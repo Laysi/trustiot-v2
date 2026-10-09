@@ -6,7 +6,7 @@
 trustiot-v2/
 ├── Cargo.toml                 # Cargo workspace
 ├── .prototools                # rust、bun 版本
-├── CLAUDE.md、AGENTS.md
+├── CLAUDE.md                  # agent 規範只放這裡，不另放 AGENTS.md
 ├── .githooks/pre-commit       # Codex 審查關卡
 ├── .github/workflows/         # ci.yml、release.yml、nightly.yml（M5，見 docs/architecture/ci-release.md）
 ├── api/openapi.json           # 由 Rust 程式碼產生，進版控
