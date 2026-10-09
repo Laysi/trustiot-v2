@@ -29,6 +29,7 @@ TrustIoT 將以 Rust 從零重建，不沿用舊架構。本目錄是重建的�
 | [里程碑](roadmap/milestones.md) | MS0–MS6 的內容與完成條件、可行性測試進度 |
 | [風險與待定事項](roadmap/risks.md) | 重建期間的風險與尚未決定的事 |
 | [可行性測試結果](feasibility/2026-10-09-cloud-poc.md) | 2026-10-09 第一批雲端 PoC 的實測結果 |
+| [可行性測試結果（2026-10-10）](feasibility/2026-10-10-edge-poc.md) | MS0 前的 Istio ambient 與 Cloudflare Tunnel 實測結果 |
 | [資料來源](references.md) | 決策引用的外部文件 |
 
 ## 背景與範圍

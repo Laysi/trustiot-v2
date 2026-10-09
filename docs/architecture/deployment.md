@@ -48,7 +48,7 @@ flowchart TB
   - 服務本身不存狀態。
   - 設定一律來自環境變數或設定檔。
   - 提供 health 與 readiness 端點。
-  - 收到 SIGTERM 時能正常收尾。
+  - 收到 SIGTERM 時能正常收尾：服務在容器內是 PID 1，不處理 SIGTERM 就會撐到寬限期結束被 SIGKILL；持有長連線的服務要主動關閉連線，讓用戶端立刻改連新的 pod。
   - DB migration 是獨立的 Job。
   - 排程工作用 Postgres advisory lock 互斥。
   - 資料接收用 MQTT shared subscription 分配。
@@ -64,14 +64,14 @@ flowchart TB
 | 資料接收 | `services/ingest` | MQTT 到 ClickHouse、端到端確認 | 不能被其他服務拖垮 |
 | 時序查詢 | `services/telemetry-query` | 讀 ClickHouse：設備圖表與即時圖表的歷史段（I3）、首頁卡片（L3）、健康歷史（H1）、AI 語意層工具（J3）；以每租戶唯讀帳號與查詢上限執行（決策 14） | 重查詢不能拖垮資料接收（I1） |
 | 閘道器營運 | `services/gateway-ops` | 設定下發、在線狀態、即時圖表轉送、OTA 分批推送 | 負責跟閘道器的長連線與狀態 |
-| MQTT 轉接 | `services/mqtt-bridge` | 把閘道器經入口 gateway 送來的 WebSocket 拆回 TCP 交給 broker，SaaS 前面多一段 Cloudflare Tunnel；來源 IP 依設定讀可信的標頭：SaaS 讀 CF-Connecting-IP，地端讀入口 gateway 的 X-Forwarded-For（決策 6、27） | 只轉送加密的位元組，看不到 mTLS 內容 |
+| MQTT 轉接 | `services/mqtt-bridge` | 把閘道器經入口 gateway 送來的 WebSocket 拆回 TCP 交給 broker，SaaS 前面多一段 Cloudflare Tunnel；來源 IP 依設定讀可信的標頭：SaaS 讀 CF-Connecting-IP，地端取入口 gateway 附加的 X-Forwarded-For 最右段（決策 6、27）；每 50 秒送 WebSocket ping，讀寫緩衝區 8 KiB，收到 SIGTERM 時送 WebSocket close | 只轉送加密的位元組，看不到 mTLS 內容 |
 | AI 助理 | `services/assistant` | 對話、agent、工具 | 最吃記憶體，改動最頻繁 |
 | AI 閘道 | `services/ai-gateway` | 供應商金鑰、轉發與串流、逾時與備援、模型角色、用量帳本、租戶 AI 額度（決策 28） | 額度要在一處原子檢查 |
 | 警報與通知 | `services/alerts` | 規則、回測、通知中心、Email、Webhook | 背景排程，可以單獨擴充 |
 | 現場脈絡 | `services/field-context` | 機台、機台關係、料號、生產區間、知識圖 | 見[現場脈絡與知識圖](field-context.md) |
 | 知識庫 | `services/knowledge` | RAG、附件 | 前處理很吃資源，可以單獨排程 |
 
-瀏覽器的流量只經過 API 閘道（決策 27）；現場閘道器的資料與設定只走 MQTT broker，不經過 API 閘道的 cookie 驗證；閘道器一律把 MQTT 包在 WebSocket 裡經 443 連線：SaaS 先連到 Cloudflare，再經 tunnel 與入口 gateway 交給 k3s 內的 MQTT 轉接服務（小型 Rust 服務，把 WebSocket 拆回 TCP 交給 broker）；地端連到客戶網路內的入口 gateway，同樣交給轉接服務，broker 不直接對外。mTLS 在 WebSocket 裡由閘道器直達 broker，Cloudflare、入口 gateway 與轉接服務只看得到加密的位元組，客戶端憑證、CRL 與 dynsec 照常運作。外層 TLS 在 SaaS 由 Cloudflare 終止，地端由入口 gateway 終止（用客戶的憑證或我們的 CA，閘道器的外層信任清單可設定），只負責穿過網路，安全只靠內層我們自己 CA 的 mTLS；工廠防火牆若會解開 443 的 TLS，只影響外層，可讓客戶把攔截用的 CA 加進外層的信任清單。轉接服務依設定讀入口傳來的可信標頭記錄閘道器的來源 IP（SaaS 讀 CF-Connecting-IP，地端讀入口 gateway 的 X-Forwarded-For），供稽核與限流。閘道器程式只有 WebSocket 一種連線方式，SaaS 與地端相同。cloudflared 跑在主機上（systemd），由主機安裝腳本安裝、以 OS 套件更新，token 存成只有 root 能讀的檔案，由 systemd 的 LoadCredential 交給服務；它是 SaaS 專屬的主機元件，不在 k8s 的部署描述內。cloudflared 以 systemd 沙箱設定執行：非 root 的動態使用者、檔案系統唯讀、禁止提權、拿掉所有 capability。主機到入口 gateway 這一段不在 mesh 內，地位和入口前的負載平衡器相同；入口 gateway 由 NetworkPolicy 只放行本機來源，叢集內其他 pod 連不到，入口之後都在 mesh 內。維運 SSH 經同一條 tunnel，前面加 Cloudflare Access，只給維運人員；閘道器與產品流量不經 Access。憑證換發與 OTA 下載走 HTTPS；換發端點是入口 cookie 驗證的明列例外，改以 TPM 簽章驗證閘道器身分（決策 12）。
+瀏覽器的流量只經過 API 閘道（決策 27）；現場閘道器的資料與設定只走 MQTT broker，不經過 API 閘道的 cookie 驗證；閘道器一律把 MQTT 包在 WebSocket 裡經 443 連線：SaaS 先連到 Cloudflare，再經 tunnel 與入口 gateway 交給 k3s 內的 MQTT 轉接服務（小型 Rust 服務，把 WebSocket 拆回 TCP 交給 broker）；地端連到客戶網路內的入口 gateway，同樣交給轉接服務，broker 不直接對外。mTLS 在 WebSocket 裡由閘道器直達 broker，Cloudflare、入口 gateway 與轉接服務只看得到加密的位元組，客戶端憑證、CRL 與 dynsec 照常運作。外層 TLS 在 SaaS 由 Cloudflare 終止，地端由入口 gateway 終止（用客戶的憑證或我們的 CA，閘道器的外層信任清單可設定），只負責穿過網路，安全只靠內層我們自己 CA 的 mTLS；工廠防火牆若會解開 443 的 TLS，只影響外層，可讓客戶把攔截用的 CA 加進外層的信任清單。轉接服務依設定讀入口傳來的可信標頭記錄閘道器的來源 IP，供稽核與限流：SaaS 只信 CF-Connecting-IP（用戶端自帶這個標頭時 Cloudflare 直接拒絕），地端只取入口 gateway 附加在 X-Forwarded-For 最右段的位址；用戶端自帶的 X-Forwarded-For 最左段與 True-Client-IP 會原樣傳進來，任何服務都不能拿來稽核或限流。Cloudflare 對兩個方向 125 秒都沒有資料的連線一律切斷：閘道器的 MQTT keepalive 設 60 秒，轉接服務另每 50 秒送 WebSocket ping；HTTP 串流要有不超過 60 秒的心跳，串流被截斷時狀態碼仍是 200，前端要靠心跳逾時察覺並續傳。閘道器程式只有 WebSocket 一種連線方式，SaaS 與地端相同。cloudflared 跑在主機上（systemd），由主機安裝腳本安裝、以 OS 套件更新，token 存成只有 root 能讀的檔案，由 systemd 的 LoadCredential 交給服務；它是 SaaS 專屬的主機元件，不在 k8s 的部署描述內。cloudflared 以 systemd 沙箱設定執行：非 root 的動態使用者、檔案系統唯讀、禁止提權、拿掉所有 capability。主機到入口 gateway 這一段不在 mesh 內，地位和入口前的負載平衡器相同，走 HTTP，入口把 x-forwarded-proto 改寫為 https；入口 gateway 由 NetworkPolicy 只放行本機來源，叢集內其他 pod 連不到，入口之後都在 mesh 內。維運 SSH 經同一條 tunnel，前面加 Cloudflare Access，只給維運人員；閘道器與產品流量不經 Access。憑證換發與 OTA 下載走 HTTPS；換發端點是入口 cookie 驗證的明列例外，改以 TPM 簽章驗證閘道器身分（決策 12）。
 
 可搬移的四條規則：
 
