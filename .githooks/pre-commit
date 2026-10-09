@@ -1,0 +1,133 @@
+#!/bin/sh
+# codex-review gate — block a commit unless Codex approves the staged diff.
+#
+# Standalone: needs only the `codex` CLI (https://github.com/openai/codex) + git.
+#   Requires: codex-cli 0.119.0 or newer (for a working `codex exec --ephemeral`)
+#   Install:  npm install -g @openai/codex  &&  codex login
+#   Enable:   from the root of the repository to protect (the README also shows curl):
+#             mkdir -p .githooks
+#             cp /path/to/codex-cc-skill/hooks/pre-commit .githooks/pre-commit
+#             chmod +x .githooks/pre-commit
+#             git config core.hooksPath .githooks      # once per clone
+#             or, with the codex-review Claude Code plugin: /codex-review:init
+#   Bypass:   git commit --no-verify   OR   CODEX_GATE_BYPASS=1 git commit ...
+#
+# Fail-closed: the commit passes only when the staged diff was captured and
+# codex exits 0 with a verdict starting 'ALLOW:'. A missing codex, a failed
+# diff capture, or a codex error or timeout blocks it (never waved through).
+#
+# Merge, cherry-pick and revert commits are not skipped. The hook recomputes
+# git's own automatic result (git merge-tree, git 2.40+) and reviews only what
+# the commit adds on top of it: conflict resolutions and any further edits. A
+# commit identical to that result passes without a review. When the result
+# can't be recomputed (older git, octopus merge, root commit), the whole staged
+# diff is reviewed instead.
+#
+# IMPORTANT — codex is run FULLY ISOLATED from this repo: the staged diff is
+# captured to a temp file, codex's cwd is a throwaway temp dir (-C), and every
+# GIT_* env var that git sets for hooks is unset before codex runs. This is
+# required: `codex` invoked inside a codex-"trusted" project otherwise performs
+# a "curated-sync" that RESETS the repo's HEAD. Isolation also guarantees no
+# repository-derived value is passed through a shell (cf. codex-plugin-cc #447).
+# The run is --ephemeral, so staged diffs never pile up in codex's session
+# history. When codex fails or writes no verdict, the tail of its output is shown.
+#
+# Derived from the stop-review-gate in openai/codex-plugin-cc (Apache-2.0).
+
+[ "$CODEX_GATE_BYPASS" = "1" ] && exit 0
+
+# Every look at the staged changes compares raw content: an external diff
+# driver, a textconv filter or a submodule ignore setting could otherwise
+# hide a staged change or show the reviewer something other than what is
+# committed.
+staged_diff() {
+  git diff --cached --no-ext-diff --no-textconv --ignore-submodules=none "$@"
+}
+
+# Nothing staged → nothing to review.
+staged_diff --quiet && exit 0
+
+# Concluding a merge, cherry-pick or revert: diff against git's automatic
+# result instead of HEAD. Any failure leaves base empty (full review).
+op='' base=''
+gitdir=$(git rev-parse --git-dir)
+if [ -f "$gitdir/MERGE_HEAD" ]; then
+  op=merge
+  # An octopus merge has one line per merged head; review it in full.
+  [ $(wc -l <"$gitdir/MERGE_HEAD") -eq 1 ] && set -- HEAD MERGE_HEAD
+elif [ -f "$gitdir/CHERRY_PICK_HEAD" ]; then
+  op=cherry-pick
+  set -- --merge-base=CHERRY_PICK_HEAD^ HEAD CHERRY_PICK_HEAD
+elif [ -f "$gitdir/REVERT_HEAD" ]; then
+  op=revert
+  set -- --merge-base=REVERT_HEAD HEAD REVERT_HEAD^
+fi
+if [ $# -gt 0 ]; then
+  # Exit 0 is a clean merge, 1 a conflicted one (the tree then holds the
+  # conflict markers); anything else is an error.
+  out=$(git merge-tree --write-tree "$@" 2>/dev/null)
+  if [ $? -le 1 ]; then
+    base=$(printf '%s\n' "$out" | head -n 1)
+    git rev-parse -q --verify "$base^{tree}" >/dev/null || base=''
+  fi
+fi
+# Exactly git's own result: the commit introduces nothing new to review.
+[ -n "$base" ] && staged_diff --quiet "$base" && exit 0
+
+if [ -n "$base" ]; then
+  scope="This commit concludes a $op. The diff on stdin is taken against git's own automatic $op result rather than HEAD, so it holds only the conflict resolutions and any further edits (in conflicted hunks, the - side shows git's conflict markers). Review ONLY that diff."
+else
+  scope="Review ONLY the staged diff provided on stdin."
+fi
+
+if ! command -v codex >/dev/null 2>&1; then
+  echo "[codex-review-gate] codex CLI not found — run 'npm i -g @openai/codex && codex login', or bypass with 'git commit --no-verify'." >&2
+  exit 1
+fi
+
+codex="codex"
+command -v timeout >/dev/null 2>&1 && codex="timeout ${CODEX_GATE_TIMEOUT:-840} codex"
+
+tmp=$(mktemp -d) || { echo "[codex-review-gate] mktemp failed" >&2; exit 1; }
+trap 'rm -rf "$tmp"' EXIT
+
+# Capture the staged diff while the git environment is still valid. Plain
+# output only: raw content, no color codes from user config.
+if ! staged_diff --no-color ${base:+"$base"} >"$tmp/staged.diff" || ! [ -s "$tmp/staged.diff" ]; then
+  echo "[codex-review-gate] commit blocked — could not capture the staged diff for review ('git diff --cached' failed or printed nothing)." >&2
+  echo "Human override: git commit --no-verify  or  CODEX_GATE_BYPASS=1" >&2
+  exit 1
+fi
+
+# Run codex with NO handle on this repo: cwd is the temp dir, and every GIT_*
+# variable git exported for this hook is unset. The diff is read from the file.
+(
+  for v in $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+  $codex exec \
+    "You are a mandatory pre-commit code review gate. $scope Your FIRST line MUST be exactly 'ALLOW: <reason>' or 'BLOCK: <reason>'. BLOCK only for real problems introduced by this diff (correctness bugs, security/authorization holes, data loss, broken error handling, resource/lifecycle leaks, clear regressions); when you BLOCK, list each finding after the first line as 'file:line — problem — fix'. Do not block on style, nitpicks, or pre-existing issues unrelated to this diff." \
+    -C "$tmp" --skip-git-repo-check --ephemeral -s read-only --color never -o "$tmp/verdict" <"$tmp/staged.diff" >/dev/null 2>"$tmp/codex.log"
+)
+rc=$?
+
+# A verdict only counts when codex itself succeeded.
+if [ "$rc" = 0 ] && head -n 1 "$tmp/verdict" 2>/dev/null | grep -q '^ALLOW:'; then
+  exit 0
+fi
+
+echo "[codex-review-gate] commit blocked — Codex review did not pass:" >&2
+echo >&2
+if [ "$rc" = 0 ] && [ -s "$tmp/verdict" ]; then
+  cat "$tmp/verdict" >&2
+else
+  if [ "$rc" = 124 ]; then
+    echo "(codex timed out after ${CODEX_GATE_TIMEOUT:-840}s; raise CODEX_GATE_TIMEOUT for a large diff. The end of its output follows.)" >&2
+  elif [ "$rc" != 0 ]; then
+    echo "(codex exited with status $rc, so any verdict it wrote is ignored; the end of its output follows. Check 'codex login' and that codex-cli is 0.119.0 or newer.)" >&2
+  else
+    echo "(codex wrote no review verdict; the end of its output follows.)" >&2
+  fi
+  tail -n 20 "$tmp/codex.log" >&2 2>/dev/null
+fi
+echo >&2
+echo "Fix the issues and re-commit. Human override: git commit --no-verify  or  CODEX_GATE_BYPASS=1" >&2
+exit 1
