@@ -24,7 +24,7 @@ trustiot-v2/
 │   ├── ingest/                # 資料接收；ClickHouse DDL
 │   ├── telemetry-query/       # 時序查詢
 │   ├── gateway-ops/           # 閘道器營運
-│   ├── mqtt-bridge/           # WebSocket ↔ TCP 轉接（SaaS）
+│   ├── mqtt-bridge/           # WebSocket ↔ TCP 轉接
 │   ├── assistant/             # AI 助理
 │   ├── ai-gateway/            # AI 閘道（不依賴 contract）
 │   ├── alerts/                # 警報與通知
