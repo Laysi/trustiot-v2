@@ -1,0 +1,16 @@
+# 資料來源
+
+- [K3s 硬體需求](https://docs.k3s.io/installation/requirements)
+- [K3s 資源實測](https://docs.k3s.io/reference/resource-profiling)
+- [EMQX 授權 FAQ](https://www.emqx.com/en/content/license-faq)
+- [mosquitto.conf(5)](https://mosquitto.org/man/mosquitto-conf-5.html)
+- [Greengrass nucleus lite](https://docs.aws.amazon.com/greengrass/v2/developerguide/greengrass-nucleus-lite-component.html)（未採用方案的參考）
+- [rig-core on crates.io](https://crates.io/crates/rig-core)（未採用方案的參考）
+- [Istio ambient 平台前置需求（k3s、OpenShift）](https://istio.io/latest/docs/ambient/install/platform-prerequisites/)、[Istio External Authorization](https://istio.io/latest/docs/tasks/security/authorization/authz-custom/)、[Istio MeshConfig（ext\_authz 的 failOpen 與逾時預設值）](https://istio.io/latest/docs/reference/config/istio.mesh.v1alpha1/)、[Istio 效能與資源用量](https://istio.io/latest/docs/ops/deployment/performance-and-scalability/)、[Cloudflare 代理的埠](https://developers.cloudflare.com/fundamentals/reference/network-ports/)、[Spectrum 各方案支援的協定](https://developers.cloudflare.com/spectrum/protocols-per-plan/)、[Tunnel 的任意 TCP 需要用戶端 cloudflared](https://developers.cloudflare.com/cloudflare-one/applications/non-http/cloudflared-authentication/arbitrary-tcp/)、[Cloudflare 524 逾時（125 秒）](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-524/)、[Cloudflare 各方案請求大小上限](https://developers.cloudflare.com/workers/platform/limits/)、[Cloudflare 服務條款（CDN 限制）](https://www.cloudflare.com/service-specific-terms-application-services/)、[Cloudflare WebSockets](https://developers.cloudflare.com/network/websockets/)、[Envoy AI Gateway 依用量限流](https://aigateway.envoyproxy.io/docs/capabilities/traffic/usage-based-ratelimiting)、[Cloudflare AI Gateway 花費上限](https://developers.cloudflare.com/ai-gateway/features/spend-limits/)
+- [Apache AGE Prepared Statements](https://age.apache.org/age-manual/master/advanced/prepared_statements.html)（cypher() 的參數經 param map 傳入）
+- [Neo4j licensing](https://neo4j.com/licensing/)（Community Edition 為 GPLv3）
+- [Neo4j Pricing](https://neo4j.com/pricing/)、[AuraDB FAQ](https://neo4j.com/cloud/platform/aura-graph-database/faq/)、[Aura instance actions](https://neo4j.com/docs/aura/managing-instances/instance-actions/)（AuraDB Free 的限制與暫停規則）
+- [Qdrant Pricing](https://qdrant.tech/pricing/)、[Qdrant Cloud：建立 cluster](https://qdrant.tech/documentation/cloud/create-cluster/)、[Qdrant Cloud：驗證與 API key](https://qdrant.tech/documentation/cloud/authentication/)（免費方案的限制與暫停規則）
+- [ClickHouse Cloud 相容性](https://clickhouse.com/docs/whats-new/cloud-compatibility)、[自架搬到 ClickHouse Cloud](https://clickhouse.com/docs/cloud/migration/clickhouse-to-cloud)
+- [EmbeddingGemma 2 model card](https://ai.google.dev/gemma/docs/embeddinggemma/model_card_2)、[Gemini API Embeddings](https://ai.google.dev/gemini-api/docs/embeddings)、[Gemini Embedding 2 發表文](https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-embedding-2/)、[Gemini Embedding 2 技術報告](https://arxiv.org/pdf/2605.27295)
+- [Apache AGE PR #2309](https://github.com/apache/age/pull/2309)（Cypher 寫入支援 RLS，1.7.0）、[Neo4j Pricing 各方案權限控管](https://neo4j.com/pricing/)、[Neo4j MCP 設定](https://neo4j.com/docs/mcp/current/configuration/)、[neo4rs（Neo4j Labs 孵化中的 Rust 驅動）](https://github.com/neo4j-labs/neo4rs)

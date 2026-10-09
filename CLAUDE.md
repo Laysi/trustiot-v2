@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Bootstrapped on 2026-10-09. No application code, build tooling, or test runner exists yet. When the first toolchain lands, pin it in `.prototools` and add its build, lint, and test commands (including how to run a single test) to this file.
 
+Architecture decisions, rebuild scope (items A1–M8), service split, repository layout, and milestones (MS0–MS6) live in `docs/`; start at `docs/README.md`. `docs/` is the source of truth: when a decision changes, update `docs/` in the same change. In `docs/`, a bare `#N` refers to the legacy repo `Laysi/trustiot`; always write legacy references as `Laysi/trustiot#N` in issues and PRs here.
+
 ## Work tracking: GitHub Issues + Project board
 
 Work is tracked as real issues in `Laysi/trustiot-v2` on the org Project **TrustIoT v2** (`Laysi`, project #12). Follow the `github-loop-engineering` skill for every issue and board transition. Resolve field and option IDs at runtime; never hard-code them.
