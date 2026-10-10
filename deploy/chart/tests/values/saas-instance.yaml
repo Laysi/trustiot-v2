@@ -7,6 +7,16 @@ hosts:
   gateway: gw.saas.trustiot.test
   ota: ota.saas.trustiot.test
 
+clickhouse:
+  bundled:
+    # Bootstrap admin password of the bundled ClickHouse; how Secrets reach the cluster is
+    # decided in Laysi/trustiot-v2#72.
+    adminSecret:
+      name: trustiot-clickhouse-admin
+    # Example size; each deployment sizes its volume from its load (README: 叢集內的 ClickHouse).
+    storage:
+      size: 50Gi
+
 qdrant:
   external:
     url: https://qdrant.saas.trustiot.test:6333

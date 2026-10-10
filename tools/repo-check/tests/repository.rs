@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use repo_check::{
-    PROTOTOOLS, RUST_TOOLCHAIN, WORKSPACE_MANIFEST, Workspace, check_member_manifest,
-    check_rust_pins, check_rust_version, find_agents_files, parse_metadata, prototools_pin,
+    PROTOTOOLS, RUNTIME_SOURCE_GLOB, RUST_TOOLCHAIN, WORKSPACE_MANIFEST, Workspace,
+    check_member_manifest, check_rust_pins, check_rust_version, find_agents_files,
+    find_runtime_sources, find_schema_changes, parse_metadata, prototools_pin,
 };
 
 fn workspace() -> Workspace {
@@ -103,6 +104,68 @@ fn agents_md_search_finds_planted_files() {
 
     let found = find_agents_files(&root).expect("walk the fixture");
     expected.sort();
+    assert_eq!(found, expected);
+
+    fs::remove_dir_all(&root).expect("remove the fixture");
+}
+
+#[test]
+fn runtime_code_never_changes_the_schema() {
+    let root = workspace().root;
+    let sources = find_runtime_sources(&root).expect("walk services/*/src");
+    assert!(
+        !sources.is_empty(),
+        "expected Rust sources under {RUNTIME_SOURCE_GLOB}"
+    );
+    let mut found = Vec::new();
+    for path in &sources {
+        for change in find_schema_changes(&read(path)) {
+            found.push(format!(
+                "{}:{}: {}",
+                path.strip_prefix(&root).unwrap_or(path).display(),
+                change.line,
+                change.statement
+            ));
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "{RUNTIME_SOURCE_GLOB} must not change a database schema; move these statements to the \
+         service's migrations/ (runtime code deletes rows with DELETE FROM, not ALTER TABLE):\n{}",
+        found.join("\n")
+    );
+}
+
+/// Proves the search above covers every service's src tree and nothing else.
+#[test]
+fn runtime_sources_are_the_rust_files_under_services_src() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("runtime-sources");
+    if root.exists() {
+        fs::remove_dir_all(&root).expect("clear the previous fixture");
+    }
+    for relative in [
+        "services/a/src/lib.rs",
+        "services/a/src/nested/mod.rs",
+        "services/a/src/schema.sql",
+        "services/a/tests/clickhouse.rs",
+        "services/a/migrations/clickhouse/0001_tables.sql",
+        "services/b/src/main.rs",
+        "crates/c/src/lib.rs",
+    ] {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().expect("fixture paths have a parent"))
+            .expect("create fixture directory");
+        fs::write(&path, "fixture\n").expect("write fixture file");
+    }
+    let found = find_runtime_sources(&root).expect("walk the fixture");
+    let expected: Vec<PathBuf> = [
+        "services/a/src/lib.rs",
+        "services/a/src/nested/mod.rs",
+        "services/b/src/main.rs",
+    ]
+    .iter()
+    .map(|relative| root.join(relative))
+    .collect();
     assert_eq!(found, expected);
 
     fs::remove_dir_all(&root).expect("remove the fixture");

@@ -206,7 +206,7 @@ describe.each(SHAPE_NAMES)("%s shape", (shape) => {
     SLOW_TEST_MS,
   );
 
-  test("services stay off until enabled: only the platform settings and the ingress render", () => {
+  test("services stay off until enabled: only the platform settings, the ingress and bundled ClickHouse render", () => {
     const manifests = render(files);
     expect(manifests.map((m) => `${m.kind}/${m.metadata.name}`).sort()).toEqual(
       [
@@ -216,6 +216,10 @@ describe.each(SHAPE_NAMES)("%s shape", (shape) => {
         `ConfigMap/${RELEASE}-platform`,
         `Gateway/${RELEASE}-ingress`,
         `NetworkPolicy/${RELEASE}-ingress`,
+        `ConfigMap/${RELEASE}-clickhouse-config`,
+        `ServiceAccount/${RELEASE}-clickhouse`,
+        `Service/${RELEASE}-clickhouse`,
+        `StatefulSet/${RELEASE}-clickhouse`,
       ].sort(),
     );
     // No backend, so no route and no public path: the cookie check covers every request.
@@ -264,11 +268,11 @@ describe("deployment shapes", () => {
     }
   });
 
-  test("external Postgres and ClickHouse are wired only in external mode", () => {
+  test("external Postgres and ClickHouse are wired only in external mode, bundled ClickHouse in-cluster", () => {
     const bundled = platformConfig(render(SHAPES.onprem));
     expect(bundled.TRUSTIOT_POSTGRES_HOST).toBeUndefined();
     expect(bundled.TRUSTIOT_POSTGRES_CA_FILE).toBeUndefined();
-    expect(bundled.TRUSTIOT_CLICKHOUSE_URL).toBeUndefined();
+    expect(bundled.TRUSTIOT_CLICKHOUSE_URL).toBe(`http://${RELEASE}-clickhouse.${NAMESPACE}.svc:8123`);
     const external = platformConfig(
       render(SHAPES.onprem, [
         "--set",
@@ -386,7 +390,9 @@ describe("exposure and hardening", () => {
       for (const service of manifests.filter((m) => m.kind === "Service")) {
         expect((service.spec as YamlMap).type).toBe("ClusterIP");
       }
-      for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
+      const workloads = manifests.filter((m) => m.kind === "Deployment" || m.kind === "StatefulSet");
+      expect(workloads.some((m) => m.kind === "StatefulSet")).toBe(true);
+      for (const deployment of workloads) {
         const pod = podSpec(deployment);
         expect(pod.hostNetwork).toBeUndefined();
         expect(pod.hostPID).toBeUndefined();
@@ -428,6 +434,155 @@ describe("exposure and hardening", () => {
         }
       }
     }
+  });
+});
+
+describe("bundled ClickHouse (decision 14)", () => {
+  const manifests = render(SHAPES.saas);
+  const name = `${RELEASE}-clickhouse`;
+  const statefulSet = find(manifests, "StatefulSet", name);
+  const pod = podSpec(statefulSet);
+  const container = pod.containers[0] as Container;
+
+  function digestOf(image: string): string {
+    const match = image.match(/@(sha256:[0-9a-f]{64})$/);
+    if (!match?.[1]) throw new Error(`${image} is not pinned by digest`);
+    return match[1];
+  }
+
+  test("the image is pinned to the same digest as the dev environment and the schema tests", () => {
+    const chartDigest = digestOf(container.image);
+    expect(container.image).toStartWith("docker.io/clickhouse/clickhouse-server:26.8@");
+    const stack = readFileSync(join(REPO_ROOT, "scripts/lib/stack.ts"), "utf8");
+    const devImage = stack.match(/clickhouse:\s*"([^"]+)"/)?.[1] ?? "";
+    const schemaTests = readFileSync(join(REPO_ROOT, "services/ingest/tests/common/mod.rs"), "utf8");
+    const testImage = schemaTests.match(/CLICKHOUSE_IMAGE: &str = "([^"]+)"/)?.[1] ?? "";
+    expect(digestOf(devImage)).toBe(chartDigest);
+    expect(digestOf(testImage)).toBe(chartDigest);
+  });
+
+  test("one replica with a retained data volume, reachable through a ClusterIP Service only", () => {
+    const spec = statefulSet.spec as YamlMap & {
+      replicas: number;
+      serviceName: string;
+      persistentVolumeClaimRetentionPolicy: Record<string, string>;
+      volumeClaimTemplates: { metadata: { name: string; labels: Record<string, string> }; spec: YamlMap }[];
+    };
+    expect(spec.replicas).toBe(1);
+    expect(spec.serviceName).toBe(name);
+    expect(spec.persistentVolumeClaimRetentionPolicy).toEqual({ whenDeleted: "Retain", whenScaled: "Retain" });
+    const claim = spec.volumeClaimTemplates[0];
+    expect(claim?.metadata.name).toBe("data");
+    // volumeClaimTemplates are immutable, so they must not carry the chart version.
+    expect(Object.keys(claim?.metadata.labels ?? {})).not.toContain("helm.sh/chart");
+    expect(Object.keys(claim?.metadata.labels ?? {})).not.toContain("app.kubernetes.io/version");
+    expect(claim?.spec).toMatchObject({ accessModes: ["ReadWriteOnce"], resources: { requests: { storage: "50Gi" } } });
+    const mounts = container.volumeMounts as { name: string; mountPath: string; readOnly?: boolean }[];
+    expect(mounts).toContainEqual({ name: "data", mountPath: "/var/lib/clickhouse" });
+
+    const service = find(manifests, "Service", name).spec as { type: string; ports: { port: number }[] };
+    expect(service.type).toBe("ClusterIP");
+    expect(service.ports.map((p) => p.port)).toEqual([8123, 9000]);
+  });
+
+  test("the pod meets the restricted Pod Security Standard and joins the ambient mesh", () => {
+    const labels = (statefulSet.spec as { template: { metadata: { labels: Record<string, string> } } }).template
+      .metadata.labels;
+    expect(labels["istio.io/dataplane-mode"]).toBe("ambient");
+    expect(pod.automountServiceAccountToken).toBe(false);
+    expect(pod.serviceAccountName).toBe(name);
+    expect(pod.securityContext?.runAsNonRoot).toBe(true);
+    expect(pod.securityContext?.runAsUser).toBe(101);
+    expect(pod.securityContext?.seccompProfile?.type).toBe("RuntimeDefault");
+    expect(container.securityContext?.allowPrivilegeEscalation).toBe(false);
+    expect(container.securityContext?.readOnlyRootFilesystem).toBe(true);
+    expect(container.securityContext?.capabilities?.drop).toEqual(["ALL"]);
+    expect(container.securityContext?.capabilities?.add).toBeUndefined();
+    expect(container.resources?.limits?.memory).toBe("2Gi");
+    for (const probe of [container.startupProbe, container.livenessProbe, container.readinessProbe]) {
+      expect(probe).toMatchObject({ httpGet: { path: "/ping", port: "http" } });
+    }
+  });
+
+  test("the bootstrap admin password comes from a mounted Secret, never the environment", () => {
+    const env = Object.fromEntries((container.env ?? []).map((e) => [e.name, e]));
+    expect(env.CLICKHOUSE_PASSWORD).toBeUndefined();
+    expect(env.CLICKHOUSE_USER?.value).toBe("trustiot_admin");
+    expect(env.CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT?.value).toBe("1");
+    expect(env.CLICKHOUSE_PASSWORD_FILE?.value).toBe("/etc/trustiot/clickhouse-admin/password");
+    for (const e of container.env ?? []) expect(e.valueFrom).toBeUndefined();
+    const volumes = Object.fromEntries((pod.volumes ?? []).map((v) => [v.name as string, v]));
+    expect(volumes["admin-password"]).toMatchObject({
+      secret: { secretName: "trustiot-clickhouse-admin", items: [{ key: "password", path: "password" }] },
+    });
+    // The entrypoint writes the account, with its password, into users.d: memory only.
+    expect(volumes["users-d"]).toMatchObject({ emptyDir: { medium: "Memory" } });
+  });
+
+  test("the server configuration holds no users, roles, profiles, quotas or row policies", () => {
+    const config = find(manifests, "ConfigMap", `${RELEASE}-clickhouse-config`).data as Record<string, string>;
+    expect(Object.keys(config)).toEqual(["trustiot.xml"]);
+    const xml = config["trustiot.xml"] ?? "";
+    expect(xml).toStartWith("<clickhouse>");
+    for (const forbidden of [/<users\b/, /<profiles\b/, /<quotas\b/, /<roles\b/, /row_polic/, /user_directories/, /access_management/, /password/i]) {
+      expect(xml).not.toMatch(forbidden);
+    }
+    // Only HTTP and the native protocol listen.
+    for (const port of ["mysql_port", "postgresql_port", "interserver_http_port"]) {
+      expect(xml).toContain(`<${port} remove="remove"/>`);
+    }
+    const mounts = container.volumeMounts as { name: string; mountPath: string; readOnly?: boolean }[];
+    expect(mounts).toContainEqual({ name: "config", mountPath: "/etc/clickhouse-server/config.d", readOnly: true });
+  });
+
+  test("the pod rolls when the server configuration or the admin password revision changes", () => {
+    const annotationsOf = (rendered: Manifest[]) =>
+      (find(rendered, "StatefulSet", name).spec as { template: { metadata: { annotations: Record<string, string> } } })
+        .template.metadata.annotations;
+    const before = annotationsOf(manifests);
+    expect(before["checksum/clickhouse-config"]).toMatch(/^[0-9a-f]{64}$/);
+    expect(before["checksum/admin-secret"]).toMatch(/^[0-9a-f]{64}$/);
+    const rotated = annotationsOf(render(SHAPES.saas, ["--set", "clickhouse.bundled.adminSecretRevision=2"]));
+    expect(rotated["checksum/admin-secret"]).not.toBe(before["checksum/admin-secret"]);
+    expect(rotated["checksum/clickhouse-config"]).toBe(before["checksum/clickhouse-config"]);
+  });
+
+  test("external mode renders no ClickHouse workload", () => {
+    const external = render(SHAPES.saas, [
+      "--set",
+      "clickhouse.mode=external",
+      "--set",
+      "clickhouse.external.url=https://ch.saas.trustiot.test:8443",
+      "--set",
+      "clickhouse.bundled.adminSecret.name=",
+    ]);
+    expect(external.filter((m) => m.metadata.name.startsWith(`${RELEASE}-clickhouse`))).toEqual([]);
+  });
+
+  test("the ingress e2e overlay installs no ClickHouse, so its helm install --wait needs no admin Secret", () => {
+    for (const shape of SHAPE_NAMES) {
+      const e2e = render([...SHAPES[shape], "tests/e2e/values-e2e.yaml"], [
+        "--set",
+        "ingress.direct.tlsSecret=trustiot-ingress-tls",
+      ]);
+      expect(e2e.filter((m) => m.metadata.name.startsWith(`${RELEASE}-clickhouse`))).toEqual([]);
+    }
+  });
+
+  test("a storage class and node placement can be set", () => {
+    const placed = render(SHAPES.onprem, [
+      "--set",
+      "clickhouse.bundled.storage.storageClassName=fast-ssd",
+      "--set",
+      "clickhouse.bundled.nodeSelector.trustiot\\.io/role=data",
+    ]);
+    const spec = find(placed, "StatefulSet", name).spec as {
+      volumeClaimTemplates: { spec: { storageClassName?: string } }[];
+      template: { spec: PodSpec };
+    };
+    expect(spec.volumeClaimTemplates[0]?.spec.storageClassName).toBe("fast-ssd");
+    expect(spec.template.spec.nodeSelector).toEqual({ "trustiot.io/role": "data" });
+    expect(spec.template.spec.securityContext?.runAsNonRoot).toBe(true);
   });
 });
 
@@ -699,6 +854,37 @@ describe("values validation rejects unsafe or incomplete settings", () => {
     ["external Qdrant without a URL", saas, ["--set", "qdrant.external.url="], /\/qdrant\/external\/url/],
     ["Sentry on without a DSN Secret", saas, ["--set", "observability.sentry.dsnSecret.name="], /dsnSecret/],
     [
+      "bundled ClickHouse without an admin password Secret",
+      saas,
+      ["--set", "clickhouse.bundled.adminSecret.name="],
+      /\/clickhouse\/bundled\/adminSecret\/name/,
+    ],
+    ["ClickHouse image without a digest", saas, ["--set", "clickhouse.bundled.image.digest="], /digest/],
+    [
+      "bundled ClickHouse without a sized volume",
+      saas,
+      ["--set", "clickhouse.bundled.storage.size="],
+      /\/clickhouse\/bundled\/storage\/size/,
+    ],
+    [
+      "ClickHouse bootstrap account named default",
+      saas,
+      ["--set", "clickhouse.bundled.adminUser=default"],
+      /\/clickhouse\/bundled\/adminUser/,
+    ],
+    [
+      "ClickHouse pod allowed to run as root",
+      saas,
+      ["--set", "clickhouse.bundled.podSecurityContext.runAsNonRoot=false"],
+      /runAsNonRoot/,
+    ],
+    [
+      "ClickHouse access settings smuggled into values",
+      saas,
+      ["--set", "clickhouse.bundled.users.reader.password=plain-text"],
+      /users/,
+    ],
+    [
       "SMTP sender with a header injection",
       onprem,
       ["--set-json", 'smtp.from="a@factory.test\\r\\nBcc: x@evil.test"'],
@@ -863,6 +1049,15 @@ describe("values validation rejects unsafe or incomplete settings", () => {
         'services.smoke-echo.env=[{"name":"LLM_API_KEY","valueFrom":{"secretKeyRef":{"name":"trustiot-ai-chat","key":"api-key"}}}]',
       ],
       /env reads the dependency credential trustiot-ai-chat\/api-key/,
+    ],
+    [
+      "ClickHouse bootstrap admin password read through custom env",
+      saas,
+      [
+        "--set-json",
+        'services.smoke-echo.env=[{"name":"CH_ADMIN_PASSWORD","valueFrom":{"secretKeyRef":{"name":"trustiot-clickhouse-admin","key":"password"}}}]',
+      ],
+      /env reads the dependency credential trustiot-clickhouse-admin\/password/,
     ],
     [
       "duplicate env names",
@@ -1210,7 +1405,8 @@ describe("documentation and packaging", () => {
   // Leaf paths of values.yaml; services.<entry> collapses to services.<name>, and
   // Kubernetes-native objects under serviceDefaults count as one field.
   function documentedPaths(value: unknown, path: string): string[] {
-    const relative = path.startsWith("serviceDefaults.") ? path.slice("serviceDefaults.".length) : "";
+    const prefix = ["serviceDefaults.", "clickhouse.bundled."].find((p) => path.startsWith(p));
+    const relative = prefix ? path.slice(prefix.length) : "";
     if (!isMap(value) || Object.keys(value).length === 0 || KUBERNETES_OBJECT_FIELDS.has(relative)) {
       return [path.replace(/^services\.[^.]+/, "services.<name>")];
     }

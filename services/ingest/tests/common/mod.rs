@@ -1,0 +1,362 @@
+//! Shared helpers for the ClickHouse schema tests: reading the migration files and running a
+//! real ClickHouse over its HTTP interface.
+
+#![allow(
+    dead_code,
+    reason = "each test binary uses a different subset of these helpers"
+)]
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// The ClickHouse image the tests run: clickhouse/clickhouse-server 26.8 (decision 14), pinned to
+/// the multi-arch index digest. The local dev environment (`scripts/lib/stack.ts`) and the Helm
+/// chart (`deploy/chart/values.yaml`) pin the same digest; `bun test deploy/chart` checks that
+/// all three agree.
+pub const CLICKHOUSE_IMAGE: &str = "docker.io/clickhouse/clickhouse-server@sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c";
+
+/// The bootstrap admin account, as the chart and the dev environment name it.
+pub const ADMIN_USER: &str = "trustiot_admin";
+
+/// One migration file.
+pub struct Migration {
+    /// File name, for example `0002_telemetry.sql`.
+    pub name: String,
+    /// Statements in file order, without comments or the closing semicolon.
+    pub statements: Vec<String>,
+}
+
+pub fn migrations_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations/clickhouse")
+}
+
+/// Every migration file in apply order (file name order).
+pub fn migrations() -> Vec<Migration> {
+    let dir = migrations_dir();
+    let mut names: Vec<String> = fs::read_dir(&dir)
+        .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
+        .map(|entry| {
+            entry
+                .expect("read a directory entry")
+                .file_name()
+                .into_string()
+                .expect("migration file names are UTF-8")
+        })
+        .collect();
+    names.sort();
+    names
+        .into_iter()
+        .map(|name| {
+            let text = fs::read_to_string(dir.join(&name))
+                .unwrap_or_else(|error| panic!("read {name}: {error}"));
+            let statements =
+                split_statements(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
+            Migration { name, statements }
+        })
+        .collect()
+}
+
+/// Splits a migration file into statements. The file format keeps this unambiguous, so the
+/// migration Job can apply files one statement at a time over HTTP:
+/// - a line whose first non-blank characters are `--` is a comment and is dropped;
+/// - a statement ends with `;` at the end of a line, and `;` appears nowhere else.
+pub fn split_statements(text: &str) -> Result<Vec<String>, String> {
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    for (index, line) in text.lines().enumerate() {
+        let trimmed = line.trim_end();
+        if trimmed.trim_start().starts_with("--") {
+            continue;
+        }
+        let (body, ends) = match trimmed.strip_suffix(';') {
+            Some(body) => (body, true),
+            None => (trimmed, false),
+        };
+        if body.contains(';') {
+            return Err(format!(
+                "line {}: `;` may only end a statement, at the end of a line",
+                index + 1
+            ));
+        }
+        if !body.trim().is_empty() {
+            current.push_str(body);
+            current.push('\n');
+        }
+        if ends {
+            let statement = current.trim().to_owned();
+            if statement.is_empty() {
+                return Err(format!("line {}: empty statement", index + 1));
+            }
+            statements.push(statement);
+            current.clear();
+        }
+    }
+    if !current.trim().is_empty() {
+        return Err("the last statement does not end with `;`".to_owned());
+    }
+    Ok(statements)
+}
+
+/// Fails the test in CI, where every prerequisite must be present; skips it elsewhere.
+#[allow(
+    clippy::print_stderr,
+    reason = "tells the developer why a test did not run"
+)]
+pub fn unavailable(what: &str) {
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "{what} is required when CI is set"
+    );
+    eprintln!("skipped: {what} is not available (set CI to make this a failure)");
+}
+
+/// `podman` or `docker`, whichever works.
+fn container_runtime() -> Option<&'static str> {
+    ["podman", "docker"].into_iter().find(|runtime| {
+        Command::new(runtime)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    })
+}
+
+fn runtime_output(runtime: &str, args: &[&str]) -> String {
+    let output = Command::new(runtime)
+        .args(args)
+        .output()
+        .unwrap_or_else(|error| panic!("{runtime} {}: {error}", args.join(" ")));
+    assert!(
+        output.status.success(),
+        "{runtime} {} failed: {}",
+        args.first().copied().unwrap_or_default(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// A container that is removed when dropped.
+struct Container {
+    runtime: &'static str,
+    name: String,
+}
+
+impl Drop for Container {
+    fn drop(&mut self) {
+        let _ = Command::new(self.runtime)
+            .args(["rm", "--force", &self.name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+/// An error answer from ClickHouse.
+#[derive(Debug)]
+pub struct QueryError {
+    pub status: u16,
+    pub body: String,
+}
+
+impl QueryError {
+    /// ClickHouse's error name, for example `ACCESS_DENIED`.
+    /// It is the last parenthesised upper-case word of the message, such as `(ACCESS_DENIED)`.
+    pub fn code(&self) -> &str {
+        self.body
+            .split('(')
+            .filter_map(|part| part.split_once(')').map(|(inside, _)| inside))
+            .rfind(|inside| {
+                inside.len() > 2
+                    && inside
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            })
+            .unwrap_or("UNKNOWN")
+    }
+}
+
+/// An account to run queries as.
+#[derive(Clone, Debug)]
+pub struct Account {
+    pub user: String,
+    pub password: String,
+}
+
+/// A ClickHouse server for one test binary: `TEST_CLICKHOUSE_URL` with `TEST_CLICKHOUSE_USER`
+/// and `TEST_CLICKHOUSE_PASSWORD` (an account with access management) when set, otherwise a
+/// throwaway container started with podman or docker. The container is capped at 1500 MB of
+/// memory and removed when this value is dropped.
+pub struct ClickHouse {
+    pub url: String,
+    pub admin: Account,
+    client: reqwest::Client,
+    _container: Option<Container>,
+}
+
+impl ClickHouse {
+    pub async fn start() -> Option<Self> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .expect("build the HTTP client");
+        if let Some(url) = std::env::var("TEST_CLICKHOUSE_URL")
+            .ok()
+            .filter(|url| !url.is_empty())
+        {
+            let admin = Account {
+                user: std::env::var("TEST_CLICKHOUSE_USER")
+                    .expect("TEST_CLICKHOUSE_USER is required with TEST_CLICKHOUSE_URL"),
+                password: std::env::var("TEST_CLICKHOUSE_PASSWORD")
+                    .expect("TEST_CLICKHOUSE_PASSWORD is required with TEST_CLICKHOUSE_URL"),
+            };
+            let server = Self {
+                url,
+                admin,
+                client,
+                _container: None,
+            };
+            server.wait_ready().await;
+            return Some(server);
+        }
+        let Some(runtime) = container_runtime() else {
+            unavailable("TEST_CLICKHOUSE_URL, podman, or docker");
+            return None;
+        };
+        let password = uuid::Uuid::new_v4().simple().to_string();
+        let container = Container {
+            runtime,
+            name: format!(
+                "ingest-test-clickhouse-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4().simple()
+            ),
+        };
+        let user_env = format!("CLICKHOUSE_USER={ADMIN_USER}");
+        let password_env = format!("CLICKHOUSE_PASSWORD={password}");
+        runtime_output(
+            runtime,
+            &[
+                "run",
+                "--detach",
+                "--name",
+                &container.name,
+                // The test machine is shared; ClickHouse sizes its caches from this limit.
+                "--memory",
+                "1500m",
+                "--env",
+                &user_env,
+                "--env",
+                &password_env,
+                // The bootstrap admin may manage access entities with SQL, as in the chart.
+                "--env",
+                "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
+                "--publish",
+                "127.0.0.1::8123",
+                CLICKHOUSE_IMAGE,
+            ],
+        );
+        let mapping = runtime_output(runtime, &["port", &container.name, "8123/tcp"]);
+        let address = mapping
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or_else(|| panic!("no host address for 8123/tcp: {mapping}"))
+            .trim()
+            .to_owned();
+        let server = Self {
+            url: format!("http://{address}"),
+            admin: Account {
+                user: ADMIN_USER.to_owned(),
+                password,
+            },
+            client,
+            _container: Some(container),
+        };
+        server.wait_ready().await;
+        Some(server)
+    }
+
+    async fn wait_ready(&self) {
+        let started = Instant::now();
+        loop {
+            if let Ok(answer) = self.admin("SELECT 1").await
+                && answer.trim() == "1"
+            {
+                return;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(90),
+                "ClickHouse at {} did not accept the admin login in time",
+                self.url
+            );
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
+
+    /// Runs one statement as `account`; `params` go into the URL query (settings, query
+    /// parameters, session_id).
+    pub async fn query_with(
+        &self,
+        account: &Account,
+        sql: &str,
+        params: &[(&str, &str)],
+    ) -> Result<String, QueryError> {
+        let mut url = reqwest::Url::parse(&self.url).expect("valid ClickHouse URL");
+        if !params.is_empty() {
+            url.query_pairs_mut().extend_pairs(params);
+        }
+        let response = self
+            .client
+            .post(url)
+            .header("X-ClickHouse-User", &account.user)
+            .header("X-ClickHouse-Key", &account.password)
+            .body(sql.to_owned())
+            .send()
+            .await
+            .map_err(|error| QueryError {
+                status: 0,
+                body: error.to_string(),
+            })?;
+        let status = response.status().as_u16();
+        let body = response.text().await.map_err(|error| QueryError {
+            status,
+            body: error.to_string(),
+        })?;
+        if (200..300).contains(&status) {
+            Ok(body)
+        } else {
+            Err(QueryError { status, body })
+        }
+    }
+
+    pub async fn query(&self, account: &Account, sql: &str) -> Result<String, QueryError> {
+        self.query_with(account, sql, &[]).await
+    }
+
+    /// Runs one statement as the admin and panics on an error.
+    pub async fn admin(&self, sql: &str) -> Result<String, QueryError> {
+        self.query(&self.admin, sql).await
+    }
+
+    pub async fn admin_ok(&self, sql: &str) -> String {
+        self.admin(sql)
+            .await
+            .unwrap_or_else(|error| panic!("admin query failed: {sql}\n{}", error.body))
+    }
+
+    /// Applies every migration file, statement by statement, as the admin.
+    pub async fn apply_migrations(&self) {
+        for migration in migrations() {
+            for statement in &migration.statements {
+                if let Err(error) = self.admin(statement).await {
+                    panic!(
+                        "{}: statement failed:\n{statement}\n{}",
+                        migration.name, error.body
+                    );
+                }
+            }
+        }
+    }
+}
