@@ -1,0 +1,48 @@
+# Local checks of the workflow's shell glue, 2026-10-10 ~12:57Z, HEAD ee8c438, workstation.
+
+== 1. `report` job of .github/workflows/release.yml
+# The job's `run` script is taken from the workflow file as committed and run with a stub `gh`
+# that records its calls; `needs` is simulated for a success and for failures in each job.
+# Temp paths are shown as <tmp>; the SHA and run id are fake.
+== success: exit 0
+release status: success, v0.0.0-rc.1 published and verified
+verification report appended to the GitHub Release
+gh api --method POST repos/Laysi/trustiot-v2/statuses/0123456789abcdef0123456789abcdef01234567 -f state=success -f context=release -f description=v0.0.0-rc.1 published and verified -f target_url=https://github.com/Laysi/trustiot-v2/actions/runs/42
+gh release view v0.0.0-rc.1 --json body --jq .body
+gh release edit v0.0.0-rc.1 --notes-file <tmp>/release-body.md
+description length: 34
+--- edited body (the stub's old "## 驗證結果" section is replaced, the rest is kept) ---
+### 其他
+
+- notes
+
+## 驗證
+
+cosign verify ...
+
+## 驗證結果
+
+2026-10-10T00:00:00Z new report
+
+---
+== plan fails: exit 1
+release status: failure, plan failed: tag "v1.0.0" … commit abc is not on main: a final release tag must point at a commit on main; tag a release candidate (vX.Y.Z-r
+gh api --method POST repos/Laysi/trustiot-v2/statuses/0123456789abcdef0123456789abcdef01234567 -f state=failure -f context=release -f description=plan failed: tag "v1.0.0" … commit abc is not on main: a final release tag must point at a commit on main; tag a release candidate (vX.Y.Z-r -f target_url=https://github.com/Laysi/trustiot-v2/actions/runs/42
+description length: 140
+== build fails without error output: exit 1
+release status: failure, build failed
+gh api --method POST repos/Laysi/trustiot-v2/statuses/0123456789abcdef0123456789abcdef01234567 -f state=failure -f context=release -f description=build failed -f target_url=https://github.com/Laysi/trustiot-v2/actions/runs/42
+description length: 12
+== publish cancelled: exit 1
+release status: failure, publish cancelled
+gh api --method POST repos/Laysi/trustiot-v2/statuses/0123456789abcdef0123456789abcdef01234567 -f state=failure -f context=release -f description=publish cancelled -f target_url=https://github.com/Laysi/trustiot-v2/actions/runs/42
+description length: 17
+# A failed job never edits the release body (no release, or a release without a verified report).
+
+== 2. Toolchain assertion of .github/actions/setup-proto
+# The same comparison as the action, run in the worktree (pinned channel) and in a temp dir
+# whose rust-toolchain.toml pins another channel, with `rustup` answering 1.99.0 (must fail).
+channel=1.99.0 active=1.99.0-x86_64-unknown-linux-gnu (overridden by '<worktree>/rust-toolchain.toml')
+MATCH
+channel=1.98.0 active=1.99.0-x86_64-unknown-linux-gnu (overridden by '<tmp>/rust-toolchain.toml')
+MISMATCH
