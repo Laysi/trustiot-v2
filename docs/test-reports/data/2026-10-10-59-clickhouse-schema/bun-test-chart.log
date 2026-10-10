@@ -1,7 +1,6 @@
-{"type":"message","message":"Detected an AI agent environment, printing as NDJSON. Trace logs are written to stderr, while user-facing logs are written to stdout."}
 bun test v1.4.2 (744846f84)
 
- 148 pass
+ 149 pass
  0 fail
- 1202 expect() calls
-Ran 148 tests across 1 file. [67.15s]
+ 1201 expect() calls
+Ran 149 tests across 1 file. [13.91s]

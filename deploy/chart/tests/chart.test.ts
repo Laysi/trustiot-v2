@@ -559,6 +559,16 @@ describe("bundled ClickHouse (decision 14)", () => {
     expect(external.filter((m) => m.metadata.name.startsWith(`${RELEASE}-clickhouse`))).toEqual([]);
   });
 
+  test("the ingress e2e overlay installs no ClickHouse, so its helm install --wait needs no admin Secret", () => {
+    for (const shape of SHAPE_NAMES) {
+      const e2e = render([...SHAPES[shape], "tests/e2e/values-e2e.yaml"], [
+        "--set",
+        "ingress.direct.tlsSecret=trustiot-ingress-tls",
+      ]);
+      expect(e2e.filter((m) => m.metadata.name.startsWith(`${RELEASE}-clickhouse`))).toEqual([]);
+    }
+  });
+
   test("a storage class and node placement can be set", () => {
     const placed = render(SHAPES.onprem, [
       "--set",

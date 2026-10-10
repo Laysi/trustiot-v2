@@ -336,7 +336,7 @@ kubectl -n trustiot create secret generic trustiot-clickhouse-admin --from-liter
 - **對外的路由**：服務要經入口對外時，在服務的 issue 把路由加進 `values.yaml` 的 `ingress.routes`（預設需要 cookie）。不要新增例外路徑：決策 27 只允許登入、閘道器憑證換發、MQTT 轉接與健康檢查四種，要加第五種必須先改決策。入口的規則集中在 `templates/_ingress.tpl` 的 `trustiot.ingress.plan`；可信的來源 IP 沿用 `trustiot.clientIpSource`，不要另外加欄位。
 - **新增叢集內元件**（broker、Postgres、ClickHouse、Qdrant、collector、Grafana）：放在自己的 `templates/<元件>.yaml`，以 `*.mode` 或開關控制；Service 只能是 ClusterIP；在 `values.schema.json` 加欄位定義、在本文件加欄位說明（測試檢查 `values.yaml` 每個欄位都在本文件），並更新「元件與開關」與平台設定的表。
 - **Secret**：values 只能出現 `{name, key}` 形式的引用；schema 的 `additionalProperties: false` 會擋下放明文的新欄位。服務要拿新的依賴帳密時，在 `_helpers.tpl` 的 `trustiot.credentialCatalog` 加一列（變數名稱、Secret、可以拿的服務）、在 schema 的 `credentials` 列舉加上名稱，並更新「密鑰的環境變數」表；自訂 `env` 自動不能讀這個帳密。叢集內元件自己產生的帳密 Secret（例如 CloudNativePG 的資料庫帳號，Laysi/trustiot-v2#58）也要加進 `trustiot.dependencySecretRefs`。新的平台變數用 `TRUSTIOT_` 開頭，自動受保留規則保護。
-- **測試**：規則寫進 `tests/chart.test.ts`。`tests/values/` 的兩個安裝實例範例與 `smoke.yaml`（以 traefik/whoami 當替身服務）也供 nightly（Laysi/trustiot-v2#69）在叢集上安裝使用；入口的叢集測試是 `tests/e2e/ingress.e2e.ts`，nightly 可直接沿用。`bun test` 的 kubeconform 已帶 CRD schema 目錄，Gateway API 與 Istio 的資源可以直接驗證。`tests/` 不會打包進 chart（`.helmignore`）。
+- **測試**：規則寫進 `tests/chart.test.ts`。`tests/values/` 的兩個安裝實例範例與 `smoke.yaml`（以 traefik/whoami 當替身服務）也供 nightly（Laysi/trustiot-v2#69）在叢集上安裝使用；入口的叢集測試是 `tests/e2e/ingress.e2e.ts`，nightly 可直接沿用。`bun test` 的 kubeconform 已帶 CRD schema 目錄，Gateway API 與 Istio 的資源可以直接驗證。兩個實例範例會部署叢集內 ClickHouse（`clickhouse.mode: bundled`），在叢集上安裝前要先建立 `trustiot-clickhouse-admin` Secret（見「叢集內的 ClickHouse」）；入口的叢集測試用 `tests/e2e/values-e2e.yaml` 改成 `external`，不部署 ClickHouse。`tests/` 不會打包進 chart（`.helmignore`）。
 
 ## OpenShift 與其他 Kubernetes
 
