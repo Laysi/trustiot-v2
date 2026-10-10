@@ -124,6 +124,17 @@ async function installIstio(platform: Platform, shapes: string[]): Promise<void>
   }
 }
 
+/**
+ * istiod registers the `istio` GatewayClass after it has started, not as part of the helm release,
+ * and `kubectl wait` on an object that does not exist yet fails at once. Wait for it to exist, and
+ * for istiod to accept it, before any chart with a Gateway is installed.
+ */
+async function waitForGatewayClass(platform: Platform): Promise<void> {
+  const kube = { env: { KUBECONFIG: platform.kubeconfig } };
+  await run(platform.log, [platform.kubectl, "wait", "--for=create", "gatewayclass/istio", "--timeout=120s"], { ...kube, timeoutMs: 150_000 });
+  await run(platform.log, [platform.kubectl, "wait", "--for=condition=Accepted", "gatewayclass/istio", "--timeout=120s"], { ...kube, timeoutMs: 150_000 });
+}
+
 /** Builds the e2e test's identity double and loads it into the cluster nodes. */
 async function loadIdentityDouble(platform: Platform): Promise<void> {
   const context = join(platform.repoRoot, "deploy", "chart", "tests", "e2e", "identity-double");
@@ -140,6 +151,7 @@ export async function installPlatform(platform: Platform, shapes: string[]): Pro
   await installGatewayApi(platform);
   platform.log.line("== platform: Istio ambient");
   await installIstio(platform, shapes);
+  await waitForGatewayClass(platform);
   platform.log.line("== platform: identity double image");
   await loadIdentityDouble(platform);
 }

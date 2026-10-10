@@ -114,6 +114,9 @@ async function main(): Promise<number> {
     writeFileSync(kubeconfig, config.stdout, { mode: 0o600 });
     const kube = { env: { KUBECONFIG: kubeconfig } };
     await run(log, [kubectl, "wait", "--for=condition=Ready", "node", "--all", "--timeout=180s"], { ...kube, timeoutMs: 200_000 });
+    // k3s's addon controller creates CoreDNS a few seconds after the node is Ready, and rollout
+    // status fails on an object that does not exist yet: wait for it to exist first.
+    await run(log, [kubectl, "--namespace", "kube-system", "wait", "--for=create", "deployment/coredns", "--timeout=120s"], { ...kube, timeoutMs: 150_000 });
     await run(log, [kubectl, "--namespace", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=180s"], { ...kube, timeoutMs: 200_000 });
     await run(log, [kubectl, "version"], { ...kube, timeoutMs: 60_000 });
 
