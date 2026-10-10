@@ -6,4 +6,12 @@
 # `cargo test -p repo-check` fails when they differ.
 
 bun = "1.4.2"
+cargo-deny = "0.20.2"
+gitleaks = "8.30.1"
 rust = "1.99.0"
+
+# Tools without a built-in proto plugin. Each schema downloads the official release
+# archive and verifies it against the checksum file published with the release.
+[plugins.tools]
+cargo-deny = "file://./.proto/plugins/cargo-deny.toml"
+gitleaks = "file://./.proto/plugins/gitleaks.toml"

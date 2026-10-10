@@ -1,0 +1,28 @@
+# proto schema plugin for cargo-deny (https://github.com/EmbarkStudios/cargo-deny).
+# Downloads the official release archive and verifies it against the
+# SHA-256 file published next to it. `cargo deny` finds the binary on PATH.
+# Reference: https://moonrepo.dev/docs/proto/non-wasm-plugin
+
+name = "cargo-deny"
+type = "cli"
+
+[platform.linux]
+download-file = "cargo-deny-{version}-{arch}-unknown-linux-musl.tar.gz"
+checksum-file = "cargo-deny-{version}-{arch}-unknown-linux-musl.tar.gz.sha256"
+archive-prefix = "cargo-deny-{version}-{arch}-unknown-linux-musl"
+
+[platform.macos]
+download-file = "cargo-deny-{version}-{arch}-apple-darwin.tar.gz"
+checksum-file = "cargo-deny-{version}-{arch}-apple-darwin.tar.gz.sha256"
+archive-prefix = "cargo-deny-{version}-{arch}-apple-darwin"
+
+[install]
+download-url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/{version}/{download_file}"
+checksum-url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/{version}/{checksum_file}"
+
+[install.exes.cargo-deny]
+exe-path = "cargo-deny"
+primary = true
+
+[resolve]
+git-url = "https://github.com/EmbarkStudios/cargo-deny"

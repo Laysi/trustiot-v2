@@ -1,0 +1,63 @@
+# cargo-deny policy for the workspace; CI runs `cargo deny --locked check`
+# (docs/architecture/ci-release.md). Reference: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# Only the platforms we build and ship: x86_64 for development and CI, aarch64 for the
+# gateway and the arm64 container images (decision 5). Dependencies that compile only for
+# other platforms never reach a product, so they are not checked.
+targets = [
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-gnu",
+]
+
+[advisories]
+# Every RustSec vulnerability advisory fails the check. An advisory may be ignored only
+# with a reason and an expiry date, for example:
+#   { id = "RUSTSEC-0000-0000", reason = "not reachable: ...", expiry = "2026-12-31" }
+ignore = []
+# Unmaintained and unsound crates fail the check as well, wherever they are in the graph.
+unmaintained = "all"
+unsound = "all"
+# A yanked version in Cargo.lock fails the check; update the lockfile.
+yanked = "deny"
+
+[licenses]
+# Allow-list of permissive licenses that allow the on-prem product to be resold
+# (docs/architecture/ci-release.md). Anything else fails, in particular the Business
+# Source License (BUSL-1.1), SSPL, the Elastic License, the Commons Clause and the GPL
+# family. Add a license here only after checking that it allows commercial
+# redistribution, and record the reason in docs/architecture/ci-release.md.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "Unicode-3.0",
+    "Zlib",
+]
+# The allow-list is a policy, not a mirror of today's graph.
+unused-allowed-license = "allow"
+confidence-threshold = 0.93
+
+[licenses.private]
+# Workspace crates are `publish = false` and carry no license field.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+# `version = "*"` is denied; path dependencies between unpublished workspace crates are fine.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# Only crates.io; a git or alternative-registry dependency must be added here explicitly.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
