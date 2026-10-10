@@ -1,0 +1,22 @@
+## admin | create evil profile (like a bigger plan, plus hostile elements)
+CREATE SETTINGS PROFILE IF NOT EXISTS evil59 SETTINGS max_threads = 64, max_memory_usage = 8000000000, max_execution_time = 0, max_rows_to_read = 0, max_result_rows = 0, SQL_tenant_id = '{B}', readonly = 0
+## tenant_a | use evil profile via URL | profile=evil59
+SELECT getSetting('readonly'), getSetting('max_threads'), getSetting('max_execution_time'), getSetting('max_memory_usage'), getSetting('SQL_tenant_id'), currentProfiles()
+## tenant_a | use evil profile via URL then read | profile=evil59
+SELECT count() FROM trustiot.telemetry
+## tenant_a | use evil profile via SET in session | session_id=pf1
+SET profile = 'evil59'
+## tenant_a | SET profile then read | session_id=pf1
+SELECT getSetting('readonly'), getSetting('max_threads'), getSetting('SQL_tenant_id'), count() FROM trustiot.telemetry
+## tenant_a | per-query SETTINGS profile
+SELECT getSetting('max_threads') SETTINGS profile = 'evil59'
+## tenant_a | profile with only non-const settings, bigger plan | profile=bigplan59
+SELECT getSetting('max_threads')
+## admin | create bigplan profile without readonly/tenant
+CREATE SETTINGS PROFILE IF NOT EXISTS bigplan59 SETTINGS max_threads = 16, max_concurrent_queries_for_user = 100, max_execution_time = 600, max_memory_usage = 4000000000
+## tenant_a | bigplan via URL | profile=bigplan59
+SELECT getSetting('max_threads'), getSetting('max_concurrent_queries_for_user'), getSetting('max_execution_time'), getSetting('max_memory_usage'), getSetting('readonly'), currentProfiles()
+## tenant_a | bigplan via SETTINGS profile
+SELECT getSetting('max_threads') SETTINGS profile = 'bigplan59'
+## admin | cleanup profiles
+DROP SETTINGS PROFILE IF EXISTS evil59, bigplan59

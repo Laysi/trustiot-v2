@@ -1,0 +1,100 @@
+## tenant_a2 | mergeTreeAnalyzeIndexes no predicate
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry')
+## tenant_a2 | mergeTreeAnalyzeIndexes predicate tenant B (oracle for existence of B data?)
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry', tenant_id = '{B}')
+## tenant_a2 | mergeTreeAnalyzeIndexes predicate tenant A
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry', tenant_id = '{A}')
+## tenant_a2 | mergeTreeAnalyzeIndexes predicate unrelated tenant
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry', tenant_id = '11111111-1111-1111-1111-111111111111')
+## tenant_a2 | mergeTreeAnalyzeIndexes batch_commits
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'batch_commits')
+## tenant_a2 | mergeTreeAnalyzeIndexes columns
+DESCRIBE TABLE mergeTreeAnalyzeIndexes('trustiot', 'telemetry')
+## tenant_a2 | mergeTreeAnalyzeIndexes with partition predicate
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry', tenant_id = '{B}', 'all')
+## tenant_a2 | mergeTreeAnalyzeIndexes with partition id argument
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry', '202610', tenant_id = '{B}')
+## tenant_a2 | mergeTreeAnalyzeIndexes with bogus tenant to count granules in range by B's key
+SELECT count() FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry', tenant_id = '{B}' AND device_id != toUUID('00000000-0000-0000-0000-000000000000'))
+## tenant_a2 | mergeTreeAnalyzeIndexes on system table
+SELECT * FROM mergeTreeAnalyzeIndexes('system', 'query_log')
+## tenant_a2 | mergeTreeCodecBlockCounts
+SELECT * FROM mergeTreeCodecBlockCounts('trustiot', 'telemetry')
+## tenant_a2 | mergeTreeCodecBlockCounts batch_commits
+SELECT * FROM mergeTreeCodecBlockCounts('trustiot', 'batch_commits')
+## tenant_a2 | mergeTreeTextIndex
+SELECT * FROM mergeTreeTextIndex('trustiot', 'telemetry', 'x')
+## tenant_a2 | mergeTreeProjection
+SELECT * FROM mergeTreeProjection('trustiot', 'telemetry', 'x')
+## tenant_a2 | mergeTreeIndex
+SELECT * FROM mergeTreeIndex('trustiot', 'telemetry')
+## tenant_a2 | mergeTreeIndex batch_commits
+SELECT * FROM mergeTreeIndex('trustiot', 'batch_commits')
+## tenant_a2 | mergeTreeAnalyzeIndexesUUID
+SELECT * FROM mergeTreeAnalyzeIndexesUUID(toUUID('00000000-0000-0000-0000-000000000000'))
+## tenant_a2 | mergeTreeAnalyzeIndexesUUID with table uuid
+SELECT * FROM mergeTreeAnalyzeIndexesUUID((SELECT uuid FROM system.tables WHERE name = 'telemetry'))
+## tenant_a2 | system.tables total_rows, uuid, metadata
+SELECT name, uuid, total_rows, total_bytes, data_paths, metadata_modification_time FROM system.tables WHERE database = 'trustiot'
+## tenant_a2 | system.columns data sizes
+SELECT name, data_compressed_bytes, data_uncompressed_bytes, marks_bytes FROM system.columns WHERE database = 'trustiot' AND table = 'telemetry'
+## tenant_a2 | system.parts
+SELECT * FROM system.parts WHERE database = 'trustiot'
+## tenant_a2 | system.parts_columns
+SELECT * FROM system.parts_columns WHERE database = 'trustiot'
+## tenant_a2 | system.data_skipping_indices
+SELECT * FROM system.data_skipping_indices
+## tenant_a2 | system.projection_parts
+SELECT * FROM system.projection_parts
+## tenant_a2 | system.detached_parts
+SELECT * FROM system.detached_parts
+## tenant_a2 | system.asynchronous_metrics
+SELECT * FROM system.asynchronous_metrics LIMIT 3
+## tenant_a2 | system.metrics / events
+SELECT * FROM system.metrics LIMIT 3
+## tenant_a2 | system.events
+SELECT * FROM system.events LIMIT 3
+## tenant_a2 | system.dictionaries
+SELECT * FROM system.dictionaries
+## tenant_a2 | system.query_log
+SELECT query, user FROM system.query_log LIMIT 3
+## tenant_a2 | system.query_thread_log
+SELECT * FROM system.query_thread_log LIMIT 3
+## tenant_a2 | system.query_views_log
+SELECT * FROM system.query_views_log LIMIT 3
+## tenant_a2 | system.processes
+SELECT * FROM system.processes
+## tenant_a2 | system.user_query_log (allowed earlier)
+SELECT * FROM system.user_query_log LIMIT 3
+## tenant_a2 | system.settings SQL_tenant_id
+SELECT name, value, changed FROM system.settings WHERE name IN ('SQL_tenant_id','readonly','max_threads')
+## tenant_a2 | system.quota_usage other users
+SELECT quota_name, quota_key FROM system.quota_usage
+## tenant_a2 | system.quotas_usage
+SELECT * FROM system.quotas_usage
+## tenant_a2 | system.user_processes
+SELECT * FROM system.user_processes
+## tenant_a2 | system.settings_profile_elements
+SELECT * FROM system.settings_profile_elements
+## tenant_a2 | system.grants
+SELECT * FROM system.grants
+## tenant_a2 | system.role_grants
+SELECT * FROM system.role_grants
+## tenant_a2 | system.macros / clusters
+SELECT * FROM system.clusters
+## tenant_a2 | system.build_options
+SELECT * FROM system.build_options LIMIT 2
+## tenant_a2 | system.server_settings
+SELECT name FROM system.server_settings LIMIT 2
+## tenant_a2 | system.disks
+SELECT * FROM system.disks
+## tenant_a2 | system.zookeeper
+SELECT * FROM system.zookeeper WHERE path = '/'
+## tenant_a2 | system.numbers
+SELECT count() FROM (SELECT number FROM system.numbers LIMIT 1000)
+## tenant_a2 | information_schema tables
+SELECT table_name, table_rows FROM information_schema.tables WHERE table_schema = 'trustiot'
+## tenant_a2 | information_schema columns
+SELECT column_name FROM information_schema.columns WHERE table_schema = 'trustiot' LIMIT 3
+## tenant_a2 | INFORMATION_SCHEMA statistics
+SELECT * FROM INFORMATION_SCHEMA.STATISTICS LIMIT 2

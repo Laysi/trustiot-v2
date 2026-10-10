@@ -1,0 +1,9 @@
+GET /?query=SELECT%201 -> 401 Code: 194. DB::Exception: default: Authentication failed: password is incorrect, or there is no user with such name  If 
+GET /ping -> 200 Ok. 
+GET /play -> 200 <!DOCTYPE html> <html> <head>     <meta charset="UTF-8">     <meta name="viewport" content="width=device-width, initial-
+GET /dashboard -> 200 <!DOCTYPE html> <html lang="en"> <head>     <meta charset="UTF-8">     <title>ClickHouse Dashboard</title>     <link rel
+GET /replicas_status -> 200 Ok. 
+GET /metrics -> 404 There is no handle /metrics. Maybe you meant /merges.  Use / or /ping for health checks. Or /replicas_status for more so
+GET /?user=default&query=SELECT%201 -> 401 Code: 194. DB::Exception: default: Authentication failed: password is incorrect, or there is no user with such name  If 
+GET /?user=default&password=&query=SELECT%201 -> 401 Code: 194. DB::Exception: default: Authentication failed: password is incorrect, or there is no user with such name  If 
+GET /?user=trustiot_admin&password=&query=SELECT%201 -> 403 Code: 516. DB::Exception: trustiot_admin: Authentication failed: password is incorrect, or there is no user with such na

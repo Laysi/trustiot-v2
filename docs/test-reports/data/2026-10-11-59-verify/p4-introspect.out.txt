@@ -1,0 +1,421 @@
+### [tenant_a] SHOW CREATE USER tenant_b
+SHOW CREATE USER tenant_b
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1105865","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SHOW USERS ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW CREATE USER self
+SHOW CREATE USER tenant_a
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"841227","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SHOW USERS ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW CREATE USER current
+SHOW CREATE USER CURRENT_USER
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"885204","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SHOW USERS ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW GRANTS FOR tenant_b
+SHOW GRANTS FOR tenant_b
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1133853","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SHOW USERS ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW GRANTS FOR ingest
+SHOW GRANTS FOR ingest
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"927101","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SHOW USERS ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW GRANTS self
+SHOW GRANTS
+--> HTTP 200 (2 ms) summary={"read_rows":"1","read_bytes":"48","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"4352","elapsed_ns":"1113435","memory_usage":"9969930"}
+GRANT trustiot_tenant_reader TO tenant_a
+
+### [tenant_a] SHOW GRANTS FOR role ingest
+SHOW GRANTS FOR trustiot_ingest
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1260803","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SHOW ROLES ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW GRANTS FOR role tenant reader
+SHOW GRANTS FOR trustiot_tenant_reader
+--> HTTP 200 (2 ms) summary={"read_rows":"1","read_bytes":"68","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"4352","elapsed_ns":"919033","memory_usage":"9970618"}
+GRANT SELECT ON trustiot.telemetry TO trustiot_tenant_reader
+
+### [tenant_a] SHOW USERS
+SHOW USERS
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1610773","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.users. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW ROLES
+SHOW ROLES
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1280564","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.roles. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW ROW POLICIES
+SHOW ROW POLICIES
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1262223","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.row_policies. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW CREATE ROW POLICY
+SHOW CREATE ROW POLICY tenant_isolation ON trustiot.telemetry
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1126989","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SHOW ROW POLICIES ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW CREATE POLICY ALL
+SHOW CREATE ROW POLICY ALL
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"902247","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SHOW ROW POLICIES ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW QUOTAS
+SHOW QUOTAS
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1298471","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.quotas. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW CREATE QUOTA
+SHOW CREATE QUOTA trustiot_tenant_reader
+--> HTTP 403 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"816418","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SHOW QUOTAS ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW CREATE QUOTA CURRENT
+SHOW CREATE QUOTA CURRENT
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"866021","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SHOW QUOTAS ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW CURRENT QUOTA
+SHOW CURRENT QUOTA
+--> HTTP 200 (5 ms) summary={"read_rows":"2","read_bytes":"554","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"2","result_bytes":"7949","elapsed_ns":"4213610","memory_usage":"10331805"}
+trustiot_tenant_reader	tenant_a	2026-10-10 18:12:00	2026-10-10 18:13:00	60	0	120	0	\N	0	\N	18	60	0	\N	0	\N	0	\N	0	\N	0	\N	0	\N	0	\N	0	\N\ntrustiot_tenant_reader	tenant_a	2026-10-10 18:00:00	2026-10-10 19:00:00	3600	41	3000	24	\N	0	\N	50	\N	23	\N	353	\N	151	20000000000	2426	\N	0	1800	0	\N	0	\N	0	\N
+
+### [tenant_a] SHOW QUOTAS ALL USAGE
+SHOW QUOTA ALL
+--> HTTP 400 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"781927","memory_usage":"0"}
+Code: 62. DB::Exception: Syntax error: failed at position 12 (ALL): ALL. Expected one of: INTO OUTFILE, FORMAT, SETTINGS, ParallelWithClause, PARALLEL WITH, end of query. (SYNTAX_ERROR) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW PROFILES
+SHOW SETTINGS PROFILES
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1274965","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.settings_profiles. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW CREATE PROFILE
+SHOW CREATE SETTINGS PROFILE trustiot_tenant_reader
+--> HTTP 403 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"771917","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SHOW SETTINGS PROFILES ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW ACCESS
+SHOW ACCESS
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1028568","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SHOW ACCESS ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SHOW PRIVILEGES
+SHOW PRIVILEGES
+--> HTTP 200 (3 ms) summary={"read_rows":"248","read_bytes":"12627","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"248","result_bytes":"36864","elapsed_ns":"2117840","memory_usage":"10033882"}
+SHOW DATABASES	[]	DATABASE	SHOW\nSHOW TABLES	[]	TABLE	SHOW\nCHECK	[]	TABLE	ALL\nSHOW COLUMNS	[]	COLUMN	SHOW\nSHOW DICTIONARIES	[]	DICTIONARY	SHOW\nSHOW	[]	\N	ALL\nSHOW FILESYSTEM CACHES	[]	\N	ALL\nSELECT	[]	COLUMN	ALL\nINSERT	[]	COLUMN	ALL\nALTER UPDATE	['UPDATE']	COLUMN	ALTER TABLE\nALTER DELETE	['DELETE']	COLUMN	ALTER TABLE\nALTER ADD COLUMN	['ADD COLUMN']	COLUMN	ALTER COLUMN\nALTER MODIFY COLUMN	['MODIFY COLUMN']	COLUMN	ALTER COLUMN\nALTER DROP COLUMN	['DROP COLUMN']	COLUMN	ALTER COLUMN\nALTER COMMENT COLUMN	['COMMENT COLUMN']	COLUMN	ALTER COLUMN\nALTER CLEAR COLUMN	['CLEAR COLUMN']	COLUMN	ALTER COLUMN\nALTER RENAME COLUMN	['RENAME COLUMN']	COLUMN	ALTER COLUMN\nALTER MATERIALIZE COLUMN	['
+
+### [tenant_a] SHOW DATABASES
+SHOW DATABASES
+--> HTTP 200 (2 ms) summary={"read_rows":"1","read_bytes":"16","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"4352","elapsed_ns":"1841778","memory_usage":"10038106"}
+trustiot
+
+### [tenant_a] SHOW TABLES FROM trustiot
+SHOW TABLES FROM trustiot
+--> HTTP 200 (3 ms) summary={"read_rows":"1","read_bytes":"33","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"4352","elapsed_ns":"2315647","memory_usage":"10072311"}
+telemetry
+
+### [tenant_a] SHOW TABLES FROM system
+SHOW TABLES FROM system
+--> HTTP 200 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1938246","memory_usage":"5370952"}
+
+
+### [tenant_a] SHOW CREATE TABLE telemetry
+SHOW CREATE TABLE trustiot.telemetry
+--> HTTP 200 (2 ms) summary={"read_rows":"1","read_bytes":"1947","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"8192","elapsed_ns":"1802832","memory_usage":"9971130"}
+CREATE TABLE trustiot.telemetry\n(\n    `tenant_id` UUID COMMENT \'Tenant that owns the gateway, taken from the gateway connection certificate, never from the payload\',\n    `gateway_id` UUID COMMENT \'Gateway that sent the batch\',\n    `stream_id` UUID COMMENT \'Gateway batch stream, batch sequence numbers are unique within a stream\',\n    `batch_seq` UInt64 COMMENT \'Sequence number of the batch within its stream\',\n    `device_id` UUID COMMENT \'Device the reading belongs to\',\n    `point` LowCardinality(String) COMMENT \'Data point key within the device model (C1)\',\n    `ts` DateTime64(3, \'UTC\') COMMENT \'Reading time from the gateway, UTC, milliseconds\' CODEC(DoubleDelta, ZSTD
+
+### [tenant_a] SHOW CREATE TABLE batch_commits
+SHOW CREATE TABLE trustiot.batch_commits
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1093284","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SHOW COLUMNS ON trustiot.batch_commits. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] DESCRIBE telemetry
+DESCRIBE TABLE trustiot.telemetry
+--> HTTP 200 (2 ms) summary={"read_rows":"13","read_bytes":"1592","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"13","result_bytes":"31359","elapsed_ns":"1082648","memory_usage":"9985298"}
+tenant_id	UUID			Tenant that owns the gateway, taken from the gateway connection certificate, never from the payload		\ngateway_id	UUID			Gateway that sent the batch		\nstream_id	UUID			Gateway batch stream, batch sequence numbers are unique within a stream		\nbatch_seq	UInt64			Sequence number of the batch within its stream		\ndevice_id	UUID			Device the reading belongs to		\npoint	LowCardinality(String)			Data point key within the device model (C1)		\nts	DateTime64(3, \'UTC\')			Reading time from the gateway, UTC, milliseconds	DoubleDelta, ZSTD(1)	\nreceived_at	DateTime64(3, \'UTC\')			Server receive time, UTC, milliseconds, drives partitioning and retention	DoubleDelta, ZSTD(1)	\nvalue_ty
+
+### [tenant_a] DESCRIBE batch_commits
+DESCRIBE TABLE trustiot.batch_commits
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1038570","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SHOW COLUMNS ON trustiot.batch_commits. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] EXPLAIN
+EXPLAIN SELECT * FROM trustiot.telemetry
+--> HTTP 200 (4 ms) summary={"read_rows":"8","read_bytes":"545","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"8","result_bytes":"5120","elapsed_ns":"3791317","memory_usage":"9979074"}
+Output: tenant_id, gateway_id, stream_id, batch_seq, device_id, point, ts, received_at, value_type, value_float, value_int, value_bool, value_string\n\nReadFromMergeTree (trustiot.telemetry)\n   Read type: Default\n   Parts: 1 | Granules: 1\n   Output: tenant_id, gateway_id, stream_id, batch_seq, device_id, point, ts, received_at, value_type, value_float, value_int, value_bool, value_string\n   Row level filter\n   Row level filter column:  tenant_id = \'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38\'
+
+### [tenant_a] EXPLAIN PLAN actions
+EXPLAIN PLAN actions=1, header=1 SELECT * FROM trustiot.telemetry WHERE tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'
+--> HTTP 200 (5 ms) summary={"read_rows":"23","read_bytes":"1194","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"23","result_bytes":"6144","elapsed_ns":"4182601","memory_usage":"9978034"}  **LEAK-OF-B-MARKER**
+Output: tenant_id, gateway_id, stream_id, batch_seq, device_id, point, ts, received_at, value_type, value_float, value_int, value_bool, value_string\n\nReadFromMergeTree (trustiot.telemetry)\n   Header: tenant_id UUID\n           gateway_id UUID\n           stream_id UUID\n           batch_seq UInt64\n           device_id UUID\n           point LowCardinality(String)\n           ts DateTime64(3, \'UTC\')\n           received_at DateTime64(3, \'UTC\')\n           value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4)\n           value_float Float64\n           value_int Int64\n           value_bool Bool\n           value_string String\n   Read type: Default\n   Parts: 0 | 
+
+### [tenant_a] EXPLAIN indexes B
+EXPLAIN indexes = 1 SELECT count() FROM trustiot.telemetry WHERE tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'
+--> HTTP 200 (4 ms) summary={"read_rows":"31","read_bytes":"1320","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"31","result_bytes":"6144","elapsed_ns":"2956562","memory_usage":"9975770"}  **LEAK-OF-B-MARKER**
+Output: count()\n\nAggregating\n│  Keys:\n│  Aggregates: count()\n│  Skip merging: 0\n└──Filter ((WHERE + Change column names to column identifiers))\n   │  Filter column: tenant_id = \'490c02de-1a4b-4600-a3ea-ae27b38e7547\'\n   └──ReadFromMergeTree (trustiot.telemetry)\n         Read type: Default\n         Parts: 0 | Granules: 0\n         Output: tenant_id\n         Row level filter\n         Row level filter column:  tenant_id = \'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38\'\n         Indexes:\n           Min-Max\n             Condition: true\n             Parts: 1/1\n             Granules: 1/1\n           Partition\n             Condition: true\n             Parts: 1/1\n             Granules: 
+
+### [tenant_a] EXPLAIN indexes A
+EXPLAIN indexes = 1 SELECT count() FROM trustiot.telemetry WHERE tenant_id = 'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38'
+--> HTTP 200 (4 ms) summary={"read_rows":"31","read_bytes":"1320","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"31","result_bytes":"6144","elapsed_ns":"2899126","memory_usage":"9975770"}
+Output: count()\n\nAggregating\n│  Keys:\n│  Aggregates: count()\n│  Skip merging: 0\n└──Filter ((WHERE + Change column names to column identifiers))\n   │  Filter column: tenant_id = \'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38\'\n   └──ReadFromMergeTree (trustiot.telemetry)\n         Read type: Default\n         Parts: 1 | Granules: 1\n         Output: tenant_id\n         Row level filter\n         Row level filter column:  tenant_id = \'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38\'\n         Indexes:\n           Min-Max\n             Condition: true\n             Parts: 1/1\n             Granules: 1/1\n           Partition\n             Condition: true\n             Parts: 1/1\n             Granules: 
+
+### [tenant_a] EXPLAIN indexes unrelated tenant
+EXPLAIN indexes = 1 SELECT count() FROM trustiot.telemetry WHERE tenant_id = '11111111-1111-1111-1111-111111111111'
+--> HTTP 200 (4 ms) summary={"read_rows":"31","read_bytes":"1320","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"31","result_bytes":"6144","elapsed_ns":"3160411","memory_usage":"9975770"}
+Output: count()\n\nAggregating\n│  Keys:\n│  Aggregates: count()\n│  Skip merging: 0\n└──Filter ((WHERE + Change column names to column identifiers))\n   │  Filter column: tenant_id = \'11111111-1111-1111-1111-111111111111\'\n   └──ReadFromMergeTree (trustiot.telemetry)\n         Read type: Default\n         Parts: 0 | Granules: 0\n         Output: tenant_id\n         Row level filter\n         Row level filter column:  tenant_id = \'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38\'\n         Indexes:\n           Min-Max\n             Condition: true\n             Parts: 1/1\n             Granules: 1/1\n           Partition\n             Condition: true\n             Parts: 1/1\n             Granules: 
+
+### [tenant_a] EXPLAIN indexes no filter
+EXPLAIN indexes = 1 SELECT count() FROM trustiot.telemetry
+--> HTTP 200 (3 ms) summary={"read_rows":"29","read_bytes":"987","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"29","result_bytes":"5120","elapsed_ns":"2609169","memory_usage":"9975794"}
+Output: count()\n\nAggregating\n│  Keys:\n│  Aggregates: count()\n│  Skip merging: 0\n└──ReadFromMergeTree (trustiot.telemetry)\n      Read type: Default\n      Parts: 1 | Granules: 1\n      Output: Empty\n      Row level filter\n      Row level filter column:  tenant_id = \'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38\'\n      Indexes:\n        Min-Max\n          Condition: true\n          Parts: 1/1\n          Granules: 1/1\n        Partition\n          Condition: true\n          Parts: 1/1\n          Granules: 1/1\n        PrimaryKey\n          Keys:\n            tenant_id\n          Condition: (tenant_id in [\'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38\', \'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38\'])\n  
+
+### [tenant_a] EXPLAIN ESTIMATE
+EXPLAIN ESTIMATE SELECT * FROM trustiot.telemetry
+--> HTTP 200 (4 ms) summary={"read_rows":"1","read_bytes":"57","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"20992","elapsed_ns":"2825205","memory_usage":"9977722"}
+trustiot	telemetry	1	7	1
+
+### [tenant_a] EXPLAIN ESTIMATE B
+EXPLAIN ESTIMATE SELECT * FROM trustiot.telemetry WHERE tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'
+--> HTTP 200 (4 ms) summary={"read_rows":"1","read_bytes":"57","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"20992","elapsed_ns":"3427675","memory_usage":"9978866"}
+trustiot	telemetry	0	0	0
+
+### [tenant_a] EXPLAIN PIPELINE
+EXPLAIN PIPELINE SELECT * FROM trustiot.telemetry WHERE tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'
+--> HTTP 200 (4 ms) summary={"read_rows":"5","read_bytes":"129","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"5","result_bytes":"4352","elapsed_ns":"3261104","memory_usage":"9977546"}
+(Expression)\nExpressionTransform\n  (Expression)\n  ExpressionTransform\n    (ReadFromMergeTree)
+
+### [tenant_a] EXPLAIN AST
+EXPLAIN AST SELECT * FROM trustiot.telemetry
+--> HTTP 200 (2 ms) summary={"read_rows":"9","read_bytes":"352","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"9","result_bytes":"4608","elapsed_ns":"1041851","memory_usage":"9971666"}
+SelectWithUnionQuery (children 1)\n ExpressionList (children 1)\n  SelectQuery (children 2)\n   ExpressionList (children 1)\n    Asterisk\n   TablesInSelectQuery (children 1)\n    TablesInSelectQueryElement (children 1)\n     TableExpression (children 1)\n      TableIdentifier trustiot.telemetry
+
+### [tenant_a] EXPLAIN QUERY TREE
+EXPLAIN QUERY TREE SELECT * FROM trustiot.telemetry
+--> HTTP 200 (2 ms) summary={"read_rows":"32","read_bytes":"1830","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"32","result_bytes":"6144","elapsed_ns":"1262674","memory_usage":"9972434"}
+QUERY id: 0\n  PROJECTION COLUMNS\n    tenant_id UUID\n    gateway_id UUID\n    stream_id UUID\n    batch_seq UInt64\n    device_id UUID\n    point LowCardinality(String)\n    ts DateTime64(3, \'UTC\')\n    received_at DateTime64(3, \'UTC\')\n    value_type Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4)\n    value_float Float64\n    value_int Int64\n    value_bool Bool\n    value_string String\n  PROJECTION\n    LIST id: 1, nodes: 13\n      COLUMN id: 2, column_name: tenant_id, result_type: UUID, source_id: 3\n      COLUMN id: 4, column_name: gateway_id, result_type: UUID, source_id: 3\n      COLUMN id: 5, column_name: stream_id, result_type: UUID, source_id: 3\n      COLUMN
+
+### [tenant_a] EXPLAIN json=1 description=1 indexes
+EXPLAIN json = 1, indexes = 1, actions = 1 SELECT value_string FROM trustiot.telemetry WHERE tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547' AND value_string = 'B-SECRET-VERIFY59'
+--> HTTP 200 (4 ms) summary={"read_rows":"1","read_bytes":"10017","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"20480","elapsed_ns":"3258962","memory_usage":"9978338"}  **LEAK-OF-B-MARKER**
+[\n  {\n    "Plan": {\n      "Node Type": "Expression",\n      "Node Id": "Expression_6",\n      "Description": "(Project names + Projection)",\n      "Expression": {\n        "Inputs": [\n          {\n            "Name": "__table1.value_string",\n            "Type": "String"\n          }\n        ],\n        "Actions": [\n          {\n            "Node Type": "INPUT",\n            "Result Type": "String",\n            "Result Name": "__table1.value_string",\n            "Arguments": [0],\n            "Removed Arguments": [],\n            "Result": 0\n          },\n          {\n            "Node Type": "ALIAS",\n            "Result Type": "String",\n            "Result Name": "value_string",
+
+### [tenant_a] EXISTS TABLE
+EXISTS TABLE trustiot.batch_commits
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1147410","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SHOW TABLES ON trustiot.batch_commits. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] KILL QUERY other users
+KILL QUERY WHERE user = 'tenant_b' SYNC
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1904850","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.processes. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] KILL QUERY all
+KILL QUERY WHERE 1 SYNC
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1449529","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.processes. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] KILL QUERY test
+KILL QUERY WHERE user != currentUser() TEST
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1469083","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.processes. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] KILL MUTATION
+KILL MUTATION WHERE database = 'trustiot'
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1666642","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.mutations. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SYSTEM FLUSH LOGS
+SYSTEM FLUSH LOGS
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1054333","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SYSTEM FLUSH LOGS ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SYSTEM DROP MARK CACHE
+SYSTEM DROP MARK CACHE
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1115263","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SYSTEM DROP MARK CACHE ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SYSTEM STOP MERGES
+SYSTEM STOP MERGES trustiot.telemetry
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1093822","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SYSTEM MERGES ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SYSTEM RELOAD CONFIG
+SYSTEM RELOAD CONFIG
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1027593","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SYSTEM RELOAD CONFIG ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SYSTEM SHUTDOWN
+SYSTEM SHUTDOWN
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1074379","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SYSTEM SHUTDOWN ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SYSTEM SYNC REPLICA
+SYSTEM SYNC REPLICA trustiot.telemetry
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1117856","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SYSTEM SYNC REPLICA ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] OPTIMIZE
+OPTIMIZE TABLE trustiot.telemetry FINAL
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1030063","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant OPTIMIZE ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] CHECK TABLE
+CHECK TABLE trustiot.telemetry
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1095441","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant CHECK ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] INSERT
+INSERT INTO trustiot.telemetry (tenant_id, point, value_type) VALUES ('b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38', 'x', 'float')
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1214403","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant INSERT(tenant_id, point, value_type) ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] INSERT batch_commits
+INSERT INTO trustiot.batch_commits (tenant_id, stream_id, seq, row_count, committed_at) VALUES ('b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38', generateUUIDv4(), 1, 1, now64())
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1091172","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant INSERT ON trustiot.batch_commits. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] INSERT SELECT from telemetry to telemetry
+INSERT INTO trustiot.telemetry SELECT * FROM trustiot.telemetry
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1373889","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant INSERT(tenant_id, gateway_id, stream_id, batch_seq, device_id, point, ts, received_at, value_type, value_float, value_int, value_bool, value_string) ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] INSERT INTO FUNCTION file
+INSERT INTO FUNCTION file('/tmp/leak.csv', 'CSV') SELECT * FROM trustiot.telemetry
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1283122","memory_usage":"0"}
+Code: 291. DB::Exception: File `/tmp/leak.csv` is not inside `/var/lib/clickhouse/user_files`. (DATABASE_ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] INTO OUTFILE
+SELECT * FROM trustiot.telemetry INTO OUTFILE '/tmp/leak2.csv'
+--> HTTP 500 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2953549","memory_usage":"0"}
+Code: 358. DB::Exception: INTO OUTFILE is not allowed. (INTO_OUTFILE_NOT_ALLOWED) (version 26.8.22.13 (official build))
+
+### [tenant_a] ALTER UPDATE
+ALTER TABLE trustiot.telemetry UPDATE value_string = 'x' WHERE 1
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1147184","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant ALTER UPDATE(value_string) ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] ALTER DELETE
+ALTER TABLE trustiot.telemetry DELETE WHERE 1
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1026842","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant ALTER DELETE ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] DELETE FROM
+DELETE FROM trustiot.telemetry WHERE 1
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1066290","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant ALTER DELETE ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] ALTER DROP PARTITION
+ALTER TABLE trustiot.telemetry DROP PARTITION ID 'all'
+--> HTTP 403 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"861359","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant ALTER DELETE ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] ALTER MODIFY TTL
+ALTER TABLE trustiot.telemetry MODIFY TTL received_at + INTERVAL 1 SECOND
+--> HTTP 403 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"901616","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant ALTER TTL ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] ALTER ADD COLUMN
+ALTER TABLE trustiot.telemetry ADD COLUMN c UInt8
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"897070","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant ALTER ADD COLUMN(c) ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] ALTER ADD ROW POLICY
+CREATE ROW POLICY pwn ON trustiot.telemetry USING 1 TO tenant_a
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1180580","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant CREATE ROW POLICY ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] ALTER ROW POLICY
+ALTER ROW POLICY tenant_isolation ON trustiot.telemetry USING 1
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1025191","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant ALTER ROW POLICY ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] DROP ROW POLICY
+DROP ROW POLICY deny_by_default ON trustiot.telemetry
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1180169","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant DROP ROW POLICY ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] DROP QUOTA
+DROP QUOTA trustiot_tenant_reader
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1065709","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant DROP QUOTA ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] CREATE QUOTA
+CREATE QUOTA q TO tenant_a
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"999628","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant CREATE QUOTA ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] ALTER QUOTA
+ALTER QUOTA trustiot_tenant_reader FOR INTERVAL 1 minute MAX queries = 100000
+--> HTTP 403 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"820946","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant ALTER QUOTA ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] DROP TABLE
+DROP TABLE trustiot.telemetry
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1097628","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant DROP TABLE ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] TRUNCATE
+TRUNCATE TABLE trustiot.telemetry
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1118567","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant TRUNCATE ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] RENAME
+RENAME TABLE trustiot.telemetry TO trustiot.telemetry2
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1051798","memory_usage":"0"}
+Code: 201. DB::Exception: Quota for user `tenant_a` for 60s has been exceeded: errors = 61/60. Interval will end at 2026-10-10 18:13:00. Name of quota template: `trustiot_tenant_reader`. (QUOTA_EXCEEDED) (version 26.8.22.13 (official build))
+
+### [tenant_a] CREATE TABLE
+CREATE TABLE trustiot.x (a UInt8) ENGINE = Memory
+--> HTTP 500 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"861892","memory_usage":"0"}
+Code: 201. DB::Exception: Quota for user `tenant_a` for 60s has been exceeded: errors = 62/60. Interval will end at 2026-10-10 18:13:00. Name of quota template: `trustiot_tenant_reader`. (QUOTA_EXCEEDED) (version 26.8.22.13 (official build))
+
+### [tenant_a] CREATE DATABASE
+CREATE DATABASE evil
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"884405","memory_usage":"0"}
+Code: 201. DB::Exception: Quota for user `tenant_a` for 60s has been exceeded: errors = 63/60. Interval will end at 2026-10-10 18:13:00. Name of quota template: `trustiot_tenant_reader`. (QUOTA_EXCEEDED) (version 26.8.22.13 (official build))
+
+### [tenant_a] CREATE VIEW
+CREATE VIEW trustiot.v AS SELECT * FROM trustiot.telemetry
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"908461","memory_usage":"0"}
+Code: 201. DB::Exception: Quota for user `tenant_a` for 60s has been exceeded: errors = 64/60. Interval will end at 2026-10-10 18:13:00. Name of quota template: `trustiot_tenant_reader`. (QUOTA_EXCEEDED) (version 26.8.22.13 (official build))
+
+### [tenant_a] CREATE MATERIALIZED VIEW
+CREATE MATERIALIZED VIEW trustiot.mv ENGINE = Memory AS SELECT * FROM trustiot.telemetry
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"925412","memory_usage":"0"}
+Code: 201. DB::Exception: Quota for user `tenant_a` for 60s has been exceeded: errors = 65/60. Interval will end at 2026-10-10 18:13:00. Name of quota template: `trustiot_tenant_reader`. (QUOTA_EXCEEDED) (version 26.8.22.13 (official build))
+
+### [tenant_a] CREATE USER
+CREATE USER evil
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"935824","memory_usage":"0"}
+Code: 201. DB::Exception: Quota for user `tenant_a` for 60s has been exceeded: errors = 66/60. Interval will end at 2026-10-10 18:13:00. Name of quota template: `trustiot_tenant_reader`. (QUOTA_EXCEEDED) (version 26.8.22.13 (official build))
+
+### [tenant_a] CREATE FUNCTION
+CREATE FUNCTION f AS (x) -> x
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"924570","memory_usage":"0"}
+Code: 201. DB::Exception: Quota for user `tenant_a` for 60s has been exceeded: errors = 67/60. Interval will end at 2026-10-10 18:13:00. Name of quota template: `trustiot_tenant_reader`. (QUOTA_EXCEEDED) (version 26.8.22.13 (official build))
+
+### [tenant_a] ATTACH
+ATTACH TABLE trustiot.telemetry
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"852102","memory_usage":"0"}
+Code: 201. DB::Exception: Quota for user `tenant_a` for 60s has been exceeded: errors = 68/60. Interval will end at 2026-10-10 18:13:00. Name of quota template: `trustiot_tenant_reader`. (QUOTA_EXCEEDED) (version 26.8.22.13 (official build))
+
+### [tenant_a] DETACH
+DETACH TABLE trustiot.telemetry
+--> HTTP 500 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"811688","memory_usage":"0"}
+Code: 201. DB::Exception: Quota for user `tenant_a` for 60s has been exceeded: errors = 69/60. Interval will end at 2026-10-10 18:13:00. Name of quota template: `trustiot_tenant_reader`. (QUOTA_EXCEEDED) (version 26.8.22.13 (official build))
+
+### [tenant_a] UNDROP
+UNDROP TABLE trustiot.telemetry
+--> HTTP 500 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"834064","memory_usage":"0"}
+Code: 201. DB::Exception: Quota for user `tenant_a` for 60s has been exceeded: errors = 70/60. Interval will end at 2026-10-10 18:13:00. Name of quota template: `trustiot_tenant_reader`. (QUOTA_EXCEEDED) (version 26.8.22.13 (official build))
+
+### [tenant_a] SET default database USE
+USE system
+--> HTTP 500 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"836010","memory_usage":"0"}
+Code: 201. DB::Exception: Quota for user `tenant_a` for 60s has been exceeded: errors = 71/60. Interval will end at 2026-10-10 18:13:00. Name of quota template: `trustiot_tenant_reader`. (QUOTA_EXCEEDED) (version 26.8.22.13 (official build))
+
+# summary: 84 probes, 3 responses containing B's tenant id or secret

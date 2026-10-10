@@ -1,0 +1,168 @@
+## tenant_a | SHOW CREATE USER tenant_b
+SHOW CREATE USER tenant_b
+## tenant_a | SHOW CREATE USER self
+SHOW CREATE USER tenant_a
+## tenant_a | SHOW CREATE USER current
+SHOW CREATE USER CURRENT_USER
+## tenant_a | SHOW GRANTS FOR tenant_b
+SHOW GRANTS FOR tenant_b
+## tenant_a | SHOW GRANTS FOR ingest
+SHOW GRANTS FOR ingest
+## tenant_a | SHOW GRANTS self
+SHOW GRANTS
+## tenant_a | SHOW GRANTS FOR role ingest
+SHOW GRANTS FOR trustiot_ingest
+## tenant_a | SHOW GRANTS FOR role tenant reader
+SHOW GRANTS FOR trustiot_tenant_reader
+## tenant_a | SHOW USERS
+SHOW USERS
+## tenant_a | SHOW ROLES
+SHOW ROLES
+## tenant_a | SHOW ROW POLICIES
+SHOW ROW POLICIES
+## tenant_a | SHOW CREATE ROW POLICY
+SHOW CREATE ROW POLICY tenant_isolation ON trustiot.telemetry
+## tenant_a | SHOW CREATE POLICY ALL
+SHOW CREATE ROW POLICY ALL
+## tenant_a | SHOW QUOTAS
+SHOW QUOTAS
+## tenant_a | SHOW CREATE QUOTA
+SHOW CREATE QUOTA trustiot_tenant_reader
+## tenant_a | SHOW CREATE QUOTA CURRENT
+SHOW CREATE QUOTA CURRENT
+## tenant_a | SHOW CURRENT QUOTA
+SHOW CURRENT QUOTA
+## tenant_a | SHOW QUOTAS ALL USAGE
+SHOW QUOTA ALL
+## tenant_a | SHOW PROFILES
+SHOW SETTINGS PROFILES
+## tenant_a | SHOW CREATE PROFILE
+SHOW CREATE SETTINGS PROFILE trustiot_tenant_reader
+## tenant_a | SHOW ACCESS
+SHOW ACCESS
+## tenant_a | SHOW PRIVILEGES
+SHOW PRIVILEGES
+## tenant_a | SHOW DATABASES
+SHOW DATABASES
+## tenant_a | SHOW TABLES FROM trustiot
+SHOW TABLES FROM trustiot
+## tenant_a | SHOW TABLES FROM system
+SHOW TABLES FROM system
+## tenant_a | SHOW CREATE TABLE telemetry
+SHOW CREATE TABLE trustiot.telemetry
+## tenant_a | SHOW CREATE TABLE batch_commits
+SHOW CREATE TABLE trustiot.batch_commits
+## tenant_a | DESCRIBE telemetry
+DESCRIBE TABLE trustiot.telemetry
+## tenant_a | DESCRIBE batch_commits
+DESCRIBE TABLE trustiot.batch_commits
+## tenant_a | EXPLAIN
+EXPLAIN SELECT * FROM trustiot.telemetry
+## tenant_a | EXPLAIN PLAN actions
+EXPLAIN PLAN actions=1, header=1 SELECT * FROM trustiot.telemetry WHERE tenant_id = '{B}'
+## tenant_a | EXPLAIN indexes B
+EXPLAIN indexes = 1 SELECT count() FROM trustiot.telemetry WHERE tenant_id = '{B}'
+## tenant_a | EXPLAIN indexes A
+EXPLAIN indexes = 1 SELECT count() FROM trustiot.telemetry WHERE tenant_id = '{A}'
+## tenant_a | EXPLAIN indexes unrelated tenant
+EXPLAIN indexes = 1 SELECT count() FROM trustiot.telemetry WHERE tenant_id = '11111111-1111-1111-1111-111111111111'
+## tenant_a | EXPLAIN indexes no filter
+EXPLAIN indexes = 1 SELECT count() FROM trustiot.telemetry
+## tenant_a | EXPLAIN ESTIMATE
+EXPLAIN ESTIMATE SELECT * FROM trustiot.telemetry
+## tenant_a | EXPLAIN ESTIMATE B
+EXPLAIN ESTIMATE SELECT * FROM trustiot.telemetry WHERE tenant_id = '{B}'
+## tenant_a | EXPLAIN PIPELINE
+EXPLAIN PIPELINE SELECT * FROM trustiot.telemetry WHERE tenant_id = '{B}'
+## tenant_a | EXPLAIN AST
+EXPLAIN AST SELECT * FROM trustiot.telemetry
+## tenant_a | EXPLAIN QUERY TREE
+EXPLAIN QUERY TREE SELECT * FROM trustiot.telemetry
+## tenant_a | EXPLAIN json=1 description=1 indexes
+EXPLAIN json = 1, indexes = 1, actions = 1 SELECT value_string FROM trustiot.telemetry WHERE tenant_id = '{B}' AND value_string = '{SECRET}'
+## tenant_a | EXISTS TABLE
+EXISTS TABLE trustiot.batch_commits
+## tenant_a | KILL QUERY other users
+KILL QUERY WHERE user = 'tenant_b' SYNC
+## tenant_a | KILL QUERY all
+KILL QUERY WHERE 1 SYNC
+## tenant_a | KILL QUERY test
+KILL QUERY WHERE user != currentUser() TEST
+## tenant_a | KILL MUTATION
+KILL MUTATION WHERE database = 'trustiot'
+## tenant_a | SYSTEM FLUSH LOGS
+SYSTEM FLUSH LOGS
+## tenant_a | SYSTEM DROP MARK CACHE
+SYSTEM DROP MARK CACHE
+## tenant_a | SYSTEM STOP MERGES
+SYSTEM STOP MERGES trustiot.telemetry
+## tenant_a | SYSTEM RELOAD CONFIG
+SYSTEM RELOAD CONFIG
+## tenant_a | SYSTEM SHUTDOWN
+SYSTEM SHUTDOWN
+## tenant_a | SYSTEM SYNC REPLICA
+SYSTEM SYNC REPLICA trustiot.telemetry
+## tenant_a | OPTIMIZE
+OPTIMIZE TABLE trustiot.telemetry FINAL
+## tenant_a | CHECK TABLE
+CHECK TABLE trustiot.telemetry
+## tenant_a | INSERT
+INSERT INTO trustiot.telemetry (tenant_id, point, value_type) VALUES ('{A}', 'x', 'float')
+## tenant_a | INSERT batch_commits
+INSERT INTO trustiot.batch_commits (tenant_id, stream_id, seq, row_count, committed_at) VALUES ('{A}', generateUUIDv4(), 1, 1, now64())
+## tenant_a | INSERT SELECT from telemetry to telemetry
+INSERT INTO trustiot.telemetry SELECT * FROM trustiot.telemetry
+## tenant_a | INSERT INTO FUNCTION file
+INSERT INTO FUNCTION file('/tmp/leak.csv', 'CSV') SELECT * FROM trustiot.telemetry
+## tenant_a | INTO OUTFILE
+SELECT * FROM trustiot.telemetry INTO OUTFILE '/tmp/leak2.csv'
+## tenant_a | ALTER UPDATE
+ALTER TABLE trustiot.telemetry UPDATE value_string = 'x' WHERE 1
+## tenant_a | ALTER DELETE
+ALTER TABLE trustiot.telemetry DELETE WHERE 1
+## tenant_a | DELETE FROM
+DELETE FROM trustiot.telemetry WHERE 1
+## tenant_a | ALTER DROP PARTITION
+ALTER TABLE trustiot.telemetry DROP PARTITION ID 'all'
+## tenant_a | ALTER MODIFY TTL
+ALTER TABLE trustiot.telemetry MODIFY TTL received_at + INTERVAL 1 SECOND
+## tenant_a | ALTER ADD COLUMN
+ALTER TABLE trustiot.telemetry ADD COLUMN c UInt8
+## tenant_a | ALTER ADD ROW POLICY
+CREATE ROW POLICY pwn ON trustiot.telemetry USING 1 TO tenant_a
+## tenant_a | ALTER ROW POLICY
+ALTER ROW POLICY tenant_isolation ON trustiot.telemetry USING 1
+## tenant_a | DROP ROW POLICY
+DROP ROW POLICY deny_by_default ON trustiot.telemetry
+## tenant_a | DROP QUOTA
+DROP QUOTA trustiot_tenant_reader
+## tenant_a | CREATE QUOTA
+CREATE QUOTA q TO tenant_a
+## tenant_a | ALTER QUOTA
+ALTER QUOTA trustiot_tenant_reader FOR INTERVAL 1 minute MAX queries = 100000
+## tenant_a | DROP TABLE
+DROP TABLE trustiot.telemetry
+## tenant_a | TRUNCATE
+TRUNCATE TABLE trustiot.telemetry
+## tenant_a | RENAME
+RENAME TABLE trustiot.telemetry TO trustiot.telemetry2
+## tenant_a | CREATE TABLE
+CREATE TABLE trustiot.x (a UInt8) ENGINE = Memory
+## tenant_a | CREATE DATABASE
+CREATE DATABASE evil
+## tenant_a | CREATE VIEW
+CREATE VIEW trustiot.v AS SELECT * FROM trustiot.telemetry
+## tenant_a | CREATE MATERIALIZED VIEW
+CREATE MATERIALIZED VIEW trustiot.mv ENGINE = Memory AS SELECT * FROM trustiot.telemetry
+## tenant_a | CREATE USER
+CREATE USER evil
+## tenant_a | CREATE FUNCTION
+CREATE FUNCTION f AS (x) -> x
+## tenant_a | ATTACH
+ATTACH TABLE trustiot.telemetry
+## tenant_a | DETACH
+DETACH TABLE trustiot.telemetry
+## tenant_a | UNDROP
+UNDROP TABLE trustiot.telemetry
+## tenant_a | SET default database USE
+USE system

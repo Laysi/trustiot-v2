@@ -1,0 +1,276 @@
+### [tenant_a] error oracle: toUInt64 on value_string
+SELECT count() FROM trustiot.telemetry WHERE toUInt64(value_string) = 1
+--> HTTP 400 (8 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"6182078","memory_usage":"0"}
+Code: 6. DB::Exception: Cannot parse string 'a-row-0' as UInt64: syntax error at begin of string. Note: there are toUInt64OrZero and toUInt64OrNull functions, which returns zero/NULL instead of throwing exception: while executing 'FUNCTION toUInt64(value_string :: 0) -> toUInt64(__table1.value_string) UInt64 : 2': While executing MergeTreeSelect(pool: ReadPoolInOrder, algorithm: InOrder). (CANNOT_PARSE_TEXT) (version 26.8.22.13 (official build))
+
+### [tenant_a] error oracle: toUInt64 in PREWHERE
+SELECT count() FROM trustiot.telemetry PREWHERE toUInt64(value_string) = 1
+--> HTTP 400 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"4857806","memory_usage":"0"}
+Code: 6. DB::Exception: Cannot parse string 'a-row-0' as UInt64: syntax error at begin of string. Note: there are toUInt64OrZero and toUInt64OrNull functions, which returns zero/NULL instead of throwing exception: while executing 'FUNCTION toUInt64(value_string :: 0) -> toUInt64(value_string) UInt64 : 2': While executing MergeTreeSelect(pool: ReadPoolInOrder, algorithm: InOrder). (CANNOT_PARSE_TEXT) (version 26.8.22.13 (official build))
+
+### [tenant_a] error oracle: throwIf with value
+SELECT count() FROM trustiot.telemetry WHERE throwIf(value_string = 'B-SECRET-VERIFY59', 'FOUND ' || value_string) = 0
+--> HTTP 400 (7 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"5798086","memory_usage":"0"}  **LEAK-OF-B-MARKER**
+Code: 44. DB::Exception: Argument at index 1 for function throwIf must be constant: while executing function throwIf on arguments equals(__table1.value_string, 'B-SECRET-VERIFY59'_String) UInt8 UInt8(size = 0), concat('FOUND '_String, __table1.value_string) String String(size = 0). (ILLEGAL_COLUMN) (version 26.8.22.13 (official build))
+
+### [tenant_a] error oracle: throwIf on every row echoing value in PREWHERE
+SELECT count() FROM trustiot.telemetry PREWHERE throwIf(value_string LIKE 'B-%', value_string) = 0
+--> HTTP 400 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"4263263","memory_usage":"0"}
+Code: 44. DB::Exception: Argument at index 1 for function throwIf must be constant: while executing function throwIf on arguments startsWith(value_string, 'B-'_String) UInt8 UInt8(size = 0), value_string String String(size = 0). (ILLEGAL_COLUMN) (version 26.8.22.13 (official build))
+
+### [tenant_a] error oracle: CAST error echo
+SELECT CAST(value_string AS UInt8) FROM trustiot.telemetry
+--> HTTP 400 (34 ms) summary={"read_rows":"7","read_bytes":"208","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"0","result_bytes":"0","elapsed_ns":"33288054","memory_usage":"2237787"}
+Code: 6. DB::Exception: Cannot parse string 'a-row-0' as UInt8: syntax error at begin of string. Note: there are toUInt8OrZero and toUInt8OrNull functions, which returns zero/NULL instead of throwing exception: while executing 'FUNCTION CAST(__table1.value_string :: 2, 'UInt8'_String :: 1) -> CAST(__table1.value_string, 'UInt8'_String) UInt8 : 0'. (CANNOT_PARSE_TEXT) (version 26.8.22.13 (official build))
+
+### [tenant_a] error oracle: parseDateTimeBestEffort
+SELECT parseDateTime(value_string, '%Y') FROM trustiot.telemetry
+--> HTTP 400 (6 ms) summary={"read_rows":"7","read_bytes":"208","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"0","result_bytes":"0","elapsed_ns":"4724734","memory_usage":"2232478"}
+Code: 41. DB::Exception: Value 49423 for year must be in the range [1970, 2106]: while executing 'FUNCTION parseDateTime(__table1.value_string :: 2, '%Y'_String :: 1) -> parseDateTime(__table1.value_string, '%Y'_String) DateTime('UTC') : 0'. (CANNOT_PARSE_DATETIME) (version 26.8.22.13 (official build))
+
+### [tenant_a] error oracle: toUUID(value_string)
+SELECT toUUID(value_string) FROM trustiot.telemetry
+--> HTTP 400 (5 ms) summary={"read_rows":"7","read_bytes":"208","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"0","result_bytes":"0","elapsed_ns":"4036047","memory_usage":"2228358"}
+Code: 376. DB::Exception: Cannot parse uuid a-row-0: Cannot parse UUID from String: while executing 'FUNCTION toUUID(__table1.value_string :: 1) -> toUUID(__table1.value_string) UUID : 0'. (CANNOT_PARSE_UUID) (version 26.8.22.13 (official build))
+
+### [tenant_a] error oracle: JSONExtract/arrayElement overflow
+SELECT [1][toUInt32(length(value_string)) + 100] FROM trustiot.telemetry WHERE value_string LIKE 'B-%'
+--> HTTP 200 (5 ms) summary={"read_rows":"7","read_bytes":"208","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"0","result_bytes":"0","elapsed_ns":"4341598","memory_usage":"5422019"}
+
+
+### [tenant_a] error oracle: 1/0 integer on B rows only
+SELECT intDiv(1, length(value_string) - 15) FROM trustiot.telemetry WHERE value_string = 'B-SECRET-VERIFY59'
+--> HTTP 200 (6 ms) summary={"read_rows":"7","read_bytes":"208","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"0","result_bytes":"0","elapsed_ns":"5364459","memory_usage":"5417819"}
+
+
+### [tenant_a] error oracle: divide only B rows (no filter)
+SELECT sum(intDiv(1, if(value_string = 'B-SECRET-VERIFY59', 0, 1))) FROM trustiot.telemetry
+--> HTTP 200 (6 ms) summary={"read_rows":"7","read_bytes":"208","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"5575180","memory_usage":"10091826"}
+3
+
+### [tenant_a] error oracle: throwIf B tenant in SELECT list
+SELECT throwIf(tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547') FROM trustiot.telemetry
+--> HTTP 200 (6 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"3","result_bytes":"130","elapsed_ns":"4585741","memory_usage":"10093992"}
+0\n0\n0
+
+### [tenant_a] error oracle: JOIN ON throwIf
+SELECT count() FROM trustiot.telemetry AS x INNER JOIN trustiot.telemetry AS y ON x.device_id = y.device_id AND throwIf(y.value_string = 'B-SECRET-VERIFY59') = 0
+--> HTTP 200 (9 ms) summary={"read_rows":"14","read_bytes":"544","written_rows":"0","written_bytes":"0","total_rows_to_read":"14","result_rows":"1","result_bytes":"136","elapsed_ns":"7085437","memory_usage":"10168498"}
+9
+
+### [tenant_a] error oracle: multiIf with exception function on non-A
+SELECT sum(toUInt8(if(tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547', '300', '1'))) FROM trustiot.telemetry
+--> HTTP 200 (6 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"4646889","memory_usage":"10094417"}
+3
+
+### [tenant_a] timing oracle: sleep only for B rows
+SELECT count() FROM trustiot.telemetry WHERE tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547' AND sleepEachRow(0.5) = 0
+--> HTTP 200 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"136","elapsed_ns":"5047590","memory_usage":"10085793"}
+0
+
+### [tenant_a] timing oracle: sleep for B rows via if()
+SELECT sum(sleepEachRow(if(tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547', 0.5, 0))) FROM trustiot.telemetry
+--> HTTP 400 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3110250","memory_usage":"0"}  **LEAK-OF-B-MARKER**
+Code: 44. DB::Exception: The argument of function sleepEachRow must be constant: while executing function sleepEachRow on arguments if(equals(__table1.tenant_id, '490c02de-1a4b-4600-a3ea-ae27b38e7547'_String), 0.5_Float64, 0_UInt8) Float64 Float64(size = 0). (ILLEGAL_COLUMN) (version 26.8.22.13 (official build))
+
+### [tenant_a] timing oracle baseline: sleep for A rows
+SELECT sum(sleepEachRow(if(tenant_id = 'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38', 0.1, 0))) FROM trustiot.telemetry
+--> HTTP 400 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2975105","memory_usage":"0"}
+Code: 44. DB::Exception: The argument of function sleepEachRow must be constant: while executing function sleepEachRow on arguments if(equals(__table1.tenant_id, 'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38'_String), 0.1_Float64, 0_UInt8) Float64 Float64(size = 0). (ILLEGAL_COLUMN) (version 26.8.22.13 (official build))
+
+### [tenant_a] WITH TOTALS
+SELECT tenant_id, count() FROM trustiot.telemetry GROUP BY tenant_id WITH TOTALS
+--> HTTP 200 (8 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"296","elapsed_ns":"6720362","memory_usage":"10087346"}
+b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38	3\n\n00000000-0000-0000-0000-000000000000	3
+
+### [tenant_a] ROLLUP
+SELECT tenant_id, count() FROM trustiot.telemetry GROUP BY ROLLUP(tenant_id)
+--> HTTP 200 (6 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"2","result_bytes":"592","elapsed_ns":"4302123","memory_usage":"10100650"}
+b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38	3\n00000000-0000-0000-0000-000000000000	3
+
+### [tenant_a] CUBE / GROUPING SETS
+SELECT tenant_id, point, count() FROM trustiot.telemetry GROUP BY GROUPING SETS ((tenant_id), (point), ())
+--> HTTP 200 (6 ms) summary={"read_rows":"7","read_bytes":"147","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"3","result_bytes":"20183","elapsed_ns":"4702635","memory_usage":"10175580"}
+b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38		3\n00000000-0000-0000-0000-000000000000	shared-point	3\n00000000-0000-0000-0000-000000000000		3
+
+### [tenant_a] LIMIT BY
+SELECT * FROM trustiot.telemetry ORDER BY tenant_id LIMIT 1 BY tenant_id
+--> HTTP 200 (7 ms) summary={"read_rows":"7","read_bytes":"754","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"17816","elapsed_ns":"5495352","memory_usage":"10142658"}
+b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38	d1f23d9f-dfbc-46d3-a82d-80498a5c74be	9461d676-6dcb-4a9d-a263-6e7336e830e9	1	2b2808ef-3132-47a3-858c-037390de9c6e	shared-point	2026-10-10 00:00:00.000	2026-10-10 18:09:20.411	string	0	0	false	a-row-0
+
+### [tenant_a] window function
+SELECT count() OVER () FROM trustiot.telemetry LIMIT 1
+--> HTTP 200 (5 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"256","elapsed_ns":"3398865","memory_usage":"10092002"}
+3
+
+### [tenant_a] ARRAY JOIN
+SELECT count() FROM trustiot.telemetry ARRAY JOIN [1,2] AS x
+--> HTTP 200 (5 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"3683161","memory_usage":"10082199"}
+6
+
+### [tenant_a] ASOF JOIN
+SELECT count() FROM trustiot.telemetry AS x ASOF JOIN trustiot.telemetry AS y ON x.device_id = y.device_id AND x.ts >= y.ts
+--> HTTP 200 (17 ms) summary={"read_rows":"14","read_bytes":"560","written_rows":"0","written_bytes":"0","total_rows_to_read":"14","result_rows":"1","result_bytes":"136","elapsed_ns":"15336748","memory_usage":"11814114"}
+3
+
+### [tenant_a] INTERSECT
+SELECT count() FROM (SELECT tenant_id FROM trustiot.telemetry INTERSECT SELECT tenant_id FROM trustiot.telemetry)
+--> HTTP 200 (10 ms) summary={"read_rows":"14","read_bytes":"224","written_rows":"0","written_bytes":"0","total_rows_to_read":"14","result_rows":"1","result_bytes":"136","elapsed_ns":"6592129","memory_usage":"10182610"}
+3
+
+### [tenant_a] EXCEPT
+SELECT tenant_id FROM trustiot.telemetry EXCEPT SELECT toUUID('b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38')
+--> HTTP 200 (7 ms) summary={"read_rows":"8","read_bytes":"113","written_rows":"0","written_bytes":"0","total_rows_to_read":"8","result_rows":"2","result_bytes":"176","elapsed_ns":"4934333","memory_usage":"10154450"}
+b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38\nb6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38
+
+### [tenant_a] COLUMNS matcher
+SELECT COLUMNS('.*') APPLY count FROM trustiot.telemetry
+--> HTTP 200 (11 ms) summary={"read_rows":"7","read_bytes":"754","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"1768","elapsed_ns":"9480139","memory_usage":"10118434"}
+3	3	3	3	3	3	3	3	3	3	3	3	3
+
+### [tenant_a] SAMPLE (no sampling key)
+SELECT count() FROM trustiot.telemetry SAMPLE 1
+--> HTTP 500 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2733682","memory_usage":"0"}
+Code: 141. DB::Exception: Storage trustiot.telemetry doesn't support sampling. (SAMPLING_NOT_SUPPORTED) (version 26.8.22.13 (official build))
+
+### [tenant_a] virtual columns
+SELECT _part, _part_offset, _partition_id, _partition_value, _part_uuid, _row_exists, _block_number, _part_data_version, _table, _database FROM trustiot.telemetry
+--> HTTP 200 (7 ms) summary={"read_rows":"7","read_bytes":"168","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"3","result_bytes":"11662","elapsed_ns":"6282551","memory_usage":"10111124"}
+202610_1_1_0	4	202610	(202610)	00000000-0000-0000-0000-000000000000	1	1	1	telemetry	trustiot\n202610_1_1_0	5	202610	(202610)	00000000-0000-0000-0000-000000000000	1	1	1	telemetry	trustiot\n202610_1_1_0	6	202610	(202610)	00000000-0000-0000-0000-000000000000	1	1	1	telemetry	trustiot
+
+### [tenant_a] virtual column _part_offset without filter and total
+SELECT max(_part_offset), count() FROM trustiot.telemetry
+--> HTTP 200 (7 ms) summary={"read_rows":"7","read_bytes":"168","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"272","elapsed_ns":"5510591","memory_usage":"10070434"}
+6	3
+
+### [tenant_a] _part_offset equality fishing
+SELECT count() FROM trustiot.telemetry WHERE _part_offset = 5
+--> HTTP 200 (8 ms) summary={"read_rows":"7","read_bytes":"168","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"6435495","memory_usage":"10079274"}
+1
+
+### [tenant_a] _part_offset reading B rows by offset in subquery of all rows
+SELECT * FROM trustiot.telemetry WHERE _part_offset IN (4,5,6)
+--> HTTP 200 (11 ms) summary={"read_rows":"7","read_bytes":"810","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"3","result_bytes":"16976","elapsed_ns":"9522574","memory_usage":"10164252"}
+b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38	d1f23d9f-dfbc-46d3-a82d-80498a5c74be	9461d676-6dcb-4a9d-a263-6e7336e830e9	1	2b2808ef-3132-47a3-858c-037390de9c6e	shared-point	2026-10-10 00:00:00.000	2026-10-10 18:09:20.411	string	0	0	false	a-row-0\nb6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38	7377a8c5-4221-4a2c-9e10-4e3c8e915f70	f46f5c45-a7b6-4957-81d2-1eca25af45c9	1	2b2808ef-3132-47a3-858c-037390de9c6e	shared-point	2026-10-10 00:00:01.000	2026-10-10 18:09:20.412	string	0	0	false	a-row-1\nb6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38	78de1c97-1870-44c5-800b-98fcf2d4dab7	328cf0da-3759-4faa-a22e-4c008a541ac6	1	2b2808ef-3132-47a3-858c-037390de9c6e	shared-point	2026-10-10 00:00:02.000	2026-10-10 18:09:20.413	string	0	0	fals
+
+### [tenant_a] merge() with virtual _table
+SELECT _table, count() FROM merge('trustiot', '.*') GROUP BY _table
+--> HTTP 200 (10 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"2833","elapsed_ns":"8103823","memory_usage":"10128511"}
+telemetry	3
+
+### [tenant_a] merge() regexp over system
+SELECT count() FROM merge('system', '^query_log$')
+--> HTTP 500 (9 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"4650373","memory_usage":"0"}
+Code: 636. DB::Exception: There are no tables satisfied provided regexp, you must specify table structure manually. (CANNOT_EXTRACT_TABLE_STRUCTURE) (version 26.8.22.13 (official build))
+
+### [tenant_a] merge() over batch_commits
+SELECT count() FROM merge('trustiot', '^batch_commits$')
+--> HTTP 500 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2531935","memory_usage":"0"}
+Code: 636. DB::Exception: There are no tables satisfied provided regexp, you must specify table structure manually. (CANNOT_EXTRACT_TABLE_STRUCTURE) (version 26.8.22.13 (official build))
+
+### [tenant_a] Distributed / engine-based tables n/a: Merge engine via CREATE blocked
+CREATE TABLE trustiot.m ENGINE = Merge('trustiot', '.*')
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2133718","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TABLE ON trustiot.m. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] view() filtered via other column
+SELECT count() FROM view(SELECT value_string FROM trustiot.telemetry WHERE value_string LIKE 'B-%')
+--> HTTP 200 (11 ms) summary={"read_rows":"7","read_bytes":"208","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"10004101","memory_usage":"10131810"}
+0
+
+### [tenant_a] JOIN USING
+SELECT count() FROM trustiot.telemetry AS x JOIN trustiot.telemetry AS y USING (device_id) WHERE y.value_string LIKE 'B-%'
+--> HTTP 200 (11 ms) summary={"read_rows":"7","read_bytes":"208","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"9246732","memory_usage":"10139698"}
+0
+
+### [tenant_a] JOIN with join_use_nulls etc per query
+SELECT count() FROM trustiot.telemetry AS x RIGHT JOIN trustiot.telemetry AS y ON x.point = y.point AND y.value_string LIKE 'B-%'
+--> HTTP 200 (15 ms) summary={"read_rows":"14","read_bytes":"390","written_rows":"0","written_bytes":"0","total_rows_to_read":"14","result_rows":"1","result_bytes":"136","elapsed_ns":"13533975","memory_usage":"10171024"}
+3
+
+### [tenant_a] FULL JOIN
+SELECT countIf(y.value_string LIKE 'B-%') FROM trustiot.telemetry AS x FULL JOIN trustiot.telemetry AS y ON x.ts = y.ts
+--> HTTP 200 (14 ms) summary={"read_rows":"14","read_bytes":"432","written_rows":"0","written_bytes":"0","total_rows_to_read":"14","result_rows":"1","result_bytes":"136","elapsed_ns":"10879848","memory_usage":"10153840"}
+0
+
+### [tenant_a] subquery with LIMIT/ORDER on all
+SELECT * FROM (SELECT * FROM trustiot.telemetry ORDER BY value_string DESC LIMIT 1)
+--> HTTP 200 (13 ms) summary={"read_rows":"14","read_bytes":"810","written_rows":"0","written_bytes":"0","total_rows_to_read":"14","result_rows":"1","result_bytes":"16766","elapsed_ns":"11322648","memory_usage":"10131683"}
+b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38	78de1c97-1870-44c5-800b-98fcf2d4dab7	328cf0da-3759-4faa-a22e-4c008a541ac6	1	2b2808ef-3132-47a3-858c-037390de9c6e	shared-point	2026-10-10 00:00:02.000	2026-10-10 18:09:20.413	string	0	0	false	a-row-2
+
+### [tenant_a] argMax / any over everything
+SELECT argMax(value_string, ts), anyLast(value_string), max(value_string), groupArray(value_string) FROM trustiot.telemetry
+--> HTTP 200 (8 ms) summary={"read_rows":"7","read_bytes":"264","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"1824","elapsed_ns":"6664903","memory_usage":"10079130"}
+a-row-2	a-row-2	a-row-2	['a-row-0','a-row-1','a-row-2']
+
+### [tenant_a] DISTINCT
+SELECT DISTINCT value_string FROM trustiot.telemetry
+--> HTTP 200 (6 ms) summary={"read_rows":"7","read_bytes":"208","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"3","result_bytes":"300","elapsed_ns":"4562795","memory_usage":"10086310"}
+a-row-0\na-row-1\na-row-2
+
+### [tenant_a] JSON/format functions text search
+SELECT countSubstrings(toString(tuple(*)), 'B-SECRET') FROM trustiot.telemetry
+--> HTTP 200 (9 ms) summary={"read_rows":"7","read_bytes":"754","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"3","result_bytes":"256","elapsed_ns":"7700730","memory_usage":"10133690"}
+0\n0\n0
+
+### [tenant_a] query via dictGet
+SELECT dictGet('trustiot.x', 'v', 1)
+--> HTTP 400 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3173884","memory_usage":"0"}
+Code: 36. DB::Exception: Dictionary (`trustiot.x`) not found: In scope SELECT dictGet('trustiot.x', 'v', 1). (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+
+### [tenant_a] query via joinGet
+SELECT joinGet('trustiot.telemetry', 'value_string', toUUID('490c02de-1a4b-4600-a3ea-ae27b38e7547'))
+--> HTTP 500 (7 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"6247945","memory_usage":"0"}  **LEAK-OF-B-MARKER**
+Code: 43. DB::Exception: Table trustiot.telemetry should have engine StorageJoin: In scope SELECT joinGet('trustiot.telemetry', 'value_string', toUUID('490c02de-1a4b-4600-a3ea-ae27b38e7547')). (ILLEGAL_TYPE_OF_ARGUMENT) (version 26.8.22.13 (official build))
+
+### [tenant_a] getMacro / hostName / currentDatabase
+SELECT hostName(), currentDatabase(), version(), uptime(), getServerPort('http_port'), timezone()
+--> HTTP 200 (5 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"25600","elapsed_ns":"3858196","memory_usage":"10097210"}
+bb8c3e4dab8e	default	26.8.22.13	437	8123	UTC
+
+### [tenant_a] filesystem info functions
+SELECT filesystemAvailable(), filesystemCapacity()
+--> HTTP 200 (5 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"8192","elapsed_ns":"3184677","memory_usage":"10062418"}
+350583640064	509332160512
+
+### [tenant_a] file() read functions
+SELECT * FROM file('/var/lib/clickhouse/user_files/x', 'CSV')
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2759279","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant READ ON FILE. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] readFile functions
+SELECT file('/etc/passwd')
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3181709","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant READ ON FILE. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] executable udf
+SELECT executable('x', 'y')
+--> HTTP 404 (7 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"5799796","memory_usage":"0"}
+Code: 46. DB::Exception: Function with name `executable` does not exist. In scope SELECT executable('x', 'y'). (UNKNOWN_FUNCTION) (version 26.8.22.13 (official build))
+
+### [tenant_a] dictGet system
+SELECT dictGet('system.x', 'v', 1)
+--> HTTP 400 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2761152","memory_usage":"0"}
+Code: 36. DB::Exception: Dictionary (`system.x`) not found: In scope SELECT dictGet('system.x', 'v', 1). (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+
+### [tenant_a] introspection functions
+SELECT demangle(addressToSymbol(1))
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3254921","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant addressToSymbol ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] getSetting on server-secret-ish
+SELECT getSetting('http_connection_timeout'), getSetting('SQL_tenant_id')
+--> HTTP 200 (4 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"8448","elapsed_ns":"3141810","memory_usage":"10074082"}
+1	b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38
+
+### [tenant_a] SELECT from CTE re-ordering names
+SELECT count() FROM trustiot.telemetry t WHERE t.tenant_id IN (SELECT DISTINCT tenant_id FROM trustiot.telemetry)
+--> HTTP 200 (11 ms) summary={"read_rows":"14","read_bytes":"224","written_rows":"0","written_bytes":"0","total_rows_to_read":"14","result_rows":"1","result_bytes":"136","elapsed_ns":"9204566","memory_usage":"10104706"}
+3
+
+### [tenant_a] transform tenant ids exposing
+SELECT groupUniqArray(tenant_id) FROM trustiot.telemetry
+--> HTTP 200 (8 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"280","elapsed_ns":"5951018","memory_usage":"10068682"}
+['b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38']
+
+# summary: 55 probes, 3 responses containing B's tenant id or secret

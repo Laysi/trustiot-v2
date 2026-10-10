@@ -1,0 +1,71 @@
+### [tenant_a] do subquery settings take effect? max_threads
+SELECT * FROM (SELECT getSetting('max_threads') AS v SETTINGS max_threads = 64)
+--> HTTP 200 (35 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"4096","elapsed_ns":"33119389","memory_usage":"10089122"}
+2
+
+### [tenant_a] outer getSetting
+SELECT getSetting('max_threads')
+--> HTTP 200 (3 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"4096","elapsed_ns":"2224146","memory_usage":"10060634"}
+2
+
+### [tenant_a] subquery getSetting SQL_tenant_id after SETTINGS B
+SELECT * FROM (SELECT getSetting('SQL_tenant_id') AS v SETTINGS SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547')
+--> HTTP 200 (3 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"4352","elapsed_ns":"2233755","memory_usage":"10090194"}
+b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38
+
+### [tenant_a] subquery getSetting readonly after SETTINGS 0
+SELECT * FROM (SELECT getSetting('readonly') AS v SETTINGS readonly = 0)
+--> HTTP 200 (4 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"4096","elapsed_ns":"2927117","memory_usage":"10089058"}
+1
+
+### [tenant_a] subquery reading telemetry, return getSetting too
+SELECT (SELECT getSetting('SQL_tenant_id')), count() FROM (SELECT * FROM trustiot.telemetry SETTINGS SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547')
+--> HTTP 200 (9 ms) summary={"read_rows":"8","read_bytes":"113","written_rows":"0","written_bytes":"0","total_rows_to_read":"8","result_rows":"1","result_bytes":"4616","elapsed_ns":"7208661","memory_usage":"10098346"}
+b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38	3
+
+### [tenant_a] subquery: raise max_rows_to_read / execution_time CONST
+SELECT count() FROM (SELECT number FROM numbers(2000000000) SETTINGS max_rows_to_read = 0, max_execution_time = 0, max_result_rows = 0, max_memory_usage = 0)
+--> HTTP 500 (31 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"28027950","memory_usage":"0"}
+Code: 158. DB::Exception: Limit for rows (controlled by 'max_rows_to_read' setting) exceeded, max rows: 1.00 billion, current rows: 2.00 billion. (TOO_MANY_ROWS) (version 26.8.22.13 (official build))
+
+### [tenant_a] subquery: max_rows_to_read effective baseline (same query, no settings)
+SELECT count() FROM numbers(2000000000)
+--> HTTP 500 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3174707","memory_usage":"0"}
+Code: 158. DB::Exception: Limit for rows (controlled by 'max_rows_to_read' setting) exceeded, max rows: 1.00 billion, current rows: 2.00 billion. (TOO_MANY_ROWS) (version 26.8.22.13 (official build))
+
+### [tenant_a] subquery: readonly=0 then an INSERT-like function
+SELECT count() FROM (SELECT * FROM trustiot.telemetry SETTINGS readonly = 0)
+--> HTTP 200 (7 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"5698606","memory_usage":"10088930"}
+3
+
+### [tenant_a] profile URL effect {profile=default}
+SELECT getSetting('readonly'), getSetting('max_threads'), getSetting('max_execution_time'), currentProfiles()
+--> HTTP 200 (3 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"20736","elapsed_ns":"2320108","memory_usage":"10097642"}
+1	2	30	['default']
+
+### [tenant_a] profile URL to tenant profile name {profile=trustiot_tenant_reader}
+SELECT getSetting('readonly'), currentProfiles()
+--> HTTP 200 (3 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"12544","elapsed_ns":"2170945","memory_usage":"10072402"}
+1	['trustiot_tenant_reader']
+
+### [tenant_a] profile URL nonexistent {profile=doesnotexist}
+SELECT 1
+--> HTTP 500 (11 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"125829","memory_usage":"0"}
+Code: 180. DB::Exception: There is no settings profile `doesnotexist` in `user directories`: , while trying to set settings profile doesnotexist: in attempt to set the value of setting 'profile' to 'doesnotexist'. (THERE_IS_NO_PROFILE) (version 26.8.22.13 (official build))
+
+### [tenant_a] per-query settings subset allowed? max_threads
+SELECT 1 SETTINGS max_threads = 1
+--> HTTP 500 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2002072","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'max_threads' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] per-query settings same value as CONST
+SELECT 1 SETTINGS readonly = 1
+--> HTTP 200 (4 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"4096","elapsed_ns":"2647295","memory_usage":"10054802"}
+1
+
+### [tenant_a] readonly=1 allowed setting change e.g. format
+SELECT 1 SETTINGS output_format_json_quote_64bit_integers = 0
+--> HTTP 200 (4 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"4096","elapsed_ns":"2850170","memory_usage":"10055442"}
+1
+
+# summary: 14 probes, 0 responses containing B's tenant id or secret
