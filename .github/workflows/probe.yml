@@ -1,0 +1,29 @@
+# Temporary probe for Laysi/trustiot-v2#67 on a throwaway branch that is never merged.
+# The checkout-only probe plus Swatinem/rust-cache, the only third-party action in ci.yml,
+# so its result shows whether that action may run in this repository.
+#
+# For `pull_request` events GitHub reads the workflow files of the pull request's merge
+# commit (refs/pull/<number>/merge), so a workflow runs on the very pull request that adds
+# it; only `pull_request_target` takes workflows from the base branch.
+name: probe
+
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  rust-cache:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: "false"
+          save-if: "false"
+      - run: echo "Swatinem/rust-cache ran in this job."
