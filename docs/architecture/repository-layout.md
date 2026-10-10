@@ -63,7 +63,7 @@ services/assets/
 ```
 
 - 每個服務有自己的 `migrations/`，只動自己的 schema；`tools/migrate` 是部署時的 migration Job，依序跑各服務的 migration 與 ClickHouse DDL（`services/ingest/migrations/clickhouse/`，檔案格式見 [services/ingest/README.md](../../services/ingest/README.md)），並冪等重建每租戶的資料庫角色（M8）。執行期程式碼不改 schema：`tools/repo-check` 擋下 `services/*/src` 裡建表、改表、刪表的 SQL。
-- `crates/protocol` 是閘道器與雲端共用的訊息格式（M4），要能編到 aarch64，不引入只能在雲端編譯的相依套件。
+- `crates/protocol` 是閘道器與雲端共用的訊息格式（M4），要能編到 aarch64，不引入只能在雲端編譯的相依套件。2026-10-10 定案：MQTT 5、topic 樹 `trustiot/v1/gw/{閘道器憑證 CN}/{up|down}/{channel}`、payload 以 CBOR 編碼、每種訊息有大小上限與拆包規則，以 `v`（主版本）與 `rev`（修訂版）管理相容性並以凍結的 v1 固定樣本測試；完整規格與選 CBOR 的理由在 [`crates/protocol/README.md`](../../crates/protocol/README.md)。
 - `services/ai-gateway` 不依賴 `crates/contract`，保留單獨抽出開源的選項（決策 28）。
 - API 規格從 Rust 程式碼產生（utoipa），各服務的規格合併成 `api/openapi.json` 進版控，CI 檢查是否與程式一致；前端的 API client 由它產生，規格不會與程式脫節。每個有 HTTP API 的服務在 library 匯出 `pub fn openapi() -> utoipa::openapi::OpenApi`，登記在 `tools/openapi`；`cargo run -p openapi` 把各服務的規格與 `crates/contract` 的 M1 錯誤 schema 合併（鍵排序固定、同一路徑與方法、同名但不同定義的 schema、重複的 operationId、找不到目標的 `$ref` 都是錯誤，不會靜默覆蓋），寫入 `api/openapi.json`。CI 重新產生後有差異就失敗，`cargo test --workspace` 也做同一項比對。細節見 [tools/openapi](../../tools/openapi/README.md)。
 - 部署以 Helm chart 打包：同一份 chart 搭配 `values-saas.yaml` 與 `values-onprem.yaml`，客戶自有的 k8s 或 OpenShift 也用這份 chart；cloudflared 是 SaaS 主機元件，放在 `deploy/host/`，不在 chart 內；Istio ambient 是整個叢集共用的平台元件，安裝 values 與入口用的 ext_authz provider 放在 `deploy/istio/`，裝 chart 之前先裝。values 分三層：`values.yaml` 是預設值；`values-saas.yaml` 與 `values-onprem.yaml` 只寫部署型態的差異；主機名稱、外部端點與 Secret 名稱寫在安裝實例的覆寫檔（SaaS 的在 `deploy/flux/`，地端由客戶安裝時提供）。values 只以名稱引用 Secret，不放密鑰；`values.schema.json` 擋下缺漏與不安全的設定。欄位與 chart 對服務的約定見 [deploy/chart/README.md](../../deploy/chart/README.md)。
