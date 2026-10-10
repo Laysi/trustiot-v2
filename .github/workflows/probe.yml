@@ -1,0 +1,55 @@
+# Temporary probe for Laysi/trustiot-v2#67 on a throwaway branch that is never merged.
+# The workflow-policy job below is copied unchanged from ci.yml. ci.yml does not pass on GitHub
+# while each of its jobs passes in a local simulation of the hosted runner, and the
+# available token cannot read check runs or logs, so one pull request per job shows which
+# job fails. ci.yml itself keeps every job.
+#
+# For `pull_request` events GitHub reads the workflow files of the pull request's merge
+# commit (refs/pull/<number>/merge), so a workflow runs on the very pull request that adds
+# it; only `pull_request_target` takes workflows from the base branch.
+name: probe
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# No token scopes by default; each job asks for what it needs.
+permissions: {}
+
+concurrency:
+  # One run per pull request: a new push to a pull request cancels its running CI. A push to
+  # main gets a group of its own commit, because GitHub replaces a pending run in a shared
+  # group with a newer one even without cancel-in-progress; so every main commit gets a result.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  workflow-policy:
+    name: workflow-policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: toolchain
+        uses: ./.github/actions/setup-proto
+        with:
+          tools: bun
+      - name: Check workflow permissions and action pinning
+        run: bun scripts/ci/check-workflows.ts
+      - name: Install script dependencies
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun install --cwd scripts --frozen-lockfile
+      - name: Type check scripts
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun run --cwd scripts typecheck
+      - name: Test scripts
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun run --cwd scripts test
