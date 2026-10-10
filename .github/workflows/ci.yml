@@ -14,8 +14,6 @@
 # - OpenAPI (Laysi/trustiot-v2#55): regenerate api/openapi.json and fail on any difference.
 # - Frontend (Laysi/trustiot-v2#123): Bun install, type check, lint, unit tests, build, and
 #   regenerating the API client with a diff check.
-# - Helm chart (Laysi/trustiot-v2#66): helm lint, then helm template with values-saas.yaml
-#   and values-onprem.yaml, each validated by kubeconform.
 name: ci
 
 on:
@@ -27,9 +25,10 @@ on:
 permissions: {}
 
 concurrency:
-  # One run per pull request or branch. A new push to a pull request cancels its running
-  # CI; runs on main always finish so that every main commit gets a result.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # One run per pull request: a new push to a pull request cancels its running CI. A push to
+  # main gets a group of its own commit, because GitHub replaces a pending run in a shared
+  # group with a newer one even without cancel-in-progress; so every main commit gets a result.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -103,6 +102,24 @@ jobs:
           tools: rust cargo-deny
       # Licenses, RustSec advisories, banned crates and sources, as configured in deny.toml.
       - run: cargo deny --locked check
+
+  helm:
+    name: helm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-proto
+        with:
+          tools: bun helm kubeconform
+      # helm lint --strict, then helm template with values-saas.yaml and values-onprem.yaml,
+      # each validated by kubeconform -strict, plus the chart's own rules and the README field
+      # check (deploy/chart/README.md). kubeconform downloads the Kubernetes schemas.
+      - run: bun test deploy/chart
 
   gitleaks:
     name: gitleaks
