@@ -13,6 +13,7 @@
 //! - [`client`]: the typed HTTP/JSON client for synchronous internal API calls: a timeout is
 //!   mandatory and every failure maps to an M1 code.
 //! - [`service`]: the names of the services that take part in these contracts.
+//! - [`openapi`]: the schemas shared by every service spec merged into `api/openapi.json`.
 //!
 //! `services/ai-gateway` must not depend on this crate (decision 28), so nothing it needs lives
 //! here. The rules for adding API types, events and error codes are in this crate's
@@ -24,6 +25,7 @@ pub mod event;
 pub mod id;
 pub mod identity;
 pub mod json;
+pub mod openapi;
 pub mod service;
 
 mod naming;
