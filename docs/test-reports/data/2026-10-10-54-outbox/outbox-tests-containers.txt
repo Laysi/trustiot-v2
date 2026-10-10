@@ -1,67 +1,68 @@
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 56.55s
-     Running unittests src/lib.rs (target/debug/deps/outbox-89f44a4fe2096e5c)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (target/debug/deps/outbox-b36acda5d17c8a97)
 
-running 7 tests
+running 8 tests
+test aggregate::tests::ids_are_bounded_and_printable ... ok
 test consumer::tests::decode_errors_retry_only_newer_versions ... ok
 test aggregate::tests::kinds_are_lower_snake_case ... ok
-test aggregate::tests::ids_are_bounded_and_printable ... ok
 test consumer::tests::subscription_names_are_checked ... ok
-test position::tests::positions_order_by_transaction_then_row ... ok
 test position::tests::positions_round_trip_as_text ... ok
+test position::tests::positions_order_by_transaction_then_row ... ok
 test schema::tests::schema_names_need_no_quoting ... ok
+test redact::tests::messages_are_replaced_by_kinds ... ok
 
-test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running tests/crash.rs (target/debug/deps/crash-1dcf6fdf14084311)
+     Running tests/crash.rs (target/debug/deps/crash-9b43596be640694b)
 
 running 2 tests
 test an_event_committed_before_the_producer_is_killed_is_delivered_after_restart ... ok
 test a_consumer_killed_mid_delivery_processes_the_event_once_after_restart ... ok
 
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.79s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.30s
 
-     Running tests/delivery.rs (target/debug/deps/delivery-82d32a193d8e2b93)
+     Running tests/delivery.rs (target/debug/deps/delivery-8b763a12d959c59a)
 
 running 13 tests
 test a_slow_handler_that_has_not_written_does_not_hold_back_other_consumers ... ok
 test a_new_subscription_can_start_after_the_history ... ok
-test a_subscription_cannot_switch_producers ... ok
 test a_duplicate_delivery_is_processed_once ... ok
-test an_aggregate_keeps_its_order_when_transaction_ids_are_inverted ... ok
-test an_event_committed_late_is_delivered_not_skipped ... ok
+test a_subscription_cannot_switch_producers ... ok
 test begin_runs_in_the_delivery_transaction ... ok
+test an_event_committed_late_is_delivered_not_skipped ... ok
+test an_aggregate_keeps_its_order_when_transaction_ids_are_inverted ... ok
 test concurrent_writers_and_two_replicas_process_each_event_once_in_order ... ok
 test failures_are_retried_in_place_or_dead_lettered ... ok
 test lag_counts_committed_events_not_yet_processed ... ok
 test replaying_from_a_position_rebuilds_the_same_state ... ok
-test shutdown_finishes_the_event_in_flight_and_leaves_the_rest_of_the_batch ... ok
 test services_need_only_the_documented_grants ... ok
+test shutdown_finishes_the_event_in_flight_and_leaves_the_rest_of_the_batch ... ok
 
-test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 71.87s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 45.39s
 
-     Running tests/metrics.rs (target/debug/deps/metrics-ac5060012ae8c776)
+     Running tests/metrics.rs (target/debug/deps/metrics-2f6c9cb58d97bea2)
 
 running 1 test
 test the_lag_is_exported_over_otlp ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.39s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.53s
 
-     Running tests/notify.rs (target/debug/deps/notify-d74eadacb2e17ef0)
+     Running tests/notify.rs (target/debug/deps/notify-a30a77ca781e833f)
 
 running 2 tests
-test a_stale_reading_never_overwrites_a_newer_one ... ok
 test late_and_replayed_events_converge_on_the_current_state ... ok
+test a_stale_reading_never_overwrites_a_newer_one ... ok
 
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.07s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.13s
 
-     Running tests/producer.rs (target/debug/deps/producer-32f8c94f0f9c61c9)
+     Running tests/producer.rs (target/debug/deps/producer-33d55afe11ccc915)
 
 running 3 tests
-test an_envelope_is_written_once ... ok
 test events_are_numbered_per_aggregate ... ok
+test an_envelope_is_written_once ... ok
 test a_rolled_back_transaction_leaves_no_event ... ok
 
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.03s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.79s
 
    Doc-tests outbox
 
