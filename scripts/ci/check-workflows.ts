@@ -9,8 +9,10 @@
  *    `write` or `none`. A workflow-level `permissions` must take the same form.
  * 2. Every action or reusable workflow named in `uses:` is pinned to a full 40-character
  *    commit SHA. Container images (`docker://` actions, job containers and service
- *    containers) are pinned to a sha256 digest. Local actions (`./...`) are allowed because
- *    they are reviewed together with the change that uses them.
+ *    containers) are pinned to a sha256 digest. Local references (`./...`) need no pin
+ *    because they are reviewed together with the change that uses them, but they must point
+ *    where this check reads: a local action under `.github/actions/` (symbolic links are
+ *    followed), a local reusable workflow directly in `.github/workflows/`.
  * 3. No workflow is triggered by `pull_request_target` or `workflow_run`: both run with the
  *    base repository's secrets and a write token on behalf of code that can come from a fork.
  *
@@ -19,8 +21,8 @@
  * be found or read.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { join, posix, relative, resolve } from "node:path";
 
 /** One broken rule, located precisely enough to fix without searching. */
 export interface Violation {
@@ -68,16 +70,40 @@ function child(path: string, key: string): string {
 }
 
 /**
- * Returns why a `uses:` value is not acceptable, or `undefined` when it is a local action,
- * a remote action or reusable workflow pinned to a full commit SHA, or a `docker://` image
- * pinned to a digest.
+ * What a `uses:` names: an action (in a step) or a reusable workflow (in a job). It decides
+ * where a local reference may point.
  */
-export function usesProblem(reference: unknown): string | undefined {
+export type UsesKind = "action" | "workflow";
+
+/**
+ * Returns why a local `uses: ./...` reference points outside the files this check reads, or
+ * `undefined`. GitHub resolves the path from the repository root.
+ */
+function localUsesProblem(reference: string, kind: UsesKind): string | undefined {
+  const path = posix.normalize(reference);
+  if (kind === "workflow") {
+    return /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path)
+      ? undefined
+      : `\`${reference}\` is not a workflow file directly in \`.github/workflows/\`, ` +
+          "the only place a local reusable workflow can be checked";
+  }
+  return path === ".github/actions" || path.startsWith(".github/actions/")
+    ? undefined
+    : `\`${reference}\` is outside \`.github/actions/\`; keep local actions there so that ` +
+        "this check reviews them";
+}
+
+/**
+ * Returns why a `uses:` value is not acceptable, or `undefined` when it is a local action
+ * under `.github/actions/` (or, for a job, a local reusable workflow), a remote action or
+ * reusable workflow pinned to a full commit SHA, or a `docker://` image pinned to a digest.
+ */
+export function usesProblem(reference: unknown, kind: UsesKind = "action"): string | undefined {
   if (typeof reference !== "string" || reference.trim() === "") {
     return "`uses` must name an action, for example `owner/repo@<40-character commit SHA>`";
   }
   if (reference.startsWith("./")) {
-    return undefined;
+    return localUsesProblem(reference, kind);
   }
   if (reference.startsWith("docker://")) {
     return IMAGE_DIGEST.test(reference)
@@ -198,7 +224,7 @@ function jobProblems(jobId: string, job: unknown): Omit<Violation, "file">[] {
   }
   const problems = permissionsProblems(job.permissions, path);
   if ("uses" in job) {
-    const problem = usesProblem(job.uses);
+    const problem = usesProblem(job.uses, "workflow");
     if (problem !== undefined) {
       problems.push({ path: `${path}.uses`, message: problem });
     }
@@ -299,16 +325,28 @@ function yamlFilesIn(directory: string): string[] {
     .sort();
 }
 
-function actionFilesUnder(directory: string): string[] {
+/**
+ * Finds every `action.yml` or `action.yaml` under `directory`. Symbolic links are followed,
+ * because GitHub follows them too, so a linked action is checked where it points; `seen`
+ * stops link cycles.
+ */
+function actionFilesUnder(directory: string, seen: Set<string> = new Set()): string[] {
   if (!existsSync(directory)) {
     return [];
   }
+  const real = realpathSync(directory);
+  if (seen.has(real)) {
+    return [];
+  }
+  seen.add(real);
   const found: string[] = [];
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) {
-      found.push(...actionFilesUnder(path));
-    } else if (entry.isFile() && (entry.name === "action.yml" || entry.name === "action.yaml")) {
+  for (const name of readdirSync(directory)) {
+    const path = join(directory, name);
+    // Undefined for a dangling link, which GitHub cannot run either.
+    const stats = statSync(path, { throwIfNoEntry: false });
+    if (stats?.isDirectory()) {
+      found.push(...actionFilesUnder(path, seen));
+    } else if (stats?.isFile() && (name === "action.yml" || name === "action.yaml")) {
       found.push(path);
     }
   }

@@ -26,7 +26,7 @@ Architecture decisions, rebuild scope (items A1–M8), service split, repository
 - Bun scripts in `scripts/`: `bun install --cwd scripts --frozen-lockfile`, then `bun run --cwd scripts typecheck` and `bun run --cwd scripts test`; a single test is `bun run --cwd scripts test -t "<test-name-filter>"`
 - Gateway crates (`crates/protocol` and every member under `edge/`) must build for aarch64: `rustup target add aarch64-unknown-linux-gnu` once, then `cargo build --locked --target aarch64-unknown-linux-gnu -p <crate>`
 
-`.github/workflows/ci.yml` runs these checks on every pull request and every push to main; its jobs and the required-checks list are in `docs/architecture/ci-release.md`. Every job must list its `permissions`, and every action must be pinned to a full commit SHA with the tag in a trailing comment.
+`.github/workflows/ci.yml` runs these checks on every pull request and every push to main; its jobs and the required-checks list are in `docs/architecture/ci-release.md`. Every job must list its `permissions`, every action must be pinned to a full commit SHA with the tag in a trailing comment, and local actions belong under `.github/actions/`.
 
 Every directory under `crates/`, `services/`, `edge/`, `factory/`, and `tools/` is a workspace member, so it needs a `Cargo.toml` that sets `edition.workspace = true` and `[lints] workspace = true`; list non-Rust directories in the root `exclude`. Declare third-party dependencies once in the root `[workspace.dependencies]`. Clippy fails on every lint in `[workspace.lints]`; suppress one only with `#[allow(lint, reason = "...")]`. Save test evidence under `docs/test-reports/` as its README describes.
 

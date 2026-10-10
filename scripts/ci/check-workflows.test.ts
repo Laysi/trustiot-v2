@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -102,6 +102,16 @@ describe("checkWorkflow", () => {
     expect(checkWorkflow("ci.yml", workflow(pinned))).toEqual([]);
   });
 
+  test("rejects local actions and reusable workflows outside the checked directories", () => {
+    const step = PINNED_JOB.replace("./.github/actions/setup-proto", "./tools/setup-proto");
+    expect(paths(checkWorkflow("ci.yml", workflow(step)))).toEqual(["jobs.build.steps[1].uses"]);
+
+    const job = "    permissions:\n      contents: read\n    uses: ./ci/release.yml\n";
+    expect(paths(checkWorkflow("ci.yml", workflow(job)))).toEqual(["jobs.build.uses"]);
+    const local = job.replace("./ci/release.yml", "./.github/workflows/release.yml");
+    expect(checkWorkflow("ci.yml", workflow(local))).toEqual([]);
+  });
+
   test("rejects job and service containers that are not pinned to a digest", () => {
     const job = `${PINNED_JOB}    container: rust:1.99
     services:
@@ -174,6 +184,29 @@ describe("usesProblem", () => {
       42,
     ]) {
       expect(usesProblem(reference)).toBeString();
+    }
+  });
+
+  test("keeps local references where the check reads them", () => {
+    expect(usesProblem("./.github/actions/setup-proto/")).toBeUndefined();
+    expect(usesProblem("./.github/actions/a/../b")).toBeUndefined();
+    for (const reference of [
+      "./",
+      "./tools/action",
+      "./.github/actions/../../tools/action",
+      "./.github/workflows/release.yml",
+    ]) {
+      expect(usesProblem(reference, "action")).toContain("outside `.github/actions/`");
+    }
+
+    expect(usesProblem("./.github/workflows/release.yml", "workflow")).toBeUndefined();
+    for (const reference of [
+      "./.github/workflows/nested/release.yml",
+      "./.github/workflows/../release.yml",
+      "./.github/actions/setup-proto",
+      "./release.yml",
+    ]) {
+      expect(usesProblem(reference, "workflow")).toContain("directly in `.github/workflows/`");
     }
   });
 });
@@ -250,6 +283,15 @@ describe("repository scan and command line", () => {
       ".github/actions/setup/action.yml",
       "runs:\n  using: composite\n  steps:\n    - uses: actions/cache@v4\n",
     );
+    write(
+      "elsewhere/linked/action.yml",
+      "runs:\n  using: composite\n  steps:\n    - uses: actions/setup-node@v5\n",
+    );
+    // A linked action is checked where it points; a link cycle and a dangling link are skipped.
+    const actions = join(root, ".github", "actions");
+    symlinkSync(join(root, "elsewhere", "linked"), join(actions, "linked"));
+    symlinkSync(actions, join(actions, "loop"));
+    symlinkSync(join(root, "missing"), join(actions, "dangling"));
   });
 
   test("finds top-level workflows and every local action", () => {
@@ -259,16 +301,18 @@ describe("repository scan and command line", () => {
       ".github/workflows/good.yml",
     ]);
     expect(files.actions.map((path) => path.slice(root.length + 1))).toEqual([
+      ".github/actions/linked/action.yml",
       ".github/actions/setup/action.yml",
     ]);
   });
 
   test("labels violations with the file relative to the root", () => {
     const { files, violations } = checkRepository(root);
-    expect(files).toBe(3);
+    expect(files).toBe(4);
     expect(violations.map((violation) => `${violation.file} ${violation.path}`)).toEqual([
       ".github/workflows/bad.yaml jobs.build",
       ".github/workflows/bad.yaml jobs.build.steps[0].uses",
+      ".github/actions/linked/action.yml runs.steps[0].uses",
       ".github/actions/setup/action.yml runs.steps[0].uses",
     ]);
   });
@@ -284,7 +328,7 @@ describe("repository scan and command line", () => {
       "`actions/checkout@v7` is not pinned to a full 40-character commit SHA",
     );
     expect(stdout).toContain("::error file=.github/workflows/bad.yaml,title=workflow policy::");
-    expect(stdout).toContain("workflow policy: 3 violation(s) in 3 file(s)");
+    expect(stdout).toContain("workflow policy: 4 violation(s) in 4 file(s)");
   });
 
   test("the command fails when there is nothing to check", () => {
