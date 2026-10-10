@@ -38,6 +38,8 @@ bun scripts/ci/check-workflows.ts       # workflow-policy
   ```
 
   其餘 4 項測試照常通過，且還原後全部恢復通過。
+- ci.yml 步驟「OpenAPI spec is current」在同一個實驗下的重播（`cargo run --locked --package openapi`，再看 `git status --porcelain -- api`）：輸出非空，所以步驟會 `exit 1`；它印出的差異見 [ci-step-diff-when-stale.txt](data/2026-10-10-55-openapi-spec/ci-step-diff-when-stale.txt)。為了讓實驗隔離，那次也以 `CONTRACT_UPDATE_FIXTURES=1` 重新產生了 contract 的 fixture，所以只有 OpenAPI 檢查會失敗，其他測試全部通過。
+- 沒有開一個故意失敗的暫時 PR：repo 的 pre-commit Codex 審查關卡正確地擋下了這個故意讓規格過期的 commit（兩次，理由都是「規格與程式不一致」），而關卡不得繞過；實驗改在本機以測試與 CI 步驟重播證明。正式 PR 的 CI 結果見 PR 描述。
 
 ## 結論
 
