@@ -209,6 +209,13 @@ where
     tracing::info!(address = %address, "listening");
 
     tokio::select! {
+        // Stopping lets the server return, and with no connection open it can return before
+        // this select is polled again. Both branches are then ready; an unbiased select picks
+        // one at random and could report that clean shutdown as a crash (exit code 1). Taking
+        // the stop first loses nothing: the select then never polls `server`, its result stays
+        // in the join handle, and the drain below awaits it and answers anything but a clean
+        // return with exit code 1.
+        biased;
         () = shutdown.stopping() => {}
         ended = &mut server => {
             // axum's server only returns after the shutdown signal, so this is a crash.
