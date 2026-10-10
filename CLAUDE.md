@@ -10,7 +10,7 @@ Architecture decisions, rebuild scope (items A1–M8), service split, repository
 
 ## Build, lint, and test
 
-`.prototools` pins Rust, Bun, Helm, and kubeconform; tools without a built-in proto plugin get a schema plugin in `.proto/plugins/` that verifies the release checksum. proto installs Rust through rustup and does not shim cargo, so rustup picks the toolchain from `rust-toolchain.toml`: change `rust` in `.prototools` and `channel` in `rust-toolchain.toml` together (`cargo test -p repo-check` fails when they differ). Run every command from the repository root.
+`.prototools` pins Rust, Bun, Helm, kubeconform, and kubectl; tools without a built-in proto plugin get a schema plugin in `.proto/plugins/` that verifies the release checksum. proto installs Rust through rustup and does not shim cargo, so rustup picks the toolchain from `rust-toolchain.toml`: change `rust` in `.prototools` and `channel` in `rust-toolchain.toml` together (`cargo test -p repo-check` fails when they differ). Run every command from the repository root.
 
 - Install the pinned tools: `proto install`
 - Build: `cargo build --workspace`
@@ -19,6 +19,7 @@ Architecture decisions, rebuild scope (items A1–M8), service split, repository
 - Test: `cargo test --workspace`
 - Single test: `cargo test -p <crate> <test-name-filter>`, for example `cargo test -p repo-check toolchain_pins_agree`
 - Helm chart (`deploy/chart`): `bun test deploy/chart` runs `helm lint`, kubeconform on both values files, the chart's own rules, and the README field check; a single check is `bun test deploy/chart -t "<test-name-filter>"`. The individual `helm lint`/`helm template` commands are in `deploy/chart/README.md`.
+- Ingress e2e (needs a cluster with Istio ambient; never run Kubernetes locally): `E2E_NAMESPACE=<ns> E2E_IDENTITY_IMAGE=<image> bun test --timeout 600000 ./deploy/chart/tests/e2e/ingress.e2e.ts`; prerequisites and the other variables are in `deploy/chart/tests/e2e/README.md`.
 - Container-backed tests: `crates/service-kit` starts throwaway Postgres and PID 1 containers with podman or docker (or uses `TEST_DATABASE_URL` for Postgres). Without them those tests skip locally; with `CI` set they fail instead.
 
 Every directory under `crates/`, `services/`, `edge/`, `factory/`, and `tools/` is a workspace member, so it needs a `Cargo.toml` that sets `edition.workspace = true` and `[lints] workspace = true`; list non-Rust directories in the root `exclude`. Declare third-party dependencies once in the root `[workspace.dependencies]`. Clippy fails on every lint in `[workspace.lints]`; suppress one only with `#[allow(lint, reason = "...")]`. Save test evidence under `docs/test-reports/` as its README describes.

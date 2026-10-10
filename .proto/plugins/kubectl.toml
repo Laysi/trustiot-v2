@@ -1,0 +1,32 @@
+# proto schema plugin for kubectl (https://kubernetes.io/docs/reference/kubectl/).
+# Downloads the official release binary from dl.k8s.io and verifies it against the
+# SHA-256 file published next to it.
+# Reference: https://moonrepo.dev/docs/proto/non-wasm-plugin
+#
+# dl.k8s.io names the OS in the path (linux, darwin) where proto's {os} token says macos,
+# so each platform spells out its own path.
+
+name = "kubectl"
+type = "cli"
+
+[platform.linux]
+download-file = "linux/{arch}/kubectl"
+checksum-file = "linux/{arch}/kubectl.sha256"
+exe-path = "kubectl"
+
+[platform.macos]
+download-file = "darwin/{arch}/kubectl"
+checksum-file = "darwin/{arch}/kubectl.sha256"
+exe-path = "kubectl"
+
+[install]
+download-url = "https://dl.k8s.io/release/v{version}/bin/{download_file}"
+checksum-url = "https://dl.k8s.io/release/v{version}/bin/{checksum_file}"
+unpack = false
+
+[install.arch]
+aarch64 = "arm64"
+x86_64 = "amd64"
+
+[resolve]
+git-url = "https://github.com/kubernetes/kubernetes"
