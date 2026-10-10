@@ -1,0 +1,21 @@
+[package]
+name = "ingest"
+description = "TrustIoT v2 ingest service: telemetry from gateways into ClickHouse with end-to-end acknowledgement. Holds the ClickHouse schema (migrations/clickhouse)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+# The service itself arrives with Laysi/trustiot-v2#91. Until then the crate carries the ClickHouse
+# DDL in migrations/clickhouse and the tests that apply it to a real ClickHouse.
+
+[dev-dependencies]
+# Talks to ClickHouse over its HTTP interface, plain HTTP to a local test container.
+reqwest.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+uuid = { workspace = true, features = ["v4"] }
+
+[lints]
+workspace = true

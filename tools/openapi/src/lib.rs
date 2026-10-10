@@ -52,7 +52,12 @@ pub const SERVICES: &[Source] = &[];
 
 /// Directories under `services/` that have no HTTP API of their own to document (workers, for
 /// example). Listing one here is a decision to review.
-pub const SERVICES_WITHOUT_API: &[&str] = &[];
+pub const SERVICES_WITHOUT_API: &[&str] = &[
+    // Takes gateway telemetry from MQTT and writes it to ClickHouse; no HTTP API besides the
+    // health endpoints (docs/architecture/deployment.md). Until Laysi/trustiot-v2#91 builds the
+    // service, the crate only holds the ClickHouse schema.
+    "ingest",
+];
 
 fn shared_schemas() -> OpenApi {
     use utoipa::OpenApi as _;

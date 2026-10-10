@@ -1,11 +1,14 @@
 {{- /*
 Service-to-service authorization (decision 27): two independent layers, so either one alone
 still refuses a call that is not on the list.
-1. AuthorizationPolicy (enforced by ztunnel, L4): each service accepts mTLS connections only from
-   the ServiceAccounts of its listed callers and, where it routes, the ingress gateway. A service
-   nobody may call gets a policy without rules, which refuses every connection.
-2. NetworkPolicy: everything in the namespace is denied by default; each service then admits
-   ztunnel's HBONE port from the pods of the same callers, and the kubelet's probes.
+1. AuthorizationPolicy (enforced by ztunnel, L4): each service and in-cluster component (bundled
+   ClickHouse) accepts mTLS connections only from the ServiceAccounts of its listed callers and,
+   where it routes, the ingress gateway. One nobody may call gets a policy without rules, which
+   refuses every connection.
+2. NetworkPolicy: everything in the namespace is denied by default; each service and component
+   then admits ztunnel's HBONE port from the pods of the same callers, and the kubelet's probes.
+   It only stops new connections: ztunnel reuses HBONE connections, and a NetworkPolicy never
+   cuts one that is already open, so the AuthorizationPolicy is the primary layer.
 No waypoint is deployed: L4 identity is all these rules need. Add one only for L7 rules between
 services, and move the affected policies to it (README.md).
 */ -}}
