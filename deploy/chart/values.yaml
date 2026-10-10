@@ -1,0 +1,249 @@
+# Defaults shared by every TrustIoT install. README.md documents every field.
+#
+# Values are layered (later layers win):
+#   1. values.yaml                          defaults (this file)
+#   2. values-saas.yaml | values-onprem.yaml   deployment shape
+#   3. instance overlay                     hosts, external endpoints and Secret names of one install
+# values.schema.json validates the merged result, so a missing or misspelled field fails
+# `helm lint`, `helm template` and `helm install` instead of producing a broken release.
+# Values never hold secret material: credentials are referenced by Secret name and key only.
+
+global:
+  # Deployment shape: "saas" (multi-tenant, behind Cloudflare Tunnel) or "onprem" (single tenant).
+  # Set by values-saas.yaml or values-onprem.yaml.
+  deploymentMode: ""
+  # Names of existing Secrets (type kubernetes.io/dockerconfigjson) used to pull images,
+  # for example the read-only GHCR pull token on SaaS.
+  imagePullSecrets: []
+
+# Public host names. Portability rule 1: use our own domain names (never IP addresses),
+# so moving between SaaS and on-prem only changes DNS.
+hosts:
+  # SPA and API, served from the same origin (decision 2).
+  app: ""
+  # Gateways connect here: MQTT inside WebSocket on 443, and HTTPS certificate renewal.
+  gateway: ""
+  # Gateways download OTA updates from here.
+  ota: ""
+
+ingress:
+  # How traffic reaches the ingress gateway (decisions 6 and 27):
+  #   tunnel  ClusterIP only; cloudflared on the host forwards to it (SaaS).
+  #   direct  The ingress gateway listens on 443 in the customer network (on-prem,
+  #           and the SaaS fallback when Cloudflare is unavailable).
+  # The MQTT broker is never exposed in either mode; gateways reach it only through
+  # the ingress gateway and mqtt-bridge.
+  exposure: ""
+
+# Defaults for every entry under `services`. An entry overrides them field by field
+# (maps merge recursively, lists and scalars are replaced); each probe under `probes`
+# is replaced as a whole; `env` is appended to `serviceDefaults.env`.
+serviceDefaults:
+  image:
+    # Registry prefix; the image is <registry>/<service name> unless `repository` is set.
+    registry: ghcr.io/laysi/trustiot-v2
+    # Full repository; overrides registry/<service name>.
+    repository: ""
+    # Empty means Chart.appVersion (services are released together, decision 4).
+    tag: ""
+    # sha256 digest; when set, the image is pinned to it.
+    digest: ""
+    pullPolicy: IfNotPresent
+  replicas: 1
+  # Container ports; the Service exposes the same port numbers (servicePort overrides it).
+  ports:
+    - name: http
+      containerPort: 8080
+      appProtocol: http
+  # Extra environment variables for every service, so they must not read Secrets. Names starting
+  # with TRUSTIOT_ plus a letter or digit, SENTRY_ or OTEL_ are reserved for the chart.
+  env: []
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: "1"
+      memory: 256Mi
+  # runAsUser is not fixed, so OpenShift's restricted-v2 SCC can assign the UID.
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  # Kubernetes probe objects. Liveness and readiness are mandatory; set startup to {} to disable it.
+  probes:
+    startup:
+      httpGet:
+        path: /healthz
+        port: http
+      periodSeconds: 2
+      failureThreshold: 30
+    liveness:
+      httpGet:
+        path: /healthz
+        port: http
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+    readiness:
+      httpGet:
+        path: /readyz
+        port: http
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 2
+  # Delay before SIGTERM so endpoint removal reaches the ingress and ztunnel first; 0 disables it.
+  preStopSleepSeconds: 5
+  # Time between SIGTERM and SIGKILL: services fail readiness, finish in-flight work and close
+  # long-lived connections within it. The pod's terminationGracePeriodSeconds is
+  # preStopSleepSeconds + drainSeconds, because Kubernetes counts the preStop sleep in it.
+  drainSeconds: 30
+  # Size limit of the writable /tmp (emptyDir); the root filesystem is read-only.
+  tmpSizeLimit: 64Mi
+  # Services do not call the Kubernetes API.
+  automountServiceAccountToken: false
+  # Images are built for arm64 only (decision 5).
+  nodeSelector:
+    kubernetes.io/arch: arm64
+  tolerations: []
+  affinity: {}
+  podLabels: {}
+  podAnnotations: {}
+
+# TrustIoT services (docs/architecture/deployment.md). Each one is switched on by the issue
+# that ships its image; until then it stays disabled. Besides the serviceDefaults fields, an
+# entry can list `credentials`: the dependency Secrets that only this service receives
+# (qdrant-read, qdrant-write, object-storage, smtp, ai; the AI keys only for ai-gateway and the
+# Qdrant keys only for knowledge); see README.md.
+services:
+  identity:
+    enabled: false
+  assets:
+    enabled: false
+  certs:
+    enabled: false
+  ingest:
+    enabled: false
+  telemetry-query:
+    enabled: false
+  gateway-ops:
+    enabled: false
+  mqtt-bridge:
+    enabled: false
+  assistant:
+    enabled: false
+  ai-gateway:
+    enabled: false
+  alerts:
+    enabled: false
+  field-context:
+    enabled: false
+  knowledge:
+    enabled: false
+
+# External dependencies (portability rule 2). Managed or self-hosted differs only in values.
+
+postgres:
+  # bundled: CloudNativePG cluster deployed by this chart (Laysi/trustiot-v2#58).
+  # external: a Postgres with Apache AGE that you run elsewhere.
+  mode: bundled
+  external:
+    host: ""
+    port: 5432
+    database: trustiot
+    # Server certificate verification (checklist M3); only verify-full is accepted.
+    sslMode: verify-full
+    # CA certificate that signed the server certificate; mounted read-only into every service.
+    caSecret:
+      name: ""
+      key: ca.crt
+
+clickhouse:
+  # bundled: ClickHouse deployed by this chart (Laysi/trustiot-v2#59).
+  # external: ClickHouse Cloud or another server (fallback only, decision 14).
+  mode: bundled
+  external:
+    # HTTPS endpoint, for example https://abc.clickhouse.cloud:8443
+    url: ""
+    # CA certificate for a private CA, mounted read-only into every service; leave the name
+    # empty for a publicly trusted certificate.
+    caSecret:
+      name: ""
+      key: ca.crt
+
+qdrant:
+  # bundled: Qdrant deployed in this cluster (on-prem, decision 19).
+  # external: Qdrant Cloud or another server (SaaS).
+  mode: ""
+  external:
+    # For example https://xyz.eu-central-1-0.aws.cloud.qdrant.io:6333
+    url: ""
+    # Retrieval uses a read-only key, background processing a write key
+    # (docs/architecture/rag.md).
+    credentialsSecret:
+      name: ""
+      readApiKeyKey: read-api-key
+      writeApiKeyKey: write-api-key
+
+# S3-compatible object storage for PDFs, page images and chat attachments (decision 20).
+objectStorage:
+  # Empty uses the AWS S3 endpoint for `region`; set it for R2 or other S3-compatible storage.
+  endpoint: ""
+  region: ""
+  bucket: ""
+  forcePathStyle: false
+  credentialsSecret:
+    name: ""
+    accessKeyIdKey: access-key-id
+    secretAccessKeyKey: secret-access-key
+
+# Outgoing email for alerts and reports (decision 18); on-prem uses the customer's SMTP.
+smtp:
+  host: ""
+  port: 587
+  # starttls or tls (implicit TLS, usually port 465). Plain SMTP is not supported.
+  security: starttls
+  # Sender, for example "TrustIoT <noreply@example.com>".
+  from: ""
+  # Leave the name empty when the relay does not need authentication.
+  credentialsSecret:
+    name: ""
+    usernameKey: username
+    passwordKey: password
+
+# OpenAI-compatible endpoints (decisions 15, 16, 26 and 28). On-prem points at the
+# customer's endpoints (for example vLLM or Ollama).
+ai:
+  chat:
+    baseUrl: ""
+    apiKeySecret:
+      name: ""
+      key: api-key
+  embedding:
+    baseUrl: ""
+    apiKeySecret:
+      name: ""
+      key: api-key
+  # Reranking uses a chat-completions endpoint with a fast model (decision 26).
+  rerank:
+    baseUrl: ""
+    apiKeySecret:
+      name: ""
+      key: api-key
+
+observability:
+  # Error tracking (decision 24): SaaS sends to sentry.io; on-prem is off unless the
+  # customer runs Sentry. When enabled, every service gets SENTRY_DSN and SENTRY_ENVIRONMENT.
+  sentry:
+    enabled: false
+    # Sentry environment tag, for example production or staging.
+    environment: ""
+    dsnSecret:
+      name: ""
+      key: dsn

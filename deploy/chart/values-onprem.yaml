@@ -1,0 +1,33 @@
+# On-prem deployment shape: single tenant on the customer's k3s, Kubernetes or OpenShift,
+# without Cloudflare. Use together with an instance overlay from the customer install that
+# sets hosts, external endpoints and Secret names.
+# README.md documents every field and compares this file with values-saas.yaml.
+
+global:
+  deploymentMode: onprem
+
+ingress:
+  # The ingress gateway terminates the outer TLS on 443 in the customer network; only the
+  # right-most X-Forwarded-For entry, appended by the gateway, is trusted as the client IP.
+  # Gateways still connect over WebSocket through mqtt-bridge (decisions 6 and 27).
+  exposure: direct
+
+# Postgres (with Apache AGE) and ClickHouse stay bundled in the cluster, as on SaaS
+# (decisions 14 and 21); see values.yaml.
+
+qdrant:
+  # Self-hosted in the cluster (decision 19).
+  mode: bundled
+
+# smtp: the customer's SMTP relay. The instance overlay sets host, port, security, from and,
+# when the relay needs it, the credentials Secret.
+# objectStorage: the customer's S3-compatible storage (decision 20; details not decided yet).
+# ai: the customer's OpenAI-compatible endpoints, for example vLLM or Ollama (decision 16).
+
+observability:
+  sentry:
+    # Off by default (decision 24); a customer that runs Sentry can enable it in the overlay.
+    enabled: false
+
+# Copying logs and traces to the customer's SIEM (decision 22) arrives with the OpenTelemetry
+# collector (Laysi/trustiot-v2#73).

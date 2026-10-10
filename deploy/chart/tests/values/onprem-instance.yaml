@@ -1,0 +1,33 @@
+# Example on-prem instance overlay for chart tests, lab installs and the nightly workflow.
+# Uses reserved .test names (RFC 6761) for the customer network.
+# Use with: -f values-onprem.yaml -f tests/values/onprem-instance.yaml
+
+hosts:
+  app: trustiot.factory.test
+  gateway: gw.trustiot.factory.test
+  ota: ota.trustiot.factory.test
+
+objectStorage:
+  # Customer S3-compatible storage inside the plant network.
+  endpoint: http://s3.factory.test:9000
+  region: us-east-1
+  bucket: trustiot
+  forcePathStyle: true
+  credentialsSecret:
+    name: trustiot-object-storage
+
+smtp:
+  # Customer relay that accepts mail from the cluster without authentication.
+  host: smtp.factory.test
+  port: 25
+  security: starttls
+  from: TrustIoT <trustiot@factory.test>
+
+ai:
+  # Customer OpenAI-compatible servers (vLLM, Ollama) inside the plant network.
+  chat:
+    baseUrl: http://vllm.factory.test:8000/v1
+  embedding:
+    baseUrl: http://ollama.factory.test:11434/v1
+  rerank:
+    baseUrl: http://vllm.factory.test:8000/v1

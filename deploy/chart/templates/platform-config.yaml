@@ -1,0 +1,72 @@
+{{- /*
+Non-secret platform settings that every service reads through envFrom (deployment rule:
+configuration comes only from environment variables or files). Secrets never go here: the
+service template maps them into env with valueFrom.secretKeyRef (SENTRY_DSN for every service,
+dependency credentials only for the services that list them under `credentials`).
+Empty settings are left out, so services can tell "not configured" from "empty".
+In bundled mode the component that deploys the dependency adds its in-cluster endpoint here.
+*/ -}}
+{{- $v := .Values -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "trustiot.platformConfigName" . }}
+  labels:
+    {{- include "trustiot.componentLabels" (dict "root" . "name" "platform") | nindent 4 }}
+data:
+  TRUSTIOT_DEPLOYMENT_MODE: {{ $v.global.deploymentMode | quote }}
+  TRUSTIOT_APP_HOST: {{ $v.hosts.app | quote }}
+  TRUSTIOT_GATEWAY_HOST: {{ $v.hosts.gateway | quote }}
+  TRUSTIOT_OTA_HOST: {{ $v.hosts.ota | quote }}
+  TRUSTIOT_CLIENT_IP_SOURCE: {{ include "trustiot.clientIpSource" . | quote }}
+  {{- if eq $v.postgres.mode "external" }}
+  TRUSTIOT_POSTGRES_HOST: {{ $v.postgres.external.host | quote }}
+  TRUSTIOT_POSTGRES_PORT: {{ $v.postgres.external.port | quote }}
+  TRUSTIOT_POSTGRES_DATABASE: {{ $v.postgres.external.database | quote }}
+  TRUSTIOT_POSTGRES_SSLMODE: {{ $v.postgres.external.sslMode | quote }}
+  {{- end }}
+  {{- if eq $v.clickhouse.mode "external" }}
+  TRUSTIOT_CLICKHOUSE_URL: {{ $v.clickhouse.external.url | quote }}
+  {{- end }}
+  {{- /* CA files mounted by the service template ("trustiot.caMounts"). */}}
+  {{- range include "trustiot.caMounts" . | fromYamlArray }}
+  TRUSTIOT_{{ .volume | replace "-" "_" | upper }}_FILE: {{ printf "%s/ca.crt" .dir | quote }}
+  {{- end }}
+  {{- if eq $v.qdrant.mode "external" }}
+  TRUSTIOT_QDRANT_URL: {{ $v.qdrant.external.url | quote }}
+  {{- end }}
+  {{- with $v.objectStorage }}
+  {{- if .endpoint }}
+  TRUSTIOT_S3_ENDPOINT: {{ .endpoint | quote }}
+  {{- end }}
+  {{- if .region }}
+  TRUSTIOT_S3_REGION: {{ .region | quote }}
+  {{- end }}
+  {{- if .bucket }}
+  TRUSTIOT_S3_BUCKET: {{ .bucket | quote }}
+  TRUSTIOT_S3_FORCE_PATH_STYLE: {{ .forcePathStyle | quote }}
+  {{- end }}
+  {{- end }}
+  {{- with $v.smtp }}
+  {{- if .host }}
+  TRUSTIOT_SMTP_HOST: {{ .host | quote }}
+  TRUSTIOT_SMTP_PORT: {{ .port | quote }}
+  TRUSTIOT_SMTP_SECURITY: {{ .security | quote }}
+  {{- end }}
+  {{- if .from }}
+  TRUSTIOT_SMTP_FROM: {{ .from | quote }}
+  {{- end }}
+  {{- end }}
+  {{- with $v.ai.chat.baseUrl }}
+  TRUSTIOT_AI_CHAT_BASE_URL: {{ . | quote }}
+  {{- end }}
+  {{- with $v.ai.embedding.baseUrl }}
+  TRUSTIOT_AI_EMBEDDING_BASE_URL: {{ . | quote }}
+  {{- end }}
+  {{- with $v.ai.rerank.baseUrl }}
+  TRUSTIOT_AI_RERANK_BASE_URL: {{ . | quote }}
+  {{- end }}
+  {{- /* SENTRY_DSN comes from its Secret in the service template; without it Sentry stays off. */}}
+  {{- if $v.observability.sentry.enabled }}
+  SENTRY_ENVIRONMENT: {{ $v.observability.sentry.environment | quote }}
+  {{- end }}

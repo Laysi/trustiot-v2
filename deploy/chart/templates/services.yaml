@@ -1,0 +1,13 @@
+{{- /* One ServiceAccount, Service and Deployment per enabled entry under .Values.services. */ -}}
+{{- range $name, $entry := .Values.services }}
+{{- if $entry.enabled }}
+{{- $config := include "trustiot.serviceConfig" (dict "root" $ "name" $name "values" $entry) | fromYaml }}
+{{- $ctx := dict "root" $ "name" $name "config" $config }}
+---
+{{ include "trustiot.service.serviceAccount" $ctx }}
+---
+{{ include "trustiot.service.service" $ctx }}
+---
+{{ include "trustiot.service.deployment" $ctx }}
+{{- end }}
+{{- end }}

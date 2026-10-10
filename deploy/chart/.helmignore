@@ -1,0 +1,11 @@
+# Files left out of the packaged chart.
+.DS_Store
+.git/
+.gitignore
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+# Chart tests and their values fixtures stay in the repo only.
+tests/
