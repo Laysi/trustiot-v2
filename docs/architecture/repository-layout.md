@@ -1,13 +1,14 @@
 # 專案目錄
 
-新系統開新的 repo `Laysi/trustiot-v2`，舊 repo `Laysi/trustiot` 封存。雲端服務、閘道器程式與共用 crate 都在同一個 Cargo workspace（決策 4）；前端與腳本用 Bun，版本與 Rust、chart 工具（helm、kubeconform）、發佈工具（zig、cargo-zigbuild、cargo-auditable、syft、cosign）一起鎖在 `.prototools`。
+新系統開新的 repo `Laysi/trustiot-v2`，舊 repo `Laysi/trustiot` 封存。雲端服務、閘道器程式與共用 crate 都在同一個 Cargo workspace（決策 4）；前端與腳本用 Bun，版本與 Rust、CI 工具（cargo-deny、gitleaks）、chart 工具（helm、kubeconform）、發佈工具（zig、cargo-zigbuild、cargo-auditable、syft、cosign）一起鎖在 `.prototools`。
 
 ```
 trustiot-v2/
 ├── Cargo.toml                 # Cargo workspace：成員、共用 lints、edition、release profile
-├── .prototools                # rust、bun、helm、kubeconform 與發佈工具的版本
-├── .proto/plugins/            # proto 沒有內建外掛的工具（helm、kubeconform、發佈工具）：官方下載網址與校驗
+├── .prototools                # rust、bun、cargo-deny、gitleaks、helm、kubeconform 與發佈工具的版本
+├── .proto/plugins/            # proto 沒有內建外掛的工具（cargo-deny、gitleaks、helm、kubeconform、發佈工具）：官方下載網址與校驗
 ├── rust-toolchain.toml        # rustup 依此選 Rust 版本，與 .prototools 相同
+├── deny.toml                  # cargo-deny 規則：授權白名單、漏洞公告、相依來源
 ├── CLAUDE.md                  # agent 規範只放這裡，不另放 AGENTS.md
 ├── .githooks/pre-commit       # Codex 審查關卡
 ├── .github/workflows/         # ci.yml、release.yml、nightly.yml（M5，見 docs/architecture/ci-release.md）
@@ -48,7 +49,7 @@ trustiot-v2/
 │   ├── flux/                  # SaaS 的 GitOps 設定（Flux）
 │   ├── host/                  # 主機安裝：k3s、cloudflared（SaaS）
 │   └── images/                # release.yml 發佈的 arm64 映像：每個子目錄一個（image.toml 或 Containerfile）
-├── scripts/                   # Bun + TS：本地一鍵啟動（M6，podman）、種子資料、發佈流程（release/）；見 scripts/README.md
+├── scripts/                   # Bun + TS：本地一鍵啟動（M6，podman）、種子資料、CI 檢查（ci/）、發佈流程（release/）；見 scripts/README.md
 ├── evals/                     # 題庫：分析、RAG、補全延遲、跨租戶 Cypher 攻擊
 ├── datasets/lab/              # lab 資料集索引與標註
 └── docs/                      # 跨服務架構文件；test-reports/ 放測試報告與原始資料
@@ -70,5 +71,5 @@ services/assets/
 - 容器映像在 `deploy/images/<名稱>/` 宣告，目錄名就是映像名與 chart 的服務名：Rust 服務放 `image.toml` 指定 Cargo 套件，其他映像放自己的 `Containerfile`。release.yml 依目錄發佈，新增映像不必改 workflow，見 [CI 與發佈](ci-release.md) 的「release.yml」。
 - 大型資料集放物件儲存，repo 只放索引與標註。
 - Workspace 成員：`crates/`、`services/`、`edge/`、`factory/`、`tools/` 底下的每個子目錄都是成員（根目錄 `Cargo.toml` 以 glob 列出，新增 crate 不必改成員清單），必須有 `Cargo.toml`，並以 `edition.workspace = true` 與 `[lints] workspace = true` 繼承 workspace 設定；非 Rust 的子目錄（目前只有 `edge/image`）列在 `exclude`。`frontend/` 與 `scripts/` 用 Bun，不是 workspace 成員。第三方相依套件一律先宣告在根目錄的 `[workspace.dependencies]`。
-- Rust 版本同時寫在 `.prototools` 與 `rust-toolchain.toml`：proto 透過 rustup 安裝 Rust、不為 cargo 建 shim，cargo 實際用哪個版本由 rustup 讀 `rust-toolchain.toml` 決定。兩者要一起改，`tools/repo-check` 會檢查一致；它也檢查每個成員繼承 workspace 設定、repo 內沒有 `AGENTS.md`。
+- Rust 版本同時寫在 `.prototools` 與 `rust-toolchain.toml`：proto 透過 rustup 安裝 Rust、不為 cargo 建 shim，cargo 實際用哪個版本由 rustup 讀 `rust-toolchain.toml` 決定；CI 則直接以 rustup 依 `rust-toolchain.toml` 安裝（原因見 [CI 與發佈](ci-release.md) 的「工具安裝」）。兩者要一起改，`tools/repo-check` 會檢查一致；它也檢查每個成員繼承 workspace 設定、repo 內沒有 `AGENTS.md`。
 - 測試報告與原始資料放 `docs/test-reports/`，命名與內容規則見 [測試報告](../test-reports/README.md)。

@@ -62,12 +62,15 @@ runs:
               exit 1
             fi
             rustup toolchain install
-            # Fail here, not in a later cargo command, if rustup picked anything else.
+            # Fail here, not in a later cargo command, if rustup picked anything else. rustup
+            # prints the active toolchain as "<channel>-<host triple> (<reason>)": compare its
+            # name, the first word, exactly with the pinned channel on this host.
             channel="$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
             active="$(rustup show active-toolchain)"
             echo "$active"
-            if [[ -z "$channel" || "$active" != "$channel"-* ]]; then
-              echo "::error title=setup-proto::rustup selected '$active', but rust-toolchain.toml pins '$channel'."
+            host="$(rustc -vV | sed -n 's/^host: //p')"
+            if [[ -z "$channel" || -z "$host" || "${active%% *}" != "$channel-$host" ]]; then
+              echo "::error title=setup-proto::rustup selected '$active', but rust-toolchain.toml pins '$channel' (expected $channel-$host)."
               exit 1
             fi
           else

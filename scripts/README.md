@@ -1,6 +1,6 @@
 # scripts
 
-Bun + TypeScript 腳本：本地一鍵啟動（清單 M6）、種子資料與發佈流程（`release/`）。Bun 版本鎖在根目錄 `.prototools`。不是 Cargo workspace 成員，也沒有 `package.json`，沒有 npm 相依套件。
+Bun + TypeScript 腳本：本地一鍵啟動（清單 M6）、種子資料、CI 檢查與發佈流程（`release/`）。Bun 版本鎖在根目錄 `.prototools`。不是 Cargo workspace 成員。腳本只用 Bun 內建的 API，執行時不需要安裝任何 npm 套件；`package.json` 只列型別檢查用的開發相依（`typescript`、`@types/bun`），版本鎖在 `bun.lock`，見下方「型別檢查與測試」。
 
 ## 本地開發環境
 
@@ -98,6 +98,10 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 - 資料庫沒有 TLS，所以給服務的 `TRUSTIOT_POSTGRES_SSLMODE` 是 `disable`；chart 的 `external` 模式只接受 `verify-full`。
 - Mosquitto 用靜態的帳號、ACL 檔，不加 TLS、不用 dynsec、不經 mqtt-bridge（決策 6 的正式設定在 Laysi/trustiot-v2#84）。
 
+## CI 檢查
+
+- `ci/check-workflows.ts`：CI 的 `workflow-policy` 檢查。每個 job 要明列 `permissions`，action 與 reusable workflow 要釘 40 字元 commit SHA（本地 action 不必釘，但要放在 `.github/actions/` 下），容器映像要釘 digest，不得使用 `pull_request_target` 與 `workflow_run`；規則與理由見 [CI 與發佈](../docs/architecture/ci-release.md)。執行：`bun scripts/ci/check-workflows.ts`。
+
 ## release/：發佈流程
 
 `.github/workflows/release.yml` 的每個 job 各執行一支腳本，彼此以 JSON 交接（型別在 `release/lib.ts`）。流程、權限與驗證方式見 [CI 與發佈](../docs/architecture/ci-release.md) 的「release.yml」。
@@ -134,3 +138,13 @@ podman stop release-registry
 ```
 
 `--dry-run` 以目前的 HEAD 規劃，tag 不必存在，也不檢查正式版是否在 main 上。只要建置映像，前兩步就夠了。同一個版本再跑一次 publish 會得到相同的 digest，不會重複推送；內容不同時 publish 會拒絕覆蓋。
+
+## 型別檢查與測試
+
+以下指令都在 repo 根目錄執行：
+
+- 安裝型別檢查用的開發相依：`bun install --cwd scripts --frozen-lockfile`（裝在 `scripts/node_modules/`，不進版控；執行腳本與測試都不需要）
+- 型別檢查（`scripts/` 下全部的 `.ts`）：`bun run --cwd scripts typecheck`
+- 測試：`bun run --cwd scripts test`，與上方的 `bun test scripts` 跑同一批測試檔；單一測試：`bun run --cwd scripts test -t "<test-name-filter>"`
+
+CI 的 `workflow-policy` job 每次都跑型別檢查與全部測試。本地開發環境的端對端測試（`TRUSTIOT_DEV_E2E=1`）要以 podman 起整套環境並編譯服務，不在 CI 執行。

@@ -1,0 +1,126 @@
+# Laysi/trustiot-v2#67 the commands of the rust, helm and workflow-policy jobs, run locally on
+# 2026-10-10 at commit e8acc6e (branch ci/67-ci-workflow, rebased on main 910961d).
+# Local machine: Fedora 45, x86_64; podman 6.1.3 (rootless) for service-kit's container tests.
+# Rust 1.99.0 (rust-toolchain.toml), Bun 1.4.2, helm 4.3.0 and kubeconform 0.8.0 from
+# .prototools. Environment as in the jobs: CI=true (as GitHub sets it, so service-kit's
+# container tests fail instead of skipping without a container runtime), SQLX_OFFLINE=true;
+# and CARGO_BUILD_JOBS=2 because the machine is shared. Compile progress lines are left out,
+# and for cargo test only the per-binary result lines are kept (a skipped container test would
+# print a line starting with "skipped:"; there is none).
+#
+$ cargo fmt --all --check
+# exit status: 0
+#
+$ cargo clippy --workspace --all-targets --locked -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.60s
+# exit status: 0
+#
+$ cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.86s
+# exit status: 0
+#
+$ cargo test --workspace --locked
+     Running unittests src/lib.rs (target/debug/deps/contract-f65268c05e4ab5a8)
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/client.rs (target/debug/deps/client-5db4f5431d2d4b91)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+     Running tests/client_logging.rs (target/debug/deps/client_logging-fbca893814e61d50)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/error_format.rs (target/debug/deps/error_format-7698d3325aca8bc1)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/events.rs (target/debug/deps/events-53427a34e9bec990)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (target/debug/deps/repo_check-bcdd8915540fedcd)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs (target/debug/deps/repository-4bf5f5e43d5bc66f)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+     Running unittests src/lib.rs (target/debug/deps/service_kit-0effc028f225e694)
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+     Running tests/chart_contract.rs (target/debug/deps/chart_contract-76e31dba3d73d265)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/container.rs (target/debug/deps/container-59daafa9ed942af5)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.89s
+     Running tests/dependency_isolation.rs (target/debug/deps/dependency_isolation-017f166152679b7b)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+     Running tests/errors.rs (target/debug/deps/errors-15a82613a32857e9)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+     Running tests/job_lock.rs (target/debug/deps/job_lock-69356c3e203000ca)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.64s
+     Running tests/lifecycle.rs (target/debug/deps/lifecycle-137a2ba8ce4e2b0f)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.60s
+     Running tests/logging.rs (target/debug/deps/logging-934626bb5942b5a2)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+     Running tests/otlp.rs (target/debug/deps/otlp-4d23d36677ff21c3)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+   Doc-tests contract
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+   Doc-tests repo_check
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests service_kit
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+# exit status: 0
+#
+$ cargo test --package service-kit --no-default-features --locked
+     Running unittests src/lib.rs (target/debug/deps/service_kit-e8e2fc598e7892d8)
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+     Running tests/chart_contract.rs (target/debug/deps/chart_contract-716da636d9b8d116)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/container.rs (target/debug/deps/container-0aa3cd65427ba35e)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.31s
+     Running tests/dependency_isolation.rs (target/debug/deps/dependency_isolation-4f42b9f41853d44b)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+     Running tests/errors.rs (target/debug/deps/errors-52ef93ab936d8a6a)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+     Running tests/job_lock.rs (target/debug/deps/job_lock-d110c27366486bc3)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.77s
+     Running tests/lifecycle.rs (target/debug/deps/lifecycle-9f38ab28c757b038)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.53s
+     Running tests/logging.rs (target/debug/deps/logging-a7a1ca5f34f38f07)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+     Running tests/otlp.rs (target/debug/deps/otlp-993a0810af86fb1d)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+   Doc-tests service_kit
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+# exit status: 0
+#
+$ bun scripts/ci/check-workflows.ts
+workflow policy: 2 file(s) checked, no violations
+# exit status: 0
+#
+$ bun install --cwd scripts --frozen-lockfile
+bun install v1.4.2 (744846f84)
+Checked 6 installs across 26 packages (no changes) [40.00ms]
+# exit status: 0
+#
+$ bun run --cwd scripts typecheck
+$ tsc --noEmit --project tsconfig.json
+# exit status: 0
+#
+$ bun run --cwd scripts test
+$ bun test
+bun test v1.4.2 (744846f84)
+ 23 pass
+ 0 fail
+ 73 expect() calls
+Ran 23 tests across 1 file. [151.00ms]
+# exit status: 0
+#
+$ bun test deploy/chart
+bun test v1.4.2 (744846f84)
+ 91 pass
+ 0 fail
+ 838 expect() calls
+Ran 91 tests across 1 file. [13.54s]
+# exit status: 0
+#
+# The aarch64 step builds nothing yet: main has no crates/protocol and no Rust member
+# under edge/, so the job prints a notice (crates/protocol arrives with Laysi/trustiot-v2#50).
+# $ ls crates edge
+crates:
+contract
+README.md
+service-kit
+
+edge:
+README.md
