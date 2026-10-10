@@ -19,6 +19,7 @@ Architecture decisions, rebuild scope (items A1–M8), service split, repository
 - Test: `cargo test --workspace`
 - Single test: `cargo test -p <crate> <test-name-filter>`, for example `cargo test -p repo-check toolchain_pins_agree`
 - Helm chart (`deploy/chart`): `bun test deploy/chart` runs `helm lint`, kubeconform on both values files, the chart's own rules, and the README field check; a single check is `bun test deploy/chart -t "<test-name-filter>"`. The individual `helm lint`/`helm template` commands are in `deploy/chart/README.md`.
+- Container-backed tests: `crates/service-kit` starts throwaway Postgres and PID 1 containers with podman or docker (or uses `TEST_DATABASE_URL` for Postgres). Without them those tests skip locally; with `CI` set they fail instead.
 
 Every directory under `crates/`, `services/`, `edge/`, `factory/`, and `tools/` is a workspace member, so it needs a `Cargo.toml` that sets `edition.workspace = true` and `[lints] workspace = true`; list non-Rust directories in the root `exclude`. Declare third-party dependencies once in the root `[workspace.dependencies]`. Clippy fails on every lint in `[workspace.lints]`; suppress one only with `#[allow(lint, reason = "...")]`. Save test evidence under `docs/test-reports/` as its README describes.
 

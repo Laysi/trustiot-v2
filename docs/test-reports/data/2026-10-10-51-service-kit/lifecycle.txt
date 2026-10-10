@@ -1,0 +1,20 @@
+# lifecycle: Laysi/trustiot-v2#51, run 2026-10-10T11:26:14.855Z, CARGO_BUILD_JOBS=2
+
+$ cargo test -p service-kit --test lifecycle -- --nocapture --test-threads 1
+
+running 8 tests
+test drain_timeout_bounds_shutdown ... ok
+test health_endpoints_answer_while_serving ... ok
+test invalid_configuration_names_the_key_without_its_value ... ok
+test listen_address_in_use_stops_startup ... ok
+test missing_required_configuration_stops_startup ... ok
+test second_signal_exits_without_draining ... ok
+test sigint_drains_like_sigterm ... ok
+test sigterm_fails_readiness_at_once_and_drains_requests_in_flight ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.80s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/lifecycle.rs (target/debug/deps/lifecycle-ba48ca2da8c5ed87)
+after SIGTERM: /readyz answered 503 at 4 ms, the process exited 0 at 2222 ms
+[exit 0, 4.3 s]

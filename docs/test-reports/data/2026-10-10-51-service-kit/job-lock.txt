@@ -1,0 +1,61 @@
+# job-lock: Laysi/trustiot-v2#51, run 2026-10-10T11:26:31.113Z, CARGO_BUILD_JOBS=2
+
+$ cargo test -p service-kit --test job_lock -- --nocapture
+
+running 5 tests
+test released_locks_return_their_connection_to_the_pool ... ok
+test only_one_replica_runs_a_job_scheduled_on_both_at_once ... ok
+test dropped_guards_and_panicking_jobs_release_the_lock ... ok
+test a_lost_session_cancels_the_job_and_frees_the_lock ... ok
+test periodic_runs_on_two_replicas_never_overlap ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/job_lock.rs (target/debug/deps/job_lock-35014a3bc618837c)
+
+thread 'tokio-rt-worker' (3345425) panicked at crates/service-kit/tests/job_lock.rs:296:39:
+job failed hard
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+10 rounds; runs by replica a and b: [2, 8]
+[exit 0, 11.2 s]
+
+$ cargo test -p service-kit --test job_lock -- --nocapture
+
+running 5 tests
+test released_locks_return_their_connection_to_the_pool ... ok
+test only_one_replica_runs_a_job_scheduled_on_both_at_once ... ok
+test dropped_guards_and_panicking_jobs_release_the_lock ... ok
+test a_lost_session_cancels_the_job_and_frees_the_lock ... ok
+test periodic_runs_on_two_replicas_never_overlap ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.75s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/job_lock.rs (target/debug/deps/job_lock-35014a3bc618837c)
+10 rounds; runs by replica a and b: [3, 7]
+
+thread 'tokio-rt-worker' (3346348) panicked at crates/service-kit/tests/job_lock.rs:296:39:
+job failed hard
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+[exit 0, 10.0 s]
+
+$ cargo test -p service-kit --test job_lock -- --nocapture
+
+running 5 tests
+test only_one_replica_runs_a_job_scheduled_on_both_at_once ... ok
+test released_locks_return_their_connection_to_the_pool ... ok
+test dropped_guards_and_panicking_jobs_release_the_lock ... ok
+test a_lost_session_cancels_the_job_and_frees_the_lock ... ok
+test periodic_runs_on_two_replicas_never_overlap ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.83s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running tests/job_lock.rs (target/debug/deps/job_lock-35014a3bc618837c)
+10 rounds; runs by replica a and b: [2, 8]
+
+thread 'tokio-rt-worker' (3347240) panicked at crates/service-kit/tests/job_lock.rs:296:39:
+job failed hard
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+[exit 0, 11.1 s]

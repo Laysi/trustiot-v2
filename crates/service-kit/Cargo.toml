@@ -1,0 +1,45 @@
+[package]
+name = "service-kit"
+description = "Shared skeleton for TrustIoT v2 cloud services: configuration, health, SIGTERM handling, tracing, and scheduled-job locks."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+# A demonstration service built on the kit. The integration tests run it as a real process (and as
+# PID 1 in a container) to prove the shutdown, health, and logging behaviour end to end.
+[[bin]]
+name = "example-service"
+path = "src/bin/example-service.rs"
+test = false
+doc = false
+
+[features]
+default = ["contract"]
+# Everything in the kit that needs crates/contract: the M1 error body of the errors the kit answers
+# itself. services/ai-gateway must not depend on crates/contract (decision 28), so it turns
+# default features off; tests/dependency_isolation.rs checks that this keeps contract out.
+contract = ["dep:contract"]
+
+[dependencies]
+axum = { workspace = true, features = ["http1", "json", "matched-path", "query", "tokio"] }
+contract = { path = "../contract", optional = true }
+humantime.workspace = true
+opentelemetry = { workspace = true, features = ["internal-logs", "logs", "trace"] }
+opentelemetry-otlp = { workspace = true, features = ["http-proto", "internal-logs", "logs", "reqwest-blocking-client", "trace"] }
+opentelemetry_sdk = { workspace = true, features = ["internal-logs", "logs", "trace"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sqlx = { workspace = true, features = ["postgres", "runtime-tokio"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
+toml.workspace = true
+tower-http = { workspace = true, features = ["catch-panic"] }
+tracing.workspace = true
+tracing-opentelemetry.workspace = true
+tracing-subscriber = { workspace = true, features = ["registry", "std", "tracing-log"] }
+
+[lints]
+workspace = true

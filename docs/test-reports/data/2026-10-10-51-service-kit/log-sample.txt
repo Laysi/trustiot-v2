@@ -1,0 +1,17 @@
+# example-service log sample, 2026-10-10 (Laysi/trustiot-v2#51)
+# filter: debug; requests: {"POST /v1/echo":200,"GET /v1/hello":200,"GET /healthz":200,"GET /v1/<path canary>":404}
+# exit code after SIGTERM: 0; stdout lines: 12; every line JSON: true
+# canaries sent (values withheld here): body, email, bearer, query, path; found in stdout or stderr: none
+# stderr bytes: 0
+{"timestamp":"2026-10-10T11:27:34.587631Z","level":"INFO","service":"example-service","target":"opentelemetry","message":"Global tracer provider is set. Traces can now be created using global::tracer() or global::tracer_with_scope().","fields":{"name":"TracerProvider.GlobalSet"}}
+{"timestamp":"2026-10-10T11:27:34.587761Z","level":"INFO","service":"example-service","target":"service_kit::service","message":"starting","fields":{"service.version":"0.1.0","process.pid":3348563,"http.listen_addr":"127.0.0.1:0","http.request_timeout_ms":30000,"shutdown.drain_delay_ms":200,"shutdown.drain_timeout_ms":20000,"telemetry.log_filter":"debug","telemetry.otlp_export":false}}
+{"timestamp":"2026-10-10T11:27:34.588209Z","level":"INFO","service":"example-service","target":"service_kit::service","message":"listening","fields":{"address":"127.0.0.1:40567"}}
+{"timestamp":"2026-10-10T11:27:34.589400Z","level":"DEBUG","service":"example-service","target":"example_service","message":"heartbeat"}
+{"timestamp":"2026-10-10T11:27:34.615516Z","level":"DEBUG","service":"example-service","target":"example_service","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","span_id":"8cb635bdbc30b653","message":"echo request","fields":{"length":41}}
+{"timestamp":"2026-10-10T11:27:34.615680Z","level":"INFO","service":"example-service","target":"service_kit::http","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","span_id":"8cb635bdbc30b653","message":"request completed","fields":{"http.request.method":"POST","http.route":"/v1/echo","http.response.status_code":200,"duration_ms":0.235}}
+{"timestamp":"2026-10-10T11:27:34.616275Z","level":"INFO","service":"example-service","target":"service_kit::http","trace_id":"8c65e2566df54f6df60f50d0640c42a7","span_id":"07129f6018615419","message":"request completed","fields":{"http.request.method":"GET","http.route":"/v1/hello","http.response.status_code":200,"duration_ms":0.081}}
+{"timestamp":"2026-10-10T11:27:34.616959Z","level":"INFO","service":"example-service","target":"service_kit::http","trace_id":"1f7d3a90a91b2e74d1b02e3263bbae15","span_id":"34dbf2d60e9e99c8","message":"request completed","fields":{"http.request.method":"GET","http.response.status_code":404,"duration_ms":0.057}}
+{"timestamp":"2026-10-10T11:27:34.618063Z","level":"INFO","service":"example-service","target":"service_kit::shutdown","message":"shutdown requested; readiness now fails","fields":{"signal":"SIGTERM","drain_delay_ms":200}}
+{"timestamp":"2026-10-10T11:27:34.819641Z","level":"DEBUG","service":"example-service","target":"example_service","message":"heartbeat task stopped"}
+{"timestamp":"2026-10-10T11:27:34.819673Z","level":"INFO","service":"example-service","target":"service_kit::service","message":"stopped accepting connections; draining requests and background tasks","fields":{"drain_timeout_ms":20000}}
+{"timestamp":"2026-10-10T11:27:34.819914Z","level":"INFO","service":"example-service","target":"service_kit::service","message":"shutdown complete","fields":{"elapsed_ms":0}}

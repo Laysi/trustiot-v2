@@ -1,0 +1,8 @@
+# PID 1 without a SIGTERM handler, 2026-10-10T11:27:27.544Z (Laysi/trustiot-v2#51)
+image: docker.io/library/alpine:3.24@sha256:79ff19e9084a00eece421b2523fb93e22d730e2c0e525905de047e848e56d95f
+$ podman run --detach --name service-kit-test-baseline-3348315 docker.io/library/alpine:3.24 sleep 600 -> exit 0
+PID 1 in the container: sleep
+$ podman stop --time 5 service-kit-test-baseline-3348315 -> exit 0 after 5.23 s
+stop stderr: time="2026-10-10T19:27:34+08:00" level=warning msg="StopSignal SIGTERM failed to stop container service-kit-test-baseline-3348315 in 5 seconds, resorting to SIGKILL"
+container exit code: 137 (137 = 128 + SIGKILL)
+$ podman rm --force service-kit-test-baseline-3348315 -> exit 0

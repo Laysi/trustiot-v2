@@ -1,0 +1,20 @@
+# logging: Laysi/trustiot-v2#51, run 2026-10-10T11:26:19.990Z, CARGO_BUILD_JOBS=2
+
+$ cargo test -p service-kit --test logging --test otlp -- --nocapture
+
+running 1 test
+test logs_are_json_with_trace_ids_and_never_contain_request_data ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+
+running 2 tests
+test logs_and_traces_export_with_trace_ids_and_without_request_data ... ok
+test export_is_off_unless_configured ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/logging.rs (target/debug/deps/logging-f3cb150ca5f8049e)
+     Running tests/otlp.rs (target/debug/deps/otlp-81849b3f5cf79c97)
+[exit 0, 1.0 s]

@@ -1,0 +1,13 @@
+# errors: Laysi/trustiot-v2#51, run 2026-10-10T11:26:19.151Z, CARGO_BUILD_JOBS=2
+
+$ cargo test -p service-kit --test errors -- --nocapture
+
+running 2 tests
+test panics_answer_500_and_are_logged_as_json ... ok
+test handler_timeouts_answer_504 ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/errors.rs (target/debug/deps/errors-994f84f4af0ad425)
+[exit 0, 0.8 s]
