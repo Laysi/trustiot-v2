@@ -8,7 +8,7 @@ GitHub Actions，三個 workflow：
 
 SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定放在 `deploy/flux/`；發版就是合併一個改 chart 版本號的 PR（由 release 流程自動開）。GitHub 不持有任何部署憑證，主機也不必對外開放，叢集只存一把唯讀的 GHCR 拉取 token；Flux 控制器的記憶體算進主機規格（MS3 重測）。地端不裝 Flux，由客戶以 Helm 安裝或用離線安裝包。
 
-通用規則（[#158](https://github.com/Laysi/trustiot/issues/158)、[#120](https://github.com/Laysi/trustiot/issues/120)、[#122](https://github.com/Laysi/trustiot/issues/122)）：每個 workflow 明列最小權限，每個 job 都寫出自己的 `permissions`，workflow 層級設 `permissions: {}`；第三方 action（含 GitHub 官方的 `actions/*` 與 reusable workflow）一律釘 40 字元的 commit SHA，行尾註解寫版本；容器映像（`docker://` action、job 與 service container）釘 digest；需要雲端憑證時用 OIDC，不放長期金鑰；發佈走 GitHub environment 加人工核准；fork 來的 PR 拿不到任何 secret，所以不使用 `pull_request_target` 與 `workflow_run` 觸發。權限、釘選與觸發條件三項由 CI 的 `workflow-policy` job（`scripts/ci/check-workflows.ts`）檢查每個 workflow 與 `.github/actions/` 下的 action。本地 action（`uses: ./...`）不必釘 SHA，因為它隨使用它的變更一起審查，但只能放在 `.github/actions/` 下，本地 reusable workflow 只能直接放在 `.github/workflows/`，才在檢查範圍內；symbolic link 依實際指向的檔案檢查。
+通用規則（[#158](https://github.com/Laysi/trustiot/issues/158)、[#120](https://github.com/Laysi/trustiot/issues/120)、[#122](https://github.com/Laysi/trustiot/issues/122)）：每個 workflow 明列最小權限，每個 job 都寫出自己的 `permissions`，workflow 層級設 `permissions: {}`；第三方 action（含 GitHub 官方的 `actions/*` 與 reusable workflow）一律釘 40 字元的 commit SHA，行尾註解寫版本；容器映像（`docker://` action、job 與 service container）釘 digest；需要雲端憑證時用 OIDC，不放長期金鑰；發佈走 GitHub environment 加人工核准（私有 repo 在目前的 GitHub 方案設不了核准，2026-10-10 決定暫時接受，改以補償措施把關，見下方「發佈核准」）；fork 來的 PR 拿不到任何 secret，所以不使用 `pull_request_target` 與 `workflow_run` 觸發。權限、釘選與觸發條件三項由 CI 的 `workflow-policy` job（`scripts/ci/check-workflows.ts`）檢查每個 workflow 與 `.github/actions/` 下的 action。本地 action（`uses: ./...`）不必釘 SHA，因為它隨使用它的變更一起審查，但只能放在 `.github/actions/` 下，本地 reusable workflow 只能直接放在 `.github/workflows/`，才在檢查範圍內；symbolic link 依實際指向的檔案檢查。
 
 ## ci.yml 的 job
 
@@ -43,7 +43,7 @@ SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定�
 
 ### 工具安裝
 
-CI 以 `.github/actions/setup-proto` 安裝 proto：版本與壓縮檔的 SHA-256 寫死在該 action，不執行會變動的線上安裝腳本；再以 proto 安裝 `.prototools` 釘選的工具。沒有內建 proto 外掛的工具（cargo-deny、gitleaks、helm、kubeconform）在 `.proto/plugins/` 設定，下載官方 release 並以 release 附的 checksum 驗證。Rust 是例外：proto 的 Rust 外掛本身只是呼叫 rustup，而 `proto install rust` 在 GitHub 代管 runner 上無法完成（2026-10-10 以暫時 PR 實測：job 超過 10 分鐘的上限仍未結束，同一個 action 裝 Bun、gitleaks 都正常；沒有 Actions 紀錄的讀取權限，原因待查），所以 setup-proto 在 CI 直接用 runner 映像內建的 rustup 執行不帶參數的 `rustup toolchain install`，依 `rust-toolchain.toml` 安裝釘選的版本、元件與 profile。本機照常由 proto 經 rustup 安裝。兩邊的 cargo 都由 rustup 讀 `rust-toolchain.toml` 決定版本，`tools/repo-check` 保證它與 `.prototools` 的 `rust` 相同，所以 CI 與本機用的是同一組版本。
+CI 以 `.github/actions/setup-proto` 安裝 proto：版本與壓縮檔的 SHA-256 寫死在該 action，不執行會變動的線上安裝腳本；再以 proto 安裝 `.prototools` 釘選的工具。沒有內建 proto 外掛的工具（cargo-deny、gitleaks、helm、kubeconform，以及 release.yml 用的 zig、cargo-zigbuild、cargo-auditable、syft、cosign）在 `.proto/plugins/` 設定，下載官方 release 並以 release 附的 checksum 驗證（zig 以官方的 minisign 簽章驗證）。Rust 是例外：proto 的 Rust 外掛本身只是呼叫 rustup，而 `proto install rust` 在 GitHub 代管 runner 上無法完成（2026-10-10 以暫時 PR 實測：job 超過 10 分鐘的上限仍未結束，同一個 action 裝 Bun、gitleaks 都正常；沒有 Actions 紀錄的讀取權限，原因待查），所以 setup-proto 在 CI 直接用 runner 映像內建的 rustup 執行不帶參數的 `rustup toolchain install`，依 `rust-toolchain.toml` 安裝釘選的版本、元件與 profile；裝完確認 rustup 選到的工具鏈名稱正好是 `<rust-toolchain.toml 的 channel>-<host triple>`，不符就在這一步失敗，不留到後面的 cargo 指令。本機照常由 proto 經 rustup 安裝。兩邊的 cargo 都由 rustup 讀 `rust-toolchain.toml` 決定版本，`tools/repo-check` 保證它與 `.prototools` 的 `rust` 相同，所以 CI 與本機用的是同一組版本。
 
 ### 授權白名單
 
@@ -116,17 +116,31 @@ verify job 對每個映像檢查：tag 指向 publish 推送的 digest；只有�
 
 Flux（Laysi/trustiot-v2#70）驗證映像與 chart 時，要用支援 cosign v3 bundle 格式的 Flux（2.8 以上），`matchOIDCIdentity` 的 issuer 寫 `^https://token\.actions\.githubusercontent\.com$`，subject 寫 `^https://github\.com/Laysi/trustiot-v2/\.github/workflows/release\.yml@refs/tags/v.*$`。上方「SaaS 以 GitOps 部署」提到由 release 流程自動開改 chart 版本號的 PR，等 `deploy/flux/` 建立後（Laysi/trustiot-v2#70）再加進 release.yml。
 
-### 公開的透明紀錄
+### 公開的透明紀錄（2026-10-10 決定接受）
 
-keyless 簽章會寫進 Sigstore 公開服務的透明紀錄：Fulcio 簽發的憑證進入公開的憑證透明度日誌，簽章與 attestation 的紀錄進入 Rekor。任何人都能以映像或 chart 的 digest 查到這些紀錄，紀錄中的憑證寫著 repo 名稱 `Laysi/trustiot-v2` 與數字 ID、組織、workflow 路徑、tag、commit SHA、Actions 執行的網址，以及簽章時 repo 是私有的。Rekor 只存簽章與 attestation 內容的雜湊，不存內容本身，所以 SBOM 列出的相依套件與版本不會公開，原始碼與映像內容也查不到（2026-10-10 以 v0.0.0-rc.1 實查，見 [測試報告](../test-reports/2026-10-10-68-release-workflow.md)）。紀錄無法刪除。私有 repo 用公開 Sigstore 是 Laysi/trustiot-v2#68 的選擇（不需要保管任何金鑰）；若這些資訊不能公開，替代方案是自建 Sigstore 或改用金鑰簽章（金鑰放在 KMS，以 OIDC 取用），兩者都要另開 issue。
+keyless 簽章會寫進 Sigstore 公開服務的透明紀錄：Fulcio 簽發的憑證進入公開的憑證透明度日誌，簽章與 attestation 的紀錄進入 Rekor。任何人都能以映像或 chart 的 digest 查到這些紀錄，紀錄中的憑證寫著 repo 名稱 `Laysi/trustiot-v2` 與數字 ID、組織、workflow 路徑、tag、commit SHA、Actions 執行的網址，以及簽章時 repo 是私有的。Rekor 只存簽章與 attestation 內容的雜湊，不存內容本身，所以 SBOM 列出的相依套件與版本不會公開，原始碼與映像內容也查不到（2026-10-10 以 v0.0.0-rc.1 實查，見 [測試報告](../test-reports/2026-10-10-68-release-workflow.md)）。紀錄無法刪除。
 
-### 發佈核准（GitHub environment）的缺口
+2026-10-10 決定接受（Laysi/trustiot-v2#68 審查，決策 30），理由：
 
-publish job 在 `release` environment 執行，原意是設定必要審查者（required reviewers）與只允許 `v*` tag 的部署規則，讓每次發佈都經人工核准。2026-10-10 的實況：本 repo 是私有庫、組織在 GitHub Free 方案，不能為私有庫設定 environment。依 GitHub 文件，Free 方案只能為公開 repo 設定 environment；Pro 與 Team 可以為私有 repo 設定 environment、部署分支與 tag 規則及 environment secret，但必要審查者與等待時間在 Free、Pro、Team 方案都只適用於公開 repo（私有 repo 要 GitHub Enterprise）。所以目前 environment 不會擋下任何發佈：v0.0.0-rc.1 的 publish job 沒有等待核准就執行了。
+- 公開的只有上述中繼資料，不含程式碼、映像內容或 SBOM。
+- 替代方案都更差：自管簽章金鑰（即使放在 KMS）會引入長期簽章金鑰，多了外洩與輪替的風險，違反「沒有長期金鑰」的原則；自建 Sigstore 的維運成本與風險都更高。
 
-workflow 照樣宣告 environment：方案到位後，在 repo 設定的 `release` environment 加上必要審查者（並開啟 prevent self-review，推 tag 的人不能自己核准）與 tag 規則 `v*`，就會生效，不必改 workflow。
+日後 repo 名稱或發版節奏變成敏感資訊時，另開 issue 改用 KMS 金鑰或自建 Sigstore。
 
-在那之前的補償措施：只有對 repo 有寫入權限的人能推 tag；正式版 tag 必須在 main 上；版本不可變；簽章身分綁定 release.yml 與 tag，消費端只接受這個身分；執行第三方程式碼的 build job 沒有寫入權限；每次發佈都留下 commit status 與 GitHub Release 可稽核。這些措施擋不住有寫入權限的人（或以其憑證操作的 agent）直接推正式版 tag。要升級方案、把 repo 改為公開，還是接受現況，需要人決定。
+### 發佈核准（2026-10-10 決定接受的現況）
+
+publish job 在 `release` environment 執行，原本的設計是在 environment 設必要審查者（required reviewers）與只允許 `v*` tag 的部署規則，讓每次發佈都經人工核准。本 repo 是私有庫、組織在 GitHub Free 方案：依 GitHub 文件，Free 方案只能為公開 repo 設定 environment；Pro 與 Team 可以為私有 repo 設定 environment、部署分支與 tag 規則及 environment secret，但必要審查者與等待時間在 Free、Pro、Team 方案都只適用於公開 repo（私有 repo 要 GitHub Enterprise）。所以 environment 擋不下任何發佈：v0.0.0-rc.1 的 publish job 沒有等待核准就執行了。
+
+2026-10-10 決定（Laysi/trustiot-v2#68 審查，決策 30）：暫不升級 GitHub 方案，repo 維持私有，接受發佈沒有人工核准，以下列補償措施把關：
+
+- 只有對 repo 有寫入權限的人能推 tag。
+- 正式版 tag 必須在 main 上，而且 main 的 ci 為這個 commit 跑的最新一次執行必須成功（見「tag 規則」）。
+- 版本不可變，已發佈的版本不覆蓋。
+- 簽章身分綁定 release.yml 與 tag，消費端只接受這個身分。
+- 執行第三方程式碼的 build job 沒有寫入權限，也拿不到任何 secret。
+- 每次發佈都留下 commit status `release` 與 GitHub Release，可以稽核。
+
+這些措施擋不住有寫入權限的人（或以其憑證操作的 agent）把 main 上 ci 已通過的 commit 打成正式版發佈。workflow 照樣宣告 environment：升級到可為私有 repo 設定必要審查者的方案（目前是 GitHub Enterprise），或 repo 改為公開時，重新檢視本決定，並在 repo 設定的 `release` environment 加上必要審查者（開啟 prevent self-review，推 tag 的人不能自己核准）與 tag 規則 `v*`，不必改 workflow。只升級到 Team 或 Pro 時，可以先加上 tag 規則。
 
 ### 結果怎麼看、失敗怎麼處理
 

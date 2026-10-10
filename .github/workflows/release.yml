@@ -123,7 +123,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # Required reviewers and tag rules for this environment need a plan that offers them for
-    # private repositories; until then they are not enforced (docs/architecture/ci-release.md).
+    # private repositories. Until then nothing here gates a release: accepted on 2026-10-10 with
+    # compensating controls (decision 30, docs/architecture/ci-release.md).
     environment:
       name: release
       url: ${{ steps.publish.outputs.release-url }}

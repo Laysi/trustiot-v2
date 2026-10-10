@@ -161,11 +161,11 @@ SBOM 的下載：verify job 以唯讀權限從 GHCR 取出 SBOM attestation 並�
 | 推一個 rc tag 後，GHCR 出現 arm64 映像與 chart，`cosign verify` 通過、SBOM 可下載 | **通過**。`v0.0.0-rc.1` 推送後約 3 分鐘，GHCR 出現只有 linux/arm64 的 `release-selftest` 映像與 `trustiot` chart；兩者以 release workflow 的身分驗證 cosign 簽章通過，另一個身分被拒；SBOM 以簽章過的 attestation 從 GHCR 取出（SPDX-2.3，13 個套件），也由 publish job 附在 GitHub Release（見「SBOM 的下載」）。verify job 的結果寫在 Release 內文，commit status `release` 為 success |
 | workflow 權限最小化，沒有長期雲端金鑰 | **通過**。`release.yml` 的預設權限是 `{}`，每個 job 只列自己需要的權限（見 ci-release.md 的表），執行第三方建置程式碼的 build job 只有 `contents: read`；Laysi/trustiot-v2#67 的規則檢查沒有違規，第三方 action 都釘 commit SHA。GHCR 以各 job 的 `GITHUB_TOKEN` 登入，cosign 以 GitHub OIDC 取得效期 10 分鐘的憑證，沒有任何雲端金鑰或簽章金鑰。workflow 唯一引用的 secret 是給發版說明模型用的 `AI_API_KEY`（選用，目前沒有設定），只交給 plan job 裡產生發版說明的那一步 |
 
-範圍內但無法在目前方案落實的一項：issue 的範圍寫「發佈走 GitHub environment 加人工核准」。publish job 已在 `release` environment 執行，但本 repo 是私有庫、組織在 GitHub Free 方案，不能為私有庫設定 environment，必要審查者在私有庫更要 GitHub Enterprise；v0.0.0-rc.1 的 publish 沒有經過任何核准就執行了。補償措施與待決事項寫在 ci-release.md 的「發佈核准（GitHub environment）的缺口」，需要人決定升級方案、把 repo 改為公開，或接受現況。
+範圍內但無法在目前方案落實的一項：issue 的範圍寫「發佈走 GitHub environment 加人工核准」。publish job 已在 `release` environment 執行，但本 repo 是私有庫、組織在 GitHub Free 方案，不能為私有庫設定 environment，必要審查者在私有庫更要 GitHub Enterprise；v0.0.0-rc.1 的 publish 沒有經過任何核准就執行了。2026-10-10 審查決定暫不升級方案、接受這個現況，以補償措施把關，其中「正式版 tag 指向的 commit 在 main 的 ci 必須通過」是這次依決定新增的；公開透明紀錄也在同一次審查決定接受。兩者的理由與重新檢視的條件見 ci-release.md 的「公開的透明紀錄」「發佈核准」與決策 30。
 
 其他後續事項：
 
 - 第一個服務映像加入後刪除 `release-selftest`（ci-release.md 已註明）。
 - release profile 的 `strip = "debuginfo"` 經 zig 連結後沒有符號表（見上）。
-- Laysi/trustiot-v2#67 分支的 `deny.toml` 只列 `aarch64-unknown-linux-gnu` 與 `x86_64-unknown-linux-gnu`，映像實際的 target 是 `aarch64-unknown-linux-musl`，只在 musl 才用到的相依不會被 cargo-deny 檢查；該 PR 或後續 issue 要加上這個 target。
-- `.github/actions/setup-proto/action.yml` 在本 PR 與 Laysi/trustiot-v2#67 都有，本 PR 的版本只多了 Rust 工具鏈的版本檢查；後合併的一方解衝突時保留這段檢查。
+
+2026-10-10 合併 main（Laysi/trustiot-v2#67 的 ci.yml）時已處理的事項：`.github/actions/setup-proto/action.yml` 保留一份，含工具鏈檢查；`deny.toml` 的 targets 加上 `aarch64-unknown-linux-musl`，cargo-deny 也檢查映像實際的 target；`scripts/lib/` 的兩個型別錯誤已在 main 修正。
