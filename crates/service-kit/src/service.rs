@@ -209,6 +209,10 @@ where
     tracing::info!(address = %address, "listening");
 
     tokio::select! {
+        // `stopping` first: it also ends the server, which on another worker thread can finish
+        // before this select is polled. Unbiased, the select would then pick either ready branch
+        // at random and report half of those graceful stops as crashes.
+        biased;
         () = shutdown.stopping() => {}
         ended = &mut server => {
             // axum's server only returns after the shutdown signal, so this is a crash.

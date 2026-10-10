@@ -1,0 +1,27 @@
+# dependencies: Laysi/trustiot-v2#52, run 2026-10-10T12:21:42.717Z, CARGO_BUILD_JOBS=2
+
+$ cargo test -p service-kit --test dependency_isolation -- --nocapture
+
+running 2 tests
+test contract_is_not_a_dependency_without_the_contract_feature ... ok
+test the_default_contract_feature_brings_in_contract ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+   Compiling service-kit v0.1.0 (./crates/service-kit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/dependency_isolation.rs (target/debug/deps/dependency_isolation-c96e7892f522ea2b)
+[exit 0, 0.8 s]
+
+$ cargo tree --locked -p service-kit -e normal,build -i ed25519-dalek
+ed25519-dalek v3.0.0
+└── service-kit v0.1.0 (./crates/service-kit)
+[exit 0, 0.3 s]
+
+$ cargo tree --locked -p service-kit --no-default-features -e normal,build -i ed25519-dalek
+error: package ID specification `ed25519-dalek` did not match any packages
+[exit 101, 0.2 s]
+
+$ cargo tree --locked -p service-kit --no-default-features -e normal,build -i contract
+error: package ID specification `contract` did not match any packages
+[exit 101, 0.3 s]

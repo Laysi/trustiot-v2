@@ -1,0 +1,7 @@
+containers:
+volumes:
+networks:
+images:
+state dir:
+listening ports of the environment:
+(empty sections mean nothing is left)

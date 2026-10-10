@@ -18,6 +18,7 @@ Architecture decisions, rebuild scope (items A1–M8), service split, repository
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings`
 - Test: `cargo test --workspace`
 - Single test: `cargo test -p <crate> <test-name-filter>`, for example `cargo test -p repo-check toolchain_pins_agree`
+- Local dev environment (podman, no Kubernetes; details in `scripts/README.md`): `bun scripts/dev.ts up` | `seed` | `status` | `env` | `down` | `purge`. Script tests: `bun test scripts` (add `TRUSTIOT_DEV_E2E=1` and the file `scripts/tests/e2e.test.ts` to run the podman end-to-end test).
 - Helm chart (`deploy/chart`): `bun test deploy/chart` runs `helm lint`, kubeconform on both values files, the chart's own rules, and the README field check; a single check is `bun test deploy/chart -t "<test-name-filter>"`. The individual `helm lint`/`helm template` commands are in `deploy/chart/README.md`.
 - Ingress e2e (needs a cluster with Istio ambient; never run Kubernetes locally): `E2E_NAMESPACE=<ns> E2E_IDENTITY_IMAGE=<image> bun test --timeout 600000 ./deploy/chart/tests/e2e/ingress.e2e.ts`; prerequisites and the other variables are in `deploy/chart/tests/e2e/README.md`.
 - Container-backed tests: `crates/service-kit` starts throwaway Postgres and PID 1 containers with podman or docker (or uses `TEST_DATABASE_URL` for Postgres). Without them those tests skip locally; with `CI` set they fail instead.

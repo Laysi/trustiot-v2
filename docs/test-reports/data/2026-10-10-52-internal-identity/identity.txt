@@ -1,0 +1,87 @@
+# identity: Laysi/trustiot-v2#52, run 2026-10-10T12:21:38.923Z, CARGO_BUILD_JOBS=2
+
+$ cargo test -p service-kit --lib identity
+
+running 27 tests
+test identity::keys::tests::duplicate_members_are_rejected ... ok
+test identity::keys::tests::a_standard_ed25519_jwk_set_parses ... ok
+test identity::keys::tests::errors_never_quote_the_configuration ... ok
+test identity::keys::tests::a_key_id_may_appear_only_once ... ok
+test identity::tests::keys_come_from_the_platform_setting_only ... ok
+test identity::keys::tests::keys_that_are_not_ed25519_public_keys_are_rejected ... ok
+test identity::tests::reasons_are_distinct ... ok
+test identity::tests::every_rejection_answers_401_unauthenticated ... ok
+test identity::keys::tests::explicit_nulls_are_not_absent_members ... ok
+test identity::keys::tests::the_set_must_hold_one_to_eight_keys ... ok
+test identity::tests::the_token_comes_from_exactly_one_identity_header ... ok
+test identity::tests::a_verified_identity_exposes_the_signed_claims ... ok
+test identity::tests::verify_uses_the_current_time ... ok
+test identity::token::tests::a_valid_token_yields_its_claims ... ok
+test identity::token::tests::keys_are_chosen_by_key_id_only ... ok
+test identity::token::tests::segments_have_exactly_one_encoding ... ok
+test identity::token::tests::malformed_and_oversized_tokens_are_rejected_before_parsing ... ok
+test identity::token::tests::forged_signatures_are_rejected ... ok
+test identity::token::tests::the_algorithm_is_fixed_by_the_verifier ... ok
+test identity::token::tests::the_header_has_exactly_alg_typ_and_kid ... ok
+test identity::token::tests::signatures_follow_rfc_8037 ... ok
+test identity::tests::tokens_verify_throughout_a_key_rotation ... ok
+test identity::token::tests::issuer_and_audience_must_match ... ok
+test identity::token::tests::the_token_type_is_explicit ... ok
+test identity::token::tests::lifetimes_must_be_short_and_positive ... ok
+test identity::token::tests::claims_are_checked_only_after_the_signature ... ok
+test identity::token::tests::expiry_and_not_before_allow_the_leeway_only ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 41 filtered out; finished in 0.18s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/service_kit-d803321a9c0d8c77)
+[exit 0, 0.5 s]
+
+$ cargo test -p service-kit --doc
+
+running 2 tests
+test crates/service-kit/src/identity.rs - identity (line 36) ... ok
+test crates/service-kit/src/identity.rs - identity::ServiceIdentity (line 285) ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 5 tests
+test crates/service-kit/src/identity.rs - identity::UserIdentity (line 194) - compile fail ... ok
+test crates/service-kit/src/identity.rs - identity::UserIdentity (line 201) - compile fail ... ok
+test crates/service-kit/src/identity.rs - identity::UserIdentity (line 214) - compile fail ... ok
+test crates/service-kit/src/identity.rs - identity::UserIdentity (line 208) - compile fail ... ok
+test crates/service-kit/src/identity.rs - identity::UserIdentity (line 219) - compile fail ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+all doctests ran in 1.46s; merged doctests compilation took 1.14s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+   Doc-tests service_kit
+[exit 0, 2.3 s]
+
+$ cargo test -p service-kit --test identity -- --nocapture --test-threads 1
+
+running 3 tests
+test an_unusable_key_set_stops_startup ... private key: exit status: 1; error: configuration key `platform.internal_identity_keys` (set by environment variable TRUSTIOT_INTERNAL_IDENTITY_KEYS) is invalid: key 0 of the JWK Set (counting from 0) contains a private key (`d`); configure only public keys
+not JSON: exit status: 1; error: configuration key `platform.internal_identity_keys` (set by environment variable TRUSTIOT_INTERNAL_IDENTITY_KEYS) is invalid: not a JWK Set with a `keys` array (syntax error at line 1 column 2)
+no keys: exit status: 1; error: configuration key `platform.internal_identity_keys` (set by environment variable TRUSTIOT_INTERNAL_IDENTITY_KEYS) is invalid: the JWK Set has no keys
+ok
+test only_requests_with_a_valid_token_reach_the_handler ... valid token: 200 {"platform_admin":false,"tenant":{"id":"01928f6e-7a3c-7d4e-8f00-00000000000a","role":"editor"},"user_id":"01928f6e-7a3c-7d4e-8f00-0123456789ab"}
+forged signature: 401 {"code":"unauthenticated","message_key":"error.unauthenticated"} logged WARN reason=bad_signature
+expired: 401 {"code":"unauthenticated","message_key":"error.unauthenticated"} logged WARN reason=expired
+audience is another service: 401 {"code":"unauthenticated","message_key":"error.unauthenticated"} logged WARN reason=wrong_audience
+missing header: 401 {"code":"unauthenticated","message_key":"error.unauthenticated"} logged WARN reason=missing
+token in another header: 401 {"code":"unauthenticated","message_key":"error.unauthenticated"} logged WARN reason=missing
+header sent twice: 401 {"code":"unauthenticated","message_key":"error.unauthenticated"} logged WARN reason=repeated
+ok
+test tokens_under_either_key_verify_during_a_rotation ... kid 2026-10-a with both keys configured: 200
+kid 2026-11-a with both keys configured: 200
+kid 2026-12-a (not configured): 401 {"code":"unauthenticated","message_key":"error.unauthenticated"}
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/identity.rs (target/debug/deps/identity-6cc9893b1df36f8a)
+[exit 0, 0.9 s]
