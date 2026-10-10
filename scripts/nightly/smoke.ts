@@ -270,7 +270,8 @@ async function collectDiagnostics(ctx: SmokeContext, namespace: string, shape: S
     sections.push(`### ${title}\n${(result.stdout + result.stderr).trim()}\n`);
   };
   const k = ctx.kubectl;
-  await section("helm list", [ctx.helm, "list", "--all", "--namespace", namespace]);
+  // Helm 4 has no `--all`; with a state flag set it lists only those states, so name them all.
+  await section("helm list", [ctx.helm, "list", "--namespace", namespace, "--deployed", "--failed", "--pending", "--superseded", "--uninstalled", "--uninstalling"]);
   await section("objects", [k, "get", "all,configmap,serviceaccount,pvc", "--namespace", namespace, "--output", "wide"]);
   await section("events", [k, "get", "events", "--namespace", namespace, "--sort-by=.lastTimestamp"]);
   await section("pods in all namespaces", [k, "get", "pods", "--all-namespaces", "--output", "wide"]);

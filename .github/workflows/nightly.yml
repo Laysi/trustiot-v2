@@ -3,7 +3,7 @@
 # deployment shape nobody is using day to day cannot rot unnoticed. Policy, what the test checks and what to do when it fails:
 # docs/architecture/ci-release.md, section nightly.yml.
 #
-# Cost: one job on one hosted runner, one k3d cluster reused for both values files. The
+# Cost: one job on one hosted arm64 runner, one k3d cluster reused for both values files. The
 # workflow also runs on pull requests that touch the chart or this workflow, so a change is
 # deployed for real before it merges. Those runs are the only extra ones. They report through the
 # check status, the job summary and the uploaded artifact: a pull request run gets no write token
@@ -49,7 +49,9 @@ concurrency:
 jobs:
   smoke:
     name: smoke
-    runs-on: ubuntu-24.04
+    # arm64, like every node we ship (decision 5): the chart's default nodeSelector is
+    # kubernetes.io/arch: arm64, and the nightly must test that shape, not an amd64 override.
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     permissions:
       contents: read
