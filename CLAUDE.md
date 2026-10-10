@@ -20,6 +20,7 @@ Architecture decisions, rebuild scope (items A1–M8), service split, repository
 - Single test: `cargo test -p <crate> <test-name-filter>`, for example `cargo test -p repo-check toolchain_pins_agree`
 - Helm chart (`deploy/chart`): `bun test deploy/chart` runs `helm lint`, kubeconform on both values files, the chart's own rules, and the README field check; a single check is `bun test deploy/chart -t "<test-name-filter>"`. The individual `helm lint`/`helm template` commands are in `deploy/chart/README.md`.
 - Container-backed tests: `crates/service-kit` starts throwaway Postgres and PID 1 containers with podman or docker (or uses `TEST_DATABASE_URL` for Postgres). Without them those tests skip locally; with `CI` set they fail instead.
+- `crates/service-kit` without its default `contract` feature, which the `--workspace` commands never build: `cargo clippy -p service-kit --no-default-features --all-targets -- -D warnings` and `cargo test -p service-kit --no-default-features`
 - Dependency licenses, advisories, and sources (rules in `deny.toml`): `cargo deny --locked check`
 - Secret scan, as CI runs it: `gitleaks git --redact --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" .`
 - Workflow policy (job `permissions`, SHA-pinned actions): `bun scripts/ci/check-workflows.ts`

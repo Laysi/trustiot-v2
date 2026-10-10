@@ -64,9 +64,22 @@ jobs:
       - name: clippy
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # The --workspace commands build default features only. service-kit's `contract` feature
+      # is on by default, but services/ai-gateway is to use the kit without it, so the code
+      # paths without it get their own lint and test run (crates/service-kit/README.md).
+      - name: clippy for service-kit without default features
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
+      # service-kit's container and job_lock tests start throwaway containers (PID 1 and
+      # Postgres) with podman or docker, both on the hosted runner. GitHub sets CI=true, which
+      # makes them fail instead of skip when no container runtime works, so a green test step
+      # means they ran.
       - name: test
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: cargo test --workspace --locked
+      - name: test service-kit without default features
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo test --package service-kit --no-default-features --locked
       - name: aarch64 build of the gateway crates
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: |
