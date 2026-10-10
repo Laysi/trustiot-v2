@@ -1,0 +1,20 @@
+# container: Laysi/trustiot-v2#51, run 2026-10-10T11:26:21.037Z, CARGO_BUILD_JOBS=2
+
+$ cargo test -p service-kit --test container -- --nocapture
+
+running 1 test
+test pid_1_in_a_container_drains_and_exits_within_the_grace_period ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.94s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/container.rs (target/debug/deps/container-dc46650bf8cbb599)
+stop returned after 2606 ms (grace period 15 s); exit code 0
+{"timestamp":"2026-10-10T11:26:26.853046Z","level":"INFO","service":"example-service","target":"opentelemetry","message":"Global tracer provider is set. Traces can now be created using global::tracer() or global::tracer_with_scope().","fields":{"name":"TracerProvider.GlobalSet"}}
+{"timestamp":"2026-10-10T11:26:26.853259Z","level":"INFO","service":"example-service","target":"service_kit::service","message":"starting","fields":{"service.version":"0.1.0","process.pid":1,"http.listen_addr":"0.0.0.0:8080","http.request_timeout_ms":30000,"shutdown.drain_delay_ms":1000,"shutdown.drain_timeout_ms":10000,"telemetry.log_filter":"info","telemetry.otlp_export":false}}
+{"timestamp":"2026-10-10T11:26:26.854158Z","level":"INFO","service":"example-service","target":"service_kit::service","message":"listening","fields":{"address":"0.0.0.0:8080"}}
+{"timestamp":"2026-10-10T11:26:28.072068Z","level":"INFO","service":"example-service","target":"service_kit::shutdown","message":"shutdown requested; readiness now fails","fields":{"signal":"SIGTERM","drain_delay_ms":1000}}
+{"timestamp":"2026-10-10T11:26:29.074059Z","level":"INFO","service":"example-service","target":"service_kit::service","message":"stopped accepting connections; draining requests and background tasks","fields":{"drain_timeout_ms":10000}}
+{"timestamp":"2026-10-10T11:26:30.473574Z","level":"INFO","service":"example-service","target":"service_kit::http","trace_id":"9ea0e525ec12d98fe885707e9b03a9dc","span_id":"265bf81e8258a7a6","message":"request completed","fields":{"http.request.method":"GET","http.route":"/v1/slow","http.response.status_code":200,"duration_ms":3016.217}}
+{"timestamp":"2026-10-10T11:26:30.474048Z","level":"INFO","service":"example-service","target":"service_kit::service","message":"shutdown complete","fields":{"elapsed_ms":1399}}
+[exit 0, 10.1 s]

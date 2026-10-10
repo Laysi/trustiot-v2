@@ -1,0 +1,14 @@
+# chart-contract: Laysi/trustiot-v2#51, run 2026-10-10T11:27:04.578Z, CARGO_BUILD_JOBS=2
+
+$ cargo test -p service-kit --test chart_contract -- --nocapture
+
+running 3 tests
+test the_default_drain_fits_the_chart_drain_seconds ... ok
+test the_chart_probes_the_kit_health_paths ... ok
+test the_kit_listens_on_the_chart_port ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running tests/chart_contract.rs (target/debug/deps/chart_contract-70e174bb10fa3523)
+[exit 0, 0.3 s]
