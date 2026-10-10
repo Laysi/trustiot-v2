@@ -259,7 +259,7 @@ describe("the chart as deployed by the nightly", () => {
   });
 
   for (const shape of ["saas", "onprem"]) {
-    test(`values-${shape}.yaml renders a workload, a health endpoint and nothing that needs a missing Secret to be real`, async () => {
+    test(`values-${shape}.yaml renders the stand-in workload with its health endpoints`, async () => {
       const helm = await pinnedTool("helm", REPO_ROOT);
       const target = discoverShapes(CHART_DIR).find((s) => s.name === shape);
       expect(target).toBeDefined();
@@ -272,9 +272,15 @@ describe("the chart as deployed by the nightly", () => {
       expect(rendered.stderr.toString()).toBe("");
       const objects = parseManifests(rendered.stdout.toString());
       expect(workloadsOf(objects).map((w) => w.name)).toContain("trustiot-smoke-echo");
+      // Components the chart gains later add workloads and endpoints of their own (the bundled
+      // ClickHouse answers /ping); the stand-in service's pair is always there.
       const endpoints = healthEndpointsOf(objects);
-      expect(endpoints.map((e) => e.path).sort()).toEqual(["/healthz", "/readyz"]);
-      expect(endpoints.every((e) => e.service === "trustiot-smoke-echo" && e.port === "http")).toBe(true);
+      const smokeEcho = endpoints.filter((e) => e.service === "trustiot-smoke-echo");
+      expect(smokeEcho.map((e) => e.path).sort()).toEqual(["/healthz", "/readyz"]);
+      expect(smokeEcho.every((e) => e.port === "http")).toBe(true);
+      // Every endpoint belongs to a workload of the release.
+      const workloadNames = new Set(workloadsOf(objects).map((w) => w.name));
+      expect(endpoints.every((e) => workloadNames.has(e.workload))).toBe(true);
     }, 60_000);
   }
 });
