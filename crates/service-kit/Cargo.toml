@@ -18,13 +18,19 @@ doc = false
 [features]
 default = ["contract"]
 # Everything in the kit that needs crates/contract: the M1 error body of the errors the kit answers
-# itself. services/ai-gateway must not depend on crates/contract (decision 28), so it turns
-# default features off; tests/dependency_isolation.rs checks that this keeps contract out.
-contract = ["dep:contract"]
+# itself, and verification of internal identity tokens (`identity`). services/ai-gateway must not
+# depend on crates/contract (decision 28), so it turns default features off;
+# tests/dependency_isolation.rs checks that this keeps contract out.
+contract = ["dep:base64", "dep:contract", "dep:ed25519-dalek"]
 
 [dependencies]
 axum = { workspace = true, features = ["http1", "json", "matched-path", "query", "tokio"] }
+# Strict base64url decoding of the internal identity token's segments (`contract` feature).
+base64 = { workspace = true, optional = true }
 contract = { path = "../contract", optional = true }
+# Ed25519 signature verification of internal identity tokens (`contract` feature). Only
+# verification is used; `fast` adds the precomputed tables that speed it up.
+ed25519-dalek = { workspace = true, optional = true, features = ["fast"] }
 humantime.workspace = true
 opentelemetry = { workspace = true, features = ["internal-logs", "logs", "metrics", "trace"] }
 opentelemetry-otlp = { workspace = true, features = ["http-proto", "internal-logs", "logs", "metrics", "reqwest-blocking-client", "trace"] }

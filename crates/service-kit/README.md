@@ -10,6 +10,7 @@
 | `http` | 請求 span 與存取日誌、handler 逾時、panic 轉成 500 |
 | `telemetry` | JSON 日誌、trace id、OTLP 匯出（日誌、trace、指標）、敏感欄位遮蔽 |
 | `job_lock` | 排程工作同一時間只在一個副本執行 |
+| `identity` | 驗證內部身分 token、取得請求的使用者身分（`contract` feature） |
 
 完整的範例服務在 `src/bin/example-service.rs`，kit 的整合測試以它做為真的行程與容器來測試。本機執行：
 
@@ -190,6 +191,151 @@ context.spawn(lock.run_periodically(
 3. key 由 `lock_key(service, job)` 以 64 bit FNV-1a 從固定命名空間、服務名稱與工作名稱算出。這個算法永遠不能改，否則滾動更新期間新舊 pod 算出不同 key，會同時執行同一個工作。改服務或工作的名稱也等於換一把鎖。
 4. 工作執行期間佔用 pool 的一條連線。
 
+## 內部身分（`identity`）
+
+入口 gateway 驗過 cookie 後，身分服務為每個請求簽一個短效的內部身分 token，放在 `x-internal-identity` 標頭交給後端（[決策 27](../../docs/architecture/decisions.md)、功能重建清單 A4）。每個服務自己驗證簽章、簽發者、受眾與效期，只信簽章，不信任何其他關於呼叫者的資訊。本模組在 `contract` feature 後面；簽發 token 是身分服務的工作（Laysi/trustiot-v2#61）。
+
+```rust
+use axum::extract::FromRef;
+use axum::routing::get;
+use axum::Router;
+use contract::ServiceName;
+use serde::Deserialize;
+use service_kit::identity::{IdentityKeys, IdentityVerifier, UserIdentity};
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Config {
+    platform: Platform,
+}
+
+#[derive(Debug, Deserialize)]
+struct Platform {
+    internal_identity_keys: IdentityKeys, // TRUSTIOT_INTERNAL_IDENTITY_KEYS，必填
+}
+
+#[derive(Clone)]
+struct AppState {
+    identity: IdentityVerifier,
+    // 服務的其他狀態
+}
+
+impl FromRef<AppState> for IdentityVerifier {
+    fn from_ref(state: &AppState) -> Self {
+        state.identity.clone()
+    }
+}
+
+async fn list_devices(user: UserIdentity) -> String {
+    // 只有驗證通過的請求會進到這裡
+    format!("{:?}", user.tenant_id())
+}
+
+fn routes(config: &Config) -> Router {
+    let identity =
+        IdentityVerifier::new(ServiceName::Assets, config.platform.internal_identity_keys.clone());
+    Router::new()
+        .route("/v1/devices", get(list_devices))
+        .with_state(AppState { identity })
+}
+```
+
+- `IdentityVerifier::new(受眾, 公鑰)`：受眾是服務自己的 `ServiceName`，寫在程式裡，不從設定讀。
+- handler 加上 `UserIdentity` 參數就要求這個請求帶有效的 token；沒通過的請求不會進 handler，直接回 401。`UserIdentity` 提供 `user_id()`、`tenant()`、`tenant_id()`、`is_platform_admin()` 與完整的 `claims()`。
+- router 的 state 必須能以 `FromRef` 取出 `IdentityVerifier`，忘了放 verifier 的 handler 無法編譯。
+- 需要 token 但不經 axum 的地方用 `IdentityVerifier::verify_headers(&HeaderMap)` 或 `verify(&str)`。
+- 範例服務的 `GET /v1/whoami` 是可以執行的例子。
+
+### token 格式
+
+JWS compact serialization（RFC 7515），payload 是 contract 的 `InternalClaims`（JSON）：
+
+| 部分 | 規定 |
+| --- | --- |
+| 標頭 | 只能有 `alg`、`typ`、`kid` 三個參數，都是字串：`{"alg":"EdDSA","typ":"internal-identity+jwt","kid":"<key id>"}`。`crit`、`jku`、`jwk`、`x5u`、`b64` 等其他參數，或同一參數出現兩次，一律拒絕 |
+| `alg` | 只接受 `EdDSA`（RFC 8037），而且公鑰只能是 Ed25519。演算法由驗證端固定，不看 token 選演算法：`none`、HMAC（拿公鑰當密鑰）、RSA、ECDSA 都在碰到公鑰之前就被拒絕 |
+| `typ` | `internal-identity+jwt`（不分大小寫）。明確標示 token 種類（RFC 8725 3.11 節），同一把金鑰簽的其他 JWT 不會被當成內部身分 |
+| `kid` | 選公鑰，必須是設定裡的某一把；不認得就拒絕，不會改用別把試 |
+| 簽章 | Ed25519 嚴格驗證（`verify_strict`）：拒絕非標準形式的簽章與小階點，同一個 token 無法改寫出另一個有效簽章 |
+| 編碼 | base64url、不補 `=`；`+`、`/`、補位與非零的尾端位元都拒絕，每個 token 只有一種寫法 |
+| 位置 | 只放在 `x-internal-identity` 標頭，且只能出現一次；不讀 `Authorization`、cookie 或 query |
+| 長度 | 最多 8192 bytes（`InternalToken::MAX_LEN`），超過的在解碼前就拒絕 |
+
+驗證順序：長度、三段格式、標頭、`kid`、簽章，簽章通過後才解析 claims。claims 的檢查：
+
+| 檢查 | 規定 |
+| --- | --- |
+| `iss` | 必須是 `identity` |
+| `aud` | 必須是驗證端自己；token 拿去別的服務會被拒絕 |
+| 效期 | `exp - iat` 必須在 1 到 300 秒之間（`MAX_LIFETIME_SECS`）。身分服務實際簽 60 秒（2026-10-10 可行性測試）；上限限制 token 外洩後的可用時間，也決定輪替要等多久 |
+| 到期 | 現在時間早於 `exp + 5 秒` |
+| 生效 | `iat` 與 `nbf`（有的話）不晚於現在時間 `+ 5 秒`：身分服務不需要送 `nbf`，送了就照它檢查 |
+| claims 格式 | 缺欄位、型別不對、`aud` 是陣列、時間不是整數秒（`"nbf": null` 也算）、同一個 claim 出現兩次，一律拒絕；不認得的 claim 忽略（contract 的規則） |
+
+5 秒（`LEEWAY_SECS`）是容許的時鐘誤差。節點都要跑 NTP；誤差超過 5 秒時，每個 token 都會被當成過期或尚未生效。
+
+### 拒絕
+
+每種失敗都回同一個回應：401，body 是 M1 的 `{"code":"unauthenticated","message_key":"error.unauthenticated"}`，呼叫端看不出是哪一項檢查失敗。服務記一行 WARN `rejected the request's internal identity`，欄位 `reason` 寫出原因；token、簽章與公鑰都不進日誌。
+
+| `reason` | 情況 |
+| --- | --- |
+| `missing` | 沒有 `x-internal-identity` 標頭，或值是空的 |
+| `repeated` | 標頭出現不只一次 |
+| `oversized` | 超過 8192 bytes |
+| `malformed` | 不是三段 base64url、有 token 不能有的字元、簽章不是 64 bytes |
+| `malformed_header` | 標頭不是剛好 `alg`、`typ`、`kid` 三個字串 |
+| `unsupported_algorithm` | `alg` 不是 `EdDSA` |
+| `wrong_type` | `typ` 不是 `internal-identity+jwt` |
+| `unknown_key` | `kid` 不在設定的公鑰裡 |
+| `bad_signature` | 簽章不符 |
+| `malformed_claims` | 簽章正確但 payload 不是 `InternalClaims` |
+| `wrong_issuer` | `iss` 不是 `identity` |
+| `wrong_audience` | `aud` 是別的服務 |
+| `invalid_lifetime` | `exp - iat` 不在 1 到 300 秒之間 |
+| `expired` | 已過 `exp + 5 秒` |
+| `not_yet_valid` | `iat` 或 `nbf` 晚於現在時間 `+ 5 秒` |
+
+### 公鑰與輪替
+
+決定（2026-10-10，Laysi/trustiot-v2#52）：公鑰由部署以設定交給每個服務，不由身分服務在執行時發布。
+
+- 身分服務的公鑰寫成 JWK Set（RFC 7517），放在平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`，服務設定裡是 `platform.internal_identity_keys`。範例：`{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"2026-10-a","x":"<32 bytes 的 base64url>"}]}`。
+- 每把公鑰的 `kty` 必須是 `OKP`、`crv` 必須是 `Ed25519`、`kid` 是 1 到 64 個可見 ASCII 字元且不重複；`alg`、`use`、`key_ops` 可以省略，有寫就必須是 `EdDSA`、`sig`、含 `verify` 的清單；一組最多 8 把。含私鑰（`d`）、小階點、格式不對的公鑰，服務都拒絕啟動，錯誤訊息只寫第幾把與原因，不寫值。
+- 平台設定只由部署決定（`TRUSTIOT__PLATFORM__*` 會被拒絕，chart 的 `services.<name>.env` 也不能設 `TRUSTIOT_` 後接英數字的名稱），所以單一服務的設定無法換掉公鑰。
+- 公鑰不是祕密，放在 chart 的平台設定 ConfigMap；私鑰只在身分服務的 Secret。chart 的 values 欄位與 ConfigMap 由 Laysi/trustiot-v2#61 加入（身分服務出映像之前，沒有服務需要它）。
+- 本機開發：直接設 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`，或寫在設定檔的 `[platform]` 表，值是 JWK Set 的 JSON 字串。
+
+為什麼不由身分服務發布（例如服務在執行時抓 JWKS 端點）：
+
+1. 驗證不多一個執行期依賴：身分服務停機時，已經發出去的 token 照樣能驗證，服務啟動也不必等身分服務。
+2. 不多一個信任來源：公鑰只來自部署設定，冒充身分服務或改寫抓取回應都換不了公鑰；也沒有「看到不認得的 `kid` 就重抓」可以被濫用來放大流量。
+3. 地端與離線環境一樣運作，沒有快取與重試的狀態要處理。
+
+代價是換公鑰要滾動重啟所有服務。平台設定變更時 chart 本來就會滾動更新 pod，服務也一起發版（決策 4），而輪替一年只有幾次，所以可以接受。
+
+輪替步驟（新舊兩把 key 以 `kid` 區分，例如 `2026-10-a` 換成 `2027-04-a`）：
+
+1. **加新公鑰**：產生新的金鑰對，把新公鑰加進 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`（新舊兩把並存）並部署。確認每個服務都已滾動完成（每個 Deployment 的 `kubectl rollout status` 都完成），身分服務仍用舊私鑰簽章。
+2. **換簽章私鑰**：把身分服務的簽章私鑰換成新的（Secret 與 `kid`），身分服務滾動完成後只簽新 `kid`。步驟 1 沒有全部完成就換，還沒拿到新公鑰的服務會以 `unknown_key` 拒絕新 token。
+3. **移除舊公鑰**：身分服務滾動完成後至少等 `300 + 5` 秒（效期上限加時鐘誤差），舊 token 全部過期，再從 `TRUSTIOT_INTERNAL_IDENTITY_KEYS` 移除舊公鑰並部署，最後刪除舊私鑰。
+
+私鑰外洩時：立即同時做步驟 1 到 3，不等舊 token 過期。滾動期間部分請求會被拒絕（401），換取外洩的金鑰馬上失效。
+
+### 背景工作沒有使用者身分
+
+`UserIdentity` 只能由 `IdentityVerifier` 從通過檢查的 token 建立，handler 透過 extractor 拿到它。它沒有其他建構方式、沒有 `Default`、沒有 `Deserialize`，`ServiceIdentity` 也不能轉成它，所以背景工作、排程工作與事件消費這些沒有請求的程式拿不到使用者身分，只能以 `ServiceIdentity`（服務自己）執行：
+
+```rust
+use contract::ServiceName;
+use service_kit::identity::ServiceIdentity;
+
+let actor = ServiceIdentity::new(ServiceName::Assets); // 或 verifier.service_identity()
+context.spawn(purge_expired(actor));
+```
+
+這由 `src/identity.rs` 的 compile-fail doctest 證明：以欄位、`From`、`Into`、`Deserialize`、`Default` 建立 `UserIdentity` 都無法編譯。不要把 handler 拿到的 `UserIdentity` 移進 `Context::spawn` 或 `tokio::spawn`：token 60 秒就過期，背景工作要做的事以服務自己的身分執行。背景工作代表服務呼叫其他服務的完整流程在 Laysi/trustiot-v2#106。
+
 ## contract feature
 
 `services/ai-gateway` 不依賴 `crates/contract`（決策 28），但會使用本 kit，所以 kit 中需要 contract 的部分都放在 kit 的 `contract` feature 後面。這個 feature 預設開啟，一般服務直接得到 M1 錯誤格式；AI 閘道以 `default-features = false` 關掉它。
@@ -198,8 +344,9 @@ context.spawn(lock.run_periodically(
 | --- | --- | --- |
 | handler 逾時 | 504，body `{"code":"timeout","message_key":"error.timeout"}` | 504，沒有 body |
 | handler panic | 500，body `{"code":"internal","message_key":"error.internal"}` | 500，沒有 body |
+| 內部身分（`identity`） | 有；拒絕時 401，body `{"code":"unauthenticated","message_key":"error.unauthenticated"}` | 沒有這個模組 |
 
-之後需要 contract 的功能（例如 Laysi/trustiot-v2#52 驗證內部身分）也放在這個 feature 後面。路由不存在的 404、method 不符的 405 與 axum extractor 的拒絕訊息由 axum 產生，不是 kit 的回應，還不是 M1 格式。
+之後需要 contract 的功能也放在這個 feature 後面。路由不存在的 404、method 不符的 405 與 axum extractor 的拒絕訊息由 axum 產生，不是 kit 的回應，還不是 M1 格式。
 
 `tests/dependency_isolation.rs` 對 kit 執行 `cargo tree`：關閉預設 feature 時相依樹裡沒有 contract，開啟時有，隨 `cargo test --workspace` 在 CI 執行。關閉 feature 的程式路徑要另外以 `cargo clippy -p service-kit --no-default-features --all-targets -- -D warnings` 與 `cargo test -p service-kit --no-default-features` 檢查，`--workspace` 的指令只建置預設 feature。
 
@@ -207,7 +354,9 @@ context.spawn(lock.run_periodically(
 
 | 指令 | 內容 | 需要 |
 | --- | --- | --- |
-| `cargo test -p service-kit --lib` | 單元測試：設定與平台設定、遮蔽、日誌格式、health、kit 的錯誤回應、lock key | 無 |
+| `cargo test -p service-kit --lib` | 單元測試：設定與平台設定、遮蔽、日誌格式、health、kit 的錯誤回應、lock key；內部身分的每一項檢查、公鑰設定與輪替（`--lib identity` 只跑這部分） | 無 |
+| `cargo test -p service-kit --doc` | 文件範例，含證明背景工作拿不到使用者身分的 compile-fail 測試 | 無 |
+| `cargo test -p service-kit --test identity` | 範例服務的 `/v1/whoami`：偽造簽章、過期、受眾不符、缺標頭都回 401 `unauthenticated`，輪替期間新舊 `kid` 都通過，無法使用的公鑰設定讓服務拒絕啟動；token 與公鑰不進日誌 | 無 |
 | `cargo test -p service-kit --test lifecycle` | 範例服務的啟動、health、SIGTERM 與 SIGINT 收尾、設定錯誤，用真的行程、訊號與 HTTP | 無 |
 | `cargo test -p service-kit --test errors` | handler 逾時回 504、panic 回 500 並記成 JSON 日誌 | 無 |
 | `cargo test -p service-kit --test logging` | JSON 日誌、trace id；body、標頭、query 與路徑不進日誌 | 無 |

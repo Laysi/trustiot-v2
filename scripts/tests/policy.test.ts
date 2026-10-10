@@ -22,8 +22,12 @@ function filesUnder(dir: string, skip: (path: string) => boolean): string[] {
   return out;
 }
 
-// Everything that ships and runs: not the tests, which spell out secrets on purpose.
-const SHIPPED = filesUnder(SCRIPTS, (path) => relative(SCRIPTS, path).startsWith("tests"));
+// Everything that ships and runs: not the tests, which spell out secrets on purpose, and not
+// node_modules, where `bun install --cwd scripts` puts the type checker and type packages.
+const SHIPPED = filesUnder(SCRIPTS, (path) => {
+  const name = relative(SCRIPTS, path);
+  return name.startsWith("tests") || name === "node_modules";
+});
 
 /** A string literal assigned to a name that looks like a secret. */
 const FIXED_SECRET =
