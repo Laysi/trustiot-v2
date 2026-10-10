@@ -134,6 +134,35 @@ jobs:
       # check (deploy/chart/README.md). kubeconform downloads the Kubernetes schemas.
       - run: bun test deploy/chart
 
+  host:
+    name: host
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: toolchain
+        uses: ./.github/actions/setup-proto
+        with:
+          tools: bun
+      - name: Install dependencies
+        run: bun install --cwd deploy/host --frozen-lockfile
+      # The SaaS host installer (deploy/host/README.md). Its tests run every step against a
+      # simulated host and score the cloudflared unit with the runner's systemd-analyze; CI=true
+      # makes them fail instead of skip when systemd-analyze or gpg is missing.
+      - name: Type check
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun run --cwd deploy/host typecheck
+      - name: Test
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun run --cwd deploy/host test
+      - name: Build the x86_64 and aarch64 executables
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun run --cwd deploy/host build
+
   gitleaks:
     name: gitleaks
     runs-on: ubuntu-24.04
