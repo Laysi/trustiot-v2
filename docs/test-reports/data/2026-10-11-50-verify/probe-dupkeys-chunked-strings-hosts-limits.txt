@@ -1,0 +1,140 @@
+
+running 1 test
+=== duplicate keys ===
+status state online,offline: Malformed(duplicate field `state`)
+status session dup: Malformed(duplicate field `session`)
+ack outcome.status dup: Malformed(duplicate field `status`)
+ack outcome.records dup: Malformed(duplicate field `records`)
+telemetry seq dup: Malformed(duplicate field `seq`)
+telemetry unknown key dup: OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000-8000-00000000a001"), seq: Seq(42), cloc
+live action.ttl_s dup: Malformed(duplicate field `ttl_s`)
+live action.op dup: Malformed(duplicate field `op`)
+log fields dup -> {"device": "0199d0a0-0000-7000-8000-000000000002", "timeout_ms": "OVERRIDDEN"}
+dup code key Integer(2)
+heartbeat exception_codes dup -> Ok([{}, {2: 999}])
+=== indefinite / chunked ===
+chunked text in unknown field: Malformed(indefinite-length strings are not supported)
+chunked bytes in unknown field: Malformed(indefinite-length strings are not supported)
+indefinite root map: OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000-8000-00000000a001"), seq: Seq(42), cloc
+   re-encode of indefinite == golden: false
+indefinite map odd: Malformed(an indefinite map ends after a key)
+indefinite map unterminated: Malformed(unterminated indefinite container)
+break alone: Malformed(unexpected initial byte 0xff)
+indefinite int 0x1f: Malformed(unexpected initial byte 0x1f)
+indefinite tag 0xdf: Malformed(unexpected initial byte 0xdf)
+=== string limits ===
+stream 64: OK TelemetryBatch { v: V1, stream: StreamId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+stream 65: Malformed(invalid stream ID "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…": mus)
+stream '': Malformed(invalid stream ID "": must be 1-64 ASCII letters, digits, '.', '_' or '-', starting with a)
+stream 'a/b': Malformed(invalid stream ID "a/b": must be 1-64 ASCII letters, digits, '.', '_' or '-', starting wit)
+stream 'a+b': Malformed(invalid stream ID "a+b": must be 1-64 ASCII letters, digits, '.', '_' or '-', starting wit)
+stream fullwidth: Malformed(invalid stream ID "ａｂｃ": must be 1-64 ASCII letters, digits, '.', '_' or '-', starting wit)
+stream cyrillic a: Malformed(invalid stream ID "аbc": must be 1-64 ASCII letters, digits, '.', '_' or '-', starting wit)
+stream zwsp: Malformed(invalid stream ID "a\u{200b}b": must be 1-64 ASCII letters, digits, '.', '_' or '-', start)
+stream nul: Malformed(invalid stream ID "a\0b": must be 1-64 ASCII letters, digits, '.', '_' or '-', starting wi)
+stream newline: Malformed(invalid stream ID "a\nb": must be 1-64 ASCII letters, digits, '.', '_' or '-', starting wi)
+stream trailing space: Malformed(invalid stream ID "ab ": must be 1-64 ASCII letters, digits, '.', '_' or '-', starting wit)
+stream '$SYS': Malformed(invalid stream ID "$SYS": must be 1-64 ASCII letters, digits, '.', '_' or '-', starting wi)
+stream '.hidden': Malformed(invalid stream ID ".hidden": must be 1-64 ASCII letters, digits, '.', '_' or '-', starting)
+text 1024 ascii: OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000-8000-00000000a001"), seq: Seq(42), cloc
+text 1025 ascii: Malformed(text value is 1025 bytes; the limit is 1024 bytes)
+text 512 e-acute (1024 bytes): OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000-8000-00000000a001"), seq: Seq(42), cloc
+text 513 e-acute: Malformed(text value is 1026 bytes; the limit is 1024 bytes)
+text with NUL: OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000-8000-00000000a001"), seq: Seq(42), cloc
+invalid utf8 value: Malformed(RequireUtf8 { name: "str" })
+overlong utf8 NUL value: Malformed(RequireUtf8 { name: "str" })
+surrogate utf8 value: Malformed(RequireUtf8 { name: "str" })
+=== hosts ===
+host "127.0.0.1": true
+host "0.0.0.0": false
+host "255.255.255.255": false
+host "224.0.0.1": false
+host "::": false
+host "::1": true
+host "ff02::1": false
+host "::ffff:0.0.0.0": true
+host "::ffff:224.0.0.1": true
+host "::ffff:255.255.255.255": true
+host "fe80::1": true
+host "fe80::1%eth0": false
+host "169.254.169.254": true
+host "192.168.1.300": false
+host "1.2.3": false
+host "01.02.03.04": false
+host "a..b": false
+host "-a": false
+host "a-": false
+host "a_b": false
+host "例え.jp": false
+host "xn--r8jz45g.jp": true
+host "localhost": true
+host "a.": false
+host ".a": false
+host "Example.COM": true
+host "[::1]": false
+host "1.2.3.4:80": false
+host "a b": false
+host "a\n": false
+host "x.1": false
+host 253: true
+host 254: false
+host label 64: false
+=== size limits ===
+telemetry limit 262144 target 262143 actual 262143: OK
+telemetry limit 262144 target 262144 actual 262144: OK
+telemetry limit 262144 target 262145 actual 262145: TooLarge { size: 262145, limit: 262144 }
+telemetry-ack-committed limit 4096 target 4095 actual 4095: OK
+telemetry-ack-committed limit 4096 target 4096 actual 4096: OK
+telemetry-ack-committed limit 4096 target 4097 actual 4097: TooLarge { size: 4097, limit: 4096 }
+telemetry-ack-duplicate limit 4096 target 4095 actual 4095: OK
+telemetry-ack-duplicate limit 4096 target 4096 actual 4096: OK
+telemetry-ack-duplicate limit 4096 target 4097 actual 4097: TooLarge { size: 4097, limit: 4096 }
+telemetry-ack-rejected limit 4096 target 4095 actual 4095: OK
+telemetry-ack-rejected limit 4096 target 4096 actual 4096: OK
+telemetry-ack-rejected limit 4096 target 4097 actual 4097: TooLarge { size: 4097, limit: 4096 }
+telemetry-ack-retry limit 4096 target 4095 actual 4095: OK
+telemetry-ack-retry limit 4096 target 4096 actual 4096: OK
+telemetry-ack-retry limit 4096 target 4097 actual 4097: TooLarge { size: 4097, limit: 4096 }
+config limit 1048576 target 1048575 actual 1048575: OK
+config limit 1048576 target 1048576 actual 1048576: OK
+config limit 1048576 target 1048577 actual 1048577: TooLarge { size: 1048577, limit: 1048576 }
+config-report-applied limit 262144 target 262143 actual 262143: OK
+config-report-applied limit 262144 target 262144 actual 262144: OK
+config-report-applied limit 262144 target 262145 actual 262145: TooLarge { size: 262145, limit: 262144 }
+config-report-rejected limit 262144 target 262143 actual 262143: OK
+config-report-rejected limit 262144 target 262144 actual 262144: OK
+config-report-rejected limit 262144 target 262145 actual 262145: TooLarge { size: 262145, limit: 262144 }
+status-online limit 4096 target 4095 actual 4095: OK
+status-online limit 4096 target 4096 actual 4096: OK
+status-online limit 4096 target 4097 actual 4097: TooLarge { size: 4097, limit: 4096 }
+status-offline limit 4096 target 4095 actual 4095: OK
+status-offline limit 4096 target 4096 actual 4096: OK
+status-offline limit 4096 target 4097 actual 4097: TooLarge { size: 4097, limit: 4096 }
+heartbeat limit 1048576 target 1048575 actual 1048575: OK
+heartbeat limit 1048576 target 1048576 actual 1048576: OK
+heartbeat limit 1048576 target 1048577 actual 1048577: TooLarge { size: 1048577, limit: 1048576 }
+live limit 65536 target 65535 actual 65535: OK
+live limit 65536 target 65536 actual 65536: OK
+live limit 65536 target 65537 actual 65537: TooLarge { size: 65537, limit: 65536 }
+live-control-start limit 65536 target 65535 actual 65535: OK
+live-control-start limit 65536 target 65536 actual 65536: OK
+live-control-start limit 65536 target 65537 actual 65537: TooLarge { size: 65537, limit: 65536 }
+live-control-renew limit 65536 target 65535 actual 65535: OK
+live-control-renew limit 65536 target 65536 actual 65536: OK
+live-control-renew limit 65536 target 65537 actual 65537: TooLarge { size: 65537, limit: 65536 }
+live-control-stop limit 65536 target 65535 actual 65535: OK
+live-control-stop limit 65536 target 65536 actual 65536: OK
+live-control-stop limit 65536 target 65537 actual 65537: TooLarge { size: 65537, limit: 65536 }
+log limit 262144 target 262143 actual 262143: OK
+log limit 262144 target 262144 actual 262144: OK
+log limit 262144 target 262145 actual 262145: TooLarge { size: 262145, limit: 262144 }
+log-request limit 4096 target 4095 actual 4095: OK
+log-request limit 4096 target 4096 actual 4096: OK
+log-request limit 4096 target 4097 actual 4097: TooLarge { size: 4097, limit: 4096 }
+log-dump limit 262144 target 262143 actual 262143: OK
+log-dump limit 262144 target 262144 actual 262144: OK
+log-dump limit 262144 target 262145 actual 262145: TooLarge { size: 262145, limit: 262144 }
+test probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+
