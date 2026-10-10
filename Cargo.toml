@@ -1,0 +1,62 @@
+[workspace]
+resolver = "3"
+# Every directory under these globs must be a Cargo package; list the ones that are not in
+# `exclude`. Files such as README.md are skipped by the globs.
+members = [
+    "crates/*",
+    "edge/*",
+    "factory/*",
+    "services/*",
+    "tools/*",
+]
+# Gateway OS image and hardening (LUKS, firewall, systemd units); not Rust.
+exclude = ["edge/image"]
+
+# Members inherit these with `<key>.workspace = true`.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Keep at or below the toolchain pinned in `.prototools` and `rust-toolchain.toml`.
+rust-version = "1.99"
+publish = false
+repository = "https://github.com/Laysi/trustiot-v2"
+
+# Every third-party dependency is declared once here, with its version and default features.
+# Members opt in with `<name>.workspace = true` and add only the extra features they need.
+[workspace.dependencies]
+serde_json = "1.0.151"
+toml = "1.1.8"
+
+# Members opt in with `[lints] workspace = true` (checked by `tools/repo-check`).
+# CI and CLAUDE.md run clippy with `-D warnings`, so every `warn` below fails the build.
+[workspace.lints.rust]
+# A crate that needs unsafe code allows it explicitly, with a reason, and documents each block.
+unsafe_code = "deny"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+# Every `#[allow(...)]` must say why: `#[allow(lint, reason = "...")]`.
+allow_attributes_without_reason = "warn"
+# Lossy `as` casts silently corrupt telemetry values; use `try_from` or document the cast.
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_sign_loss = "warn"
+dbg_macro = "warn"
+# Services log through `tracing`; CLIs that print allow these per crate with a reason.
+print_stderr = "warn"
+print_stdout = "warn"
+# Byte-index slicing panics on multi-byte characters (UI text is Traditional Chinese).
+string_slice = "warn"
+todo = "warn"
+undocumented_unsafe_blocks = "warn"
+unimplemented = "warn"
+# Return errors instead of panicking; tests may unwrap (see clippy.toml).
+unwrap_used = "warn"
+
+[profile.release]
+# Release binaries are built once per tag (docs/architecture/ci-release.md), so trade build
+# time for smaller, faster binaries; the gateway runs on a memory-constrained Pi.
+codegen-units = 1
+lto = "thin"
+# Drop debug info but keep symbol names so panics and Sentry stack traces stay readable.
+strip = "debuginfo"
