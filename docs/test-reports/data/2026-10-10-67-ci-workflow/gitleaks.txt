@@ -1,0 +1,112 @@
+# Laysi/trustiot-v2#67 secret scan, 2026-10-10, local machine (Fedora 45, x86_64), gitleaks 8.30.1
+# installed by proto from .prototools. Each run uses the gitleaks step of .github/workflows/ci.yml:
+# the same flags, and its jq step for the annotations. Author and Email lines of the findings
+# are removed (no personal data in test reports); the findings are redacted by --redact.
+# Log times are local time (UTC+08:00).
+#
+# 1. This repository at commit e8acc6e (branch ci/67-ci-workflow, rebased on main 910961d).
+#    Its history is main's history plus this branch's commits: the same content the job scans
+#    in the pull request's merge commit.
+#
+$ gitleaks git --no-banner --redact --verbose --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" --report-format=json --report-path=<report> .
+8:10PM INF 26 commits scanned.
+8:10PM INF scanned ~1474079 bytes (1.47 MB) in 1.29s
+8:10PM INF no leaks found
+# exit status: 0
+#
+# 2. The fake-key branch ci/67-canary-gitleaks (commit 5c330f0): ci-canary/fake-private-key.pem
+#    has a PEM private-key header around base64 text that says it is not a key. On GitHub this
+#    branch's pull request (Laysi/trustiot-v2#227, workflow with the gitleaks job only) failed;
+#    see ci-runs.txt.
+#
+$ gitleaks git --no-banner --redact --verbose --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent 5c330f02534ea9ed9ea7838213f85712028c3f02" --report-format=json --report-path=<report> <repo>
+Finding:     REDACTED
+Secret:      REDACTED
+RuleID:      private-key
+Entropy:     5.238565
+File:        ci-canary/fake-private-key.pem
+Line:        1
+Commit:      5c330f02534ea9ed9ea7838213f85712028c3f02
+Date:        2026-10-10T09:15:22Z
+Fingerprint: 5c330f02534ea9ed9ea7838213f85712028c3f02:ci-canary/fake-private-key.pem:private-key:1
+Link:        https://github.com/Laysi/trustiot-v2/blob/5c330f02534ea9ed9ea7838213f85712028c3f02/ci-canary/fake-private-key.pem#L1-L4
+
+Finding:     REDACTED
+Secret:      REDACTED
+RuleID:      private-key
+Entropy:     4.776599
+Tags:        [decoded:base64 decode-depth:1]
+File:        ci-canary/fake-private-key.pem
+Line:        1
+Commit:      5c330f02534ea9ed9ea7838213f85712028c3f02
+Date:        2026-10-10T09:15:22Z
+Fingerprint: 5c330f02534ea9ed9ea7838213f85712028c3f02:ci-canary/fake-private-key.pem:private-key:1
+Link:        https://github.com/Laysi/trustiot-v2/blob/5c330f02534ea9ed9ea7838213f85712028c3f02/ci-canary/fake-private-key.pem#L1-L4
+
+7:37PM INF 16 commits scanned.
+7:37PM INF scanned ~329859 bytes (329.86 KB) in 808ms
+7:37PM WRN leaks found: 2
+# exit status: 1
+# annotations printed by the job's jq step:
+::error file=ci-canary/fake-private-key.pem,line=1,title=gitleaks private-key::Secret in commit 5c330f02534e (fingerprint 5c330f02534ea9ed9ea7838213f85712028c3f02:ci-canary/fake-private-key.pem:private-key:1). Revoke it, then remove it from history or add the fingerprint to .gitleaksignore with a reason.
+#
+# 3. Content added only while merging. A scratch repository whose merge commit 06cf694 adds
+#    z.pem (byte for byte the fake key of section 2) that neither parent has:
+#
+$ git log --graph --format='%h %s' --name-status   (scratch repository)
+*   06cf694 Merge feature
+|\  
+| * dac0064 B
+| | 
+| | A	x.txt
+* | 8280a4c C
+|/  
+|   
+|   A	y.txt
+* 58efe7b A
+  
+  A	README
+$ git show --first-parent --name-status --format='%h %s' HEAD
+06cf694 Merge feature
+
+A	x.txt
+A	z.pem
+#
+# 3a. With the job's flags (--diff-merges=first-parent): the merge commit's addition is found.
+#
+$ gitleaks git --no-banner --redact --verbose --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" --report-format=json --report-path=<report> <repo>
+Finding:     REDACTED
+Secret:      REDACTED
+RuleID:      private-key
+Entropy:     5.238565
+File:        z.pem
+Line:        1
+Commit:      06cf69472017e193665fa54be4273bd4691e417f
+Date:        2026-10-10T09:06:53Z
+Fingerprint: 06cf69472017e193665fa54be4273bd4691e417f:z.pem:private-key:1
+
+Finding:     REDACTED
+Secret:      REDACTED
+RuleID:      private-key
+Entropy:     4.776599
+Tags:        [decoded:base64 decode-depth:1]
+File:        z.pem
+Line:        1
+Commit:      06cf69472017e193665fa54be4273bd4691e417f
+Date:        2026-10-10T09:06:53Z
+Fingerprint: 06cf69472017e193665fa54be4273bd4691e417f:z.pem:private-key:1
+
+7:37PM INF 4 commits scanned.
+7:37PM INF scanned ~207 bytes (207 bytes) in 631ms
+7:37PM WRN leaks found: 2
+# exit status: 1
+# annotations printed by the job's jq step:
+::error file=z.pem,line=1,title=gitleaks private-key::Secret in commit 06cf69472017 (fingerprint 06cf69472017e193665fa54be4273bd4691e417f:z.pem:private-key:1). Revoke it, then remove it from history or add the fingerprint to .gitleaksignore with a reason.
+#
+# 3b. Without --diff-merges, git log shows no diff for merge commits and the key is missed.
+#
+$ gitleaks git --no-banner --redact --verbose --log-opts="--full-history --diff-filter=tuxdb HEAD" --report-format=json --report-path=<report> <repo>
+7:37PM INF 3 commits scanned.
+7:37PM INF scanned ~17 bytes (17 bytes) in 537ms
+7:37PM INF no leaks found
+# exit status: 0

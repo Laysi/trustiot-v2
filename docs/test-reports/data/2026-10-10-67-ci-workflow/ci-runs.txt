@@ -1,0 +1,80 @@
+# Laysi/trustiot-v2#67 GitHub Actions runs on temporary draft pull requests, 2026-10-10.
+#
+# How results were read: the token available to the agent cannot read check runs or Actions
+# logs (GET .../check-runs answers HTTP 403), so each run's outcome is read from the pull
+# request's `mergeable_state` (GitHub MCP pull_request_read, method get). The repository has no
+# required checks (no branch protection on the Free plan), so:
+#   clean    = every check finished and passed, or the pull request has no checks at all
+#   unstable = a check is still queued or running, or a check failed
+# Calibration: #228 adds no workflow and is clean at once; #230 runs one passing job and goes
+# from unstable to clean within a minute. A state that stays unstable after the job's
+# timeout-minutes means that a check failed or was cancelled by the timeout.
+#
+# Every pull request below was a draft with base integration/ms0, never merged, and closed when
+# the work was done; its branch was deleted. Times are UTC.
+#
+# PR    branch                        head     created   what it ran
+# #226  ci/67-ci-workflow             3e0d809  09:13:01  the first ci.yml (no helm job yet), Rust through `proto install rust`
+# #227  ci/67-canary-gitleaks         5c330f0  09:15:53  only the gitleaks job, plus ci-canary/fake-private-key.pem (fake key)
+# #228  ci/67-probe-calibration       2528626  09:30:15  no workflow (adds a text file)
+# #229  ci/67-probe-actions           b696e35  09:38:14  one job: checkout and echo
+# #230  ci/67-probe-rust-cache        0691bb7  09:40:27  one job: Swatinem/rust-cache (is the action allowed to run?)
+# #232  ci/67-probe-setup-bun         8b5ae65  11:00:42  one job: .github/actions/setup-proto with `bun`
+# #233  ci/67-probe-job-rust          81095c1  11:07:45  only the rust job of ci.yml (Rust through `proto install rust`)
+# #234  ci/67-probe-job-deny          e5e97c2  11:07:46  only the cargo-deny job (Rust through `proto install rust`)
+# #235  ci/67-probe-job-scan          597ced8  11:07:48  only the gitleaks job, no fake key
+# #236  ci/67-probe-job-policy        59ebcd7  11:13:14  only the workflow-policy job
+# #237  ci/67-probe-setup-rust        0542d4f  11:14:50  one job: setup-proto with `rust` through `proto install rust`, timeout 10 min
+# #238  ci/67-probe-rustup-direct     4c9997b  11:25:29  one job: setup-proto installing Rust with the runner's rustup (the fix), timeout 10 min
+#
+# Readings (time of the read, PR, head, mergeable_state):
+09:13:36 #226 3e0d809 unstable
+09:19:06 #227 5c330f0 unstable
+09:20:05 #226 3e0d809 unstable
+09:23:26 #226 3e0d809 unstable
+09:23:26 #227 5c330f0 unstable
+09:26:28 #226 3e0d809 unstable
+09:29:25 #226 3e0d809 unstable
+09:30:25 #228 2528626 clean
+09:38:56 #229 b696e35 clean
+09:40:34 #230 0691bb7 unstable
+09:41:15 #230 0691bb7 clean
+09:43:56 #226 3e0d809 unstable
+09:46:17 #226 3e0d809 unstable
+10:52:02 #226 3e0d809 unstable
+11:00:50 #232 8b5ae65 unstable
+11:01:12 #232 8b5ae65 clean
+11:08:42 #235 597ced8 clean
+11:08:42 #234 e5e97c2 unstable
+11:08:43 #233 81095c1 unstable
+11:12:16 #234 e5e97c2 unstable
+11:12:16 #233 81095c1 unstable
+11:12:16 #235 597ced8 clean
+11:13:46 #236 59ebcd7 clean
+11:14:24 #236 59ebcd7 clean
+11:15:24 #233 81095c1 unstable
+11:15:24 #237 0542d4f unstable
+11:20:33 #233 81095c1 unstable
+11:20:33 #237 0542d4f unstable
+11:25:40 #237 0542d4f unstable
+11:25:40 #234 e5e97c2 unstable
+11:28:01 #238 4c9997b clean
+11:43:40 #237 0542d4f unstable
+11:43:40 #238 4c9997b clean
+#
+# Conclusions:
+# - Pull requests trigger the workflow, also the pull request that adds it: #230 and #232 add
+#   their workflow to a base without any, and both show a running check before they pass.
+# - gitleaks fails on the fake key: the same job passes without it (#235 clean) and fails with
+#   it (#227 unstable). The job's steps in both are identical to the gitleaks job of the final
+#   ci.yml, and gitleaks.txt shows the finding when the same commands run locally on 5c330f0.
+# - The workflow-policy job (#236), Swatinem/rust-cache (#230) and setup-proto with Bun (#232)
+#   pass on GitHub-hosted runners.
+# - Every job that installs Rust through `proto install rust` fails (#226, #233, #234) and so
+#   does setup-proto with only `rust` (#237: still unstable 29 minutes after it was opened,
+#   far past its 10-minute timeout). The same steps pass in a local simulation of the runner
+#   (rustup in ~/.rustup, RUSTUP_HOME and CARGO_HOME unset), and the logs cannot be read, so
+#   the cause is unknown. Installing Rust with the runner image's rustup (#238) passes; that is
+#   what the final setup-proto does.
+# - The full CI of the final branch runs on its pull request to main; its result is recorded in
+#   that pull request and in the implementation note on Laysi/trustiot-v2#67.

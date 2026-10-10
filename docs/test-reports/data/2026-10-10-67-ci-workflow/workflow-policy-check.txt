@@ -1,0 +1,54 @@
+# Laysi/trustiot-v2#67 workflow policy check, 2026-10-10, local machine (Fedora 45, x86_64), Bun 1.4.2
+#
+# 1. Negative case: a fixture repository that breaks every rule once or more.
+#    <fixture>/.github/workflows/bad.yml:
+#
+#    name: bad
+#    on:
+#      pull_request_target:
+#    jobs:
+#      build:
+#        runs-on: ubuntu-24.04
+#        steps:
+#          - uses: actions/checkout@v7
+#          - uses: ./tools/unchecked-action
+#          - run: echo build
+#      release:
+#        runs-on: ubuntu-24.04
+#        permissions: write-all
+#        services:
+#          db:
+#            image: postgres:18
+#        steps:
+#          - uses: Swatinem/rust-cache@6323deb
+#          - uses: docker://alpine:3.22
+#          - uses: ./.github/actions/setup
+#
+#    <fixture>/.github/actions/setup/action.yml:
+#
+#    name: setup
+#    description: A local composite action that uses an unpinned action.
+#    runs:
+#      using: composite
+#      steps:
+#        - uses: actions/setup-node@v6
+#
+# $ bun scripts/ci/check-workflows.ts <fixture>
+.github/workflows/bad.yml: on.pull_request_target: `pull_request_target` is not allowed: it runs with the base repository's secrets and a write token for pull requests from forks
+.github/workflows/bad.yml: jobs.build: missing `permissions`; list every scope the job needs, for example `permissions: { contents: read }`, or `permissions: {}` for none
+.github/workflows/bad.yml: jobs.build.steps[0].uses: `actions/checkout@v7` is not pinned to a full 40-character commit SHA; use `owner/repo@<sha> # <tag>` so the code that runs cannot change under the same reference
+.github/workflows/bad.yml: jobs.build.steps[1].uses: `./tools/unchecked-action` is outside `.github/actions/`; keep local actions there so that this check reviews them
+.github/workflows/bad.yml: jobs.release.permissions: `permissions: write-all` is a shorthand; list each scope explicitly instead
+.github/workflows/bad.yml: jobs.release.services.db.image: image `postgres:18` is not pinned to a digest; use `<image>:<tag>@sha256:<digest>`
+.github/workflows/bad.yml: jobs.release.steps[0].uses: `Swatinem/rust-cache@6323deb` is not pinned to a full 40-character commit SHA; use `owner/repo@<sha> # <tag>` so the code that runs cannot change under the same reference
+.github/workflows/bad.yml: jobs.release.steps[1].uses: `docker://alpine:3.22` is not pinned to an image digest; use `docker://<image>@sha256:<digest>`
+.github/actions/setup/action.yml: runs.steps[0].uses: `actions/setup-node@v6` is not pinned to a full 40-character commit SHA; use `owner/repo@<sha> # <tag>` so the code that runs cannot change under the same reference
+workflow policy: 9 violation(s) in 2 file(s)
+# exit status: 1
+#
+# 2. This repository at commit e8acc6e (branch ci/67-ci-workflow): .github/workflows/ci.yml
+#    and .github/actions/setup-proto/action.yml.
+#
+# $ bun scripts/ci/check-workflows.ts
+workflow policy: 2 file(s) checked, no violations
+# exit status: 0

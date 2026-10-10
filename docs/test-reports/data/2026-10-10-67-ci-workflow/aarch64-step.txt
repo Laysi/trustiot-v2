@@ -1,0 +1,89 @@
+# Laysi/trustiot-v2#67 the rust job's aarch64 step, run locally on 2026-10-10 (Fedora 45, x86_64,
+# Rust 1.99.0 with the aarch64-unknown-linux-gnu target) on an export of commit e8acc6e, in three
+# cases: the commit as it is; plus a throwaway library edge/ci-probe that builds for every target;
+# and the same library with a compile_error! for aarch64 only. The last case must fail, which
+# shows that the step really compiles the edge/ members for aarch64. CARGO_BUILD_JOBS=2; compile
+# progress lines are left out; <scratch> is a scratch directory, <target> its CARGO_TARGET_DIR.
+#
+# The step's run script, read from .github/workflows/ci.yml:
+#   # The gateway runs on aarch64: crates/protocol and every workspace member under
+#   # edge/ must build for it (docs/architecture/repository-layout.md). Libraries build
+#   # without a cross linker; the first gateway binary adds one.
+#   packages=()
+#   for manifest in crates/protocol/Cargo.toml edge/*/Cargo.toml; do
+#     if [[ -f "$manifest" ]]; then
+#       pkgid="$(cargo pkgid --locked --manifest-path "$manifest")"
+#       packages+=(--package "$pkgid")
+#     fi
+#   done
+#   if (( ${#packages[@]} == 0 )); then
+#     echo "::notice title=aarch64 build::No gateway crates yet (crates/protocol, edge/*)."
+#     exit 0
+#   fi
+#   rustup target add aarch64-unknown-linux-gnu
+#   cargo build --locked --target aarch64-unknown-linux-gnu "${packages[@]}"
+
+## case: none
+$ bash --noprofile --norc -eo pipefail <the step's run script>
+::notice title=aarch64 build::No gateway crates yet (crates/protocol, edge/*).
+# exit status: 0
+
+# edge/ci-probe/src/lib.rs (ok):
+#   //! Throwaway crate on the temporary branch `ci/67-probe-aarch64` (Laysi/trustiot-v2#67).
+#   //! It proves that the `rust` CI job builds every workspace member under `edge/` for
+#   //! `aarch64-unknown-linux-gnu`; the branch is deleted after one run and never merged.
+#   
+#   /// The architecture this crate was compiled for, for example `aarch64`.
+#   pub fn target_arch() -> &'static str {
+#       std::env::consts::ARCH
+#   }
+#   
+#   #[cfg(test)]
+#   mod tests {
+#       #[test]
+#       fn reports_the_compiled_architecture() {
+#           assert_eq!(super::target_arch(), std::env::consts::ARCH);
+#       }
+#   }
+## case: ok
+$ bash --noprofile --norc -eo pipefail <the step's run script>
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.58s
+# exit status: 0
+
+$ ls <target>/aarch64-unknown-linux-gnu/debug/*.rlib
+<target>/aarch64-unknown-linux-gnu/debug/libci_probe.rlib
+
+# edge/ci-probe/src/lib.rs (fail):
+#   //! Throwaway crate on the temporary branch `ci/67-probe-aarch64-fail` (Laysi/trustiot-v2#67).
+#   //! It compiles on x86_64 but not on aarch64, which proves that the `rust` CI job builds every
+#   //! workspace member under `edge/` for `aarch64-unknown-linux-gnu`: the job must fail. The
+#   //! branch is deleted after one run and never merged.
+#   
+#   #[cfg(target_arch = "aarch64")]
+#   compile_error!("ci-probe: deliberate aarch64-only failure for the Laysi/trustiot-v2#67 CI check");
+#   
+#   /// The architecture this crate was compiled for, for example `x86_64`.
+#   pub fn target_arch() -> &'static str {
+#       std::env::consts::ARCH
+#   }
+#   
+#   #[cfg(test)]
+#   mod tests {
+#       #[test]
+#       fn reports_the_compiled_architecture() {
+#           assert_eq!(super::target_arch(), std::env::consts::ARCH);
+#       }
+#   }
+## case: fail
+$ bash --noprofile --norc -eo pipefail <the step's run script>
+info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+error: ci-probe: deliberate aarch64-only failure for the Laysi/trustiot-v2#67 CI check
+ --> edge/ci-probe/src/lib.rs:7:1
+  |
+7 | compile_error!("ci-probe: deliberate aarch64-only failure for the Laysi/trustiot-v2#67 CI check");
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `ci-probe` (lib) due to 1 previous error
+# exit status: 101
+
