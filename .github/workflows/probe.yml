@@ -1,0 +1,25 @@
+# Temporary probe for Laysi/trustiot-v2#67 on a throwaway branch that is never merged.
+# It shows whether GitHub Actions runs a job at all for pull requests in this repository,
+# using only the checkout action.
+#
+# For `pull_request` events GitHub reads the workflow files of the pull request's merge
+# commit (refs/pull/<number>/merge), so a workflow runs on the very pull request that adds
+# it; only `pull_request_target` takes workflows from the base branch.
+name: probe
+
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  echo:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: echo "GitHub Actions ran this job."
