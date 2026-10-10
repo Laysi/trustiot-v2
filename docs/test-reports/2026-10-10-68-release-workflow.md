@@ -7,7 +7,7 @@
 - **commit**：`ee8c438`（分支 `ci/68-release-workflow`，base 為 main 的 `71be25d`）。本機的發佈測試、負向檢查與可重現建置都在這個 commit 上跑；rebase 之前跑過的交叉編譯檢查另外註明。之後分支四次合併 main（`8ce2dfd`、`a25efe9`、`9132855`、`ece0566`），並加上「正式版要 main 的 ci 通過」的規則；合併後的檢查在 `f10215a`、`5f8d02e` 與 `08408dc` 上跑，見「合併 main 之後」。
 - **本機**：x86_64 的 Fedora 45（kernel 7.2.8）。podman 6.1.3、skopeo 1.24.1 來自系統；bun 1.4.2、helm 4.3.0、zig 0.16.0、cargo-zigbuild 0.23.4、cargo-auditable 0.7.6、syft 1.52.0、cosign 3.1.3 由 `.prototools` 鎖定版本、以 proto 安裝；Rust 1.99.0（`rust-toolchain.toml`）加上 `aarch64-unknown-linux-musl` target。詳見 [environment.txt](data/2026-10-10-68-release-workflow/environment.txt)。
 - **本機 registry**：`docker.io/library/registry:3`（以 digest 釘選），只聽 `127.0.0.1:5068`。本機測試以當場產生的 cosign 金鑰對簽章（`--local-test-key`），不寫入 Sigstore：keyless 簽章需要 GitHub Actions 的 OIDC token，而且本機測試不該在公開紀錄留下任何東西。金鑰在測試的暫存目錄，測完刪除。
-- **GitHub**：簽章過的 annotated tag `v0.0.0-rc.1` 指向 `ee8c438`，2026-10-10T12:39:36Z 推送，觸發 release.yml 的執行 [38052766358](https://github.com/Laysi/trustiot-v2/actions/runs/38052766358)，各 job 在 GitHub 代管的 `ubuntu-24.04`（x86_64）runner 上執行。repo 為私有，組織在 GitHub Free 方案。repo 沒有設定 `AI_MODEL` 變數，所以發版說明是 `Laysi/release-notes-action` 的 commit 主旨清單。
+- **GitHub**：簽章過的 annotated tag `v0.0.0-rc.1` 指向 `ee8c438`，2026-10-10T12:39:36Z 推送，觸發 release.yml 的執行 [38052766358](https://github.com/Laysi/trustiot-v2/actions/runs/38052766358)，各 job 在 GitHub 代管的 `ubuntu-24.04`（x86_64）runner 上執行。repo 為私有，組織在 GitHub Free 方案。repo 沒有設定 `AI_MODEL` 變數，所以發版說明是 `Laysi/release-notes-action` 的 commit 主旨清單。合併 main 之後，以指向 `82ff556` 的 `v0.0.0-rc.2` 再跑一次（2026-10-10T14:28:17Z 推送，執行 [38059729095](https://github.com/Laysi/trustiot-v2/actions/runs/38059729095)）。
 - **結果的讀取方式**：本 repo 的 GitHub 讀寫走 GitHub MCP server，它的 token 讀不到 check run 與 Actions 日誌，所以 CI 的結果以 report job 設的 commit status `release`（MCP `pull_request_read` 的 `get_status`）與 GitHub Release 的內文（MCP `get_release_by_tag`）為準。
 - **Sigstore 公開紀錄**：以 Rekor 的公開 API（`rekor.sigstore.dev`，v1）不帶任何憑證查詢。
 - **lab 的 Mac mini M1**（`trustiot-mac-m1`）：Fedora Linux Asahi Remix 44、aarch64、podman 5.8.7，依 e2e 鎖的規則使用。
@@ -85,6 +85,9 @@ GitHub 上的發佈測試：
 git tag -s v0.0.0-rc.1 -m "v0.0.0-rc.1: release pipeline test for Laysi/trustiot-v2#68 (branch ci/68-release-workflow)" ee8c438
 git push origin v0.0.0-rc.1
 # 結束後以 GitHub MCP 讀取：pull_request_read get_status（PR Laysi/trustiot-v2#243 的 head 就是 ee8c438）、get_release_by_tag v0.0.0-rc.1
+# 合併 main 之後，對當時的 head 再跑一次，讀取方式相同
+git tag -s v0.0.0-rc.2 -m "v0.0.0-rc.2: release pipeline test for Laysi/trustiot-v2#68 (branch ci/68-release-workflow, after merging main and adding the ci-on-main rule)" 82ff556
+git push origin v0.0.0-rc.2
 ```
 
 公開紀錄的查詢（[rekor-public-entries.txt](data/2026-10-10-68-release-workflow/rekor-public-entries.txt)）：
@@ -183,11 +186,26 @@ SBOM 的下載：verify job 以唯讀權限從 GHCR 取出 SBOM attestation 並�
 
 main 再前進（`ece0566`，從程式碼產生 OpenAPI 規格），第四次合併成 `08408dc`，衝突只在 `tools/README.md` 與 `repository-layout.md` 的工具清單。2026-10-10T14:16–14:23Z 在 `08408dc` 重跑：`cargo test --workspace` 34 組、240 項通過；main 在 ci.yml 新加的「OpenAPI spec is current」（`cargo run --locked -p openapi` 之後 `api/` 沒有差異）通過；gitleaks 掃 42 個 commit 沒有發現；其餘各項結果同上表。
 
+### GitHub：v0.0.0-rc.2（合併 main 之後）
+
+簽章過的 annotated tag `v0.0.0-rc.2` 指向分支當時的 head `82ff556`（四次合併 main 之後，含「正式版要 main 的 ci 通過」的規則、合併後的 setup-proto 與 `cc` 1.7.0），2026-10-10T14:28:17Z 推送。執行 [38059729095](https://github.com/Laysi/trustiot-v2/actions/runs/38059729095) 在 14:31:32Z 設好 commit status，約 3 分 15 秒，五個 job 都成功。
+
+| 項目 | 結果 |
+| --- | --- |
+| commit status `release`（`82ff556`） | success，「v0.0.0-rc.2 published and verified」，14:31:32Z（[github-rc2-status.json](data/2026-10-10-68-release-workflow/github-rc2-status.json)） |
+| GitHub Release | `v0.0.0-rc.2`，prerelease，14:30:58Z 由 `github-actions[bot]` 建立，內文含發版說明、digest 表、驗證指令與驗證結果（[github-rc2-release.txt](data/2026-10-10-68-release-workflow/github-rc2-release.txt)）；發版說明列出 `v0.0.0-rc.1` 以來的 commit，也包含合併進來的 main commit |
+| 映像 | `ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.2` → `sha256:e37a77d34c761c4118c8867504bcd29997f3b647d703f2713bf6fc97bace1fa5`，只有 linux/arm64；簽章與 SBOM attestation 驗證通過，SBOM 是 SPDX-2.3、13 個套件 |
+| chart | `ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.2` → `sha256:5e628d7fe41dca5a51e6759140bae85d905e09e3cf47dd20c0f052e7f6f2bf95`；簽章驗證通過；拉下的檔案就是發佈的檔案；version 與 appVersion 都是 `0.0.0-rc.2` |
+| 私有、對照 | 匿名拉取映像與 chart 都被拒；以另一個身分（`refs/tags/v0.0.0-rc.2-not-this-release`）驗證映像被拒 |
+| Sigstore 公開紀錄 | 3 筆 `dsse` 紀錄（映像的簽章 14:30:39Z、SBOM attestation 14:30:44Z、chart 14:30:52Z），同樣只存 `envelopeHash`、`payloadHash` 與 `signatures`（[rekor-rc2-entries.txt](data/2026-10-10-68-release-workflow/rekor-rc2-entries.txt)） |
+
+候選版不檢查 main 的 ci，所以這次執行沒有呼叫讀取 ci 結果的 GitHub API；它證明的是 plan job 加上 `actions: read` 與 `GITHUB_TOKEN`、setup-proto 合併、`cc` 改成 1.7.0、chart 加入 ingress 範本之後，整條發佈照常運作。
+
 ## 結論
 
 | 驗收條件 | 結果 |
 | --- | --- |
-| 推一個 rc tag 後，GHCR 出現 arm64 映像與 chart，`cosign verify` 通過、SBOM 可下載 | **通過**。`v0.0.0-rc.1` 推送後約 3 分鐘，GHCR 出現只有 linux/arm64 的 `release-selftest` 映像與 `trustiot` chart；兩者以 release workflow 的身分驗證 cosign 簽章通過，另一個身分被拒；SBOM 以簽章過的 attestation 從 GHCR 取出（SPDX-2.3，13 個套件），也由 publish job 附在 GitHub Release（見「SBOM 的下載」）。verify job 的結果寫在 Release 內文，commit status `release` 為 success |
+| 推一個 rc tag 後，GHCR 出現 arm64 映像與 chart，`cosign verify` 通過、SBOM 可下載 | **通過**。`v0.0.0-rc.1` 推送後約 3 分鐘，GHCR 出現只有 linux/arm64 的 `release-selftest` 映像與 `trustiot` chart；兩者以 release workflow 的身分驗證 cosign 簽章通過，另一個身分被拒；SBOM 以簽章過的 attestation 從 GHCR 取出（SPDX-2.3，13 個套件），也由 publish job 附在 GitHub Release（見「SBOM 的下載」）。verify job 的結果寫在 Release 內文，commit status `release` 為 success。合併 main 之後以 `v0.0.0-rc.2` 再跑一次，結果相同（見「GitHub：v0.0.0-rc.2」） |
 | workflow 權限最小化，沒有長期雲端金鑰 | **通過**。`release.yml` 的預設權限是 `{}`，每個 job 只列自己需要的權限（見 ci-release.md 的表），執行第三方建置程式碼的 build job 只有 `contents: read`；Laysi/trustiot-v2#67 的規則檢查沒有違規，第三方 action 都釘 commit SHA。GHCR 以各 job 的 `GITHUB_TOKEN` 登入，cosign 以 GitHub OIDC 取得效期 10 分鐘的憑證，沒有任何雲端金鑰或簽章金鑰。workflow 唯一引用的 secret 是給發版說明模型用的 `AI_API_KEY`（選用，目前沒有設定），只交給 plan job 裡產生發版說明的那一步 |
 
 範圍內但無法在目前方案落實的一項：issue 的範圍寫「發佈走 GitHub environment 加人工核准」。publish job 已在 `release` environment 執行，但本 repo 是私有庫、組織在 GitHub Free 方案，不能為私有庫設定 environment，必要審查者在私有庫更要 GitHub Enterprise；v0.0.0-rc.1 的 publish 沒有經過任何核准就執行了。2026-10-10 審查決定暫不升級方案、接受這個現況，以補償措施把關，其中「正式版 tag 指向的 commit 在 main 的 ci 必須通過」是這次依決定新增的；公開透明紀錄也在同一次審查決定接受。兩者的理由與重新檢視的條件見 ci-release.md 的「公開的透明紀錄」「發佈核准」與決策 30。
