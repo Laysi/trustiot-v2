@@ -65,7 +65,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | 服務間授權（AuthorizationPolicy、NetworkPolicy） | — | 每個服務已有自己的 ServiceAccount | Laysi/trustiot-v2#63 |
 | Postgres（CloudNativePG 加 AGE） | `postgres.mode` | `external` 已接到平台設定；`bundled` 的 operator 與 Cluster 尚未加入 | Laysi/trustiot-v2#57、Laysi/trustiot-v2#58 |
 | migration Job | — | 尚未加入 | Laysi/trustiot-v2#60 |
-| ClickHouse | `clickhouse.mode` | `external` 已接到平台設定；`bundled` 尚未加入 | Laysi/trustiot-v2#59 |
+| ClickHouse | `clickhouse.mode` | `bundled`：單節點 StatefulSet（見「叢集內的 ClickHouse」）；`external` 已接到平台設定。schema、帳號與 row policy 由 migration Job 以 SQL 套用 | Laysi/trustiot-v2#60（migration Job）、Laysi/trustiot-v2#72（admin 密碼的 Secret） |
 | MQTT broker（Mosquitto） | — | 尚未加入 | Laysi/trustiot-v2#84 |
 | Qdrant | `qdrant.mode` | `external` 已接到平台設定；`bundled` 尚未加入 | Laysi/trustiot-v2#194 |
 | 物件儲存、SMTP、AI 端點 | `objectStorage.*`、`smtp.*`、`ai.*` | 一律外部，設定已接到平台設定 | Laysi/trustiot-v2#133、Laysi/trustiot-v2#169、Laysi/trustiot-v2#139 |
@@ -222,6 +222,20 @@ ingress:
 | `postgres.external.caSecret.name` | `""` | `external` 時必填；簽發伺服器憑證的 CA 所在的 Secret |
 | `postgres.external.caSecret.key` | `ca.crt` | |
 | `clickhouse.mode` | `bundled` | `bundled`：叢集內自管（Laysi/trustiot-v2#59）；`external`：ClickHouse Cloud 等，只當備案（決策 14） |
+| `clickhouse.bundled.image.repository` | `docker.io/clickhouse/clickhouse-server` | |
+| `clickhouse.bundled.image.tag` | `26.8` | 26.8 LTS；實際版本由 digest 決定 |
+| `clickhouse.bundled.image.digest` | `sha256:110d3d1f…b40c` | 必填（版本固定），multi-arch index 的 digest，含 arm64；必須與 `scripts/lib/stack.ts` 和 `services/ingest/tests/common/mod.rs` 相同（測試比對） |
+| `clickhouse.bundled.image.pullPolicy` | `IfNotPresent` | |
+| `clickhouse.bundled.adminUser` | `trustiot_admin` | bootstrap 管理帳號，有 access management 權限，只給 migration Job 使用；不能是 `default` |
+| `clickhouse.bundled.adminSecret.name` | `""`，`bundled` 時必填 | 放 bootstrap 管理帳號密碼的既有 Secret；服務的自訂 `env` 不能讀它 |
+| `clickhouse.bundled.adminSecret.key` | `password` | |
+| `clickhouse.bundled.adminSecretRevision` | `"1"` | ClickHouse 只在啟動時讀 admin 密碼。輪替密碼時先改 Secret，再改這個值，升級時 ClickHouse 會重啟並換上新密碼，migration Job 才不會拿新密碼去連還在用舊密碼的伺服器 |
+| `clickhouse.bundled.storage.size` | `""`，`bundled` 時必填 | 資料磁碟區大小，每個部署依自己的資料量與保存期限估算，見「叢集內的 ClickHouse」 |
+| `clickhouse.bundled.storage.storageClassName` | `""` | 空白時用叢集預設的 StorageClass |
+| `clickhouse.bundled.resources` | requests `cpu: 250m`、`memory: 512Mi`；limits `cpu: "2"`、`memory: 2Gi` | ClickHouse 依記憶體上限的 90% 設定自己的上限與快取；schema 要求 `limits.memory` |
+| `clickhouse.bundled.podSecurityContext` | `runAsNonRoot: true`、`runAsUser`／`runAsGroup`／`fsGroup: 101`、`seccompProfile: RuntimeDefault` | 映像沒有宣告 `USER`，所以固定 clickhouse 使用者的 UID 101；OpenShift 把三個 ID 設成 `null`，交給 SCC 指派。限制同 `serviceDefaults.podSecurityContext` |
+| `clickhouse.bundled.nodeSelector` | `{}` | 映像是 multi-arch，不限架構 |
+| `clickhouse.bundled.tolerations` | `[]` | |
 | `clickhouse.external.url` | `""` | `external` 時必填；只接受 https，例如 `https://abc.clickhouse.cloud:8443` |
 | `clickhouse.external.caSecret.name` | `""` | 私有 CA 簽發時才設定 |
 | `clickhouse.external.caSecret.key` | `ca.crt` | |
@@ -260,6 +274,23 @@ ingress:
 
 URL 欄位都不接受 `user:password@` 這種帶帳密的寫法。
 
+## 叢集內的 ClickHouse
+
+`clickhouse.mode: bundled`（預設，SaaS 與地端相同）部署 `templates/clickhouse.yaml`：
+
+- 一個副本的 StatefulSet `<release>-clickhouse`，資料在 PVC `data-<release>-clickhouse-0`（`/var/lib/clickhouse`）；StatefulSet 刪除或縮容時保留 PVC。ClusterIP Service 只開 HTTP 8123 與 native 9000。
+- 伺服器設定只有一個 ConfigMap（`<release>-clickhouse-config`，掛成 `config.d`）：監聽位址、關掉 MySQL／PostgreSQL 相容埠與 interserver 埠、日誌只寫 stdout。設定變更時 pod 自動重啟。
+- 帳號、角色、row policy、settings profile 與 quota 一律不寫在設定檔（決策 14；ClickHouse Cloud 不能改設定檔）：由 migration Job（Laysi/trustiot-v2#60）以 bootstrap 管理帳號套用 `services/ingest/migrations/clickhouse/` 的 SQL，存在 ClickHouse 自己的 access storage（PVC 上的 `access/`）。唯一由映像產生的帳號是 bootstrap 管理帳號：映像的 entrypoint 依 `CLICKHOUSE_USER`、`CLICKHOUSE_PASSWORD_FILE`（掛載的 Secret）與 `CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1` 寫進 `users.d`（記憶體 emptyDir），並移除沒有密碼的 `default` 帳號。
+- 根目錄唯讀、以 UID 101 非 root 執行、不能提權、drop 所有 capability；探針是 `GET /ping`。pod 帶 `istio.io/dataplane-mode: ambient` 加入 ambient mesh，服務連 ClickHouse 由 ztunnel 加 mTLS。
+
+磁碟區大小沒有預設值，每個部署在安裝實例的覆寫檔設定 `clickhouse.bundled.storage.size`：每日筆數 × 保存天數 × 約 3.1 bytes（2026-10-09 實測，30 天 52 億筆佔 15.2 GiB）× 1.5（merge 時新舊 part 並存與系統表的餘裕）。例如每天 1 億筆、保存 400 天約 190 GB（遙測表的保存期限暫定 400 天，Laysi/trustiot-v2#92 定案）。磁碟用量的告警與擴充見清單 I2（硬碟水位告警）。
+
+安裝前要先有 `clickhouse.bundled.adminSecret` 指定的 Secret（如何進叢集由 Laysi/trustiot-v2#72 決定），例如：
+
+```sh
+kubectl -n trustiot create secret generic trustiot-clickhouse-admin --from-literal=password="$(openssl rand -hex 32)"
+```
+
 ## chart 與服務的約定
 
 服務照下列約定實作，就能直接用通用樣板部署（docs/architecture/deployment.md 的服務設計規則）：
@@ -278,7 +309,7 @@ URL 欄位都不接受 `user:password@` 這種帶帳密的寫法。
 | `TRUSTIOT_APP_HOST`、`TRUSTIOT_GATEWAY_HOST`、`TRUSTIOT_OTA_HOST` | `hosts.*` | 一律 |
 | `TRUSTIOT_CLIENT_IP_SOURCE` | 由 `ingress.exposure` 推導：`cf-connecting-ip` 或 `x-forwarded-for-rightmost` | 一律 |
 | `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE` | `postgres.external.*` | `postgres.mode` 為 `external` |
-| `TRUSTIOT_CLICKHOUSE_URL` | `clickhouse.external.url` | `clickhouse.mode` 為 `external` |
+| `TRUSTIOT_CLICKHOUSE_URL` | `external`：`clickhouse.external.url`；`bundled`：`http://<release>-clickhouse.<namespace>.svc:8123`（叢集內明文 HTTP，pod 之間由 Istio ambient 的 ztunnel 加上 mTLS） | 一律 |
 | `TRUSTIOT_QDRANT_URL` | `qdrant.external.url` | `qdrant.mode` 為 `external` |
 | `TRUSTIOT_S3_ENDPOINT`、`_REGION`、`_BUCKET`、`_FORCE_PATH_STYLE` | `objectStorage.*` | 各自有值時；`_FORCE_PATH_STYLE` 隨 bucket |
 | `TRUSTIOT_SMTP_HOST`、`_PORT`、`_SECURITY`、`_FROM` | `smtp.*` | 有 host 時（`_FROM` 有值時） |
@@ -286,7 +317,7 @@ URL 欄位都不接受 `user:password@` 這種帶帳密的寫法。
 | `TRUSTIOT_POSTGRES_CA_FILE`、`TRUSTIOT_CLICKHOUSE_CA_FILE` | 掛載的 CA 憑證路徑 | 對應的依賴為 `external` 且設定了 `caSecret.name` |
 | `SENTRY_ENVIRONMENT` | `observability.sentry.environment` | Sentry 開啟時（`SENTRY_DSN` 來自 Secret，見上） |
 
-`bundled` 模式的叢集內端點，由部署該元件的 issue 加進這張表。
+`bundled` 模式的叢集內端點，由部署該元件的 issue 加進這張表（ClickHouse 見 `TRUSTIOT_CLICKHOUSE_URL`）。服務連 ClickHouse 的帳號與密碼隨 migration Job 與各服務加入（Laysi/trustiot-v2#60、Laysi/trustiot-v2#91、Laysi/trustiot-v2#119）。
 
 密鑰的環境變數（以 `valueFrom.secretKeyRef` 注入，不在 ConfigMap）：
 
@@ -305,7 +336,7 @@ URL 欄位都不接受 `user:password@` 這種帶帳密的寫法。
 - **對外的路由**：服務要經入口對外時，在服務的 issue 把路由加進 `values.yaml` 的 `ingress.routes`（預設需要 cookie）。不要新增例外路徑：決策 27 只允許登入、閘道器憑證換發、MQTT 轉接與健康檢查四種，要加第五種必須先改決策。入口的規則集中在 `templates/_ingress.tpl` 的 `trustiot.ingress.plan`；可信的來源 IP 沿用 `trustiot.clientIpSource`，不要另外加欄位。
 - **新增叢集內元件**（broker、Postgres、ClickHouse、Qdrant、collector、Grafana）：放在自己的 `templates/<元件>.yaml`，以 `*.mode` 或開關控制；Service 只能是 ClusterIP；在 `values.schema.json` 加欄位定義、在本文件加欄位說明（測試檢查 `values.yaml` 每個欄位都在本文件），並更新「元件與開關」與平台設定的表。
 - **Secret**：values 只能出現 `{name, key}` 形式的引用；schema 的 `additionalProperties: false` 會擋下放明文的新欄位。服務要拿新的依賴帳密時，在 `_helpers.tpl` 的 `trustiot.credentialCatalog` 加一列（變數名稱、Secret、可以拿的服務）、在 schema 的 `credentials` 列舉加上名稱，並更新「密鑰的環境變數」表；自訂 `env` 自動不能讀這個帳密。叢集內元件自己產生的帳密 Secret（例如 CloudNativePG 的資料庫帳號，Laysi/trustiot-v2#58）也要加進 `trustiot.dependencySecretRefs`。新的平台變數用 `TRUSTIOT_` 開頭，自動受保留規則保護。
-- **測試**：規則寫進 `tests/chart.test.ts`。`tests/values/` 的兩個安裝實例範例與 `smoke.yaml`（以 traefik/whoami 當替身服務）也供 nightly（Laysi/trustiot-v2#69）在叢集上安裝使用；入口的叢集測試是 `tests/e2e/ingress.e2e.ts`，nightly 可直接沿用。`bun test` 的 kubeconform 已帶 CRD schema 目錄，Gateway API 與 Istio 的資源可以直接驗證。`tests/` 不會打包進 chart（`.helmignore`）。
+- **測試**：規則寫進 `tests/chart.test.ts`。`tests/values/` 的兩個安裝實例範例與 `smoke.yaml`（以 traefik/whoami 當替身服務）也供 nightly（Laysi/trustiot-v2#69）在叢集上安裝使用；入口的叢集測試是 `tests/e2e/ingress.e2e.ts`，nightly 可直接沿用。`bun test` 的 kubeconform 已帶 CRD schema 目錄，Gateway API 與 Istio 的資源可以直接驗證。兩個實例範例會部署叢集內 ClickHouse（`clickhouse.mode: bundled`），在叢集上安裝前要先建立 `trustiot-clickhouse-admin` Secret（見「叢集內的 ClickHouse」）；入口的叢集測試用 `tests/e2e/values-e2e.yaml` 改成 `external`，不部署 ClickHouse。`tests/` 不會打包進 chart（`.helmignore`）。
 
 ## OpenShift 與其他 Kubernetes
 

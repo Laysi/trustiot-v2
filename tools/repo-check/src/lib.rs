@@ -360,6 +360,109 @@ pub fn find_agents_files(root: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(found)
 }
 
+/// Directories of runtime code that must never change a database schema: the `src` directory
+/// of every cloud service (decision 14; Laysi/trustiot#103). Schema changes live in each
+/// service's `migrations/` and are applied by the migration Job.
+pub const RUNTIME_SOURCE_GLOB: &str = "services/*/src";
+
+/// Lists the Rust files under `services/*/src`, sorted.
+pub fn find_runtime_sources(root: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut found = Vec::new();
+    let services = root.join("services");
+    if !services.is_dir() {
+        return Ok(found);
+    }
+    let mut pending = Vec::new();
+    for entry in fs::read_dir(&services)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            pending.push(entry.path().join("src"));
+        }
+    }
+    while let Some(dir) = pending.pop() {
+        if !dir.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if entry.file_type()?.is_dir() {
+                pending.push(path);
+            } else if path.extension() == Some(OsStr::new("rs")) {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// A schema-changing SQL statement in source code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaChange {
+    /// 1-based line of the statement's first word.
+    pub line: usize,
+    /// The statement's leading words, upper-cased, for example `ALTER TABLE`.
+    pub statement: String,
+}
+
+const SCHEMA_VERBS: [&str; 9] = [
+    "CREATE", "ALTER", "DROP", "RENAME", "TRUNCATE", "ATTACH", "DETACH", "EXCHANGE", "UNDROP",
+];
+/// Words that may sit between the verb and the object, as in `CREATE OR REPLACE TEMPORARY TABLE`.
+const SCHEMA_MODIFIERS: [&str; 11] = [
+    "OR",
+    "REPLACE",
+    "TEMPORARY",
+    "TEMP",
+    "IF",
+    "NOT",
+    "EXISTS",
+    "MATERIALIZED",
+    "LIVE",
+    "WINDOW",
+    "UNLOGGED",
+];
+const SCHEMA_OBJECTS: [&str; 5] = ["TABLE", "TABLES", "DATABASE", "VIEW", "DICTIONARY"];
+
+/// Finds SQL statements that create, alter or drop tables, views, dictionaries or databases in
+/// Rust source. Words are compared case-insensitively and may span lines; identifiers such as
+/// `create_table` are single words and do not match. Lines that start with `//` (comments and
+/// doc comments) are skipped. `ALTER TABLE ... DELETE` matches too: runtime code deletes rows
+/// with `DELETE FROM`, which needs no schema privilege.
+pub fn find_schema_changes(source: &str) -> Vec<SchemaChange> {
+    let mut words: Vec<(usize, String)> = Vec::new();
+    for (index, line) in source.lines().enumerate() {
+        if line.trim_start().starts_with("//") {
+            continue;
+        }
+        words.extend(
+            line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .filter(|word| !word.is_empty())
+                .map(|word| (index + 1, word.to_ascii_uppercase())),
+        );
+    }
+    let mut found = Vec::new();
+    for (start, (line, verb)) in words.iter().enumerate() {
+        if !SCHEMA_VERBS.contains(&verb.as_str()) {
+            continue;
+        }
+        let object = words
+            .iter()
+            .skip(start + 1)
+            .find(|(_, word)| !SCHEMA_MODIFIERS.contains(&word.as_str()));
+        if let Some((_, object)) = object
+            && SCHEMA_OBJECTS.contains(&object.as_str())
+        {
+            found.push(SchemaChange {
+                line: *line,
+                statement: format!("{verb} {object}"),
+            });
+        }
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,6 +691,55 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn schema_changes_are_found() {
+        let source = r#"
+            const A: &str = "CREATE TABLE IF NOT EXISTS t (a UInt8) ENGINE = MergeTree";
+            const B: &str = "create or replace temporary table t AS SELECT 1";
+            let c = "ALTER
+                TABLE trustiot.telemetry ADD COLUMN x UInt8";
+            let d = format!("DROP DATABASE {name}");
+            let e = "ALTER TABLE t DELETE WHERE 1";
+            let f = "CREATE MATERIALIZED VIEW IF NOT EXISTS v TO t AS SELECT 1";
+            let g = "TRUNCATE TABLE t; RENAME TABLE a TO b; EXCHANGE TABLES a AND b";
+        "#;
+        let found: Vec<(usize, String)> = find_schema_changes(source)
+            .into_iter()
+            .map(|change| (change.line, change.statement))
+            .collect();
+        let expected: Vec<(usize, String)> = [
+            (2, "CREATE TABLE"),
+            (3, "CREATE TABLE"),
+            (4, "ALTER TABLE"),
+            (6, "DROP DATABASE"),
+            (7, "ALTER TABLE"),
+            (8, "CREATE VIEW"),
+            (9, "TRUNCATE TABLE"),
+            (9, "RENAME TABLE"),
+            (9, "EXCHANGE TABLES"),
+        ]
+        .into_iter()
+        .map(|(line, statement)| (line, statement.to_owned()))
+        .collect();
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn data_statements_comments_and_identifiers_are_not_schema_changes() {
+        let source = r#"
+            // Runtime code never runs CREATE TABLE; the migration Job does.
+            /// ALTER TABLE belongs in migrations/.
+            const INSERT: &str = "INSERT INTO trustiot.telemetry (a) VALUES (1)";
+            const DELETE: &str = "DELETE FROM trustiot.telemetry WHERE stream_id = {s:UUID}";
+            const USER: &str = "CREATE USER tenant_x IDENTIFIED WITH sha256_password BY 'x'";
+            const GRANT: &str = "GRANT trustiot_tenant_reader TO tenant_x";
+            fn create_table() {}
+            let drop_table_count = 0;
+            let created = "the table was created";
+        "#;
+        assert_eq!(find_schema_changes(source), Vec::new());
     }
 
     #[test]

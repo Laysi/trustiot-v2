@@ -57,6 +57,14 @@ ingress:
       match: PathPrefix
       service: assets
 
+# The ingress test needs no ClickHouse. External mode deploys no ClickHouse workload, so the
+# run needs neither the admin Secret nor a data volume, and `helm install --wait` does not wait
+# on a database (bundled ClickHouse: services/ingest tests and Laysi/trustiot-v2#60).
+clickhouse:
+  mode: external
+  external:
+    url: https://clickhouse.e2e.trustiot.test:8443
+
 observability:
   sentry:
     # No Sentry Secret in the test namespace.

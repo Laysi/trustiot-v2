@@ -1,0 +1,7 @@
+/entrypoint.sh: create new user 'trustiot_admin' instead 'default'
+2026.10.10 13:43:18.598131 [ 1 ] {} <Information> Application: Listening for http://[::]:8123
+2026.10.10 13:43:18.598225 [ 1 ] {} <Information> Application: Listening for native protocol (tcp): [::]:9000
+2026.10.10 13:43:18.598231 [ 1 ] {} <Information> Application: Ready for connections.
+# Separate run, same flags, data directory bind-mounted from the host and owned by root (as with k3s local-path):
+2026.10.10 13:41:26.565113 [ 1 ] {} <Warning> Context: Effective user of the process (clickhouse) does not match the owner of the data (root).
+2026.10.10 13:41:29.848126 [ 1 ] {} <Information> Application: Ready for connections.
