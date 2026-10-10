@@ -1,0 +1,16 @@
+# Extra overlay for the SaaS lab install (last -f): exercises the Secret wiring on a real
+# cluster. The smoke service asks for two dependency credentials, and an external Postgres
+# brings a CA certificate that every service mounts. The referenced Secrets hold dummy values
+# created in the e2e-66 namespace before the install (see the report).
+postgres:
+  mode: external
+  external:
+    host: pg.saas.trustiot.test
+    caSecret:
+      name: trustiot-pg-ca
+
+services:
+  smoke-echo:
+    credentials:
+      - object-storage
+      - smtp

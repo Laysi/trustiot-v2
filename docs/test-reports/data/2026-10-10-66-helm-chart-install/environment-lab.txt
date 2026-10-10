@@ -1,0 +1,24 @@
+$ sudo k3s --version
+k3s version v1.36.5+k3s1 (3dd98cc5)
+go version go1.26.8
+
+$ uname -srm
+Linux 7.1.13-402.asahi.fc44.aarch64+16k aarch64
+
+$ kubectl get nodes -o wide
+NAME              STATUS   ROLES           AGE   VERSION        INTERNAL-IP     EXTERNAL-IP   OS-IMAGE                                       KERNEL-VERSION                              CONTAINER-RUNTIME
+trustiot-mac-m1   Ready    control-plane   18h   v1.36.5+k3s1   192.168.35.25   <none>        Fedora Linux Asahi Remix 44 (Server Edition)   7.1.13-402.asahi.fc44.aarch64+16k (arm64)   containerd://2.3.4-k3s1.36
+
+$ kubectl -n istio-system get deploy,ds -o custom-columns=NAME:.metadata.name,IMAGE:.spec.template.spec.containers[0].image
+NAME             IMAGE
+istiod           registry.istio.io/release/pilot:1.30.5-distroless
+istio-cni-node   registry.istio.io/release/install-cni:1.30.5-distroless
+ztunnel          registry.istio.io/release/ztunnel:1.30.5-distroless
+
+$ kubectl get namespace e2e-66 --show-labels
+NAME     STATUS   AGE     LABELS
+e2e-66   Active   5m26s   kubernetes.io/metadata.name=e2e-66,pod-security.kubernetes.io/audit=restricted,pod-security.kubernetes.io/enforce-version=latest,pod-security.kubernetes.io/enforce=restricted,pod-security.kubernetes.io/warn=restricted
+
+$ kubectl -n e2e-66 get rolebinding e2e-66-helm -o wide
+NAME          ROLE                AGE     USERS   GROUPS   SERVICEACCOUNTS
+e2e-66-helm   ClusterRole/admin   5m26s                    e2e-66/e2e-66-helm

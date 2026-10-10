@@ -1,0 +1,60 @@
+$ helm version
+version.BuildInfo{Version:"v4.3.0", GitCommit:"bec5b06ed841fe5269972d864d5177944fd5970f", GitTreeState:"clean", GoVersion:"go1.27.1", KubeClientVersion:"v1.37"}
+
+$ kubeconform -v
+v0.8.0
+
+$ helm lint deploy/chart --strict -f deploy/chart/values-saas.yaml -f deploy/chart/tests/values/saas-instance.yaml
+# exit 0
+==> Linting deploy/chart
+[INFO] Chart.yaml: icon is recommended
+
+1 chart(s) linted, 0 chart(s) failed
+
+$ helm template trustiot deploy/chart -n trustiot -f deploy/chart/values-saas.yaml -f deploy/chart/tests/values/saas-instance.yaml > saas.yaml
+# exit 0, 1282 bytes
+$ kubeconform -strict -summary -kubernetes-version 1.30.0 saas.yaml
+# exit 0
+Summary: 1 resource found parsing stdin - Valid: 1, Invalid: 0, Errors: 0, Skipped: 0
+
+$ kubeconform -strict -summary -kubernetes-version 1.36.0 saas.yaml
+# exit 0
+Summary: 1 resource found parsing stdin - Valid: 1, Invalid: 0, Errors: 0, Skipped: 0
+
+$ helm template trustiot deploy/chart -n trustiot -f deploy/chart/values-saas.yaml -f deploy/chart/tests/values/saas-instance.yaml -f deploy/chart/tests/values/smoke.yaml --set services.<each of the 12>.enabled=true > saas-all.yaml
+# exit 0, 60937 bytes
+$ kubeconform -strict -summary -kubernetes-version 1.30.0 saas-all.yaml
+# exit 0
+Summary: 40 resources found parsing stdin - Valid: 40, Invalid: 0, Errors: 0, Skipped: 0
+
+$ kubeconform -strict -summary -kubernetes-version 1.36.0 saas-all.yaml
+# exit 0
+Summary: 40 resources found parsing stdin - Valid: 40, Invalid: 0, Errors: 0, Skipped: 0
+
+$ helm lint deploy/chart --strict -f deploy/chart/values-onprem.yaml -f deploy/chart/tests/values/onprem-instance.yaml
+# exit 0
+==> Linting deploy/chart
+[INFO] Chart.yaml: icon is recommended
+
+1 chart(s) linted, 0 chart(s) failed
+
+$ helm template trustiot deploy/chart -n trustiot -f deploy/chart/values-onprem.yaml -f deploy/chart/tests/values/onprem-instance.yaml > onprem.yaml
+# exit 0, 1174 bytes
+$ kubeconform -strict -summary -kubernetes-version 1.30.0 onprem.yaml
+# exit 0
+Summary: 1 resource found parsing stdin - Valid: 1, Invalid: 0, Errors: 0, Skipped: 0
+
+$ kubeconform -strict -summary -kubernetes-version 1.36.0 onprem.yaml
+# exit 0
+Summary: 1 resource found parsing stdin - Valid: 1, Invalid: 0, Errors: 0, Skipped: 0
+
+$ helm template trustiot deploy/chart -n trustiot -f deploy/chart/values-onprem.yaml -f deploy/chart/tests/values/onprem-instance.yaml -f deploy/chart/tests/values/smoke.yaml --set services.<each of the 12>.enabled=true > onprem-all.yaml
+# exit 0, 58840 bytes
+$ kubeconform -strict -summary -kubernetes-version 1.30.0 onprem-all.yaml
+# exit 0
+Summary: 40 resources found parsing stdin - Valid: 40, Invalid: 0, Errors: 0, Skipped: 0
+
+$ kubeconform -strict -summary -kubernetes-version 1.36.0 onprem-all.yaml
+# exit 0
+Summary: 40 resources found parsing stdin - Valid: 40, Invalid: 0, Errors: 0, Skipped: 0
+

@@ -1,0 +1,10 @@
+$ helm upgrade trustiot deploy/chart -n e2e-66 -f deploy/chart/values-onprem.yaml -f deploy/chart/tests/values/onprem-instance.yaml -f deploy/chart/tests/values/smoke.yaml --set hosts.ota=ota2.trustiot.factory.test --wait --timeout 5m
+# exit 0, 3.8 s
+Release "trustiot" has been upgraded. Happy Helming!
+NAME: trustiot
+LAST DEPLOYED: Sat Oct 10 17:36:58 2026
+NAMESPACE: e2e-66
+STATUS: deployed
+REVISION: 2
+DESCRIPTION: Upgrade complete
+TEST SUITE: None

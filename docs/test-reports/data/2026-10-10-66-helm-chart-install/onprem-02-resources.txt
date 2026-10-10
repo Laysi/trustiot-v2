@@ -1,0 +1,27 @@
+$ kubectl -n e2e-66 get deploy,rs,pods,svc,endpointslices,cm,sa -o wide
+# exit 0, 0.7 s
+NAME                                  READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS   IMAGES                                                                                                     SELECTOR
+deployment.apps/trustiot-smoke-echo   1/1     1            1           4s    smoke-echo   docker.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44   app.kubernetes.io/component=smoke-echo,app.kubernetes.io/instance=trustiot,app.kubernetes.io/name=trustiot
+
+NAME                                             DESIRED   CURRENT   READY   AGE   CONTAINERS   IMAGES                                                                                                     SELECTOR
+replicaset.apps/trustiot-smoke-echo-7dcc969c4d   1         1         1       4s    smoke-echo   docker.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44   app.kubernetes.io/component=smoke-echo,app.kubernetes.io/instance=trustiot,app.kubernetes.io/name=trustiot,pod-template-hash=7dcc969c4d
+
+NAME                                       READY   STATUS    RESTARTS   AGE   IP            NODE              NOMINATED NODE   READINESS GATES
+pod/trustiot-smoke-echo-7dcc969c4d-ff59k   1/1     Running   0          4s    10.42.0.104   trustiot-mac-m1   <none>           <none>
+
+NAME                          TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE   SELECTOR
+service/trustiot-smoke-echo   ClusterIP   10.43.179.252   <none>        8080/TCP   4s    app.kubernetes.io/component=smoke-echo,app.kubernetes.io/instance=trustiot,app.kubernetes.io/name=trustiot
+
+NAME                                                       ADDRESSTYPE   PORTS   ENDPOINTS     AGE
+endpointslice.discovery.k8s.io/trustiot-smoke-echo-srdrx   IPv4          8080    10.42.0.104   4s
+
+NAME                           DATA   AGE
+configmap/istio-ca-crl         1      3m34s
+configmap/istio-ca-root-cert   1      3m34s
+configmap/kube-root-ca.crt     1      3m34s
+configmap/trustiot-platform    16     4s
+
+NAME                                 AGE
+serviceaccount/default               3m34s
+serviceaccount/e2e-66-helm           3m34s
+serviceaccount/trustiot-smoke-echo   4s

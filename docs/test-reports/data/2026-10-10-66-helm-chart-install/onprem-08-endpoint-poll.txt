@@ -1,0 +1,44 @@
+# 43 samples every ~0.2 s plus kubectl time; ready endpoints per sample: min 1, max 1; pods seen: trustiot-smoke-echo-7dcc969c4d-ff59k, trustiot-smoke-echo-66d768797-rmrvz
+1791625015.306746765 trustiot-smoke-echo-7dcc969c4d-ff59k=true 
+1791625015.586562091 trustiot-smoke-echo-7dcc969c4d-ff59k=true 
+1791625015.867732677 trustiot-smoke-echo-7dcc969c4d-ff59k=true 
+1791625016.164815920 trustiot-smoke-echo-7dcc969c4d-ff59k=true 
+1791625016.459018142 trustiot-smoke-echo-7dcc969c4d-ff59k=true 
+1791625016.744384299 trustiot-smoke-echo-7dcc969c4d-ff59k=true 
+1791625017.047220001 trustiot-smoke-echo-7dcc969c4d-ff59k=true 
+1791625017.343148527 trustiot-smoke-echo-7dcc969c4d-ff59k=true 
+1791625017.632779882 trustiot-smoke-echo-7dcc969c4d-ff59k=true 
+1791625017.922342862 trustiot-smoke-echo-7dcc969c4d-ff59k=true 
+1791625018.208816153 trustiot-smoke-echo-7dcc969c4d-ff59k=true 
+1791625018.483373857 trustiot-smoke-echo-7dcc969c4d-ff59k=true 
+1791625018.772025247 trustiot-smoke-echo-7dcc969c4d-ff59k=true 
+1791625019.038925521 trustiot-smoke-echo-7dcc969c4d-ff59k=true 
+1791625019.324582931 trustiot-smoke-echo-7dcc969c4d-ff59k=true 
+1791625019.604652883 trustiot-smoke-echo-7dcc969c4d-ff59k=true trustiot-smoke-echo-66d768797-rmrvz=false 
+1791625019.904441396 trustiot-smoke-echo-7dcc969c4d-ff59k=true trustiot-smoke-echo-66d768797-rmrvz=false 
+1791625020.189717845 trustiot-smoke-echo-7dcc969c4d-ff59k=true trustiot-smoke-echo-66d768797-rmrvz=false 
+1791625020.495689194 trustiot-smoke-echo-7dcc969c4d-ff59k=true trustiot-smoke-echo-66d768797-rmrvz=false 
+1791625020.762303424 trustiot-smoke-echo-7dcc969c4d-ff59k=true trustiot-smoke-echo-66d768797-rmrvz=false 
+1791625021.033231477 trustiot-smoke-echo-7dcc969c4d-ff59k=true trustiot-smoke-echo-66d768797-rmrvz=false 
+1791625021.324116758 trustiot-smoke-echo-7dcc969c4d-ff59k=true trustiot-smoke-echo-66d768797-rmrvz=false 
+1791625021.621343002 trustiot-smoke-echo-7dcc969c4d-ff59k=true trustiot-smoke-echo-66d768797-rmrvz=false 
+1791625021.889820912 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625022.175246237 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625022.468657620 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625022.759099731 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625023.057510150 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625023.350436696 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625023.645258423 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625023.933262100 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625024.231719186 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625024.516960176 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625024.804016388 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625025.096589556 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625025.380233535 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625025.665188065 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625025.955372841 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625026.247310963 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625026.542623777 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625026.821659847 trustiot-smoke-echo-7dcc969c4d-ff59k=false trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625027.111508412 trustiot-smoke-echo-66d768797-rmrvz=true 
+1791625027.385021192 trustiot-smoke-echo-66d768797-rmrvz=true 

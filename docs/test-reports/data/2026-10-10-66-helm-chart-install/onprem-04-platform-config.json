@@ -1,0 +1,18 @@
+{
+  "TRUSTIOT_AI_CHAT_BASE_URL": "http://vllm.factory.test:8000/v1",
+  "TRUSTIOT_AI_EMBEDDING_BASE_URL": "http://ollama.factory.test:11434/v1",
+  "TRUSTIOT_AI_RERANK_BASE_URL": "http://vllm.factory.test:8000/v1",
+  "TRUSTIOT_APP_HOST": "trustiot.factory.test",
+  "TRUSTIOT_CLIENT_IP_SOURCE": "x-forwarded-for-rightmost",
+  "TRUSTIOT_DEPLOYMENT_MODE": "onprem",
+  "TRUSTIOT_GATEWAY_HOST": "gw.trustiot.factory.test",
+  "TRUSTIOT_OTA_HOST": "ota.trustiot.factory.test",
+  "TRUSTIOT_S3_BUCKET": "trustiot",
+  "TRUSTIOT_S3_ENDPOINT": "http://s3.factory.test:9000",
+  "TRUSTIOT_S3_FORCE_PATH_STYLE": "true",
+  "TRUSTIOT_S3_REGION": "us-east-1",
+  "TRUSTIOT_SMTP_FROM": "TrustIoT <trustiot@factory.test>",
+  "TRUSTIOT_SMTP_HOST": "smtp.factory.test",
+  "TRUSTIOT_SMTP_PORT": "25",
+  "TRUSTIOT_SMTP_SECURITY": "starttls"
+}

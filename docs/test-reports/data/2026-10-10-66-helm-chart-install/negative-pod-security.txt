@@ -1,0 +1,45 @@
+$ helm install trustiot-neg deploy/chart -n e2e-66 -f deploy/chart/values-onprem.yaml -f deploy/chart/tests/values/onprem-instance.yaml -f deploy/chart/tests/values/smoke.yaml --set services.smoke-echo.securityContext.allowPrivilegeEscalation=true
+# exit 1, 0.3 s
+Error: INSTALLATION FAILED: values don't meet the specifications of the schema(s) in the following chart(s):
+trustiot:
+- at '/services/smoke-echo': 'allOf' failed
+  - at '/services/smoke-echo/securityContext/allowPrivilegeEscalation': value must be false
+
+
+$ helm install trustiot-neg deploy/chart -n e2e-66 -f deploy/chart/values-onprem.yaml -f deploy/chart/tests/values/onprem-instance.yaml -f deploy/chart/tests/values/smoke.yaml --set services.smoke-echo.securityContext.allowPrivilegeEscalation=true --skip-schema-validation
+# exit 0, 0.8 s
+NAME: trustiot-neg
+LAST DEPLOYED: Sat Oct 10 17:38:03 2026
+NAMESPACE: e2e-66
+STATUS: deployed
+REVISION: 1
+DESCRIPTION: Install complete
+TEST SUITE: None
+I1010 17:38:03.813606 3255608 warnings.go:107] "Warning: would violate PodSecurity \"restricted:latest\": allowPrivilegeEscalation != false (container \"smoke-echo\" must set securityContext.allowPrivilegeEscalation=false)"
+
+$ kubectl -n e2e-66 get deploy,rs,pods -l app.kubernetes.io/instance=trustiot-neg
+# exit 0, 1.5 s
+NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/trustiot-neg-smoke-echo   0/1     0            0           10s
+
+NAME                                                 DESIRED   CURRENT   READY   AGE
+replicaset.apps/trustiot-neg-smoke-echo-56696dc75c   1         0         0       10s
+
+$ kubectl -n e2e-66 get events --field-selector reason=FailedCreate
+# exit 0, 1.1 s
+OBJECT                               COUNT   MESSAGE
+trustiot-neg-smoke-echo-56696dc75c   1       Error creating: pods "trustiot-neg-smoke-echo-56696dc75c-qjrvs" is forbidden: violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false (container "smoke-echo" must set securityContext.allowPrivilegeEscalation=false)
+trustiot-neg-smoke-echo-56696dc75c   1       Error creating: pods "trustiot-neg-smoke-echo-56696dc75c-ph6rz" is forbidden: violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false (container "smoke-echo" must set securityContext.allowPrivilegeEscalation=false)
+trustiot-neg-smoke-echo-56696dc75c   1       Error creating: pods "trustiot-neg-smoke-echo-56696dc75c-pdd4m" is forbidden: violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false (container "smoke-echo" must set securityContext.allowPrivilegeEscalation=false)
+trustiot-neg-smoke-echo-56696dc75c   1       Error creating: pods "trustiot-neg-smoke-echo-56696dc75c-k6jnc" is forbidden: violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false (container "smoke-echo" must set securityContext.allowPrivilegeEscalation=false)
+trustiot-neg-smoke-echo-56696dc75c   1       Error creating: pods "trustiot-neg-smoke-echo-56696dc75c-qjj7l" is forbidden: violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false (container "smoke-echo" must set securityContext.allowPrivilegeEscalation=false)
+trustiot-neg-smoke-echo-56696dc75c   1       Error creating: pods "trustiot-neg-smoke-echo-56696dc75c-5d8kz" is forbidden: violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false (container "smoke-echo" must set securityContext.allowPrivilegeEscalation=false)
+trustiot-neg-smoke-echo-56696dc75c   1       Error creating: pods "trustiot-neg-smoke-echo-56696dc75c-wkxvs" is forbidden: violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false (container "smoke-echo" must set securityContext.allowPrivilegeEscalation=false)
+trustiot-neg-smoke-echo-56696dc75c   1       Error creating: pods "trustiot-neg-smoke-echo-56696dc75c-2xfwq" is forbidden: violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false (container "smoke-echo" must set securityContext.allowPrivilegeEscalation=false)
+trustiot-neg-smoke-echo-56696dc75c   1       Error creating: pods "trustiot-neg-smoke-echo-56696dc75c-nm6tq" is forbidden: violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false (container "smoke-echo" must set securityContext.allowPrivilegeEscalation=false)
+trustiot-neg-smoke-echo-56696dc75c   3       (combined from similar events): Error creating: pods "trustiot-neg-smoke-echo-56696dc75c-rzgt7" is forbidden: violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false (container "smoke-echo" must set securityContext.allowPrivilegeEscalation=false)
+
+$ helm uninstall trustiot-neg -n e2e-66 --wait
+# exit 0, 0.6 s
+release "trustiot-neg" uninstalled
+

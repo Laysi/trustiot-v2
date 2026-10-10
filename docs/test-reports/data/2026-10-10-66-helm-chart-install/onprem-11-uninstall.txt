@@ -1,0 +1,23 @@
+$ helm uninstall trustiot -n e2e-66 --wait --timeout 3m
+# exit 0, 0.6 s
+release "trustiot" uninstalled
+
+$ kubectl -n e2e-66 get all,cm,sa,secrets
+# exit 0, 0.5 s
+NAME                                      READY   STATUS        RESTARTS   AGE
+pod/trustiot-smoke-echo-66d768797-g5j99   1/1     Terminating   0          8s
+
+NAME                           DATA   AGE
+configmap/istio-ca-crl         1      4m3s
+configmap/istio-ca-root-cert   1      4m3s
+configmap/kube-root-ca.crt     1      4m3s
+
+NAME                         AGE
+serviceaccount/default       4m3s
+serviceaccount/e2e-66-helm   4m3s
+
+NAME                             TYPE     DATA   AGE
+secret/trustiot-object-storage   Opaque   2      2m49s
+secret/trustiot-pg-ca            Opaque   1      2m49s
+secret/trustiot-sentry           Opaque   1      2m49s
+secret/trustiot-smtp             Opaque   2      2m49s

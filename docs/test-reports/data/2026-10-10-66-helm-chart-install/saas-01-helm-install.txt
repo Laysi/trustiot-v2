@@ -1,0 +1,9 @@
+$ helm install trustiot deploy/chart -n e2e-66 -f deploy/chart/values-saas.yaml -f deploy/chart/tests/values/saas-instance.yaml -f deploy/chart/tests/values/smoke.yaml -f docs/test-reports/data/2026-10-10-66-helm-chart-install/saas-e2e-extra.yaml --wait --timeout 5m
+# exit 0, 7.9 s
+NAME: trustiot
+LAST DEPLOYED: Sat Oct 10 17:35:54 2026
+NAMESPACE: e2e-66
+STATUS: deployed
+REVISION: 1
+DESCRIPTION: Install complete
+TEST SUITE: None
