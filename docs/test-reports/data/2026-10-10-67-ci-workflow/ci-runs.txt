@@ -1,0 +1,110 @@
+# Laysi/trustiot-v2#67 GitHub Actions runs on temporary draft pull requests, 2026-10-10.
+#
+# How results were read: the token available to the agent cannot read check runs or Actions
+# logs (GET .../check-runs answers HTTP 403), so each run's outcome is read from the pull
+# request's `mergeable_state` (GitHub MCP pull_request_read, method get). The repository has no
+# required checks (no branch protection on the Free plan), so:
+#   clean    = every check finished and passed, or the pull request has no checks at all
+#   unstable = a check is still queued or running, or a check failed
+# Calibration: Laysi/trustiot-v2#228 adds no workflow and is clean at once;
+# Laysi/trustiot-v2#230 runs one passing job and goes from unstable to clean within a minute.
+# A state that stays unstable after the job's timeout-minutes means that a check failed or was
+# cancelled by the timeout.
+#
+# Every pull request below was a draft with base integration/ms0, never merged, and closed when
+# the work was done; its branch was deleted. Times are UTC.
+#
+# PR                     branch                        head     created   what it ran
+# Laysi/trustiot-v2#226  ci/67-ci-workflow             3e0d809  09:13:01  the first ci.yml (no helm job yet), Rust through `proto install rust`
+# Laysi/trustiot-v2#227  ci/67-canary-gitleaks         5c330f0  09:15:53  only the gitleaks job, plus ci-canary/fake-private-key.pem (fake key)
+# Laysi/trustiot-v2#228  ci/67-probe-calibration       2528626  09:30:15  no workflow (adds a text file)
+# Laysi/trustiot-v2#229  ci/67-probe-actions           b696e35  09:38:14  one job: checkout and echo
+# Laysi/trustiot-v2#230  ci/67-probe-rust-cache        0691bb7  09:40:27  one job: Swatinem/rust-cache (is the action allowed to run?)
+# Laysi/trustiot-v2#232  ci/67-probe-setup-bun         8b5ae65  11:00:42  one job: .github/actions/setup-proto with `bun`
+# Laysi/trustiot-v2#233  ci/67-probe-job-rust          81095c1  11:07:45  only the rust job of ci.yml (Rust through `proto install rust`)
+# Laysi/trustiot-v2#234  ci/67-probe-job-deny          e5e97c2  11:07:46  only the cargo-deny job (Rust through `proto install rust`)
+# Laysi/trustiot-v2#235  ci/67-probe-job-scan          597ced8  11:07:48  only the gitleaks job, no fake key
+# Laysi/trustiot-v2#236  ci/67-probe-job-policy        59ebcd7  11:13:14  only the workflow-policy job
+# Laysi/trustiot-v2#237  ci/67-probe-setup-rust        0542d4f  11:14:50  one job: setup-proto with `rust` through `proto install rust`, timeout 10 min
+# Laysi/trustiot-v2#238  ci/67-probe-rustup-direct     4c9997b  11:25:29  one job: setup-proto installing Rust with the runner's rustup (the fix), timeout 10 min
+#
+# Readings (time of the read, PR, head, mergeable_state):
+09:13:36 Laysi/trustiot-v2#226 3e0d809 unstable
+09:19:06 Laysi/trustiot-v2#227 5c330f0 unstable
+09:20:05 Laysi/trustiot-v2#226 3e0d809 unstable
+09:23:26 Laysi/trustiot-v2#226 3e0d809 unstable
+09:23:26 Laysi/trustiot-v2#227 5c330f0 unstable
+09:26:28 Laysi/trustiot-v2#226 3e0d809 unstable
+09:29:25 Laysi/trustiot-v2#226 3e0d809 unstable
+09:30:25 Laysi/trustiot-v2#228 2528626 clean
+09:38:56 Laysi/trustiot-v2#229 b696e35 clean
+09:40:34 Laysi/trustiot-v2#230 0691bb7 unstable
+09:41:15 Laysi/trustiot-v2#230 0691bb7 clean
+09:43:56 Laysi/trustiot-v2#226 3e0d809 unstable
+09:46:17 Laysi/trustiot-v2#226 3e0d809 unstable
+10:52:02 Laysi/trustiot-v2#226 3e0d809 unstable
+11:00:50 Laysi/trustiot-v2#232 8b5ae65 unstable
+11:01:12 Laysi/trustiot-v2#232 8b5ae65 clean
+11:08:42 Laysi/trustiot-v2#235 597ced8 clean
+11:08:42 Laysi/trustiot-v2#234 e5e97c2 unstable
+11:08:43 Laysi/trustiot-v2#233 81095c1 unstable
+11:12:16 Laysi/trustiot-v2#234 e5e97c2 unstable
+11:12:16 Laysi/trustiot-v2#233 81095c1 unstable
+11:12:16 Laysi/trustiot-v2#235 597ced8 clean
+11:13:46 Laysi/trustiot-v2#236 59ebcd7 clean
+11:14:24 Laysi/trustiot-v2#236 59ebcd7 clean
+11:15:24 Laysi/trustiot-v2#233 81095c1 unstable
+11:15:24 Laysi/trustiot-v2#237 0542d4f unstable
+11:20:33 Laysi/trustiot-v2#233 81095c1 unstable
+11:20:33 Laysi/trustiot-v2#237 0542d4f unstable
+11:25:40 Laysi/trustiot-v2#237 0542d4f unstable
+11:25:40 Laysi/trustiot-v2#234 e5e97c2 unstable
+11:28:01 Laysi/trustiot-v2#238 4c9997b clean
+11:43:40 Laysi/trustiot-v2#237 0542d4f unstable
+11:43:40 Laysi/trustiot-v2#238 4c9997b clean
+#
+# The pull request of the final branch, Laysi/trustiot-v2#240 (base main, not a draft), read the
+# same way. It was opened with head 5516fdc; 86cc3df is its head after main was merged in twice
+# (pushed at 12:45:33).
+12:17:21 Laysi/trustiot-v2#240 5516fdc unstable
+12:23:43 Laysi/trustiot-v2#240 5516fdc clean
+12:25:09 Laysi/trustiot-v2#240 5516fdc clean
+12:27:47 Laysi/trustiot-v2#240 5516fdc clean
+12:45:37 Laysi/trustiot-v2#240 86cc3df unknown
+12:51:40 Laysi/trustiot-v2#240 86cc3df clean
+12:53:52 Laysi/trustiot-v2#240 86cc3df clean
+12:55:17 Laysi/trustiot-v2#240 86cc3df clean
+#
+# Cross-check with GitHub's search (GitHub MCP search_pull_requests with the `status:`
+# qualifier, read between 12:54 and 12:58), which filters pull requests by the check state of
+# their head commit. This issue's pull requests are listed as follows:
+#   status:success  Laysi/trustiot-v2#229, Laysi/trustiot-v2#230, Laysi/trustiot-v2#232,
+#                   Laysi/trustiot-v2#235, Laysi/trustiot-v2#236, Laysi/trustiot-v2#238
+#   status:failure  Laysi/trustiot-v2#226, Laysi/trustiot-v2#227, Laysi/trustiot-v2#233,
+#                   Laysi/trustiot-v2#234, Laysi/trustiot-v2#237
+#   status:pending  Laysi/trustiot-v2#228 (no checks at all) and Laysi/trustiot-v2#240
+# For the temporary pull requests this agrees with every reading above. Laysi/trustiot-v2#240 at
+# 86cc3df is listed like Laysi/trustiot-v2#228, a pull request without checks, and no reading of
+# 86cc3df caught a running check, so these readings do not prove that 86cc3df's run happened.
+# The run of the next head was watched while it ran; its result is recorded in the pull request
+# and in the implementation note on Laysi/trustiot-v2#67.
+#
+# Conclusions:
+# - Pull requests trigger the workflow, also the pull request that adds it:
+#   Laysi/trustiot-v2#230 and Laysi/trustiot-v2#232 add their workflow to a base without any, and
+#   both show a running check before they pass.
+# - gitleaks fails on the fake key: the same job passes without it (Laysi/trustiot-v2#235 clean)
+#   and fails with it (Laysi/trustiot-v2#227 unstable). The job's steps in both are identical to
+#   the gitleaks job of the final ci.yml, and gitleaks.txt shows the finding when the same
+#   commands run locally on 5c330f0.
+# - The workflow-policy job (Laysi/trustiot-v2#236), Swatinem/rust-cache (Laysi/trustiot-v2#230)
+#   and setup-proto with Bun (Laysi/trustiot-v2#232) pass on GitHub-hosted runners.
+# - Every job that installs Rust through `proto install rust` fails (Laysi/trustiot-v2#226,
+#   Laysi/trustiot-v2#233, Laysi/trustiot-v2#234) and so does setup-proto with only `rust`
+#   (Laysi/trustiot-v2#237: still unstable 29 minutes after it was opened, far past its
+#   10-minute timeout). The same steps pass in a local simulation of the runner (rustup in
+#   ~/.rustup, RUSTUP_HOME and CARGO_HOME unset), and the logs cannot be read, so the cause is
+#   unknown. Installing Rust with the runner image's rustup (Laysi/trustiot-v2#238) passes; that
+#   is what the final setup-proto does.
+# - The whole ci.yml passed on Laysi/trustiot-v2#240 at 5516fdc: a running check at 12:17:21,
+#   then clean.

@@ -1,0 +1,16 @@
+old tests (origin/main 71be25d), 50 runs under load
+
+run-03: test sigterm_fails_readiness_at_once_and_drains_requests_in_flight ... FAILED (crates/service-kit/tests/lifecycle.rs:77:5)
+run-04: test invalid_configuration_names_the_key_without_its_value ... FAILED (crates/service-kit/tests/lifecycle.rs:222:5)
+run-05: test sigterm_fails_readiness_at_once_and_drains_requests_in_flight ... FAILED (crates/service-kit/tests/lifecycle.rs:77:5)
+run-07: test sigterm_fails_readiness_at_once_and_drains_requests_in_flight ... FAILED (crates/service-kit/tests/lifecycle.rs:77:5)
+run-14: test sigterm_fails_readiness_at_once_and_drains_requests_in_flight ... FAILED (crates/service-kit/tests/lifecycle.rs:77:5)
+run-17: test sigterm_fails_readiness_at_once_and_drains_requests_in_flight ... FAILED (crates/service-kit/tests/lifecycle.rs:77:5)
+run-24: test sigterm_fails_readiness_at_once_and_drains_requests_in_flight ... FAILED (crates/service-kit/tests/lifecycle.rs:77:5)
+run-29: test sigterm_fails_readiness_at_once_and_drains_requests_in_flight ... FAILED (crates/service-kit/tests/lifecycle.rs:77:5)
+run-50: test invalid_configuration_names_the_key_without_its_value ... FAILED (crates/service-kit/tests/lifecycle.rs:222:5)
+runs=50 failed=9
+
+test result lines (count):
+41 x test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;
+9 x test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;

@@ -1,0 +1,37 @@
+# Laysi/trustiot-v2#67 unit tests of scripts/ci/check-workflows.ts, 2026-10-10, local machine
+# (Fedora 45, x86_64), Bun 1.4.2, commit e8acc6e. Bun's AI-agent detection was turned off for
+# this run so that every test is listed (otherwise Bun prints failures only).
+#
+# $ cd scripts && bun test
+bun test v1.4.2 (744846f84)
+
+ci/check-workflows.test.ts:
+(pass) checkWorkflow > accepts explicit permissions, SHA-pinned actions and local actions [4.83ms]
+(pass) checkWorkflow > rejects a job without permissions [0.56ms]
+(pass) checkWorkflow > rejects an action pinned to a tag instead of a commit SHA [0.24ms]
+(pass) checkWorkflow > rejects permission shorthands and unknown levels [0.90ms]
+(pass) checkWorkflow > accepts an empty permissions map [0.18ms]
+(pass) checkWorkflow > rejects an unpinned reusable workflow [0.23ms]
+(pass) checkWorkflow > rejects local actions and reusable workflows outside the checked directories [0.43ms]
+(pass) checkWorkflow > rejects job and service containers that are not pinned to a digest [0.69ms]
+(pass) checkWorkflow > rejects triggers that hand secrets to fork code, in every syntax [1.03ms]
+(pass) checkWorkflow > reports every violation in one pass [0.27ms]
+(pass) checkWorkflow > reports unreadable or malformed files instead of crashing [0.32ms]
+(pass) usesProblem > accepts local actions, full SHAs and digest-pinned images [0.16ms]
+(pass) usesProblem > rejects every other reference [0.18ms]
+(pass) usesProblem > keeps local references where the check reads them [0.22ms]
+(pass) imageProblem > requires a digest [0.08ms]
+(pass) checkAction > checks the steps of a composite action [0.41ms]
+(pass) checkAction > checks the image of a Docker action [0.20ms]
+(pass) annotation > escapes GitHub workflow command syntax [0.31ms]
+(pass) repository scan and command line > finds top-level workflows and every local action [1.43ms]
+(pass) repository scan and command line > labels violations with the file relative to the root [1.17ms]
+(pass) repository scan and command line > the command fails on an unpinned action and a job without permissions [34.48ms]
+(pass) repository scan and command line > the command fails when there is nothing to check [23.54ms]
+(pass) repository scan and command line > this repository's workflows and actions pass [32.09ms]
+
+ 23 pass
+ 0 fail
+ 73 expect() calls
+Ran 23 tests across 1 file. [128.00ms]
+# exit status: 0

@@ -48,10 +48,87 @@
     "ingress": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["exposure"],
+      "required": [
+        "exposure",
+        "authzProvider",
+        "replicas",
+        "resources",
+        "tunnel",
+        "direct",
+        "publicPaths",
+        "routes"
+      ],
       "properties": {
-        "exposure": { "enum": ["tunnel", "direct"] }
-      }
+        "exposure": { "enum": ["tunnel", "direct"] },
+        "authzProvider": {
+          "description": "Name of the istiod meshConfig extension provider that calls the identity service.",
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+        },
+        "replicas": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requests", "limits"],
+          "properties": {
+            "requests": { "$ref": "#/definitions/resourceList" },
+            "limits": { "allOf": [{ "$ref": "#/definitions/resourceList" }, { "required": ["memory"] }] }
+          }
+        },
+        "tunnel": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allowedSources"],
+          "properties": {
+            "allowedSources": {
+              "description": "IPv4 CIDRs allowed to reach the ingress pods in tunnel mode; never the whole network.",
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "$ref": "#/definitions/hostCidr" }
+            }
+          }
+        },
+        "direct": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["serviceType", "tlsSecret"],
+          "properties": {
+            "serviceType": { "enum": ["LoadBalancer", "NodePort", "ClusterIP"] },
+            "tlsSecret": { "$ref": "#/definitions/optionalK8sName" }
+          }
+        },
+        "publicPaths": {
+          "description": "The only cookie-free paths (decision 27): exact paths, no wildcards.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["login", "healthCheck", "certRenewal", "mqtt"],
+          "properties": {
+            "login": { "$ref": "#/definitions/exactPath" },
+            "healthCheck": { "$ref": "#/definitions/exactPath" },
+            "certRenewal": { "$ref": "#/definitions/exactPath" },
+            "mqtt": { "$ref": "#/definitions/exactPath" }
+          }
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["host", "path", "match", "service"],
+            "properties": {
+              "host": { "enum": ["app", "gateway", "ota"] },
+              "path": { "$ref": "#/definitions/routePath" },
+              "match": { "enum": ["PathPrefix", "Exact"] },
+              "service": { "type": "string", "pattern": "^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$" },
+              "port": { "type": "string", "pattern": "^[a-z]([a-z0-9-]{0,13}[a-z0-9])?$" }
+            }
+          }
+        }
+      },
+      "if": { "properties": { "exposure": { "const": "direct" } } },
+      "then": { "properties": { "direct": { "properties": { "tlsSecret": { "minLength": 1 } } } } }
     },
     "serviceDefaults": {
       "allOf": [
@@ -410,6 +487,25 @@
       "pattern": "^$|^https://[^\\s/?#@]+(/[^\\s]*)?$"
     },
     "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "hostCidr": {
+      "description": "IPv4 CIDR with a prefix of at least /8.",
+      "type": "string",
+      "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12][0-9]|[89])$"
+    },
+    "exactPath": {
+      "description": "One exact lower-case path: segments start with a letter or digit, so no '.', '..', '//', trailing '/', '%', ';' or wildcards; never under /internal (decision 27).",
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^(/[a-z0-9][a-z0-9._-]*)+$",
+      "not": { "pattern": "^/internal" }
+    },
+    "routePath": {
+      "description": "'/' or a lower-case path in the exactPath form; never under /internal (decision 27).",
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^/$|^(/[a-z0-9][a-z0-9._-]*)+$",
+      "not": { "pattern": "^/internal" }
+    },
     "k8sName": {
       "description": "DNS-1123 subdomain, the format of Kubernetes object names.",
       "type": "string",
@@ -583,9 +679,9 @@
         "tolerations": { "type": "array", "items": { "type": "object" } },
         "affinity": { "type": "object" },
         "podLabels": {
-          "description": "app.kubernetes.io/ and helm.sh/ keys are reserved for the chart's own labels.",
+          "description": "app.kubernetes.io/ and helm.sh/ keys and istio.io/dataplane-mode are reserved for the chart's own labels.",
           "type": "object",
-          "propertyNames": { "not": { "pattern": "^(app\\.kubernetes\\.io/|helm\\.sh/)" } },
+          "propertyNames": { "not": { "pattern": "^(app\\.kubernetes\\.io/|helm\\.sh/|istio\\.io/dataplane-mode$)" } },
           "additionalProperties": { "type": "string" }
         },
         "podAnnotations": {

@@ -74,6 +74,8 @@ spec:
     metadata:
       labels:
         {{- include "trustiot.componentLabels" $ctx | nindent 8 }}
+        # Istio ambient: ztunnel adds mTLS to every connection to ClickHouse (decision 27).
+        istio.io/dataplane-mode: ambient
       annotations:
         # Restart when the server configuration changes.
         checksum/clickhouse-config: {{ include "trustiot.clickhouse.serverConfig" . | sha256sum }}

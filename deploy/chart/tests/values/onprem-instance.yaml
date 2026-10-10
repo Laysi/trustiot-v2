@@ -7,6 +7,11 @@ hosts:
   gateway: gw.trustiot.factory.test
   ota: ota.trustiot.factory.test
 
+ingress:
+  direct:
+    # Outer TLS certificate for the three hosts, issued by the customer's CA.
+    tlsSecret: trustiot-ingress-tls
+
 clickhouse:
   bundled:
     # Bootstrap admin password of the bundled ClickHouse; how Secrets reach the cluster is

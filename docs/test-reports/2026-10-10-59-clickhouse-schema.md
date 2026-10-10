@@ -73,7 +73,7 @@ bun test deploy/chart
 
 ### chart
 
-`bun test deploy/chart`：106 項全數通過（[bun-test-chart.log](data/2026-10-10-59-clickhouse-schema/bun-test-chart.log)），包含兩份 values 在 Kubernetes 1.30.0 與 1.36.0 的 kubeconform（含 StatefulSet）。新增的規則：ClickHouse 映像與 dev 環境、schema 測試同一個 digest；單副本、PVC 保留、只有 ClusterIP 8123／9000；restricted Pod Security；admin 密碼只從掛載的 Secret 讀、`users.d` 在記憶體、輪替密碼時改 `adminSecretRevision` 會重啟 ClickHouse；伺服器設定沒有帳號、角色、profile、quota、row policy 或密碼；`external` 模式不產生 ClickHouse；values 驗證擋下缺 admin Secret、沒有設定磁碟區大小、沒有 digest、admin 叫 `default`、允許 root、在 values 放帳號設定；服務的自訂 `env` 讀不到 admin 密碼。
+`bun test deploy/chart`：148 項全數通過（含合併 main 的入口 gateway 測試）（[bun-test-chart.log](data/2026-10-10-59-clickhouse-schema/bun-test-chart.log)），包含兩份 values 在 Kubernetes 1.30.0 與 1.36.0 的 kubeconform（含 StatefulSet）。新增的規則：ClickHouse 映像與 dev 環境、schema 測試同一個 digest；單副本、PVC 保留、只有 ClusterIP 8123／9000；restricted Pod Security 且加入 Istio ambient mesh；admin 密碼只從掛載的 Secret 讀、`users.d` 在記憶體、輪替密碼時改 `adminSecretRevision` 會重啟 ClickHouse；伺服器設定沒有帳號、角色、profile、quota、row policy 或密碼；`external` 模式不產生 ClickHouse；values 驗證擋下缺 admin Secret、沒有設定磁碟區大小、沒有 digest、admin 叫 `default`、允許 root、在 values 放帳號設定；服務的自訂 `env` 讀不到 admin 密碼。
 
 以 chart 的 `config.d` 在 podman 以 pod 的限制啟動（[hardened-container.log](data/2026-10-10-59-clickhouse-schema/hardened-container.log)）：entrypoint 以 `trustiot_admin` 取代 `default`，只監聽 HTTP 8123 與 native 9000（MySQL、PostgreSQL 相容埠與 9009 已關），唯讀根目錄下正常啟動。資料目錄擁有者是 root 時（k3s local-path 的情況）只有一行警告，仍正常啟動。
 

@@ -116,9 +116,12 @@ class Session {
 
   constructor(private readonly socket: Socket) {
     socket.on("data", (chunk) => {
-      const next = new Uint8Array(this.buffer.length + chunk.length);
+      // No encoding is set on the socket, so chunks arrive as bytes; the string case exists
+      // only in the type of the "data" event.
+      const bytes = typeof chunk === "string" ? encoder.encode(chunk) : chunk;
+      const next = new Uint8Array(this.buffer.length + bytes.length);
       next.set(this.buffer);
-      next.set(chunk, this.buffer.length);
+      next.set(bytes, this.buffer.length);
       this.buffer = next;
       this.flush();
     });
