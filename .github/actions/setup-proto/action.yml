@@ -1,11 +1,13 @@
 # Installs proto from a release pinned by version and SHA-256 (not from a mutable install
-# script), then the tools a job needs at the versions pinned in `.prototools`.
+# script), then the tools a job needs at the versions pinned in `.prototools`. Rust comes
+# from the runner image's rustup at the version pinned in `rust-toolchain.toml`.
 name: Set up proto
 description: Install the pinned proto release and the requested tools from .prototools.
 
 inputs:
   tools:
     description: Space-separated tool names from .prototools, for example `rust cargo-deny`.
+      `rust` is installed with rustup from rust-toolchain.toml.
     required: true
 
 runs:
@@ -47,7 +49,21 @@ runs:
         export PATH="$proto_bin:$HOME/.proto/shims:$PATH"
         proto --version
 
-        # Word splitting is intended: one `proto install` per listed tool.
+        # Word splitting is intended: one installation per listed tool.
         for tool in $TOOLS; do
-          proto install "$tool" --yes
+          if [[ "$tool" == rust ]]; then
+            # proto's Rust plugin only drives rustup, and on GitHub-hosted runners
+            # `proto install rust` does not complete. Use the image's rustup directly:
+            # without arguments it installs the channel, components and profile pinned in
+            # rust-toolchain.toml, whose channel repo-check keeps equal to `rust` in
+            # .prototools.
+            if ! command -v rustup > /dev/null; then
+              echo "::error title=setup-proto::rustup is not on PATH; the runner image must provide it."
+              exit 1
+            fi
+            rustup toolchain install
+            rustup show active-toolchain
+          else
+            proto install "$tool" --yes
+          fi
         done
