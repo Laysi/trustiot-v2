@@ -1,0 +1,6 @@
+# Istio ambient on OpenShift (customer clusters). Pass to all four Istio charts
+# (base, istiod, cni, ztunnel); README.md has the install commands and the OpenShift notes.
+profile: ambient
+global:
+  # OpenShift's CNI paths, and the SCC-compatible settings for istio-cni and ztunnel.
+  platform: openshift

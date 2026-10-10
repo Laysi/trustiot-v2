@@ -1,0 +1,238 @@
+{{- /*
+Ingress gateway (decision 27): Istio implements the Kubernetes Gateway API. Every request needs
+the cookie, which an AuthorizationPolicy with the CUSTOM action sends to the identity service
+(ext_authz through the mesh extension provider ingress.authzProvider); only the public paths skip
+it. Requests to public paths lose any x-internal-identity header, and nothing under /internal is
+reachable from outside. Istio creates the gateway Deployment and Service from the Gateway and the
+options ConfigMap below.
+*/ -}}
+{{- $v := .Values -}}
+{{- $gateway := include "trustiot.ingress.gatewayName" . -}}
+{{- $listener := include "trustiot.ingress.listener" . -}}
+{{- $options := include "trustiot.componentName" (dict "root" . "name" "ingress-options") -}}
+{{- $plan := include "trustiot.ingress.plan" . | fromYaml -}}
+{{- $labels := include "trustiot.componentLabels" (dict "root" . "name" "ingress") -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $options }}
+  labels:
+    {{- $labels | nindent 4 }}
+data:
+  {{- /* Strategic-merge patches that Istio applies to the objects it generates. */}}
+  deployment: |
+    spec:
+      replicas: {{ $v.ingress.replicas }}
+      template:
+        spec:
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: istio-proxy
+              resources:
+                {{- toYaml $v.ingress.resources | nindent 16 }}
+  service: |
+    spec:
+      {{- if eq $v.ingress.exposure "tunnel" }}
+      # Reached only by cloudflared on the host; nothing listens on the host or the network.
+      type: ClusterIP
+      {{- else }}
+      type: {{ $v.ingress.direct.serviceType }}
+      {{- end }}
+  {{- if gt (int $v.ingress.replicas) 1 }}
+  podDisruptionBudget: |
+    spec:
+      minAvailable: 1
+  {{- end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ $gateway }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  gatewayClassName: istio
+  infrastructure:
+    labels:
+      app.kubernetes.io/name: {{ include "trustiot.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: ingress
+      app.kubernetes.io/part-of: trustiot
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: {{ $options }}
+  listeners:
+    {{- if eq $listener "http" }}
+    # cloudflared to the gateway is plain HTTP inside the host; Cloudflare terminates TLS.
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- else }}
+    # The gateway terminates the outer TLS; gateways keep their own mTLS inside the WebSocket.
+    - name: https
+      port: 443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            group: ""
+            name: {{ $v.ingress.direct.tlsSecret }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- end }}
+{{- range $host := list "app" "gateway" "ota" }}
+{{- $rules := list }}
+{{- range $plan.public }}
+{{- if eq .host $host }}
+{{- $rules = append $rules (dict "item" . "public" true) }}
+{{- end }}
+{{- end }}
+{{- range $plan.routes }}
+{{- if eq .host $host }}
+{{- $rules = append $rules (dict "item" . "public" false) }}
+{{- end }}
+{{- end }}
+{{- if $rules }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "trustiot.componentName" (dict "root" $ "name" (printf "ingress-%s" $host)) }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ $gateway }}
+      sectionName: {{ $listener }}
+  hostnames:
+    - {{ get $v.hosts $host | quote }}
+  rules:
+    {{- range $rules }}
+    - matches:
+        - path:
+            type: {{ .item.match }}
+            value: {{ .item.path | quote }}
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            # Clients always reach us over HTTPS (Cloudflare or this gateway's TLS), so backends
+            # can rely on it for Secure cookies and redirect URLs.
+            set:
+              - name: x-forwarded-proto
+                value: https
+            {{- if .public }}
+            # Public path: no ext_authz check overwrites the header, so drop any client copy.
+            remove:
+              - x-internal-identity
+            {{- end }}
+      backendRefs:
+        - name: {{ .item.backend.name }}
+          port: {{ .item.backend.port }}
+    {{- end }}
+{{- end }}
+{{- end }}
+---
+{{- /*
+Cookie check on every request except a public path on its own host. Rules are ORed: the first
+catches every non-public path, and one more rule per public path catches it on any other host,
+so an exemption never leaks to a host where that path is routed elsewhere. Istio matches paths
+exactly (after Envoy's RFC 3986 normalization), so encoded or case variants are checked too.
+*/}}
+{{- $exempt := dict }}
+{{- range $plan.public }}
+{{- $_ := set $exempt .path (append (get $exempt .path | default list) .hostname) }}
+{{- end }}
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ include "trustiot.componentName" (dict "root" . "name" "ingress-cookie-check") }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ $gateway }}
+  action: CUSTOM
+  provider:
+    name: {{ $v.ingress.authzProvider }}
+  rules:
+    {{- if $exempt }}
+    - to:
+        - operation:
+            notPaths:
+              {{- range $path := keys $exempt | sortAlpha }}
+              - {{ $path | quote }}
+              {{- end }}
+    {{- range $path := keys $exempt | sortAlpha }}
+    - to:
+        - operation:
+            paths:
+              - {{ $path | quote }}
+            notHosts:
+              {{- range get $exempt $path | uniq | sortAlpha }}
+              - {{ . | quote }}
+              {{- end }}
+    {{- end }}
+    {{- else }}
+    # No public path is enabled: every request is checked.
+    - {}
+    {{- end }}
+---
+# Internal APIs between services live under /internal (decision 27). No route forwards that
+# prefix, and this denies it even when a route such as "/" would match. CUSTOM runs first, so a
+# request without a cookie gets 401 and one with a valid cookie gets 403.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ include "trustiot.componentName" (dict "root" . "name" "ingress-deny-internal") }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ $gateway }}
+  action: DENY
+  rules:
+    - to:
+        - operation:
+            paths:
+              - "/internal*"
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $gateway }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: {{ $gateway }}
+  policyTypes:
+    - Ingress
+  ingress:
+    {{- if eq $v.ingress.exposure "tunnel" }}
+    # Only the host (cloudflared, kubelet probes) may connect; other pods may not.
+    - from:
+        {{- range $v.ingress.tunnel.allowedSources }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+    {{- else }}
+    # The customer network reaches the HTTPS listener; the kubelet checks readiness on 15021.
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 15021
+          protocol: TCP
+    {{- end }}

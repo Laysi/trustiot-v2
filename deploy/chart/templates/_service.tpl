@@ -148,6 +148,8 @@ spec:
       first value), so the selector labels and the checksum cannot be overridden. */}}
       labels:
         {{- $labels := include "trustiot.componentLabels" . | fromYaml }}
+        {{- /* Istio ambient: ztunnel adds mTLS to every connection of this pod (decision 27). */}}
+        {{- $_ := set $labels "istio.io/dataplane-mode" "ambient" }}
         {{- toYaml (merge $labels ($config.podLabels | default dict)) | nindent 8 }}
       annotations:
         {{- /* Restart pods when the platform settings they read through envFrom change. */}}

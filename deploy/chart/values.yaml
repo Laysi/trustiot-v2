@@ -34,6 +34,49 @@ ingress:
   # The MQTT broker is never exposed in either mode; gateways reach it only through
   # the ingress gateway and mqtt-bridge.
   exposure: ""
+  # Istio mesh extension provider (istiod meshConfig.extensionProviders) that sends the cookie
+  # of every request to the identity service (ext_authz). deploy/istio sets it up with
+  # failOpen false, a short timeout and statusOnError 503; the chart only refers to it by name.
+  authzProvider: trustiot-identity
+  # Ingress gateway pods (Istio's gateway Deployment, configured through
+  # infrastructure.parametersRef).
+  replicas: 2
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: "2"
+      memory: 512Mi
+  tunnel:
+    # Sources allowed to reach the ingress pods when exposure is tunnel (NetworkPolicy): only the
+    # host, where cloudflared and the kubelet run. On k3s the host reaches pods from cni0, the
+    # first address of the node's pod CIDR (10.42.0.1 on a single-node default install).
+    allowedSources:
+      - 10.42.0.1/32
+  direct:
+    # Service type of the ingress gateway when exposure is direct; it listens on 443.
+    # LoadBalancer uses k3s ServiceLB or the customer's load balancer.
+    serviceType: LoadBalancer
+    # Existing kubernetes.io/tls Secret with the outer TLS certificate (the customer's, or one
+    # from our CA) for hosts.app, hosts.gateway and hosts.ota. Required when exposure is direct.
+    tlsSecret: ""
+  # The only paths that skip the cookie check (decision 27). Each is one exact path on a fixed
+  # host and backend; the ingress strips x-internal-identity from these requests. A path is
+  # exempt only while its backend service is enabled.
+  publicPaths:
+    # hosts.app -> identity
+    login: /auth/login
+    # hosts.app -> identity (external uptime checks)
+    healthCheck: /healthz
+    # hosts.gateway -> certs (gateways renew certificates with a TPM signature, decision 12)
+    certRenewal: /certs/renew
+    # hosts.gateway -> mqtt-bridge (MQTT inside WebSocket)
+    mqtt: /mqtt
+  # Routes that need the cookie: {host: app|gateway|ota, path, match: PathPrefix|Exact,
+  # service: <key under services>, port: <port name, default http>}. Services add their routes
+  # when they ship. Paths under /internal/ are never routed (decision 27).
+  routes: []
 
 # Defaults for every entry under `services`. An entry overrides them field by field
 # (maps merge recursively, lists and scalars are replaced); each probe under `probes`
