@@ -25,6 +25,7 @@ Architecture decisions, rebuild scope (items A1–M8), service split, repository
 - Dependency licenses, advisories, and sources (rules in `deny.toml`): `cargo deny --locked check`
 - Secret scan, as CI runs it: `gitleaks git --redact --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" .`
 - Workflow policy (job `permissions`, SHA-pinned actions): `bun scripts/ci/check-workflows.ts`
+- Secret handling (every Dockerfile/Containerfile, build args, secrets in `run`, SOPS-encrypted Secret manifests; rules in `docs/architecture/secrets.md`): `bun scripts/ci/check-secret-handling.ts`
 - Bun scripts in `scripts/` (the dev environment and the CI checks): `bun install --cwd scripts --frozen-lockfile` installs the type checker, then `bun run --cwd scripts typecheck` checks every `.ts` file there; `bun run --cwd scripts test` runs the same test files as `bun test scripts`, and a single test is `bun run --cwd scripts test -t "<test-name-filter>"`
 - Gateway crates (`crates/protocol` and every member under `edge/`) must build for aarch64: `rustup target add aarch64-unknown-linux-gnu` once, then `cargo build --locked --target aarch64-unknown-linux-gnu -p <crate>`
 

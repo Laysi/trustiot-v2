@@ -101,6 +101,7 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 ## CI 檢查
 
 - `ci/check-workflows.ts`：CI 的 `workflow-policy` 檢查。每個 job 要明列 `permissions`，action 與 reusable workflow 要釘 40 字元 commit SHA（本地 action 不必釘，但要放在 `.github/actions/` 下），容器映像要釘 digest，不得使用 `pull_request_target` 與 `workflow_run`；規則與理由見 [CI 與發佈](../docs/architecture/ci-release.md)。執行：`bun scripts/ci/check-workflows.ts`。
+- `ci/check-secret-handling.ts`：同一個 job 的密鑰處理檢查。repo 內每個 Dockerfile 與 Containerfile 不 COPY 金鑰類檔案（也不經目錄或萬用字元帶進 repo 裡的金鑰類檔案）、`ARG` 與 `ENV` 不放密鑰、複製整個 build context 時要有以 `*` 開頭的 ignore 檔；根目錄的 `.dockerignore` 只有 `*`，不用 Dockerfile 專屬的 ignore 檔與 `--ignorefile`；`--build-arg` 只能是字面值的 `NAME=value`、名稱不像密鑰；映像建置一律以 `lib/build-context.ts` 的 `containerBuildArgs(context, options)` 產生 `podman build` 的參數，它會先檢查實際的 context 並只接受白名單內的建置選項（不接受 `--build-context`、`--volume` 這類讓建置讀到 context 以外檔案的選項），其他地方不直接寫建置指令，也不以執行時才決定的子指令呼叫容器工具（`lib/podman.ts` 在執行時擋下不經 `containerBuildArgs` 的建置）；workflow 的 `run` 不寫 `${{ secrets.* }}`；repo 內的 Kubernetes Secret 一律以 SOPS 加密。規則與理由見 [密鑰與權限](../docs/architecture/secrets.md)。執行：`bun scripts/ci/check-secret-handling.ts`。測試檔（`*.test.ts`）不掃描 `--build-arg`，因為它們刻意寫出違規的例子。
 
 ## 型別檢查與測試
 
