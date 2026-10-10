@@ -1,0 +1,78 @@
+===== probe crate Cargo.toml (outside the repository)
+[package]
+name = "compile-fail-check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+contract = { path = "<repo>/crates/contract" }
+serde = { version = "1.0.229", features = ["derive"] }
+socket2 = "0.6.5"
+tokio = { version = "1.53.2", features = ["io-util", "macros", "net", "rt"] }
+
+===== src/bin/error_chains.rs
+// Evidence probe: what reqwest reports when a peer resets (RST) or closes (FIN) the connection
+// after reading the request, and how contract classifies it.
+use std::time::Duration;
+
+use contract::client::{Endpoint, InternalClient, Method};
+use contract::{InternalToken, service};
+use tokio::io::AsyncReadExt;
+use tokio::net::TcpListener;
+
+struct Ping;
+
+impl Endpoint for Ping {
+    type Service = service::Identity;
+    type Body = ();
+    type Response = ();
+    const METHOD: Method = Method::Get;
+    const ROUTE: &'static str = "/internal/ping";
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    for (label, reset) in [("RST (SO_LINGER 0)", true), ("FIN (plain close)", false)] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = [0_u8; 4096];
+            let _ = stream.read(&mut buffer).await.unwrap();
+            if reset {
+                socket2::SockRef::from(&stream)
+                    .set_linger(Some(Duration::ZERO))
+                    .unwrap();
+            }
+            drop(stream);
+        });
+        let client: InternalClient<service::Identity> =
+            InternalClient::new(&base_url, Duration::from_secs(5)).unwrap();
+        let error = client
+            .call(&Ping, &InternalToken::new("t").unwrap())
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+        println!("peer {label}: kind={} code={}", error.kind(), error.code());
+        let mut source = std::error::Error::source(&error);
+        while let Some(cause) = source {
+            println!("  caused by: {cause}  [{cause:?}]");
+            source = cause.source();
+        }
+    }
+}
+
+===== $ cargo run -q --bin error_chains   (exit code 0)
+peer RST (SO_LINGER 0): kind=connection_reset code=unavailable
+  caused by: error sending request  [reqwest::Error { kind: Request, source: hyper_util::client::legacy::Error(SendRequest, hyper::Error(Io, Os { code: 104, kind: ConnectionReset, message: "Connection reset by peer" })) }]
+  caused by: client error (SendRequest)  [hyper_util::client::legacy::Error(SendRequest, hyper::Error(Io, Os { code: 104, kind: ConnectionReset, message: "Connection reset by peer" }))]
+  caused by: connection error  [hyper::Error(Io, Os { code: 104, kind: ConnectionReset, message: "Connection reset by peer" })]
+  caused by: Connection reset by peer (os error 104)  [Os { code: 104, kind: ConnectionReset, message: "Connection reset by peer" }]
+peer FIN (plain close): kind=connection_reset code=unavailable
+  caused by: error sending request  [reqwest::Error { kind: Request, source: hyper_util::client::legacy::Error(SendRequest, hyper::Error(IncompleteMessage)) }]
+  caused by: client error (SendRequest)  [hyper_util::client::legacy::Error(SendRequest, hyper::Error(IncompleteMessage))]
+  caused by: connection closed before message completed  [hyper::Error(IncompleteMessage)]
+

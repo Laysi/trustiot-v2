@@ -1,0 +1,161 @@
+HEAD 6095203f339c00d5dcbe328f1c2c7ff921f61afe
+merge-base with integration/ms0 3a94ff1649a4822cedd4e28e1d0a80f9239012e1
+git status --short: (clean)
+rustc 1.99.0 (b940084d7 2026-09-28)
+cargo 1.99.0 (5f94df478 2026-08-27)
+
+$ CARGO_BUILD_JOBS=2 cargo fmt --all -- --check   (exit code 0)
+(no output)
+
+$ CARGO_BUILD_JOBS=2 cargo clippy --workspace --all-targets -- -D warnings   (exit code 0)
+(no output)
+
+$ CARGO_BUILD_JOBS=2 cargo test --workspace   (exit code 0)
+Running unittests src/lib.rs (target/debug/deps/contract-3c9555a50938a85a)
+
+running 32 tests
+test client::tests::path_parameters_are_encoded_as_single_segments ... ok
+test client::tests::routes_follow_the_rules ... ok
+test client::tests::display_names_peer_route_and_kind_without_values ... ok
+test client::tests::peer_m1_errors_pass_through_except_unauthenticated ... ok
+test client::tests::only_json_objects_count_as_m1_bodies ... ok
+test client::tests::statuses_without_an_m1_body_map_by_status ... ok
+test client::tests::transport_failures_map_to_m1_codes ... ok
+test client::tests::base_urls_must_be_plain_http_origins ... ok
+test error::tests::display_names_code_and_key_only ... ok
+test error::tests::internal_errors_never_carry_details ... ok
+test client::tests::timeouts_are_mandatory_and_bounded ... ok
+test error::tests::message_keys_are_validated ... ok
+test error::tests::malformed_key_literal_panics_outside_const - should panic ... ok
+test error::tests::only_transient_codes_are_retryable ... ok
+test error::tests::wire_values_status_and_default_keys_follow_the_code ... ok
+test id::tests::generated_ids_are_time_ordered_uuid_v7 ... ok
+test id::tests::rejects_text_that_is_not_a_uuid ... ok
+test id::tests::serializes_as_a_plain_uuid_string ... ok
+test identity::tests::claims_tolerate_unknown_claims_and_default_platform_admin ... ok
+test identity::tests::claims_use_jwt_names_and_round_trip ... ok
+test identity::tests::claims_without_a_tenant_have_no_tenant_id ... ok
+test identity::tests::roles_include_lower_roles_and_unknown_roles_grant_nothing ... ok
+test identity::tests::tokens_are_header_safe_and_redacted ... ok
+test json::tests::missing_field_names_are_kept ... ok
+test json::tests::syntax_errors_keep_their_position ... ok
+test json::tests::values_from_the_document_are_dropped ... ok
+test naming::tests::accepts_dotted_lowercase_names ... ok
+test naming::tests::rejects_malformed_names ... ok
+test service::tests::ai_gateway_is_not_a_contract_service ... ok
+test service::tests::all_lists_each_service_once ... ok
+test service::tests::markers_name_their_service ... ok
+test service::tests::wire_names_match_serde_and_parse_back ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/client.rs (target/debug/deps/client-87fbe155aad1a4c0)
+
+running 14 tests
+test a_refused_connection_maps_to_unavailable ... ok
+test a_connection_closed_without_a_response_is_a_reset ... ok
+test a_reset_connection_maps_to_unavailable ... ok
+test bad_requests_fail_before_reaching_the_network ... ok
+test a_peer_rejecting_our_credential_is_internal ... ok
+test a_response_that_breaks_the_contract_is_internal ... ok
+test an_oversized_response_is_rejected ... ok
+test no_content_decodes_as_unit ... ok
+test peer_m1_errors_pass_through ... ok
+test get_sends_the_token_and_decodes_the_response ... ok
+test post_sends_a_json_body ... ok
+test redirects_are_not_followed ... ok
+test statuses_without_an_m1_body_map_by_status ... ok
+test a_silent_peer_times_out_as_m1_timeout ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+     Running tests/client_logging.rs (target/debug/deps/client_logging-5f46be7b681aded6)
+
+running 1 test
+test failures_are_logged_with_peer_and_kind_but_not_the_token ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/error_format.rs (target/debug/deps/error_format-a060bb73ef09fc23)
+
+running 7 tests
+test every_code_round_trips_with_its_default_key ... ok
+test full_body_round_trips_in_the_documented_shape ... ok
+test malformed_bodies_are_rejected ... ok
+test unknown_fields_from_newer_peers_are_ignored ... ok
+test openapi_schema_describes_the_error_body ... ok
+test specific_message_keys_round_trip ... ok
+test openapi_schema_matches_the_fixture ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/events.rs (target/debug/deps/events-6ab26fef3b4c7646)
+
+running 9 tests
+test a_newer_version_waits_for_the_consumer_upgrade ... ok
+test fields_added_later_are_ignored_by_older_consumers ... ok
+test old_versions_decode_with_the_current_consumer ... ok
+test envelopes_round_trip_in_the_documented_shape ... ok
+test mismatched_envelopes_are_rejected_for_good ... ok
+test platform_wide_events_have_no_tenant ... ok
+test positional_array_payloads_are_rejected ... ok
+test payloads_must_be_json_objects ... ok
+test new_envelopes_carry_type_version_tenant_time_and_producer ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/repo_check-aa954c12c377a906)
+
+running 12 tests
+test tests::exact_version_accepts_only_major_minor_patch ... ok
+test tests::different_rust_pins_fail ... ok
+test tests::metadata_lists_member_manifests ... ok
+test tests::inexact_rust_pins_fail ... ok
+test tests::versions_order_numerically ... ok
+test tests::matching_rust_pins_pass ... ok
+test tests::metadata_errors_are_reported ... ok
+test tests::member_must_inherit_edition_and_lints ... ok
+test tests::missing_or_malformed_pins_fail ... ok
+test tests::errors_name_the_file_and_key ... ok
+test tests::rust_version_must_not_exceed_toolchain ... ok
+test tests::rust_version_accepts_two_or_three_parts ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/repository.rs (target/debug/deps/repository-5beb9cc390b8fa71)
+
+running 4 tests
+test agents_md_search_finds_planted_files ... ok
+test repository_has_no_agents_md ... ok
+test members_inherit_workspace_edition_and_lints ... ok
+test toolchain_pins_agree ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+   Doc-tests contract
+
+running 5 tests
+test crates/contract/src/client.rs - client::Endpoint (line 74) ... ok
+test crates/contract/src/event.rs - event::Event (line 22) ... ok
+test crates/contract/src/client.rs - client::InternalClient<S>::new (line 249) ... ok
+test crates/contract/src/client.rs - client::InternalClient<S>::call (line 327) ... ok
+test crates/contract/src/error.rs - error::message_key (line 239) ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 4 tests
+test crates/contract/src/client.rs - client::InternalClient<S>::new (line 262) - compile fail ... ok
+test crates/contract/src/error.rs - error::message_key (line 246) - compile fail ... ok
+test crates/contract/src/client.rs - client::InternalClient<S>::call (line 347) - compile fail ... ok
+test crates/contract/src/event.rs - event::Event (line 45) - compile fail ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+all doctests ran in 0.99s; merged doctests compilation took 0.80s
+   Doc-tests repo_check
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
