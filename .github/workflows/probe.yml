@@ -1,0 +1,80 @@
+# Temporary probe for Laysi/trustiot-v2#67 on a throwaway branch that is never merged.
+# The rust job below is copied unchanged from ci.yml. ci.yml does not pass on GitHub
+# while each of its jobs passes in a local simulation of the hosted runner, and the
+# available token cannot read check runs or logs, so one pull request per job shows which
+# job fails. ci.yml itself keeps every job.
+#
+# For `pull_request` events GitHub reads the workflow files of the pull request's merge
+# commit (refs/pull/<number>/merge), so a workflow runs on the very pull request that adds
+# it; only `pull_request_target` takes workflows from the base branch.
+name: probe
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# No token scopes by default; each job asks for what it needs.
+permissions: {}
+
+concurrency:
+  # One run per pull request or branch. A new push to a pull request cancels its running
+  # CI; runs on main always finish so that every main commit gets a result.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: rust
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # sqlx's query macros read the committed `.sqlx/` data instead of a live database, so
+      # a query without up-to-date data fails to compile.
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: toolchain
+        uses: ./.github/actions/setup-proto
+        with:
+          tools: rust
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: "false"
+          # Pull requests restore main's cache but do not save their own.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The checks below run even when an earlier one fails, so one run reports them all.
+      - name: rustfmt
+        run: cargo fmt --all --check
+      - name: clippy
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: test
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo test --workspace --locked
+      - name: aarch64 build of the gateway crates
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: |
+          # The gateway runs on aarch64: crates/protocol and every workspace member under
+          # edge/ must build for it (docs/architecture/repository-layout.md). Libraries build
+          # without a cross linker; the first gateway binary adds one.
+          packages=()
+          for manifest in crates/protocol/Cargo.toml edge/*/Cargo.toml; do
+            if [[ -f "$manifest" ]]; then
+              pkgid="$(cargo pkgid --locked --manifest-path "$manifest")"
+              packages+=(--package "$pkgid")
+            fi
+          done
+          if (( ${#packages[@]} == 0 )); then
+            echo "::notice title=aarch64 build::No gateway crates yet (crates/protocol, edge/*)."
+            exit 0
+          fi
+          rustup target add aarch64-unknown-linux-gnu
+          cargo build --locked --target aarch64-unknown-linux-gnu "${packages[@]}"
