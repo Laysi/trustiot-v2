@@ -16,6 +16,10 @@ use std::time::{Duration, Instant};
 /// The example service's binary, built by Cargo for these tests.
 pub const EXAMPLE_SERVICE: &str = env!("CARGO_BIN_EXE_example-service");
 
+/// How long the reader threads get to consume what an exited process left in its pipes. The
+/// data is already in the kernel, so this only bounds scheduling delay on a loaded machine.
+pub const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// A W3C trace context whose trace id the tests look for.
 pub const TRACE_ID: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
 pub const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
@@ -24,6 +28,8 @@ pub const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba90
 #[derive(Clone, Default)]
 pub struct Output {
     lines: Arc<(Mutex<Vec<String>>, Condvar)>,
+    /// Set once the reader thread has seen the end of the stream (or a read error).
+    closed: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl Output {
@@ -35,7 +41,30 @@ impl Output {
                 lines.lock().expect("output lock").push(line);
                 changed.notify_all();
             }
+            let (closed, changed) = &*self.closed;
+            *closed.lock().expect("output lock") = true;
+            changed.notify_all();
         });
+    }
+
+    /// Waits until the reader thread has read the stream to its end. A process that has exited
+    /// can still have output in its pipe that the reader thread has not consumed yet, so read
+    /// `lines`, `text` and `json_lines` for the complete output only after this returns true.
+    pub fn wait_closed(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let (closed, changed) = &*self.closed;
+        let mut guard = closed.lock().expect("output lock");
+        while !*guard {
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            guard = changed
+                .wait_timeout(guard, deadline - now)
+                .expect("output lock")
+                .0;
+        }
+        true
     }
 
     /// Every line so far.
@@ -139,9 +168,17 @@ impl Service {
         send_signal(self.pid(), signal);
     }
 
-    /// Waits for the process to exit.
+    /// Waits for the process to exit, then for its stdout and stderr to be read completely, so
+    /// the output is whole when this returns.
     pub fn wait_exit(&mut self, timeout: Duration) -> Option<ExitStatus> {
-        wait_exit(&mut self.child, timeout)
+        let status = wait_exit(&mut self.child, timeout)?;
+        for (name, output) in [("stdout", &self.stdout), ("stderr", &self.stderr)] {
+            assert!(
+                output.wait_closed(OUTPUT_DRAIN_TIMEOUT),
+                "{name} of the exited service was not read to its end"
+            );
+        }
+        Some(status)
     }
 }
 
