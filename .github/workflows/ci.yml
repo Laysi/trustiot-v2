@@ -11,7 +11,6 @@
 #   ClickHouse and Mosquitto, every migration on a fresh database, the cross-tenant negative
 #   tests (Laysi/trustiot-v2#56), and `cargo sqlx prepare --check` against that database.
 # - The static check that rejects SQL built from strings (Laysi/trustiot-v2#53).
-# - OpenAPI (Laysi/trustiot-v2#55): regenerate api/openapi.json and fail on any difference.
 # - Frontend (Laysi/trustiot-v2#123): Bun install, type check, lint, unit tests, build, and
 #   regenerating the API client with a diff check.
 name: ci
@@ -81,6 +80,17 @@ jobs:
       - name: test service-kit without default features
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: cargo test --package service-kit --no-default-features --locked
+      # api/openapi.json is generated from the code (tools/openapi). Regenerate it and fail on any
+      # difference, so an API type cannot change without the committed spec changing with it.
+      - name: OpenAPI spec is current
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: |
+          cargo run --locked --package openapi
+          if [[ -n "$(git status --porcelain -- api)" ]]; then
+            git --no-pager diff -- api
+            echo "::error file=api/openapi.json,title=OpenAPI spec is out of date::Run 'cargo run -p openapi' and commit api/openapi.json."
+            exit 1
+          fi
       - name: aarch64 build of the gateway crates
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: |

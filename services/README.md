@@ -4,4 +4,5 @@
 
 - 每個子目錄都是 workspace 成員（根目錄 `Cargo.toml` 的 `services/*`），必須有 `Cargo.toml`，並繼承 workspace 的 edition 與 lints（`cargo test -p repo-check` 會檢查）。
 - 服務內部：`README.md`（繁中說明）、`migrations/`（只動自己的 schema）、`src/`、`tests/`（含跨租戶負向測試）。
+- 有 HTTP API 的服務在 library 匯出 `pub fn openapi() -> utoipa::openapi::OpenApi`，並登記在 `tools/openapi`，規格才會進 `api/openapi.json`；沒有 HTTP API 的服務也要在那裡登記為 `SERVICES_WITHOUT_API`，否則 `cargo test --workspace` 失敗（做法見 [tools/openapi](../tools/openapi/README.md)）。
 - 服務之間只透過 `crates/contract` 的型別、事件與有型別的 client 溝通，不跨服務 JOIN；`services/ai-gateway` 不依賴 `crates/contract`（決策 28）。
