@@ -47,7 +47,7 @@ trustiot-v2/
 │   ├── chart/                 # Helm chart；values-saas.yaml、values-onprem.yaml
 │   ├── flux/                  # SaaS 的 GitOps 設定（Flux）
 │   └── host/                  # 主機安裝：k3s、cloudflared（SaaS）
-├── scripts/                   # Bun + TS：本地一鍵啟動（M6）、種子資料、CI 檢查（ci/）
+├── scripts/                   # Bun + TS：本地一鍵啟動（M6，podman）、種子資料、CI 檢查（ci/）；見 scripts/README.md
 ├── evals/                     # 題庫：分析、RAG、補全延遲、跨租戶 Cypher 攻擊
 ├── datasets/lab/              # lab 資料集索引與標註
 └── docs/                      # 跨服務架構文件；test-reports/ 放測試報告與原始資料
@@ -65,6 +65,7 @@ services/assets/
 - `services/ai-gateway` 不依賴 `crates/contract`，保留單獨抽出開源的選項（決策 28）。
 - API 規格從 Rust 程式碼產生（例如 utoipa），各服務的規格合併成 `api/openapi.json` 進版控，CI 檢查是否與程式一致；前端的 API client 由它產生，規格不會與程式脫節。
 - 部署以 Helm chart 打包：同一份 chart 搭配 `values-saas.yaml` 與 `values-onprem.yaml`，客戶自有的 k8s 或 OpenShift 也用這份 chart；cloudflared 是 SaaS 主機元件，放在 `deploy/host/`，不在 chart 內。values 分三層：`values.yaml` 是預設值；`values-saas.yaml` 與 `values-onprem.yaml` 只寫部署型態的差異；主機名稱、外部端點與 Secret 名稱寫在安裝實例的覆寫檔（SaaS 的在 `deploy/flux/`，地端由客戶安裝時提供）。values 只以名稱引用 Secret，不放密鑰；`values.schema.json` 擋下缺漏與不安全的設定。欄位與 chart 對服務的約定見 [deploy/chart/README.md](../../deploy/chart/README.md)。
+- 本地開發環境（M6）用 rootless podman 起容器，不跑 Kubernetes：`bun scripts/dev.ts up` 起 Postgres（含 AGE）、ClickHouse、Mosquitto 與 `lib/services.ts` 列出的服務，帳密每次產生、只存在使用者的 XDG 狀態目錄，所有埠只綁 127.0.0.1。服務的容器介面照 chart 的約定（8080、`/healthz`、`/readyz`、`TRUSTIOT_*` 環境變數），日後改用 k3d 只需換掉啟動容器的那一層。決定的理由、與 k3d 方案的取捨及與正式環境的差異見 [scripts/README.md](../../scripts/README.md)。
 - 大型資料集放物件儲存，repo 只放索引與標註。
 - Workspace 成員：`crates/`、`services/`、`edge/`、`factory/`、`tools/` 底下的每個子目錄都是成員（根目錄 `Cargo.toml` 以 glob 列出，新增 crate 不必改成員清單），必須有 `Cargo.toml`，並以 `edition.workspace = true` 與 `[lints] workspace = true` 繼承 workspace 設定；非 Rust 的子目錄（目前只有 `edge/image`）列在 `exclude`。`frontend/` 與 `scripts/` 用 Bun，不是 workspace 成員。第三方相依套件一律先宣告在根目錄的 `[workspace.dependencies]`。
 - Rust 版本同時寫在 `.prototools` 與 `rust-toolchain.toml`：proto 透過 rustup 安裝 Rust、不為 cargo 建 shim，cargo 實際用哪個版本由 rustup 讀 `rust-toolchain.toml` 決定；CI 則直接以 rustup 依 `rust-toolchain.toml` 安裝（原因見 [CI 與發佈](ci-release.md) 的「工具安裝」）。兩者要一起改，`tools/repo-check` 會檢查一致；它也檢查每個成員繼承 workspace 設定、repo 內沒有 `AGENTS.md`。

@@ -1,0 +1,10 @@
+up exit 0
+passwords generated for this run: 3 (values not recorded)
+fresh clone of the branch (excluding target/): passwords found = 0
+output of the up command: passwords found = 0
+container logs: postgres: passwords found = 0
+container logs: clickhouse: passwords found = 0
+container logs: mosquitto: passwords found = 0
+container logs: example-service: passwords found = 0
+process list (ps -eo args) while running: passwords found = 0
+evidence files collected so far: passwords found = 0
