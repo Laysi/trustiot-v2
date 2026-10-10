@@ -1,0 +1,66 @@
+# Installs proto from a release pinned by version and SHA-256 (not from a mutable install
+# script), then the tools a job needs at the versions pinned in `.prototools`.
+name: Set up proto
+description: Install the pinned proto release and the requested tools from .prototools.
+
+inputs:
+  tools:
+    description: Space-separated tool names from .prototools, for example `rust cargo-deny`.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install proto and tools
+      shell: bash
+      env:
+        # Bump both values together; the hash is the SHA-256 of the archive below
+        # (published as proto_cli-x86_64-unknown-linux-gnu.tar.xz.sha256 in the release).
+        PROTO_VERSION: "0.60.2"
+        PROTO_SHA256: fe96d99ede103639becd6ab624688efeacc91049574174b31e67d1affd1c295c
+        TOOLS: ${{ inputs.tools }}
+      run: |
+        set -euo pipefail
+        if [[ "$RUNNER_OS" != "Linux" || "$RUNNER_ARCH" != "X64" ]]; then
+          echo "::error title=setup-proto::Only Linux x64 runners are supported, got $RUNNER_OS $RUNNER_ARCH."
+          exit 1
+        fi
+        if [[ -z "${TOOLS// /}" ]]; then
+          echo "::error title=setup-proto::The tools input is empty."
+          exit 1
+        fi
+
+        target="x86_64-unknown-linux-gnu"
+        archive="$RUNNER_TEMP/proto_cli-$target.tar.xz"
+        curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 \
+          --output "$archive" \
+          "https://github.com/moonrepo/proto/releases/download/v$PROTO_VERSION/proto_cli-$target.tar.xz"
+        echo "$PROTO_SHA256  $archive" | sha256sum --check --strict
+
+        proto_bin="$HOME/.proto/bin"
+        mkdir -p "$proto_bin"
+        tar --extract --xz --file "$archive" --directory "$proto_bin" --strip-components=1 \
+          "proto_cli-$target/proto" "proto_cli-$target/proto-shim"
+        rm -f "$archive"
+        echo "$proto_bin" >> "$GITHUB_PATH"
+        echo "$HOME/.proto/shims" >> "$GITHUB_PATH"
+        export PATH="$proto_bin:$HOME/.proto/shims:$PATH"
+        proto --version
+
+        # Word splitting is intended: one installation per listed tool.
+        for tool in $TOOLS; do
+          if [[ "$tool" == rust ]]; then
+            # proto's Rust plugin only drives rustup, and on GitHub-hosted runners
+            # `proto install rust` does not complete. Use the image's rustup directly:
+            # without arguments it installs the channel, components and profile pinned in
+            # rust-toolchain.toml, whose channel repo-check keeps equal to `rust` here.
+            if ! command -v rustup > /dev/null; then
+              echo "::error title=setup-proto::rustup is not on PATH; the runner image must provide it."
+              exit 1
+            fi
+            rustup toolchain install
+            rustup show active-toolchain
+          else
+            proto install "$tool" --yes
+          fi
+        done
