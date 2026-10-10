@@ -1,0 +1,38 @@
+# istiod Helm values for TrustIoT: the ext_authz provider of the ingress gateway (decision 27).
+# Use together with values-k3s.yaml or values-openshift.yaml; README.md has the install commands.
+#
+# The chart's AuthorizationPolicy refers to this provider by name (ingress.authzProvider), so
+# the two must match. The provider points at the identity service of the release "trustiot" in
+# namespace "trustiot" (<release>-identity.<namespace>.svc.cluster.local); change `service`
+# when you install under another release name or namespace.
+
+meshConfig:
+  extensionProviders:
+    - name: trustiot-identity
+      envoyExtAuthzHttp:
+        service: trustiot-identity.trustiot.svc.cluster.local
+        port: 8080
+        # The identity service's check endpoint; the gateway appends the original path. It is
+        # under /internal, which the ingress never routes.
+        pathPrefix: /internal/ext-authz
+        # Fail closed: an unreachable, failing or slow identity service rejects the request.
+        # Istio's default timeout is 600 s.
+        failOpen: false
+        timeout: 0.5s
+        # 503 instead of the default 403, so the SPA can tell "service unavailable" from
+        # "sign in again" (401 from the identity service).
+        statusOnError: "503"
+        # Only the cookie goes to the identity service (Host, method, path and Authorization
+        # are always included).
+        includeRequestHeadersInCheck:
+          - cookie
+        # On allow, the identity service's x-internal-identity replaces any client copy, so the
+        # identity service must always return it.
+        headersToUpstreamOnAllow:
+          - x-internal-identity
+
+pilot:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi

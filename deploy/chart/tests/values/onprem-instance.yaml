@@ -7,6 +7,11 @@ hosts:
   gateway: gw.trustiot.factory.test
   ota: ota.trustiot.factory.test
 
+ingress:
+  direct:
+    # Outer TLS certificate for the three hosts, issued by the customer's CA.
+    tlsSecret: trustiot-ingress-tls
+
 objectStorage:
   # Customer S3-compatible storage inside the plant network.
   endpoint: http://s3.factory.test:9000

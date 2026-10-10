@@ -1,12 +1,12 @@
 # 專案目錄
 
-新系統開新的 repo `Laysi/trustiot-v2`，舊 repo `Laysi/trustiot` 封存。雲端服務、閘道器程式與共用 crate 都在同一個 Cargo workspace（決策 4）；前端與腳本用 Bun，版本與 Rust、CI 工具（cargo-deny、gitleaks）、chart 工具（helm、kubeconform）一起鎖在 `.prototools`。
+新系統開新的 repo `Laysi/trustiot-v2`，舊 repo `Laysi/trustiot` 封存。雲端服務、閘道器程式與共用 crate 都在同一個 Cargo workspace（決策 4）；前端與腳本用 Bun，版本與 Rust、CI 工具（cargo-deny、gitleaks）、chart 與叢集工具（helm、kubeconform、kubectl）一起鎖在 `.prototools`。
 
 ```
 trustiot-v2/
 ├── Cargo.toml                 # Cargo workspace：成員、共用 lints、edition、release profile
-├── .prototools                # rust、bun、cargo-deny、gitleaks、helm、kubeconform 版本
-├── .proto/plugins/            # proto 沒有內建外掛的工具（cargo-deny、gitleaks、helm、kubeconform）：官方下載網址與校驗
+├── .prototools                # rust、bun、cargo-deny、gitleaks、helm、kubeconform、kubectl 版本
+├── .proto/plugins/            # proto 沒有內建外掛的工具（cargo-deny、gitleaks、helm、kubeconform、kubectl）：官方下載網址與校驗
 ├── rust-toolchain.toml        # rustup 依此選 Rust 版本，與 .prototools 相同
 ├── deny.toml                  # cargo-deny 規則：授權白名單、漏洞公告、相依來源
 ├── CLAUDE.md                  # agent 規範只放這裡，不另放 AGENTS.md
@@ -46,6 +46,7 @@ trustiot-v2/
 │   └── repo-check/            # repo 規則檢查，隨 cargo test 執行
 ├── deploy/
 │   ├── chart/                 # Helm chart；values-saas.yaml、values-onprem.yaml
+│   ├── istio/                 # Istio ambient 的安裝 values 與 ext_authz provider（叢集共用的平台元件）
 │   ├── flux/                  # SaaS 的 GitOps 設定（Flux）
 │   └── host/                  # 主機安裝：k3s、cloudflared（SaaS）
 ├── scripts/                   # Bun + TS：本地一鍵啟動（M6，podman）、種子資料、CI 檢查（ci/）；見 scripts/README.md
@@ -65,7 +66,7 @@ services/assets/
 - `crates/protocol` 是閘道器與雲端共用的訊息格式（M4），要能編到 aarch64，不引入只能在雲端編譯的相依套件。
 - `services/ai-gateway` 不依賴 `crates/contract`，保留單獨抽出開源的選項（決策 28）。
 - API 規格從 Rust 程式碼產生（utoipa），各服務的規格合併成 `api/openapi.json` 進版控，CI 檢查是否與程式一致；前端的 API client 由它產生，規格不會與程式脫節。每個有 HTTP API 的服務在 library 匯出 `pub fn openapi() -> utoipa::openapi::OpenApi`，登記在 `tools/openapi`；`cargo run -p openapi` 把各服務的規格與 `crates/contract` 的 M1 錯誤 schema 合併（鍵排序固定、同一路徑與方法、同名但不同定義的 schema、重複的 operationId、找不到目標的 `$ref` 都是錯誤，不會靜默覆蓋），寫入 `api/openapi.json`。CI 重新產生後有差異就失敗，`cargo test --workspace` 也做同一項比對。細節見 [tools/openapi](../../tools/openapi/README.md)。
-- 部署以 Helm chart 打包：同一份 chart 搭配 `values-saas.yaml` 與 `values-onprem.yaml`，客戶自有的 k8s 或 OpenShift 也用這份 chart；cloudflared 是 SaaS 主機元件，放在 `deploy/host/`，不在 chart 內。values 分三層：`values.yaml` 是預設值；`values-saas.yaml` 與 `values-onprem.yaml` 只寫部署型態的差異；主機名稱、外部端點與 Secret 名稱寫在安裝實例的覆寫檔（SaaS 的在 `deploy/flux/`，地端由客戶安裝時提供）。values 只以名稱引用 Secret，不放密鑰；`values.schema.json` 擋下缺漏與不安全的設定。欄位與 chart 對服務的約定見 [deploy/chart/README.md](../../deploy/chart/README.md)。
+- 部署以 Helm chart 打包：同一份 chart 搭配 `values-saas.yaml` 與 `values-onprem.yaml`，客戶自有的 k8s 或 OpenShift 也用這份 chart；cloudflared 是 SaaS 主機元件，放在 `deploy/host/`，不在 chart 內；Istio ambient 是整個叢集共用的平台元件，安裝 values 與入口用的 ext_authz provider 放在 `deploy/istio/`，裝 chart 之前先裝。values 分三層：`values.yaml` 是預設值；`values-saas.yaml` 與 `values-onprem.yaml` 只寫部署型態的差異；主機名稱、外部端點與 Secret 名稱寫在安裝實例的覆寫檔（SaaS 的在 `deploy/flux/`，地端由客戶安裝時提供）。values 只以名稱引用 Secret，不放密鑰；`values.schema.json` 擋下缺漏與不安全的設定。欄位與 chart 對服務的約定見 [deploy/chart/README.md](../../deploy/chart/README.md)。
 - 本地開發環境（M6）用 rootless podman 起容器，不跑 Kubernetes：`bun scripts/dev.ts up` 起 Postgres（含 AGE）、ClickHouse、Mosquitto 與 `lib/services.ts` 列出的服務，帳密每次產生、只存在使用者的 XDG 狀態目錄，所有埠只綁 127.0.0.1。服務的容器介面照 chart 的約定（8080、`/healthz`、`/readyz`、`TRUSTIOT_*` 環境變數），日後改用 k3d 只需換掉啟動容器的那一層。決定的理由、與 k3d 方案的取捨及與正式環境的差異見 [scripts/README.md](../../scripts/README.md)。
 - 大型資料集放物件儲存，repo 只放索引與標註。
 - Workspace 成員：`crates/`、`services/`、`edge/`、`factory/`、`tools/` 底下的每個子目錄都是成員（根目錄 `Cargo.toml` 以 glob 列出，新增 crate 不必改成員清單），必須有 `Cargo.toml`，並以 `edition.workspace = true` 與 `[lints] workspace = true` 繼承 workspace 設定；非 Rust 的子目錄（目前只有 `edge/image`）列在 `exclude`。`frontend/` 與 `scripts/` 用 Bun，不是 workspace 成員。第三方相依套件一律先宣告在根目錄的 `[workspace.dependencies]`。
