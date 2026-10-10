@@ -101,11 +101,29 @@ function decodeChunked(body: Buffer): Buffer {
   return Buffer.concat(parts);
 }
 
-async function raw(
-  target: string,
-  // sni: TLS server name (on-prem shape); defaults to the Host header without its port.
-  options: { host?: HostKey | string; method?: string; headers?: [string, string][]; sni?: string } = {},
-): Promise<RawResponse> {
+type RawOptions = {
+  host?: HostKey | string;
+  method?: string;
+  headers?: [string, string][];
+  // TLS server name (on-prem shape); defaults to the Host header without its port.
+  sni?: string;
+};
+
+// Sends one request. When the tunnel to the gateway (ssh or kubectl port-forward) has died,
+// for example because the SSH session was dropped, reopens it and sends the request once more;
+// any other failure fails the test.
+async function raw(target: string, options: RawOptions = {}): Promise<RawResponse> {
+  try {
+    return await rawOnce(target, options);
+  } catch (error) {
+    if (tunnel === undefined || (tunnel.exitCode === null && tunnel.signalCode === null)) throw error;
+    console.error(`tunnel to the ingress gateway exited (${tunnel.exitCode ?? tunnel.signalCode}); reopening it`);
+    await openTunnel();
+    return rawOnce(target, options);
+  }
+}
+
+async function rawOnce(target: string, options: RawOptions): Promise<RawResponse> {
   const hostHeader = options.host === undefined ? HOSTS.app : (HOSTS[options.host as HostKey] ?? options.host);
   const lines = [
     `${options.method ?? "GET"} ${target} HTTP/1.1`,
