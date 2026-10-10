@@ -1,6 +1,6 @@
 # scripts
 
-Bun + TypeScript 腳本：本地一鍵啟動（清單 M6）與種子資料。Bun 版本鎖在根目錄 `.prototools`。不是 Cargo workspace 成員，也沒有 `package.json`，沒有 npm 相依套件。
+Bun + TypeScript 腳本：本地一鍵啟動（清單 M6）、種子資料與發佈流程（`release/`）。Bun 版本鎖在根目錄 `.prototools`。不是 Cargo workspace 成員，也沒有 `package.json`，沒有 npm 相依套件。
 
 ## 本地開發環境
 
@@ -97,3 +97,40 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 - Postgres 映像是官方的 `apache/age`；正式環境是 CloudNativePG 加自建的 AGE 映像（Laysi/trustiot-v2#57）。
 - 資料庫沒有 TLS，所以給服務的 `TRUSTIOT_POSTGRES_SSLMODE` 是 `disable`；chart 的 `external` 模式只接受 `verify-full`。
 - Mosquitto 用靜態的帳號、ACL 檔，不加 TLS、不用 dynsec、不經 mqtt-bridge（決策 6 的正式設定在 Laysi/trustiot-v2#84）。
+
+## release/：發佈流程
+
+`.github/workflows/release.yml` 的每個 job 各執行一支腳本，彼此以 JSON 交接（型別在 `release/lib.ts`）。流程、權限與驗證方式見 [CI 與發佈](../docs/architecture/ci-release.md) 的「release.yml」。
+
+| 腳本 | job | 內容 |
+| --- | --- | --- |
+| `release/plan.ts` | plan | 檢查 tag，列出要發佈的映像（`deploy/images/`）與 chart，`helm lint --strict` |
+| `release/build.ts` | build | 交叉編譯 Rust、建置 arm64 映像（OCI 壓縮檔）與 SPDX SBOM，不推送 |
+| `release/publish.ts` | publish | 推送映像、cosign 簽章與 SBOM attestation，打包、推送並簽章 chart，建立 GitHub Release |
+| `release/verify.ts` | verify | 以唯讀權限驗證發佈結果，輸出驗證報告 |
+
+單元測試：`bun test scripts/release`，也包含在 `bun test scripts` 裡（`lib.test.ts` 不需要任何工具；`plan.test.ts` 在暫存目錄建立 git repo）。
+
+### 本機跑一次完整流程
+
+需要 podman、skopeo，以及 `proto install` 裝好的 bun、helm、zig、cargo-zigbuild、cargo-auditable、syft、cosign，在 repo 根目錄執行。發佈到本機的暫用 registry，並以暫用的 cosign 金鑰簽章：本機模式不寫入公開的透明紀錄，也不建立 GitHub Release，而且只接受本機（`localhost`、`127.0.0.1`）的 registry。`--local-test-key` 與 `--registry` 在 GitHub Actions 裡會被拒絕，正式發佈一律 keyless 簽章、只發佈到 GHCR。映像壓縮檔不小，工作目錄放在 `~/.cache` 而不是 `/tmp`。
+
+```sh
+mkdir -p ~/.cache && work="$(mktemp -d ~/.cache/trustiot-release.XXXXXX)"
+podman run -d --rm --name release-registry -p 127.0.0.1:5068:5000 \
+  docker.io/library/registry:3@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8
+COSIGN_PASSWORD= cosign generate-key-pair --output-key-prefix "$work/test"
+printf '### 其他\n\n- **測試**：本機發佈。\n' > "$work/notes.md"
+
+bun scripts/release/plan.ts --tag v0.0.0-rc.1 --dry-run \
+  --registry 127.0.0.1:5068/laysi/trustiot-v2 --output "$work/plan.json"
+bun scripts/release/build.ts --plan "$work/plan.json" --out "$work/out"
+COSIGN_PASSWORD= bun scripts/release/publish.ts --plan "$work/plan.json" --artifacts "$work/out" \
+  --notes "$work/notes.md" --output "$work/published.json" --local-test-key "$work/test"
+bun scripts/release/verify.ts --plan "$work/plan.json" --published "$work/published.json" \
+  --output "$work/report.md" --local-test-key "$work/test"
+
+podman stop release-registry
+```
+
+`--dry-run` 以目前的 HEAD 規劃，tag 不必存在，也不檢查正式版是否在 main 上。只要建置映像，前兩步就夠了。同一個版本再跑一次 publish 會得到相同的 digest，不會重複推送；內容不同時 publish 會拒絕覆蓋。

@@ -26,6 +26,7 @@ repository = "https://github.com/Laysi/trustiot-v2"
 [workspace.dependencies]
 axum = { version = "0.8.9", default-features = false }
 base64 = "0.22.1"
+cc = "1.5.1"
 chrono = { version = "0.4.45", default-features = false }
 ed25519-dalek = { version = "3.0.0", default-features = false }
 http = "1.5.0"
