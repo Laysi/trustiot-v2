@@ -61,10 +61,9 @@ jobs:
       # The platform the chart expects (deploy/istio/README.md). The Gateway API CRDs are applied
       # from the release asset after its SHA-256 matches; bump version and hash together.
       GATEWAY_API_VERSION: v1.6.1
-      GATEWAY_API_SHA256: 24d931f22abd8e40c973264319ead7cfa09d0fb7716b7ab1ee2ff174cb063a73
+      GATEWAY_CRDS_SHA256: 24d931f22abd8e40c973264319ead7cfa09d0fb7716b7ab1ee2ff174cb063a73
       # renovate: datasource=github-releases depName=istio/istio
       ISTIO_VERSION: 1.30.5
-      NIGHTLY_OUT: ${{ runner.temp }}/nightly-out
       NIGHTLY_SIMULATE_FAILURE: ${{ inputs.simulate_failure && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -78,12 +77,16 @@ jobs:
       # Installs Gateway API and Istio ambient, then per values file: the smoke deployment and the
       # ingress e2e test (deploy/chart/tests/e2e).
       - name: Deploy the chart with each values file and run the tests
+        # The runner context is not available in job-level env, only in steps.
+        env:
+          NIGHTLY_OUT: ${{ runner.temp }}/nightly-out
         run: bun scripts/nightly/run.ts
       - name: Upload the report and the run log
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nightly-report
+          # The directory the previous step's NIGHTLY_OUT names, spelled out because step env does not carry over.
           path: ${{ runner.temp }}/nightly-out
           if-no-files-found: warn
           retention-days: 14

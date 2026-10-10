@@ -186,7 +186,8 @@ jobs:
       - id: toolchain
         uses: ./.github/actions/setup-proto
         with:
-          tools: bun
+          # helm: scripts/nightly/manifests.test.ts renders the chart to check what the nightly deploys.
+          tools: bun helm
       - name: Check workflow permissions and action pinning
         run: bun scripts/ci/check-workflows.ts
       - name: Install script dependencies

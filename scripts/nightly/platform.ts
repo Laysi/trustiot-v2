@@ -22,7 +22,7 @@ export interface Platform {
   log: RunLog;
   /** Gateway API release, for example `v1.6.1`, and the SHA-256 of its standard-install.yaml. */
   gatewayApiVersion: string;
-  gatewayApiSha256: string;
+  gatewayCrdsSha256: string;
   /** Istio release, for example `1.30.5`, used for all four charts. */
   istioVersion: string;
 }
@@ -81,7 +81,7 @@ async function installGatewayApi(platform: Platform): Promise<void> {
     if (!response.ok) throw new Error(`GET ${url} returned ${response.status}`);
     return new Uint8Array(await response.arrayBuffer());
   });
-  verifySha256(body, platform.gatewayApiSha256, `Gateway API ${platform.gatewayApiVersion} standard-install.yaml`);
+  verifySha256(body, platform.gatewayCrdsSha256, `Gateway API ${platform.gatewayApiVersion} standard-install.yaml`);
   const file = join(platform.outDir, "gateway-api-standard-install.yaml");
   writeFileSync(file, body);
   const kube = { env: { KUBECONFIG: platform.kubeconfig } };

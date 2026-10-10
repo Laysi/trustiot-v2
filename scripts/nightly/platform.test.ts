@@ -57,7 +57,7 @@ describe("readPins", () => {
   const good = {
     K3S_IMAGE: `rancher/k3s:v1.36.5-k3s1@${DIGEST}`,
     GATEWAY_API_VERSION: "v1.6.1",
-    GATEWAY_API_SHA256: "a".repeat(64),
+    GATEWAY_CRDS_SHA256: "a".repeat(64),
     ISTIO_VERSION: "1.30.5",
   };
 
@@ -68,7 +68,7 @@ describe("readPins", () => {
   test("rejects a missing or loose pin", () => {
     expect(() => readPins({ ...good, K3S_IMAGE: "rancher/k3s:latest" })).toThrow("digest");
     expect(() => readPins({ ...good, GATEWAY_API_VERSION: "main" })).toThrow("GATEWAY_API_VERSION");
-    expect(() => readPins({ ...good, GATEWAY_API_SHA256: "abc" })).toThrow("GATEWAY_API_SHA256");
+    expect(() => readPins({ ...good, GATEWAY_CRDS_SHA256: "abc" })).toThrow("GATEWAY_CRDS_SHA256");
     expect(() => readPins({ ...good, ISTIO_VERSION: "1.30" })).toThrow("ISTIO_VERSION");
     expect(() => readPins({ ...good, ISTIO_VERSION: undefined })).toThrow("ISTIO_VERSION");
   });

@@ -7,7 +7,7 @@
 // Environment:
 //   K3S_IMAGE                    required; the k3s image of the cluster, pinned by digest
 //   GATEWAY_API_VERSION          required; Gateway API release whose standard-install.yaml is applied
-//   GATEWAY_API_SHA256           required; SHA-256 of that file
+//   GATEWAY_CRDS_SHA256           required; SHA-256 of that file
 //   ISTIO_VERSION                required; Istio release of the four Helm charts (deploy/istio/README.md)
 //   NIGHTLY_OUT                  output directory (default: ./nightly-out)
 //   NIGHTLY_SIMULATE_FAILURE     `true` fails every shape on purpose after its install
@@ -42,7 +42,7 @@ export function requireDigestPinned(image: string | undefined): string {
 export interface VersionPins {
   image: string;
   gatewayApiVersion: string;
-  gatewayApiSha256: string;
+  gatewayCrdsSha256: string;
   istioVersion: string;
 }
 
@@ -50,12 +50,12 @@ export interface VersionPins {
 export function readPins(env: Record<string, string | undefined>): VersionPins {
   const image = requireDigestPinned(env.K3S_IMAGE);
   const gatewayApiVersion = env.GATEWAY_API_VERSION ?? "";
-  const gatewayApiSha256 = env.GATEWAY_API_SHA256 ?? "";
+  const gatewayCrdsSha256 = env.GATEWAY_CRDS_SHA256 ?? "";
   const istioVersion = env.ISTIO_VERSION ?? "";
   if (!/^v\d+\.\d+\.\d+$/.test(gatewayApiVersion)) throw new Error(`GATEWAY_API_VERSION must look like v1.6.1; got ${JSON.stringify(gatewayApiVersion)}`);
-  if (!/^[0-9a-f]{64}$/.test(gatewayApiSha256)) throw new Error("GATEWAY_API_SHA256 must be 64 lowercase hex digits");
+  if (!/^[0-9a-f]{64}$/.test(gatewayCrdsSha256)) throw new Error("GATEWAY_CRDS_SHA256 must be 64 lowercase hex digits");
   if (!/^\d+\.\d+\.\d+$/.test(istioVersion)) throw new Error(`ISTIO_VERSION must look like 1.30.5; got ${JSON.stringify(istioVersion)}`);
-  return { image, gatewayApiVersion, gatewayApiSha256, istioVersion };
+  return { image, gatewayApiVersion, gatewayCrdsSha256, istioVersion };
 }
 
 async function main(): Promise<number> {
@@ -120,7 +120,7 @@ async function main(): Promise<number> {
     await installPlatform(
       {
         repoRoot: REPO_ROOT, outDir, kubeconfig, helm, kubectl, k3d, cluster: CLUSTER, log,
-        gatewayApiVersion: pins.gatewayApiVersion, gatewayApiSha256: pins.gatewayApiSha256, istioVersion: pins.istioVersion,
+        gatewayApiVersion: pins.gatewayApiVersion, gatewayCrdsSha256: pins.gatewayCrdsSha256, istioVersion: pins.istioVersion,
       },
       shapes.map((shape) => shape.name),
     );
