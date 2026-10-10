@@ -38,16 +38,16 @@ describe("exec and run", () => {
 
   test("a quiet run keeps standard output out of the log and out of the error", async () => {
     const log = new RunLog(logPath);
-    // The token is in the environment, not on the command line, which a log always shows.
-    const env = { TOKEN: "secret-token" };
-    await run(log, ["sh", "-c", 'echo "$TOKEN"'], { quiet: true, env });
-    const failure = run(log, ["sh", "-c", 'echo "$TOKEN"; echo failed >&2; exit 1'], { quiet: true, env });
+    // The marker is in the environment, not on the command line, which a log always shows.
+    const env = { MARKER: "leak-canary" };
+    await run(log, ["sh", "-c", 'echo "$MARKER"'], { quiet: true, env });
+    const failure = run(log, ["sh", "-c", 'echo "$MARKER"; echo failed >&2; exit 1'], { quiet: true, env });
     await expect(failure).rejects.toBeInstanceOf(CommandError);
     await expect(failure).rejects.toThrow("failed");
     const text = readFileSync(logPath, "utf8");
-    expect(text).not.toContain("secret-token");
+    expect(text).not.toContain("leak-canary");
     expect(text).toContain("failed");
-    await failure.catch((error: Error) => expect(error.message).not.toContain("secret-token"));
+    await failure.catch((error: Error) => expect(error.message).not.toContain("leak-canary"));
   });
 
   test("retry returns the first success and rethrows the last failure", async () => {
