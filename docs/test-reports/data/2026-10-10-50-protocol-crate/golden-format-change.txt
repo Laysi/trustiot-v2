@@ -1,0 +1,159 @@
+# Deliberate format change (not committed): in crates/protocol/src/telemetry.rs the field
+# TelemetryBatch.clock_synced got #[serde(rename = "clock_ok")]; then
+#   CARGO_BUILD_JOBS=2 cargo test -p protocol --test golden
+# The change was reverted afterwards. Compile lines are omitted.
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.82s
+     Running tests/golden.rs (target/debug/deps/golden-264ebc21f4f3e19c)
+
+running 6 tests
+test every_channel_has_a_golden_case ... ok
+test the_current_golden_files_are_exactly_the_cases ... ok
+test the_subset_check_catches_lost_and_changed_fields ... ok
+test every_case_round_trips ... ok
+test encodings_match_the_current_golden_files ... FAILED
+test frozen_v1_payloads_still_decode ... FAILED
+
+failures:
+
+---- encodings_match_the_current_golden_files stdout ----
+
+thread 'encodings_match_the_current_golden_files' (3843113) panicked at crates/protocol/tests/golden.rs:73:5:
+telemetry: encoding changed
+--- golden
+a56176016673747265616d782430313939643061302d303030302d373030302d
+383030302d30303030303030306130303163736571182a6c636c6f636b5f7379
+6e636564f56673657269657386a366646576696365782430313939643061302d
+303030302d373030302d383030302d30303030303030303030303165706f696e
+74696672657175656e63796773616d706c657382821b000001a1231c0000fb40
+4dfd70a3d70a3d821b000001a1231c03e8fa42700000a3666465766963657824
+30313939643061302d303030302d373030302d383030302d3030303030303030
+3030303165706f696e746772756e6e696e676773616d706c657381821b000001
+a1231c0000f5a366646576696365782430313939643061302d303030302d3730
+30302d383030302d30303030303030303030303265706f696e7469656e657267
+795f77686773616d706c657381821b000001a1231c00001b0000011f71fb04cb
+a366646576696365782430313939643061302d303030302d373030302d383030
+302d30303030303030303030303265706f696e746c706f7765725f666163746f
+726773616d706c657381821b000001a1231c0005fabf000000a3666465766963
+65782430313939643061302d303030302d373030302d383030302d3030303030
+3030303030303265706f696e746673657269616c6773616d706c657381821b00
+0001a1231c000569504d324b2d30303031a36664657669636578243031393964
+3061302d303030302d373030302d383030302d30303030303030303030303265
+706f696e746b74656d70657261747572656773616d706c657381821b000001a1
+231c00052b
++++ encoded
+a56176016673747265616d782430313939643061302d303030302d373030302d
+383030302d30303030303030306130303163736571182a68636c6f636b5f6f6b
+f56673657269657386a366646576696365782430313939643061302d30303030
+2d373030302d383030302d30303030303030303030303165706f696e74696672
+657175656e63796773616d706c657382821b000001a1231c0000fb404dfd70a3
+d70a3d821b000001a1231c03e8fa42700000a366646576696365782430313939
+643061302d303030302d373030302d383030302d303030303030303030303031
+65706f696e746772756e6e696e676773616d706c657381821b000001a1231c00
+00f5a366646576696365782430313939643061302d303030302d373030302d38
+3030302d30303030303030303030303265706f696e7469656e657267795f7768
+6773616d706c657381821b000001a1231c00001b0000011f71fb04cba3666465
+76696365782430313939643061302d303030302d373030302d383030302d3030
+3030303030303030303265706f696e746c706f7765725f666163746f72677361
+6d706c657381821b000001a1231c0005fabf000000a366646576696365782430
+313939643061302d303030302d373030302d383030302d303030303030303030
+30303265706f696e746673657269616c6773616d706c657381821b000001a123
+1c000569504d324b2d30303031a366646576696365782430313939643061302d
+303030302d373030302d383030302d30303030303030303030303265706f696e
+746b74656d70657261747572656773616d706c657381821b000001a1231c0005
+2b
+
+
+telemetry: JSON rendering changed
+{
+  "clock_ok": true,
+  "seq": 42,
+  "series": [
+    {
+      "device": "0199d0a0-0000-7000-8000-000000000001",
+      "point": "frequency",
+      "samples": [
+        [
+          1791590400000,
+          59.98
+        ],
+        [
+          1791590401000,
+          60.0
+        ]
+      ]
+    },
+    {
+      "device": "0199d0a0-0000-7000-8000-000000000001",
+      "point": "running",
+      "samples": [
+        [
+          1791590400000,
+          true
+        ]
+      ]
+    },
+    {
+      "device": "0199d0a0-0000-7000-8000-000000000002",
+      "point": "energy_wh",
+      "samples": [
+        [
+          1791590400000,
+          1234567890123
+        ]
+      ]
+    },
+    {
+      "device": "0199d0a0-0000-7000-8000-000000000002",
+      "point": "power_factor",
+      "samples": [
+        [
+          1791590400005,
+          -0.5
+        ]
+      ]
+    },
+    {
+      "device": "0199d0a0-0000-7000-8000-000000000002",
+      "point": "serial",
+      "samples": [
+        [
+          1791590400005,
+          "PM2K-0001"
+        ]
+      ]
+    },
+    {
+      "device": "0199d0a0-0000-7000-8000-000000000002",
+      "point": "temperature",
+      "samples": [
+        [
+          1791590400005,
+          -12
+        ]
+      ]
+    }
+  ],
+  "stream": "0199d0a0-0000-7000-8000-00000000a001",
+  "v": 1
+}
+
+
+telemetry: golden does not decode to the sample: malformed payload: missing field `clock_ok`
+
+If the change is intended, regenerate with UPDATE_GOLDEN=1 and review the diff.
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- frozen_v1_payloads_still_decode stdout ----
+
+thread 'frozen_v1_payloads_still_decode' (3843116) panicked at crates/protocol/tests/golden.rs:180:37:
+frozen payload telemetry no longer decodes: malformed payload: missing field `clock_ok`
+
+
+failures:
+    encodings_match_the_current_golden_files
+    frozen_v1_payloads_still_decode
+
+test result: FAILED. 4 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p protocol --test golden`

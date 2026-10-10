@@ -9,6 +9,8 @@
 # tool with a schema plugin needs the `# renovate:` comment above its pin (datasource and the
 # upstream repository, plus `extractVersion` when release tags carry a `v` prefix).
 
+# renovate: datasource=github-releases depName=rhysd/actionlint extractVersion=^v(?<version>.+)$
+actionlint = "1.7.12"
 bun = "1.4.2"
 # renovate: datasource=github-releases depName=EmbarkStudios/cargo-deny
 cargo-deny = "0.20.2"
@@ -27,6 +29,7 @@ rust = "1.99.0"
 # Tools without a built-in proto plugin. Each schema downloads the official release
 # archive or binary and verifies it against the checksum file published with the release.
 [plugins.tools]
+actionlint = "file://./.proto/plugins/actionlint.toml"
 cargo-deny = "file://./.proto/plugins/cargo-deny.toml"
 gitleaks = "file://./.proto/plugins/gitleaks.toml"
 helm = "file://./.proto/plugins/helm.toml"
