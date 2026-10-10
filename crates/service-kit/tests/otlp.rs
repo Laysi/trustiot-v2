@@ -1,6 +1,6 @@
 //! OTLP export from a real `example-service` process to a fake OTLP/HTTP receiver: off unless
-//! configured, and when on, logs and traces arrive with the caller's trace id and without
-//! request data.
+//! configured, and when on, logs and traces arrive with the caller's trace id, metrics arrive,
+//! and none of them carries request data.
 
 mod support;
 
@@ -164,7 +164,7 @@ fn export_is_off_unless_configured() {
 }
 
 #[test]
-fn logs_and_traces_export_with_trace_ids_and_without_request_data() {
+fn logs_traces_and_metrics_export_without_request_data() {
     let collector = FakeCollector::start();
     let mut service = Service::start(&[
         ("TRUSTIOT__TELEMETRY__OTLP_ENDPOINT", &collector.url()),
@@ -204,7 +204,15 @@ fn logs_and_traces_export_with_trace_ids_and_without_request_data() {
         contains(&logs, b"echo request"),
         "the handler's debug event is exported"
     );
-    for payload in [&traces, &logs] {
+    // Metrics: the final reading is exported at shutdown.
+    let metrics = collector.bodies("/v1/metrics");
+    assert!(!metrics.is_empty(), "no metrics exported");
+    let metrics = metrics.concat();
+    assert!(
+        contains(&metrics, b"example_service.echo.requests"),
+        "the service's counter is exported"
+    );
+    for payload in [&traces, &logs, &metrics] {
         assert!(
             contains(payload, b"example-service"),
             "service.name resource"

@@ -1,6 +1,6 @@
 # service-kit
 
-雲端服務的共用骨架，實作[部署文件](../../docs/architecture/deployment.md)「讓 k8s 只是打包工作的服務設計規則」：設定只來自環境變數或設定檔、health 與 readiness、收到 SIGTERM 正常收尾、JSON 日誌與 OTLP 匯出、排程工作以 Postgres advisory lock 互斥。每個服務的 `main` 都透過 `service_kit::run` 啟動。
+雲端服務的共用骨架，實作[部署文件](../../docs/architecture/deployment.md)「讓 k8s 只是打包工作的服務設計規則」：設定只來自環境變數或設定檔、health 與 readiness、收到 SIGTERM 正常收尾、JSON 日誌與 OTLP 匯出（日誌、trace、指標）、排程工作以 Postgres advisory lock 互斥。每個服務的 `main` 都透過 `service_kit::run` 啟動。
 
 | 模組 | 內容 |
 | --- | --- |
@@ -8,7 +8,7 @@
 | `health` | `/healthz`、`/readyz` 與 readiness 檢查 |
 | `shutdown` | SIGTERM、SIGINT 收尾，`Shutdown` 狀態 |
 | `http` | 請求 span 與存取日誌、handler 逾時、panic 轉成 500 |
-| `telemetry` | JSON 日誌、trace id、OTLP 匯出、敏感欄位遮蔽 |
+| `telemetry` | JSON 日誌、trace id、OTLP 匯出（日誌、trace、指標）、敏感欄位遮蔽 |
 | `job_lock` | 排程工作同一時間只在一個副本執行 |
 
 完整的範例服務在 `src/bin/example-service.rs`，kit 的整合測試以它做為真的行程與容器來測試。本機執行：
@@ -104,7 +104,7 @@ kit 的設定與預設值（環境變數以 `TRUSTIOT` 前綴為例）：
 | `shutdown.drain_delay` | `TRUSTIOT__SHUTDOWN__DRAIN_DELAY` | `5s` | 收到 SIGTERM 後照常服務多久，等入口、ztunnel 與 kube-proxy 不再送來新請求 |
 | `shutdown.drain_timeout` | `TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT` | `20s` | 停止接受連線後，進行中的請求與背景工作結束的時間上限；必須大於 0 |
 | `telemetry.log_filter` | `TRUSTIOT__TELEMETRY__LOG_FILTER` | `info` | 預設等級加上以逗號分隔的 `target=level`，例如 `info,sqlx=warn` |
-| `telemetry.otlp_endpoint` | `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` | 未設定（不匯出） | OTLP/HTTP 接收端的 base URL，例如 `http://otel-collector:4318`；只接受 `http://`（mesh 已加密這一段），不得含帳密或 query |
+| `telemetry.otlp_endpoint` | `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` | 未設定（不匯出） | OTLP/HTTP 接收端的 base URL（日誌、trace、指標都送到這裡），例如 `http://otel-collector:4318`；只接受 `http://`（mesh 已加密這一段），不得含帳密或 query |
 
 ## Health 與 readiness
 
@@ -156,7 +156,8 @@ kit 的設定與預設值（環境變數以 `TRUSTIOT` 前綴為例）：
 
 OTLP 匯出：
 
-- 設定 `telemetry.otlp_endpoint` 後，日誌送到 `<url>/v1/logs`、trace 送到 `<url>/v1/traces`（OTLP/HTTP protobuf，批次送出），resource 帶 `service.name` 與 `service.version`。預設關閉；只設 `OTEL_EXPORTER_OTLP_ENDPOINT` 不會開啟匯出，端點以 kit 的設定為準。
+- 設定 `telemetry.otlp_endpoint` 後，日誌送到 `<url>/v1/logs`、trace 送到 `<url>/v1/traces`（OTLP/HTTP protobuf，批次送出），指標送到 `<url>/v1/metrics`（每 `OTEL_METRIC_EXPORT_INTERVAL` 毫秒一次，預設 60 秒），resource 帶 `service.name` 與 `service.version`。預設關閉；只設 `OTEL_EXPORTER_OTLP_ENDPOINT` 不會開啟匯出，端點以 kit 的設定為準。
+- 指標：開啟匯出時 kit 設定全域的 meter provider，服務與共用 crate 以 `opentelemetry::global::meter` 建立儀表（例如 `crates/outbox` 的 lag）。在 `Telemetry::init` 之前建立的儀表不會匯出，所以在 `start` 裡或之後建立；關閉匯出時儀表不做任何事。收尾時送出最後一次讀數。
 - 其他 OpenTelemetry SDK 的標準環境變數仍然有效，例如取樣的 `OTEL_TRACES_SAMPLER` 與批次的 `OTEL_BSP_*`；在 chart 上 `OTEL_*` 只由 chart 設定。
 - SDK 自己的診斷日誌（target 以 `opentelemetry` 開頭）只寫 stdout，不匯出，避免匯出失敗時自我循環。
 
@@ -210,7 +211,7 @@ context.spawn(lock.run_periodically(
 | `cargo test -p service-kit --test lifecycle` | 範例服務的啟動、health、SIGTERM 與 SIGINT 收尾、設定錯誤，用真的行程、訊號與 HTTP | 無 |
 | `cargo test -p service-kit --test errors` | handler 逾時回 504、panic 回 500 並記成 JSON 日誌 | 無 |
 | `cargo test -p service-kit --test logging` | JSON 日誌、trace id；body、標頭、query 與路徑不進日誌 | 無 |
-| `cargo test -p service-kit --test otlp` | OTLP 匯出到假的接收端：預設關閉、帶 trace id、不含 body | 無 |
+| `cargo test -p service-kit --test otlp` | OTLP 匯出到假的接收端：預設關閉、帶 trace id、指標送出、不含 body | 無 |
 | `cargo test -p service-kit --test container` | 範例服務在容器內以 PID 1 執行（唯讀根目錄、任意 UID），`stop` 時收尾並以 0 結束 | podman 或 docker，會拉 `gcr.io/distroless/cc-debian13` |
 | `cargo test -p service-kit --test job_lock` | 兩個副本互斥、session 中斷、guard 釋放、連線回到 pool | `TEST_DATABASE_URL`，或 podman 或 docker（會拉 `postgres:18.6-alpine`） |
 | `cargo test -p service-kit --test dependency_isolation` | 關閉 feature 時不依賴 contract，開啟時依賴 | 無 |

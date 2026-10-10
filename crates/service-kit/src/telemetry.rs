@@ -1,5 +1,5 @@
-//! Structured JSON logs on stdout with trace and span ids, and optional OTLP export of logs and
-//! traces (docs/architecture/observability.md).
+//! Structured JSON logs on stdout with trace and span ids, and optional OTLP export of logs,
+//! traces, and metrics (docs/architecture/observability.md).
 //!
 //! Every log line is one JSON object: `timestamp`, `level`, `service`, `target`, `trace_id` and
 //! `span_id` (inside a span), `message`, and `fields`. Field values whose names look sensitive
@@ -14,6 +14,7 @@ use std::time::Duration;
 use opentelemetry::logs::LoggerProvider as _;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_sdk::logs::{SdkLogger, SdkLoggerProvider};
+use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::{SdkTracer, SdkTracerProvider};
 use serde::Deserialize;
@@ -38,8 +39,9 @@ pub struct TelemetryConfig {
     /// for example `info` or `info,sqlx=warn`. Default `info`.
     pub log_filter: String,
     /// Base URL of an OTLP/HTTP receiver, such as `http://otel-collector:4318`. Unset (the
-    /// default) turns export off; set, logs go to `<url>/v1/logs` and traces to
-    /// `<url>/v1/traces`. Only `http://` is accepted: the service mesh encrypts the hop.
+    /// default) turns export off; set, logs go to `<url>/v1/logs`, traces to `<url>/v1/traces`,
+    /// and metrics to `<url>/v1/metrics`. Only `http://` is accepted: the service mesh
+    /// encrypts the hop.
     pub otlp_endpoint: Option<String>,
 }
 
@@ -109,7 +111,7 @@ pub enum TelemetryError {
     /// An OTLP exporter could not be built.
     #[error("cannot build the OTLP {signal} exporter: {message}")]
     Exporter {
-        /// `trace` or `log`.
+        /// `trace`, `log`, or `metric`.
         signal: &'static str,
         /// The exporter's error.
         message: String,
@@ -117,21 +119,28 @@ pub enum TelemetryError {
 }
 
 /// The installed telemetry. Call [`Telemetry::shutdown`] before the process exits so buffered
-/// logs and spans are exported.
+/// logs, spans, and the last metric readings are exported.
 #[derive(Debug)]
 pub struct Telemetry {
     tracer_provider: SdkTracerProvider,
     logger_provider: Option<SdkLoggerProvider>,
+    meter_provider: Option<SdkMeterProvider>,
 }
 
 impl Telemetry {
     /// Installs the global subscriber: JSON lines on stdout, trace context for every span, and
     /// OTLP export when `config.otlp_endpoint` is set. Also installs the W3C trace-context
-    /// propagator and a panic hook that logs panics as JSON.
+    /// propagator, a panic hook that logs panics as JSON, and, with an endpoint, the global
+    /// meter provider: instruments created afterwards through `opentelemetry::global::meter`
+    /// are exported, those created before stay no-ops.
     pub fn init(info: &ServiceInfo, config: &TelemetryConfig) -> Result<Self, TelemetryError> {
         let targets = config.targets().map_err(TelemetryError::Config)?;
         let endpoint = config.otlp_base().map_err(TelemetryError::Config)?;
-        let (tracer_provider, logger_provider) = otlp::providers(info, endpoint.as_deref())?;
+        let otlp::Providers {
+            tracer: tracer_provider,
+            logger: logger_provider,
+            meter: meter_provider,
+        } = otlp::providers(info, endpoint.as_deref())?;
         let logger = logger_provider
             .as_ref()
             .map(|provider| provider.logger("service-kit"));
@@ -146,10 +155,14 @@ impl Telemetry {
         .map_err(|_| TelemetryError::AlreadyInitialized)?;
         opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
         opentelemetry::global::set_tracer_provider(tracer_provider.clone());
+        if let Some(meter_provider) = &meter_provider {
+            opentelemetry::global::set_meter_provider(meter_provider.clone());
+        }
         install_panic_hook();
         Ok(Self {
             tracer_provider,
             logger_provider,
+            meter_provider,
         })
     }
 
@@ -158,20 +171,27 @@ impl Telemetry {
         let Self {
             tracer_provider,
             logger_provider,
+            meter_provider,
         } = self;
-        // Shutting a provider down blocks until its export thread finishes.
+        // Shutting a provider down blocks until its export thread finishes. They shut down in
+        // parallel, so the whole shutdown still takes at most `timeout`.
         let traces =
             tokio::task::spawn_blocking(move || tracer_provider.shutdown_with_timeout(timeout));
         let logs = tokio::task::spawn_blocking(move || {
             logger_provider.map(|provider| provider.shutdown_with_timeout(timeout))
         });
+        let metrics = tokio::task::spawn_blocking(move || {
+            meter_provider.map(|provider| provider.shutdown_with_timeout(timeout))
+        });
         let margin = Duration::from_millis(500);
-        match tokio::time::timeout(timeout + margin, async { (traces.await, logs.await) }).await {
-            Ok((Ok(Ok(())), Ok(None | Some(Ok(()))))) => {}
-            Ok((traces, logs)) => {
+        let all = async { (traces.await, logs.await, metrics.await) };
+        match tokio::time::timeout(timeout + margin, all).await {
+            Ok((Ok(Ok(())), Ok(None | Some(Ok(()))), Ok(None | Some(Ok(()))))) => {}
+            Ok((traces, logs, metrics)) => {
                 tracing::warn!(
                     traces = ?traces.map(|result| result.err()),
                     logs = ?logs.map(|result| result.and_then(Result::err)),
+                    metrics = ?metrics.map(|result| result.and_then(Result::err)),
                     "telemetry export did not shut down cleanly"
                 );
             }

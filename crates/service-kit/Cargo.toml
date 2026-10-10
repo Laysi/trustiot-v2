@@ -26,9 +26,9 @@ contract = ["dep:contract"]
 axum = { workspace = true, features = ["http1", "json", "matched-path", "query", "tokio"] }
 contract = { path = "../contract", optional = true }
 humantime.workspace = true
-opentelemetry = { workspace = true, features = ["internal-logs", "logs", "trace"] }
-opentelemetry-otlp = { workspace = true, features = ["http-proto", "internal-logs", "logs", "reqwest-blocking-client", "trace"] }
-opentelemetry_sdk = { workspace = true, features = ["internal-logs", "logs", "trace"] }
+opentelemetry = { workspace = true, features = ["internal-logs", "logs", "metrics", "trace"] }
+opentelemetry-otlp = { workspace = true, features = ["http-proto", "internal-logs", "logs", "metrics", "reqwest-blocking-client", "trace"] }
+opentelemetry_sdk = { workspace = true, features = ["internal-logs", "logs", "metrics", "trace"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sqlx = { workspace = true, features = ["postgres", "runtime-tokio"] }
