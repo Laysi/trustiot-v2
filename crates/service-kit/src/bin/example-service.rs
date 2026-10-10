@@ -7,7 +7,8 @@
 //!
 //! Routes besides `/healthz` and `/readyz`:
 //! - `GET /v1/hello` returns the configured greeting.
-//! - `POST /v1/echo` with `{"text": "..."}` returns the text's length in characters.
+//! - `POST /v1/echo` with `{"text": "..."}` returns the text's length in characters and counts
+//!   the call in the `example_service.echo.requests` metric.
 //! - `GET /v1/slow?ms=N` answers after N milliseconds (at most 10 000), to exercise draining and
 //!   the handler timeout.
 //! - `GET /v1/panic` panics, to exercise the kit's panic handling.
@@ -63,6 +64,8 @@ impl Validate for Config {
 
 struct AppState {
     greeting: String,
+    /// Exported over OTLP when the kit's endpoint is set; a no-op otherwise.
+    echo_requests: opentelemetry::metrics::Counter<u64>,
 }
 
 #[tokio::main]
@@ -86,8 +89,14 @@ async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         tracing::debug!("heartbeat task stopped");
     });
 
+    // Created in `start`, after the kit installed the meter provider.
+    let echo_requests = opentelemetry::global::meter("example-service")
+        .u64_counter("example_service.echo.requests")
+        .with_description("POST /v1/echo calls")
+        .build();
     let state = Arc::new(AppState {
         greeting: context.config().greeting.clone(),
+        echo_requests,
     });
     let router = Router::new()
         .route("/v1/hello", get(hello))
@@ -138,7 +147,11 @@ struct EchoRequest {
     text: String,
 }
 
-async fn echo(Json(request): Json<EchoRequest>) -> Json<serde_json::Value> {
+async fn echo(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<EchoRequest>,
+) -> Json<serde_json::Value> {
+    state.echo_requests.add(1, &[]);
     let length = request.text.chars().count();
     // Log the size of the input, never the input.
     tracing::debug!(length, "echo request");
