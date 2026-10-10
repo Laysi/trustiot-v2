@@ -1,0 +1,11 @@
+# log sample: Laysi/trustiot-v2#52, 2026-10-10T12:09:58Z
+#
+# stdout of example-service during tests/identity.rs only_requests_with_a_valid_token_reach_the_handler:
+# one accepted request, then a forged signature and a request without the header. The rejection
+# line carries only the reason; neither the token nor the key appears (the test asserts it).
+
+{"timestamp":"2026-10-10T12:09:58.732788Z","level":"INFO","service":"example-service","target":"service_kit::http","trace_id":"6695748ee3c23c2f8d3845e0eabb349a","span_id":"061612bbea023e01","message":"request completed","fields":{"http.request.method":"GET","http.route":"/v1/whoami","http.response.status_code":200,"duration_ms":26.057}}
+{"timestamp":"2026-10-10T12:09:58.759801Z","level":"WARN","service":"example-service","target":"service_kit::identity","trace_id":"ebcc346631566ca255bca1bf60670005","span_id":"a74b7da39ba40bcb","message":"rejected the request's internal identity","fields":{"reason":"bad_signature"}}
+{"timestamp":"2026-10-10T12:09:58.760308Z","level":"INFO","service":"example-service","target":"service_kit::http","trace_id":"ebcc346631566ca255bca1bf60670005","span_id":"a74b7da39ba40bcb","message":"request completed","fields":{"http.request.method":"GET","http.route":"/v1/whoami","http.response.status_code":401,"duration_ms":21.909}}
+{"timestamp":"2026-10-10T12:09:58.808993Z","level":"WARN","service":"example-service","target":"service_kit::identity","trace_id":"345fbfc9e759cf946ef1f82cc9754224","span_id":"c41b1fb9d89bb0e1","message":"rejected the request's internal identity","fields":{"reason":"missing"}}
+{"timestamp":"2026-10-10T12:09:58.809348Z","level":"INFO","service":"example-service","target":"service_kit::http","trace_id":"345fbfc9e759cf946ef1f82cc9754224","span_id":"c41b1fb9d89bb0e1","message":"request completed","fields":{"http.request.method":"GET","http.route":"/v1/whoami","http.response.status_code":401,"duration_ms":0.422}}

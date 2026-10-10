@@ -1,0 +1,5 @@
+# stability: Laysi/trustiot-v2#52, run 2026-10-10T12:23:37.189Z, CARGO_BUILD_JOBS=2
+
+$ cargo test -p service-kit --test identity --test errors   (repeated 30 times)
+failed runs: 0 of 30
+

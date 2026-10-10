@@ -1,0 +1,23 @@
+# shutdown race: Laysi/trustiot-v2#52, observed 2026-10-10T12:09:58Z, CARGO_BUILD_JOBS=2
+#
+# Before commit 6ef4b31, a graceful SIGTERM stop of example-service sometimes exited with code 1.
+# Observed while running the process-level tests repeatedly on a loaded machine (load average
+# about 7 on 8 cores):
+#
+#   cargo test -p service-kit --test identity --test errors --test lifecycle --test logging
+#
+# 2 of 6 runs failed: errors.rs handler_timeouts_answer_504 and identity.rs
+# only_requests_with_a_valid_token_reach_the_handler, both at `assert!(status.success())` with
+# "exit status: 1". The end of the service's stdout in the identity failure (request lines
+# omitted):
+
+{"timestamp":"2026-10-10T12:09:58.816816Z","level":"INFO","service":"example-service","target":"service_kit::shutdown","message":"shutdown requested; readiness now fails","fields":{"signal":"SIGTERM","drain_delay_ms":300}}
+{"timestamp":"2026-10-10T12:09:59.119663Z","level":"ERROR","service":"example-service","target":"service_kit::service","message":"server stopped unexpectedly","fields":{"outcome":"Ok(Ok(()))"}}
+
+# The server task ended normally (Ok(Ok(()))) 300 ms after SIGTERM, which is exactly the drain
+# delay: Shutdown::stopping ended it. It finished before the main `tokio::select!` was polled,
+# so both branches were ready and tokio picked the "server ended" branch at random.
+#
+# After the fix (`biased;`, stopping first), 30 of 30 repeated runs passed; see stability.txt.
+# A comparison run of 30 with the old code on a quieter machine (2026-10-10T12:24Z) also passed
+# 30 of 30: the race depends on load, so the counts alone do not show it; the log above does.
