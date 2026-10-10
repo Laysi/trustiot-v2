@@ -1,0 +1,6 @@
+Linux 7.1.13-402.asahi.fc44.aarch64+16k aarch64
+k3s version v1.36.5+k3s1 (3dd98cc5)
+registry.istio.io/release/pilot:1.30.5-distroless
+registry.istio.io/release/ztunnel:1.30.5-distroless
+v1.6.1
+No resources found in e2e-63 namespace.

@@ -167,7 +167,11 @@ mesh:
 | AuthorizationPolicy `<release>-<服務>` | 每個啟用的服務一個，ALLOW，以 selector 選這個服務的 pod，只允許呼叫端的 principals（ztunnel 在 L4 執行）。沒有任何呼叫端時是沒有規則的 ALLOW，拒絕所有連線 |
 | NetworkPolicy `<release>-<服務>` | 每個啟用的服務一個：只從同一批呼叫端的 pod（與入口 gateway 的 pod）放行 TCP 15008，也就是 ztunnel 的 HBONE 埠，mesh 內的連線都從這裡進來，不直接連應用程式的埠；另放行 `169.254.7.127/32`，ambient 下 kubelet 的健康檢查由 istio-cni SNAT 成這個位址 |
 
-- 兩層的分工：AuthorizationPolicy 驗證 mTLS 憑證裡的身分，NetworkPolicy 只看來源 pod 的 IP。拿掉 NetworkPolicy 時，清單外的呼叫仍被 ztunnel 重置；拿掉 AuthorizationPolicy 時，清單外的 pod 連不到 15008，非 mesh 的 pod 連不到任何埠。被 ztunnel 拒絕時呼叫端看到的是連線重置，不是 HTTP 403（docs/feasibility/2026-10-10-edge-poc.md）。
+- 兩層的分工：AuthorizationPolicy 驗證 mTLS 憑證裡的身分，ztunnel 對每條代理的連線檢查；NetworkPolicy 只看來源 pod 的 label 與 IP，擋的是新建立的 TCP 連線。拿掉 NetworkPolicy 時，清單外的呼叫仍被 ztunnel 重置；拿掉 AuthorizationPolicy 時，清單外的服務連不到對方的 15008，非 mesh 的 pod 連不到任何埠。被拒時呼叫端看到的是連線重置或拒絕，不是 HTTP 403（docs/feasibility/2026-10-10-edge-poc.md）。2026-10-10 在實驗機實測兩個方向（docs/test-reports/2026-10-10-63-mesh-authz.md）。
+- NetworkPolicy 這一層的限制，主要防線是 AuthorizationPolicy：
+  - mesh 內的連線都經 15008，所以 NetworkPolicy 只有在 15008 依呼叫端的 pod 限定時才是 mesh 內的第二層；只放行「任何來源的 15008」（2026-10-10 PoC 的寫法）對 mesh 內的呼叫端沒有作用，只擋非 mesh 的 pod。
+  - NetworkPolicy 不切斷已建立的連線，而 ztunnel 會保留兩個 pod 之間的 HBONE 連線重複使用。之後才收緊或加上的 NetworkPolicy，對既有連線上的呼叫不起作用，要等連線關閉（實測恢復 NetworkPolicy 後 90 秒內仍持續通過）；AuthorizationPolicy 的變更則立即套用到新的呼叫。
+  - NetworkPolicy 依 label 選來源，能在 namespace 裡建 pod 的人可以複製服務的 label 通過它；mTLS 身分來自 ServiceAccount，只有 AuthorizationPolicy 擋得住（實測的 imposter）。
 - NetworkPolicy 只管連入（`Ingress`），不限制連出：外部依賴（Qdrant Cloud、S3、SMTP、AI 端點、外部資料庫）以主機名稱指定，NetworkPolicy 無法依主機名稱放行。
 - 不部署 waypoint：L4 的身分已足夠。服務之間需要 L7 規則（例如依路徑或方法）時才為該服務加 waypoint，並把它的 AuthorizationPolicy 改成以 `targetRefs` 指向 Service、在 ztunnel 層放行 waypoint 的 ServiceAccount；代表使用者呼叫的授權（內部身分 token）由服務自己驗證，不靠 waypoint（Laysi/trustiot-v2#106）。
 - 叢集測試 `tests/e2e/mesh.e2e.ts` 以真實連線驗證清單內放行、清單外被拒，以及兩層各自生效，用法見該目錄的 README。

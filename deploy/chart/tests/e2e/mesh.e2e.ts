@@ -1,16 +1,25 @@
 // Service-to-service authorization e2e test (Laysi/trustiot-v2#63): installs the chart into an
 // existing namespace of any cluster with Istio ambient and checks decision 27's two layers on
 // real traffic. Calls are made from inside the services' own pods, so ztunnel sees each
-// service's ServiceAccount, plus two test pods: one in the mesh with a ServiceAccount that is
-// not a service's, and one outside the mesh.
+// service's ServiceAccount, plus three test pods: one in the mesh with a ServiceAccount that is
+// not a service's (stranger), one outside the mesh (outsider), and one that carries the assets
+// service's labels but not its ServiceAccount (imposter), which only the AuthorizationPolicy
+// can tell apart.
 //
 //   1. both layers: the listed call and the ingress gateway's calls pass, every other call fails,
 //      and every pod's health checks pass under default deny;
-//   2. NetworkPolicies removed: the AuthorizationPolicies alone still refuse every unlisted call;
-//   3. both removed: the same calls now pass, which proves the calls themselves work;
-//   4. NetworkPolicies back, AuthorizationPolicies still removed: the NetworkPolicies alone refuse
-//      every unlisted call;
+//   2. AuthorizationPolicies removed: the NetworkPolicies alone refuse every unlisted call (the
+//      imposter now gets through, which shows the AuthorizationPolicies are gone);
+//   3. both removed: the unlisted calls pass, which proves the calls themselves work;
+//   4. AuthorizationPolicies back, NetworkPolicies still removed: the AuthorizationPolicies alone
+//      refuse every unlisted call;
 //   5. both back: the installed state again.
+//
+// The NetworkPolicy-only phase comes before any unlisted call has ever succeeded: a
+// NetworkPolicy does not cut connections that are already open, and ztunnel keeps HBONE
+// connections open for reuse, so restoring NetworkPolicies after phase 3 would not refuse calls
+// over those connections. ztunnel checks the AuthorizationPolicy on every proxied connection, so
+// phase 4 does not depend on the order.
 //
 // README.md in this directory lists the prerequisites; run from the repository root:
 //
@@ -41,8 +50,9 @@ import {
   waitFor,
 } from "./cluster";
 
-// How long a call may take before it counts as refused. A NetworkPolicy drops packets, so a
-// refused call ends in a timeout; ztunnel resets refused connections right away.
+// How long a call may take before it counts as refused. Depending on the NetworkPolicy
+// controller, a refused connection is rejected right away or dropped (a timeout); ztunnel resets
+// refused connections right away.
 const CALL_TIMEOUT_MS = Number(process.env.E2E_CALL_TIMEOUT_MS ?? "5000");
 // How long a policy change may take to reach ztunnel and the NetworkPolicy controller.
 const SETTLE_MS = Number(process.env.E2E_SETTLE_MS ?? "90000");
@@ -67,8 +77,10 @@ const serviceCaller = (service: Service): Caller => ({
 const testPodCaller = (name: string, pod: string): Caller => ({ name, target: [`pod/${pod}`, "--container", "client"] });
 const OUTSIDER_POD = `mesh-e2e-outsider-${SUFFIX}`;
 const STRANGER_POD = `mesh-e2e-stranger-${SUFFIX}`;
+const IMPOSTER_POD = `mesh-e2e-imposter-${SUFFIX}`;
 const outsider = testPodCaller("outsider (not in the mesh)", OUTSIDER_POD);
 const stranger = testPodCaller("stranger (in the mesh, ServiceAccount default)", STRANGER_POD);
+const imposter = testPodCaller("imposter (assets labels, ServiceAccount default)", IMPOSTER_POD);
 
 function callScript(url: string, host?: string): string {
   return `const started = performance.now();
@@ -99,6 +111,8 @@ function call(caller: Caller, url: string, host?: string): CallResult {
 
 const passed = (result: CallResult) => result.outcome === "response" && result.status === 200;
 
+// The chart's own pods; the imposter test pod shares their selector labels but not this one.
+const CHART_PODS = `app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/part-of=trustiot`;
 const serviceUrl = (service: Service) => `http://${OBJECT_PREFIX}-${service}:8080/healthz`;
 function podIp(selector: string): string {
   const ip = kubectl("get", "pods", "-l", selector, "-o", "jsonpath={.items[0].status.podIP}").trim();
@@ -106,7 +120,7 @@ function podIp(selector: string): string {
   return ip;
 }
 const servicePodUrl = (service: Service) =>
-  `http://${podIp(`app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=${service}`)}:8080/healthz`;
+  `http://${podIp(`${CHART_PODS},app.kubernetes.io/component=${service}`)}:8080/healthz`;
 
 type Case = { name: string; caller: Caller; url: () => string; host?: string };
 // The one listed call (mesh.calls in values-mesh-e2e.yaml).
@@ -120,6 +134,9 @@ const UNLISTED: Case[] = [
   { name: "outsider -> certs Service (no mesh identity)", caller: outsider, url: () => serviceUrl("certs") },
   { name: "outsider -> certs pod IP, application port", caller: outsider, url: () => servicePodUrl("certs") },
 ];
+// A pod with the listed caller's labels but another ServiceAccount: the NetworkPolicy admits it
+// (it selects pods by label), the AuthorizationPolicy does not (it checks the mTLS identity).
+const IMPOSTER: Case = { name: "imposter -> certs (assets labels, not its ServiceAccount)", caller: imposter, url: () => serviceUrl("certs") };
 // The port the gateway pod listens on for the Service's port 80 (the probe below bypasses the
 // Service, so it needs the targetPort).
 function gatewayListenerPort(): number {
@@ -217,7 +234,7 @@ function podStatuses(selector: string): PodStatus[] {
 }
 function expectHealthyPods(phase: string) {
   const pods = [
-    ...podStatuses(`app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component in (${SERVICES.join(",")})`),
+    ...podStatuses(`${CHART_PODS},app.kubernetes.io/component in (${SERVICES.join(",")})`),
     ...podStatuses(`gateway.networking.k8s.io/gateway-name=${GATEWAY}`),
   ];
   results.push({ phase, pods });
@@ -261,12 +278,22 @@ function restore(objects: Manifest[]) {
 let releaseCreated = false;
 const testPods: string[] = [];
 
-function testPod(name: string, dataplaneMode: "ambient" | "none") {
+// A client pod running the identity double's image as a plain server. The imposter also carries
+// the assets service's selector labels, and a readiness probe that never passes, so it never
+// becomes an endpoint of the assets Service (the ReplicaSet does not adopt it either: its
+// selector also needs pod-template-hash).
+function testPod(name: string, dataplaneMode: "ambient" | "none", impersonate?: Service) {
   testPods.push(name);
+  const impersonated = impersonate
+    ? { "app.kubernetes.io/name": "trustiot", "app.kubernetes.io/instance": RELEASE, "app.kubernetes.io/component": impersonate }
+    : {};
   const pod = {
     apiVersion: "v1",
     kind: "Pod",
-    metadata: { name, labels: { "app.kubernetes.io/part-of": TEST_POD_LABEL, "istio.io/dataplane-mode": dataplaneMode } },
+    metadata: {
+      name,
+      labels: { ...impersonated, "app.kubernetes.io/part-of": TEST_POD_LABEL, "istio.io/dataplane-mode": dataplaneMode },
+    },
     spec: {
       automountServiceAccountToken: false,
       enableServiceLinks: false,
@@ -279,6 +306,7 @@ function testPod(name: string, dataplaneMode: "ambient" | "none") {
           imagePullPolicy: PULL_POLICY,
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } },
           resources: { requests: { cpu: "10m", memory: "32Mi" }, limits: { memory: "128Mi" } },
+          ...(impersonate ? { readinessProbe: { httpGet: { path: "/never-ready", port: 1 }, periodSeconds: 30 } } : {}),
         },
       ],
     },
@@ -302,7 +330,10 @@ beforeAll(async () => {
   kubectl("rollout", "status", `deployment/${GATEWAY}-istio`, "--timeout=180s");
   testPod(OUTSIDER_POD, "none");
   testPod(STRANGER_POD, "ambient");
+  testPod(IMPOSTER_POD, "ambient", "assets");
   kubectl("wait", `pod/${OUTSIDER_POD}`, `pod/${STRANGER_POD}`, "--for=condition=Ready", "--timeout=180s");
+  kubectl("wait", `pod/${IMPOSTER_POD}`, "--for=condition=ContainersReady=false", "--timeout=180s");
+  kubectl("wait", `pod/${IMPOSTER_POD}`, "--for=jsonpath={.status.containerStatuses[0].started}=true", "--timeout=180s");
   await openTunnel();
 }, 600_000);
 
@@ -350,42 +381,47 @@ describe("service-to-service authorization (decision 27)", () => {
     expect(passed(check(phase, NETWORK_POLICY_PROBE))).toBe(false);
     await expectGatewayReachesBackends(phase);
     expectUnlisted(phase, false);
+    expect(passed(check(phase, IMPOSTER))).toBe(false);
   }, 600_000);
 
-  test("2. NetworkPolicies removed: the AuthorizationPolicies alone refuse every unlisted call", async () => {
-    const phase = "AuthorizationPolicy only";
-    remove(networkPolicies());
-    await settle(phase, NETWORK_POLICY_PROBE, true);
+  test("2. AuthorizationPolicies removed: the NetworkPolicies alone refuse every unlisted call", async () => {
+    const phase = "NetworkPolicy only";
+    remove(servicePolicies());
+    // The NetworkPolicy admits the imposter by its labels, so once it gets through, the
+    // AuthorizationPolicies are no longer enforced.
+    await settle(phase, IMPOSTER, true);
+    expectUnlisted(phase, false);
+    expect(passed(check(phase, NETWORK_POLICY_PROBE))).toBe(false);
     expect(passed(check(phase, LISTED))).toBe(true);
     await expectGatewayReachesBackends(phase);
-    expectUnlisted(phase, false);
   }, 600_000);
 
   test("3. both removed: the unlisted calls pass, so the layers are what refused them", async () => {
     const phase = "neither layer";
-    remove(servicePolicies());
+    remove(networkPolicies());
+    await settle(phase, NETWORK_POLICY_PROBE, true);
     for (const testCase of UNLISTED) await settle(phase, testCase, true);
     expectUnlisted(phase, true);
     expect(passed(check(phase, LISTED))).toBe(true);
   }, 600_000);
 
-  test("4. NetworkPolicies back, AuthorizationPolicies still removed: the NetworkPolicies alone refuse every unlisted call", async () => {
-    const phase = "NetworkPolicy only";
-    restore(networkPolicies());
-    await settle(phase, NETWORK_POLICY_PROBE, false);
-    for (const testCase of UNLISTED) await settle(phase, testCase, false);
+  test("4. AuthorizationPolicies back, NetworkPolicies still removed: the AuthorizationPolicies alone refuse every unlisted call", async () => {
+    const phase = "AuthorizationPolicy only";
+    restore(servicePolicies());
+    for (const testCase of [...UNLISTED, IMPOSTER]) await settle(phase, testCase, false);
     expectUnlisted(phase, false);
+    expect(passed(check(phase, IMPOSTER))).toBe(false);
+    expect(passed(check(phase, NETWORK_POLICY_PROBE))).toBe(true);
     expect(passed(check(phase, LISTED))).toBe(true);
     await expectGatewayReachesBackends(phase);
   }, 600_000);
 
   test("5. both layers back: the installed state, and every pod is still healthy", async () => {
     const phase = "both layers again";
-    restore(servicePolicies());
-    // Nothing observable changes while the NetworkPolicies already refuse the unlisted calls, so
-    // give ztunnel the settle time it needs before the final checks.
-    await Bun.sleep(5_000);
+    restore(networkPolicies());
+    await settle(phase, NETWORK_POLICY_PROBE, false);
     expectUnlisted(phase, false);
+    expect(passed(check(phase, IMPOSTER))).toBe(false);
     expect(passed(check(phase, LISTED))).toBe(true);
     await expectGatewayReachesBackends(phase);
     expectHealthyPods(phase);
