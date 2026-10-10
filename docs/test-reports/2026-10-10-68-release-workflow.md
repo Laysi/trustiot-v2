@@ -10,6 +10,7 @@
 - **GitHub**：簽章過的 annotated tag `v0.0.0-rc.1` 指向 `ee8c438`，2026-10-10T12:39:36Z 推送，觸發 release.yml 的執行 [38052766358](https://github.com/Laysi/trustiot-v2/actions/runs/38052766358)，各 job 在 GitHub 代管的 `ubuntu-24.04`（x86_64）runner 上執行。repo 為私有，組織在 GitHub Free 方案。repo 沒有設定 `AI_MODEL` 變數，所以發版說明是 `Laysi/release-notes-action` 的 commit 主旨清單。
 - **結果的讀取方式**：本 repo 的 GitHub 讀寫走 GitHub MCP server，它的 token 讀不到 check run 與 Actions 日誌，所以 CI 的結果以 report job 設的 commit status `release`（MCP `pull_request_read` 的 `get_status`）與 GitHub Release 的內文（MCP `get_release_by_tag`）為準。
 - **Sigstore 公開紀錄**：以 Rekor 的公開 API（`rekor.sigstore.dev`，v1）不帶任何憑證查詢。
+- **lab 的 Mac mini M1**（`trustiot-mac-m1`）：Fedora Linux Asahi Remix 44、aarch64、podman 5.8.7，依 e2e 鎖的規則使用。
 
 ## 指令
 
@@ -113,7 +114,7 @@ curl -s https://rekor.sigstore.dev/api/v1/log/entries/<uuid>
 - `service-kit` 的 `example-service`（axum、tokio、sqlx、opentelemetry-otlp 等 186 個 crate）以同一套工具鏈交叉編譯成功，360 秒，產出 3,292,856 bytes 的 aarch64 靜態執行檔。這是 rebase 前跑的；之後的服務映像會走同一條路。
 - 發現的問題：workspace 的 release profile 設 `strip = "debuginfo"`，用意是保留符號名稱給 panic 與 Sentry 的 stack trace，但經 zig 連結後 `.symtab` 整個不見了（`strip = "none"` 時 4,005,440 bytes、有 `.symtab`；`debuginfo` 時 376,848 bytes、沒有）。本 PR 不改，列為後續事項。
 
-workflow 的 shell 片段：report job 在成功時設 `release` 為 success（「v0.0.0-rc.1 published and verified」），並把 GitHub Release 裡舊的「驗證結果」換成新的；plan 失敗時描述是「plan failed: 原因」並截到 140 字元；沒有錯誤訊息的失敗寫「build failed」，取消寫「publish cancelled」；失敗時不改 GitHub Release。`setup-proto` 的工具鏈檢查在版本相符時通過，不符時報錯。
+workflow 的 shell 片段：report job 在成功時設 `release` 為 success（「v0.0.0-rc.1 published and verified」），並把 GitHub Release 裡舊的「驗證結果」換成新的；plan 失敗時描述是「plan failed: 原因」並截到 140 字元；沒有錯誤訊息的失敗寫「build failed」，取消寫「publish cancelled」；失敗時不改 GitHub Release。`setup-proto` 的工具鏈檢查以 `<channel>-<host triple>` 精確比對 rustup 選到的工具鏈名稱：相符時通過（後面附的原因說明不影響）；版本不同、host 不同或只有前綴相同時報錯。
 
 ### GitHub：v0.0.0-rc.1
 
@@ -142,9 +143,16 @@ SBOM 的下載：verify job 以唯讀權限從 GHCR 取出 SBOM attestation 並�
 - 憑證公開了：repo `https://github.com/Laysi/trustiot-v2`（數字 ID `1411578173`）、組織 `https://github.com/Laysi`（`64061142`）、workflow 路徑與 tag、commit `ee8c4388…`、觸發事件 `push`、`github-hosted` runner、Actions 執行的網址，以及「簽章時 repo 是 private」。
 - 憑證效期 10 分鐘（例如 12:42:02 到 12:52:02），簽章後就失效，沒有需要保管的金鑰。
 
-### lab 的 Mac mini M1
+### lab 的 Mac mini M1（arm64 實機）
 
-待測。原本要把本機建出的 OCI 壓縮檔（`sha256:182467660b…`）拿到 lab 的 arm64 主機上以 podman 執行，確認在真的 arm64 上會跑並印出 `"arch":"aarch64"`、`"c_object":"ok"`。2026-10-10T12:50Z 起 lab 的 e2e 鎖由 Laysi/trustiot-v2#62 持有，等候期間沒有釋出。GHCR 上的映像是私有的，lab 主機也沒有讀取憑證，所以即使取得鎖，執行的也是本機建出的同一條流程的產物，不是 CI 推送的那一個。這一項不在驗收條件內：映像的平台由 verify job 檢查（linux/arm64），交叉編譯的 C 物件與 Rust 的一致性由 `release-selftest` 自己在執行時檢查。
+本機建出的 OCI 壓縮檔（manifest `sha256:182467660b…`）在 lab 的 arm64 主機上以 podman 執行（[lab-arm64-run.txt](data/2026-10-10-68-release-workflow/lab-arm64-run.txt)）：
+
+- 2026-10-10T13:20:54Z 取得 lab 的 e2e 鎖（之前由 Laysi/trustiot-v2#62 持有，每 3 分鐘重試），13:21:04Z 釋出。
+- 主機：Fedora Linux Asahi Remix 44（kernel 7.1.13，aarch64），podman 5.8.7。映像載入在 `~/e2e-68` 下的暫用 podman storage，跑完連同目錄刪除。
+- 載入後的 manifest digest 與本機建置相同，平台 linux/arm64，以 UID 65532 執行。
+- 以 `podman run --rm --network none --read-only --cap-drop all --security-opt no-new-privileges` 執行，exit 0，輸出 `{"arch":"aarch64","c_object":"ok","c_pointer_bits":64,...,"version":"0.0.0-rc.1"}`：執行檔在真的 arm64 上會跑，zig 編譯的 C 物件與 Rust 對指標寬度的看法一致，版本是 release 流程蓋上的。
+
+限制：GHCR 上的映像是私有的，lab 主機沒有讀取憑證，所以跑的是本機以同一條流程建出的映像，不是 CI 推送的那一個（兩者 digest 不同的原因見上）。這一項不在驗收條件內，是額外的實機確認。
 
 ## 結論
 
@@ -161,4 +169,3 @@ SBOM 的下載：verify job 以唯讀權限從 GHCR 取出 SBOM attestation 並�
 - release profile 的 `strip = "debuginfo"` 經 zig 連結後沒有符號表（見上）。
 - Laysi/trustiot-v2#67 分支的 `deny.toml` 只列 `aarch64-unknown-linux-gnu` 與 `x86_64-unknown-linux-gnu`，映像實際的 target 是 `aarch64-unknown-linux-musl`，只在 musl 才用到的相依不會被 cargo-deny 檢查；該 PR 或後續 issue 要加上這個 target。
 - `.github/actions/setup-proto/action.yml` 在本 PR 與 Laysi/trustiot-v2#67 都有，本 PR 的版本只多了 Rust 工具鏈的版本檢查；後合併的一方解衝突時保留這段檢查。
-- lab 的 arm64 實機執行（見上）。
