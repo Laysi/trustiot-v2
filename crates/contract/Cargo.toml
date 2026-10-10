@@ -1,0 +1,31 @@
+[package]
+name = "contract"
+description = "Contracts between TrustIoT v2 cloud services: M1 errors, IDs, events, internal identity, typed internal API client."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["now", "serde"] }
+http.workspace = true
+# Only to recognise "connection closed before the response" in reqwest's error chain.
+hyper = { workspace = true, features = ["client", "http1"] }
+percent-encoding.workspace = true
+# Plain HTTP only: in-mesh calls get mTLS from Istio ambient's ztunnel, so no TLS stack here.
+reqwest.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+utoipa = { workspace = true, features = ["chrono", "uuid"] }
+uuid = { workspace = true, features = ["serde", "v7"] }
+
+[dev-dependencies]
+# Resets a test connection with SO_LINGER 0; tokio's own `set_linger` is deprecated.
+socket2.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "time"] }
+
+[lints]
+workspace = true

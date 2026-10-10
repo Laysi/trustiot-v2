@@ -1,0 +1,152 @@
+{
+  "strategy": {
+    "rollingUpdate": {
+      "maxSurge": 1,
+      "maxUnavailable": 0
+    },
+    "type": "RollingUpdate"
+  },
+  "template": {
+    "metadata": {
+      "annotations": {
+        "checksum/platform-config": "c762e0fc8eb42efb887e5d7f611bc10279689e7ff85e6cb4ecba53963d1aa3e5"
+      },
+      "labels": {
+        "app.kubernetes.io/component": "smoke-echo",
+        "app.kubernetes.io/instance": "trustiot",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/name": "trustiot",
+        "app.kubernetes.io/part-of": "trustiot",
+        "app.kubernetes.io/version": "0.1.0",
+        "helm.sh/chart": "trustiot-0.1.0"
+      }
+    },
+    "spec": {
+      "automountServiceAccountToken": false,
+      "containers": [
+        {
+          "env": [
+            {
+              "name": "OTEL_SERVICE_NAME",
+              "value": "smoke-echo"
+            },
+            {
+              "name": "WHOAMI_PORT_NUMBER",
+              "value": "8080"
+            }
+          ],
+          "envFrom": [
+            {
+              "configMapRef": {
+                "name": "trustiot-platform"
+              }
+            }
+          ],
+          "image": "docker.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44",
+          "imagePullPolicy": "IfNotPresent",
+          "lifecycle": {
+            "preStop": {
+              "sleep": {
+                "seconds": 5
+              }
+            }
+          },
+          "livenessProbe": {
+            "failureThreshold": 3,
+            "httpGet": {
+              "path": "/healthz",
+              "port": "http",
+              "scheme": "HTTP"
+            },
+            "periodSeconds": 10,
+            "successThreshold": 1,
+            "timeoutSeconds": 2
+          },
+          "name": "smoke-echo",
+          "ports": [
+            {
+              "containerPort": 8080,
+              "name": "http",
+              "protocol": "TCP"
+            }
+          ],
+          "readinessProbe": {
+            "failureThreshold": 2,
+            "httpGet": {
+              "path": "/readyz",
+              "port": "http",
+              "scheme": "HTTP"
+            },
+            "periodSeconds": 5,
+            "successThreshold": 1,
+            "timeoutSeconds": 2
+          },
+          "resources": {
+            "limits": {
+              "cpu": "1",
+              "memory": "256Mi"
+            },
+            "requests": {
+              "cpu": "20m",
+              "memory": "32Mi"
+            }
+          },
+          "securityContext": {
+            "allowPrivilegeEscalation": false,
+            "capabilities": {
+              "drop": [
+                "ALL"
+              ]
+            },
+            "readOnlyRootFilesystem": true
+          },
+          "startupProbe": {
+            "failureThreshold": 30,
+            "httpGet": {
+              "path": "/healthz",
+              "port": "http",
+              "scheme": "HTTP"
+            },
+            "periodSeconds": 2,
+            "successThreshold": 1,
+            "timeoutSeconds": 1
+          },
+          "terminationMessagePath": "/dev/termination-log",
+          "terminationMessagePolicy": "File",
+          "volumeMounts": [
+            {
+              "mountPath": "/tmp",
+              "name": "tmp"
+            }
+          ]
+        }
+      ],
+      "dnsPolicy": "ClusterFirst",
+      "enableServiceLinks": false,
+      "nodeSelector": {
+        "kubernetes.io/arch": "arm64"
+      },
+      "restartPolicy": "Always",
+      "schedulerName": "default-scheduler",
+      "securityContext": {
+        "runAsGroup": 65532,
+        "runAsNonRoot": true,
+        "runAsUser": 65532,
+        "seccompProfile": {
+          "type": "RuntimeDefault"
+        }
+      },
+      "serviceAccount": "trustiot-smoke-echo",
+      "serviceAccountName": "trustiot-smoke-echo",
+      "terminationGracePeriodSeconds": 35,
+      "volumes": [
+        {
+          "emptyDir": {
+            "sizeLimit": "64Mi"
+          },
+          "name": "tmp"
+        }
+      ]
+    }
+  }
+}

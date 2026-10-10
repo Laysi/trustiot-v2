@@ -1,0 +1,29 @@
+# proto schema plugin for kubeconform (https://github.com/yannh/kubeconform).
+# Downloads the official release archive and verifies it against the
+# release's CHECKSUMS file.
+# Reference: https://moonrepo.dev/docs/proto/non-wasm-plugin
+
+name = "kubeconform"
+type = "cli"
+
+[platform.linux]
+download-file = "kubeconform-linux-{arch}.tar.gz"
+checksum-file = "CHECKSUMS"
+exe-path = "kubeconform"
+
+[platform.macos]
+download-file = "kubeconform-darwin-{arch}.tar.gz"
+checksum-file = "CHECKSUMS"
+exe-path = "kubeconform"
+
+[install]
+download-url = "https://github.com/yannh/kubeconform/releases/download/v{version}/{download_file}"
+checksum-url = "https://github.com/yannh/kubeconform/releases/download/v{version}/{checksum_file}"
+unpack = true
+
+[install.arch]
+aarch64 = "arm64"
+x86_64 = "amd64"
+
+[resolve]
+git-url = "https://github.com/yannh/kubeconform"

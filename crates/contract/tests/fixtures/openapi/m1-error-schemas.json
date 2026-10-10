@@ -1,0 +1,80 @@
+{
+  "ErrorBody": {
+    "description": "The JSON body of every error response (M1). Clients ignore fields they do not know, so\nfields are only ever added as optional ones.",
+    "properties": {
+      "code": {
+        "$ref": "#/components/schemas/ErrorCode",
+        "description": "What went wrong; clients branch on this."
+      },
+      "details": {
+        "description": "Values the translated message refers to, for example `{\"max\": 40}`. Never user-facing\ntext, internal error text, or personal data. Absent when empty.",
+        "type": "object"
+      },
+      "field_errors": {
+        "description": "The request fields that were rejected. Absent when empty.",
+        "items": {
+          "$ref": "#/components/schemas/FieldError"
+        },
+        "type": "array"
+      },
+      "message_key": {
+        "$ref": "#/components/schemas/MessageKey",
+        "description": "The message the client shows, translated by the client."
+      }
+    },
+    "required": [
+      "code",
+      "message_key"
+    ],
+    "type": "object"
+  },
+  "ErrorCode": {
+    "description": "What went wrong, as one of a closed set of codes (M1). The HTTP status follows from the\ncode; a more specific reason goes in the message key, not in a new code.",
+    "enum": [
+      "invalid_request",
+      "validation_failed",
+      "unauthenticated",
+      "permission_denied",
+      "tenant_suspended",
+      "quota_exceeded",
+      "not_found",
+      "conflict",
+      "rate_limited",
+      "internal",
+      "unavailable",
+      "timeout"
+    ],
+    "type": "string"
+  },
+  "FieldError": {
+    "description": "A rejected field of the request body.",
+    "properties": {
+      "details": {
+        "description": "Values the message refers to. Absent when empty.",
+        "type": "object"
+      },
+      "field": {
+        "description": "JSON Pointer (RFC 6901) to the rejected value in the request body, for example\n`/points/3/address`; an empty string means the whole body.",
+        "type": "string"
+      },
+      "message_key": {
+        "$ref": "#/components/schemas/MessageKey",
+        "description": "The message the client shows next to the field."
+      }
+    },
+    "required": [
+      "field",
+      "message_key"
+    ],
+    "type": "object"
+  },
+  "MessageKey": {
+    "description": "Key of the translated message the client shows; never the message itself.",
+    "examples": [
+      "error.not_found"
+    ],
+    "maxLength": 128,
+    "pattern": "^[a-z0-9_]+(\\.[a-z0-9_]+)+$",
+    "type": "string"
+  }
+}

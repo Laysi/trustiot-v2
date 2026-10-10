@@ -10,7 +10,7 @@ Architecture decisions, rebuild scope (items A1–M8), service split, repository
 
 ## Build, lint, and test
 
-`.prototools` pins Rust and Bun. proto installs Rust through rustup and does not shim cargo, so rustup picks the toolchain from `rust-toolchain.toml`: change `rust` in `.prototools` and `channel` in `rust-toolchain.toml` together (`cargo test -p repo-check` fails when they differ). Run every command from the repository root.
+`.prototools` pins Rust, Bun, Helm, and kubeconform; tools without a built-in proto plugin get a schema plugin in `.proto/plugins/` that verifies the release checksum. proto installs Rust through rustup and does not shim cargo, so rustup picks the toolchain from `rust-toolchain.toml`: change `rust` in `.prototools` and `channel` in `rust-toolchain.toml` together (`cargo test -p repo-check` fails when they differ). Run every command from the repository root.
 
 - Install the pinned tools: `proto install`
 - Build: `cargo build --workspace`
@@ -18,6 +18,7 @@ Architecture decisions, rebuild scope (items A1–M8), service split, repository
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings`
 - Test: `cargo test --workspace`
 - Single test: `cargo test -p <crate> <test-name-filter>`, for example `cargo test -p repo-check toolchain_pins_agree`
+- Helm chart (`deploy/chart`): `bun test deploy/chart` runs `helm lint`, kubeconform on both values files, the chart's own rules, and the README field check; a single check is `bun test deploy/chart -t "<test-name-filter>"`. The individual `helm lint`/`helm template` commands are in `deploy/chart/README.md`.
 
 Every directory under `crates/`, `services/`, `edge/`, `factory/`, and `tools/` is a workspace member, so it needs a `Cargo.toml` that sets `edition.workspace = true` and `[lints] workspace = true`; list non-Rust directories in the root `exclude`. Declare third-party dependencies once in the root `[workspace.dependencies]`. Clippy fails on every lint in `[workspace.lints]`; suppress one only with `#[allow(lint, reason = "...")]`. Save test evidence under `docs/test-reports/` as its README describes.
 

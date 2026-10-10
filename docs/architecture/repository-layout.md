@@ -1,11 +1,12 @@
 # 專案目錄
 
-新系統開新的 repo `Laysi/trustiot-v2`，舊 repo `Laysi/trustiot` 封存。雲端服務、閘道器程式與共用 crate 都在同一個 Cargo workspace（決策 4）；前端與腳本用 Bun，版本與 Rust 一起鎖在 `.prototools`。
+新系統開新的 repo `Laysi/trustiot-v2`，舊 repo `Laysi/trustiot` 封存。雲端服務、閘道器程式與共用 crate 都在同一個 Cargo workspace（決策 4）；前端與腳本用 Bun，版本與 Rust、chart 工具（helm、kubeconform）一起鎖在 `.prototools`。
 
 ```
 trustiot-v2/
 ├── Cargo.toml                 # Cargo workspace：成員、共用 lints、edition、release profile
-├── .prototools                # rust、bun 版本
+├── .prototools                # rust、bun、helm、kubeconform 版本
+├── .proto/plugins/            # proto 沒有內建外掛的工具（helm、kubeconform）：官方下載網址與校驗
 ├── rust-toolchain.toml        # rustup 依此選 Rust 版本，與 .prototools 相同
 ├── CLAUDE.md                  # agent 規範只放這裡，不另放 AGENTS.md
 ├── .githooks/pre-commit       # Codex 審查關卡
@@ -61,7 +62,7 @@ services/assets/
 - `crates/protocol` 是閘道器與雲端共用的訊息格式（M4），要能編到 aarch64，不引入只能在雲端編譯的相依套件。
 - `services/ai-gateway` 不依賴 `crates/contract`，保留單獨抽出開源的選項（決策 28）。
 - API 規格從 Rust 程式碼產生（例如 utoipa），各服務的規格合併成 `api/openapi.json` 進版控，CI 檢查是否與程式一致；前端的 API client 由它產生，規格不會與程式脫節。
-- 部署以 Helm chart 打包：同一份 chart 搭配 `values-saas.yaml` 與 `values-onprem.yaml`，客戶自有的 k8s 或 OpenShift 也用這份 chart；cloudflared 是 SaaS 主機元件，放在 `deploy/host/`，不在 chart 內。
+- 部署以 Helm chart 打包：同一份 chart 搭配 `values-saas.yaml` 與 `values-onprem.yaml`，客戶自有的 k8s 或 OpenShift 也用這份 chart；cloudflared 是 SaaS 主機元件，放在 `deploy/host/`，不在 chart 內。values 分三層：`values.yaml` 是預設值；`values-saas.yaml` 與 `values-onprem.yaml` 只寫部署型態的差異；主機名稱、外部端點與 Secret 名稱寫在安裝實例的覆寫檔（SaaS 的在 `deploy/flux/`，地端由客戶安裝時提供）。values 只以名稱引用 Secret，不放密鑰；`values.schema.json` 擋下缺漏與不安全的設定。欄位與 chart 對服務的約定見 [deploy/chart/README.md](../../deploy/chart/README.md)。
 - 大型資料集放物件儲存，repo 只放索引與標註。
 - Workspace 成員：`crates/`、`services/`、`edge/`、`factory/`、`tools/` 底下的每個子目錄都是成員（根目錄 `Cargo.toml` 以 glob 列出，新增 crate 不必改成員清單），必須有 `Cargo.toml`，並以 `edition.workspace = true` 與 `[lints] workspace = true` 繼承 workspace 設定；非 Rust 的子目錄（目前只有 `edge/image`）列在 `exclude`。`frontend/` 與 `scripts/` 用 Bun，不是 workspace 成員。第三方相依套件一律先宣告在根目錄的 `[workspace.dependencies]`。
 - Rust 版本同時寫在 `.prototools` 與 `rust-toolchain.toml`：proto 透過 rustup 安裝 Rust、不為 cargo 建 shim，cargo 實際用哪個版本由 rustup 讀 `rust-toolchain.toml` 決定。兩者要一起改，`tools/repo-check` 會檢查一致；它也檢查每個成員繼承 workspace 設定、repo 內沒有 `AGENTS.md`。

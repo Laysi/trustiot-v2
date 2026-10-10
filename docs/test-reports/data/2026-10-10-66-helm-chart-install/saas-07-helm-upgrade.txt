@@ -1,0 +1,10 @@
+$ helm upgrade trustiot deploy/chart -n e2e-66 -f deploy/chart/values-saas.yaml -f deploy/chart/tests/values/saas-instance.yaml -f deploy/chart/tests/values/smoke.yaml -f docs/test-reports/data/2026-10-10-66-helm-chart-install/saas-e2e-extra.yaml --set hosts.ota=ota2.saas.trustiot.test --wait --timeout 5m
+# exit 0, 3.5 s
+Release "trustiot" has been upgraded. Happy Helming!
+NAME: trustiot
+LAST DEPLOYED: Sat Oct 10 17:36:10 2026
+NAMESPACE: e2e-66
+STATUS: deployed
+REVISION: 2
+DESCRIPTION: Upgrade complete
+TEST SUITE: None

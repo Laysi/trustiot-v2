@@ -1,0 +1,586 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TrustIoT chart values",
+  "description": "Validated by helm lint, template and install. README.md documents every field.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "global",
+    "hosts",
+    "ingress",
+    "serviceDefaults",
+    "services",
+    "postgres",
+    "clickhouse",
+    "qdrant",
+    "objectStorage",
+    "smtp",
+    "ai",
+    "observability"
+  ],
+  "properties": {
+    "global": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deploymentMode", "imagePullSecrets"],
+      "properties": {
+        "deploymentMode": {
+          "description": "Deployment shape, set by values-saas.yaml or values-onprem.yaml.",
+          "enum": ["saas", "onprem"]
+        },
+        "imagePullSecrets": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/k8sName" }
+        }
+      }
+    },
+    "hosts": {
+      "description": "Our own domain names, never IP addresses (portability rule 1).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["app", "gateway", "ota"],
+      "properties": {
+        "app": { "$ref": "#/definitions/dnsName" },
+        "gateway": { "$ref": "#/definitions/dnsName" },
+        "ota": { "$ref": "#/definitions/dnsName" }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exposure"],
+      "properties": {
+        "exposure": { "enum": ["tunnel", "direct"] }
+      }
+    },
+    "serviceDefaults": {
+      "allOf": [
+        { "$ref": "#/definitions/serviceSpec" },
+        {
+          "required": [
+            "image",
+            "replicas",
+            "ports",
+            "env",
+            "resources",
+            "podSecurityContext",
+            "securityContext",
+            "probes",
+            "preStopSleepSeconds",
+            "drainSeconds",
+            "tmpSizeLimit",
+            "automountServiceAccountToken",
+            "nodeSelector",
+            "tolerations",
+            "affinity",
+            "podLabels",
+            "podAnnotations"
+          ],
+          "properties": {
+            "enabled": false,
+            "credentials": false,
+            "env": {
+              "description": "Every service gets serviceDefaults.env, so it must not read Secrets.",
+              "items": { "properties": { "valueFrom": { "not": { "required": ["secretKeyRef"] } } } }
+            },
+            "image": { "required": ["registry", "repository", "tag", "digest", "pullPolicy"] },
+            "resources": {
+              "required": ["requests", "limits"],
+              "properties": { "limits": { "required": ["memory"] } }
+            },
+            "podSecurityContext": { "required": ["runAsNonRoot", "seccompProfile"] },
+            "securityContext": {
+              "required": ["allowPrivilegeEscalation", "readOnlyRootFilesystem", "capabilities"],
+              "properties": { "capabilities": { "required": ["drop"] } }
+            },
+            "probes": { "required": ["liveness", "readiness"] }
+          }
+        }
+      ]
+    },
+    "services": {
+      "description": "TrustIoT services keyed by name; each entry overrides serviceDefaults.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$" },
+      "additionalProperties": {
+        "allOf": [{ "$ref": "#/definitions/serviceSpec" }, { "required": ["enabled"] }]
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "external"],
+      "properties": {
+        "mode": { "enum": ["bundled", "external"] },
+        "external": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["host", "port", "database", "sslMode", "caSecret"],
+          "properties": {
+            "host": { "$ref": "#/definitions/optionalHostOrIp" },
+            "port": { "$ref": "#/definitions/port" },
+            "database": { "type": "string", "pattern": "^[a-z_][a-z0-9_]{0,62}$" },
+            "sslMode": { "const": "verify-full" },
+            "caSecret": { "$ref": "#/definitions/secretKeyRef" }
+          }
+        }
+      },
+      "if": { "properties": { "mode": { "const": "external" } } },
+      "then": {
+        "properties": {
+          "external": {
+            "properties": {
+              "host": { "minLength": 1 },
+              "caSecret": { "properties": { "name": { "minLength": 1 } } }
+            }
+          }
+        }
+      }
+    },
+    "clickhouse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "external"],
+      "properties": {
+        "mode": { "enum": ["bundled", "external"] },
+        "external": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url", "caSecret"],
+          "properties": {
+            "url": { "$ref": "#/definitions/optionalHttpsUrl" },
+            "caSecret": { "$ref": "#/definitions/secretKeyRef" }
+          }
+        }
+      },
+      "if": { "properties": { "mode": { "const": "external" } } },
+      "then": { "properties": { "external": { "properties": { "url": { "minLength": 1 } } } } }
+    },
+    "qdrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "external"],
+      "properties": {
+        "mode": { "enum": ["bundled", "external"] },
+        "external": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url", "credentialsSecret"],
+          "properties": {
+            "url": { "$ref": "#/definitions/optionalHttpsUrl" },
+            "credentialsSecret": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "readApiKeyKey", "writeApiKeyKey"],
+              "properties": {
+                "name": { "$ref": "#/definitions/optionalK8sName" },
+                "readApiKeyKey": { "$ref": "#/definitions/secretKey" },
+                "writeApiKeyKey": { "$ref": "#/definitions/secretKey" }
+              }
+            }
+          }
+        }
+      },
+      "if": { "properties": { "mode": { "const": "external" } } },
+      "then": { "properties": { "external": { "properties": { "url": { "minLength": 1 } } } } }
+    },
+    "objectStorage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endpoint", "region", "bucket", "forcePathStyle", "credentialsSecret"],
+      "properties": {
+        "endpoint": { "$ref": "#/definitions/optionalHttpUrl" },
+        "region": { "type": "string", "pattern": "^[a-z0-9-]{0,32}$" },
+        "bucket": { "type": "string", "pattern": "^$|^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$" },
+        "forcePathStyle": { "type": "boolean" },
+        "credentialsSecret": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "accessKeyIdKey", "secretAccessKeyKey"],
+          "properties": {
+            "name": { "$ref": "#/definitions/optionalK8sName" },
+            "accessKeyIdKey": { "$ref": "#/definitions/secretKey" },
+            "secretAccessKeyKey": { "$ref": "#/definitions/secretKey" }
+          }
+        }
+      }
+    },
+    "smtp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "port", "security", "from", "credentialsSecret"],
+      "properties": {
+        "host": { "$ref": "#/definitions/optionalHostOrIp" },
+        "port": { "$ref": "#/definitions/port" },
+        "security": { "enum": ["starttls", "tls"] },
+        "from": {
+          "description": "Single line only, so it cannot inject mail headers.",
+          "type": "string",
+          "maxLength": 320,
+          "pattern": "^[^\\r\\n]*$"
+        },
+        "credentialsSecret": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "usernameKey", "passwordKey"],
+          "properties": {
+            "name": { "$ref": "#/definitions/optionalK8sName" },
+            "usernameKey": { "$ref": "#/definitions/secretKey" },
+            "passwordKey": { "$ref": "#/definitions/secretKey" }
+          }
+        }
+      }
+    },
+    "ai": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chat", "embedding", "rerank"],
+      "properties": {
+        "chat": { "$ref": "#/definitions/aiEndpoint" },
+        "embedding": { "$ref": "#/definitions/aiEndpoint" },
+        "rerank": { "$ref": "#/definitions/aiEndpoint" }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sentry"],
+      "properties": {
+        "sentry": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "environment", "dsnSecret"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "environment": { "type": "string", "pattern": "^$|^[A-Za-z0-9_.-]{1,64}$" },
+            "dsnSecret": { "$ref": "#/definitions/secretKeyRef" }
+          },
+          "if": { "properties": { "enabled": { "const": true } } },
+          "then": {
+            "properties": {
+              "environment": { "minLength": 1 },
+              "dsnSecret": { "properties": { "name": { "minLength": 1 } } }
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "description": "On-prem never goes through Cloudflare: the ingress gateway faces the customer network (decision 27).",
+      "if": {
+        "required": ["global"],
+        "properties": { "global": { "required": ["deploymentMode"], "properties": { "deploymentMode": { "const": "onprem" } } } }
+      },
+      "then": { "properties": { "ingress": { "properties": { "exposure": { "const": "direct" } } } } }
+    },
+    {
+      "description": "SaaS reaches every external endpoint over the internet, so they must use https.",
+      "if": {
+        "required": ["global"],
+        "properties": { "global": { "required": ["deploymentMode"], "properties": { "deploymentMode": { "const": "saas" } } } }
+      },
+      "then": {
+        "properties": {
+          "objectStorage": { "properties": { "endpoint": { "$ref": "#/definitions/optionalHttpsUrl" } } },
+          "ai": {
+            "properties": {
+              "chat": { "properties": { "baseUrl": { "$ref": "#/definitions/optionalHttpsUrl" } } },
+              "embedding": { "properties": { "baseUrl": { "$ref": "#/definitions/optionalHttpsUrl" } } },
+              "rerank": { "properties": { "baseUrl": { "$ref": "#/definitions/optionalHttpsUrl" } } }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "dnsName": {
+      "description": "Lower-case DNS name with at least two labels; the last label starts with a letter, so IP addresses are rejected.",
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+    },
+    "optionalHostOrIp": {
+      "description": "Empty, a lower-case DNS name or an IPv4 address.",
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^$|^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$"
+    },
+    "optionalHttpUrl": {
+      "description": "Empty or an http(s) URL without user info, so credentials never sit in values.",
+      "type": "string",
+      "maxLength": 2048,
+      "pattern": "^$|^https?://[^\\s/?#@]+(/[^\\s]*)?$"
+    },
+    "optionalHttpsUrl": {
+      "description": "Empty or an https URL without user info.",
+      "type": "string",
+      "maxLength": 2048,
+      "pattern": "^$|^https://[^\\s/?#@]+(/[^\\s]*)?$"
+    },
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "k8sName": {
+      "description": "DNS-1123 subdomain, the format of Kubernetes object names.",
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+    },
+    "optionalK8sName": {
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+    },
+    "secretKey": { "type": "string", "maxLength": 253, "pattern": "^[-._a-zA-Z0-9]+$" },
+    "secretKeyRef": {
+      "description": "Reference to one key of an existing Secret; an empty name means not configured.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "key"],
+      "properties": {
+        "name": { "$ref": "#/definitions/optionalK8sName" },
+        "key": { "$ref": "#/definitions/secretKey" }
+      }
+    },
+    "aiEndpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseUrl", "apiKeySecret"],
+      "properties": {
+        "baseUrl": { "$ref": "#/definitions/optionalHttpUrl" },
+        "apiKeySecret": { "$ref": "#/definitions/secretKeyRef" }
+      }
+    },
+    "quantity": {
+      "type": ["string", "number"],
+      "pattern": "^[0-9]+(\\.[0-9]+)?(m|k|M|G|T|P|E|Ki|Mi|Gi|Ti|Pi|Ei)?$"
+    },
+    "resourceList": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": { "$ref": "#/definitions/quantity" },
+        "memory": { "$ref": "#/definitions/quantity" },
+        "ephemeral-storage": { "$ref": "#/definitions/quantity" }
+      }
+    },
+    "probe": {
+      "description": "A Kubernetes probe object; {} disables an optional probe.",
+      "type": "object"
+    },
+    "containerPort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "containerPort"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z]([a-z0-9-]{0,13}[a-z0-9])?$" },
+        "containerPort": { "type": "integer", "minimum": 1024, "maximum": 65535 },
+        "servicePort": { "$ref": "#/definitions/port" },
+        "protocol": { "enum": ["TCP", "UDP", "SCTP"] },
+        "appProtocol": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9./-]*[a-z0-9])?$" }
+      }
+    },
+    "envKeyRef": {
+      "description": "Kubernetes SecretKeySelector or ConfigMapKeySelector.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "key"],
+      "properties": {
+        "name": { "$ref": "#/definitions/k8sName" },
+        "key": { "$ref": "#/definitions/secretKey" },
+        "optional": { "type": "boolean" }
+      }
+    },
+    "envVar": {
+      "description": "Kubernetes EnvVar with either a literal value or exactly one valueFrom source.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "not": {
+            "description": "Names starting with TRUSTIOT_ plus a letter or digit, SENTRY_ or OTEL_ are set by the chart.",
+            "pattern": "(?i)^(TRUSTIOT_[A-Z0-9]|SENTRY_|OTEL_)"
+          }
+        },
+        "value": { "type": "string" },
+        "valueFrom": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "maxProperties": 1,
+          "properties": {
+            "secretKeyRef": { "$ref": "#/definitions/envKeyRef" },
+            "configMapKeyRef": { "$ref": "#/definitions/envKeyRef" },
+            "fieldRef": { "type": "object" },
+            "resourceFieldRef": { "type": "object" }
+          }
+        }
+      },
+      "not": { "required": ["value", "valueFrom"] },
+      "if": {
+        "properties": {
+          "name": { "pattern": "(?i)(secret|passw|passphrase|pwd|token|api_?key|(^|_)key$|dsn|private|credential)" }
+        }
+      },
+      "then": {
+        "description": "Secret-like variables must come from a Secret: valueFrom.secretKeyRef only, never a literal value or another source.",
+        "required": ["valueFrom"],
+        "properties": { "valueFrom": { "required": ["secretKeyRef"] } }
+      }
+    },
+    "serviceSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "registry": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([a-z0-9.:-]*[a-z0-9])?(/[a-z0-9]([a-z0-9._-]*[a-z0-9])?)*$"
+            },
+            "repository": {
+              "type": "string",
+              "pattern": "^$|^[a-z0-9]([a-z0-9.:-]*[a-z0-9])?(/[a-z0-9]([a-z0-9._-]*[a-z0-9])?)*$"
+            },
+            "tag": { "type": "string", "pattern": "^$|^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$" },
+            "digest": { "type": "string", "pattern": "^$|^sha256:[a-f0-9]{64}$" },
+            "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "replicas": { "type": "integer", "minimum": 1 },
+        "ports": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/containerPort" }
+        },
+        "env": { "type": "array", "items": { "$ref": "#/definitions/envVar" } },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "requests": { "$ref": "#/definitions/resourceList" },
+            "limits": { "$ref": "#/definitions/resourceList" }
+          }
+        },
+        "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" },
+        "securityContext": { "$ref": "#/definitions/containerSecurityContext" },
+        "probes": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "startup": { "$ref": "#/definitions/probe" },
+            "liveness": { "$ref": "#/definitions/probe" },
+            "readiness": { "$ref": "#/definitions/probe" }
+          }
+        },
+        "credentials": {
+          "description": "Dependency Secrets injected into this service only; never set in serviceDefaults.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["qdrant-read", "qdrant-write", "object-storage", "smtp", "ai"] }
+        },
+        "preStopSleepSeconds": { "type": "integer", "minimum": 0, "maximum": 60 },
+        "drainSeconds": { "type": "integer", "minimum": 1, "maximum": 3600 },
+        "tmpSizeLimit": { "$ref": "#/definitions/quantity" },
+        "automountServiceAccountToken": { "type": "boolean" },
+        "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
+        "tolerations": { "type": "array", "items": { "type": "object" } },
+        "affinity": { "type": "object" },
+        "podLabels": {
+          "description": "app.kubernetes.io/ and helm.sh/ keys are reserved for the chart's own labels.",
+          "type": "object",
+          "propertyNames": { "not": { "pattern": "^(app\\.kubernetes\\.io/|helm\\.sh/)" } },
+          "additionalProperties": { "type": "string" }
+        },
+        "podAnnotations": {
+          "description": "checksum/ keys are reserved for the chart; legacy AppArmor and seccomp annotations are rejected (use the security contexts).",
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "pattern": "^(checksum/|container\\.apparmor\\.security\\.beta\\.kubernetes\\.io/|seccomp\\.security\\.alpha\\.kubernetes\\.io/|container\\.seccomp\\.security\\.alpha\\.kubernetes\\.io/)"
+            }
+          },
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "seccompProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["RuntimeDefault", "Localhost"] },
+        "localhostProfile": { "type": "string", "minLength": 1 }
+      }
+    },
+    "appArmorProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["RuntimeDefault", "Localhost"] },
+        "localhostProfile": { "type": "string", "minLength": 1 }
+      }
+    },
+    "seLinuxOptions": {
+      "description": "Only the SELinux types and fields that the restricted Pod Security Standard allows.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["container_t", "container_init_t", "container_kvm_t", "container_engine_t"] },
+        "level": { "type": "string" }
+      }
+    },
+    "podSecurityContext": {
+      "description": "Allow-list of pod security settings within the restricted Pod Security Standard.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runAsNonRoot": { "const": true },
+        "runAsUser": { "type": "integer", "minimum": 1 },
+        "runAsGroup": { "type": "integer", "minimum": 0 },
+        "fsGroup": { "type": "integer", "minimum": 0 },
+        "fsGroupChangePolicy": { "enum": ["OnRootMismatch", "Always"] },
+        "supplementalGroups": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+        "seccompProfile": { "$ref": "#/definitions/seccompProfile" },
+        "appArmorProfile": { "$ref": "#/definitions/appArmorProfile" },
+        "seLinuxOptions": { "$ref": "#/definitions/seLinuxOptions" }
+      }
+    },
+    "containerSecurityContext": {
+      "description": "Allow-list of container security settings within the restricted Pod Security Standard.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowPrivilegeEscalation": { "const": false },
+        "readOnlyRootFilesystem": { "type": "boolean" },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "drop": {
+              "type": "array",
+              "items": { "type": "string" },
+              "contains": { "const": "ALL" }
+            },
+            "add": { "type": "array", "maxItems": 0 }
+          }
+        },
+        "runAsNonRoot": { "const": true },
+        "runAsUser": { "type": "integer", "minimum": 1 },
+        "runAsGroup": { "type": "integer", "minimum": 0 },
+        "procMount": { "const": "Default" },
+        "seccompProfile": { "$ref": "#/definitions/seccompProfile" },
+        "appArmorProfile": { "$ref": "#/definitions/appArmorProfile" },
+        "seLinuxOptions": { "$ref": "#/definitions/seLinuxOptions" }
+      }
+    }
+  }
+}

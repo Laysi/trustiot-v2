@@ -1,0 +1,35 @@
+[
+  {
+    "name": "trustiot-smoke-echo-5d6fcf8947-tggmd",
+    "phase": "Running",
+    "conditions": [
+      {
+        "type": "PodReadyToStartContainers",
+        "status": "True"
+      },
+      {
+        "type": "Initialized",
+        "status": "True"
+      },
+      {
+        "type": "Ready",
+        "status": "True"
+      },
+      {
+        "type": "ContainersReady",
+        "status": "True"
+      },
+      {
+        "type": "PodScheduled",
+        "status": "True"
+      }
+    ],
+    "containers": [
+      {
+        "ready": true,
+        "restartCount": 0,
+        "imageID": "docker.io/traefik/whoami@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44"
+      }
+    ]
+  }
+]

@@ -1,0 +1,38 @@
+//! Contracts between TrustIoT v2 cloud services (decision 4 in `docs/architecture/decisions.md`).
+//!
+//! Services talk to each other only through the types in this crate, so changing a contract
+//! breaks the build of every service that depends on it instead of failing at run time:
+//!
+//! - [`error`]: the M1 error format, one JSON shape and one closed set of codes for every error
+//!   response; bodies carry translation keys, never user-facing text.
+//! - [`id`]: typed UUIDv7 identifiers (portability rule 3 in `docs/architecture/deployment.md`).
+//! - [`event`]: the versioned envelope for events that cross service boundaries through the
+//!   outbox.
+//! - [`identity`]: the claims of the internal identity token (decision 27) and the header that
+//!   carries it.
+//! - [`client`]: the typed HTTP/JSON client for synchronous internal API calls: a timeout is
+//!   mandatory and every failure maps to an M1 code.
+//! - [`service`]: the names of the services that take part in these contracts.
+//!
+//! `services/ai-gateway` must not depend on this crate (decision 28), so nothing it needs lives
+//! here. The rules for adding API types, events and error codes are in this crate's
+//! `README.md`.
+
+pub mod client;
+pub mod error;
+pub mod event;
+pub mod id;
+pub mod identity;
+pub mod json;
+pub mod service;
+
+mod naming;
+
+pub use client::{CallError, CallErrorKind, ClientConfigError, Endpoint, InternalClient, Method};
+pub use error::{ErrorBody, ErrorCode, FieldError, MessageKey};
+pub use event::{DecodeError, EncodeError, Event, EventEnvelope};
+pub use id::{EventId, TenantId, UserId};
+pub use identity::{
+    INTERNAL_IDENTITY_HEADER, InternalClaims, InternalToken, TenantGrant, TenantRole,
+};
+pub use service::{Service, ServiceName};

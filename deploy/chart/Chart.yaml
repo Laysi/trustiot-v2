@@ -1,0 +1,13 @@
+apiVersion: v2
+name: trustiot
+description: TrustIoT v2 platform. SaaS and on-premises installs use this same chart with values-saas.yaml or values-onprem.yaml.
+type: application
+# Chart version. The release workflow (Laysi/trustiot-v2#68) bumps it.
+version: 0.1.0
+# Default image tag of every TrustIoT service (services are released together, decision 4).
+appVersion: "0.1.0"
+# Native preStop sleep (PodLifecycleSleepAction) is on by default from Kubernetes 1.30.
+kubeVersion: ">=1.30.0-0"
+home: https://github.com/Laysi/trustiot-v2
+sources:
+  - https://github.com/Laysi/trustiot-v2/tree/main/deploy/chart

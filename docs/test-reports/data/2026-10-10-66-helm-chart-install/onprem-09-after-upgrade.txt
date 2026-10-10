@@ -1,0 +1,14 @@
+$ kubectl -n e2e-66 get rs -o wide
+# exit 0, 0.5 s
+NAME                             DESIRED   CURRENT   READY   AGE   CONTAINERS   IMAGES                                                                                                     SELECTOR
+trustiot-smoke-echo-66d768797    1         1         1       11s   smoke-echo   docker.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44   app.kubernetes.io/component=smoke-echo,app.kubernetes.io/instance=trustiot,app.kubernetes.io/name=trustiot,pod-template-hash=66d768797
+trustiot-smoke-echo-7dcc969c4d   0         0         0       22s   smoke-echo   docker.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44   app.kubernetes.io/component=smoke-echo,app.kubernetes.io/instance=trustiot,app.kubernetes.io/name=trustiot,pod-template-hash=7dcc969c4d
+
+$ kubectl -n e2e-66 get configmap trustiot-platform -o jsonpath='{.data.TRUSTIOT_OTA_HOST}'
+# exit 0, 0.6 s
+ota2.trustiot.factory.test
+$ helm history trustiot -n e2e-66
+# exit 0, 0.1 s
+REVISION	UPDATED                 	STATUS    	CHART         	APP VERSION	DESCRIPTION     
+1       	Sat Oct 10 17:36:47 2026	superseded	trustiot-0.1.0	0.1.0      	Install complete
+2       	Sat Oct 10 17:36:58 2026	deployed  	trustiot-0.1.0	0.1.0      	Upgrade complete

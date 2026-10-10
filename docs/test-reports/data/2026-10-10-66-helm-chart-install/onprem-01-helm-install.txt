@@ -1,0 +1,9 @@
+$ helm install trustiot deploy/chart -n e2e-66 -f deploy/chart/values-onprem.yaml -f deploy/chart/tests/values/onprem-instance.yaml -f deploy/chart/tests/values/smoke.yaml --wait --timeout 5m
+# exit 0, 3.4 s
+NAME: trustiot
+LAST DEPLOYED: Sat Oct 10 17:36:47 2026
+NAMESPACE: e2e-66
+STATUS: deployed
+REVISION: 1
+DESCRIPTION: Install complete
+TEST SUITE: None

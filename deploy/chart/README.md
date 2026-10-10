@@ -1,0 +1,267 @@
+# TrustIoT Helm chart
+
+SaaS 與地端用同一份 chart（決策 1、5）：`values-saas.yaml` 與 `values-onprem.yaml` 描述兩種部署型態，客戶自有的 k8s 或 OpenShift 也用這份 chart。本文件列出每個 values 欄位，以及 chart 與服務之間的約定。
+
+## 指令
+
+helm、kubeconform 與 bun 的版本鎖在 repo 根目錄的 `.prototools`，先執行 `proto install`。以下指令都在 repo 根目錄執行。
+
+```sh
+# 全部檢查：兩份 values 的 helm lint 與 kubeconform、chart 規則、本文件的欄位清單
+bun test deploy/chart
+
+# 只跑名稱含指定字串的檢查
+bun test deploy/chart -t "kubeconform"
+
+# 個別執行（地端把 saas 換成 onprem）
+helm lint deploy/chart --strict -f deploy/chart/values-saas.yaml -f deploy/chart/tests/values/saas-instance.yaml
+helm template trustiot deploy/chart -n trustiot -f deploy/chart/values-saas.yaml -f deploy/chart/tests/values/saas-instance.yaml > saas.yaml
+kubeconform -strict -summary -kubernetes-version 1.36.0 saas.yaml
+
+# 安裝：第三個 -f 是這個安裝實例的覆寫檔（見下一節）
+helm install trustiot deploy/chart -n trustiot --create-namespace -f deploy/chart/values-saas.yaml -f <覆寫檔>
+```
+
+`bun test` 以 Kubernetes 1.30.0（`Chart.yaml` 的 `kubeVersion` 下限）與 1.36.0（實驗機與 SaaS 的 k3s）各跑一次 kubeconform；第一次執行要下載 schema，需要網路。
+
+proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 程序持有鎖時；在 agent 環境還會以 NDJSON 輸出），會混進 `helm template` 產生的清單。自動化流程（CI、nightly、腳本）請以 `proto bin helm --reporter text` 取得執行檔路徑後直接執行，`bun test deploy/chart` 就是這樣做。
+
+## values 的三層
+
+後面的層覆寫前面的層：
+
+| 層 | 檔案 | 內容 |
+| --- | --- | --- |
+| 1 | `values.yaml` | 所有欄位的預設值 |
+| 2 | `values-saas.yaml` 或 `values-onprem.yaml` | 部署型態，也就是 SaaS 與地端的差異 |
+| 3 | 安裝實例的覆寫檔 | 這一個安裝的主機名稱、外部端點與 Secret 名稱。SaaS 的放在 `deploy/flux/`（Laysi/trustiot-v2#70）；地端由客戶安裝時提供；`tests/values/` 有測試用的範例 |
+
+`values.schema.json` 驗證合併後的結果：缺欄位、拼錯欄位、以 IP 當主機名稱、在 values 放明文密鑰、SaaS 的外部端點不是 https，都會讓 `helm lint`、`helm template` 與 `helm install` 直接失敗，不會裝出壞掉的版本。
+
+## SaaS 與地端的差異
+
+| 欄位 | `values-saas.yaml` | `values-onprem.yaml` | 依據 |
+| --- | --- | --- | --- |
+| `global.deploymentMode` | `saas` | `onprem` | 決策 1 |
+| `ingress.exposure` | `tunnel`：入口 gateway 只有 ClusterIP，由主機上的 cloudflared 轉入，主機不開埠 | `direct`：入口 gateway 在客戶網路開 443，終止外層 TLS | 決策 27 |
+| 可信的來源 IP（由 `ingress.exposure` 推導，不能單獨設定） | `CF-Connecting-IP` | 入口 gateway 附加在 X-Forwarded-For 最右段的位址 | 決策 6、27 |
+| `qdrant.mode` | `external`：Qdrant Cloud | `bundled`：叢集內自架 | 決策 19 |
+| `objectStorage.*` | 託管的 S3 或 R2 | 客戶的 S3 相容儲存（細節未定） | 決策 20 |
+| `smtp.*` | 我們的郵件服務 | 客戶的 SMTP | 決策 18 |
+| `ai.*` | 雲端 API | 客戶的 OpenAI 相容端點，例如 vLLM、Ollama | 決策 15、16、26 |
+| `observability.sentry.enabled` | `true`，送 sentry.io | `false`，客戶有自己的 Sentry 時可開 | 決策 24 |
+| OTLP 轉送（欄位隨 Laysi/trustiot-v2#73 的 collector 加入） | 不轉送 | 可轉送到客戶的 SIEM | 決策 22 |
+
+兩種型態相同的部分：Postgres（含 Apache AGE）與 ClickHouse 都在叢集內（`bundled`）；MQTT broker 不直接對外，閘道器一律以 443 的 WebSocket 經入口 gateway 與 mqtt-bridge 連到 broker；chart 產生的 Service 一律是 ClusterIP（測試強制）。SaaS 在 Cloudflare 無法使用時，可改用 `ingress.exposure: direct` 直接對外，閘道器只改 DNS（docs/roadmap/risks.md）。
+
+## 元件與開關
+
+加入元件的 issue 要同時更新這張表。
+
+| 元件 | 開關 | 2026-10-10 的狀態 | 後續 issue |
+| --- | --- | --- | --- |
+| Rust 服務（見下一節） | `services.<name>.enabled` | 通用樣板完成；映像還沒出，預設全關 | 各服務的 issue 出映像時改成開 |
+| 入口 gateway（Istio ambient、Gateway API、ext_authz） | `ingress.exposure` | 目前只決定可信的來源 IP；Gateway、路由與授權政策尚未加入 | Laysi/trustiot-v2#62 |
+| 服務間授權（AuthorizationPolicy、NetworkPolicy） | — | 每個服務已有自己的 ServiceAccount | Laysi/trustiot-v2#63 |
+| Postgres（CloudNativePG 加 AGE） | `postgres.mode` | `external` 已接到平台設定；`bundled` 的 operator 與 Cluster 尚未加入 | Laysi/trustiot-v2#57、Laysi/trustiot-v2#58 |
+| migration Job | — | 尚未加入 | Laysi/trustiot-v2#60 |
+| ClickHouse | `clickhouse.mode` | `external` 已接到平台設定；`bundled` 尚未加入 | Laysi/trustiot-v2#59 |
+| MQTT broker（Mosquitto） | — | 尚未加入 | Laysi/trustiot-v2#84 |
+| Qdrant | `qdrant.mode` | `external` 已接到平台設定；`bundled` 尚未加入 | Laysi/trustiot-v2#194 |
+| 物件儲存、SMTP、AI 端點 | `objectStorage.*`、`smtp.*`、`ai.*` | 一律外部，設定已接到平台設定 | Laysi/trustiot-v2#133、Laysi/trustiot-v2#169、Laysi/trustiot-v2#139 |
+| OpenTelemetry collector 與 OTLP 轉送 | — | 尚未加入；轉送目的地的欄位隨 collector 一起加 | Laysi/trustiot-v2#73 |
+| Grafana | — | 尚未加入 | Laysi/trustiot-v2#183 |
+| Sentry | `observability.sentry.*` | 開關、環境名稱與 DSN 已接到每個服務 | Laysi/trustiot-v2#184 |
+| 密鑰 | 各個 `*Secret` 欄位、`services.<name>.credentials` | values 只存 Secret 名稱與 key；Sentry DSN 給每個服務，其他依賴的帳密只給列出它的服務，外部資料庫的 CA 掛進每個服務 | Laysi/trustiot-v2#72 決定 Secret 怎麼進叢集 |
+
+## 服務
+
+`services` 的 key 與 docs/architecture/deployment.md 的服務表一致（測試比對），物件名稱是 `<release>-<key>`；release 名稱不含 `trustiot` 時是 `<release>-trustiot-<key>`；超過 63 個字元時縮短前段、保留 `-<key>`，不同服務不會撞名。每個服務產生一個 ServiceAccount、一個 ClusterIP Service 與一個 Deployment。
+
+`identity`、`assets`、`certs`、`ingest`、`telemetry-query`、`gateway-ops`、`mqtt-bridge`、`assistant`、`ai-gateway`、`alerts`、`field-context`、`knowledge`
+
+## values 欄位
+
+「必填」指 schema 要求非空值。Secret 欄位一律是既有 Secret 的名稱與 key，名稱空白代表不設定。
+
+### global、hosts、ingress
+
+| 欄位 | 預設值 | 說明 |
+| --- | --- | --- |
+| `global.deploymentMode` | `""`，必填 | `saas` 或 `onprem`，由兩份 values 設定 |
+| `global.imagePullSecrets` | `[]` | 拉映像用的既有 Secret 名稱（`kubernetes.io/dockerconfigjson`），例如 SaaS 的 GHCR 唯讀拉取 token |
+| `hosts.app` | `""`，必填 | SPA 與 API 的主機名稱，同一網域（決策 2） |
+| `hosts.gateway` | `""`，必填 | 閘道器連線的主機名稱：443 上包在 WebSocket 裡的 MQTT 與 HTTPS 憑證換發 |
+| `hosts.ota` | `""`，必填 | 閘道器下載 OTA 的主機名稱 |
+| `ingress.exposure` | `""`，必填 | `tunnel` 或 `direct`，見上一節；地端只能是 `direct` |
+
+三個主機名稱都用我們自己的網域（可搬移規則 1），schema 拒絕 IP 與大寫；搬遷時只改 DNS。
+
+### serviceDefaults 與 services.\<name\>
+
+`serviceDefaults` 是每個服務的預設值，`services.<name>` 可以覆寫其中任何欄位。合併方式：map 逐個 key 遞迴合併，list 與單一值整個取代，`false`、`0` 與空字串也算覆寫；`probes` 底下的每個 probe 整個取代；`env` 接在 `serviceDefaults.env` 後面。
+
+| 欄位 | 預設值 | 說明 |
+| --- | --- | --- |
+| `serviceDefaults.image.registry` | `ghcr.io/laysi/trustiot-v2` | 映像是 `<registry>/<服務名稱>` |
+| `serviceDefaults.image.repository` | `""` | 完整的 repository，設定時取代 `<registry>/<服務名稱>` |
+| `serviceDefaults.image.tag` | `""` | 空白時用 `Chart.yaml` 的 `appVersion`（服務一起發版，決策 4） |
+| `serviceDefaults.image.digest` | `""` | `sha256:` 加 64 個十六進位字元；設定時以 digest 固定映像 |
+| `serviceDefaults.image.pullPolicy` | `IfNotPresent` | `Always`、`IfNotPresent` 或 `Never` |
+| `serviceDefaults.replicas` | `1` | 副本數 |
+| `serviceDefaults.ports` | `http` 8080 | 容器埠清單，欄位見下表；Service 開同樣的埠號 |
+| `serviceDefaults.env` | `[]` | 每個服務都加的環境變數（Kubernetes `EnvVar`）；每個服務都會拿到，所以不能讀 Secret（`valueFrom.secretKeyRef`）；名稱的限制同 `services.<name>.env` |
+| `serviceDefaults.resources` | requests `cpu: 20m`、`memory: 32Mi`；limits `cpu: "1"`、`memory: 256Mi` | 資源需求與上限；schema 要求 `limits.memory` |
+| `serviceDefaults.podSecurityContext` | `runAsNonRoot: true`、`seccompProfile: RuntimeDefault` | 不固定 `runAsUser`，讓 OpenShift 的 restricted-v2 SCC 指派 UID。只接受 restricted Pod Security Standard 允許的欄位與值：`runAsNonRoot` 只能是 `true`，seccomp 與 AppArmor 只能是 `RuntimeDefault` 或 `Localhost`，不能設 sysctls |
+| `serviceDefaults.securityContext` | `allowPrivilegeEscalation: false`、`readOnlyRootFilesystem: true`、`capabilities.drop: [ALL]` | 同樣只接受 restricted 允許的設定：不能提權、不能 privileged、`capabilities.drop` 一定含 `ALL` 且不能加 capability、`procMount` 只能是 `Default` |
+| `serviceDefaults.probes.startup` | `GET /healthz`，每 2 秒，最多 30 次 | 設成 `{}` 停用 |
+| `serviceDefaults.probes.liveness` | `GET /healthz`，每 10 秒，逾時 2 秒，失敗 3 次 | 必填 |
+| `serviceDefaults.probes.readiness` | `GET /readyz`，每 5 秒，逾時 2 秒，失敗 2 次 | 必填 |
+| `serviceDefaults.preStopSleepSeconds` | `5` | 送 SIGTERM 前先等幾秒，讓入口與 ztunnel 先移除這個 pod；`0` 停用，最多 60 |
+| `serviceDefaults.drainSeconds` | `30` | SIGTERM 到 SIGKILL 之間給服務收尾的秒數。Kubernetes 把 preStop 的等待算在寬限期內，所以 pod 的 `terminationGracePeriodSeconds` 是 `preStopSleepSeconds + drainSeconds`（預設 35） |
+| `serviceDefaults.tmpSizeLimit` | `64Mi` | 可寫入的 `/tmp`（emptyDir）大小上限；根目錄唯讀 |
+| `serviceDefaults.automountServiceAccountToken` | `false` | 服務不呼叫 Kubernetes API |
+| `serviceDefaults.nodeSelector` | `kubernetes.io/arch: arm64` | 映像只出 arm64（決策 5） |
+| `serviceDefaults.tolerations` | `[]` | Kubernetes tolerations |
+| `serviceDefaults.affinity` | `{}` | Kubernetes affinity |
+| `serviceDefaults.podLabels` | `{}` | 加在 pod 上的 label；`app.kubernetes.io/` 與 `helm.sh/` 開頭的 key 保留給 chart，避免改到 selector |
+| `serviceDefaults.podAnnotations` | `{}` | 加在 pod 上的 annotation；`checksum/` 開頭的 key 保留給 chart，也不接受舊式的 AppArmor 與 seccomp annotation |
+
+每個服務的欄位：
+
+| 欄位 | 說明 |
+| --- | --- |
+| `services.<name>.enabled` | 必填；服務的 issue 出映像後改成 `true` |
+| `services.<name>.image` | 覆寫 `serviceDefaults.image` 的欄位 |
+| `services.<name>.replicas` | 覆寫副本數 |
+| `services.<name>.ports` | 整個取代埠清單；埠名與埠號不能重複，探針只能指向清單內的埠名 |
+| `services.<name>.env` | 接在 `serviceDefaults.env` 後面，名稱不能重複。`TRUSTIOT_` 後面接英數字、`SENTRY_`、`OTEL_` 開頭的名稱（不分大小寫）保留給 chart，避免覆寫平台設定與 chart 給的密鑰；`TRUSTIOT__`（兩個底線）開頭的名稱不在保留範圍。名稱像密鑰（含 SECRET、PASSW、PASSPHRASE、PWD、TOKEN、API_KEY、DSN、PRIVATE、CREDENTIAL，或以 `_KEY` 結尾，不分大小寫）的變數只能用 `valueFrom.secretKeyRef`，不能用字面值或 ConfigMap 等其他來源；每一項只能有 `value` 或一個 `valueFrom` 來源。任何變數都不能讀 values 指定的依賴帳密與 Sentry DSN（同一個 Secret 的同一個 key），依賴帳密要改列在 `credentials` |
+| `services.<name>.credentials` | 只給這個服務的依賴帳密，可列 `qdrant-read`、`qdrant-write`、`object-storage`、`smtp`、`ai`，變數見「密鑰的環境變數」；不能放在 `serviceDefaults`，避免每個服務都拿到。`ai` 只能給 `ai-gateway`（決策 28）；`qdrant-read` 與 `qdrant-write` 只能給 `knowledge`，因為 Qdrant 查詢的租戶條件由知識庫服務加上（docs/architecture/rag.md） |
+| `services.<name>.resources` | 逐欄覆寫資源設定 |
+| `services.<name>.podSecurityContext` | 逐欄覆寫；限制同 `serviceDefaults` |
+| `services.<name>.securityContext` | 逐欄覆寫；限制同 `serviceDefaults` |
+| `services.<name>.probes` | 每個 probe 整個取代；liveness 與 readiness 不能是空的 |
+| `services.<name>.preStopSleepSeconds` | 覆寫 preStop 等待秒數 |
+| `services.<name>.drainSeconds` | 覆寫收尾秒數，例如持有長連線的服務 |
+| `services.<name>.tmpSizeLimit` | 覆寫 `/tmp` 大小上限 |
+| `services.<name>.automountServiceAccountToken` | 需要呼叫 Kubernetes API 的服務才設 `true` |
+| `services.<name>.nodeSelector` | 逐個 key 合併 |
+| `services.<name>.tolerations` | 整個取代 |
+| `services.<name>.affinity` | 逐個 key 合併 |
+| `services.<name>.podLabels` | 逐個 key 合併；保留的 key 同 `serviceDefaults.podLabels` |
+| `services.<name>.podAnnotations` | 逐個 key 合併；限制同 `serviceDefaults.podAnnotations` |
+
+`ports` 每一項的欄位：
+
+| 欄位 | 說明 |
+| --- | --- |
+| `ports[].name` | 必填；最多 15 個字元的小寫名稱，probe 以名稱指定埠 |
+| `ports[].containerPort` | 必填；1024–65535，服務不以 root 執行 |
+| `ports[].servicePort` | Service 的埠號，預設同 `containerPort` |
+| `ports[].protocol` | `TCP`（預設）、`UDP` 或 `SCTP` |
+| `ports[].appProtocol` | 例如 `http`，供 Istio 判斷協定 |
+
+### 外部依賴
+
+所有外部依賴由 values 指定，託管或自架只差在 values（可搬移規則 2）。`bundled` 代表由這份 chart 部署在叢集內；`external` 代表用叢集外的服務。
+
+| 欄位 | 預設值 | 說明 |
+| --- | --- | --- |
+| `postgres.mode` | `bundled` | `bundled`：CloudNativePG（Laysi/trustiot-v2#58）；`external`：自行維運、含 Apache AGE 的 Postgres |
+| `postgres.external.host` | `""` | `external` 時必填；主機名稱或 IPv4 |
+| `postgres.external.port` | `5432` | |
+| `postgres.external.database` | `trustiot` | 資料庫名稱 |
+| `postgres.external.sslMode` | `verify-full` | 只接受 `verify-full`：一律驗證伺服器憑證（清單 M3） |
+| `postgres.external.caSecret.name` | `""` | `external` 時必填；簽發伺服器憑證的 CA 所在的 Secret |
+| `postgres.external.caSecret.key` | `ca.crt` | |
+| `clickhouse.mode` | `bundled` | `bundled`：叢集內自管（Laysi/trustiot-v2#59）；`external`：ClickHouse Cloud 等，只當備案（決策 14） |
+| `clickhouse.external.url` | `""` | `external` 時必填；只接受 https，例如 `https://abc.clickhouse.cloud:8443` |
+| `clickhouse.external.caSecret.name` | `""` | 私有 CA 簽發時才設定 |
+| `clickhouse.external.caSecret.key` | `ca.crt` | |
+| `qdrant.mode` | `""`，必填 | `external`（SaaS，Qdrant Cloud）或 `bundled`（地端自架，Laysi/trustiot-v2#194） |
+| `qdrant.external.url` | `""` | `external` 時必填；只接受 https |
+| `qdrant.external.credentialsSecret.name` | `""` | 放 API key 的 Secret |
+| `qdrant.external.credentialsSecret.readApiKeyKey` | `read-api-key` | 檢索用的唯讀 key（docs/architecture/rag.md） |
+| `qdrant.external.credentialsSecret.writeApiKeyKey` | `write-api-key` | 背景處理用的寫入 key |
+| `objectStorage.endpoint` | `""` | S3 相容端點；空白時用 AWS S3。SaaS 只接受 https |
+| `objectStorage.region` | `""` | 例如 R2 用 `auto` |
+| `objectStorage.bucket` | `""` | bucket 名稱 |
+| `objectStorage.forcePathStyle` | `false` | MinIO 等需要 path-style 時設 `true` |
+| `objectStorage.credentialsSecret.name` | `""` | 放存取金鑰的 Secret |
+| `objectStorage.credentialsSecret.accessKeyIdKey` | `access-key-id` | |
+| `objectStorage.credentialsSecret.secretAccessKeyKey` | `secret-access-key` | |
+| `smtp.host` | `""` | SMTP 主機名稱或 IPv4；地端是客戶的 SMTP |
+| `smtp.port` | `587` | |
+| `smtp.security` | `starttls` | `starttls` 或 `tls`（直接 TLS，通常是 465）；不支援明文 SMTP |
+| `smtp.from` | `""` | 寄件者，例如 `TrustIoT <noreply@example.com>`；只能一行，避免注入郵件標頭 |
+| `smtp.credentialsSecret.name` | `""` | relay 不需要驗證時留空 |
+| `smtp.credentialsSecret.usernameKey` | `username` | |
+| `smtp.credentialsSecret.passwordKey` | `password` | |
+| `ai.chat.baseUrl` | `""` | OpenAI 相容的聊天端點，例如 `https://api.openai.com/v1`；SaaS 只接受 https |
+| `ai.chat.apiKeySecret.name` | `""` | 只有 AI 閘道服務拿到金鑰（決策 28） |
+| `ai.chat.apiKeySecret.key` | `api-key` | |
+| `ai.embedding.baseUrl` | `""` | embedding 端點（決策 26） |
+| `ai.embedding.apiKeySecret.name` | `""` | |
+| `ai.embedding.apiKeySecret.key` | `api-key` | |
+| `ai.rerank.baseUrl` | `""` | 重排用的聊天端點，搭配快速模型（決策 26） |
+| `ai.rerank.apiKeySecret.name` | `""` | |
+| `ai.rerank.apiKeySecret.key` | `api-key` | |
+| `observability.sentry.enabled` | `false` | SaaS 開、地端預設關（決策 24）；開啟時每個服務都拿到 `SENTRY_DSN` 與 `SENTRY_ENVIRONMENT` |
+| `observability.sentry.environment` | `""` | 開啟時必填，例如 `production`、`staging` |
+| `observability.sentry.dsnSecret.name` | `""` | 開啟時必填；DSN 含金鑰，放在 Secret |
+| `observability.sentry.dsnSecret.key` | `dsn` | |
+
+URL 欄位都不接受 `user:password@` 這種帶帳密的寫法。
+
+## chart 與服務的約定
+
+服務照下列約定實作，就能直接用通用樣板部署（docs/architecture/deployment.md 的服務設計規則）：
+
+- **設定**：ConfigMap `<release>-platform` 以 `envFrom` 交給每個服務，另外每個服務有 `OTEL_SERVICE_NAME=<服務名稱>`。`TRUSTIOT_` 後接英數字、`SENTRY_` 與 `OTEL_` 開頭的變數只由 chart 設定，`env` 不能覆寫，服務讀到的平台設定一定是 values 決定的值。沒有設定的項目不會出現，服務可以分辨「沒設定」與「空字串」。平台設定變更時 pod 會自動滾動更新。
+- **密鑰**：不放進 ConfigMap，以 `valueFrom.secretKeyRef` 從 values 指定的 Secret 取用。Sentry 開啟時每個服務有 `SENTRY_DSN`；其他依賴的帳密只給在 `services.<name>.credentials` 列出它的服務（見後面「密鑰的環境變數」），Secret 名稱空白的項目不注入。外部 Postgres 與 ClickHouse 的 CA 憑證以唯讀方式掛在 `/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`。服務自己的資料庫帳號（每個服務一個角色，決策 4）隨 Postgres 與 migration 的 issue 加入（Laysi/trustiot-v2#58、Laysi/trustiot-v2#60）。
+- **埠與探針**：HTTP 監聽 8080（埠名 `http`）；`GET /healthz` 供 startup 與 liveness，`GET /readyz` 供 readiness。
+- **SIGTERM**：pod 刪除時先等 `preStopSleepSeconds`（預設 5 秒），再送 SIGTERM；服務收到後 readiness 立即回失敗、處理完進行中的請求、主動關閉長連線，在 `drainSeconds`（預設 30 秒）內結束，之後才會被 SIGKILL。服務是容器內的 PID 1，要自己處理 SIGTERM。
+- **執行環境**：根目錄唯讀，只有 `/tmp` 可寫；以非 root 執行，映像的 `USER` 要是數字 UID，並能以 OpenShift 指派的任意 UID 執行；沒有 ServiceAccount token；只排到 arm64 節點。
+
+平台設定的環境變數：
+
+| 變數 | 來源 | 何時出現 |
+| --- | --- | --- |
+| `TRUSTIOT_DEPLOYMENT_MODE` | `global.deploymentMode` | 一律 |
+| `TRUSTIOT_APP_HOST`、`TRUSTIOT_GATEWAY_HOST`、`TRUSTIOT_OTA_HOST` | `hosts.*` | 一律 |
+| `TRUSTIOT_CLIENT_IP_SOURCE` | 由 `ingress.exposure` 推導：`cf-connecting-ip` 或 `x-forwarded-for-rightmost` | 一律 |
+| `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE` | `postgres.external.*` | `postgres.mode` 為 `external` |
+| `TRUSTIOT_CLICKHOUSE_URL` | `clickhouse.external.url` | `clickhouse.mode` 為 `external` |
+| `TRUSTIOT_QDRANT_URL` | `qdrant.external.url` | `qdrant.mode` 為 `external` |
+| `TRUSTIOT_S3_ENDPOINT`、`_REGION`、`_BUCKET`、`_FORCE_PATH_STYLE` | `objectStorage.*` | 各自有值時；`_FORCE_PATH_STYLE` 隨 bucket |
+| `TRUSTIOT_SMTP_HOST`、`_PORT`、`_SECURITY`、`_FROM` | `smtp.*` | 有 host 時（`_FROM` 有值時） |
+| `TRUSTIOT_AI_CHAT_BASE_URL`、`TRUSTIOT_AI_EMBEDDING_BASE_URL`、`TRUSTIOT_AI_RERANK_BASE_URL` | `ai.*.baseUrl` | 各自有值時 |
+| `TRUSTIOT_POSTGRES_CA_FILE`、`TRUSTIOT_CLICKHOUSE_CA_FILE` | 掛載的 CA 憑證路徑 | 對應的依賴為 `external` 且設定了 `caSecret.name` |
+| `SENTRY_ENVIRONMENT` | `observability.sentry.environment` | Sentry 開啟時（`SENTRY_DSN` 來自 Secret，見上） |
+
+`bundled` 模式的叢集內端點，由部署該元件的 issue 加進這張表。
+
+密鑰的環境變數（以 `valueFrom.secretKeyRef` 注入，不在 ConfigMap）：
+
+| 變數 | 來源 | 哪些服務拿到 |
+| --- | --- | --- |
+| `SENTRY_DSN` | `observability.sentry.dsnSecret` | Sentry 開啟時每個服務 |
+| `TRUSTIOT_QDRANT_READ_API_KEY` | `qdrant.external.credentialsSecret` 的 `readApiKeyKey` | `knowledge` 的 `credentials` 含 `qdrant-read`，且 `qdrant.mode` 為 `external` |
+| `TRUSTIOT_QDRANT_WRITE_API_KEY` | `qdrant.external.credentialsSecret` 的 `writeApiKeyKey` | `knowledge` 的 `credentials` 含 `qdrant-write`，且 `qdrant.mode` 為 `external` |
+| `TRUSTIOT_S3_ACCESS_KEY_ID`、`TRUSTIOT_S3_SECRET_ACCESS_KEY` | `objectStorage.credentialsSecret` | `credentials` 含 `object-storage` |
+| `TRUSTIOT_SMTP_USERNAME`、`TRUSTIOT_SMTP_PASSWORD` | `smtp.credentialsSecret` | `credentials` 含 `smtp` |
+| `TRUSTIOT_AI_CHAT_API_KEY`、`TRUSTIOT_AI_EMBEDDING_API_KEY`、`TRUSTIOT_AI_RERANK_API_KEY` | `ai.*.apiKeySecret` | `ai-gateway` 的 `credentials` 含 `ai`（決策 28） |
+
+## 擴充 chart
+
+- **新增服務**：在 `values.yaml` 的 `services` 加一個 key，並同步 docs/architecture/deployment.md 的服務表（測試比對兩邊）。服務特有的埠、資源、探針與 Secret 寫在該 key 底下。
+- **入口 gateway**（Laysi/trustiot-v2#62）：以 Gateway API 的 `Gateway` 宣告，對外的 Service 由 Istio 依 `ingress.exposure` 產生（`tunnel` 用 ClusterIP，`direct` 開 443）；可信的來源 IP 沿用 `trustiot.clientIpSource`，不要另外加欄位。`bun test` 的 kubeconform 已帶 CRD schema 目錄，Gateway API 與 Istio 的資源可以直接驗證。
+- **新增叢集內元件**（broker、Postgres、ClickHouse、Qdrant、collector、Grafana）：放在自己的 `templates/<元件>.yaml`，以 `*.mode` 或開關控制；Service 只能是 ClusterIP；在 `values.schema.json` 加欄位定義、在本文件加欄位說明（測試檢查 `values.yaml` 每個欄位都在本文件），並更新「元件與開關」與平台設定的表。
+- **Secret**：values 只能出現 `{name, key}` 形式的引用；schema 的 `additionalProperties: false` 會擋下放明文的新欄位。服務要拿新的依賴帳密時，在 `_helpers.tpl` 的 `trustiot.credentialCatalog` 加一列（變數名稱、Secret、可以拿的服務）、在 schema 的 `credentials` 列舉加上名稱，並更新「密鑰的環境變數」表；自訂 `env` 自動不能讀這個帳密。叢集內元件自己產生的帳密 Secret（例如 CloudNativePG 的資料庫帳號，Laysi/trustiot-v2#58）也要加進 `trustiot.dependencySecretRefs`。新的平台變數用 `TRUSTIOT_` 開頭，自動受保留規則保護。
+- **測試**：規則寫進 `tests/chart.test.ts`。`tests/values/` 的兩個安裝實例範例與 `smoke.yaml`（以 traefik/whoami 當替身服務）也供 nightly（Laysi/trustiot-v2#69）在叢集上安裝使用。`tests/` 不會打包進 chart（`.helmignore`）。
+
+## OpenShift 與其他 Kubernetes
+
+- Pod 符合 restricted Pod Security Standard，且不固定 UID，可以在 OpenShift 的 restricted-v2 SCC 下執行。
+- 預設只排到 arm64 節點；客戶用 x86 主機時，要先加出 amd64 映像（決策 5）再調整 `serviceDefaults.nodeSelector`。
+- Istio ambient 在 OpenShift 的設定隨入口 gateway 一起寫（Laysi/trustiot-v2#62）。

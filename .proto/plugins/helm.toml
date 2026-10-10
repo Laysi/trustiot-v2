@@ -1,0 +1,31 @@
+# proto schema plugin for Helm (https://helm.sh).
+# Downloads the official release archive from get.helm.sh and verifies it
+# against the SHA-256 file published next to it.
+# Reference: https://moonrepo.dev/docs/proto/non-wasm-plugin
+
+name = "Helm"
+type = "cli"
+
+[platform.linux]
+download-file = "helm-v{version}-linux-{arch}.tar.gz"
+checksum-file = "helm-v{version}-linux-{arch}.tar.gz.sha256sum"
+archive-prefix = "linux-{arch}"
+exe-path = "helm"
+
+[platform.macos]
+download-file = "helm-v{version}-darwin-{arch}.tar.gz"
+checksum-file = "helm-v{version}-darwin-{arch}.tar.gz.sha256sum"
+archive-prefix = "darwin-{arch}"
+exe-path = "helm"
+
+[install]
+download-url = "https://get.helm.sh/{download_file}"
+checksum-url = "https://get.helm.sh/{checksum_file}"
+unpack = true
+
+[install.arch]
+aarch64 = "arm64"
+x86_64 = "amd64"
+
+[resolve]
+git-url = "https://github.com/helm/helm"

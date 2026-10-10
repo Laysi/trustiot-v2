@@ -1,0 +1,49 @@
+# Example SaaS instance overlay for chart tests, lab installs and the nightly workflow.
+# Uses reserved .test names (RFC 6761); the real SaaS overlay lives in deploy/flux.
+# Use with: -f values-saas.yaml -f tests/values/saas-instance.yaml
+
+hosts:
+  app: app.saas.trustiot.test
+  gateway: gw.saas.trustiot.test
+  ota: ota.saas.trustiot.test
+
+qdrant:
+  external:
+    url: https://qdrant.saas.trustiot.test:6333
+    credentialsSecret:
+      name: trustiot-qdrant
+
+objectStorage:
+  endpoint: https://objects.saas.trustiot.test
+  region: auto
+  bucket: trustiot-saas-test
+  credentialsSecret:
+    name: trustiot-object-storage
+
+smtp:
+  host: smtp.saas.trustiot.test
+  port: 587
+  security: starttls
+  from: TrustIoT <noreply@saas.trustiot.test>
+  credentialsSecret:
+    name: trustiot-smtp
+
+ai:
+  chat:
+    baseUrl: https://llm.saas.trustiot.test/v1
+    apiKeySecret:
+      name: trustiot-ai-chat
+  embedding:
+    baseUrl: https://embedding.saas.trustiot.test/v1
+    apiKeySecret:
+      name: trustiot-ai-embedding
+  rerank:
+    baseUrl: https://llm.saas.trustiot.test/v1
+    apiKeySecret:
+      name: trustiot-ai-chat
+
+observability:
+  sentry:
+    environment: test
+    dsnSecret:
+      name: trustiot-sentry

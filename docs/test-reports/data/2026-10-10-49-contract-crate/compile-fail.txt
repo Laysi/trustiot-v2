@@ -1,0 +1,201 @@
+===== cargo build --bin no_timeout (src/bin/no_timeout.rs), expected error[E0061]
+// Doctest twin: InternalClient::new without a timeout.
+use contract::{InternalClient, service};
+
+fn main() {
+    let _identity = InternalClient::<service::Identity>::new("http://identity:8080");
+}
+----- compiler output (exit code 101; error[E0061] present)
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+   --> src/bin/no_timeout.rs:5:21
+    |
+  5 |     let _identity = InternalClient::<service::Identity>::new("http://identity:8080");
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^------------------------ argument #2 of type `Duration` is missing
+    |
+note: associated function defined here
+   --> <repo>/crates/contract/src/client.rs:271:12
+    |
+271 |     pub fn new(base_url: &str, timeout: Duration) -> Result<Self, ClientConfigError> {
+    |            ^^^
+help: provide the argument
+    |
+  5 |     let _identity = InternalClient::<service::Identity>::new("http://identity:8080", /* Duration */);
+    |                                                                                    ++++++++++++++++
+
+For more information about this error, try `rustc --explain E0061`.
+error: could not compile `compile-fail-check` (bin "no_timeout") due to 1 previous error
+
+===== cargo build --bin wrong_service (src/bin/wrong_service.rs), expected error[E0271]
+// Doctest twin: an assets endpoint called on the identity client.
+use contract::client::{Endpoint, InternalClient, Method};
+use contract::{InternalToken, service};
+
+struct ListDevices;
+
+impl Endpoint for ListDevices {
+    type Service = service::Assets;
+    type Body = ();
+    type Response = ();
+    const METHOD: Method = Method::Get;
+    const ROUTE: &'static str = "/internal/devices";
+}
+
+async fn list(identity: &InternalClient<service::Identity>, token: &InternalToken) {
+    let _ = identity.call(&ListDevices, token).await;
+}
+
+fn main() {
+    let _ = list;
+}
+----- compiler output (exit code 101; error[E0271] present)
+error[E0271]: type mismatch resolving `<ListDevices as Endpoint>::Service == Identity`
+   --> src/bin/wrong_service.rs:16:27
+    |
+ 16 |     let _ = identity.call(&ListDevices, token).await;
+    |                      ---- ^^^^^^^^^^^^ type mismatch resolving `<ListDevices as Endpoint>::Service == Identity`
+    |                      |
+    |                      required by a bound introduced by this call
+    |
+note: expected this to be `contract::service::Identity`
+   --> src/bin/wrong_service.rs:8:20
+    |
+  8 |     type Service = service::Assets;
+    |                    ^^^^^^^^^^^^^^^
+note: required by a bound in `InternalClient::<S>::call`
+   --> <repo>/crates/contract/src/client.rs:373:21
+    |
+367 |     pub async fn call<E>(
+    |                  ---- required by a bound in this associated function
+...
+373 |         E: Endpoint<Service = S>,
+    |                     ^^^^^^^^^^^ required by this bound in `InternalClient::<S>::call`
+
+error[E0271]: type mismatch resolving `<ListDevices as Endpoint>::Service == Identity`
+   --> src/bin/wrong_service.rs:16:13
+    |
+ 16 |     let _ = identity.call(&ListDevices, token).await;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ type mismatch resolving `<ListDevices as Endpoint>::Service == Identity`
+    |
+note: expected this to be `contract::service::Identity`
+   --> src/bin/wrong_service.rs:8:20
+    |
+  8 |     type Service = service::Assets;
+    |                    ^^^^^^^^^^^^^^^
+note: required by a bound in `InternalClient::<S>::call`
+   --> <repo>/crates/contract/src/client.rs:373:21
+    |
+367 |     pub async fn call<E>(
+    |                  ---- required by a bound in this associated function
+...
+373 |         E: Endpoint<Service = S>,
+    |                     ^^^^^^^^^^^ required by this bound in `InternalClient::<S>::call`
+
+error[E0271]: type mismatch resolving `<ListDevices as Endpoint>::Service == Identity`
+   --> src/bin/wrong_service.rs:16:48
+    |
+ 16 |     let _ = identity.call(&ListDevices, token).await;
+    |                                                ^^^^^ type mismatch resolving `<ListDevices as Endpoint>::Service == Identity`
+    |
+note: expected this to be `contract::service::Identity`
+   --> src/bin/wrong_service.rs:8:20
+    |
+  8 |     type Service = service::Assets;
+    |                    ^^^^^^^^^^^^^^^
+note: required by a bound in `InternalClient::<S>::call`
+   --> <repo>/crates/contract/src/client.rs:373:21
+    |
+367 |     pub async fn call<E>(
+    |                  ---- required by a bound in this associated function
+...
+373 |         E: Endpoint<Service = S>,
+    |                     ^^^^^^^^^^^ required by this bound in `InternalClient::<S>::call`
+
+For more information about this error, try `rustc --explain E0271`.
+error: could not compile `compile-fail-check` (bin "wrong_service") due to 3 previous errors
+
+===== cargo build --bin bad_message_key (src/bin/bad_message_key.rs), expected error[E0080]
+// Doctest twin: a message key that is user-facing text.
+fn main() {
+    let _key = contract::message_key!("Device name is invalid");
+}
+----- compiler output (exit code 101; error[E0080] present)
+error[E0080]: evaluation panicked: malformed message key
+   --> src/bin/bad_message_key.rs:3:16
+    |
+  3 |     let _key = contract::message_key!("Device name is invalid");
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `main::{constant#0}` failed inside this call
+    |
+note: inside `MessageKey::new`
+   --> /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/panic.rs:62:8
+    |
+    = note: the failure occurred here
+    |
+   ::: <repo>/crates/contract/src/error.rs:176:9
+    |
+176 |         assert!(is_dotted_name(key), "malformed message key");
+    |         ----------------------------------------------------- in this macro invocation
+
+note: erroneous constant encountered
+ --> src/bin/bad_message_key.rs:3:16
+  |
+3 |     let _key = contract::message_key!("Device name is invalid");
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the macro `contract::message_key` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+For more information about this error, try `rustc --explain E0080`.
+error: could not compile `compile-fail-check` (bin "bad_message_key") due to 1 previous error
+
+===== cargo build --bin bad_event_type (src/bin/bad_event_type.rs), expected error[E0080]
+// Doctest twin: an event type that is not `<domain>.<event>`.
+use contract::{Event, EventEnvelope, ServiceName};
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WidgetRenamed {
+    widget_id: String,
+}
+
+impl Event for WidgetRenamed {
+    const TYPE: &'static str = "WidgetRenamed";
+    const VERSION: u32 = 1;
+    const PRODUCER: ServiceName = ServiceName::Assets;
+}
+
+fn main() {
+    let _ = EventEnvelope::new(&WidgetRenamed { widget_id: "w-1".into() }, None);
+}
+----- compiler output (exit code 101; error[E0080] present)
+error[E0080]: evaluation panicked: Event::TYPE must be `<domain>.<event>` in lower snake case
+   --> /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/panic.rs:62:8
+    |
+    = note: evaluation of `contract::EventEnvelope::new::<WidgetRenamed>::{constant#0}` failed here
+    |
+   ::: <repo>/crates/contract/src/event.rs:151:13
+    |
+151 | /             assert!(
+152 | |                 is_dotted_name(E::TYPE),
+153 | |                 "Event::TYPE must be `<domain>.<event>` in lower snake case"
+154 | |             );
+    | |_____________- in this macro invocation
+
+note: erroneous constant encountered
+   --> <repo>/crates/contract/src/event.rs:150:9
+    |
+150 | /         const {
+151 | |             assert!(
+152 | |                 is_dotted_name(E::TYPE),
+153 | |                 "Event::TYPE must be `<domain>.<event>` in lower snake case"
+154 | |             );
+155 | |             assert!(E::VERSION >= 1, "Event::VERSION starts at 1");
+156 | |         }
+    | |_________^
+
+note: the above error was encountered while instantiating `fn EventEnvelope::new::<WidgetRenamed>`
+  --> src/bin/bad_event_type.rs:16:13
+   |
+16 |     let _ = EventEnvelope::new(&WidgetRenamed { widget_id: "w-1".into() }, None);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0080`.
+error: could not compile `compile-fail-check` (bin "bad_event_type") due to 1 previous error
+

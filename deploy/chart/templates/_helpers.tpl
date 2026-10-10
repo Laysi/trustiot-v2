@@ -1,0 +1,239 @@
+{{/*
+Chart name.
+*/}}
+{{- define "trustiot.name" -}}
+{{- .Chart.Name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/*
+Release-scoped base name: the release name when it already contains the chart name,
+otherwise "<release>-<chart>".
+*/}}
+{{- define "trustiot.fullname" -}}
+{{- if contains .Chart.Name .Release.Name -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-%s" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "trustiot.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/*
+Labels shared by every object of the release.
+*/}}
+{{- define "trustiot.labels" -}}
+helm.sh/chart: {{ include "trustiot.chart" . }}
+app.kubernetes.io/name: {{ include "trustiot.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/part-of: trustiot
+{{- end -}}
+
+{{/*
+Object name of a component: the release prefix is shortened so the "-<component>" suffix
+always fits in 63 characters and different components never collapse to the same name.
+Argument: dict "root" $ "name" <component>.
+*/}}
+{{- define "trustiot.componentName" -}}
+{{- $suffix := printf "-%s" .name -}}
+{{- $prefix := include "trustiot.fullname" .root | trunc (int (sub 63 (len $suffix))) | trimSuffix "-" -}}
+{{- printf "%s%s" $prefix $suffix -}}
+{{- end -}}
+
+{{/*
+Immutable selector labels of a component. Argument: dict "root" $ "name" <component>.
+*/}}
+{{- define "trustiot.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "trustiot.name" .root }}
+app.kubernetes.io/instance: {{ .root.Release.Name }}
+app.kubernetes.io/component: {{ .name }}
+{{- end -}}
+
+{{/*
+All labels of a component object. Argument: dict "root" $ "name" <component>.
+*/}}
+{{- define "trustiot.componentLabels" -}}
+{{ include "trustiot.labels" .root }}
+app.kubernetes.io/component: {{ .name }}
+{{- end -}}
+
+{{/*
+Name of the ConfigMap with the platform settings every service reads.
+*/}}
+{{- define "trustiot.platformConfigName" -}}
+{{- include "trustiot.componentName" (dict "root" . "name" "platform") -}}
+{{- end -}}
+
+{{/*
+Recursive merge where "src" wins, including false, 0 and "" (sprig's merge functions
+ignore such values). Maps are merged key by key; lists and scalars are replaced.
+Mutates "dst". Argument: dict "dst" <map> "src" <map>.
+*/}}
+{{- define "trustiot.deepMerge" -}}
+{{- $dst := .dst -}}
+{{- range $key, $value := .src -}}
+{{- $current := get $dst $key -}}
+{{- if and (kindIs "map" $value) (kindIs "map" $current) -}}
+{{- include "trustiot.deepMerge" (dict "dst" $current "src" $value) -}}
+{{- else -}}
+{{- $_ := set $dst $key $value -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Effective settings of one service: serviceDefaults overridden by the service entry.
+Each probe is replaced as a whole and env is appended to the defaults.
+Argument: dict "root" $ "name" <service> "values" <service entry>.
+Returns YAML; use with fromYaml.
+*/}}
+{{- define "trustiot.serviceConfig" -}}
+{{- $defaults := deepCopy .root.Values.serviceDefaults -}}
+{{- if hasKey $defaults "credentials" -}}
+{{- fail "serviceDefaults.credentials is not allowed: list credentials under services.<name>, so only that service gets them" -}}
+{{- end -}}
+{{- $entry := deepCopy .values -}}
+{{- $config := omit $defaults "probes" "env" -}}
+{{- $_ := include "trustiot.deepMerge" (dict "dst" $config "src" (omit $entry "enabled" "probes" "env")) -}}
+{{- $probes := $defaults.probes -}}
+{{- range $kind, $probe := ($entry.probes | default dict) -}}
+{{- $_ := set $probes $kind $probe -}}
+{{- end -}}
+{{- $_ := set $config "probes" $probes -}}
+{{- $_ := set $config "env" (concat ($defaults.env | default list) ($entry.env | default list)) -}}
+{{- toYaml $config -}}
+{{- end -}}
+
+{{/*
+Container image reference of a service, pinned by digest when one is set.
+Argument: dict "root" $ "name" <service> "image" <effective image settings>.
+*/}}
+{{- define "trustiot.serviceImage" -}}
+{{- $repository := .image.repository | default (printf "%s/%s" .image.registry .name) -}}
+{{- $tag := .image.tag | default .root.Chart.AppVersion -}}
+{{- if .image.digest -}}
+{{- printf "%s:%s@%s" $repository $tag .image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" $repository $tag -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Dependency credentials that services request under services.<name>.credentials, read from the
+Secrets named in values. One row per variable:
+  credential  the name used in services.<name>.credentials
+  env         the variable the service reads
+  secret/key  the Secret reference; an empty name means not configured
+  available   false when this deployment does not use the dependency (Qdrant in bundled mode)
+  owners      the only services allowed to request it, with the reason; empty means any service
+Returns a YAML list; use with fromYamlArray.
+*/}}
+{{- define "trustiot.credentialCatalog" -}}
+{{- $v := .Values -}}
+{{- $qdrant := $v.qdrant.external.credentialsSecret -}}
+{{- $qdrantExternal := eq $v.qdrant.mode "external" -}}
+{{- $qdrantOwners := dict "services" (list "knowledge") "reason" "the knowledge service adds the tenant conditions to every Qdrant query (docs/architecture/rag.md)" -}}
+{{- $s3 := $v.objectStorage.credentialsSecret -}}
+{{- $smtp := $v.smtp.credentialsSecret -}}
+{{- $ai := $v.ai -}}
+{{- $aiOwners := dict "services" (list "ai-gateway") "reason" "only the AI gateway holds the provider keys (decision 28)" -}}
+{{- $anyService := dict "services" (list) "reason" "" -}}
+{{- $rows := list -}}
+{{- $rows = append $rows (dict "credential" "qdrant-read" "env" "TRUSTIOT_QDRANT_READ_API_KEY" "secret" $qdrant.name "key" $qdrant.readApiKeyKey "available" $qdrantExternal "owners" $qdrantOwners) -}}
+{{- $rows = append $rows (dict "credential" "qdrant-write" "env" "TRUSTIOT_QDRANT_WRITE_API_KEY" "secret" $qdrant.name "key" $qdrant.writeApiKeyKey "available" $qdrantExternal "owners" $qdrantOwners) -}}
+{{- $rows = append $rows (dict "credential" "object-storage" "env" "TRUSTIOT_S3_ACCESS_KEY_ID" "secret" $s3.name "key" $s3.accessKeyIdKey "available" true "owners" $anyService) -}}
+{{- $rows = append $rows (dict "credential" "object-storage" "env" "TRUSTIOT_S3_SECRET_ACCESS_KEY" "secret" $s3.name "key" $s3.secretAccessKeyKey "available" true "owners" $anyService) -}}
+{{- $rows = append $rows (dict "credential" "smtp" "env" "TRUSTIOT_SMTP_USERNAME" "secret" $smtp.name "key" $smtp.usernameKey "available" true "owners" $anyService) -}}
+{{- $rows = append $rows (dict "credential" "smtp" "env" "TRUSTIOT_SMTP_PASSWORD" "secret" $smtp.name "key" $smtp.passwordKey "available" true "owners" $anyService) -}}
+{{- $rows = append $rows (dict "credential" "ai" "env" "TRUSTIOT_AI_CHAT_API_KEY" "secret" $ai.chat.apiKeySecret.name "key" $ai.chat.apiKeySecret.key "available" true "owners" $aiOwners) -}}
+{{- $rows = append $rows (dict "credential" "ai" "env" "TRUSTIOT_AI_EMBEDDING_API_KEY" "secret" $ai.embedding.apiKeySecret.name "key" $ai.embedding.apiKeySecret.key "available" true "owners" $aiOwners) -}}
+{{- $rows = append $rows (dict "credential" "ai" "env" "TRUSTIOT_AI_RERANK_API_KEY" "secret" $ai.rerank.apiKeySecret.name "key" $ai.rerank.apiKeySecret.key "available" true "owners" $aiOwners) -}}
+{{- toYaml $rows -}}
+{{- end -}}
+
+{{/*
+Env entries for the credentials one service requested (services.<name>.credentials), so each
+dependency Secret reaches only the services that list it. Fails on an unknown credential or one
+the service may not hold; skips credentials whose Secret name is empty or whose dependency this
+deployment does not use.
+Argument: dict "root" $ "name" <service> "credentials" <list>.
+Returns a YAML list; use with fromYamlArray.
+*/}}
+{{- define "trustiot.credentialEnv" -}}
+{{- $name := .name -}}
+{{- $catalog := include "trustiot.credentialCatalog" .root | fromYamlArray -}}
+{{- $env := list -}}
+{{- range $credential := .credentials -}}
+{{- $rows := list -}}
+{{- range $catalog -}}
+{{- if eq .credential $credential -}}
+{{- $rows = append $rows . -}}
+{{- end -}}
+{{- end -}}
+{{- if not $rows -}}
+{{- fail (printf "services.%s: unknown credential %q" $name $credential) -}}
+{{- end -}}
+{{- range $rows -}}
+{{- if and .owners.services (not (has $name .owners.services)) -}}
+{{- fail (printf "services.%s: only %s may receive the %s credential: %s" $name (join ", " .owners.services) $credential .owners.reason) -}}
+{{- end -}}
+{{- if and .available .secret -}}
+{{- $env = append $env (dict "name" .env "valueFrom" (dict "secretKeyRef" (dict "name" .secret "key" .key))) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- toYaml $env -}}
+{{- end -}}
+
+{{/*
+Every configured dependency credential as "<secret>/<key>", including the Sentry DSN. Custom env
+must not read these, so they reach services only through the chart.
+Returns a YAML list; use with fromYamlArray.
+*/}}
+{{- define "trustiot.dependencySecretRefs" -}}
+{{- $refs := list -}}
+{{- range include "trustiot.credentialCatalog" . | fromYamlArray -}}
+{{- if .secret -}}
+{{- $refs = append $refs (printf "%s/%s" .secret .key) -}}
+{{- end -}}
+{{- end -}}
+{{- with .Values.observability.sentry.dsnSecret -}}
+{{- if .name -}}
+{{- $refs = append $refs (printf "%s/%s" .name .key) -}}
+{{- end -}}
+{{- end -}}
+{{- toYaml (uniq $refs) -}}
+{{- end -}}
+
+{{/*
+CA certificates of external databases, mounted read-only into every service (they are public
+certificates, kept in Secrets by the operator). Returns a YAML list of
+{volume, secret, key, dir}; use with fromYamlArray.
+*/}}
+{{- define "trustiot.caMounts" -}}
+{{- $mounts := list -}}
+{{- range $dependency := list "postgres" "clickhouse" -}}
+{{- $settings := get $.Values $dependency -}}
+{{- if and (eq $settings.mode "external") $settings.external.caSecret.name -}}
+{{- $mounts = append $mounts (dict "volume" (printf "%s-ca" $dependency) "secret" $settings.external.caSecret.name "key" $settings.external.caSecret.key "dir" (printf "/etc/trustiot/%s-ca" $dependency)) -}}
+{{- end -}}
+{{- end -}}
+{{- toYaml $mounts -}}
+{{- end -}}
+
+{{/*
+Trusted source of the client IP, derived from the ingress exposure so the two can never
+disagree (decisions 6 and 27): behind Cloudflare only CF-Connecting-IP is trustworthy; with
+direct exposure only the right-most X-Forwarded-For entry, which the ingress gateway appends.
+*/}}
+{{- define "trustiot.clientIpSource" -}}
+{{- if eq .Values.ingress.exposure "tunnel" -}}
+cf-connecting-ip
+{{- else -}}
+x-forwarded-for-rightmost
+{{- end -}}
+{{- end -}}

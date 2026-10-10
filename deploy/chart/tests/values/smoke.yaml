@@ -1,0 +1,20 @@
+# Stand-in service that exercises the generic service template on a real cluster before
+# any TrustIoT image exists. traefik/whoami answers 200 on every path (so /healthz and
+# /readyz pass) and exits right away on SIGTERM. Pinned to the multi-arch index digest,
+# which includes linux/arm64.
+# Use as the last -f after a deployment shape and an instance overlay.
+
+services:
+  smoke-echo:
+    enabled: true
+    image:
+      repository: docker.io/traefik/whoami
+      tag: v1.12.0
+      digest: sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
+    env:
+      - name: WHOAMI_PORT_NUMBER
+        value: "8080"
+    podSecurityContext:
+      # The image sets no USER; TrustIoT images declare a numeric non-root USER instead.
+      runAsUser: 65532
+      runAsGroup: 65532

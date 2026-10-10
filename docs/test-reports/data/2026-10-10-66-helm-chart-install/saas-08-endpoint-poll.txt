@@ -1,0 +1,43 @@
+# 42 samples every ~0.2 s plus kubectl time; ready endpoints per sample: min 1, max 1; pods seen: trustiot-smoke-echo-5d6fcf8947-tggmd, trustiot-smoke-echo-787b67f44b-xbkwn
+1791624967.279640429 trustiot-smoke-echo-5d6fcf8947-tggmd=true 
+1791624967.574621657 trustiot-smoke-echo-5d6fcf8947-tggmd=true 
+1791624967.848630648 trustiot-smoke-echo-5d6fcf8947-tggmd=true 
+1791624968.137191246 trustiot-smoke-echo-5d6fcf8947-tggmd=true 
+1791624968.424766378 trustiot-smoke-echo-5d6fcf8947-tggmd=true 
+1791624968.746486800 trustiot-smoke-echo-5d6fcf8947-tggmd=true 
+1791624969.029621900 trustiot-smoke-echo-5d6fcf8947-tggmd=true 
+1791624969.310181440 trustiot-smoke-echo-5d6fcf8947-tggmd=true 
+1791624969.603676157 trustiot-smoke-echo-5d6fcf8947-tggmd=true 
+1791624969.893089552 trustiot-smoke-echo-5d6fcf8947-tggmd=true 
+1791624970.185456927 trustiot-smoke-echo-5d6fcf8947-tggmd=true 
+1791624970.474739947 trustiot-smoke-echo-5d6fcf8947-tggmd=true 
+1791624970.766329192 trustiot-smoke-echo-5d6fcf8947-tggmd=true 
+1791624971.042055821 trustiot-smoke-echo-5d6fcf8947-tggmd=true 
+1791624971.330058206 trustiot-smoke-echo-5d6fcf8947-tggmd=true 
+1791624971.637853860 trustiot-smoke-echo-5d6fcf8947-tggmd=true trustiot-smoke-echo-787b67f44b-xbkwn=false 
+1791624971.913899742 trustiot-smoke-echo-5d6fcf8947-tggmd=true trustiot-smoke-echo-787b67f44b-xbkwn=false 
+1791624972.195626374 trustiot-smoke-echo-5d6fcf8947-tggmd=true trustiot-smoke-echo-787b67f44b-xbkwn=false 
+1791624972.473927022 trustiot-smoke-echo-5d6fcf8947-tggmd=true trustiot-smoke-echo-787b67f44b-xbkwn=false 
+1791624972.762878164 trustiot-smoke-echo-5d6fcf8947-tggmd=true trustiot-smoke-echo-787b67f44b-xbkwn=false 
+1791624973.056829092 trustiot-smoke-echo-5d6fcf8947-tggmd=true trustiot-smoke-echo-787b67f44b-xbkwn=false 
+1791624973.363755615 trustiot-smoke-echo-5d6fcf8947-tggmd=true trustiot-smoke-echo-787b67f44b-xbkwn=false 
+1791624973.634149581 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624973.923419017 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624974.216883900 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624974.508053100 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624974.786164663 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624975.077944160 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624975.368841941 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624975.655555983 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624975.928668302 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624976.202066165 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624976.492852028 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624976.789497226 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624977.069420386 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624977.371558333 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624977.660460850 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624977.953523605 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624978.258795324 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624978.546625083 trustiot-smoke-echo-5d6fcf8947-tggmd=false trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624978.843354948 trustiot-smoke-echo-787b67f44b-xbkwn=true 
+1791624979.127515431 trustiot-smoke-echo-787b67f44b-xbkwn=true 

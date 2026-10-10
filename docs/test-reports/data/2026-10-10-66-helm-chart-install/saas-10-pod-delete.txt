@@ -1,0 +1,14 @@
+# pod trustiot-smoke-echo-787b67f44b-xbkwn, terminationGracePeriodSeconds 35
+$ kubectl -n e2e-66 delete pod trustiot-smoke-echo-787b67f44b-xbkwn --wait=true
+# exit 0, 6.1 s
+pod "trustiot-smoke-echo-787b67f44b-xbkwn" deleted from e2e-66 namespace
+elapsed on the box: 5.6 s
+
+$ kubectl -n e2e-66 get events --field-selector involvedObject.name=trustiot-smoke-echo-787b67f44b-xbkwn
+# exit 0, 0.6 s
+TIME                   REASON      MESSAGE
+<nil>                  Scheduled   Successfully assigned e2e-66/trustiot-smoke-echo-787b67f44b-xbkwn to trustiot-mac-m1
+2026-10-10T09:36:11Z   Pulled      Container image "docker.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44" already present on machine and can be accessed by the pod
+2026-10-10T09:36:11Z   Created     Container created
+2026-10-10T09:36:11Z   Started     Container started
+2026-10-10T09:36:24Z   Killing     Stopping container smoke-echo

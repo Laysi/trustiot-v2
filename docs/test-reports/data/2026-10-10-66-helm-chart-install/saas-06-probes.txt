@@ -1,0 +1,11 @@
+$ kubectl get --raw /api/v1/namespaces/e2e-66/services/trustiot-smoke-echo:http/proxy/healthz | head -3
+# exit 0, 0.6 s
+Hostname: trustiot-smoke-echo-5d6fcf8947-tggmd
+IP: 127.0.0.1
+IP: ::1
+
+$ kubectl get --raw /api/v1/namespaces/e2e-66/services/trustiot-smoke-echo:http/proxy/readyz | head -3
+# exit 0, 0.6 s
+Hostname: trustiot-smoke-echo-5d6fcf8947-tggmd
+IP: 127.0.0.1
+IP: ::1
