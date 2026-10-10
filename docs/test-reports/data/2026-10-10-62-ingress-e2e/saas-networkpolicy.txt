@@ -1,0 +1,12 @@
+# 2026-10-10T12:57:30Z SaaS release in e2e-62; ingress ClusterIP 10.43.158.10, pods 10.42.0.135 10.42.0.136
+$ kubectl -n e2e-62 get networkpolicy trustiot-ingress -o jsonpath={.spec}
+{"ingress":[{"from":[{"ipBlock":{"cidr":"10.42.0.1/32"}}]}],"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"trustiot-ingress"}},"policyTypes":["Ingress"]}
+
+## from the lab host (source 10.42.0.1 on cni0, like cloudflared)
+ingress ClusterIP http://10.43.158.10/healthz -> HTTP 200 0.002469s
+
+## from a pod in e2e-62 (not in the mesh, no special labels)
+ingress ClusterIP                  http://10.43.158.10/healthz        FAILED TypeError ConnectionRefused Unable to connect. Is the computer able to access the url? 0 ms
+ingress pod 10.42.0.135            http://10.42.0.135:80/healthz      FAILED TypeError ConnectionRefused Unable to connect. Is the computer able to access the url? 0 ms
+ingress pod 10.42.0.136            http://10.42.0.136:80/healthz      FAILED TypeError ConnectionRefused Unable to connect. Is the computer able to access the url? 0 ms
+control: assets Service            http://trustiot-assets:8080/healthz HTTP 200 2 ms
