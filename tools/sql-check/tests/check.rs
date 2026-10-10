@@ -120,6 +120,46 @@ fn listed_paths_exist() {
     for skipped in sql_check::SKIPPED {
         assert!(root.join(skipped).is_dir(), "{skipped} does not exist");
     }
+    for exception in sql_check::SET_CONFIG_ALLOWED {
+        assert!(
+            root.join(exception.path).is_file(),
+            "{} does not exist",
+            exception.path
+        );
+        let setting = exception.setting.to_ascii_lowercase();
+        assert!(
+            !setting.starts_with("trustiot.")
+                && setting != "role"
+                && setting != "session_authorization",
+            "{}: {} cannot be allowed ({})",
+            exception.path,
+            exception.setting,
+            exception.reason
+        );
+    }
+    for exception in sql_check::EXCEPTIONS {
+        let path = Path::new(exception.path);
+        assert!(
+            root.join(path).is_file(),
+            "{} does not exist",
+            exception.path
+        );
+        assert!(
+            path.components()
+                .any(|component| component.as_os_str() == "tests")
+                && !path
+                    .components()
+                    .any(|component| component.as_os_str() == "src"),
+            "{} is not a test file ({})",
+            exception.path,
+            exception.reason
+        );
+        assert!(
+            !exception.rules.contains(&Rule::UncheckedInclude),
+            "{}: included files are always checked",
+            exception.path
+        );
+    }
 }
 
 /// The workspace check sees the allowed file, and finds its tenant SQL only because it is

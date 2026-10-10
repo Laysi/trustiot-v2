@@ -17,13 +17,17 @@ RLS 防的是程式漏寫租戶條件，不防 SQL 注入：注入的 SQL 以服
 | `DynamicQueryBuilder` | `QueryBuilder::new`、`with_arguments`、`push`、`push_unseparated`、`separated` 收到非靜態的文字 | 值用 `push_bind`；SQL 片段只用字面值或常數 |
 | `LeakedString` | 用到 sqlx 的檔案裡有 `.leak()` 或 `Box::leak`：洩漏的 `String` 會變成 `&'static str`，繞過 sqlx 的檢查 | 同上 |
 | `SqlBuiltFromStrings` | `format!`、`format_args!`、`write!`、`writeln!`、`+`、`push_str`、`insert_str` 的文字開頭像 SQL（大寫的 `SELECT`、`WHERE`、`AND` 等後接空白） | 同上 |
-| `SessionSetting` | SQL 設定或重設 `trustiot.*` 設定或角色（`SET [LOCAL] trustiot.…`、`SET ROLE`、`SET SESSION AUTHORIZATION`、`RESET ALL`、`ALTER ROLE … SET trustiot.…`）、呼叫 `set_config`，或用到 `pg_settings`（對它 `UPDATE` 等於 `SET`）。檢查的文字包括每個字串字面值、每個 `concat!` 接起來的全文、`include_str!`、`include_bytes!` 引入的檔案內容，以及同一個檔案依原始碼順序交給 QueryBuilder 的靜態文字接起來的全文（常數也代入同檔案裡的值）；QueryBuilder 的片段只要提到 `trustiot` 也報；識別字的雙引號、`.` 前後的空白與 SQL 註解（字串裡的 `--` 不算註解）不影響判斷 | 租戶只由 service-kit 的 `tenant` 模組在交易開頭設定 |
+| `SessionSetting` | SQL 設定或重設 `trustiot.*` 設定或角色（`SET [LOCAL] trustiot.…`、`SET ROLE`、`SET SESSION AUTHORIZATION`、`RESET ALL`、`ALTER ROLE … SET trustiot.…`）、呼叫 `set_config`（第一個參數是 `SET_CONFIG_SETTINGS` 裡審查過的設定的字面值名稱時除外：`application_name`、`idle_in_transaction_session_timeout`、`lock_timeout`、`statement_timeout`；其他設定，例如 `search_path`，只有列在 `SET_CONFIG_ALLOWED` 的檔案可以；名稱是參數、運算式、`trustiot.*`、`role` 或 `session_authorization` 一律被擋），或用到 `pg_settings`（對它 `UPDATE` 等於 `SET`）。檢查的文字包括每個字串字面值、每個 `concat!` 接起來的全文、`include_str!`、`include_bytes!` 引入的檔案內容，以及同一個檔案依原始碼順序交給 QueryBuilder 的靜態文字接起來的全文（常數也代入同檔案裡的值）；QueryBuilder 的片段只要提到 `trustiot` 也報；識別字的雙引號、`.` 前後的空白與 SQL 註解（字串裡的 `--` 不算註解）不影響判斷 | 租戶只由 service-kit 的 `tenant` 模組在交易開頭設定 |
 | `UncheckedInclude` | `include_str!`、`include_bytes!` 引入的檔案讀不到（路徑不是字面值，例如 `concat!(env!("OUT_DIR"), …)`，或檔案不存在），無法檢查其中的 SQL | 以相對於原始檔的字面值路徑引入 repo 裡的檔案 |
 
 - 檢查 workspace 內所有 `.rs` 檔（含測試與 `build.rs`），略過 `target`、`node_modules`、`.` 開頭的目錄，以及本工具自己（`SKIPPED`：原始碼與範例檔本來就含有被擋的寫法）。
 - 測試程式（路徑含 `tests` 目錄的檔案，或 `#[cfg(test)]` 模組）的 `DynamicSql`、`DynamicQueryBuilder` 另外接受單一名稱的變數，例如走訪字面值表格的迴圈變數；sqlx 仍要求 `&'static str`，而 `leak` 與 `AssertSqlSafe` 在測試裡一樣被擋。其他規則對測試程式不放寬。
 - `SqlBuiltFromStrings` 不認 `FROM` 與 `COPY` 開頭的文字，因為 Containerfile 也這樣開頭。
-- 例外清單只有 `SESSION_SETTING_ALLOWED`：`crates/service-kit/src/tenant.rs` 可以含 `set_config('trustiot.tenant_id', …)`。測試確認清單上的路徑存在。
+- 例外清單有三個，測試確認清單上的路徑存在：
+  - `SESSION_SETTING_ALLOWED`：只有 `crates/service-kit/src/tenant.rs` 可以含 `set_config('trustiot.tenant_id', …)`。
+  - `SET_CONFIG_ALLOWED`：檔案可以用 `set_config` 改的額外設定，每筆寫明理由與值的來源；不能是 `trustiot.*`、`role` 或 `session_authorization`。目前是 `crates/outbox/src/consumer.rs` 的 `search_path`（值是設定的產生端 schema，`ConsumerConfig::new` 以 `is_schema_name` 驗證過）與 `crates/outbox/tests/delivery.rs` 的測試用設定 `outbox_test.tenant`。
+  - `EXCEPTIONS`：測試檔（路徑在 `tests` 目錄下、不在 `src` 下）可以免除列出的規則，每筆寫明理由；`UncheckedInclude` 不能免除。目前是 `crates/outbox/tests/delivery.rs`、`crates/outbox/tests/support/mod.rs`（以每次執行產生的名稱建立 schema、角色與 grant，DDL 的識別字不能綁定），以及 `services/ingest/tests/clickhouse.rs`（ClickHouse 而不是 Postgres：建立每次執行的使用者、角色與租戶，並以 `SET ROLE NONE` 驗證攻擊會失敗，所以 `SessionSetting` 也免除）。
+- 只檢查 `.rs` 檔與它們以 `include_str!`、`include_bytes!` 引入的檔案。各服務 `migrations/` 下的 `.sql`（例如 `services/ingest` 的 ClickHouse schema）是 migration 角色執行的 DDL，不經服務的程式送出，不在本檢查範圍；`tools/repo-check` 另外擋下 `services/*/src` 裡改 schema 的 SQL（決策 14）。
 - 巨集的內容會解析成運算式或陳述式再檢查（例如 `sqlx::query!`、`tokio::select!`），解析不了時檢查其中的字串字面值與 `AssertSqlSafe`。doc comment 不檢查。
 
 ## 限制
@@ -44,4 +48,4 @@ RLS 防的是程式漏寫租戶條件，不防 SQL 注入：注入的 SQL 以服
 ## 測試
 
 - `src/lib.rs` 的單元測試：每條規則的觸發與不觸發的寫法。
-- `tests/check.rs`：`tests/fixtures/concatenated.rs` 每個以行尾註解標示規則的行都被報出、而且只有這些行；`tests/fixtures/parameterized.rs` 不報任何問題（兩者引入的 `schema.sql`、`sets-tenant.sql` 也在 `tests/fixtures/`）；整個 workspace 沒有違規；例外清單與略過清單的路徑存在。
+- `tests/check.rs`：`tests/fixtures/concatenated.rs` 每個以行尾註解標示規則的行都被報出、而且只有這些行；`tests/fixtures/parameterized.rs` 不報任何問題（兩者引入的 `schema.sql`、`sets-tenant.sql` 也在 `tests/fixtures/`）；整個 workspace 沒有違規；例外清單與略過清單的路徑存在，`EXCEPTIONS` 只列測試檔。

@@ -155,11 +155,11 @@ tx.commit().await?;
 
 ## 與租戶隔離（決策 29）的配合
 
-決策 29 的 RLS 與 `SET LOCAL` 由 Laysi/trustiot-v2#53 實作。本 crate 不處理租戶，設計成在那樣的交易裡也能運作：
+決策 29 的 RLS 與 `SET LOCAL` 由 Laysi/trustiot-v2#53 實作（service-kit 的 `tenant` 模組；`outbox_event` 的 policy 範本是 [`crates/service-kit/sql/outbox-event.sql`](../service-kit/sql/outbox-event.sql)，說明見 [service-kit README 的 outbox 一節](../service-kit/README.md#outboxcratesoutbox)）。本 crate 不處理租戶，設計成在那樣的交易裡也能運作：
 
-- **產生端**：`publish` 只在呼叫端的交易裡執行兩個語句，不另開交易、不改設定，所以在交易開頭設定租戶之後呼叫即可。`outbox_event.tenant_id` 來自信封（呼叫端傳入的租戶）；#53 為產生端角色加上 `WITH CHECK (tenant_id = 目前租戶)` 的 INSERT policy，寫錯租戶會被資料庫擋下。插入不使用 `RETURNING`，所以不需要 SELECT policy。全平台事件（`tenant_id` 為 NULL）是否允許、由哪個角色寫，由 #53 決定。
+- **產生端**：`publish` 只在呼叫端的交易裡執行兩個語句，不另開交易、不改設定，所以在交易開頭設定租戶之後呼叫即可。`outbox_event.tenant_id` 來自信封（呼叫端傳入的租戶）；#53 為產生端角色加上 `WITH CHECK (tenant_id = 目前租戶)` 的 INSERT policy，寫錯租戶會被資料庫擋下。插入不使用 `RETURNING`，所以不需要 SELECT policy。全平台事件（`tenant_id` 為 NULL）由 #53 決定（2026-10-10）：允許，但只由產生端的平台角色寫（`platform_events` policy），服務角色寫不了。
 - **`outbox_aggregate`**：只有聚合種類、ID 與序號，不是租戶資料；產生端角色需要讀寫它。
-- **消費端讀取**：投遞本來就跨租戶，消費端角色對產生端 `outbox_event` 需要一條不限租戶的 SELECT policy（例如 `USING (true)`，只給消費端角色）。讀取在消費端自己的唯讀交易裡進行，與 handler 的交易分開。
+- **消費端讀取**：投遞本來就跨租戶，消費端對產生端 `outbox_event` 需要一條不限租戶的 SELECT policy（範本的 `consumer_read`：`USING (true)`，只給消費端的**平台角色**；給服務角色的話，service-kit 會拒絕它的連線）。讀取在消費端自己的唯讀交易裡進行，與 handler 的交易分開。
 - **消費端處理**：每個事件一筆交易，`Handler::begin` 是交易裡的第一步，在本 crate 碰任何資料表之前，於此依 `Delivery::tenant()` 設定租戶；之後 handler 的讀寫都在該租戶之下。消費端自己的 `outbox_subscription`、`outbox_inbox`、`outbox_dead_letter`、`outbox_version` 不帶租戶資料，不需要 RLS。
 
 ## 資料庫權限

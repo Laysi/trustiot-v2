@@ -13,7 +13,7 @@
 //! | [`Rule::DynamicQueryBuilder`] | `QueryBuilder::new`/`with_arguments`, `push`, `push_unseparated`, and `separated` with anything but static SQL; values go through `push_bind` |
 //! | [`Rule::LeakedString`] | `.leak()` and `Box::leak` in files that use sqlx: a leaked `String` passes runtime text as `&'static str` |
 //! | [`Rule::SqlBuiltFromStrings`] | `format!`, `format_args!`, `write!`, `writeln!`, `+`, `push_str`, and `insert_str` with text that starts like SQL (`SELECT`, `WHERE`, ...) |
-//! | [`Rule::SessionSetting`] | SQL that sets or resets `trustiot.*` settings or the role, calls `set_config`, or names `pg_settings`, outside [`SESSION_SETTING_ALLOWED`]: only service-kit's tenant module sets the tenant. The check reads string literals, the joined text of each `concat!`, the files `include_str!`/`include_bytes!` name, and the static text a file passes to query builders, joined in source order; a query builder fragment that names `trustiot` is reported too |
+//! | [`Rule::SessionSetting`] | SQL that sets or resets `trustiot.*` settings or the role, calls `set_config` (except with the literal name of a setting in [`SET_CONFIG_SETTINGS`], or of the file's entry in [`SET_CONFIG_ALLOWED`]), or names `pg_settings`, outside [`SESSION_SETTING_ALLOWED`]: only service-kit's tenant module sets the tenant. The check reads string literals, the joined text of each `concat!`, the files `include_str!`/`include_bytes!` name, and the static text a file passes to query builders, joined in source order; a query builder fragment that names `trustiot` is reported too |
 //! | [`Rule::UncheckedInclude`] | `include_str!`/`include_bytes!` of a file the check cannot read (a path that is not a literal, or a missing file), whose SQL it therefore cannot check |
 //!
 //! Test code (files under a `tests` directory and `#[cfg(test)]` modules) may also pass SQL
@@ -42,6 +42,89 @@ pub const SESSION_SETTING_ALLOWED: &[&str] = &["crates/service-kit/src/tenant.rs
 /// whose source and fixtures name every pattern it rejects. Its fixtures are checked by its own
 /// tests instead.
 pub const SKIPPED: &[&str] = &["tools/sql-check"];
+
+/// Settings any code may change with `set_config`: they bound time or label the session, and
+/// change neither the role nor which rows or objects a query reaches.
+pub const SET_CONFIG_SETTINGS: &[&str] = &[
+    "application_name",
+    "idle_in_transaction_session_timeout",
+    "lock_timeout",
+    "statement_timeout",
+];
+
+/// A file that may call `set_config` for one more setting, and why.
+pub struct SettingException {
+    /// The file, relative to the workspace root.
+    pub path: &'static str,
+    /// The setting name, as written in the SQL.
+    pub setting: &'static str,
+    /// Why, including where the value comes from.
+    pub reason: &'static str,
+}
+
+/// Files that may call `set_config` for a setting outside [`SET_CONFIG_SETTINGS`].
+pub const SET_CONFIG_ALLOWED: &[SettingException] = &[
+    SettingException {
+        path: "crates/outbox/src/consumer.rs",
+        setting: "search_path",
+        reason: "the read transaction searches only the producer's schema; the value is the \
+                 configured schema name, which ConsumerConfig::new accepts only when \
+                 is_schema_name holds (lower-case letters, digits, and _, not pg_*)",
+    },
+    SettingException {
+        path: "crates/outbox/tests/delivery.rs",
+        setting: "outbox_test.tenant",
+        reason: "a test-only setting the test handler sets and its policies read",
+    },
+];
+
+/// Rules waived for a test file that builds SQL from strings: every rule but the ones against
+/// session settings and unreadable includes.
+pub const DYNAMIC_SQL: &[Rule] = &[
+    Rule::DynamicSql,
+    Rule::AssertSqlSafe,
+    Rule::DynamicQueryBuilder,
+    Rule::LeakedString,
+    Rule::SqlBuiltFromStrings,
+];
+
+/// A test file that may break some rules, and why.
+pub struct Exception {
+    /// The file, relative to the workspace root; always under a `tests` directory.
+    pub path: &'static str,
+    /// The rules that do not apply to it.
+    pub rules: &'static [Rule],
+    /// Why.
+    pub reason: &'static str,
+}
+
+/// Test files that may break some rules. Tests that create per-run roles, schemas, or users
+/// need identifiers in DDL, which cannot be bound.
+pub const EXCEPTIONS: &[Exception] = &[
+    Exception {
+        path: "crates/outbox/tests/delivery.rs",
+        rules: DYNAMIC_SQL,
+        reason: "creates per-run roles and grants on per-run schemas",
+    },
+    Exception {
+        path: "crates/outbox/tests/support/mod.rs",
+        rules: DYNAMIC_SQL,
+        reason: "creates a per-run schema",
+    },
+    Exception {
+        path: "services/ingest/tests/clickhouse.rs",
+        rules: &[
+            Rule::DynamicSql,
+            Rule::AssertSqlSafe,
+            Rule::DynamicQueryBuilder,
+            Rule::LeakedString,
+            Rule::SqlBuiltFromStrings,
+            Rule::SessionSetting,
+        ],
+        reason: "ClickHouse, not Postgres: creates per-run users, roles, and tenants, and runs \
+                 SET ROLE NONE as an attack that must fail",
+    },
+];
 
 /// sqlx functions whose first argument is SQL.
 const QUERY_FUNCTIONS: &[&str] = &[
@@ -229,6 +312,22 @@ pub fn check_source(
     source: &str,
     allow_session_setting: bool,
 ) -> Result<Vec<Finding>, CheckError> {
+    check_source_allowing(path, dir, source, allow_session_setting, &[])
+}
+
+/// [`check_source`], also accepting `set_config` for `settings` (the file's entries in
+/// [`SET_CONFIG_ALLOWED`]).
+///
+/// # Errors
+///
+/// When `source` is not valid Rust.
+pub fn check_source_allowing(
+    path: &Path,
+    dir: Option<&Path>,
+    source: &str,
+    allow_session_setting: bool,
+    settings: &[&str],
+) -> Result<Vec<Finding>, CheckError> {
     let file = syn::parse_file(source).map_err(|error| CheckError::Parse {
         path: path.to_owned(),
         message: error.to_string(),
@@ -242,6 +341,10 @@ pub fn check_source(
             .any(|component| component.as_os_str() == "tests"),
         test_modules: 0,
         allow_session_setting,
+        settings: settings
+            .iter()
+            .map(|setting| (*setting).to_owned())
+            .collect(),
         sqlx_imports: Vec::new(),
         builder_types: BUILDER_TYPES
             .iter()
@@ -278,7 +381,8 @@ pub fn check_source(
 }
 
 /// Checks every `.rs` file under `root` (the workspace root), skipping [`SKIPPED`], `target`,
-/// `node_modules`, and directories whose name starts with `.`.
+/// `node_modules`, and directories whose name starts with `.`. Files in
+/// [`EXCEPTIONS`] are not checked for the rules they list.
 ///
 /// # Errors
 ///
@@ -297,7 +401,19 @@ pub fn check_tree(root: &Path) -> Result<Vec<Finding>, CheckError> {
         let allowed = SESSION_SETTING_ALLOWED
             .iter()
             .any(|allowed| relative == Path::new(allowed));
-        findings.extend(check_source(&relative, file.parent(), &source, allowed)?);
+        let waived: &[Rule] = EXCEPTIONS
+            .iter()
+            .find(|exception| relative == Path::new(exception.path))
+            .map_or(&[], |exception| exception.rules);
+        let settings: Vec<&str> = SET_CONFIG_ALLOWED
+            .iter()
+            .filter(|exception| relative == Path::new(exception.path))
+            .map(|exception| exception.setting)
+            .collect();
+        let mut file_findings =
+            check_source_allowing(&relative, file.parent(), &source, allowed, &settings)?;
+        file_findings.retain(|finding| !waived.contains(&finding.rule));
+        findings.extend(file_findings);
     }
     Ok(findings)
 }
@@ -402,6 +518,8 @@ struct Checker<'a> {
     dir: Option<&'a Path>,
     uses_sqlx: bool,
     allow_session_setting: bool,
+    /// Settings this file may also change with `set_config`.
+    settings: Vec<String>,
     sqlx_imports: Vec<String>,
     /// Names of the query builder types: sqlx's, their renames, and aliases of them.
     builder_types: Vec<String>,
@@ -509,8 +627,13 @@ impl Checker<'_> {
         self.check_text(literal.span(), &literal.value());
     }
 
+    fn sets_session(&self, sql: &str) -> bool {
+        let settings: Vec<&str> = self.settings.iter().map(String::as_str).collect();
+        sets_session_allowing(sql, &settings)
+    }
+
     fn check_text(&mut self, span: Span, sql: &str) {
-        if !self.allow_session_setting && sets_session(sql) {
+        if !self.allow_session_setting && self.sets_session(sql) {
             self.report(span, Rule::SessionSetting);
         }
     }
@@ -541,7 +664,7 @@ impl Checker<'_> {
             self.report(span_of(sql), Rule::SessionSetting);
         }
         self.builder_text.push_str(&text);
-        if !self.builder_text_reported && sets_session(&self.builder_text) {
+        if !self.builder_text_reported && self.sets_session(&self.builder_text) {
             self.builder_text_reported = true;
             self.report(span_of(sql), Rule::SessionSetting);
         }
@@ -1186,13 +1309,82 @@ pub fn looks_like_sql(text: &str) -> bool {
     SQL_START_WORDS.contains(&word) && rest.starts_with(char::is_whitespace)
 }
 
-/// Whether SQL text sets or resets a `trustiot.*` setting or the role, calls `set_config`, or
-/// names `pg_settings` (updating it sets a setting). Identifier quotes, white space around `.`,
-/// and comments do not hide a match: the text is checked as it is and with its comments
-/// removed.
+/// Whether SQL text sets or resets a `trustiot.*` setting or the role, calls `set_config` (other
+/// than with the literal name of a setting in [`SET_CONFIG_SETTINGS`]), or names `pg_settings`
+/// (updating it sets a setting). Identifier quotes, white space around `.`, and comments do not
+/// hide a match: the text is checked as it is and with its comments removed.
 #[must_use]
 pub fn sets_session(sql: &str) -> bool {
-    sets_session_words(sql) || sets_session_words(&strip_comments(sql))
+    sets_session_allowing(sql, &[])
+}
+
+/// [`sets_session`], also accepting `set_config` with the literal name of one of `settings`.
+#[must_use]
+pub fn sets_session_allowing(sql: &str, settings: &[&str]) -> bool {
+    [sql.to_owned(), strip_comments(sql)]
+        .iter()
+        .any(|text| sets_session_words(text) || calls_unsafe_set_config(text, settings))
+}
+
+/// Whether SQL text calls `set_config` other than with the literal name of a setting in
+/// [`SET_CONFIG_SETTINGS`] or `settings`; `trustiot.*`, the role, and the session authorization
+/// never count as allowed.
+fn calls_unsafe_set_config(sql: &str, settings: &[&str]) -> bool {
+    let text: Vec<char> = sql
+        .chars()
+        .filter(|c| *c != '"')
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    let needle: Vec<char> = "SET_CONFIG".chars().collect();
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut start = 0;
+    while let Some(offset) = text[start..]
+        .windows(needle.len())
+        .position(|window| window == needle.as_slice())
+    {
+        let at = start + offset;
+        start = at + needle.len();
+        if at > 0 && is_word(text[at - 1]) || text.get(start).is_some_and(|&c| is_word(c)) {
+            continue;
+        }
+        let mut index = start;
+        let skip_space = |index: &mut usize| {
+            while text.get(*index).is_some_and(|c| c.is_whitespace()) {
+                *index += 1;
+            }
+        };
+        skip_space(&mut index);
+        if text.get(index) != Some(&'(') {
+            return true;
+        }
+        index += 1;
+        skip_space(&mut index);
+        if text.get(index) != Some(&'\'') {
+            return true;
+        }
+        index += 1;
+        let name_start = index;
+        while text.get(index).is_some_and(|&c| c != '\'') {
+            index += 1;
+        }
+        let name: String = text[name_start..index.min(text.len())].iter().collect();
+        index += 1;
+        if text.get(index) == Some(&'\'') {
+            // A doubled quote: the name goes on, which a setting name never does.
+            return true;
+        }
+        skip_space(&mut index);
+        let safe_name = !name.starts_with("TRUSTIOT.")
+            && !matches!(name.as_str(), "ROLE" | "SESSION_AUTHORIZATION")
+            && SET_CONFIG_SETTINGS
+                .iter()
+                .chain(settings)
+                .any(|setting| setting.eq_ignore_ascii_case(&name));
+        if !safe_name || text.get(index) != Some(&',') {
+            return true;
+        }
+    }
+    false
 }
 
 fn sets_session_words(sql: &str) -> bool {
@@ -1202,7 +1394,7 @@ fn sets_session_words(sql: &str) -> bool {
     for (index, current) in words.iter().enumerate() {
         // Also schema-qualified, such as `pg_catalog.set_config`.
         let name = current.rsplit('.').next().unwrap_or_default();
-        if name == "SET_CONFIG" || name == "PG_SETTINGS" {
+        if name == "PG_SETTINGS" {
             return true;
         }
         // The last segment too: a stray dot before a keyword joins it to the previous word.
@@ -1542,8 +1734,27 @@ mod tests {
             "SET statement_timeout = '1.5s'",
             "SELECT t.name FROM devices t WHERE t.settings = $1",
             "SELECT 1",
+            "SELECT set_config('statement_timeout', $1, true)",
+            "SELECT pg_catalog.set_config ( 'lock_timeout' , $1, true)",
         ] {
             assert!(!sets_session(sql), "{sql}");
+        }
+        let search_path = "SELECT set_config('search_path', $1, true)";
+        assert!(sets_session(search_path), "only reviewed settings");
+        assert!(!sets_session_allowing(search_path, &["search_path"]));
+        assert!(sets_session_allowing(
+            "SELECT set_config('trustiot.tenant_id', $1, true)",
+            &["trustiot.tenant_id"]
+        ));
+        for sql in [
+            "SELECT set_config($1, $2, true)",
+            "SELECT set_config('trust' || 'iot.tenant_id', $1, true)",
+            "SELECT set_config('role', 'owner', false)",
+            "SELECT set_config('it''s', $1, true)",
+            "SELECT set_config /* x */ ('search_path', $1, true)",
+            "SELECT set_config",
+        ] {
+            assert!(sets_session(sql), "{sql}");
         }
         let source = r#"
             async fn run(pool: &sqlx::PgPool) {
@@ -1632,7 +1843,7 @@ mod tests {
             }
             fn config() {
                 let mut builder = QueryBuilder::<Postgres>::new("SELECT set_");
-                builder.push("config('a', $1, true)");
+                builder.push("config($1, $2, true)");
             }
         "#;
         // The fragment naming trustiot in each of the first two functions, and the fragment
@@ -1642,7 +1853,7 @@ mod tests {
             use sqlx::{Postgres, QueryBuilder};
             fn config() {
                 let mut builder = QueryBuilder::<Postgres>::new("SELECT set_");
-                builder.push("config('a', $1, true)");
+                builder.push("config($1, $2, true)");
             }
         "#;
         assert_eq!(rules(config_only), [Rule::SessionSetting]);
@@ -1661,14 +1872,14 @@ mod tests {
     fn concat_is_checked_as_its_joined_text() {
         let source = r#"
             const SPLIT: &str = concat!("SELECT set_", "config('trustiot.tenant_id', $1, true)");
-            const NESTED: &str = concat!("SELECT ", stringify!(set_config), "('x', $1, true)");
+            const NESTED: &str = concat!("SELECT ", stringify!(set_config), "($1, $2, true)");
             async fn run(pool: &sqlx::PgPool) {
                 sqlx::query(concat!("SET LOCAL trustiot.", "tenant_id = '1'")).execute(pool);
                 sqlx::query(concat!("SELECT 1 WHERE ", env!("FILTER"))).execute(pool);
                 sqlx::query(concat!("SELECT ", concat!("1, ", 2), ", ", 'x')).execute(pool);
             }
             macro_rules! tenant {
-                () => { sqlx::query(concat!("SELECT set_", "config('a', $1, true)")) };
+                () => { sqlx::query(concat!("SELECT set_", "config($1, $2, true)")) };
                 ($filter:expr) => { sqlx::query(concat!("SELECT 1 WHERE ", $filter)) };
             }
         "#;
