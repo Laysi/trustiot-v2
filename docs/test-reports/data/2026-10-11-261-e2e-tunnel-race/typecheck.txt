@@ -1,0 +1,17 @@
+$ git checkout 82e0480   # main before this change
+$ bun install --cwd scripts --frozen-lockfile      # typescript 7.0.2, @types/bun 1.4.2
+# tsc with scripts/tsconfig.json options, include = ../deploy/chart/tests/**/*.ts
+$ cd scripts && ./node_modules/.bin/tsc --noEmit -p <that config>
+../deploy/chart/tests/e2e/ingress.e2e.ts(187,87): error TS2322: Type 'Buffer<ArrayBufferLike>' is not assignable to type 'Buffer<ArrayBuffer>'.
+  Type 'ArrayBufferLike' is not assignable to type 'ArrayBuffer'.
+    Type 'SharedArrayBuffer' is missing the following properties from type 'ArrayBuffer': resizable, resize, detached, transfer, transferToFixedLength
+# (line 187: `body = decodeChunked(body)`; `body` was inferred as Buffer<ArrayBuffer> from subarray(), decodeChunked returns Buffer)
+# chart.test.ts and identity-double/server.ts: no errors.
+
+$ git checkout fix/261-e2e-tunnel-race   # this change: include added to scripts/tsconfig.json, `let body: Buffer`
+$ bun run --cwd scripts typecheck
+$ tsc --noEmit --project tsconfig.json
+(no output, exit 0)
+
+# While writing the unit tests the wider include caught a real mistake once (property 'kill' does not
+# exist on type 'TunnelProcess' in tunnel-recovery.test.ts), fixed before commit.
