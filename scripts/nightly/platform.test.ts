@@ -33,6 +33,12 @@ describe("istiodOverlay", () => {
     expect(overlay.meshConfig.extensionProviders[0]?.envoyExtAuthzHttp.failOpen).toBe(false);
   });
 
+  test("keeps the mesh's path normalization, which the ingress e2e's /internal slash cases need", () => {
+    // Laysi/trustiot-v2#255: without it "//internal" and "/%2finternal" pass the DENY policy.
+    const mesh = (Bun.YAML.parse(istiodOverlay(base, ["saas"])) as { meshConfig: { pathNormalization?: unknown } }).meshConfig;
+    expect(mesh.pathNormalization).toEqual({ normalization: "DECODE_AND_MERGE_SLASHES" });
+  });
+
   test("fails when the repository's provider is gone", () => {
     expect(() => istiodOverlay("meshConfig:\n  extensionProviders: []\n", ["saas"])).toThrow(BASE_PROVIDER);
   });

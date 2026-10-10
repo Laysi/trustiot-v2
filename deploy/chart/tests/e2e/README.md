@@ -2,8 +2,9 @@
 
 `ingress.e2e.ts` 把 chart 裝進現有叢集的一個 namespace，經真正的入口 gateway 驗證決策 27 的規則（Laysi/trustiot-v2#62）：
 
-- 需要 cookie 的路徑：沒有 cookie 或 session 無效回 401；有效 cookie 時後端只看到 1 個 `x-internal-identity`，是身分服務給的值，偽造的值進不來；`x-forwarded-proto` 為 `https`；`/internal` 沒有 cookie 回 401、有 cookie 回 403。
-- 例外路徑（登入、健康檢查、憑證換發、MQTT）：不用 cookie，偽造的身分標頭被剝除，後端看到 0 個；在別的主機上不算例外。
+- 需要 cookie 的路徑：沒有 cookie 或 session 無效回 401；有效 cookie 時後端只看到 1 個 `x-internal-identity`，是身分服務給的值，偽造的值進不來，底線寫法（`x_internal_identity` 等三種）也被移除；`x-forwarded-proto` 為 `https`；`/internal` 沒有 cookie 回 401、有 cookie 回 403。
+- `/internal` 的 11 種斜線寫法（`INTERNAL_SLASH_CASES`：`//internal`、`///internal`、`//./internal`、`/x/..//internal/…`、`/%2finternal`、`/%2Finternal` 等）：沒有 cookie 回 401、有效 cookie 回 403（Laysi/trustiot-v2#255）。這些案例只在 istiod 設了 `deploy/istio/istiod-values.yaml` 的 `meshConfig.pathNormalization`（`DECODE_AND_MERGE_SLASHES`）時通過；少了它，有效 cookie 的請求會到達全包路由的後端。
+- 例外路徑（登入、健康檢查、憑證換發、MQTT）：不用 cookie，偽造的身分標頭與其底線寫法被剝除，後端看到 0 個；`Host` 帶埠號（`:80`、`:443`、`:8443`）仍是例外；在別的主機上（帶不帶埠號）不算例外。
 - 路徑繞過：`BYPASS_CASES` 列出 28 種寫法（`..`、`%2e%2e`、`;`、`//`、大小寫、`?`、`%23` 等），沒有 cookie 時全部到不了需要 cookie 的後端。
 - 身分服務延遲 3 秒時約 0.5 秒回 503；身分服務停機（scale 到 0）時需要 cookie 的路徑回 503、不依賴身分服務的例外路徑照常 200，恢復後回到 401／200。
 
@@ -24,7 +25,7 @@ nightly workflow（Laysi/trustiot-v2#69）每晚在 k3d 叢集上以兩種型態
 ## 前置條件
 
 1. 叢集已依 `deploy/istio/README.md` 裝好 Istio ambient 與 Gateway API CRD。
-2. istiod 有一個 ext_authz provider 指向測試 namespace 的身分服務替身 `trustiot-identity.<namespace>.svc.cluster.local:8080`，設定與 `deploy/istio/istiod-values.yaml` 相同（`pathPrefix: /internal/ext-authz`、`failOpen: false`、`timeout: 0.5s`、`statusOnError: "503"`）。
+2. istiod 有一個 ext_authz provider 指向測試 namespace 的身分服務替身 `trustiot-identity.<namespace>.svc.cluster.local:8080`，設定與 `deploy/istio/istiod-values.yaml` 相同（`pathPrefix: /internal/ext-authz`、`failOpen: false`、`timeout: 0.5s`、`statusOnError: "503"`），mesh 的 `pathNormalization` 也與該檔相同。k3s 以 `HelmChartConfig istiod` 疊加時，清單會整份取代，所以叢集原有的 provider 要原樣重複寫入；範例見 [lab-istiod-helmchartconfig.yaml](../../../../docs/test-reports/data/2026-10-11-255-path-normalization/lab-istiod-helmchartconfig.yaml)。這是整個叢集共用的設定：先備份 `istio-system` 的 ConfigMap `istio`，測完刪掉 `HelmChartConfig`，再確認 `mesh` 與備份逐位元組相同。
 3. 測試用的 namespace 已建立，建議設 Pod Security `restricted`。測試的身分要能在這個 namespace 管理 chart 的物件，包含 `gateway.networking.k8s.io` 的 Gateway、HTTPRoute 與 `security.istio.io` 的 AuthorizationPolicy（內建的 `admin` ClusterRole 不含這兩個 API group）。
 4. 身分服務替身的映像（arm64 或叢集節點的架構）要在叢集拉得到。例如在節點上建好再匯入 containerd：
 

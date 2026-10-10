@@ -1,0 +1,23 @@
+#!/bin/bash
+# usage: run-e2e.sh <repo dir> <label> <saas|onprem>
+# Runs deploy/chart/tests/e2e/ingress.e2e.ts of <repo dir> against the lab (namespace e2e-255).
+set -u
+REPO=$1
+LABEL=$2
+SHAPE=$3
+S=/tmp/claude-1000/-home-ruisi-projects-trustiot-v2/5d2bbbe4-4241-4ab5-b2fe-2e33d3a23171/scratchpad/issue-255
+OUT=$S/data/$LABEL
+mkdir -p "$OUT"
+cd "$REPO" || exit 2
+date -u +%FT%TZ > "$OUT/started-$SHAPE.txt"
+KUBECONFIG=$S/kube/config \
+E2E_NAMESPACE=e2e-255 \
+E2E_SHAPE=$SHAPE \
+E2E_AUTHZ_PROVIDER=trustiot-e2e-255 \
+E2E_IDENTITY_IMAGE=localhost/trustiot-e2e/identity-double:255@sha256:063a3d3594e37a3ef7c0c224a2ac2c0579000de9b3ecea1825f9233b486bf0e5 \
+E2E_IMAGE_PULL_POLICY=Never \
+E2E_SSH_JUMP=trustiot-mac-m1 \
+E2E_REPORT_DIR=$OUT \
+/home/ruisi/.proto/tools/bun/1.4.2/bun test --timeout 600000 --reporter=junit --reporter-outfile="$OUT/e2e-$SHAPE.junit.xml" ./deploy/chart/tests/e2e/ingress.e2e.ts > "$OUT/e2e-$SHAPE.log" 2>&1
+echo "exit=$?" | tee "$OUT/exit-$SHAPE.txt"
+date -u +%FT%TZ >> "$OUT/started-$SHAPE.txt"
