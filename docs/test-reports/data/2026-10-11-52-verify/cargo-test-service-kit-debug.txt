@@ -1,0 +1,29 @@
+     Running unittests src/lib.rs (target/debug/deps/service_kit-d803321a9c0d8c77)
+test result: ok. 68 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.82s
+     Running tests/chart_contract.rs (target/debug/deps/chart_contract-895b87f07abce479)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/container.rs (target/debug/deps/container-e6f3a737556ef752)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 63.68s
+     Running tests/dependency_isolation.rs (target/debug/deps/dependency_isolation-c96e7892f522ea2b)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.75s
+     Running tests/errors.rs (target/debug/deps/errors-04f50d486c37b192)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.88s
+     Running tests/identity.rs (target/debug/deps/identity-6cc9893b1df36f8a)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s
+     Running tests/identity_adversarial.rs (target/debug/deps/identity_adversarial-a3cee653480c5457)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 54.24s
+     Running tests/job_lock.rs (target/debug/deps/job_lock-0826c2e8ecc081e5)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.62s
+     Running tests/lifecycle.rs (target/debug/deps/lifecycle-71179074ba612c51)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.68s
+     Running tests/logging.rs (target/debug/deps/logging-319e654fb20ef7f2)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+     Running tests/otlp.rs (target/debug/deps/otlp-228b8a53a336b043)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+   Doc-tests service_kit
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.21s
+
+real	4m47.165s
+user	2m50.785s
+sys	0m31.657s
