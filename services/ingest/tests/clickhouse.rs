@@ -24,6 +24,8 @@ struct World {
     b_secret: String,
     ingest: Account,
     a: Account,
+    /// A second account of tenant A, so the error quota of `a` cannot hide an attack's outcome.
+    a_extra: Account,
     b: Account,
     /// Has the tenant role but no SQL_tenant_id setting.
     no_tenant: Account,
@@ -87,6 +89,8 @@ impl World {
         let ingest =
             create_account_with_role(&ch, &format!("ingest_{suffix}"), "trustiot_ingest").await;
         let a = create_tenant_account(&ch, &format!("tenant_a_{suffix}"), Some(tenant_a)).await;
+        let a_extra =
+            create_tenant_account(&ch, &format!("tenant_a_extra_{suffix}"), Some(tenant_a)).await;
         let b = create_tenant_account(&ch, &format!("tenant_b_{suffix}"), Some(tenant_b)).await;
         let no_tenant = create_tenant_account(&ch, &format!("no_tenant_{suffix}"), None).await;
         let unscoped_role = format!("unscoped_reader_{suffix}");
@@ -110,6 +114,7 @@ impl World {
             b_secret,
             ingest,
             a,
+            a_extra,
             b,
             no_tenant,
             unscoped,
@@ -183,6 +188,7 @@ impl World {
         for user in [
             &self.ingest,
             &self.a,
+            &self.a_extra,
             &self.b,
             &self.no_tenant,
             &self.unscoped,
@@ -527,18 +533,280 @@ fn attacks(world: &World) -> Vec<Attack> {
     ]
 }
 
+/// Attacks added by the independent verification of Laysi/trustiot-v2#59 (see
+/// docs/test-reports/2026-10-11-59-verify.md): settings in nested queries, URL parameters that
+/// select a role, table functions and introspection that an account with only `SELECT` on the
+/// telemetry table reaches, and statements that must stay denied to a read-only account. Run as
+/// the second account of tenant A.
+fn extra_attacks(world: &World) -> Vec<Attack> {
+    let a = world.tenant_a;
+    let b = world.tenant_b;
+    let a_count = A_ROWS.to_string();
+    let a_self_join = (A_ROWS * A_ROWS).to_string();
+    let mut attacks = vec![
+        // ClickHouse accepts a SETTINGS clause on a nested query but must not apply it to the
+        // row policy: the read-only profile only checks the outermost one.
+        attack(
+            "nested SETTINGS: SQL_tenant_id = B in a subquery",
+            format!(
+                "SELECT count() FROM (SELECT * FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{b}')"
+            ),
+            answer(&a_count),
+        ),
+        attack(
+            "nested SETTINGS: readonly = 0 and SQL_tenant_id = B in a subquery",
+            format!(
+                "SELECT count() FROM (SELECT * FROM trustiot.telemetry SETTINGS readonly = 0, SQL_tenant_id = '{b}')"
+            ),
+            answer(&a_count),
+        ),
+        attack(
+            "nested SETTINGS: CTE",
+            format!(
+                "WITH t AS (SELECT * FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{b}') SELECT count() FROM t"
+            ),
+            answer(&a_count),
+        ),
+        attack(
+            "nested SETTINGS: JOIN subquery",
+            format!(
+                "SELECT count() FROM trustiot.telemetry AS x JOIN (SELECT * FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{b}') AS y ON x.point = y.point"
+            ),
+            answer(&a_self_join),
+        ),
+        attack(
+            "nested SETTINGS: scalar subquery",
+            format!(
+                "SELECT (SELECT count() FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{b}')"
+            ),
+            answer(&a_count),
+        ),
+        attack(
+            "nested SETTINGS: view()",
+            format!(
+                "SELECT count() FROM view(SELECT * FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{b}')"
+            ),
+            answer(&a_count),
+        ),
+        attack(
+            "nested SETTINGS: getSetting still returns the account's tenant",
+            format!(
+                "SELECT * FROM (SELECT getSetting('SQL_tenant_id') SETTINGS SQL_tenant_id = '{b}')"
+            ),
+            answer(a.to_string()),
+        ),
+        attack(
+            "nested SETTINGS: readonly stays 1",
+            "SELECT * FROM (SELECT getSetting('readonly') SETTINGS readonly = 0)",
+            answer("1"),
+        ),
+        attack(
+            "nested SETTINGS: max_rows_to_read = 0 does not lift the profile limit",
+            "SELECT count() FROM (SELECT number FROM numbers(2000000000) SETTINGS max_rows_to_read = 0)",
+            Expect::Denied,
+        ),
+        // Selecting another role or settings profile through the HTTP interface.
+        Attack {
+            name: "URL parameter role = trustiot_ingest",
+            sql: "SELECT count() FROM trustiot.telemetry".to_owned(),
+            params: vec![("role", "trustiot_ingest".to_owned())],
+            expect: Expect::Denied,
+        },
+        Attack {
+            name: "URL parameters readonly = 0 and SQL_tenant_id = B",
+            sql: "SELECT count() FROM trustiot.telemetry".to_owned(),
+            params: vec![
+                ("readonly", "0".to_owned()),
+                ("SQL_tenant_id", b.to_string()),
+            ],
+            expect: Expect::Denied,
+        },
+        attack(
+            "SETTINGS profile plus max_threads",
+            "SELECT 1 SETTINGS profile = 'trustiot_tenant_reader', max_threads = 64",
+            Expect::Denied,
+        ),
+        // Table functions and virtual tables that read table metadata or other servers.
+        attack(
+            "mergeTreeCodecBlockCounts()",
+            "SELECT * FROM mergeTreeCodecBlockCounts('trustiot', 'telemetry')",
+            Expect::Denied,
+        ),
+        attack(
+            "mergeTreeIndex() on batch_commits",
+            "SELECT * FROM mergeTreeIndex('trustiot', 'batch_commits')",
+            Expect::Denied,
+        ),
+        attack(
+            "remote('localhost')",
+            "SELECT count() FROM remote('localhost', trustiot.telemetry)",
+            Expect::Denied,
+        ),
+        attack(
+            "remote() with the default account",
+            "SELECT count() FROM remote('127.0.0.1:9000', system.one, 'default', '')",
+            Expect::Denied,
+        ),
+        attack(
+            "clusterAllReplicas()",
+            "SELECT count() FROM clusterAllReplicas('default', trustiot.telemetry)",
+            Expect::Denied,
+        ),
+        attack(
+            "s3()",
+            "SELECT count() FROM s3('http://127.0.0.1:9000/bucket/key.csv', 'CSV', 'a UInt8')",
+            Expect::Denied,
+        ),
+        attack(
+            "urlCluster()",
+            "SELECT count() FROM urlCluster('default', 'http://127.0.0.1:8123/?query=SELECT%201', 'LineAsString')",
+            Expect::Denied,
+        ),
+        attack(
+            "executable()",
+            "SELECT * FROM executable('cat', 'LineAsString', 'line String')",
+            Expect::Denied,
+        ),
+    ];
+    // Introspection and administration statements a read-only account must not run.
+    attacks.push(attack(
+        "SHOW CREATE USER of tenant B",
+        format!("SHOW CREATE USER {}", world.b.user),
+        Expect::Denied,
+    ));
+    for (name, sql) in [
+        (
+            "SHOW GRANTS FOR the ingest role",
+            "SHOW GRANTS FOR trustiot_ingest",
+        ),
+        ("SHOW ROW POLICIES", "SHOW ROW POLICIES"),
+        (
+            "SHOW CREATE ROW POLICY",
+            "SHOW CREATE ROW POLICY tenant_isolation ON trustiot.telemetry",
+        ),
+        ("SHOW QUOTAS", "SHOW QUOTAS"),
+        ("SHOW ACCESS", "SHOW ACCESS"),
+        (
+            "KILL QUERY of other accounts",
+            "KILL QUERY WHERE user != currentUser() SYNC",
+        ),
+        ("SYSTEM FLUSH LOGS", "SYSTEM FLUSH LOGS"),
+        ("SYSTEM RELOAD CONFIG", "SYSTEM RELOAD CONFIG"),
+        ("OPTIMIZE TABLE", "OPTIMIZE TABLE trustiot.telemetry FINAL"),
+        (
+            "ALTER TABLE UPDATE",
+            "ALTER TABLE trustiot.telemetry UPDATE value_string = 'x' WHERE 1",
+        ),
+        (
+            "ALTER TABLE DROP PARTITION",
+            "ALTER TABLE trustiot.telemetry DROP PARTITION ID 'all'",
+        ),
+        (
+            "CREATE TEMPORARY TABLE",
+            "CREATE TEMPORARY TABLE scratch (x UInt8) ENGINE = Memory",
+        ),
+        (
+            "INSERT SELECT into telemetry",
+            "INSERT INTO trustiot.telemetry SELECT * FROM trustiot.telemetry",
+        ),
+        (
+            "SHOW CREATE TABLE batch_commits",
+            "SHOW CREATE TABLE trustiot.batch_commits",
+        ),
+        ("ALTER USER itself", "ALTER USER CURRENT_USER SETTINGS NONE"),
+        (
+            "SET DEFAULT ROLE trustiot_ingest",
+            "SET DEFAULT ROLE trustiot_ingest TO CURRENT_USER",
+        ),
+    ] {
+        attacks.push(attack(name, sql, Expect::Denied));
+    }
+    attacks
+}
+
+/// A brand-new account with no role reads nothing, and an account that is granted `SELECT`
+/// directly (not through a role that a policy names) reads no rows from either table: the
+/// `deny_by_default` policies apply to every account, including ones created later.
+async fn deny_by_default_covers_new_accounts(world: &World) {
+    let ch = &world.ch;
+    let tenant = world.tenant_a;
+    // One completion record, so a count of 0 below does not come from an empty table.
+    ch.query(
+        &world.ingest,
+        &format!(
+            "INSERT INTO trustiot.batch_commits (tenant_id, gateway_id, stream_id, seq, row_count, \
+             committed_at) VALUES ('{tenant}', generateUUIDv4(), generateUUIDv4(), 1, 1, now64(3, 'UTC'))"
+        ),
+    )
+    .await
+    .unwrap_or_else(failed);
+    let bare = Account {
+        user: format!("bare_{}", world.suffix),
+        password: password(),
+    };
+    let direct = Account {
+        user: format!("direct_{}", world.suffix),
+        password: password(),
+    };
+    for account in [&bare, &direct] {
+        ch.admin_ok(&format!(
+            "CREATE USER {} IDENTIFIED WITH sha256_password BY '{}'",
+            account.user, account.password
+        ))
+        .await;
+    }
+    ch.admin_ok(&format!("GRANT SELECT ON trustiot.* TO {}", direct.user))
+        .await;
+    for table in ["telemetry", "batch_commits"] {
+        let sql = format!("SELECT count() FROM trustiot.{table}");
+        let error = ch
+            .query(&bare, &sql)
+            .await
+            .expect_err("an account without a role must not read the table");
+        assert_eq!(error.code(), "ACCESS_DENIED", "{table}: {}", error.body);
+        assert_eq!(
+            ch.query(&direct, &sql).await.unwrap_or_else(failed).trim(),
+            "0",
+            "an account granted SELECT directly must read no rows of {table}"
+        );
+        // The bootstrap admin is an account too: the policies hide the rows from it as well.
+        assert_eq!(
+            ch.admin(&sql).await.unwrap_or_else(failed).trim(),
+            "0",
+            "the admin reads no rows of {table}"
+        );
+    }
+    // Tenant accounts have no grant on the completion table at all.
+    for account in [&world.a, &world.b] {
+        let error = ch
+            .query(account, "SELECT count() FROM trustiot.batch_commits")
+            .await
+            .expect_err("a tenant account must not read batch_commits");
+        assert_eq!(error.code(), "ACCESS_DENIED", "{}", error.body);
+    }
+    for account in [&bare, &direct] {
+        ch.admin_ok(&format!("DROP USER IF EXISTS {}", account.user))
+            .await;
+    }
+}
+
 async fn tenant_attacks_read_nothing_of_another_tenant(world: &World) {
+    run_attacks(world, &world.a, attacks(world)).await;
+}
+
+/// Runs every attack as `account` and fails when one leaks tenant B or does not end as expected.
+async fn run_attacks(world: &World, account: &Account, attacks: Vec<Attack>) {
     let mut failures = Vec::new();
     #[allow(clippy::print_stdout, reason = "the attack list is the test evidence")]
     {
         println!("attack | outcome");
-        for attack in attacks(world) {
+        for attack in attacks {
             let params: Vec<(&str, &str)> = attack
                 .params
                 .iter()
                 .map(|(name, value)| (*name, value.as_str()))
                 .collect();
-            let result = world.ch.query_with(&world.a, &attack.sql, &params).await;
+            let result = world.ch.query_with(account, &attack.sql, &params).await;
             let outcome = match &result {
                 Ok(body) => format!("answer {:?}", body.trim()),
                 Err(error) => format!("refused {}", error.code()),
@@ -686,6 +954,19 @@ async fn quota_is_per_user(world: &World) {
         "0"
     );
     assert!(world.ch.query(&world.quota_1, COUNT_ROWS).await.is_err());
+    // The quota is keyed by the user name: a client-supplied key or a fresh session does not
+    // start a new counter.
+    for params in [
+        [("quota_key", "another-key")],
+        [("session_id", "fresh-session")],
+    ] {
+        let error = world
+            .ch
+            .query_with(&world.quota_1, COUNT_ROWS, &params)
+            .await
+            .expect_err("the exhausted quota must not be bypassed");
+        assert_eq!(error.code(), "QUOTA_EXCEEDED", "{params:?}: {}", error.body);
+    }
 }
 
 /// The ingest account writes and deletes data but cannot change the schema or access control.
@@ -774,6 +1055,24 @@ async fn ingest_account_cannot_change_schema(world: &World) {
         "TRUNCATE TABLE trustiot.telemetry",
         "CREATE USER injected IDENTIFIED WITH no_password",
         "ALTER ROW POLICY tenant_isolation ON trustiot.telemetry USING 1",
+        "CREATE DATABASE injected",
+        "CREATE VIEW trustiot.injected_view AS SELECT * FROM trustiot.telemetry",
+        "CREATE ROW POLICY injected ON trustiot.telemetry USING 1 TO CURRENT_USER",
+        "DROP DATABASE trustiot",
+        "RENAME TABLE trustiot.telemetry TO trustiot.telemetry_old",
+        "EXCHANGE TABLES trustiot.telemetry AND trustiot.batch_commits",
+        "ALTER TABLE trustiot.telemetry DROP COLUMN value_string",
+        "ALTER TABLE trustiot.telemetry MODIFY COLUMN value_string UInt8",
+        "ALTER TABLE trustiot.telemetry DROP CONSTRAINT tenant_id_set",
+        "ALTER TABLE trustiot.telemetry ADD INDEX injected value_string TYPE bloom_filter GRANULARITY 1",
+        "ALTER TABLE trustiot.telemetry ADD PROJECTION injected (SELECT * ORDER BY tenant_id)",
+        "ALTER TABLE trustiot.telemetry MODIFY ORDER BY (tenant_id, ts)",
+        "ALTER TABLE trustiot.telemetry UPDATE tenant_id = generateUUIDv4() WHERE 1",
+        "ALTER TABLE trustiot.telemetry FREEZE",
+        "ALTER TABLE trustiot.telemetry MATERIALIZE TTL",
+        "OPTIMIZE TABLE trustiot.telemetry FINAL",
+        "GRANT SELECT ON *.* TO CURRENT_USER",
+        "GRANT trustiot_tenant_reader TO CURRENT_USER",
     ] {
         let error = world
             .ch
@@ -947,6 +1246,8 @@ async fn clickhouse_schema_and_tenant_isolation() {
     world.ch.admin_ok("SYSTEM FLUSH LOGS").await;
     each_account_sees_its_own_rows(&world).await;
     tenant_attacks_read_nothing_of_another_tenant(&world).await;
+    run_attacks(&world, &world.a_extra, extra_attacks(&world)).await;
+    deny_by_default_covers_new_accounts(&world).await;
     set_role_none_loses_access(&world).await;
     account_without_tenant_setting_gets_an_error(&world).await;
     ingest_account_cannot_change_schema(&world).await;
