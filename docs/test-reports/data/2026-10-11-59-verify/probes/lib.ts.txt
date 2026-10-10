@@ -1,0 +1,35 @@
+import { readFileSync, readdirSync } from "node:fs";
+export const URL_ = "http://127.0.0.1:18123/";
+export const ADMIN = { user: "trustiot_admin", password: "<redacted>" };
+export type Acct = { user: string; password: string };
+export async function q(a: Acct, sql: string, params: Record<string, string> = {}): Promise<{ status: number; body: string; ms: number; summary: string }> {
+  const u = new URL(URL_);
+  for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
+  const t = performance.now();
+  const r = await fetch(u, { method: "POST", headers: { "X-ClickHouse-User": a.user, "X-ClickHouse-Key": a.password }, body: sql });
+  const body = await r.text();
+  return { status: r.status, body, ms: Math.round(performance.now() - t), summary: r.headers.get("x-clickhouse-summary") ?? "" };
+}
+export function splitStatements(text: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  for (const line of text.split("\n")) {
+    const t = line.trimEnd();
+    if (t.trimStart().startsWith("--")) continue;
+    const ends = t.endsWith(";");
+    const body = ends ? t.slice(0, -1) : t;
+    if (body.trim()) cur += body + "\n";
+    if (ends) {
+      out.push(cur.trim());
+      cur = "";
+    }
+  }
+  return out;
+}
+export async function applyMigrations(dir: string) {
+  for (const f of readdirSync(dir).sort())
+    for (const s of splitStatements(readFileSync(`${dir}/${f}`, "utf8"))) {
+      const r = await q(ADMIN, s);
+      if (r.status !== 200) throw new Error(`${f}: ${r.body}\n${s}`);
+    }
+}

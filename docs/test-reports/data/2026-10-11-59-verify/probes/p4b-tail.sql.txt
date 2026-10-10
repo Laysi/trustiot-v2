@@ -1,0 +1,22 @@
+## tenant_a2 | RENAME
+RENAME TABLE trustiot.telemetry TO trustiot.telemetry2
+## tenant_a2 | CREATE TABLE
+CREATE TABLE trustiot.x (a UInt8) ENGINE = Memory
+## tenant_a2 | CREATE DATABASE
+CREATE DATABASE evil
+## tenant_a2 | CREATE VIEW
+CREATE VIEW trustiot.v AS SELECT * FROM trustiot.telemetry
+## tenant_a2 | CREATE MATERIALIZED VIEW
+CREATE MATERIALIZED VIEW trustiot.mv ENGINE = Memory AS SELECT * FROM trustiot.telemetry
+## tenant_a2 | CREATE USER
+CREATE USER evil
+## tenant_a2 | CREATE FUNCTION
+CREATE FUNCTION f AS (x) -> x
+## tenant_a2 | ATTACH
+ATTACH TABLE trustiot.telemetry
+## tenant_a2 | DETACH
+DETACH TABLE trustiot.telemetry
+## tenant_a2 | UNDROP
+UNDROP TABLE trustiot.telemetry
+## tenant_a2 | SET default database USE
+USE system

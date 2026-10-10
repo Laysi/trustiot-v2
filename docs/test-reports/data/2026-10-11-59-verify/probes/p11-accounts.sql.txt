@@ -1,0 +1,108 @@
+## admin | account census
+SELECT name, auth_type, default_roles_all, storage FROM system.users ORDER BY name
+## admin | default user exists?
+SELECT count() FROM system.users WHERE name = 'default'
+## admin | create roleless account with direct SELECT on db
+CREATE USER IF NOT EXISTS direct_sel IDENTIFIED WITH sha256_password BY '<redacted>'
+## admin | grant select on whole trustiot db to roleless user
+GRANT SELECT ON trustiot.* TO direct_sel
+## admin | grant select on *.* to another new user
+CREATE USER IF NOT EXISTS all_sel IDENTIFIED WITH sha256_password BY '<redacted>'
+## admin | grant
+GRANT SELECT ON *.* TO all_sel
+## norole | brand-new account no role: telemetry
+SELECT count() FROM trustiot.telemetry
+## norole | brand-new account no role: batch_commits
+SELECT count() FROM trustiot.batch_commits
+## norole | brand-new account whoami
+SELECT currentUser(), currentRoles(), currentProfiles()
+## norole | brand-new account can set readonly? (no profile)
+SET readonly = 1
+## norole | brand-new account: settings
+SELECT getSetting('readonly'), getSetting('max_execution_time'), getSetting('max_memory_usage')
+## norole | brand-new account: SHOW TABLES
+SHOW TABLES FROM trustiot
+## norole | brand-new account: mergeTreeAnalyzeIndexes
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry')
+## direct_sel | roleless user with direct SELECT on trustiot.* telemetry
+SELECT count() FROM trustiot.telemetry
+## direct_sel | roleless user with direct SELECT: batch_commits
+SELECT count() FROM trustiot.batch_commits
+## direct_sel | roleless user: read values
+SELECT value_string FROM trustiot.telemetry
+## direct_sel | roleless user: merge
+SELECT count() FROM merge('trustiot', '.*')
+## direct_sel | roleless user: mergeTreeAnalyzeIndexes (no row policy honoured)
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry')
+## all_sel | SELECT on *.* user: telemetry
+SELECT count() FROM trustiot.telemetry
+## all_sel | SELECT on *.* user: batch_commits
+SELECT count() FROM trustiot.batch_commits
+## all_sel | SELECT on *.* user: logs db
+SELECT count() FROM system.tables WHERE database = 'trustiot_logs'
+## all_sel | SELECT on *.* user: system.users
+SELECT count() FROM system.users
+## all_sel | SELECT on *.* user: remote loop-back
+SELECT count() FROM remote('127.0.0.1', trustiot.telemetry)
+## admin | bootstrap admin reads telemetry? (deny_by_default applies to ALL)
+SELECT count() FROM trustiot.telemetry
+## admin | bootstrap admin reads batch_commits
+SELECT count() FROM trustiot.batch_commits
+## admin | bootstrap admin as SELECT sees system.row_policies
+SELECT short_name, database, table, select_filter, is_restrictive, apply_to_all, apply_to_list, storage FROM system.row_policies ORDER BY table, short_name
+## admin | bootstrap admin: unauthenticated default user over HTTP does not exist (check via tenant id)
+SELECT name FROM system.users WHERE name IN ('default', 'ingest', 'trustiot_admin')
+## no_tenant | tenant role without SQL_tenant_id: count
+SELECT count() FROM trustiot.telemetry
+## no_tenant | tenant role without SQL_tenant_id: batch
+SELECT count() FROM trustiot.batch_commits
+## no_tenant | tenant role without SQL_tenant_id: subquery
+SELECT count() FROM (SELECT * FROM trustiot.telemetry)
+## no_tenant | tenant role without SQL_tenant_id: JOIN
+SELECT count() FROM trustiot.telemetry AS x JOIN trustiot.telemetry AS y ON x.point = y.point
+## no_tenant | tenant role without SQL_tenant_id: view()
+SELECT count() FROM view(SELECT * FROM trustiot.telemetry)
+## no_tenant | tenant role without SQL_tenant_id: merge
+SELECT count() FROM merge('trustiot', '.*')
+## no_tenant | tenant role without SQL_tenant_id: EXPLAIN
+EXPLAIN SELECT * FROM trustiot.telemetry
+## no_tenant | tenant role without SQL_tenant_id: SET itself
+SET SQL_tenant_id = '{B}'
+## no_tenant | tenant role without SQL_tenant_id: query setting
+SELECT count() FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{B}'
+## no_tenant | tenant role without SQL_tenant_id: subquery setting
+SELECT count() FROM (SELECT * FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{B}')
+## no_tenant | tenant role without SQL_tenant_id: URL param | SQL_tenant_id={B}
+SELECT count() FROM trustiot.telemetry
+## no_tenant | no_tenant SELECT 1 still works (constant)
+SELECT 1
+## no_tenant | empty string tenant? admin-less; mergeTreeAnalyzeIndexes works
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry')
+## admin | create tenant account with INVALID setting value (empty)
+CREATE USER IF NOT EXISTS bad_tenant IDENTIFIED WITH sha256_password BY '<redacted>' SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '' CONST
+## admin | grant role
+GRANT trustiot_tenant_reader TO bad_tenant
+## bad_tenant | empty SQL_tenant_id: read
+SELECT count() FROM trustiot.telemetry
+## admin | create tenant account with SQL_tenant_id = zero uuid
+CREATE USER IF NOT EXISTS zero_tenant IDENTIFIED WITH sha256_password BY '<redacted>' SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '00000000-0000-0000-0000-000000000000' CONST
+## admin | grant role
+GRANT trustiot_tenant_reader TO zero_tenant
+## zero_tenant | zero-uuid tenant: read
+SELECT count() FROM trustiot.telemetry
+## admin | create tenant account where SQL_tenant_id is NOT const (template misuse)
+CREATE USER IF NOT EXISTS nonconst_tenant IDENTIFIED WITH sha256_password BY '<redacted>' SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '{A}'
+## admin | grant role
+GRANT trustiot_tenant_reader TO nonconst_tenant
+## nonconst_tenant | non-const tenant: SET to B (readonly profile still blocks?)
+SELECT count() FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{B}'
+## admin | create tenant account without profile (template misuse): can it switch tenant?
+CREATE USER IF NOT EXISTS noprof_tenant IDENTIFIED WITH sha256_password BY '<redacted>' SETTINGS SQL_tenant_id = '{A}'
+## admin | grant role
+GRANT trustiot_tenant_reader TO noprof_tenant
+## noprof_tenant | misuse: user with role but no profile and non-const setting: switch tenant via query setting
+SELECT count() FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{B}'
+## noprof_tenant | misuse: role profile alone gives readonly?
+SELECT getSetting('readonly'), currentProfiles()
+## admin | cleanup misuse accounts
+DROP USER IF EXISTS direct_sel, all_sel, bad_tenant, zero_tenant, nonconst_tenant, noprof_tenant

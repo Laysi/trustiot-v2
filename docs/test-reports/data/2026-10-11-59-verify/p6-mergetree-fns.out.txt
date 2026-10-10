@@ -1,0 +1,251 @@
+### [tenant_a2] mergeTreeAnalyzeIndexes no predicate
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry')
+--> HTTP 200 (8 ms) summary={"read_rows":"1","read_bytes":"44","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"16640","elapsed_ns":"5037582","memory_usage":"10061474"}
+202610_1_1_0	[(0,1)]
+
+### [tenant_a2] mergeTreeAnalyzeIndexes predicate tenant B (oracle for existence of B data?)
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry', tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547')
+--> HTTP 200 (8 ms) summary={"read_rows":"1","read_bytes":"44","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"16640","elapsed_ns":"6423902","memory_usage":"10082570"}
+202610_1_1_0	[(0,1)]
+
+### [tenant_a2] mergeTreeAnalyzeIndexes predicate tenant A
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry', tenant_id = 'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38')
+--> HTTP 200 (7 ms) summary={"read_rows":"1","read_bytes":"44","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"16640","elapsed_ns":"5211254","memory_usage":"10082570"}
+202610_1_1_0	[(0,1)]
+
+### [tenant_a2] mergeTreeAnalyzeIndexes predicate unrelated tenant
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry', tenant_id = '11111111-1111-1111-1111-111111111111')
+--> HTTP 200 (8 ms) summary={"read_rows":"1","read_bytes":"28","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"8704","elapsed_ns":"5514834","memory_usage":"10090554"}
+202610_1_1_0	[]
+
+### [tenant_a2] mergeTreeAnalyzeIndexes batch_commits
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'batch_commits')
+--> HTTP 403 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"4328926","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.batch_commits. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] mergeTreeAnalyzeIndexes columns
+DESCRIBE TABLE mergeTreeAnalyzeIndexes('trustiot', 'telemetry')
+--> HTTP 200 (5 ms) summary={"read_rows":"2","read_bytes":"161","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"2","result_bytes":"29819","elapsed_ns":"3437545","memory_usage":"9973034"}
+part_name	String					\nranges	Array(Tuple(UInt64, UInt64))
+
+### [tenant_a2] mergeTreeAnalyzeIndexes with partition predicate
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry', tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547', 'all')
+--> HTTP 500 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3578286","memory_usage":"0"}
+Code: 170. DB::Exception: Bad get: has String, requested Array. (BAD_GET) (version 26.8.22.13 (official build))
+
+### [tenant_a2] mergeTreeAnalyzeIndexes with partition id argument
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry', '202610', tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547')
+--> HTTP 400 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"4041863","memory_usage":"0"}  **LEAK-OF-B-MARKER**
+Code: 36. DB::Exception: Parts must be an array of strings, got: tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+
+### [tenant_a2] mergeTreeAnalyzeIndexes with bogus tenant to count granules in range by B's key
+SELECT count() FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry', tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547' AND device_id != toUUID('00000000-0000-0000-0000-000000000000'))
+--> HTTP 200 (7 ms) summary={"read_rows":"1","read_bytes":"20","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"136","elapsed_ns":"5690873","memory_usage":"10102506"}
+1
+
+### [tenant_a2] mergeTreeAnalyzeIndexes on system table
+SELECT * FROM mergeTreeAnalyzeIndexes('system', 'query_log')
+--> HTTP 403 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3686563","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.query_log. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] mergeTreeCodecBlockCounts
+SELECT * FROM mergeTreeCodecBlockCounts('trustiot', 'telemetry')
+--> HTTP 403 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"4222055","memory_usage":"0"}
+Code: 497. DB::Exception: Cannot read column `codec_block_counts` from `mergeTreeCodecBlockCounts` because a row policy is applied on table trustiot.telemetry (eae0f3ea-5a0d-4b73-b4be-70829bab03e6). The counts would cover rows the policy hides. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] mergeTreeCodecBlockCounts batch_commits
+SELECT * FROM mergeTreeCodecBlockCounts('trustiot', 'batch_commits')
+--> HTTP 403 (7 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"4550601","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SHOW TABLES ON trustiot.batch_commits. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] mergeTreeTextIndex
+SELECT * FROM mergeTreeTextIndex('trustiot', 'telemetry', 'x')
+--> HTTP 400 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"4178081","memory_usage":"0"}
+Code: 36. DB::Exception: There is no index with name 'x'. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+
+### [tenant_a2] mergeTreeProjection
+SELECT * FROM mergeTreeProjection('trustiot', 'telemetry', 'x')
+--> HTTP 500 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2959989","memory_usage":"0"}
+Code: 582. DB::Exception: There is no projection x in table. (NO_SUCH_PROJECTION_IN_TABLE) (version 26.8.22.13 (official build))
+
+### [tenant_a2] mergeTreeIndex
+SELECT * FROM mergeTreeIndex('trustiot', 'telemetry')
+--> HTTP 403 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"4297454","memory_usage":"0"}
+Code: 497. DB::Exception: Cannot read from `mergeTreeIndex` because a row policy is applied on table trustiot.telemetry (eae0f3ea-5a0d-4b73-b4be-70829bab03e6). Reading the index could violate the row policy. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] mergeTreeIndex batch_commits
+SELECT * FROM mergeTreeIndex('trustiot', 'batch_commits')
+--> HTTP 403 (7 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"4940316","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.batch_commits. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] mergeTreeAnalyzeIndexesUUID
+SELECT * FROM mergeTreeAnalyzeIndexesUUID(toUUID('00000000-0000-0000-0000-000000000000'))
+--> HTTP 400 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3472490","memory_usage":"0"}
+Code: 36. DB::Exception: Argument 'UUID' must be a literal with type String, got UUID. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+
+### [tenant_a2] mergeTreeAnalyzeIndexesUUID with table uuid
+SELECT * FROM mergeTreeAnalyzeIndexesUUID((SELECT uuid FROM system.tables WHERE name = 'telemetry'))
+--> HTTP 400 (10 ms) summary={"read_rows":"1","read_bytes":"33","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"7664535","memory_usage":"2334550"}
+Code: 36. DB::Exception: Argument 'UUID' must be a literal with type String, got UUID. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.tables total_rows, uuid, metadata
+SELECT name, uuid, total_rows, total_bytes, data_paths, metadata_modification_time FROM system.tables WHERE database = 'trustiot'
+--> HTTP 200 (10 ms) summary={"read_rows":"1","read_bytes":"154","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"33412","elapsed_ns":"7220156","memory_usage":"10083435"}
+telemetry	eae0f3ea-5a0d-4b73-b4be-70829bab03e6	7	4210	['/var/lib/clickhouse/store/eae/eae0f3ea-5a0d-4b73-b4be-70829bab03e6/']	2026-10-10 18:09:20
+
+### [tenant_a2] system.columns data sizes
+SELECT name, data_compressed_bytes, data_uncompressed_bytes, marks_bytes FROM system.columns WHERE database = 'trustiot' AND table = 'telemetry'
+--> HTTP 200 (8 ms) summary={"read_rows":"13","read_bytes":"961","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"13","result_bytes":"12776","elapsed_ns":"6622953","memory_usage":"10097501"}
+tenant_id	0	0	0\ngateway_id	0	0	0\nstream_id	0	0	0\nbatch_seq	0	0	0\ndevice_id	0	0	0\npoint	0	0	0\nts	0	0	0\nreceived_at	0	0	0\nvalue_type	0	0	0\nvalue_float	0	0	0\nvalue_int	0	0	0\nvalue_bool	0	0	0\nvalue_string	0	0	0
+
+### [tenant_a2] system.parts
+SELECT * FROM system.parts WHERE database = 'trustiot'
+--> HTTP 403 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3094825","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.parts. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.parts_columns
+SELECT * FROM system.parts_columns WHERE database = 'trustiot'
+--> HTTP 403 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3015392","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.parts_columns. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.data_skipping_indices
+SELECT * FROM system.data_skipping_indices
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2862989","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.data_skipping_indices. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.projection_parts
+SELECT * FROM system.projection_parts
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2802467","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.projection_parts. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.detached_parts
+SELECT * FROM system.detached_parts
+--> HTTP 403 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2901693","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.detached_parts. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.asynchronous_metrics
+SELECT * FROM system.asynchronous_metrics LIMIT 3
+--> HTTP 403 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3162111","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.asynchronous_metrics. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.metrics / events
+SELECT * FROM system.metrics LIMIT 3
+--> HTTP 403 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3165454","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.metrics. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.events
+SELECT * FROM system.events LIMIT 3
+--> HTTP 403 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2971990","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.events. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.dictionaries
+SELECT * FROM system.dictionaries
+--> HTTP 403 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3020388","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.dictionaries. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.query_log
+SELECT query, user FROM system.query_log LIMIT 3
+--> HTTP 403 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3497803","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.query_log. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.query_thread_log
+SELECT * FROM system.query_thread_log LIMIT 3
+--> HTTP 403 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3199863","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.query_thread_log. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.query_views_log
+SELECT * FROM system.query_views_log LIMIT 3
+--> HTTP 403 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3005183","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.query_views_log. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.processes
+SELECT * FROM system.processes
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2867446","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.processes. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.user_query_log (allowed earlier)
+SELECT * FROM system.user_query_log LIMIT 3
+--> HTTP 200 (67 ms) summary={"read_rows":"773","read_bytes":"2056092","written_rows":"0","written_bytes":"0","total_rows_to_read":"773","result_rows":"3","result_bytes":"108318","elapsed_ns":"65331503","memory_usage":"15133986"}
+bb8c3e4dab8e	ExceptionBeforeStart	2026-10-10	2026-10-10 18:12:31	2026-10-10 18:12:31.231990	2026-10-10 18:12:31	2026-10-10 18:12:31.231844	0	0	0	0	0	0	0	2232614	default	RENAME TABLE trustiot.telemetry TO trustiot.telemetry2		10278676561305584445	Rename	[]	[]	[]	[]	[]	[]	497	Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it\'s necessary to have the grant SELECT, DROP TABLE ON trustiot.telemetry. (Missing permissions: DROP TABLE ON trustiot.telemetry). (ACCESS_DENIED) (version 26.8.22.13 (official build))	0. DB::Exception::Exception(DB::Exception::MessageMasked&&, int, bool) @ 0x000000001736c36a\n1. DB::Exception::Exception(String&&, int, String, bool) @ 0x0
+
+### [tenant_a2] system.settings SQL_tenant_id
+SELECT name, value, changed FROM system.settings WHERE name IN ('SQL_tenant_id','readonly','max_threads')
+--> HTTP 200 (34 ms) summary={"read_rows":"1819","read_bytes":"759997","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"3","result_bytes":"2735","elapsed_ns":"24030494","memory_usage":"11424077"}
+max_threads	2	1\nreadonly	1	1\nSQL_tenant_id	\'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38\'	1
+
+### [tenant_a2] system.quota_usage other users
+SELECT quota_name, quota_key FROM system.quota_usage
+--> HTTP 200 (11 ms) summary={"read_rows":"2","read_bytes":"556","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"2","result_bytes":"8704","elapsed_ns":"7305475","memory_usage":"10298938"}
+trustiot_tenant_reader	tenant_a2\ntrustiot_tenant_reader	tenant_a2
+
+### [tenant_a2] system.quotas_usage
+SELECT * FROM system.quotas_usage
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2202146","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.quotas_usage. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.user_processes
+SELECT * FROM system.user_processes
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2159509","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.user_processes. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.settings_profile_elements
+SELECT * FROM system.settings_profile_elements
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1953419","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.settings_profile_elements. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.grants
+SELECT * FROM system.grants
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2004797","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.grants. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.role_grants
+SELECT * FROM system.role_grants
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2144066","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.role_grants. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.macros / clusters
+SELECT * FROM system.clusters
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2662809","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.clusters. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.build_options
+SELECT * FROM system.build_options LIMIT 2
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2225609","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.build_options. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.server_settings
+SELECT name FROM system.server_settings LIMIT 2
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2129735","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.server_settings. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.disks
+SELECT * FROM system.disks
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2139999","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.disks. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.zookeeper
+SELECT * FROM system.zookeeper WHERE path = '/'
+--> HTTP 404 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2833963","memory_usage":"0"}
+Code: 60. DB::Exception: Unknown table expression identifier 'system.zookeeper' in scope SELECT * FROM system.zookeeper WHERE path = '/'. (UNKNOWN_TABLE) (version 26.8.22.13 (official build))
+
+### [tenant_a2] system.numbers
+SELECT count() FROM (SELECT number FROM system.numbers LIMIT 1000)
+--> HTTP 403 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3811847","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.numbers. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] information_schema tables
+SELECT table_name, table_rows FROM information_schema.tables WHERE table_schema = 'trustiot'
+--> HTTP 403 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2921939","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON information_schema.tables. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] information_schema columns
+SELECT column_name FROM information_schema.columns WHERE table_schema = 'trustiot' LIMIT 3
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2934691","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON information_schema.columns. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] INFORMATION_SCHEMA statistics
+SELECT * FROM INFORMATION_SCHEMA.STATISTICS LIMIT 2
+--> HTTP 403 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2849391","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON INFORMATION_SCHEMA.STATISTICS. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+# summary: 50 probes, 1 responses containing B's tenant id or secret

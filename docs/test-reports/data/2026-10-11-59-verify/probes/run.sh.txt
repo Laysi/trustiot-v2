@@ -1,0 +1,5 @@
+#!/bin/bash
+# usage: run.sh <probe-name-without-.txt>   (runs from the worktree)
+S=/tmp/claude-1000/-home-ruisi-projects-trustiot-v2/5d2bbbe4-4241-4ab5-b2fe-2e33d3a23171/scratchpad/verify-59
+W=/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a3fa330f4cb2e5dab
+bun $S/probe.ts $S/$1.txt $W/docs/test-reports/data/2026-10-11-59-verify/$1.out.txt 2>&1 | grep -v '^$' | grep -v 'Detected an AI' | sed -E 's/ summary=\{"read_rows":"([0-9]+)"[^}]*\}/ read_rows=\1/' | cut -c1-${2:-400}
