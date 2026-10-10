@@ -33,11 +33,7 @@ impl FakeCollector {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { continue };
                 let sink = Arc::clone(&sink);
-                thread::spawn(move || {
-                    if let Some(request) = read_request(stream) {
-                        sink.lock().expect("collector lock").push(request);
-                    }
-                });
+                thread::spawn(move || read_request(stream, &sink));
             }
         });
         Self { address, received }
@@ -62,9 +58,11 @@ impl FakeCollector {
     }
 }
 
-/// Reads one request (Content-Length or chunked body) and answers 200 with an empty export
-/// response, then closes the connection.
-fn read_request(stream: TcpStream) -> Option<(String, Vec<u8>)> {
+/// Reads one request (Content-Length or chunked body), records it, and answers 200 with an empty
+/// export response, then closes the connection. The request is recorded before the answer, so a
+/// service that has finished its shutdown export (it waits for the answers) leaves nothing
+/// unrecorded behind.
+fn read_request(stream: TcpStream, sink: &Mutex<Vec<Request>>) -> Option<()> {
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .ok()?;
@@ -106,14 +104,14 @@ fn read_request(stream: TcpStream) -> Option<(String, Vec<u8>)> {
         body.resize(length, 0);
         reader.read_exact(&mut body).ok()?;
     }
+    sink.lock().expect("collector lock").push((path, body));
     let mut stream = stream;
     stream
         .write_all(
             b"HTTP/1.1 200 OK\r\nContent-Type: application/x-protobuf\r\nContent-Length: 0\r\n\
               Connection: close\r\n\r\n",
         )
-        .ok()?;
-    Some((path, body))
+        .ok()
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {

@@ -1,0 +1,22 @@
+# 2026-10-10T12:55:20Z on-prem release in e2e-62, ingress gateway ClusterIP 10.43.193.63 (requests from the lab host)
+## provider trustiot-e2e-62 (exists)
+trustiot.factory.test  /api/whoami  (no cookie)            -> 401
+trustiot.factory.test  /api/whoami  cookie: sid=valid-x    -> 200
+trustiot.factory.test  /healthz     (no cookie)            -> 200
+gw.trustiot.factory.test /mqtt        (no cookie)            -> 200
+$ helm upgrade trustiot deploy/chart -n e2e-62 --reuse-values --set ingress.authzProvider=trustiot-missing-62 --wait
+Release "trustiot" has been upgraded. Happy Helming!
+STATUS: deployed
+REVISION: 2
+## provider trustiot-missing-62 (not in istiod's mesh config)
+trustiot.factory.test  /api/whoami  (no cookie)            -> 403
+trustiot.factory.test  /api/whoami  cookie: sid=valid-x    -> 403
+trustiot.factory.test  /healthz     (no cookie)            -> 200
+gw.trustiot.factory.test /mqtt        (no cookie)            -> 200
+$ helm rollback trustiot 1 -n e2e-62 --wait
+Rollback was a success! Happy Helming!
+## back to provider trustiot-e2e-62
+trustiot.factory.test  /api/whoami  (no cookie)            -> 401
+trustiot.factory.test  /api/whoami  cookie: sid=valid-x    -> 200
+trustiot.factory.test  /healthz     (no cookie)            -> 200
+gw.trustiot.factory.test /mqtt        (no cookie)            -> 200

@@ -1,0 +1,63 @@
+# Ingress e2e overlay (ingress.e2e.ts). Use after a deployment shape and its instance overlay:
+#   -f values-saas.yaml -f tests/values/saas-instance.yaml -f tests/e2e/values-e2e.yaml
+# The test adds the identity double's image, the mesh extension provider name and, for the
+# on-prem shape, the TLS Secret.
+#
+# Stand-ins: identity runs the identity double (tests/e2e/identity-double), and the other
+# backends run traefik/whoami, which echoes every request header back. WHOAMI_NAME tells the
+# test which backend answered.
+
+services:
+  identity:
+    enabled: true
+    podSecurityContext:
+      runAsUser: 65532
+      runAsGroup: 65532
+  # Needs the cookie: reached through the catch-all route below.
+  assets:
+    enabled: true
+    image: &whoami
+      repository: docker.io/traefik/whoami
+      tag: v1.12.0
+      digest: sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
+    env:
+      - name: WHOAMI_PORT_NUMBER
+        value: "8080"
+      - name: WHOAMI_NAME
+        value: protected-backend
+    podSecurityContext: &nonroot
+      runAsUser: 65532
+      runAsGroup: 65532
+  # Public paths on hosts.gateway.
+  certs:
+    enabled: true
+    image: *whoami
+    env:
+      - name: WHOAMI_PORT_NUMBER
+        value: "8080"
+      - name: WHOAMI_NAME
+        value: public-certs
+    podSecurityContext: *nonroot
+  mqtt-bridge:
+    enabled: true
+    image: *whoami
+    env:
+      - name: WHOAMI_PORT_NUMBER
+        value: "8080"
+      - name: WHOAMI_NAME
+        value: public-mqtt-bridge
+    podSecurityContext: *nonroot
+
+ingress:
+  # A catch-all like the SPA's: every path on hosts.app that is not public needs the cookie,
+  # including /internal (denied) and the public paths of hosts.gateway.
+  routes:
+    - host: app
+      path: /
+      match: PathPrefix
+      service: assets
+
+observability:
+  sentry:
+    # No Sentry Secret in the test namespace.
+    enabled: false
