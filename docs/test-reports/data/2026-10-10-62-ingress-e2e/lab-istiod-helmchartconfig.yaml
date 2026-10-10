@@ -1,0 +1,38 @@
+# Lab only (trustiot-mac-m1), Laysi/trustiot-v2#62 e2e: adds the extension provider
+# "trustiot-e2e-62" for the identity double in namespace e2e-62, next to the edge PoC's
+# provider "identity". k3s's helm-controller layers this HelmChartConfig over the istiod
+# HelmChart in ~/stack/platform/istio.yaml without changing that file. Helm replaces lists
+# instead of merging them, so the PoC provider is repeated here unchanged.
+#
+# Apply:     sudo k3s kubectl apply -f lab-istiod-helmchartconfig.yaml
+# Roll back: sudo k3s kubectl -n kube-system delete helmchartconfig istiod
+#            (helm-controller upgrades istiod again with only the HelmChart's values)
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: istiod
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    meshConfig:
+      extensionProviders:
+        - name: identity
+          envoyExtAuthzHttp:
+            service: identity.poc.svc.cluster.local
+            port: 8080
+            timeout: 0.5s
+            failOpen: false
+            pathPrefix: /check
+            includeRequestHeadersInCheck: [cookie]
+            headersToUpstreamOnAllow: [x-internal-identity]
+        # Same settings as deploy/istio/istiod-values.yaml, pointed at the e2e namespace.
+        - name: trustiot-e2e-62
+          envoyExtAuthzHttp:
+            service: trustiot-identity.e2e-62.svc.cluster.local
+            port: 8080
+            pathPrefix: /internal/ext-authz
+            failOpen: false
+            timeout: 0.5s
+            statusOnError: "503"
+            includeRequestHeadersInCheck: [cookie]
+            headersToUpstreamOnAllow: [x-internal-identity]

@@ -1,0 +1,10 @@
+old tests, an earlier batch of 20 runs under the same load
+
+run-08: test invalid_configuration_names_the_key_without_its_value ... FAILED (crates/service-kit/tests/lifecycle.rs:222:5)
+run-19: test sigterm_fails_readiness_at_once_and_drains_requests_in_flight ... FAILED (crates/service-kit/tests/lifecycle.rs:77:5)
+run-20: test missing_required_configuration_stops_startup ... FAILED (crates/service-kit/tests/lifecycle.rs:202:5)
+runs=20 failed=3
+
+test result lines (count):
+17 x test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;
+3 x test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;

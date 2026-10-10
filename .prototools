@@ -25,7 +25,7 @@ kubectl = "1.36.5"
 rust = "1.99.0"
 
 # Tools without a built-in proto plugin. Each schema downloads the official release
-# archive and verifies it against the checksum file published with the release.
+# archive or binary and verifies it against the checksum file published with the release.
 [plugins.tools]
 cargo-deny = "file://./.proto/plugins/cargo-deny.toml"
 gitleaks = "file://./.proto/plugins/gitleaks.toml"
