@@ -177,3 +177,90 @@ exit 0, exit 0; 176 tests: 175 pass, 1 skip (the same podman e2e test), 0 fail
 
 $ bun test deploy/chart
 133 pass, 0 fail
+
+
+# Main moved on again (6451abd: the protocol crate, actionlint for workflow files, an e2e report)
+# and was merged again: 81c5072. Its conflicts were in .prototools, CLAUDE.md, Cargo.toml and
+# docs/architecture/ci-release.md, each side adding one item; all kept. The checks ran
+# 2026-10-10T14:35-14:42Z on the resolved merge before it was committed (committing changed no file).
+
+$ cargo fmt --all --check; cargo clippy --workspace --all-targets --locked -- -D warnings;
+  cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
+exit 0, exit 0, exit 0
+
+$ cargo test --workspace --locked
+exit 0: 45 test result lines, 338 passed, 0 failed, 0 ignored
+
+$ cargo test --package service-kit --no-default-features --locked
+exit 0: 65 passed, 0 failed
+
+$ cargo run --locked --package openapi; git status --porcelain -- api
+wrote api/openapi.json (2973 bytes); no output from git status
+
+$ cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+
+$ bun scripts/ci/check-workflows.ts
+workflow policy: 3 file(s) checked, no violations
+
+$ bun scripts/ci/lint-workflows.ts    # ci.yml's new actionlint step (proto install actionlint first)
+actionlint: 2 workflow file(s), no errors    (ci.yml and release.yml)
+
+$ bun install --cwd scripts --frozen-lockfile; bun run --cwd scripts typecheck; bun run --cwd scripts test
+exit 0, exit 0; 186 tests across 10 files: 185 pass, 1 skip (the podman e2e test), 0 fail
+
+$ bun test deploy/chart
+133 pass, 0 fail
+
+
+# Main moved on again (8931a63: the ingest service's ClickHouse schema and the ClickHouse bundled in
+# the chart) and was merged again without conflicts: bc5b0d7. The checks ran 2026-10-10T18:04-18:11Z,
+# the cargo, bun and chart checks on the merge before it was committed (committing changed no file),
+# the rest on bc5b0d7 itself.
+
+$ cargo fmt --all --check; cargo clippy --workspace --all-targets --locked -- -D warnings;
+  cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
+exit 0, exit 0, exit 0
+
+$ cargo test --workspace --locked
+exit 0: 49 test result lines, 348 passed, 0 failed, 0 ignored
+
+$ cargo test --package service-kit --no-default-features --locked
+exit 0: 65 passed, 0 failed
+
+$ cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+
+$ bun scripts/ci/check-workflows.ts
+workflow policy: 3 file(s) checked, no violations
+
+$ bun scripts/ci/lint-workflows.ts
+actionlint: 2 workflow file(s), no errors    (also rerun on bc5b0d7)
+
+$ bun install --cwd scripts --frozen-lockfile; bun run --cwd scripts typecheck; bun run --cwd scripts test
+exit 0, exit 0; 186 tests across 10 files: 185 pass, 1 skip (the podman e2e test), 0 fail
+
+$ bun test deploy/chart
+149 pass, 0 fail
+
+$ cargo run --locked --package openapi; git status --porcelain -- api    # on bc5b0d7, clean checkout
+wrote api/openapi.json (2973 bytes)
+OpenAPI spec is current
+
+$ gitleaks git --no-banner --redact --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" .
+exit 0 on bc5b0d7: 50 commits scanned, no leaks found
+
+$ bun scripts/release/plan.ts --tag v0.0.0-rc.99 --dry-run --output plan.json
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.99 → version 0.0.0-rc.99 (prerelease), commit bc5b0d78b59c528c40f513e1fb96ec32c2ab36f2
+[release:plan] image ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.99 (Rust package release-selftest)
+[release:plan] chart ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.99
+[release:plan] notes start from v0.0.0-rc.2
+(a local dry run only: no tag was created and nothing was built or pushed)
+
+$ helm package deploy/chart --version 0.0.0-rc.99 --app-version 0.0.0-rc.99 -d <scratch>
+exit 0; the package holds Chart.yaml, values.yaml, values.schema.json, values-saas.yaml,
+values-onprem.yaml, README.md, .helmignore and templates/ (_clickhouse.tpl, _helpers.tpl,
+_ingress.tpl, _service.tpl, clickhouse.yaml, ingress.yaml, platform-config.yaml, services.yaml);
+tests/ is left out by .helmignore

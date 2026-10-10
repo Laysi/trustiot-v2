@@ -4,7 +4,7 @@
 
 ## 環境
 
-- **commit**：`ee8c438`（分支 `ci/68-release-workflow`，base 為 main 的 `71be25d`）。本機的發佈測試、負向檢查與可重現建置都在這個 commit 上跑；rebase 之前跑過的交叉編譯檢查另外註明。之後分支四次合併 main（`8ce2dfd`、`a25efe9`、`9132855`、`ece0566`），並加上「正式版要 main 的 ci 通過」的規則；合併後的檢查在 `f10215a`、`5f8d02e` 與 `08408dc` 上跑，見「合併 main 之後」。
+- **commit**：`ee8c438`（分支 `ci/68-release-workflow`，base 為 main 的 `71be25d`）。本機的發佈測試、負向檢查與可重現建置都在這個 commit 上跑；rebase 之前跑過的交叉編譯檢查另外註明。之後分支六次合併 main（最後一次合併進 main 的 `8931a63`），並加上「正式版要 main 的 ci 通過」的規則；第二次合併起，每次合併後都在合併的 commit 上重跑檢查，見「合併 main 之後」。
 - **本機**：x86_64 的 Fedora 45（kernel 7.2.8）。podman 6.1.3、skopeo 1.24.1 來自系統；bun 1.4.2、helm 4.3.0、zig 0.16.0、cargo-zigbuild 0.23.4、cargo-auditable 0.7.6、syft 1.52.0、cosign 3.1.3 由 `.prototools` 鎖定版本、以 proto 安裝；Rust 1.99.0（`rust-toolchain.toml`）加上 `aarch64-unknown-linux-musl` target。詳見 [environment.txt](data/2026-10-10-68-release-workflow/environment.txt)。
 - **本機 registry**：`docker.io/library/registry:3`（以 digest 釘選），只聽 `127.0.0.1:5068`。本機測試以當場產生的 cosign 金鑰對簽章（`--local-test-key`），不寫入 Sigstore：keyless 簽章需要 GitHub Actions 的 OIDC token，而且本機測試不該在公開紀錄留下任何東西。金鑰在測試的暫存目錄，測完刪除。
 - **GitHub**：簽章過的 annotated tag `v0.0.0-rc.1` 指向 `ee8c438`，2026-10-10T12:39:36Z 推送，觸發 release.yml 的執行 [38052766358](https://github.com/Laysi/trustiot-v2/actions/runs/38052766358)，各 job 在 GitHub 代管的 `ubuntu-24.04`（x86_64）runner 上執行。repo 為私有，組織在 GitHub Free 方案。repo 沒有設定 `AI_MODEL` 變數，所以發版說明是 `Laysi/release-notes-action` 的 commit 主旨清單。合併 main 之後，以指向 `82ff556` 的 `v0.0.0-rc.2` 再跑一次（2026-10-10T14:28:17Z 推送，執行 [38059729095](https://github.com/Laysi/trustiot-v2/actions/runs/38059729095)）。
@@ -182,9 +182,14 @@ SBOM 的下載：verify job 以唯讀權限從 GHCR 取出 SBOM attestation 並�
 | `bun test scripts/release` | 90 項通過，0 項失敗；其中 11 項測正式版規則：在 main 上、main 的 ci 為該 commit 跑的最新一次 push 執行成功；沒有執行、還在跑、失敗或讀不到時拒絕；候選版與 dry run 不查 ci |
 | `plan.ts --dry-run`、`helm package` | 兩份 values 的 `helm lint --strict` 通過；合併進來的 ingress 範本照常打包，`tests/`（含 e2e）不進 chart |
 
-之後 main 又前進（`9132855`，transactional outbox），再合併一次成 `5f8d02e`。唯一的衝突是 `Cargo.lock`：結果是 main 的 lock 加上 `release-selftest`，所以自測程式的建置相依 `cc` 從 1.5.1 變成 main 的 1.7.0。2026-10-10T14:05–14:15Z 在 `5f8d02e` 重跑同一組檢查：`cargo test --workspace` 30 組、223 項通過（main 帶進 outbox crate），其餘各項結果同上表，gitleaks 掃 39 個 commit 沒有發現。以 `plan.ts --dry-run` 與 `build.ts` 重跑發佈的建置：`cc` 1.7.0 經 zig 編譯 C 物件成功，執行檔是 aarch64 ELF，映像只有 linux/arm64，SBOM 13 個套件。lab 的 arm64 實機執行用的是 `cc` 1.5.1 的建置，沒有重跑。
+之後 main 繼續前進，每次合併後在合併的 commit 上重跑同一組檢查（原始資料同上）。時間都是 2026-10-10，UTC：
 
-main 再前進（`ece0566`，從程式碼產生 OpenAPI 規格），第四次合併成 `08408dc`，衝突只在 `tools/README.md` 與 `repository-layout.md` 的工具清單。2026-10-10T14:16–14:23Z 在 `08408dc` 重跑：`cargo test --workspace` 34 組、240 項通過；main 在 ci.yml 新加的「OpenAPI spec is current」（`cargo run --locked -p openapi` 之後 `api/` 沒有差異）通過；gitleaks 掃 42 個 commit 沒有發現；其餘各項結果同上表。
+| 合併 | 合併進來的 main | 衝突 | 結果 |
+| --- | --- | --- | --- |
+| `5f8d02e`（14:05–14:15Z） | `9132855`：transactional outbox（Laysi/trustiot-v2#54） | `Cargo.lock`：取 main 的 lock 再加上 `release-selftest`，所以自測程式的建置相依 `cc` 從 1.5.1 變成 main 的 1.7.0 | `cargo test --workspace` 30 組、223 項通過；gitleaks 掃 39 個 commit 沒有發現；其餘同上表。以 `plan.ts --dry-run` 與 `build.ts` 重跑發佈的建置：`cc` 1.7.0 經 zig 編譯 C 物件成功，執行檔是 aarch64 ELF，映像只有 linux/arm64，SBOM 13 個套件。lab 的 arm64 實機執行用的是 `cc` 1.5.1 的建置，沒有重跑 |
+| `08408dc`（14:16–14:23Z） | `ece0566`：從程式碼產生 OpenAPI 規格（Laysi/trustiot-v2#55） | `tools/README.md`、`repository-layout.md` 的工具清單 | `cargo test --workspace` 34 組、240 項通過；main 在 ci.yml 新加的「OpenAPI spec is current」（`cargo run --locked -p openapi` 之後 `api/` 沒有差異）通過；gitleaks 掃 42 個 commit 沒有發現；其餘同上表 |
+| `81c5072`（14:35–14:42Z） | `6451abd`：protocol crate（Laysi/trustiot-v2#50）、actionlint（Laysi/trustiot-v2#251）、Laysi/trustiot-v2#62 的獨立 e2e 報告 | `.prototools`、`CLAUDE.md`、`Cargo.toml`、`ci-release.md` 都是兩邊各加一項，全部保留 | `cargo test --workspace` 45 組、338 項通過；main 在 ci.yml 新加的 actionlint（`bun scripts/ci/lint-workflows.ts`）檢查 `ci.yml` 與 `release.yml`，沒有錯誤；`scripts/` 186 項中 185 項通過、1 項略過；其餘同上表 |
+| `bc5b0d7`（18:04–18:11Z） | `8931a63`：ingest 的 ClickHouse schema 與 chart 內建的 ClickHouse（Laysi/trustiot-v2#59） | 無 | `cargo test --workspace` 49 組、348 項通過；`bun test deploy/chart` 149 項通過；actionlint 沒有錯誤；OpenAPI 檢查通過；gitleaks 掃 50 個 commit 沒有發現；`plan.ts --dry-run` 兩份 values 的 `helm lint --strict` 通過，chart 打包含新的 ClickHouse 範本、不含 `tests/`；其餘同上表 |
 
 ### GitHub：v0.0.0-rc.2（合併 main 之後）
 
@@ -215,4 +220,4 @@ main 再前進（`ece0566`，從程式碼產生 OpenAPI 規格），第四次合
 - 第一個服務映像加入後刪除 `release-selftest`（ci-release.md 已註明）。
 - release profile 的 `strip = "debuginfo"` 經 zig 連結後沒有符號表（見上）。
 
-2026-10-10 合併 main（Laysi/trustiot-v2#67 的 ci.yml）時已處理的事項：`.github/actions/setup-proto/action.yml` 保留一份，含工具鏈檢查；`deny.toml` 的 targets 加上 `aarch64-unknown-linux-musl`，cargo-deny 也檢查映像實際的 target；`scripts/lib/` 的兩個型別錯誤已在 main 修正。第二次合併（Laysi/trustiot-v2#62 的 Istio 入口、Laysi/trustiot-v2#244 的測試時序修正）只有工具清單的衝突；第三次（Laysi/trustiot-v2#54 的 outbox）只有 `Cargo.lock` 的衝突，`cc` 因此改用 1.7.0；第四次（Laysi/trustiot-v2#55 的 OpenAPI）只有工具清單的衝突。合併後的檢查見「合併 main 之後」。
+2026-10-10 合併 main（Laysi/trustiot-v2#67 的 ci.yml）時已處理的事項：`.github/actions/setup-proto/action.yml` 保留一份，含工具鏈檢查；`deny.toml` 的 targets 加上 `aarch64-unknown-linux-musl`，cargo-deny 也檢查映像實際的 target；`scripts/lib/` 的兩個型別錯誤已在 main 修正。第二次合併（Laysi/trustiot-v2#62 的 Istio 入口、Laysi/trustiot-v2#244 的測試時序修正）只有工具清單的衝突；第三次（Laysi/trustiot-v2#54 的 outbox）只有 `Cargo.lock` 的衝突，`cc` 因此改用 1.7.0；第四次（Laysi/trustiot-v2#55 的 OpenAPI）只有工具清單的衝突；第五次（Laysi/trustiot-v2#50 的 protocol、Laysi/trustiot-v2#251 的 actionlint）的衝突都是兩邊各加一項，全部保留；第六次（Laysi/trustiot-v2#59 的 ClickHouse）沒有衝突。合併後的檢查見「合併 main 之後」。
