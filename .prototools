@@ -5,6 +5,7 @@
 # from `rust-toolchain.toml`. Change `rust` here and `channel` there together;
 # `cargo test -p repo-check` fails when they differ.
 
+actionlint = "1.7.12"
 bun = "1.4.2"
 cargo-deny = "0.20.2"
 gitleaks = "8.30.1"
@@ -16,6 +17,7 @@ rust = "1.99.0"
 # Tools without a built-in proto plugin. Each schema downloads the official release
 # archive or binary and verifies it against the checksum file published with the release.
 [plugins.tools]
+actionlint = "file://./.proto/plugins/actionlint.toml"
 cargo-deny = "file://./.proto/plugins/cargo-deny.toml"
 gitleaks = "file://./.proto/plugins/gitleaks.toml"
 helm = "file://./.proto/plugins/helm.toml"
