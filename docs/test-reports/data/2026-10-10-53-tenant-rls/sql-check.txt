@@ -1,0 +1,64 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (target/debug/deps/sql_check-42bd2cf9753fa63a)
+
+running 19 tests
+test tests::doc_comments_are_not_checked ... ok
+test tests::invalid_rust_is_an_error ... ok
+test tests::assert_sql_safe_is_always_found ... ok
+test tests::findings_name_the_file_line_and_rule ... ok
+test tests::dynamic_sql_is_found ... ok
+test tests::query_calls_in_macro_definitions_need_static_sql ... ok
+test tests::concat_is_checked_as_its_joined_text ... ok
+test tests::renamed_and_aliased_query_builders_are_followed ... ok
+test tests::sql_like_text_needs_a_sql_word_and_a_space ... ok
+test tests::session_settings_are_found_outside_the_kit ... ok
+test tests::included_files_are_checked ... ok
+test tests::sql_built_with_strings_is_found ... ok
+test tests::only_declared_constants_count_as_static ... ok
+test tests::unrelated_functions_named_query_are_ignored ... ok
+test tests::query_builders_in_macros_take_only_static_text ... ok
+test tests::static_sql_passes ... ok
+test tests::query_builders_take_only_static_text ... ok
+test tests::test_code_may_pass_sql_through_variables ... ok
+test tests::query_builder_text_is_checked_joined ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/check.rs (target/debug/deps/check-336ff9b2be587a65)
+
+running 6 tests
+test listed_paths_exist ... ok
+test parameterized_sql_is_not_reported ... ok
+services/example/src/concatenated.rs:4:12: AssertSqlSafe: AssertSqlSafe turns off sqlx's check that SQL is static; write static SQL and bind values
+services/example/src/concatenated.rs:7:15: SqlBuiltFromStrings: SQL text is built with format!, concatenation, or push_str; write static SQL and bind values
+services/example/src/concatenated.rs:8:17: DynamicSql: SQL passed to sqlx must be a string literal or a constant; bind values with $1 and .bind()
+services/example/src/concatenated.rs:8:17: AssertSqlSafe: AssertSqlSafe turns off sqlx's check that SQL is static; write static SQL and bind values
+services/example/src/concatenated.rs:12:11: DynamicSql: SQL passed to sqlx must be a string literal or a constant; bind values with $1 and .bind()
+services/example/src/concatenated.rs:14:11: DynamicSql: SQL passed to sqlx must be a string literal or a constant; bind values with $1 and .bind()
+services/example/src/concatenated.rs:19:9: SqlBuiltFromStrings: SQL text is built with format!, concatenation, or push_str; write static SQL and bind values
+services/example/src/concatenated.rs:21:33: LeakedString: a leaked string passes runtime text to sqlx as &'static str; write static SQL and bind values
+services/example/src/concatenated.rs:22:34: DynamicSql: SQL passed to sqlx must be a string literal or a constant; bind values with $1 and .bind()
+services/example/src/concatenated.rs:27:18: DynamicQueryBuilder: QueryBuilder SQL text must be a string literal or a constant; add values with push_bind
+services/example/src/concatenated.rs:29:26: DynamicQueryBuilder: QueryBuilder SQL text must be a string literal or a constant; add values with push_bind
+services/example/src/concatenated.rs:34:32: DynamicQueryBuilder: QueryBuilder SQL text must be a string literal or a constant; add values with push_bind
+services/example/src/concatenated.rs:40:18: SessionSetting: SQL sets or resets a trustiot.* setting or the role, or calls set_config; only service-kit's tenant transactions set the tenant (decision 29)
+services/example/src/concatenated.rs:45:17: SessionSetting: SQL sets or resets a trustiot.* setting or the role, or calls set_config; only service-kit's tenant transactions set the tenant (decision 29)
+services/example/src/concatenated.rs:49:17: SessionSetting: SQL sets or resets a trustiot.* setting or the role, or calls set_config; only service-kit's tenant transactions set the tenant (decision 29)
+services/example/src/concatenated.rs:54:17: SessionSetting: SQL sets or resets a trustiot.* setting or the role, or calls set_config; only service-kit's tenant transactions set the tenant (decision 29)
+services/example/src/concatenated.rs:59:19: SessionSetting: SQL sets or resets a trustiot.* setting or the role, or calls set_config; only service-kit's tenant transactions set the tenant (decision 29)
+services/example/src/concatenated.rs:63:19: UncheckedInclude: include_str!/include_bytes! names a file the check cannot read, so its SQL is not checked; include a file by a literal path relative to the source file
+services/example/src/concatenated.rs:67:17: DynamicSql: SQL passed to sqlx must be a string literal or a constant; bind values with $1 and .bind()
+services/example/src/concatenated.rs:72:15: DynamicSql: SQL passed to sqlx must be a string literal or a constant; bind values with $1 and .bind()
+test concatenated_sql_is_reported_on_every_marked_line ... ok
+test every_rule_is_exercised_by_the_fixture ... ok
+test the_tenant_module_is_the_only_exception ... ok
+test the_workspace_has_no_string_built_sql ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.68s
+
+   Doc-tests sql_check
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -40,7 +40,8 @@ trustiot-v2/
 ├── frontend/                  # Vite + React SPA
 ├── tools/
 │   ├── migrate/               # migration Job
-│   └── repo-check/            # repo 規則檢查，隨 cargo test 執行
+│   ├── repo-check/            # repo 規則檢查，隨 cargo test 執行
+│   └── sql-check/             # 擋下由字串組成的 SQL 與 kit 以外的租戶設定（決策 29），隨 cargo test 執行
 ├── deploy/
 │   ├── chart/                 # Helm chart；values-saas.yaml、values-onprem.yaml
 │   ├── flux/                  # SaaS 的 GitOps 設定（Flux）

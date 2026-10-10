@@ -1,6 +1,6 @@
 [package]
 name = "service-kit"
-description = "Shared skeleton for TrustIoT v2 cloud services: configuration, health, SIGTERM handling, tracing, and scheduled-job locks."
+description = "Shared skeleton for TrustIoT v2 cloud services: configuration, health, SIGTERM handling, tracing, scheduled-job locks, and tenant-isolated Postgres."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -18,7 +18,8 @@ doc = false
 [features]
 default = ["contract"]
 # Everything in the kit that needs crates/contract: the M1 error body of the errors the kit answers
-# itself, and verification of internal identity tokens (`identity`). services/ai-gateway must not
+# itself, verification of internal identity tokens (`identity`), and tenant-scoped Postgres
+# transactions (`tenant`), which take the tenant from that identity. services/ai-gateway must not
 # depend on crates/contract (decision 28), so it turns default features off;
 # tests/dependency_isolation.rs checks that this keeps contract out.
 contract = ["dep:base64", "dep:contract", "dep:ed25519-dalek"]
@@ -37,7 +38,8 @@ opentelemetry-otlp = { workspace = true, features = ["http-proto", "internal-log
 opentelemetry_sdk = { workspace = true, features = ["internal-logs", "logs", "trace"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-sqlx = { workspace = true, features = ["postgres", "runtime-tokio"] }
+# TLS with rustls and ring: connections always verify the server (`postgres`, checklist M3).
+sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
@@ -46,6 +48,10 @@ tower-http = { workspace = true, features = ["catch-panic"] }
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber = { workspace = true, features = ["registry", "std", "tracing-log"] }
+
+[dev-dependencies]
+# A throwaway CA and server certificate for the TLS Postgres the tenant tests start.
+rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
 
 [lints]
 workspace = true

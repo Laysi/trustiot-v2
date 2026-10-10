@@ -5,6 +5,8 @@
     reason = "each test binary includes this module and uses a different subset of it"
 )]
 
+pub mod postgres;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::process::{Child, Command, ExitStatus, Stdio};

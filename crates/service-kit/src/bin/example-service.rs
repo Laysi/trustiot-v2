@@ -3,7 +3,10 @@
 //!
 //! Configuration: `TRUSTIOT__GREETING` (required) plus the kit's settings. With the default
 //! `contract` feature, also the platform setting `TRUSTIOT_INTERNAL_IDENTITY_KEYS` (optional
-//! here only; see `Platform`).
+//! here only; see `Platform`), and a tenant database when `TRUSTIOT__DATABASE__USERNAME` and
+//! `TRUSTIOT__DATABASE__PASSWORD` are set: the platform settings
+//! `TRUSTIOT_POSTGRES_{HOST,PORT,DATABASE,SSLMODE,CA_FILE}` then say where, and the service
+//! refuses to start unless `TRUSTIOT_POSTGRES_SSLMODE` is `verify-full`.
 //!
 //! Routes besides `/healthz` and `/readyz`:
 //! - `GET /v1/hello` returns the configured greeting.
@@ -13,6 +16,10 @@
 //! - `GET /v1/panic` panics, to exercise the kit's panic handling.
 //! - `GET /v1/whoami` (`contract` feature, when the identity keys are set) returns the user of the
 //!   request's internal identity token, which must be addressed to `assets`; otherwise 401.
+//! - `GET /v1/items` (`contract` feature, when the identity keys and the database are set) lists
+//!   the names in `example_items` (crates/service-kit/sql/tenant-table.sql) in a tenant
+//!   transaction for the token's tenant. The query has no tenant condition: row-level security
+//!   returns only that tenant's rows. A token without a tenant answers 403 `permission_denied`.
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -39,6 +46,11 @@ struct Config {
     #[cfg(feature = "contract")]
     #[serde(default)]
     platform: Platform,
+    /// The example's database role (`database.username`, `database.password`). Product
+    /// services get their roles' credentials from the deployment (Laysi/trustiot-v2#58,
+    /// Laysi/trustiot-v2#60).
+    #[cfg(feature = "contract")]
+    database: Option<DatabaseCredentials>,
 }
 
 /// The platform settings the example reads. No `deny_unknown_fields`: every service gets every
@@ -50,6 +62,69 @@ struct Platform {
     /// the kit's other tests can run the example without keys; a product service declares it
     /// without `Option`, so it refuses to start without keys.
     internal_identity_keys: Option<service_kit::identity::IdentityKeys>,
+    /// `TRUSTIOT_POSTGRES_*`: read only when `database` is set. A product service declares
+    /// them without `Option` and `postgres_sslmode` as `service_kit::postgres::SslMode`, so any
+    /// other `sslmode` stops it at startup. The example keeps them optional and checks the
+    /// `sslmode` in `validate`, because the local dev environment runs it without a database
+    /// and passes `TRUSTIOT_POSTGRES_SSLMODE=disable` (scripts/README.md).
+    postgres_host: Option<String>,
+    postgres_port: Option<u16>,
+    postgres_database: Option<String>,
+    postgres_sslmode: Option<String>,
+    postgres_ca_file: Option<std::path::PathBuf>,
+}
+
+#[cfg(feature = "contract")]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DatabaseCredentials {
+    username: String,
+    password: String,
+}
+
+/// Never prints the password.
+#[cfg(feature = "contract")]
+impl std::fmt::Debug for DatabaseCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DatabaseCredentials")
+            .field("username", &self.username)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "contract")]
+impl Config {
+    /// The tenant database's connection settings, when the example has a database.
+    fn postgres(&self) -> Result<Option<service_kit::postgres::PostgresConfig>, Invalid> {
+        let Some(credentials) = &self.database else {
+            return Ok(None);
+        };
+        let platform = &self.platform;
+        let required = |key: &str| Invalid::new(key, "is required when `database` is set");
+        let ssl_mode = platform
+            .postgres_sslmode
+            .as_deref()
+            .ok_or_else(|| required("platform.postgres_sslmode"))?
+            .parse::<service_kit::postgres::SslMode>()
+            .map_err(|error| Invalid::new("platform.postgres_sslmode", error.to_string()))?;
+        Ok(Some(service_kit::postgres::PostgresConfig {
+            host: platform
+                .postgres_host
+                .clone()
+                .ok_or_else(|| required("platform.postgres_host"))?,
+            port: platform
+                .postgres_port
+                .ok_or_else(|| required("platform.postgres_port"))?,
+            database: platform
+                .postgres_database
+                .clone()
+                .ok_or_else(|| required("platform.postgres_database"))?,
+            ssl_mode,
+            ca_file: platform.postgres_ca_file.clone(),
+            username: credentials.username.clone(),
+            password: credentials.password.clone(),
+        }))
+    }
 }
 
 impl Validate for Config {
@@ -57,6 +132,8 @@ impl Validate for Config {
         if self.greeting.trim().is_empty() {
             return Err(Invalid::new("greeting", "must not be blank"));
         }
+        #[cfg(feature = "contract")]
+        self.postgres()?;
         Ok(())
     }
 }
@@ -96,27 +173,111 @@ async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         .route("/v1/panic", get(panic))
         .with_state(state);
     #[cfg(feature = "contract")]
-    let router = match &context.config().platform.internal_identity_keys {
-        Some(keys) => router.merge(identity::routes(keys.clone())),
-        None => router,
+    let router = {
+        let config = context.config();
+        // `validate` already accepted these settings.
+        let postgres = config
+            .postgres()
+            .map_err(|invalid| format!("{}: {}", invalid.key, invalid.message))?;
+        let database = match postgres {
+            Some(postgres) => {
+                let db = service_kit::tenant::TenantDb::connect_lazy(
+                    postgres.connect_options(),
+                    sqlx::postgres::PgPoolOptions::new().max_connections(4),
+                )?;
+                let ping = db.clone();
+                context.health().add_check("postgres", move || {
+                    let db = ping.clone();
+                    async move { db.ping().await }
+                });
+                Some(db)
+            }
+            None => None,
+        };
+        match &config.platform.internal_identity_keys {
+            Some(keys) => router.merge(identity::routes(keys.clone(), database)),
+            None => router,
+        }
     };
     Ok(router)
 }
 
-/// The route that needs the user's identity.
+/// The routes that need the user's identity.
 #[cfg(feature = "contract")]
 mod identity {
+    use axum::extract::{FromRef, State};
+    use axum::http::StatusCode;
     use axum::routing::get;
     use axum::{Json, Router};
-    use contract::ServiceName;
+    use contract::{ErrorBody, ErrorCode, ServiceName};
     use service_kit::identity::{IdentityKeys, IdentityVerifier, UserIdentity};
+    use service_kit::tenant::{TenantDb, TenantDbError};
+
+    #[derive(Clone)]
+    struct IdentityState {
+        verifier: IdentityVerifier,
+        db: TenantDb,
+    }
+
+    impl FromRef<IdentityState> for IdentityVerifier {
+        fn from_ref(state: &IdentityState) -> Self {
+            state.verifier.clone()
+        }
+    }
 
     /// The example stands in for a product service, so it accepts tokens addressed to `assets`.
     /// A product service names itself here.
-    pub(crate) fn routes(keys: IdentityKeys) -> Router {
-        Router::new()
+    pub(crate) fn routes(keys: IdentityKeys, database: Option<TenantDb>) -> Router {
+        let verifier = IdentityVerifier::new(ServiceName::Assets, keys);
+        let whoami = Router::new()
             .route("/v1/whoami", get(whoami))
-            .with_state(IdentityVerifier::new(ServiceName::Assets, keys))
+            .with_state(verifier.clone());
+        match database {
+            Some(db) => whoami.merge(
+                Router::new()
+                    .route("/v1/items", get(items))
+                    .with_state(IdentityState { verifier, db }),
+            ),
+            None => whoami,
+        }
+    }
+
+    /// The names of the user's tenant's items. The query has no tenant condition; row-level
+    /// security limits it to the tenant the kit set from the token.
+    async fn items(
+        State(state): State<IdentityState>,
+        user: UserIdentity,
+    ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorBody>)> {
+        let error = |code: ErrorCode| {
+            let body = ErrorBody::new(code);
+            (body.http_status(), Json(body))
+        };
+        let mut tx = state
+            .db
+            .begin(&user)
+            .await
+            .map_err(|failure| match failure {
+                TenantDbError::NoTenant => error(ErrorCode::PermissionDenied),
+                other => {
+                    tracing::error!(error = %other, "could not start a tenant transaction");
+                    error(ErrorCode::Unavailable)
+                }
+            })?;
+        let names: Vec<String> = sqlx::query_scalar("SELECT name FROM example_items ORDER BY name")
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|failure| {
+                tracing::error!(error = %failure, "could not list the items");
+                error(ErrorCode::Unavailable)
+            })?;
+        let tenant = tx.tenant_id();
+        tx.commit().await.map_err(|failure| {
+            tracing::error!(error = %failure, "could not commit");
+            error(ErrorCode::Unavailable)
+        })?;
+        Ok(Json(
+            serde_json::json!({ "tenant": tenant, "items": names }),
+        ))
     }
 
     /// Answers only requests whose token verified; the extractor answers 401 for the rest.
