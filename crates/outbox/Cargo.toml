@@ -1,0 +1,40 @@
+[package]
+name = "outbox"
+description = "Transactional outbox for TrustIoT v2 cloud services: events written with the business data, delivered in order, processed once, replayable."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+# A producer and a consumer in one process, for demonstrations and this crate's integration
+# tests (crash, restart, and OTLP metrics need a real process). Never deployed.
+[[bin]]
+name = "outbox-example"
+path = "src/bin/outbox-example.rs"
+test = false
+doc = false
+
+[dependencies]
+# The binary only: a real service on the kit, so crash and metrics tests run end to end.
+axum = { workspace = true, features = ["http1", "json", "tokio"] }
+chrono.workspace = true
+contract = { path = "../contract" }
+opentelemetry = { workspace = true, features = ["metrics"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+service-kit = { path = "../service-kit" }
+sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "uuid"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio-util.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v7"] }
+
+[dev-dependencies]
+# Decodes the OTLP metric export the tests receive, to read the lag value itself.
+opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "metrics"] }
+prost = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true
