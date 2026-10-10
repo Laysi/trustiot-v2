@@ -1,4 +1,13 @@
-# 入口 gateway 的叢集測試
+# 叢集測試（入口 gateway、服務間授權）
+
+兩個測試共用 `cluster.ts`（環境變數、`.prototools` 鎖定的 helm 與 kubectl、不碰既有安裝的 `helm install`）：
+
+| 測試 | 驗證 | issue |
+| --- | --- | --- |
+| `ingress.e2e.ts` | 入口 gateway：cookie 驗證、例外路徑、標頭、路徑繞過、身分服務停機 | Laysi/trustiot-v2#62 |
+| `mesh.e2e.ts` | 服務間授權：清單內的呼叫放行、清單外的被拒，AuthorizationPolicy 與 NetworkPolicy 各自生效，預設拒絕下健康檢查通過 | Laysi/trustiot-v2#63 |
+
+## 入口 gateway（`ingress.e2e.ts`）
 
 `ingress.e2e.ts` 把 chart 裝進現有叢集的一個 namespace，經真正的入口 gateway 驗證決策 27 的規則（Laysi/trustiot-v2#62）：
 
@@ -9,7 +18,7 @@
 
 不在 `bun test deploy/chart` 內（檔名沒有 `.test.`），要有叢集才能跑。叢集可以是 k3d、k3s 或其他 Kubernetes，只要 kubectl 連得到。
 
-## 替身
+### 替身
 
 | 服務 | 替身 | 說明 |
 | --- | --- | --- |
@@ -19,7 +28,7 @@
 
 設定在 `values-e2e.yaml`。身分服務的真實版本是 Laysi/trustiot-v2#61，接上後的端到端驗證在 Laysi/trustiot-v2#77。
 
-## 前置條件
+### 前置條件
 
 1. 叢集已依 `deploy/istio/README.md` 裝好 Istio ambient 與 Gateway API CRD。
 2. istiod 有一個 ext_authz provider 指向測試 namespace 的身分服務替身 `trustiot-identity.<namespace>.svc.cluster.local:8080`，設定與 `deploy/istio/istiod-values.yaml` 相同（`pathPrefix: /internal/ext-authz`、`failOpen: false`、`timeout: 0.5s`、`statusOnError: "503"`）。
@@ -37,7 +46,7 @@
 
 5. 本機有 `proto install` 裝好的 helm 與 kubectl；地端型態還需要 `openssl`（產生一次性的自簽憑證）。
 
-## 執行
+### 執行
 
 在 repo 根目錄：
 
@@ -64,3 +73,47 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/ingress.e2e.ts
 | `E2E_KEEP` | 空 | `1` 時測完不移除 release，方便查看 |
 
 測試以 `helm install --wait` 安裝；release 已經存在時直接失敗，不碰既有的安裝。結束時只移除這次建立的 release 與 TLS Secret（名稱帶隨機字尾）。身分服務停機的測試會暫時把替身 scale 到 0，結束時恢復。請求一律以自寫的 HTTP/1.1 客戶端送出原始的請求行，`fetch` 會先把 `..` 與編碼正規化，測不到繞過。
+
+## 服務間授權（`mesh.e2e.ts`）
+
+`mesh.e2e.ts` 把 chart 裝進現有叢集的一個 namespace，以真實的連線驗證決策 27 的服務間授權（Laysi/trustiot-v2#63，規則見 chart README 的「服務間授權（mesh）」）。呼叫從服務自己的 pod 內發出（`kubectl exec` 在服務的容器裡跑 Bun），所以 ztunnel 看到的是該服務的 ServiceAccount；另外建兩個測試 pod 當呼叫端：一個在 mesh 內、用 namespace 的 `default` ServiceAccount（stranger），一個不在 mesh（outsider，`istio.io/dataplane-mode: none`）。
+
+| 呼叫 | 預期 |
+| --- | --- |
+| assets → certs | 清單內（`values-mesh-e2e.yaml` 的 `mesh.calls`），放行 |
+| 入口 gateway → identity、certs、mqtt-bridge（例外路徑，經 `kubectl port-forward` 進入口 pod） | 放行 |
+| certs → assets、assets → alerts、mqtt-bridge → identity、stranger → certs、outsider → certs 的 Service 與 pod IP | 清單外，被拒 |
+| outsider → 入口 gateway 的 pod | 只有入口的 NetworkPolicy 擋，用來確認 NetworkPolicy 是否生效 |
+
+測試依序執行五個階段，每個階段從前一個階段留下的狀態開始：
+
+1. 兩層都在：清單內的呼叫與入口放行，清單外的全部被拒；所有 pod 就緒、沒有重啟（預設拒絕下 kubelet 的健康檢查照常通過）。
+2. 刪掉 release 的所有 NetworkPolicy：outsider 連得到入口 pod（確認 NetworkPolicy 已失效），清單外的呼叫仍全部被 AuthorizationPolicy 拒絕。
+3. 再刪掉服務的 AuthorizationPolicy（入口的 cookie 驗證與 `/internal` 拒絕保留）：清單外的呼叫全部成功，證明前後階段被拒是政策造成的，不是呼叫本身有問題。
+4. 以 `helm get manifest` 的內容重建 NetworkPolicy、AuthorizationPolicy 仍刪除：清單外的呼叫全部被 NetworkPolicy 拒絕，清單內的與入口照常放行。
+5. 重建 AuthorizationPolicy，回到安裝時的狀態：再檢查一次呼叫與 pod 健康狀態。
+
+被 ztunnel 拒絕時呼叫端看到連線重置（`error`），被 NetworkPolicy 丟棄時看到逾時（`timeout`）；兩者都算被拒，結果檔記錄每次呼叫的種類與毫秒數。
+
+### 前置條件與執行
+
+前置條件同入口測試的 1、3、4、5 項：需要 Istio ambient 與 Gateway API CRD、已建立的 namespace（建議 `restricted`）、叢集拉得到的身分服務替身映像；不需要 ext_authz provider，入口只走例外路徑。測試的身分還要能在 namespace 裡建立 pod、`pods/exec` 與 `pods/portforward`，並刪除與建立 NetworkPolicy 和 AuthorizationPolicy。身分服務替身的映像同時用在五個服務與兩個測試 pod，因為它是唯一有執行環境（Bun）、能從 pod 內發出呼叫的測試映像。
+
+在 repo 根目錄：
+
+```sh
+E2E_NAMESPACE=e2e-63 \
+E2E_IDENTITY_IMAGE=localhost/trustiot-e2e/identity-double:63@sha256:<digest> \
+E2E_IMAGE_PULL_POLICY=Never \
+bun test --timeout 600000 ./deploy/chart/tests/e2e/mesh.e2e.ts
+```
+
+變數同入口測試的 `E2E_NAMESPACE`、`E2E_IDENTITY_IMAGE`、`E2E_IMAGE_PULL_POLICY`、`E2E_KUBECONTEXT`、`E2E_RELEASE`、`E2E_KEEP`，另有：
+
+| 變數 | 預設 | 說明 |
+| --- | --- | --- |
+| `E2E_CALL_TIMEOUT_MS` | `5000` | 一次呼叫多久沒有回應算被拒（NetworkPolicy 丟棄封包時呼叫端只會等到逾時） |
+| `E2E_SETTLE_MS` | `90000` | 刪除或重建政策後，等 ztunnel 與 NetworkPolicy 控制器套用的上限 |
+| `E2E_REPORT_DIR` | 空 | 設定時把每次呼叫的結果寫成 `mesh-e2e.json` |
+
+結束時只移除這次建立的 release 與兩個測試 pod（名稱帶隨機字尾）。中途失敗時，刪掉的政策隨 release 一起移除；`E2E_KEEP=1` 時 release 保留在最後的狀態。

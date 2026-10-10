@@ -1,0 +1,95 @@
+{{- /*
+Service-to-service authorization (decision 27): two independent layers, so either one alone
+still refuses a call that is not on the list.
+1. AuthorizationPolicy (enforced by ztunnel, L4): each service accepts mTLS connections only from
+   the ServiceAccounts of its listed callers and, where it routes, the ingress gateway. A service
+   nobody may call gets a policy without rules, which refuses every connection.
+2. NetworkPolicy: everything in the namespace is denied by default; each service then admits
+   ztunnel's HBONE port from the pods of the same callers, and the kubelet's probes.
+No waypoint is deployed: L4 identity is all these rules need. Add one only for L7 rules between
+services, and move the affected policies to it (README.md).
+*/ -}}
+{{- $v := .Values -}}
+{{- $gateway := include "trustiot.ingress.gatewayName" . -}}
+{{- $mesh := include "trustiot.mesh.plan" . | fromYaml -}}
+# Default deny: a pod in this namespace accepts only what another NetworkPolicy here allows
+# (the ingress gateway's own policy and the per-service policies below).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "trustiot.componentName" (dict "root" . "name" "default-deny") }}
+  labels:
+    {{- include "trustiot.componentLabels" (dict "root" . "name" "default-deny") | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+{{- range $service := $mesh.services }}
+{{- $ctx := dict "root" $ "name" $service.name }}
+{{- $principals := list }}
+{{- range $service.callers }}
+{{- $principals = append $principals (include "trustiot.mesh.principal" (dict "root" $ "serviceAccount" (include "trustiot.componentName" (dict "root" $ "name" .)))) }}
+{{- end }}
+{{- if $service.ingress }}
+{{- /* Istio names the gateway's ServiceAccount "<gateway>-istio". */}}
+{{- $principals = append $principals (include "trustiot.mesh.principal" (dict "root" $ "serviceAccount" (printf "%s-istio" $gateway))) }}
+{{- end }}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ include "trustiot.componentName" $ctx }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "trustiot.selectorLabels" $ctx | nindent 6 }}
+  action: ALLOW
+  {{- if $principals }}
+  rules:
+    - from:
+        - source:
+            principals:
+              {{- range $principals }}
+              - {{ . | quote }}
+              {{- end }}
+  {{- else }}
+  # No caller is listed: an ALLOW policy without rules refuses every connection.
+  {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "trustiot.componentName" $ctx }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "trustiot.selectorLabels" $ctx | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    {{- if $principals }}
+    # Mesh traffic arrives only on ztunnel's HBONE port, from the caller's own pod IP.
+    - from:
+        {{- range $service.callers }}
+        - podSelector:
+            matchLabels:
+              {{- include "trustiot.selectorLabels" (dict "root" $ "name" .) | nindent 14 }}
+        {{- end }}
+        {{- if $service.ingress }}
+        - podSelector:
+            matchLabels:
+              gateway.networking.k8s.io/gateway-name: {{ $gateway }}
+        {{- end }}
+      ports:
+        - port: {{ include "trustiot.mesh.hbonePort" $ }}
+          protocol: TCP
+    {{- end }}
+    # Kubelet probes, which istio-cni SNATs to this address in ambient mode.
+    - from:
+        - ipBlock:
+            cidr: {{ include "trustiot.mesh.kubeletProbeSource" $ }}
+{{- end }}

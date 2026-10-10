@@ -206,7 +206,7 @@ describe.each(SHAPE_NAMES)("%s shape", (shape) => {
     SLOW_TEST_MS,
   );
 
-  test("services stay off until enabled: only the platform settings and the ingress render", () => {
+  test("services stay off until enabled: only the platform settings, the ingress and default deny render", () => {
     const manifests = render(files);
     expect(manifests.map((m) => `${m.kind}/${m.metadata.name}`).sort()).toEqual(
       [
@@ -215,6 +215,7 @@ describe.each(SHAPE_NAMES)("%s shape", (shape) => {
         `ConfigMap/${RELEASE}-ingress-options`,
         `ConfigMap/${RELEASE}-platform`,
         `Gateway/${RELEASE}-ingress`,
+        `NetworkPolicy/${RELEASE}-default-deny`,
         `NetworkPolicy/${RELEASE}-ingress`,
       ].sort(),
     );
@@ -647,6 +648,189 @@ describe("ingress gateway (decision 27)", () => {
   });
 });
 
+type MeshPolicy = {
+  selector: { matchLabels: Record<string, string> };
+  action: string;
+  rules?: { from: { source: { principals: string[] } }[] }[];
+};
+type NetworkPolicyPeer = { podSelector?: { matchLabels: Record<string, string> }; ipBlock?: { cidr: string } };
+type NetworkPolicySpec = {
+  podSelector: { matchLabels?: Record<string, string> };
+  policyTypes: string[];
+  ingress?: { from?: NetworkPolicyPeer[]; ports?: { port: number; protocol: string }[] }[];
+};
+
+describe("service-to-service authorization (decision 27)", () => {
+  const GATEWAY_SA = `${RELEASE}-ingress-istio`;
+  const GATEWAY_PODS = { "gateway.networking.k8s.io/gateway-name": `${RELEASE}-ingress` };
+  const principal = (serviceAccount: string, trustDomain = "cluster.local") =>
+    `${trustDomain}/ns/${NAMESPACE}/sa/${serviceAccount}`;
+  // The ingress e2e backends plus two services nobody routes to: assets calls alerts, nobody
+  // calls knowledge.
+  const CALLS = '{"assets":["certs","alerts"],"identity":["assets"]}';
+  const meshArgs = ["--set", "services.alerts.enabled=true", "--set", "services.knowledge.enabled=true", "--set-json", `mesh.calls=${CALLS}`];
+  const withCalls = (shape: Shape = "saas", args: string[] = meshArgs) => render([...SHAPES[shape], E2E_VALUES], args);
+  const meshPolicy = (manifests: Manifest[], service: string) =>
+    find(manifests, "AuthorizationPolicy", `${RELEASE}-${service}`).spec as MeshPolicy;
+  const networkPolicy = (manifests: Manifest[], name: string) =>
+    find(manifests, "NetworkPolicy", `${RELEASE}-${name}`).spec as NetworkPolicySpec;
+  const podLabels = (deployment: Manifest) =>
+    (deployment.spec as { template: { metadata: { labels: Record<string, string> } } }).template.metadata.labels;
+  const selects = (selector: Record<string, string>, labels: Record<string, string>) =>
+    Object.entries(selector).every(([key, value]) => labels[key] === value);
+  const serviceOf = (objectName: string) => objectName.slice(`${RELEASE}-`.length);
+  const principalsOf = (policy: MeshPolicy) => policy.rules?.flatMap((r) => r.from.flatMap((f) => f.source.principals)) ?? [];
+  // The services whose pods a NetworkPolicy admits on the HBONE port, and whether the ingress
+  // gateway's pods are admitted too.
+  function hboneSources(manifests: Manifest[], spec: NetworkPolicySpec) {
+    const hbone = (spec.ingress ?? []).filter((rule) => rule.ports !== undefined);
+    for (const rule of hbone) expect(rule.ports).toEqual([{ port: 15008, protocol: "TCP" }]);
+    const peers = hbone.flatMap((rule) => rule.from ?? []);
+    for (const peer of peers) expect(peer.ipBlock).toBeUndefined();
+    const services = manifests
+      .filter((m) => m.kind === "Deployment")
+      .filter((d) => peers.some((peer) => peer.podSelector && selects(peer.podSelector.matchLabels, podLabels(d))))
+      .map((d) => serviceOf(d.metadata.name))
+      .sort();
+    const gateway = peers.some((peer) => JSON.stringify(peer.podSelector?.matchLabels) === JSON.stringify(GATEWAY_PODS));
+    return { services, gateway };
+  }
+
+  test("every service runs as its own ServiceAccount", () => {
+    const manifests = render([...SHAPES.saas, SMOKE], enableAllServices);
+    const accounts = manifests.filter((m) => m.kind === "ServiceAccount").map((m) => m.metadata.name);
+    const deployments = manifests.filter((m) => m.kind === "Deployment");
+    expect(deployments.length).toBe(plannedServices.length + 1);
+    expect(new Set(deployments.map((d) => podSpec(d).serviceAccountName)).size).toBe(deployments.length);
+    for (const deployment of deployments) {
+      expect(podSpec(deployment).serviceAccountName).toBe(deployment.metadata.name);
+      expect(accounts).toContain(deployment.metadata.name);
+    }
+  });
+
+  test.each(SHAPE_NAMES)("%s: the namespace denies all incoming traffic by default, with or without services", (shape) => {
+    for (const args of [[], enableAllServices]) {
+      const deny = find(render(SHAPES[shape], args), "NetworkPolicy", `${RELEASE}-default-deny`).spec;
+      expect(deny).toEqual({ podSelector: {}, policyTypes: ["Ingress"] });
+    }
+  });
+
+  test("the call list and the ingress routes generate one AuthorizationPolicy per service", () => {
+    const manifests = withCalls();
+    const sa = (service: string) => principal(`${RELEASE}-${service}`);
+    // Callers from mesh.calls first (sorted), then the ingress gateway where it routes or, for
+    // identity, where it sends the cookie check (ext_authz).
+    const expected: Record<string, string[]> = {
+      identity: [principal(GATEWAY_SA)],
+      assets: [sa("identity"), principal(GATEWAY_SA)],
+      certs: [sa("assets"), principal(GATEWAY_SA)],
+      "mqtt-bridge": [principal(GATEWAY_SA)],
+      alerts: [sa("assets")],
+      knowledge: [],
+    };
+    const policies = manifests.filter((m) => m.kind === "AuthorizationPolicy" && !m.metadata.name.startsWith(`${RELEASE}-ingress-`));
+    expect(policies.map((m) => m.metadata.name).sort()).toEqual(Object.keys(expected).map((s) => `${RELEASE}-${s}`).sort());
+    for (const [service, principals] of Object.entries(expected)) {
+      const policy = meshPolicy(manifests, service);
+      expect(policy.action).toBe("ALLOW");
+      // The selector picks exactly this service's pods.
+      for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
+        expect(selects(policy.selector.matchLabels, podLabels(deployment))).toBe(serviceOf(deployment.metadata.name) === service);
+      }
+      if (principals.length === 0) {
+        // An ALLOW policy without rules refuses every connection.
+        expect(policy.rules).toBeUndefined();
+      } else {
+        expect(policy.rules).toEqual([{ from: [{ source: { principals } }] }]);
+      }
+    }
+  });
+
+  test.each(SHAPE_NAMES)("%s: each service's NetworkPolicy admits HBONE from the same callers, and kubelet probes", (shape) => {
+    const manifests = withCalls(shape);
+    const services = manifests.filter((m) => m.kind === "Deployment").map((d) => serviceOf(d.metadata.name));
+    expect(services.length).toBe(6);
+    for (const service of services) {
+      const spec = networkPolicy(manifests, service);
+      for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
+        expect(selects(spec.podSelector.matchLabels ?? {}, podLabels(deployment))).toBe(serviceOf(deployment.metadata.name) === service);
+      }
+      expect(spec.policyTypes).toEqual(["Ingress"]);
+      // The same callers as the AuthorizationPolicy, so either layer alone enforces the list.
+      const principals = principalsOf(meshPolicy(manifests, service));
+      const sources = hboneSources(manifests, spec);
+      expect(sources.gateway).toBe(principals.includes(principal(GATEWAY_SA)));
+      expect(sources.services).toEqual(
+        principals
+          .filter((p) => p !== principal(GATEWAY_SA))
+          .map((p) => serviceOf(p.split("/sa/")[1] ?? ""))
+          .sort(),
+      );
+      // Kubelet probes come from istio-cni's SNAT address.
+      expect(spec.ingress?.at(-1)).toEqual({ from: [{ ipBlock: { cidr: "169.254.7.127/32" } }] });
+      // Nothing else: no rule opens an application port or admits another source.
+      expect(spec.ingress?.length).toBe(principals.length > 0 ? 2 : 1);
+    }
+  });
+
+  test("calls involving a disabled service are skipped", () => {
+    const manifests = render(
+      [...SHAPES.saas, E2E_VALUES],
+      ["--set-json", 'mesh.calls={"assistant":["certs"],"certs":["knowledge","assets"]}'],
+    );
+    expect(principalsOf(meshPolicy(manifests, "certs"))).toEqual([principal(GATEWAY_SA)]);
+    expect(principalsOf(meshPolicy(manifests, "assets"))).toEqual([principal(`${RELEASE}-certs`), principal(GATEWAY_SA)]);
+    expect(manifests.some((m) => m.metadata.name === `${RELEASE}-knowledge`)).toBe(false);
+  });
+
+  test("with the default empty call list only the ingress gateway reaches its backends and the identity service", () => {
+    const manifests = render(SHAPES.saas, enableAllServices);
+    for (const service of plannedServices) {
+      // Public paths keep identity, certs and mqtt-bridge reachable from the gateway.
+      const expected = ["identity", "certs", "mqtt-bridge"].includes(service) ? [principal(GATEWAY_SA)] : [];
+      expect(principalsOf(meshPolicy(manifests, service))).toEqual(expected);
+      expect(networkPolicy(manifests, service).ingress?.length).toBe(expected.length > 0 ? 2 : 1);
+    }
+  });
+
+  test("principals use mesh.trustDomain", () => {
+    const manifests = withCalls("saas", [...meshArgs, "--set", "mesh.trustDomain=trustiot.example.com"]);
+    expect(principalsOf(meshPolicy(manifests, "certs"))).toEqual([
+      principal(`${RELEASE}-assets`, "trustiot.example.com"),
+      principal(GATEWAY_SA, "trustiot.example.com"),
+    ]);
+  });
+
+  test("no waypoint by default: ztunnel enforces every service policy at L4", () => {
+    for (const shape of SHAPE_NAMES) {
+      const manifests = withCalls(shape, [...meshArgs, ...enableAllServices]);
+      for (const manifest of manifests) {
+        expect(manifest.metadata.labels?.["istio.io/use-waypoint"]).toBeUndefined();
+        if (manifest.kind === "Gateway") expect((manifest.spec as { gatewayClassName: string }).gatewayClassName).toBe("istio");
+        if (manifest.kind === "AuthorizationPolicy" && !manifest.metadata.name.startsWith(`${RELEASE}-ingress-`)) {
+          // Workload selector and source principals only: no targetRefs and no L7 conditions.
+          const spec = manifest.spec as MeshPolicy & { targetRefs?: unknown };
+          expect(spec.targetRefs).toBeUndefined();
+          expect(JSON.stringify(spec.rules ?? [])).not.toMatch(/"(to|when)"/);
+        }
+      }
+      for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
+        expect(podLabels(deployment)["istio.io/use-waypoint"]).toBeUndefined();
+      }
+    }
+  });
+
+  test.each([
+    ["an unknown caller", '{"billing":["assets"]}', /mesh\.calls: unknown caller "billing"/],
+    ["an unknown callee", '{"assets":["billing"]}', /mesh\.calls\.assets: unknown callee "billing"/],
+    ["callees that are not a list", '{"assets":"certs"}', /mesh\.calls\.assets: must be a list of services/],
+  ])("the templates reject a call list with %s, without schema validation", (_name, calls, expected) => {
+    const result = helmTemplate([...SHAPES.saas, E2E_VALUES], ["--skip-schema-validation", "--set-json", `mesh.calls=${calls}`]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(expected);
+  });
+});
+
 describe("values validation rejects unsafe or incomplete settings", () => {
   const saas = [...SHAPES.saas, SMOKE];
   const onprem = [...SHAPES.onprem, SMOKE];
@@ -949,6 +1133,10 @@ describe("values validation rejects unsafe or incomplete settings", () => {
       ["--set", "services.smoke-echo.podLabels.istio\\.io/dataplane-mode=none"],
       /invalid propertyName 'istio\.io\/dataplane-mode'/,
     ],
+    ["unknown mesh field", saas, ["--set", "mesh.waypoint=true"], /waypoint/],
+    ["IP address as the trust domain", saas, ["--set", "mesh.trustDomain=10.0.0.1"], /\/mesh\/trustDomain/],
+    ["callee listed twice", saas, ["--set-json", 'mesh.calls={"smoke-echo":["smoke-echo","smoke-echo"]}'], /\/mesh\/calls/],
+    ["callees that are not a list", saas, ["--set-json", 'mesh.calls={"smoke-echo":"smoke-echo"}'], /\/mesh\/calls/],
   ];
 
   test.each(cases)("%s", (_name, files, args, expected) => {

@@ -59,8 +59,8 @@ strip, so all the safety rules live here:
   exemption never falls through to another route;
 - cookie routes come from ingress.routes and must point at an enabled service;
 - nothing is routed under /internal, and a host never has the same path twice.
-Returns YAML {public: [...], routes: [...]}; each item has host, hostname, path, match, backend
-and, for public paths, key. Use with fromYaml.
+Returns YAML {public: [...], routes: [...]}; each item has host, hostname, path, match, service
+(the key under services), backend and, for public paths, key. Use with fromYaml.
 */}}
 {{- define "trustiot.ingress.plan" -}}
 {{- $v := .Values -}}
@@ -90,7 +90,7 @@ and, for public paths, key. Use with fromYaml.
 {{- $entry := get $v.services .service -}}
 {{- if and $entry $entry.enabled -}}
 {{- $backend := include "trustiot.ingress.backend" (dict "root" $ "service" .service "port" "http" "where" $where) | fromYaml -}}
-{{- $public = append $public (dict "key" .key "host" .host "hostname" (get $hostnames .host) "path" $path "match" "Exact" "backend" $backend) -}}
+{{- $public = append $public (dict "key" .key "host" .host "hostname" (get $hostnames .host) "path" $path "match" "Exact" "service" .service "backend" $backend) -}}
 {{- end -}}
 {{- end -}}
 {{- $routes := list -}}
@@ -118,7 +118,7 @@ and, for public paths, key. Use with fromYaml.
 {{- fail (printf "%s: service %q is not enabled" $where $route.service) -}}
 {{- end -}}
 {{- $backend := include "trustiot.ingress.backend" (dict "root" $ "service" $route.service "port" ($route.port | default "http") "where" $where) | fromYaml -}}
-{{- $routes = append $routes (dict "host" $route.host "hostname" (get $hostnames $route.host) "path" $route.path "match" $route.match "backend" $backend) -}}
+{{- $routes = append $routes (dict "host" $route.host "hostname" (get $hostnames $route.host) "path" $route.path "match" $route.match "service" $route.service "backend" $backend) -}}
 {{- end -}}
 {{- dict "public" $public "routes" $routes | toYaml -}}
 {{- end -}}

@@ -190,6 +190,19 @@ services:
   knowledge:
     enabled: false
 
+# Service-to-service authorization (decision 27). ztunnel adds mTLS to every connection and each
+# service has its own ServiceAccount; a service accepts connections only from the callers listed
+# here and, for the services it routes to, the ingress gateway. Two layers enforce the list
+# independently: an AuthorizationPolicy per service (by ServiceAccount) and NetworkPolicies that
+# deny everything else in the namespace.
+mesh:
+  # SPIFFE trust domain of the mesh (Istio meshConfig.trustDomain), used in the callers'
+  # identities <trustDomain>/ns/<namespace>/sa/<ServiceAccount>.
+  trustDomain: cluster.local
+  # Who may call whom: <caller>: [<callee>, ...], both keys under `services`. Each service's issue
+  # adds the internal APIs it calls. Calls involving a disabled service are skipped.
+  calls: {}
+
 # External dependencies (portability rule 2). Managed or self-hosted differs only in values.
 
 postgres:
