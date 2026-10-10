@@ -2,6 +2,7 @@
 
 mod common;
 
+use contract::openapi::SharedSchemas;
 use contract::{ErrorBody, ErrorCode, FieldError, MessageKey, message_key};
 use serde_json::{Value, json};
 use utoipa::OpenApi;
@@ -102,12 +103,8 @@ fn malformed_bodies_are_rejected() {
     }
 }
 
-#[derive(OpenApi)]
-#[openapi(components(schemas(ErrorBody, ErrorCode, FieldError, MessageKey)))]
-struct ErrorSchemas;
-
 fn error_schemas() -> Value {
-    serde_json::to_value(ErrorSchemas::openapi()).expect("OpenAPI document serializes")["components"]
+    serde_json::to_value(SharedSchemas::openapi()).expect("OpenAPI document serializes")["components"]
         ["schemas"]
         .clone()
 }

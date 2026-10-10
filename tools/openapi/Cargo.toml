@@ -1,0 +1,17 @@
+[package]
+name = "openapi"
+description = "Generates api/openapi.json by merging the OpenAPI spec every service exposes from code with the shared M1 error schemas."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+contract = { path = "../../crates/contract" }
+serde_json.workspace = true
+thiserror.workspace = true
+utoipa.workspace = true
+
+[lints]
+workspace = true
