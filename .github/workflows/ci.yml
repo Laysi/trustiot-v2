@@ -5,13 +5,14 @@
 # (scripts/ci/check-workflows.ts): every job lists its `permissions`; every action is pinned
 # to a full commit SHA with the tag in a trailing comment; no `pull_request_target` or
 # `workflow_run` triggers, so pull requests from forks never get secrets or a write token.
+# The same job runs actionlint (scripts/ci/lint-workflows.ts) so a file GitHub cannot parse
+# fails here instead of at its first trigger.
 #
 # Checks that later issues add to this workflow:
 # - Integration tests (Laysi/trustiot-v2#60): service containers for Postgres with AGE,
 #   ClickHouse and Mosquitto, every migration on a fresh database, the cross-tenant negative
 #   tests (Laysi/trustiot-v2#56), and `cargo sqlx prepare --check` against that database.
 # - The static check that rejects SQL built from strings (Laysi/trustiot-v2#53).
-# - OpenAPI (Laysi/trustiot-v2#55): regenerate api/openapi.json and fail on any difference.
 # - Frontend (Laysi/trustiot-v2#123): Bun install, type check, lint, unit tests, build, and
 #   regenerating the API client with a diff check.
 name: ci
@@ -70,8 +71,9 @@ jobs:
       - name: clippy for service-kit without default features
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
-      # service-kit's container and job_lock tests start throwaway containers (PID 1 and
-      # Postgres) with podman or docker, both on the hosted runner. GitHub sets CI=true, which
+      # service-kit's container and job_lock tests and the ingest ClickHouse schema test start
+      # throwaway containers (PID 1, Postgres and ClickHouse) with podman or docker, both on the
+      # hosted runner. GitHub sets CI=true, which
       # makes them fail instead of skip when no container runtime works, so a green test step
       # means they ran.
       - name: test
@@ -80,6 +82,17 @@ jobs:
       - name: test service-kit without default features
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: cargo test --package service-kit --no-default-features --locked
+      # api/openapi.json is generated from the code (tools/openapi). Regenerate it and fail on any
+      # difference, so an API type cannot change without the committed spec changing with it.
+      - name: OpenAPI spec is current
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: |
+          cargo run --locked --package openapi
+          if [[ -n "$(git status --porcelain -- api)" ]]; then
+            git --no-pager diff -- api
+            echo "::error file=api/openapi.json,title=OpenAPI spec is out of date::Run 'cargo run -p openapi' and commit api/openapi.json."
+            exit 1
+          fi
       - name: aarch64 build of the gateway crates
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: |
@@ -186,7 +199,8 @@ jobs:
       - id: toolchain
         uses: ./.github/actions/setup-proto
         with:
-          tools: bun
+          # helm: scripts/nightly/manifests.test.ts renders the chart to check what the nightly deploys.
+          tools: bun helm actionlint
       - name: Check workflow permissions and action pinning
         run: bun scripts/ci/check-workflows.ts
       # Container build files, build arguments, secrets in run scripts and Secret manifests
@@ -194,6 +208,11 @@ jobs:
       - name: Check secret handling
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: bun scripts/ci/check-secret-handling.ts
+      # What GitHub itself would reject when it parses a workflow, for example a context that
+      # is not available at that key. Without this, such a file only fails when it is triggered.
+      - name: Lint workflows with actionlint
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun scripts/ci/lint-workflows.ts
       - name: Install script dependencies
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: bun install --cwd scripts --frozen-lockfile

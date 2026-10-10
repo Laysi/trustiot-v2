@@ -7,6 +7,21 @@ hosts:
   gateway: gw.trustiot.factory.test
   ota: ota.trustiot.factory.test
 
+ingress:
+  direct:
+    # Outer TLS certificate for the three hosts, issued by the customer's CA.
+    tlsSecret: trustiot-ingress-tls
+
+clickhouse:
+  bundled:
+    # Bootstrap admin password of the bundled ClickHouse; how Secrets reach the cluster is
+    # decided in Laysi/trustiot-v2#72.
+    adminSecret:
+      name: trustiot-clickhouse-admin
+    # Example size; each deployment sizes its volume from its load (README: 叢集內的 ClickHouse).
+    storage:
+      size: 100Gi
+
 objectStorage:
   # Customer S3-compatible storage inside the plant network.
   endpoint: http://s3.factory.test:9000

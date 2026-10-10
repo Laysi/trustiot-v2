@@ -1,0 +1,167 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.26
+   Compiling quote v1.0.47
+   Compiling stable_deref_trait v1.2.1
+   Compiling libc v0.2.190
+   Compiling syn v3.0.7
+   Compiling writeable v0.6.4
+   Compiling futures-core v0.3.34
+   Compiling pin-project-lite v0.2.17
+   Compiling litemap v0.8.3
+   Compiling smallvec v1.16.3
+   Compiling icu_normalizer_data v2.3.0
+   Compiling icu_properties_data v2.3.0
+   Compiling utf8_iter v1.0.4
+   Compiling bytes v1.12.1
+   Compiling http v1.5.0
+   Compiling synstructure v0.14.0
+   Compiling socket2 v0.6.5
+   Compiling mio v1.2.4
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.4
+   Compiling zerovec-derive v0.11.6
+   Compiling zerofrom v0.1.8
+   Compiling yoke v0.8.3
+   Compiling displaydoc v0.2.7
+   Compiling zerotrie v0.2.5
+   Compiling tokio-macros v2.7.2
+   Compiling zerovec v0.11.8
+   Compiling tokio v1.53.2
+   Compiling tinystr v0.8.4
+   Compiling icu_locale_core v2.3.0
+   Compiling potential_utf v0.1.6
+   Compiling icu_collections v2.3.0
+   Compiling icu_provider v2.3.1
+   Compiling icu_normalizer v2.3.0
+   Compiling icu_properties v2.3.0
+   Compiling http-body v1.1.0
+   Compiling httparse v1.10.1
+   Compiling slab v0.4.12
+   Compiling percent-encoding v2.3.2
+   Compiling futures-task v0.3.34
+   Compiling futures-util v0.3.34
+   Compiling idna_adapter v1.2.2
+   Compiling once_cell v1.21.4
+   Compiling tower-service v0.3.3
+   Compiling try-lock v0.2.5
+   Compiling want v0.3.2
+   Compiling tracing-core v0.1.36
+   Compiling idna v1.1.0
+   Compiling form_urlencoded v1.2.2
+   Compiling sync_wrapper v1.0.2
+   Compiling atomic-waker v1.1.2
+   Compiling serde_core v1.0.229
+   Compiling getrandom v0.4.3
+   Compiling tower-layer v0.3.3
+   Compiling hyper v1.12.0
+   Compiling tower v0.5.3
+   Compiling url v2.5.8
+   Compiling tracing v0.1.44
+   Compiling futures-channel v0.3.34
+   Compiling base64 v0.23.1
+   Compiling cfg-if v1.0.5
+   Compiling bitflags v2.13.2
+   Compiling ipnet v2.12.2
+   Compiling tower-http v0.6.11
+   Compiling hyper-util v0.1.21
+   Compiling http-body-util v0.1.5
+   Compiling log v0.4.34
+   Compiling reqwest v0.13.5
+   Compiling serde_json v1.0.151
+   Compiling uuid v1.28.0
+   Compiling ingest v0.1.0 (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a3fa330f4cb2e5dab/services/ingest)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 46s
+     Running unittests src/lib.rs (target/debug/deps/ingest-e06a83ab6f20a986)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/clickhouse.rs (target/debug/deps/clickhouse-87b2b2fd9bfe0918)
+
+running 1 test
+telemetry: MergeTree PARTITION BY toYYYYMM(received_at) ORDER BY (tenant_id, device_id, point, ts) TTL toDateTime(received_at) + toIntervalDay(400) SETTINGS fsync_after_insert = 1, fsync_part_directory = 1, non_replicated_deduplication_window = 1000, index_granularity = 8192
+batch_commits: ReplacingMergeTree PARTITION BY toYYYYMM(committed_at) ORDER BY (stream_id, seq) TTL toDateTime(committed_at) + toIntervalDay(400) SETTINGS fsync_after_insert = 1, fsync_part_directory = 1, index_granularity = 8192
+access entities:
+role	trustiot_tenant_reader	local_directory
+role	trustiot_ingest	local_directory
+row policy	service_all_rows ON batch_commits	local_directory
+row policy	service_all_rows ON telemetry	local_directory
+row policy	deny_by_default ON telemetry	local_directory
+row policy	tenant_isolation ON telemetry	local_directory
+row policy	deny_by_default ON batch_commits	local_directory
+settings profile	trustiot_tenant_reader	local_directory
+quota	trustiot_tenant_reader	local_directory
+attack | outcome
+direct: count every row | answer "3"
+direct: read every value | answer "a-row-0\na-row-1\na-row-2"
+direct: filter on tenant B | answer "0"
+direct: tenant B OR true | answer "3"
+direct: PREWHERE tenant B | answer "0"
+direct: group by tenant | answer "18a9231c-c7d3-46ca-9541-63355b49dc9f\t3"
+direct: virtual columns | answer "3"
+direct: throwIf error oracle | answer "3"
+JOIN: self join on the shared device | answer "0"
+JOIN: cross join | answer "9"
+JOIN: LEFT join to tenant B | answer "0"
+subquery: IN | answer "0"
+subquery: scalar | answer "3"
+subquery: FROM | answer "3"
+subquery: CTE | answer "3"
+UNION ALL with tenant B filter | answer "3"
+UNION DISTINCT of tenants | answer "18a9231c-c7d3-46ca-9541-63355b49dc9f"
+FINAL | refused ILLEGAL_FINAL
+merge(): the telemetry table | answer "3"
+merge(): every table in the database | answer "3"
+view() | answer "3"
+view() filtered on tenant B | answer "0"
+mergeTreeIndex() | refused ACCESS_DENIED
+remote() to this server | refused ACCESS_DENIED
+cluster() | refused ACCESS_DENIED
+loop() | refused ACCESS_DENIED
+file() | refused DATABASE_ACCESS_DENIED
+url() (SSRF) | refused ACCESS_DENIED
+system.query_log | refused ACCESS_DENIED
+system.processes | refused ACCESS_DENIED
+system.parts | refused ACCESS_DENIED
+system.part_log | refused ACCESS_DENIED
+system.text_log | refused ACCESS_DENIED
+system.users | refused ACCESS_DENIED
+system.row_policies | refused ACCESS_DENIED
+system.settings_profile_elements | refused ACCESS_DENIED
+system.mutations | refused ACCESS_DENIED
+query SETTINGS SQL_tenant_id = B | refused READONLY
+URL parameter SQL_tenant_id = B | refused READONLY
+query SETTINGS additional_table_filters | refused READONLY
+raise max_threads | refused READONLY
+EXECUTE AS the ingest account | refused ACCESS_DENIED
+read batch_commits | refused ACCESS_DENIED
+tenant INSERT of a tenant B row | refused ACCESS_DENIED
+tenant lightweight DELETE | refused ACCESS_DENIED
+tenant ALTER TABLE DELETE | refused ACCESS_DENIED
+CREATE VIEW | refused ACCESS_DENIED
+CREATE ROW POLICY | refused ACCESS_DENIED
+GRANT to self | refused ACCESS_DENIED
+quota: the first account was stopped at query 185
+server: 26.8.22.13
+test clickhouse_schema_and_tenant_isolation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 32.06s
+
+     Running tests/migrations.rs (target/debug/deps/migrations-e4b2757a4a5e0d5f)
+
+running 5 tests
+test files_are_numbered_in_apply_order ... ok
+test splitter_rejects_ambiguous_files ... ok
+test every_file_has_statements ... ok
+test tables_use_only_mergetree_engines ... ok
+test statements_are_idempotent_and_never_destroy_data ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Doc-tests ingest
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

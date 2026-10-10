@@ -72,11 +72,12 @@ const BOOLEAN = /^(?:true|false)$/;
 /**
  * The tags the builds give their images: the dev environment's
  * `localhost/trustiot-dev-<instance>-<service>:dev` and the release build's
- * `localhost/trustiot-release/<image>:<version>` (Laysi/trustiot-v2#68). Nothing is pushed
+ * `localhost/trustiot-release/<image>:<version>` (Laysi/trustiot-v2#68), and the test doubles'
+ * `localhost/trustiot-e2e/<image>:<tag>` (the nightly's identity double). Nothing is pushed
  * under these names; release images are pushed by digest from an OCI archive.
  */
 const IMAGE_TAG =
-  /^localhost\/(?:trustiot-dev-[a-z][a-z0-9-]{0,23}-[a-z][a-z0-9-]{0,40}:dev|trustiot-release\/[a-z][a-z0-9-]{0,63}:\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)$/;
+  /^localhost\/(?:trustiot-dev-[a-z][a-z0-9-]{0,23}-[a-z][a-z0-9-]{0,40}:dev|trustiot-release\/[a-z][a-z0-9-]{0,63}:\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?|trustiot-e2e\/[a-z][a-z0-9-]{0,63}:[a-z0-9][a-z0-9.-]{0,31})$/;
 
 /**
  * Whether a value holds a run of 20 or more letters and digits mixed, between separators: the

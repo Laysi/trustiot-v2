@@ -1,0 +1,50 @@
+// Memory pressure from tenant accounts vs the ingest account. Usage: bun memdos.ts <out> <accounts>
+import { readFileSync, writeFileSync } from "node:fs";
+import { ADMIN, q, type Acct } from "./lib.ts";
+
+const w = JSON.parse(readFileSync(new URL("./world.json", import.meta.url).pathname, "utf8"));
+const nAcc = Number(process.argv[3] ?? 1);
+let out = "";
+const log = (s: string) => {
+  out += s + "\n";
+  console.log(s);
+};
+const code = (b: string) => /\(([A-Z_0-9]{3,})\)(?!.*\([A-Z_0-9]{3,}\))/.exec(b)?.[1] ?? "";
+async function mk(name: string): Promise<Acct> {
+  const password = "pw" + crypto.randomUUID().replaceAll("-", "");
+  await q(ADMIN, `DROP USER IF EXISTS ${name}`);
+  for (const s of [
+    `CREATE USER ${name} IDENTIFIED WITH sha256_password BY '${password}' SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '${w.tenantA}' CONST`,
+    `GRANT trustiot_tenant_reader TO ${name}`,
+  ]) {
+    const r = await q(ADMIN, s);
+    if (r.status !== 200) throw new Error(r.body);
+  }
+  return { user: name, password };
+}
+const accts = await Promise.all(Array.from({ length: nAcc }, (_, i) => mk(`mem_${i}`)));
+// ~500 MB of strings per query, 4 concurrent queries per account (max_concurrent_queries_for_user)
+const heavy = "SELECT length(groupArray(randomPrintableASCII(120))) FROM numbers(1000000)";
+const ing = w.accts.ingest;
+let stop = false;
+const inserts: string[] = [];
+const insertLoop = (async () => {
+  let n = 0;
+  while (!stop) {
+    const r = await q(ing, `INSERT INTO trustiot.batch_commits (tenant_id, gateway_id, stream_id, seq, row_count, committed_at) VALUES ('${w.tenantA}', generateUUIDv4(), generateUUIDv4(), ${n++}, 1, now64(3,'UTC'))`);
+    inserts.push(r.status === 200 ? "ok" : code(r.body) || "HTTP" + r.status);
+    await new Promise((res) => setTimeout(res, 200));
+  }
+})();
+const t0 = performance.now();
+const res = await Promise.all(accts.flatMap((a) => Array.from({ length: 4 }, () => q(a, heavy))));
+stop = true;
+await insertLoop;
+const tally = (xs: string[]) => JSON.stringify(xs.reduce((m: Record<string, number>, x) => ((m[x] = (m[x] ?? 0) + 1), m), {}));
+log(`${nAcc} tenant account(s) x 4 concurrent ~500MB queries (${(performance.now() - t0 / 1).toFixed(0) === "" ? "" : Math.round(performance.now() - t0)} ms)`);
+log(`heavy queries: ${tally(res.map((r) => (r.status === 200 ? "ok" : code(r.body) || "HTTP" + r.status)))}`);
+log(`ingest inserts during the run: ${tally(inserts)}`);
+const alive = await q(ADMIN, "SELECT 1").catch((e) => ({ status: 0, body: String(e) }));
+log(`server alive afterwards: ${alive.status === 200}`);
+writeFileSync(process.argv[2], out);
+for (let i = 0; i < nAcc; i++) await q(ADMIN, `DROP USER IF EXISTS mem_${i}`).catch(() => {});

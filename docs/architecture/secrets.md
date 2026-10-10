@@ -88,7 +88,8 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 | --- | --- | --- | --- | --- | --- |
 | Postgres 帳號：superuser、migration 角色、每個服務一個角色、平台後台角色（決策 4、29） | 各服務連 Postgres；migration Job | `bundled`：CloudNativePG 在叢集內產生的 Secret，不進 git | `bundled` 同左；`external`：客戶建立的 Secret | 環境變數，每個服務只拿自己的角色 | Laysi/trustiot-v2#58、Laysi/trustiot-v2#60 |
 | AGE 每租戶登入角色（決策 21） | field-context 以租戶專屬角色執行 Cypher | 由程式在建立租戶時產生，不進 git、不經過人 | 同左 | 由 Laysi/trustiot-v2#176 決定 | Laysi/trustiot-v2#176 |
-| ClickHouse 帳號：管理、ingest 寫入、OTel 日誌寫入、每租戶唯讀（決策 14、22） | ingest、telemetry-query、collector | `bundled`：部署時在叢集內產生的 Secret；每租戶唯讀帳號由 telemetry-query 建立租戶時產生 | 同左 | 環境變數，只給使用該帳號的服務 | Laysi/trustiot-v2#59、Laysi/trustiot-v2#73、Laysi/trustiot-v2#119 |
+| 叢集內 ClickHouse 的 bootstrap 管理帳號密碼（`clickhouse.mode: bundled`），Secret `trustiot-clickhouse-admin`、key `password` | ClickHouse 本身；之後的 migration Job（Laysi/trustiot-v2#60） | SOPS（`deploy/flux/`，以 `openssl rand -hex 32` 產生） | 客戶在安裝前建立（`deploy/chart/README.md`「叢集內的 ClickHouse」的指令） | 唯讀 volume 掛成檔案 `/etc/trustiot/clickhouse-admin/password`（`CLICKHOUSE_PASSWORD_FILE`），只掛進 ClickHouse 的 pod；服務的自訂 `env` 不能讀它（chart 測試） | Laysi/trustiot-v2#59、Laysi/trustiot-v2#60 |
+| ClickHouse 帳號：ingest 寫入、OTel 日誌寫入、每租戶唯讀（決策 14、22） | ingest、telemetry-query、collector | `bundled`：由 migration Job 以管理帳號建立，存成叢集內的 Secret；每租戶唯讀帳號由 telemetry-query 建立租戶時產生 | 同左 | 環境變數，只給使用該帳號的服務 | Laysi/trustiot-v2#60、Laysi/trustiot-v2#73、Laysi/trustiot-v2#119 |
 | MQTT dynsec 管理帳密 | certs、gateway-ops 註冊與停用閘道器（決策 6） | 部署時在叢集內產生的 Secret | 同左 | 環境變數，只給需要的服務 | Laysi/trustiot-v2#82、Laysi/trustiot-v2#84 |
 | Grafana 管理者帳密 | 維運看板（決策 23） | 部署時在叢集內產生；登入改用 SSO 時移除 | 客戶的 Secret | Grafana 自己讀 Secret | Laysi/trustiot-v2#183 |
 

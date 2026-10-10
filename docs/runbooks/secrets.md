@@ -111,6 +111,14 @@ Laysi/trustiot-v2#78 補上確切指令。原則：
 - **簽發 CA 私鑰**：以根 CA 簽一張新的簽發 CA 憑證，新舊兩張同時列在信任清單；certs 服務改用新的簽，舊的簽發 CA 簽過的憑證全部到期或換發後，才移除舊的簽發 CA 並撤銷它。
 - **外洩**：立即撤銷該簽發 CA、發新 CRL，所有它簽過的憑證要求換發（決策 12 的換發端點，閘道器不必寄回）。
 
+### 叢集內 ClickHouse 的管理帳號密碼
+
+Secret `trustiot-clickhouse-admin`（key `password`）。ClickHouse 只在啟動時讀這個密碼，所以換值之後要讓它重啟：
+
+1. 產生新值：`openssl rand -hex 32`。SaaS 以 `sops edit deploy/flux/<檔名>.sops.yaml` 換掉 `password`；地端由客戶換值，值經管線傳入、不出現在命令列：`openssl rand -hex 32 | tr -d "\n" | kubectl -n trustiot create secret generic trustiot-clickhouse-admin --from-file=password=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -`。
+2. 同一個變更把 values 的 `clickhouse.bundled.adminSecretRevision` 加一。升級時 ClickHouse 的 pod 重啟並換上新密碼，migration Job 也拿新密碼連線。
+3. 確認 ClickHouse 的 `/ping` 探針恢復、migration Job 完成；舊密碼不再能登入（以 `clickhouse-client --ask-password` 輸入舊值，確認被拒）。
+
 ### 叢集內產生的帳號
 
 Postgres（CloudNativePG）、ClickHouse、MQTT dynsec、Grafana 的帳號由叢集內產生，值不經過人。各自的 issue 補上指令（Laysi/trustiot-v2#58、Laysi/trustiot-v2#59、Laysi/trustiot-v2#84、Laysi/trustiot-v2#183）。原則：在叢集內重新產生值、更新資料庫裡的帳號、重啟使用它的服務，三步在一次維護中完成；只有懷疑外洩或人員異動時才需要輪替。

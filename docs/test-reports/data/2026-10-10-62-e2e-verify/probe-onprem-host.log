@@ -1,0 +1,40 @@
+=== host
+OK   [host] Host with trailing dot, /api/whoami -> 404 382ms not reached
+OK   [host] Host with trailing dot, gateway /mqtt -> 404 362ms not reached
+OK   [host] Host with port, gateway /mqtt -> 401 429ms not reached
+OK   [host] Host upper case, gateway /mqtt -> 200 347ms not reached
+OK   [host] Host upper case, app /api/whoami -> 401 382ms not reached
+OK   [host] gateway host + dot-dot to app path -> 404 303ms not reached
+OK   [host] duplicate Host (gateway then app) /mqtt -> 404 309ms not reached
+OK   [host] duplicate Host (app then gateway) /mqtt -> 404 311ms not reached
+OK   [host] duplicate Host (gateway, app) /api/whoami -> 404 304ms not reached
+OK   [host] comma Host -> 400 311ms not reached
+OK   [host] userinfo Host -> 404 326ms not reached
+OK   [host] userinfo Host reversed -> 404 357ms not reached
+OK   [host] absolute-form gateway, Host app, /mqtt -> 200 397ms not reached
+OK   [host] absolute-form app, Host gateway, /mqtt -> 401 332ms not reached
+OK   [host] absolute-form gateway /mqtt, Host app, no cookie GET -> 404 307ms not reached
+OK   [host] absolute-form app /api/whoami, Host gateway -> 401 309ms not reached
+OK   [host] absolute-form https scheme -> 200 317ms not reached
+OK   [host] x-forwarded-host spoof -> 401 326ms not reached
+OK   [host] HTTP/1.0 without Host -> 426 310ms not reached
+OK   [host] HTTP/1.0 absolute-form no Host -> 426 324ms not reached
+OK   [host] empty Host -> 404 310ms not reached
+OK   [host] IP Host -> 404 303ms not reached
+OK   [host] wildcard-ish Host -> 404 306ms not reached
+OK   [host] ota host /healthz -> 404 330ms not reached
+OK   [host] ota host /api/whoami -> 404 303ms not reached
+OK   [host] gateway host /api/whoami -> 404 305ms not reached
+OK   [host] gateway host /healthz -> 404 318ms not reached
+OK   [host] app host /mqtt -> 401 304ms not reached
+OK   [host] app host /certs/renew -> 401 311ms not reached
+OK   [host] SNI gateway, Host app -> 401 307ms 
+OK   [host] SNI ota, Host app -> 401 309ms 
+OK   [host] SNI unknown, Host app -> 401 304ms 
+OK   [host-h2] :authority gateway, host app, /mqtt -> 200 334ms not reached
+OK   [host-h2] :authority app, host gateway, /mqtt -> 401 314ms not reached
+OK   [host-h2] :authority gateway, host app, /mqtt/../api/whoami -> 404 322ms not reached
+OK   [host-h2] :authority app, /healthz/../api/whoami -> 401 389ms not reached
+OK   [host-h2] :authority app, /%2e%2e -> 401 369ms not reached
+OK   [host-h2] :authority app, /api/whoami -> 401 364ms not reached
+done: 38 rows, 0 failing

@@ -1,0 +1,162 @@
+bun test v1.4.2 (744846f84)
+
+deploy/chart/tests/e2e/ingress.e2e.ts:
+510 |       [VALID_COOKIE, 403],
+511 |     ] as [string | undefined, number][]) {
+512 |       const response = await raw(target, { headers: cookie ? [["cookie", cookie]] : [] });
+513 |       record("internal slashes", cookie ? "valid cookie" : "no cookie", target, HOSTS.app, response);
+514 |       expect(response.body).not.toContain(PROTECTED_MARKER);
+515 |       expect(response.status).toBe(expected);
+                                    ^
+error: expect(received).toBe(expected)
+
+Expected: 403
+Received: 307
+
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a7d01229eb900724e/deploy/chart/tests/e2e/ingress.e2e.ts:515:31)
+(fail) paths that need the cookie > /internal behind doubled or encoded slashes is denied: //internal [125.14ms]
+510 |       [VALID_COOKIE, 403],
+511 |     ] as [string | undefined, number][]) {
+512 |       const response = await raw(target, { headers: cookie ? [["cookie", cookie]] : [] });
+513 |       record("internal slashes", cookie ? "valid cookie" : "no cookie", target, HOSTS.app, response);
+514 |       expect(response.body).not.toContain(PROTECTED_MARKER);
+515 |       expect(response.status).toBe(expected);
+                                    ^
+error: expect(received).toBe(expected)
+
+Expected: 403
+Received: 307
+
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a7d01229eb900724e/deploy/chart/tests/e2e/ingress.e2e.ts:515:31)
+(fail) paths that need the cookie > /internal behind doubled or encoded slashes is denied: //internal/tenants [99.78ms]
+510 |       [VALID_COOKIE, 403],
+511 |     ] as [string | undefined, number][]) {
+512 |       const response = await raw(target, { headers: cookie ? [["cookie", cookie]] : [] });
+513 |       record("internal slashes", cookie ? "valid cookie" : "no cookie", target, HOSTS.app, response);
+514 |       expect(response.body).not.toContain(PROTECTED_MARKER);
+515 |       expect(response.status).toBe(expected);
+                                    ^
+error: expect(received).toBe(expected)
+
+Expected: 403
+Received: 307
+
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a7d01229eb900724e/deploy/chart/tests/e2e/ingress.e2e.ts:515:31)
+(fail) paths that need the cookie > /internal behind doubled or encoded slashes is denied: ///internal [78.96ms]
+510 |       [VALID_COOKIE, 403],
+511 |     ] as [string | undefined, number][]) {
+512 |       const response = await raw(target, { headers: cookie ? [["cookie", cookie]] : [] });
+513 |       record("internal slashes", cookie ? "valid cookie" : "no cookie", target, HOSTS.app, response);
+514 |       expect(response.body).not.toContain(PROTECTED_MARKER);
+515 |       expect(response.status).toBe(expected);
+                                    ^
+error: expect(received).toBe(expected)
+
+Expected: 403
+Received: 307
+
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a7d01229eb900724e/deploy/chart/tests/e2e/ingress.e2e.ts:515:31)
+(fail) paths that need the cookie > /internal behind doubled or encoded slashes is denied: //./internal [96.64ms]
+510 |       [VALID_COOKIE, 403],
+511 |     ] as [string | undefined, number][]) {
+512 |       const response = await raw(target, { headers: cookie ? [["cookie", cookie]] : [] });
+513 |       record("internal slashes", cookie ? "valid cookie" : "no cookie", target, HOSTS.app, response);
+514 |       expect(response.body).not.toContain(PROTECTED_MARKER);
+515 |       expect(response.status).toBe(expected);
+                                    ^
+error: expect(received).toBe(expected)
+
+Expected: 403
+Received: 307
+
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a7d01229eb900724e/deploy/chart/tests/e2e/ingress.e2e.ts:515:31)
+(fail) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /.//internal/tenants [90.16ms]
+510 |       [VALID_COOKIE, 403],
+511 |     ] as [string | undefined, number][]) {
+512 |       const response = await raw(target, { headers: cookie ? [["cookie", cookie]] : [] });
+513 |       record("internal slashes", cookie ? "valid cookie" : "no cookie", target, HOSTS.app, response);
+514 |       expect(response.body).not.toContain(PROTECTED_MARKER);
+515 |       expect(response.status).toBe(expected);
+                                    ^
+error: expect(received).toBe(expected)
+
+Expected: 403
+Received: 307
+
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a7d01229eb900724e/deploy/chart/tests/e2e/ingress.e2e.ts:515:31)
+(fail) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /x/..//internal/tenants [78.86ms]
+509 |       [undefined, 401],
+510 |       [VALID_COOKIE, 403],
+511 |     ] as [string | undefined, number][]) {
+512 |       const response = await raw(target, { headers: cookie ? [["cookie", cookie]] : [] });
+513 |       record("internal slashes", cookie ? "valid cookie" : "no cookie", target, HOSTS.app, response);
+514 |       expect(response.body).not.toContain(PROTECTED_MARKER);
+                                      ^
+error: expect(received).not.toContain(expected)
+
+Expected to not contain: "Name: protected-backend"
+Received: "Name: protected-backend\nHostname: trustiot-assets-57d8b5fb7b-tcvgw\nIP: 127.0.0.1\nIP: ::1\nIP: 10.42.0.249\nIP: fe80::1445:23ff:fe74:e7b4\nRemoteAddr: 10.42.0.252:49519\nGET /%2finternal HTTP/1.1\r\nHost: app.saas.trustiot.test\r\nUser-Agent: trustiot-ingress-e2e\r\nCookie: sid=valid-5256e1fab10b487081970cf9799016b8\r\nX-Envoy-Attempt-Count: 1\r\nX-Envoy-Decorator-Operation: trustiot-assets.e2e-255.svc.cluster.local:8080/*\r\nX-Envoy-External-Address: 10.42.0.1\r\nX-Forwarded-For: 10.42.0.1\r\nX-Forwarded-Proto: https\r\nX-Internal-Identity: double.eyJzdWIiOiJ1c2VyLXZhbGlkLTUyNTZlMWZhYjEwYjQ4NzA4MTk3MGNmOTc5OTAxNmI4IiwidGVuYW50IjoidGVuYW50LWUyZSIsInBhdGgiOiIvJTJmaW50ZXJuYWwifQ\r\nX-Request-Id: 38170219-a439-4cdb-9b81-b417437c70cd\r\n\r\n"
+
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a7d01229eb900724e/deploy/chart/tests/e2e/ingress.e2e.ts:514:33)
+(fail) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2finternal [124.22ms]
+509 |       [undefined, 401],
+510 |       [VALID_COOKIE, 403],
+511 |     ] as [string | undefined, number][]) {
+512 |       const response = await raw(target, { headers: cookie ? [["cookie", cookie]] : [] });
+513 |       record("internal slashes", cookie ? "valid cookie" : "no cookie", target, HOSTS.app, response);
+514 |       expect(response.body).not.toContain(PROTECTED_MARKER);
+                                      ^
+error: expect(received).not.toContain(expected)
+
+Expected to not contain: "Name: protected-backend"
+Received: "Name: protected-backend\nHostname: trustiot-assets-57d8b5fb7b-tcvgw\nIP: 127.0.0.1\nIP: ::1\nIP: 10.42.0.249\nIP: fe80::1445:23ff:fe74:e7b4\nRemoteAddr: 10.42.0.252:57067\nGET /%2finternal/tenants HTTP/1.1\r\nHost: app.saas.trustiot.test\r\nUser-Agent: trustiot-ingress-e2e\r\nCookie: sid=valid-5256e1fab10b487081970cf9799016b8\r\nX-Envoy-Attempt-Count: 1\r\nX-Envoy-Decorator-Operation: trustiot-assets.e2e-255.svc.cluster.local:8080/*\r\nX-Envoy-External-Address: 10.42.0.1\r\nX-Forwarded-For: 10.42.0.1\r\nX-Forwarded-Proto: https\r\nX-Internal-Identity: double.eyJzdWIiOiJ1c2VyLXZhbGlkLTUyNTZlMWZhYjEwYjQ4NzA4MTk3MGNmOTc5OTAxNmI4IiwidGVuYW50IjoidGVuYW50LWUyZSIsInBhdGgiOiIvJTJmaW50ZXJuYWwvdGVuYW50cyJ9\r\nX-Request-Id: 074de493-1a0b-47ab-85de-7483c26a10ad\r\n\r\n"
+
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a7d01229eb900724e/deploy/chart/tests/e2e/ingress.e2e.ts:514:33)
+(fail) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2finternal/tenants [84.21ms]
+509 |       [undefined, 401],
+510 |       [VALID_COOKIE, 403],
+511 |     ] as [string | undefined, number][]) {
+512 |       const response = await raw(target, { headers: cookie ? [["cookie", cookie]] : [] });
+513 |       record("internal slashes", cookie ? "valid cookie" : "no cookie", target, HOSTS.app, response);
+514 |       expect(response.body).not.toContain(PROTECTED_MARKER);
+                                      ^
+error: expect(received).not.toContain(expected)
+
+Expected to not contain: "Name: protected-backend"
+Received: "Name: protected-backend\nHostname: trustiot-assets-57d8b5fb7b-tcvgw\nIP: 127.0.0.1\nIP: ::1\nIP: 10.42.0.249\nIP: fe80::1445:23ff:fe74:e7b4\nRemoteAddr: 10.42.0.253:46295\nGET /%2Finternal HTTP/1.1\r\nHost: app.saas.trustiot.test\r\nUser-Agent: trustiot-ingress-e2e\r\nCookie: sid=valid-5256e1fab10b487081970cf9799016b8\r\nX-Envoy-Attempt-Count: 1\r\nX-Envoy-Decorator-Operation: trustiot-assets.e2e-255.svc.cluster.local:8080/*\r\nX-Envoy-External-Address: 10.42.0.1\r\nX-Forwarded-For: 10.42.0.1\r\nX-Forwarded-Proto: https\r\nX-Internal-Identity: double.eyJzdWIiOiJ1c2VyLXZhbGlkLTUyNTZlMWZhYjEwYjQ4NzA4MTk3MGNmOTc5OTAxNmI4IiwidGVuYW50IjoidGVuYW50LWUyZSIsInBhdGgiOiIvJTJGaW50ZXJuYWwifQ\r\nX-Request-Id: 82def87a-d500-426a-addb-eabde44ef3b7\r\n\r\n"
+
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a7d01229eb900724e/deploy/chart/tests/e2e/ingress.e2e.ts:514:33)
+(fail) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2Finternal [76.40ms]
+509 |       [undefined, 401],
+510 |       [VALID_COOKIE, 403],
+511 |     ] as [string | undefined, number][]) {
+512 |       const response = await raw(target, { headers: cookie ? [["cookie", cookie]] : [] });
+513 |       record("internal slashes", cookie ? "valid cookie" : "no cookie", target, HOSTS.app, response);
+514 |       expect(response.body).not.toContain(PROTECTED_MARKER);
+                                      ^
+error: expect(received).not.toContain(expected)
+
+Expected to not contain: "Name: protected-backend"
+Received: "Name: protected-backend\nHostname: trustiot-assets-57d8b5fb7b-tcvgw\nIP: 127.0.0.1\nIP: ::1\nIP: 10.42.0.249\nIP: fe80::1445:23ff:fe74:e7b4\nRemoteAddr: 10.42.0.253:48351\nGET /%2f%2finternal HTTP/1.1\r\nHost: app.saas.trustiot.test\r\nUser-Agent: trustiot-ingress-e2e\r\nCookie: sid=valid-5256e1fab10b487081970cf9799016b8\r\nX-Envoy-Attempt-Count: 1\r\nX-Envoy-Decorator-Operation: trustiot-assets.e2e-255.svc.cluster.local:8080/*\r\nX-Envoy-External-Address: 10.42.0.1\r\nX-Forwarded-For: 10.42.0.1\r\nX-Forwarded-Proto: https\r\nX-Internal-Identity: double.eyJzdWIiOiJ1c2VyLXZhbGlkLTUyNTZlMWZhYjEwYjQ4NzA4MTk3MGNmOTc5OTAxNmI4IiwidGVuYW50IjoidGVuYW50LWUyZSIsInBhdGgiOiIvJTJmJTJmaW50ZXJuYWwifQ\r\nX-Request-Id: 7a317db6-fa13-4fa4-ba3b-40d301d0189d\r\n\r\n"
+
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a7d01229eb900724e/deploy/chart/tests/e2e/ingress.e2e.ts:514:33)
+(fail) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2f%2finternal [78.40ms]
+509 |       [undefined, 401],
+510 |       [VALID_COOKIE, 403],
+511 |     ] as [string | undefined, number][]) {
+512 |       const response = await raw(target, { headers: cookie ? [["cookie", cookie]] : [] });
+513 |       record("internal slashes", cookie ? "valid cookie" : "no cookie", target, HOSTS.app, response);
+514 |       expect(response.body).not.toContain(PROTECTED_MARKER);
+                                      ^
+error: expect(received).not.toContain(expected)
+
+Expected to not contain: "Name: protected-backend"
+Received: "Name: protected-backend\nHostname: trustiot-assets-57d8b5fb7b-tcvgw\nIP: 127.0.0.1\nIP: ::1\nIP: 10.42.0.249\nIP: fe80::1445:23ff:fe74:e7b4\nRemoteAddr: 10.42.0.253:46295\nGET /%2finternal HTTP/1.1\r\nHost: app.saas.trustiot.test\r\nUser-Agent: trustiot-ingress-e2e\r\nCookie: sid=valid-5256e1fab10b487081970cf9799016b8\r\nX-Envoy-Attempt-Count: 1\r\nX-Envoy-Decorator-Operation: trustiot-assets.e2e-255.svc.cluster.local:8080/*\r\nX-Envoy-External-Address: 10.42.0.1\r\nX-Forwarded-For: 10.42.0.1\r\nX-Forwarded-Proto: https\r\nX-Internal-Identity: double.eyJzdWIiOiJ1c2VyLXZhbGlkLTUyNTZlMWZhYjEwYjQ4NzA4MTk3MGNmOTc5OTAxNmI4IiwidGVuYW50IjoidGVuYW50LWUyZSIsInBhdGgiOiIvJTJmaW50ZXJuYWwifQ\r\nX-Request-Id: 697fb2d4-dd1a-4f9f-95ce-71debb0dc032\r\n\r\n"
+
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a7d01229eb900724e/deploy/chart/tests/e2e/ingress.e2e.ts:514:33)
+(fail) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /./%2finternal [79.07ms]
+
+ 50 pass
+ 11 fail
+ 377 expect() calls
+Ran 61 tests across 1 file. [57.48s]

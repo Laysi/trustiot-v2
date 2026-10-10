@@ -1,0 +1,276 @@
+### [tenant_a] baseline count
+SELECT count() FROM trustiot.telemetry
+--> HTTP 200 (37 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"24442263","memory_usage":"10184682"}
+3
+
+### [tenant_a] baseline whoami
+SELECT currentUser(), currentRoles(), enabledRoles(), currentProfiles(), getSetting('SQL_tenant_id'), getSetting('readonly')
+--> HTTP 200 (4 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"38144","elapsed_ns":"2818981","memory_usage":"10116578"}
+tenant_a	['trustiot_tenant_reader']	['trustiot_tenant_reader']	['default','trustiot_tenant_reader']	b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38	1
+
+### [tenant_a] per-query SETTINGS SQL_tenant_id=B
+SELECT count() FROM trustiot.telemetry SETTINGS SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'
+--> HTTP 500 (10 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"8975983","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'SQL_tenant_id' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] per-query SETTINGS readonly=0
+SELECT count() FROM trustiot.telemetry SETTINGS readonly = 0
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1222235","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'readonly' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] per-query SETTINGS readonly=2
+SELECT count() FROM trustiot.telemetry SETTINGS readonly = 2
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1176565","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'readonly' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] per-query SETTINGS readonly=0, SQL_tenant_id=B
+SELECT count() FROM trustiot.telemetry SETTINGS readonly = 0, SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1205616","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'readonly' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] SET SQL_tenant_id (no session)
+SET SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'
+--> HTTP 500 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1906247","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'SQL_tenant_id' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] SET SQL_tenant_id in session then query {session_id=s1}
+SET SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1203045","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'SQL_tenant_id' setting in readonly mode. (READONLY)
+
+### [tenant_a] session s1 query after SET {session_id=s1}
+SELECT count() FROM trustiot.telemetry
+--> HTTP 200 (5 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"3854666","memory_usage":"10067602"}
+3
+
+### [tenant_a] SET readonly=0 in session {session_id=s2}
+SET readonly = 0
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1194053","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'readonly' setting in readonly mode. (READONLY)
+
+### [tenant_a] session s2 SET SQL_tenant_id after readonly=0 attempt {session_id=s2}
+SET SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1502125","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'SQL_tenant_id' setting in readonly mode. (READONLY)
+
+### [tenant_a] SET ROLE trustiot_ingest {session_id=s3}
+SET ROLE trustiot_ingest
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1489005","memory_usage":"0"}
+Code: 512. DB::Exception: Role trustiot_ingest should be granted to set as a current. (SET_NON_GRANTED_ROLE)
+
+### [tenant_a] SET ROLE ALL {session_id=s3}
+SET ROLE ALL
+--> HTTP 200 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"330808","memory_usage":"2110350"}
+
+
+### [tenant_a] session s3 count {session_id=s3}
+SELECT count() FROM trustiot.telemetry
+--> HTTP 200 (5 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"4430862","memory_usage":"10067602"}
+3
+
+### [tenant_a] SET ROLE NONE then read {session_id=s4}
+SET ROLE NONE
+--> HTTP 200 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"337523","memory_usage":"2110286"}
+
+
+### [tenant_a] after SET ROLE NONE count {session_id=s4}
+SELECT count() FROM trustiot.telemetry
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2028099","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. (ACCESS_DENIED)
+
+### [tenant_a] after SET ROLE NONE SET SQL_tenant_id {session_id=s4}
+SET SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1216609","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'SQL_tenant_id' setting in readonly mode. (READONLY)
+
+### [tenant_a] after SET ROLE NONE settings and profiles {session_id=s4}
+SELECT getSetting('SQL_tenant_id'), getSetting('readonly'), getSetting('max_threads'), currentProfiles()
+--> HTTP 200 (3 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"20992","elapsed_ns":"2342561","memory_usage":"10098050"}
+b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38	1	2	['default','trustiot_tenant_reader']
+
+### [tenant_a] after SET ROLE NONE SETTINGS readonly=0 per query {session_id=s4}
+SELECT 1 SETTINGS readonly = 0
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1174588","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'readonly' setting in readonly mode. (READONLY)
+
+### [tenant_a] SET DEFAULT ROLE NONE
+SET DEFAULT ROLE NONE
+--> HTTP 400 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1813358","memory_usage":"0"}
+Code: 62. DB::Exception: Syntax error: failed at position 22 (end of query): . Expected one of: token, Comma, EXCEPT, TO, end of query. (SYNTAX_ERROR) (version 26.8.22.13 (official build))
+
+### [tenant_a] ALTER USER self settings
+ALTER USER tenant_a SETTINGS SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547' CONST
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1898359","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant ALTER USER ON tenant_a. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] ALTER USER self drop settings
+ALTER USER tenant_a SETTINGS NONE
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1242285","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant ALTER USER ON tenant_a. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] ALTER USER self profile
+ALTER USER tenant_a SETTINGS PROFILE 'default'
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1759776","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant ALTER USER ON tenant_a. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] ALTER USER self password
+ALTER USER tenant_a IDENTIFIED BY 'x'
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1231861","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant ALTER USER ON tenant_a. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] GRANT trustiot_ingest TO self
+GRANT trustiot_ingest TO tenant_a
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2519267","memory_usage":"0"}
+Code: 497. DB::Exception: Not enough privileges. To execute this query, it's necessary to have the role trustiot_ingest granted with ADMIN option. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] CREATE TEMPORARY TABLE
+CREATE TEMPORARY TABLE tmp1 (x UInt8) ENGINE = Memory
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1816313","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TEMPORARY TABLE ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] subquery SETTINGS SQL_tenant_id=B
+SELECT count() FROM (SELECT * FROM trustiot.telemetry SETTINGS SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547')
+--> HTTP 200 (6 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"4804083","memory_usage":"10090698"}
+3
+
+### [tenant_a] subquery SETTINGS readonly=0 + tenant
+SELECT count() FROM (SELECT * FROM trustiot.telemetry SETTINGS readonly = 0, SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547')
+--> HTTP 200 (7 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"5567964","memory_usage":"10090002"}
+3
+
+### [tenant_a] CTE SETTINGS SQL_tenant_id=B
+WITH t AS (SELECT * FROM trustiot.telemetry SETTINGS SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547') SELECT count() FROM t
+--> HTTP 200 (8 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"5903471","memory_usage":"10090386"}
+3
+
+### [tenant_a] UNION branch SETTINGS
+SELECT count() FROM trustiot.telemetry SETTINGS SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547' UNION ALL SELECT count() FROM trustiot.telemetry
+--> HTTP 200 (9 ms) summary={"read_rows":"14","read_bytes":"224","written_rows":"0","written_bytes":"0","total_rows_to_read":"14","result_rows":"2","result_bytes":"272","elapsed_ns":"7911490","memory_usage":"10166506"}
+3\n3
+
+### [tenant_a] JOIN subquery SETTINGS
+SELECT count() FROM trustiot.telemetry AS x JOIN (SELECT * FROM trustiot.telemetry SETTINGS SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547') AS y ON x.point = y.point
+--> HTTP 200 (9 ms) summary={"read_rows":"14","read_bytes":"294","written_rows":"0","written_bytes":"0","total_rows_to_read":"14","result_rows":"1","result_bytes":"136","elapsed_ns":"7919386","memory_usage":"10183412"}
+9
+
+### [tenant_a] view() with SETTINGS
+SELECT count() FROM view(SELECT * FROM trustiot.telemetry SETTINGS SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547')
+--> HTTP 200 (10 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"8408835","memory_usage":"10125810"}
+3
+
+### [tenant_a] IN subquery SETTINGS
+SELECT count() FROM numbers(1) WHERE 1 IN (SELECT count() FROM trustiot.telemetry SETTINGS SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547')
+--> HTTP 200 (10 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"8628752","memory_usage":"10157505"}
+0
+
+### [tenant_a] scalar subquery SETTINGS
+SELECT (SELECT count() FROM trustiot.telemetry SETTINGS SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547')
+--> HTTP 200 (8 ms) summary={"read_rows":"8","read_bytes":"113","written_rows":"0","written_bytes":"0","total_rows_to_read":"8","result_rows":"1","result_bytes":"264","elapsed_ns":"6677389","memory_usage":"10086578"}
+3
+
+### [tenant_a] additional_table_filters in subquery
+SELECT count() FROM (SELECT * FROM trustiot.telemetry SETTINGS additional_table_filters = {'trustiot.telemetry': '1'})
+--> HTTP 200 (7 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"5743111","memory_usage":"10089626"}
+3
+
+### [tenant_a] row policy settings: apply_row_policy_after_final / optimize_move_to_prewhere
+SELECT count() FROM trustiot.telemetry SETTINGS optimize_move_to_prewhere = 0
+--> HTTP 500 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1689633","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'optimize_move_to_prewhere' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] additional_result_filter
+SELECT count() FROM trustiot.telemetry SETTINGS additional_result_filter = '1'
+--> HTTP 500 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1794991","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'additional_result_filter' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] allow_experimental_analyzer=0 (old analyzer path)
+SELECT count() FROM trustiot.telemetry SETTINGS allow_experimental_analyzer = 0
+--> HTTP 500 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1783338","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'allow_experimental_analyzer' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] enable_analyzer=0
+SELECT count() FROM trustiot.telemetry SETTINGS enable_analyzer = 0
+--> HTTP 500 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1734261","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'allow_experimental_analyzer' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] URL param SQL_tenant_id {SQL_tenant_id=490c02de-1a4b-4600-a3ea-ae27b38e7547}
+SELECT count() FROM trustiot.telemetry
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"108922","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'SQL_tenant_id' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] URL param readonly=0 + tenant {readonly=0&SQL_tenant_id=490c02de-1a4b-4600-a3ea-ae27b38e7547}
+SELECT count() FROM trustiot.telemetry
+--> HTTP 500 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"94839","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'readonly' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] URL param readonly=0 {readonly=0}
+SELECT count() FROM trustiot.telemetry
+--> HTTP 500 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"88371","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'readonly' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] URL param role {role=trustiot_ingest}
+SELECT count() FROM trustiot.telemetry
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"104385","memory_usage":"0"}
+Code: 512. DB::Exception: Role trustiot_ingest should be granted to set as a current. (SET_NON_GRANTED_ROLE) (version 26.8.22.13 (official build))
+
+### [tenant_a] URL param role none {role=trustiot_tenant_reader}
+SELECT count() FROM trustiot.telemetry
+--> HTTP 200 (7 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"5698568","memory_usage":"10067730"}
+3
+
+### [tenant_a] URL param user override to other user {user=tenant_b}
+SELECT count() FROM trustiot.telemetry
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"98529","memory_usage":"0"}
+Code: 516. DB::Exception: Invalid authentication: it is not allowed to use X-ClickHouse HTTP headers and authentication via parameters simultaneously. (AUTHENTICATION_FAILED)
+
+### [tenant_a] URL param profile {profile=default}
+SELECT count() FROM trustiot.telemetry
+--> HTTP 200 (7 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"5502342","memory_usage":"10067730"}
+3
+
+### [tenant_a] URL param quota_key {quota_key=bypass1}
+SELECT count() FROM trustiot.telemetry
+--> HTTP 200 (7 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"5137199","memory_usage":"10074586"}
+3
+
+### [tenant_a] URL param database {database=trustiot}
+SELECT count() FROM telemetry
+--> HTTP 200 (8 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"136","elapsed_ns":"6070974","memory_usage":"10109098"}
+3
+
+### [tenant_a] URL param param_ injection {param_t=490c02de-1a4b-4600-a3ea-ae27b38e7547}
+SELECT count() FROM trustiot.telemetry WHERE tenant_id = {t:UUID}
+--> HTTP 200 (8 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"136","elapsed_ns":"5940416","memory_usage":"10068498"}
+0
+
+### [tenant_a] EXECUTE AS ingest
+EXECUTE AS ingest SELECT count() FROM trustiot.telemetry
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2409178","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant IMPERSONATE ON ingest. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] EXECUTE AS tenant_b
+EXECUTE AS tenant_b SELECT count() FROM trustiot.telemetry
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2059141","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant IMPERSONATE ON tenant_b. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] EXECUTE AS admin
+EXECUTE AS trustiot_admin SELECT 1
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1920988","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a: Not enough privileges. To execute this query, it's necessary to have the grant IMPERSONATE ON trustiot_admin. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a] getSetting other tenant var
+SELECT getSetting('SQL_tenant_idx')
+--> HTTP 404 (12 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"10102355","memory_usage":"0"}
+Code: 115. DB::Exception: Unknown setting 'SQL_tenant_idx': In scope SELECT getSetting('SQL_tenant_idx'). (UNKNOWN_SETTING) (version 26.8.22.13 (official build))
+
+### [tenant_a] custom setting new SQL_ name
+SELECT 1 SETTINGS SQL_other = 'x'
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1419579","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'SQL_other' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] custom prefix settings other
+SELECT 1 SETTINGS custom_x = 'x'
+--> HTTP 404 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2007541","memory_usage":"0"}
+Code: 115. DB::Exception: Setting custom_x is neither a builtin setting nor started with the prefix 'SQL_' registered for user-defined settings. (UNKNOWN_SETTING) (version 26.8.22.13 (official build))
+
+# summary: 55 probes, 0 responses containing B's tenant id or secret

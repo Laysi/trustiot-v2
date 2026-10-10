@@ -799,6 +799,7 @@ describe("builds check their actual context", () => {
       expect(() => containerBuildArgs(clean, ["--tag", "localhost/trustiot-dev-default-a1b2c3d4e5f6a7b8c9d0e1f2:dev"])).toThrow(/--tag needs a value of the form/);
       expect(() => containerBuildArgs(clean, ["--label", "org.opencontainers.image.title=a1b2c3d4e5f6a7b8c9d0e1f2"])).toThrow(/label org\.opencontainers\.image\.title needs a value/);
       expect(containerBuildArgs(clean, ["--tag", "localhost/trustiot-dev-default-example-service:dev"])).toHaveLength(4);
+      expect(containerBuildArgs(clean, ["--tag", "localhost/trustiot-e2e/identity-double:nightly"])).toHaveLength(4);
       // Relative paths come back absolute, so another working directory cannot change what is built.
       const relativeContext = relative(process.cwd(), clean);
       expect(containerBuildArgs(relativeContext, ["--file", relative(process.cwd(), file)])).toEqual([

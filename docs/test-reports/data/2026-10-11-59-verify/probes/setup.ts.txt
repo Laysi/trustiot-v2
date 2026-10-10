@@ -1,0 +1,56 @@
+import { ADMIN, applyMigrations, q, type Acct } from "./lib.ts";
+import { writeFileSync } from "node:fs";
+
+const dir = process.argv[2];
+await applyMigrations(dir);
+await applyMigrations(dir); // twice
+const ra = crypto.randomUUID();
+const rb = crypto.randomUUID();
+const w = { tenantA: ra, tenantB: rb, canaryB: "B-SECRET-VERIFY59", accts: {} as Record<string, Acct> };
+async function must(sql: string) {
+  const r = await q(ADMIN, sql);
+  if (r.status !== 200) throw new Error(sql + "\n" + r.body);
+  return r.body;
+}
+const pw = () => "pw" + crypto.randomUUID().replaceAll("-", "");
+async function tenant(name: string, t?: string) {
+  const p = pw();
+  w.accts[name] = { user: name, password: p };
+  await must(`CREATE USER ${name} IDENTIFIED WITH sha256_password BY '${p}' SETTINGS PROFILE 'trustiot_tenant_reader'${t ? `, SQL_tenant_id = '${t}' CONST` : ""}`);
+  await must(`GRANT trustiot_tenant_reader TO ${name}`);
+}
+await tenant("tenant_a", ra);
+await tenant("tenant_b", rb);
+await tenant("tenant_a2", ra);
+await tenant("no_tenant");
+await tenant("quota_1", crypto.randomUUID());
+for (const n of ["norole"]) {
+  const p = pw();
+  w.accts[n] = { user: n, password: p };
+  await must(`CREATE USER ${n} IDENTIFIED WITH sha256_password BY '${p}'`);
+}
+{
+  const p = pw();
+  w.accts["ingest"] = { user: "ingest", password: p };
+  await must(`CREATE USER ingest IDENTIFIED WITH sha256_password BY '${p}'`);
+  await must(`GRANT trustiot_ingest TO ingest`);
+}
+const dev = crypto.randomUUID();
+const rows: string[] = [];
+const row = (t: string, n: number, v: string) =>
+  `('${t}','${crypto.randomUUID()}','${crypto.randomUUID()}',1,'${dev}','shared-point',toDateTime64('2026-10-10 00:00:00',3,'UTC')+${n},now64(3,'UTC'),'string','${v}')`;
+for (let n = 0; n < 3; n++) rows.push(row(ra, n, `a-row-${n}`));
+for (let n = 0; n < 4; n++) rows.push(row(rb, n, w.canaryB));
+const ins = await q(
+  w.accts.ingest,
+  `INSERT INTO trustiot.telemetry (tenant_id,gateway_id,stream_id,batch_seq,device_id,point,ts,received_at,value_type,value_string) VALUES ${rows.join(",")}`,
+);
+if (ins.status !== 200) throw new Error(ins.body);
+const ins2 = await q(
+  w.accts.ingest,
+  `INSERT INTO trustiot.batch_commits (tenant_id,gateway_id,stream_id,seq,row_count,committed_at) VALUES ('${rb}', generateUUIDv4(), generateUUIDv4(), 1, 4, now64(3,'UTC')),('${ra}', generateUUIDv4(), generateUUIDv4(), 1, 3, now64(3,'UTC'))`,
+);
+if (ins2.status !== 200) throw new Error(ins2.body);
+await must("SYSTEM FLUSH LOGS");
+writeFileSync(new URL("./world.json", import.meta.url).pathname, JSON.stringify(w, null, 1));
+console.log("ok", ra, rb);

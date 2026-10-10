@@ -1,0 +1,133 @@
+// Renovate configuration (docs/architecture/ci-release.md, nightly.yml). Renovate runs as the
+// Renovate GitHub App installed on the organization; see the "Renovate" section of that
+// document for the installation and for what the app needs to be allowed to do.
+//
+// Rules that every Renovate pull request keeps (checked by scripts/nightly/renovate.test.ts):
+// - GitHub Actions stay pinned to a full commit SHA, with the release tag in a trailing
+//   comment (the workflow-policy job in ci.yml rejects anything else).
+// - Container images stay pinned by digest.
+// - Rust, Bun and the tools in `.prototools` are updated as exact versions.
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:recommended",
+    // Pins every `uses:` to a commit SHA and keeps `# vX.Y.Z` next to it.
+    "helpers:pinGitHubActionDigestsToSemver",
+    // Dependency Dashboard issue and one PR per update group; pull requests carry this label.
+    ":dependencyDashboard",
+  ],
+  // The default preset skips every `tests/` directory, but this repository keeps pinned images
+  // in tests and test values (service-kit's container tests, the chart's smoke values).
+  ignorePresets: [":ignoreModulesAndTests"],
+  ignorePaths: ["**/node_modules/**", "**/target/**", "docs/test-reports/**"],
+  // Commit messages and PR titles follow Angular format, like every commit in this repository.
+  semanticCommits: "enabled",
+  semanticCommitType: "chore",
+  semanticCommitScope: "deps",
+  labels: ["area:ci", "dependencies"],
+  // Exact versions in Cargo.toml and package.json: a bump is a reviewed change, never a range.
+  rangeStrategy: "pin",
+  // At most this many open pull requests: the nightly and CI are the only checks, and Actions
+  // minutes are limited.
+  prConcurrentLimit: 5,
+  prHourlyLimit: 2,
+  // Weekly, before the working week, in Taipei time; security updates ignore the schedule.
+  timezone: "Asia/Taipei",
+  schedule: ["before 6am on monday"],
+  lockFileMaintenance: {
+    enabled: true,
+    schedule: ["before 6am on the first day of the month"],
+  },
+  vulnerabilityAlerts: {
+    // Security fixes open right away, whatever the schedule is.
+    schedule: ["at any time"],
+    labels: ["area:ci", "dependencies", "security"],
+  },
+  // Container images are always pinned by digest, in every file type Renovate reads here.
+  pinDigests: true,
+  packageRules: [
+    {
+      description: "Our own images are released together with the chart (decision 4), not by Renovate",
+      matchPackageNames: ["ghcr.io/laysi/**"],
+      enabled: false,
+    },
+    {
+      description: "Every container image stays pinned by digest",
+      matchDatasources: ["docker"],
+      pinDigests: true,
+    },
+    {
+      description: "Pin and bump GitHub Actions together as one group",
+      matchManagers: ["github-actions"],
+      groupName: "github actions",
+      pinDigests: true,
+    },
+    {
+      description: "The Rust toolchain: .prototools (proto manager) and rust-toolchain.toml change in one pull request (repo-check fails when they differ)",
+      matchDatasources: ["rust-version"],
+      groupName: "rust toolchain",
+    },
+    {
+      description: "Kubernetes tools follow the k3s minor of the SaaS host and the lab (1.36); a new minor is a deliberate upgrade, not a bot PR",
+      matchPackageNames: ["rancher/k3s", "kubernetes/kubernetes"],
+      allowedVersions: "/^v?1\\.36\\./",
+    },
+    {
+      description: "Istio: the nightly's charts stay on the minor that the SaaS host and the lab run (deploy/istio/README.md); a new minor is a deliberate upgrade of all four charts together",
+      matchPackageNames: ["istio/istio"],
+      allowedVersions: "/^1\\.30\\./",
+    },
+    {
+      description: "k3s image tags look like v1.36.5-k3s1",
+      matchPackageNames: ["rancher/k3s"],
+      versioning: "loose",
+    },
+    {
+      description: "Rust crates: one weekly pull request for the semver-compatible updates",
+      matchManagers: ["cargo"],
+      matchUpdateTypes: ["minor", "patch"],
+      groupName: "rust crates",
+    },
+    {
+      description: "Bun packages for scripts: one weekly pull request",
+      matchManagers: ["npm", "bun"],
+      groupName: "scripts packages",
+    },
+  ],
+  customManagers: [
+    {
+      description: "Tools pinned in .prototools that Renovate's proto manager does not know: the tools with a schema plugin in .proto/plugins, each annotated with a `# renovate:` comment above its pin",
+      customType: "regex",
+      managerFilePatterns: ["/(^|/)\\.prototools$/"],
+      matchStrings: [
+        "# renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?\\n[a-z0-9_-]+ = \"(?<currentValue>[^\"]+)\"",
+      ],
+    },
+    {
+      description: "Versions in workflow env blocks, annotated with a `# renovate:` comment on the line above",
+      customType: "regex",
+      managerFilePatterns: ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      matchStrings: [
+        "# renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>\\S+)\\n\\s+[A-Z0-9_]+: \"?(?<currentValue>[^\"\\s]+)\"?",
+      ],
+    },
+    {
+      description: "Images written as name:tag@sha256:digest in source, tests, workflows and values files",
+      customType: "regex",
+      managerFilePatterns: ["/\\.(rs|ts|ya?ml)$/"],
+      matchStrings: [
+        "(?<depName>[a-z0-9][a-z0-9./_-]*[a-z0-9]):(?<currentValue>[A-Za-z0-9_][A-Za-z0-9._-]*)@(?<currentDigest>sha256:[a-f0-9]{64})",
+      ],
+      datasourceTemplate: "docker",
+    },
+    {
+      description: "Chart values that give an image as repository, tag and digest on separate lines",
+      customType: "regex",
+      managerFilePatterns: ["/^deploy/chart/.*\\.ya?ml$/"],
+      matchStrings: [
+        "repository: (?<depName>\\S+)\\n\\s+tag: (?<currentValue>\\S+)\\n\\s+digest: (?<currentDigest>sha256:[a-f0-9]{64})",
+      ],
+      datasourceTemplate: "docker",
+    },
+  ],
+}

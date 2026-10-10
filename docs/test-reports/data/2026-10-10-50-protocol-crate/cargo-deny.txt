@@ -1,0 +1,495 @@
+{"type":"message","message":"Detected an AI agent environment, printing as NDJSON. Trace logs are written to stderr, while user-facing logs are written to stdout."}
+warning[duplicate]: found 2 duplicate entries for crate 'base64'
+   ┌─ Cargo.lock:9:1
+   │  
+ 9 │ ╭ base64 0.22.1 registry+https://github.com/rust-lang/crates.io-index
+10 │ │ base64 0.23.1 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰───────────────────────────────────────────────────────────────────┘ lock entries
+   │  
+   ├ base64 v0.22.1
+     ├── service-kit v0.1.0
+     ├── sqlx-core v0.9.0
+     │   ├── sqlx v0.9.0
+     │   │   └── service-kit v0.1.0 (*)
+     │   └── sqlx-postgres v0.9.0
+     │       └── sqlx v0.9.0 (*)
+     └── sqlx-postgres v0.9.0 (*)
+   ├ base64 v0.23.1
+     ├── hyper-util v0.1.21
+     │   ├── axum v0.8.9
+     │   │   └── service-kit v0.1.0
+     │   └── reqwest v0.13.5
+     │       ├── contract v0.1.0
+     │       │   └── service-kit v0.1.0 (*)
+     │       ├── opentelemetry-http v0.33.1
+     │       │   └── opentelemetry-otlp v0.33.1
+     │       │       └── service-kit v0.1.0 (*)
+     │       └── opentelemetry-otlp v0.33.1 (*)
+     └── reqwest v0.13.5 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'block-buffer'
+   ┌─ Cargo.lock:12:1
+   │  
+12 │ ╭ block-buffer 0.10.4 registry+https://github.com/rust-lang/crates.io-index
+13 │ │ block-buffer 0.12.1 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰─────────────────────────────────────────────────────────────────────────┘ lock entries
+   │  
+   ├ block-buffer v0.10.4
+     └── digest v0.10.7
+         └── sha2 v0.10.9
+             └── sqlx-core v0.9.0
+                 ├── sqlx v0.9.0
+                 │   └── service-kit v0.1.0
+                 └── sqlx-postgres v0.9.0
+                     └── sqlx v0.9.0 (*)
+   ├ block-buffer v0.12.1
+     └── digest v0.11.3
+         ├── curve25519-dalek v5.0.0
+         │   └── ed25519-dalek v3.0.0
+         │       └── service-kit v0.1.0
+         ├── hmac v0.13.0
+         │   ├── hkdf v0.13.0
+         │   │   └── sqlx-postgres v0.9.0
+         │   │       └── sqlx v0.9.0
+         │   │           └── service-kit v0.1.0 (*)
+         │   └── sqlx-postgres v0.9.0 (*)
+         ├── md-5 v0.11.0
+         │   └── sqlx-postgres v0.9.0 (*)
+         └── sha2 v0.11.0
+             ├── ed25519-dalek v3.0.0 (*)
+             └── sqlx-postgres v0.9.0 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'cpufeatures'
+   ┌─ Cargo.lock:22:1
+   │  
+22 │ ╭ cpufeatures 0.2.17 registry+https://github.com/rust-lang/crates.io-index
+23 │ │ cpufeatures 0.3.1 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰───────────────────────────────────────────────────────────────────────┘ lock entries
+   │  
+   ├ cpufeatures v0.2.17
+     └── sha2 v0.10.9
+         └── sqlx-core v0.9.0
+             ├── sqlx v0.9.0
+             │   └── service-kit v0.1.0
+             └── sqlx-postgres v0.9.0
+                 └── sqlx v0.9.0 (*)
+   ├ cpufeatures v0.3.1
+     ├── chacha20 v0.10.2
+     │   └── rand v0.10.3
+     │       └── sqlx-postgres v0.9.0
+     │           └── sqlx v0.9.0
+     │               └── service-kit v0.1.0
+     ├── curve25519-dalek v5.0.0
+     │   └── ed25519-dalek v3.0.0
+     │       └── service-kit v0.1.0 (*)
+     └── sha2 v0.11.0
+         ├── ed25519-dalek v3.0.0 (*)
+         └── sqlx-postgres v0.9.0 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'crypto-common'
+   ┌─ Cargo.lock:28:1
+   │  
+28 │ ╭ crypto-common 0.1.7 registry+https://github.com/rust-lang/crates.io-index
+29 │ │ crypto-common 0.2.2 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰─────────────────────────────────────────────────────────────────────────┘ lock entries
+   │  
+   ├ crypto-common v0.1.7
+     └── digest v0.10.7
+         └── sha2 v0.10.9
+             └── sqlx-core v0.9.0
+                 ├── sqlx v0.9.0
+                 │   └── service-kit v0.1.0
+                 └── sqlx-postgres v0.9.0
+                     └── sqlx v0.9.0 (*)
+   ├ crypto-common v0.2.2
+     └── digest v0.11.3
+         ├── curve25519-dalek v5.0.0
+         │   └── ed25519-dalek v3.0.0
+         │       └── service-kit v0.1.0
+         ├── hmac v0.13.0
+         │   ├── hkdf v0.13.0
+         │   │   └── sqlx-postgres v0.9.0
+         │   │       └── sqlx v0.9.0
+         │   │           └── service-kit v0.1.0 (*)
+         │   └── sqlx-postgres v0.9.0 (*)
+         ├── md-5 v0.11.0
+         │   └── sqlx-postgres v0.9.0 (*)
+         └── sha2 v0.11.0
+             ├── ed25519-dalek v3.0.0 (*)
+             └── sqlx-postgres v0.9.0 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'digest'
+   ┌─ Cargo.lock:33:1
+   │  
+33 │ ╭ digest 0.10.7 registry+https://github.com/rust-lang/crates.io-index
+34 │ │ digest 0.11.3 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰───────────────────────────────────────────────────────────────────┘ lock entries
+   │  
+   ├ digest v0.10.7
+     └── sha2 v0.10.9
+         └── sqlx-core v0.9.0
+             ├── sqlx v0.9.0
+             │   └── service-kit v0.1.0
+             └── sqlx-postgres v0.9.0
+                 └── sqlx v0.9.0 (*)
+   ├ digest v0.11.3
+     ├── curve25519-dalek v5.0.0
+     │   └── ed25519-dalek v3.0.0
+     │       └── service-kit v0.1.0
+     ├── hmac v0.13.0
+     │   ├── hkdf v0.13.0
+     │   │   └── sqlx-postgres v0.9.0
+     │   │       └── sqlx v0.9.0
+     │   │           └── service-kit v0.1.0 (*)
+     │   └── sqlx-postgres v0.9.0 (*)
+     ├── md-5 v0.11.0
+     │   └── sqlx-postgres v0.9.0 (*)
+     └── sha2 v0.11.0
+         ├── ed25519-dalek v3.0.0 (*)
+         └── sqlx-postgres v0.9.0 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'getrandom'
+   ┌─ Cargo.lock:55:1
+   │  
+55 │ ╭ getrandom 0.3.4 registry+https://github.com/rust-lang/crates.io-index
+56 │ │ getrandom 0.4.3 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰─────────────────────────────────────────────────────────────────────┘ lock entries
+   │  
+   ├ getrandom v0.3.4
+     └── rand_core v0.9.5
+         ├── rand v0.9.5
+         │   └── opentelemetry_sdk v0.33.1
+         │       ├── opentelemetry-otlp v0.33.1
+         │       │   └── service-kit v0.1.0
+         │       ├── opentelemetry-proto v0.33.1
+         │       │   └── opentelemetry-otlp v0.33.1 (*)
+         │       └── service-kit v0.1.0 (*)
+         └── rand_chacha v0.9.0
+             └── rand v0.9.5 (*)
+   ├ getrandom v0.4.3
+     ├── rand v0.10.3
+     │   └── sqlx-postgres v0.9.0
+     │       └── sqlx v0.9.0
+     │           └── service-kit v0.1.0
+     └── uuid v1.28.0
+         ├── contract v0.1.0
+         │   └── service-kit v0.1.0 (*)
+         └── utoipa-gen v6.0.1
+             └── utoipa v6.0.0
+                 └── contract v0.1.0 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'hashbrown'
+   ┌─ Cargo.lock:58:1
+   │  
+58 │ ╭ hashbrown 0.16.1 registry+https://github.com/rust-lang/crates.io-index
+59 │ │ hashbrown 0.17.1 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰──────────────────────────────────────────────────────────────────────┘ lock entries
+   │  
+   ├ hashbrown v0.16.1
+     ├── hashlink v0.11.1
+     │   └── sqlx-core v0.9.0
+     │       ├── sqlx v0.9.0
+     │       │   └── service-kit v0.1.0
+     │       └── sqlx-postgres v0.9.0
+     │           └── sqlx v0.9.0 (*)
+     └── sqlx-core v0.9.0 (*)
+   ├ hashbrown v0.17.1
+     └── indexmap v2.14.2
+         ├── sqlx-core v0.9.0
+         │   ├── sqlx v0.9.0
+         │   │   └── service-kit v0.1.0
+         │   └── sqlx-postgres v0.9.0
+         │       └── sqlx v0.9.0 (*)
+         └── utoipa v6.0.0
+             └── contract v0.1.0
+                 └── service-kit v0.1.0 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'rand'
+    ┌─ Cargo.lock:115:1
+    │  
+115 │ ╭ rand 0.9.5 registry+https://github.com/rust-lang/crates.io-index
+116 │ │ rand 0.10.3 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ rand v0.9.5
+      └── opentelemetry_sdk v0.33.1
+          ├── opentelemetry-otlp v0.33.1
+          │   └── service-kit v0.1.0
+          ├── opentelemetry-proto v0.33.1
+          │   └── opentelemetry-otlp v0.33.1 (*)
+          └── service-kit v0.1.0 (*)
+    ├ rand v0.10.3
+      └── sqlx-postgres v0.9.0
+          └── sqlx v0.9.0
+              └── service-kit v0.1.0
+
+warning[duplicate]: found 2 duplicate entries for crate 'rand_core'
+    ┌─ Cargo.lock:118:1
+    │  
+118 │ ╭ rand_core 0.9.5 registry+https://github.com/rust-lang/crates.io-index
+119 │ │ rand_core 0.10.1 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰──────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ rand_core v0.9.5
+      ├── rand v0.9.5
+      │   └── opentelemetry_sdk v0.33.1
+      │       ├── opentelemetry-otlp v0.33.1
+      │       │   └── service-kit v0.1.0
+      │       ├── opentelemetry-proto v0.33.1
+      │       │   └── opentelemetry-otlp v0.33.1 (*)
+      │       └── service-kit v0.1.0 (*)
+      └── rand_chacha v0.9.0
+          └── rand v0.9.5 (*)
+    ├ rand_core v0.10.1
+      ├── chacha20 v0.10.2
+      │   └── rand v0.10.3
+      │       └── sqlx-postgres v0.9.0
+      │           └── sqlx v0.9.0
+      │               └── service-kit v0.1.0
+      ├── getrandom v0.4.3
+      │   ├── rand v0.10.3 (*)
+      │   └── uuid v1.28.0
+      │       ├── contract v0.1.0
+      │       │   └── service-kit v0.1.0 (*)
+      │       └── utoipa-gen v6.0.1
+      │           └── utoipa v6.0.0
+      │               └── contract v0.1.0 (*)
+      └── rand v0.10.3 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'sha2'
+    ┌─ Cargo.lock:134:1
+    │  
+134 │ ╭ sha2 0.10.9 registry+https://github.com/rust-lang/crates.io-index
+135 │ │ sha2 0.11.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ sha2 v0.10.9
+      └── sqlx-core v0.9.0
+          ├── sqlx v0.9.0
+          │   └── service-kit v0.1.0
+          └── sqlx-postgres v0.9.0
+              └── sqlx v0.9.0 (*)
+    ├ sha2 v0.11.0
+      ├── ed25519-dalek v3.0.0
+      │   └── service-kit v0.1.0
+      └── sqlx-postgres v0.9.0
+          └── sqlx v0.9.0
+              └── service-kit v0.1.0 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'syn'
+    ┌─ Cargo.lock:148:1
+    │  
+148 │ ╭ syn 2.0.119 registry+https://github.com/rust-lang/crates.io-index
+149 │ │ syn 3.0.7 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ syn v2.0.119
+      ├── curve25519-dalek-derive v0.1.1
+      │   └── curve25519-dalek v5.0.0
+      │       └── ed25519-dalek v3.0.0
+      │           └── service-kit v0.1.0
+      ├── prost-derive v0.14.4
+      │   └── prost v0.14.4
+      │       ├── opentelemetry-otlp v0.33.1
+      │       │   └── service-kit v0.1.0 (*)
+      │       └── opentelemetry-proto v0.33.1
+      │           └── opentelemetry-otlp v0.33.1 (*)
+      ├── tracing-attributes v0.1.31
+      │   └── tracing v0.1.44
+      │       ├── contract v0.1.0
+      │       │   └── service-kit v0.1.0 (*)
+      │       ├── hyper-util v0.1.21
+      │       │   ├── axum v0.8.9
+      │       │   │   └── service-kit v0.1.0 (*)
+      │       │   └── reqwest v0.13.5
+      │       │       ├── contract v0.1.0 (*)
+      │       │       ├── opentelemetry-http v0.33.1
+      │       │       │   └── opentelemetry-otlp v0.33.1 (*)
+      │       │       └── opentelemetry-otlp v0.33.1 (*)
+      │       ├── opentelemetry v0.33.1
+      │       │   ├── opentelemetry-http v0.33.1 (*)
+      │       │   ├── opentelemetry-otlp v0.33.1 (*)
+      │       │   ├── opentelemetry-proto v0.33.1 (*)
+      │       │   ├── opentelemetry_sdk v0.33.1
+      │       │   │   ├── opentelemetry-otlp v0.33.1 (*)
+      │       │   │   ├── opentelemetry-proto v0.33.1 (*)
+      │       │   │   └── service-kit v0.1.0 (*)
+      │       │   ├── service-kit v0.1.0 (*)
+      │       │   └── tracing-opentelemetry v0.34.0
+      │       │       └── service-kit v0.1.0 (*)
+      │       ├── service-kit v0.1.0 (*)
+      │       ├── sqlx-core v0.9.0
+      │       │   ├── sqlx v0.9.0
+      │       │   │   └── service-kit v0.1.0 (*)
+      │       │   └── sqlx-postgres v0.9.0
+      │       │       └── sqlx v0.9.0 (*)
+      │       ├── sqlx-postgres v0.9.0 (*)
+      │       ├── tower-http v0.7.1
+      │       │   └── service-kit v0.1.0 (*)
+      │       └── tracing-opentelemetry v0.34.0 (*)
+      └── zerocopy-derive v0.8.62
+          └── zerocopy v0.8.62
+              ├── half v2.7.1
+              │   └── cbor4ii v1.2.3
+              │       └── protocol v0.1.0
+              └── ppv-lite86 v0.2.21
+                  └── rand_chacha v0.9.0
+                      └── rand v0.9.5
+                          └── opentelemetry_sdk v0.33.1 (*)
+    ├ syn v3.0.7
+      ├── async-trait v0.1.92
+      │   └── opentelemetry-http v0.33.1
+      │       └── opentelemetry-otlp v0.33.1
+      │           └── service-kit v0.1.0
+      ├── displaydoc v0.2.7
+      │   ├── icu_collections v2.3.0
+      │   │   ├── icu_normalizer v2.3.0
+      │   │   │   └── idna_adapter v1.2.2
+      │   │   │       └── idna v1.1.0
+      │   │   │           └── url v2.5.8
+      │   │   │               ├── reqwest v0.13.5
+      │   │   │               │   ├── contract v0.1.0
+      │   │   │               │   │   └── service-kit v0.1.0 (*)
+      │   │   │               │   ├── opentelemetry-http v0.33.1 (*)
+      │   │   │               │   └── opentelemetry-otlp v0.33.1 (*)
+      │   │   │               ├── sqlx-core v0.9.0
+      │   │   │               │   ├── sqlx v0.9.0
+      │   │   │               │   │   └── service-kit v0.1.0 (*)
+      │   │   │               │   └── sqlx-postgres v0.9.0
+      │   │   │               │       └── sqlx v0.9.0 (*)
+      │   │   │               └── tower-http v0.6.11
+      │   │   │                   └── reqwest v0.13.5 (*)
+      │   │   └── icu_properties v2.3.0
+      │   │       └── idna_adapter v1.2.2 (*)
+      │   ├── icu_locale_core v2.3.0
+      │   │   ├── icu_properties v2.3.0 (*)
+      │   │   └── icu_provider v2.3.1
+      │   │       ├── icu_normalizer v2.3.0 (*)
+      │   │       └── icu_properties v2.3.0 (*)
+      │   ├── icu_properties v2.3.0 (*)
+      │   ├── icu_provider v2.3.1 (*)
+      │   ├── tinystr v0.8.4
+      │   │   └── icu_locale_core v2.3.0 (*)
+      │   └── zerotrie v0.2.5
+      │       ├── icu_properties v2.3.0 (*)
+      │       └── icu_provider v2.3.1 (*)
+      ├── futures-macro v0.3.34
+      │   └── futures-util v0.3.34
+      │       ├── axum v0.8.9
+      │       │   └── service-kit v0.1.0 (*)
+      │       ├── futures-executor v0.3.34
+      │       │   └── opentelemetry_sdk v0.33.1
+      │       │       ├── opentelemetry-otlp v0.33.1 (*)
+      │       │       ├── opentelemetry-proto v0.33.1
+      │       │       │   └── opentelemetry-otlp v0.33.1 (*)
+      │       │       └── service-kit v0.1.0 (*)
+      │       ├── hyper-util v0.1.21
+      │       │   ├── axum v0.8.9 (*)
+      │       │   └── reqwest v0.13.5 (*)
+      │       ├── opentelemetry_sdk v0.33.1 (*)
+      │       ├── reqwest v0.13.5 (*)
+      │       ├── sqlx-core v0.9.0 (*)
+      │       ├── sqlx-postgres v0.9.0 (*)
+      │       ├── tokio-util v0.7.20
+      │       │   └── service-kit v0.1.0 (*)
+      │       ├── tower v0.5.3
+      │       │   ├── axum v0.8.9 (*)
+      │       │   ├── reqwest v0.13.5 (*)
+      │       │   └── tower-http v0.6.11 (*)
+      │       ├── tower-http v0.6.11 (*)
+      │       └── tower-http v0.7.1
+      │           └── service-kit v0.1.0 (*)
+      ├── serde_derive v1.0.229
+      │   └── serde v1.0.229
+      │       ├── cbor4ii v1.2.3
+      │       │   └── protocol v0.1.0
+      │       ├── chrono v0.4.45
+      │       │   └── contract v0.1.0 (*)
+      │       ├── contract v0.1.0 (*)
+      │       ├── protocol v0.1.0 (*)
+      │       ├── serde_urlencoded v0.7.1
+      │       │   └── axum v0.8.9 (*)
+      │       ├── service-kit v0.1.0 (*)
+      │       └── utoipa v6.0.0
+      │           └── contract v0.1.0 (*)
+      ├── synstructure v0.14.0
+      │   ├── yoke-derive v0.8.4
+      │   │   └── yoke v0.8.3
+      │   │       ├── icu_collections v2.3.0 (*)
+      │   │       ├── icu_provider v2.3.1 (*)
+      │   │       ├── zerotrie v0.2.5 (*)
+      │   │       └── zerovec v0.11.8
+      │   │           ├── icu_collections v2.3.0 (*)
+      │   │           ├── icu_locale_core v2.3.0 (*)
+      │   │           ├── icu_normalizer v2.3.0 (*)
+      │   │           ├── icu_properties v2.3.0 (*)
+      │   │           ├── icu_provider v2.3.1 (*)
+      │   │           ├── potential_utf v0.1.6
+      │   │           │   └── icu_collections v2.3.0 (*)
+      │   │           └── tinystr v0.8.4 (*)
+      │   └── zerofrom-derive v0.1.8
+      │       └── zerofrom v0.1.8
+      │           ├── icu_collections v2.3.0 (*)
+      │           ├── icu_provider v2.3.1 (*)
+      │           ├── yoke v0.8.3 (*)
+      │           ├── zerotrie v0.2.5 (*)
+      │           └── zerovec v0.11.8 (*)
+      ├── thiserror-impl v2.0.21
+      │   └── thiserror v2.0.21
+      │       ├── contract v0.1.0 (*)
+      │       ├── opentelemetry v0.33.1
+      │       │   ├── opentelemetry-http v0.33.1 (*)
+      │       │   ├── opentelemetry-otlp v0.33.1 (*)
+      │       │   ├── opentelemetry-proto v0.33.1 (*)
+      │       │   ├── opentelemetry_sdk v0.33.1 (*)
+      │       │   ├── service-kit v0.1.0 (*)
+      │       │   └── tracing-opentelemetry v0.34.0
+      │       │       └── service-kit v0.1.0 (*)
+      │       ├── opentelemetry-otlp v0.33.1 (*)
+      │       ├── opentelemetry_sdk v0.33.1 (*)
+      │       ├── service-kit v0.1.0 (*)
+      │       ├── sqlx-core v0.9.0 (*)
+      │       └── sqlx-postgres v0.9.0 (*)
+      ├── tokio-macros v2.7.2
+      │   └── tokio v1.53.2
+      │       ├── axum v0.8.9 (*)
+      │       ├── (dev) contract v0.1.0 (*)
+      │       ├── hyper v1.12.0
+      │       │   ├── axum v0.8.9 (*)
+      │       │   ├── contract v0.1.0 (*)
+      │       │   ├── hyper-util v0.1.21 (*)
+      │       │   └── reqwest v0.13.5 (*)
+      │       ├── hyper-util v0.1.21 (*)
+      │       ├── reqwest v0.13.5 (*)
+      │       ├── service-kit v0.1.0 (*)
+      │       ├── sqlx-core v0.9.0 (*)
+      │       ├── tokio-stream v0.1.19
+      │       │   └── sqlx-core v0.9.0 (*)
+      │       ├── tokio-util v0.7.20 (*)
+      │       └── tower v0.5.3 (*)
+      ├── utoipa-gen v6.0.1
+      │   └── utoipa v6.0.0 (*)
+      ├── yoke-derive v0.8.4 (*)
+      ├── zerofrom-derive v0.1.8 (*)
+      └── zerovec-derive v0.11.6
+          └── zerovec v0.11.8 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'tower-http'
+    ┌─ Cargo.lock:166:1
+    │  
+166 │ ╭ tower-http 0.6.11 registry+https://github.com/rust-lang/crates.io-index
+167 │ │ tower-http 0.7.1 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰──────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ tower-http v0.6.11
+      └── reqwest v0.13.5
+          ├── contract v0.1.0
+          │   └── service-kit v0.1.0
+          ├── opentelemetry-http v0.33.1
+          │   └── opentelemetry-otlp v0.33.1
+          │       └── service-kit v0.1.0 (*)
+          └── opentelemetry-otlp v0.33.1 (*)
+    ├ tower-http v0.7.1
+      └── service-kit v0.1.0
+
+advisories ok, bans ok, licenses ok, sources ok

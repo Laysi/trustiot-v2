@@ -1,0 +1,376 @@
+### [ingest] whoami
+SELECT currentUser(), currentRoles(), currentProfiles(), getSetting('readonly')
+--> HTTP 200 (6 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"25344","elapsed_ns":"3288301","memory_usage":"10090634"}
+ingest	['trustiot_ingest']	['default']	0
+
+### [ingest] SHOW GRANTS
+SHOW GRANTS
+--> HTTP 200 (3 ms) summary={"read_rows":"1","read_bytes":"39","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"4352","elapsed_ns":"1545625","memory_usage":"9969786"}
+GRANT trustiot_ingest TO ingest
+
+### [ingest] read all tenants (service policy)
+SELECT tenant_id, count() FROM trustiot.telemetry GROUP BY tenant_id ORDER BY 1
+--> HTTP 200 (6 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"2","result_bytes":"304","elapsed_ns":"5266510","memory_usage":"10073834"}  **LEAK-OF-B-MARKER**
+490c02de-1a4b-4600-a3ea-ae27b38e7547	4\nb6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38	3
+
+### [ingest] read batch_commits
+SELECT count() FROM trustiot.batch_commits
+--> HTTP 200 (4 ms) summary={"read_rows":"1","read_bytes":"16","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"136","elapsed_ns":"2820874","memory_usage":"10048338"}
+55
+
+### [ingest] CREATE TABLE
+CREATE TABLE trustiot.injected (a UInt8) ENGINE = MergeTree ORDER BY a
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1599040","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TABLE ON trustiot.injected. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] CREATE TABLE in other db
+CREATE TABLE trustiot_logs.injected (a UInt8) ENGINE = MergeTree ORDER BY a
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1351830","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TABLE ON trustiot_logs.injected. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] CREATE TABLE IF NOT EXISTS (runtime-style)
+CREATE TABLE IF NOT EXISTS trustiot.telemetry (a UInt8) ENGINE = MergeTree ORDER BY a
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1309279","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TABLE ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] CREATE DATABASE
+CREATE DATABASE evil
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1226581","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant CREATE DATABASE ON evil.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] CREATE VIEW
+CREATE VIEW trustiot.v AS SELECT * FROM trustiot.telemetry
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1288067","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant CREATE VIEW ON trustiot.v. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] CREATE MATERIALIZED VIEW
+CREATE MATERIALIZED VIEW trustiot.mv ENGINE = Memory AS SELECT * FROM trustiot.telemetry
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1348552","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant CREATE VIEW ON trustiot.mv. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] CREATE TEMPORARY TABLE
+CREATE TEMPORARY TABLE tmp1 (x UInt8) ENGINE = Memory
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1531295","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TEMPORARY TABLE ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER ADD COLUMN
+ALTER TABLE trustiot.telemetry ADD COLUMN injected UInt8
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1472421","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER ADD COLUMN(injected) ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER DROP COLUMN
+ALTER TABLE trustiot.telemetry DROP COLUMN value_string
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1310748","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER DROP COLUMN(value_string) ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER MODIFY COLUMN
+ALTER TABLE trustiot.telemetry MODIFY COLUMN value_string UInt8
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1363512","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER MODIFY COLUMN(value_string) ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER COMMENT COLUMN
+ALTER TABLE trustiot.telemetry COMMENT COLUMN tenant_id 'x'
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1307701","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER COMMENT COLUMN(tenant_id) ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER CLEAR COLUMN
+ALTER TABLE trustiot.telemetry CLEAR COLUMN value_string IN PARTITION ID '202610'
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1271573","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER CLEAR COLUMN(value_string) ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER MODIFY TTL
+ALTER TABLE trustiot.telemetry MODIFY TTL toDateTime(received_at) + INTERVAL 1 SECOND
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1805385","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER TTL ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER REMOVE TTL
+ALTER TABLE trustiot.telemetry REMOVE TTL
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1523927","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER TTL ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER MODIFY SETTING
+ALTER TABLE trustiot.telemetry MODIFY SETTING fsync_after_insert = 0
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1319796","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER SETTINGS ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER RESET SETTING
+ALTER TABLE trustiot.telemetry RESET SETTING fsync_after_insert
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1387133","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER SETTINGS ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER ADD CONSTRAINT / DROP CONSTRAINT
+ALTER TABLE trustiot.telemetry DROP CONSTRAINT tenant_id_set
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1296696","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER DROP CONSTRAINT ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER ADD INDEX
+ALTER TABLE trustiot.telemetry ADD INDEX i value_string TYPE bloom_filter GRANULARITY 1
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1337424","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER ADD INDEX ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER ADD PROJECTION
+ALTER TABLE trustiot.telemetry ADD PROJECTION p (SELECT * ORDER BY tenant_id)
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1611552","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER ADD PROJECTION ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER MODIFY ORDER BY
+ALTER TABLE trustiot.telemetry MODIFY ORDER BY (tenant_id, ts)
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1727762","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER ORDER BY ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER MODIFY COMMENT
+ALTER TABLE trustiot.telemetry MODIFY COMMENT 'x'
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1357862","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER MODIFY COMMENT ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER UPDATE
+ALTER TABLE trustiot.telemetry UPDATE tenant_id = 'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38' WHERE tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1621819","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER UPDATE(tenant_id) ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] lightweight UPDATE
+UPDATE trustiot.telemetry SET tenant_id = 'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38' WHERE tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1790513","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER UPDATE ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER DELETE (allowed by grant, documented)
+ALTER TABLE trustiot.telemetry DELETE WHERE value_string = 'no-such-row-xyz'
+--> HTTP 200 (33 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"32293188","memory_usage":"2233669"}
+
+
+### [ingest] DELETE FROM no-match (allowed)
+DELETE FROM trustiot.telemetry WHERE value_string = 'no-such-row-xyz'
+--> HTTP 200 (1151 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1149185324","memory_usage":"2246805"}
+
+
+### [ingest] ALTER FREEZE
+ALTER TABLE trustiot.telemetry FREEZE
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1957632","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER FREEZE PARTITION ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER FETCH / MOVE
+ALTER TABLE trustiot.telemetry MOVE PARTITION ID '202610' TO TABLE trustiot.batch_commits
+--> HTTP 500 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2578695","memory_usage":"0"}
+Code: 122. DB::Exception: Tables have different structure. (INCOMPATIBLE_COLUMNS) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER REPLACE PARTITION FROM
+ALTER TABLE trustiot.telemetry REPLACE PARTITION ID '202610' FROM trustiot.telemetry
+--> HTTP 200 (23 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"21343527","memory_usage":"9694810"}
+
+
+### [ingest] ALTER ATTACH PARTITION FROM
+ALTER TABLE trustiot.telemetry ATTACH PARTITION ID '202610' FROM trustiot.telemetry
+--> HTTP 200 (12 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"11160661","memory_usage":"2141566"}
+
+
+### [ingest] ALTER DETACH PARTITION
+ALTER TABLE trustiot.telemetry DETACH PARTITION ID '202609'
+--> HTTP 200 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3066145","memory_usage":"2125934"}
+
+
+### [ingest] ALTER DROP DETACHED PARTITION
+ALTER TABLE trustiot.telemetry DROP DETACHED PARTITION ID '202609' SETTINGS allow_drop_detached = 1
+--> HTTP 200 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"759310","memory_usage":"2112166"}
+
+
+### [ingest] ALTER DROP PARTITION (nonexistent partition)
+ALTER TABLE trustiot.telemetry DROP PARTITION ID '199001'
+--> HTTP 200 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"555778","memory_usage":"2125934"}
+
+
+### [ingest] ALTER MATERIALIZE TTL
+ALTER TABLE trustiot.telemetry MATERIALIZE TTL
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1961764","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER MATERIALIZE TTL ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER RENAME COLUMN
+ALTER TABLE trustiot.telemetry RENAME COLUMN point TO point2
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1719422","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER RENAME COLUMN(point) ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] RENAME TABLE
+RENAME TABLE trustiot.telemetry TO trustiot.telemetry_old
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1485186","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant SELECT, DROP TABLE ON trustiot.telemetry. (Missing permissions: DROP TABLE ON trustiot.telemetry). (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] EXCHANGE TABLES
+EXCHANGE TABLES trustiot.telemetry AND trustiot.batch_commits
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1518833","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant SELECT, DROP TABLE ON trustiot.telemetry. (Missing permissions: DROP TABLE ON trustiot.telemetry). (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] DROP TABLE
+DROP TABLE trustiot.telemetry
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1409428","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant DROP TABLE ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] DROP DATABASE
+DROP DATABASE trustiot
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1539820","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant DROP DATABASE ON trustiot.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] TRUNCATE
+TRUNCATE TABLE trustiot.telemetry
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1420591","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant TRUNCATE ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] DETACH TABLE
+DETACH TABLE trustiot.telemetry
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1351846","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant DROP TABLE ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] OPTIMIZE
+OPTIMIZE TABLE trustiot.telemetry FINAL
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1348096","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant OPTIMIZE ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] SYSTEM STOP MERGES
+SYSTEM STOP MERGES trustiot.telemetry
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1411982","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant SYSTEM MERGES ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] SYSTEM FLUSH LOGS
+SYSTEM FLUSH LOGS
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1352413","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant SYSTEM FLUSH LOGS ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] KILL QUERY
+KILL QUERY WHERE 1 TEST
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2168423","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.processes. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] SYSTEM RELOAD CONFIG
+SYSTEM RELOAD CONFIG
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1439964","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant SYSTEM RELOAD CONFIG ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] CREATE USER
+CREATE USER ingest_evil IDENTIFIED WITH no_password
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2018979","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant CREATE USER ON ingest_evil. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] CREATE ROLE
+CREATE ROLE evilrole
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2308634","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant CREATE ROLE ON evilrole. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] GRANT to self
+GRANT SELECT ON *.* TO ingest
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2422596","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON *.* WITH GRANT OPTION. (Missing permissions: SELECT ON *.*, SELECT ON trustiot.batch_commits, SELECT ON trustiot.telemetry). You can try to use the `GRANT CURRENT GRANTS(...)` statement. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] GRANT role to self
+GRANT trustiot_tenant_reader TO ingest
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2365894","memory_usage":"0"}
+Code: 497. DB::Exception: Not enough privileges. To execute this query, it's necessary to have the role trustiot_tenant_reader granted with ADMIN option. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER ROW POLICY
+ALTER ROW POLICY tenant_isolation ON trustiot.telemetry USING 1
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2252567","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER ROW POLICY ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] DROP ROW POLICY
+DROP ROW POLICY deny_by_default ON trustiot.telemetry
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2142652","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant DROP ROW POLICY ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] CREATE ROW POLICY
+CREATE ROW POLICY pwn ON trustiot.telemetry USING 1 TO ingest
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1574314","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant CREATE ROW POLICY ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER QUOTA
+ALTER QUOTA trustiot_tenant_reader FOR INTERVAL 1 minute MAX queries = 100000
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1411110","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER QUOTA ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] ALTER USER self
+ALTER USER ingest SETTINGS NONE
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1464531","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant ALTER USER ON ingest. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] CREATE SETTINGS PROFILE
+CREATE SETTINGS PROFILE p SETTINGS max_threads = 1
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1629421","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant CREATE SETTINGS PROFILE ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] CREATE FUNCTION
+CREATE FUNCTION f AS (x) -> x
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1475354","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant CREATE FUNCTION ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] system.users / grants
+SELECT count() FROM system.users
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1704454","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.users. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] system.query_log
+SELECT count() FROM system.query_log
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1785481","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.query_log. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] system.parts
+SELECT count() FROM system.parts
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1610895","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.parts. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] system.processes
+SELECT count() FROM system.processes
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2038760","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.processes. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] system.tables
+SELECT name FROM system.tables WHERE database = 'trustiot'
+--> HTTP 200 (4 ms) summary={"read_rows":"2","read_bytes":"70","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"2","result_bytes":"4352","elapsed_ns":"3403514","memory_usage":"10085319"}
+batch_commits\ntelemetry
+
+### [ingest] mergeTreeIndex (row policy USING 1 -> allowed?)
+SELECT count() FROM mergeTreeIndex('trustiot', 'telemetry')
+--> HTTP 200 (4 ms) summary={"read_rows":"4","read_bytes":"32","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"136","elapsed_ns":"2526726","memory_usage":"10062378"}
+4
+
+### [ingest] SET readonly stuff and write settings (no profile)
+SET max_memory_usage = 0
+--> HTTP 200 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"416525","memory_usage":"2109694"}
+
+
+### [ingest] remote
+SELECT count() FROM remote('127.0.0.1', trustiot.telemetry)
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2703931","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] file read
+SELECT * FROM file('/etc/passwd', 'LineAsString')
+--> HTTP 500 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2465738","memory_usage":"0"}
+Code: 291. DB::Exception: File `/etc/passwd` is not inside `/var/lib/clickhouse/user_files`. (DATABASE_ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] url
+SELECT * FROM url('http://127.0.0.1:8123/?query=SELECT%201', 'LineAsString')
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2490613","memory_usage":"0"}
+Code: 497. DB::Exception: ingest: Not enough privileges. To execute this query, it's necessary to have the grant READ ON URL. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [ingest] INSERT with another tenant (by design)
+INSERT INTO trustiot.batch_commits (tenant_id, stream_id, seq, row_count, committed_at) VALUES ('490c02de-1a4b-4600-a3ea-ae27b38e7547', generateUUIDv4(), 99, 0, now64(3, 'UTC'))
+--> HTTP 200 (85 ms) summary={"read_rows":"1","read_bytes":"82","written_rows":"1","written_bytes":"82","total_rows_to_read":"0","result_rows":"1","result_bytes":"82","elapsed_ns":"83763693","memory_usage":"2152686"}
+
+
+### [ingest] INSERT violating constraint tenant zero
+INSERT INTO trustiot.batch_commits (tenant_id, stream_id, seq, row_count, committed_at) VALUES ('00000000-0000-0000-0000-000000000000', generateUUIDv4(), 99, 0, now64(3, 'UTC'))
+--> HTTP 500 (65 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"62415982","memory_usage":"0"}
+Code: 469. DB::Exception: Constraint `tenant_id_set` for table trustiot.batch_commits (ade2b65c-41c6-4b6e-b551-b2e383e245da) is violated at row 1. Expression: (tenant_id != toUUID('00000000-0000-0000-0000-000000000000')). Column values: tenant_id = '00000000-0000-0000-0000-000000000000': While executing WaitForAsyncInsert. (VIOLATED_CONSTRAINT) (version 26.8.22.13 (official build))
+
+### [ingest] INSERT empty point (length constraint)
+INSERT INTO trustiot.telemetry (tenant_id, point, value_type) VALUES ('b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38', '', 'float')
+--> HTTP 500 (73 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"71353802","memory_usage":"0"}
+Code: 469. DB::Exception: Constraint `point_length` for table trustiot.telemetry (eae0f3ea-5a0d-4b73-b4be-70829bab03e6) is violated at row 1. Expression: ((length(point) >= 1) AND (length(point) <= 128)). Column values: point = '': While executing WaitForAsyncInsert. (VIOLATED_CONSTRAINT) (version 26.8.22.13 (official build))
+
+### [ingest] INSERT point too long
+INSERT INTO trustiot.telemetry (tenant_id, point, value_type) SELECT 'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38', repeat('x', 129), 'float'
+--> HTTP 500 (9 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"1","written_bytes":"163","total_rows_to_read":"1","result_rows":"0","result_bytes":"0","elapsed_ns":"8169992","memory_usage":"2435086"}
+Code: 469. DB::Exception: Constraint `point_length` for table trustiot.telemetry (eae0f3ea-5a0d-4b73-b4be-70829bab03e6) is violated at row 1. Expression: ((length(point) >= 1) AND (length(point) <= 128)). Column values: point = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…'. (VIOLATED_CONSTRAINT) (version 26.8.22.13 (official build))
+
+### [ingest] INSERT two value columns set
+INSERT INTO trustiot.telemetry (tenant_id, point, value_type, value_float, value_string) VALUES ('b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38', 'p', 'float', 1, 'x')
+--> HTTP 500 (136 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"134836772","memory_usage":"0"}
+Code: 469. DB::Exception: Constraint `value_matches_type` for table trustiot.telemetry (eae0f3ea-5a0d-4b73-b4be-70829bab03e6) is violated at row 1. Expression: (((value_type = 'float') OR (value_float = 0)) AND ((value_type = 'int') OR (value_int = 0)) AND ((value_type = 'bool') OR (value_bool = false)) AND ((value_type = 'string') OR (value_string = ''))). Column values: value_type = 1, value_float = 1., value_int = 0, value_bool = 0, value_string = 'x': While executing WaitForAsyncInsert. (VIOLATED_CONSTRAINT) (version 26.8.22.13 (official build))
+
+# summary: 75 probes, 1 responses containing B's tenant id or secret

@@ -1,0 +1,30 @@
+   Compiling contract v0.1.0 (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-ab59470f8c6b887af/crates/contract)
+   Compiling openapi v0.1.0 (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-ab59470f8c6b887af/tools/openapi)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.93s
+     Running tests/openapi.rs (target/debug/deps/openapi-00b589df48641ff9)
+
+running 5 tests
+test every_service_directory_is_registered ... ok
+test spec_contains_the_m1_error_schemas ... ok
+test committed_spec_is_what_the_code_generates ... FAILED
+test a_stale_spec_is_rejected ... ok
+test a_service_spec_merges_with_the_shared_error_schema ... ok
+
+failures:
+
+---- committed_spec_is_what_the_code_generates stdout ----
+
+thread 'committed_spec_is_what_the_code_generates' (3731844) panicked at tools/openapi/tests/openapi.rs:28:9:
+api/openapi.json is out of date with the code; run `cargo run -p openapi` and commit the result.
+first difference at line 25:
+  committed:           }
+  generated:           },
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    committed_spec_is_what_the_code_generates
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p openapi --test openapi`

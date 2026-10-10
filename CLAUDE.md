@@ -10,7 +10,7 @@ Architecture decisions, rebuild scope (items A1–M8), service split, repository
 
 ## Build, lint, and test
 
-`.prototools` pins Rust, Bun, cargo-deny, gitleaks, Helm, and kubeconform; tools without a built-in proto plugin get a schema plugin in `.proto/plugins/` that verifies the release checksum. proto installs Rust through rustup and does not shim cargo, so rustup picks the toolchain from `rust-toolchain.toml`: change `rust` in `.prototools` and `channel` in `rust-toolchain.toml` together (`cargo test -p repo-check` fails when they differ). Run every command from the repository root.
+`.prototools` pins Rust, Bun, actionlint, cargo-deny, gitleaks, Helm, k3d, kubeconform, and kubectl; tools without a built-in proto plugin get a schema plugin in `.proto/plugins/` that verifies the release checksum. proto installs Rust through rustup and does not shim cargo, so rustup picks the toolchain from `rust-toolchain.toml`: change `rust` in `.prototools` and `channel` in `rust-toolchain.toml` together (`cargo test -p repo-check` fails when they differ). Run every command from the repository root.
 
 - Install the pinned tools: `proto install`
 - Build: `cargo build --workspace`
@@ -20,12 +20,16 @@ Architecture decisions, rebuild scope (items A1–M8), service split, repository
 - Single test: `cargo test -p <crate> <test-name-filter>`, for example `cargo test -p repo-check toolchain_pins_agree`
 - Local dev environment (podman, no Kubernetes; details in `scripts/README.md`): `bun scripts/dev.ts up` | `seed` | `status` | `env` | `down` | `purge`. Script tests: `bun test scripts` (add `TRUSTIOT_DEV_E2E=1` and the file `scripts/tests/e2e.test.ts` to run the podman end-to-end test).
 - Helm chart (`deploy/chart`): `bun test deploy/chart` runs `helm lint`, kubeconform on both values files, the chart's own rules, and the README field check; a single check is `bun test deploy/chart -t "<test-name-filter>"`. The individual `helm lint`/`helm template` commands are in `deploy/chart/README.md`.
+- Nightly workflow (`.github/workflows/nightly.yml`, `scripts/nightly/`): CI deploys the chart with both values files to a k3d cluster and smoke-tests it; it runs only in CI, because workstations do not run Kubernetes. Its unit tests need no cluster: `bun test scripts/nightly`. Renovate (`renovate.json5`) updates dependencies; a tool pinned in `.prototools` with a schema plugin needs a `# renovate:` comment above its pin (`bun test scripts/nightly` checks it). Details: `docs/architecture/ci-release.md`.
+- Ingress e2e (needs a cluster with Istio ambient; never run Kubernetes locally): `E2E_NAMESPACE=<ns> E2E_IDENTITY_IMAGE=<image> bun test --timeout 600000 ./deploy/chart/tests/e2e/ingress.e2e.ts`; prerequisites and the other variables are in `deploy/chart/tests/e2e/README.md`.
 - Container-backed tests: `crates/service-kit` starts throwaway Postgres and PID 1 containers with podman or docker (or uses `TEST_DATABASE_URL` for Postgres). Without them those tests skip locally; with `CI` set they fail instead.
 - `crates/service-kit` without its default `contract` feature, which the `--workspace` commands never build: `cargo clippy -p service-kit --no-default-features --all-targets -- -D warnings` and `cargo test -p service-kit --no-default-features`
+- API spec (`api/openapi.json`, generated from the code, never edited by hand): regenerate with `cargo run -p openapi` after changing any API type and commit the result; `cargo run -p openapi -- --check` only verifies it. `cargo test --workspace` and CI fail when the committed file differs from what the code generates. Each service exposes `pub fn openapi()` and registers it in `tools/openapi` (`tools/openapi/README.md`).
 - Dependency licenses, advisories, and sources (rules in `deny.toml`): `cargo deny --locked check`
 - Secret scan, as CI runs it: `gitleaks git --redact --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" .`
 - Workflow policy (job `permissions`, SHA-pinned actions): `bun scripts/ci/check-workflows.ts`
-- Secret handling (every Dockerfile/Containerfile, build args, secrets in `run`, SOPS-encrypted Secret manifests; rules in `docs/architecture/secrets.md`): `bun scripts/ci/check-secret-handling.ts`
+- Secret handling (every Dockerfile/Containerfile, container build commands, build args, where workflows read secrets, SOPS-encrypted Secret manifests; rules in `docs/architecture/secrets.md`): `bun scripts/ci/check-secret-handling.ts`
+- Workflow syntax and expression check with the pinned actionlint, which rejects what GitHub cannot parse (for example `runner.temp` in job-level `env`): `bun scripts/ci/lint-workflows.ts` (run `proto install actionlint` first; the shellcheck integration is deliberately off, see `docs/architecture/ci-release.md`)
 - Bun scripts in `scripts/` (the dev environment and the CI checks): `bun install --cwd scripts --frozen-lockfile` installs the type checker, then `bun run --cwd scripts typecheck` checks every `.ts` file there; `bun run --cwd scripts test` runs the same test files as `bun test scripts`, and a single test is `bun run --cwd scripts test -t "<test-name-filter>"`
 - Gateway crates (`crates/protocol` and every member under `edge/`) must build for aarch64: `rustup target add aarch64-unknown-linux-gnu` once, then `cargo build --locked --target aarch64-unknown-linux-gnu -p <crate>`
 

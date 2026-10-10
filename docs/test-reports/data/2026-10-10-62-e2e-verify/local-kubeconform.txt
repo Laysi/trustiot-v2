@@ -1,0 +1,16 @@
+== saas k8s 1.30.0 (services off)
+Summary: 6 resources found parsing stdin - Valid: 6, Invalid: 0, Errors: 0, Skipped: 0
+== saas k8s 1.30.0 -f deploy/chart/tests/e2e/values-e2e.yaml
+Summary: 20 resources found parsing stdin - Valid: 20, Invalid: 0, Errors: 0, Skipped: 0
+== saas k8s 1.36.0 (services off)
+Summary: 6 resources found parsing stdin - Valid: 6, Invalid: 0, Errors: 0, Skipped: 0
+== saas k8s 1.36.0 -f deploy/chart/tests/e2e/values-e2e.yaml
+Summary: 20 resources found parsing stdin - Valid: 20, Invalid: 0, Errors: 0, Skipped: 0
+== onprem k8s 1.30.0 (services off)
+Summary: 6 resources found parsing stdin - Valid: 6, Invalid: 0, Errors: 0, Skipped: 0
+== onprem k8s 1.30.0 -f deploy/chart/tests/e2e/values-e2e.yaml
+Summary: 20 resources found parsing stdin - Valid: 20, Invalid: 0, Errors: 0, Skipped: 0
+== onprem k8s 1.36.0 (services off)
+Summary: 6 resources found parsing stdin - Valid: 6, Invalid: 0, Errors: 0, Skipped: 0
+== onprem k8s 1.36.0 -f deploy/chart/tests/e2e/values-e2e.yaml
+Summary: 20 resources found parsing stdin - Valid: 20, Invalid: 0, Errors: 0, Skipped: 0

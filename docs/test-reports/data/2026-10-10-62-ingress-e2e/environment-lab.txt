@@ -1,0 +1,66 @@
+# 2026-10-10T13:19:00Z
+$ uname -srm
+Linux 7.1.13-402.asahi.fc44.aarch64+16k aarch64
+$ grep PRETTY_NAME /etc/os-release
+PRETTY_NAME="Fedora Linux Asahi Remix 44 (Server Edition)"
+$ k3s --version
+k3s version v1.36.5+k3s1 (3dd98cc5)
+$ kubectl get helmchart -n kube-system (Istio charts)
+NAME         CHART     VERSION
+istio-base   base      1.30.5
+istio-cni    cni       1.30.5
+istiod       istiod    1.30.5
+ztunnel      ztunnel   1.30.5
+$ kubectl get crd gateways.gateway.networking.k8s.io (bundle version and channel)
+v1.6.1 standard
+$ kubectl get namespace e2e-62 --show-labels
+NAME     STATUS   AGE   LABELS
+e2e-62   Active   35m   kubernetes.io/metadata.name=e2e-62,pod-security.kubernetes.io/audit=restricted,pod-security.kubernetes.io/enforce-version=latest,pod-security.kubernetes.io/enforce=restricted,pod-security.kubernetes.io/warn=restricted
+$ kubectl -n kube-system get helmchartconfig
+NAME     AGE
+istiod   34m
+$ kubectl -n istio-system get cm istio -o jsonpath={.data.mesh} | extensionProviders
+extensionProviders:
+- envoyExtAuthzHttp:
+    failOpen: false
+    headersToUpstreamOnAllow:
+    - x-internal-identity
+    includeRequestHeadersInCheck:
+    - cookie
+    pathPrefix: /check
+    port: 8080
+    service: identity.poc.svc.cluster.local
+    timeout: 0.5s
+  name: identity
+- envoyExtAuthzHttp:
+    failOpen: false
+    headersToUpstreamOnAllow:
+    - x-internal-identity
+    includeRequestHeadersInCheck:
+    - cookie
+    pathPrefix: /internal/ext-authz
+    port: 8080
+    service: trustiot-identity.e2e-62.svc.cluster.local
+    statusOnError: "503"
+    timeout: 0.5s
+  name: trustiot-e2e-62
+rootNamespace: istio-system
+$ crictl inspecti localhost/trustiot-e2e/identity-double:62 (digest, architecture)
+{"repoDigests":["localhost/trustiot-e2e/identity-double@sha256:fa51242d85ecfb71f9c27b1ff8a7102343e0a21ed0fcd31c9e0bab591858b992"],"arch":"arm64"}
+$ sha256sum ~/e2e-62/identity-double/*
+c7bc7cf545bbe26dc01d138e5d8168b34f64abd7d330d42c58255de7f4ec68c4  server.ts
+275d650243ab3000ff25915e115207ac4e893a8e2b5a23df004cb66f54267156  Containerfile
+$ free -m
+               total        used        free      shared  buff/cache   available
+Mem:            7543        4013         598         159        4106        3529
+Swap:           8191         607        7584
+$ sha256sum deploy/chart/tests/e2e/identity-double/* (local checkout)
+c7bc7cf545bbe26dc01d138e5d8168b34f64abd7d330d42c58255de7f4ec68c4  server.ts
+275d650243ab3000ff25915e115207ac4e893a8e2b5a23df004cb66f54267156  Containerfile
+$ git rev-parse HEAD
+1563a5b9d47440b2eb10829b1b34d298dae5218c
+$ local tools
+{"type":"message","message":"Detected an AI agent environment, printing as NDJSON. Trace logs are written to stderr, while user-facing logs are written to stdout."}
+1.4.2
+v4.3.0+gbec5b06
+Client Version: v1.36.5

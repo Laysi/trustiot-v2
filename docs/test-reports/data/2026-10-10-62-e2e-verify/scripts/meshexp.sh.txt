@@ -1,0 +1,23 @@
+#!/bin/bash
+# Experiment: does meshConfig.pathNormalization close the "//internal" gap? (cluster-wide, reverted after)
+S=/tmp/claude-1000/-home-ruisi-projects-trustiot-v2/5d2bbbe4-4241-4ab5-b2fe-2e33d3a23171/scratchpad/e2e-62
+W=/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a66c946f0acf60298
+D=$W/docs/test-reports/data/2026-10-10-62-e2e-verify
+export PATH=/home/ruisi/.proto/tools/bun/1.4.2:$PATH
+export PROBE_PORT=17080 PROBE_SHAPE=saas
+LOG=$D/mesh-pathnormalization-experiment.txt
+: > $LOG
+for MODE in MERGE_SLASHES DECODE_AND_MERGE_SLASHES; do
+  echo "=== pathNormalization $MODE" | tee -a $LOG
+  ssh trustiot-mac-m1 "sed 's|^    meshConfig:|    meshConfig:\n      pathNormalization:\n        normalization: $MODE|' ~/e2e-62v/hcc.yaml > ~/e2e-62v/hcc-$MODE.yaml && sudo k3s kubectl apply -f ~/e2e-62v/hcc-$MODE.yaml" | tee -a $LOG
+  sleep 50
+  ssh trustiot-mac-m1 "sudo k3s kubectl -n istio-system get cm istio -o jsonpath='{.data.mesh}' | grep -A2 pathNormalization" | tee -a $LOG
+  sleep 15
+  cd $W
+  PROBE_OUT=$D/mesh-$MODE-slashes.json bun $S/probe.ts slashes > $D/mesh-$MODE-slashes.log 2>&1
+  cut -c1-200 $D/mesh-$MODE-slashes.log | tee -a $LOG
+  PROBE_OUT=$D/mesh-$MODE-bypass.json bun $S/probe.ts bypass > $D/mesh-$MODE-bypass.log 2>&1
+  tail -1 $D/mesh-$MODE-bypass.log | tee -a $LOG
+done
+echo "=== restore" | tee -a $LOG
+ssh trustiot-mac-m1 "sudo k3s kubectl apply -f ~/e2e-62v/hcc.yaml" | tee -a $LOG

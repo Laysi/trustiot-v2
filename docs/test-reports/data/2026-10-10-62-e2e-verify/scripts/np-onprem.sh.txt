@@ -1,0 +1,56 @@
+#!/bin/bash
+# NetworkPolicy check (saas shape): who can reach the ingress gateway pods and ClusterIP.
+S=/tmp/claude-1000/-home-ruisi-projects-trustiot-v2/5d2bbbe4-4241-4ab5-b2fe-2e33d3a23171/scratchpad/e2e-62
+W=/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a66c946f0acf60298
+D=$W/docs/test-reports/data/2026-10-10-62-e2e-verify
+export KUBECONFIG=$S/kube/config
+export PATH=/home/ruisi/.proto/tools/kubectl/1.36.5:$PATH
+LOG=$D/networkpolicy-onprem.txt
+IMG=localhost/trustiot-e2e/identity-double:62v
+K() { kubectl "$@"; }
+LK() { ssh trustiot-mac-m1 "sudo k3s kubectl $*"; }
+: > $LOG
+CIP=$(K get svc trustiot-ingress-istio -o jsonpath='{.spec.clusterIP}')
+PODS=$(K get pods -l gateway.networking.k8s.io/gateway-name=trustiot-ingress -o jsonpath='{range .items[*]}{.status.podIP}{" "}{end}')
+IDIP=$(K get pods -l app.kubernetes.io/component=identity -o jsonpath='{.items[0].status.podIP}')
+TARGETS="$CIP:443 $CIP:15021"
+for ip in $PODS; do TARGETS="$TARGETS $ip:443 $ip:15021 $ip:15090"; done
+echo "targets: $TARGETS" | tee -a $LOG
+echo "identity pod ip: $IDIP" | tee -a $LOG
+SCRIPT='const T=process.env.TARGETS.split(" ");for(const t of T){try{const p=t.endsWith(":443")?"https":"http";const r=await fetch(p+"://"+t+"/api/whoami",{headers:{host:"trustiot.factory.test",cookie:"sid=valid-npprobe"},signal:AbortSignal.timeout(3000),tls:{rejectUnauthorized:false}});console.log(t,"HTTP",r.status)}catch(e){console.log(t,"ERR",e.cause?.code||e.code||e.name||e.message)}}'
+mkpod() { # ns name label
+cat <<EOF
+apiVersion: v1
+kind: Pod
+metadata: {name: $2, namespace: $1, labels: {$3}}
+spec:
+  restartPolicy: Never
+  securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+  containers:
+  - name: c
+    image: $IMG
+    imagePullPolicy: Never
+    command: ["bun","-e"]
+    args: ['$SCRIPT']
+    env: [{name: TARGETS, value: "$TARGETS $IDIP:8080"}]
+    securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+EOF
+}
+echo "== from the lab host (source 10.42.0.1)" | tee -a $LOG
+for t in $TARGETS; do
+  if [ "${t##*:}" = 443 ]; then code=$(ssh trustiot-mac-m1 "curl -sk -o /dev/null -m 3 -w '%{http_code}' --resolve trustiot.factory.test:443:${t%:*} -H 'Cookie: sid=valid-npprobe' https://trustiot.factory.test/api/whoami"); else code=$(ssh trustiot-mac-m1 "curl -s -o /dev/null -m 3 -w '%{http_code}' -H 'Host: trustiot.factory.test' http://$t/api/whoami"); fi
+  echo "host -> $t HTTP $code" | tee -a $LOG
+done
+LK create namespace e2e-62-verify-other >/dev/null 2>&1
+mkpod e2e-62-verify np-plain "app: np-plain" | K apply -f - >/dev/null
+mkpod e2e-62-verify np-ambient "app: np-ambient, istio.io/dataplane-mode: ambient" | K apply -f - >/dev/null
+mkpod e2e-62-verify-other np-other "app: np-other" | ssh trustiot-mac-m1 "sudo k3s kubectl apply -f -" >/dev/null
+sleep 25
+for p in "e2e-62-verify np-plain" "e2e-62-verify np-ambient" "e2e-62-verify-other np-other"; do
+  set -- $p
+  echo "== from pod $2 in namespace $1 ($(LK -n $1 get pod $2 -o jsonpath='{.status.podIP}'))" | tee -a $LOG
+  LK -n $1 logs $2 2>&1 | tee -a $LOG
+done
+K delete pod np-plain np-ambient --wait=true >/dev/null
+LK delete namespace e2e-62-verify-other --wait=true >/dev/null
+echo done | tee -a $LOG

@@ -1,0 +1,44 @@
+=== internal
+OK   [internal] plain /internal / no cookie -> 401 200ms blocked
+OK   [internal] plain /internal / valid cookie -> 403 221ms blocked
+OK   [internal] /internal/tenants / no cookie -> 401 197ms blocked
+OK   [internal] /internal/tenants / valid cookie -> 403 224ms blocked
+OK   [internal] pct2F / no cookie -> 401 200ms blocked
+OK   [internal] pct2F / valid cookie -> 403 197ms blocked
+OK   [internal] pct2F upper / no cookie -> 401 200ms blocked
+OK   [internal] pct2F upper / valid cookie -> 403 201ms blocked
+OK   [internal] encoded i / no cookie -> 401 217ms blocked
+OK   [internal] encoded i / valid cookie -> 403 203ms blocked
+OK   [internal] encoded i upper / no cookie -> 401 200ms blocked
+OK   [internal] encoded i upper / valid cookie -> 403 217ms blocked
+OK   [internal] double slash / no cookie -> 401 198ms blocked
+OK   [internal] double slash / valid cookie -> 307 233ms blocked
+OK   [internal] dot segment / no cookie -> 401 206ms blocked
+OK   [internal] dot segment / valid cookie -> 403 198ms blocked
+OK   [internal] dot-dot / no cookie -> 401 198ms blocked
+OK   [internal] dot-dot / valid cookie -> 403 206ms blocked
+OK   [internal] encoded dot-dot / no cookie -> 401 200ms blocked
+OK   [internal] encoded dot-dot / valid cookie -> 403 198ms blocked
+OK   [internal] healthz dot-dot / no cookie -> 401 205ms blocked
+OK   [internal] healthz dot-dot / valid cookie -> 403 197ms blocked
+OK   [internal] semicolon / no cookie -> 401 199ms blocked
+OK   [internal] semicolon / valid cookie -> 403 202ms blocked
+OK   [internal] trailing dot / no cookie -> 401 198ms blocked
+OK   [internal] trailing dot / valid cookie -> 403 201ms blocked
+OK   [internal] internal trailing slash / no cookie -> 401 203ms blocked
+OK   [internal] internal trailing slash / valid cookie -> 403 201ms blocked
+OK   [internal] internalx prefix (DENY /internal* covers) / no cookie -> 401 201ms blocked
+OK   [internal] internalx prefix (DENY /internal* covers) / valid cookie -> 403 216ms blocked
+OK   [internal] backslash / no cookie -> 401 201ms blocked
+OK   [internal] backslash / valid cookie -> 403 202ms blocked
+OK   [internal] NUL / no cookie -> 400 196ms blocked
+OK   [internal] NUL / valid cookie -> 400 213ms blocked
+OK   [internal] overlong dot-dot (gateway does not decode it; opaque segment, informational) / no cookie -> 401 197ms blocked
+OK   [internal] overlong dot-dot (gateway does not decode it; opaque segment, informational) / valid cookie -> 200 225ms reached backend (informational)
+OK   [internal] ext-authz path / no cookie -> 401 200ms blocked
+OK   [internal] ext-authz path / valid cookie -> 403 198ms blocked
+OK   [internal] case: /INTERNAL (case-sensitive prefix, informational) / no cookie -> 401 196ms blocked
+OK   [internal] case: /INTERNAL (case-sensitive prefix, informational) / valid cookie -> 200 218ms reached backend (informational)
+OK   [internal] case: /Internal (informational) / no cookie -> 401 197ms blocked
+OK   [internal] case: /Internal (informational) / valid cookie -> 200 201ms reached backend (informational)
+done: 42 rows, 0 failing

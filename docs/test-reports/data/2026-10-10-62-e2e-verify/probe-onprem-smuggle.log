@@ -1,0 +1,204 @@
+=== smuggle
+OK   [smuggle-public] /healthz (identity) / lower-case / no cookie -> 200 369ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / lower-case / cookie -> 200 328ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / canonical case / no cookie -> 200 319ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / canonical case / cookie -> 200 329ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / upper case / no cookie -> 200 347ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / upper case / cookie -> 200 322ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / mixed case / no cookie -> 200 325ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / mixed case / cookie -> 200 331ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / duplicated same case / no cookie -> 200 435ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / duplicated same case / cookie -> 200 351ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / duplicated mixed case / no cookie -> 200 305ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / duplicated mixed case / cookie -> 200 436ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / comma-joined / no cookie -> 200 367ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / comma-joined / cookie -> 200 311ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / empty value / no cookie -> 200 326ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / empty value / cookie -> 200 306ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / leading whitespace value / no cookie -> 200 321ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / leading whitespace value / cookie -> 200 313ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / tab before value / no cookie -> 200 331ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / tab before value / cookie -> 200 351ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / obs-fold continuation / no cookie -> 200 339ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / obs-fold continuation / cookie -> 200 301ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / space before colon / no cookie -> 400 299ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / space before colon / cookie -> 400 302ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / connection-nominated (hop-by-hop) / no cookie -> 200 299ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / connection-nominated (hop-by-hop) / cookie -> 200 305ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / underscore variant / no cookie -> 200 307ms backend saw 0 identity header(s); INFO: x_internal_identity passed through as a distinct header
+OK   [smuggle-public] /healthz (identity) / underscore variant / cookie -> 200 302ms backend saw 0 identity header(s); INFO: x_internal_identity passed through as a distinct header
+OK   [smuggle-public] /healthz (identity) / trailing-space name variant / no cookie -> 400 304ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / trailing-space name variant / cookie -> 400 310ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / long value 60 KiB / no cookie -> 200 323ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / long value 60 KiB / cookie -> 200 307ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / 100 headers + forged / no cookie -> 431 386ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / 100 headers + forged / cookie -> 431 312ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / with x-envoy-* spoof / no cookie -> 200 301ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / with x-envoy-* spoof / cookie -> 200 310ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / x-original-uri / x-forwarded-uri spoof / no cookie -> 200 297ms backend saw 0 identity header(s)
+OK   [smuggle-public] /healthz (identity) / x-original-uri / x-forwarded-uri spoof / cookie -> 200 308ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / lower-case / no cookie -> 200 302ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / lower-case / cookie -> 200 305ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / canonical case / no cookie -> 200 303ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / canonical case / cookie -> 200 304ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / upper case / no cookie -> 200 333ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / upper case / cookie -> 200 334ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / mixed case / no cookie -> 200 311ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / mixed case / cookie -> 200 304ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / duplicated same case / no cookie -> 200 309ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / duplicated same case / cookie -> 200 303ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / duplicated mixed case / no cookie -> 200 314ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / duplicated mixed case / cookie -> 200 316ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / comma-joined / no cookie -> 200 307ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / comma-joined / cookie -> 200 308ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / empty value / no cookie -> 200 339ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / empty value / cookie -> 200 341ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / leading whitespace value / no cookie -> 200 349ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / leading whitespace value / cookie -> 200 308ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / tab before value / no cookie -> 200 344ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / tab before value / cookie -> 200 323ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / obs-fold continuation / no cookie -> 200 310ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / obs-fold continuation / cookie -> 200 305ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / space before colon / no cookie -> 400 307ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / space before colon / cookie -> 400 345ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / connection-nominated (hop-by-hop) / no cookie -> 200 357ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / connection-nominated (hop-by-hop) / cookie -> 200 308ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / underscore variant / no cookie -> 200 310ms backend saw 0 identity header(s); INFO: x_internal_identity passed through as a distinct header
+OK   [smuggle-public] /auth/login (identity) / underscore variant / cookie -> 200 313ms backend saw 0 identity header(s); INFO: x_internal_identity passed through as a distinct header
+OK   [smuggle-public] /auth/login (identity) / trailing-space name variant / no cookie -> 400 452ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / trailing-space name variant / cookie -> 400 463ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / long value 60 KiB / no cookie -> 200 452ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / long value 60 KiB / cookie -> 200 336ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / 100 headers + forged / no cookie -> 431 333ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / 100 headers + forged / cookie -> 431 315ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / with x-envoy-* spoof / no cookie -> 200 397ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / with x-envoy-* spoof / cookie -> 200 315ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / x-original-uri / x-forwarded-uri spoof / no cookie -> 200 304ms backend saw 0 identity header(s)
+OK   [smuggle-public] /auth/login (identity) / x-original-uri / x-forwarded-uri spoof / cookie -> 200 306ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / lower-case / no cookie -> 200 336ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / lower-case / cookie -> 200 335ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / canonical case / no cookie -> 200 341ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / canonical case / cookie -> 200 341ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / upper case / no cookie -> 200 304ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / upper case / cookie -> 200 307ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / mixed case / no cookie -> 200 303ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / mixed case / cookie -> 200 303ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / duplicated same case / no cookie -> 200 299ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / duplicated same case / cookie -> 200 307ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / duplicated mixed case / no cookie -> 200 304ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / duplicated mixed case / cookie -> 200 304ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / comma-joined / no cookie -> 200 309ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / comma-joined / cookie -> 200 303ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / empty value / no cookie -> 200 332ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / empty value / cookie -> 200 328ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / leading whitespace value / no cookie -> 200 306ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / leading whitespace value / cookie -> 200 308ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / tab before value / no cookie -> 200 300ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / tab before value / cookie -> 200 302ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / obs-fold continuation / no cookie -> 200 300ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / obs-fold continuation / cookie -> 200 302ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / space before colon / no cookie -> 400 302ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / space before colon / cookie -> 400 304ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / connection-nominated (hop-by-hop) / no cookie -> 200 303ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / connection-nominated (hop-by-hop) / cookie -> 200 301ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / underscore variant / no cookie -> 200 300ms backend saw 0 identity header(s); INFO: x_internal_identity passed through as a distinct header
+OK   [smuggle-public] /certs/renew (certs) / underscore variant / cookie -> 200 301ms backend saw 0 identity header(s); INFO: x_internal_identity passed through as a distinct header
+OK   [smuggle-public] /certs/renew (certs) / trailing-space name variant / no cookie -> 400 299ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / trailing-space name variant / cookie -> 400 304ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / long value 60 KiB / no cookie -> 200 323ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / long value 60 KiB / cookie -> 200 311ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / 100 headers + forged / no cookie -> 431 300ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / 100 headers + forged / cookie -> 431 302ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / with x-envoy-* spoof / no cookie -> 200 303ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / with x-envoy-* spoof / cookie -> 200 332ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / x-original-uri / x-forwarded-uri spoof / no cookie -> 200 343ms backend saw 0 identity header(s)
+OK   [smuggle-public] /certs/renew (certs) / x-original-uri / x-forwarded-uri spoof / cookie -> 200 321ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / lower-case / no cookie -> 200 355ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / lower-case / cookie -> 200 309ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / canonical case / no cookie -> 200 321ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / canonical case / cookie -> 200 387ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / upper case / no cookie -> 200 367ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / upper case / cookie -> 200 344ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / mixed case / no cookie -> 200 314ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / mixed case / cookie -> 200 402ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / duplicated same case / no cookie -> 200 303ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / duplicated same case / cookie -> 200 303ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / duplicated mixed case / no cookie -> 200 310ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / duplicated mixed case / cookie -> 200 304ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / comma-joined / no cookie -> 200 307ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / comma-joined / cookie -> 200 307ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / empty value / no cookie -> 200 308ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / empty value / cookie -> 200 316ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / leading whitespace value / no cookie -> 200 317ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / leading whitespace value / cookie -> 200 316ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / tab before value / no cookie -> 200 310ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / tab before value / cookie -> 200 322ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / obs-fold continuation / no cookie -> 200 311ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / obs-fold continuation / cookie -> 200 311ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / space before colon / no cookie -> 400 332ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / space before colon / cookie -> 400 325ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / connection-nominated (hop-by-hop) / no cookie -> 200 316ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / connection-nominated (hop-by-hop) / cookie -> 200 328ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / underscore variant / no cookie -> 200 368ms backend saw 0 identity header(s); INFO: x_internal_identity passed through as a distinct header
+OK   [smuggle-public] /mqtt (mqtt-bridge) / underscore variant / cookie -> 200 326ms backend saw 0 identity header(s); INFO: x_internal_identity passed through as a distinct header
+OK   [smuggle-public] /mqtt (mqtt-bridge) / trailing-space name variant / no cookie -> 400 300ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / trailing-space name variant / cookie -> 400 311ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / long value 60 KiB / no cookie -> 200 358ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / long value 60 KiB / cookie -> 200 316ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / 100 headers + forged / no cookie -> 431 312ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / 100 headers + forged / cookie -> 431 317ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / with x-envoy-* spoof / no cookie -> 200 312ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / with x-envoy-* spoof / cookie -> 200 319ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / x-original-uri / x-forwarded-uri spoof / no cookie -> 200 310ms backend saw 0 identity header(s)
+OK   [smuggle-public] /mqtt (mqtt-bridge) / x-original-uri / x-forwarded-uri spoof / cookie -> 200 311ms backend saw 0 identity header(s)
+OK   [smuggle-protected] lower-case / valid cookie -> 200 319ms status 200; backend saw 1 (X-Internal-Identity: double.eyJzdWIiOiJ1)
+OK   [smuggle-protected] lower-case / no cookie -> 401 333ms status 401
+OK   [smuggle-protected] canonical case / valid cookie -> 200 340ms status 200; backend saw 1 (X-Internal-Identity: double.eyJzdWIiOiJ1)
+OK   [smuggle-protected] canonical case / no cookie -> 401 324ms status 401
+OK   [smuggle-protected] upper case / valid cookie -> 200 311ms status 200; backend saw 1 (X-Internal-Identity: double.eyJzdWIiOiJ1)
+OK   [smuggle-protected] upper case / no cookie -> 401 343ms status 401
+OK   [smuggle-protected] mixed case / valid cookie -> 200 331ms status 200; backend saw 1 (X-Internal-Identity: double.eyJzdWIiOiJ1)
+OK   [smuggle-protected] mixed case / no cookie -> 401 312ms status 401
+OK   [smuggle-protected] duplicated same case / valid cookie -> 200 319ms status 200; backend saw 1 (X-Internal-Identity: double.eyJzdWIiOiJ1)
+OK   [smuggle-protected] duplicated same case / no cookie -> 401 312ms status 401
+OK   [smuggle-protected] duplicated mixed case / valid cookie -> 200 307ms status 200; backend saw 1 (X-Internal-Identity: double.eyJzdWIiOiJ1)
+OK   [smuggle-protected] duplicated mixed case / no cookie -> 401 309ms status 401
+OK   [smuggle-protected] comma-joined / valid cookie -> 200 316ms status 200; backend saw 1 (X-Internal-Identity: double.eyJzdWIiOiJ1)
+OK   [smuggle-protected] comma-joined / no cookie -> 401 326ms status 401
+OK   [smuggle-protected] empty value / valid cookie -> 200 334ms status 200; backend saw 1 (X-Internal-Identity: double.eyJzdWIiOiJ1)
+OK   [smuggle-protected] empty value / no cookie -> 401 309ms status 401
+OK   [smuggle-protected] leading whitespace value / valid cookie -> 200 356ms status 200; backend saw 1 (X-Internal-Identity: double.eyJzdWIiOiJ1)
+OK   [smuggle-protected] leading whitespace value / no cookie -> 401 310ms status 401
+OK   [smuggle-protected] tab before value / valid cookie -> 200 313ms status 200; backend saw 1 (X-Internal-Identity: double.eyJzdWIiOiJ1)
+OK   [smuggle-protected] tab before value / no cookie -> 401 311ms status 401
+OK   [smuggle-protected] obs-fold continuation / valid cookie -> 200 317ms status 200; backend saw 1 (X-Internal-Identity: double.eyJzdWIiOiJ1)
+OK   [smuggle-protected] obs-fold continuation / no cookie -> 401 304ms status 401
+OK   [smuggle-protected] space before colon / valid cookie -> 400 313ms status 400; backend saw 0 ()
+OK   [smuggle-protected] space before colon / no cookie -> 400 313ms status 400
+OK   [smuggle-protected] connection-nominated (hop-by-hop) / valid cookie -> 200 321ms status 200; backend saw 1 (X-Internal-Identity: double.eyJzdWIiOiJ1)
+OK   [smuggle-protected] connection-nominated (hop-by-hop) / no cookie -> 401 366ms status 401
+OK   [smuggle-protected] underscore variant / valid cookie -> 200 316ms status 200; backend saw 1 (X-Internal-Identity: double.eyJzdWIiOiJ1)
+OK   [smuggle-protected] underscore variant / no cookie -> 401 311ms status 401
+OK   [smuggle-protected] trailing-space name variant / valid cookie -> 400 364ms status 400; backend saw 0 ()
+OK   [smuggle-protected] trailing-space name variant / no cookie -> 400 322ms status 400
+OK   [smuggle-protected] long value 60 KiB / valid cookie -> 200 346ms status 200; backend saw 1 (X-Internal-Identity: double.eyJzdWIiOiJ1)
+OK   [smuggle-protected] long value 60 KiB / no cookie -> 401 347ms status 401
+OK   [smuggle-protected] 100 headers + forged / valid cookie -> 431 353ms status 431; backend saw 0 ()
+OK   [smuggle-protected] 100 headers + forged / no cookie -> 431 359ms status 431
+OK   [smuggle-protected] with x-envoy-* spoof / valid cookie -> 200 313ms status 200; backend saw 1 (X-Internal-Identity: double.eyJzdWIiOiJ1)
+OK   [smuggle-protected] with x-envoy-* spoof / no cookie -> 401 304ms status 401
+OK   [smuggle-protected] x-original-uri / x-forwarded-uri spoof / valid cookie -> 200 319ms status 200; backend saw 1 (X-Internal-Identity: double.eyJzdWIiOiJ1)
+OK   [smuggle-protected] x-original-uri / x-forwarded-uri spoof / no cookie -> 401 317ms status 401
+OK   [xfp] http / protected -> 200 312ms backend x-forwarded-proto: ["https"]
+OK   [xfp] http / public -> 200 337ms backend x-forwarded-proto: ["https"]
+OK   [xfp] HTTP upper / protected -> 200 316ms backend x-forwarded-proto: ["https"]
+OK   [xfp] HTTP upper / public -> 200 317ms backend x-forwarded-proto: ["https"]
+OK   [xfp] duplicate / protected -> 200 313ms backend x-forwarded-proto: ["https"]
+OK   [xfp] duplicate / public -> 200 445ms backend x-forwarded-proto: ["https"]
+OK   [xfp] comma list / protected -> 200 322ms backend x-forwarded-proto: ["https"]
+OK   [xfp] comma list / public -> 200 312ms backend x-forwarded-proto: ["https"]
+OK   [xfp] empty / protected -> 200 313ms backend x-forwarded-proto: ["https"]
+OK   [xfp] empty / public -> 200 315ms backend x-forwarded-proto: ["https"]
+OK   [xfp] Forwarded header / protected -> 200 310ms backend x-forwarded-proto: ["https"]
+OK   [xfp] Forwarded header / public -> 200 332ms backend x-forwarded-proto: ["https"]
+done: 202 rows, 0 failing

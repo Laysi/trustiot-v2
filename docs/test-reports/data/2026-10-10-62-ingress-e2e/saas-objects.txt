@@ -1,0 +1,197 @@
+$ kubectl -n e2e-62 get gateway,httproute,authorizationpolicy,networkpolicy,svc,deploy,pdb,pods -o wide
+NAME                                                 CLASS   ADDRESS                                           PROGRAMMED   AGE
+gateway.gateway.networking.k8s.io/trustiot-ingress   istio   trustiot-ingress-istio.e2e-62.svc.cluster.local   True         81s
+
+NAME                                                           HOSTNAMES                    AGE
+httproute.gateway.networking.k8s.io/trustiot-ingress-app       ["app.saas.trustiot.test"]   81s
+httproute.gateway.networking.k8s.io/trustiot-ingress-gateway   ["gw.saas.trustiot.test"]    81s
+
+NAME                                                                   ACTION   AGE
+authorizationpolicy.security.istio.io/trustiot-ingress-cookie-check    CUSTOM   81s
+authorizationpolicy.security.istio.io/trustiot-ingress-deny-internal   DENY     81s
+
+NAME                                               POD-SELECTOR                                              AGE
+networkpolicy.networking.k8s.io/trustiot-ingress   gateway.networking.k8s.io/gateway-name=trustiot-ingress   81s
+
+NAME                             TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)            AGE   SELECTOR
+service/trustiot-assets          ClusterIP   10.43.236.97    <none>        8080/TCP           81s   app.kubernetes.io/component=assets,app.kubernetes.io/instance=trustiot,app.kubernetes.io/name=trustiot
+service/trustiot-certs           ClusterIP   10.43.220.139   <none>        8080/TCP           81s   app.kubernetes.io/component=certs,app.kubernetes.io/instance=trustiot,app.kubernetes.io/name=trustiot
+service/trustiot-identity        ClusterIP   10.43.1.52      <none>        8080/TCP           81s   app.kubernetes.io/component=identity,app.kubernetes.io/instance=trustiot,app.kubernetes.io/name=trustiot
+service/trustiot-ingress-istio   ClusterIP   10.43.158.10    <none>        15021/TCP,80/TCP   81s   gateway.networking.k8s.io/gateway-name=trustiot-ingress
+service/trustiot-mqtt-bridge     ClusterIP   10.43.77.143    <none>        8080/TCP           81s   app.kubernetes.io/component=mqtt-bridge,app.kubernetes.io/instance=trustiot,app.kubernetes.io/name=trustiot
+
+NAME                                     READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS    IMAGES                                                                                                              SELECTOR
+deployment.apps/trustiot-assets          1/1     1            1           81s   assets        docker.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44            app.kubernetes.io/component=assets,app.kubernetes.io/instance=trustiot,app.kubernetes.io/name=trustiot
+deployment.apps/trustiot-certs           1/1     1            1           81s   certs         docker.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44            app.kubernetes.io/component=certs,app.kubernetes.io/instance=trustiot,app.kubernetes.io/name=trustiot
+deployment.apps/trustiot-identity        1/1     1            1           81s   identity      localhost/trustiot-e2e/identity-double:62@sha256:fa51242d85ecfb71f9c27b1ff8a7102343e0a21ed0fcd31c9e0bab591858b992   app.kubernetes.io/component=identity,app.kubernetes.io/instance=trustiot,app.kubernetes.io/name=trustiot
+deployment.apps/trustiot-ingress-istio   2/2     2            2           81s   istio-proxy   registry.istio.io/release/proxyv2:1.30.5-distroless                                                                 gateway.networking.k8s.io/gateway-name=trustiot-ingress
+deployment.apps/trustiot-mqtt-bridge     1/1     1            1           81s   mqtt-bridge   docker.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44            app.kubernetes.io/component=mqtt-bridge,app.kubernetes.io/instance=trustiot,app.kubernetes.io/name=trustiot
+
+NAME                                                MIN AVAILABLE   MAX UNAVAILABLE   ALLOWED DISRUPTIONS   AGE
+poddisruptionbudget.policy/trustiot-ingress-istio   1               N/A               1                     81s
+
+NAME                                          READY   STATUS    RESTARTS   AGE   IP            NODE              NOMINATED NODE   READINESS GATES
+pod/trustiot-assets-5b7989cd69-7978t          1/1     Running   0          81s   10.42.0.133   trustiot-mac-m1   <none>           <none>
+pod/trustiot-certs-6f465d4445-grl9c           1/1     Running   0          81s   10.42.0.131   trustiot-mac-m1   <none>           <none>
+pod/trustiot-identity-5ccb57bd48-lzt6t        1/1     Running   0          34s   10.42.0.137   trustiot-mac-m1   <none>           <none>
+pod/trustiot-ingress-istio-5b477fdcb7-cftqk   1/1     Running   0          81s   10.42.0.135   trustiot-mac-m1   <none>           <none>
+pod/trustiot-ingress-istio-5b477fdcb7-stssm   1/1     Running   0          81s   10.42.0.136   trustiot-mac-m1   <none>           <none>
+pod/trustiot-mqtt-bridge-665cbb87bc-qnfv2     1/1     Running   0          81s   10.42.0.132   trustiot-mac-m1   <none>           <none>
+
+$ kubectl -n e2e-62 get gateway trustiot-ingress -o jsonpath={.spec.listeners}
+[
+  {
+    "allowedRoutes": {
+      "namespaces": {
+        "from": "Same"
+      }
+    },
+    "name": "http",
+    "port": 80,
+    "protocol": "HTTP"
+  }
+]
+$ kubectl -n e2e-62 get gateway trustiot-ingress -o jsonpath={.status.conditions}
+[
+  {
+    "type": "Accepted",
+    "status": "True",
+    "reason": "Accepted"
+  },
+  {
+    "type": "Programmed",
+    "status": "True",
+    "reason": "Programmed"
+  }
+]
+
+$ kubectl -n e2e-62 get pods -l gateway.networking.k8s.io/gateway-name=trustiot-ingress -o json | jq (labels, security contexts, resources)
+[
+  {
+    "name": "trustiot-ingress-istio-5b477fdcb7-cftqk",
+    "labels": {
+      "app.kubernetes.io/component": "ingress",
+      "app.kubernetes.io/instance": "trustiot",
+      "app.kubernetes.io/name": "trustiot",
+      "app.kubernetes.io/part-of": "trustiot",
+      "gateway.istio.io/managed": "istio.io-gateway-controller",
+      "gateway.networking.k8s.io/gateway-class-name": "istio",
+      "gateway.networking.k8s.io/gateway-name": "trustiot-ingress",
+      "istio.io/dataplane-mode": "none",
+      "pod-template-hash": "5b477fdcb7",
+      "service.istio.io/canonical-name": "trustiot-ingress-istio",
+      "service.istio.io/canonical-revision": "latest",
+      "sidecar.istio.io/inject": "false"
+    },
+    "podSecurityContext": {
+      "seccompProfile": {
+        "type": "RuntimeDefault"
+      },
+      "sysctls": [
+        {
+          "name": "net.ipv4.ip_unprivileged_port_start",
+          "value": "0"
+        }
+      ]
+    },
+    "containers": [
+      {
+        "name": "istio-proxy",
+        "image": "registry.istio.io/release/proxyv2:1.30.5-distroless",
+        "securityContext": {
+          "allowPrivilegeEscalation": false,
+          "capabilities": {
+            "drop": [
+              "ALL"
+            ]
+          },
+          "privileged": false,
+          "readOnlyRootFilesystem": true,
+          "runAsGroup": 1337,
+          "runAsNonRoot": true,
+          "runAsUser": 1337
+        },
+        "resources": {
+          "limits": {
+            "cpu": "2",
+            "memory": "512Mi"
+          },
+          "requests": {
+            "cpu": "50m",
+            "memory": "64Mi"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "trustiot-ingress-istio-5b477fdcb7-stssm",
+    "labels": {
+      "app.kubernetes.io/component": "ingress",
+      "app.kubernetes.io/instance": "trustiot",
+      "app.kubernetes.io/name": "trustiot",
+      "app.kubernetes.io/part-of": "trustiot",
+      "gateway.istio.io/managed": "istio.io-gateway-controller",
+      "gateway.networking.k8s.io/gateway-class-name": "istio",
+      "gateway.networking.k8s.io/gateway-name": "trustiot-ingress",
+      "istio.io/dataplane-mode": "none",
+      "pod-template-hash": "5b477fdcb7",
+      "service.istio.io/canonical-name": "trustiot-ingress-istio",
+      "service.istio.io/canonical-revision": "latest",
+      "sidecar.istio.io/inject": "false"
+    },
+    "podSecurityContext": {
+      "seccompProfile": {
+        "type": "RuntimeDefault"
+      },
+      "sysctls": [
+        {
+          "name": "net.ipv4.ip_unprivileged_port_start",
+          "value": "0"
+        }
+      ]
+    },
+    "containers": [
+      {
+        "name": "istio-proxy",
+        "image": "registry.istio.io/release/proxyv2:1.30.5-distroless",
+        "securityContext": {
+          "allowPrivilegeEscalation": false,
+          "capabilities": {
+            "drop": [
+              "ALL"
+            ]
+          },
+          "privileged": false,
+          "readOnlyRootFilesystem": true,
+          "runAsGroup": 1337,
+          "runAsNonRoot": true,
+          "runAsUser": 1337
+        },
+        "resources": {
+          "limits": {
+            "cpu": "2",
+            "memory": "512Mi"
+          },
+          "requests": {
+            "cpu": "50m",
+            "memory": "64Mi"
+          }
+        }
+      }
+    ]
+  }
+]
+
+$ kubectl -n e2e-62 get pods -l app.kubernetes.io/component=assets -o jsonpath={.items[*].metadata.labels}
+{
+  "app.kubernetes.io/component": "assets",
+  "app.kubernetes.io/instance": "trustiot",
+  "app.kubernetes.io/managed-by": "Helm",
+  "app.kubernetes.io/name": "trustiot",
+  "app.kubernetes.io/part-of": "trustiot",
+  "app.kubernetes.io/version": "0.1.0",
+  "helm.sh/chart": "trustiot-0.1.0",
+  "istio.io/dataplane-mode": "ambient",
+  "pod-template-hash": "5b7989cd69"
+}

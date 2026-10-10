@@ -1,0 +1,26 @@
+# 2026-10-10, local x86_64 machine, commit 296e0cf (branch feat/50-protocol-crate)
+# rustup target list --installed (toolchain 1.99.0 from rust-toolchain.toml) includes
+# aarch64-unknown-linux-gnu, added once with `rustup target add aarch64-unknown-linux-gnu`.
+
+$ cargo clean -p protocol --target aarch64-unknown-linux-gnu
+     Removed 435 files, 77.4MiB total
+
+$ CARGO_BUILD_JOBS=2 cargo build --locked --target aarch64-unknown-linux-gnu -p protocol
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling zerocopy v0.8.62
+   Compiling cfg-if v1.0.5
+   Compiling syn v2.0.119
+   Compiling syn v3.0.7
+   Compiling serde_derive v1.0.229
+   Compiling zerocopy-derive v0.8.62
+   Compiling serde v1.0.229
+   Compiling half v2.7.1
+   Compiling cbor4ii v1.2.3
+   Compiling protocol v0.1.0 (crates/protocol)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 55.77s
+exit=0
+
+# One object file extracted from the rlib with `ar x`:
+$ file protocol-341d6a7abc2a9c24.01ollxjjy3h3f6ijns8i0rt9e.0psmp1a.rcgu.o
+protocol-341d6a7abc2a9c24.01ollxjjy3h3f6ijns8i0rt9e.0psmp1a.rcgu.o: ELF 64-bit LSB relocatable, ARM aarch64, version 1 (SYSV), with debug_info, not stripped

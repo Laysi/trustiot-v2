@@ -1,0 +1,28 @@
+## tenant_a | do subquery settings take effect? max_threads
+SELECT * FROM (SELECT getSetting('max_threads') AS v SETTINGS max_threads = 64)
+## tenant_a | outer getSetting
+SELECT getSetting('max_threads')
+## tenant_a | subquery getSetting SQL_tenant_id after SETTINGS B
+SELECT * FROM (SELECT getSetting('SQL_tenant_id') AS v SETTINGS SQL_tenant_id = '{B}')
+## tenant_a | subquery getSetting readonly after SETTINGS 0
+SELECT * FROM (SELECT getSetting('readonly') AS v SETTINGS readonly = 0)
+## tenant_a | subquery reading telemetry, return getSetting too
+SELECT (SELECT getSetting('SQL_tenant_id')), count() FROM (SELECT * FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{B}')
+## tenant_a | subquery: raise max_rows_to_read / execution_time CONST
+SELECT count() FROM (SELECT number FROM numbers(2000000000) SETTINGS max_rows_to_read = 0, max_execution_time = 0, max_result_rows = 0, max_memory_usage = 0)
+## tenant_a | subquery: max_rows_to_read effective baseline (same query, no settings)
+SELECT count() FROM numbers(2000000000)
+## tenant_a | subquery: readonly=0 then an INSERT-like function
+SELECT count() FROM (SELECT * FROM trustiot.telemetry SETTINGS readonly = 0)
+## tenant_a | profile URL effect | profile=default
+SELECT getSetting('readonly'), getSetting('max_threads'), getSetting('max_execution_time'), currentProfiles()
+## tenant_a | profile URL to tenant profile name | profile=trustiot_tenant_reader
+SELECT getSetting('readonly'), currentProfiles()
+## tenant_a | profile URL nonexistent | profile=doesnotexist
+SELECT 1
+## tenant_a | per-query settings subset allowed? max_threads
+SELECT 1 SETTINGS max_threads = 1
+## tenant_a | per-query settings same value as CONST
+SELECT 1 SETTINGS readonly = 1
+## tenant_a | readonly=1 allowed setting change e.g. format
+SELECT 1 SETTINGS output_format_json_quote_64bit_integers = 0

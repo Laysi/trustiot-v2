@@ -1,0 +1,10 @@
+# Identity service test double for the ingress e2e test (see server.ts). Test-only image:
+# build it from this directory and load it into the test cluster, never publish it.
+#   podman build --platform linux/arm64 -t localhost/trustiot-e2e/identity-double:62 .
+# Bun matches the version pinned in .prototools; the base is pinned by its multi-arch index digest.
+FROM docker.io/oven/bun:1.4.2-distroless@sha256:1a0c31c7c5f9d193aedf60fe1cebdeb76ac8f6e29f24be8dd8cbd6df72df26ec
+COPY server.ts /app/server.ts
+# Numeric non-root user, as the chart's restricted Pod Security settings require.
+USER 65532:65532
+EXPOSE 8080
+ENTRYPOINT ["bun", "run", "/app/server.ts"]

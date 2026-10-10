@@ -1,0 +1,109 @@
++ sudo k3s kubectl delete namespace e2e-62-verify e2e-62-verify-other --ignore-not-found --wait=true
+namespace "e2e-62-verify" deleted
++ sudo k3s kubectl -n kube-system delete helmchartconfig istiod
++ sudo k3s kubectl -n kube-system delete helmchartconfig istiod
+helmchartconfig.helm.cattle.io "istiod" deleted from kube-system namespace
++ sleep 60
+Error from server (NotFound): helmchartconfigs.helm.cattle.io "istiod" not found
++ sleep 60
++ sudo k3s kubectl -n kube-system get helmchartconfig
++ sudo k3s kubectl -n kube-system get helmchartconfig
+No resources found in kube-system namespace.
++ sudo k3s kubectl -n istio-system get cm istio -o yaml
+No resources found in kube-system namespace.
++ sudo k3s kubectl -n istio-system get cm istio -o yaml
++ sudo k3s kubectl -n istio-system get cm istio -o 'jsonpath={.data.mesh}'
++ sudo k3s kubectl -n istio-system get cm istio -o 'jsonpath={.data.mesh}'
++ python3 -
++ python3 -
+mesh data identical: True | meshNetworks identical: True
++ sudo k3s kubectl -n istio-system get cm istio -o 'jsonpath={.data.mesh}'
++ sha256sum
+mesh data identical: True | meshNetworks identical: True
++ sudo k3s kubectl -n istio-system get cm istio -o 'jsonpath={.data.mesh}'
++ sha256sum
+11507d117465e92da63f14204fc2c19837df210957b181730a46a0ce91ae76be  -
++ python3 -c 'import yaml;print(yaml.safe_load(open("/home/trustiot/mesh-before-62-verify.yaml"))["data"]["mesh"],end="")'
++ sha256sum
+11507d117465e92da63f14204fc2c19837df210957b181730a46a0ce91ae76be  -
++ python3 -c 'import yaml;print(yaml.safe_load(open("/home/trustiot/mesh-before-62-verify.yaml"))["data"]["mesh"],end="")'
++ sha256sum
+11507d117465e92da63f14204fc2c19837df210957b181730a46a0ce91ae76be  -
++ sudo k3s kubectl get pods -A
++ grep -E 'poc|istio|e2e'
+11507d117465e92da63f14204fc2c19837df210957b181730a46a0ce91ae76be  -
++ sudo k3s kubectl get pods -A
++ grep -E 'poc|istio|e2e'
+istio-ingress   edge-istio-5878956479-2v7bk               1/1     Running     0             15h
+istio-ingress   edge-istio-5878956479-swx9s               1/1     Running     0             15h
+istio-system    istio-cni-node-j4nkz                      1/1     Running     0             22h
+istio-system    istiod-656fff7c89-hngnl                   1/1     Running     0             22h
+istio-system    ztunnel-hx6wn                             1/1     Running     0             22h
+kube-system     helm-install-istio-base-ggnpf             0/1     Completed   0             22h
+kube-system     helm-install-istio-cni-cdmxf              0/1     Completed   1 (22h ago)   22h
+kube-system     helm-install-istiod-7795s                 0/1     Completed   0             59s
+poc             bridge-5f677f6cbf-7bblw                   1/1     Running     0             15h
+poc             bridge-5f677f6cbf-x2lhw                   1/1     Running     0             15h
+poc             consumer-69876bfb6b-kbw76                 1/1     Running     0             16h
+poc             identity-58ff9fbcb9-v94h8                 1/1     Running     0             16h
+poc             mosquitto-poc-f45958d5b-lhztl             1/1     Running     0             15h
+poc             probe-a-869b95c769-cns84                  1/1     Running     0             16h
+poc             probe-b-6d8bccd5d5-krqlp                  1/1     Running     0             16h
+poc             probe-c-577895cc85-b7fdw                  1/1     Running     0             16h
++ sudo k3s kubectl -n istio-ingress get gateway,pods
+istio-ingress   edge-istio-5878956479-2v7bk               1/1     Running     0             15h
+istio-ingress   edge-istio-5878956479-swx9s               1/1     Running     0             15h
+istio-system    istio-cni-node-j4nkz                      1/1     Running     0             22h
+istio-system    istiod-656fff7c89-hngnl                   1/1     Running     0             22h
+istio-system    ztunnel-hx6wn                             1/1     Running     0             22h
+kube-system     helm-install-istio-base-ggnpf             0/1     Completed   0             22h
+kube-system     helm-install-istio-cni-cdmxf              0/1     Completed   1 (22h ago)   22h
+kube-system     helm-install-istiod-7795s                 0/1     Completed   0             59s
+poc             bridge-5f677f6cbf-7bblw                   1/1     Running     0             15h
+poc             bridge-5f677f6cbf-x2lhw                   1/1     Running     0             15h
+poc             consumer-69876bfb6b-kbw76                 1/1     Running     0             16h
+poc             identity-58ff9fbcb9-v94h8                 1/1     Running     0             16h
+poc             mosquitto-poc-f45958d5b-lhztl             1/1     Running     0             15h
+poc             probe-a-869b95c769-cns84                  1/1     Running     0             16h
+poc             probe-b-6d8bccd5d5-krqlp                  1/1     Running     0             16h
+poc             probe-c-577895cc85-b7fdw                  1/1     Running     0             16h
++ sudo k3s kubectl -n istio-ingress get gateway,pods
+NAME                                     CLASS   ADDRESS                                      PROGRAMMED   AGE
+gateway.gateway.networking.k8s.io/edge   istio   edge-istio.istio-ingress.svc.cluster.local   True         22h
+
+NAME                              READY   STATUS    RESTARTS   AGE
+pod/edge-istio-5878956479-2v7bk   1/1     Running   0          15h
+pod/edge-istio-5878956479-swx9s   1/1     Running   0          15h
+NAME                                     CLASS   ADDRESS                                      PROGRAMMED   AGE
+gateway.gateway.networking.k8s.io/edge   istio   edge-istio.istio-ingress.svc.cluster.local   True         22h
+
+NAME                              READY   STATUS    RESTARTS   AGE
+pod/edge-istio-5878956479-2v7bk   1/1     Running   0          15h
+pod/edge-istio-5878956479-swx9s   1/1     Running   0          15h
+localhost/trustiot-e2e/identity-double:62v
+localhost/trustiot-e2e/identity-double@sha256:acf3aac75fa69d4a3db3a28e33aedcf3a93bfe64ecffd75a8fbc0af1588d1bdb
+Untagged: localhost/trustiot-e2e/identity-double:62v
+Deleted: e4296dba8e06ecd57e8a8094e762d0577734c54642316ac6bec798f219252a6e
+Deleted: ac201879847a597c3db2037102a43da959bc1c93083f5388d90b60558d386d1c
+Deleted: e4617ef2f252d08c00beba2019c48f63c3b42694ff44b47966b6d61dc6c479de
+Deleted: 83ffb125447752b5f26112311d8c101c43ea578b4e8e88e157f488ab95fa292d
+REPOSITORY                     TAG               IMAGE ID      CREATED       SIZE
+localhost/poc-edge             0.2               ef6c4dadf54e  16 hours ago  50 MB
+<none>                         <none>            ad766dd493c7  16 hours ago  870 MB
+localhost/poc-edge             0.1               91ce7962a56b  16 hours ago  50 MB
+<none>                         <none>            a22132c13d7a  16 hours ago  870 MB
+docker.io/oven/bun             <none>            4703df9c2cc9  5 weeks ago   107 MB
+docker.io/library/rust         1.97-slim-trixie  00e8e76dfeb7  2 months ago  859 MB
+gcr.io/distroless/cc-debian13  nonroot           d52dcb5dd7c6  56 years ago  39.7 MB
+NAME              STATUS   AGE
+default           Active   22h
+istio-ingress     Active   22h
+istio-system      Active   22h
+kube-node-lease   Active   22h
+kube-public       Active   22h
+kube-system       Active   22h
+poc               Active   16h
+trustiot          Active   22h
+e2e.lock
+poc-edge
+stack
