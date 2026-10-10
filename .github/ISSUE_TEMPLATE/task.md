@@ -25,7 +25,7 @@ type: Task
 
 ## 現狀 (State)
 
-<!-- 目前進度，含絕對日期。每次移動 Status 都要同步更新。 -->
+<!-- 目前進度，以及在等什麼，含絕對日期；工作有進展就更新。不要抄寫 Status、Priority 等看板欄位，那些以看板為準。 -->
 
 尚未開始。
 
@@ -37,8 +37,10 @@ type: Task
 
 ## 指標 (Pointers)
 
-<!-- 可點擊的錨點：檔案路徑、PR／commit、相關文件、要跑的指令。 -->
+<!-- 可點擊的錨點：父 issue 與前置 issue、檔案路徑、PR／commit、相關文件、要跑的指令。前置 issue 也要在 GitHub 設成 blocked by 關係。 -->
 
+- 父 issue：
+- 前置 issue（blocked by）：
 - 檔案：
 - 文件：
 - 指令：
