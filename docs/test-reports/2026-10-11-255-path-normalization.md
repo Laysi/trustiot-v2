@@ -12,7 +12,7 @@
 
 ## 環境
 
-- **受測 commit**：分支 `fix/255-ingress-path-normalization` 的 `032acf2`（以 main `8931a63` 為基底）。「修正前」用 main `8931a63` 的 `deploy/chart`（`git archive` 取出到 `~/.cache/trustiot-v2-255/before`），只換上本分支的 `ingress.e2e.ts`。
+- **受測 commit**：分支 `fix/255-ingress-path-normalization` 的 `032acf2`（以 main `8931a63` 為基底）。測後分支重定基底到 main `4d129f2`（nightly，#247），commit 編號改變；`4d129f2` 對 `deploy/` 只在 `deploy/chart/tests/e2e/README.md` 加了 nightly 的說明，受測的 chart、`deploy/istio` 與 `ingress.e2e.ts` 內容不變。「修正前」用 main `8931a63` 的 `deploy/chart`（`git archive` 取出到 `~/.cache/trustiot-v2-255/before`），只換上本分支的 `ingress.e2e.ts`。
 - **本機**：x86_64 Fedora；bun 1.4.2、helm 4.3.0、kubectl 1.36.5，皆由 `.prototools` 鎖定。
 - **lab**：`trustiot-mac-m1`（aarch64），k3s v1.36.5+k3s1，Istio 1.30.5 ambient；istiod、ztunnel、istio-cni 的映像 digest 見 [environment-lab.txt](data/2026-10-11-255-path-normalization/environment-lab.txt)。
 - **身分服務替身**：在 lab 以 podman 由 repo 的 `identity-double/` 建置，`localhost/trustiot-e2e/identity-double:255@sha256:063a3d3594e37a3ef7c0c224a2ac2c0579000de9b3ecea1825f9233b486bf0e5`；其他後端是 `values-e2e.yaml` 固定 digest 的 traefik/whoami。
