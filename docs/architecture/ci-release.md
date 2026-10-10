@@ -75,11 +75,11 @@ Flux（Laysi/trustiot-v2#70）驗證映像與 chart 時，要用支援 cosign v3
 
 ### 公開的透明紀錄
 
-keyless 簽章會寫進 Sigstore 公開服務的透明紀錄：Fulcio 簽發的憑證進入公開的憑證透明度日誌，簽章與 attestation 的紀錄進入 Rekor。任何人都查得到這些紀錄中的 repo 名稱 `Laysi/trustiot-v2`、workflow 路徑、tag、commit SHA 與映像 digest；查不到原始碼與映像內容。紀錄無法刪除。私有 repo 用公開 Sigstore 是 Laysi/trustiot-v2#68 的選擇（不需要保管任何金鑰）；若這些資訊不能公開，替代方案是自建 Sigstore 或改用金鑰簽章（金鑰放在 KMS，以 OIDC 取用），兩者都要另開 issue。
+keyless 簽章會寫進 Sigstore 公開服務的透明紀錄：Fulcio 簽發的憑證進入公開的憑證透明度日誌，簽章與 attestation 的紀錄進入 Rekor。任何人都能以映像或 chart 的 digest 查到這些紀錄，紀錄中的憑證寫著 repo 名稱 `Laysi/trustiot-v2` 與數字 ID、組織、workflow 路徑、tag、commit SHA、Actions 執行的網址，以及簽章時 repo 是私有的。Rekor 只存簽章與 attestation 內容的雜湊，不存內容本身，所以 SBOM 列出的相依套件與版本不會公開，原始碼與映像內容也查不到（2026-10-10 以 v0.0.0-rc.1 實查，見 [測試報告](../test-reports/2026-10-10-68-release-workflow.md)）。紀錄無法刪除。私有 repo 用公開 Sigstore 是 Laysi/trustiot-v2#68 的選擇（不需要保管任何金鑰）；若這些資訊不能公開，替代方案是自建 Sigstore 或改用金鑰簽章（金鑰放在 KMS，以 OIDC 取用），兩者都要另開 issue。
 
 ### 發佈核准（GitHub environment）的缺口
 
-publish job 在 `release` environment 執行，原意是設定必要審查者（required reviewers）與只允許 `v*` tag 的部署規則，讓每次發佈都經人工核准。2026-10-10 的實況：本 repo 是私有庫、組織在 GitHub Free 方案，私有庫不能設定 environment 的保護規則。依 GitHub 文件，Free、Pro、Team 方案的必要審查者與等待時間只適用於公開 repo（私有 repo 要 GitHub Enterprise）；部署分支與 tag 規則、environment secret 在私有 repo 需要 Pro 或 Team。所以目前 environment 只留下部署紀錄，不會擋下任何發佈。
+publish job 在 `release` environment 執行，原意是設定必要審查者（required reviewers）與只允許 `v*` tag 的部署規則，讓每次發佈都經人工核准。2026-10-10 的實況：本 repo 是私有庫、組織在 GitHub Free 方案，不能為私有庫設定 environment。依 GitHub 文件，Free 方案只能為公開 repo 設定 environment；Pro 與 Team 可以為私有 repo 設定 environment、部署分支與 tag 規則及 environment secret，但必要審查者與等待時間在 Free、Pro、Team 方案都只適用於公開 repo（私有 repo 要 GitHub Enterprise）。所以目前 environment 不會擋下任何發佈：v0.0.0-rc.1 的 publish job 沒有等待核准就執行了。
 
 workflow 照樣宣告 environment：方案到位後，在 repo 設定的 `release` environment 加上必要審查者（並開啟 prevent self-review，推 tag 的人不能自己核准）與 tag 規則 `v*`，就會生效，不必改 workflow。
 
