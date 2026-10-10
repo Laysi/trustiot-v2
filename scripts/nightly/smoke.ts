@@ -1,6 +1,7 @@
 // Deploys the Helm chart with one values file into a k3d cluster and checks that it works:
-// every workload of the release is ready, every HTTP probe a Service exposes answers, and an
-// uninstall leaves nothing behind. Components the chart gains later are covered without
+// every workload of the release is ready (the kubelet's HTTP probes answer), every Service that
+// exposes a probe routes to a ready pod, and an uninstall leaves nothing behind. Components
+// the chart gains later are covered without
 // changes here, because the checks read the release's own manifests (manifests.ts).
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,8 +16,8 @@ import {
   missingTlsSecrets,
   parseManifests,
   podProblems,
+  readyEndpointsFor,
   restartsOf,
-  serviceProxyPath,
   workloadsOf,
 } from "./manifests.ts";
 import type { Check, ShapeResult } from "./report.ts";
@@ -188,19 +189,28 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
           ? `${count} pods running or completed`
           : `${count} pods running or completed; restarts: ${[...restarts].map(([pod, n]) => `${pod}=${n}`).join(", ")}`;
       })) &&
-      (await check("health endpoints answer through their Services", async () => {
+      (await check("Services that expose a health endpoint have ready endpoints", async () => {
         const endpoints = healthEndpointsOf(parseManifests(manifest));
         if (endpoints.length === 0) {
           throw new Error("no Service exposes an HTTP probe of a workload; tests/values/smoke.yaml should add a service with probes");
         }
-        const answered: string[] = [];
+        // Not called over the network: default deny refuses the API server's Service proxy
+        // (manifests.ts, readyEndpointsFor). The kubelet's probes already answered for every
+        // ready pod; this checks that each Service routes to one.
+        const routed: string[] = [];
         for (const endpoint of endpoints) {
-          // Through the API server's Service proxy, so no port-forward and no extra tool is needed.
-          const path = serviceProxyPath(namespace, endpoint);
-          await retry(ctx.log, 6, 5_000, () => kubectl(["get", "--raw", path], 30_000));
-          answered.push(`${endpoint.service}:${endpoint.port}${endpoint.path}`);
+          await retry(ctx.log, 6, 5_000, async () => {
+            const slices = await kubectl([
+              "get", "endpointslices", "--namespace", namespace,
+              "--selector", `kubernetes.io/service-name=${endpoint.service}`, "--output", "json",
+            ], 30_000);
+            const ready = readyEndpointsFor(JSON.parse(slices.stdout) as { items?: unknown[] }, endpoint.port);
+            if (ready === 0) throw new Error(`Service ${endpoint.service} has no ready endpoint on port ${endpoint.port}`);
+            return slices;
+          });
+          routed.push(`${endpoint.service}:${endpoint.port}${endpoint.path}`);
         }
-        return answered.join(", ");
+        return routed.join(", ");
       })) &&
       (await check("helm uninstall leaves no object of the release", async () => {
         await helm(["uninstall", RELEASE, "--namespace", namespace, "--wait", "--timeout", "3m"], 4 * 60_000);

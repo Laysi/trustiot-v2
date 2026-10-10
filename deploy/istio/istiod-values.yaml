@@ -1,4 +1,5 @@
-# istiod Helm values for TrustIoT: the ext_authz provider of the ingress gateway (decision 27).
+# istiod Helm values for TrustIoT: the mesh's path normalization and the ext_authz provider of
+# the ingress gateway (decision 27).
 # Use together with values-k3s.yaml or values-openshift.yaml; README.md has the install commands.
 #
 # The chart's AuthorizationPolicy refers to this provider by name (ingress.authzProvider), so
@@ -7,6 +8,14 @@
 # when you install under another release name or namespace.
 
 meshConfig:
+  # Every proxy in the mesh (the ingress gateway included) decodes %2F and %5C, applies RFC 3986
+  # normalization and merges repeated slashes before routing and authorization, and forwards the
+  # normalized path. Without it "//internal/..." and "/%2finternal/..." slip past the chart's
+  # DENY on /internal* while a backend may still treat them as /internal (Laysi/trustiot-v2#255).
+  # MERGE_SLASHES alone is not enough: it leaves %2F encoded. Mesh-wide, so a path segment can
+  # never carry an encoded "/" (README.md).
+  pathNormalization:
+    normalization: DECODE_AND_MERGE_SLASHES
   extensionProviders:
     - name: trustiot-identity
       envoyExtAuthzHttp:

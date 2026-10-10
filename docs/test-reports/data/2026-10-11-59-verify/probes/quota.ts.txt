@@ -1,0 +1,83 @@
+// Quota and resource-limit attacks. Usage: bun quota.ts <out>
+import { readFileSync, writeFileSync } from "node:fs";
+import { ADMIN, q, type Acct } from "./lib.ts";
+
+const w = JSON.parse(readFileSync(new URL("./world.json", import.meta.url).pathname, "utf8"));
+let out = "";
+const log = (s: string) => {
+  out += s + "\n";
+  console.log(s);
+};
+const code = (b: string) => /\(([A-Z_0-9]{3,})\)(?!.*\([A-Z_0-9]{3,}\))/.exec(b)?.[1] ?? "";
+async function mk(name: string): Promise<Acct> {
+  const password = "pw" + crypto.randomUUID().replaceAll("-", "");
+  await q(ADMIN, `DROP USER IF EXISTS ${name}`);
+  for (const s of [
+    `CREATE USER ${name} IDENTIFIED WITH sha256_password BY '${password}' SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '${w.tenantA}' CONST`,
+    `GRANT trustiot_tenant_reader TO ${name}`,
+  ]) {
+    const r = await q(ADMIN, s);
+    if (r.status !== 200) throw new Error(r.body);
+  }
+  return { user: name, password };
+}
+const READ = "SELECT count() FROM trustiot.telemetry";
+
+// Q1: table-reading queries are stopped at the per-user limit; quota_key / header do not reset it
+const u1 = await mk("qa_1");
+let stoppedAt = 0;
+for (let i = 1; i <= 300; i++) {
+  const r = await q(u1, READ);
+  if (code(r.body) === "QUOTA_EXCEEDED") {
+    stoppedAt = i;
+    break;
+  }
+}
+log(`Q1 reading queries: first QUOTA_EXCEEDED at query #${stoppedAt} (limit 120/min)`);
+const k = await q(u1, READ, { quota_key: "other-key" });
+log(`Q1b same account with quota_key=other-key: HTTP ${k.status} ${code(k.body)}`);
+const k2 = await fetch("http://127.0.0.1:18123/", { method: "POST", headers: { "X-ClickHouse-User": u1.user, "X-ClickHouse-Key": u1.password, "X-ClickHouse-Quota": "other" }, body: READ });
+log(`Q1c same account with X-ClickHouse-Quota header: HTTP ${k2.status} ${code(await k2.text())}`);
+const s = await q(u1, READ, { session_id: "fresh-" + crypto.randomUUID() });
+log(`Q1d same account with a fresh session_id: HTTP ${s.status} ${code(s.body)}`);
+const prof = await q(u1, READ, { profile: "default" });
+log(`Q1e same account with profile=default: HTTP ${prof.status} ${code(prof.body)}`);
+const u2 = await mk("qa_2");
+const other = await q(u2, READ);
+log(`Q1f other account meanwhile: HTTP ${other.status} answer=${other.body.trim()}`);
+
+// Q2: constant queries are not counted at all (documented limitation): how many succeed in a burst?
+const u3 = await mk("qa_3");
+let ok = 0;
+for (let i = 0; i < 400; i++) if ((await q(u3, "SELECT 1")).status === 200) ok++;
+log(`Q2 400 x 'SELECT 1': ${ok} succeeded (quota is 120 queries/min)`);
+let okNum = 0;
+for (let i = 0; i < 300; i++) if ((await q(u3, "SELECT count() FROM numbers(1000)")).status === 200) okNum++;
+log(`Q2b 300 x 'SELECT count() FROM numbers(1000)': ${okNum} succeeded`);
+const u3q = await q(u3, "SELECT * FROM system.quota_usage FORMAT TSV");
+log(`Q2c quota_usage of that account afterwards (queries column is #5/#7 of each row):\n${u3q.body.trim().split("\n").map((l) => l.split("\t").slice(0, 8).join(" | ")).join("\n")}`);
+
+// Q3: SET ROLE NONE keeps the account out of the quota (documented) -- check what it can still do
+const u4 = await mk("qa_4");
+const sess = "rn-" + crypto.randomUUID();
+await q(u4, "SET ROLE NONE", { session_id: sess });
+let okRole = 0;
+for (let i = 0; i < 300; i++) if ((await q(u4, "SELECT sum(number) FROM numbers(10000)", { session_id: sess })).status === 200) okRole++;
+log(`Q3 after SET ROLE NONE, 300 x numbers() queries: ${okRole} succeeded`);
+const heavy = await q(u4, "SELECT count() FROM numbers(900000000) WHERE number % 7 = 3", { session_id: sess });
+log(`Q3b after SET ROLE NONE heavy numbers() scan: HTTP ${heavy.status} ${code(heavy.body)} ${heavy.ms} ms`);
+
+// Q4: concurrency limit (max_concurrent_queries_for_user = 4)
+const u5 = await mk("qa_5");
+const par = await Promise.all(Array.from({ length: 10 }, () => q(u5, "SELECT sleep(2), count() FROM trustiot.telemetry")));
+const tally: Record<string, number> = {};
+for (const r of par) tally[r.status === 200 ? "ok" : code(r.body)] = (tally[r.status === 200 ? "ok" : code(r.body)] ?? 0) + 1;
+log(`Q4 10 parallel 2-second queries as one account: ${JSON.stringify(tally)}`);
+
+// Q5: per-account limits are per account: N accounts of one tenant multiply the limits (by design)
+const accounts = await Promise.all([1, 2, 3, 4, 5].map((i) => mk("qm_" + i)));
+const many = await Promise.all(accounts.map((a) => q(a, "SELECT sleep(2), count() FROM trustiot.telemetry")));
+log(`Q5 5 accounts of the same tenant in parallel: ${many.filter((r) => r.status === 200).length} of 5 ran concurrently`);
+
+writeFileSync(process.argv[2], out);
+for (const n of ["qa_1", "qa_2", "qa_3", "qa_4", "qa_5", "qm_1", "qm_2", "qm_3", "qm_4", "qm_5"]) await q(ADMIN, `DROP USER IF EXISTS ${n}`);

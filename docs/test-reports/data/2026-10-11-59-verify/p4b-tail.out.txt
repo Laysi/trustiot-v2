@@ -1,0 +1,56 @@
+### [tenant_a2] RENAME
+RENAME TABLE trustiot.telemetry TO trustiot.telemetry2
+--> HTTP 403 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"752281","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT, DROP TABLE ON trustiot.telemetry. (Missing permissions: DROP TABLE ON trustiot.telemetry). (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] CREATE TABLE
+CREATE TABLE trustiot.x (a UInt8) ENGINE = Memory
+--> HTTP 403 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"664978","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TABLE ON trustiot.x. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] CREATE DATABASE
+CREATE DATABASE evil
+--> HTTP 403 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"633492","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant CREATE DATABASE ON evil.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] CREATE VIEW
+CREATE VIEW trustiot.v AS SELECT * FROM trustiot.telemetry
+--> HTTP 403 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"539360","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant CREATE VIEW ON trustiot.v. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] CREATE MATERIALIZED VIEW
+CREATE MATERIALIZED VIEW trustiot.mv ENGINE = Memory AS SELECT * FROM trustiot.telemetry
+--> HTTP 403 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"539161","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant CREATE VIEW ON trustiot.mv. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] CREATE USER
+CREATE USER evil
+--> HTTP 403 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"602746","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant CREATE USER ON evil. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] CREATE FUNCTION
+CREATE FUNCTION f AS (x) -> x
+--> HTTP 403 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"646695","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant CREATE FUNCTION ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] ATTACH
+ATTACH TABLE trustiot.telemetry
+--> HTTP 403 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"468864","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TABLE ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] DETACH
+DETACH TABLE trustiot.telemetry
+--> HTTP 403 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"784540","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant DROP TABLE ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] UNDROP
+UNDROP TABLE trustiot.telemetry
+--> HTTP 403 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"695451","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant UNDROP TABLE ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] SET default database USE
+USE system
+--> HTTP 403 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"827758","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SHOW DATABASES ON system.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+# summary: 11 probes, 0 responses containing B's tenant id or secret

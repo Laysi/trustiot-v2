@@ -1,0 +1,271 @@
+### [admin] account census
+SELECT name, auth_type, default_roles_all, storage FROM system.users ORDER BY name
+--> HTTP 200 (6 ms) summary={"read_rows":"8","read_bytes":"1469","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"8","result_bytes":"1281","elapsed_ns":"3529877","memory_usage":"10175137"}
+ingest	['sha256_password']	1	local_directory\nno_tenant	['sha256_password']	1	local_directory\nnorole	['sha256_password']	1	local_directory\nquota_1	['sha256_password']	1	local_directory\ntenant_a	['sha256_password']	1	local_directory\ntenant_a2	['sha256_password']	1	local_directory\ntenant_b	['sha256_password']	1	local_directory\ntrustiot_admin	['plaintext_password']	1	users_xml
+
+### [admin] default user exists?
+SELECT count() FROM system.users WHERE name = 'default'
+--> HTTP 200 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"136","elapsed_ns":"3493355","memory_usage":"10075330"}
+0
+
+### [admin] create roleless account with direct SELECT on db
+CREATE USER IF NOT EXISTS direct_sel IDENTIFIED WITH sha256_password BY '<redacted>'
+--> HTTP 200 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1449905","memory_usage":"2114894"}
+
+
+### [admin] grant select on whole trustiot db to roleless user
+GRANT SELECT ON trustiot.* TO direct_sel
+--> HTTP 200 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1274445","memory_usage":"2111054"}
+
+
+### [admin] grant select on *.* to another new user
+CREATE USER IF NOT EXISTS all_sel IDENTIFIED WITH sha256_password BY '<redacted>'
+--> HTTP 200 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"947340","memory_usage":"2112230"}
+
+
+### [admin] grant
+GRANT SELECT ON *.* TO all_sel
+--> HTTP 200 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"993469","memory_usage":"2110510"}
+
+
+### [norole] brand-new account no role: telemetry
+SELECT count() FROM trustiot.telemetry
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1969008","memory_usage":"0"}
+Code: 497. DB::Exception: norole: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [norole] brand-new account no role: batch_commits
+SELECT count() FROM trustiot.batch_commits
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1879413","memory_usage":"0"}
+Code: 497. DB::Exception: norole: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.batch_commits. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [norole] brand-new account whoami
+SELECT currentUser(), currentRoles(), currentProfiles()
+--> HTTP 200 (5 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"17151","elapsed_ns":"3445605","memory_usage":"10073690"}
+norole	[]	['default']
+
+### [norole] brand-new account can set readonly? (no profile)
+SET readonly = 1
+--> HTTP 200 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"335687","memory_usage":"2109438"}
+
+
+### [norole] brand-new account: settings
+SELECT getSetting('readonly'), getSetting('max_execution_time'), getSetting('max_memory_usage')
+--> HTTP 200 (4 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"12288","elapsed_ns":"2963930","memory_usage":"10084738"}
+0	0	0
+
+### [norole] brand-new account: SHOW TABLES
+SHOW TABLES FROM trustiot
+--> HTTP 200 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3470096","memory_usage":"5359360"}
+
+
+### [norole] brand-new account: mergeTreeAnalyzeIndexes
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry')
+--> HTTP 403 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3642311","memory_usage":"0"}
+Code: 497. DB::Exception: norole: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [direct_sel] roleless user with direct SELECT on trustiot.* telemetry
+SELECT count() FROM trustiot.telemetry
+--> HTTP 200 (13 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"136","elapsed_ns":"9683140","memory_usage":"10155922"}
+0
+
+### [direct_sel] roleless user with direct SELECT: batch_commits
+SELECT count() FROM trustiot.batch_commits
+--> HTTP 200 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"136","elapsed_ns":"4979025","memory_usage":"10052370"}
+0
+
+### [direct_sel] roleless user: read values
+SELECT value_string FROM trustiot.telemetry
+--> HTTP 200 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2611188","memory_usage":"5354219"}
+
+
+### [direct_sel] roleless user: merge
+SELECT count() FROM merge('trustiot', '.*')
+--> HTTP 200 (9 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"136","elapsed_ns":"7182001","memory_usage":"10163658"}
+0
+
+### [direct_sel] roleless user: mergeTreeAnalyzeIndexes (no row policy honoured)
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry')
+--> HTTP 200 (5 ms) summary={"read_rows":"1","read_bytes":"44","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"16640","elapsed_ns":"3403904","memory_usage":"10060362"}
+202610_1_1_0	[(0,1)]
+
+### [all_sel] SELECT on *.* user: telemetry
+SELECT count() FROM trustiot.telemetry
+--> HTTP 200 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"136","elapsed_ns":"4243873","memory_usage":"10156290"}
+0
+
+### [all_sel] SELECT on *.* user: batch_commits
+SELECT count() FROM trustiot.batch_commits
+--> HTTP 200 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"136","elapsed_ns":"4035420","memory_usage":"10052146"}
+0
+
+### [all_sel] SELECT on *.* user: logs db
+SELECT count() FROM system.tables WHERE database = 'trustiot_logs'
+--> HTTP 200 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"136","elapsed_ns":"4352230","memory_usage":"10085127"}
+0
+
+### [all_sel] SELECT on *.* user: system.users
+SELECT count() FROM system.users
+--> HTTP 200 (5 ms) summary={"read_rows":"10","read_bytes":"1838","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"136","elapsed_ns":"3945879","memory_usage":"10069258"}
+10
+
+### [all_sel] SELECT on *.* user: remote loop-back
+SELECT count() FROM remote('127.0.0.1', trustiot.telemetry)
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2412574","memory_usage":"0"}
+Code: 497. DB::Exception: all_sel: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [admin] bootstrap admin reads telemetry? (deny_by_default applies to ALL)
+SELECT count() FROM trustiot.telemetry
+--> HTTP 200 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"136","elapsed_ns":"4486337","memory_usage":"10052530"}
+0
+
+### [admin] bootstrap admin reads batch_commits
+SELECT count() FROM trustiot.batch_commits
+--> HTTP 200 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"136","elapsed_ns":"3337901","memory_usage":"10052146"}
+0
+
+### [admin] bootstrap admin as SELECT sees system.row_policies
+SELECT short_name, database, table, select_filter, is_restrictive, apply_to_all, apply_to_list, storage FROM system.row_policies ORDER BY table, short_name
+--> HTTP 200 (6 ms) summary={"read_rows":"5","read_bytes":"984","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"5","result_bytes":"2667","elapsed_ns":"4229639","memory_usage":"10155383"}
+deny_by_default	trustiot	batch_commits	0	0	1	[]	local_directory\nservice_all_rows	trustiot	batch_commits	1	0	0	['trustiot_ingest']	local_directory\ndeny_by_default	trustiot	telemetry	0	0	1	[]	local_directory\nservice_all_rows	trustiot	telemetry	1	0	0	['trustiot_ingest']	local_directory\ntenant_isolation	trustiot	telemetry	tenant_id = toUUID(getSetting(\'SQL_tenant_id\'))	0	0	['trustiot_tenant_reader']	local_directory
+
+### [admin] bootstrap admin: unauthenticated default user over HTTP does not exist (check via tenant id)
+SELECT name FROM system.users WHERE name IN ('default', 'ingest', 'trustiot_admin')
+--> HTTP 200 (5 ms) summary={"read_rows":"2","read_bytes":"366","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"2","result_bytes":"4352","elapsed_ns":"3512374","memory_usage":"10185254"}
+trustiot_admin\ningest
+
+### [no_tenant] tenant role without SQL_tenant_id: count
+SELECT count() FROM trustiot.telemetry
+--> HTTP 404 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3017249","memory_usage":"0"}
+Code: 115. DB::Exception: Unknown setting 'SQL_tenant_id': In scope tenant_id = toUUID(getSetting('SQL_tenant_id')). (UNKNOWN_SETTING) (version 26.8.22.13 (official build))
+
+### [no_tenant] tenant role without SQL_tenant_id: batch
+SELECT count() FROM trustiot.batch_commits
+--> HTTP 403 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1690685","memory_usage":"0"}
+Code: 497. DB::Exception: no_tenant: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.batch_commits. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [no_tenant] tenant role without SQL_tenant_id: subquery
+SELECT count() FROM (SELECT * FROM trustiot.telemetry)
+--> HTTP 404 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3398556","memory_usage":"0"}
+Code: 115. DB::Exception: Unknown setting 'SQL_tenant_id': In scope tenant_id = toUUID(getSetting('SQL_tenant_id')). (UNKNOWN_SETTING) (version 26.8.22.13 (official build))
+
+### [no_tenant] tenant role without SQL_tenant_id: JOIN
+SELECT count() FROM trustiot.telemetry AS x JOIN trustiot.telemetry AS y ON x.point = y.point
+--> HTTP 404 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2882457","memory_usage":"0"}
+Code: 115. DB::Exception: Unknown setting 'SQL_tenant_id': In scope tenant_id = toUUID(getSetting('SQL_tenant_id')). (UNKNOWN_SETTING) (version 26.8.22.13 (official build))
+
+### [no_tenant] tenant role without SQL_tenant_id: view()
+SELECT count() FROM view(SELECT * FROM trustiot.telemetry)
+--> HTTP 404 (7 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"6333824","memory_usage":"0"}
+Code: 115. DB::Exception: Unknown setting 'SQL_tenant_id': In scope tenant_id = toUUID(getSetting('SQL_tenant_id')). (UNKNOWN_SETTING) (version 26.8.22.13 (official build))
+
+### [no_tenant] tenant role without SQL_tenant_id: merge
+SELECT count() FROM merge('trustiot', '.*')
+--> HTTP 404 (9 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"5169041","memory_usage":"0"}
+Code: 115. DB::Exception: Unknown setting 'SQL_tenant_id': While processing tenant_id = toUUID(getSetting('SQL_tenant_id')): Child table: trustiot.telemetry (eae0f3ea-5a0d-4b73-b4be-70829bab03e6). (UNKNOWN_SETTING) (version 26.8.22.13 (official build))
+
+### [no_tenant] tenant role without SQL_tenant_id: EXPLAIN
+EXPLAIN SELECT * FROM trustiot.telemetry
+--> HTTP 404 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3113484","memory_usage":"0"}
+Code: 115. DB::Exception: Unknown setting 'SQL_tenant_id': In scope tenant_id = toUUID(getSetting('SQL_tenant_id')). (UNKNOWN_SETTING) (version 26.8.22.13 (official build))
+
+### [no_tenant] tenant role without SQL_tenant_id: SET itself
+SET SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'
+--> HTTP 500 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1480376","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'SQL_tenant_id' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [no_tenant] tenant role without SQL_tenant_id: query setting
+SELECT count() FROM trustiot.telemetry SETTINGS SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'
+--> HTTP 500 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1961915","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'SQL_tenant_id' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [no_tenant] tenant role without SQL_tenant_id: subquery setting
+SELECT count() FROM (SELECT * FROM trustiot.telemetry SETTINGS SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547')
+--> HTTP 404 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2986568","memory_usage":"0"}
+Code: 115. DB::Exception: Unknown setting 'SQL_tenant_id': In scope tenant_id = toUUID(getSetting('SQL_tenant_id')). (UNKNOWN_SETTING) (version 26.8.22.13 (official build))
+
+### [no_tenant] tenant role without SQL_tenant_id: URL param {SQL_tenant_id=490c02de-1a4b-4600-a3ea-ae27b38e7547}
+SELECT count() FROM trustiot.telemetry
+--> HTTP 500 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"115836","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'SQL_tenant_id' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [no_tenant] no_tenant SELECT 1 still works (constant)
+SELECT 1
+--> HTTP 200 (4 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"4096","elapsed_ns":"2797665","memory_usage":"10052914"}
+1
+
+### [no_tenant] empty string tenant? admin-less; mergeTreeAnalyzeIndexes works
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry')
+--> HTTP 200 (7 ms) summary={"read_rows":"1","read_bytes":"44","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"16640","elapsed_ns":"5328249","memory_usage":"10061114"}
+202610_1_1_0	[(0,1)]
+
+### [admin] create tenant account with INVALID setting value (empty)
+CREATE USER IF NOT EXISTS bad_tenant IDENTIFIED WITH sha256_password BY '<redacted>' SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '' CONST
+--> HTTP 200 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1198976","memory_usage":"2114278"}
+
+
+### [admin] grant role
+GRANT trustiot_tenant_reader TO bad_tenant
+--> HTTP 200 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2074431","memory_usage":"2110910"}
+
+
+### [bad_tenant] empty SQL_tenant_id: read
+SELECT count() FROM trustiot.telemetry
+--> HTTP 400 (8 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"5459021","memory_usage":"0"}
+Code: 376. DB::Exception: Cannot parse uuid : Cannot parse UUID from String: In scope tenant_id = toUUID(getSetting('SQL_tenant_id')). (CANNOT_PARSE_UUID) (version 26.8.22.13 (official build))
+
+### [admin] create tenant account with SQL_tenant_id = zero uuid
+CREATE USER IF NOT EXISTS zero_tenant IDENTIFIED WITH sha256_password BY '<redacted>' SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '00000000-0000-0000-0000-000000000000' CONST
+--> HTTP 200 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1331791","memory_usage":"2114582"}
+
+
+### [admin] grant role
+GRANT trustiot_tenant_reader TO zero_tenant
+--> HTTP 200 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1195703","memory_usage":"2110958"}
+
+
+### [zero_tenant] zero-uuid tenant: read
+SELECT count() FROM trustiot.telemetry
+--> HTTP 200 (9 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"136","elapsed_ns":"6518978","memory_usage":"10164962"}
+0
+
+### [admin] create tenant account where SQL_tenant_id is NOT const (template misuse)
+CREATE USER IF NOT EXISTS nonconst_tenant IDENTIFIED WITH sha256_password BY '<redacted>' SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = 'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38'
+--> HTTP 200 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1299079","memory_usage":"2114582"}
+
+
+### [admin] grant role
+GRANT trustiot_tenant_reader TO nonconst_tenant
+--> HTTP 200 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1290583","memory_usage":"2110958"}
+
+
+### [nonconst_tenant] non-const tenant: SET to B (readonly profile still blocks?)
+SELECT count() FROM trustiot.telemetry SETTINGS SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'
+--> HTTP 500 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2577720","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'SQL_tenant_id' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [admin] create tenant account without profile (template misuse): can it switch tenant?
+CREATE USER IF NOT EXISTS noprof_tenant IDENTIFIED WITH sha256_password BY '<redacted>' SETTINGS SQL_tenant_id = 'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38'
+--> HTTP 200 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1350033","memory_usage":"2113678"}
+
+
+### [admin] grant role
+GRANT trustiot_tenant_reader TO noprof_tenant
+--> HTTP 200 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1429378","memory_usage":"2110638"}
+
+
+### [noprof_tenant] misuse: user with role but no profile and non-const setting: switch tenant via query setting
+SELECT count() FROM trustiot.telemetry SETTINGS SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'
+--> HTTP 500 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2366499","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'SQL_tenant_id' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [noprof_tenant] misuse: role profile alone gives readonly?
+SELECT getSetting('readonly'), currentProfiles()
+--> HTTP 200 (5 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"1","result_rows":"1","result_bytes":"12544","elapsed_ns":"3478675","memory_usage":"10175754"}
+1	['default','trustiot_tenant_reader']
+
+### [admin] cleanup misuse accounts
+DROP USER IF EXISTS direct_sel, all_sel, bad_tenant, zero_tenant, nonconst_tenant, noprof_tenant
+--> HTTP 200 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1752075","memory_usage":"2110158"}
+
+
+# summary: 54 probes, 0 responses containing B's tenant id or secret

@@ -1,0 +1,1372 @@
+[
+  {
+    "group": "cookie",
+    "name": "no cookie",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 401,
+    "ms": 74,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "cookie",
+    "name": "unknown session",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 401,
+    "ms": 60.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "cookie",
+    "name": "other cookies only",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 401,
+    "ms": 90.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "cookie",
+    "name": "valid cookie",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 200,
+    "ms": 87.4,
+    "reachedProtectedBackend": true,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "cookie",
+    "name": "valid cookie + forged header",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 200,
+    "ms": 107.2,
+    "reachedProtectedBackend": true,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "cookie",
+    "name": "valid cookie + underscore identity headers",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 200,
+    "ms": 64.1,
+    "reachedProtectedBackend": true,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "cookie",
+    "name": "forged header, no cookie",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 401,
+    "ms": 61.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "x-forwarded-proto",
+    "name": "cookie route, client sent nothing",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 200,
+    "ms": 64.7,
+    "reachedProtectedBackend": true,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "x-forwarded-proto",
+    "name": "cookie route, client sent http",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 200,
+    "ms": 63.5,
+    "reachedProtectedBackend": true,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal",
+    "name": "no cookie",
+    "host": "trustiot.factory.test",
+    "target": "/internal/ext-authz/api/whoami",
+    "status": 401,
+    "ms": 71.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal",
+    "name": "no cookie",
+    "host": "trustiot.factory.test",
+    "target": "/internal",
+    "status": 401,
+    "ms": 62.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal",
+    "name": "no cookie",
+    "host": "trustiot.factory.test",
+    "target": "/internal/tenants",
+    "status": 401,
+    "ms": 60.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal",
+    "name": "valid cookie",
+    "host": "trustiot.factory.test",
+    "target": "/internal/ext-authz/api/whoami",
+    "status": 403,
+    "ms": 75.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal",
+    "name": "valid cookie",
+    "host": "trustiot.factory.test",
+    "target": "/internal",
+    "status": 403,
+    "ms": 79.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal",
+    "name": "valid cookie",
+    "host": "trustiot.factory.test",
+    "target": "/internal/tenants",
+    "status": 403,
+    "ms": 70.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "trustiot.factory.test",
+    "target": "//internal",
+    "status": 401,
+    "ms": 64.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "trustiot.factory.test",
+    "target": "//internal",
+    "status": 403,
+    "ms": 59.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "trustiot.factory.test",
+    "target": "//internal/tenants",
+    "status": 401,
+    "ms": 58.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "trustiot.factory.test",
+    "target": "//internal/tenants",
+    "status": 403,
+    "ms": 61.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "trustiot.factory.test",
+    "target": "///internal",
+    "status": 401,
+    "ms": 66.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "trustiot.factory.test",
+    "target": "///internal",
+    "status": 403,
+    "ms": 60.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "trustiot.factory.test",
+    "target": "//./internal",
+    "status": 401,
+    "ms": 61.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "trustiot.factory.test",
+    "target": "//./internal",
+    "status": 403,
+    "ms": 65.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "trustiot.factory.test",
+    "target": "/.//internal/tenants",
+    "status": 401,
+    "ms": 63.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "trustiot.factory.test",
+    "target": "/.//internal/tenants",
+    "status": 403,
+    "ms": 67,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "trustiot.factory.test",
+    "target": "/x/..//internal/tenants",
+    "status": 401,
+    "ms": 75.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "trustiot.factory.test",
+    "target": "/x/..//internal/tenants",
+    "status": 403,
+    "ms": 70.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "trustiot.factory.test",
+    "target": "/%2finternal",
+    "status": 401,
+    "ms": 78.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "trustiot.factory.test",
+    "target": "/%2finternal",
+    "status": 403,
+    "ms": 59.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "trustiot.factory.test",
+    "target": "/%2finternal/tenants",
+    "status": 401,
+    "ms": 59.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "trustiot.factory.test",
+    "target": "/%2finternal/tenants",
+    "status": 403,
+    "ms": 63.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "trustiot.factory.test",
+    "target": "/%2Finternal",
+    "status": 401,
+    "ms": 58.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "trustiot.factory.test",
+    "target": "/%2Finternal",
+    "status": 403,
+    "ms": 83,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "trustiot.factory.test",
+    "target": "/%2f%2finternal",
+    "status": 401,
+    "ms": 58.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "trustiot.factory.test",
+    "target": "/%2f%2finternal",
+    "status": 403,
+    "ms": 60.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "trustiot.factory.test",
+    "target": "/./%2finternal",
+    "status": 401,
+    "ms": 59.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "trustiot.factory.test",
+    "target": "/./%2finternal",
+    "status": 403,
+    "ms": 60.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "cookie",
+    "name": "unknown host",
+    "host": "unknown.trustiot.test",
+    "target": "/api/whoami",
+    "status": 404,
+    "ms": 77.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "certificate renewal",
+    "host": "gw.trustiot.factory.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 92.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "MQTT over WebSocket",
+    "host": "gw.trustiot.factory.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 93.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "login",
+    "host": "trustiot.factory.test",
+    "target": "/auth/login",
+    "status": 200,
+    "ms": 85.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "health check",
+    "host": "trustiot.factory.test",
+    "target": "/healthz",
+    "status": 200,
+    "ms": 65.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "certificate renewal, underscore identity headers",
+    "host": "gw.trustiot.factory.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 91.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "MQTT over WebSocket, underscore identity headers",
+    "host": "gw.trustiot.factory.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 95.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "login, underscore identity headers",
+    "host": "trustiot.factory.test",
+    "target": "/auth/login",
+    "status": 200,
+    "ms": 67.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "health check, underscore identity headers",
+    "host": "trustiot.factory.test",
+    "target": "/healthz",
+    "status": 200,
+    "ms": 82.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/mqtt on gw.trustiot.factory.test:443",
+    "host": "gw.trustiot.factory.test:443",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 61.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/certs/renew on gw.trustiot.factory.test:443",
+    "host": "gw.trustiot.factory.test:443",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 99.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/mqtt on gw.trustiot.factory.test:8443",
+    "host": "gw.trustiot.factory.test:8443",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 61.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/healthz on trustiot.factory.test:443",
+    "host": "trustiot.factory.test:443",
+    "target": "/healthz",
+    "status": 200,
+    "ms": 293.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/auth/login on trustiot.factory.test:443",
+    "host": "trustiot.factory.test:443",
+    "target": "/auth/login",
+    "status": 200,
+    "ms": 68.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/mqtt on trustiot.factory.test:443",
+    "host": "trustiot.factory.test:443",
+    "target": "/mqtt",
+    "status": 401,
+    "ms": 67.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/certs/renew on trustiot.factory.test:443",
+    "host": "trustiot.factory.test:443",
+    "target": "/certs/renew",
+    "status": 401,
+    "ms": 60,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/api/whoami on trustiot.factory.test:443",
+    "host": "trustiot.factory.test:443",
+    "target": "/api/whoami",
+    "status": 401,
+    "ms": 60.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/auth/login on gw.trustiot.factory.test:443",
+    "host": "gw.trustiot.factory.test:443",
+    "target": "/auth/login",
+    "status": 404,
+    "ms": 58.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/mqtt on ota.trustiot.factory.test:443",
+    "host": "ota.trustiot.factory.test:443",
+    "target": "/mqtt",
+    "status": 404,
+    "ms": 64.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "health check GET",
+    "host": "trustiot.factory.test",
+    "target": "/healthz",
+    "status": 200,
+    "ms": 63.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public on another host",
+    "name": "/mqtt on hosts.app",
+    "host": "trustiot.factory.test",
+    "target": "/mqtt",
+    "status": 401,
+    "ms": 85.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public on another host",
+    "name": "/certs/renew on hosts.app",
+    "host": "trustiot.factory.test",
+    "target": "/certs/renew",
+    "status": 401,
+    "ms": 64.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public on another host",
+    "name": "/auth/login on hosts.gateway",
+    "host": "gw.trustiot.factory.test",
+    "target": "/auth/login",
+    "status": 404,
+    "ms": 78,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public on another host",
+    "name": "/healthz on hosts.gateway",
+    "host": "gw.trustiot.factory.test",
+    "target": "/healthz",
+    "status": 404,
+    "ms": 60.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public on another host",
+    "name": "/mqtt on hosts.ota",
+    "host": "ota.trustiot.factory.test",
+    "target": "/mqtt",
+    "status": 404,
+    "ms": 75,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public on another host",
+    "name": "/auth/login on hosts.ota",
+    "host": "ota.trustiot.factory.test",
+    "target": "/auth/login",
+    "status": 404,
+    "ms": 61.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "dot-dot out of a public path",
+    "host": "trustiot.factory.test",
+    "target": "/healthz/../api/whoami",
+    "status": 401,
+    "ms": 59.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "encoded dot-dot",
+    "host": "trustiot.factory.test",
+    "target": "/healthz/%2e%2e/api/whoami",
+    "status": 401,
+    "ms": 62.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "encoded dot-dot, upper case hex",
+    "host": "trustiot.factory.test",
+    "target": "/healthz/%2E%2E/api/whoami",
+    "status": 401,
+    "ms": 61.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "dot-dot with an encoded slash",
+    "host": "trustiot.factory.test",
+    "target": "/healthz/..%2fapi/whoami",
+    "status": 401,
+    "ms": 59.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "encoded slashes around dot-dot",
+    "host": "trustiot.factory.test",
+    "target": "/healthz%2f..%2fapi/whoami",
+    "status": 401,
+    "ms": 68.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "double leading slash",
+    "host": "trustiot.factory.test",
+    "target": "//api/whoami",
+    "status": 401,
+    "ms": 60.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "double slash after a public path",
+    "host": "trustiot.factory.test",
+    "target": "/healthz//../api/whoami",
+    "status": 401,
+    "ms": 61.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "upper-case public path then dot-dot",
+    "host": "trustiot.factory.test",
+    "target": "/HEALTHZ/../api/whoami",
+    "status": 401,
+    "ms": 61,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "upper-case public path",
+    "host": "trustiot.factory.test",
+    "target": "/HEALTHZ",
+    "status": 401,
+    "ms": 61.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "mixed-case public path",
+    "host": "trustiot.factory.test",
+    "target": "/Auth/Login",
+    "status": 401,
+    "ms": 60.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "public path of the gateway host, dot-dot",
+    "host": "gw.trustiot.factory.test",
+    "target": "/mqtt/../api/whoami",
+    "status": 404,
+    "ms": 59.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "public path in the query string",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami?x=/healthz",
+    "status": 401,
+    "ms": 66.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "public path in the query after dot-dot",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami?/../healthz",
+    "status": 401,
+    "ms": 66,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "semicolon path parameter, then dot-dot",
+    "host": "trustiot.factory.test",
+    "target": "/healthz;/../api/whoami",
+    "status": 401,
+    "ms": 64.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "dot-dot with a semicolon",
+    "host": "trustiot.factory.test",
+    "target": "/healthz/..;/api/whoami",
+    "status": 401,
+    "ms": 60,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "semicolon parameter on a public path",
+    "host": "trustiot.factory.test",
+    "target": "/healthz;x=y",
+    "status": 401,
+    "ms": 66.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "single dot segment",
+    "host": "trustiot.factory.test",
+    "target": "/./api/whoami",
+    "status": 401,
+    "ms": 62.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "encoded single dot",
+    "host": "trustiot.factory.test",
+    "target": "/%2e/api/whoami",
+    "status": 401,
+    "ms": 59.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "encoded hash before a public path",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami%23/healthz",
+    "status": 401,
+    "ms": 59.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "raw hash before a public path",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami#/healthz",
+    "status": 401,
+    "ms": 59.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "trailing slash on a public path",
+    "host": "trustiot.factory.test",
+    "target": "/healthz/",
+    "status": 401,
+    "ms": 60,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "public path as a prefix",
+    "host": "trustiot.factory.test",
+    "target": "/healthz/api/whoami",
+    "status": 401,
+    "ms": 58,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "public path plus suffix",
+    "host": "trustiot.factory.test",
+    "target": "/healthzx",
+    "status": 401,
+    "ms": 57.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "backslash dot-dot",
+    "host": "trustiot.factory.test",
+    "target": "/healthz\\..\\api\\whoami",
+    "status": 401,
+    "ms": 62.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "encoded backslash dot-dot",
+    "host": "trustiot.factory.test",
+    "target": "/healthz%5c..%5capi%5cwhoami",
+    "status": 401,
+    "ms": 63.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "absolute-form request target",
+    "host": "trustiot.factory.test",
+    "target": "http://trustiot.factory.test/healthz/../api/whoami",
+    "status": 401,
+    "ms": 59.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "encoded internal prefix",
+    "host": "trustiot.factory.test",
+    "target": "/%69nternal/tenants",
+    "status": 401,
+    "ms": 60.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "internal prefix after dot-dot",
+    "host": "trustiot.factory.test",
+    "target": "/healthz/../internal/tenants",
+    "status": 401,
+    "ms": 59.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity slow",
+    "name": "slow session #1",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 572.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity slow",
+    "name": "slow session #2",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 576.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity slow",
+    "name": "slow session #3",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 574.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity slow",
+    "name": "slow session #4",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 560.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity slow",
+    "name": "slow session #5",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 578,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #1",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 63.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #1",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 58.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #1",
+    "host": "gw.trustiot.factory.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 67.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #1",
+    "host": "gw.trustiot.factory.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 105.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #2",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 72.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #2",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 60.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #2",
+    "host": "gw.trustiot.factory.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 101.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #2",
+    "host": "gw.trustiot.factory.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 70.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #3",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 71.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #3",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 64.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #3",
+    "host": "gw.trustiot.factory.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 64.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #3",
+    "host": "gw.trustiot.factory.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 61.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #4",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 57.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #4",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 58.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #4",
+    "host": "gw.trustiot.factory.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 67.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #4",
+    "host": "gw.trustiot.factory.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 62.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #5",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 60.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #5",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 63.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #5",
+    "host": "gw.trustiot.factory.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 60.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #5",
+    "host": "gw.trustiot.factory.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 60.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #6",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 65.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #6",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 59.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #6",
+    "host": "gw.trustiot.factory.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 63.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #6",
+    "host": "gw.trustiot.factory.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 65.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #7",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 59.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #7",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 57.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #7",
+    "host": "gw.trustiot.factory.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 63.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #7",
+    "host": "gw.trustiot.factory.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 65.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #8",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 58.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #8",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 60.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #8",
+    "host": "gw.trustiot.factory.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 62.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #8",
+    "host": "gw.trustiot.factory.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 92.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #9",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 54.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #9",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 65.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #9",
+    "host": "gw.trustiot.factory.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 67.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #9",
+    "host": "gw.trustiot.factory.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 63.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #10",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 61.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #10",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 74.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #10",
+    "host": "gw.trustiot.factory.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 65.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #10",
+    "host": "gw.trustiot.factory.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 65,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie after recovery",
+    "host": "trustiot.factory.test",
+    "target": "/api/whoami",
+    "status": 401,
+    "ms": 177.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  }
+]
