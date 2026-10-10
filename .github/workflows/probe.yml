@@ -1,0 +1,67 @@
+# Temporary probe for Laysi/trustiot-v2#67 on a throwaway branch that is never merged.
+# The secret-scan job below is copied unchanged from ci.yml. ci.yml does not pass on GitHub
+# while each of its jobs passes in a local simulation of the hosted runner, and the
+# available token cannot read check runs or logs, so one pull request per job shows which
+# job fails. ci.yml itself keeps every job.
+#
+# For `pull_request` events GitHub reads the workflow files of the pull request's merge
+# commit (refs/pull/<number>/merge), so a workflow runs on the very pull request that adds
+# it; only `pull_request_target` takes workflows from the base branch.
+name: probe
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# No token scopes by default; each job asks for what it needs.
+permissions: {}
+
+concurrency:
+  # One run per pull request or branch. A new push to a pull request cancels its running
+  # CI; runs on main always finish so that every main commit gets a result.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Every commit reachable from the checked-out commit is scanned.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-proto
+        with:
+          tools: gitleaks
+      - name: gitleaks
+        run: |
+          # Scan the history of HEAD only. gitleaks' default (`--all`) would also scan every
+          # other branch that the full-depth checkout fetched. Merge commits are diffed
+          # against their first parent so that content added while merging is scanned too.
+          report="$RUNNER_TEMP/gitleaks.json"
+          status=0
+          gitleaks git --no-banner --redact --verbose \
+            --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" \
+            --report-format=json --report-path="$report" . || status=$?
+          if (( status != 0 )) && [[ -s "$report" ]]; then
+            # One annotation per finding; the report is redacted, so no secret is printed.
+            jq -r '
+              def data: gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
+              def prop: data | gsub(":"; "%3A") | gsub(","; "%2C");
+              unique_by(.Fingerprint)[]
+              | "::error file=\(.File | prop),line=\(.StartLine),title=gitleaks \(.RuleID | prop)::"
+                + ("Secret in commit \(.Commit[0:12]) (fingerprint \(.Fingerprint)). Revoke it, "
+                  + "then remove it from history or add the fingerprint to .gitleaksignore "
+                  + "with a reason." | data)
+            ' "$report"
+          fi
+          exit "$status"
