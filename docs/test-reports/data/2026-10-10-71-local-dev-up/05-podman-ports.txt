@@ -1,0 +1,4 @@
+trustiot-dev-default-postgres  127.0.0.1:15432->5432/tcp
+trustiot-dev-default-clickhouse  127.0.0.1:18123->8123/tcp, 9000/tcp, 9009/tcp
+trustiot-dev-default-mosquitto  127.0.0.1:11883->1883/tcp
+trustiot-dev-default-example-service  127.0.0.1:18080->8080/tcp

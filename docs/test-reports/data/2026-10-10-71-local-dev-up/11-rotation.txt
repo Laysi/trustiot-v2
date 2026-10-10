@@ -1,0 +1,3 @@
+postgres password changed: true
+clickhouse password changed: true
+mqtt password changed: true

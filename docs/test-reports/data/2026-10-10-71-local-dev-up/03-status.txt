@@ -1,0 +1,18 @@
+ok   container postgres: running
+ok   container clickhouse: running
+ok   container mosquitto: running
+ok   container example-service: running
+ok   postgres: published port: 127.0.0.1:15432
+ok   postgres: published port demands a password: authentication request 10 (10 = SCRAM)
+ok   postgres: login and Apache AGE: age 1.8.0
+ok   postgres: wrong password refused: refused
+ok   clickhouse: published port: http://127.0.0.1:18123/ping
+ok   clickhouse: login: SELECT 1 -> 1
+ok   clickhouse: anonymous access refused: refused (401)
+ok   mqtt: login: CONNACK 0
+ok   mqtt: anonymous access refused: CONNACK 5
+ok   mqtt: wrong password refused: CONNACK 5
+ok   example-service: GET /healthz (container port 8080): 127.0.0.1:18080 -> 200
+ok   example-service: GET /readyz (container port 8080): 127.0.0.1:18080 -> 200
+all checks passed
+status exit 0

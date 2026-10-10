@@ -1,0 +1,7 @@
+700 ruisi /home/ruisi/.local/state/trustiot-v2/dev
+700 ruisi /home/ruisi/.local/state/trustiot-v2/dev/default
+600 ruisi /home/ruisi/.local/state/trustiot-v2/dev/default/state.json
+總用量 4
+drwx------. 1 ruisi ruisi  20 10月 10 20:19 .
+drwx------. 1 ruisi ruisi  14 10月 10 20:19 ..
+-rw-------. 1 ruisi ruisi 665 10月 10 20:16 state.json

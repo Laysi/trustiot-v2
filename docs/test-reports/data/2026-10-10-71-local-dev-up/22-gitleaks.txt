@@ -1,0 +1,17 @@
+gitleaks 8.30.1 (version pinned as gitleaks = 8.30.1 by Laysi/trustiot-v2#67; installed through proto with its schema plugin)
+$ gitleaks dir scripts --redact -v
+8:21PM INF scanned ~112614 bytes (112.61 KB) in 80.3ms
+8:21PM INF no leaks found
+exit 0
+$ gitleaks dir docs --redact -v
+8:21PM INF scanned ~365653 bytes (365.65 KB) in 172ms
+8:21PM INF no leaks found
+exit 0
+$ gitleaks dir CLAUDE.md --redact -v
+8:21PM INF scanned ~6045 bytes (6.05 KB) in 40.3ms
+8:21PM INF no leaks found
+exit 0
+$ gitleaks dir . --redact -v
+8:21PM INF scanned ~156549511 bytes (156.55 MB) in 8.12s
+8:21PM INF no leaks found
+exit 0

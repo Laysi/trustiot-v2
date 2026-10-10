@@ -1,0 +1,7 @@
+applied platform/postgres/001-dev-smoke.sql
+applied platform/clickhouse/001-database.sql
+applied platform/clickhouse/002-table.sql
+applied platform/clickhouse/003-rows.sql
+published retained message on trustiot-dev/seed/hello
+seed verified: 2 machines (table and graph), 240 telemetry rows, 1 retained message
+seed exit 0
