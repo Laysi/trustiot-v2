@@ -1,0 +1,42 @@
+=== pathNormalization MERGE_SLASHES
+helmchartconfig.helm.cattle.io/istiod configured
+pathNormalization:
+  normalization: MERGE_SLASHES
+rootNamespace: istio-system
+=== slashes
+OK   [slashes] valid cookie //internal/tenants -> 403 214ms denied by /internal DENY
+OK   [slashes] valid cookie ///internal -> 403 199ms denied by /internal DENY
+OK   [slashes] valid cookie //internal -> 403 199ms denied by /internal DENY
+OK   [slashes] valid cookie /internal//tenants -> 403 199ms denied by /internal DENY
+OK   [slashes] valid cookie /%2finternal/tenants -> 200 201ms passed the DENY policy to the backend
+OK   [slashes] valid cookie /%2Finternal -> 200 201ms passed the DENY policy to the backend
+OK   [slashes] valid cookie /x/..//internal/tenants -> 403 199ms denied by /internal DENY
+OK   [slashes] valid cookie /./%2finternal -> 200 201ms passed the DENY policy to the backend
+OK   [slashes] valid cookie /%2f%2finternal -> 200 204ms passed the DENY policy to the backend
+OK   [slashes] valid cookie //./internal -> 403 198ms denied by /internal DENY
+OK   [slashes] valid cookie /.//internal/tenants -> 403 196ms denied by /internal DENY
+OK   [slashes] valid cookie //INTERNAL/tenants -> 200 201ms passed the DENY policy to the backend
+done: 12 rows, 0 failing
+done: 62 rows, 0 failing
+=== pathNormalization DECODE_AND_MERGE_SLASHES
+helmchartconfig.helm.cattle.io/istiod configured
+pathNormalization:
+  normalization: DECODE_AND_MERGE_SLASHES
+rootNamespace: istio-system
+=== slashes
+OK   [slashes] valid cookie //internal/tenants -> 403 207ms denied by /internal DENY
+OK   [slashes] valid cookie ///internal -> 403 196ms denied by /internal DENY
+OK   [slashes] valid cookie //internal -> 403 197ms denied by /internal DENY
+OK   [slashes] valid cookie /internal//tenants -> 403 199ms denied by /internal DENY
+OK   [slashes] valid cookie /%2finternal/tenants -> 403 205ms denied by /internal DENY
+OK   [slashes] valid cookie /%2Finternal -> 403 200ms denied by /internal DENY
+OK   [slashes] valid cookie /x/..//internal/tenants -> 403 198ms denied by /internal DENY
+OK   [slashes] valid cookie /./%2finternal -> 403 198ms denied by /internal DENY
+OK   [slashes] valid cookie /%2f%2finternal -> 403 196ms denied by /internal DENY
+OK   [slashes] valid cookie //./internal -> 403 197ms denied by /internal DENY
+OK   [slashes] valid cookie /.//internal/tenants -> 403 197ms denied by /internal DENY
+OK   [slashes] valid cookie //INTERNAL/tenants -> 200 202ms passed the DENY policy to the backend
+done: 12 rows, 0 failing
+done: 62 rows, 0 failing
+=== restore
+helmchartconfig.helm.cattle.io/istiod configured

@@ -101,6 +101,7 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 ## CI 檢查
 
 - `ci/check-workflows.ts`：CI 的 `workflow-policy` 檢查。每個 job 要明列 `permissions`，action 與 reusable workflow 要釘 40 字元 commit SHA（本地 action 不必釘，但要放在 `.github/actions/` 下），容器映像要釘 digest，不得使用 `pull_request_target` 與 `workflow_run`；規則與理由見 [CI 與發佈](../docs/architecture/ci-release.md)。執行：`bun scripts/ci/check-workflows.ts`。
+- `ci/lint-workflows.ts`：CI 的 `workflow-policy` 的另一步，以 `.prototools` 釘選的 actionlint 檢查 workflow 的語法與各處可用的 context，擋下 GitHub 無法解析的檔案（例如 job 層 `env` 用了 `runner.temp`）；不啟用 shellcheck，理由見同一份文件的「Workflow 語法檢查」。執行：`proto install actionlint` 後 `bun scripts/ci/lint-workflows.ts`。
 
 ## release/：發佈流程
 

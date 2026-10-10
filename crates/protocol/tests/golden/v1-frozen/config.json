@@ -1,0 +1,107 @@
+{
+  "devices": [
+    {
+      "host": "192.168.10.21",
+      "id": "0199d0a0-0000-7000-8000-000000000001",
+      "model": "ms300-vfd",
+      "poll_interval_ms": 1000,
+      "port": 502,
+      "transport": "modbus_tcp",
+      "unit_id": 1
+    },
+    {
+      "host": "192.168.10.30",
+      "id": "0199d0a0-0000-7000-8000-000000000002",
+      "model": "pm-2000",
+      "poll_interval_ms": 5000,
+      "port": 4196,
+      "transport": "rtu_over_tcp",
+      "unit_id": 3
+    },
+    {
+      "host": "192.168.10.30",
+      "id": "0199d0a0-0000-7000-8000-000000000003",
+      "model": "pm-2000",
+      "poll_interval_ms": 5000,
+      "port": 4196,
+      "transport": "rtu_over_tcp",
+      "unit_id": 4
+    }
+  ],
+  "models": [
+    {
+      "name": "ms300-vfd",
+      "points": [
+        {
+          "address": 8451,
+          "data_type": "u16",
+          "function_code": 3,
+          "key": "frequency",
+          "scale": 0.01
+        },
+        {
+          "address": 8460,
+          "byte_order": "cdab",
+          "data_type": "u32",
+          "function_code": 3,
+          "key": "energy_wh"
+        },
+        {
+          "address": 0,
+          "data_type": "i16",
+          "function_code": 4,
+          "key": "temperature",
+          "offset": -40.0,
+          "scale": 0.1
+        },
+        {
+          "address": 0,
+          "data_type": "bool",
+          "function_code": 1,
+          "key": "running"
+        }
+      ]
+    },
+    {
+      "name": "pm-2000",
+      "points": [
+        {
+          "address": 0,
+          "data_type": "f32",
+          "function_code": 4,
+          "key": "voltage_a"
+        },
+        {
+          "address": 2,
+          "byte_order": "dcba",
+          "data_type": "u64",
+          "function_code": 4,
+          "key": "energy_wh"
+        },
+        {
+          "address": 6,
+          "byte_order": "badc",
+          "data_type": "f64",
+          "function_code": 4,
+          "key": "power"
+        },
+        {
+          "address": 100,
+          "data_type": "string",
+          "function_code": 3,
+          "key": "serial",
+          "length": 5
+        },
+        {
+          "address": 3,
+          "data_type": "bool",
+          "function_code": 2,
+          "key": "breaker"
+        }
+      ]
+    }
+  ],
+  "rev": 1,
+  "v": 1,
+  "version": 7
+}

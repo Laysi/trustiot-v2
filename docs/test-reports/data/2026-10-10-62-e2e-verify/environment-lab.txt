@@ -1,0 +1,27 @@
+NAME="Fedora Linux Asahi Remix"
+VERSION="44 (Server Edition)"
+RELEASE_TYPE=stable
+aarch64
+Client Version: v1.36.5+k3s1
+Kustomize Version: v5.8.1
+Server Version: v1.36.5+k3s1
+istiod:
+registry.istio.io/release/pilot:1.30.5-distroless
+ztunnel:
+registry.istio.io/release/ztunnel:1.30.5-distroless
+gateway-api:
+{"api-approved.kubernetes.io":"https://github.com/kubernetes-sigs/gateway-api/pull/4530","gateway.networking.k8s.io/bundle-version":"v1.6.1","gateway.networking.k8s.io/channel":"standard","helm.sh/resource-policy":"keep","meta.helm.sh/release-name":"traefik-crd","meta.helm.sh/release-namespace":"kube-system"}
+images:
+trustiot-assets-5b7989cd69-tdq6c assets=docker.io/traefik/whoami@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44 
+trustiot-certs-6f465d4445-jqt2r certs=docker.io/traefik/whoami@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44 
+trustiot-identity-66d8b95f97-stlkf identity=localhost/trustiot-e2e/identity-double@sha256:acf3aac75fa69d4a3db3a28e33aedcf3a93bfe64ecffd75a8fbc0af1588d1bdb 
+trustiot-ingress-istio-d6b9bdcf9-c8lbr istio-proxy=registry.istio.io/release/proxyv2@sha256:658e29ad3b72b20f62f3133088d12ac2abd29abe119209478babce32fd44a94d 
+trustiot-ingress-istio-d6b9bdcf9-qcxx2 istio-proxy=registry.istio.io/release/proxyv2@sha256:658e29ad3b72b20f62f3133088d12ac2abd29abe119209478babce32fd44a94d 
+trustiot-mqtt-bridge-665cbb87bc-865rm mqtt-bridge=docker.io/traefik/whoami@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44 
+gateway-pod-security:
+{"seccompProfile":{"type":"RuntimeDefault"},"sysctls":[{"name":"net.ipv4.ip_unprivileged_port_start","value":"0"}]}
+{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"privileged":false,"readOnlyRootFilesystem":true,"runAsGroup":1337,"runAsNonRoot":true,"runAsUser":1337}
+               total        used        free      shared  buff/cache   available
+Mem:            7543        4194         586         162        3940        3348
+tested commit: a25efe9d (a25efe9 feat(deploy): add Istio ambient ingress ..., worktree HEAD; origin/main later advanced, deploy/ unchanged)
+local tools: bun 1.4.2 v4.3.0+gbec5b06 kubectl 1.36.5 kubeconform 0.8.0

@@ -1,0 +1,14 @@
+=== slashes
+OK   [slashes] valid cookie //internal/tenants -> 403 207ms denied by /internal DENY
+OK   [slashes] valid cookie ///internal -> 403 196ms denied by /internal DENY
+OK   [slashes] valid cookie //internal -> 403 197ms denied by /internal DENY
+OK   [slashes] valid cookie /internal//tenants -> 403 199ms denied by /internal DENY
+OK   [slashes] valid cookie /%2finternal/tenants -> 403 205ms denied by /internal DENY
+OK   [slashes] valid cookie /%2Finternal -> 403 200ms denied by /internal DENY
+OK   [slashes] valid cookie /x/..//internal/tenants -> 403 198ms denied by /internal DENY
+OK   [slashes] valid cookie /./%2finternal -> 403 198ms denied by /internal DENY
+OK   [slashes] valid cookie /%2f%2finternal -> 403 196ms denied by /internal DENY
+OK   [slashes] valid cookie //./internal -> 403 197ms denied by /internal DENY
+OK   [slashes] valid cookie /.//internal/tenants -> 403 197ms denied by /internal DENY
+OK   [slashes] valid cookie //INTERNAL/tenants -> 200 202ms passed the DENY policy to the backend
+done: 12 rows, 0 failing

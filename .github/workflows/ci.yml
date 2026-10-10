@@ -5,6 +5,8 @@
 # (scripts/ci/check-workflows.ts): every job lists its `permissions`; every action is pinned
 # to a full commit SHA with the tag in a trailing comment; no `pull_request_target` or
 # `workflow_run` triggers, so pull requests from forks never get secrets or a write token.
+# The same job runs actionlint (scripts/ci/lint-workflows.ts) so a file GitHub cannot parse
+# fails here instead of at its first trigger.
 #
 # Checks that later issues add to this workflow:
 # - Integration tests (Laysi/trustiot-v2#60): service containers for Postgres with AGE,
@@ -196,9 +198,14 @@ jobs:
       - id: toolchain
         uses: ./.github/actions/setup-proto
         with:
-          tools: bun
+          tools: bun actionlint
       - name: Check workflow permissions and action pinning
         run: bun scripts/ci/check-workflows.ts
+      # What GitHub itself would reject when it parses a workflow, for example a context that
+      # is not available at that key. Without this, such a file only fails when it is triggered.
+      - name: Lint workflows with actionlint
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun scripts/ci/lint-workflows.ts
       - name: Install script dependencies
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: bun install --cwd scripts --frozen-lockfile

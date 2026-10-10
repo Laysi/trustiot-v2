@@ -1,0 +1,15 @@
+== saas: options ConfigMap (replicas, service type, PDB) and listener
+25:            cidr: 10.42.0.1/32
+44:      replicas: 2
+62:      type: ClusterIP
+65:      minAvailable: 1
+185:      port: 80
+186:      protocol: HTTP
+== onprem: options ConfigMap (replicas, service type, PDB) and listener
+24:        - port: 443
+46:      replicas: 2
+63:      type: LoadBalancer
+66:      minAvailable: 1
+184:      port: 443
+185:      protocol: HTTPS
+187:        mode: Terminate

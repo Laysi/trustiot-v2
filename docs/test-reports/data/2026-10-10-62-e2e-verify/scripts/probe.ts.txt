@@ -1,0 +1,594 @@
+// Independent skeptical probe for Laysi/trustiot-v2#62 (not part of the repo's e2e).
+// Sends raw bytes to the ingress gateway (through an ssh -L tunnel to its ClusterIP) so nothing
+// normalizes the request target or the headers. Usage:
+//   PROBE_PORT=<local port> PROBE_SHAPE=saas|onprem PROBE_CA=<ca pem path, onprem> \
+//   PROBE_OUT=<json path> bun probe.ts <group...|all>
+import net from "node:net";
+import tls from "node:tls";
+import http2 from "node:http2";
+import { readFileSync, writeFileSync } from "node:fs";
+
+const PORT = Number(process.env.PROBE_PORT);
+const SHAPE = process.env.PROBE_SHAPE ?? "saas";
+const CA = process.env.PROBE_SHAPE === "onprem" && process.env.PROBE_CA ? readFileSync(process.env.PROBE_CA, "utf8") : undefined;
+const OUT = process.env.PROBE_OUT;
+const HOSTS =
+  SHAPE === "saas"
+    ? { app: "app.saas.trustiot.test", gateway: "gw.saas.trustiot.test", ota: "ota.saas.trustiot.test" }
+    : { app: "trustiot.factory.test", gateway: "gw.trustiot.factory.test", ota: "ota.trustiot.factory.test" };
+const FORGED = `forged.${crypto.randomUUID()}`;
+const VALID = `sid=valid-${crypto.randomUUID().replaceAll("-", "")}`;
+const SLOW = `sid=slow-${crypto.randomUUID().replaceAll("-", "")}`;
+const PROTECTED = "Name: protected-backend";
+const PUBLIC_MARKERS = ["Name: public-certs", "Name: public-mqtt-bridge", "identity-double"];
+
+type Resp = { status: number | string; headers: Record<string, string[]>; body: string; ms: number; bytes: number };
+
+function connect(sni?: string): Promise<net.Socket> {
+  return new Promise((resolve, reject) => {
+    const s =
+      SHAPE === "onprem"
+        ? tls.connect({ host: "127.0.0.1", port: PORT, ca: CA, servername: sni ?? HOSTS.app, checkServerIdentity: () => undefined })
+        : net.connect({ host: "127.0.0.1", port: PORT });
+    s.once(SHAPE === "onprem" ? "secureConnect" : "connect", () => resolve(s));
+    s.once("error", reject);
+  });
+}
+
+// Sends the exact bytes; resolves when the peer closes, resets or after `waitMs` without close.
+async function sendRaw(bytes: Buffer, sni?: string, waitMs = 8000): Promise<Resp> {
+  const started = performance.now();
+  let first: number | undefined;
+  const chunks: Buffer[] = [];
+  let sock: net.Socket;
+  try {
+    sock = await connect(sni);
+  } catch (e) {
+    return { status: `connect-error:${(e as Error).message}`, headers: {}, body: "", ms: 0, bytes: 0 };
+  }
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      sock.destroy();
+      resolve();
+    }, waitMs);
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    sock.on("data", (d) => {
+      first ??= performance.now();
+      chunks.push(d);
+      // Enough to judge: stop reading once the response is complete (content-length or headers only).
+      const text = Buffer.concat(chunks).toString("latin1");
+      const split = text.indexOf("\r\n\r\n");
+      if (split >= 0) {
+        const m = /content-length:\s*(\d+)/i.exec(text.slice(0, split));
+        if (m && text.length - split - 4 >= Number(m[1])) {
+          sock.destroy();
+          done();
+        }
+      }
+    });
+    sock.on("close", done);
+    sock.on("end", done);
+    sock.on("error", done);
+    sock.write(bytes, () => {});
+  });
+  const ms = (first ?? performance.now()) - started;
+  const all = Buffer.concat(chunks);
+  const split = all.indexOf("\r\n\r\n");
+  if (split < 0) return { status: all.length ? "malformed" : "no-response", headers: {}, body: all.toString("latin1"), ms, bytes: all.length };
+  const [line = "", ...hl] = all.subarray(0, split).toString("latin1").split("\r\n");
+  const headers: Record<string, string[]> = {};
+  for (const l of hl) {
+    const c = l.indexOf(":");
+    (headers[l.slice(0, c).trim().toLowerCase()] ??= []).push(l.slice(c + 1).trim());
+  }
+  let body = all.subarray(split + 4);
+  if (headers["transfer-encoding"]?.some((v) => /chunked/i.test(v))) {
+    const parts: Buffer[] = [];
+    let o = 0;
+    while (o < body.length) {
+      const e = body.indexOf("\r\n", o);
+      if (e < 0) break;
+      const n = Number.parseInt(body.subarray(o, e).toString(), 16);
+      if (!Number.isFinite(n) || n === 0) break;
+      parts.push(body.subarray(e + 2, e + 2 + n));
+      o = e + 2 + n + 2;
+    }
+    body = Buffer.concat(parts);
+  }
+  return { status: Number(line.split(" ")[1]), headers, body: body.toString("latin1"), ms, bytes: all.length };
+}
+
+type ReqOpts = {
+  method?: string;
+  target: string | Buffer;
+  host?: string | null; // null: no Host header
+  hostLines?: string[]; // extra raw Host-ish lines
+  headers?: (string | Buffer)[]; // raw header lines, without CRLF
+  version?: string;
+  body?: string;
+  sni?: string;
+  waitMs?: number;
+};
+function build(o: ReqOpts): Buffer {
+  const parts: Buffer[] = [];
+  const add = (x: string | Buffer) => parts.push(typeof x === "string" ? Buffer.from(x, "latin1") : x);
+  add(`${o.method ?? "GET"} `);
+  add(o.target);
+  add(` ${o.version ?? "HTTP/1.1"}\r\n`);
+  if (o.host !== null) add(`host: ${o.host ?? HOSTS.app}\r\n`);
+  for (const l of o.hostLines ?? []) add(`${l}\r\n`);
+  add("connection: close\r\n");
+  for (const h of o.headers ?? []) {
+    add(h);
+    add("\r\n");
+  }
+  if (o.body !== undefined) add(`content-length: ${Buffer.byteLength(o.body)}\r\n`);
+  add("\r\n");
+  if (o.body !== undefined) add(o.body);
+  return Buffer.concat(parts);
+}
+// SNI follows the Host header when that is a plain host name; odd Host values get a valid SNI.
+const sniFor = (h?: string | null) => (h && /^[A-Za-z0-9.-]+(:\d+)?$/.test(h) && !/^\d+\.\d+\.\d+\.\d+/.test(h) ? h.split(":")[0].replace(/\.$/, "") : undefined);
+const send = (o: ReqOpts) => sendRaw(build(o), o.sni ?? sniFor(o.host), o.waitMs);
+
+function countHeader(body: string, name: string): number {
+  return body.split("\n").filter((l) => l.toLowerCase().startsWith(`${name.toLowerCase()}:`)).length;
+}
+// identity double echo is JSON with a lowercase headers map.
+function identityEchoCount(body: string): number {
+  try {
+    const j = JSON.parse(body) as { headers?: Record<string, string> };
+    return j.headers && "x-internal-identity" in j.headers ? 1 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+const rows: Record<string, unknown>[] = [];
+let failures = 0;
+function row(group: string, name: string, shown: string, r: Resp, verdict: string, ok: boolean, extra: Record<string, unknown> = {}) {
+  // A transport error proves nothing about the gateway: never count it as "blocked".
+  // Any non-HTTP outcome (connect error, no response, malformed, h2 error) proves nothing either.
+  if (typeof r.status === "string") ok = false;
+  if (!ok) failures++;
+  const entry = {
+    group,
+    name,
+    request: shown,
+    status: r.status,
+    ms: Math.round(r.ms),
+    reachedProtected: r.body.includes(PROTECTED),
+    reachedPublic: PUBLIC_MARKERS.some((m) => r.body.includes(m)),
+    forgedEchoed: r.body.includes(FORGED),
+    verdict,
+    ok,
+    ...extra,
+  };
+  rows.push(entry);
+  console.log(`${ok ? "OK  " : "FAIL"} [${group}] ${name} -> ${r.status} ${Math.round(r.ms)}ms ${verdict}`);
+}
+const show = (t: string | Buffer) => (typeof t === "string" ? t : JSON.stringify(t.toString("latin1")));
+
+// A no-cookie request must never reach the protected backend nor echo the forged header.
+function noCookieOk(r: Resp): boolean {
+  return !r.body.includes(PROTECTED) && !r.body.includes(FORGED);
+}
+
+// Statuses that mean "refused before any backend": bad request, no/invalid cookie, denied, no route,
+// upgrade required, header too large. A redirect or a 2xx from a backend is NOT in this set.
+const BLOCKED = new Set([400, 401, 403, 404, 426, 431]);
+const isBlocked = (r: Resp) => typeof r.status === "number" && BLOCKED.has(r.status);
+
+const pad = (n: number, c = "a") => c.repeat(n);
+const B = (s: string) => Buffer.from(s, "latin1");
+
+async function groupBypass() {
+  const t: [string, string | Buffer][] = [
+    // NUL and trailing dot variants
+    ["pct-NUL after public path", "/healthz%00"],
+    ["pct-NUL then dot-dot", "/healthz%00/../api/whoami"],
+    ["pct-NUL before public path", "/api/whoami%00/healthz"],
+    ["double-encoded NUL", "/healthz%2500"],
+    ["raw NUL byte", B("/healthz\x00/../api/whoami")],
+    ["raw NUL in cookie route", B("/api/whoami\x00")],
+    ["trailing dot", "/healthz."],
+    ["trailing double dot", "/healthz.."],
+    ["dot after public path then dot-dot", "/healthz./../api/whoami"],
+    ["encoded trailing dot", "/healthz%2e"],
+    ["encoded space", "/healthz%20"],
+    ["raw tab", B("/healthz\t/../api/whoami")],
+    ["encoded tab", "/healthz%09"],
+    ["encoded LF", "/healthz%0a"],
+    ["encoded CRLF header injection", "/healthz%0d%0ax-internal-identity:%20forged"],
+    ["plus", "/healthz+"],
+    // %2F, %5C
+    ["pct2F after public path", "/healthz%2Fx"],
+    ["pct2F leading", "/%2Fapi/whoami"],
+    ["pct2F pair leading", "/%2f%2fapi%2fwhoami"],
+    ["dot-dot with %2e%2e%2f", "/healthz/%2e%2e%2fapi/whoami"],
+    ["all-encoded traversal", "/healthz%2f%2e%2e%2fapi%2fwhoami"],
+    ["upper-case %2F..%2F", "/healthz%2F..%2Fapi/whoami"],
+    ["pct5C dot-dot", "/healthz%5C..%5Capi/whoami"],
+    ["pct5C mixed with slash", "/healthz%5c/../api/whoami"],
+    ["pct5C leading", "/%5Capi%5Cwhoami"],
+    ["pct5C upper", "/healthz%5C..%5Capi%5Cwhoami"],
+    // double encoding
+    ["double-encoded dot-dot", "/healthz/%252e%252e/api/whoami"],
+    ["double-encoded leading dot-dot", "/%252e%252e/api/whoami"],
+    ["double-encoded slash", "/healthz%252f..%252fapi/whoami"],
+    ["double-encoded internal", "/%2569nternal/tenants"],
+    ["triple-encoded dot", "/healthz/%25252e%25252e/api/whoami"],
+    // overlong UTF-8 and unicode
+    ["overlong dot c0ae", "/healthz/%c0%ae%c0%ae/api/whoami"],
+    ["overlong c0 2e", "/healthz/%c0%2e%c0%2e/api/whoami"],
+    ["overlong slash c0af", "/healthz%c0%af..%c0%afapi/whoami"],
+    ["overlong slash e080af", "/healthz%e0%80%af..%e0%80%afapi/whoami"],
+    ["overlong dot e080ae", "/healthz/%e0%80%ae%e0%80%ae/api/whoami"],
+    ["overlong dot-dot internal", "/%c0%ae%c0%ae/internal/tenants"],
+    ["raw overlong bytes", B("/healthz/\xc0\xae\xc0\xae/api/whoami")],
+    ["fullwidth solidus", "/healthz%ef%bc%8f..%ef%bc%8fapi/whoami"],
+    ["IIS %u002e", "/healthz/%u002e%u002e/api/whoami"],
+    ["IIS %u2215", "/healthz%u2215..%u2215api/whoami"],
+    ["raw utf-8 in path", B("/h\xc3\xa9althz")],
+    ["bad percent", "/healthz%zz/../api/whoami"],
+    ["truncated percent", "/healthz%/../api/whoami"],
+    ["truncated percent 2", "/healthz%2"],
+    // more shapes
+    ["semicolon after dot-dot", "/healthz/..;/api/whoami"],
+    ["semicolon with encoded slash", "/healthz;%2f..%2fapi/whoami"],
+    ["matrix param public", "/healthz;a=b/"],
+    ["dot-dot-dot-dot many", "/healthz/" + "../".repeat(50) + "api/whoami"],
+    ["many double slashes", "/" + "/".repeat(200) + "api/whoami"],
+    ["query-only public", "/api/whoami?/healthz"],
+    ["encoded question", "/healthz%3f/../api/whoami"],
+    ["fragment-encoded hash", "/healthz%23/../api/whoami"],
+    ["asterisk-form", "*"],
+    ["empty path", ""],
+    ["authority-form", HOSTS.app + ":80"],
+    // long paths
+    ["8 KiB path", "/api/" + pad(8000)],
+    ["8 KiB path under public prefix", "/healthz/" + pad(8000)],
+    ["64 KiB path", "/api/" + pad(65000)],
+    ["1 MiB path", "/api/" + pad(1_000_000)],
+    ["100 KiB query on public path", "/healthz?" + pad(100_000)],
+    ["20000 dot-dot segments", "/healthz/" + "..%2f".repeat(20000) + "api/whoami"],
+  ];
+  for (const [name, target] of t) {
+    const r = await send({ target, headers: [`x-internal-identity: ${FORGED}`], waitMs: 15000 });
+    row("bypass", name, show(target).slice(0, 120), r, noCookieOk(r) && isBlocked(r) ? "refused before any backend" : "NOT REFUSED", noCookieOk(r) && isBlocked(r));
+  }
+  // The same request-target shapes with a valid cookie: allowed through (200) is fine, but the
+  // identity header from the identity service must be the only one.
+}
+
+// Paths under /internal must never reach a backend, with or without a valid cookie.
+async function groupInternal() {
+  const targets: [string, string, boolean][] = [
+    ["plain /internal", "/internal", true],
+    ["/internal/tenants", "/internal/tenants", true],
+    ["pct2F", "/internal%2ftenants", true],
+    ["pct2F upper", "/internal%2Ftenants", true],
+    ["encoded i", "/%69nternal/tenants", true],
+    ["encoded i upper", "/%69%6e%74ernal", true],
+    ["double slash", "//internal/tenants", true],
+    ["dot segment", "/./internal/tenants", true],
+    ["dot-dot", "/x/../internal/tenants", true],
+    ["encoded dot-dot", "/x/%2e%2e/internal/tenants", true],
+    ["healthz dot-dot", "/healthz/../internal/tenants", true],
+    ["semicolon", "/internal;x=y/tenants", true],
+    ["trailing dot", "/internal.", true],
+    ["internal trailing slash", "/internal/", true],
+    ["internalx prefix (DENY /internal* covers)", "/internalx", true],
+    ["backslash", "/internal%5ctenants", true],
+    ["NUL", "/internal%00", true],
+    ["overlong dot-dot (gateway does not decode it; opaque segment, informational)", "/x/%c0%ae%c0%ae/internal/tenants", false],
+    ["ext-authz path", "/internal/ext-authz/api/whoami", true],
+    ["case: /INTERNAL (case-sensitive prefix, informational)", "/INTERNAL/tenants", false],
+    ["case: /Internal (informational)", "/Internal", false],
+  ];
+  for (const [name, target, mustBlock] of targets) {
+    for (const [label, cookie] of [["no cookie", undefined], ["valid cookie", VALID]] as const) {
+      const r = await send({ target, headers: cookie ? [`cookie: ${cookie}`] : [] });
+      const reached = !isBlocked(r) || r.body.includes(PROTECTED);
+      const ok = !mustBlock || !reached;
+      row("internal", `${name} / ${label}`, target, r, mustBlock ? (reached ? "REACHED BACKEND" : "blocked") : reached ? "reached backend (informational)" : "blocked", ok);
+    }
+  }
+}
+
+function hdrCases(): [string, (string | Buffer)[]][] {
+  const f = FORGED;
+  return [
+    ["lower-case", [`x-internal-identity: ${f}`]],
+    ["canonical case", [`X-Internal-Identity: ${f}`]],
+    ["upper case", [`X-INTERNAL-IDENTITY: ${f}`]],
+    ["mixed case", [`x-InTeRnAl-iDeNtItY: ${f}`]],
+    ["duplicated same case", [`x-internal-identity: ${f}`, `x-internal-identity: ${f}2`]],
+    ["duplicated mixed case", [`x-internal-identity: ${f}`, `X-Internal-Identity: ${f}2`, `X-INTERNAL-IDENTITY: ${f}3`]],
+    ["comma-joined", [`x-internal-identity: ${f}, ${f}2`]],
+    ["empty value", ["x-internal-identity:"]],
+    ["leading whitespace value", [`x-internal-identity:   ${f}`]],
+    ["tab before value", [`x-internal-identity:\t${f}`]],
+    ["obs-fold continuation", [`x-internal-identity: a`, ` ${f}`]],
+    ["space before colon", [`x-internal-identity : ${f}`]],
+    ["connection-nominated (hop-by-hop)", [`connection: x-internal-identity`, `x-internal-identity: ${f}`]],
+    ["underscore variant", [`x_internal_identity: ${f}`]],
+    ["trailing-space name variant", [`x-internal-identity\t: ${f}`]],
+    ["long value 60 KiB", [`x-internal-identity: ${pad(60000)}${f}`]],
+    ["100 headers + forged", [...Array.from({ length: 100 }, (_, i) => `x-pad-${i}: v`), `x-internal-identity: ${f}`]],
+    ["with x-envoy-* spoof", [`x-envoy-original-path: /healthz`, `x-envoy-internal: true`, `x-internal-identity: ${f}`]],
+    ["x-original-uri / x-forwarded-uri spoof", [`x-original-uri: /healthz`, `x-forwarded-uri: /healthz`, `x-internal-identity: ${f}`]],
+  ];
+}
+
+async function groupSmuggle() {
+  // Public paths (exceptions): the backend must see 0 identity headers.
+  const publics: [string, string, string, string][] = [
+    ["/healthz (identity)", "/healthz", HOSTS.app, "identity"],
+    ["/auth/login (identity)", "/auth/login", HOSTS.app, "identity"],
+    ["/certs/renew (certs)", "/certs/renew", HOSTS.gateway, "whoami"],
+    ["/mqtt (mqtt-bridge)", "/mqtt", HOSTS.gateway, "whoami"],
+  ];
+  for (const [pname, path, host, kind] of publics) {
+    for (const [cname, headers] of hdrCases()) {
+      for (const cookie of [undefined, VALID]) {
+        const hs = [...headers, ...(cookie ? [`cookie: ${cookie}`] : [])];
+        const method = "POST";
+        const r = await send({ target: path, host, method, headers: method === "POST" ? [...hs, "content-length: 0"] : hs, waitMs: 10000 });
+        const seen = kind === "identity" ? identityEchoCount(r.body) : countHeader(r.body, "x-internal-identity");
+        const status = r.status;
+        // Header-parse rejections (400/431) are fine; success must show 0.
+        const rejected = status === 400 || status === 431;
+        // A different header name (underscore) is passed through unchanged by Envoy: informational.
+        const underscore = cname === "underscore variant";
+        const ok = underscore ? true : !r.body.includes(FORGED) && (rejected || seen === 0);
+        row("smuggle-public", `${pname} / ${cname} / ${cookie ? "cookie" : "no cookie"}`, `${method} ${path}`, r, `backend saw ${seen} identity header(s)${underscore ? "; INFO: x_internal_identity passed through as a distinct header" : ""}`, ok, { identityHeadersSeen: seen, underscoreForwarded: underscore ? r.body.toLowerCase().includes("x_internal_identity") : undefined });
+      }
+    }
+  }
+  // Protected path: with a valid cookie the backend sees exactly the identity service's value.
+  for (const [cname, headers] of hdrCases()) {
+    const r = await send({ target: "/api/whoami", headers: [...headers, `cookie: ${VALID}`], waitMs: 10000 });
+    const seen = countHeader(r.body, "x-internal-identity");
+    const val = r.body.split("\n").find((l) => l.toLowerCase().startsWith("x-internal-identity:"));
+    const rejected = r.status === 400 || r.status === 431;
+    const underscoreP = cname === "underscore variant";
+    const ok = underscoreP ? r.status === 200 && seen === 1 && (val ?? "").includes("double.") : !r.body.includes(FORGED) && (rejected || (r.status === 200 && seen === 1 && (val ?? "").includes("double.")) || (r.status === 200 && seen === 0));
+    row("smuggle-protected", `${cname} / valid cookie`, "GET /api/whoami", r, `status ${r.status}; backend saw ${seen} (${(val ?? "").slice(0, 40)})`, ok, { identityHeadersSeen: seen });
+    const r2 = await send({ target: "/api/whoami", headers, waitMs: 10000 });
+    row("smuggle-protected", `${cname} / no cookie`, "GET /api/whoami", r2, `status ${r2.status}`, noCookieOk(r2) && isBlocked(r2));
+  }
+  // x-forwarded-proto variants: the backend sees exactly one value, "https".
+  const xfp: [string, string[]][] = [
+    ["http", ["x-forwarded-proto: http"]],
+    ["HTTP upper", ["X-Forwarded-Proto: HTTP"]],
+    ["duplicate", ["x-forwarded-proto: http", "X-Forwarded-Proto: ftp"]],
+    ["comma list", ["x-forwarded-proto: http, https"]],
+    ["empty", ["x-forwarded-proto:"]],
+    ["Forwarded header", ["forwarded: proto=http;for=1.2.3.4"]],
+  ];
+  for (const [name, headers] of xfp) {
+    for (const [pname, target, host, cookie] of [
+      ["protected", "/api/whoami", HOSTS.app, VALID],
+      ["public", "/certs/renew", HOSTS.gateway, undefined],
+    ] as const) {
+      const r = await send({ target, host, method: pname === "public" ? "POST" : "GET", headers: [...headers, ...(cookie ? [`cookie: ${cookie}`] : []), ...(pname === "public" ? ["content-length: 0"] : [])] });
+      const vals = r.body.split("\n").filter((l) => l.toLowerCase().startsWith("x-forwarded-proto:")).map((l) => l.slice(l.indexOf(":") + 1).trim());
+      const ok = r.status === 200 && vals.length === 1 && vals[0] === "https";
+      row("xfp", `${name} / ${pname}`, target, r, `backend x-forwarded-proto: ${JSON.stringify(vals)}`, ok);
+    }
+  }
+}
+
+// Host / authority disagreement between what authz and the router see.
+async function groupHost() {
+  const A = HOSTS.app;
+  const G = HOSTS.gateway;
+  const cases: [string, ReqOpts][] = [
+    ["Host with trailing dot, /api/whoami", { target: "/api/whoami", host: `${A}.` }],
+    ["Host with trailing dot, gateway /mqtt", { target: "/mqtt", host: `${G}.`, method: "POST", headers: ["content-length: 0"] }],
+    ["Host with port, gateway /mqtt", { target: "/mqtt", host: `${G}:80`, method: "POST", headers: ["content-length: 0"] }],
+    ["Host upper case, gateway /mqtt", { target: "/mqtt", host: G.toUpperCase(), method: "POST", headers: ["content-length: 0"] }],
+    ["Host upper case, app /api/whoami", { target: "/api/whoami", host: A.toUpperCase() }],
+    ["gateway host + dot-dot to app path", { target: "/mqtt/../api/whoami", host: G }],
+    ["duplicate Host (gateway then app) /mqtt", { target: "/mqtt", host: G, hostLines: [`host: ${A}`], method: "POST", headers: ["content-length: 0"] }],
+    ["duplicate Host (app then gateway) /mqtt", { target: "/mqtt", host: A, hostLines: [`host: ${G}`], method: "POST", headers: ["content-length: 0"] }],
+    ["duplicate Host (gateway, app) /api/whoami", { target: "/api/whoami", host: G, hostLines: [`host: ${A}`] }],
+    ["comma Host", { target: "/mqtt", host: `${G}, ${A}`, method: "POST", headers: ["content-length: 0"] }],
+    ["userinfo Host", { target: "/mqtt", host: `${G}@${A}`, method: "POST", headers: ["content-length: 0"] }],
+    ["userinfo Host reversed", { target: "/mqtt", host: `${A}@${G}`, method: "POST", headers: ["content-length: 0"] }],
+    ["absolute-form gateway, Host app, /mqtt", { target: `http://${G}/mqtt`, host: A, method: "POST", headers: ["content-length: 0"] }],
+    ["absolute-form app, Host gateway, /mqtt", { target: `http://${A}/mqtt`, host: G, method: "POST", headers: ["content-length: 0"] }],
+    ["absolute-form gateway /mqtt, Host app, no cookie GET", { target: `http://${G}/mqtt/../api/whoami`, host: A }],
+    ["absolute-form app /api/whoami, Host gateway", { target: `http://${A}/api/whoami`, host: G }],
+    ["absolute-form https scheme", { target: `https://${G}/mqtt`, host: A, method: "POST", headers: ["content-length: 0"] }],
+    ["x-forwarded-host spoof", { target: "/mqtt", host: A, headers: [`x-forwarded-host: ${G}`, "x-original-host: " + G], method: "POST" }],
+    ["HTTP/1.0 without Host", { target: "/api/whoami", host: null, version: "HTTP/1.0" }],
+    ["HTTP/1.0 absolute-form no Host", { target: `http://${A}/api/whoami`, host: null, version: "HTTP/1.0" }],
+    ["empty Host", { target: "/api/whoami", host: "" }],
+    ["IP Host", { target: "/api/whoami", host: "127.0.0.1" }],
+    ["wildcard-ish Host", { target: "/api/whoami", host: "*" }],
+    ["ota host /healthz", { target: "/healthz", host: HOSTS.ota }],
+    ["ota host /api/whoami", { target: "/api/whoami", host: HOSTS.ota }],
+    ["gateway host /api/whoami", { target: "/api/whoami", host: G }],
+    ["gateway host /healthz", { target: "/healthz", host: G }],
+    ["app host /mqtt", { target: "/mqtt", host: A, method: "POST", headers: ["content-length: 0"] }],
+    ["app host /certs/renew", { target: "/certs/renew", host: A, method: "POST", headers: ["content-length: 0"] }],
+  ];
+  for (const [name, o] of cases) {
+    const r = await send({ ...o, headers: [...(o.headers ?? []), `x-internal-identity: ${FORGED}`] });
+    const reached = r.body.includes(PROTECTED);
+    row("host", name, `${o.method ?? "GET"} ${show(o.target)} host=${o.host}`, r, reached ? "REACHED PROTECTED" : isBlocked(r) ? "refused" : "public route", noCookieOk(r) && (isBlocked(r) || (r.status === 200 && PUBLIC_MARKERS.some((m) => r.body.includes(m)))));
+  }
+  // SNI-vs-Host disagreement on the on-prem listener.
+  if (SHAPE === "onprem") {
+    for (const [sniName, sni] of [["SNI gateway, Host app", HOSTS.gateway], ["SNI ota, Host app", HOSTS.ota], ["SNI unknown, Host app", "unknown.example.test"]] as const) {
+      const r = await send({ target: "/api/whoami", host: HOSTS.app, sni });
+      row("host", sniName, "GET /api/whoami", r, "", noCookieOk(r) && isBlocked(r));
+    }
+  }
+  // HTTP/2 (h2c prior knowledge on the plain listener; ALPN h2 on the TLS one):
+  // :authority and host header disagree.
+  const h2cases: [string, string, string, string?][] = [
+    [":authority gateway, host app, /mqtt", G, "/mqtt", A],
+    [":authority app, host gateway, /mqtt", A, "/mqtt", G],
+    [":authority gateway, host app, /mqtt/../api/whoami", G, "/mqtt/../api/whoami", A],
+    [":authority app, /healthz/../api/whoami", A, "/healthz/../api/whoami"],
+    [":authority app, /%2e%2e", A, "/healthz/%2e%2e/api/whoami"],
+    [":authority app, /api/whoami", A, "/api/whoami"],
+  ];
+  for (const [name, authority, path, hostHeader] of h2cases) {
+    const r = await h2(authority, path, hostHeader);
+    row("host-h2", name, `h2 ${path}`, r, r.status === 200 && r.body.includes(PROTECTED) ? "REACHED PROTECTED" : isBlocked(r) ? "refused" : "public route", noCookieOk(r) && (isBlocked(r) || (r.status === 200 && PUBLIC_MARKERS.some((m) => r.body.includes(m)))));
+  }
+}
+
+function h2(authority: string, path: string, hostHeader?: string): Promise<Resp> {
+  return new Promise((resolve) => {
+    const started = performance.now();
+    const url = `${SHAPE === "onprem" ? "https" : "http"}://127.0.0.1:${PORT}`;
+    let done = false;
+    const finish = (r: Resp) => {
+      if (done) return;
+      done = true;
+      resolve(r);
+    };
+    try {
+      const c = http2.connect(url, SHAPE === "onprem" ? { ca: CA, servername: authority.split(":")[0] } : {});
+      c.on("error", (e) => finish({ status: `h2-error:${(e as Error).message}`, headers: {}, body: "", ms: 0, bytes: 0 }));
+      const headers: Record<string, string> = { ":method": "GET", ":path": path, ":authority": authority, "x-internal-identity": FORGED };
+      if (hostHeader) headers.host = hostHeader;
+      const req = c.request(headers);
+      const chunks: Buffer[] = [];
+      let status: number | string = "none";
+      req.on("response", (h) => (status = Number(h[":status"])));
+      req.on("data", (d: Buffer) => chunks.push(d));
+      req.on("end", () => {
+        c.close();
+        finish({ status, headers: {}, body: Buffer.concat(chunks).toString(), ms: performance.now() - started, bytes: 0 });
+      });
+      req.on("error", (e) => {
+        c.close();
+        finish({ status: `h2-stream-error:${(e as Error).message}`, headers: {}, body: "", ms: 0, bytes: 0 });
+      });
+      req.end();
+      setTimeout(() => {
+        c.destroy();
+        finish({ status: "h2-timeout", headers: {}, body: "", ms: 0, bytes: 0 });
+      }, 8000);
+    } catch (e) {
+      finish({ status: `h2-throw:${(e as Error).message}`, headers: {}, body: "", ms: 0, bytes: 0 });
+    }
+  });
+}
+
+// Slow identity (timeout) and concurrency.
+async function groupTiming() {
+  const base: number[] = [];
+  for (let i = 0; i < 10; i++) base.push((await send({ target: "/healthz" })).ms);
+  base.sort((a, b) => a - b);
+  const rtt = base[Math.floor(base.length / 2)] ?? 0;
+  console.log(`baseline /healthz first-byte median ${Math.round(rtt)} ms`);
+  rows.push({ group: "timing", name: "baseline /healthz median ms", ms: Math.round(rtt), ok: true });
+  const times: number[] = [];
+  for (let i = 0; i < 10; i++) {
+    const r = await send({ target: "/api/whoami", headers: [`cookie: ${SLOW}`] });
+    times.push(r.ms);
+    // 503 within timeout (500 ms) + RTT + slack 300 ms
+    const ok = r.status === 503 && r.ms < 500 + rtt + 300 && r.ms > 400 && !r.body.includes(PROTECTED);
+    row("timing", `slow identity sequential #${i + 1}`, "GET /api/whoami", r, `503 expected within ~${Math.round(500 + rtt)} ms`, ok);
+  }
+  const conc = await Promise.all(Array.from({ length: 40 }, () => send({ target: "/api/whoami", headers: [`cookie: ${SLOW}`] })));
+  const max = Math.max(...conc.map((r) => r.ms));
+  const all503 = conc.every((r) => r.status === 503);
+  rows.push({ group: "timing", name: "40 concurrent slow requests", statuses: [...new Set(conc.map((r) => r.status))], maxMs: Math.round(max), minMs: Math.round(Math.min(...conc.map((r) => r.ms))), ok: all503 && max < 500 + rtt + 700 });
+  console.log(`40 concurrent slow: statuses ${[...new Set(conc.map((r) => r.status))]} max ${Math.round(max)} ms`);
+  if (!(all503 && max < 500 + rtt + 700)) failures++;
+  // slow identity must not delay a public path
+  const [pub, slow] = await Promise.all([send({ target: "/certs/renew", host: HOSTS.gateway, method: "POST", headers: ["content-length: 0"] }), send({ target: "/api/whoami", headers: [`cookie: ${SLOW}`] })]);
+  row("timing", "public path during a slow check", "POST /certs/renew", pub, `slow status ${slow.status}`, pub.status === 200 && pub.ms < rtt + 300);
+}
+
+// Polls while something else restarts or removes the identity service; stops at SIGTERM or after
+// PROBE_SECONDS. Never may a request without a valid cookie get 200 from a protected backend.
+async function groupWatch() {
+  const seconds = Number(process.env.PROBE_SECONDS ?? "60");
+  const end = Date.now() + seconds * 1000;
+  const hist: Record<string, number> = {};
+  let bad = 0;
+  let maxMs = 0;
+  const log: unknown[] = [];
+  while (Date.now() < end) {
+    const [a, b, c, pub] = await Promise.all([
+      send({ target: "/api/whoami" }),
+      send({ target: "/api/whoami", headers: [`cookie: ${VALID}`] }),
+      send({ target: "/api/whoami", headers: [`cookie: sid=garbage`] }),
+      send({ target: "/certs/renew", host: HOSTS.gateway, method: "POST", headers: [`x-internal-identity: ${FORGED}`, "content-length: 0"] }),
+    ]);
+    const pk = `public-certs:${pub.status}`;
+    hist[pk] = (hist[pk] ?? 0) + 1;
+    maxMs = Math.max(maxMs, pub.ms);
+    if (pub.body.includes(FORGED)) bad++;
+    for (const [label, r] of [["nocookie", a], ["valid", b], ["garbage", c]] as const) {
+      const key = `${label}:${r.status}`;
+      hist[key] = (hist[key] ?? 0) + 1;
+      if (label !== "valid" && (r.body.includes(PROTECTED) || r.status === 200)) {
+        bad++;
+        log.push({ t: new Date().toISOString(), label, status: r.status });
+      }
+      maxMs = Math.max(maxMs, r.ms);
+    }
+    await Bun.sleep(100);
+  }
+  console.log("watch histogram", JSON.stringify(hist), "fail-open count", bad, "max first-byte ms", Math.round(maxMs));
+  rows.push({ group: "watch", name: `poll ${seconds}s`, histogram: hist, failOpen: bad, maxMs: Math.round(maxMs), ok: bad === 0, bad: log });
+  if (bad) failures++;
+}
+
+// Sequential timing of a cookie route while the identity service is hung or down.
+async function groupDowntime() {
+  const base: number[] = [];
+  for (let i = 0; i < 8; i++) base.push((await send({ target: "/healthz" })).ms);
+  base.sort((a, b) => a - b);
+  const rtt = base[Math.floor(base.length / 2)] ?? 0;
+  rows.push({ group: "downtime", name: "baseline /healthz median ms", ms: Math.round(rtt), ok: true });
+  const ms: number[] = [];
+  const statuses: Record<string, number> = {};
+  for (let i = 0; i < 20; i++) {
+    for (const cookie of [VALID, undefined]) {
+      const r = await send({ target: "/api/whoami", headers: cookie ? [`cookie: ${cookie}`] : [] });
+      ms.push(r.ms);
+      statuses[String(r.status)] = (statuses[String(r.status)] ?? 0) + 1;
+      if (r.body.includes(PROTECTED) && !cookie) failures++;
+    }
+  }
+  ms.sort((a, b) => a - b);
+  const p = (q: number) => Math.round(ms[Math.min(ms.length - 1, Math.floor(ms.length * q))] ?? 0);
+  console.log(`downtime: baseline ${Math.round(rtt)} ms; n=${ms.length} statuses ${JSON.stringify(statuses)} min ${p(0)} p50 ${p(0.5)} p95 ${p(0.95)} max ${Math.round(ms[ms.length - 1] ?? 0)}`);
+  rows.push({ group: "downtime", name: "40 sequential requests", baselineMs: Math.round(rtt), statuses, minMs: p(0), p50Ms: p(0.5), p95Ms: p(0.95), maxMs: Math.round(ms[ms.length - 1] ?? 0), ok: true });
+}
+
+// Observation: with a VALID cookie, which /internal spellings does the DENY policy miss (the
+// request then reaches the catch-all backend, here a Go whoami whose ServeMux cleans the path)?
+async function groupSlashes() {
+  const targets = ["//internal/tenants", "///internal", "//internal", "/internal//tenants", "/%2finternal/tenants", "/%2Finternal", "/x/..//internal/tenants", "/./%2finternal", "/%2f%2finternal", "//./internal", "/.//internal/tenants", "//INTERNAL/tenants"];
+  for (const target of targets) {
+    const r = await send({ target, headers: [`cookie: ${VALID}`] });
+    const location = r.headers.location?.[0];
+    const reached = r.body.includes(PROTECTED) || r.status === 307 || r.status === 301 || r.status === 308 || r.status === 200;
+    row("slashes", `valid cookie ${target}`, target, r, `${r.status === 403 ? "denied by /internal DENY" : "passed the DENY policy to the backend"}${location ? ` (backend redirect Location: ${location})` : ""}`, isBlocked(r) || /INTERNAL/.test(target), { location, reachedBackend: reached });
+  }
+}
+
+const groups: Record<string, () => Promise<void>> = { slashes: groupSlashes, downtime: groupDowntime, bypass: groupBypass, internal: groupInternal, smuggle: groupSmuggle, host: groupHost, timing: groupTiming, watch: groupWatch };
+const wanted = process.argv.slice(2);
+for (const g of wanted.includes("all") ? ["bypass", "internal", "smuggle", "host", "timing"] : wanted) {
+  console.log(`=== ${g}`);
+  await groups[g]!();
+}
+if (OUT) writeFileSync(OUT, `${JSON.stringify(rows, null, 1)}\n`);
+console.log(`done: ${rows.length} rows, ${failures} failing`);
+process.exit(failures ? 1 : 0);

@@ -8,7 +8,7 @@ GitHub Actions，三個 workflow：
 
 SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定放在 `deploy/flux/`；發版就是合併一個改 chart 版本號的 PR（由 release 流程自動開）。GitHub 不持有任何部署憑證，主機也不必對外開放，叢集只存一把唯讀的 GHCR 拉取 token；Flux 控制器的記憶體算進主機規格（MS3 重測）。地端不裝 Flux，由客戶以 Helm 安裝或用離線安裝包。
 
-通用規則（[#158](https://github.com/Laysi/trustiot/issues/158)、[#120](https://github.com/Laysi/trustiot/issues/120)、[#122](https://github.com/Laysi/trustiot/issues/122)）：每個 workflow 明列最小權限，每個 job 都寫出自己的 `permissions`，workflow 層級設 `permissions: {}`；第三方 action（含 GitHub 官方的 `actions/*` 與 reusable workflow）一律釘 40 字元的 commit SHA，行尾註解寫版本；容器映像（`docker://` action、job 與 service container）釘 digest；需要雲端憑證時用 OIDC，不放長期金鑰；發佈走 GitHub environment 加人工核准（私有 repo 在目前的 GitHub 方案設不了核准，2026-10-10 決定暫時接受，改以補償措施把關，見下方「發佈核准」）；fork 來的 PR 拿不到任何 secret，所以不使用 `pull_request_target` 與 `workflow_run` 觸發。權限、釘選與觸發條件三項由 CI 的 `workflow-policy` job（`scripts/ci/check-workflows.ts`）檢查每個 workflow 與 `.github/actions/` 下的 action。本地 action（`uses: ./...`）不必釘 SHA，因為它隨使用它的變更一起審查，但只能放在 `.github/actions/` 下，本地 reusable workflow 只能直接放在 `.github/workflows/`，才在檢查範圍內；symbolic link 依實際指向的檔案檢查。
+通用規則（[#158](https://github.com/Laysi/trustiot/issues/158)、[#120](https://github.com/Laysi/trustiot/issues/120)、[#122](https://github.com/Laysi/trustiot/issues/122)）：每個 workflow 明列最小權限，每個 job 都寫出自己的 `permissions`，workflow 層級設 `permissions: {}`；第三方 action（含 GitHub 官方的 `actions/*` 與 reusable workflow）一律釘 40 字元的 commit SHA，行尾註解寫版本；容器映像（`docker://` action、job 與 service container）釘 digest；需要雲端憑證時用 OIDC，不放長期金鑰；發佈走 GitHub environment 加人工核准（私有 repo 在目前的 GitHub 方案設不了核准，2026-10-10 決定暫時接受，改以補償措施把關，見下方「發佈核准」）；fork 來的 PR 拿不到任何 secret，所以不使用 `pull_request_target` 與 `workflow_run` 觸發。權限、釘選與觸發條件三項由 CI 的 `workflow-policy` job（`scripts/ci/check-workflows.ts`）檢查每個 workflow 與 `.github/actions/` 下的 action；workflow 本身是否為 GitHub 能解析的語法，由同一個 job 以 actionlint 檢查（見下方「Workflow 語法檢查」）。本地 action（`uses: ./...`）不必釘 SHA，因為它隨使用它的變更一起審查，但只能放在 `.github/actions/` 下，本地 reusable workflow 只能直接放在 `.github/workflows/`，才在檢查範圍內；symbolic link 依實際指向的檔案檢查。
 
 ## ci.yml 的 job
 
@@ -20,7 +20,7 @@ SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定�
 | `cargo-deny` | `cargo deny --locked check`，規則在根目錄的 `deny.toml`：授權白名單（見下方「授權白名單」）；RustSec 的漏洞、unmaintained 與 unsound 公告一律失敗，要忽略某則公告必須在 `deny.toml` 寫明理由與到期日；Cargo.lock 裡有 yanked 版本就失敗；相依只能來自 crates.io |
 | `helm` | `bun test deploy/chart`：`helm lint --strict`；`values-saas.yaml` 與 `values-onprem.yaml` 各自 helm template 後以 `kubeconform -strict` 驗證（Kubernetes schema 由 kubeconform 下載）；再加上 chart 自己的規則與 README 欄位檢查，見 `deploy/chart/README.md` |
 | `gitleaks` | 掃描 HEAD 能走到的每個 commit（完整歷史）；merge commit 也以對第一個 parent 的差異掃描，只在合併時加入的內容也查得到。只掃 HEAD，不掃 checkout 時一起抓下來的其他分支。發現時在該檔案與行號標註，附 fingerprint；報告遮蔽祕密值，不會印進紀錄 |
-| `workflow-policy` | `scripts/ci/check-workflows.ts` 檢查 `.github/workflows/` 的 workflow 與 `.github/actions/` 的 action，規則即上方通用規則中的權限、釘選（含本地 action 的位置）與觸發條件三項；再跑 `scripts/` 全部 TypeScript 的型別檢查與測試（含本地開發環境 Laysi/trustiot-v2#71 的單元測試；它的端對端測試要以 podman 起整套環境並編譯服務，不在 CI 執行） |
+| `workflow-policy` | `scripts/ci/check-workflows.ts` 檢查 `.github/workflows/` 的 workflow 與 `.github/actions/` 的 action，規則即上方通用規則中的權限、釘選（含本地 action 的位置）與觸發條件三項；`scripts/ci/lint-workflows.ts` 以 actionlint 檢查每個 workflow 的語法、expression 與各 key 可用的 context（2026-10-10，Laysi/trustiot-v2#251；本機 `bun scripts/ci/lint-workflows.ts`）；再跑 `scripts/` 全部 TypeScript 的型別檢查與測試（含本地開發環境 Laysi/trustiot-v2#71 的單元測試；它的端對端測試要以 podman 起整套環境並編譯服務，不在 CI 執行） |
 
 之後由其他 issue 加進 ci.yml 的檢查（加入時同步更新本表與必要檢查清單）：
 
@@ -42,7 +42,18 @@ SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定�
 
 ### 工具安裝
 
-CI 以 `.github/actions/setup-proto` 安裝 proto：版本與壓縮檔的 SHA-256 寫死在該 action，不執行會變動的線上安裝腳本；再以 proto 安裝 `.prototools` 釘選的工具。沒有內建 proto 外掛的工具（cargo-deny、gitleaks、helm、kubeconform，以及 release.yml 用的 zig、cargo-zigbuild、cargo-auditable、syft、cosign）在 `.proto/plugins/` 設定，下載官方 release 並以 release 附的 checksum 驗證（zig 以官方的 minisign 簽章驗證）。Rust 是例外：proto 的 Rust 外掛本身只是呼叫 rustup，而 `proto install rust` 在 GitHub 代管 runner 上無法完成（2026-10-10 以暫時 PR 實測：job 超過 10 分鐘的上限仍未結束，同一個 action 裝 Bun、gitleaks 都正常；沒有 Actions 紀錄的讀取權限，原因待查），所以 setup-proto 在 CI 直接用 runner 映像內建的 rustup 執行不帶參數的 `rustup toolchain install`，依 `rust-toolchain.toml` 安裝釘選的版本、元件與 profile；裝完確認 rustup 選到的工具鏈名稱正好是 `<rust-toolchain.toml 的 channel>-<host triple>`，不符就在這一步失敗，不留到後面的 cargo 指令。本機照常由 proto 經 rustup 安裝。兩邊的 cargo 都由 rustup 讀 `rust-toolchain.toml` 決定版本，`tools/repo-check` 保證它與 `.prototools` 的 `rust` 相同，所以 CI 與本機用的是同一組版本。
+CI 以 `.github/actions/setup-proto` 安裝 proto：版本與壓縮檔的 SHA-256 寫死在該 action，不執行會變動的線上安裝腳本；再以 proto 安裝 `.prototools` 釘選的工具。沒有內建 proto 外掛的工具（actionlint、cargo-deny、gitleaks、helm、kubeconform，以及 release.yml 用的 zig、cargo-zigbuild、cargo-auditable、syft、cosign）在 `.proto/plugins/` 設定，下載官方 release 並以 release 附的 checksum 驗證（zig 以官方的 minisign 簽章驗證）。Rust 是例外：proto 的 Rust 外掛本身只是呼叫 rustup，而 `proto install rust` 在 GitHub 代管 runner 上無法完成（2026-10-10 以暫時 PR 實測：job 超過 10 分鐘的上限仍未結束，同一個 action 裝 Bun、gitleaks 都正常；沒有 Actions 紀錄的讀取權限，原因待查），所以 setup-proto 在 CI 直接用 runner 映像內建的 rustup 執行不帶參數的 `rustup toolchain install`，依 `rust-toolchain.toml` 安裝釘選的版本、元件與 profile；裝完確認 rustup 選到的工具鏈名稱正好是 `<rust-toolchain.toml 的 channel>-<host triple>`，不符就在這一步失敗，不留到後面的 cargo 指令。本機照常由 proto 經 rustup 安裝。兩邊的 cargo 都由 rustup 讀 `rust-toolchain.toml` 決定版本，`tools/repo-check` 保證它與 `.prototools` 的 `rust` 相同，所以 CI 與本機用的是同一組版本。
+
+### Workflow 語法檢查
+
+2026-10-10（Laysi/trustiot-v2#251）加入。起因：Laysi/trustiot-v2#247 的 `nightly.yml` 在 `jobs.<id>.env` 用了 `${{ runner.temp }}`。`runner` context 不能用在 job 層的 `env`，GitHub 因此判定整個檔案無效，每次觸發都在解析階段失敗，畫面只有 "This run likely failed because of a workflow file issue"；排程 workflow 要到排程時間才會發現。`check-workflows.ts` 只把 YAML 當資料讀，看不出這類錯誤，所以另外以 [actionlint](https://github.com/rhysd/actionlint) 檢查，它知道每個 key 可用哪些 context 與函式。
+
+- 本機與 CI 同一個指令：`bun scripts/ci/lint-workflows.ts [repository-root]`（先 `proto install actionlint`）。它找出 `.github/workflows/` 下的 `.yml` 與 `.yaml`，以 `proto bin actionlint` 取得 `.prototools` 釘選版本的執行檔，檢查並回報；退出碼 0 無錯誤、1 有錯誤、2 無法執行。測試在 `scripts/ci/lint-workflows.test.ts`：以暫時目錄裡的 workflow 證明 job 層 `env` 的 `runner.temp` 會失敗、同一個值放在 step 層則通過，並檢查 repo 現有的每個 workflow 都通過。
+- 為何是獨立的腳本、不併進 `check-workflows.ts`：後者是純 YAML 規則檢查，單元測試不需任何外部執行檔；actionlint 是另一個執行檔，缺少時要有明確的錯誤訊息，並且在 CI 是獨立的步驟，失敗時一眼看出是哪一類問題。兩個步驟都在 `workflow-policy` job，前一步失敗時後一步照跑。
+- 版本與來源：`.prototools` 釘 actionlint 1.7.12（2026-03-30 發佈），`.proto/plugins/actionlint.toml` 下載官方 release 的 `actionlint_<version>_<os>_<arch>.tar.gz`，以同一個 release 的 `actionlint_<version>_checksums.txt` 驗證 SHA-256；支援 linux 與 macOS 的 x64、arm64。
+- composite action 的涵蓋範圍：actionlint 不把 `action.yml` 當獨立檔案檢查（拿它當 workflow 讀會得到一堆結構錯誤）。它檢查的是 workflow 呼叫本地 action 時給的 `with` 是否定義過、必填的是否漏給、讀的 output 是否存在。action 自己的 steps 只由 `check-workflows.ts` 的規則檢查。要讓這項檢查生效，actionlint 必須找到專案根目錄（`.git`），所以腳本在沒有 `.git` 的目錄會直接失敗，而不是無聲地略過。
+- shellcheck 與 pyflakes：不啟用，腳本固定加 `-shellcheck= -pyflakes=`。決定與理由（2026-10-10）：(1) actionlint 在 PATH 上找得到 shellcheck 才會用它，GitHub 代管 runner 映像內建 shellcheck 而本機通常沒有，不明確關掉的話同一個 commit 在 CI 與本機會得到不同結果；(2) shellcheck 要啟用就得一樣經 proto 釘版本，但 shellcheck 的 release 只附壓縮檔、沒有 checksum 檔（`shellcheck-v0.11.0.sha256sum` 回 404），做不出本 repo 要求的「下載時驗證 checksum」的外掛；(3) 目前 workflow 的 `run` 區塊很短，且都以 `set -euo pipefail` 執行。代價是 `run` 區塊裡的 shell 問題（例如變數沒加引號）不會被檢查。重新評估的時機：shellcheck 開始附 checksum，或 `run` 區塊變多變長；屆時在 `.prototools` 釘 shellcheck、加外掛，並把 `ACTIONLINT_FLAGS` 的 `-shellcheck=` 拿掉。
+- 偵測到問題時修 workflow 本身；不用 `-ignore` 或設定檔壓掉規則，除非是 actionlint 的誤判，並在該處寫明理由。
 
 ### 授權白名單
 

@@ -1,0 +1,83 @@
+{
+  "agent_version": "0.1.0+3a94ff1",
+  "buffer": {
+    "disk_bytes": 0,
+    "dropped_records": 0,
+    "oldest_pending": 1791590450000,
+    "pending_batches": 1,
+    "pending_records": 1200
+  },
+  "cert_not_after": 1799366400000,
+  "clock_synced": true,
+  "config_version": 7,
+  "devices": [
+    {
+      "device": "0199d0a0-0000-7000-8000-000000000001",
+      "failures": {
+        "connect": 0,
+        "exception": 0,
+        "invalid_value": 0,
+        "timeout": 0,
+        "unit_mismatch": 0
+      },
+      "last_success": 1791590459000,
+      "points_failed": 0,
+      "points_total": 4,
+      "requests": 7200
+    },
+    {
+      "device": "0199d0a0-0000-7000-8000-000000000002",
+      "exception_codes": {
+        "2": 2
+      },
+      "failures": {
+        "connect": 1,
+        "exception": 2,
+        "invalid_value": 0,
+        "timeout": 4,
+        "unit_mismatch": 3
+      },
+      "last_failure": {
+        "at": 1791590458000,
+        "detail": "illegal data address",
+        "exception_code": 2,
+        "kind": "exception"
+      },
+      "last_success": 1791590455000,
+      "points_failed": 1,
+      "points_total": 5,
+      "requests": 3600
+    }
+  ],
+  "interval_s": 60,
+  "sent_at": 1791590460000,
+  "session": "0199d0a0-0000-7000-8000-00000000c001",
+  "system": {
+    "agent_starts_since_boot": 2,
+    "agent_uptime_s": 3600,
+    "boot_count": 12,
+    "booted_at": 1791590400000,
+    "cpu_percent": 12.5,
+    "data_available_bytes": 15000000000,
+    "data_total_bytes": 16000000000,
+    "memory_available_bytes": 1610612736,
+    "memory_total_bytes": 2147483648,
+    "soc_temp_celsius": 48.5,
+    "throttling": {
+      "now": {
+        "frequency_capped": false,
+        "soft_temp_limit": false,
+        "throttled": false,
+        "under_voltage": false
+      },
+      "since_boot": {
+        "frequency_capped": false,
+        "soft_temp_limit": false,
+        "throttled": false,
+        "under_voltage": true
+      }
+    },
+    "uptime_s": 86400
+  },
+  "v": 1
+}

@@ -5,6 +5,7 @@
 # from `rust-toolchain.toml`. Change `rust` here and `channel` there together;
 # `cargo test -p repo-check` fails when they differ.
 
+actionlint = "1.7.12"
 bun = "1.4.2"
 cargo-auditable = "0.7.6"
 cargo-deny = "0.20.2"
@@ -22,6 +23,7 @@ zig = "0.16.0"
 # archive or binary and verifies it against the checksum file published with the release
 # (Zig: against the release's minisign signature).
 [plugins.tools]
+actionlint = "file://./.proto/plugins/actionlint.toml"
 cargo-auditable = "file://./.proto/plugins/cargo-auditable.toml"
 cargo-deny = "file://./.proto/plugins/cargo-deny.toml"
 cargo-zigbuild = "file://./.proto/plugins/cargo-zigbuild.toml"

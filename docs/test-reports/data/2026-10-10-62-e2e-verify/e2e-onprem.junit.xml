@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="44" assertions="288" failures="0" skipped="0" time="77.325153492">
+  <testsuite name="deploy/chart/tests/e2e/ingress.e2e.ts" file="deploy/chart/tests/e2e/ingress.e2e.ts" tests="44" assertions="288" failures="0" skipped="0" time="77.31418949" hostname="fedora">
+    <testsuite name="paths that need the cookie" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="399" tests="7" assertions="37" failures="0" skipped="0" time="4.38" hostname="fedora">
+      <testcase name="no cookie or an unknown session: 401 from the identity service, backend not reached" classname="paths that need the cookie" time="0.683534" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="400" assertions="9" />
+      <testcase name="valid cookie: the backend gets exactly one identity header, from the identity service" classname="paths that need the cookie" time="0.243372" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="414" assertions="4" />
+      <testcase name="valid cookie plus a forged identity header: the forged value never reaches the backend" classname="paths that need the cookie" time="0.244621" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="423" assertions="3" />
+      <testcase name="forged identity header without a cookie: 401" classname="paths that need the cookie" time="0.209342" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="436" assertions="2" />
+      <testcase name="x-forwarded-proto is https at the backend, even when the client sends http" classname="paths that need the cookie" time="0.483242" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="443" assertions="6" />
+      <testcase name="/internal is never reachable: 401 without a cookie, 403 with one" classname="paths that need the cookie" time="1.300868" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="453" assertions="12" />
+      <testcase name="an unknown host gets no route" classname="paths that need the cookie" time="1.218485" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="467" assertions="1" />
+    </testsuite>
+    <testsuite name="public paths" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="482" tests="6" assertions="44" failures="0" skipped="0" time="6.445" hostname="fedora">
+      <testcase name="certificate renewal: no cookie needed, the forged identity header is stripped" classname="public paths" time="0.225925" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="488" assertions="4" />
+      <testcase name="MQTT over WebSocket: no cookie needed, the forged identity header is stripped" classname="public paths" time="0.232228" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="488" assertions="4" />
+      <testcase name="login on the identity service: no cookie needed, the forged identity header is stripped" classname="public paths" time="0.227648" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="508" assertions="5" />
+      <testcase name="health check on the identity service: no cookie needed, the forged identity header is stripped" classname="public paths" time="0.224369" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="508" assertions="5" />
+      <testcase name="GET /healthz answers without a cookie" classname="public paths" time="0.202977" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="526" assertions="2" />
+      <testcase name="a public path on another host is not public" classname="public paths" time="5.335978" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="533" assertions="24" />
+    </testsuite>
+    <testsuite name="path-bypass attempts never reach a cookie route without a cookie" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="592" tests="29" assertions="86" failures="0" skipped="0" time="7.039" hostname="fedora">
+      <testcase name="the list covers at least 11 forms" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.000449" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="593" assertions="2" />
+      <testcase name="dot-dot out of a public path: /healthz/../api/whoami" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.228244" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="encoded dot-dot: /healthz/%2e%2e/api/whoami" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.2214" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="encoded dot-dot, upper case hex: /healthz/%2E%2E/api/whoami" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.215853" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="dot-dot with an encoded slash: /healthz/..%2fapi/whoami" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.210052" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="encoded slashes around dot-dot: /healthz%2f..%2fapi/whoami" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.207131" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="double leading slash: //api/whoami" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.215751" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="double slash after a public path: /healthz//../api/whoami" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.214062" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="upper-case public path then dot-dot: /HEALTHZ/../api/whoami" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.215034" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="upper-case public path: /HEALTHZ" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.219823" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="mixed-case public path: /Auth/Login" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.22051" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="public path of the gateway host, dot-dot: /mqtt/../api/whoami" classname="path-bypass attempts never reach a cookie route without a cookie" time="1.217724" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="public path in the query string: /api/whoami?x=/healthz" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.213996" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="public path in the query after dot-dot: /api/whoami?/../healthz" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.211238" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="semicolon path parameter, then dot-dot: /healthz;/../api/whoami" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.250142" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="dot-dot with a semicolon: /healthz/..;/api/whoami" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.211161" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="semicolon parameter on a public path: /healthz;x=y" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.245314" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="single dot segment: /./api/whoami" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.212882" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="encoded single dot: /%2e/api/whoami" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.213322" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="encoded hash before a public path: /api/whoami%23/healthz" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.209465" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="raw hash before a public path: /api/whoami#/healthz" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.223525" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="trailing slash on a public path: /healthz/" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.206531" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="public path as a prefix: /healthz/api/whoami" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.207148" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="public path plus suffix: /healthzx" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.209961" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="backslash dot-dot: /healthz\..\api\whoami" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.209997" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="encoded backslash dot-dot: /healthz%5c..%5capi%5cwhoami" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.213489" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="absolute-form request target: http://APP_HOST/healthz/../api/whoami" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.205979" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="encoded internal prefix: /%69nternal/tenants" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.21126" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+      <testcase name="internal prefix after dot-dot: /healthz/../internal/tenants" classname="path-bypass attempts never reach a cookie route without a cookie" time="0.211161" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="598" assertions="3" />
+    </testsuite>
+    <testsuite name="identity service failures" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="618" tests="2" assertions="121" failures="0" skipped="0" time="43.563" hostname="fedora">
+      <testcase name="slow identity service: 503 after the ext_authz timeout, backend not reached" classname="identity service failures" time="3.653299" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="619" assertions="20" />
+      <testcase name="identity service down: cookie routes return 503 within the timeout, public paths keep working" classname="identity service failures" time="39.91075" file="deploy/chart/tests/e2e/ingress.e2e.ts" line="630" assertions="101" />
+    </testsuite>
+  </testsuite>
+</testsuites>
