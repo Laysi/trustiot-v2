@@ -1,0 +1,11 @@
+{
+  "outcome": {
+    "code": "decode_failed",
+    "message": "malformed payload: missing field `series`",
+    "status": "rejected"
+  },
+  "seq": 42,
+  "server_time": 1791590401500,
+  "stream": "0199d0a0-0000-7000-8000-00000000a001",
+  "v": 1
+}

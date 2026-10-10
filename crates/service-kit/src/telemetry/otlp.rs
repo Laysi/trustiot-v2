@@ -1,5 +1,5 @@
 //! OpenTelemetry providers: always a tracer (so every log line in a span has a trace id), and
-//! OTLP/HTTP exporters for traces and logs only when an endpoint is configured.
+//! OTLP/HTTP exporters for traces, logs, and metrics only when an endpoint is configured.
 
 use std::time::Duration;
 
@@ -8,6 +8,7 @@ use opentelemetry_otlp::{ExporterBuildError, Protocol, WithExportConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
+use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::trace::{SdkTracerProvider, SpanData, SpanExporter};
 
 use super::TelemetryError;
@@ -60,15 +61,28 @@ fn resource(info: &ServiceInfo) -> Resource {
         .build()
 }
 
-/// Builds the tracer provider and, when `endpoint` is set, the OTLP log provider.
+/// The providers [`super::Telemetry`] installs.
+pub(crate) struct Providers {
+    pub(crate) tracer: SdkTracerProvider,
+    /// Exports logs; only with an endpoint.
+    pub(crate) logger: Option<SdkLoggerProvider>,
+    /// Exports metrics; only with an endpoint.
+    pub(crate) meter: Option<SdkMeterProvider>,
+}
+
+/// Builds the tracer provider and, when `endpoint` is set, the OTLP log and metric providers.
 pub(crate) fn providers(
     info: &ServiceInfo,
     endpoint: Option<&str>,
-) -> Result<(SdkTracerProvider, Option<SdkLoggerProvider>), TelemetryError> {
+) -> Result<Providers, TelemetryError> {
     let resource = resource(info);
     let Some(endpoint) = endpoint else {
-        let tracer_provider = SdkTracerProvider::builder().with_resource(resource).build();
-        return Ok((tracer_provider, None));
+        let tracer = SdkTracerProvider::builder().with_resource(resource).build();
+        return Ok(Providers {
+            tracer,
+            logger: None,
+            meter: None,
+        });
     };
     // reqwest's blocking client, which the OTLP exporters use from their own export threads,
     // panics when it is built on an async runtime thread, so build it on a plain thread.
@@ -85,10 +99,7 @@ pub(crate) fn providers(
     })
 }
 
-fn exporting_providers(
-    resource: Resource,
-    endpoint: &str,
-) -> Result<(SdkTracerProvider, Option<SdkLoggerProvider>), TelemetryError> {
+fn exporting_providers(resource: Resource, endpoint: &str) -> Result<Providers, TelemetryError> {
     let spans = opentelemetry_otlp::SpanExporter::builder()
         .with_http()
         .with_protocol(Protocol::HttpBinary)
@@ -101,15 +112,31 @@ fn exporting_providers(
         .with_endpoint(format!("{endpoint}/v1/logs"))
         .build()
         .map_err(|error| exporter_error("log", error))?;
-    let tracer_provider = SdkTracerProvider::builder()
+    let metrics = opentelemetry_otlp::MetricExporter::builder()
+        .with_http()
+        .with_protocol(Protocol::HttpBinary)
+        .with_endpoint(format!("{endpoint}/v1/metrics"))
+        .build()
+        .map_err(|error| exporter_error("metric", error))?;
+    let tracer = SdkTracerProvider::builder()
         .with_resource(resource.clone())
         .with_batch_exporter(RedactingSpanExporter(spans))
         .build();
-    let logger_provider = SdkLoggerProvider::builder()
-        .with_resource(resource)
+    let logger = SdkLoggerProvider::builder()
+        .with_resource(resource.clone())
         .with_batch_exporter(logs)
         .build();
-    Ok((tracer_provider, Some(logger_provider)))
+    // The periodic reader collects and exports from its own thread every
+    // `OTEL_METRIC_EXPORT_INTERVAL` milliseconds (60 s by default).
+    let meter = SdkMeterProvider::builder()
+        .with_resource(resource)
+        .with_periodic_exporter(metrics)
+        .build();
+    Ok(Providers {
+        tracer,
+        logger: Some(logger),
+        meter: Some(meter),
+    })
 }
 
 /// The SDK's configuration errors read `<setting>: <reason>` and the reason can quote the

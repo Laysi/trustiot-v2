@@ -1,6 +1,6 @@
 //! OTLP export from a real `example-service` process to a fake OTLP/HTTP receiver: off unless
-//! configured, and when on, logs and traces arrive with the caller's trace id and without
-//! request data.
+//! configured, and when on, logs and traces arrive with the caller's trace id, metrics arrive,
+//! and none of them carries request data.
 
 mod support;
 
@@ -33,11 +33,7 @@ impl FakeCollector {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { continue };
                 let sink = Arc::clone(&sink);
-                thread::spawn(move || {
-                    if let Some(request) = read_request(stream) {
-                        sink.lock().expect("collector lock").push(request);
-                    }
-                });
+                thread::spawn(move || read_request(stream, &sink));
             }
         });
         Self { address, received }
@@ -62,9 +58,11 @@ impl FakeCollector {
     }
 }
 
-/// Reads one request (Content-Length or chunked body) and answers 200 with an empty export
-/// response, then closes the connection.
-fn read_request(stream: TcpStream) -> Option<(String, Vec<u8>)> {
+/// Reads one request (Content-Length or chunked body), records it, and answers 200 with an empty
+/// export response, then closes the connection. The request is recorded before the answer, so a
+/// service that has finished its shutdown export (it waits for the answers) leaves nothing
+/// unrecorded behind.
+fn read_request(stream: TcpStream, sink: &Mutex<Vec<Request>>) -> Option<()> {
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .ok()?;
@@ -106,14 +104,14 @@ fn read_request(stream: TcpStream) -> Option<(String, Vec<u8>)> {
         body.resize(length, 0);
         reader.read_exact(&mut body).ok()?;
     }
+    sink.lock().expect("collector lock").push((path, body));
     let mut stream = stream;
     stream
         .write_all(
             b"HTTP/1.1 200 OK\r\nContent-Type: application/x-protobuf\r\nContent-Length: 0\r\n\
               Connection: close\r\n\r\n",
         )
-        .ok()?;
-    Some((path, body))
+        .ok()
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -164,7 +162,7 @@ fn export_is_off_unless_configured() {
 }
 
 #[test]
-fn logs_and_traces_export_with_trace_ids_and_without_request_data() {
+fn logs_traces_and_metrics_export_without_request_data() {
     let collector = FakeCollector::start();
     let mut service = Service::start(&[
         ("TRUSTIOT__TELEMETRY__OTLP_ENDPOINT", &collector.url()),
@@ -204,7 +202,15 @@ fn logs_and_traces_export_with_trace_ids_and_without_request_data() {
         contains(&logs, b"echo request"),
         "the handler's debug event is exported"
     );
-    for payload in [&traces, &logs] {
+    // Metrics: the final reading is exported at shutdown.
+    let metrics = collector.bodies("/v1/metrics");
+    assert!(!metrics.is_empty(), "no metrics exported");
+    let metrics = metrics.concat();
+    assert!(
+        contains(&metrics, b"example_service.echo.requests"),
+        "the service's counter is exported"
+    );
+    for payload in [&traces, &logs, &metrics] {
         assert!(
             contains(payload, b"example-service"),
             "service.name resource"

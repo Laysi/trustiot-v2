@@ -274,6 +274,11 @@ fn an_unusable_key_set_stops_startup() {
             "{case}: {text}"
         );
         assert!(text.contains(KEYS_VARIABLE), "{case}: {text}");
+        // The process has exited; read its whole output before checking what is absent from it.
+        assert!(
+            stdout.wait_closed(support::OUTPUT_DRAIN_TIMEOUT),
+            "{case}: the output was not read to its end"
+        );
         assert!(
             !stdout.text().contains(&keys),
             "{case}: the value is logged"

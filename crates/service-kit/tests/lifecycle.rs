@@ -3,11 +3,39 @@
 
 mod support;
 
-use std::net::TcpStream;
+use std::io::ErrorKind;
+use std::net::{SocketAddr, TcpStream};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use support::{Service, get, spawn_example, wait_exit};
+use support::{OUTPUT_DRAIN_TIMEOUT, Output, Service, get, spawn_example, wait_exit};
+
+/// Retries connecting until the connection is refused, which is how a closed listener answers.
+/// The log line that announces the end of accepting is written just before the listener is
+/// dropped, so a connection right after it can still succeed on a loaded machine; the deadline
+/// keeps a listener that never closes a failure.
+fn wait_until_refused(address: SocketAddr, timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let outcome = match TcpStream::connect_timeout(&address, Duration::from_secs(1)) {
+            Err(error) if error.kind() == ErrorKind::ConnectionRefused => return Ok(()),
+            Err(error) => format!("connecting failed with {error}"),
+            Ok(_) => "a connection was accepted".to_owned(),
+        };
+        if Instant::now() >= deadline {
+            return Err(format!("still not refused after {timeout:?}: {outcome}"));
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Waits until the reader thread has consumed everything a process that already exited printed.
+fn read_to_end(output: &Output) {
+    assert!(
+        output.wait_closed(OUTPUT_DRAIN_TIMEOUT),
+        "the output of the exited service was not read to its end"
+    );
+}
 
 #[test]
 fn health_endpoints_answer_while_serving() {
@@ -74,10 +102,8 @@ fn sigterm_fails_readiness_at_once_and_drains_requests_in_flight() {
             Duration::from_secs(3),
         )
         .expect("the service stops accepting after the drain delay");
-    assert!(
-        TcpStream::connect(address).is_err(),
-        "new connections are refused once draining"
-    );
+    wait_until_refused(address, Duration::from_secs(5))
+        .unwrap_or_else(|why| panic!("new connections are refused once draining: {why}"));
 
     let slow = in_flight
         .join()
@@ -198,6 +224,7 @@ fn missing_required_configuration_stops_startup() {
     let (mut child, stdout, _stderr) = spawn_example(&[("TRUSTIOT__GREETING", "")]);
     let status = wait_exit(&mut child, Duration::from_secs(10)).expect("the service exits");
     assert_eq!(status.code(), Some(1), "{status}");
+    read_to_end(&stdout);
     let lines = stdout.json_lines();
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert_eq!(lines[0]["level"], "ERROR");
@@ -218,6 +245,7 @@ fn invalid_configuration_names_the_key_without_its_value() {
     ]);
     let status = wait_exit(&mut child, Duration::from_secs(10)).expect("the service exits");
     assert_eq!(status.code(), Some(1), "{status}");
+    read_to_end(&stdout);
     let text = stdout.text();
     assert!(text.contains("http.listen_addr"), "{text}");
     assert!(text.contains("TRUSTIOT__HTTP__LISTEN_ADDR"), "{text}");

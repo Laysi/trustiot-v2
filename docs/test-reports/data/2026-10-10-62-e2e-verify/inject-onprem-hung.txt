@@ -1,0 +1,7 @@
+pod trustiot-identity-5b7d95f4d9-ktmwd container 55a62196037851843112abc5f784ec17dda5a0312f8d26e530a1a8bafa343901 pid 359818
+    PID STAT CMD
+ 359818 Tsl  bun run /app/server.ts
+watch histogram {"public-certs:200":18,"nocookie:503":18,"valid:503":18,"garbage:503":18} fail-open count 0 max first-byte ms 867
+downtime: baseline 367 ms; n=40 statuses {"503":40} min 302 p50 336 p95 468 max 473
+    PID STAT CMD
+watch histogram {"public-certs:200":14,"nocookie:401":14,"valid:200":14,"garbage:401":14} fail-open count 0 max first-byte ms 388

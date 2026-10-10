@@ -50,9 +50,12 @@ export function askAuthentication(
     let received: Uint8Array = new Uint8Array(0);
     socket.once("connect", () => socket.write(startupMessage(user, database)));
     socket.on("data", (chunk) => {
-      const next = new Uint8Array(received.length + chunk.length);
+      // No encoding is set on the socket, so chunks arrive as bytes; the string case exists
+      // only in the type of the "data" event.
+      const bytes = typeof chunk === "string" ? new TextEncoder().encode(chunk) : chunk;
+      const next = new Uint8Array(received.length + bytes.length);
       next.set(received);
-      next.set(chunk, received.length);
+      next.set(bytes, received.length);
       received = next;
       try {
         const answer = authRequest(received);

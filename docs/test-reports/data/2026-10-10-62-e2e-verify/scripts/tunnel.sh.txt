@@ -1,0 +1,13 @@
+#!/bin/bash
+# usage: tunnel.sh saas|onprem : (re)open ssh -L 127.0.0.1:17080 -> gateway ClusterIP, detached
+SHAPE=$1
+S=/tmp/claude-1000/-home-ruisi-projects-trustiot-v2/5d2bbbe4-4241-4ab5-b2fe-2e33d3a23171/scratchpad/e2e-62
+export KUBECONFIG=$S/kube/config
+IP=$(/home/ruisi/.proto/tools/kubectl/1.36.5/kubectl get svc trustiot-ingress-istio -o jsonpath='{.spec.clusterIP}')
+PORT=80; [ "$SHAPE" = onprem ] && PORT=443
+pkill -f "L 127.0.0.1:17080" || true
+sleep 1
+setsid nohup ssh -N -o ServerAliveInterval=20 -o ExitOnForwardFailure=yes -L 127.0.0.1:17080:$IP:$PORT trustiot-mac-m1 < /dev/null > /dev/null 2>&1 &
+sleep 3
+echo "tunnel to $IP:$PORT"
+pgrep -af "L 127.0.0.1:17080" | head -1

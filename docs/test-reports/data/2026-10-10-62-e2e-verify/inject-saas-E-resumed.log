@@ -1,0 +1,3 @@
+=== watch
+watch histogram {"public-certs:200":19,"nocookie:401":19,"valid:200":19,"garbage:401":19} fail-open count 0 max first-byte ms 604
+done: 1 rows, 0 failing

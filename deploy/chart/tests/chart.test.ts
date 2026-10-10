@@ -59,6 +59,8 @@ const SHAPES = {
 type Shape = keyof typeof SHAPES;
 const SHAPE_NAMES = Object.keys(SHAPES) as Shape[];
 const SMOKE = "tests/values/smoke.yaml";
+// Ingress e2e overlay: identity, certs, mqtt-bridge and assets on, plus a catch-all cookie route.
+const E2E_VALUES = "tests/e2e/values-e2e.yaml";
 
 type YamlMap = { [key: string]: unknown };
 type Manifest = YamlMap & {
@@ -190,6 +192,8 @@ describe.each(SHAPE_NAMES)("%s shape", (shape) => {
         helmTemplate(files),
         helmTemplate([...files, SMOKE]),
         helmTemplate([...files, SMOKE], enableAllServices),
+        // Ingress routes, public paths and the cookie check.
+        helmTemplate([...files, E2E_VALUES], enableAllServices),
       ];
       for (const rendered of renders) {
         expect(rendered.stderr).toBe("");
@@ -202,9 +206,25 @@ describe.each(SHAPE_NAMES)("%s shape", (shape) => {
     SLOW_TEST_MS,
   );
 
-  test("services stay off until enabled: only the platform ConfigMap renders", () => {
+  test("services stay off until enabled: only the platform settings, the ingress and bundled ClickHouse render", () => {
     const manifests = render(files);
-    expect(manifests.map((m) => `${m.kind}/${m.metadata.name}`)).toEqual([`ConfigMap/${RELEASE}-platform`]);
+    expect(manifests.map((m) => `${m.kind}/${m.metadata.name}`).sort()).toEqual(
+      [
+        `AuthorizationPolicy/${RELEASE}-ingress-cookie-check`,
+        `AuthorizationPolicy/${RELEASE}-ingress-deny-internal`,
+        `ConfigMap/${RELEASE}-ingress-options`,
+        `ConfigMap/${RELEASE}-platform`,
+        `Gateway/${RELEASE}-ingress`,
+        `NetworkPolicy/${RELEASE}-ingress`,
+        `ConfigMap/${RELEASE}-clickhouse-config`,
+        `ServiceAccount/${RELEASE}-clickhouse`,
+        `Service/${RELEASE}-clickhouse`,
+        `StatefulSet/${RELEASE}-clickhouse`,
+      ].sort(),
+    );
+    // No backend, so no route and no public path: the cookie check covers every request.
+    const check = find(manifests, "AuthorizationPolicy", `${RELEASE}-ingress-cookie-check`);
+    expect((check.spec as { rules: unknown[] }).rules).toEqual([{}]);
   });
 
   test("every planned service renders a ServiceAccount, Service and Deployment", () => {
@@ -248,11 +268,11 @@ describe("deployment shapes", () => {
     }
   });
 
-  test("external Postgres and ClickHouse are wired only in external mode", () => {
+  test("external Postgres and ClickHouse are wired only in external mode, bundled ClickHouse in-cluster", () => {
     const bundled = platformConfig(render(SHAPES.onprem));
     expect(bundled.TRUSTIOT_POSTGRES_HOST).toBeUndefined();
     expect(bundled.TRUSTIOT_POSTGRES_CA_FILE).toBeUndefined();
-    expect(bundled.TRUSTIOT_CLICKHOUSE_URL).toBeUndefined();
+    expect(bundled.TRUSTIOT_CLICKHOUSE_URL).toBe(`http://${RELEASE}-clickhouse.${NAMESPACE}.svc:8123`);
     const external = platformConfig(
       render(SHAPES.onprem, [
         "--set",
@@ -370,7 +390,9 @@ describe("exposure and hardening", () => {
       for (const service of manifests.filter((m) => m.kind === "Service")) {
         expect((service.spec as YamlMap).type).toBe("ClusterIP");
       }
-      for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
+      const workloads = manifests.filter((m) => m.kind === "Deployment" || m.kind === "StatefulSet");
+      expect(workloads.some((m) => m.kind === "StatefulSet")).toBe(true);
+      for (const deployment of workloads) {
         const pod = podSpec(deployment);
         expect(pod.hostNetwork).toBeUndefined();
         expect(pod.hostPID).toBeUndefined();
@@ -411,6 +433,371 @@ describe("exposure and hardening", () => {
           expect(key).not.toMatch(/SECRET|PASSW|PASSPHRASE|PWD|TOKEN|API_?KEY|(^|_)KEY$|DSN|PRIVATE|CREDENTIAL/i);
         }
       }
+    }
+  });
+});
+
+describe("bundled ClickHouse (decision 14)", () => {
+  const manifests = render(SHAPES.saas);
+  const name = `${RELEASE}-clickhouse`;
+  const statefulSet = find(manifests, "StatefulSet", name);
+  const pod = podSpec(statefulSet);
+  const container = pod.containers[0] as Container;
+
+  function digestOf(image: string): string {
+    const match = image.match(/@(sha256:[0-9a-f]{64})$/);
+    if (!match?.[1]) throw new Error(`${image} is not pinned by digest`);
+    return match[1];
+  }
+
+  test("the image is pinned to the same digest as the dev environment and the schema tests", () => {
+    const chartDigest = digestOf(container.image);
+    expect(container.image).toStartWith("docker.io/clickhouse/clickhouse-server:26.8@");
+    const stack = readFileSync(join(REPO_ROOT, "scripts/lib/stack.ts"), "utf8");
+    const devImage = stack.match(/clickhouse:\s*"([^"]+)"/)?.[1] ?? "";
+    const schemaTests = readFileSync(join(REPO_ROOT, "services/ingest/tests/common/mod.rs"), "utf8");
+    const testImage = schemaTests.match(/CLICKHOUSE_IMAGE: &str = "([^"]+)"/)?.[1] ?? "";
+    expect(digestOf(devImage)).toBe(chartDigest);
+    expect(digestOf(testImage)).toBe(chartDigest);
+  });
+
+  test("one replica with a retained data volume, reachable through a ClusterIP Service only", () => {
+    const spec = statefulSet.spec as YamlMap & {
+      replicas: number;
+      serviceName: string;
+      persistentVolumeClaimRetentionPolicy: Record<string, string>;
+      volumeClaimTemplates: { metadata: { name: string; labels: Record<string, string> }; spec: YamlMap }[];
+    };
+    expect(spec.replicas).toBe(1);
+    expect(spec.serviceName).toBe(name);
+    expect(spec.persistentVolumeClaimRetentionPolicy).toEqual({ whenDeleted: "Retain", whenScaled: "Retain" });
+    const claim = spec.volumeClaimTemplates[0];
+    expect(claim?.metadata.name).toBe("data");
+    // volumeClaimTemplates are immutable, so they must not carry the chart version.
+    expect(Object.keys(claim?.metadata.labels ?? {})).not.toContain("helm.sh/chart");
+    expect(Object.keys(claim?.metadata.labels ?? {})).not.toContain("app.kubernetes.io/version");
+    expect(claim?.spec).toMatchObject({ accessModes: ["ReadWriteOnce"], resources: { requests: { storage: "50Gi" } } });
+    const mounts = container.volumeMounts as { name: string; mountPath: string; readOnly?: boolean }[];
+    expect(mounts).toContainEqual({ name: "data", mountPath: "/var/lib/clickhouse" });
+
+    const service = find(manifests, "Service", name).spec as { type: string; ports: { port: number }[] };
+    expect(service.type).toBe("ClusterIP");
+    expect(service.ports.map((p) => p.port)).toEqual([8123, 9000]);
+  });
+
+  test("the pod meets the restricted Pod Security Standard and joins the ambient mesh", () => {
+    const labels = (statefulSet.spec as { template: { metadata: { labels: Record<string, string> } } }).template
+      .metadata.labels;
+    expect(labels["istio.io/dataplane-mode"]).toBe("ambient");
+    expect(pod.automountServiceAccountToken).toBe(false);
+    expect(pod.serviceAccountName).toBe(name);
+    expect(pod.securityContext?.runAsNonRoot).toBe(true);
+    expect(pod.securityContext?.runAsUser).toBe(101);
+    expect(pod.securityContext?.seccompProfile?.type).toBe("RuntimeDefault");
+    expect(container.securityContext?.allowPrivilegeEscalation).toBe(false);
+    expect(container.securityContext?.readOnlyRootFilesystem).toBe(true);
+    expect(container.securityContext?.capabilities?.drop).toEqual(["ALL"]);
+    expect(container.securityContext?.capabilities?.add).toBeUndefined();
+    expect(container.resources?.limits?.memory).toBe("2Gi");
+    for (const probe of [container.startupProbe, container.livenessProbe, container.readinessProbe]) {
+      expect(probe).toMatchObject({ httpGet: { path: "/ping", port: "http" } });
+    }
+  });
+
+  test("the bootstrap admin password comes from a mounted Secret, never the environment", () => {
+    const env = Object.fromEntries((container.env ?? []).map((e) => [e.name, e]));
+    expect(env.CLICKHOUSE_PASSWORD).toBeUndefined();
+    expect(env.CLICKHOUSE_USER?.value).toBe("trustiot_admin");
+    expect(env.CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT?.value).toBe("1");
+    expect(env.CLICKHOUSE_PASSWORD_FILE?.value).toBe("/etc/trustiot/clickhouse-admin/password");
+    for (const e of container.env ?? []) expect(e.valueFrom).toBeUndefined();
+    const volumes = Object.fromEntries((pod.volumes ?? []).map((v) => [v.name as string, v]));
+    expect(volumes["admin-password"]).toMatchObject({
+      secret: { secretName: "trustiot-clickhouse-admin", items: [{ key: "password", path: "password" }] },
+    });
+    // The entrypoint writes the account, with its password, into users.d: memory only.
+    expect(volumes["users-d"]).toMatchObject({ emptyDir: { medium: "Memory" } });
+  });
+
+  test("the server configuration holds no users, roles, profiles, quotas or row policies", () => {
+    const config = find(manifests, "ConfigMap", `${RELEASE}-clickhouse-config`).data as Record<string, string>;
+    expect(Object.keys(config)).toEqual(["trustiot.xml"]);
+    const xml = config["trustiot.xml"] ?? "";
+    expect(xml).toStartWith("<clickhouse>");
+    for (const forbidden of [/<users\b/, /<profiles\b/, /<quotas\b/, /<roles\b/, /row_polic/, /user_directories/, /access_management/, /password/i]) {
+      expect(xml).not.toMatch(forbidden);
+    }
+    // Only HTTP and the native protocol listen.
+    for (const port of ["mysql_port", "postgresql_port", "interserver_http_port"]) {
+      expect(xml).toContain(`<${port} remove="remove"/>`);
+    }
+    const mounts = container.volumeMounts as { name: string; mountPath: string; readOnly?: boolean }[];
+    expect(mounts).toContainEqual({ name: "config", mountPath: "/etc/clickhouse-server/config.d", readOnly: true });
+  });
+
+  test("the pod rolls when the server configuration or the admin password revision changes", () => {
+    const annotationsOf = (rendered: Manifest[]) =>
+      (find(rendered, "StatefulSet", name).spec as { template: { metadata: { annotations: Record<string, string> } } })
+        .template.metadata.annotations;
+    const before = annotationsOf(manifests);
+    expect(before["checksum/clickhouse-config"]).toMatch(/^[0-9a-f]{64}$/);
+    expect(before["checksum/admin-secret"]).toMatch(/^[0-9a-f]{64}$/);
+    const rotated = annotationsOf(render(SHAPES.saas, ["--set", "clickhouse.bundled.adminSecretRevision=2"]));
+    expect(rotated["checksum/admin-secret"]).not.toBe(before["checksum/admin-secret"]);
+    expect(rotated["checksum/clickhouse-config"]).toBe(before["checksum/clickhouse-config"]);
+  });
+
+  test("external mode renders no ClickHouse workload", () => {
+    const external = render(SHAPES.saas, [
+      "--set",
+      "clickhouse.mode=external",
+      "--set",
+      "clickhouse.external.url=https://ch.saas.trustiot.test:8443",
+      "--set",
+      "clickhouse.bundled.adminSecret.name=",
+    ]);
+    expect(external.filter((m) => m.metadata.name.startsWith(`${RELEASE}-clickhouse`))).toEqual([]);
+  });
+
+  test("the ingress e2e overlay installs no ClickHouse, so its helm install --wait needs no admin Secret", () => {
+    for (const shape of SHAPE_NAMES) {
+      const e2e = render([...SHAPES[shape], "tests/e2e/values-e2e.yaml"], [
+        "--set",
+        "ingress.direct.tlsSecret=trustiot-ingress-tls",
+      ]);
+      expect(e2e.filter((m) => m.metadata.name.startsWith(`${RELEASE}-clickhouse`))).toEqual([]);
+    }
+  });
+
+  test("a storage class and node placement can be set", () => {
+    const placed = render(SHAPES.onprem, [
+      "--set",
+      "clickhouse.bundled.storage.storageClassName=fast-ssd",
+      "--set",
+      "clickhouse.bundled.nodeSelector.trustiot\\.io/role=data",
+    ]);
+    const spec = find(placed, "StatefulSet", name).spec as {
+      volumeClaimTemplates: { spec: { storageClassName?: string } }[];
+      template: { spec: PodSpec };
+    };
+    expect(spec.volumeClaimTemplates[0]?.spec.storageClassName).toBe("fast-ssd");
+    expect(spec.template.spec.nodeSelector).toEqual({ "trustiot.io/role": "data" });
+    expect(spec.template.spec.securityContext?.runAsNonRoot).toBe(true);
+  });
+});
+
+type HttpRouteRule = {
+  matches: { path: { type: string; value: string } }[];
+  filters: {
+    type: string;
+    requestHeaderModifier: { set?: { name: string; value: string }[]; remove?: string[] };
+  }[];
+  backendRefs: { name: string; port: number }[];
+};
+type AuthzOperation = { paths?: string[]; notPaths?: string[]; hosts?: string[]; notHosts?: string[] };
+type AuthzPolicy = {
+  targetRefs: { group: string; kind: string; name: string }[];
+  action: string;
+  provider?: { name: string };
+  rules: { to?: { operation: AuthzOperation }[] }[];
+};
+
+describe("ingress gateway (decision 27)", () => {
+  const GATEWAY = `${RELEASE}-ingress`;
+  // The only cookie-free paths: host, exact path and backend (decision 27).
+  const PUBLIC_PATHS = {
+    saas: [
+      ["app.saas.trustiot.test", "/auth/login", `${RELEASE}-identity`],
+      ["app.saas.trustiot.test", "/healthz", `${RELEASE}-identity`],
+      ["gw.saas.trustiot.test", "/certs/renew", `${RELEASE}-certs`],
+      ["gw.saas.trustiot.test", "/mqtt", `${RELEASE}-mqtt-bridge`],
+    ],
+    onprem: [
+      ["trustiot.factory.test", "/auth/login", `${RELEASE}-identity`],
+      ["trustiot.factory.test", "/healthz", `${RELEASE}-identity`],
+      ["gw.trustiot.factory.test", "/certs/renew", `${RELEASE}-certs`],
+      ["gw.trustiot.factory.test", "/mqtt", `${RELEASE}-mqtt-bridge`],
+    ],
+  } as const;
+  const withBackends = (shape: Shape, args: string[] = []) => render([...SHAPES[shape], E2E_VALUES], args);
+
+  function rules(manifests: Manifest[]) {
+    return manifests
+      .filter((m) => m.kind === "HTTPRoute")
+      .flatMap((route) => {
+        const spec = route.spec as { hostnames: string[]; parentRefs: { name: string; sectionName: string }[]; rules: HttpRouteRule[] };
+        return spec.rules.map((rule) => ({ host: spec.hostnames[0] ?? "", parentRefs: spec.parentRefs, rule }));
+      });
+  }
+  const modifier = (rule: HttpRouteRule) => {
+    expect(rule.filters).toHaveLength(1);
+    expect(rule.filters[0]?.type).toBe("RequestHeaderModifier");
+    return rule.filters[0]?.requestHeaderModifier ?? {};
+  };
+  const strips = (rule: HttpRouteRule) => (modifier(rule).remove ?? []).includes("x-internal-identity");
+  const policy = (manifests: Manifest[], suffix: string) =>
+    find(manifests, "AuthorizationPolicy", `${RELEASE}-ingress-${suffix}`).spec as AuthzPolicy;
+
+  test.each(SHAPE_NAMES)("%s: Istio gateway with 2 replicas, set up through infrastructure.parametersRef", (shape) => {
+    const manifests = render(SHAPES[shape]);
+    const gateway = find(manifests, "Gateway", GATEWAY).spec as {
+      gatewayClassName: string;
+      infrastructure: { parametersRef: { group: string; kind: string; name: string } };
+      listeners: { name: string; port: number; protocol: string; tls?: unknown; allowedRoutes: unknown }[];
+    };
+    expect(gateway.gatewayClassName).toBe("istio");
+    expect(gateway.infrastructure.parametersRef).toEqual({ group: "", kind: "ConfigMap", name: `${GATEWAY}-options` });
+    const options = find(manifests, "ConfigMap", `${GATEWAY}-options`).data as Record<string, string>;
+    const deployment = Bun.YAML.parse(options.deployment ?? "") as {
+      spec: { replicas: number; template: { spec: { securityContext: unknown; containers: { name: string; resources: unknown }[] } } };
+    };
+    expect(deployment.spec.replicas).toBe(2);
+    expect(deployment.spec.template.spec.securityContext).toEqual({ seccompProfile: { type: "RuntimeDefault" } });
+    expect(deployment.spec.template.spec.containers[0]?.name).toBe("istio-proxy");
+    expect(Bun.YAML.parse(options.podDisruptionBudget ?? "")).toEqual({ spec: { minAvailable: 1 } });
+    const service = Bun.YAML.parse(options.service ?? "") as { spec: { type: string } };
+    if (shape === "saas") {
+      // Behind Cloudflare Tunnel: ClusterIP only, plain HTTP from cloudflared on the host.
+      expect(service.spec.type).toBe("ClusterIP");
+      expect(gateway.listeners).toEqual([
+        { name: "http", port: 80, protocol: "HTTP", allowedRoutes: { namespaces: { from: "Same" } } },
+      ]);
+    } else {
+      // On-prem: 443 in the customer network, the gateway terminates the outer TLS.
+      expect(service.spec.type).toBe("LoadBalancer");
+      expect(gateway.listeners).toEqual([
+        {
+          name: "https",
+          port: 443,
+          protocol: "HTTPS",
+          tls: { mode: "Terminate", certificateRefs: [{ kind: "Secret", group: "", name: "trustiot-ingress-tls" }] },
+          allowedRoutes: { namespaces: { from: "Same" } },
+        },
+      ]);
+    }
+  });
+
+  test("a single replica gets no PodDisruptionBudget", () => {
+    const options = find(render(SHAPES.saas, ["--set", "ingress.replicas=1"]), "ConfigMap", `${GATEWAY}-options`).data as Record<string, string>;
+    expect(options.podDisruptionBudget).toBeUndefined();
+  });
+
+  test.each(SHAPE_NAMES)("%s: every route sets x-forwarded-proto https and attaches to the one listener", (shape) => {
+    const rendered = rules(withBackends(shape));
+    expect(rendered.length).toBeGreaterThan(0);
+    for (const { rule, parentRefs } of rendered) {
+      expect(modifier(rule).set).toEqual([{ name: "x-forwarded-proto", value: "https" }]);
+      expect(parentRefs).toEqual([{ name: GATEWAY, sectionName: shape === "saas" ? "http" : "https" }]);
+    }
+  });
+
+  test.each(SHAPE_NAMES)("%s: public paths are exact, strip the identity header and skip the cookie check only on their host", (shape) => {
+    const manifests = withBackends(shape);
+    const rendered = rules(manifests);
+    const publicRules = rendered.filter(({ rule }) => strips(rule));
+    expect(
+      publicRules.map(({ host, rule }) => [host, rule.matches[0]?.path.value, rule.backendRefs[0]?.name]).sort(),
+    ).toEqual(PUBLIC_PATHS[shape].map((p) => [...p]).sort());
+    for (const { rule } of publicRules) {
+      expect(rule.matches).toHaveLength(1);
+      expect(rule.matches[0]?.path.type).toBe("Exact");
+      expect(rule.backendRefs).toEqual([{ name: rule.backendRefs[0]?.name ?? "", port: 8080 }]);
+    }
+    const check = policy(manifests, "cookie-check");
+    expect(check.action).toBe("CUSTOM");
+    expect(check.provider).toEqual({ name: "trustiot-identity" });
+    expect(check.targetRefs).toEqual([{ group: "gateway.networking.k8s.io", kind: "Gateway", name: GATEWAY }]);
+    const exempt = PUBLIC_PATHS[shape].map(([, path]) => path).sort();
+    // Rule 1 checks every other path; one more rule per public path checks it on any other host.
+    expect(check.rules[0]).toEqual({ to: [{ operation: { notPaths: exempt } }] });
+    expect(check.rules.slice(1)).toEqual(
+      exempt.map((path) => ({
+        to: [{ operation: { paths: [path], notHosts: PUBLIC_PATHS[shape].filter(([, p]) => p === path).map(([host]) => host) } }],
+      })),
+    );
+    // Cookie routes never strip the header (that would drop the identity service's value) and
+    // are never exempt.
+    for (const { rule } of rendered.filter(({ rule }) => !strips(rule))) {
+      expect(modifier(rule).remove).toBeUndefined();
+      expect(exempt).not.toContain(rule.matches[0]?.path.value);
+    }
+  });
+
+  test("a public path is neither routed nor exempt while its backend is off", () => {
+    const manifests = render(SHAPES.saas, ["--set", "services.identity.enabled=true"]);
+    const rendered = rules(manifests);
+    expect(rendered.map(({ host, rule }) => `${host}${rule.matches[0]?.path.value}`).sort()).toEqual([
+      "app.saas.trustiot.test/auth/login",
+      "app.saas.trustiot.test/healthz",
+    ]);
+    const check = policy(manifests, "cookie-check");
+    expect(check.rules[0]).toEqual({ to: [{ operation: { notPaths: ["/auth/login", "/healthz"] } }] });
+    expect(check.rules).toHaveLength(3);
+  });
+
+  test("the same path exempt on two hosts is checked on every other host", () => {
+    const manifests = render(
+      [...SHAPES.saas, E2E_VALUES],
+      ["--set", "ingress.publicPaths.healthCheck=/up", "--set", "ingress.publicPaths.certRenewal=/up"],
+    );
+    const check = policy(manifests, "cookie-check");
+    expect(check.rules).toContainEqual({
+      to: [{ operation: { paths: ["/up"], notHosts: ["app.saas.trustiot.test", "gw.saas.trustiot.test"] } }],
+    });
+  });
+
+  test("/internal is denied at the gateway even when a catch-all route matches it", () => {
+    const manifests = withBackends("saas");
+    const deny = policy(manifests, "deny-internal");
+    expect(deny.action).toBe("DENY");
+    expect(deny.targetRefs).toEqual([{ group: "gateway.networking.k8s.io", kind: "Gateway", name: GATEWAY }]);
+    expect(deny.rules).toEqual([{ to: [{ operation: { paths: ["/internal*"] } }] }]);
+    for (const { rule } of rules(manifests)) expect(rule.matches[0]?.path.value).not.toStartWith("/internal");
+  });
+
+  test("NetworkPolicy: behind the tunnel only the host may connect; direct exposure opens 443 only", () => {
+    const tunnel = find(render(SHAPES.saas), "NetworkPolicy", GATEWAY).spec as YamlMap;
+    expect(tunnel).toEqual({
+      podSelector: { matchLabels: { "gateway.networking.k8s.io/gateway-name": GATEWAY } },
+      policyTypes: ["Ingress"],
+      ingress: [{ from: [{ ipBlock: { cidr: "10.42.0.1/32" } }] }],
+    });
+    const direct = find(render(SHAPES.onprem), "NetworkPolicy", GATEWAY).spec as YamlMap;
+    expect(direct.ingress).toEqual([
+      {
+        ports: [
+          { port: 443, protocol: "TCP" },
+          { port: 15021, protocol: "TCP" },
+        ],
+      },
+    ]);
+  });
+
+  test("the mesh extension provider in deploy/istio fails closed and matches the chart", () => {
+    const istiod = Bun.YAML.parse(readFileSync(join(REPO_ROOT, "deploy/istio/istiod-values.yaml"), "utf8")) as {
+      meshConfig: { extensionProviders: { name: string; envoyExtAuthzHttp: Record<string, unknown> }[] };
+    };
+    const ingress = defaults.ingress as { authzProvider: string };
+    const provider = istiod.meshConfig.extensionProviders.find((p) => p.name === ingress.authzProvider);
+    expect(provider).toBeDefined();
+    const http = provider?.envoyExtAuthzHttp ?? {};
+    expect(http.failOpen).toBe(false);
+    expect(http.statusOnError).toBe("503");
+    expect(String(http.timeout)).toMatch(/^0\.\d+s$/);
+    expect(http.pathPrefix).toBe("/internal/ext-authz");
+    expect(http.includeRequestHeadersInCheck).toEqual(["cookie"]);
+    expect(http.headersToUpstreamOnAllow).toEqual(["x-internal-identity"]);
+    // The identity service of the release "trustiot" in namespace "trustiot" (README.md).
+    const identity = find(render(SHAPES.saas, ["--set", "services.identity.enabled=true"]), "Service", `${RELEASE}-identity`);
+    expect(http.service).toBe(`${identity.metadata.name}.${NAMESPACE}.svc.cluster.local`);
+    expect(http.port).toBe((identity.spec as { ports: { port: number }[] }).ports[0]?.port);
+  });
+
+  test("service pods join the ambient mesh, and podLabels cannot opt them out", () => {
+    for (const args of [[], ["--skip-schema-validation", "--set", "services.smoke-echo.podLabels.istio\\.io/dataplane-mode=none"]]) {
+      const deployment = find(render([...SHAPES.saas, SMOKE], args), "Deployment", `${RELEASE}-smoke-echo`);
+      const labels = (deployment.spec as { template: { metadata: { labels: Record<string, string> } } }).template.metadata.labels;
+      expect(labels["istio.io/dataplane-mode"]).toBe("ambient");
     }
   });
 });
@@ -466,6 +853,37 @@ describe("values validation rejects unsafe or incomplete settings", () => {
     ["Postgres without server verification", saas, ["--set", "postgres.external.sslMode=require"], /sslMode/],
     ["external Qdrant without a URL", saas, ["--set", "qdrant.external.url="], /\/qdrant\/external\/url/],
     ["Sentry on without a DSN Secret", saas, ["--set", "observability.sentry.dsnSecret.name="], /dsnSecret/],
+    [
+      "bundled ClickHouse without an admin password Secret",
+      saas,
+      ["--set", "clickhouse.bundled.adminSecret.name="],
+      /\/clickhouse\/bundled\/adminSecret\/name/,
+    ],
+    ["ClickHouse image without a digest", saas, ["--set", "clickhouse.bundled.image.digest="], /digest/],
+    [
+      "bundled ClickHouse without a sized volume",
+      saas,
+      ["--set", "clickhouse.bundled.storage.size="],
+      /\/clickhouse\/bundled\/storage\/size/,
+    ],
+    [
+      "ClickHouse bootstrap account named default",
+      saas,
+      ["--set", "clickhouse.bundled.adminUser=default"],
+      /\/clickhouse\/bundled\/adminUser/,
+    ],
+    [
+      "ClickHouse pod allowed to run as root",
+      saas,
+      ["--set", "clickhouse.bundled.podSecurityContext.runAsNonRoot=false"],
+      /runAsNonRoot/,
+    ],
+    [
+      "ClickHouse access settings smuggled into values",
+      saas,
+      ["--set", "clickhouse.bundled.users.reader.password=plain-text"],
+      /users/,
+    ],
     [
       "SMTP sender with a header injection",
       onprem,
@@ -633,6 +1051,15 @@ describe("values validation rejects unsafe or incomplete settings", () => {
       /env reads the dependency credential trustiot-ai-chat\/api-key/,
     ],
     [
+      "ClickHouse bootstrap admin password read through custom env",
+      saas,
+      [
+        "--set-json",
+        'services.smoke-echo.env=[{"name":"CH_ADMIN_PASSWORD","valueFrom":{"secretKeyRef":{"name":"trustiot-clickhouse-admin","key":"password"}}}]',
+      ],
+      /env reads the dependency credential trustiot-clickhouse-admin\/password/,
+    ],
+    [
       "duplicate env names",
       saas,
       [
@@ -648,6 +1075,74 @@ describe("values validation rejects unsafe or incomplete settings", () => {
       saas,
       ["--set-json", "services.smoke-echo.probes.readiness={}"],
       /probes.readiness is required/,
+    ],
+    // Ingress gateway (decision 27).
+    ["wildcard public path", saas, ["--set", "ingress.publicPaths.healthCheck=/healthz/*"], /\/ingress\/publicPaths\/healthCheck/],
+    ["public path with a dot segment", saas, ["--set", "ingress.publicPaths.login=/auth/../login"], /\/ingress\/publicPaths\/login/],
+    ["public path with a trailing slash", saas, ["--set", "ingress.publicPaths.mqtt=/mqtt/"], /\/ingress\/publicPaths\/mqtt/],
+    ["upper-case public path", saas, ["--set", "ingress.publicPaths.mqtt=/MQTT"], /\/ingress\/publicPaths\/mqtt/],
+    ["encoded public path", saas, ["--set", "ingress.publicPaths.certRenewal=/certs%2frenew"], /\/ingress\/publicPaths\/certRenewal/],
+    ["public path under /internal", saas, ["--set", "ingress.publicPaths.login=/internal/login"], /\/ingress\/publicPaths\/login/],
+    ["extra public path", saas, ["--set", "ingress.publicPaths.metrics=/metrics"], /metrics/],
+    [
+      "cookie route under /internal",
+      saas,
+      ["--set-json", 'ingress.routes=[{"host":"app","path":"/internal/tenants","match":"PathPrefix","service":"smoke-echo"}]'],
+      /\/ingress\/routes\/0\/path/,
+    ],
+    [
+      "cookie route with an encoded path",
+      saas,
+      ["--set-json", 'ingress.routes=[{"host":"app","path":"/api%2fv1","match":"PathPrefix","service":"smoke-echo"}]'],
+      /\/ingress\/routes\/0\/path/,
+    ],
+    [
+      "cookie route with a regular expression match",
+      saas,
+      ["--set-json", 'ingress.routes=[{"host":"app","path":"/api","match":"RegularExpression","service":"smoke-echo"}]'],
+      /\/ingress\/routes\/0\/match/,
+    ],
+    [
+      "cookie route on an unknown host",
+      saas,
+      ["--set-json", 'ingress.routes=[{"host":"admin","path":"/","match":"PathPrefix","service":"smoke-echo"}]'],
+      /\/ingress\/routes\/0\/host/,
+    ],
+    [
+      "cookie route to a disabled service",
+      saas,
+      ["--set-json", 'ingress.routes=[{"host":"app","path":"/api","match":"PathPrefix","service":"knowledge"}]'],
+      /ingress\.routes\[0\]: service "knowledge" is not enabled/,
+    ],
+    [
+      "cookie route to an undeclared port",
+      saas,
+      ["--set-json", 'ingress.routes=[{"host":"app","path":"/api","match":"PathPrefix","service":"smoke-echo","port":"metrics"}]'],
+      /ingress\.routes\[0\]: service "smoke-echo" has no port named "metrics"/,
+    ],
+    [
+      "cookie route on a public path",
+      [...saas, E2E_VALUES],
+      ["--set-json", 'ingress.routes=[{"host":"gateway","path":"/mqtt","match":"PathPrefix","service":"assets"}]'],
+      /ingress\.routes\[0\]: \/mqtt is already routed for hosts\.gateway/,
+    ],
+    [
+      "two public paths on one host share a path",
+      [...saas, E2E_VALUES],
+      ["--set", "ingress.publicPaths.healthCheck=/auth/login"],
+      /ingress\.publicPaths\.healthCheck: \/auth\/login is listed twice for hosts\.app/,
+    ],
+    ["whole network behind the tunnel", saas, ["--set-json", 'ingress.tunnel.allowedSources=["0.0.0.0/0"]'], /allowedSources/],
+    ["no source behind the tunnel", saas, ["--set-json", "ingress.tunnel.allowedSources=[]"], /allowedSources/],
+    ["direct exposure without a TLS certificate", onprem, ["--set", "ingress.direct.tlsSecret="], /\/ingress\/direct\/tlsSecret/],
+    ["no ingress replica", saas, ["--set", "ingress.replicas=0"], /\/ingress\/replicas/],
+    ["no ext_authz provider", saas, ["--set", "ingress.authzProvider="], /\/ingress\/authzProvider/],
+    ["ingress without a memory limit", saas, ["--set", "ingress.resources.limits.memory=null"], /\/ingress\/resources\/limits/],
+    [
+      "pod label that would take a service out of the mesh",
+      saas,
+      ["--set", "services.smoke-echo.podLabels.istio\\.io/dataplane-mode=none"],
+      /invalid propertyName 'istio\.io\/dataplane-mode'/,
     ],
   ];
 
@@ -697,6 +1192,41 @@ describe("the templates keep the secret and env boundaries without schema valida
       "unknown credential",
       ["--set-json", 'services.smoke-echo.credentials=["postgres"]'],
       /services\.smoke-echo: unknown credential "postgres"/,
+    ],
+    [
+      "wildcard public path",
+      ["--set", "services.identity.enabled=true", "--set", "ingress.publicPaths.healthCheck=/healthz/*"],
+      /ingress\.publicPaths\.healthCheck: "\/healthz\/\*" must be one exact lower-case path/,
+    ],
+    [
+      "public path with a dot segment, even with its backend off",
+      ["--set", "ingress.publicPaths.login=/auth/../login"],
+      /ingress\.publicPaths\.login: "\/auth\/\.\.\/login" must be one exact lower-case path/,
+    ],
+    [
+      "public path under /internal",
+      ["--set", "ingress.publicPaths.mqtt=/internal/mqtt"],
+      /ingress\.publicPaths\.mqtt: paths under \/internal are never routed/,
+    ],
+    [
+      "cookie route under /internal",
+      ["--set-json", 'ingress.routes=[{"host":"app","path":"/internal/tenants","match":"PathPrefix","service":"smoke-echo"}]'],
+      /ingress\.routes\[0\]: paths under \/internal are never routed/,
+    ],
+    [
+      "cookie route with a dot segment",
+      ["--set-json", 'ingress.routes=[{"host":"app","path":"/api/../x","match":"PathPrefix","service":"smoke-echo"}]'],
+      /ingress\.routes\[0\]: "\/api\/\.\.\/x" must be '\/' or a lower-case path/,
+    ],
+    [
+      "cookie route with a regular expression match",
+      ["--set-json", 'ingress.routes=[{"host":"app","path":"/api","match":"RegularExpression","service":"smoke-echo"}]'],
+      /ingress\.routes\[0\]: match must be PathPrefix or Exact/,
+    ],
+    [
+      "cookie route on an unknown host",
+      ["--set-json", 'ingress.routes=[{"host":"admin","path":"/","match":"PathPrefix","service":"smoke-echo"}]'],
+      /ingress\.routes\[0\]: host must be app, gateway or ota/,
     ],
   ];
 
@@ -824,11 +1354,21 @@ describe("service settings merge", () => {
   test("the longest release name keeps every object name distinct and within 63 characters", () => {
     // Helm caps release names at 53 characters.
     const release = `trustiot-${"x".repeat(44)}`;
-    const manifests = render(files, enableAllServices, release);
-    for (const kind of ["ServiceAccount", "Service", "Deployment", "ConfigMap"]) {
+    const manifests = render(
+      [...files, E2E_VALUES],
+      [...enableAllServices, "--set-json", 'ingress.routes=[{"host":"ota","path":"/","match":"PathPrefix","service":"gateway-ops"}]'],
+      release,
+    );
+    const kinds = ["ServiceAccount", "Service", "Deployment", "ConfigMap", "Gateway", "HTTPRoute", "AuthorizationPolicy", "NetworkPolicy"];
+    for (const kind of kinds) {
       const names = manifests.filter((m) => m.kind === kind).map((m) => m.metadata.name);
+      expect(names.length).toBeGreaterThan(0);
       expect(new Set(names).size).toBe(names.length);
       for (const name of names) expect(name.length).toBeLessThanOrEqual(63);
+    }
+    // Istio adds "-istio" to the Gateway name for the Deployment, Service and ServiceAccount.
+    for (const gateway of manifests.filter((m) => m.kind === "Gateway")) {
+      expect(`${gateway.metadata.name}-istio`.length).toBeLessThanOrEqual(63);
     }
     const deployments = manifests.filter((m) => m.kind === "Deployment").map((m) => m.metadata.name);
     for (const service of [...plannedServices, "smoke-echo"]) {
@@ -865,7 +1405,8 @@ describe("documentation and packaging", () => {
   // Leaf paths of values.yaml; services.<entry> collapses to services.<name>, and
   // Kubernetes-native objects under serviceDefaults count as one field.
   function documentedPaths(value: unknown, path: string): string[] {
-    const relative = path.startsWith("serviceDefaults.") ? path.slice("serviceDefaults.".length) : "";
+    const prefix = ["serviceDefaults.", "clickhouse.bundled."].find((p) => path.startsWith(p));
+    const relative = prefix ? path.slice(prefix.length) : "";
     if (!isMap(value) || Object.keys(value).length === 0 || KUBERNETES_OBJECT_FIELDS.has(relative)) {
       return [path.replace(/^services\.[^.]+/, "services.<name>")];
     }

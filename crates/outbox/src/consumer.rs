@@ -1,0 +1,1070 @@
+//! Reading a producer's log and processing each event once, in order.
+
+use std::borrow::Cow;
+use std::error::Error as StdError;
+use std::sync::Arc;
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use contract::{DecodeError, EventEnvelope, EventId, TenantId};
+use sqlx::{PgConnection, PgPool, Postgres, Transaction};
+use tokio_util::sync::CancellationToken;
+use tracing::Instrument as _;
+use uuid::Uuid;
+
+use crate::aggregate::Aggregate;
+use crate::lag::{Lag, LagCell};
+use crate::position::Position;
+use crate::schema::is_schema_name;
+
+/// Tries the transaction-level advisory lock of subscription `$1` in the consumer's schema.
+/// Replicas take turns through it; it does not give the transaction an ID.
+const TRY_LOCK_SUBSCRIPTION: &str = "SELECT pg_try_advisory_xact_lock(hashtextextended(\
+     'outbox.subscription:' || coalesce(current_schema(), '') || ':' || $1, 0))";
+
+/// Waits for the same lock, for [`replay_from`].
+const LOCK_SUBSCRIPTION: &str = "SELECT pg_advisory_xact_lock(hashtextextended(\
+     'outbox.subscription:' || coalesce(current_schema(), '') || ':' || $1, 0))";
+
+/// The longest subscription name, in bytes.
+pub const MAX_SUBSCRIPTION_LEN: usize = 100;
+
+/// Where a new subscription starts reading. Ignored once the subscription exists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum StartFrom {
+    /// With the first event in the log (the default): a new consumer sees the whole history.
+    #[default]
+    Beginning,
+    /// After the history: a new consumer sees what is committed from now on. The start is the
+    /// read horizon (the oldest write transaction still running), so no event committed after
+    /// the subscription is created is missed, and a few committed just before may be included.
+    Latest,
+}
+
+/// How a subscription reads one producer's log.
+#[derive(Clone, Debug)]
+pub struct ConsumerConfig {
+    subscription: String,
+    source_schema: String,
+    start_from: StartFrom,
+    batch_size: u16,
+    poll_interval: Duration,
+    max_backoff: Duration,
+    lag_interval: Duration,
+}
+
+impl ConsumerConfig {
+    /// A subscription named `subscription` (unique within the consuming service, kept forever:
+    /// renaming it starts a new subscription) that reads the log in the producer's schema
+    /// `source_schema`.
+    ///
+    /// Defaults: start from the beginning, batches of 100 events, poll every second when idle,
+    /// back off up to 30 seconds after failures, sample the lag every 15 seconds.
+    ///
+    /// # Errors
+    ///
+    /// When the subscription name is not 1–100 bytes of lower case letters, digits, `_`, `.`,
+    /// and `-` starting with a letter or digit, or the schema name would need quoting.
+    pub fn new(
+        subscription: impl Into<String>,
+        source_schema: impl Into<String>,
+    ) -> Result<Self, InvalidConfig> {
+        let subscription = subscription.into();
+        let source_schema = source_schema.into();
+        if !is_subscription_name(&subscription) {
+            return Err(InvalidConfig::Subscription);
+        }
+        if !is_schema_name(&source_schema) {
+            return Err(InvalidConfig::SourceSchema);
+        }
+        Ok(Self {
+            subscription,
+            source_schema,
+            start_from: StartFrom::Beginning,
+            batch_size: 100,
+            poll_interval: Duration::from_secs(1),
+            max_backoff: Duration::from_secs(30),
+            lag_interval: Duration::from_secs(15),
+        })
+    }
+
+    /// Where a new subscription starts.
+    #[must_use]
+    pub fn start_from(mut self, start: StartFrom) -> Self {
+        self.start_from = start;
+        self
+    }
+
+    /// How many events one poll reads at most (at least 1).
+    #[must_use]
+    pub fn batch_size(mut self, size: u16) -> Self {
+        self.batch_size = size.max(1);
+        self
+    }
+
+    /// How long to wait before polling again once caught up. This bounds the delivery latency.
+    #[must_use]
+    pub fn poll_interval(mut self, interval: Duration) -> Self {
+        self.poll_interval = interval.max(Duration::from_millis(10));
+        self
+    }
+
+    /// The longest wait between retries of a failing event.
+    #[must_use]
+    pub fn max_backoff(mut self, backoff: Duration) -> Self {
+        self.max_backoff = backoff.max(Duration::from_millis(10));
+        self
+    }
+
+    /// How often [`Consumer::run`] measures the lag.
+    #[must_use]
+    pub fn lag_interval(mut self, interval: Duration) -> Self {
+        self.lag_interval = interval.max(Duration::from_millis(10));
+        self
+    }
+
+    /// The subscription's name.
+    #[must_use]
+    pub fn subscription(&self) -> &str {
+        &self.subscription
+    }
+
+    /// The producer's schema.
+    #[must_use]
+    pub fn source_schema(&self) -> &str {
+        &self.source_schema
+    }
+}
+
+fn is_subscription_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= MAX_SUBSCRIPTION_LEN
+        && (bytes[0].is_ascii_lowercase() || bytes[0].is_ascii_digit())
+        && bytes.iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'.' | b'-')
+        })
+}
+
+/// A [`ConsumerConfig`] could not be built.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum InvalidConfig {
+    /// The subscription name is not allowed.
+    #[error(
+        "subscription names are 1-100 bytes of lower case letters, digits, `_`, `.`, and `-`, \
+         starting with a letter or digit"
+    )]
+    Subscription,
+    /// The schema name would need quoting.
+    #[error(
+        "source schema names are lower case letters, digits, and `_`, starting with a letter or \
+         `_`, at most 63 bytes, not starting with `pg_`"
+    )]
+    SourceSchema,
+}
+
+/// One event handed to a [`Handler`].
+#[derive(Clone, Debug)]
+pub struct Delivery {
+    /// The event's position in the producer's log.
+    pub position: Position,
+    /// The aggregate the event belongs to.
+    pub aggregate: Aggregate,
+    /// The event's number within its aggregate, starting at 1.
+    pub aggregate_seq: i64,
+    /// The event.
+    pub envelope: EventEnvelope,
+    /// When the producer wrote the event.
+    pub stored_at: DateTime<Utc>,
+}
+
+impl Delivery {
+    /// The event's tenant, `None` for a platform-wide event.
+    #[must_use]
+    pub fn tenant(&self) -> Option<TenantId> {
+        self.envelope.tenant_id
+    }
+}
+
+/// Processes the events of one subscription.
+///
+/// For every event the consumer opens a transaction, calls [`Handler::begin`], takes the
+/// subscription's lock, checks the event ID against the inbox, calls [`Handler::handle`],
+/// records the event ID, advances the subscription, and commits. Whatever the handler writes
+/// through `tx` therefore commits exactly when the event counts as processed: a crash or error
+/// before the commit leaves nothing behind, and the event is delivered again.
+///
+/// Keep the time between the handler's first write and the commit short: from its first write
+/// a transaction holds back the read horizon of every consumer in the Postgres cluster (see the
+/// README). Do slow reads, such as an internal API call in notification mode, before writing.
+pub trait Handler: Send + Sync + 'static {
+    /// Runs first in each delivery's transaction, before the consumer touches any table. Set
+    /// the transaction's tenant here (decision 29), from [`Delivery::tenant`]. The default does
+    /// nothing.
+    fn begin(
+        &self,
+        tx: &mut Transaction<'static, Postgres>,
+        delivery: &Delivery,
+    ) -> impl Future<Output = Result<(), HandlerError>> + Send {
+        let _ = (tx, delivery);
+        async { Ok(()) }
+    }
+
+    /// Applies one event. Write only through `tx`; side effects outside the database (calls,
+    /// messages) may happen more than once, because an event whose transaction fails is
+    /// delivered again.
+    fn handle(
+        &self,
+        tx: &mut Transaction<'static, Postgres>,
+        delivery: &Delivery,
+    ) -> impl Future<Output = Result<(), HandlerError>> + Send;
+}
+
+/// Whether a failed event is retried or set aside.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailureKind {
+    /// Retry the same event with backoff; later events wait, so the order holds.
+    Retry,
+    /// Record the event in `outbox_dead_letter` and move on. Use only when no retry can ever
+    /// succeed, such as an event that cannot be decoded.
+    Permanent,
+}
+
+/// A handler could not process an event.
+#[derive(Debug, thiserror::Error)]
+#[error("{reason}")]
+pub struct HandlerError {
+    kind: FailureKind,
+    reason: Cow<'static, str>,
+    #[source]
+    source: Option<Box<dyn StdError + Send + Sync>>,
+}
+
+impl HandlerError {
+    /// A failure that may pass: the event is retried. `reason` is logged and must not contain
+    /// event data or personal data.
+    pub fn retry(reason: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            kind: FailureKind::Retry,
+            reason: reason.into(),
+            source: None,
+        }
+    }
+
+    /// A failure no retry can fix: the event is dead-lettered. `reason` is logged and stored
+    /// and must not contain event data or personal data.
+    pub fn permanent(reason: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            kind: FailureKind::Permanent,
+            reason: reason.into(),
+            source: None,
+        }
+    }
+
+    /// Attaches the underlying error. Only its kind (for database errors, the SQLSTATE) is
+    /// logged, because error messages can quote values.
+    #[must_use]
+    pub fn with_source(mut self, source: impl StdError + Send + Sync + 'static) -> Self {
+        self.source = Some(Box::new(source));
+        self
+    }
+
+    /// Whether the event is retried or dead-lettered.
+    #[must_use]
+    pub fn kind(&self) -> FailureKind {
+        self.kind
+    }
+
+    /// The reason given by the handler.
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    /// The SQLSTATE of an underlying database error, for logs.
+    fn sqlstate(&self) -> Option<String> {
+        let source = self.source.as_deref()?;
+        let error = source.downcast_ref::<sqlx::Error>()?;
+        sqlstate(error)
+    }
+}
+
+impl From<sqlx::Error> for HandlerError {
+    /// Database errors are retried: most are transient (connection loss, serialization
+    /// failures, deadlocks), and a permanent one keeps failing visibly instead of losing the
+    /// event.
+    fn from(error: sqlx::Error) -> Self {
+        Self::retry("database error").with_source(error)
+    }
+}
+
+impl From<DecodeError> for HandlerError {
+    /// A payload newer than this build is retried until the consumer is upgraded (the
+    /// contract's rule); every other decode error is permanent.
+    fn from(error: DecodeError) -> Self {
+        if error.is_retryable() {
+            Self::retry("event version is newer than this build").with_source(error)
+        } else {
+            Self::permanent("event cannot be decoded").with_source(error)
+        }
+    }
+}
+
+fn sqlstate(error: &sqlx::Error) -> Option<String> {
+    match error {
+        sqlx::Error::Database(database) => database.code().map(Cow::into_owned),
+        _ => None,
+    }
+}
+
+/// How [`replay_from`] treats events the subscription has already processed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Replay {
+    /// Skip them: the inbox still lists them, so only events never processed (and dead-lettered
+    /// ones) reach the handler again. Use to re-read a range safely.
+    SkipProcessed,
+    /// Forget them, so the handler sees every event again. Use to rebuild state, clearing
+    /// that state in the same transaction after [`replay_from`].
+    Reprocess,
+}
+
+/// Moves `subscription` so that its next poll delivers the events after `after`, for example
+/// [`Position::START`] for the whole log, or [`Position::just_before`] of an event to include
+/// it. Run it in a transaction of the consuming service; with [`Replay::Reprocess`], clear the
+/// state to rebuild in the same transaction, after this call. It waits for an event being
+/// processed to finish and then holds the subscription's lock until the transaction ends, so
+/// call it before touching any table a delivery may write: the other order can deadlock with
+/// a delivery in flight.
+///
+/// # Errors
+///
+/// When the subscription does not exist, or a query fails.
+pub async fn replay_from(
+    tx: &mut Transaction<'_, Postgres>,
+    subscription: &str,
+    after: Position,
+    replay: Replay,
+) -> Result<(), ConsumerError> {
+    // Waits for a delivery in progress; deliveries started later wait for this transaction.
+    sqlx::query(LOCK_SUBSCRIPTION)
+        .bind(subscription)
+        .execute(&mut **tx)
+        .await?;
+    let updated = sqlx::query(
+        "UPDATE outbox_subscription SET position_tx = $2, position_id = $3, updated_at = now() \
+         WHERE name = $1",
+    )
+    .bind(subscription)
+    .bind(after.tx())
+    .bind(after.id())
+    .execute(&mut **tx)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(ConsumerError::UnknownSubscription(subscription.to_owned()));
+    }
+    if replay == Replay::Reprocess {
+        sqlx::query(
+            "DELETE FROM outbox_inbox WHERE subscription = $1 \
+             AND (position_tx, position_id) > ($2, $3)",
+        )
+        .bind(subscription)
+        .bind(after.tx())
+        .bind(after.id())
+        .execute(&mut **tx)
+        .await?;
+    }
+    tracing::info!(
+        subscription,
+        position = %after,
+        reprocess = replay == Replay::Reprocess,
+        "outbox subscription moved for replay"
+    );
+    Ok(())
+}
+
+/// A consumer-side failure outside the handler.
+#[derive(Debug, thiserror::Error)]
+pub enum ConsumerError {
+    /// A query failed; usually transient.
+    #[error("outbox query failed: {}", crate::redact::SafeSqlx(.0))]
+    Database(#[from] sqlx::Error),
+    /// The subscription has not been created; see [`Consumer::ensure_subscription`].
+    #[error("outbox subscription `{0}` does not exist")]
+    UnknownSubscription(String),
+    /// The subscription exists but reads another producer's log; its positions mean nothing in
+    /// this one. Pick a new subscription name instead.
+    #[error(
+        "outbox subscription `{subscription}` reads schema `{stored}`, not the configured \
+         `{configured}`"
+    )]
+    SourceMismatch {
+        /// The subscription.
+        subscription: String,
+        /// The schema it was created for.
+        stored: String,
+        /// The schema now configured.
+        configured: String,
+    },
+}
+
+impl ConsumerError {
+    /// Whether retrying can help; configuration mistakes cannot.
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Self::Database(_))
+    }
+}
+
+/// What one [`Consumer::poll_once`] did.
+#[derive(Debug, Default)]
+pub struct Progress {
+    /// Events handed to the handler and committed.
+    pub delivered: usize,
+    /// Events skipped because the inbox already listed them.
+    pub duplicates: usize,
+    /// Events recorded in `outbox_dead_letter`.
+    pub dead_lettered: usize,
+    /// Why the poll stopped.
+    pub outcome: Outcome,
+}
+
+/// Why a poll stopped.
+#[derive(Debug, Default)]
+pub enum Outcome {
+    /// Every event readable now has been processed.
+    #[default]
+    CaughtUp,
+    /// More events are waiting; poll again at once.
+    MoreAvailable,
+    /// Another replica is processing this subscription.
+    Busy,
+    /// The handler failed and asked for a retry; the event stays first in line.
+    Retry {
+        /// The event that failed.
+        event_id: EventId,
+        /// The handler's error.
+        error: HandlerError,
+    },
+}
+
+/// A row of the producer's log.
+struct Row {
+    position: Position,
+    event_id: Uuid,
+    event_type: String,
+    aggregate: Aggregate,
+    aggregate_seq: i64,
+    envelope: String,
+    stored_at: DateTime<Utc>,
+}
+
+type RowTuple = (
+    i64,
+    i64,
+    Uuid,
+    String,
+    String,
+    String,
+    i64,
+    String,
+    DateTime<Utc>,
+);
+
+impl From<RowTuple> for Row {
+    fn from(row: RowTuple) -> Self {
+        let (id, tx, event_id, event_type, kind, aggregate_id, aggregate_seq, envelope, stored) =
+            row;
+        Self {
+            position: Position::new(tx, id),
+            event_id,
+            event_type,
+            aggregate: Aggregate::from_stored(kind, aggregate_id),
+            aggregate_seq,
+            envelope,
+            stored_at: stored,
+        }
+    }
+}
+
+/// The result of trying one event.
+enum Step {
+    Delivered,
+    Duplicate,
+    DeadLettered,
+    /// Another replica holds the subscription.
+    Busy,
+    /// Another replica moved the subscription; read again from its position.
+    Moved,
+    Retry(HandlerError),
+}
+
+/// The subscription's lock outcome inside a delivery transaction.
+enum Claim {
+    Claimed,
+    Busy,
+    Moved,
+}
+
+/// Reads one subscription and hands each event to a [`Handler`]. Cheap to clone; clones share
+/// the handler and the lag reading.
+///
+/// Run one per subscription in each replica: replicas take turns through a transaction-level
+/// advisory lock per subscription, and every delivery advances the position only from the one
+/// it started at, so events are processed one at a time, in order.
+pub struct Consumer<H> {
+    inner: Arc<Inner<H>>,
+}
+
+impl<H> Clone for Consumer<H> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+struct Inner<H> {
+    pool: PgPool,
+    config: ConsumerConfig,
+    handler: H,
+    lag: Arc<LagCell>,
+}
+
+impl<H: Handler> Consumer<H> {
+    /// A consumer that reads with `pool`, the consuming service's own pool: its `search_path`
+    /// starts with the service's schema, where the consumer tables are, and its role may read
+    /// `outbox_event` in the producer's schema (see the README).
+    ///
+    /// The lag gauges are registered with the global meter provider on the first call in a
+    /// process, so create consumers after telemetry is initialized (`service_kit::run` does that
+    /// before calling the service's start function).
+    pub fn new(pool: PgPool, config: ConsumerConfig, handler: H) -> Self {
+        let lag = LagCell::register(&config.subscription, &config.source_schema);
+        Self {
+            inner: Arc::new(Inner {
+                pool,
+                config,
+                handler,
+                lag,
+            }),
+        }
+    }
+
+    /// The configuration.
+    #[must_use]
+    pub fn config(&self) -> &ConsumerConfig {
+        &self.inner.config
+    }
+
+    /// The handler.
+    #[must_use]
+    pub fn handler(&self) -> &H {
+        &self.inner.handler
+    }
+
+    /// Creates the subscription if it does not exist yet, starting as configured.
+    ///
+    /// # Errors
+    ///
+    /// [`ConsumerError::SourceMismatch`] when the subscription exists for another schema, or a
+    /// query error.
+    pub async fn ensure_subscription(&self) -> Result<(), ConsumerError> {
+        let config = &self.inner.config;
+        let start = match config.start_from {
+            StartFrom::Beginning => Position::START,
+            StartFrom::Latest => {
+                let mut tx = self.source_transaction().await?;
+                let horizon = horizon(&mut tx).await?;
+                tx.commit().await?;
+                // Every event below the horizon has committed or never will; every later one
+                // sorts after this position.
+                Position::new(horizon.saturating_sub(1), i64::MAX)
+            }
+        };
+        sqlx::query(
+            "INSERT INTO outbox_subscription (name, source_schema, position_tx, position_id) \
+             VALUES ($1, $2, $3, $4) ON CONFLICT (name) DO NOTHING",
+        )
+        .bind(&config.subscription)
+        .bind(&config.source_schema)
+        .bind(start.tx())
+        .bind(start.id())
+        .execute(&self.inner.pool)
+        .await?;
+        let stored: String =
+            sqlx::query_scalar("SELECT source_schema FROM outbox_subscription WHERE name = $1")
+                .bind(&config.subscription)
+                .fetch_one(&self.inner.pool)
+                .await?;
+        if stored != config.source_schema {
+            return Err(ConsumerError::SourceMismatch {
+                subscription: config.subscription.clone(),
+                stored,
+                configured: config.source_schema.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    /// The position of the last event the subscription processed or dead-lettered.
+    ///
+    /// # Errors
+    ///
+    /// When the subscription does not exist, or the query fails.
+    pub async fn position(&self) -> Result<Position, ConsumerError> {
+        let row: Option<(i64, i64)> = sqlx::query_as(
+            "SELECT position_tx, position_id FROM outbox_subscription WHERE name = $1",
+        )
+        .bind(&self.inner.config.subscription)
+        .fetch_optional(&self.inner.pool)
+        .await?;
+        row.map(|(tx, id)| Position::new(tx, id)).ok_or_else(|| {
+            ConsumerError::UnknownSubscription(self.inner.config.subscription.clone())
+        })
+    }
+
+    /// Reads one batch and processes it in order, stopping early when the handler asks for a
+    /// retry or another replica takes over.
+    ///
+    /// # Errors
+    ///
+    /// When a query of the consumer itself fails or the subscription does not exist. Handler
+    /// failures are reported in [`Progress::outcome`] instead.
+    pub async fn poll_once(&self) -> Result<Progress, ConsumerError> {
+        self.poll(None).await
+    }
+
+    /// [`Consumer::poll_once`], stopping between events once `stop` is cancelled, so shutdown
+    /// waits for one event at most rather than a whole batch.
+    async fn poll(&self, stop: Option<&CancellationToken>) -> Result<Progress, ConsumerError> {
+        let start = self.position().await?;
+        let batch = self.fetch(start).await?;
+        let full = batch.len() >= usize::from(self.inner.config.batch_size);
+        let mut progress = Progress::default();
+        let mut expected = start;
+        for row in batch {
+            if stop.is_some_and(CancellationToken::is_cancelled) {
+                progress.outcome = Outcome::MoreAvailable;
+                return Ok(progress);
+            }
+            let position = row.position;
+            let event_id = EventId::from_uuid(row.event_id);
+            match self.deliver(expected, row).await? {
+                Step::Delivered => progress.delivered += 1,
+                Step::Duplicate => progress.duplicates += 1,
+                Step::DeadLettered => progress.dead_lettered += 1,
+                Step::Busy => {
+                    progress.outcome = Outcome::Busy;
+                    return Ok(progress);
+                }
+                Step::Moved => {
+                    progress.outcome = Outcome::MoreAvailable;
+                    return Ok(progress);
+                }
+                Step::Retry(error) => {
+                    progress.outcome = Outcome::Retry { event_id, error };
+                    return Ok(progress);
+                }
+            }
+            expected = position;
+        }
+        progress.outcome = if full {
+            Outcome::MoreAvailable
+        } else {
+            Outcome::CaughtUp
+        };
+        Ok(progress)
+    }
+
+    /// The last lag measurement, `None` before the first.
+    #[must_use]
+    pub fn lag(&self) -> Option<Lag> {
+        self.inner.lag.get()
+    }
+
+    /// Measures the lag now and publishes it to the gauges.
+    ///
+    /// # Errors
+    ///
+    /// When a query fails or the subscription does not exist.
+    pub async fn measure_lag(&self) -> Result<Lag, ConsumerError> {
+        let position = self.position().await?;
+        let mut tx = self.source_transaction().await?;
+        let lag = crate::lag::measure(&mut tx, position).await?;
+        tx.commit().await?;
+        self.inner.lag.set(lag);
+        Ok(lag)
+    }
+
+    /// Creates the subscription, then processes events and measures the lag until `stop` is
+    /// cancelled. An event being processed when `stop` fires is finished first. Query failures
+    /// are logged and retried with backoff.
+    ///
+    /// # Errors
+    ///
+    /// Only for a configuration mistake ([`ConsumerError::SourceMismatch`]), which no retry
+    /// can fix.
+    pub async fn run(self, stop: CancellationToken) -> Result<(), ConsumerError> {
+        let mut failures = 0;
+        loop {
+            match self.ensure_subscription().await {
+                Ok(()) => break,
+                Err(error) if !error.is_retryable() => {
+                    tracing::error!(
+                        subscription = self.inner.config.subscription,
+                        error = %error,
+                        "outbox consumer cannot start"
+                    );
+                    return Err(error);
+                }
+                Err(error) => {
+                    failures += 1;
+                    tracing::warn!(
+                        subscription = self.inner.config.subscription,
+                        error = %error,
+                        attempt = failures,
+                        "outbox subscription could not be created; retrying"
+                    );
+                    if !pause(&stop, self.backoff(failures)).await {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        tokio::join!(self.process(stop.clone()), self.monitor_lag(stop));
+        Ok(())
+    }
+
+    /// Processes events until `stop` is cancelled; the subscription must exist.
+    pub async fn process(&self, stop: CancellationToken) {
+        let config = &self.inner.config;
+        let mut failures: u32 = 0;
+        while !stop.is_cancelled() {
+            let wait = match self.poll(Some(&stop)).await {
+                Ok(progress) => match progress.outcome {
+                    Outcome::CaughtUp | Outcome::Busy => {
+                        failures = 0;
+                        config.poll_interval
+                    }
+                    Outcome::MoreAvailable => {
+                        failures = 0;
+                        Duration::ZERO
+                    }
+                    Outcome::Retry { event_id, error } => {
+                        failures = failures.saturating_add(1);
+                        tracing::warn!(
+                            subscription = config.subscription,
+                            event_id = %event_id,
+                            attempt = failures,
+                            reason = error.reason(),
+                            sqlstate = error.sqlstate(),
+                            "outbox event failed; retrying"
+                        );
+                        self.backoff(failures)
+                    }
+                },
+                Err(error) => {
+                    failures = failures.saturating_add(1);
+                    tracing::warn!(
+                        subscription = config.subscription,
+                        error = %error,
+                        attempt = failures,
+                        "outbox poll failed; retrying"
+                    );
+                    self.backoff(failures)
+                }
+            };
+            if !wait.is_zero() && !pause(&stop, wait).await {
+                break;
+            }
+        }
+    }
+
+    /// Measures the lag every `lag_interval` until `stop` is cancelled.
+    pub async fn monitor_lag(&self, stop: CancellationToken) {
+        while !stop.is_cancelled() {
+            if let Err(error) = self.measure_lag().await {
+                tracing::warn!(
+                    subscription = self.inner.config.subscription,
+                    error = %error,
+                    "outbox lag could not be measured"
+                );
+            }
+            if !pause(&stop, self.inner.config.lag_interval).await {
+                break;
+            }
+        }
+    }
+
+    fn backoff(&self, failures: u32) -> Duration {
+        let config = &self.inner.config;
+        let base = config.poll_interval.max(Duration::from_millis(100));
+        let factor = 2_u32.saturating_pow(failures.saturating_sub(1).min(16));
+        base.saturating_mul(factor).min(config.max_backoff)
+    }
+
+    /// A read transaction whose `search_path` is the producer's schema only, so the log is
+    /// found there or not at all.
+    async fn source_transaction(&self) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
+        let mut tx = self.inner.pool.begin().await?;
+        sqlx::query("SELECT set_config('search_path', $1, true)")
+            .bind(&self.inner.config.source_schema)
+            .execute(&mut *tx)
+            .await?;
+        Ok(tx)
+    }
+
+    /// The next events after `after` that can no longer be preceded by a later commit.
+    async fn fetch(&self, after: Position) -> Result<Vec<Row>, sqlx::Error> {
+        let mut tx = self.source_transaction().await?;
+        let horizon = horizon(&mut tx).await?;
+        let rows: Vec<RowTuple> = sqlx::query_as(
+            "SELECT id, tx_order, event_id, event_type, aggregate_type, aggregate_id, \
+             aggregate_seq, envelope::text, stored_at FROM outbox_event \
+             WHERE (tx_order, id) > ($1, $2) AND tx_order < $3 \
+             ORDER BY tx_order, id LIMIT $4",
+        )
+        .bind(after.tx())
+        .bind(after.id())
+        .bind(horizon)
+        .bind(i64::from(self.inner.config.batch_size))
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(rows.into_iter().map(Row::from).collect())
+    }
+
+    async fn deliver(&self, expected: Position, row: Row) -> Result<Step, ConsumerError> {
+        let span = tracing::info_span!(
+            "outbox.deliver",
+            subscription = self.inner.config.subscription,
+            event_id = %row.event_id,
+            event_type = row.event_type,
+            position = %row.position,
+        );
+        async move {
+            let Ok(envelope) = serde_json::from_str::<EventEnvelope>(&row.envelope) else {
+                let error = HandlerError::permanent("stored envelope cannot be decoded");
+                return self.dead_letter(expected, &row, &error).await;
+            };
+            let delivery = Delivery {
+                position: row.position,
+                aggregate: row.aggregate.clone(),
+                aggregate_seq: row.aggregate_seq,
+                envelope,
+                stored_at: row.stored_at,
+            };
+            let mut tx = self.inner.pool.begin().await?;
+            if let Err(error) = self.inner.handler.begin(&mut tx, &delivery).await {
+                drop(tx);
+                return self.failed(expected, &row, error).await;
+            }
+            match self.claim(&mut tx, expected).await? {
+                Claim::Claimed => {}
+                Claim::Busy => return Ok(Step::Busy),
+                Claim::Moved => return Ok(Step::Moved),
+            }
+            // Only reads so far: the transaction gets an ID (and holds back every consumer's
+            // horizon) no earlier than the handler's first write.
+            let fresh: bool = sqlx::query_scalar(
+                "SELECT NOT EXISTS (SELECT 1 FROM outbox_inbox \
+                 WHERE subscription = $1 AND event_id = $2)",
+            )
+            .bind(&self.inner.config.subscription)
+            .bind(row.event_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if fresh {
+                if let Err(error) = self.inner.handler.handle(&mut tx, &delivery).await {
+                    drop(tx);
+                    return self.failed(expected, &row, error).await;
+                }
+                sqlx::query(
+                    "INSERT INTO outbox_inbox (subscription, event_id, position_tx, position_id) \
+                     VALUES ($1, $2, $3, $4)",
+                )
+                .bind(&self.inner.config.subscription)
+                .bind(row.event_id)
+                .bind(row.position.tx())
+                .bind(row.position.id())
+                .execute(&mut *tx)
+                .await?;
+            }
+            if !self.advance(&mut tx, expected, row.position).await? {
+                return Ok(Step::Moved);
+            }
+            tx.commit().await?;
+            if fresh {
+                tracing::debug!("outbox event processed");
+                Ok(Step::Delivered)
+            } else {
+                tracing::debug!("outbox event already processed; skipped");
+                Ok(Step::Duplicate)
+            }
+        }
+        .instrument(span)
+        .await
+    }
+
+    async fn failed(
+        &self,
+        expected: Position,
+        row: &Row,
+        error: HandlerError,
+    ) -> Result<Step, ConsumerError> {
+        match error.kind() {
+            FailureKind::Retry => Ok(Step::Retry(error)),
+            FailureKind::Permanent => self.dead_letter(expected, row, &error).await,
+        }
+    }
+
+    /// Records a permanently failed event and moves past it, in a transaction of its own (the
+    /// handler's writes were rolled back).
+    async fn dead_letter(
+        &self,
+        expected: Position,
+        row: &Row,
+        error: &HandlerError,
+    ) -> Result<Step, ConsumerError> {
+        let mut tx = self.inner.pool.begin().await?;
+        match self.claim(&mut tx, expected).await? {
+            Claim::Claimed => {}
+            Claim::Busy => return Ok(Step::Busy),
+            Claim::Moved => return Ok(Step::Moved),
+        }
+        sqlx::query(
+            "INSERT INTO outbox_dead_letter \
+             (subscription, event_id, position_tx, position_id, reason) \
+             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (subscription, event_id) \
+             DO UPDATE SET reason = EXCLUDED.reason, failed_at = now()",
+        )
+        .bind(&self.inner.config.subscription)
+        .bind(row.event_id)
+        .bind(row.position.tx())
+        .bind(row.position.id())
+        .bind(error.reason())
+        .execute(&mut *tx)
+        .await?;
+        if !self.advance(&mut tx, expected, row.position).await? {
+            return Ok(Step::Moved);
+        }
+        tx.commit().await?;
+        tracing::error!(
+            reason = error.reason(),
+            sqlstate = error.sqlstate(),
+            "outbox event failed permanently; recorded in outbox_dead_letter"
+        );
+        Ok(Step::DeadLettered)
+    }
+
+    /// Takes the subscription's lock for this transaction, unless another replica holds it, and
+    /// checks that nobody processed past `expected` since the batch was read.
+    ///
+    /// The lock is a transaction-level advisory lock rather than a row lock: locking a row
+    /// gives the transaction an ID at once, and a transaction with an ID holds back the read
+    /// horizon of every consumer in the cluster for as long as the handler runs.
+    async fn claim(
+        &self,
+        tx: &mut PgConnection,
+        expected: Position,
+    ) -> Result<Claim, ConsumerError> {
+        let locked: bool = sqlx::query_scalar(TRY_LOCK_SUBSCRIPTION)
+            .bind(&self.inner.config.subscription)
+            .fetch_one(&mut *tx)
+            .await?;
+        if !locked {
+            return Ok(Claim::Busy);
+        }
+        let row: Option<(i64, i64)> = sqlx::query_as(
+            "SELECT position_tx, position_id FROM outbox_subscription WHERE name = $1",
+        )
+        .bind(&self.inner.config.subscription)
+        .fetch_optional(tx)
+        .await?;
+        Ok(match row {
+            Some((tx, id)) if Position::new(tx, id) == expected => Claim::Claimed,
+            Some(_) => Claim::Moved,
+            None => {
+                return Err(ConsumerError::UnknownSubscription(
+                    self.inner.config.subscription.clone(),
+                ));
+            }
+        })
+    }
+
+    /// Moves the subscription from `from` to `to`; false when it is no longer at `from`
+    /// (moved by [`replay_from`] or another replica), so the transaction must not commit.
+    async fn advance(
+        &self,
+        tx: &mut PgConnection,
+        from: Position,
+        to: Position,
+    ) -> Result<bool, sqlx::Error> {
+        let updated = sqlx::query(
+            "UPDATE outbox_subscription SET position_tx = $2, position_id = $3, updated_at = now() \
+             WHERE name = $1 AND position_tx = $4 AND position_id = $5",
+        )
+        .bind(&self.inner.config.subscription)
+        .bind(to.tx())
+        .bind(to.id())
+        .bind(from.tx())
+        .bind(from.id())
+        .execute(tx)
+        .await?;
+        Ok(updated.rows_affected() == 1)
+    }
+}
+
+/// The oldest transaction still running. Every transaction below it has finished, so every
+/// event ordered below it is either visible to the next statement or never will be.
+pub(crate) async fn horizon(tx: &mut PgConnection) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT pg_snapshot_xmin(pg_current_snapshot())::text::bigint")
+        .fetch_one(tx)
+        .await
+}
+
+/// Sleeps for `duration`; false when `stop` was cancelled first.
+async fn pause(stop: &CancellationToken, duration: Duration) -> bool {
+    tokio::select! {
+        () = stop.cancelled() => false,
+        () = tokio::time::sleep(duration) => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subscription_names_are_checked() {
+        for name in ["assets.tenant-sync", "a", "9_x"] {
+            assert!(ConsumerConfig::new(name, "identity").is_ok(), "{name}");
+        }
+        for name in ["", "A", "-a", "a b", "a/b", "a".repeat(101).as_str()] {
+            assert_eq!(
+                ConsumerConfig::new(name, "identity").err(),
+                Some(InvalidConfig::Subscription),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            ConsumerConfig::new("a", "Identity").err(),
+            Some(InvalidConfig::SourceSchema)
+        );
+    }
+
+    #[test]
+    fn decode_errors_retry_only_newer_versions() {
+        let newer = DecodeError::NewerVersion {
+            event_type: "example.widget_renamed",
+            found: 3,
+            newest_known: 2,
+        };
+        assert_eq!(HandlerError::from(newer).kind(), FailureKind::Retry);
+        let unknown = DecodeError::UnknownVersion {
+            event_type: "example.widget_renamed",
+            version: 0,
+        };
+        assert_eq!(HandlerError::from(unknown).kind(), FailureKind::Permanent);
+    }
+}

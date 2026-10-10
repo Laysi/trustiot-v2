@@ -1,0 +1,220 @@
+# CI for every pull request (whatever its base branch, integration branches included) and
+# every push to main. Policy and the required-checks list: docs/architecture/ci-release.md.
+#
+# Rules for this and every other workflow, enforced by the workflow-policy job
+# (scripts/ci/check-workflows.ts): every job lists its `permissions`; every action is pinned
+# to a full commit SHA with the tag in a trailing comment; no `pull_request_target` or
+# `workflow_run` triggers, so pull requests from forks never get secrets or a write token.
+# The same job runs actionlint (scripts/ci/lint-workflows.ts) so a file GitHub cannot parse
+# fails here instead of at its first trigger.
+#
+# Checks that later issues add to this workflow:
+# - Integration tests (Laysi/trustiot-v2#60): service containers for Postgres with AGE,
+#   ClickHouse and Mosquitto, every migration on a fresh database, the cross-tenant negative
+#   tests (Laysi/trustiot-v2#56), and `cargo sqlx prepare --check` against that database.
+# - The static check that rejects SQL built from strings (Laysi/trustiot-v2#53).
+# - Frontend (Laysi/trustiot-v2#123): Bun install, type check, lint, unit tests, build, and
+#   regenerating the API client with a diff check.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# No token scopes by default; each job asks for what it needs.
+permissions: {}
+
+concurrency:
+  # One run per pull request: a new push to a pull request cancels its running CI. A push to
+  # main gets a group of its own commit, because GitHub replaces a pending run in a shared
+  # group with a newer one even without cancel-in-progress; so every main commit gets a result.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: rust
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # sqlx's query macros read the committed `.sqlx/` data instead of a live database, so
+      # a query without up-to-date data fails to compile.
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: toolchain
+        uses: ./.github/actions/setup-proto
+        with:
+          tools: rust
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: "false"
+          # Pull requests restore main's cache but do not save their own.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The checks below run even when an earlier one fails, so one run reports them all.
+      - name: rustfmt
+        run: cargo fmt --all --check
+      - name: clippy
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # The --workspace commands build default features only. service-kit's `contract` feature
+      # is on by default, but services/ai-gateway is to use the kit without it, so the code
+      # paths without it get their own lint and test run (crates/service-kit/README.md).
+      - name: clippy for service-kit without default features
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
+      # service-kit's container and job_lock tests and the ingest ClickHouse schema test start
+      # throwaway containers (PID 1, Postgres and ClickHouse) with podman or docker, both on the
+      # hosted runner. GitHub sets CI=true, which
+      # makes them fail instead of skip when no container runtime works, so a green test step
+      # means they ran.
+      - name: test
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo test --workspace --locked
+      - name: test service-kit without default features
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo test --package service-kit --no-default-features --locked
+      # api/openapi.json is generated from the code (tools/openapi). Regenerate it and fail on any
+      # difference, so an API type cannot change without the committed spec changing with it.
+      - name: OpenAPI spec is current
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: |
+          cargo run --locked --package openapi
+          if [[ -n "$(git status --porcelain -- api)" ]]; then
+            git --no-pager diff -- api
+            echo "::error file=api/openapi.json,title=OpenAPI spec is out of date::Run 'cargo run -p openapi' and commit api/openapi.json."
+            exit 1
+          fi
+      - name: aarch64 build of the gateway crates
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: |
+          # The gateway runs on aarch64: crates/protocol and every workspace member under
+          # edge/ must build for it (docs/architecture/repository-layout.md). Libraries build
+          # without a cross linker; the first gateway binary adds one.
+          packages=()
+          for manifest in crates/protocol/Cargo.toml edge/*/Cargo.toml; do
+            if [[ -f "$manifest" ]]; then
+              pkgid="$(cargo pkgid --locked --manifest-path "$manifest")"
+              packages+=(--package "$pkgid")
+            fi
+          done
+          if (( ${#packages[@]} == 0 )); then
+            echo "::notice title=aarch64 build::No gateway crates yet (crates/protocol, edge/*)."
+            exit 0
+          fi
+          rustup target add aarch64-unknown-linux-gnu
+          cargo build --locked --target aarch64-unknown-linux-gnu "${packages[@]}"
+
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-proto
+        with:
+          tools: rust cargo-deny
+      # Licenses, RustSec advisories, banned crates and sources, as configured in deny.toml.
+      - run: cargo deny --locked check
+
+  helm:
+    name: helm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-proto
+        with:
+          tools: bun helm kubeconform
+      # helm lint --strict, then helm template with values-saas.yaml and values-onprem.yaml,
+      # each validated by kubeconform -strict, plus the chart's own rules and the README field
+      # check (deploy/chart/README.md). kubeconform downloads the Kubernetes schemas.
+      - run: bun test deploy/chart
+
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Every commit reachable from the checked-out commit is scanned.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-proto
+        with:
+          tools: gitleaks
+      - name: gitleaks
+        run: |
+          # Scan the history of HEAD only. gitleaks' default (`--all`) would also scan every
+          # other branch that the full-depth checkout fetched. Merge commits are diffed
+          # against their first parent so that content added while merging is scanned too.
+          report="$RUNNER_TEMP/gitleaks.json"
+          status=0
+          gitleaks git --no-banner --redact --verbose \
+            --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" \
+            --report-format=json --report-path="$report" . || status=$?
+          if (( status != 0 )) && [[ -s "$report" ]]; then
+            # One annotation per finding; the report is redacted, so no secret is printed.
+            jq -r '
+              def data: gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
+              def prop: data | gsub(":"; "%3A") | gsub(","; "%2C");
+              unique_by(.Fingerprint)[]
+              | "::error file=\(.File | prop),line=\(.StartLine),title=gitleaks \(.RuleID | prop)::"
+                + ("Secret in commit \(.Commit[0:12]) (fingerprint \(.Fingerprint)). Revoke it, "
+                  + "then remove it from history or add the fingerprint to .gitleaksignore "
+                  + "with a reason." | data)
+            ' "$report"
+          fi
+          exit "$status"
+
+  workflow-policy:
+    name: workflow-policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: toolchain
+        uses: ./.github/actions/setup-proto
+        with:
+          tools: bun actionlint
+      - name: Check workflow permissions and action pinning
+        run: bun scripts/ci/check-workflows.ts
+      # What GitHub itself would reject when it parses a workflow, for example a context that
+      # is not available at that key. Without this, such a file only fails when it is triggered.
+      - name: Lint workflows with actionlint
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun scripts/ci/lint-workflows.ts
+      - name: Install script dependencies
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun install --cwd scripts --frozen-lockfile
+      # Both cover all of scripts/, the local dev environment included. Its podman end-to-end
+      # test skips unless TRUSTIOT_DEV_E2E is set: it builds the services and pulls the stack.
+      - name: Type check scripts
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun run --cwd scripts typecheck
+      - name: Test scripts
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun run --cwd scripts test

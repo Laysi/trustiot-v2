@@ -1,0 +1,12 @@
+#!/bin/bash
+# usage: probe.sh saas|onprem group...
+SHAPE=$1; shift
+S=/tmp/claude-1000/-home-ruisi-projects-trustiot-v2/5d2bbbe4-4241-4ab5-b2fe-2e33d3a23171/scratchpad/e2e-62
+W=/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a66c946f0acf60298
+D=$W/docs/test-reports/data/2026-10-10-62-e2e-verify
+export PATH=/home/ruisi/.proto/tools/bun/1.4.2:$PATH
+export PROBE_PORT=17080 PROBE_SHAPE=$SHAPE PROBE_CA=$S/tls.crt
+for g in "$@"; do
+  PROBE_OUT=$D/probe-$SHAPE-$g.json bun $S/probe.ts $g > $D/probe-$SHAPE-$g.log 2>&1
+  echo "group $g exit=$?"; tail -3 $D/probe-$SHAPE-$g.log
+done

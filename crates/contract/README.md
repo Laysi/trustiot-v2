@@ -10,6 +10,7 @@
 | `identity` | 內部身分標頭 `x-internal-identity`、claims `InternalClaims`、遮蔽內容的 `InternalToken` |
 | `client` | 內部 API 的 `Endpoint` 與有型別的 client `InternalClient<S>` |
 | `service` | `ServiceName` 與型別層級的服務標記（`service::Identity` 等） |
+| `openapi` | `SharedSchemas`：每個服務規格共用的 OpenAPI schema（M1 錯誤格式） |
 | `json` | 不含文件內容的 JSON 錯誤 `JsonError`：serde 的訊息會引用值，日誌不得含個資（M2） |
 
 測試：`cargo test -p contract`。OpenAPI 與事件的固定樣本在 `tests/fixtures/`。
@@ -60,7 +61,7 @@
 - 新增代碼：在 `ErrorCode` 加變體，補上 `ALL`、`as_str`、`http_status`、`default_message_key`（編譯器會指出漏掉的 `match`），更新本頁的代碼表，再以 `CONTRACT_UPDATE_FIXTURES=1 cargo test -p contract --test error_format` 重新產生 `tests/fixtures/openapi/m1-error-schemas.json` 並在審查時檢查差異。
 - 既有代碼不刪除、不改名：服務分批更新時，舊版前端與其他服務仍依賴它。
 - 用戶端忽略不認得的欄位，所以 `ErrorBody` 只會增加選填欄位。
-- OpenAPI：`ErrorBody`、`ErrorCode`、`FieldError`、`MessageKey` 都實作 `utoipa::ToSchema`；收進 `api/openapi.json` 由 Laysi/trustiot-v2#55 處理。
+- OpenAPI：`ErrorBody`、`ErrorCode`、`FieldError`、`MessageKey` 都實作 `utoipa::ToSchema`，由 `openapi::SharedSchemas` 匯出；`tools/openapi` 把它併進 `api/openapi.json`，服務的規格可以直接以 `#/components/schemas/ErrorBody` 描述錯誤回應。改了這些型別後要重新產生 `api/openapi.json`（`cargo run -p openapi`），否則 `cargo test --workspace` 與 CI 失敗。
 
 ## 內部 API
 
