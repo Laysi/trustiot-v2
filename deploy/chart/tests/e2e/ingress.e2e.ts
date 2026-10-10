@@ -1,7 +1,9 @@
 // Ingress e2e test (Laysi/trustiot-v2#62): installs the chart with test doubles into an existing
 // namespace of any cluster with Istio ambient, then checks the cookie check, the public paths,
 // the header rules, path-bypass attempts and an identity-service outage through the real ingress
-// gateway. README.md in this directory lists the prerequisites; run from the repository root:
+// gateway. The /internal slash cases (Laysi/trustiot-v2#255) also need the mesh's path
+// normalization from deploy/istio/istiod-values.yaml. README.md in this directory lists the
+// prerequisites; run from the repository root:
 //
 //   E2E_NAMESPACE=e2e-62 E2E_IDENTITY_IMAGE=<image> bun test ./deploy/chart/tests/e2e/ingress.e2e.ts
 //
@@ -317,6 +319,27 @@ afterAll(() => {
 // ---------------------------------------------------------------------------------------------
 // Cookie check.
 
+// Spellings of /internal that only the mesh's path normalization (merge slashes, decode %2F)
+// brings back to /internal before the DENY policy matches (Laysi/trustiot-v2#255).
+const INTERNAL_SLASH_CASES = [
+  "//internal",
+  "//internal/tenants",
+  "///internal",
+  "//./internal",
+  "/.//internal/tenants",
+  "/x/..//internal/tenants",
+  "/%2finternal",
+  "/%2finternal/tenants",
+  "/%2Finternal",
+  "/%2f%2finternal",
+  "/./%2finternal",
+];
+
+// Spellings of x-internal-identity with underscores. Envoy forwards headers with underscores
+// unchanged, and CGI/WSGI-style servers read "-" and "_" alike (HTTP_X_INTERNAL_IDENTITY), so
+// the ingress removes all three on every route (Laysi/trustiot-v2#255, F2).
+const UNDERSCORE_IDENTITY_HEADERS = ["x_internal_identity", "x-internal_identity", "x_internal-identity"];
+
 describe("paths that need the cookie", () => {
   test("no cookie or an unknown session: 401 from the identity service, backend not reached", async () => {
     for (const [name, headers] of [
@@ -354,6 +377,19 @@ describe("paths that need the cookie", () => {
     expect(response.body).not.toContain(FORGED);
   });
 
+  test("valid cookie plus underscore spellings of the identity header: none reaches the backend", async () => {
+    const response = await raw("/api/whoami", {
+      headers: [["cookie", VALID_COOKIE], ...UNDERSCORE_IDENTITY_HEADERS.map((name): [string, string] => [name, FORGED])],
+    });
+    record("cookie", "valid cookie + underscore identity headers", "/api/whoami", HOSTS.app, response);
+    expect(response.status).toBe(200);
+    expect(response.body).toContain(PROTECTED_MARKER);
+    expect(response.body).not.toContain(FORGED);
+    for (const name of UNDERSCORE_IDENTITY_HEADERS) expect(whoamiHeaderCount(response.body, name)).toBe(0);
+    expect(whoamiHeaderCount(response.body, "x-internal-identity")).toBe(1);
+    expect(whoamiHeader(response.body, "x-internal-identity")).toStartWith("double.");
+  });
+
   test("forged identity header without a cookie: 401", async () => {
     const response = await raw("/api/whoami", { headers: [["x-internal-identity", FORGED]] });
     record("cookie", "forged header, no cookie", "/api/whoami", HOSTS.app, response);
@@ -382,6 +418,22 @@ describe("paths that need the cookie", () => {
         expect(response.status).toBe(expected);
         expect(response.body).not.toContain(PROTECTED_MARKER);
       }
+    }
+  });
+
+  // Laysi/trustiot-v2#255 (F1 of docs/test-reports/2026-10-10-62-e2e-verify.md): without the mesh's
+  // path normalization (deploy/istio/istiod-values.yaml, DECODE_AND_MERGE_SLASHES) these
+  // spellings slip past the /internal* DENY and reach the catch-all backend, which may clean the
+  // path up to /internal/... itself. MERGE_SLASHES alone still lets the %2f forms through.
+  test.each(INTERNAL_SLASH_CASES)("/internal behind doubled or encoded slashes is denied: %s", async (target) => {
+    for (const [cookie, expected] of [
+      [undefined, 401],
+      [VALID_COOKIE, 403],
+    ] as [string | undefined, number][]) {
+      const response = await raw(target, { headers: cookie ? [["cookie", cookie]] : [] });
+      record("internal slashes", cookie ? "valid cookie" : "no cookie", target, HOSTS.app, response);
+      expect(response.body).not.toContain(PROTECTED_MARKER);
+      expect(response.status).toBe(expected);
     }
   });
 
@@ -442,6 +494,53 @@ describe("public paths", () => {
     expect(echo.headers["x-internal-identity"]).toBeUndefined();
     expect(echo.headers["x-forwarded-proto"]).toBe("https");
     expect(response.body).not.toContain(FORGED);
+  });
+
+  test.each([...whoamiPaths, ["login", "app", "/auth/login"], ["health check", "app", "/healthz"]] as [string, HostKey, string][])(
+    "%s: underscore spellings of the identity header are removed",
+    async (name, host, path) => {
+      const response = await raw(path, {
+        host,
+        method: "POST",
+        headers: [...UNDERSCORE_IDENTITY_HEADERS.map((header): [string, string] => [header, FORGED]), ["content-length", "0"]],
+      });
+      record("public", `${name}, underscore identity headers`, path, HOSTS[host], response);
+      expect(response.status).toBe(200);
+      expect(response.body).not.toContain(FORGED);
+      expect(response.body).not.toContain(PROTECTED_MARKER);
+    },
+  );
+
+  // Laysi/trustiot-v2#255 (F3): a gateway, its WebSocket library or a proxy may put the port in
+  // Host. The route matches the host with any port, so the exemption does too, and only on the
+  // public path's own host (deploy/chart/README.md).
+  test("Host with a port: a public path is public on its own host only", async () => {
+    const port = SHAPE === "saas" ? 80 : 443;
+    for (const [host, path, expected] of [
+      [`${HOSTS.gateway}:${port}`, "/mqtt", 200],
+      [`${HOSTS.gateway}:${port}`, "/certs/renew", 200],
+      [`${HOSTS.gateway}:8443`, "/mqtt", 200],
+      [`${HOSTS.app}:${port}`, "/healthz", 200],
+      [`${HOSTS.app}:${port}`, "/auth/login", 200],
+      [`${HOSTS.app}:${port}`, "/mqtt", 401],
+      [`${HOSTS.app}:${port}`, "/certs/renew", 401],
+      [`${HOSTS.app}:${port}`, "/api/whoami", 401],
+      [`${HOSTS.gateway}:${port}`, "/auth/login", 404],
+      [`${HOSTS.ota}:${port}`, "/mqtt", 404],
+    ] as [string, string, number][]) {
+      const response = await raw(path, {
+        host,
+        method: "POST",
+        headers: [
+          ["x-internal-identity", FORGED],
+          ["content-length", "0"],
+        ],
+      });
+      record("public, host with port", `${path} on ${host}`, path, host, response);
+      expect(response.status).toBe(expected);
+      expect(response.body).not.toContain(PROTECTED_MARKER);
+      expect(response.body).not.toContain(FORGED);
+    }
   });
 
   test("GET /healthz answers without a cookie", async () => {

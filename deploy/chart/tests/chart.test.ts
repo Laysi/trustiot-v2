@@ -638,6 +638,10 @@ describe("ingress gateway (decision 27)", () => {
     return rule.filters[0]?.requestHeaderModifier ?? {};
   };
   const strips = (rule: HttpRouteRule) => (modifier(rule).remove ?? []).includes("x-internal-identity");
+  // Underscore spellings of the identity header, removed on every route (Laysi/trustiot-v2#255).
+  const UNDERSCORE_SPELLINGS = ["x_internal_identity", "x-internal_identity", "x_internal-identity"];
+  // A public path is exempt on its own host with or without a port, as the gateway routes it.
+  const withPorts = (hosts: readonly string[]) => hosts.flatMap((host) => [host, `${host}:*`]);
   const policy = (manifests: Manifest[], suffix: string) =>
     find(manifests, "AuthorizationPolicy", `${RELEASE}-ingress-${suffix}`).spec as AuthzPolicy;
 
@@ -702,6 +706,7 @@ describe("ingress gateway (decision 27)", () => {
       publicRules.map(({ host, rule }) => [host, rule.matches[0]?.path.value, rule.backendRefs[0]?.name]).sort(),
     ).toEqual(PUBLIC_PATHS[shape].map((p) => [...p]).sort());
     for (const { rule } of publicRules) {
+      expect(modifier(rule).remove).toEqual(["x-internal-identity", ...UNDERSCORE_SPELLINGS]);
       expect(rule.matches).toHaveLength(1);
       expect(rule.matches[0]?.path.type).toBe("Exact");
       expect(rule.backendRefs).toEqual([{ name: rule.backendRefs[0]?.name ?? "", port: 8080 }]);
@@ -715,13 +720,22 @@ describe("ingress gateway (decision 27)", () => {
     expect(check.rules[0]).toEqual({ to: [{ operation: { notPaths: exempt } }] });
     expect(check.rules.slice(1)).toEqual(
       exempt.map((path) => ({
-        to: [{ operation: { paths: [path], notHosts: PUBLIC_PATHS[shape].filter(([, p]) => p === path).map(([host]) => host) } }],
+        to: [
+          {
+            operation: {
+              paths: [path],
+              notHosts: withPorts(PUBLIC_PATHS[shape].filter(([, p]) => p === path).map(([host]) => host)),
+            },
+          },
+        ],
       })),
     );
-    // Cookie routes never strip the header (that would drop the identity service's value) and
-    // are never exempt.
-    for (const { rule } of rendered.filter(({ rule }) => !strips(rule))) {
-      expect(modifier(rule).remove).toBeUndefined();
+    // Cookie routes never strip the header (that would drop the identity service's value), only
+    // its underscore spellings, and are never exempt.
+    const cookieRules = rendered.filter(({ rule }) => !strips(rule));
+    expect(cookieRules.length).toBeGreaterThan(0);
+    for (const { rule } of cookieRules) {
+      expect(modifier(rule).remove).toEqual(UNDERSCORE_SPELLINGS);
       expect(exempt).not.toContain(rule.matches[0]?.path.value);
     }
   });
@@ -745,7 +759,7 @@ describe("ingress gateway (decision 27)", () => {
     );
     const check = policy(manifests, "cookie-check");
     expect(check.rules).toContainEqual({
-      to: [{ operation: { paths: ["/up"], notHosts: ["app.saas.trustiot.test", "gw.saas.trustiot.test"] } }],
+      to: [{ operation: { paths: ["/up"], notHosts: withPorts(["app.saas.trustiot.test", "gw.saas.trustiot.test"]) } }],
     });
   });
 
@@ -774,6 +788,14 @@ describe("ingress gateway (decision 27)", () => {
         ],
       },
     ]);
+  });
+
+  test("the mesh in deploy/istio decodes %2F and merges slashes, so /internal* catches every spelling", () => {
+    // MERGE_SLASHES alone leaves "/%2finternal" past the DENY policy (Laysi/trustiot-v2#255).
+    const istiod = Bun.YAML.parse(readFileSync(join(REPO_ROOT, "deploy/istio/istiod-values.yaml"), "utf8")) as {
+      meshConfig: { pathNormalization?: { normalization?: string } };
+    };
+    expect(istiod.meshConfig.pathNormalization).toEqual({ normalization: "DECODE_AND_MERGE_SLASHES" });
   });
 
   test("the mesh extension provider in deploy/istio fails closed and matches the chart", () => {
