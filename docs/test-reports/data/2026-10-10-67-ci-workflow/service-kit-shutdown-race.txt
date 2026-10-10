@@ -1,0 +1,47 @@
+# Laysi/trustiot-v2#67 service-kit exits with 1 after a clean SIGTERM shutdown, 2026-10-10,
+# local machine (Fedora 45, x86_64, 8 CPUs, shared with other agents), Rust 1.99.0.
+#
+# Found while adding crates/service-kit (Laysi/trustiot-v2#51) to CI. With CI=true, the
+# integration tests that expect exit code 0 after SIGTERM (tests/lifecycle.rs, errors.rs,
+# otlp.rs) failed now and then:
+#   cargo test --locked -p service-kit --test otlp --test errors --test lifecycle, 10 rounds
+#   main 910961d (unfixed), load average about 8.9:           5 of 10 rounds failed
+#   commit e8acc6e (fixed), load average about 4.4:           0 of 10 rounds failed
+#   commit e8acc6e (fixed), --no-default-features, same load: 0 of 10 rounds failed
+#
+# Cause: in serve() (crates/service-kit/src/service.rs) a tokio::select! waits for either the
+# stop signal or the server task. Stopping lets axum's server return; with no connection open
+# the server task can finish before the select is polled again, both branches are ready, and an
+# unbiased select picks one at random. Picking the server logs "server stopped unexpectedly"
+# with outcome Ok(Ok(())) and exits with 1. The fix (commit e8acc6e) makes the select biased
+# toward the stop signal; the server's result stays in its join handle and the drain that
+# follows still turns anything but a clean return into exit code 1.
+#
+# Reproduction: two example-service processes started the way the tests start them (empty
+# environment plus the tests' settings), one request each, then SIGTERM, in rounds. PIN=<cpu>
+# runs both on one CPU with taskset, the contention a busy machine or CI runner gives.
+#
+#   one() {   # $1: 1 or 2
+#     env -i TRUSTIOT__GREETING="hello from the tests" TRUSTIOT__HTTP__LISTEN_ADDR=127.0.0.1:0 \
+#       TRUSTIOT__SHUTDOWN__DRAIN_DELAY=300ms TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT=10s \
+#       ${PIN:+taskset -c "$PIN"} target/debug/example-service > out$1.txt 2> err$1.txt &
+#     pid=$!
+#     # wait for the "listening" line, read its address, then:
+#     curl -s -o /dev/null "http://$address/v1/hello"
+#     kill -TERM "$pid"; wait "$pid"; echo $? > status$1.txt
+#   }
+#   for round in ...; do one 1 & one 2 & wait; done   # count non-zero statuses
+#
+# Results (non-zero exits / processes):
+#   unfixed (select as on main 910961d), PIN=5:       42 of 120
+#   unfixed (select as on main 910961d), no pinning:   1 of 120, then 0 of 300 (load average 2 to 4)
+#   fixed (commit e8acc6e), PIN=5:                     0 of 120, then 0 of 300
+#   fixed (commit e8acc6e), no pinning:                0 of 120
+#
+# Every unfixed failure logged the same line. One of them, as printed (unfixed, PIN=5):
+{"timestamp":"2026-10-10T12:04:09.290760Z","level":"INFO","service":"example-service","target":"service_kit::service","message":"starting","fields":{"service.version":"0.1.0","process.pid":3442010,"http.listen_addr":"127.0.0.1:0","http.request_timeout_ms":30000,"shutdown.drain_delay_ms":300,"shutdown.drain_timeout_ms":10000,"telemetry.log_filter":"info","telemetry.otlp_export":false}}
+{"timestamp":"2026-10-10T12:04:09.291097Z","level":"INFO","service":"example-service","target":"service_kit::service","message":"listening","fields":{"address":"127.0.0.1:42483"}}
+{"timestamp":"2026-10-10T12:04:09.328836Z","level":"INFO","service":"example-service","target":"service_kit::http","trace_id":"d0911b114623c2d24c7376c4978f4fc8","span_id":"9e43d0530aec8248","message":"request completed","fields":{"http.request.method":"GET","http.route":"/v1/hello","http.response.status_code":200,"duration_ms":0.127}}
+{"timestamp":"2026-10-10T12:04:09.329685Z","level":"INFO","service":"example-service","target":"service_kit::shutdown","message":"shutdown requested; readiness now fails","fields":{"signal":"SIGTERM","drain_delay_ms":300}}
+{"timestamp":"2026-10-10T12:04:09.631426Z","level":"ERROR","service":"example-service","target":"service_kit::service","message":"server stopped unexpectedly","fields":{"outcome":"Ok(Ok(()))"}}
+# exit status: 1
