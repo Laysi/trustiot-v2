@@ -1,0 +1,105 @@
+# Negative checks: each guard fails when its rule is broken. Run in the worktree on
+# 2026-10-10 before commit 99eb6b1; every change below was reverted right after its run.
+
+## 1. Rust pins disagree
+$ sed -i 's/^rust = "1.99.0"/rust = "1.98.1"/' .prototools   # rust-toolchain.toml stays 1.99.0
+$ cargo test -p repo-check --test repository toolchain_pins_agree
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running tests/repository.rs (target/debug/deps/repository-543c03936beae19d)
+
+running 1 test
+test toolchain_pins_agree ... FAILED
+
+failures:
+
+---- toolchain_pins_agree stdout ----
+
+thread 'toolchain_pins_agree' (3140959) panicked at tools/repo-check/tests/repository.rs:37:33:
+.prototools pins rust 1.98.1 but rust-toolchain.toml pins 1.99.0; change both together
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    toolchain_pins_agree
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p repo-check --test repository`
+[exit 101]
+
+## 2. AGENTS.md exists
+$ touch AGENTS.md
+$ cargo test -p repo-check --test repository repository_has_no_agents_md
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running tests/repository.rs (target/debug/deps/repository-543c03936beae19d)
+
+running 1 test
+test repository_has_no_agents_md ... FAILED
+
+failures:
+
+---- repository_has_no_agents_md stdout ----
+
+thread 'repository_has_no_agents_md' (3140976) panicked at tools/repo-check/tests/repository.rs:62:5:
+agent instructions belong in CLAUDE.md only; remove ["/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a29d9f1ec9f20c275/AGENTS.md"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    repository_has_no_agents_md
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p repo-check --test repository`
+[exit 101]
+
+## 3. Workspace lints are enforced on members
+$ printf '\npub fn probe(text: &str) -> u8 {\n    let wide: u32 = text.parse().unwrap();\n    wide as u8\n}\n' >> tools/repo-check/src/lib.rs
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Checking repo-check v0.1.0 (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a29d9f1ec9f20c275/tools/repo-check)
+error: items after a test module
+   --> tools/repo-check/src/lib.rs:364:1
+    |
+364 | mod tests {
+    | ^^^^^^^^^
+...
+608 | pub fn probe(text: &str) -> u8 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#items_after_test_module
+    = note: `-D clippy::items-after-test-module` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::items_after_test_module)]`
+    = help: move the items to before the test module was defined
+
+error: used `unwrap()` on a `Result` value
+   --> tools/repo-check/src/lib.rs:609:21
+    |
+609 |     let wide: u32 = text.parse().unwrap();
+    |                     ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: if this value is an `Err`, it will panic
+    = help: consider using `expect()` to provide a better panic message
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#unwrap_used
+    = note: `-D clippy::unwrap-used` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unwrap_used)]`
+
+error: casting `u32` to `u8` may truncate the value
+   --> tools/repo-check/src/lib.rs:610:5
+    |
+610 |     wide as u8
+    |     ^^^^^^^^^^
+    |
+    = help: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#cast_possible_truncation
+    = note: `-D clippy::cast-possible-truncation` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::cast_possible_truncation)]`
+help: ... or use `try_from` and handle the error accordingly
+    |
+610 -     wide as u8
+610 +     u8::try_from(wide)
+    |
+
+error: could not compile `repo-check` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `repo-check` (lib test) due to 3 previous errors
+[exit 101]
