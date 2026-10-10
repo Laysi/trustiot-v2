@@ -1,4 +1,13 @@
-# 入口 gateway 的叢集測試
+# 叢集測試（入口 gateway、服務間授權）
+
+兩個測試共用 `cluster.ts`（環境變數、`.prototools` 鎖定的 helm 與 kubectl、不碰既有安裝的 `helm install`）：
+
+| 測試 | 驗證 | issue |
+| --- | --- | --- |
+| `ingress.e2e.ts` | 入口 gateway：cookie 驗證、例外路徑、標頭、路徑繞過、身分服務停機 | Laysi/trustiot-v2#62 |
+| `mesh.e2e.ts` | 服務間授權：清單內的呼叫放行、清單外的被拒，AuthorizationPolicy 與 NetworkPolicy 各自生效，預設拒絕下健康檢查通過 | Laysi/trustiot-v2#63 |
+
+## 入口 gateway（`ingress.e2e.ts`）
 
 `ingress.e2e.ts` 把 chart 裝進現有叢集的一個 namespace，經真正的入口 gateway 驗證決策 27 的規則（Laysi/trustiot-v2#62）：
 
@@ -12,7 +21,7 @@
 
 nightly workflow（Laysi/trustiot-v2#69）每晚在 k3d 叢集上以兩種型態各跑一次：裝好 Gateway API 與 Istio ambient、為每個型態的測試命名空間在 istiod 加一個 provider、建置身分服務替身並匯入節點，做法見 [CI 與發佈](../../../../docs/architecture/ci-release.md) 的 nightly.yml 一節與 `scripts/nightly/platform.ts`；那邊請求經 `kubectl port-forward`，不涵蓋入口的 NetworkPolicy。
 
-## 替身
+### 替身
 
 | 服務 | 替身 | 說明 |
 | --- | --- | --- |
@@ -22,7 +31,7 @@ nightly workflow（Laysi/trustiot-v2#69）每晚在 k3d 叢集上以兩種型態
 
 設定在 `values-e2e.yaml`。身分服務的真實版本是 Laysi/trustiot-v2#61，接上後的端到端驗證在 Laysi/trustiot-v2#77。
 
-## 前置條件
+### 前置條件
 
 1. 叢集已依 `deploy/istio/README.md` 裝好 Istio ambient 與 Gateway API CRD。
 2. istiod 有一個 ext_authz provider 指向測試 namespace 的身分服務替身 `trustiot-identity.<namespace>.svc.cluster.local:8080`，設定與 `deploy/istio/istiod-values.yaml` 相同（`pathPrefix: /internal/ext-authz`、`failOpen: false`、`timeout: 0.5s`、`statusOnError: "503"`），mesh 的 `pathNormalization` 也與該檔相同。k3s 以 `HelmChartConfig istiod` 疊加時，清單會整份取代，所以叢集原有的 provider 要原樣重複寫入；範例見 [lab-istiod-helmchartconfig.yaml](../../../../docs/test-reports/data/2026-10-11-255-path-normalization/lab-istiod-helmchartconfig.yaml)。這是整個叢集共用的設定：先備份 `istio-system` 的 ConfigMap `istio`，測完刪掉 `HelmChartConfig`，再確認 `mesh` 與備份逐位元組相同。
@@ -40,7 +49,7 @@ nightly workflow（Laysi/trustiot-v2#69）每晚在 k3d 叢集上以兩種型態
 
 5. 本機有 `proto install` 裝好的 helm 與 kubectl；地端型態還需要 `openssl`（產生一次性的自簽憑證）。
 
-## 執行
+### 執行
 
 在 repo 根目錄：
 
@@ -68,9 +77,56 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/ingress.e2e.ts
 
 測試以 `helm install --wait` 安裝；release 已經存在時直接失敗，不碰既有的安裝。結束時只移除這次建立的 release 與 TLS Secret（名稱帶隨機字尾）。身分服務停機的測試會暫時把替身 scale 到 0，結束時恢復。請求一律以自寫的 HTTP/1.1 客戶端送出原始的請求行，`fetch` 會先把 `..` 與編碼正規化，測不到繞過。
 
-## 通道斷線時的復原
+## 服務間授權（`mesh.e2e.ts`）
 
-測試經 `kubectl port-forward`（或 `E2E_SSH_JUMP` 的 `ssh -L`）連入口 gateway。這條通道偶爾會在請求進行中斷線：kubectl 印出 `error forwarding port … to pod` 與 `error: lost connection to pod`。2026-10-10 PR Laysi/trustiot-v2#258 的 CI 就發生過一次（run 38075563886 attempt 1，`identity service down`），當時 `raw()` 丟出 `no HTTP response for /api/whoami: ""`，測試失敗。
+`mesh.e2e.ts` 把 chart 裝進現有叢集的一個 namespace，以真實的連線驗證決策 27 的服務間授權（Laysi/trustiot-v2#63，規則見 chart README 的「服務間授權（mesh）」）。呼叫從服務自己的 pod 內發出（`kubectl exec` 在服務的容器裡跑 Bun），所以 ztunnel 看到的是該服務的 ServiceAccount；另外建三個測試 pod 當呼叫端：stranger 在 mesh 內、用 namespace 的 `default` ServiceAccount；outsider 不在 mesh（`istio.io/dataplane-mode: none`）；imposter 在 mesh 內、帶 assets 服務的 selector label 但用 `default` ServiceAccount（readiness 永遠不過，所以不會變成 assets Service 的端點）。
+
+| 呼叫 | 預期 |
+| --- | --- |
+| assets → certs | 清單內（`values-mesh-e2e.yaml` 的 `mesh.calls`），放行 |
+| 入口 gateway → identity、certs、mqtt-bridge（例外路徑，經 `kubectl port-forward` 進入口 pod） | 放行 |
+| certs → assets、assets → alerts、mqtt-bridge → identity、stranger → certs、outsider → certs 的 Service 與 pod IP | 清單外，任一層在就被拒 |
+| imposter → certs | NetworkPolicy 依 label 放行它，只有 AuthorizationPolicy 擋得住；用來確認 AuthorizationPolicy 是否生效 |
+| outsider → 入口 gateway 的 pod | 只有入口的 NetworkPolicy 擋；用來確認 NetworkPolicy 是否生效 |
+
+測試依序執行五個階段，每個階段從前一個階段留下的狀態開始：
+
+1. 兩層都在：清單內的呼叫與入口放行，清單外的與 imposter 全部被拒；所有 pod 就緒、沒有重啟（預設拒絕下 kubelet 的健康檢查照常通過）。
+2. 刪掉服務的 AuthorizationPolicy（入口的 cookie 驗證與 `/internal` 拒絕保留）：imposter 通過（確認 AuthorizationPolicy 已失效），清單外的呼叫仍全部被 NetworkPolicy 拒絕，清單內的與入口照常放行。
+3. 再刪掉 release 的所有 NetworkPolicy：outsider 連得到入口 pod，清單外的呼叫全部成功，證明前後階段被拒是政策造成的，不是呼叫本身有問題。
+4. 以 `helm get manifest` 的內容重建 AuthorizationPolicy、NetworkPolicy 仍刪除：清單外的呼叫與 imposter 全部被 AuthorizationPolicy 拒絕，清單內的與入口照常放行。
+5. 重建 NetworkPolicy，回到安裝時的狀態：再檢查一次呼叫與 pod 健康狀態。
+
+只有 NetworkPolicy 的階段排在任何清單外的呼叫成功之前：NetworkPolicy 不會切斷已經建立的連線，而 ztunnel 會保留 HBONE 連線重複使用，所以第 3 階段之後才重建 NetworkPolicy 時，走既有連線的呼叫照樣成功（2026-10-10 在實驗機實測，見 docs/test-reports/2026-10-10-63-mesh-authz.md）。AuthorizationPolicy 由 ztunnel 對每條代理的連線檢查，第 4 階段不受順序影響。
+
+被 ztunnel 拒絕時呼叫端看到連線重置（`ECONNRESET`）；被 NetworkPolicy 擋時，依 NetworkPolicy 控制器的做法是立即拒絕（k3s 是 `ConnectionRefused`，mesh 內的呼叫端經 ztunnel 轉成重置）或逾時。都算被拒，結果檔記錄每次呼叫的種類與毫秒數。
+
+### 前置條件與執行
+
+前置條件同入口測試的 1、3、4、5 項：需要 Istio ambient 與 Gateway API CRD、已建立的 namespace（建議 `restricted`）、叢集拉得到的身分服務替身映像；不需要 ext_authz provider，入口只走例外路徑。測試的身分還要能在 namespace 裡建立 pod、`pods/exec` 與 `pods/portforward`，並刪除與建立 NetworkPolicy 和 AuthorizationPolicy。身分服務替身的映像同時用在五個服務與三個測試 pod，因為它是唯一有執行環境（Bun）、能從 pod 內發出呼叫的測試映像。
+
+在 repo 根目錄：
+
+```sh
+E2E_NAMESPACE=e2e-63 \
+E2E_IDENTITY_IMAGE=localhost/trustiot-e2e/identity-double:63@sha256:<digest> \
+E2E_IMAGE_PULL_POLICY=Never \
+bun test --timeout 600000 ./deploy/chart/tests/e2e/mesh.e2e.ts
+```
+
+變數同入口測試的 `E2E_NAMESPACE`、`E2E_IDENTITY_IMAGE`、`E2E_IMAGE_PULL_POLICY`、`E2E_KUBECONTEXT`、`E2E_RELEASE`、`E2E_KEEP`，另有：
+
+| 變數 | 預設 | 說明 |
+| --- | --- | --- |
+| `E2E_CALL_TIMEOUT_MS` | `5000` | 一次呼叫多久沒有回應算被拒（NetworkPolicy 丟棄封包時呼叫端只會等到逾時） |
+| `E2E_SETTLE_MS` | `90000` | 刪除或重建政策後，等 ztunnel 與 NetworkPolicy 控制器套用的上限 |
+| `E2E_REPORT_DIR` | 空 | 設定時把每次呼叫的結果寫成 `mesh-e2e.json` |
+
+結束時只移除這次建立的 release 與三個測試 pod（名稱帶隨機字尾）。中途失敗時，刪掉的政策隨 release 一起移除；`E2E_KEEP=1` 時 release 保留在最後的狀態。
+
+## 通道斷線時的復原（`ingress.e2e.ts` 與 `mesh.e2e.ts`）
+
+測試經 `kubectl port-forward`（或 `E2E_SSH_JUMP` 的 `ssh -L`）連入口 gateway，`mesh.e2e.ts` 的入口呼叫也經 `kubectl port-forward`，兩者共用同一套復原邏輯。這條通道偶爾會在請求進行中斷線：kubectl 印出 `error forwarding port … to pod` 與 `error: lost connection to pod`。2026-10-10 PR Laysi/trustiot-v2#258 的 CI 就發生過一次（run 38075563886 attempt 1，`identity service down`），當時 `raw()` 丟出 `no HTTP response for /api/whoami: ""`，測試失敗。
 
 原因是競態：請求先因連線被關閉而失敗，kubectl 行程要稍晚才結束；舊的 `raw()` 在失敗的當下檢查行程是否已結束，看到還在跑就直接丟出錯誤。現在的做法（`tunnel-recovery.ts`）：
 

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="5" assertions="68" failures="0" skipped="0" time="35.678382703">
+  <testsuite name="deploy/chart/tests/e2e/mesh.e2e.ts" file="deploy/chart/tests/e2e/mesh.e2e.ts" tests="5" assertions="68" failures="0" skipped="0" time="35.674028735" hostname="fedora">
+    <testsuite name="service-to-service authorization (decision 27)" file="deploy/chart/tests/e2e/mesh.e2e.ts" line="376" tests="5" assertions="68" failures="0" skipped="0" time="25.07" hostname="fedora">
+      <testcase name="1. both layers: the listed call and the gateway pass, unlisted calls fail, health checks pass under default deny" classname="service-to-service authorization (decision 27)" time="3.555639" file="deploy/chart/tests/e2e/mesh.e2e.ts" line="377" assertions="19" />
+      <testcase name="2. AuthorizationPolicies removed: the NetworkPolicies alone refuse every unlisted call" classname="service-to-service authorization (decision 27)" time="4.041791" file="deploy/chart/tests/e2e/mesh.e2e.ts" line="387" assertions="11" />
+      <testcase name="3. both removed: the unlisted calls pass, so the layers are what refused them" classname="service-to-service authorization (decision 27)" time="6.816277" file="deploy/chart/tests/e2e/mesh.e2e.ts" line="399" assertions="7" />
+      <testcase name="4. AuthorizationPolicies back, NetworkPolicies still removed: the AuthorizationPolicies alone refuse every unlisted call" classname="service-to-service authorization (decision 27)" time="6.116322" file="deploy/chart/tests/e2e/mesh.e2e.ts" line="408" assertions="12" />
+      <testcase name="5. both layers back: the installed state, and every pod is still healthy" classname="service-to-service authorization (decision 27)" time="4.542495" file="deploy/chart/tests/e2e/mesh.e2e.ts" line="419" assertions="19" />
+    </testsuite>
+  </testsuite>
+</testsuites>

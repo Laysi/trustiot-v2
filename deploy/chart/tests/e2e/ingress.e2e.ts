@@ -9,47 +9,46 @@
 //
 // Not part of `bun test deploy/chart` (the file name has no .test. suffix): it needs a cluster.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import type { Subprocess } from "bun";
 import { type RawEndpoint, type RawResponse, sendRaw } from "./raw-client.ts";
 import { withTunnelRecovery } from "./tunnel-recovery.ts";
-
-const CHART_DIR = join(import.meta.dir, "..", "..");
-const REPO_ROOT = join(CHART_DIR, "..", "..");
-
-function required(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new Error(`${name} is required (see deploy/chart/tests/e2e/README.md)`);
-  return value;
-}
+import {
+  CONTEXT,
+  GATEWAY,
+  IDENTITY_IMAGE,
+  KEEP,
+  KUBECTL,
+  NAMESPACE,
+  OBJECT_PREFIX,
+  RELEASE,
+  REPORT_DIR,
+  freePort,
+  imageValues,
+  installRelease,
+  kubectl,
+  run,
+  uninstallRelease,
+  waitFor,
+} from "./cluster";
 
 const SHAPE = (process.env.E2E_SHAPE ?? "saas") as "saas" | "onprem";
 if (SHAPE !== "saas" && SHAPE !== "onprem") throw new Error("E2E_SHAPE must be saas or onprem");
-const NAMESPACE = required("E2E_NAMESPACE");
-const IDENTITY_IMAGE = required("E2E_IDENTITY_IMAGE");
-const CONTEXT = process.env.E2E_KUBECONTEXT;
-const RELEASE = process.env.E2E_RELEASE ?? "trustiot";
 const PROVIDER = process.env.E2E_AUTHZ_PROVIDER ?? "trustiot-identity";
-const PULL_POLICY = process.env.E2E_IMAGE_PULL_POLICY ?? "IfNotPresent";
 // ext_authz timeout of the mesh extension provider (deploy/istio/istiod-values.yaml).
 const AUTHZ_TIMEOUT_MS = Number(process.env.E2E_AUTHZ_TIMEOUT_MS ?? "500");
 // Reach the gateway's ClusterIP through `ssh -L` on this host (the cluster node), so requests come
 // from the host like cloudflared's. Without it the test uses kubectl port-forward, which enters
 // the gateway pod directly and so skips the ingress NetworkPolicy.
 const SSH_JUMP = process.env.E2E_SSH_JUMP;
-// Directory for the per-request results (JSON); empty means no file.
-const REPORT_DIR = process.env.E2E_REPORT_DIR;
-const KEEP = process.env.E2E_KEEP === "1";
 
 const HOSTS =
   SHAPE === "saas"
     ? { app: "app.saas.trustiot.test", gateway: "gw.saas.trustiot.test", ota: "ota.saas.trustiot.test" }
     : { app: "trustiot.factory.test", gateway: "gw.trustiot.factory.test", ota: "ota.trustiot.factory.test" };
 type HostKey = keyof typeof HOSTS;
-const GATEWAY = `${RELEASE.includes("trustiot") ? RELEASE : `${RELEASE}-trustiot`}-ingress`;
-const OBJECT_PREFIX = RELEASE.includes("trustiot") ? RELEASE : `${RELEASE}-trustiot`;
 // A name of its own, so the test never replaces a certificate it did not create.
 const TLS_SECRET = `trustiot-e2e-tls-${crypto.randomUUID().slice(0, 8)}`;
 // Markers that whoami prints as "Name: <WHOAMI_NAME>" (tests/e2e/values-e2e.yaml).
@@ -57,29 +56,6 @@ const PROTECTED_MARKER = "Name: protected-backend";
 const FORGED = `forged.${crypto.randomUUID()}`;
 const VALID_COOKIE = `sid=valid-${crypto.randomUUID().replaceAll("-", "")}`;
 const SLOW_COOKIE = `sid=slow-${crypto.randomUUID().replaceAll("-", "")}`;
-
-function pinnedTool(tool: string): string {
-  const result = Bun.spawnSync({ cmd: ["proto", "bin", tool, "--reporter", "text"], cwd: REPO_ROOT });
-  const path = result.stdout.toString().trim().split("\n").at(-1)?.trim() ?? "";
-  if (result.exitCode !== 0 || !isAbsolute(path) || !existsSync(path)) {
-    throw new Error(`cannot find the pinned ${tool}; run \`proto install\``);
-  }
-  return path;
-}
-const HELM = pinnedTool("helm");
-const KUBECTL = pinnedTool("kubectl");
-
-function run(cmd: string[], allowFailure = false): string {
-  const proc = Bun.spawnSync({ cmd, cwd: CHART_DIR, stdout: "pipe", stderr: "pipe" });
-  if (proc.exitCode !== 0 && !allowFailure) {
-    throw new Error(`${cmd.slice(0, 3).join(" ")} failed (${proc.exitCode}):\n${proc.stderr.toString()}`);
-  }
-  return proc.stdout.toString();
-}
-const kubectl = (...args: string[]) =>
-  run([KUBECTL, ...(CONTEXT ? ["--context", CONTEXT] : []), "--namespace", NAMESPACE, ...args]);
-const helm = (...args: string[]) =>
-  run([HELM, ...(CONTEXT ? ["--kube-context", CONTEXT] : []), "--namespace", NAMESPACE, ...args]);
 
 // ---------------------------------------------------------------------------------------------
 // Raw HTTP/1.1 client (raw-client.ts): fetch() would normalize the request target (dot segments,
@@ -141,33 +117,6 @@ let tunnel: Subprocess | undefined;
 let releaseCreated = false;
 let tlsSecretCreated = false;
 
-function releaseExists(): boolean {
-  const proc = Bun.spawnSync({
-    cmd: [HELM, ...(CONTEXT ? ["--kube-context", CONTEXT] : []), "--namespace", NAMESPACE, "status", RELEASE],
-    stdout: "ignore",
-    stderr: "pipe",
-  });
-  if (proc.exitCode === 0) return true;
-  if (proc.stderr.toString().includes("not found")) return false;
-  throw new Error(`helm status ${RELEASE} failed:\n${proc.stderr.toString()}`);
-}
-
-async function waitFor(what: string, check: () => boolean | Promise<boolean>, timeoutMs = 120_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await check()) return;
-    await Bun.sleep(500);
-  }
-  throw new Error(`timed out waiting for ${what}`);
-}
-
-async function freePort(): Promise<number> {
-  const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
-  const port = server.port;
-  server.stop(true);
-  return port;
-}
-
 async function openTunnel(): Promise<void> {
   const port = await freePort();
   const remotePort = SHAPE === "saas" ? 80 : 443;
@@ -203,28 +152,12 @@ async function openTunnel(): Promise<void> {
   });
 }
 
-function identityImageValues(): string[] {
-  const match = /^(?<repository>[^@]+?)(?::(?<tag>[\w][\w.-]*))?(?:@(?<digest>sha256:[a-f0-9]{64}))?$/.exec(IDENTITY_IMAGE);
-  if (!match?.groups?.repository) throw new Error(`E2E_IDENTITY_IMAGE is not an image reference: ${IDENTITY_IMAGE}`);
-  const { repository, tag, digest } = match.groups;
-  return [
-    "--set-string",
-    `services.identity.image.repository=${repository}`,
-    "--set-string",
-    `services.identity.image.tag=${tag ?? "latest"}`,
-    "--set-string",
-    `services.identity.image.digest=${digest ?? ""}`,
-    "--set-string",
-    `services.identity.image.pullPolicy=${PULL_POLICY}`,
-  ];
-}
-
 beforeAll(async () => {
   const shapeFiles =
     SHAPE === "saas"
       ? ["values-saas.yaml", "tests/values/saas-instance.yaml"]
       : ["values-onprem.yaml", "tests/values/onprem-instance.yaml"];
-  const extra: string[] = ["--set", `ingress.authzProvider=${PROVIDER}`, ...identityImageValues()];
+  const extra: string[] = ["--set", `ingress.authzProvider=${PROVIDER}`, ...imageValues("identity", IDENTITY_IMAGE)];
   if (SHAPE === "onprem") {
     // Throwaway self-signed certificate for the three hosts; the key never leaves the temp dir.
     const key = join(work, "tls.key");
@@ -261,26 +194,9 @@ beforeAll(async () => {
       "ingress.direct.serviceType=ClusterIP",
     );
   }
-  // Never touch an existing installation: install fails if the release exists, and only a
-  // release this run created is uninstalled afterwards.
-  if (releaseExists()) {
-    throw new Error(`release ${RELEASE} already exists in ${NAMESPACE}; use another E2E_RELEASE or namespace`);
-  }
-  // A failed install removes itself (--rollback-on-failure), and the release counts as this
-  // run's only once install succeeded, so a concurrent run's release is never uninstalled.
-  helm(
-    "install",
-    RELEASE,
-    ".",
-    ...shapeFiles.flatMap((f) => ["--values", f]),
-    "--values",
-    "tests/e2e/values-e2e.yaml",
-    ...extra,
-    "--rollback-on-failure",
-    "--wait",
-    "--timeout",
-    "5m",
-  );
+  // Only a release this run installed counts as its own, so a concurrent run's release is never
+  // uninstalled (cluster.ts).
+  installRelease([...shapeFiles, "tests/e2e/values-e2e.yaml"], extra);
   releaseCreated = true;
   kubectl("wait", `gateway/${GATEWAY}`, "--for=condition=Programmed", "--timeout=180s");
   kubectl("rollout", "status", `deployment/${GATEWAY}-istio`, "--timeout=180s");
@@ -294,14 +210,19 @@ beforeAll(async () => {
 
 afterAll(() => {
   tunnel?.kill();
+  const errors: string[] = [];
+  // A failed report write must not skip the cleanup below.
   if (REPORT_DIR) {
-    mkdirSync(REPORT_DIR, { recursive: true });
-    writeFileSync(join(REPORT_DIR, `ingress-e2e-${SHAPE}.json`), `${JSON.stringify(results, null, 2)}\n`);
+    try {
+      mkdirSync(REPORT_DIR, { recursive: true });
+      writeFileSync(join(REPORT_DIR, `ingress-e2e-${SHAPE}.json`), `${JSON.stringify(results, null, 2)}\n`);
+    } catch (error) {
+      errors.push(`report: ${String(error)}`);
+    }
   }
   if (!KEEP) {
-    const errors: string[] = [];
     for (const [created, cleanup] of [
-      [releaseCreated, () => helm("uninstall", RELEASE, "--wait", "--timeout", "3m")],
+      [releaseCreated, uninstallRelease],
       [tlsSecretCreated, () => kubectl("delete", "secret", TLS_SECRET, "--ignore-not-found")],
     ] as [boolean, () => void][]) {
       if (!created) continue;
@@ -311,9 +232,9 @@ afterAll(() => {
         errors.push(String(error));
       }
     }
-    if (errors.length) throw new Error(`cleanup failed:\n${errors.join("\n")}`);
   }
   rmSync(work, { recursive: true, force: true });
+  if (errors.length) throw new Error(`cleanup failed:\n${errors.join("\n")}`);
 }, 300_000);
 
 // ---------------------------------------------------------------------------------------------
