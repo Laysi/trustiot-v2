@@ -1,0 +1,30 @@
+# proto schema plugin for gitleaks (https://github.com/gitleaks/gitleaks).
+# Downloads the official release archive and verifies it against the
+# checksums file published with the release.
+# Reference: https://moonrepo.dev/docs/proto/non-wasm-plugin
+
+name = "gitleaks"
+type = "cli"
+
+[platform.linux]
+download-file = "gitleaks_{version}_linux_{arch}.tar.gz"
+checksum-file = "gitleaks_{version}_checksums.txt"
+
+[platform.macos]
+download-file = "gitleaks_{version}_darwin_{arch}.tar.gz"
+checksum-file = "gitleaks_{version}_checksums.txt"
+
+[install]
+download-url = "https://github.com/gitleaks/gitleaks/releases/download/v{version}/{download_file}"
+checksum-url = "https://github.com/gitleaks/gitleaks/releases/download/v{version}/{checksum_file}"
+
+[install.arch]
+aarch64 = "arm64"
+x86_64 = "x64"
+
+[install.exes.gitleaks]
+exe-path = "gitleaks"
+primary = true
+
+[resolve]
+git-url = "https://github.com/gitleaks/gitleaks"
