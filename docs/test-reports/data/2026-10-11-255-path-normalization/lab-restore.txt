@@ -1,0 +1,64 @@
++ K='sudo k3s kubectl'
++ sudo k3s kubectl delete namespace e2e-255 --wait=true
+namespace "e2e-255" deleted
++ sleep 30
++ sudo k3s kubectl -n kube-system get helmchartconfig
+No resources found in kube-system namespace.
++ sudo k3s kubectl -n istio-system get cm istio -o 'jsonpath={.data.mesh}'
++ sudo k3s kubectl -n istio-system get cm istio -o 'jsonpath={.data.meshNetworks}'
++ python3 -c 'import yaml;print(yaml.safe_load(open("/home/trustiot/e2e-255/mesh-before-255.yaml"))["data"]["mesh"],end="")'
++ python3 -c 'import yaml;print(yaml.safe_load(open("/home/trustiot/e2e-255/mesh-before-255.yaml"))["data"]["meshNetworks"],end="")'
++ sha256sum /home/trustiot/e2e-255/mesh-after.txt /home/trustiot/e2e-255/mesh-before.txt /home/trustiot/e2e-255/meshnet-after.txt /home/trustiot/e2e-255/meshnet-before.txt
+11507d117465e92da63f14204fc2c19837df210957b181730a46a0ce91ae76be  /home/trustiot/e2e-255/mesh-after.txt
+11507d117465e92da63f14204fc2c19837df210957b181730a46a0ce91ae76be  /home/trustiot/e2e-255/mesh-before.txt
+7b2c40b5001e85e00a7ee8ebfc7bcfea574e72f8906e1503bc73e5a2cb0eeaed  /home/trustiot/e2e-255/meshnet-after.txt
+7b2c40b5001e85e00a7ee8ebfc7bcfea574e72f8906e1503bc73e5a2cb0eeaed  /home/trustiot/e2e-255/meshnet-before.txt
++ cmp /home/trustiot/e2e-255/mesh-before.txt /home/trustiot/e2e-255/mesh-after.txt
+MESH-IDENTICAL
++ echo MESH-IDENTICAL
++ cmp /home/trustiot/e2e-255/meshnet-before.txt /home/trustiot/e2e-255/meshnet-after.txt
+MESHNETWORKS-IDENTICAL
++ echo MESHNETWORKS-IDENTICAL
++ sudo k3s kubectl get pods -A
++ grep -E 'poc|istio'
+istio-ingress   edge-istio-5878956479-2v7bk               1/1     Running     0             19h
+istio-ingress   edge-istio-5878956479-swx9s               1/1     Running     0             19h
+istio-system    istio-cni-node-j4nkz                      1/1     Running     0             26h
+istio-system    istiod-656fff7c89-hngnl                   1/1     Running     0             26h
+istio-system    ztunnel-hx6wn                             1/1     Running     0             26h
+kube-system     helm-install-istio-base-ggnpf             0/1     Completed   0             26h
+kube-system     helm-install-istio-cni-cdmxf              0/1     Completed   1 (26h ago)   26h
+kube-system     helm-install-istiod-dr8zz                 0/1     Completed   0             60s
+poc             bridge-5f677f6cbf-7bblw                   1/1     Running     0             19h
+poc             bridge-5f677f6cbf-x2lhw                   1/1     Running     0             19h
+poc             consumer-69876bfb6b-kbw76                 1/1     Running     0             20h
+poc             identity-58ff9fbcb9-v94h8                 1/1     Running     0             20h
+poc             mosquitto-poc-f45958d5b-lhztl             1/1     Running     0             19h
+poc             probe-a-869b95c769-cns84                  1/1     Running     0             20h
+poc             probe-b-6d8bccd5d5-krqlp                  1/1     Running     0             20h
+poc             probe-c-577895cc85-b7fdw                  1/1     Running     0             20h
++ sudo k3s kubectl -n istio-ingress get gateway
+NAME   CLASS   ADDRESS                                      PROGRAMMED   AGE
+edge   istio   edge-istio.istio-ingress.svc.cluster.local   True         26h
+++ sudo k3s kubectl -n istio-ingress get svc edge-istio -o 'jsonpath={.spec.clusterIP}'
++ IP=10.43.188.156
++ for h in trustiot-poc.laysi.io poc.trustiot.test
++ for p in /healthz /api/whoami
+++ curl -s -o /dev/null -w '%{http_code}' -H 'Host: trustiot-poc.laysi.io' http://10.43.188.156/healthz
+trustiot-poc.laysi.io /healthz 200
++ echo 'trustiot-poc.laysi.io /healthz 200'
++ for p in /healthz /api/whoami
+++ curl -s -o /dev/null -w '%{http_code}' -H 'Host: trustiot-poc.laysi.io' http://10.43.188.156/api/whoami
+trustiot-poc.laysi.io /api/whoami 401
++ echo 'trustiot-poc.laysi.io /api/whoami 401'
++ for h in trustiot-poc.laysi.io poc.trustiot.test
++ for p in /healthz /api/whoami
+++ curl -s -o /dev/null -w '%{http_code}' -H 'Host: poc.trustiot.test' http://10.43.188.156/healthz
+poc.trustiot.test /healthz 200
++ echo 'poc.trustiot.test /healthz 200'
++ for p in /healthz /api/whoami
+++ curl -s -o /dev/null -w '%{http_code}' -H 'Host: poc.trustiot.test' http://10.43.188.156/api/whoami
+poc.trustiot.test /api/whoami 401
++ echo 'poc.trustiot.test /api/whoami 401'
++ date -u +%FT%TZ
+2026-10-10T18:16:45Z
