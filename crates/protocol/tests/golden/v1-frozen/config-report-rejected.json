@@ -1,0 +1,13 @@
+{
+  "active_version": 7,
+  "issues": [
+    {
+      "code": "unknown_model",
+      "message": "model pm-3000 is not in the configuration",
+      "path": "devices[2].model"
+    }
+  ],
+  "outcome": "rejected",
+  "v": 1,
+  "version": 8
+}
