@@ -52,6 +52,7 @@ flowchart TB
   - DB migration 是獨立的 Job。
   - 排程工作用 Postgres advisory lock 互斥。
   - 資料接收用 MQTT shared subscription 分配。
+  - 設定、health 與 readiness、SIGTERM 收尾與 advisory lock 由 `crates/service-kit` 實作，符合 [Helm chart 與服務的約定](../../deploy/chart/README.md)：服務自己的設定用 `TRUSTIOT__<SECTION>__<KEY>`，chart 的平台設定 `TRUSTIOT_<NAME>` 以 `platform` 表交給服務；kit 的收尾時間要在 chart 的 `drainSeconds` 內。細節見 [service-kit 的 README](../../crates/service-kit/README.md)。
 - **完全斷網的地端環境**：以容器映像壓縮包加上部署描述安裝。
 
 服務切分（決策 4）：服務隨里程碑逐步長出來，例如 MS1 需要憑證與佈建、資產、資料接收、閘道器營運與 MQTT 轉接五個（MQTT 轉接在 SaaS 與地端都部署）。上面的服務設計規則適用於每一個服務。
