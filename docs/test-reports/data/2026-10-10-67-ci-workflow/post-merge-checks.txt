@@ -1,7 +1,9 @@
 # Laysi/trustiot-v2#67 every check of ci.yml run locally again on 2026-10-10 after main was
-# merged into the branch: commit 9b9022a on ci/67-ci-workflow. Its merge commit 3bc4e48 brings
-# in main 4f9db40, which adds the local dev environment scripts of Laysi/trustiot-v2#71; 9b9022a
-# makes those scripts pass the workflow-policy job's type check and tests.
+# merged into the branch twice: commit 1082c2f on ci/67-ci-workflow. Merge commit 3bc4e48 brings
+# in main 4f9db40 (the local dev environment scripts of Laysi/trustiot-v2#71), and 9b9022a makes
+# those scripts pass the workflow-policy job's type check and tests. Merge commit 1082c2f brings
+# in main 71be25d (internal identity verification, Laysi/trustiot-v2#52) and takes main's
+# crates/service-kit/src/service.rs, which carries the same shutdown race fix as e8acc6e.
 # Same machine, tools and environment as local-checks.txt: CI=true, SQLX_OFFLINE=true,
 # CARGO_BUILD_JOBS=2. Compile progress lines are left out; for cargo test only the per-binary
 # result lines are kept (a skipped container test would print a line starting with "skipped:";
@@ -10,18 +12,18 @@
 # log times are local time (UTC+08:00).
 #
 $ git log -1 --format=%H %s
-9b9022ab2d6a5cb768ceb97702455819e2486878 fix(scripts): pass the CI type check and tests with the dev environment
+1082c2f5f07157cf2394aef5efff3d1b8c87c23e chore(merge): merge origin/main into ci/67-ci-workflow again
 # exit status: 0
 #
 $ cargo fmt --all --check
 # exit status: 0
 #
 $ cargo clippy --workspace --all-targets --locked -- -D warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.52s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.56s
 # exit status: 0
 #
 $ cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.26s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.74s
 # exit status: 0
 #
 $ cargo test --workspace --locked
@@ -39,31 +41,34 @@ test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/repository.rs (target/debug/deps/repository-4bf5f5e43d5bc66f)
 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
-     Running unittests src/lib.rs (target/debug/deps/service_kit-0effc028f225e694)
-test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
-     Running tests/chart_contract.rs (target/debug/deps/chart_contract-76e31dba3d73d265)
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
-     Running tests/container.rs (target/debug/deps/container-59daafa9ed942af5)
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.42s
-     Running tests/dependency_isolation.rs (target/debug/deps/dependency_isolation-017f166152679b7b)
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
-     Running tests/errors.rs (target/debug/deps/errors-15a82613a32857e9)
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
-     Running tests/job_lock.rs (target/debug/deps/job_lock-69356c3e203000ca)
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.15s
-     Running tests/lifecycle.rs (target/debug/deps/lifecycle-137a2ba8ce4e2b0f)
-test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.53s
-     Running tests/logging.rs (target/debug/deps/logging-934626bb5942b5a2)
+     Running unittests src/lib.rs (target/debug/deps/service_kit-5c36690e19376c5d)
+test result: ok. 68 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+     Running tests/chart_contract.rs (target/debug/deps/chart_contract-2e0d0d27af1138b9)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/container.rs (target/debug/deps/container-e467dd4d4766c6df)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.24s
+     Running tests/dependency_isolation.rs (target/debug/deps/dependency_isolation-3aa69f958429ffa6)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+     Running tests/errors.rs (target/debug/deps/errors-1207d8b43b1b68e0)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+     Running tests/identity.rs (target/debug/deps/identity-0f054333f27cf7d0)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s
+     Running tests/job_lock.rs (target/debug/deps/job_lock-28f36929003c82bb)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.10s
+     Running tests/lifecycle.rs (target/debug/deps/lifecycle-4701eac2bb82cd21)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.54s
+     Running tests/logging.rs (target/debug/deps/logging-95c1def028f7b6ef)
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
-     Running tests/otlp.rs (target/debug/deps/otlp-4d23d36677ff21c3)
+     Running tests/otlp.rs (target/debug/deps/otlp-0f2f2532d5b113f6)
 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
    Doc-tests contract
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
    Doc-tests repo_check
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
    Doc-tests service_kit
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
 # exit status: 0
 #
 $ cargo test --package service-kit --no-default-features --locked
@@ -72,15 +77,17 @@ test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
      Running tests/chart_contract.rs (target/debug/deps/chart_contract-716da636d9b8d116)
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/container.rs (target/debug/deps/container-0aa3cd65427ba35e)
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.62s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.99s
      Running tests/dependency_isolation.rs (target/debug/deps/dependency_isolation-4f42b9f41853d44b)
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
      Running tests/errors.rs (target/debug/deps/errors-52ef93ab936d8a6a)
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.66s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+     Running tests/identity.rs (target/debug/deps/identity-004dd96ffe20e674)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/job_lock.rs (target/debug/deps/job_lock-d110c27366486bc3)
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.35s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.08s
      Running tests/lifecycle.rs (target/debug/deps/lifecycle-9f38ab28c757b038)
-test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.53s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.56s
      Running tests/logging.rs (target/debug/deps/logging-a7a1ca5f34f38f07)
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
      Running tests/otlp.rs (target/debug/deps/otlp-993a0810af86fb1d)
@@ -93,7 +100,7 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 $ cargo deny --color never --locked check --show-stats
  advisories ok: 0 errors, 0 warnings, 0 notes
        bans ok: 0 errors, 12 warnings, 0 notes
-   licenses ok: 0 errors, 0 warnings, 195 notes
+   licenses ok: 0 errors, 0 warnings, 203 notes
     sources ok: 0 errors, 0 warnings, 0 notes
 # exit status: 0
 #
@@ -103,7 +110,7 @@ workflow policy: 2 file(s) checked, no violations
 #
 $ bun install --cwd scripts --frozen-lockfile
 bun install v1.4.2 (744846f84)
-Checked 6 installs across 26 packages (no changes) [4.00ms]
+Checked 6 installs across 26 packages (no changes) [13.00ms]
 # exit status: 0
 #
 $ bun run --cwd scripts typecheck
@@ -114,105 +121,105 @@ $ bun run --cwd scripts test
 $ bun test
 bun test v1.4.2 (744846f84)
 ci/check-workflows.test.ts:
-(pass) checkWorkflow > accepts explicit permissions, SHA-pinned actions and local actions [1.28ms]
-(pass) checkWorkflow > rejects a job without permissions [0.21ms]
-(pass) checkWorkflow > rejects an action pinned to a tag instead of a commit SHA [0.12ms]
-(pass) checkWorkflow > rejects permission shorthands and unknown levels [0.42ms]
-(pass) checkWorkflow > accepts an empty permissions map [0.09ms]
-(pass) checkWorkflow > rejects an unpinned reusable workflow [0.12ms]
-(pass) checkWorkflow > rejects local actions and reusable workflows outside the checked directories [0.42ms]
-(pass) checkWorkflow > rejects job and service containers that are not pinned to a digest [0.44ms]
-(pass) checkWorkflow > rejects triggers that hand secrets to fork code, in every syntax [0.38ms]
-(pass) checkWorkflow > reports every violation in one pass [0.11ms]
-(pass) checkWorkflow > reports unreadable or malformed files instead of crashing [0.16ms]
-(pass) usesProblem > accepts local actions, full SHAs and digest-pinned images [0.09ms]
-(pass) usesProblem > rejects every other reference [0.09ms]
-(pass) usesProblem > keeps local references where the check reads them [0.12ms]
-(pass) imageProblem > requires a digest [0.05ms]
-(pass) checkAction > checks the steps of a composite action [0.22ms]
-(pass) checkAction > checks the image of a Docker action [0.09ms]
-(pass) annotation > escapes GitHub workflow command syntax [0.14ms]
-(pass) repository scan and command line > finds top-level workflows and every local action [0.71ms]
-(pass) repository scan and command line > labels violations with the file relative to the root [0.57ms]
-(pass) repository scan and command line > the command fails on an unpinned action and a job without permissions [13.70ms]
-(pass) repository scan and command line > the command fails when there is nothing to check [11.03ms]
-(pass) repository scan and command line > this repository's workflows and actions pass [13.06ms]
+(pass) checkWorkflow > accepts explicit permissions, SHA-pinned actions and local actions [0.77ms]
+(pass) checkWorkflow > rejects a job without permissions [0.12ms]
+(pass) checkWorkflow > rejects an action pinned to a tag instead of a commit SHA [0.07ms]
+(pass) checkWorkflow > rejects permission shorthands and unknown levels [0.22ms]
+(pass) checkWorkflow > accepts an empty permissions map [0.05ms]
+(pass) checkWorkflow > rejects an unpinned reusable workflow [0.07ms]
+(pass) checkWorkflow > rejects local actions and reusable workflows outside the checked directories [0.15ms]
+(pass) checkWorkflow > rejects job and service containers that are not pinned to a digest [0.24ms]
+(pass) checkWorkflow > rejects triggers that hand secrets to fork code, in every syntax [0.49ms]
+(pass) checkWorkflow > reports every violation in one pass [0.07ms]
+(pass) checkWorkflow > reports unreadable or malformed files instead of crashing [0.11ms]
+(pass) usesProblem > accepts local actions, full SHAs and digest-pinned images [0.07ms]
+(pass) usesProblem > rejects every other reference [0.05ms]
+(pass) usesProblem > keeps local references where the check reads them [0.06ms]
+(pass) imageProblem > requires a digest [0.02ms]
+(pass) checkAction > checks the steps of a composite action [0.11ms]
+(pass) checkAction > checks the image of a Docker action [0.05ms]
+(pass) annotation > escapes GitHub workflow command syntax [0.08ms]
+(pass) repository scan and command line > finds top-level workflows and every local action [0.44ms]
+(pass) repository scan and command line > labels violations with the file relative to the root [0.36ms]
+(pass) repository scan and command line > the command fails on an unpinned action and a job without permissions [8.06ms]
+(pass) repository scan and command line > the command fails when there is nothing to check [6.70ms]
+(pass) repository scan and command line > this repository's workflows and actions pass [7.77ms]
 tests/e2e.test.ts:
 (skip) the dev environment with podman > starts, passes every check, seeds, rotates credentials, stops and purges without leftovers
 tests/protocol.test.ts:
-(pass) MQTT packets > CONNECT with a login matches the 3.1.1 layout [0.85ms]
-(pass) MQTT packets > an anonymous CONNECT sets no login flags [0.09ms]
-(pass) MQTT packets > remaining length uses the variable-length encoding [0.77ms]
-(pass) MQTT packets > SUBSCRIBE carries the packet id, the filter and QoS 0 [0.20ms]
-(pass) MQTT packets > decodePacket waits for a complete packet and consumes only one [0.18ms]
-(pass) MQTT packets > a malformed length is an error [0.08ms]
-(pass) Postgres startup > the StartupMessage has the protocol version and the parameters [0.18ms]
-(pass) Postgres startup > authRequest reads the request type [0.20ms]
+(pass) MQTT packets > CONNECT with a login matches the 3.1.1 layout [0.55ms]
+(pass) MQTT packets > an anonymous CONNECT sets no login flags [0.05ms]
+(pass) MQTT packets > remaining length uses the variable-length encoding [0.36ms]
+(pass) MQTT packets > SUBSCRIBE carries the packet id, the filter and QoS 0 [0.09ms]
+(pass) MQTT packets > decodePacket waits for a complete packet and consumes only one [0.09ms]
+(pass) MQTT packets > a malformed length is an error [0.04ms]
+(pass) Postgres startup > the StartupMessage has the protocol version and the parameters [0.10ms]
+(pass) Postgres startup > authRequest reads the request type [0.09ms]
 tests/secrets.test.ts:
-(pass) randomSecret > is URL-safe and carries 256 bits by default [0.18ms]
-(pass) randomSecret > never repeats [22.41ms]
-(pass) randomSecret > refuses a weak length [0.10ms]
-(pass) generateCredentials > gives every login its own strong password, different on every call [0.23ms]
-(pass) mosquittoPasswordEntry > uses the sha512-pbkdf2 format and verifies against the password [0.56ms]
-(pass) mosquittoPasswordEntry > does not contain the password [0.13ms]
-(pass) mosquittoPasswordEntry > rejects a user name that would break the file format [0.06ms]
-(pass) dotenv > writes KEY=value lines [0.16ms]
-(pass) dotenv > refuses values and names that need quoting [0.10ms]
-(pass) dotenv > accepts every generated secret [0.11ms]
-(pass) SQL quoting > doubles quotes [0.06ms]
+(pass) randomSecret > is URL-safe and carries 256 bits by default [0.11ms]
+(pass) randomSecret > never repeats [13.71ms]
+(pass) randomSecret > refuses a weak length [0.12ms]
+(pass) generateCredentials > gives every login its own strong password, different on every call [0.14ms]
+(pass) mosquittoPasswordEntry > uses the sha512-pbkdf2 format and verifies against the password [0.34ms]
+(pass) mosquittoPasswordEntry > does not contain the password [0.07ms]
+(pass) mosquittoPasswordEntry > rejects a user name that would break the file format [0.03ms]
+(pass) dotenv > writes KEY=value lines [0.09ms]
+(pass) dotenv > refuses values and names that need quoting [0.05ms]
+(pass) dotenv > accepts every generated secret [0.07ms]
+(pass) SQL quoting > doubles quotes [0.04ms]
 tests/stack.test.ts:
-(pass) images > every image is pinned by digest [0.10ms]
-(pass) images > runArgs refuses an image that is not pinned [0.28ms]
-(pass) images > a locally built service image is allowed [0.09ms]
-(pass) runArgs > publishes only on the loopback address [0.16ms]
-(pass) runArgs > labels the container so down and purge can find it [0.05ms]
-(pass) runArgs > passes secrets only through the env file, which holds no values here [0.13ms]
-(pass) runArgs > keeps the image and command last [0.06ms]
-(pass) runArgs > drops privilege escalation and never restarts by itself [0.06ms]
-(pass) resolvePorts > uses the defaults [0.13ms]
-(pass) resolvePorts > takes overrides [0.05ms]
-(pass) resolvePorts > rejects invalid and duplicate ports [0.18ms]
-(pass) assertDistinctPorts > accepts distinct ports and names both parties of a collision [0.26ms]
-(pass) assertDistinctPorts > the default ports of the infrastructure and the services do not collide [0.09ms]
-(pass) generated configuration > Postgres trusts only the local socket and demands SCRAM everywhere else [0.07ms]
-(pass) generated configuration > Mosquitto refuses anonymous clients and reads its logins from files [0.09ms]
-(pass) generated configuration > the ACL names one user [0.03ms]
-(pass) services > every declared service has a unique name and port, and follows the chart's conventions [0.14ms]
-(pass) services > port overrides are named after the service [0.24ms]
-(pass) services > platform settings use the chart's names and carry no credentials [0.19ms]
-(pass) services > the container serves HTTP on the chart's port [0.07ms]
+(pass) images > every image is pinned by digest [0.08ms]
+(pass) images > runArgs refuses an image that is not pinned [0.16ms]
+(pass) images > a locally built service image is allowed [0.05ms]
+(pass) runArgs > publishes only on the loopback address [0.09ms]
+(pass) runArgs > labels the container so down and purge can find it [0.03ms]
+(pass) runArgs > passes secrets only through the env file, which holds no values here [0.07ms]
+(pass) runArgs > keeps the image and command last [0.04ms]
+(pass) runArgs > drops privilege escalation and never restarts by itself [0.05ms]
+(pass) resolvePorts > uses the defaults [0.08ms]
+(pass) resolvePorts > takes overrides [0.03ms]
+(pass) resolvePorts > rejects invalid and duplicate ports [0.11ms]
+(pass) assertDistinctPorts > accepts distinct ports and names both parties of a collision [0.14ms]
+(pass) assertDistinctPorts > the default ports of the infrastructure and the services do not collide [0.05ms]
+(pass) generated configuration > Postgres trusts only the local socket and demands SCRAM everywhere else [0.04ms]
+(pass) generated configuration > Mosquitto refuses anonymous clients and reads its logins from files [0.05ms]
+(pass) generated configuration > the ACL names one user [0.02ms]
+(pass) services > every declared service has a unique name and port, and follows the chart's conventions [0.08ms]
+(pass) services > port overrides are named after the service [0.13ms]
+(pass) services > platform settings use the chart's names and carry no credentials [0.10ms]
+(pass) services > the container serves HTTP on the chart's port [0.04ms]
 (pass) services > the Containerfile starts the binary on the pinned base [0.06ms]
 tests/state.test.ts:
-(pass) paths > follow XDG_STATE_HOME and fall back to ~/.local/state [0.27ms]
-(pass) paths > never point into the repository [0.08ms]
-(pass) resolveInstance > defaults and validates [0.26ms]
-(pass) private files > directories are 0700 and files 0600, whatever the umask [0.55ms]
-(pass) private files > an overwrite is atomic and leaves no temporary file [0.30ms]
-(pass) private files > withPrivateFile removes the file even when the action fails [0.75ms]
-(pass) interrupts > runCleanups removes the secret file and the lock held by a running command [0.95ms]
-(pass) interrupts > a finished cleanup is not run again [0.12ms]
-(pass) state file > round-trips and is private [0.48ms]
-(pass) state file > is absent before up and rejects an unknown version [0.26ms]
-(pass) lock > a second holder is refused until the first releases [0.69ms]
-(pass) lock > instances do not block each other [0.28ms]
-(pass) lock > a lock left by a dead process is taken over [0.53ms]
-(pass) lock > a lock directory without an owner is not taken while it is fresh, but is when old [1.06ms]
-(pass) lock > taking and releasing leaves nothing behind [0.51ms]
+(pass) paths > follow XDG_STATE_HOME and fall back to ~/.local/state [0.28ms]
+(pass) paths > never point into the repository [0.07ms]
+(pass) resolveInstance > defaults and validates [0.14ms]
+(pass) private files > directories are 0700 and files 0600, whatever the umask [0.35ms]
+(pass) private files > an overwrite is atomic and leaves no temporary file [0.16ms]
+(pass) private files > withPrivateFile removes the file even when the action fails [0.43ms]
+(pass) interrupts > runCleanups removes the secret file and the lock held by a running command [0.47ms]
+(pass) interrupts > a finished cleanup is not run again [0.05ms]
+(pass) state file > round-trips and is private [0.31ms]
+(pass) state file > is absent before up and rejects an unknown version [0.15ms]
+(pass) lock > a second holder is refused until the first releases [0.37ms]
+(pass) lock > instances do not block each other [0.16ms]
+(pass) lock > a lock left by a dead process is taken over [0.35ms]
+(pass) lock > a lock directory without an owner is not taken while it is fresh, but is when old [0.58ms]
+(pass) lock > taking and releasing leaves nothing behind [0.34ms]
 tests/policy.test.ts:
-(pass) scripts/ holds no fixed credentials > no literal is assigned to a secret-looking name [2.14ms]
-(pass) scripts/ holds no fixed credentials > the rule itself catches a fixed password [0.05ms]
-(pass) scripts/ holds no fixed credentials > seed files create no login role or password [0.19ms]
-(pass) scripts/ never opens a port to other machines > no wildcard bind address and no host networking [0.32ms]
-(pass) seed discovery > finds the platform seeds in the order they apply [0.53ms]
-(pass) seed discovery > picks up a service's own seeds after the platform's, by service name [0.77ms]
-(pass) seed discovery > an empty tree has no seeds [0.14ms]
+(pass) scripts/ holds no fixed credentials > no literal is assigned to a secret-looking name [1.25ms]
+(pass) scripts/ holds no fixed credentials > the rule itself catches a fixed password [0.03ms]
+(pass) scripts/ holds no fixed credentials > seed files create no login role or password [0.10ms]
+(pass) scripts/ never opens a port to other machines > no wildcard bind address and no host networking [0.19ms]
+(pass) seed discovery > finds the platform seeds in the order they apply [0.34ms]
+(pass) seed discovery > picks up a service's own seeds after the platform's, by service name [0.48ms]
+(pass) seed discovery > an empty tree has no seeds [0.09ms]
 1 tests skipped:
 (skip) the dev environment with podman > starts, passes every check, seeds, rotates credentials, stops and purges without leftovers
  85 pass
  1 skip
  0 fail
  240 expect() calls
-Ran 86 tests across 7 files. [115.00ms]
+Ran 86 tests across 7 files. [69.00ms]
 # exit status: 0
 #
 $ bun test deploy/chart
@@ -220,13 +227,13 @@ bun test v1.4.2 (744846f84)
  91 pass
  0 fail
  838 expect() calls
-Ran 91 tests across 1 file. [6.93s]
+Ran 91 tests across 1 file. [7.13s]
 # exit status: 0
 #
 $ gitleaks git --no-banner --redact --verbose --log-opts=--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD --report-format=json --report-path=<report> .
-8:39PM INF 30 commits scanned.
-8:39PM INF scanned ~1829504 bytes (1.83 MB) in 541ms
-8:39PM INF no leaks found
+8:44PM INF 33 commits scanned.
+8:44PM INF scanned ~2133542 bytes (2.13 MB) in 617ms
+8:44PM INF no leaks found
 # exit status: 0
 #
 # Socket chunks: 9b9022a narrows the "data" chunks in scripts/lib/pgwire.ts and
