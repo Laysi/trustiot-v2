@@ -285,8 +285,18 @@ function hex(bytes: number): string {
 }
 
 beforeAll(async () => {
-  if (helm("list", "--all", "--short", "--filter", `^${RELEASE}$`).trim()) {
+  // Never touch an existing installation (the same check as cluster.ts, which this test does not
+  // import because it requires the ingress test's variables).
+  const status = Bun.spawnSync({
+    cmd: [HELM, ...(CONTEXT ? ["--kube-context", CONTEXT] : []), "--namespace", NAMESPACE, "status", RELEASE],
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  if (status.exitCode === 0) {
     throw new Error(`release ${RELEASE} already exists in ${NAMESPACE}; use another E2E_RELEASE or namespace`);
+  }
+  if (!status.stderr.toString().includes("not found")) {
+    throw new Error(`helm status ${RELEASE} failed:\n${status.stderr.toString()}`);
   }
   // Fresh passwords, written to files in a private temp dir so they never appear in argv.
   const collectorPassword = hex(24);
