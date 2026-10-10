@@ -25,7 +25,7 @@ Architecture decisions, rebuild scope (items A1–M8), service split, repository
 - Dependency licenses, advisories, and sources (rules in `deny.toml`): `cargo deny --locked check`
 - Secret scan, as CI runs it: `gitleaks git --redact --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" .`
 - Workflow policy (job `permissions`, SHA-pinned actions): `bun scripts/ci/check-workflows.ts`
-- Bun scripts in `scripts/`: `bun install --cwd scripts --frozen-lockfile`, then `bun run --cwd scripts typecheck` and `bun run --cwd scripts test`; a single test is `bun run --cwd scripts test -t "<test-name-filter>"`
+- Bun scripts in `scripts/` (the dev environment and the CI checks): `bun install --cwd scripts --frozen-lockfile` installs the type checker, then `bun run --cwd scripts typecheck` checks every `.ts` file there; `bun run --cwd scripts test` runs the same test files as `bun test scripts`, and a single test is `bun run --cwd scripts test -t "<test-name-filter>"`
 - Gateway crates (`crates/protocol` and every member under `edge/`) must build for aarch64: `rustup target add aarch64-unknown-linux-gnu` once, then `cargo build --locked --target aarch64-unknown-linux-gnu -p <crate>`
 
 `.github/workflows/ci.yml` runs these checks on every pull request and every push to main; its jobs and the required-checks list are in `docs/architecture/ci-release.md`. Every job must list its `permissions`, every action must be pinned to a full commit SHA with the tag in a trailing comment, and local actions belong under `.github/actions/`.

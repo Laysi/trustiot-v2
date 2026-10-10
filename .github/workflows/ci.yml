@@ -192,6 +192,8 @@ jobs:
       - name: Install script dependencies
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: bun install --cwd scripts --frozen-lockfile
+      # Both cover all of scripts/, the local dev environment included. Its podman end-to-end
+      # test skips unless TRUSTIOT_DEV_E2E is set: it builds the services and pulls the stack.
       - name: Type check scripts
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: bun run --cwd scripts typecheck
