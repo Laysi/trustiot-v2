@@ -1,0 +1,150 @@
+[
+ {
+  "group": "timing",
+  "name": "baseline /healthz median ms",
+  "ms": 201,
+  "ok": true
+ },
+ {
+  "group": "timing",
+  "name": "slow identity sequential #1",
+  "request": "GET /api/whoami",
+  "status": 503,
+  "ms": 714,
+  "reachedProtected": false,
+  "reachedPublic": false,
+  "forgedEchoed": false,
+  "verdict": "503 expected within ~701 ms",
+  "ok": true
+ },
+ {
+  "group": "timing",
+  "name": "slow identity sequential #2",
+  "request": "GET /api/whoami",
+  "status": 503,
+  "ms": 711,
+  "reachedProtected": false,
+  "reachedPublic": false,
+  "forgedEchoed": false,
+  "verdict": "503 expected within ~701 ms",
+  "ok": true
+ },
+ {
+  "group": "timing",
+  "name": "slow identity sequential #3",
+  "request": "GET /api/whoami",
+  "status": 503,
+  "ms": 700,
+  "reachedProtected": false,
+  "reachedPublic": false,
+  "forgedEchoed": false,
+  "verdict": "503 expected within ~701 ms",
+  "ok": true
+ },
+ {
+  "group": "timing",
+  "name": "slow identity sequential #4",
+  "request": "GET /api/whoami",
+  "status": 503,
+  "ms": 711,
+  "reachedProtected": false,
+  "reachedPublic": false,
+  "forgedEchoed": false,
+  "verdict": "503 expected within ~701 ms",
+  "ok": true
+ },
+ {
+  "group": "timing",
+  "name": "slow identity sequential #5",
+  "request": "GET /api/whoami",
+  "status": 503,
+  "ms": 695,
+  "reachedProtected": false,
+  "reachedPublic": false,
+  "forgedEchoed": false,
+  "verdict": "503 expected within ~701 ms",
+  "ok": true
+ },
+ {
+  "group": "timing",
+  "name": "slow identity sequential #6",
+  "request": "GET /api/whoami",
+  "status": 503,
+  "ms": 714,
+  "reachedProtected": false,
+  "reachedPublic": false,
+  "forgedEchoed": false,
+  "verdict": "503 expected within ~701 ms",
+  "ok": true
+ },
+ {
+  "group": "timing",
+  "name": "slow identity sequential #7",
+  "request": "GET /api/whoami",
+  "status": 503,
+  "ms": 697,
+  "reachedProtected": false,
+  "reachedPublic": false,
+  "forgedEchoed": false,
+  "verdict": "503 expected within ~701 ms",
+  "ok": true
+ },
+ {
+  "group": "timing",
+  "name": "slow identity sequential #8",
+  "request": "GET /api/whoami",
+  "status": 503,
+  "ms": 699,
+  "reachedProtected": false,
+  "reachedPublic": false,
+  "forgedEchoed": false,
+  "verdict": "503 expected within ~701 ms",
+  "ok": true
+ },
+ {
+  "group": "timing",
+  "name": "slow identity sequential #9",
+  "request": "GET /api/whoami",
+  "status": 503,
+  "ms": 700,
+  "reachedProtected": false,
+  "reachedPublic": false,
+  "forgedEchoed": false,
+  "verdict": "503 expected within ~701 ms",
+  "ok": true
+ },
+ {
+  "group": "timing",
+  "name": "slow identity sequential #10",
+  "request": "GET /api/whoami",
+  "status": 503,
+  "ms": 696,
+  "reachedProtected": false,
+  "reachedPublic": false,
+  "forgedEchoed": false,
+  "verdict": "503 expected within ~701 ms",
+  "ok": true
+ },
+ {
+  "group": "timing",
+  "name": "40 concurrent slow requests",
+  "statuses": [
+   503
+  ],
+  "maxMs": 715,
+  "minMs": 699,
+  "ok": true
+ },
+ {
+  "group": "timing",
+  "name": "public path during a slow check",
+  "request": "POST /certs/renew",
+  "status": 200,
+  "ms": 228,
+  "reachedProtected": false,
+  "reachedPublic": true,
+  "forgedEchoed": false,
+  "verdict": "slow status 503",
+  "ok": true
+ }
+]

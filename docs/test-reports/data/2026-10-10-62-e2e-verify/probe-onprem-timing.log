@@ -1,0 +1,15 @@
+=== timing
+baseline /healthz first-byte median 315 ms
+OK   [timing] slow identity sequential #1 -> 503 872ms 503 expected within ~815 ms
+OK   [timing] slow identity sequential #2 -> 503 921ms 503 expected within ~815 ms
+OK   [timing] slow identity sequential #3 -> 503 835ms 503 expected within ~815 ms
+OK   [timing] slow identity sequential #4 -> 503 823ms 503 expected within ~815 ms
+OK   [timing] slow identity sequential #5 -> 503 821ms 503 expected within ~815 ms
+OK   [timing] slow identity sequential #6 -> 503 809ms 503 expected within ~815 ms
+OK   [timing] slow identity sequential #7 -> 503 813ms 503 expected within ~815 ms
+OK   [timing] slow identity sequential #8 -> 503 819ms 503 expected within ~815 ms
+OK   [timing] slow identity sequential #9 -> 503 818ms 503 expected within ~815 ms
+OK   [timing] slow identity sequential #10 -> 503 820ms 503 expected within ~815 ms
+40 concurrent slow: statuses 503 max 952 ms
+OK   [timing] public path during a slow check -> 200 308ms slow status 503
+done: 13 rows, 0 failing

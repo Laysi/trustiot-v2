@@ -1,0 +1,64 @@
+=== bypass
+OK   [bypass] pct-NUL after public path -> 400 435ms not reached
+OK   [bypass] pct-NUL then dot-dot -> 400 337ms not reached
+OK   [bypass] pct-NUL before public path -> 400 353ms not reached
+OK   [bypass] double-encoded NUL -> 401 348ms not reached
+OK   [bypass] raw NUL byte -> 400 354ms not reached
+OK   [bypass] raw NUL in cookie route -> 400 327ms not reached
+OK   [bypass] trailing dot -> 401 317ms not reached
+OK   [bypass] trailing double dot -> 401 358ms not reached
+OK   [bypass] dot after public path then dot-dot -> 401 372ms not reached
+OK   [bypass] encoded trailing dot -> 401 338ms not reached
+OK   [bypass] encoded space -> 401 312ms not reached
+OK   [bypass] raw tab -> 400 325ms not reached
+OK   [bypass] encoded tab -> 401 319ms not reached
+OK   [bypass] encoded LF -> 401 316ms not reached
+OK   [bypass] encoded CRLF header injection -> 401 328ms not reached
+OK   [bypass] plus -> 401 311ms not reached
+OK   [bypass] pct2F after public path -> 401 324ms not reached
+OK   [bypass] pct2F leading -> 401 346ms not reached
+OK   [bypass] pct2F pair leading -> 401 318ms not reached
+OK   [bypass] dot-dot with %2e%2e%2f -> 401 324ms not reached
+OK   [bypass] all-encoded traversal -> 401 337ms not reached
+OK   [bypass] upper-case %2F..%2F -> 401 310ms not reached
+OK   [bypass] pct5C dot-dot -> 401 344ms not reached
+OK   [bypass] pct5C mixed with slash -> 401 304ms not reached
+OK   [bypass] pct5C leading -> 401 309ms not reached
+OK   [bypass] pct5C upper -> 401 310ms not reached
+OK   [bypass] double-encoded dot-dot -> 401 364ms not reached
+OK   [bypass] double-encoded leading dot-dot -> 401 306ms not reached
+OK   [bypass] double-encoded slash -> 401 329ms not reached
+OK   [bypass] double-encoded internal -> 401 313ms not reached
+OK   [bypass] triple-encoded dot -> 401 319ms not reached
+OK   [bypass] overlong dot c0ae -> 401 317ms not reached
+OK   [bypass] overlong c0 2e -> 401 333ms not reached
+OK   [bypass] overlong slash c0af -> 401 320ms not reached
+OK   [bypass] overlong slash e080af -> 401 312ms not reached
+OK   [bypass] overlong dot e080ae -> 401 315ms not reached
+OK   [bypass] overlong dot-dot internal -> 401 311ms not reached
+OK   [bypass] raw overlong bytes -> 400 319ms not reached
+OK   [bypass] fullwidth solidus -> 401 338ms not reached
+OK   [bypass] IIS %u002e -> 401 351ms not reached
+OK   [bypass] IIS %u2215 -> 401 314ms not reached
+OK   [bypass] raw utf-8 in path -> 400 309ms not reached
+OK   [bypass] bad percent -> 401 327ms not reached
+OK   [bypass] truncated percent -> 401 307ms not reached
+OK   [bypass] truncated percent 2 -> 401 310ms not reached
+OK   [bypass] semicolon after dot-dot -> 401 303ms not reached
+OK   [bypass] semicolon with encoded slash -> 401 314ms not reached
+OK   [bypass] matrix param public -> 401 319ms not reached
+OK   [bypass] dot-dot-dot-dot many -> 401 308ms not reached
+OK   [bypass] many double slashes -> 401 311ms not reached
+OK   [bypass] query-only public -> 401 356ms not reached
+OK   [bypass] encoded question -> 401 322ms not reached
+OK   [bypass] fragment-encoded hash -> 401 359ms not reached
+OK   [bypass] asterisk-form -> 400 356ms not reached
+OK   [bypass] empty path -> 400 326ms not reached
+OK   [bypass] authority-form -> 400 346ms not reached
+OK   [bypass] 8 KiB path -> 401 345ms not reached
+OK   [bypass] 8 KiB path under public prefix -> 401 327ms not reached
+OK   [bypass] 64 KiB path -> 431 389ms not reached
+OK   [bypass] 1 MiB path -> 431 409ms not reached
+OK   [bypass] 100 KiB query on public path -> 431 316ms not reached
+OK   [bypass] 20000 dot-dot segments -> 431 313ms not reached
+done: 62 rows, 0 failing

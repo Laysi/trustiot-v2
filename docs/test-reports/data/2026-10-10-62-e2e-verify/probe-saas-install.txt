@@ -1,0 +1,42 @@
+I1010 22:14:43.584121 3975653 warnings.go:107] "Warning: configured AuthorizationPolicy will deny all traffic to TCP ports under its scope due to the use of only HTTP attributes in a DENY rule; it is recommended to explicitly specify the port"
+NAME: trustiot
+LAST DEPLOYED: Sat Oct 10 22:14:40 2026
+NAMESPACE: e2e-62-verify
+STATUS: deployed
+REVISION: 1
+DESCRIPTION: Install complete
+TEST SUITE: None
+gateway.gateway.networking.k8s.io/trustiot-ingress condition met
+deployment "trustiot-ingress-istio" successfully rolled out
+clusterIP=10.43.231.61 port=80
+NAME                                         READY   STATUS    RESTARTS   AGE   IP            NODE              NOMINATED NODE   READINESS GATES
+pod/trustiot-assets-5b7989cd69-tdq6c         1/1     Running   0          8s    10.42.0.202   trustiot-mac-m1   <none>           <none>
+pod/trustiot-certs-6f465d4445-jqt2r          1/1     Running   0          8s    10.42.0.203   trustiot-mac-m1   <none>           <none>
+pod/trustiot-identity-66d8b95f97-stlkf       1/1     Running   0          8s    10.42.0.205   trustiot-mac-m1   <none>           <none>
+pod/trustiot-ingress-istio-d6b9bdcf9-c8lbr   1/1     Running   0          8s    10.42.0.207   trustiot-mac-m1   <none>           <none>
+pod/trustiot-ingress-istio-d6b9bdcf9-qcxx2   1/1     Running   0          8s    10.42.0.206   trustiot-mac-m1   <none>           <none>
+pod/trustiot-mqtt-bridge-665cbb87bc-865rm    1/1     Running   0          8s    10.42.0.204   trustiot-mac-m1   <none>           <none>
+
+NAME                             TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)            AGE   SELECTOR
+service/trustiot-assets          ClusterIP   10.43.73.25     <none>        8080/TCP           8s    app.kubernetes.io/component=assets,app.kubernetes.io/instance=trustiot,app.kubernetes.io/name=trustiot
+service/trustiot-certs           ClusterIP   10.43.94.176    <none>        8080/TCP           8s    app.kubernetes.io/component=certs,app.kubernetes.io/instance=trustiot,app.kubernetes.io/name=trustiot
+service/trustiot-identity        ClusterIP   10.43.32.222    <none>        8080/TCP           8s    app.kubernetes.io/component=identity,app.kubernetes.io/instance=trustiot,app.kubernetes.io/name=trustiot
+service/trustiot-ingress-istio   ClusterIP   10.43.231.61    <none>        15021/TCP,80/TCP   8s    gateway.networking.k8s.io/gateway-name=trustiot-ingress
+service/trustiot-mqtt-bridge     ClusterIP   10.43.203.217   <none>        8080/TCP           8s    app.kubernetes.io/component=mqtt-bridge,app.kubernetes.io/instance=trustiot,app.kubernetes.io/name=trustiot
+
+NAME                                                 CLASS   ADDRESS                                                  PROGRAMMED   AGE
+gateway.gateway.networking.k8s.io/trustiot-ingress   istio   trustiot-ingress-istio.e2e-62-verify.svc.cluster.local   True         9s
+
+NAME                                                           HOSTNAMES                    AGE
+httproute.gateway.networking.k8s.io/trustiot-ingress-app       ["app.saas.trustiot.test"]   9s
+httproute.gateway.networking.k8s.io/trustiot-ingress-gateway   ["gw.saas.trustiot.test"]    9s
+
+NAME                                                                   ACTION   AGE
+authorizationpolicy.security.istio.io/trustiot-ingress-cookie-check    CUSTOM   9s
+authorizationpolicy.security.istio.io/trustiot-ingress-deny-internal   DENY     9s
+
+NAME                                               POD-SELECTOR                                              AGE
+networkpolicy.networking.k8s.io/trustiot-ingress   gateway.networking.k8s.io/gateway-name=trustiot-ingress   10s
+
+NAME                                                MIN AVAILABLE   MAX UNAVAILABLE   ALLOWED DISRUPTIONS   AGE
+poddisruptionbudget.policy/trustiot-ingress-istio   1               N/A               1                     9s
