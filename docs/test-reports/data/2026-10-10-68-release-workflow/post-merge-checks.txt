@@ -94,3 +94,51 @@ exit 0; the package holds Chart.yaml, values.yaml, values.schema.json, values-sa
 values-onprem.yaml, README.md, .helmignore and templates/ (_helpers.tpl, _ingress.tpl, _service.tpl,
 ingress.yaml, platform-config.yaml, services.yaml); tests/ (including tests/e2e/) is left out by
 .helmignore
+
+
+# Main moved on (9132855, the transactional outbox) and was merged again: 5f8d02e, committed
+# 2026-10-10T14:14:19Z. Its only conflict was Cargo.lock; the result is main's lock plus the
+# release-selftest package, so release-selftest's build dependency cc is now 1.7.0 (main's) instead
+# of 1.5.1. The same checks ran 14:05-14:14Z on the resolved merge before it was committed
+# (committing changed no file); gitleaks and the release build ran on 5f8d02e itself.
+
+$ cargo fmt --all --check; cargo clippy --workspace --all-targets --locked -- -D warnings;
+  cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
+exit 0, exit 0, exit 0
+
+$ cargo test --workspace --locked
+exit 0: 30 test result lines, 223 passed, 0 failed, 0 ignored (the outbox crate came with main)
+
+$ cargo test --package service-kit --no-default-features --locked
+exit 0: 65 passed, 0 failed
+
+$ cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+
+$ gitleaks git --no-banner --redact --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" .
+exit 0 on 5f8d02e: 39 commits scanned, no leaks found
+
+$ bun scripts/ci/check-workflows.ts
+workflow policy: 3 file(s) checked, no violations
+
+$ bun install --cwd scripts --frozen-lockfile; bun run --cwd scripts typecheck; bun run --cwd scripts test
+exit 0, exit 0; 176 tests: 175 pass, 1 skip (the same podman e2e test), 0 fail
+
+$ bun test deploy/chart
+133 pass, 0 fail
+
+$ bun scripts/release/plan.ts --tag v0.0.0-rc.99 --dry-run --output plan.json
+$ CARGO_BUILD_JOBS=2 bun scripts/release/build.ts --plan plan.json --out out
+exit 0, 14:14:57Z, on 5f8d02e. The release build with cc 1.7.0:
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:build] cross-compiling release-selftest for aarch64-unknown-linux-musl
+   Compiling cc v1.7.0
+   Compiling release-selftest v0.1.0 (<repo>/tools/release-selftest)
+    Finished `release` profile [optimized] target(s) in 8.70s
+[release:build] building ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.99 for linux/arm64
+[release:build] ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.99 → sha256:0088899fe68475c9ba38d851ceba4c358dffa3fffd52828f38a85d1c6e40d65b, SBOM SPDX-2.3 with 13 packages
+build.ts checked that the binary is a 64-bit aarch64 ELF and that the image has the single platform
+linux/arm64; the build script's check that the target C compiler is set passed (the C object was
+compiled by zig through cc 1.7.0). The binary was not run on arm64 hardware again: the lab run in
+lab-arm64-run.txt used the cc 1.5.1 build.
