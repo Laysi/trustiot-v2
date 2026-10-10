@@ -18,7 +18,7 @@ package = "identity"        # Cargo 套件名
 
 ## 自帶 Containerfile 的映像
 
-子目錄放 `Containerfile`，以該目錄為 build context，以 `podman build --platform linux/arm64` 建置。GitHub 代管 runner 是 x86，而且不使用模擬器，所以 arm64 那一層不能有 `RUN`：要編譯的東西放在 `FROM --platform=$BUILDPLATFORM` 的建置階段交叉編譯後 `COPY` 進來，或取用上游已有的 arm64 映像。基底映像以 tag 加 digest 釘選。
+子目錄放 `Containerfile`，以該目錄為 build context，以 `podman build --platform linux/arm64` 建置。release.yml 在 x86 的 GitHub 代管 runner 上建置，而且不使用模擬器，所以 arm64 那一層不能有 `RUN`：要編譯的東西放在 `FROM --platform=$BUILDPLATFORM` 的建置階段交叉編譯後 `COPY` 進來，或取用上游已有的 arm64 映像。基底映像以 tag 加 digest 釘選。
 
 ## 本機試建
 
