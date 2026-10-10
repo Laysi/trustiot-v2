@@ -1,0 +1,95 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/ingest-c523a620647a33e3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/clickhouse.rs (target/debug/deps/clickhouse-b8e28cd5e585aca4)
+
+running 1 test
+telemetry: MergeTree PARTITION BY toYYYYMM(received_at) ORDER BY (tenant_id, device_id, point, ts) TTL toDateTime(received_at) + toIntervalDay(400) SETTINGS fsync_after_insert = 1, fsync_part_directory = 1, non_replicated_deduplication_window = 1000, index_granularity = 8192
+batch_commits: ReplacingMergeTree PARTITION BY toYYYYMM(committed_at) ORDER BY (stream_id, seq) TTL toDateTime(committed_at) + toIntervalDay(400) SETTINGS fsync_after_insert = 1, fsync_part_directory = 1, index_granularity = 8192
+access entities:
+role	trustiot_tenant_reader	local_directory
+role	trustiot_ingest	local_directory
+row policy	tenant_isolation ON telemetry	local_directory
+row policy	deny_by_default ON batch_commits	local_directory
+row policy	service_all_rows ON batch_commits	local_directory
+row policy	service_all_rows ON telemetry	local_directory
+row policy	deny_by_default ON telemetry	local_directory
+settings profile	trustiot_tenant_reader	local_directory
+quota	trustiot_tenant_reader	local_directory
+attack | outcome
+direct: count every row | answer "3"
+direct: read every value | answer "a-row-0\na-row-1\na-row-2"
+direct: filter on tenant B | answer "0"
+direct: tenant B OR true | answer "3"
+direct: PREWHERE tenant B | answer "0"
+direct: group by tenant | answer "cac41e7a-9eeb-474b-9ba4-5f20c52a4c4b\t3"
+direct: virtual columns | answer "3"
+direct: throwIf error oracle | answer "3"
+JOIN: self join on the shared device | answer "0"
+JOIN: cross join | answer "9"
+JOIN: LEFT join to tenant B | answer "0"
+subquery: IN | answer "0"
+subquery: scalar | answer "3"
+subquery: FROM | answer "3"
+subquery: CTE | answer "3"
+UNION ALL with tenant B filter | answer "3"
+UNION DISTINCT of tenants | answer "cac41e7a-9eeb-474b-9ba4-5f20c52a4c4b"
+FINAL | refused ILLEGAL_FINAL
+merge(): the telemetry table | answer "3"
+merge(): every table in the database | answer "3"
+view() | answer "3"
+view() filtered on tenant B | answer "0"
+mergeTreeIndex() | refused ACCESS_DENIED
+remote() to this server | refused ACCESS_DENIED
+cluster() | refused ACCESS_DENIED
+loop() | refused ACCESS_DENIED
+file() | refused DATABASE_ACCESS_DENIED
+url() (SSRF) | refused ACCESS_DENIED
+system.query_log | refused ACCESS_DENIED
+system.processes | refused ACCESS_DENIED
+system.parts | refused ACCESS_DENIED
+system.part_log | refused ACCESS_DENIED
+system.text_log | refused ACCESS_DENIED
+system.users | refused ACCESS_DENIED
+system.row_policies | refused ACCESS_DENIED
+system.settings_profile_elements | refused ACCESS_DENIED
+system.mutations | refused ACCESS_DENIED
+query SETTINGS SQL_tenant_id = B | refused READONLY
+URL parameter SQL_tenant_id = B | refused READONLY
+query SETTINGS additional_table_filters | refused READONLY
+raise max_threads | refused READONLY
+EXECUTE AS the ingest account | refused ACCESS_DENIED
+read batch_commits | refused ACCESS_DENIED
+tenant INSERT of a tenant B row | refused ACCESS_DENIED
+tenant lightweight DELETE | refused ACCESS_DENIED
+tenant ALTER TABLE DELETE | refused ACCESS_DENIED
+CREATE VIEW | refused ACCESS_DENIED
+CREATE ROW POLICY | refused ACCESS_DENIED
+GRANT to self | refused ACCESS_DENIED
+quota: the first account was stopped at query 121
+server: 26.8.22.13
+test clickhouse_schema_and_tenant_isolation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.27s
+
+     Running tests/migrations.rs (target/debug/deps/migrations-d2d3e1c7f21c43fd)
+
+running 5 tests
+test splitter_rejects_ambiguous_files ... ok
+test every_file_has_statements ... ok
+test files_are_numbered_in_apply_order ... ok
+test tables_use_only_mergetree_engines ... ok
+test statements_are_idempotent_and_never_destroy_data ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests ingest
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

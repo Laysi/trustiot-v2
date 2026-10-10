@@ -140,9 +140,81 @@
     "clickhouse": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mode", "external"],
+      "required": ["mode", "bundled", "external"],
       "properties": {
         "mode": { "enum": ["bundled", "external"] },
+        "bundled": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "image",
+            "adminUser",
+            "adminSecret",
+            "adminSecretRevision",
+            "storage",
+            "resources",
+            "podSecurityContext",
+            "nodeSelector",
+            "tolerations"
+          ],
+          "properties": {
+            "image": {
+              "description": "Pinned by digest (decision 14: fixed version).",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["repository", "tag", "digest", "pullPolicy"],
+              "properties": {
+                "repository": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]([a-z0-9.:-]*[a-z0-9])?(/[a-z0-9]([a-z0-9._-]*[a-z0-9])?)*$"
+                },
+                "tag": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$" },
+                "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+                "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+              }
+            },
+            "adminUser": {
+              "description": "Bootstrap account with access management, used only by the migration Job.",
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,62}$",
+              "not": { "const": "default" }
+            },
+            "adminSecret": { "$ref": "#/definitions/secretKeyRef" },
+            "adminSecretRevision": {
+              "description": "Change after rotating the admin Secret; restarts ClickHouse so it reads the new password.",
+              "oneOf": [
+                { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,63}$" },
+                { "type": "integer", "minimum": 0 }
+              ]
+            },
+            "storage": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["size", "storageClassName"],
+              "properties": {
+                "size": { "anyOf": [{ "const": "" }, { "$ref": "#/definitions/quantity" }] },
+                "storageClassName": { "$ref": "#/definitions/optionalK8sName" }
+              }
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["requests", "limits"],
+              "properties": {
+                "requests": { "$ref": "#/definitions/resourceList" },
+                "limits": { "allOf": [{ "$ref": "#/definitions/resourceList" }, { "required": ["memory"] }] }
+              }
+            },
+            "podSecurityContext": {
+              "allOf": [
+                { "$ref": "#/definitions/podSecurityContext" },
+                { "required": ["runAsNonRoot", "seccompProfile"] }
+              ]
+            },
+            "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
+            "tolerations": { "type": "array", "items": { "type": "object" } }
+          }
+        },
         "external": {
           "type": "object",
           "additionalProperties": false,
@@ -153,8 +225,25 @@
           }
         }
       },
-      "if": { "properties": { "mode": { "const": "external" } } },
-      "then": { "properties": { "external": { "properties": { "url": { "minLength": 1 } } } } }
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "external" } } },
+          "then": { "properties": { "external": { "properties": { "url": { "minLength": 1 } } } } }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "bundled" } } },
+          "then": {
+            "properties": {
+              "bundled": {
+                "properties": {
+                  "adminSecret": { "properties": { "name": { "minLength": 1 } } },
+                  "storage": { "properties": { "size": { "minLength": 1 } } }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "qdrant": {
       "type": "object",

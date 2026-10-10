@@ -23,7 +23,7 @@ trustiot-v2/
 │   ├── identity/              # 身分與租戶（含 ext_authz 端點）
 │   ├── assets/                # 資產
 │   ├── certs/                 # 憑證與佈建（含 HTTPS 換發端點）
-│   ├── ingest/                # 資料接收；ClickHouse DDL
+│   ├── ingest/                # 資料接收；ClickHouse DDL（migrations/clickhouse/）
 │   ├── telemetry-query/       # 時序查詢
 │   ├── gateway-ops/           # 閘道器營運
 │   ├── mqtt-bridge/           # WebSocket ↔ TCP 轉接
@@ -58,7 +58,7 @@ services/assets/
 └── tests/                     # 含跨租戶負向測試
 ```
 
-- 每個服務有自己的 `migrations/`，只動自己的 schema；`tools/migrate` 是部署時的 migration Job，依序跑各服務的 migration 與 ClickHouse DDL，並冪等重建每租戶的資料庫角色（M8）。
+- 每個服務有自己的 `migrations/`，只動自己的 schema；`tools/migrate` 是部署時的 migration Job，依序跑各服務的 migration 與 ClickHouse DDL（`services/ingest/migrations/clickhouse/`，檔案格式見 [services/ingest/README.md](../../services/ingest/README.md)），並冪等重建每租戶的資料庫角色（M8）。執行期程式碼不改 schema：`tools/repo-check` 擋下 `services/*/src` 裡建表、改表、刪表的 SQL。
 - `crates/protocol` 是閘道器與雲端共用的訊息格式（M4），要能編到 aarch64，不引入只能在雲端編譯的相依套件。
 - `services/ai-gateway` 不依賴 `crates/contract`，保留單獨抽出開源的選項（決策 28）。
 - API 規格從 Rust 程式碼產生（例如 utoipa），各服務的規格合併成 `api/openapi.json` 進版控，CI 檢查是否與程式一致；前端的 API client 由它產生，規格不會與程式脫節。

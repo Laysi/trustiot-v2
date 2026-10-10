@@ -27,6 +27,9 @@ data:
   {{- end }}
   {{- if eq $v.clickhouse.mode "external" }}
   TRUSTIOT_CLICKHOUSE_URL: {{ $v.clickhouse.external.url | quote }}
+  {{- else }}
+  {{- /* Plain HTTP inside the cluster; Istio ambient's ztunnel adds mTLS between pods. */}}
+  TRUSTIOT_CLICKHOUSE_URL: {{ printf "http://%s.%s.svc:8123" (include "trustiot.componentName" (dict "root" . "name" "clickhouse")) .Release.Namespace | quote }}
   {{- end }}
   {{- /* CA files mounted by the service template ("trustiot.caMounts"). */}}
   {{- range include "trustiot.caMounts" . | fromYamlArray }}

@@ -206,6 +206,14 @@ Returns a YAML list; use with fromYamlArray.
 {{- $refs = append $refs (printf "%s/%s" .name .key) -}}
 {{- end -}}
 {{- end -}}
+{{- /* The bundled ClickHouse's bootstrap admin password: only the migration Job may use it. */ -}}
+{{- if eq .Values.clickhouse.mode "bundled" -}}
+{{- with .Values.clickhouse.bundled.adminSecret -}}
+{{- if .name -}}
+{{- $refs = append $refs (printf "%s/%s" .name .key) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- toYaml (uniq $refs) -}}
 {{- end -}}
 

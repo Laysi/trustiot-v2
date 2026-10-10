@@ -168,6 +168,55 @@ clickhouse:
   # bundled: ClickHouse deployed by this chart (Laysi/trustiot-v2#59).
   # external: ClickHouse Cloud or another server (fallback only, decision 14).
   mode: bundled
+  # Single-node ClickHouse in this cluster (decision 14). Users, roles, row policies, settings
+  # profiles and quotas are created with SQL by the migration Job (services/ingest/migrations),
+  # never in these values or the server configuration.
+  bundled:
+    image:
+      # clickhouse/clickhouse-server 26.8 LTS, pinned to the multi-arch index digest (arm64
+      # included). scripts/lib/stack.ts and services/ingest/tests use the same digest; the chart
+      # tests fail when the three differ.
+      repository: docker.io/clickhouse/clickhouse-server
+      tag: "26.8"
+      digest: sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c
+      pullPolicy: IfNotPresent
+    # Bootstrap account with access management, created by the image from the variables below
+    # and used only by the migration Job. The image's passwordless "default" user is removed.
+    adminUser: trustiot_admin
+    # Existing Secret with the bootstrap account's password; required in bundled mode.
+    adminSecret:
+      name: ""
+      key: password
+    # The server reads the password only at start. After changing the Secret, change this value
+    # too, so the upgrade restarts ClickHouse with the new password before the migration Job
+    # uses it.
+    adminSecretRevision: "1"
+    storage:
+      # Required in bundled mode; each deployment sizes it for its own load and retention:
+      # rows per day x retention days x about 3.1 bytes per row (2026-10-09 measurement)
+      # x 1.5 for merges and system tables. See deploy/chart/README.md.
+      size: ""
+      # Empty: the cluster's default StorageClass.
+      storageClassName: ""
+    # ClickHouse sizes its memory limit (90 %) and caches from the container's memory limit.
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+    # The image runs as the clickhouse user (UID 101) and declares no USER, so the UID is set
+    # here; on OpenShift remove runAsUser, runAsGroup and fsGroup to let the SCC assign them.
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 101
+      runAsGroup: 101
+      fsGroup: 101
+      seccompProfile:
+        type: RuntimeDefault
+    nodeSelector: {}
+    tolerations: []
   external:
     # HTTPS endpoint, for example https://abc.clickhouse.cloud:8443
     url: ""
