@@ -1,0 +1,141 @@
+### [admin] exploratory mitigation: view over the base table, definer = ingest account
+CREATE VIEW IF NOT EXISTS trustiot.tv59 DEFINER = ingest SQL SECURITY DEFINER AS SELECT * FROM trustiot.telemetry
+--> HTTP 200 (38 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"33561865","memory_usage":"2209558"}
+
+
+### [admin] row policy on the view for a separate role
+CREATE ROLE IF NOT EXISTS viewreader59
+--> HTTP 200 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1273738","memory_usage":"2110254"}
+
+
+### [admin] policy
+CREATE ROW POLICY IF NOT EXISTS viewtenant59 ON trustiot.tv59 AS PERMISSIVE FOR SELECT USING tenant_id = toUUID(getSetting('SQL_tenant_id')) TO viewreader59
+--> HTTP 200 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2220171","memory_usage":"2111750"}
+
+
+### [admin] grant on view only
+GRANT SELECT ON trustiot.tv59 TO viewreader59
+--> HTTP 200 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1614922","memory_usage":"2111198"}
+
+
+### [admin] user in tenant A with the view role and the same profile
+CREATE USER IF NOT EXISTS vt59 IDENTIFIED WITH sha256_password BY '<redacted>' SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = 'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38' CONST
+--> HTTP 200 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1390497","memory_usage":"2114550"}
+
+
+### [admin] grant view role
+GRANT viewreader59 TO vt59
+--> HTTP 200 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1481341","memory_usage":"2110894"}
+
+
+### [admin] profile role for readonly
+GRANT trustiot_tenant_reader TO vt59
+--> HTTP 200 (7 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2594355","memory_usage":"2110974"}
+
+
+### [admin] revoke base table select from this user only by not granting; check effective grants
+SHOW GRANTS FOR vt59
+--> HTTP 200 (7 ms) summary={"read_rows":"1","read_bytes":"58","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"4352","elapsed_ns":"3648439","memory_usage":"9969146"}
+GRANT trustiot_tenant_reader, viewreader59 TO vt59
+
+### [admin] check privileges of the user: it has trustiot_tenant_reader (base SELECT) too, so create a user with only the view role + a profile role
+CREATE ROLE IF NOT EXISTS profileonly59
+--> HTTP 200 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1968135","memory_usage":"2110222"}
+
+
+### [admin] profile only role
+CREATE SETTINGS PROFILE IF NOT EXISTS profileonly59 SETTINGS readonly = 1 CONST TO profileonly59
+--> HTTP 200 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3134707","memory_usage":"2110822"}
+
+
+### [admin] user2
+CREATE USER IF NOT EXISTS vt59b IDENTIFIED WITH sha256_password BY '<redacted>' SETTINGS PROFILE 'profileonly59', SQL_tenant_id = 'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38' CONST
+--> HTTP 200 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1400412","memory_usage":"2114422"}
+
+
+### [admin] grant roles
+GRANT viewreader59, profileonly59 TO vt59b
+--> HTTP 200 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1553848","memory_usage":"2111006"}
+
+
+### [vt59b] read through the view as tenant A
+SELECT count() FROM trustiot.tv59
+--> HTTP 200 (35 ms) summary={"read_rows":"14","read_bytes":"224","written_rows":"0","written_bytes":"0","total_rows_to_read":"14","result_rows":"1","result_bytes":"136","elapsed_ns":"25992562","memory_usage":"10267218"}
+6
+
+### [vt59b] read values
+SELECT value_string FROM trustiot.tv59 ORDER BY 1
+--> HTTP 200 (18 ms) summary={"read_rows":"14","read_bytes":"416","written_rows":"0","written_bytes":"0","total_rows_to_read":"14","result_rows":"6","result_bytes":"432","elapsed_ns":"14588101","memory_usage":"10164346"}
+a-row-0\na-row-0\na-row-1\na-row-1\na-row-2\na-row-2
+
+### [vt59b] attempt base table
+SELECT count() FROM trustiot.telemetry
+--> HTTP 403 (8 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"5199721","memory_usage":"0"}
+Code: 497. DB::Exception: vt59b: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [vt59b] mergeTreeAnalyzeIndexes on base table
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry', tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547')
+--> HTTP 403 (8 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"6083317","memory_usage":"0"}
+Code: 497. DB::Exception: vt59b: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [vt59b] mergeTreeAnalyzeIndexes on the view
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'tv59', tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547')
+--> HTTP 400 (8 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"5403067","memory_usage":"0"}
+Code: 36. DB::Exception: Storage MergeTreeAnalyzeIndexes expected MergeTree table, got: View. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+
+### [vt59b] nested settings on the view
+SELECT count() FROM trustiot.tv59 SETTINGS SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547'
+--> HTTP 500 (8 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"5148559","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'SQL_tenant_id' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [vt59b] view settings in subquery
+SELECT count() FROM (SELECT * FROM trustiot.tv59 SETTINGS SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547')
+--> HTTP 200 (19 ms) summary={"read_rows":"14","read_bytes":"224","written_rows":"0","written_bytes":"0","total_rows_to_read":"14","result_rows":"1","result_bytes":"136","elapsed_ns":"16003341","memory_usage":"10141914"}
+6
+
+### [vt59b] EXPLAIN ESTIMATE on the view
+EXPLAIN ESTIMATE SELECT * FROM trustiot.tv59
+--> HTTP 200 (26 ms) summary={"read_rows":"1","read_bytes":"57","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"20992","elapsed_ns":"23806464","memory_usage":"9975738"}
+trustiot	telemetry	2	14	2
+
+### [vt59b] system.tables total_rows visible?
+SELECT name, total_rows FROM system.tables WHERE database = 'trustiot'
+--> HTTP 200 (11 ms) summary={"read_rows":"1","read_bytes":"37","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"4616","elapsed_ns":"8153993","memory_usage":"10090247"}
+tv59	\N
+
+### [vt59b] read_rows header on view query
+SELECT count() FROM trustiot.tv59 WHERE tenant_id = 'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38'
+--> HTTP 200 (18 ms) summary={"read_rows":"14","read_bytes":"224","written_rows":"0","written_bytes":"0","total_rows_to_read":"14","result_rows":"1","result_bytes":"136","elapsed_ns":"13566772","memory_usage":"10132385"}
+6
+
+### [vt59b] _part_offset through the view
+SELECT _part_offset FROM trustiot.tv59
+--> HTTP 404 (7 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"4496917","memory_usage":"0"}
+Code: 47. DB::Exception: Unknown expression identifier `_part_offset` in scope SELECT _part_offset FROM trustiot.tv59. (UNKNOWN_IDENTIFIER) (version 26.8.22.13 (official build))
+
+### [admin] cleanup
+DROP VIEW IF EXISTS trustiot.tv59
+--> HTTP 200 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2525488","memory_usage":"2113814"}
+
+
+### [admin] cleanup users
+DROP USER IF EXISTS vt59, vt59b
+--> HTTP 200 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1765081","memory_usage":"2109102"}
+
+
+### [admin] cleanup roles
+DROP ROLE IF EXISTS viewreader59, profileonly59
+--> HTTP 200 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3207605","memory_usage":"2109230"}
+
+
+### [admin] cleanup profile
+DROP SETTINGS PROFILE IF EXISTS profileonly59
+--> HTTP 200 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"975206","memory_usage":"2109118"}
+
+
+### [admin] cleanup policy
+DROP ROW POLICY IF EXISTS viewtenant59 ON trustiot.tv59
+--> HTTP 200 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1035918","memory_usage":"2109422"}
+
+
+# summary: 28 probes, 0 responses containing B's tenant id or secret

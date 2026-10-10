@@ -1,0 +1,4 @@
+1 tenant account(s) x 4 concurrent ~500MB queries (2976 ms)
+heavy queries: {"ok":4}
+ingest inserts during the run: {"ok":9}
+server alive afterwards: true

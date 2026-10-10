@@ -1,0 +1,39 @@
+// Usage: bun probe.ts <probe-file> <out-file>
+// Probe file blocks:
+//   ## <account> | <label> [| k=v&k=v url params]
+//   <sql lines...>
+// Placeholders: {A} {B} {SECRET} {AUSER}...
+import { readFileSync, writeFileSync } from "node:fs";
+import { ADMIN, q, type Acct } from "./lib.ts";
+
+const w = JSON.parse(readFileSync(new URL("./world.json", import.meta.url).pathname, "utf8"));
+const adhoc: Record<string, string> = { direct_sel: "<redacted>", all_sel: "<redacted>", bad_tenant: "<redacted>", zero_tenant: "<redacted>", nonconst_tenant: "<redacted>", noprof_tenant: "<redacted>", ing_x: "<redacted>", vt59b: "<redacted>", vt59: "<redacted>" };
+const accts: Record<string, Acct> = { ...w.accts, admin: ADMIN, ...Object.fromEntries(Object.entries(adhoc).map(([user, password]) => [user, { user, password }])) };
+const text = readFileSync(process.argv[2], "utf8")
+  .replaceAll("{A}", w.tenantA)
+  .replaceAll("{B}", w.tenantB)
+  .replaceAll("{SECRET}", w.canaryB);
+const blocks = text.split(/^## /m).slice(1);
+let out = "";
+let leaks = 0;
+for (const b of blocks) {
+  const nl = b.indexOf("\n");
+  const head = b.slice(0, nl).split("|").map((s) => s.trim());
+  const sql = b.slice(nl + 1).trim();
+  const params: Record<string, string> = {};
+  if (head[2]) for (const [k, v] of new URLSearchParams(head[2])) params[k] = v;
+  const a = accts[head[0]];
+  if (!a) throw new Error("no account " + head[0]);
+  let r = await q(a, sql, params);
+  for (let i = 0; i < 4 && r.body.includes("QUOTA_EXCEEDED") && !head[1].includes("quota"); i++) {
+    await new Promise((res) => setTimeout(res, 20000));
+    r = await q(a, sql, params);
+  }
+  const leak = r.body.includes(w.tenantB) || r.body.includes(w.canaryB);
+  if (leak) leaks++;
+  const bodyShort = r.body.trim().replace(/\n/g, "\\n").slice(0, 700);
+  out += `### [${head[0]}] ${head[1]}${head[2] ? " {" + head[2] + "}" : ""}\n${sql}\n--> HTTP ${r.status} (${r.ms} ms) summary=${r.summary}${leak ? "  **LEAK-OF-B-MARKER**" : ""}\n${bodyShort}\n\n`;
+}
+out += `# summary: ${blocks.length} probes, ${leaks} responses containing B's tenant id or secret\n`;
+writeFileSync(process.argv[3], out);
+console.log(out);

@@ -1,0 +1,110 @@
+## tenant_a | error oracle: toUInt64 on value_string
+SELECT count() FROM trustiot.telemetry WHERE toUInt64(value_string) = 1
+## tenant_a | error oracle: toUInt64 in PREWHERE
+SELECT count() FROM trustiot.telemetry PREWHERE toUInt64(value_string) = 1
+## tenant_a | error oracle: throwIf with value
+SELECT count() FROM trustiot.telemetry WHERE throwIf(value_string = '{SECRET}', 'FOUND ' || value_string) = 0
+## tenant_a | error oracle: throwIf on every row echoing value in PREWHERE
+SELECT count() FROM trustiot.telemetry PREWHERE throwIf(value_string LIKE 'B-%', value_string) = 0
+## tenant_a | error oracle: CAST error echo
+SELECT CAST(value_string AS UInt8) FROM trustiot.telemetry
+## tenant_a | error oracle: parseDateTimeBestEffort
+SELECT parseDateTime(value_string, '%Y') FROM trustiot.telemetry
+## tenant_a | error oracle: toUUID(value_string)
+SELECT toUUID(value_string) FROM trustiot.telemetry
+## tenant_a | error oracle: JSONExtract/arrayElement overflow
+SELECT [1][toUInt32(length(value_string)) + 100] FROM trustiot.telemetry WHERE value_string LIKE 'B-%'
+## tenant_a | error oracle: 1/0 integer on B rows only
+SELECT intDiv(1, length(value_string) - 15) FROM trustiot.telemetry WHERE value_string = '{SECRET}'
+## tenant_a | error oracle: divide only B rows (no filter)
+SELECT sum(intDiv(1, if(value_string = '{SECRET}', 0, 1))) FROM trustiot.telemetry
+## tenant_a | error oracle: throwIf B tenant in SELECT list
+SELECT throwIf(tenant_id = '{B}') FROM trustiot.telemetry
+## tenant_a | error oracle: JOIN ON throwIf
+SELECT count() FROM trustiot.telemetry AS x INNER JOIN trustiot.telemetry AS y ON x.device_id = y.device_id AND throwIf(y.value_string = '{SECRET}') = 0
+## tenant_a | error oracle: multiIf with exception function on non-A
+SELECT sum(toUInt8(if(tenant_id = '{B}', '300', '1'))) FROM trustiot.telemetry
+## tenant_a | timing oracle: sleep only for B rows
+SELECT count() FROM trustiot.telemetry WHERE tenant_id = '{B}' AND sleepEachRow(0.5) = 0
+## tenant_a | timing oracle: sleep for B rows via if()
+SELECT sum(sleepEachRow(if(tenant_id = '{B}', 0.5, 0))) FROM trustiot.telemetry
+## tenant_a | timing oracle baseline: sleep for A rows
+SELECT sum(sleepEachRow(if(tenant_id = '{A}', 0.1, 0))) FROM trustiot.telemetry
+## tenant_a | WITH TOTALS
+SELECT tenant_id, count() FROM trustiot.telemetry GROUP BY tenant_id WITH TOTALS
+## tenant_a | ROLLUP
+SELECT tenant_id, count() FROM trustiot.telemetry GROUP BY ROLLUP(tenant_id)
+## tenant_a | CUBE / GROUPING SETS
+SELECT tenant_id, point, count() FROM trustiot.telemetry GROUP BY GROUPING SETS ((tenant_id), (point), ())
+## tenant_a | LIMIT BY
+SELECT * FROM trustiot.telemetry ORDER BY tenant_id LIMIT 1 BY tenant_id
+## tenant_a | window function
+SELECT count() OVER () FROM trustiot.telemetry LIMIT 1
+## tenant_a | ARRAY JOIN
+SELECT count() FROM trustiot.telemetry ARRAY JOIN [1,2] AS x
+## tenant_a | ASOF JOIN
+SELECT count() FROM trustiot.telemetry AS x ASOF JOIN trustiot.telemetry AS y ON x.device_id = y.device_id AND x.ts >= y.ts
+## tenant_a | INTERSECT
+SELECT count() FROM (SELECT tenant_id FROM trustiot.telemetry INTERSECT SELECT tenant_id FROM trustiot.telemetry)
+## tenant_a | EXCEPT
+SELECT tenant_id FROM trustiot.telemetry EXCEPT SELECT toUUID('{A}')
+## tenant_a | COLUMNS matcher
+SELECT COLUMNS('.*') APPLY count FROM trustiot.telemetry
+## tenant_a | SAMPLE (no sampling key)
+SELECT count() FROM trustiot.telemetry SAMPLE 1
+## tenant_a | virtual columns
+SELECT _part, _part_offset, _partition_id, _partition_value, _part_uuid, _row_exists, _block_number, _part_data_version, _table, _database FROM trustiot.telemetry
+## tenant_a | virtual column _part_offset without filter and total
+SELECT max(_part_offset), count() FROM trustiot.telemetry
+## tenant_a | _part_offset equality fishing
+SELECT count() FROM trustiot.telemetry WHERE _part_offset = 5
+## tenant_a | _part_offset reading B rows by offset in subquery of all rows
+SELECT * FROM trustiot.telemetry WHERE _part_offset IN (4,5,6)
+## tenant_a | merge() with virtual _table
+SELECT _table, count() FROM merge('trustiot', '.*') GROUP BY _table
+## tenant_a | merge() regexp over system
+SELECT count() FROM merge('system', '^query_log$')
+## tenant_a | merge() over batch_commits
+SELECT count() FROM merge('trustiot', '^batch_commits$')
+## tenant_a | Distributed / engine-based tables n/a: Merge engine via CREATE blocked
+CREATE TABLE trustiot.m ENGINE = Merge('trustiot', '.*')
+## tenant_a | view() filtered via other column
+SELECT count() FROM view(SELECT value_string FROM trustiot.telemetry WHERE value_string LIKE 'B-%')
+## tenant_a | JOIN USING
+SELECT count() FROM trustiot.telemetry AS x JOIN trustiot.telemetry AS y USING (device_id) WHERE y.value_string LIKE 'B-%'
+## tenant_a | JOIN with join_use_nulls etc per query
+SELECT count() FROM trustiot.telemetry AS x RIGHT JOIN trustiot.telemetry AS y ON x.point = y.point AND y.value_string LIKE 'B-%'
+## tenant_a | FULL JOIN
+SELECT countIf(y.value_string LIKE 'B-%') FROM trustiot.telemetry AS x FULL JOIN trustiot.telemetry AS y ON x.ts = y.ts
+## tenant_a | subquery with LIMIT/ORDER on all
+SELECT * FROM (SELECT * FROM trustiot.telemetry ORDER BY value_string DESC LIMIT 1)
+## tenant_a | argMax / any over everything
+SELECT argMax(value_string, ts), anyLast(value_string), max(value_string), groupArray(value_string) FROM trustiot.telemetry
+## tenant_a | DISTINCT
+SELECT DISTINCT value_string FROM trustiot.telemetry
+## tenant_a | JSON/format functions text search
+SELECT countSubstrings(toString(tuple(*)), 'B-SECRET') FROM trustiot.telemetry
+## tenant_a | query via dictGet
+SELECT dictGet('trustiot.x', 'v', 1)
+## tenant_a | query via joinGet
+SELECT joinGet('trustiot.telemetry', 'value_string', toUUID('{B}'))
+## tenant_a | getMacro / hostName / currentDatabase
+SELECT hostName(), currentDatabase(), version(), uptime(), getServerPort('http_port'), timezone()
+## tenant_a | filesystem info functions
+SELECT filesystemAvailable(), filesystemCapacity()
+## tenant_a | file() read functions
+SELECT * FROM file('/var/lib/clickhouse/user_files/x', 'CSV')
+## tenant_a | readFile functions
+SELECT file('/etc/passwd')
+## tenant_a | executable udf
+SELECT executable('x', 'y')
+## tenant_a | dictGet system
+SELECT dictGet('system.x', 'v', 1)
+## tenant_a | introspection functions
+SELECT demangle(addressToSymbol(1))
+## tenant_a | getSetting on server-secret-ish
+SELECT getSetting('http_connection_timeout'), getSetting('SQL_tenant_id')
+## tenant_a | SELECT from CTE re-ordering names
+SELECT count() FROM trustiot.telemetry t WHERE t.tenant_id IN (SELECT DISTINCT tenant_id FROM trustiot.telemetry)
+## tenant_a | transform tenant ids exposing
+SELECT groupUniqArray(tenant_id) FROM trustiot.telemetry

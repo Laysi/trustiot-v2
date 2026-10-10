@@ -1,0 +1,176 @@
+### [tenant_b] generate B activity first (query containing B secret text)
+SELECT value_string FROM trustiot.telemetry WHERE value_string = 'B-SECRET-VERIFY59' LIMIT 1
+--> HTTP 200 (12 ms) summary={"read_rows":"7","read_bytes":"208","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"512","elapsed_ns":"8483286","memory_usage":"10121530"}  **LEAK-OF-B-MARKER**
+B-SECRET-VERIFY59
+
+### [tenant_a2] user_query_log: whose queries are visible
+SELECT user, count() FROM system.user_query_log GROUP BY user
+--> HTTP 200 (19 ms) summary={"read_rows":"4253","read_bytes":"10070","written_rows":"0","written_bytes":"0","total_rows_to_read":"4253","result_rows":"1","result_bytes":"544","elapsed_ns":"17416230","memory_usage":"10174730"}
+tenant_a2	341
+
+### [tenant_a2] user_query_log: any mention of B's secret or user name
+SELECT count() FROM system.user_query_log WHERE query LIKE '%B-SECRET%' OR user = 'tenant_b' OR query LIKE '%tenant_b%'
+--> HTTP 200 (21 ms) summary={"read_rows":"3887","read_bytes":"251591","written_rows":"0","written_bytes":"0","total_rows_to_read":"3887","result_rows":"1","result_bytes":"136","elapsed_ns":"17575710","memory_usage":"10173937"}
+0
+
+### [tenant_a2] quota_usage keys
+SELECT DISTINCT quota_key FROM system.quota_usage
+--> HTTP 200 (10 ms) summary={"read_rows":"2","read_bytes":"556","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"272","elapsed_ns":"5334345","memory_usage":"10309162"}
+tenant_a2
+
+### [tenant_a2] s3 with literal args
+SELECT count() FROM s3('http://127.0.0.1:9000/bucket/key.csv', 'CSV', 'a UInt8')
+--> HTTP 403 (8 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"4798845","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant READ ON S3. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] s3Cluster
+SELECT count() FROM s3Cluster('default', 'http://127.0.0.1:9000/bucket/key.csv', 'CSV', 'a UInt8')
+--> HTTP 403 (9 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"7260233","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant READ ON S3. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] urlCluster
+SELECT count() FROM urlCluster('default', 'http://127.0.0.1:8123/?query=SELECT%201', 'LineAsString')
+--> HTTP 403 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"4099208","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant READ ON URL. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] url with literal
+SELECT count() FROM url('http://127.0.0.1:8123/?query=SELECT%201', 'LineAsString')
+--> HTTP 403 (7 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3341002","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant READ ON URL. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] fileCluster
+SELECT count() FROM fileCluster('default', '/etc/passwd', 'LineAsString')
+--> HTTP 500 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3984895","memory_usage":"0"}
+Code: 291. DB::Exception: File `/etc/passwd` is not inside `/var/lib/clickhouse/user_files`. (DATABASE_ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] file user_files
+SELECT count() FROM file('x.csv', 'CSV', 'a UInt8')
+--> HTTP 403 (7 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3514682","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant READ ON FILE. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] hdfs
+SELECT count() FROM hdfs('hdfs://127.0.0.1:9/x', 'CSV', 'a UInt8')
+--> HTTP 403 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3427310","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant READ ON HDFS. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] remote with credentials guess default
+SELECT count() FROM remote('127.0.0.1:9000', system.one, 'default', '')
+--> HTTP 403 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3504167","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] remote 127.0.0.2 policy-free route
+SELECT count() FROM remote('127.0.0.2', trustiot.telemetry)
+--> HTTP 403 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3180303","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] remote localhost
+SELECT count() FROM remote('localhost', trustiot.telemetry)
+--> HTTP 403 (10 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"6408641","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] remoteSecure
+SELECT count() FROM remoteSecure('127.0.0.1:9440', trustiot.telemetry)
+--> HTTP 403 (9 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"6078294","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] cluster
+SELECT count() FROM cluster('default', trustiot.telemetry)
+--> HTTP 403 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3205394","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] clusterAllReplicas
+SELECT count() FROM clusterAllReplicas('default', trustiot.telemetry)
+--> HTTP 403 (7 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"4030816","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] mysql
+SELECT * FROM mysql('127.0.0.1:3306', 'd', 't', 'u', 'p')
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2606014","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant READ ON MYSQL. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] postgresql
+SELECT * FROM postgresql('127.0.0.1:5432', 'd', 't', 'u', 'p')
+--> HTTP 403 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3027231","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant READ ON POSTGRES. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] sqlite
+SELECT * FROM sqlite('/var/lib/clickhouse/user_files/x.db', 't')
+--> HTTP 403 (11 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"9626953","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant READ ON SQLITE. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] executable
+SELECT * FROM executable('cat', 'LineAsString', 'line String')
+--> HTTP 403 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2494041","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TEMPORARY TABLE ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] dictionary
+SELECT * FROM dictionary('trustiot.d')
+--> HTTP 403 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3787668","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TEMPORARY TABLE ON *.*. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] input
+SELECT * FROM input('a UInt8')
+--> HTTP 500 (5 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3647065","memory_usage":"0"}
+Code: 477. DB::Exception: Input stream is not initialized, input() must be used only in INSERT SELECT query. (INVALID_USAGE_OF_INPUT) (version 26.8.22.13 (official build))
+
+### [tenant_a2] generateRandom
+SELECT count() FROM (SELECT * FROM generateRandom('a UInt8', 1, 1, 1) LIMIT 1000)
+--> HTTP 200 (6 ms) summary={"read_rows":"1000","read_bytes":"1000","written_rows":"0","written_bytes":"0","total_rows_to_read":"1000","result_rows":"1","result_bytes":"136","elapsed_ns":"4605552","memory_usage":"10085522"}
+1000
+
+### [tenant_a2] numbers cross join telemetry (cost, not leak)
+SELECT count() FROM numbers(1000) AS n CROSS JOIN trustiot.telemetry
+--> HTTP 200 (14 ms) summary={"read_rows":"1014","read_bytes":"8238","written_rows":"0","written_bytes":"0","total_rows_to_read":"1014","result_rows":"1","result_bytes":"136","elapsed_ns":"12358432","memory_usage":"10122700"}
+6000
+
+### [tenant_a2] numbers JOIN telemetry: any tenant mix
+SELECT t.tenant_id, count() FROM numbers(3) AS n INNER JOIN trustiot.telemetry AS t ON n.number = toUInt64(length(t.value_string)) % 3 GROUP BY t.tenant_id
+--> HTTP 200 (13 ms) summary={"read_rows":"17","read_bytes":"360","written_rows":"0","written_bytes":"0","total_rows_to_read":"17","result_rows":"1","result_bytes":"304","elapsed_ns":"10993128","memory_usage":"10197490"}
+b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38	6
+
+### [tenant_a2] KILL via system
+KILL QUERY WHERE user = 'tenant_b' ASYNC
+--> HTTP 403 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3961883","memory_usage":"0"}
+Code: 497. DB::Exception: tenant_a2: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.processes. (ACCESS_DENIED) (version 26.8.22.13 (official build))
+
+### [tenant_a2] CHECK GRANT
+CHECK GRANT SELECT ON trustiot.batch_commits
+--> HTTP 200 (3 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"128","elapsed_ns":"2204636","memory_usage":"9970617"}
+0
+
+### [tenant_a2] CHECK GRANT sel on telemetry
+CHECK GRANT SELECT ON trustiot.telemetry
+--> HTTP 200 (4 ms) summary={"read_rows":"1","read_bytes":"1","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"128","elapsed_ns":"2798300","memory_usage":"9970777"}
+1
+
+### [tenant_a2] WATCH / LIVE VIEW
+WATCH trustiot.lv
+--> HTTP 404 (6 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"3006993","memory_usage":"0"}
+Code: 60. DB::Exception: Table trustiot.lv does not exist. (UNKNOWN_TABLE) (version 26.8.22.13 (official build))
+
+### [tenant_a2] EXPLAIN SYNTAX shows row policy?
+EXPLAIN SYNTAX SELECT * FROM trustiot.telemetry
+--> HTTP 200 (5 ms) summary={"read_rows":"1","read_bytes":"40","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"1","result_bytes":"4352","elapsed_ns":"2918621","memory_usage":"9971554"}
+SELECT *\nFROM trustiot.telemetry
+
+### [tenant_a2] EXPLAIN PLAN all (shows policy filter literal)
+EXPLAIN actions = 1 SELECT count() FROM trustiot.telemetry
+--> HTTP 200 (8 ms) summary={"read_rows":"12","read_bytes":"398","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"12","result_bytes":"4608","elapsed_ns":"6665014","memory_usage":"9975794"}
+Output: count()\n\nAggregating\n│  Keys:\n│  Aggregates: count()\n│  Skip merging: 0\n└──ReadFromMergeTree (trustiot.telemetry)\n      Read type: Default\n      Parts: 2 | Granules: 2\n      Output: Empty\n      Row level filter\n      Row level filter column:  tenant_id = \'b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38\'
+
+### [tenant_a2] DESCRIBE with settings
+DESCRIBE TABLE trustiot.telemetry SETTINGS describe_extend_object_types = 1
+--> HTTP 500 (4 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2718246","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'describe_extend_object_types' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a2] SELECT from table with FORMAT Native / ProfileEvents progress headers
+SELECT count() FROM trustiot.telemetry FORMAT JSON
+--> HTTP 200 (9 ms) summary={"read_rows":"14","read_bytes":"224","written_rows":"0","written_bytes":"0","total_rows_to_read":"14","result_rows":"1","result_bytes":"136","elapsed_ns":"7143945","memory_usage":"10076794"}
+{\n	"meta":\n	[\n		{\n			"name": "count()",\n			"type": "UInt64"\n		}\n	],\n\n	"data":\n	[\n		{\n			"count()": 6\n		}\n	],\n\n	"rows": 1,\n\n	"statistics":\n	{\n		"elapsed": 0.006152071,\n		"rows_read": 14,\n		"bytes_read": 224\n	}\n}
+
+### [tenant_a2] count with rows_before_limit_at_least
+SELECT * FROM trustiot.telemetry LIMIT 1 FORMAT JSON
+--> HTTP 200 (11 ms) summary={"read_rows":"7","read_bytes":"754","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"17816","elapsed_ns":"9071286","memory_usage":"10123850"}
+{\n	"meta":\n	[\n		{\n			"name": "tenant_id",\n			"type": "UUID"\n		},\n		{\n			"name": "gateway_id",\n			"type": "UUID"\n		},\n		{\n			"name": "stream_id",\n			"type": "UUID"\n		},\n		{\n			"name": "batch_seq",\n			"type": "UInt64"\n		},\n		{\n			"name": "device_id",\n			"type": "UUID"\n		},\n		{\n			"name": "point",\n			"type": "LowCardinality(String)"\n		},\n		{\n			"name": "ts",\n			"type": "DateTime64(3, 'UTC')"\n		},\n		{\n			"name": "received_at",\n			"type": "DateTime64(3, 'UTC')"\n		},\n		{\n			"name": "value_type",\n			"type": "Enum8('float' = 1, 'int' = 2, 'bool' = 3, 'string' = 4)"\n		},\n		{\n			"name": "value_float",\n			"type": "Float64"\n		},\n		{\n			"name": "value_int",\n		
+
+# summary: 35 probes, 1 responses containing B's tenant id or secret

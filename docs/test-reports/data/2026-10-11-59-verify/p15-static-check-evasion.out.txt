@@ -1,0 +1,39 @@
+detected     | plain
+detected     | lowercase
+detected     | split across lines
+detected     | OR REPLACE
+detected     | IF NOT EXISTS
+NOT-DETECTED | string concat
+NOT-DETECTED | format arg
+detected     | concat! macro
+NOT-DETECTED | block comment between
+NOT-DETECTED | tab escape
+detected     | backslash line continuation
+NOT-DETECTED | include_str of sql file
+detected     | ALTER TABLE DELETE
+NOT-DETECTED | CREATE USER
+NOT-DETECTED | GRANT
+NOT-DETECTED | CREATE ROW POLICY
+NOT-DETECTED | ALTER ROW POLICY
+NOT-DETECTED | CREATE FUNCTION
+NOT-DETECTED | OPTIMIZE TABLE
+NOT-DETECTED | CREATE INDEX
+NOT-DETECTED | CREATE SCHEMA
+detected     | ALTER TABLE DROP COLUMN
+detected     | ALTER TABLE MODIFY TTL
+NOT-DETECTED | line comment is skipped (intended)
+detected     | block comment line is skipped?
+detected     | raw string
+detected     | MATERIALIZED VIEW
+detected     | CREATE OR REPLACE DICTIONARY
+NOT-DETECTED | REPLACE TABLE
+detected     | ALTER TABLE ATTACH PARTITION
+detected     | ALTER TABLE DROP PARTITION
+detected     | EXCHANGE TABLES
+detected     | ALTER TABLE MOVE PARTITION
+NOT-DETECTED | SYSTEM
+NOT-DETECTED | SET ROLE
+NOT-DETECTED | DELETE FROM (allowed by design)
+detected     | // after code on same line
+detected     | line starting with // inside a multi-line string
+NOT-DETECTED | CREATE inside a multi-line string after a // line start

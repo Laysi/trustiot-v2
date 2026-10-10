@@ -1,0 +1,56 @@
+## admin | exploratory mitigation: view over the base table, definer = ingest account
+CREATE VIEW IF NOT EXISTS trustiot.tv59 DEFINER = ingest SQL SECURITY DEFINER AS SELECT * FROM trustiot.telemetry
+## admin | row policy on the view for a separate role
+CREATE ROLE IF NOT EXISTS viewreader59
+## admin | policy
+CREATE ROW POLICY IF NOT EXISTS viewtenant59 ON trustiot.tv59 AS PERMISSIVE FOR SELECT USING tenant_id = toUUID(getSetting('SQL_tenant_id')) TO viewreader59
+## admin | grant on view only
+GRANT SELECT ON trustiot.tv59 TO viewreader59
+## admin | user in tenant A with the view role and the same profile
+CREATE USER IF NOT EXISTS vt59 IDENTIFIED WITH sha256_password BY '<redacted>' SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '{A}' CONST
+## admin | grant view role
+GRANT viewreader59 TO vt59
+## admin | profile role for readonly
+GRANT trustiot_tenant_reader TO vt59
+## admin | revoke base table select from this user only by not granting; check effective grants
+SHOW GRANTS FOR vt59
+## admin | check privileges of the user: it has trustiot_tenant_reader (base SELECT) too, so create a user with only the view role + a profile role
+CREATE ROLE IF NOT EXISTS profileonly59
+## admin | profile only role
+CREATE SETTINGS PROFILE IF NOT EXISTS profileonly59 SETTINGS readonly = 1 CONST TO profileonly59
+## admin | user2
+CREATE USER IF NOT EXISTS vt59b IDENTIFIED WITH sha256_password BY '<redacted>' SETTINGS PROFILE 'profileonly59', SQL_tenant_id = '{A}' CONST
+## admin | grant roles
+GRANT viewreader59, profileonly59 TO vt59b
+## vt59b | read through the view as tenant A
+SELECT count() FROM trustiot.tv59
+## vt59b | read values
+SELECT value_string FROM trustiot.tv59 ORDER BY 1
+## vt59b | attempt base table
+SELECT count() FROM trustiot.telemetry
+## vt59b | mergeTreeAnalyzeIndexes on base table
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'telemetry', tenant_id = '{B}')
+## vt59b | mergeTreeAnalyzeIndexes on the view
+SELECT * FROM mergeTreeAnalyzeIndexes('trustiot', 'tv59', tenant_id = '{B}')
+## vt59b | nested settings on the view
+SELECT count() FROM trustiot.tv59 SETTINGS SQL_tenant_id = '{B}'
+## vt59b | view settings in subquery
+SELECT count() FROM (SELECT * FROM trustiot.tv59 SETTINGS SQL_tenant_id = '{B}')
+## vt59b | EXPLAIN ESTIMATE on the view
+EXPLAIN ESTIMATE SELECT * FROM trustiot.tv59
+## vt59b | system.tables total_rows visible?
+SELECT name, total_rows FROM system.tables WHERE database = 'trustiot'
+## vt59b | read_rows header on view query
+SELECT count() FROM trustiot.tv59 WHERE tenant_id = '{A}'
+## vt59b | _part_offset through the view
+SELECT _part_offset FROM trustiot.tv59
+## admin | cleanup
+DROP VIEW IF EXISTS trustiot.tv59
+## admin | cleanup users
+DROP USER IF EXISTS vt59, vt59b
+## admin | cleanup roles
+DROP ROLE IF EXISTS viewreader59, profileonly59
+## admin | cleanup profile
+DROP SETTINGS PROFILE IF EXISTS profileonly59
+## admin | cleanup policy
+DROP ROW POLICY IF EXISTS viewtenant59 ON trustiot.tv59
