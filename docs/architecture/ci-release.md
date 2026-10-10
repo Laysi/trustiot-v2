@@ -69,7 +69,7 @@ ci.yml 不使用任何 secret，每個 job 的 GITHUB_TOKEN 只有 `contents: re
 
 ### 做什麼
 
-`smoke` job 在一台 arm64 的 ubuntu runner（`ubuntu-24.04-arm`）上起一個 k3d 叢集，節點是 arm64，與出貨的架構相同，不覆寫 chart 的 nodeSelector，裝好平台元件，兩份 values（`values-saas.yaml`、`values-onprem.yaml`，各加上 `tests/values/` 的實例覆寫檔與 `smoke.yaml`）依序測試，各用自己的命名空間。k3s 映像是 `rancher/k3s:v1.36.5-k3s1`（SaaS 主機與 lab 的版本），以 multi-arch index 的 digest 釘選，不開 Traefik、ServiceLB 與 metrics-server。
+`smoke` job 在一台 arm64 的 ubuntu runner（`ubuntu-24.04-arm`）上起一個 k3d 叢集，節點是 arm64，與出貨的架構相同，不覆寫 chart 的 nodeSelector，裝好平台元件，兩份 values（`values-saas.yaml`、`values-onprem.yaml`，各加上 `tests/values/` 的實例覆寫檔與 `smoke.yaml`）依序測試，各用自己的命名空間。k3s 映像是 `rancher/k3s:v1.36.5-k3s1`（SaaS 主機與 lab 的版本），以 multi-arch index 的 digest 釘選，k3s 的設定與正式安裝相同，只關閉 Traefik（決策 27）；ServiceLB 保留，地端型態的入口是 LoadBalancer Service，位址由它指派。
 
 平台元件（`scripts/nightly/platform.ts`，照 `deploy/istio/README.md` 的順序，與 SaaS 主機在裝 chart 前做的事相同）：
 

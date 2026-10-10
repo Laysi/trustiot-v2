@@ -97,12 +97,12 @@ async function main(): Promise<number> {
           k3d, "cluster", "create", CLUSTER,
           "--image", image,
           "--servers", "1", "--agents", "0",
-          // The chart's Services are ClusterIP and the smoke test reaches them through the API
-          // server, so no load balancer node, Traefik, ServiceLB or metrics-server is needed.
+          // The k3s of a production install (SaaS and on-prem), whose only change is that Traefik is
+          // off (decision 27): ServiceLB stays, because the on-prem shape exposes the ingress as a
+          // LoadBalancer Service whose address k3s's ServiceLB assigns. No k3d load balancer node:
+          // that is k3d's own way of publishing ports, which the tests do not use.
           "--no-lb",
           "--k3s-arg", "--disable=traefik@server:0",
-          "--k3s-arg", "--disable=servicelb@server:0",
-          "--k3s-arg", "--disable=metrics-server@server:0",
           "--kubeconfig-update-default=false",
           "--kubeconfig-switch-context=false",
           "--wait", "--timeout", "240s",
