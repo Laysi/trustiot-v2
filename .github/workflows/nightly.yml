@@ -1,0 +1,116 @@
+# Nightly: deploys the whole Helm chart into a k3d cluster once per values file (SaaS, then
+# on-prem) and runs the smoke test, so a deployment shape nobody is using day to day cannot
+# rot unnoticed. Policy, what the test checks and what to do when it fails:
+# docs/architecture/ci-release.md, section nightly.yml.
+#
+# Cost: one job on one hosted runner, one k3d cluster reused for both values files. The
+# workflow also runs on pull requests that touch the chart or this workflow, so a change is
+# deployed for real before it merges. Those runs are the only extra ones. They report through the
+# check status, the job summary and the uploaded artifact: a pull request run gets no write token
+# for comments, because it runs the workflow file of the pull request itself.
+#
+# Jobs and what each may do (every job lists its own `permissions`):
+# - smoke   contents: read. Runs the chart and the stand-in service images on a throwaway
+#           cluster; it has no write access and no secret, and hands over only the report.
+# - notify  issues: write; actions: read. Scheduled and manual runs only: opens or updates the
+#           failure issue, or closes it when a night passes again, with the workflow's own
+#           GITHUB_TOKEN. No external service, no extra secret.
+name: nightly
+
+on:
+  schedule:
+    # 18:17 UTC is 02:17 in Taipei; an odd minute avoids the busy start of the hour.
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+    inputs:
+      simulate_failure:
+        description: Fail every shape on purpose after its install, to check the failure notification.
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - .github/workflows/nightly.yml
+      - .github/actions/setup-proto/**
+      - .proto/plugins/**
+      - .prototools
+      - deploy/chart/**
+      - scripts/nightly/**
+
+# No token scopes by default; each job asks for what it needs.
+permissions: {}
+
+concurrency:
+  # A pull request's newer push replaces its running deployment. A scheduled or manual run is
+  # never cancelled; a second one waits, so every night gets its own result.
+  group: nightly-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  smoke:
+    name: smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # The k3s version of the SaaS host and the lab (docs/feasibility/2026-10-10-edge-poc.md),
+      # pinned by the digest of the multi-arch index. Renovate keeps tag and digest together
+      # (renovate.json5; it stays on the 1.36 minor until someone upgrades k3s on purpose).
+      K3S_IMAGE: rancher/k3s:v1.36.5-k3s1@sha256:057cfd5a9d51b89f1f0ee139c28d5d5fdd5aa7ddeac2742a0ba90c6dbc0329bb
+      NIGHTLY_OUT: ${{ runner.temp }}/nightly-out
+      NIGHTLY_SIMULATE_FAILURE: ${{ inputs.simulate_failure && 'true' || 'false' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # bun runs the test, helm, k3d and kubectl are the versions pinned in .prototools. Docker,
+      # which k3d needs, is part of the runner image.
+      - uses: ./.github/actions/setup-proto
+        with:
+          tools: bun helm k3d kubectl
+      - name: Deploy the chart with each values file and run the smoke test
+        run: bun scripts/nightly/run.ts
+      - name: Upload the report and the run log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nightly-report
+          path: ${{ runner.temp }}/nightly-out
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The script that holds the write token must be reviewed code: it runs for scheduled runs (always
+  # the default branch) and for manual runs on the default branch. A manual run of another branch
+  # still runs the smoke job but notifies nobody; pull requests never run this job.
+  notify:
+    name: notify
+    needs: smoke
+    # Also when the smoke job failed or timed out.
+    if: ${{ always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch)) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-proto
+        with:
+          tools: bun
+      - name: Download the report
+        # Missing when the smoke job failed before it wrote one; the notification says so.
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nightly-report
+          path: ${{ runner.temp }}/nightly-report
+      - name: Open, update or close the failure issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NIGHTLY_RESULT: ${{ needs.smoke.result }}
+          NIGHTLY_REPORT_DIR: ${{ runner.temp }}/nightly-report
+          NIGHTLY_JOB_NAME: smoke
+        run: bun scripts/nightly/notify.ts
