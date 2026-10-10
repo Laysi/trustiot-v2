@@ -1,0 +1,22 @@
+{
+  "dropped": 3,
+  "entries": [
+    {
+      "at": 1791590400010,
+      "fields": {
+        "device": "0199d0a0-0000-7000-8000-000000000002",
+        "timeout_ms": "5000"
+      },
+      "level": "warn",
+      "message": "read timed out; retrying",
+      "target": "edge_agent::modbus"
+    },
+    {
+      "at": 1791590400020,
+      "level": "error",
+      "message": "telemetry publish refused by the broker (PUBACK 0x87)",
+      "target": "edge_agent::upload"
+    }
+  ],
+  "v": 1
+}

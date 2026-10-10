@@ -1,0 +1,14 @@
+cbor4ii v1.2.3: MIT
+cfg-if v1.0.5: MIT OR Apache-2.0
+half v2.7.1: MIT OR Apache-2.0
+proc-macro2 v1.0.107: MIT OR Apache-2.0
+protocol v0.1.0 (crates/protocol): 
+quote v1.0.47: MIT OR Apache-2.0
+serde_core v1.0.229: MIT OR Apache-2.0
+serde_derive v1.0.229 (proc-macro): MIT OR Apache-2.0
+serde v1.0.229: MIT OR Apache-2.0
+syn v2.0.119: MIT OR Apache-2.0
+syn v3.0.7: MIT OR Apache-2.0
+unicode-ident v1.0.26: (MIT OR Apache-2.0) AND Unicode-3.0
+zerocopy-derive v0.8.62 (proc-macro): BSD-2-Clause OR Apache-2.0 OR MIT
+zerocopy v0.8.62: BSD-2-Clause OR Apache-2.0 OR MIT
