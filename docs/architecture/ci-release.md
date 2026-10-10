@@ -9,3 +9,89 @@ GitHub Actions，三個 workflow：
 SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定放在 `deploy/flux/`；發版就是合併一個改 chart 版本號的 PR（由 release 流程自動開）。GitHub 不持有任何部署憑證，主機也不必對外開放，叢集只存一把唯讀的 GHCR 拉取 token；Flux 控制器的記憶體算進主機規格（MS3 重測）。地端不裝 Flux，由客戶以 Helm 安裝或用離線安裝包。
 
 通用規則（[#158](https://github.com/Laysi/trustiot/issues/158)、[#120](https://github.com/Laysi/trustiot/issues/120)、[#122](https://github.com/Laysi/trustiot/issues/122)）：每個 workflow 明列最小權限；第三方 action 一律釘 commit SHA；需要雲端憑證時用 OIDC，不放長期金鑰；發佈走 GitHub environment 加人工核准；fork 來的 PR 拿不到任何 secret。
+
+## release.yml
+
+2026-10-10 上線（Laysi/trustiot-v2#68）。推送 `vMAJOR.MINOR.PATCH`（正式版）或 `vMAJOR.MINOR.PATCH-rc.N`（候選版）tag 時執行，其他 tag 不觸發。流程由 `scripts/release/` 的 Bun 腳本執行，本機測試方式見 [scripts/README.md](../../scripts/README.md)。
+
+### 發佈內容
+
+- 映像：`deploy/images/` 下每個子目錄是一個映像，目錄名就是映像名，也是 chart 裡的服務名；發佈為 `ghcr.io/laysi/trustiot-v2/<名稱>:<版本>`，只有 linux/arm64 一個平台。新增映像只要加目錄，不必改 workflow。
+  - Rust 映像：目錄只放 `image.toml`，以 `[rust]` 的 `package` 指定 Cargo 套件，套件有多個執行檔時加 `bin`。執行檔交叉編譯成 `aarch64-unknown-linux-musl` 的靜態執行檔，放進共用的 `deploy/images/rust-binary.Containerfile`：distroless static 基底（以 digest 釘選），以 UID 65532 執行。
+  - 自帶 Containerfile 的映像（例如 Laysi/trustiot-v2#57 含 AGE 的 Postgres）：目錄放 `Containerfile`，目錄本身是 build context。代管 runner 是 x86 而且不用模擬器，所以 arm64 那一層不能有 `RUN`：要編譯的東西放在 `FROM --platform=$BUILDPLATFORM` 的建置階段交叉編譯，或取用上游已有的 arm64 映像。
+- Helm chart：`ghcr.io/laysi/trustiot-v2/charts/trustiot:<版本>`。打包時 version 與 appVersion 都設成 tag 的版本，repo 裡的 `Chart.yaml` 不改；chart 預設的映像 tag 是 appVersion，所以預設拉同一版的映像（所有服務一起發版，決策 4）。
+- GitHub Release：發版說明（`Laysi/release-notes-action`，從上一個版本的 tag 算起：正式版從上一個正式版，候選版從上一個任何 tag）、每個映像與 chart 的 digest、驗證指令、每個映像的 SBOM（`<名稱>-<版本>.spdx.json`），最後附上 verify job 的驗證結果。候選版標為 prerelease，不會成為 Latest。發版說明要用模型整理時，設定 repo 變數 `AI_MODEL`（與 `AI_BASE_URL`）及 secret `AI_API_KEY`；沒設定或呼叫失敗時，內容是上一版以來的 commit 主旨。
+- `release-selftest`（`tools/release-selftest`）是流程自測用的映像，不是服務：一個連結 C 物件的小程式，執行時印出自己的架構，用來驗證交叉編譯（含 C 編譯器與連結器）、簽章、SBOM 與驗證整條路。它不在 chart 裡，也不部署。第一個服務映像加入後，連同 crate 一起刪除。
+
+### tag 規則
+
+- 正式版 tag 指向的 commit 必須在 main 上，plan job 不通過就停止；候選版可以打在任何分支。
+- 版本不可變：GHCR 上已有同版本而內容不同時，publish 失敗，要重發就打新的版本號。同一個 tag 重跑失敗的 publish job 時沿用同一次 build 的產物，digest 不變：已推送的不再推送，簽章與 SBOM attestation 重新附上。
+- plan、build、publish 都確認 checkout 的 commit 就是 tag 指向的 commit；排隊期間 tag 被移動時，該次執行失敗。
+
+### job 與權限
+
+| job | 權限 | 內容 |
+| --- | --- | --- |
+| `plan` | `contents: read` | 檢查 tag、列出要發佈的映像與 chart、`helm lint --strict`（兩種部署型態），產生發版說明。`AI_API_KEY` 只交給產生發版說明的步驟 |
+| `build` | `contents: read` | 交叉編譯並建置映像、產生 SBOM。它執行第三方的建置程式碼（Cargo build script、proc macro），所以沒有任何 secret 與寫入權限，交出去的只有資料：映像的 OCI 壓縮檔與 SBOM，以 artifact 交給 publish，保留 1 天 |
+| `publish` | `contents: write`、`packages: write`、`id-token: write`；`release` environment | 原封不動推送映像（digest 不變）、簽章、附 SBOM attestation；從 repo 打包、推送並簽章 chart；建立 GitHub Release。不執行建置程式碼 |
+| `verify` | `contents: read`、`packages: read` | 以消費端的方式唯讀檢查發佈結果，見下方「簽章與驗證」 |
+| `report` | `contents: write`、`statuses: write` | 不論前面成敗都執行：在 tag 指向的 commit 上設 commit status `release`（失敗時寫出第一個失敗的 job 與原因），並把驗證結果附到 GitHub Release |
+
+沒有長期雲端金鑰，也沒有簽章金鑰：GHCR 以各 job 自己的 `GITHUB_TOKEN` 登入；cosign 以 keyless 方式簽章，憑證由 Sigstore Fulcio 依 publish job 的 GitHub OIDC token 簽發，效期約 10 分鐘。
+
+### 交叉編譯與可重現建置
+
+- `cargo auditable zigbuild --locked --release --target aarch64-unknown-linux-musl`：Zig 當 C 編譯器與連結器（cargo-zigbuild），cargo-auditable 把相依清單嵌進執行檔，syft 才列得出 crate。zig、cargo-zigbuild、cargo-auditable、syft、cosign 都鎖在 `.prototools`，Zig 以官方 minisign 簽章驗證，其餘以 release 附的 checksum 驗證。Rust 在 CI 由 runner 的 rustup 依 `rust-toolchain.toml` 安裝，再加上 musl target。
+- 映像建置不執行任何 arm64 程式，x86 的代管 runner 不需要模擬器。
+- 時間戳一律取 tag 所指 commit 的時間（`SOURCE_DATE_EPOCH`、`podman build --timestamp`、`helm package`），chart 推送時的建立時間也固定，執行檔裡的原始碼路徑換成固定的前綴（`--remap-path-prefix`），所以同一個 commit 以同一組工具重建，會得到相同的映像與 chart digest（2026-10-10 本機驗證，見 [測試報告](../test-reports/2026-10-10-68-release-workflow.md)）。runner 上的 podman 版本不由本 repo 釘選，不同版本打包出的映像層可能不同，所以不保證本機與 CI 建出的 digest 相同。
+
+### 簽章與驗證
+
+簽章身分是 release.yml 在該 tag 上的執行：
+
+```
+issuer:   https://token.actions.githubusercontent.com
+identity: https://github.com/Laysi/trustiot-v2/.github/workflows/release.yml@refs/tags/<tag>
+```
+
+GHCR 套件是私有的，驗證前先以有讀取權限的帳號 `cosign login ghcr.io`：
+
+```sh
+cosign verify ghcr.io/laysi/trustiot-v2/<名稱>:<版本> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "https://github.com/Laysi/trustiot-v2/.github/workflows/release.yml@refs/tags/v<版本>"
+cosign verify-attestation --type spdxjson ghcr.io/laysi/trustiot-v2/<名稱>:<版本> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "https://github.com/Laysi/trustiot-v2/.github/workflows/release.yml@refs/tags/v<版本>"
+```
+
+chart 以同樣的身分驗證 `ghcr.io/laysi/trustiot-v2/charts/trustiot:<版本>`。每次發佈的 GitHub Release 都列出該版本完整的驗證指令與 digest。SBOM 是 syft 產生的 SPDX 2.3 JSON，以 attestation 附在映像上，也是 GitHub Release 的附件。
+
+verify job 對每個映像檢查：tag 指向 publish 推送的 digest；只有一個平台且是 linux/arm64；簽章與 SBOM attestation 以上述身分（再加上 commit SHA 與觸發事件）驗證通過；匿名拉取被拒，即套件是私有的。chart 檢查 tag、簽章與 version、appVersion。另外以不屬於這次發佈的身分驗證一次，必須失敗，證明上述檢查不是空檢查。
+
+Flux（Laysi/trustiot-v2#70）驗證映像與 chart 時，要用支援 cosign v3 bundle 格式的 Flux（2.8 以上），`matchOIDCIdentity` 的 issuer 寫 `^https://token\.actions\.githubusercontent\.com$`，subject 寫 `^https://github\.com/Laysi/trustiot-v2/\.github/workflows/release\.yml@refs/tags/v.*$`。上方「SaaS 以 GitOps 部署」提到由 release 流程自動開改 chart 版本號的 PR，等 `deploy/flux/` 建立後（Laysi/trustiot-v2#70）再加進 release.yml。
+
+### 公開的透明紀錄
+
+keyless 簽章會寫進 Sigstore 公開服務的透明紀錄：Fulcio 簽發的憑證進入公開的憑證透明度日誌，簽章與 attestation 的紀錄進入 Rekor。任何人都查得到這些紀錄中的 repo 名稱 `Laysi/trustiot-v2`、workflow 路徑、tag、commit SHA 與映像 digest；查不到原始碼與映像內容。紀錄無法刪除。私有 repo 用公開 Sigstore 是 Laysi/trustiot-v2#68 的選擇（不需要保管任何金鑰）；若這些資訊不能公開，替代方案是自建 Sigstore 或改用金鑰簽章（金鑰放在 KMS，以 OIDC 取用），兩者都要另開 issue。
+
+### 發佈核准（GitHub environment）的缺口
+
+publish job 在 `release` environment 執行，原意是設定必要審查者（required reviewers）與只允許 `v*` tag 的部署規則，讓每次發佈都經人工核准。2026-10-10 的實況：本 repo 是私有庫、組織在 GitHub Free 方案，私有庫不能設定 environment 的保護規則。依 GitHub 文件，Free、Pro、Team 方案的必要審查者與等待時間只適用於公開 repo（私有 repo 要 GitHub Enterprise）；部署分支與 tag 規則、environment secret 在私有 repo 需要 Pro 或 Team。所以目前 environment 只留下部署紀錄，不會擋下任何發佈。
+
+workflow 照樣宣告 environment：方案到位後，在 repo 設定的 `release` environment 加上必要審查者（並開啟 prevent self-review，推 tag 的人不能自己核准）與 tag 規則 `v*`，就會生效，不必改 workflow。
+
+在那之前的補償措施：只有對 repo 有寫入權限的人能推 tag；正式版 tag 必須在 main 上；版本不可變；簽章身分綁定 release.yml 與 tag，消費端只接受這個身分；執行第三方程式碼的 build job 沒有寫入權限；每次發佈都留下 commit status 與 GitHub Release 可稽核。這些措施擋不住有寫入權限的人（或以其憑證操作的 agent）直接推正式版 tag。要升級方案、把 repo 改為公開，還是接受現況，需要人決定。
+
+### 結果怎麼看、失敗怎麼處理
+
+- 每次執行都在 tag 指向的 commit 上留下 commit status `release`：成功是「`<tag>` published and verified」，失敗寫出第一個失敗的 job 與原因，連結到該次執行。成功時 GitHub Release 的最後一節「驗證結果」列出 verify job 檢查過的每一項。
+- plan 或 build 失敗時還沒有發佈任何東西：候選版修正後改打下一個 rc 號；正式版可以刪掉 tag，修正後重打。publish 或 verify 失敗時先看原因：外部服務暫時失敗就只重跑失敗的 job（Re-run failed jobs）：publish 沿用同一次 build 的產物，digest 不變，重跑是安全的；內容有問題就打新的版本號，不要移動已經發佈過的 tag。
+- 已發佈的版本不刪除也不覆蓋；有問題的版本以新版本取代，必要時在 GitHub Release 註明。
+
+### Actions 分鐘數與儲存空間
+
+- 一次發佈有 5 個 job，每個 job 的分鐘數各自無條件進位。build 不做 Rust 編譯快取：發佈次數少，快取空間留給 ci.yml。
+- build 交給 publish 的 artifact 只保留 1 天。依 GitHub 文件，Free 方案組織的 Packages 與 Actions artifact 共用 500 MB 儲存空間；GHCR 的容器映像目前不計費（GitHub 承諾改變前至少提前一個月通知）。映像變多變大時，留意 artifact 的大小。

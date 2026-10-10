@@ -10,7 +10,7 @@ Architecture decisions, rebuild scope (items A1–M8), service split, repository
 
 ## Build, lint, and test
 
-`.prototools` pins Rust, Bun, Helm, and kubeconform; tools without a built-in proto plugin get a schema plugin in `.proto/plugins/` that verifies the release checksum. proto installs Rust through rustup and does not shim cargo, so rustup picks the toolchain from `rust-toolchain.toml`: change `rust` in `.prototools` and `channel` in `rust-toolchain.toml` together (`cargo test -p repo-check` fails when they differ). Run every command from the repository root.
+`.prototools` pins Rust, Bun, Helm, kubeconform, and the release tools (zig, cargo-zigbuild, cargo-auditable, syft, cosign); tools without a built-in proto plugin get a schema plugin in `.proto/plugins/` that verifies the release checksum. proto installs Rust through rustup and does not shim cargo, so rustup picks the toolchain from `rust-toolchain.toml`: change `rust` in `.prototools` and `channel` in `rust-toolchain.toml` together (`cargo test -p repo-check` fails when they differ). Run every command from the repository root.
 
 - Install the pinned tools: `proto install`
 - Build: `cargo build --workspace`
@@ -21,6 +21,8 @@ Architecture decisions, rebuild scope (items A1–M8), service split, repository
 - Local dev environment (podman, no Kubernetes; details in `scripts/README.md`): `bun scripts/dev.ts up` | `seed` | `status` | `env` | `down` | `purge`. Script tests: `bun test scripts` (add `TRUSTIOT_DEV_E2E=1` and the file `scripts/tests/e2e.test.ts` to run the podman end-to-end test).
 - Helm chart (`deploy/chart`): `bun test deploy/chart` runs `helm lint`, kubeconform on both values files, the chart's own rules, and the README field check; a single check is `bun test deploy/chart -t "<test-name-filter>"`. The individual `helm lint`/`helm template` commands are in `deploy/chart/README.md`.
 - Container-backed tests: `crates/service-kit` starts throwaway Postgres and PID 1 containers with podman or docker (or uses `TEST_DATABASE_URL` for Postgres). Without them those tests skip locally; with `CI` set they fail instead.
+- Release scripts (`scripts/release`, run by `.github/workflows/release.yml`): `bun test scripts/release`; a single test is `bun test scripts/release -t "<test-name-filter>"`. Building the arm64 images locally and running the whole publish and verify flow against a throwaway registry are described in `scripts/README.md`.
+- Images: each directory under `deploy/images/` is a published arm64 image (`image.toml` for a Rust binary, or its own `Containerfile`); see `deploy/images/README.md`. Base images must be pinned by digest.
 
 Every directory under `crates/`, `services/`, `edge/`, `factory/`, and `tools/` is a workspace member, so it needs a `Cargo.toml` that sets `edition.workspace = true` and `[lints] workspace = true`; list non-Rust directories in the root `exclude`. Declare third-party dependencies once in the root `[workspace.dependencies]`. Clippy fails on every lint in `[workspace.lints]`; suppress one only with `#[allow(lint, reason = "...")]`. Save test evidence under `docs/test-reports/` as its README describes.
 
