@@ -1,0 +1,32 @@
+mesh-DECODE_AND_MERGE_SLASHES-bypass.json: 62 rows, 0 failing under the strict rules
+mesh-DECODE_AND_MERGE_SLASHES-slashes.json: 12 rows, 0 failing under the strict rules
+mesh-MERGE_SLASHES-bypass.json: 62 rows, 0 failing under the strict rules
+mesh-MERGE_SLASHES-slashes.json: 12 rows, 4 failing under the strict rules
+  slashes | valid cookie /%2finternal/tenants | status 200
+  slashes | valid cookie /%2Finternal | status 200
+  slashes | valid cookie /./%2finternal | status 200
+  slashes | valid cookie /%2f%2finternal | status 200
+probe-onprem-bypass.json: 62 rows, 0 failing under the strict rules
+probe-onprem-host.json: 38 rows, 0 failing under the strict rules
+probe-onprem-internal.json: 42 rows, 1 failing under the strict rules
+  internal | double slash / valid cookie | status 307
+probe-onprem-smuggle.json: 202 rows, 0 failing under the strict rules
+probe-onprem-timing.json: 11 rows, 0 failing under the strict rules
+probe-saas-bypass.json: 62 rows, 0 failing under the strict rules
+probe-saas-host.json: 35 rows, 0 failing under the strict rules
+probe-saas-internal.json: 42 rows, 1 failing under the strict rules
+  internal | double slash / valid cookie | status 307
+probe-saas-slashes.json: 12 rows, 10 failing under the strict rules
+  slashes | valid cookie //internal/tenants | status 307
+  slashes | valid cookie ///internal | status 307
+  slashes | valid cookie //internal | status 307
+  slashes | valid cookie /%2finternal/tenants | status 200
+  slashes | valid cookie /%2Finternal | status 200
+  slashes | valid cookie /x/..//internal/tenants | status 307
+  slashes | valid cookie /./%2finternal | status 200
+  slashes | valid cookie /%2f%2finternal | status 200
+  slashes | valid cookie //./internal | status 307
+  slashes | valid cookie /.//internal/tenants | status 307
+probe-saas-smuggle.json: 202 rows, 0 failing under the strict rules
+probe-saas-timing.json: 11 rows, 0 failing under the strict rules
+total 867 rows, 16 failing

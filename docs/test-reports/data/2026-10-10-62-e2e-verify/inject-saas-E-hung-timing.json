@@ -1,0 +1,21 @@
+[
+ {
+  "group": "downtime",
+  "name": "baseline /healthz median ms",
+  "ms": 200,
+  "ok": true
+ },
+ {
+  "group": "downtime",
+  "name": "40 sequential requests",
+  "baselineMs": 200,
+  "statuses": {
+   "503": 40
+  },
+  "minMs": 182,
+  "p50Ms": 191,
+  "p95Ms": 242,
+  "maxMs": 293,
+  "ok": true
+ }
+]

@@ -1,0 +1,49 @@
+// Offline re-evaluation of the saved probe results with the stricter verdict rules of the final
+// probe.ts (refused = status in {400,401,403,404,426,431}; a transport error, an empty response or
+// a backend-generated redirect/2xx never counts as "blocked"). The raw statuses and flags in the
+// JSON files are unchanged; only the "ok" verdict is recomputed. Usage: bun reeval.ts <data dir>
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const dir = process.argv[2] ?? ".";
+const BLOCKED = new Set([400, 401, 403, 404, 426, 431]);
+type Row = {
+  group: string;
+  name: string;
+  status?: number | string;
+  reachedProtected?: boolean;
+  reachedPublic?: boolean;
+  forgedEchoed?: boolean;
+  ok?: boolean;
+  request?: string;
+};
+let total = 0;
+const failing: string[] = [];
+const files = readdirSync(dir)
+  .filter((f) => /^(probe-(saas|onprem)-(bypass|internal|smuggle|host|timing|slashes)|mesh-.*-(bypass|slashes))\.json$/.test(f))
+  .sort();
+for (const file of files) {
+  const rows = JSON.parse(readFileSync(join(dir, file), "utf8")) as Row[];
+  let n = 0;
+  const bad: string[] = [];
+  for (const r of rows) {
+    if (r.status === undefined) continue;
+    n++;
+    const blocked = typeof r.status === "number" && BLOCKED.has(r.status);
+    let ok = r.ok !== false;
+    if (typeof r.status === "string") ok = false;
+    else if (r.group === "bypass") ok = blocked && !r.reachedProtected && !r.forgedEchoed;
+    else if (r.group === "internal") ok = /informational/.test(r.name) || (blocked && !r.reachedProtected);
+    else if (r.group === "slashes") ok = blocked || /INTERNAL/.test(r.request ?? "");
+    else if (r.group === "smuggle-protected" && r.name.endsWith("no cookie")) ok = blocked && !r.reachedProtected && !r.forgedEchoed;
+    else if (r.group === "host" || r.group === "host-h2") {
+      ok = !r.reachedProtected && !r.forgedEchoed && (blocked || (r.status === 200 && !!r.reachedPublic));
+    }
+    if (!ok) bad.push(`  ${r.group} | ${r.name} | status ${r.status}`);
+  }
+  total += n;
+  console.log(`${file}: ${n} rows, ${bad.length} failing under the strict rules`);
+  for (const b of bad) console.log(b);
+  failing.push(...bad.map((b) => `${file}${b}`));
+}
+console.log(`total ${total} rows, ${failing.length} failing`);

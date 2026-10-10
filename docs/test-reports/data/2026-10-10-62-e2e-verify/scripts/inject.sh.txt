@@ -1,0 +1,63 @@
+#!/bin/bash
+# usage: inject.sh saas|onprem   failure injection against the installed release "trustiot"
+SHAPE=$1
+S=/tmp/claude-1000/-home-ruisi-projects-trustiot-v2/5d2bbbe4-4241-4ab5-b2fe-2e33d3a23171/scratchpad/e2e-62
+W=/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a66c946f0acf60298
+D=$W/docs/test-reports/data/2026-10-10-62-e2e-verify
+export KUBECONFIG=$S/kube/config
+export PATH=/home/ruisi/.proto/tools/bun/1.4.2:/home/ruisi/.proto/tools/helm/4.3.0:/home/ruisi/.proto/tools/kubectl/1.36.5:$PATH
+export PROBE_PORT=17080 PROBE_SHAPE=$SHAPE PROBE_CA=$S/tls.crt
+LOG=$D/inject-$SHAPE.txt
+cd $W
+say() { echo "[$(date -u +%T.%3N)] $*" | tee -a $LOG; }
+watch() { # name seconds
+  PROBE_SECONDS=$2 PROBE_OUT=$D/inject-$SHAPE-$1.json bun $S/probe.ts watch > $D/inject-$SHAPE-$1.log 2>&1
+  say "watch $1: $(grep 'watch histogram' $D/inject-$SHAPE-$1.log)"
+}
+: > $LOG
+# A: identity down (scale 0)
+say "A: scale identity to 0"
+kubectl scale deploy/trustiot-identity --replicas=0 > /dev/null
+kubectl wait --for=delete pod -l app.kubernetes.io/component=identity --timeout=90s >> $LOG 2>&1
+sleep 5
+watch A-down 15
+say "A: public paths during outage"
+for p in "gateway /certs/renew" "gateway /mqtt"; do :; done
+kubectl scale deploy/trustiot-identity --replicas=1 > /dev/null
+kubectl rollout status deploy/trustiot-identity --timeout=120s >> $LOG 2>&1
+sleep 5
+watch A-recovered 8
+# B: rolling restart under traffic
+say "B: rollout restart + force delete under traffic"
+(sleep 6; kubectl rollout restart deploy/trustiot-identity > /dev/null; sleep 8; kubectl delete pod -l app.kubernetes.io/component=identity --grace-period=0 --force >> $LOG 2>&1) &
+watch B-restart 40
+wait
+kubectl rollout status deploy/trustiot-identity --timeout=120s >> $LOG 2>&1
+# C: network black hole to the identity pods (running but unreachable)
+say "C: deny-all ingress NetworkPolicy on identity pods"
+kubectl apply -f - >> $LOG 2>&1 <<EOF
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: probe-blackhole-identity}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: identity}}
+  policyTypes: [Ingress]
+EOF
+sleep 5
+watch C-blackhole 15
+kubectl delete networkpolicy probe-blackhole-identity >> $LOG 2>&1
+sleep 5
+watch C-recovered 8
+# D: provider name does not exist
+say "D: helm upgrade to a missing provider name"
+cd $W/deploy/chart
+helm upgrade trustiot . -n e2e-62-verify --reuse-values --set ingress.authzProvider=trustiot-missing-62v --wait --timeout 3m >> $LOG 2>&1
+sleep 10
+cd $W
+watch D-missing-provider 10
+cd $W/deploy/chart
+helm rollback trustiot -n e2e-62-verify --wait --timeout 3m >> $LOG 2>&1
+sleep 10
+cd $W
+watch D-restored 8
+say "done"

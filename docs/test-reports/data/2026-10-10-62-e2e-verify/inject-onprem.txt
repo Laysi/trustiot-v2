@@ -1,0 +1,32 @@
+[14:09:00.014] A: scale identity to 0
+pod/trustiot-identity-6ddb9c4d9d-8wkdz condition met
+[14:09:27.469] watch A-down: watch histogram {"public-certs:200":34,"nocookie:503":34,"valid:503":34,"garbage:503":34} fail-open count 0 max first-byte ms 436
+[14:09:27.478] A: public paths during outage
+Waiting for deployment "trustiot-identity" rollout to finish: 0 of 1 updated replicas are available...
+deployment "trustiot-identity" successfully rolled out
+[14:09:44.310] watch A-recovered: watch histogram {"public-certs:200":17,"nocookie:401":17,"valid:200":17,"garbage:401":17} fail-open count 0 max first-byte ms 538
+[14:09:44.325] B: rollout restart + force delete under traffic
+Warning: Immediate deletion does not wait for confirmation that the running resource has been terminated. The resource may continue to run on the cluster indefinitely.
+pod "trustiot-identity-5b7d95f4d9-cn9qw" force deleted from e2e-62-verify namespace
+[14:10:25.110] watch B-restart: watch histogram {"public-certs:200":88,"nocookie:401":81,"valid:200":81,"garbage:401":81,"nocookie:503":7,"valid:503":7,"garbage:503":7} fail-open count 0 max first-byte ms 503
+deployment "trustiot-identity" successfully rolled out
+[14:10:26.323] C: deny-all ingress NetworkPolicy on identity pods
+networkpolicy.networking.k8s.io/probe-blackhole-identity created
+[14:10:48.160] watch C-blackhole: watch histogram {"public-certs:200":33,"nocookie:401":33,"valid:200":33,"garbage:401":33} fail-open count 0 max first-byte ms 425
+networkpolicy.networking.k8s.io "probe-blackhole-identity" deleted from e2e-62-verify namespace
+[14:11:01.911] watch C-recovered: watch histogram {"public-certs:200":19,"nocookie:401":19,"valid:200":19,"garbage:401":19} fail-open count 0 max first-byte ms 356
+[14:11:01.919] D: helm upgrade to a missing provider name
+I1010 22:11:09.216879 3952460 warnings.go:107] "Warning: configured AuthorizationPolicy will deny all traffic to TCP ports under its scope due to the use of only HTTP attributes in a DENY rule; it is recommended to explicitly specify the port"
+Release "trustiot" has been upgraded. Happy Helming!
+NAME: trustiot
+LAST DEPLOYED: Sat Oct 10 22:11:03 2026
+NAMESPACE: e2e-62-verify
+STATUS: deployed
+REVISION: 2
+DESCRIPTION: Upgrade complete
+TEST SUITE: None
+[14:11:31.377] watch D-missing-provider: watch histogram {"public-certs:200":24,"nocookie:403":24,"valid:403":24,"garbage:403":24} fail-open count 0 max first-byte ms 350
+I1010 22:11:40.027858 3955509 warnings.go:107] "Warning: configured AuthorizationPolicy will deny all traffic to TCP ports under its scope due to the use of only HTTP attributes in a DENY rule; it is recommended to explicitly specify the port"
+Rollback was a success! Happy Helming!
+[14:12:01.714] watch D-restored: watch histogram {"public-certs:200":17,"nocookie:401":17,"valid:200":17,"garbage:401":17} fail-open count 0 max first-byte ms 519
+[14:12:01.726] done
