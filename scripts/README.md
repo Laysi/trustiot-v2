@@ -112,7 +112,7 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 以下指令都在 repo 根目錄執行：
 
 - 安裝型別檢查用的開發相依：`bun install --cwd scripts --frozen-lockfile`（裝在 `scripts/node_modules/`，不進版控；執行腳本與測試都不需要）
-- 型別檢查（`scripts/` 下全部的 `.ts`）：`bun run --cwd scripts typecheck`
+- 型別檢查（`scripts/` 下全部的 `.ts`，加上 `deploy/chart/tests/` 下全部的 `.ts`，後者含要有叢集才能跑的入口 e2e）：`bun run --cwd scripts typecheck`
 - 測試：`bun run --cwd scripts test`，與上方的 `bun test scripts` 跑同一批測試檔；單一測試：`bun run --cwd scripts test -t "<test-name-filter>"`
 
 CI 的 `workflow-policy` job 每次都跑型別檢查與全部測試。本地開發環境的端對端測試（`TRUSTIOT_DEV_E2E=1`）要以 podman 起整套環境並編譯服務，不在 CI 執行。

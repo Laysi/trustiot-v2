@@ -67,3 +67,18 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/ingress.e2e.ts
 | `E2E_KEEP` | 空 | `1` 時測完不移除 release，方便查看 |
 
 測試以 `helm install --wait` 安裝；release 已經存在時直接失敗，不碰既有的安裝。結束時只移除這次建立的 release 與 TLS Secret（名稱帶隨機字尾）。身分服務停機的測試會暫時把替身 scale 到 0，結束時恢復。請求一律以自寫的 HTTP/1.1 客戶端送出原始的請求行，`fetch` 會先把 `..` 與編碼正規化，測不到繞過。
+
+## 通道斷線時的復原
+
+測試經 `kubectl port-forward`（或 `E2E_SSH_JUMP` 的 `ssh -L`）連入口 gateway。這條通道偶爾會在請求進行中斷線：kubectl 印出 `error forwarding port … to pod` 與 `error: lost connection to pod`。2026-10-10 PR Laysi/trustiot-v2#258 的 CI 就發生過一次（run 38075563886 attempt 1，`identity service down`），當時 `raw()` 丟出 `no HTTP response for /api/whoami: ""`，測試失敗。
+
+原因是競態：請求先因連線被關閉而失敗，kubectl 行程要稍晚才結束；舊的 `raw()` 在失敗的當下檢查行程是否已結束，看到還在跑就直接丟出錯誤。現在的做法（`tunnel-recovery.ts`）：
+
+- 請求以連線層錯誤失敗（`raw-client.ts` 的 `ConnectionError`：連線被拒、被重設、在回應標頭之前被關閉、逾時）時，最多等 5 秒讓通道行程結束。
+- 行程在這段時間內結束，就重開通道並把請求重送一次；重送只有一次，第二次再失敗就失敗。
+- 行程沒有結束，代表是 gateway 那一端真的關掉連線，錯誤照樣丟出，不重試。
+- 只要拿到 HTTP 回應（或已收到回應標頭）就不重試，狀態碼不符（例如該是 200 卻得到 503）照樣讓測試失敗；非 `ConnectionError` 的錯誤也直接丟出。
+
+沒有查到可避免 port-forward 斷線的原因（斷線時間點只有一次紀錄，kubectl 沒有說明 pod 端為何關閉連線），所以靠上述復原處理；若之後斷線變得頻繁，再評估改用 k3d 的 LoadBalancer 埠對映取代 port-forward。
+
+邏輯有不需要叢集的單元測試（`tunnel-recovery.test.ts`、`raw-client.test.ts`），由 `bun test deploy/chart` 執行。測試用真正的子行程（`fake-port-forward.ts`，一個 TCP proxy）扮演 kubectl：它在收到請求時切斷連線，300 毫秒後才結束行程，重現上述競態。
