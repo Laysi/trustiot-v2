@@ -18,6 +18,8 @@
 
 不在 `bun test deploy/chart` 內（檔名沒有 `.test.`），要有叢集才能跑。叢集可以是 k3d、k3s 或其他 Kubernetes，只要 kubectl 連得到。
 
+nightly workflow（Laysi/trustiot-v2#69）每晚在 k3d 叢集上以兩種型態各跑一次：裝好 Gateway API 與 Istio ambient、為每個型態的測試命名空間在 istiod 加一個 provider、建置身分服務替身並匯入節點，做法見 [CI 與發佈](../../../../docs/architecture/ci-release.md) 的 nightly.yml 一節與 `scripts/nightly/platform.ts`；那邊請求經 `kubectl port-forward`，不涵蓋入口的 NetworkPolicy。
+
 ### 替身
 
 | 服務 | 替身 | 說明 |
