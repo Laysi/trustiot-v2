@@ -1,0 +1,189 @@
+---
+# Source: trustiot/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trustiot-ingress
+  labels:
+    helm.sh/chart: trustiot-0.1.0
+    app.kubernetes.io/name: trustiot
+    app.kubernetes.io/instance: trustiot
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: trustiot
+    app.kubernetes.io/component: ingress
+spec:
+  podSelector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: trustiot-ingress
+  policyTypes:
+    - Ingress
+  ingress:
+    # Only the host (cloudflared, kubelet probes) may connect; other pods may not.
+    - from:
+        - ipBlock:
+            cidr: 10.42.0.1/32
+
+---
+# Source: trustiot/templates/ingress.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trustiot-ingress-options
+  labels:
+    helm.sh/chart: trustiot-0.1.0
+    app.kubernetes.io/name: trustiot
+    app.kubernetes.io/instance: trustiot
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: trustiot
+    app.kubernetes.io/component: ingress
+data:
+  deployment: |
+    spec:
+      replicas: 2
+      template:
+        spec:
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: istio-proxy
+              resources:
+                limits:
+                  cpu: "2"
+                  memory: 512Mi
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+  service: |
+    spec:
+      # Reached only by cloudflared on the host; nothing listens on the host or the network.
+      type: ClusterIP
+  podDisruptionBudget: |
+    spec:
+      minAvailable: 1
+
+---
+# Source: trustiot/templates/platform-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trustiot-platform
+  labels:
+    helm.sh/chart: trustiot-0.1.0
+    app.kubernetes.io/name: trustiot
+    app.kubernetes.io/instance: trustiot
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: trustiot
+    app.kubernetes.io/component: platform
+data:
+  TRUSTIOT_DEPLOYMENT_MODE: "saas"
+  TRUSTIOT_APP_HOST: "app.saas.trustiot.test"
+  TRUSTIOT_GATEWAY_HOST: "gw.saas.trustiot.test"
+  TRUSTIOT_OTA_HOST: "ota.saas.trustiot.test"
+  TRUSTIOT_CLIENT_IP_SOURCE: "cf-connecting-ip"
+  TRUSTIOT_QDRANT_URL: "https://qdrant.saas.trustiot.test:6333"
+  TRUSTIOT_S3_ENDPOINT: "https://objects.saas.trustiot.test"
+  TRUSTIOT_S3_REGION: "auto"
+  TRUSTIOT_S3_BUCKET: "trustiot-saas-test"
+  TRUSTIOT_S3_FORCE_PATH_STYLE: "false"
+  TRUSTIOT_SMTP_HOST: "smtp.saas.trustiot.test"
+  TRUSTIOT_SMTP_PORT: "587"
+  TRUSTIOT_SMTP_SECURITY: "starttls"
+  TRUSTIOT_SMTP_FROM: "TrustIoT <noreply@saas.trustiot.test>"
+  TRUSTIOT_AI_CHAT_BASE_URL: "https://llm.saas.trustiot.test/v1"
+  TRUSTIOT_AI_EMBEDDING_BASE_URL: "https://embedding.saas.trustiot.test/v1"
+  TRUSTIOT_AI_RERANK_BASE_URL: "https://llm.saas.trustiot.test/v1"
+  SENTRY_ENVIRONMENT: "test"
+
+---
+# Source: trustiot/templates/ingress.yaml
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: trustiot-ingress-cookie-check
+  labels:
+    helm.sh/chart: trustiot-0.1.0
+    app.kubernetes.io/name: trustiot
+    app.kubernetes.io/instance: trustiot
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: trustiot
+    app.kubernetes.io/component: ingress
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: trustiot-ingress
+  action: CUSTOM
+  provider:
+    name: trustiot-identity
+  rules:
+    # No public path is enabled: every request is checked.
+    - {}
+
+---
+# Source: trustiot/templates/ingress.yaml
+# Internal APIs between services live under /internal (decision 27). No route forwards that
+# prefix, and this denies it even when a route such as "/" would match. CUSTOM runs first, so a
+# request without a cookie gets 401 and one with a valid cookie gets 403.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: trustiot-ingress-deny-internal
+  labels:
+    helm.sh/chart: trustiot-0.1.0
+    app.kubernetes.io/name: trustiot
+    app.kubernetes.io/instance: trustiot
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: trustiot
+    app.kubernetes.io/component: ingress
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: trustiot-ingress
+  action: DENY
+  rules:
+    - to:
+        - operation:
+            paths:
+              - "/internal*"
+
+---
+# Source: trustiot/templates/ingress.yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: trustiot-ingress
+  labels:
+    helm.sh/chart: trustiot-0.1.0
+    app.kubernetes.io/name: trustiot
+    app.kubernetes.io/instance: trustiot
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: trustiot
+    app.kubernetes.io/component: ingress
+spec:
+  gatewayClassName: istio
+  infrastructure:
+    labels:
+      app.kubernetes.io/name: trustiot
+      app.kubernetes.io/instance: trustiot
+      app.kubernetes.io/component: ingress
+      app.kubernetes.io/part-of: trustiot
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: trustiot-ingress-options
+  listeners:
+    # cloudflared to the gateway is plain HTTP inside the host; Cloudflare terminates TLS.
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same
