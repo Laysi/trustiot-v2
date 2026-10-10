@@ -68,7 +68,7 @@ ci.yml 不使用任何 secret，每個 job 的 GITHUB_TOKEN 只有 `contents: re
 
 ### tag 規則
 
-- 正式版 tag 指向的 commit 必須在 main 上，plan job 不通過就停止；候選版可以打在任何分支。
+- 正式版 tag 指向的 commit 必須在 main 上，而且 ci.yml 在 main 上為這個 commit 跑的最新一次 push 執行必須成功；plan job 以 `actions: read` 從 GitHub API 讀取，任一項不通過就停止。所以正式版要打在 main 的 ci 跑過的 commit（合併產生的那個 commit），ci 還在跑時，等它通過後重跑這次 release（Re-run all jobs）。候選版可以打在任何分支，不檢查 ci。
 - 版本不可變：GHCR 上已有同版本而內容不同時，publish 失敗，要重發就打新的版本號。同一個 tag 重跑失敗的 publish job 時沿用同一次 build 的產物，digest 不變：已推送的不再推送，簽章與 SBOM attestation 重新附上。
 - plan、build、publish 都確認 checkout 的 commit 就是 tag 指向的 commit；排隊期間 tag 被移動時，該次執行失敗。
 
@@ -76,7 +76,7 @@ ci.yml 不使用任何 secret，每個 job 的 GITHUB_TOKEN 只有 `contents: re
 
 | job | 權限 | 內容 |
 | --- | --- | --- |
-| `plan` | `contents: read` | 檢查 tag、列出要發佈的映像與 chart、`helm lint --strict`（兩種部署型態），產生發版說明。`AI_API_KEY` 只交給產生發版說明的步驟 |
+| `plan` | `contents: read`、`actions: read` | 檢查 tag（正式版要在 main 上，且該 commit 在 main 的 ci 通過；`actions: read` 只用來讀 ci 的執行結果）、列出要發佈的映像與 chart、`helm lint --strict`（兩種部署型態），產生發版說明。`AI_API_KEY` 只交給產生發版說明的步驟 |
 | `build` | `contents: read` | 交叉編譯並建置映像、產生 SBOM。它執行第三方的建置程式碼（Cargo build script、proc macro），所以沒有任何 secret 與寫入權限，交出去的只有資料：映像的 OCI 壓縮檔與 SBOM，以 artifact 交給 publish，保留 1 天 |
 | `publish` | `contents: write`、`packages: write`、`id-token: write`；`release` environment | 原封不動推送映像（digest 不變）、簽章、附 SBOM attestation；從 repo 打包、推送並簽章 chart；建立 GitHub Release。不執行建置程式碼 |
 | `verify` | `contents: read`、`packages: read` | 以消費端的方式唯讀檢查發佈結果，見下方「簽章與驗證」 |
@@ -131,7 +131,7 @@ workflow 照樣宣告 environment：方案到位後，在 repo 設定的 `releas
 ### 結果怎麼看、失敗怎麼處理
 
 - 每次執行都在 tag 指向的 commit 上留下 commit status `release`：成功是「`<tag>` published and verified」，失敗寫出第一個失敗的 job 與原因，連結到該次執行。成功時 GitHub Release 的最後一節「驗證結果」列出 verify job 檢查過的每一項。
-- plan 或 build 失敗時還沒有發佈任何東西：候選版修正後改打下一個 rc 號；正式版可以刪掉 tag，修正後重打。publish 或 verify 失敗時先看原因：外部服務暫時失敗就只重跑失敗的 job（Re-run failed jobs）：publish 沿用同一次 build 的產物，digest 不變，重跑是安全的；內容有問題就打新的版本號，不要移動已經發佈過的 tag。
+- plan 或 build 失敗時還沒有發佈任何東西：候選版修正後改打下一個 rc 號；正式版可以刪掉 tag，修正後重打。正式版只因 main 的 ci 還沒跑完而停在 plan 時，等 ci 通過後重跑這次 release 即可。publish 或 verify 失敗時先看原因：外部服務暫時失敗就只重跑失敗的 job（Re-run failed jobs）：publish 沿用同一次 build 的產物，digest 不變，重跑是安全的；內容有問題就打新的版本號，不要移動已經發佈過的 tag。
 - 已發佈的版本不刪除也不覆蓋；有問題的版本以新版本取代，必要時在 GitHub Release 註明。
 
 ### Actions 分鐘數與儲存空間

@@ -3,14 +3,18 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  CI_WORKFLOW_PATH,
   GITHUB_OIDC_ISSUER,
   REGISTRY,
   RUST_CONTAINERFILE,
   type ReleasePlan,
+  type WorkflowRun,
   aarch64ElfProblem,
   baseImageProblems,
+  ciRunsUrl,
   compareReleaseTags,
   discoverImages,
+  greenCiProblem,
   helmPushDigest,
   imageNameProblem,
   imagePlatformProblems,
@@ -20,6 +24,7 @@ import {
   parsePlan,
   parsePublished,
   parseReleaseTag,
+  parseWorkflowRuns,
   planImage,
   previousReleaseTag,
   renderReleaseBody,
@@ -334,6 +339,92 @@ describe("parsePlan", () => {
     for (const registry of ["127.0.0.2:5068/x", "localhost.example.com/x", "registry.local:5000/x", "ghcr.io/laysi/trustiot-v2"]) {
       expect(() => requireLoopbackRegistry(local(registry))).toThrow(registry);
     }
+  });
+});
+
+describe("ci on main", () => {
+  const COMMIT = "0123456789abcdef0123456789abcdef01234567";
+  const OTHER = "89abcdef0123456789abcdef0123456789abcdef";
+
+  function run(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
+    return {
+      id: 100,
+      path: CI_WORKFLOW_PATH,
+      headSha: COMMIT,
+      headBranch: "main",
+      event: "push",
+      status: "completed",
+      conclusion: "success",
+      url: "https://github.com/Laysi/trustiot-v2/actions/runs/100",
+      ...overrides,
+    };
+  }
+
+  test("asks for the push runs of ci.yml on main for the commit", () => {
+    const url = new URL(ciRunsUrl("https://api.github.com/", "Laysi/trustiot-v2", COMMIT));
+    expect(url.origin + url.pathname).toBe("https://api.github.com/repos/Laysi/trustiot-v2/actions/workflows/ci.yml/runs");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ head_sha: COMMIT, branch: "main", event: "push", per_page: "100" });
+    expect(() => ciRunsUrl("https://api.github.com", "Laysi/trustiot-v2/x", COMMIT)).toThrow("not an owner/name repository");
+    expect(() => ciRunsUrl("https://api.github.com", "Laysi/trustiot-v2", "abc123")).toThrow("not a full commit SHA");
+  });
+
+  test("reads the runs of a GitHub API answer", () => {
+    const answer = {
+      total_count: 1,
+      workflow_runs: [
+        {
+          id: 38052766358,
+          name: "ci",
+          path: ".github/workflows/ci.yml",
+          head_sha: COMMIT,
+          head_branch: "main",
+          event: "push",
+          status: "completed",
+          conclusion: "success",
+          html_url: "https://github.com/Laysi/trustiot-v2/actions/runs/38052766358",
+        },
+        { id: 2, path: ".github/workflows/ci.yml", head_sha: COMMIT, head_branch: null, event: "push", status: "queued", conclusion: null },
+      ],
+    };
+    expect(parseWorkflowRuns(answer)).toEqual([
+      run({ id: 38052766358, url: "https://github.com/Laysi/trustiot-v2/actions/runs/38052766358" }),
+      run({ id: 2, headBranch: "", status: "queued", conclusion: "", url: "" }),
+    ]);
+    expect(parseWorkflowRuns({ total_count: 0, workflow_runs: [] })).toEqual([]);
+    expect(() => parseWorkflowRuns({ message: "Not Found" })).toThrow("without a workflow_runs list");
+    expect(() => parseWorkflowRuns({ workflow_runs: [{ id: "1" }] })).toThrow("workflow run 0");
+  });
+
+  test("passes when the newest push run on main for the commit succeeded", () => {
+    expect(greenCiProblem([run()], COMMIT)).toBeUndefined();
+    expect(greenCiProblem([run({ id: 1, conclusion: "failure" }), run({ id: 2 })], COMMIT)).toBeUndefined();
+    expect(greenCiProblem([run({ path: `${CI_WORKFLOW_PATH}@refs/heads/main` })], COMMIT)).toBeUndefined();
+  });
+
+  test("refuses when there is no run on main for the commit", () => {
+    expect(greenCiProblem([], COMMIT)).toContain(`no ci run on main for ${COMMIT}`);
+    // Runs that do not count: another commit, branch, event or workflow.
+    for (const other of [
+      run({ headSha: OTHER }),
+      run({ headBranch: "ci/68-release-workflow" }),
+      run({ event: "pull_request" }),
+      run({ event: "workflow_dispatch" }),
+      run({ path: ".github/workflows/release.yml" }),
+      run({ path: ".github/workflows/ci.yml.bak" }),
+    ]) {
+      expect(greenCiProblem([other], COMMIT)).toContain("no ci run on main");
+    }
+  });
+
+  test("refuses while ci is still running, and when it did not succeed", () => {
+    expect(greenCiProblem([run({ status: "in_progress", conclusion: "" })], COMMIT)).toContain("is in_progress");
+    expect(greenCiProblem([run({ status: "queued", conclusion: "" })], COMMIT)).toContain("re-run this release");
+    for (const conclusion of ["failure", "cancelled", "timed_out", "skipped", "action_required", ""]) {
+      expect(greenCiProblem([run({ conclusion })], COMMIT)).toContain("ended with");
+    }
+    // A newer run that failed outweighs an older success.
+    expect(greenCiProblem([run({ id: 1 }), run({ id: 2, conclusion: "failure" })], COMMIT)).toContain("ended with failure");
+    expect(greenCiProblem([run({ id: 2, conclusion: "failure" }), run({ id: 1 })], COMMIT)).toContain("ended with failure");
   });
 });
 

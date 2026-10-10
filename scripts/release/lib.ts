@@ -548,6 +548,109 @@ export function requireLoopbackRegistry(plan: ReleasePlan): void {
 }
 
 // ---------------------------------------------------------------------------------------------
+// CI on main
+
+/** The workflow whose run on main a final release requires (docs/architecture/ci-release.md). */
+export const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
+
+/** The fields of a GitHub Actions workflow run that the release reads. */
+export interface WorkflowRun {
+  id: number;
+  /** The workflow file, `.github/workflows/ci.yml`. */
+  path: string;
+  headSha: string;
+  /** Empty when GitHub reports none. */
+  headBranch: string;
+  /** The triggering event, `push` for a run on main. */
+  event: string;
+  /** `queued`, `in_progress`, `completed`, ...; empty when GitHub reports none. */
+  status: string;
+  /** `success`, `failure`, `cancelled`, ... once completed; empty before. */
+  conclusion: string;
+  url: string;
+}
+
+/**
+ * The GitHub REST request (list workflow runs, needs `actions: read`) for the push runs of
+ * ci.yml on main whose head is `commit`.
+ */
+export function ciRunsUrl(apiUrl: string, repository: string, commit: string): string {
+  if (!REPOSITORY.test(repository)) {
+    throw new ReleaseError(`"${repository}" is not an owner/name repository`);
+  }
+  if (!COMMIT_SHA.test(commit)) {
+    throw new ReleaseError(`"${commit}" is not a full commit SHA`);
+  }
+  const workflow = CI_WORKFLOW_PATH.split("/").at(-1) ?? "";
+  const query = new URLSearchParams({ head_sha: commit, branch: "main", event: "push", per_page: "100" });
+  return `${apiUrl.replace(/\/+$/, "")}/repos/${repository}/actions/workflows/${workflow}/runs?${query}`;
+}
+
+/** Reads the `workflow_runs` of a list-workflow-runs response. */
+export function parseWorkflowRuns(body: unknown): WorkflowRun[] {
+  if (!isMap(body) || !Array.isArray(body.workflow_runs)) {
+    throw new ReleaseError("the GitHub API answered without a workflow_runs list");
+  }
+  const text = (value: unknown): string => (typeof value === "string" ? value : "");
+  return body.workflow_runs.map((run: unknown, index: number): WorkflowRun => {
+    if (
+      !isMap(run) ||
+      typeof run.id !== "number" ||
+      typeof run.path !== "string" ||
+      typeof run.head_sha !== "string" ||
+      typeof run.event !== "string"
+    ) {
+      throw new ReleaseError(`workflow run ${index} in the GitHub API answer lacks id, path, head_sha or event`);
+    }
+    return {
+      id: run.id,
+      path: run.path,
+      headSha: run.head_sha,
+      headBranch: text(run.head_branch),
+      event: run.event,
+      status: text(run.status),
+      conclusion: text(run.conclusion),
+      url: text(run.html_url),
+    };
+  });
+}
+
+/**
+ * Why `commit` may not be released as a final version, or undefined when its newest push run of
+ * ci.yml on main completed successfully. Runs of other workflows, commits, branches or events
+ * do not count, and a newer run that did not succeed outweighs an older success.
+ */
+export function greenCiProblem(runs: readonly WorkflowRun[], commit: string): string | undefined {
+  const onMain = runs
+    .filter(
+      (run) =>
+        (run.path === CI_WORKFLOW_PATH || run.path.startsWith(`${CI_WORKFLOW_PATH}@`)) &&
+        run.headSha === commit &&
+        run.headBranch === "main" &&
+        run.event === "push",
+    )
+    .toSorted((a, b) => b.id - a.id);
+  const newest = onMain[0];
+  const retry = "re-run this release (Re-run all jobs) once ci has passed on main";
+  if (newest === undefined) {
+    return (
+      `no ci run on main for ${commit}: a final release needs a successful push run of ${CI_WORKFLOW_PATH} ` +
+      `for the tagged commit on main (tag the commit that main's ci ran for); ${retry}`
+    );
+  }
+  if (newest.status !== "completed") {
+    return `ci on main for ${commit} is ${newest.status || "not finished"} (${newest.url}); ${retry}`;
+  }
+  if (newest.conclusion !== "success") {
+    return (
+      `ci on main for ${commit} ended with ${newest.conclusion || "no conclusion"} (${newest.url}): ` +
+      `a final release needs it green; fix main and tag a new version, or ${retry}`
+    );
+  }
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Signing identity
 
 /**

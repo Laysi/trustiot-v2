@@ -108,7 +108,7 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 
 | 腳本 | job | 內容 |
 | --- | --- | --- |
-| `release/plan.ts` | plan | 檢查 tag，列出要發佈的映像（`deploy/images/`）與 chart，`helm lint --strict` |
+| `release/plan.ts` | plan | 檢查 tag（正式版要在 main 上，且該 commit 在 main 的 ci 通過），列出要發佈的映像（`deploy/images/`）與 chart，`helm lint --strict` |
 | `release/build.ts` | build | 交叉編譯 Rust、建置 arm64 映像（OCI 壓縮檔）與 SPDX SBOM，不推送 |
 | `release/publish.ts` | publish | 推送映像、cosign 簽章與 SBOM attestation，打包、推送並簽章 chart，建立 GitHub Release |
 | `release/verify.ts` | verify | 以唯讀權限驗證發佈結果，輸出驗證報告 |
@@ -137,7 +137,7 @@ bun scripts/release/verify.ts --plan "$work/plan.json" --published "$work/publis
 podman stop release-registry
 ```
 
-`--dry-run` 以目前的 HEAD 規劃，tag 不必存在，也不檢查正式版是否在 main 上。只要建置映像，前兩步就夠了。同一個版本再跑一次 publish 會得到相同的 digest，不會重複推送；內容不同時 publish 會拒絕覆蓋。
+`--dry-run` 以目前的 HEAD 規劃，tag 不必存在，也不檢查正式版是否在 main 上、main 的 ci 是否通過（後者以 `GITHUB_TOKEN` 讀 GitHub API）。只要建置映像，前兩步就夠了。同一個版本再跑一次 publish 會得到相同的 digest，不會重複推送；內容不同時 publish 會拒絕覆蓋。
 
 ## 型別檢查與測試
 

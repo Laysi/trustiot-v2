@@ -4,8 +4,9 @@
 # procedure when a run fails: docs/architecture/ci-release.md, section release.yml.
 #
 # Jobs and what each may do (every job lists its own `permissions`):
-# - plan     contents: read. Checks the tag (a final release must be on main), lists what the
-#            release publishes, lints the chart and writes the release notes.
+# - plan     contents: read, actions: read. Checks the tag (a final release must be on main,
+#            with a green ci run for that commit there), lists what the release publishes,
+#            lints the chart and writes the release notes.
 # - build    contents: read. Cross-compiles and builds the images. It runs third-party build
 #            code (Cargo build scripts and proc macros), so it gets no secret and no write
 #            access, and hands over only data: image archives and SBOMs as an artifact.
@@ -39,6 +40,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
+      actions: read # a final release needs a green ci run of the tagged commit on main
       contents: read
     outputs:
       plan: ${{ steps.plan.outputs.plan }}
@@ -55,6 +57,9 @@ jobs:
         with:
           tools: bun helm
       - id: plan
+        env:
+          # Read-only: lists the ci runs on main for a final release (scripts/release/plan.ts).
+          GITHUB_TOKEN: ${{ github.token }}
         run: bun scripts/release/plan.ts --tag "$GITHUB_REF_NAME"
       # The model is optional: without the AI_MODEL variable (or when the call fails) the notes
       # are the commit subjects since the previous release.

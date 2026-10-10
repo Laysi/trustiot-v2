@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { REGISTRY, parseReleaseTag } from "./lib.ts";
+import { CI_WORKFLOW_PATH, REGISTRY, type WorkflowRun, parseReleaseTag } from "./lib.ts";
 import { makePlan, previousTag } from "./planner.ts";
 
 // Throwaway repositories are built with git plumbing and without the user's or the system's git
@@ -73,8 +73,41 @@ function repo(options: { originMain?: boolean } = {}): Repo {
   return { root, main, branch };
 }
 
-function plan(root: string, tag: string, dryRun = false) {
-  return makePlan({ root, tag, dryRun, registry: REGISTRY, repository: "Laysi/trustiot-v2" });
+type CiRuns = (commit: string) => Promise<WorkflowRun[]>;
+
+/** A successful push run of ci.yml on main for `commit`. */
+function greenRun(commit: string, overrides: Partial<WorkflowRun> = {}): WorkflowRun {
+  return {
+    id: 7,
+    path: CI_WORKFLOW_PATH,
+    headSha: commit,
+    headBranch: "main",
+    event: "push",
+    status: "completed",
+    conclusion: "success",
+    url: "https://github.com/Laysi/trustiot-v2/actions/runs/7",
+    ...overrides,
+  };
+}
+
+/** GitHub as seen by the plan: the ci runs it lists for each commit; records what was asked. */
+function fakeCi(runs: WorkflowRun[]): CiRuns & { asked: string[] } {
+  const asked: string[] = [];
+  const ciRuns = async (commit: string) => {
+    asked.push(commit);
+    return runs.filter((run) => run.headSha === commit);
+  };
+  return Object.assign(ciRuns, { asked });
+}
+
+/** A ci lookup that must not happen. */
+const noCi: CiRuns = async (commit) => {
+  throw new Error(`ci runs were asked for ${commit}`);
+};
+
+/** `ciRuns: null` plans without any way to read ci runs. */
+function plan(root: string, tag: string, dryRun = false, ciRuns: CiRuns | null = noCi) {
+  return makePlan({ root, tag, dryRun, registry: REGISTRY, repository: "Laysi/trustiot-v2", ciRuns: ciRuns ?? undefined });
 }
 
 describe("makePlan", () => {
@@ -122,14 +155,57 @@ describe("makePlan", () => {
     await expect(plan(root, "v0.3.0")).rejects.toThrow("is not on main");
   });
 
-  test("plans a final release on main", async () => {
+  test("plans a final release on main once ci passed there", async () => {
     const { root, main } = repo();
     git(root, ["update-ref", "--no-deref", "HEAD", main]);
     git(root, ["update-ref", "refs/tags/v0.3.0", main]);
-    const result = await plan(root, "v0.3.0");
+    const ci = fakeCi([greenRun(main)]);
+    const result = await plan(root, "v0.3.0", false, ci);
     expect(result.prerelease).toBe(false);
     expect(result.commit).toBe(main);
     expect(result.sourceDateEpoch).toBe(MAIN_EPOCH);
+    expect(ci.asked).toEqual([main]);
+  });
+
+  test("refuses a final release on main without a green ci run for its commit", async () => {
+    const { root, main, branch } = repo();
+    git(root, ["update-ref", "--no-deref", "HEAD", main]);
+    git(root, ["update-ref", "refs/tags/v0.3.0", main]);
+    // No run at all, or a green run only for another commit or for the pull request.
+    for (const runs of [[], [greenRun(branch)], [greenRun(main, { event: "pull_request", headBranch: "feature" })]]) {
+      await expect(plan(root, "v0.3.0", false, fakeCi(runs))).rejects.toThrow(`no ci run on main for ${main}`);
+    }
+    await expect(plan(root, "v0.3.0", false, fakeCi([greenRun(main, { status: "in_progress", conclusion: "" })]))).rejects.toThrow(
+      "is in_progress",
+    );
+    await expect(plan(root, "v0.3.0", false, fakeCi([greenRun(main, { conclusion: "failure" })]))).rejects.toThrow(
+      "ended with failure",
+    );
+  });
+
+  test("refuses a final release when the ci runs cannot be read", async () => {
+    const { root, main } = repo();
+    git(root, ["update-ref", "--no-deref", "HEAD", main]);
+    git(root, ["update-ref", "refs/tags/v0.3.0", main]);
+    await expect(plan(root, "v0.3.0", false, null)).rejects.toThrow("needs the ci runs of the tagged commit");
+    const failing: CiRuns = async () => {
+      throw new Error("HTTP 403");
+    };
+    await expect(plan(root, "v0.3.0", false, failing)).rejects.toThrow("HTTP 403");
+  });
+
+  test("checks main before ci, and never asks for ci for a release candidate or a dry run", async () => {
+    const { root, main, branch } = repo();
+    git(root, ["update-ref", "refs/tags/v0.3.0", branch]);
+    const ci = fakeCi([greenRun(branch)]);
+    await expect(plan(root, "v0.3.0", false, ci)).rejects.toThrow("is not on main");
+    expect(ci.asked).toEqual([]);
+    git(root, ["update-ref", "refs/tags/v0.3.0-rc.1", branch]);
+    expect((await plan(root, "v0.3.0-rc.1", false, noCi)).prerelease).toBe(true);
+    expect((await plan(root, "v0.4.0", true, noCi)).commit).toBe(branch);
+    git(root, ["update-ref", "--no-deref", "HEAD", main]);
+    git(root, ["update-ref", "refs/tags/v0.3.0-rc.2", main]);
+    expect((await plan(root, "v0.3.0-rc.2", false, noCi)).commit).toBe(main);
   });
 
   test("refuses a final release when origin/main was not fetched", async () => {

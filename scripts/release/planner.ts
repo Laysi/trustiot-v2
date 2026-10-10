@@ -11,7 +11,9 @@ import {
   type ReleasePlan,
   type ReleaseVersion,
   ReleaseError,
+  type WorkflowRun,
   discoverImages,
+  greenCiProblem,
   isMap,
   parsePlan,
   parseReleaseTag,
@@ -23,12 +25,17 @@ export interface PlanInput {
   /** The repository root (a git work tree). */
   root: string;
   tag: string;
-  /** Local build of HEAD: the tag need not exist and the main check is skipped. */
+  /** Local build of HEAD: the tag need not exist and the main and ci checks are skipped. */
   dryRun: boolean;
   /** Registry path the images and chart go to. */
   registry: string;
   /** `owner/name` as GitHub spells it. */
   repository: string;
+  /**
+   * Lists the push runs of ci.yml on main for a commit (plan.ts asks the GitHub API). A final
+   * release needs one; release candidates and dry runs never call it.
+   */
+  ciRuns?: (commit: string) => Promise<WorkflowRun[]>;
 }
 
 async function git(root: string, ...args: string[]): Promise<string> {
@@ -54,6 +61,17 @@ async function requireOnMain(root: string, commit: string): Promise<void> {
   }
 }
 
+/** Throws unless the newest push run of ci.yml on main for `commit` succeeded. */
+async function requireGreenCi(input: PlanInput, commit: string): Promise<void> {
+  if (input.ciRuns === undefined) {
+    throw new ReleaseError("a final release needs the ci runs of the tagged commit on main, and nothing can read them here");
+  }
+  const problem = greenCiProblem(await input.ciRuns(commit), commit);
+  if (problem !== undefined) {
+    throw new ReleaseError(problem);
+  }
+}
+
 /** The chart name from Chart.yaml. */
 function chartName(root: string): string {
   const chart = Bun.YAML.parse(readFileSync(join(root, CHART_DIR, "Chart.yaml"), "utf8"));
@@ -65,7 +83,7 @@ function chartName(root: string): string {
 
 /**
  * Checks the tag against the checked-out commit and lists what the release publishes. A final
- * release (no -rc.N) must be on main.
+ * release (no -rc.N) must be on main, and ci must have passed for that commit on main.
  */
 export async function makePlan(input: PlanInput): Promise<ReleasePlan> {
   const version = parseReleaseTag(input.tag);
@@ -80,6 +98,7 @@ export async function makePlan(input: PlanInput): Promise<ReleasePlan> {
     }
     if (!version.prerelease) {
       await requireOnMain(input.root, commit);
+      await requireGreenCi(input, commit);
     }
   }
   const sourceDateEpoch = Number(await git(input.root, "log", "-1", "--format=%ct", commit));
