@@ -1,0 +1,18 @@
+diff --git a/api/openapi.json b/api/openapi.json
+index ad14adb..7887042 100644
+--- a/api/openapi.json
++++ b/api/openapi.json
+@@ -22,6 +22,13 @@
+           "message_key": {
+             "$ref": "#/components/schemas/MessageKey",
+             "description": "The message the client shows, translated by the client."
++          },
++          "stale_proof_note": {
++            "description": "Temporary experiment (Laysi/trustiot-v2#55): an optional field added to the type and to the\ncontract fixture, but deliberately without regenerating api/openapi.json, so that the\nOpenAPI up-to-date check is the one that fails.",
++            "type": [
++              "string",
++              "null"
++            ]
+           }
+         },
+         "required": [
