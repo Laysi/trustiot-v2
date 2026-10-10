@@ -1,0 +1,13 @@
+{
+  "id": "01928f6e-7a3c-7d4e-8f00-000000000102",
+  "type": "example.widget_renamed",
+  "version": 2,
+  "tenant_id": "01928f6e-7a3c-7d4e-8f00-00000000000a",
+  "occurred_at": "2026-10-10T08:05:00.456Z",
+  "producer": "assets",
+  "payload": {
+    "widget_id": "w-1",
+    "display_name": "Pump B",
+    "renamed_by": "01928f6e-7a3c-7d4e-8f00-0123456789ab"
+  }
+}
