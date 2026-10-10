@@ -1,0 +1,2 @@
+purged instance "default": 4 container(s), 1 network(s), 5 volume(s), 1 image(s), credentials and state
+purge exit 0

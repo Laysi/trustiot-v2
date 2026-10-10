@@ -1,0 +1,5 @@
+trustiot-dev-default-postgres-data
+trustiot-dev-default-clickhouse-data
+trustiot-dev-default-mosquitto-data
+trustiot-dev-default-mosquitto-config
+trustiot-dev-default-postgres-config

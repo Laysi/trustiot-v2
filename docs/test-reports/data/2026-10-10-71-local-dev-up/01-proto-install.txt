@@ -1,0 +1,6 @@
+{"type":"progress","id":"kubeconform","message":"kubeconform 0.8.0 installed"}
+{"type":"progress","id":"bun","message":"Bun 1.4.2 installed"}
+{"type":"progress","id":"helm","message":"Helm 4.3.0 installed"}
+{"type":"progress","id":"rust","message":"Rust 1.99.0 installed"}
+{"type":"notice","variant":"success","messages":["Installed kubeconform, bun, helm, and rust in 0s!"]}
+proto install exit 0
