@@ -1,0 +1,26 @@
+# proto schema plugin for k3d (https://k3d.io).
+# Downloads the official release binary and verifies it against the checksums.txt
+# published with the release (its entries are named `_dist/<binary>`).
+# Reference: https://moonrepo.dev/docs/proto/non-wasm-plugin
+
+name = "k3d"
+type = "cli"
+
+[platform.linux]
+download-file = "k3d-linux-{arch}"
+checksum-file = "checksums.txt"
+
+[install]
+download-url = "https://github.com/k3d-io/k3d/releases/download/v{version}/{download_file}"
+checksum-url = "https://github.com/k3d-io/k3d/releases/download/v{version}/{checksum_file}"
+
+[install.arch]
+aarch64 = "arm64"
+x86_64 = "amd64"
+
+[install.exes.k3d]
+exe-path = "k3d"
+primary = true
+
+[resolve]
+git-url = "https://github.com/k3d-io/k3d"

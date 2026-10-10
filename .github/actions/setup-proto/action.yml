@@ -16,28 +16,43 @@ runs:
     - name: Install proto and tools
       shell: bash
       env:
-        # Bump both values together; the hash is the SHA-256 of the archive below
-        # (published as proto_cli-x86_64-unknown-linux-gnu.tar.xz.sha256 in the release).
+        # Bump the version and both hashes together. Each hash is the SHA-256 of the archive for
+        # its architecture, published next to it in the release as
+        # proto_cli-<target>.tar.xz.sha256.
         PROTO_VERSION: "0.60.2"
-        PROTO_SHA256: fe96d99ede103639becd6ab624688efeacc91049574174b31e67d1affd1c295c
+        PROTO_SHA256_X64: fe96d99ede103639becd6ab624688efeacc91049574174b31e67d1affd1c295c
+        PROTO_SHA256_ARM64: bf04fec624b76dcf935ac4753e1ced8fc6a105ec1eb5abd6690f5ece308748cc
         TOOLS: ${{ inputs.tools }}
       run: |
         set -euo pipefail
-        if [[ "$RUNNER_OS" != "Linux" || "$RUNNER_ARCH" != "X64" ]]; then
-          echo "::error title=setup-proto::Only Linux x64 runners are supported, got $RUNNER_OS $RUNNER_ARCH."
+        if [[ "$RUNNER_OS" != "Linux" ]]; then
+          echo "::error title=setup-proto::Only Linux runners are supported, got $RUNNER_OS $RUNNER_ARCH."
           exit 1
         fi
+        case "$RUNNER_ARCH" in
+          X64)
+            target="x86_64-unknown-linux-gnu"
+            expected_sha256="$PROTO_SHA256_X64"
+            ;;
+          ARM64)
+            target="aarch64-unknown-linux-gnu"
+            expected_sha256="$PROTO_SHA256_ARM64"
+            ;;
+          *)
+            echo "::error title=setup-proto::Only x64 and arm64 Linux runners are supported, got $RUNNER_OS $RUNNER_ARCH."
+            exit 1
+            ;;
+        esac
         if [[ -z "${TOOLS// /}" ]]; then
           echo "::error title=setup-proto::The tools input is empty."
           exit 1
         fi
 
-        target="x86_64-unknown-linux-gnu"
         archive="$RUNNER_TEMP/proto_cli-$target.tar.xz"
         curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 \
           --output "$archive" \
           "https://github.com/moonrepo/proto/releases/download/v$PROTO_VERSION/proto_cli-$target.tar.xz"
-        echo "$PROTO_SHA256  $archive" | sha256sum --check --strict
+        echo "$expected_sha256  $archive" | sha256sum --check --strict
 
         proto_bin="$HOME/.proto/bin"
         mkdir -p "$proto_bin"
