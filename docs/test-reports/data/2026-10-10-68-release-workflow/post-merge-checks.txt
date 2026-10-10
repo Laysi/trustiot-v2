@@ -1,0 +1,96 @@
+# The checks of main's .github/workflows/ci.yml, plus the release scripts, on the merge of main into
+# ci/68-release-workflow. Run 2026-10-10 13:54-14:01Z on the workstation (Fedora 45 x86_64, 8 cores),
+# CARGO_BUILD_JOBS=2, SQLX_OFFLINE=true.
+# Tree: the merge commit f10215a (main a25efe9 merged into d2d859d). The cargo, bun and chart checks
+# through the cargo test rerun (13:59:33Z) ran on the resolved merge before it was committed at
+# 13:59:48Z; committing changed no file. gitleaks, `bun test scripts/release`, the plan dry run and
+# `helm package` ran on f10215a itself. Each command's full log was kept locally; this file has the
+# exit codes and the summaries.
+
+$ proto install --yes
+exit 0
+
+$ cargo fmt --all --check
+exit 0 (no output)
+
+$ cargo clippy --workspace --all-targets --locked -- -D warnings
+exit 0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.22s
+
+$ cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
+exit 0
+
+$ cargo test --workspace --locked
+exit 101, 13:55Z. One test failed, then cargo stopped:
+  crates/service-kit/tests/container.rs
+  pid_1_in_a_container_drains_and_exits_within_the_grace_period ... FAILED
+  panicked at crates/service-kit/tests/container.rs:160:29: readiness fails within the drain delay
+The test gives /readyz one second after `podman stop` starts to answer 503. The load average was
+about 18 on 8 cores (other builds on the workstation). This branch does not change crates/,
+services/ or edge/: `git diff origin/main -- crates/ services/ edge/` is empty, so the code is the
+same as on main.
+
+$ cargo test --workspace --locked --no-fail-fast
+exit 0, 13:59Z (the same tree, rerun)
+23 test result lines: 194 passed, 0 failed, 0 ignored
+(includes pid_1_in_a_container_drains_and_exits_within_the_grace_period ... ok, and the 4 tests of
+release-selftest)
+
+$ cargo test --package service-kit --no-default-features --locked
+exit 0 (the container test passed here as well: pid_1_in_a_container_drains_and_exits_within_the_grace_period ... ok)
+
+$ cargo deny --locked check
+exit 0
+advisories ok, bans ok, licenses ok, sources ok
+(deny.toml targets: aarch64-unknown-linux-gnu, aarch64-unknown-linux-musl, x86_64-unknown-linux-gnu)
+
+$ gitleaks git --no-banner --redact --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" .
+exit 0 on f10215a: 36 commits scanned, no leaks found
+
+$ bun scripts/ci/check-workflows.ts
+workflow policy: 3 file(s) checked, no violations
+
+$ bun install --cwd scripts --frozen-lockfile
+exit 0
+
+$ bun run --cwd scripts typecheck
+exit 0 (no output)
+
+$ bun run --cwd scripts test
+176 tests across 9 files: 175 pass, 1 skip, 0 fail
+skipped: "the dev environment with podman > starts, passes every check, seeds, rotates credentials,
+stops and purges without leftovers" (tests/e2e.test.ts, runs only with TRUSTIOT_DEV_E2E=1)
+
+$ bun test deploy/chart
+133 pass, 0 fail
+
+$ bun test scripts/release --reporter=junit
+90 tests: 90 pass, 0 fail, 0 skipped (209 assertions)
+The tests of the rule "a final release needs a green ci run on main", all pass:
+  ci on main > asks for the push runs of ci.yml on main for the commit
+  ci on main > reads the runs of a GitHub API answer
+  ci on main > passes when the newest push run on main for the commit succeeded
+  ci on main > refuses when there is no run on main for the commit
+  ci on main > refuses while ci is still running, and when it did not succeed
+  makePlan > refuses a final release that is not on main
+  makePlan > plans a final release on main once ci passed there
+  makePlan > refuses a final release on main without a green ci run for its commit
+  makePlan > refuses a final release when the ci runs cannot be read
+  makePlan > checks main before ci, and never asks for ci for a release candidate or a dry run
+  makePlan > refuses a final release when origin/main was not fetched
+
+$ bun scripts/release/plan.ts --tag v0.0.0-rc.99 --dry-run --output plan.json
+exit 0
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.99 → version 0.0.0-rc.99 (prerelease), commit f10215a83e9b20b98093bccfa6aad33d0d4a4f6d
+[release:plan] image ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.99 (Rust package release-selftest)
+[release:plan] chart ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.99
+[release:plan] notes start from v0.0.0-rc.1
+(a local dry run only: no tag was created and nothing was built or pushed)
+
+$ helm package deploy/chart --version 0.0.0-rc.99 --app-version 0.0.0-rc.99 -d <scratch>
+exit 0; the package holds Chart.yaml, values.yaml, values.schema.json, values-saas.yaml,
+values-onprem.yaml, README.md, .helmignore and templates/ (_helpers.tpl, _ingress.tpl, _service.tpl,
+ingress.yaml, platform-config.yaml, services.yaml); tests/ (including tests/e2e/) is left out by
+.helmignore

@@ -4,7 +4,7 @@
 
 ## 環境
 
-- **commit**：`ee8c438`（分支 `ci/68-release-workflow`，base 為 main 的 `71be25d`）。本機的發佈測試、負向檢查與可重現建置都在這個 commit 上跑；rebase 之前跑過的交叉編譯檢查另外註明。
+- **commit**：`ee8c438`（分支 `ci/68-release-workflow`，base 為 main 的 `71be25d`）。本機的發佈測試、負向檢查與可重現建置都在這個 commit 上跑；rebase 之前跑過的交叉編譯檢查另外註明。之後分支兩次合併 main（`8ce2dfd`、`a25efe9`），並加上「正式版要 main 的 ci 通過」的規則；合併後的檢查在 `f10215a` 上跑，見「合併 main 之後」。
 - **本機**：x86_64 的 Fedora 45（kernel 7.2.8）。podman 6.1.3、skopeo 1.24.1 來自系統；bun 1.4.2、helm 4.3.0、zig 0.16.0、cargo-zigbuild 0.23.4、cargo-auditable 0.7.6、syft 1.52.0、cosign 3.1.3 由 `.prototools` 鎖定版本、以 proto 安裝；Rust 1.99.0（`rust-toolchain.toml`）加上 `aarch64-unknown-linux-musl` target。詳見 [environment.txt](data/2026-10-10-68-release-workflow/environment.txt)。
 - **本機 registry**：`docker.io/library/registry:3`（以 digest 釘選），只聽 `127.0.0.1:5068`。本機測試以當場產生的 cosign 金鑰對簽章（`--local-test-key`），不寫入 Sigstore：keyless 簽章需要 GitHub Actions 的 OIDC token，而且本機測試不該在公開紀錄留下任何東西。金鑰在測試的暫存目錄，測完刪除。
 - **GitHub**：簽章過的 annotated tag `v0.0.0-rc.1` 指向 `ee8c438`，2026-10-10T12:39:36Z 推送，觸發 release.yml 的執行 [38052766358](https://github.com/Laysi/trustiot-v2/actions/runs/38052766358)，各 job 在 GitHub 代管的 `ubuntu-24.04`（x86_64）runner 上執行。repo 為私有，組織在 GitHub Free 方案。repo 沒有設定 `AI_MODEL` 變數，所以發版說明是 `Laysi/release-notes-action` 的 commit 主旨清單。
@@ -58,6 +58,14 @@ bun test scripts/release
 # Laysi/trustiot-v2#67 的 workflow 規則檢查與 TypeScript 型別檢查（該 PR 尚未合併，暫時複製過來執行）
 bun scripts/ci/check-workflows.ts .
 bun run --cwd scripts typecheck
+```
+
+合併 main 之後的檢查（[post-merge-checks.txt](data/2026-10-10-68-release-workflow/post-merge-checks.txt)）：在 `f10215a`（main 的 `a25efe9` 合併進來之後）跑 main 的 ci.yml 的每一項檢查，指令與 `CLAUDE.md` 的「Build, lint, and test」相同，再加上：
+
+```sh
+bun test scripts/release --reporter=junit --reporter-outfile=<work>/release-tests.junit.xml
+bun scripts/release/plan.ts --tag v0.0.0-rc.99 --dry-run --output <work>/plan.json   # 只在本機規劃，不建 tag、不建置也不推送
+helm package deploy/chart --version 0.0.0-rc.99 --app-version 0.0.0-rc.99 -d <work>
 ```
 
 交叉編譯的檢查（[cross-compile-checks.txt](data/2026-10-10-68-release-workflow/cross-compile-checks.txt)）：
@@ -154,6 +162,23 @@ SBOM 的下載：verify job 以唯讀權限從 GHCR 取出 SBOM attestation 並�
 
 限制：GHCR 上的映像是私有的，lab 主機沒有讀取憑證，所以跑的是本機以同一條流程建出的映像，不是 CI 推送的那一個（兩者 digest 不同的原因見上）。這一項不在驗收條件內，是額外的實機確認。
 
+### 合併 main 之後
+
+2026-10-10T13:54–14:01Z 在 `f10215a` 上跑（[post-merge-checks.txt](data/2026-10-10-68-release-workflow/post-merge-checks.txt)）：
+
+| 項目 | 結果 |
+| --- | --- |
+| `cargo fmt`；`cargo clippy -D warnings`（workspace，以及 service-kit 關閉預設 feature） | 通過 |
+| `cargo test --workspace --locked` | 第一次有 1 項失敗：`crates/service-kit/tests/container.rs` 要 `/readyz` 在 `podman stop` 開始後 1 秒內回 503，當時工作站的負載約 18（8 核）。本分支沒有改 `crates/`，這段程式與 main 相同。同一份程式重跑：23 組，194 項通過，0 項失敗 |
+| `cargo test -p service-kit --no-default-features` | 通過，上面那項容器測試也通過 |
+| `cargo deny --locked check` | 通過，targets 含映像實際的 `aarch64-unknown-linux-musl` |
+| gitleaks（`f10215a` 能走到的 36 個 commit） | 沒有發現 |
+| workflow 規則（`scripts/ci/check-workflows.ts`） | 3 個檔案，沒有違規 |
+| `scripts/` 的型別檢查與測試 | 型別檢查通過；176 項中 175 項通過，1 項略過（要設 `TRUSTIOT_DEV_E2E=1` 的 podman 端對端測試） |
+| `bun test deploy/chart` | 133 項通過，0 項失敗 |
+| `bun test scripts/release` | 90 項通過，0 項失敗；其中 11 項測正式版規則：在 main 上、main 的 ci 為該 commit 跑的最新一次 push 執行成功；沒有執行、還在跑、失敗或讀不到時拒絕；候選版與 dry run 不查 ci |
+| `plan.ts --dry-run`、`helm package` | 兩份 values 的 `helm lint --strict` 通過；合併進來的 ingress 範本照常打包，`tests/`（含 e2e）不進 chart |
+
 ## 結論
 
 | 驗收條件 | 結果 |
@@ -168,4 +193,4 @@ SBOM 的下載：verify job 以唯讀權限從 GHCR 取出 SBOM attestation 並�
 - 第一個服務映像加入後刪除 `release-selftest`（ci-release.md 已註明）。
 - release profile 的 `strip = "debuginfo"` 經 zig 連結後沒有符號表（見上）。
 
-2026-10-10 合併 main（Laysi/trustiot-v2#67 的 ci.yml）時已處理的事項：`.github/actions/setup-proto/action.yml` 保留一份，含工具鏈檢查；`deny.toml` 的 targets 加上 `aarch64-unknown-linux-musl`，cargo-deny 也檢查映像實際的 target；`scripts/lib/` 的兩個型別錯誤已在 main 修正。
+2026-10-10 合併 main（Laysi/trustiot-v2#67 的 ci.yml）時已處理的事項：`.github/actions/setup-proto/action.yml` 保留一份，含工具鏈檢查；`deny.toml` 的 targets 加上 `aarch64-unknown-linux-musl`，cargo-deny 也檢查映像實際的 target；`scripts/lib/` 的兩個型別錯誤已在 main 修正。第二次合併（Laysi/trustiot-v2#62 的 Istio 入口、Laysi/trustiot-v2#244 的測試時序修正）只有工具清單的衝突，合併後的檢查見「合併 main 之後」。
