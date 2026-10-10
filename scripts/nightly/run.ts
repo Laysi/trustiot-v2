@@ -6,11 +6,15 @@
 //
 // Environment:
 //   K3S_IMAGE                    required; the k3s image of the cluster, pinned by digest
+//   GATEWAY_API_VERSION          required; Gateway API release whose standard-install.yaml is applied
+//   GATEWAY_API_SHA256           required; SHA-256 of that file
+//   ISTIO_VERSION                required; Istio release of the four Helm charts (deploy/istio/README.md)
 //   NIGHTLY_OUT                  output directory (default: ./nightly-out)
 //   NIGHTLY_SIMULATE_FAILURE     `true` fails every shape on purpose after its install
 //   GITHUB_STEP_SUMMARY          when set, the Markdown report is appended to it
 //
-// Needs docker (for k3d) and the tools pinned in .prototools: helm, k3d and kubectl.
+// Needs docker (for k3d and the e2e test's image), openssl, and the tools pinned in .prototools:
+// bun, helm, k3d and kubectl.
 // Exit status: 0 when every shape passed, 1 when a check failed, 2 on a usage error.
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +22,7 @@ import { join, resolve } from "node:path";
 
 import { exec, pinnedTool, retry, run, RunLog } from "./exec.ts";
 import { isOk, renderMarkdown, type Report, type ShapeResult } from "./report.ts";
+import { installPlatform } from "./platform.ts";
 import { discoverShapes, smokeShape } from "./smoke.ts";
 
 const REPO_ROOT = resolve(import.meta.dir, "..", "..");
@@ -34,14 +39,34 @@ export function requireDigestPinned(image: string | undefined): string {
   return image;
 }
 
+export interface VersionPins {
+  image: string;
+  gatewayApiVersion: string;
+  gatewayApiSha256: string;
+  istioVersion: string;
+}
+
+/** The versions the nightly installs, all pinned in nightly.yml; a missing or loose one is an error. */
+export function readPins(env: Record<string, string | undefined>): VersionPins {
+  const image = requireDigestPinned(env.K3S_IMAGE);
+  const gatewayApiVersion = env.GATEWAY_API_VERSION ?? "";
+  const gatewayApiSha256 = env.GATEWAY_API_SHA256 ?? "";
+  const istioVersion = env.ISTIO_VERSION ?? "";
+  if (!/^v\d+\.\d+\.\d+$/.test(gatewayApiVersion)) throw new Error(`GATEWAY_API_VERSION must look like v1.6.1; got ${JSON.stringify(gatewayApiVersion)}`);
+  if (!/^[0-9a-f]{64}$/.test(gatewayApiSha256)) throw new Error("GATEWAY_API_SHA256 must be 64 lowercase hex digits");
+  if (!/^\d+\.\d+\.\d+$/.test(istioVersion)) throw new Error(`ISTIO_VERSION must look like 1.30.5; got ${JSON.stringify(istioVersion)}`);
+  return { image, gatewayApiVersion, gatewayApiSha256, istioVersion };
+}
+
 async function main(): Promise<number> {
-  let image: string;
+  let pins: VersionPins;
   try {
-    image = requireDigestPinned(process.env.K3S_IMAGE);
+    pins = readPins(process.env);
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     return 2;
   }
+  const image = pins.image;
   const outDir = resolve(process.env.NIGHTLY_OUT ?? "nightly-out");
   mkdirSync(outDir, { recursive: true });
   const log = new RunLog(join(outDir, "run.log"));
@@ -92,8 +117,16 @@ async function main(): Promise<number> {
     await run(log, [kubectl, "--namespace", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=180s"], { ...kube, timeoutMs: 200_000 });
     await run(log, [kubectl, "version"], { ...kube, timeoutMs: 60_000 });
 
+    await installPlatform(
+      {
+        repoRoot: REPO_ROOT, outDir, kubeconfig, helm, kubectl, k3d, cluster: CLUSTER, log,
+        gatewayApiVersion: pins.gatewayApiVersion, gatewayApiSha256: pins.gatewayApiSha256, istioVersion: pins.istioVersion,
+      },
+      shapes.map((shape) => shape.name),
+    );
+
     for (const shape of shapes) {
-      shapeResults.push(await smokeShape({ chartDir: CHART_DIR, outDir, kubeconfig, helm, kubectl, log, simulateFailure }, shape));
+      shapeResults.push(await smokeShape({ repoRoot: REPO_ROOT, chartDir: CHART_DIR, outDir, kubeconfig, helm, kubectl, log, simulateFailure }, shape));
     }
   } catch (error) {
     infraError = error instanceof Error ? error.message : String(error);

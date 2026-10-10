@@ -73,6 +73,11 @@
       allowedVersions: "/^v?1\\.36\\./",
     },
     {
+      description: "Istio: the nightly's charts stay on the minor that the SaaS host and the lab run (deploy/istio/README.md); a new minor is a deliberate upgrade of all four charts together",
+      matchPackageNames: ["istio/istio"],
+      allowedVersions: "/^1\\.30\\./",
+    },
+    {
       description: "k3s image tags look like v1.36.5-k3s1",
       matchPackageNames: ["rancher/k3s"],
       versioning: "loose",
@@ -96,6 +101,14 @@
       managerFilePatterns: ["/(^|/)\\.prototools$/"],
       matchStrings: [
         "# renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?\\n[a-z0-9_-]+ = \"(?<currentValue>[^\"]+)\"",
+      ],
+    },
+    {
+      description: "Versions in workflow env blocks, annotated with a `# renovate:` comment on the line above",
+      customType: "regex",
+      managerFilePatterns: ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      matchStrings: [
+        "# renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>\\S+)\\n\\s+[A-Z0-9_]+: \"?(?<currentValue>[^\"\\s]+)\"?",
       ],
     },
     {

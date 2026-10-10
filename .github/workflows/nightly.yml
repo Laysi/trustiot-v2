@@ -1,6 +1,6 @@
-# Nightly: deploys the whole Helm chart into a k3d cluster once per values file (SaaS, then
-# on-prem) and runs the smoke test, so a deployment shape nobody is using day to day cannot
-# rot unnoticed. Policy, what the test checks and what to do when it fails:
+# Nightly: installs Istio ambient into a k3d cluster, deploys the whole Helm chart once per
+# values file (SaaS, then on-prem), and runs the smoke test and the ingress e2e test, so a
+# deployment shape nobody is using day to day cannot rot unnoticed. Policy, what the test checks and what to do when it fails:
 # docs/architecture/ci-release.md, section nightly.yml.
 #
 # Cost: one job on one hosted runner, one k3d cluster reused for both values files. The
@@ -34,6 +34,7 @@ on:
       - .proto/plugins/**
       - .prototools
       - deploy/chart/**
+      - deploy/istio/**
       - scripts/nightly/**
 
 # No token scopes by default; each job asks for what it needs.
@@ -49,7 +50,7 @@ jobs:
   smoke:
     name: smoke
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
     env:
@@ -57,6 +58,12 @@ jobs:
       # pinned by the digest of the multi-arch index. Renovate keeps tag and digest together
       # (renovate.json5; it stays on the 1.36 minor until someone upgrades k3s on purpose).
       K3S_IMAGE: rancher/k3s:v1.36.5-k3s1@sha256:057cfd5a9d51b89f1f0ee139c28d5d5fdd5aa7ddeac2742a0ba90c6dbc0329bb
+      # The platform the chart expects (deploy/istio/README.md). The Gateway API CRDs are applied
+      # from the release asset after its SHA-256 matches; bump version and hash together.
+      GATEWAY_API_VERSION: v1.6.1
+      GATEWAY_API_SHA256: 24d931f22abd8e40c973264319ead7cfa09d0fb7716b7ab1ee2ff174cb063a73
+      # renovate: datasource=github-releases depName=istio/istio
+      ISTIO_VERSION: 1.30.5
       NIGHTLY_OUT: ${{ runner.temp }}/nightly-out
       NIGHTLY_SIMULATE_FAILURE: ${{ inputs.simulate_failure && 'true' || 'false' }}
     steps:
@@ -64,11 +71,13 @@ jobs:
         with:
           persist-credentials: false
       # bun runs the test, helm, k3d and kubectl are the versions pinned in .prototools. Docker,
-      # which k3d needs, is part of the runner image.
+      # which k3d and the e2e test's image build need, and openssl are part of the runner image.
       - uses: ./.github/actions/setup-proto
         with:
           tools: bun helm k3d kubectl
-      - name: Deploy the chart with each values file and run the smoke test
+      # Installs Gateway API and Istio ambient, then per values file: the smoke deployment and the
+      # ingress e2e test (deploy/chart/tests/e2e).
+      - name: Deploy the chart with each values file and run the tests
         run: bun scripts/nightly/run.ts
       - name: Upload the report and the run log
         if: ${{ always() }}

@@ -1,7 +1,7 @@
 // Guards the Renovate configuration (renovate.json5): the pinning rules the nightly issue asks
 // for, and that every tool pinned in .prototools is one Renovate can update.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -56,6 +56,27 @@ describe("renovate.json5", () => {
     expect(regex.exec("image: rancher/k3s:v1.36.5-k3s1@" + digest)?.groups?.depName).toBe("rancher/k3s");
     // A reference without a digest is not this manager's business.
     expect(regex.test("image: docker.io/library/postgres:18.6-alpine")).toBe(false);
+  });
+});
+
+describe("annotated workflow versions", () => {
+  const manager = config.customManagers.find((m) => m.managerFilePatterns.some((p) => p.includes(".github/workflows")));
+
+  test("every `# renovate:` annotation in a workflow is read by the workflow manager", () => {
+    expect(manager).toBeDefined();
+    const regex = new RegExp(manager!.matchStrings[0]!, "g");
+    for (const file of readdirSync(join(REPO_ROOT, ".github", "workflows")).filter((name) => /\.ya?ml$/.test(name))) {
+      const text = readFileSync(join(REPO_ROOT, ".github", "workflows", file), "utf8");
+      const annotations = text.split("\n").filter((line) => line.includes("# renovate:")).length;
+      const matches = [...text.matchAll(regex)].length;
+      expect({ file, matches }).toEqual({ file, matches: annotations });
+    }
+  });
+
+  test("the Istio version is one of them", () => {
+    const text = readFileSync(join(REPO_ROOT, ".github", "workflows", "nightly.yml"), "utf8");
+    const groups = [...text.matchAll(new RegExp(manager!.matchStrings[0]!, "g"))].map((m) => m.groups);
+    expect(groups).toContainEqual(expect.objectContaining({ depName: "istio/istio", currentValue: "1.30.5" }));
   });
 });
 

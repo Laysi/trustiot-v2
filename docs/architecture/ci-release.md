@@ -4,7 +4,7 @@ GitHub Actions，三個 workflow：
 
 1. `ci.yml`：每個 PR（不論目標分支，整合分支也一樣）與推到 main 都跑，全綠才能合併（目前由流程把關，見下方「必要檢查與強制方式」）。Rust 跑 fmt、clippy、測試與 sqlx 離線檢查，並以 cargo-deny 檢查授權與漏洞公告（地端產品不能混入 BSL 等不能轉售的授權）；整合測試以 service container 起含 AGE 的 Postgres、ClickHouse 與 Mosquitto，跑完全部 migration 後跑跨租戶負向測試（RLS、row policy、AGE 角色）；閘道器程式交叉編譯成 aarch64，agent 用 testkit 的假 Modbus 端點跑故障注入測試；前端跑 Bun 安裝、型別檢查、lint、單元測試與建置；重新產生 `api/openapi.json` 與前端 client，有差異就失敗；helm lint，兩份 values 各自 helm template 後以 kubeconform 驗證（`bun test deploy/chart` 一次跑完，也檢查 chart 自己的安全規則，見 `deploy/chart/README.md`）；gitleaks 掃描祕密。各項由哪個 job 負責、哪些還沒加入，見下方「ci.yml 的 job」。Codex 審查設為 PR 的必要檢查，是伺服器端的關卡；本機 pre-commit 只是提早攔下。
 2. `release.yml`：打 tag 時跑。容器映像只出 arm64：Rust 先交叉編譯再放進映像，推到 GHCR，以 cosign 簽章並附 SBOM；SaaS 主機與展示機（Mac M1）都要是 arm64，地端客戶若用 x86 主機，到時再加 amd64。Helm chart 打包推到 GHCR。閘道器 agent 與 updater 的 aarch64 執行檔附建置來源證明，由 CI 以 OTA 簽章金鑰簽章：金鑰存在受保護的 GitHub environment，只有 main 上的 tag 能用，每次簽章都要人工核准。另外產出離線安裝包（MS6）；release notes 沿用 `Laysi/release-notes-action`。
-3. `nightly.yml`：每晚用 k3d 部署整套 chart（兩份 values 各一次），跑端到端冒煙測試，失敗時開 issue 通知；依賴更新交給 Renovate。做什麼、怎麼通知與失敗時怎麼辦見下方「nightly.yml」與「Renovate」。
+3. `nightly.yml`：每晚用 k3d 部署整套 chart（兩份 values 各一次），裝好 Istio ambient 後跑冒煙測試與入口 e2e 測試，失敗時開 issue 通知；依賴更新交給 Renovate。做什麼、怎麼通知與失敗時怎麼辦見下方「nightly.yml」與「Renovate」。
 
 SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定放在 `deploy/flux/`；發版就是合併一個改 chart 版本號的 PR（由 release 流程自動開）。GitHub 不持有任何部署憑證，主機也不必對外開放，叢集只存一把唯讀的 GHCR 拉取 token；Flux 控制器的記憶體算進主機規格（MS3 重測）。地端不裝 Flux，由客戶以 Helm 安裝或用離線安裝包。
 
@@ -55,30 +55,42 @@ ci.yml 不使用任何 secret，每個 job 的 GITHUB_TOKEN 只有 `contents: re
 
 ## nightly.yml
 
-每晚 18:17 UTC（台北 02:17）執行，也可在 main 上手動執行（`workflow_dispatch`，選項 `simulate_failure` 會讓每份 values 在安裝後故意失敗，用來驗證通知）。動到 `deploy/chart/`、`scripts/nightly/`、`.prototools`、`.proto/plugins/`、`setup-proto` 或 `nightly.yml` 本身的 PR 也會跑，chart 的改動在合併前就先真的部署一次；這些 PR 的執行不寫任何留言（PR 的 workflow 檔由 PR 自己決定，不給它寫入權限），結果看 check 狀態、job summary 與 `nightly-report` artifact。
+每晚 18:17 UTC（台北 02:17）執行，也可在 main 上手動執行（`workflow_dispatch`，選項 `simulate_failure` 會讓每份 values 在安裝後故意失敗，用來驗證通知）。動到 `deploy/chart/`、`deploy/istio/`、`scripts/nightly/`、`.prototools`、`.proto/plugins/`、`setup-proto` 或 `nightly.yml` 本身的 PR 也會跑，chart 的改動在合併前就先真的部署一次；這些 PR 的執行不寫任何留言（PR 的 workflow 檔由 PR 自己決定，不給它寫入權限），結果看 check 狀態、job summary 與 `nightly-report` artifact。
 
 ### 做什麼
 
-`smoke` job 在一台 ubuntu runner 上起一個 k3d 叢集，兩份 values（`values-saas.yaml`、`values-onprem.yaml`，各加上 `tests/values/` 的實例覆寫檔與 `smoke.yaml`）依序安裝到各自的命名空間。k3s 映像是 `rancher/k3s:v1.36.5-k3s1`（SaaS 主機與 lab 的版本），以 multi-arch index 的 digest 釘選，不開 Traefik、ServiceLB 與 metrics-server。每份 values 的檢查，任何一項失敗就停止該份並收集診斷（物件、事件、`describe`、pod 日誌；不含 Secret 內容）：
+`smoke` job 在一台 ubuntu runner 上起一個 k3d 叢集，裝好平台元件，兩份 values（`values-saas.yaml`、`values-onprem.yaml`，各加上 `tests/values/` 的實例覆寫檔與 `smoke.yaml`）依序測試，各用自己的命名空間。k3s 映像是 `rancher/k3s:v1.36.5-k3s1`（SaaS 主機與 lab 的版本），以 multi-arch index 的 digest 釘選，不開 Traefik、ServiceLB 與 metrics-server。
+
+平台元件（`scripts/nightly/platform.ts`，照 `deploy/istio/README.md` 的順序，與 SaaS 主機在裝 chart 前做的事相同）：
+
+1. Gateway API 的 standard CRD：從 release 下載 `standard-install.yaml`，SHA-256 與 workflow 裡釘的值相符才套用（`GATEWAY_API_VERSION`、`GATEWAY_API_SHA256`，要一起改）。
+2. Istio ambient：官方 repo 的 `base`、`istiod`、`cni`、`ztunnel` 四個 chart，版本 `ISTIO_VERSION`，用 `deploy/istio/values-k3s.yaml`。istiod 另加一份由 `deploy/istio/istiod-values.yaml` 產生的覆寫：同一個 ext_authz provider（fail closed、0.5 秒逾時、503）為每個 e2e 命名空間各複製一份，名稱 `trustiot-e2e-<shape>`，所以 provider 的設定永遠是 repo 裡那份。
+3. 建出 e2e 的身分服務替身映像（`deploy/chart/tests/e2e/identity-double`），匯入 k3d 節點。
+
+每份 values 依序做：
 
 1. 命名空間以 Pod Security `restricted`（enforce、warn、audit）建立：chart 要能在最嚴格的等級下安裝，也是 OpenShift 的前提。
-2. 為 chart 渲染出來的 pod 讀取、但 chart 自己不建立的 Secret 建立假值（Secret 怎麼進叢集由 Laysi/trustiot-v2#72 決定；這裡驗證的是接線，不是帳密）。
+2. 為 chart 渲染出來的 pod 讀取、但 chart 自己不建立的 Secret 建立假值，並為 Gateway listener 引用的 TLS Secret 建立自簽憑證（Secret 怎麼進叢集由 Laysi/trustiot-v2#72 決定；這裡驗證的是接線，不是帳密）。
 3. `helm upgrade --install --wait --wait-for-jobs --timeout 5m`。
 4. 讀 `helm get manifest`，每個 Deployment、StatefulSet、DaemonSet 都要 rollout 完成，每個 Job 都要完成。release 一個 workload 都沒有就失敗（`smoke.yaml` 一定會加一個，沒有代表覆寫檔壞了）。
-5. 沒有 pod 處於 CrashLoopBackOff、ImagePullBackOff、設定錯誤或未就緒；重啟次數記在報告裡。
-6. 每個 workload 的 HTTP 探針（startup、liveness、readiness），凡是有 Service 對外開那個埠的，都經 API server 的 Service proxy 呼叫一次（`/healthz`、`/readyz` 等），不需要 port-forward。
-7. `helm uninstall` 之後，release 的每個物件都不存在。
+5. 每個 Gateway 的 `Programmed` 條件為真（Istio 在 helm 結束後才產生入口 pod）。
+6. 沒有 pod 處於 CrashLoopBackOff、ImagePullBackOff、設定錯誤或未就緒；重啟次數記在報告裡。
+7. 每個 workload 的 HTTP 探針（startup、liveness、readiness），凡是有 Service 對外開那個埠的，都經 API server 的 Service proxy 呼叫一次（`/healthz`、`/readyz` 等），不需要 port-forward。
+8. `helm uninstall` 之後，release 的每個物件都不存在。
+9. 入口 e2e 測試（`deploy/chart/tests/e2e/ingress.e2e.ts`，Laysi/trustiot-v2#62）：在 `nightly-e2e-<shape>` 命名空間以對應的型態跑一次，驗證 cookie 驗證、例外路徑、路徑繞過與身分服務停機時的行為；這也是 #62 要求的 k3d 測試，每晚執行。請求經 `kubectl port-forward` 直接進入口 pod，所以不涵蓋入口的 NetworkPolicy（那一項只在 lab 以 `E2E_SSH_JUMP` 驗證）。
 
-檢查全部從 release 自己的 manifest 推導（`scripts/nightly/manifests.ts`），不寫死元件；之後加入的元件（入口 gateway、Postgres、ClickHouse、broker 等）會自動被納入 workload 就緒與探針檢查。元件需要的前置（例如 Istio 的 CRD、operator）由加入該元件的 issue 在 `scripts/nightly/run.ts` 補上；各里程碑完成條件的測試也由各自的 issue 加進來。
+每份 values 任何一項失敗就停止該份並收集診斷（物件、事件、`describe`、pod 日誌；不含 Secret 內容，輸出可能含 Secret 的指令不寫進日誌）。
+
+檢查 3 到 8 全部從 release 自己的 manifest 推導（`scripts/nightly/manifests.ts`），不寫死元件；之後加入的元件（Postgres、ClickHouse、broker 等）會自動被納入 workload 就緒與探針檢查。元件需要的前置（例如 operator）由加入該元件的 issue 在 `scripts/nightly/platform.ts` 補上；各里程碑完成條件的測試也由各自的 issue 加進來。
 
 在 TrustIoT 服務映像出來以前，`smoke.yaml` 的替身服務（`traefik/whoami`，以 digest 釘選）讓通用服務樣板在真叢集上被驗證。
 
 ### 本機執行
 
-nightly 只在 CI 跑：本 repo 規定工作站不跑 Kubernetes。要在有 docker 的機器上重現，`proto install` 之後：
+nightly 只在 CI 跑：本 repo 規定工作站不跑 Kubernetes。要在有 docker 與 openssl 的機器上重現，`proto install` 之後，把 workflow 裡的 `K3S_IMAGE`、`GATEWAY_API_VERSION`、`GATEWAY_API_SHA256`、`ISTIO_VERSION` 設成環境變數：
 
 ```sh
-K3S_IMAGE=<workflow 裡的 K3S_IMAGE> NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
+NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
 ```
 
 單元測試（不需要叢集，只需要 helm）：`bun test scripts/nightly`。
@@ -93,7 +105,7 @@ K3S_IMAGE=<workflow 裡的 K3S_IMAGE> NIGHTLY_OUT=/tmp/nightly-out bun scripts/n
 
 ### 失敗時怎麼辦
 
-先看 issue 內文的報告：它列出哪份 values 的哪一項失敗與診斷。要重現就到 Actions 頁手動執行 nightly（選 `simulate_failure` 只用來驗證通知，不用來除錯）。常見原因：Docker Hub 對匿名拉取的流量限制（`traefik/whoami` 與 k3s 映像都在 Docker Hub，k3d 建立叢集與映像拉取已重試）、chart 的改動讓某份 values 裝不起來、k3s 映像或 k3d 版本更新。GitHub 在 repo 60 天沒有活動時會停掉排程 workflow，這個 repo 有活動所以不會發生，但若看到排程停了，到 Actions 頁重新啟用。
+先看 issue 內文的報告：它列出哪份 values 的哪一項失敗與診斷。要重現就到 Actions 頁手動執行 nightly（選 `simulate_failure` 只用來驗證通知，不用來除錯）。常見原因：Docker Hub 對匿名拉取的流量限制（`traefik/whoami`、k3s 映像與 e2e 替身的基底映像都在 Docker Hub，建立叢集與建置映像已重試）、chart 的改動讓某份 values 裝不起來或讓入口的行為改變、Istio、Gateway API、k3s 或 k3d 版本更新。GitHub 在 repo 60 天沒有活動時會停掉排程 workflow，這個 repo 有活動所以不會發生，但若看到排程停了，到 Actions 頁重新啟用。
 
 ### 成本
 
@@ -108,6 +120,7 @@ K3S_IMAGE=<workflow 裡的 K3S_IMAGE> NIGHTLY_OUT=/tmp/nightly-out bun scripts/n
 | Rust crate | Renovate 的 cargo manager 更新 `Cargo.toml` 與 `Cargo.lock`；版本固定為精確值（`rangeStrategy: pin`），minor 與 patch 每週合成一個 PR |
 | Bun 套件 | `scripts/` 的 `package.json` 與 `bun.lock`，每週一個 PR |
 | GitHub Actions | `helpers:pinGitHubActionDigestsToSemver`：每個 `uses:` 維持 40 字元 commit SHA，行尾註解維持版本 |
+| Istio 與其他寫在 workflow env 的版本 | env 上方寫 `# renovate:` 註解（資料來源與套件名稱）即由自訂規則更新；Istio 停在 1.30 minor。Gateway API 的版本與雜湊要一起改，不由 Renovate 更新 |
 | 容器映像 | `pinDigests: true`；原始碼、測試、workflow 與 values 裡寫成 `名稱:tag@sha256:…` 的映像由自訂規則讀取，更新時 tag 與 digest 一起換；chart 的 `repository`／`tag`／`digest` 分三行寫法也有規則；`rancher/k3s` 與 kubectl 停在 1.36 minor，換 minor 是刻意的升級 |
 | `.prototools` | Renovate 的 proto manager 認得 `bun` 與 `rust`；有 schema 外掛的工具（cargo-deny、gitleaks、helm、k3d、kubeconform、kubectl）在 pin 上方寫 `# renovate:` 註解，由自訂規則更新。新增工具時照樣寫註解，`bun test scripts/nightly` 會檢查 |
 | Rust 工具鏈 | `.prototools` 的 `rust` 與 `rust-toolchain.toml` 的 `channel` 合成一個 PR，兩處同時改（`repo-check` 要求兩者相同） |
@@ -116,6 +129,7 @@ PR 標題是 Angular 格式（`chore(deps): …`），標籤 `area:ci` 與 `depe
 
 不由 Renovate 更新的項目（要手動改）：
 
+- nightly 的 `GATEWAY_API_VERSION` 與 `GATEWAY_API_SHA256`：同上，版本與雜湊要一起換。
 - `.github/actions/setup-proto/action.yml` 的 `PROTO_VERSION` 與 `PROTO_SHA256`：兩個值必須一起換，Renovate 只能改版本號。
 - `scripts/lib/stack.ts` 的開發環境映像：只有 digest，tag 寫在註解，Renovate 讀不到。把 tag 寫進字串（`名稱:tag@sha256:…`）就會被納入。
 

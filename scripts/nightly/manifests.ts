@@ -271,3 +271,31 @@ export function restartsOf(podList: { items?: unknown[] }): Map<string, number> 
   }
   return restarts;
 }
+
+/** Names of the Gateway API Gateways in the release: Istio creates a gateway pod for each. */
+export function gatewaysOf(objects: K8sObject[]): string[] {
+  return flatten(objects)
+    .filter((o) => o.kind === "Gateway" && asString(o.apiVersion)?.startsWith("gateway.networking.k8s.io/") === true)
+    .flatMap((o) => (o.metadata?.name === undefined ? [] : [o.metadata.name]));
+}
+
+/**
+ * TLS Secrets that the release's Gateway listeners refer to but the release does not create: the
+ * installing environment provides them (the customer's certificate on-prem), so the nightly cluster
+ * creates a self-signed one under each name.
+ */
+export function missingTlsSecrets(objects: K8sObject[]): string[] {
+  const flat = flatten(objects);
+  const created = new Set(flat.filter((o) => o.kind === "Secret").map((o) => o.metadata?.name));
+  const names = new Set<string>();
+  for (const gateway of flat.filter((o) => o.kind === "Gateway")) {
+    for (const listener of asArray(asMap(gateway.spec).listeners).filter(isMap)) {
+      for (const ref of asArray(asMap(listener.tls).certificateRefs).filter(isMap)) {
+        const kind = asString(ref.kind) ?? "Secret";
+        const name = asString(ref.name);
+        if (kind === "Secret" && name !== undefined && !created.has(name)) names.add(name);
+      }
+    }
+  }
+  return [...names].sort();
+}

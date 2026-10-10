@@ -2,13 +2,17 @@
 // every workload of the release is ready, every HTTP probe a Service exposes answers, and an
 // uninstall leaves nothing behind. Components the chart gains later are covered without
 // changes here, because the checks read the release's own manifests (manifests.ts).
-import { existsSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { runIngressE2e } from "./e2e.ts";
 import { exec, retry, run, RunLog } from "./exec.ts";
 import {
+  gatewaysOf,
   healthEndpointsOf,
   missingSecrets,
+  missingTlsSecrets,
   parseManifests,
   podProblems,
   restartsOf,
@@ -26,6 +30,7 @@ export interface Shape {
 }
 
 export interface SmokeContext {
+  repoRoot: string;
   chartDir: string;
   /** Where per-shape diagnostics files go. */
   outDir: string;
@@ -126,7 +131,10 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
           const literals = [...keys].map((key) => `--from-literal=${key}=nightly-dummy-value`);
           await kubectl(["create", "secret", "generic", name, "--namespace", namespace, ...literals]);
         }
-        return missing.size === 0 ? "none needed" : `${missing.size} created: ${[...missing.keys()].join(", ")}`;
+        const tls = missingTlsSecrets(parseManifests(rendered.stdout));
+        for (const name of tls) await createTlsSecret(ctx, namespace, name);
+        const created = [...missing.keys(), ...tls];
+        return created.length === 0 ? "none needed" : `${created.length} created: ${created.join(", ")}`;
       })) &&
       (await check("helm install --wait", async () => {
         await helm(
@@ -160,6 +168,14 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
           }
         }
         return workloads.map((w) => `${w.kind}/${w.name}`).join(", ");
+      })) &&
+      (await check("every Gateway is programmed", async () => {
+        // Istio creates a gateway pod for each Gateway object, after helm has returned.
+        const gateways = gatewaysOf(parseManifests(manifest));
+        for (const gateway of gateways) {
+          await kubectl(["wait", "--namespace", namespace, "--for=condition=Programmed", `gateway.gateway.networking.k8s.io/${gateway}`, "--timeout=180s"], 200_000);
+        }
+        return gateways.length === 0 ? "the release has no Gateway" : gateways.join(", ");
       })) &&
       (await check("no pod is broken, not ready or crash-looping", async () => {
         const pods = await kubectl(["get", "pods", "--namespace", namespace, "--output", "json"]);
@@ -195,7 +211,8 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         if (left.code !== 0) throw new Error(`kubectl get failed: ${tail(left.stderr.trim(), 400)}`);
         if (left.stdout.trim() !== "") throw new Error(`still present after uninstall: ${left.stdout.trim().split("\n").join(", ")}`);
         return "all objects removed";
-      }));
+      })) &&
+      (await check("ingress e2e test (deploy/chart/tests/e2e)", () => runIngressE2e(ctx, shape.name)));
   } catch (error) {
     // The checks catch their own errors; this is a bug in the smoke test itself.
     const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
@@ -222,6 +239,26 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
     ...(diagnostics === undefined ? {} : { diagnostics }),
     durationMs: Date.now() - started,
   };
+}
+
+/**
+ * A self-signed certificate under the given Secret name, for a Gateway listener. The key lives in
+ * a private temporary directory only as long as the command needs it and is never logged.
+ */
+async function createTlsSecret(ctx: SmokeContext, namespace: string, name: string): Promise<void> {
+  const dir = mkdtempSync(join(tmpdir(), "nightly-tls-"));
+  try {
+    const cert = join(dir, "tls.crt");
+    const key = join(dir, "tls.key");
+    await run(ctx.log, ["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-subj", "/CN=nightly.test", "-days", "1", "-keyout", key, "-out", cert], { timeoutMs: 30_000 });
+    await run(
+      ctx.log,
+      [ctx.kubectl, "create", "secret", "tls", name, "--namespace", namespace, `--cert=${cert}`, `--key=${key}`],
+      { env: { KUBECONFIG: ctx.kubeconfig }, timeoutMs: 60_000 },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** Cluster state and pod logs of a failed shape. Nothing here prints a Secret's data. */

@@ -3,7 +3,9 @@ import { join } from "node:path";
 
 import { pinnedTool } from "./exec.ts";
 import {
+  gatewaysOf,
   healthEndpointsOf,
+  missingTlsSecrets,
   missingSecrets,
   parseManifests,
   podProblems,
@@ -275,4 +277,43 @@ describe("the chart as deployed by the nightly", () => {
       expect(endpoints.every((e) => e.service === "trustiot-smoke-echo" && e.port === "http")).toBe(true);
     }, 60_000);
   }
+});
+
+describe("gateways", () => {
+  const GATEWAYS = `
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: { name: ingress }
+spec:
+  gatewayClassName: istio
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+    - name: https
+      port: 443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - { kind: Secret, group: "", name: ingress-tls }
+          - { name: made-here }
+          - { kind: ConfigMap, name: not-a-secret }
+---
+apiVersion: v1
+kind: Secret
+metadata: { name: made-here }
+---
+apiVersion: example.test/v1
+kind: Gateway
+metadata: { name: other-kind-of-gateway }
+`;
+
+  test("gatewaysOf lists Gateway API gateways only", () => {
+    expect(gatewaysOf(parseManifests(GATEWAYS))).toEqual(["ingress"]);
+  });
+
+  test("missingTlsSecrets lists the certificate Secrets the release does not create", () => {
+    expect(missingTlsSecrets(parseManifests(GATEWAYS))).toEqual(["ingress-tls"]);
+  });
 });
