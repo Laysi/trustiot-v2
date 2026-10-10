@@ -1,0 +1,33 @@
+# Temporary probe for Laysi/trustiot-v2#67 on a throwaway branch that is never merged.
+# The rust and cargo-deny jobs of ci.yml do not pass on GitHub while setup-proto with Bun
+# does; both install Rust through setup-proto. This probe runs only that installation and
+# prints the toolchain versions, so its result shows whether installing Rust through proto
+# works on a hosted runner.
+#
+# For `pull_request` events GitHub reads the workflow files of the pull request's merge
+# commit (refs/pull/<number>/merge), so a workflow runs on the very pull request that adds
+# it; only `pull_request_target` takes workflows from the base branch.
+name: probe
+
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  setup-rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-proto
+        with:
+          tools: rust
+      - run: |
+          cargo --version
+          cargo fmt --version
+          cargo clippy --version
