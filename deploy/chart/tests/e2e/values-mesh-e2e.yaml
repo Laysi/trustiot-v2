@@ -1,0 +1,21 @@
+# Service-to-service authorization e2e overlay (mesh.e2e.ts). Use after the ingress overlay:
+#   -f values-saas.yaml -f tests/values/saas-instance.yaml -f tests/e2e/values-e2e.yaml \
+#   -f tests/e2e/values-mesh-e2e.yaml
+# The test runs the identity double's image for every service listed here, because it is the
+# one test image with a runtime (Bun) that can make calls from inside a service's pod.
+#
+# The call graph under test:
+#   assets -> certs        listed: allowed
+#   everything else        not listed: refused, for example certs -> assets, assets -> alerts
+# The ingress gateway reaches identity (public paths, ext_authz), assets (catch-all route),
+# certs and mqtt-bridge (public paths); nothing routes to alerts.
+
+services:
+  # Reached by no route and no listed caller: refuses every connection.
+  alerts:
+    enabled: true
+
+mesh:
+  calls:
+    assets:
+      - certs

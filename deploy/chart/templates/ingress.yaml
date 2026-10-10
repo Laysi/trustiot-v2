@@ -2,8 +2,8 @@
 Ingress gateway (decision 27): Istio implements the Kubernetes Gateway API. Every request needs
 the cookie, which an AuthorizationPolicy with the CUSTOM action sends to the identity service
 (ext_authz through the mesh extension provider ingress.authzProvider); only the public paths skip
-it. Requests to public paths lose any x-internal-identity header, and nothing under /internal is
-reachable from outside. Istio creates the gateway Deployment and Service from the Gateway and the
+it. Requests to public paths lose any x-internal-identity header, every route drops its
+underscore spellings, and nothing under /internal is reachable from outside. Istio creates the gateway Deployment and Service from the Gateway and the
 options ConfigMap below.
 */ -}}
 {{- $v := .Values -}}
@@ -128,11 +128,18 @@ spec:
             set:
               - name: x-forwarded-proto
                 value: https
-            {{- if .public }}
-            # Public path: no ext_authz check overwrites the header, so drop any client copy.
             remove:
+              {{- if .public }}
+              # Public path: no ext_authz check overwrites the header, so drop any client copy.
+              # A cookie route must keep it: route filters run after ext_authz and would drop
+              # the identity service's value too.
               - x-internal-identity
-            {{- end }}
+              {{- end }}
+              # Underscore spellings are other header names to Envoy, which forwards them, but
+              # CGI/WSGI-style servers read "-" and "_" alike (Laysi/trustiot-v2#255).
+              - x_internal_identity
+              - x-internal_identity
+              - x_internal-identity
       backendRefs:
         - name: {{ .item.backend.name }}
           port: {{ .item.backend.port }}
@@ -144,7 +151,9 @@ spec:
 Cookie check on every request except a public path on its own host. Rules are ORed: the first
 catches every non-public path, and one more rule per public path catches it on any other host,
 so an exemption never leaks to a host where that path is routed elsewhere. Istio matches paths
-exactly (after Envoy's RFC 3986 normalization), so encoded or case variants are checked too.
+exactly after the mesh's path normalization (deploy/istio/istiod-values.yaml), so encoded or
+case variants are checked too. The host is exempt with or without a port ("<host>:*"), as the
+gateway routes it: a gateway may send "Host: gw.example.com:443" (Laysi/trustiot-v2#255).
 */}}
 {{- $exempt := dict }}
 {{- range $plan.public }}
@@ -180,6 +189,7 @@ spec:
             notHosts:
               {{- range get $exempt $path | uniq | sortAlpha }}
               - {{ . | quote }}
+              - {{ printf "%s:*" . | quote }}
               {{- end }}
     {{- end }}
     {{- else }}
@@ -189,7 +199,9 @@ spec:
 ---
 # Internal APIs between services live under /internal (decision 27). No route forwards that
 # prefix, and this denies it even when a route such as "/" would match. CUSTOM runs first, so a
-# request without a cookie gets 401 and one with a valid cookie gets 403.
+# request without a cookie gets 401 and one with a valid cookie gets 403. Spellings such as
+# "//internal" and "/%2finternal" match only because the mesh merges slashes and decodes %2F
+# before authorization (meshConfig.pathNormalization in deploy/istio/istiod-values.yaml).
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:

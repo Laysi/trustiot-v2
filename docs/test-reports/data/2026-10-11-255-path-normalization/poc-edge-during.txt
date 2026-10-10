@@ -1,0 +1,5 @@
+2026-10-10T18:15:38Z
+trustiot-poc.laysi.io /healthz 200
+trustiot-poc.laysi.io /api/whoami 401
+poc.trustiot.test /healthz 200
+poc.trustiot.test /api/whoami 401

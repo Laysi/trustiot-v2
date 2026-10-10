@@ -1,0 +1,70 @@
+## tenant_b | generate B activity first (query containing B secret text)
+SELECT value_string FROM trustiot.telemetry WHERE value_string = '{SECRET}' LIMIT 1
+## tenant_a2 | user_query_log: whose queries are visible
+SELECT user, count() FROM system.user_query_log GROUP BY user
+## tenant_a2 | user_query_log: any mention of B's secret or user name
+SELECT count() FROM system.user_query_log WHERE query LIKE '%B-SECRET%' OR user = 'tenant_b' OR query LIKE '%tenant_b%'
+## tenant_a2 | quota_usage keys
+SELECT DISTINCT quota_key FROM system.quota_usage
+## tenant_a2 | s3 with literal args
+SELECT count() FROM s3('http://127.0.0.1:9000/bucket/key.csv', 'CSV', 'a UInt8')
+## tenant_a2 | s3Cluster
+SELECT count() FROM s3Cluster('default', 'http://127.0.0.1:9000/bucket/key.csv', 'CSV', 'a UInt8')
+## tenant_a2 | urlCluster
+SELECT count() FROM urlCluster('default', 'http://127.0.0.1:8123/?query=SELECT%201', 'LineAsString')
+## tenant_a2 | url with literal
+SELECT count() FROM url('http://127.0.0.1:8123/?query=SELECT%201', 'LineAsString')
+## tenant_a2 | fileCluster
+SELECT count() FROM fileCluster('default', '/etc/passwd', 'LineAsString')
+## tenant_a2 | file user_files
+SELECT count() FROM file('x.csv', 'CSV', 'a UInt8')
+## tenant_a2 | hdfs
+SELECT count() FROM hdfs('hdfs://127.0.0.1:9/x', 'CSV', 'a UInt8')
+## tenant_a2 | remote with credentials guess default
+SELECT count() FROM remote('127.0.0.1:9000', system.one, 'default', '')
+## tenant_a2 | remote 127.0.0.2 policy-free route
+SELECT count() FROM remote('127.0.0.2', trustiot.telemetry)
+## tenant_a2 | remote localhost
+SELECT count() FROM remote('localhost', trustiot.telemetry)
+## tenant_a2 | remoteSecure
+SELECT count() FROM remoteSecure('127.0.0.1:9440', trustiot.telemetry)
+## tenant_a2 | cluster
+SELECT count() FROM cluster('default', trustiot.telemetry)
+## tenant_a2 | clusterAllReplicas
+SELECT count() FROM clusterAllReplicas('default', trustiot.telemetry)
+## tenant_a2 | mysql
+SELECT * FROM mysql('127.0.0.1:3306', 'd', 't', 'u', 'p')
+## tenant_a2 | postgresql
+SELECT * FROM postgresql('127.0.0.1:5432', 'd', 't', 'u', 'p')
+## tenant_a2 | sqlite
+SELECT * FROM sqlite('/var/lib/clickhouse/user_files/x.db', 't')
+## tenant_a2 | executable
+SELECT * FROM executable('cat', 'LineAsString', 'line String')
+## tenant_a2 | dictionary
+SELECT * FROM dictionary('trustiot.d')
+## tenant_a2 | input
+SELECT * FROM input('a UInt8')
+## tenant_a2 | generateRandom
+SELECT count() FROM (SELECT * FROM generateRandom('a UInt8', 1, 1, 1) LIMIT 1000)
+## tenant_a2 | numbers cross join telemetry (cost, not leak)
+SELECT count() FROM numbers(1000) AS n CROSS JOIN trustiot.telemetry
+## tenant_a2 | numbers JOIN telemetry: any tenant mix
+SELECT t.tenant_id, count() FROM numbers(3) AS n INNER JOIN trustiot.telemetry AS t ON n.number = toUInt64(length(t.value_string)) % 3 GROUP BY t.tenant_id
+## tenant_a2 | KILL via system
+KILL QUERY WHERE user = 'tenant_b' ASYNC
+## tenant_a2 | CHECK GRANT
+CHECK GRANT SELECT ON trustiot.batch_commits
+## tenant_a2 | CHECK GRANT sel on telemetry
+CHECK GRANT SELECT ON trustiot.telemetry
+## tenant_a2 | WATCH / LIVE VIEW
+WATCH trustiot.lv
+## tenant_a2 | EXPLAIN SYNTAX shows row policy?
+EXPLAIN SYNTAX SELECT * FROM trustiot.telemetry
+## tenant_a2 | EXPLAIN PLAN all (shows policy filter literal)
+EXPLAIN actions = 1 SELECT count() FROM trustiot.telemetry
+## tenant_a2 | DESCRIBE with settings
+DESCRIBE TABLE trustiot.telemetry SETTINGS describe_extend_object_types = 1
+## tenant_a2 | SELECT from table with FORMAT Native / ProfileEvents progress headers
+SELECT count() FROM trustiot.telemetry FORMAT JSON
+## tenant_a2 | count with rows_before_limit_at_least
+SELECT * FROM trustiot.telemetry LIMIT 1 FORMAT JSON

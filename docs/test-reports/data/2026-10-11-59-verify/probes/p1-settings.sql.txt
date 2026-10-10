@@ -1,0 +1,110 @@
+## tenant_a | baseline count
+SELECT count() FROM trustiot.telemetry
+## tenant_a | baseline whoami
+SELECT currentUser(), currentRoles(), enabledRoles(), currentProfiles(), getSetting('SQL_tenant_id'), getSetting('readonly')
+## tenant_a | per-query SETTINGS SQL_tenant_id=B
+SELECT count() FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{B}'
+## tenant_a | per-query SETTINGS readonly=0
+SELECT count() FROM trustiot.telemetry SETTINGS readonly = 0
+## tenant_a | per-query SETTINGS readonly=2
+SELECT count() FROM trustiot.telemetry SETTINGS readonly = 2
+## tenant_a | per-query SETTINGS readonly=0, SQL_tenant_id=B
+SELECT count() FROM trustiot.telemetry SETTINGS readonly = 0, SQL_tenant_id = '{B}'
+## tenant_a | SET SQL_tenant_id (no session)
+SET SQL_tenant_id = '{B}'
+## tenant_a | SET SQL_tenant_id in session then query | session_id=s1
+SET SQL_tenant_id = '{B}'
+## tenant_a | session s1 query after SET | session_id=s1
+SELECT count() FROM trustiot.telemetry
+## tenant_a | SET readonly=0 in session | session_id=s2
+SET readonly = 0
+## tenant_a | session s2 SET SQL_tenant_id after readonly=0 attempt | session_id=s2
+SET SQL_tenant_id = '{B}'
+## tenant_a | SET ROLE trustiot_ingest | session_id=s3
+SET ROLE trustiot_ingest
+## tenant_a | SET ROLE ALL | session_id=s3
+SET ROLE ALL
+## tenant_a | session s3 count | session_id=s3
+SELECT count() FROM trustiot.telemetry
+## tenant_a | SET ROLE NONE then read | session_id=s4
+SET ROLE NONE
+## tenant_a | after SET ROLE NONE count | session_id=s4
+SELECT count() FROM trustiot.telemetry
+## tenant_a | after SET ROLE NONE SET SQL_tenant_id | session_id=s4
+SET SQL_tenant_id = '{B}'
+## tenant_a | after SET ROLE NONE settings and profiles | session_id=s4
+SELECT getSetting('SQL_tenant_id'), getSetting('readonly'), getSetting('max_threads'), currentProfiles()
+## tenant_a | after SET ROLE NONE SETTINGS readonly=0 per query | session_id=s4
+SELECT 1 SETTINGS readonly = 0
+## tenant_a | SET DEFAULT ROLE NONE
+SET DEFAULT ROLE NONE
+## tenant_a | ALTER USER self settings
+ALTER USER tenant_a SETTINGS SQL_tenant_id = '{B}' CONST
+## tenant_a | ALTER USER self drop settings
+ALTER USER tenant_a SETTINGS NONE
+## tenant_a | ALTER USER self profile
+ALTER USER tenant_a SETTINGS PROFILE 'default'
+## tenant_a | ALTER USER self password
+ALTER USER tenant_a IDENTIFIED BY 'x'
+## tenant_a | GRANT trustiot_ingest TO self
+GRANT trustiot_ingest TO tenant_a
+## tenant_a | CREATE TEMPORARY TABLE
+CREATE TEMPORARY TABLE tmp1 (x UInt8) ENGINE = Memory
+## tenant_a | subquery SETTINGS SQL_tenant_id=B
+SELECT count() FROM (SELECT * FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{B}')
+## tenant_a | subquery SETTINGS readonly=0 + tenant
+SELECT count() FROM (SELECT * FROM trustiot.telemetry SETTINGS readonly = 0, SQL_tenant_id = '{B}')
+## tenant_a | CTE SETTINGS SQL_tenant_id=B
+WITH t AS (SELECT * FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{B}') SELECT count() FROM t
+## tenant_a | UNION branch SETTINGS
+SELECT count() FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{B}' UNION ALL SELECT count() FROM trustiot.telemetry
+## tenant_a | JOIN subquery SETTINGS
+SELECT count() FROM trustiot.telemetry AS x JOIN (SELECT * FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{B}') AS y ON x.point = y.point
+## tenant_a | view() with SETTINGS
+SELECT count() FROM view(SELECT * FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{B}')
+## tenant_a | IN subquery SETTINGS
+SELECT count() FROM numbers(1) WHERE 1 IN (SELECT count() FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{B}')
+## tenant_a | scalar subquery SETTINGS
+SELECT (SELECT count() FROM trustiot.telemetry SETTINGS SQL_tenant_id = '{B}')
+## tenant_a | additional_table_filters in subquery
+SELECT count() FROM (SELECT * FROM trustiot.telemetry SETTINGS additional_table_filters = {'trustiot.telemetry': '1'})
+## tenant_a | row policy settings: apply_row_policy_after_final / optimize_move_to_prewhere
+SELECT count() FROM trustiot.telemetry SETTINGS optimize_move_to_prewhere = 0
+## tenant_a | additional_result_filter
+SELECT count() FROM trustiot.telemetry SETTINGS additional_result_filter = '1'
+## tenant_a | allow_experimental_analyzer=0 (old analyzer path)
+SELECT count() FROM trustiot.telemetry SETTINGS allow_experimental_analyzer = 0
+## tenant_a | enable_analyzer=0
+SELECT count() FROM trustiot.telemetry SETTINGS enable_analyzer = 0
+## tenant_a | URL param SQL_tenant_id | SQL_tenant_id={B}
+SELECT count() FROM trustiot.telemetry
+## tenant_a | URL param readonly=0 + tenant | readonly=0&SQL_tenant_id={B}
+SELECT count() FROM trustiot.telemetry
+## tenant_a | URL param readonly=0 | readonly=0
+SELECT count() FROM trustiot.telemetry
+## tenant_a | URL param role | role=trustiot_ingest
+SELECT count() FROM trustiot.telemetry
+## tenant_a | URL param role none | role=trustiot_tenant_reader
+SELECT count() FROM trustiot.telemetry
+## tenant_a | URL param user override to other user | user=tenant_b
+SELECT count() FROM trustiot.telemetry
+## tenant_a | URL param profile | profile=default
+SELECT count() FROM trustiot.telemetry
+## tenant_a | URL param quota_key | quota_key=bypass1
+SELECT count() FROM trustiot.telemetry
+## tenant_a | URL param database | database=trustiot
+SELECT count() FROM telemetry
+## tenant_a | URL param param_ injection | param_t={B}
+SELECT count() FROM trustiot.telemetry WHERE tenant_id = {t:UUID}
+## tenant_a | EXECUTE AS ingest
+EXECUTE AS ingest SELECT count() FROM trustiot.telemetry
+## tenant_a | EXECUTE AS tenant_b
+EXECUTE AS tenant_b SELECT count() FROM trustiot.telemetry
+## tenant_a | EXECUTE AS admin
+EXECUTE AS trustiot_admin SELECT 1
+## tenant_a | getSetting other tenant var
+SELECT getSetting('SQL_tenant_idx')
+## tenant_a | custom setting new SQL_ name
+SELECT 1 SETTINGS SQL_other = 'x'
+## tenant_a | custom prefix settings other
+SELECT 1 SETTINGS custom_x = 'x'

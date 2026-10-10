@@ -10,6 +10,7 @@
     "ingress",
     "serviceDefaults",
     "services",
+    "mesh",
     "postgres",
     "clickhouse",
     "qdrant",
@@ -181,6 +182,25 @@
       "propertyNames": { "pattern": "^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$" },
       "additionalProperties": {
         "allOf": [{ "$ref": "#/definitions/serviceSpec" }, { "required": ["enabled"] }]
+      }
+    },
+    "mesh": {
+      "description": "Service-to-service authorization (decision 27).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trustDomain", "calls"],
+      "properties": {
+        "trustDomain": { "$ref": "#/definitions/dnsName" },
+        "calls": {
+          "description": "Who may call whom: <caller>: [<callee>, ...], both keys under services.",
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$" },
+          "additionalProperties": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "pattern": "^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$" }
+          }
+        }
       }
     },
     "postgres": {

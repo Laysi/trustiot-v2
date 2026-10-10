@@ -62,7 +62,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | --- | --- | --- | --- |
 | Rust 服務（見下一節） | `services.<name>.enabled` | 通用樣板完成；映像還沒出，預設全關 | 各服務的 issue 出映像時改成開 |
 | 入口 gateway（Istio ambient、Gateway API、ext_authz） | `ingress.*` | 完成：Gateway、路由、cookie 驗證、例外路徑、`/internal` 拒絕與 NetworkPolicy；服務的 pod 加入 ambient mesh。Istio 本身與 ext_authz provider 由 `deploy/istio` 安裝。服務的 cookie 路由隨各服務加入 `ingress.routes` | Laysi/trustiot-v2#62；真身分服務的端到端驗證在 Laysi/trustiot-v2#77 |
-| 服務間授權（AuthorizationPolicy、NetworkPolicy） | — | 每個服務已有自己的 ServiceAccount | Laysi/trustiot-v2#63 |
+| 服務間授權（AuthorizationPolicy、NetworkPolicy） | `mesh.*` | 完成：每個服務自己的 ServiceAccount、依 `mesh.calls` 產生的 AuthorizationPolicy、namespace 預設拒絕的 NetworkPolicy；不部署 waypoint。服務之間的呼叫隨各服務加入 `mesh.calls` | Laysi/trustiot-v2#63；代表使用者呼叫的授權矩陣在 Laysi/trustiot-v2#106 |
 | Postgres（CloudNativePG 加 AGE） | `postgres.mode` | `external` 已接到平台設定；`bundled` 的 operator 與 Cluster 尚未加入 | Laysi/trustiot-v2#57、Laysi/trustiot-v2#58 |
 | migration Job | — | 尚未加入 | Laysi/trustiot-v2#60 |
 | ClickHouse | `clickhouse.mode` | `bundled`：單節點 StatefulSet（見「叢集內的 ClickHouse」）；`external` 已接到平台設定。schema、帳號與 row policy 由 migration Job 以 SQL 套用 | Laysi/trustiot-v2#60（migration Job）、Laysi/trustiot-v2#72（admin 密碼的 Secret） |
@@ -119,16 +119,23 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | --- | --- |
 | Gateway `<release>-ingress` | `gatewayClassName: istio`；`tunnel` 只有 80 的 HTTP listener，`direct` 只有 443 的 HTTPS listener（`tls.mode: Terminate`）；只接受同一個 namespace 的路由。Istio 依它建立 Deployment、Service 與 ServiceAccount `<release>-ingress-istio` |
 | ConfigMap `<release>-ingress-options` | 經 `infrastructure.parametersRef` 交給 Istio：副本數、資源、Pod 的 `seccompProfile: RuntimeDefault`（符合 restricted）、Service 類型與 PodDisruptionBudget |
-| HTTPRoute `<release>-ingress-app`、`-gateway`、`-ota` | 每個主機一個，只有有規則時才產生。每條規則都把 `x-forwarded-proto` 設為 `https`（cloudflared 到入口是明文 HTTP，後端判斷 Secure cookie 與重導向網址要靠它）；例外路徑另外移除 `x-internal-identity` |
-| AuthorizationPolicy `<release>-ingress-cookie-check` | CUSTOM，provider 為 `ingress.authzProvider`。第一條規則檢查例外路徑以外的所有路徑；每個例外路徑再一條規則，在它以外的主機照樣檢查，例外不會漏到別的主機。沒有任何例外路徑時檢查所有請求 |
-| AuthorizationPolicy `<release>-ingress-deny-internal` | DENY `/internal*`：服務之間的內部 API 不能從外面進來，即使有 `/` 這種全包的路由。CUSTOM 先執行，所以沒有 cookie 回 401、有 cookie 回 403 |
+| HTTPRoute `<release>-ingress-app`、`-gateway`、`-ota` | 每個主機一個，只有有規則時才產生。每條規則都把 `x-forwarded-proto` 設為 `https`（cloudflared 到入口是明文 HTTP，後端判斷 Secure cookie 與重導向網址要靠它）；每條規則都移除底線寫法的 `x_internal_identity`、`x-internal_identity`、`x_internal-identity`，例外路徑另外移除 `x-internal-identity` |
+| AuthorizationPolicy `<release>-ingress-cookie-check` | CUSTOM，provider 為 `ingress.authzProvider`。第一條規則檢查例外路徑以外的所有路徑；每個例外路徑再一條規則，在它以外的主機照樣檢查，例外不會漏到別的主機；它自己的主機帶不帶埠號都算（`notHosts` 列 `<主機>` 與 `<主機>:*`）。沒有任何例外路徑時檢查所有請求 |
+| AuthorizationPolicy `<release>-ingress-deny-internal` | DENY `/internal*`：服務之間的內部 API 不能從外面進來，即使有 `/` 這種全包的路由。CUSTOM 先執行，所以沒有 cookie 回 401、有 cookie 回 403。`//internal`、`/%2finternal` 這類寫法要靠 mesh 的路徑正規化先整理成 `/internal` 才比對得到，見下方「依賴 mesh 的路徑正規化」 |
 | NetworkPolicy `<release>-ingress` | `tunnel`：只放行 `ingress.tunnel.allowedSources`，叢集內其他 pod 連不到入口；`direct`：只開 443 與 kubelet 檢查就緒用的 15021 |
 
 例外路徑（`ingress.publicPaths`）的規則：
 
-- 只有決策 27 列的四種，主機與後端固定在 chart，values 只能改路徑；schema 與樣板都只接受一個完整的小寫路徑，不能有萬用字元、`.`、`..`、`//`、結尾的 `/`、`%` 或 `;`，也不能在 `/internal` 底下。路由以 `Exact` 比對，Envoy 依 RFC 3986 正規化後才比對，大小寫、編碼與 `..` 的變形都不是例外，照樣要 cookie。
+- 只有決策 27 列的四種，主機與後端固定在 chart，values 只能改路徑；schema 與樣板都只接受一個完整的小寫路徑，不能有萬用字元、`.`、`..`、`//`、結尾的 `/`、`%` 或 `;`，也不能在 `/internal` 底下。路由以 `Exact` 比對，Envoy 依 mesh 的路徑正規化（解碼 `%2F`、RFC 3986、合併斜線）整理後才比對，大小寫、編碼與 `..` 的變形都不是例外，照樣要 cookie。
 - 後端服務關閉時，這個例外路徑既不路由也不免驗證，請求不會落到別的路由上。
 - 例外路徑沒有 ext_authz 覆寫身分標頭，所以路由移除用戶端帶來的 `x-internal-identity`；需要 cookie 的路徑不能移除，因為路由的標頭規則在 ext_authz 之後執行，會把身分服務給的值一起移除。
+- 例外只在它自己的主機成立，`Host` 帶不帶埠號都一樣（見下方「`Host` 帶埠號」）。
+
+依賴 mesh 的路徑正規化（Laysi/trustiot-v2#255）：上面的路徑規則與 `/internal*` 的 DENY 都假設 istiod 設了 `meshConfig.pathNormalization.normalization: DECODE_AND_MERGE_SLASHES`（`deploy/istio/istiod-values.yaml`）。沒有它時，帶有效 cookie 的 `//internal/tenants` 或 `/%2finternal/tenants` 比對不到 DENY，會落到全包路由。chart 無法檢查叢集的 mesh 設定，所以每個叢集都要依 `deploy/istio/README.md` 安裝；`tests/e2e/ingress.e2e.ts` 的回歸案例在少了這個設定時會失敗。設定的影響（`%2F` 一律解碼、路徑參數不能夾帶 `/`）見該 README 的「路徑正規化」。
+
+底線寫法的身分標頭（Laysi/trustiot-v2#255，決定於 2026-10-11）：Envoy 預設照轉名稱帶底線的標頭，`x_internal_identity` 對它是另一個標頭；但 CGI／WSGI 風格的伺服器把 `-` 與 `_` 視為相同（都變成 `HTTP_X_INTERNAL_IDENTITY`），偽造值可能被當成內部身分。每條路由（例外路徑與需要 cookie 的路徑）都移除 `x-internal-identity` 的三種底線寫法。不採用「拒絕所有帶底線的標頭」：Istio 沒有對應的設定，要用 EnvoyFilter（Istio 不保證跨版本相容，而且同樣是 mesh 層級），也可能擋掉閘道器或第三方客戶端合法的標頭；需要信任的標頭只有 `x-internal-identity` 一個（決策 27），移除它的變形就夠。服務仍然只讀 `x-internal-identity` 並驗簽（`crates/service-kit`）。
+
+`Host` 帶埠號（Laysi/trustiot-v2#255，決定於 2026-10-11）：入口**接受** `Host` 帶埠號，例如閘道器送 `Host: gw.example.com:443`。Istio 的路由本來就把 `<主機>` 與 `<主機>:<任何埠>` 視為同一個主機，但例外的授權規則原本只列主機名稱，帶埠號時例外不成立，憑證換發與 MQTT 會回 401。現在例外規則同時列 `<主機>` 與 `<主機>:*`，與路由的比對方式一致：例外只在它自己的主機成立，`app` 主機帶埠號照樣要 cookie。閘道器韌體不必為此特別處理 `Host`；WebSocket 函式庫或客戶網路的代理放進埠號（預設的 443 或其他埠）都可以。Cloudflare Tunnel 轉發的 `Host` 沒有埠號，SaaS 原本就不受影響。這也是 Laysi/trustiot-v2#77（真身分服務與閘道器的端到端驗證）要沿用的約定。
 
 需要 cookie 的路由（`ingress.routes`）：`host` 是 `app`、`gateway` 或 `ota`；`path` 是 `/` 或與例外路徑同樣格式的路徑，不能在 `/internal` 底下；`match` 是 `PathPrefix` 或 `Exact`；`service` 必須是已啟用的服務，`port` 是它的埠名（預設 `http`）。同一個主機不能有兩條相同路徑，也不能與例外路徑相同。例如資產服務的 API：
 
@@ -140,9 +147,44 @@ ingress:
 
 與身分服務的約定（Laysi/trustiot-v2#61 實作）：入口以 `<pathPrefix><原始路徑>` 呼叫身分服務，`pathPrefix` 是 `/internal/ext-authz`，只帶 `cookie`（另有 Host、方法、路徑與 Authorization）；有效時回 200 並一定帶 `x-internal-identity`，入口以它覆寫用戶端帶來的同名標頭；無效時回 401，入口把回應原樣交給用戶端。身分服務無法連線、出錯或超過 0.5 秒時入口回 503（`statusOnError`）。這些設定在 istiod 的 provider，見 `deploy/istio/README.md`。
 
-服務的 pod 帶 `istio.io/dataplane-mode: ambient` 加入 ambient mesh，入口到服務、服務之間由 ztunnel 加 mTLS；`podLabels` 不能改這個 label。服務之間的授權政策屬於 Laysi/trustiot-v2#63。
+服務的 pod 帶 `istio.io/dataplane-mode: ambient` 加入 ambient mesh，入口到服務、服務之間由 ztunnel 加 mTLS；`podLabels` 不能改這個 label。服務之間的授權見下一節。
 
-叢集上的 e2e 測試（cookie、例外路徑、標頭、28 種路徑繞過、身分服務停機）在 `tests/e2e/`，用法見該目錄的 README。
+叢集上的 e2e 測試（cookie、例外路徑、標頭與其底線寫法、`Host` 帶埠號、28 種路徑繞過、`/internal` 的 11 種斜線寫法、身分服務停機）在 `tests/e2e/`，用法見該目錄的 README。
+
+### 服務間授權（mesh）
+
+決策 27 的服務間 mTLS 與授權：ztunnel 替每條連線加 mTLS，呼叫端的身分是它的 ServiceAccount（每個服務一個，`<release>-<服務>`）。「誰可以呼叫誰」只有一份清單，由兩層各自執行，任何一層單獨存在都擋得住清單以外的呼叫：
+
+| 欄位 | 預設值 | 說明 |
+| --- | --- | --- |
+| `mesh.trustDomain` | `cluster.local` | mesh 的 SPIFFE trust domain（Istio 的 `meshConfig.trustDomain`）；呼叫端身分寫成 `<trustDomain>/ns/<namespace>/sa/<ServiceAccount>` |
+| `mesh.calls` | `mesh.calls.ingest` 與 `mesh.calls.telemetry-query` 都是 `[clickhouse]` | 誰可以呼叫誰：`<呼叫端>: [<被呼叫端>, ...]`。呼叫端是 `services` 的 key；被呼叫端是 `services` 的 key，或叢集內元件 `clickhouse`（`clickhouse.mode: bundled` 時）與 `otel-collector`（collector 開啟時）。遙測的呼叫由 chart 自動加上，不必列：每個啟用的服務 → `otel-collector`，`otel-collector` → `clickhouse`。不認得的名稱讓安裝失敗；服務未啟用或元件沒有部署時略過這條，所以可以先列還沒出映像的服務。預設值是決策 14 與 docs/architecture/deployment.md 寫明的 ClickHouse 用戶端：資料接收寫入、時序查詢以每租戶唯讀帳號讀取。各服務的 issue 加入它要呼叫的內部 API |
+
+```yaml
+mesh:
+  calls:
+    assistant: [ai-gateway, telemetry-query]   # 例子：assistant 可以呼叫這兩個服務
+```
+
+除了 `mesh.calls`，入口 gateway（ServiceAccount `<release>-ingress-istio`）自動可以呼叫它路由到的服務（例外路徑與 `ingress.routes` 的後端），以及做 cookie 驗證（ext_authz）的身分服務。chart 產生下列物件：
+
+| 物件 | 內容 |
+| --- | --- |
+| NetworkPolicy `<release>-default-deny` | 選取 namespace 內所有 pod、不放行任何連入：沒有其他 NetworkPolicy 放行的連線一律拒絕。服務全關時也會產生 |
+| AuthorizationPolicy `<release>-<服務或元件>` | 每個啟用的服務與每個部署的叢集內元件（目前是 `bundled` 的 ClickHouse）一個，ALLOW，以 selector 選它的 pod，只允許呼叫端的 principals（ztunnel 在 L4 執行）。沒有任何呼叫端時是沒有規則的 ALLOW，拒絕所有連線 |
+| NetworkPolicy `<release>-<服務或元件>` | 同上，每個一個：只從同一批呼叫端的 pod（與入口 gateway 的 pod）放行 TCP 15008，也就是 ztunnel 的 HBONE 埠，mesh 內的連線都從這裡進來，不直接連應用程式的埠；另放行 `169.254.7.127/32`，ambient 下 kubelet 的健康檢查由 istio-cni SNAT 成這個位址 |
+
+- 兩層的分工：AuthorizationPolicy 驗證 mTLS 憑證裡的身分，ztunnel 對每條代理的連線檢查；NetworkPolicy 只看來源 pod 的 label 與 IP，擋的是新建立的 TCP 連線。拿掉 NetworkPolicy 時，清單外的呼叫仍被 ztunnel 重置；拿掉 AuthorizationPolicy 時，清單外的服務連不到對方的 15008，非 mesh 的 pod 連不到任何埠。被拒時呼叫端看到的是連線重置或拒絕，不是 HTTP 403（docs/feasibility/2026-10-10-edge-poc.md）。2026-10-10 在實驗機實測兩個方向（docs/test-reports/2026-10-10-63-mesh-authz.md）。
+- NetworkPolicy 這一層的限制，主要防線是 AuthorizationPolicy：
+  - mesh 內的連線都經 15008，所以 NetworkPolicy 只有在 15008 依呼叫端的 pod 限定時才是 mesh 內的第二層；只放行「任何來源的 15008」（2026-10-10 PoC 的寫法）對 mesh 內的呼叫端沒有作用，只擋非 mesh 的 pod。
+  - NetworkPolicy 不切斷已建立的連線，而 ztunnel 會保留兩個 pod 之間的 HBONE 連線重複使用。之後才收緊或加上的 NetworkPolicy，對既有連線上的呼叫不起作用，要等連線關閉（實測恢復 NetworkPolicy 後 90 秒內仍持續通過）；AuthorizationPolicy 的變更則立即套用到新的呼叫。
+  - NetworkPolicy 依 label 選來源，能在 namespace 裡建 pod 的人可以複製服務的 label 通過它；mTLS 身分來自 ServiceAccount，只有 AuthorizationPolicy 擋得住（實測的 imposter）。
+- NetworkPolicy 只管連入（`Ingress`），不限制連出：外部依賴（Qdrant Cloud、S3、SMTP、AI 端點、外部資料庫）以主機名稱指定，NetworkPolicy 無法依主機名稱放行。
+- 不部署 waypoint：L4 的身分已足夠。服務之間需要 L7 規則（例如依路徑或方法）時才為該服務加 waypoint，並把它的 AuthorizationPolicy 改成以 `targetRefs` 指向 Service、在 ztunnel 層放行 waypoint 的 ServiceAccount；代表使用者呼叫的授權（內部身分 token）由服務自己驗證，不靠 waypoint（Laysi/trustiot-v2#106）。
+- 叢集測試 `tests/e2e/mesh.e2e.ts` 以真實連線驗證清單內放行、清單外被拒，以及兩層各自生效，用法見該目錄的 README。
+- 叢集內的 ClickHouse 走同一套規則：只有 `mesh.calls` 列出的 `ingest` 與 `telemetry-query`，以及 chart 自動加上的 OpenTelemetry collector（Laysi/trustiot-v2#73）連得到它，其他服務與 pod 都被拒，kubelet 的 `/ping` 探測經 `169.254.7.127/32` 照常通過。還沒有的用戶端加入時要加進來：migration Job（Laysi/trustiot-v2#60）要在 `trustiot.mesh.plan` 加上 Job 當呼叫端（`mesh.calls` 的呼叫端只能是服務；元件之間的呼叫由 plan 自己加，collector 就是這樣），Grafana（Laysi/trustiot-v2#183）同樣。
+- collector 也是 mesh 內的元件（`trustiot.mesh.components` 的 `otel-collector`）：每個啟用的服務都自動是它的呼叫端（送 OTLP），其他 pod 連不到它。它連出到外部 ClickHouse 或 SIEM 不受 NetworkPolicy 限制（只管連入）；SIEM 在同一個 namespace 時，要另外以 NetworkPolicy 放行 collector 的 pod 連它。ClickHouse 的政策只以 chart 測試驗證，2026-10-10 的實驗機測試沒有部署它（見測試報告）。
+- 預設拒絕套用到 namespace 內所有 pod，包括之後加入的叢集內元件（broker、Postgres 等）：在 mesh 內的元件加進 `trustiot.mesh.components`，由同一份清單產生政策；不在 mesh 內的元件自帶 NetworkPolicy，只放行實際的用戶端（見「擴充 chart」）。chart 測試檢查每個 Deployment 與 StatefulSet 的 pod 都有自己的 NetworkPolicy 與 AuthorizationPolicy。
 
 ### serviceDefaults 與 services.\<name\>
 
@@ -357,7 +399,7 @@ observability:
 
 SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 ClickHouse；collector 重啟時佇列裡的資料會遺失。
 
-服務間授權（Laysi/trustiot-v2#63）加入 namespace 預設拒絕後，要放行服務到 collector 的 4318、collector 到 ClickHouse 的 9000（或外部 ClickHouse 與 SIEM 的連出）與 kubelet 的健康檢查。
+服務間授權（見「服務間授權（mesh）」）：collector 是 mesh 內的元件，chart 自動讓每個啟用的服務連它、讓它連叢集內的 ClickHouse，kubelet 的健康檢查照常通過；其他連線一律被拒。
 
 ## chart 與服務的約定
 
@@ -401,10 +443,11 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 ## 擴充 chart
 
 - **新增服務**：在 `values.yaml` 的 `services` 加一個 key，並同步 docs/architecture/deployment.md 的服務表（測試比對兩邊）。服務特有的埠、資源、探針與 Secret 寫在該 key 底下。
+- **服務之間的呼叫**：服務要呼叫另一個服務的內部 API 時，在服務的 issue 把這條呼叫加進 `values.yaml` 的 `mesh.calls`；沒列的呼叫會被重置。服務間授權的規則集中在 `templates/_mesh.tpl` 的 `trustiot.mesh.plan`，AuthorizationPolicy 與 NetworkPolicy 都由它產生，不要為單一服務另外寫政策。
 - **對外的路由**：服務要經入口對外時，在服務的 issue 把路由加進 `values.yaml` 的 `ingress.routes`（預設需要 cookie）。不要新增例外路徑：決策 27 只允許登入、閘道器憑證換發、MQTT 轉接與健康檢查四種，要加第五種必須先改決策。入口的規則集中在 `templates/_ingress.tpl` 的 `trustiot.ingress.plan`；可信的來源 IP 沿用 `trustiot.clientIpSource`，不要另外加欄位。
-- **新增叢集內元件**（broker、Postgres、ClickHouse、Qdrant、collector、Grafana）：放在自己的 `templates/<元件>.yaml`，以 `*.mode` 或開關控制；Service 只能是 ClusterIP；在 `values.schema.json` 加欄位定義、在本文件加欄位說明（測試檢查 `values.yaml` 每個欄位都在本文件），並更新「元件與開關」與平台設定的表。
+- **新增叢集內元件**（broker、Postgres、ClickHouse、Qdrant、collector、Grafana）：放在自己的 `templates/<元件>.yaml`，以 `*.mode` 或開關控制；Service 只能是 ClusterIP；namespace 預設拒絕所有連入：元件在 mesh 內時（pod 帶 `istio.io/dataplane-mode: ambient`）把它加進 `templates/_mesh.tpl` 的 `trustiot.mesh.components`、用戶端列進 `mesh.calls`，AuthorizationPolicy 與 NetworkPolicy 由 chart 產生；不在 mesh 內時自帶 NetworkPolicy，只對實際的用戶端開它的埠，並讓 kubelet 的健康檢查到得了；在 `values.schema.json` 加欄位定義、在本文件加欄位說明（測試檢查 `values.yaml` 每個欄位都在本文件），並更新「元件與開關」與平台設定的表。
 - **Secret**：values 只能出現 `{name, key}` 形式的引用；schema 的 `additionalProperties: false` 會擋下放明文的新欄位。服務要拿新的依賴帳密時，在 `_helpers.tpl` 的 `trustiot.credentialCatalog` 加一列（變數名稱、Secret、可以拿的服務）、在 schema 的 `credentials` 列舉加上名稱，並更新「密鑰的環境變數」表；自訂 `env` 自動不能讀這個帳密。叢集內元件自己產生的帳密 Secret（例如 CloudNativePG 的資料庫帳號，Laysi/trustiot-v2#58）也要加進 `trustiot.dependencySecretRefs`。新的平台變數用 `TRUSTIOT_` 開頭，自動受保留規則保護。
-- **測試**：規則寫進 `tests/chart.test.ts`。`tests/values/` 的兩個安裝實例範例與 `smoke.yaml`（以 traefik/whoami 當替身服務）也供 nightly（Laysi/trustiot-v2#69）在叢集上安裝使用；入口的叢集測試是 `tests/e2e/ingress.e2e.ts`，日誌管線的叢集測試是 `tests/e2e/otel.e2e.ts`，nightly 可直接沿用。`bun test` 的 kubeconform 已帶 CRD schema 目錄，Gateway API 與 Istio 的資源可以直接驗證。兩個實例範例會部署叢集內 ClickHouse（`clickhouse.mode: bundled`），在叢集上安裝前要先建立 `trustiot-clickhouse-admin` Secret（見「叢集內的 ClickHouse」）與 collector 的 `trustiot-otel-collector-clickhouse` Secret；入口的叢集測試用 `tests/e2e/values-e2e.yaml` 改成 `external`，不部署 ClickHouse，也關掉 collector。`tests/` 不會打包進 chart（`.helmignore`）。
+- **測試**：規則寫進 `tests/chart.test.ts`。`tests/values/` 的兩個安裝實例範例與 `smoke.yaml`（以 traefik/whoami 當替身服務）也供 nightly（Laysi/trustiot-v2#69）在叢集上安裝使用；叢集測試是 `tests/e2e/ingress.e2e.ts`（入口）、`tests/e2e/mesh.e2e.ts`（服務間授權）與 `tests/e2e/otel.e2e.ts`（日誌管線），前兩個共用 `tests/e2e/cluster.ts`，nightly 可直接沿用。`bun test` 的 kubeconform 已帶 CRD schema 目錄，Gateway API 與 Istio 的資源可以直接驗證。兩個實例範例會部署叢集內 ClickHouse（`clickhouse.mode: bundled`）與 collector，在叢集上安裝前要先建立 `trustiot-clickhouse-admin` Secret（見「叢集內的 ClickHouse」）與 collector 的 `trustiot-otel-collector-clickhouse` Secret；叢集測試用 `tests/e2e/values-e2e.yaml` 改成 `external`，不部署 ClickHouse，也關掉 collector。`tests/` 不會打包進 chart（`.helmignore`）。
 
 ## OpenShift 與其他 Kubernetes
 

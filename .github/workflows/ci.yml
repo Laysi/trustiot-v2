@@ -199,7 +199,8 @@ jobs:
       - id: toolchain
         uses: ./.github/actions/setup-proto
         with:
-          tools: bun actionlint
+          # helm: scripts/nightly/manifests.test.ts renders the chart to check what the nightly deploys.
+          tools: bun helm actionlint
       - name: Check workflow permissions and action pinning
         run: bun scripts/ci/check-workflows.ts
       # What GitHub itself would reject when it parses a workflow, for example a context that

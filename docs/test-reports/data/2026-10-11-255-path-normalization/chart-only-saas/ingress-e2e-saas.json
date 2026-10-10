@@ -1,0 +1,1372 @@
+[
+  {
+    "group": "cookie",
+    "name": "no cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 401,
+    "ms": 53.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "cookie",
+    "name": "unknown session",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 401,
+    "ms": 46.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "cookie",
+    "name": "other cookies only",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 401,
+    "ms": 70.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "cookie",
+    "name": "valid cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 200,
+    "ms": 39.3,
+    "reachedProtectedBackend": true,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "cookie",
+    "name": "valid cookie + forged header",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 200,
+    "ms": 82.4,
+    "reachedProtectedBackend": true,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "cookie",
+    "name": "valid cookie + underscore identity headers",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 200,
+    "ms": 70.5,
+    "reachedProtectedBackend": true,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "cookie",
+    "name": "forged header, no cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 401,
+    "ms": 53.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "x-forwarded-proto",
+    "name": "cookie route, client sent nothing",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 200,
+    "ms": 44.1,
+    "reachedProtectedBackend": true,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "x-forwarded-proto",
+    "name": "cookie route, client sent http",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 200,
+    "ms": 41,
+    "reachedProtectedBackend": true,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal",
+    "name": "no cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/internal/ext-authz/api/whoami",
+    "status": 401,
+    "ms": 36.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal",
+    "name": "no cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/internal",
+    "status": 401,
+    "ms": 36.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal",
+    "name": "no cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/internal/tenants",
+    "status": 401,
+    "ms": 37.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal",
+    "name": "valid cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/internal/ext-authz/api/whoami",
+    "status": 403,
+    "ms": 55.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal",
+    "name": "valid cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/internal",
+    "status": 403,
+    "ms": 60.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal",
+    "name": "valid cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/internal/tenants",
+    "status": 403,
+    "ms": 59.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "//internal",
+    "status": 401,
+    "ms": 66.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "//internal",
+    "status": 307,
+    "ms": 56.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "//internal/tenants",
+    "status": 401,
+    "ms": 37.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "//internal/tenants",
+    "status": 307,
+    "ms": 62,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "///internal",
+    "status": 401,
+    "ms": 38.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "///internal",
+    "status": 307,
+    "ms": 39.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "//./internal",
+    "status": 401,
+    "ms": 37.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "//./internal",
+    "status": 307,
+    "ms": 58.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/.//internal/tenants",
+    "status": 401,
+    "ms": 43.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/.//internal/tenants",
+    "status": 307,
+    "ms": 45.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/x/..//internal/tenants",
+    "status": 401,
+    "ms": 38.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/x/..//internal/tenants",
+    "status": 307,
+    "ms": 39.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/%2finternal",
+    "status": 401,
+    "ms": 44.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/%2finternal",
+    "status": 200,
+    "ms": 79.2,
+    "reachedProtectedBackend": true,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/%2finternal/tenants",
+    "status": 401,
+    "ms": 39.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/%2finternal/tenants",
+    "status": 200,
+    "ms": 43.8,
+    "reachedProtectedBackend": true,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/%2Finternal",
+    "status": 401,
+    "ms": 36,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/%2Finternal",
+    "status": 200,
+    "ms": 39.6,
+    "reachedProtectedBackend": true,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/%2f%2finternal",
+    "status": 401,
+    "ms": 37.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/%2f%2finternal",
+    "status": 200,
+    "ms": 40,
+    "reachedProtectedBackend": true,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "no cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/./%2finternal",
+    "status": 401,
+    "ms": 40.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "internal slashes",
+    "name": "valid cookie",
+    "host": "app.saas.trustiot.test",
+    "target": "/./%2finternal",
+    "status": 200,
+    "ms": 38.2,
+    "reachedProtectedBackend": true,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "cookie",
+    "name": "unknown host",
+    "host": "unknown.trustiot.test",
+    "target": "/api/whoami",
+    "status": 404,
+    "ms": 51.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "certificate renewal",
+    "host": "gw.saas.trustiot.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 67,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "MQTT over WebSocket",
+    "host": "gw.saas.trustiot.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 65.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "login",
+    "host": "app.saas.trustiot.test",
+    "target": "/auth/login",
+    "status": 200,
+    "ms": 55.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "health check",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthz",
+    "status": 200,
+    "ms": 57.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "certificate renewal, underscore identity headers",
+    "host": "gw.saas.trustiot.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 66.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "MQTT over WebSocket, underscore identity headers",
+    "host": "gw.saas.trustiot.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 39.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "login, underscore identity headers",
+    "host": "app.saas.trustiot.test",
+    "target": "/auth/login",
+    "status": 200,
+    "ms": 57.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "health check, underscore identity headers",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthz",
+    "status": 200,
+    "ms": 38.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/mqtt on gw.saas.trustiot.test:80",
+    "host": "gw.saas.trustiot.test:80",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 66.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/certs/renew on gw.saas.trustiot.test:80",
+    "host": "gw.saas.trustiot.test:80",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 36.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/mqtt on gw.saas.trustiot.test:8443",
+    "host": "gw.saas.trustiot.test:8443",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 79.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/healthz on app.saas.trustiot.test:80",
+    "host": "app.saas.trustiot.test:80",
+    "target": "/healthz",
+    "status": 200,
+    "ms": 38.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/auth/login on app.saas.trustiot.test:80",
+    "host": "app.saas.trustiot.test:80",
+    "target": "/auth/login",
+    "status": 200,
+    "ms": 39.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/mqtt on app.saas.trustiot.test:80",
+    "host": "app.saas.trustiot.test:80",
+    "target": "/mqtt",
+    "status": 401,
+    "ms": 37.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/certs/renew on app.saas.trustiot.test:80",
+    "host": "app.saas.trustiot.test:80",
+    "target": "/certs/renew",
+    "status": 401,
+    "ms": 37.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/api/whoami on app.saas.trustiot.test:80",
+    "host": "app.saas.trustiot.test:80",
+    "target": "/api/whoami",
+    "status": 401,
+    "ms": 37.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/auth/login on gw.saas.trustiot.test:80",
+    "host": "gw.saas.trustiot.test:80",
+    "target": "/auth/login",
+    "status": 404,
+    "ms": 51.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public, host with port",
+    "name": "/mqtt on ota.saas.trustiot.test:80",
+    "host": "ota.saas.trustiot.test:80",
+    "target": "/mqtt",
+    "status": 404,
+    "ms": 37,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public",
+    "name": "health check GET",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthz",
+    "status": 200,
+    "ms": 41.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public on another host",
+    "name": "/mqtt on hosts.app",
+    "host": "app.saas.trustiot.test",
+    "target": "/mqtt",
+    "status": 401,
+    "ms": 37.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public on another host",
+    "name": "/certs/renew on hosts.app",
+    "host": "app.saas.trustiot.test",
+    "target": "/certs/renew",
+    "status": 401,
+    "ms": 38.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public on another host",
+    "name": "/auth/login on hosts.gateway",
+    "host": "gw.saas.trustiot.test",
+    "target": "/auth/login",
+    "status": 404,
+    "ms": 36.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public on another host",
+    "name": "/healthz on hosts.gateway",
+    "host": "gw.saas.trustiot.test",
+    "target": "/healthz",
+    "status": 404,
+    "ms": 37.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public on another host",
+    "name": "/mqtt on hosts.ota",
+    "host": "ota.saas.trustiot.test",
+    "target": "/mqtt",
+    "status": 404,
+    "ms": 41.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "public on another host",
+    "name": "/auth/login on hosts.ota",
+    "host": "ota.saas.trustiot.test",
+    "target": "/auth/login",
+    "status": 404,
+    "ms": 55.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "dot-dot out of a public path",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthz/../api/whoami",
+    "status": 401,
+    "ms": 40.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "encoded dot-dot",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthz/%2e%2e/api/whoami",
+    "status": 401,
+    "ms": 37,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "encoded dot-dot, upper case hex",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthz/%2E%2E/api/whoami",
+    "status": 401,
+    "ms": 37.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "dot-dot with an encoded slash",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthz/..%2fapi/whoami",
+    "status": 401,
+    "ms": 38,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "encoded slashes around dot-dot",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthz%2f..%2fapi/whoami",
+    "status": 401,
+    "ms": 39.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "double leading slash",
+    "host": "app.saas.trustiot.test",
+    "target": "//api/whoami",
+    "status": 401,
+    "ms": 40.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "double slash after a public path",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthz//../api/whoami",
+    "status": 401,
+    "ms": 37.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "upper-case public path then dot-dot",
+    "host": "app.saas.trustiot.test",
+    "target": "/HEALTHZ/../api/whoami",
+    "status": 401,
+    "ms": 37.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "upper-case public path",
+    "host": "app.saas.trustiot.test",
+    "target": "/HEALTHZ",
+    "status": 401,
+    "ms": 37.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "mixed-case public path",
+    "host": "app.saas.trustiot.test",
+    "target": "/Auth/Login",
+    "status": 401,
+    "ms": 40.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "public path of the gateway host, dot-dot",
+    "host": "gw.saas.trustiot.test",
+    "target": "/mqtt/../api/whoami",
+    "status": 404,
+    "ms": 38.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "public path in the query string",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami?x=/healthz",
+    "status": 401,
+    "ms": 48.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "public path in the query after dot-dot",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami?/../healthz",
+    "status": 401,
+    "ms": 42.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "semicolon path parameter, then dot-dot",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthz;/../api/whoami",
+    "status": 401,
+    "ms": 39.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "dot-dot with a semicolon",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthz/..;/api/whoami",
+    "status": 401,
+    "ms": 38.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "semicolon parameter on a public path",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthz;x=y",
+    "status": 401,
+    "ms": 38.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "single dot segment",
+    "host": "app.saas.trustiot.test",
+    "target": "/./api/whoami",
+    "status": 401,
+    "ms": 37.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "encoded single dot",
+    "host": "app.saas.trustiot.test",
+    "target": "/%2e/api/whoami",
+    "status": 401,
+    "ms": 37.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "encoded hash before a public path",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami%23/healthz",
+    "status": 401,
+    "ms": 36.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "raw hash before a public path",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami#/healthz",
+    "status": 401,
+    "ms": 36.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "trailing slash on a public path",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthz/",
+    "status": 401,
+    "ms": 37.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "public path as a prefix",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthz/api/whoami",
+    "status": 401,
+    "ms": 37.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "public path plus suffix",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthzx",
+    "status": 401,
+    "ms": 37.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "backslash dot-dot",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthz\\..\\api\\whoami",
+    "status": 401,
+    "ms": 37.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "encoded backslash dot-dot",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthz%5c..%5capi%5cwhoami",
+    "status": 401,
+    "ms": 41.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "absolute-form request target",
+    "host": "app.saas.trustiot.test",
+    "target": "http://app.saas.trustiot.test/healthz/../api/whoami",
+    "status": 401,
+    "ms": 39.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "encoded internal prefix",
+    "host": "app.saas.trustiot.test",
+    "target": "/%69nternal/tenants",
+    "status": 401,
+    "ms": 37.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "bypass",
+    "name": "internal prefix after dot-dot",
+    "host": "app.saas.trustiot.test",
+    "target": "/healthz/../internal/tenants",
+    "status": 401,
+    "ms": 39.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity slow",
+    "name": "slow session #1",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 553,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity slow",
+    "name": "slow session #2",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 537.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity slow",
+    "name": "slow session #3",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 554.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity slow",
+    "name": "slow session #4",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 536.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity slow",
+    "name": "slow session #5",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 554.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #1",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 39.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #1",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 54.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #1",
+    "host": "gw.saas.trustiot.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 68.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #1",
+    "host": "gw.saas.trustiot.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 38,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #2",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 37.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #2",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 38.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #2",
+    "host": "gw.saas.trustiot.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 40,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #2",
+    "host": "gw.saas.trustiot.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 40.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #3",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 37.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #3",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 38.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #3",
+    "host": "gw.saas.trustiot.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 40.2,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #3",
+    "host": "gw.saas.trustiot.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 66,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #4",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 40.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #4",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 36.9,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #4",
+    "host": "gw.saas.trustiot.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 71.8,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #4",
+    "host": "gw.saas.trustiot.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 45.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #5",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 40.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #5",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 37.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #5",
+    "host": "gw.saas.trustiot.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 39,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #5",
+    "host": "gw.saas.trustiot.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 41.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #6",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 37.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #6",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 38.6,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #6",
+    "host": "gw.saas.trustiot.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 39.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #6",
+    "host": "gw.saas.trustiot.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 39.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #7",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 41.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #7",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 40,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #7",
+    "host": "gw.saas.trustiot.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 39.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #7",
+    "host": "gw.saas.trustiot.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 47.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #8",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 38.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #8",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 36.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #8",
+    "host": "gw.saas.trustiot.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 39.3,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #8",
+    "host": "gw.saas.trustiot.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 42.1,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #9",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 38,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #9",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 37.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #9",
+    "host": "gw.saas.trustiot.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 40.5,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #9",
+    "host": "gw.saas.trustiot.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 39.7,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "valid cookie #10",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 37.4,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie #10",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 503,
+    "ms": 38,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /certs/renew #10",
+    "host": "gw.saas.trustiot.test",
+    "target": "/certs/renew",
+    "status": 200,
+    "ms": 45,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "public /mqtt #10",
+    "host": "gw.saas.trustiot.test",
+    "target": "/mqtt",
+    "status": 200,
+    "ms": 41,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  },
+  {
+    "group": "identity down",
+    "name": "no cookie after recovery",
+    "host": "app.saas.trustiot.test",
+    "target": "/api/whoami",
+    "status": 401,
+    "ms": 51,
+    "reachedProtectedBackend": false,
+    "forgedHeaderSeen": false
+  }
+]

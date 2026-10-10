@@ -1,0 +1,359 @@
+# system tables as tenant A: 153 tables
+# name | http | detail
+aggregate_function_combinators | 200 | ROWS=15
+aggregated_zookeeper_log | 403 | ACCESS_DENIED
+asynchronous_insert_log | 403 | ACCESS_DENIED
+asynchronous_inserts | 403 | ACCESS_DENIED
+asynchronous_loader | 403 | ACCESS_DENIED
+asynchronous_metric_log | 403 | ACCESS_DENIED
+asynchronous_metrics | 403 | ACCESS_DENIED
+azure_queue_metadata | 403 | ACCESS_DENIED
+azure_queue_metadata_cache | 403 | ACCESS_DENIED
+azure_queue_settings | 403 | ACCESS_DENIED
+background_schedule_pool | 403 | ACCESS_DENIED
+background_schedule_pool_log | 403 | ACCESS_DENIED
+backup_log | 403 | ACCESS_DENIED
+backups | 403 | ACCESS_DENIED
+blob_storage_log | 403 | ACCESS_DENIED
+build_options | 403 | ACCESS_DENIED
+certificates | 403 | ACCESS_DENIED
+clusters | 403 | ACCESS_DENIED
+codecs | 403 | ACCESS_DENIED
+collations | 200 | ROWS=20
+columns | 200 | ROWS=13
+completions | 200 | ROWS=20
+constraints | 403 | ACCESS_DENIED
+contributors | 200 | ROWS=20
+crash_log | 403 | ACCESS_DENIED
+current_roles | 200 | ROWS=1
+dashboards | 403 | ACCESS_DENIED
+data_skipping_index_types | 403 | ACCESS_DENIED
+data_skipping_indices | 403 | ACCESS_DENIED
+data_type_families | 200 | ROWS=20
+database_engines | 200 | ROWS=17
+database_replicas | 403 | ACCESS_DENIED
+databases | 200 | ROWS=1
+delta_lake_metadata_log | 403 | ACCESS_DENIED
+detached_parts | 403 | ACCESS_DENIED
+detached_tables | 403 | ACCESS_DENIED
+dictionaries | 403 | ACCESS_DENIED
+dictionary_layouts | 200 | ROWS=20
+dictionary_sources | 403 | ACCESS_DENIED
+dimensional_metrics | 403 | ACCESS_DENIED
+disk_types | 200 | ROWS=12
+disks | 403 | ACCESS_DENIED
+distributed_ddl_queue | 403 | ACCESS_DENIED
+distribution_queue | 403 | ACCESS_DENIED
+dns_cache | 403 | ACCESS_DENIED
+documentation | 403 | ACCESS_DENIED
+dropped_tables | 403 | ACCESS_DENIED
+dropped_tables_parts | 403 | ACCESS_DENIED
+enabled_roles | 200 | ROWS=1
+error_log | 403 | ACCESS_DENIED
+errors | 403 | ACCESS_DENIED
+events | 403 | ACCESS_DENIED
+fail_points | 403 | ACCESS_DENIED
+filesystem_cache | 403 | ACCESS_DENIED
+filesystem_cache_settings | 403 | ACCESS_DENIED
+formats | 200 | ROWS=20
+functions | 200 | ROWS=20
+grants | 403 | ACCESS_DENIED
+graphite_retentions | 403 | ACCESS_DENIED
+handlers | 403 | ACCESS_DENIED
+histogram_metrics | 403 | ACCESS_DENIED
+hypothetical_indexes | 403 | ACCESS_DENIED
+iceberg_files | 403 | ACCESS_DENIED
+iceberg_history | 403 | ACCESS_DENIED
+iceberg_metadata_log | 403 | ACCESS_DENIED
+instrumentation | 403 | ACCESS_DENIED
+jemalloc_arena_bins | 403 | ACCESS_DENIED
+jemalloc_bins | 403 | ACCESS_DENIED
+jemalloc_profile_text | 403 | ACCESS_DENIED
+jemalloc_sampled_allocations | 403 | ACCESS_DENIED
+jemalloc_stats | 403 | ACCESS_DENIED
+kafka_consumers | 403 | ACCESS_DENIED
+keywords | 403 | ACCESS_DENIED
+licenses | 200 | ROWS=20
+macros | 403 | ACCESS_DENIED
+masking_policies | 403 | ACCESS_DENIED
+merge_tree_settings | 403 | ACCESS_DENIED
+merges | 403 | ACCESS_DENIED
+metric_log | 403 | ACCESS_DENIED
+metrics | 403 | ACCESS_DENIED
+models | 403 | ACCESS_DENIED
+moves | 403 | ACCESS_DENIED
+mutations | 403 | ACCESS_DENIED
+named_collections | 403 | ACCESS_DENIED
+numbers | 403 | ACCESS_DENIED
+numbers_mt | 403 | ACCESS_DENIED
+one | 200 | ROWS=1
+opentelemetry_span_log | 403 | ACCESS_DENIED
+part_log | 403 | ACCESS_DENIED
+part_moves_between_shards | 403 | ACCESS_DENIED
+parts | 403 | ACCESS_DENIED
+parts_columns | 403 | ACCESS_DENIED
+primes | 403 | ACCESS_DENIED
+privileges | 200 | ROWS=20
+processes | 403 | ACCESS_DENIED
+processors_profile_log | 403 | ACCESS_DENIED
+projection_parts | 403 | ACCESS_DENIED
+projection_parts_columns | 403 | ACCESS_DENIED
+projections | 403 | ACCESS_DENIED
+query_cache | 403 | ACCESS_DENIED
+query_condition_cache | 403 | ACCESS_DENIED
+query_log | 403 | ACCESS_DENIED
+query_metric_log | 403 | ACCESS_DENIED
+query_thread_log | 403 | ACCESS_DENIED
+query_views_log | 403 | ACCESS_DENIED
+quota_limits | 403 | ACCESS_DENIED
+quota_usage | 200 | ROWS=2
+quotas | 403 | ACCESS_DENIED
+quotas_usage | 403 | ACCESS_DENIED
+remote_data_paths | 403 | ACCESS_DENIED
+replicas | 403 | ACCESS_DENIED
+replicated_fetches | 403 | ACCESS_DENIED
+replicated_merge_tree_settings | 403 | ACCESS_DENIED
+replication_queue | 403 | ACCESS_DENIED
+resources | 403 | ACCESS_DENIED
+rocksdb | 403 | ACCESS_DENIED
+role_grants | 403 | ACCESS_DENIED
+roles | 403 | ACCESS_DENIED
+row_policies | 403 | ACCESS_DENIED
+s3_queue_metadata | 403 | ACCESS_DENIED
+s3_queue_settings | 403 | ACCESS_DENIED
+s3queue_log | 403 | ACCESS_DENIED
+s3queue_metadata_cache | 403 | ACCESS_DENIED
+scheduler | 403 | ACCESS_DENIED
+schema_inference_cache | 403 | ACCESS_DENIED
+server_settings | 403 | ACCESS_DENIED
+settings | 200 | ROWS=20
+settings_changes | 403 | ACCESS_DENIED
+settings_profile_elements | 403 | ACCESS_DENIED
+settings_profiles | 403 | ACCESS_DENIED
+stack_trace | 403 | ACCESS_DENIED
+stemmers | 403 | ACCESS_DENIED
+storage_policies | 403 | ACCESS_DENIED
+symbols | 403 | ACCESS_DENIED
+table_engines | 200 | ROWS=20
+table_functions | 200 | ROWS=20
+tables | 200 | ROWS=1
+text_log | 403 | ACCESS_DENIED
+time_zones | 200 | ROWS=20
+tokenizers | 403 | ACCESS_DENIED
+trace_log | 403 | ACCESS_DENIED
+unicode | 403 | ACCESS_DENIED
+user_defined_functions | 403 | ACCESS_DENIED
+user_directories | 403 | ACCESS_DENIED
+user_processes | 403 | ACCESS_DENIED
+user_query_log | 200 | ROWS=0
+users | 403 | ACCESS_DENIED
+view_refreshes | 403 | ACCESS_DENIED
+warnings | 403 | ACCESS_DENIED
+workloads | 403 | ACCESS_DENIED
+zeros | 403 | ACCESS_DENIED
+zeros_mt | 403 | ACCESS_DENIED
+zookeeper_connection_log | 403 | ACCESS_DENIED
+
+# allowed system tables (HTTP 200): aggregate_function_combinators, collations, columns, completions, contributors, current_roles, data_type_families, database_engines, databases, dictionary_layouts, disk_types, enabled_roles, formats, functions, licenses, one, privileges, quota_usage, settings, table_engines, table_functions, tables, time_zones, user_query_log
+# responses mentioning B's tenant id, secret or user name: 0
+
+## system.aggregate_function_combinators
+SimpleState | 0 | Applied as a suffix to an aggregate function name (e.g. `sumSimpleState`), it returns the final aggregation result value, but typed as `SimpleAggregateFunction` instead of the plain result type, for storage in engines such as `AggregatingMergeTree`. Unlike the `State` combinator, it does not return a serialized intermediate state; it is only supported for functions whose partial results can be merged by reapplying the function itself. | <aggregate_function>SimpleState |  |  | ['State']
+OrDefault | 0 | Applied as a suffix to an aggregate function name (e.g. `sumOrDefault`), it returns the ret
+
+## system.collations
+af | Afrikaans
+am | Amharic
+ar | Arabic
+ar_SA | Arabic
+as | Assamese
+
+## system.columns
+trustiot | telemetry | tenant_id | UUID | 1 |  |  | 0 | 0 | 0 | Tenant that owns the gateway, taken from the gateway connection certificate, never from the payload | 0 | 1 | 1 | 0 |  | \N | \N | \N | \N | \N | Default | basic(auto)
+trustiot | telemetry | gateway_id | UUID | 2 |  |  | 0 | 0 | 0 | Gateway that sent the batch | 0 | 0 | 0 | 0 |  | \N | \N | \N | \N | \N | Default | basic(auto)
+trustiot | telemetry | stream_id | UUID | 3 |  |  | 0 | 0 | 0 | Gateway batch stream, batch sequence numbers are unique within a stream | 0 | 0 | 0 | 0 |  | \N | \N | \N | \N | \N | Default | basic(auto)
+trustiot | telemetry | batch_seq | UInt64 | 4 |  |  | 0 | 0 | 0 | Sequence number of the batch within its stream | 0 | 0 | 0 | 0 |  | \N | 64 | 2 | 0 | \N | Default | basic(auto),
+
+## system.completions
+trustiot | database | \N
+telemetry | table | trustiot
+tenant_id | column | telemetry
+gateway_id | column | telemetry
+stream_id | column | telemetry
+
+## system.contributors
+lihaibo42
+SuperDJY
+alesapin
+idfer
+Jake Liu
+
+## system.current_roles
+trustiot_tenant_reader | 0 | 1
+
+## system.data_type_families
+JSON | 1 |  | \nimport WhenToUseJson from \'/snippets/_when-to-use-json.mdx\';\n\n<Card title="Looking for a guide?" href="/concepts/best-practices/json-type" icon="book">\n  Check out our JSON best practice guide for examples, advanced features and considerations for using the JSON type.\n</Card>\n\nThe `JSON` type stores JavaScript Object Notation (JSON) documents in a single column.\n\n<Note>\nIn ClickHouse Open-Source JSON data type is marked as production ready in version 25.3. It\'s not recommended to use this type in production in previous versions.\n</Note>\n\nTo declare a column of `JSON` t
+
+## system.database_engines
+HDFS | A read-only database that exposes files in HDFS as tables. | ENGINE = HDFS([hdfs_host_and_root_path]) |  |  | ['S3','Filesystem']
+S3 | A read-only database that exposes objects in Amazon S3 (or S3-compatible storage) as tables. | ENGINE = S3([config_or_url[, access_key_id, secret_access_key]]) |  |  | ['Filesystem','HDFS']
+SQLite | \nAllows to connect to [SQLite](https://www.sqlite.org/index.html) database and perform `INSERT` and `SELECT` queries to exchange data between ClickHouse and SQLite.\n\n## Creating a database {#creating-a-database}\n\n```sql\n    CREATE DATABASE sqlite_database\n    ENGINE = SQLit
+
+## system.databases
+trustiot | Atomic | /var/lib/clickhouse/store/ | store/a40/a402df43-988f-4008-86f6-4091066b4873/ | a402df43-988f-4008-86f6-4091066b4873 | Atomic | TrustIoT tenant telemetry, schema in services/ingest/migrations/clickhouse | 0
+
+## system.dictionary_layouts
+direct | 0 | \n# direct dictionary layout\n\n## direct {#direct}\n\nThe dictionary is not stored in memory and directly goes to the source during the processing of a request.\n\nThe dictionary key has the [UInt64](/reference/data-types/int-uint) type.\n\nAll types of [sources](/reference/statements/create/dictionary/sources/overview#dictionary-sources), except local files, are supported.\n\nConfiguration example:\n\n<Tabs>\n<Tab title="DDL">\n\n```sql\nLAYOUT(DIRECT())\n```\n\n</Tab>\n<Tab title="Configuration file">\n\n```xml\n<layout>\n  <direct />\n</layout>\n```\n\n</Tab>\n</Tabs>\n<br/>\n\n##
+
+## system.disk_types
+azure_blob_storage | A disk backed by Microsoft Azure Blob Storage. Retained for compatibility; equivalent to `object_storage` with `object_storage_type = azure_blob_storage`. | disk(type = azure_blob_storage, storage_account_url = \'...\', container_name = \'...\') |  |  | ['object_storage']
+hdfs | A disk backed by the Apache Hadoop Distributed File System (HDFS). Retained for compatibility; equivalent to `object_storage` with `object_storage_type = hdfs`. | disk(type = hdfs, endpoint = \'hdfs://...\') |  |  | ['object_storage']
+local_blob_storage | A disk backed by a local directory treated as object storage. Ret
+
+## system.enabled_roles
+trustiot_tenant_reader | 0 | 1 | 1
+
+## system.formats
+One | 1 | 0 | 0 | 0 | 1 |  | 0 | 0 | 1 | 0 | 0 | 0 | \n| Input | Output | Alias |\n|-------|--------|-------|\n| ✔     | ✗      |       |\n\n## Description {#description}\n\nThe `One` format is a special input format that doesn\'t read any data from file, and returns only one row with column of type [`UInt8`](/reference/data-types/int-uint), name `dummy` and value `0` (like the `system.one` table).\nCan be used with virtual columns `_file/_path`  to list all files without reading actual data.\n\n## Example usage {#example-usage}\n\nExample:\n\n```sql title="Query"\nSELECT _file FROM file(\'path/to/files/data*\', One);\
+
+## system.functions
+HMAC | 0 | 1 |  |  | System | \nComputes the HMAC (Hash-based Message Authentication Code) for the given message using the specified hash algorithm and secret key.\n\nSupported hash algorithms:\n- blake2b512\n- blake2s256\n- md4\n- md5\n- md5-sha1\n- mdc2\n- ripemd (aliases: RIPEMD160, ripemd)\n- ripemd160\n- rmd160 (aliases: RIPEMD160, rmd160)\n- sha1\n- sha224\n- sha256\n- sha3-224\n- sha3-256\n- sha3-384\n- sha3-512\n- sha384\n- sha512\n- sha512-224\n- sha512-256\n- shake128\n- shake256\n- sm3\n- ssl3-md5 (aliases: MD5, ssl3-md5)\n- ssl3-sha1 (aliases: SHA1, ssl3-sha1)\n- whirlpool\n     | HMAC(mode, mes
+
+## system.licenses
+AMQP-CPP | Apache | /contrib/AMQP-CPP/LICENSE | Apache License\n                           Version 2.0, January 2004\n                        http://www.apache.org/licenses/\n\n   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION\n\n   1. Definitions.\n\n      "License" shall mean the terms and conditions for use, reproduction,\n      and distribution as defined by Sections 1 through 9 of this document.\n\n      "Licensor" shall mean the copyright owner or entity authorized by\n      the copyright owner that is granting the License.\n\n      "Legal Entity" shall mean the union of the acti
+
+## system.one
+0
+
+## system.privileges
+SHOW DATABASES | [] | DATABASE | SHOW
+SHOW TABLES | [] | TABLE | SHOW
+CHECK | [] | TABLE | ALL
+SHOW COLUMNS | [] | COLUMN | SHOW
+SHOW DICTIONARIES | [] | DICTIONARY | SHOW
+
+## system.quota_usage
+trustiot_tenant_reader | sweep_a_2 | 2026-10-10 18:00:00 | 2026-10-10 19:00:00 | 3600 | 2 | 3000 | 2 | \N | 0 | \N | 11 | \N | 21 | \N | 144943 | \N | 85 | 20000000000 | 611340 | \N | 0 | 1800 | 0 | \N | 0 | \N | 0 | \N
+trustiot_tenant_reader | sweep_a_2 | 2026-10-10 18:12:00 | 2026-10-10 18:13:00 | 60 | 2 | 120 | 2 | \N | 0 | \N | 11 | 60 | 21 | \N | 144943 | \N | 85 | \N | 611340 | \N | 0 | \N | 0 | \N | 0 | \N | 0 | \N
+
+## system.settings
+dialect | clickhouse | 0 | Which dialect will be used to parse query.\n\nSupported values:\n- `clickhouse` (default) — standard ClickHouse SQL.\n- `kusto` — Kusto Query Language. Requires the experimental setting `allow_experimental_kusto_dialect`.\n- `prql` — PRQL. Requires the experimental setting `allow_experimental_prql_dialect`.\n- `polyglot` — transpiles SQL from other dialects (MySQL, PostgreSQL, etc.) into ClickHouse SQL. Requires the experimental setting `allow_experimental_polyglot_dialect`.\n- `promql` — PromQL (Prometheus Query Language) evaluated over a TimeSeries table, configured by t
+
+## system.table_engines
+GCS | 1 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | The `GCS` engine provides integration with [Google Cloud Storage (GCS)](https://cloud.google.com/storage) through its Amazon S3-compatible API. It shares the implementation, parameters, and settings of the [`S3`](/reference/engines/table-engines/integrations/s3) table engine; see that engine\'s documentation for the full description, parameters, examples, and settings.\n | ENGINE = GCS(url [, NOSIGN | access_key_id, secret_access_key [, session_token]] [, format] [, compression]) |  |  | ['AzureBlobStorage','HDFS']
+OSS | 1 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | The `OSS` engine provides integration with [Ali
+
+## system.table_functions
+ytsaurus | \nimport { ExperimentalBadge } from "/snippets/components/ExperimentalBadge/ExperimentalBadge.jsx";\n\n<ExperimentalBadge/>\n\nThe table function allows to read data from the YTsaurus cluster.\n\n## Syntax {#syntax}\n\n```sql\nytsaurus(http_proxy_url, cypress_path, oauth_token, format)\n```\n\n<Info>\nThis is an experimental feature that may change in backwards-incompatible ways in the future releases.\nEnable usage of the YTsaurus table function\nwith [allow_experimental_ytsaurus_table_function](/reference/settings/session-settings/allow-experimental#allow_experimental_ytsaurus_table
+
+## system.tables
+trustiot | telemetry | eae0f3ea-5a0d-4b73-b4be-70829bab03e6 | MergeTree | 0 | ['/var/lib/clickhouse/store/eae/eae0f3ea-5a0d-4b73-b4be-70829bab03e6/'] | store/a40/a402df43-988f-4008-86f6-4091066b4873/telemetry.sql | 2026-10-10 18:09:20 | 0 | [] | [] | CREATE TABLE trustiot.telemetry (`tenant_id` UUID COMMENT \'Tenant that owns the gateway, taken from the gateway connection certificate, never from the payload\', `gateway_id` UUID COMMENT \'Gateway that sent the batch\', `stream_id` UUID COMMENT \'Gateway batch stream, batch sequence numbers are unique within a stream\', `batch_seq` UInt64 COMMENT \'Sequence number of
+
+## system.time_zones
+Africa/Abidjan
+Africa/Accra
+Africa/Addis_Ababa
+Africa/Algiers
+Africa/Asmara
+
+## system.user_query_log
+
+
+# table functions as tenant A: 94
+# name | http | code | detail
+SQLStandardValues | 200 | ANSWER 1
+arrowFlight | 500 | NUMBER_OF_ARGUMENTS_DOESNT_MATCH :: Code: 42. DB::Exception: Storage ArrowFlight requires 2 or 4 parameters: ArrowFlight('host:port', 'dataset' [, 'user', 'password']). (NUMBER_OF_ARGUMENTS_DOESNT
+arrowflight | 500 | NUMBER_OF_ARGUMENTS_DOESNT_MATCH :: Code: 42. DB::Exception: Storage ArrowFlight requires 2 or 4 parameters: ArrowFlight('host:port', 'dataset' [, 'user', 'password']). (NUMBER_OF_ARGUMENTS_DOESNT
+azureBlobStorage | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'connection_string/storage_account_url' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (o
+azureBlobStorageCluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+bigquery | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'argument' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+cluster | 403 | ACCESS_DENIED :: Code: 497. DB::Exception: sweep_a_3: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED) (version 26.
+clusterAllReplicas | 403 | ACCESS_DENIED :: Code: 497. DB::Exception: sweep_a_4: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED) (version 26.
+cosn | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'url' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+deltaLake | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'url' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+deltaLakeAzure | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'connection_string/storage_account_url' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (o
+deltaLakeAzureCluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+deltaLakeCluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+deltaLakeLocal | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'path' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+deltaLakeS3 | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'url' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+deltaLakeS3Cluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+dictionary | 403 | ACCESS_DENIED :: Code: 497. DB::Exception: sweep_a_1: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TEMPORARY TABLE ON *.*. (ACCESS_DENIE
+eval | 500 | SUPPORT_IS_DISABLED :: Code: 344. DB::Exception: Table function `eval` is experimental. Set `allow_experimental_eval_table_function = 1` to enable it. (SUPPORT_IS_DISABLED) (version 2
+executable | 500 | NUMBER_OF_ARGUMENTS_DOESNT_MATCH :: Code: 42. DB::Exception: Table function 'executable' requires minimum 3 arguments: script_name, format, structure, [input_query...]. (NUMBER_OF_ARGUMENTS_DOESNT
+file | 500 | DATABASE_ACCESS_DENIED :: Code: 291. DB::Exception: File `/etc/passwd` is not inside `/var/lib/clickhouse/user_files`. (DATABASE_ACCESS_DENIED) (version 26.8.22.13 (official build))
+fileCluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+filesystem | 500 | BAD_GET :: Code: 170. DB::Exception: Bad get: has UInt64, requested String. (BAD_GET) (version 26.8.22.13 (official build))
+format | 403 | ACCESS_DENIED :: Code: 497. DB::Exception: sweep_a_7: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TEMPORARY TABLE ON *.*. (ACCESS_DENIE
+fuzzJSON | 408 | TIMEOUT_EXCEEDED :: Code: 159. DB::Exception: Timeout exceeded: elapsed 30017.742 ms, maximum: 30000.000 ms. (TIMEOUT_EXCEEDED) (version 26.8.22.13 (official build))
+fuzzQuery | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'query' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+gcs | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'url' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+generateRandom | 500 | TOO_MANY_ROWS :: Code: 158. DB::Exception: Limit for rows or bytes to read exceeded, max rows: 1.00 billion, current rows: 1.00 billion: While executing GenerateRandom. (TOO_MAN
+generateSeries | 200 | ANSWER 5
+generate_series | 200 | ANSWER 5
+hdfs | 403 | ACCESS_DENIED :: Code: 497. DB::Exception: sweep_a_2: Not enough privileges. To execute this query, it's necessary to have the grant READ ON HDFS. (ACCESS_DENIED) (version 26.8.
+hdfsCluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+hive | 500 | NUMBER_OF_ARGUMENTS_DOESNT_MATCH :: Code: 42. DB::Exception: The signature of function hive is:  - hive_url, hive_database, hive_table, structure, partition_by_keys. (NUMBER_OF_ARGUMENTS_DOESNT_MA
+hudi | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'url' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+hudiCluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+iceberg | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'url' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+icebergAzure | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'connection_string/storage_account_url' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (o
+icebergAzureCluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+icebergCluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+icebergHDFS | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'url' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+icebergHDFSCluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+icebergLocal | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'path' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+icebergLocalCluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+icebergS3 | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'url' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+icebergS3Cluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+input | 500 | INVALID_USAGE_OF_INPUT :: Code: 477. DB::Exception: Input stream is not initialized, input() must be used only in INSERT SELECT query. (INVALID_USAGE_OF_INPUT) (version 26.8.22.13 (offic
+jdbc | 403 | ACCESS_DENIED :: Code: 497. DB::Exception: sweep_a_6: Not enough privileges. To execute this query, it's necessary to have the grant READ ON JDBC. (ACCESS_DENIED) (version 26.8.
+loop | 403 | ACCESS_DENIED :: Code: 497. DB::Exception: sweep_a_7: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TEMPORARY TABLE ON *.*. (ACCESS_DENIE
+merge | 200 | ANSWER 3
+mergeTreeAnalyzeIndexes | 200 | ANSWER 1
+mergeTreeAnalyzeIndexesUUID | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'UUID' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+mergeTreeCodecBlockCounts | 500 | NUMBER_OF_ARGUMENTS_DOESNT_MATCH :: Code: 42. DB::Exception: Table function 'mergeTreeCodecBlockCounts' must have 2 arguments (database, table), got: 1. (NUMBER_OF_ARGUMENTS_DOESNT_MATCH) (version
+mergeTreeIndex | 403 | ACCESS_DENIED :: Code: 497. DB::Exception: Cannot read from `mergeTreeIndex` because a row policy is applied on table trustiot.telemetry (eae0f3ea-5a0d-4b73-b4be-70829bab03e6). 
+mergeTreeProjection | 500 | NO_SUCH_PROJECTION_IN_TABLE :: Code: 582. DB::Exception: There is no projection p in table. (NO_SUCH_PROJECTION_IN_TABLE) (version 26.8.22.13 (official build))
+mergeTreeTextIndex | 500 | NUMBER_OF_ARGUMENTS_DOESNT_MATCH :: Code: 42. DB::Exception: Table function 'mergeTreeTextIndex' must have 3 arguments (database, table, index_name), got: 1. (NUMBER_OF_ARGUMENTS_DOESNT_MATCH) (ve
+mongodb | 500 | NUMBER_OF_ARGUMENTS_DOESNT_MATCH :: Code: 42. DB::Exception: Incorrect argument count for table function 'mongodb'. Usage: mongodb('host:port', database, collection, user, password, structure[, op
+mysql | 403 | ACCESS_DENIED :: Code: 497. DB::Exception: sweep_a_4: Not enough privileges. To execute this query, it's necessary to have the grant READ ON MYSQL. (ACCESS_DENIED) (version 26.8
+null | 200 | ANSWER 0
+numbers | 200 | ANSWER 10
+numbers_mt | 200 | ANSWER 10
+odbc | 403 | ACCESS_DENIED :: Code: 497. DB::Exception: sweep_a_8: Not enough privileges. To execute this query, it's necessary to have the grant READ ON ODBC. (ACCESS_DENIED) (version 26.8.
+oss | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'url' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+paimon | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'url' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+paimonAzure | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'connection_string/storage_account_url' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (o
+paimonAzureCluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+paimonCluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+paimonHDFS | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'url' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+paimonHDFSCluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+paimonLocal | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'path' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+paimonS3 | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'url' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+paimonS3Cluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+postgresql | 403 | ACCESS_DENIED :: Code: 497. DB::Exception: sweep_a_7: Not enough privileges. To execute this query, it's necessary to have the grant READ ON POSTGRES. (ACCESS_DENIED) (version 2
+primes | 200 | ANSWER 1
+prometheusQuery | 500 | NUMBER_OF_ARGUMENTS_DOESNT_MATCH :: Code: 42. DB::Exception: Table function 'prometheusQuery' requires 3..4 arguments: prometheusQuery([database, ] time_series_table, promql_query, [database, ] ti
+prometheusQueryRange | 500 | NUMBER_OF_ARGUMENTS_DOESNT_MATCH :: Code: 42. DB::Exception: Table function 'prometheusQueryRange' requires 5..6 arguments: prometheusQueryRange([database, ] time_series_table, promql_query, [data
+redis | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Bad arguments count when creating Redis table function. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+remote | 403 | ACCESS_DENIED :: Code: 497. DB::Exception: sweep_a_0: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED) (version 26.
+remoteSecure | 403 | ACCESS_DENIED :: Code: 497. DB::Exception: sweep_a_1: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED) (version 26.
+s3 | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Bucket name length is out of bounds in virtual hosted style S3 URI: 'b' (http://127.0.0.1:9/b/k). (BAD_ARGUMENTS) (version 26.8.22.13 (
+s3Cluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+sqlite | 500 | PATH_ACCESS_DENIED :: Code: 481. DB::Exception: SQLite database file path '/tmp/x.db' must be inside 'user_files' directory. (PATH_ACCESS_DENIED) (version 26.8.22.13 (official build)
+timeSeriesData | 500 | UNEXPECTED_TABLE_ENGINE :: Code: 727. DB::Exception: This operation can be executed on a TimeSeries table only, the engine of table trustiot.telemetry (eae0f3ea-5a0d-4b73-b4be-70829bab03e
+timeSeriesMetrics | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'table_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+timeSeriesSamples | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'table_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+timeSeriesSelector | 500 | NUMBER_OF_ARGUMENTS_DOESNT_MATCH :: Code: 42. DB::Exception: Table function 'timeSeriesSelector' requires 4..5 arguments: timeSeriesSelector([database, ] time_series_table, selector, min_time, max
+timeSeriesTags | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'table_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+url | 403 | ACCESS_DENIED :: Code: 497. DB::Exception: sweep_a_10: Not enough privileges. To execute this query, it's necessary to have the grant READ ON URL. (ACCESS_DENIED) (version 26.8.
+urlCluster | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Argument 'cluster_name' must be a literal with type String, got UInt64. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+values | 200 | ANSWER 1
+view | 200 | ANSWER 1
+viewExplain | 400 | BAD_ARGUMENTS :: Code: 36. DB::Exception: Table function 'viewExplain' requires 2 or 3 arguments, got 1. (BAD_ARGUMENTS) (version 26.8.22.13 (official build))
+viewIfPermitted | 400 | SYNTAX_ERROR :: Code: 62. DB::Exception: Syntax error: failed at position 37 (1): 1). Expected one of: SELECT query, possibly with UNION, list of union elements, SELECT query, 
+ytsaurus | 500 | NUMBER_OF_ARGUMENTS_DOESNT_MATCH :: Code: 42. DB::Exception: Table function 'ytsaurus' 4 parameters: ytsaurus('http_proxy_url', cypress_path, oauth_token, structure) or with 2 parameters: ytsaurus
+zeros | 403 | ACCESS_DENIED :: Code: 497. DB::Exception: sweep_a_5: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TEMPORARY TABLE ON *.*. (ACCESS_DENIE
+zeros_mt | 403 | ACCESS_DENIED :: Code: 497. DB::Exception: sweep_a_6: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TEMPORARY TABLE ON *.*. (ACCESS_DENIE
+
+# total leaks: 0

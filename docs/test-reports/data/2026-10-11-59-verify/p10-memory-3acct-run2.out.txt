@@ -1,0 +1,4 @@
+3 tenant account(s) x 4 concurrent ~500MB queries (2570 ms)
+heavy queries: {"ok":4,"MEMORY_LIMIT_EXCEEDED":8}
+ingest inserts during the run: {"ok":8,"MEMORY_LIMIT_EXCEEDED":1}
+server alive afterwards: true

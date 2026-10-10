@@ -184,6 +184,30 @@ function siemManifests(): string {
   const labels = { "app.kubernetes.io/name": SIEM, "app.kubernetes.io/part-of": "trustiot-e2e" };
   const objects = [
     { apiVersion: "v1", kind: "ConfigMap", metadata: { name: SIEM, labels }, data: { "config.yaml": SIEM_CONFIG } },
+    // The chart denies all incoming traffic in the namespace by default; a SIEM outside the
+    // namespace would not need this. Only the collector's pods may connect (the SIEM is not in
+    // the mesh, so the connection arrives from the collector's pod IP on the OTLP port).
+    {
+      apiVersion: "networking.k8s.io/v1",
+      kind: "NetworkPolicy",
+      metadata: { name: SIEM, labels },
+      spec: {
+        podSelector: { matchLabels: labels },
+        policyTypes: ["Ingress"],
+        ingress: [
+          {
+            from: [
+              {
+                podSelector: {
+                  matchLabels: { "app.kubernetes.io/instance": RELEASE, "app.kubernetes.io/component": "otel-collector" },
+                },
+              },
+            ],
+            ports: [{ port: 4318, protocol: "TCP" }],
+          },
+        ],
+      },
+    },
     {
       apiVersion: "v1",
       kind: "Service",
@@ -364,7 +388,7 @@ afterAll(() => {
     [created.release, () => helm("uninstall", RELEASE, "--wait", "--timeout", "3m")],
     // The StatefulSet keeps its volume on uninstall (persistentVolumeClaimRetentionPolicy).
     [created.release, () => kubectl("delete", "pvc", `data-${PREFIX}-clickhouse-0`, "--ignore-not-found", "--wait=true")],
-    [created.siem, () => kubectl("delete", "deployment,service,configmap", SIEM, "--ignore-not-found", "--wait=true")],
+    [created.siem, () => kubectl("delete", "deployment,service,configmap,networkpolicy", SIEM, "--ignore-not-found", "--wait=true")],
     [created.secrets, () => kubectl("delete", "secret", ADMIN_SECRET, COLLECTOR_SECRET, SIEM, "--ignore-not-found")],
   ];
   for (const [done, cleanup] of steps) {
