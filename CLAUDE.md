@@ -4,9 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository state
 
-Bootstrapped on 2026-10-09. No application code, build tooling, or test runner exists yet. When the first toolchain lands, pin it in `.prototools` and add its build, lint, and test commands (including how to run a single test) to this file.
+Bootstrapped on 2026-10-09; the Cargo workspace and toolchain pins landed on 2026-10-10. `tools/repo-check` enforces repository invariants as part of `cargo test`. Pin every new runtime or dev tool in `.prototools` and add its commands to this file.
 
 Architecture decisions, rebuild scope (items A1–M8), service split, repository layout, and milestones (MS0–MS6) live in `docs/`; start at `docs/README.md`. `docs/` is the source of truth: when a decision changes, update `docs/` in the same change. In `docs/`, a bare `#N` refers to the legacy repo `Laysi/trustiot`; always write legacy references as `Laysi/trustiot#N` in issues and PRs here.
+
+## Build, lint, and test
+
+`.prototools` pins Rust and Bun. proto installs Rust through rustup and does not shim cargo, so rustup picks the toolchain from `rust-toolchain.toml`: change `rust` in `.prototools` and `channel` in `rust-toolchain.toml` together (`cargo test -p repo-check` fails when they differ). Run every command from the repository root.
+
+- Install the pinned tools: `proto install`
+- Build: `cargo build --workspace`
+- Format: `cargo fmt --all` (check only: `cargo fmt --all --check`)
+- Lint: `cargo clippy --workspace --all-targets -- -D warnings`
+- Test: `cargo test --workspace`
+- Single test: `cargo test -p <crate> <test-name-filter>`, for example `cargo test -p repo-check toolchain_pins_agree`
+
+Every directory under `crates/`, `services/`, `edge/`, `factory/`, and `tools/` is a workspace member, so it needs a `Cargo.toml` that sets `edition.workspace = true` and `[lints] workspace = true`; list non-Rust directories in the root `exclude`. Declare third-party dependencies once in the root `[workspace.dependencies]`. Clippy fails on every lint in `[workspace.lints]`; suppress one only with `#[allow(lint, reason = "...")]`. Save test evidence under `docs/test-reports/` as its README describes.
 
 ## Work tracking: GitHub Issues + Project board
 

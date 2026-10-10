@@ -1,0 +1,6 @@
+# rustup reads this file to pick the toolchain for cargo in this repository.
+# Keep `channel` equal to `rust` in `.prototools` (checked by `cargo test -p repo-check`).
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"
