@@ -40,11 +40,13 @@ spec:
 {{- end -}}
 
 {{/*
-Container env: the chart's variables first (OTEL_SERVICE_NAME, SENTRY_DSN and the credentials
-the service lists), then serviceDefaults.env and services.<name>.env.
+Container env: the chart's variables first (OTEL_SERVICE_NAME, the collector endpoint, SENTRY_DSN
+and the credentials the service lists), then serviceDefaults.env and services.<name>.env.
 Custom env cannot take over what the chart controls:
 - names starting with TRUSTIOT_ plus a letter or digit, SENTRY_ or OTEL_ are reserved, so the
   platform settings from the ConfigMap (envFrom loses to env) and the chart's Secrets stay as set;
+- while the collector is enabled, TRUSTIOT__TELEMETRY__OTLP_ENDPOINT is reserved too, so every
+  service's telemetry goes through the collector's redaction;
 - serviceDefaults.env reaches every service, so it must not read Secrets;
 - secret-like names (as in values.schema.json) come from valueFrom.secretKeyRef only;
 - dependency credentials reach a service only through services.<name>.credentials.
@@ -64,6 +66,9 @@ Returns a YAML list; use with fromYamlArray.
 {{- if regexMatch "(?i)^(TRUSTIOT_[A-Z0-9]|SENTRY_|OTEL_)" .name -}}
 {{- fail (printf "services.%s: env %s: names starting with TRUSTIOT_, SENTRY_ or OTEL_ are set by the chart" $name .name) -}}
 {{- end -}}
+{{- if and $values.observability.collector.enabled (regexMatch "(?i)^TRUSTIOT__TELEMETRY__OTLP_ENDPOINT$" .name) -}}
+{{- fail (printf "services.%s: env %s is set by the chart: it points at the OpenTelemetry collector (observability.collector)" $name .name) -}}
+{{- end -}}
 {{- if regexMatch "(?i)(secret|passw|passphrase|pwd|token|api_?key|(^|_)key$|dsn|private|credential)" .name -}}
 {{- $from := .valueFrom | default dict -}}
 {{- if or (hasKey . "value") (ne (len (keys $from)) 1) (not (hasKey $from "secretKeyRef")) -}}
@@ -77,6 +82,10 @@ Returns a YAML list; use with fromYamlArray.
 {{- end -}}
 {{- end -}}
 {{- $env := list (dict "name" "OTEL_SERVICE_NAME" "value" $name) -}}
+{{- if $values.observability.collector.enabled -}}
+{{- /* service-kit exports logs, traces and metrics only when its own setting names the endpoint. */ -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__TELEMETRY__OTLP_ENDPOINT" "value" (include "trustiot.collector.endpoint" .root)) -}}
+{{- end -}}
 {{- with $values.observability.sentry -}}
 {{- if .enabled -}}
 {{- $env = append $env (dict "name" "SENTRY_DSN" "valueFrom" (dict "secretKeyRef" (dict "name" .dsnSecret.name "key" .dsnSecret.key))) -}}

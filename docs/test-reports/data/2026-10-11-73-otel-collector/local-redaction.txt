@@ -1,0 +1,49 @@
+# 2026-10-11 local podman run (x86_64 Fedora, podman 6.1.3)
+# ClickHouse 26.8 and otelcol-contrib 0.161.0, both at the digests pinned in deploy/chart/values.yaml.
+# Collector config: `helm template` of deploy/chart (on-prem shape, forward on, http), with the
+# ClickHouse endpoint rewritten to the local container; started with --read-only --cap-drop ALL
+# --security-opt no-new-privileges. Migrations 0001-0005 applied twice, collector account created
+# with the two statements of 0005_logs.sql (INSERT, SHOW COLUMNS only).
+#
+# Sent over OTLP/HTTP JSON (one log record, one span): a log body with an email, a Bearer header
+# value, a JWT, password=..., a phone number and a national ID; attributes user.email, token,
+# http.request.body, requestBody, prompt, message.content, note (email and an sk- API key),
+# db_url (URL with user:password), http.request.body.size, content_type, http.route,
+# test.marker=m1; a span named with an email, an authorization header attribute, url.full with
+# token=<JWT>, a phone attribute, an exception event with password=... and an email, and a status
+# message with an email. Only matching substrings are replaced; the rest of each value is kept.
+
+$ SELECT Body, LogAttributes FROM trustiot_logs.otel_logs WHERE LogAttributes['test.marker']='m1' FORMAT Vertical
+Row 1:
+──────
+Body:          login failed for **** with Authorization: **** token **** **** phone **** id ****
+LogAttributes: {'content_type':'application/json','db_url':'****db:5432/x','http.request.body':'****','http.request.body.size':'48','http.route':'/v1/echo','message.content':'****','note':'forwarded by **** key ****','prompt':'****','requestBody':'****','test.marker':'m1','token':'****','user.email':'****'}
+
+$ SELECT SpanName, SpanAttributes, StatusMessage, Events.Attributes FROM trustiot_logs.otel_traces WHERE SpanAttributes['test.marker']='m1' FORMAT Vertical
+Row 1:
+──────
+SpanName:          GET /users/****
+SpanAttributes:    {'http.request.header.authorization':'****','test.marker':'m1','url.full':'https://x.test/cb?****&a=1','user.phone':'****'}
+StatusMessage:     failed for ****
+Events.Attributes: [{'exception.message':'bad **** for ****'}]
+
+$ stand-in SIEM (collector with the debug exporter) output for the same log record
+Body: Str(login failed for **** with Authorization: **** token **** **** phone **** id ****)
+Attributes:
+     -> test.marker: Str(m1)
+     -> user.email: Str(****)
+     -> token: Str(****)
+     -> http.request.body: Str(****)
+     -> requestBody: Str(****)
+     -> http.request.body.size: Int(48)
+     -> content_type: Str(application/json)
+     -> note: Str(forwarded by **** key ****)
+     -> db_url: Str(****db:5432/x)
+     -> prompt: Str(****)
+     -> message.content: Str(****)
+     -> http.route: Str(/v1/echo)
+Trace ID: 73730000000000000000000000000002
+Span ID: 0000000000000002
+
+$ grep -c -E '<each original value>' <SIEM output>
+0

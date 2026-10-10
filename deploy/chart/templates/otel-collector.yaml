@@ -1,0 +1,202 @@
+{{- /*
+OpenTelemetry collector (decision 22): receives OTLP from every service, redacts it, writes logs
+and traces to ClickHouse's trustiot_logs database and optionally forwards them to the customer's
+SIEM. The configuration is "trustiot.collector.config"; Secrets reach it only as environment
+variables from secretKeyRef. Its ClickHouse account is created with SQL by the migration Job
+(decision 14), not here.
+*/ -}}
+{{- $collector := .Values.observability.collector }}
+{{- if $collector.enabled }}
+{{- $ctx := dict "root" . "name" "otel-collector" }}
+{{- $name := include "trustiot.componentName" $ctx }}
+{{- $configName := include "trustiot.componentName" (dict "root" . "name" "otel-collector-config") }}
+{{- $config := include "trustiot.collector.config" . }}
+{{- $forward := $collector.forward }}
+{{- if and $forward.enabled (not $forward.endpoint) }}
+{{- fail "observability.collector.forward.endpoint is required when forwarding is enabled" }}
+{{- end }}
+{{- if and $forward.enabled $forward.caSecret.name (not (hasPrefix "https://" $forward.endpoint)) }}
+{{- fail "observability.collector.forward.caSecret needs an https:// endpoint" }}
+{{- end }}
+{{- if and $forward.enabled $forward.authHeader.name (not $forward.authHeader.secret.name) }}
+{{- fail "observability.collector.forward.authHeader.secret.name is required when authHeader.name is set" }}
+{{- end }}
+{{- if not $collector.clickhouse.passwordSecret.name }}
+{{- fail "observability.collector.clickhouse.passwordSecret.name is required when the collector is enabled" }}
+{{- end }}
+{{- $clickhouseCa := and (eq .Values.clickhouse.mode "external") .Values.clickhouse.external.caSecret.name }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $configName }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+data:
+  config.yaml: |
+    {{- $config | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+spec:
+  # In-cluster only, like every Service of this chart.
+  type: ClusterIP
+  selector:
+    {{- include "trustiot.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+      protocol: TCP
+      appProtocol: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Start the new collector before stopping the old one, so services keep an endpoint.
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "trustiot.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "trustiot.componentLabels" $ctx | nindent 8 }}
+        # Istio ambient: ztunnel adds mTLS from the services and to ClickHouse (decision 27).
+        istio.io/dataplane-mode: ambient
+      annotations:
+        # Restart when the configuration changes.
+        checksum/config: {{ $config | sha256sum }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      # Time to flush the export queues after SIGTERM.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        {{- toYaml $collector.podSecurityContext | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      {{- with $collector.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $collector.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: otel-collector
+          image: {{ printf "%s:%s@%s" $collector.image.repository $collector.image.tag $collector.image.digest }}
+          imagePullPolicy: {{ $collector.image.pullPolicy }}
+          args:
+            - --config=/etc/otelcol/config.yaml
+          env:
+            - name: CLICKHOUSE_USER
+              value: {{ $collector.clickhouse.user | quote }}
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $collector.clickhouse.passwordSecret.name }}
+                  key: {{ $collector.clickhouse.passwordSecret.key }}
+            {{- if and $forward.enabled $forward.authHeader.name }}
+            - name: FORWARD_AUTH_HEADER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $forward.authHeader.secret.name }}
+                  key: {{ $forward.authHeader.secret.key }}
+            {{- end }}
+          ports:
+            - name: otlp-http
+              containerPort: 4318
+              protocol: TCP
+            - name: health
+              containerPort: 13133
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /
+              port: health
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          resources:
+            {{- toYaml $collector.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol
+              readOnly: true
+            {{- if $clickhouseCa }}
+            - name: clickhouse-ca
+              mountPath: /etc/trustiot/clickhouse-ca
+              readOnly: true
+            {{- end }}
+            {{- if and $forward.enabled $forward.caSecret.name }}
+            - name: forward-ca
+              mountPath: /etc/trustiot/forward-ca
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $configName }}
+        {{- if $clickhouseCa }}
+        - name: clickhouse-ca
+          secret:
+            secretName: {{ .Values.clickhouse.external.caSecret.name }}
+            items:
+              - key: {{ .Values.clickhouse.external.caSecret.key }}
+                path: ca.crt
+        {{- end }}
+        {{- if and $forward.enabled $forward.caSecret.name }}
+        - name: forward-ca
+          secret:
+            secretName: {{ $forward.caSecret.name }}
+            items:
+              - key: {{ $forward.caSecret.key }}
+                path: ca.crt
+        {{- end }}
+{{- end }}

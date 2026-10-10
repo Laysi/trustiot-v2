@@ -132,6 +132,11 @@ function find(manifests: Manifest[], kind: string, name: string): Manifest {
   return found;
 }
 
+// Deployments of TrustIoT services, as opposed to in-cluster components such as the collector.
+function isServiceDeployment(m: Manifest): boolean {
+  return m.kind === "Deployment" && m.metadata.labels?.["app.kubernetes.io/component"] !== "otel-collector";
+}
+
 function podSpec(deployment: Manifest): PodSpec {
   const spec = deployment.spec as { template: { spec: PodSpec } };
   return spec.template.spec;
@@ -206,7 +211,7 @@ describe.each(SHAPE_NAMES)("%s shape", (shape) => {
     SLOW_TEST_MS,
   );
 
-  test("services stay off until enabled: only the platform settings, the ingress and bundled ClickHouse render", () => {
+  test("services stay off until enabled: only the platform settings, the ingress, bundled ClickHouse and the collector render", () => {
     const manifests = render(files);
     expect(manifests.map((m) => `${m.kind}/${m.metadata.name}`).sort()).toEqual(
       [
@@ -220,6 +225,10 @@ describe.each(SHAPE_NAMES)("%s shape", (shape) => {
         `ServiceAccount/${RELEASE}-clickhouse`,
         `Service/${RELEASE}-clickhouse`,
         `StatefulSet/${RELEASE}-clickhouse`,
+        `ConfigMap/${RELEASE}-otel-collector-config`,
+        `ServiceAccount/${RELEASE}-otel-collector`,
+        `Service/${RELEASE}-otel-collector`,
+        `Deployment/${RELEASE}-otel-collector`,
       ].sort(),
     );
     // No backend, so no route and no public path: the cookie check covers every request.
@@ -404,7 +413,7 @@ describe("exposure and hardening", () => {
 
   test("pods meet the restricted Pod Security Standard and carry the service contract", () => {
     for (const manifests of renders) {
-      for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
+      for (const deployment of manifests.filter(isServiceDeployment)) {
         const pod = podSpec(deployment);
         expect(pod.automountServiceAccountToken).toBe(false);
         expect(pod.securityContext?.runAsNonRoot).toBe(true);
@@ -583,6 +592,311 @@ describe("bundled ClickHouse (decision 14)", () => {
     expect(spec.volumeClaimTemplates[0]?.spec.storageClassName).toBe("fast-ssd");
     expect(spec.template.spec.nodeSelector).toEqual({ "trustiot.io/role": "data" });
     expect(spec.template.spec.securityContext?.runAsNonRoot).toBe(true);
+  });
+});
+
+type CollectorConfig = {
+  receivers: { otlp: { protocols: Record<string, { endpoint: string }> } };
+  processors: {
+    redaction: {
+      allow_all_keys: boolean;
+      redact_all_types: boolean;
+      summary: string;
+      blocked_key_patterns: string[];
+      ignored_key_patterns: string[];
+      blocked_values: string[];
+    };
+    "transform/redact": { error_mode: string; trace_statements: { context: string; statements: string[] }[] };
+  } & YamlMap;
+  exporters: Record<string, YamlMap>;
+  service: { pipelines: Record<string, { receivers: string[]; processors: string[]; exporters: string[] }> };
+};
+
+// Columns the ClickHouse exporter of the pinned collector inserts
+// (exporter/clickhouseexporter/internal/sqltemplates/{logs,traces}_insert.sql of
+// opentelemetry-collector-contrib v0.161.0, plus the optional EventName of logs).
+const EXPORTER_VERSION = "0.161.0";
+const EXPORTER_COLUMNS = {
+  otel_logs: [
+    "Timestamp", "TraceId", "SpanId", "TraceFlags", "SeverityText", "SeverityNumber", "ServiceName", "Body",
+    "ResourceSchemaUrl", "ResourceAttributes", "ScopeSchemaUrl", "ScopeName", "ScopeVersion", "ScopeAttributes",
+    "LogAttributes", "EventName",
+  ],
+  otel_traces: [
+    "Timestamp", "TraceId", "SpanId", "ParentSpanId", "TraceState", "SpanName", "SpanKind", "ServiceName",
+    "ResourceAttributes", "ScopeName", "ScopeVersion", "SpanAttributes", "Duration", "StatusCode", "StatusMessage",
+    "Events", "Links",
+  ],
+};
+
+describe("OpenTelemetry collector (decision 22)", () => {
+  const name = `${RELEASE}-otel-collector`;
+  const manifests = render([...SHAPES.saas, SMOKE]);
+  const deployment = find(manifests, "Deployment", name);
+  const pod = podSpec(deployment);
+  const container = pod.containers[0] as Container;
+
+  function configOf(rendered: Manifest[]): CollectorConfig {
+    const data = find(rendered, "ConfigMap", `${RELEASE}-otel-collector-config`).data as Record<string, string>;
+    return Bun.YAML.parse(data["config.yaml"] ?? "") as CollectorConfig;
+  }
+  const config = configOf(manifests);
+  const forwardArgs = (endpoint: string, ...extra: string[]) => [
+    "--set",
+    "observability.collector.forward.enabled=true",
+    "--set",
+    `observability.collector.forward.endpoint=${endpoint}`,
+    ...extra,
+  ];
+
+  // The redaction processor's rules, as JavaScript regular expressions. Go RE2 and JavaScript
+  // agree on the syntax used here; a leading (?i) becomes the i flag.
+  function goRegex(pattern: string): RegExp {
+    return pattern.startsWith("(?i)") ? new RegExp(pattern.slice(4), "i") : new RegExp(pattern);
+  }
+  const rules = config.processors.redaction;
+  const masksKey = (key: string) =>
+    !rules.ignored_key_patterns.some((p) => goRegex(p).test(key)) &&
+    rules.blocked_key_patterns.some((p) => goRegex(p).test(key));
+  const maskValue = (value: string) =>
+    rules.blocked_values.reduce((text, p) => text.replace(new RegExp(goRegex(p), `${goRegex(p).flags}g`), "****"), value);
+
+  // Field names from service-kit's own redaction tests (crates/service-kit/src/telemetry/redact.rs).
+  function serviceKitNames(testName: string): string[] {
+    const source = readFileSync(join(REPO_ROOT, "crates/service-kit/src/telemetry/redact.rs"), "utf8");
+    const body = source.split(`fn ${testName}()`)[1]?.split("] {")[0] ?? "";
+    const names = [...body.matchAll(/"([^"]+)"/g)].map((m) => m[1] ?? "");
+    if (names.length < 10) throw new Error(`no names found in ${testName}`);
+    return names;
+  }
+
+  test("the image is the contrib distribution pinned to its multi-arch digest", () => {
+    expect(container.image).toBe(
+      `docker.io/otel/opentelemetry-collector-contrib:${EXPORTER_VERSION}@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1`,
+    );
+    expect(container.args).toEqual(["--config=/etc/otelcol/config.yaml"]);
+  });
+
+  test("the pod meets the restricted Pod Security Standard, joins the ambient mesh and is reachable on OTLP/HTTP only", () => {
+    const labels = (deployment.spec as { template: { metadata: { labels: Record<string, string> } } }).template.metadata
+      .labels;
+    expect(labels["istio.io/dataplane-mode"]).toBe("ambient");
+    expect(pod.automountServiceAccountToken).toBe(false);
+    expect(pod.serviceAccountName).toBe(name);
+    expect(pod.securityContext).toEqual({ runAsNonRoot: true, seccompProfile: { type: "RuntimeDefault" } });
+    expect(container.securityContext).toEqual({
+      allowPrivilegeEscalation: false,
+      readOnlyRootFilesystem: true,
+      capabilities: { drop: ["ALL"] },
+    });
+    expect(container.resources?.limits?.memory).toBe("512Mi");
+    for (const probe of [container.startupProbe, container.livenessProbe, container.readinessProbe]) {
+      expect(probe).toMatchObject({ httpGet: { path: "/", port: "health" } });
+    }
+    const service = find(manifests, "Service", name).spec as { type: string; ports: { name: string; port: number }[] };
+    expect(service.type).toBe("ClusterIP");
+    expect(service.ports.map((p) => `${p.name}:${p.port}`)).toEqual(["otlp-http:4318"]);
+    expect(Object.keys(config.receivers.otlp.protocols)).toEqual(["http"]);
+  });
+
+  test("every service exports to the collector, and turning the collector off removes it everywhere", () => {
+    const smoke = podSpec(find(manifests, "Deployment", `${RELEASE}-smoke-echo`)).containers[0];
+    const endpoint = smoke?.env?.find((e) => e.name === "TRUSTIOT__TELEMETRY__OTLP_ENDPOINT");
+    expect(endpoint).toEqual({
+      name: "TRUSTIOT__TELEMETRY__OTLP_ENDPOINT",
+      value: `http://${name}.${NAMESPACE}.svc:4318`,
+    });
+    const off = render([...SHAPES.saas, SMOKE], ["--set", "observability.collector.enabled=false"]);
+    expect(off.filter((m) => m.metadata.name.startsWith(name))).toEqual([]);
+    const offEnv = podSpec(find(off, "Deployment", `${RELEASE}-smoke-echo`)).containers[0]?.env ?? [];
+    expect(offEnv.map((e) => e.name)).not.toContain("TRUSTIOT__TELEMETRY__OTLP_ENDPOINT");
+    // Without the chart's collector, a service may point at another one.
+    const own = render(
+      [...SHAPES.saas, SMOKE],
+      [
+        "--set",
+        "observability.collector.enabled=false",
+        "--set-json",
+        'services.smoke-echo.env=[{"name":"TRUSTIOT__TELEMETRY__OTLP_ENDPOINT","value":"http://otel.example.test:4318"}]',
+      ],
+    );
+    expect(podSpec(find(own, "Deployment", `${RELEASE}-smoke-echo`)).containers[0]?.env).toContainEqual({
+      name: "TRUSTIOT__TELEMETRY__OTLP_ENDPOINT",
+      value: "http://otel.example.test:4318",
+    });
+  });
+
+  test("secrets reach the collector only through secretKeyRef, never its configuration", () => {
+    const env = Object.fromEntries((container.env ?? []).map((e) => [e.name, e]));
+    expect(env.CLICKHOUSE_USER).toEqual({ name: "CLICKHOUSE_USER", value: "trustiot_collector" });
+    expect(env.CLICKHOUSE_PASSWORD?.valueFrom).toEqual({
+      secretKeyRef: { name: "trustiot-otel-collector-clickhouse", key: "password" },
+    });
+    expect(env.FORWARD_AUTH_HEADER).toBeUndefined();
+    const clickhouse = config.exporters.clickhouse as YamlMap;
+    expect(clickhouse.username).toBe("${env:CLICKHOUSE_USER}");
+    expect(clickhouse.password).toBe("${env:CLICKHOUSE_PASSWORD}");
+  });
+
+  test("logs and traces are redacted before any exporter; metrics are dropped", () => {
+    const { pipelines } = config.service;
+    expect(Object.keys(pipelines).sort()).toEqual(["logs", "metrics", "traces"]);
+    expect(pipelines.logs).toEqual({ receivers: ["otlp"], processors: ["memory_limiter", "redaction"], exporters: ["clickhouse"] });
+    expect(pipelines.traces).toEqual({
+      receivers: ["otlp"],
+      processors: ["memory_limiter", "redaction", "transform/redact"],
+      exporters: ["clickhouse"],
+    });
+    expect(pipelines.metrics).toEqual({ receivers: ["otlp"], processors: ["memory_limiter"], exporters: ["nop"] });
+    expect(rules.allow_all_keys).toBe(true);
+    expect(rules.redact_all_types).toBe(true);
+    // The audit attributes would list which keys were masked.
+    expect(rules.summary).toBe("silent");
+    // Span names and status messages get the value patterns too.
+    const groups = config.processors["transform/redact"].trace_statements;
+    expect(groups.map((g) => g.context)).toEqual(["span"]);
+    const statements = groups[0]?.statements ?? [];
+    expect(statements).toHaveLength(2 * rules.blocked_values.length);
+    expect(statements[0]).toStartWith("replace_pattern(name, ");
+    expect(statements.at(-1)).toStartWith("replace_pattern(status.message, ");
+  });
+
+  test("key rules mask every name service-kit masks and keep every name it keeps", () => {
+    const sensitive = serviceKitNames("credentials_personal_data_and_payloads_are_sensitive");
+    const kept = serviceKitNames("operational_fields_are_kept");
+    expect(sensitive.filter((key) => !masksKey(key))).toEqual([]);
+    expect(kept.filter(masksKey)).toEqual([]);
+    for (const key of ["requestBody", "userEmail", "chatContent", "accessJWT", "PROMPT", "http.request.body.content"]) {
+      expect(masksKey(key)).toBe(true);
+    }
+    for (const key of ["contentType", "bodySize", "http.response.body.size", "content-length", "test.marker"]) {
+      expect(masksKey(key)).toBe(false);
+    }
+  });
+
+  test("value rules mask credentials and personal data inside text and keep operational values", () => {
+    const masked: [string, string][] = [
+      ["login failed for alice.wang@example.com", "login failed for ****"],
+      ["Authorization: Bearer abcDEF123456ghiJKL", "Authorization: ****"],
+      ["token eyJhbGci.eyJzdWIi.c2lnbmF0", "token ****"],
+      ["password=hunter2 and api_key: sk-abc", "**** and ****"],
+      ["postgres://svc:pa55word@db:5432/x", "****db:5432/x"],
+      ["call 0912-345-678 or +886 912 345 678", "call **** or ****"],
+      ["holder A123456789", "holder ****"],
+      ["key sk-test0123456789abcdefghij", "key ****"],
+      ["-----BEGIN EC PRIVATE KEY-----", "****"],
+    ];
+    for (const [input, expected] of masked) expect(maskValue(input)).toBe(expected);
+    for (const kept of [
+      "request completed",
+      "/v1/devices/{id}",
+      "4bf92f3577b34da6a3ce929d0e0e4736",
+      "2026-10-10T08:00:00.123456Z",
+      "3f2a1c4e-9b7d-4e60-8a5b-0c1d2e3f4a5b",
+      "duration 3.2 ms, 1234567 rows",
+      "https://app.saas.trustiot.test/api/assets",
+      "10.42.0.1:8080",
+    ]) {
+      expect(maskValue(kept)).toBe(kept);
+    }
+  });
+
+  test("ClickHouse gets inserts only, into tables the migrations own", () => {
+    const clickhouse = config.exporters.clickhouse as YamlMap;
+    expect(clickhouse).toMatchObject({
+      endpoint: `tcp://${RELEASE}-clickhouse.${NAMESPACE}.svc:9000?dial_timeout=10s`,
+      database: "trustiot_logs",
+      create_schema: false,
+      logs_table_name: "otel_logs",
+      traces_table_name: "otel_traces",
+    });
+    expect(container.image).toContain(`:${EXPORTER_VERSION}@`);
+    const sql = readFileSync(join(REPO_ROOT, "services/ingest/migrations/clickhouse/0005_logs.sql"), "utf8");
+    for (const [table, columns] of Object.entries(EXPORTER_COLUMNS)) {
+      const ddl = sql.split(`CREATE TABLE IF NOT EXISTS trustiot_logs.${table}\n`)[1]?.split("\nENGINE")[0] ?? "";
+      const defined = [...ddl.matchAll(/^ {4}([A-Za-z]+) /gm)].map((m) => m[1]);
+      expect(columns.filter((column) => !defined.includes(column))).toEqual([]);
+      expect(sql).toContain(`GRANT INSERT, SHOW COLUMNS ON trustiot_logs.${table} TO trustiot_otel_collector;`);
+    }
+  });
+
+  test("external ClickHouse is reached over its HTTPS URL with its CA", () => {
+    const external = render(SHAPES.saas, [
+      "--set",
+      "clickhouse.mode=external",
+      "--set",
+      "clickhouse.external.url=https://ch.saas.trustiot.test:8443",
+      "--set",
+      "clickhouse.external.caSecret.name=ch-ca",
+    ]);
+    expect(configOf(external).exporters.clickhouse).toMatchObject({
+      endpoint: "https://ch.saas.trustiot.test:8443",
+      tls: { ca_file: "/etc/trustiot/clickhouse-ca/ca.crt" },
+    });
+    const externalPod = podSpec(find(external, "Deployment", name));
+    expect(externalPod.volumes).toContainEqual({
+      name: "clickhouse-ca",
+      secret: { secretName: "ch-ca", items: [{ key: "ca.crt", path: "ca.crt" }] },
+    });
+  });
+
+  test("forwarding is off by default and copies only the chosen signals to the SIEM", () => {
+    for (const shape of SHAPE_NAMES) {
+      expect(Object.keys(configOf(render(SHAPES[shape])).exporters).sort()).toEqual(["clickhouse", "nop"]);
+    }
+    const logsOnly = configOf(render(SHAPES.onprem, forwardArgs("https://siem.factory.test:4318")));
+    expect(logsOnly.exporters["otlp_http/siem"]).toMatchObject({ endpoint: "https://siem.factory.test:4318" });
+    expect(logsOnly.service.pipelines.logs?.exporters).toEqual(["clickhouse", "otlp_http/siem"]);
+    expect(logsOnly.service.pipelines.traces?.exporters).toEqual(["clickhouse"]);
+    expect(logsOnly.service.pipelines.metrics?.exporters).toEqual(["nop"]);
+
+    const both = configOf(
+      render(
+        SHAPES.onprem,
+        forwardArgs("http://siem.factory.test:4317", "--set", "observability.collector.forward.protocol=grpc", "--set-json", 'observability.collector.forward.signals=["logs","traces"]'),
+      ),
+    );
+    // The gRPC exporter would try TLS on an http:// endpoint.
+    expect(both.exporters["otlp_grpc/siem"]).toMatchObject({ endpoint: "http://siem.factory.test:4317", tls: { insecure: true } });
+    expect(both.service.pipelines.traces?.exporters).toEqual(["clickhouse", "otlp_grpc/siem"]);
+  });
+
+  test("the SIEM's auth header and CA come from Secrets", () => {
+    const rendered = render(
+      SHAPES.onprem,
+      forwardArgs(
+        "https://siem.factory.test",
+        "--set",
+        "observability.collector.forward.authHeader.name=Authorization",
+        "--set",
+        "observability.collector.forward.authHeader.secret.name=siem-auth",
+        "--set",
+        "observability.collector.forward.caSecret.name=siem-ca",
+      ),
+    );
+    expect(configOf(rendered).exporters["otlp_http/siem"]).toMatchObject({
+      headers: { Authorization: "${env:FORWARD_AUTH_HEADER}" },
+      tls: { ca_file: "/etc/trustiot/forward-ca/ca.crt" },
+    });
+    const forwardPod = podSpec(find(rendered, "Deployment", name));
+    const env = forwardPod.containers[0]?.env ?? [];
+    expect(env.find((e) => e.name === "FORWARD_AUTH_HEADER")?.valueFrom).toEqual({
+      secretKeyRef: { name: "siem-auth", key: "value" },
+    });
+    expect(forwardPod.volumes).toContainEqual({
+      name: "forward-ca",
+      secret: { secretName: "siem-ca", items: [{ key: "ca.crt", path: "ca.crt" }] },
+    });
+  });
+
+  test("the pod rolls when the configuration changes", () => {
+    const checksum = (rendered: Manifest[]) =>
+      (find(rendered, "Deployment", name).spec as { template: { metadata: { annotations: Record<string, string> } } })
+        .template.metadata.annotations["checksum/config"];
+    expect(checksum(manifests)).toMatch(/^[0-9a-f]{64}$/);
+    expect(checksum(render([...SHAPES.onprem, SMOKE], forwardArgs("https://siem.factory.test")))).not.toBe(
+      checksum(render([...SHAPES.onprem, SMOKE])),
+    );
   });
 });
 
@@ -1144,6 +1458,65 @@ describe("values validation rejects unsafe or incomplete settings", () => {
       ["--set", "services.smoke-echo.podLabels.istio\\.io/dataplane-mode=none"],
       /invalid propertyName 'istio\.io\/dataplane-mode'/,
     ],
+    [
+      "collector without its ClickHouse password Secret",
+      saas,
+      ["--set", "observability.collector.clickhouse.passwordSecret.name="],
+      /\/observability\/collector\/clickhouse\/passwordSecret\/name/,
+    ],
+    [
+      "collector using the default ClickHouse account",
+      saas,
+      ["--set", "observability.collector.clickhouse.user=default"],
+      /\/observability\/collector\/clickhouse\/user/,
+    ],
+    [
+      "collector image without a digest",
+      saas,
+      ["--set", "observability.collector.image.digest="],
+      /\/observability\/collector\/image\/digest/,
+    ],
+    [
+      "forwarding without an endpoint",
+      onprem,
+      ["--set", "observability.collector.forward.enabled=true"],
+      /\/observability\/collector\/forward\/endpoint/,
+    ],
+    [
+      "SIEM credentials inside the forward URL",
+      onprem,
+      [
+        "--set",
+        "observability.collector.forward.enabled=true",
+        "--set",
+        "observability.collector.forward.endpoint=https://u:p@siem.factory.test",
+      ],
+      /\/observability\/collector\/forward\/endpoint/,
+    ],
+    [
+      "SaaS forwarding over plain http",
+      saas,
+      [
+        "--set",
+        "observability.collector.forward.enabled=true",
+        "--set",
+        "observability.collector.forward.endpoint=http://siem.saas.trustiot.test:4318",
+      ],
+      /\/observability\/collector\/forward\/endpoint/,
+    ],
+    [
+      "forwarding metrics",
+      onprem,
+      ["--set-json", 'observability.collector.forward.signals=["logs","metrics"]'],
+      /\/observability\/collector\/forward\/signals/,
+    ],
+    [
+      "SIEM auth header without its Secret",
+      onprem,
+      ["--set", "observability.collector.forward.authHeader.name=Authorization"],
+      /\/observability\/collector\/forward\/authHeader\/secret\/name/,
+    ],
+    ["plain-text SIEM token in values", onprem, ["--set", "observability.collector.forward.token=plain-text"], /token/],
   ];
 
   test.each(cases)("%s", (_name, files, args, expected) => {
@@ -1228,6 +1601,53 @@ describe("the templates keep the secret and env boundaries without schema valida
       ["--set-json", 'ingress.routes=[{"host":"admin","path":"/","match":"PathPrefix","service":"smoke-echo"}]'],
       /ingress\.routes\[0\]: host must be app, gateway or ota/,
     ],
+    [
+      "env that points a service past the collector",
+      ["--set-json", 'services.smoke-echo.env=[{"name":"TRUSTIOT__TELEMETRY__OTLP_ENDPOINT","value":"http://elsewhere:4318"}]'],
+      /services\.smoke-echo: env TRUSTIOT__TELEMETRY__OTLP_ENDPOINT is set by the chart/,
+    ],
+    [
+      "env that reads the collector's ClickHouse password",
+      [
+        "--set-json",
+        'services.smoke-echo.env=[{"name":"CH_PASSWORD","valueFrom":{"secretKeyRef":{"name":"trustiot-otel-collector-clickhouse","key":"password"}}}]',
+      ],
+      /env reads the dependency credential trustiot-otel-collector-clickhouse\/password/,
+    ],
+    [
+      "collector without its ClickHouse password Secret",
+      ["--set", "observability.collector.clickhouse.passwordSecret.name="],
+      /observability\.collector\.clickhouse\.passwordSecret\.name is required/,
+    ],
+    [
+      "forwarding without an endpoint",
+      ["--set", "observability.collector.forward.enabled=true"],
+      /observability\.collector\.forward\.endpoint is required/,
+    ],
+    [
+      "SIEM CA with a plain-text endpoint",
+      [
+        "--set",
+        "observability.collector.forward.enabled=true",
+        "--set",
+        "observability.collector.forward.endpoint=http://siem.saas.trustiot.test:4318",
+        "--set",
+        "observability.collector.forward.caSecret.name=siem-ca",
+      ],
+      /observability\.collector\.forward\.caSecret needs an https:\/\/ endpoint/,
+    ],
+    [
+      "SIEM auth header without its Secret",
+      [
+        "--set",
+        "observability.collector.forward.enabled=true",
+        "--set",
+        "observability.collector.forward.endpoint=https://siem.saas.trustiot.test",
+        "--set",
+        "observability.collector.forward.authHeader.name=Authorization",
+      ],
+      /observability\.collector\.forward\.authHeader\.secret\.name is required/,
+    ],
   ];
 
   test.each(cases)("%s", (_name, args, expected) => {
@@ -1295,6 +1715,7 @@ describe("service settings merge", () => {
     ]).containers[0];
     expect(container?.env?.map((e) => e.name)).toEqual([
       "OTEL_SERVICE_NAME",
+      "TRUSTIOT__TELEMETRY__OTLP_ENDPOINT",
       "SENTRY_DSN",
       "RUST_LOG",
       "WHOAMI_PORT_NUMBER",
@@ -1310,6 +1731,7 @@ describe("service settings merge", () => {
     const container = smokeDeployment(["--set-json", `services.smoke-echo.env=${JSON.stringify(env)}`]).containers[0];
     expect(container?.env?.map((e) => e.name)).toEqual([
       "OTEL_SERVICE_NAME",
+      "TRUSTIOT__TELEMETRY__OTLP_ENDPOINT",
       "SENTRY_DSN",
       "SESSION_KEY",
       "LOG_FORMAT",
@@ -1345,7 +1767,7 @@ describe("service settings merge", () => {
   test("object names are prefixed with the release, without repeating the chart name", () => {
     const names = (release: string) =>
       render(files, [], release)
-        .filter((m) => m.kind === "Deployment")
+        .filter(isServiceDeployment)
         .map((m) => m.metadata.name);
     expect(names("trustiot-staging")).toEqual(["trustiot-staging-smoke-echo"]);
     expect(names("lab")).toEqual(["lab-trustiot-smoke-echo"]);
@@ -1405,7 +1827,9 @@ describe("documentation and packaging", () => {
   // Leaf paths of values.yaml; services.<entry> collapses to services.<name>, and
   // Kubernetes-native objects under serviceDefaults count as one field.
   function documentedPaths(value: unknown, path: string): string[] {
-    const prefix = ["serviceDefaults.", "clickhouse.bundled."].find((p) => path.startsWith(p));
+    const prefix = ["serviceDefaults.", "clickhouse.bundled.", "observability.collector."].find((p) =>
+      path.startsWith(p),
+    );
     const relative = prefix ? path.slice(prefix.length) : "";
     if (!isMap(value) || Object.keys(value).length === 0 || KUBERNETES_OBJECT_FIELDS.has(relative)) {
       return [path.replace(/^services\.[^.]+/, "services.<name>")];

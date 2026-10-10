@@ -339,3 +339,66 @@ observability:
     dsnSecret:
       name: ""
       key: dsn
+  # OpenTelemetry collector (decision 22). Every service sends its logs, traces and metrics to it
+  # over OTLP/HTTP (the chart sets TRUSTIOT__TELEMETRY__OTLP_ENDPOINT). The collector redacts
+  # credentials, personal data, request bodies and chat content, then writes logs and traces to
+  # the trustiot_logs database in ClickHouse (services/ingest/migrations/clickhouse/0005_logs.sql,
+  # 30 day retention) and, when forwarding is on, also sends them to the customer's SIEM.
+  # Metrics are accepted and dropped until their storage is decided (Laysi/trustiot-v2#183).
+  collector:
+    enabled: true
+    image:
+      # opentelemetry-collector-contrib (it has the ClickHouse exporter and the redaction
+      # processor), pinned to the multi-arch index digest (arm64 included). Changing the
+      # version can change the exporter's columns: check them against 0005_logs.sql.
+      repository: docker.io/otel/opentelemetry-collector-contrib
+      tag: "0.161.0"
+      digest: sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
+      pullPolicy: IfNotPresent
+    # The collector's ClickHouse account. The migration Job creates it with SQL and grants it the
+    # trustiot_otel_collector role (INSERT into the log tables only), never in server
+    # configuration files (decision 14).
+    clickhouse:
+      user: trustiot_collector
+      # Existing Secret with the account's password; required when the collector is enabled.
+      passwordSecret:
+        name: ""
+        key: password
+    # Copy of the redacted logs (and optionally traces) for the customer's SIEM over OTLP.
+    forward:
+      enabled: false
+      # OTLP endpoint of the SIEM: for http the base URL (the exporter appends /v1/logs and
+      # /v1/traces), for grpc https://host:port. https unless the SIEM is on a trusted network.
+      endpoint: ""
+      # http (OTLP/HTTP, protobuf) or grpc.
+      protocol: http
+      # Signals to forward: logs, traces.
+      signals:
+        - logs
+      # Optional header the SIEM authenticates with, for example Authorization. The whole header
+      # value (for example "Bearer <token>") is read from the Secret.
+      authHeader:
+        name: ""
+        secret:
+          name: ""
+          key: value
+      # CA certificate for a SIEM with a private CA; leave the name empty for a public one.
+      caSecret:
+        name: ""
+        key: ca.crt
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+    # The image runs as the numeric non-root UID 10001; it is not fixed here, so OpenShift's
+    # restricted-v2 SCC can assign one.
+    podSecurityContext:
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
+    # The image is multi-arch.
+    nodeSelector: {}
+    tolerations: []

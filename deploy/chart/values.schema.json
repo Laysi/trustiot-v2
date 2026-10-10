@@ -410,7 +410,7 @@
     "observability": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sentry"],
+      "required": ["sentry", "collector"],
       "properties": {
         "sentry": {
           "type": "object",
@@ -428,6 +428,91 @@
               "dsnSecret": { "properties": { "name": { "minLength": 1 } } }
             }
           }
+        },
+        "collector": {
+          "description": "OpenTelemetry collector (decision 22): redacts and writes logs and traces to ClickHouse, optionally forwards them to a SIEM.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "image", "clickhouse", "forward", "resources", "podSecurityContext", "nodeSelector", "tolerations"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "image": {
+              "description": "Pinned by digest.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["repository", "tag", "digest", "pullPolicy"],
+              "properties": {
+                "repository": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9.:-]*[a-z0-9])?(/[a-z0-9]([a-z0-9._-]*[a-z0-9])?)*$" },
+                "tag": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$" },
+                "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+                "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+              }
+            },
+            "clickhouse": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["user", "passwordSecret"],
+              "properties": {
+                "user": {
+                  "description": "Account created by the migration Job with the trustiot_otel_collector role.",
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]{0,62}$",
+                  "not": { "enum": ["default", "trustiot_otel_collector"] }
+                },
+                "passwordSecret": { "$ref": "#/definitions/secretKeyRef" }
+              }
+            },
+            "forward": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["enabled", "endpoint", "protocol", "signals", "authHeader", "caSecret"],
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "endpoint": { "$ref": "#/definitions/optionalHttpUrl" },
+                "protocol": { "enum": ["http", "grpc"] },
+                "signals": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": { "enum": ["logs", "traces"] }
+                },
+                "authHeader": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["name", "secret"],
+                  "properties": {
+                    "name": {
+                      "description": "HTTP header name; its whole value comes from the Secret.",
+                      "type": "string",
+                      "pattern": "^$|^[A-Za-z][A-Za-z0-9-]{0,63}$"
+                    },
+                    "secret": { "$ref": "#/definitions/secretKeyRef" }
+                  },
+                  "if": { "properties": { "name": { "minLength": 1 } } },
+                  "then": { "properties": { "secret": { "properties": { "name": { "minLength": 1 } } } } }
+                },
+                "caSecret": { "$ref": "#/definitions/secretKeyRef" }
+              },
+              "if": { "properties": { "enabled": { "const": true } } },
+              "then": { "properties": { "endpoint": { "minLength": 1 } } }
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["requests", "limits"],
+              "properties": {
+                "requests": { "$ref": "#/definitions/resourceList" },
+                "limits": { "allOf": [{ "$ref": "#/definitions/resourceList" }, { "required": ["memory"] }] }
+              }
+            },
+            "podSecurityContext": {
+              "allOf": [{ "$ref": "#/definitions/podSecurityContext" }, { "required": ["runAsNonRoot", "seccompProfile"] }]
+            },
+            "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
+            "tolerations": { "type": "array", "items": { "type": "object" } }
+          },
+          "if": { "properties": { "enabled": { "const": true } } },
+          "then": { "properties": { "clickhouse": { "properties": { "passwordSecret": { "properties": { "name": { "minLength": 1 } } } } } } }
         }
       }
     }
@@ -455,6 +540,13 @@
               "chat": { "properties": { "baseUrl": { "$ref": "#/definitions/optionalHttpsUrl" } } },
               "embedding": { "properties": { "baseUrl": { "$ref": "#/definitions/optionalHttpsUrl" } } },
               "rerank": { "properties": { "baseUrl": { "$ref": "#/definitions/optionalHttpsUrl" } } }
+            }
+          },
+          "observability": {
+            "properties": {
+              "collector": {
+                "properties": { "forward": { "properties": { "endpoint": { "$ref": "#/definitions/optionalHttpsUrl" } } } }
+              }
             }
           }
         }

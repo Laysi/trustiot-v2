@@ -28,3 +28,7 @@ observability:
   sentry:
     # Errors go to sentry.io (decision 24). The instance overlay sets environment and dsnSecret.
     enabled: true
+  # Logs and traces stay in our ClickHouse; nothing is forwarded (decision 22).
+  collector:
+    forward:
+      enabled: false

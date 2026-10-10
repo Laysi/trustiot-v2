@@ -214,6 +214,15 @@ Returns a YAML list; use with fromYamlArray.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- /* The collector's ClickHouse password and the SIEM's auth header: only the collector. */ -}}
+{{- with .Values.observability.collector -}}
+{{- if and .enabled .clickhouse.passwordSecret.name -}}
+{{- $refs = append $refs (printf "%s/%s" .clickhouse.passwordSecret.name .clickhouse.passwordSecret.key) -}}
+{{- end -}}
+{{- if and .enabled .forward.enabled .forward.authHeader.name .forward.authHeader.secret.name -}}
+{{- $refs = append $refs (printf "%s/%s" .forward.authHeader.secret.name .forward.authHeader.secret.key) -}}
+{{- end -}}
+{{- end -}}
 {{- toYaml (uniq $refs) -}}
 {{- end -}}
 

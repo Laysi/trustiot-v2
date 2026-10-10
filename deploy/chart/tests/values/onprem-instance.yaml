@@ -46,3 +46,10 @@ ai:
     baseUrl: http://ollama.factory.test:11434/v1
   rerank:
     baseUrl: http://vllm.factory.test:8000/v1
+
+observability:
+  # The collector's ClickHouse account password (the migration Job creates the account with it).
+  collector:
+    clickhouse:
+      passwordSecret:
+        name: trustiot-otel-collector-clickhouse

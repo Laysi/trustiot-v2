@@ -1,5 +1,6 @@
 //! The ClickHouse schema against a real server: the migrations apply (twice), the tables have
-//! the settings decision 8 and 14 need, and tenant isolation holds against the attack types of
+//! the settings decision 8 and 14 need, the collector's log tables keep their retention and
+//! accept inserts only from its account, and tenant isolation holds against the attack types of
 //! the 2026-10-09 feasibility test (docs/feasibility/2026-10-09-cloud-poc.md).
 //!
 //! Uses `TEST_CLICKHOUSE_URL` (with `TEST_CLICKHOUSE_USER` and `TEST_CLICKHOUSE_PASSWORD`) when
@@ -919,14 +920,138 @@ async fn access_entities_come_from_sql(ch: &ClickHouse) {
         println!("access entities:\n{}", rows.trim());
     }
     let lines: Vec<&str> = rows.lines().collect();
-    // 2 roles, 5 row policies, 1 settings profile, 1 quota.
-    assert_eq!(lines.len(), 9, "{rows}");
+    // 3 roles, 5 row policies, 1 settings profile, 1 quota.
+    assert_eq!(lines.len(), 10, "{rows}");
     for line in lines {
         assert!(
             line.ends_with("\tlocal_directory"),
             "not created by SQL: {line}"
         );
     }
+}
+
+/// The OpenTelemetry collector's log tables (0005_logs.sql): MergeTree with a retention TTL on
+/// the server's receive time, and an account that can only insert into them.
+async fn log_tables_for_the_collector(ch: &ClickHouse) {
+    for name in ["otel_logs", "otel_traces"] {
+        let row = ch
+            .admin_ok(&format!(
+                "SELECT engine, engine_full FROM system.tables \
+                 WHERE database = 'trustiot_logs' AND name = '{name}' FORMAT JSONEachRow"
+            ))
+            .await;
+        let row: serde_json::Value = serde_json::from_str(row.trim())
+            .unwrap_or_else(|error| panic!("{name}: {error}: {row}"));
+        let info = TableInfo {
+            engine: row["engine"].as_str().expect("a string column").to_owned(),
+            engine_full: row["engine_full"]
+                .as_str()
+                .expect("a string column")
+                .to_owned(),
+        };
+        assert_eq!(info.engine, "MergeTree", "{info:?}");
+        // ClickHouse prints `TTL ReceivedAt + toIntervalDay(30)` for a DateTime column.
+        assert!(
+            info.engine_full
+                .contains("TTL ReceivedAt + toIntervalDay(30)"),
+            "{name} has no 30 day TTL on ReceivedAt: {info:?}"
+        );
+        assert!(
+            info.engine_full.contains("PARTITION BY toDate(ReceivedAt)"),
+            "{info:?}"
+        );
+        #[allow(clippy::print_stdout, reason = "test evidence")]
+        {
+            println!("trustiot_logs.{name}: {}", info.engine_full);
+        }
+    }
+
+    // The account as the migration Job creates it (0005_logs.sql and deploy/chart/README.md).
+    let suffix: String = Uuid::new_v4()
+        .simple()
+        .to_string()
+        .chars()
+        .take(12)
+        .collect();
+    let collector = create_account_with_role(
+        ch,
+        &format!("collector_{suffix}"),
+        "trustiot_otel_collector",
+    )
+    .await;
+    let marker = format!("collector-test-{suffix}");
+    ch.query(
+        &collector,
+        &format!(
+            "INSERT INTO trustiot_logs.otel_logs (Timestamp, TraceId, ServiceName, Body, \
+             LogAttributes) VALUES (now64(9), '4bf92f3577b34da6a3ce929d0e0e4736', 'schema-test', \
+             'request completed', map('test.marker', '{marker}'))"
+        ),
+    )
+    .await
+    .unwrap_or_else(failed);
+    ch.query(
+        &collector,
+        &format!(
+            "INSERT INTO trustiot_logs.otel_traces (Timestamp, TraceId, SpanId, SpanName, \
+             ServiceName, SpanAttributes) VALUES (now64(9), '4bf92f3577b34da6a3ce929d0e0e4736', \
+             '5f1c3e2a9b7d4e60', 'GET /v1/hello', 'schema-test', map('test.marker', '{marker}'))"
+        ),
+    )
+    .await
+    .unwrap_or_else(failed);
+    // The exporter reads the columns at start.
+    let columns = ch
+        .query(&collector, "DESC TABLE trustiot_logs.otel_logs")
+        .await
+        .unwrap_or_else(failed);
+    assert!(columns.contains("LogAttributes"), "{columns}");
+    let received = ch
+        .admin_ok(&format!(
+            "SELECT count() FROM trustiot_logs.otel_logs \
+             WHERE LogAttributes['test.marker'] = '{marker}' AND ReceivedAt >= now() - 60"
+        ))
+        .await;
+    assert_eq!(
+        received.trim(),
+        "1",
+        "ReceivedAt is filled in by the server"
+    );
+
+    for sql in [
+        "SELECT count() FROM trustiot_logs.otel_logs",
+        "SELECT count() FROM trustiot.telemetry",
+        "INSERT INTO trustiot.telemetry (tenant_id, point, value_type) \
+         VALUES (generateUUIDv4(), 'p', 'float')",
+        "CREATE TABLE trustiot_logs.injected (a UInt8) ENGINE = MergeTree ORDER BY a",
+        "ALTER TABLE trustiot_logs.otel_logs MODIFY TTL ReceivedAt + INTERVAL 1 DAY",
+        "ALTER TABLE trustiot_logs.otel_logs DELETE WHERE 1",
+        "TRUNCATE TABLE trustiot_logs.otel_logs",
+        "DROP TABLE trustiot_logs.otel_traces",
+        "CREATE USER injected IDENTIFIED WITH no_password",
+    ] {
+        let error = ch
+            .query(&collector, sql)
+            .await
+            .expect_err("the collector account may only insert log rows");
+        assert_eq!(error.code(), "ACCESS_DENIED", "{sql}: {}", error.body);
+    }
+
+    for table in ["otel_logs", "otel_traces"] {
+        let attributes = if table == "otel_logs" {
+            "LogAttributes"
+        } else {
+            "SpanAttributes"
+        };
+        ch.admin_ok(&format!(
+            "ALTER TABLE trustiot_logs.{table} DELETE WHERE {attributes}['test.marker'] = '{marker}' \
+             SETTINGS mutations_sync = 2"
+        ))
+        .await;
+    }
+    let _ = ch
+        .admin(&format!("DROP USER IF EXISTS {}", collector.user))
+        .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -939,6 +1064,7 @@ async fn clickhouse_schema_and_tenant_isolation() {
     ch.apply_migrations().await;
     table_settings_are_in_place(&ch).await;
     access_entities_come_from_sql(&ch).await;
+    log_tables_for_the_collector(&ch).await;
 
     let world = World::new(ch).await;
     world.insert_rows().await;
