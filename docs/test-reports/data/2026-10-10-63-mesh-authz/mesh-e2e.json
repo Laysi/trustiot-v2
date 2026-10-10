@@ -1,0 +1,659 @@
+[
+  {
+    "phase": "both layers",
+    "pods": [
+      {
+        "name": "trustiot-alerts-778647dc6-qjn55",
+        "ready": true,
+        "restarts": 0
+      },
+      {
+        "name": "trustiot-assets-7b66976bbf-86q5g",
+        "ready": true,
+        "restarts": 0
+      },
+      {
+        "name": "trustiot-certs-55d55b9cf7-nk6mn",
+        "ready": true,
+        "restarts": 0
+      },
+      {
+        "name": "trustiot-identity-85cc99f8bc-5lwcw",
+        "ready": true,
+        "restarts": 0
+      },
+      {
+        "name": "trustiot-mqtt-bridge-55ff695bf5-8rwdq",
+        "ready": true,
+        "restarts": 0
+      },
+      {
+        "name": "trustiot-ingress-istio-5596dd59c-44s6h",
+        "ready": true,
+        "restarts": 0
+      },
+      {
+        "name": "trustiot-ingress-istio-5596dd59c-j9866",
+        "ready": true,
+        "restarts": 0
+      }
+    ]
+  },
+  {
+    "phase": "both layers (settling)",
+    "call": "assets -> certs (listed)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 3
+  },
+  {
+    "phase": "both layers",
+    "call": "outsider -> ingress gateway pod (only the host may connect)",
+    "url": "http://10.42.0.227:80/healthz",
+    "outcome": "error",
+    "code": "ConnectionRefused",
+    "message": "Unable to connect. Is the computer able to access the url?",
+    "ms": 1
+  },
+  {
+    "phase": "both layers",
+    "call": "gateway -> identity (public /healthz)",
+    "url": "http://app.saas.trustiot.test/healthz",
+    "outcome": "response",
+    "status": 200
+  },
+  {
+    "phase": "both layers",
+    "call": "gateway -> certs (public /certs/renew)",
+    "url": "http://gw.saas.trustiot.test/certs/renew",
+    "outcome": "response",
+    "status": 200
+  },
+  {
+    "phase": "both layers",
+    "call": "gateway -> mqtt-bridge (public /mqtt)",
+    "url": "http://gw.saas.trustiot.test/mqtt",
+    "outcome": "response",
+    "status": 200
+  },
+  {
+    "phase": "both layers",
+    "call": "certs -> assets (the listed call reversed)",
+    "url": "http://trustiot-assets:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "both layers",
+    "call": "assets -> alerts (alerts has no caller)",
+    "url": "http://trustiot-alerts:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 2
+  },
+  {
+    "phase": "both layers",
+    "call": "mqtt-bridge -> identity (only the gateway may call it)",
+    "url": "http://trustiot-identity:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 2
+  },
+  {
+    "phase": "both layers",
+    "call": "stranger -> certs (mesh identity that is not a service)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 2
+  },
+  {
+    "phase": "both layers",
+    "call": "outsider -> certs Service (no mesh identity)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "error",
+    "code": "ConnectionRefused",
+    "message": "Unable to connect. Is the computer able to access the url?",
+    "ms": 1
+  },
+  {
+    "phase": "both layers",
+    "call": "outsider -> certs pod IP, application port",
+    "url": "http://10.42.0.225:8080/healthz",
+    "outcome": "error",
+    "code": "ConnectionRefused",
+    "message": "Unable to connect. Is the computer able to access the url?",
+    "ms": 1
+  },
+  {
+    "phase": "both layers",
+    "call": "imposter -> certs (assets labels, not its ServiceAccount)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 3
+  },
+  {
+    "phase": "NetworkPolicy only (settling)",
+    "call": "imposter -> certs (assets labels, not its ServiceAccount)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 2
+  },
+  {
+    "phase": "NetworkPolicy only",
+    "call": "certs -> assets (the listed call reversed)",
+    "url": "http://trustiot-assets:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 2
+  },
+  {
+    "phase": "NetworkPolicy only",
+    "call": "assets -> alerts (alerts has no caller)",
+    "url": "http://trustiot-alerts:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "NetworkPolicy only",
+    "call": "mqtt-bridge -> identity (only the gateway may call it)",
+    "url": "http://trustiot-identity:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "NetworkPolicy only",
+    "call": "stranger -> certs (mesh identity that is not a service)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "NetworkPolicy only",
+    "call": "outsider -> certs Service (no mesh identity)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "error",
+    "code": "ConnectionRefused",
+    "message": "Unable to connect. Is the computer able to access the url?",
+    "ms": 1
+  },
+  {
+    "phase": "NetworkPolicy only",
+    "call": "outsider -> certs pod IP, application port",
+    "url": "http://10.42.0.225:8080/healthz",
+    "outcome": "error",
+    "code": "ConnectionRefused",
+    "message": "Unable to connect. Is the computer able to access the url?",
+    "ms": 1
+  },
+  {
+    "phase": "NetworkPolicy only",
+    "call": "outsider -> ingress gateway pod (only the host may connect)",
+    "url": "http://10.42.0.227:80/healthz",
+    "outcome": "error",
+    "code": "ConnectionRefused",
+    "message": "Unable to connect. Is the computer able to access the url?",
+    "ms": 0
+  },
+  {
+    "phase": "NetworkPolicy only",
+    "call": "assets -> certs (listed)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 2
+  },
+  {
+    "phase": "NetworkPolicy only",
+    "call": "gateway -> identity (public /healthz)",
+    "url": "http://app.saas.trustiot.test/healthz",
+    "outcome": "response",
+    "status": 200
+  },
+  {
+    "phase": "NetworkPolicy only",
+    "call": "gateway -> certs (public /certs/renew)",
+    "url": "http://gw.saas.trustiot.test/certs/renew",
+    "outcome": "response",
+    "status": 200
+  },
+  {
+    "phase": "NetworkPolicy only",
+    "call": "gateway -> mqtt-bridge (public /mqtt)",
+    "url": "http://gw.saas.trustiot.test/mqtt",
+    "outcome": "response",
+    "status": 200
+  },
+  {
+    "phase": "neither layer (settling)",
+    "call": "outsider -> ingress gateway pod (only the host may connect)",
+    "url": "http://10.42.0.227:80/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 22
+  },
+  {
+    "phase": "neither layer (settling)",
+    "call": "certs -> assets (the listed call reversed)",
+    "url": "http://trustiot-assets:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 3
+  },
+  {
+    "phase": "neither layer (settling)",
+    "call": "assets -> alerts (alerts has no caller)",
+    "url": "http://trustiot-alerts:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 3
+  },
+  {
+    "phase": "neither layer (settling)",
+    "call": "mqtt-bridge -> identity (only the gateway may call it)",
+    "url": "http://trustiot-identity:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 3
+  },
+  {
+    "phase": "neither layer (settling)",
+    "call": "stranger -> certs (mesh identity that is not a service)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 3
+  },
+  {
+    "phase": "neither layer (settling)",
+    "call": "outsider -> certs Service (no mesh identity)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 1
+  },
+  {
+    "phase": "neither layer (settling)",
+    "call": "outsider -> certs pod IP, application port",
+    "url": "http://10.42.0.225:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 2
+  },
+  {
+    "phase": "neither layer",
+    "call": "certs -> assets (the listed call reversed)",
+    "url": "http://trustiot-assets:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 2
+  },
+  {
+    "phase": "neither layer",
+    "call": "assets -> alerts (alerts has no caller)",
+    "url": "http://trustiot-alerts:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 2
+  },
+  {
+    "phase": "neither layer",
+    "call": "mqtt-bridge -> identity (only the gateway may call it)",
+    "url": "http://trustiot-identity:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 2
+  },
+  {
+    "phase": "neither layer",
+    "call": "stranger -> certs (mesh identity that is not a service)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 2
+  },
+  {
+    "phase": "neither layer",
+    "call": "outsider -> certs Service (no mesh identity)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 2
+  },
+  {
+    "phase": "neither layer",
+    "call": "outsider -> certs pod IP, application port",
+    "url": "http://10.42.0.225:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 1
+  },
+  {
+    "phase": "neither layer",
+    "call": "assets -> certs (listed)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 2
+  },
+  {
+    "phase": "AuthorizationPolicy only (settling)",
+    "call": "certs -> assets (the listed call reversed)",
+    "url": "http://trustiot-assets:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "AuthorizationPolicy only (settling)",
+    "call": "assets -> alerts (alerts has no caller)",
+    "url": "http://trustiot-alerts:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "AuthorizationPolicy only (settling)",
+    "call": "mqtt-bridge -> identity (only the gateway may call it)",
+    "url": "http://trustiot-identity:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "AuthorizationPolicy only (settling)",
+    "call": "stranger -> certs (mesh identity that is not a service)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 2
+  },
+  {
+    "phase": "AuthorizationPolicy only (settling)",
+    "call": "outsider -> certs Service (no mesh identity)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "AuthorizationPolicy only (settling)",
+    "call": "outsider -> certs pod IP, application port",
+    "url": "http://10.42.0.225:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "AuthorizationPolicy only (settling)",
+    "call": "imposter -> certs (assets labels, not its ServiceAccount)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "AuthorizationPolicy only",
+    "call": "certs -> assets (the listed call reversed)",
+    "url": "http://trustiot-assets:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "AuthorizationPolicy only",
+    "call": "assets -> alerts (alerts has no caller)",
+    "url": "http://trustiot-alerts:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 2
+  },
+  {
+    "phase": "AuthorizationPolicy only",
+    "call": "mqtt-bridge -> identity (only the gateway may call it)",
+    "url": "http://trustiot-identity:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "AuthorizationPolicy only",
+    "call": "stranger -> certs (mesh identity that is not a service)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 2
+  },
+  {
+    "phase": "AuthorizationPolicy only",
+    "call": "outsider -> certs Service (no mesh identity)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "AuthorizationPolicy only",
+    "call": "outsider -> certs pod IP, application port",
+    "url": "http://10.42.0.225:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "AuthorizationPolicy only",
+    "call": "imposter -> certs (assets labels, not its ServiceAccount)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 2
+  },
+  {
+    "phase": "AuthorizationPolicy only",
+    "call": "outsider -> ingress gateway pod (only the host may connect)",
+    "url": "http://10.42.0.227:80/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 4
+  },
+  {
+    "phase": "AuthorizationPolicy only",
+    "call": "assets -> certs (listed)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 2
+  },
+  {
+    "phase": "AuthorizationPolicy only",
+    "call": "gateway -> identity (public /healthz)",
+    "url": "http://app.saas.trustiot.test/healthz",
+    "outcome": "response",
+    "status": 200
+  },
+  {
+    "phase": "AuthorizationPolicy only",
+    "call": "gateway -> certs (public /certs/renew)",
+    "url": "http://gw.saas.trustiot.test/certs/renew",
+    "outcome": "response",
+    "status": 200
+  },
+  {
+    "phase": "AuthorizationPolicy only",
+    "call": "gateway -> mqtt-bridge (public /mqtt)",
+    "url": "http://gw.saas.trustiot.test/mqtt",
+    "outcome": "response",
+    "status": 200
+  },
+  {
+    "phase": "both layers again (settling)",
+    "call": "outsider -> ingress gateway pod (only the host may connect)",
+    "url": "http://10.42.0.227:80/healthz",
+    "outcome": "error",
+    "code": "ConnectionRefused",
+    "message": "Unable to connect. Is the computer able to access the url?",
+    "ms": 1
+  },
+  {
+    "phase": "both layers again",
+    "call": "certs -> assets (the listed call reversed)",
+    "url": "http://trustiot-assets:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "both layers again",
+    "call": "assets -> alerts (alerts has no caller)",
+    "url": "http://trustiot-alerts:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "both layers again",
+    "call": "mqtt-bridge -> identity (only the gateway may call it)",
+    "url": "http://trustiot-identity:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 2
+  },
+  {
+    "phase": "both layers again",
+    "call": "stranger -> certs (mesh identity that is not a service)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "both layers again",
+    "call": "outsider -> certs Service (no mesh identity)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "error",
+    "code": "ConnectionRefused",
+    "message": "Unable to connect. Is the computer able to access the url?",
+    "ms": 1
+  },
+  {
+    "phase": "both layers again",
+    "call": "outsider -> certs pod IP, application port",
+    "url": "http://10.42.0.225:8080/healthz",
+    "outcome": "error",
+    "code": "ConnectionRefused",
+    "message": "Unable to connect. Is the computer able to access the url?",
+    "ms": 0
+  },
+  {
+    "phase": "both layers again",
+    "call": "imposter -> certs (assets labels, not its ServiceAccount)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "error",
+    "code": "ECONNRESET",
+    "message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+    "ms": 1
+  },
+  {
+    "phase": "both layers again",
+    "call": "assets -> certs (listed)",
+    "url": "http://trustiot-certs:8080/healthz",
+    "outcome": "response",
+    "status": 200,
+    "ms": 2
+  },
+  {
+    "phase": "both layers again",
+    "call": "gateway -> identity (public /healthz)",
+    "url": "http://app.saas.trustiot.test/healthz",
+    "outcome": "response",
+    "status": 200
+  },
+  {
+    "phase": "both layers again",
+    "call": "gateway -> certs (public /certs/renew)",
+    "url": "http://gw.saas.trustiot.test/certs/renew",
+    "outcome": "response",
+    "status": 200
+  },
+  {
+    "phase": "both layers again",
+    "call": "gateway -> mqtt-bridge (public /mqtt)",
+    "url": "http://gw.saas.trustiot.test/mqtt",
+    "outcome": "response",
+    "status": 200
+  },
+  {
+    "phase": "both layers again",
+    "pods": [
+      {
+        "name": "trustiot-alerts-778647dc6-qjn55",
+        "ready": true,
+        "restarts": 0
+      },
+      {
+        "name": "trustiot-assets-7b66976bbf-86q5g",
+        "ready": true,
+        "restarts": 0
+      },
+      {
+        "name": "trustiot-certs-55d55b9cf7-nk6mn",
+        "ready": true,
+        "restarts": 0
+      },
+      {
+        "name": "trustiot-identity-85cc99f8bc-5lwcw",
+        "ready": true,
+        "restarts": 0
+      },
+      {
+        "name": "trustiot-mqtt-bridge-55ff695bf5-8rwdq",
+        "ready": true,
+        "restarts": 0
+      },
+      {
+        "name": "trustiot-ingress-istio-5596dd59c-44s6h",
+        "ready": true,
+        "restarts": 0
+      },
+      {
+        "name": "trustiot-ingress-istio-5596dd59c-j9866",
+        "ready": true,
+        "restarts": 0
+      }
+    ]
+  }
+]

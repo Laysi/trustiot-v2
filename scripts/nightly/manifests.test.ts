@@ -10,7 +10,7 @@ import {
   parseManifests,
   podProblems,
   restartsOf,
-  serviceProxyPath,
+  readyEndpointsFor,
   workloadsOf,
 } from "./manifests.ts";
 import { discoverShapes, valuesArgs } from "./smoke.ts";
@@ -198,14 +198,46 @@ spec:
     expect(healthEndpointsOf(objects)).toEqual([]);
   });
 
-  test("builds the API server proxy path", () => {
-    const readiness = healthEndpointsOf(parseManifests(MANIFEST)).find((e) => e.probe === "readiness");
-    expect(readiness).toBeDefined();
-    if (readiness === undefined) return;
-    expect(serviceProxyPath("ns", readiness)).toBe("/api/v1/namespaces/ns/services/web:http/proxy/readyz");
-    expect(serviceProxyPath("ns", { ...readiness, scheme: "https", path: "healthz" })).toBe(
-      "/api/v1/namespaces/ns/services/https:web:http/proxy/healthz",
-    );
+});
+
+describe("readyEndpointsFor", () => {
+  const slice = (ports: { name?: string; port: number }[], ready: boolean[]) => ({
+    ports,
+    endpoints: ready.map((r, i) => ({ addresses: [`10.42.0.${i + 10}`], conditions: { ready: r } })),
+  });
+
+  test("counts the ready endpoints of the slices that serve the named port", () => {
+    const list = { items: [slice([{ name: "http", port: 8080 }], [true, false, true]), slice([{ name: "native", port: 9000 }], [true])] };
+    expect(readyEndpointsFor(list, "http")).toBe(2);
+    expect(readyEndpointsFor(list, "native")).toBe(1);
+    expect(readyEndpointsFor(list, "metrics")).toBe(0);
+  });
+
+  test("an unnamed Service port is listed with an empty name", () => {
+    expect(readyEndpointsFor({ items: [slice([{ name: "", port: 8080 }], [true])] }, "8080")).toBe(1);
+    expect(readyEndpointsFor({ items: [slice([{ name: "", port: 8080 }], [true])] }, "http")).toBe(0);
+  });
+
+  test("an endpoint whose ready condition is unset or null counts as ready", () => {
+    const list = {
+      items: [
+        {
+          ports: [{ name: "http", port: 8080 }],
+          endpoints: [{ addresses: ["10.42.0.10"] }, { addresses: ["10.42.0.11"], conditions: {} }, { addresses: ["10.42.0.12"], conditions: { ready: null } }],
+        },
+      ],
+    };
+    expect(readyEndpointsFor(list, "http")).toBe(3);
+  });
+
+  test("a slice whose port has no number serves nothing", () => {
+    const list = { items: [{ ports: [{ name: "http", port: null }], endpoints: [{ addresses: ["10.42.0.10"], conditions: { ready: true } }] }] };
+    expect(readyEndpointsFor(list, "http")).toBe(0);
+  });
+
+  test("no slice, or only endpoints that are not ready, gives 0", () => {
+    expect(readyEndpointsFor({}, "http")).toBe(0);
+    expect(readyEndpointsFor({ items: [slice([{ name: "http", port: 8080 }], [false])] }, "http")).toBe(0);
   });
 });
 
