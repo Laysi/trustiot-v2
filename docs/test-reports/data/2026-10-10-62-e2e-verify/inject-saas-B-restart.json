@@ -1,0 +1,19 @@
+[
+ {
+  "group": "watch",
+  "name": "poll 40s",
+  "histogram": {
+   "public-certs:200": 163,
+   "nocookie:401": 151,
+   "valid:200": 151,
+   "garbage:401": 151,
+   "nocookie:503": 12,
+   "valid:503": 12,
+   "garbage:503": 12
+  },
+  "failOpen": 0,
+  "maxMs": 215,
+  "ok": true,
+  "bad": []
+ }
+]

@@ -1,0 +1,39 @@
+#!/bin/bash
+# usage: install.sh saas|onprem|uninstall   (installs release "trustiot" in e2e-62-verify and opens ssh -L on 127.0.0.1:17080)
+set -e
+SHAPE=$1
+S=/tmp/claude-1000/-home-ruisi-projects-trustiot-v2/5d2bbbe4-4241-4ab5-b2fe-2e33d3a23171/scratchpad/e2e-62
+W=/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a66c946f0acf60298
+export KUBECONFIG=$S/kube/config
+export PATH=/home/ruisi/.proto/tools/helm/4.3.0:/home/ruisi/.proto/tools/kubectl/1.36.5:$PATH
+cd $W/deploy/chart
+pkill -f "L 127.0.0.1:17080" || true
+if [ "$SHAPE" = uninstall ]; then
+  helm uninstall trustiot -n e2e-62-verify --wait --timeout 3m || true
+  kubectl delete secret -l trustiot-e2e-probe=1 --ignore-not-found || true
+  exit 0
+fi
+IMG=localhost/trustiot-e2e/identity-double
+DIG=sha256:acf3aac75fa69d4a3db3a28e33aedcf3a93bfe64ecffd75a8fbc0af1588d1bdb
+EXTRA=(--set ingress.authzProvider=trustiot-e2e-62v --set-string services.identity.image.repository=$IMG --set-string services.identity.image.tag=62v --set-string services.identity.image.digest=$DIG --set-string services.identity.image.pullPolicy=Never)
+if [ "$SHAPE" = saas ]; then
+  FILES=(-f values-saas.yaml -f tests/values/saas-instance.yaml)
+  RPORT=80
+else
+  FILES=(-f values-onprem.yaml -f tests/values/onprem-instance.yaml)
+  RPORT=443
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -subj "/CN=probe" \
+    -addext "subjectAltName=DNS:trustiot.factory.test,DNS:gw.trustiot.factory.test,DNS:ota.trustiot.factory.test" \
+    -keyout $S/tls.key -out $S/tls.crt 2>/dev/null
+  kubectl create secret tls trustiot-probe-tls --cert $S/tls.crt --key $S/tls.key --dry-run=client -o yaml | kubectl label --local -f - trustiot-e2e-probe=1 -o yaml | kubectl apply -f -
+  rm -f $S/tls.key
+  EXTRA+=(--set ingress.direct.tlsSecret=trustiot-probe-tls --set ingress.direct.serviceType=ClusterIP)
+fi
+helm install trustiot . -n e2e-62-verify "${FILES[@]}" -f tests/e2e/values-e2e.yaml "${EXTRA[@]}" --rollback-on-failure --wait --timeout 5m
+kubectl wait gateway/trustiot-ingress --for=condition=Programmed --timeout=180s
+kubectl rollout status deployment/trustiot-ingress-istio --timeout=180s
+IP=$(kubectl get svc trustiot-ingress-istio -o jsonpath='{.spec.clusterIP}')
+echo "clusterIP=$IP port=$RPORT"
+ssh -f -N -o ExitOnForwardFailure=yes -L 127.0.0.1:17080:$IP:$RPORT trustiot-mac-m1
+sleep 2
+kubectl get pods,svc,gateway,httproute,authorizationpolicy,networkpolicy,pdb -o wide

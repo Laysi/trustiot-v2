@@ -1,0 +1,46 @@
+targets: 10.43.136.130:80 10.43.136.130:15021 10.42.0.181:80 10.42.0.181:15021 10.42.0.181:15090 10.42.0.182:80 10.42.0.182:15021 10.42.0.182:15090
+identity pod ip: 10.42.0.185
+== from the lab host (source 10.42.0.1)
+host -> 10.43.136.130:80 HTTP 200
+host -> 10.43.136.130:15021 HTTP 404
+host -> 10.42.0.181:80 HTTP 200
+host -> 10.42.0.181:15021 HTTP 404
+host -> 10.42.0.181:15090 HTTP 404
+host -> 10.42.0.182:80 HTTP 200
+host -> 10.42.0.182:15021 HTTP 404
+host -> 10.42.0.182:15090 HTTP 404
+== from pod np-plain in namespace e2e-62-verify (10.42.0.186)
+10.43.136.130:80 ERR ConnectionRefused
+10.43.136.130:15021 ERR ConnectionRefused
+10.42.0.181:80 ERR ConnectionRefused
+10.42.0.181:15021 ERR ConnectionRefused
+10.42.0.181:15090 ERR ConnectionRefused
+10.42.0.182:80 ERR ConnectionRefused
+10.42.0.182:15021 ERR ConnectionRefused
+10.42.0.182:15090 ERR ConnectionRefused
+10.42.0.185:8080 HTTP 200
+== from pod np-ambient in namespace e2e-62-verify (10.42.0.187)
+10.43.136.130:80 ERR ECONNRESET
+10.43.136.130:15021 ERR ECONNRESET
+10.42.0.181:80 ERR ECONNRESET
+10.42.0.181:15021 ERR ECONNRESET
+10.42.0.181:15090 ERR ECONNRESET
+10.42.0.182:80 ERR ECONNRESET
+10.42.0.182:15021 ERR ECONNRESET
+10.42.0.182:15090 ERR ECONNRESET
+10.42.0.185:8080 HTTP 200
+== from pod np-other in namespace e2e-62-verify-other (10.42.0.188)
+10.43.136.130:80 ERR ConnectionRefused
+10.43.136.130:15021 ERR ConnectionRefused
+10.42.0.181:80 ERR ConnectionRefused
+10.42.0.181:15021 ERR ConnectionRefused
+10.42.0.181:15090 ERR ConnectionRefused
+10.42.0.182:80 ERR ConnectionRefused
+10.42.0.182:15021 ERR ConnectionRefused
+10.42.0.182:15090 ERR ConnectionRefused
+10.42.0.185:8080 HTTP 200
+== control: deny-all NetworkPolicy on identity pods, plain pod -> identity pod IP:8080 and via gateway
+10.42.0.185:8080 ERR ConnectionRefused
+gateway -> identity during the deny-all policy:
+200
+done

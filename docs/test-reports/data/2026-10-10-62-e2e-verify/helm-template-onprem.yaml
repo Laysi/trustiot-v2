@@ -1,0 +1,194 @@
+---
+# Source: trustiot/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trustiot-ingress
+  labels:
+    helm.sh/chart: trustiot-0.1.0
+    app.kubernetes.io/name: trustiot
+    app.kubernetes.io/instance: trustiot
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: trustiot
+    app.kubernetes.io/component: ingress
+spec:
+  podSelector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: trustiot-ingress
+  policyTypes:
+    - Ingress
+  ingress:
+    # The customer network reaches the HTTPS listener; the kubelet checks readiness on 15021.
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 15021
+          protocol: TCP
+
+---
+# Source: trustiot/templates/ingress.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trustiot-ingress-options
+  labels:
+    helm.sh/chart: trustiot-0.1.0
+    app.kubernetes.io/name: trustiot
+    app.kubernetes.io/instance: trustiot
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: trustiot
+    app.kubernetes.io/component: ingress
+data:
+  deployment: |
+    spec:
+      replicas: 2
+      template:
+        spec:
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: istio-proxy
+              resources:
+                limits:
+                  cpu: "2"
+                  memory: 512Mi
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+  service: |
+    spec:
+      type: LoadBalancer
+  podDisruptionBudget: |
+    spec:
+      minAvailable: 1
+
+---
+# Source: trustiot/templates/platform-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trustiot-platform
+  labels:
+    helm.sh/chart: trustiot-0.1.0
+    app.kubernetes.io/name: trustiot
+    app.kubernetes.io/instance: trustiot
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: trustiot
+    app.kubernetes.io/component: platform
+data:
+  TRUSTIOT_DEPLOYMENT_MODE: "onprem"
+  TRUSTIOT_APP_HOST: "trustiot.factory.test"
+  TRUSTIOT_GATEWAY_HOST: "gw.trustiot.factory.test"
+  TRUSTIOT_OTA_HOST: "ota.trustiot.factory.test"
+  TRUSTIOT_CLIENT_IP_SOURCE: "x-forwarded-for-rightmost"
+  TRUSTIOT_S3_ENDPOINT: "http://s3.factory.test:9000"
+  TRUSTIOT_S3_REGION: "us-east-1"
+  TRUSTIOT_S3_BUCKET: "trustiot"
+  TRUSTIOT_S3_FORCE_PATH_STYLE: "true"
+  TRUSTIOT_SMTP_HOST: "smtp.factory.test"
+  TRUSTIOT_SMTP_PORT: "25"
+  TRUSTIOT_SMTP_SECURITY: "starttls"
+  TRUSTIOT_SMTP_FROM: "TrustIoT <trustiot@factory.test>"
+  TRUSTIOT_AI_CHAT_BASE_URL: "http://vllm.factory.test:8000/v1"
+  TRUSTIOT_AI_EMBEDDING_BASE_URL: "http://ollama.factory.test:11434/v1"
+  TRUSTIOT_AI_RERANK_BASE_URL: "http://vllm.factory.test:8000/v1"
+
+---
+# Source: trustiot/templates/ingress.yaml
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: trustiot-ingress-cookie-check
+  labels:
+    helm.sh/chart: trustiot-0.1.0
+    app.kubernetes.io/name: trustiot
+    app.kubernetes.io/instance: trustiot
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: trustiot
+    app.kubernetes.io/component: ingress
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: trustiot-ingress
+  action: CUSTOM
+  provider:
+    name: trustiot-identity
+  rules:
+    # No public path is enabled: every request is checked.
+    - {}
+
+---
+# Source: trustiot/templates/ingress.yaml
+# Internal APIs between services live under /internal (decision 27). No route forwards that
+# prefix, and this denies it even when a route such as "/" would match. CUSTOM runs first, so a
+# request without a cookie gets 401 and one with a valid cookie gets 403.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: trustiot-ingress-deny-internal
+  labels:
+    helm.sh/chart: trustiot-0.1.0
+    app.kubernetes.io/name: trustiot
+    app.kubernetes.io/instance: trustiot
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: trustiot
+    app.kubernetes.io/component: ingress
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: trustiot-ingress
+  action: DENY
+  rules:
+    - to:
+        - operation:
+            paths:
+              - "/internal*"
+
+---
+# Source: trustiot/templates/ingress.yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: trustiot-ingress
+  labels:
+    helm.sh/chart: trustiot-0.1.0
+    app.kubernetes.io/name: trustiot
+    app.kubernetes.io/instance: trustiot
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: trustiot
+    app.kubernetes.io/component: ingress
+spec:
+  gatewayClassName: istio
+  infrastructure:
+    labels:
+      app.kubernetes.io/name: trustiot
+      app.kubernetes.io/instance: trustiot
+      app.kubernetes.io/component: ingress
+      app.kubernetes.io/part-of: trustiot
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: trustiot-ingress-options
+  listeners:
+    # The gateway terminates the outer TLS; gateways keep their own mTLS inside the WebSocket.
+    - name: https
+      port: 443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            group: ""
+            name: trustiot-ingress-tls
+      allowedRoutes:
+        namespaces:
+          from: Same

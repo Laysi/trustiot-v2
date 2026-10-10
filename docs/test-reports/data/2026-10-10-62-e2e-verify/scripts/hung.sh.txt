@@ -1,0 +1,27 @@
+#!/bin/bash
+# usage: hung.sh saas|onprem  -- SIGSTOP the identity process (running, port open, never answers)
+SHAPE=$1
+S=/tmp/claude-1000/-home-ruisi-projects-trustiot-v2/5d2bbbe4-4241-4ab5-b2fe-2e33d3a23171/scratchpad/e2e-62
+W=/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a66c946f0acf60298
+D=$W/docs/test-reports/data/2026-10-10-62-e2e-verify
+export KUBECONFIG=$S/kube/config
+export PATH=/home/ruisi/.proto/tools/bun/1.4.2:/home/ruisi/.proto/tools/kubectl/1.36.5:$PATH
+export PROBE_PORT=17080 PROBE_SHAPE=$SHAPE PROBE_CA=$S/tls.crt
+LOG=$D/inject-$SHAPE-hung.txt
+: > $LOG
+POD=$(kubectl get pods -l app.kubernetes.io/component=identity -o jsonpath='{.items[0].metadata.name}')
+CID=$(kubectl get pod $POD -o jsonpath='{.status.containerStatuses[0].containerID}' | sed 's|containerd://||')
+PID=$(ssh trustiot-mac-m1 "sudo k3s crictl inspect -o go-template --template '{{.info.pid}}' $CID")
+case "$PID" in ''|*[!0-9]*|1) echo "bad pid '$PID'"; exit 1;; esac
+echo "pod $POD container $CID pid $PID" | tee -a $LOG
+ssh trustiot-mac-m1 "sudo kill -STOP $PID; ps -o pid,stat,cmd -p $PID" | tee -a $LOG
+sleep 2
+cd $W
+PROBE_SECONDS=12 PROBE_OUT=$D/inject-$SHAPE-E-hung.json bun $S/probe.ts watch > $D/inject-$SHAPE-E-hung.log 2>&1
+grep 'watch histogram' $D/inject-$SHAPE-E-hung.log | tee -a $LOG
+PROBE_OUT=$D/inject-$SHAPE-E-hung-timing.json bun $S/probe.ts downtime > $D/inject-$SHAPE-E-hung-timing.log 2>&1
+grep -E 'downtime:' $D/inject-$SHAPE-E-hung-timing.log | tee -a $LOG
+ssh trustiot-mac-m1 "sudo kill -CONT $PID; ps -o pid,stat,cmd -p $PID" | tee -a $LOG
+sleep 3
+PROBE_SECONDS=6 PROBE_OUT=$D/inject-$SHAPE-E-resumed.json bun $S/probe.ts watch > $D/inject-$SHAPE-E-resumed.log 2>&1
+grep 'watch histogram' $D/inject-$SHAPE-E-resumed.log | tee -a $LOG

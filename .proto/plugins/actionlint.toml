@@ -1,0 +1,30 @@
+# proto schema plugin for actionlint (https://github.com/rhysd/actionlint).
+# Downloads the official release archive and verifies it against the
+# checksums file published with the release.
+# Reference: https://moonrepo.dev/docs/proto/non-wasm-plugin
+
+name = "actionlint"
+type = "cli"
+
+[platform.linux]
+download-file = "actionlint_{version}_linux_{arch}.tar.gz"
+checksum-file = "actionlint_{version}_checksums.txt"
+
+[platform.macos]
+download-file = "actionlint_{version}_darwin_{arch}.tar.gz"
+checksum-file = "actionlint_{version}_checksums.txt"
+
+[install]
+download-url = "https://github.com/rhysd/actionlint/releases/download/v{version}/{download_file}"
+checksum-url = "https://github.com/rhysd/actionlint/releases/download/v{version}/{checksum_file}"
+
+[install.arch]
+aarch64 = "arm64"
+x86_64 = "amd64"
+
+[install.exes.actionlint]
+exe-path = "actionlint"
+primary = true
+
+[resolve]
+git-url = "https://github.com/rhysd/actionlint"
