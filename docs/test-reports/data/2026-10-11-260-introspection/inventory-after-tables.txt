@@ -1,0 +1,128 @@
+# account ta5, target trustiot.telemetry
+merge
+  B: 500 CANNOT_EXTRACT_TABLE_STRUCTURE Code: 636. DB::Exception: There are no tables satisfied provided regexp, you must specify table structure manually. (CANNOT_EXTRACT_TABLE_ST
+  Z: 500 CANNOT_EXTRACT_TABLE_STRUCTURE Code: 636. DB::Exception: There are no tables satisfied provided regexp, you must specify table structure manually. (CANNOT_EXTRACT_TABLE_ST
+mergeTreeIndex
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. 
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. 
+mergeTreeIndex with_marks
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. 
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. 
+mergeTreeAnalyzeIndexes
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. 
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. 
+mergeTreeAnalyzeIndexesUUID
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. 
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. 
+mergeTreeCodecBlockCounts
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant SHOW TABLES ON trustiot.teleme
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant SHOW TABLES ON trustiot.teleme
+mergeTreeProjection
+  B: 500 NO_SUCH_PROJECTION_IN_TABLE Code: 582. DB::Exception: There is no projection none in table. (NO_SUCH_PROJECTION_IN_TABLE) (version 26.8.22.13 (official build))
+  Z: 500 NO_SUCH_PROJECTION_IN_TABLE Code: 582. DB::Exception: There is no projection none in table. (NO_SUCH_PROJECTION_IN_TABLE) (version 26.8.22.13 (official build))
+mergeTreeTextIndex
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant SHOW TABLES ON trustiot.teleme
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant SHOW TABLES ON trustiot.teleme
+view
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. 
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. 
+viewIfPermitted
+  B: ok read_rows=0 0
+  Z: ok read_rows=0 0
+viewExplain (EXPLAIN subquery)
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TEMPORARY TABLE ON *.*.
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TEMPORARY TABLE ON *.*.
+eval
+  B: 500 SUPPORT_IS_DISABLED Code: 344. DB::Exception: Table function `eval` is experimental. Set `allow_experimental_eval_table_function = 1` to enable it. (SUPPORT_IS_
+  Z: 500 SUPPORT_IS_DISABLED Code: 344. DB::Exception: Table function `eval` is experimental. Set `allow_experimental_eval_table_function = 1` to enable it. (SUPPORT_IS_
+loop
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TEMPORARY TABLE ON *.*.
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TEMPORARY TABLE ON *.*.
+cluster
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED
+clusterAllReplicas
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED
+remote
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED
+remoteSecure
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta5: Not enough privileges. To execute this query, it's necessary to have the grant READ ON REMOTE. (ACCESS_DENIED
+timeSeriesData
+  B: 500 UNEXPECTED_TABLE_ENGINE Code: 727. DB::Exception: This operation can be executed on a TimeSeries table only, the engine of table trustiot.telemetry (f6339241-4813-4
+  Z: 500 UNEXPECTED_TABLE_ENGINE Code: 727. DB::Exception: This operation can be executed on a TimeSeries table only, the engine of table trustiot.telemetry (f6339241-4813-4
+timeSeriesTags
+  B: 500 UNEXPECTED_TABLE_ENGINE Code: 727. DB::Exception: This operation can be executed on a TimeSeries table only, the engine of table trustiot.telemetry (f6339241-4813-4
+  Z: 500 UNEXPECTED_TABLE_ENGINE Code: 727. DB::Exception: This operation can be executed on a TimeSeries table only, the engine of table trustiot.telemetry (f6339241-4813-4
+timeSeriesMetrics
+  B: 500 UNEXPECTED_TABLE_ENGINE Code: 727. DB::Exception: This operation can be executed on a TimeSeries table only, the engine of table trustiot.telemetry (f6339241-4813-4
+  Z: 500 UNEXPECTED_TABLE_ENGINE Code: 727. DB::Exception: This operation can be executed on a TimeSeries table only, the engine of table trustiot.telemetry (f6339241-4813-4
+timeSeriesSamples
+  B: 500 UNEXPECTED_TABLE_ENGINE Code: 727. DB::Exception: This operation can be executed on a TimeSeries table only, the engine of table trustiot.telemetry (f6339241-4813-4
+  Z: 500 UNEXPECTED_TABLE_ENGINE Code: 727. DB::Exception: This operation can be executed on a TimeSeries table only, the engine of table trustiot.telemetry (f6339241-4813-4
+timeSeriesSelector
+  B: 500 UNEXPECTED_TABLE_ENGINE Code: 727. DB::Exception: This operation can be executed on a TimeSeries table only, the engine of table trustiot.telemetry (f6339241-4813-4
+  Z: 500 UNEXPECTED_TABLE_ENGINE Code: 727. DB::Exception: This operation can be executed on a TimeSeries table only, the engine of table trustiot.telemetry (f6339241-4813-4
+prometheusQuery
+  B: 500 UNEXPECTED_TABLE_ENGINE Code: 727. DB::Exception: This operation can be executed on a TimeSeries table only, the engine of table trustiot.telemetry (f6339241-4813-4
+  Z: 500 UNEXPECTED_TABLE_ENGINE Code: 727. DB::Exception: This operation can be executed on a TimeSeries table only, the engine of table trustiot.telemetry (f6339241-4813-4
+prometheusQueryRange
+  B: 500 UNEXPECTED_TABLE_ENGINE Code: 727. DB::Exception: This operation can be executed on a TimeSeries table only, the engine of table trustiot.telemetry (f6339241-4813-4
+  Z: 500 UNEXPECTED_TABLE_ENGINE Code: 727. DB::Exception: This operation can be executed on a TimeSeries table only, the engine of table trustiot.telemetry (f6339241-4813-4
+dictionary
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta6: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TEMPORARY TABLE ON *.*.
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta6: Not enough privileges. To execute this query, it's necessary to have the grant CREATE TEMPORARY TABLE ON *.*.
+fuzzQuery
+  B: ok read_rows=3 3
+  Z: ok read_rows=3 3
+input
+  B: 500 INVALID_USAGE_OF_INPUT Code: 477. DB::Exception: Input stream is not initialized, input() must be used only in INSERT SELECT query. (INVALID_USAGE_OF_INPUT) (versi
+  Z: 500 INVALID_USAGE_OF_INPUT Code: 477. DB::Exception: Input stream is not initialized, input() must be used only in INSERT SELECT query. (INVALID_USAGE_OF_INPUT) (versi
+EXPLAIN ESTIMATE
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta6: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. 
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta6: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. 
+EXPLAIN indexes
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta6: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. 
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta6: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. 
+read statistics (X-ClickHouse-Summary)
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta6: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. 
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta6: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON trustiot.telemetry. 
+hasColumnInTable
+  B: 403 ACCESS_DENIED Code: 497. DB::Exception: ta6: Not enough privileges. To execute this query, it's necessary to have the grant SHOW COLUMNS ON trustiot.telem
+  Z: 403 ACCESS_DENIED Code: 497. DB::Exception: ta6: Not enough privileges. To execute this query, it's necessary to have the grant SHOW COLUMNS ON trustiot.telem
+system.tables row stats
+  B: ok read_rows=0 
+  Z: ok read_rows=0 
+system.columns size stats
+  B: ok read_rows=0 0	0	0
+  Z: ok read_rows=0 0	0	0
+
+# system database sweep
+system tables: 141; readable: 24
+aggregate_function_combinators=15
+collations=145
+columns=11
+completions=8495
+contributors=2832
+current_roles=1
+data_type_families=141
+database_engines=17
+databases=1
+dictionary_layouts=22
+disk_types=12
+enabled_roles=1
+formats=114
+functions=1889
+licenses=1443
+one=1
+privileges=248
+quota_usage=2
+settings=1819
+table_engines=84
+table_functions=94
+tables=1
+time_zones=598
+user_query_log=41
+information_schema tables: 40; readable: 0 

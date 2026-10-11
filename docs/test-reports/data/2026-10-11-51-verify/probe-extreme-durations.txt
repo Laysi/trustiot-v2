@@ -1,0 +1,7 @@
+{"TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT":"500000000000y"} -> exit=101 after 146 ms PANIC: overflow when adding duration to instant
+{"TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT":"292000000000y"} -> exit=0 after 123 ms 
+{"TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT":"100y"} -> exit=0 after 169 ms 
+{"TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT":"1000000h"} -> exit=0 after 214 ms 
+{"TRUSTIOT__SHUTDOWN__DRAIN_DELAY":"500000000000y"} -> exit=137 after 8015 ms 
+{"TRUSTIOT__HTTP__REQUEST_TIMEOUT":"500000000000y"} -> exit=0 after 119 ms 
+{"TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT":"1ns"} -> exit=0 after 123 ms 

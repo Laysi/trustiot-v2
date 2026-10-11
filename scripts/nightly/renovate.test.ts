@@ -99,13 +99,21 @@ describe(".prototools", () => {
 
   test("the annotation names the upstream of the tool's schema plugin", () => {
     const plugin = (tool: string) => readFileSync(join(REPO_ROOT, ".proto", "plugins", `${tool}.toml`), "utf8");
-    const gitUrl = (tool: string) => /^git-url = "https:\/\/github\.com\/([^"]+)"$/m.exec(plugin(tool))?.[1];
+    const gitUrl = (tool: string) => /^git-url = "([^"]+)"$/m.exec(plugin(tool))?.[1];
+    // A GitHub upstream is named owner/repo and read with a github-* datasource. Any other
+    // upstream (Zig's is on Codeberg) is named by its repository URL, which only git-tags reads.
+    const upstream = (url = "") => {
+      const github = /^https:\/\/github\.com\/(.+)$/.exec(url)?.[1];
+      return github === undefined
+        ? { datasource: "git-tags", depName: url }
+        : { datasource: expect.stringMatching(/^github-(releases|tags)$/), depName: github };
+    };
     const lines = prototools.split("\n");
     for (const [index, line] of lines.entries()) {
       const tool = /^([a-z0-9_-]+) = "[^"]+"$/.exec(line)?.[1];
-      const depName = /depName=(\S+)/.exec(lines[index - 1] ?? "")?.[1];
-      if (tool === undefined || depName === undefined) continue;
-      expect(`${tool}: ${depName}`).toBe(`${tool}: ${gitUrl(tool)}`);
+      const annotation = /datasource=(\S+) depName=(\S+)/.exec(lines[index - 1] ?? "");
+      if (tool === undefined || annotation === null) continue;
+      expect({ tool, datasource: annotation[1], depName: annotation[2] }).toEqual({ tool, ...upstream(gitUrl(tool)) });
     }
   });
 });

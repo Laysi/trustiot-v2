@@ -1,0 +1,8 @@
+deploy/chart/tests/e2e/ports.test.ts:
+(pass) nothing accepts connections on a port right after freePort() returns it [407.80ms]
+(pass) the returned port can be bound at once [30.23ms]
+
+ 202 pass
+ 0 fail
+ 2071 expect() calls
+Ran 202 tests across 4 files. [17.60s]
