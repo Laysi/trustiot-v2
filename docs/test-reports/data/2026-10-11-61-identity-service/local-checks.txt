@@ -1,4 +1,4 @@
-# Local machine (Fedora, kernel 7.2.8-300.fc45.x86_64), 2026-10-11, branch feat/61-identity-service after merging main e21ff41
+# Local machine (Fedora, kernel 7.2.8-300.fc45.x86_64), 2026-10-11, branch feat/61-identity-service after merging main b8d1afa (merge commit 6cb8f8c)
 
 $ bun test deploy/chart/tests/e2e/tunnel-recovery.test.ts
 bun test v1.4.2 (744846f84)

@@ -6,7 +6,7 @@
 
 | 項目 | 值 |
 | --- | --- |
-| 受測分支 | `feat/61-identity-service`：功能 commit `e50018c`、`9b8e2a2`；合併 main `e21ff41`（合併 commit `d5a41ff`）後全部重跑，下表的結果都是合併後的 |
+| 受測分支 | `feat/61-identity-service`：功能 commit `e50018c`、`9b8e2a2`。合併 main `e21ff41`（合併 commit `d5a41ff`）後跑 `cargo test -p identity` 的完整清單；再合併 main `b8d1afa`（合併 commit `6cb8f8c`）後重跑其餘所有檢查（第二次合併沒有動到 `services/identity`） |
 | 建置與測試機 | ruisi-wsl（WSL2，Linux 6.18.33.2-microsoft-standard-WSL2 x86_64，20 核，Docker 29.7.2），`CI=1`：找不到容器執行環境時容器測試改為失敗，不會略過 |
 | 本機 | Fedora，核心 7.2.8-300.fc45.x86_64；只跑 `tunnel-recovery.test.ts` 與 `bun run --cwd scripts typecheck` |
 | 工具 | rustc 1.99.0、Bun 1.4.2、Helm 4.3.0（皆由 `.prototools` 固定） |
@@ -38,7 +38,7 @@ gitleaks detect --redact --source . --log-opts="origin/main..HEAD"
 | --- | --- | --- |
 | `cargo test -p identity` | 單元 31 個、整合 7 個全部通過（整合測試真的連到 TLS Postgres） | [identity-tests.txt](data/2026-10-11-61-identity-service/identity-tests.txt) |
 | fmt、clippy、`cargo test --workspace`（66 個測試執行檔，含 `repo-check`、`sql-check`、`openapi`）、openapi 比對、cargo-deny | 全部通過 | [workspace-checks.txt](data/2026-10-11-61-identity-service/workspace-checks.txt) |
-| chart：helm lint、kubeconform、chart 規則、README 欄位檢查（`chart.test.ts`、`raw-client.test.ts`、`ports.test.ts`） | 198 個通過 | [workspace-checks.txt](data/2026-10-11-61-identity-service/workspace-checks.txt) 的最後一段 |
+| chart：helm lint、kubeconform、chart 規則、README 欄位檢查（`chart.test.ts`、`raw-client.test.ts`、`ports.test.ts`） | 200 個通過 | [workspace-checks.txt](data/2026-10-11-61-identity-service/workspace-checks.txt) 的最後一段 |
 | `tunnel-recovery.test.ts`（本機） | 15 個通過 | [local-checks.txt](data/2026-10-11-61-identity-service/local-checks.txt) |
 | scripts 型別檢查（含 `deploy/chart/tests/`） | 通過 | [local-checks.txt](data/2026-10-11-61-identity-service/local-checks.txt) |
 | gitleaks（本分支的 commit） | 沒有發現 | 推送前於本機執行 |
