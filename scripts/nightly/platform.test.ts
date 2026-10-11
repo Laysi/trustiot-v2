@@ -1,9 +1,22 @@
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { lastLines, summarizeBunTest } from "./e2e.ts";
-import { BASE_PROVIDER, e2eNamespaceOf, istiodOverlay, providerNameOf, verifySha256 } from "./platform.ts";
+import { CommandError, RunLog } from "./exec.ts";
+import type { ExecOptions, ExecResult } from "./exec.ts";
+import {
+  BASE_PROVIDER,
+  clusterNodeNames,
+  e2eNamespaceOf,
+  importImageIntoCluster,
+  IMPORT_ATTEMPTS,
+  istiodOverlay,
+  providerNameOf,
+  verifySha256,
+} from "./platform.ts";
+import type { ImportCommands } from "./platform.ts";
 import { readPins } from "./run.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -88,5 +101,136 @@ describe("e2e output", () => {
 
   test("lastLines keeps the end", () => {
     expect(lastLines("a\nb\nc\nd\n", 2)).toBe("c\nd");
+  });
+});
+
+describe("importImageIntoCluster", () => {
+  const IMAGE = "localhost/trustiot-e2e/identity-double:nightly";
+  const K3D = "/pinned/k3d";
+  const CLUSTER = "nightly";
+  const label = { "k3d.cluster": CLUSTER };
+
+  /** What `k3d node list -o json` prints: this cluster's nodes, another cluster's, and non-containerd nodes. */
+  const NODES = [
+    { name: "k3d-nightly-server-0", role: "server", runtimeLabels: label },
+    { name: "k3d-nightly-agent-0", role: "agent", runtimeLabels: label },
+    { name: "k3d-nightly-serverlb", role: "loadbalancer", runtimeLabels: label },
+    { name: "k3d-other-server-0", role: "server", runtimeLabels: { "k3d.cluster": "other" } },
+  ];
+
+  const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "", timedOut: false });
+  const failed = (stderr: string): ExecResult => ({ code: 1, stdout: "", stderr, timedOut: false });
+
+  let dir: string;
+  let logPath: string;
+  let log: RunLog;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "nightly-platform-"));
+    logPath = join(dir, "run.log");
+    log = new RunLog(logPath);
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  /**
+   * A cluster that has the image on the nodes in `has`. Each `k3d image import` is one "import" call:
+   * `onImport(n)` returns the nodes that hold the image afterwards (k3d exits 0 either way).
+   */
+  function fakeCluster(onImport: (call: number) => string[], nodes: unknown = NODES) {
+    const state = { imports: [] as string[][], inspected: [] as string[], has: new Set<string>() };
+    const commands: ImportCommands = {
+      run: async (runLog, cmd) => {
+        runLog.line(`$ ${cmd.join(" ")}`);
+        expect(cmd.slice(0, 3)).toEqual([K3D, "image", "import"]);
+        state.imports.push(cmd);
+        state.has = new Set(onImport(state.imports.length));
+        return ok("INFO Successfully imported 1 image(s) into 1 cluster(s)");
+      },
+      exec: async (cmd: string[], _options?: ExecOptions) => {
+        if (cmd[0] === K3D) {
+          expect(cmd.slice(1)).toEqual(["node", "list", "--output", "json"]);
+          return ok(JSON.stringify(nodes));
+        }
+        expect(cmd.slice(0, 2)).toEqual(["docker", "exec"]);
+        expect(cmd.slice(3)).toEqual(["crictl", "inspecti", IMAGE]);
+        const node = cmd[2]!;
+        state.inspected.push(node);
+        return state.has.has(node) ? ok("{}") : failed(`FATA[0000] no such image: "${IMAGE}"`);
+      },
+    };
+    return { state, commands };
+  }
+
+  const platform = () => ({ k3d: K3D, cluster: CLUSTER, log });
+  const importWith = (commands: ImportCommands, attempts = IMPORT_ATTEMPTS) =>
+    importImageIntoCluster(platform(), IMAGE, commands, { attempts, pauseMs: 0 });
+
+  test("finds only this cluster's server and agent nodes", async () => {
+    const { commands } = fakeCluster(() => []);
+    expect(await clusterNodeNames(platform(), commands)).toEqual(["k3d-nightly-server-0", "k3d-nightly-agent-0"]);
+  });
+
+  test("fails when the cluster has no node to check, or k3d's answer is unusable", async () => {
+    await expect(clusterNodeNames(platform(), fakeCluster(() => [], []).commands)).rejects.toThrow("no server or agent node");
+    await expect(clusterNodeNames(platform(), { exec: async () => ok("not json") })).rejects.toThrow("did not print JSON");
+    await expect(clusterNodeNames(platform(), { exec: async () => failed("boom") })).rejects.toThrow("boom");
+  });
+
+  test("passes and logs every node when the image is present on all of them", async () => {
+    const { state, commands } = fakeCluster(() => ["k3d-nightly-server-0", "k3d-nightly-agent-0"]);
+    await importWith(commands);
+    expect(state.imports).toHaveLength(1);
+    expect(state.inspected).toEqual(["k3d-nightly-server-0", "k3d-nightly-agent-0"]);
+    const text = readFileSync(logPath, "utf8");
+    expect(text).toContain(`image ${IMAGE} is present on node k3d-nightly-server-0`);
+    expect(text).toContain(`image ${IMAGE} is present on node k3d-nightly-agent-0`);
+    expect(text).toContain(`image ${IMAGE} confirmed on 2 node(s): k3d-nightly-server-0, k3d-nightly-agent-0`);
+  });
+
+  test("imports with --mode direct into the right cluster", async () => {
+    const { state, commands } = fakeCluster(() => ["k3d-nightly-server-0", "k3d-nightly-agent-0"]);
+    await importWith(commands);
+    expect(state.imports[0]).toEqual([K3D, "image", "import", IMAGE, "--cluster", CLUSTER, "--mode", "direct"]);
+  });
+
+  test("retries when k3d reports success but a node lacks the image, then passes", async () => {
+    // The first import loses the agent's copy, the way #335's tarball race lost the server's.
+    const { state, commands } = fakeCluster((call) => (call === 1 ? ["k3d-nightly-server-0"] : ["k3d-nightly-server-0", "k3d-nightly-agent-0"]));
+    await importWith(commands);
+    expect(state.imports).toHaveLength(2);
+    const text = readFileSync(logPath, "utf8");
+    expect(text).toContain(`image ${IMAGE} is NOT present on node k3d-nightly-agent-0`);
+    expect(text).toContain("attempt 1/3 failed");
+    expect(text).toContain(`image ${IMAGE} confirmed on 2 node(s)`);
+  });
+
+  test("fails at the import step, naming the image and the node, when every attempt leaves it missing", async () => {
+    const { state, commands } = fakeCluster(() => ["k3d-nightly-agent-0"]);
+    const failure = importWith(commands);
+    await expect(failure).rejects.toThrow("k3d image import succeeded, but image");
+    await expect(failure).rejects.toThrow(IMAGE);
+    await expect(failure).rejects.toThrow("missing on node(s) k3d-nightly-server-0 of cluster nightly");
+    await failure.catch((error: Error) => expect(error.message).not.toContain("k3d-nightly-agent-0 of cluster"));
+    expect(state.imports).toHaveLength(IMPORT_ATTEMPTS);
+    expect(readFileSync(logPath, "utf8")).toContain(`image ${IMAGE} is NOT present on node k3d-nightly-server-0: FATA[0000] no such image`);
+  });
+
+  test("names every missing node", async () => {
+    const { commands } = fakeCluster(() => []);
+    await expect(importWith(commands, 1)).rejects.toThrow("k3d-nightly-server-0, k3d-nightly-agent-0 of cluster");
+  });
+
+  test("an import command that fails is retried like a missing image", async () => {
+    const { state, commands } = fakeCluster(() => ["k3d-nightly-server-0", "k3d-nightly-agent-0"]);
+    let calls = 0;
+    const flaky: ImportCommands = {
+      ...commands,
+      run: async (runLog, cmd, options) => {
+        if (++calls === 1) throw new CommandError(cmd, failed("ERRO failed to import"));
+        return commands.run(runLog, cmd, options);
+      },
+    };
+    await importWith(flaky);
+    expect(calls).toBe(2);
+    expect(state.imports).toHaveLength(1);
   });
 });
