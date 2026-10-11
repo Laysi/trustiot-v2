@@ -380,7 +380,7 @@ struct Platform {
     postgres_port: u16,                       // TRUSTIOT_POSTGRES_PORT
     postgres_database: String,                // TRUSTIOT_POSTGRES_DATABASE
     postgres_sslmode: SslMode,                // TRUSTIOT_POSTGRES_SSLMODE，只接受 verify-full
-    postgres_ca_file: Option<std::path::PathBuf>, // TRUSTIOT_POSTGRES_CA_FILE
+    postgres_ca_file: std::path::PathBuf,     // TRUSTIOT_POSTGRES_CA_FILE，必填：唯一信任的 CA
 }
 
 fn tenant_db(platform: &Platform, username: String, password: String) -> Result<TenantDb, service_kit::BoxError> {
@@ -449,7 +449,10 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 ### 連線（`postgres`）
 
 - 伺服器憑證一律驗證（清單 M3）：`postgres::SslMode` 只接受 `verify-full`，宣告成 `TRUSTIOT_POSTGRES_SSLMODE` 的型別，其他值（`disable`、`require`、`verify-ca`⋯）讓服務在接流量前以 exit code 1 停止，錯誤訊息不含設定的值。`postgres::connect_lazy`、`TenantDb::connect_lazy`、`PlatformDb::connect_lazy` 也拒絕 `sslmode` 不是 `verify-full` 或走 Unix socket 的連線設定。
-- 信任的 CA 是 `TRUSTIOT_POSTGRES_CA_FILE`（chart 掛在 `/etc/trustiot/postgres-ca/ca.crt`）加上 webpki-roots 內建的公開根憑證（sqlx 的 rustls 設定無法只信任指定的 CA）。主機名稱一律比對，所以公開 CA 只有在攻擊者能取得資料庫主機名稱的公開憑證時才有影響；叢集內的名稱（`*.svc`）公開 CA 不會簽發。
+- 信任範圍（Laysi/trustiot-v2#272）：伺服器憑證必須鏈到 `TRUSTIOT_POSTGRES_CA_FILE`（`PostgresConfig::ca_file`，chart 掛在 `/etc/trustiot/postgres-ca/ca.crt`）裡的 CA，**只有**這些 CA；公開根憑證（webpki-roots）與系統的憑證庫都不信任。所以公開 CA 為資料庫主機名稱簽發的憑證也會被拒，資料庫用公開 CA 簽的憑證時（例如某些託管 Postgres），要把那個 CA 放進 CA 檔。
+  - `ca_file` 是必填欄位，把 `TRUSTIOT_POSTGRES_CA_FILE` 宣告成不是 `Option` 的 `PathBuf`：沒有設定就以 exit code 1 停止，不退回公開根憑證。檔案在每次建立新連線時讀取，換 CA 不必重啟；檔案可以放多張 CA（換 CA 的過渡期）。
+  - 做法：sqlx 的 rustls 連線器一律先放 `webpki_roots::TLS_SERVER_ROOTS` 再加上設定的 CA，沒有可以關掉的設定或 feature（其他 TLS feature 改載入系統憑證庫）。根目錄 `Cargo.toml` 以 `[patch.crates-io]` 把 `webpki-roots` 換成空清單的 [`crates/webpki-roots-empty`](../webpki-roots-empty/src/lib.rs)，信任清單因此只剩設定的 CA；沒有帶 root 憑證的連線設定（例如自己組的 `PgConnectOptions`）一律連不上。這是暫時做法：sqlx 提供自訂 rustls 設定或不帶預設根憑證的 feature 後，依 Laysi/trustiot-v2#304 改用官方做法並移除這個替換。
+  - 這個替換對整個 workspace 生效，所以其他 crate 不能依賴 `webpki-roots`（需要公開根憑證的 client 請改用系統憑證庫或 `webpki-root-certs`）。`tests/postgres_trust.rs` 檢查 `Cargo.lock`：`webpki-roots` 是這個空 crate、只有 sqlx 用它、sqlx 沒有載入 `rustls-native-certs` 等其他信任來源；升級 sqlx 時這項檢查失敗，代表替換失效，要先處理再合併。
 - 每個新連線在交給 pool 之前執行 `postgres::check_session`，有問題就關閉連線並記一行 ERROR `refused a database session that row-level security would not protect`（`problem` 欄位寫原因）。sqlx 會一直重試到 pool 的 acquire timeout，之後 `begin`、`ping` 回 `TenantDbError::UnsafeSession`，readiness 失敗。檢查項目（`UnsafeSession`）：
 
 | 問題 | 原因 |
@@ -502,7 +505,8 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 | `cargo test -p service-kit --test otlp` | OTLP 匯出到假的接收端：預設關閉、帶 trace id、指標送出、不含 body；collector 連線被重設或回 400 時，`debug`、`trace` 與針對 SDK 的指令下，端點路徑、SDK 環境變數與 collector 回應的 canary 都不出現在 stdout 與 stderr；帶 query 的端點被拒絕且不印出 | 無 |
 | `cargo test -p service-kit --test container` | 範例服務在容器內以 PID 1 執行（唯讀根目錄、任意 UID），`stop` 時收尾並以 0 結束 | podman 或 docker，會拉 `gcr.io/distroless/cc-debian13` |
 | `cargo test -p service-kit --test job_lock` | 兩個副本互斥、session 中斷、guard 釋放、連線回到 pool、工作 panic 後排程繼續且日誌不含 panic 訊息；網路分割（經本機 TCP 代理，代理改成黑洞後丟棄封包但不關連線）時持有者在鎖逾時內停止工作，取鎖與釋放鎖在鎖逾時內放棄 | `TEST_DATABASE_URL`，或 podman 或 docker（會拉 `postgres:18.6-alpine`） |
-| `cargo test -p service-kit --test tenant_db` | 租戶隔離：沒設定租戶查不到也寫不進任何列；租戶 A 讀不到、改不到、寫不進租戶 B 的列；pool 重用連線時租戶不會帶到下一個交易；服務角色不是擁有者、沒有 BYPASSRLS、關不掉 RLS；不安全的連線被拒；平台角色只看得到開放的表；outbox 範本（租戶事件、全平台事件、消費端讀取）；伺服器憑證與主機名稱驗證；範例服務在 `sslmode` 不是 `verify-full` 時拒絕啟動，`/v1/items` 只回 token 租戶的資料 | podman 或 docker（會拉 `postgres:18.6-alpine`，以測試時產生的 CA 啟用 TLS）；不使用 `TEST_DATABASE_URL`，因為測試要以 superuser 建角色，並需要知道伺服器的 CA |
+| `cargo test -p service-kit --test tenant_db` | 租戶隔離：沒設定租戶查不到也寫不進任何列；租戶 A 讀不到、改不到、寫不進租戶 B 的列；pool 重用連線時租戶不會帶到下一個交易；服務角色不是擁有者、沒有 BYPASSRLS、關不掉 RLS；不安全的連線被拒；平台角色只看得到開放的表；outbox 範本（租戶事件、全平台事件、消費端讀取）；伺服器憑證與主機名稱驗證；範例服務在 `sslmode` 不是 `verify-full` 或沒有設定 `TRUSTIOT_POSTGRES_CA_FILE` 時拒絕啟動，`/v1/items` 只回 token 租戶的資料 | podman 或 docker（會拉 `postgres:18.6-alpine`，以測試時產生的 CA 啟用 TLS）；不使用 `TEST_DATABASE_URL`，因為測試要以 superuser 建角色，並需要知道伺服器的 CA |
+| `cargo test -p service-kit --test postgres_trust` | 只信任設定的 CA：sqlx 編進來的 `webpki-roots` 是空清單，`Cargo.lock` 裡只有 sqlx 用它、sqlx 沒有載入系統憑證庫等其他信任來源；對真的 Postgres：設定的 CA（含多張 CA 的檔案）連得上，別的 CA 簽的、主機名稱不符的、沒有設定 CA 的都被拒 | 前兩項無；真 Postgres 那項要 podman 或 docker（同 `tenant_db`） |
 | `cargo test -p sql-check` | 由字串組成的 SQL 與 kit 以外的租戶設定（`tools/sql-check`） | 無 |
 | `cargo test -p service-kit --test dependency_isolation` | 關閉 feature 時不依賴 contract，開啟時依賴 | 無 |
 | `cargo test -p service-kit --test chart_contract` | kit 的預設 API 埠、健康埠、探針的路徑與埠（`health`）與收尾時間符合 `deploy/chart/values.yaml` | 無 |
