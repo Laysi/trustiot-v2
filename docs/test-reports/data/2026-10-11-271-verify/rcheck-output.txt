@@ -1,0 +1,228 @@
+rcheck: queued at 21:41:02; running now: nothing
+rcheck: started at 21:41:02 in /home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a1179debe52bc28a3
+### HEAD b4c748bdb4e431e3976f75be62f8ae429a21e75d + working tree
+ M tools/sql-check/README.md
+ M tools/sql-check/src/lib.rs
+?? crates/outbox/tests/verify_271.rs
+### cargo fmt --all --check
+exit=0
+### cargo clippy --workspace --all-targets --locked -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 24.36s
+exit=0
+### cargo test --locked -p sql-check -p repo-check
+     Running unittests src/lib.rs (target/debug/deps/repo_check-cb97eb5799213f90)
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs (target/debug/deps/repository-3bb08d58df261a4f)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/sql_check-1bc345e149b707e5)
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/check.rs (target/debug/deps/check-600082b3a3b97008)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.07s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+exit=0
+### cargo test --locked -p outbox
+     Running unittests src/lib.rs (target/debug/deps/outbox-6346494410fd1d80)
+test consumer::tests::decode_errors_retry_only_newer_versions ... ok
+test aggregate::tests::ids_are_bounded_and_printable ... ok
+test aggregate::tests::kinds_are_lower_snake_case ... ok
+test consumer::tests::subscription_names_are_checked ... ok
+test position::tests::positions_order_by_transaction_then_row ... ok
+test position::tests::positions_round_trip_as_text ... ok
+test redact::tests::messages_are_replaced_by_kinds ... ok
+test schema::tests::schema_names_need_no_quoting ... ok
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/crash.rs (target/debug/deps/crash-fa1e1e02a1139b4a)
+test an_event_committed_before_the_producer_is_killed_is_delivered_after_restart ... ok
+test a_consumer_killed_mid_delivery_processes_the_event_once_after_restart ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.03s
+     Running tests/delivery.rs (target/debug/deps/delivery-0e66844f7ad45bc1)
+test begin_runs_in_the_delivery_transaction ... ok
+test an_event_committed_late_is_delivered_not_skipped ... ok
+test a_duplicate_delivery_is_processed_once ... ok
+test a_slow_handler_that_has_not_written_does_not_hold_back_other_consumers ... ok
+test a_new_subscription_can_start_after_the_history ... ok
+test an_aggregate_keeps_its_order_when_transaction_ids_are_inverted ... ok
+test a_subscription_cannot_switch_producers ... ok
+test concurrent_writers_and_two_replicas_process_each_event_once_in_order ... ok
+test lag_counts_committed_events_not_yet_processed ... ok
+test failures_are_retried_in_place_or_dead_lettered ... ok
+test shutdown_finishes_the_event_in_flight_and_leaves_the_rest_of_the_batch ... ok
+test replaying_from_a_position_rebuilds_the_same_state ... ok
+test services_need_only_the_documented_grants ... ok
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.50s
+     Running tests/metrics.rs (target/debug/deps/metrics-166047f1506d65a4)
+test the_lag_is_exported_over_otlp ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.20s
+     Running tests/notify.rs (target/debug/deps/notify-cd727e34219ed2c4)
+test a_stale_reading_never_overwrites_a_newer_one ... ok
+test late_and_replayed_events_converge_on_the_current_state ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.09s
+     Running tests/producer.rs (target/debug/deps/producer-f301156740a83c38)
+test events_are_numbered_per_aggregate ... ok
+test an_envelope_is_written_once ... ok
+test a_rolled_back_transaction_leaves_no_event ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.05s
+     Running tests/tenancy.rs (target/debug/deps/tenancy-38d1059c26fa9994)
+test a_reader_without_the_read_policy_stops_the_consumer ... ok
+test the_platform_role_reads_every_tenant_and_each_event_runs_in_its_tenant ... ok
+test an_event_whose_envelope_names_another_tenant_is_dead_lettered ... ok
+test a_handler_cannot_write_another_tenant ... ok
+test a_service_role_that_can_read_across_tenants_is_refused ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.25s
+     Running tests/verify_271.rs (target/debug/deps/verify_271-7d562b96a0b9526b)
+test f1_a_platform_wide_event_never_runs_in_a_leaked_tenant ... ignored, Laysi/trustiot-v2#271 F-1: a session-level tenant leaks into later no-tenant transactions on the pooled connection
+test f2_a_handler_that_switches_the_tenant_is_not_committed ... ignored, Laysi/trustiot-v2#271 F-2: a handler can switch the tenant of its transaction and the consumer commits it
+test f3_a_handler_commit_does_not_split_the_delivery ... ignored, Laysi/trustiot-v2#271 F-3: a handler's own COMMIT splits the delivery and the event is processed twice
+test f4_a_platform_reader_transaction_stays_read_only ... ignored, Laysi/trustiot-v2#271 F-4: SET TRANSACTION READ WRITE undoes the PlatformReader's READ ONLY
+test f5_a_handler_panic_does_not_stop_the_consumer ... ignored, Laysi/trustiot-v2#271 F-5: a handler panic stops Consumer::run for good and freezes the lag gauges
+test the_platform_role_reads_the_log_and_nothing_else ... ok
+test odd_tenant_ids_are_dead_lettered_or_run_in_exactly_the_row_tenant ... ok
+test a_database_restart_mid_run_loses_and_duplicates_nothing ... ok
+test misconfigured_pools_fail_without_processing_anything ... ok
+test three_replicas_and_concurrent_writers_process_each_event_once_in_its_tenant ... ok
+test a_failed_delivery_leaves_nothing_and_the_event_is_processed_once ... ok
+test a_handler_cannot_leave_its_tenant_by_role_or_rls_tricks ... ok
+test unsafe_roles_are_refused_for_either_pool ... ok
+test result: ok. 8 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 31.51s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+exit=0
+### cargo test --locked -p outbox --test verify_271 -- --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/verify_271.rs (target/debug/deps/verify_271-7d562b96a0b9526b)
+
+running 13 tests
+test f1_a_platform_wide_event_never_runs_in_a_leaked_tenant ... ignored, Laysi/trustiot-v2#271 F-1: a session-level tenant leaks into later no-tenant transactions on the pooled connection
+test f2_a_handler_that_switches_the_tenant_is_not_committed ... ignored, Laysi/trustiot-v2#271 F-2: a handler can switch the tenant of its transaction and the consumer commits it
+test f3_a_handler_commit_does_not_split_the_delivery ... ignored, Laysi/trustiot-v2#271 F-3: a handler's own COMMIT splits the delivery and the event is processed twice
+test f4_a_platform_reader_transaction_stays_read_only ... ignored, Laysi/trustiot-v2#271 F-4: SET TRANSACTION READ WRITE undoes the PlatformReader's READ ONLY
+test f5_a_handler_panic_does_not_stop_the_consumer ... ignored, Laysi/trustiot-v2#271 F-5: a handler panic stops Consumer::run for good and freezes the lag gauges
+delivered 5, dead-lettered 5
+dead letters: [("01a12b34-6b55-7124-ba1e-d837beb373b4", "envelope tenant differs from the log row"), ("01a12b34-6b64-73de-a720-a4bb39b9ef81", "envelope tenant differs from the log row"), ("01a12b34-6b6a-7100-900e-63f71ad2a83d", "stored envelope cannot be decoded"), ("01a12b34-6b6f-728c-990e-319066e888d1", "stored envelope cannot be decoded"), ("01a12b34-6b75-778b-b974-a59b216bdf87", "stored envelope cannot be decoded")]
+ledger: [("01a12b34-6a1c-7469-9558-32bbed1bc92a", Some("01928f6e-7a3c-7d4e-8f00-00000000000a"), Some("01928f6e-7a3c-7d4e-8f00-00000000000a"), 1), ("01a12b34-6b7c-7774-b688-ee0d04da56f0", Some("01928f6e-7a3c-7d4e-8f00-00000000000a"), Some("01928f6e-7a3c-7d4e-8f00-00000000000a"), 2), ("01a12b34-6b83-7251-8eda-a79f6131315d", Some("01a12b34-6a1a-7124-9501-8f384b60ba1a"), Some("01a12b34-6a1a-7124-9501-8f384b60ba1a"), 1), ("01a12b34-6b89-73d9-b707-c6a8d9b21f03", Some("00000000-0000-0000-0000-000000000000"), Some("00000000-0000-0000-0000-000000000000"), 1), ("01a12b34-6b8e-70d9-91d8-eac5e69277ae", None, None, 0)]
+misconfigurations:
+reader trusts another CA: ensure outbox query failed: I/O error [error communicating with database: invalid peer certificate: UnknownIssuer]; poll outbox query failed: I/O error [error communicating with database: invalid peer certificate: UnknownIssuer]
+service role trusts another CA: ensure outbox query failed: I/O error [error communicating with database: invalid peer certificate: UnknownIssuer]; poll outbox query failed: I/O error [error communicating with database: invalid peer certificate: UnknownIssuer]
+reader without a CA: ensure outbox query failed: I/O error [error communicating with database: invalid peer certificate: UnknownIssuer]; poll outbox query failed: I/O error [error communicating with database: invalid peer certificate: UnknownIssuer]
+reader with a missing CA file: ensure outbox query failed: I/O error [error communicating with database: No such file or directory (os error 2)]; poll outbox query failed: I/O error [error communicating with database: No such file or directory (os error 2)]
+service role with a missing CA file: ensure outbox query failed: I/O error [error communicating with database: No such file or directory (os error 2)]; poll outbox query failed: I/O error [error communicating with database: No such file or directory (os error 2)]
+reader with a wrong password: ensure outbox query failed: SQLSTATE 28P01 [error returned from database: password authentication failed for user "consumer_1180177_9_platform" at line 317]; poll outbox query failed: SQLSTATE 28P01 [error returned from database: password authentication failed for user "consumer_1180177_9_platform" at line 317]
+service role with a wrong password: ensure outbox query failed: SQLSTATE 28P01 [error returned from database: password authentication failed for user "consumer_1180177_9_app" at line 317]; poll outbox query failed: SQLSTATE 28P01 [error returned from database: password authentication failed for user "consumer_1180177_9_app" at line 317]
+platform role probes:
+42501  SELECT * FROM producer_1180177_24.outbox_aggregate
+42501  SELECT * FROM producer_1180177_24.widget
+42501  SELECT * FROM producer_1180177_24.scratch
+42501  SELECT * FROM consumer_1180177_25.outbox_inbox
+42501  SELECT * FROM consumer_1180177_25.note
+42501  INSERT INTO producer_1180177_24.outbox_event (tx_order, event_id, event_type, aggregate_type, aggregate_id, aggregate_seq, envelope) VALUES (1, gen_random_uuid(), 'x.y', 'w', 'w', 99, '{}')
+42501  UPDATE producer_1180177_24.outbox_event SET event_type = 'x.y'
+42501  DELETE FROM producer_1180177_24.outbox_event
+42501  TRUNCATE producer_1180177_24.outbox_event
+42501  ALTER TABLE producer_1180177_24.outbox_event DISABLE ROW LEVEL SECURITY
+42501  CREATE POLICY mine ON producer_1180177_24.outbox_event USING (true)
+42501  CREATE TABLE producer_1180177_24.planted (n int)
+42501  CREATE TABLE public.planted (n int)
+42501  CREATE SCHEMA planted
+42501  CREATE TEMP TABLE planted (n int)
+42501  (service role) SELECT * FROM producer_1180177_24.outbox_event
+25006  (reader) UPDATE producer_1180177_24.outbox_event
+outbox-test-postgres-1180177-3
+test the_platform_role_reads_the_log_and_nothing_else ... ok
+test misconfigured_pools_fail_without_processing_anything ... ok
+test odd_tenant_ids_are_dead_lettered_or_run_in_exactly_the_row_tenant ... ok
+
+thread 'a_failed_delivery_leaves_nothing_and_the_event_is_processed_once' (1180179) panicked at crates/outbox/tests/verify_271.rs:869:31:
+verify: the handler panics after writing
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+restart: ledger 20 (20 distinct), wrong tenant 0, events 20
+test a_database_restart_mid_run_loses_and_duplicates_nothing ... ok
+failures:
+Retry: first attempt Retry { event_id: EventId(01a12b34-6304-73a7-a27f-8ac30df8d30b), error: HandlerError { kind: Retry, reason: "verify: retry after writing", source: None } }; notes 0, ledger 0, inbox 0, position 0:0
+Permanent: first attempt CaughtUp; notes 0, ledger 0, inbox 0, position 777:2
+Panic: first attempt panicked: true; notes 0, ledger 0, inbox 0, position 0:0
+BackendKilled: first attempt Retry { event_id: EventId(01a12b34-8aa1-75a5-81c1-ff8e7b7fb7cf), error: HandlerError { kind: Retry, reason: "database error", source: Some(Database(PgDatabaseError { severity: Fatal, code: "57P01", message: "terminating connection due to administrator command", detail: None, hint: None, position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("postgres.c"), line: Some(3354), routine: Some("ProcessInterrupts") })) } }; notes 0, ledger 0, inbox 0, position 0:0
+240 events, 3 replicas, 22 injected failures: ledger 240 (240 distinct), wrong tenant 0, order violations 0, notes 181
+test three_replicas_and_concurrent_writers_process_each_event_once_in_its_tenant ... ok
+test a_failed_delivery_leaves_nothing_and_the_event_is_processed_once ... ok
+escape attempts:
+SET ROLE <consumer platform role>: retry, SQLSTATE 42501; tenant B notes 0
+SET ROLE <producer service role>: retry, SQLSTATE 42501; tenant B notes 0
+set_config('role', <consumer platform role>): retry, SQLSTATE 42501; tenant B notes 0
+SET SESSION AUTHORIZATION postgres: retry, SQLSTATE 42501; tenant B notes 0
+RESET ROLE; RESET ALL: retry, SQLSTATE 42501; tenant B notes 0
+SET LOCAL row_security = off: retry, SQLSTATE 42501; tenant B notes 0
+ALTER TABLE note DISABLE ROW LEVEL SECURITY: retry, SQLSTATE 42501; tenant B notes 0
+CREATE POLICY open ON note USING (true): retry, SQLSTATE 42501; tenant B notes 0
+read the producer's outbox_event: retry, SQLSTATE 42501; tenant B notes 0
+CREATE TEMP TABLE: retry, SQLSTATE 42501; tenant B notes 0
+SET ROLE NONE: retry, SQLSTATE 42501; tenant B notes 0
+test a_handler_cannot_leave_its_tenant_by_role_or_rls_tricks ... ok
+refused sessions:
+superuser as the reader: the database role is a superuser or bypasses row-level security, itself or through a role it belongs to
+platform role as the service role: producer_1180177_30.outbox_event policy consumer_read applies to the database role and is not exactly the tenant condition, so it may expose other tenants' rows
+read policy for PUBLIC: producer_1180177_40.outbox_event policy everyone applies to the database role and is not exactly the tenant condition, so it may expose other tenants' rows
+platform role with BYPASSRLS: the database role is a superuser or bypasses row-level security, itself or through a role it belongs to
+service role member of the platform role: producer_1180177_56.outbox_event policy consumer_read applies to the database role and is not exactly the tenant condition, so it may expose other tenants' rows
+test unsafe_roles_are_refused_for_either_pool ... ok
+
+test result: ok. 8 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 30.25s
+
+exit=0
+### cargo test --locked -p outbox --test verify_271 -- --ignored --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/verify_271.rs (target/debug/deps/verify_271-7d562b96a0b9526b)
+
+running 5 tests
+
+thread 'f5_a_handler_panic_does_not_stop_the_consumer' (1182146) panicked at crates/outbox/tests/verify_271.rs:991:9:
+verify: the handler panics once
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+processed 0; run task finished on its own: true (Err(true)); lag gauge None, measured now 1
+
+thread 'f5_a_handler_panic_does_not_stop_the_consumer' (1182146) panicked at crates/outbox/tests/verify_271.rs:1042:5:
+Consumer::run ended after one handler panic; the subscription no longer advances
+first attempt: Retry { event_id: EventId(01a12b34-d368-75d2-a44c-e81800981d85), error: HandlerError { kind: Retry, reason: "verify: fails after its own COMMIT", source: None } }
+SET TRANSACTION READ WRITE: Ok(()); insert: Ok(()); commit: Ok(()); rows: 1
+
+thread 'f4_a_platform_reader_transaction_stays_read_only' (1182145) panicked at crates/outbox/tests/verify_271.rs:723:5:
+assertion `left == right` failed: a PlatformReader transaction wrote a row
+  left: 1
+ right: 0
+tenant A notes after the failed attempt: 1; after retry: 2
+
+thread 'f3_a_handler_commit_does_not_split_the_delivery' (1182144) panicked at crates/outbox/tests/verify_271.rs:479:5:
+assertion `left == right` failed: a failed delivery must leave nothing, and the event is processed once
+  left: (1, 2)
+ right: (0, 1)
+test f5_a_handler_panic_does_not_stop_the_consumer ... FAILED
+test f4_a_platform_reader_transaction_stays_read_only ... FAILED
+ledger after the leak: [("01a12b34-d4b0-7666-b29d-95561251af33", Some("01928f6e-7a3c-7d4e-8f00-00000000000a"), Some("01928f6e-7a3c-7d4e-8f00-00000000000b"), 1), ("01a12b34-d5d6-77d8-8eba-dfac85959512", None, Some("01928f6e-7a3c-7d4e-8f00-00000000000b"), 1)]
+
+thread 'f1_a_platform_wide_event_never_runs_in_a_leaked_tenant' (1182142) panicked at crates/outbox/tests/verify_271.rs:427:5:
+assertion `left == right` failed: the platform-wide event's transaction must have no tenant and see no tenant row
+  left: (Some("01928f6e-7a3c-7d4e-8f00-00000000000b"), 1)
+ right: (None, 0)
+test f3_a_handler_commit_does_not_split_the_delivery ... FAILED
+test f1_a_platform_wide_event_never_runs_in_a_leaked_tenant ... FAILED
+tenant switches: [("set_config local", 1, "CaughtUp, delivered 1"), ("set_config hidden in PL/pgSQL EXECUTE (passes sql-check)", 1, "CaughtUp, delivered 1")]
+
+thread 'f2_a_handler_that_switches_the_tenant_is_not_committed' (1182143) panicked at crates/outbox/tests/verify_271.rs:364:9:
+assertion `left == right` failed: set_config local: the handler of a tenant-A event committed a tenant-B row (CaughtUp, delivered 1)
+  left: 1
+ right: 0
+test f2_a_handler_that_switches_the_tenant_is_not_committed ... FAILED
+
+failures:
+
+failures:
+    f1_a_platform_wide_event_never_runs_in_a_leaked_tenant
+    f2_a_handler_that_switches_the_tenant_is_not_committed
+    f3_a_handler_commit_does_not_split_the_delivery
+    f4_a_platform_reader_transaction_stays_read_only
+    f5_a_handler_panic_does_not_stop_the_consumer
+
+test result: FAILED. 0 passed; 5 failed; 0 ignored; 0 measured; 8 filtered out; finished in 8.83s
+
+error: test failed, to rerun pass `-p outbox --test verify_271`
+exit=101
+rcheck: exit 0 at 21:44:07
