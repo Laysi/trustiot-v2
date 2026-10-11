@@ -1,0 +1,6 @@
+# The SaaS cluster: everything Flux applies from main (deploy/flux/README.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - flux-system
+  - trustiot

@@ -2,11 +2,19 @@
 
 GitHub Actions，三個 workflow：
 
-1. `ci.yml`：每個 PR（不論目標分支，整合分支也一樣）與推到 main 都跑，全綠才能合併（目前由流程把關，見下方「必要檢查與強制方式」）。Rust 跑 fmt、clippy、測試與 sqlx 離線檢查，並以 cargo-deny 檢查授權與漏洞公告（地端產品不能混入 BSL 等不能轉售的授權）；整合測試以 service container 起含 AGE 的 Postgres、ClickHouse 與 Mosquitto，跑完全部 migration 後跑跨租戶負向測試（RLS、row policy、AGE 角色）；閘道器程式交叉編譯成 aarch64，agent 用 testkit 的假 Modbus 端點跑故障注入測試；前端跑 Bun 安裝、型別檢查、lint、單元測試與建置；重新產生 `api/openapi.json` 與前端 client，有差異就失敗；helm lint，兩份 values 各自 helm template 後以 kubeconform 驗證（`bun test deploy/chart` 一次跑完，也檢查 chart 自己的安全規則，見 `deploy/chart/README.md`）；SaaS 主機安裝程式的型別檢查、測試與建置（`deploy/host`）；gitleaks 掃描祕密。各項由哪個 job 負責、哪些還沒加入，見下方「ci.yml 的 job」。Codex 審查設為 PR 的必要檢查，是伺服器端的關卡；本機 pre-commit 只是提早攔下。2026-10-11 起（Laysi/trustiot-v2#309）每個 job 都在 arm64 runner 上執行，`rust`、`cargo-deny`、`helm`、`host` 依變更的路徑決定是否執行，見下方「依變更路徑決定 job」。
+1. `ci.yml`：每個 PR（不論目標分支，整合分支也一樣）與推到 main 都跑，release.yml 開的 deploy PR 則由 release.yml 以 `workflow_dispatch` 觸發（見下方「SaaS 以 GitOps 部署」），全綠才能合併（目前由流程把關，見下方「必要檢查與強制方式」）。Rust 跑 fmt、clippy、測試與 sqlx 離線檢查，並以 cargo-deny 檢查授權與漏洞公告（地端產品不能混入 BSL 等不能轉售的授權）；整合測試以 service container 起含 AGE 的 Postgres、ClickHouse 與 Mosquitto，跑完全部 migration 後跑跨租戶負向測試（RLS、row policy、AGE 角色）；閘道器程式交叉編譯成 aarch64，agent 用 testkit 的假 Modbus 端點跑故障注入測試；前端跑 Bun 安裝、型別檢查、lint、單元測試與建置；重新產生 `api/openapi.json` 與前端 client，有差異就失敗；helm lint，兩份 values 各自 helm template 後以 kubeconform 驗證（`bun test deploy/chart` 一次跑完，也檢查 chart 自己的安全規則，見 `deploy/chart/README.md`）；SaaS 主機安裝程式的型別檢查、測試與建置（`deploy/host`）；gitleaks 掃描祕密。各項由哪個 job 負責、哪些還沒加入，見下方「ci.yml 的 job」。Codex 審查設為 PR 的必要檢查，是伺服器端的關卡；本機 pre-commit 只是提早攔下。2026-10-11 起（Laysi/trustiot-v2#309）每個 job 都在 arm64 runner 上執行，`rust`、`cargo-deny`、`helm`、`host` 依變更的路徑決定是否執行，見下方「依變更路徑決定 job」。
 2. `release.yml`：打 tag 時跑。容器映像只出 arm64：Rust 先交叉編譯再放進映像，推到 GHCR，以 cosign 簽章並附 SBOM；SaaS 主機與展示機（Mac M1）都要是 arm64，地端客戶若用 x86 主機，到時再加 amd64。Helm chart 打包推到 GHCR。閘道器 agent 與 updater 的 aarch64 執行檔附建置來源證明，由 CI 以 OTA 簽章金鑰簽章：金鑰存在受保護的 GitHub environment，只有 main 上的 tag 能用，每次簽章都要人工核准。另外產出離線安裝包（MS6）；release notes 沿用 `Laysi/release-notes-action`。
 3. `nightly.yml`：每晚用 k3d 部署整套 chart（兩份 values 各一次），裝好 Istio ambient 後跑冒煙測試與入口 e2e 測試，失敗時開 issue 通知；PR 只在帶 `smoke` label 時才部署；依賴更新交給 Renovate。做什麼、怎麼通知與失敗時怎麼辦見下方「nightly.yml」與「Renovate」。
 
 SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定放在 `deploy/flux/`；發版就是合併一個改 chart 版本號的 PR（由 release 流程自動開）。GitHub 不持有任何部署憑證，主機也不必對外開放，叢集只存一把唯讀的 GHCR 拉取 token；Flux 控制器的記憶體算進主機規格（MS3 重測）。地端不裝 Flux，由客戶以 Helm 安裝或用離線安裝包。
+
+2026-10-11 實作（Laysi/trustiot-v2#70，操作與建立叢集的步驟見 [deploy/flux/README.md](../../deploy/flux/README.md)）：
+
+- Flux 只裝 source、kustomize、helm 三個控制器（`.prototools` 釘 Flux 2.9.6，控制器映像以 cosign 驗過 fluxcd 官方簽章的 digest 釘選）。叢集以一把唯讀的 deploy key 經 SSH 每分鐘讀一次 main，只取 `deploy/flux/`；叢集沒有能寫 GitHub 的憑證，GitHub 也沒有叢集的憑證。
+- chart 以 OCIRepository 拉取，tag 與 digest 都寫在 `deploy/flux/clusters/saas/trustiot/chart.yaml`（digest 優先），只接受 release.yml 在**該版本的 tag** 上的 keyless 簽章（issuer 與 subject 都是完全比對，比下方「簽章與驗證」的 `v.*` 更窄）。這個檔案由 `scripts/release/flux.ts` 產生，`bun test deploy/flux` 要求它與產生的內容逐字相同，所以驗簽不會被手改拿掉或放寬。
+- 發版：release.yml 的 `deploy-pr` job 在 verify 通過後，以 GitHub API 在 main 上做一個 commit（改 `chart.yaml` 與部署中的 `values-saas.yaml` 副本），推到 `deploy/trustiot-<版本>` 並開 PR；候選版開成 draft，版本不比 main 上的新時不開。合併後 Flux 在 1 分鐘內開始升級，Helm 升級失敗時自動 rollback；revert 該 PR 即回到前一版。2026-10-11 在實驗機以一次性的 git 伺服器、registry 與簽章金鑰實測（[測試報告](../test-reports/2026-10-11-70-flux-gitops.md)）。
+- deploy PR 上的 CI：以 `GITHUB_TOKEN` 開的 PR 不觸發 workflow，`workflow_dispatch` 是唯一的例外，所以 `deploy-pr` job 以 `actions: write` 在該分支執行 ci.yml（ci.yml 因此加了 `workflow_dispatch` 觸發），結果掛在分支的 head commit，PR 看得到；dispatch 失敗時由人關閉再重開 PR。沒有改用 GitHub App 或 PAT 開 PR：那要在 GitHub 存一把能寫 repo 的長期憑證。
+- 前提：repo 設定「Allow GitHub Actions to create and approve pull requests」要打開，否則 `deploy-pr` 推好分支後失敗並附上 compare 連結，由人開 PR。這與下方「GitHub 的 Actions 設定」目前的 `false` 相反，由人決定（見該節）。
 
 ### SaaS 的祕密怎麼進叢集
 
@@ -40,7 +48,7 @@ SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定�
 2. 建立 SaaS 叢集時，由維運人員產生叢集的 age 金鑰對、直接建立 `sops-age` Secret（不經版控），並把私鑰的離線備份交給兩位保管人。
 3. GHCR 拉取 token 用的專用機器帳號（GHCR 只接受 classic personal access token，見密鑰清冊）。
 
-Laysi/trustiot-v2#70 以這些公鑰建立 `.sops.yaml`，並把 sops 與 age 鎖進 `.prototools`。地端不裝 Flux，Secret 由客戶以自己的方式建立，chart 只認 Secret 名稱與 key。
+Laysi/trustiot-v2#70 建立了 `.sops.yaml`（規則：`deploy/flux/clusters/saas/` 下的 `*.sops.yaml`，只加密 `data` 與 `stringData`），收件者還是空的：上列第 1、2 項的公鑰由人提供後填入，在那之前 sops 拒絕加密，不會產生沒有人解得開的檔案。sops 鎖在 `.prototools`（schema 外掛驗 release 的 checksum）。age 的 release 只附 Sigsum 證明、沒有 checksum 檔，proto 的 schema 外掛驗證不了下載，所以改由 `.prototools` 釘選的 Go 從原始碼建置：`bun scripts/flux/age.ts age-keygen ...` 以 `go install filippo.io/age/cmd/...@<版本>` 取得 module，由 Go checksum database 驗證（版本在 `scripts/flux/age.ts` 的 `AGE_VERSION`）。地端不裝 Flux，Secret 由客戶以自己的方式建立，chart 只認 Secret 名稱與 key。
 
 通用規則（[#158](https://github.com/Laysi/trustiot/issues/158)、[#120](https://github.com/Laysi/trustiot/issues/120)、[#122](https://github.com/Laysi/trustiot/issues/122)）：每個 workflow 明列最小權限，每個 job 都寫出自己的 `permissions`，workflow 層級設 `permissions: {}`；第三方 action（含 GitHub 官方的 `actions/*` 與 reusable workflow）一律釘 40 字元的 commit SHA，行尾註解寫版本；容器映像（`docker://` action、job 與 service container）釘 digest；需要雲端憑證時用 OIDC，不放長期金鑰；發佈走 GitHub environment 加人工核准（私有 repo 在目前的 GitHub 方案設不了核准，2026-10-10 決定暫時接受，改以補償措施把關，見下方「發佈核准」）；fork 來的 PR 拿不到任何 secret，所以不使用 `pull_request_target` 與 `workflow_run` 觸發。權限、釘選與觸發條件三項由 CI 的 `workflow-policy` job（`scripts/ci/check-workflows.ts`）檢查每個 workflow 與 `.github/actions/` 下的 action；workflow 本身是否為 GitHub 能解析的語法，由同一個 job 以 actionlint 檢查（見下方「Workflow 語法檢查」）。本地 action（`uses: ./...`）不必釘 SHA，因為它隨使用它的變更一起審查，但只能放在 `.github/actions/` 下，本地 reusable workflow 只能直接放在 `.github/workflows/`，才在檢查範圍內；symbolic link 依實際指向的檔案檢查。
 
@@ -55,7 +63,7 @@ Laysi/trustiot-v2#70 以這些公鑰建立 `.sops.yaml`，並把 sops 與 age �
 | `changes` | `bun scripts/ci/changes.ts`：比較這次要測的 commit 與一個已測過的 commit，輸出 `rust`、`cargo-deny`、`helm`、`host` 各自是否執行（`true` 或 `false`），並在 job summary 列出理由、比較的 commit 與變更的檔案。推到 main 時另以 `actions: read` 讀 main 上近期的 ci 結果；PR 執行的是 PR 自己的腳本，不給它 token。規則見下方「依變更路徑決定 job」 |
 | `rust` | `cargo fmt --all --check`；`cargo clippy --workspace --all-targets --locked -- -D warnings`；`cargo test --workspace --locked`（含 `tools/repo-check` 的 repo 規則、`crates/service-kit` 以 `cargo tree` 檢查關閉 `contract` feature 時不依賴 contract，以及之後各 crate 的測試，例如 agent 以 testkit 假 Modbus 端點跑的故障注入測試）。`--workspace` 只建置預設 feature，所以 service-kit 關閉預設 feature 另跑一次 clippy 與測試（`--package service-kit --no-default-features`）。service-kit 的容器測試（以 PID 1 執行的範例服務、advisory lock 用的 Postgres）與 testkit 跨租戶負向測試框架的自我測試（帶 TLS 的 Postgres）用 runner 上的 podman 或 docker 起容器；GitHub 設定 `CI=true`，找不到可用的容器執行環境時這些測試失敗而不是略過，所以測試步驟通過就表示它們真的跑過。全程設 `SQLX_OFFLINE=true`：sqlx 的查詢巨集只讀進版控的 `.sqlx/`，查詢資料沒更新就編譯失敗。接著執行 `cargo run --locked --package openapi` 重新產生 `api/openapi.json`（`tools/openapi`，各服務由程式碼產生的 OpenAPI 規格加上 M1 錯誤 schema 合併而成），有任何差異就印出差異並失敗，所以改了 API 型別卻沒重新產生規格的 PR 過不了；同一項比對也在 `cargo test --workspace` 裡（`tools/openapi/tests/openapi.rs`）。最後把 `crates/protocol` 與 `edge/` 下的每個成員以 `aarch64-unknown-linux-gnu` 建置；還沒有這些 crate 時只留下說明，protocol crate（Laysi/trustiot-v2#50）併入後自動涵蓋。runner 是 arm64 時主機本身就是這個 target，直接原生建置（沿用前面步驟的編譯快取）；在 x64 主機上才交叉編譯，函式庫建置不需要交叉連結器，第一個閘道器執行檔加入時一併加上。前一項失敗時後面幾項照跑，一次回報全部結果 |
 | `cargo-deny` | `cargo deny --locked check`，規則在根目錄的 `deny.toml`：授權白名單（見下方「授權白名單」）；RustSec 的漏洞、unmaintained 與 unsound 公告一律失敗，要忽略某則公告必須在 `deny.toml` 寫明理由與到期日；Cargo.lock 裡有 yanked 版本就失敗；相依只能來自 crates.io |
-| `helm` | `bun test deploy/chart`：`helm lint --strict`；`values-saas.yaml` 與 `values-onprem.yaml` 各自 helm template 後以 `kubeconform -strict` 驗證（Kubernetes schema 由 kubeconform 下載）；再加上 chart 自己的規則與 README 欄位檢查，見 `deploy/chart/README.md`；入口 e2e 的通道復原邏輯（`deploy/chart/tests/e2e/tunnel-recovery.ts`）有不需要叢集的單元測試，也在這一步跑 |
+| `helm` | `bun test deploy/chart`：`helm lint --strict`；`values-saas.yaml` 與 `values-onprem.yaml` 各自 helm template 後以 `kubeconform -strict` 驗證（Kubernetes schema 由 kubeconform 下載）；再加上 chart 自己的規則與 README 欄位檢查，見 `deploy/chart/README.md`；入口 e2e 的通道復原邏輯（`deploy/chart/tests/e2e/tunnel-recovery.ts`）有不需要叢集的單元測試，也在這一步跑。接著 `bun test deploy/flux`（Laysi/trustiot-v2#70）：SaaS 的 GitOps 樹以 `kubectl kustomize` 建置、以 kubeconform 對釘選版本的 Flux CRD 驗證，Flux 的 manifest 與釘選的 flux CLI 輸出相同，chart 來源的驗簽設定、實例 values 對 chart schema、`.sops.yaml`，見 `deploy/flux/README.md` 的「檢查」 |
 | `host` | SaaS 主機安裝程式（`deploy/host`，Laysi/trustiot-v2#64）：型別檢查；`bun test` 以模擬主機跑每個安裝步驟（乾淨主機一次到位、重跑不改任何東西、拒絕時主機不變、token 不出現在指令列與輸出），並以 runner 的 `systemd-analyze security --offline` 確認 cloudflared unit 的評分不高於 2.0、以 gpg 確認釘選的 Cloudflare 套件簽章金鑰指紋；`CI=true` 時缺 systemd-analyze 或 gpg 會失敗而不是略過；最後編譯 x86_64 與 aarch64 兩個執行檔 |
 | `gitleaks` | 掃描 HEAD 能走到的每個 commit（完整歷史）；merge commit 也以對第一個 parent 的差異掃描，只在合併時加入的內容也查得到。只掃 HEAD，不掃 checkout 時一起抓下來的其他分支。發現時在該檔案與行號標註，附 fingerprint；報告遮蔽祕密值，不會印進紀錄 |
 | `workflow-policy` | `scripts/ci/check-workflows.ts` 檢查 `.github/workflows/` 的 workflow 與 `.github/actions/` 的 action，規則即上方通用規則中的權限、釘選（含本地 action 的位置）與觸發條件三項；`scripts/ci/lint-workflows.ts` 以 actionlint 檢查每個 workflow 的語法、expression 與各 key 可用的 context（2026-10-10，Laysi/trustiot-v2#251；本機 `bun scripts/ci/lint-workflows.ts`）；`scripts/ci/check-secret-handling.ts` 檢查密鑰的處理：repo 內每個 Dockerfile 與 Containerfile 不 COPY 金鑰類檔案、`ARG` 與 `ENV` 不放密鑰、只有旁邊的 ignore 檔以 `*` 開頭時才能複製整個 build context，`--build-arg` 與 `build-args` 不傳密鑰，映像建置一律經 `containerBuildArgs` 檢查實際的 context，`${{ secrets.* }}` 只出現在 step 的 `env` 與 `with`（不寫進 `run`，也不放在 workflow 與 job 層級的 `env`），repo 內的 Kubernetes Secret 一律以 SOPS 加密（規則見 [密鑰與權限](secrets.md)）；再跑 `scripts/` 與 `deploy/chart/tests/` 全部 TypeScript 的型別檢查（2026-10-11，Laysi/trustiot-v2#261）與 `scripts/` 的測試（含本地開發環境 Laysi/trustiot-v2#71 的單元測試；它的端對端測試要以 podman 起整套環境並編譯服務，不在 CI 執行；也含 `changes` 的路徑規則，以及 ci.yml 與 nightly.yml 決定執行與否的條件式，見下方「依變更路徑決定 job」） |
@@ -88,7 +96,7 @@ Laysi/trustiot-v2#70 以這些公鑰建立 `.sops.yaml`，並把 sops 與 age �
 | 全部 | `.github/workflows/ci.yml`、`.github/actions/` 下的任何檔案、`scripts/ci/changes.ts` 本身與它直接或間接 import 的 repo 內檔案（目前是 `scripts/release/lib.ts`，推到 main 時由它挑出比較的基準 commit）、`.prototools`、`.proto/` 下的任何檔案（`rust`、`cargo-deny`、`bun`、`helm`、`kubeconform` 的版本都從這裡來）有變動 |
 | `rust` | 預設執行，只有在每個變動的檔案都屬於下列「`rust` 不讀的路徑」時才略過：`docs/`、`deploy/`（`deploy/chart/values.yaml` 除外，`crates/service-kit/tests/chart_contract.rs` 讀它）、`scripts/`、`frontend/`、`.github/`（上一列的 ci.yml 與本地 action 除外）、`.githooks/`，以及根目錄的 `README.md`、`renovate.json5`、`.gitleaksignore`、`.dockerignore`、`deny.toml`。不論在哪個目錄，`.rs`、`.sql` 與任何大小寫的 `AGENTS.md` 都會讓它執行（`tools/sql-check` 掃描整個 repo 的 Rust 檔與它們 include 的 SQL，`tools/repo-check` 不允許任何 AGENTS.md）。沒有列出的路徑（`crates/`、`services/`、`edge/`、`factory/`、`tools/`、`api/`、`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`clippy.toml`、`.cargo/`、`CLAUDE.md`、`.gitignore`、`datasets/`、`evals/`，以及之後新增的任何目錄）一律執行 |
 | `cargo-deny` | 任何 `Cargo.toml`、`Cargo.lock`、`deny.toml`、`rust-toolchain.toml`、`.cargo/` 下的檔案有變動 |
-| `helm` | `deploy/chart/`、`deploy/istio/` 下的檔案，或 chart 測試讀的 `scripts/lib/stack.ts`、`services/ingest/tests/common/mod.rs`、`docs/architecture/deployment.md` 有變動 |
+| `helm` | `deploy/chart/`、`deploy/istio/`、`deploy/flux/`、`scripts/flux/` 下的檔案，或 chart 測試讀的 `scripts/lib/stack.ts`、`services/ingest/tests/common/mod.rs`、`docs/architecture/deployment.md`，或 `bun test deploy/flux` 讀的 `.sops.yaml`、`scripts/release/flux.ts` 有變動（Laysi/trustiot-v2#70） |
 | `host` | `deploy/host/` 下的檔案有變動（安裝程式的原始碼、測試、相依與建置都在這個目錄） |
 | `gitleaks`、`workflow-policy` | 每次都執行 |
 
@@ -114,7 +122,7 @@ Runner：2026-10-11 依使用者指示（Laysi/trustiot-v2#309），ci.yml 與 n
 
 ### 工具安裝
 
-CI 以 `.github/actions/setup-proto` 安裝 proto：版本與兩種架構（x64、arm64）各自壓縮檔的 SHA-256 寫死在該 action，不執行會變動的線上安裝腳本；再以 proto 安裝 `.prototools` 釘選的工具。沒有內建 proto 外掛的工具（actionlint、cargo-deny、gitleaks、helm、k3d、kubeconform、kubectl，以及 release.yml 用的 zig、cargo-zigbuild、cargo-auditable、syft、cosign）在 `.proto/plugins/` 設定，下載官方 release 並以 release 附的 checksum 驗證（zig 以官方的 minisign 簽章驗證）。Rust 是例外：proto 的 Rust 外掛本身只是呼叫 rustup，而 `proto install rust` 在 GitHub 代管 runner 上無法完成（2026-10-10 以暫時 PR 實測：job 超過 10 分鐘的上限仍未結束，同一個 action 裝 Bun、gitleaks 都正常；沒有 Actions 紀錄的讀取權限，原因待查），所以 setup-proto 在 CI 直接用 runner 映像內建的 rustup 執行不帶參數的 `rustup toolchain install`，依 `rust-toolchain.toml` 安裝釘選的版本、元件與 profile；裝完確認 rustup 選到的工具鏈名稱正好是 `<rust-toolchain.toml 的 channel>-<host triple>`，不符就在這一步失敗，不留到後面的 cargo 指令。本機照常由 proto 經 rustup 安裝。兩邊的 cargo 都由 rustup 讀 `rust-toolchain.toml` 決定版本，`tools/repo-check` 保證它與 `.prototools` 的 `rust` 相同，所以 CI 與本機用的是同一組版本。
+CI 以 `.github/actions/setup-proto` 安裝 proto：版本與兩種架構（x64、arm64）各自壓縮檔的 SHA-256 寫死在該 action，不執行會變動的線上安裝腳本；再以 proto 安裝 `.prototools` 釘選的工具。沒有內建 proto 外掛的工具（actionlint、cargo-deny、gitleaks、helm、k3d、kubeconform、kubectl、flux、sops，以及 release.yml 用的 zig、cargo-zigbuild、cargo-auditable、syft、cosign）在 `.proto/plugins/` 設定，下載官方 release 並以 release 附的 checksum 驗證（zig 以官方的 minisign 簽章驗證）。Go 用 proto 內建的外掛，只用來從原始碼建置 age（age 的 release 沒有 checksum 檔，見上方「SaaS 的祕密怎麼進叢集」）。Rust 是例外：proto 的 Rust 外掛本身只是呼叫 rustup，而 `proto install rust` 在 GitHub 代管 runner 上無法完成（2026-10-10 以暫時 PR 實測：job 超過 10 分鐘的上限仍未結束，同一個 action 裝 Bun、gitleaks 都正常；沒有 Actions 紀錄的讀取權限，原因待查），所以 setup-proto 在 CI 直接用 runner 映像內建的 rustup 執行不帶參數的 `rustup toolchain install`，依 `rust-toolchain.toml` 安裝釘選的版本、元件與 profile；裝完確認 rustup 選到的工具鏈名稱正好是 `<rust-toolchain.toml 的 channel>-<host triple>`，不符就在這一步失敗，不留到後面的 cargo 指令。本機照常由 proto 經 rustup 安裝。兩邊的 cargo 都由 rustup 讀 `rust-toolchain.toml` 決定版本，`tools/repo-check` 保證它與 `.prototools` 的 `rust` 相同，所以 CI 與本機用的是同一組版本。
 
 ### Workflow 語法檢查
 
@@ -145,7 +153,7 @@ ci.yml 不使用任何 secret，每個 job 的 GITHUB_TOKEN 只有 `contents: re
 | fork PR 的 workflow 拿到寫入權限的 token（`send_write_tokens_to_workflows`） | `false` | fork PR 的 `GITHUB_TOKEN` 一律唯讀 |
 | fork PR 的 workflow 要先核准（`require_approval_for_fork_pr_workflows`） | `true` | 有寫入權限的人核准後才會執行 |
 | 預設的 `GITHUB_TOKEN` 權限（`default_workflow_permissions`） | `read` | 沒寫 `permissions` 的 job 也只有讀取權限；我們的 workflow 另外每個 job 都明列 |
-| Actions 能否核准 PR（`can_approve_pull_request_reviews`） | `false` | workflow 不能以 `GITHUB_TOKEN` 核准 PR、繞過人工審查 |
+| Actions 能否開立與核准 PR（`can_approve_pull_request_reviews`） | `false`（待決定，見下） | workflow 不能以 `GITHUB_TOKEN` 開 PR，也不能核准 PR、繞過人工審查 |
 | action 必須釘完整的 commit SHA（`sha_pinning_required`） | `true` | GitHub 拒絕執行沒有釘 SHA 的 action，與 `workflow-policy` 的檢查互為兩層 |
 
 重新確認的指令（需要 repo 的管理權限；每年與人員異動時各做一次，[密鑰輪替 runbook](../runbooks/secrets.md) 也列了這一項）：
@@ -160,6 +168,8 @@ gh api repos/Laysi/trustiot-v2/actions/permissions/fork-pr-workflows-private-rep
 ```
 
 任何一項與上表不同，就表示設定被改過：先改回，再查組織的稽核紀錄找出原因。
+
+`can_approve_pull_request_reviews` 同時控制「開 PR」與「核准 PR」。release.yml 的 `deploy-pr` job 要以 `GITHUB_TOKEN` 開 deploy PR（Laysi/trustiot-v2#70），設定為 `false` 時它只推分支、由人開 PR。改為 `true` 由人決定並記錄在 Laysi/trustiot-v2#70：在目前的 Free 方案，核准不是合併的條件（沒有分支保護），所以多出的「核准」能力不繞過任何強制關卡；有 `pull-requests: write` 的 job 只有 `deploy-pr`，它不執行建置程式碼。改了之後更新上表，升級到能用分支保護的方案時重新檢視（[deploy/flux/README.md](../../deploy/flux/README.md)「需要的 repo 設定」）。
 
 ## release.yml
 
@@ -188,7 +198,8 @@ gh api repos/Laysi/trustiot-v2/actions/permissions/fork-pr-workflows-private-rep
 | `build` | `contents: read` | 交叉編譯並建置映像、產生 SBOM。它執行第三方的建置程式碼（Cargo build script、proc macro），所以沒有任何 secret 與寫入權限，交出去的只有資料：映像的 OCI 壓縮檔與 SBOM，以 artifact 交給 publish，保留 1 天 |
 | `publish` | `contents: write`、`packages: write`、`id-token: write`；`release` environment | 原封不動推送映像（digest 不變）、簽章、附 SBOM attestation；從 repo 打包、推送並簽章 chart；建立 GitHub Release。不執行建置程式碼 |
 | `verify` | `contents: read`、`packages: read` | 以消費端的方式唯讀檢查發佈結果，見下方「簽章與驗證」 |
-| `report` | `contents: write`、`statuses: write` | 不論前面成敗都執行：在 tag 指向的 commit 上設 commit status `release`（失敗時寫出第一個失敗的 job 與原因），並把驗證結果附到 GitHub Release |
+| `deploy-pr` | `contents: write`、`pull-requests: write`、`actions: write` | verify 通過後提議部署到 SaaS（Laysi/trustiot-v2#70）：以 GitHub API 在 main 上做一個 commit（`deploy/flux/` 的 chart 版本、digest 與 `values-saas.yaml` 副本），推到 `deploy/trustiot-<版本>`、開 PR（候選版為 draft），再以 `workflow_dispatch` 在該分支跑 ci.yml。commit 由 GitHub 以 `github-actions[bot]` 建立並簽章，job 不需要 git 憑證。版本不比 main 上部署中的新時不開 PR；重跑時已有的分支與 PR 不重開。見 [deploy/flux/README.md](../../deploy/flux/README.md) |
+| `report` | `contents: write`、`statuses: write` | 不論前面成敗都執行：在 tag 指向的 commit 上設 commit status `release`（失敗時寫出第一個失敗的 job 與原因，含 `deploy-pr`），並把驗證結果附到 GitHub Release |
 
 沒有長期雲端金鑰，也沒有簽章金鑰：GHCR 以各 job 自己的 `GITHUB_TOKEN` 登入；cosign 以 keyless 方式簽章，憑證由 Sigstore Fulcio 依 publish job 的 GitHub OIDC token 簽發，效期約 10 分鐘。
 
@@ -222,7 +233,7 @@ chart 以同樣的身分驗證 `ghcr.io/laysi/trustiot-v2/charts/trustiot:<版�
 
 verify job 對每個映像檢查：tag 指向 publish 推送的 digest；只有一個平台且是 linux/arm64；簽章與 SBOM attestation 以上述身分（再加上 commit SHA 與觸發事件）驗證通過；匿名拉取被拒，即套件是私有的。chart 檢查 tag、簽章與 version、appVersion。另外以不屬於這次發佈的身分驗證一次，必須失敗，證明上述檢查不是空檢查。
 
-Flux（Laysi/trustiot-v2#70）驗證映像與 chart 時，要用支援 cosign v3 bundle 格式的 Flux（2.8 以上），`matchOIDCIdentity` 的 issuer 寫 `^https://token\.actions\.githubusercontent\.com$`，subject 寫 `^https://github\.com/Laysi/trustiot-v2/\.github/workflows/release\.yml@refs/tags/v.*$`。上方「SaaS 以 GitOps 部署」提到由 release 流程自動開改 chart 版本號的 PR，等 `deploy/flux/` 建立後（Laysi/trustiot-v2#70）再加進 release.yml。
+Flux（Laysi/trustiot-v2#70）驗證 chart 時，要用支援 cosign v3 bundle 格式的 Flux（2.8 以上；`.prototools` 釘 2.9.6），`matchOIDCIdentity` 的 issuer 寫 `^https://token\.actions\.githubusercontent\.com$`，subject 寫該版本的完整身分，例如 `^https://github\.com/Laysi/trustiot-v2/\.github/workflows/release\.yml@refs/tags/v1\.2\.0$`（`deploy/flux/clusters/saas/trustiot/chart.yaml`，由 release.yml 的 `deploy-pr` job 寫入）。Flux 只驗證它自己拉的 chart；服務映像由 kubelet 拉取，SaaS 上的映像驗簽要另外的 admission controller（Laysi/trustiot-v2#70 的後續提案）。
 
 ### 公開的透明紀錄（2026-10-10 決定接受）
 
@@ -343,7 +354,7 @@ NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
 | GitHub Actions | `helpers:pinGitHubActionDigestsToSemver`：每個 `uses:` 維持 40 字元 commit SHA，行尾註解維持版本 |
 | Istio 與其他寫在 workflow env 的版本 | env 上方寫 `# renovate:` 註解（資料來源與套件名稱）即由自訂規則更新；Istio 停在 1.30 minor。Gateway API 的版本與雜湊要一起改，不由 Renovate 更新 |
 | 容器映像 | `pinDigests: true`；原始碼、測試、workflow 與 values 裡寫成 `名稱:tag@sha256:…` 的映像由自訂規則讀取，更新時 tag 與 digest 一起換；chart 的 `repository`／`tag`／`digest` 分三行寫法也有規則；`deploy/images/` 的 Containerfile（release.yml 的映像基底）由 Renovate 內建的 dockerfile manager 讀取；`rancher/k3s` 與 kubectl 停在 1.36 minor，換 minor 是刻意的升級 |
-| `.prototools` | Renovate 的 proto manager 認得 `bun` 與 `rust`；有 schema 外掛的工具（`.proto/plugins/` 下的每一個，含 release.yml 用的 zig、cargo-zigbuild、cargo-auditable、syft、cosign）在 pin 上方寫 `# renovate:` 註解，由自訂規則更新。上游在 GitHub 的工具以 `owner/repo` 命名；zig 的上游在 Codeberg（GitHub 上的 repo 在 0.15.2 之後沒有 tag），以 `git-tags` 讀 Codeberg repo 的 tag。新增工具時照樣寫註解，`bun test scripts/nightly` 會檢查註解存在、且指向外掛 `git-url` 的上游 |
+| `.prototools` | Renovate 的 proto manager 認得 `bun`、`go` 與 `rust`；有 schema 外掛的工具（`.proto/plugins/` 下的每一個，含 release.yml 用的 zig、cargo-zigbuild、cargo-auditable、syft、cosign，以及 flux、sops）在 pin 上方寫 `# renovate:` 註解，由自訂規則更新。`flux` 的更新 PR 要在同一個 PR 執行 `bun scripts/flux/components.ts` 重寫 Flux 的 manifest 與控制器 digest，否則 `bun test deploy/flux` 失敗（[deploy/flux/README.md](../../deploy/flux/README.md)「升級 Flux」）。上游在 GitHub 的工具以 `owner/repo` 命名；zig 的上游在 Codeberg（GitHub 上的 repo 在 0.15.2 之後沒有 tag），以 `git-tags` 讀 Codeberg repo 的 tag。新增工具時照樣寫註解，`bun test scripts/nightly` 會檢查註解存在、且指向外掛 `git-url` 的上游 |
 | Rust 工具鏈 | `.prototools` 的 `rust` 與 `rust-toolchain.toml` 的 `channel` 合成一個 PR，兩處同時改（`repo-check` 要求兩者相同） |
 
 PR 標題是 Angular 格式（`chore(deps): …`），標籤 `area:ci` 與 `dependencies`；同時開著的 PR 最多 5 個、每小時最多 2 個，週一 06:00 前（台北時間）才開，資安修補不受排程限制。
@@ -353,6 +364,8 @@ PR 標題是 Angular 格式（`chore(deps): …`），標籤 `area:ci` 與 `depe
 - nightly 的 `GATEWAY_API_VERSION` 與 `GATEWAY_CRDS_SHA256`：同上，版本與雜湊要一起換。
 - `.github/actions/setup-proto/action.yml` 的 `PROTO_VERSION` 與 `PROTO_SHA256_X64`、`PROTO_SHA256_ARM64`：三個值必須一起換，Renovate 只能改版本號。
 - `scripts/lib/stack.ts` 的開發環境映像：只有 digest，tag 寫在註解，Renovate 讀不到。把 tag 寫進字串（`名稱:tag@sha256:…`）就會被納入。
+- `scripts/flux/age.ts` 的 `AGE_VERSION`（age 從原始碼建置的版本）。
+- Flux 控制器映像的 digest（`deploy/flux/clusters/saas/flux-system/kustomization.yaml`）：隨 `flux` 的 pin 由 `bun scripts/flux/components.ts` 重寫，不單獨更新。
 
 ### 需要人在 GitHub 組織裝 Renovate
 

@@ -1,0 +1,41 @@
+# Instance overlay of the SaaS install: host names, external endpoints and the names of the
+# Secrets in this directory (deploy/chart/values.yaml, layer 3; deploy/chart/README.md documents
+# every field). Never put secret values here; they go into SOPS-encrypted Secrets.
+#
+# Fields left empty below are decisions for whoever sets up the SaaS cluster (deploy/flux/README.md,
+# "上線前要填的值"). Until they are set, the chart's schema rejects the values and the HelmRelease
+# stays not ready with that error; nothing is installed half-way.
+
+global:
+  # The read-only GHCR pull token (ghcr-pull.sops.yaml); the same Secret lets Flux pull the chart.
+  imagePullSecrets:
+    - ghcr-pull
+
+# The SaaS domain names (Cloudflare Tunnel routes, deploy/host/README.md).
+hosts:
+  app: ""
+  gateway: ""
+  ota: ""
+
+clickhouse:
+  bundled:
+    # SOPS-encrypted Secret trustiot-clickhouse-admin, key password (docs/architecture/secrets.md).
+    adminSecret:
+      name: trustiot-clickhouse-admin
+    # Volume size of the bundled ClickHouse; size it from the host's disk and expected load
+    # (deploy/chart/README.md, 叢集內的 ClickHouse).
+    storage:
+      size: ""
+
+qdrant:
+  external:
+    # Qdrant Cloud cluster URL (decision 19, Laysi/trustiot-v2#194).
+    url: ""
+    credentialsSecret:
+      name: trustiot-qdrant
+
+observability:
+  sentry:
+    environment: production
+    dsnSecret:
+      name: trustiot-sentry

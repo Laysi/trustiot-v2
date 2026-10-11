@@ -14,6 +14,9 @@
 #            images byte for byte, signs and attests them, pushes and signs the chart, creates
 #            the GitHub Release. Runs no build code.
 # - verify   contents: read, packages: read. Checks the published release as a consumer would.
+# - deploy-pr actions, contents, pull-requests: write. Proposes deploying the release on the
+#            SaaS cluster: a PR against main that changes the chart version in deploy/flux/,
+#            and a ci.yml run on it (a PR opened with GITHUB_TOKEN starts no workflow by itself).
 # - report   contents: write, statuses: write. Posts the `release` commit status on the tagged
 #            commit (also when an earlier job failed) and appends the verification report to the
 #            GitHub Release.
@@ -185,9 +188,40 @@ jobs:
           printf '%s' "$PUBLISHED" > "$RUNNER_TEMP/published.json"
           bun scripts/release/verify.ts --plan "$RUNNER_TEMP/plan.json" --published "$RUNNER_TEMP/published.json"
 
+  deploy-pr:
+    name: deploy-pr
+    needs: [plan, publish, verify]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write # start ci.yml on the deploy branch (workflow_dispatch)
+      contents: write # create the commit and the branch deploy/trustiot-<version>
+      pull-requests: write # open the deploy PR
+    outputs:
+      pull-request: ${{ steps.deploy-pr.outputs.pull-request }}
+      error: ${{ steps.deploy-pr.outputs.error }}
+    steps:
+      # The released commit: the script and the copied shape values come from it. The change is
+      # made through the GitHub API on top of main, so no git credentials are needed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-proto
+        with:
+          tools: bun
+      - id: deploy-pr
+        env:
+          PLAN: ${{ needs.plan.outputs.plan }}
+          PUBLISHED: ${{ needs.publish.outputs.published }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$PLAN" > "$RUNNER_TEMP/plan.json"
+          printf '%s' "$PUBLISHED" > "$RUNNER_TEMP/published.json"
+          bun scripts/release/deploy-pr.ts --plan "$RUNNER_TEMP/plan.json" --published "$RUNNER_TEMP/published.json"
+
   report:
     name: report
-    needs: [plan, build, publish, verify]
+    needs: [plan, build, publish, verify, deploy-pr]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -206,7 +240,7 @@ jobs:
           # scripts/release/exec.ts runStage) says why.
           state=success
           description="$GITHUB_REF_NAME published and verified"
-          for job in plan build publish verify; do
+          for job in plan build publish verify deploy-pr; do
             result="$(jq -r --arg job "$job" '.[$job].result' <<< "$NEEDS")"
             if [[ "$result" != success ]]; then
               error="$(jq -r --arg job "$job" '.[$job].outputs.error // ""' <<< "$NEEDS")"

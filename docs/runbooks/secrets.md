@@ -15,7 +15,7 @@
 
 ## 準備
 
-- 工具：`sops` 與 `age`（版本由 Laysi/trustiot-v2#70 鎖進 `.prototools`，以 `proto install` 安裝）。
+- 工具：`sops`（`.prototools` 釘選，`proto install sops`）與 age（`bun scripts/flux/age.ts age-keygen ...` 或 `bun scripts/flux/age.ts age ...`：以 `.prototools` 釘選的 Go 從原始碼建置，由 Go checksum database 驗證，見 [deploy/flux/README.md](../../deploy/flux/README.md) 的「祕密」）。下文的 `age-keygen` 指的就是 `bun scripts/flux/age.ts age-keygen`。
 - 執行者要是 SOPS 的收件者之一：自己的 age 私鑰在自己的裝置上，以 `SOPS_AGE_KEY_FILE` 指向它。
 - 在 SaaS 主機上操作 Kubernetes 時，經 Cloudflare Access 的維運 SSH 登入，以 `sudo k3s kubectl` 執行。GitHub 不持有叢集憑證，所以這些步驟不能交給 CI。
 - 新的值只經由檔案、stdin 或編輯器輸入，不寫在指令列（[規則 3](../architecture/secrets.md)）。複製到剪貼簿的值用完即清除。
@@ -60,8 +60,8 @@
 GHCR 只接受 classic personal access token，所以以專用機器帳號建立，只勾 `read:packages`，並設定到期日。
 
 1. 以機器帳號建立新 token（到期日最長一年），在團隊行事曆記下到期前 14 天的提醒。
-2. 依「通用步驟：SaaS」更新 `deploy/flux/` 內的 `kubernetes.io/dockerconfigjson` Secret（Laysi/trustiot-v2#70 補上檔名）。
-3. 確認 Flux 拉得到：`flux reconcile source oci <名稱>`（chart 以 HelmRepository 取得時用 `flux reconcile source helm <名稱>`；名稱由 Laysi/trustiot-v2#70 補上），READY 為 True。每次 reconcile 都以這個 Secret 向 GHCR 重新認證，不靠快取。
+2. 重新產生 `deploy/flux/clusters/saas/trustiot/ghcr-pull.sops.yaml`（Secret `ghcr-pull`，namespace `trustiot`），token 只經 stdin：`<輸出 token 的指令> | bun scripts/flux/ghcr-pull-secret.ts --username <機器帳號>`。整份檔案換新，所以不必 `sops edit`；開 PR 合併（「通用步驟：SaaS」的第 4 步）。
+3. 確認 Flux 拉得到：合併後在主機上以 `sudo k3s kubectl -n trustiot annotate --overwrite ocirepository/trustiot reconcile.fluxcd.io/requestedAt="$(date +%s)"` 立刻觸發，再 `sudo k3s kubectl -n trustiot get ocirepository trustiot`，READY 為 True。每次 reconcile 都以這個 Secret 向 GHCR 重新認證，不靠快取。
 4. 確認 kubelet 拉得到：節點上已有快取的映像不會重新拉取，所以另起一個 `imagePullPolicy: Always` 的一次性 Pod，強迫 kubelet 以新 token 向 GHCR 認證。把下列內容存成 `ghcr-pull-check.yaml`（填入 Secret 名稱與目前版本的任一個服務映像）：
 
    ```yaml
@@ -90,7 +90,7 @@ GHCR 只接受 classic personal access token，所以以專用機器帳號建立
              drop: [ALL]
    ```
 
-   `sudo k3s kubectl apply -f ghcr-pull-check.yaml`，再以 `sudo k3s kubectl -n trustiot get events --field-selector involvedObject.name=ghcr-pull-check` 確認有 `Pulled`（Successfully pulled image），沒有 `ErrImagePull` 或 `401`。容器啟動後因為沒有設定而結束是正常的，這裡只確認拉取。最後 `sudo k3s kubectl -n trustiot delete pod ghcr-pull-check`。
+   Secret 名稱是 `ghcr-pull`。`sudo k3s kubectl apply -f ghcr-pull-check.yaml`，再以 `sudo k3s kubectl -n trustiot get events --field-selector involvedObject.name=ghcr-pull-check` 確認有 `Pulled`（Successfully pulled image），沒有 `ErrImagePull` 或 `401`。容器啟動後因為沒有設定而結束是正常的，這裡只確認拉取。最後 `sudo k3s kubectl -n trustiot delete pod ghcr-pull-check`。
 5. 兩項都確認後，刪除舊 token。
 
 ### 內部身分簽章金鑰
@@ -133,9 +133,28 @@ Laysi/trustiot-v2#164 補上。原則：閘道器的 updater 內建公鑰，所�
 2. 在 `.sops.yaml` 的收件者加入新公鑰（舊的先保留），對 `deploy/flux/` 下每個 SOPS 檔案執行 `sops updatekeys -y <檔案>`，開 PR 合併。
 3. 在主機上更新叢集的 Secret，私鑰從檔案經 stdin 傳入：
    `sudo k3s kubectl -n flux-system create secret generic sops-age --from-file=age.agekey=/dev/stdin --dry-run=client -o yaml < <新檔案> | sudo k3s kubectl apply -f -`
-4. 確認 Flux 仍能解密（`flux reconcile kustomization <名稱> --with-source` 後 READY 為 True）。
+4. 確認 Flux 仍能解密：`sudo k3s kubectl -n flux-system annotate --overwrite kustomization/flux-system reconcile.fluxcd.io/requestedAt="$(date +%s)"` 後，`sudo k3s kubectl -n flux-system get kustomization flux-system` 的 READY 為 True。
 5. 從 `.sops.yaml` 移除舊公鑰，再對每個檔案 `sops updatekeys -y`，並以 `sops rotate -i <檔案>` 換掉資料金鑰，開 PR 合併。
 6. 更新離線備份，銷毀舊私鑰與 `<新檔案>`。
+
+### Flux 的 deploy key
+
+叢集以這把唯讀金鑰經 SSH 讀 main（[deploy/flux/README.md](../../deploy/flux/README.md)「建立叢集」第 3 步）。GitHub 允許同一個 repo 有多把 deploy key，所以先加新的再刪舊的，同步不中斷：
+
+1. 產生新金鑰：`ssh-keygen -t ed25519 -N '' -C trustiot-saas-flux-<YYYY-MM-DD> -f flux-deploy-key`，在 GitHub 的 repo 設定加入 `flux-deploy-key.pub`，**不勾** Allow write access。
+2. 把三個檔案複製到主機，更新叢集的 Secret：
+
+   ```sh
+   sudo k3s kubectl -n flux-system create secret generic flux-system \
+     --from-file=identity=flux-deploy-key --from-file=identity.pub=flux-deploy-key.pub \
+     --from-file=known_hosts=github-known-hosts --dry-run=client -o yaml | sudo k3s kubectl apply -f -
+   shred -u flux-deploy-key
+   ```
+
+3. 立刻同步並確認：`sudo k3s kubectl -n flux-system annotate --overwrite gitrepository/flux-system reconcile.fluxcd.io/requestedAt="$(date +%s)"`，再 `sudo k3s kubectl -n flux-system get gitrepository flux-system` 的 READY 為 True。
+4. 在 GitHub 刪除舊的 deploy key。
+
+外洩時先在 GitHub 刪除該 deploy key（同步會停止，正在跑的服務不受影響），再依上面的步驟換新的。它是唯讀的，外洩的影響是 repo 內容被讀取：依「外洩處理」檢查範圍。
 
 ### 維運人員加入與離開
 

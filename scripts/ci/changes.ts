@@ -136,13 +136,25 @@ const HELM_READ_FILES: ReadonlySet<string> = new Set([
   "services/ingest/tests/common/mod.rs",
 ]);
 
-/** `bun test deploy/chart`: the chart, its tests, the mesh values and a few cross-checked files. */
+/**
+ * What `bun test deploy/flux` reads besides deploy/flux/ and the chart (Laysi/trustiot-v2#70):
+ * the SOPS rules and the scripts that its tests load (checked by changes.test.ts).
+ */
+const FLUX_READ_FILES: ReadonlySet<string> = new Set([".sops.yaml", "scripts/release/flux.ts"]);
+
+/**
+ * `bun test deploy/chart` and `bun test deploy/flux`: the chart, its tests, the mesh values, the
+ * SaaS GitOps tree and a few cross-checked files.
+ */
 export function affectsHelm(path: string): boolean {
   return (
     affectsEveryJob(path) ||
     path.startsWith("deploy/chart/") ||
     path.startsWith("deploy/istio/") ||
-    HELM_READ_FILES.has(path)
+    path.startsWith("deploy/flux/") ||
+    path.startsWith("scripts/flux/") ||
+    HELM_READ_FILES.has(path) ||
+    FLUX_READ_FILES.has(path)
   );
 }
 
