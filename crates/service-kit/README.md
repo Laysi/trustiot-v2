@@ -109,7 +109,7 @@ kit 的設定與預設值（環境變數以 `TRUSTIOT` 前綴為例）：
 | `http.request_timeout` | `TRUSTIOT__HTTP__REQUEST_TIMEOUT` | `30s` | handler 產生回應標頭的時間上限，逾時回 504；串流的 body 不受限。用 504 而不是 503，是因為入口會重試 503，非冪等的請求可能被執行兩次；必須大於 0，上限 1 小時 |
 | `shutdown.drain_delay` | `TRUSTIOT__SHUTDOWN__DRAIN_DELAY` | `5s` | 收到 SIGTERM 後照常服務多久，等入口、ztunnel 與 kube-proxy 不再送來新請求；上限 1 小時 |
 | `shutdown.drain_timeout` | `TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT` | `20s` | 停止接受連線後，進行中的請求與背景工作結束的時間上限；必須大於 0，上限 1 小時 |
-| `telemetry.log_filter` | `TRUSTIOT__TELEMETRY__LOG_FILTER` | `info` | 預設等級加上以逗號分隔的 `target=level`，例如 `info,sqlx=warn`；OpenTelemetry SDK 的診斷日誌（target 以 `opentelemetry` 開頭）不論怎麼設，DEBUG 與 TRACE 都不輸出，見[日誌與 trace](#日誌與-trace)的 OTLP 匯出一節 |
+| `telemetry.log_filter` | `TRUSTIOT__TELEMETRY__LOG_FILTER` | `info` | 預設等級加上以逗號分隔的 `target=level`，例如 `info,sqlx=warn`，對所有相依套件都有效，包括透過 `log` crate 發出事件的（例如 `reqwest`）：這些事件以原本的 target 比對；OpenTelemetry SDK 的診斷日誌（target 以 `opentelemetry` 開頭）不論怎麼設，DEBUG 與 TRACE 都不輸出，見[日誌與 trace](#日誌與-trace)的 OTLP 匯出一節 |
 | `telemetry.otlp_endpoint` | `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` | 未設定（不匯出） | OTLP/HTTP 接收端的 base URL（日誌、trace、指標都送到這裡），例如 `http://otel-collector:4318`；只接受 `http://`（mesh 已加密這一段），不得含帳密或 query |
 
 時間長度的上限（`service_kit::http::MAX_REQUEST_TIMEOUT`、`service_kit::shutdown::MAX_DRAIN`）：`http.request_timeout`、`shutdown.drain_delay`、`shutdown.drain_timeout` 各自不得超過 1 小時（剛好 1 小時可以），而且 `drain_delay + drain_timeout` 合計也不得超過 1 小時。超過就在啟動時以設定錯誤拒絕（錯誤訊息寫出設定名稱與環境變數，不寫設定值）。沒有上限時，極端值（例如 `500000000000y`）會讓 SIGTERM 後的時間運算溢位而 panic（`drain_timeout`），或讓服務永遠不退出（`drain_delay`）。
@@ -154,7 +154,7 @@ kit 的設定與預設值（環境變數以 `TRUSTIOT` 前綴為例）：
 - `trace_id`、`span_id`：事件在 span 內才有。每個請求在 `http.request` span 內處理；請求帶 W3C `traceparent` 時延續呼叫端的 trace。
 - 每個請求一行 `request completed`（5xx 是 ERROR 等級的 `request failed`），只記 method、路由樣板（不記實際路徑與 query）、狀態碼與耗時；不記標頭與 body。health 端點不記。
 - handler panic 時回 500，並記一行 ERROR `thread panicked`，含位置與 panic 訊息，所以 panic 與 `expect` 的訊息不能放資料。handler 超過 `http.request_timeout` 時回 504，記一行 WARN。兩者的回應 body 見 [contract feature](#contract-feature)。
-- `telemetry.log_filter` 調整等級。span 不受它影響，一律在 INFO 以上建立，等級調到 `warn` 時，warn 日誌仍帶 trace id。
+- `telemetry.log_filter` 調整等級，`target=level` 指令對所有 target 都有效：經 `log` crate 橋接進來的事件（`reqwest` 等相依套件用 `log` 發日誌）以事件原本的 target 比對，日誌行的 `target` 也是原本的，所以 `debug,reqwest=warn` 讓 reqwest 只剩 WARN 以上。span 不受它影響，一律在 INFO 以上建立，等級調到 `warn` 時，warn 日誌仍帶 trace id。
 
 規則（[觀測文件](../../docs/architecture/observability.md)、功能重建清單 M2）：
 
