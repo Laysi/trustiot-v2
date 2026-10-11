@@ -246,7 +246,7 @@ publish job 在 `release` environment 執行，原本的設計是在 environment
 5. 每個 Gateway 的 `Programmed` 條件為真（Istio 在 helm 結束後才產生入口 pod）。
 6. 沒有 pod 處於 CrashLoopBackOff、ImagePullBackOff、設定錯誤或未就緒；重啟次數記在報告裡。
 7. 每個 Gateway 的 NetworkPolicy 放行的埠，與 Istio 為它產生的 Deployment（探針）和 Service（target port）實際用的埠完全相同：少放行一個，入口就收不到流量或通不過探針；多放行一個，就多開了用不到的埠（例如 Envoy 的指標埠）。chart 的埠是從自己的 Gateway 與 Istio 固定的狀態埠 15021 推得的，這一項以實際安裝的 Istio 版本驗證（Laysi/trustiot-v2#287，見 `deploy/chart/README.md` 的「入口 pod 的埠」）。
-8. 每個 workload 的 HTTP 探針（startup、liveness、readiness），凡是有 Service 對外開那個埠的，那個 Service 的 EndpointSlice 在該埠至少有一個就緒的端點。不經網路呼叫：chart 預設拒絕所有連入（決策 27，Laysi/trustiot-v2#63），API server 的 Service proxy 從節點連 pod，會被 NetworkPolicy 與 AuthorizationPolicy 擋下；探針本身已由 kubelet 經 ambient 的探測位址呼叫過，第 6 項的就緒就是結果。
+8. 每個 workload 的 HTTP 探針（startup、liveness、readiness），凡是有 Service 對外開那個埠的，那個 Service 的 EndpointSlice 在該埠至少有一個就緒的端點。不經網路呼叫：chart 預設拒絕所有連入（決策 27，Laysi/trustiot-v2#63），API server 的 Service proxy 從節點連 pod，會被 NetworkPolicy 與 AuthorizationPolicy 擋下；探針本身已由 kubelet 經 ambient 的探測位址呼叫過，第 6 項的就緒就是結果。服務的探針連健康埠（`health`，Laysi/trustiot-v2#286），Service 不開這個埠，所以服務只由第 6 項涵蓋；這一項檢查的是 smoke 的替身服務（探針連 `http`）與 ClickHouse 這類由 Service 開放探針埠的工作負載。
 9. `helm uninstall` 之後，release 的每個物件都不存在。
 10. 入口 e2e 測試（`deploy/chart/tests/e2e/ingress.e2e.ts`，Laysi/trustiot-v2#62）：在 `nightly-e2e-<shape>` 命名空間以對應的型態跑一次，驗證 cookie 驗證、例外路徑、路徑繞過與身分服務停機時的行為；這也是 #62 要求的 k3d 測試，每晚執行。請求經 `kubectl port-forward` 直接進入口 pod，所以不涵蓋入口的 NetworkPolicy（那一項只在 lab 以 `E2E_SSH_JUMP` 驗證）。通道在請求進行中斷線時，測試會重開通道並重送一次（Laysi/trustiot-v2#261，細節見該目錄的 README）。
 

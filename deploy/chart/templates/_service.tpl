@@ -4,6 +4,36 @@ Every template takes dict "root" $ "name" <service> "config" <effective settings
 where the settings come from "trustiot.serviceConfig".
 */}}
 
+{{/*
+Container ports of a service: its ports, then the health port (healthPort, named "health"),
+where the service serves /healthz and /readyz and nothing else. The Service exposes only ports:
+the kubelet is the health port's one client, and no ingress route can name it. Fails when a port
+reuses the health port's name or number, or two ports share a name or number.
+Argument: dict "name" <service> "config" <effective settings>.
+Returns YAML {ports: [{name, containerPort, ...}]}; use with fromYaml.
+*/}}
+{{- define "trustiot.service.containerPorts" -}}
+{{- $health := dict "name" "health" "containerPort" (int .config.healthPort) -}}
+{{- $ports := list -}}
+{{- range .config.ports -}}
+{{- if or (eq .name "health") (eq (int .containerPort) $health.containerPort) -}}
+{{- fail (printf "services.%s: ports must not use the name health or the health port %d (healthPort)" $.name $health.containerPort) -}}
+{{- end -}}
+{{- $ports = append $ports . -}}
+{{- end -}}
+{{- $ports = append $ports $health -}}
+{{- $names := list -}}
+{{- $numbers := list -}}
+{{- range $ports -}}
+{{- $names = append $names .name -}}
+{{- $numbers = append $numbers (int .containerPort) -}}
+{{- end -}}
+{{- if or (ne (len $names) (len (uniq $names))) (ne (len $numbers) (len (uniq $numbers))) -}}
+{{- fail (printf "services.%s: port names and container ports must be unique" .name) -}}
+{{- end -}}
+{{- dict "ports" $ports | toYaml -}}
+{{- end -}}
+
 {{- define "trustiot.service.serviceAccount" -}}
 apiVersion: v1
 kind: ServiceAccount
@@ -114,14 +144,10 @@ Returns a YAML list; use with fromYamlArray.
 {{- if not $config.probes.readiness -}}
 {{- fail (printf "services.%s: probes.readiness is required (docs/architecture/deployment.md)" .name) -}}
 {{- end -}}
+{{- $containerPorts := (include "trustiot.service.containerPorts" . | fromYaml).ports -}}
 {{- $portNames := list -}}
-{{- $portNumbers := list -}}
-{{- range $config.ports -}}
+{{- range $containerPorts -}}
 {{- $portNames = append $portNames .name -}}
-{{- $portNumbers = append $portNumbers (int .containerPort) -}}
-{{- end -}}
-{{- if or (ne (len $portNames) (len (uniq $portNames))) (ne (len $portNumbers) (len (uniq $portNumbers))) -}}
-{{- fail (printf "services.%s: port names and container ports must be unique" .name) -}}
 {{- end -}}
 {{- range $kind, $probe := $config.probes -}}
 {{- range $handler := list "httpGet" "tcpSocket" "grpc" -}}
@@ -195,7 +221,7 @@ spec:
           image: {{ include "trustiot.serviceImage" (dict "root" .root "name" .name "image" $config.image) }}
           imagePullPolicy: {{ $config.image.pullPolicy }}
           ports:
-            {{- range $config.ports }}
+            {{- range $containerPorts }}
             - name: {{ .name }}
               containerPort: {{ .containerPort }}
               protocol: {{ .protocol | default "TCP" }}

@@ -8,7 +8,9 @@ that starts in the node's network namespace and goes to an ambient pod to this l
 address, and ztunnel passes it straight to the application port, without mTLS or
 AuthorizationPolicy. Kubelet probes arrive this way, but so does any other process on the node's
 network, such as a hostNetwork pod in another namespace. The NetworkPolicy therefore admits this
-source only on the workload's probe ports ("trustiot.mesh.probePorts").
+source only on the workload's probe ports ("trustiot.mesh.probePorts"). Services probe their
+health port, which serves /healthz and /readyz only, so the node never reaches their API
+(Laysi/trustiot-v2#286).
 */}}
 {{- define "trustiot.mesh.hostSource" -}}
 169.254.7.127/32
@@ -16,8 +18,10 @@ source only on the workload's probe ports ("trustiot.mesh.probePorts").
 
 {{/*
 Container ports and probes of an enabled service or in-cluster component, as its pod spec
-renders them. A component <name> defines "trustiot.<name>.pod", which its own template also
-uses for the container's ports and probes, so the two cannot drift apart.
+renders them. A service's come from "trustiot.service.containerPorts" (its ports plus the health
+port) and its probes, as its Deployment renders them. A component <name> defines
+"trustiot.<name>.pod", which its own template also uses for the container's ports and probes, so
+the two cannot drift apart.
 Argument: dict "root" $ "name" <service or component>.
 Returns YAML {ports: [{name, containerPort}], probes: {startup, liveness, readiness}}; use with
 fromYaml.
@@ -28,7 +32,8 @@ fromYaml.
 {{- include (printf "trustiot.%s.pod" .name) .root -}}
 {{- else -}}
 {{- $config := include "trustiot.serviceConfig" (dict "root" .root "name" .name "values" (get .root.Values.services .name)) | fromYaml -}}
-{{- dict "ports" $config.ports "probes" $config.probes | toYaml -}}
+{{- $ports := (include "trustiot.service.containerPorts" (dict "name" .name "config" $config) | fromYaml).ports -}}
+{{- dict "ports" $ports "probes" $config.probes | toYaml -}}
 {{- end -}}
 {{- end -}}
 

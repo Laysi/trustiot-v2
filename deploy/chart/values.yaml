@@ -98,6 +98,10 @@ serviceDefaults:
     - name: http
       containerPort: 8080
       appProtocol: http
+  # Container port of the health endpoints, named "health": services serve /healthz and /readyz
+  # there and nothing else (crates/service-kit, http.health_listen_addr). The probes use it, and
+  # the Service does not expose it: only the kubelet calls it.
+  healthPort: 8081
   # Extra environment variables for every service, so they must not read Secrets. Names starting
   # with TRUSTIOT_ plus a letter or digit, SENTRY_ or OTEL_ are reserved for the chart.
   env: []
@@ -120,24 +124,26 @@ serviceDefaults:
       drop:
         - ALL
   # Kubernetes probe objects. Liveness and readiness are mandatory; set startup to {} to disable it.
+  # They use the health port: the node reaches a pod only on its probe ports (README.md, "節點來源"),
+  # so a probe on http would open the whole API to every process on the node.
   probes:
     startup:
       httpGet:
         path: /healthz
-        port: http
+        port: health
       periodSeconds: 2
       failureThreshold: 30
     liveness:
       httpGet:
         path: /healthz
-        port: http
+        port: health
       periodSeconds: 10
       timeoutSeconds: 2
       failureThreshold: 3
     readiness:
       httpGet:
         path: /readyz
-        port: http
+        port: health
       periodSeconds: 5
       timeoutSeconds: 2
       failureThreshold: 2
