@@ -1,0 +1,13 @@
+bun test v1.4.2 (744846f84)
+
+docs/test-reports/data/2026-10-11-288-tunnel-recovery-wsl/legacy-vs-fixed.test.ts:
+PRE-FIX RESULT: threw = no HTTP response for /api/whoami: "" | reopens = 0
+(pass) pre-fix logic: fault injection makes the request fail [56.43ms]
+LOG: tunnel to the ingress gateway exited (1) during a request (no HTTP response for /api/whoami: ""); reopening it
+FIXED RESULT: status = 200 body = gateway | reopens = 1
+(pass) fixed logic: same fault injection is recovered [429.18ms]
+
+ 2 pass
+ 0 fail
+ 4 expect() calls
+Ran 2 tests across 1 file. [504.00ms]

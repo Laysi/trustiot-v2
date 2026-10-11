@@ -25,6 +25,23 @@ use tracing_subscriber::registry::LookupSpan;
 
 use super::redact::{REDACTED, is_sensitive};
 
+/// Whether events with this target come from the OpenTelemetry SDK crates (`opentelemetry`,
+/// `opentelemetry_sdk`, `opentelemetry-otlp`, `opentelemetry-http`, ...). The SDK names its
+/// crate in the target of its own diagnostics.
+pub(crate) fn is_sdk_target(target: &str) -> bool {
+    target.starts_with("opentelemetry")
+}
+
+/// Whether an event is dropped whatever the log filter says: the SDK's diagnostics below INFO.
+///
+/// At DEBUG and TRACE the exporter records the full request URL (`HttpClient.NetworkError`,
+/// `HttpClient.StatusError`), the collector's response body, and its own configuration. The URL's
+/// path can carry a token, so these levels never leave the process. The INFO, WARN and ERROR
+/// diagnostics of the pinned SDK versions do not contain the URL.
+pub(crate) fn sdk_diagnostic_suppressed(target: &str, level: &Level) -> bool {
+    is_sdk_target(target) && *level > Level::INFO
+}
+
 /// Where JSON log lines go: stdout in services, a buffer in tests.
 pub(crate) trait LineSink: Send + Sync + 'static {
     /// Writes one complete line, including its trailing newline.
@@ -275,6 +292,11 @@ where
         let mut recorded = Recorded::default();
         event.record(&mut recorded);
         let target = recorded.log_target.as_deref().unwrap_or(metadata.target());
+        // The filter judges by the event's own target; an event bridged from the `log` crate
+        // carries its real target only as a field, so the decision is repeated here.
+        if sdk_diagnostic_suppressed(target, metadata.level()) {
+            return;
+        }
         let span_context = self.span_context(event, &ctx);
         let now = SystemTime::now();
 
@@ -300,7 +322,7 @@ where
         // The SDK's own diagnostics stay on stdout: exporting them could loop while the export
         // they describe is failing.
         if let Some(logger) = &self.otel
-            && !target.starts_with("opentelemetry")
+            && !is_sdk_target(target)
         {
             let mut record = logger.create_log_record();
             record.set_timestamp(now);
@@ -340,6 +362,17 @@ impl<W> Debug for LogLayer<W> {
 mod tests {
     use super::*;
     use crate::telemetry::test_support::{capture_subscriber, lines};
+
+    /// One event of each level on `target`; the debug and trace ones carry a URL with a canary.
+    macro_rules! emit_all_levels {
+        ($target:literal) => {
+            tracing::error!(target: $target, "kept");
+            tracing::warn!(target: $target, "kept");
+            tracing::info!(target: $target, "kept");
+            tracing::debug!(target: $target, url = "http://c/canary", "x");
+            tracing::trace!(target: $target, url = "http://c/canary", "x");
+        };
+    }
 
     #[test]
     fn events_become_json_lines_with_redacted_fields() {
@@ -424,6 +457,58 @@ mod tests {
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert_eq!(lines[0]["message"], "kept");
         assert!(lines[0]["trace_id"].is_string(), "{}", lines[0]);
+    }
+
+    #[test]
+    fn sdk_diagnostics_below_info_are_dropped_at_every_filter() {
+        // `trace` for everything, including each OpenTelemetry crate by name.
+        let (subscriber, capture, _provider) = capture_subscriber(
+            "trace,opentelemetry=trace,opentelemetry_sdk=trace,opentelemetry-otlp=trace,\
+             opentelemetry-http=trace",
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            emit_all_levels!("opentelemetry");
+            emit_all_levels!("opentelemetry_sdk");
+            emit_all_levels!("opentelemetry-otlp");
+            emit_all_levels!("opentelemetry-http");
+            // Other targets are not affected.
+            tracing::debug!(target: "sqlx::query", "own debug");
+            tracing::trace!("own trace");
+        });
+        let lines = lines(&capture);
+        let kept: Vec<&str> = lines
+            .iter()
+            .filter_map(|line| line["message"].as_str())
+            .collect();
+        assert_eq!(
+            kept.iter().filter(|m| **m == "kept").count(),
+            4 * 3,
+            "{lines:?}"
+        );
+        assert!(
+            kept.contains(&"own debug") && kept.contains(&"own trace"),
+            "{kept:?}"
+        );
+        let raw = String::from_utf8(capture.0.lock().expect("capture lock").clone())
+            .expect("JSON is UTF-8");
+        assert!(!raw.contains("canary"), "{raw}");
+    }
+
+    #[test]
+    fn bridged_log_events_are_judged_by_their_original_target() {
+        // The `log` crate's events carry their real target in a field.
+        let (subscriber, capture, _provider) = capture_subscriber("trace");
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(log.target = "opentelemetry-otlp", "bridged sdk debug");
+            tracing::warn!(log.target = "opentelemetry-otlp", "bridged sdk warn");
+            tracing::debug!(log.target = "reqwest::connect", "bridged other");
+        });
+        let lines = lines(&capture);
+        let kept: Vec<&str> = lines
+            .iter()
+            .filter_map(|line| line["message"].as_str())
+            .collect();
+        assert_eq!(kept, ["bridged sdk warn", "bridged other"], "{lines:?}");
     }
 
     #[test]

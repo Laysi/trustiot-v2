@@ -1,0 +1,4 @@
+Linux 6.18.33.2-microsoft-standard-WSL2 x86_64
+1.4.2
+probe right after freePort(): {"connected":20}
+probe 20 ms after freePort(): {"refused (ECONNREFUSED)":20}
