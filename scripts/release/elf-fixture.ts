@@ -1,6 +1,6 @@
 /**
- * Test fixture: the smallest 64-bit little-endian ELF file that the binary checks in lib.ts
- * read (aarch64ElfProblem, staticElfProblem). Only tests import it.
+ * Test fixture: the smallest 64-bit little-endian ELF file that the binary checks read
+ * (lib.ts's aarch64ElfProblem, rust-build.ts's staticElfProblem). Only tests import it.
  */
 
 /** `e_machine` values: aarch64 and x86_64. */

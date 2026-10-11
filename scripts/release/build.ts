@@ -7,7 +7,7 @@
  * Rust images: the binaries are cross-compiled for aarch64-unknown-linux-musl in one Cargo
  * run, with Zig as C compiler and linker (cargo-zigbuild) and the dependency list embedded
  * (cargo-auditable), then each is packed with deploy/images/rust-binary.Containerfile. The
- * Cargo command is lib.ts's rustCrossCompileCommand, which the nightly's service images share.
+ * Cargo command is rust-build.ts's rustCrossCompileCommand, which the nightly's service images share.
  * Containerfile images are built from their directory. Builds never run arm64 code: a
  * Containerfile whose RUN steps execute in the arm64 stage fails without an emulator.
  *
@@ -36,12 +36,10 @@ import {
   parsePlan,
   renderRustContainerfile,
   resolveBinary,
-  rustCrossCompileCommand,
   rustSpec,
-  staticElfProblem,
   summarizeSpdx,
-  toolchainChannel,
 } from "./lib.ts";
+import { rustCrossCompileCommand, staticElfProblem, toolchainChannel } from "./rust-build.ts";
 
 const ROOT = resolve(import.meta.dir, "..", "..");
 

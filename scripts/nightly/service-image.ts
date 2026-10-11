@@ -1,6 +1,6 @@
 // Service images for the nightly cluster (Laysi/trustiot-v2#308): builds the image of a Rust
 // service the way release.yml does (deploy/images/<name>/image.toml, cross-compiled for
-// aarch64-unknown-linux-musl with lib.ts's rustCrossCompileCommand and packed with
+// aarch64-unknown-linux-musl with rust-build.ts's rustCrossCompileCommand and packed with
 // deploy/images/rust-binary.Containerfile), tags it `localhost/trustiot-e2e/<name>:nightly` and
 // imports it into every k3d node with importImageIntoCluster. Nothing is pushed.
 //
@@ -22,10 +22,8 @@ import {
   discoverImages,
   renderRustContainerfile,
   resolveBinary,
-  rustCrossCompileCommand,
-  staticElfProblem,
-  toolchainChannel,
 } from "../release/lib.ts";
+import { rustCrossCompileCommand, staticElfProblem, toolchainChannel } from "../release/rust-build.ts";
 import { exec, pinnedTool, retry, run } from "./exec.ts";
 import { importImageIntoCluster } from "./platform.ts";
 import type { ImportCommands, Platform } from "./platform.ts";
