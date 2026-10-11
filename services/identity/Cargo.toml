@@ -1,0 +1,47 @@
+[package]
+name = "identity"
+description = "TrustIoT v2 identity service: server-side sessions, the ingress gateway's ext_authz check, and the internal identity tokens every other service trusts."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "identity"
+path = "src/main.rs"
+test = false
+doc = false
+
+[dependencies]
+axum = { workspace = true, features = ["http1", "json", "tokio"] }
+# Strict base64url: token segments and the session cookie have exactly one encoding.
+base64.workspace = true
+contract = { path = "../../crates/contract" }
+# Signs internal identity tokens with Ed25519 and reads the signing key from a PKCS#8 PEM file
+# (the format `openssl genpkey -algorithm ed25519` writes). `zeroize` wipes the key on drop.
+ed25519-dalek = { workspace = true, features = ["fast", "pem", "pkcs8", "zeroize"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+service-kit = { path = "../../crates/service-kit" }
+# The database stores only the SHA-256 of a session cookie.
+sha2.workspace = true
+# Same TLS stack as service-kit: every connection verifies the server (checklist M3).
+sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
+tracing.workspace = true
+# Wipes the private key file's text after parsing.
+zeroize.workspace = true
+
+[dev-dependencies]
+# Session secrets for test sessions; production code never creates sessions in MS0.
+getrandom.workspace = true
+# The TLS Postgres the integration tests start (shared with crates/service-kit's tests).
+rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
+# The cross-tenant negative test suite (decision 29).
+testkit = { path = "../../crates/testkit" }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

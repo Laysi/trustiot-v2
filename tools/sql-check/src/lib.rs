@@ -138,6 +138,13 @@ pub const EXCEPTIONS: &[Exception] = &[
         reason: "ClickHouse, not Postgres: creates per-run users, roles, and tenants, and runs \
                  SET ROLE NONE as an attack that must fail",
     },
+    Exception {
+        path: "services/identity/tests/adversarial.rs",
+        rules: &[Rule::SessionSetting],
+        reason: "attacks the identity service role's session: sets valid, unknown, empty and \
+                 malformed tenant ids with set_config and runs SET ROLE and SET SESSION \
+                 AUTHORIZATION, which row-level security and the database must refuse",
+    },
 ];
 
 /// sqlx functions whose first argument is SQL.

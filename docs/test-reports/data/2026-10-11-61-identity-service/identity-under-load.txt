@@ -1,0 +1,36 @@
+HEAD 0767a2d4780d1e31a015e880f57552d90ae4c110; 2026-10-11T22:06:40+08:00; nproc 8
+load with 16 busy loops, before the tests: 6.72 4.61 5.21
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.18s
+     Running tests/adversarial.rs (target/debug/deps/adversarial-1172f07f1edf952e)
+
+running 11 tests
+test the_audience_follows_the_route_and_an_allow_carries_only_the_identity_header ... ok
+test slow_or_locked_database_answers_503_and_recovers_without_failing_open ... ok
+test rotation_across_restarts_keeps_old_tokens_valid_and_new_ones_under_the_new_kid ... ok
+test cookie_parsing_accepts_only_one_exact_session_cookie ... ok
+test killed_connections_never_turn_into_401_or_200_for_the_wrong_person ... ok
+test the_health_port_serves_only_the_health_routes ... ok
+test session_expiry_and_revocation_are_decided_by_the_database_clock ... ok
+test wrong_credentials_or_database_fail_closed ... ok
+test the_service_refuses_to_start_without_a_usable_matching_signing_key ... ok
+test memberships_are_isolated_by_tenant_and_by_user ... ok
+test nothing_secret_is_logged_at_any_level ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 46.19s
+
+     Running tests/ext_authz.rs (target/debug/deps/ext_authz-de24672821de6e94)
+
+running 8 tests
+test an_unreachable_database_fails_closed ... ok
+test unusable_keys_and_settings_stop_startup ... ok
+test the_service_role_cannot_create_or_change_sessions ... ok
+test secrets_never_reach_logs_or_responses ... ok
+test an_active_session_gets_one_token_that_the_routed_service_accepts ... ok
+test invalid_or_expired_sessions_get_401 ... ok
+test role_changes_apply_to_the_next_request ... ok
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.00s
+
+load at the end: 17.73 8.78 6.64
+rc=0

@@ -1,0 +1,222 @@
+rcheck: queued at 22:00:10; running now: nothing
+rcheck: started at 22:00:10 in /home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a1d1099564a5fa83b
+HEAD 0767a2d4780d1e31a015e880f57552d90ae4c110; nproc 8; load 1.90 5.46 5.82
+
+=== cargo fmt --all --check (22:00:10; load 1.90 5.46 5.82)
+rc=0
+
+=== cargo clippy --locked --workspace --all-targets -- -D warnings (22:00:11; load 1.90 5.46 5.82)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.68s
+rc=0
+
+=== cargo clippy --locked -p service-kit --no-default-features --all-targets -- -D warnings (22:00:12; load 1.83 5.39 5.79)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s
+rc=0
+
+=== cargo test --locked --workspace --no-fail-fast (22:00:12; load 1.83 5.39 5.79)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+     Running tests/otlp.rs (target/debug/deps/otlp-492d7f0bd416cc51)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.86s
+     Running tests/postgres_trust.rs (target/debug/deps/postgres_trust-a07a670a51e228b1)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.77s
+     Running tests/tenant_db.rs (target/debug/deps/tenant_db-8eeb94b51d7fddf7)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.57s
+     Running tests/verify_config.rs (target/debug/deps/verify_config-f6cbea3f74c3ffc5)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/verify_container.rs (target/debug/deps/verify_container-35111539b4ccd773)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.10s
+     Running tests/verify_job_lock.rs (target/debug/deps/verify_job_lock-b28a7a4209cea885)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.13s
+     Running tests/verify_leaks.rs (target/debug/deps/verify_leaks-8be7d78afc9570a0)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+     Running tests/verify_shutdown.rs (target/debug/deps/verify_shutdown-50a6b4adb28d0961)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.92s
+     Running unittests src/lib.rs (target/debug/deps/sql_check-1bc345e149b707e5)
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/check.rs (target/debug/deps/check-600082b3a3b97008)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.45s
+     Running unittests src/lib.rs (target/debug/deps/testkit-c5f0fb1268aeb8fb)
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/postgres_isolation.rs (target/debug/deps/postgres_isolation-788328ad6a5d28c5)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.71s
+     Running unittests src/lib.rs (target/debug/deps/webpki_roots-32d6e46fad581407)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+rc=0
+
+=== cargo test --locked -p service-kit --no-default-features (22:04:36; load 2.18 4.20 5.25)
+     Running unittests src/lib.rs (target/debug/deps/service_kit-b9df3524a410259d)
+test result: ok. 59 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+     Running tests/chart_contract.rs (target/debug/deps/chart_contract-9de13ad8b374bdbb)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/container.rs (target/debug/deps/container-d596e2db14a36f61)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.89s
+     Running tests/dependency_isolation.rs (target/debug/deps/dependency_isolation-fae9f47338f518c9)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+     Running tests/errors.rs (target/debug/deps/errors-e48f9d6b769818a2)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+     Running tests/identity.rs (target/debug/deps/identity-b65f3a4e8afd18bf)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/identity_adversarial.rs (target/debug/deps/identity_adversarial-142aceda871e040f)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/job_lock.rs (target/debug/deps/job_lock-23f23e9d9d1080ac)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.32s
+     Running tests/lifecycle.rs (target/debug/deps/lifecycle-0440dc6972eb7034)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.06s
+     Running tests/logging.rs (target/debug/deps/logging-9aec5e393cf4a7e4)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+     Running tests/otlp.rs (target/debug/deps/otlp-73beb4d5bbdc888e)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.74s
+     Running tests/postgres_trust.rs (target/debug/deps/postgres_trust-13d35a9f7c60106e)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.76s
+     Running tests/tenant_db.rs (target/debug/deps/tenant_db-8bcebfde5ed0b273)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/verify_config.rs (target/debug/deps/verify_config-31da2f03c5ca3eba)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/verify_container.rs (target/debug/deps/verify_container-5851be8ca8e5085b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.42s
+     Running tests/verify_job_lock.rs (target/debug/deps/verify_job_lock-5d9bd310eac753c5)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.68s
+     Running tests/verify_leaks.rs (target/debug/deps/verify_leaks-a310f76369b37bc4)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s
+     Running tests/verify_shutdown.rs (target/debug/deps/verify_shutdown-49426591b016008d)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.92s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+rc=0
+
+=== identity tests (full output in identity-tests.txt)
+--- cargo test --locked -p identity
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.22s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.10s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.41s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+rc=0
+--- cargo test --locked -p identity --test cross_tenant -- --nocapture
+16 probes, 0 failed
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.00s
+rc=0
+--- cargo test --locked -p identity --test ext_authz a_slow_database_connect -- --nocapture
+slow connect: 3 connections at ready, statuses after the cut [503, 503, 503, 503, 200], 8 connections in all
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 10.10s
+rc=0
+
+=== identity database tests under CPU load (full output in identity-under-load.txt)
+load with 16 busy loops, before the tests: 6.72 4.61 5.21
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 46.19s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.00s
+load at the end: 17.73 8.78 6.64
+rc=0
+
+=== cargo run --locked -p openapi -- --check (22:08:19; load 17.73 8.78 6.64)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running `target/debug/openapi --check`
+api/openapi.json is up to date
+rc=0
+
+=== cargo deny --locked check (22:08:19; load 17.73 8.78 6.64)
+warning[duplicate]: found 2 duplicate entries for crate 'base64'
+warning[duplicate]: found 2 duplicate entries for crate 'block-buffer'
+warning[duplicate]: found 2 duplicate entries for crate 'cpufeatures'
+warning[duplicate]: found 2 duplicate entries for crate 'crypto-common'
+warning[duplicate]: found 2 duplicate entries for crate 'digest'
+warning[duplicate]: found 3 duplicate entries for crate 'getrandom'
+warning[duplicate]: found 2 duplicate entries for crate 'hashbrown'
+warning[duplicate]: found 2 duplicate entries for crate 'rand'
+warning[duplicate]: found 2 duplicate entries for crate 'rand_core'
+warning[duplicate]: found 2 duplicate entries for crate 'sha2'
+warning[duplicate]: found 2 duplicate entries for crate 'syn'
+      │       ├── tokio-util v0.7.20
+      │   ├── yoke-derive v0.8.4
+      │   │   └── yoke v0.8.3
+      │           ├── yoke v0.8.3 (*)
+      ├── tokio-macros v2.7.2
+      │   └── tokio v1.53.2
+      │       ├── tokio-stream v0.1.19
+      │       ├── tokio-util v0.7.20 (*)
+      ├── yoke-derive v0.8.4 (*)
+warning[duplicate]: found 2 duplicate entries for crate 'tower-http'
+advisories ok, bans ok, licenses ok, sources ok
+rc=0
+
+=== bun install --cwd scripts --frozen-lockfile (22:08:20; load 17.73 8.78 6.64)
+bun install v1.4.2 (744846f84)
+Checked 7 installs across 27 packages (no changes) [2.00ms]
+rc=0
+
+=== bun run --cwd scripts typecheck (22:08:20; load 17.73 8.78 6.64)
+$ tsc --noEmit --project tsconfig.json
+rc=0
+
+=== bun test scripts (22:08:21; load 17.73 8.78 6.64)
+2026-10-11T14:08:23.483Z $ sh -c echo "$MARKER"; echo failed >&2; exit 1
+    failed
+2026-10-11T14:08:23.485Z attempt 1/3 failed: not yet
+2026-10-11T14:08:23.486Z attempt 2/3 failed: not yet
+2026-10-11T14:08:23.488Z attempt 1/2 failed: always
+2026-10-11T14:08:23.489Z attempt 2/2 failed: always
+ 518 pass
+ 1 skip
+ 0 fail
+rc=0
+
+=== bun test deploy/chart (22:08:24; load 16.63 8.70 6.62)
+ 261 pass
+ 0 fail
+rc=0
+
+=== bun scripts/ci/check-workflows.ts (22:08:56; load 9.67 7.85 6.41)
+workflow policy: 4 file(s) checked, no violations
+rc=0
+
+=== bun scripts/ci/check-secret-handling.ts (22:08:56; load 9.67 7.85 6.41)
+secret handling: 209 file(s) checked, 3 container build file(s), no violations
+rc=0
+
+=== bun scripts/ci/lint-workflows.ts (22:08:57; load 9.67 7.85 6.41)
+actionlint: 3 workflow file(s), no errors
+rc=0
+
+=== bun install --cwd deploy/host --frozen-lockfile (22:08:57; load 9.67 7.85 6.41)
+bun install v1.4.2 (744846f84)
+Checked 6 installs across 26 packages (no changes) [28.00ms]
+rc=0
+
+=== bun run --cwd deploy/host typecheck (22:08:57; load 9.67 7.85 6.41)
+$ tsc --noEmit --project tsconfig.json
+rc=0
+
+=== bun run --cwd deploy/host test (22:08:57; load 9.67 7.85 6.41)
+ 111 pass
+ 0 fail
+rc=0
+
+=== bun run --cwd deploy/host build (22:08:57; load 9.67 7.85 6.41)
+$ bun build.ts
+   [3ms]  minify  -41.20 KB (estimate)
+   [1ms]  bundle  7 modules
+  [92ms] compile  /home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a1d1099564a5fa83b/deploy/host/dist/trustiot-host-install-x86_64 bun-linux-x64-baseline-v1.4.2
+   [3ms]  minify  -41.20 KB (estimate)
+   [1ms]  bundle  7 modules
+ [106ms] compile  /home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a1d1099564a5fa83b/deploy/host/dist/trustiot-host-install-aarch64 bun-linux-aarch64-v1.4.2
+bc1dba1ec32c70ef90bdafcb6adadc08c446c720e8fe0faa5343e4fc60b10885  trustiot-host-install-x86_64
+efcc045cd32a79682d30f2b15a792810d68d260cf4f7e60b504d6ec0c89e8109  trustiot-host-install-aarch64
+rc=0
+
+=== done 22:08:58; load 9.67 7.85 6.41; failed: none
+rcheck: exit 0 at 22:08:58
+
+[exited with code 0]

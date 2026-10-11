@@ -1,0 +1,10 @@
+    Finished `release` profile [optimized] target(s) in 8m 41s
+     Running tests/ext_authz.rs (target/release/deps/ext_authz-8352c9b5c9efc8bb)
+test unusable_keys_and_settings_stop_startup ... ok
+test an_unreachable_database_fails_closed ... ok
+test the_service_role_cannot_create_or_change_sessions ... ok
+test an_active_session_gets_one_token_that_the_routed_service_accepts ... ok
+test invalid_or_expired_sessions_get_401 ... ok
+test secrets_never_reach_logs_or_responses ... ok
+test role_changes_apply_to_the_next_request ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.19s
