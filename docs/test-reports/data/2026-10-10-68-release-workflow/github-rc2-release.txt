@@ -7,8 +7,9 @@ on 2026-10-10 (after the run finished). Metadata from the same response:
   draft:        false
   published_at: 2026-10-10T14:30:58Z
 The body follows unchanged. The notes at the top are the commit-list fallback of
-Laysi/release-notes-action (no AI_MODEL variable is set in the repository); they list every
-commit reachable from v0.0.0-rc.2 and not from v0.0.0-rc.1, so main's merged commits are there too.
+Laysi/release-notes-action (no AI_MODEL variable is set in the repository); they list the commits
+reachable from v0.0.0-rc.2 and not from v0.0.0-rc.1, main's merged commits included, except the
+ci(...) and chore(...) commits (main's #240 and this branch's four merge commits).
 -->
 - test(release): record the checks after merging the OpenAPI spec
 - test(release): record the checks after merging the outbox
