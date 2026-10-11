@@ -1,0 +1,62 @@
+# Build host ruisi-wsl (WSL2 x86_64, 20 cores, Docker 29.7.2, CI=1), 2026-10-11
+# Branch feat/61-identity-service after merging main e21ff41 (merge commit d5a41ff).
+# Command: cargo test --locked -p identity 2>&1 | grep -v "^\s*Compiling\|^\s*Finished\|^\s*Blocking"
+# tests/ext_authz.rs starts a TLS Postgres container (postgres:18.6-alpine, pinned by digest); with CI=1 a missing
+# container runtime fails these tests instead of skipping them.
+
+     Running unittests src/lib.rs (/home/ruisi/tv2/agents/61/target/debug/deps/identity-6753000061ee2437)
+
+running 31 tests
+test audience::tests::exact_wins_then_the_longest_prefix_on_segment_boundaries ... ok
+test audience::tests::unusable_routes_stop_startup_without_quoting_the_setting ... ok
+test audience::tests::the_setting_deserializes_from_its_json_text ... ok
+test audience::tests::the_host_must_match_with_any_port_and_in_any_case ... ok
+test audience::tests::without_routes_nothing_has_an_audience ... ok
+test session::tests::a_missing_repeated_or_malformed_session_cookie_is_refused ... ok
+test session::tests::cookie_errors_have_distinct_reasons ... ok
+test session::tests::a_secret_round_trips_through_its_cookie_value ... ok
+test session::tests::debug_output_never_shows_the_secret_or_its_hash ... ok
+test session::tests::only_the_one_canonical_spelling_is_a_secret ... ok
+test session::tests::the_hash_is_sha256_of_the_secret_bytes ... ok
+test issuer::tests::only_an_ed25519_pkcs8_pem_is_a_signing_key ... ok
+test session::tests::only_the_three_schema_roles_are_issued ... ok
+test session::tests::the_session_cookie_is_found_among_other_cookies_and_headers ... ok
+test audience::tests::the_setting_must_be_an_array_of_exact_route_objects ... ok
+test ext_authz::tests::nothing_but_the_check_is_served ... ok
+test ext_authz::tests::sessions_that_are_missing_unknown_or_malformed_get_401 ... ok
+test ext_authz::tests::a_failing_store_gets_503_without_an_identity ... ok
+test ext_authz::tests::a_session_without_a_route_for_the_request_gets_403 ... ok
+test issuer::tests::the_header_and_claims_are_exactly_the_contract ... ok
+test ext_authz::tests::an_issued_token_expires_after_the_replay_window ... ok
+test ext_authz::tests::grants_without_a_tenant_or_with_admin_rights_are_signed_as_they_are ... ok
+test issuer::tests::a_token_stops_working_after_its_lifetime_and_the_skew ... ok
+test ext_authz::tests::an_active_session_gets_one_verified_identity_for_the_routed_service ... ok
+test issuer::tests::a_key_the_services_do_not_have_is_refused ... ok
+test issuer::tests::errors_and_debug_output_never_show_the_private_key ... ok
+test issuer::tests::tokens_pass_service_kit_verification_for_their_audience_only ... ok
+test issuer::tests::the_key_id_is_the_one_whose_public_key_matches ... ok
+test ext_authz::tests::forged_identity_headers_never_reach_the_allow ... ok
+test ext_authz::tests::every_method_and_path_shape_of_the_check_is_served ... ok
+test ext_authz::tests::a_hanging_store_gets_503_within_the_deadline ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+     Running tests/ext_authz.rs (/home/ruisi/tv2/agents/61/target/debug/deps/ext_authz-47764160fb915093)
+
+running 7 tests
+test unusable_keys_and_settings_stop_startup ... ok
+test an_unreachable_database_fails_closed ... ok
+test the_service_role_cannot_create_or_change_sessions ... ok
+test an_active_session_gets_one_token_that_the_routed_service_accepts ... ok
+test secrets_never_reach_logs_or_responses ... ok
+test invalid_or_expired_sessions_get_401 ... ok
+test role_changes_apply_to_the_next_request ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.39s
+
+   Doc-tests identity
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
