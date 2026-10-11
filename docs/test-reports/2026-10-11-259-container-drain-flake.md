@@ -16,6 +16,14 @@ issue 的推測成立，並且有兩處補充：
 2. 在 `podman` 前面放一個只對 `stop` 睡 1 秒再執行真正 podman 的包裝（`data/.../podman-slow-stop.sh`），舊測試 5 次全部失敗在 `container_old.rs:160`（即 `readiness fails within the drain delay`），與 issue 描述的行號相同；延遲 0 秒時舊測試通過。
 3. 補充：舊測試的 in-flight 請求是 3 秒，從 `stop` 之前 0.5 秒開始。訊號延遲超過約 2.5 秒時，請求會在訊號之前結束，測試就不再驗證「draining 期間仍服務 in-flight 請求」。同一檔案的 `stop_took < GRACE_PERIOD - 5s`（grace 15 秒）也沒有給慢速 `stop` 留餘裕。
 
+### 與 #51 驗證者的測量對照（`podman stop` 送出 SIGTERM 要多久）
+
+協調者轉述：#51 的獨立驗證者（PR Laysi/trustiot-v2#280）在這台機器量到 `podman stop` 呼叫後約 3.5 秒才送出 SIGTERM，並在其 `verify_container.rs` 改用 `podman kill --signal TERM`。這與上面的原因是同一件事：訊號比 1 秒的輪詢期限晚到。確認與取捨如下。
+
+- 我這邊的量測（`data/.../signal-latency.txt`，`latency.ts`）：用日誌估計「`stop` 開始到服務記錄 SIGTERM」的時間，修正後高負載 40 次為 1.7 至 4.4 秒（中位數 2.7 秒），最終程式高負載 10 次為 0.8 至 2.8 秒。這個估計是上界：`podman stop` 在服務結束之後還要拆容器，才會返回，這段時間也被算進去。修正前在負載下通過的 17 次估計值為 0.2 至 2.7 秒，但它們必然在 1 秒內收到訊號，所以多餘的部分（最多約 1.7 秒以上）就是這個拆除時間，不能把估計當成精確延遲。結論是：訊號延遲在高負載下可超過 1 秒，數秒是可信的，與驗證者的 3.5 秒一致。
+- 用 alpine 容器加相同旗標（`--read-only`、`--cap-drop ALL`、`--publish` 等）直接量 `podman stop` 到 TERM trap 的時間（`stoplat.sh`），在 load 11 至 21 時只有 0.0 至 0.6 秒（量測誤差約 0.5 秒），量不到數秒的延遲；所以數秒級的延遲不是每次都有，視負載與當時 podman 的狀態而定，這也是它「偶發」的原因。
+- 取捨：不改用 `podman kill --signal TERM`。`podman kill` 可以去掉訊號延遲，但這個測試要證明的是「kubelet 的停止方式」：SIGTERM，然後 grace period 到了才 SIGKILL，以及行程在 grace period 內以 0 結束；`podman stop --time` 才有這個語意。把測試寫成不依賴訊號何時到達，一樣穩定，又保留了這個語意。修正後容許的訊號延遲約 8 秒（見下），高於觀察到的任何數值。
+
 ## 修正（只改 `crates/service-kit/tests/container.rs`）
 
 - 輪詢從 `stop` 啟動起算，直到看到第一個 503，期限 `READINESS_FAILS_BY = 30s`。503 只存在於「SIGTERM 到 listener 關閉」之間，所以看到 503 就已經證明 readiness 在 drain delay 內失敗；訊號多晚到都不影響。連線失敗（訊號之前，或 listener 關閉之後）不算答案，重試到期限，逾時時印出最後一次結果與容器日誌。
@@ -66,7 +74,7 @@ CARGO_BUILD_JOBS=2 cargo test -p service-kit
 - 修正後 40 次高負載執行的 `podman stop` 總耗時（含 9 秒 in-flight 請求）：最短 9.3 秒、中位數約 10.2 秒、最長 11.7 秒，全部遠低於 35 秒的上限，exit code 皆為 0。
 - 修正後在前期（含 4 工作的 cargo build 同時進行）與 40 次執行期間，沒有一次失敗；修正前在負載下 20 次中失敗 3 次，與 issue 的現象相同。
 - 最終提交的程式在修正前驗證之後只有微調（以 `IN_FLIGHT_MS: u64` 常數取代 `Duration` 轉型以通過 clippy，以及註解換行），行為相同，因此另外在高負載跑了 10 次與注入 3 秒 2 次。另外 `cargo test -p service-kit` 全部通過（`container` 1 個測試通過）。
-- 日誌與摘要：[summary.txt](data/2026-10-11-259-container-drain-flake/summary.txt)、[修正前失敗範例](data/2026-10-11-259-container-drain-flake/old-test-failure-example.log)、[修正後注入 3 秒範例](data/2026-10-11-259-container-drain-flake/fixed-test-stop-delay-3s-example.log)；腳本 `burn.ts`、`run.ts`、`podman-slow-stop.sh`、`regress.sh`、`final.sh` 也在該目錄。
+- 日誌與摘要：[summary.txt](data/2026-10-11-259-container-drain-flake/summary.txt)、[修正前失敗範例](data/2026-10-11-259-container-drain-flake/old-test-failure-example.log)、[修正後注入 3 秒範例](data/2026-10-11-259-container-drain-flake/fixed-test-stop-delay-3s-example.log)；[signal-latency.txt](data/2026-10-11-259-container-drain-flake/signal-latency.txt)；腳本 `burn.ts`、`run.ts`、`latency.ts`、`stoplat.sh`、`podman-slow-stop.sh`、`regress.sh`、`final.sh` 也在該目錄。
 
 ## 結論
 
