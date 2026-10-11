@@ -14,6 +14,29 @@ services:
     env:
       - name: WHOAMI_PORT_NUMBER
         value: "8080"
+    # whoami listens on one port only, so the stand-in is probed on http. TrustIoT services are
+    # probed on their health port (healthPort), the only port the node reaches on them.
+    probes:
+      startup:
+        httpGet:
+          path: /healthz
+          port: http
+        periodSeconds: 2
+        failureThreshold: 30
+      liveness:
+        httpGet:
+          path: /healthz
+          port: http
+        periodSeconds: 10
+        timeoutSeconds: 2
+        failureThreshold: 3
+      readiness:
+        httpGet:
+          path: /readyz
+          port: http
+        periodSeconds: 5
+        timeoutSeconds: 2
+        failureThreshold: 2
     podSecurityContext:
       # The image sets no USER; TrustIoT images declare a numeric non-root USER instead.
       runAsUser: 65532

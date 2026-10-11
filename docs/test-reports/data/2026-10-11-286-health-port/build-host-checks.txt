@@ -1,0 +1,103 @@
+HEAD
+== fmt
+== clippy
+    Checking protocol v0.1.0 (/home/ruisi/tv2/agents/286/src/crates/protocol)
+    Checking outbox v0.1.0 (/home/ruisi/tv2/agents/286/src/crates/outbox)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.10s
+    Checking service-kit v0.1.0 (/home/ruisi/tv2/agents/286/src/crates/service-kit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.06s
+== service-kit
+test http::tests::the_health_port_must_differ_from_the_api_port ... ok
+test health::tests::readiness_follows_the_phase ... ok
+test shutdown::tests::drain_timeout_must_be_positive ... ok
+test telemetry::otlp::tests::exported_spans_have_sensitive_attributes_redacted ... ok
+test telemetry::otlp::tests::exporter_errors_keep_the_setting_but_not_the_endpoint ... ok
+test health::tests::concurrent_probes_share_one_round_of_checks ... ok
+test service::tests::background_tasks_are_dropped_when_the_drain_times_out ... ok
+test health::tests::failing_or_hanging_checks_fail_readiness ... ok
+test result: ok. 76 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+test the_default_drain_fits_the_chart_drain_seconds ... ok
+test the_chart_probes_the_kit_health_paths_on_the_health_port ... ok
+test the_kit_listens_on_the_chart_port ... ok
+test the_kit_serves_health_on_the_chart_health_port ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test pid_1_in_a_container_drains_and_exits_within_the_grace_period ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.35s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.05s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.93s
+test health_port_equal_to_the_api_port_stops_startup ... ok
+test health_endpoints_answer_while_serving ... ok
+test health_port_serves_only_the_probe_endpoints ... ok
+test second_signal_exits_without_draining ... ok
+test listen_address_in_use_stops_startup ... ok
+test sigint_drains_like_sigterm ... ok
+test drain_timeout_bounds_shutdown ... ok
+test sigterm_fails_readiness_at_once_and_drains_requests_in_flight ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.77s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+test logs_traces_and_metrics_export_without_request_data ... ok
+test export_is_off_unless_configured ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.81s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test sigterm_to_pid_1_flips_readiness_then_drains_and_exits_zero ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.25s
+test releasing_a_guard_whose_session_died_reports_an_error_not_success ... ok
+test a_killed_lock_session_stops_the_job_reports_lost_and_leaks_nothing ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.68s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.35s
+test an_idle_service_exits_zero_right_after_the_drain_delay ... ok
+test a_slow_body_upload_in_flight_is_cut_off_at_the_drain_timeout ... ok
+test a_client_that_stalls_mid_request_is_cut_off_at_the_drain_timeout_not_hung ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.14s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+== lifecycle evidence
+after SIGTERM: /readyz answered 503 on both ports at 12 ms, the process exited 0 at 2226 ms
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.69s
+== service-kit no-default
+test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.12s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.66s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.57s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.77s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.23s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.84s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.38s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.08s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== outbox
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.33s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.98s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.32s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.41s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.42s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== repo-check
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== chart
+ 187 pass
+ 0 fail
+Ran 187 tests across 1 file. [13.38s]
+== nightly
+ 58 pass
+ 0 fail
+Ran 58 tests across 5 files. [291.00ms]
+== typecheck
+$ tsc --noEmit --project tsconfig.json
+
+[exited with code 0]
