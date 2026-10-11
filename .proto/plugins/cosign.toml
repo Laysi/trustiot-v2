@@ -1,0 +1,34 @@
+# proto schema plugin for cosign (https://github.com/sigstore/cosign).
+# Downloads the official release binary (a single executable, not an archive)
+# and verifies it against the checksums file published with the release.
+# Reference: https://moonrepo.dev/docs/proto/non-wasm-plugin
+
+name = "cosign"
+type = "cli"
+
+[platform.linux]
+download-file = "cosign-linux-{arch}"
+checksum-file = "cosign_checksums.txt"
+
+[platform.macos]
+download-file = "cosign-darwin-{arch}"
+checksum-file = "cosign_checksums.txt"
+
+[install]
+download-url = "https://github.com/sigstore/cosign/releases/download/v{version}/{download_file}"
+checksum-url = "https://github.com/sigstore/cosign/releases/download/v{version}/{checksum_file}"
+# The download is the executable itself. proto stores a download it does not unpack under
+# the primary exe-path below, so `cosign-linux-amd64` is installed as
+# ~/.proto/tools/cosign/<version>/cosign (checked with proto 0.60.2).
+unpack = false
+
+[install.arch]
+aarch64 = "arm64"
+x86_64 = "amd64"
+
+[install.exes.cosign]
+exe-path = "cosign"
+primary = true
+
+[resolve]
+git-url = "https://github.com/sigstore/cosign"

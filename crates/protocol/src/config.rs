@@ -62,8 +62,10 @@ pub struct DesiredConfig {
     /// This configuration's version for the gateway.
     pub version: ConfigVersion,
     /// The device models the devices use, each once.
+    #[serde(deserialize_with = "codec::seq")]
     pub models: Vec<DeviceModel>,
     /// The devices to poll. A device missing here is no longer polled and its state is cleared.
+    #[serde(deserialize_with = "codec::seq")]
     pub devices: Vec<Device>,
 }
 
@@ -73,6 +75,7 @@ pub struct DeviceModel {
     /// The model's name, unique within the configuration.
     pub name: ModelName,
     /// The data points to read.
+    #[serde(deserialize_with = "codec::seq")]
     pub points: Vec<DataPoint>,
 }
 
@@ -340,10 +343,11 @@ impl Host {
     }
 
     /// The host in a form that is equal for equal hosts: an IP address in its canonical text
-    /// form, a DNS name in lowercase.
-    fn canonical(&self) -> String {
+    /// form, with an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) as the IPv4 address it maps;
+    /// a DNS name in lowercase.
+    pub fn canonical(&self) -> String {
         match IpAddr::from_str(&self.0) {
-            Ok(ip) => ip.to_string(),
+            Ok(ip) => ip.to_canonical().to_string(),
             Err(_) => self.0.to_ascii_lowercase(),
         }
     }
@@ -351,6 +355,9 @@ impl Host {
 
 fn is_valid_host(host: &str) -> bool {
     if let Ok(ip) = IpAddr::from_str(host) {
+        // A socket connects to an IPv4-mapped address as to the IPv4 address it maps, so the
+        // same rules apply to both spellings (Laysi/trustiot-v2#269).
+        let ip = ip.to_canonical();
         return !ip.is_unspecified()
             && !ip.is_multicast()
             && ip != IpAddr::from([255, 255, 255, 255]);
@@ -425,8 +432,10 @@ impl DesiredConfig {
 
     /// Reads only the version of a configuration that [`Self::decode`] refused, so the gateway
     /// can report the rejection for the right version.
+    /// Fails when the payload is larger than [`codec::MAX_PEEK_BYTES`] or has no valid
+    /// `version`.
     pub fn peek_header(payload: &[u8]) -> Result<ConfigHeader, DecodeError> {
-        codec::from_slice(payload)
+        codec::peek(payload)
     }
 }
 
@@ -740,7 +749,11 @@ pub struct ConfigReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_version: Option<ConfigVersion>,
     /// Why a configuration was rejected; at most [`MAX_REPORT_ISSUES`].
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "codec::seq"
+    )]
     pub issues: Vec<Issue>,
 }
 

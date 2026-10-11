@@ -1,0 +1,18 @@
+# Pre-fix run: the same tests with the suppression disabled (`sdk_diagnostic_suppressed` made to
+# always return false), so the kit behaves as before the fix.
+# Command (build host, CI=1): rcheck.sh 285 'cargo test --locked -p service-kit --test otlp 2>&1 | cut -c1-600 | tail -80'
+# Below: the lines of that output that carry the path canary (one per signal; the last 80 lines
+# only), then the summary. The canary is a test value, not a secret.
+
+{"timestamp":"2026-10-11T03:39:35.540502Z","level":"DEBUG","service":"example-service","target":"opentelemetry-otlp","message":"","fields":{"name":"HttpClient.NetworkError","url":"http://127.0.0.1:39540/endpoint-path-canary-7d41/v1/metrics","error":"error sending request for url (http://127.0.0.1:39540/endpoint-path-canary-7d41/v1/metrics)"}}
+{"timestamp":"2026-10-11T03:39:35.588110Z","level":"DEBUG","service":"example-service","target":"opentelemetry-otlp","message":"","fields":{"name":"HttpClient.NetworkError","url":"http://127.0.0.1:39540/endpoint-path-canary-7d41/v1/traces","error":"error sending request for url (http://127.0.0.1:39540/endpoint-path-canary-7d41/v1/traces)"}}
+{"timestamp":"2026-10-11T03:39:35.620145Z","level":"DEBUG","service":"example-service","target":"opentelemetry-otlp","message":"","fields":{"name":"HttpClient.NetworkError","url":"http://127.0.0.1:39540/endpoint-path-canary-7d41/v1/logs","error":"error sending request for url (http://127.0.0.1:39540/endpoint-path-canary-7d41/v1/logs)"}}
+
+failures:
+    endpoint_path_stays_out_of_output_at_debug_when_the_collector_answers_400
+    endpoint_path_stays_out_of_output_at_debug_when_the_collector_resets
+    endpoint_path_stays_out_of_output_at_trace_when_the_collector_answers_400
+    endpoint_path_stays_out_of_output_at_trace_when_the_collector_resets
+    sdk_targets_cannot_be_turned_up_by_name
+
+test result: FAILED. 3 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.90s

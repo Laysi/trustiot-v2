@@ -8,7 +8,7 @@
 2. 閘道器：warn 以上隨 MQTT 持續上傳，有流量上限；完整日誌由後台下指令上傳指定時段；不寫 SD 卡。
 3. 地端可以把 OTLP 另外轉送到客戶自己的 SIEM。
 4. 日誌不得包含聊天內容、request body、憑證與個資（[#110](https://github.com/Laysi/trustiot/issues/110)）。
-5. Rust 服務的日誌由 `crates/service-kit` 輸出：stdout 每行一個 JSON 物件，請求內的日誌帶 trace id；OTLP 匯出（日誌、trace、指標）預設關閉，設定 collector 位址後才開啟；名稱像憑證、個資或內容的欄位，值一律遮蔽。遮蔽只是最後防線，第 4 點仍要靠程式本身不記錄這些值；格式與規則見[它的 README](../../crates/service-kit/README.md)。
+5. Rust 服務的日誌由 `crates/service-kit` 輸出：stdout 每行一個 JSON 物件，請求內的日誌帶 trace id；OTLP 匯出（日誌、trace、指標）預設關閉，設定 collector 位址後才開啟，collector 位址的路徑不論日誌等級都不進日誌（OpenTelemetry SDK 的診斷日誌只輸出 INFO 以上）；名稱像憑證、個資或內容的欄位，值一律遮蔽。遮蔽只是最後防線，第 4 點仍要靠程式本身不記錄這些值；格式與規則見[它的 README](../../crates/service-kit/README.md)。
 
 看板與告警：
 

@@ -346,7 +346,7 @@ URL 欄位都不接受 `user:password@` 這種帶帳密的寫法。
 
 - 一個副本的 StatefulSet `<release>-clickhouse`，資料在 PVC `data-<release>-clickhouse-0`（`/var/lib/clickhouse`）；StatefulSet 刪除或縮容時保留 PVC。ClusterIP Service 只開 HTTP 8123 與 native 9000。
 - 伺服器設定只有一個 ConfigMap（`<release>-clickhouse-config`，掛成 `config.d`）：監聽位址、關掉 MySQL／PostgreSQL 相容埠與 interserver 埠、日誌只寫 stdout。設定變更時 pod 自動重啟。
-- 帳號、角色、row policy、settings profile 與 quota 一律不寫在設定檔（決策 14；ClickHouse Cloud 不能改設定檔）：由 migration Job（Laysi/trustiot-v2#60）以 bootstrap 管理帳號套用 `services/ingest/migrations/clickhouse/` 的 SQL，存在 ClickHouse 自己的 access storage（PVC 上的 `access/`）。唯一由映像產生的帳號是 bootstrap 管理帳號：映像的 entrypoint 依 `CLICKHOUSE_USER`、`CLICKHOUSE_PASSWORD_FILE`（掛載的 Secret）與 `CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1` 寫進 `users.d`（記憶體 emptyDir），並移除沒有密碼的 `default` 帳號。
+- 帳號、角色、row policy、settings profile 與 quota 一律不寫在設定檔（決策 14；ClickHouse Cloud 不能改設定檔）：由 migration Job（Laysi/trustiot-v2#60）以 bootstrap 管理帳號套用 `services/ingest/migrations/clickhouse/` 的 SQL，存在 ClickHouse 自己的 access storage（PVC 上的 `access/`）。租戶帳號只能讀的 view `trustiot.tenant_telemetry` 與它的 DEFINER 帳號（不能登入）也由這些 SQL 建立，chart 不必為它們設定任何值（Laysi/trustiot-v2#260）。唯一由映像產生的帳號是 bootstrap 管理帳號：映像的 entrypoint 依 `CLICKHOUSE_USER`、`CLICKHOUSE_PASSWORD_FILE`（掛載的 Secret）與 `CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1` 寫進 `users.d`（記憶體 emptyDir），並移除沒有密碼的 `default` 帳號。
 - 根目錄唯讀、以 UID 101 非 root 執行、不能提權、drop 所有 capability；探針是 `GET /ping`。pod 帶 `istio.io/dataplane-mode: ambient` 加入 ambient mesh，服務連 ClickHouse 由 ztunnel 加 mTLS。
 
 磁碟區大小沒有預設值，每個部署在安裝實例的覆寫檔設定 `clickhouse.bundled.storage.size`：每日筆數 × 保存天數 × 約 3.1 bytes（2026-10-09 實測，30 天 52 億筆佔 15.2 GiB）× 1.5（merge 時新舊 part 並存與系統表的餘裕）。例如每天 1 億筆、保存 400 天約 190 GB（遙測表的保存期限暫定 400 天，Laysi/trustiot-v2#92 定案）。磁碟用量的告警與擴充見清單 I2（硬碟水位告警）。

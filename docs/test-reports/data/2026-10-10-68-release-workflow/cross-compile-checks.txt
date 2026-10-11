@@ -1,0 +1,38 @@
+# Cross-compile checks for aarch64-unknown-linux-musl with the release toolchain
+# (zig 0.16.0, cargo-zigbuild 0.23.4, cargo-auditable 0.7.6, Rust 1.99.0), workstation Fedora 45
+# x86_64, CARGO_BUILD_JOBS=2, 2026-10-10. Runs 1 and 2 were before the rebase onto main 71be25d;
+# tools/release-selftest and the release profile did not change in the rebase.
+
+== 1. tools/release-selftest/build.rs C compiler guard (12:22Z)
+$ cargo auditable zigbuild --locked --release --target aarch64-unknown-linux-musl --package release-selftest
+    Finished `release` profile [optimized] target(s) in 15.51s
+exit 0
+ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped
+# The build script's guard passed, so one of the variables it checks was set (cargo-zigbuild
+# sets CC_aarch64_unknown_linux_musl to its zig cc wrapper). The variables the build script
+# watches, from its output:
+cargo::rerun-if-env-changed=CC_aarch64_unknown_linux_musl
+cargo::rerun-if-env-changed=CC_aarch64-unknown-linux-musl
+# A plain cross build without a C compiler for the target must stop with the explanation:
+$ cargo build --locked --target aarch64-unknown-linux-musl --package release-selftest --target-dir target/cc-check
+error: failed to run custom build command for `release-selftest v0.1.0 (.../tools/release-selftest)`
+  cross-compiling for aarch64-unknown-linux-musl needs a C compiler for the target: build with `cargo zigbuild` (scripts/release/build.ts does), or set CC_aarch64_unknown_linux_musl
+exit 101
+
+== 2. Does a zigbuild-linked binary keep its symbol table? (12:24Z)
+# Same package, CARGO_PROFILE_RELEASE_STRIP overridden, separate target dirs, `readelf -S`:
+strip=none: exit 0, symtab sections: 1, size 4005440
+strip=debuginfo: exit 0, symtab sections: 0, size 376848
+# The workspace profile sets strip = "debuginfo" to keep symbols for symbolication, but the
+# zig linker drops .symtab with it. Recorded as a follow-up; not changed in this PR.
+
+== 3. service-kit dependency stack (example-service), before the rebase (11:53-11:59Z)
+$ cargo auditable zigbuild --locked --release --target aarch64-unknown-linux-musl --package service-kit --bin example-service
+186 crates compiled
+warning: linker stderr: ignoring deprecated linker optimization setting '1'
+    Finished `release` profile [optimized] target(s) in 5m 59s
+elapsed 360s
+target/aarch64-unknown-linux-musl/release/example-service: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped
+size 3292856 bytes
+# The linker warning comes from zig's linker and is harmless; the stack (axum, tokio, sqlx,
+# opentelemetry-otlp, ...) cross-compiles the way release images are built.

@@ -1,0 +1,49 @@
+== plan
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.1 → version 0.0.0-rc.1 (prerelease), commit ee8c4388772d2dce6c8e93f2b7cd60ec298c803a
+[release:plan] image 127.0.0.1:5068/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 (Rust package release-selftest)
+[release:plan] chart 127.0.0.1:5068/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1
+[release:plan] first release: the notes list every commit
+== build
+[release:build] 127.0.0.1:5068/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 → sha256:182467660b124c93204d556d04aec5ec87dfcd274dd27bfdf85ee2d2248ac2ea, SBOM SPDX-2.3 with 13 packages
+== publish
+[release:publish] pushing 127.0.0.1:5068/laysi/trustiot-v2/release-selftest:0.0.0-rc.1
+[release:publish] 127.0.0.1:5068/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 → sha256:182467660b124c93204d556d04aec5ec87dfcd274dd27bfdf85ee2d2248ac2ea: signed, SBOM attested
+[release:publish] 127.0.0.1:5068/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1 → sha256:802286856c7fc42ae924ed6293e107c847f75b3a20a77a7a7351a146ebf9c481: signed
+[release:publish] local test: no GitHub Release; its body is in /home/ruisi/.cache/trustiot-v2-68/e2e-final/release-body.md
+[release:publish] released v0.0.0-rc.1
+{
+  "images": [
+    {
+      "name": "release-selftest",
+      "ref": "127.0.0.1:5068/laysi/trustiot-v2/release-selftest:0.0.0-rc.1",
+      "digest": "sha256:182467660b124c93204d556d04aec5ec87dfcd274dd27bfdf85ee2d2248ac2ea",
+      "sbomAsset": "release-selftest-0.0.0-rc.1.spdx.json"
+    }
+  ],
+  "chart": {
+    "name": "trustiot",
+    "ref": "127.0.0.1:5068/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1",
+    "digest": "sha256:802286856c7fc42ae924ed6293e107c847f75b3a20a77a7a7351a146ebf9c481"
+  },
+  "releaseUrl": ""
+}
+== publish again (re-run: same digests, nothing pushed twice)
+[release:publish] 127.0.0.1:5068/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 is already sha256:182467660b124c93204d556d04aec5ec87dfcd274dd27bfdf85ee2d2248ac2ea; not pushing it again
+[release:publish] 127.0.0.1:5068/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 → sha256:182467660b124c93204d556d04aec5ec87dfcd274dd27bfdf85ee2d2248ac2ea: signed, SBOM attested
+[release:publish] 127.0.0.1:5068/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1 already holds this chart (sha256:802286856c7fc42ae924ed6293e107c847f75b3a20a77a7a7351a146ebf9c481); not pushing it again
+[release:publish] 127.0.0.1:5068/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1 → sha256:802286856c7fc42ae924ed6293e107c847f75b3a20a77a7a7351a146ebf9c481: signed
+[release:publish] local test: no GitHub Release; its body is in /home/ruisi/.cache/trustiot-v2-68/e2e-final/release-body.md
+[release:publish] released v0.0.0-rc.1
+re-run published the same digests
+== verify
+[release:verify] 127.0.0.1:5068/laysi/trustiot-v2/release-selftest:0.0.0-rc.1: sha256:182467660b124c93204d556d04aec5ec87dfcd274dd27bfdf85ee2d2248ac2ea, signature and SBOM attestation verified (SPDX-2.3，13 個套件)
+[release:verify] 127.0.0.1:5068/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1: sha256:802286856c7fc42ae924ed6293e107c847f75b3a20a77a7a7351a146ebf9c481, signature verified, version and appVersion 0.0.0-rc.1
+[release:verify] verified 1 image(s) and the chart
+## 驗證結果
+
+2026-10-10T12:40:28Z 由 release workflow 的 verify job 以唯讀權限從 registry 檢查，以本機測試金鑰驗證簽章（本機測試，不是正式發佈）：
+
+- 映像 `release-selftest`：tag 指向 `sha256:182467660b124c93204d556d04aec5ec87dfcd274dd27bfdf85ee2d2248ac2ea`；平台 linux/arm64；cosign 簽章驗證通過；SBOM attestation 驗證通過（SPDX-2.3，13 個套件）。
+- Helm chart `trustiot`：tag 指向 `sha256:802286856c7fc42ae924ed6293e107c847f75b3a20a77a7a7351a146ebf9c481`；cosign 簽章驗證通過；拉下的 chart 就是發佈的檔案；Chart.yaml 的 version 與 appVersion 都是 `0.0.0-rc.1`。

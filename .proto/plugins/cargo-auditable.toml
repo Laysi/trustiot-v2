@@ -1,0 +1,29 @@
+# proto schema plugin for cargo-auditable (https://github.com/rust-secure-code/cargo-auditable),
+# which embeds the dependency list in each binary so that syft can build the SBOM.
+# Downloads the official release archive and verifies it against the SHA-256 file
+# published next to it.
+# Reference: https://moonrepo.dev/docs/proto/non-wasm-plugin
+
+name = "cargo-auditable"
+type = "cli"
+
+[platform.linux]
+download-file = "cargo-auditable-{arch}-unknown-linux-{libc}.tar.xz"
+checksum-file = "cargo-auditable-{arch}-unknown-linux-{libc}.tar.xz.sha256"
+archive-prefix = "cargo-auditable-{arch}-unknown-linux-{libc}"
+
+[platform.macos]
+download-file = "cargo-auditable-{arch}-apple-darwin.tar.xz"
+checksum-file = "cargo-auditable-{arch}-apple-darwin.tar.xz.sha256"
+archive-prefix = "cargo-auditable-{arch}-apple-darwin"
+
+[install]
+download-url = "https://github.com/rust-secure-code/cargo-auditable/releases/download/v{version}/{download_file}"
+checksum-url = "https://github.com/rust-secure-code/cargo-auditable/releases/download/v{version}/{checksum_file}"
+
+[install.exes.cargo-auditable]
+exe-path = "cargo-auditable"
+primary = true
+
+[resolve]
+git-url = "https://github.com/rust-secure-code/cargo-auditable"

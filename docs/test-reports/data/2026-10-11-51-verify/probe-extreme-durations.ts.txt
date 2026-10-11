@@ -1,0 +1,38 @@
+// Starts example-service with extreme duration settings, sends SIGTERM, records the exit code.
+const bin = process.argv[2];
+const out = process.argv[3];
+const cases: Record<string, string>[] = [
+  { TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT: "500000000000y" },
+  { TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT: "292000000000y" },
+  { TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT: "100y" },
+  { TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT: "1000000h" },
+  { TRUSTIOT__SHUTDOWN__DRAIN_DELAY: "500000000000y" },
+  { TRUSTIOT__HTTP__REQUEST_TIMEOUT: "500000000000y" },
+  { TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT: "1ns" },
+];
+const lines: string[] = [];
+for (const extra of cases) {
+  const proc = Bun.spawn([bin], {
+    env: {
+      TRUSTIOT__GREETING: "hi",
+      TRUSTIOT__HTTP__LISTEN_ADDR: "127.0.0.1:0",
+      TRUSTIOT__SHUTDOWN__DRAIN_DELAY: "100ms",
+      ...extra,
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  await Bun.sleep(1500);
+  const t = Date.now();
+  proc.kill("SIGTERM");
+  const timer = setTimeout(() => proc.kill("SIGKILL"), 8000);
+  const code = await proc.exited;
+  clearTimeout(timer);
+  const text = await new Response(proc.stdout).text();
+  const panic = text.split("\n").find((l) => l.includes("thread panicked")) ?? "";
+  lines.push(
+    `${JSON.stringify(extra)} -> exit=${code} after ${Date.now() - t} ms ${panic ? "PANIC: " + (JSON.parse(panic).fields.payload as string) : ""}`,
+  );
+}
+await Bun.write(out, lines.join("\n") + "\n");
+console.log(lines.join("\n"));

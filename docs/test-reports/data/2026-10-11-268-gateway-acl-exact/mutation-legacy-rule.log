@@ -1,0 +1,147 @@
+warning: unused variable: `channel`
+  --> crates/protocol/src/acl.rs:84:15
+   |
+84 |         .map(|channel| AclRule {
+   |               ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_channel`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `protocol` (lib) generated 1 warning (run `cargo fix --lib -p protocol` to apply 1 suggestion)
+warning: `protocol` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running unittests src/lib.rs (target/debug/deps/protocol-08b65339001814da)
+
+running 33 tests
+test acl::tests::publish_rules_are_exact_one_per_up_channel ... FAILED
+test acl::tests::rules_serialize_for_dynamic_security ... FAILED
+test acl::tests::the_wildcard_rule_before_the_fix_fails_the_same_check ... ok
+test acl::tests::wildcard_usernames_gain_nothing ... ok
+test codec::tests::decode_errors_map_to_issue_codes ... ok
+test acl::tests::gateway_subscribes_only_its_own_down_channels ... ok
+test codec::tests::decoding_rejects_trailing_bytes_and_deep_nesting ... ok
+test acl::tests::filter_matching_follows_mqtt ... ok
+test codec::tests::issues_are_bounded ... ok
+test codec::tests::the_structure_check_accepts_every_well_formed_shape ... ok
+test float::tests::optional_floats_accept_null_and_values ... ok
+test ids::tests::agent_versions_allow_semver_metadata ... ok
+test ids::tests::id_errors_do_not_echo_unbounded_input ... ok
+test acl::tests::gateway_publishes_only_its_own_up_channels ... FAILED
+test ids::tests::model_names_follow_c1 ... ok
+test ids::tests::sequence_numbers_start_at_one_and_never_wrap ... ok
+test ids::tests::ids_reject_topic_syntax_and_bad_lengths ... ok
+test ids::tests::ids_accept_the_documented_characters ... ok
+test ids::tests::unix_millis_converts_system_time ... ok
+test open_enum::tests::codes_have_one_shape ... ok
+test open_enum::tests::unknown_codes_are_kept ... ok
+test topic::tests::channel_names_are_unique_per_direction ... ok
+test topic::tests::delivery_rules ... ok
+test topic::tests::foreign_topics_are_rejected ... ok
+test topic::tests::every_topic_parses_back ... ok
+test topic::tests::topics_have_six_levels ... ok
+test codec::tests::the_structure_check_refuses_impossible_lengths_before_decoding ... ok
+test float::tests::every_float_width_and_small_integers_are_accepted ... ok
+test codec::tests::the_version_marker_accepts_only_one ... ok
+test topic::tests::gateways_subscribe_to_each_down_channel ... ok
+test value::tests::invalid_values_are_reported ... ok
+test value::tests::floats_narrow_only_when_exact ... ok
+test codec::tests::head_lengths_match_the_encoder ... ok
+
+failures:
+
+---- acl::tests::publish_rules_are_exact_one_per_up_channel stdout ----
+
+thread 'acl::tests::publish_rules_are_exact_one_per_up_channel' (351765) panicked at crates/protocol/src/acl.rs:260:9:
+assertion `left == right` failed
+  left: 1
+ right: 7
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- acl::tests::rules_serialize_for_dynamic_security stdout ----
+
+thread 'acl::tests::rules_serialize_for_dynamic_security' (351766) panicked at crates/protocol/src/acl.rs:356:9:
+assertion `left == right` failed
+  left: Array [Object {"acltype": String("publishClientSend"), "allow": Bool(true), "priority": Number(0), "topic": String("trustiot/v1/gw/%u/up/#")}, Object {"acltype": String("subscribePattern"), "allow": Bool(true), "priority": Number(0), "topic": String("trustiot/v1/gw/%u/down/#")}, Object {"acltype": String("publishClientReceive"), "allow": Bool(true), "priority": Number(0), "topic": String("trustiot/v1/gw/%u/down/#")}, Object {"acltype": String("unsubscribePattern"), "allow": Bool(true), "priority": Number(0), "topic": String("trustiot/v1/gw/%u/down/#")}]
+ right: Array [Object {"acltype": String("publishClientSend"), "allow": Bool(true), "priority": Number(0), "topic": String("trustiot/v1/gw/%u/up/telemetry")}, Object {"acltype": String("publishClientSend"), "allow": Bool(true), "priority": Number(0), "topic": String("trustiot/v1/gw/%u/up/config-report")}, Object {"acltype": String("publishClientSend"), "allow": Bool(true), "priority": Number(0), "topic": String("trustiot/v1/gw/%u/up/status")}, Object {"acltype": String("publishClientSend"), "allow": Bool(true), "priority": Number(0), "topic": String("trustiot/v1/gw/%u/up/heartbeat")}, Object {"acltype": String("publishClientSend"), "allow": Bool(true), "priority": Number(0), "topic": String("trustiot/v1/gw/%u/up/live")}, Object {"acltype": String("publishClientSend"), "allow": Bool(true), "priority": Number(0), "topic": String("trustiot/v1/gw/%u/up/log")}, Object {"acltype": String("publishClientSend"), "allow": Bool(true), "priority": Number(0), "topic": String("trustiot/v1/gw/%u/up/log-dump")}, Object {"acltype": String("subscribePattern"), "allow": Bool(true), "priority": Number(0), "topic": String("trustiot/v1/gw/%u/down/#")}, Object {"acltype": String("publishClientReceive"), "allow": Bool(true), "priority": Number(0), "topic": String("trustiot/v1/gw/%u/down/#")}, Object {"acltype": String("unsubscribePattern"), "allow": Bool(true), "priority": Number(0), "topic": String("trustiot/v1/gw/%u/down/#")}]
+
+---- acl::tests::gateway_publishes_only_its_own_up_channels stdout ----
+
+thread 'acl::tests::gateway_publishes_only_its_own_up_channels' (351763) panicked at crates/protocol/src/acl.rs:230:13:
+trustiot/v1/gw/gw-a/up
+
+
+failures:
+    acl::tests::gateway_publishes_only_its_own_up_channels
+    acl::tests::publish_rules_are_exact_one_per_up_channel
+    acl::tests::rules_serialize_for_dynamic_security
+
+test result: FAILED. 30 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.38s
+
+error: test failed, to rerun pass `-p protocol --lib`
+     Running tests/adversarial.rs (target/debug/deps/adversarial-d63360b058d2a6d2)
+
+running 12 tests
+test a_gateways_acl_topics_contain_no_wildcard_except_the_trailing_hash ... ok
+test chunked_strings_and_broken_indefinite_items_are_refused ... ok
+test only_a_map_is_a_message ... ok
+test repeated_keys_are_refused_wherever_a_field_could_be_chosen ... ok
+test topics_never_parse_into_wildcards_or_other_gateways ... ok
+test golden_payloads_survive_a_decode_and_encode_byte_for_byte ... ok
+test a_newer_revision_is_refused_in_every_encoding_a_peer_might_use ... ok
+test the_major_version_is_checked_first_and_exactly ... ok
+test integer_and_float_extremes_are_accepted_or_refused_exactly ... ok
+test identifier_and_text_limits_hold_at_the_byte ... ok
+test a_payload_of_exactly_the_limit_is_accepted_and_one_byte_more_is_not ... ok
+test nesting_beyond_the_limit_is_refused_for_every_container_kind_and_cheap_to_refuse ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+     Running tests/broker.rs (target/debug/deps/broker-2e7172e52259602f)
+
+running 2 tests
+test the_wildcard_rule_before_the_fix_fails_the_same_check ... ok
+test the_gateway_role_allows_exactly_the_protocol_channels ... FAILED
+
+failures:
+
+---- the_gateway_role_allows_exactly_the_protocol_channels stdout ----
+
+thread 'the_gateway_role_allows_exactly_the_protocol_channels' (351954) panicked at crates/protocol/tests/broker.rs:652:5:
+assertion `left == right` failed
+  left: ["trustiot/v1/gw/gw-a/up: PUBACK Some(0), expected 0x87", "trustiot/v1/gw/gw-a/up/: PUBACK Some(0), expected 0x87", "trustiot/v1/gw/gw-a/up/spam: PUBACK Some(0), expected 0x87", "trustiot/v1/gw/gw-a/up/spam/1: PUBACK Some(0), expected 0x87", "trustiot/v1/gw/gw-a/up/telemetry/extra: PUBACK Some(0), expected 0x87", "trustiot/v1/gw/gw-a/up/telemetry/: PUBACK Some(0), expected 0x87", "trustiot/v1/gw/gw-a/up/Telemetry: PUBACK Some(0), expected 0x87", "trustiot/v1/gw/gw-a/up/telemetry-ack: PUBACK Some(0), expected 0x87", "trustiot/v1/gw/gw-a/up/config: PUBACK Some(0), expected 0x87", "trustiot/v1/gw/gw-a/up//status: PUBACK Some(0), expected 0x87", "trustiot/v1/gw/gw-a/up: delivered to the cloud", "trustiot/v1/gw/gw-a/up/: delivered to the cloud", "trustiot/v1/gw/gw-a/up/spam: delivered to the cloud", "trustiot/v1/gw/gw-a/up/spam/1: delivered to the cloud", "trustiot/v1/gw/gw-a/up/telemetry/extra: delivered to the cloud", "trustiot/v1/gw/gw-a/up/telemetry/: delivered to the cloud", "trustiot/v1/gw/gw-a/up/Telemetry: delivered to the cloud", "trustiot/v1/gw/gw-a/up/telemetry-ack: delivered to the cloud", "trustiot/v1/gw/gw-a/up/config: delivered to the cloud", "trustiot/v1/gw/gw-a/up//status: delivered to the cloud", "trustiot/v1/gw/gw-a/up: stored as a retained message", "trustiot/v1/gw/gw-a/up/: stored as a retained message", "trustiot/v1/gw/gw-a/up//status: stored as a retained message", "trustiot/v1/gw/gw-a/up/Telemetry: stored as a retained message", "trustiot/v1/gw/gw-a/up/config: stored as a retained message", "trustiot/v1/gw/gw-a/up/spam: stored as a retained message", "trustiot/v1/gw/gw-a/up/spam/1: stored as a retained message", "trustiot/v1/gw/gw-a/up/telemetry-ack: stored as a retained message", "trustiot/v1/gw/gw-a/up/telemetry/: stored as a retained message", "trustiot/v1/gw/gw-a/up/telemetry/extra: stored as a retained message"]
+ right: []
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    the_gateway_role_allows_exactly_the_protocol_channels
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 47.95s
+
+error: test failed, to rerun pass `-p protocol --test broker`
+     Running tests/readme.rs (target/debug/deps/readme-e146324afde437e1)
+
+running 2 tests
+test the_readme_lists_the_gateway_acl ... FAILED
+test the_readme_lists_every_topic_with_its_message_and_delivery ... ok
+
+failures:
+
+---- the_readme_lists_the_gateway_acl stdout ----
+
+thread 'the_readme_lists_the_gateway_acl' (357221) panicked at crates/protocol/tests/readme.rs:109:5:
+assertion `left == right` failed
+  left: ["| `publishClientSend` | `trustiot/v1/gw/%u/up/telemetry` | 是 |", "| `publishClientSend` | `trustiot/v1/gw/%u/up/config-report` | 是 |", "| `publishClientSend` | `trustiot/v1/gw/%u/up/status` | 是 |", "| `publishClientSend` | `trustiot/v1/gw/%u/up/heartbeat` | 是 |", "| `publishClientSend` | `trustiot/v1/gw/%u/up/live` | 是 |", "| `publishClientSend` | `trustiot/v1/gw/%u/up/log` | 是 |", "| `publishClientSend` | `trustiot/v1/gw/%u/up/log-dump` | 是 |", "| `subscribePattern` | `trustiot/v1/gw/%u/down/#` | 是 |", "| `publishClientReceive` | `trustiot/v1/gw/%u/down/#` | 是 |", "| `unsubscribePattern` | `trustiot/v1/gw/%u/down/#` | 是 |"]
+ right: ["| `publishClientSend` | `trustiot/v1/gw/%u/up/#` | 是 |", "| `subscribePattern` | `trustiot/v1/gw/%u/down/#` | 是 |", "| `publishClientReceive` | `trustiot/v1/gw/%u/down/#` | 是 |", "| `unsubscribePattern` | `trustiot/v1/gw/%u/down/#` | 是 |"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    the_readme_lists_the_gateway_acl
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p protocol --test readme`
+error: 3 targets failed:
+    `-p protocol --lib`
+    `-p protocol --test broker`
+    `-p protocol --test readme`
