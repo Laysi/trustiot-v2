@@ -297,7 +297,9 @@ fn single_pass_disagrees<M: Message + PartialEq + Debug>(payload: &[u8]) -> Opti
 ///   refuse an array;
 /// - "item serde cannot buffer": refuses a tag, a simple value other than false, true, null
 ///   and undefined, or a negative integer below `i64::MIN`, even in an entry it would skip,
-///   where other maps skip it.
+///   where other maps skip it;
+/// - "invalid UTF-8": refuses text that is not UTF-8 even in an entry it would skip, where
+///   other maps skip it.
 fn single_pass_features(payload: &[u8]) -> BTreeSet<&'static str> {
     fn walk(rest: &mut &[u8], key: bool, features: &mut BTreeSet<&'static str>) -> Option<()> {
         let (&initial, tail) = rest.split_first()?;
@@ -372,7 +374,11 @@ fn single_pass_features(payload: &[u8]) -> BTreeSet<&'static str> {
                     features.insert("byte string");
                 }
                 let length = usize::try_from(argument?).ok()?;
-                *rest = rest.get(length..)?;
+                let (bytes, tail) = rest.split_at_checked(length)?;
+                if major == 3 && std::str::from_utf8(bytes).is_err() {
+                    features.insert("invalid UTF-8");
+                }
+                *rest = tail;
             }
             4 => items(rest, features, false)?,
             5 => items(rest, features, true)?,
