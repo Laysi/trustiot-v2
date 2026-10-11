@@ -5,12 +5,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use repo_check::{
-    PROTOTOOLS, RUNTIME_SOURCE_GLOB, RUST_TOOLCHAIN, WORKSPACE_MANIFEST, Workspace,
-    check_member_manifest, check_rust_pins, check_rust_version, find_agents_files,
-    find_runtime_sources, find_schema_changes, parse_metadata, prototools_pin,
+    DEV_ONLY_CRATES, PROTOTOOLS, RUNTIME_SOURCE_GLOB, RUST_TOOLCHAIN, WORKSPACE_MANIFEST,
+    Workspace, check_member_manifest, check_rust_pins, check_rust_version, find_agents_files,
+    find_runtime_sources, find_schema_changes, non_dev_uses, parse_metadata, prototools_pin,
 };
 
-fn workspace() -> Workspace {
+/// `cargo metadata --no-deps --format-version 1` of this workspace.
+fn metadata() -> String {
     // The cargo binary that is running these tests, so the pinned toolchain answers.
     let output = Command::new(env!("CARGO"))
         .args(["metadata", "--no-deps", "--format-version", "1"])
@@ -22,8 +23,11 @@ fn workspace() -> Workspace {
         "cargo metadata failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8(output.stdout).expect("cargo metadata prints UTF-8");
-    parse_metadata(&stdout).expect("cargo metadata output should parse")
+    String::from_utf8(output.stdout).expect("cargo metadata prints UTF-8")
+}
+
+fn workspace() -> Workspace {
+    parse_metadata(&metadata()).expect("cargo metadata output should parse")
 }
 
 fn read(path: &Path) -> String {
@@ -54,6 +58,17 @@ fn members_inherit_workspace_edition_and_lints() {
     for manifest in &workspace.member_manifests {
         check_member_manifest(manifest, &read(manifest)).unwrap_or_else(|error| panic!("{error}"));
     }
+}
+
+/// Test support crates stay out of service binaries: their SQL is checked as test code.
+#[test]
+fn dev_only_crates_are_only_dev_dependencies() {
+    let uses = non_dev_uses(&metadata(), DEV_ONLY_CRATES).unwrap_or_else(|error| panic!("{error}"));
+    assert!(
+        uses.is_empty(),
+        "move these to [dev-dependencies]:\n{}",
+        uses.join("\n")
+    );
 }
 
 #[test]

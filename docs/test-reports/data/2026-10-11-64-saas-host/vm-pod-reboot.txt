@@ -1,0 +1,38 @@
+# Pod -> host probe (2026-10-11 about 03:15Z, VM host64 10.0.2.15, busybox:1.37 pod 10.42.0.5)
+$ k3s kubectl run probe64 --image=docker.io/library/busybox:1.37 --restart=Never --command -- sh -c 'nc -z -w 3 <host> <port> for each target; nslookup kubernetes.default.svc.cluster.local'
+10.0.2.15:22 refused-or-timeout
+10.42.0.1:22 refused-or-timeout
+10.0.2.15:6443 open
+10.43.0.1:443 open
+10.0.2.15:10250 open
+dns ok
+
+# Reboot (2026-10-11T03:19Z), checked 1 minute after boot
+$ uptime; getenforce; systemctl is-active cloudflared k3s firewalld
+ 03:20:05 up 1 min,  1 user,  load average: 3.05, 1.02, 0.36
+Enforcing
+active
+active
+active
+$ ss -Htlnup | grep -E ':(80|443)\b' || echo "no 80/443 listeners"
+no 80/443 listeners
+$ firewall-cmd --zone=trusted --list-sources; firewall-cmd --zone=trusted --list-rich-rules
+10.42.0.0/16
+rule family="ipv4" source address="10.42.0.0/16" port port="22" protocol="tcp" reject
+$ k3s kubectl get nodes --no-headers
+host64   Ready   control-plane   7h35m   v1.36.5+k3s1
+$ journalctl -b -u cloudflared -o cat | grep -c "Registered tunnel connection"
+4
+
+# Drift: an operator opens 443 by hand, the installer closes it again
+$ firewall-cmd --zone=public --add-service=https; firewall-cmd --permanent --zone=public --add-port=443/tcp
+$ sudo ./trustiot-host-install-x86_64      (see drift.log)
++ firewalld (runtime): remove service https from zone public
++ firewalld (permanent): remove port 443/tcp from zone public
+Done: 2 change(s) made.
+$ firewall-cmd --zone=public --list-services; firewall-cmd --permanent --zone=public --list-ports
+dhcpv6-client mdns ssh
+(empty)
+
+# Re-run timing (strace -f -e execve, 2026-10-11T03:1xZ): 341 s, 144 firewall-cmd calls,
+# each 0.5-10.9 s on this 2 vCPU VM; every other command together under 20 s.
