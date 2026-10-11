@@ -65,17 +65,17 @@ struct Fixture {
 }
 
 impl Fixture {
-    async fn new(database: &'static str) -> Option<Self> {
+    /// Creates `database` with `create`, a static `CREATE DATABASE <database> OWNER
+    /// identity_owner` (tools/sql-check: no SQL built from strings).
+    async fn new(create: &'static str, database: &'static str) -> Option<Self> {
         let postgres = tls_postgres(ROLES).await?;
         let mut admin = PgConnection::connect_with(&postgres.superuser("postgres"))
             .await
             .expect("connect as the superuser");
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-            "CREATE DATABASE {database} OWNER identity_owner"
-        )))
-        .execute(&mut admin)
-        .await
-        .expect("create the database");
+        sqlx::raw_sql(create)
+            .execute(&mut admin)
+            .await
+            .expect("create the database");
         let dir = scratch_dir(database);
         let key = TestKey::new(71);
         let key_file = dir.join("signing-key.pem");
@@ -309,7 +309,12 @@ fn status_of(response: &Option<Raw>) -> String {
 
 #[tokio::test]
 async fn cookie_parsing_accepts_only_one_exact_session_cookie() {
-    let Some(fixture) = Fixture::new("verify_cookies").await else {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE verify_cookies OWNER identity_owner",
+        "verify_cookies",
+    )
+    .await
+    else {
         return;
     };
     fixture.add_user(USER, false).await;
@@ -645,7 +650,12 @@ async fn cookie_parsing_accepts_only_one_exact_session_cookie() {
 
 #[tokio::test]
 async fn session_expiry_and_revocation_are_decided_by_the_database_clock() {
-    let Some(fixture) = Fixture::new("verify_expiry").await else {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE verify_expiry OWNER identity_owner",
+        "verify_expiry",
+    )
+    .await
+    else {
         return;
     };
     fixture.add_user(USER, false).await;
@@ -757,7 +767,12 @@ fn no_identity_and_closed(response: &support::Response, what: &str) {
 
 #[tokio::test]
 async fn slow_or_locked_database_answers_503_and_recovers_without_failing_open() {
-    let Some(fixture) = Fixture::new("verify_locks").await else {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE verify_locks OWNER identity_owner",
+        "verify_locks",
+    )
+    .await
+    else {
         return;
     };
     fixture.add_user(USER, false).await;
@@ -770,14 +785,21 @@ async fn slow_or_locked_database_answers_503_and_recovers_without_failing_open()
     let service = fixture.service_with(&[("TRUSTIOT__DATABASE__MAX_CONNECTIONS", "3")]);
     warm(&service, &session_cookie);
 
-    for table in ["identity.sessions", "identity.memberships"] {
+    for (table, lock) in [
+        (
+            "identity.sessions",
+            "BEGIN; LOCK TABLE identity.sessions IN ACCESS EXCLUSIVE MODE",
+        ),
+        (
+            "identity.memberships",
+            "BEGIN; LOCK TABLE identity.memberships IN ACCESS EXCLUSIVE MODE",
+        ),
+    ] {
         let mut owner = fixture.connect("identity_owner").await;
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-            "BEGIN; LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE"
-        )))
-        .execute(&mut owner)
-        .await
-        .expect("lock the table");
+        sqlx::raw_sql(lock)
+            .execute(&mut owner)
+            .await
+            .expect("lock the table");
 
         // One request: 503 within the 0.4 s deadline (plus margin), never a 200.
         let started = Instant::now();
@@ -874,7 +896,12 @@ async fn slow_or_locked_database_answers_503_and_recovers_without_failing_open()
 
 #[tokio::test]
 async fn killed_connections_never_turn_into_401_or_200_for_the_wrong_person() {
-    let Some(fixture) = Fixture::new("verify_kill").await else {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE verify_kill OWNER identity_owner",
+        "verify_kill",
+    )
+    .await
+    else {
         return;
     };
     fixture.add_user(USER, false).await;
@@ -941,7 +968,12 @@ async fn killed_connections_never_turn_into_401_or_200_for_the_wrong_person() {
 
 #[tokio::test]
 async fn wrong_credentials_or_database_fail_closed() {
-    let Some(fixture) = Fixture::new("verify_creds").await else {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE verify_creds OWNER identity_owner",
+        "verify_creds",
+    )
+    .await
+    else {
         return;
     };
     fixture.add_user(USER, false).await;
@@ -983,7 +1015,12 @@ async fn wrong_credentials_or_database_fail_closed() {
 
 #[tokio::test]
 async fn memberships_are_isolated_by_tenant_and_by_user() {
-    let Some(fixture) = Fixture::new("verify_tenants").await else {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE verify_tenants OWNER identity_owner",
+        "verify_tenants",
+    )
+    .await
+    else {
         return;
     };
     fixture.add_user(USER, false).await;
@@ -1143,7 +1180,12 @@ async fn memberships_are_isolated_by_tenant_and_by_user() {
 
 #[tokio::test]
 async fn nothing_secret_is_logged_at_any_level() {
-    let Some(fixture) = Fixture::new("verify_logs").await else {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE verify_logs OWNER identity_owner",
+        "verify_logs",
+    )
+    .await
+    else {
         return;
     };
     fixture.add_user(USER, false).await;
@@ -1253,7 +1295,12 @@ async fn nothing_secret_is_logged_at_any_level() {
 
 #[tokio::test]
 async fn the_health_port_serves_only_the_health_routes() {
-    let Some(fixture) = Fixture::new("verify_health").await else {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE verify_health OWNER identity_owner",
+        "verify_health",
+    )
+    .await
+    else {
         return;
     };
     fixture.add_user(USER, false).await;
@@ -1354,7 +1401,12 @@ fn refuses_to_start(fixture: &Fixture, name: &str, key_file: &Path, keys: Option
 
 #[tokio::test]
 async fn the_service_refuses_to_start_without_a_usable_matching_signing_key() {
-    let Some(fixture) = Fixture::new("verify_keys").await else {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE verify_keys OWNER identity_owner",
+        "verify_keys",
+    )
+    .await
+    else {
         return;
     };
     let dir = scratch_dir("verify-keyfiles");
@@ -1527,7 +1579,12 @@ fn run_to_exit_or_serve(env: &[(&str, &str)]) -> (Option<i32>, String) {
 
 #[tokio::test]
 async fn rotation_across_restarts_keeps_old_tokens_valid_and_new_ones_under_the_new_kid() {
-    let Some(fixture) = Fixture::new("verify_rotation").await else {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE verify_rotation OWNER identity_owner",
+        "verify_rotation",
+    )
+    .await
+    else {
         return;
     };
     fixture.add_user(USER, false).await;
@@ -1627,7 +1684,12 @@ async fn rotation_across_restarts_keeps_old_tokens_valid_and_new_ones_under_the_
 
 #[tokio::test]
 async fn the_audience_follows_the_route_and_an_allow_carries_only_the_identity_header() {
-    let Some(fixture) = Fixture::new("verify_audience").await else {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE verify_audience OWNER identity_owner",
+        "verify_audience",
+    )
+    .await
+    else {
         return;
     };
     fixture.add_user(USER, false).await;
