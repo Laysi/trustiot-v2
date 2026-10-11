@@ -1,0 +1,57 @@
++ K='sudo k3s kubectl'
++ sudo k3s kubectl delete namespace e2e-287 --wait=true
+namespace "e2e-287" deleted
++ date -u +%FT%TZ
+2026-10-11T04:14:33Z
++ sudo k3s kubectl -n kube-system delete helmchartconfig istiod
+helmchartconfig.helm.cattle.io "istiod" deleted from kube-system namespace
+++ seq 1 40
++ for i in $(seq 1 40)
++ sleep 4
++ sudo k3s kubectl -n istio-system get cm istio -o 'jsonpath={.data.mesh}'
++ grep -q trustiot-e2e-287
++ for i in $(seq 1 40)
++ sleep 4
++ sudo k3s kubectl -n istio-system get cm istio -o 'jsonpath={.data.mesh}'
++ grep -q trustiot-e2e-287
+mesh restored 2026-10-11T04:14:41Z
+++ date -u +%FT%TZ
++ echo 'mesh restored 2026-10-11T04:14:41Z'
++ break
++ sleep 5
++ sudo k3s kubectl -n istio-system get cm istio -o 'jsonpath={.data.mesh}'
++ sudo k3s kubectl -n istio-system get cm istio -o 'jsonpath={.data.meshNetworks}'
+11507d117465e92da63f14204fc2c19837df210957b181730a46a0ce91ae76be  /home/trustiot/e2e-287/mesh-before.txt
+11507d117465e92da63f14204fc2c19837df210957b181730a46a0ce91ae76be  /home/trustiot/e2e-287/mesh-after.txt
+7b2c40b5001e85e00a7ee8ebfc7bcfea574e72f8906e1503bc73e5a2cb0eeaed  /home/trustiot/e2e-287/meshnet-before.txt
+7b2c40b5001e85e00a7ee8ebfc7bcfea574e72f8906e1503bc73e5a2cb0eeaed  /home/trustiot/e2e-287/meshnet-after.txt
+MESH-IDENTICAL
+MESHNETWORKS-IDENTICAL
++ sha256sum /home/trustiot/e2e-287/mesh-before.txt /home/trustiot/e2e-287/mesh-after.txt /home/trustiot/e2e-287/meshnet-before.txt /home/trustiot/e2e-287/meshnet-after.txt
++ cmp /home/trustiot/e2e-287/mesh-before.txt /home/trustiot/e2e-287/mesh-after.txt
++ echo MESH-IDENTICAL
++ cmp /home/trustiot/e2e-287/meshnet-before.txt /home/trustiot/e2e-287/meshnet-after.txt
++ echo MESHNETWORKS-IDENTICAL
++ sudo k3s kubectl -n kube-system get helmchartconfig
+No resources found in kube-system namespace.
++ sudo k3s kubectl get pods -A
++ grep -E 'poc|istio'
+istio-ingress   edge-istio-5878956479-2v7bk               1/1     Running     0             29h
+istio-ingress   edge-istio-5878956479-swx9s               1/1     Running     0             29h
+istio-system    istio-cni-node-j4nkz                      1/1     Running     0             36h
+istio-system    istiod-656fff7c89-hngnl                   1/1     Running     0             36h
+istio-system    ztunnel-hx6wn                             1/1     Running     0             36h
+kube-system     helm-install-istio-base-ggnpf             0/1     Completed   0             36h
+kube-system     helm-install-istio-cni-cdmxf              0/1     Completed   1 (36h ago)   36h
+kube-system     helm-install-istiod-xscgd                 0/1     Completed   0             12s
+poc             bridge-5f677f6cbf-7bblw                   1/1     Running     0             29h
+poc             bridge-5f677f6cbf-x2lhw                   1/1     Running     0             29h
+poc             consumer-69876bfb6b-kbw76                 1/1     Running     0             30h
+poc             identity-58ff9fbcb9-v94h8                 1/1     Running     0             30h
+poc             mosquitto-poc-f45958d5b-lhztl             1/1     Running     0             29h
+poc             probe-a-869b95c769-cns84                  1/1     Running     0             30h
+poc             probe-b-6d8bccd5d5-krqlp                  1/1     Running     0             30h
+poc             probe-c-577895cc85-b7fdw                  1/1     Running     0             30h
++ sudo k3s kubectl -n istio-ingress get gateway
+NAME   CLASS   ADDRESS                                      PROGRAMMED   AGE
+edge   istio   edge-istio.istio-ingress.svc.cluster.local   True         36h

@@ -1,0 +1,8 @@
+Deployment/trustiot-ingress-istio: istio.io/dataplane-mode=none, sysctls=[{"name":"net.ipv4.ip_unprivileged_port_start","value":"0"}]
+  container istio-proxy (registry.istio.io/release/proxyv2:1.30.5-distroless) ports=[{"containerPort":15020,"name":"metrics","protocol":"TCP"},{"containerPort":15021,"name":"status-port","protocol":"TCP"},{"containerPort":15090,"name":"http-envoy-prom","protocol":"TCP"}]
+    startupProbe: {"failureThreshold":30,"httpGet":{"path":"/healthz/ready","port":15021,"scheme":"HTTP"},"initialDelaySeconds":1,"periodSeconds":1,"successThreshold":1,"timeoutSeconds":1}
+    livenessProbe: null
+    readinessProbe: {"failureThreshold":4,"httpGet":{"path":"/healthz/ready","port":15021,"scheme":"HTTP"},"periodSeconds":15,"successThreshold":1,"timeoutSeconds":1}
+Service/trustiot-ingress-istio: type=ClusterIP ports=[{"appProtocol":"tcp","name":"status-port","port":15021,"protocol":"TCP","targetPort":15021},{"appProtocol":"http","name":"http","port":80,"protocol":"TCP","targetPort":80}]
+gatewayPorts: {"gateway":"trustiot-ingress","needed":[80,15021],"admitted":[80,15021]}
+problems: none
