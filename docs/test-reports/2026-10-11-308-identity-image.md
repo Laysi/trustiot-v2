@@ -4,7 +4,7 @@
 
 ## 環境
 
-- **commit**：`9c183ad`（分支 `feat/308-identity-image`，base 為 main 的 `dddd9ed`）。映像的 `org.opencontainers.image.revision` 就是這個 commit。之後的 commit 只改文件（含 `scripts/README.md`）與這份報告，沒有改 Rust 與 `scripts/` 的程式。
+- **commit**：`9c183ad`（分支 `feat/308-identity-image`，base 為 main 的 `dddd9ed`），lab 上執行的映像就是這次建出的，`org.opencontainers.image.revision` 是這個 commit。之後的 `596ef2c` 把共用的建置程式從 `scripts/release/lib.ts` 搬到 `scripts/release/rust-build.ts`（行為不變；`lib.ts` 被 `scripts/ci/changes.ts` 引用，改它會讓 CI 每個 job 都執行），在 `596ef2c` 上以同樣的指令重建一次（[rebuild-596ef2c.txt](data/2026-10-11-308-identity-image/rebuild-596ef2c.txt)）：兩條路建出的執行檔 SHA-256 與 `9c183ad` 的相同，映像 digest 因 revision 標籤與時間戳（commit 時間）不同而不同。再之後的 commit 只改文件與這份報告。
 - **建置機**：本機 x86_64 的 Fedora 45（kernel 7.2.8），8 核，與其他 agent 共用（建置期間負載 3–5）。經共用的檢查佇列（`rcheck.sh`）執行：`CI=1`、`CARGO_BUILD_JOBS=6`、worktree 自己的 `target/`（開始時不存在，即冷建置）、nice 10。podman 6.1.3、skopeo 1.24.1 來自系統；bun 1.4.2、helm 4.3.0、zig 0.16.0、cargo-zigbuild 0.23.4、cargo-auditable 0.7.6、syft 1.52.0 由 `.prototools` 鎖定、以 proto 安裝；Rust 1.99.0（`rust-toolchain.toml`）加上 `aarch64-unknown-linux-musl` target。沒有 docker：nightly 輔助程式的建置以 podman 代替 docker 執行（`podman build` 與 `docker build` 的參數相同，都來自 `containerBuildArgs`）。
 - **arm64 環境**：lab 的 Mac mini M1（`trustiot-mac-m1`），Fedora Linux Asahi Remix 44（kernel 7.1.13-402.asahi.fc44.aarch64+16k）、podman 5.8.7。依 lab 規則取得 `~/e2e.lock`（2026-10-11T15:12:39Z）後使用，用完釋放。lab 上沒有編譯任何東西，只載入本機建好的映像。
 - **基底映像**：`gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3`，釘在 `deploy/images/rust-binary.Containerfile`（本 issue 沒有改它）。
@@ -56,6 +56,7 @@ bun test scripts/nightly   # 含新的 service-image.test.ts
 | 執行檔 | `ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped`（`file`）；`build.ts` 的 `aarch64ElfProblem` 與新增的 `staticElfProblem` 都通過 |
 | nightly 輔助程式 | `buildServiceImage` 建出 `localhost/trustiot-e2e/identity:nightly`（linux/arm64、65532、同一個 entrypoint）。cargo 沿用剛才的建置（`Finished … in 0.24s`），整段 6 秒 |
 | 兩條路的執行檔 | SHA-256 相同：`17bb1421ce36aa7c756c9cc116a1ac10f003ca512596a534e03346493a41e3d6`。nightly 用的就是發佈會建出的執行檔 |
+| 在 `596ef2c` 重建 | cargo 沿用快取，release 流程 13 秒、nightly 輔助程式 5 秒；兩個執行檔的 SHA-256 仍是 `17bb1421…`，`file` 同上；映像 `sha256:aa0acb859fd720998a2793a4c3034d62d107f0d11eb7a6bd0578740c3bfea9f2` |
 
 建置中唯一的警告是 zig 連結器的 `ignoring deprecated linker optimization setting '1'`（`linker_messages`），`release-selftest` 也有，與本 issue 無關。
 
