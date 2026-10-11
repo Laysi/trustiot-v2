@@ -1,0 +1,102 @@
++ sudo ss -tlnp
+State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                                   
+LISTEN 0      4096       127.0.0.1:10257      0.0.0.0:*    users:(("k3s-server",pid=18161,fd=201))  
+LISTEN 0      4096       127.0.0.1:10256      0.0.0.0:*    users:(("k3s-server",pid=18161,fd=241))  
+LISTEN 0      4096       127.0.0.1:10259      0.0.0.0:*    users:(("k3s-server",pid=18161,fd=215))  
+LISTEN 0      4096       127.0.0.1:10258      0.0.0.0:*    users:(("k3s-server",pid=18161,fd=248))  
+LISTEN 0      4096       127.0.0.1:10249      0.0.0.0:*    users:(("k3s-server",pid=18161,fd=233))  
+LISTEN 0      4096       127.0.0.1:10248      0.0.0.0:*    users:(("k3s-server",pid=18161,fd=225))  
+LISTEN 0      128          0.0.0.0:22         0.0.0.0:*    users:(("sshd",pid=938,fd=6))            
+LISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*    users:(("systemd-resolve",pid=607,fd=19))
+LISTEN 0      4096       127.0.0.1:6444       0.0.0.0:*    users:(("k3s-server",pid=18161,fd=21))   
+LISTEN 0      4096         0.0.0.0:5355       0.0.0.0:*    users:(("systemd-resolve",pid=607,fd=13))
+LISTEN 0      4096       127.0.0.1:20241      0.0.0.0:*    users:(("cloudflared",pid=1005,fd=7))    
+LISTEN 0      128        127.0.0.1:20242      0.0.0.0:*    users:(("cloudflared",pid=450447,fd=4))  
+LISTEN 0      10           0.0.0.0:27500      0.0.0.0:*    users:(("passimd",pid=36529,fd=9))       
+LISTEN 0      4096      127.0.0.54:53         0.0.0.0:*    users:(("systemd-resolve",pid=607,fd=21))
+LISTEN 0      4096       127.0.0.1:10010      0.0.0.0:*    users:(("containerd",pid=18189,fd=155))  
+LISTEN 0      128             [::]:22            [::]:*    users:(("sshd",pid=938,fd=7))            
+LISTEN 0      4096               *:9090             *:*    users:(("systemd",pid=1,fd=288))         
+LISTEN 0      4096            [::]:5355          [::]:*    users:(("systemd-resolve",pid=607,fd=15))
+LISTEN 0      4096               *:6443             *:*    users:(("k3s-server",pid=18161,fd=12))   
+LISTEN 0      4096               *:10250            *:*    users:(("k3s-server",pid=18161,fd=227))  
++ sudo ss -ulnp
+State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                                   
+UNCONN 0      0         127.0.0.54:53         0.0.0.0:*    users:(("systemd-resolve",pid=607,fd=20))
+UNCONN 0      0      127.0.0.53%lo:53         0.0.0.0:*    users:(("systemd-resolve",pid=607,fd=18))
+UNCONN 0      0            0.0.0.0:8472       0.0.0.0:*                                             
+UNCONN 0      0          127.0.0.1:323        0.0.0.0:*    users:(("chronyd",pid=822,fd=4))         
+UNCONN 0      0            0.0.0.0:5353       0.0.0.0:*    users:(("avahi-daemon",pid=820,fd=12))   
+UNCONN 0      0            0.0.0.0:5355       0.0.0.0:*    users:(("systemd-resolve",pid=607,fd=12))
+UNCONN 0      0                  *:57428            *:*    users:(("cloudflared",pid=1005,fd=8))    
+UNCONN 0      0                  *:41048            *:*    users:(("cloudflared",pid=450447,fd=9))  
+UNCONN 0      0              [::1]:323           [::]:*    users:(("chronyd",pid=822,fd=5))         
+UNCONN 0      0                  *:57925            *:*    users:(("cloudflared",pid=1005,fd=4))    
+UNCONN 0      0               [::]:5353          [::]:*    users:(("avahi-daemon",pid=820,fd=13))   
+UNCONN 0      0               [::]:5355          [::]:*    users:(("systemd-resolve",pid=607,fd=14))
+UNCONN 0      0                  *:58618            *:*    users:(("cloudflared",pid=450447,fd=7))  
+UNCONN 0      0                  *:50544            *:*    users:(("cloudflared",pid=450447,fd=8))  
+UNCONN 0      0                  *:42716            *:*    users:(("cloudflared",pid=1005,fd=9))    
+UNCONN 0      0                  *:47189            *:*    users:(("cloudflared",pid=1005,fd=11))   
+UNCONN 0      0                  *:55658            *:*    users:(("cloudflared",pid=450447,fd=11)) 
++ systemctl status cloudflared-e2e-64 --no-pager
++ head -12
+● cloudflared-e2e-64.service - Cloudflare Tunnel for TrustIoT (product traffic and ops SSH)
+     Loaded: loaded (/etc/systemd/system/cloudflared-e2e-64.service; enabled; preset: disabled)
+    Drop-In: /usr/lib/systemd/system/service.d
+             └─10-timeout-abort.conf
+     Active: active (running) since Sun 2026-10-11 02:30:29 CST; 38s ago
+ Invocation: 1d2bd9872b594a96bd4cb88d23dfd423
+       Docs: https://github.com/Laysi/trustiot-v2/blob/main/deploy/host/README.md
+   Main PID: 450447 (cloudflared)
+      Tasks: 13 (limit: 4550)
+     Memory: 27.4M (peak: 31.3M)
+        CPU: 321ms
+     CGroup: /system.slice/cloudflared-e2e-64.service
++ ps -o user,uid,pid,cmd -C cloudflared
+USER       UID     PID CMD
+root         0    1005 /usr/bin/cloudflared --no-autoupdate tunnel run --token-file /etc/cloudflared/token
+cloudfl+ 61609  450447 /usr/bin/cloudflared --no-autoupdate tunnel run --token-file /run/credentials/cloudflared-e2e-64.service/tunnel-token
+++ systemctl show -p MainPID --value cloudflared-e2e-64
++ sudo grep -E '^(Cap|NoNewPrivs)' /proc/450447/status
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	0000000000000000
+CapAmb:	0000000000000000
+NoNewPrivs:	1
++ sudo ls -la /etc/credstore/ /run/credentials/cloudflared-e2e-64.service/
+/etc/credstore/:
+total 4
+drwx------. 1 root root   62 Oct 11 02:30 .
+drwxr-xr-x. 1 root root 3952 Oct 10 07:01 ..
+-rw-------. 1 root root  240 Oct 11 02:30 cloudflared-e2e-64.tunnel-token
+
+/run/credentials/cloudflared-e2e-64.service/:
+total 16
+dr-xr-x---+ 2 root root  60 Oct 11 02:30 .
+drwxr-xr-x. 7 root root 140 Oct 11 02:30 ..
+-r--r-----+ 1 root root 240 Oct 11 02:30 tunnel-token
++ sudo journalctl -u cloudflared-e2e-64 --no-pager -o cat
++ grep -iE 'registered tunnel connection|icmp|buffer|error|warn'
++ sed -E s/connIndex/connIndex/
++ head -20
+2026-10-10T18:30:29Z INF ICMP proxy will use 192.168.35.25 as source for IPv4
+2026-10-10T18:30:29Z INF ICMP proxy will use fe80::e4f7:89a8:3e6b:1738 in zone end0 as source for IPv6
+2026-10-10T18:30:29Z WRN The user running cloudflared process has a GID (group ID) that is not within ping_group_range. You might need to add that user to a group within that range, or instead update the range to encompass a group the user is already in by modifying /proc/sys/net/ipv4/ping_group_range. Otherwise cloudflared will not be able to ping this network error="open /proc/sys/net/ipv4/ping_group_range: no such file or directory"
+2026-10-10T18:30:29Z WRN ICMP proxy feature is disabled error="cannot create ICMPv4 proxy: open /proc/sys/net/ipv4/ping_group_range: no such file or directory nor ICMPv6 proxy: bind: invalid argument"
+2026-10-10T18:30:29Z INF ICMP proxy will use 192.168.35.25 as source for IPv4
+2026-10-10T18:30:29Z INF ICMP proxy will use fe80::e4f7:89a8:3e6b:1738 in zone end0 as source for IPv6
+2026-10-10T18:30:29Z INF Registered tunnel connection connIndex=0 connection=3618df17-34e3-4810-bc35-046f10d7614a event=0 ip=198.41.200.233 location=tpe01 protocol=quic
+2026-10-10T18:30:30Z INF Registered tunnel connection connIndex=1 connection=84037fa0-626a-4e88-9378-395f969447df event=0 ip=198.41.192.27 location=tpe05 protocol=quic
+2026-10-10T18:30:31Z INF Registered tunnel connection connIndex=2 connection=e8f65f70-352d-444e-bc76-404094a0faf1 event=0 ip=198.41.200.53 location=tpe01 protocol=quic
+2026-10-10T18:30:32Z INF Registered tunnel connection connIndex=3 connection=6e50a2fe-5333-41f5-a812-645b5dd79427 event=0 ip=198.41.192.47 location=tpe05 protocol=quic
++ systemctl show -p ActiveEnterTimestamp -p MainPID cloudflared
+ActiveEnterTimestamp=Sat 2026-10-10 07:23:19 CST
+MainPID=1005
++ rpm -q --qf '%{RSAHEADER:pgpsig}\n' cloudflared
+RSA/SHA512, Tue Oct  6 01:57:25 2026, Key ID 8a682d308d4e5e73
++ dnf repoquery --installed --qf '%{from_repo}\n' cloudflared
+cloudflared-stable
++ ls -la /usr/local/bin/cloudflared
+ls: cannot access '/usr/local/bin/cloudflared': No such file or directory

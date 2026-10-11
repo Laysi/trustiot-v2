@@ -1,0 +1,130 @@
+## date
+2026-10-10T19:47:21Z
+## getenforce
+Enforcing
+## ss -tlnp
+State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                                   
+LISTEN 0      4096      127.0.0.54:53         0.0.0.0:*    users:(("systemd-resolve",pid=753,fd=21))
+LISTEN 0      4096       127.0.0.1:6444       0.0.0.0:*    users:(("k3s-server",pid=4528,fd=18))    
+LISTEN 0      4096       127.0.0.1:10258      0.0.0.0:*    users:(("k3s-server",pid=4528,fd=224))   
+LISTEN 0      4096       127.0.0.1:10259      0.0.0.0:*    users:(("k3s-server",pid=4528,fd=237))   
+LISTEN 0      4096       127.0.0.1:10256      0.0.0.0:*    users:(("k3s-server",pid=4528,fd=213))   
+LISTEN 0      4096       127.0.0.1:10257      0.0.0.0:*    users:(("k3s-server",pid=4528,fd=171))   
+LISTEN 0      4096       127.0.0.1:10248      0.0.0.0:*    users:(("k3s-server",pid=4528,fd=198))   
+LISTEN 0      4096       127.0.0.1:10249      0.0.0.0:*    users:(("k3s-server",pid=4528,fd=219))   
+LISTEN 0      4096         0.0.0.0:5355       0.0.0.0:*    users:(("systemd-resolve",pid=753,fd=13))
+LISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*    users:(("systemd-resolve",pid=753,fd=19))
+LISTEN 0      4096       127.0.0.1:10010      0.0.0.0:*    users:(("containerd",pid=4819,fd=15))    
+LISTEN 0      128        127.0.0.1:20241      0.0.0.0:*    users:(("cloudflared",pid=5947,fd=10))   
+LISTEN 0      128          0.0.0.0:22         0.0.0.0:*    users:(("sshd",pid=1103,fd=6))           
+LISTEN 0      4096            [::]:5355          [::]:*    users:(("systemd-resolve",pid=753,fd=15))
+LISTEN 0      4096               *:6443             *:*    users:(("k3s-server",pid=4528,fd=12))    
+LISTEN 0      128             [::]:22            [::]:*    users:(("sshd",pid=1103,fd=7))           
+LISTEN 0      4096               *:10250            *:*    users:(("k3s-server",pid=4528,fd=203))   
+## ss -ulnp
+State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                                   
+UNCONN 0      0         127.0.0.54:53         0.0.0.0:*    users:(("systemd-resolve",pid=753,fd=20))
+UNCONN 0      0      127.0.0.53%lo:53         0.0.0.0:*    users:(("systemd-resolve",pid=753,fd=18))
+UNCONN 0      0            0.0.0.0:8472       0.0.0.0:*                                             
+UNCONN 0      0          127.0.0.1:323        0.0.0.0:*    users:(("chronyd",pid=876,fd=4))         
+UNCONN 0      0            0.0.0.0:5355       0.0.0.0:*    users:(("systemd-resolve",pid=753,fd=12))
+UNCONN 0      0              [::1]:323           [::]:*    users:(("chronyd",pid=876,fd=5))         
+UNCONN 0      0                  *:33695            *:*    users:(("cloudflared",pid=5947,fd=8))    
+UNCONN 0      0                  *:37865            *:*    users:(("cloudflared",pid=5947,fd=4))    
+UNCONN 0      0               [::]:5355          [::]:*    users:(("systemd-resolve",pid=753,fd=14))
+UNCONN 0      0                  *:52988            *:*    users:(("cloudflared",pid=5947,fd=11))   
+UNCONN 0      0                  *:38668            *:*    users:(("cloudflared",pid=5947,fd=9))    
+## systemd-analyze security cloudflared (overall)
+→ Overall exposure level for cloudflared.service: 1.1 OK 🙂
+## unit state
+active
+active
+active
+enabled
+enabled
+enabled
+## cloudflared process
+USER       UID     PID COMMAND
+cloudfl+ 62260    5947 /usr/bin/cloudflared --no-autoupdate tunnel run 
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	0000000000000000
+CapAmb:	0000000000000000
+NoNewPrivs:	1
+Seccomp:	2
+system_u:system_r:unconfined_service_t:s0 5947 ? 00:00:02 cloudflared
+## credstore
+total 4
+drwx------. 1 root root   .
+drwxr-xr-x. 1 root root ..
+-rw-------. 1 root root  cloudflared.tunnel-token
+## cloudflared package provenance
+cloudflared-2026.10.0-1.x86_64
+cloudflared-stable
+RSA/SHA512, Mon 05 Oct 2026 05:57:25 PM UTC, Key ID 8a682d308d4e5e73
+## repo file
+# Managed by trustiot-host-install (deploy/host in Laysi/trustiot-v2).
+[cloudflared-stable]
+name=cloudflared-stable
+baseurl=https://pkg.cloudflare.com/cloudflared/rpm
+enabled=1
+type=rpm
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cloudflare-packaging
+## firewalld trusted (runtime / permanent)
+trusted (active)
+  target: ACCEPT
+  ingress-priority: 0
+  egress-priority: 0
+  icmp-block-inversion: no
+  interfaces: 
+  sources: 10.42.0.0/16
+  services: 
+  ports: 
+  protocols: 
+  forward: yes
+  masquerade: no
+  forward-ports: 
+  source-ports: 
+  icmp-blocks: 
+  rich rules: 
+	rule family="ipv4" source address="10.42.0.0/16" port port="22" protocol="tcp" reject
+  sources: 10.42.0.0/16
+  rich rules: 
+	rule family="ipv4" source address="10.42.0.0/16" port port="22" protocol="tcp" reject
+## default zone
+public
+public (default)
+  interfaces: ens3
+trusted
+  sources: 10.42.0.0/16
+## zones with http/https services or 80/443 ports
+none
+## k3s
+k3s version v1.36.5+k3s1 (3dd98cc5)
+# Managed by trustiot-host-install (deploy/host in Laysi/trustiot-v2).
+# Product traffic reaches the Istio ingress gateway's ClusterIP through cloudflared on this
+# host, so nothing in k3s may listen on the host's ports: Traefik is replaced by the Istio
+# ingress (decision 27) and servicelb, which would bind host ports for every LoadBalancer
+# Service, is off.
+disable:
+  - traefik
+  - servicelb
+NAME     STATUS   ROLES           AGE     VERSION        INTERNAL-IP   EXTERNAL-IP   OS-IMAGE                          KERNEL-VERSION                    CONTAINER-RUNTIME
+host64   Ready    control-plane   3m43s   v1.36.5+k3s1   10.0.2.15     <none>        Fedora Linux 44 (Cloud Edition)   6.19.10-300.fc44.x86_64 (amd64)   containerd://2.3.4-k3s1.36
+NAMESPACE     NAME                                      READY   STATUS    RESTARTS   AGE
+kube-system   coredns-7cfb7bc9c7-6l48m                  1/1     Running   0          3m26s
+kube-system   local-path-provisioner-77b9867795-4g85c   1/1     Running   0          3m26s
+kube-system   metrics-server-6dc596dfb8-blkch           1/1     Running   0          3m26s
+## k3s networks
+10.42.0.0/24
+10.43.0.1
+## services of type LoadBalancer
+No resources found
+## cloudflared journal (connections)
+2026-10-10T19:46:32Z INF Starting tunnel tunnelID=a442a867-4b77-4e7f-97a6-ea011130c4cb
+2026-10-10T19:46:33Z INF Registered tunnel connection connIndex=0 connection=… event=0 ip=198.41.200.13 location=tpe01 protocol=quic
+2026-10-10T19:46:34Z INF Registered tunnel connection connIndex=1 connection=… event=0 ip=198.41.192.27 location=tpe05 protocol=quic
+2026-10-10T19:46:35Z INF Registered tunnel connection connIndex=2 connection=… event=0 ip=198.41.200.63 location=tpe01 protocol=quic
+2026-10-10T19:46:36Z INF Registered tunnel connection connIndex=3 connection=… event=0 ip=198.41.192.47 location=tpe05 protocol=quic
