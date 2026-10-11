@@ -187,10 +187,16 @@ context.spawn(lock.run_periodically(
 ));
 ```
 
-- `run_periodically` 每個週期試一次，直到 `Shutdown::stopping`；失敗記 WARN。`run_exclusive(job)` 只試一次，拿不到鎖回 `Ok(None)`；`try_acquire()` 取得 `JobLockGuard`，自行 `release()`。
+- `run_periodically` 每個週期試一次，直到 `Shutdown::stopping`；失敗記 WARN，panic 記 ERROR（見下）。`run_exclusive(job)` 只試一次，拿不到鎖回 `Ok(None)`；`try_acquire()` 取得 `JobLockGuard`，自行 `release()`。
+- 工作 panic 時，`run_periodically` 不結束排程：panic 被攔下，記一行 ERROR `scheduled job panicked; it runs again next period`（只有工作名稱，不含 panic 訊息），鎖照一般流程明確釋放，下一個週期照常再跑。這一行 ERROR 是告警的依據。panic hook 另外記的那行 `thread panicked` 仍含位置與 panic 訊息，所以 panic 訊息不能放資料（見[日誌與 trace](#日誌與-trace)）。工作的 closure 在 panic 後會被再次呼叫，它共用的狀態（例如被 poison 的 `Mutex`）要自己處理。`panic = "abort"` 的建置不受影響，行程仍會結束。
+- 為什麼選「排程繼續」而不是「readiness 失敗或結束行程」：
+  1. 每個副本都排同一個工作，工作的 panic 多半來自資料或邏輯，所有副本會一起 panic。readiness 失敗會讓整個服務退出 Service 的 endpoints，退出行程會讓所有 pod 進入 CrashLoopBackOff；一個背景工作的缺陷就變成整個服務的 API 中斷。
+  2. 重啟不會修好資料造成的 panic，只會換來更長的重試間隔與重啟風暴；排程繼續則維持原本的週期重試，資料修好後自動恢復。
+  3. 工作必須冪等（規則 1），重跑同一輪是安全的；panic 前持有的鎖已釋放，別的副本也可以接手。
+  4. 原本「默默停止」的問題來自沒有訊號。現在每次 panic 都有一行 ERROR，可以用日誌告警。
 - 鎖跟著資料庫 session：副本當機或斷線時 session 結束，鎖跟著釋放。guard 被 drop（panic、取消）時關閉連線，鎖也一併釋放。
 - 工作執行期間每 5 秒 ping 一次 session（`with_heartbeat` 可調，不能是 0；不論設多少，每個鎖逾時內至少 ping 兩次）。session 斷掉，或超過鎖逾時（`with_timeout`，預設 10 秒，範圍 100 ms 到 60 秒，超出範圍會 panic）沒有確認 session 還活著時，工作在下一個 await 被取消並回 `JobLockError::Lost`，因為別的副本可能已經接手。確認的時間點是最後一次有回應的查詢送出的時間。
-- 取鎖與釋放鎖等資料庫也最多等鎖逾時：`try_acquire` 在時間內拿不到 pool 的連線回 `JobLockError::Database`（`sqlx::Error::PoolTimedOut`），鎖的查詢沒有回應回 `Lost`；`release` 沒有回應回 `Lost`，guard 關閉連線。
+- 取鎖與釋放鎖等資料庫也最多等鎖逾時：`try_acquire` 在時間內拿不到 pool 的連線回 `JobLockError::Database`（`sqlx::Error::PoolTimedOut`），鎖的查詢沒有回應回 `Lost`；`release` 沒有回應回 `Lost`，guard 關閉連線；工作 panic 後的明確釋放也一樣。`run_periodically` 在釋放之前就記下工作的結果（完成、失敗的 WARN、panic 的 ERROR），所以釋放失敗時這些日誌也不會漏掉，之後另記一行 `scheduled job lock failed`。
 
 ### 鎖的保證有時間界限
 
@@ -491,7 +497,7 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 | `cargo test -p service-kit --test logging` | JSON 日誌、trace id；body、標頭、query 與路徑不進日誌 | 無 |
 | `cargo test -p service-kit --test otlp` | OTLP 匯出到假的接收端：預設關閉、帶 trace id、指標送出、不含 body | 無 |
 | `cargo test -p service-kit --test container` | 範例服務在容器內以 PID 1 執行（唯讀根目錄、任意 UID），`stop` 時收尾並以 0 結束 | podman 或 docker，會拉 `gcr.io/distroless/cc-debian13` |
-| `cargo test -p service-kit --test job_lock` | 兩個副本互斥、session 中斷、guard 釋放、連線回到 pool；網路分割（經本機 TCP 代理，代理改成黑洞後丟棄封包但不關連線）時持有者在鎖逾時內停止工作，取鎖與釋放鎖在鎖逾時內放棄 | `TEST_DATABASE_URL`，或 podman 或 docker（會拉 `postgres:18.6-alpine`） |
+| `cargo test -p service-kit --test job_lock` | 兩個副本互斥、session 中斷、guard 釋放、連線回到 pool、工作 panic 後排程繼續且日誌不含 panic 訊息；網路分割（經本機 TCP 代理，代理改成黑洞後丟棄封包但不關連線）時持有者在鎖逾時內停止工作，取鎖與釋放鎖在鎖逾時內放棄 | `TEST_DATABASE_URL`，或 podman 或 docker（會拉 `postgres:18.6-alpine`） |
 | `cargo test -p service-kit --test tenant_db` | 租戶隔離：沒設定租戶查不到也寫不進任何列；租戶 A 讀不到、改不到、寫不進租戶 B 的列；pool 重用連線時租戶不會帶到下一個交易；服務角色不是擁有者、沒有 BYPASSRLS、關不掉 RLS；不安全的連線被拒；平台角色只看得到開放的表；outbox 範本（租戶事件、全平台事件、消費端讀取）；伺服器憑證與主機名稱驗證；範例服務在 `sslmode` 不是 `verify-full` 時拒絕啟動，`/v1/items` 只回 token 租戶的資料 | podman 或 docker（會拉 `postgres:18.6-alpine`，以測試時產生的 CA 啟用 TLS）；不使用 `TEST_DATABASE_URL`，因為測試要以 superuser 建角色，並需要知道伺服器的 CA |
 | `cargo test -p sql-check` | 由字串組成的 SQL 與 kit 以外的租戶設定（`tools/sql-check`） | 無 |
 | `cargo test -p service-kit --test dependency_isolation` | 關閉 feature 時不依賴 contract，開啟時依賴 | 無 |

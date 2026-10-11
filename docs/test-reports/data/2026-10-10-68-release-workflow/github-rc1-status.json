@@ -1,0 +1,16 @@
+{
+  "source": "GitHub MCP pull_request_read get_status, PR Laysi/trustiot-v2#243, read 2026-10-10T12:50:50Z",
+  "sha": "ee8c4388772d2dce6c8e93f2b7cd60ec298c803a",
+  "state": "success",
+  "statuses": [
+    {
+      "context": "release",
+      "created_at": "2026-10-10T12:42:59Z",
+      "description": "v0.0.0-rc.1 published and verified",
+      "state": "success",
+      "target_url": "https://github.com/Laysi/trustiot-v2/actions/runs/38052766358",
+      "updated_at": "2026-10-10T12:42:59Z"
+    }
+  ],
+  "total_count": 1
+}

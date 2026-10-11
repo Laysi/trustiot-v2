@@ -1,0 +1,29 @@
+# proto schema plugin for cargo-zigbuild (https://github.com/rust-cross/cargo-zigbuild),
+# which cross-compiles Rust with Zig as the C compiler and linker.
+# Downloads the official release archive and verifies it against the SHA-256 file
+# published next to it.
+# Reference: https://moonrepo.dev/docs/proto/non-wasm-plugin
+
+name = "cargo-zigbuild"
+type = "cli"
+
+[platform.linux]
+download-file = "cargo-zigbuild-{arch}-unknown-linux-{libc}.tar.xz"
+checksum-file = "cargo-zigbuild-{arch}-unknown-linux-{libc}.tar.xz.sha256"
+archive-prefix = "cargo-zigbuild-{arch}-unknown-linux-{libc}"
+
+[platform.macos]
+download-file = "cargo-zigbuild-{arch}-apple-darwin.tar.xz"
+checksum-file = "cargo-zigbuild-{arch}-apple-darwin.tar.xz.sha256"
+archive-prefix = "cargo-zigbuild-{arch}-apple-darwin"
+
+[install]
+download-url = "https://github.com/rust-cross/cargo-zigbuild/releases/download/v{version}/{download_file}"
+checksum-url = "https://github.com/rust-cross/cargo-zigbuild/releases/download/v{version}/{checksum_file}"
+
+[install.exes.cargo-zigbuild]
+exe-path = "cargo-zigbuild"
+primary = true
+
+[resolve]
+git-url = "https://github.com/rust-cross/cargo-zigbuild"

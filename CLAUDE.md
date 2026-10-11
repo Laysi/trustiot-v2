@@ -10,7 +10,7 @@ Architecture decisions, rebuild scope (items A1–M8), service split, repository
 
 ## Build, lint, and test
 
-`.prototools` pins Rust, Bun, actionlint, cargo-deny, gitleaks, Helm, k3d, kubeconform, and kubectl; tools without a built-in proto plugin get a schema plugin in `.proto/plugins/` that verifies the release checksum. proto installs Rust through rustup and does not shim cargo, so rustup picks the toolchain from `rust-toolchain.toml`: change `rust` in `.prototools` and `channel` in `rust-toolchain.toml` together (`cargo test -p repo-check` fails when they differ). Run every command from the repository root.
+`.prototools` pins Rust, Bun, actionlint, cargo-deny, gitleaks, Helm, k3d, kubeconform, kubectl, and the release tools (zig, cargo-zigbuild, cargo-auditable, syft, cosign); tools without a built-in proto plugin get a schema plugin in `.proto/plugins/` that verifies the release checksum. proto installs Rust through rustup and does not shim cargo, so rustup picks the toolchain from `rust-toolchain.toml`: change `rust` in `.prototools` and `channel` in `rust-toolchain.toml` together (`cargo test -p repo-check` fails when they differ). Run every command from the repository root.
 
 - Install the pinned tools: `proto install`
 - Build: `cargo build --workspace`
@@ -31,6 +31,8 @@ Architecture decisions, rebuild scope (items A1–M8), service split, repository
 - Workflow syntax and expression check with the pinned actionlint, which rejects what GitHub cannot parse (for example `runner.temp` in job-level `env`): `bun scripts/ci/lint-workflows.ts` (run `proto install actionlint` first; the shellcheck integration is deliberately off, see `docs/architecture/ci-release.md`)
 - Bun scripts in `scripts/` (the dev environment and the CI checks): `bun install --cwd scripts --frozen-lockfile` installs the type checker, then `bun run --cwd scripts typecheck` checks every `.ts` file there and under `deploy/chart/tests/` (the ingress e2e included, which needs a cluster to run but not to type-check); `bun run --cwd scripts test` runs the same test files as `bun test scripts`, and a single test is `bun run --cwd scripts test -t "<test-name-filter>"`
 - Gateway crates (`crates/protocol` and every member under `edge/`) must build for aarch64: `rustup target add aarch64-unknown-linux-gnu` once, then `cargo build --locked --target aarch64-unknown-linux-gnu -p <crate>`
+- Release scripts (`scripts/release`, run by `.github/workflows/release.yml`): `bun test scripts/release`; a single test is `bun test scripts/release -t "<test-name-filter>"`. Building the arm64 images locally and running the whole publish and verify flow against a throwaway registry are described in `scripts/README.md`.
+- Images: each directory under `deploy/images/` is a published arm64 image (`image.toml` for a Rust binary, or its own `Containerfile`); see `deploy/images/README.md`. Base images must be pinned by digest.
 
 `.github/workflows/ci.yml` runs these checks on every pull request and every push to main; its jobs and the required-checks list are in `docs/architecture/ci-release.md`. Every job must list its `permissions`, every action must be pinned to a full commit SHA with the tag in a trailing comment, and local actions belong under `.github/actions/`.
 

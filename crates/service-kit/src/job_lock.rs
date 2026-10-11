@@ -21,6 +21,8 @@
 
 use std::fmt::Display;
 use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::task::Poll;
 use std::time::Duration;
 
 use sqlx::pool::PoolConnection;
@@ -232,6 +234,12 @@ impl JobLock {
     /// Runs `job` every `period` on whichever replica gets the lock, until `shutdown` begins
     /// stopping. The first round starts at once. A run that is still going when shutdown
     /// begins finishes unless the service's drain timeout cuts it off. Failures are logged.
+    ///
+    /// A job that panics does not stop the schedule: the panic is caught, one ERROR line names
+    /// the job (never the panic payload, which may carry data), the lock is released as after
+    /// any other run, and the job runs again next period. The closure is called again after a
+    /// panic, so state it shares must not be left half-updated (a poisoned `Mutex`, for
+    /// example). A binary built with `panic = "abort"` still exits on a panic.
     pub async fn run_periodically<F, Fut, E>(self, period: Duration, shutdown: Shutdown, mut job: F)
     where
         F: FnMut() -> Fut,
@@ -246,11 +254,29 @@ impl JobLock {
                 () = shutdown.stopping() => break,
                 _ = ticks.tick() => {}
             }
-            match self.run_exclusive(&mut job).await {
-                Ok(Some(Ok(()))) => tracing::debug!(job = %self.job, "scheduled job finished"),
-                Ok(Some(Err(error))) => {
-                    tracing::warn!(job = %self.job, error = %error, "scheduled job failed");
+            // The job's outcome is logged inside the locked run, as soon as it is known: a release
+            // that fails afterwards (for example, one that times out in a network partition)
+            // must not swallow it. The closure runs inside the catch, so a panic while it builds
+            // the future is caught too. The run then ends normally and the lock is released with
+            // an explicit unlock.
+            let (name, job) = (&self.job, &mut job);
+            let run = self.run_exclusive(|| async move {
+                match catch_panic(async { job().await }).await {
+                    Ok(Ok(())) => tracing::debug!(job = %name, "scheduled job finished"),
+                    Ok(Err(error)) => {
+                        tracing::warn!(job = %name, error = %error, "scheduled job failed");
+                    }
+                    // The payload is dropped unread: the panic hook has already logged the panic
+                    // with its location, and this line must carry nothing a job could put in a
+                    // panic message.
+                    Err(Panicked) => tracing::error!(
+                        job = %name,
+                        "scheduled job panicked; it runs again next period"
+                    ),
                 }
+            });
+            match run.await {
+                Ok(Some(())) => {}
                 Ok(None) => tracing::debug!(
                     job = %self.job,
                     "scheduled job skipped; another replica holds its lock"
@@ -261,6 +287,25 @@ impl JobLock {
             }
         }
     }
+}
+
+/// A job panicked. The panic payload is deliberately not kept.
+struct Panicked;
+
+/// Awaits `future`, turning a panic while it is polled into `Err(Panicked)`.
+async fn catch_panic<Fut: Future>(future: Fut) -> Result<Fut::Output, Panicked> {
+    let mut future = Box::pin(future);
+    std::future::poll_fn(|context| {
+        match catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(context))) {
+            Ok(Poll::Pending) => Poll::Pending,
+            Ok(Poll::Ready(output)) => Poll::Ready(Ok(output)),
+            Err(payload) => {
+                drop(payload);
+                Poll::Ready(Err(Panicked))
+            }
+        }
+    })
+    .await
 }
 
 /// A held job lock.

@@ -637,3 +637,284 @@ async fn taking_and_releasing_the_lock_give_up_within_the_timeout_in_a_partition
         );
     }
 }
+
+/// Collects the events logged on the test's thread: level and `name=value` text.
+#[derive(Clone, Default)]
+struct Captured(Arc<Mutex<Vec<(tracing::Level, String)>>>);
+
+impl Captured {
+    fn events(&self) -> Vec<(tracing::Level, String)> {
+        self.0.lock().expect("captured events").clone()
+    }
+}
+
+struct EventText<'a>(&'a mut String);
+
+impl tracing::field::Visit for EventText<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        use std::fmt::Write;
+        let _ = write!(self.0, "{}={value:?} ", field.name());
+    }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Captured {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        let mut text = String::new();
+        event.record(&mut EventText(&mut text));
+        self.0
+            .lock()
+            .expect("captured events")
+            .push((*event.metadata().level(), text));
+    }
+}
+
+/// Starts capturing this thread's log events; the capture ends when the guard drops. The test
+/// must run on a current-thread runtime so that the scheduled task logs on this thread.
+fn capture_logs() -> (Captured, tracing::subscriber::DefaultGuard) {
+    use tracing_subscriber::layer::SubscriberExt;
+    let captured = Captured::default();
+    let subscriber = tracing_subscriber::registry().with(captured.clone());
+    (captured, tracing::subscriber::set_default(subscriber))
+}
+
+/// What a panicking job must not leak: the panic message, which can carry data.
+const SECRET: &str = "secret-customer-data-4711";
+
+/// Waits until `counter` reaches `at_least`.
+async fn wait_for(counter: &AtomicUsize, at_least: usize) {
+    let started = Instant::now();
+    while counter.load(Ordering::SeqCst) < at_least {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the job only ran {} times",
+            counter.load(Ordering::SeqCst)
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// A job that panics keeps its schedule (the chosen behaviour, see the README): later periods
+/// run it again, one ERROR line per panic names the job but not the panic message, and the lock
+/// is free for another replica afterwards. The job panics on its first two calls.
+async fn assert_panics_keep_the_schedule<F, Fut>(name: &str, calls: Arc<AtomicUsize>, job: F)
+where
+    F: FnMut() -> Fut + Send + 'static,
+    Fut: Future<Output = Result<(), String>> + Send + 'static,
+{
+    let Some(database) = database().await else {
+        return;
+    };
+    let (captured, _logs) = capture_logs();
+    let job_name = unique_name(name);
+    let lock = JobLock::new(replica(&database.url).await, "example-service", &job_name);
+    let other = JobLock::new(replica(&database.url).await, "example-service", &job_name);
+    let admin = replica(&database.url).await;
+    let shutdown = Shutdown::new();
+    let runner = tokio::spawn(lock.clone().run_periodically(
+        Duration::from_millis(40),
+        shutdown.clone(),
+        job,
+    ));
+
+    // The schedule must reach the fifth call although the first two panicked.
+    wait_for(&calls, 5).await;
+    assert!(
+        !runner.is_finished(),
+        "a panicking job ended the schedule of its replica"
+    );
+    shutdown.stop();
+    tokio::time::timeout(Duration::from_secs(2), runner)
+        .await
+        .expect("the runner stops when the service stops")
+        .expect("the runner task did not panic");
+    assert_eq!(lock_holder(&admin, lock.key()).await, None);
+    eventually_acquires(&other).await;
+
+    let events = captured.events();
+    let panics: Vec<_> = events
+        .iter()
+        .filter(|(level, text)| {
+            *level == tracing::Level::ERROR && text.contains(&job_name) && text.contains("panicked")
+        })
+        .collect();
+    assert_eq!(panics.len(), 2, "one ERROR per panic: {events:?}");
+    // Only the scheduler's own lines (they carry the job name) are checked: the process-wide
+    // panic hook, which this test does not install, logs the message by design (README).
+    for (level, text) in events.iter().filter(|(_, text)| text.contains(&job_name)) {
+        assert!(
+            !text.contains(SECRET),
+            "{level} event leaks the payload: {text}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_panicking_job_keeps_its_schedule_and_logs_no_payload() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    assert_panics_keep_the_schedule("panicking", calls, move || {
+        let call = counted.fetch_add(1, Ordering::SeqCst);
+        async move {
+            if call < 2 {
+                panic!("{SECRET} in call {call}");
+            }
+            tokio::task::yield_now().await;
+            Ok(())
+        }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_job_that_panics_before_returning_its_future_keeps_its_schedule_too() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    assert_panics_keep_the_schedule("panicking-builder", calls, move || {
+        let call = counted.fetch_add(1, Ordering::SeqCst);
+        assert!(call >= 2, "{SECRET} in call {call}");
+        async { Ok(()) }
+    })
+    .await;
+}
+
+/// Waits until a captured event satisfies `matches` and returns when it was first seen.
+async fn wait_for_event(
+    captured: &Captured,
+    within: Duration,
+    matches: impl Fn(&(tracing::Level, String)) -> bool,
+) -> Instant {
+    let started = Instant::now();
+    loop {
+        if captured.events().iter().any(&matches) {
+            return Instant::now();
+        }
+        assert!(
+            started.elapsed() < within,
+            "no such event within {within:?}: {:?}",
+            captured.events()
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// A periodic job that panics while its replica is cut off from Postgres: the panic is caught
+/// and logged although the release that follows fails, that release gives up within the lock
+/// timeout instead of waiting for TCP, and the schedule goes on (its next rounds fail to take
+/// the lock, also within the timeout) until the service stops. The lock timeout and the panic
+/// handling compose.
+#[tokio::test(flavor = "current_thread")]
+async fn a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout() {
+    let Some(database) = database().await else {
+        return;
+    };
+    let (captured, _logs) = capture_logs();
+    let job = unique_name("partition-panic");
+    let proxy = Proxy::start(&database.url).await;
+    let admin = replica(&database.url).await;
+    let a = JobLock::new(
+        replica_behind(&proxy, PgPoolOptions::new()).await,
+        "example-service",
+        &job,
+    )
+    .with_heartbeat(PARTITION_HEARTBEAT)
+    .with_timeout(PARTITION_TIMEOUT);
+    let b = JobLock::new(replica(&database.url).await, "example-service", &job);
+    let key = a.key();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let panic_now = Arc::new(AtomicBool::new(false));
+    let shutdown = Shutdown::new();
+    let runner = {
+        let calls = Arc::clone(&calls);
+        let panic_now = Arc::clone(&panic_now);
+        tokio::spawn(
+            a.run_periodically(Duration::from_millis(100), shutdown.clone(), move || {
+                let call = calls.fetch_add(1, Ordering::SeqCst);
+                let panic_now = Arc::clone(&panic_now);
+                async move {
+                    if call == 0 {
+                        while !panic_now.load(Ordering::SeqCst) {
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                        panic!("the first run fails while its replica is partitioned");
+                    }
+                    Ok::<(), String>(())
+                }
+            }),
+        )
+    };
+    let started = Instant::now();
+    let holder = loop {
+        if let Some(pid) = lock_holder(&admin, key).await {
+            break pid;
+        }
+        assert!(started.elapsed() < Duration::from_secs(5), "never locked");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+
+    proxy.partition();
+    let terminated: bool = sqlx::query_scalar("SELECT pg_terminate_backend($1)")
+        .bind(holder)
+        .fetch_one(&admin)
+        .await
+        .expect("terminate the holder's session");
+    assert!(terminated);
+    panic_now.store(true, Ordering::SeqCst);
+    let panicked = wait_for_event(&captured, Duration::from_secs(2), |(level, text)| {
+        *level == tracing::Level::ERROR && text.contains(&job) && text.contains("panicked")
+    })
+    .await;
+    let wait = PARTITION_TIMEOUT * 5;
+    let released = wait_for_event(&captured, wait, |(level, text)| {
+        *level == tracing::Level::WARN
+            && text.contains(&job)
+            && text.contains("scheduled job lock failed")
+            && text.contains("lost the lock")
+    })
+    .await;
+    let gave_up_after = released - panicked;
+    // Evidence for the test report, shown with `--nocapture`.
+    eprintln!(
+        "lock timeout {PARTITION_TIMEOUT:?}: the release after the panic gave up after \
+         {gave_up_after:?}"
+    );
+    assert!(
+        gave_up_after <= PARTITION_TIMEOUT + SCHEDULING_SLACK,
+        "the release after the panic waited {gave_up_after:?}"
+    );
+
+    // The schedule goes on: later rounds try again, and each gives up within the timeout too.
+    let lock_failures = |captured: &Captured| {
+        captured
+            .events()
+            .iter()
+            .filter(|(level, text)| {
+                *level == tracing::Level::WARN
+                    && text.contains(&job)
+                    && text.contains("scheduled job lock failed")
+            })
+            .count()
+    };
+    let started = Instant::now();
+    while lock_failures(&captured) < 3 {
+        assert!(
+            started.elapsed() < wait,
+            "the schedule stalled after the panic: {:?}",
+            captured.events()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(!runner.is_finished(), "the panic ended the schedule");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the job ran without its lock"
+    );
+    // The server released the lock with the session; another replica takes it.
+    eventually_acquires(&b).await;
+
+    shutdown.stop();
+    tokio::time::timeout(PARTITION_TIMEOUT + Duration::from_secs(2), runner)
+        .await
+        .expect("the runner stops when the service stops")
+        .expect("the runner task did not panic");
+}

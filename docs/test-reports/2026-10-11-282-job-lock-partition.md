@@ -79,6 +79,27 @@ for i in $(seq 1 10); do cargo test --locked -p service-kit --test job_lock part
 | `cargo test -p service-kit`（預設 feature 與 `--no-default-features`）、`cargo test -p repo-check` | 全部通過 |
 | `cargo fmt --check`、workspace clippy、service-kit `--no-default-features` clippy | 無警告 |
 
+### 與 Laysi/trustiot-v2#284 的組合（工作 panic 後排程繼續）
+
+PR Laysi/trustiot-v2#295（main `dc39e7d`）讓 `run_periodically` 攔下工作的 panic、記一行 ERROR 後繼續排程。合併後新增 `a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout` 測試，情境如下：
+
+1. 分割並結束持有者的 session；
+2. 讓工作 panic。
+
+測試檢查：
+
+- panic 的 ERROR 有記下；
+- 之後的釋放在鎖逾時內放棄，並記下 `scheduled job lock failed`；
+- 排程繼續，之後的回合在逾時內取鎖失敗，工作沒有在無鎖時再跑；
+- 另一副本取得鎖；
+- 服務停止時排程結束。
+
+- 合併後、修正前：**失敗**，見 [panic-in-partition-before-logging-fix.txt](data/2026-10-11-282-job-lock-partition/panic-in-partition-before-logging-fix.txt)。
+  - `run_periodically` 原本在 `run_exclusive` 回傳後才記工作結果；釋放逾時回 `Lost` 時，工作的結果被丟掉，panic 的 ERROR 沒有記下。
+  - 這一行是 Laysi/trustiot-v2#284 告警的依據，所以會漏告警。
+- 修正：`run_periodically` 改在鎖住的回合內、釋放之前就記下工作結果（完成、失敗、panic）。
+- 修正後：job lock 全部 10 個測試跑 5 次都通過，見 [panic-in-partition-after-logging-fix.txt](data/2026-10-11-282-job-lock-partition/panic-in-partition-after-logging-fix.txt)。panic 後的釋放在 997.3–1005.4 ms 放棄（鎖逾時 1 秒）。
+
 ## 4. 結論
 
 | 驗收條件 | 結果 |
