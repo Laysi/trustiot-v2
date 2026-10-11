@@ -1099,8 +1099,18 @@ describe("service-to-service authorization (decision 27)", () => {
     from: [{ ipBlock: { cidr: HOST_SOURCE } }],
     ports: ports.map((port) => ({ port, protocol: "TCP" })),
   });
-  // Services probe /healthz and /readyz on their http port (serviceDefaults.probes).
-  const SERVICE_PROBE_PORT = 8080;
+  // Services probe /healthz and /readyz on their health port (serviceDefaults.healthPort and
+  // serviceDefaults.probes), which serves nothing else; their API listens on http.
+  const HEALTH_PORT = 8081;
+  const API_PORT = 8080;
+  // Test stand-ins that run traefik/whoami, which listens on http only, so their overlays probe
+  // http. The identity double (identity in the e2e overlay) listens on the health port like a
+  // TrustIoT service.
+  const WHOAMI_STAND_INS: Record<string, string[]> = {
+    [SMOKE]: ["smoke-echo"],
+    [E2E_VALUES]: ["assets", "certs", "mqtt-bridge"],
+  };
+  const standInsOf = (overlays: readonly string[]) => new Set(overlays.flatMap((overlay) => WHOAMI_STAND_INS[overlay] ?? []));
   // Bundled ClickHouse probes /ping on its HTTP port; the native protocol (9000) stays closed.
   const CLICKHOUSE_PROBE_PORT = 8123;
   const principal = (serviceAccount: string, trustDomain = "cluster.local") =>
@@ -1206,8 +1216,9 @@ describe("service-to-service authorization (decision 27)", () => {
           .map((p) => serviceOf(p.split("/sa/")[1] ?? ""))
           .sort(),
       );
-      // Kubelet probes come from istio-cni's SNAT address, admitted on the probe port only.
-      expect(spec.ingress?.at(-1)).toEqual(hostRule(SERVICE_PROBE_PORT));
+      // Kubelet probes come from istio-cni's SNAT address, admitted on the probe port only: the
+      // health port, or http for a whoami stand-in of this overlay.
+      expect(spec.ingress?.at(-1)).toEqual(hostRule(standInsOf([E2E_VALUES]).has(service) ? API_PORT : HEALTH_PORT));
       // Nothing else: no rule opens an application port or admits another source.
       expect(spec.ingress?.length).toBe(principals.length > 0 ? 2 : 1);
     }
@@ -1386,6 +1397,64 @@ describe("service-to-service authorization (decision 27)", () => {
       }
     }
   }, SLOW_TEST_MS);
+
+  // Laysi/trustiot-v2#286: the node reaches a TrustIoT service on its health port alone, which
+  // serves /healthz and /readyz only, and never on its API port, /internal/ included.
+  test.each(SHAPE_NAMES)("%s: the node source reaches every service on its health port only, never its API port", (shape) => {
+    const renders: [string, string[], string[]][] = [...PROBE_RENDERS, ["every service, no stand-in", [], enableAllServices]];
+    const checked = new Set<string>();
+    for (const [name, overlays, args] of renders) {
+      const manifests = render([...SHAPES[shape], ...overlays], args);
+      const standIns = standInsOf(overlays);
+      for (const { workload, spec, rules } of hostSourceRules(manifests)) {
+        if (workload.kind !== "Deployment") continue;
+        const service = serviceOf(workload.metadata.name);
+        const label = `${name}: ${service}`;
+        // Nothing but the host rule admits an ipBlock, so these are all the ports the node reaches.
+        const nodePorts = (spec.ingress ?? []).filter((rule) => (rule.from ?? []).some((peer) => peer.ipBlock)).flatMap((rule) => (rule.ports ?? []).map((p) => p.port));
+        if (standIns.has(service)) {
+          // A whoami stand-in of a test overlay has no health port to probe.
+          expect({ label, rules }).toEqual({ label, rules: [hostRule(API_PORT)] });
+          continue;
+        }
+        expect({ label, rules }).toEqual({ label, rules: [hostRule(HEALTH_PORT)] });
+        expect({ label, nodePorts }).toEqual({ label, nodePorts: [HEALTH_PORT] });
+        const [container] = podSpec(workload).containers;
+        expect({ label, ports: container?.ports?.map(({ name: port, containerPort }) => ({ name: port, containerPort })) }).toEqual({
+          label,
+          ports: [
+            { name: "http", containerPort: API_PORT },
+            { name: "health", containerPort: HEALTH_PORT },
+          ],
+        });
+        for (const probe of [container?.startupProbe, container?.livenessProbe, container?.readinessProbe]) {
+          expect({ label, port: (probe as Probe | undefined)?.httpGet?.port }).toEqual({ label, port: "health" });
+        }
+        // The Service exposes the API only: the kubelet is the health port's one client.
+        const servicePorts = (find(manifests, "Service", workload.metadata.name).spec as { ports: { name: string; port: number }[] }).ports;
+        expect({ label, servicePorts: servicePorts.map((p) => [p.name, p.port]) }).toEqual({ label, servicePorts: [["http", API_PORT]] });
+        checked.add(service);
+      }
+    }
+    // Every planned service was checked with the chart's defaults, the identity double too.
+    expect([...checked].sort()).toEqual([...plannedServices].sort());
+  }, SLOW_TEST_MS);
+
+  test("healthPort moves the health port, and the node source and probes follow it", () => {
+    const manifests = render([...SHAPES.saas], ["--set", "services.assets.enabled=true", "--set", "services.assets.healthPort=9091"]);
+    const workload = find(manifests, "Deployment", `${RELEASE}-assets`);
+    expect(podSpec(workload).containers[0]?.ports?.find((p) => p.name === "health")?.containerPort).toBe(9091);
+    expect(networkPolicy(manifests, "assets").ingress?.filter(isHostRule)).toEqual([hostRule(9091)]);
+  });
+
+  test("no ingress route can reach the health port", () => {
+    const result = helmTemplate(
+      [...SHAPES.saas, SMOKE],
+      ["--set-json", 'ingress.routes=[{"host":"app","path":"/","match":"PathPrefix","service":"smoke-echo","port":"health"}]'],
+    );
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(/service "smoke-echo" has no port named "health"/);
+  });
 
   test("probe ports follow the probe definitions: named and numeric ports, tcpSocket, grpc, and exec", () => {
     const PORTS = [
@@ -1632,6 +1701,21 @@ describe("values validation rejects unsafe or incomplete settings", () => {
       ],
       /port names and container ports must be unique/,
     ],
+    [
+      "a port named health",
+      saas,
+      ["--set-json", 'services.smoke-echo.ports=[{"name":"http","containerPort":8080},{"name":"health","containerPort":9000}]'],
+      /services\.smoke-echo: ports must not use the name health or the health port 8081/,
+    ],
+    [
+      "a port on the health port's number",
+      saas,
+      ["--set-json", 'services.smoke-echo.ports=[{"name":"http","containerPort":8081}]'],
+      /services\.smoke-echo: ports must not use the name health or the health port 8081/,
+    ],
+    ["health port below 1024", saas, ["--set", "services.smoke-echo.healthPort=81"], /\/services\/smoke-echo\/healthPort/],
+    ["health port as a string", saas, ["--set-string", "services.smoke-echo.healthPort=8081"], /\/services\/smoke-echo\/healthPort/],
+    ["no health port", saas, ["--set", "serviceDefaults.healthPort=null"], /healthPort/],
     [
       "env that overrides a platform setting",
       saas,

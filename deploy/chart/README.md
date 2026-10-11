@@ -180,7 +180,7 @@ mesh:
 | --- | --- |
 | NetworkPolicy `<release>-default-deny` | 選取 namespace 內所有 pod、不放行任何連入：沒有其他 NetworkPolicy 放行的連線一律拒絕。服務全關時也會產生 |
 | AuthorizationPolicy `<release>-<服務或元件>` | 每個啟用的服務與每個部署的叢集內元件（目前是 `bundled` 的 ClickHouse）一個，ALLOW，以 selector 選它的 pod，只允許呼叫端的 principals（ztunnel 在 L4 執行）。沒有任何呼叫端時是沒有規則的 ALLOW，拒絕所有連線 |
-| NetworkPolicy `<release>-<服務或元件>` | 同上，每個一個：只從同一批呼叫端的 pod（與入口 gateway 的 pod）放行 TCP 15008，也就是 ztunnel 的 HBONE 埠，mesh 內的連線都從這裡進來，不直接連應用程式的埠；另對節點來源 `169.254.7.127/32`（kubelet 的健康檢查由 istio-cni SNAT 成這個位址）只放行該工作負載探針實際連的 TCP 埠，見下方「節點來源」。只有 exec 探針時不產生這條規則；沒有呼叫端也沒有探針埠時 `ingress: []`，拒絕所有連入 |
+| NetworkPolicy `<release>-<服務或元件>` | 同上，每個一個：只從同一批呼叫端的 pod（與入口 gateway 的 pod）放行 TCP 15008，也就是 ztunnel 的 HBONE 埠，mesh 內的連線都從這裡進來，不直接連應用程式的埠；另對節點來源 `169.254.7.127/32`（kubelet 的健康檢查由 istio-cni SNAT 成這個位址）只放行該工作負載探針實際連的 TCP 埠，服務是健康埠（`healthPort`，預設 8081），見下方「節點來源」。只有 exec 探針時不產生這條規則；沒有呼叫端也沒有探針埠時 `ingress: []`，拒絕所有連入 |
 
 - 兩層的分工：AuthorizationPolicy 驗證 mTLS 憑證裡的身分，ztunnel 對每條代理的連線檢查；NetworkPolicy 只看來源 pod 的 label 與 IP，擋的是新建立的 TCP 連線。拿掉 NetworkPolicy 時，清單外的呼叫仍被 ztunnel 重置；拿掉 AuthorizationPolicy 時，清單外的服務連不到對方的 15008，非 mesh 的 pod 連不到任何埠。被拒時呼叫端看到的是連線重置或拒絕，不是 HTTP 403（docs/feasibility/2026-10-10-edge-poc.md）。2026-10-10 在實驗機實測兩個方向（docs/test-reports/2026-10-10-63-mesh-authz.md）。
 - NetworkPolicy 這一層的限制，主要防線是 AuthorizationPolicy：
@@ -189,7 +189,9 @@ mesh:
   - NetworkPolicy 依 label 選來源，能在 namespace 裡建 pod 的人可以複製服務的 label 通過它；mTLS 身分來自 ServiceAccount，只有 AuthorizationPolicy 擋得住（實測的 imposter）。
 - 節點來源 `169.254.7.127/32`：ambient 下 istio-cni 在節點上把「從節點的網路命名空間發出、連到 ambient pod」的連線一律 SNAT 成這個位址，pod 裡的 ztunnel 規則看到這個來源就直接交給應用程式的埠，不經 mTLS，也不套用 AuthorizationPolicy。kubelet 的健康檢查這樣進來，節點上其他行程也一樣，例如其他 namespace 的 `hostNetwork` pod 或節點上的系統服務。所以這條規則是兩層都管不到的入口，只能靠 NetworkPolicy 限縮：
   - chart 只對探針實際連的埠放行：startup、liveness、readiness 探針中 `httpGet`、`tcpSocket`、`grpc` 的埠，具名的埠換成 container port 的數字，exec 探針不需要網路規則（Laysi/trustiot-v2#265）。埠由 `templates/_mesh.tpl` 的 `trustiot.mesh.probePorts` 從 pod 用的同一份探針設定推得：服務來自 `serviceDefaults.probes` 與 `services.<name>.probes`，叢集內元件來自 `trustiot.<元件>.pod`（ClickHouse 是 `templates/_clickhouse.tpl` 的 `trustiot.clickhouse.pod`），不在 values 另寫一份，改探針時 NetworkPolicy 跟著變。chart 測試對兩份 values 的多種組合，逐一比對每個工作負載 pod spec 裡的探針埠與這條規則。
-  - 剩下的開口：服務的探針與 API 共用 `http`（8080），所以節點上的行程仍連得到服務的 API，包括只靠 AuthorizationPolicy 限定呼叫端的 `/internal/` 路徑；代表使用者的請求仍要帶身分服務簽的內部身分 token，由服務自己驗簽（決策 27）。ClickHouse 只剩 HTTP 8123（`/ping` 以外的查詢都要帳密），原生協定 9000 從節點連不到。要完全隔開，健康檢查要改由只回應 `/healthz`、`/readyz` 的獨立埠提供。攻擊者要先控制節點上的 `hostNetwork` 行程，所以這是縱深防禦，不是可直接利用的漏洞。
+  - 服務的探針連獨立的健康埠（`serviceDefaults.healthPort`，預設 8081，埠名 `health`），service-kit 在這個埠只提供 `/healthz`、`/readyz`，其他路徑一律 404（`crates/service-kit` 的 `http.health_listen_addr`）。所以節點來源對服務只放行健康埠，碰不到 API 埠（`http`，8080），也就碰不到只靠 AuthorizationPolicy 限定呼叫端的 `/internal/` 路徑（Laysi/trustiot-v2#286）。健康埠只是 container port：Service 不開它，`ingress.routes` 也指不到它（`port: health` 會讓渲染失敗），只有 kubelet 會連。服務的 `ports` 不能用 `health` 這個名稱或健康埠的埠號。chart 測試對兩份 values 與各種疊加（全部服務、smoke 與 ingress e2e 的 overlay），逐一檢查每個服務的節點來源規則只有健康埠。
+  - 覆寫 `services.<name>.probes` 讓探針連 `http` 會讓節點來源重新連得到那個服務的整個 API，所以服務不要這樣做。只有測試用的替身這樣設：`tests/values/smoke.yaml` 與 `tests/e2e/values-e2e.yaml` 的 traefik/whoami 只能聽一個埠，探針因此連 `http`；身分服務替身與 TrustIoT 服務一樣有健康埠。
+  - ClickHouse 只開 HTTP 8123 給節點（`/ping` 以外的查詢都要帳密），原生協定 9000 從節點連不到。
 - NetworkPolicy 只管連入（`Ingress`），不限制連出：外部依賴（Qdrant Cloud、S3、SMTP、AI 端點、外部資料庫）以主機名稱指定，NetworkPolicy 無法依主機名稱放行。
 - 不部署 waypoint：L4 的身分已足夠。服務之間需要 L7 規則（例如依路徑或方法）時才為該服務加 waypoint，並把它的 AuthorizationPolicy 改成以 `targetRefs` 指向 Service、在 ztunnel 層放行 waypoint 的 ServiceAccount；代表使用者呼叫的授權（內部身分 token）由服務自己驗證，不靠 waypoint（Laysi/trustiot-v2#106）。
 - 叢集測試 `tests/e2e/mesh.e2e.ts` 以真實連線驗證清單內放行、清單外被拒，以及兩層各自生效，用法見該目錄的 README。
@@ -209,13 +211,14 @@ mesh:
 | `serviceDefaults.image.pullPolicy` | `IfNotPresent` | `Always`、`IfNotPresent` 或 `Never` |
 | `serviceDefaults.replicas` | `1` | 副本數 |
 | `serviceDefaults.ports` | `http` 8080 | 容器埠清單，欄位見下表；Service 開同樣的埠號 |
+| `serviceDefaults.healthPort` | `8081` | 健康埠：chart 另外加上名為 `health` 的 container port，服務在這裡只提供 `/healthz`、`/readyz`；探針連它，節點來源也只放行它（見「節點來源」）。Service 不開這個埠。1024–65535，不能與 `ports` 的埠名或埠號重複 |
 | `serviceDefaults.env` | `[]` | 每個服務都加的環境變數（Kubernetes `EnvVar`）；每個服務都會拿到，所以不能讀 Secret（`valueFrom.secretKeyRef`）；名稱的限制同 `services.<name>.env` |
 | `serviceDefaults.resources` | requests `cpu: 20m`、`memory: 32Mi`；limits `cpu: "1"`、`memory: 256Mi` | 資源需求與上限；schema 要求 `limits.memory` |
 | `serviceDefaults.podSecurityContext` | `runAsNonRoot: true`、`seccompProfile: RuntimeDefault` | 不固定 `runAsUser`，讓 OpenShift 的 restricted-v2 SCC 指派 UID。只接受 restricted Pod Security Standard 允許的欄位與值：`runAsNonRoot` 只能是 `true`，seccomp 與 AppArmor 只能是 `RuntimeDefault` 或 `Localhost`，不能設 sysctls |
 | `serviceDefaults.securityContext` | `allowPrivilegeEscalation: false`、`readOnlyRootFilesystem: true`、`capabilities.drop: [ALL]` | 同樣只接受 restricted 允許的設定：不能提權、不能 privileged、`capabilities.drop` 一定含 `ALL` 且不能加 capability、`procMount` 只能是 `Default` |
-| `serviceDefaults.probes.startup` | `GET /healthz`，每 2 秒，最多 30 次 | 設成 `{}` 停用 |
-| `serviceDefaults.probes.liveness` | `GET /healthz`，每 10 秒，逾時 2 秒，失敗 3 次 | 必填 |
-| `serviceDefaults.probes.readiness` | `GET /readyz`，每 5 秒，逾時 2 秒，失敗 2 次 | 必填 |
+| `serviceDefaults.probes.startup` | 健康埠的 `GET /healthz`，每 2 秒，最多 30 次 | 設成 `{}` 停用 |
+| `serviceDefaults.probes.liveness` | 健康埠的 `GET /healthz`，每 10 秒，逾時 2 秒，失敗 3 次 | 必填 |
+| `serviceDefaults.probes.readiness` | 健康埠的 `GET /readyz`，每 5 秒，逾時 2 秒，失敗 2 次 | 必填 |
 | `serviceDefaults.preStopSleepSeconds` | `5` | 送 SIGTERM 前先等幾秒，讓入口與 ztunnel 先移除這個 pod；`0` 停用，最多 60 |
 | `serviceDefaults.drainSeconds` | `30` | SIGTERM 到 SIGKILL 之間給服務收尾的秒數。Kubernetes 把 preStop 的等待算在寬限期內，所以 pod 的 `terminationGracePeriodSeconds` 是 `preStopSleepSeconds + drainSeconds`（預設 35） |
 | `serviceDefaults.tmpSizeLimit` | `64Mi` | 可寫入的 `/tmp`（emptyDir）大小上限；根目錄唯讀 |
@@ -233,7 +236,8 @@ mesh:
 | `services.<name>.enabled` | 必填；服務的 issue 出映像後改成 `true` |
 | `services.<name>.image` | 覆寫 `serviceDefaults.image` 的欄位 |
 | `services.<name>.replicas` | 覆寫副本數 |
-| `services.<name>.ports` | 整個取代埠清單；埠名與埠號不能重複，探針只能指向清單內的埠名 |
+| `services.<name>.ports` | 整個取代埠清單；埠名與埠號不能重複，也不能用 `health` 或健康埠的埠號；探針只能指向清單內的埠名與 `health` |
+| `services.<name>.healthPort` | 覆寫健康埠的埠號；服務的 `http.health_listen_addr` 要跟著改 |
 | `services.<name>.env` | 接在 `serviceDefaults.env` 後面，名稱不能重複。`TRUSTIOT_` 後面接英數字、`SENTRY_`、`OTEL_` 開頭的名稱（不分大小寫）保留給 chart，避免覆寫平台設定與 chart 給的密鑰；`TRUSTIOT__`（兩個底線）開頭的名稱不在保留範圍。名稱像密鑰（含 SECRET、PASSW、PASSPHRASE、PWD、TOKEN、API_KEY、DSN、PRIVATE、CREDENTIAL，或以 `_KEY` 結尾，不分大小寫）的變數只能用 `valueFrom.secretKeyRef`，不能用字面值或 ConfigMap 等其他來源；每一項只能有 `value` 或一個 `valueFrom` 來源。任何變數都不能讀 values 指定的依賴帳密與 Sentry DSN（同一個 Secret 的同一個 key），依賴帳密要改列在 `credentials` |
 | `services.<name>.credentials` | 只給這個服務的依賴帳密，可列 `qdrant-read`、`qdrant-write`、`object-storage`、`smtp`、`ai`，變數見「密鑰的環境變數」；不能放在 `serviceDefaults`，避免每個服務都拿到。`ai` 只能給 `ai-gateway`（決策 28）；`qdrant-read` 與 `qdrant-write` 只能給 `knowledge`，因為 Qdrant 查詢的租戶條件由知識庫服務加上（docs/architecture/rag.md） |
 | `services.<name>.resources` | 逐欄覆寫資源設定 |
@@ -349,7 +353,7 @@ kubectl -n trustiot create secret generic trustiot-clickhouse-admin --from-liter
 
 - **設定**：ConfigMap `<release>-platform` 以 `envFrom` 交給每個服務，另外每個服務有 `OTEL_SERVICE_NAME=<服務名稱>`。`TRUSTIOT_` 後接英數字、`SENTRY_` 與 `OTEL_` 開頭的變數只由 chart 設定，`env` 不能覆寫，服務讀到的平台設定一定是 values 決定的值。沒有設定的項目不會出現，服務可以分辨「沒設定」與「空字串」。平台設定變更時 pod 會自動滾動更新。
 - **密鑰**：不放進 ConfigMap，以 `valueFrom.secretKeyRef` 從 values 指定的 Secret 取用。Sentry 開啟時每個服務有 `SENTRY_DSN`；其他依賴的帳密只給在 `services.<name>.credentials` 列出它的服務（見後面「密鑰的環境變數」），Secret 名稱空白的項目不注入。外部 Postgres 與 ClickHouse 的 CA 憑證以唯讀方式掛在 `/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`。服務自己的資料庫帳號（每個服務一個角色，決策 4）隨 Postgres 與 migration 的 issue 加入（Laysi/trustiot-v2#58、Laysi/trustiot-v2#60）。
-- **埠與探針**：HTTP 監聽 8080（埠名 `http`）；`GET /healthz` 供 startup 與 liveness，`GET /readyz` 供 readiness。
+- **埠與探針**：API 監聽 8080（埠名 `http`）；健康埠 8081（埠名 `health`）只提供 `GET /healthz`（startup 與 liveness）與 `GET /readyz`（readiness），其他路徑回 404。探針連健康埠，節點上的行程因此碰不到 API（「節點來源」）。service-kit 預設就是這樣（`http.listen_addr`、`http.health_listen_addr`），`crates/service-kit/tests/chart_contract.rs` 對照 `values.yaml` 檢查。
 - **SIGTERM**：pod 刪除時先等 `preStopSleepSeconds`（預設 5 秒），再送 SIGTERM；服務收到後 readiness 立即回失敗、處理完進行中的請求、主動關閉長連線，在 `drainSeconds`（預設 30 秒）內結束，之後才會被 SIGKILL。服務是容器內的 PID 1，要自己處理 SIGTERM。
 - **執行環境**：根目錄唯讀，只有 `/tmp` 可寫；以非 root 執行，映像的 `USER` 要是數字 UID，並能以 OpenShift 指派的任意 UID 執行；沒有 ServiceAccount token；只排到 arm64 節點。
 

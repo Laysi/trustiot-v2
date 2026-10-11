@@ -1,0 +1,29 @@
+# Cleanup after the lab run (2026-10-10T18:45Z-18:52Z)
+
+## Lab host trustiot-mac-m1
+- cloudflared-e2e-64.service: disabled, stopped, unit file removed, daemon-reload -> "Unit cloudflared-e2e-64.service could not be found."
+- /etc/credstore/cloudflared-e2e-64.tunnel-token removed; /etc/credstore (owned by systemd-259.9-1.fc44 through tmpfiles credstore.conf) now empty, kept.
+- cloudflared package: reinstalled from the GitHub release rpm 2026.10.0 (binary sha256 e6422b9d4f72d3194bc5a38676f13667c06666523217b842a877d72a80b5ac08, identical to the repo build) -> from_repo @commandline, as before.
+  /usr/local/bin/cloudflared -> /usr/bin/cloudflared and /usr/local/etc/cloudflared/.installedFromPackageManager restored (the old package's %postun removes them on every reinstall/upgrade).
+- rpm key gpg-pubkey-cc94b39c77ae7342a68b89628a682d308d4e5e73-68fa3b78 removed; /etc/yum.repos.d/cloudflared.repo and /etc/pki/rpm-gpg/RPM-GPG-KEY-cloudflare-packaging removed; dnf cache cloudflared-stable-* removed. `dnf repolist` lists no cloudflared repository.
+- firewalld trusted zone (runtime and permanent): rich rule removed, 10.43.0.0/16 re-added. `diff trusted.xml.pre-64 trusted.xml` -> identical; trusted.xml.old restored from trusted.xml.old.pre-64; backups removed.
+  runtime and permanent sources: 10.42.0.0/16 10.43.0.0/16; no rich rules.
+- helm release trustiot in e2e-64 uninstalled; namespace e2e-64 deleted (NotFound); no RoleBinding/ClusterRoleBinding/policy references e2e-64.
+- image localhost/trustiot-e2e/identity-double:64 removed from k3s containerd and podman. docker.io/oven/bun base image was pulled 2026-10-10 22:37 CST by an earlier session, left as is.
+- ~/e2e-64 (handoff key, ciphertexts, installer, logs) removed. Home now: e2e.lock poc-edge stack.
+
+## Health after cleanup
+- ops cloudflared.service: active, MainPID 1005, ActiveEnterTimestamp Sat 2026-10-10 07:23:19 CST (unchanged during the whole test).
+- poc pods: bridge x2, consumer, identity, mosquitto-poc, probe-a/b/c all Running; istio-ingress edge-istio x2 Running.
+- edge Gateway: curl -H "Host: poc.trustiot.test" http://10.43.188.156/healthz -> 200.
+- ss -Htlnp: nothing on 80 or 443.
+
+## Cloudflare
+- DNS record trustiot-e2e-64-8ae851.laysi.io deleted; lookup by name -> 0 records; no DNS name contains "e2e".
+- Tunnel trustiot-e2e-64-8ae851 (ec56d1af-3baf-4ed1-a0a0-5c79a74ce978): connections deleted, tunnel deleted, deleted_at 2026-10-10T18:50:34Z.
+  Active tunnels now: ai-km, knowva-mac, knowva-mac-2, knowva-ssh, office-pve-01, trustiot-mac-m1.
+- No Access application was created; the ops app trustiot-mac-m1-ssh was only read.
+- https://trustiot-e2e-64-8ae851.laysi.io/healthz -> no longer resolves (curl exit 6).
+
+## Workstation
+- ssh -L 127.0.0.1:16464 forward (PID 2022) closed; scratch kubeconfig and ServiceAccount token deleted.

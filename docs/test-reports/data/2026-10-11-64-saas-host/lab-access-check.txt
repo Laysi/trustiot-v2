@@ -1,0 +1,10 @@
+# Ops SSH hostname, unauthenticated, read-only (2026-10-10T18:40Z)
+$ curl -sI https://trustiot-mac-m1-ssh.laysi.io/
+HTTP/2 302
+location: https://laysi.cloudflareaccess.com/cdn-cgi/access/login/trustiot-mac-m1-ssh.laysi.io?kid=b009acbb...&meta=<redacted>&redirect_url=<redacted>
+server: cloudflare
+
+# Access application (read through the Cloudflare API, not modified)
+name: trustiot-mac-m1-ssh   type: self_hosted   domain: trustiot-mac-m1-ssh.laysi.io   session_duration: 24h
+policy "laysi.io only"                    decision=allow         include=[email_domain]
+policy "claude workstation service token" decision=non_identity  include=[service_token]

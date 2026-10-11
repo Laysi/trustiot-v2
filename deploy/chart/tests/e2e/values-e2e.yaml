@@ -25,6 +25,29 @@ services:
         value: "8080"
       - name: WHOAMI_NAME
         value: protected-backend
+    # whoami listens on one port only, so the whoami stand-ins are probed on http. The identity
+    # double, like a TrustIoT service, is probed on its health port (healthPort).
+    probes: &whoamiProbes
+      startup:
+        httpGet:
+          path: /healthz
+          port: http
+        periodSeconds: 2
+        failureThreshold: 30
+      liveness:
+        httpGet:
+          path: /healthz
+          port: http
+        periodSeconds: 10
+        timeoutSeconds: 2
+        failureThreshold: 3
+      readiness:
+        httpGet:
+          path: /readyz
+          port: http
+        periodSeconds: 5
+        timeoutSeconds: 2
+        failureThreshold: 2
     podSecurityContext: &nonroot
       runAsUser: 65532
       runAsGroup: 65532
@@ -37,6 +60,7 @@ services:
         value: "8080"
       - name: WHOAMI_NAME
         value: public-certs
+    probes: *whoamiProbes
     podSecurityContext: *nonroot
   mqtt-bridge:
     enabled: true
@@ -46,6 +70,7 @@ services:
         value: "8080"
       - name: WHOAMI_NAME
         value: public-mqtt-bridge
+    probes: *whoamiProbes
     podSecurityContext: *nonroot
 
 ingress:

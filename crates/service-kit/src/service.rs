@@ -1,15 +1,18 @@
 //! The service lifecycle: configuration, telemetry, startup, serving, and graceful shutdown.
 
 use std::future::Future;
+use std::net::SocketAddr;
 use std::process::ExitCode;
 use std::time::Duration;
 
 use axum::Router;
 use serde::de::DeserializeOwned;
+use tokio::net::TcpListener;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
+use tokio_util::task::{AbortOnDropHandle, TaskTracker};
 
-use crate::config::{self, Settings, Validate};
+use crate::config::{self, KitConfig, Settings, Validate};
 use crate::health::Health;
 use crate::http;
 use crate::shutdown::{self, Shutdown};
@@ -99,10 +102,11 @@ impl<T> Context<T> {
 
 /// Runs a service: loads and validates its configuration, starts telemetry, calls `init` to
 /// build its routes, serves them with the health routes until SIGTERM or SIGINT, drains, and
-/// returns the process exit code.
+/// returns the process exit code. The health routes are also served alone on the health port
+/// (`http.health_listen_addr`) until this returns.
 ///
 /// Startup fails (exit code 1, the reason logged) on invalid configuration, when `init` fails,
-/// or when the listen address is taken. A signal during `init` exits at once with code 0.
+/// or when either listen address is taken. A signal during `init` exits at once with code 0.
 pub async fn run<T, F, Fut>(info: ServiceInfo, init: F) -> ExitCode
 where
     T: DeserializeOwned + Validate,
@@ -142,6 +146,7 @@ where
         service.version = info.version,
         process.pid = std::process::id(),
         http.listen_addr = %kit.http.listen_addr,
+        http.health_listen_addr = %kit.http.health_listen_addr,
         http.request_timeout_ms = duration_ms(kit.http.request_timeout),
         shutdown.drain_delay_ms = duration_ms(kit.shutdown.drain_delay),
         shutdown.drain_timeout_ms = duration_ms(kit.shutdown.drain_timeout),
@@ -183,21 +188,12 @@ where
         }
     };
 
-    let listener = match tokio::net::TcpListener::bind(kit.http.listen_addr).await {
-        Ok(listener) => listener,
-        Err(error) => {
-            tracing::error!(
-                address = %kit.http.listen_addr,
-                error = %error,
-                "cannot listen; not starting"
-            );
-            return ExitCode::FAILURE;
-        }
+    let Some((listener, address)) = bind(kit.http.listen_addr).await else {
+        return ExitCode::FAILURE;
     };
-    let address = listener.local_addr().map_or_else(
-        |_| kit.http.listen_addr.to_string(),
-        |address| address.to_string(),
-    );
+    let Some((health_listener, health_address)) = bind(kit.http.health_listen_addr).await else {
+        return ExitCode::FAILURE;
+    };
     let router = http::compose(routes, health.router(), &kit.http, halt.clone());
     let stop = shutdown.clone();
     let mut server = tokio::spawn(async move {
@@ -205,18 +201,64 @@ where
             .with_graceful_shutdown(async move { stop.stopping().await })
             .await
     });
+    // The health port keeps answering through the drain, readiness with 503, so the kubelet
+    // sees a draining pod rather than refused connections. It stops accepting before this
+    // function returns (and the handle aborts it on any other way out).
+    let health_router = health.router();
+    let mut health_server = AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(health_listener, health_router).await
+    }));
     health.set_ready();
-    tracing::info!(address = %address, "listening");
+    tracing::info!(
+        address = %address,
+        health_address = %health_address,
+        "listening"
+    );
 
+    let code = drain(
+        &kit,
+        &shutdown,
+        &tasks,
+        &halt,
+        &mut server,
+        &mut health_server,
+    )
+    .await;
+    // Close the health port before telemetry is flushed: readiness fails from now on, the
+    // listener closes, and idle probe connections are shut down. A probe still in flight gets
+    // its answer, at once after a signal, when readiness runs no checks.
+    health.set_draining();
+    health_server.abort();
+    let _ = health_server.await;
+    code
+}
+
+/// Serves until a shutdown signal or a server failure, then drains: the second half of `serve`.
+async fn drain(
+    kit: &KitConfig,
+    shutdown: &Shutdown,
+    tasks: &TaskTracker,
+    halt: &CancellationToken,
+    server: &mut JoinHandle<std::io::Result<()>>,
+    health_server: &mut AbortOnDropHandle<std::io::Result<()>>,
+) -> ExitCode {
     tokio::select! {
         // `stopping` first: it also ends the server, which on another worker thread can finish
         // before this select is polled. Unbiased, the select would then pick either ready branch
         // at random and report half of those graceful stops as crashes.
         biased;
         () = shutdown.stopping() => {}
-        ended = &mut server => {
+        ended = &mut *server => {
             // axum's server only returns after the shutdown signal, so this is a crash.
             tracing::error!(outcome = ?ended, "server stopped unexpectedly");
+            return ExitCode::FAILURE;
+        }
+        ended = &mut *health_server => {
+            // The health server has no shutdown signal: it only returns on failure. The API
+            // server must not outlive this return either.
+            tracing::error!(outcome = ?ended, "health server stopped unexpectedly");
+            server.abort();
+            let _ = server.await;
             return ExitCode::FAILURE;
         }
     }
@@ -230,7 +272,7 @@ where
     let deadline = started + drain_timeout;
     tasks.close();
     // The server finishes once every connection has; background tasks are waited for after it.
-    let served = tokio::time::timeout_at(deadline, &mut server).await;
+    let served = tokio::time::timeout_at(deadline, &mut *server).await;
     let tasks_done = tokio::time::timeout_at(deadline, tasks.wait())
         .await
         .is_ok();
@@ -252,7 +294,8 @@ where
             // (the server task is aborted) so no work continues while telemetry is flushed.
             halt.cancel();
             let grace = tokio::time::Instant::now() + HALT_GRACE;
-            if !server.is_finished() && tokio::time::timeout_at(grace, &mut server).await.is_err() {
+            if !server.is_finished() && tokio::time::timeout_at(grace, &mut *server).await.is_err()
+            {
                 server.abort();
             }
             let _ = tokio::time::timeout_at(grace, tasks.wait()).await;
@@ -261,6 +304,26 @@ where
                 "drain timed out; cut off the work still in flight"
             );
             ExitCode::FAILURE
+        }
+    }
+}
+
+/// Binds a listener and returns it with the address it got, or logs why it cannot.
+async fn bind(address: SocketAddr) -> Option<(TcpListener, String)> {
+    match TcpListener::bind(address).await {
+        Ok(listener) => {
+            let bound = listener
+                .local_addr()
+                .map_or_else(|_| address.to_string(), |bound| bound.to_string());
+            Some((listener, bound))
+        }
+        Err(error) => {
+            tracing::error!(
+                address = %address,
+                error = %error,
+                "cannot listen; not starting"
+            );
+            None
         }
     }
 }
