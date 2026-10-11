@@ -1,0 +1,115 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.74s
+     Running unittests src/lib.rs (target/debug/deps/identity-f94ae056fbd73e7e)
+
+running 31 tests
+test audience::tests::the_setting_deserializes_from_its_json_text ... ok
+test audience::tests::exact_wins_then_the_longest_prefix_on_segment_boundaries ... ok
+test audience::tests::the_host_must_match_with_any_port_and_in_any_case ... ok
+test audience::tests::without_routes_nothing_has_an_audience ... ok
+test audience::tests::unusable_routes_stop_startup_without_quoting_the_setting ... ok
+test audience::tests::the_setting_must_be_an_array_of_exact_route_objects ... ok
+test ext_authz::tests::a_failing_store_gets_503_without_an_identity ... ok
+test ext_authz::tests::an_issued_token_expires_after_the_replay_window ... ok
+test ext_authz::tests::a_session_without_a_route_for_the_request_gets_403 ... ok
+test ext_authz::tests::nothing_but_the_check_is_served ... ok
+test ext_authz::tests::sessions_that_are_missing_unknown_or_malformed_get_401 ... ok
+test ext_authz::tests::grants_without_a_tenant_or_with_admin_rights_are_signed_as_they_are ... ok
+test issuer::tests::only_an_ed25519_pkcs8_pem_is_a_signing_key ... ok
+test ext_authz::tests::an_active_session_gets_one_verified_identity_for_the_routed_service ... ok
+test issuer::tests::the_header_and_claims_are_exactly_the_contract ... ok
+test issuer::tests::a_token_stops_working_after_its_lifetime_and_the_skew ... ok
+test ext_authz::tests::forged_identity_headers_never_reach_the_allow ... ok
+test session::tests::a_missing_repeated_or_malformed_session_cookie_is_refused ... ok
+test session::tests::a_secret_round_trips_through_its_cookie_value ... ok
+test session::tests::cookie_errors_have_distinct_reasons ... ok
+test session::tests::debug_output_never_shows_the_secret_or_its_hash ... ok
+test session::tests::only_the_one_canonical_spelling_is_a_secret ... ok
+test session::tests::only_the_three_schema_roles_are_issued ... ok
+test session::tests::the_hash_is_sha256_of_the_secret_bytes ... ok
+test session::tests::the_session_cookie_is_found_among_other_cookies_and_headers ... ok
+test issuer::tests::a_key_the_services_do_not_have_is_refused ... ok
+test issuer::tests::errors_and_debug_output_never_show_the_private_key ... ok
+test issuer::tests::the_key_id_is_the_one_whose_public_key_matches ... ok
+test issuer::tests::tokens_pass_service_kit_verification_for_their_audience_only ... ok
+test ext_authz::tests::a_hanging_store_gets_503_within_the_deadline ... ok
+test ext_authz::tests::every_method_and_path_shape_of_the_check_is_served ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.34s
+
+     Running tests/cross_tenant.rs (target/debug/deps/cross_tenant-948adaab5fd5c38e)
+
+running 1 test
+test tenants_are_isolated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.52s
+
+     Running tests/ext_authz.rs (target/debug/deps/ext_authz-de24672821de6e94)
+
+running 7 tests
+test unusable_keys_and_settings_stop_startup ... ok
+test an_unreachable_database_fails_closed ... ok
+test the_service_role_cannot_create_or_change_sessions ... ok
+test role_changes_apply_to_the_next_request ... FAILED
+test an_active_session_gets_one_token_that_the_routed_service_accepts ... FAILED
+test invalid_or_expired_sessions_get_401 ... FAILED
+test secrets_never_reach_logs_or_responses ... FAILED
+
+failures:
+
+---- role_changes_apply_to_the_next_request stdout ----
+
+thread 'role_changes_apply_to_the_next_request' (816325) panicked at services/identity/tests/ext_authz.rs:255:5:
+assertion `left == right` failed: 503
+content-type: application/json
+cache-control: no-store
+content-length: 56
+connection: close
+date: Sun, 11 Oct 2026 08:54:55 GMT
+{"code":"unavailable","message_key":"error.unavailable"}
+  left: 503
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- an_active_session_gets_one_token_that_the_routed_service_accepts stdout ----
+
+thread 'an_active_session_gets_one_token_that_the_routed_service_accepts' (816322) panicked at services/identity/tests/ext_authz.rs:255:5:
+assertion `left == right` failed: 503
+content-type: application/json
+cache-control: no-store
+content-length: 56
+connection: close
+date: Sun, 11 Oct 2026 08:54:56 GMT
+{"code":"unavailable","message_key":"error.unavailable"}
+  left: 503
+ right: 200
+
+---- invalid_or_expired_sessions_get_401 stdout ----
+
+thread 'invalid_or_expired_sessions_get_401' (816324) panicked at services/identity/tests/ext_authz.rs:255:5:
+assertion `left == right` failed: 503
+content-type: application/json
+cache-control: no-store
+content-length: 56
+connection: close
+date: Sun, 11 Oct 2026 08:54:58 GMT
+{"code":"unavailable","message_key":"error.unavailable"}
+  left: 503
+ right: 200
+
+---- secrets_never_reach_logs_or_responses stdout ----
+
+thread 'secrets_never_reach_logs_or_responses' (816326) panicked at services/identity/tests/ext_authz.rs:555:5:
+assertion `left == right` failed: two allows
+  left: 0
+ right: 2
+
+
+failures:
+    an_active_session_gets_one_token_that_the_routed_service_accepts
+    invalid_or_expired_sessions_get_401
+    role_changes_apply_to_the_next_request
+    secrets_never_reach_logs_or_responses
+
+test result: FAILED. 3 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 29.52s
+
+error: test failed, to rerun pass `-p identity --test ext_authz`
