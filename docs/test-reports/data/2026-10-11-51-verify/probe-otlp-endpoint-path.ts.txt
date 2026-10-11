@@ -1,0 +1,29 @@
+// Runs example-service with an unreachable OTLP endpoint whose path holds a canary, at a given log
+// filter, and counts how often the canary reaches stdout.
+const bin = process.argv[2];
+const out = process.argv[3];
+const results: string[] = [];
+for (const filter of ["info", "debug"]) {
+  const proc = Bun.spawn([bin], {
+    env: {
+      TRUSTIOT__GREETING: "hi",
+      TRUSTIOT__HTTP__LISTEN_ADDR: "127.0.0.1:18051",
+      TRUSTIOT__SHUTDOWN__DRAIN_DELAY: "100ms",
+      TRUSTIOT__TELEMETRY__OTLP_ENDPOINT: "http://127.0.0.1:9/canary-endpoint-path-4a7b",
+      TRUSTIOT__TELEMETRY__LOG_FILTER: filter,
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  await Bun.sleep(1500);
+  await fetch("http://127.0.0.1:18051/v1/hello");
+  await Bun.sleep(6000);
+  proc.kill("SIGTERM");
+  const code = await proc.exited;
+  const text = (await new Response(proc.stdout).text()) + (await new Response(proc.stderr).text());
+  const hits = text.split("\n").filter((l) => l.includes("canary-endpoint-path-4a7b"));
+  results.push(`filter=${filter} exit=${code} lines=${text.split("\n").length - 1} canary_lines=${hits.length}`);
+  if (hits.length) results.push(...hits.slice(0, 2).map((l) => "  " + l));
+}
+await Bun.write(out, results.join("\n") + "\n");
+console.log(results.join("\n"));

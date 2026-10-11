@@ -41,6 +41,7 @@ pub struct TelemetryBatch {
     /// cloud can flag or correct the timestamps of a whole batch (Laysi/trustiot#180).
     pub clock_synced: bool,
     /// The readings, one entry per data point, each data point at most once.
+    #[serde(deserialize_with = "codec::seq")]
     pub series: Vec<Series>,
 }
 
@@ -52,6 +53,7 @@ pub struct Series {
     /// The data point, as listed in the device's model.
     pub point: PointKey,
     /// The samples in the order they were taken. Never empty.
+    #[serde(deserialize_with = "codec::seq")]
     pub samples: Vec<Sample>,
 }
 
@@ -170,10 +172,10 @@ impl TelemetryBatch {
 
     /// Reads only the stream and sequence number of a payload that [`Self::decode`] refused, so
     /// the cloud can still answer it with [`AckOutcome::Rejected`] instead of leaving the
-    /// gateway to resend it forever. Fails only when the payload is not a CBOR map with those
-    /// two fields.
+    /// gateway to resend it forever. Fails only when the payload is larger than
+    /// [`codec::MAX_PEEK_BYTES`] or is not a CBOR map with those two fields.
     pub fn peek_header(payload: &[u8]) -> Result<BatchHeader, DecodeError> {
-        codec::from_slice(payload)
+        codec::peek(payload)
     }
 }
 
@@ -222,7 +224,10 @@ pub enum AckOutcome {
     Rejected {
         /// Why.
         code: IssueCode,
-        /// A diagnostic, at most [`MAX_ISSUE_MESSAGE_BYTES`].
+        /// A diagnostic, at most [`MAX_ISSUE_MESSAGE_BYTES`], without U+0000. A diagnostic
+        /// derived from the refused payload may quote it; take the message of an
+        /// [`crate::Issue`] (from [`DecodeError::to_issues`]), which [`crate::Issue::new`]
+        /// already cleaned and cut to size.
         message: String,
     },
     /// The cloud cannot store the batch now. The gateway resends the same batch after the
@@ -257,6 +262,13 @@ impl Message for TelemetryAck {
                     IssueCode::TooLong,
                     "outcome.message",
                     format!("longer than {MAX_ISSUE_MESSAGE_BYTES} bytes"),
+                ))
+            }
+            AckOutcome::Rejected { message, .. } if codec::has_nul(message) => {
+                Err(Invalid::single(
+                    IssueCode::InvalidValue,
+                    "outcome.message",
+                    "contains U+0000",
                 ))
             }
             _ => Ok(()),

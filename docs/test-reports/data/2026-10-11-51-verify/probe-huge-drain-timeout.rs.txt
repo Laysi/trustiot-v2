@@ -1,0 +1,35 @@
+#[test]
+fn a_huge_drain_timeout_does_not_crash_the_drain() {
+    // `drain_timeout` is added to the current instant when shutdown begins. A value the
+    // duration parser accepts must not turn SIGTERM into a panic.
+    let mut child = Command::new(EXAMPLE_SERVICE)
+        .env_clear()
+        .env("TRUSTIOT__GREETING", "hi")
+        .env("TRUSTIOT__HTTP__LISTEN_ADDR", "127.0.0.1:0")
+        .env("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", "100ms")
+        .env("TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT", "500000000000y")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    std::thread::sleep(Duration::from_secs(2));
+    if wait_exit(&mut child, Duration::from_millis(1)).is_some() {
+        // Rejected at startup is an acceptable way to refuse such a value.
+        let output = child.wait_with_output().expect("output");
+        assert_eq!(output.status.code(), Some(1));
+        return;
+    }
+    send_signal(child.id(), "TERM");
+    let status = wait_exit(&mut child, Duration::from_secs(10));
+    if status.is_none() {
+        let _ = child.kill();
+    }
+    let output = child.wait_with_output().expect("output");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        status.and_then(|status| status.code()),
+        Some(0),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
