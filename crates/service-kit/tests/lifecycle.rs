@@ -253,6 +253,79 @@ fn invalid_configuration_names_the_key_without_its_value() {
 }
 
 #[test]
+fn durations_beyond_the_caps_stop_startup() {
+    // 500000000000y made SIGTERM panic (drain_timeout) or never exit (drain_delay) before the
+    // caps (Laysi/trustiot-v2#283). Now each is refused at startup, naming the setting and its
+    // variable but not the value.
+    let cases = [
+        (
+            "TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT",
+            "500000000000y",
+            "shutdown.drain_timeout",
+        ),
+        (
+            "TRUSTIOT__SHUTDOWN__DRAIN_DELAY",
+            "500000000000y",
+            "shutdown.drain_delay",
+        ),
+        (
+            "TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT",
+            "3601s",
+            "shutdown.drain_timeout",
+        ),
+        (
+            "TRUSTIOT__SHUTDOWN__DRAIN_DELAY",
+            "3601s",
+            "shutdown.drain_delay",
+        ),
+        (
+            "TRUSTIOT__HTTP__REQUEST_TIMEOUT",
+            "500000000000y",
+            "http.request_timeout",
+        ),
+    ];
+    for (variable, value, key) in cases {
+        let (mut child, stdout, _stderr) = spawn_example(&[(variable, value)]);
+        let status = wait_exit(&mut child, Duration::from_secs(10)).expect("the service exits");
+        assert_eq!(status.code(), Some(1), "{variable}={value}: {status}");
+        read_to_end(&stdout);
+        let text = stdout.text();
+        assert!(text.contains(key), "{variable}={value}: {text}");
+        assert!(text.contains(variable), "{variable}={value}: {text}");
+        assert!(!text.contains(value), "{variable}={value}: {text}");
+        assert!(!text.contains("listening"), "{variable}={value}: {text}");
+    }
+    // Both within one hour, but their sum is not.
+    let (mut child, stdout, _stderr) = spawn_example(&[
+        ("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", "2400s"),
+        ("TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT", "2400s"),
+    ]);
+    let status = wait_exit(&mut child, Duration::from_secs(10)).expect("the service exits");
+    assert_eq!(status.code(), Some(1), "{status}");
+    read_to_end(&stdout);
+    let text = stdout.text();
+    assert!(text.contains("shutdown.drain_timeout"), "{text}");
+    assert!(!text.contains("2400"), "{text}");
+}
+
+#[test]
+fn durations_at_the_caps_still_start_and_drain_on_sigterm() {
+    // The limits are inclusive: one hour of drain timeout starts, and with nothing in flight the
+    // service exits at once on SIGTERM. (A delay of one hour is covered by the unit tests; it
+    // would keep this test waiting.)
+    let mut service = Service::start(&[
+        ("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", "0s"),
+        ("TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT", "1h"),
+        ("TRUSTIOT__HTTP__REQUEST_TIMEOUT", "1h"),
+    ]);
+    service.signal("TERM");
+    let status = service
+        .wait_exit(Duration::from_secs(5))
+        .expect("the service exits");
+    assert_eq!(status.code(), Some(0), "{status}");
+}
+
+#[test]
 fn listen_address_in_use_stops_startup() {
     let taken = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a port");
     let address = taken.local_addr().expect("local address").to_string();
