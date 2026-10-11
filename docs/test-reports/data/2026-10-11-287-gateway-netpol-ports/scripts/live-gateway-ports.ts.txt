@@ -1,0 +1,36 @@
+// Lab only, Laysi/trustiot-v2#287: runs the nightly smoke check (scripts/nightly/manifests.ts,
+// gatewayPorts) against the release in e2e-287 and the Deployment and Service that the lab's
+// Istio generated for its Gateway.
+// usage: KUBECONFIG=... bun live-gateway-ports.ts <worktree>
+const [worktree] = process.argv.slice(2);
+if (!worktree) throw new Error("usage: live-gateway-ports.ts <worktree>");
+const { gatewayPortProblems, gatewayPorts, gatewaysOf, parseManifests } = await import(`${worktree}/scripts/nightly/manifests.ts`);
+const kubectl = "/home/ruisi/.proto/tools/kubectl/1.36.5/kubectl";
+const helm = "/home/ruisi/.proto/tools/helm/4.3.0/helm";
+function out(cmd: string[]): string {
+  const p = Bun.spawnSync({ cmd, stdout: "pipe", stderr: "pipe" });
+  if (p.exitCode !== 0) throw new Error(`${cmd.join(" ")}: ${p.stderr.toString()}`);
+  return p.stdout.toString();
+}
+const release = parseManifests(out([helm, "get", "manifest", "trustiot", "-n", "e2e-287"]));
+for (const gateway of gatewaysOf(release)) {
+  const generatedText = out([kubectl, "-n", "e2e-287", "get", "deployments,services", "--selector", `gateway.networking.k8s.io/gateway-name=${gateway}`, "-o", "json"]);
+  const generated = parseManifests(generatedText);
+  const items = JSON.parse(generatedText).items as any[];
+  for (const item of items) {
+    if (item.kind === "Deployment") {
+      const pod = item.spec.template;
+      console.log(`Deployment/${item.metadata.name}: istio.io/dataplane-mode=${pod.metadata.labels["istio.io/dataplane-mode"]}, sysctls=${JSON.stringify(pod.spec.securityContext?.sysctls)}`);
+      for (const c of pod.spec.containers) {
+        console.log(`  container ${c.name} (${c.image}) ports=${JSON.stringify(c.ports)}`);
+        for (const kind of ["startupProbe", "livenessProbe", "readinessProbe"]) console.log(`    ${kind}: ${JSON.stringify(c[kind] ?? null)}`);
+      }
+    } else {
+      console.log(`Service/${item.metadata.name}: type=${item.spec.type} ports=${JSON.stringify(item.spec.ports)}`);
+    }
+  }
+  const ports = gatewayPorts(gateway, generated, release);
+  console.log(`gatewayPorts: ${JSON.stringify(ports)}`);
+  const problems = gatewayPortProblems(ports);
+  console.log(problems.length === 0 ? "problems: none" : `problems: ${problems.join("; ")}`);
+}

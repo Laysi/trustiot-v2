@@ -63,6 +63,17 @@ describe("scripts/ holds no fixed credentials", () => {
   });
 });
 
+describe("scripts/ holds no key material", () => {
+  test("no PEM block of a private key or a certificate is committed", () => {
+    // Certificates and keys are generated at `up` time into the state directory (lib/tls.ts).
+    for (const file of SHIPPED.filter((path) => /\.(ts|sql|md|json|pem|crt|key)$/.test(path))) {
+      expect(readFileSync(file, "utf8"), file).not.toMatch(/-----BEGIN [A-Z ]*(PRIVATE KEY|CERTIFICATE)-----\n/);
+    }
+    const names = SHIPPED.map((path) => path.split("/").at(-1)!);
+    expect(names.filter((name) => /\.(pem|crt|key|p12|pfx)$/.test(name))).toEqual([]);
+  });
+});
+
 describe("scripts/ never opens a port to other machines", () => {
   test("no wildcard bind address and no host networking", () => {
     for (const file of SHIPPED.filter((path) => path.endsWith(".ts"))) {

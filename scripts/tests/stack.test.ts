@@ -9,9 +9,13 @@ import {
   MOSQUITTO_CONFIG,
   mosquittoAcl,
   namesFor,
+  POSTGRES_CONFIG_DIR,
   POSTGRES_HBA,
+  POSTGRES_HBA_PATH,
+  postgresCommand,
   resolvePorts,
   runArgs,
+  SERVICE_CA_PATH,
   SERVICE_PORT,
   type ContainerSpec,
 } from "../lib/stack.ts";
@@ -124,13 +128,32 @@ describe("assertDistinctPorts", () => {
 });
 
 describe("generated configuration", () => {
-  test("Postgres trusts only the local socket and demands SCRAM everywhere else", () => {
+  test("Postgres trusts only the local socket and demands TLS and SCRAM everywhere else", () => {
     const rules = POSTGRES_HBA.split("\n").filter((line) => line && !line.startsWith("#"));
     expect(rules).toEqual([
       "local all all trust",
-      "host all all 0.0.0.0/0 scram-sha-256",
-      "host all all ::/0 scram-sha-256",
+      "hostssl all all 0.0.0.0/0 scram-sha-256",
+      "hostssl all all ::/0 scram-sha-256",
+      "host all all 0.0.0.0/0 reject",
+      "host all all ::/0 reject",
     ]);
+  });
+
+  test("the Postgres command turns TLS on with the generated files and the generated pg_hba.conf", () => {
+    const command = postgresCommand();
+    expect(command[0]).toBe("postgres");
+    const settings = command.flatMap((arg, index) => (command[index - 1] === "-c" ? [arg] : []));
+    expect(settings).toEqual([
+      `hba_file=${POSTGRES_HBA_PATH}`,
+      "ssl=on",
+      `ssl_cert_file=${POSTGRES_CONFIG_DIR}/server.crt`,
+      `ssl_key_file=${POSTGRES_CONFIG_DIR}/server.key`,
+    ]);
+  });
+
+  test("services find the CA where the Helm chart mounts it", () => {
+    expect(SERVICE_CA_PATH).toBe("/etc/trustiot/postgres-ca/ca.crt");
+    expect(platformEnv("trustiot").TRUSTIOT_POSTGRES_CA_FILE).toBe(SERVICE_CA_PATH);
   });
 
   test("Mosquitto refuses anonymous clients and reads its logins from files", () => {
@@ -181,6 +204,17 @@ describe("services", () => {
     for (const key of Object.keys(env)) expect(key).toMatch(/^TRUSTIOT_[A-Z0-9]+(_[A-Z0-9]+)*$/);
     expect(env.TRUSTIOT_POSTGRES_HOST).toBe("postgres");
     expect(JSON.stringify(env)).not.toMatch(/passw|secret|token|key/i);
+  });
+
+  test("services always verify the database server, as service-kit demands", () => {
+    expect(platformEnv("trustiot").TRUSTIOT_POSTGRES_SSLMODE).toBe("verify-full");
+    expect(JSON.stringify(platformEnv("trustiot"))).not.toContain("disable");
+  });
+
+  test("a database role is a plain identifier and each is unique", () => {
+    const roles = SERVICES.flatMap((service) => (service.database ? [service.database.role] : []));
+    expect(new Set(roles).size).toBe(roles.length);
+    for (const role of roles) expect(role).toMatch(/^[a-z][a-z0-9_]*$/);
   });
 
   test("the container serves HTTP on the chart's port", () => {

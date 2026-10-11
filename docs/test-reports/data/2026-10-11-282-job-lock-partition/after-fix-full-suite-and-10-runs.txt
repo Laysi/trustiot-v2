@@ -1,0 +1,92 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.49s
+    Checking service-kit v0.1.0 (/home/ruisi/tv2/agents/282/src/crates/service-kit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.90s
+     Running unittests src/lib.rs (/home/ruisi/tv2/agents/282/target/debug/deps/service_kit-33b22c5d0e2eddc8)
+test result: ok. 79 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+     Running tests/chart_contract.rs (/home/ruisi/tv2/agents/282/target/debug/deps/chart_contract-6fe51a95012e8003)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/container.rs (/home/ruisi/tv2/agents/282/target/debug/deps/container-4d0a3e345e242122)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.97s
+     Running tests/dependency_isolation.rs (/home/ruisi/tv2/agents/282/target/debug/deps/dependency_isolation-f0943d8b247732b1)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+     Running tests/errors.rs (/home/ruisi/tv2/agents/282/target/debug/deps/errors-6a53c3746cf83466)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+     Running tests/identity.rs (/home/ruisi/tv2/agents/282/target/debug/deps/identity-e464c39a8b592abb)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s
+     Running tests/identity_adversarial.rs (/home/ruisi/tv2/agents/282/target/debug/deps/identity_adversarial-8cca7aa47d1bd290)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.41s
+     Running tests/job_lock.rs (/home/ruisi/tv2/agents/282/target/debug/deps/job_lock-4ee85e664ac0b2d8)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.66s
+     Running tests/lifecycle.rs (/home/ruisi/tv2/agents/282/target/debug/deps/lifecycle-82b6417dde07cf00)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.59s
+     Running tests/logging.rs (/home/ruisi/tv2/agents/282/target/debug/deps/logging-c7853c93c05486c6)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+     Running tests/otlp.rs (/home/ruisi/tv2/agents/282/target/debug/deps/otlp-cfc8138e9fe5b574)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+     Running tests/tenant_db.rs (/home/ruisi/tv2/agents/282/target/debug/deps/tenant_db-4566ab199a00e3d3)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.07s
+     Running tests/verify_config.rs (/home/ruisi/tv2/agents/282/target/debug/deps/verify_config-6205fbdbdf4762e5)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/verify_container.rs (/home/ruisi/tv2/agents/282/target/debug/deps/verify_container-7022183a8419e8d9)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.31s
+     Running tests/verify_job_lock.rs (/home/ruisi/tv2/agents/282/target/debug/deps/verify_job_lock-61077479c894a8a4)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.85s
+     Running tests/verify_leaks.rs (/home/ruisi/tv2/agents/282/target/debug/deps/verify_leaks-8639dc1fa319f87a)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.34s
+     Running tests/verify_shutdown.rs (/home/ruisi/tv2/agents/282/target/debug/deps/verify_shutdown-8413ea6b50c845f6)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.98s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.21s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.63s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.59s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.73s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.06s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.33s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.02s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+lock timeout 1s, after the partition: release Ok((Err(Lost { job: "service-kit-test-partition-queries-267857-2" }), 1.002325399s)); try_acquire Ok((Err(Lost { job: "service-kit-test-partition-queries-267857-2" }), 1.001943318s)); try_acquire through a pinging pool Ok((Err(Database { job: "service-kit-test-partition-queries-267857-2", source: PoolTimedOut }), 1.00222962s))
+lock timeout 1s, heartbeat 200ms: replica b took the lock 25.944124ms after the partition; replica a stopped its job 998.993665ms after the partition; both ran the job for 954.636528ms
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 4.14s
+lock timeout 1s, heartbeat 200ms: replica b took the lock 26.673862ms after the partition; replica a stopped its job 1.000150387s after the partition; both ran the job for 952.33234ms
+lock timeout 1s, after the partition: release Ok((Err(Lost { job: "service-kit-test-partition-queries-268007-3" }), 1.001121468s)); try_acquire Ok((Err(Lost { job: "service-kit-test-partition-queries-268007-3" }), 1.001045496s)); try_acquire through a pinging pool Ok((Err(Database { job: "service-kit-test-partition-queries-268007-3", source: PoolTimedOut }), 1.001106172s))
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 4.29s
+lock timeout 1s, heartbeat 200ms: replica b took the lock 27.049349ms after the partition; replica a stopped its job 1.000216865s after the partition; both ran the job for 952.096286ms
+lock timeout 1s, after the partition: release Ok((Err(Lost { job: "service-kit-test-partition-queries-268156-3" }), 1.000612029s)); try_acquire Ok((Err(Lost { job: "service-kit-test-partition-queries-268156-3" }), 1.000545614s)); try_acquire through a pinging pool Ok((Err(Database { job: "service-kit-test-partition-queries-268156-3", source: PoolTimedOut }), 1.000599017s))
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 4.29s
+lock timeout 1s, heartbeat 200ms: replica b took the lock 26.370475ms after the partition; replica a stopped its job 999.328132ms after the partition; both ran the job for 966.652557ms
+lock timeout 1s, after the partition: release Ok((Err(Lost { job: "service-kit-test-partition-queries-268274-3" }), 1.002470224s)); try_acquire Ok((Err(Lost { job: "service-kit-test-partition-queries-268274-3" }), 1.002154305s)); try_acquire through a pinging pool Ok((Err(Database { job: "service-kit-test-partition-queries-268274-3", source: PoolTimedOut }), 1.00233039s))
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 4.25s
+lock timeout 1s, after the partition: release Ok((Err(Lost { job: "service-kit-test-partition-queries-268394-2" }), 1.00293632s)); try_acquire Ok((Err(Lost { job: "service-kit-test-partition-queries-268394-2" }), 1.00259325s)); try_acquire through a pinging pool Ok((Err(Database { job: "service-kit-test-partition-queries-268394-2", source: PoolTimedOut }), 1.002853706s))
+lock timeout 1s, heartbeat 200ms: replica b took the lock 25.799197ms after the partition; replica a stopped its job 999.425881ms after the partition; both ran the job for 953.195908ms
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 4.14s
+lock timeout 1s, after the partition: release Ok((Err(Lost { job: "service-kit-test-partition-queries-268516-2" }), 1.002789965s)); try_acquire Ok((Err(Lost { job: "service-kit-test-partition-queries-268516-2" }), 1.002522666s)); try_acquire through a pinging pool Ok((Err(Database { job: "service-kit-test-partition-queries-268516-2", source: PoolTimedOut }), 1.002729177s))
+lock timeout 1s, heartbeat 200ms: replica b took the lock 26.307091ms after the partition; replica a stopped its job 998.968167ms after the partition; both ran the job for 953.267476ms
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 4.11s
+lock timeout 1s, after the partition: release Ok((Err(Lost { job: "service-kit-test-partition-queries-268635-2" }), 1.002920183s)); try_acquire Ok((Err(Lost { job: "service-kit-test-partition-queries-268635-2" }), 1.002535429s)); try_acquire through a pinging pool Ok((Err(Database { job: "service-kit-test-partition-queries-268635-2", source: PoolTimedOut }), 1.002826407s))
+lock timeout 1s, heartbeat 200ms: replica b took the lock 26.069744ms after the partition; replica a stopped its job 1.000306683s after the partition; both ran the job for 970.568596ms
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 4.05s
+lock timeout 1s, after the partition: release Ok((Err(Lost { job: "service-kit-test-partition-queries-268752-2" }), 1.001746716s)); try_acquire Ok((Err(Lost { job: "service-kit-test-partition-queries-268752-2" }), 1.001663409s)); try_acquire through a pinging pool Ok((Err(Database { job: "service-kit-test-partition-queries-268752-2", source: PoolTimedOut }), 1.001730626s))
+lock timeout 1s, heartbeat 200ms: replica b took the lock 25.228023ms after the partition; replica a stopped its job 1.000025183s after the partition; both ran the job for 956.187675ms
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 3.81s
+lock timeout 1s, after the partition: release Ok((Err(Lost { job: "service-kit-test-partition-queries-268871-2" }), 1.001493322s)); try_acquire Ok((Err(Lost { job: "service-kit-test-partition-queries-268871-2" }), 1.001401953s)); try_acquire through a pinging pool Ok((Err(Database { job: "service-kit-test-partition-queries-268871-2", source: PoolTimedOut }), 1.001474928s))
+lock timeout 1s, heartbeat 200ms: replica b took the lock 26.938815ms after the partition; replica a stopped its job 998.405017ms after the partition; both ran the job for 967.184472ms
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 4.52s
+lock timeout 1s, after the partition: release Ok((Err(Lost { job: "service-kit-test-partition-queries-268995-2" }), 1.002326361s)); try_acquire Ok((Err(Lost { job: "service-kit-test-partition-queries-268995-2" }), 1.001988388s)); try_acquire through a pinging pool Ok((Err(Database { job: "service-kit-test-partition-queries-268995-2", source: PoolTimedOut }), 1.002226309s))
+lock timeout 1s, heartbeat 200ms: replica b took the lock 26.350393ms after the partition; replica a stopped its job 999.923204ms after the partition; both ran the job for 954.142179ms
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 4.90s
+
+[exited with code 0]

@@ -198,14 +198,26 @@ context.spawn(lock.run_periodically(
   2. 重啟不會修好資料造成的 panic，只會換來更長的重試間隔與重啟風暴；排程繼續則維持原本的週期重試，資料修好後自動恢復。
   3. 工作必須冪等（規則 1），重跑同一輪是安全的；panic 前持有的鎖已釋放，別的副本也可以接手。
   4. 原本「默默停止」的問題來自沒有訊號。現在每次 panic 都有一行 ERROR，可以用日誌告警。
-- 鎖跟著資料庫 session：副本當機或斷線時 session 結束，鎖跟著釋放。工作執行期間每 5 秒 ping 一次 session（`with_heartbeat` 可調）；session 斷掉時工作在下一個 await 被取消並回 `JobLockError::Lost`，因為別的副本可能已經接手。guard 被 drop（panic、取消）時關閉連線，鎖也一併釋放。
+- 鎖跟著資料庫 session：副本當機或斷線時 session 結束，鎖跟著釋放。guard 被 drop（panic、取消）時關閉連線，鎖也一併釋放。
+- 工作執行期間每 5 秒 ping 一次 session（`with_heartbeat` 可調，不能是 0；不論設多少，每個鎖逾時內至少 ping 兩次）。session 斷掉，或超過鎖逾時（`with_timeout`，預設 10 秒，範圍 100 ms 到 60 秒，超出範圍會 panic）沒有確認 session 還活著時，工作在下一個 await 被取消並回 `JobLockError::Lost`，因為別的副本可能已經接手。確認的時間點是最後一次有回應的查詢送出的時間。
+- 取鎖與釋放鎖等資料庫也最多等鎖逾時：`try_acquire` 在時間內拿不到 pool 的連線回 `JobLockError::Database`（`sqlx::Error::PoolTimedOut`），鎖的查詢沒有回應回 `Lost`；`release` 沒有回應回 `Lost`，guard 關閉連線；工作 panic 後的明確釋放也一樣。`run_periodically` 在釋放之前就記下工作的結果（完成、失敗的 WARN、panic 的 ERROR），所以釋放失敗時這些日誌也不會漏掉，之後另記一行 `scheduled job lock failed`。
+
+### 鎖的保證有時間界限
+
+server 端可以在持有者不知情時結束鎖的 session：網路分割時封包被丟棄、連線沒有被重設，同時 failover、idle 逾時、keepalive 判定或管理者以 `pg_terminate_backend` 結束了 session。server 一結束 session 就釋放鎖，別的副本可以立刻取得；持有者這邊的 TCP 要十幾分鐘才放棄，所以只能靠鎖逾時察覺。
+
+- 網路分割時，持有者最晚在最後一次確認後的一個鎖逾時判定 `Lost` 並停止工作，所以兩個副本同時執行同一個工作的時間最多一個鎖逾時（預設 10 秒），另加計時器與排程的延遲（正常負載下是毫秒級）。
+- 分割但 server 沒有結束 session 時，持有者一樣在鎖逾時內停止工作；鎖留在 server 上，直到 server 察覺 session 已死（TCP keepalive 或逾時設定），這段期間沒有副本執行這個工作。
+- 連線被乾淨關閉或重設時，下一次 ping 就失敗，不必等逾時。
+- 鎖逾時越長越能容忍資料庫偶爾變慢，但重疊的時間也越長；越短則資料庫一慢就取消工作，留到下一輪再跑。
 
 規則：
 
-1. 工作必須冪等：鎖只防止同時執行，不防止重複執行。
-2. 連線必須是 session 層級：直連 Postgres，或經 session mode 的 pooler；不能經 transaction mode 的 pooling，否則鎖會落在別的 session。
-3. key 由 `lock_key(service, job)` 以 64 bit FNV-1a 從固定命名空間、服務名稱與工作名稱算出。這個算法永遠不能改，否則滾動更新期間新舊 pod 算出不同 key，會同時執行同一個工作。改服務或工作的名稱也等於換一把鎖。
-4. 工作執行期間佔用 pool 的一條連線。
+1. 工作必須冪等：鎖只在上述時間界限內防止同時執行，也不防止重複執行。網路分割時兩個副本可能同時執行最多一個鎖逾時，工作要能承受。
+2. 工作要經常 await：取消只發生在 await，長時間不 await 的運算（CPU 密集或阻塞呼叫）在察覺 `Lost` 後仍會跑完那一段，超出上述時間界限。
+3. 連線必須是 session 層級：直連 Postgres，或經 session mode 的 pooler；不能經 transaction mode 的 pooling，否則鎖會落在別的 session。
+4. key 由 `lock_key(service, job)` 以 64 bit FNV-1a 從固定命名空間、服務名稱與工作名稱算出。這個算法永遠不能改，否則滾動更新期間新舊 pod 算出不同 key，會同時執行同一個工作。改服務或工作的名稱也等於換一把鎖。
+5. 工作執行期間佔用 pool 的一條連線。
 
 ## 內部身分（`identity`）
 
@@ -459,7 +471,7 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 ### 威脅模型與限制
 
 - RLS 擋的是程式漏寫租戶條件。SQL 注入可以用服務角色改掉 `trustiot.tenant_id`，所以只用參數化查詢；`tools/sql-check` 隨 `cargo test --workspace` 擋下由字串組成的 SQL、`AssertSqlSafe`、SQL 裡的 `set_config` 與 `SET ROLE` 等（規則見[它的 README](../../tools/sql-check/README.md)）。
-- 本機開發環境（`scripts/`）的 Postgres 沒有 TLS、給服務的 `TRUSTIOT_POSTGRES_SSLMODE` 是 `disable`，用 Postgres 的服務在那裡會拒絕啟動；第一個用 Postgres 的服務進開發環境前，開發環境要改成 TLS。範例服務只在設定了 `database` 時才讀 Postgres 設定，所以照常啟動。
+- 本機開發環境（`scripts/`）的 Postgres 只接受 TLS，憑證由 `up` 當場產生的開發 CA 簽發，給服務的 `TRUSTIOT_POSTGRES_SSLMODE` 是 `verify-full`、`TRUSTIOT_POSTGRES_CA_FILE` 指向那個 CA（Laysi/trustiot-v2#273，見 [scripts/README.md](../../scripts/README.md)「Postgres 的 TLS」）。開發環境給範例服務一個一般的資料庫角色，它以 `verify-full` 連上本機 Postgres，`/readyz` 的 `postgres` 檢查通過才就緒。
 - AI 閘道（不依賴 contract）沒有 `tenant`；它若有租戶資料表，需要不經 contract 的租戶交易介面。
 
 ## contract feature
@@ -489,13 +501,13 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 | `cargo test -p service-kit --test logging` | JSON 日誌、trace id；body、標頭、query 與路徑不進日誌 | 無 |
 | `cargo test -p service-kit --test otlp` | OTLP 匯出到假的接收端：預設關閉、帶 trace id、指標送出、不含 body；collector 連線被重設或回 400 時，`debug`、`trace` 與針對 SDK 的指令下，端點路徑、SDK 環境變數與 collector 回應的 canary 都不出現在 stdout 與 stderr；帶 query 的端點被拒絕且不印出 | 無 |
 | `cargo test -p service-kit --test container` | 範例服務在容器內以 PID 1 執行（唯讀根目錄、任意 UID），`stop` 時收尾並以 0 結束 | podman 或 docker，會拉 `gcr.io/distroless/cc-debian13` |
-| `cargo test -p service-kit --test job_lock` | 兩個副本互斥、session 中斷、guard 釋放、連線回到 pool、工作 panic 後排程繼續且日誌不含 panic 訊息 | `TEST_DATABASE_URL`，或 podman 或 docker（會拉 `postgres:18.6-alpine`） |
+| `cargo test -p service-kit --test job_lock` | 兩個副本互斥、session 中斷、guard 釋放、連線回到 pool、工作 panic 後排程繼續且日誌不含 panic 訊息；網路分割（經本機 TCP 代理，代理改成黑洞後丟棄封包但不關連線）時持有者在鎖逾時內停止工作，取鎖與釋放鎖在鎖逾時內放棄 | `TEST_DATABASE_URL`，或 podman 或 docker（會拉 `postgres:18.6-alpine`） |
 | `cargo test -p service-kit --test tenant_db` | 租戶隔離：沒設定租戶查不到也寫不進任何列；租戶 A 讀不到、改不到、寫不進租戶 B 的列；pool 重用連線時租戶不會帶到下一個交易；服務角色不是擁有者、沒有 BYPASSRLS、關不掉 RLS；不安全的連線被拒；平台角色只看得到開放的表；outbox 範本（租戶事件、全平台事件、消費端讀取）；伺服器憑證與主機名稱驗證；範例服務在 `sslmode` 不是 `verify-full` 時拒絕啟動，`/v1/items` 只回 token 租戶的資料 | podman 或 docker（會拉 `postgres:18.6-alpine`，以測試時產生的 CA 啟用 TLS）；不使用 `TEST_DATABASE_URL`，因為測試要以 superuser 建角色，並需要知道伺服器的 CA |
 | `cargo test -p sql-check` | 由字串組成的 SQL 與 kit 以外的租戶設定（`tools/sql-check`） | 無 |
 | `cargo test -p service-kit --test dependency_isolation` | 關閉 feature 時不依賴 contract，開啟時依賴 | 無 |
 | `cargo test -p service-kit --test chart_contract` | kit 的預設 API 埠、健康埠、探針的路徑與埠（`health`）與收尾時間符合 `deploy/chart/values.yaml` | 無 |
 
-- `TEST_DATABASE_URL` 指向可以任意取 advisory lock 的 Postgres（測試不建表）；沒設時每個測試起一個用完即刪的 Postgres 容器。
+- `TEST_DATABASE_URL` 指向可以任意取 advisory lock 的 Postgres（測試不建表），且不能要求驗證主機名稱，因為分割測試改經 `127.0.0.1` 的代理連線；沒設時每個測試起一個用完即刪的 Postgres 容器。
 - `tenant_db` 的測試共用一個啟用 TLS 的 Postgres 容器（`tests/support/postgres.rs`，記憶體上限 512 MB），最後一個用到它的測試結束時刪除；每個測試用自己的資料庫。
 - 沒有容器執行環境時，需要它的測試在本機略過，並在 stderr 印出 `skipped:`；設了 `CI` 環境變數時改為失敗，CI 不會默默略過。
 - 加 `-- --nocapture` 會印出測試報告用的數據，例如容器停止花的時間與 exit code。
