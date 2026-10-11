@@ -468,7 +468,7 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 ### 威脅模型與限制
 
 - RLS 擋的是程式漏寫租戶條件。SQL 注入可以用服務角色改掉 `trustiot.tenant_id`，所以只用參數化查詢；`tools/sql-check` 隨 `cargo test --workspace` 擋下由字串組成的 SQL、`AssertSqlSafe`、SQL 裡的 `set_config` 與 `SET ROLE` 等（規則見[它的 README](../../tools/sql-check/README.md)）。
-- 本機開發環境（`scripts/`）的 Postgres 沒有 TLS、給服務的 `TRUSTIOT_POSTGRES_SSLMODE` 是 `disable`，用 Postgres 的服務在那裡會拒絕啟動；第一個用 Postgres 的服務進開發環境前，開發環境要改成 TLS。範例服務只在設定了 `database` 時才讀 Postgres 設定，所以照常啟動。
+- 本機開發環境（`scripts/`）的 Postgres 只接受 TLS，憑證由 `up` 當場產生的開發 CA 簽發，給服務的 `TRUSTIOT_POSTGRES_SSLMODE` 是 `verify-full`、`TRUSTIOT_POSTGRES_CA_FILE` 指向那個 CA（Laysi/trustiot-v2#273，見 [scripts/README.md](../../scripts/README.md)「Postgres 的 TLS」）。開發環境給範例服務一個一般的資料庫角色，它以 `verify-full` 連上本機 Postgres，`/readyz` 的 `postgres` 檢查通過才就緒。
 - AI 閘道（不依賴 contract）沒有 `tenant`；它若有租戶資料表，需要不經 contract 的租戶交易介面。
 
 ## contract feature
