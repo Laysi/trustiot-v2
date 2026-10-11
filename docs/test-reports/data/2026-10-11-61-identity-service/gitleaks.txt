@@ -1,0 +1,11 @@
+# Local machine (Fedora, kernel 7.2.8-300.fc45.x86_64), 2026-10-11 17:12 Taipei, HEAD bda79cf
+
+$ gitleaks detect --redact --source . --log-opts="origin/main..HEAD"     (origin/main = 7c2e405)
+INF 4 commits scanned.
+INF scanned ~213100 bytes (213.10 KB) in 535ms
+INF no leaks found
+
+# The HEAD tree exported with `git archive HEAD` and unpacked into an empty directory:
+$ gitleaks dir --redact --no-banner <export dir>
+INF scanned ~6930612 bytes (6.93 MB) in 827ms
+INF no leaks found
