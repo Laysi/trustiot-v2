@@ -1,0 +1,96 @@
+=== publish
+PUB as 'gw-1' to 'trustiot/v1/gw/gw-1/up/telemetry' 
+Client c-gw-1 received PUBACK (Mid: 1, RC:16)
+PUB as 'gw-1' to 'trustiot/v1/gw/gw-1/up/status' -r
+Client c-gw-1 received PUBACK (Mid: 1, RC:16)
+PUB as 'gw-1' to 'trustiot/v1/gw/gw-1/up/anything/deep/er' 
+Client c-gw-1 received PUBACK (Mid: 1, RC:16)
+PUB as 'gw-1' to 'trustiot/v1/gw/gw-1/up' 
+Client c-gw-1 received PUBACK (Mid: 1, RC:16)
+PUB as 'gw-1' to 'trustiot/v1/gw/gw-10/up/telemetry' 
+Client c-gw-1 received PUBACK (Mid: 1, RC:135)
+PUB as 'gw-10' to 'trustiot/v1/gw/gw-1/up/telemetry' 
+Client c-gw-10 received PUBACK (Mid: 1, RC:135)
+PUB as 'gw-1' to 'trustiot/v1/gw/gw-1/down/config' 
+Client c-gw-1 received PUBACK (Mid: 1, RC:135)
+PUB as 'gw-1' to 'trustiot/v1/gw/gw-1/down/telemetry-ack' 
+Client c-gw-1 received PUBACK (Mid: 1, RC:135)
+PUB as 'gw-1' to 'trustiot/v1/gw/+/up/telemetry' 
+Error: Invalid publish topic 'trustiot/v1/gw/+/up/telemetry', does it contain '+' or '#'?
+PUB as 'gw-1' to 'trustiot/v1/gw/gw-1.x/up/telemetry' 
+Client c-gw-1 received PUBACK (Mid: 1, RC:135)
+PUB as 'gw-1.x' to 'trustiot/v1/gw/gw-1.x/up/telemetry' 
+Client c-gw-1.x received PUBACK (Mid: 1, RC:16)
+PUB as 'gw-1.x' to 'trustiot/v1/gw/gw-1/up/telemetry' 
+Client c-gw-1.x received PUBACK (Mid: 1, RC:135)
+PUB as 'gw-1' to 'trustiot/v1/gw/gw-1/../gw-10/up/telemetry' 
+Client c-gw-1 received PUBACK (Mid: 1, RC:135)
+PUB as 'gw-1' to '$SYS/broker/uptime' 
+Client c-gw-1 received PUBACK (Mid: 1, RC:135)
+PUB as 'gw-1' to 'other/topic' 
+Client c-gw-1 received PUBACK (Mid: 1, RC:135)
+=== subscribe
+SUB as 'gw-1' to 'trustiot/v1/gw/gw-1/down/config'
+Client c-gw-1 received SUBACK
+Subscribed (mid: 1): 0
+SUB as 'gw-1' to 'trustiot/v1/gw/gw-1/down/#'
+Client c-gw-1 received SUBACK
+Subscribed (mid: 1): 0
+SUB as 'gw-1' to 'trustiot/v1/gw/gw-1/down/+'
+Client c-gw-1 received SUBACK
+Subscribed (mid: 1): 0
+SUB as 'gw-1' to 'trustiot/v1/gw/+/down/config'
+Client c-gw-1 received SUBACK
+Subscribed (mid: 1): 135
+SUB as 'gw-1' to 'trustiot/v1/gw/#'
+Client c-gw-1 received SUBACK
+Subscribed (mid: 1): 135
+SUB as 'gw-1' to '#'
+Client c-gw-1 received SUBACK
+Subscribed (mid: 1): 135
+SUB as 'gw-1' to '$SYS/#'
+Client c-gw-1 received SUBACK
+Subscribed (mid: 1): 135
+SUB as 'gw-1' to 'trustiot/v1/gw/gw-1/up/telemetry'
+Client c-gw-1 received SUBACK
+Subscribed (mid: 1): 135
+SUB as 'gw-1' to 'trustiot/v1/gw/gw-10/down/config'
+Client c-gw-1 received SUBACK
+Subscribed (mid: 1): 135
+SUB as 'gw-1' to 'trustiot/v1/gw/gw-1.x/down/config'
+Client c-gw-1 received SUBACK
+Subscribed (mid: 1): 135
+SUB as 'gw-1.x' to 'trustiot/v1/gw/gw-1/down/config'
+Client c-gw-1.x received SUBACK
+Subscribed (mid: 1): 135
+SUB as 'gw-1.x' to 'trustiot/v1/gw/gw-1.x/down/config'
+Client c-gw-1.x received SUBACK
+Subscribed (mid: 1): 0
+=== users whose names are wildcards or contain a level separator
+PUB as '+' to 'trustiot/v1/gw/+/up/telemetry' 
+Error: Invalid publish topic 'trustiot/v1/gw/+/up/telemetry', does it contain '+' or '#'?
+PUB as '+' to 'trustiot/v1/gw/gw-1/up/telemetry' 
+Client c-+ received PUBACK (Mid: 1, RC:135)
+PUB as '#' to 'trustiot/v1/gw/gw-1/up/telemetry' 
+Client c-# received PUBACK (Mid: 1, RC:135)
+PUB as 'a/b' to 'trustiot/v1/gw/a/b/up/telemetry' 
+Client c-a/b received PUBACK (Mid: 1, RC:135)
+PUB as 'a/b' to 'trustiot/v1/gw/gw-1/up/telemetry' 
+Client c-a/b received PUBACK (Mid: 1, RC:135)
+SUB as '+' to 'trustiot/v1/gw/gw-1/down/config'
+Client c-+ received SUBACK
+Subscribed (mid: 1): 135
+SUB as '+' to 'trustiot/v1/gw/+/down/config'
+Client c-+ received SUBACK
+Subscribed (mid: 1): 135
+SUB as '#' to 'trustiot/v1/gw/gw-1/down/config'
+Client c-# received SUBACK
+Subscribed (mid: 1): 135
+SUB as 'a/b' to 'trustiot/v1/gw/gw-1/down/config'
+Client c-a/b received SUBACK
+Subscribed (mid: 1): 135
+SUB as 'gw-+' to 'trustiot/v1/gw/gw-1/down/config'
+Client c-gw-+ received SUBACK
+Subscribed (mid: 1): 135
+SUB as 'gw-+' to 'trustiot/v1/gw/gw-+/down/config'
+Error: Invalid subscription topic 'trustiot/v1/gw/gw-+/down/config', are all '+' and '#' wildcards correct?

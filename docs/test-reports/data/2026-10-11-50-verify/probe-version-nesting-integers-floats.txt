@@ -1,0 +1,133 @@
+warning: value assigned to `b` is never read
+   --> crates/protocol/tests/probe_tmp.rs:172:25
+    |
+172 |             let mut b = enc(&m);
+    |                         ^^^^^^^ this value is reassigned later and never used
+...
+176 |             b = enc(&m2);
+    |             - `b` is overwritten here before the previous value is read
+    |
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: `protocol` (test "probe_tmp") generated 1 warning
+
+running 1 test
+=== v and rev ===
+telemetry v=2: UnsupportedVersion { found: 2 }
+telemetry v=0: UnsupportedVersion { found: 0 }
+telemetry v=u64max: UnsupportedVersion { found: 18446744073709551615 }
+telemetry v=-1: Malformed(Mismatch { name: "u64", found: 32 })
+telemetry v=1.0: Malformed(Mismatch { name: "u64", found: 251 })
+telemetry v="1": Malformed(Mismatch { name: "u64", found: 97 })
+telemetry v=true: Malformed(Mismatch { name: "u64", found: 245 })
+telemetry v=null: Malformed(Mismatch { name: "u64", found: 246 })
+telemetry v=tag0(1): Malformed(Mismatch { name: "u64", found: 192 })
+telemetry v=tag55799(1): Malformed(Mismatch { name: "u64", found: 217 })
+telemetry v missing: Malformed(missing field `v`)
+telemetry dup v:1,v:2: Malformed(duplicate field `v`)
+telemetry dup v:2,v:1: Malformed(duplicate field `v`)
+status rev=0: OK Online(Online { v: V1, session: SessionId("0199d0a0-0000-700
+config rev=0: Invalid(Invalid { issues: [Issue { code: UnsupportedRevision, path: "rev", message: "revision 0 is outside 1..=1" }] })
+status rev=1: OK Online(Online { v: V1, session: SessionId("0199d0a0-0000-700
+config rev=1: OK DesiredConfig { v: V1, rev: 1, version: ConfigVersion(7), mo
+status rev=2: UnsupportedRevision { required: 2 }
+config rev=2: UnsupportedRevision { required: 2 }
+status rev=65536: UnsupportedRevision { required: 65536 }
+config rev=65536: UnsupportedRevision { required: 65536 }
+status rev=u64max: UnsupportedRevision { required: 18446744073709551615 }
+config rev=u64max: UnsupportedRevision { required: 18446744073709551615 }
+status rev=null: OK Online(Online { v: V1, session: SessionId("0199d0a0-0000-700
+config rev=null: Malformed(Mismatch { name: "u16", found: 246 })
+status rev=-1: Malformed(Mismatch { name: "u64", found: 32 })
+config rev=-1: Malformed(Mismatch { name: "u64", found: 32 })
+status rev="x": Malformed(Mismatch { name: "u64", found: 97 })
+config rev="x": Malformed(Mismatch { name: "u64", found: 97 })
+status rev=2.0: Malformed(Mismatch { name: "u64", found: 251 })
+config rev=2.0: Malformed(Mismatch { name: "u64", found: 251 })
+status rev=tag(2): Malformed(Mismatch { name: "u64", found: 193 })
+config rev=tag(2): Malformed(Mismatch { name: "u64", found: 193 })
+status rev missing: OK Online(Online { v: V1, session: SessionId("0199d0a0-0000-700
+config rev missing: Malformed(missing field `rev`)
+config dup rev 1,99: Malformed(duplicate field `rev`)
+config dup rev 99,1: Malformed(duplicate field `rev`)
+=== array / non-map roots ===
+telemetry as positional array: Malformed(Mismatch { name: "map", found: 133 })
+config keys: [Text("v"), Text("rev"), Text("version"), Text("models"), Text("devices")]
+config as positional array (orig rev): Malformed(Mismatch { name: "map", found: 133 })
+config as positional array rev=99: Malformed(Mismatch { name: "map", found: 133 })
+telemetry tag55799(map): Malformed(Mismatch { name: "map", found: 217 })
+telemetry tag0(map): Malformed(Mismatch { name: "map", found: 192 })
+int root: Malformed(Mismatch { name: "map", found: 1 })
+null root: Malformed(Mismatch { name: "map", found: 246 })
+empty map: Malformed(missing field `v`)
+empty array: Malformed(Mismatch { name: "map", found: 128 })
+bytes root: Malformed(Mismatch { name: "map", found: 65 })
+=== nesting boundaries (unknown field `future`) ===
+array depth 30: OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000
+array depth 31: Malformed(DepthOverflow { name: "ignored-any" })
+array depth 32: Malformed(nesting deeper than 32)
+array depth 33: Malformed(nesting deeper than 32)
+array depth 34: Malformed(nesting deeper than 32)
+map depth 30: OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000
+map depth 31: Malformed(DepthOverflow { name: "ignored-any" })
+map depth 32: Malformed(nesting deeper than 32)
+map depth 33: Malformed(nesting deeper than 32)
+map depth 34: Malformed(nesting deeper than 32)
+tag depth 30: OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000
+tag depth 31: Malformed(DepthOverflow { name: "ignored-any" })
+tag depth 32: Malformed(nesting deeper than 32)
+tag depth 33: Malformed(nesting deeper than 32)
+tag depth 34: Malformed(nesting deeper than 32)
+indef-array depth 30: OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000
+indef-array depth 31: Malformed(DepthOverflow { name: "ignored-any" })
+indef-array depth 32: Malformed(nesting deeper than 32)
+indef-array depth 33: Malformed(nesting deeper than 32)
+indef-array depth 34: Malformed(nesting deeper than 32)
+indef-map depth 30: OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000
+indef-map depth 31: Malformed(DepthOverflow { name: "ignored-any" })
+indef-map depth 32: Malformed(nesting deeper than 32)
+indef-map depth 33: Malformed(nesting deeper than 32)
+indef-map depth 34: Malformed(nesting deeper than 32)
+=== integers ===
+seq=0: Malformed(invalid value: integer `0`, expected a nonzero u64)
+seq=1: OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000
+seq=u64max: OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000
+seq=-1: Malformed(Mismatch { name: "u64", found: 32 })
+seq=2^64: Malformed(Mismatch { name: "u64", found: 194 })
+value=i64max: OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000
+value=i64max+1: Malformed(integer 9223372036854775808 does not fit a 64-bit signed value)
+value=i64min: OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000
+value=i64min-1: Malformed(invalid type: integer `-9223372036854775809` as i128, expected a boolean, a 64-bit signed )
+value=u64max: Malformed(integer 18446744073709551615 does not fit a 64-bit signed value)
+value=-2^64: Malformed(invalid type: integer `-18446744073709551616` as i128, expected a boolean, a 64-bit signed)
+value=bignum: Malformed(invalid type: integer `18446744073709551616` as u128, expected a boolean, a 64-bit signed )
+value=tag1(5): Malformed(Unsupported { name: "any", found: 193 })
+value=bytes: Malformed(invalid type: byte array, expected a boolean, a 64-bit signed integer, a finite float, or )
+value=null: Malformed(invalid type: Option value, expected a boolean, a 64-bit signed integer, a finite float, o)
+=== floats (value) ===
+f16 nan: Malformed(float value is NaN or infinite)
+f16 +inf: Malformed(float value is NaN or infinite)
+f16 -inf: Malformed(float value is NaN or infinite)
+f16 1.5: OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000
+f16 max: OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000
+f16 subnormal: OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000
+f32 nan: Malformed(float value is NaN or infinite)
+f32 inf: Malformed(float value is NaN or infinite)
+f64 snan: Malformed(float value is NaN or infinite)
+f64 -0.0: OK TelemetryBatch { v: V1, stream: StreamId("0199d0a0-0000-7000
+simple 16: Malformed(Unsupported { name: "ignored-any", found: 240 })
+simple 255: Malformed(Unsupported { name: "ignored-any", found: 248 })
+undefined: Malformed(invalid type: Option value, expected a boolean, a 64-bit signed integer, a finite float, o)
+=== config floats ===
+scale f16 nan: Invalid(Invalid { issues: [Issue { code: InvalidScaling, path: "models[0].points[0].scale", message: "must be a finite number" }] })
+scale f16 inf: Invalid(Invalid { issues: [Issue { code: InvalidScaling, path: "models[0].points[0].scale", message: "must be a finite number" }] })
+scale f16 0: Invalid(Invalid { issues: [Issue { code: InvalidScaling, path: "models[0].points[0].scale", message: "0 would turn every reading into the offset" }] })
+scale int 5: OK DesiredConfig { v: V1, rev: 1, version: ConfigVersion(7), mo
+scale int 2^32: Malformed(integer 4294967296 is too large for a float field)
+scale int -5: OK DesiredConfig { v: V1, rev: 1, version: ConfigVersion(7), mo
+scale text: Malformed(invalid type: string "x", expected a float, a 32-bit integer or null)
+scale f64 nan: Invalid(Invalid { issues: [Issue { code: InvalidScaling, path: "models[0].points[0].scale", message: "must be a finite number" }] })
+test probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+

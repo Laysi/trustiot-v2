@@ -1,0 +1,10 @@
+Client c-gw-1 received PUBACK (Mid: 1, RC:16)
+Client c-gw-1 received PUBACK (Mid: 1, RC:16)
+Client c-gw-1 received PUBACK (Mid: 1, RC:16)
+--- retained messages a cloud subscriber sees under trustiot/v1/gw/gw-1/up/#
+trustiot/v1/gw/gw-1/up/status x
+trustiot/v1/gw/gw-1/up/spam/1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+trustiot/v1/gw/gw-1/up/spam/2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+trustiot/v1/gw/gw-1/up/spam/3 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+Timed out
+--- stored retained bytes (mosquitto persistence is not enabled; count from $SYS is not available to the gateway)

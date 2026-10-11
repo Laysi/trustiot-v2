@@ -1,0 +1,64 @@
+--- createRole from the crate's JSON
+--- default ACL access
+Warning: You are running mosquitto_ctrl without encryption.
+This means all of the configuration changes you are making are visible on the network, including passwords.
+
+publishClientSend    : deny
+publishClientReceive : allow
+subscribe            : deny
+unsubscribe          : allow
+--- role
+Warning: You are running mosquitto_ctrl without encryption.
+This means all of the configuration changes you are making are visible on the network, including passwords.
+
+Rolename: trustiot-gateway
+ACLs:     publishClientSend    : allow : trustiot/v1/gw/%u/up/# (priority: 0)
+          publishClientReceive : allow : trustiot/v1/gw/%u/down/# (priority: 0)
+          subscribePattern     : allow : trustiot/v1/gw/%u/down/# (priority: 0)
+          unsubscribePattern   : allow : trustiot/v1/gw/%u/down/# (priority: 0)
+--- createClient gw-1
+Warning: You are running mosquitto_ctrl without encryption.
+This means all of the configuration changes you are making are visible on the network, including passwords.
+Warning: You are running mosquitto_ctrl without encryption.
+This means all of the configuration changes you are making are visible on the network, including passwords.
+--- createClient gw-10
+Warning: You are running mosquitto_ctrl without encryption.
+This means all of the configuration changes you are making are visible on the network, including passwords.
+Warning: You are running mosquitto_ctrl without encryption.
+This means all of the configuration changes you are making are visible on the network, including passwords.
+--- createClient gw-1.x
+Warning: You are running mosquitto_ctrl without encryption.
+This means all of the configuration changes you are making are visible on the network, including passwords.
+Warning: You are running mosquitto_ctrl without encryption.
+This means all of the configuration changes you are making are visible on the network, including passwords.
+--- createClient a/b
+Warning: You are running mosquitto_ctrl without encryption.
+This means all of the configuration changes you are making are visible on the network, including passwords.
+Warning: You are running mosquitto_ctrl without encryption.
+This means all of the configuration changes you are making are visible on the network, including passwords.
+--- createClient +
+Warning: You are running mosquitto_ctrl without encryption.
+This means all of the configuration changes you are making are visible on the network, including passwords.
+Warning: You are running mosquitto_ctrl without encryption.
+This means all of the configuration changes you are making are visible on the network, including passwords.
+--- createClient #
+Warning: You are running mosquitto_ctrl without encryption.
+This means all of the configuration changes you are making are visible on the network, including passwords.
+Warning: You are running mosquitto_ctrl without encryption.
+This means all of the configuration changes you are making are visible on the network, including passwords.
+--- createClient gw-+
+Warning: You are running mosquitto_ctrl without encryption.
+This means all of the configuration changes you are making are visible on the network, including passwords.
+Warning: You are running mosquitto_ctrl without encryption.
+This means all of the configuration changes you are making are visible on the network, including passwords.
+Warning: You are running mosquitto_ctrl without encryption.
+This means all of the configuration changes you are making are visible on the network, including passwords.
+
+#
++
+a/b
+admin
+gw-+
+gw-1
+gw-1.x
+gw-10

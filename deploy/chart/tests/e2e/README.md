@@ -7,6 +7,8 @@
 | `ingress.e2e.ts` | 入口 gateway：cookie 驗證、例外路徑、標頭、路徑繞過、身分服務停機 | Laysi/trustiot-v2#62 |
 | `mesh.e2e.ts` | 服務間授權：清單內的呼叫放行、清單外的被拒，AuthorizationPolicy 與 NetworkPolicy 各自生效，預設拒絕下健康檢查通過 | Laysi/trustiot-v2#63 |
 
+`otel.e2e.ts`（日誌管線，Laysi/trustiot-v2#73）不經入口 gateway，有自己的環境變數，不用 `cluster.ts`，見最後一節。
+
 ## 入口 gateway（`ingress.e2e.ts`）
 
 `ingress.e2e.ts` 把 chart 裝進現有叢集的一個 namespace，經真正的入口 gateway 驗證決策 27 的規則（Laysi/trustiot-v2#62）：
@@ -123,6 +125,21 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/mesh.e2e.ts
 | `E2E_REPORT_DIR` | 空 | 設定時把每次呼叫的結果寫成 `mesh-e2e.json` |
 
 結束時只移除這次建立的 release 與三個測試 pod（名稱帶隨機字尾）。中途失敗時，刪掉的政策隨 release 一起移除；`E2E_KEEP=1` 時 release 保留在最後的狀態。
+
+## 通道斷線時的復原（`ingress.e2e.ts` 與 `mesh.e2e.ts`）
+
+測試經 `kubectl port-forward`（或 `E2E_SSH_JUMP` 的 `ssh -L`）連入口 gateway，`mesh.e2e.ts` 的入口呼叫也經 `kubectl port-forward`，兩者共用同一套復原邏輯。這條通道偶爾會在請求進行中斷線：kubectl 印出 `error forwarding port … to pod` 與 `error: lost connection to pod`。2026-10-10 PR Laysi/trustiot-v2#258 的 CI 就發生過一次（run 38075563886 attempt 1，`identity service down`），當時 `raw()` 丟出 `no HTTP response for /api/whoami: ""`，測試失敗。
+
+原因是競態：請求先因連線被關閉而失敗，kubectl 行程要稍晚才結束；舊的 `raw()` 在失敗的當下檢查行程是否已結束，看到還在跑就直接丟出錯誤。現在的做法（`tunnel-recovery.ts`）：
+
+- 請求以連線層錯誤失敗（`raw-client.ts` 的 `ConnectionError`：連線被拒、被重設、在回應標頭之前被關閉、逾時）時，最多等 5 秒讓通道行程結束。
+- 行程在這段時間內結束，就重開通道並把請求重送一次；重送只有一次，第二次再失敗就失敗。
+- 行程沒有結束，代表是 gateway 那一端真的關掉連線，錯誤照樣丟出，不重試。
+- 只要拿到 HTTP 回應（或已收到回應標頭）就不重試，狀態碼不符（例如該是 200 卻得到 503）照樣讓測試失敗；非 `ConnectionError` 的錯誤也直接丟出。
+
+沒有查到可避免 port-forward 斷線的原因（斷線時間點只有一次紀錄，kubectl 沒有說明 pod 端為何關閉連線），所以靠上述復原處理；若之後斷線變得頻繁，再評估改用 k3d 的 LoadBalancer 埠對映取代 port-forward。
+
+邏輯有不需要叢集的單元測試（`tunnel-recovery.test.ts`、`raw-client.test.ts`），由 `bun test deploy/chart` 執行。測試用真正的子行程（`fake-port-forward.ts`，一個 TCP proxy）扮演 kubectl：它在收到請求時切斷連線，300 毫秒後才結束行程，重現上述競態。
 
 ## 日誌管線（`otel.e2e.ts`）
 
