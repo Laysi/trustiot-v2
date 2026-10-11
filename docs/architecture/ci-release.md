@@ -285,7 +285,7 @@ publish job 在 `release` environment 執行，原本的設計是在 environment
 
 1. Gateway API 的 standard CRD：從 release 下載 `standard-install.yaml`，SHA-256 與 workflow 裡釘的值相符才套用（`GATEWAY_API_VERSION`、`GATEWAY_CRDS_SHA256`，要一起改）。
 2. Istio ambient：官方 repo 的 `base`、`istiod`、`cni`、`ztunnel` 四個 chart，版本 `ISTIO_VERSION`，用 `deploy/istio/values-k3s.yaml`。istiod 另加一份由 `deploy/istio/istiod-values.yaml` 產生的覆寫：同一個 ext_authz provider（fail closed、0.5 秒逾時、503）為每個 e2e 命名空間各複製一份，名稱 `trustiot-e2e-<shape>`，所以 provider 的設定永遠是 repo 裡那份。
-3. 建出 e2e 的身分服務替身映像（`deploy/chart/tests/e2e/identity-double`），匯入 k3d 節點。
+3. 建出 e2e 的身分服務替身映像（`deploy/chart/tests/e2e/identity-double`），以 `k3d image import --mode direct` 匯入 k3d 節點，並逐一確認每個 server 與 agent 節點的 containerd 都有這個映像（`docker exec <node> crictl inspecti <image>`，節點清單來自 `k3d node list -o json`）；缺任何一個節點就重新匯入，共 3 次，用完仍缺則在這一步失敗，訊息寫出映像與缺少的節點，成功時 log 逐節點記錄「confirmed」。為什麼不能信 k3d 的結束碼：k3d 5.9.0 預設的 tools-node 模式由各節點從共用 volume 匯入 tarball，單一節點失敗只寫 `ERRO` 並照樣以 0 結束，映像沒進節點，e2e 的身分服務（`pullPolicy: IfNotPresent`，`localhost` 無法拉取）就等滿 5 分鐘才逾時，看起來像 chart 出錯（2026-10-11，Laysi/trustiot-v2#335）。`--mode direct` 把 `docker save` 的輸出直接串進各節點的 `ctr image import`，沒有 tools node 與共用 volume，k3d 也會回傳節點的錯誤；它只是降低機率的緩解，保證來自逐節點的確認。
 
 每份 values 依序做：
 
@@ -326,7 +326,7 @@ NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
 
 ### 失敗時怎麼辦
 
-先看 issue 內文的報告：它列出哪份 values 的哪一項失敗與診斷。要重現就到 Actions 頁手動執行 nightly（選 `simulate_failure` 只用來驗證通知，不用來除錯）。常見原因：Docker Hub 對匿名拉取的流量限制（`traefik/whoami`、k3s 映像與 e2e 替身的基底映像都在 Docker Hub，建立叢集與建置映像已重試）、chart 的改動讓某份 values 裝不起來或讓入口的行為改變、Istio、Gateway API、k3s 或 k3d 版本更新。GitHub 在 repo 60 天沒有活動時會停掉排程 workflow，這個 repo 有活動所以不會發生，但若看到排程停了，到 Actions 頁重新啟用。
+先看 issue 內文的報告：它列出哪份 values 的哪一項失敗與診斷。要重現就到 Actions 頁手動執行 nightly（選 `simulate_failure` 只用來驗證通知，不用來除錯）。常見原因：Docker Hub 對匿名拉取的流量限制（`traefik/whoami`、k3s 映像與 e2e 替身的基底映像都在 Docker Hub，建立叢集與建置映像已重試）、替身映像沒有進到節點（log 的 `identity double image` 段會寫出哪個節點缺映像，匯入已重試）、chart 的改動讓某份 values 裝不起來或讓入口的行為改變、Istio、Gateway API、k3s 或 k3d 版本更新。GitHub 在 repo 60 天沒有活動時會停掉排程 workflow，這個 repo 有活動所以不會發生，但若看到排程停了，到 Actions 頁重新啟用。
 
 ### 成本
 
