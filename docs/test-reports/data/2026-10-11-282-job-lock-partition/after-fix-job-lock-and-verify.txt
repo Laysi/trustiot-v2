@@ -1,0 +1,55 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.10s
+    Checking sqlx v0.9.0
+    Checking service-kit v0.1.0 (/home/ruisi/tv2/agents/282/src/crates/service-kit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.04s
+     Running unittests src/lib.rs (/home/ruisi/tv2/agents/282/target/debug/deps/service_kit-33b22c5d0e2eddc8)
+
+running 6 tests
+test job_lock::tests::lock_keys_are_stable_across_releases ... ok
+test job_lock::tests::lock_keys_separate_services_and_name_boundaries ... ok
+test job_lock::tests::timeouts_within_the_bounds_are_accepted ... ok
+test job_lock::tests::a_timeout_above_the_maximum_is_refused - should panic ... ok
+test job_lock::tests::a_timeout_below_the_minimum_is_refused - should panic ... ok
+test job_lock::tests::a_zero_heartbeat_is_refused - should panic ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 73 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.80s
+     Running tests/job_lock.rs (/home/ruisi/tv2/agents/282/target/debug/deps/job_lock-4ee85e664ac0b2d8)
+
+running 7 tests
+
+thread 'tokio-rt-worker' (187704) panicked at crates/service-kit/tests/job_lock.rs:310:39:
+job failed hard
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test released_locks_return_their_connection_to_the_pool ... ok
+10 rounds; runs by replica a and b: [3, 7]
+lock timeout 1s, after the partition: release Ok((Err(Lost { job: "service-kit-test-partition-queries-187663-8" }), 1.000520017s)); try_acquire Ok((Err(Lost { job: "service-kit-test-partition-queries-187663-8" }), 1.000453837s)); try_acquire through a pinging pool Ok((Err(Database { job: "service-kit-test-partition-queries-187663-8", source: PoolTimedOut }), 1.000501238s))
+test dropped_guards_and_panicking_jobs_release_the_lock ... ok
+lock timeout 1s, heartbeat 200ms: replica b took the lock 27.319762ms after the partition; replica a stopped its job 999.03826ms after the partition; both ran the job for 967.399461ms
+test only_one_replica_runs_a_job_scheduled_on_both_at_once ... ok
+test a_lost_session_cancels_the_job_and_frees_the_lock ... ok
+test taking_and_releasing_the_lock_give_up_within_the_timeout_in_a_partition ... ok
+test a_partitioned_holder_stops_its_job_within_the_lock_timeout ... ok
+test periodic_runs_on_two_replicas_never_overlap ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.17s
+
+     Running tests/verify_job_lock.rs (/home/ruisi/tv2/agents/282/target/debug/deps/verify_job_lock-61077479c894a8a4)
+
+running 4 tests
+
+thread 'tokio-rt-worker' (188743) panicked at crates/service-kit/tests/verify_job_lock.rs:249:39:
+job failed on purpose
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+killed session detected after 193.53865ms (heartbeat 200 ms)
+8 replicas x 60 rounds: 50 runs, 430 skipped, highest concurrency 1
+test a_killed_lock_session_stops_the_job_reports_lost_and_leaks_nothing ... ok
+test eight_replicas_contending_never_run_a_job_twice_at_once ... ok
+test releasing_a_guard_whose_session_died_reports_an_error_not_success ... ok
+test a_panicking_job_and_a_dropped_run_release_the_lock ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.13s
+
+
+[exited with code 0]

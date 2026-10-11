@@ -846,12 +846,26 @@ describe("ingress gateway (decision 27)", () => {
     for (const { rule } of rules(manifests)) expect(rule.matches[0]?.path.value).not.toStartWith("/internal");
   });
 
-  test("NetworkPolicy: behind the tunnel only the host may connect; direct exposure opens 443 only", () => {
+  // Istio's status port on every gateway pod. Istio fixes it: its kube-gateway injection template
+  // probes it (startup and readiness, GET /healthz/ready) and lists it in the gateway's Service as
+  // "status-port". Recorded for Istio 1.30.5 in docs/test-reports/2026-10-11-287-gateway-netpol-ports.md;
+  // the nightly smoke test compares the live gateway's probe and Service ports with the policy.
+  const ISTIO_STATUS_PORT = 15021;
+
+  test("NetworkPolicy: behind the tunnel only the host may connect, to 80 and 15021; direct exposure opens 443 and 15021", () => {
     const tunnel = find(render(SHAPES.saas), "NetworkPolicy", GATEWAY).spec as YamlMap;
     expect(tunnel).toEqual({
       podSelector: { matchLabels: { "gateway.networking.k8s.io/gateway-name": GATEWAY } },
       policyTypes: ["Ingress"],
-      ingress: [{ from: [{ ipBlock: { cidr: "10.42.0.1/32" } }] }],
+      ingress: [
+        {
+          from: [{ ipBlock: { cidr: "10.42.0.1/32" } }],
+          ports: [
+            { port: 80, protocol: "TCP" },
+            { port: 15021, protocol: "TCP" },
+          ],
+        },
+      ],
     });
     const direct = find(render(SHAPES.onprem), "NetworkPolicy", GATEWAY).spec as YamlMap;
     expect(direct.ingress).toEqual([
@@ -862,6 +876,31 @@ describe("ingress gateway (decision 27)", () => {
         ],
       },
     ]);
+  });
+
+  test.each(SHAPE_NAMES)("%s: every rule of the gateway's NetworkPolicy admits only the Gateway's listener and Istio's status port", (shape) => {
+    // Two sources behind the tunnel, so a rule per source would also be caught.
+    const args = shape === "saas" ? ["--set-json", 'ingress.tunnel.allowedSources=["10.42.0.1/32","10.42.1.1/32"]'] : [];
+    const manifests = render(SHAPES[shape], args);
+    const gateway = find(manifests, "Gateway", GATEWAY).spec as {
+      listeners: { port: number }[];
+      infrastructure: { labels: Record<string, string> };
+    };
+    const expected = [...gateway.listeners.map((l) => l.port), ISTIO_STATUS_PORT].map((port) => ({ port, protocol: "TCP" }));
+    const rules = (find(manifests, "NetworkPolicy", GATEWAY).spec as NetworkPolicySpec).ingress ?? [];
+    expect(rules.length).toBeGreaterThan(0);
+    // A rule without ports admits every port of the pod, Envoy's metrics included.
+    for (const rule of rules) expect(rule.ports).toEqual(expected);
+    if (shape === "saas") {
+      expect(rules.flatMap((rule) => rule.from ?? [])).toEqual([
+        { ipBlock: { cidr: "10.42.0.1/32" } },
+        { ipBlock: { cidr: "10.42.1.1/32" } },
+      ]);
+    }
+    // The kubelet's probes come from the host's address, an allowed source, only while the pod
+    // stays out of the ambient mesh (Istio labels it istio.io/dataplane-mode: none). In the mesh,
+    // they would come from the node source 169.254.7.127, which no rule admits.
+    expect(Object.keys(gateway.infrastructure.labels)).not.toContain("istio.io/dataplane-mode");
   });
 
   test("the mesh in deploy/istio decodes %2F and merges slashes, so /internal* catches every spelling", () => {

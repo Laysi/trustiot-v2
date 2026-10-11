@@ -1,0 +1,16 @@
+$ CARGO_BUILD_JOBS=2 TRUSTIOT_DEV_E2E=1 bun test scripts/tests/e2e.test.ts
+(1) commit e03fba5, cargo cache warm
+bun test v1.4.2 (744846f84)
+
+ 1 pass
+ 0 fail
+ 61 expect() calls
+Ran 1 test across 1 file. [64.77s]
+
+(2) merge commit ad356bb (after merging origin/main 0a5b01c; includes a cargo rebuild)
+bun test v1.4.2 (744846f84)
+
+ 1 pass
+ 0 fail
+ 61 expect() calls
+Ran 1 test across 1 file. [479.32s]
