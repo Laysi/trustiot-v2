@@ -1,0 +1,9 @@
+  host: Fedora Linux 44 (Cloud Edition), x64, systemd 259
+  cloudflared: cloudflared version 2026.10.0 (built 2026-10-05-17:37 UTC); updates come with `dnf upgrade --repo=cloudflared-stable cloudflared`
+  tunnel token: kept the one in /etc/credstore/cloudflared.tunnel-token (tunnel a442a867-4b77-4e7f-97a6-ea011130c4cb)
+  check: systemd-analyze security cloudflared.service = 1.1 (at most 2)
+  check: nothing listens on TCP or UDP 80 or 443
+  check: no pod publishes host port 80 or 443
+  note: TCP listeners on non-loopback addresses (firewalld decides who reaches them): 5355 systemd-resolve, 22 sshd, 6443 k3s-server, 10250 k3s-server
+Done: the host already matched; nothing changed.
+exit=0 elapsed=567s

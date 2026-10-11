@@ -6,7 +6,8 @@
 //! here only; see `Platform`), and a tenant database when `TRUSTIOT__DATABASE__USERNAME` and
 //! `TRUSTIOT__DATABASE__PASSWORD` are set: the platform settings
 //! `TRUSTIOT_POSTGRES_{HOST,PORT,DATABASE,SSLMODE,CA_FILE}` then say where, and the service
-//! refuses to start unless `TRUSTIOT_POSTGRES_SSLMODE` is `verify-full`.
+//! refuses to start unless `TRUSTIOT_POSTGRES_SSLMODE` is `verify-full` and
+//! `TRUSTIOT_POSTGRES_CA_FILE` names the CA that is the only one trusted for the server.
 //!
 //! Routes besides `/healthz` and `/readyz`:
 //! - `GET /v1/hello` returns the configured greeting.
@@ -66,8 +67,7 @@ struct Platform {
     /// `TRUSTIOT_POSTGRES_*`: read only when `database` is set. A product service declares
     /// them without `Option` and `postgres_sslmode` as `service_kit::postgres::SslMode`, so any
     /// other `sslmode` stops it at startup. The example keeps them optional and checks the
-    /// `sslmode` in `validate`, because the local dev environment runs it without a database
-    /// and passes `TRUSTIOT_POSTGRES_SSLMODE=disable` (scripts/README.md).
+    /// `sslmode` in `validate`, because the kit's own tests run it without a database.
     postgres_host: Option<String>,
     postgres_port: Option<u16>,
     postgres_database: Option<String>,
@@ -121,7 +121,10 @@ impl Config {
                 .clone()
                 .ok_or_else(|| required("platform.postgres_database"))?,
             ssl_mode,
-            ca_file: platform.postgres_ca_file.clone(),
+            ca_file: platform
+                .postgres_ca_file
+                .clone()
+                .ok_or_else(|| required("platform.postgres_ca_file"))?,
             username: credentials.username.clone(),
             password: credentials.password.clone(),
         }))

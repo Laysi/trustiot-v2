@@ -38,7 +38,10 @@ opentelemetry-otlp = { workspace = true, features = ["http-proto", "internal-log
 opentelemetry_sdk = { workspace = true, features = ["internal-logs", "logs", "metrics", "trace"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-# TLS with rustls and ring: connections always verify the server (`postgres`, checklist M3).
+# TLS with rustls and ring: connections always verify the server (`postgres`, checklist M3). The
+# root Cargo.toml replaces webpki-roots with an empty list, so the configured CA is the only trust
+# anchor (Laysi/trustiot-v2#272); a feature that loads the system store instead is refused by
+# tests/postgres_trust.rs.
 sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
@@ -52,6 +55,10 @@ tracing-subscriber = { workspace = true, features = ["registry", "std", "tracing
 [dev-dependencies]
 # A throwaway CA and server certificate for the TLS Postgres the tenant tests start.
 rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
+# The black-hole TCP proxy of the job-lock partition tests.
+tokio = { workspace = true, features = ["io-util"] }
+# The empty stand-in for webpki-roots that sqlx is built with (tests/postgres_trust.rs).
+webpki-roots.workspace = true
 
 [lints]
 workspace = true

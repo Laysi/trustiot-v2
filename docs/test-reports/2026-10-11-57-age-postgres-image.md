@@ -57,6 +57,6 @@ sudo k3s kubectl -n e2e-57 wait --for=condition=Ready cluster/age --timeout=170s
 ## 結論
 
 - 「release.yml 建出 arm64 映像並推到 GHCR」：**部分通過**。映像以 release.yml 的 `build.ts` 在與 runner 相同限制（x86、無模擬器）下建出 linux/arm64，SBOM 列出 AGE，release 不必修改。推到 GHCR、簽章與 verify 要一次真正的 release（rc tag），**待測**：tag 對外可見，由 coordinator 決定何時打。
-- 「映像內 `CREATE EXTENSION age` 成功，並能執行一個 cypher() 查詢（自動測試）」：**通過**。`deploy/images/postgres/image.test.ts` 在實驗機的 arm64 上對 release 建出的同一個映像 8 項全過，CloudNativePG 實際部署也成功；ci.yml 新增的 `postgres-image` job 在 x86 runner 以 qemu 執行同一份測試（PR 的 CI 結果另見 PR）。
+- 「映像內 `CREATE EXTENSION age` 成功，並能執行一個 cypher() 查詢（自動測試）」：**通過**。`deploy/images/postgres/image.test.ts` 在實驗機的 arm64 上對 release 建出的同一個映像 8 項全過，CloudNativePG 實際部署也成功；ci.yml 新增的 `postgres-image` job 在 arm64 runner 上原生建置並執行同一份測試（PR 的 CI 結果另見 PR）。
 - 「chart 以 digest 引用此映像」：**待測**。digest 要等第一次 release 發佈後才有（本機與 runner 的 podman 版本不同，digest 不保證相同，不能用本機的值）；發佈後把 digest 寫進 chart。
 - 映像以非 root（UID 26）執行，符合 CloudNativePG 的預設 securityContext：**通過**。

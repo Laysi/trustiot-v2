@@ -3,6 +3,7 @@
 // Installed once on the nightly cluster, the way the SaaS host installs them before the chart.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { containerBuildArgs } from "../lib/build-context.ts";
 
 import { retry, run, RunLog } from "./exec.ts";
 
@@ -139,7 +140,10 @@ async function waitForGatewayClass(platform: Platform): Promise<void> {
 async function loadIdentityDouble(platform: Platform): Promise<void> {
   const context = join(platform.repoRoot, "deploy", "chart", "tests", "e2e", "identity-double");
   await retry(platform.log, 2, 10_000, () =>
-    run(platform.log, ["docker", "build", "--tag", IDENTITY_DOUBLE_IMAGE, "--file", join(context, "Containerfile"), context], { timeoutMs: 600_000 }),
+    // containerBuildArgs checks the context and the Containerfile first (docs/architecture/secrets.md).
+    run(platform.log, ["docker", ...containerBuildArgs(context, ["--tag", IDENTITY_DOUBLE_IMAGE, "--file", join(context, "Containerfile")])], {
+      timeoutMs: 600_000,
+    }),
   );
   await run(platform.log, [platform.k3d, "image", "import", IDENTITY_DOUBLE_IMAGE, "--cluster", platform.cluster], { timeoutMs: 300_000 });
 }

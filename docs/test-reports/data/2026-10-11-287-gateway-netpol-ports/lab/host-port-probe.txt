@@ -1,0 +1,32 @@
+== branch policy (ports 80, 15021) 2026-10-11T04:08:40Z
+policy: [{"from":[{"ipBlock":{"cidr":"10.42.0.1/32"}}],"ports":[{"port":80,"protocol":"TCP"},{"port":15021,"protocol":"TCP"}]}]
+10.42.0.57:80/ -> HTTP 401 (000 = no connection within 3 s)
+10.42.0.57:15021/healthz/ready -> HTTP 200 (000 = no connection within 3 s)
+10.42.0.57:15020/stats/prometheus -> HTTP 200 (000 = no connection within 3 s)
+10.42.0.57:15090/stats/prometheus -> HTTP 200 (000 = no connection within 3 s)
+10.42.0.58:80/ -> HTTP 401 (000 = no connection within 3 s)
+10.42.0.58:15021/healthz/ready -> HTTP 200 (000 = no connection within 3 s)
+10.42.0.58:15020/stats/prometheus -> HTTP 200 (000 = no connection within 3 s)
+10.42.0.58:15090/stats/prometheus -> HTTP 200 (000 = no connection within 3 s)
+networkpolicy.networking.k8s.io/trustiot-ingress patched
+== main e8f180b policy (no ports) 2026-10-11T04:08:48Z
+policy: [{"from":[{"ipBlock":{"cidr":"10.42.0.1/32"}}]}]
+10.42.0.57:80/ -> HTTP 401 (000 = no connection within 3 s)
+10.42.0.57:15021/healthz/ready -> HTTP 200 (000 = no connection within 3 s)
+10.42.0.57:15020/stats/prometheus -> HTTP 200 (000 = no connection within 3 s)
+10.42.0.57:15090/stats/prometheus -> HTTP 200 (000 = no connection within 3 s)
+10.42.0.58:80/ -> HTTP 401 (000 = no connection within 3 s)
+10.42.0.58:15021/healthz/ready -> HTTP 200 (000 = no connection within 3 s)
+10.42.0.58:15020/stats/prometheus -> HTTP 200 (000 = no connection within 3 s)
+10.42.0.58:15090/stats/prometheus -> HTTP 200 (000 = no connection within 3 s)
+networkpolicy.networking.k8s.io/trustiot-ingress patched
+== branch policy restored 2026-10-11T04:08:57Z
+policy: [{"from":[{"ipBlock":{"cidr":"10.42.0.1/32"}}],"ports":[{"port":80,"protocol":"TCP"},{"port":15021,"protocol":"TCP"}]}]
+10.42.0.57:80/ -> HTTP 401 (000 = no connection within 3 s)
+10.42.0.57:15021/healthz/ready -> HTTP 200 (000 = no connection within 3 s)
+10.42.0.57:15020/stats/prometheus -> HTTP 200 (000 = no connection within 3 s)
+10.42.0.57:15090/stats/prometheus -> HTTP 200 (000 = no connection within 3 s)
+10.42.0.58:80/ -> HTTP 401 (000 = no connection within 3 s)
+10.42.0.58:15021/healthz/ready -> HTTP 200 (000 = no connection within 3 s)
+10.42.0.58:15020/stats/prometheus -> HTTP 200 (000 = no connection within 3 s)
+10.42.0.58:15090/stats/prometheus -> HTTP 200 (000 = no connection within 3 s)

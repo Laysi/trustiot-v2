@@ -3,6 +3,8 @@ import { join } from "node:path";
 
 import { pinnedTool } from "./exec.ts";
 import {
+  gatewayPortProblems,
+  gatewayPorts,
   gatewaysOf,
   healthEndpointsOf,
   missingTlsSecrets,
@@ -353,5 +355,155 @@ metadata: { name: other-kind-of-gateway }
 
   test("missingTlsSecrets lists the certificate Secrets the release does not create", () => {
     expect(missingTlsSecrets(parseManifests(GATEWAYS))).toEqual(["ingress-tls"]);
+  });
+});
+
+describe("gateway ports", () => {
+  // What Istio 1.30.5 generates for a Gateway (`kubectl get deployments,services -l
+  // gateway.networking.k8s.io/gateway-name=<name> -o json`), trimmed to the fields the check reads;
+  // captured on the lab cluster (docs/test-reports/2026-10-11-287-gateway-netpol-ports.md).
+  function istioGenerated(gateway: string, listener: { name: string; port: number }, infrastructure: Record<string, string> = {}) {
+    const labels = {
+      ...infrastructure,
+      "gateway.istio.io/managed": "istio.io-gateway-controller",
+      "gateway.networking.k8s.io/gateway-class-name": "istio",
+      "gateway.networking.k8s.io/gateway-name": gateway,
+      "istio.io/dataplane-mode": "none",
+    };
+    const probe = { httpGet: { path: "/healthz/ready", port: 15021, scheme: "HTTP" } };
+    return JSON.stringify({
+      apiVersion: "v1",
+      kind: "List",
+      items: [
+        {
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          metadata: { name: `${gateway}-istio`, labels },
+          spec: {
+            template: {
+              metadata: { labels: { ...labels, "sidecar.istio.io/inject": "false" } },
+              spec: {
+                containers: [
+                  {
+                    name: "istio-proxy",
+                    ports: [
+                      { containerPort: 15020, name: "metrics", protocol: "TCP" },
+                      { containerPort: 15021, name: "status-port", protocol: "TCP" },
+                      { containerPort: 15090, name: "http-envoy-prom", protocol: "TCP" },
+                    ],
+                    startupProbe: probe,
+                    readinessProbe: probe,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        {
+          apiVersion: "v1",
+          kind: "Service",
+          metadata: { name: `${gateway}-istio`, labels },
+          spec: {
+            ports: [
+              { name: "status-port", port: 15021, protocol: "TCP", targetPort: 15021 },
+              { name: listener.name, port: listener.port, protocol: "TCP", targetPort: listener.port },
+            ],
+          },
+        },
+      ],
+    });
+  }
+
+  for (const [shape, listener] of [
+    ["saas", { name: "http", port: 80 }],
+    ["onprem", { name: "https", port: 443 }],
+  ] as const) {
+    test(`values-${shape}.yaml: the gateway's NetworkPolicy admits exactly what Istio's gateway pods use`, async () => {
+      const helm = await pinnedTool("helm", REPO_ROOT);
+      const target = discoverShapes(CHART_DIR).find((s) => s.name === shape);
+      if (target === undefined) throw new Error(`no ${shape} shape`);
+      const rendered = Bun.spawnSync({
+        cmd: [helm, "template", "trustiot", CHART_DIR, "--namespace", `nightly-${shape}`, ...valuesArgs(CHART_DIR, target)],
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(rendered.stderr.toString()).toBe("");
+      const release = parseManifests(rendered.stdout.toString());
+      const [gateway] = gatewaysOf(release);
+      if (gateway === undefined) throw new Error("the release has no Gateway");
+      // Istio copies the Gateway's infrastructure labels onto the pods, which the policy may select on.
+      const spec = release.find((o) => o.kind === "Gateway")?.spec as { infrastructure?: { labels?: Record<string, string> } };
+      const generated = parseManifests(istioGenerated(gateway, listener, spec.infrastructure?.labels));
+      const ports = gatewayPorts(gateway, generated, release);
+      expect(ports).toEqual({ gateway, needed: [listener.port, 15021], admitted: [listener.port, 15021] });
+      expect(gatewayPortProblems(ports)).toEqual([]);
+    }, 60_000);
+  }
+
+  const POLICY_HEADER = `
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: deny-all }
+spec: { podSelector: {}, policyTypes: [Ingress] }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: other-pods }
+spec:
+  podSelector: { matchLabels: { app: other } }
+  ingress: [{}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: gw }
+spec:
+  podSelector: { matchLabels: { "gateway.networking.k8s.io/gateway-name": gw } }
+  policyTypes: [Ingress]
+`;
+  const generated = parseManifests(istioGenerated("gw", { name: "http", port: 80 }));
+  const check = (rules: string) => gatewayPorts("gw", generated, parseManifests(`${POLICY_HEADER}  ingress:\n${rules}`));
+
+  test("a policy that admits the listener and the status port by name or number passes; other pods' policies do not count", () => {
+    const ports = check(`
+    - from: [{ ipBlock: { cidr: 10.42.0.1/32 } }]
+      ports: [{ port: 80 }, { port: status-port, protocol: TCP }]
+`);
+    expect(ports).toEqual({ gateway: "gw", needed: [80, 15021], admitted: [80, 15021] });
+    expect(gatewayPortProblems(ports)).toEqual([]);
+  });
+
+  test("a rule without ports admits every port", () => {
+    const ports = check(`
+    - from: [{ ipBlock: { cidr: 10.42.0.1/32 } }]
+`);
+    expect(ports.admitted).toBe("all");
+    expect(gatewayPortProblems(ports)).toEqual(["Gateway gw: a NetworkPolicy rule admits every port"]);
+  });
+
+  test("a refused status port and an admitted metrics range are both reported; UDP does not count", () => {
+    const ports = check(`
+    - ports: [{ port: 80 }, { port: 15020, endPort: 15021, protocol: UDP }, { port: 15090, endPort: 15091 }]
+`);
+    expect(ports.admitted).toEqual([80, 15090, 15091]);
+    expect(gatewayPortProblems(ports)).toEqual([
+      "Gateway gw: the NetworkPolicy refuses 15021, which the pods' probes or Service use",
+      "Gateway gw: the NetworkPolicy admits 15090, 15091, which neither a probe nor the Service uses",
+    ]);
+  });
+
+  test("a gateway without its generated Deployment or Service, or a selector it cannot evaluate, is an error", () => {
+    const service = parseManifests(istioGenerated("gw", { name: "http", port: 80 })).flatMap((o) =>
+      o.kind === "List" ? ((o.items as typeof generated) ?? []) : [o],
+    );
+    expect(() => gatewayPorts("gw", service.filter((o) => o.kind === "Service"), [])).toThrow("expected one Deployment");
+    expect(() => gatewayPorts("gw", service.filter((o) => o.kind === "Deployment"), [])).toThrow("no Service");
+    const expressions = parseManifests(`
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: by-expression }
+spec:
+  podSelector: { matchExpressions: [{ key: app, operator: Exists }] }
+`);
+    expect(() => gatewayPorts("gw", generated, expressions)).toThrow("matchExpressions");
   });
 });

@@ -4,6 +4,11 @@
 //!   [`SslMode`] is the configuration type of `TRUSTIOT_POSTGRES_SSLMODE` and accepts nothing
 //!   else, so a service configured otherwise refuses to start; [`connect_lazy`] refuses
 //!   connection options that do not verify the server.
+//! - The chain must lead to the CA the service is configured with
+//!   ([`PostgresConfig::ca_file`], required) and to nothing else: sqlx trusts no public or system
+//!   roots, because the workspace replaces its `webpki-roots` with an empty list
+//!   (`crates/webpki-roots-empty`, Laysi/trustiot-v2#272). Options without a root certificate
+//!   therefore reach no server at all.
 //! - Every new session is checked before the pool hands it out: the role must not be a
 //!   superuser, bypass row-level security, or own (or belong to the owner of) any table, and
 //!   every table it can reach that has a `tenant_id` column must be protected by row-level
@@ -133,9 +138,12 @@ pub struct PostgresConfig {
     pub database: String,
     /// Always [`SslMode::VerifyFull`]; a field so the configuration states it.
     pub ssl_mode: SslMode,
-    /// PEM file with the CA certificates that sign the server certificate, added to the
-    /// built-in public roots. The chart mounts it at `/etc/trustiot/postgres-ca/ca.crt`.
-    pub ca_file: Option<PathBuf>,
+    /// PEM file with the CA certificates that sign the server certificate. They are the only
+    /// trust anchors: no public or system root is trusted, so a service without this setting
+    /// refuses to start (declare `TRUSTIOT_POSTGRES_CA_FILE` without `Option`). Read on every
+    /// new connection, so a replaced file takes effect without a restart. The chart mounts it at
+    /// `/etc/trustiot/postgres-ca/ca.crt`.
+    pub ca_file: PathBuf,
     /// The database role.
     pub username: String,
     /// The role's password.
@@ -157,11 +165,12 @@ impl fmt::Debug for PostgresConfig {
 }
 
 impl PostgresConfig {
-    /// sqlx connection options that verify the server. Settings from `PG*` environment
-    /// variables that these fields cover are overridden.
+    /// sqlx connection options that verify the server against [`Self::ca_file`] only. Settings
+    /// from `PG*` environment variables that these fields cover (including `PGSSLROOTCERT`) are
+    /// overridden.
     #[must_use]
     pub fn connect_options(&self) -> PgConnectOptions {
-        let options = PgConnectOptions::new_without_pgpass()
+        PgConnectOptions::new_without_pgpass()
             .host(&self.host)
             .port(self.port)
             .database(&self.database)
@@ -169,11 +178,8 @@ impl PostgresConfig {
             .password(&self.password)
             .ssl_mode(match self.ssl_mode {
                 SslMode::VerifyFull => PgSslMode::VerifyFull,
-            });
-        match &self.ca_file {
-            Some(ca_file) => options.ssl_root_cert(ca_file),
-            None => options,
-        }
+            })
+            .ssl_root_cert(&self.ca_file)
     }
 }
 
@@ -228,6 +234,10 @@ pub enum SessionRole {
 /// [`sqlx::Error::PoolTimedOut`]; `tenant::TenantDb` reports it as the [`UnsafeSession`].
 ///
 /// The kit sets `pool`'s `after_connect` callback; one set earlier is replaced.
+///
+/// The server certificate must chain to the root certificate in `options`
+/// ([`PostgresConfig::connect_options`] sets it from [`PostgresConfig::ca_file`]); no public or
+/// system root is trusted, so options without one never get a connection.
 ///
 /// # Errors
 ///
@@ -525,7 +535,7 @@ mod tests {
             port: 5432,
             database: "trustiot".to_owned(),
             ssl_mode: SslMode::VerifyFull,
-            ca_file: Some(PathBuf::from("/etc/trustiot/postgres-ca/ca.crt")),
+            ca_file: PathBuf::from("/etc/trustiot/postgres-ca/ca.crt"),
             username: "assets_app".to_owned(),
             password: "do-not-print".to_owned(),
         }
@@ -575,6 +585,12 @@ mod tests {
         assert_eq!(options.get_database(), Some("trustiot"));
         assert_eq!(options.get_username(), "assets_app");
         assert_eq!(require_verify_full(&options), Ok(()));
+        // sqlx has no getter for the root certificate; its Debug output shows it.
+        let debug = format!("{options:?}");
+        assert!(
+            debug.contains(r#"ssl_root_cert: Some(File("/etc/trustiot/postgres-ca/ca.crt"))"#),
+            "the CA file is the root certificate"
+        );
     }
 
     #[test]

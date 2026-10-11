@@ -1,0 +1,29 @@
+  host: Fedora Linux Asahi Remix 44 (Server Edition), arm64, systemd 259
++ firewalld (runtime): in the trusted zone, rule family="ipv4" source address="10.42.0.0/16" port port="22" protocol="tcp" reject
++ firewalld (runtime): remove the service network 10.43.0.0/16 from the trusted zone (it is never a source)
++ firewalld (permanent): in the trusted zone, rule family="ipv4" source address="10.42.0.0/16" port port="22" protocol="tcp" reject
++ firewalld (permanent): remove the service network 10.43.0.0/16 from the trusted zone (it is never a source)
+  k3s: skipped (--skip-k3s), left as it is
++ write /etc/pki/rpm-gpg/RPM-GPG-KEY-cloudflare-packaging: Cloudflare's package signing key
++ write /etc/yum.repos.d/cloudflared.repo: cloudflared repository (https://pkg.cloudflare.com/cloudflared/rpm)
++ replace the installed cloudflared with Cloudflare's signed package from the pinned repository (--reinstall-cloudflared)
+Updating and loading repositories:
+ cloudflared-stable                     100% |   1.9 KiB/s |   2.0 KiB |  00m01s
+Importing OpenPGP key 0x8D4E5E73:
+ UserID     : "CloudFlare Software Packaging 2025 <help@cloudflare.com>"
+ Fingerprint: CC94B39C77AE7342A68B89628A682D308D4E5E73
+ From       : file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cloudflare-packaging
+The key was successfully imported.
+ cloudflared-stable                     100% |   3.0 KiB/s |   2.0 KiB |  00m01s
+>>> repomd.xml GPG signature verification error: Signing key not found
+Repositories loaded.
+Failed to resolve the transaction:
+Packages for argument 'cloudflared' installed, but not available.
+Updating and loading repositories:
+ cloudflared-stable                     100% |   3.0 KiB/s |   2.0 KiB |  00m01s
+ cloudflared-stable                     100% |   2.3 KiB/s |   2.0 KiB |  00m01s
+>>> repomd.xml GPG signature verification error: Signing key not found
+Repositories loaded.
+Nothing to do.
+error: the installed cloudflared did not come from the pinned repository (installed from @commandline, signature (none)). Run again with --reinstall-cloudflared to replace it with Cloudflare's signed package; services already running it keep the old binary until they restart
+exit=1

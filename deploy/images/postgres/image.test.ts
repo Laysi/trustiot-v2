@@ -6,9 +6,13 @@
  *
  * Without POSTGRES_IMAGE the image is built from this directory the way release.yml builds it
  * (podman build --platform linux/arm64). The checks of the image's files run anywhere. The
- * checks that start Postgres run the arm64 image, so they need an arm64 host or an arm64
- * emulator registered with binfmt_misc (the postgres-image job in ci.yml registers one after
- * the build). Without either they are skipped locally and fail when CI is set.
+ * checks that start Postgres run the arm64 image, so they need an arm64 host (the postgres-image
+ * job in ci.yml runs on one) or an arm64 emulator registered with binfmt_misc. Without either
+ * they are skipped locally and fail when CI is set.
+ *
+ * A build on an arm64 host runs every stage natively, so it would not notice a RUN in an arm64
+ * stage, which release.yml's x86 build without an emulator cannot run. The Containerfile tests
+ * below check that statically instead.
  *
  * Postgres starts the way CloudNativePG runs its operand: UID and GID 26, read-only root
  * filesystem, every capability dropped, no privilege escalation, data and sockets on writable
@@ -19,6 +23,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { containerBuildArgs } from "../../../scripts/lib/build-context.ts";
 import { aarch64ElfProblem, baseImageProblems } from "../../../scripts/release/lib.ts";
 
 const DIR = import.meta.dir;
@@ -124,8 +129,10 @@ describe("image", () => {
 
   beforeAll(async () => {
     if (image === "") {
-      image = "localhost/trustiot-test/postgres:latest";
-      await run(["podman", "build", "--platform", "linux/arm64", "--format", "oci", "--tag", image, DIR]);
+      image = "localhost/trustiot-e2e/postgres:image-test";
+      // containerBuildArgs checks the build context and the Containerfile against the secret
+      // rules first (docs/architecture/secrets.md), like every container build in the repository.
+      await run(["podman", ...containerBuildArgs(DIR, ["--platform", "linux/arm64", "--format", "oci", "--tag", image])]);
     }
     // Copy the AGE files out of the image without running it.
     files = mkdtempSync(join(tmpdir(), "trustiot-postgres-image-"));

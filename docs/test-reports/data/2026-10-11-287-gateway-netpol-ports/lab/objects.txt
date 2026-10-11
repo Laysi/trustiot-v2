@@ -1,0 +1,13 @@
+NAME                                                 CLASS   ADDRESS                                            PROGRAMMED   AGE
+gateway.gateway.networking.k8s.io/trustiot-ingress   istio   trustiot-ingress-istio.e2e-287.svc.cluster.local   True         63s
+
+NAME                                          READY   STATUS    RESTARTS   AGE   IP           NODE              NOMINATED NODE   READINESS GATES
+pod/trustiot-assets-57d8b5fb7b-s8fpp          1/1     Running   0          63s   10.42.0.54   trustiot-mac-m1   <none>           <none>
+pod/trustiot-certs-5d8f5c89c8-974xh           1/1     Running   0          63s   10.42.0.56   trustiot-mac-m1   <none>           <none>
+pod/trustiot-identity-cfb4f6f98-vcshx         1/1     Running   0          12s   10.42.0.59   trustiot-mac-m1   <none>           <none>
+pod/trustiot-ingress-istio-7bccf9b595-hx84b   1/1     Running   0          63s   10.42.0.57   trustiot-mac-m1   <none>           <none>
+pod/trustiot-ingress-istio-7bccf9b595-v2l2x   1/1     Running   0          62s   10.42.0.58   trustiot-mac-m1   <none>           <none>
+pod/trustiot-mqtt-bridge-565d74c6d-ptfgb      1/1     Running   0          63s   10.42.0.53   trustiot-mac-m1   <none>           <none>
+{"ingress":[{"from":[{"ipBlock":{"cidr":"10.42.0.1/32"}}],"ports":[{"port":80,"protocol":"TCP"},{"port":15021,"protocol":"TCP"}]}],"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"trustiot-ingress"}},"policyTypes":["Ingress"]}
+{"name":"trustiot-ingress-istio-7bccf9b595-hx84b","ip":"10.42.0.57","dataplane":"none","ready":[true]}
+{"name":"trustiot-ingress-istio-7bccf9b595-v2l2x","ip":"10.42.0.58","dataplane":"none","ready":[true]}

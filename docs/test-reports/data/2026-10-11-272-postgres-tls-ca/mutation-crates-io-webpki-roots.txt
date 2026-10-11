@@ -1,0 +1,42 @@
+rcheck.sh 272 on ruisi-wsl, 2026-10-11. The command first edits the build host's copy of the
+branch so that it builds like main (crates.io webpki-roots, no [patch.crates-io]), then runs
+tests/postgres_trust.rs. Exit code 101 (expected: the guards must fail on main's setup).
+
+$ sed -i -e "/^\[patch.crates-io\]/,/^webpki-roots = /d" -e "s|^webpki-roots = { path = \"crates/webpki-roots-empty\" }|webpki-roots = \"1\"|" Cargo.toml
+$ cargo test -p service-kit --test postgres_trust -- --nocapture
+
+== mutated Cargo.toml (main-like: crates.io webpki-roots, no patch):
+61:webpki-roots = "1"
+63:# sqlx trusts webpki-roots (Mozilla's public roots) in addition to the configured Postgres CA, and
+65:# anchor (crates/webpki-roots-empty, Laysi/trustiot-v2#272). Nothing else may use webpki-roots;
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.38s
+     Running tests/postgres_trust.rs (/home/ruisi/tv2/agents/272/target/debug/deps/postgres_trust-6f2311ca1a501f83)
+
+running 3 tests
+
+thread 'sqlx_is_built_with_no_public_roots' (141338) panicked at crates/service-kit/tests/postgres_trust.rs:32:5:
+webpki-roots is not the empty stand-in: sqlx would trust 121 public roots for Postgres
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test sqlx_is_built_with_no_public_roots ... FAILED
+
+thread 'the_lock_file_gives_sqlx_no_trust_anchor_but_the_configured_ca' (141339) panicked at crates/service-kit/tests/postgres_trust.rs:88:5:
+assertion `left == right` failed: exactly one webpki-roots in the graph
+  left: 2
+ right: 1
+test the_lock_file_gives_sqlx_no_trust_anchor_but_the_configured_ca ... FAILED
+configured CA, matching host: connected
+bundle with the configured CA: connected
+another CA configured, matching host: error communicating with database: invalid peer certificate: UnknownIssuer
+configured CA, wrong host name: error communicating with database: invalid peer certificate: certificate not valid for name "localhost"; certificate is only valid for IpAddress(127.0.0.1)
+no CA configured: error communicating with database: invalid peer certificate: UnknownIssuer
+test only_the_configured_ca_is_trusted ... ok
+
+failures:
+
+failures:
+    sqlx_is_built_with_no_public_roots
+    the_lock_file_gives_sqlx_no_trust_anchor_but_the_configured_ca
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.44s
+
+error: test failed, to rerun pass `-p service-kit --test postgres_trust`

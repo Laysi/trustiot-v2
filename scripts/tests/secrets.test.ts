@@ -6,6 +6,7 @@ import {
   generateCredentials,
   mosquittoPasswordEntry,
   randomSecret,
+  serviceRoleSql,
   sqlIdentifier,
   sqlLiteral,
 } from "../lib/secrets.ts";
@@ -40,6 +41,37 @@ describe("generateCredentials", () => {
     ];
     expect(new Set(passwords).size).toBe(6);
     for (const password of passwords) expect(password.length).toBeGreaterThanOrEqual(43);
+  });
+
+  test("makes a login per service role, never the dev user's", () => {
+    const credentials = generateCredentials({ "example-service": "example_service" });
+    const login = credentials.services["example-service"]!;
+    expect(login.user).toBe("example_service");
+    expect(login.user).not.toBe(credentials.postgres.user);
+    expect(login.password.length).toBeGreaterThanOrEqual(43);
+    expect(login.password).not.toBe(credentials.postgres.password);
+    expect(generateCredentials().services).toEqual({});
+  });
+});
+
+describe("serviceRoleSql", () => {
+  test("creates a plain login role that cannot bypass row-level security, and sets its password", () => {
+    const sql = serviceRoleSql("example_service", "p'w");
+    expect(sql).toContain("CREATE ROLE \"example_service\" LOGIN NOSUPERUSER NOBYPASSRLS");
+    expect(sql).toContain("NOCREATEDB NOCREATEROLE NOREPLICATION");
+    expect(sql).toContain("ALTER ROLE \"example_service\" WITH LOGIN NOSUPERUSER NOBYPASSRLS");
+    expect(sql).toContain("PASSWORD 'p''w'");
+    expect(sql).not.toMatch(/GRANT|OWNER/i);
+  });
+
+  test("can run again over an existing role", () => {
+    expect(serviceRoleSql("r", "x")).toContain("IF NOT EXISTS (SELECT FROM pg_roles");
+  });
+
+  test("refuses a role name that is not a plain identifier", () => {
+    for (const bad of ["", "Example", "a-b", "a b", "1a", 'a"; DROP ROLE x; --', "x".repeat(64)]) {
+      expect(() => serviceRoleSql(bad, "x")).toThrow(/invalid database role name/);
+    }
   });
 });
 

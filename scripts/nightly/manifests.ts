@@ -318,3 +318,110 @@ export function missingTlsSecrets(objects: K8sObject[]): string[] {
   }
   return [...names].sort();
 }
+
+/** The TCP ports one Istio gateway's pods use, and what the release's NetworkPolicies admit for them. */
+export interface GatewayPorts {
+  gateway: string;
+  /** Ports of the pods' startup, liveness and readiness probes and the target ports of their Service. */
+  needed: number[];
+  /** Ports that NetworkPolicies of the release admit for the pods from any source; "all" when a rule names no port. */
+  admitted: number[] | "all";
+}
+
+/** Container port numbers by name, across the containers of a pod spec. */
+function namedPorts(spec: YamlMap): Map<string, number> {
+  const ports = new Map<string, number>();
+  for (const container of containersOf(spec)) {
+    for (const port of asArray(container.ports).filter(isMap)) {
+      const name = asString(port.name);
+      if (name !== undefined && typeof port.containerPort === "number") ports.set(name, port.containerPort);
+    }
+  }
+  return ports;
+}
+
+function selectsPod(selector: YamlMap, labels: Record<string, string>): boolean {
+  if (asArray(selector.matchExpressions).length > 0) {
+    throw new Error("a NetworkPolicy podSelector uses matchExpressions, which this check does not evaluate");
+  }
+  return Object.entries(asMap(selector.matchLabels)).every(([key, value]) => labels[key] === value);
+}
+
+/**
+ * Compares the ports that Istio's generated gateway pods really use with what the release's
+ * NetworkPolicies let in. `generated` holds the Deployment and Service that Istio created for the
+ * Gateway (`kubectl get deployments,services -l gateway.networking.k8s.io/gateway-name=<name>`);
+ * `release` is the release's manifest. The chart derives the policy's ports from its own Gateway
+ * and Istio's fixed status port (deploy/chart/templates/_ingress.tpl); this checks them against
+ * the Istio version that is actually installed.
+ */
+export function gatewayPorts(gateway: string, generated: K8sObject[], release: K8sObject[]): GatewayPorts {
+  const objects = flatten(generated);
+  const deployments = objects.filter((o) => o.kind === "Deployment");
+  const deployment = deployments[0];
+  if (deployment === undefined || deployments.length !== 1) {
+    throw new Error(`expected one Deployment generated for Gateway ${gateway}, found ${deployments.length}`);
+  }
+  const template = podTemplate(deployment);
+  if (template === undefined) throw new Error(`the Deployment of Gateway ${gateway} has no pod template`);
+  const byName = namedPorts(template.spec);
+  const needed = new Set<number>();
+  for (const container of containersOf(template.spec)) {
+    for (const probe of ["startup", "liveness", "readiness"] as const) {
+      const spec = asMap(container[`${probe}Probe`]);
+      for (const handler of ["httpGet", "tcpSocket", "grpc"]) {
+        if (!isMap(spec[handler])) continue;
+        const value = asMap(spec[handler]).port;
+        const port = portNumber(value, byName);
+        if (port === undefined) throw new Error(`Gateway ${gateway}: the ${probe} probe's port ${JSON.stringify(value)} does not resolve`);
+        needed.add(port);
+      }
+    }
+  }
+  const services = objects.filter((o) => o.kind === "Service");
+  if (services.length === 0) throw new Error(`no Service generated for Gateway ${gateway}`);
+  for (const service of services) {
+    for (const port of asArray(asMap(service.spec).ports).filter(isMap)) {
+      const target = portNumber(port.targetPort ?? port.port, byName);
+      if (target === undefined) throw new Error(`Gateway ${gateway}: Service port ${JSON.stringify(port)} does not resolve`);
+      needed.add(target);
+    }
+  }
+
+  let admitted: Set<number> | "all" = new Set<number>();
+  for (const policy of flatten(release).filter((o) => o.kind === "NetworkPolicy")) {
+    const spec = asMap(policy.spec);
+    if (!selectsPod(asMap(spec.podSelector), template.labels)) continue;
+    for (const rule of asArray(spec.ingress).filter(isMap)) {
+      const ports = asArray(rule.ports).filter(isMap);
+      // A rule without ports, or a NetworkPolicyPort without a port, admits every port.
+      if (ports.length === 0) admitted = "all";
+      for (const port of ports) {
+        if ((asString(port.protocol) ?? "TCP") !== "TCP") continue;
+        const first = portNumber(port.port, byName);
+        if (first === undefined) admitted = "all";
+        if (admitted === "all" || first === undefined) continue;
+        const last = typeof port.endPort === "number" ? port.endPort : first;
+        for (let p = first; p <= last; p += 1) admitted.add(p);
+      }
+    }
+  }
+  const sorted = (ports: Set<number>): number[] => [...ports].sort((a, b) => a - b);
+  return { gateway, needed: sorted(needed), admitted: admitted === "all" ? "all" : sorted(admitted) };
+}
+
+/** What is wrong with a gateway's ports: needed ports the policies refuse, and admitted ports nothing uses. */
+export function gatewayPortProblems(ports: GatewayPorts): string[] {
+  const admitted = ports.admitted;
+  if (admitted === "all") return [`Gateway ${ports.gateway}: a NetworkPolicy rule admits every port`];
+  const problems: string[] = [];
+  const refused = ports.needed.filter((p) => !admitted.includes(p));
+  const unused = admitted.filter((p) => !ports.needed.includes(p));
+  if (refused.length > 0) {
+    problems.push(`Gateway ${ports.gateway}: the NetworkPolicy refuses ${refused.join(", ")}, which the pods' probes or Service use`);
+  }
+  if (unused.length > 0) {
+    problems.push(`Gateway ${ports.gateway}: the NetworkPolicy admits ${unused.join(", ")}, which neither a probe nor the Service uses`);
+  }
+  return problems;
+}

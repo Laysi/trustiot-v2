@@ -1,0 +1,102 @@
+== fmt
+== clippy
+    Checking outbox v0.1.0 (/home/ruisi/tv2/agents/286/src/crates/outbox)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.87s
+    Checking service-kit v0.1.0 (/home/ruisi/tv2/agents/286/src/crates/service-kit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.12s
+== service-kit
+     Running unittests src/lib.rs (/home/ruisi/tv2/agents/286/target/debug/deps/service_kit-33b22c5d0e2eddc8)
+test result: ok. 82 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+     Running tests/chart_contract.rs (/home/ruisi/tv2/agents/286/target/debug/deps/chart_contract-6fe51a95012e8003)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/container.rs (/home/ruisi/tv2/agents/286/target/debug/deps/container-4d0a3e345e242122)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.13s
+     Running tests/dependency_isolation.rs (/home/ruisi/tv2/agents/286/target/debug/deps/dependency_isolation-f0943d8b247732b1)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+     Running tests/errors.rs (/home/ruisi/tv2/agents/286/target/debug/deps/errors-6a53c3746cf83466)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s
+     Running tests/identity.rs (/home/ruisi/tv2/agents/286/target/debug/deps/identity-e464c39a8b592abb)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+     Running tests/identity_adversarial.rs (/home/ruisi/tv2/agents/286/target/debug/deps/identity_adversarial-8cca7aa47d1bd290)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.33s
+     Running tests/job_lock.rs (/home/ruisi/tv2/agents/286/target/debug/deps/job_lock-4ee85e664ac0b2d8)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.87s
+     Running tests/lifecycle.rs (/home/ruisi/tv2/agents/286/target/debug/deps/lifecycle-82b6417dde07cf00)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.81s
+     Running tests/logging.rs (/home/ruisi/tv2/agents/286/target/debug/deps/logging-c7853c93c05486c6)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+     Running tests/otlp.rs (/home/ruisi/tv2/agents/286/target/debug/deps/otlp-cfc8138e9fe5b574)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.88s
+     Running tests/tenant_db.rs (/home/ruisi/tv2/agents/286/target/debug/deps/tenant_db-4566ab199a00e3d3)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.31s
+     Running tests/verify_config.rs (/home/ruisi/tv2/agents/286/target/debug/deps/verify_config-6205fbdbdf4762e5)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/verify_container.rs (/home/ruisi/tv2/agents/286/target/debug/deps/verify_container-7022183a8419e8d9)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.97s
+     Running tests/verify_job_lock.rs (/home/ruisi/tv2/agents/286/target/debug/deps/verify_job_lock-61077479c894a8a4)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.20s
+     Running tests/verify_leaks.rs (/home/ruisi/tv2/agents/286/target/debug/deps/verify_leaks-8639dc1fa319f87a)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.37s
+     Running tests/verify_shutdown.rs (/home/ruisi/tv2/agents/286/target/debug/deps/verify_shutdown-8413ea6b50c845f6)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.11s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+== lifecycle evidence
+test health_port_equal_to_the_api_port_stops_startup ... ok
+test missing_required_configuration_stops_startup ... ok
+test invalid_configuration_names_the_key_without_its_value ... ok
+test durations_beyond_the_caps_stop_startup ... ok
+test health_endpoints_answer_while_serving ... ok
+test durations_at_the_caps_still_start_and_drain_on_sigterm ... ok
+test health_port_serves_only_the_probe_endpoints ... ok
+test second_signal_exits_without_draining ... ok
+test listen_address_in_use_stops_startup ... ok
+test sigint_drains_like_sigterm ... ok
+test drain_timeout_bounds_shutdown ... ok
+after SIGTERM: /readyz answered 503 on both ports at 2 ms, the process exited 0 at 2222 ms
+test sigterm_fails_readiness_at_once_and_drains_requests_in_flight ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.80s
+== service-kit no-default
+test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.19s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.10s
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.80s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.85s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.72s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.45s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.38s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.11s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== outbox
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.96s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.90s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.71s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.89s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.42s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== repo-check
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== chart
+ 187 pass
+ 0 fail
+Ran 187 tests across 1 file. [13.37s]
+== nightly
+ 58 pass
+ 0 fail
+Ran 58 tests across 5 files. [380.00ms]
+== typecheck
+$ tsc --noEmit --project tsconfig.json
+== done
+
+[exited with code 0]

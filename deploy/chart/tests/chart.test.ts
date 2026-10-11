@@ -385,6 +385,204 @@ describe("secrets reach only the services that need them", () => {
   });
 });
 
+// Checklist M3 (docs/architecture/secrets.md): values name Secrets and never hold secret
+// material, and the chart reads Secrets by name and key only, never creating one itself.
+describe("values reference Secrets by name only and hold no secret material", () => {
+  const SECRET_LIKE = /secret|passw|passphrase|pwd|token|api_?key|(^|_)key$|dsn|private|credential/i;
+  // Secret names are DNS subdomains; keys inside a Secret follow the Kubernetes data key rule.
+  const SECRET_NAME = /^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)?$/;
+  const SECRET_DATA_KEY = /^[-._a-zA-Z0-9]+$/;
+  const CREDENTIAL_NAME = /^[a-z][a-z0-9-]*$/;
+  const SECRET_MATERIAL: [RegExp, string][] = [
+    [/-----BEGIN [A-Z0-9 ]+-----/, "a PEM block"],
+    [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/, "a JWT"],
+    [/\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/, "a GitHub token"],
+    [/\bsk-[A-Za-z0-9_-]{16,}/, "an API key"],
+    [/\bAKIA[0-9A-Z]{16}\b/, "an AWS access key"],
+    [/\bAIza[0-9A-Za-z_-]{30,}/, "a Google API key"],
+    [/\bxox[abprs]-[A-Za-z0-9-]{10,}/, "a Slack token"],
+    [/AGE-SECRET-KEY-1/, "an age private key"],
+    [/^[a-z][a-z0-9+.-]*:\/\/[^/@\s]+@/i, "a URL with credentials"],
+  ];
+  const VALUES_FILES = [
+    "values.yaml",
+    "values-saas.yaml",
+    "values-onprem.yaml",
+    "tests/values/saas-instance.yaml",
+    "tests/values/onprem-instance.yaml",
+    SMOKE,
+  ];
+
+  // Returns why a string looks like secret material: a known shape, or a run of 24+ characters
+  // without separators that mixes letters and digits (a random key or token, including a
+  // lowercase hex key). Names made of short words (`trustiot-clickhouse-admin`) are not.
+  function secretMaterial(value: string): string | undefined {
+    for (const [pattern, what] of SECRET_MATERIAL) if (pattern.test(value)) return what;
+    const randomLooking =
+      value.length >= 24 &&
+      /^[A-Za-z0-9+/=_.-]+$/.test(value) &&
+      value
+        .split(/[-_.]/)
+        .some((run) => run.length >= 24 && [/[a-z]/, /[A-Z]/, /[0-9]/].filter((c) => c.test(run)).length >= 2);
+    return randomLooking ? "a random-looking key or token" : undefined;
+  }
+
+  type Leaf = { path: string[]; value: unknown };
+  function leaves(value: unknown, path: string[] = []): Leaf[] {
+    if (isMap(value)) return Object.entries(value).flatMap(([k, v]) => leaves(v, [...path, k]));
+    if (Array.isArray(value)) return value.flatMap((v, i) => leaves(v, [...path, String(i)]));
+    return [{ path, value }];
+  }
+
+  // Problems in one parsed values file. A field may only look like a secret when it is part of
+  // a Secret reference: the `name` or a `key`/`*Key` field of a `*Secret` map, a `*Secret`
+  // field that holds a Secret name itself (`ingress.direct.tlsSecret`), an entry of
+  // `imagePullSecrets`, an env var's `valueFrom.secretKeyRef`, a `credentials` entry (the
+  // name of a chart-defined credential, not the credential itself), or a `*SecretRevision`
+  // counter that rolls pods when a Secret is rotated.
+  function valuesProblems(doc: unknown): string[] {
+    const problems: string[] = [];
+    for (const { path, value } of leaves(doc)) {
+      const where = path.join(".");
+      if (typeof value === "string") {
+        const material = secretMaterial(value);
+        if (material) problems.push(`${where} holds ${material}`);
+      }
+      // A boolean is a switch such as automountServiceAccountToken, never secret material.
+      if (typeof value === "boolean" || !path.some((segment) => SECRET_LIKE.test(segment))) continue;
+      const owner = path.findLastIndex((segment) => /Secrets?$|^secretKeyRef$/.test(segment));
+      const field = path.at(-1) ?? "";
+      const text = typeof value === "string" ? value : "";
+      if (path.at(-2) === "credentials" && path.at(-3) !== undefined && CREDENTIAL_NAME.test(text)) continue;
+      if (/Secret$/.test(field) && path.findLastIndex((segment) => SECRET_LIKE.test(segment)) === path.length - 1 && SECRET_NAME.test(text)) continue;
+      if (/SecretRevision$/.test(field) && /^\d{1,9}$/.test(text)) continue;
+      if (owner >= 0 && path.length === owner + 2 && field === "name" && SECRET_NAME.test(text)) continue;
+      if (owner >= 0 && path.length === owner + 2 && /^(key|.+Key)$/.test(field) && SECRET_DATA_KEY.test(text)) continue;
+      // imagePullSecrets: a list of names or of {name} objects.
+      if (path[owner] === "imagePullSecrets" && SECRET_NAME.test(text)) continue;
+      problems.push(`${where} looks like a secret but is not a Secret name or key reference`);
+    }
+    return problems;
+  }
+
+  test.each(VALUES_FILES)("%s: secret fields are Secret names and keys, never secret material", (file) => {
+    expect(valuesProblems(readYaml(file))).toEqual([]);
+  });
+
+  test("the values rule catches plain-text secrets", () => {
+    expect(valuesProblems({ qdrant: { external: { apiKey: "plain" } } })).toEqual([
+      "qdrant.external.apiKey looks like a secret but is not a Secret name or key reference",
+    ]);
+    expect(valuesProblems({ smtp: { credentialsSecret: { name: "trustiot-smtp", password: "hunter2" } } })).toEqual([
+      "smtp.credentialsSecret.password looks like a secret but is not a Secret name or key reference",
+    ]);
+    expect(valuesProblems({ ai: { chat: { apiKeySecret: { name: "sk-0123456789abcdefghijKLMN" } } } })).toEqual([
+      "ai.chat.apiKeySecret.name holds an API key",
+      "ai.chat.apiKeySecret.name looks like a secret but is not a Secret name or key reference",
+    ]);
+    expect(valuesProblems({ hosts: { app: "-----BEGIN PRIVATE KEY-----" } })).toEqual(["hosts.app holds a PEM block"]);
+    // A `*Secret` field holds a Secret name, and a `*SecretRevision` a counter, nothing else.
+    expect(valuesProblems({ ingress: { direct: { tlsSecret: "trustiot-ingress-tls" } }, clickhouse: { bundled: { adminSecretRevision: "2" } } })).toEqual([]);
+    expect(valuesProblems({ ingress: { direct: { tlsSecret: "BEGIN key material" } }, clickhouse: { bundled: { adminSecretRevision: "hunter2" } } })).toEqual([
+      "ingress.direct.tlsSecret looks like a secret but is not a Secret name or key reference",
+      "clickhouse.bundled.adminSecretRevision looks like a secret but is not a Secret name or key reference",
+    ]);
+    // Assembled at run time so that gitleaks does not report the example key.
+    const awsKey = ["AKIA", "ABCDEFGHIJKLMNOP"].join("");
+    expect(valuesProblems({ objectStorage: { region: awsKey } })).toEqual(["objectStorage.region holds an AWS access key"]);
+    expect(valuesProblems({ objectStorage: { endpoint: "https://user:pass@s3.test" } })).toEqual([
+      "objectStorage.endpoint holds a URL with credentials",
+    ]);
+    expect(valuesProblems({ extra: { note: "q8Zr4TnW2xKv9LbP0sYh7GcJ3mDfE6uA" } })).toEqual([
+      "extra.note holds a random-looking key or token",
+    ]);
+    // A lowercase hex key is random-looking too, also inside a longer value.
+    const hexRun = "0123456789abcdef".repeat(4);
+    expect(valuesProblems({ extra: { note: hexRun } })).toEqual(["extra.note holds a random-looking key or token"]);
+    expect(valuesProblems({ extra: { note: `prefix-${hexRun.slice(0, 32)}` } })).toEqual(["extra.note holds a random-looking key or token"]);
+    // Long names made of words are not.
+    expect(valuesProblems({ extra: { note: "trustiot-clickhouse-admin-2026-10-10-backup" } })).toEqual([]);
+    // References are fine, including the image digest and credential names.
+    expect(
+      valuesProblems({
+        global: { imagePullSecrets: ["ghcr-pull", { name: "ghcr-pull-2" }] },
+        qdrant: { external: { credentialsSecret: { name: "trustiot-qdrant", readApiKeyKey: "read-api-key" } } },
+        services: {
+          knowledge: {
+            credentials: ["qdrant-read"],
+            image: { digest: `sha256:${"ab".repeat(32)}` },
+            env: [{ name: "DB_PASSWORD", valueFrom: { secretKeyRef: { name: "db", key: "password" } } }],
+          },
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  // Renders both shapes with every service; helm can take more than the default 5 s on a busy machine.
+  test("rendered manifests create no Secret and read Secrets by name and key only", () => {
+    const names = new Set(
+      SHAPE_NAMES.flatMap((shape) =>
+        SHAPES[shape].flatMap((file) =>
+          leaves(readYaml(file))
+            .filter(({ path }) => path.at(-1) === "name" && /Secret$/.test(path.at(-2) ?? ""))
+            .map(({ value }) => String(value)),
+        ),
+      ),
+    );
+    expect(names.size).toBeGreaterThan(0);
+    const allCredentials = [
+      "--set-json",
+      'services.knowledge.credentials=["qdrant-read","qdrant-write","object-storage","smtp"]',
+      "--set-json",
+      'services.ai-gateway.credentials=["ai","smtp"]',
+      "--set",
+      "postgres.mode=external",
+      "--set",
+      "postgres.external.host=pg.trustiot.test",
+      "--set",
+      "postgres.external.caSecret.name=trustiot-pg-ca",
+    ];
+    names.add("trustiot-pg-ca");
+    for (const shape of SHAPE_NAMES) {
+      const manifests = render([...SHAPES[shape], SMOKE], [...enableAllServices, ...allCredentials]);
+      expect(manifests.filter((m) => m.kind === "Secret")).toEqual([]);
+      let references = 0;
+      for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
+        const pod = podSpec(deployment);
+        for (const volume of pod.volumes ?? []) {
+          const secret = volume.secret as { secretName?: string } | undefined;
+          if (!secret) continue;
+          references += 1;
+          expect(names).toContain(secret.secretName ?? "");
+        }
+        for (const env of pod.containers.flatMap((c) => c.env ?? [])) {
+          const ref = env.valueFrom?.secretKeyRef;
+          if (SECRET_LIKE.test(env.name)) {
+            // Secret-looking variables never carry a literal value.
+            expect(env.value, env.name).toBeUndefined();
+            expect(ref, env.name).toBeDefined();
+          }
+          if (!ref) continue;
+          references += 1;
+          expect(Object.keys(ref).sort()).toEqual(["key", "name"]);
+          expect(names).toContain(ref.name);
+        }
+      }
+      expect(references).toBeGreaterThan(0);
+      // Nothing rendered, ConfigMaps included, carries secret material.
+      // The chart's own `checksum/*` pod annotations are SHA-256 digests of rendered config,
+      // which are random-looking by design.
+      const material = leaves(manifests).flatMap(({ path, value }) => {
+        const digest =
+          path.at(-2) === "annotations" && (path.at(-1) ?? "").startsWith("checksum/") && /^[0-9a-f]{64}$/.test(String(value));
+        const found = typeof value === "string" && !digest ? secretMaterial(value) : undefined;
+        return found ? [`${path.join(".")}: ${found}`] : [];
+      });
+      expect(material).toEqual([]);
+    }
+  }, 60_000);
+});
+
 describe("exposure and hardening", () => {
   const renders = SHAPE_NAMES.map((shape) => render([...SHAPES[shape], SMOKE], enableAllServices));
 
@@ -772,12 +970,26 @@ describe("ingress gateway (decision 27)", () => {
     for (const { rule } of rules(manifests)) expect(rule.matches[0]?.path.value).not.toStartWith("/internal");
   });
 
-  test("NetworkPolicy: behind the tunnel only the host may connect; direct exposure opens 443 only", () => {
+  // Istio's status port on every gateway pod. Istio fixes it: its kube-gateway injection template
+  // probes it (startup and readiness, GET /healthz/ready) and lists it in the gateway's Service as
+  // "status-port". Recorded for Istio 1.30.5 in docs/test-reports/2026-10-11-287-gateway-netpol-ports.md;
+  // the nightly smoke test compares the live gateway's probe and Service ports with the policy.
+  const ISTIO_STATUS_PORT = 15021;
+
+  test("NetworkPolicy: behind the tunnel only the host may connect, to 80 and 15021; direct exposure opens 443 and 15021", () => {
     const tunnel = find(render(SHAPES.saas), "NetworkPolicy", GATEWAY).spec as YamlMap;
     expect(tunnel).toEqual({
       podSelector: { matchLabels: { "gateway.networking.k8s.io/gateway-name": GATEWAY } },
       policyTypes: ["Ingress"],
-      ingress: [{ from: [{ ipBlock: { cidr: "10.42.0.1/32" } }] }],
+      ingress: [
+        {
+          from: [{ ipBlock: { cidr: "10.42.0.1/32" } }],
+          ports: [
+            { port: 80, protocol: "TCP" },
+            { port: 15021, protocol: "TCP" },
+          ],
+        },
+      ],
     });
     const direct = find(render(SHAPES.onprem), "NetworkPolicy", GATEWAY).spec as YamlMap;
     expect(direct.ingress).toEqual([
@@ -788,6 +1000,31 @@ describe("ingress gateway (decision 27)", () => {
         ],
       },
     ]);
+  });
+
+  test.each(SHAPE_NAMES)("%s: every rule of the gateway's NetworkPolicy admits only the Gateway's listener and Istio's status port", (shape) => {
+    // Two sources behind the tunnel, so a rule per source would also be caught.
+    const args = shape === "saas" ? ["--set-json", 'ingress.tunnel.allowedSources=["10.42.0.1/32","10.42.1.1/32"]'] : [];
+    const manifests = render(SHAPES[shape], args);
+    const gateway = find(manifests, "Gateway", GATEWAY).spec as {
+      listeners: { port: number }[];
+      infrastructure: { labels: Record<string, string> };
+    };
+    const expected = [...gateway.listeners.map((l) => l.port), ISTIO_STATUS_PORT].map((port) => ({ port, protocol: "TCP" }));
+    const rules = (find(manifests, "NetworkPolicy", GATEWAY).spec as NetworkPolicySpec).ingress ?? [];
+    expect(rules.length).toBeGreaterThan(0);
+    // A rule without ports admits every port of the pod, Envoy's metrics included.
+    for (const rule of rules) expect(rule.ports).toEqual(expected);
+    if (shape === "saas") {
+      expect(rules.flatMap((rule) => rule.from ?? [])).toEqual([
+        { ipBlock: { cidr: "10.42.0.1/32" } },
+        { ipBlock: { cidr: "10.42.1.1/32" } },
+      ]);
+    }
+    // The kubelet's probes come from the host's address, an allowed source, only while the pod
+    // stays out of the ambient mesh (Istio labels it istio.io/dataplane-mode: none). In the mesh,
+    // they would come from the node source 169.254.7.127, which no rule admits.
+    expect(Object.keys(gateway.infrastructure.labels)).not.toContain("istio.io/dataplane-mode");
   });
 
   test("the mesh in deploy/istio decodes %2F and merges slashes, so /internal* catches every spelling", () => {
@@ -853,8 +1090,18 @@ describe("service-to-service authorization (decision 27)", () => {
     from: [{ ipBlock: { cidr: HOST_SOURCE } }],
     ports: ports.map((port) => ({ port, protocol: "TCP" })),
   });
-  // Services probe /healthz and /readyz on their http port (serviceDefaults.probes).
-  const SERVICE_PROBE_PORT = 8080;
+  // Services probe /healthz and /readyz on their health port (serviceDefaults.healthPort and
+  // serviceDefaults.probes), which serves nothing else; their API listens on http.
+  const HEALTH_PORT = 8081;
+  const API_PORT = 8080;
+  // Test stand-ins that run traefik/whoami, which listens on http only, so their overlays probe
+  // http. The identity double (identity in the e2e overlay) listens on the health port like a
+  // TrustIoT service.
+  const WHOAMI_STAND_INS: Record<string, string[]> = {
+    [SMOKE]: ["smoke-echo"],
+    [E2E_VALUES]: ["assets", "certs", "mqtt-bridge"],
+  };
+  const standInsOf = (overlays: readonly string[]) => new Set(overlays.flatMap((overlay) => WHOAMI_STAND_INS[overlay] ?? []));
   // Bundled ClickHouse probes /ping on its HTTP port; the native protocol (9000) stays closed.
   const CLICKHOUSE_PROBE_PORT = 8123;
   const principal = (serviceAccount: string, trustDomain = "cluster.local") =>
@@ -960,8 +1207,9 @@ describe("service-to-service authorization (decision 27)", () => {
           .map((p) => serviceOf(p.split("/sa/")[1] ?? ""))
           .sort(),
       );
-      // Kubelet probes come from istio-cni's SNAT address, admitted on the probe port only.
-      expect(spec.ingress?.at(-1)).toEqual(hostRule(SERVICE_PROBE_PORT));
+      // Kubelet probes come from istio-cni's SNAT address, admitted on the probe port only: the
+      // health port, or http for a whoami stand-in of this overlay.
+      expect(spec.ingress?.at(-1)).toEqual(hostRule(standInsOf([E2E_VALUES]).has(service) ? API_PORT : HEALTH_PORT));
       // Nothing else: no rule opens an application port or admits another source.
       expect(spec.ingress?.length).toBe(principals.length > 0 ? 2 : 1);
     }
@@ -1140,6 +1388,64 @@ describe("service-to-service authorization (decision 27)", () => {
       }
     }
   }, SLOW_TEST_MS);
+
+  // Laysi/trustiot-v2#286: the node reaches a TrustIoT service on its health port alone, which
+  // serves /healthz and /readyz only, and never on its API port, /internal/ included.
+  test.each(SHAPE_NAMES)("%s: the node source reaches every service on its health port only, never its API port", (shape) => {
+    const renders: [string, string[], string[]][] = [...PROBE_RENDERS, ["every service, no stand-in", [], enableAllServices]];
+    const checked = new Set<string>();
+    for (const [name, overlays, args] of renders) {
+      const manifests = render([...SHAPES[shape], ...overlays], args);
+      const standIns = standInsOf(overlays);
+      for (const { workload, spec, rules } of hostSourceRules(manifests)) {
+        if (workload.kind !== "Deployment") continue;
+        const service = serviceOf(workload.metadata.name);
+        const label = `${name}: ${service}`;
+        // Nothing but the host rule admits an ipBlock, so these are all the ports the node reaches.
+        const nodePorts = (spec.ingress ?? []).filter((rule) => (rule.from ?? []).some((peer) => peer.ipBlock)).flatMap((rule) => (rule.ports ?? []).map((p) => p.port));
+        if (standIns.has(service)) {
+          // A whoami stand-in of a test overlay has no health port to probe.
+          expect({ label, rules }).toEqual({ label, rules: [hostRule(API_PORT)] });
+          continue;
+        }
+        expect({ label, rules }).toEqual({ label, rules: [hostRule(HEALTH_PORT)] });
+        expect({ label, nodePorts }).toEqual({ label, nodePorts: [HEALTH_PORT] });
+        const [container] = podSpec(workload).containers;
+        expect({ label, ports: container?.ports?.map(({ name: port, containerPort }) => ({ name: port, containerPort })) }).toEqual({
+          label,
+          ports: [
+            { name: "http", containerPort: API_PORT },
+            { name: "health", containerPort: HEALTH_PORT },
+          ],
+        });
+        for (const probe of [container?.startupProbe, container?.livenessProbe, container?.readinessProbe]) {
+          expect({ label, port: (probe as Probe | undefined)?.httpGet?.port }).toEqual({ label, port: "health" });
+        }
+        // The Service exposes the API only: the kubelet is the health port's one client.
+        const servicePorts = (find(manifests, "Service", workload.metadata.name).spec as { ports: { name: string; port: number }[] }).ports;
+        expect({ label, servicePorts: servicePorts.map((p) => [p.name, p.port]) }).toEqual({ label, servicePorts: [["http", API_PORT]] });
+        checked.add(service);
+      }
+    }
+    // Every planned service was checked with the chart's defaults, the identity double too.
+    expect([...checked].sort()).toEqual([...plannedServices].sort());
+  }, SLOW_TEST_MS);
+
+  test("healthPort moves the health port, and the node source and probes follow it", () => {
+    const manifests = render([...SHAPES.saas], ["--set", "services.assets.enabled=true", "--set", "services.assets.healthPort=9091"]);
+    const workload = find(manifests, "Deployment", `${RELEASE}-assets`);
+    expect(podSpec(workload).containers[0]?.ports?.find((p) => p.name === "health")?.containerPort).toBe(9091);
+    expect(networkPolicy(manifests, "assets").ingress?.filter(isHostRule)).toEqual([hostRule(9091)]);
+  });
+
+  test("no ingress route can reach the health port", () => {
+    const result = helmTemplate(
+      [...SHAPES.saas, SMOKE],
+      ["--set-json", 'ingress.routes=[{"host":"app","path":"/","match":"PathPrefix","service":"smoke-echo","port":"health"}]'],
+    );
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(/service "smoke-echo" has no port named "health"/);
+  });
 
   test("probe ports follow the probe definitions: named and numeric ports, tcpSocket, grpc, and exec", () => {
     const PORTS = [
@@ -1386,6 +1692,21 @@ describe("values validation rejects unsafe or incomplete settings", () => {
       ],
       /port names and container ports must be unique/,
     ],
+    [
+      "a port named health",
+      saas,
+      ["--set-json", 'services.smoke-echo.ports=[{"name":"http","containerPort":8080},{"name":"health","containerPort":9000}]'],
+      /services\.smoke-echo: ports must not use the name health or the health port 8081/,
+    ],
+    [
+      "a port on the health port's number",
+      saas,
+      ["--set-json", 'services.smoke-echo.ports=[{"name":"http","containerPort":8081}]'],
+      /services\.smoke-echo: ports must not use the name health or the health port 8081/,
+    ],
+    ["health port below 1024", saas, ["--set", "services.smoke-echo.healthPort=81"], /\/services\/smoke-echo\/healthPort/],
+    ["health port as a string", saas, ["--set-string", "services.smoke-echo.healthPort=8081"], /\/services\/smoke-echo\/healthPort/],
+    ["no health port", saas, ["--set", "serviceDefaults.healthPort=null"], /healthPort/],
     [
       "env that overrides a platform setting",
       saas,

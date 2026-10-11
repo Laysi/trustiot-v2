@@ -1,0 +1,12 @@
+PRETTY_NAME="Fedora Linux 44 (Cloud Edition)"
+Enforcing
+package firewalld is not installed
+package k3s-selinux is not installed
+package cloudflared is not installed
+ls: cannot access '/usr/local/bin/k3s': No such file or directory
+LISTEN 0      4096      127.0.0.54:53   0.0.0.0:* users:(("systemd-resolve",pid=753,fd=21))
+LISTEN 0      4096         0.0.0.0:5355 0.0.0.0:* users:(("systemd-resolve",pid=753,fd=13))
+LISTEN 0      4096   127.0.0.53%lo:53   0.0.0.0:* users:(("systemd-resolve",pid=753,fd=19))
+LISTEN 0      128          0.0.0.0:22   0.0.0.0:* users:(("sshd",pid=1103,fd=6))           
+LISTEN 0      4096            [::]:5355    [::]:* users:(("systemd-resolve",pid=753,fd=15))
+LISTEN 0      128             [::]:22      [::]:* users:(("sshd",pid=1103,fd=7))           

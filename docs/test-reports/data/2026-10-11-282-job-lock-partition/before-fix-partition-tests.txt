@@ -1,0 +1,26 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.32s
+     Running tests/job_lock.rs (/home/ruisi/tv2/agents/282/target/debug/deps/job_lock-4ee85e664ac0b2d8)
+
+running 2 tests
+test a_partitioned_holder_stops_its_job_within_the_lock_timeout ... 
+thread 'a_partitioned_holder_stops_its_job_within_the_lock_timeout' (140024) panicked at crates/service-kit/tests/job_lock.rs:525:9:
+replica a still ran its job 5s after replica b took the lock (236 ticks so far): two replicas run the job at once
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test taking_and_releasing_the_lock_give_up_within_the_timeout_in_a_partition ... lock timeout 1s, after the partition: release Err(Elapsed(())); try_acquire Err(Elapsed(())); try_acquire through a pinging pool Err(Elapsed(()))
+
+thread 'taking_and_releasing_the_lock_give_up_within_the_timeout_in_a_partition' (140110) panicked at crates/service-kit/tests/job_lock.rs:614:47:
+release stops waiting for the database: Elapsed(())
+FAILED
+
+failures:
+
+failures:
+    a_partitioned_holder_stops_its_job_within_the_lock_timeout
+    taking_and_releasing_the_lock_give_up_within_the_timeout_in_a_partition
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 5 filtered out; finished in 15.13s
+
+error: test failed, to rerun pass `-p service-kit --test job_lock`
+
+[exited with code 101]
