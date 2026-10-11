@@ -1,0 +1,24 @@
+rcheck: queued at 23:38:24; running now: nothing
+rcheck: started at 23:38:24 in /home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a935ea81e0b888746
+
+running 2 tests
+slow connect: 3 connections at ready, ready again 3.024891741s after the proxy resumed, 8 connections in all
+  "2026-10-11T15:38:34.826229Z" "the database connections are open" null
+  "2026-10-11T15:38:41.827734Z" "cannot keep the database connections open; not ready" "database error: database error: pool timed out while waiting for an open connection"
+  "2026-10-11T15:38:44.956216Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+
+thread 'a_keep_warm_round_replaces_every_dropped_connection' (1519493) panicked at services/identity/tests/ext_authz.rs:791:5:
+the keep-warm task did not notice the dropped connections:
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test a_keep_warm_round_replaces_every_dropped_connection ... FAILED
+
+failures:
+
+failures:
+    a_keep_warm_round_replaces_every_dropped_connection
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 36.96s
+
+error: test failed, to rerun pass `-p identity --test ext_authz`
+rcheck: exit 101 at 23:39:06
