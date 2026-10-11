@@ -1,9 +1,7 @@
-    Checking testkit v0.1.0 (/home/ruisi/tv2/agents/56/src/crates/testkit)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.11s
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.24s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.18s
      Running unittests src/lib.rs (/home/ruisi/tv2/agents/56/target/debug/deps/testkit-a5fafaacc64c86b5)
 
-running 22 tests
+running 23 tests
 test identity::tests::a_user_without_a_tenant_has_none ... ok
 test identity::tests::another_issuers_tokens_do_not_verify ... ok
 test identity::tests::tokens_verify_for_their_audience_only ... ok
@@ -20,6 +18,7 @@ test isolation::postgres::tests::declared_relations_pass ... ok
 test isolation::postgres::tests::names_are_validated_and_qualified ... ok
 test isolation::postgres::tests::the_macros_build_static_sql_from_the_name ... ok
 test isolation::postgres::tests::wrong_declarations_fail ... ok
+test isolation::tests::a_tenant_id_sent_in_the_request_is_not_a_leak ... ok
 test isolation::tests::an_empty_report_is_not_isolated ... ok
 test isolation::tests::leaks_find_any_marker_in_any_case ... ok
 test isolation::tests::markers_cover_the_tenant_and_each_row ... ok
@@ -27,7 +26,7 @@ test isolation::tests::shows_finds_a_row_by_id_or_canary ... ok
 test isolation::tests::snapshot_changes_fail ... ok
 test isolation::tests::the_requested_id_is_not_a_leak_but_its_canary_is ... ok
 
-test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
 
      Running tests/postgres_isolation.rs (/home/ruisi/tv2/agents/56/target/debug/deps/postgres_isolation-100c2cec76670099)
 
@@ -66,8 +65,8 @@ pass | example_items | move own rows into tenant A | refused (42501)
 pass | example_items | insert into tenant A | refused (42501)
 pass | GET /v1/items | list as tenant A | 200: all 5 own rows, nothing of tenant B
 pass | GET /v1/items | without a tenant | 403, nothing shown
-FAIL | GET /v1/items/{id} | tenant B's row as tenant A | 200 shows tenant B's data: ["canary-b-49f1e8ed71d2458fb0e95f8477dcbf50"]
-FAIL | GET /v1/items/{id} | without a tenant | 200 shows tenant data: ["d2982789-439e-44ef-afb0-2a703ad61044", "canary-a-c1d7c703cde14075991d5c9478f4c90a"]
+FAIL | GET /v1/items/{id} | tenant B's row as tenant A | 200 shows tenant B's data: ["canary-b-53e949600a654e9cb929f1f2854839c5"]
+FAIL | GET /v1/items/{id} | without a tenant | 200 shows tenant data: ["canary-a-49131103c1aa4d839d1a23b5751f06a4"]
 pass | GET /v1/items/{id} | positive control: own row as tenant A | 200
 pass | DELETE /v1/items/{id} | tenant B's row as tenant A | 404, nothing shown
 pass | DELETE /v1/items/{id} | without a tenant | 403, nothing shown
@@ -81,8 +80,8 @@ pass | POST /v1/items | positive control: create for tenant A | 201
 pass | api | tenant B rows after tenant A's endpoint probes | 5 rows, all unchanged
 pass | GET /v1/items | list as tenant B | 200: all 5 own rows, nothing of tenant A
 pass | GET /v1/items | without a tenant | 403, nothing shown
-FAIL | GET /v1/items/{id} | tenant A's row as tenant B | 200 shows tenant A's data: ["canary-a-c1d7c703cde14075991d5c9478f4c90a"]
-FAIL | GET /v1/items/{id} | without a tenant | 200 shows tenant data: ["d66c960e-1b6a-4b3b-a2de-299d4917aab4", "canary-b-49f1e8ed71d2458fb0e95f8477dcbf50"]
+FAIL | GET /v1/items/{id} | tenant A's row as tenant B | 200 shows tenant A's data: ["canary-a-49131103c1aa4d839d1a23b5751f06a4"]
+FAIL | GET /v1/items/{id} | without a tenant | 200 shows tenant data: ["canary-b-53e949600a654e9cb929f1f2854839c5"]
 pass | GET /v1/items/{id} | positive control: own row as tenant B | 200
 pass | DELETE /v1/items/{id} | tenant A's row as tenant B | 404, nothing shown
 pass | DELETE /v1/items/{id} | without a tenant | 403, nothing shown
@@ -119,12 +118,12 @@ pass | DELETE /v1/items/{id} | tenant B's row as tenant A | 404, nothing shown
 pass | DELETE /v1/items/{id} | without a tenant | 403, nothing shown
 pass | DELETE /v1/items/{id} | positive control: own row as tenant A | 204
 FAIL | PUT /v1/items/{id} | tenant B's row as tenant A | expected 403 or 404 for another tenant's resource, got 200
-FAIL | PUT /v1/items/{id} | without a tenant | 200 shows tenant data: ["c935c120-ca76-4ec6-b501-90e73fe618ba"]
+FAIL | PUT /v1/items/{id} | without a tenant | expected a refusal, got 200
 pass | PUT /v1/items/{id} | positive control: own row as tenant A | 200
 pass | POST /v1/items | create for tenant B as tenant A | 201, nothing of tenant B shown (stored rows are compared after all probes)
 pass | POST /v1/items | without a tenant | 403, nothing shown
 pass | POST /v1/items | positive control: create for tenant A | 201
-FAIL | api | tenant B rows after tenant A's endpoint probes | changed by another tenant's requests: before ["example_items: (01a129f0-6b77-76d0-99be-1de785a392f8,8796085c-7843-4395-a895-5b6298a81bdc,canary-b-deb33c91604d48a8a6f66f77763a474f)"], after ["example_items: (01a129f0-6b77-76d0-99be-1de785a392f8,8796085c-7843-4395-a895-5b6298a81bdc,canary-a-171f05572f114261a2ff230ad961711c)"]
+FAIL | api | tenant B rows after tenant A's endpoint probes | changed by another tenant's requests: before ["example_items: (01a129ff-c613-7628-a753-330c0eef1050,4f898482-cde7-4410-911b-231f28dc4b7b,canary-b-9b3be42e3ddf4c5ab58f856273151f66)"], after ["example_items: (01a129ff-c613-7628-a753-330c0eef1050,4f898482-cde7-4410-911b-231f28dc4b7b,canary-a-2b7a69725d6843739058026f4b8898cf)"]
 pass | GET /v1/items | list as tenant B | 200: all 5 own rows, nothing of tenant A
 pass | GET /v1/items | without a tenant | 403, nothing shown
 pass | GET /v1/items/{id} | tenant A's row as tenant B | 404, nothing shown
@@ -134,12 +133,12 @@ pass | DELETE /v1/items/{id} | tenant A's row as tenant B | 404, nothing shown
 pass | DELETE /v1/items/{id} | without a tenant | 403, nothing shown
 pass | DELETE /v1/items/{id} | positive control: own row as tenant B | 204
 FAIL | PUT /v1/items/{id} | tenant A's row as tenant B | expected 403 or 404 for another tenant's resource, got 200
-FAIL | PUT /v1/items/{id} | without a tenant | 200 shows tenant data: ["2106c2e9-c336-4a70-89ab-3b05608d652b"]
+FAIL | PUT /v1/items/{id} | without a tenant | expected a refusal, got 200
 pass | PUT /v1/items/{id} | positive control: own row as tenant B | 200
 pass | POST /v1/items | create for tenant A as tenant B | 201, nothing of tenant A shown (stored rows are compared after all probes)
 pass | POST /v1/items | without a tenant | 403, nothing shown
 pass | POST /v1/items | positive control: create for tenant B | 201
-FAIL | api | tenant A rows after tenant B's endpoint probes | changed by another tenant's requests: before ["example_items: (01a129f0-6b77-76d0-99be-1de6d26e5dee,1bcb878e-f63e-4d19-bc84-6d1915d6a457,canary-a-19a9c7c9dce5428d9feb8bdb705d0a56)"], after ["example_items: (01a129f0-6b77-76d0-99be-1de6d26e5dee,1bcb878e-f63e-4d19-bc84-6d1915d6a457,canary-b-0cb572bc405c4acbb18d9eb2a06f1692)"]
+FAIL | api | tenant A rows after tenant B's endpoint probes | changed by another tenant's requests: before ["example_items: (01a129ff-c613-7628-a753-330bc706097a,72fcef6a-02a6-42b0-a4a0-ded8bdf6ef75,canary-a-2ab59093622445faa3d692835970ddce)"], after ["example_items: (01a129ff-c613-7628-a753-330bc706097a,72fcef6a-02a6-42b0-a4a0-ded8bdf6ef75,canary-b-ab77e2518d664f81a6d512341b0985ea)"]
 43 probes, 6 failed
 ok
 test the_example_fails_with_rls_off_and_passes_with_it_on ... == row-level security on
@@ -194,9 +193,9 @@ pass | public.example_items | coverage | declared table
 pass | example_items | seed | 5 rows per tenant
 FAIL | postgres | session as tenant A | refused the database session: table `public.example_items` has a tenant_id column but row-level security is not enabled
 FAIL | postgres | session as tenant B | refused the database session: table `public.example_items` has a tenant_id column but row-level security is not enabled
-FAIL | GET /v1/items | list as tenant A | 200 shows tenant B's data: ["3f1a6940-45f1-43fa-a3e3-4d9dc998e5df", "canary-b-07db713850724a218af008ecf0bf618a", "1adcfa9b-4303-44ab-b0b3-37fecbe35a38", "canary-b-ee9e6506494d45b19c4f8e42106dec59", "2d731935-1f53-4cea-841b-fadf22461132", "canary-b-2b5f289fac884a6d89a2efd01459ac72", "6f0b2d29-cc75-4ee4-8391-98776dd541b5", "canary-b-791e4d82d5c3470bb6a8ba1d64ce925d", "2ee9113f-6a1b-4282-81bd-8db868011f5f", "canary-b-0b13690abff84a2793577e39d06b765e"]
+FAIL | GET /v1/items | list as tenant A | 200 shows tenant B's data: ["ab2280be-c3af-41be-93c8-51801a4c4836", "canary-b-dd3846e1178a4056b62ec936c174bad3", "532a6a64-9001-4471-93b8-004e97eead77", "canary-b-0bb7c9185fec4078af279a3f47023d4e", "4c38b157-1936-4cf1-b1e6-325f679e2160", "canary-b-fb3070013dc04f02915f1e7dbdafd336", "a904c6f5-b497-4768-9a57-dab5c92d7d6f", "canary-b-55bfff0bdf2c49b48af3bec02d5e5244", "834afd91-5d18-49a6-9981-642509120ad6", "canary-b-0ba9328147944c6cbe2bf66e007f5701"]
 pass | GET /v1/items | without a tenant | 403, nothing shown
-FAIL | GET /v1/items/{id} | tenant B's row as tenant A | 200 shows tenant B's data: ["canary-b-07db713850724a218af008ecf0bf618a"]
+FAIL | GET /v1/items/{id} | tenant B's row as tenant A | 200 shows tenant B's data: ["canary-b-dd3846e1178a4056b62ec936c174bad3"]
 pass | GET /v1/items/{id} | without a tenant | 403, nothing shown
 pass | GET /v1/items/{id} | positive control: own row as tenant A | 200
 FAIL | DELETE /v1/items/{id} | tenant B's row as tenant A | expected 403 or 404 for another tenant's resource, got 204
@@ -208,10 +207,10 @@ pass | PUT /v1/items/{id} | positive control: own row as tenant A | 200
 pass | POST /v1/items | create for tenant B as tenant A | 201, nothing of tenant B shown (stored rows are compared after all probes)
 pass | POST /v1/items | without a tenant | 403, nothing shown
 pass | POST /v1/items | positive control: create for tenant A | 201
-FAIL | api | tenant B rows after tenant A's endpoint probes | changed by another tenant's requests: before ["example_items: (01a129f0-8b63-73fc-b153-f03b9c593559,1adcfa9b-4303-44ab-b0b3-37fecbe35a38,canary-b-ee9e6506494d45b19c4f8e42106dec59)", "example_items: (01a129f0-8b63-73fc-b153-f03b9c593559,2d731935-1f53-4cea-841b-fadf22461132,canary-b-2b5f289fac884a6d89a2efd01459ac72)"], after ["example_items: (01a129f0-8b63-73fc-b153-f03b9c593559,2d731935-1f53-4cea-841b-fadf22461132,canary-a-371ad7cff4de48879021042e4fbc337a)"]
-FAIL | GET /v1/items | list as tenant B | 200 shows tenant A's data: ["de95abe4-33e5-4671-95e0-9ae72e257dbe", "canary-a-f92229c63ab743e7a5fe9541b5e2e8ba", "76d0d1b8-e6c5-4507-9f28-6127f006970a", "6f6fa5f4-4667-4f16-99b1-983b7393f9d6", "canary-a-effc94062f1e4ac6975997bb66c78031", "d7c13179-5fd6-410e-a881-2a17ea2ef8b5", "canary-a-2a6654e2fbfd4eb389f8b91cd5e70f98"]
+FAIL | api | tenant B rows after tenant A's endpoint probes | changed by another tenant's requests: before ["example_items: (01a129ff-d9a5-75f7-84a7-e10e9658afea,4c38b157-1936-4cf1-b1e6-325f679e2160,canary-b-fb3070013dc04f02915f1e7dbdafd336)", "example_items: (01a129ff-d9a5-75f7-84a7-e10e9658afea,532a6a64-9001-4471-93b8-004e97eead77,canary-b-0bb7c9185fec4078af279a3f47023d4e)"], after ["example_items: (01a129ff-d9a5-75f7-84a7-e10e9658afea,4c38b157-1936-4cf1-b1e6-325f679e2160,canary-a-24fa5c09f3ab490aaf4958629dc4e8b2)"]
+FAIL | GET /v1/items | list as tenant B | 200 shows tenant A's data: ["4cc45cc0-0525-4107-af23-dfe7d810c455", "canary-a-7228e761342c40a1b2d4d74875c9bbfa", "15169eac-7165-4c0d-81f1-33a021d0e6a8", "6e35331d-6db1-44b9-9fdc-acc35448ccb5", "canary-a-fd5da6a49cca401d96663dcbd634e5dd", "7c13db0e-44d9-4b10-8d63-c26e123ab874", "canary-a-a49b0a87af57410fa5124a24c976a08f"]
 pass | GET /v1/items | without a tenant | 403, nothing shown
-FAIL | GET /v1/items/{id} | tenant A's row as tenant B | 200 shows tenant A's data: ["canary-a-f92229c63ab743e7a5fe9541b5e2e8ba"]
+FAIL | GET /v1/items/{id} | tenant A's row as tenant B | 200 shows tenant A's data: ["canary-a-7228e761342c40a1b2d4d74875c9bbfa"]
 pass | GET /v1/items/{id} | without a tenant | 403, nothing shown
 pass | GET /v1/items/{id} | positive control: own row as tenant B | 200
 FAIL | DELETE /v1/items/{id} | tenant A's row as tenant B | expected 403 or 404 for another tenant's resource, got 204
@@ -223,7 +222,7 @@ pass | PUT /v1/items/{id} | positive control: own row as tenant B | 200
 pass | POST /v1/items | create for tenant A as tenant B | 201, nothing of tenant A shown (stored rows are compared after all probes)
 pass | POST /v1/items | without a tenant | 403, nothing shown
 pass | POST /v1/items | positive control: create for tenant B | 201
-FAIL | api | tenant A rows after tenant B's endpoint probes | changed by another tenant's requests: before ["example_items: (01a129f0-8b63-73fc-b153-f03aa558639c,6f6fa5f4-4667-4f16-99b1-983b7393f9d6,canary-a-effc94062f1e4ac6975997bb66c78031)", "example_items: (01a129f0-8b63-73fc-b153-f03aa558639c,d7c13179-5fd6-410e-a881-2a17ea2ef8b5,canary-a-2a6654e2fbfd4eb389f8b91cd5e70f98)"], after ["example_items: (01a129f0-8b63-73fc-b153-f03aa558639c,d7c13179-5fd6-410e-a881-2a17ea2ef8b5,canary-b-bad1adf2ee73429bbab4e8d70caeca6e)"]
+FAIL | api | tenant A rows after tenant B's endpoint probes | changed by another tenant's requests: before ["example_items: (01a129ff-d9a5-75f7-84a7-e10d4fb0e689,6e35331d-6db1-44b9-9fdc-acc35448ccb5,canary-a-fd5da6a49cca401d96663dcbd634e5dd)", "example_items: (01a129ff-d9a5-75f7-84a7-e10d4fb0e689,7c13db0e-44d9-4b10-8d63-c26e123ab874,canary-a-a49b0a87af57410fa5124a24c976a08f)"], after ["example_items: (01a129ff-d9a5-75f7-84a7-e10d4fb0e689,7c13db0e-44d9-4b10-8d63-c26e123ab874,canary-b-9b642ffb6e0f45d5a69c0d6efa4ab746)"]
 34 probes, 12 failed
 == row-level security on again
 result | subject | probe | outcome
@@ -273,13 +272,13 @@ pass | api | tenant A rows after tenant B's endpoint probes | 6 rows, all unchan
 43 probes, 0 failed
 ok
 
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 32.48s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.85s
 
    Doc-tests testkit
 
 running 1 test
-test crates/testkit/src/isolation.rs - isolation::Suite (line 344) - compile ... ok
+test crates/testkit/src/isolation.rs - isolation::Suite (line 341) - compile ... ok
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-all doctests ran in 0.28s; merged doctests compilation took 0.27s
+all doctests ran in 0.25s; merged doctests compilation took 0.24s
