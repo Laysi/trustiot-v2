@@ -66,8 +66,28 @@ Mosquitto 映像宣告兩個 `VOLUME`，實驗把具名 volume 掛在 `/mosquitt
 
 fmt、兩次 clippy、`cargo test --workspace --locked`、`cargo test -p service-kit --no-default-features --locked`、openapi、deny、scripts 型別檢查與測試、chart（250 通過）、workflow 政策、secret handling、開發環境 e2e。
 
+### 2026-10-12：合併 main `dddd9ed` 之後
+
+main 在這段期間加入了身分服務（PR Laysi/trustiot-v2#305）。它的測試輔助程式 `services/identity/tests/support/mod.rs` 也以 `rm --force` 移除 Postgres 容器，沒有 `--volumes`。
+
+- 第一次在合併後的樹上跑：`tools/repo-check` 的 `test_containers_are_removed_together_with_their_volumes` 失敗，指出的就是這個檔案。這證明上面的保護有作用。
+  - `cargo test` 停在這個失敗的測試檔。
+  - 這個工作結束時，佇列清掉了 2 個跑期間變成 dangling 的 volume。
+  - 輸出在 `data/2026-10-11-334-test-container-volumes/merged-main-dddd9ed-first-run.txt`。
+- 修正：在那一處加上 `--volumes`，寫法與其他輔助程式相同。
+- 修正後重跑，全部通過：
+  - 環境：建置主機 ruisi-wsl（20 核，Docker），經 `rcheck.sh`，`CI=1`。
+  - 結果：
+    - `cargo fmt --all --check` 通過；
+    - `cargo clippy --workspace --all-targets --locked -- -D warnings` 通過；
+    - `cargo test --workspace --locked --no-fail-fast`：76 個測試執行檔，588 個測試通過，0 失敗；
+    - `bun run --cwd scripts typecheck` 通過；
+    - `bun test scripts`：527 個測試，1 個略過（podman e2e），0 失敗。
+  - volume：佇列在這個工作結束時檢查，跑期間變成 dangling 的 volume 是 0 個。
+  - 輸出在 `data/2026-10-11-334-test-container-volumes/merged-main-dddd9ed-checks.txt`。第一行 `ef67bd8` 是佇列在建置主機上為工作樹拍的快照 commit，不是本 repo 的 commit。
+
 ## 結論
 
 - 驗收 1（`CI=1 cargo test --workspace` 與 `bun test scripts` 之後 dangling volume 不變）：通過。兩次量測，名稱集合都沒有差異；修正前的對照則增加 11 個。
 - 驗收 2（新測試證明容器移除後 volume 都已刪除）：通過，見上。
-- 驗收 3（列出的位置都已修正，`CLAUDE.md` 已更新）：通過。已修正的位置：`crates/service-kit/tests/support/mod.rs`、`crates/testkit/src/container.rs`、`crates/outbox/tests/support/mod.rs`、`crates/protocol/tests/broker.rs`、`services/ingest/tests/common/mod.rs`、`scripts/lib/commands.ts`（`down`、`purge`、`up` 重啟共用的 `removeContainers`）與 `scripts/tests/e2e.test.ts` 的探針容器。`crates/service-kit/tests/{container,verify_container}.rs` 的 `Image::drop` 用 `rmi`，不涉及容器的 volume。
+- 驗收 3（列出的位置都已修正，`CLAUDE.md` 已更新）：通過。已修正的位置：`crates/service-kit/tests/support/mod.rs`、`crates/testkit/src/container.rs`、`crates/outbox/tests/support/mod.rs`、`crates/protocol/tests/broker.rs`、`services/ingest/tests/common/mod.rs`、`services/identity/tests/support/mod.rs`（2026-10-12 合併 main 後補上）、`scripts/lib/commands.ts`（`down`、`purge`、`up` 重啟共用的 `removeContainers`）與 `scripts/tests/e2e.test.ts` 的探針容器。`crates/service-kit/tests/{container,verify_container}.rs` 的 `Image::drop` 用 `rmi`，不涉及容器的 volume。

@@ -1,0 +1,15 @@
+ef67bd8
+== fmt
+ok
+== clippy
+    Checking identity v0.1.0 (/home/ruisi/tv2/agents/334-33ff0d47/src/services/identity)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.81s
+== cargo test --workspace
+76 test binaries: 588 passed, 0 failed, 0 ignored
+== scripts
+$ tsc --noEmit --project tsconfig.json
+ 1 skip
+ 0 fail
+ 1605 expect() calls
+Ran 527 tests across 20 files. [1389.00ms]
+rcheck: removed 0 dangling test volumes
