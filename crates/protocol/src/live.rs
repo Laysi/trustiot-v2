@@ -10,8 +10,10 @@
 
 use std::collections::HashSet;
 
+use serde::de::{DeserializeOwned, IgnoredAny};
 use serde::{Deserialize, Serialize};
 
+use crate::codec::sealed::Token;
 use crate::codec::{
     self, DecodeError, EncodeError, Invalid, IssueCode, Issues, Message, V1, encoded_len, head_len,
 };
@@ -39,7 +41,8 @@ pub struct LiveControl {
     pub action: LiveAction,
 }
 
-/// What to do with a lease. Encoded as a map whose `op` names the variant.
+/// What to do with a lease. Encoded as a map whose `op` names the variant; [`crate::decode`]
+/// reads the operation first and then only the fields of that variant.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum LiveAction {
@@ -97,20 +100,24 @@ impl Message for LiveControl {
             );
         }
         if spec.devices.len() > MAX_LIVE_DEVICES {
+            // Repeats are listed only within the limit. A 64 KiB payload holds about 32,000
+            // two-byte device IDs; an issue for each repeat cost about 180 bytes per payload
+            // byte (Laysi/trustiot-v2#290), and the list is refused anyway.
             issues.push(
                 IssueCode::TooMany,
                 "action.devices",
                 format!("at most {MAX_LIVE_DEVICES} devices per lease"),
             );
-        }
-        let mut seen = HashSet::with_capacity(spec.devices.len());
-        for (index, device) in spec.devices.iter().enumerate() {
-            if !seen.insert(device) {
-                issues.push(
-                    IssueCode::Duplicate,
-                    format!("action.devices[{index}]"),
-                    format!("device {device} is listed twice"),
-                );
+        } else {
+            let mut seen = HashSet::with_capacity(spec.devices.len());
+            for (index, device) in spec.devices.iter().enumerate() {
+                if !seen.insert(device) {
+                    issues.push(
+                        IssueCode::Duplicate,
+                        format!("action.devices[{index}]"),
+                        format!("device {device} is listed twice"),
+                    );
+                }
             }
         }
         if !(MIN_LIVE_INTERVAL_MS..=MAX_LIVE_INTERVAL_MS).contains(&spec.interval_ms) {
@@ -139,6 +146,73 @@ impl Message for LiveControl {
             ));
         }
         Ok(())
+    }
+
+    /// Reads `action.op` first, then decodes the payload with the fields of the operation it
+    /// names, so that no entry of the action map is buffered (Laysi/trustiot-v2#290). Both
+    /// passes skip unknown keys without building anything; each refuses a repeated field, as a
+    /// single pass would.
+    fn decode_item(payload: &[u8], _: Token) -> Result<Self, DecodeError> {
+        /// The operation names of [`LiveAction`], read like serde reads them for the derived
+        /// enum: an unknown name is [`LiveAction::Unknown`].
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum Op {
+            Start,
+            Renew,
+            Stop,
+            #[serde(other)]
+            Unknown,
+        }
+
+        #[derive(Deserialize)]
+        struct Probe {
+            action: ActionProbe,
+        }
+
+        #[derive(Deserialize)]
+        struct ActionProbe {
+            op: Op,
+        }
+
+        let Probe {
+            action: ActionProbe { op },
+        } = codec::from_slice(payload)?;
+        match op {
+            Op::Start => LiveWire::decode(payload, LiveAction::Start),
+            Op::Renew => LiveWire::decode(payload, LiveAction::Renew),
+            Op::Stop => LiveWire::decode(payload, |IgnoredAny| LiveAction::Stop),
+            Op::Unknown => LiveWire::decode(payload, |IgnoredAny| LiveAction::Unknown),
+        }
+    }
+}
+
+/// A [`LiveControl`] whose action holds the fields `F` of one [`LiveAction`] variant: the
+/// second decoding pass, once the operation is known. [`LiveWire::decode`] takes it apart and
+/// builds the [`LiveControl`] field by field, so a field added to one and not the other does
+/// not compile.
+#[derive(Deserialize)]
+struct LiveWire<F> {
+    v: V1,
+    lease: LeaseId,
+    action: F,
+}
+
+impl<F: DeserializeOwned> LiveWire<F> {
+    fn decode(
+        payload: &[u8],
+        action: impl FnOnce(F) -> LiveAction,
+    ) -> Result<LiveControl, DecodeError> {
+        let Self {
+            v,
+            lease,
+            action: fields,
+        } = codec::from_slice(payload)?;
+        Ok(LiveControl {
+            v,
+            lease,
+            action: action(fields),
+        })
     }
 }
 

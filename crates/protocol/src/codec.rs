@@ -12,7 +12,9 @@
 //!   fields (they take their default).
 //!
 //! A declared item count never sizes an allocation by itself: arrays reserve at most
-//! [`SEQ_PREALLOC_BYTES`] up front and grow with the items that actually decode.
+//! [`SEQ_PREALLOC_BYTES`] up front and grow with the items that actually decode. Unknown keys are
+//! skipped without building anything, also in the maps of internally tagged enums, which
+//! [`decode`] reads in two passes: the tag, then the fields of the variant it names.
 
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
@@ -93,6 +95,25 @@ pub trait Message: Serialize + DeserializeOwned {
     fn validate_outgoing(&self) -> Result<(), Invalid> {
         Ok(())
     }
+
+    /// Deserializes the CBOR item of a payload whose size and version [`decode`] has checked.
+    /// The default deserializes `Self` in one pass. A message that holds an internally tagged
+    /// enum (`Status`, `TelemetryAck`, `LiveControl`) overrides it to decode in two phases:
+    /// first only the tag, then the fields of the variant it names. Serde's own `Deserialize`
+    /// for such an enum buffers every other entry of the map before it looks at the tag
+    /// (Laysi/trustiot-v2#290). The `sealed::Token` argument keeps other crates from calling
+    /// it, which would skip the size, version and validation checks, and from overriding it.
+    #[doc(hidden)]
+    fn decode_item(payload: &[u8], _: sealed::Token) -> Result<Self, DecodeError> {
+        from_slice(payload)
+    }
+}
+
+pub(crate) mod sealed {
+    /// Proof that a call to `Message::decode_item` comes from this crate. Other crates
+    /// cannot name this type, so they can neither call that method nor override it.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Token;
 }
 
 /// Validates `message` and encodes it as CBOR within its channel's size limit.
@@ -126,7 +147,7 @@ pub fn decode<M: Message>(payload: &[u8]) -> Result<M, DecodeError> {
         });
     }
     check_version(payload)?;
-    let message: M = from_slice(payload)?;
+    let message = M::decode_item(payload, sealed::Token)?;
     message.validate().map_err(DecodeError::Invalid)?;
     Ok(message)
 }

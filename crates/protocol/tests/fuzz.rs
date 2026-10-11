@@ -27,7 +27,7 @@ mod common;
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::{Duration, Instant};
@@ -131,6 +131,9 @@ struct Outcome {
     peak: usize,
     /// A broken invariant.
     violation: Option<String>,
+    /// The encoding features that explain why the two-pass and the single-pass decoder of an
+    /// internally tagged message disagree on this input (see [`run_tagged`]).
+    single_pass_delta: Option<String>,
 }
 
 fn violation(text: impl Into<String>) -> Outcome {
@@ -198,16 +201,217 @@ fn run<M: Message + PartialEq + Debug>(payload: &[u8]) -> Outcome {
 
 type Runner = fn(&[u8]) -> Outcome;
 
+/// [`run`], and for a message that holds an internally tagged enum, which `decode` reads in two
+/// passes (Laysi/trustiot-v2#290), a comparison with serde's single pass, which `decode` used
+/// before: both must accept the same message or refuse with the same kind of error, unless the
+/// input uses an encoding that the single pass reads differently from every other message map
+/// ([`single_pass_features`]).
+fn run_tagged<M: Message + PartialEq + Debug>(payload: &[u8]) -> Outcome {
+    let mut outcome = run::<M>(payload);
+    if outcome.violation.is_some() {
+        return outcome;
+    }
+    if let Some(problem) = single_pass_disagrees::<M>(payload) {
+        let features = single_pass_features(payload);
+        if features.is_empty() {
+            outcome.violation = Some(problem);
+        } else {
+            outcome.single_pass_delta = Some(features.into_iter().collect::<Vec<_>>().join(" + "));
+        }
+    }
+    outcome
+}
+
+/// What `decode` returned before Laysi/trustiot-v2#290: the same checks before the message
+/// body, then serde's single pass over the whole payload, which buffers the tagged map, then
+/// validation. `None` when a check before the message body refuses the payload: both decoders
+/// share those checks.
+fn single_pass<M: Message>(payload: &[u8]) -> Option<Result<M, DecodeError>> {
+    #[derive(serde::Deserialize)]
+    struct Major {
+        v: u64,
+    }
+    #[derive(serde::Deserialize)]
+    struct Revision {
+        #[serde(default)]
+        rev: Option<u64>,
+    }
+    if payload.is_empty() || payload.len() > M::CHANNEL.max_payload_bytes() {
+        return None;
+    }
+    let facts = structure_facts(payload).ok()?;
+    if facts.depth > MAX_NESTING || facts.chunked_string {
+        return None;
+    }
+    let major: Major = cbor4ii::serde::from_slice(payload).ok()?;
+    let revision: Revision = cbor4ii::serde::from_slice(payload).ok()?;
+    if major.v != 1 || revision.rev.unwrap_or(0) > u64::from(protocol::PROTOCOL_REVISION) {
+        return None;
+    }
+    Some(
+        cbor4ii::serde::from_slice::<M>(payload)
+            .map_err(|error| DecodeError::Malformed(error.to_string()))
+            .and_then(|message| {
+                message
+                    .validate()
+                    .map(|()| message)
+                    .map_err(DecodeError::Invalid)
+            }),
+    )
+}
+
+/// Whether two-pass `decode` and serde's single pass disagree on `payload`: one accepts and the
+/// other refuses, they accept different messages, or one finds the payload malformed and the
+/// other invalid.
+fn single_pass_disagrees<M: Message + PartialEq + Debug>(payload: &[u8]) -> Option<String> {
+    let two_pass = decode::<M>(payload);
+    let Some(single) = single_pass::<M>(payload) else {
+        return two_pass
+            .is_ok()
+            .then(|| "accepted a payload the shared checks refuse".to_owned());
+    };
+    let class = |result: &Result<M, DecodeError>| match result {
+        Ok(_) => "accepted",
+        Err(DecodeError::Invalid(_)) => "invalid",
+        Err(_) => "malformed",
+    };
+    match (&two_pass, &single) {
+        (Ok(two), Ok(one)) if two == one => None,
+        (Err(_), Err(_)) if class(&two_pass) == class(&single) => None,
+        _ => Some(format!(
+            "two passes give {two_pass:?}, a single pass {single:?}"
+        )),
+    }
+}
+
+/// The encodings in `payload` that serde's single pass over an internally tagged enum reads
+/// differently from how this crate decodes every other message map, and so from the two
+/// passes. The single pass goes through serde's buffered `Content`, which
+///
+/// - "non-text key": reads an integer key as a field index and skips a byte string key, where
+///   other maps refuse both;
+/// - "byte string": reads a UTF-8 byte string as text, where other maps refuse it;
+/// - "wide integer": accepts an integer encoded wider than its field (a `u32` in 8 bytes),
+///   where other maps refuse it;
+/// - "array": reads the enum from an array whose first item is the tag, where other maps
+///   refuse an array;
+/// - "item serde cannot buffer": refuses a tag, a simple value other than false, true, null
+///   and undefined, or a negative integer below `i64::MIN`, even in an entry it would skip,
+///   where other maps skip it.
+fn single_pass_features(payload: &[u8]) -> BTreeSet<&'static str> {
+    fn walk(rest: &mut &[u8], key: bool, features: &mut BTreeSet<&'static str>) -> Option<()> {
+        let (&initial, tail) = rest.split_first()?;
+        *rest = tail;
+        let (major, info) = (initial >> 5, initial & 0x1f);
+        let width = match info {
+            0..=23 => 0,
+            24 => 1,
+            25 => 2,
+            26 => 4,
+            27 => 8,
+            31 => usize::MAX,
+            _ => return None,
+        };
+        let argument = if width == usize::MAX {
+            None
+        } else if width == 0 {
+            Some(u64::from(info))
+        } else {
+            let (bytes, tail) = rest.split_at_checked(width)?;
+            *rest = tail;
+            Some(
+                bytes
+                    .iter()
+                    .fold(0, |acc, byte| (acc << 8) | u64::from(*byte)),
+            )
+        };
+        if key && major != 3 {
+            features.insert("non-text key");
+        }
+        let items = |rest: &mut &[u8], features: &mut BTreeSet<&'static str>, map: bool| {
+            match argument {
+                Some(count) => {
+                    for _ in 0..count {
+                        walk(rest, map, features)?;
+                        if map {
+                            walk(rest, false, features)?;
+                        }
+                    }
+                }
+                None => {
+                    while rest.first() != Some(&0xff) {
+                        walk(rest, map, features)?;
+                        if map {
+                            walk(rest, false, features)?;
+                        }
+                    }
+                    *rest = rest.get(1..)?;
+                }
+            }
+            Some(())
+        };
+        match major {
+            0 | 1 => {
+                let value = argument?;
+                let shortest = match value {
+                    0..=23 => 0,
+                    24..=0xff => 1,
+                    0x100..=0xffff => 2,
+                    0x1_0000..=0xffff_ffff => 4,
+                    _ => 8,
+                };
+                if width > shortest {
+                    features.insert("wide integer");
+                }
+                if major == 1 && value > i64::MAX.unsigned_abs() {
+                    features.insert("item serde cannot buffer");
+                }
+            }
+            2 | 3 => {
+                if major == 2 {
+                    features.insert("byte string");
+                }
+                let length = usize::try_from(argument?).ok()?;
+                *rest = rest.get(length..)?;
+            }
+            4 => items(rest, features, false)?,
+            5 => items(rest, features, true)?,
+            6 => {
+                features.insert("item serde cannot buffer");
+                walk(rest, false, features)?;
+            }
+            _ => {
+                if !matches!(info, 20..=23 | 25..=27) {
+                    features.insert("item serde cannot buffer");
+                }
+            }
+        }
+        Some(())
+    }
+    let mut features = BTreeSet::new();
+    let _ = walk(&mut &payload[..], false, &mut features);
+    if let Ok(Cbor::Map(entries)) = cbor4ii::serde::from_slice::<Cbor>(payload) {
+        let enum_as_array = entries.iter().any(|(name, value)| {
+            matches!(name, Cbor::Text(name) if name == "outcome" || name == "action")
+                && matches!(value, Cbor::Array(_))
+        });
+        if enum_as_array {
+            features.insert("array");
+        }
+    }
+    features
+}
+
 fn runner(name: &str) -> Runner {
     match name {
         "telemetry" => run::<TelemetryBatch>,
-        n if n.starts_with("telemetry-ack") => run::<TelemetryAck>,
+        n if n.starts_with("telemetry-ack") => run_tagged::<TelemetryAck>,
         "config" => run::<DesiredConfig>,
         n if n.starts_with("config-report") => run::<ConfigReport>,
-        n if n.starts_with("status") => run::<Status>,
+        n if n.starts_with("status") => run_tagged::<Status>,
         "heartbeat" => run::<Heartbeat>,
         "live" => run::<LiveSamples>,
-        n if n.starts_with("live-control") => run::<LiveControl>,
+        n if n.starts_with("live-control") => run_tagged::<LiveControl>,
         "log" => run::<LogBatch>,
         "log-request" => run::<LogRequest>,
         "log-dump" => run::<LogDump>,
@@ -1047,6 +1251,7 @@ struct Totals {
     worst_ratio_input: String,
     notes: BTreeSet<String>,
     widened: u64,
+    single_pass_deltas: BTreeMap<String, u64>,
 }
 
 #[test]
@@ -1107,6 +1312,9 @@ fn decoders_survive_hostile_payloads() {
                 )),
                 Ok((outcome, peek)) => {
                     totals.accepted += u64::from(outcome.accepted);
+                    if let Some(delta) = &outcome.single_pass_delta {
+                        *totals.single_pass_deltas.entry(delta.clone()).or_default() += 1;
+                    }
                     let ratio = outcome.peak as f64 / payload.len().max(1) as f64;
                     if ratio > totals.max_peak_ratio && payload.len() > 64 {
                         totals.max_peak_ratio = ratio;
@@ -1165,6 +1373,10 @@ fn decoders_survive_hostile_payloads() {
     println!(
         "accepted messages that no longer fit after re-encoding: {}",
         totals.widened
+    );
+    println!(
+        "tagged messages on which two passes and serde's single pass disagree, by encoding feature: {:?}",
+        totals.single_pass_deltas
     );
     for note in &totals.notes {
         println!("note: {note}");
@@ -1456,4 +1668,369 @@ fn a_hostile_array_count_reserves_at_most_a_bounded_amount() {
         worst > SEQ_PREALLOC_BYTES / 2,
         "the probe no longer reserves anything: {worst}"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Internally tagged enums
+
+/// The shortest CBOR head of `major` type with argument `count`.
+fn cbor_head(major: u8, count: usize) -> Vec<u8> {
+    let major = major << 5;
+    match u32::try_from(count).unwrap() {
+        small @ 0..=23 => vec![major | u8::try_from(small).unwrap()],
+        byte @ 24..=0xff => vec![major | 24, u8::try_from(byte).unwrap()],
+        short @ 0x100..=0xffff => [
+            &[major | 25][..],
+            &u16::try_from(short).unwrap().to_be_bytes(),
+        ]
+        .concat(),
+        long => [&[major | 26][..], &long.to_be_bytes()].concat(),
+    }
+}
+
+/// CBOR items of at most `size` bytes (`size` ≥ 8) that cost a decoder the most per byte: many
+/// tiny items in definite and indefinite containers, short identifiers, and one long text.
+fn bulky_values(size: usize) -> Vec<(&'static str, Vec<u8>)> {
+    let definite = |major: u8, item: &[u8]| {
+        let mut count = size / item.len();
+        while cbor_head(major, count).len() + count * item.len() > size {
+            count -= 1;
+        }
+        [cbor_head(major, count), item.repeat(count)].concat()
+    };
+    let indefinite = |open: u8, item: &[u8]| {
+        let count = (size - 2) / item.len();
+        [&[open][..], &item.repeat(count), &[0xff]].concat()
+    };
+    vec![
+        ("array of 0", definite(4, &[0x00])),
+        ("indefinite array of 0", indefinite(0x9f, &[0x00])),
+        ("indefinite array of []", indefinite(0x9f, &[0x80])),
+        ("indefinite array of [0]", indefinite(0x9f, &[0x81, 0x00])),
+        ("indefinite map of 0: 0", indefinite(0xbf, &[0x00, 0x00])),
+        ("array of \"a\"", definite(4, &[0x61, b'a'])),
+        ("indefinite array of \"a\"", indefinite(0x9f, &[0x61, b'a'])),
+        ("text", definite(3, b"a")),
+    ]
+}
+
+/// Payload sizes to probe up to `limit`: sizes just past a power of two, where a growing buffer
+/// has just doubled, and the limit itself.
+fn probe_sizes(limit: usize) -> Vec<usize> {
+    let mut sizes: Vec<usize> = (5..usize::BITS)
+        .map(|bits| (1usize << bits) + 8)
+        .take_while(|size| *size < limit)
+        .collect();
+    sizes.push(limit);
+    sizes
+}
+
+/// Where an internally tagged enum sits in a message: the map that holds the tag (the payload,
+/// or the map under `parent`) and the tag's key.
+#[derive(Clone, Copy)]
+struct Tagged {
+    parent: Option<&'static str>,
+    tag: &'static str,
+}
+
+/// `payload` with `key` in its tagged map set to the encoded item `raw`: an existing key
+/// keeps its place, a new one goes right before the tag or after every entry.
+fn with_raw_entry(
+    payload: &[u8],
+    tagged: Tagged,
+    key: &str,
+    raw: &[u8],
+    before_tag: bool,
+) -> Vec<u8> {
+    const MARKER: &str = "raw-entry-marker";
+    let text = |value: &str| Cbor::Text(value.to_owned());
+    let mut tree: Cbor = cbor4ii::serde::from_slice(payload).unwrap();
+    let mut map = &mut tree;
+    if let Some(parent) = tagged.parent {
+        let Cbor::Map(entries) = map else {
+            panic!("a message is a map")
+        };
+        map = &mut entries
+            .iter_mut()
+            .find(|(name, _)| *name == text(parent))
+            .unwrap()
+            .1;
+    }
+    let Cbor::Map(entries) = map else {
+        panic!("an internally tagged enum is a map")
+    };
+    if let Some(entry) = entries.iter_mut().find(|(name, _)| *name == text(key)) {
+        entry.1 = text(MARKER);
+    } else {
+        let tag_at = entries
+            .iter()
+            .position(|(name, _)| *name == text(tagged.tag))
+            .unwrap();
+        let at = if before_tag { tag_at } else { entries.len() };
+        entries.insert(at, (text(key), text(MARKER)));
+    }
+    let template = encode_value(&tree).unwrap();
+    let needle = encode_value(&text(MARKER)).unwrap();
+    let at = template
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .unwrap();
+    [&template[..at], raw, &template[at + needle.len()..]].concat()
+}
+
+/// What decoding one bulky payload allocated.
+struct TaggedProbe {
+    /// The payload, described.
+    input: String,
+    length: usize,
+    /// The peak while `decode` ran.
+    decode: usize,
+    /// The peak while serde's single-pass `Deserialize` ran, which buffers the tagged map.
+    serde: usize,
+}
+
+impl TaggedProbe {
+    fn decode_factor(&self) -> f64 {
+        self.decode as f64 / self.length as f64
+    }
+
+    fn serde_factor(&self) -> f64 {
+        self.serde as f64 / self.length as f64
+    }
+}
+
+/// Decodes `plain` with every bulky value in its tagged map, under the unknown key `future`
+/// and under each of `known` keys, at every probe size and on both sides of the tag. An unknown
+/// entry must leave the decoded message and the allocation exactly as without it.
+fn probe_tagged<M: Message + PartialEq + Debug>(
+    plain: &[u8],
+    tagged: Tagged,
+    known: &[&str],
+) -> Vec<TaggedProbe> {
+    let (sample, baseline) = peak_during(|| decode::<M>(plain).unwrap());
+    let sample = &sample;
+    let mut probes = Vec::new();
+    let limit = M::CHANNEL.max_payload_bytes();
+    for key in std::iter::once(&"future").chain(known) {
+        let overhead = with_raw_entry(plain, tagged, key, &[0x00], true).len() - 1;
+        for size in probe_sizes(limit - overhead) {
+            for (shape, raw) in bulky_values(size) {
+                for before_tag in [true, false] {
+                    let payload = with_raw_entry(plain, tagged, key, &raw, before_tag);
+                    assert!(payload.len() <= limit, "{key} {shape} {size}");
+                    let (result, peak) = peak_during(|| decode::<M>(&payload));
+                    let (_, serde_peak) =
+                        peak_during(|| cbor4ii::serde::from_slice::<M>(&payload).is_ok());
+                    if *key == "future" {
+                        assert_eq!(result.as_ref().ok(), Some(sample), "{}", hex(&payload));
+                        assert_eq!(
+                            peak,
+                            baseline,
+                            "an unknown {shape} of {} bytes {} the tag changed what decoding allocates",
+                            raw.len(),
+                            if before_tag { "before" } else { "after" }
+                        );
+                    }
+                    probes.push(TaggedProbe {
+                        input: format!(
+                            "{key} = {shape} ({} bytes, {} the tag)",
+                            raw.len(),
+                            if before_tag { "before" } else { "after" }
+                        ),
+                        length: payload.len(),
+                        decode: peak,
+                        serde: serde_peak,
+                    });
+                }
+            }
+        }
+    }
+    probes
+}
+
+/// The most a tagged channel's `decode` may allocate over the probes of
+/// [`tagged_maps_decode_in_two_passes_without_buffering`].
+struct TaggedBound {
+    channel: &'static str,
+    /// Bytes per payload byte, over payloads of at least 1 KiB (below that, the fixed cost of
+    /// a few short strings dominates the ratio).
+    factor: f64,
+    /// Bytes, over every payload.
+    peak: usize,
+}
+
+/// `Status`, `AckOutcome` and `LiveAction` are internally tagged: a field of their map names the
+/// variant. Serde's derived `Deserialize` for such an enum buffers every other entry of the map
+/// before it reads the tag, at tens of bytes per payload byte, so `decode` reads these messages
+/// in two passes instead: the tag, then the fields of the variant it names
+/// (Laysi/trustiot-v2#290). Over bulky unknown entries and the bulkiest values of the known
+/// fields, at sizes up to the channel limit, this test pins that
+///
+/// - an unknown entry, however bulky and on either side of the tag, allocates nothing and does
+///   not change the decoded message;
+/// - decoding allocates at most the measured factor and peak of each channel;
+/// - serde's single pass would have buffered the same payloads, so the probe stays meaningful.
+#[test]
+fn tagged_maps_decode_in_two_passes_without_buffering() {
+    // Measured on 2026-10-11 (docs/test-reports/2026-10-11-290-two-phase-tagged-decode.md).
+    let bounds = [
+        TaggedBound {
+            channel: "status",
+            factor: 1.5,
+            peak: 4608,
+        },
+        TaggedBound {
+            channel: "telemetry-ack",
+            factor: 1.5,
+            peak: 4608,
+        },
+        TaggedBound {
+            channel: "live-control",
+            factor: 40.0,
+            peak: 1_700_000,
+        },
+    ];
+
+    let status = Tagged {
+        parent: None,
+        tag: "state",
+    };
+    let outcome = Tagged {
+        parent: Some("outcome"),
+        tag: "status",
+    };
+    let action = Tagged {
+        parent: Some("action"),
+        tag: "op",
+    };
+    // An acknowledgement with a status from a newer peer, which decodes as `Unknown`.
+    let deferred = with_raw_entry(
+        &encode(&common::ack_committed()).unwrap(),
+        outcome,
+        "status",
+        b"\x68deferred",
+        true,
+    );
+    let decoded: TelemetryAck = decode(&deferred).unwrap();
+    assert_eq!(decoded.outcome, protocol::telemetry::AckOutcome::Unknown);
+
+    let probes: [Vec<TaggedProbe>; 3] = [
+        [
+            probe_tagged::<Status>(
+                &encode(&common::status_online()).unwrap(),
+                status,
+                &["session", "agent_version"],
+            ),
+            probe_tagged::<Status>(
+                &encode(&common::status_offline()).unwrap(),
+                status,
+                &["session", "reason"],
+            ),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+        [
+            probe_tagged::<TelemetryAck>(
+                &encode(&common::ack_committed()).unwrap(),
+                outcome,
+                &["records"],
+            ),
+            probe_tagged::<TelemetryAck>(
+                &encode(&common::ack_duplicate()).unwrap(),
+                outcome,
+                &["records"],
+            ),
+            probe_tagged::<TelemetryAck>(
+                &encode(&common::ack_rejected()).unwrap(),
+                outcome,
+                &["code", "message"],
+            ),
+            probe_tagged::<TelemetryAck>(
+                &encode(&common::ack_retry()).unwrap(),
+                outcome,
+                &["after_ms"],
+            ),
+            probe_tagged::<TelemetryAck>(&deferred, outcome, &[]),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+        [
+            probe_tagged::<LiveControl>(
+                &encode(&common::live_start()).unwrap(),
+                action,
+                &["devices"],
+            ),
+            probe_tagged::<LiveControl>(
+                &encode(&common::live_renew()).unwrap(),
+                action,
+                &["devices"],
+            ),
+            probe_tagged::<LiveControl>(&encode(&common::live_stop()).unwrap(), action, &[]),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    ];
+
+    let mut failures = Vec::new();
+    for (bound, probes) in bounds.iter().zip(&probes) {
+        let channel = bound.channel;
+        let by = |key: fn(&TaggedProbe) -> f64| {
+            probes
+                .iter()
+                .filter(|probe| probe.length >= 1024)
+                .max_by(|a, b| key(a).total_cmp(&key(b)))
+                .unwrap()
+        };
+        let factor = by(TaggedProbe::decode_factor);
+        let peak = probes.iter().max_by_key(|probe| probe.decode).unwrap();
+        let serde = by(TaggedProbe::serde_factor);
+        println!(
+            "{channel}: {} payloads of {} to {} bytes",
+            probes.len(),
+            probes.iter().map(|probe| probe.length).min().unwrap(),
+            probes.iter().map(|probe| probe.length).max().unwrap(),
+        );
+        println!(
+            "  decode: at most {:.2}x from 1 KiB up ({}, {} bytes for {}); peak {} bytes ({}, {} bytes)",
+            factor.decode_factor(),
+            factor.input,
+            factor.decode,
+            factor.length,
+            peak.decode,
+            peak.input,
+            peak.length,
+        );
+        println!(
+            "  serde's single pass: at most {:.1}x ({}, {} bytes for {}); peak {} bytes",
+            serde.serde_factor(),
+            serde.input,
+            serde.serde,
+            serde.length,
+            probes.iter().map(|probe| probe.serde).max().unwrap(),
+        );
+        if factor.decode_factor() > bound.factor {
+            failures.push(format!(
+                "{channel}: {:.2}x exceeds the pinned {}x ({})",
+                factor.decode_factor(),
+                bound.factor,
+                factor.input
+            ));
+        }
+        if peak.decode > bound.peak {
+            failures.push(format!(
+                "{channel}: a peak of {} bytes exceeds the pinned {} ({})",
+                peak.decode, bound.peak, peak.input
+            ));
+        }
+        if serde.serde_factor() < 16.0 {
+            failures.push(format!(
+                "{channel}: serde's single pass buffers only {:.1}x; the probe proves nothing",
+                serde.serde_factor()
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
