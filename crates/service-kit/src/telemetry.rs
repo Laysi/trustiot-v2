@@ -28,7 +28,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use crate::ServiceInfo;
 use crate::config::Invalid;
 
-use self::log_layer::{LineSink, LogLayer, Stdout};
+use self::log_layer::{LineSink, LogLayer, Stdout, sdk_diagnostic_suppressed};
 pub use self::redact::{REDACTED, is_sensitive};
 
 /// `telemetry.*`: logs and traces.
@@ -245,7 +245,9 @@ fn span_enabled(metadata: &Metadata<'_>) -> bool {
     metadata.is_span() && *metadata.level() <= Level::INFO
 }
 
-/// The log layer's filter: spans as above, events by the configured directives.
+/// The log layer's filter: spans as above, events by the configured directives, except that
+/// the OpenTelemetry SDK's diagnostics below INFO are always dropped (they can print the OTLP
+/// endpoint's path; see [`sdk_diagnostic_suppressed`]).
 struct LogFilter {
     targets: Targets,
 }
@@ -255,8 +257,10 @@ impl<S> Filter<S> for LogFilter {
         if metadata.is_span() {
             span_enabled(metadata)
         } else {
-            self.targets
-                .would_enable(metadata.target(), metadata.level())
+            !sdk_diagnostic_suppressed(metadata.target(), metadata.level())
+                && self
+                    .targets
+                    .would_enable(metadata.target(), metadata.level())
         }
     }
 

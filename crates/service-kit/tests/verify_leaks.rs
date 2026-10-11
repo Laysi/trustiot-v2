@@ -296,7 +296,8 @@ fn nothing_a_request_carries_reaches_logs_or_otlp_on_any_path() {
 fn an_unreachable_collector_url_with_a_secret_path_does_not_reach_stdout() {
     // The SDK reports failed exports through its own diagnostics on stdout. A collector URL may
     // carry a token in its path, so the diagnostics must not repeat it. At the default filter
-    // (`info`) they do not; at `debug` the SDK logs the full URL (see the verification report).
+    // (`info`) they do not; below `info` the kit drops them (`tests/otlp.rs` covers `debug` and
+    // `trace`).
     let mut service = Service::start(&[(
         "TRUSTIOT__TELEMETRY__OTLP_ENDPOINT",
         "http://127.0.0.1:9/canary-endpoint-path-4a7b",
