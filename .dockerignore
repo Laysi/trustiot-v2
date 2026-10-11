@@ -1,0 +1,6 @@
+# The repository root is never a container build context: it holds .git, local .env files
+# and keys that must not reach a build (Laysi/trustiot#120). Image builds use their own
+# directory or a generated directory as the context (docs/architecture/secrets.md).
+# podman reads this file too when there is no .containerignore.
+# scripts/ci/check-secret-handling.ts keeps "*" as the first pattern.
+*

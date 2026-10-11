@@ -232,6 +232,11 @@ jobs:
           tools: bun helm actionlint
       - name: Check workflow permissions and action pinning
         run: bun scripts/ci/check-workflows.ts
+      # Container build files, build arguments, secrets in run scripts and Secret manifests
+      # (docs/architecture/secrets.md); covers every Dockerfile or Containerfile in the repo.
+      - name: Check secret handling
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun scripts/ci/check-secret-handling.ts
       # What GitHub itself would reject when it parses a workflow, for example a context that
       # is not available at that key. Without this, such a file only fails when it is triggered.
       - name: Lint workflows with actionlint
