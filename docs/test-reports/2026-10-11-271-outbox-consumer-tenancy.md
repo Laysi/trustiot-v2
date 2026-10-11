@@ -70,7 +70,35 @@ platform role read 3 events (tenant A, tenant B, platform-wide); each handler ra
 | --- | --- | --- |
 | 消費端以平台角色讀取 RLS 下的 `outbox_event`，讀得到所有租戶的事件；以服務角色連線時被 service-kit 拒絕（測試，真 Postgres） | 通過 | `tenancy.rs`：`the_platform_role_reads_every_tenant_and_each_event_runs_in_its_tenant`（租戶 A、B、全平台三個事件都送達、lag 0）；`a_service_role_that_can_read_across_tenants_is_refused`（把跨租戶讀取開給服務角色，消費端得到 `UnsafeSession::PermissivePolicy`）；`a_reader_without_the_read_policy_stops_the_consumer`（以沒有 `consumer_read` 的角色讀時回 `CannotReadAllTenants`，不會靜靜讀不到） |
 | handler 的寫入只落在事件的租戶；handler 試圖寫入其他租戶時失敗（測試） | 通過 | `the_platform_role_reads_every_tenant_and_each_event_runs_in_its_tenant`（寫入落在事件租戶、看不到別的租戶）；`a_handler_cannot_write_another_tenant`（租戶 A 的事件與全平台事件寫租戶 B 都被拒，SQLSTATE 42501，沒有寫入、位置不動）；`an_event_whose_envelope_names_another_tenant_is_dead_lettered`（信封租戶與 log 列不符時不執行 handler） |
-| 既有的 outbox 有序、冪等遞送測試全部仍通過，包含 Laysi/trustiot-v2#54 獨立驗證新增的測試 | 通過 | `cargo test -p outbox` 全部通過，crash、delivery、tenancy 重複 3 次通過。#54 的獨立驗證（PR Laysi/trustiot-v2#274）沒有新增進 `cargo test` 的測試，它的 harness 以 `.txt` 存在 data 目錄、需要數十分鐘的多行程混沌執行，本次沒有重跑；保證成立的理由見 outbox README「交易邊界與保證」：交易的切法與每筆交易內的語句順序不變，只換了 pool 與租戶設定 |
+| 既有的 outbox 有序、冪等遞送測試全部仍通過，包含 Laysi/trustiot-v2#54 獨立驗證新增的測試 | 通過 | `cargo test -p outbox` 全部通過，crash、delivery、tenancy 重複 3 次通過。Laysi/trustiot-v2#54 的獨立驗證（PR Laysi/trustiot-v2#274）沒有新增進 `cargo test` 的測試，它的 harness 以 `.txt` 存在 data 目錄、需要數十分鐘的多行程混沌執行，本次沒有重跑；保證成立的理由見 outbox README「交易邊界與保證」：交易的切法與每筆交易內的語句順序不變，只換了 pool 與租戶設定 |
 | README 已更新；測試證據存到 `docs/test-reports/` | 通過 | `crates/outbox/README.md`、`crates/service-kit/README.md`、`tools/sql-check/README.md`、`docs/architecture/decisions.md` 決策 29；本報告 |
 
-待測：#54 的混沌 harness 在新連線方式（TLS、四個角色）下的長時間執行。harness 目前直接用一個非 TLS 的角色連線，要先改寫連線方式；本次以上述 `cargo test` 的併發、當機、重播測試與交易邊界的推論代替。
+待測：Laysi/trustiot-v2#54 的混沌 harness 在新連線方式（TLS、四個角色）下的長時間執行。harness 目前直接用一個非 TLS 的角色連線，要先改寫連線方式；本次以上述 `cargo test` 的併發、當機、重播測試與交易邊界的推論代替。
+
+## 5. 獨立驗證的發現與修正（2026-10-11）
+
+獨立驗證（[2026-10-11-271-verify](2026-10-11-271-verify.md)，測試在 `crates/outbox/tests/verify_271.rs`）找到五個問題。F-1 到 F-4 在本分支修正，F-5 早於本 issue，另開 Laysi/trustiot-v2#333：
+
+| 發現 | 修正 | 證據 |
+| --- | --- | --- |
+| F-1：handler 以 `set_config(..., false)` 設定的 session 層級租戶，會帶進同一條連線之後「沒有租戶」的交易 | service-kit 每個 pool 的 `after_release` 查 session 層級的 `trustiot.tenant_id`，不是空的就關掉連線並記 ERROR（`crates/service-kit/src/postgres.rs`） | `f1_a_platform_wide_event_never_runs_in_a_leaked_tenant`：全平台事件的交易沒有租戶、看不到任何租戶的列；`tenant_db.rs` 的 `the_tenant_setting_does_not_leak_across_pooled_connections` 另驗證租戶交易內與直接在 pool 上設定兩種情況，下一個交易都換了一條新連線、沒有租戶 |
+| F-2：handler 在交易內改租戶（含藏在 `DO … EXECUTE` 裡），消費端照樣 commit | `handle` 回來後在同一筆交易查租戶設定，與事件租戶不同就回滾、進死信（`handler changed the delivery's tenant`） | `f2_a_handler_that_switches_the_tenant_is_not_committed`：兩種寫法都沒有寫進租戶 B，事件進死信 |
+| F-3：handler 自己 `COMMIT` 後回傳 retry，事件被處理兩次 | 查 inbox 時一併以 `set_config('outbox.delivery', <UUID>, true)` 設一個交易層級的標記（不取得交易 ID），同一個查詢確認標記還在；交易被結束時標記跟著消失，就進死信（`handler ended the delivery's transaction`），不論 handler 回傳什麼 | `f3_a_handler_commit_does_not_split_the_delivery`：事件只處理一次（handler 只被呼叫一次）、進死信。handler 在 `COMMIT` 前的寫入已生效、無法撤回，所以測試的斷言由「失敗的那次什麼都不留」改為「留下的那一列不會再多一列」，理由寫在測試與驗證報告第 5 節 |
+| F-4：`PlatformReader` 交易的第一個陳述 `SET TRANSACTION READ WRITE` 能解除唯讀 | `PlatformReader::begin` 在 `BEGIN READ ONLY` 後立刻執行 `SELECT 1` | `f4_a_platform_reader_transaction_stays_read_only`：`SET TRANSACTION READ WRITE` 回 25001，沒有寫入；`tenant_db.rs` 的 `the_platform_role_reads_across_tenants_only_where_allowed` 也檢查 25001 |
+| F-5：handler panic 停掉 `Consumer::run`，lag 指標凍結 | 不在本 PR，Laysi/trustiot-v2#333 | `f5_` 測試維持 `#[ignore = "Laysi/trustiot-v2#333: …"]` |
+
+`verify_271.rs` 的 `--nocapture` 輸出（節錄，修正後）：
+
+```
+tenant switches: [("set_config local", 0, "CaughtUp, delivered 0, dead-lettered 1"), ("set_config hidden in PL/pgSQL EXECUTE (passes sql-check)", 0, "CaughtUp, delivered 0, dead-lettered 1")]
+first attempt: CaughtUp, delivered 0, dead-lettered 1
+tenant A notes after the failed attempt: 1; after catching up: 1; handler attempts 1; dead letters [(…, "handler ended the delivery's transaction")]
+SET TRANSACTION READ WRITE: Err(Some("25001")); insert: Err(Some("25P02")); commit: Ok(()); rows: 0
+ledger after the leak: [(…, Some("…0a"), Some("…0a"), 0), (…, None, None, 0)]
+```
+
+F-1 的測試改了 handler：設定 session 層級的租戶 B 之後，再以 `SET LOCAL` 把交易的租戶設回事件的租戶。不這樣做的話，F-2 的檢查會先把投遞判為改了租戶並回滾，session 設定不會 commit，就測不到 pool 歸還時的檢查。
+
+限制：handler 切到別的租戶寫入、回來前又切回原租戶，消費端查不出來；決策 29 把設定租戶的 SQL 交給 `tools/sql-check` 擋，PL/pgSQL `EXECUTE` 字串仍是它已知的盲點。
+
+修正後的完整檢查：[`fixes-checks.txt`](data/2026-10-11-271-outbox-consumer-tenancy/fixes-checks.txt)。

@@ -86,6 +86,13 @@ pub const SET_CONFIG_ALLOWED: &[SettingException] = &[
                  is_schema_name holds (lower-case letters, digits, and _, not pg_*)",
     },
     SettingException {
+        path: "crates/outbox/src/consumer.rs",
+        setting: "outbox.delivery",
+        reason: "a transaction-level marker the consumer sets before calling the handler and \
+                 reads after it, to tell whether the handler ended the transaction; the value \
+                 is a UUID the consumer generates",
+    },
+    SettingException {
         path: "crates/outbox/tests/delivery.rs",
         setting: "outbox_test.tenant",
         reason: "a test-only setting the test handler sets and its policies read",
@@ -152,6 +159,13 @@ pub const EXCEPTIONS: &[Exception] = &[
         ],
         reason: "ClickHouse, not Postgres: creates per-run users, roles, and tenants, and runs \
                  SET ROLE NONE as an attack that must fail",
+    },
+    Exception {
+        path: "crates/service-kit/tests/tenant_db.rs",
+        rules: &[Rule::SessionSetting],
+        reason: "sets a session-level tenant with set_config, as nothing may, to test that the \
+                 pool closes such a session on release instead of handing it to the next user \
+                 (Laysi/trustiot-v2#271)",
     },
 ];
 

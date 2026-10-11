@@ -528,12 +528,15 @@ impl PlatformReader {
     /// When the database fails or refuses the session.
     pub async fn begin(&self) -> Result<PlatformTransaction, TenantDbError> {
         tracing::debug!(purpose = self.purpose, "platform database read");
-        let tx = self
+        let mut tx = self
             .pool
             .pool
             .begin_with("BEGIN READ ONLY")
             .await
             .map_err(|error| self.pool.error(error))?;
+        // Until the transaction's first query, `SET TRANSACTION READ WRITE` would still undo
+        // READ ONLY; after it Postgres refuses ("must be set before any query").
+        sqlx::query("SELECT 1").execute(&mut *tx).await?;
         Ok(PlatformTransaction {
             tx,
             actor: self.actor,

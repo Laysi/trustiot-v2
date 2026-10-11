@@ -417,9 +417,10 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 | `BackgroundTenantDb::begin(TenantId, purpose)` | 排程工作、事件消費 | 工作本身：事件帶的租戶，或平台角色查詢找出的租戶。以 DEBUG 記下服務、租戶與 `purpose` |
 | `BackgroundTenantDb::begin_without_tenant(purpose)` | 不帶租戶資料的表（例如 outbox 消費端自己的表）、全平台事件的處理 | 不設定租戶：看不到也寫不進任何租戶的列。以 DEBUG 記下服務與 `purpose` |
 | `PlatformDb::begin(PlatformActor, purpose)` | 平台後台、跨租戶的工作 | 不設定租戶；平台角色只看得到表上有 `platform_access` policy 的資料。以 INFO 記一行 `platform database access`（actor、`purpose`），操作本身的紀錄在 Laysi/trustiot-v2#130 |
-| `PlatformDb::reader(PlatformActor, purpose)` → `PlatformReader::begin()` | 每隔幾秒就要跨租戶讀一次的例行工作，例如 outbox 消費端輪詢事件 | 同 `PlatformDb::begin`，但交易是 `READ ONLY`（資料庫拒絕寫入）；actor 與 `purpose` 在建立 `PlatformReader` 時以 INFO 記一次（`platform database reader`），每筆交易只記 DEBUG，免得每秒一行 INFO |
+| `PlatformDb::reader(PlatformActor, purpose)` → `PlatformReader::begin()` | 每隔幾秒就要跨租戶讀一次的例行工作，例如 outbox 消費端輪詢事件 | 同 `PlatformDb::begin`，但交易是 `READ ONLY`（資料庫拒絕寫入）。`begin()` 在 `BEGIN READ ONLY` 之後立刻執行 `SELECT 1`：在交易的第一個查詢之前，`SET TRANSACTION READ WRITE` 還能改回讀寫，之後 Postgres 拒絕（Laysi/trustiot-v2#271 驗證的 F-4）。actor 與 `purpose` 在建立 `PlatformReader` 時以 INFO 記一次（`platform database reader`），每筆交易只記 DEBUG，免得每秒一行 INFO |
 
 - 交易的第一個陳述就是 `SELECT set_config('trustiot.tenant_id', $1, true)`：等同 `SET LOCAL`，但值以參數綁定。交易結束（commit、rollback、drop、出錯）設定就消失，連線回到 pool 時不帶租戶。
+- 連線回到 pool 時，kit 再查一次（pool 的 `after_release`，每次歸還一個查詢）：session 層級還有 `trustiot.tenant_id`（有人以 `set_config(..., false)` 或 `SET` 設定，例如藏在 PL/pgSQL `EXECUTE` 字串裡、sql-check 看不到的寫法），就關掉這條連線、不放回 pool，並記一行 ERROR `closed a database session left with a session-level tenant`。否則下一個拿到這條連線的交易會在那個租戶裡執行，包括 `begin_without_tenant` 與 `TenantDb::pool()` 上的直接查詢（Laysi/trustiot-v2#271 驗證的 F-1）。新連線的同類檢查是下面的 `TenantPreset`。
 - `TenantTransaction` 沒有改租戶的方法，`TenantDb` 也沒有以任意租戶開交易的 handler 用方法；`src/tenant.rs` 的 compile-fail doctest 證明這些寫法無法編譯。SQL 裡設定租戶或角色由 `tools/sql-check` 擋下，只有 `src/tenant.rs` 例外。
 - 背景工作沒有使用者身分（見[內部身分](#背景工作沒有使用者身分)），所以決定：代表單一租戶的工作用 `BackgroundTenantDb` 開交易，租戶來自工作本身；要找出「哪些租戶有工作」這種跨租戶查詢，用 `PlatformDb` 與 `PlatformActor::service`，會留紀錄。
 - `BackgroundTenantDb` 是能指定租戶的能力，只有啟動時的 `TenantDb::connect_lazy_with_background(options, pool, ServiceIdentity)` 會一併產生（與 `TenantDb` 共用 pool）。把 `TenantDb` 放進 router 的 state、`BackgroundTenantDb` 只交給背景工作：handler 手上的 `TenantDb` 沒有任何接受租戶的方法，無法把請求裡的租戶拿去開交易（compile-fail doctest 證明）。
@@ -461,7 +462,7 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 | 問題 | 原因 |
 | --- | --- |
 | `BypassesRls` | 角色本身或它所屬的角色是 superuser 或有 `BYPASSRLS` |
-| `TenantPreset` | 連線一開始就有 `trustiot.tenant_id`（角色或資料庫預設值、連線參數） |
+| `TenantPreset` | 連線一開始就有 `trustiot.tenant_id`（角色或資料庫預設值、連線參數）；使用中才設定的 session 層級租戶由歸還時的檢查處理（見[交易](#交易)） |
 | `OwnsRelation` | 角色擁有、或屬於擁有某張表或檢視的角色 |
 | `UnprotectedTable` | 角色能用、有 `tenant_id` 欄的表沒啟用 RLS（含 partition） |
 | `PermissivePolicy` | 套用到角色（`PUBLIC` 或它所屬的角色）的 permissive policy 不是一字不差的租戶條件；平台角色的連線只放行以平台角色本身名稱給它、而且沒給 `PUBLIC` 的 policy，經由它所屬的群組角色取得的不放行 |

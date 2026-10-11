@@ -76,6 +76,7 @@ context.spawn(async move {
 - `Consumer::new(&PlatformDb, BackgroundTenantDb, ...)`：讀事件用消費端服務的**平台角色**，處理事件與消費端自己的表用**服務角色**（見[與租戶隔離的配合](#與租戶隔離決策-29的配合)）。兩個 pool 都由 service-kit 建立，所以一定驗證伺服器憑證並檢查每個連線。
 - 每個事件一筆服務角色的交易，開在事件的租戶裡：設定租戶 → `begin` → 取得訂閱的鎖 → 查 inbox → `handle` → 記錄事件 ID → 推進位置 → commit。handler 的寫入與「已處理」同時生效：commit 前當機或出錯都不留下任何東西，事件之後會再送一次。`begin` 是可選的掛勾，給 `statement_timeout` 這類交易設定用；租戶不由 handler 設定。
 - handler 只透過 `tx` 寫資料庫。資料庫以外的副作用（呼叫、通知）可能執行多次，要自己冪等。
+- handler 不得結束 `tx`（`COMMIT`、`ROLLBACK`），也不得改它的租戶或角色（`trustiot.tenant_id`、`SET ROLE`）。`handle` 回來後，消費端在同一筆交易查一次：交易仍是開始時那一筆（呼叫 handler 前以 `set_config('outbox.delivery', <UUID>, true)` 設的交易層級標記還在；交易結束標記就消失。不用 `transaction_timestamp()`，因為兩筆交易的時間可能相同），租戶仍是事件的租戶。不符時回滾還開著的部分，記一筆 ERROR，把事件記進死信（`handler ended the delivery's transaction` 或 `handler changed the delivery's tenant`），不重試，因為每次重試都會再犯。handler 自己 `COMMIT` 之前的寫入在消費端拿回控制權時已經 commit，無法撤回；這個檢查保證的是事件不會被處理第二次，並留下紀錄。切換租戶後在回來前又切回原租戶的寫法查不出來，依決策 29 由 `tools/sql-check` 擋設定租戶的 SQL。
 - `run` 在 `Shutdown::stopping` 之後停止，正在處理的事件會先做完；建立 `Consumer` 前要先初始化遙測（`service_kit::run` 已經做了），lag 指標才會接到 OTLP。
 
 ## 投遞機制（2026-10-10 定案）
@@ -142,6 +143,7 @@ tx.commit().await?;
 | --- | --- |
 | `HandlerError::retry(原因)`、`sqlx::Error`、`DecodeError::NewerVersion` | 回滾，以退避（輪詢間隔加倍，上限 `max_backoff`，預設 30 秒）重試同一個事件；後面的事件等它，順序不變。每次失敗記一筆 WARN |
 | `HandlerError::permanent(原因)`、其他 `DecodeError`、無法解析的信封 | 回滾 handler 的寫入，另開交易把事件記進 `outbox_dead_letter` 並跳過，記一筆 ERROR |
+| 不論回傳什麼，handler 結束了交易或改了租戶（見[消費端](#消費端)） | 同上，記進死信；handler 自己 `COMMIT` 之前的寫入已經 commit |
 
 - 原因（`reason`）會記進日誌與死信表，不能含事件內容或個資；底層錯誤只記 SQLSTATE，因為錯誤訊息可能引用資料值（M2）。`ConsumerError` 與 `PublishError` 的文字同樣只有 SQLSTATE 或失敗種類，原始錯誤仍可由 `source()` 取得。
 - 一直重試的事件會讓訂閱停住，lag 指標隨之上升；死信事件可在修正後以 `replay_from` 重新處理。
@@ -175,7 +177,7 @@ tx.commit().await?;
 | 交易 | 角色 | 內容 |
 | --- | --- | --- |
 | 讀取 | 平台角色，`READ ONLY` | 取讀取上限、讀一批事件；commit 後才處理 |
-| 處理一個事件 | 服務角色，事件的租戶（全平台事件無租戶） | 設定租戶 → `begin` → 訂閱的 advisory lock → 位置未被移動的檢查 → 查 inbox → `handle` → 寫 inbox → 從原位置推進位置 → commit |
+| 處理一個事件 | 服務角色，事件的租戶（全平台事件無租戶） | 設定租戶 → `begin` → 訂閱的 advisory lock → 位置未被移動的檢查 → 查 inbox（同時設定交易層級的標記）→ `handle` → 檢查交易與租戶沒被 handler 改掉 → 寫 inbox → 從原位置推進位置 → commit |
 | 死信 | 服務角色，無租戶 | 訂閱的 advisory lock → 位置檢查 → 寫死信 → 推進位置 → commit |
 
 原本的保證都不變，因為改的只是每筆交易用哪個 pool、開在哪個租戶，交易的切法與每筆交易裡的語句順序都沒變：
@@ -183,6 +185,7 @@ tx.commit().await?;
 - **至少一次**：讀取交易只讀不寫，讀完就結束，事件是否「已處理」只由處理交易決定。handler 的寫入、inbox、位置在同一筆處理交易 commit；commit 前當機、出錯或被 RLS 拒絕，三者一起回滾，下一輪從同一位置再讀到同一事件。
 - **只處理一次**：inbox 與位置跟 handler 的寫入在同一筆交易；位置只從開始處理時的位置推進，被別的副本或 `replay_from` 移動過就整筆回滾。設定租戶不影響這些檢查：inbox、訂閱表不帶租戶資料，RLS 不過濾它們。
 - **有序、不漏讀**：讀取上限（`pg_snapshot_xmin`）是叢集層級的值，與用哪個角色讀無關；排序與上限的推論見[順序與不漏讀](#順序與不漏讀)。處理交易在 handler 第一次寫入前都只有讀取與 `set_config`（設定租戶不會取得交易 ID），所以不會比原本更早拖住其他訂閱的讀取上限。
+- **handler 不守規則時**（Laysi/trustiot-v2#271 的獨立驗證 F-1 到 F-3，2026-10-11 修正）：handler 改了交易的租戶或自己結束交易，事件進死信（見[消費端](#消費端)）；handler 以 `set_config(..., false)` 設定 session 層級的租戶時，service-kit 在連線歸還 pool 時關掉這條連線，之後沒有租戶的交易（全平台事件、死信、位置查詢）不會在那個租戶裡執行。
 - 測試：既有的投遞、當機、重播、通知模式、lag 測試全部改以這套角色執行（平台角色在 RLS 下讀、服務角色在租戶交易處理），併發測試的事件分屬兩個租戶；`tests/tenancy.rs` 另外驗證跨租戶讀取、handler 只能寫事件的租戶、角色設錯時被拒、信封租戶不符時進死信。
 
 ## 資料庫權限
@@ -225,6 +228,7 @@ ALTER ROLE assets_app SET search_path = assets;      -- 消費端的表在服務
 | `cargo test -p outbox --test producer` | 回滾不留事件、聚合序號、同一信封只能寫一次 |
 | `cargo test -p outbox --test delivery` | 交易 ID 反轉時仍依序、晚 commit 的事件不漏、並行寫入（兩個租戶）加兩個副本每個事件只處理一次、重複投遞跳過、重播後狀態相同、重試與死信、`begin` 在同一交易、未寫入的 handler 不拖住其他訂閱、收尾時只做完進行中的事件、lag、`StartFrom::Latest`、最小權限（產生端以租戶交易與平台角色寫事件） |
 | `cargo test -p outbox --test tenancy` | 平台角色在 RLS 下讀到兩個租戶與全平台的事件、每個事件在自己的租戶處理且看不到別的租戶；handler 寫別的租戶被拒（42501）；服務角色被開放跨租戶讀取時連線被拒、讀取端沒有 `consumer_read` 時停下；信封租戶與 log 列不符時進死信 |
+| `cargo test -p outbox --test verify_271` | Laysi/trustiot-v2#271 的獨立驗證（[報告](../../docs/test-reports/2026-10-11-271-verify.md)）：handler 以角色、RLS 手法離開租戶都失敗；改租戶、自己 `COMMIT` 的投遞進死信；session 層級的租戶不會帶進下一個交易；`PlatformReader` 的唯讀解除不了；怪異的租戶 ID、角色設錯、設定錯誤、三個副本加並行寫入、資料庫重啟。`f5_` 是 Laysi/trustiot-v2#333（handler panic 停掉 `run`），目前 `#[ignore]` |
 | `cargo test -p outbox --test notify` | 舊讀數不覆蓋新狀態（含副本競爭）、晚到與重播收斂 |
 | `cargo test -p outbox --test crash` | 以 SIGKILL 結束 `outbox-example`：commit 後投遞前、handler 寫入後 commit 前，重啟後各處理一次，且在事件的租戶處理 |
 | `cargo test -p outbox --test metrics` | lag 經 OTLP/HTTP 匯出到假的接收端，解碼後讀到數值 |

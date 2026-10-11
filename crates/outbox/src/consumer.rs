@@ -255,6 +255,13 @@ pub trait Handler: Send + Sync + 'static {
     /// Applies one event. Write only through `tx`, which is in [`Delivery::tenant`]; side
     /// effects outside the database (calls, messages) may happen more than once, because an
     /// event whose transaction fails is delivered again.
+    ///
+    /// Never end `tx` (`COMMIT`, `ROLLBACK`) or change its tenant or role. After `handle`
+    /// returns, the consumer checks that `tx` is still the delivery's transaction and in the
+    /// event's tenant; if not, it rolls back what is still open and dead-letters the event
+    /// (`handler ended the delivery's transaction`, `handler changed the delivery's tenant`)
+    /// instead of retrying it. Writes made before a handler's own `COMMIT` are committed by
+    /// then and stay.
     fn handle(
         &self,
         tx: &mut Transaction<'static, Postgres>,
@@ -1037,17 +1044,38 @@ impl<H: Handler> Consumer<H> {
                 Claim::Moved => return Ok(Step::Moved),
             }
             // Only reads so far: the transaction gets an ID (and holds back every consumer's
-            // horizon) no earlier than the handler's first write.
-            let fresh: bool = sqlx::query_scalar(
+            // horizon) no earlier than the handler's first write. A transaction-level marker
+            // identifies the transaction without giving it an ID; it ends with the transaction.
+            let marker = Uuid::now_v7().to_string();
+            let (fresh, _): (bool, String) = sqlx::query_as(
                 "SELECT NOT EXISTS (SELECT 1 FROM outbox_inbox \
-                 WHERE subscription = $1 AND event_id = $2)",
+                 WHERE subscription = $1 AND event_id = $2), \
+                 set_config('outbox.delivery', $3, true)",
             )
             .bind(&self.inner.config.subscription)
             .bind(row.event_id)
+            .bind(&marker)
             .fetch_one(&mut **tx)
             .await?;
             if fresh {
-                if let Err(error) = self.inner.handler.handle(tx, &delivery).await {
+                let handled = self.inner.handler.handle(tx, &delivery).await;
+                // A handler's own failure leaves the transaction aborted, so the check cannot
+                // run; that error then stands.
+                let broken = match transaction_broken(tx, &delivery, &marker).await {
+                    Ok(broken) => broken,
+                    Err(_) if handled.is_err() => None,
+                    Err(error) => return Err(error.into()),
+                };
+                if let Some(broken) = broken {
+                    drop(delivery_tx);
+                    tracing::error!(
+                        reason = broken.reason(),
+                        "outbox handler broke its delivery's transaction; if it ended the \
+                         transaction, the writes before that may have committed"
+                    );
+                    return self.dead_letter(expected, &row, &broken).await;
+                }
+                if let Err(error) = handled {
                     drop(delivery_tx);
                     return self.failed(expected, &row, error).await;
                 }
@@ -1189,6 +1217,43 @@ impl<H: Handler> Consumer<H> {
         .await?;
         Ok(updated.rows_affected() == 1)
     }
+}
+
+/// Whether the handler broke the delivery's transaction, checked after it returns: the
+/// transaction must still carry `marker`, which the consumer set transaction-locally in
+/// `outbox.delivery` before calling the handler (a handler that sends `COMMIT` or `ROLLBACK`
+/// ends the transaction and the marker with it, and what follows runs in other transactions;
+/// transaction timestamps are not unique, so they cannot tell), and still be in the
+/// event's tenant (a handler that sets `trustiot.tenant_id` moves it). Either is a handler bug
+/// that no retry fixes, so it is a permanent failure. A handler that switches the tenant and
+/// back before it returns is not detected; decision 29 leaves SQL that sets the tenant to
+/// `tools/sql-check`.
+async fn transaction_broken(
+    tx: &mut PgConnection,
+    delivery: &Delivery,
+    marker: &str,
+) -> Result<Option<HandlerError>, sqlx::Error> {
+    let (same, tenant): (bool, Option<String>) = sqlx::query_as(
+        "SELECT current_setting('outbox.delivery', true) IS NOT DISTINCT FROM $1, \
+         NULLIF(current_setting('trustiot.tenant_id', true), '')",
+    )
+    .bind(marker)
+    .fetch_one(tx)
+    .await?;
+    if !same {
+        return Ok(Some(HandlerError::permanent(
+            "handler ended the delivery's transaction",
+        )));
+    }
+    // A value that is no UUID is a change too (row-level security would fail on it).
+    let current = tenant.map(|tenant| Uuid::parse_str(&tenant).ok());
+    let expected = delivery.tenant().map(|tenant| Some(*tenant.as_uuid()));
+    if current != expected {
+        return Ok(Some(HandlerError::permanent(
+            "handler changed the delivery's tenant",
+        )));
+    }
+    Ok(None)
 }
 
 /// The oldest transaction still running. Every transaction below it has finished, so every

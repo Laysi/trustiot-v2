@@ -3,8 +3,10 @@
 //! Real Postgres with TLS, one throwaway container per test (skipped without podman or docker
 //! unless `CI` is set). Report: `docs/test-reports/2026-10-11-271-verify.md`.
 //!
-//! Tests that show a defect assert the behaviour we want and are `#[ignore]`d with the finding's
-//! number, so the branch stays green; run them with `--ignored` to see them fail.
+//! Tests that show a defect assert the behaviour we want and are `#[ignore]`d with the issue
+//! that tracks it, so the branch stays green; run them with `--ignored` to see them fail. The
+//! `f1_` to `f4_` tests were findings F-1 to F-4 and pass since Laysi/trustiot-v2#271 fixed them; `f5_` is
+//! Laysi/trustiot-v2#333.
 //!
 //! The handlers here deliberately run SQL that switches the tenant or the role (attacks that must
 //! fail, or findings), so `tools/sql-check` exempts this file from its session-setting rule.
@@ -270,7 +272,10 @@ async fn try_escape(database: &Database, attack: impl Fn(&Setup) -> String) -> (
             "retry, SQLSTATE {}",
             handler_sqlstate(error).unwrap_or_else(|| "-".to_owned())
         ),
-        other => format!("{other:?}, delivered {}", progress.delivered),
+        other => format!(
+            "{other:?}, delivered {}, dead-lettered {}",
+            progress.delivered, progress.dead_lettered
+        ),
     };
     (notes_of(&setup, TENANT_B).await, outcome)
 }
@@ -335,7 +340,6 @@ async fn a_handler_cannot_leave_its_tenant_by_role_or_rls_tricks() {
 /// relies on `tools/sql-check`; a PL/pgSQL `EXECUTE` hides it from sql-check). The consumer does
 /// not notice that the transaction it commits is no longer in the event's tenant.
 #[tokio::test]
-#[ignore = "Laysi/trustiot-v2#271 F-2: a handler can switch the tenant of its transaction and the consumer commits it"]
 async fn f2_a_handler_that_switches_the_tenant_is_not_committed() {
     let Some(database) = database().await else {
         return;
@@ -365,10 +369,20 @@ async fn f2_a_handler_that_switches_the_tenant_is_not_committed() {
             tenant_b_notes, 0,
             "{name}: the handler of a tenant-A event committed a tenant-B row ({outcome})"
         );
+        // Fixed in Laysi/trustiot-v2#271: the consumer checks the tenant after the handler returns and
+        // dead-letters the event, since every retry would switch again.
+        assert!(
+            outcome.ends_with("dead-lettered 1"),
+            "{name}: the event is set aside, got {outcome}"
+        );
     }
 }
 
-/// Sets the session's tenant (not the transaction's) to tenant B while handling a tenant event.
+/// Sets the session's tenant (not the transaction's) to tenant B while handling a tenant event,
+/// then puts the transaction's tenant back. Without that second step the consumer's check after
+/// the handler (F-2's fix) already sees tenant B, rolls back, and dead-letters the event, so the
+/// session setting never reaches a commit; with it, only the pool's check on release (F-1's fix)
+/// stands between the leak and the next transaction.
 struct SessionLeak;
 
 impl Handler for SessionLeak {
@@ -377,9 +391,13 @@ impl Handler for SessionLeak {
         tx: &mut Transaction<'static, Postgres>,
         delivery: &Delivery,
     ) -> Result<(), HandlerError> {
-        if delivery.tenant().is_some() {
+        if let Some(tenant) = delivery.tenant() {
             sqlx::query("SELECT set_config('trustiot.tenant_id', $1, false)")
                 .bind(TENANT_B)
+                .execute(&mut **tx)
+                .await?;
+            sqlx::query("SELECT set_config('trustiot.tenant_id', $1, true)")
+                .bind(tenant.to_string())
                 .execute(&mut **tx)
                 .await?;
         }
@@ -389,10 +407,10 @@ impl Handler for SessionLeak {
 
 /// F-1: a session-level tenant set inside one delivery survives the commit on the pooled
 /// connection; the next transaction "without a tenant" (a platform-wide event, a dead letter,
-/// bookkeeping) runs in that tenant. service-kit checks for a preset tenant only on new
-/// connections.
+/// bookkeeping) runs in that tenant. service-kit checked for a preset tenant only on new
+/// connections; since Laysi/trustiot-v2#271 it also closes a session that goes back to the pool
+/// with a session-level tenant.
 #[tokio::test]
-#[ignore = "Laysi/trustiot-v2#271 F-1: a session-level tenant leaks into later no-tenant transactions on the pooled connection"]
 async fn f1_a_platform_wide_event_never_runs_in_a_leaked_tenant() {
     let Some(database) = database().await else {
         return;
@@ -452,10 +470,16 @@ impl Handler for EarlyCommit {
 }
 
 /// F-3: a handler that sends `COMMIT` commits its writes outside the delivery's atomic unit;
-/// the event is then retried and processed twice. The consumer does not detect that the
-/// transaction it was given has ended.
+/// the event was then retried and processed twice, because the consumer did not detect that the
+/// transaction it was given had ended.
+///
+/// Since Laysi/trustiot-v2#271 the consumer detects it after the handler returns and
+/// dead-letters the event instead of retrying it. The writes before the handler's `COMMIT` are
+/// committed by the time the consumer gets control back, and nothing can undo them, so the
+/// verifier's original expectation (nothing left after the failed attempt) cannot hold; what
+/// the consumer guarantees is that the event is not processed a second time and is set aside
+/// with the reason.
 #[tokio::test]
-#[ignore = "Laysi/trustiot-v2#271 F-3: a handler's own COMMIT splits the delivery and the event is processed twice"]
 async fn f3_a_handler_commit_does_not_split_the_delivery() {
     let Some(database) = database().await else {
         return;
@@ -471,15 +495,38 @@ async fn f3_a_handler_commit_does_not_split_the_delivery() {
     );
     consumer.ensure_subscription().await.expect("subscription");
     let first = consumer.poll_once().await.expect("poll");
-    println!("first attempt: {:?}", first.outcome);
+    println!(
+        "first attempt: {:?}, delivered {}, dead-lettered {}",
+        first.outcome, first.delivered, first.dead_lettered
+    );
     let after_failure = notes_of(&setup, TENANT_A).await;
     catch_up(&consumer).await;
     let total = notes_of(&setup, TENANT_A).await;
-    println!("tenant A notes after the failed attempt: {after_failure}; after retry: {total}");
+    let attempts = consumer.handler().attempts.load(Ordering::SeqCst);
+    let dead: Vec<(String, String)> =
+        sqlx::query_as("SELECT event_id::text, reason FROM outbox_dead_letter")
+            .fetch_all(&setup.consumer)
+            .await
+            .expect("dead letters");
+    println!(
+        "tenant A notes after the failed attempt: {after_failure}; after catching up: {total}; \
+         handler attempts {attempts}; dead letters {dead:?}"
+    );
     assert_eq!(
-        (after_failure, total),
+        (first.delivered, first.dead_lettered),
         (0, 1),
-        "a failed delivery must leave nothing, and the event is processed once"
+        "the split delivery is dead-lettered, not retried"
+    );
+    assert_eq!(
+        (after_failure, total, attempts),
+        (1, 1, 1),
+        "what the handler committed itself stays, and the event is processed once"
+    );
+    assert_eq!(
+        dead.iter()
+            .map(|(_, reason)| reason.as_str())
+            .collect::<Vec<_>>(),
+        ["handler ended the delivery's transaction"]
     );
 }
 
@@ -679,7 +726,6 @@ async fn the_platform_role_reads_the_log_and_nothing_else() {
 /// F-4: `PlatformReader` transactions start with `BEGIN READ ONLY`, but nothing runs before the
 /// caller's first statement, so `SET TRANSACTION READ WRITE` turns them into write transactions.
 #[tokio::test]
-#[ignore = "Laysi/trustiot-v2#271 F-4: SET TRANSACTION READ WRITE undoes the PlatformReader's READ ONLY"]
 async fn f4_a_platform_reader_transaction_stays_read_only() {
     let Some(database) = database().await else {
         return;
@@ -996,11 +1042,11 @@ impl Handler for PanicsOnce {
     }
 }
 
-/// F-5 (present before #271): a handler panic ends `Consumer::run` for good (the panic unwinds
+/// F-5, tracked in Laysi/trustiot-v2#333 (present before Laysi/trustiot-v2#271): a handler panic ends `Consumer::run` for good (the panic unwinds
 /// through `tokio::join!` of processing and lag monitoring), so the subscription stops in that
 /// replica and the lag gauges keep their last value.
 #[tokio::test]
-#[ignore = "Laysi/trustiot-v2#271 F-5: a handler panic stops Consumer::run for good and freezes the lag gauges"]
+#[ignore = "Laysi/trustiot-v2#333: a handler panic ends Consumer::run and freezes the lag metric"]
 async fn f5_a_handler_panic_does_not_stop_the_consumer() {
     let Some(database) = database().await else {
         return;
