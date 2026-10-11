@@ -1,0 +1,11 @@
+{
+  "tot": {
+    "delivered": 24021,
+    "dup": 3892,
+    "dead": 981,
+    "handled": 36939,
+    "retry_before": 1232,
+    "retry_after": 1120
+  },
+  "drain_lag_final": "0"
+}

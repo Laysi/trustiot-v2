@@ -6,9 +6,11 @@ still refuses a call that is not on the list.
    where it routes, the ingress gateway. One nobody may call gets a policy without rules, which
    refuses every connection.
 2. NetworkPolicy: everything in the namespace is denied by default; each service and component
-   then admits ztunnel's HBONE port from the pods of the same callers, and the kubelet's probes.
-   It only stops new connections: ztunnel reuses HBONE connections, and a NetworkPolicy never
-   cuts one that is already open, so the AuthorizationPolicy is the primary layer.
+   then admits ztunnel's HBONE port from the pods of the same callers, and connections from the
+   node (kubelet probes, "trustiot.mesh.hostSource") on its probe ports only, because ztunnel
+   lets those through unauthorized. It only stops new connections: ztunnel reuses HBONE
+   connections, and a NetworkPolicy never cuts one that is already open, so the
+   AuthorizationPolicy is the primary layer.
 No waypoint is deployed: L4 identity is all these rules need. Add one only for L7 rules between
 services, and move the affected policies to it (README.md).
 */ -}}
@@ -73,6 +75,11 @@ spec:
       {{- include "trustiot.selectorLabels" $ctx | nindent 6 }}
   policyTypes:
     - Ingress
+  {{- $probePorts := (include "trustiot.mesh.probePorts" $ctx | fromYaml).ports }}
+  {{- if not (or $principals $probePorts) }}
+  # Nobody may call it and no probe connects: deny every connection.
+  ingress: []
+  {{- else }}
   ingress:
     {{- if $principals }}
     # Mesh traffic arrives only on ztunnel's HBONE port, from the caller's own pod IP.
@@ -91,8 +98,17 @@ spec:
         - port: {{ include "trustiot.mesh.hbonePort" $ }}
           protocol: TCP
     {{- end }}
-    # Kubelet probes, which istio-cni SNATs to this address in ambient mode.
+    {{- if $probePorts }}
+    # Connections from the node, which istio-cni SNATs to this address and ztunnel does not
+    # authorize: kubelet probes, but also any hostNetwork process. Only the probe ports.
     - from:
         - ipBlock:
-            cidr: {{ include "trustiot.mesh.kubeletProbeSource" $ }}
+            cidr: {{ include "trustiot.mesh.hostSource" $ }}
+      ports:
+        {{- range $probePorts }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+  {{- end }}
 {{- end }}

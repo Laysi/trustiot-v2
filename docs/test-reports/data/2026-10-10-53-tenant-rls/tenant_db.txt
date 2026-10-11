@@ -1,0 +1,51 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.44s
+     Running tests/tenant_db.rs (target/debug/deps/tenant_db-f340a9e19cd7fef5)
+
+running 10 tests
+sslmode "disable": exit status: 1; error: configuration key `platform.postgres_sslmode` (set by environment variable TRUSTIOT_POSTGRES_SSLMODE) is invalid: only `verify-full` is accepted: services always verify the database server's certificate and host name (checklist M3)
+sslmode "allow": exit status: 1; error: configuration key `platform.postgres_sslmode` (set by environment variable TRUSTIOT_POSTGRES_SSLMODE) is invalid: only `verify-full` is accepted: services always verify the database server's certificate and host name (checklist M3)
+sslmode "prefer": exit status: 1; error: configuration key `platform.postgres_sslmode` (set by environment variable TRUSTIOT_POSTGRES_SSLMODE) is invalid: only `verify-full` is accepted: services always verify the database server's certificate and host name (checklist M3)
+sslmode "require": exit status: 1; error: configuration key `platform.postgres_sslmode` (set by environment variable TRUSTIOT_POSTGRES_SSLMODE) is invalid: only `verify-full` is accepted: services always verify the database server's certificate and host name (checklist M3)
+sslmode "verify-ca": exit status: 1; error: configuration key `platform.postgres_sslmode` (set by environment variable TRUSTIOT_POSTGRES_SSLMODE) is invalid: only `verify-full` is accepted: services always verify the database server's certificate and host name (checklist M3)
+sslmode "": exit status: 1; error: configuration key `platform.postgres_sslmode` is invalid: is required when `database` is set
+test a_service_without_server_verification_refuses_to_start ... ok
+unrelated CA: error communicating with database: invalid peer certificate: UnknownIssuer
+host name mismatch: error communicating with database: invalid peer certificate: certificate not valid for name "localhost"; certificate is only valid for IpAddress(127.0.0.1)
+test connections_verify_the_server_certificate_and_host_name ... ok
+service role, another tenant event: refused (error returned from database: new row violates row-level security policy for table "outbox_event" at line 2337)
+service role, platform-wide event: refused (error returned from database: new row violates row-level security policy for table "outbox_event" at line 2337)
+tenant A: insert into B refused (error returned from database: new row violates row-level security policy for table "example_items" at line 2337); move to B refused (error returned from database: new row violates row-level security policy for table "example_items" at line 2337)
+test a_tenant_reads_and_writes_only_its_own_rows ... ok
+outbox: tenant events by the service role, platform-wide by the platform role, all read by the consumer's platform role
+test outbox_events_follow_the_tenant_policies ... ok
+disable row-level security: refused (error returned from database: must be owner of table example_items at line 2931)
+drop the policy: refused (error returned from database: must be owner of relation example_items at line 2931)
+add a permissive policy: refused (error returned from database: must be owner of table example_items at line 2931)
+truncate: refused (error returned from database: permission denied for table example_items at line 2793)
+copy rows into a temporary table: refused (error returned from database: permission denied to create temporary tables in database "roles" at line 4413)
+row_security = off: refused (error returned from database: query would be affected by row-level security policy for table "example_items" at line 125)
+test the_service_role_cannot_bypass_row_level_security ... ok
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+a policy the platform role inherits from a group: refused with Err(PermissivePolicy("public.example_items policy group_access"))
+a tenant table without row-level security: refused with "table `public.loose_items` has a tenant_id column but row-level security is not enabled", accepted once fixed
+GET /v1/items: 200 {"items":["a-1","a-2"],"tenant":"01928f6e-7a3c-7d4e-8f00-00000000000a"}
+GET /v1/items: 200 {"items":["b-1"],"tenant":"01928f6e-7a3c-7d4e-8f00-00000000000b"}
+GET /v1/items: 403 {"code":"permission_denied","message_key":"error.permission_denied"}
+test the_example_service_serves_each_user_only_their_tenant ... ok
+one pooled session (pid 123): no tenant after commit, rollback, drop, or error
+test the_tenant_setting_does_not_leak_across_pooled_connections ... ok
+a view with its owner's rights: refused with "view `public.item_names` reads tenant data but is not security_invoker", accepted once fixed
+without a tenant: 0 rows visible, update 0, delete 0, insert refused: error returned from database: new row violates row-level security policy for table "example_items" at line 2337
+test without_a_tenant_no_rows_are_visible_or_writable ... ok
+a materialized view: refused with "`public.item_counts` holds tenant data and is a materialized view or foreign table, which row-level security cannot protect", accepted once fixed
+a permissive policy for every role: refused with "public.example_items policy everything applies to the database role and is not exactly the tenant condition, so it may expose other tenants' rows", accepted once fixed
+a widened tenant policy for the service role: refused with "public.example_items policy widened applies to the database role and is not exactly the tenant condition, so it may expose other tenants' rows", accepted once fixed
+a view of tenant data without the tenant column: refused with "view `public.all_names_again` reads tenant data but is not security_invoker", accepted once fixed
+a SECURITY DEFINER function over tenant data: refused with "the database role may execute SECURITY DEFINER function `all_item_names()`, which runs with another role's rights and row-level security visibility", accepted once fixed
+TRUNCATE on a tenant table: refused with "the database role may TRUNCATE tenant table `public.example_items`, which row-level security ignores", accepted once fixed
+temporary tables: refused with "the database role may create temporary tables, which row-level security does not cover and which outlive the transaction on a pooled connection", accepted once fixed
+a platform role's SECURITY DEFINER function: refused with Err(DefinerFunction("platform_names()")), accepted once revoked
+test sessions_row_level_security_would_not_protect_are_refused ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 37.80s
+
