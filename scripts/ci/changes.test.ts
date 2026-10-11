@@ -7,6 +7,7 @@ import type { WorkflowRun } from "../release/lib.ts";
 import {
   affectsCargoDeny,
   affectsEveryJob,
+  DECISION_CODE,
   affectsHelm,
   affectsHost,
   affectsRust,
@@ -204,8 +205,15 @@ describe("path rules", () => {
     expect(running([".github/workflows/nightly.yml", "scripts/nightly/run.ts"])).toEqual([]);
   });
 
-  test("changes to the workflow, its actions, this script and the tool pins run every job", () => {
-    for (const path of [".github/workflows/ci.yml", ".github/actions/setup-proto/action.yml", "scripts/ci/changes.ts", ".prototools", ".proto/plugins/bun.toml"]) {
+  test("changes to the workflow, its actions, this script, its imports and the tool pins run every job", () => {
+    for (const path of [
+      ".github/workflows/ci.yml",
+      ".github/actions/setup-proto/action.yml",
+      "scripts/ci/changes.ts",
+      "scripts/release/lib.ts",
+      ".prototools",
+      ".proto/plugins/bun.toml",
+    ]) {
       expect(affectsEveryJob(path)).toBe(true);
       expect(running([path])).toEqual([...PATH_JOBS].toSorted());
     }
@@ -228,6 +236,90 @@ describe("path rules", () => {
 // files the rust and helm jobs' tests read outside their own directories and require the rules
 // to cover them, so a new test that reads, say, a doc cannot be skipped silently.
 describe("guards: files the jobs read are covered", () => {
+  /**
+   * The repository files a TypeScript file imports with a relative path, followed transitively.
+   * Fails on a specifier it cannot read (`import(name)`, `require(name)`), so the guard never
+   * misses a dependency silently.
+   */
+  function importsOf(entry: string, root = ROOT): string[] {
+    const seen = new Set<string>();
+    const pending = [entry];
+    while (pending.length > 0) {
+      const file = pending.pop() as string;
+      if (seen.has(file)) continue;
+      seen.add(file);
+      const source = readFileSync(join(root, file), "utf8");
+      // Static forms always name a string literal: `import ... from "./x"`, `export ... from "./x"`
+      // and `import "./x"`.
+      const specifiers = [...source.matchAll(/(?:\bfrom|\bimport)\s+["']([^"'\n]+)["']/g)].map((match) => match[1] ?? "");
+      // Calls: `import(...)`, `require(...)` and `import x = require(...)`. The argument must be
+      // exactly one string literal; anything else (a variable, a template, a literal followed by
+      // an expression) is reported, because the file it loads cannot be known here.
+      const computed: string[] = [];
+      for (const call of source.matchAll(/\b(?:import|require)\s*\(/g)) {
+        const rest = source.slice((call.index ?? 0) + call[0].length);
+        const literal = /^\s*(["'])([^"'\n]*)\1\s*\)/.exec(rest);
+        if (literal) {
+          specifiers.push(literal[2] ?? "");
+        } else {
+          computed.push(`${call[0]}${rest.slice(0, 40).split("\n")[0]}`);
+        }
+      }
+      expect(`${file}: ${computed.join(", ")}`).toBe(`${file}: `);
+      for (const specifier of specifiers.filter((specifier) => /^\.{1,2}\//.test(specifier))) {
+        const imported = posix.normalize(posix.join(posix.dirname(file), specifier));
+        expect(existsSync(join(root, imported))).toBe(true);
+        pending.push(imported);
+      }
+    }
+    seen.delete(entry);
+    return [...seen].toSorted();
+  }
+
+  test("every file the decision script imports, transitively, runs every job", () => {
+    const imports = importsOf("scripts/ci/changes.ts");
+    expect(imports).toContain("scripts/release/lib.ts");
+    expect(imports.filter((path) => !affectsEveryJob(path))).toEqual([]);
+    expect([...DECISION_CODE].toSorted()).toEqual(["scripts/ci/changes.ts", ...imports].toSorted());
+  });
+
+  test("the import guard follows every import form through other files", () => {
+    const root = mkdtempSync(join(tmpdir(), "changes-imports-"));
+    try {
+      write(root, {
+        "scripts/ci/entry.ts": 'import { a } from "./a.ts";\nimport "../side/effect.ts";\nexport { a };\n',
+        "scripts/ci/a.ts": 'export * from "../lib/b.ts";\nexport const a = 1;\n',
+        "scripts/lib/b.ts": 'import type { C } from "./c.ts";\nexport const load = () => import("../late/d.ts");\nexport type B = C;\n',
+        "scripts/lib/c.ts": "export type C = number;\n",
+        "scripts/late/d.ts": 'import { readFileSync } from "node:fs";\nconst e = require("./e.cjs");\nexport { e, readFileSync };\n',
+        "scripts/late/e.cjs": "module.exports = 1;\n",
+        "scripts/side/effect.ts": 'import f = require("../lib/f.ts");\nexport { f };\n',
+        "scripts/lib/f.ts": "export = 2;\n",
+      });
+      expect(importsOf("scripts/ci/entry.ts", root)).toEqual([
+        "scripts/ci/a.ts",
+        "scripts/late/d.ts",
+        "scripts/late/e.cjs",
+        "scripts/lib/b.ts",
+        "scripts/lib/c.ts",
+        "scripts/lib/f.ts",
+        "scripts/side/effect.ts",
+      ]);
+      for (const call of [
+        "import(name)",
+        'import("./a.ts" + suffix)',
+        "import(`./${name}`)",
+        'require("./a.ts".replace("a", name))',
+        "require(name)",
+      ]) {
+        write(root, { "scripts/ci/computed.ts": `const name = "a";\nconst suffix = "";\nexport const load = () => ${call};\n` });
+        expect(() => importsOf("scripts/ci/computed.ts", root)).toThrow();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   /** Repository files under `dir` with one of the extensions, skipping build output and hidden directories. */
   function sources(dir: string, extensions: readonly string[]): string[] {
     const found: string[] = [];

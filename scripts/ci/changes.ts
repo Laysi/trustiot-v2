@@ -18,8 +18,8 @@
  * Path rules: `rust` is the safe direction. It runs unless every changed file is in a short
  * list of paths that nothing in the rust job reads; a new top-level directory or file runs it
  * by default. `cargo-deny`, `helm` and `host` read a known, small set of files and run when one of
- * them changes. Changes to this script, ci.yml, the local actions or the tool pins run every
- * job. `gitleaks` and `workflow-policy` do not depend on this script and always run.
+ * them changes. Changes to this script or any repository file it imports (transitively;
+ * DECISION_CODE), ci.yml, the local actions or the tool pins run every job. `gitleaks` and `workflow-policy` do not depend on this script and always run.
  *
  * Usage (in the `changes` job): bun scripts/ci/changes.ts
  * Reads GITHUB_EVENT_NAME, GITHUB_REPOSITORY, GITHUB_API_URL, GITHUB_TOKEN (actions: read, for
@@ -43,18 +43,24 @@ export interface JobDecision {
 }
 export type Decision = Record<PathJob, JobDecision>;
 
-/** This script itself: a change to the rules runs every job, so the new rules are tested. */
-const SELF = "scripts/ci/changes.ts";
+/**
+ * This script and every repository file it imports, directly or through another import: a
+ * change to any of them can change the decision, so it runs every job and the new code is
+ * tested. `../release/lib.ts` picks the green main commit a push is compared with.
+ * changes.test.ts follows the imports and fails when one is missing here.
+ */
+export const DECISION_CODE: ReadonlySet<string> = new Set(["scripts/ci/changes.ts", "scripts/release/lib.ts"]);
 
 /**
- * Files every path-dependent job depends on: the workflow, its local actions, this script, and
- * the tool pins (`rust`, `cargo-deny`, `bun`, `helm` and `kubeconform` come from them).
+ * Files every path-dependent job depends on: the workflow, its local actions, this script and
+ * its imports, and the tool pins (`rust`, `cargo-deny`, `bun`, `helm` and `kubeconform` come
+ * from them).
  */
 export function affectsEveryJob(path: string): boolean {
   return (
     path === ".github/workflows/ci.yml" ||
     path.startsWith(".github/actions/") ||
-    path === SELF ||
+    DECISION_CODE.has(path) ||
     path === ".prototools" ||
     path.startsWith(".proto/")
   );

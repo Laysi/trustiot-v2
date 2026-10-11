@@ -17,15 +17,15 @@ $ bun scripts/ci/check-secret-handling.ts
 secret handling: 201 file(s) checked, 2 container build file(s), no violations
 
 $ bun run --cwd scripts test
- 511 pass
+ 513 pass
  1 skip            # scripts/tests/e2e.test.ts without TRUSTIOT_DEV_E2E
  0 fail
-Ran 512 tests across 20 files.
+Ran 514 tests across 20 files.
 
 $ bun test scripts/ci
- 262 pass
+ 264 pass
  0 fail
-Ran 262 tests across 5 files.
+Ran 264 tests across 5 files.
 
 $ bun test deploy/chart
  221 pass

@@ -85,14 +85,14 @@ Laysi/trustiot-v2#70 以這些公鑰建立 `.sops.yaml`，並把 sops 與 age �
 
 | job | 何時執行 |
 | --- | --- |
-| 全部 | `.github/workflows/ci.yml`、`.github/actions/` 下的任何檔案、`scripts/ci/changes.ts` 本身、`.prototools`、`.proto/` 下的任何檔案（`rust`、`cargo-deny`、`bun`、`helm`、`kubeconform` 的版本都從這裡來）有變動 |
+| 全部 | `.github/workflows/ci.yml`、`.github/actions/` 下的任何檔案、`scripts/ci/changes.ts` 本身與它直接或間接 import 的 repo 內檔案（目前是 `scripts/release/lib.ts`，推到 main 時由它挑出比較的基準 commit）、`.prototools`、`.proto/` 下的任何檔案（`rust`、`cargo-deny`、`bun`、`helm`、`kubeconform` 的版本都從這裡來）有變動 |
 | `rust` | 預設執行，只有在每個變動的檔案都屬於下列「`rust` 不讀的路徑」時才略過：`docs/`、`deploy/`（`deploy/chart/values.yaml` 除外，`crates/service-kit/tests/chart_contract.rs` 讀它）、`scripts/`、`frontend/`、`.github/`（上一列的 ci.yml 與本地 action 除外）、`.githooks/`，以及根目錄的 `README.md`、`renovate.json5`、`.gitleaksignore`、`.dockerignore`、`deny.toml`。不論在哪個目錄，`.rs`、`.sql` 與任何大小寫的 `AGENTS.md` 都會讓它執行（`tools/sql-check` 掃描整個 repo 的 Rust 檔與它們 include 的 SQL，`tools/repo-check` 不允許任何 AGENTS.md）。沒有列出的路徑（`crates/`、`services/`、`edge/`、`factory/`、`tools/`、`api/`、`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`clippy.toml`、`.cargo/`、`CLAUDE.md`、`.gitignore`、`datasets/`、`evals/`，以及之後新增的任何目錄）一律執行 |
 | `cargo-deny` | 任何 `Cargo.toml`、`Cargo.lock`、`deny.toml`、`rust-toolchain.toml`、`.cargo/` 下的檔案有變動 |
 | `helm` | `deploy/chart/`、`deploy/istio/` 下的檔案，或 chart 測試讀的 `scripts/lib/stack.ts`、`services/ingest/tests/common/mod.rs`、`docs/architecture/deployment.md` 有變動 |
 | `host` | `deploy/host/` 下的檔案有變動（安裝程式的原始碼、測試、相依與建置都在這個目錄） |
 | `gitleaks`、`workflow-policy` | 每次都執行 |
 
-**怎麼確保規則跟得上**：`scripts/ci/changes.test.ts` 逐類列出路徑與預期結果，另有兩項守門測試：掃描 repo 內每個 `.rs` 檔的字串常值與 `include_str!`/`include_bytes!`，凡是指向 repo 內某個路徑的，都必須會讓 `rust` 執行；掃描 `deploy/chart/tests/` 與 `deploy/host/` 的 TypeScript，凡是讀到 repo 內其他檔案的，都必須會讓 `helm` 或 `host` 執行。所以新測試開始讀某份文件時，若沒有同時更新規則，`workflow-policy` 會失敗。`scripts/ci/workflow-conditions.test.ts` 以 GitHub 自己的 expression 引擎（[`@actions/expressions`](https://www.npmjs.com/package/@actions/expressions)，GitHub 的 actions/languageservices，MIT）計算 ci.yml 與 nightly.yml 的 `if` 與 concurrency：`changes` 回答 `false` 才略過，回答 `true`、空值或 `changes` 本身失敗時都執行，整次執行被取消時不執行。
+**怎麼確保規則跟得上**：`scripts/ci/changes.test.ts` 逐類列出路徑與預期結果，另有兩項守門測試：掃描 repo 內每個 `.rs` 檔的字串常值與 `include_str!`/`include_bytes!`，凡是指向 repo 內某個路徑的，都必須會讓 `rust` 執行；掃描 `deploy/chart/tests/` 與 `deploy/host/` 的 TypeScript，凡是讀到 repo 內其他檔案的，都必須會讓 `helm` 或 `host` 執行。所以新測試開始讀某份文件時，若沒有同時更新規則，`workflow-policy` 會失敗。另一項守門測試沿著 `changes.ts` 的相對 import 一路追下去，每個被 import 的檔案都必須列在 `DECISION_CODE`，也就是會讓全部 job 執行。`scripts/ci/workflow-conditions.test.ts` 以 GitHub 自己的 expression 引擎（[`@actions/expressions`](https://www.npmjs.com/package/@actions/expressions)，GitHub 的 actions/languageservices，MIT）計算 ci.yml 與 nightly.yml 的 `if` 與 concurrency：`changes` 回答 `false` 才略過，回答 `true`、空值或 `changes` 本身失敗時都執行，整次執行被取消時不執行。
 
 **失敗時往執行的方向走**：每個依路徑的 job 寫成 `if: !cancelled() && needs.changes.outputs.<job> != 'false'`，`changes` 失敗、逾時或沒寫出結果時照樣執行；`changes.ts` 遇到任何問題也都回答「全部執行」，並在 job summary 寫明原因。
 
