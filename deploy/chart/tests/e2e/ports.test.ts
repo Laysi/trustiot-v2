@@ -1,6 +1,10 @@
 // Unit test of freePort (Laysi/trustiot-v2#288). Runs with `bun test deploy/chart`.
 import { expect, test } from "bun:test";
+import { useProcessTestTimeouts } from "../timing.ts";
 import { freePort } from "./ports.ts";
+
+// freePort() polls with real sockets, 20 times in the first test: see ../timing.ts.
+useProcessTestTimeouts();
 
 test("nothing accepts connections on a port right after freePort() returns it", async () => {
   // Before #288 the stopped listener kept accepting for a moment on WSL2.

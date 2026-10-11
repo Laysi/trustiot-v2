@@ -1,0 +1,5 @@
+before-kit run 1: exit 0, 282 s, load 36.03
+before-kit run 2: exit 0, 158 s, load 36.94
+before-kit run 3: exit 0, 173 s, load 37.83
+before-kit run 4: exit 0, 165 s, load 37.25
+before-kit: 0 of 4 runs failed

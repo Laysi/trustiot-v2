@@ -25,7 +25,7 @@ use service_kit::tenant::{PlatformActor, PlatformDb, TenantDb, TenantDbError};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use sqlx::{Connection, PgConnection, PgPool};
 use support::postgres::{SERVER_HOST, TestCa, TlsPostgres, tls_postgres};
-use support::{Service, request, spawn_example, wait_exit};
+use support::{OUTPUT_DRAIN_TIMEOUT, Output, Service, request, spawn_example, wait_exit};
 
 const TENANT_A: &str = "01928f6e-7a3c-7d4e-8f00-00000000000a";
 const TENANT_B: &str = "01928f6e-7a3c-7d4e-8f00-00000000000b";
@@ -62,6 +62,20 @@ const BACKEND_PID: &str = "SELECT pg_backend_pid()";
 
 /// SQLSTATE `insufficient_privilege`: row-level security violations and missing rights.
 const INSUFFICIENT_PRIVILEGE: &str = "42501";
+
+/// The pool acquire timeouts, in seconds, that a test tries one after the other while it waits
+/// for the kit to report a refused session. Opening a session (TLS handshake, then the session
+/// check) takes a few hundred milliseconds on an idle machine and several seconds on a busy
+/// one, and a pool that times out before its first session was checked has no refusal to
+/// report yet. The first budget is what an idle machine needs; each retry doubles it, so the
+/// wait is as long as the machine needs, up to a minute in all.
+const ACQUIRE_BUDGETS_SECONDS: [u64; 5] = [2, 4, 8, 16, 32];
+
+/// How long the example service may need to become ready. Its readiness check has to open a
+/// database session within 800 ms (`CHECK_TIMEOUT` in `health.rs`), so a busy machine can take
+/// many attempts; an idle one needs one. The wait ends at once when the service is ready or
+/// stops answering.
+const READY_BUDGET: Duration = Duration::from_secs(120);
 
 /// One test's database, with the template table and the seed rows.
 struct Fixture {
@@ -776,15 +790,7 @@ async fn sessions_row_level_security_would_not_protect_are_refused() {
 
     // Through the kit's pool, a refused session never reaches the caller: sqlx retries until
     // the acquire timeout, and the kit reports the refusal.
-    let as_owner = TenantDb::connect_lazy(
-        fixture.options("example_owner"),
-        PgPoolOptions::new().acquire_timeout(Duration::from_secs(2)),
-    )
-    .expect("verify-full options");
-    let error = as_owner
-        .begin(&Identity::new().user(Some(TENANT_A), false))
-        .await
-        .expect_err("the owner's session is refused");
+    let (as_owner, error) = refusal_through_pool(fixture.options("example_owner")).await;
     assert!(
         matches!(
             &error,
@@ -793,6 +799,69 @@ async fn sessions_row_level_security_would_not_protect_are_refused() {
         "{error}"
     );
     assert!(as_owner.ping().await.is_err(), "readiness fails too");
+}
+
+/// Begins a transaction through the kit's pool for `options` until the pool reports the
+/// refusal of the session, and returns that pool and the error. A pool that times out before
+/// its first session was checked has nothing to report (`TenantDbError::Database` with
+/// `PoolTimedOut`): that says the machine is slow, not that the kit is wrong, so it is tried
+/// again with a longer acquire timeout (`ACQUIRE_BUDGETS_SECONDS`). Any other outcome ends the
+/// wait: a refusal is the result, and a transaction that began or another error is a bug.
+#[allow(
+    clippy::print_stdout,
+    reason = "evidence for the test report, shown with `--nocapture`"
+)]
+async fn refusal_through_pool(options: PgConnectOptions) -> (TenantDb, TenantDbError) {
+    let user = Identity::new().user(Some(TENANT_A), false);
+    for seconds in ACQUIRE_BUDGETS_SECONDS {
+        let pool = PgPoolOptions::new().acquire_timeout(Duration::from_secs(seconds));
+        let db = TenantDb::connect_lazy(options.clone(), pool).expect("verify-full options");
+        match db.begin(&user).await {
+            Err(TenantDbError::Database(sqlx::Error::PoolTimedOut)) => {
+                println!("no session was checked within {seconds} s; trying a longer timeout");
+            }
+            Err(error) => return (db, error),
+            Ok(_) => panic!("a transaction began on a session that must be refused"),
+        }
+    }
+    panic!(
+        "the pool reported no refusal within {ACQUIRE_BUDGETS_SECONDS:?} s: no session was \
+         checked in that time"
+    );
+}
+
+/// Polls `/readyz` until it answers 200, for at most `READY_BUDGET`. A service that stops
+/// answering, or answers anything but 200 or 503, fails the test at once; so does one that is
+/// still not ready at the end, with its last answer and its output, which names the failing
+/// check.
+#[allow(
+    clippy::print_stdout,
+    reason = "evidence for the test report, shown with `--nocapture`"
+)]
+fn wait_until_ready(address: std::net::SocketAddr, stdout: &Output, stderr: &Output) {
+    let started = Instant::now();
+    loop {
+        let answer = support::get(address, "/readyz");
+        match &answer {
+            Ok(response) if response.status == 200 => {
+                println!("ready after {} ms", started.elapsed().as_millis());
+                return;
+            }
+            Ok(response) if response.status == 503 => {}
+            _ => panic!(
+                "GET /readyz did not answer 200 or 503: {answer:?}\nstdout:\n{}\nstderr:\n{}",
+                stdout.text(),
+                stderr.text()
+            ),
+        }
+        assert!(
+            started.elapsed() < READY_BUDGET,
+            "the service was not ready after {READY_BUDGET:?}; last answer: {answer:?}\nstdout:\n{}\nstderr:\n{}",
+            stdout.text(),
+            stderr.text()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// Connections verify the server's certificate chain and host name; options that would not
@@ -1092,10 +1161,7 @@ fn a_service_without_server_verification_refuses_to_start() {
             wait_exit(&mut child, Duration::from_secs(10)).expect("the service exits by itself");
         assert_eq!(status.code(), Some(1), "sslmode {sslmode:?}");
         let error = stdout
-            .wait_for_message(
-                "invalid configuration; not starting",
-                Duration::from_secs(2),
-            )
+            .wait_for_message("invalid configuration; not starting", OUTPUT_DRAIN_TIMEOUT)
             .unwrap_or_else(|| panic!("sslmode {sslmode:?}: the error is logged"));
         let text = error["fields"]["error"].as_str().expect("error text");
         assert!(text.contains("platform.postgres_sslmode"), "{text}");
@@ -1229,20 +1295,14 @@ async fn the_example_service_serves_each_user_only_their_tenant() {
 
     let service = start(env(&ca_file)).await.expect("start");
     let address = service.address;
+    let (stdout, stderr) = (service.stdout.clone(), service.stderr.clone());
     let tokens = [
         identity.token(Some(TENANT_A), false),
         identity.token(Some(TENANT_B), false),
         identity.token(None, false),
     ];
     let responses = tokio::task::spawn_blocking(move || {
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while support::get(address, "/readyz").expect("readyz").status != 200 {
-            assert!(
-                Instant::now() < deadline,
-                "the service did not become ready"
-            );
-            std::thread::sleep(Duration::from_millis(100));
-        }
+        wait_until_ready(address, &stdout, &stderr);
         tokens
             .iter()
             .map(|token| {

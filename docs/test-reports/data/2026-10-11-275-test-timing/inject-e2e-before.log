@@ -1,0 +1,5 @@
+(fail) tunnel dies while a request is in flight > the request fails before the process has exited, the way kubectl behaves (fault injection) [825.08ms]
+(fail) sendRaw > a failure after the response head arrived is not a ConnectionError, so it is never retried [501.19ms]
+ 20 pass
+ 2 fail
+Ran 22 tests across 2 files. [2.87s]
