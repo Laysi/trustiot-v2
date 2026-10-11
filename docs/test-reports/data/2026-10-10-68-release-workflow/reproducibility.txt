@@ -1,0 +1,8 @@
+first build:  sha256:182467660b124c93204d556d04aec5ec87dfcd274dd27bfdf85ee2d2248ac2ea
+rebuild 1:    sha256:182467660b124c93204d556d04aec5ec87dfcd274dd27bfdf85ee2d2248ac2ea
+rebuild 2:    sha256:182467660b124c93204d556d04aec5ec87dfcd274dd27bfdf85ee2d2248ac2ea
+binary sha256 (first build and rebuilds share target/; the image layers are rebuilt each time):
+fdfc10c5c326e5cebf7d6698a9909f421ae67bb1f4ffaca47f7fc474a4c70fb3  target/aarch64-unknown-linux-musl/release/release-selftest
+embedded source paths (expect /cargo and no /home):
+/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/itoa-1.0.18/...
+file: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped

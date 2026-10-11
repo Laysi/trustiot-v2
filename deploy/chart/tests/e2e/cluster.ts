@@ -74,12 +74,9 @@ export async function waitFor(what: string, check: () => boolean | Promise<boole
   throw new Error(`timed out waiting for ${what}`);
 }
 
-export async function freePort(): Promise<number> {
-  const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
-  const port = server.port;
-  server.stop(true);
-  return port;
-}
+// A local port nothing listens on, for a tunnel process (ports.ts explains why a plain
+// listen-and-stop is not enough on WSL2).
+export { freePort } from "./ports.ts";
 
 // Image values of one service from an image reference (repository[:tag][@sha256:digest]).
 export function imageValues(service: string, image: string): string[] {

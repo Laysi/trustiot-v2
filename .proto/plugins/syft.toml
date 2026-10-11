@@ -1,0 +1,30 @@
+# proto schema plugin for syft (https://github.com/anchore/syft), the SBOM generator.
+# Downloads the official release archive and verifies it against the checksums
+# file published with the release.
+# Reference: https://moonrepo.dev/docs/proto/non-wasm-plugin
+
+name = "syft"
+type = "cli"
+
+[platform.linux]
+download-file = "syft_{version}_linux_{arch}.tar.gz"
+checksum-file = "syft_{version}_checksums.txt"
+
+[platform.macos]
+download-file = "syft_{version}_darwin_{arch}.tar.gz"
+checksum-file = "syft_{version}_checksums.txt"
+
+[install]
+download-url = "https://github.com/anchore/syft/releases/download/v{version}/{download_file}"
+checksum-url = "https://github.com/anchore/syft/releases/download/v{version}/{checksum_file}"
+
+[install.arch]
+aarch64 = "arm64"
+x86_64 = "amd64"
+
+[install.exes.syft]
+exe-path = "syft"
+primary = true
+
+[resolve]
+git-url = "https://github.com/anchore/syft"

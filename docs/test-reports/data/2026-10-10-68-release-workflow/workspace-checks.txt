@@ -1,0 +1,27 @@
+# Workspace checks after rebasing ci/68-release-workflow onto main 71be25d
+# Run 2026-10-10 12:37-12:39Z on the workstation (Fedora 45 x86_64), HEAD ee8c438, CARGO_BUILD_JOBS=2.
+# Each command's full log was kept locally; this file has the exit codes and the summaries.
+
+$ cargo fmt --all --check
+fmt: exit 0 in 0s (no output)
+
+$ cargo clippy --workspace --all-targets --locked -- -D warnings
+clippy: exit 0 in 11s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.44s
+
+$ cargo test --workspace --locked
+test: exit 0 in 62s
+23 test result lines: 194 passed, 0 failed, 0 ignored
+(includes `unittests src/main.rs (release_selftest)`: running 4 tests ... ok)
+
+$ bun test deploy/chart
+chart: exit 0 in 18s
+ 91 pass
+ 0 fail
+Ran 91 tests across 1 file.
+
+$ bun test scripts/release
+release-scripts: exit 0 in 1s
+ 82 pass
+ 0 fail
+Ran 82 tests across 2 files.
