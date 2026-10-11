@@ -43,7 +43,7 @@ trustiot-v2/
 ├── tools/
 │   ├── migrate/               # migration Job
 │   ├── openapi/               # 合併各服務的 OpenAPI 規格，產生 api/openapi.json
-│   ├── release-selftest/      # release.yml 的流程自測映像，不是服務；第一個服務映像加入後刪除
+│   ├── release-selftest/      # release.yml 的流程自測映像，不是服務；第一個 Rust 服務映像加入後刪除
 │   ├── repo-check/            # repo 規則檢查，隨 cargo test 執行
 │   └── sql-check/             # 擋下由字串組成的 SQL 與 kit 以外的租戶設定（決策 29），隨 cargo test 執行
 ├── deploy/
@@ -51,7 +51,7 @@ trustiot-v2/
 │   ├── istio/                 # Istio ambient 的安裝 values 與 ext_authz provider（叢集共用的平台元件）
 │   ├── flux/                  # SaaS 的 GitOps 設定（Flux）
 │   ├── host/                  # 主機安裝：k3s、cloudflared（SaaS）
-│   └── images/                # release.yml 發佈的 arm64 映像：每個子目錄一個（image.toml 或 Containerfile）
+│   └── images/                # release.yml 發佈的 arm64 映像：每個子目錄一個（image.toml 或 Containerfile）；postgres/ 是含 AGE 的 CloudNativePG 映像
 ├── scripts/                   # Bun + TS：本地一鍵啟動（M6，podman）、種子資料、CI 檢查（ci/）、發佈流程（release/）；見 scripts/README.md
 ├── evals/                     # 題庫：分析、RAG、補全延遲、跨租戶 Cypher 攻擊
 ├── datasets/lab/              # lab 資料集索引與標註

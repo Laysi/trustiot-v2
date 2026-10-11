@@ -147,6 +147,57 @@ jobs:
       # check (deploy/chart/README.md). kubeconform downloads the Kubernetes schemas.
       - run: bun test deploy/chart
 
+  postgres-image:
+    name: postgres-image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The change check below compares with the base of the pull request or the push.
+          fetch-depth: 0
+          persist-credentials: false
+      # Building and emulating the arm64 image takes minutes, so it only runs when the image,
+      # its test or this workflow changes. A skipped run still reports success.
+      - id: changes
+        name: Check for changes to the image
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          paths=(deploy/images/postgres .github/workflows/ci.yml scripts/release/lib.ts)
+          if [[ -z "$BASE" || "$BASE" =~ ^0+$ ]] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            run=true
+          elif git diff --quiet "$BASE" HEAD -- "${paths[@]}"; then
+            run=false
+            echo "::notice title=postgres-image::No changes to ${paths[*]}; the image is not rebuilt."
+          else
+            run=true
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+      - if: ${{ steps.changes.outputs.run == 'true' }}
+        uses: ./.github/actions/setup-proto
+        with:
+          tools: bun
+      # Built the way release.yml builds it: linux/arm64 on this x86 runner with no emulator
+      # registered yet, so a program run in the arm64 stage fails here as it would in a release.
+      - name: Build the arm64 image
+        if: ${{ steps.changes.outputs.run == 'true' }}
+        run: podman build --platform linux/arm64 --format oci --tag localhost/trustiot-ci/postgres:ci deploy/images/postgres
+      # The test starts Postgres in the arm64 image, which needs an arm64 emulator from here on.
+      - name: Register the arm64 emulator
+        if: ${{ steps.changes.outputs.run == 'true' }}
+        run: sudo podman run --rm --privileged docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0 --install arm64
+      # CREATE EXTENSION age and cypher() queries in the image, run as CloudNativePG runs it
+      # (deploy/images/postgres/README.md). CI=true makes the test fail instead of skip when the
+      # image cannot run.
+      - name: Test the image
+        if: ${{ steps.changes.outputs.run == 'true' }}
+        env:
+          POSTGRES_IMAGE: localhost/trustiot-ci/postgres:ci
+        run: bun test deploy/images/postgres
+
   gitleaks:
     name: gitleaks
     runs-on: ubuntu-24.04

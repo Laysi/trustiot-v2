@@ -18,7 +18,9 @@ package = "identity"        # Cargo 套件名
 
 ## 自帶 Containerfile 的映像
 
-子目錄放 `Containerfile`，以該目錄為 build context，以 `podman build --platform linux/arm64` 建置。release.yml 在 x86 的 GitHub 代管 runner 上建置，而且不使用模擬器，所以 arm64 那一層不能有 `RUN`：要編譯的東西放在 `FROM --platform=$BUILDPLATFORM` 的建置階段交叉編譯後 `COPY` 進來，或取用上游已有的 arm64 映像。基底映像以 tag 加 digest 釘選。
+子目錄放 `Containerfile`，以該目錄為 build context，以 `podman build --platform linux/arm64` 建置。release.yml 在 x86 的 GitHub 代管 runner 上建置，而且不使用模擬器，所以 arm64 那一層不能有 `RUN`：要編譯的東西放在 `FROM --platform=$BUILDPLATFORM` 的建置階段交叉編譯後 `COPY` 進來，或取用上游已有的 arm64 映像。基底映像以 tag 加 digest 釘選。範例是 [postgres](postgres/README.md)（CloudNativePG 的 Postgres 加交叉編譯的 Apache AGE）。
+
+SBOM 由 syft 從映像產生，只列得出套件資料庫（例如 dpkg）或執行檔本身宣告的東西。自己編譯後 `COPY` 進來的程式不在任何套件資料庫裡，要在連結時加上 ELF package note（systemd 的 ELF package metadata，例如 `-Xlinker '--package-metadata={"type":"generic","name":"<名稱>","version":"<版本>"}'`），syft 才會把它列進 SBOM；postgres 映像的 AGE 就是這樣做。
 
 ## 本機試建
 

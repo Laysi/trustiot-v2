@@ -63,7 +63,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | Rust 服務（見下一節） | `services.<name>.enabled` | 通用樣板完成；映像還沒出，預設全關 | 各服務的 issue 出映像時改成開 |
 | 入口 gateway（Istio ambient、Gateway API、ext_authz） | `ingress.*` | 完成：Gateway、路由、cookie 驗證、例外路徑、`/internal` 拒絕與 NetworkPolicy；服務的 pod 加入 ambient mesh。Istio 本身與 ext_authz provider 由 `deploy/istio` 安裝。服務的 cookie 路由隨各服務加入 `ingress.routes` | Laysi/trustiot-v2#62；真身分服務的端到端驗證在 Laysi/trustiot-v2#77 |
 | 服務間授權（AuthorizationPolicy、NetworkPolicy） | `mesh.*` | 完成：每個服務自己的 ServiceAccount、依 `mesh.calls` 產生的 AuthorizationPolicy、namespace 預設拒絕的 NetworkPolicy；不部署 waypoint。服務之間的呼叫隨各服務加入 `mesh.calls` | Laysi/trustiot-v2#63；代表使用者呼叫的授權矩陣在 Laysi/trustiot-v2#106 |
-| Postgres（CloudNativePG 加 AGE） | `postgres.mode` | `external` 已接到平台設定；`bundled` 的 operator 與 Cluster 尚未加入 | Laysi/trustiot-v2#57、Laysi/trustiot-v2#58 |
+| Postgres（CloudNativePG 加 AGE） | `postgres.mode` | `external` 已接到平台設定；含 AGE 的映像在 [deploy/images/postgres](../images/postgres/README.md)，由 release.yml 發佈；`bundled` 的 operator 與 Cluster 尚未加入 | Laysi/trustiot-v2#57、Laysi/trustiot-v2#58 |
 | migration Job | — | 尚未加入 | Laysi/trustiot-v2#60 |
 | ClickHouse | `clickhouse.mode` | `bundled`：單節點 StatefulSet（見「叢集內的 ClickHouse」）；`external` 已接到平台設定。schema、帳號與 row policy 由 migration Job 以 SQL 套用 | Laysi/trustiot-v2#60（migration Job）、Laysi/trustiot-v2#72（admin 密碼的 Secret） |
 | MQTT broker（Mosquitto） | — | 尚未加入 | Laysi/trustiot-v2#84 |

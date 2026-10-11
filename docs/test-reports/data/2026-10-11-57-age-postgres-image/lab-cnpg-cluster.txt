@@ -1,0 +1,53 @@
+## CloudNativePG ghcr.io/cloudnative-pg/cloudnative-pg:1.30.1
+Cluster in healthy state image=localhost/trustiot-57/postgres:release-local@sha256:cb840e1939e3cf785d3ff68f9ba62b9d196a3987e4fd705170a4489735ffea9c
+## pod age-1: image, pod and container securityContext
+localhost/trustiot-57/postgres:release-local@sha256:cb840e1939e3cf785d3ff68f9ba62b9d196a3987e4fd705170a4489735ffea9c
+docker.io/library/import-2026-10-11@sha256:4b3ac2ccf8a0ccb4db21c0ef8961db701ab70bf817882502c461ddef69bd3ecc
+pod: {"fsGroup":26,"runAsGroup":26,"runAsNonRoot":true,"runAsUser":26,"seccompProfile":{"type":"RuntimeDefault"}}
+postgres: {"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"privileged":false,"readOnlyRootFilesystem":true,"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}
+## inside the postgres container
+uid=26(postgres) gid=26(tape) groups=26(tape),101(ssl-cert)
+USER         PID COMMAND
+postgres      26 postgres
+postgres      27 postgres
+touch: cannot touch '/usr/lib/postgresql/18/lib/x': Read-only file system
+age
+## AGE
+SELECT version();
+                                                         version                                                          
+--------------------------------------------------------------------------------------------------------------------------
+ PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+(1 row)
+
+CREATE EXTENSION age;
+CREATE EXTENSION
+SELECT extname, extversion FROM pg_extension WHERE extname = 'age';
+ extname | extversion 
+---------+------------
+ age     | 1.8.0
+(1 row)
+
+SET search_path = ag_catalog, "$user", public;
+SET
+SELECT create_graph('plant');
+NOTICE:  graph "plant" has been created
+ create_graph 
+--------------
+ 
+(1 row)
+
+SELECT * FROM cypher('plant', $$
+  CREATE (:Machine {name: 'press-1'})-[:FEEDS]->(:Machine {name: 'oven-2'})
+$$) AS (v agtype);
+ v 
+---
+(0 rows)
+
+SELECT * FROM cypher('plant', $$
+  MATCH (a:Machine)-[:FEEDS]->(b:Machine) RETURN a.name, b.name
+$$) AS (a agtype, b agtype);
+     a     |    b     
+-----------+----------
+ "press-1" | "oven-2"
+(1 row)
+

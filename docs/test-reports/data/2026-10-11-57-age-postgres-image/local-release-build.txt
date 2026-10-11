@@ -1,0 +1,52 @@
+# Release build path on the workstation (x86_64, Fedora 45, podman 6.1.3, no arm64 emulator
+# registered: /proc/sys/fs/binfmt_misc has only `register` and `status`), 2026-10-11
+
+$ bun scripts/release/plan.ts --tag v0.0.0-rc.1 --dry-run --output plan-all.json
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.1 → version 0.0.0-rc.1 (prerelease), commit 0a5b01ca73f2e0c5d43e948ac7a6883de92a218e
+[release:plan] image ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.1 (deploy/images/postgres)
+[release:plan] image ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 (Rust package release-selftest)
+[release:plan] chart ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1
+# plan.json = plan-all.json with only the postgres image, so the run skips the Rust cross-compile
+$ bun scripts/release/build.ts --plan plan.json --out release
+[release:build] building ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.1 for linux/arm64
+[release:build] ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.1 → sha256:cb840e1939e3cf785d3ff68f9ba62b9d196a3987e4fd705170a4489735ffea9c, SBOM SPDX-2.3 with 142 packages
+(build.ts also ran imagePlatformProblems: linux/arm64 manifest and config; result in local-release-build.json)
+
+# Cross-compile, from the build log
+aarch64-linux-gnu-gcc ... -mbranch-protection=standard -fPIC ... -I/usr/include/postgresql/18/server ... -c -o src/backend/age.o src/backend/age.c
+aarch64-linux-gnu-gcc ... -shared -o age.so ... -L/usr/aarch64-linux-gnu/lib -Wl,-z,relro -Wl,-z,now -Wl,--as-needed -Xlinker '--package-metadata={"type":"generic","name":"apache-age","version":"1.8.0","license":"Apache-2.0","sourceRepo":"https://github.com/apache/age"}'
+/usr/bin/install -c -m 755 age.so '/out/usr/lib/postgresql/18/lib/age.so'
+/usr/bin/install -c -m 644 .//age.control '/out/usr/share/postgresql/18/extension/'
+/usr/bin/install -c -m 644 .//age--1.6.0--1.7.0.sql .//age--1.7.0--1.8.0.sql age--1.8.0.sql '/out/usr/share/postgresql/18/extension/'
+
+# age.so copied out of the image (podman create + podman cp, nothing executed)
+$ LC_ALL=C file age-release.so
+age-release.so: ELF 64-bit LSB shared object, ARM aarch64, version 1 (SYSV), dynamically linked, BuildID[sha1]=64e2e48d05159dd170db5d8f12c7818539881564, not stripped
+$ LC_ALL=C readelf -d age-release.so | grep NEEDED
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-aarch64.so.1]
+$ LC_ALL=C readelf -n age-release.so | grep -A2 -i package
+Displaying notes found in: .note.package
+  Owner                Data size 	Description
+  FDO                  0x00000080	FDO_PACKAGING_METADATA
+
+# SBOM entry for AGE (release/images/postgres.spdx.json)
+{"name":"apache-age","version":"1.8.0","lic":"Apache-2.0","refs":["cpe:2.3:a:apache:apache-age:1.8.0:*:*:*:*:*:*:*","cpe:2.3:a:apache:apache_age:1.8.0:*:*:*:*:*:*:*","pkg:generic/apache-age@1.8.0"]}
+(full package list: sbom-packages.txt)
+
+# Image size: OCI archive 90,671,616 bytes (gzip layers); uncompressed 278 MB
+
+# Reproducibility: age.so from the release build above and from
+# `podman build --no-cache --platform linux/arm64 --format oci --timestamp 1791619200 ...` (fresh apt
+# from the Debian snapshot, fresh compile) are byte-identical:
+7301f9108bb1e083e4234adfd0362c28976c76ee17c8ef6ed2fc6bd85daa4e29  age-nocache.so
+7301f9108bb1e083e4234adfd0362c28976c76ee17c8ef6ed2fc6bd85daa4e29  age-release.so
+
+# image.test.ts on the workstation (x86, no emulator): the file checks pass, the Postgres checks skip
+$ POSTGRES_IMAGE=localhost/trustiot-57/postgres:dev bun test deploy/images/postgres
+skipped: this machine cannot run linux/arm64 containers (needs an arm64 host or binfmt_misc qemu-aarch64)
+ 5 pass
+ 3 skip
+ 0 fail
