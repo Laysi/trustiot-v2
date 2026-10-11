@@ -1,0 +1,5 @@
+trustiot-host-install-aarch64: OK
+== e2e unit, skip k3s, dry run, no token
+  host: Fedora Linux Asahi Remix 44 (Server Edition), arm64, systemd 259
+error: the installed cloudflared did not come from the pinned repository (installed from @commandline, signature (none)). Run again with --reinstall-cloudflared to replace it with Cloudflare's signed package; services already running it keep the old binary until they restart
+exit=1

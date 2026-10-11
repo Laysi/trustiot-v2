@@ -1,0 +1,44 @@
+  host: Fedora Linux Asahi Remix 44 (Server Edition), arm64, systemd 259
+  k3s: skipped (--skip-k3s), left as it is
++ replace /etc/yum.repos.d/cloudflared.repo: cloudflared repository (https://pkg.cloudflare.com/cloudflared/rpm)
++ replace the installed cloudflared with Cloudflare's signed package from the pinned repository (--reinstall-cloudflared)
+Updating and loading repositories:
+ cloudflared-stable                     100% |   3.8 KiB/s |   2.5 KiB |  00m01s
+Repositories loaded.
+Package                  Arch    Version       Repository              Size
+Reinstalling:
+ cloudflared             aarch64 0:2026.10.0-1 cloudflared-stable  35.9 MiB
+   replacing cloudflared aarch64 0:2026.10.0-1 @commandline        35.9 MiB
+
+Transaction Summary:
+ Reinstalling:       1 package
+ Replacing:          1 package
+
+Total size of inbound packages is 17 MiB. Need to download 17 MiB.
+After this operation, 0 B extra will be used (install 36 MiB, remove 36 MiB).
+[1/1] cloudflared-0:2026.10.0-1.aarch64 100% |  15.8 MiB/s |  17.0 MiB |  00m01s
+--------------------------------------------------------------------------------
+[1/1] Total                             100% |  15.8 MiB/s |  17.0 MiB |  00m01s
+Running transaction
+Importing OpenPGP key 0x8D4E5E73:
+ UserID     : "CloudFlare Software Packaging 2025 <help@cloudflare.com>"
+ Fingerprint: CC94B39C77AE7342A68B89628A682D308D4E5E73
+ From       : file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cloudflare-packaging
+The key was successfully imported.
+[1/4] Verify package files              100% |  20.0   B/s |   1.0   B |  00m00s
+[2/4] Prepare transaction               100% |  46.0   B/s |   2.0   B |  00m00s
+[3/4] Reinstalling cloudflared-0:2026.1 100% | 268.2 MiB/s |  35.9 MiB |  00m00s
+[4/4] Removing cloudflared-0:2026.10.0- 100% |  15.0   B/s |   2.0   B |  00m00s
+Complete!
+  tunnel token: tunnel ec56d1af-3baf-4ed1-a0a0-5c79a74ce978
++ write /etc/credstore/cloudflared-e2e-64.tunnel-token: tunnel token (root only)
++ write /etc/systemd/system/cloudflared-e2e-64.service: cloudflared unit (sandboxed, token through LoadCredential)
++ reload systemd's unit files
++ enable cloudflared-e2e-64.service at boot
++ start cloudflared-e2e-64.service and wait for its first tunnel connection
+  check: systemd-analyze security cloudflared-e2e-64.service = 1.1 (at most 2)
+  check: nothing listens on TCP or UDP 80 or 443
+  check: no pod publishes host port 80 or 443
+  note: TCP listeners on non-loopback addresses (firewalld decides who reaches them): 22 sshd, 5355 systemd-resolve, 27500 passimd, 9090 systemd, 6443 k3s-server, 10250 k3s-server
+Done: 7 change(s) made.
+exit=0

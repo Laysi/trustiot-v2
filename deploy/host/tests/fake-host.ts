@@ -37,6 +37,8 @@ export class FakeHost implements System {
   /** What the k3s API server reports: the node's pod networks and the kubernetes Service's addresses. */
   podCidrs = "10.42.0.0/24";
   serviceIps = "10.43.0.1";
+  /** Number of pod network queries that come back empty, as for a node that just became Ready. */
+  podCidrsPending = 0;
   units = new Map<string, Unit>();
   selinux = "Enforcing";
   defaultZone = "FedoraServer";
@@ -44,6 +46,8 @@ export class FakeHost implements System {
   targets = new Map<string, string>();
   /** Output of `firewall-cmd --direct --get-all-rules`. */
   directRules = "";
+  /** "unknown" makes --info-zone/--info-policy print only the target, a layout the installer must refuse. */
+  infoFormat: "firewalld-2.4" | "unknown" = "firewalld-2.4";
   /** False for a firewalld older than 0.9, which has no policies. */
   policiesSupported = true;
   /** False for a cloudflared older than its --token-file option. */
@@ -139,7 +143,13 @@ export class FakeHost implements System {
       case K3S_BINARY:
         if (args[0] === "--version") return ok("k3s version v1.36.5+k3s1 (abcdef12)\ngo version go1.25\n");
         if (!this.units.get("k3s")?.active) return fail(1, "connection refused");
-        if (args.includes("jsonpath={.items[*].spec.podCIDRs[*]}")) return ok(this.podCidrs);
+        if (args.includes("jsonpath={.items[*].spec.podCIDRs[*]}")) {
+          if (this.podCidrsPending > 0) {
+            this.podCidrsPending--;
+            return ok("");
+          }
+          return ok(this.podCidrs);
+        }
         if (args.includes("jsonpath={.spec.clusterIPs[*]}")) return ok(this.serviceIps);
         if (args.includes("pods")) return ok(this.podHostPorts);
         return ok("host Ready control-plane 1m v1.36.5+k3s1\n");
@@ -281,8 +291,20 @@ export class FakeHost implements System {
       const entry = kind === "policy" ? this.policies.get(name ?? "") : (permanent ? this.permanent : this.runtime).get(name ?? "");
       if (!entry) return fail(112, "INVALID_ZONE");
       const target = this.targets.get(name ?? "") ?? (kind === "policy" ? "CONTINUE" : name === "trusted" ? "ACCEPT" : "default");
-      const egress = kind === "policy" ? "  egress-zones: HOST\n" : "";
-      return ok(`${name}\n  target: ${target}\n${egress}  services: ${[...entry.services].join(" ")}\n`);
+      if (this.infoFormat === "unknown") return ok(`${name}\n  target: ${target}\n`);
+      // The layout of firewalld 2.4: one `  key: value` line per field, and the entries of
+      // forward-ports and rich rules on their own lines, indented with a tab.
+      const list = (items: Set<string>) => [...items].map((item) => `\t${item}\n`).join("");
+      const head =
+        kind === "policy"
+          ? `${name}\n  disable: no\n  priority: -1\n  target: ${target}\n  ingress-zones: ANY\n  egress-zones: HOST\n`
+          : `${name}\n  target: ${target}\n  ingress-priority: 0\n  egress-priority: 0\n  icmp-block-inversion: no\n` +
+            `  interfaces: ${[...entry.interfaces].join(" ")}\n  sources: ${[...entry.sources].join(" ")}\n`;
+      return ok(
+        `${head}  services: ${[...entry.services].join(" ")}\n  ports: ${[...entry.ports].join(" ")}\n  protocols: \n` +
+          `  forward: yes\n  masquerade: no\n  forward-ports: \n${list(entry.forwardPorts)}  source-ports: \n  icmp-blocks: \n` +
+          `  rich rules: \n${list(entry.richRules)}`,
+      );
     }
     const policyName = args.find((arg) => arg.startsWith("--policy="))?.slice(9);
     const zoneName = args.find((arg) => arg.startsWith("--zone="))?.slice(7) ?? this.defaultZone;

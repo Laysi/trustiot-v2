@@ -1,0 +1,11 @@
+  host: Fedora Linux Asahi Remix 44 (Server Edition), arm64, systemd 259
+  k3s: skipped (--skip-k3s), left as it is
+  cloudflared: cloudflared version 2026.10.0 (built 2026-10-05-17:37 UTC); updates come with `dnf upgrade --repo=cloudflared-stable cloudflared`
+  tunnel token: kept the one in /etc/credstore/cloudflared-e2e-64.tunnel-token (tunnel ec56d1af-3baf-4ed1-a0a0-5c79a74ce978)
+  check: systemd-analyze security cloudflared-e2e-64.service = 1.1 (at most 2)
+  check: nothing listens on TCP or UDP 80 or 443
+  check: no pod publishes host port 80 or 443
+  note: TCP listeners on non-loopback addresses (firewalld decides who reaches them): 22 sshd, 5355 systemd-resolve, 27500 passimd, 9090 systemd, 6443 k3s-server, 10250 k3s-server
+Done: the host already matched; nothing changed.
+exit=0
+450447

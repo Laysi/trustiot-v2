@@ -14,7 +14,14 @@ import {
   renderUnit,
   unitPath,
 } from "../src/desired.ts";
-import { type InstallOptions, InstallError, install, parseListeners, richRuleOpensWebPort } from "../src/install.ts";
+import {
+  type InstallOptions,
+  InstallError,
+  install,
+  parseFirewallInfo,
+  parseListeners,
+  richRuleOpensWebPort,
+} from "../src/install.ts";
 import { TokenError } from "../src/token.ts";
 import { FAKE_INSTALLER_SHA256, FakeHost } from "./fake-host.ts";
 
@@ -231,6 +238,16 @@ describe("existing hosts", () => {
     host.podCidrs = "10.244.0.0/24";
     await expect(run(host)).rejects.toThrow(/pod network 10.244.0.0\/24/);
     expect(host.files.has(credentialPath("cloudflared"))).toBe(false);
+  });
+
+  test("a new node that is Ready before its pod network is assigned is waited for", async () => {
+    // Seen on a clean Fedora Cloud 44 VM on 2026-10-10: Ready one second after the node object
+    // was created, with spec.podCIDRs still empty.
+    const host = new FakeHost();
+    host.podCidrsPending = 2;
+    await run(host);
+    expect(host.podCidrsPending).toBe(0);
+    expect(host.units.get("cloudflared")?.active).toBe(true);
   });
 
   test("a running k3s that would not start at boot is enabled", async () => {
@@ -505,7 +522,14 @@ describe("refusals and checks", () => {
       /forwards port=80/,
     ],
     ["a custom service with 443", (host: FakeHost) => void host.runtime.get("FedoraServer")?.services.add("web-alt"), /allows the service web-alt/],
-    ["a zone with target ACCEPT", (host: FakeHost) => void host.targets.set("work", "ACCEPT"), /zone work \(runtime\) has the target ACCEPT/],
+    [
+      "a bound zone with target ACCEPT",
+      (host: FakeHost) => {
+        host.targets.set("work", "ACCEPT");
+        host.permanent.get("work")?.interfaces.add("eth1");
+      },
+      /zone work \(permanent\) has the target ACCEPT/,
+    ],
     ["a policy into the host with target ACCEPT", (host: FakeHost) => void host.targets.set("allow-host-ipv6", "ACCEPT"), /policy allow-host-ipv6/],
     ["a direct rule", (host: FakeHost) => void (host.directRules = "ipv4 filter INPUT 0 -p tcp --dport 443 -j ACCEPT\n"), /has direct rules/],
   ])("%s stops the run before any change", async (_name, configure, message) => {
@@ -515,12 +539,61 @@ describe("refusals and checks", () => {
     expect(host.mutations).toBe(0);
   });
 
+  test("an unbound zone with target ACCEPT, like Fedora's nm-shared, is fine", async () => {
+    const host = await installedHost();
+    for (const zones of [host.runtime, host.permanent]) {
+      zones.set("nm-shared", {
+        services: new Set(["dhcp", "dns", "ssh"]),
+        ports: new Set(),
+        sources: new Set(),
+        interfaces: new Set(),
+        richRules: new Set(['rule priority="32767" reject']),
+        forwardPorts: new Set(),
+      });
+    }
+    host.targets.set("nm-shared", "ACCEPT");
+    host.servicePorts.dhcp = ["67/udp"];
+    host.servicePorts.dns = ["53/tcp", "53/udp"];
+    const result = await run(host, options({ token: null }));
+    expect(result.changes).toEqual([]);
+  });
+
+  test.each([
+    ["the current default zone", "runtime"],
+    ["the default zone in firewalld.conf", "config"],
+  ])("%s with target ACCEPT stops the run even with nothing bound", async (_name, where) => {
+    // The default zone takes every interface that is bound to no zone.
+    const host = await installedHost();
+    host.targets.set("work", "ACCEPT");
+    if (where === "runtime") host.defaultZone = "work";
+    else host.files.set("/etc/firewalld/firewalld.conf", { data: new TextEncoder().encode("DefaultZone=work\n"), mode: 0o644, uid: 0 });
+    await expect(run(host, options({ token: null }))).rejects.toThrow(/zone work .* target ACCEPT/);
+    expect(host.mutations).toBe(0);
+  });
+
   test("rich rules that refuse web ports and other rich rules are fine", async () => {
     const host = await installedHost();
     host.permanent.get("public")?.richRules.add('rule family="ipv4" source address="192.0.2.0/24" port port="443" protocol="tcp" reject');
     host.permanent.get("public")?.richRules.add('rule family="ipv4" source address="192.0.2.0/24" service name="ssh" accept');
     const result = await run(host, options({ token: null }));
     expect(result.changes).toEqual([]);
+  });
+
+  test("each zone and policy is read with one --info call, not one call per field", async () => {
+    const host = await installedHost();
+    await run(host, options({ token: null }));
+    const listCalls = host.commands.filter((cmd) =>
+      cmd.some((arg) => /^--list-(services|ports|forward-ports|rich-rules)$/.test(arg)),
+    );
+    expect(listCalls).toEqual([]);
+  });
+
+  test("a zone description in an unknown layout stops the run before any change", async () => {
+    const host = new FakeHost();
+    host.packages.add("firewalld");
+    host.infoFormat = "unknown";
+    await expect(run(host)).rejects.toThrow(/its description has no "[a-z -]+" field/);
+    expect(host.mutations).toBe(0);
   });
 
   test("web services are removed from policies too", async () => {
@@ -585,6 +658,57 @@ describe("richRuleOpensWebPort", () => {
     ['rule family="ipv4" forward-port port="8080" protocol="tcp" to-port="80"', false],
   ])("%s → %p", async (rule, expected) => {
     expect(await richRuleOpensWebPort(rule, portsOf)).toBe(expected);
+  });
+});
+
+describe("parseFirewallInfo", () => {
+  test("reads firewalld 2.4's --info-zone output, multi-line fields included", () => {
+    // Captured with `firewall-cmd --info-zone=work` on Fedora Cloud 44 (firewalld 2.4.4).
+    const info = parseFirewallInfo(
+      [
+        "work",
+        "  target: default",
+        "  ingress-priority: 0",
+        "  egress-priority: 0",
+        "  icmp-block-inversion: no",
+        "  interfaces: ",
+        "  sources: ",
+        "  services: dhcpv6-client mdns ssh",
+        "  ports: 1000-1001/tcp",
+        "  protocols: ",
+        "  forward: yes",
+        "  masquerade: no",
+        "  forward-ports: ",
+        "\tport=8080:proto=tcp:toport=80:toaddr=",
+        "\tport=8443:proto=tcp:toport=443:toaddr=10.0.0.1",
+        "  source-ports: ",
+        "  icmp-blocks: ",
+        "  rich rules: ",
+        '\trule family="ipv4" source address="1.2.3.4" accept',
+        '\trule service name="http" log prefix="a b" accept',
+        "",
+      ].join("\n"),
+    );
+    expect(info.get("target")).toEqual(["default"]);
+    expect(info.get("interfaces")).toEqual([]);
+    expect(info.get("services")).toEqual(["dhcpv6-client", "mdns", "ssh"]);
+    expect(info.get("ports")).toEqual(["1000-1001/tcp"]);
+    expect(info.get("forward-ports")).toEqual(["port=8080:proto=tcp:toport=80:toaddr=", "port=8443:proto=tcp:toport=443:toaddr=10.0.0.1"]);
+    expect(info.get("rich rules")).toEqual(['rule family="ipv4" source address="1.2.3.4" accept', 'rule service name="http" log prefix="a b" accept']);
+  });
+
+  test("reads a policy and an active zone's header", () => {
+    const info = parseFirewallInfo(
+      "allow-host-ipv6 (active)\n  disable: no\n  priority: -15000\n  target: CONTINUE\n  ingress-zones: ANY\n  egress-zones: HOST\n" +
+        '  services: \n  rich rules: \n\trule family="ipv6" icmp-type name="redirect" accept\n',
+    );
+    expect(info.get("egress-zones")).toEqual(["HOST"]);
+    expect(info.get("rich rules")).toEqual(['rule family="ipv6" icmp-type name="redirect" accept']);
+    expect(info.has("allow-host-ipv6 (active)")).toBe(false);
+  });
+
+  test("an entry line without a field is refused", () => {
+    expect(() => parseFirewallInfo("work\n\tport=80:proto=tcp:toport=8080:toaddr=\n")).toThrow(InstallError);
   });
 });
 

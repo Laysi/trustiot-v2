@@ -47,8 +47,11 @@ export const FORBIDDEN_LISTEN_PORTS = [80, 443];
 export const FIREWALLD_CONFIG = "/etc/firewalld/firewalld.conf";
 
 // cloudflared comes from Cloudflare's official RPM repository, so `dnf upgrade` updates it.
-// Packages and repository metadata are both signature-checked against Cloudflare's packaging
-// key, which is pinned here by fingerprint instead of being fetched at install time.
+// Every package is signature-checked against Cloudflare's packaging key, which is pinned here
+// by fingerprint instead of being fetched at install time. The repository metadata is not:
+// Cloudflare signs repomd.xml with an older key (254B391D8CACCBF8, checked 2026-10-11) that it
+// no longer publishes, so repo_gpgcheck=1 makes dnf refuse the repository. The installed
+// package's own signature is verified again afterwards (checkCloudflaredProvenance).
 export const CLOUDFLARE_KEY = cloudflareKey;
 export const CLOUDFLARE_KEY_FINGERPRINT = "CC94B39C77AE7342A68B89628A682D308D4E5E73";
 /** The key ID rpm prints for packages signed with that key: the fingerprint's last 16 digits. */
@@ -67,7 +70,6 @@ baseurl=${CLOUDFLARED_REPO_BASEURL}
 enabled=1
 type=rpm
 gpgcheck=1
-repo_gpgcheck=1
 gpgkey=file://${CLOUDFLARE_KEY_PATH}
 `;
 export const CLOUDFLARED_BINARY = "/usr/bin/cloudflared";

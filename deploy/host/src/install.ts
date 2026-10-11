@@ -352,6 +352,7 @@ async function planFirewallScope(sys: System, { cmd, label }: FirewallScope): Pr
   // reboot or reload brings back.
   // Policies (firewalld 0.9 and later) can open ports between zones as well.
   const zones = words((await mustRun(sys, [...cmd, "--get-zones"])).stdout).filter((zone) => zone !== "trusted");
+  const defaults = await defaultZones(sys, cmd[0] === "firewall-offline-cmd");
   const policies = await mustRun(sys, [...cmd, "--get-policies"]);
   const targets = [
     ...zones.map((zone) => ({ flag: `--zone=${zone}`, name: `zone ${zone}` })),
@@ -380,37 +381,95 @@ async function planFirewallScope(sys: System, { cmd, label }: FirewallScope): Pr
     if (direct !== "") refuse("direct configuration", `has direct rules (${direct.split("\n")[0]})`);
   }
   for (const { flag, name } of targets) {
-    // A zone with target ACCEPT accepts everything, like trusted; a policy with target ACCEPT
-    // into the host does the same for its ingress zones.
-    const info = (await mustRun(sys, [...cmd, flag.replace(/^--(zone|policy)=/, "--info-$1=")])).stdout;
-    const field = (key: string) => words(new RegExp(`^\\s*${key}:(.*)$`, "m").exec(info)?.[1] ?? "");
+    // One --info-zone/--info-policy call per zone: firewall-offline-cmd needs seconds per call,
+    // and a host has about twenty zones and policies, each audited before and during the change.
+    const isZone = flag.startsWith("--zone=");
+    const info = parseFirewallInfo((await mustRun(sys, [...cmd, flag.replace(/^--(zone|policy)=/, "--info-$1=")])).stdout);
+    const field = (key: string): string[] => {
+      const value = info.get(key);
+      // A field that is missing means output this installer does not understand; never read
+      // that as "nothing is open".
+      if (value === undefined) throw new InstallError(`firewalld ${name} (${label}): its description has no "${key}" field`);
+      return value;
+    };
+    // A zone with target ACCEPT accepts everything, like trusted, from the interfaces and
+    // sources bound to it, and the default zone also takes every interface bound to no zone;
+    // a policy with target ACCEPT into the host does the same for its ingress zones. Fedora
+    // ships the zone nm-shared with target ACCEPT and nothing bound (NetworkManager binds it
+    // only to connections it shares), so binding decides for the other zones.
     const target = field("target")[0] ?? "";
-    const intoHost = flag.startsWith("--zone=") || field("egress-zones").some((zone) => zone === "HOST" || zone === "ANY");
-    if (target === "ACCEPT" && intoHost) refuse(name, "has the target ACCEPT");
-    for (const service of words((await mustRun(sys, [...cmd, flag, "--list-services"])).stdout)) {
+    const zoneName = flag.replace(/^--zone=/, "");
+    const applies = isZone
+      ? defaults.has(zoneName) || field("interfaces").length > 0 || field("sources").length > 0
+      : field("egress-zones").some((zone) => zone === "HOST" || zone === "ANY");
+    if (target === "ACCEPT" && applies) refuse(name, "has the target ACCEPT and applies to traffic into the host");
+    for (const service of field("services")) {
       if (CLOSED_SERVICES.includes(service)) {
         actions.push(change(`remove service ${service} from ${name}`, [flag, `--remove-service=${service}`]));
       } else if ((await portsOf(service)).some(opensWebPort)) {
         refuse(name, `allows the service ${service}`);
       }
     }
-    for (const port of words((await mustRun(sys, [...cmd, flag, "--list-ports"])).stdout)) {
+    for (const port of field("ports")) {
       if (CLOSED_PORTS.includes(port)) {
         actions.push(change(`remove port ${port} from ${name}`, [flag, `--remove-port=${port}`]));
       } else if (opensWebPort(port)) {
         refuse(name, `opens the port range ${port}`);
       }
     }
-    for (const forward of words((await mustRun(sys, [...cmd, flag, "--list-forward-ports"])).stdout)) {
+    for (const forward of field("forward-ports")) {
       const port = /(?:^|:)port=([\d-]+):proto=(\w+)/.exec(forward);
       if (port !== null && opensWebPort(`${port[1]}/${port[2]}`)) refuse(name, `forwards ${forward}`);
     }
-    const richRules = (await mustRun(sys, [...cmd, flag, "--list-rich-rules"])).stdout.split("\n").filter((rule) => rule.trim() !== "");
-    for (const rule of richRules) {
-      if (await richRuleOpensWebPort(rule, portsOf)) refuse(name, `has the rich rule '${rule.trim()}'`);
+    for (const rule of field("rich rules")) {
+      if (await richRuleOpensWebPort(rule, portsOf)) refuse(name, `has the rich rule '${rule}'`);
     }
   }
   return actions;
+}
+
+/**
+ * The zones that take interfaces bound to no zone: the current default and the one in
+ * firewalld.conf, which comes back after a reload or reboot (firewalld falls back to public
+ * when the file names none). Both count in every scope, which errs on the strict side.
+ */
+async function defaultZones(sys: System, offline: boolean): Promise<Set<string>> {
+  const current = (await mustRun(sys, [offline ? "firewall-offline-cmd" : "firewall-cmd", "--get-default-zone"])).stdout.trim();
+  const configured = /^\s*DefaultZone\s*=\s*(\S+)\s*$/m.exec((await readText(sys, FIREWALLD_CONFIG)) ?? "")?.[1] ?? "public";
+  return new Set([current, configured].filter((zone) => zone !== ""));
+}
+
+/** Fields of `--info-zone`/`--info-policy` whose entries are whole lines, not words. */
+const LINE_FIELDS = new Set(["rich rules"]);
+
+/**
+ * Parses the output of `firewall-cmd --info-zone=<z>` or `--info-policy=<p>` (and the same
+ * from firewall-offline-cmd). Each field is a line `  <key>: <values>`; the entries of the
+ * multi-line fields (forward ports, rich rules) follow on lines indented with a tab:
+ *
+ *     work
+ *       services: dhcpv6-client ssh
+ *       forward-ports:
+ *     \tport=8080:proto=tcp:toport=80:toaddr=
+ *       rich rules:
+ *     \trule family="ipv4" source address="1.2.3.4" accept
+ */
+export function parseFirewallInfo(text: string): Map<string, string[]> {
+  const fields = new Map<string, string[]>();
+  let key: string | null = null;
+  const entries = (field: string, value: string): string[] =>
+    LINE_FIELDS.has(field) ? (value.trim() === "" ? [] : [value.trim()]) : words(value);
+  for (const line of text.split("\n")) {
+    if (line.startsWith("\t")) {
+      if (key === null) throw new InstallError(`unexpected line in firewalld's output: ${line.trim()}`);
+      fields.get(key)?.push(...entries(key, line));
+      continue;
+    }
+    const match = /^ +([a-z][a-z -]*?):(?: (.*))?$/.exec(line);
+    key = match === null ? null : (match[1] ?? "");
+    if (key !== null) fields.set(key, entries(key, match?.[2] ?? ""));
+  }
+  return fields;
 }
 
 /**
@@ -827,10 +886,17 @@ async function waitForK3sNode(sys: System): Promise<void> {
     const result = await sys.run([K3S_BINARY, "kubectl", "get", "nodes", "--no-headers"]);
     const nodes = result.stdout.split("\n").filter((line) => line.trim() !== "");
     if (result.code === 0 && nodes.length > 0 && nodes.every((line) => line.trim().split(/\s+/)[1] === "Ready")) {
-      await checkK3sNetworks(sys);
-      return;
+      // A new node can be Ready a few seconds before the controller manager assigns its pod
+      // network, so the networks are checked once they are there.
+      const networks = await readK3sNetworks(sys);
+      if (networks.podNetworks.length > 0 && networks.serviceIps.length > 0) {
+        checkK3sNetworkRanges(networks);
+        return;
+      }
+      last = "the node is Ready but has no pod network assigned yet";
+    } else {
+      last = (result.stdout + result.stderr).trim();
     }
-    last = (result.stdout + result.stderr).trim();
     await sys.sleep(5_000);
   }
   throw new InstallError(`the k3s node is not Ready after 5 minutes: ${last}`);
@@ -842,9 +908,23 @@ async function waitForK3sNode(sys: System): Promise<void> {
  * trusted, so its actual networks are read from the API server and must lie inside them.
  */
 async function checkK3sNetworks(sys: System): Promise<void> {
+  checkK3sNetworkRanges(await readK3sNetworks(sys));
+}
+
+interface K3sNetworks {
+  podNetworks: string[];
+  serviceIps: string[];
+}
+
+async function readK3sNetworks(sys: System): Promise<K3sNetworks> {
   const kubectl = (args: string[]) => mustRun(sys, [K3S_BINARY, "kubectl", ...args]);
-  const podNetworks = words((await kubectl(["get", "nodes", "-o", "jsonpath={.items[*].spec.podCIDRs[*]}"])).stdout);
-  const serviceIps = words((await kubectl(["-n", "default", "get", "service", "kubernetes", "-o", "jsonpath={.spec.clusterIPs[*]}"])).stdout);
+  return {
+    podNetworks: words((await kubectl(["get", "nodes", "-o", "jsonpath={.items[*].spec.podCIDRs[*]}"])).stdout),
+    serviceIps: words((await kubectl(["-n", "default", "get", "service", "kubernetes", "-o", "jsonpath={.spec.clusterIPs[*]}"])).stdout),
+  };
+}
+
+function checkK3sNetworkRanges({ podNetworks, serviceIps }: K3sNetworks): void {
   const [podRange, serviceRange] = [K3S_POD_NETWORK, K3S_SERVICE_NETWORK];
   const wrong = [
     ...podNetworks.filter((network) => !cidrWithin(network, podRange)).map((network) => `pod network ${network}`),
