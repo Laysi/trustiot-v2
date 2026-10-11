@@ -33,10 +33,15 @@ import {
   requirePublishedAsPlanned,
   requireRegistry,
   resolveBinary,
+  RUST_TARGET,
+  rustCrossCompileCommand,
   sbomAssetName,
   signingIdentity,
+  staticElfProblem,
   summarizeSpdx,
+  toolchainChannel,
 } from "./lib.ts";
+import { ELF_AARCH64, PT_LOAD, dynamicAarch64Binary, elfFile, staticAarch64Binary } from "./elf-fixture.ts";
 
 const ROOT = resolve(import.meta.dir, "..", "..");
 const DIGEST_A = `sha256:${"a".repeat(64)}`;
@@ -155,6 +160,7 @@ describe("parseImageToml", () => {
     ["an empty file", "", "missing the [rust] table"],
     ["a misspelt key", '[rust]\npackage = "x"\nbinary = "x"\n', "unknown key(s) binary"],
     ["a package name with a space", '[rust]\npackage = "a b"\n', "package must be"],
+    ["a package name that cargo would read as an option", '[rust]\npackage = "--workspace"\n', "package must be"],
     ["a numeric bin", '[rust]\npackage = "x"\nbin = 1\n', "bin must be"],
   ])("rejects %s", (_label, source, message) => {
     expect(() => parseImageToml("x", source, "deploy/images/x/image.toml")).toThrow(message);
@@ -207,6 +213,8 @@ describe("discoverImages", () => {
   test("the repository's own images are valid", () => {
     const images = discoverImages(ROOT);
     expect(images.map((image) => image.name)).toContain("release-selftest");
+    // Laysi/trustiot-v2#308: the identity service ships as the chart's `identity` service.
+    expect(images).toContainEqual({ kind: "rust", name: "identity", package: "identity" });
   });
 });
 
@@ -512,6 +520,86 @@ describe("aarch64ElfProblem", () => {
     if (process.arch === "x64") {
       expect(aarch64ElfProblem(new Uint8Array(readFileSync(process.execPath)))).toContain("ELF machine is 62");
     }
+  });
+});
+
+describe("staticElfProblem", () => {
+  test("accepts a static PIE, which has a dynamic section but no interpreter", () => {
+    expect(staticElfProblem(staticAarch64Binary())).toBeUndefined();
+    expect(aarch64ElfProblem(staticAarch64Binary())).toBeUndefined();
+  });
+
+  test("rejects a binary that names a program interpreter", () => {
+    expect(staticElfProblem(dynamicAarch64Binary())).toContain("dynamically linked");
+    expect(staticElfProblem(elfFile(ELF_AARCH64, [PT_LOAD, PT_LOAD, 3]))).toContain("dynamically linked");
+  });
+
+  test("rejects files it cannot read as an executable", () => {
+    expect(staticElfProblem(elfFile(ELF_AARCH64, []))).toContain("no program headers");
+    expect(staticElfProblem(staticAarch64Binary().slice(0, 100))).toContain("truncated");
+    expect(staticElfProblem(elfFile(ELF_AARCH64, [PT_LOAD], 1))).toContain("64-bit");
+    expect(staticElfProblem(new Uint8Array(10))).toContain("64-bit");
+  });
+
+  test("rejects the dynamically linked bun running this test", () => {
+    // Bun's Linux builds link glibc dynamically.
+    if (process.platform === "linux") {
+      expect(staticElfProblem(new Uint8Array(readFileSync(process.execPath)))).toContain("dynamically linked");
+    }
+  });
+});
+
+describe("toolchainChannel", () => {
+  test("reads the repository's pinned toolchain", () => {
+    expect(toolchainChannel(readFileSync(join(ROOT, "rust-toolchain.toml"), "utf8"))).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  test("rejects a file without a channel", () => {
+    expect(() => toolchainChannel("[toolchain]\nprofile = \"minimal\"\n")).toThrow("no toolchain.channel");
+    expect(() => toolchainChannel("not toml = = =")).toThrow("cannot parse");
+  });
+});
+
+describe("rustCrossCompileCommand", () => {
+  const base = {
+    cargo: "/home/u/.cargo/bin/cargo",
+    zig: "/proto/zig/0.16.0/zig",
+    cargoZigbuild: "/proto/cargo-zigbuild/0.23.4/cargo-zigbuild",
+    cargoAuditable: "/proto/cargo-auditable/0.7.6/cargo-auditable",
+    packages: ["identity", "release-selftest"],
+    root: "/work/trustiot-v2",
+    cargoHome: "/home/u/.cargo",
+    path: "/usr/bin:/bin",
+  };
+
+  test("cross-compiles every package for musl in one Cargo run, with cargo-auditable and cargo-zigbuild", () => {
+    const { cmd, env } = rustCrossCompileCommand(base);
+    expect(cmd).toEqual([
+      base.cargo, "auditable", "zigbuild", "--locked", "--release", "--target", RUST_TARGET, "--bins",
+      "--package", "identity", "--package", "release-selftest",
+    ]);
+    expect(RUST_TARGET).toBe("aarch64-unknown-linux-musl");
+    expect(env.PATH).toBe("/proto/cargo-auditable/0.7.6:/proto/cargo-zigbuild/0.23.4:/usr/bin:/bin");
+    expect(env.CARGO_ZIGBUILD_ZIG_PATH).toBe(base.zig);
+    expect(env.CARGO_ENCODED_RUSTFLAGS?.split("\x1f")).toEqual([
+      "--remap-path-prefix=/home/u/.cargo=/cargo",
+      "--remap-path-prefix=/work/trustiot-v2=/build",
+    ]);
+  });
+
+  test("sets the release version and timestamp only when given", () => {
+    const plain = rustCrossCompileCommand(base).env;
+    expect(plain.TRUSTIOT_RELEASE_VERSION).toBeUndefined();
+    expect(plain.SOURCE_DATE_EPOCH).toBeUndefined();
+    const release = rustCrossCompileCommand({ ...base, version: "1.2.0-rc.1", sourceDateEpoch: 1_791_630_056 }).env;
+    expect(release.TRUSTIOT_RELEASE_VERSION).toBe("1.2.0-rc.1");
+    expect(release.SOURCE_DATE_EPOCH).toBe("1791630056");
+  });
+
+  test("rejects no package and names that are not Cargo names", () => {
+    expect(() => rustCrossCompileCommand({ ...base, packages: [] })).toThrow("no Cargo package");
+    expect(() => rustCrossCompileCommand({ ...base, packages: ["--workspace"] })).toThrow("not a Cargo package name");
+    expect(() => rustCrossCompileCommand({ ...base, packages: ["a b"] })).toThrow("not a Cargo package name");
   });
 });
 
