@@ -101,4 +101,12 @@ F-1 的測試改了 handler：設定 session 層級的租戶 B 之後，再以 `
 
 限制：handler 切到別的租戶寫入、回來前又切回原租戶，消費端查不出來；決策 29 把設定租戶的 SQL 交給 `tools/sql-check` 擋，PL/pgSQL `EXECUTE` 字串仍是它已知的盲點。
 
-修正後的完整檢查：[`fixes-checks.txt`](data/2026-10-11-271-outbox-consumer-tenancy/fixes-checks.txt)。
+修正後的完整檢查：[`fixes-checks.txt`](data/2026-10-11-271-outbox-consumer-tenancy/fixes-checks.txt)，在修正 commit `044c459` 合併 main `dddd9ed`（含 Laysi/trustiot-v2#305、Laysi/trustiot-v2#337）之後的 `b9533ea`，本機檢查佇列（Fedora、podman、`CI=1`）一次跑完。以下全部通過：
+
+- `cargo fmt --all --check`、兩種 clippy
+- `cargo test --workspace`：77 個測試套件、599 個測試，0 失敗（`verify_271` 12 通過、1 個 ignored，即 Laysi/trustiot-v2#333 的 `f5_`）
+- outbox 全部測試，以及 crash／delivery／tenancy 重複 3 次
+- `tenant_db`（11）與 `postgres_trust`（3）；service-kit 無預設 feature 的測試（122）
+- `openapi --check`、`cargo deny`
+- scripts 的型別檢查與測試（526 通過、1 略過）、`bun test deploy/chart`（261）
+- workflow policy、secret handling、actionlint
