@@ -1,0 +1,79 @@
+# Baseline: main dddd9ed plus throwaway instrumentation (pool size/idle logs), 20 runs, CI=1, local check queue, 2026-10-11
+# per run: statuses until the first 200 | 503s among 40 checks after the first 200 | dead idle connections found by checks (sqlx 'ping on idle connection returned error') | readiness WARN after the cut | largest pool size | result
+run 1: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 2: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 3: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 4: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 5: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 6: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 7: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 8: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 9: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 10: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 11: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 12: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 13: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 14: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 15: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 16: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 17: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 18: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 19: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+run 20: statuses=[503, 503, 503, 503, 200] late503=0 dead_found_by_checks=3 not_ready_warn=0 max_pool_size=5 ok
+
+# run 7: service log timeline (filtered; UTC); the cut is just before the first 'ping on idle' line
+15:17:55.013922 PROBE keep-warm round {"size":0,"idle":0}
+15:17:55.015026 readiness check failed {"check":"postgres","error":"the database connections are not open yet"}
+15:17:56.139532 the database connections are open {"connections":3}
+15:17:57.032082 PROBE lookup start {"size":3,"idle":3}
+15:17:57.036022 PROBE before membership {"size":3,"idle":2}
+15:17:57.097658 PROBE lookup start {"size":3,"idle":3}
+15:17:57.100703 PROBE before membership {"size":3,"idle":2}
+15:17:57.163155 PROBE lookup start {"size":3,"idle":3}
+15:17:57.166348 PROBE before membership {"size":3,"idle":2}
+15:17:57.229105 PROBE lookup start {"size":3,"idle":3}
+15:17:57.230594 PROBE before membership {"size":3,"idle":2}
+15:17:57.291180 PROBE lookup start {"size":3,"idle":3}
+15:17:57.292666 PROBE before membership {"size":3,"idle":2}
+15:17:57.353900 PROBE lookup start {"size":3,"idle":3}
+15:17:57.354898 PROBE before membership {"size":3,"idle":2}
+15:17:57.415072 PROBE lookup start {"size":3,"idle":3}
+15:17:57.416386 PROBE before membership {"size":3,"idle":2}
+15:17:57.477053 PROBE lookup start {"size":3,"idle":3}
+15:17:57.478556 PROBE before membership {"size":3,"idle":2}
+15:17:57.539264 PROBE lookup start {"size":3,"idle":3}
+15:17:57.540719 PROBE before membership {"size":3,"idle":2}
+15:17:57.601696 PROBE lookup start {"size":3,"idle":3}
+15:17:57.603095 PROBE before membership {"size":3,"idle":2}
+15:17:57.664132 PROBE lookup start {"size":3,"idle":3}
+15:17:57.665634 PROBE before membership {"size":3,"idle":2}
+15:17:57.726368 PROBE lookup start {"size":3,"idle":3}
+15:17:57.727934 PROBE before membership {"size":3,"idle":2}
+15:17:57.788371 PROBE lookup start {"size":3,"idle":3}
+15:17:57.789916 PROBE before membership {"size":3,"idle":2}
+15:17:57.850351 PROBE lookup start {"size":3,"idle":3}
+15:17:57.851903 PROBE before membership {"size":3,"idle":2}
+15:17:57.913108 PROBE lookup start {"size":3,"idle":3}
+15:17:57.914411 PROBE before membership {"size":3,"idle":2}
+15:17:57.975020 PROBE lookup start {"size":3,"idle":3}
+15:17:57.976435 PROBE before membership {"size":3,"idle":2}
+15:17:58.037192 PROBE lookup start {"size":3,"idle":3}
+15:17:58.038779 PROBE before membership {"size":3,"idle":2}
+15:17:58.099425 PROBE lookup start {"size":3,"idle":3}
+15:17:58.100865 PROBE before membership {"size":3,"idle":2}
+15:17:58.140645 PROBE keep-warm round {"size":3,"idle":3}
+15:17:58.161512 PROBE lookup start {"size":3,"idle":3}
+15:17:58.162918 PROBE before membership {"size":3,"idle":2}
+15:17:58.223947 PROBE lookup start {"size":3,"idle":3}
+15:17:58.225321 PROBE before membership {"size":3,"idle":2}
+15:17:58.286702 PROBE lookup start {"size":3,"idle":3}
+15:17:58.286935 ping on idle connection returned error {"error":"error communicating with database: peer closed connection without sending TLS close_notify: https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof"}
+15:17:58.789416 PROBE lookup start {"size":3,"idle":2}
+15:17:58.789714 ping on idle connection returned error {"error":"error communicating with database: peer closed connection without sending TLS close_notify: https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof"}
+15:17:59.291705 PROBE lookup start {"size":3,"idle":1}
+15:17:59.291882 ping on idle connection returned error {"error":"error communicating with database: peer closed connection without sending TLS close_notify: https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof"}
+15:17:59.404559 PROBE before membership {"size":3,"idle":0}
+15:17:59.795155 PROBE lookup start {"size":4,"idle":1}
+15:17:59.796086 PROBE before membership {"size":4,"idle":0}
+15:18:00.144744 PROBE keep-warm round {"size":5,"idle":2}
+15:18:02.148193 PROBE keep-warm round {"size":5,"idle":5}
