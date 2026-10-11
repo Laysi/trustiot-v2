@@ -1,0 +1,38 @@
+# Run on the build host (ruisi-wsl, Docker, CI=1) through rcheck.sh; branch fix/283-shutdown-duration-bounds
+
+$ cargo fmt --all --check && cargo clippy --locked -p service-kit --all-targets -- -D warnings
+Finished `dev` profile (no warnings)
+
+$ cargo test --locked -p service-kit
+unittests src/lib.rs          ok. 79 passed
+tests/chart_contract.rs       ok. 3 passed
+tests/container.rs            ok. 1 passed
+tests/dependency_isolation.rs ok. 2 passed
+tests/errors.rs               ok. 2 passed
+tests/identity.rs             ok. 3 passed
+tests/identity_adversarial.rs ok. 17 passed
+tests/job_lock.rs             ok. 5 passed
+tests/lifecycle.rs            ok. 10 passed
+tests/logging.rs              ok. 1 passed
+tests/otlp.rs                 ok. 2 passed
+tests/tenant_db.rs            ok. 10 passed
+doc-tests                     ok. 5 passed, ok. 9 passed
+
+$ cargo clippy --locked -p service-kit --no-default-features --all-targets -- -D warnings   -> Finished
+$ cargo test --locked -p service-kit --no-default-features --lib --test lifecycle
+ok. 52 passed (lib), ok. 10 passed (lifecycle)
+$ cargo clippy --locked --workspace --all-targets -- -D warnings   -> Finished
+
+# The new tests
+$ cargo test --locked -p service-kit --lib -- capped limit_not_the_value positive
+test http::tests::request_timeout_is_capped_at_one_hour ... ok
+test http::tests::request_timeout_must_be_positive ... ok
+test shutdown::tests::drain_timeout_must_be_positive ... ok
+test shutdown::tests::each_drain_time_is_capped_at_one_hour ... ok
+test shutdown::tests::messages_name_the_limit_not_the_value ... ok
+test shutdown::tests::the_sum_of_both_is_capped_at_one_hour ... ok
+test result: ok. 7 passed (includes the pre-existing identity::token::tests::lifetimes_must_be_short_and_positive)
+$ cargo test --locked -p service-kit --test lifecycle -- durations
+test durations_at_the_caps_still_start_and_drain_on_sigterm ... ok
+test durations_beyond_the_caps_stop_startup ... ok
+test result: ok. 2 passed

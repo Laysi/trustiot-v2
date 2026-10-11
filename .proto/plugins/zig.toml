@@ -1,0 +1,30 @@
+# proto schema plugin for Zig (https://ziglang.org), used only as the C compiler and
+# linker for cross-compiling Rust to aarch64 (through cargo-zigbuild).
+# Downloads the official release archive and verifies its minisign signature with
+# the Zig Software Foundation's public key, as published on https://ziglang.org/download/.
+# Reference: https://moonrepo.dev/docs/proto/non-wasm-plugin
+
+name = "Zig"
+type = "language"
+
+[platform.linux]
+download-file = "zig-{arch}-linux-{version}.tar.xz"
+checksum-file = "zig-{arch}-linux-{version}.tar.xz.minisig"
+archive-prefix = "zig-{arch}-linux-{version}"
+
+[platform.macos]
+download-file = "zig-{arch}-macos-{version}.tar.xz"
+checksum-file = "zig-{arch}-macos-{version}.tar.xz.minisig"
+archive-prefix = "zig-{arch}-macos-{version}"
+
+[install]
+download-url = "https://ziglang.org/download/{version}/{download_file}"
+checksum-url = "https://ziglang.org/download/{version}/{checksum_file}"
+checksum-public-key = "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
+
+[install.exes.zig]
+exe-path = "zig"
+primary = true
+
+[resolve]
+git-url = "https://codeberg.org/ziglang/zig"

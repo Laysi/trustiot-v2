@@ -22,6 +22,10 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use crate::config::Invalid;
 use crate::telemetry::duration_ms;
 
+/// The longest `http.request_timeout` accepted: one hour. A larger value is a typo, and one beyond
+/// what `tokio::time::Instant` can add silently disables the timeout.
+pub const MAX_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
 /// `http.*`: the HTTP server.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -50,6 +54,12 @@ impl HttpConfig {
             return Err(Invalid::new(
                 "http.request_timeout",
                 "must be longer than zero",
+            ));
+        }
+        if self.request_timeout > MAX_REQUEST_TIMEOUT {
+            return Err(Invalid::new(
+                "http.request_timeout",
+                "must not be longer than 1 hour",
             ));
         }
         Ok(())
@@ -272,5 +282,23 @@ mod tests {
             config.validate().expect_err("zero timeout").key,
             "http.request_timeout"
         );
+    }
+
+    #[test]
+    fn request_timeout_is_capped_at_one_hour() {
+        let at_cap = HttpConfig {
+            request_timeout: MAX_REQUEST_TIMEOUT,
+            ..HttpConfig::default()
+        };
+        assert!(at_cap.validate().is_ok());
+        for request_timeout in [MAX_REQUEST_TIMEOUT + Duration::from_secs(1), Duration::MAX] {
+            let config = HttpConfig {
+                request_timeout,
+                ..HttpConfig::default()
+            };
+            let error = config.validate().expect_err("over the cap");
+            assert_eq!(error.key, "http.request_timeout");
+            assert!(error.message.contains("1 hour"), "{}", error.message);
+        }
     }
 }
