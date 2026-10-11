@@ -63,7 +63,7 @@ Renovate 會開 PR 更新 `FROM` 的 tag 與 digest（`renovate.json5` 只允許
 
 `image.test.ts`（`bun test deploy/images/postgres`）：
 
-- 不執行映像也能跑的檢查：每個 `FROM` 以 digest 釘選；只有 `--platform=$BUILDPLATFORM` 的階段有 `RUN`；最後是 `USER 26`；映像是 linux/arm64、以 UID 26 執行；`age.so` 是 aarch64 的 ELF，帶 AGE 版本的 package note；`age.control` 的版本與 `AGE_VERSION` 相同。
+- 不執行映像也能跑的檢查：每個 `FROM` 以 digest 釘選；只有 `--platform=$BUILDPLATFORM` 的階段有 `RUN`；沒有 `SHELL`，每個 `RUN` 都是以 `set -eu` 開頭的 POSIX sh（podman 建 OCI 映像時忽略 `SHELL`，2026-10-11 在 podman 5.8.7 上實際遇到）；最後是 `USER 26`；映像是 linux/arm64、以 UID 26 執行；`age.so` 是 aarch64 的 ELF，帶 AGE 版本的 package note；`age.control` 的版本與 `AGE_VERSION` 相同。
 - 啟動 Postgres 的檢查（需要 arm64 主機或 binfmt 的 arm64 模擬器，沒有時本機略過，設了 `CI` 時失敗）：照 CloudNativePG 的方式以 UID/GID 26、唯讀根檔案系統、drop ALL capabilities、no-new-privileges 啟動，PID 1 就是 postgres；CloudNativePG 呼叫的 `initdb`、`pg_ctl`、`pg_controldata`、`pg_basebackup`、`pg_rewind` 在 PATH 上；`CREATE EXTENSION age` 裝上 `AGE_VERSION`，cypher() 建立並查回一張圖；非 superuser 角色在唯讀交易中不經 `LOAD` 執行 cypher() 查詢。
 
 沒有設 `POSTGRES_IMAGE` 時測試先以 `podman build --platform linux/arm64` 建置；設了就測該映像。ci.yml 的 `postgres-image` job 在 arm64 runner 上以原生方式建置並執行測試，只在本目錄有變更時執行（規則在 `scripts/ci/changes.ts`）。release.yml 在 x86 上交叉編譯，原生建置驗證不到「arm64 階段不能有 `RUN`」，這一點由上面的靜態檢查負責。在 arm64 機器上可直接跑；要測 release 建出的映像時，以 `bun scripts/release/build.ts` 建出 OCI 壓縮檔（[scripts/README.md](../../../scripts/README.md)），`podman pull oci-archive:<檔案>` 後把映像名稱給 `POSTGRES_IMAGE`。

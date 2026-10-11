@@ -54,6 +54,18 @@ sudo k3s kubectl -n e2e-57 wait --for=condition=Ready cluster/age --timeout=170s
 | CloudNativePG 1.30.1 | `spec.imageName` 直接寫我們的映像會被拒絕（`invalid version tag`，因為 tag 不是 PostgreSQL 版本）；改用 ImageCatalog `major: 18` 後 Cluster 進入 healthy。pod 以 `runAsUser/runAsGroup/fsGroup 26`、`runAsNonRoot`、`readOnlyRootFilesystem`、drop ALL 執行，`shared_preload_libraries` 是 `age`，`CREATE EXTENSION age` 與 cypher() 查詢成功（[lab-cnpg-cluster.txt](data/2026-10-11-57-age-postgres-image/lab-cnpg-cluster.txt)） |
 | 實驗機還原 | 叢集層級物件清單（CRD、webhook、ClusterRole、namespace、PV）前後 SHA-256 相同；匯入的映像與 operator 映像已刪除；`poc` 的 8 個 pod 前後都 Running |
 
+### 合併 main（Laysi/trustiot-v2#309）之後：arm64 原生建置
+
+ci.yml 的 job 全部改到 `ubuntu-24.04-arm` 之後，`postgres-image` 改成在 arm64 上原生建置並測試，不再用 qemu。實驗機（podman 5.8.7）上以同樣的方式重跑：`CI=1 CONTAINER_HOST=… bun test deploy/images/postgres`，不設 `POSTGRES_IMAGE`，測試自己經 `containerBuildArgs` 建置（[lab-native-build.txt](data/2026-10-11-57-age-postgres-image/lab-native-build.txt)）。
+
+| 項目 | 結果 |
+| --- | --- |
+| 第 1 次 | 失敗：podman 5.8.7 建 OCI 映像時忽略 `SHELL`，RUN 改由 `/bin/sh` 執行，bash 語法 `${…/+/%2B}` 出現 `Bad substitution`。工作站的 podman 6.1.3 只警告、仍照用 `SHELL`，所以先前沒發現；release runner 的 podman 版本不由本 repo 釘選，release 可能也會這樣失敗。修正：拿掉 `SHELL`，每個 RUN 都是以 `set -eu` 開頭的 POSIX sh，`image.test.ts` 加一項靜態檢查 |
+| 第 2 次 | 失敗：在 arm64 建置機上，Debian 的 `gcc-aarch64-linux-gnu` 呼叫原生的 `as`，所以加裝 `binutils` |
+| 第 3 次 | 9 通過、0 失敗（`CI=1`，Postgres 的測試不可能被略過），建置加測試 71.8 秒 |
+| x86 交叉建置（release 的路） | 修正後的 Containerfile 在工作站（無模擬器）照樣建置成功，`age.so` 與先前 release 建出的逐位元相同（`7301f910…`）；原生建置的 `age.so` 不同（`4d1878bf…`，同版 gcc 在另一種架構上的 build），符合預期，release 只發佈 x86 交叉建置的結果 |
+| 實驗機還原 | 刪除建置產生的 28 個映像後，`podman images -a` 前後相同；沒有留下容器 |
+
 ## 結論
 
 - 「release.yml 建出 arm64 映像並推到 GHCR」：**部分通過**。映像以 release.yml 的 `build.ts` 在與 runner 相同限制（x86、無模擬器）下建出 linux/arm64，SBOM 列出 AGE，release 不必修改。推到 GHCR、簽章與 verify 要一次真正的 release（rc tag），**待測**：tag 對外可見，由 coordinator 決定何時打。

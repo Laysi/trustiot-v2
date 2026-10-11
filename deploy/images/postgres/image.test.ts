@@ -116,6 +116,18 @@ describe("Containerfile", () => {
     }
   });
 
+  test("every RUN is plain sh that stops at the first error, because podman ignores SHELL for OCI images", () => {
+    const instructions = stages(CONTAINERFILE).flatMap((stage) => stage.instructions);
+    expect(instructions.filter((line) => /^SHELL\s/i.test(line))).toEqual([]);
+    const runs = instructions.filter((line) => /^RUN\s/i.test(line));
+    expect(runs.length).toBeGreaterThan(0);
+    for (const line of runs) {
+      expect(line).toMatch(/^RUN set -eu;/);
+      // bash-only syntax that /bin/sh (dash) rejects.
+      expect(line).not.toMatch(/\[\[|\]\]|\$\{[A-Za-z_]+\/|pipefail/);
+    }
+  });
+
   test("ends as the postgres user that CloudNativePG expects", () => {
     const last = stages(CONTAINERFILE).at(-1);
     expect(last?.instructions.filter((line) => /^USER\s/i.test(line)).at(-1)).toBe(`USER ${POSTGRES_UID}`);
