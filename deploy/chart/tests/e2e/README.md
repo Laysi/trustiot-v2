@@ -138,3 +138,5 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/mesh.e2e.ts
 沒有查到可避免 port-forward 斷線的原因（斷線時間點只有一次紀錄，kubectl 沒有說明 pod 端為何關閉連線），所以靠上述復原處理；若之後斷線變得頻繁，再評估改用 k3d 的 LoadBalancer 埠對映取代 port-forward。
 
 邏輯有不需要叢集的單元測試（`tunnel-recovery.test.ts`、`raw-client.test.ts`），由 `bun test deploy/chart` 執行。測試用真正的子行程（`fake-port-forward.ts`，一個 TCP proxy）扮演 kubectl：它在收到請求時切斷連線，300 毫秒後才結束行程，重現上述競態。
+
+給通道行程用的本機埠一律由 `ports.ts` 的 `freePort()` 取得，不要自己 `Bun.listen` 再 `stop`：在 WSL2 上 `stop(true)` 回傳時監聽 socket 還沒關，要等事件迴圈再跑一輪才會關。剛啟動通道就探測該埠的程式會連到這個將死的監聽，誤以為通道已就緒，再把請求送進即將關閉的 socket（`no HTTP response … ""`）。`freePort()` 等到連線被拒絕才回傳（Laysi/trustiot-v2#288，`docs/test-reports/2026-10-11-288-tunnel-recovery-wsl.md`）。
