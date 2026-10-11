@@ -1,0 +1,40 @@
+// usage: bun diff-render.ts <before chart dir> <after chart dir>
+// Renders both shapes (with and without the smoke and e2e overlays) from both charts and lists
+// the objects whose content differs (key order ignored).
+const [before, after] = process.argv.slice(2);
+if (!before || !after) throw new Error("usage: diff-render.ts <before> <after>");
+const helm = "/home/ruisi/.proto/tools/helm/4.3.0/helm";
+const overlays: Record<string, string[]> = {
+  plain: [],
+  smoke: ["-f", "tests/values/smoke.yaml"],
+  e2e: ["-f", "tests/values/smoke.yaml", "-f", "tests/e2e/values-e2e.yaml"],
+};
+function render(chart: string, shape: string, extra: string[]): Map<string, unknown> {
+  const proc = Bun.spawnSync({
+    cmd: [helm, "template", "trustiot", ".", "-n", "trustiot", "-f", `values-${shape}.yaml`, "-f", `tests/values/${shape}-instance.yaml`, ...extra],
+    cwd: chart,
+  });
+  if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
+  const docs = (Bun.YAML.parse(proc.stdout.toString()) as any[]).filter(Boolean);
+  return new Map(docs.map((d) => [`${d.kind}/${d.metadata.name}`, d]));
+}
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, canonical(v)]));
+  }
+  return value;
+}
+for (const shape of ["saas", "onprem"]) {
+  for (const [name, extra] of Object.entries(overlays)) {
+    const a = render(before, shape, extra);
+    const b = render(after, shape, extra);
+    const keys = [...new Set([...a.keys(), ...b.keys()])].sort();
+    const changed = keys.filter((k) => JSON.stringify(canonical(a.get(k))) !== JSON.stringify(canonical(b.get(k))));
+    console.log(`${shape} + ${name}: ${keys.length} objects, changed: ${changed.length === 0 ? "none" : changed.join(", ")}`);
+    for (const k of changed) {
+      console.log(`  before ${k}: ${JSON.stringify((a.get(k) as any)?.spec?.ingress)}`);
+      console.log(`  after  ${k}: ${JSON.stringify((b.get(k) as any)?.spec?.ingress)}`);
+    }
+  }
+}

@@ -1,0 +1,32 @@
+(pass) failures that are not connection failures are never retried > status 503 is a result, not a reason to reopen [46.37ms]
+(pass) failures that are not connection failures are never retried > status 504 is a result, not a reason to reopen [43.81ms]
+(pass) failures that are not connection failures are never retried > a request that was answered in part is not resent, even though the tunnel is dead [367.16ms]
+(pass) failures that are not connection failures are never retried > an error that is not a ConnectionError is rethrown even though the tunnel is dead [24.96ms]
+
+deploy/chart/tests/e2e/raw-client.test.ts:
+(pass) sendRaw > sends the request target unchanged and parses status, headers and a content-length body [16.57ms]
+(pass) sendRaw > decodes a chunked body [21.63ms]
+(pass) sendRaw > a connection closed before any response is a ConnectionError [21.15ms]
+(pass) sendRaw > a response cut inside the head is a ConnectionError [21.01ms]
+(pass) sendRaw > a failure after the response head arrived is not a ConnectionError, so it is never retried [366.44ms]
+(pass) sendRaw > a refused connection is a ConnectionError [13.71ms]
+(pass) sendRaw > a response that never comes is a ConnectionError after the timeout [212.60ms]
+
+5 tests failed:
+(fail) tunnel dies while a request is in flight > the request fails before the process has exited, the way kubectl behaves (fault injection) [5014.61ms]
+  ^ this test timed out after 5000ms.
+(fail) tunnel dies while a request is in flight > reopens the tunnel and sends the request once more [5003.20ms]
+  ^ this test timed out after 5000ms.
+(fail) tunnel dies while a request is in flight > a tunnel that exited long before the request is reopened without waiting [109.98ms]
+(fail) tunnel dies while a request is in flight > a healthy tunnel needs no recovery [5002.29ms]
+  ^ this test timed out after 5000ms.
+(fail) tunnel dies while a request is in flight > a failing reopen is thrown [5000.56ms]
+  ^ this test timed out after 5000ms.
+
+ 197 pass
+ 5 fail
+ 3 errors
+ 2044 expect() calls
+Ran 202 tests across 3 files. [34.53s]
+
+[exited with code 1]

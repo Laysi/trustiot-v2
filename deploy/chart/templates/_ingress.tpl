@@ -21,6 +21,38 @@ the host forwards to the ClusterIP), HTTPS on 443 when the gateway faces the net
 {{- end -}}
 
 {{/*
+Port of that listener. Istio's gateway Service forwards each listener port to the same port on
+the pod, where Envoy binds it directly (Istio lets the gateway pod bind ports below 1024 with
+the sysctl net.ipv4.ip_unprivileged_port_start=0), so the NetworkPolicy admits this number.
+*/}}
+{{- define "trustiot.ingress.listenerPort" -}}
+{{- if eq (include "trustiot.ingress.listener" .) "http" -}}80{{- else -}}443{{- end -}}
+{{- end -}}
+
+{{/*
+Istio's status port on the gateway pod. Istio fixes it: the kube-gateway injection template
+gives the istio-proxy container a startup and a readiness probe, both GET /healthz/ready on
+15021, and the generated Service lists it as "status-port" (Istio 1.30.5, checked on the lab
+cluster in docs/test-reports/2026-10-11-287-gateway-netpol-ports.md). The gateway pod is not in
+the ambient mesh (Istio labels it istio.io/dataplane-mode: none), so the kubelet's probes come
+from the host's own address, not from the ambient node source ("trustiot.mesh.hostSource").
+*/}}
+{{- define "trustiot.ingress.statusPort" -}}
+15021
+{{- end -}}
+
+{{/*
+The ports of the gateway's NetworkPolicy rules: the listener and Istio's status port, both TCP.
+Every other port of the pod (Envoy's metrics on 15020 and 15090) stays closed.
+Returns a YAML list of NetworkPolicyPort.
+*/}}
+{{- define "trustiot.ingress.policyPorts" -}}
+{{- list
+  (dict "port" (int (include "trustiot.ingress.listenerPort" .)) "protocol" "TCP")
+  (dict "port" (int (include "trustiot.ingress.statusPort" .)) "protocol" "TCP") | toYaml -}}
+{{- end -}}
+
+{{/*
 Exact-path form shared with values.schema.json: segments start with a letter or digit, so no dot
 segments, empty segments, trailing slash, percent-encoding, ';' or wildcards.
 */}}

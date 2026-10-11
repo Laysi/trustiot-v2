@@ -1,0 +1,19 @@
+$ rcheck.sh 282 'cargo clippy --locked -p service-kit --all-targets -- -D warnings 2>&1 | grep -v "^ *\(Checking\|Compiling\)" | tail -30 && for i in 1 2 3 4 5; do cargo test --locked -p service-kit --test job_lock -- --nocapture 2>&1 | grep -E "^test a_job_that_panics_in|test result|lock timeout 1s: the release|no such event|stalled"; done'
+# Merge of main dc39e7d (#295) into the #282 branch, with run_periodically logging the job's
+# outcome before the release. Five runs of the whole job_lock suite (10 tests each).
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.74s
+lock timeout 1s: the release after the panic gave up after 997.314261ms
+test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.66s
+lock timeout 1s: the release after the panic gave up after 1.00541007s
+test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.23s
+lock timeout 1s: the release after the panic gave up after 1.000090297s
+test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.25s
+lock timeout 1s: the release after the panic gave up after 998.141629ms
+test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.98s
+lock timeout 1s: the release after the panic gave up after 1.000746203s
+test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.92s

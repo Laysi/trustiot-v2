@@ -1,0 +1,30 @@
+# Lab only, Laysi/trustiot-v2#287: a pod outside the mesh in e2e-287 that the test adds to
+# ingress.tunnel.allowedSources, so that the gateway's NetworkPolicy (not the "node traffic is
+# always allowed" rule of Kubernetes NetworkPolicy) decides which ports it reaches.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: np-probe
+  namespace: e2e-287
+  labels:
+    app: np-probe
+spec:
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: curl
+      image: docker.io/curlimages/curl:8.11.1
+      command: ["sleep", "3600"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests: { cpu: 10m, memory: 16Mi }
+        limits: { memory: 32Mi }

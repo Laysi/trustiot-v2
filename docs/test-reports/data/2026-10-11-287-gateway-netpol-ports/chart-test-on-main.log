@@ -1,0 +1,63 @@
+bun test v1.4.2 (744846f84)
+
+deploy/chart/tests/chart.test.ts:
+778 |   // the nightly smoke test compares the live gateway's probe and Service ports with the policy.
+779 |   const ISTIO_STATUS_PORT = 15021;
+780 | 
+781 |   test("NetworkPolicy: behind the tunnel only the host may connect, to 80 and 15021; direct exposure opens 443 and 15021", () => {
+782 |     const tunnel = find(render(SHAPES.saas), "NetworkPolicy", GATEWAY).spec as YamlMap;
+783 |     expect(tunnel).toEqual({
+                         ^
+error: expect(received).toEqual(expected)
+
+@@ -10,12 +10,2 @@
+        ],
+-       "ports": [
+-         {
+-           "port": 80,
+-           "protocol": "TCP",
+-         },
+-         {
+-           "port": 15021,
+-           "protocol": "TCP",
+-         },
+-       ],
+      },
+
+- Expected  - 10
++ Received  + 0
+
+      at <anonymous> (<main e8f180b>/deploy/chart/tests/chart.test.ts:783:20)
+(fail) ingress gateway (decision 27) > NetworkPolicy: behind the tunnel only the host may connect, to 80 and 15021; direct exposure opens 443 and 15021 [367.06ms]
+814 |     };
+815 |     const expected = [...gateway.listeners.map((l) => l.port), ISTIO_STATUS_PORT].map((port) => ({ port, protocol: "TCP" }));
+816 |     const rules = (find(manifests, "NetworkPolicy", GATEWAY).spec as NetworkPolicySpec).ingress ?? [];
+817 |     expect(rules.length).toBeGreaterThan(0);
+818 |     // A rule without ports admits every port of the pod, Envoy's metrics included.
+819 |     for (const rule of rules) expect(rule.ports).toEqual(expected);
+                                                       ^
+error: expect(received).toEqual(expected)
+
+- [
+-   {
+-     "port": 80,
+-     "protocol": "TCP",
+-   },
+-   {
+-     "port": 15021,
+-     "protocol": "TCP",
+-   },
+- ]
++ undefined
+
+- Expected  - 10
++ Received  + 1
+
+      at <anonymous> (<main e8f180b>/deploy/chart/tests/chart.test.ts:819:50)
+(fail) ingress gateway (decision 27) > saas: every rule of the gateway's NetworkPolicy admits only the Gateway's listener and Istio's status port [440.65ms]
+
+ 5 pass
+ 173 filtered out
+ 2 fail
+ 232 expect() calls
+Ran 7 tests across 1 file. [11.17s]

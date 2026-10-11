@@ -1,0 +1,32 @@
+bun test v1.4.2 (744846f84)
+
+scripts/nightly/manifests.test.ts:
+433 |       if (gateway === undefined) throw new Error("the release has no Gateway");
+434 |       // Istio copies the Gateway's infrastructure labels onto the pods, which the policy may select on.
+435 |       const spec = release.find((o) => o.kind === "Gateway")?.spec as { infrastructure?: { labels?: Record<string, string> } };
+436 |       const generated = parseManifests(istioGenerated(gateway, listener, spec.infrastructure?.labels));
+437 |       const ports = gatewayPorts(gateway, generated, release);
+438 |       expect(ports).toEqual({ gateway, needed: [listener.port, 15021], admitted: [listener.port, 15021] });
+                          ^
+error: expect(received).toEqual(expected)
+
+@@ -1,6 +1,3 @@
+  {
+-   "admitted": [
+-     80,
+-     15021,
+-   ],
++   "admitted": "all",
+    "gateway": "trustiot-ingress",
+
+- Expected  - 4
++ Received  + 1
+
+      at <anonymous> (/home/ruisi/.cache/trustiot-v2-287/before/scripts/nightly/manifests.test.ts:438:21)
+(fail) gateway ports > values-saas.yaml: the gateway's NetworkPolicy admits exactly what Istio's gateway pods use [1464.95ms]
+
+ 5 pass
+ 21 filtered out
+ 1 fail
+ 14 expect() calls
+Ran 6 tests across 1 file. [2.59s]
