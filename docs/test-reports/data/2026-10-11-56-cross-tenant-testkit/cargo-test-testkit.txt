@@ -1,0 +1,285 @@
+    Checking testkit v0.1.0 (/home/ruisi/tv2/agents/56/src/crates/testkit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.11s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.24s
+     Running unittests src/lib.rs (/home/ruisi/tv2/agents/56/target/debug/deps/testkit-a5fafaacc64c86b5)
+
+running 22 tests
+test identity::tests::a_user_without_a_tenant_has_none ... ok
+test identity::tests::another_issuers_tokens_do_not_verify ... ok
+test identity::tests::tokens_verify_for_their_audience_only ... ok
+test isolation::api::tests::a_stale_or_repeated_declaration_fails ... ok
+test isolation::api::tests::an_undeclared_api_fails ... ok
+test isolation::api::tests::an_undeclared_operation_fails ... ok
+test isolation::api::tests::each_write_to_a_row_gets_its_own_row ... ok
+test isolation::api::tests::every_operation_declared_or_exempt_passes ... ok
+test isolation::api::tests::paths_must_match_the_kind ... ok
+test isolation::api::tests::placeholders_are_filled ... ok
+test isolation::postgres::tests::a_forgotten_relation_fails ... ok
+test isolation::postgres::tests::a_repeated_declaration_fails ... ok
+test isolation::postgres::tests::declared_relations_pass ... ok
+test isolation::postgres::tests::names_are_validated_and_qualified ... ok
+test isolation::postgres::tests::the_macros_build_static_sql_from_the_name ... ok
+test isolation::postgres::tests::wrong_declarations_fail ... ok
+test isolation::tests::an_empty_report_is_not_isolated ... ok
+test isolation::tests::leaks_find_any_marker_in_any_case ... ok
+test isolation::tests::markers_cover_the_tenant_and_each_row ... ok
+test isolation::tests::shows_finds_a_row_by_id_or_canary ... ok
+test isolation::tests::snapshot_changes_fail ... ok
+test isolation::tests::the_requested_id_is_not_a_leak_but_its_canary_is ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/postgres_isolation.rs (/home/ruisi/tv2/agents/56/target/debug/deps/postgres_isolation-100c2cec76670099)
+
+running 4 tests
+test a_forgotten_table_fails ... result | subject | probe | outcome
+pass | public.example_items | coverage | declared table
+FAIL | public.example_notes | coverage | the service role can use this table but the suite does not declare it: add pg_table!/pg_view!, or exempt() it with the reason it holds no tenant data
+pass | api | coverage | no HTTP API: database probes only
+pass | example_items | seed | 2 rows per tenant
+pass | postgres | session as tenant A | the kit accepts the service role's session
+pass | example_items | read as tenant A | 2 rows visible, all own, none of tenant B
+pass | example_items | read without a tenant | no row visible
+pass | example_items | update own rows as tenant A | 2 rows reached, none of tenant B
+pass | example_items | move own rows into tenant B | refused (42501)
+pass | example_items | insert into tenant B | refused (42501)
+pass | postgres | session as tenant B | the kit accepts the service role's session
+pass | example_items | read as tenant B | 2 rows visible, all own, none of tenant A
+pass | example_items | update own rows as tenant B | 2 rows reached, none of tenant A
+pass | example_items | move own rows into tenant A | refused (42501)
+pass | example_items | insert into tenant A | refused (42501)
+15 probes, 1 failed
+ok
+test an_endpoint_that_reads_across_tenants_fails ... result | subject | probe | outcome
+pass | public.example_items | coverage | declared table
+pass | example_items | seed | 5 rows per tenant
+pass | postgres | session as tenant A | the kit accepts the service role's session
+pass | example_items | read as tenant A | 5 rows visible, all own, none of tenant B
+pass | example_items | read without a tenant | no row visible
+pass | example_items | update own rows as tenant A | 5 rows reached, none of tenant B
+pass | example_items | move own rows into tenant B | refused (42501)
+pass | example_items | insert into tenant B | refused (42501)
+pass | postgres | session as tenant B | the kit accepts the service role's session
+pass | example_items | read as tenant B | 5 rows visible, all own, none of tenant A
+pass | example_items | update own rows as tenant B | 5 rows reached, none of tenant A
+pass | example_items | move own rows into tenant A | refused (42501)
+pass | example_items | insert into tenant A | refused (42501)
+pass | GET /v1/items | list as tenant A | 200: all 5 own rows, nothing of tenant B
+pass | GET /v1/items | without a tenant | 403, nothing shown
+FAIL | GET /v1/items/{id} | tenant B's row as tenant A | 200 shows tenant B's data: ["canary-b-49f1e8ed71d2458fb0e95f8477dcbf50"]
+FAIL | GET /v1/items/{id} | without a tenant | 200 shows tenant data: ["d2982789-439e-44ef-afb0-2a703ad61044", "canary-a-c1d7c703cde14075991d5c9478f4c90a"]
+pass | GET /v1/items/{id} | positive control: own row as tenant A | 200
+pass | DELETE /v1/items/{id} | tenant B's row as tenant A | 404, nothing shown
+pass | DELETE /v1/items/{id} | without a tenant | 403, nothing shown
+pass | DELETE /v1/items/{id} | positive control: own row as tenant A | 204
+pass | PUT /v1/items/{id} | tenant B's row as tenant A | 404, nothing shown
+pass | PUT /v1/items/{id} | without a tenant | 403, nothing shown
+pass | PUT /v1/items/{id} | positive control: own row as tenant A | 200
+pass | POST /v1/items | create for tenant B as tenant A | 201, nothing of tenant B shown (stored rows are compared after all probes)
+pass | POST /v1/items | without a tenant | 403, nothing shown
+pass | POST /v1/items | positive control: create for tenant A | 201
+pass | api | tenant B rows after tenant A's endpoint probes | 5 rows, all unchanged
+pass | GET /v1/items | list as tenant B | 200: all 5 own rows, nothing of tenant A
+pass | GET /v1/items | without a tenant | 403, nothing shown
+FAIL | GET /v1/items/{id} | tenant A's row as tenant B | 200 shows tenant A's data: ["canary-a-c1d7c703cde14075991d5c9478f4c90a"]
+FAIL | GET /v1/items/{id} | without a tenant | 200 shows tenant data: ["d66c960e-1b6a-4b3b-a2de-299d4917aab4", "canary-b-49f1e8ed71d2458fb0e95f8477dcbf50"]
+pass | GET /v1/items/{id} | positive control: own row as tenant B | 200
+pass | DELETE /v1/items/{id} | tenant A's row as tenant B | 404, nothing shown
+pass | DELETE /v1/items/{id} | without a tenant | 403, nothing shown
+pass | DELETE /v1/items/{id} | positive control: own row as tenant B | 204
+pass | PUT /v1/items/{id} | tenant A's row as tenant B | 404, nothing shown
+pass | PUT /v1/items/{id} | without a tenant | 403, nothing shown
+pass | PUT /v1/items/{id} | positive control: own row as tenant B | 200
+pass | POST /v1/items | create for tenant A as tenant B | 201, nothing of tenant A shown (stored rows are compared after all probes)
+pass | POST /v1/items | without a tenant | 403, nothing shown
+pass | POST /v1/items | positive control: create for tenant B | 201
+pass | api | tenant A rows after tenant B's endpoint probes | 6 rows, all unchanged
+43 probes, 4 failed
+ok
+test an_endpoint_that_writes_across_tenants_fails ... result | subject | probe | outcome
+pass | public.example_items | coverage | declared table
+pass | example_items | seed | 5 rows per tenant
+pass | postgres | session as tenant A | the kit accepts the service role's session
+pass | example_items | read as tenant A | 5 rows visible, all own, none of tenant B
+pass | example_items | read without a tenant | no row visible
+pass | example_items | update own rows as tenant A | 5 rows reached, none of tenant B
+pass | example_items | move own rows into tenant B | refused (42501)
+pass | example_items | insert into tenant B | refused (42501)
+pass | postgres | session as tenant B | the kit accepts the service role's session
+pass | example_items | read as tenant B | 5 rows visible, all own, none of tenant A
+pass | example_items | update own rows as tenant B | 5 rows reached, none of tenant A
+pass | example_items | move own rows into tenant A | refused (42501)
+pass | example_items | insert into tenant A | refused (42501)
+pass | GET /v1/items | list as tenant A | 200: all 5 own rows, nothing of tenant B
+pass | GET /v1/items | without a tenant | 403, nothing shown
+pass | GET /v1/items/{id} | tenant B's row as tenant A | 404, nothing shown
+pass | GET /v1/items/{id} | without a tenant | 403, nothing shown
+pass | GET /v1/items/{id} | positive control: own row as tenant A | 200
+pass | DELETE /v1/items/{id} | tenant B's row as tenant A | 404, nothing shown
+pass | DELETE /v1/items/{id} | without a tenant | 403, nothing shown
+pass | DELETE /v1/items/{id} | positive control: own row as tenant A | 204
+FAIL | PUT /v1/items/{id} | tenant B's row as tenant A | expected 403 or 404 for another tenant's resource, got 200
+FAIL | PUT /v1/items/{id} | without a tenant | 200 shows tenant data: ["c935c120-ca76-4ec6-b501-90e73fe618ba"]
+pass | PUT /v1/items/{id} | positive control: own row as tenant A | 200
+pass | POST /v1/items | create for tenant B as tenant A | 201, nothing of tenant B shown (stored rows are compared after all probes)
+pass | POST /v1/items | without a tenant | 403, nothing shown
+pass | POST /v1/items | positive control: create for tenant A | 201
+FAIL | api | tenant B rows after tenant A's endpoint probes | changed by another tenant's requests: before ["example_items: (01a129f0-6b77-76d0-99be-1de785a392f8,8796085c-7843-4395-a895-5b6298a81bdc,canary-b-deb33c91604d48a8a6f66f77763a474f)"], after ["example_items: (01a129f0-6b77-76d0-99be-1de785a392f8,8796085c-7843-4395-a895-5b6298a81bdc,canary-a-171f05572f114261a2ff230ad961711c)"]
+pass | GET /v1/items | list as tenant B | 200: all 5 own rows, nothing of tenant A
+pass | GET /v1/items | without a tenant | 403, nothing shown
+pass | GET /v1/items/{id} | tenant A's row as tenant B | 404, nothing shown
+pass | GET /v1/items/{id} | without a tenant | 403, nothing shown
+pass | GET /v1/items/{id} | positive control: own row as tenant B | 200
+pass | DELETE /v1/items/{id} | tenant A's row as tenant B | 404, nothing shown
+pass | DELETE /v1/items/{id} | without a tenant | 403, nothing shown
+pass | DELETE /v1/items/{id} | positive control: own row as tenant B | 204
+FAIL | PUT /v1/items/{id} | tenant A's row as tenant B | expected 403 or 404 for another tenant's resource, got 200
+FAIL | PUT /v1/items/{id} | without a tenant | 200 shows tenant data: ["2106c2e9-c336-4a70-89ab-3b05608d652b"]
+pass | PUT /v1/items/{id} | positive control: own row as tenant B | 200
+pass | POST /v1/items | create for tenant A as tenant B | 201, nothing of tenant A shown (stored rows are compared after all probes)
+pass | POST /v1/items | without a tenant | 403, nothing shown
+pass | POST /v1/items | positive control: create for tenant B | 201
+FAIL | api | tenant A rows after tenant B's endpoint probes | changed by another tenant's requests: before ["example_items: (01a129f0-6b77-76d0-99be-1de6d26e5dee,1bcb878e-f63e-4d19-bc84-6d1915d6a457,canary-a-19a9c7c9dce5428d9feb8bdb705d0a56)"], after ["example_items: (01a129f0-6b77-76d0-99be-1de6d26e5dee,1bcb878e-f63e-4d19-bc84-6d1915d6a457,canary-b-0cb572bc405c4acbb18d9eb2a06f1692)"]
+43 probes, 6 failed
+ok
+test the_example_fails_with_rls_off_and_passes_with_it_on ... == row-level security on
+result | subject | probe | outcome
+pass | public.example_items | coverage | declared table
+pass | example_items | seed | 5 rows per tenant
+pass | postgres | session as tenant A | the kit accepts the service role's session
+pass | example_items | read as tenant A | 5 rows visible, all own, none of tenant B
+pass | example_items | read without a tenant | no row visible
+pass | example_items | update own rows as tenant A | 5 rows reached, none of tenant B
+pass | example_items | move own rows into tenant B | refused (42501)
+pass | example_items | insert into tenant B | refused (42501)
+pass | postgres | session as tenant B | the kit accepts the service role's session
+pass | example_items | read as tenant B | 5 rows visible, all own, none of tenant A
+pass | example_items | update own rows as tenant B | 5 rows reached, none of tenant A
+pass | example_items | move own rows into tenant A | refused (42501)
+pass | example_items | insert into tenant A | refused (42501)
+pass | GET /v1/items | list as tenant A | 200: all 5 own rows, nothing of tenant B
+pass | GET /v1/items | without a tenant | 403, nothing shown
+pass | GET /v1/items/{id} | tenant B's row as tenant A | 404, nothing shown
+pass | GET /v1/items/{id} | without a tenant | 403, nothing shown
+pass | GET /v1/items/{id} | positive control: own row as tenant A | 200
+pass | DELETE /v1/items/{id} | tenant B's row as tenant A | 404, nothing shown
+pass | DELETE /v1/items/{id} | without a tenant | 403, nothing shown
+pass | DELETE /v1/items/{id} | positive control: own row as tenant A | 204
+pass | PUT /v1/items/{id} | tenant B's row as tenant A | 404, nothing shown
+pass | PUT /v1/items/{id} | without a tenant | 403, nothing shown
+pass | PUT /v1/items/{id} | positive control: own row as tenant A | 200
+pass | POST /v1/items | create for tenant B as tenant A | 201, nothing of tenant B shown (stored rows are compared after all probes)
+pass | POST /v1/items | without a tenant | 403, nothing shown
+pass | POST /v1/items | positive control: create for tenant A | 201
+pass | api | tenant B rows after tenant A's endpoint probes | 5 rows, all unchanged
+pass | GET /v1/items | list as tenant B | 200: all 5 own rows, nothing of tenant A
+pass | GET /v1/items | without a tenant | 403, nothing shown
+pass | GET /v1/items/{id} | tenant A's row as tenant B | 404, nothing shown
+pass | GET /v1/items/{id} | without a tenant | 403, nothing shown
+pass | GET /v1/items/{id} | positive control: own row as tenant B | 200
+pass | DELETE /v1/items/{id} | tenant A's row as tenant B | 404, nothing shown
+pass | DELETE /v1/items/{id} | without a tenant | 403, nothing shown
+pass | DELETE /v1/items/{id} | positive control: own row as tenant B | 204
+pass | PUT /v1/items/{id} | tenant A's row as tenant B | 404, nothing shown
+pass | PUT /v1/items/{id} | without a tenant | 403, nothing shown
+pass | PUT /v1/items/{id} | positive control: own row as tenant B | 200
+pass | POST /v1/items | create for tenant A as tenant B | 201, nothing of tenant A shown (stored rows are compared after all probes)
+pass | POST /v1/items | without a tenant | 403, nothing shown
+pass | POST /v1/items | positive control: create for tenant B | 201
+pass | api | tenant A rows after tenant B's endpoint probes | 6 rows, all unchanged
+43 probes, 0 failed
+== row-level security off on example_items
+result | subject | probe | outcome
+pass | public.example_items | coverage | declared table
+pass | example_items | seed | 5 rows per tenant
+FAIL | postgres | session as tenant A | refused the database session: table `public.example_items` has a tenant_id column but row-level security is not enabled
+FAIL | postgres | session as tenant B | refused the database session: table `public.example_items` has a tenant_id column but row-level security is not enabled
+FAIL | GET /v1/items | list as tenant A | 200 shows tenant B's data: ["3f1a6940-45f1-43fa-a3e3-4d9dc998e5df", "canary-b-07db713850724a218af008ecf0bf618a", "1adcfa9b-4303-44ab-b0b3-37fecbe35a38", "canary-b-ee9e6506494d45b19c4f8e42106dec59", "2d731935-1f53-4cea-841b-fadf22461132", "canary-b-2b5f289fac884a6d89a2efd01459ac72", "6f0b2d29-cc75-4ee4-8391-98776dd541b5", "canary-b-791e4d82d5c3470bb6a8ba1d64ce925d", "2ee9113f-6a1b-4282-81bd-8db868011f5f", "canary-b-0b13690abff84a2793577e39d06b765e"]
+pass | GET /v1/items | without a tenant | 403, nothing shown
+FAIL | GET /v1/items/{id} | tenant B's row as tenant A | 200 shows tenant B's data: ["canary-b-07db713850724a218af008ecf0bf618a"]
+pass | GET /v1/items/{id} | without a tenant | 403, nothing shown
+pass | GET /v1/items/{id} | positive control: own row as tenant A | 200
+FAIL | DELETE /v1/items/{id} | tenant B's row as tenant A | expected 403 or 404 for another tenant's resource, got 204
+pass | DELETE /v1/items/{id} | without a tenant | 403, nothing shown
+pass | DELETE /v1/items/{id} | positive control: own row as tenant A | 204
+FAIL | PUT /v1/items/{id} | tenant B's row as tenant A | expected 403 or 404 for another tenant's resource, got 200
+pass | PUT /v1/items/{id} | without a tenant | 403, nothing shown
+pass | PUT /v1/items/{id} | positive control: own row as tenant A | 200
+pass | POST /v1/items | create for tenant B as tenant A | 201, nothing of tenant B shown (stored rows are compared after all probes)
+pass | POST /v1/items | without a tenant | 403, nothing shown
+pass | POST /v1/items | positive control: create for tenant A | 201
+FAIL | api | tenant B rows after tenant A's endpoint probes | changed by another tenant's requests: before ["example_items: (01a129f0-8b63-73fc-b153-f03b9c593559,1adcfa9b-4303-44ab-b0b3-37fecbe35a38,canary-b-ee9e6506494d45b19c4f8e42106dec59)", "example_items: (01a129f0-8b63-73fc-b153-f03b9c593559,2d731935-1f53-4cea-841b-fadf22461132,canary-b-2b5f289fac884a6d89a2efd01459ac72)"], after ["example_items: (01a129f0-8b63-73fc-b153-f03b9c593559,2d731935-1f53-4cea-841b-fadf22461132,canary-a-371ad7cff4de48879021042e4fbc337a)"]
+FAIL | GET /v1/items | list as tenant B | 200 shows tenant A's data: ["de95abe4-33e5-4671-95e0-9ae72e257dbe", "canary-a-f92229c63ab743e7a5fe9541b5e2e8ba", "76d0d1b8-e6c5-4507-9f28-6127f006970a", "6f6fa5f4-4667-4f16-99b1-983b7393f9d6", "canary-a-effc94062f1e4ac6975997bb66c78031", "d7c13179-5fd6-410e-a881-2a17ea2ef8b5", "canary-a-2a6654e2fbfd4eb389f8b91cd5e70f98"]
+pass | GET /v1/items | without a tenant | 403, nothing shown
+FAIL | GET /v1/items/{id} | tenant A's row as tenant B | 200 shows tenant A's data: ["canary-a-f92229c63ab743e7a5fe9541b5e2e8ba"]
+pass | GET /v1/items/{id} | without a tenant | 403, nothing shown
+pass | GET /v1/items/{id} | positive control: own row as tenant B | 200
+FAIL | DELETE /v1/items/{id} | tenant A's row as tenant B | expected 403 or 404 for another tenant's resource, got 204
+pass | DELETE /v1/items/{id} | without a tenant | 403, nothing shown
+pass | DELETE /v1/items/{id} | positive control: own row as tenant B | 204
+FAIL | PUT /v1/items/{id} | tenant A's row as tenant B | expected 403 or 404 for another tenant's resource, got 200
+pass | PUT /v1/items/{id} | without a tenant | 403, nothing shown
+pass | PUT /v1/items/{id} | positive control: own row as tenant B | 200
+pass | POST /v1/items | create for tenant A as tenant B | 201, nothing of tenant A shown (stored rows are compared after all probes)
+pass | POST /v1/items | without a tenant | 403, nothing shown
+pass | POST /v1/items | positive control: create for tenant B | 201
+FAIL | api | tenant A rows after tenant B's endpoint probes | changed by another tenant's requests: before ["example_items: (01a129f0-8b63-73fc-b153-f03aa558639c,6f6fa5f4-4667-4f16-99b1-983b7393f9d6,canary-a-effc94062f1e4ac6975997bb66c78031)", "example_items: (01a129f0-8b63-73fc-b153-f03aa558639c,d7c13179-5fd6-410e-a881-2a17ea2ef8b5,canary-a-2a6654e2fbfd4eb389f8b91cd5e70f98)"], after ["example_items: (01a129f0-8b63-73fc-b153-f03aa558639c,d7c13179-5fd6-410e-a881-2a17ea2ef8b5,canary-b-bad1adf2ee73429bbab4e8d70caeca6e)"]
+34 probes, 12 failed
+== row-level security on again
+result | subject | probe | outcome
+pass | public.example_items | coverage | declared table
+pass | example_items | seed | 5 rows per tenant
+pass | postgres | session as tenant A | the kit accepts the service role's session
+pass | example_items | read as tenant A | 5 rows visible, all own, none of tenant B
+pass | example_items | read without a tenant | no row visible
+pass | example_items | update own rows as tenant A | 5 rows reached, none of tenant B
+pass | example_items | move own rows into tenant B | refused (42501)
+pass | example_items | insert into tenant B | refused (42501)
+pass | postgres | session as tenant B | the kit accepts the service role's session
+pass | example_items | read as tenant B | 5 rows visible, all own, none of tenant A
+pass | example_items | update own rows as tenant B | 5 rows reached, none of tenant A
+pass | example_items | move own rows into tenant A | refused (42501)
+pass | example_items | insert into tenant A | refused (42501)
+pass | GET /v1/items | list as tenant A | 200: all 5 own rows, nothing of tenant B
+pass | GET /v1/items | without a tenant | 403, nothing shown
+pass | GET /v1/items/{id} | tenant B's row as tenant A | 404, nothing shown
+pass | GET /v1/items/{id} | without a tenant | 403, nothing shown
+pass | GET /v1/items/{id} | positive control: own row as tenant A | 200
+pass | DELETE /v1/items/{id} | tenant B's row as tenant A | 404, nothing shown
+pass | DELETE /v1/items/{id} | without a tenant | 403, nothing shown
+pass | DELETE /v1/items/{id} | positive control: own row as tenant A | 204
+pass | PUT /v1/items/{id} | tenant B's row as tenant A | 404, nothing shown
+pass | PUT /v1/items/{id} | without a tenant | 403, nothing shown
+pass | PUT /v1/items/{id} | positive control: own row as tenant A | 200
+pass | POST /v1/items | create for tenant B as tenant A | 201, nothing of tenant B shown (stored rows are compared after all probes)
+pass | POST /v1/items | without a tenant | 403, nothing shown
+pass | POST /v1/items | positive control: create for tenant A | 201
+pass | api | tenant B rows after tenant A's endpoint probes | 5 rows, all unchanged
+pass | GET /v1/items | list as tenant B | 200: all 5 own rows, nothing of tenant A
+pass | GET /v1/items | without a tenant | 403, nothing shown
+pass | GET /v1/items/{id} | tenant A's row as tenant B | 404, nothing shown
+pass | GET /v1/items/{id} | without a tenant | 403, nothing shown
+pass | GET /v1/items/{id} | positive control: own row as tenant B | 200
+pass | DELETE /v1/items/{id} | tenant A's row as tenant B | 404, nothing shown
+pass | DELETE /v1/items/{id} | without a tenant | 403, nothing shown
+pass | DELETE /v1/items/{id} | positive control: own row as tenant B | 204
+pass | PUT /v1/items/{id} | tenant A's row as tenant B | 404, nothing shown
+pass | PUT /v1/items/{id} | without a tenant | 403, nothing shown
+pass | PUT /v1/items/{id} | positive control: own row as tenant B | 200
+pass | POST /v1/items | create for tenant A as tenant B | 201, nothing of tenant A shown (stored rows are compared after all probes)
+pass | POST /v1/items | without a tenant | 403, nothing shown
+pass | POST /v1/items | positive control: create for tenant B | 201
+pass | api | tenant A rows after tenant B's endpoint probes | 6 rows, all unchanged
+43 probes, 0 failed
+ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 32.48s
+
+   Doc-tests testkit
+
+running 1 test
+test crates/testkit/src/isolation.rs - isolation::Suite (line 344) - compile ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.28s; merged doctests compilation took 0.27s
