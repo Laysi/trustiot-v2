@@ -50,7 +50,7 @@ flowchart TB
   - 提供 health 與 readiness 端點。
   - 收到 SIGTERM 時能正常收尾：服務在容器內是 PID 1，不處理 SIGTERM 就會撐到寬限期結束被 SIGKILL；持有長連線的服務要主動關閉連線，讓用戶端立刻改連新的 pod。
   - DB migration 是獨立的 Job。
-  - 排程工作用 Postgres advisory lock 互斥。
+  - 排程工作用 Postgres advisory lock 互斥。互斥有時間界限：網路分割時兩個副本可能同時執行最多一個鎖逾時（預設 10 秒），所以工作必須冪等。
   - 資料接收用 MQTT shared subscription 分配。
   - 設定、health 與 readiness、SIGTERM 收尾與 advisory lock 由 `crates/service-kit` 實作，符合 [Helm chart 與服務的約定](../../deploy/chart/README.md)：服務自己的設定用 `TRUSTIOT__<SECTION>__<KEY>`，chart 的平台設定 `TRUSTIOT_<NAME>` 以 `platform` 表交給服務；kit 的收尾時間要在 chart 的 `drainSeconds` 內。細節見 [service-kit 的 README](../../crates/service-kit/README.md)。
 - **完全斷網的地端環境**：以容器映像壓縮包加上部署描述安裝。
