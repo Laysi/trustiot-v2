@@ -8,6 +8,13 @@
 # The same job runs actionlint (scripts/ci/lint-workflows.ts) so a file GitHub cannot parse
 # fails here instead of at its first trigger.
 #
+# Cost (Laysi/trustiot-v2#309): every job runs on the 2-core arm64 runner, which costs less per
+# minute than x64. The `changes` job (scripts/ci/changes.ts) decides from the changed paths
+# whether `rust`, `cargo-deny`, `helm` and `host` run; a job it skips reports as skipped, which counts
+# as passed. Each of them runs unless `changes` answered exactly 'false', so a failed or
+# missing answer runs everything. `gitleaks` and `workflow-policy` always run. A new job that
+# should depend on paths gets its rule in scripts/ci/changes.ts and an output of `changes`.
+#
 # Checks that later issues add to this workflow:
 # - Integration tests (Laysi/trustiot-v2#60): service containers for Postgres with AGE,
 #   ClickHouse and Mosquitto, every migration on a fresh database, the cross-tenant negative
@@ -36,9 +43,43 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # On a push to main: which recent main commits ci passed on, to compare with the newest of
+      # them. If that cannot be read, every job runs (scripts/ci/changes.ts).
+      actions: read
+    outputs:
+      rust: ${{ steps.decide.outputs.rust }}
+      cargo-deny: ${{ steps.decide.outputs.cargo-deny }}
+      helm: ${{ steps.decide.outputs.helm }}
+      host: ${{ steps.decide.outputs.host }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A push is compared with the newest green main commit, which can be any ancestor.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-proto
+        with:
+          tools: bun
+      - id: decide
+        name: Decide which jobs the changed paths need
+        env:
+          # Only a push reads the runs; a pull request runs its own copy of the script, so it
+          # gets no token at all.
+          GITHUB_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
+        run: bun scripts/ci/changes.ts
+
   rust:
     name: rust
-    runs-on: ubuntu-24.04
+    needs: changes
+    # Also when `changes` failed: only an explicit 'false' skips the job.
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     permissions:
       contents: read
@@ -110,12 +151,21 @@ jobs:
             echo "::notice title=aarch64 build::No gateway crates yet (crates/protocol, edge/*)."
             exit 0
           fi
-          rustup target add aarch64-unknown-linux-gnu
-          cargo build --locked --target aarch64-unknown-linux-gnu "${packages[@]}"
+          # On the arm64 runner the host is the gateway target: build natively, which reuses
+          # the build cache of the steps above. On an x64 host, cross-compile.
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          if [[ "$host" == aarch64-unknown-linux-gnu ]]; then
+            cargo build --locked "${packages[@]}"
+          else
+            rustup target add aarch64-unknown-linux-gnu
+            cargo build --locked --target aarch64-unknown-linux-gnu "${packages[@]}"
+          fi
 
   cargo-deny:
     name: cargo-deny
-    runs-on: ubuntu-24.04
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.cargo-deny != 'false' }}
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     permissions:
       contents: read
@@ -131,7 +181,9 @@ jobs:
 
   helm:
     name: helm
-    runs-on: ubuntu-24.04
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.helm != 'false' }}
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     permissions:
       contents: read
@@ -149,7 +201,9 @@ jobs:
 
   host:
     name: host
-    runs-on: ubuntu-24.04
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.host != 'false' }}
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     permissions:
       contents: read
@@ -178,7 +232,7 @@ jobs:
 
   gitleaks:
     name: gitleaks
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     permissions:
       contents: read
@@ -217,7 +271,7 @@ jobs:
 
   workflow-policy:
     name: workflow-policy
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     permissions:
       contents: read
