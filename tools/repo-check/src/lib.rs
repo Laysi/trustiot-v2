@@ -327,6 +327,61 @@ pub fn parse_metadata(metadata_json: &str) -> Result<Workspace, CheckError> {
     })
 }
 
+/// Workspace crates that other members may use only as `[dev-dependencies]`: test support that
+/// must never ship in a service binary. `tools/sql-check` treats their sources as test code
+/// (its `TEST_SUPPORT` list), which is safe only while this holds.
+pub const DEV_ONLY_CRATES: &[&str] = &["testkit"];
+
+/// Every dependency on a crate in `dev_only` that is not a dev-dependency, as
+/// `<package> depends on <crate> as a <normal|build> dependency`, from
+/// `cargo metadata --no-deps --format-version 1` output.
+pub fn non_dev_uses(metadata_json: &str, dev_only: &[&str]) -> Result<Vec<String>, CheckError> {
+    const FILE: &str = "cargo metadata output";
+    let metadata: serde_json::Value =
+        serde_json::from_str(metadata_json).map_err(|error| CheckError::Parse {
+            file: FILE.to_owned(),
+            message: error.to_string(),
+        })?;
+    let missing = |key| CheckError::MissingKey {
+        file: FILE.to_owned(),
+        key,
+    };
+    let packages = metadata
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| missing("packages"))?;
+    let mut uses = Vec::new();
+    for package in packages {
+        let package_name = package
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| missing("packages.name"))?;
+        let dependencies = package
+            .get("dependencies")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| missing("packages.dependencies"))?;
+        for dependency in dependencies {
+            let name = dependency
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| missing("packages.dependencies.name"))?;
+            if !dev_only.contains(&name) {
+                continue;
+            }
+            // `kind` is null for a normal dependency, "dev" or "build" otherwise.
+            match dependency.get("kind").and_then(serde_json::Value::as_str) {
+                Some("dev") => {}
+                kind => uses.push(format!(
+                    "{package_name} depends on {name} as a {} dependency",
+                    kind.unwrap_or("normal")
+                )),
+            }
+        }
+    }
+    uses.sort();
+    Ok(uses)
+}
+
 /// Directories the `AGENTS.md` search skips: build output, installed dependencies, and hidden
 /// directories such as `.git` and the agent worktrees under `.claude`.
 fn is_skipped_dir(name: &OsStr) -> bool {
@@ -688,6 +743,33 @@ mod tests {
             ),
             Err(CheckError::MissingKey {
                 key: "packages",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn dev_only_crates_must_be_dev_dependencies() {
+        let metadata = r#"{"packages": [
+            {"name": "assets", "dependencies": [
+                {"name": "testkit", "kind": "dev"},
+                {"name": "sqlx", "kind": null}
+            ]},
+            {"name": "alerts", "dependencies": [{"name": "testkit", "kind": null}]},
+            {"name": "ingest", "dependencies": [{"name": "testkit", "kind": "build"}]},
+            {"name": "testkit", "dependencies": []}
+        ]}"#;
+        assert_eq!(
+            non_dev_uses(metadata, DEV_ONLY_CRATES),
+            Ok(vec![
+                "alerts depends on testkit as a normal dependency".to_owned(),
+                "ingest depends on testkit as a build dependency".to_owned(),
+            ])
+        );
+        assert!(matches!(
+            non_dev_uses(r#"{"packages": [{"name": "a"}]}"#, DEV_ONLY_CRATES),
+            Err(CheckError::MissingKey {
+                key: "packages.dependencies",
                 ..
             })
         ));
