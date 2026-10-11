@@ -1,0 +1,58 @@
+warning: unused import: `Mutex`
+  --> crates/service-kit/tests/verify_job_lock_probes.rs:13:22
+   |
+13 | use std::sync::{Arc, Mutex};
+   |                      ^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `JobLockError`
+  --> crates/service-kit/tests/verify_job_lock_probes.rs:16:38
+   |
+16 | use service_kit::job_lock::{JobLock, JobLockError};
+   |                                      ^^^^^^^^^^^^
+
+warning: function `any_advisory_locks` is never used
+   --> crates/service-kit/tests/verify_job_lock_probes.rs:104:10
+    |
+104 | async fn any_advisory_locks(admin: &PgPool) -> i64 {
+    |          ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `service-kit` (test "verify_job_lock_probes") generated 3 warnings (run `cargo fix --test "verify_job_lock_probes" -p service-kit` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.10s
+     Running tests/verify_job_lock_probes.rs (target/debug/deps/verify_job_lock_probes-cf1955cec8bf5062)
+
+running 3 tests
+test a_panicking_job_does_not_end_the_periodic_schedule ... 
+thread 'tokio-rt-worker' (233265) panicked at crates/service-kit/tests/verify_job_lock_probes.rs:203:25:
+first run panics
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+runs after 2 s: 1 (task finished: true)
+
+thread 'a_panicking_job_does_not_end_the_periodic_schedule' (233263) panicked at crates/service-kit/tests/verify_job_lock_probes.rs:209:5:
+the schedule ended after one panic
+FAILED
+test a_pool_of_one_connection_deadlocks_a_job_that_uses_the_pool ... pool of one: Err(Elapsed(()))
+
+thread 'a_pool_of_one_connection_deadlocks_a_job_that_uses_the_pool' (234453) panicked at crates/service-kit/tests/verify_job_lock_probes.rs:222:5:
+the job waited for a connection the lock holds
+FAILED
+test partitioned_holder_is_detected_and_the_job_stops ... replica B holds the lock 36.076875ms after the partition+kill
+replica A job ticks during the next 10 s while B holds the lock: 449 (run finished: false)
+
+thread 'partitioned_holder_is_detected_and_the_job_stops' (236478) panicked at crates/service-kit/tests/verify_job_lock_probes.rs:190:5:
+TWO REPLICAS RUN THE JOB: A kept running 449 ticks while B held the lock
+FAILED
+
+failures:
+
+failures:
+    a_panicking_job_does_not_end_the_periodic_schedule
+    a_pool_of_one_connection_deadlocks_a_job_that_uses_the_pool
+    partitioned_holder_is_detected_and_the_job_stops
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 75.77s
+
+error: test failed, to rerun pass `-p service-kit --test verify_job_lock_probes`
