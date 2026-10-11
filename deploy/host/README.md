@@ -105,8 +105,6 @@ bun run --cwd deploy/host build      # deploy/host/dist/ 下的兩個執行檔�
 
    ClusterIP 在 Service 存在期間不會變；Service 被刪掉重建（例如重裝 chart）後要更新這三條路由，否則 Cloudflare 回 502。
 
-   cloudflared 交給入口的 `Host` 是公開主機名稱本身，不帶埠號，所以入口的例外路徑（健康檢查等）不受「`Host` 帶埠號時不比對例外路由」的限制影響（Laysi/trustiot-v2#62 驗證報告的 F3）；2026-10-11 經 tunnel 實測 `/healthz` 回 200。
-
 7. **驗證。**
 
    ```sh
