@@ -26,7 +26,7 @@ RLS 防的是程式漏寫租戶條件，不防 SQL 注入：注入的 SQL 以服
 - 例外清單有三個，測試確認清單上的路徑存在：
   - `SESSION_SETTING_ALLOWED`：只有 `crates/service-kit/src/tenant.rs` 可以含 `set_config('trustiot.tenant_id', …)`。
   - `SET_CONFIG_ALLOWED`：檔案可以用 `set_config` 改的額外設定，每筆寫明理由與值的來源；不能是 `trustiot.*`、`role` 或 `session_authorization`。目前是 `crates/outbox/src/consumer.rs` 的 `search_path`（值是設定的產生端 schema，`ConsumerConfig::new` 以 `is_schema_name` 驗證過）與 `crates/outbox/tests/delivery.rs` 的測試用設定 `outbox_test.tenant`。
-  - `EXCEPTIONS`：測試檔（路徑在 `tests` 目錄下、不在 `src` 下）可以免除列出的規則，每筆寫明理由；`UncheckedInclude` 不能免除。目前是 `crates/outbox/tests/delivery.rs`、`crates/outbox/tests/support/mod.rs`（以每次執行產生的名稱建立 schema、角色與 grant，DDL 的識別字不能綁定），以及 `services/ingest/tests/clickhouse.rs`（ClickHouse 而不是 Postgres：建立每次執行的使用者、角色與租戶，並以 `SET ROLE NONE` 驗證攻擊會失敗，所以 `SessionSetting` 也免除）。
+  - `EXCEPTIONS`：測試檔（路徑在 `tests` 目錄下、不在 `src` 下）可以免除列出的規則，每筆寫明理由；`UncheckedInclude` 不能免除。目前是 `crates/outbox/tests/delivery.rs`、`crates/outbox/tests/support/mod.rs`（以每次執行產生的名稱建立 schema、角色、grant 與 policy，並把這些角色名稱代入 service-kit 的 outbox policy 範本執行，DDL 的識別字不能綁定），以及 `services/ingest/tests/clickhouse.rs`（ClickHouse 而不是 Postgres：建立每次執行的使用者、角色與租戶，並以 `SET ROLE NONE` 驗證攻擊會失敗，所以 `SessionSetting` 也免除）。
 - 只檢查 `.rs` 檔與它們以 `include_str!`、`include_bytes!` 引入的檔案。各服務 `migrations/` 下的 `.sql`（例如 `services/ingest` 的 ClickHouse schema）是 migration 角色執行的 DDL，不經服務的程式送出，不在本檢查範圍；`tools/repo-check` 另外擋下 `services/*/src` 裡改 schema 的 SQL（決策 14）。
 - 巨集的內容會解析成運算式或陳述式再檢查（例如 `sqlx::query!`、`tokio::select!`），解析不了時檢查其中的字串字面值與 `AssertSqlSafe`。doc comment 不檢查。
 

@@ -391,7 +391,9 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 | --- | --- | --- |
 | `TenantDb::begin(&UserIdentity)` | handler | 請求的內部身分 token（已驗證）；token 沒有租戶時回 `TenantDbError::NoTenant`，端點回 403 `permission_denied` |
 | `BackgroundTenantDb::begin(TenantId, purpose)` | 排程工作、事件消費 | 工作本身：事件帶的租戶，或平台角色查詢找出的租戶。以 DEBUG 記下服務、租戶與 `purpose` |
+| `BackgroundTenantDb::begin_without_tenant(purpose)` | 不帶租戶資料的表（例如 outbox 消費端自己的表）、全平台事件的處理 | 不設定租戶：看不到也寫不進任何租戶的列。以 DEBUG 記下服務與 `purpose` |
 | `PlatformDb::begin(PlatformActor, purpose)` | 平台後台、跨租戶的工作 | 不設定租戶；平台角色只看得到表上有 `platform_access` policy 的資料。以 INFO 記一行 `platform database access`（actor、`purpose`），操作本身的紀錄在 Laysi/trustiot-v2#130 |
+| `PlatformDb::reader(PlatformActor, purpose)` → `PlatformReader::begin()` | 每隔幾秒就要跨租戶讀一次的例行工作，例如 outbox 消費端輪詢事件 | 同 `PlatformDb::begin`，但交易是 `READ ONLY`（資料庫拒絕寫入）；actor 與 `purpose` 在建立 `PlatformReader` 時以 INFO 記一次（`platform database reader`），每筆交易只記 DEBUG，免得每秒一行 INFO |
 
 - 交易的第一個陳述就是 `SELECT set_config('trustiot.tenant_id', $1, true)`：等同 `SET LOCAL`，但值以參數綁定。交易結束（commit、rollback、drop、出錯）設定就消失，連線回到 pool 時不帶租戶。
 - `TenantTransaction` 沒有改租戶的方法，`TenantDb` 也沒有以任意租戶開交易的 handler 用方法；`src/tenant.rs` 的 compile-fail doctest 證明這些寫法無法編譯。SQL 裡設定租戶或角色由 `tools/sql-check` 擋下，只有 `src/tenant.rs` 例外。
@@ -406,7 +408,8 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
   1. 服務角色只有 INSERT，`tenant_isolation` 的 `WITH CHECK` 讓它只寫得進目前租戶的事件；不給 SELECT（`publish` 不用 `RETURNING`）。
   2. 全平台事件（`tenant_id` 為 NULL）決定（2026-10-10）：允許，但只由產生端的平台角色經 `PlatformDb` 寫（`platform_events` policy：`FOR INSERT ... WITH CHECK (tenant_id IS NULL)`），會留紀錄；平台角色寫不了任何租戶的事件，服務角色寫不了全平台事件。平台角色另需 `outbox_aggregate` 的權限（outbox README「資料庫權限」中產生端的那幾行）。
   3. 投遞要讀所有租戶的事件，所以消費端以**它的平台角色**讀（`consumer_read` policy：`FOR SELECT TO <消費端平台角色> USING (true)`），不能用服務角色：開放給服務角色的跨租戶 policy 會讓它的連線被拒（`PermissivePolicy`）。handler 的寫入則在消費端服務角色的租戶交易裡。
-- 目前 `outbox::Consumer` 讀取與 handler 交易共用一個 pool，`Handler::begin` 也還沒有設定租戶的 kit 介面；兩者要配合上一點調整（讀取用平台角色的 pool、handler 交易用 `BackgroundTenantDb` 的 pool 並由 kit 設定租戶），列為後續工作。
+- `outbox::Consumer::new(&PlatformDb, BackgroundTenantDb, ...)` 照上一點連線（Laysi/trustiot-v2#271，2026-10-11）：以 `PlatformDb::reader` 的唯讀交易讀事件，每個事件以 `BackgroundTenantDb::begin(事件的租戶, "outbox-delivery")` 開交易，全平台事件與消費端自己的表用 `BackgroundTenantDb::begin_without_tenant`。細節與保證見 [outbox README](../outbox/README.md#與租戶隔離決策-29的配合)。
+- 交給函式庫的交易：`TenantTransaction::transaction()`、`PlatformTransaction::transaction()` 回傳同一筆 sqlx 交易（`&mut Transaction`），給參數是 sqlx 交易的函式庫用，例如 `outbox::publish` 與 outbox 的 handler；租戶設定不變，交易仍由原物件 commit、rollback 或 drop 結束。
 
 ### 角色與 policy 範本
 

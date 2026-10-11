@@ -109,7 +109,8 @@ pub const EXCEPTIONS: &[Exception] = &[
     Exception {
         path: "crates/outbox/tests/support/mod.rs",
         rules: DYNAMIC_SQL,
-        reason: "creates a per-run schema",
+        reason: "creates per-run schemas, roles, grants, and policies, and runs service-kit's \
+                 outbox policy template with the per-run role names",
     },
     Exception {
         path: "services/ingest/tests/clickhouse.rs",

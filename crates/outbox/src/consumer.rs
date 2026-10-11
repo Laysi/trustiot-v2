@@ -7,7 +7,12 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use contract::{DecodeError, EventEnvelope, EventId, TenantId};
-use sqlx::{PgConnection, PgPool, Postgres, Transaction};
+use service_kit::postgres::UnsafeSession;
+use service_kit::tenant::{
+    BackgroundTenantDb, PlatformActor, PlatformDb, PlatformReader, PlatformTransaction,
+    TenantDbError, TenantTransaction,
+};
+use sqlx::{PgConnection, Postgres, Transaction};
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument as _;
 use uuid::Uuid;
@@ -16,6 +21,37 @@ use crate::aggregate::Aggregate;
 use crate::lag::{Lag, LagCell};
 use crate::position::Position;
 use crate::schema::is_schema_name;
+
+/// The purpose the consumer's platform reader is logged with.
+const READ_PURPOSE: &str = "outbox-consumer-read";
+
+/// The purpose of a delivery's transaction, logged at DEBUG.
+const DELIVERY_PURPOSE: &str = "outbox-delivery";
+
+/// The purpose of the consumer's own bookkeeping transactions (subscription, dead letters).
+const BOOKKEEPING_PURPOSE: &str = "outbox-consumer";
+
+/// Whether the reader sees every row of `outbox_event` in the producer's schema: row-level
+/// security is on (service-kit refuses the session otherwise), a permissive policy that applies
+/// to the reader's role allows reading with `USING (true)` (the `consumer_read` template), and
+/// no restrictive policy narrows it. A reader without such a policy would see no tenant's events
+/// and report no lag, so the consumer refuses to run instead.
+const READS_ALL_TENANTS: &str = "\
+    SELECT EXISTS ( \
+        SELECT 1 FROM pg_policy p \
+        WHERE p.polrelid = c.oid AND p.polpermissive AND p.polcmd IN ('r', '*') \
+          AND p.polqual IS NOT NULL AND pg_get_expr(p.polqual, p.polrelid) = 'true' \
+          AND (0 = ANY (p.polroles) OR EXISTS ( \
+              SELECT 1 FROM unnest(p.polroles) AS role \
+              WHERE role <> 0 AND pg_has_role(current_user, role, 'MEMBER'))) \
+    ) AND NOT EXISTS ( \
+        SELECT 1 FROM pg_policy p \
+        WHERE p.polrelid = c.oid AND NOT p.polpermissive AND p.polcmd IN ('r', '*') \
+          AND (0 = ANY (p.polroles) OR EXISTS ( \
+              SELECT 1 FROM unnest(p.polroles) AS role \
+              WHERE role <> 0 AND pg_has_role(current_user, role, 'MEMBER'))) \
+    ) \
+    FROM pg_class c WHERE c.oid = to_regclass('outbox_event') AND c.relrowsecurity";
 
 /// Tries the transaction-level advisory lock of subscription `$1` in the consumer's schema.
 /// Replicas take turns through it; it does not give the transaction an ID.
@@ -179,7 +215,9 @@ pub struct Delivery {
 }
 
 impl Delivery {
-    /// The event's tenant, `None` for a platform-wide event.
+    /// The event's tenant, `None` for a platform-wide event. It is the tenant the producer's
+    /// row-level security checked when the event was written (the log row's `tenant_id`, which
+    /// the consumer compares with the envelope), and the tenant of the delivery's transaction.
     #[must_use]
     pub fn tenant(&self) -> Option<TenantId> {
         self.envelope.tenant_id
@@ -188,19 +226,23 @@ impl Delivery {
 
 /// Processes the events of one subscription.
 ///
-/// For every event the consumer opens a transaction, calls [`Handler::begin`], takes the
+/// For every event the consumer opens a transaction of the consuming service's role in the
+/// event's tenant (decision 29: service-kit sets the tenant as the first statement; a
+/// platform-wide event gets a transaction without a tenant), calls [`Handler::begin`], takes the
 /// subscription's lock, checks the event ID against the inbox, calls [`Handler::handle`],
 /// records the event ID, advances the subscription, and commits. Whatever the handler writes
 /// through `tx` therefore commits exactly when the event counts as processed: a crash or error
-/// before the commit leaves nothing behind, and the event is delivered again.
+/// before the commit leaves nothing behind, and the event is delivered again. Row-level security
+/// limits the handler to the event's tenant: it sees no other tenant's rows and cannot write
+/// any, and in a platform-wide event's transaction it sees and writes no tenant's rows at all.
 ///
 /// Keep the time between the handler's first write and the commit short: from its first write
 /// a transaction holds back the read horizon of every consumer in the Postgres cluster (see the
 /// README). Do slow reads, such as an internal API call in notification mode, before writing.
 pub trait Handler: Send + Sync + 'static {
-    /// Runs first in each delivery's transaction, before the consumer touches any table. Set
-    /// the transaction's tenant here (decision 29), from [`Delivery::tenant`]. The default does
-    /// nothing.
+    /// Runs first in each delivery's transaction, after the tenant is set and before the
+    /// consumer touches any table, for transaction settings such as `statement_timeout`. The
+    /// default does nothing.
     fn begin(
         &self,
         tx: &mut Transaction<'static, Postgres>,
@@ -210,9 +252,9 @@ pub trait Handler: Send + Sync + 'static {
         async { Ok(()) }
     }
 
-    /// Applies one event. Write only through `tx`; side effects outside the database (calls,
-    /// messages) may happen more than once, because an event whose transaction fails is
-    /// delivered again.
+    /// Applies one event. Write only through `tx`, which is in [`Delivery::tenant`]; side
+    /// effects outside the database (calls, messages) may happen more than once, because an
+    /// event whose transaction fails is delivered again.
     fn handle(
         &self,
         tx: &mut Transaction<'static, Postgres>,
@@ -405,13 +447,46 @@ pub enum ConsumerError {
         /// The schema now configured.
         configured: String,
     },
+    /// service-kit refused a database session: the role could bypass or escape row-level
+    /// security (for example, a policy opens `outbox_event` across tenants to the service role
+    /// rather than the platform role). The database's migration has to fix it.
+    #[error("refused the database session: {0}")]
+    UnsafeSession(UnsafeSession),
+    /// The platform role reads the producer's `outbox_event` without a `USING (true)` read
+    /// policy (the `consumer_read` template), so it would see no tenant's events and report no
+    /// lag. The producer's migration has to grant it.
+    #[error(
+        "the platform role cannot read every tenant's events in schema `{source_schema}`: \
+         `outbox_event` needs a consumer_read policy for it"
+    )]
+    CannotReadAllTenants {
+        /// The producer's schema.
+        source_schema: String,
+    },
+    /// Any other failure of the kit's database access.
+    #[error("tenant database error")]
+    TenantDb(#[source] TenantDbError),
 }
 
 impl ConsumerError {
-    /// Whether retrying can help; configuration mistakes cannot.
+    /// Whether retrying can help. A subscription that reads another producer cannot be fixed;
+    /// a refused session or a missing read policy can, by a migration, so those are retried.
     #[must_use]
     pub fn is_retryable(&self) -> bool {
-        matches!(self, Self::Database(_))
+        !matches!(
+            self,
+            Self::UnknownSubscription(_) | Self::SourceMismatch { .. }
+        )
+    }
+}
+
+impl From<TenantDbError> for ConsumerError {
+    fn from(error: TenantDbError) -> Self {
+        match error {
+            TenantDbError::Database(error) => Self::Database(error),
+            TenantDbError::UnsafeSession(problem) => Self::UnsafeSession(problem),
+            other => Self::TenantDb(other),
+        }
     }
 }
 
@@ -452,6 +527,8 @@ struct Row {
     position: Position,
     event_id: Uuid,
     event_type: String,
+    /// The tenant the producer's row-level security checked on insert.
+    tenant_id: Option<Uuid>,
     aggregate: Aggregate,
     aggregate_seq: i64,
     envelope: String,
@@ -463,6 +540,7 @@ type RowTuple = (
     i64,
     Uuid,
     String,
+    Option<Uuid>,
     String,
     String,
     i64,
@@ -472,16 +550,50 @@ type RowTuple = (
 
 impl From<RowTuple> for Row {
     fn from(row: RowTuple) -> Self {
-        let (id, tx, event_id, event_type, kind, aggregate_id, aggregate_seq, envelope, stored) =
-            row;
+        let (
+            id,
+            tx,
+            event_id,
+            event_type,
+            tenant_id,
+            kind,
+            aggregate_id,
+            aggregate_seq,
+            envelope,
+            stored,
+        ) = row;
         Self {
             position: Position::new(tx, id),
             event_id,
             event_type,
+            tenant_id,
             aggregate: Aggregate::from_stored(kind, aggregate_id),
             aggregate_seq,
             envelope,
             stored_at: stored,
+        }
+    }
+}
+
+/// A delivery's transaction: in the event's tenant, or without a tenant for a platform-wide
+/// event. Dropping it rolls back.
+enum DeliveryTransaction {
+    Tenant(TenantTransaction),
+    NoTenant(Transaction<'static, Postgres>),
+}
+
+impl DeliveryTransaction {
+    fn transaction(&mut self) -> &mut Transaction<'static, Postgres> {
+        match self {
+            Self::Tenant(tx) => tx.transaction(),
+            Self::NoTenant(tx) => tx,
+        }
+    }
+
+    async fn commit(self) -> Result<(), sqlx::Error> {
+        match self {
+            Self::Tenant(tx) => tx.commit().await,
+            Self::NoTenant(tx) => tx.commit().await,
         }
     }
 }
@@ -524,25 +636,41 @@ impl<H> Clone for Consumer<H> {
 }
 
 struct Inner<H> {
-    pool: PgPool,
+    /// The consuming service's platform role: reads the producer's log across tenants.
+    events: PlatformReader,
+    /// The consuming service's role: deliveries in the event's tenant, and the consumer tables.
+    work: BackgroundTenantDb,
     config: ConsumerConfig,
     handler: H,
     lag: Arc<LagCell>,
 }
 
 impl<H: Handler> Consumer<H> {
-    /// A consumer that reads with `pool`, the consuming service's own pool: its `search_path`
-    /// starts with the service's schema, where the consumer tables are, and its role may read
-    /// `outbox_event` in the producer's schema (see the README).
+    /// A consumer of the consuming service (decision 29):
+    ///
+    /// - `events` is the service's platform role. It reads `outbox_event` in the producer's
+    ///   schema across tenants, through the producer's `consumer_read` policy, in read-only
+    ///   transactions. The reader is made here and logged once at INFO with the actor (the
+    ///   service of `work`) and the purpose `outbox-consumer-read`.
+    /// - `work` is the service role's background handle. Each delivery runs in a transaction of
+    ///   the event's tenant from it; the consumer tables are in the schema its role's
+    ///   `search_path` starts with.
     ///
     /// The lag gauges are registered with the global meter provider on the first call in a
     /// process, so create consumers after telemetry is initialized (`service_kit::run` does that
     /// before calling the service's start function).
-    pub fn new(pool: PgPool, config: ConsumerConfig, handler: H) -> Self {
+    pub fn new(
+        events: &PlatformDb,
+        work: BackgroundTenantDb,
+        config: ConsumerConfig,
+        handler: H,
+    ) -> Self {
+        let events = events.reader(PlatformActor::service(work.actor()), READ_PURPOSE);
         let lag = LagCell::register(&config.subscription, &config.source_schema);
         Self {
             inner: Arc::new(Inner {
-                pool,
+                events,
+                work,
                 config,
                 handler,
                 lag,
@@ -562,12 +690,15 @@ impl<H: Handler> Consumer<H> {
         &self.inner.handler
     }
 
-    /// Creates the subscription if it does not exist yet, starting as configured.
+    /// Creates the subscription if it does not exist yet, starting as configured, and checks
+    /// that the platform role reads every tenant's events.
     ///
     /// # Errors
     ///
-    /// [`ConsumerError::SourceMismatch`] when the subscription exists for another schema, or a
-    /// query error.
+    /// [`ConsumerError::SourceMismatch`] when the subscription exists for another schema,
+    /// [`ConsumerError::CannotReadAllTenants`] when the producer's log has no read policy for
+    /// the platform role, [`ConsumerError::UnsafeSession`] when service-kit refuses a session,
+    /// or a query error.
     pub async fn ensure_subscription(&self) -> Result<(), ConsumerError> {
         let config = &self.inner.config;
         let start = match config.start_from {
@@ -581,6 +712,11 @@ impl<H: Handler> Consumer<H> {
                 Position::new(horizon.saturating_sub(1), i64::MAX)
             }
         };
+        let mut tx = self
+            .inner
+            .work
+            .begin_without_tenant(BOOKKEEPING_PURPOSE)
+            .await?;
         sqlx::query(
             "INSERT INTO outbox_subscription (name, source_schema, position_tx, position_id) \
              VALUES ($1, $2, $3, $4) ON CONFLICT (name) DO NOTHING",
@@ -589,18 +725,31 @@ impl<H: Handler> Consumer<H> {
         .bind(&config.source_schema)
         .bind(start.tx())
         .bind(start.id())
-        .execute(&self.inner.pool)
+        .execute(&mut *tx)
         .await?;
         let stored: String =
             sqlx::query_scalar("SELECT source_schema FROM outbox_subscription WHERE name = $1")
                 .bind(&config.subscription)
-                .fetch_one(&self.inner.pool)
+                .fetch_one(&mut *tx)
                 .await?;
+        tx.commit().await?;
         if stored != config.source_schema {
             return Err(ConsumerError::SourceMismatch {
                 subscription: config.subscription.clone(),
                 stored,
                 configured: config.source_schema.clone(),
+            });
+        }
+        let mut tx = self.source_transaction().await?;
+        let reads_all: Option<bool> = sqlx::query_scalar(READS_ALL_TENANTS)
+            .fetch_optional(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        // No row: the log is missing or row-level security is off. Then service-kit refuses the
+        // platform role's session or reading fails, each with its own error.
+        if reads_all == Some(false) {
+            return Err(ConsumerError::CannotReadAllTenants {
+                source_schema: config.source_schema.clone(),
             });
         }
         Ok(())
@@ -612,12 +761,18 @@ impl<H: Handler> Consumer<H> {
     ///
     /// When the subscription does not exist, or the query fails.
     pub async fn position(&self) -> Result<Position, ConsumerError> {
+        let mut tx = self
+            .inner
+            .work
+            .begin_without_tenant(BOOKKEEPING_PURPOSE)
+            .await?;
         let row: Option<(i64, i64)> = sqlx::query_as(
             "SELECT position_tx, position_id FROM outbox_subscription WHERE name = $1",
         )
         .bind(&self.inner.config.subscription)
-        .fetch_optional(&self.inner.pool)
+        .fetch_optional(&mut *tx)
         .await?;
+        tx.commit().await?;
         row.map(|(tx, id)| Position::new(tx, id)).ok_or_else(|| {
             ConsumerError::UnknownSubscription(self.inner.config.subscription.clone())
         })
@@ -803,10 +958,10 @@ impl<H: Handler> Consumer<H> {
         base.saturating_mul(factor).min(config.max_backoff)
     }
 
-    /// A read transaction whose `search_path` is the producer's schema only, so the log is
-    /// found there or not at all.
-    async fn source_transaction(&self) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
-        let mut tx = self.inner.pool.begin().await?;
+    /// A read-only transaction of the platform role whose `search_path` is the producer's
+    /// schema only, so the log is found there or not at all.
+    async fn source_transaction(&self) -> Result<PlatformTransaction, ConsumerError> {
+        let mut tx = self.inner.events.begin().await?;
         sqlx::query("SELECT set_config('search_path', $1, true)")
             .bind(&self.inner.config.source_schema)
             .execute(&mut *tx)
@@ -815,11 +970,11 @@ impl<H: Handler> Consumer<H> {
     }
 
     /// The next events after `after` that can no longer be preceded by a later commit.
-    async fn fetch(&self, after: Position) -> Result<Vec<Row>, sqlx::Error> {
+    async fn fetch(&self, after: Position) -> Result<Vec<Row>, ConsumerError> {
         let mut tx = self.source_transaction().await?;
         let horizon = horizon(&mut tx).await?;
         let rows: Vec<RowTuple> = sqlx::query_as(
-            "SELECT id, tx_order, event_id, event_type, aggregate_type, aggregate_id, \
+            "SELECT id, tx_order, event_id, event_type, tenant_id, aggregate_type, aggregate_id, \
              aggregate_seq, envelope::text, stored_at FROM outbox_event \
              WHERE (tx_order, id) > ($1, $2) AND tx_order < $3 \
              ORDER BY tx_order, id LIMIT $4",
@@ -847,6 +1002,12 @@ impl<H: Handler> Consumer<H> {
                 let error = HandlerError::permanent("stored envelope cannot be decoded");
                 return self.dead_letter(expected, &row, &error).await;
             };
+            // The producer's row-level security checked the row's tenant, not the envelope's:
+            // an event whose envelope names another tenant must not run in that tenant.
+            if envelope.tenant_id.map(|tenant| *tenant.as_uuid()) != row.tenant_id {
+                let error = HandlerError::permanent("envelope tenant differs from the log row");
+                return self.dead_letter(expected, &row, &error).await;
+            }
             let delivery = Delivery {
                 position: row.position,
                 aggregate: row.aggregate.clone(),
@@ -854,12 +1015,23 @@ impl<H: Handler> Consumer<H> {
                 envelope,
                 stored_at: row.stored_at,
             };
-            let mut tx = self.inner.pool.begin().await?;
-            if let Err(error) = self.inner.handler.begin(&mut tx, &delivery).await {
-                drop(tx);
+            let mut delivery_tx = match delivery.tenant() {
+                Some(tenant) => DeliveryTransaction::Tenant(
+                    self.inner.work.begin(tenant, DELIVERY_PURPOSE).await?,
+                ),
+                None => DeliveryTransaction::NoTenant(
+                    self.inner
+                        .work
+                        .begin_without_tenant(DELIVERY_PURPOSE)
+                        .await?,
+                ),
+            };
+            let tx = delivery_tx.transaction();
+            if let Err(error) = self.inner.handler.begin(tx, &delivery).await {
+                drop(delivery_tx);
                 return self.failed(expected, &row, error).await;
             }
-            match self.claim(&mut tx, expected).await? {
+            match self.claim(tx, expected).await? {
                 Claim::Claimed => {}
                 Claim::Busy => return Ok(Step::Busy),
                 Claim::Moved => return Ok(Step::Moved),
@@ -872,11 +1044,11 @@ impl<H: Handler> Consumer<H> {
             )
             .bind(&self.inner.config.subscription)
             .bind(row.event_id)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await?;
             if fresh {
-                if let Err(error) = self.inner.handler.handle(&mut tx, &delivery).await {
-                    drop(tx);
+                if let Err(error) = self.inner.handler.handle(tx, &delivery).await {
+                    drop(delivery_tx);
                     return self.failed(expected, &row, error).await;
                 }
                 sqlx::query(
@@ -887,13 +1059,13 @@ impl<H: Handler> Consumer<H> {
                 .bind(row.event_id)
                 .bind(row.position.tx())
                 .bind(row.position.id())
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
             }
-            if !self.advance(&mut tx, expected, row.position).await? {
+            if !self.advance(tx, expected, row.position).await? {
                 return Ok(Step::Moved);
             }
-            tx.commit().await?;
+            delivery_tx.commit().await?;
             if fresh {
                 tracing::debug!("outbox event processed");
                 Ok(Step::Delivered)
@@ -926,7 +1098,11 @@ impl<H: Handler> Consumer<H> {
         row: &Row,
         error: &HandlerError,
     ) -> Result<Step, ConsumerError> {
-        let mut tx = self.inner.pool.begin().await?;
+        let mut tx = self
+            .inner
+            .work
+            .begin_without_tenant(BOOKKEEPING_PURPOSE)
+            .await?;
         match self.claim(&mut tx, expected).await? {
             Claim::Claimed => {}
             Claim::Busy => return Ok(Step::Busy),

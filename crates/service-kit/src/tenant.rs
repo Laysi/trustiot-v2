@@ -17,6 +17,9 @@
 //! - [`PlatformDb`]: the pool of the service's platform role, the only role whose policies let
 //!   it read and write across tenants (the platform back office and cross-tenant jobs). Every
 //!   transaction names a [`PlatformActor`] and a purpose and is logged.
+//! - [`PlatformReader`]: read-only transactions of the platform role for routine reads that run
+//!   every few seconds, such as an outbox consumer polling a producer's events. The actor and
+//!   purpose are logged once, when the reader is made.
 //!
 //! Every pool verifies the server (`verify-full`) and checks every session before use
 //! ([`UnsafeSession`], see [`postgres::connect_lazy`](crate::postgres::connect_lazy)).
@@ -288,6 +291,27 @@ impl BackgroundTenantDb {
         );
         self.pool.begin_in(tenant).await
     }
+
+    /// Starts a transaction with no tenant: row-level security shows it no row of any tenant
+    /// table and lets it write none. Use it for the service's tables without tenant data, such
+    /// as an outbox consumer's bookkeeping, and for work that belongs to no tenant, such as a
+    /// platform-wide event (one whose `tenant_id` is NULL). `purpose` is logged at DEBUG with
+    /// the service.
+    ///
+    /// # Errors
+    ///
+    /// When the database fails or refuses the session.
+    pub async fn begin_without_tenant(
+        &self,
+        purpose: &'static str,
+    ) -> Result<Transaction<'static, Postgres>, TenantDbError> {
+        tracing::debug!(
+            service = self.actor.service().as_str(),
+            purpose,
+            "transaction without a tenant for background work"
+        );
+        self.pool.begin().await
+    }
 }
 
 /// A transaction in one tenant. Use it as the executor of queries with `&mut *tx`; it rolls back
@@ -324,6 +348,13 @@ impl TenantTransaction {
     /// When the rollback fails; the connection is then closed.
     pub async fn rollback(self) -> Result<(), sqlx::Error> {
         self.tx.rollback().await
+    }
+
+    /// The sqlx transaction, for library code whose API takes one, such as `outbox::publish`
+    /// and an outbox handler. The tenant setting stays as the kit set it, and the transaction
+    /// still ends through this `TenantTransaction`: commit, rollback, or drop.
+    pub fn transaction(&mut self) -> &mut Transaction<'static, Postgres> {
+        &mut self.tx
     }
 }
 
@@ -438,6 +469,76 @@ impl PlatformDb {
         let tx = self.pool.begin().await?;
         Ok(PlatformTransaction { tx, actor })
     }
+
+    /// A handle for routine read-only work across tenants that opens a transaction every few
+    /// seconds, such as an outbox consumer polling a producer's events, where an INFO line per
+    /// transaction would bury the log. The actor and `purpose` are logged at INFO here, once
+    /// (`platform database reader`); each transaction is logged at DEBUG. Its transactions are
+    /// `READ ONLY`, so the database refuses every write through them.
+    #[must_use]
+    pub fn reader(&self, actor: PlatformActor, purpose: &'static str) -> PlatformReader {
+        match actor.0 {
+            Actor::Admin(user) => tracing::info!(
+                actor = "platform_admin",
+                user_id = %user,
+                purpose,
+                "platform database reader"
+            ),
+            Actor::Service(service) => tracing::info!(
+                actor = "service",
+                service = service.as_str(),
+                purpose,
+                "platform database reader"
+            ),
+        }
+        PlatformReader {
+            pool: self.pool.clone(),
+            actor,
+            purpose,
+        }
+    }
+}
+
+/// Read-only cross-tenant transactions of the platform role for one actor and purpose; see
+/// [`PlatformDb::reader`]. Cloning is cheap and shares the pool.
+#[derive(Clone, Debug)]
+pub struct PlatformReader {
+    pool: CheckedPool,
+    actor: PlatformActor,
+    purpose: &'static str,
+}
+
+impl PlatformReader {
+    /// Who the reads are for.
+    #[must_use]
+    pub fn actor(&self) -> PlatformActor {
+        self.actor
+    }
+
+    /// What the reads are for.
+    #[must_use]
+    pub fn purpose(&self) -> &'static str {
+        self.purpose
+    }
+
+    /// Starts a `READ ONLY` cross-tenant transaction, logged at DEBUG with the purpose.
+    ///
+    /// # Errors
+    ///
+    /// When the database fails or refuses the session.
+    pub async fn begin(&self) -> Result<PlatformTransaction, TenantDbError> {
+        tracing::debug!(purpose = self.purpose, "platform database read");
+        let tx = self
+            .pool
+            .pool
+            .begin_with("BEGIN READ ONLY")
+            .await
+            .map_err(|error| self.pool.error(error))?;
+        Ok(PlatformTransaction {
+            tx,
+            actor: self.actor,
+        })
+    }
 }
 
 /// A cross-tenant transaction of the platform role. Use it as the executor with `&mut *tx`; it
@@ -470,6 +571,13 @@ impl PlatformTransaction {
     /// When the rollback fails.
     pub async fn rollback(self) -> Result<(), sqlx::Error> {
         self.tx.rollback().await
+    }
+
+    /// The sqlx transaction, for library code whose API takes one, such as `outbox::publish`
+    /// writing a platform-wide event. The transaction still ends through this
+    /// `PlatformTransaction`.
+    pub fn transaction(&mut self) -> &mut Transaction<'static, Postgres> {
+        &mut self.tx
     }
 }
 
