@@ -139,6 +139,7 @@
             "image",
             "replicas",
             "ports",
+            "healthPort",
             "env",
             "resources",
             "podSecurityContext",
@@ -664,6 +665,12 @@
           "type": "array",
           "minItems": 1,
           "items": { "$ref": "#/definitions/containerPort" }
+        },
+        "healthPort": {
+          "description": "Container port named health where the service serves /healthz and /readyz only; the probes use it and the Service does not expose it.",
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 65535
         },
         "env": { "type": "array", "items": { "$ref": "#/definitions/envVar" } },
         "resources": {
