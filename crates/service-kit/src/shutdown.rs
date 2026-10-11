@@ -25,6 +25,11 @@ use crate::config::Invalid;
 use crate::health::Health;
 use crate::telemetry::duration_ms;
 
+/// The longest `shutdown.drain_delay` or `shutdown.drain_timeout` accepted, and the longest their
+/// sum may be: one hour. Far beyond any pod's grace period, yet far below the point where
+/// `tokio::time::Instant + Duration` overflows (a panic) or a sleep never ends in practice.
+pub const MAX_DRAIN: Duration = Duration::from_secs(60 * 60);
+
 /// `shutdown.*`: draining on SIGTERM. The time the pod gets between SIGTERM and SIGKILL (the
 /// chart's `drainSeconds`) must cover `drain_delay + drain_timeout` plus 3 s to cut off work that
 /// overran the drain and to flush telemetry (README.md).
@@ -55,6 +60,23 @@ impl ShutdownConfig {
             return Err(Invalid::new(
                 "shutdown.drain_timeout",
                 "must be longer than zero, or requests in flight are cut off",
+            ));
+        }
+        // Messages name the setting and the limit, never the configured value.
+        for (key, value) in [
+            ("shutdown.drain_delay", self.drain_delay),
+            ("shutdown.drain_timeout", self.drain_timeout),
+        ] {
+            if value > MAX_DRAIN {
+                return Err(Invalid::new(key, "must not be longer than 1 hour"));
+            }
+        }
+        // Both are at most an hour here, so the sum cannot overflow.
+        if self.drain_delay + self.drain_timeout > MAX_DRAIN {
+            return Err(Invalid::new(
+                "shutdown.drain_timeout",
+                "must be short enough that shutdown.drain_delay plus shutdown.drain_timeout \
+                 is at most 1 hour",
             ));
         }
         Ok(())
@@ -191,5 +213,58 @@ mod tests {
             "shutdown.drain_timeout"
         );
         assert!(ShutdownConfig::default().validate().is_ok());
+    }
+
+    fn config(delay: Duration, timeout: Duration) -> ShutdownConfig {
+        ShutdownConfig {
+            drain_delay: delay,
+            drain_timeout: timeout,
+        }
+    }
+
+    #[test]
+    fn each_drain_time_is_capped_at_one_hour() {
+        let second = Duration::from_secs(1);
+        let delay = config(MAX_DRAIN + second, second)
+            .validate()
+            .expect_err("delay over the cap");
+        assert_eq!(delay.key, "shutdown.drain_delay");
+        let timeout = config(Duration::ZERO, MAX_DRAIN + second)
+            .validate()
+            .expect_err("timeout over the cap");
+        assert_eq!(timeout.key, "shutdown.drain_timeout");
+        // Values that overflow `Instant + Duration` are rejected without arithmetic on them.
+        assert!(config(Duration::MAX, second).validate().is_err());
+        assert!(config(second, Duration::MAX).validate().is_err());
+    }
+
+    #[test]
+    fn the_sum_of_both_is_capped_at_one_hour() {
+        let half_and_a_bit = MAX_DRAIN / 2 + Duration::from_secs(1);
+        let error = config(half_and_a_bit, half_and_a_bit)
+            .validate()
+            .expect_err("sum over the cap");
+        assert_eq!(error.key, "shutdown.drain_timeout");
+        // Exactly the cap is fine, whichever way it is split.
+        assert!(config(Duration::ZERO, MAX_DRAIN).validate().is_ok());
+        assert!(config(MAX_DRAIN / 2, MAX_DRAIN / 2).validate().is_ok());
+        assert!(
+            config(MAX_DRAIN - Duration::from_secs(1), Duration::from_secs(1))
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn messages_name_the_limit_not_the_value() {
+        for config in [
+            config(Duration::from_secs(7_654_321), Duration::from_secs(1)),
+            config(Duration::ZERO, Duration::from_secs(7_654_321)),
+            config(Duration::from_secs(3_000), Duration::from_secs(3_000)),
+        ] {
+            let error = config.validate().expect_err("over the cap");
+            assert!(!error.message.contains("7654321"), "{}", error.message);
+            assert!(error.message.contains("1 hour"), "{}", error.message);
+        }
     }
 }

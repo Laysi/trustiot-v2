@@ -105,6 +105,31 @@ fn tables_use_only_mergetree_engines() {
     );
 }
 
+/// Every view runs as an explicit definer (SQL SECURITY DEFINER), so the accounts that read it
+/// need no grant on the tables behind it (Laysi/trustiot-v2#260). The server default for a
+/// plain view is SQL SECURITY INVOKER, which would need such a grant.
+#[test]
+fn views_run_as_their_definer() {
+    let mut views = 0;
+    for migration in migrations() {
+        for statement in &migration.statements {
+            let text = words(statement).join(" ");
+            if !(text.starts_with("CREATE VIEW ") || text.starts_with("CREATE MATERIALIZED VIEW "))
+            {
+                continue;
+            }
+            views += 1;
+            // DEFINER twice: once for `DEFINER = <user>`, once for `SQL SECURITY DEFINER`.
+            assert!(
+                text.matches(" DEFINER ").count() >= 2 && text.contains(" SQL SECURITY DEFINER "),
+                "{}: a view needs DEFINER = <user> SQL SECURITY DEFINER:\n{statement}",
+                migration.name
+            );
+        }
+    }
+    assert!(views >= 1, "expected the tenant view");
+}
+
 #[test]
 fn splitter_rejects_ambiguous_files() {
     assert_eq!(
