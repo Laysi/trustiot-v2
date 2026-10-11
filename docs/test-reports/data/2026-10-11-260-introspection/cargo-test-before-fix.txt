@@ -1,0 +1,196 @@
+   Compiling ingest v0.1.0 (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a94ebc94ec2fa85b2/services/ingest)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.09s
+     Running tests/clickhouse.rs (target/debug/deps/clickhouse-87b2b2fd9bfe0918)
+
+running 1 test
+probe | relation | with tenant B's ID | with an unused ID
+cluster | trustiot.telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+cluster | trustiot.batch_commits | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+cluster | trustiot.tenant_telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+clusterAllReplicas | trustiot.telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+clusterAllReplicas | trustiot.batch_commits | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+clusterAllReplicas | trustiot.tenant_telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+dictionary | trustiot.telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+dictionary | trustiot.batch_commits | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+dictionary | trustiot.tenant_telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+eval | trustiot.telemetry | refused SUPPORT_IS_DISABLED (read_rows Some(0)) | refused SUPPORT_IS_DISABLED (read_rows Some(0))
+eval | trustiot.batch_commits | refused SUPPORT_IS_DISABLED (read_rows Some(0)) | refused SUPPORT_IS_DISABLED (read_rows Some(0))
+eval | trustiot.tenant_telemetry | refused SUPPORT_IS_DISABLED (read_rows Some(0)) | refused SUPPORT_IS_DISABLED (read_rows Some(0))
+loop | trustiot.telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+loop | trustiot.batch_commits | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+loop | trustiot.tenant_telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+merge | trustiot.telemetry | answer 0 (read_rows Some(0)) | answer 0 (read_rows Some(0))
+merge | trustiot.batch_commits | refused CANNOT_EXTRACT_TABLE_STRUCTURE (read_rows Some(0)) | refused CANNOT_EXTRACT_TABLE_STRUCTURE (read_rows Some(0))
+merge | trustiot.tenant_telemetry | refused CANNOT_EXTRACT_TABLE_STRUCTURE (read_rows Some(0)) | refused CANNOT_EXTRACT_TABLE_STRUCTURE (read_rows Some(0))
+mergeTreeAnalyzeIndexes | trustiot.telemetry | answer 202610_1_1_0	[(0,1)] (read_rows Some(1)) | answer 202610_1_1_0	[] (read_rows Some(1))
+mergeTreeAnalyzeIndexes | trustiot.batch_commits | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+mergeTreeAnalyzeIndexes | trustiot.tenant_telemetry | refused UNKNOWN_TABLE (read_rows Some(0)) | refused UNKNOWN_TABLE (read_rows Some(0))
+mergeTreeAnalyzeIndexesUUID | trustiot.telemetry | answer 202610_1_1_0	[(0,1)] (read_rows Some(1)) | answer 202610_1_1_0	[] (read_rows Some(1))
+mergeTreeAnalyzeIndexesUUID | trustiot.batch_commits | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+mergeTreeAnalyzeIndexesUUID | trustiot.tenant_telemetry | refused CANNOT_PARSE_UUID (read_rows Some(0)) | refused CANNOT_PARSE_UUID (read_rows Some(0))
+mergeTreeCodecBlockCounts | trustiot.telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+mergeTreeCodecBlockCounts | trustiot.batch_commits | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+mergeTreeCodecBlockCounts | trustiot.tenant_telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+mergeTreeIndex | trustiot.telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+mergeTreeIndex | trustiot.batch_commits | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+mergeTreeIndex | trustiot.tenant_telemetry | refused UNKNOWN_TABLE (read_rows Some(0)) | refused UNKNOWN_TABLE (read_rows Some(0))
+mergeTreeProjection | trustiot.telemetry | refused NO_SUCH_PROJECTION_IN_TABLE (read_rows Some(0)) | refused NO_SUCH_PROJECTION_IN_TABLE (read_rows Some(0))
+mergeTreeProjection | trustiot.batch_commits | refused NO_SUCH_PROJECTION_IN_TABLE (read_rows Some(0)) | refused NO_SUCH_PROJECTION_IN_TABLE (read_rows Some(0))
+mergeTreeProjection | trustiot.tenant_telemetry | refused UNKNOWN_TABLE (read_rows Some(0)) | refused UNKNOWN_TABLE (read_rows Some(0))
+mergeTreeTextIndex | trustiot.telemetry | refused BAD_ARGUMENTS (read_rows Some(0)) | refused BAD_ARGUMENTS (read_rows Some(0))
+mergeTreeTextIndex | trustiot.batch_commits | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+mergeTreeTextIndex | trustiot.tenant_telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+prometheusQuery | trustiot.telemetry | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0)) | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0))
+prometheusQuery | trustiot.batch_commits | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0)) | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0))
+prometheusQuery | trustiot.tenant_telemetry | refused UNKNOWN_TABLE (read_rows Some(0)) | refused UNKNOWN_TABLE (read_rows Some(0))
+prometheusQueryRange | trustiot.telemetry | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0)) | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0))
+prometheusQueryRange | trustiot.batch_commits | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0)) | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0))
+prometheusQueryRange | trustiot.tenant_telemetry | refused UNKNOWN_TABLE (read_rows Some(0)) | refused UNKNOWN_TABLE (read_rows Some(0))
+remote | trustiot.telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+remote | trustiot.batch_commits | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+remote | trustiot.tenant_telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+remoteSecure | trustiot.telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+remoteSecure | trustiot.batch_commits | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+remoteSecure | trustiot.tenant_telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+timeSeriesData | trustiot.telemetry | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0)) | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0))
+timeSeriesData | trustiot.batch_commits | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0)) | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0))
+timeSeriesData | trustiot.tenant_telemetry | refused UNKNOWN_TABLE (read_rows Some(0)) | refused UNKNOWN_TABLE (read_rows Some(0))
+timeSeriesMetrics | trustiot.telemetry | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0)) | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0))
+timeSeriesMetrics | trustiot.batch_commits | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0)) | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0))
+timeSeriesMetrics | trustiot.tenant_telemetry | refused UNKNOWN_TABLE (read_rows Some(0)) | refused UNKNOWN_TABLE (read_rows Some(0))
+timeSeriesSamples | trustiot.telemetry | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0)) | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0))
+timeSeriesSamples | trustiot.batch_commits | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0)) | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0))
+timeSeriesSamples | trustiot.tenant_telemetry | refused UNKNOWN_TABLE (read_rows Some(0)) | refused UNKNOWN_TABLE (read_rows Some(0))
+timeSeriesSelector | trustiot.telemetry | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0)) | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0))
+timeSeriesSelector | trustiot.batch_commits | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0)) | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0))
+timeSeriesSelector | trustiot.tenant_telemetry | refused UNKNOWN_TABLE (read_rows Some(0)) | refused UNKNOWN_TABLE (read_rows Some(0))
+timeSeriesTags | trustiot.telemetry | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0)) | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0))
+timeSeriesTags | trustiot.batch_commits | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0)) | refused UNEXPECTED_TABLE_ENGINE (read_rows Some(0))
+timeSeriesTags | trustiot.tenant_telemetry | refused UNKNOWN_TABLE (read_rows Some(0)) | refused UNKNOWN_TABLE (read_rows Some(0))
+view | trustiot.telemetry | answer 0 (read_rows Some(0)) | answer 0 (read_rows Some(0))
+view | trustiot.batch_commits | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+view | trustiot.tenant_telemetry | refused UNKNOWN_TABLE (read_rows Some(0)) | refused UNKNOWN_TABLE (read_rows Some(0))
+viewExplain | trustiot.telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+viewExplain | trustiot.batch_commits | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+viewExplain | trustiot.tenant_telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+viewIfPermitted | trustiot.telemetry | answer 0 (read_rows Some(0)) | answer 0 (read_rows Some(0))
+viewIfPermitted | trustiot.batch_commits | answer 0 (read_rows Some(0)) | answer 0 (read_rows Some(0))
+viewIfPermitted | trustiot.tenant_telemetry | refused UNKNOWN_TABLE (read_rows Some(0)) | refused UNKNOWN_TABLE (read_rows Some(0))
+EXPLAIN indexes | trustiot.telemetry | answer Output: tenant_id, gateway_id, stream_id, batch_seq, device_id, point, ts, received_at, value_type, value_float, value_int, value_bool, value_string
+
+ReadFromMergeTree (trustiot.telemetry)
+   Read type: Default
+   Parts: 0 | Granules: 0
+   Output: tenant_id, gateway_id, stream_id, batch_seq, device_id, point, ts, received_at, value_type, value_float, value_int, value_bool, value_string
+   Prewhere filter
+   Prewhere filter column:  tenant_id = \'<key>\'
+   Row level filter
+   Row level filter column:  tenant_id = \'d405581a-d13e-4938-8609-0a60a80f8554\'
+   Indexes:
+     Min-Max
+       Condition: true
+       Parts: 1/1
+       Granules: 1/1
+     Partition
+       Condition: true
+       Parts: 1/1
+       Granules: 1/1
+     PrimaryKey
+       Keys:
+         tenant_id
+       Condition: and((tenant_id in [\'<key>\', \'<key>\']), (tenant_id in [\'d405581a-d13e-4938-8609-0a60a80f8554\', \'d405581a-d13e-4938-8609-0a60a80f8554\']))
+       Parts: 0/1
+       Granules: 0/1
+       Search Algorithm: binary search
+     Ranges: 0 (read_rows Some(27)) | answer Output: tenant_id, gateway_id, stream_id, batch_seq, device_id, point, ts, received_at, value_type, value_float, value_int, value_bool, value_string
+
+ReadFromMergeTree (trustiot.telemetry)
+   Read type: Default
+   Parts: 0 | Granules: 0
+   Output: tenant_id, gateway_id, stream_id, batch_seq, device_id, point, ts, received_at, value_type, value_float, value_int, value_bool, value_string
+   Prewhere filter
+   Prewhere filter column:  tenant_id = \'<key>\'
+   Row level filter
+   Row level filter column:  tenant_id = \'d405581a-d13e-4938-8609-0a60a80f8554\'
+   Indexes:
+     Min-Max
+       Condition: true
+       Parts: 1/1
+       Granules: 1/1
+     Partition
+       Condition: true
+       Parts: 1/1
+       Granules: 1/1
+     PrimaryKey
+       Keys:
+         tenant_id
+       Condition: and((tenant_id in [\'<key>\', \'<key>\']), (tenant_id in [\'d405581a-d13e-4938-8609-0a60a80f8554\', \'d405581a-d13e-4938-8609-0a60a80f8554\']))
+       Parts: 0/1
+       Granules: 0/1
+       Search Algorithm: binary search
+     Ranges: 0 (read_rows Some(27))
+EXPLAIN indexes | trustiot.batch_commits | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+EXPLAIN indexes | trustiot.tenant_telemetry | refused UNKNOWN_TABLE (read_rows Some(0)) | refused UNKNOWN_TABLE (read_rows Some(0))
+EXPLAIN ESTIMATE | trustiot.telemetry | answer trustiot	telemetry	0	0	0 (read_rows Some(1)) | answer trustiot	telemetry	0	0	0 (read_rows Some(1))
+EXPLAIN ESTIMATE | trustiot.batch_commits | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+EXPLAIN ESTIMATE | trustiot.tenant_telemetry | refused UNKNOWN_TABLE (read_rows Some(0)) | refused UNKNOWN_TABLE (read_rows Some(0))
+rows read (X-ClickHouse-Summary) | trustiot.telemetry | answer 0 (read_rows Some(0)) | answer 0 (read_rows Some(0))
+rows read (X-ClickHouse-Summary) | trustiot.batch_commits | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+rows read (X-ClickHouse-Summary) | trustiot.tenant_telemetry | refused UNKNOWN_TABLE (read_rows Some(0)) | refused UNKNOWN_TABLE (read_rows Some(0))
+hasColumnInTable() | trustiot.telemetry | answer 1 (read_rows Some(1)) | answer 1 (read_rows Some(1))
+hasColumnInTable() | trustiot.batch_commits | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+hasColumnInTable() | trustiot.tenant_telemetry | refused ACCESS_DENIED (read_rows Some(0)) | refused ACCESS_DENIED (read_rows Some(0))
+system.tables statistics | trustiot.telemetry | answer 7	4235 (read_rows Some(1)) | answer 7	4235 (read_rows Some(1))
+system.tables statistics | trustiot.batch_commits | answer  (read_rows Some(0)) | answer  (read_rows Some(0))
+system.tables statistics | trustiot.tenant_telemetry | answer  (read_rows Some(0)) | answer  (read_rows Some(0))
+system.columns statistics | trustiot.telemetry | answer 0 (read_rows Some(13)) | answer 0 (read_rows Some(13))
+system.columns statistics | trustiot.batch_commits | answer 0 (read_rows Some(0)) | answer 0 (read_rows Some(0))
+system.columns statistics | trustiot.tenant_telemetry | answer 0 (read_rows Some(0)) | answer 0 (read_rows Some(0))
+
+thread 'clickhouse_schema_and_tenant_isolation' (477722) panicked at services/ingest/tests/clickhouse.rs:1384:5:
+introspection reaches other tenants:
+mergeTreeAnalyzeIndexes on trustiot.telemetry depends on tenant B's rows: answer 202610_1_1_0	[(0,1)] (read_rows Some(1)) / answer 202610_1_1_0	[] (read_rows Some(1))
+mergeTreeAnalyzeIndexes on trustiot.telemetry answers a tenant account: answer 202610_1_1_0	[(0,1)] (read_rows Some(1))
+mergeTreeAnalyzeIndexesUUID on trustiot.telemetry depends on tenant B's rows: answer 202610_1_1_0	[(0,1)] (read_rows Some(1)) / answer 202610_1_1_0	[] (read_rows Some(1))
+mergeTreeAnalyzeIndexesUUID on trustiot.telemetry answers a tenant account: answer 202610_1_1_0	[(0,1)] (read_rows Some(1))
+EXPLAIN indexes on trustiot.telemetry answers a tenant account: answer Output: tenant_id, gateway_id, stream_id, batch_seq, device_id, point, ts, received_at, value_type, value_float, value_int, value_bool, value_string
+
+ReadFromMergeTree (trustiot.telemetry)
+   Read type: Default
+   Parts: 0 | Granules: 0
+   Output: tenant_id, gateway_id, stream_id, batch_seq, device_id, point, ts, received_at, value_type, value_float, value_int, value_bool, value_string
+   Prewhere filter
+   Prewhere filter column:  tenant_id = \'<key>\'
+   Row level filter
+   Row level filter column:  tenant_id = \'d405581a-d13e-4938-8609-0a60a80f8554\'
+   Indexes:
+     Min-Max
+       Condition: true
+       Parts: 1/1
+       Granules: 1/1
+     Partition
+       Condition: true
+       Parts: 1/1
+       Granules: 1/1
+     PrimaryKey
+       Keys:
+         tenant_id
+       Condition: and((tenant_id in [\'<key>\', \'<key>\']), (tenant_id in [\'d405581a-d13e-4938-8609-0a60a80f8554\', \'d405581a-d13e-4938-8609-0a60a80f8554\']))
+       Parts: 0/1
+       Granules: 0/1
+       Search Algorithm: binary search
+     Ranges: 0 (read_rows Some(27))
+EXPLAIN ESTIMATE on trustiot.telemetry answers a tenant account: answer trustiot	telemetry	0	0	0 (read_rows Some(1))
+hasColumnInTable() on trustiot.telemetry answers a tenant account: answer 1 (read_rows Some(1))
+system.tables statistics on trustiot.telemetry answers a tenant account: answer 7	4235 (read_rows Some(1))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test clickhouse_schema_and_tenant_isolation ... FAILED
+
+failures:
+
+failures:
+    clickhouse_schema_and_tenant_isolation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.04s
+
+error: test failed, to rerun pass `-p ingest --test clickhouse`
