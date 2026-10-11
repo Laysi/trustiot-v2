@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 use cbor4ii::core::Value as Cbor;
 use common::{cases, golden_dir, read_hex};
 use protocol::acl::{filter_matches, gateway_acl_topic};
-use protocol::codec::MAX_NESTING;
+use protocol::codec::{MAX_NESTING, SEQ_PREALLOC_BYTES};
 use protocol::config::{ConfigReport, DesiredConfig};
 use protocol::health::{Heartbeat, Status};
 use protocol::live::{LiveControl, LiveSamples};
@@ -332,7 +332,7 @@ fn duplicate_key_problem<M: Message + PartialEq + Debug>(
 ) -> Option<String> {
     let value: Cbor = cbor4ii::serde::from_slice(payload).ok()?;
     let mut found = Vec::new();
-    collect_duplicates(&value, "", &mut Vec::new(), &mut found);
+    collect_duplicates(&value, &mut Vec::new(), &mut found);
     for path in found.into_iter().take(4) {
         for keep_first in [true, false] {
             let mut variant = value.clone();
@@ -360,16 +360,11 @@ fn encode_value(value: &Cbor) -> Option<Vec<u8>> {
     Some(writer.into_inner())
 }
 
-/// Field names of map-typed fields (data, not message structs) that keep the last of a repeated key.
-const KNOWN_LAST_WINS_MAPS: &[&str] = &["fields", "exception_codes"];
-
-/// Paths (child indexes) of maps that contain a repeated text key.
-fn collect_duplicates(
-    value: &Cbor,
-    parent: &str,
-    path: &mut Vec<usize>,
-    found: &mut Vec<Vec<usize>>,
-) {
+/// Paths (child indexes) of maps that contain a repeated key. Every map counts: message structs
+/// and the data maps (`LogEntry::fields`, `DeviceStats::exception_codes`) all refuse a repeated
+/// key since Laysi/trustiot-v2#269 (finding F1 of the verification report), so only a repeated
+/// unknown key, which is skipped, may appear in an accepted payload.
+fn collect_duplicates(value: &Cbor, path: &mut Vec<usize>, found: &mut Vec<Vec<usize>>) {
     match value {
         Cbor::Map(entries) => {
             let mut keys = BTreeSet::new();
@@ -377,32 +372,25 @@ fn collect_duplicates(
             for (key, _) in entries {
                 repeated |= !keys.insert(format!("{key:?}"));
             }
-            // Data maps (`LogEntry::fields`, a `BTreeMap`) keep the last of a repeated key; that
-            // is finding F1 of the verification report, not an invariant this test can hold.
-            if repeated && !KNOWN_LAST_WINS_MAPS.contains(&parent) {
+            if repeated {
                 found.push(path.clone());
             }
-            for (index, (key, child)) in entries.iter().enumerate() {
+            for (index, (_, child)) in entries.iter().enumerate() {
                 path.push(index);
-                let name = if let Cbor::Text(text) = key {
-                    text.as_str()
-                } else {
-                    ""
-                };
-                collect_duplicates(child, name, path, found);
+                collect_duplicates(child, path, found);
                 path.pop();
             }
         }
         Cbor::Array(items) => {
             for (index, child) in items.iter().enumerate() {
                 path.push(index);
-                collect_duplicates(child, parent, path, found);
+                collect_duplicates(child, path, found);
                 path.pop();
             }
         }
         Cbor::Tag(_, inner) => {
             path.push(0);
-            collect_duplicates(inner, parent, path, found);
+            collect_duplicates(inner, path, found);
             path.pop();
         }
         _ => {}
@@ -1391,14 +1379,15 @@ fn array_payload(prefix: &[(&str, Vec<u8>)], field: &str, count: usize, item: u8
     bytes
 }
 
-/// A payload that declares `count` array items (each a one-byte `true`) makes serde reserve room
-/// for them before the first item fails to decode. The reservation is capped at 1 MiB per
-/// collection, so the transient allocation is bounded however large the declared count is, but
-/// it is up to ~180 times the payload for a few kilobytes (finding F2 of the verification report).
-/// This test pins the bound so that it cannot grow unnoticed.
+/// A payload that declares `count` array items (each a one-byte `true`) used to make serde
+/// reserve room for all of them before the first item failed to decode: up to 1 MiB per
+/// collection, ~180 times the payload for a few kilobytes (finding F2 of the verification
+/// report). Arrays now reserve at most `SEQ_PREALLOC_BYTES` before their items decode
+/// (Laysi/trustiot-v2#269), so the peak no longer depends on the declared count. This test pins
+/// the bound so that it cannot grow unnoticed.
 #[test]
 fn a_hostile_array_count_reserves_at_most_a_bounded_amount() {
-    const BOUND: usize = 1_200_000;
+    const BOUND: usize = 2 * SEQ_PREALLOC_BYTES;
     let key = |name: &str| {
         let mut bytes = vec![0x60 | u8::try_from(name.len()).unwrap()];
         bytes.extend(name.as_bytes());
@@ -1462,8 +1451,9 @@ fn a_hostile_array_count_reserves_at_most_a_bounded_amount() {
             worst = worst.max(outcome.peak);
         }
     }
+    // The probe still reaches the reservation (the bound is not met by failing earlier).
     assert!(
-        worst > 100_000,
+        worst > SEQ_PREALLOC_BYTES / 2,
         "the probe no longer reserves anything: {worst}"
     );
 }

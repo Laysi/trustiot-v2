@@ -625,3 +625,234 @@ fn golden_payloads_survive_a_decode_and_encode_byte_for_byte() {
         assert_eq!(again, Some(golden), "{name}");
     }
 }
+
+/// The map of the first `devices[]` entry of a golden heartbeat that has `key`.
+fn heartbeat_device_with<'a>(heartbeat: &'a mut Cbor, key: &str) -> &'a mut Cbor {
+    let Cbor::Array(devices) = child(heartbeat, "devices") else {
+        panic!("devices is not an array")
+    };
+    devices
+        .iter_mut()
+        .find(|device| {
+            entries(&mut (*device).clone())
+                .iter()
+                .any(|(name, _)| *name == text(key))
+        })
+        .unwrap()
+}
+
+fn first_log_entry(log: &mut Cbor) -> &mut Cbor {
+    let Cbor::Array(items) = child(log, "entries") else {
+        panic!("entries is not an array")
+    };
+    &mut items[0]
+}
+
+/// Finding F1 of the #50 verification: the data maps kept the last of a repeated key
+/// (Laysi/trustiot-v2#269). They now refuse it like message structs refuse a repeated field.
+#[test]
+fn a_repeated_key_in_a_data_map_is_refused() {
+    use protocol::health::Heartbeat;
+    use protocol::logs::LogBatch;
+
+    // The reproduction of the report: `timeout_ms` twice, the second "OVERRIDDEN".
+    let mut log = golden("log");
+    entries(child(first_log_entry(&mut log), "fields"))
+        .push((text("timeout_ms"), text("OVERRIDDEN")));
+    assert!(is_malformed::<LogBatch>(&encode_tree(&log)));
+    // The repeated key first, then the original: refused in either order.
+    let mut log = golden("log");
+    entries(child(first_log_entry(&mut log), "fields")).insert(0, (text("timeout_ms"), text("1")));
+    assert!(is_malformed::<LogBatch>(&encode_tree(&log)));
+    // A new key is still a new field.
+    let mut log = golden("log");
+    entries(child(first_log_entry(&mut log), "fields")).push((text("retry"), text("2")));
+    let batch = LogBatch::decode(&encode_tree(&log)).unwrap();
+    assert_eq!(batch.entries[0].fields.len(), 3);
+
+    // Exception code 2 twice, the second 999.
+    let mut heartbeat = golden("heartbeat");
+    let device = heartbeat_device_with(&mut heartbeat, "exception_codes");
+    entries(child(device, "exception_codes")).push((Cbor::Integer(2), Cbor::Integer(999)));
+    assert!(is_malformed::<Heartbeat>(&encode_tree(&heartbeat)));
+    let mut heartbeat = golden("heartbeat");
+    let device = heartbeat_device_with(&mut heartbeat, "exception_codes");
+    entries(child(device, "exception_codes")).push((Cbor::Integer(3), Cbor::Integer(1)));
+    assert!(Heartbeat::decode(&encode_tree(&heartbeat)).is_ok());
+
+    // The same code written with a wider head (0x18 0x02 instead of 0x02) is the same key.
+    let mut heartbeat = golden("heartbeat");
+    let device = heartbeat_device_with(&mut heartbeat, "exception_codes");
+    entries(child(device, "exception_codes")).push((Cbor::Integer(0x77), Cbor::Integer(1)));
+    let mut payload = encode_tree(&heartbeat);
+    // Rewrite the added key 0x77 (`18 77`) as a one-byte-argument 2 (`18 02`).
+    let at = payload
+        .windows(3)
+        .position(|window| window == [0x18, 0x77, 0x01])
+        .unwrap();
+    payload[at + 1] = 0x02;
+    assert!(is_malformed::<Heartbeat>(&payload));
+}
+
+/// U+0000 is refused in every free text of the protocol (Laysi/trustiot-v2#269); other control
+/// characters are left to whoever renders the text.
+#[test]
+fn nul_is_refused_in_every_free_text() {
+    use protocol::config::ConfigReport;
+    use protocol::health::Heartbeat;
+    use protocol::logs::{LogBatch, LogDump};
+    use protocol::{Issue, IssueCode};
+
+    fn invalid_at(result: Result<impl std::fmt::Debug, DecodeError>, path: &str) {
+        let Err(DecodeError::Invalid(invalid)) = &result else {
+            panic!("expected {path} to be invalid: {result:?}");
+        };
+        assert!(
+            invalid
+                .issues()
+                .iter()
+                .any(|issue| issue.code == IssueCode::InvalidValue && issue.path == path),
+            "{path}: {invalid}"
+        );
+    }
+
+    // Telemetry text values (and live values, which share the type).
+    assert!(TelemetryBatch::decode(&telemetry_with_first_value(text("AB\0"))).is_err());
+    assert!(TelemetryBatch::decode(&telemetry_with_first_value(text("a\0b"))).is_err());
+
+    // Log entries: target, message, field names and values.
+    for (key, path) in [
+        ("target", "entries[0].target"),
+        ("message", "entries[0].message"),
+    ] {
+        let mut log = golden("log");
+        set(first_log_entry(&mut log), key, Some(text("x\0y")));
+        invalid_at(LogBatch::decode(&encode_tree(&log)), path);
+    }
+    for (name, value) in [("bad\0name", "v"), ("name", "bad\0value")] {
+        let mut log = golden("log");
+        entries(child(first_log_entry(&mut log), "fields")).push((text(name), text(value)));
+        invalid_at(LogBatch::decode(&encode_tree(&log)), "entries[0].fields");
+    }
+    let mut dump = golden("log-dump");
+    if let Cbor::Array(items) = child(&mut dump, "entries")
+        && let Some(entry) = items.first_mut()
+    {
+        set(entry, "message", Some(text("\0")));
+        invalid_at(LogDump::decode(&encode_tree(&dump)), "entries[0].message");
+    }
+
+    // Heartbeat failure detail.
+    let mut heartbeat = golden("heartbeat");
+    let device = heartbeat_device_with(&mut heartbeat, "last_failure");
+    set(child(device, "last_failure"), "detail", Some(text("eof\0")));
+    let Err(DecodeError::Invalid(invalid)) = Heartbeat::decode(&encode_tree(&heartbeat)) else {
+        panic!("a NUL in the failure detail must be refused");
+    };
+    assert!(
+        invalid
+            .issues()
+            .iter()
+            .any(|issue| issue.code == IssueCode::InvalidValue
+                && issue.path.ends_with(".last_failure.detail")),
+        "{invalid}"
+    );
+
+    // The rejection message of an acknowledgement, and the issues of a configuration report.
+    let mut ack = golden("telemetry-ack-rejected");
+    set(child(&mut ack, "outcome"), "message", Some(text("bad\0")));
+    invalid_at(
+        decode::<TelemetryAck>(&encode_tree(&ack)),
+        "outcome.message",
+    );
+    for (key, path) in [("message", "issues[0].message"), ("path", "issues[0].path")] {
+        let mut report = golden("config-report-rejected");
+        let Cbor::Array(issues) = child(&mut report, "issues") else {
+            panic!()
+        };
+        set(&mut issues[0], key, Some(text("a\0")));
+        invalid_at(ConfigReport::decode(&encode_tree(&report)), path);
+    }
+
+    // Tabs, line breaks and escape sequences pass: escaping them depends on where the text
+    // is shown, so the renderer does it.
+    let mut log = golden("log");
+    set(
+        first_log_entry(&mut log),
+        "message",
+        Some(text("line 1\nline 2\t\r\u{1b}[31m\u{7f}\u{202e}")),
+    );
+    assert!(LogBatch::decode(&encode_tree(&log)).is_ok());
+    assert!(TelemetryBatch::decode(&telemetry_with_first_value(text("a\tb\u{1}"))).is_ok());
+
+    // The constructors make text sendable: U+0000 becomes U+FFFD before the length cut.
+    let issue = Issue::new(IssueCode::DecodeFailed, "a\0", "unknown variant `\0x`");
+    assert_eq!(issue.path, "a\u{fffd}");
+    assert_eq!(issue.message, "unknown variant `\u{fffd}x`");
+    let entry = protocol::logs::LogEntry::new(
+        protocol::UnixMillis::new(1),
+        protocol::logs::LogLevel::Warn,
+        "t\0",
+        "m\0",
+    )
+    .with_field("k\0", "v\0");
+    assert_eq!(entry.target, "t\u{fffd}");
+    assert_eq!(entry.message, "m\u{fffd}");
+    assert_eq!(
+        entry.fields.get("k\u{fffd}").map(String::as_str),
+        Some("v\u{fffd}")
+    );
+    let batch = LogBatch {
+        v: protocol::V1,
+        entries: vec![entry],
+        dropped: 0,
+    };
+    assert_eq!(LogBatch::decode(&batch.encode().unwrap()).unwrap(), batch);
+}
+
+/// A header peek reads payloads that `decode` refused, but not more than any conforming MQTT
+/// connection carries (Laysi/trustiot-v2#269).
+#[test]
+fn a_header_peek_reads_at_most_max_peek_bytes() {
+    use protocol::codec::MAX_PEEK_BYTES;
+
+    let padded = |golden_name: &str, target: usize| {
+        let sample = golden(golden_name);
+        let mut pad = target - encode_tree(&sample).len() - 24;
+        loop {
+            let mut padded = sample.clone();
+            entries(&mut padded).push((text("pad"), Cbor::Bytes(vec![0; pad])));
+            let payload = encode_tree(&padded);
+            if payload.len() >= target {
+                assert_eq!(payload.len(), target);
+                break payload;
+            }
+            pad += 1;
+        }
+    };
+    // Over the channel limit, so `decode` refuses it, but the peek still answers.
+    let at_limit = padded("telemetry", MAX_PEEK_BYTES);
+    assert!(matches!(
+        TelemetryBatch::decode(&at_limit),
+        Err(DecodeError::TooLarge { .. })
+    ));
+    assert_eq!(
+        TelemetryBatch::peek_header(&at_limit).unwrap().seq.get(),
+        42
+    );
+    let over = padded("telemetry", MAX_PEEK_BYTES + 1);
+    assert_eq!(
+        TelemetryBatch::peek_header(&over),
+        Err(DecodeError::TooLarge {
+            size: MAX_PEEK_BYTES + 1,
+            limit: MAX_PEEK_BYTES
+        })
+    );
+    let at_limit = padded("config", MAX_PEEK_BYTES);
+    assert!(DesiredConfig::peek_header(&at_limit).is_ok());
+    let over = padded("config", MAX_PEEK_BYTES + 1);
+    assert!(matches!(
+        DesiredConfig::peek_header(&over),
+        Err(DecodeError::TooLarge { .. })
+    ));
+}
