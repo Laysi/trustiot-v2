@@ -1,11 +1,19 @@
-# Local machine (Fedora, kernel 7.2.8-300.fc45.x86_64), 2026-10-11 17:12 Taipei, HEAD bda79cf
+# Local machine (Fedora, kernel 7.2.8-300.fc45.x86_64), 2026-10-11 22:00 Taipei, HEAD 0767a2d
+# (origin/main = 1ad700f). The branch's 10 non-merge commits: e50018c 9b8e2a2 189f857 d4de21c
+# 6870628 71f6989 b19fb27 c36bc5f 69ce7b1 0767a2d.
 
-$ gitleaks detect --redact --source . --log-opts="origin/main..HEAD"     (origin/main = 7c2e405)
-INF 4 commits scanned.
-INF scanned ~213100 bytes (213.10 KB) in 535ms
+$ gitleaks detect --redact --no-banner --source . --log-opts="origin/main..HEAD"
+INF 10 commits scanned.
+INF scanned ~529111 bytes (529.11 KB) in 364ms
+INF no leaks found
+
+# The history CI scans (.github/workflows/ci.yml; `gitleaks detect` is the same scan as `gitleaks git`):
+$ gitleaks detect --redact --no-banner --source . --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD"
+INF 77 commits scanned.
+INF scanned ~10567551 bytes (10.57 MB) in 1.59s
 INF no leaks found
 
 # The HEAD tree exported with `git archive HEAD` and unpacked into an empty directory:
 $ gitleaks dir --redact --no-banner <export dir>
-INF scanned ~6930612 bytes (6.93 MB) in 827ms
+INF scanned ~7462633 bytes (7.46 MB) in 2.07s
 INF no leaks found
