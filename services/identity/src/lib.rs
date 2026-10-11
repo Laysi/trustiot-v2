@@ -25,13 +25,14 @@ use axum::Router;
 use service_kit::{BoxError, Context};
 
 use crate::config::Config;
-use crate::ext_authz::{CHECK_DEADLINE, ExtAuthz};
+use crate::ext_authz::ExtAuthz;
 use crate::issuer::Issuer;
 use crate::session::{PgSessionStore, SessionStore};
 
 /// The service's startup for `service_kit::run`: loads and checks the signing key against the
-/// deployed public keys, connects to Postgres lazily with the session check of
-/// `crates/service-kit`, and serves the ext_authz check. Readiness follows Postgres.
+/// deployed public keys, starts keeping the Postgres connections open (with the session check of
+/// `crates/service-kit`), and serves the ext_authz check. Readiness passes once the connections
+/// are open (`PgSessionStore::keep_warm`).
 ///
 /// # Errors
 ///
@@ -51,8 +52,8 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     let store = PgSessionStore::connect_lazy(
         config.postgres().connect_options(),
         config.database.max_connections,
-        CHECK_DEADLINE,
     )?;
+    context.spawn(store.clone().keep_warm(context.shutdown().clone()));
     let ping = store.clone();
     context.health().add_check("postgres", move || {
         let store = ping.clone();

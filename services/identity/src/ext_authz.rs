@@ -7,7 +7,7 @@
 //! | Active session, routed request | 200 with exactly one `x-internal-identity`: a token this service just signed for the route's service | Replaces any client copy of the header with this one and forwards the request |
 //! | No, repeated, malformed, unknown, expired or revoked session cookie | 401 `unauthenticated` | Returns this response to the client |
 //! | Active session, but no cookie route matches the host and path | 403 `permission_denied` | Returns this response to the client |
-//! | The session store failed or did not answer within [`CHECK_DEADLINE`] | 503 `unavailable` | Treats a 5xx as an error and answers its own 503 (`statusOnError`) |
+//! | The session store failed, was busy, or did not answer within [`CHECK_DEADLINE`] | 503 `unavailable` | Treats a 5xx as an error and answers its own 503 (`statusOnError`) |
 //!
 //! A 200 is only ever built from a freshly signed token ([`Decision::Allow`] cannot exist
 //! without one), because the gateway forwards the client's own `x-internal-identity` when an
@@ -35,9 +35,10 @@ use crate::session::{SessionStore, session_secret};
 /// `/internal`, which the ingress gateway never routes, so clients cannot reach it.
 pub const CHECK_PATH_PREFIX: &str = "/internal/ext-authz";
 
-/// How long one check may take. The gateway gives up after 0.5 s (`timeout` of the provider);
-/// answering 503 before that frees the database connection instead of finishing work nobody
-/// waits for.
+/// How long one check may take. The gateway gives up after 0.5 s (`timeout` of the provider), so
+/// the check answers 503 before that. The lookup itself goes on in the background, bounded by
+/// [`crate::session::WORK_LIMIT`], so a database connection it was opening is kept for the next
+/// check instead of being cut off (services/identity/README.md, "連線池").
 pub const CHECK_DEADLINE: Duration = Duration::from_millis(400);
 
 /// The check's state: the session store, the signer, and the routes that decide the audience.

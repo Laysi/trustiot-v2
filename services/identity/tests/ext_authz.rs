@@ -20,7 +20,9 @@ use serde_json::json;
 use service_kit::identity::{IdentityError, IdentityKeys, IdentityVerifier, UserIdentity};
 use sqlx::{Connection, PgConnection};
 use support::postgres::{SERVER_HOST, TEST_PASSWORD, TlsPostgres, tls_postgres};
-use support::{Service, TestKey, cookie, jwks, new_secret, request, run_to_exit, scratch_dir};
+use support::{
+    Service, SlowProxy, TestKey, cookie, jwks, new_secret, request, run_to_exit, scratch_dir,
+};
 
 /// The roles of decision 29 for this service, created once per Postgres. The migration Job
 /// (Laysi/trustiot-v2#60) creates them in a deployment.
@@ -625,6 +627,86 @@ async fn an_unreachable_database_fails_closed() {
     }
     // Requests without a usable cookie never need the database.
     assert_unauthenticated(&check(&service, "/", None));
+}
+
+/// Finding F1 of docs/test-reports/2026-10-11-61-verify.md: opening a database connection may
+/// take longer than a check may, as on a loaded node or a slow network; here a proxy holds every
+/// new connection for 1 s. The service becomes ready only with its connections open, checks
+/// after that never wait for a new one, and when the database drops every connection (a
+/// failover), checks fail closed until the replacements are open and then recover on their own.
+#[tokio::test]
+async fn a_slow_database_connect_never_fails_a_check_after_ready() {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE identity_slow_connect OWNER identity_owner",
+        "identity_slow_connect",
+    )
+    .await
+    else {
+        return;
+    };
+    fixture.add_user(USER, false).await;
+    fixture.add_membership(TENANT_A, USER, "viewer").await;
+    let session = cookie(
+        &fixture
+            .add_session(USER, Some(TENANT_A), SESSION_SECS, false)
+            .await,
+    );
+    let proxy = SlowProxy::start(fixture.postgres.address, Duration::from_secs(1));
+    let env = with(
+        fixture.env(),
+        "TRUSTIOT_POSTGRES_PORT",
+        &proxy.port.to_string(),
+    );
+    let env: Vec<(&str, &str)> = env.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+    let service = Service::start(&env);
+    service.wait_ready(Duration::from_secs(30));
+    let opened = proxy.accepted();
+    assert!(opened >= 3, "ready with {opened} connections");
+
+    // Every check after ready is answered from open connections: none fails, none opens one.
+    for round in 0..20 {
+        let response = check(&service, "/", Some(&session));
+        assert_eq!(response.status, 200, "check {round}: {}", response.raw());
+        verified(&fixture, &response, ServiceName::Assets);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(proxy.accepted(), opened, "a check opened a connection");
+
+    // A failover: every connection is dropped, and each new one takes 1 s again.
+    proxy.cut();
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let mut statuses = Vec::new();
+    loop {
+        let response = check(&service, "/", Some(&session));
+        statuses.push(response.status);
+        if response.status == 200 {
+            verified(&fixture, &response, ServiceName::Assets);
+            break;
+        }
+        assert_eq!(response.status, 503, "after the cut: {}", response.raw());
+        assert!(response.header_values("x-internal-identity").is_empty());
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no recovery after the cut: {statuses:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    for round in 0..10 {
+        let response = check(&service, "/", Some(&session));
+        assert_eq!(
+            response.status,
+            200,
+            "check {round} after recovery ({statuses:?}): {}",
+            response.raw()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let ready = request(service.health_address, "GET", "/readyz", &[]).expect("readyz");
+    assert_eq!(ready.status, 200, "{}", ready.raw());
+    println!(
+        "slow connect: {opened} connections at ready, statuses after the cut {statuses:?}, {} connections in all",
+        proxy.accepted()
+    );
 }
 
 /// Settings for a service whose database is at `127.0.0.1:<port>`.

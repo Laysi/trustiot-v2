@@ -492,3 +492,75 @@ impl Drop for Container {
             .status();
     }
 }
+
+/// A TCP proxy in front of Postgres that holds every new connection for `delay` before it
+/// reaches the server, so opening a database connection (TCP, TLS, SCRAM, service-kit's session
+/// check) takes longer than one ext_authz check may (finding F1 of
+/// docs/test-reports/2026-10-11-61-verify.md) without depending on machine load. It can also cut
+/// every connection it carries, as a database failover does.
+pub struct SlowProxy {
+    pub port: u16,
+    carried: Arc<Mutex<Vec<TcpStream>>>,
+    accepted: Arc<AtomicU32>,
+}
+
+impl SlowProxy {
+    /// Listens on a free local port and forwards to `upstream` after `delay`.
+    pub fn start(upstream: SocketAddr, delay: Duration) -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind the proxy");
+        let port = listener.local_addr().expect("proxy address").port();
+        let carried = Arc::new(Mutex::new(Vec::new()));
+        let accepted = Arc::new(AtomicU32::new(0));
+        let (all, count) = (Arc::clone(&carried), Arc::clone(&accepted));
+        thread::spawn(move || {
+            for client in listener.incoming() {
+                let Ok(client) = client else { continue };
+                count.fetch_add(1, Ordering::SeqCst);
+                let all = Arc::clone(&all);
+                thread::spawn(move || {
+                    thread::sleep(delay);
+                    let Ok(server) = TcpStream::connect(upstream) else {
+                        return;
+                    };
+                    if let (Ok(c), Ok(s)) = (client.try_clone(), server.try_clone()) {
+                        all.lock().expect("proxy lock").extend([c, s]);
+                    }
+                    forward(client, server);
+                });
+            }
+        });
+        Self {
+            port,
+            carried,
+            accepted,
+        }
+    }
+
+    /// Connections the proxy has accepted so far.
+    pub fn accepted(&self) -> u32 {
+        self.accepted.load(Ordering::SeqCst)
+    }
+
+    /// Closes every connection the proxy carries, as a database failover would.
+    pub fn cut(&self) {
+        for stream in self.carried.lock().expect("proxy lock").drain(..) {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+    }
+}
+
+/// Copies both directions until either side closes.
+fn forward(client: TcpStream, server: TcpStream) {
+    let (Ok(mut client_read), Ok(mut server_write)) = (client.try_clone(), server.try_clone())
+    else {
+        return;
+    };
+    let upstream = thread::spawn(move || {
+        let _ = std::io::copy(&mut client_read, &mut server_write);
+        let _ = server_write.shutdown(std::net::Shutdown::Both);
+    });
+    let (mut server_read, mut client_write) = (server, client);
+    let _ = std::io::copy(&mut server_read, &mut client_write);
+    let _ = client_write.shutdown(std::net::Shutdown::Both);
+    let _ = upstream.join();
+}

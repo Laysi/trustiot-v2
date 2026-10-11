@@ -9,6 +9,7 @@ use service_kit::identity::IdentityKeys;
 use service_kit::postgres::{PostgresConfig, SslMode};
 
 use crate::audience::IngressRoutes;
+use crate::session::WARM_CONNECTIONS;
 
 /// Most database connections one replica may open.
 pub const MAX_DATABASE_CONNECTIONS: u32 = 100;
@@ -56,8 +57,9 @@ pub struct Database {
     pub username: String,
     /// `TRUSTIOT__DATABASE__PASSWORD`, from a Secret.
     pub password: String,
-    /// `TRUSTIOT__DATABASE__MAX_CONNECTIONS`: pool size per replica, 1 to
-    /// [`MAX_DATABASE_CONNECTIONS`]. Default 10.
+    /// `TRUSTIOT__DATABASE__MAX_CONNECTIONS`: most connections per replica, from
+    /// [`WARM_CONNECTIONS`] (the ones always kept open) to [`MAX_DATABASE_CONNECTIONS`].
+    /// Default 10.
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
 }
@@ -94,10 +96,10 @@ impl Config {
 
 impl Validate for Config {
     fn validate(&self) -> Result<(), Invalid> {
-        if !(1..=MAX_DATABASE_CONNECTIONS).contains(&self.database.max_connections) {
+        if !(WARM_CONNECTIONS..=MAX_DATABASE_CONNECTIONS).contains(&self.database.max_connections) {
             return Err(Invalid::new(
                 "database.max_connections",
-                format!("must be between 1 and {MAX_DATABASE_CONNECTIONS}"),
+                format!("must be between {WARM_CONNECTIONS} and {MAX_DATABASE_CONNECTIONS}"),
             ));
         }
         if self.database.username.trim().is_empty() {

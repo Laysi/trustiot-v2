@@ -766,8 +766,8 @@ async fn slow_or_locked_database_answers_503_and_recovers_without_failing_open()
         .add_session(USER, Some(TENANT_A), SESSION_SECS, false)
         .await;
     let session_cookie = cookie(&secret);
-    // A small pool, so a few stuck lookups exhaust it.
-    let service = fixture.service_with(&[("TRUSTIOT__DATABASE__MAX_CONNECTIONS", "2")]);
+    // The smallest pool (the three connections kept open), so a few stuck lookups exhaust it.
+    let service = fixture.service_with(&[("TRUSTIOT__DATABASE__MAX_CONNECTIONS", "3")]);
     warm(&service, &session_cookie);
 
     for table in ["identity.sessions", "identity.memberships"] {
@@ -791,7 +791,7 @@ async fn slow_or_locked_database_answers_503_and_recovers_without_failing_open()
             json!({"code": "unavailable", "message_key": "error.unavailable"})
         );
 
-        // 12 concurrent requests against a pool of 2 with both connections stuck or timing out:
+        // 12 concurrent requests against a pool of 3 with every connection stuck or timing out:
         // all fail closed, quickly.
         let address = service.address;
         let cookie_value = session_cookie.clone();

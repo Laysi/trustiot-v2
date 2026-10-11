@@ -9,6 +9,8 @@
 
 use std::fmt;
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use axum::http::HeaderMap;
@@ -18,9 +20,12 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use contract::{TenantGrant, TenantId, TenantRole, UserId};
 use service_kit::identity::ServiceIdentity;
 use service_kit::postgres::InsecureConnection;
+use service_kit::shutdown::Shutdown;
 use service_kit::tenant::{BackgroundTenantDb, TenantDb, TenantDbError};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 /// The session cookie. The `__Host-` prefix makes browsers accept it only when it was set by this
 /// host over HTTPS with `Path=/` and no `Domain`, so a sibling subdomain cannot plant or overwrite
@@ -32,6 +37,31 @@ pub const SESSION_SECRET_BYTES: usize = 32;
 
 /// Length of the cookie value: [`SESSION_SECRET_BYTES`] in base64url without padding.
 pub const SESSION_COOKIE_LEN: usize = 43;
+
+/// How long getting a database connection may take, opening a new one included (TCP, TLS,
+/// SCRAM and service-kit's session check): the pool's acquire timeout. It is far longer than an
+/// ext_authz check may take ([`crate::ext_authz::CHECK_DEADLINE`]) on purpose: a check that gives
+/// up does not cancel the connection it was waiting for (see [`PgSessionStore`]), and a pool
+/// whose new connections were cut off at the check deadline would never get any on a slow
+/// network or a loaded node (finding F1 of docs/test-reports/2026-10-11-61-verify.md).
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Connections the pool keeps open, and the fewest a replica may be configured with. One check
+/// holds up to two at once (the session query's connection is still being returned while the
+/// membership transaction starts on another), and the keep-warm task one more, so a steady
+/// stream of checks never waits for a new connection.
+pub const WARM_CONNECTIONS: u32 = 3;
+
+/// How often the keep-warm task checks the pool ([`PgSessionStore::keep_warm`]).
+pub const KEEP_WARM_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Upper bound on one lookup or one keep-warm round, [`CONNECT_TIMEOUT`] included, so a database
+/// that stops answering cannot hold tasks and connections forever.
+pub const WORK_LIMIT: Duration = Duration::from_secs(10);
+
+/// Lookups that may be in flight per pool connection. Beyond that a check fails at once with
+/// 503 instead of queueing work that would outlive the check anyway.
+pub const IN_FLIGHT_PER_CONNECTION: u32 = 4;
 
 /// The secret of one session, as carried in [`SESSION_COOKIE`]. `Debug` never prints it, there
 /// is no `Display` or `Serialize`, and the bytes are wiped on drop.
@@ -183,6 +213,18 @@ pub enum StoreError {
     /// A row holds a value the schema forbids, so it is not trusted.
     #[error("the sessions data is inconsistent: {0}")]
     Inconsistent(&'static str),
+    /// [`IN_FLIGHT_PER_CONNECTION`] lookups per connection are already waiting for the database.
+    #[error("too many session lookups are in flight")]
+    Busy,
+    /// The lookup or keep-warm round did not finish within [`WORK_LIMIT`].
+    #[error("the database did not answer in time")]
+    TimedOut,
+    /// The lookup ended without an answer: it panicked, or the service is stopping.
+    #[error("the session lookup was interrupted")]
+    Interrupted,
+    /// The pool does not hold its [`WARM_CONNECTIONS`] (yet), so checks could wait for new ones.
+    #[error("the database connections are not open yet")]
+    NotWarm,
 }
 
 impl From<sqlx::Error> for StoreError {
@@ -200,7 +242,7 @@ pub trait SessionStore: Send + Sync + 'static {
         hash: SessionHash,
     ) -> impl Future<Output = Result<Option<SessionGrant>, StoreError>> + Send;
 
-    /// Readiness: fails while the store cannot answer.
+    /// Readiness: fails while the store cannot answer every check in time.
     fn ping(&self) -> impl Future<Output = Result<(), StoreError>> + Send;
 }
 
@@ -227,15 +269,29 @@ const MEMBERSHIP_PURPOSE: &str = "ext-authz-membership";
 /// the request, so this store holds the background handle that can open a transaction for a
 /// given tenant and keeps it private: its only use is [`PgSessionStore::lookup`], which takes the
 /// tenant from the row it just read.
+///
+/// Opening a connection must never race the check deadline (services/identity/README.md,
+/// "連線池"):
+///
+/// - Each lookup runs in its own task, which the check does not cancel when it gives up: a
+///   connection the lookup was opening is finished and kept for the next check. At most
+///   [`IN_FLIGHT_PER_CONNECTION`] lookups per connection run at once, each for at most
+///   [`WORK_LIMIT`].
+/// - [`PgSessionStore::keep_warm`] keeps [`WARM_CONNECTIONS`] open, and readiness passes only
+///   while they are, so the gateway sends checks only to a replica that will not have to open a
+///   connection for them.
 #[derive(Clone, Debug)]
 pub struct PgSessionStore {
     db: TenantDb,
     memberships: BackgroundTenantDb,
+    in_flight: Arc<Semaphore>,
+    warm: Arc<AtomicBool>,
 }
 
 impl PgSessionStore {
-    /// A lazily connecting store. `acquire_timeout` should stay below the ext_authz deadline, so
-    /// a saturated pool fails the check rather than outlives it.
+    /// A lazily connecting store with up to `max_connections` connections (at least
+    /// [`WARM_CONNECTIONS`], which [`Config`](crate::config::Config) enforces). Nothing connects
+    /// until [`PgSessionStore::keep_warm`] or a lookup runs.
     ///
     /// # Errors
     ///
@@ -243,19 +299,87 @@ impl PgSessionStore {
     pub fn connect_lazy(
         options: PgConnectOptions,
         max_connections: u32,
-        acquire_timeout: Duration,
     ) -> Result<Self, InsecureConnection> {
+        // The default lifetime (30 min) and idle timeout (10 min) stay, so service-kit's session
+        // check runs again on every replacement: a role or policy that went wrong is caught
+        // within 30 minutes. `min_connections` opens the replacements in the background rather
+        // than in a check.
         let pool = PgPoolOptions::new()
             .max_connections(max_connections)
-            .acquire_timeout(acquire_timeout);
+            .min_connections(WARM_CONNECTIONS.min(max_connections))
+            .acquire_timeout(CONNECT_TIMEOUT);
         let actor = ServiceIdentity::new(contract::ServiceName::Identity);
         let (db, memberships) = TenantDb::connect_lazy_with_background(options, pool, actor)?;
-        Ok(Self { db, memberships })
+        let permits = usize::try_from(max_connections.saturating_mul(IN_FLIGHT_PER_CONNECTION))
+            .unwrap_or(Semaphore::MAX_PERMITS)
+            .min(Semaphore::MAX_PERMITS);
+        Ok(Self {
+            db,
+            memberships,
+            in_flight: Arc::new(Semaphore::new(permits)),
+            warm: Arc::new(AtomicBool::new(false)),
+        })
     }
-}
 
-impl SessionStore for PgSessionStore {
-    async fn lookup(&self, hash: SessionHash) -> Result<Option<SessionGrant>, StoreError> {
+    /// Keeps [`WARM_CONNECTIONS`] open until the service stops, for
+    /// [`service_kit::Context::spawn`]: every [`KEEP_WARM_INTERVAL`] it opens what is missing,
+    /// or else runs `SELECT 1` on one connection (which also replaces a connection the database
+    /// dropped). Readiness ([`SessionStore::ping`]) follows the last round. Logs when the pool
+    /// becomes warm or stops being warm, never a secret.
+    pub async fn keep_warm(self, shutdown: Shutdown) {
+        let mut was_warm = None;
+        loop {
+            let outcome = tokio::select! {
+                () = shutdown.stopping() => return,
+                outcome = tokio::time::timeout(WORK_LIMIT, self.warm_up()) => {
+                    outcome.unwrap_or(Err(StoreError::TimedOut))
+                }
+            };
+            let warm = outcome.is_ok();
+            self.warm.store(warm, Ordering::Release);
+            match outcome {
+                Ok(()) if was_warm != Some(true) => tracing::info!(
+                    connections = WARM_CONNECTIONS,
+                    "the database connections are open"
+                ),
+                Err(error) if was_warm != Some(false) => tracing::warn!(
+                    error = %error,
+                    "cannot keep the database connections open; not ready"
+                ),
+                _ => {}
+            }
+            was_warm = Some(warm);
+            tokio::select! {
+                () = shutdown.stopping() => return,
+                () = tokio::time::sleep(KEEP_WARM_INTERVAL) => {}
+            }
+        }
+    }
+
+    /// One keep-warm round. When the pool holds fewer than [`WARM_CONNECTIONS`], takes that many
+    /// at once, so the missing ones are opened (a new connection passes service-kit's session
+    /// check, an idle one is pinged before it is handed out). Otherwise runs `SELECT 1` on one,
+    /// which also replaces it when the database dropped it.
+    async fn warm_up(&self) -> Result<(), StoreError> {
+        let pool = self.db.pool();
+        if pool.size() >= WARM_CONNECTIONS {
+            return Ok(self.db.ping().await?);
+        }
+        let mut opening = JoinSet::new();
+        for _ in 0..WARM_CONNECTIONS {
+            let pool = pool.clone();
+            opening.spawn(async move { pool.acquire().await });
+        }
+        // Hold every connection until all are open, so none is taken twice.
+        let mut held = Vec::new();
+        while let Some(joined) = opening.join_next().await {
+            held.push(joined.map_err(|_| StoreError::Interrupted)??);
+        }
+        Ok(())
+    }
+
+    /// The lookup itself, on the caller's task.
+    async fn read(&self, hash: SessionHash) -> Result<Option<SessionGrant>, StoreError> {
         let row: Option<(String, Option<String>, bool)> = sqlx::query_as(ACTIVE_SESSION)
             .bind(hash.as_bytes().as_slice())
             .fetch_optional(self.db.pool())
@@ -284,12 +408,6 @@ impl SessionStore for PgSessionStore {
         }))
     }
 
-    async fn ping(&self) -> Result<(), StoreError> {
-        Ok(self.db.ping().await?)
-    }
-}
-
-impl PgSessionStore {
     /// The user's role in `tenant`, or `None` when they are not a member (any more).
     async fn role(&self, tenant: TenantId, user: UserId) -> Result<Option<TenantRole>, StoreError> {
         let mut tx = self.memberships.begin(tenant, MEMBERSHIP_PURPOSE).await?;
@@ -300,6 +418,33 @@ impl PgSessionStore {
             .await?;
         tx.commit().await?;
         role.map(|role| parse_role(&role)).transpose()
+    }
+}
+
+impl SessionStore for PgSessionStore {
+    /// Runs the lookup on its own task, which goes on when the caller stops waiting (see
+    /// [`PgSessionStore`]).
+    async fn lookup(&self, hash: SessionHash) -> Result<Option<SessionGrant>, StoreError> {
+        let permit = Arc::clone(&self.in_flight)
+            .try_acquire_owned()
+            .map_err(|_| StoreError::Busy)?;
+        let store = self.clone();
+        let lookup = tokio::spawn(async move {
+            let grant = tokio::time::timeout(WORK_LIMIT, store.read(hash))
+                .await
+                .unwrap_or(Err(StoreError::TimedOut));
+            drop(permit);
+            grant
+        });
+        lookup.await.unwrap_or(Err(StoreError::Interrupted))
+    }
+
+    async fn ping(&self) -> Result<(), StoreError> {
+        if self.warm.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            Err(StoreError::NotWarm)
+        }
     }
 }
 

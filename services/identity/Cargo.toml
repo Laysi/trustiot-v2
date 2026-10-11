@@ -29,7 +29,7 @@ sha2.workspace = true
 # Same TLS stack as service-kit: every connection verifies the server (checklist M3).
 sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
 tracing.workspace = true
 # Wipes the private key file's text after parsing.
 zeroize.workspace = true
