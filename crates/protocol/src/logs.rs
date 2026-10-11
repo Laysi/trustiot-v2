@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::codec::{
-    self, DecodeError, EncodeError, Invalid, IssueCode, Issues, Message, V1, encoded_len, head_len,
-    truncate,
+    self, DecodeError, EncodeError, Invalid, IssueCode, Issues, Message, V1, encoded_len, has_nul,
+    head_len, replace_nul, truncate,
 };
 use crate::ids::{RequestId, UnixMillis};
 use crate::open_enum::open_enum;
@@ -64,7 +64,9 @@ impl LogLevel {
     }
 }
 
-/// One log entry.
+/// One log entry. No text in it may contain U+0000 ([`LogEntry::new`] and
+/// [`LogEntry::with_field`] replace it); other control characters, such as line breaks, are
+/// kept, and whoever displays the entry escapes them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogEntry {
     /// When it was logged, from the gateway's clock.
@@ -75,13 +77,18 @@ pub struct LogEntry {
     pub target: String,
     /// The message, at most [`MAX_MESSAGE_BYTES`].
     pub message: String,
-    /// Structured fields, at most [`MAX_FIELDS`].
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    /// Structured fields, at most [`MAX_FIELDS`]. A payload that repeats a name is refused.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "codec::unique_map"
+    )]
     pub fields: BTreeMap<String, String>,
 }
 
 impl LogEntry {
-    /// An entry without fields, cutting `target` and `message` to their limits.
+    /// An entry without fields, replacing U+0000 with U+FFFD and cutting `target` and
+    /// `message` to their limits.
     pub fn new(
         at: UnixMillis,
         level: LogLevel,
@@ -91,20 +98,20 @@ impl LogEntry {
         Self {
             at,
             level,
-            target: truncate(target.into(), MAX_TARGET_BYTES),
-            message: truncate(message.into(), MAX_MESSAGE_BYTES),
+            target: truncate(replace_nul(target.into()), MAX_TARGET_BYTES),
+            message: truncate(replace_nul(message.into()), MAX_MESSAGE_BYTES),
             fields: BTreeMap::new(),
         }
     }
 
-    /// Adds a field, cutting its name and value to their limits; ignored once the entry has
-    /// [`MAX_FIELDS`] fields.
+    /// Adds a field, replacing U+0000 with U+FFFD and cutting its name and value to their
+    /// limits; ignored once the entry has [`MAX_FIELDS`] fields.
     #[must_use]
     pub fn with_field(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         if self.fields.len() < MAX_FIELDS {
             self.fields.insert(
-                truncate(name.into(), MAX_FIELD_NAME_BYTES),
-                truncate(value.into(), MAX_FIELD_VALUE_BYTES),
+                truncate(replace_nul(name.into()), MAX_FIELD_NAME_BYTES),
+                truncate(replace_nul(value.into()), MAX_FIELD_VALUE_BYTES),
             );
         }
         self
@@ -124,6 +131,15 @@ impl LogEntry {
                 format!("{path}.message"),
                 format!("longer than {MAX_MESSAGE_BYTES} bytes"),
             );
+        }
+        for (field, text) in [("target", &self.target), ("message", &self.message)] {
+            if has_nul(text) {
+                issues.push(
+                    IssueCode::InvalidValue,
+                    format!("{path}.{field}"),
+                    "contains U+0000",
+                );
+            }
         }
         if self.fields.len() > MAX_FIELDS {
             issues.push(
@@ -152,6 +168,13 @@ impl LogEntry {
                     IssueCode::TooLong,
                     format!("{path}.fields"),
                     format!("field values are at most {MAX_FIELD_VALUE_BYTES} bytes"),
+                );
+            }
+            if has_nul(name) || has_nul(value) {
+                issues.push(
+                    IssueCode::InvalidValue,
+                    format!("{path}.fields"),
+                    "a field name or value contains U+0000",
                 );
             }
         }
@@ -200,6 +223,7 @@ pub struct LogBatch {
     /// Wire format major version.
     pub v: V1,
     /// The entries, oldest first.
+    #[serde(deserialize_with = "codec::seq")]
     pub entries: Vec<LogEntry>,
     /// Entries the rate limit dropped since the previous batch.
     #[serde(default)]
@@ -339,6 +363,7 @@ pub struct LogDump {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub available_from: Option<UnixMillis>,
     /// The entries, oldest first.
+    #[serde(deserialize_with = "codec::seq")]
     pub entries: Vec<LogEntry>,
 }
 

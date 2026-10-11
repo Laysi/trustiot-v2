@@ -1,0 +1,32 @@
+# Peak decode allocation (bytes) for payloads that declare `count` array items, each a one-byte
+# `true`, measured by the counting allocator of crates/protocol/tests/fuzz.rs
+# (a_hostile_array_count_reserves_at_most_a_bounded_amount, with a temporary eprintln of
+# payload.len() and outcome.peak; debug build, branch fix/269-protocol-decoder-hardening, 2026-10-11).
+# Before the fix (report 2026-10-11-50-verify, alloc-amplification-output.txt): heartbeat x1000
+# 1,017 bytes -> 184,000; heartbeat x4200 4,217 -> 772,800; telemetry x4200 4,244 -> 302,401;
+# every type x20000 -> about 1 MiB.
+PROBE heartbeat x1000: payload 1017 peak 4048
+PROBE telemetry x1000: payload 1044 peak 4033
+PROBE live x1000: payload 1016 peak 4032
+PROBE log x1000: payload 1017 peak 4048
+PROBE config x1000: payload 1030 peak 4080
+PROBE heartbeat x4200: payload 4217 peak 4048
+PROBE telemetry x4200: payload 4244 peak 4033
+PROBE live x4200: payload 4216 peak 4032
+PROBE log x4200: payload 4217 peak 4048
+PROBE config x4200: payload 4230 peak 4080
+PROBE heartbeat x20000: payload 20017 peak 4048
+PROBE telemetry x20000: payload 20044 peak 4033
+PROBE live x20000: payload 20016 peak 4032
+PROBE log x20000: payload 20017 peak 4048
+PROBE config x20000: payload 20030 peak 4080
+PROBE heartbeat x50000: payload 50017 peak 4048
+PROBE telemetry x50000: payload 50044 peak 4033
+PROBE live x50000: payload 50016 peak 4032
+PROBE log x50000: payload 50017 peak 4048
+PROBE config x50000: payload 50030 peak 4080
+PROBE heartbeat x60000: payload 60017 peak 4048
+PROBE telemetry x60000: payload 60044 peak 4033
+PROBE live x60000: payload 60016 peak 4032
+PROBE log x60000: payload 60017 peak 4048
+PROBE config x60000: payload 60030 peak 4080
