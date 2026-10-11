@@ -1,0 +1,15 @@
+
+running 1 test
+test pid_1_in_a_container_drains_and_exits_within_the_grace_period has been running for over 60 seconds
+test pid_1_in_a_container_drains_and_exits_within_the_grace_period ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 95.44s
+
+stop returned after 11278 ms (grace period 40 s); exit code 0
+{"timestamp":"2026-10-10T19:43:45.209845Z","level":"INFO","service":"example-service","target":"opentelemetry","message":"Global tracer provider is set. Traces can now be created using global::tracer() or global::tracer_with_scope().","fields":{"name":"TracerProvider.GlobalSet"}}
+{"timestamp":"2026-10-10T19:43:45.210700Z","level":"INFO","service":"example-service","target":"service_kit::service","message":"starting","fields":{"service.version":"0.1.0","process.pid":1,"http.listen_addr":"0.0.0.0:8080","http.request_timeout_ms":30000,"shutdown.drain_delay_ms":3000,"shutdown.drain_timeout_ms":10000,"telemetry.log_filter":"info","telemetry.otlp_export":false}}
+{"timestamp":"2026-10-10T19:43:45.212865Z","level":"INFO","service":"example-service","target":"service_kit::service","message":"listening","fields":{"address":"0.0.0.0:8080"}}
+{"timestamp":"2026-10-10T19:43:52.971707Z","level":"INFO","service":"example-service","target":"service_kit::shutdown","message":"shutdown requested; readiness now fails","fields":{"signal":"SIGTERM","drain_delay_ms":3000}}
+{"timestamp":"2026-10-10T19:43:55.973989Z","level":"INFO","service":"example-service","target":"service_kit::service","message":"stopped accepting connections; draining requests and background tasks","fields":{"drain_timeout_ms":10000}}
+{"timestamp":"2026-10-10T19:43:57.031409Z","level":"INFO","service":"example-service","target":"service_kit::http","trace_id":"9a2bbd30b0825ca0c4fc1d73d9645bfa","span_id":"d0566156245c06b1","message":"request completed","fields":{"http.request.method":"GET","http.route":"/v1/slow","http.response.status_code":200,"duration_ms":9001.893}}
+{"timestamp":"2026-10-10T19:43:57.033116Z","level":"INFO","service":"example-service","target":"service_kit::service","message":"shutdown complete","fields":{"elapsed_ms":1058}}

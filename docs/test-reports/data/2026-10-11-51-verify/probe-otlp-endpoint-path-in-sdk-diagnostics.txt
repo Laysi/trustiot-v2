@@ -1,0 +1,4 @@
+filter=info exit=0 lines=16 canary_lines=0
+filter=debug exit=0 lines=224 canary_lines=36
+  {"timestamp":"2026-10-10T19:20:46.226803Z","level":"DEBUG","service":"example-service","target":"opentelemetry-otlp","message":"","fields":{"name":"HttpClient.NetworkError","url":"http://127.0.0.1:9/canary-endpoint-path-4a7b/v1/logs","error":"error sending request for url (http://127.0.0.1:9/canary-endpoint-path-4a7b/v1/logs)"}}
+  {"timestamp":"2026-10-10T19:20:46.440833Z","level":"DEBUG","service":"example-service","target":"opentelemetry-otlp","message":"","fields":{"name":"HttpClient.NetworkError","url":"http://127.0.0.1:9/canary-endpoint-path-4a7b/v1/logs","error":"error sending request for url (http://127.0.0.1:9/canary-endpoint-path-4a7b/v1/logs)"}}

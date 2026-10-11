@@ -1,0 +1,223 @@
+//! Independent verification of Laysi/trustiot-v2#51: the advisory-lock tool under failure.
+//! Uses `TEST_DATABASE_URL` when set, otherwise a throwaway Postgres container; skipped without
+//! either unless `CI` is set (like `job_lock.rs`).
+//!
+//! Adds to `job_lock.rs`: a stress run in which many replicas contend for one job and the number
+//! of concurrent runs is counted, the lock holder's backend killed mid-job (the job stops, the
+//! lock does not leak, another replica takes over), a panicking job, and a job future dropped by
+//! a timeout.
+
+mod support;
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use service_kit::job_lock::{JobLock, JobLockError};
+use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
+use support::{Container, container_runtime, runtime_output, unavailable, unique_name};
+
+const POSTGRES_IMAGE: &str = "docker.io/library/postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873";
+
+struct Database {
+    url: String,
+    _container: Option<Container>,
+}
+
+async fn database() -> Option<Database> {
+    if let Some(url) = std::env::var("TEST_DATABASE_URL")
+        .ok()
+        .filter(|url| !url.is_empty())
+    {
+        return Some(Database {
+            url,
+            _container: None,
+        });
+    }
+    let Some(runtime) = container_runtime() else {
+        unavailable("TEST_DATABASE_URL, podman, or docker");
+        return None;
+    };
+    let container = Container {
+        runtime,
+        name: unique_name("verify-postgres"),
+    };
+    runtime_output(
+        runtime,
+        &[
+            "run",
+            "--detach",
+            "--memory",
+            "512m",
+            "--name",
+            &container.name,
+            "--env",
+            "POSTGRES_PASSWORD=service-kit-test",
+            "--publish",
+            "127.0.0.1::5432",
+            POSTGRES_IMAGE,
+        ],
+    );
+    let address = container.host_address("5432/tcp");
+    let url = format!("postgres://postgres:service-kit-test@{address}/postgres");
+    let started = Instant::now();
+    loop {
+        if let Ok(pool) = PgPool::connect(&url).await
+            && sqlx::query("SELECT 1").execute(&pool).await.is_ok()
+        {
+            pool.close().await;
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "Postgres did not start in time"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    Some(Database {
+        url,
+        _container: Some(container),
+    })
+}
+
+async fn replica(url: &str, connections: u32) -> PgPool {
+    PgPoolOptions::new()
+        .max_connections(connections)
+        .connect(url)
+        .await
+        .expect("connect a replica's pool")
+}
+
+/// Process ids of the backends that hold an advisory lock with `key`.
+async fn holders(admin: &PgPool, key: i64) -> Vec<i32> {
+    sqlx::query_scalar(
+        "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND objsubid = 1 \
+         AND ((classid::bigint << 32) | objid::bigint) = $1",
+    )
+    .bind(key)
+    .fetch_all(admin)
+    .await
+    .expect("query pg_locks")
+}
+
+async fn any_advisory_locks(admin: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'")
+        .fetch_one(admin)
+        .await
+        .expect("count advisory locks")
+}
+
+
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::AtomicBool;
+use std::thread;
+use service_kit::shutdown::Shutdown;
+
+/// A TCP proxy to Postgres that can be switched to a black hole: it then swallows traffic in
+/// both directions, like a network partition that drops packets without resetting connections.
+struct Proxy {
+    address: std::net::SocketAddr,
+    blackhole: Arc<AtomicBool>,
+}
+
+fn proxy(target: std::net::SocketAddr) -> Proxy {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind proxy");
+    let address = listener.local_addr().expect("addr");
+    let blackhole = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&blackhole);
+    thread::spawn(move || {
+        for client in listener.incoming() {
+            let Ok(client) = client else { continue };
+            let Ok(server) = TcpStream::connect(target) else { continue };
+            for (mut from, mut to) in [
+                (client.try_clone().expect("clone"), server.try_clone().expect("clone")),
+                (server, client),
+            ] {
+                let flag = Arc::clone(&flag);
+                thread::spawn(move || {
+                    let mut buffer = [0_u8; 8192];
+                    while let Ok(n) = from.read(&mut buffer) {
+                        if n == 0 { break; }
+                        if flag.load(Ordering::SeqCst) { continue; }
+                        if to.write_all(&buffer[..n]).is_err() { break; }
+                    }
+                });
+            }
+        }
+    });
+    Proxy { address, blackhole }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn partitioned_holder_is_detected_and_the_job_stops() {
+    let Some(database) = database().await else { return };
+    let direct: std::net::SocketAddr = database.url.split("@").nth(1).and_then(|r| r.split("/").next()).expect("host").parse().expect("addr");
+    let proxy = proxy(direct);
+    let via_proxy = database.url.replace(&direct.to_string(), &proxy.address.to_string());
+    let admin = replica(&database.url, 2).await;
+    let holder = JobLock::new(replica(&via_proxy, 2).await, "verify", "partition").with_heartbeat(Duration::from_millis(200));
+    let other = JobLock::new(replica(&database.url, 2).await, "verify", "partition");
+    let key = holder.key();
+    let ticks = Arc::new(AtomicUsize::new(0));
+    let job_ticks = Arc::clone(&ticks);
+    let run = tokio::spawn(async move {
+        holder.run_exclusive(|| async move { loop { job_ticks.fetch_add(1, Ordering::SeqCst); tokio::time::sleep(Duration::from_millis(20)).await; } }).await
+    });
+    let started = Instant::now();
+    let pid = loop {
+        if let Some(pid) = holders(&admin, key).await.first().copied() { break pid; }
+        assert!(started.elapsed() < Duration::from_secs(5), "never locked");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    proxy.blackhole.store(true, Ordering::SeqCst);
+    sqlx::query("SELECT pg_terminate_backend($1)").bind(pid).execute(&admin).await.expect("terminate");
+    // The server released the lock; another replica takes it.
+    let started = Instant::now();
+    let guard = loop {
+        if let Some(guard) = other.try_acquire().await.expect("try") { break guard; }
+        assert!(started.elapsed() < Duration::from_secs(5), "never freed");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    eprintln!("replica B holds the lock {:?} after the partition+kill", started.elapsed());
+    let before = ticks.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    let after = ticks.load(Ordering::SeqCst);
+    let finished = run.is_finished();
+    eprintln!("replica A job ticks during the next 10 s while B holds the lock: {} (run finished: {finished})", after - before);
+    guard.release().await.expect("release");
+    assert!(finished && after == before || after - before < 5, "TWO REPLICAS RUN THE JOB: A kept running {} ticks while B held the lock", after - before);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_panicking_job_does_not_end_the_periodic_schedule() {
+    let Some(database) = database().await else { return };
+    let lock = JobLock::new(replica(&database.url, 2).await, "verify", "periodic-panic");
+    let runs = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&runs);
+    let task = tokio::spawn(lock.run_periodically(Duration::from_millis(100), Shutdown::new(), move || {
+        let counter = Arc::clone(&counter);
+        async move {
+            let n = counter.fetch_add(1, Ordering::SeqCst);
+            if n == 0 { panic!("first run panics"); }
+            Ok::<(), String>(())
+        }
+    }));
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    eprintln!("runs after 2 s: {} (task finished: {})", runs.load(Ordering::SeqCst), task.is_finished());
+    assert!(runs.load(Ordering::SeqCst) > 1, "the schedule ended after one panic");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pool_of_one_connection_deadlocks_a_job_that_uses_the_pool() {
+    let Some(database) = database().await else { return };
+    let pool = replica(&database.url, 1).await;
+    let lock = JobLock::new(pool.clone(), "verify", "pool1");
+    let work = pool.clone();
+    let result = tokio::time::timeout(Duration::from_secs(5), lock.run_exclusive(|| async move {
+        sqlx::query("SELECT 1").execute(&work).await.map(|_| ())
+    })).await;
+    eprintln!("pool of one: {result:?}");
+    assert!(result.is_ok(), "the job waited for a connection the lock holds");
+}

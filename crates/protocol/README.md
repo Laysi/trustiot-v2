@@ -31,13 +31,30 @@ broker 與每個用戶端接受的 maximum packet size 至少要是 `MIN_MAX_PAC
 
 1. **值的型別不會走樣。** 遙測值的型別由 CBOR 本身的型別表示：布林、整數、浮點數、文字各自不同，不需要另加型別欄位。JSON 分不出 `60` 與 `60.0`，而且許多 JSON 解析器把超過 2^53 的整數當成浮點數，電表累計值這類大整數會被悄悄改掉。浮點數以二進位傳送，往返完全相同；能無損縮成 f32 的值只佔 5 bytes。其他 CBOR 編碼器常把短的浮點數編成半精度（f16），接收端一樣接受。
 2. **自我描述，新增欄位不破壞相容。** 欄位以名稱為鍵，接收端略過不認得的鍵，舊版程式可以讀新版訊息（見「版本與相容性」）。postcard、bincode 這類不帶欄位名稱的格式做不到，新增欄位就要全面同步升級；閘道器散在客戶現場，無法同步升級。
-3. **解析有界、不必跳脫。** 字串與陣列都以長度為前綴。解碼前先走一遍 CBOR 結構：宣告的長度或項目數超過剩餘位元組、巢狀超過 `MAX_NESTING`、多餘的尾端位元組都直接拒絕，惡意 payload 只會失敗、不會配置記憶體（`tests/robustness.rs`、`tests/allocation.rs`）。不定長度的陣列與 map 可以接受；不定長度（分段）的字串一律拒絕，因為 `cbor4ii` 1.2.3 解這種字串時不會讀掉結尾的 break，後面的欄位會錯位。本 crate 的編碼器只產生定長的項目。
+3. **解析有界、不必跳脫。** 字串與陣列都以長度為前綴。解碼前先走一遍 CBOR 結構：宣告的長度或項目數超過剩餘位元組、巢狀超過 `MAX_NESTING`、多餘的尾端位元組都直接拒絕（`tests/robustness.rs`、`tests/allocation.rs`）。宣告的項目數也不決定配置大小：陣列在項目解出之前最多預留 `SEQ_PREALLOC_BYTES`（4 KiB），之後隨實際解出的項目成長，見「大小上限與拆包」的解碼配置上限。不定長度的陣列與 map 可以接受；不定長度（分段）的字串一律拒絕，因為 `cbor4ii` 1.2.3 解這種字串時不會讀掉結尾的 break，後面的欄位會錯位。本 crate 的編碼器只產生定長的項目。
 4. **標準、工具多、可轉成 JSON 看。** RFC 標準格式，各語言都有解碼器；固定樣本同時存一份 JSON，審查時看得懂格式改了什麼。
 5. **純 Rust、能編到 aarch64。** 使用 `cbor4ii`（MIT），沒有 C 相依、不需要 protoc 之類的建置工具。
 
 體積不是主要理由：本 crate 的樣本中 CBOR 比緊湊 JSON 小約 20%（遙測 613 對 750 bytes），因為大部分是 UUID 字串；遙測流量的大小主要靠合併成批次與拆包上限控制。
 
 不選 Protobuf：要另外維護 schema 與程式碼產生，Rust 的 prost 建置時需要 protoc；欄位相容規則（以編號為準）也比較容易出錯。不選 MessagePack：與 CBOR 能力相近，但 CBOR 是 IETF 標準。
+
+### 解碼規則與下游責任（Laysi/trustiot-v2#269）
+
+閘道器在客戶現場，可能被入侵，所以每條解碼路徑都當成處理惡意輸入。以下各項是 2026-10-11 獨立驗證（`docs/test-reports/2026-10-11-50-verify.md` 的 F1、F4 與資訊項）之後定下的規則；協定層拒絕的項目有測試（`tests/adversarial.rs`、`tests/validation.rs`），交給下游的項目寫明由誰處理。
+
+- **重複鍵一律拒絕（協定層）。** 訊息結構的欄位重複，以及資料 map（`LogEntry.fields`、`DeviceStats.exception_codes`）的鍵重複，都以 `decode_failed` 拒絕整則訊息，不採「後者勝出」：同一份位元組在不同解碼器上不能得到不同的值，例外碼的計數也不能被悄悄丟掉。同一個整數鍵以不同寬度編碼（`02` 與 `18 02`）也算重複。不認得的鍵重複則照常略過。
+- **文字不得含 U+0000（協定層）。** 遙測與即時值的文字值、日誌的 `target`、`message`、欄位名稱與值、心跳的 `last_failure.detail`、`TelemetryAck` 拒絕原因的 `message`、`ConfigReport` 每個 issue 的 `path` 與 `message`，含 NUL 時 `encode` 拒絕送出、`decode` 拒絕接收。理由：PostgreSQL 的 `text` 存不了 NUL（雲端寫入會失敗，而且是在已經回應之後才失敗），C 介面會把它當字串結尾；沒有任何欄位需要它。送出端的處理：
+  - `LogEntry::new`、`LogEntry::with_field` 與 `Issue::new` 先把 NUL 換成 U+FFFD 再截長度，所以用這些建構函式產生的日誌與 issue 一定送得出去。診斷訊息可能引用惡意 payload 的內容（例如 serde 的 `unknown variant`），雲端回 `rejected` 時 `message` 一律取自 `DecodeError::to_issues` 的 issue。
+  - 遙測文字值沒有建構函式：閘道器的 Modbus 字串解碼（Laysi/trustiot-v2#87）要先去掉暫存器補位的結尾 NUL；之後仍含 NUL 的值與 NaN 一樣是 `ValueError::NulInText`，算讀取失敗（`invalid_value`），不送出。
+- **其他控制字元交給下游。** tab、換行、`ESC`、`DEL`、C1 與雙向文字控制字元，協定都接受：日誌訊息本來就有多行與 tab，而哪些字元危險取決於顯示的地方（終端機是 `ESC`，HTML 是 `<`，CSV 是開頭的 `=`），協定層無法列舉。PostgreSQL 與 ClickHouse 都能原樣儲存這些字元，寫入不需處理。責任：
+  - 雲端服務把閘道器送來的文字寫進自己的日誌時，一律當結構化欄位的值交給 `tracing` 的 JSON 輸出跳脫，不得拼進訊息字串（資料接收 Laysi/trustiot-v2#91、gateway-ops Laysi/trustiot-v2#93、健康資料 Laysi/trustiot-v2#118、閘道器日誌 Laysi/trustiot-v2#185）。
+  - 前端與 Grafana 以純文字呈現這些值，不當 HTML 或 Markdown 解讀；CSV 匯出防範公式注入。
+- **心跳不做欄位間的交叉檢查，交給雲端。** 例如 `memory_available_bytes` 大於 `memory_total_bytes`、`data_available_bytes` 大於 `data_total_bytes`、失敗數總和大於 `requests`、`requests` 為 0，協定都接受（只保留原有的 `points_failed` ≤ `points_total`，那兩個值出自同一次輪詢）。理由：心跳同時是在線訊號，為了一個計數器拒收整則心跳會讓閘道器看起來離線；計數器在不同時間點取樣，可能短暫不一致；`requests` 為 0 是合法狀態（剛加入、還沒輪詢的設備）。責任：
+  - 雲端健康資料入庫（Laysi/trustiot-v2#118）以兩次心跳的差計算成功率：`requests` 的差為 0 時沒有成功率（顯示無資料，不除以 0），結果夾在 0 到 1 之間；差為負數代表 agent 重啟（`agent_uptime_s` 變小），從新的累計值重算。可用量大於總量時以總量為上限顯示並記錄為異常樣本，不讓整則心跳失敗。
+  - 閘道器（Laysi/trustiot-v2#117）在同一個時間點讀取所有計數器，每個請求先計入 `requests` 再計入失敗類型，讓正常運作下不會出現不一致。
+- **`peek_header` 有大小上限（協定層）。** `TelemetryBatch::peek_header` 與 `DesiredConfig::peek_header` 只讀不超過 `MAX_PEEK_BYTES`（等於 `MIN_MAX_PACKET_BYTES`，1 MiB + 8 KiB）的 payload，超過時回 `DecodeError::TooLarge`。上限不能用 channel 上限：peek 正是給 `decode` 拒絕的 payload 用的，超過 256 KiB 的遙測批次也要能回 `rejected`，否則閘道器會永遠重送。比這更大的 payload 不可能經符合規定的 MQTT 連線送達；broker 的 maximum packet size 設為 `MIN_MAX_PACKET_BYTES` 時，任何送得到雲端的 payload 都 peek 得到。
+- **IPv4-mapped 位址等同 IPv4（協定層）。** 設備的 `host` 寫成 `::ffff:a.b.c.d` 時，先換成它對應的 IPv4 位址再套用同一套規則：`::ffff:0.0.0.0`、`::ffff:224.0.0.1`、`::ffff:255.255.255.255` 與 IPv4 寫法一樣被拒絕。`Host::canonical` 把兩種寫法正規化成同一個 IPv4 位址，同一個轉換器不能因寫法不同而混用兩種傳輸方式（`mixed_transport`）。`Host::as_str` 仍是寫入時的原樣。
 
 ## Topic
 
@@ -68,16 +85,33 @@ ID（閘道器、設備、串流、session、租約、請求 ID 與資料點鍵�
 
 ## ACL（Mosquitto dynsec）
 
-Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec 的 ACL topic 中 `%u` 會換成 username（`acl_file` 在 2.1 已棄用）。佈建時為每台閘道器建立 dynsec client 並綁定角色 `trustiot-gateway`（`GATEWAY_ROLE`），角色規則由 `gateway_role_acls()` 產生，可直接作為 `$CONTROL/dynamic-security/v1` 的 `createRole`／`addRoleACL` 參數：
+Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec 的 ACL topic 中 `%u` 會換成 username（`acl_file` 在 2.1 已棄用）。佈建時為每台閘道器建立 dynsec client 並綁定角色 `trustiot-gateway`（`GATEWAY_ROLE`），角色規則由 `gateway_role_acls()` 產生，可直接作為 `$CONTROL/dynamic-security/v1` 的 `createRole`／`modifyRole` 的 `acls` 參數：
 
 | acltype | topic | allow |
 | --- | --- | --- |
-| `publishClientSend` | `trustiot/v1/gw/%u/up/#` | 是 |
+| `publishClientSend` | `trustiot/v1/gw/%u/up/telemetry` | 是 |
+| `publishClientSend` | `trustiot/v1/gw/%u/up/config-report` | 是 |
+| `publishClientSend` | `trustiot/v1/gw/%u/up/status` | 是 |
+| `publishClientSend` | `trustiot/v1/gw/%u/up/heartbeat` | 是 |
+| `publishClientSend` | `trustiot/v1/gw/%u/up/live` | 是 |
+| `publishClientSend` | `trustiot/v1/gw/%u/up/log` | 是 |
+| `publishClientSend` | `trustiot/v1/gw/%u/up/log-dump` | 是 |
 | `subscribePattern` | `trustiot/v1/gw/%u/down/#` | 是 |
 | `publishClientReceive` | `trustiot/v1/gw/%u/down/#` | 是 |
 | `unsubscribePattern` | `trustiot/v1/gw/%u/down/#` | 是 |
 
-其餘一律依 broker 的預設拒絕。結果：閘道器只能發布到自己的 `up/`（發到別台的 topic 得到 PUBACK 0x87）、只能訂閱自己的 `down/`；CN 含 `+`、`#`、`/` 的憑證 Mosquitto 不會代入 `%u`，什麼都讀不到，CA 也不會簽出這種 CN（`GatewayId` 的字元規則）。LWT 發布到 `up/status`，同樣在允許範圍內。雲端服務的身分、角色與 broker 的預設存取設定由 Laysi/trustiot-v2#84 決定；dynsec 的註冊與撤銷流程由 Laysi/trustiot-v2#82 實作。
+發布規則是每個 `up` channel 一條精確 topic（`gateway_channel_acl_topic`），不用萬用字元：`up/#` 會讓閘道器在自己的 `up/` 底下任意新增 topic，並在每個 topic 留下一則 retained 訊息，數量沒有上限（Laysi/trustiot-v2#268，驗證報告 [2026-10-11-50-verify](../../docs/test-reports/2026-10-11-50-verify.md) 的 F3）。broker 上已註冊的角色不會跟著程式更新：新增 `up` channel，或角色是以修正前的 `up/#` 規則建立的（2026-10-11 時 Laysi/trustiot-v2#82 與 Laysi/trustiot-v2#84 都還沒有實作，broker 上沒有這樣的角色），都要以 `modifyRole` 帶 `acls: gateway_role_acls()` 換掉整份 ACL，再以 `getRole` 確認；`addRoleACL` 只會加在舊規則旁邊，`up/#` 仍然有效。換掉舊規則後，還要以空 payload 的 retained 訊息清掉 `up/` 下非協定 topic 殘留的 retained 訊息。這個同步流程由 Laysi/trustiot-v2#82 實作。
+
+其餘一律依 broker 的預設拒絕。結果：閘道器只能發布到自己 `up/` 下的協定 channel（發到別台的 topic，或自己 `up/` 下不是協定 channel 的 topic，都得到 PUBACK 0x87）、只能訂閱自己的 `down/`；CN 含 `+`、`#`、`/` 的憑證 Mosquitto 不會代入 `%u`，什麼都讀不到，CA 也不會簽出這種 CN（`GatewayId` 的字元規則）。LWT 發布到 `up/status`，同樣在允許範圍內。雲端服務的身分、角色與 broker 的預設存取設定由 Laysi/trustiot-v2#84 決定；dynsec 的註冊與撤銷流程由 Laysi/trustiot-v2#82 實作。
+
+**閘道器的 retained 訊息**（2026-10-11 決定）：
+
+- 不能全面禁止。`up/status` 依協定是 retained（`Status` 與 LWT），晚上線的雲端服務靠它取得每台閘道器目前的在線狀態；其他 `up` channel 的 retain 一律為否（上方 topic 表與 `Channel::delivery`），閘道器 agent 不得對它們設 retain。
+- dynsec 無法依 retain 旗標授權：它的 ACL 檢查只看 acltype、topic 與 client，不看 retain 旗標（Mosquitto 2.1.2 的 `plugins/dynamic-security/acl.c`），所以角色規則擋不住閘道器在 `up/telemetry` 等 channel 設 retain。broker 的 `retain_available false` 會關掉整個 broker（或 listener）的 retained，`up/status` 與 `down/config` 都需要，不能用。
+- 實際的界限來自精確規則：同一個 topic 的新 retained 訊息會取代舊的，所以一台閘道器最多在 7 個 `up` channel 各留一則 retained 訊息，每則不超過 broker 的 maximum packet size。broker 層級的上限（maximum packet size、每個 client 的佇列與 retained 的數量和大小）由 Laysi/trustiot-v2#84 設定。
+- 雲端服務訂閱時，broker 會重播 retained 訊息（retain 旗標為 1）。在 retain 為否的 channel 上收到 retain 旗標為 1 的訊息，表示閘道器違反協定：丟棄並記錄，不能當成新資料處理，否則每次重新訂閱都會再收一次同一則舊訊息。
+
+`tests/broker.rs` 以真的 Mosquitto 2.1.2（與 `scripts/lib/stack.ts` 相同 digest 的容器，podman 或 docker；沒有容器執行環境時略過，設了 `CI` 則失敗）驗證：角色以 `gateway_role_acls()` 的 JSON 建立；每個 `up` channel 依 `Channel::delivery` 送達雲端，`up/status` 的 LWT 在斷線時送出；每個 `down` channel 送達閘道器；`up/` 下不是協定 channel 的 topic 得到 PUBACK 0x87、雲端收不到、broker 不留 retained，設在這種 topic 的 LWT 也被丟掉；修正前的 `up/#` 規則讓同一項檢查失敗，以 `modifyRole` 換掉 ACL 並清掉殘留的 retained 後通過；dynsec 確實不擋允許 topic 上的 retain 旗標。
 
 ## 共同欄位與版本
 
@@ -206,6 +240,12 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 
 `encode` 對超過上限的 payload 回 `EncodeError::TooLarge`，`decode` 在解析前就拒絕超過上限的 payload；不拆包的訊息在最大合法內容下仍放得進上限（`tests/limits.rs`）。
 
+**解碼配置上限。** 解碼會配置記憶體，但配置量隨實際解出的內容成長，不隨 payload 宣告的項目數成長：
+
+- 宣告的長度或項目數超過剩餘位元組的 payload，在結構檢查時就被拒絕，什麼都不配置（`tests/allocation.rs`）。
+- 每個陣列在項目解出之前最多預留 `SEQ_PREALLOC_BYTES`（4 KiB），之後依實際解出的項目加倍成長；字串依實際長度配置；map 不預留。serde 原本會依宣告的項目數預留（每個集合最多 1 MiB），2026-10-11 實測 1,017 bytes 的惡意心跳讓解碼暫時配置 184,000 bytes（181 倍）、4.2 KB 配置 773 KB（Laysi/trustiot-v2#269）。改用有上限的預留後，同樣宣告 1,000 到 60,000 個項目的心跳、遙測、即時值、日誌與設定 payload，解碼配置高峰都在 4,080 bytes 以下，與宣告數量無關（`tests/fuzz.rs` 的 `a_hostile_array_count_reserves_at_most_a_bounded_amount` 把上限釘在 8 KiB）。
+- 其餘配置與實際解出的內容成正比：Rust 結構比 CBOR 編碼大（例如每台設備的心跳統計在記憶體中約 184 bytes），所以 1 MiB 的設定或心跳解碼時高峰達十多 MB；以 `status`、`state`、`op` 區分種類的 `Status`、`AckOutcome`、`LiveAction`，serde 會先把整個 map 緩衝成中間值，每個輸入位元組約佔 56 bytes，但這些 channel 的上限只有 4–64 KiB。2026-10-11 以 90 萬個惡意輸入實測（release，種子 4）：配置最多是 payload 的 56.2 倍（改之前約 180 倍），絕對高峰 13.2 MB 來自 1 MiB 的設定。`tests/fuzz.rs` 對每個輸入檢查配置不超過 payload 的 200 倍加 64 KiB。雲端同時解碼的訊息數由各服務的並行上限約束，總量等於並行數乘以單則上限。
+
 ## 版本與相容性
 
 - **主版本**：`v` 欄位與 topic 的 `v1`。不相容的變更（改名、刪欄位、改型別或語意）開新的主版本與新的 topic 樹；接收端遇到其他 `v` 一律拒絕（`unsupported_version`），在解析其他欄位之前就判斷。
@@ -213,6 +253,19 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 - **向後相容**（新程式讀舊訊息）：新增的欄位必須是選填並有預設值。`tests/golden/v1-frozen/` 是 v1 第一版的固定樣本，永遠不重新產生、不修改、不刪除；之後每個版本都要能把它們解碼成相同的內容（`frozen_v1_payloads_still_decode`）。
 - **固定樣本**：`tests/golden/current/` 是目前版本編出的每種訊息的位元組（`.cbor.hex`）與 JSON 呈現，格式任何改變都會讓測試失敗。確定要改格式時以 `UPDATE_GOLDEN=1 cargo test -p protocol --test golden` 重新產生並審查 diff；改了 `current` 卻沒有新增 `rev` 或新主版本，代表改壞了相容性。
 - **closed enum**（`Status` 的 `state`、`DataType`、`ByteOrder`、`Transport`、`FunctionCode`、`LogLevel`）不認得的值會讓訊息被拒絕：這些值接收端必須理解才能正確動作。
+
+### v1 接收範圍的變更紀錄
+
+收緊接收範圍也是相容性變更：舊的送出端照舊送出的內容，新的接收端可能拒絕。下列變更都在任何閘道器出貨之前（MS0）完成，所以沿用 `PROTOCOL_REVISION` 1、不開新的 `rev`；`tests/golden/current/` 與 `tests/golden/v1-frozen/` 的位元組都沒有改變，固定樣本照舊解碼成相同內容（`frozen_v1_payloads_still_decode`）。出貨之後的收緊必須提高 `rev` 或主版本。
+
+| 日期 | 變更 | 之前 | 之後 |
+| --- | --- | --- | --- |
+| 2026-10-11 | 資料 map 的重複鍵（Laysi/trustiot-v2#269） | `LogEntry.fields`、`DeviceStats.exception_codes` 後出現的值覆蓋前面的 | `decode_failed` |
+| 2026-10-11 | 文字中的 U+0000（Laysi/trustiot-v2#269） | 接受 | `encode` 與 `decode` 都拒絕；遙測文字值是 `ValueError::NulInText`，其他欄位是 `invalid_value` |
+| 2026-10-11 | IPv4-mapped 的設備 `host`（Laysi/trustiot-v2#269） | `::ffff:0.0.0.0` 等繞過未指定、多播、廣播位址的檢查；`::ffff:1.2.3.4` 與 `1.2.3.4` 視為不同端點 | 依 IPv4 規則判斷；兩種寫法是同一個端點 |
+| 2026-10-11 | `peek_header` 的大小（Laysi/trustiot-v2#269） | 不限 | 超過 `MAX_PEEK_BYTES` 回 `TooLarge` |
+
+解碼配置的改變（`SEQ_PREALLOC_BYTES`）不影響接收範圍，只影響配置量。
 
 ## 相依套件與 aarch64
 

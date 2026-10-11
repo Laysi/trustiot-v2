@@ -1,0 +1,21 @@
+# Same tenant-A queries: on the table with the old grant and a tenant row policy (account olda), and through trustiot.tenant_telemetry (tenant role).
+# Data: 900,000 rows, 3 tenants x 30 devices x 10 points x 1,000 readings, one part, 110 granules. Server-side elapsed_ns from X-ClickHouse-Summary, median.
+# Host load average about 23-28 on 8 cores during both runs.
+
+## run 1 (2026-10-11, before 05:00, 7 runs per query)
+query | base (old model): read_rows, PK granules, median ms | view (new model): read_rows, PK granules, median ms | same answer
+count all | 8193, 37/110, 15.9 | 8193, 37/110, 27.1 | true
+sum over all rows | 303104, 37/110, 66.0 | 303104, 37/110, 77.8 | true
+one device, one point, time range | 8192, 1/110, 15.1 | 8192, 1/110, 25.9 | true
+one device grouped by point | 16384, 2/110, 21.2 | 16384, 2/110, 27.0 | true
+latest value per device and point | 303104, 37/110, 162.0 | 303104, 37/110, 159.3 | true
+filter on non-key column | 303104, 37/110, 75.7 | 303104, 37/110, 79.0 | true
+
+## run 2 (2026-10-11 11:07, 15 runs per query)
+query | base (old model): read_rows, PK granules, median ms | view (new model): read_rows, PK granules, median ms | same answer
+count all | 8193, 37/110, 7.6 | 8193, 37/110, 12.6 | true
+sum over all rows | 303104, 37/110, 58.2 | 303104, 37/110, 83.6 | true
+one device, one point, time range | 8192, 1/110, 16.4 | 8192, 1/110, 29.8 | true
+one device grouped by point | 16384, 2/110, 21.2 | 16384, 2/110, 28.9 | true
+latest value per device and point | 303104, 37/110, 154.0 | 303104, 37/110, 173.5 | true
+filter on non-key column | 303104, 37/110, 73.8 | 303104, 37/110, 82.9 | true
