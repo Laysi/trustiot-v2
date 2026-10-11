@@ -1,0 +1,23 @@
+# lab Mac mini M1 (Fedora Asahi, aarch64, 16K pages), 2026-10-11
+
+# lab-proto.sh: proto 0.60.2 for aarch64 from the pinned release (SHA-256 from
+# .github/actions/setup-proto), then `proto install gitleaks` with the repository's plugins.
+# proto cannot resolve versions here because the lab box has no git.
+/home/trustiot/.cache/trustiot-v2-309/proto_cli-aarch64-unknown-linux-gnu.tar.xz: OK
+aarch64
+proto 0.60.2
+install gitleaks FAILED
+Error: plugin::wasm::failed_function_call
+
+  × Command or script git does not exist. Unable to execute from plugin.
+
+# lab-assets.sh: the linux arm64 assets the schema plugins resolve to, verified against the
+# checksum file of each release and run.
+aarch64
+16384
+gitleaks_8.30.1_linux_arm64.tar.gz: OK
+gitleaks ELF 64-bit LSB executable, ARM aarch64: 8.30.1
+actionlint_1.7.12_linux_arm64.tar.gz: OK
+actionlint ELF 64-bit LSB executable, ARM aarch64: 1.7.12
+cargo-deny-0.20.2-aarch64-unknown-linux-musl.tar.gz: OK
+cargo-deny ELF 64-bit LSB executable, ARM aarch64: cargo-deny 0.20.2

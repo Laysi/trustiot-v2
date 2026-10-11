@@ -10,7 +10,7 @@
 | 工具 | rustc 1.99.0、Docker 29.7.2 |
 | Postgres | `postgres:18.6-alpine@sha256:77f58511…`，每個測試一個用完即刪的容器，以測試時產生的 CA 啟用 TLS；消費端以 service-kit 的 pool 連線（`sslmode=verify-full`、每個新連線做 RLS 檢查） |
 | 角色 | 每個測試的 `Database::setup`（`crates/outbox/tests/support/mod.rs`）建立產生端的服務角色與平台角色、消費端的服務角色與平台角色；`outbox_event` 執行 service-kit 的 [`sql/outbox-event.sql`](../../crates/service-kit/sql/outbox-event.sql)（RLS 與 `tenant_isolation`、`platform_events`、`consumer_read` 三條 policy），授權照 outbox README「資料庫權限」 |
-| 分支 | `feat/271-outbox-platform-pool`：先在 main `e8f180b` 上測，合併 main `e21ff41` 後重測一次 |
+| 分支 | `feat/271-outbox-platform-pool`：先在 main `e8f180b` 上測，合併 main `e21ff41` 後重測，最後合併 main `9b13ad8`（含 Laysi/trustiot-v2#294 的「只信任設定的 CA」）後在本機檢查佇列（Fedora、podman、`CI=1`）完整重測一次 |
 
 ## 2. 指令
 
@@ -28,6 +28,17 @@ cargo test --locked -p service-kit --test tenant_db
 ## 3. 結果
 
 完整輸出：[`outbox-tests.txt`](data/2026-10-11-271-outbox-consumer-tenancy/outbox-tests.txt)（基於 `e8f180b`）；合併 main `e21ff41` 後的重測：[`merged-main-checks.txt`](data/2026-10-11-271-outbox-consumer-tenancy/merged-main-checks.txt)，含 `cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、service-kit 無預設 feature 的 clippy、`cargo test --workspace`（64 個測試套件、482 個測試全部通過）、outbox 全部測試與 crash／delivery／tenancy 重複 3 次、`tenant_db`、`cargo deny --locked check`，全部通過。
+
+合併 main `9b13ad8` 後的完整重測：[`merged-main-9b13ad8-checks.txt`](data/2026-10-11-271-outbox-consumer-tenancy/merged-main-9b13ad8-checks.txt)。以下全部通過：
+
+- `cargo fmt --all --check`、兩種 clippy
+- `cargo test --workspace`：70 個測試套件、528 個測試，0 失敗
+- outbox 全部測試，以及 crash／delivery／tenancy 重複 3 次
+- `tenant_db` 與 `postgres_trust`：消費端與測試都在只信任設定的 CA 下連線
+- service-kit 無預設 feature 的測試（122 個）
+- `openapi --check`、`cargo deny`
+- scripts 的型別檢查與測試（513 通過、1 略過）、`bun test deploy/chart`（221）
+- workflow policy、secret handling、actionlint
 
 | 測試 | 結果 |
 | --- | --- |
