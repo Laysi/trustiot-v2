@@ -1,0 +1,11 @@
+after-tenant run 1: exit 0, 67 s, load 28.33
+after-tenant run 2: exit 0, 71 s, load 32.19
+after-tenant run 3: exit 0, 89 s, load 37.04
+after-tenant run 4: exit 0, 74 s, load 34.83
+after-tenant run 5: exit 0, 70 s, load 34.17
+after-tenant run 6: exit 0, 70 s, load 34.03
+after-tenant run 7: exit 0, 63 s, load 33.96
+after-tenant run 8: exit 0, 62 s, load 34.93
+after-tenant run 9: exit 0, 61 s, load 33.38
+after-tenant run 10: exit 0, 85 s, load 33.09
+after-tenant: 0 of 10 runs failed

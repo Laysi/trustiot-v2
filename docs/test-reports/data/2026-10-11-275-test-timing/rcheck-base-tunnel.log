@@ -1,0 +1,7 @@
+ 10 pass
+ 5 fail
+(fail) tunnel dies while a request is in flight > a failing reopen is thrown [5000.42ms]
+(fail) tunnel dies while a request is in flight > a healthy tunnel needs no recovery [5001.22ms]
+(fail) tunnel dies while a request is in flight > a tunnel that exited long before the request is reopened without waiting [113.71ms]
+(fail) tunnel dies while a request is in flight > reopens the tunnel and sends the request once more [5000.52ms]
+(fail) tunnel dies while a request is in flight > the request fails before the process has exited, the way kubectl behaves (fault injection) [5003.81ms]

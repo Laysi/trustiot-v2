@@ -1,0 +1,11 @@
+no session was checked within 2 s; trying a longer timeout
+ready after 11877 ms
+ready after 12050 ms
+ready after 15456 ms
+ready after 15601 ms
+ready after 19600 ms
+ready after 28627 ms
+ready after 37972 ms
+ready after 54714 ms
+ready after 6171 ms
+ready after 9910 ms

@@ -1,0 +1,18 @@
+(pass) saas shape > rendered manifests pass kubeconform -strict for Kubernetes 1.30.0 [1045.53ms]
+(pass) saas shape > rendered manifests pass kubeconform -strict for Kubernetes 1.36.0 [1038.47ms]
+(pass) onprem shape > rendered manifests pass kubeconform -strict for Kubernetes 1.30.0 [1019.80ms]
+(pass) onprem shape > rendered manifests pass kubeconform -strict for Kubernetes 1.36.0 [1042.55ms]
+ 4 pass
+ 0 fail
+(pass) saas shape > rendered manifests pass kubeconform -strict for Kubernetes 1.30.0 [1053.62ms]
+(pass) saas shape > rendered manifests pass kubeconform -strict for Kubernetes 1.36.0 [1047.82ms]
+(pass) onprem shape > rendered manifests pass kubeconform -strict for Kubernetes 1.30.0 [1031.14ms]
+(pass) onprem shape > rendered manifests pass kubeconform -strict for Kubernetes 1.36.0 [1062.75ms]
+ 4 pass
+ 0 fail
+(pass) saas shape > rendered manifests pass kubeconform -strict for Kubernetes 1.30.0 [1074.46ms]
+(pass) saas shape > rendered manifests pass kubeconform -strict for Kubernetes 1.36.0 [1069.33ms]
+(pass) onprem shape > rendered manifests pass kubeconform -strict for Kubernetes 1.30.0 [1072.25ms]
+(pass) onprem shape > rendered manifests pass kubeconform -strict for Kubernetes 1.36.0 [1072.18ms]
+ 4 pass
+ 0 fail

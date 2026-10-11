@@ -1,0 +1,4 @@
+after-kit run 1: exit 0, 158 s, load 33.22
+after-kit run 2: exit 0, 141 s, load 32.46
+after-kit run 3: exit 0, 131 s, load 31.51
+after-kit: 0 of 3 runs failed

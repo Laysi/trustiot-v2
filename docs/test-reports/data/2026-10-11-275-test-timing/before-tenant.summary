@@ -1,0 +1,11 @@
+before-tenant run 1: exit 0, 165 s, load 28.88
+before-tenant run 2: exit 0, 64 s, load 29.95
+before-tenant run 3: exit 101, 80 s, load 30.73
+before-tenant run 4: exit 101, 70 s, load 30.28
+before-tenant run 5: exit 0, 68 s, load 29.96
+before-tenant run 6: exit 0, 71 s, load 30.54
+before-tenant run 7: exit 0, 62 s, load 29.58
+before-tenant run 8: exit 0, 62 s, load 28.89
+before-tenant run 9: exit 0, 68 s, load 28.61
+before-tenant run 10: exit 101, 67 s, load 30.62
+before-tenant: 3 of 10 runs failed
