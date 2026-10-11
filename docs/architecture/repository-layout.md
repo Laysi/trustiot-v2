@@ -20,7 +20,8 @@ trustiot-v2/
 │   ├── service-kit/           # 服務共用骨架：設定、health、SIGTERM、tracing、驗內部身分、SET LOCAL 租戶
 │   ├── outbox/                # 事件框架：同交易寫入、冪等消費、重播
 │   ├── openai-client/         # 薄的 OpenAI 相容 client（決策 15）
-│   └── testkit/               # 測試用 Modbus 端點與故障注入（M7）、跨租戶負向測試
+│   ├── testkit/               # 測試用 Modbus 端點與故障注入（M7）、跨租戶負向測試
+│   └── webpki-roots-empty/    # 取代 crates.io 的 webpki-roots（空清單），Postgres 只信任設定的 CA
 ├── services/
 │   ├── identity/              # 身分與租戶（含 ext_authz 端點）
 │   ├── assets/                # 資產
