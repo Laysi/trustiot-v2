@@ -1,0 +1,32 @@
+### 其他
+
+- **測試**：本機端到端測試。
+
+## 發佈內容
+
+映像只有 linux/arm64；chart 的 `appVersion` 與映像的 tag 都是 `0.0.0-rc.1`，來源 commit 為 `ee8c4388772d2dce6c8e93f2b7cd60ec298c803a`。部署時以 digest 為準。
+
+| 產物 | 參照 | digest |
+| --- | --- | --- |
+| 映像 `release-selftest` | `127.0.0.1:5068/laysi/trustiot-v2/release-selftest:0.0.0-rc.1` | `sha256:182467660b124c93204d556d04aec5ec87dfcd274dd27bfdf85ee2d2248ac2ea` |
+| Helm chart `trustiot` | `oci://127.0.0.1:5068/laysi/trustiot-v2/charts/trustiot` 版本 `0.0.0-rc.1` | `sha256:802286856c7fc42ae924ed6293e107c847f75b3a20a77a7a7351a146ebf9c481` |
+
+每個映像的 SBOM（SPDX JSON）附在本頁的 assets，也以簽章過的 attestation 存在 registry。
+
+## 驗證
+
+以 GitHub OIDC 的 keyless cosign 簽章，簽章身分是這個 tag 上的 release workflow。套件是私有的，先以有讀取權限的帳號 `cosign login ghcr.io`：
+
+```sh
+cosign verify 127.0.0.1:5068/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 \
+  --certificate-identity 'https://github.com/Laysi/trustiot-v2/.github/workflows/release.yml@refs/tags/v0.0.0-rc.1' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify 127.0.0.1:5068/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1 \
+  --certificate-identity 'https://github.com/Laysi/trustiot-v2/.github/workflows/release.yml@refs/tags/v0.0.0-rc.1' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+# SBOM：驗證 attestation 後取出 predicate
+cosign verify-attestation --type spdxjson 127.0.0.1:5068/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 \
+  --certificate-identity 'https://github.com/Laysi/trustiot-v2/.github/workflows/release.yml@refs/tags/v0.0.0-rc.1' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  | jq -r .payload | base64 -d | jq .predicate
+```

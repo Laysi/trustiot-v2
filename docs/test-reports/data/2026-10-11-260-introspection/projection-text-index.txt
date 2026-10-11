@@ -1,0 +1,14 @@
+[admin] SHOW CREATE TABLE scratch260.t
+  -> HTTP 200: CREATE TABLE scratch260.t\n(\n    `k` UInt32,\n    `s` String,\n    PROJECTION p\n    (\n        SELECT\n            k,\n            s\n        ORDER BY s\n    )\n)\nENGINE = MergeTree\nORDER BY k\nSE
+[admin] SHOW CREATE TABLE scratch260.tt
+  -> HTTP 200: CREATE TABLE scratch260.tt\n(\n    `k` UInt32,\n    `s` String,\n    INDEX ti s TYPE text(tokenizer = \'splitByNonAlpha\') GRANULARITY 100000000\n)\nENGINE = MergeTree\nORDER BY k\nSETTINGS index_gran
+[admin] SHOW CREATE ROW POLICY small ON scratch260.t
+  -> HTTP 200: CREATE ROW POLICY small ON scratch260.t FOR SELECT USING k < 3 TO s260
+[s260] SELECT count() FROM scratch260.t
+  -> HTTP 200: 3
+[s260] SELECT count() FROM mergeTreeProjection('scratch260', 't', 'p')
+  -> HTTP 200: 3
+[s260] SELECT * FROM mergeTreeTextIndex('scratch260', 'tt', 'ti') LIMIT 3
+  -> HTTP 403: ACCESS_DENIED: Code: 497. DB::Exception: Cannot read from `mergeTreeTextIndex` because a row policy is applied on table scratch260.tt (0f2903bb-0170-4331-8f67-677b8a1c6a30). The text index covers all rows of the table, so reading its tokens would violate the row policy. (ACC
+[ta7] SELECT * FROM mergeTreeProjection('scratch260', 't', 'p') LIMIT 3
+  -> HTTP 403: ACCESS_DENIED: Code: 497. DB::Exception: ta7: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON scratch260.t. (ACCESS_DENIED) (version 26.8.22.13 (official build))

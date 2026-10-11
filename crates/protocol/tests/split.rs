@@ -341,6 +341,7 @@ fn a_refused_reading_leaves_the_builder_unchanged() {
                 len: MAX_TEXT_BYTES + 1,
             },
         ),
+        (Value::Text("a\0b".to_owned()), ValueError::NulInText),
     ] {
         // Also with a clock change, which would otherwise close the open batch.
         for clock in [true, false] {

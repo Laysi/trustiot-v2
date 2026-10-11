@@ -72,7 +72,7 @@ async fn start(context: Context<Config>) -> Result<Router, BoxError> {
 - 每個設定鍵有點分隔的路徑，例如 `http.listen_addr`。用環境變數 `TRUSTIOT__HTTP__LISTEN_ADDR` 設定（前綴之後每段轉大寫，以 `__` 連接），或寫在 `TRUSTIOT_CONFIG_FILE` 指定的 TOML 檔；兩者都有時以環境變數為準。值為空字串的變數視同未設定。
 - 頂層的 `http`、`shutdown`、`telemetry` 屬於 kit（`config::KIT_SECTIONS`），其他頂層鍵交給服務自己的設定型別。設定型別加上 `#[serde(deny_unknown_fields)]`，拼錯的鍵才會在啟動時被擋下；沒有自己設定的服務用 `config::NoConfig`。
 - 環境變數的值都是字串，kit 依欄位型別轉成數字或布林；清單用逗號分隔，例如 `TRUSTIOT__CORS__ORIGINS=https://a.example,https://b.example`。元素本身含逗號的清單寫在設定檔。
-- 時間長度欄位加 `#[serde(deserialize_with = "service_kit::config::duration")]`，值寫成 `5s`、`500ms`、`1m 30s`。
+- 時間長度欄位加 `#[serde(deserialize_with = "service_kit::config::duration")]`，值寫成 `5s`、`500ms`、`1m 30s`。`duration` 不設上限（humantime 接受 `500000000000y` 這類值）：服務自己的時間欄位要在 `Validate` 設合理上限，免得 `Instant + Duration` 溢位 panic。
 - 缺少必要的鍵、型別錯誤、未知的鍵，以及 `Validate::validate` 回傳的 `Invalid`，都會讓服務在接流量之前以 exit code 1 停止。錯誤訊息只寫鍵、環境變數名稱與來源，不寫設定值；服務自己的 `Invalid` 訊息也不能含設定值。
 - 不帶產品名稱前綴的服務（AI 閘道，[決策 28](../../docs/architecture/decisions.md)）用 `ServiceInfo::with_env_prefix` 換掉 `TRUSTIOT`；平台設定的前綴也跟著換，部署時要對應。
 - 不要用 `Debug` 印出整個設定：連線字串等設定可能含密碼。
@@ -105,11 +105,13 @@ kit 的設定與預設值（環境變數以 `TRUSTIOT` 前綴為例）：
 | 鍵 | 環境變數 | 預設 | 說明 |
 | --- | --- | --- | --- |
 | `http.listen_addr` | `TRUSTIOT__HTTP__LISTEN_ADDR` | `0.0.0.0:8080` | 監聽位址；health 端點也在這個埠 |
-| `http.request_timeout` | `TRUSTIOT__HTTP__REQUEST_TIMEOUT` | `30s` | handler 產生回應標頭的時間上限，逾時回 504；串流的 body 不受限。用 504 而不是 503，是因為入口會重試 503，非冪等的請求可能被執行兩次 |
-| `shutdown.drain_delay` | `TRUSTIOT__SHUTDOWN__DRAIN_DELAY` | `5s` | 收到 SIGTERM 後照常服務多久，等入口、ztunnel 與 kube-proxy 不再送來新請求 |
-| `shutdown.drain_timeout` | `TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT` | `20s` | 停止接受連線後，進行中的請求與背景工作結束的時間上限；必須大於 0 |
-| `telemetry.log_filter` | `TRUSTIOT__TELEMETRY__LOG_FILTER` | `info` | 預設等級加上以逗號分隔的 `target=level`，例如 `info,sqlx=warn` |
+| `http.request_timeout` | `TRUSTIOT__HTTP__REQUEST_TIMEOUT` | `30s` | handler 產生回應標頭的時間上限，逾時回 504；串流的 body 不受限。用 504 而不是 503，是因為入口會重試 503，非冪等的請求可能被執行兩次；必須大於 0，上限 1 小時 |
+| `shutdown.drain_delay` | `TRUSTIOT__SHUTDOWN__DRAIN_DELAY` | `5s` | 收到 SIGTERM 後照常服務多久，等入口、ztunnel 與 kube-proxy 不再送來新請求；上限 1 小時 |
+| `shutdown.drain_timeout` | `TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT` | `20s` | 停止接受連線後，進行中的請求與背景工作結束的時間上限；必須大於 0，上限 1 小時 |
+| `telemetry.log_filter` | `TRUSTIOT__TELEMETRY__LOG_FILTER` | `info` | 預設等級加上以逗號分隔的 `target=level`，例如 `info,sqlx=warn`；OpenTelemetry SDK 的診斷日誌（target 以 `opentelemetry` 開頭）不論怎麼設，DEBUG 與 TRACE 都不輸出，見[日誌與 trace](#日誌與-trace)的 OTLP 匯出一節 |
 | `telemetry.otlp_endpoint` | `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` | 未設定（不匯出） | OTLP/HTTP 接收端的 base URL（日誌、trace、指標都送到這裡），例如 `http://otel-collector:4318`；只接受 `http://`（mesh 已加密這一段），不得含帳密或 query |
+
+時間長度的上限（`service_kit::http::MAX_REQUEST_TIMEOUT`、`service_kit::shutdown::MAX_DRAIN`）：`http.request_timeout`、`shutdown.drain_delay`、`shutdown.drain_timeout` 各自不得超過 1 小時（剛好 1 小時可以），而且 `drain_delay + drain_timeout` 合計也不得超過 1 小時。超過就在啟動時以設定錯誤拒絕（錯誤訊息寫出設定名稱與環境變數，不寫設定值）。沒有上限時，極端值（例如 `500000000000y`）會讓 SIGTERM 後的時間運算溢位而 panic（`drain_timeout`），或讓服務永遠不退出（`drain_delay`）。
 
 ## Health 與 readiness
 
@@ -164,7 +166,8 @@ OTLP 匯出：
 - 設定 `telemetry.otlp_endpoint` 後，日誌送到 `<url>/v1/logs`、trace 送到 `<url>/v1/traces`（OTLP/HTTP protobuf，批次送出），指標送到 `<url>/v1/metrics`（每 `OTEL_METRIC_EXPORT_INTERVAL` 毫秒一次，預設 60 秒），resource 帶 `service.name` 與 `service.version`。預設關閉；只設 `OTEL_EXPORTER_OTLP_ENDPOINT` 不會開啟匯出，端點以 kit 的設定為準。
 - 指標：開啟匯出時 kit 設定全域的 meter provider，服務與共用 crate 以 `opentelemetry::global::meter` 建立儀表（例如 `crates/outbox` 的 lag）。在 `Telemetry::init` 之前建立的儀表不會匯出，所以在 `start` 裡或之後建立；關閉匯出時儀表不做任何事。收尾時送出最後一次讀數。
 - 其他 OpenTelemetry SDK 的標準環境變數仍然有效，例如取樣的 `OTEL_TRACES_SAMPLER` 與批次的 `OTEL_BSP_*`；在 chart 上 `OTEL_*` 只由 chart 設定。
-- SDK 自己的診斷日誌（target 以 `opentelemetry` 開頭）只寫 stdout，不匯出，避免匯出失敗時自我循環。
+- SDK 自己的診斷日誌（target 以 `opentelemetry` 開頭：`opentelemetry`、`opentelemetry_sdk`、`opentelemetry-otlp`、`opentelemetry-http`）只寫 stdout，不匯出，避免匯出失敗時自我循環。
+- 端點的路徑可能帶 token，所以 SDK 的診斷日誌**只輸出 INFO、WARN、ERROR**，`telemetry.log_filter` 設成 `debug` 或 `trace`、或寫 `opentelemetry-otlp=trace` 這類針對 SDK 的指令，都不會讓它輸出更多：SDK 在 DEBUG 以下，每次匯出失敗都會記錄完整 URL（含路徑），還有 collector 回應的 body。啟動日誌也只記「匯出是否開啟」，不記端點。核對過鎖定版本（`Cargo.lock` 的 0.33.1）的 INFO 以上診斷，沒有 URL；升級 SDK 後，`cargo test -p service-kit --test otlp` 的 canary 測試會檢查這件事。其他 target（例如 `reqwest`、`hyper_util`）在 `debug` 與 `trace` 下只記主機與連接埠，不含路徑，同一組測試也涵蓋。端點的 query 與帳密本來就會被設定驗證拒絕，錯誤訊息不含原值。仍然不要把 token 放在端點路徑，token 應由 mesh 或 collector 端處理。
 
 ## 排程工作（`job_lock`）
 
@@ -185,7 +188,13 @@ context.spawn(lock.run_periodically(
 ));
 ```
 
-- `run_periodically` 每個週期試一次，直到 `Shutdown::stopping`；失敗記 WARN。`run_exclusive(job)` 只試一次，拿不到鎖回 `Ok(None)`；`try_acquire()` 取得 `JobLockGuard`，自行 `release()`。
+- `run_periodically` 每個週期試一次，直到 `Shutdown::stopping`；失敗記 WARN，panic 記 ERROR（見下）。`run_exclusive(job)` 只試一次，拿不到鎖回 `Ok(None)`；`try_acquire()` 取得 `JobLockGuard`，自行 `release()`。
+- 工作 panic 時，`run_periodically` 不結束排程：panic 被攔下，記一行 ERROR `scheduled job panicked; it runs again next period`（只有工作名稱，不含 panic 訊息），鎖照一般流程明確釋放，下一個週期照常再跑。這一行 ERROR 是告警的依據。panic hook 另外記的那行 `thread panicked` 仍含位置與 panic 訊息，所以 panic 訊息不能放資料（見[日誌與 trace](#日誌與-trace)）。工作的 closure 在 panic 後會被再次呼叫，它共用的狀態（例如被 poison 的 `Mutex`）要自己處理。`panic = "abort"` 的建置不受影響，行程仍會結束。
+- 為什麼選「排程繼續」而不是「readiness 失敗或結束行程」：
+  1. 每個副本都排同一個工作，工作的 panic 多半來自資料或邏輯，所有副本會一起 panic。readiness 失敗會讓整個服務退出 Service 的 endpoints，退出行程會讓所有 pod 進入 CrashLoopBackOff；一個背景工作的缺陷就變成整個服務的 API 中斷。
+  2. 重啟不會修好資料造成的 panic，只會換來更長的重試間隔與重啟風暴；排程繼續則維持原本的週期重試，資料修好後自動恢復。
+  3. 工作必須冪等（規則 1），重跑同一輪是安全的；panic 前持有的鎖已釋放，別的副本也可以接手。
+  4. 原本「默默停止」的問題來自沒有訊號。現在每次 panic 都有一行 ERROR，可以用日誌告警。
 - 鎖跟著資料庫 session：副本當機或斷線時 session 結束，鎖跟著釋放。工作執行期間每 5 秒 ping 一次 session（`with_heartbeat` 可調）；session 斷掉時工作在下一個 await 被取消並回 `JobLockError::Lost`，因為別的副本可能已經接手。guard 被 drop（panic、取消）時關閉連線，鎖也一併釋放。
 
 規則：
@@ -478,9 +487,9 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 | `cargo test -p service-kit --test lifecycle` | 範例服務的啟動、health、SIGTERM 與 SIGINT 收尾、設定錯誤，用真的行程、訊號與 HTTP | 無 |
 | `cargo test -p service-kit --test errors` | handler 逾時回 504、panic 回 500 並記成 JSON 日誌 | 無 |
 | `cargo test -p service-kit --test logging` | JSON 日誌、trace id；body、標頭、query 與路徑不進日誌 | 無 |
-| `cargo test -p service-kit --test otlp` | OTLP 匯出到假的接收端：預設關閉、帶 trace id、指標送出、不含 body | 無 |
+| `cargo test -p service-kit --test otlp` | OTLP 匯出到假的接收端：預設關閉、帶 trace id、指標送出、不含 body；collector 連線被重設或回 400 時，`debug`、`trace` 與針對 SDK 的指令下，端點路徑、SDK 環境變數與 collector 回應的 canary 都不出現在 stdout 與 stderr；帶 query 的端點被拒絕且不印出 | 無 |
 | `cargo test -p service-kit --test container` | 範例服務在容器內以 PID 1 執行（唯讀根目錄、任意 UID），`stop` 時收尾並以 0 結束 | podman 或 docker，會拉 `gcr.io/distroless/cc-debian13` |
-| `cargo test -p service-kit --test job_lock` | 兩個副本互斥、session 中斷、guard 釋放、連線回到 pool | `TEST_DATABASE_URL`，或 podman 或 docker（會拉 `postgres:18.6-alpine`） |
+| `cargo test -p service-kit --test job_lock` | 兩個副本互斥、session 中斷、guard 釋放、連線回到 pool、工作 panic 後排程繼續且日誌不含 panic 訊息 | `TEST_DATABASE_URL`，或 podman 或 docker（會拉 `postgres:18.6-alpine`） |
 | `cargo test -p service-kit --test tenant_db` | 租戶隔離：沒設定租戶查不到也寫不進任何列；租戶 A 讀不到、改不到、寫不進租戶 B 的列；pool 重用連線時租戶不會帶到下一個交易；服務角色不是擁有者、沒有 BYPASSRLS、關不掉 RLS；不安全的連線被拒；平台角色只看得到開放的表；outbox 範本（租戶事件、全平台事件、消費端讀取）；伺服器憑證與主機名稱驗證；範例服務在 `sslmode` 不是 `verify-full` 時拒絕啟動，`/v1/items` 只回 token 租戶的資料 | podman 或 docker（會拉 `postgres:18.6-alpine`，以測試時產生的 CA 啟用 TLS）；不使用 `TEST_DATABASE_URL`，因為測試要以 superuser 建角色，並需要知道伺服器的 CA |
 | `cargo test -p sql-check` | 由字串組成的 SQL 與 kit 以外的租戶設定（`tools/sql-check`） | 無 |
 | `cargo test -p service-kit --test dependency_isolation` | 關閉 feature 時不依賴 contract，開啟時依賴 | 無 |

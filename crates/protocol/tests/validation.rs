@@ -262,6 +262,26 @@ fn devices_follow_the_connection_rules() {
             IssueCode::MixedTransport,
             "devices[2].transport",
         ),
+        (
+            // An IPv4-mapped IPv6 literal is the same endpoint as its IPv4 form
+            // (Laysi/trustiot-v2#269), whichever comes first and in any case.
+            Box::new(|c| {
+                c.devices[1].host = Host::new("192.168.10.30").unwrap();
+                c.devices[2].host = Host::new("::FFFF:192.168.10.30").unwrap();
+                c.devices[2].transport = Transport::ModbusTcp;
+            }),
+            IssueCode::MixedTransport,
+            "devices[2].transport",
+        ),
+        (
+            Box::new(|c| {
+                c.devices[1].host = Host::new("::ffff:c0a8:a1e").unwrap();
+                c.devices[2].host = Host::new("192.168.10.30").unwrap();
+                c.devices[2].transport = Transport::ModbusTcp;
+            }),
+            IssueCode::MixedTransport,
+            "devices[2].transport",
+        ),
     ];
     for (change, code, path) in cases {
         has(&config_issues(change), code, path);
@@ -397,6 +417,65 @@ fn hosts_are_unicast_addresses_or_dns_names() {
     ] {
         assert!(Host::new(host).is_err(), "{host:?}");
     }
+}
+
+/// An IPv4-mapped IPv6 literal (`::ffff:a.b.c.d`) is the IPv4 address it maps: the same
+/// acceptance and the same canonical form, so neither rule can be bypassed by spelling
+/// (Laysi/trustiot-v2#269, finding F4 of the #50 verification).
+#[test]
+fn ipv4_mapped_hosts_follow_the_ipv4_rules() {
+    for ipv4 in [
+        "192.168.10.30",
+        "10.0.0.1",
+        "127.0.0.1",
+        "1.2.3.4",
+        "0.0.0.0",
+        "224.0.0.1",
+        "239.255.255.255",
+        "255.255.255.255",
+        "192.168.1.255",
+    ] {
+        let octets: Vec<u8> = ipv4
+            .split('.')
+            .map(|octet| octet.parse().unwrap())
+            .collect();
+        let hex = format!(
+            "::ffff:{:x}:{:x}",
+            u16::from_be_bytes([octets[0], octets[1]]),
+            u16::from_be_bytes([octets[2], octets[3]])
+        );
+        let plain = Host::new(ipv4);
+        for mapped in [
+            format!("::ffff:{ipv4}"),
+            format!("::FFFF:{ipv4}"),
+            format!("0:0:0:0:0:ffff:{ipv4}"),
+            hex,
+        ] {
+            let host = Host::new(mapped.as_str());
+            assert_eq!(host.is_ok(), plain.is_ok(), "{mapped:?} vs {ipv4:?}");
+            if let (Ok(host), Ok(plain)) = (host, &plain) {
+                assert_eq!(host.canonical(), plain.canonical(), "{mapped:?}");
+                assert_eq!(host.canonical(), ipv4);
+                // As written: the wire keeps the sender's spelling.
+                assert_eq!(host.as_str(), mapped);
+            }
+        }
+    }
+    // The cases of the report, refused like their IPv4 forms.
+    for host in [
+        "::ffff:0.0.0.0",
+        "::ffff:224.0.0.1",
+        "::ffff:255.255.255.255",
+    ] {
+        assert!(Host::new(host).is_err(), "{host:?}");
+    }
+    // Other IPv6 addresses keep their own form; DNS names compare in lowercase.
+    assert_eq!(
+        Host::new("2001:DB8::10").unwrap().canonical(),
+        "2001:db8::10"
+    );
+    assert_eq!(Host::new("::1").unwrap().canonical(), "::1");
+    assert_eq!(Host::new("PLC-1.Local").unwrap().canonical(), "plc-1.local");
     assert!(FunctionCode::try_from(0).is_err());
     assert!(FunctionCode::try_from(5).is_err());
     for number in 1..=4 {

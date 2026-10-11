@@ -1,0 +1,14 @@
+spdxVersion SPDX-2.3, 13 packages
+- base-files 13.8+deb13u7
+- ca-certificates 20250419
+- itoa 1.0.18
+- media-types 13.0.0
+- memchr 2.8.3
+- netbase 6.5
+- release-selftest 0.1.0
+- serde_core 1.0.229
+- serde_json 1.0.151
+- tzdata 2026c-0+deb13u1
+- tzdata-legacy 2026c-0+deb13u1
+- zmij 1.0.23
+- 127.0.0.1:5068/laysi/trustiot-v2/release-selftest 0.0.0-rc.1

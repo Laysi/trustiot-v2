@@ -1,0 +1,4 @@
+{"type":"message","message":"Detected an AI agent environment, printing as NDJSON. Trace logs are written to stderr, while user-facing logs are written to stdout."}
+probe right after freePort(): {"refused (ECONNREFUSED)":20}
+probe 20 ms after freePort(): {"refused (ECONNREFUSED)":20}
+Linux 7.2.8-300.fc45.x86_64 x86_64

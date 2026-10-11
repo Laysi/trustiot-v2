@@ -1,0 +1,233 @@
+# Release: a tag vX.Y.Z or vX.Y.Z-rc.N publishes every image declared under deploy/images/ as a
+# linux/arm64 image, and the Helm chart, to GHCR; signs them keyless with cosign, attests an SPDX
+# SBOM for each image and creates the GitHub Release. Policy, verification commands and the
+# procedure when a run fails: docs/architecture/ci-release.md, section release.yml.
+#
+# Jobs and what each may do (every job lists its own `permissions`):
+# - plan     contents: read, actions: read. Checks the tag (a final release must be on main,
+#            with a green ci run for that commit there), lists what the release publishes,
+#            lints the chart and writes the release notes.
+# - build    contents: read. Cross-compiles and builds the images. It runs third-party build
+#            code (Cargo build scripts and proc macros), so it gets no secret and no write
+#            access, and hands over only data: image archives and SBOMs as an artifact.
+# - publish  environment `release`; contents, packages: write; id-token: write. Pushes the
+#            images byte for byte, signs and attests them, pushes and signs the chart, creates
+#            the GitHub Release. Runs no build code.
+# - verify   contents: read, packages: read. Checks the published release as a consumer would.
+# - report   contents: write, statuses: write. Posts the `release` commit status on the tagged
+#            commit (also when an earlier job failed) and appends the verification report to the
+#            GitHub Release.
+name: release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"
+
+# No token scopes by default; each job asks for what it needs.
+permissions: {}
+
+concurrency:
+  # One run per tag at a time; a second push of the same tag waits instead of cancelling a
+  # publish half-way.
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read # a final release needs a green ci run of the tagged commit on main
+      contents: read
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      notes: ${{ steps.notes-text.outputs.notes }}
+      error: ${{ steps.plan.outputs.error }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # All tags and origin/main: a final release must be on main, and the notes start
+          # from the previous release tag.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-proto
+        with:
+          tools: bun helm
+      - id: plan
+        env:
+          # Read-only: lists the ci runs on main for a final release (scripts/release/plan.ts).
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun scripts/release/plan.ts --tag "$GITHUB_REF_NAME"
+      # The model is optional: without the AI_MODEL variable (or when the call fails) the notes
+      # are the commit subjects since the previous release.
+      - id: notes
+        uses: Laysi/release-notes-action@ad6ed96c1975be6724225d3c18132e08ad474070 # v1.3.0
+        with:
+          tag: ${{ github.ref_name }}
+          previous-tag: ${{ steps.plan.outputs.previous-tag }}
+          tag-pattern: "v[0-9]*"
+          context: TrustIoT v2 是 IoT 平台（雲端服務與現場閘道器），以 arm64 容器映像與 Helm chart 發佈，SaaS 與地端安裝共用同一份 chart。讀者是部署與維運 TrustIoT 的工程師。
+          base-url: ${{ vars.AI_BASE_URL }}
+          model: ${{ vars.AI_MODEL }}
+          api-key: ${{ secrets.AI_API_KEY }}
+      - id: notes-text
+        env:
+          NOTES_FILE: ${{ steps.notes.outputs.file }}
+        run: |
+          delimiter="EOF_$(openssl rand -hex 16)"
+          { echo "notes<<$delimiter"; cat "$NOTES_FILE"; echo "$delimiter"; } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      error: ${{ steps.build.outputs.error }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Rust itself comes from the runner's rustup: build.ts installs the toolchain pinned in
+      # rust-toolchain.toml and the aarch64-unknown-linux-musl target. podman and skopeo come
+      # with the runner image.
+      - uses: ./.github/actions/setup-proto
+        with:
+          tools: bun zig cargo-zigbuild cargo-auditable syft
+      - id: build
+        env:
+          PLAN: ${{ needs.plan.outputs.plan }}
+          CARGO_TERM_COLOR: always
+        run: |
+          printf '%s' "$PLAN" > "$RUNNER_TEMP/plan.json"
+          podman --version
+          skopeo --version
+          bun scripts/release/build.ts --plan "$RUNNER_TEMP/plan.json" --out "$RUNNER_TEMP/release"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-build
+          path: ${{ runner.temp }}/release
+          if-no-files-found: error
+          # Only publish reads it, in the same run; the layers are compressed already.
+          retention-days: 1
+          compression-level: 0
+
+  publish:
+    name: publish
+    needs: [plan, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Required reviewers and tag rules for this environment need a plan that offers them for
+    # private repositories. Until then nothing here gates a release: accepted on 2026-10-10 with
+    # compensating controls (decision 30, docs/architecture/ci-release.md).
+    environment:
+      name: release
+      url: ${{ steps.publish.outputs.release-url }}
+    permissions:
+      contents: write # create the GitHub Release and upload the SBOMs to it
+      id-token: write # keyless cosign: the signing certificate is issued for this job's OIDC token
+      packages: write # push the images and the chart to GHCR
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+      error: ${{ steps.publish.outputs.error }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-proto
+        with:
+          tools: bun cosign helm
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-build
+          path: ${{ runner.temp }}/release
+      - id: publish
+        env:
+          PLAN: ${{ needs.plan.outputs.plan }}
+          NOTES: ${{ needs.plan.outputs.notes }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$PLAN" > "$RUNNER_TEMP/plan.json"
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          bun scripts/release/publish.ts --plan "$RUNNER_TEMP/plan.json" \
+            --artifacts "$RUNNER_TEMP/release" --notes "$RUNNER_TEMP/notes.md"
+
+  verify:
+    name: verify
+    needs: [plan, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      report: ${{ steps.verify.outputs.report }}
+      error: ${{ steps.verify.outputs.error }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-proto
+        with:
+          tools: bun cosign helm
+      - id: verify
+        env:
+          PLAN: ${{ needs.plan.outputs.plan }}
+          PUBLISHED: ${{ needs.publish.outputs.published }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$PLAN" > "$RUNNER_TEMP/plan.json"
+          printf '%s' "$PUBLISHED" > "$RUNNER_TEMP/published.json"
+          bun scripts/release/verify.ts --plan "$RUNNER_TEMP/plan.json" --published "$RUNNER_TEMP/published.json"
+
+  report:
+    name: report
+    needs: [plan, build, publish, verify]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write # append the verification report to the GitHub Release
+      statuses: write # the `release` commit status on the tagged commit
+    steps:
+      - name: Post the result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NEEDS: ${{ toJSON(needs) }}
+          REPORT: ${{ needs.verify.outputs.report }}
+        run: |
+          # The first job that did not succeed decides the status; its `error` output (set by
+          # scripts/release/exec.ts runStage) says why.
+          state=success
+          description="$GITHUB_REF_NAME published and verified"
+          for job in plan build publish verify; do
+            result="$(jq -r --arg job "$job" '.[$job].result' <<< "$NEEDS")"
+            if [[ "$result" != success ]]; then
+              error="$(jq -r --arg job "$job" '.[$job].outputs.error // ""' <<< "$NEEDS")"
+              state=failure
+              description="$job ${result/failure/failed}${error:+: $error}"
+              break
+            fi
+          done
+          # GitHub accepts at most 140 characters.
+          description="${description:0:140}"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state="$state" -f context=release -f description="$description" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > /dev/null
+          echo "release status: $state, $description"
+
+          if [[ -n "$REPORT" ]]; then
+            body="$(gh release view "$GITHUB_REF_NAME" --json body --jq .body)"
+            # Drop the report of an earlier run of this release; $( ) drops trailing newlines.
+            body="$(printf '%s' "${body%%$'\n## 驗證結果'*}")"
+            printf '%s\n\n%s\n' "$body" "$REPORT" > "$RUNNER_TEMP/release-body.md"
+            gh release edit "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/release-body.md" > /dev/null
+            echo "verification report appended to the GitHub Release"
+          fi
+          [[ "$state" == success ]]

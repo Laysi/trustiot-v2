@@ -59,6 +59,7 @@ pub enum LiveAction {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LiveSpec {
     /// The devices, 1 to [`MAX_LIVE_DEVICES`], each once.
+    #[serde(deserialize_with = "codec::seq")]
     pub devices: Vec<DeviceId>,
     /// The sampling interval: the tenant plan's shortest sampling interval (rebuild checklist
     /// I3), within [`MIN_LIVE_INTERVAL_MS`]..=[`MAX_LIVE_INTERVAL_MS`].
@@ -147,6 +148,7 @@ pub struct LiveSamples {
     /// Wire format major version.
     pub v: V1,
     /// The samples, grouped like telemetry.
+    #[serde(deserialize_with = "codec::seq")]
     pub series: Vec<Series>,
 }
 

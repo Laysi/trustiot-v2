@@ -1,0 +1,22 @@
+== 1. a rebuilt image with other content cannot take an existing version tag
+  [release:build] 127.0.0.1:5068/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 → sha256:c6497b6b701c4d727e0691c012b207e46287cb34e3c8e8911911832906534dc9, SBOM SPDX-2.3 with 13 packages
+PASS immutable-image: exit 1, [release:publish] 127.0.0.1:5068/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 already exists with sha256:182467660b124c93204d556d04aec5ec87dfcd274dd27bfdf85ee2d2248ac2ea, not sha256:c6497b6b701c4d727e0691c012b207e46287cb34e3c8e8911911832906534dc9: published versions are immutable, so tag a new version
+== 2. verify fails when the tag no longer points at the published digest
+PASS moved-tag: exit 1, [release:verify] 127.0.0.1:5068/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 points at sha256:d3a97075ffa6cd4219477b690733b8ac8b64641fc9228062179ab90f9a035ee5, but sha256:182467660b124c93204d556d04aec5ec87dfcd274dd27bfdf85ee2d2248ac2ea was published
+== 3. verify fails for an image signed by another key
+sha256:182467660b124c93204d556d04aec5ec87dfcd274dd27bfdf85ee2d2248ac2ea
+PASS wrong-key: exit 1, error during command execution: no matching attestations: failed to verify signature: could not verify envelope: accepted signatures do not match threshold, Found: 0, Expected 1
+== 4. local test switches are refused inside GitHub Actions
+PASS local-key-in-actions: exit 1, [release:verify] --local-test-key is for local tests only; releases are signed keyless
+PASS registry-in-actions: exit 1, [release:plan] --registry is only for local dry runs; releases publish to ghcr.io/laysi/trustiot-v2
+PASS keyless-outside-actions: exit 1, [release:verify] keyless signing needs the OIDC token of a GitHub Actions job; to test locally pass --local-test-key <prefix> with a cosign key pair and a local registry
+== 5. inside GitHub Actions, a plan for another registry is refused before anything is pushed
+PASS registry-guard: exit 1, [release:publish] releases publish only to ghcr.io/laysi/trustiot-v2, but the plan names 127.0.0.1:5068/laysi/trustiot-v2/release-selftest, 127.0.0.1:5068/laysi/trustiot-v2/charts/trustiot
+== 5b. local test mode refuses a plan for GHCR, so a test never takes a release's tags
+PASS local-mode-ghcr: exit 1, [release:publish] local tests publish only to a registry on this machine (localhost or 127.0.0.1), but the plan names ghcr.io/laysi/trustiot-v2/release-selftest, ghcr.io/laysi/trustiot-v2/charts/trustiot; plan with --dry-run --registry 127.0.0.1:<port>/laysi/trustiot-v2
+== 6. a job refuses a checkout that is not the planned commit
+PASS wrong-checkout: exit 1, [release:build] the checkout is ee8c4388772d2dce6c8e93f2b7cd60ec298c803a, but the release plan is for 0000000000000000000000000000000000000000
+== 7. verify refuses a publish result whose chart is not the planned one
+PASS other-chart: exit 1, [release:verify] the published chart 127.0.0.1:5068/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.99 is not the planned 127.0.0.1:5068/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1
+== 8. the published image verifies again after it is put back
+[release:verify] verified 1 image(s) and the chart
