@@ -64,7 +64,8 @@ webpki-roots = { path = "crates/webpki-roots-empty" }
 # sqlx trusts webpki-roots (Mozilla's public roots) in addition to the configured Postgres CA, and
 # has no option to leave them out. This empty stand-in makes the configured CA the only trust
 # anchor (crates/webpki-roots-empty, Laysi/trustiot-v2#272). Nothing else may use webpki-roots;
-# crates/service-kit/tests/postgres_trust.rs checks Cargo.lock.
+# crates/service-kit/tests/postgres_trust.rs checks Cargo.lock. Temporary: remove it once sqlx
+# accepts a custom rustls config (Laysi/trustiot-v2#304).
 [patch.crates-io]
 webpki-roots = { path = "crates/webpki-roots-empty" }
 

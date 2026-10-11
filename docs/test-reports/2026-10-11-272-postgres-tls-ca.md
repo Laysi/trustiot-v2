@@ -80,3 +80,17 @@ cargo test -p service-kit --test postgres_trust the_lock_file
 | 非設定 CA 簽發的被拒；設定 CA 簽發、主機名稱正確的被接受；主機名稱錯的被拒（真 Postgres） | 通過（容器以 Docker 執行，issue 寫的 podman 與 Docker 走同一段 `tests/support` 程式）；公開根憑證被排除由兩項守門測試證明，main 的設定下兩項都失敗 |
 | 沒有設定 CA 時 service-kit 拒絕啟動（測試） | 通過：`a_service_without_a_postgres_ca_refuses_to_start`；`PostgresConfig::ca_file` 為必填型別 |
 | `cargo deny --locked check` 通過；README 已更新；證據存到 `docs/test-reports/` | 通過 |
+
+## 補充：合併 main `b8d1afa` 後重跑（2026-10-11）
+
+使用者在 2026-10-11 接受 workspace 層級的 `webpki-roots` 替換，條件是追蹤上游；上游提供官方做法後依 Laysi/trustiot-v2#304 移除（決策 29、兩份 README 與守門測試的失敗訊息都指向它）。
+
+合併 main `b8d1afa` 之後（含 OTLP 匯出、release workflow、本機開發環境的 Postgres TLS），在 build host 以 `rcheck.sh 272` 重跑：
+
+- `cargo tree -i webpki-roots --locked -e normal,build,dev`：只有 sqlx-core（以及 service-kit 的 dev-dependency）依賴它；`rustls` 也只有 sqlx-core 使用，OTLP 匯出的 HTTP client 沒有用 TLS 根憑證。
+- `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo clippy --locked -p service-kit --no-default-features --all-targets -- -D warnings`：通過。
+- `cargo test --locked --workspace`（`CI=1`，沒有 `skipped:`；`postgres_trust` 3 項、`tenant_db` 11 項）與 `cargo test --locked -p service-kit --no-default-features`：通過。
+- `cargo deny --locked check`：`advisories ok, bans ok, licenses ok, sources ok`。
+- 突變 1（crates.io `webpki-roots`、沒有 patch）重跑：兩項守門測試照樣失敗，失敗訊息指向 Laysi/trustiot-v2#304。
+
+原始輸出：[after-merge-b8d1afa.txt](data/2026-10-11-272-postgres-tls-ca/after-merge-b8d1afa.txt)。

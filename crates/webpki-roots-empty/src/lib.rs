@@ -11,6 +11,10 @@
 //! that needs public roots would silently get none. `crates/service-kit/tests/postgres_trust.rs`
 //! checks `Cargo.lock` for that, for the patch being in use, and for sqlx loading no other root
 //! source (such as the system store through `rustls-native-certs`).
+//!
+//! This crate is a temporary workaround. Once sqlx accepts a custom rustls configuration or has
+//! a rustls feature without built-in roots, Laysi/trustiot-v2#304 switches service-kit to it and
+//! deletes this crate and the patch.
 
 #![no_std]
 

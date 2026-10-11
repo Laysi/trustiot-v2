@@ -4,6 +4,10 @@
 //! list (`crates/webpki-roots-empty`). These tests check that the replacement is the crate sqlx
 //! is built with, that sqlx loads no other trust source, and, against a real Postgres with TLS,
 //! that only the configured CA lets a connection through.
+//!
+//! The replacement is temporary: once sqlx accepts a custom rustls configuration or offers a
+//! rustls feature without built-in roots, Laysi/trustiot-v2#304 removes the patch and the
+//! lock-file guard, and keeps the real Postgres test.
 
 mod support;
 
@@ -14,6 +18,10 @@ use service_kit::postgres::{PostgresConfig, SslMode};
 use sqlx::postgres::{PgConnectOptions, PgSslMode};
 use sqlx::{Connection, PgConnection};
 use support::postgres::{SERVER_HOST, TEST_PASSWORD, TestCa, TlsPostgres, tls_postgres};
+
+/// Appended to every guard failure: where the workaround is tracked and how it goes away.
+const WORKAROUND: &str = "the empty webpki-roots patch is a temporary workaround until sqlx \
+     accepts a custom rustls config; see Laysi/trustiot-v2#304 for how to replace and remove it";
 
 /// Crates that give rustls or sqlx trust anchors besides the configured CA: the system store,
 /// the platform verifier, Mozilla's roots as certificates, or another TLS stack.
@@ -28,10 +36,11 @@ const OTHER_TRUST_SOURCES: [&str; 6] = [
 
 #[test]
 fn sqlx_is_built_with_no_public_roots() {
-    // The real crate lists about 150 roots; sqlx adds every one of them to its trust store.
+    // The real crate (1.0.9) lists 121 roots; sqlx adds every one of them to its trust store.
     assert!(
         webpki_roots::TLS_SERVER_ROOTS.is_empty(),
-        "webpki-roots is not the empty stand-in: sqlx would trust {} public roots for Postgres",
+        "webpki-roots is not the empty stand-in: sqlx would trust {} public roots for Postgres \
+         ({WORKAROUND})",
         webpki_roots::TLS_SERVER_ROOTS.len()
     );
 }
@@ -85,10 +94,16 @@ fn the_lock_file_gives_sqlx_no_trust_anchor_but_the_configured_ca() {
         .iter()
         .filter(|package| package.name == "webpki-roots")
         .collect();
-    assert_eq!(roots.len(), 1, "exactly one webpki-roots in the graph");
+    assert_eq!(
+        roots.len(),
+        1,
+        "exactly one webpki-roots in the graph; an sqlx upgrade may have left the patch \
+         unused ({WORKAROUND})"
+    );
     assert_eq!(
         roots[0].source, None,
-        "webpki-roots must be the path crate crates/webpki-roots-empty, not crates.io"
+        "webpki-roots must be the path crate crates/webpki-roots-empty, not crates.io \
+         ({WORKAROUND})"
     );
 
     let sqlx_core = packages
@@ -100,14 +115,15 @@ fn the_lock_file_gives_sqlx_no_trust_anchor_but_the_configured_ca() {
     for source in OTHER_TRUST_SOURCES {
         assert!(
             !sqlx_core.dependencies.contains(source),
-            "sqlx-core is built with {source}, which trusts more than the configured CA"
+            "sqlx-core is built with {source}, which trusts more than the configured CA \
+             ({WORKAROUND})"
         );
     }
     assert!(
         sqlx_core.dependencies.contains("rustls")
             && sqlx_core.dependencies.contains("webpki-roots"),
         "sqlx-core must be built with rustls and webpki-roots (feature tls-rustls-ring-webpki), \
-         so its trust store starts from the empty stand-in"
+         so its trust store starts from the empty stand-in ({WORKAROUND})"
     );
 
     let dependents: BTreeSet<&str> = packages
@@ -119,7 +135,8 @@ fn the_lock_file_gives_sqlx_no_trust_anchor_but_the_configured_ca() {
         dependents,
         BTreeSet::from(["service-kit", "sqlx-core"]),
         "only sqlx (and this test) may use webpki-roots: the empty stand-in would leave any \
-         other client without public roots"
+         other client without public roots; such a client should use the system store or \
+         webpki-root-certs ({WORKAROUND})"
     );
     println!("sqlx-core trust sources: webpki-roots (empty stand-in) plus the configured CA");
 }
