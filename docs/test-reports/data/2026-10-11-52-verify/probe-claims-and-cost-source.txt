@@ -1,0 +1,74 @@
+//! Throwaway probe (not committed): prints how unusual-but-signed claims and keys are treated.
+#![cfg(feature = "contract")]
+#![allow(clippy::string_slice, reason = "probe")]
+
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use contract::ServiceName;
+use ed25519_dalek::{Signer, SigningKey};
+use serde_json::{Value, json};
+use service_kit::identity::{IdentityKeys, IdentityVerifier};
+
+fn now() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+}
+fn b64(b: impl AsRef<[u8]>) -> String {
+    URL_SAFE_NO_PAD.encode(b)
+}
+
+#[test]
+fn probe() {
+    let key = SigningKey::from_bytes(&[7; 32]);
+    let jwk = json!({"kty":"OKP","crv":"Ed25519","kid":"k1","x":b64(key.verifying_key().as_bytes())});
+    let keys = IdentityKeys::from_jwks(&json!({"keys":[jwk]}).to_string()).unwrap();
+    let verifier = IdentityVerifier::new(ServiceName::Assets, keys);
+    let header = r#"{"alg":"EdDSA","typ":"internal-identity+jwt","kid":"k1"}"#;
+    let sign = |claims: &Value| {
+        let signed = format!("{}.{}", b64(header), b64(claims.to_string()));
+        format!("{signed}.{}", b64(key.sign(signed.as_bytes()).to_bytes()))
+    };
+    let t = now();
+    let base = |sub: &str| {
+        json!({"iss":"identity","sub":sub,"aud":"assets","iat":t,"exp":t+60,"tenant":null})
+    };
+    println!("== sub spellings");
+    for sub in [
+        "01928f6e-7a3c-7d4e-8f00-0123456789ab",
+        "01928F6E-7A3C-7D4E-8F00-0123456789AB",
+        "01928f6e7a3c7d4e8f000123456789ab",
+        "{01928f6e-7a3c-7d4e-8f00-0123456789ab}",
+        "urn:uuid:01928f6e-7a3c-7d4e-8f00-0123456789ab",
+        "00000000-0000-0000-0000-000000000000",
+        "ffffffff-ffff-ffff-ffff-ffffffffffff",
+        "01928f6e-7a3c-4d4e-8f00-0123456789ab",
+    ] {
+        match verifier.verify(&sign(&base(sub))) {
+            Ok(user) => println!("sub {sub} -> accepted as {}", user.user_id()),
+            Err(error) => println!("sub {sub} -> {error:?}"),
+        }
+    }
+    println!("== per-verification cost (release build)");
+    let token = sign(&base("01928f6e-7a3c-7d4e-8f00-0123456789ab"));
+    for (label, tok) in [("typical token", token.clone())] {
+        let start = Instant::now();
+        for _ in 0..2000 {
+            verifier.verify(&tok).unwrap();
+        }
+        println!("{label}: {:?} per verification (2000 runs)", start.elapsed() / 2000);
+    }
+    let (signed, _) = token.rsplit_once('.').unwrap();
+    let forged = format!("{signed}.{}", b64([1u8; 64]));
+    let start = Instant::now();
+    for _ in 0..2000 {
+        let _ = verifier.verify(&forged);
+    }
+    println!("forged signature: {:?} per verification", start.elapsed() / 2000);
+    let garbage = format!("{}.{}.{}", b64("{}"), b64("{}"), b64([0u8; 64]));
+    let start = Instant::now();
+    for _ in 0..200_000 {
+        let _ = verifier.verify(&garbage);
+    }
+    println!("malformed header: {:?} per verification", start.elapsed() / 200_000);
+}
