@@ -23,7 +23,11 @@ const EXIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// within the drain delay, and the exit has to come long before the drain timeout, so both are
 /// long compared with what a busy machine takes to schedule a test thread: a test thread that
 /// waits one second for a CPU would otherwise find the listener closed or the delay over.
-const DRAIN_DELAY: Duration = Duration::from_secs(4);
+const DRAIN_DELAY: Duration = Duration::from_secs(3);
+/// How long past the drain delay the request in flight keeps the drain open: the health port has
+/// to be checked while requests drain, so the request must still be running when the API port
+/// has closed, however late the test thread gets its turn.
+const DRAIN_OVERLAP: Duration = Duration::from_secs(5);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Retries connecting until the connection is refused, which is how a closed listener answers.
@@ -147,7 +151,9 @@ fn sigterm_fails_readiness_at_once_and_drains_requests_in_flight() {
     assert_eq!(get(address, "/readyz").expect("GET /readyz").status, 200);
     assert_eq!(get(health, "/readyz").expect("GET /readyz").status, 200);
 
-    let in_flight = thread::spawn(move || get(address, "/v1/slow?ms=2500"));
+    let slow_ms =
+        u64::try_from((DRAIN_DELAY + DRAIN_OVERLAP).as_millis()).expect("milliseconds fit u64");
+    let in_flight = thread::spawn(move || get(address, &format!("/v1/slow?ms={slow_ms}")));
     // Let the slow request reach its handler before the signal.
     thread::sleep(Duration::from_millis(300));
     let signalled = Instant::now();
@@ -198,15 +204,15 @@ fn sigterm_fails_readiness_at_once_and_drains_requests_in_flight() {
         .expect("request thread")
         .expect("the request in flight completes");
     assert_eq!(slow.status, 200);
-    assert_eq!(slow.json()["waited_ms"], 2500);
+    assert_eq!(slow.json()["waited_ms"], slow_ms);
 
     let status = service
         .wait_exit(DRAIN_DELAY + DRAIN_TIMEOUT)
         .expect("the service exits");
     let exited = signalled.elapsed();
     assert_eq!(status.code(), Some(0), "{status}");
-    // The request in flight is done long before the drain delay ends, so the service exits
-    // right after the delay; waiting for the drain timeout instead would be a hang.
+    // The service exits when the request in flight is done, long before the drain timeout;
+    // waiting for the drain timeout instead would be a hang.
     assert!(
         exited < DRAIN_TIMEOUT / 2,
         "exited {exited:?} after SIGTERM, with a drain delay of {DRAIN_DELAY:?} and a drain timeout of {DRAIN_TIMEOUT:?}"
