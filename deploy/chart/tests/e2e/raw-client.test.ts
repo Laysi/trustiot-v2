@@ -2,7 +2,10 @@
 // returns for a response, and which failures it reports as ConnectionError. No cluster needed.
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Socket } from "bun";
+import { HEAD_STALL_TIMEOUT_MS, useProcessTestTimeouts } from "../timing.ts";
 import { ConnectionError, decodeChunked, sendRaw } from "./raw-client.ts";
+
+useProcessTestTimeouts();
 
 const servers: { stop(force?: boolean): unknown }[] = [];
 afterEach(() => {
@@ -88,7 +91,9 @@ describe("sendRaw", () => {
       socket.write("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\npartial");
       socket.flush();
     });
-    const stallError = await sendRaw({ host: "127.0.0.1", port: stalled.port, tls: false }, request, 300).catch((e) => e);
+    const stallError = await sendRaw({ host: "127.0.0.1", port: stalled.port, tls: false }, request, HEAD_STALL_TIMEOUT_MS).catch(
+      (e) => e,
+    );
     expect(stallError).toBeInstanceOf(Error);
     expect(stallError).not.toBeInstanceOf(ConnectionError);
     expect(stallError.message).toContain("timeout");
