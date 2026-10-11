@@ -57,3 +57,26 @@ Work is tracked as real issues in `Laysi/trustiot-v2` on the org Project **Trust
 - **CLI fallback:** use the GitHub MCP server for every GitHub read and write. The user has authorized the skill's `gh api` fallback for two things the server can't do yet, and nothing else: native blocked-by dependencies (list, add, remove) and creating milestones.
 - **Assignment** is decided when work starts, not at creation.
 - **Closing:** if the Project's auto-close workflow is enabled, setting Status to `Done` closes the issue, so close the issue through the completion ritual instead of moving the card first.
+
+## Parallel agent work
+
+To work through a parent issue with several agents at once, one coordinating session claims the ready leaves (the skill's fan-out), gives each leaf to its own agent, verifies the results and merges them. These rules come from MS0 (2026-10-10 to 2026-10-11).
+
+- Each agent works on one leaf, in its own git worktree, on a branch from `origin/main`. Agents never merge. The coordinator verifies and merges `review:ai` PRs; `review:human` PRs wait for a person.
+- Never rebase once a PR is open, and never rebase when the rebase has a conflict: a rebase does not run `.githooks/pre-commit`, so the conflict resolution is never reviewed. Merge `origin/main` instead.
+- Never bypass `.githooks/pre-commit`. Keep work-in-progress checkpoints as patch files outside the repository, not as commits.
+- Before the first push, scan the branch history (`gitleaks git --redact --log-opts="origin/main..HEAD" .`) and an exported copy of the head tree (`git archive HEAD`, then `gitleaks dir`). CI also scans the PR's test-merge commit, and main gets a squash commit, so a secret-looking value still in the tree comes back under a SHA that no `.gitleaksignore` entry can name. Build fake secrets at run time.
+- Actions minutes are limited (GitHub Free, shared by the whole organization), and every push to a PR runs CI. Verify locally first, push each PR once when it is ready to merge, and never push to find out what CI says. Add the `smoke` label only when deciding to merge a PR that changes what the nightly deploys.
+- Run heavy checks (the workspace build and tests, the container-backed tests with `CI=1`, the chart tests) through one queue, one job at a time, with one shared cargo target directory. Several agents building the workspace at once exhaust memory and make time-sensitive tests fail. Never build on the lab cluster's host.
+- Outside CI, Kubernetes e2e runs only on the shared lab cluster, never on a workstation or build host. Hold the lab lock for the whole run, use a namespace `e2e-<issue>`, record every cluster-wide change and restore it byte-identical, and release the lock when the run ends.
+- An agent can stop in the middle of a step (a usage limit, a build host outage). Before it continues, a resumed agent re-checks its git state (an unfinished merge or commit), what it has pushed, the locks it holds and anything it left running.
+- The coordinator verifies a batch of PRs together:
+  1. Build the tree of main plus each PR head with `git merge-tree --write-tree` and `git commit-tree`.
+  2. Run every CI check on that tree with `CI=1`, so the container-backed tests run instead of skipping.
+  3. Merge the PRs in the same order with `gh pr merge --squash --match-head-commit "$(git rev-parse <ref>)"`.
+  4. Check that `git rev-parse origin/main^{tree}` equals the verified tree.
+
+  A PR's own CI tests it against the main of that moment; the batch is what tests the PRs against each other. On MS0 it caught, for example, a chart test that read files the CI path filter did not cover.
+- A security-relevant leaf also gets an independent verifier: a fresh agent that did not write the code and tries to break it. On MS0 these verifiers found real defects that the implementers' own tests had missed: Laysi/trustiot-v2#255, Laysi/trustiot-v2#260, Laysi/trustiot-v2#268, and Laysi/trustiot-v2#282 to Laysi/trustiot-v2#285. Before the merge, the verifier's branch can be merged into the implementer's branch, so both go out in one push.
+- Keep the decisions that need a person (a release tag, a repository setting, hardware, a credential) in one list on the milestone's root issue, so they can be answered together instead of each one stalling its own PR.
+- Most PRs edit the rows of `docs/architecture/decisions.md`, the command list in this file, and `deploy/chart/README.md`. Each merge can then force a main merge, and another CI run, on every other open PR. Merge the PR with the widest documentation footprint first.
