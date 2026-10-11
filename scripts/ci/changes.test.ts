@@ -155,6 +155,9 @@ describe("path rules", () => {
     "deploy/istio/istiod-values.yaml",
     "scripts/lib/stack.ts",
     "services/ingest/tests/common/mod.rs",
+    "services/ingest/migrations/clickhouse",
+    "services/ingest/migrations/clickhouse/0006_logs.sql",
+    "crates/service-kit/src/telemetry/redact.rs",
     "docs/architecture/deployment.md",
     ".prototools",
     ".proto/plugins/helm.toml",
@@ -166,7 +169,15 @@ describe("path rules", () => {
     expect(affectsHelm(path)).toBe(true);
   });
 
-  test.each(["crates/protocol/src/lib.rs", "docs/README.md", "deploy/images/ingest/image.toml", "scripts/dev.ts", "Cargo.lock"])(
+  test.each([
+    "crates/protocol/src/lib.rs",
+    "docs/README.md",
+    "deploy/images/ingest/image.toml",
+    "scripts/dev.ts",
+    "Cargo.lock",
+    "services/ingest/migrations/clickhouse-old/0001.sql",
+    "crates/service-kit/src/telemetry/mod.rs",
+  ])(
     "helm skips %s",
     (path) => {
       expect(affectsHelm(path)).toBe(false);

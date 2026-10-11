@@ -1,0 +1,120 @@
+{
+  "run": "b2853154",
+  "namespace": "e2e-73",
+  "release": "trustiot",
+  "collectorImage": "docker.io/otel/opentelemetry-collector-contrib:0.161.0@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1",
+  "request": {
+    "traceId": "12316c0a1a9d9db527c18c98cc231c7a",
+    "logs": [
+      {
+        "Timestamp": "2026-10-10 19:46:03.555889514",
+        "TraceId": "12316c0a1a9d9db527c18c98cc231c7a",
+        "SpanId": "9b4771c8c6ca87f4",
+        "SeverityText": "INFO",
+        "ServiceName": "example-service",
+        "Body": "request completed",
+        "LogAttributes": {
+          "duration_ms": "0.05",
+          "http.request.method": "POST",
+          "http.response.status_code": "200",
+          "http.route": "/v1/echo"
+        },
+        "ReceivedAt": "2026-10-10 19:46:06"
+      }
+    ],
+    "spans": [
+      {
+        "TraceId": "12316c0a1a9d9db527c18c98cc231c7a",
+        "SpanName": "POST /v1/echo",
+        "ServiceName": "example-service",
+        "SpanAttributes": {
+          "busy_ns": "36332",
+          "code.file.path": "crates/service-kit/src/http.rs",
+          "code.line.number": "141",
+          "code.module.name": "service_kit::http",
+          "http.request.method": "POST",
+          "http.response.status_code": "200",
+          "http.route": "/v1/echo",
+          "idle_ns": "32876",
+          "target": "service_kit::http",
+          "thread.id": "2",
+          "thread.name": "tokio-rt-worker"
+        }
+      }
+    ]
+  },
+  "tables": [
+    {
+      "name": "otel_logs",
+      "engine": "MergeTree",
+      "engine_full": "MergeTree PARTITION BY toDate(ReceivedAt) ORDER BY (toStartOfFiveMinutes(Timestamp), ServiceName, Timestamp) TTL ReceivedAt + toIntervalDay(30) SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1"
+    },
+    {
+      "name": "otel_traces",
+      "engine": "MergeTree",
+      "engine_full": "MergeTree PARTITION BY toDate(ReceivedAt) ORDER BY (ServiceName, SpanName, toDateTime(Timestamp)) TTL ReceivedAt + toIntervalDay(30) SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1"
+    }
+  ],
+  "siem": {
+    "excerpt": [
+      "Body: Str(request completed)",
+      "     -> http.route: Str(/v1/echo)",
+      "Trace ID: 12316c0a1a9d9db527c18c98cc231c7a",
+      "    Trace ID       : 12316c0a1a9d9db527c18c98cc231c7a",
+      "     -> http.route: Str(/v1/echo)"
+    ],
+    "unauthenticatedStatus": 401
+  },
+  "redaction": {
+    "clickhouse": {
+      "logs": [
+        {
+          "Body": "login failed for **** with Authorization: **** token **** **** phone ****",
+          "LogAttributes": {
+            "http.request.body": "****",
+            "http.request.body.size": "40",
+            "http.route": "/v1/echo",
+            "note": "forwarded by ****",
+            "test.marker": "redaction-b2853154",
+            "token": "****",
+            "user.email": "****"
+          }
+        }
+      ],
+      "spans": [
+        {
+          "SpanName": "GET /users/****",
+          "SpanAttributes": {
+            "http.request.header.authorization": "****",
+            "test.marker": "redaction-b2853154",
+            "url.full": "https://x.test/cb?****"
+          },
+          "StatusMessage": "failed for ****",
+          "EventAttributes": [
+            {
+              "exception.message": "bad ****"
+            }
+          ]
+        }
+      ]
+    },
+    "siemExcerpt": [
+      "Body: Str(login failed for **** with Authorization: **** token **** **** phone ****)",
+      "     -> user.email: Str(****)",
+      "     -> token: Str(****)",
+      "     -> http.request.body: Str(****)",
+      "     -> note: Str(forwarded by ****)",
+      "    Name           : GET /users/****",
+      "    Status message : failed for ****",
+      "     -> http.request.header.authorization: Str(****)",
+      "     -> url.full: Str(https://x.test/cb?****)",
+      "          -> exception.message: Str(bad ****)"
+    ]
+  },
+  "collectorPod": {
+    "runAsNonRoot": true,
+    "seccompProfile": {
+      "type": "RuntimeDefault"
+    }
+  }
+}

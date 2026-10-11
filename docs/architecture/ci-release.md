@@ -89,7 +89,7 @@ Laysi/trustiot-v2#70 以這些公鑰建立 `.sops.yaml`，並把 sops 與 age �
 | 全部 | `.github/workflows/ci.yml`、`.github/actions/` 下的任何檔案、`scripts/ci/changes.ts` 本身與它直接或間接 import 的 repo 內檔案（目前是 `scripts/release/lib.ts`，推到 main 時由它挑出比較的基準 commit）、`.prototools`、`.proto/` 下的任何檔案（`rust`、`cargo-deny`、`bun`、`helm`、`kubeconform` 的版本都從這裡來）有變動 |
 | `rust` | 預設執行，只有在每個變動的檔案都屬於下列「`rust` 不讀的路徑」時才略過：`docs/`、`deploy/`（`deploy/chart/values.yaml` 除外，`crates/service-kit/tests/chart_contract.rs` 讀它）、`scripts/`、`frontend/`、`.github/`（上一列的 ci.yml 與本地 action 除外）、`.githooks/`，以及根目錄的 `README.md`、`renovate.json5`、`.gitleaksignore`、`.dockerignore`、`deny.toml`。不論在哪個目錄，`.rs`、`.sql` 與任何大小寫的 `AGENTS.md` 都會讓它執行（`tools/sql-check` 掃描整個 repo 的 Rust 檔與它們 include 的 SQL，`tools/repo-check` 不允許任何 AGENTS.md）。沒有列出的路徑（`crates/`、`services/`、`edge/`、`factory/`、`tools/`、`api/`、`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`clippy.toml`、`.cargo/`、`CLAUDE.md`、`.gitignore`、`datasets/`、`evals/`，以及之後新增的任何目錄）一律執行 |
 | `cargo-deny` | 任何 `Cargo.toml`、`Cargo.lock`、`deny.toml`、`rust-toolchain.toml`、`.cargo/` 下的檔案有變動 |
-| `helm` | `deploy/chart/`、`deploy/istio/` 下的檔案，或 chart 測試讀的 `scripts/lib/stack.ts`、`services/ingest/tests/common/mod.rs`、`docs/architecture/deployment.md` 有變動 |
+| `helm` | `deploy/chart/`、`deploy/istio/`、`services/ingest/migrations/clickhouse/` 下的檔案，或 chart 測試讀的 `scripts/lib/stack.ts`、`services/ingest/tests/common/mod.rs`、`crates/service-kit/src/telemetry/redact.rs`、`docs/architecture/deployment.md` 有變動 |
 | `host` | `deploy/host/` 下的檔案有變動（安裝程式的原始碼、測試、相依與建置都在這個目錄） |
 | `postgres-image` | `deploy/images/postgres/` 下的檔案（Containerfile 就是 build context，測試也在這裡），或測試經 `containerBuildArgs` 間接 import 的 `scripts/lib/build-context.ts`、`scripts/ci/check-secret-handling.ts`、`scripts/lib/{stack,state,secrets,cleanup}.ts` 有變動（測試 import 的 `scripts/release/lib.ts` 已在「全部」那一列） |
 | `gitleaks`、`workflow-policy` | 每次都執行 |
@@ -287,7 +287,7 @@ publish job 在 `release` environment 執行，原本的設計是在 environment
 
 1. Gateway API 的 standard CRD：從 release 下載 `standard-install.yaml`，SHA-256 與 workflow 裡釘的值相符才套用（`GATEWAY_API_VERSION`、`GATEWAY_CRDS_SHA256`，要一起改）。
 2. Istio ambient：官方 repo 的 `base`、`istiod`、`cni`、`ztunnel` 四個 chart，版本 `ISTIO_VERSION`，用 `deploy/istio/values-k3s.yaml`。istiod 另加一份由 `deploy/istio/istiod-values.yaml` 產生的覆寫：同一個 ext_authz provider（fail closed、0.5 秒逾時、503）為每個 e2e 命名空間各複製一份，名稱 `trustiot-e2e-<shape>`，所以 provider 的設定永遠是 repo 裡那份。
-3. 建出 e2e 的身分服務替身映像（`deploy/chart/tests/e2e/identity-double`），匯入 k3d 節點。
+3. 建出 e2e 的身分服務替身映像（`deploy/chart/tests/e2e/identity-double`），以 `k3d image import --mode direct` 匯入 k3d 節點，並逐一確認每個 server 與 agent 節點的 containerd 都有這個映像（`docker exec <node> crictl inspecti <image>`，節點清單來自 `k3d node list -o json`）；缺任何一個節點就重新匯入，共 3 次，用完仍缺則在這一步失敗，訊息寫出映像與缺少的節點，成功時 log 逐節點記錄「confirmed」。為什麼不能信 k3d 的結束碼：k3d 5.9.0 預設的 tools-node 模式由各節點從共用 volume 匯入 tarball，單一節點失敗只寫 `ERRO` 並照樣以 0 結束，映像沒進節點，e2e 的身分服務（`pullPolicy: IfNotPresent`，`localhost` 無法拉取）就等滿 5 分鐘才逾時，看起來像 chart 出錯（2026-10-11，Laysi/trustiot-v2#335）。`--mode direct` 把 `docker save` 的輸出直接串進各節點的 `ctr image import`，沒有 tools node 與共用 volume，k3d 也會回傳節點的錯誤；它只是降低機率的緩解，保證來自逐節點的確認。
 
 每份 values 依序做：
 
@@ -328,7 +328,7 @@ NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
 
 ### 失敗時怎麼辦
 
-先看 issue 內文的報告：它列出哪份 values 的哪一項失敗與診斷。要重現就到 Actions 頁手動執行 nightly（選 `simulate_failure` 只用來驗證通知，不用來除錯）。常見原因：Docker Hub 對匿名拉取的流量限制（`traefik/whoami`、k3s 映像與 e2e 替身的基底映像都在 Docker Hub，建立叢集與建置映像已重試）、chart 的改動讓某份 values 裝不起來或讓入口的行為改變、Istio、Gateway API、k3s 或 k3d 版本更新。GitHub 在 repo 60 天沒有活動時會停掉排程 workflow，這個 repo 有活動所以不會發生，但若看到排程停了，到 Actions 頁重新啟用。
+先看 issue 內文的報告：它列出哪份 values 的哪一項失敗與診斷。要重現就到 Actions 頁手動執行 nightly（選 `simulate_failure` 只用來驗證通知，不用來除錯）。常見原因：Docker Hub 對匿名拉取的流量限制（`traefik/whoami`、k3s 映像與 e2e 替身的基底映像都在 Docker Hub，建立叢集與建置映像已重試）、替身映像沒有進到節點（log 的 `identity double image` 段會寫出哪個節點缺映像，匯入已重試）、chart 的改動讓某份 values 裝不起來或讓入口的行為改變、Istio、Gateway API、k3s 或 k3d 版本更新。GitHub 在 repo 60 天沒有活動時會停掉排程 workflow，這個 repo 有活動所以不會發生，但若看到排程停了，到 Actions 頁重新啟用。
 
 ### 成本
 

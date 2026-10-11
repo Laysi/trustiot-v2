@@ -94,3 +94,6 @@ observability:
   sentry:
     # No Sentry Secret in the test namespace.
     enabled: false
+  # No ClickHouse to write to (see above); the collector has its own cluster test (otel.e2e.ts).
+  collector:
+    enabled: false

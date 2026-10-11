@@ -19,6 +19,10 @@ data:
   TRUSTIOT_GATEWAY_HOST: {{ $v.hosts.gateway | quote }}
   TRUSTIOT_OTA_HOST: {{ $v.hosts.ota | quote }}
   TRUSTIOT_CLIENT_IP_SOURCE: {{ include "trustiot.clientIpSource" . | quote }}
+  {{- /* Public keys only: the schema allows no private member (decision 27). */}}
+  {{- with include "trustiot.internalIdentity.jwks" . }}
+  TRUSTIOT_INTERNAL_IDENTITY_KEYS: {{ . | quote }}
+  {{- end }}
   {{- if eq $v.postgres.mode "external" }}
   TRUSTIOT_POSTGRES_HOST: {{ $v.postgres.external.host | quote }}
   TRUSTIOT_POSTGRES_PORT: {{ $v.postgres.external.port | quote }}
