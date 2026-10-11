@@ -1,0 +1,33 @@
+# Local checks, 2026-10-11, Fedora 45 x86_64, Bun 1.4.2, branch ci/309-path-filter after
+# merging origin/main 7c2e405 (none of these needs a container)
+
+$ bun install --cwd scripts --frozen-lockfile
+Checked 7 installs across 27 packages (no changes)
+
+$ bun run --cwd scripts typecheck
+exit 0
+
+$ bun scripts/ci/check-workflows.ts
+workflow policy: 4 file(s) checked, no violations
+
+$ bun scripts/ci/lint-workflows.ts
+actionlint: 3 workflow file(s), no errors
+
+$ bun scripts/ci/check-secret-handling.ts
+secret handling: 201 file(s) checked, 2 container build file(s), no violations
+
+$ bun run --cwd scripts test
+ 513 pass
+ 1 skip            # scripts/tests/e2e.test.ts without TRUSTIOT_DEV_E2E
+ 0 fail
+Ran 514 tests across 20 files.
+
+$ bun test scripts/ci
+ 264 pass
+ 0 fail
+Ran 264 tests across 5 files.
+
+$ bun test deploy/chart
+ 221 pass
+ 0 fail
+Ran 221 tests across 4 files.
