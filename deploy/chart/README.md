@@ -72,6 +72,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | OpenTelemetry collector 與 OTLP 轉送 | — | 尚未加入；轉送目的地的欄位隨 collector 一起加 | Laysi/trustiot-v2#73 |
 | Grafana | — | 尚未加入 | Laysi/trustiot-v2#183 |
 | Sentry | `observability.sentry.*` | 開關、環境名稱與 DSN 已接到每個服務 | Laysi/trustiot-v2#184 |
+| 內部身分（公鑰、簽章私鑰） | `internalIdentity.*` | 完成：公鑰以 JWK Set 放進平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`；簽章私鑰的 Secret 只掛進身分服務；身分服務另外拿到需要 cookie 的路由（`TRUSTIOT_INGRESS_ROUTES`），決定 token 的受眾 | Laysi/trustiot-v2#61；SaaS 的值放進 `deploy/flux/` 由 Laysi/trustiot-v2#70 做 |
 | 密鑰 | 各個 `*Secret` 欄位、`services.<name>.credentials` | values 只存 Secret 名稱與 key；Sentry DSN 給每個服務，其他依賴的帳密只給列出它的服務，外部資料庫的 CA 掛進每個服務 | Laysi/trustiot-v2#72 決定 Secret 怎麼進叢集 |
 
 ## 服務
@@ -145,7 +146,16 @@ ingress:
     - {host: app, path: /api/assets, match: PathPrefix, service: assets}
 ```
 
-與身分服務的約定（Laysi/trustiot-v2#61 實作）：入口以 `<pathPrefix><原始路徑>` 呼叫身分服務，`pathPrefix` 是 `/internal/ext-authz`，只帶 `cookie`（另有 Host、方法、路徑與 Authorization）；有效時回 200 並一定帶 `x-internal-identity`，入口以它覆寫用戶端帶來的同名標頭；無效時回 401，入口把回應原樣交給用戶端。身分服務無法連線、出錯或超過 0.5 秒時入口回 503（`statusOnError`）。這些設定在 istiod 的 provider，見 `deploy/istio/README.md`。
+與身分服務的約定（Laysi/trustiot-v2#61 實作，細節見 `services/identity/README.md`）：入口以 `<pathPrefix><原始路徑>` 呼叫身分服務，`pathPrefix` 是 `/internal/ext-authz`，只帶 `cookie`（另有 Host、方法、路徑與 Authorization）。
+
+| 身分服務的回應 | 情況 | 入口 |
+| --- | --- | --- |
+| 200，剛好一個 `x-internal-identity` | session 有效，且原始請求的主機與路徑對得到 `ingress.routes` 的一條路由 | 以這個值覆寫用戶端帶來的同名標頭，轉給後端 |
+| 401 `unauthenticated` | 沒有 session cookie、cookie 重複或格式不對、session 不存在、過期或已撤銷 | 原樣交給用戶端 |
+| 403 `permission_denied` | session 有效，但身分服務的路由表對不到這個請求（正常情況下不會發生：入口沒有路由的請求不會呼叫身分服務） | 原樣交給用戶端 |
+| 503 `unavailable` | 資料庫失敗，或 0.4 秒內查不完 | 把 5xx 當成錯誤，回自己的 503（`statusOnError`） |
+
+身分服務無法連線、出錯或超過 0.5 秒時入口也回 503。session cookie 名稱是 `__Host-trustiot-session`。token 的受眾（`aud`）是請求要去的服務：chart 把 `ingress.routes` 換成實際主機名稱後以 `TRUSTIOT_INGRESS_ROUTES` 交給身分服務，身分服務以 Gateway API 的規則比對（主機相同、不看埠號；`Exact` 優先，其次最長、以路徑段為界的 `PathPrefix`）。比對不一致只會造成拒絕，不會放寬權限：token 只有它的受眾接受。入口的設定在 istiod 的 provider，見 `deploy/istio/README.md`。
 
 服務的 pod 帶 `istio.io/dataplane-mode: ambient` 加入 ambient mesh，入口到服務、服務之間由 ztunnel 加 mTLS；`podLabels` 不能改這個 label。服務之間的授權見下一節。
 
@@ -252,6 +262,18 @@ mesh:
 | `ports[].protocol` | `TCP`（預設）、`UDP` 或 `SCTP` |
 | `ports[].appProtocol` | 例如 `http`，供 Istio 判斷協定 |
 
+### 內部身分
+
+決策 27 的內部身分 token：身分服務為每個通過 cookie 驗證的請求簽一個 60 秒的 token，每個服務以這裡的公鑰驗證。格式、驗證規則與輪替在 `crates/service-kit/README.md` 的「內部身分」與 `services/identity/README.md`。
+
+| 欄位 | 預設值 | 說明 |
+| --- | --- | --- |
+| `internalIdentity.publicKeys` | `[]` | 身分服務的 Ed25519 公鑰，每把 `{kid, x}`：`kid` 是 1–64 個可見 ASCII 字元、不能重複，`x` 是 32 bytes 公鑰的 base64url（不補 `=`，43 個字元），最多 8 把。chart 組成 JWK Set 放進平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`；schema 只允許這兩個欄位，所以私鑰（`d`）放不進 values 與 ConfigMap。空的時候不設定，服務會拒絕啟動。輪替期間同時列新舊兩把 |
+| `internalIdentity.signingKeySecret.name` | `""` | 放身分服務簽章私鑰的既有 Secret；身分服務啟用時必填（沒有它身分服務拒絕啟動）。私鑰是 PKCS#8 PEM（`openssl genpkey -algorithm ed25519`），以唯讀 volume 只掛進身分服務的 `/etc/trustiot/identity-signing-key/signing-key.pem`，路徑以 `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` 告訴它；任何服務的自訂 `env` 都不能讀這個 Secret 的這個 key。私鑰對應的公鑰必須在 `publicKeys` 裡，身分服務以它找出自己的 `kid`，找不到就拒絕啟動 |
+| `internalIdentity.signingKeySecret.key` | `signing-key.pem` | |
+
+身分服務只在啟動時讀私鑰，Kubernetes 不會因 Secret 改變而重啟 pod：換私鑰後要滾動重啟身分服務（`kubectl rollout restart`，或改 `services.identity.podAnnotations`），步驟見 `services/identity/README.md` 的「金鑰輪替」。
+
 ### 外部依賴
 
 所有外部依賴由 values 指定，託管或自架只差在 values（可搬移規則 2）。`bundled` 代表由這份 chart 部署在叢集內；`external` 代表用叢集外的服務。
@@ -340,7 +362,7 @@ kubectl -n trustiot create secret generic trustiot-clickhouse-admin --from-liter
 服務照下列約定實作，就能直接用通用樣板部署（docs/architecture/deployment.md 的服務設計規則）：
 
 - **設定**：ConfigMap `<release>-platform` 以 `envFrom` 交給每個服務，另外每個服務有 `OTEL_SERVICE_NAME=<服務名稱>`。`TRUSTIOT_` 後接英數字、`SENTRY_` 與 `OTEL_` 開頭的變數只由 chart 設定，`env` 不能覆寫，服務讀到的平台設定一定是 values 決定的值。沒有設定的項目不會出現，服務可以分辨「沒設定」與「空字串」。平台設定變更時 pod 會自動滾動更新。
-- **密鑰**：不放進 ConfigMap，以 `valueFrom.secretKeyRef` 從 values 指定的 Secret 取用。Sentry 開啟時每個服務有 `SENTRY_DSN`；其他依賴的帳密只給在 `services.<name>.credentials` 列出它的服務（見後面「密鑰的環境變數」），Secret 名稱空白的項目不注入。外部 Postgres 與 ClickHouse 的 CA 憑證以唯讀方式掛在 `/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`。服務自己的資料庫帳號（每個服務一個角色，決策 4）隨 Postgres 與 migration 的 issue 加入（Laysi/trustiot-v2#58、Laysi/trustiot-v2#60）。
+- **密鑰**：不放進 ConfigMap，以 `valueFrom.secretKeyRef` 從 values 指定的 Secret 取用。Sentry 開啟時每個服務有 `SENTRY_DSN`；其他依賴的帳密只給在 `services.<name>.credentials` 列出它的服務（見後面「密鑰的環境變數」），Secret 名稱空白的項目不注入。外部 Postgres 與 ClickHouse 的 CA 憑證以唯讀方式掛在 `/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`；內部身分的簽章私鑰只掛進身分服務（見「內部身分」）。服務自己的資料庫帳號（每個服務一個角色，決策 4）隨 Postgres 與 migration 的 issue 加入（Laysi/trustiot-v2#58、Laysi/trustiot-v2#60）。
 - **埠與探針**：HTTP 監聽 8080（埠名 `http`）；`GET /healthz` 供 startup 與 liveness，`GET /readyz` 供 readiness。
 - **SIGTERM**：pod 刪除時先等 `preStopSleepSeconds`（預設 5 秒），再送 SIGTERM；服務收到後 readiness 立即回失敗、處理完進行中的請求、主動關閉長連線，在 `drainSeconds`（預設 30 秒）內結束，之後才會被 SIGKILL。服務是容器內的 PID 1，要自己處理 SIGTERM。
 - **執行環境**：根目錄唯讀，只有 `/tmp` 可寫；以非 root 執行，映像的 `USER` 要是數字 UID，並能以 OpenShift 指派的任意 UID 執行；沒有 ServiceAccount token；只排到 arm64 節點。
@@ -352,6 +374,7 @@ kubectl -n trustiot create secret generic trustiot-clickhouse-admin --from-liter
 | `TRUSTIOT_DEPLOYMENT_MODE` | `global.deploymentMode` | 一律 |
 | `TRUSTIOT_APP_HOST`、`TRUSTIOT_GATEWAY_HOST`、`TRUSTIOT_OTA_HOST` | `hosts.*` | 一律 |
 | `TRUSTIOT_CLIENT_IP_SOURCE` | 由 `ingress.exposure` 推導：`cf-connecting-ip` 或 `x-forwarded-for-rightmost` | 一律 |
+| `TRUSTIOT_INTERNAL_IDENTITY_KEYS` | `internalIdentity.publicKeys` 組成的 JWK Set（JSON） | 有公鑰時 |
 | `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE` | `postgres.external.*` | `postgres.mode` 為 `external` |
 | `TRUSTIOT_CLICKHOUSE_URL` | `external`：`clickhouse.external.url`；`bundled`：`http://<release>-clickhouse.<namespace>.svc:8123`（叢集內明文 HTTP，pod 之間由 Istio ambient 的 ztunnel 加上 mTLS） | 一律 |
 | `TRUSTIOT_QDRANT_URL` | `qdrant.external.url` | `qdrant.mode` 為 `external` |
@@ -374,11 +397,18 @@ kubectl -n trustiot create secret generic trustiot-clickhouse-admin --from-liter
 | `TRUSTIOT_SMTP_USERNAME`、`TRUSTIOT_SMTP_PASSWORD` | `smtp.credentialsSecret` | `credentials` 含 `smtp` |
 | `TRUSTIOT_AI_CHAT_API_KEY`、`TRUSTIOT_AI_EMBEDDING_API_KEY`、`TRUSTIOT_AI_RERANK_API_KEY` | `ai.*.apiKeySecret` | `ai-gateway` 的 `credentials` 含 `ai`（決策 28） |
 
+只給身分服務的變數（chart 設定，`TRUSTIOT_` 開頭，自訂 `env` 不能覆寫）：
+
+| 變數 | 來源 | 何時出現 |
+| --- | --- | --- |
+| `TRUSTIOT_INGRESS_ROUTES` | `ingress.routes` 換成實際主機名稱的 JSON 陣列 `[{host, path, match, service}]`，決定 token 的受眾 | 一律（沒有路由時是 `[]`） |
+| `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` | 掛載的簽章私鑰路徑 `/etc/trustiot/identity-signing-key/signing-key.pem` | `internalIdentity.signingKeySecret.name` 有值時 |
+
 ## 擴充 chart
 
 - **新增服務**：在 `values.yaml` 的 `services` 加一個 key，並同步 docs/architecture/deployment.md 的服務表（測試比對兩邊）。服務特有的埠、資源、探針與 Secret 寫在該 key 底下。
 - **服務之間的呼叫**：服務要呼叫另一個服務的內部 API 時，在服務的 issue 把這條呼叫加進 `values.yaml` 的 `mesh.calls`；沒列的呼叫會被重置。服務間授權的規則集中在 `templates/_mesh.tpl` 的 `trustiot.mesh.plan`，AuthorizationPolicy 與 NetworkPolicy 都由它產生，不要為單一服務另外寫政策。
-- **對外的路由**：服務要經入口對外時，在服務的 issue 把路由加進 `values.yaml` 的 `ingress.routes`（預設需要 cookie）。不要新增例外路徑：決策 27 只允許登入、閘道器憑證換發、MQTT 轉接與健康檢查四種，要加第五種必須先改決策。入口的規則集中在 `templates/_ingress.tpl` 的 `trustiot.ingress.plan`；可信的來源 IP 沿用 `trustiot.clientIpSource`，不要另外加欄位。
+- **對外的路由**：服務要經入口對外時，在服務的 issue 把路由加進 `values.yaml` 的 `ingress.routes`（預設需要 cookie）。不要新增例外路徑：決策 27 只允許登入、閘道器憑證換發、MQTT 轉接與健康檢查四種，要加第五種必須先改決策。身分服務以同一份路由決定 token 的受眾（`TRUSTIOT_INGRESS_ROUTES`），所以路由的後端就是收 token 的服務；`ai-gateway` 不驗證內部身分（決策 28），不能有 cookie 路由。入口的規則集中在 `templates/_ingress.tpl` 的 `trustiot.ingress.plan`；可信的來源 IP 沿用 `trustiot.clientIpSource`，不要另外加欄位。
 - **新增叢集內元件**（broker、Postgres、ClickHouse、Qdrant、collector、Grafana）：放在自己的 `templates/<元件>.yaml`，以 `*.mode` 或開關控制；Service 只能是 ClusterIP；namespace 預設拒絕所有連入：元件在 mesh 內時（pod 帶 `istio.io/dataplane-mode: ambient`）把它加進 `templates/_mesh.tpl` 的 `trustiot.mesh.components`、用戶端列進 `mesh.calls`，並定義 `trustiot.<元件>.pod`（container ports 與探針，元件的模板也從它渲染，NetworkPolicy 依它只對節點來源開探針埠），AuthorizationPolicy 與 NetworkPolicy 由 chart 產生；不在 mesh 內時自帶 NetworkPolicy，只對實際的用戶端開它的埠，並讓 kubelet 的健康檢查到得了；在 `values.schema.json` 加欄位定義、在本文件加欄位說明（測試檢查 `values.yaml` 每個欄位都在本文件），並更新「元件與開關」與平台設定的表。
 - **Secret**：values 只能出現 `{name, key}` 形式的引用；schema 的 `additionalProperties: false` 會擋下放明文的新欄位。服務要拿新的依賴帳密時，在 `_helpers.tpl` 的 `trustiot.credentialCatalog` 加一列（變數名稱、Secret、可以拿的服務）、在 schema 的 `credentials` 列舉加上名稱，並更新「密鑰的環境變數」表；自訂 `env` 自動不能讀這個帳密。叢集內元件自己產生的帳密 Secret（例如 CloudNativePG 的資料庫帳號，Laysi/trustiot-v2#58）也要加進 `trustiot.dependencySecretRefs`。新的平台變數用 `TRUSTIOT_` 開頭，自動受保留規則保護。
 - **測試**：規則寫進 `tests/chart.test.ts`。`tests/values/` 的兩個安裝實例範例與 `smoke.yaml`（以 traefik/whoami 當替身服務）也供 nightly（Laysi/trustiot-v2#69）在叢集上安裝使用；叢集測試是 `tests/e2e/ingress.e2e.ts`（入口）與 `tests/e2e/mesh.e2e.ts`（服務間授權），共用 `tests/e2e/cluster.ts`，nightly 可直接沿用。`bun test` 的 kubeconform 已帶 CRD schema 目錄，Gateway API 與 Istio 的資源可以直接驗證。兩個實例範例會部署叢集內 ClickHouse（`clickhouse.mode: bundled`），在叢集上安裝前要先建立 `trustiot-clickhouse-admin` Secret（見「叢集內的 ClickHouse」）；叢集測試用 `tests/e2e/values-e2e.yaml` 改成 `external`，不部署 ClickHouse。`tests/` 不會打包進 chart（`.helmignore`）。

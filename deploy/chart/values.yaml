@@ -211,6 +211,22 @@ mesh:
     telemetry-query:
       - clickhouse
 
+# Internal identity (decision 27): for every request that passes the cookie check, the identity
+# service signs a short-lived token for the backend, and every service verifies it with the
+# public keys below. Rotation adds the new public key first, then swaps the private key, then
+# removes the old public key (services/identity/README.md).
+internalIdentity:
+  # The identity service's Ed25519 public keys: {kid, x}, where x is the 32-byte public key in
+  # base64url without padding. Not secret; every service gets them as the platform setting
+  # TRUSTIOT_INTERNAL_IDENTITY_KEYS. Services refuse to start without them.
+  publicKeys: []
+  # Existing Secret with the identity service's private key in PKCS#8 PEM
+  # (`openssl genpkey -algorithm ed25519`), mounted as a read-only file into the identity service
+  # only. Its public key must be in publicKeys, or the identity service refuses to start.
+  signingKeySecret:
+    name: ""
+    key: signing-key.pem
+
 # External dependencies (portability rule 2). Managed or self-hosted differs only in values.
 
 postgres:

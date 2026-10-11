@@ -40,8 +40,9 @@ spec:
 {{- end -}}
 
 {{/*
-Container env: the chart's variables first (OTEL_SERVICE_NAME, SENTRY_DSN and the credentials
-the service lists), then serviceDefaults.env and services.<name>.env.
+Container env: the chart's variables first (OTEL_SERVICE_NAME, SENTRY_DSN, the credentials the
+service lists and, for identity, its routes and signing key file), then serviceDefaults.env and
+services.<name>.env.
 Custom env cannot take over what the chart controls:
 - names starting with TRUSTIOT_ plus a letter or digit, SENTRY_ or OTEL_ are reserved, so the
   platform settings from the ConfigMap (envFrom loses to env) and the chart's Secrets stay as set;
@@ -83,7 +84,11 @@ Returns a YAML list; use with fromYamlArray.
 {{- end -}}
 {{- end -}}
 {{- $credentialEnv := include "trustiot.credentialEnv" (dict "root" .root "name" $name "credentials" ($config.credentials | default list)) | fromYamlArray -}}
-{{- $env = concat $env $credentialEnv ($config.env | default list) -}}
+{{- $identityEnv := list -}}
+{{- if eq $name "identity" -}}
+{{- $identityEnv = include "trustiot.identity.env" .root | fromYamlArray -}}
+{{- end -}}
+{{- $env = concat $env $credentialEnv $identityEnv ($config.env | default list) -}}
 {{- $names := list -}}
 {{- range $env -}}
 {{- $names = append $names .name -}}
@@ -124,6 +129,11 @@ Returns a YAML list; use with fromYamlArray.
 {{- end -}}
 {{- $env := include "trustiot.service.env" . | fromYamlArray -}}
 {{- $caMounts := include "trustiot.caMounts" .root | fromYamlArray -}}
+{{- /* The internal identity signing key reaches the identity service only (decision 27). */ -}}
+{{- $signingKey := dict -}}
+{{- if and (eq .name "identity") .root.Values.internalIdentity.signingKeySecret.name -}}
+{{- $signingKey = .root.Values.internalIdentity.signingKeySecret -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -222,6 +232,11 @@ spec:
               mountPath: {{ .dir }}
               readOnly: true
             {{- end }}
+            {{- if $signingKey }}
+            - name: identity-signing-key
+              mountPath: {{ include "trustiot.identity.signingKeyDir" .root }}
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir:
@@ -233,5 +248,13 @@ spec:
             items:
               - key: {{ .key }}
                 path: ca.crt
+        {{- end }}
+        {{- if $signingKey }}
+        - name: identity-signing-key
+          secret:
+            secretName: {{ $signingKey.name }}
+            items:
+              - key: {{ $signingKey.key }}
+                path: {{ include "trustiot.identity.signingKeyFile" .root }}
         {{- end }}
 {{- end -}}

@@ -29,7 +29,7 @@ nightly workflow（Laysi/trustiot-v2#69）每晚在 k3d 叢集上以兩種型態
 | `assets` | traefik/whoami，以 digest 固定 | 需要 cookie 的後端（`hosts.app` 的 `/` 全包路由），回應帶 `Name: protected-backend` |
 | `certs`、`mqtt-bridge` | 同上 | 例外路徑的後端 |
 
-設定在 `values-e2e.yaml`。身分服務的真實版本是 Laysi/trustiot-v2#61，接上後的端到端驗證在 Laysi/trustiot-v2#77。
+設定在 `values-e2e.yaml`。真實的身分服務在 `services/identity`（Laysi/trustiot-v2#61），回應表與替身相同（允許時回 200 並帶 `x-internal-identity`、無效回 401、逾時由入口回 503），但 cookie 是 `__Host-trustiot-session`，還會依 `ingress.routes` 決定 token 的受眾、對不到路由回 403，也需要 Postgres 與簽章私鑰；換成真實版本的端到端驗證在 Laysi/trustiot-v2#77。
 
 ### 前置條件
 

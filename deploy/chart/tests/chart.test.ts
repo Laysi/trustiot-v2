@@ -385,6 +385,80 @@ describe("secrets reach only the services that need them", () => {
   });
 });
 
+describe("internal identity (decision 27, Laysi/trustiot-v2#61)", () => {
+  const e2e = [...SHAPES.saas, E2E_VALUES];
+  const signingKey = ["--set", "internalIdentity.signingKeySecret.name=trustiot-identity-signing"];
+  const env = (manifests: Manifest[], service: string) =>
+    podSpec(find(manifests, "Deployment", `${RELEASE}-${service}`)).containers[0]?.env ?? [];
+  const envValue = (manifests: Manifest[], service: string, name: string) =>
+    env(manifests, service).find((e) => e.name === name)?.value;
+
+  test("every service gets the public keys as a JWK Set in the platform settings; none leaves it unset", () => {
+    const config = platformConfig(render(SHAPES.saas));
+    expect(JSON.parse(config.TRUSTIOT_INTERNAL_IDENTITY_KEYS ?? "null")).toEqual({
+      keys: [{ kty: "OKP", crv: "Ed25519", kid: "2026-10-a", x: "jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8" }],
+    });
+    // A rotation lists two keys.
+    const rotating = platformConfig(
+      render(SHAPES.saas, [
+        "--set-json",
+        'internalIdentity.publicKeys=[{"kid":"2026-10-a","x":"jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8"},{"kid":"2027-04-a","x":"WTbPFr1BQmbmKbme_XhWAvSUaOZ5_XCgpUlsUp0IGMw"}]',
+      ]),
+    );
+    const keys = JSON.parse(rotating.TRUSTIOT_INTERNAL_IDENTITY_KEYS ?? "null") as { keys: { kid: string }[] };
+    expect(keys.keys.map((key) => key.kid)).toEqual(["2026-10-a", "2027-04-a"]);
+    expect(platformConfig(render(SHAPES.onprem)).TRUSTIOT_INTERNAL_IDENTITY_KEYS).toBeUndefined();
+  });
+
+  test("the signing key is mounted read-only into the identity service only", () => {
+    const manifests = render([...SHAPES.saas, SMOKE], [...enableAllServices, ...signingKey]);
+    const identity = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`));
+    expect(identity.volumes).toContainEqual({
+      name: "identity-signing-key",
+      secret: { secretName: "trustiot-identity-signing", items: [{ key: "signing-key.pem", path: "signing-key.pem" }] },
+    });
+    expect(identity.containers[0]?.volumeMounts).toContainEqual({
+      name: "identity-signing-key",
+      mountPath: "/etc/trustiot/identity-signing-key",
+      readOnly: true,
+    });
+    expect(envValue(manifests, "identity", "TRUSTIOT_IDENTITY_SIGNING_KEY_FILE")).toBe(
+      "/etc/trustiot/identity-signing-key/signing-key.pem",
+    );
+    for (const deployment of manifests.filter((m) => m.kind === "Deployment" && m.metadata.name !== `${RELEASE}-identity`)) {
+      const pod = podSpec(deployment);
+      const text = JSON.stringify(pod);
+      expect(text).not.toContain("trustiot-identity-signing");
+      expect(text).not.toContain("TRUSTIOT_IDENTITY_SIGNING_KEY_FILE");
+    }
+    // Nothing of the private key reaches a ConfigMap.
+    for (const configMap of manifests.filter((m) => m.kind === "ConfigMap")) {
+      expect(JSON.stringify(configMap)).not.toContain("trustiot-identity-signing");
+    }
+    // Without a Secret, nothing is mounted and the service refuses to start on its own.
+    const unset = render([...SHAPES.saas, SMOKE], enableAllServices);
+    expect(JSON.stringify(podSpec(find(unset, "Deployment", `${RELEASE}-identity`)))).not.toContain("signing");
+  });
+
+  test("the identity service alone gets the cookie routes, with host names, to address its tokens", () => {
+    const manifests = render(e2e, [
+      "--set-json",
+      'ingress.routes=[{"host":"app","path":"/","match":"PathPrefix","service":"assets"},{"host":"gateway","path":"/api/certs","match":"Exact","service":"certs"}]',
+    ]);
+    expect(JSON.parse(envValue(manifests, "identity", "TRUSTIOT_INGRESS_ROUTES") ?? "null")).toEqual([
+      { host: "app.saas.trustiot.test", path: "/", match: "PathPrefix", service: "assets" },
+      { host: "gw.saas.trustiot.test", path: "/api/certs", match: "Exact", service: "certs" },
+    ]);
+    for (const service of ["assets", "certs", "mqtt-bridge"]) {
+      expect(envValue(manifests, service, "TRUSTIOT_INGRESS_ROUTES")).toBeUndefined();
+    }
+    expect(platformConfig(manifests).TRUSTIOT_INGRESS_ROUTES).toBeUndefined();
+    // No cookie routes: an empty list, so the identity service starts and denies every check.
+    const none = render([...SHAPES.saas, SMOKE], ["--set", "services.identity.enabled=true"]);
+    expect(envValue(none, "identity", "TRUSTIOT_INGRESS_ROUTES")).toBe("[]");
+  });
+});
+
 describe("exposure and hardening", () => {
   const renders = SHAPE_NAMES.map((shape) => render([...SHAPES[shape], SMOKE], enableAllServices));
 
@@ -1238,6 +1312,44 @@ describe("values validation rejects unsafe or incomplete settings", () => {
       /\/services\/smoke-echo\/env\/0/,
     ],
     ["Postgres without server verification", saas, ["--set", "postgres.external.sslMode=require"], /sslMode/],
+    [
+      "a private key (d) among the internal identity public keys",
+      saas,
+      [
+        "--set-json",
+        'internalIdentity.publicKeys=[{"kid":"k","x":"jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8","d":"private"}]',
+      ],
+      /\/internalIdentity\/publicKeys\/0/,
+    ],
+    [
+      "an internal identity public key that is not 32 bytes",
+      saas,
+      ["--set-json", 'internalIdentity.publicKeys=[{"kid":"k","x":"jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q"}]'],
+      /\/internalIdentity\/publicKeys\/0\/x/,
+    ],
+    [
+      "an internal identity public key in padded base64",
+      saas,
+      ["--set-json", 'internalIdentity.publicKeys=[{"kid":"k","x":"jxSgv4kffdHZ1jN2sf/IVpE4VGbJdheBqhCAAqI89Q8="}]'],
+      /\/internalIdentity\/publicKeys\/0\/x/,
+    ],
+    [
+      "more than eight internal identity public keys",
+      saas,
+      [
+        "--set-json",
+        `internalIdentity.publicKeys=${JSON.stringify(
+          Array.from({ length: 9 }, (_, i) => ({ kid: `k${i}`, x: "jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8" })),
+        )}`,
+      ],
+      /\/internalIdentity\/publicKeys/,
+    ],
+    [
+      "the internal identity signing key as a plain value",
+      saas,
+      ["--set", "internalIdentity.signingKeySecret.value=plain-text"],
+      /signingKeySecret/,
+    ],
     ["external Qdrant without a URL", saas, ["--set", "qdrant.external.url="], /\/qdrant\/external\/url/],
     ["Sentry on without a DSN Secret", saas, ["--set", "observability.sentry.dsnSecret.name="], /dsnSecret/],
     [
@@ -1488,6 +1600,37 @@ describe("values validation rejects unsafe or incomplete settings", () => {
       saas,
       ["--set-json", 'ingress.routes=[{"host":"app","path":"/api","match":"RegularExpression","service":"smoke-echo"}]'],
       /\/ingress\/routes\/0\/match/,
+    ],
+    [
+      "an internal identity key id listed twice",
+      saas,
+      [
+        "--set-json",
+        'internalIdentity.publicKeys=[{"kid":"k","x":"jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8"},{"kid":"k","x":"jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8"}]',
+      ],
+      /internalIdentity\.publicKeys\[1\]: key id "k" is listed twice/,
+    ],
+    [
+      "env that reads the internal identity signing key",
+      saas,
+      [
+        "--set",
+        "internalIdentity.signingKeySecret.name=trustiot-identity-signing",
+        "--set-json",
+        'services.smoke-echo.env=[{"name":"SIGNING_KEY","valueFrom":{"secretKeyRef":{"name":"trustiot-identity-signing","key":"signing-key.pem"}}}]',
+      ],
+      /services\.smoke-echo: env reads the dependency credential trustiot-identity-signing\/signing-key\.pem/,
+    ],
+    [
+      "cookie route to ai-gateway",
+      saas,
+      [
+        "--set",
+        "services.ai-gateway.enabled=true",
+        "--set-json",
+        'ingress.routes=[{"host":"app","path":"/api/ai","match":"PathPrefix","service":"ai-gateway"}]',
+      ],
+      /ingress\.routes\[0\]: ai-gateway takes no internal identity tokens/,
     ],
     [
       "cookie route on an unknown host",

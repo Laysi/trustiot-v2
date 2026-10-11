@@ -190,8 +190,9 @@ Returns a YAML list; use with fromYamlArray.
 {{- end -}}
 
 {{/*
-Every configured dependency credential as "<secret>/<key>", including the Sentry DSN. Custom env
-must not read these, so they reach services only through the chart.
+Every configured dependency credential as "<secret>/<key>", including the Sentry DSN and the
+internal identity signing key. Custom env must not read these, so they reach services only
+through the chart.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.dependencySecretRefs" -}}
@@ -212,6 +213,12 @@ Returns a YAML list; use with fromYamlArray.
 {{- if .name -}}
 {{- $refs = append $refs (printf "%s/%s" .name .key) -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+{{- /* The internal identity signing key: mounted into the identity service only. */ -}}
+{{- with .Values.internalIdentity.signingKeySecret -}}
+{{- if .name -}}
+{{- $refs = append $refs (printf "%s/%s" .name .key) -}}
 {{- end -}}
 {{- end -}}
 {{- toYaml (uniq $refs) -}}
