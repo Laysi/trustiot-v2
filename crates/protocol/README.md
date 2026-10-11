@@ -68,16 +68,33 @@ ID（閘道器、設備、串流、session、租約、請求 ID 與資料點鍵�
 
 ## ACL（Mosquitto dynsec）
 
-Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec 的 ACL topic 中 `%u` 會換成 username（`acl_file` 在 2.1 已棄用）。佈建時為每台閘道器建立 dynsec client 並綁定角色 `trustiot-gateway`（`GATEWAY_ROLE`），角色規則由 `gateway_role_acls()` 產生，可直接作為 `$CONTROL/dynamic-security/v1` 的 `createRole`／`addRoleACL` 參數：
+Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec 的 ACL topic 中 `%u` 會換成 username（`acl_file` 在 2.1 已棄用）。佈建時為每台閘道器建立 dynsec client 並綁定角色 `trustiot-gateway`（`GATEWAY_ROLE`），角色規則由 `gateway_role_acls()` 產生，可直接作為 `$CONTROL/dynamic-security/v1` 的 `createRole`／`modifyRole` 的 `acls` 參數：
 
 | acltype | topic | allow |
 | --- | --- | --- |
-| `publishClientSend` | `trustiot/v1/gw/%u/up/#` | 是 |
+| `publishClientSend` | `trustiot/v1/gw/%u/up/telemetry` | 是 |
+| `publishClientSend` | `trustiot/v1/gw/%u/up/config-report` | 是 |
+| `publishClientSend` | `trustiot/v1/gw/%u/up/status` | 是 |
+| `publishClientSend` | `trustiot/v1/gw/%u/up/heartbeat` | 是 |
+| `publishClientSend` | `trustiot/v1/gw/%u/up/live` | 是 |
+| `publishClientSend` | `trustiot/v1/gw/%u/up/log` | 是 |
+| `publishClientSend` | `trustiot/v1/gw/%u/up/log-dump` | 是 |
 | `subscribePattern` | `trustiot/v1/gw/%u/down/#` | 是 |
 | `publishClientReceive` | `trustiot/v1/gw/%u/down/#` | 是 |
 | `unsubscribePattern` | `trustiot/v1/gw/%u/down/#` | 是 |
 
-其餘一律依 broker 的預設拒絕。結果：閘道器只能發布到自己的 `up/`（發到別台的 topic 得到 PUBACK 0x87）、只能訂閱自己的 `down/`；CN 含 `+`、`#`、`/` 的憑證 Mosquitto 不會代入 `%u`，什麼都讀不到，CA 也不會簽出這種 CN（`GatewayId` 的字元規則）。LWT 發布到 `up/status`，同樣在允許範圍內。雲端服務的身分、角色與 broker 的預設存取設定由 Laysi/trustiot-v2#84 決定；dynsec 的註冊與撤銷流程由 Laysi/trustiot-v2#82 實作。
+發布規則是每個 `up` channel 一條精確 topic（`gateway_channel_acl_topic`），不用萬用字元：`up/#` 會讓閘道器在自己的 `up/` 底下任意新增 topic，並在每個 topic 留下一則 retained 訊息，數量沒有上限（Laysi/trustiot-v2#268，驗證報告 [2026-10-11-50-verify](../../docs/test-reports/2026-10-11-50-verify.md) 的 F3）。broker 上已註冊的角色不會跟著程式更新：新增 `up` channel，或角色是以修正前的 `up/#` 規則建立的（2026-10-11 時 Laysi/trustiot-v2#82 與 Laysi/trustiot-v2#84 都還沒有實作，broker 上沒有這樣的角色），都要以 `modifyRole` 帶 `acls: gateway_role_acls()` 換掉整份 ACL，再以 `getRole` 確認；`addRoleACL` 只會加在舊規則旁邊，`up/#` 仍然有效。換掉舊規則後，還要以空 payload 的 retained 訊息清掉 `up/` 下非協定 topic 殘留的 retained 訊息。這個同步流程由 Laysi/trustiot-v2#82 實作。
+
+其餘一律依 broker 的預設拒絕。結果：閘道器只能發布到自己 `up/` 下的協定 channel（發到別台的 topic，或自己 `up/` 下不是協定 channel 的 topic，都得到 PUBACK 0x87）、只能訂閱自己的 `down/`；CN 含 `+`、`#`、`/` 的憑證 Mosquitto 不會代入 `%u`，什麼都讀不到，CA 也不會簽出這種 CN（`GatewayId` 的字元規則）。LWT 發布到 `up/status`，同樣在允許範圍內。雲端服務的身分、角色與 broker 的預設存取設定由 Laysi/trustiot-v2#84 決定；dynsec 的註冊與撤銷流程由 Laysi/trustiot-v2#82 實作。
+
+**閘道器的 retained 訊息**（2026-10-11 決定）：
+
+- 不能全面禁止。`up/status` 依協定是 retained（`Status` 與 LWT），晚上線的雲端服務靠它取得每台閘道器目前的在線狀態；其他 `up` channel 的 retain 一律為否（上方 topic 表與 `Channel::delivery`），閘道器 agent 不得對它們設 retain。
+- dynsec 無法依 retain 旗標授權：它的 ACL 檢查只看 acltype、topic 與 client，不看 retain 旗標（Mosquitto 2.1.2 的 `plugins/dynamic-security/acl.c`），所以角色規則擋不住閘道器在 `up/telemetry` 等 channel 設 retain。broker 的 `retain_available false` 會關掉整個 broker（或 listener）的 retained，`up/status` 與 `down/config` 都需要，不能用。
+- 實際的界限來自精確規則：同一個 topic 的新 retained 訊息會取代舊的，所以一台閘道器最多在 7 個 `up` channel 各留一則 retained 訊息，每則不超過 broker 的 maximum packet size。broker 層級的上限（maximum packet size、每個 client 的佇列與 retained 的數量和大小）由 Laysi/trustiot-v2#84 設定。
+- 雲端服務訂閱時，broker 會重播 retained 訊息（retain 旗標為 1）。在 retain 為否的 channel 上收到 retain 旗標為 1 的訊息，表示閘道器違反協定：丟棄並記錄，不能當成新資料處理，否則每次重新訂閱都會再收一次同一則舊訊息。
+
+`tests/broker.rs` 以真的 Mosquitto 2.1.2（與 `scripts/lib/stack.ts` 相同 digest 的容器，podman 或 docker；沒有容器執行環境時略過，設了 `CI` 則失敗）驗證：角色以 `gateway_role_acls()` 的 JSON 建立；每個 `up` channel 依 `Channel::delivery` 送達雲端，`up/status` 的 LWT 在斷線時送出；每個 `down` channel 送達閘道器；`up/` 下不是協定 channel 的 topic 得到 PUBACK 0x87、雲端收不到、broker 不留 retained，設在這種 topic 的 LWT 也被丟掉；修正前的 `up/#` 規則讓同一項檢查失敗，以 `modifyRole` 換掉 ACL 並清掉殘留的 retained 後通過；dynsec 確實不擋允許 topic 上的 retain 旗標。
 
 ## 共同欄位與版本
 
