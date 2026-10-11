@@ -1,0 +1,18 @@
+# The release-selftest image run on real arm64 hardware: the lab Mac mini M1 (trustiot-mac-m1).
+# The image is the OCI archive that scripts/release/build.ts built on the workstation for
+# v0.0.0-rc.1 at ee8c438 (manifest sha256:182467660b..., see local-build.json); the image on
+# GHCR is private and the lab box has no read credentials for it.
+# The e2e lock was held by Laysi/trustiot-v2#62 from 12:43:22Z; polled every 3 minutes from
+# 12:50Z, it was free at 13:20:54Z. The run used a throwaway podman storage (vfs) under
+# ~/e2e-68, removed afterwards, and released the lock.
+2026-10-10T13:20:54Z lock: ACQUIRED
+local archive sha256: 215683c443cff7ab562dc0c66ea88143d8c91e5eb1d8a7ac51677d63c74dd2ba
+host: Linux 7.1.13-402.asahi.fc44.aarch64+16k aarch64; Fedora Linux Asahi Remix 44 (Server Edition); podman version 5.8.7
+archive sha256: 215683c443cff7ab562dc0c66ea88143d8c91e5eb1d8a7ac51677d63c74dd2ba
+Loaded image: sha256:2295545de62c07d3ffd2e7177698b3487d1e7ea63b961892f6ac9f8afb150059
+manifest digest sha256:182467660b124c93204d556d04aec5ec87dfcd274dd27bfdf85ee2d2248ac2ea; os/arch linux/arm64; user 65532:65532; entrypoint [/usr/local/bin/release-selftest]
+--- podman run --rm --network none --read-only --cap-drop all --security-opt no-new-privileges <image>
+{"arch":"aarch64","c_object":"ok","c_pointer_bits":64,"name":"release-selftest","os":"linux","rust_pointer_bits":64,"version":"0.0.0-rc.1"}
+exit 0
+cleanup: /home/trustiot/e2e-68 removed
+2026-10-10T13:21:04Z unlock: RELEASED

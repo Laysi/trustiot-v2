@@ -1,0 +1,11 @@
+# TypeScript type check of scripts/ with the package.json, tsconfig.json and bun.lock from the
+# Laysi/trustiot-v2#67 branch (ci.yml is not on main yet; they were copied in for the run and
+# removed afterwards). 2026-10-10 ~13:01Z, HEAD ee8c438 (main 71be25d + this branch).
+$ tsc --noEmit --project tsconfig.json
+lib/mqtt.ts(121,16): error TS2345: Argument of type 'string | NonSharedBuffer' is not assignable to parameter of type 'ArrayLike<number>'.
+  Type 'string' is not assignable to type 'ArrayLike<number>'.
+lib/pgwire.ts(55,16): error TS2345: Argument of type 'string | NonSharedBuffer' is not assignable to parameter of type 'ArrayLike<number>'.
+  Type 'string' is not assignable to type 'ArrayLike<number>'.
+error: script "typecheck" exited with code 1
+# No errors in scripts/release/. The two errors are in scripts/lib/ from Laysi/trustiot-v2#71
+# (already on main); the Laysi/trustiot-v2#67 branch fixes both (commit 9b9022a).
