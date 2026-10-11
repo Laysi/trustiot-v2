@@ -464,3 +464,71 @@ $ bun scripts/release/plan.ts --tag v0.0.0-rc.99 --dry-run --output plan.json   
 [release:plan] chart ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.99
 [release:plan] notes start from v0.0.0-rc.3
 (a local dry run only: no tag was created and nothing was built or pushed)
+
+# Main moved on again while the evidence above was being committed (92395c1, then e8f180b: tenant
+# transactions with row-level security and the SQL check, Laysi/trustiot-v2#263; adversarial
+# identity token tests, Laysi/trustiot-v2#270; the outbox chaos verification, Laysi/trustiot-v2#274;
+# the probe-port limit for the ambient node source, Laysi/trustiot-v2#277) and was merged again:
+# 31622f8, committed 2026-10-11T03:44:27Z. Conflicts in docs/architecture/decisions.md (main's new text of
+# decision 29, this branch's decision 30 kept after it) and in the tools list of
+# docs/architecture/repository-layout.md (release-selftest, repo-check, sql-check). Of the files
+# the release workflow uses, the merge changes only the chart templates (_clickhouse.tpl,
+# _mesh.tpl, clickhouse.yaml, mesh.yaml) and Cargo.toml/Cargo.lock, which add packages but change
+# the version of none already locked, so release-selftest's dependencies (cc 1.7.0) are the same;
+# the workflow, setup-proto, .prototools, scripts/release, deploy/images and tools/release-selftest
+# are unchanged. The checks ran 2026-10-11T03:12-03:46Z at a load average of 10-33: the cargo,
+# bun and chart checks on the merge before it was committed (committing changed no file),
+# gitleaks and the release checks on 31622f8 itself.
+
+$ cargo fmt --all --check; cargo clippy --workspace --all-targets --locked -- -D warnings;
+  cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
+exit 0, exit 0, exit 0
+
+$ cargo test --workspace --locked
+exit 0: 57 test result lines, 433 passed, 0 failed, 0 ignored    (main's new service-kit tests included)
+
+$ cargo test --package service-kit --no-default-features --locked
+exit 101 at a load average of about 30: 1 failed, the same container.rs check as after the second
+merge ("readiness fails within the drain delay": /readyz must answer 503 within 1 s of podman stop;
+the test ran 66 s). This branch does not change crates/. Rerun right after on the same tree,
+2026-10-11T03:42-03:44Z, load average about 28: exit 0, 73 passed, 0 failed.
+
+$ cargo run --locked --package openapi; git diff --exit-code -- api; git status --porcelain -- api
+wrote api/openapi.json (2973 bytes); no difference
+
+$ cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+
+$ gitleaks git --no-banner --redact --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" .
+exit 0 on a061b22 (before the merge commit): 61 commits scanned, no leaks found
+exit 0 on 31622f8: 66 commits scanned, no leaks found
+
+$ bun scripts/ci/check-workflows.ts
+workflow policy: 4 file(s) checked, no violations
+
+$ bun scripts/ci/lint-workflows.ts
+actionlint: 3 workflow file(s), no errors    (ci.yml, nightly.yml, release.yml)
+
+$ bun install --cwd scripts --frozen-lockfile; bun run --cwd scripts typecheck; bun run --cwd scripts test
+exit 0, exit 0; 244 tests across 15 files: 243 pass, 1 skip (the podman e2e test), 0 fail
+
+$ bun test deploy/chart
+200 pass, 0 fail (3 files), with bun's default 5 s limit
+
+$ bun test scripts/release    # on 31622f8
+90 pass, 0 fail
+
+$ bun scripts/release/plan.ts --tag v0.0.0-rc.99 --dry-run --output plan.json    # on 31622f8
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.99 → version 0.0.0-rc.99 (prerelease), commit 31622f835f3c71724d8df0643a28575b9f4d57c1
+[release:plan] image ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.99 (Rust package release-selftest)
+[release:plan] chart ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.99
+[release:plan] notes start from v0.0.0-rc.3
+(a local dry run only: no tag was created and nothing was built or pushed)
+
+$ helm package deploy/chart --version 0.0.0-rc.99 --app-version 0.0.0-rc.99 -d <scratch>    # on 31622f8
+exit 0; the package holds Chart.yaml, values.yaml, values.schema.json, values-saas.yaml,
+values-onprem.yaml, README.md, .helmignore and templates/ (_clickhouse.tpl, _helpers.tpl,
+_ingress.tpl, _mesh.tpl, _service.tpl, clickhouse.yaml, ingress.yaml, mesh.yaml,
+platform-config.yaml, services.yaml); tests/ is left out by .helmignore
