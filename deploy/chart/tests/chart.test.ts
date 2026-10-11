@@ -527,7 +527,7 @@ describe("values reference Secrets by name only and hold no secret material", ()
     ).toEqual([]);
   });
 
-  // Renders both shapes with every service; helm can take more than the default 5 s on a busy machine.
+  // Renders both shapes with every service: several helm commands, so it gets the slow limit.
   test("rendered manifests create no Secret and read Secrets by name and key only", () => {
     const names = new Set(
       SHAPE_NAMES.flatMap((shape) =>
@@ -589,7 +589,7 @@ describe("values reference Secrets by name only and hold no secret material", ()
       });
       expect(material).toEqual([]);
     }
-  }, 60_000);
+  }, SLOW_TEST_MS);
 });
 
 describe("exposure and hardening", () => {
