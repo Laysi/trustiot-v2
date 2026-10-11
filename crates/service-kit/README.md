@@ -72,7 +72,7 @@ async fn start(context: Context<Config>) -> Result<Router, BoxError> {
 - 每個設定鍵有點分隔的路徑，例如 `http.listen_addr`。用環境變數 `TRUSTIOT__HTTP__LISTEN_ADDR` 設定（前綴之後每段轉大寫，以 `__` 連接），或寫在 `TRUSTIOT_CONFIG_FILE` 指定的 TOML 檔；兩者都有時以環境變數為準。值為空字串的變數視同未設定。
 - 頂層的 `http`、`shutdown`、`telemetry` 屬於 kit（`config::KIT_SECTIONS`），其他頂層鍵交給服務自己的設定型別。設定型別加上 `#[serde(deny_unknown_fields)]`，拼錯的鍵才會在啟動時被擋下；沒有自己設定的服務用 `config::NoConfig`。
 - 環境變數的值都是字串，kit 依欄位型別轉成數字或布林；清單用逗號分隔，例如 `TRUSTIOT__CORS__ORIGINS=https://a.example,https://b.example`。元素本身含逗號的清單寫在設定檔。
-- 時間長度欄位加 `#[serde(deserialize_with = "service_kit::config::duration")]`，值寫成 `5s`、`500ms`、`1m 30s`。
+- 時間長度欄位加 `#[serde(deserialize_with = "service_kit::config::duration")]`，值寫成 `5s`、`500ms`、`1m 30s`。`duration` 不設上限（humantime 接受 `500000000000y` 這類值）：服務自己的時間欄位要在 `Validate` 設合理上限，免得 `Instant + Duration` 溢位 panic。
 - 缺少必要的鍵、型別錯誤、未知的鍵，以及 `Validate::validate` 回傳的 `Invalid`，都會讓服務在接流量之前以 exit code 1 停止。錯誤訊息只寫鍵、環境變數名稱與來源，不寫設定值；服務自己的 `Invalid` 訊息也不能含設定值。
 - 不帶產品名稱前綴的服務（AI 閘道，[決策 28](../../docs/architecture/decisions.md)）用 `ServiceInfo::with_env_prefix` 換掉 `TRUSTIOT`；平台設定的前綴也跟著換，部署時要對應。
 - 不要用 `Debug` 印出整個設定：連線字串等設定可能含密碼。
@@ -105,11 +105,13 @@ kit 的設定與預設值（環境變數以 `TRUSTIOT` 前綴為例）：
 | 鍵 | 環境變數 | 預設 | 說明 |
 | --- | --- | --- | --- |
 | `http.listen_addr` | `TRUSTIOT__HTTP__LISTEN_ADDR` | `0.0.0.0:8080` | 監聽位址；health 端點也在這個埠 |
-| `http.request_timeout` | `TRUSTIOT__HTTP__REQUEST_TIMEOUT` | `30s` | handler 產生回應標頭的時間上限，逾時回 504；串流的 body 不受限。用 504 而不是 503，是因為入口會重試 503，非冪等的請求可能被執行兩次 |
-| `shutdown.drain_delay` | `TRUSTIOT__SHUTDOWN__DRAIN_DELAY` | `5s` | 收到 SIGTERM 後照常服務多久，等入口、ztunnel 與 kube-proxy 不再送來新請求 |
-| `shutdown.drain_timeout` | `TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT` | `20s` | 停止接受連線後，進行中的請求與背景工作結束的時間上限；必須大於 0 |
+| `http.request_timeout` | `TRUSTIOT__HTTP__REQUEST_TIMEOUT` | `30s` | handler 產生回應標頭的時間上限，逾時回 504；串流的 body 不受限。用 504 而不是 503，是因為入口會重試 503，非冪等的請求可能被執行兩次；必須大於 0，上限 1 小時 |
+| `shutdown.drain_delay` | `TRUSTIOT__SHUTDOWN__DRAIN_DELAY` | `5s` | 收到 SIGTERM 後照常服務多久，等入口、ztunnel 與 kube-proxy 不再送來新請求；上限 1 小時 |
+| `shutdown.drain_timeout` | `TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT` | `20s` | 停止接受連線後，進行中的請求與背景工作結束的時間上限；必須大於 0，上限 1 小時 |
 | `telemetry.log_filter` | `TRUSTIOT__TELEMETRY__LOG_FILTER` | `info` | 預設等級加上以逗號分隔的 `target=level`，例如 `info,sqlx=warn` |
 | `telemetry.otlp_endpoint` | `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` | 未設定（不匯出） | OTLP/HTTP 接收端的 base URL（日誌、trace、指標都送到這裡），例如 `http://otel-collector:4318`；只接受 `http://`（mesh 已加密這一段），不得含帳密或 query |
+
+時間長度的上限（`service_kit::http::MAX_REQUEST_TIMEOUT`、`service_kit::shutdown::MAX_DRAIN`）：`http.request_timeout`、`shutdown.drain_delay`、`shutdown.drain_timeout` 各自不得超過 1 小時（剛好 1 小時可以），而且 `drain_delay + drain_timeout` 合計也不得超過 1 小時。超過就在啟動時以設定錯誤拒絕（錯誤訊息寫出設定名稱與環境變數，不寫設定值）。沒有上限時，極端值（例如 `500000000000y`）會讓 SIGTERM 後的時間運算溢位而 panic（`drain_timeout`），或讓服務永遠不退出（`drain_delay`）。
 
 ## Health 與 readiness
 
