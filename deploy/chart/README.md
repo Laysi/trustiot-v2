@@ -43,7 +43,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | 欄位 | `values-saas.yaml` | `values-onprem.yaml` | 依據 |
 | --- | --- | --- | --- |
 | `global.deploymentMode` | `saas` | `onprem` | 決策 1 |
-| `ingress.exposure` | `tunnel`：入口 gateway 只有 ClusterIP、聽 80 的 HTTP，由主機上的 cloudflared 轉入，主機不開埠；NetworkPolicy 只放行 `ingress.tunnel.allowedSources`（本機） | `direct`：入口 gateway 以 `ingress.direct.serviceType`（預設 LoadBalancer）在客戶網路開 443，以 `ingress.direct.tlsSecret` 終止外層 TLS | 決策 27 |
+| `ingress.exposure` | `tunnel`：入口 gateway 只有 ClusterIP、聽 80 的 HTTP，由主機上的 cloudflared 轉入，主機不開埠；NetworkPolicy 只放行 `ingress.tunnel.allowedSources`（本機）連 80 與 15021 | `direct`：入口 gateway 以 `ingress.direct.serviceType`（預設 LoadBalancer）在客戶網路開 443，以 `ingress.direct.tlsSecret` 終止外層 TLS | 決策 27 |
 | 可信的來源 IP（由 `ingress.exposure` 推導，不能單獨設定） | `CF-Connecting-IP` | 入口 gateway 附加在 X-Forwarded-For 最右段的位址 | 決策 6、27 |
 | `qdrant.mode` | `external`：Qdrant Cloud | `bundled`：叢集內自架 | 決策 19 |
 | `objectStorage.*` | 託管的 S3 或 R2 | 客戶的 S3 相容儲存（細節未定） | 決策 20 |
@@ -65,14 +65,14 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | 服務間授權（AuthorizationPolicy、NetworkPolicy） | `mesh.*` | 完成：每個服務自己的 ServiceAccount、依 `mesh.calls` 產生的 AuthorizationPolicy、namespace 預設拒絕的 NetworkPolicy；不部署 waypoint。服務之間的呼叫隨各服務加入 `mesh.calls` | Laysi/trustiot-v2#63；代表使用者呼叫的授權矩陣在 Laysi/trustiot-v2#106 |
 | Postgres（CloudNativePG 加 AGE） | `postgres.mode` | `external` 已接到平台設定；`bundled` 的 operator 與 Cluster 尚未加入 | Laysi/trustiot-v2#57、Laysi/trustiot-v2#58 |
 | migration Job | — | 尚未加入 | Laysi/trustiot-v2#60 |
-| ClickHouse | `clickhouse.mode` | `bundled`：單節點 StatefulSet（見「叢集內的 ClickHouse」）；`external` 已接到平台設定。schema、帳號與 row policy 由 migration Job 以 SQL 套用 | Laysi/trustiot-v2#60（migration Job）、Laysi/trustiot-v2#72（admin 密碼的 Secret） |
+| ClickHouse | `clickhouse.mode` | `bundled`：單節點 StatefulSet（見「叢集內的 ClickHouse」）；`external` 已接到平台設定。schema、帳號與 row policy 由 migration Job 以 SQL 套用 | Laysi/trustiot-v2#60（migration Job）；admin 密碼的 Secret 見「叢集內的 ClickHouse」與 docs/runbooks/secrets.md |
 | MQTT broker（Mosquitto） | — | 尚未加入 | Laysi/trustiot-v2#84 |
 | Qdrant | `qdrant.mode` | `external` 已接到平台設定；`bundled` 尚未加入 | Laysi/trustiot-v2#194 |
 | 物件儲存、SMTP、AI 端點 | `objectStorage.*`、`smtp.*`、`ai.*` | 一律外部，設定已接到平台設定 | Laysi/trustiot-v2#133、Laysi/trustiot-v2#169、Laysi/trustiot-v2#139 |
 | OpenTelemetry collector 與 OTLP 轉送 | `observability.collector.enabled` | 完成（預設開）：收服務的 OTLP、遮蔽後把日誌與 trace 寫進 ClickHouse 的 `trustiot_logs`，可轉送到 SIEM（見「OpenTelemetry collector」）。帳號由 migration Job 以 SQL 建立；指標先收下丟棄 | Laysi/trustiot-v2#60（建帳號）、Laysi/trustiot-v2#183（指標存放與 Grafana）、Laysi/trustiot-v2#63（服務間授權要放行 collector） |
 | Grafana | — | 尚未加入 | Laysi/trustiot-v2#183 |
 | Sentry | `observability.sentry.*` | 開關、環境名稱與 DSN 已接到每個服務 | Laysi/trustiot-v2#184 |
-| 密鑰 | 各個 `*Secret` 欄位、`services.<name>.credentials` | values 只存 Secret 名稱與 key；Sentry DSN 給每個服務，其他依賴的帳密只給列出它的服務，外部資料庫的 CA 掛進每個服務 | Laysi/trustiot-v2#72 決定 Secret 怎麼進叢集 |
+| 密鑰 | 各個 `*Secret` 欄位、`services.<name>.credentials` | values 只存 Secret 名稱與 key；Sentry DSN 給每個服務，其他依賴的帳密只給列出它的服務，外部資料庫的 CA 掛進每個服務；chart 不產生 Secret（測試檢查） | SaaS 的 Secret 以 SOPS 加密放在 `deploy/flux/`（Laysi/trustiot-v2#70）；地端由客戶建立。規則與清冊見 docs/architecture/secrets.md |
 
 ## 服務
 
@@ -100,7 +100,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | `ingress.resources.requests.memory` | `64Mi` | 2026-10-10 實測閒置約 46–54 MiB |
 | `ingress.resources.limits.cpu` | `"2"` | |
 | `ingress.resources.limits.memory` | `512Mi` | 必填；1,000 條閘道器連線時兩個副本合計約多 94 MiB |
-| `ingress.tunnel.allowedSources` | `[10.42.0.1/32]` | `tunnel` 時唯一能連入口 pod 的來源（IPv4 CIDR，至少 /8）：本機。k3s 的主機以 cni0 連 pod，位址是節點 pod CIDR 的第一個位址（單節點預設安裝為 10.42.0.1）；其他 Kubernetes 改成 cloudflared 與 kubelet 的實際來源 |
+| `ingress.tunnel.allowedSources` | `[10.42.0.1/32]` | `tunnel` 時唯一能連入口 pod 的來源（IPv4 CIDR，至少 /8）：本機，而且只能連 listener 的 80 與 Istio 的狀態埠 15021。k3s 的主機以 cni0 連 pod，位址是節點 pod CIDR 的第一個位址（單節點預設安裝為 10.42.0.1）；其他 Kubernetes 改成 cloudflared 與 kubelet 的實際來源 |
 | `ingress.direct.serviceType` | `LoadBalancer` | `direct` 時入口 Service 的類型：`LoadBalancer`（k3s 的 ServiceLB 或客戶的負載平衡器）、`NodePort` 或 `ClusterIP`（前面另有客戶的反向代理時） |
 | `ingress.direct.tlsSecret` | `""` | `direct` 時必填；外層 TLS 憑證所在的既有 `kubernetes.io/tls` Secret，涵蓋三個主機名稱，用客戶的憑證或我們 CA 簽的 |
 | `ingress.publicPaths.login` | `/auth/login` | 登入，`hosts.app` → `identity` |
@@ -122,7 +122,15 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | HTTPRoute `<release>-ingress-app`、`-gateway`、`-ota` | 每個主機一個，只有有規則時才產生。每條規則都把 `x-forwarded-proto` 設為 `https`（cloudflared 到入口是明文 HTTP，後端判斷 Secure cookie 與重導向網址要靠它）；每條規則都移除底線寫法的 `x_internal_identity`、`x-internal_identity`、`x_internal-identity`，例外路徑另外移除 `x-internal-identity` |
 | AuthorizationPolicy `<release>-ingress-cookie-check` | CUSTOM，provider 為 `ingress.authzProvider`。第一條規則檢查例外路徑以外的所有路徑；每個例外路徑再一條規則，在它以外的主機照樣檢查，例外不會漏到別的主機；它自己的主機帶不帶埠號都算（`notHosts` 列 `<主機>` 與 `<主機>:*`）。沒有任何例外路徑時檢查所有請求 |
 | AuthorizationPolicy `<release>-ingress-deny-internal` | DENY `/internal*`：服務之間的內部 API 不能從外面進來，即使有 `/` 這種全包的路由。CUSTOM 先執行，所以沒有 cookie 回 401、有 cookie 回 403。`//internal`、`/%2finternal` 這類寫法要靠 mesh 的路徑正規化先整理成 `/internal` 才比對得到，見下方「依賴 mesh 的路徑正規化」 |
-| NetworkPolicy `<release>-ingress` | `tunnel`：只放行 `ingress.tunnel.allowedSources`，叢集內其他 pod 連不到入口；`direct`：只開 443 與 kubelet 檢查就緒用的 15021 |
+| NetworkPolicy `<release>-ingress` | `tunnel`：只放行 `ingress.tunnel.allowedSources` 連 80（cloudflared）與 15021（kubelet 的探針），叢集內其他 pod 連不到入口；`direct`：只開 443 與 15021。兩種都不開 Envoy 的指標埠（15020、15090），見下方「入口 pod 的埠」 |
+
+入口 pod 的埠（Laysi/trustiot-v2#287，決定於 2026-10-11）：NetworkPolicy 每條規則都帶 `ports`，只有兩個 TCP 埠，不在 values 另寫一份：
+
+- listener 的埠：由 `templates/_ingress.tpl` 的 `trustiot.ingress.listenerPort` 決定（`tunnel` 80、`direct` 443），Gateway 的 listener 與 NetworkPolicy 都用它。Istio 產生的 Service 把 listener 的埠原樣轉到 pod 的同一個埠，Envoy 直接聽這個埠（Istio 在入口 pod 設 `net.ipv4.ip_unprivileged_port_start=0`），所以 NetworkPolicy 放行的就是這個數字。
+- Istio 的狀態埠 15021（`trustiot.ingress.statusPort`）：Istio 的 kube-gateway 樣板固定讓 `istio-proxy` 的 startup 與 readiness 探針 `GET /healthz/ready` 打 15021，Service 也列為 `status-port`；這個數字由 Istio 決定，chart 無法從自己的設定推得。
+- 節點來源：入口 pod 不在 ambient mesh 裡（Istio 給它 `istio.io/dataplane-mode: none`），kubelet 的探針不經 istio-cni 的 SNAT，來源是主機自己的位址（k3s 為 cni0），與 cloudflared 相同，所以 `tunnel` 只有一條規則：`allowedSources` 連 80 與 15021。服務用的節點來源 `169.254.7.127/32`（見「服務間授權」）不適用，NetworkPolicy 也不放行它；chart 測試檢查 Gateway 的 `infrastructure.labels` 不帶 `istio.io/dataplane-mode`，否則入口 pod 被放進 mesh 後探針會被擋。
+- 同一個節點的主機不受這條規則限制：Kubernetes NetworkPolicy 一律放行來自 pod 所在節點的連線，k3s 的 kube-router 以「來源是本機位址」實作，cni0 的位址也算。所以單節點的 SaaS 主機上，cloudflared、kubelet 與主機上其他行程（包括其他 namespace 的 `hostNetwork` pod）都連得到入口 pod 的每個埠，Envoy 的指標埠 15020、15090 也一樣；2026-10-11 在實驗機實測（見上面的測試報告）。這條規則與它的埠限制管的是 `allowedSources` 裡不是 pod 所在節點的來源：多節點時的其他節點、改跑在其他節點的 cloudflared，或寫得比本機更大的網段。服務的節點來源 `169.254.7.127/32` 不是主機的位址，不適用這個例外：2026-10-10 的 PoC 實測預設拒絕時要明確放行它，探針才會通過（docs/feasibility/2026-10-10-edge-poc.md），所以「服務間授權」的探針埠限制在單節點上也有作用。
+- 驗證：chart 測試對兩種型態比對每條規則的 `ports` 與 Gateway 的 listener 加 15021；nightly 與 PR 的 `smoke` job 在 k3d 上讀 Istio 實際產生的 Deployment 與 Service，確認探針與 Service 用的埠和 NetworkPolicy 放行的埠完全相同（`scripts/nightly/manifests.ts` 的 `gatewayPorts`）。Istio 升級改了狀態埠時，這一項會失敗。2026-10-11 在實驗機（Istio 1.30.5）的紀錄見 `docs/test-reports/2026-10-11-287-gateway-netpol-ports.md`。
 
 例外路徑（`ingress.publicPaths`）的規則：
 
@@ -329,8 +337,8 @@ mesh:
 | `observability.collector.forward.protocol` | `http` | `http`（OTLP/HTTP protobuf）或 `grpc` |
 | `observability.collector.forward.signals` | `[logs]` | 要轉送的訊號：`logs`、`traces` |
 | `observability.collector.forward.authHeader.name` | `""` | SIEM 驗證用的標頭名稱，例如 `Authorization`；空白代表不送 |
-| `observability.collector.forward.authHeader.secret.name` | `""`，設了標頭名稱時必填 | 放整個標頭值（例如 `Bearer <token>`）的既有 Secret；服務的自訂 `env` 不能讀它 |
-| `observability.collector.forward.authHeader.secret.key` | `value` | |
+| `observability.collector.forward.authHeader.valueSecret.name` | `""`，設了標頭名稱時必填 | 放整個標頭值（例如 `Bearer <token>`）的既有 Secret；服務的自訂 `env` 不能讀它 |
+| `observability.collector.forward.authHeader.valueSecret.key` | `value` | |
 | `observability.collector.forward.caSecret.name` | `""` | SIEM 用私有 CA 時才設，endpoint 必須是 https |
 | `observability.collector.forward.caSecret.key` | `ca.crt` | |
 | `observability.collector.resources` | requests `cpu: 50m`、`memory: 128Mi`；limits `cpu: "1"`、`memory: 512Mi` | `memory_limiter` 以記憶體上限的 80% 為界，超過時先拒收（服務端會重試）；2026-10-11 本機實測閒置約 38 MiB |
@@ -351,7 +359,7 @@ URL 欄位都不接受 `user:password@` 這種帶帳密的寫法。
 
 磁碟區大小沒有預設值，每個部署在安裝實例的覆寫檔設定 `clickhouse.bundled.storage.size`：每日筆數 × 保存天數 × 約 3.1 bytes（2026-10-09 實測，30 天 52 億筆佔 15.2 GiB）× 1.5（merge 時新舊 part 並存與系統表的餘裕）。例如每天 1 億筆、保存 400 天約 190 GB（遙測表的保存期限暫定 400 天，Laysi/trustiot-v2#92 定案）。磁碟用量的告警與擴充見清單 I2（硬碟水位告警）。
 
-安裝前要先有 `clickhouse.bundled.adminSecret` 指定的 Secret（如何進叢集由 Laysi/trustiot-v2#72 決定），例如：
+安裝前要先有 `clickhouse.bundled.adminSecret` 指定的 Secret：SaaS 以 SOPS 加密放在 `deploy/flux/`，由 Flux 解密（docs/architecture/ci-release.md「SaaS 的祕密怎麼進叢集」）；地端由客戶在安裝前建立，例如：
 
 ```sh
 kubectl -n trustiot create secret generic trustiot-clickhouse-admin --from-literal=password="$(openssl rand -hex 32)"
@@ -449,7 +457,7 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 - **服務之間的呼叫**：服務要呼叫另一個服務的內部 API 時，在服務的 issue 把這條呼叫加進 `values.yaml` 的 `mesh.calls`；沒列的呼叫會被重置。服務間授權的規則集中在 `templates/_mesh.tpl` 的 `trustiot.mesh.plan`，AuthorizationPolicy 與 NetworkPolicy 都由它產生，不要為單一服務另外寫政策。
 - **對外的路由**：服務要經入口對外時，在服務的 issue 把路由加進 `values.yaml` 的 `ingress.routes`（預設需要 cookie）。不要新增例外路徑：決策 27 只允許登入、閘道器憑證換發、MQTT 轉接與健康檢查四種，要加第五種必須先改決策。入口的規則集中在 `templates/_ingress.tpl` 的 `trustiot.ingress.plan`；可信的來源 IP 沿用 `trustiot.clientIpSource`，不要另外加欄位。
 - **新增叢集內元件**（broker、Postgres、ClickHouse、Qdrant、collector、Grafana）：放在自己的 `templates/<元件>.yaml`，以 `*.mode` 或開關控制；Service 只能是 ClusterIP；namespace 預設拒絕所有連入：元件在 mesh 內時（pod 帶 `istio.io/dataplane-mode: ambient`）把它加進 `templates/_mesh.tpl` 的 `trustiot.mesh.components`、用戶端列進 `mesh.calls`，並定義 `trustiot.<元件>.pod`（container ports 與探針，元件的模板也從它渲染，NetworkPolicy 依它只對節點來源開探針埠），AuthorizationPolicy 與 NetworkPolicy 由 chart 產生；不在 mesh 內時自帶 NetworkPolicy，只對實際的用戶端開它的埠，並讓 kubelet 的健康檢查到得了；在 `values.schema.json` 加欄位定義、在本文件加欄位說明（測試檢查 `values.yaml` 每個欄位都在本文件），並更新「元件與開關」與平台設定的表。
-- **Secret**：values 只能出現 `{name, key}` 形式的引用；schema 的 `additionalProperties: false` 會擋下放明文的新欄位。服務要拿新的依賴帳密時，在 `_helpers.tpl` 的 `trustiot.credentialCatalog` 加一列（變數名稱、Secret、可以拿的服務）、在 schema 的 `credentials` 列舉加上名稱，並更新「密鑰的環境變數」表；自訂 `env` 自動不能讀這個帳密。叢集內元件自己產生的帳密 Secret（例如 CloudNativePG 的資料庫帳號，Laysi/trustiot-v2#58）也要加進 `trustiot.dependencySecretRefs`。新的平台變數用 `TRUSTIOT_` 開頭，自動受保留規則保護。
+- **Secret**：values 只能出現 `{name, key}` 形式的引用（測試掃描兩份 values、`values.yaml` 與 `tests/values/` 的每個欄位：名稱像密鑰的欄位只能是 `*Secret` 底下的 `name`、`key` 或 `*Key`，任何值都不能像私鑰、token 或帶帳密的 URL；並確認渲染結果沒有 Secret、只以名稱與 key 讀 Secret）；schema 的 `additionalProperties: false` 會擋下放明文的新欄位。服務要拿新的依賴帳密時，在 `_helpers.tpl` 的 `trustiot.credentialCatalog` 加一列（變數名稱、Secret、可以拿的服務）、在 schema 的 `credentials` 列舉加上名稱，並更新「密鑰的環境變數」表；自訂 `env` 自動不能讀這個帳密。叢集內元件自己產生的帳密 Secret（例如 CloudNativePG 的資料庫帳號，Laysi/trustiot-v2#58）也要加進 `trustiot.dependencySecretRefs`。新的平台變數用 `TRUSTIOT_` 開頭，自動受保留規則保護。
 - **測試**：規則寫進 `tests/chart.test.ts`。`tests/values/` 的兩個安裝實例範例與 `smoke.yaml`（以 traefik/whoami 當替身服務）也供 nightly（Laysi/trustiot-v2#69）在叢集上安裝使用；叢集測試是 `tests/e2e/ingress.e2e.ts`（入口）、`tests/e2e/mesh.e2e.ts`（服務間授權）與 `tests/e2e/otel.e2e.ts`（日誌管線），前兩個共用 `tests/e2e/cluster.ts`，nightly 可直接沿用。`bun test` 的 kubeconform 已帶 CRD schema 目錄，Gateway API 與 Istio 的資源可以直接驗證。兩個實例範例會部署叢集內 ClickHouse（`clickhouse.mode: bundled`）與 collector，在叢集上安裝前要先建立 `trustiot-clickhouse-admin` Secret（見「叢集內的 ClickHouse」）與 collector 的 `trustiot-otel-collector-clickhouse` Secret；叢集測試用 `tests/e2e/values-e2e.yaml` 改成 `external`，不部署 ClickHouse，也關掉 collector。`tests/` 不會打包進 chart（`.helmignore`）。
 
 ## OpenShift 與其他 Kubernetes

@@ -219,8 +219,8 @@ Returns a YAML list; use with fromYamlArray.
 {{- if and .enabled .clickhouse.passwordSecret.name -}}
 {{- $refs = append $refs (printf "%s/%s" .clickhouse.passwordSecret.name .clickhouse.passwordSecret.key) -}}
 {{- end -}}
-{{- if and .enabled .forward.enabled .forward.authHeader.name .forward.authHeader.secret.name -}}
-{{- $refs = append $refs (printf "%s/%s" .forward.authHeader.secret.name .forward.authHeader.secret.key) -}}
+{{- if and .enabled .forward.enabled .forward.authHeader.name .forward.authHeader.valueSecret.name -}}
+{{- $refs = append $refs (printf "%s/%s" .forward.authHeader.valueSecret.name .forward.authHeader.valueSecret.key) -}}
 {{- end -}}
 {{- end -}}
 {{- toYaml (uniq $refs) -}}

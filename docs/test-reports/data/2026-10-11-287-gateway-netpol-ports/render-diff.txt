@@ -1,0 +1,12 @@
+saas + plain: 13 objects, changed: NetworkPolicy/trustiot-ingress
+  before NetworkPolicy/trustiot-ingress: [{"from":[{"ipBlock":{"cidr":"10.42.0.1/32"}}]}]
+  after  NetworkPolicy/trustiot-ingress: [{"from":[{"ipBlock":{"cidr":"10.42.0.1/32"}}],"ports":[{"port":80,"protocol":"TCP"},{"port":15021,"protocol":"TCP"}]}]
+saas + smoke: 18 objects, changed: NetworkPolicy/trustiot-ingress
+  before NetworkPolicy/trustiot-ingress: [{"from":[{"ipBlock":{"cidr":"10.42.0.1/32"}}]}]
+  after  NetworkPolicy/trustiot-ingress: [{"from":[{"ipBlock":{"cidr":"10.42.0.1/32"}}],"ports":[{"port":80,"protocol":"TCP"},{"port":15021,"protocol":"TCP"}]}]
+saas + e2e: 34 objects, changed: NetworkPolicy/trustiot-ingress
+  before NetworkPolicy/trustiot-ingress: [{"from":[{"ipBlock":{"cidr":"10.42.0.1/32"}}]}]
+  after  NetworkPolicy/trustiot-ingress: [{"from":[{"ipBlock":{"cidr":"10.42.0.1/32"}}],"ports":[{"port":80,"protocol":"TCP"},{"port":15021,"protocol":"TCP"}]}]
+onprem + plain: 13 objects, changed: none
+onprem + smoke: 18 objects, changed: none
+onprem + e2e: 34 objects, changed: none

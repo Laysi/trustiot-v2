@@ -1,0 +1,29 @@
+(pass) sendRaw > a failure after the response head arrived is not a ConnectionError, so it is never retried [342.54ms]
+(pass) sendRaw > a refused connection is a ConnectionError [14.30ms]
+(pass) sendRaw > a response that never comes is a ConnectionError after the timeout [202.37ms]
+
+ 187 pass
+ 0 fail
+ 2005 expect() calls
+Ran 187 tests across 2 files. [13.10s]
+# Unhandled error between tests
+-------------------------------
+115 |     // The check that raw() made before #261 looked at exitCode and signalCode right here and
+116 |     // rethrew, because the process had not exited yet.
+--
+error: expect(received).toBe(expected)
+
+Expected: 1
+Received: null
+--
+# Unhandled error between tests
+-------------------------------
+ 97 |   });
+ 98 |   const ms = (firstByte ?? performance.now()) - started;
+--
+# Unhandled error between tests
+-------------------------------
+ 97 |   });
+ 98 |   const ms = (firstByte ?? performance.now()) - started;
+
+[exited with code 1]

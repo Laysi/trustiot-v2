@@ -19,8 +19,8 @@ variables from secretKeyRef. Its ClickHouse account is created with SQL by the m
 {{- if and $forward.enabled $forward.caSecret.name (not (hasPrefix "https://" $forward.endpoint)) }}
 {{- fail "observability.collector.forward.caSecret needs an https:// endpoint" }}
 {{- end }}
-{{- if and $forward.enabled $forward.authHeader.name (not $forward.authHeader.secret.name) }}
-{{- fail "observability.collector.forward.authHeader.secret.name is required when authHeader.name is set" }}
+{{- if and $forward.enabled $forward.authHeader.name (not $forward.authHeader.valueSecret.name) }}
+{{- fail "observability.collector.forward.authHeader.valueSecret.name is required when authHeader.name is set" }}
 {{- end }}
 {{- if not $collector.clickhouse.passwordSecret.name }}
 {{- fail "observability.collector.clickhouse.passwordSecret.name is required when the collector is enabled" }}
@@ -129,8 +129,8 @@ spec:
             - name: FORWARD_AUTH_HEADER
               valueFrom:
                 secretKeyRef:
-                  name: {{ $forward.authHeader.secret.name }}
-                  key: {{ $forward.authHeader.secret.key }}
+                  name: {{ $forward.authHeader.valueSecret.name }}
+                  key: {{ $forward.authHeader.valueSecret.key }}
             {{- end }}
           {{- /* The NetworkPolicy opens the probe ports from the same definition. */}}
           ports:

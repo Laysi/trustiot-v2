@@ -499,17 +499,17 @@
                 "authHeader": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["name", "secret"],
+                  "required": ["name", "valueSecret"],
                   "properties": {
                     "name": {
                       "description": "HTTP header name; its whole value comes from the Secret.",
                       "type": "string",
                       "pattern": "^$|^[A-Za-z][A-Za-z0-9-]{0,63}$"
                     },
-                    "secret": { "$ref": "#/definitions/secretKeyRef" }
+                    "valueSecret": { "$ref": "#/definitions/secretKeyRef" }
                   },
                   "if": { "properties": { "name": { "minLength": 1 } } },
-                  "then": { "properties": { "secret": { "properties": { "name": { "minLength": 1 } } } } }
+                  "then": { "properties": { "valueSecret": { "properties": { "name": { "minLength": 1 } } } } }
                 },
                 "caSecret": { "$ref": "#/definitions/secretKeyRef" }
               },

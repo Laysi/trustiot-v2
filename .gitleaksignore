@@ -5,3 +5,9 @@
 # are only applied when they match. It was committed under a variable name that the generic-api-key
 # rule took for an API key; the variable is GATEWAY_CRDS_SHA256 now.
 4c4c1ddf345f41f36230bceaca7356dad36ac18d:.github/workflows/nightly.yml:generic-api-key:64
+
+# Test fixture in the chart's values test, not a secret: a lowercase hex run built from a repeated
+# literal ("0123456789abcdef".repeat(4)), which the test expects to be reported as random-looking.
+# The generic-api-key rule matched its old variable name hexKey; the variable is hexRun now. The
+# commit exists only on the branch of PR Laysi/trustiot-v2#276.
+6e00e42f42ec6d6373e5dce41f30f6d4af93cf67:deploy/chart/tests/chart.test.ts:generic-api-key:467

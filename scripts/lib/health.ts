@@ -6,9 +6,10 @@ import { connect } from "node:net";
 import { clickhouse, ClickHouseError, ping } from "./clickhouse.ts";
 import { connackCode } from "./mqtt.ts";
 import { podman } from "./podman.ts";
-import { askAuthentication, AUTH_SASL } from "./pgwire.ts";
+import { askAuthentication, askAuthenticationTls, AUTH_SASL, isCertificateRefusal } from "./pgwire.ts";
 import type { State } from "./state.ts";
-import { namesFor, SERVICE_PORT } from "./stack.ts";
+import { namesFor, POSTGRES_CA_PATH, SERVICE_PORT } from "./stack.ts";
+import { generateDevCertificates } from "./tls.ts";
 import type { ServiceDef } from "./services.ts";
 
 export interface CheckResult {
@@ -44,6 +45,20 @@ export function tcpOpen(port: number, host = "127.0.0.1", timeoutMs = 2000): Pro
   });
 }
 
+/** Passes when the attempt fails because the client refused the certificate. */
+async function expectRefusal(name: string, attempt: () => Promise<unknown>): Promise<CheckResult> {
+  try {
+    const answer = await attempt();
+    return result(name, false, `the connection was accepted (${String(answer)})`);
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    // Another failure, such as an unreachable server, proves nothing about the certificate.
+    return isCertificateRefusal(error)
+      ? result(name, true, `refused (${code})`)
+      : result(name, false, error instanceof Error ? error.message : String(error));
+  }
+}
+
 /** Runs psql inside the Postgres container, logging in over TCP with the given password. */
 async function psql(
   state: State,
@@ -58,13 +73,18 @@ async function psql(
     [
       "exec",
       "--interactive",
+      "--env",
+      "PGSSLMODE=verify-full",
+      "--env",
+      `PGSSLROOTCERT=${POSTGRES_CA_PATH}`,
       names.container("postgres"),
       "sh",
       "-c",
       'IFS= read -r PGPASSWORD && export PGPASSWORD && exec psql "$@"',
       "psql-wrapper",
       // The container's own network address, not 127.0.0.1: every non-local address needs a
-      // password (see POSTGRES_HBA), so this is a real password test.
+      // password (see POSTGRES_HBA), so this is a real password test. It connects the way a
+      // service does: TLS, with the certificate verified against the dev CA and the name.
       "--host=postgres",
       "--port=5432",
       `--username=${user}`,
@@ -80,34 +100,67 @@ async function psql(
   );
 }
 
-export function postgresChecks(state: State): Check[] {
+/** A name no certificate of this environment carries. */
+const UNKNOWN_HOST_NAME = "not-postgres.invalid";
+
+/**
+ * `caCertificate` is the PEM of the instance's dev CA (`tls/ca.crt` in the state directory).
+ * The TLS checks connect to the published port the way a verify-full client does.
+ */
+export function postgresChecks(state: State, caCertificate: string): Check[] {
+  const { user, database } = state.credentials.postgres;
+  const port = state.ports.postgres;
   return [
     () =>
       guarded("postgres: published port", async () => {
-        const open = await tcpOpen(state.ports.postgres);
-        return result("postgres: published port", open, `127.0.0.1:${state.ports.postgres}`);
+        const open = await tcpOpen(port);
+        return result("postgres: published port", open, `127.0.0.1:${port}`);
       }),
     () =>
-      guarded("postgres: published port demands a password", async () => {
-        // A startup message without credentials: the server must answer with a SCRAM
-        // challenge, never "authentication OK".
-        const name = "postgres: published port demands a password";
-        const answer = await askAuthentication(
-          state.ports.postgres,
-          state.credentials.postgres.user,
-          state.credentials.postgres.database,
-        );
+      guarded("postgres: published port refuses a connection without TLS", async () => {
+        // A startup message in the clear: the server must refuse it, whatever the credentials.
+        const name = "postgres: published port refuses a connection without TLS";
+        const answer = await askAuthentication(port, user, database);
+        return result(name, answer === "error", answer === "error" ? "refused" : `authentication request ${answer}`);
+      }),
+    () =>
+      guarded("postgres: published port demands a password over TLS", async () => {
+        // TLS verified against the dev CA and the loopback address, then a startup message
+        // without credentials: the server must answer with a SCRAM challenge, never
+        // "authentication OK".
+        const name = "postgres: published port demands a password over TLS";
+        const answer = await askAuthenticationTls(port, user, database, {
+          ca: caCertificate,
+          serverName: "127.0.0.1",
+        });
         return result(name, answer === AUTH_SASL, `authentication request ${answer} (10 = SCRAM)`);
       }),
     () =>
-      guarded("postgres: login and Apache AGE", async () => {
+      guarded("postgres: certificate of another CA refused", async () => {
+        const name = "postgres: certificate of another CA refused";
+        const other = generateDevCertificates("other").caCertificate;
+        return await expectRefusal(name, () =>
+          askAuthenticationTls(port, user, database, { ca: other, serverName: "127.0.0.1" }),
+        );
+      }),
+    () =>
+      guarded("postgres: certificate for another host name refused", async () => {
+        const name = "postgres: certificate for another host name refused";
+        return await expectRefusal(name, () =>
+          askAuthenticationTls(port, user, database, { ca: caCertificate, serverName: UNKNOWN_HOST_NAME }),
+        );
+      }),
+    () =>
+      guarded("postgres: login over TLS and Apache AGE", async () => {
+        const name = "postgres: login over TLS and Apache AGE";
         const answer = await psql(
           state,
           state.credentials.postgres.password,
-          "SELECT 'age ' || extversion FROM pg_extension WHERE extname = 'age'",
+          "SELECT 'age ' || extversion || ', tls ' || (SELECT ssl::text FROM pg_stat_ssl WHERE pid = pg_backend_pid()) " +
+            "FROM pg_extension WHERE extname = 'age'",
         );
         const text = answer.stdout.trim();
-        return result("postgres: login and Apache AGE", answer.code === 0 && text.startsWith("age "), text || "no answer");
+        return result(name, answer.code === 0 && /^age \S+, tls true$/.test(text), text || answer.stderr.trim() || "no answer");
       }),
     () =>
       guarded("postgres: wrong password refused", async () => {

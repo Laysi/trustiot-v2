@@ -1,0 +1,25 @@
+$ rcheck.sh 282 'cargo test --locked -p service-kit --test job_lock a_job_that_panics_in_a_partition -- --nocapture 2>&1 | grep -v "^ *Compiling" | tail -30 | cut -c1-3000'
+# Merge of main dc39e7d (#295, run_periodically catches job panics) into the #282 branch, before
+# the job outcome was logged ahead of the release. The panic ERROR line is missing: the release
+# timed out (Lost), run_exclusive returned that error, and the job's outcome was dropped.
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/job_lock.rs (/home/ruisi/tv2/agents/282/target/debug/deps/job_lock-4ee85e664ac0b2d8)
+
+running 1 test
+
+thread 'a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout' (435743) panicked at crates/service-kit/tests/job_lock.rs:837:25:
+the first run fails while its replica is partitioned
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout' (435743) panicked at crates/service-kit/tests/job_lock.rs:791:9:
+no such event within 2s: [(Level(Debug), "summary=\"SELECT pid FROM pg_locks …\" db.statement=\"\\n\\nSELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND objsubid = 1 AND ((classid::bigint << 32) | objid::bigint) = $1\\n\" rows_affected=0 rows_returned=0 elapsed=2.095769ms elapsed_secs=0.002095769 "), (Level(Debug), "summary=\"SELECT pg_try_advisory_lock($1)\" db.statement=\"\" rows_affected=1 rows_returned=1 elapsed=1.354485ms elapsed_secs=0.001354485 "), (Level(Debug), "summary=\"SELECT pid FROM pg_locks …\" db.statement=\"\\n\\nSELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND objsubid = 1 AND ((classid::bigint << 32) | objid::bigint) = $1\\n\" rows_affected=1 rows_returned=1 elapsed=546.065µs elapsed_secs=0.000546065 "), (Level(Debug), "summary=\"SELECT pg_terminate_backend($1)\" db.statement=\"\" rows_affected=1 rows_returned=1 elapsed=1.22038ms elapsed_secs=0.00122038 "), (Level(Warn), "message=slow statement: execution time exceeded alert threshold summary=\"SELECT pg_advisory_unlock($1)\" db.statement=\"\" rows_affected=0 rows_returned=0 elapsed=1.000304765s elapsed_secs=1.000304765 slow_threshold=1s "), (Level(Warn), "message=job lock release timed out job=service-kit-test-partition-panic-435742-1 "), (Level(Warn), "message=scheduled job lock failed job=service-kit-test-partition-panic-435742-1 error=lost the lock of job `service-kit-test-partition-panic-435742-1`: its database session ended or stopped answering ")]
+test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... FAILED
+
+failures:
+
+failures:
+    a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 4.39s
+
+error: test failed, to rerun pass `-p service-kit --test job_lock`

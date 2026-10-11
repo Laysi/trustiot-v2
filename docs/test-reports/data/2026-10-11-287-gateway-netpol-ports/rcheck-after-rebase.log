@@ -1,0 +1,20 @@
+(pass) sendRaw > a response that never comes is a ConnectionError after the timeout [210.74ms]
+
+ 187 pass
+ 0 fail
+ 2005 expect() calls
+Ran 187 tests across 2 files. [13.35s]
+(fail) tunnel dies while a request is in flight > the request fails before the process has exited, the way kubectl behaves (fault injection) [5002.20ms]
+(fail) tunnel dies while a request is in flight > reopens the tunnel and sends the request once more [5001.89ms]
+(fail) tunnel dies while a request is in flight > a tunnel that exited long before the request is reopened without waiting [116.57ms]
+(fail) tunnel dies while a request is in flight > a healthy tunnel needs no recovery [5003.11ms]
+(fail) tunnel dies while a request is in flight > a failing reopen is thrown [5000.89ms]
+(fail) tunnel dies while a request is in flight > the request fails before the process has exited, the way kubectl behaves (fault injection) [5002.20ms]
+(fail) tunnel dies while a request is in flight > reopens the tunnel and sends the request once more [5001.89ms]
+(fail) tunnel dies while a request is in flight > a tunnel that exited long before the request is reopened without waiting [116.57ms]
+(fail) tunnel dies while a request is in flight > a healthy tunnel needs no recovery [5003.11ms]
+(fail) tunnel dies while a request is in flight > a failing reopen is thrown [5000.89ms]
+ 197 pass
+ 5 fail
+
+[exited with code 1]

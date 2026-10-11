@@ -1,7 +1,8 @@
 // Just enough of the PostgreSQL wire protocol to ask a server how it wants a client to log in,
 // without a password. A server that answers "authentication OK" to a startup message that
 // carries no credentials trusts the client, which must never be the case on a published port.
-import { connect } from "node:net";
+import { connect, isIP, type Socket } from "node:net";
+import { connect as tlsConnect } from "node:tls";
 
 /** The StartupMessage (protocol 3.0) for `user` and `database`. */
 export function startupMessage(user: string, database: string): Uint8Array {
@@ -72,6 +73,89 @@ export function askAuthentication(
     socket.once("error", (error) => {
       clearTimeout(timer);
       reject(error);
+    });
+  });
+}
+
+/**
+ * Whether `error` is a client's refusal of the server certificate (wrong CA, wrong name,
+ * expired), as opposed to a network failure: a check that expects a refusal must not pass just
+ * because the server was unreachable.
+ */
+export function isCertificateRefusal(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && /CERT|ISSUER|SIGNATURE|CHAIN|VERIFY/.test(code);
+}
+
+/** The SSLRequest message: length 8, then the request code 80877103. */
+export const SSL_REQUEST = new Uint8Array([0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f]);
+
+export interface TlsTrust {
+  /** PEM of the CA that must have signed the server certificate; nothing else is trusted. */
+  ca: string;
+  /** The name the certificate must carry: a host name or an IP address. */
+  serverName: string;
+}
+
+/**
+ * Like {@link askAuthentication}, but over TLS the way a verify-full client connects: an
+ * SSLRequest first, then the handshake, which only succeeds when the server certificate chains
+ * to `trust.ca` and names `trust.serverName`. Rejects with the TLS error (its `code` says why
+ * the certificate was refused) or, when the server does not offer TLS, with a plain error.
+ */
+export function askAuthenticationTls(
+  port: number,
+  user: string,
+  database: string,
+  trust: TlsTrust,
+  host = "127.0.0.1",
+  timeoutMs = 5000,
+): Promise<number | "error"> {
+  return new Promise((resolve, reject) => {
+    const raw: Socket = connect({ host, port });
+    let secure: ReturnType<typeof tlsConnect> | undefined;
+    const timer = setTimeout(
+      () => finish(() => reject(new Error("timed out waiting for the Postgres server"))),
+      timeoutMs,
+    );
+    const finish = (action: () => void) => {
+      clearTimeout(timer);
+      secure?.destroy();
+      raw.destroy();
+      action();
+    };
+    raw.once("error", (error) => finish(() => reject(error)));
+    raw.once("connect", () => raw.write(SSL_REQUEST));
+    raw.once("data", (answer) => {
+      const bytes = typeof answer === "string" ? new TextEncoder().encode(answer) : answer;
+      if (bytes[0] !== 0x53) {
+        finish(() => reject(new Error("the Postgres server does not offer TLS")));
+        return;
+      }
+      // `ca` replaces the default trust store, so only the dev CA is trusted. An IP address is
+      // matched against the certificate's IP entries and a name against its DNS entries.
+      secure = tlsConnect({
+        socket: raw,
+        ca: trust.ca,
+        ...(isIP(trust.serverName) ? { host: trust.serverName } : { servername: trust.serverName }),
+        rejectUnauthorized: true,
+        minVersion: "TLSv1.2",
+      });
+      secure.once("error", (error) => finish(() => reject(error)));
+      secure.once("secureConnect", () => secure!.write(startupMessage(user, database)));
+      let received: Uint8Array = new Uint8Array(0);
+      secure.on("data", (chunk: Uint8Array) => {
+        const next = new Uint8Array(received.length + chunk.length);
+        next.set(received);
+        next.set(chunk, received.length);
+        received = next;
+        try {
+          const outcome = authRequest(received);
+          if (outcome !== undefined) finish(() => resolve(outcome));
+        } catch (error) {
+          finish(() => reject(error));
+        }
+      });
     });
   });
 }

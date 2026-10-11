@@ -401,7 +401,7 @@ observability:
       # value (for example "Bearer <token>") is read from the Secret.
       authHeader:
         name: ""
-        secret:
+        valueSecret:
           name: ""
           key: value
       # CA certificate for a SIEM with a private CA; leave the name empty for a public one.
