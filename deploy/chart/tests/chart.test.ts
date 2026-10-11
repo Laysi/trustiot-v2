@@ -5,6 +5,10 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { COMMAND_TIMEOUT_MS, SLOW_TEST_MS, throwIfTimedOut, useProcessTestTimeouts } from "./timing.ts";
+
+// Every test starts helm, and some also kubeconform: see timing.ts for the limits.
+useProcessTestTimeouts();
 
 const CHART_DIR = join(import.meta.dir, "..");
 const REPO_ROOT = join(CHART_DIR, "..", "..");
@@ -13,12 +17,9 @@ const REPO_ROOT = join(CHART_DIR, "..", "..");
 // can write its own notices to stdout (for example while another proto process holds a
 // lock), which would corrupt rendered manifests.
 function pinnedTool(tool: string): string {
-  const result = Bun.spawnSync({
-    cmd: ["proto", "bin", tool, "--reporter", "text"],
-    cwd: REPO_ROOT,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  const cmd = ["proto", "bin", tool, "--reporter", "text"];
+  const result = Bun.spawnSync({ cmd, cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe", timeout: COMMAND_TIMEOUT_MS });
+  throwIfTimedOut(cmd, result);
   const path = result.stdout.toString().trim().split("\n").at(-1)?.trim() ?? "";
   if (result.exitCode !== 0 || !isAbsolute(path) || !existsSync(path)) {
     throw new Error(`cannot find the pinned ${tool}; run \`proto install\`\n${result.stderr.toString()}`);
@@ -50,7 +51,6 @@ const KUBERNETES_OBJECT_FIELDS = new Set([
 ]);
 const CRD_SCHEMA_LOCATION =
   "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json";
-const SLOW_TEST_MS = 120_000;
 
 const SHAPES = {
   saas: ["values-saas.yaml", "tests/values/saas-instance.yaml"],
@@ -95,14 +95,23 @@ function isMap(value: unknown): value is YamlMap {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function run(cmd: string[], stdin?: string) {
+function run(cmd: readonly string[], stdin?: string) {
   const proc = Bun.spawnSync({
-    cmd,
+    cmd: [...cmd],
     cwd: CHART_DIR,
     stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin),
     stdout: "pipe",
     stderr: "pipe",
+    timeout: COMMAND_TIMEOUT_MS,
   });
+  throwIfTimedOut(
+    cmd,
+    proc,
+    cmd[0] === KUBECONFORM
+      ? "kubeconform fetches schemas over the network into its cache, and a download can stall; " +
+          "or the machine was so busy that it never ran (check `uptime`)"
+      : undefined,
+  );
   return { code: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 

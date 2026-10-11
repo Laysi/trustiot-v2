@@ -1,0 +1,18 @@
+(fail) tunnel dies while a request is in flight > the request fails before the process has exited, the way kubectl behaves (fault injection) [60034.35ms]
+error: expect(received).toBe(expected)
+(fail) tunnel dies while a request is in flight > reopens the tunnel and sends the request once more [30040.40ms]
+(fail) tunnel dies while a request is in flight > a tunnel that exited long before the request is reopened without waiting [82.28ms]
+(fail) tunnel dies while a request is in flight > a healthy tunnel needs no recovery [30055.22ms]
+error: expect(received).toBe(expected)
+(fail) tunnel dies while a request is in flight > retries at most once: a second connection failure is thrown [30036.72ms]
+error: expect(received).toThrow(expected)
+(fail) tunnel dies while a request is in flight > a failing reopen is thrown [30046.78ms]
+(fail) tunnel dies while a request is in flight > the request fails before the process has exited, the way kubectl behaves (fault injection) [60034.35ms]
+(fail) tunnel dies while a request is in flight > reopens the tunnel and sends the request once more [30040.40ms]
+(fail) tunnel dies while a request is in flight > a tunnel that exited long before the request is reopened without waiting [82.28ms]
+(fail) tunnel dies while a request is in flight > a healthy tunnel needs no recovery [30055.22ms]
+(fail) tunnel dies while a request is in flight > retries at most once: a second connection failure is thrown [30036.72ms]
+(fail) tunnel dies while a request is in flight > a failing reopen is thrown [30046.78ms]
+ 194 pass
+ 6 fail
+Ran 200 tests across 3 files. [197.68s]

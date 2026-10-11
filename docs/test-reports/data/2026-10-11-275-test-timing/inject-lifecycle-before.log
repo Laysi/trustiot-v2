@@ -1,0 +1,14 @@
+   Compiling service-kit v0.1.0 (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-ad2260244a934a4e7/crates/service-kit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.27s
+     Running tests/lifecycle.rs (target/debug/deps/lifecycle-f1071f3dd7b4f9e9)
+running 1 test
+test sigterm_fails_readiness_at_once_and_drains_requests_in_flight ... FAILED
+failures:
+---- sigterm_fails_readiness_at_once_and_drains_requests_in_flight stdout ----
+thread 'sigterm_fails_readiness_at_once_and_drains_requests_in_flight' (645170) panicked at crates/service-kit/tests/lifecycle.rs:84:41:
+GET /readyz while draining: Os { code: 111, kind: ConnectionRefused, message: "Connection refused" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+failures:
+    sigterm_fails_readiness_at_once_and_drains_requests_in_flight
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 2.07s
+error: test failed, to rerun pass `-p service-kit --test lifecycle`

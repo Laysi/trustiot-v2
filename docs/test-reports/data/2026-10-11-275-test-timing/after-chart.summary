@@ -1,0 +1,6 @@
+after-chart run 1: exit 0, 215 s, load 35.56
+after-chart run 2: exit 0, 235 s, load 35.65
+after-chart run 3: exit 0, 241 s, load 35.88
+after-chart run 4: exit 0, 254 s, load 34.44
+after-chart run 5: exit 0, 271 s, load 37.71
+after-chart: 0 of 5 runs failed

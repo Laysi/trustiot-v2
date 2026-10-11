@@ -10,6 +10,22 @@ use std::time::{Duration, Instant};
 
 use support::{OUTPUT_DRAIN_TIMEOUT, Output, Service, get, spawn_example, wait_exit};
 
+/// How long a test waits for something the service does as soon as it is scheduled: logging a
+/// line, closing a listener. It only ever bounds a failure, so it is far above what a busy
+/// machine needs (an idle one needs milliseconds).
+const EVENT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long a test waits for a service to exit when the exit itself is what it checks and its
+/// duration is asserted separately, against the delay the test configured.
+const EXIT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The drain delay and drain timeout of the SIGTERM test. The test has to reach the service
+/// within the drain delay, and the exit has to come long before the drain timeout, so both are
+/// long compared with what a busy machine takes to schedule a test thread: a test thread that
+/// waits one second for a CPU would otherwise find the listener closed or the delay over.
+const DRAIN_DELAY: Duration = Duration::from_secs(4);
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Retries connecting until the connection is refused, which is how a closed listener answers.
 /// The log line that announces the end of accepting is written just before the listener is
 /// dropped, so a connection right after it can still succeed on a loaded machine; the deadline
@@ -60,9 +76,11 @@ fn health_endpoints_answer_while_serving() {
 
 #[test]
 fn sigterm_fails_readiness_at_once_and_drains_requests_in_flight() {
+    let drain_delay = format!("{}s", DRAIN_DELAY.as_secs());
+    let drain_timeout = format!("{}s", DRAIN_TIMEOUT.as_secs());
     let mut service = Service::start(&[
-        ("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", "1s"),
-        ("TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT", "10s"),
+        ("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", &drain_delay),
+        ("TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT", &drain_timeout),
     ]);
     let address = service.address;
     assert_eq!(get(address, "/readyz").expect("GET /readyz").status, 200);
@@ -75,16 +93,13 @@ fn sigterm_fails_readiness_at_once_and_drains_requests_in_flight() {
 
     service
         .stdout
-        .wait_for_message(
-            "shutdown requested; readiness now fails",
-            Duration::from_secs(2),
-        )
+        .wait_for_message("shutdown requested; readiness now fails", EVENT_TIMEOUT)
         .expect("the service logs the shutdown request");
     let ready = get(address, "/readyz").expect("GET /readyz while draining");
     let ready_checked = signalled.elapsed();
     assert!(
-        ready_checked < Duration::from_secs(1),
-        "readiness was checked within the drain delay"
+        ready_checked < DRAIN_DELAY,
+        "readiness was checked {ready_checked:?} after SIGTERM, not within the {DRAIN_DELAY:?} drain delay"
     );
     assert_eq!(ready.status, 503);
     assert_eq!(ready.json()["status"], "draining");
@@ -99,10 +114,10 @@ fn sigterm_fails_readiness_at_once_and_drains_requests_in_flight() {
         .stdout
         .wait_for_message(
             "stopped accepting connections; draining requests and background tasks",
-            Duration::from_secs(3),
+            DRAIN_DELAY + EVENT_TIMEOUT,
         )
         .expect("the service stops accepting after the drain delay");
-    wait_until_refused(address, Duration::from_secs(5))
+    wait_until_refused(address, EVENT_TIMEOUT)
         .unwrap_or_else(|why| panic!("new connections are refused once draining: {why}"));
 
     let slow = in_flight
@@ -113,13 +128,15 @@ fn sigterm_fails_readiness_at_once_and_drains_requests_in_flight() {
     assert_eq!(slow.json()["waited_ms"], 2500);
 
     let status = service
-        .wait_exit(Duration::from_secs(10))
+        .wait_exit(DRAIN_DELAY + DRAIN_TIMEOUT)
         .expect("the service exits");
     let exited = signalled.elapsed();
     assert_eq!(status.code(), Some(0), "{status}");
+    // The request in flight is done long before the drain delay ends, so the service exits
+    // right after the delay; waiting for the drain timeout instead would be a hang.
     assert!(
-        exited < Duration::from_secs(5),
-        "exited {exited:?} after SIGTERM"
+        exited < DRAIN_TIMEOUT / 2,
+        "exited {exited:?} after SIGTERM, with a drain delay of {DRAIN_DELAY:?} and a drain timeout of {DRAIN_TIMEOUT:?}"
     );
     service
         .stdout
@@ -137,9 +154,7 @@ fn sigterm_fails_readiness_at_once_and_drains_requests_in_flight() {
 fn sigint_drains_like_sigterm() {
     let mut service = Service::start(&[]);
     service.signal("INT");
-    let status = service
-        .wait_exit(Duration::from_secs(5))
-        .expect("the service exits");
+    let status = service.wait_exit(EXIT_TIMEOUT).expect("the service exits");
     assert_eq!(status.code(), Some(0), "{status}");
     let requested = service
         .stdout
@@ -162,17 +177,16 @@ fn drain_timeout_bounds_shutdown() {
     thread::sleep(Duration::from_millis(300));
     let signalled = Instant::now();
     service.signal("TERM");
-    let status = service
-        .wait_exit(Duration::from_secs(5))
-        .expect("the service exits");
+    let status = service.wait_exit(EXIT_TIMEOUT).expect("the service exits");
     let elapsed = signalled.elapsed();
     assert_eq!(
         status.code(),
         Some(1),
         "a cut-off drain is a failure: {status}"
     );
+    // The handler needs 8 s: an exit before 5 s was not waiting for it.
     assert!(
-        elapsed < Duration::from_secs(3),
+        elapsed < Duration::from_secs(5),
         "exited {elapsed:?} after SIGTERM"
     );
     service
@@ -201,22 +215,22 @@ fn drain_timeout_bounds_shutdown() {
 
 #[test]
 fn second_signal_exits_without_draining() {
-    let mut service = Service::start(&[("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", "10s")]);
+    let mut service = Service::start(&[("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", "30s")]);
     service.signal("TERM");
     service
         .stdout
-        .wait_for_message(
-            "shutdown requested; readiness now fails",
-            Duration::from_secs(2),
-        )
+        .wait_for_message("shutdown requested; readiness now fails", EVENT_TIMEOUT)
         .expect("first signal logged");
     let signalled = Instant::now();
     service.signal("TERM");
-    let status = service
-        .wait_exit(Duration::from_secs(5))
-        .expect("the service exits");
+    let status = service.wait_exit(EXIT_TIMEOUT).expect("the service exits");
     assert_eq!(status.code(), Some(1), "{status}");
-    assert!(signalled.elapsed() < Duration::from_secs(2));
+    // Draining would take the 30 s of the drain delay.
+    let exited = signalled.elapsed();
+    assert!(
+        exited < Duration::from_secs(15),
+        "exited {exited:?} after the second SIGTERM"
+    );
 }
 
 #[test]
