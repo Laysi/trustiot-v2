@@ -537,6 +537,16 @@ async fn secrets_never_reach_logs_or_responses() {
     ] {
         responses.push(request(service.address, "GET", target, &[]).expect("request"));
     }
+    // The health port, which the node can reach, serves the health routes and nothing else:
+    // not the check, so no token is ever issued there.
+    for target in ["/healthz", "/readyz", "/internal/ext-authz/api/devices"] {
+        let headers = [("host", APP), ("cookie", session_cookie.as_str())];
+        let response = request(service.health_address, "GET", target, &headers).expect("request");
+        if target.starts_with("/internal") {
+            assert_eq!(response.status, 404, "{}", response.raw());
+        }
+        responses.push(response);
+    }
     let tokens: Vec<String> = responses
         .iter()
         .flat_map(|response| response.header_values("x-internal-identity"))
@@ -609,8 +619,10 @@ async fn an_unreachable_database_fails_closed() {
         response.json(),
         json!({"code": "unavailable", "message_key": "error.unavailable"})
     );
-    let ready = request(service.address, "GET", "/readyz", &[]).expect("readyz");
-    assert_eq!(ready.status, 503);
+    for address in [service.health_address, service.address] {
+        let ready = request(address, "GET", "/readyz", &[]).expect("readyz");
+        assert_eq!(ready.status, 503);
+    }
     // Requests without a usable cookie never need the database.
     assert_unauthenticated(&check(&service, "/", None));
 }
@@ -632,6 +644,14 @@ fn base_env(keys: &str, key_file: &std::path::Path, port: u16) -> Env {
         ("TRUSTIOT_POSTGRES_PORT".into(), port.to_string()),
         ("TRUSTIOT_POSTGRES_DATABASE".into(), "identity".into()),
         ("TRUSTIOT_POSTGRES_SSLMODE".into(), "verify-full".into()),
+        // Read when a connection is made, never at startup; nothing listens at `port` anyway.
+        (
+            "TRUSTIOT_POSTGRES_CA_FILE".into(),
+            key_file
+                .with_file_name("postgres-ca.crt")
+                .display()
+                .to_string(),
+        ),
         ("TRUSTIOT__DATABASE__USERNAME".into(), "identity_app".into()),
         (
             "TRUSTIOT__DATABASE__PASSWORD".into(),
@@ -707,6 +727,11 @@ fn unusable_keys_and_settings_stop_startup() {
             "no routes",
             without(base_env(&good_keys, &key_file, 1), "TRUSTIOT_INGRESS_ROUTES"),
             "TRUSTIOT_INGRESS_ROUTES",
+        ),
+        (
+            "no CA for the database server",
+            without(base_env(&good_keys, &key_file, 1), "TRUSTIOT_POSTGRES_CA_FILE"),
+            "TRUSTIOT_POSTGRES_CA_FILE",
         ),
         (
             "a route the service cannot issue for",

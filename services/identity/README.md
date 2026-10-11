@@ -92,7 +92,7 @@ openssl pkey -in signing-key.pem -pubout -outform DER | tail -c 32 | basenc --ba
 2. **換簽章私鑰**：把 Secret 的內容換成新私鑰，然後 `kubectl rollout restart deployment/<release>-identity`（Secret 改變不會自動重啟 pod）。新的 pod 自己找出新 `kid`；步驟 1 沒做完就換，新 pod 拒絕啟動，舊 pod 繼續服務。
 3. **移除舊公鑰**：身分服務滾動完成後至少等 305 秒（驗證端接受的最長效期 300 秒加 5 秒時鐘誤差），再從 `publicKeys` 移除舊公鑰並部署，最後刪除舊私鑰。
 
-私鑰外洩時三步同時做，不等舊 token 過期。
+私鑰外洩時三步同時做，不等舊 token 過期。SaaS（SOPS、每步一個 PR、以 `trustiot.io/secret-rotated` annotation 重啟）與地端的實際操作見 [密鑰 runbook](../../docs/runbooks/secrets.md) 的「內部身分簽章金鑰」。
 
 ## 設定
 
@@ -103,11 +103,11 @@ openssl pkey -in signing-key.pem -pubout -outform DER | tail -c 32 | basenc --ba
 | `TRUSTIOT_INTERNAL_IDENTITY_KEYS` | 平台設定：每個服務共用的公鑰 JWK Set；簽章私鑰的公鑰必須在裡面 |
 | `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` | 只給身分服務：掛載的私鑰路徑 |
 | `TRUSTIOT_INGRESS_ROUTES` | 只給身分服務：cookie 路由，決定受眾 |
-| `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE`、`_CA_FILE` | 平台設定：Postgres 位置；只接受 `verify-full` |
+| `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE`、`_CA_FILE` | 平台設定：Postgres 位置；只接受 `verify-full`，`_CA_FILE` 必填，是唯一信任的根憑證 |
 | `TRUSTIOT__DATABASE__USERNAME`、`TRUSTIOT__DATABASE__PASSWORD` | 服務角色 `identity_app` 的帳密（Secret；隨 Laysi/trustiot-v2#58、Laysi/trustiot-v2#60 交付） |
 | `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 每個副本的連線數，1–100，預設 10 |
 
-啟動時連線不急著建立；readiness（`/readyz`）跟著 Postgres 的連線檢查，資料庫連不上時 ext_authz 回 503、readiness 回 503。設定、金鑰或路由不能用時以 exit code 1 結束，不開始服務。
+啟動時連線不急著建立；readiness（健康埠與 API 埠的 `/readyz`）跟著 Postgres 的連線檢查，資料庫連不上時 ext_authz 回 503、readiness 回 503。健康埠（預設 8081）只有 `/healthz` 與 `/readyz`，ext_authz 端點只在 API 埠（8080）。設定、金鑰或路由不能用時以 exit code 1 結束，不開始服務。
 
 ## 測試工具怎麼建立 session
 
@@ -126,7 +126,7 @@ MS0 沒有登入，測試以 migration 角色直接寫表（`tests/ext_authz.rs`
 CARGO_BUILD_JOBS=2 cargo test -p identity
 ```
 
-`tests/ext_authz.rs` 需要 podman 或 docker：起一個帶 TLS 的暫時 Postgres（與 `crates/service-kit` 的測試共用同一份支援程式），每個測試建自己的資料庫、套用 migration、以 `identity_app` 啟動真的 binary。沒有容器時略過，設了 `CI` 時改為失敗。
+`tests/ext_authz.rs` 需要 podman 或 docker：起一個帶 TLS 的暫時 Postgres（與 `crates/service-kit` 的測試共用同一份支援程式），每個測試建自己的資料庫、套用 migration、以 `identity_app` 啟動真的 binary。`tests/cross_tenant.rs` 是 [crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試，用 testkit 的 TLS Postgres。兩者沒有容器時都略過，設了 `CI` 時改為失敗。
 
 | 測試 | 驗證 |
 | --- | --- |
@@ -134,4 +134,5 @@ CARGO_BUILD_JOBS=2 cargo test -p identity
 | `src/issuer.rs` | token 的標頭與 claims 剛好是約定的格式、只有受眾驗得過、過期後被拒；`kid` 的判斷；公鑰沒部署時拒絕；錯誤與 `Debug` 不含私鑰 |
 | `src/audience.rs` | `Exact` 優先與最長 `PathPrefix`、主機比對；不能用的路由設定拒絕啟動且不引用設定值 |
 | `src/ext_authz/tests.rs` | 以假的 session store 驗證回應表的每一列、偽造的身分標頭不影響 200、store 失敗或卡住時 0.4 秒內回 503、各種方法與路徑形狀、只服務這個端點 |
-| `tests/ext_authz.rs` | 真的服務與 Postgres：有效 session 拿到一個通過 service-kit 驗證的 token，偽造的同名標頭不會出現在回應；401 的各種情況（含過期、撤銷、使用者刪除）；改角色與移除成員在下一個請求生效；服務角色不能寫 session、RLS 擋住其他租戶的成員資料；私鑰、session secret 與 token 不出現在日誌與回應；資料庫連不上時回 503；金鑰與設定不能用時拒絕啟動 |
+| `tests/ext_authz.rs` | 真的服務與 Postgres：有效 session 拿到一個通過 service-kit 驗證的 token，偽造的同名標頭不會出現在回應；401 的各種情況（含過期、撤銷、使用者刪除）；改角色與移除成員在下一個請求生效；服務角色不能寫 session、RLS 擋住其他租戶的成員資料；私鑰、session secret 與 token 不出現在日誌與回應；健康埠只有 `/healthz`、`/readyz`；資料庫連不上時回 503；金鑰與設定不能用時拒絕啟動 |
+| `tests/cross_tenant.rs` | 服務角色讀不到也改不了其他租戶的 `memberships`（讀、無租戶讀、更新、搬移、插入五種探測），服務角色碰得到的每個關聯都已宣告：`users`、`sessions` 不是租戶資料而豁免，沒有租戶資料的 API |

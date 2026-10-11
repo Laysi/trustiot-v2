@@ -1,0 +1,23 @@
+# Fixture repository (created under the session scratchpad, not committed)
+$ cat .dockerignore
+*
+$ cat deploy/images/demo/Containerfile
+FROM gcr.io/distroless/static-debian13:nonroot
+COPY certs/server.key /etc/tls/server.key
+COPY .env /app/.env
+ARG GHCR_TOKEN
+ENV DATABASE_PASSWORD=changeme
+COPY . /src
+$ cat scripts/build.ts
+await run(["podman", "build", "--build-arg", "NPM_AUTH_TOKEN=" + token, "."]);
+
+$ bun scripts/ci/check-secret-handling.ts <fixture>
+deploy/images/demo/Containerfile:2: COPY certs/server.key copies a private key or keystore into the image; build-time secrets go through RUN --mount=type=secret and runtime secrets through a Kubernetes Secret
+deploy/images/demo/Containerfile:3: COPY .env copies a dotenv file into the image; build-time secrets go through RUN --mount=type=secret and runtime secrets through a Kubernetes Secret
+deploy/images/demo/Containerfile:4: ARG GHCR_TOKEN looks like a secret; build arguments stay in the image history, so pass it with RUN --mount=type=secret,id=... instead
+deploy/images/demo/Containerfile:5: ENV DATABASE_PASSWORD looks like a secret and would stay in the image configuration; inject it at run time from a Kubernetes Secret
+deploy/images/demo/Containerfile:6: COPY . copies the whole build context, but deploy/images/demo/ has no ignore file; deploy/images/ has no ignore file; deploy/ has no ignore file; start the ignore file with "*" and allow only the files the image needs with "!" lines, never key or credential files
+scripts/build.ts:1: build argument NPM_AUTH_TOKEN looks like a secret; build arguments stay in the image history, so use a secret mount (--secret, RUN --mount=type=secret) instead
+scripts/build.ts:1: writes a container build command; take the arguments from containerBuildArgs(context, options) in scripts/lib/build-context.ts, which checks the context it builds
+secret handling: 7 violation(s); checked 2 file(s), 1 container build file(s)
+exit status: 1

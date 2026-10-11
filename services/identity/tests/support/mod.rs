@@ -187,6 +187,8 @@ pub struct Service {
     pub stdout: Output,
     pub stderr: Output,
     pub address: SocketAddr,
+    /// The health port, which serves only `/healthz` and `/readyz` (the kubelet probes it).
+    pub health_address: SocketAddr,
 }
 
 impl Service {
@@ -203,23 +205,26 @@ impl Service {
                     stderr.text()
                 )
             });
-        let address = listening["fields"]["address"]
-            .as_str()
-            .and_then(|address| address.parse().ok())
-            .unwrap_or_else(|| panic!("no address in {listening}"));
+        let parse = |field: &str| -> SocketAddr {
+            listening["fields"][field]
+                .as_str()
+                .and_then(|address| address.parse().ok())
+                .unwrap_or_else(|| panic!("no {field} in {listening}"))
+        };
         Self {
             child,
             stdout,
             stderr,
-            address,
+            address: parse("address"),
+            health_address: parse("health_address"),
         }
     }
 
-    /// Waits for `/readyz` to answer 200.
+    /// Waits for `/readyz` on the health port to answer 200.
     pub fn wait_ready(&self, timeout: Duration) {
         let deadline = Instant::now() + timeout;
         loop {
-            if request(self.address, "GET", "/readyz", &[]).is_ok_and(|r| r.status == 200) {
+            if request(self.health_address, "GET", "/readyz", &[]).is_ok_and(|r| r.status == 200) {
                 return;
             }
             assert!(
@@ -260,6 +265,7 @@ pub fn spawn(env: &[(&str, &str)]) -> (Child, Output, Output) {
     command
         .env_clear()
         .env("TRUSTIOT__HTTP__LISTEN_ADDR", "127.0.0.1:0")
+        .env("TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR", "127.0.0.1:0")
         .env("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", "100ms")
         .env("TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT", "5s")
         .envs(env.iter().copied())

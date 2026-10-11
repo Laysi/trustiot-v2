@@ -8,7 +8,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use support::{OUTPUT_DRAIN_TIMEOUT, Output, Service, get, spawn_example, wait_exit};
+use support::{OUTPUT_DRAIN_TIMEOUT, Output, Service, get, request, spawn_example, wait_exit};
 
 /// Retries connecting until the connection is refused, which is how a closed listener answers.
 /// The log line that announces the end of accepting is written just before the listener is
@@ -59,13 +59,75 @@ fn health_endpoints_answer_while_serving() {
 }
 
 #[test]
+fn health_port_serves_only_the_probe_endpoints() {
+    let service = Service::start(&[]);
+    let health = service.health_address;
+    assert_ne!(health.port(), service.address.port());
+    let live = get(health, "/healthz").expect("GET /healthz on the health port");
+    assert_eq!(live.status, 200);
+    assert_eq!(live.json()["status"], "ok");
+    assert_eq!(live.header("cache-control"), Some("no-store"));
+    let ready = get(health, "/readyz").expect("GET /readyz on the health port");
+    assert_eq!(ready.status, 200);
+    assert_eq!(ready.json()["status"], "ready");
+
+    // Everything the API port serves, and every near miss of the probe paths, is 404 here: the
+    // node, which reaches this port unauthenticated, gets nothing else (Laysi/trustiot-v2#286).
+    for target in [
+        "/",
+        "/v1/hello",
+        "/v1/slow?ms=1",
+        "/v1/panic",
+        "/v1/whoami",
+        "/v1/items",
+        "/internal/anything",
+        "/healthz/",
+        "/readyz/",
+        "/healthz/../v1/hello",
+        "/HEALTHZ",
+        "/healthzx",
+        "//healthz",
+        "/%68ealthz",
+    ] {
+        let response = get(health, target).unwrap_or_else(|error| panic!("GET {target}: {error}"));
+        assert_eq!(response.status, 404, "GET {target} on the health port");
+    }
+    for (method, target) in [
+        ("POST", "/v1/echo"),
+        ("PUT", "/internal/anything"),
+        ("DELETE", "/v1/hello"),
+    ] {
+        let response = request(health, method, target, &[], Some(r#"{"text":"x"}"#))
+            .unwrap_or_else(|error| panic!("{method} {target}: {error}"));
+        assert_eq!(response.status, 404, "{method} {target} on the health port");
+    }
+    // The probe paths answer GET only.
+    let post = request(health, "POST", "/readyz", &[], Some("{}")).expect("POST /readyz");
+    assert_eq!(post.status, 405);
+    // The API port still serves the service, and its health routes for mesh callers.
+    assert_eq!(
+        get(service.address, "/v1/hello").expect("hello").status,
+        200
+    );
+    assert_eq!(get(service.address, "/readyz").expect("readyz").status, 200);
+    // Neither port logs probes, nor the requests the health port refused.
+    let text = service.stdout.text();
+    assert!(
+        !text.contains("/healthz") && !text.contains("/readyz") && !text.contains("/internal"),
+        "{text}"
+    );
+}
+
+#[test]
 fn sigterm_fails_readiness_at_once_and_drains_requests_in_flight() {
     let mut service = Service::start(&[
         ("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", "1s"),
         ("TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT", "10s"),
     ]);
     let address = service.address;
+    let health = service.health_address;
     assert_eq!(get(address, "/readyz").expect("GET /readyz").status, 200);
+    assert_eq!(get(health, "/readyz").expect("GET /readyz").status, 200);
 
     let in_flight = thread::spawn(move || get(address, "/v1/slow?ms=2500"));
     // Let the slow request reach its handler before the signal.
@@ -80,16 +142,21 @@ fn sigterm_fails_readiness_at_once_and_drains_requests_in_flight() {
             Duration::from_secs(2),
         )
         .expect("the service logs the shutdown request");
+    // Readiness fails at once on both ports: they share one state.
     let ready = get(address, "/readyz").expect("GET /readyz while draining");
+    let health_ready = get(health, "/readyz").expect("GET /readyz on the health port");
     let ready_checked = signalled.elapsed();
     assert!(
         ready_checked < Duration::from_secs(1),
         "readiness was checked within the drain delay"
     );
-    assert_eq!(ready.status, 503);
-    assert_eq!(ready.json()["status"], "draining");
+    for ready in [&ready, &health_ready] {
+        assert_eq!(ready.status, 503);
+        assert_eq!(ready.json()["status"], "draining");
+    }
     // Still alive and still serving during the drain delay.
     assert_eq!(get(address, "/healthz").expect("GET /healthz").status, 200);
+    assert_eq!(get(health, "/healthz").expect("GET /healthz").status, 200);
     assert_eq!(
         get(address, "/v1/hello").expect("GET /v1/hello").status,
         200
@@ -104,6 +171,12 @@ fn sigterm_fails_readiness_at_once_and_drains_requests_in_flight() {
         .expect("the service stops accepting after the drain delay");
     wait_until_refused(address, Duration::from_secs(5))
         .unwrap_or_else(|why| panic!("new connections are refused once draining: {why}"));
+    // The health port keeps answering while requests drain, so the kubelet sees a draining pod
+    // instead of refused connections: still not ready, still alive.
+    let draining = get(health, "/readyz").expect("GET /readyz on the health port while draining");
+    assert_eq!(draining.status, 503);
+    assert_eq!(draining.json()["status"], "draining");
+    assert_eq!(get(health, "/healthz").expect("GET /healthz").status, 200);
 
     let slow = in_flight
         .join()
@@ -125,9 +198,12 @@ fn sigterm_fails_readiness_at_once_and_drains_requests_in_flight() {
         .stdout
         .wait_for_message("shutdown complete", Duration::from_secs(1))
         .expect("the service logs a clean shutdown");
+    // The health port closes with the process.
+    wait_until_refused(health, Duration::from_secs(5))
+        .unwrap_or_else(|why| panic!("the health port closes at exit: {why}"));
     // Evidence for the test report, shown with `--nocapture`.
     eprintln!(
-        "after SIGTERM: /readyz answered 503 at {} ms, the process exited 0 at {} ms",
+        "after SIGTERM: /readyz answered 503 on both ports at {} ms, the process exited 0 at {} ms",
         ready_checked.as_millis(),
         exited.as_millis()
     );
@@ -327,13 +403,38 @@ fn durations_at_the_caps_still_start_and_drain_on_sigterm() {
 
 #[test]
 fn listen_address_in_use_stops_startup() {
-    let taken = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a port");
-    let address = taken.local_addr().expect("local address").to_string();
-    let (mut child, stdout, _stderr) =
-        spawn_example(&[("TRUSTIOT__HTTP__LISTEN_ADDR", address.as_str())]);
+    for variable in [
+        "TRUSTIOT__HTTP__LISTEN_ADDR",
+        "TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR",
+    ] {
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a port");
+        let address = taken.local_addr().expect("local address").to_string();
+        let (mut child, stdout, _stderr) = spawn_example(&[(variable, address.as_str())]);
+        let status = wait_exit(&mut child, Duration::from_secs(10)).expect("the service exits");
+        assert_eq!(status.code(), Some(1), "{variable}: {status}");
+        let logged = stdout
+            .wait_for_message("cannot listen; not starting", Duration::from_secs(1))
+            .unwrap_or_else(|| panic!("{variable}: not logged"));
+        assert_eq!(logged["fields"]["address"], address.as_str(), "{variable}");
+        assert!(!stdout.text().contains("\"listening\""), "{variable}");
+    }
+}
+
+#[test]
+fn health_port_equal_to_the_api_port_stops_startup() {
+    let (mut child, stdout, _stderr) = spawn_example(&[
+        ("TRUSTIOT__HTTP__LISTEN_ADDR", "127.0.0.1:18080"),
+        ("TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR", "0.0.0.0:18080"),
+    ]);
     let status = wait_exit(&mut child, Duration::from_secs(10)).expect("the service exits");
     assert_eq!(status.code(), Some(1), "{status}");
-    stdout
-        .wait_for_message("cannot listen; not starting", Duration::from_secs(1))
+    let logged = stdout
+        .wait_for_message(
+            "invalid configuration; not starting",
+            Duration::from_secs(1),
+        )
         .expect("logged");
+    let error = logged["fields"]["error"].as_str().expect("error text");
+    assert!(error.contains("http.health_listen_addr"), "{error}");
+    assert!(!error.contains("18080"), "{error}");
 }

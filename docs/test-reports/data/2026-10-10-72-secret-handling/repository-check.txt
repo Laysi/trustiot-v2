@@ -1,0 +1,17 @@
+# This branch (feat/72-secrets-policy, with main e21ff41 merged in on 2026-10-11; main now
+# includes the release workflow of Laysi/trustiot-v2#68)
+$ bun scripts/ci/check-secret-handling.ts
+secret handling: 185 file(s) checked, 2 container build file(s), no violations
+exit status: 0
+# The container build files are deploy/chart/tests/e2e/identity-double/Containerfile, which the
+# nightly builds through containerBuildArgs (scripts/nightly/platform.ts), and
+# deploy/images/rust-binary.Containerfile, which the release build renders per image and builds
+# through containerBuildArgs (scripts/release/build.ts).
+
+# Before scripts/release/build.ts was changed, the same check on the merged tree reported:
+scripts/release/build.ts:174: writes a container build command; take the arguments from containerBuildArgs(context, options) in scripts/lib/build-context.ts, which checks the context it builds
+docs/test-reports/data/2026-10-11-259-container-drain-flake/podman-slow-stop.sh:7: runs a container tool whose subcommand is not fixed text right after the tool (it is computed at run time, or follows global options), so this check cannot tell whether it builds; write the subcommand first as a string literal, or build through containerBuildArgs (scripts/lib/build-context.ts)
+secret handling: 2 violation(s); checked 199 file(s), 2 container build file(s)
+exit status: 1
+# The second is a test double kept with another report (a podman wrapper that passes its
+# arguments along); files under docs/test-reports/data/ are now skipped as scripts, like test files.

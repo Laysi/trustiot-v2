@@ -39,6 +39,8 @@ zeroize.workspace = true
 getrandom.workspace = true
 # The TLS Postgres the integration tests start (shared with crates/service-kit's tests).
 rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
+# The cross-tenant negative test suite (decision 29).
+testkit = { path = "../../crates/testkit" }
 tower = { workspace = true, features = ["util"] }
 
 [lints]

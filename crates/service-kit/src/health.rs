@@ -5,9 +5,16 @@
 //! - [`READINESS_PATH`] answers 200 only after startup finished, while no shutdown signal has
 //!   arrived, and while every registered check passes; otherwise 503.
 //!
-//! Both are served on the main port, outside the request logging and timeout layers. Under Istio
-//! ambient the kubelet's probes arrive from 169.254.7.127 without passing through ztunnel, so
-//! the chart's NetworkPolicy must allow that address (docs/feasibility/2026-10-10-edge-poc.md).
+//! Both are served on two ports, from the same state, outside the request logging and timeout
+//! layers:
+//! - the health port (`http.health_listen_addr`), which serves nothing else: every other path
+//!   answers 404. The kubelet probes this port. Under Istio ambient its probes arrive from
+//!   169.254.7.127 without passing through ztunnel, and so does every other connection from the
+//!   node, such as a hostNetwork pod's (docs/feasibility/2026-10-10-edge-poc.md). The chart's
+//!   NetworkPolicy therefore admits that address on the health port only, which keeps the node
+//!   away from the API, `/internal/` included (Laysi/trustiot-v2#286).
+//! - the API port, for callers through the mesh, for example the ingress gateway's public
+//!   `/healthz` that external uptime checks call, and for running a service outside the chart.
 
 use std::fmt::Display;
 use std::future::Future;
@@ -203,7 +210,8 @@ impl Health {
         ok
     }
 
-    /// The `/healthz` and `/readyz` routes.
+    /// The `/healthz` and `/readyz` routes. Alone, as the health port serves them, every other
+    /// path answers 404 (axum's default fallback) and another method on these two paths 405.
     pub(crate) fn router(&self) -> Router {
         Router::new()
             .route(LIVENESS_PATH, get(liveness))

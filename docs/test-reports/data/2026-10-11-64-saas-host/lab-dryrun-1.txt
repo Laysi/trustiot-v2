@@ -1,0 +1,8 @@
+== default unit, dry run
+  host: Fedora Linux Asahi Remix 44 (Server Edition), arm64, systemd 259
+exit=1
+== e2e unit, skip k3s, dry run, no token
+error: /etc/systemd/system/cloudflared.service exists and was not written by this installer (for example by `cloudflared service install`). It is left untouched; migrate it as deploy/host/README.md describes, or choose another name with --unit
+  host: Fedora Linux Asahi Remix 44 (Server Edition), arm64, systemd 259
+error: firewalld zone nm-shared (runtime) has the target ACCEPT, which can open TCP or UDP 80 or 443 on the host; the installer removes only the plain http/https services and 80/443 ports, so change this one yourself and run again
+exit=1

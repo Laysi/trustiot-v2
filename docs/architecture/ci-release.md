@@ -2,11 +2,45 @@
 
 GitHub Actions，三個 workflow：
 
-1. `ci.yml`：每個 PR（不論目標分支，整合分支也一樣）與推到 main 都跑，全綠才能合併（目前由流程把關，見下方「必要檢查與強制方式」）。Rust 跑 fmt、clippy、測試與 sqlx 離線檢查，並以 cargo-deny 檢查授權與漏洞公告（地端產品不能混入 BSL 等不能轉售的授權）；整合測試以 service container 起含 AGE 的 Postgres、ClickHouse 與 Mosquitto，跑完全部 migration 後跑跨租戶負向測試（RLS、row policy、AGE 角色）；閘道器程式交叉編譯成 aarch64，agent 用 testkit 的假 Modbus 端點跑故障注入測試；前端跑 Bun 安裝、型別檢查、lint、單元測試與建置；重新產生 `api/openapi.json` 與前端 client，有差異就失敗；helm lint，兩份 values 各自 helm template 後以 kubeconform 驗證（`bun test deploy/chart` 一次跑完，也檢查 chart 自己的安全規則，見 `deploy/chart/README.md`）；gitleaks 掃描祕密。各項由哪個 job 負責、哪些還沒加入，見下方「ci.yml 的 job」。Codex 審查設為 PR 的必要檢查，是伺服器端的關卡；本機 pre-commit 只是提早攔下。
+1. `ci.yml`：每個 PR（不論目標分支，整合分支也一樣）與推到 main 都跑，全綠才能合併（目前由流程把關，見下方「必要檢查與強制方式」）。Rust 跑 fmt、clippy、測試與 sqlx 離線檢查，並以 cargo-deny 檢查授權與漏洞公告（地端產品不能混入 BSL 等不能轉售的授權）；整合測試以 service container 起含 AGE 的 Postgres、ClickHouse 與 Mosquitto，跑完全部 migration 後跑跨租戶負向測試（RLS、row policy、AGE 角色）；閘道器程式交叉編譯成 aarch64，agent 用 testkit 的假 Modbus 端點跑故障注入測試；前端跑 Bun 安裝、型別檢查、lint、單元測試與建置；重新產生 `api/openapi.json` 與前端 client，有差異就失敗；helm lint，兩份 values 各自 helm template 後以 kubeconform 驗證（`bun test deploy/chart` 一次跑完，也檢查 chart 自己的安全規則，見 `deploy/chart/README.md`）；SaaS 主機安裝程式的型別檢查、測試與建置（`deploy/host`）；gitleaks 掃描祕密。各項由哪個 job 負責、哪些還沒加入，見下方「ci.yml 的 job」。Codex 審查設為 PR 的必要檢查，是伺服器端的關卡；本機 pre-commit 只是提早攔下。
 2. `release.yml`：打 tag 時跑。容器映像只出 arm64：Rust 先交叉編譯再放進映像，推到 GHCR，以 cosign 簽章並附 SBOM；SaaS 主機與展示機（Mac M1）都要是 arm64，地端客戶若用 x86 主機，到時再加 amd64。Helm chart 打包推到 GHCR。閘道器 agent 與 updater 的 aarch64 執行檔附建置來源證明，由 CI 以 OTA 簽章金鑰簽章：金鑰存在受保護的 GitHub environment，只有 main 上的 tag 能用，每次簽章都要人工核准。另外產出離線安裝包（MS6）；release notes 沿用 `Laysi/release-notes-action`。
 3. `nightly.yml`：每晚用 k3d 部署整套 chart（兩份 values 各一次），裝好 Istio ambient 後跑冒煙測試與入口 e2e 測試，失敗時開 issue 通知；依賴更新交給 Renovate。做什麼、怎麼通知與失敗時怎麼辦見下方「nightly.yml」與「Renovate」。
 
 SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定放在 `deploy/flux/`；發版就是合併一個改 chart 版本號的 PR（由 release 流程自動開）。GitHub 不持有任何部署憑證，主機也不必對外開放，叢集只存一把唯讀的 GHCR 拉取 token；Flux 控制器的記憶體算進主機規格（MS3 重測）。地端不裝 Flux，由客戶以 Helm 安裝或用離線安裝包。
+
+### SaaS 的祕密怎麼進叢集
+
+2026-10-10 決定（Laysi/trustiot-v2#72）：**SOPS 加 age，由 Flux 的 kustomize-controller 解密**。密鑰的規則與清冊見 [密鑰與權限](secrets.md)，輪替步驟見 [密鑰輪替 runbook](../runbooks/secrets.md)。
+
+做法：
+
+- 每個 Secret 寫成一般的 Kubernetes Secret YAML，放在 `deploy/flux/`，檔名以 `.sops.yaml` 結尾。只加密 `data` 與 `stringData` 的值（`encrypted_regex: ^(data|stringData)$`），Secret 名稱與 key 保持明文，PR 看得出改了哪個 Secret 的哪個 key，看不到值。
+- repo 根目錄的 `.sops.yaml` 列出收件者：SaaS 叢集的 age 公鑰，加上每位負責維運的人的 age 公鑰。
+- Flux 的 Kustomization 設 `decryption.provider: sops`，引用 `flux-system` namespace 的 Secret `sops-age`（叢集的 age 私鑰），在記憶體中解密後套用。CI 不解密，GitHub 上只有密文。
+- CI 的 `check-secret-handling.ts` 擋下 repo 內任何沒有加密的 Secret（見下方 `workflow-policy`）。
+
+理由：
+
+1. **不多跑元件**：解密是 Flux 本來就在跑的 kustomize-controller 的功能。sealed-secrets 與 External Secrets Operator 都要多一個常駐控制器，單節點主機（決策 5）的記憶體每一份都要算。
+2. **從零重建可以重現**：版控裡有完整的期望狀態（含加密的 Secret），新主機放回叢集的 age 私鑰後，Flux 就能把整套裝回來（重建演練，Laysi/trustiot-v2#187）。sealed-secrets 的密文綁定叢集控制器自己的金鑰，重建時要先還原那把金鑰，否則每個 Secret 都要重新封裝；它也預設每 30 天換新封裝金鑰，備份要跟著更新。
+3. **人能檢查與輪替，不必碰叢集**：維運人員是收件者，以自己的 age 私鑰 `sops edit` 就能確認內容與換值，走一般的 PR 審查。sealed-secrets 的密文只有叢集解得開，人無法確認裡面是什麼。
+4. **不依賴雲端帳號**：age 不需要 KMS（決策 1 去 AWS）。External Secrets Operator 需要外部的祕密庫：Vault 要自己維運，1Password、Infisical 等是新的供應商與費用；叢集還是要存一把讀祕密庫的憑證，問題只是往外移一層。
+5. **GitHub 仍不持有部署憑證**：CI 從頭到尾不需要解密金鑰。
+
+代價與對策：
+
+- 叢集的 age 私鑰成為新的信任根：只存在叢集的 Secret 與離線備份，不進版控；離線備份與根 CA 私鑰一起保管（密鑰清冊）。
+- 收件者能解密全部 SOPS 檔案：收件者只限負責維運的人；有人離開時，除了移除收件者，還要輪替他讀得到的每一個值（runbook）。
+- 密文永久留在版控歷史：叢集私鑰或任一收件者的私鑰外洩，歷史上的每個值都解得開，所以私鑰外洩時要輪替所有值，不只換金鑰。
+- gitleaks 若把 `ENC[...]` 誤判為祕密，以 gitleaks 設定排除 SOPS 密文的格式，不排除整個檔案。
+
+需要人提供的東西（Laysi/trustiot-v2#70 建立 `deploy/flux/` 之前）：
+
+1. 決定哪幾位維運人員是收件者，建議至少兩位，避免只有一個人解得開。每位以 `age-keygen` 在自己的裝置產生金鑰對，只交出公鑰。
+2. 建立 SaaS 叢集時，由維運人員產生叢集的 age 金鑰對、直接建立 `sops-age` Secret（不經版控），並把私鑰的離線備份交給兩位保管人。
+3. GHCR 拉取 token 用的專用機器帳號（GHCR 只接受 classic personal access token，見密鑰清冊）。
+
+Laysi/trustiot-v2#70 以這些公鑰建立 `.sops.yaml`，並把 sops 與 age 鎖進 `.prototools`。地端不裝 Flux，Secret 由客戶以自己的方式建立，chart 只認 Secret 名稱與 key。
 
 通用規則（[#158](https://github.com/Laysi/trustiot/issues/158)、[#120](https://github.com/Laysi/trustiot/issues/120)、[#122](https://github.com/Laysi/trustiot/issues/122)）：每個 workflow 明列最小權限，每個 job 都寫出自己的 `permissions`，workflow 層級設 `permissions: {}`；第三方 action（含 GitHub 官方的 `actions/*` 與 reusable workflow）一律釘 40 字元的 commit SHA，行尾註解寫版本；容器映像（`docker://` action、job 與 service container）釘 digest；需要雲端憑證時用 OIDC，不放長期金鑰；發佈走 GitHub environment 加人工核准（私有 repo 在目前的 GitHub 方案設不了核准，2026-10-10 決定暫時接受，改以補償措施把關，見下方「發佈核准」）；fork 來的 PR 拿不到任何 secret，所以不使用 `pull_request_target` 與 `workflow_run` 觸發。權限、釘選與觸發條件三項由 CI 的 `workflow-policy` job（`scripts/ci/check-workflows.ts`）檢查每個 workflow 與 `.github/actions/` 下的 action；workflow 本身是否為 GitHub 能解析的語法，由同一個 job 以 actionlint 檢查（見下方「Workflow 語法檢查」）。本地 action（`uses: ./...`）不必釘 SHA，因為它隨使用它的變更一起審查，但只能放在 `.github/actions/` 下，本地 reusable workflow 只能直接放在 `.github/workflows/`，才在檢查範圍內；symbolic link 依實際指向的檔案檢查。
 
@@ -16,11 +50,12 @@ SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定�
 
 | job（檢查名稱） | 內容 |
 | --- | --- |
-| `rust` | `cargo fmt --all --check`；`cargo clippy --workspace --all-targets --locked -- -D warnings`；`cargo test --workspace --locked`（含 `tools/repo-check` 的 repo 規則、`crates/service-kit` 以 `cargo tree` 檢查關閉 `contract` feature 時不依賴 contract，以及之後各 crate 的測試，例如 agent 以 testkit 假 Modbus 端點跑的故障注入測試）。`--workspace` 只建置預設 feature，所以 service-kit 關閉預設 feature 另跑一次 clippy 與測試（`--package service-kit --no-default-features`）。service-kit 的容器測試（以 PID 1 執行的範例服務、advisory lock 用的 Postgres）用 runner 上的 podman 或 docker 起容器；GitHub 設定 `CI=true`，找不到可用的容器執行環境時這些測試失敗而不是略過，所以測試步驟通過就表示它們真的跑過。全程設 `SQLX_OFFLINE=true`：sqlx 的查詢巨集只讀進版控的 `.sqlx/`，查詢資料沒更新就編譯失敗。接著執行 `cargo run --locked --package openapi` 重新產生 `api/openapi.json`（`tools/openapi`，各服務由程式碼產生的 OpenAPI 規格加上 M1 錯誤 schema 合併而成），有任何差異就印出差異並失敗，所以改了 API 型別卻沒重新產生規格的 PR 過不了；同一項比對也在 `cargo test --workspace` 裡（`tools/openapi/tests/openapi.rs`）。最後把 `crates/protocol` 與 `edge/` 下的每個成員以 `aarch64-unknown-linux-gnu` 建置；還沒有這些 crate 時只留下說明，protocol crate（Laysi/trustiot-v2#50）併入後自動涵蓋。函式庫建置不需要交叉連結器，第一個閘道器執行檔加入時一併加上。前一項失敗時後面幾項照跑，一次回報全部結果 |
+| `rust` | `cargo fmt --all --check`；`cargo clippy --workspace --all-targets --locked -- -D warnings`；`cargo test --workspace --locked`（含 `tools/repo-check` 的 repo 規則、`crates/service-kit` 以 `cargo tree` 檢查關閉 `contract` feature 時不依賴 contract，以及之後各 crate 的測試，例如 agent 以 testkit 假 Modbus 端點跑的故障注入測試）。`--workspace` 只建置預設 feature，所以 service-kit 關閉預設 feature 另跑一次 clippy 與測試（`--package service-kit --no-default-features`）。service-kit 的容器測試（以 PID 1 執行的範例服務、advisory lock 用的 Postgres）與 testkit 跨租戶負向測試框架的自我測試（帶 TLS 的 Postgres）用 runner 上的 podman 或 docker 起容器；GitHub 設定 `CI=true`，找不到可用的容器執行環境時這些測試失敗而不是略過，所以測試步驟通過就表示它們真的跑過。全程設 `SQLX_OFFLINE=true`：sqlx 的查詢巨集只讀進版控的 `.sqlx/`，查詢資料沒更新就編譯失敗。接著執行 `cargo run --locked --package openapi` 重新產生 `api/openapi.json`（`tools/openapi`，各服務由程式碼產生的 OpenAPI 規格加上 M1 錯誤 schema 合併而成），有任何差異就印出差異並失敗，所以改了 API 型別卻沒重新產生規格的 PR 過不了；同一項比對也在 `cargo test --workspace` 裡（`tools/openapi/tests/openapi.rs`）。最後把 `crates/protocol` 與 `edge/` 下的每個成員以 `aarch64-unknown-linux-gnu` 建置；還沒有這些 crate 時只留下說明，protocol crate（Laysi/trustiot-v2#50）併入後自動涵蓋。函式庫建置不需要交叉連結器，第一個閘道器執行檔加入時一併加上。前一項失敗時後面幾項照跑，一次回報全部結果 |
 | `cargo-deny` | `cargo deny --locked check`，規則在根目錄的 `deny.toml`：授權白名單（見下方「授權白名單」）；RustSec 的漏洞、unmaintained 與 unsound 公告一律失敗，要忽略某則公告必須在 `deny.toml` 寫明理由與到期日；Cargo.lock 裡有 yanked 版本就失敗；相依只能來自 crates.io |
 | `helm` | `bun test deploy/chart`：`helm lint --strict`；`values-saas.yaml` 與 `values-onprem.yaml` 各自 helm template 後以 `kubeconform -strict` 驗證（Kubernetes schema 由 kubeconform 下載）；再加上 chart 自己的規則與 README 欄位檢查，見 `deploy/chart/README.md`；入口 e2e 的通道復原邏輯（`deploy/chart/tests/e2e/tunnel-recovery.ts`）有不需要叢集的單元測試，也在這一步跑 |
+| `host` | SaaS 主機安裝程式（`deploy/host`，Laysi/trustiot-v2#64）：型別檢查；`bun test` 以模擬主機跑每個安裝步驟（乾淨主機一次到位、重跑不改任何東西、拒絕時主機不變、token 不出現在指令列與輸出），並以 runner 的 `systemd-analyze security --offline` 確認 cloudflared unit 的評分不高於 2.0、以 gpg 確認釘選的 Cloudflare 套件簽章金鑰指紋；`CI=true` 時缺 systemd-analyze 或 gpg 會失敗而不是略過；最後編譯 x86_64 與 aarch64 兩個執行檔 |
 | `gitleaks` | 掃描 HEAD 能走到的每個 commit（完整歷史）；merge commit 也以對第一個 parent 的差異掃描，只在合併時加入的內容也查得到。只掃 HEAD，不掃 checkout 時一起抓下來的其他分支。發現時在該檔案與行號標註，附 fingerprint；報告遮蔽祕密值，不會印進紀錄 |
-| `workflow-policy` | `scripts/ci/check-workflows.ts` 檢查 `.github/workflows/` 的 workflow 與 `.github/actions/` 的 action，規則即上方通用規則中的權限、釘選（含本地 action 的位置）與觸發條件三項；`scripts/ci/lint-workflows.ts` 以 actionlint 檢查每個 workflow 的語法、expression 與各 key 可用的 context（2026-10-10，Laysi/trustiot-v2#251；本機 `bun scripts/ci/lint-workflows.ts`）；再跑 `scripts/` 與 `deploy/chart/tests/` 全部 TypeScript 的型別檢查（2026-10-11，Laysi/trustiot-v2#261）與 `scripts/` 的測試（含本地開發環境 Laysi/trustiot-v2#71 的單元測試；它的端對端測試要以 podman 起整套環境並編譯服務，不在 CI 執行） |
+| `workflow-policy` | `scripts/ci/check-workflows.ts` 檢查 `.github/workflows/` 的 workflow 與 `.github/actions/` 的 action，規則即上方通用規則中的權限、釘選（含本地 action 的位置）與觸發條件三項；`scripts/ci/lint-workflows.ts` 以 actionlint 檢查每個 workflow 的語法、expression 與各 key 可用的 context（2026-10-10，Laysi/trustiot-v2#251；本機 `bun scripts/ci/lint-workflows.ts`）；`scripts/ci/check-secret-handling.ts` 檢查密鑰的處理：repo 內每個 Dockerfile 與 Containerfile 不 COPY 金鑰類檔案、`ARG` 與 `ENV` 不放密鑰、只有旁邊的 ignore 檔以 `*` 開頭時才能複製整個 build context，`--build-arg` 與 `build-args` 不傳密鑰，映像建置一律經 `containerBuildArgs` 檢查實際的 context，`${{ secrets.* }}` 只出現在 step 的 `env` 與 `with`（不寫進 `run`，也不放在 workflow 與 job 層級的 `env`），repo 內的 Kubernetes Secret 一律以 SOPS 加密（規則見 [密鑰與權限](secrets.md)）；再跑 `scripts/` 與 `deploy/chart/tests/` 全部 TypeScript 的型別檢查（2026-10-11，Laysi/trustiot-v2#261）與 `scripts/` 的測試（含本地開發環境 Laysi/trustiot-v2#71 的單元測試；它的端對端測試要以 podman 起整套環境並編譯服務，不在 CI 執行） |
 
 之後由其他 issue 加進 ci.yml 的檢查（加入時同步更新本表與必要檢查清單）：
 
@@ -32,7 +67,7 @@ SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定�
 
 ### 必要檢查與強制方式
 
-必要檢查清單（ci.yml 的 job 名稱）：`rust`、`cargo-deny`、`helm`、`gitleaks`、`workflow-policy`。
+必要檢查清單（ci.yml 的 job 名稱）：`rust`、`cargo-deny`、`helm`、`host`、`gitleaks`、`workflow-policy`。
 
 2026-10-10 確認：本 repo 是私有庫，組織在 GitHub Free 方案，分支保護與 ruleset 都不能用（API 回 HTTP 403「Upgrade to GitHub Pro」），GitHub 不會擋下沒通過檢查的合併。方案升級前由流程把關：合併任何 PR 之前，確認上列檢查在該 PR 最新的 commit 上全部通過。方案升級後，在 main 的 ruleset 把上列檢查設為必要檢查。
 
@@ -61,7 +96,33 @@ CI 以 `.github/actions/setup-proto` 安裝 proto：版本與兩種架構（x64�
 
 ### fork 來的 PR
 
-ci.yml 不使用任何 secret，每個 job 的 GITHUB_TOKEN 只有 `contents: read`，checkout 也不把 token 留在 `.git/config`（`persist-credentials: false`）。fork 來的 PR 以 `pull_request` 事件執行，GitHub 不給 secret、token 唯讀；`workflow-policy` 擋下 `pull_request_target` 與 `workflow_run`。私有庫 Actions 設定中的「Send write tokens to workflows from fork pull requests」與「Send secrets to workflows from fork pull requests」保持關閉（GitHub 預設值）。
+ci.yml 不使用任何 secret，每個 job 的 GITHUB_TOKEN 只有 `contents: read`，checkout 也不把 token 留在 `.git/config`（`persist-credentials: false`）。fork 來的 PR 以 `pull_request` 事件執行，GitHub 不給 secret、token 唯讀；`workflow-policy` 擋下 `pull_request_target` 與 `workflow_run`。repo 層級的 Actions 設定另外保證這幾點，見下一節。
+
+### GitHub 的 Actions 設定
+
+2026-10-10 經使用者同意，以 GitHub API 設定並讀回確認（記錄於 Laysi/trustiot-v2#72）：
+
+| 設定 | 值 | 效果 |
+| --- | --- | --- |
+| fork PR 的 workflow 送出 secret 與變數（`send_secrets_and_variables`） | `false` | 私有庫的 fork PR 拿不到任何 secret 與 Actions 變數 |
+| fork PR 的 workflow 拿到寫入權限的 token（`send_write_tokens_to_workflows`） | `false` | fork PR 的 `GITHUB_TOKEN` 一律唯讀 |
+| fork PR 的 workflow 要先核准（`require_approval_for_fork_pr_workflows`） | `true` | 有寫入權限的人核准後才會執行 |
+| 預設的 `GITHUB_TOKEN` 權限（`default_workflow_permissions`） | `read` | 沒寫 `permissions` 的 job 也只有讀取權限；我們的 workflow 另外每個 job 都明列 |
+| Actions 能否核准 PR（`can_approve_pull_request_reviews`） | `false` | workflow 不能以 `GITHUB_TOKEN` 核准 PR、繞過人工審查 |
+| action 必須釘完整的 commit SHA（`sha_pinning_required`） | `true` | GitHub 拒絕執行沒有釘 SHA 的 action，與 `workflow-policy` 的檢查互為兩層 |
+
+重新確認的指令（需要 repo 的管理權限；每年與人員異動時各做一次，[密鑰輪替 runbook](../runbooks/secrets.md) 也列了這一項）：
+
+```sh
+# sha_pinning_required: true
+gh api repos/Laysi/trustiot-v2/actions/permissions
+# default_workflow_permissions: "read"、can_approve_pull_request_reviews: false
+gh api repos/Laysi/trustiot-v2/actions/permissions/workflow
+# send_write_tokens_to_workflows: false、send_secrets_and_variables: false、require_approval_for_fork_pr_workflows: true
+gh api repos/Laysi/trustiot-v2/actions/permissions/fork-pr-workflows-private-repos
+```
+
+任何一項與上表不同，就表示設定被改過：先改回，再查組織的稽核紀錄找出原因。
 
 ## release.yml
 
@@ -180,13 +241,13 @@ publish job 在 `release` environment 執行，原本的設計是在 environment
 每份 values 依序做：
 
 1. 命名空間以 Pod Security `restricted`（enforce、warn、audit）建立：chart 要能在最嚴格的等級下安裝，也是 OpenShift 的前提。
-2. 為 chart 渲染出來的 pod 讀取、但 chart 自己不建立的 Secret 建立假值，並為 Gateway listener 引用的 TLS Secret 建立自簽憑證（Secret 怎麼進叢集由 Laysi/trustiot-v2#72 決定；這裡驗證的是接線，不是帳密）。內建的 ClickHouse（`clickhouse.mode: bundled`，Laysi/trustiot-v2#59）照 `tests/values/<shape>-instance.yaml` 的 `storage.size` 安裝，磁碟區由 k3s 內建的 local-path 提供，管理帳號的 Secret `trustiot-clickhouse-admin` 也是假值；它的 `/ping` 探針與其他 workload 一起被檢查。
+2. 為 chart 渲染出來的 pod 讀取、但 chart 自己不建立的 Secret 建立假值，並為 Gateway listener 引用的 TLS Secret 建立自簽憑證（SaaS 的 Secret 怎麼進叢集見上方「SaaS 的祕密怎麼進叢集」；這裡驗證的是接線，不是帳密）。內建的 ClickHouse（`clickhouse.mode: bundled`，Laysi/trustiot-v2#59）照 `tests/values/<shape>-instance.yaml` 的 `storage.size` 安裝，磁碟區由 k3s 內建的 local-path 提供，管理帳號的 Secret `trustiot-clickhouse-admin` 也是假值；它的 `/ping` 探針與其他 workload 一起被檢查。
 3. `helm upgrade --install --wait --wait-for-jobs --timeout 5m`。
 4. 讀 `helm get manifest`，每個 Deployment、StatefulSet、DaemonSet 都要 rollout 完成，每個 Job 都要完成。release 一個 workload 都沒有就失敗（`smoke.yaml` 一定會加一個，沒有代表覆寫檔壞了）。
 5. 每個 Gateway 的 `Programmed` 條件為真（Istio 在 helm 結束後才產生入口 pod）。
 6. 沒有 pod 處於 CrashLoopBackOff、ImagePullBackOff、設定錯誤或未就緒；重啟次數記在報告裡。
 7. 每個 Gateway 的 NetworkPolicy 放行的埠，與 Istio 為它產生的 Deployment（探針）和 Service（target port）實際用的埠完全相同：少放行一個，入口就收不到流量或通不過探針；多放行一個，就多開了用不到的埠（例如 Envoy 的指標埠）。chart 的埠是從自己的 Gateway 與 Istio 固定的狀態埠 15021 推得的，這一項以實際安裝的 Istio 版本驗證（Laysi/trustiot-v2#287，見 `deploy/chart/README.md` 的「入口 pod 的埠」）。
-8. 每個 workload 的 HTTP 探針（startup、liveness、readiness），凡是有 Service 對外開那個埠的，那個 Service 的 EndpointSlice 在該埠至少有一個就緒的端點。不經網路呼叫：chart 預設拒絕所有連入（決策 27，Laysi/trustiot-v2#63），API server 的 Service proxy 從節點連 pod，會被 NetworkPolicy 與 AuthorizationPolicy 擋下；探針本身已由 kubelet 經 ambient 的探測位址呼叫過，第 6 項的就緒就是結果。
+8. 每個 workload 的 HTTP 探針（startup、liveness、readiness），凡是有 Service 對外開那個埠的，那個 Service 的 EndpointSlice 在該埠至少有一個就緒的端點。不經網路呼叫：chart 預設拒絕所有連入（決策 27，Laysi/trustiot-v2#63），API server 的 Service proxy 從節點連 pod，會被 NetworkPolicy 與 AuthorizationPolicy 擋下；探針本身已由 kubelet 經 ambient 的探測位址呼叫過，第 6 項的就緒就是結果。服務的探針連健康埠（`health`，Laysi/trustiot-v2#286），Service 不開這個埠，所以服務只由第 6 項涵蓋；這一項檢查的是 smoke 的替身服務（探針連 `http`）與 ClickHouse 這類由 Service 開放探針埠的工作負載。
 9. `helm uninstall` 之後，release 的每個物件都不存在。
 10. 入口 e2e 測試（`deploy/chart/tests/e2e/ingress.e2e.ts`，Laysi/trustiot-v2#62）：在 `nightly-e2e-<shape>` 命名空間以對應的型態跑一次，驗證 cookie 驗證、例外路徑、路徑繞過與身分服務停機時的行為；這也是 #62 要求的 k3d 測試，每晚執行。請求經 `kubectl port-forward` 直接進入口 pod，所以不涵蓋入口的 NetworkPolicy（那一項只在 lab 以 `E2E_SSH_JUMP` 驗證）。通道在請求進行中斷線時，測試會重開通道並重送一次（Laysi/trustiot-v2#261，細節見該目錄的 README）。
 

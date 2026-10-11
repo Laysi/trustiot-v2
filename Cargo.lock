@@ -1015,6 +1015,7 @@ dependencies = [
  "service-kit",
  "sha2 0.11.0",
  "sqlx",
+ "testkit",
  "thiserror",
  "tokio",
  "tower",
@@ -1819,6 +1820,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -2191,6 +2193,25 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.7",
+]
+
+[[package]]
+name = "testkit"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "contract",
+ "ed25519-dalek",
+ "http",
+ "rcgen",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "service-kit",
+ "sqlx",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -2713,8 +2734,6 @@ dependencies = [
 [[package]]
 name = "webpki-roots"
 version = "1.0.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
 dependencies = [
  "rustls-pki-types",
 ]

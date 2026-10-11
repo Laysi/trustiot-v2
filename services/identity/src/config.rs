@@ -42,8 +42,9 @@ pub struct Platform {
     pub postgres_database: String,
     /// `TRUSTIOT_POSTGRES_SSLMODE`: only `verify-full` is accepted.
     pub postgres_sslmode: SslMode,
-    /// `TRUSTIOT_POSTGRES_CA_FILE`: the CA of the server certificate, when it is not public.
-    pub postgres_ca_file: Option<PathBuf>,
+    /// `TRUSTIOT_POSTGRES_CA_FILE`: the CA of the server certificate, the only trust anchor
+    /// (crates/service-kit, "連線"); required.
+    pub postgres_ca_file: PathBuf,
 }
 
 /// `database.*`: the service role (`identity_app`), which owns nothing and reads the sessions

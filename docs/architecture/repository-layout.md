@@ -9,6 +9,7 @@ trustiot-v2/
 ├── .proto/plugins/            # proto 沒有內建外掛的工具（cargo-deny、gitleaks、helm、kubeconform、kubectl、發佈工具）：官方下載網址與校驗
 ├── rust-toolchain.toml        # rustup 依此選 Rust 版本，與 .prototools 相同
 ├── deny.toml                  # cargo-deny 規則：授權白名單、漏洞公告、相依來源
+├── .dockerignore              # 只有 `*`：repo 根目錄不當 container build context（docs/architecture/secrets.md）
 ├── CLAUDE.md                  # agent 規範只放這裡，不另放 AGENTS.md
 ├── .githooks/pre-commit       # Codex 審查關卡
 ├── .github/workflows/         # ci.yml、release.yml、nightly.yml（M5，見 docs/architecture/ci-release.md）
@@ -20,7 +21,8 @@ trustiot-v2/
 │   ├── service-kit/           # 服務共用骨架：設定、health、SIGTERM、tracing、驗內部身分、SET LOCAL 租戶
 │   ├── outbox/                # 事件框架：同交易寫入、冪等消費、重播
 │   ├── openai-client/         # 薄的 OpenAI 相容 client（決策 15）
-│   └── testkit/               # 測試用 Modbus 端點與故障注入（M7）、跨租戶負向測試
+│   ├── testkit/               # 測試用 Modbus 端點與故障注入（M7）、跨租戶負向測試
+│   └── webpki-roots-empty/    # 取代 crates.io 的 webpki-roots（空清單），Postgres 只信任設定的 CA
 ├── services/
 │   ├── identity/              # 身分與租戶（含 ext_authz 端點）
 │   ├── assets/                # 資產
@@ -55,7 +57,7 @@ trustiot-v2/
 ├── scripts/                   # Bun + TS：本地一鍵啟動（M6，podman）、種子資料、CI 檢查（ci/）、發佈流程（release/）；見 scripts/README.md
 ├── evals/                     # 題庫：分析、RAG、補全延遲、跨租戶 Cypher 攻擊
 ├── datasets/lab/              # lab 資料集索引與標註
-└── docs/                      # 跨服務架構文件；test-reports/ 放測試報告與原始資料
+└── docs/                      # 跨服務架構文件；runbooks/ 放維運步驟；test-reports/ 放測試報告與原始資料
 
 每個服務內部（以 assets 為例）：
 services/assets/
