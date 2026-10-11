@@ -1,0 +1,41 @@
+## key usage and read statistics
+[200] count all | read_rows=8193 total_rows_to_read=8192 | 300000
+[200] count where tenant B | read_rows=0 total_rows_to_read=0 | 0
+[200] count where tenant Z | read_rows=0 total_rows_to_read=0 | 0
+[200] count where tenant B OR 1 | read_rows=8193 total_rows_to_read=8192 | 300000
+[500] PREWHERE tenant B | read_rows=0 total_rows_to_read=0 | ILLEGAL_PREWHERE: Code: 182. DB::Exception: Storage View (table trustiot.tenant_telemetry (23058fa0-d79b-4058-97b3-97e9e75d8907)) does not support PREWHERE. (ILLEGAL_PREWHERE) (version 26.8.22.13 (official build))
+[500] PREWHERE tenant Z | read_rows=0 total_rows_to_read=0 | ILLEGAL_PREWHERE: Code: 182. DB::Exception: Storage View (table trustiot.tenant_telemetry (23058fa0-d79b-4058-97b3-97e9e75d8907)) does not support PREWHERE. (ILLEGAL_PREWHERE) (version 26.8.22.13 (official build))
+[200] one device (A) | read_rows=311297 total_rows_to_read=311296 | 10000
+[200] one device and point | read_rows=311296 total_rows_to_read=311296 | 1000
+[200] EXPLAIN ESTIMATE all | read_rows=1 total_rows_to_read=0 | trustiot	telemetry	1	303104	37
+[200] EXPLAIN ESTIMATE B | read_rows=1 total_rows_to_read=0 | trustiot	telemetry	0	0	0
+[200] EXPLAIN ESTIMATE Z | read_rows=1 total_rows_to_read=0 | trustiot	telemetry	0	0	0
+[200] EXPLAIN indexes B | read_rows=25 total_rows_to_read=0 | Output: tenant_id, gateway_id, device_id, point, ts, received_at, value_type, value_float, value_int, value_bool, value_string \n  \n ReadFromMergeTree (trustiot.telemetry) \n    Read type: Default \n    Parts: 0 | Granules: 0 \n    Output: tenant_id, gateway_id, device_id, point, ts, received_at, value_type, value_float, value_int, value_bool, value_string \n    Prewhere filter \n    Prewhere fil  **B-MARKER**
+[200] EXPLAIN indexes device | read_rows=27 total_rows_to_read=0 | Output: tenant_id, gateway_id, device_id, point, ts, received_at, value_type, value_float, value_int, value_bool, value_string \n  \n ReadFromMergeTree (trustiot.telemetry) \n    Read type: Default \n    Parts: 1 | Granules: 1 \n    Output: tenant_id, device_id, point, gateway_id, ts, received_at, value_type, value_float, value_int, value_bool, value_string \n    Prewhere filter \n    Prewhere fil
+[200] EXPLAIN plan | read_rows=8 total_rows_to_read=0 | Output: value_string \n  \n ReadFromMergeTree (trustiot.telemetry) \n    Read type: Default \n    Parts: 1 | Granules: 37 \n    Output: value_string \n    Prewhere filter \n    Prewhere filter column:  tenant_id = \'aaaaaaaa-0000-4000-8000-000000000001\' AND point = \'p1\'
+[200] EXPLAIN PIPELINE threads | read_rows=10 total_rows_to_read=0 | (Expression) \n ExpressionTransform \n   (Aggregating) \n   AggregatingTransform \n     (Expression) \n     ExpressionTransform \n       (Expression) \n       ExpressionTransform \n         (ReadFromMergeTree) \n         MergeTreeSelect(pool: ReadPoolInOrder, algorithm: InOrder) 0 → 1
+## error and timing oracles
+[200] throwIf tenant B | read_rows=303104 total_rows_to_read=303104 | 300000
+[500] throwIf B value | read_rows=294912 total_rows_to_read=303104 | FUNCTION_THROW_IF_VALUE_IS_NON_ZERO: Code: 395. DB::Exception: oracle: while executing 'FUNCTION throwIf(equals(__table1.value_string, 'B-SECRET'_String) :: 4, 'oracle'_String :: 2) -> throwIf(equals(__table1.value_string, 'B-SECRET'_String), 'oracle'_String) UInt8 : 1': While executing MergeTreeSelect(pool: ReadPoolInOrder, algorithm:  **B-MARKER**
+[500] PREWHERE throwIf | read_rows=0 total_rows_to_read=0 | ILLEGAL_PREWHERE: Code: 182. DB::Exception: Storage View (table trustiot.tenant_telemetry (23058fa0-d79b-4058-97b3-97e9e75d8907)) does not support PREWHERE. (ILLEGAL_PREWHERE) (version 26.8.22.13 (official build))
+[400] toUInt64 value in WHERE | read_rows=0 total_rows_to_read=0 | CANNOT_PARSE_TEXT: Code: 6. DB::Exception: Cannot parse string 'a-val' as UInt64: syntax error at begin of string. Note: there are toUInt64OrZero and toUInt64OrNull functions, which returns zero/NULL instead of throwing exception: while executing 'FUNCTION toUInt64(value_string :: 0) -> toUInt64(__table1.value_string)
+[500] toUInt64 value in PREWHERE | read_rows=0 total_rows_to_read=0 | ILLEGAL_PREWHERE: Code: 182. DB::Exception: Storage View (table trustiot.tenant_telemetry (23058fa0-d79b-4058-97b3-97e9e75d8907)) does not support PREWHERE. (ILLEGAL_PREWHERE) (version 26.8.22.13 (official build))
+[400] toUUID error | read_rows=0 total_rows_to_read=0 | CANNOT_PARSE_UUID: Code: 376. DB::Exception: Cannot parse uuid a-valx: Cannot parse UUID from String: while executing 'FUNCTION toUUID(concat(__table1.value_string, 'x'_String) :: 3) -> toUUID(concat(__table1.value_string, 'x'_String)) UUID : 1': While executing MergeTreeSelect(pool: ReadPoolInOrder, algorithm: InOrde
+[200] intDiv by zero on B | read_rows=303104 total_rows_to_read=303104 | 300000
+[200] sleepEachRow on B | read_rows=0 total_rows_to_read=0 | 0
+[200] subquery select B | read_rows=0 total_rows_to_read=0 | 0
+[200] join on device | read_rows=0 total_rows_to_read=0 | 0
+[200] FINAL | read_rows=8193 total_rows_to_read=8192 | 300000
+[404] virtual _part | read_rows=0 total_rows_to_read=0 | UNKNOWN_IDENTIFIER: Code: 47. DB::Exception: Unknown expression or function identifier `_part` in scope SELECT count() FROM trustiot.tenant_telemetry WHERE _part != ''. (UNKNOWN_IDENTIFIER) (version 26.8.22.13 (official build))
+[200] virtual _table | read_rows=303104 total_rows_to_read=303104 | 300000
+[200] nested SETTINGS tenant | read_rows=8193 total_rows_to_read=8192 | 300000
+[500] query SETTINGS tenant | read_rows=0 total_rows_to_read=0 | READONLY: Code: 164. DB::Exception: Cannot modify 'SQL_tenant_id' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+[200] getSetting inside | read_rows=303104 total_rows_to_read=303104 | aaaaaaaa-0000-4000-8000-000000000001
+[200] SHOW CREATE view | read_rows=1 total_rows_to_read=0 | CREATE VIEW trustiot.tenant_telemetry\n(\n    `tenant_id` UUID,\n    `gateway_id` UUID,\n    `device_id` UUID,\n    `point` LowCardinality(String),\n    `ts` DateTime64(3, \'UTC\'),\n    `received_at` DateTime64(3, \'UTC\'),\n    `value_type` Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4),\n    `value_float` Float64,\n    `value_int` Int64,\n    `value_bool` Bool,\n    `value_stri
+[200] DESCRIBE view | read_rows=11 total_rows_to_read=0 | tenant_id	UUID					 \n gateway_id	UUID					 \n device_id	UUID					 \n point	LowCardinality(String)					 \n ts	DateTime64(3, \'UTC\')					 \n received_at	DateTime64(3, \'UTC\')					 \n value_type	Enum8(\'float\' = 1, \'int\' = 2, \'bool\' = 3, \'string\' = 4)					 \n value_float	Float64					 \n value_int	Int64					 \n value_bool	Bool					 \n value_string	String
+[500] additional_table_filters | read_rows=0 total_rows_to_read=0 | READONLY: Code: 164. DB::Exception: Cannot modify 'additional_table_filters' setting in readonly mode. (READONLY) (version 26.8.22.13 (official build))
+[200] sample | read_rows=8193 total_rows_to_read=8192 | 300000
+## limits
+[200] max_result_rows | read_rows=73728 total_rows_to_read=303104 | aaaaaaaa-0000-4000-8000-000000000001	fc498427-ddae-439c-88f3-0bb4dd08289a	186e13cd-667f-912a-0000-000000000000	p0	2026-10-01 00:00:00.000	2026-10-10 19:25:42.075	string	0	0	false	a-val \n aaaaaaaa-0000-4000-8000-000000000001	b78d4c2f-f9da-4100-a253-124c37e452f0	186e13cd-667f-912a-0000-000000000000	p0	2026-10-01 00:00:01.000	2026-10-10 19:25:42.075	string	0	0	false	a-val \n aaaaaaaa-0000-4000-8000-
+[500] memory heavy | read_rows=0 total_rows_to_read=0 | ALIAS_REQUIRED: Code: 206. DB::Exception: JOIN , ... no alias for subquery or table function numbers(2000). In scope SELECT concat(value_string, toString(number)) AS value_string FROM trustiot.tenant_telemetry, numbers(2000) (set joined_subquery_requires_alias = 0 to disable restriction). (ALIAS_REQUIRED) (version 
+[500] execution time | read_rows=0 total_rows_to_read=0 | ALIAS_REQUIRED: Code: 206. DB::Exception: JOIN , ... no alias for subquery or table function numbers(100000). In scope SELECT count() FROM trustiot.tenant_telemetry, numbers(100000) WHERE (sleepEachRow(0) = 0) AND ((number % 7) = 1) (set joined_subquery_requires_alias = 0 to disable restriction). (ALIAS_REQUIRED) (
