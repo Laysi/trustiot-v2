@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { containerBuildArgs } from "./build-context.ts";
 import { registerCleanup } from "./cleanup.ts";
 import { clickhouse } from "./clickhouse.ts";
 import {
@@ -473,16 +474,16 @@ async function startService(ctx: Context, state: State, service: ServiceDef): Pr
   try {
     copyFileSync(binary, join(buildDir, service.cargo.bin));
     writeFileSync(join(buildDir, "Containerfile"), containerfile(IMAGES.serviceBase, service));
-    await podmanOk([
-      "build",
-      "--quiet",
-      ...imageLabelArgs(ctx.names),
-      "--tag",
-      image,
-      "--file",
-      join(buildDir, "Containerfile"),
-      buildDir,
-    ]);
+    await podmanOk(
+      containerBuildArgs(buildDir, [
+        "--quiet",
+        ...imageLabelArgs(ctx.names),
+        "--tag",
+        image,
+        "--file",
+        join(buildDir, "Containerfile"),
+      ]),
+    );
   } finally {
     rmSync(buildDir, { recursive: true, force: true });
     forget();
