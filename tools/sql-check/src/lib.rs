@@ -127,6 +127,20 @@ pub const EXCEPTIONS: &[Exception] = &[
                  outbox policy template with the per-run role names",
     },
     Exception {
+        path: "crates/outbox/tests/verify_271.rs",
+        rules: &[
+            Rule::DynamicSql,
+            Rule::AssertSqlSafe,
+            Rule::DynamicQueryBuilder,
+            Rule::LeakedString,
+            Rule::SqlBuiltFromStrings,
+            Rule::SessionSetting,
+        ],
+        reason: "independent verification of Laysi/trustiot-v2#271: test handlers run SET ROLE, \
+                 RESET ALL, and set_config on the tenant with per-run role names, as attacks \
+                 that must fail or as reported findings",
+    },
+    Exception {
         path: "services/ingest/tests/clickhouse.rs",
         rules: &[
             Rule::DynamicSql,
