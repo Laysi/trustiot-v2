@@ -45,6 +45,11 @@ export function stateDir(env: Record<string, string | undefined>, instance: stri
   return join(stateRoot(env), instance);
 }
 
+/** The CA certificate of the instance (public) that host-side tools and services trust. */
+export function caCertificatePath(dir: string): string {
+  return join(dir, "tls", "ca.crt");
+}
+
 export interface Ports extends InfraPorts {
   /** Host ports of the services, by service name. */
   services: Record<string, number>;
@@ -52,7 +57,7 @@ export interface Ports extends InfraPorts {
 
 /** What `up` resolved; `seed`, `status` and `env` read it back. Contains secrets: mode 0600. */
 export interface State {
-  version: 1;
+  version: 2;
   instance: string;
   startedAt: string;
   ports: Ports;
@@ -97,11 +102,21 @@ export function saveState(dir: string, state: State): void {
 export function loadState(dir: string): State | undefined {
   const path = statePath(dir);
   if (!existsSync(path)) return undefined;
-  const state = JSON.parse(readFileSync(path, "utf8")) as State;
-  if (state.version !== 1) {
+  const state = JSON.parse(readFileSync(path, "utf8")) as { version?: number };
+  if (state.version === 1) {
+    // Written before the Postgres TLS change (Laysi/trustiot-v2#273): it has no service logins
+    // and the running Postgres has no TLS. `down` does not read the state, removes those
+    // containers and keeps the data volumes; the next `up` makes a current state on the same
+    // data, so nothing is lost.
+    throw new Error(
+      `${path} was written by an older version of this script, and its containers have no ` +
+        "Postgres TLS; run the down command (data volumes are kept) and then up",
+    );
+  }
+  if (state.version !== 2) {
     throw new Error(`${path} has an unknown version; run the purge command and start again`);
   }
-  return state;
+  return state as State;
 }
 
 export function removeState(dir: string): void {
