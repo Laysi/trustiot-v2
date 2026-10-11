@@ -8,6 +8,7 @@ account the image creates is the bootstrap admin, from CLICKHOUSE_USER and the p
 {{- if eq .Values.clickhouse.mode "bundled" }}
 {{- $ch := .Values.clickhouse.bundled }}
 {{- $ctx := dict "root" . "name" "clickhouse" }}
+{{- $pod := include "trustiot.clickhouse.pod" . | fromYaml }}
 {{- $name := include "trustiot.componentName" $ctx }}
 {{- $configName := include "trustiot.componentName" (dict "root" . "name" "clickhouse-config") }}
 apiVersion: v1
@@ -117,33 +118,15 @@ spec:
             # The bootstrap account may create users, roles, row policies, profiles and quotas.
             - name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT
               value: "1"
+          {{- /* The NetworkPolicy opens the probe ports from the same definition. */}}
           ports:
-            - name: http
-              containerPort: 8123
-              protocol: TCP
-            - name: native
-              containerPort: 9000
-              protocol: TCP
+            {{- toYaml $pod.ports | nindent 12 }}
           startupProbe:
-            httpGet:
-              path: /ping
-              port: http
-            periodSeconds: 5
-            failureThreshold: 60
+            {{- toYaml $pod.probes.startup | nindent 12 }}
           livenessProbe:
-            httpGet:
-              path: /ping
-              port: http
-            periodSeconds: 10
-            timeoutSeconds: 3
-            failureThreshold: 6
+            {{- toYaml $pod.probes.liveness | nindent 12 }}
           readinessProbe:
-            httpGet:
-              path: /ping
-              port: http
-            periodSeconds: 5
-            timeoutSeconds: 3
-            failureThreshold: 3
+            {{- toYaml $pod.probes.readiness | nindent 12 }}
           resources:
             {{- toYaml $ch.resources | nindent 12 }}
           securityContext:

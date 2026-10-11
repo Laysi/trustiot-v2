@@ -44,7 +44,8 @@ trustiot-v2/
 │   ├── migrate/               # migration Job
 │   ├── openapi/               # 合併各服務的 OpenAPI 規格，產生 api/openapi.json
 │   ├── release-selftest/      # release.yml 的流程自測映像，不是服務；第一個服務映像加入後刪除
-│   └── repo-check/            # repo 規則檢查，隨 cargo test 執行
+│   ├── repo-check/            # repo 規則檢查，隨 cargo test 執行
+│   └── sql-check/             # 擋下由字串組成的 SQL 與 kit 以外的租戶設定（決策 29），隨 cargo test 執行
 ├── deploy/
 │   ├── chart/                 # Helm chart；values-saas.yaml、values-onprem.yaml
 │   ├── istio/                 # Istio ambient 的安裝 values 與 ext_authz provider（叢集共用的平台元件）

@@ -1,0 +1,209 @@
+bun test v1.4.2 (744846f84)
+
+deploy/chart/tests/chart.test.ts:
+959 |           .filter((p) => p !== principal(GATEWAY_SA))
+960 |           .map((p) => serviceOf(p.split("/sa/")[1] ?? ""))
+961 |           .sort(),
+962 |       );
+963 |       // Kubelet probes come from istio-cni's SNAT address, admitted on the probe port only.
+964 |       expect(spec.ingress?.at(-1)).toEqual(hostRule(SERVICE_PROBE_PORT));
+                                         ^
+error: expect(received).toEqual(expected)
+
+@@ -8,8 +8,2 @@
+    ],
+-   "ports": [
+-     {
+-       "port": 8080,
+-       "protocol": "TCP",
+-     },
+-   ],
+  }
+
+- Expected  - 6
++ Received  + 0
+
+      at <anonymous> (<origin/main b82d56e checkout>/deploy/chart/tests/chart.test.ts:964:36)
+(fail) service-to-service authorization (decision 27) > saas: each service's NetworkPolicy admits HBONE from the same callers, and kubelet probes [1331.53ms]
+959 |           .filter((p) => p !== principal(GATEWAY_SA))
+960 |           .map((p) => serviceOf(p.split("/sa/")[1] ?? ""))
+961 |           .sort(),
+962 |       );
+963 |       // Kubelet probes come from istio-cni's SNAT address, admitted on the probe port only.
+964 |       expect(spec.ingress?.at(-1)).toEqual(hostRule(SERVICE_PROBE_PORT));
+                                         ^
+error: expect(received).toEqual(expected)
+
+@@ -8,8 +8,2 @@
+    ],
+-   "ports": [
+-     {
+-       "port": 8080,
+-       "protocol": "TCP",
+-     },
+-   ],
+  }
+
+- Expected  - 6
++ Received  + 0
+
+      at <anonymous> (<origin/main b82d56e checkout>/deploy/chart/tests/chart.test.ts:964:36)
+(fail) service-to-service authorization (decision 27) > onprem: each service's NetworkPolicy admits HBONE from the same callers, and kubelet probes [929.76ms]
+1029 |     const spec = networkPolicy(manifests, "clickhouse");
+1030 |     expect(selects(spec.podSelector.matchLabels ?? {}, labels)).toBe(true);
+1031 |     expect(hboneSources(manifests, spec)).toEqual({ services: ["ingest", "telemetry-query"], gateway: false });
+1032 |     // The kubelet's GET /ping probes arrive from istio-cni's SNAT address, on the HTTP port only.
+1033 |     expect(spec.ingress).toHaveLength(2);
+1034 |     expect(spec.ingress?.at(-1)).toEqual(hostRule(CLICKHOUSE_PROBE_PORT));
+                                        ^
+error: expect(received).toEqual(expected)
+
+@@ -8,8 +8,2 @@
+    ],
+-   "ports": [
+-     {
+-       "port": 8123,
+-       "protocol": "TCP",
+-     },
+-   ],
+  }
+
+- Expected  - 6
++ Received  + 0
+
+      at <anonymous> (<origin/main b82d56e checkout>/deploy/chart/tests/chart.test.ts:1034:34)
+(fail) service-to-service authorization (decision 27) > saas: bundled ClickHouse admits only ingest and telemetry-query, and keeps its probes [2756.58ms]
+1029 |     const spec = networkPolicy(manifests, "clickhouse");
+1030 |     expect(selects(spec.podSelector.matchLabels ?? {}, labels)).toBe(true);
+1031 |     expect(hboneSources(manifests, spec)).toEqual({ services: ["ingest", "telemetry-query"], gateway: false });
+1032 |     // The kubelet's GET /ping probes arrive from istio-cni's SNAT address, on the HTTP port only.
+1033 |     expect(spec.ingress).toHaveLength(2);
+1034 |     expect(spec.ingress?.at(-1)).toEqual(hostRule(CLICKHOUSE_PROBE_PORT));
+                                        ^
+error: expect(received).toEqual(expected)
+
+@@ -8,8 +8,2 @@
+    ],
+-   "ports": [
+-     {
+-       "port": 8123,
+-       "protocol": "TCP",
+-     },
+-   ],
+  }
+
+- Expected  - 6
++ Received  + 0
+
+      at <anonymous> (<origin/main b82d56e checkout>/deploy/chart/tests/chart.test.ts:1034:34)
+(fail) service-to-service authorization (decision 27) > onprem: bundled ClickHouse admits only ingest and telemetry-query, and keeps its probes [1165.37ms]
+1035 |   });
+1036 | 
+1037 |   test("ClickHouse refuses everyone while its callers are off, and gets no policy when external", () => {
+1038 |     const off = render(SHAPES.saas);
+1039 |     expect(meshPolicy(off, "clickhouse").rules).toBeUndefined();
+1040 |     expect(networkPolicy(off, "clickhouse").ingress).toEqual([hostRule(CLICKHOUSE_PROBE_PORT)]);
+                                                            ^
+error: expect(received).toEqual(expected)
+
+@@ -9,8 +9,2 @@
+      ],
+-     "ports": [
+-       {
+-         "port": 8123,
+-         "protocol": "TCP",
+-       },
+-     ],
+    },
+
+- Expected  - 6
++ Received  + 0
+
+      at <anonymous> (<origin/main b82d56e checkout>/deploy/chart/tests/chart.test.ts:1040:54)
+(fail) service-to-service authorization (decision 27) > ClickHouse refuses everyone while its callers are off, and gets no policy when external [706.07ms]
+1131 |       const manifests = render([...SHAPES[shape], ...overlays], args);
+1132 |       for (const { workload, spec, rules } of hostSourceRules(manifests)) {
+1133 |         const label = `${name}: ${workload.metadata.name}`;
+1134 |         const expected = probePorts(workload);
+1135 |         // One rule, with this source alone and exactly the probe ports; none without probe ports.
+1136 |         expect({ label, rules }).toEqual({ label, rules: expected.length > 0 ? [hostRule(...expected)] : [] });
+                                        ^
+error: expect(received).toEqual(expected)
+
+@@ -11,8 +11,2 @@
+        ],
+-       "ports": [
+-         {
+-           "port": 8123,
+-           "protocol": "TCP",
+-         },
+-       ],
+      },
+
+- Expected  - 6
++ Received  + 0
+
+      at <anonymous> (<origin/main b82d56e checkout>/deploy/chart/tests/chart.test.ts:1136:34)
+(fail) service-to-service authorization (decision 27) > saas: the host source reaches only each workload's probe ports [412.83ms]
+1131 |       const manifests = render([...SHAPES[shape], ...overlays], args);
+1132 |       for (const { workload, spec, rules } of hostSourceRules(manifests)) {
+1133 |         const label = `${name}: ${workload.metadata.name}`;
+1134 |         const expected = probePorts(workload);
+1135 |         // One rule, with this source alone and exactly the probe ports; none without probe ports.
+1136 |         expect({ label, rules }).toEqual({ label, rules: expected.length > 0 ? [hostRule(...expected)] : [] });
+                                        ^
+error: expect(received).toEqual(expected)
+
+@@ -11,8 +11,2 @@
+        ],
+-       "ports": [
+-         {
+-           "port": 8123,
+-           "protocol": "TCP",
+-         },
+-       ],
+      },
+
+- Expected  - 6
++ Received  + 0
+
+      at <anonymous> (<origin/main b82d56e checkout>/deploy/chart/tests/chart.test.ts:1136:34)
+(fail) service-to-service authorization (decision 27) > onprem: the host source reaches only each workload's probe ports [607.88ms]
+1163 |       startup: { tcpSocket: { port: "admin" } },
+1164 |       liveness: { grpc: { port: 9090 } },
+1165 |       readiness: { httpGet: { path: "/readyz", port: 8080 } },
+1166 |     });
+1167 |     expect(mixed.rendered).toEqual([8080, 9090, 9901]);
+1168 |     expect(mixed.spec.ingress).toEqual([hostRule(8080, 9090, 9901)]);
+                                      ^
+error: expect(received).toEqual(expected)
+
+@@ -9,16 +9,2 @@
+      ],
+-     "ports": [
+-       {
+-         "port": 8080,
+-         "protocol": "TCP",
+-       },
+-       {
+-         "port": 9090,
+-         "protocol": "TCP",
+-       },
+-       {
+-         "port": 9901,
+-         "protocol": "TCP",
+-       },
+-     ],
+    },
+
+- Expected  - 14
++ Received  + 0
+
+      at <anonymous> (<origin/main b82d56e checkout>/deploy/chart/tests/chart.test.ts:1168:32)
+(fail) service-to-service authorization (decision 27) > probe ports follow the probe definitions: named and numeric ports, tcpSocket, grpc, and exec [520.18ms]
+
+ 16 pass
+ 154 filtered out
+ 8 fail
+ 483 expect() calls
+Ran 24 tests across 1 file. [33.65s]

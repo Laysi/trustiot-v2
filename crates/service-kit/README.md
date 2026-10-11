@@ -10,7 +10,9 @@
 | `http` | 請求 span 與存取日誌、handler 逾時、panic 轉成 500 |
 | `telemetry` | JSON 日誌、trace id、OTLP 匯出（日誌、trace、指標）、敏感欄位遮蔽 |
 | `job_lock` | 排程工作同一時間只在一個副本執行 |
+| `postgres` | Postgres 連線一律 `verify-full`；新連線先檢查角色與 RLS 設定，不安全就拒用 |
 | `identity` | 驗證內部身分 token、取得請求的使用者身分（`contract` feature） |
+| `tenant` | 以 RLS 限定單一租戶的交易，租戶取自已驗證的身分；平台角色的跨租戶交易（`contract` feature） |
 
 完整的範例服務在 `src/bin/example-service.rs`，kit 的整合測試以它做為真的行程與容器來測試。本機執行：
 
@@ -52,6 +54,8 @@ async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     Ok(Router::new() /* 服務的路由 */)
 }
 ```
+
+（這個例子只示範 `run` 的流程；服務實際連 Postgres 要經 [`postgres` 與 `tenant`](#租戶隔離tenant)，連線才會驗證伺服器憑證、租戶資料才受 RLS 保護。）
 
 `run` 依序：
 
@@ -336,6 +340,116 @@ context.spawn(purge_expired(actor));
 
 這由 `src/identity.rs` 的 compile-fail doctest 證明：以欄位、`From`、`Into`、`Deserialize`、`Default` 建立 `UserIdentity` 都無法編譯。不要把 handler 拿到的 `UserIdentity` 移進 `Context::spawn` 或 `tokio::spawn`：token 60 秒就過期，背景工作要做的事以服務自己的身分執行。背景工作代表服務呼叫其他服務的完整流程在 Laysi/trustiot-v2#106。
 
+## 租戶隔離（`tenant`）
+
+帶租戶資料的表一律啟用 RLS，policy 拿 `tenant_id` 比對交易的租戶設定 `trustiot.tenant_id`；kit 在交易開頭設定一次，值取自已驗證的內部身分（[決策 29](../../docs/architecture/decisions.md)）。查詢漏寫租戶條件也只看得到該交易的租戶，交易外的查詢看不到任何租戶資料。`tenant` 在 `contract` feature 後面；連線與檢查在 `postgres`，不需要 contract。
+
+```rust
+use service_kit::identity::UserIdentity;
+use service_kit::postgres::{PostgresConfig, SslMode};
+use service_kit::tenant::{TenantDb, TenantDbError};
+use sqlx::postgres::PgPoolOptions;
+
+#[derive(Debug, serde::Deserialize)]
+struct Platform {
+    postgres_host: String,                    // TRUSTIOT_POSTGRES_HOST
+    postgres_port: u16,                       // TRUSTIOT_POSTGRES_PORT
+    postgres_database: String,                // TRUSTIOT_POSTGRES_DATABASE
+    postgres_sslmode: SslMode,                // TRUSTIOT_POSTGRES_SSLMODE，只接受 verify-full
+    postgres_ca_file: Option<std::path::PathBuf>, // TRUSTIOT_POSTGRES_CA_FILE
+}
+
+fn tenant_db(platform: &Platform, username: String, password: String) -> Result<TenantDb, service_kit::BoxError> {
+    let config = PostgresConfig {
+        host: platform.postgres_host.clone(),
+        port: platform.postgres_port,
+        database: platform.postgres_database.clone(),
+        ssl_mode: platform.postgres_sslmode,
+        ca_file: platform.postgres_ca_file.clone(),
+        username, // 服務角色的帳密，由 Laysi/trustiot-v2#58、Laysi/trustiot-v2#60 決定怎麼交給服務
+        password,
+    };
+    Ok(TenantDb::connect_lazy(config.connect_options(), PgPoolOptions::new().max_connections(10))?)
+}
+
+async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>, TenantDbError> {
+    let mut tx = db.begin(user).await?; // 租戶取自 user；沒有租戶回 NoTenant
+    let names = sqlx::query_scalar("SELECT name FROM devices ORDER BY name") // 不寫租戶條件
+        .fetch_all(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(names)
+}
+```
+
+- 健康檢查用 `db.ping()` 註冊（範例服務的 `postgres` 檢查）。完整可執行的例子是範例服務的 `GET /v1/items`。
+- 連到 Postgres 的唯一方式是 `TenantDb`、`PlatformDb` 或 `postgres::connect_lazy`；不要自己建 `PgPool`，否則沒有伺服器驗證與連線檢查。
+
+### 交易
+
+| 呼叫 | 用在 | 租戶從哪來 |
+| --- | --- | --- |
+| `TenantDb::begin(&UserIdentity)` | handler | 請求的內部身分 token（已驗證）；token 沒有租戶時回 `TenantDbError::NoTenant`，端點回 403 `permission_denied` |
+| `BackgroundTenantDb::begin(TenantId, purpose)` | 排程工作、事件消費 | 工作本身：事件帶的租戶，或平台角色查詢找出的租戶。以 DEBUG 記下服務、租戶與 `purpose` |
+| `PlatformDb::begin(PlatformActor, purpose)` | 平台後台、跨租戶的工作 | 不設定租戶；平台角色只看得到表上有 `platform_access` policy 的資料。以 INFO 記一行 `platform database access`（actor、`purpose`），操作本身的紀錄在 Laysi/trustiot-v2#130 |
+
+- 交易的第一個陳述就是 `SELECT set_config('trustiot.tenant_id', $1, true)`：等同 `SET LOCAL`，但值以參數綁定。交易結束（commit、rollback、drop、出錯）設定就消失，連線回到 pool 時不帶租戶。
+- `TenantTransaction` 沒有改租戶的方法，`TenantDb` 也沒有以任意租戶開交易的 handler 用方法；`src/tenant.rs` 的 compile-fail doctest 證明這些寫法無法編譯。SQL 裡設定租戶或角色由 `tools/sql-check` 擋下，只有 `src/tenant.rs` 例外。
+- 背景工作沒有使用者身分（見[內部身分](#背景工作沒有使用者身分)），所以決定：代表單一租戶的工作用 `BackgroundTenantDb` 開交易，租戶來自工作本身；要找出「哪些租戶有工作」這種跨租戶查詢，用 `PlatformDb` 與 `PlatformActor::service`，會留紀錄。
+- `BackgroundTenantDb` 是能指定租戶的能力，只有啟動時的 `TenantDb::connect_lazy_with_background(options, pool, ServiceIdentity)` 會一併產生（與 `TenantDb` 共用 pool）。把 `TenantDb` 放進 router 的 state、`BackgroundTenantDb` 只交給背景工作：handler 手上的 `TenantDb` 沒有任何接受租戶的方法，無法把請求裡的租戶拿去開交易（compile-fail doctest 證明）。
+- `PlatformActor::admin(&UserIdentity)` 只有平台管理者（A2）拿得到；`PlatformActor` 沒有其他建構方式。
+
+### outbox（`crates/outbox`）
+
+- 產生端在同一個 `&mut *tx` 呼叫 `outbox::publish`，事件與業務資料一起 commit 或 rollback；事件的租戶用 `tx.tenant_id()`。
+- `outbox_event` 的 RLS 照 [`sql/outbox-event.sql`](sql/outbox-event.sql)，由產生端的 migration 在 `install_producer` 之後執行：
+  1. 服務角色只有 INSERT，`tenant_isolation` 的 `WITH CHECK` 讓它只寫得進目前租戶的事件；不給 SELECT（`publish` 不用 `RETURNING`）。
+  2. 全平台事件（`tenant_id` 為 NULL）決定（2026-10-10）：允許，但只由產生端的平台角色經 `PlatformDb` 寫（`platform_events` policy：`FOR INSERT ... WITH CHECK (tenant_id IS NULL)`），會留紀錄；平台角色寫不了任何租戶的事件，服務角色寫不了全平台事件。平台角色另需 `outbox_aggregate` 的權限（outbox README「資料庫權限」中產生端的那幾行）。
+  3. 投遞要讀所有租戶的事件，所以消費端以**它的平台角色**讀（`consumer_read` policy：`FOR SELECT TO <消費端平台角色> USING (true)`），不能用服務角色：開放給服務角色的跨租戶 policy 會讓它的連線被拒（`PermissivePolicy`）。handler 的寫入則在消費端服務角色的租戶交易裡。
+- 目前 `outbox::Consumer` 讀取與 handler 交易共用一個 pool，`Handler::begin` 也還沒有設定租戶的 kit 介面；兩者要配合上一點調整（讀取用平台角色的 pool、handler 交易用 `BackgroundTenantDb` 的 pool 並由 kit 設定租戶），列為後續工作。
+
+### 角色與 policy 範本
+
+每個服務三個角色：
+
+| 角色 | 用途 | 限制 |
+| --- | --- | --- |
+| migration 角色（例 `assets_owner`） | 跑 migration，擁有 schema 與表 | 不給服務在執行期使用；表的擁有者不受 RLS 限制，所以 migration 可以跨租戶回填 |
+| 服務角色（例 `assets_app`） | `TenantDb`、`BackgroundTenantDb` | 不是 superuser、沒有 `BYPASSRLS`、不擁有任何表、不是擁有者角色的成員、沒有 `TRUNCATE`、不能建暫存表；套用到它的 policy 只能是租戶條件 |
+| 平台角色（例 `assets_platform`） | `PlatformDb` | 同服務角色，但可以有以角色名稱明列給它的 policy（`platform_access`、`platform_events`、`consumer_read`）；不給 `BYPASSRLS`，所以沒開放的表一列都看不到 |
+
+每個資料庫建好後，擁有者先執行一次 [`sql/database.sql`](sql/database.sql)：撤銷 `PUBLIC` 預設有的 `TEMPORARY`。暫存表不受 RLS 限制，而且跟著 session 活到交易之後，pool 重用連線時，一個租戶交易複製進暫存表的列，下一個交易（任何租戶）都讀得到。
+
+帶租戶資料的表照 [`sql/tenant-table.sql`](sql/tenant-table.sql) 寫 migration：`tenant_id uuid NOT NULL` 排在主鍵與索引的最前面；`ENABLE ROW LEVEL SECURITY`；`tenant_isolation` policy 對所有角色，`USING` 與 `WITH CHECK` 一字不差地用 `postgres::TENANT_CONDITION`（連線檢查比對 Postgres 存下的寫法 `TENANT_CONDITION_AS_STORED`，任何放寬，例如加上 `OR ...`，都會被拒）；需要時才加以名稱給平台角色的 `platform_access`；只 grant 需要的權限。檢視表一律 `WITH (security_invoker = true)`；物化檢視、foreign table 與讀租戶表的 `SECURITY DEFINER` 函式不能保護，不要讓服務角色讀得到或執行（函式建立後 `REVOKE EXECUTE ... FROM PUBLIC`）。`tests/tenant_db.rs` 直接執行這兩個檔案，範本就是測過的版本。
+
+### 連線（`postgres`）
+
+- 伺服器憑證一律驗證（清單 M3）：`postgres::SslMode` 只接受 `verify-full`，宣告成 `TRUSTIOT_POSTGRES_SSLMODE` 的型別，其他值（`disable`、`require`、`verify-ca`⋯）讓服務在接流量前以 exit code 1 停止，錯誤訊息不含設定的值。`postgres::connect_lazy`、`TenantDb::connect_lazy`、`PlatformDb::connect_lazy` 也拒絕 `sslmode` 不是 `verify-full` 或走 Unix socket 的連線設定。
+- 信任的 CA 是 `TRUSTIOT_POSTGRES_CA_FILE`（chart 掛在 `/etc/trustiot/postgres-ca/ca.crt`）加上 webpki-roots 內建的公開根憑證（sqlx 的 rustls 設定無法只信任指定的 CA）。主機名稱一律比對，所以公開 CA 只有在攻擊者能取得資料庫主機名稱的公開憑證時才有影響；叢集內的名稱（`*.svc`）公開 CA 不會簽發。
+- 每個新連線在交給 pool 之前執行 `postgres::check_session`，有問題就關閉連線並記一行 ERROR `refused a database session that row-level security would not protect`（`problem` 欄位寫原因）。sqlx 會一直重試到 pool 的 acquire timeout，之後 `begin`、`ping` 回 `TenantDbError::UnsafeSession`，readiness 失敗。檢查項目（`UnsafeSession`）：
+
+| 問題 | 原因 |
+| --- | --- |
+| `BypassesRls` | 角色本身或它所屬的角色是 superuser 或有 `BYPASSRLS` |
+| `TenantPreset` | 連線一開始就有 `trustiot.tenant_id`（角色或資料庫預設值、連線參數） |
+| `OwnsRelation` | 角色擁有、或屬於擁有某張表或檢視的角色 |
+| `UnprotectedTable` | 角色能用、有 `tenant_id` 欄的表沒啟用 RLS（含 partition） |
+| `PermissivePolicy` | 套用到角色（`PUBLIC` 或它所屬的角色）的 permissive policy 不是一字不差的租戶條件；平台角色的連線只放行以平台角色本身名稱給它、而且沒給 `PUBLIC` 的 policy，經由它所屬的群組角色取得的不放行 |
+| `UnprotectedView` | 角色能用、讀租戶資料（直接或經其他檢視）的檢視表不是 `security_invoker`，不論有沒有 `tenant_id` 欄 |
+| `Unprotectable` | 角色能用、含租戶資料的物化檢視或 foreign table |
+| `DefinerFunction` | 角色能執行別的角色擁有的 `SECURITY DEFINER` 函式（extension 與系統 schema 的函式除外）：函式以擁有者的權限與 RLS 可見範圍執行，擁有者可能是表的擁有者、superuser 或有跨租戶 policy 的平台角色 |
+| `TemporaryTables` | 角色能在資料庫建暫存表（`TEMPORARY` 權限；Postgres 預設給 `PUBLIC`） |
+| `TruncateAllowed` | 角色對租戶表有 `TRUNCATE`（不受 RLS 限制） |
+
+- 檢查依欄位名稱 `tenant_id` 判斷哪些是租戶表（再沿著檢視的相依找出建在它們上面的檢視），所以租戶欄一律叫這個名字。
+- `PlatformDb` 以平台角色的規則檢查（`SessionRole::Platform`），其他 pool 以服務角色的規則（`SessionRole::Service`）。
+
+### 威脅模型與限制
+
+- RLS 擋的是程式漏寫租戶條件。SQL 注入可以用服務角色改掉 `trustiot.tenant_id`，所以只用參數化查詢；`tools/sql-check` 隨 `cargo test --workspace` 擋下由字串組成的 SQL、`AssertSqlSafe`、SQL 裡的 `set_config` 與 `SET ROLE` 等（規則見[它的 README](../../tools/sql-check/README.md)）。
+- 本機開發環境（`scripts/`）的 Postgres 沒有 TLS、給服務的 `TRUSTIOT_POSTGRES_SSLMODE` 是 `disable`，用 Postgres 的服務在那裡會拒絕啟動；第一個用 Postgres 的服務進開發環境前，開發環境要改成 TLS。範例服務只在設定了 `database` 時才讀 Postgres 設定，所以照常啟動。
+- AI 閘道（不依賴 contract）沒有 `tenant`；它若有租戶資料表，需要不經 contract 的租戶交易介面。
+
 ## contract feature
 
 `services/ai-gateway` 不依賴 `crates/contract`（決策 28），但會使用本 kit，所以 kit 中需要 contract 的部分都放在 kit 的 `contract` feature 後面。這個 feature 預設開啟，一般服務直接得到 M1 錯誤格式；AI 閘道以 `default-features = false` 關掉它。
@@ -345,6 +459,7 @@ context.spawn(purge_expired(actor));
 | handler 逾時 | 504，body `{"code":"timeout","message_key":"error.timeout"}` | 504，沒有 body |
 | handler panic | 500，body `{"code":"internal","message_key":"error.internal"}` | 500，沒有 body |
 | 內部身分（`identity`） | 有；拒絕時 401，body `{"code":"unauthenticated","message_key":"error.unauthenticated"}` | 沒有這個模組 |
+| 租戶交易（`tenant`） | 有 | 沒有這個模組；`postgres`（`verify-full` 與連線檢查）兩者都有 |
 
 之後需要 contract 的功能也放在這個 feature 後面。路由不存在的 404、method 不符的 405 與 axum extractor 的拒絕訊息由 axum 產生，不是 kit 的回應，還不是 M1 格式。
 
@@ -363,9 +478,12 @@ context.spawn(purge_expired(actor));
 | `cargo test -p service-kit --test otlp` | OTLP 匯出到假的接收端：預設關閉、帶 trace id、指標送出、不含 body | 無 |
 | `cargo test -p service-kit --test container` | 範例服務在容器內以 PID 1 執行（唯讀根目錄、任意 UID），`stop` 時收尾並以 0 結束 | podman 或 docker，會拉 `gcr.io/distroless/cc-debian13` |
 | `cargo test -p service-kit --test job_lock` | 兩個副本互斥、session 中斷、guard 釋放、連線回到 pool | `TEST_DATABASE_URL`，或 podman 或 docker（會拉 `postgres:18.6-alpine`） |
+| `cargo test -p service-kit --test tenant_db` | 租戶隔離：沒設定租戶查不到也寫不進任何列；租戶 A 讀不到、改不到、寫不進租戶 B 的列；pool 重用連線時租戶不會帶到下一個交易；服務角色不是擁有者、沒有 BYPASSRLS、關不掉 RLS；不安全的連線被拒；平台角色只看得到開放的表；outbox 範本（租戶事件、全平台事件、消費端讀取）；伺服器憑證與主機名稱驗證；範例服務在 `sslmode` 不是 `verify-full` 時拒絕啟動，`/v1/items` 只回 token 租戶的資料 | podman 或 docker（會拉 `postgres:18.6-alpine`，以測試時產生的 CA 啟用 TLS）；不使用 `TEST_DATABASE_URL`，因為測試要以 superuser 建角色，並需要知道伺服器的 CA |
+| `cargo test -p sql-check` | 由字串組成的 SQL 與 kit 以外的租戶設定（`tools/sql-check`） | 無 |
 | `cargo test -p service-kit --test dependency_isolation` | 關閉 feature 時不依賴 contract，開啟時依賴 | 無 |
 | `cargo test -p service-kit --test chart_contract` | kit 的預設埠、health 路徑與收尾時間符合 `deploy/chart/values.yaml` | 無 |
 
 - `TEST_DATABASE_URL` 指向可以任意取 advisory lock 的 Postgres（測試不建表）；沒設時每個測試起一個用完即刪的 Postgres 容器。
+- `tenant_db` 的測試共用一個啟用 TLS 的 Postgres 容器（`tests/support/postgres.rs`，記憶體上限 512 MB），最後一個用到它的測試結束時刪除；每個測試用自己的資料庫。
 - 沒有容器執行環境時，需要它的測試在本機略過，並在 stderr 印出 `skipped:`；設了 `CI` 環境變數時改為失敗，CI 不會默默略過。
 - 加 `-- --nocapture` 會印出測試報告用的數據，例如容器停止花的時間與 exit code。

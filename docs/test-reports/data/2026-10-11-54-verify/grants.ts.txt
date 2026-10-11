@@ -1,0 +1,49 @@
+// Minimal-grant checks (README "資料庫權限") against the running chaos Postgres.
+import { $ } from "bun";
+const PG = "outbox-chaos-pg";
+async function sql(user: string, q: string) {
+  const r = await $`podman exec ${PG} psql -h 127.0.0.1 -U ${user} -d postgres -At -v ON_ERROR_STOP=1 -c ${q}`
+    .env({ PGPASSWORD: user === "postgres" ? "pw" : user }).quiet().nothrow();
+  return { ok: r.exitCode === 0, out: r.stdout.toString().trim(), err: r.stderr.toString().trim().split("\n")[0] };
+}
+// A second producer the consumer was never granted anything on.
+await sql("postgres", "create schema if not exists prod2; create table if not exists prod2.outbox_event (id int, envelope jsonb); insert into prod2.outbox_event values (1, '{}'); create table if not exists prod2.customers (id int, secret text); insert into prod2.customers values (1, 'x');");
+type Case = { who: string; q: string; expect: "ok" | "denied"; label: string };
+const cases: Case[] = [
+  { who: "consumer_role", q: "select count(*) >= 0 from prod.outbox_event", expect: "ok", label: "consumer reads producer outbox_event" },
+  { who: "consumer_role", q: "select count(*) from prod.ledger", expect: "denied", label: "consumer reads producer business table" },
+  { who: "consumer_role", q: "select count(*) from prod.outbox_aggregate", expect: "denied", label: "consumer reads producer outbox_aggregate" },
+  { who: "consumer_role", q: "select count(*) from prod2.outbox_event", expect: "denied", label: "consumer reads another producer's outbox_event" },
+  { who: "consumer_role", q: "select count(*) from prod2.customers", expect: "denied", label: "consumer reads another producer's business table" },
+  { who: "consumer_role", q: "select count(*) from secret.tenants", expect: "denied", label: "consumer reads unrelated schema" },
+  { who: "consumer_role", q: "select count(*) from other.junk", expect: "denied", label: "consumer reads other.junk" },
+  { who: "consumer_role", q: "insert into prod.outbox_event (tx_order,event_id,event_type,aggregate_type,aggregate_id,aggregate_seq,envelope) values (1, gen_random_uuid(), 't','widget','x',1,'{}')", expect: "denied", label: "consumer INSERT into producer outbox_event" },
+  { who: "consumer_role", q: "update prod.outbox_event set event_type = 'x' where false", expect: "denied", label: "consumer UPDATE producer outbox_event (zero rows)" },
+  { who: "consumer_role", q: "delete from prod.outbox_event where false", expect: "denied", label: "consumer DELETE producer outbox_event (zero rows)" },
+  { who: "consumer_role", q: "truncate prod.outbox_event", expect: "denied", label: "consumer TRUNCATE producer outbox_event" },
+  { who: "consumer_role", q: "select id from prod.outbox_event limit 1 for update", expect: "denied", label: "consumer SELECT FOR UPDATE producer outbox_event" },
+  { who: "consumer_role", q: "insert into prod.outbox_aggregate values ('widget','zzz',1,1)", expect: "denied", label: "consumer INSERT producer outbox_aggregate (cannot call publish on producer)" },
+  { who: "consumer_role", q: "create table prod.x (a int)", expect: "denied", label: "consumer CREATE in producer schema" },
+  { who: "consumer_role", q: "create table cons.x (a int)", expect: "denied", label: "consumer CREATE in own schema (not owner)" },
+  { who: "consumer_role", q: "select count(*) >= 0 from cons.outbox_inbox", expect: "ok", label: "consumer reads own outbox_inbox" },
+  { who: "consumer_role", q: "select count(*) >= 0 from pg_catalog.pg_class", expect: "ok", label: "(control) catalog readable" },
+  { who: "producer_role", q: "select count(*) from prod.outbox_event", expect: "denied", label: "producer cannot SELECT its own outbox_event (INSERT only)" },
+  { who: "producer_role", q: "update prod.outbox_event set event_type = 'x' where false", expect: "denied", label: "producer UPDATE outbox_event" },
+  { who: "producer_role", q: "delete from prod.outbox_event where false", expect: "denied", label: "producer DELETE outbox_event" },
+  { who: "producer_role", q: "select count(*) from cons.outbox_inbox", expect: "denied", label: "producer reads consumer tables" },
+  { who: "producer_role", q: "select count(*) from secret.tenants", expect: "denied", label: "producer reads unrelated schema" },
+  { who: "producer_role", q: "select count(*) >= 0 from prod.outbox_aggregate", expect: "ok", label: "producer reads own outbox_aggregate" },
+];
+let bad = 0;
+const lines: string[] = [];
+for (const c of cases) {
+  const r = await sql(c.who, c.q);
+  const got = r.ok ? "ok" : /permission denied|42501/.test(r.err) ? "denied" : "other-error";
+  const pass = got === c.expect;
+  if (!pass) bad++;
+  lines.push(`${pass ? "PASS" : "FAIL"}  ${c.who.padEnd(14)} expect=${c.expect.padEnd(6)} got=${got.padEnd(6)} ${c.label}  [${r.ok ? r.out : r.err}]`);
+}
+console.log(lines.join("\n"));
+console.log(`\n${cases.length - bad}/${cases.length} as expected`);
+await sql("postgres", "drop schema prod2 cascade");
+process.exit(bad ? 1 : 0);

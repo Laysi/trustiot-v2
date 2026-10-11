@@ -1,0 +1,456 @@
+{
+  "chart": "origin/main b82d56e",
+  "renders": "<shape> + tests/values/smoke.yaml, every service enabled",
+  "saas": {
+    "Deployment/trustiot-ai-gateway": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-alerts": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-assets": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-assistant": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-certs": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-field-context": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-gateway-ops": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-identity": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-ingest": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-knowledge": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-mqtt-bridge": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-smoke-echo": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-telemetry-query": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "StatefulSet/trustiot-clickhouse": {
+      "probePorts": [
+        8123
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "onprem": {
+    "Deployment/trustiot-ai-gateway": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-alerts": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-assets": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-assistant": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-certs": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-field-context": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-gateway-ops": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-identity": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-ingest": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-knowledge": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-mqtt-bridge": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-smoke-echo": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Deployment/trustiot-telemetry-query": {
+      "probePorts": [
+        8080
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "StatefulSet/trustiot-clickhouse": {
+      "probePorts": [
+        8123
+      ],
+      "hostSourceRules": [
+        {
+          "from": [
+            {
+              "ipBlock": {
+                "cidr": "169.254.7.127/32"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
