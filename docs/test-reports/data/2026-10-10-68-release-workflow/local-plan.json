@@ -1,0 +1,22 @@
+{
+  "tag": "v0.0.0-rc.1",
+  "version": "0.0.0-rc.1",
+  "prerelease": true,
+  "commit": "ee8c4388772d2dce6c8e93f2b7cd60ec298c803a",
+  "sourceDateEpoch": 1791635837,
+  "repository": "Laysi/trustiot-v2",
+  "images": [
+    {
+      "name": "release-selftest",
+      "kind": "rust",
+      "package": "release-selftest",
+      "repository": "127.0.0.1:5068/laysi/trustiot-v2/release-selftest",
+      "ref": "127.0.0.1:5068/laysi/trustiot-v2/release-selftest:0.0.0-rc.1"
+    }
+  ],
+  "chart": {
+    "name": "trustiot",
+    "repository": "127.0.0.1:5068/laysi/trustiot-v2/charts/trustiot",
+    "version": "0.0.0-rc.1"
+  }
+}

@@ -1,0 +1,534 @@
+# The checks of main's .github/workflows/ci.yml, plus the release scripts, on the merge of main into
+# ci/68-release-workflow. Run 2026-10-10 13:54-14:01Z on the workstation (Fedora 45 x86_64, 8 cores),
+# CARGO_BUILD_JOBS=2, SQLX_OFFLINE=true.
+# Tree: the merge commit f10215a (main a25efe9 merged into d2d859d). The cargo, bun and chart checks
+# through the cargo test rerun (13:59:33Z) ran on the resolved merge before it was committed at
+# 13:59:48Z; committing changed no file. gitleaks, `bun test scripts/release`, the plan dry run and
+# `helm package` ran on f10215a itself. Each command's full log was kept locally; this file has the
+# exit codes and the summaries.
+
+$ proto install --yes
+exit 0
+
+$ cargo fmt --all --check
+exit 0 (no output)
+
+$ cargo clippy --workspace --all-targets --locked -- -D warnings
+exit 0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.22s
+
+$ cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
+exit 0
+
+$ cargo test --workspace --locked
+exit 101, 13:55Z. One test failed, then cargo stopped:
+  crates/service-kit/tests/container.rs
+  pid_1_in_a_container_drains_and_exits_within_the_grace_period ... FAILED
+  panicked at crates/service-kit/tests/container.rs:160:29: readiness fails within the drain delay
+The test gives /readyz one second after `podman stop` starts to answer 503. The load average was
+about 18 on 8 cores (other builds on the workstation). This branch does not change crates/,
+services/ or edge/: `git diff origin/main -- crates/ services/ edge/` is empty, so the code is the
+same as on main.
+
+$ cargo test --workspace --locked --no-fail-fast
+exit 0, 13:59Z (the same tree, rerun)
+23 test result lines: 194 passed, 0 failed, 0 ignored
+(includes pid_1_in_a_container_drains_and_exits_within_the_grace_period ... ok, and the 4 tests of
+release-selftest)
+
+$ cargo test --package service-kit --no-default-features --locked
+exit 0 (the container test passed here as well: pid_1_in_a_container_drains_and_exits_within_the_grace_period ... ok)
+
+$ cargo deny --locked check
+exit 0
+advisories ok, bans ok, licenses ok, sources ok
+(deny.toml targets: aarch64-unknown-linux-gnu, aarch64-unknown-linux-musl, x86_64-unknown-linux-gnu)
+
+$ gitleaks git --no-banner --redact --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" .
+exit 0 on f10215a: 36 commits scanned, no leaks found
+
+$ bun scripts/ci/check-workflows.ts
+workflow policy: 3 file(s) checked, no violations
+
+$ bun install --cwd scripts --frozen-lockfile
+exit 0
+
+$ bun run --cwd scripts typecheck
+exit 0 (no output)
+
+$ bun run --cwd scripts test
+176 tests across 9 files: 175 pass, 1 skip, 0 fail
+skipped: "the dev environment with podman > starts, passes every check, seeds, rotates credentials,
+stops and purges without leftovers" (tests/e2e.test.ts, runs only with TRUSTIOT_DEV_E2E=1)
+
+$ bun test deploy/chart
+133 pass, 0 fail
+
+$ bun test scripts/release --reporter=junit
+90 tests: 90 pass, 0 fail, 0 skipped (209 assertions)
+The tests of the rule "a final release needs a green ci run on main", all pass:
+  ci on main > asks for the push runs of ci.yml on main for the commit
+  ci on main > reads the runs of a GitHub API answer
+  ci on main > passes when the newest push run on main for the commit succeeded
+  ci on main > refuses when there is no run on main for the commit
+  ci on main > refuses while ci is still running, and when it did not succeed
+  makePlan > refuses a final release that is not on main
+  makePlan > plans a final release on main once ci passed there
+  makePlan > refuses a final release on main without a green ci run for its commit
+  makePlan > refuses a final release when the ci runs cannot be read
+  makePlan > checks main before ci, and never asks for ci for a release candidate or a dry run
+  makePlan > refuses a final release when origin/main was not fetched
+
+$ bun scripts/release/plan.ts --tag v0.0.0-rc.99 --dry-run --output plan.json
+exit 0
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.99 → version 0.0.0-rc.99 (prerelease), commit f10215a83e9b20b98093bccfa6aad33d0d4a4f6d
+[release:plan] image ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.99 (Rust package release-selftest)
+[release:plan] chart ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.99
+[release:plan] notes start from v0.0.0-rc.1
+(a local dry run only: no tag was created and nothing was built or pushed)
+
+$ helm package deploy/chart --version 0.0.0-rc.99 --app-version 0.0.0-rc.99 -d <scratch>
+exit 0; the package holds Chart.yaml, values.yaml, values.schema.json, values-saas.yaml,
+values-onprem.yaml, README.md, .helmignore and templates/ (_helpers.tpl, _ingress.tpl, _service.tpl,
+ingress.yaml, platform-config.yaml, services.yaml); tests/ (including tests/e2e/) is left out by
+.helmignore
+
+
+# Main moved on (9132855, the transactional outbox) and was merged again: 5f8d02e, committed
+# 2026-10-10T14:14:19Z. Its only conflict was Cargo.lock; the result is main's lock plus the
+# release-selftest package, so release-selftest's build dependency cc is now 1.7.0 (main's) instead
+# of 1.5.1. The same checks ran 14:05-14:14Z on the resolved merge before it was committed
+# (committing changed no file); gitleaks and the release build ran on 5f8d02e itself.
+
+$ cargo fmt --all --check; cargo clippy --workspace --all-targets --locked -- -D warnings;
+  cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
+exit 0, exit 0, exit 0
+
+$ cargo test --workspace --locked
+exit 0: 30 test result lines, 223 passed, 0 failed, 0 ignored (the outbox crate came with main)
+
+$ cargo test --package service-kit --no-default-features --locked
+exit 0: 65 passed, 0 failed
+
+$ cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+
+$ gitleaks git --no-banner --redact --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" .
+exit 0 on 5f8d02e: 39 commits scanned, no leaks found
+
+$ bun scripts/ci/check-workflows.ts
+workflow policy: 3 file(s) checked, no violations
+
+$ bun install --cwd scripts --frozen-lockfile; bun run --cwd scripts typecheck; bun run --cwd scripts test
+exit 0, exit 0; 176 tests: 175 pass, 1 skip (the same podman e2e test), 0 fail
+
+$ bun test deploy/chart
+133 pass, 0 fail
+
+$ bun scripts/release/plan.ts --tag v0.0.0-rc.99 --dry-run --output plan.json
+$ CARGO_BUILD_JOBS=2 bun scripts/release/build.ts --plan plan.json --out out
+exit 0, 14:14:57Z, on 5f8d02e. The release build with cc 1.7.0:
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:build] cross-compiling release-selftest for aarch64-unknown-linux-musl
+   Compiling cc v1.7.0
+   Compiling release-selftest v0.1.0 (<repo>/tools/release-selftest)
+    Finished `release` profile [optimized] target(s) in 8.70s
+[release:build] building ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.99 for linux/arm64
+[release:build] ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.99 → sha256:0088899fe68475c9ba38d851ceba4c358dffa3fffd52828f38a85d1c6e40d65b, SBOM SPDX-2.3 with 13 packages
+build.ts checked that the binary is a 64-bit aarch64 ELF and that the image has the single platform
+linux/arm64; the build script's check that the target C compiler is set passed (the C object was
+compiled by zig through cc 1.7.0). The binary was not run on arm64 hardware again: the lab run in
+lab-arm64-run.txt used the cc 1.5.1 build.
+
+
+# Main moved on again (ece0566, the OpenAPI spec generated from code) and was merged again: 08408dc,
+# committed 2026-10-10T14:22:10Z. Its conflicts were only the tool lists in tools/README.md and
+# docs/architecture/repository-layout.md. The checks ran 14:16-14:22Z on the resolved merge before it
+# was committed (committing changed no file); the OpenAPI step and gitleaks ran on 08408dc itself.
+
+$ cargo fmt --all --check; cargo clippy --workspace --all-targets --locked -- -D warnings;
+  cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
+exit 0, exit 0, exit 0
+
+$ cargo test --workspace --locked
+exit 0: 34 test result lines, 240 passed, 0 failed, 0 ignored
+
+$ cargo test --package service-kit --no-default-features --locked
+exit 0: 65 passed, 0 failed
+
+$ cargo run --locked --package openapi; git status --porcelain -- api    # ci.yml "OpenAPI spec is current"
+wrote api/openapi.json (2973 bytes)
+(no output from git status: the committed spec is what the code generates)
+
+$ cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+
+$ gitleaks git --no-banner --redact --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" .
+exit 0 on 08408dc: 42 commits scanned, no leaks found
+
+$ bun scripts/ci/check-workflows.ts
+workflow policy: 3 file(s) checked, no violations
+
+$ bun install --cwd scripts --frozen-lockfile; bun run --cwd scripts typecheck; bun run --cwd scripts test
+exit 0, exit 0; 176 tests: 175 pass, 1 skip (the same podman e2e test), 0 fail
+
+$ bun test deploy/chart
+133 pass, 0 fail
+
+
+# Main moved on again (6451abd: the protocol crate, actionlint for workflow files, an e2e report)
+# and was merged again: 81c5072. Its conflicts were in .prototools, CLAUDE.md, Cargo.toml and
+# docs/architecture/ci-release.md, each side adding one item; all kept. The checks ran
+# 2026-10-10T14:35-14:42Z on the resolved merge before it was committed (committing changed no file).
+
+$ cargo fmt --all --check; cargo clippy --workspace --all-targets --locked -- -D warnings;
+  cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
+exit 0, exit 0, exit 0
+
+$ cargo test --workspace --locked
+exit 0: 45 test result lines, 338 passed, 0 failed, 0 ignored
+
+$ cargo test --package service-kit --no-default-features --locked
+exit 0: 65 passed, 0 failed
+
+$ cargo run --locked --package openapi; git status --porcelain -- api
+wrote api/openapi.json (2973 bytes); no output from git status
+
+$ cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+
+$ bun scripts/ci/check-workflows.ts
+workflow policy: 3 file(s) checked, no violations
+
+$ bun scripts/ci/lint-workflows.ts    # ci.yml's new actionlint step (proto install actionlint first)
+actionlint: 2 workflow file(s), no errors    (ci.yml and release.yml)
+
+$ bun install --cwd scripts --frozen-lockfile; bun run --cwd scripts typecheck; bun run --cwd scripts test
+exit 0, exit 0; 186 tests across 10 files: 185 pass, 1 skip (the podman e2e test), 0 fail
+
+$ bun test deploy/chart
+133 pass, 0 fail
+
+
+# Main moved on again (8931a63: the ingest service's ClickHouse schema and the ClickHouse bundled in
+# the chart) and was merged again without conflicts: bc5b0d7. The checks ran 2026-10-10T18:04-18:11Z,
+# the cargo, bun and chart checks on the merge before it was committed (committing changed no file),
+# the rest on bc5b0d7 itself.
+
+$ cargo fmt --all --check; cargo clippy --workspace --all-targets --locked -- -D warnings;
+  cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
+exit 0, exit 0, exit 0
+
+$ cargo test --workspace --locked
+exit 0: 49 test result lines, 348 passed, 0 failed, 0 ignored
+
+$ cargo test --package service-kit --no-default-features --locked
+exit 0: 65 passed, 0 failed
+
+$ cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+
+$ bun scripts/ci/check-workflows.ts
+workflow policy: 3 file(s) checked, no violations
+
+$ bun scripts/ci/lint-workflows.ts
+actionlint: 2 workflow file(s), no errors    (also rerun on bc5b0d7)
+
+$ bun install --cwd scripts --frozen-lockfile; bun run --cwd scripts typecheck; bun run --cwd scripts test
+exit 0, exit 0; 186 tests across 10 files: 185 pass, 1 skip (the podman e2e test), 0 fail
+
+$ bun test deploy/chart
+149 pass, 0 fail
+
+$ cargo run --locked --package openapi; git status --porcelain -- api    # on bc5b0d7, clean checkout
+wrote api/openapi.json (2973 bytes)
+OpenAPI spec is current
+
+$ gitleaks git --no-banner --redact --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" .
+exit 0 on bc5b0d7: 50 commits scanned, no leaks found
+
+$ bun scripts/release/plan.ts --tag v0.0.0-rc.99 --dry-run --output plan.json
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.99 → version 0.0.0-rc.99 (prerelease), commit bc5b0d78b59c528c40f513e1fb96ec32c2ab36f2
+[release:plan] image ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.99 (Rust package release-selftest)
+[release:plan] chart ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.99
+[release:plan] notes start from v0.0.0-rc.2
+(a local dry run only: no tag was created and nothing was built or pushed)
+
+$ helm package deploy/chart --version 0.0.0-rc.99 --app-version 0.0.0-rc.99 -d <scratch>
+exit 0; the package holds Chart.yaml, values.yaml, values.schema.json, values-saas.yaml,
+values-onprem.yaml, README.md, .helmignore and templates/ (_clickhouse.tpl, _helpers.tpl,
+_ingress.tpl, _service.tpl, clickhouse.yaml, ingress.yaml, platform-config.yaml, services.yaml);
+tests/ is left out by .helmignore
+
+# Main moved on again (4d129f2: the nightly workflow, Renovate and setup-proto for arm64 runners,
+# Laysi/trustiot-v2#247) and was merged again: 1dde1e8, committed 2026-10-10T19:24:51Z. Conflicts in
+# .prototools, CLAUDE.md, docs/architecture/ci-release.md and scripts/README.md; both sides kept.
+# .github/actions/setup-proto/action.yml merged without a conflict and was checked by hand: main's
+# x64 and arm64 archives with one hash each, plus this branch's exact toolchain check. The release
+# tools in .prototools got `# renovate:` annotations; Zig's upstream is Codeberg, so its annotation
+# reads git tags from the Codeberg URL, and scripts/nightly/renovate.test.ts now accepts a
+# non-GitHub upstream named by its full URL with git-tags. The checks ran 2026-10-10T18:33-19:23Z
+# on the resolved merge before it was committed (committing changed no file), at a load average of
+# 19-36 on 8 cores; gitleaks in that run scanned cef0f50, and 1dde1e8 itself in the next run.
+
+$ cargo fmt --all --check; cargo clippy --workspace --all-targets --locked -- -D warnings;
+  cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
+exit 0, exit 0, exit 0
+
+$ cargo test --workspace --locked
+exit 0: 49 test result lines, 348 passed, 0 failed, 0 ignored
+
+$ cargo test --package service-kit --no-default-features --locked
+exit 0: 65 passed, 0 failed
+
+$ cargo run --locked --package openapi; git diff --exit-code -- api; git status --porcelain -- api
+wrote api/openapi.json (2973 bytes); no difference
+
+$ cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+
+$ bun scripts/ci/check-workflows.ts
+workflow policy: 4 file(s) checked, no violations    (ci.yml, nightly.yml, release.yml, setup-proto)
+
+$ bun scripts/ci/lint-workflows.ts
+actionlint: 3 workflow file(s), no errors    (ci.yml, nightly.yml, release.yml)
+
+$ bun install --cwd scripts --frozen-lockfile; bun run --cwd scripts typecheck; bun run --cwd scripts test
+exit 0, exit 0; 239 tests across 15 files: 238 pass, 1 skip (the podman e2e test), 0 fail
+(`bun test scripts` from the repository root: the same 239 tests, 238 pass, 1 skip)
+
+$ bun test deploy/chart
+149 pass, 0 fail
+
+$ bun renovate-mutations.ts <worktree>    # a wrong .prototools annotation must fail renovate.test.ts
+# Each case edits .prototools, runs scripts/nightly/renovate.test.ts and restores the file.
+caught zig read with github-releases (exit 1, 1 fail)
+caught zig named by the GitHub mirror (exit 1, 1 fail)
+caught zig github-tags ziglang/zig (exit 1, 1 fail)
+caught cosign wrong repo (exit 1, 1 fail)
+caught kubectl read with git-tags (exit 1, 1 fail)
+caught syft annotation missing (exit 1, 1 fail)
+restored
+
+$ git ls-remote --tags https://codeberg.org/ziglang/zig; git ls-remote --tags https://github.com/ziglang/zig
+Codeberg: 0.15.0, 0.15.1, 0.15.2, 0.16.0, 0.17.0; GitHub: 0.15.0, 0.15.1, 0.15.2 (nothing after 0.15.2)
+
+$ setup-proto-arch-check.sh <worktree> <download dir>    # 2026-10-10T18:40Z, LC_ALL=C
+# setup-proto on both runner architectures without a runner: the RUNNER_ARCH case block and the
+# toolchain check are cut out of the committed action and run; each pinned hash is checked
+# against the proto release archive it names with the action's own sha256sum command. The action
+# did not change in the merge below.
+PROTO_VERSION=0.60.2
+PROTO_SHA256_X64=fe96d99ede103639becd6ab624688efeacc91049574174b31e67d1affd1c295c
+PROTO_SHA256_ARM64=bf04fec624b76dcf935ac4753e1ced8fc6a105ec1eb5abd6690f5ece308748cc
+--- 1. RUNNER_ARCH selection, cut out of the action
+  X64: exit 0: target=x86_64-unknown-linux-gnu sha256=fe96d99ede103639becd6ab624688efeacc91049574174b31e67d1affd1c295c
+  ARM64: exit 0: target=aarch64-unknown-linux-gnu sha256=bf04fec624b76dcf935ac4753e1ced8fc6a105ec1eb5abd6690f5ece308748cc
+  ARM: exit 1: ::error title=setup-proto::Only x64 and arm64 Linux runners are supported, got Linux ARM.
+--- 2. each pinned hash against the release archive it names (sha256sum --check --strict, as in the action)
+  proto_cli-x86_64-unknown-linux-gnu.tar.xz: OK
+  x86_64-unknown-linux-gnu: holds proto and proto-shim
+  proto_cli-aarch64-unknown-linux-gnu.tar.xz: OK
+  aarch64-unknown-linux-gnu: holds proto and proto-shim
+--- 3. exact toolchain check on an aarch64 host (stubbed rustup/rustc)
+  3a. rustup answers 1.99.0-aarch64-unknown-linux-gnu on an aarch64 host (must be accepted)
+    1.99.0-aarch64-unknown-linux-gnu (overridden by '<tmp>/rust-toolchain.toml')
+    PASS (accepted)
+  3b. rustup answers 1.99.0-x86_64-unknown-linux-gnu on an aarch64 host (must be rejected)
+    1.99.0-x86_64-unknown-linux-gnu (overridden by '<tmp>/rust-toolchain.toml')
+    ::error title=setup-proto::rustup selected '1.99.0-x86_64-unknown-linux-gnu (overridden by '<tmp>/rust-toolchain.toml')', but rust-toolchain.toml pins '1.99.0' (expected 1.99.0-aarch64-unknown-linux-gnu).
+--- result: all cases as expected
+
+# Main moved on during those checks (404817d: mesh path normalization and ingress hardening,
+# Laysi/trustiot-v2#258; service-to-service authorization with a default-deny NetworkPolicy,
+# Laysi/trustiot-v2#256; an independent check of ClickHouse tenant isolation, Laysi/trustiot-v2#264)
+# and was merged again without conflicts: c8b60a9, committed 2026-10-10T19:47:48Z. The checks ran
+# 2026-10-10T19:26-19:48Z, at a load average of 25-36: the cargo, bun and chart checks on the merge
+# before it was committed (committing changed no file), gitleaks and the rest on c8b60a9 itself.
+
+$ cargo fmt --all --check; cargo clippy --workspace --all-targets --locked -- -D warnings;
+  cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
+exit 0, exit 0, exit 0
+
+$ cargo test --workspace --locked
+exit 0: 49 test result lines, 348 passed, 0 failed, 0 ignored
+
+$ cargo test --package service-kit --no-default-features --locked
+exit 0: 65 passed, 0 failed
+
+$ cargo run --locked --package openapi; git status --porcelain -- api    # on c8b60a9, clean checkout
+wrote api/openapi.json (2973 bytes)
+OpenAPI spec is current
+
+$ cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+
+$ gitleaks git --no-banner --redact --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" .
+exit 0 on 1dde1e8: 53 commits scanned, no leaks found
+exit 0 on c8b60a9: 57 commits scanned, no leaks found
+
+$ bun scripts/ci/check-workflows.ts
+workflow policy: 4 file(s) checked, no violations
+
+$ bun scripts/ci/lint-workflows.ts
+actionlint: 3 workflow file(s), no errors    (ci.yml, nightly.yml, release.yml)
+
+$ bun install --cwd scripts --frozen-lockfile; bun run --cwd scripts typecheck; bun run --cwd scripts test
+exit 0, exit 0; 244 tests across 15 files: 243 pass, 1 skip (the podman e2e test), 0 fail
+
+$ bun test deploy/chart
+exit 1: 173 pass, 1 fail. The failure is a timeout, not an assertion: main's new test
+"service-to-service authorization (decision 27) > saas: the namespace denies all incoming traffic
+by default, with or without services" renders the chart twice and hit bun's default 5 s limit
+(5455 ms) at a load average of about 33. Run alone at a load average of 36, its saas and onprem
+cases both timed out the same way (onprem after 5338 ms); with a 30 s limit both passed, 11 s in
+total.
+
+$ bun test deploy/chart --timeout 30000    # 2026-10-10T19:44-19:47Z, the same tree
+174 pass, 0 fail
+
+$ bun test scripts/release    # on c8b60a9
+90 pass, 0 fail
+
+$ bun scripts/release/plan.ts --tag v0.0.0-rc.99 --dry-run --output plan.json    # on c8b60a9
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.99 → version 0.0.0-rc.99 (prerelease), commit c8b60a9df636fcd9eb55aadd10702079be42fdd3
+[release:plan] image ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.99 (Rust package release-selftest)
+[release:plan] chart ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.99
+[release:plan] notes start from v0.0.0-rc.2
+(a local dry run only: no tag was created and nothing was built or pushed)
+
+$ helm package deploy/chart --version 0.0.0-rc.99 --app-version 0.0.0-rc.99 -d <scratch>
+exit 0; the package holds Chart.yaml, values.yaml, values.schema.json, values-saas.yaml,
+values-onprem.yaml, README.md, .helmignore and templates/ (_clickhouse.tpl, _helpers.tpl,
+_ingress.tpl, _mesh.tpl, _service.tpl, clickhouse.yaml, ingress.yaml, mesh.yaml,
+platform-config.yaml, services.yaml); tests/ is left out by .helmignore
+
+# Main moved on again (a4bfe2b: hostile-input fuzz and adversarial tests for the protocol crate,
+# Laysi/trustiot-v2#266; the ingress e2e tunnel recovery, Laysi/trustiot-v2#267) and was merged
+# again without conflicts: ce5afb2, committed 2026-10-11T03:03:29Z. No file the release workflow
+# uses changed (`git diff --stat c8b60a9 ce5afb2` over .github, .prototools, .proto,
+# rust-toolchain.toml, Cargo.toml, Cargo.lock, deny.toml, scripts/release, deploy/images,
+# tools/release-selftest and the chart's Chart.yaml, templates, values files and .helmignore is
+# empty), so v0.0.0-rc.3 on c8b60a9 still covers the release path. The checks ran
+# 2026-10-11T02:51-03:05Z, the cargo, bun and chart checks on the merge before it was committed
+# (committing changed no file), gitleaks and the release checks on ce5afb2 itself.
+
+$ cargo fmt --all --check; cargo clippy --workspace --all-targets --locked -- -D warnings;
+  cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
+exit 0, exit 0, exit 0
+
+$ cargo test --workspace --locked
+exit 0: 52 test result lines, 367 passed, 0 failed, 0 ignored    (main's new protocol tests included)
+
+$ cargo test --package service-kit --no-default-features --locked
+exit 0: 65 passed, 0 failed
+
+$ cargo run --locked --package openapi; git diff --exit-code -- api; git status --porcelain -- api
+wrote api/openapi.json (2973 bytes); no difference
+
+$ cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+
+$ gitleaks git --no-banner --redact --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" .
+exit 0 on ce5afb2: 60 commits scanned, no leaks found
+
+$ bun scripts/ci/check-workflows.ts
+workflow policy: 4 file(s) checked, no violations
+
+$ bun scripts/ci/lint-workflows.ts
+actionlint: 3 workflow file(s), no errors    (ci.yml, nightly.yml, release.yml)
+
+$ bun install --cwd scripts --frozen-lockfile; bun run --cwd scripts typecheck; bun run --cwd scripts test
+exit 0, exit 0 (the type check now covers deploy/chart/tests too); 244 tests across 15 files:
+243 pass, 1 skip (the podman e2e test), 0 fail
+
+$ bun test deploy/chart
+196 pass, 0 fail (3 files: chart.test.ts and main's two tunnel-recovery unit test files), with
+bun's default 5 s limit, at a load average of 16-24
+
+$ bun test scripts/release    # on ce5afb2
+90 pass, 0 fail
+
+$ bun scripts/release/plan.ts --tag v0.0.0-rc.99 --dry-run --output plan.json    # on ce5afb2
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.99 → version 0.0.0-rc.99 (prerelease), commit ce5afb2441b70633affc913f15d04ccbc36aae8e
+[release:plan] image ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.99 (Rust package release-selftest)
+[release:plan] chart ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.99
+[release:plan] notes start from v0.0.0-rc.3
+(a local dry run only: no tag was created and nothing was built or pushed)
+
+# Main moved on again while the evidence above was being committed (92395c1, then e8f180b: tenant
+# transactions with row-level security and the SQL check, Laysi/trustiot-v2#263; adversarial
+# identity token tests, Laysi/trustiot-v2#270; the outbox chaos verification, Laysi/trustiot-v2#274;
+# the probe-port limit for the ambient node source, Laysi/trustiot-v2#277) and was merged again:
+# 31622f8, committed 2026-10-11T03:44:27Z. Conflicts in docs/architecture/decisions.md (main's new text of
+# decision 29, this branch's decision 30 kept after it) and in the tools list of
+# docs/architecture/repository-layout.md (release-selftest, repo-check, sql-check). Of the files
+# the release workflow uses, the merge changes only the chart templates (_clickhouse.tpl,
+# _mesh.tpl, clickhouse.yaml, mesh.yaml) and Cargo.toml/Cargo.lock, which add packages but change
+# the version of none already locked, so release-selftest's dependencies (cc 1.7.0) are the same;
+# the workflow, setup-proto, .prototools, scripts/release, deploy/images and tools/release-selftest
+# are unchanged. The checks ran 2026-10-11T03:12-03:46Z at a load average of 10-33: the cargo,
+# bun and chart checks on the merge before it was committed (committing changed no file),
+# gitleaks and the release checks on 31622f8 itself.
+
+$ cargo fmt --all --check; cargo clippy --workspace --all-targets --locked -- -D warnings;
+  cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
+exit 0, exit 0, exit 0
+
+$ cargo test --workspace --locked
+exit 0: 57 test result lines, 433 passed, 0 failed, 0 ignored    (main's new service-kit tests included)
+
+$ cargo test --package service-kit --no-default-features --locked
+exit 101 at a load average of about 30: 1 failed, the same container.rs check as after the second
+merge ("readiness fails within the drain delay": /readyz must answer 503 within 1 s of podman stop;
+the test ran 66 s). This branch does not change crates/. Rerun right after on the same tree,
+2026-10-11T03:42-03:44Z, load average about 28: exit 0, 73 passed, 0 failed.
+
+$ cargo run --locked --package openapi; git diff --exit-code -- api; git status --porcelain -- api
+wrote api/openapi.json (2973 bytes); no difference
+
+$ cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+
+$ gitleaks git --no-banner --redact --log-opts="--full-history --diff-filter=tuxdb --diff-merges=first-parent HEAD" .
+exit 0 on a061b22 (before the merge commit): 61 commits scanned, no leaks found
+exit 0 on 31622f8: 66 commits scanned, no leaks found
+
+$ bun scripts/ci/check-workflows.ts
+workflow policy: 4 file(s) checked, no violations
+
+$ bun scripts/ci/lint-workflows.ts
+actionlint: 3 workflow file(s), no errors    (ci.yml, nightly.yml, release.yml)
+
+$ bun install --cwd scripts --frozen-lockfile; bun run --cwd scripts typecheck; bun run --cwd scripts test
+exit 0, exit 0; 244 tests across 15 files: 243 pass, 1 skip (the podman e2e test), 0 fail
+
+$ bun test deploy/chart
+200 pass, 0 fail (3 files), with bun's default 5 s limit
+
+$ bun test scripts/release    # on 31622f8
+90 pass, 0 fail
+
+$ bun scripts/release/plan.ts --tag v0.0.0-rc.99 --dry-run --output plan.json    # on 31622f8
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.99 → version 0.0.0-rc.99 (prerelease), commit 31622f835f3c71724d8df0643a28575b9f4d57c1
+[release:plan] image ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.99 (Rust package release-selftest)
+[release:plan] chart ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.99
+[release:plan] notes start from v0.0.0-rc.3
+(a local dry run only: no tag was created and nothing was built or pushed)
+
+$ helm package deploy/chart --version 0.0.0-rc.99 --app-version 0.0.0-rc.99 -d <scratch>    # on 31622f8
+exit 0; the package holds Chart.yaml, values.yaml, values.schema.json, values-saas.yaml,
+values-onprem.yaml, README.md, .helmignore and templates/ (_clickhouse.tpl, _helpers.tpl,
+_ingress.tpl, _mesh.tpl, _service.tpl, clickhouse.yaml, ingress.yaml, mesh.yaml,
+platform-config.yaml, services.yaml); tests/ is left out by .helmignore

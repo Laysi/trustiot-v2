@@ -1,5 +1,6 @@
 // Deploys the Helm chart with one values file into a k3d cluster and checks that it works:
-// every workload of the release is ready (the kubelet's HTTP probes answer), every Service that
+// every workload of the release is ready (the kubelet's HTTP probes answer), each ingress
+// gateway's NetworkPolicy admits exactly the ports its Istio pods use, every Service that
 // exposes a probe routes to a ready pod, and an uninstall leaves nothing behind. Components
 // the chart gains later are covered without
 // changes here, because the checks read the release's own manifests (manifests.ts).
@@ -10,6 +11,8 @@ import { join } from "node:path";
 import { runIngressE2e } from "./e2e.ts";
 import { exec, retry, run, RunLog } from "./exec.ts";
 import {
+  gatewayPortProblems,
+  gatewayPorts,
   gatewaysOf,
   healthEndpointsOf,
   missingSecrets,
@@ -188,6 +191,23 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         return restarts.size === 0
           ? `${count} pods running or completed`
           : `${count} pods running or completed; restarts: ${[...restarts].map(([pod, n]) => `${pod}=${n}`).join(", ")}`;
+      })) &&
+      (await check("each Gateway's NetworkPolicy admits exactly the ports its Istio pods use", async () => {
+        // The chart derives the ingress gateway's NetworkPolicy ports from its Gateway and Istio's
+        // status port; this compares them with the Deployment and Service the installed Istio made.
+        const objects = parseManifests(manifest);
+        const found: string[] = [];
+        for (const gateway of gatewaysOf(objects)) {
+          const generated = await kubectl([
+            "get", "deployments,services", "--namespace", namespace,
+            "--selector", `gateway.networking.k8s.io/gateway-name=${gateway}`, "--output", "json",
+          ]);
+          const ports = gatewayPorts(gateway, parseManifests(generated.stdout), objects);
+          const problems = gatewayPortProblems(ports);
+          if (problems.length > 0) throw new Error(problems.join("; "));
+          found.push(`${gateway}: ${ports.needed.join(", ")}`);
+        }
+        return found.length === 0 ? "the release has no Gateway" : found.join("; ");
       })) &&
       (await check("Services that expose a health endpoint have ready endpoints", async () => {
         const endpoints = healthEndpointsOf(parseManifests(manifest));

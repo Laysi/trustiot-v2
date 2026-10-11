@@ -67,8 +67,7 @@ struct Platform {
     /// `TRUSTIOT_POSTGRES_*`: read only when `database` is set. A product service declares
     /// them without `Option` and `postgres_sslmode` as `service_kit::postgres::SslMode`, so any
     /// other `sslmode` stops it at startup. The example keeps them optional and checks the
-    /// `sslmode` in `validate`, because the local dev environment runs it without a database
-    /// and passes `TRUSTIOT_POSTGRES_SSLMODE=disable` (scripts/README.md).
+    /// `sslmode` in `validate`, because the kit's own tests run it without a database.
     postgres_host: Option<String>,
     postgres_port: Option<u16>,
     postgres_database: Option<String>,

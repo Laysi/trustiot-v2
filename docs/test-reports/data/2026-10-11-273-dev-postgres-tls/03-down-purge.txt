@@ -1,0 +1,14 @@
+$ bun scripts/dev.ts down
+removed 4 container(s); data volumes kept (use purge to delete them)
+$ volumes after down
+trustiot-dev-ev273-postgres-data
+trustiot-dev-ev273-clickhouse-data
+trustiot-dev-ev273-mosquitto-data
+trustiot-dev-ev273-mosquitto-config
+$ ls state dir after down
+ls: 無法存取 '/tmp/claude-1000/-home-ruisi-projects-trustiot-v2/5d2bbbe4-4241-4ab5-b2fe-2e33d3a23171/scratchpad/issue-273/state/trustiot-v2/dev/ev273': 沒有此一檔案或目錄
+
+$ bun scripts/dev.ts purge
+purged instance "ev273": 0 container(s), 0 network(s), 4 volume(s), 1 image(s), credentials and state
+$ leftovers after purge (volumes, containers, state dir)
+ls: 無法存取 '/tmp/claude-1000/-home-ruisi-projects-trustiot-v2/5d2bbbe4-4241-4ab5-b2fe-2e33d3a23171/scratchpad/issue-273/state/trustiot-v2/dev/ev273': 沒有此一檔案或目錄

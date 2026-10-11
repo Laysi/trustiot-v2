@@ -1,0 +1,30 @@
+starting postgres, clickhouse and mosquitto
+ok   postgres: published port: 127.0.0.1:25432
+ok   postgres: published port refuses a connection without TLS: refused
+ok   postgres: published port demands a password over TLS: authentication request 10 (10 = SCRAM)
+ok   postgres: certificate of another CA refused: refused (UNABLE_TO_VERIFY_LEAF_SIGNATURE)
+ok   postgres: certificate for another host name refused: refused (ERR_TLS_CERT_ALTNAME_INVALID)
+ok   postgres: login over TLS and Apache AGE: age 1.8.0, tls true
+ok   postgres: wrong password refused: refused
+ok   clickhouse: published port: http://127.0.0.1:28123/ping
+ok   clickhouse: login: SELECT 1 -> 1
+ok   clickhouse: anonymous access refused: refused (401)
+ok   mqtt: login: CONNACK 0
+ok   mqtt: anonymous access refused: CONNACK 5
+ok   mqtt: wrong password refused: CONNACK 5
+building service-kit (example-service) with cargo
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.84s
+starting example-service
+ok   example-service: GET /healthz (container port 8080): 127.0.0.1:28080 -> 200
+ok   example-service: GET /readyz (container port 8080): 127.0.0.1:28080 -> 200
+
+environment "ev273" is up; every check passed
+
+  postgres         127.0.0.1:25432  (database trustiot, Apache AGE)
+  clickhouse       http://127.0.0.1:28123
+  mqtt             127.0.0.1:21883
+  example-service  http://127.0.0.1:28080
+
+Credentials are generated for this run and stored only in the state directory.
+Print them for your shell with: bun scripts/dev.ts env
+exit 0

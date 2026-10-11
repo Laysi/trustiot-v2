@@ -1,0 +1,23 @@
+[admin] CREATE VIEW trustiot.ctx_definer DEFINER = trustiot_tenant_view_definer SQL SECURITY DEFINER AS SELECT currentUser() AS u, getSetting('readonly') AS ro, getSetting('max_threads') AS mt, getSetting('max_execution_time') AS met, getSetting('max_rows_to_read') AS mr, getSetting('max_result_rows') AS mres, getSetting('max_memory_usage') AS mm, getSettingOrDefault('SQL_tenant_id', 'none') AS tid
+  -> HTTP 200: 
+[admin] CREATE VIEW trustiot.ctx_invoker SQL SECURITY INVOKER AS SELECT currentUser() AS u, getSetting('readonly') AS ro, getSetting('max_threads') AS mt, getSetting('max_execution_time') AS met, getSetting('max_rows_to_read') AS mr, getSetting('max_result_rows') AS mres, getSetting('max_memory_usage') AS mm, getSettingOrDefault('SQL_tenant_id', 'none') AS tid
+  -> HTTP 200: 
+[admin] GRANT SELECT ON trustiot.ctx_definer TO ta14
+  -> HTTP 200: 
+[admin] GRANT SELECT ON trustiot.ctx_invoker TO ta14
+  -> HTTP 200: 
+# columns: user, readonly, max_threads, max_execution_time, max_rows_to_read, max_result_rows, max_memory_usage, SQL_tenant_id
+[ta14] SELECT currentUser() AS u, getSetting('readonly') AS ro, getSetting('max_threads') AS mt, getSetting('max_execution_time') AS met, getSetting('max_rows_to_read') AS mr, getSetting('max_result_rows') AS mres, getSetting('max_memory_usage') AS mm, getSettingOrDefault('SQL_tenant_id', 'none') AS tid
+  -> HTTP 200: ta14	1	2	30	1000000000	1000000	536870912	aaaaaaaa-0000-4000-8000-000000000001
+[ta14] SELECT * FROM trustiot.ctx_definer
+  -> HTTP 200: ta14	1	2	30	0	0	0	aaaaaaaa-0000-4000-8000-000000000001
+[ta14] SELECT * FROM trustiot.ctx_invoker
+  -> HTTP 200: ta14	1	2	30	0	0	0	aaaaaaaa-0000-4000-8000-000000000001
+[admin] REVOKE SELECT ON trustiot.ctx_definer FROM ta14
+  -> HTTP 200: 
+[admin] REVOKE SELECT ON trustiot.ctx_invoker FROM ta14
+  -> HTTP 200: 
+[admin] DROP VIEW trustiot.ctx_definer
+  -> HTTP 200: 
+[admin] DROP VIEW trustiot.ctx_invoker
+  -> HTTP 200: 

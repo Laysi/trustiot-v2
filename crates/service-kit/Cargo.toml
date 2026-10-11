@@ -55,6 +55,8 @@ tracing-subscriber = { workspace = true, features = ["registry", "std", "tracing
 [dev-dependencies]
 # A throwaway CA and server certificate for the TLS Postgres the tenant tests start.
 rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
+# The black-hole TCP proxy of the job-lock partition tests.
+tokio = { workspace = true, features = ["io-util"] }
 # The empty stand-in for webpki-roots that sqlx is built with (tests/postgres_trust.rs).
 webpki-roots.workspace = true
 

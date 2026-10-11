@@ -1,0 +1,20 @@
+[package]
+name = "release-selftest"
+description = "Pipeline self-test for release.yml: a tiny binary built, signed and published exactly like a service image."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+# Published as the image declared in deploy/images/release-selftest/image.toml
+# (docs/architecture/ci-release.md).
+
+[dependencies]
+serde_json.workspace = true
+
+[build-dependencies]
+cc.workspace = true
+
+[lints]
+workspace = true
