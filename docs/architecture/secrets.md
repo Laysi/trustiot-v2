@@ -89,7 +89,8 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 | Postgres 帳號：superuser、migration 角色、每個服務一個角色、平台後台角色（決策 4、29） | 各服務連 Postgres；migration Job | `bundled`：CloudNativePG 在叢集內產生的 Secret，不進 git | `bundled` 同左；`external`：客戶建立的 Secret | 環境變數，每個服務只拿自己的角色 | Laysi/trustiot-v2#58、Laysi/trustiot-v2#60 |
 | AGE 每租戶登入角色（決策 21） | field-context 以租戶專屬角色執行 Cypher | 由程式在建立租戶時產生，不進 git、不經過人 | 同左 | 由 Laysi/trustiot-v2#176 決定 | Laysi/trustiot-v2#176 |
 | 叢集內 ClickHouse 的 bootstrap 管理帳號密碼（`clickhouse.mode: bundled`），Secret `trustiot-clickhouse-admin`、key `password` | ClickHouse 本身；之後的 migration Job（Laysi/trustiot-v2#60） | SOPS（`deploy/flux/`，以 `openssl rand -hex 32` 產生） | 客戶在安裝前建立（`deploy/chart/README.md`「叢集內的 ClickHouse」的指令） | 唯讀 volume 掛成檔案 `/etc/trustiot/clickhouse-admin/password`（`CLICKHOUSE_PASSWORD_FILE`），只掛進 ClickHouse 的 pod；服務的自訂 `env` 不能讀它（chart 測試） | Laysi/trustiot-v2#59、Laysi/trustiot-v2#60 |
-| ClickHouse 帳號：ingest 寫入、OTel 日誌寫入、每租戶唯讀（決策 14、22） | ingest、telemetry-query、collector | `bundled`：由 migration Job 以管理帳號建立，存成叢集內的 Secret；每租戶唯讀帳號由 telemetry-query 建立租戶時產生 | 同左 | 環境變數，只給使用該帳號的服務 | Laysi/trustiot-v2#60、Laysi/trustiot-v2#73、Laysi/trustiot-v2#119 |
+| ClickHouse 帳號：ingest 寫入、每租戶唯讀（決策 14） | ingest、telemetry-query | `bundled`：由 migration Job 以管理帳號建立，存成叢集內的 Secret；每租戶唯讀帳號由 telemetry-query 建立租戶時產生 | 同左 | 環境變數，只給使用該帳號的服務 | Laysi/trustiot-v2#60、Laysi/trustiot-v2#119 |
+| OpenTelemetry collector 的 ClickHouse 帳號密碼（`observability.collector.clickhouse.passwordSecret`，範例 Secret `trustiot-otel-collector-clickhouse`、key `password`） | collector 寫 `trustiot_logs` 的兩張日誌表（決策 14、22）；migration Job 以同一個密碼建立帳號 `trustiot_collector`，只授與角色 `trustiot_otel_collector`（`services/ingest/migrations/clickhouse/0006_logs.sql`） | SOPS（`deploy/flux/`，以 `openssl rand -hex 32` 產生） | 客戶在安裝前建立 | 環境變數 `CLICKHOUSE_PASSWORD`（`secretKeyRef`），只給 collector；服務的自訂 `env` 不能讀它（chart 測試） | Laysi/trustiot-v2#73、Laysi/trustiot-v2#60 |
 | ClickHouse 帳號 `trustiot_tenant_view_definer` | view `trustiot.tenant_telemetry` 的 DEFINER（`services/ingest/migrations/clickhouse/0005_tenant_view.sql`） | 不是密鑰：`IDENTIFIED WITH no_password HOST NONE`，不能登入、沒有密碼要保管或輪替；只有 `SELECT ON trustiot.telemetry` | 同左 | 不注入任何服務 | Laysi/trustiot-v2#260 |
 | MQTT dynsec 管理帳密 | certs、gateway-ops 註冊與停用閘道器（決策 6） | 部署時在叢集內產生的 Secret | 同左 | 環境變數，只給需要的服務 | Laysi/trustiot-v2#82、Laysi/trustiot-v2#84 |
 | Grafana 管理者帳密 | 維運看板（決策 23） | 部署時在叢集內產生；登入改用 SSO 時移除 | 客戶的 Secret | Grafana 自己讀 Secret | Laysi/trustiot-v2#183 |
@@ -104,6 +105,7 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 | 備份用的物件儲存金鑰 | Postgres 的 WAL 與完整備份、ClickHouse 備份（M8） | SOPS；與服務用的金鑰分開、只能寫備份 bucket | 客戶建立的 Secret | 只給備份元件 | Laysi/trustiot-v2#134、Laysi/trustiot-v2#135 |
 | SMTP 帳密 | 通知與報表寄信（決策 18） | SOPS | 客戶的 relay 需要驗證時，客戶建立的 Secret | 環境變數，只給列出 `smtp` 的服務 | Laysi/trustiot-v2#169 |
 | Sentry DSN | 錯誤回報（決策 24） | SOPS | 預設關閉；客戶開啟時由客戶建立 | 環境變數 `SENTRY_DSN`，每個服務 | Laysi/trustiot-v2#184 |
+| SIEM 轉送的認證標頭與 CA（`observability.collector.forward.authHeader.valueSecret`、`observability.collector.forward.caSecret`） | collector 把遮蔽後的日誌以 OTLP 轉送到客戶的 SIEM（決策 22） | 預設不轉送 | 客戶開啟轉送時由客戶建立 | 標頭值是環境變數 `FORWARD_AUTH_HEADER`（`secretKeyRef`），CA 以唯讀 volume 掛成 `/etc/trustiot/forward-ca/ca.crt`，都只給 collector | Laysi/trustiot-v2#73 |
 
 ### 主機、映像與發佈
 
