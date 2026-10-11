@@ -1,0 +1,12 @@
+
+running 1 test
+Host::new("::ffff:0.0.0.0") accepted: true
+Host::new("::ffff:224.0.0.1") accepted: true
+Host::new("::ffff:255.255.255.255") accepted: true
+Host::new("::ffff:1.2.3.4") accepted: true
+devices[1] rtu_over_tcp 192.168.10.30:4196, devices[2] modbus_tcp ::ffff:192.168.10.30:4196 -> mixed_transport reported: false
+devices[1] rtu_over_tcp ::ffff:c0a8:a1e:4196, devices[2] modbus_tcp 192.168.10.30:4196 -> mixed_transport reported: false
+test probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

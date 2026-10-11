@@ -211,11 +211,30 @@ function dedupe(endpoints: HealthEndpoint[]): HealthEndpoint[] {
   });
 }
 
-/** The API server path that proxies a request to a Service port (kubectl get --raw). */
-export function serviceProxyPath(namespace: string, endpoint: HealthEndpoint): string {
-  const prefix = endpoint.scheme === "https" ? "https:" : "";
-  const path = endpoint.path.startsWith("/") ? endpoint.path : `/${endpoint.path}`;
-  return `/api/v1/namespaces/${namespace}/services/${prefix}${endpoint.service}:${endpoint.port}/proxy${path}`;
+/**
+ * Ready endpoints that a Service's EndpointSlices (from `kubectl get endpointslices -o json`)
+ * list for one Service port (its name, or the number when the port is unnamed: the slice then
+ * names it ""). The health endpoints are not called over the network: the chart's default-deny
+ * NetworkPolicy and AuthorizationPolicies (decision 27) refuse connections from the node, which
+ * is where the API server's Service proxy comes from. The kubelet's HTTP probes, which pass
+ * through istio-cni's probe address, have already answered for every ready pod.
+ */
+export function readyEndpointsFor(sliceList: { items?: unknown[] }, port: string): number {
+  let ready = 0;
+  for (const slice of asArray(sliceList.items).filter(isMap)) {
+    const ports = asArray(slice.ports).filter(isMap);
+    // A slice port without a number means the Service port resolved to no container port.
+    const servesPort = ports.some((p) => {
+      const name = asString(p.name) ?? "";
+      return typeof p.port === "number" && (name === port || (name === "" && /^\d+$/.test(port)));
+    });
+    if (!servesPort) continue;
+    for (const endpoint of asArray(slice.endpoints).filter(isMap)) {
+      // An unset ready condition means ready (discovery.k8s.io/v1); only false means not ready.
+      if (asMap(endpoint.conditions).ready !== false) ready += 1;
+    }
+  }
+  return ready;
 }
 
 /** Waiting reasons that mean a pod will not come up without a change. */

@@ -1,0 +1,22 @@
+## admin | engine_full of both tables (AC4 fsync, AC TTL/partition)
+SELECT name, engine, engine_full FROM system.tables WHERE database = 'trustiot' ORDER BY name FORMAT Vertical
+## admin | fsync settings through system.merge_tree_settings? (table-level overrides)
+SELECT name, create_table_query FROM system.tables WHERE database = 'trustiot' ORDER BY name FORMAT Vertical
+## admin | databases present
+SELECT name, comment FROM system.databases WHERE name LIKE 'trustiot%' ORDER BY name
+## admin | non-MergeTree engines in trustiot dbs
+SELECT count() FROM system.tables WHERE database IN ('trustiot', 'trustiot_logs') AND NOT endsWith(engine, 'MergeTree')
+## admin | access entities (all local_directory = created by SQL)
+SELECT 'role' AS k, name, storage FROM system.roles WHERE startsWith(name, 'trustiot_') UNION ALL SELECT 'profile', name, storage FROM system.settings_profiles WHERE startsWith(name, 'trustiot_') UNION ALL SELECT 'quota', name || ' keys=' || toString(keys), storage FROM system.quotas WHERE startsWith(name, 'trustiot_') UNION ALL SELECT 'row policy', short_name || ' ON ' || table, storage FROM system.row_policies WHERE database = 'trustiot' ORDER BY 1, 2
+## admin | profile elements (all CONST?)
+SELECT setting_name, value, min, max, writability FROM system.settings_profile_elements WHERE profile_name = 'trustiot_tenant_reader' ORDER BY setting_name
+## admin | quota limits
+SELECT name, keys, durations, apply_to_list FROM system.quotas WHERE name = 'trustiot_tenant_reader'
+## admin | quota limits detail
+SELECT * FROM system.quota_limits WHERE quota_name = 'trustiot_tenant_reader' ORDER BY duration FORMAT Vertical
+## admin | server-side check: users without row policies default
+SELECT name, value FROM system.server_settings WHERE name LIKE '%row_polic%'
+## admin | grants of roles
+SELECT role_name, access_type, database, table, grant_option FROM system.grants WHERE role_name LIKE 'trustiot_%' ORDER BY role_name, table, access_type
+## admin | sample 400-day TTL on batch_commits vs telemetry
+SELECT table, extract(engine_full, 'TTL [^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+') AS ttl FROM system.tables WHERE database = 'trustiot' ORDER BY table

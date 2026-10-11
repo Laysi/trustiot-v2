@@ -5,22 +5,42 @@
 //!
 //! - rejected: an empty or oversized payload, malformed CBOR, bytes after the item, nesting
 //!   deeper than [`MAX_NESTING`], a missing or wrongly typed field, an invalid identifier, a
-//!   field that appears twice in one message map, a major version other than
-//!   [`PROTOCOL_VERSION`], or a `rev` greater than [`PROTOCOL_REVISION`];
+//!   field that appears twice in one message map, a key that appears twice in a data map
+//!   (log entry fields, exception code counts), U+0000 in any text, a major version other
+//!   than [`PROTOCOL_VERSION`], or a `rev` greater than [`PROTOCOL_REVISION`];
 //! - accepted: map keys this build does not know (they are skipped), and absent optional
 //!   fields (they take their default).
+//!
+//! A declared item count never sizes an allocation by itself: arrays reserve at most
+//! [`SEQ_PREALLOC_BYTES`] up front and grow with the items that actually decode.
 
+use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::convert::Infallible;
 use std::fmt;
+use std::marker::PhantomData;
 
 use cbor4ii::core::dec::{Read, Reference};
 use cbor4ii::core::enc::Write;
-use serde::de::DeserializeOwned;
+use serde::de::{DeserializeOwned, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::open_enum::open_enum;
-use crate::topic::Channel;
+use crate::topic::{Channel, MIN_MAX_PACKET_BYTES};
 use crate::{PROTOCOL_REVISION, PROTOCOL_VERSION};
+
+/// Most bytes a decoder reserves for an array before its items decode. Serde would otherwise
+/// reserve room for the declared item count (up to 1 MiB per array), so a payload of a few
+/// kilobytes that declares thousands of items could make the decoder allocate ~180 times its
+/// size before failing on the first item (Laysi/trustiot-v2#269).
+pub const SEQ_PREALLOC_BYTES: usize = 4096;
+
+/// Largest payload a header peek (`TelemetryBatch::peek_header`, `DesiredConfig::peek_header`)
+/// reads: the MQTT packet size every broker and client must accept
+/// ([`MIN_MAX_PACKET_BYTES`]). A peek serves payloads that [`decode`] refused, including those
+/// over their channel limit, so it cannot use the channel limit; anything larger than this
+/// cannot have arrived over a conforming MQTT connection.
+pub const MAX_PEEK_BYTES: usize = MIN_MAX_PACKET_BYTES;
 
 /// Deepest nesting of CBOR arrays and maps a decoder accepts. The deepest message in this
 /// version nests 6 levels; the margin leaves room for fields a newer peer adds while keeping a
@@ -167,6 +187,105 @@ pub(crate) fn from_slice<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> Result<T
         Err(DecodeError::TrailingBytes {
             count: input.rest.len(),
         })
+    }
+}
+
+/// Reads the identifying fields of a payload that [`decode`] may have refused. Checks only the
+/// size ([`MAX_PEEK_BYTES`]) and the framing, not `v`, the channel limit or the other fields.
+pub(crate) fn peek<'de, T: Deserialize<'de>>(payload: &'de [u8]) -> Result<T, DecodeError> {
+    if payload.len() > MAX_PEEK_BYTES {
+        return Err(DecodeError::TooLarge {
+            size: payload.len(),
+            limit: MAX_PEEK_BYTES,
+        });
+    }
+    from_slice(payload)
+}
+
+/// Deserializes an array into a `Vec` that reserves at most [`SEQ_PREALLOC_BYTES`] before its
+/// items decode, instead of the declared item count. Use it with `deserialize_with` on every
+/// `Vec` field of a message.
+pub(crate) fn seq<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct SeqVisitor<T>(PhantomData<T>);
+
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for SeqVisitor<T> {
+        type Value = Vec<T>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("an array")
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut access: A) -> Result<Vec<T>, A::Error> {
+            let most = SEQ_PREALLOC_BYTES / size_of::<T>().max(1);
+            let mut items = Vec::with_capacity(access.size_hint().unwrap_or(0).min(most));
+            while let Some(item) = access.next_element()? {
+                items.push(item);
+            }
+            Ok(items)
+        }
+    }
+
+    deserializer.deserialize_seq(SeqVisitor(PhantomData))
+}
+
+/// Deserializes a map that refuses a repeated key, as message structs refuse a repeated field.
+/// Serde's own `BTreeMap` keeps the last value, which would silently drop the earlier one and
+/// let two decoders of the same bytes disagree about which value counts.
+pub(crate) fn unique_map<'de, D, K, V>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error>
+where
+    D: Deserializer<'de>,
+    K: Deserialize<'de> + Ord,
+    V: Deserialize<'de>,
+{
+    struct MapVisitor<K, V>(PhantomData<(K, V)>);
+
+    impl<'de, K, V> Visitor<'de> for MapVisitor<K, V>
+    where
+        K: Deserialize<'de> + Ord,
+        V: Deserialize<'de>,
+    {
+        type Value = BTreeMap<K, V>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a map without repeated keys")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut access: A) -> Result<Self::Value, A::Error> {
+            let mut map = BTreeMap::new();
+            while let Some((key, value)) = access.next_entry()? {
+                match map.entry(key) {
+                    Entry::Vacant(slot) => {
+                        slot.insert(value);
+                    }
+                    Entry::Occupied(_) => {
+                        return Err(serde::de::Error::custom("a map key appears twice"));
+                    }
+                }
+            }
+            Ok(map)
+        }
+    }
+
+    deserializer.deserialize_map(MapVisitor(PhantomData))
+}
+
+/// Whether `text` holds U+0000. No text in this protocol may: PostgreSQL `text` cannot store
+/// it, and C interfaces read it as the end of the string. Other control characters are allowed
+/// and left to whoever renders the text (see the crate README).
+pub(crate) fn has_nul(text: &str) -> bool {
+    text.contains('\0')
+}
+
+/// `text` with every U+0000 replaced by U+FFFD, for constructors that make text sendable.
+pub(crate) fn replace_nul(text: String) -> String {
+    if has_nul(&text) {
+        text.replace('\0', "\u{fffd}")
+    } else {
+        text
     }
 }
 
@@ -443,16 +562,26 @@ pub struct Issue {
 }
 
 impl Issue {
-    /// Builds an issue, cutting `path` and `message` to their limits at a character boundary.
+    /// Builds an issue, replacing U+0000 with U+FFFD (a diagnostic may quote hostile input)
+    /// and cutting `path` and `message` to their limits at a character boundary.
     pub fn new(code: IssueCode, path: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code,
-            path: truncate(path.into(), MAX_ISSUE_PATH_BYTES),
-            message: truncate(message.into(), MAX_ISSUE_MESSAGE_BYTES),
+            path: truncate(replace_nul(path.into()), MAX_ISSUE_PATH_BYTES),
+            message: truncate(replace_nul(message.into()), MAX_ISSUE_MESSAGE_BYTES),
         }
     }
 
     pub(crate) fn check_bounds(&self, path: &str) -> Result<(), Issue> {
+        for (field, text) in [("path", &self.path), ("message", &self.message)] {
+            if has_nul(text) {
+                return Err(Issue::new(
+                    IssueCode::InvalidValue,
+                    format!("{path}.{field}"),
+                    "contains U+0000",
+                ));
+            }
+        }
         if self.path.len() > MAX_ISSUE_PATH_BYTES {
             return Err(Issue::new(
                 IssueCode::TooLong,

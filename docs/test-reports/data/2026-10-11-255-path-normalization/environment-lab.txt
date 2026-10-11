@@ -1,0 +1,5 @@
+aarch64
+k3s version v1.36.5+k3s1 (3dd98cc5)
+istio-cni-node-j4nkz registry.istio.io/release/install-cni@sha256:7285115c6b02054c059b71dff0a446dc045a65b1c5cdc652806c94aed1de8d73
+istiod-656fff7c89-hngnl registry.istio.io/release/pilot@sha256:78052a996140d7f0a3f03d04fb3352714cbc40e0b69dcf70b59ee07511ff3dfb
+ztunnel-hx6wn registry.istio.io/release/ztunnel@sha256:885b9b64d41c750768d9f4e80b01dcd7808dc4ac5de50252671542b72def6e09

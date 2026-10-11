@@ -1,0 +1,101 @@
+#![allow(clippy::unwrap_used, reason = "probe")]
+mod common;
+use cbor4ii::core::Value as C;
+use common::{golden_dir, read_hex, to_hex};
+use protocol::config::Host;
+use protocol::health::Heartbeat;
+use protocol::logs::LogBatch;
+use std::fmt::Write as _;
+use std::fs;
+
+fn t(s: &str) -> C {
+    C::Text(s.into())
+}
+fn enc(v: &C) -> Vec<u8> {
+    use cbor4ii::core::enc::Encode;
+    let mut w = cbor4ii::core::utils::BufWriter::new(Vec::new());
+    v.encode(&mut w).unwrap();
+    w.into_inner()
+}
+fn base(name: &str) -> C {
+    cbor4ii::serde::from_slice(&read_hex(&golden_dir("current").join(format!("{name}.cbor.hex")))).unwrap()
+}
+fn get_mut<'a>(v: &'a mut C, key: &str) -> &'a mut C {
+    let C::Map(es) = v else { panic!() };
+    &mut es.iter_mut().find(|(k, _)| *k == t(key)).unwrap().1
+}
+
+fn raw_array_payload(field: &str, prefix: &[(&str, Vec<u8>)], count: usize, item: u8) -> Vec<u8> {
+    let tx = |s: &str| {
+        let mut v = vec![0x60 | u8::try_from(s.len()).unwrap()];
+        v.extend(s.as_bytes());
+        v
+    };
+    let mut v = vec![0xa0 | u8::try_from(2 + prefix.len()).unwrap()];
+    v.extend(tx("v"));
+    v.push(1);
+    for (k, val) in prefix {
+        v.extend(tx(k));
+        v.extend(val);
+    }
+    v.extend(tx(field));
+    v.push(0x9a);
+    v.extend(u32::try_from(count).unwrap().to_be_bytes());
+    v.extend(std::iter::repeat_n(item, count));
+    v
+}
+
+#[test]
+fn write_findings() {
+    let out = std::path::PathBuf::from(std::env::var("FINDINGS_OUT").unwrap());
+    fs::create_dir_all(&out).unwrap();
+    let mut summary = String::new();
+
+    // F1a: repeated key in LogEntry.fields
+    let mut m = base("log");
+    let C::Array(entries) = get_mut(&mut m, "entries") else { panic!() };
+    let C::Map(fields) = get_mut(&mut entries[0], "fields") else { panic!() };
+    fields.push((t("timeout_ms"), t("OVERRIDDEN")));
+    let bytes = enc(&m);
+    fs::write(out.join("F1a-log-fields-repeated-key.cbor.hex"), to_hex(&bytes)).unwrap();
+    let decoded = LogBatch::decode(&bytes).unwrap();
+    writeln!(summary, "F1a decode OK, fields = {:?}", decoded.entries[0].fields).unwrap();
+
+    // F1b: repeated key in DeviceStats.exception_codes
+    let mut m = base("heartbeat");
+    let C::Array(devs) = get_mut(&mut m, "devices") else { panic!() };
+    for d in devs.iter_mut() {
+        let C::Map(es) = d else { panic!() };
+        if let Some((_, C::Map(codes))) = es.iter_mut().find(|(k, _)| *k == t("exception_codes")) {
+            let first = codes[0].clone();
+            codes.push((first.0, C::Integer(999)));
+        }
+    }
+    let bytes = enc(&m);
+    fs::write(out.join("F1b-heartbeat-exception-codes-repeated-key.cbor.hex"), to_hex(&bytes)).unwrap();
+    let decoded = Heartbeat::decode(&bytes).unwrap();
+    writeln!(
+        summary,
+        "F1b decode OK, exception_codes = {:?}",
+        decoded.devices.iter().map(|d| d.exception_codes.clone()).collect::<Vec<_>>()
+    )
+    .unwrap();
+
+    // F2: small payloads that make the decoder allocate much more than their size
+    let heartbeat = raw_array_payload("devices", &[], 4200, 0xf5);
+    fs::write(out.join("F2a-heartbeat-devices-x4200.cbor.hex"), to_hex(&heartbeat)).unwrap();
+    let telemetry = raw_array_payload(
+        "series",
+        &[("stream", vec![0x61, b's']), ("seq", vec![1]), ("clock_synced", vec![0xf5])],
+        4200,
+        0xf5,
+    );
+    fs::write(out.join("F2b-telemetry-series-x4200.cbor.hex"), to_hex(&telemetry)).unwrap();
+    writeln!(summary, "F2 sizes: heartbeat {} bytes, telemetry {} bytes", heartbeat.len(), telemetry.len()).unwrap();
+
+    // F4: hosts that slip past the unspecified / multicast / broadcast rule
+    for host in ["::ffff:0.0.0.0", "::ffff:224.0.0.1", "::ffff:255.255.255.255"] {
+        writeln!(summary, "F4 host {host}: accepted = {}", Host::new(host).is_ok()).unwrap();
+    }
+    fs::write(out.join("findings-summary.txt"), summary).unwrap();
+}

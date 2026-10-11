@@ -18,5 +18,5 @@
     "noUnusedParameters": true,
     "skipLibCheck": true
   },
-  "include": ["**/*.ts"]
+  "include": ["**/*.ts", "../deploy/chart/tests/**/*.ts"]
 }

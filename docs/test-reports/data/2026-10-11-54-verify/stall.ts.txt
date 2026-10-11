@@ -1,0 +1,64 @@
+// Horizon-stall probe: caught-up consumers, then a long write tx in another schema, then a long read-only tx.
+// Usage: bun stall.ts <chaos-binary> <outdir>
+import { $ } from "bun";
+import { mkdirSync, writeFileSync, appendFileSync, rmSync } from "node:fs";
+const [bin, outdir] = process.argv.slice(2);
+const PG = "outbox-stall-pg", PORT = 55433;
+const IMAGE = "docker.io/library/postgres@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873";
+const env = { ...process.env,
+  CHAOS_URL_ADMIN: `postgres://postgres:pw@127.0.0.1:${PORT}/postgres`,
+  CHAOS_URL_PRODUCER: `postgres://producer_role:producer_role@127.0.0.1:${PORT}/postgres`,
+  CHAOS_URL_CONSUMER: `postgres://consumer_role:consumer_role@127.0.0.1:${PORT}/postgres` };
+mkdirSync(`${outdir}/procs`, { recursive: true });
+rmSync(`${outdir}/STOP`, { force: true }); rmSync(`${outdir}/STOP_CONSUMERS`, { force: true });
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const t0 = Date.now();
+const log = (s: string) => { const l = `[${((Date.now() - t0) / 1000).toFixed(1)}s] ${s}`; console.log(l); appendFileSync(`${outdir}/stall-timeline.txt`, l + "\n"); };
+const psql = async (q: string) => (await $`podman exec ${PG} psql -h 127.0.0.1 -U postgres -d postgres -At -c ${q}`.env({ PGPASSWORD: "pw" }).quiet().nothrow()).stdout.toString().trim();
+await $`podman rm -f ${PG}`.quiet().nothrow();
+await $`podman run -d --name ${PG} --memory 1g -e POSTGRES_PASSWORD=pw -p 127.0.0.1:${PORT}:5432 ${IMAGE} postgres -c max_connections=100`.quiet();
+while ((await psql("select 1")) !== "1") await sleep(500);
+await sleep(1500);
+await $`${bin} setup`.env(env).quiet();
+const spawn = (name: string, args: string[]) => { const f = `${outdir}/procs/${name}.log`; return Bun.spawn([bin, ...args], { env, stdout: Bun.file(f), stderr: Bun.file(f + ".err") }); };
+const procs = [spawn("stall-p1", ["producer", "p1", outdir]), spawn("stall-c1", ["consumer", "c1", "run", outdir]), spawn("stall-c2", ["consumer", "c2", "poll", outdir])];
+const q = `select (select count(*) from prod.outbox_event), (select count(*) from cons.outbox_inbox), (select count(*) from prod.outbox_event e, cons.outbox_subscription s where (e.tx_order, e.id) > (s.position_tx, s.position_id))`;
+writeFileSync(`${outdir}/stall.csv`, "t_s,phase,events,processed,lag\n");
+let phase = "warmup";
+async function sample() { const r = await psql(q); const [e, p, l] = r.split("|"); appendFileSync(`${outdir}/stall.csv`, `${((Date.now() - t0) / 1000).toFixed(1)},${phase},${e},${p},${l}\n`); return { e: +e, p: +p, l: +l }; }
+// Warm up until caught up.
+for (let i = 0; i < 60; i++) { await sleep(2000); const s = await sample(); if (i > 5 && s.l < 15) break; }
+log("caught up; starting phase A: long WRITE transaction in schema other (30 s)");
+phase = "write_tx_open";
+const longTx = psql("begin; insert into other.junk default values; select pg_sleep(30); commit;");
+await sleep(1500);
+const a0 = await sample();
+for (let i = 0; i < 12; i++) { await sleep(2000); await sample(); }
+const a1 = await sample();
+log(`during write tx: events ${a0.e}->${a1.e}, processed ${a0.p}->${a1.p}, lag ${a0.l}->${a1.l}`);
+await longTx;
+phase = "after_commit";
+for (let i = 0; i < 10; i++) { await sleep(1500); await sample(); }
+const a2 = await sample();
+log(`after commit: processed ${a2.p}, lag ${a2.l}`);
+log("phase B: long READ-ONLY transaction (30 s), no xid");
+phase = "readonly_tx_open";
+const roTx = psql("begin; select count(*) from other.junk; select pg_sleep(30); commit;");
+await sleep(1500);
+const b0 = await sample();
+for (let i = 0; i < 12; i++) { await sleep(2000); await sample(); }
+const b1 = await sample();
+log(`during read-only tx: events ${b0.e}->${b1.e}, processed ${b0.p}->${b1.p}, lag ${b0.l}->${b1.l}`);
+await roTx;
+// Wind down and verify everything.
+writeFileSync(`${outdir}/STOP`, "");
+await procs[0].exited;
+for (let i = 0; i < 60; i++) { const s = await sample(); if (s.l === 0) break; await sleep(1000); }
+await sleep(3000);
+writeFileSync(`${outdir}/STOP_CONSUMERS`, "");
+await procs[1].exited; await procs[2].exited;
+const v = await $`${bin} verify ${outdir}`.env(env).quiet().nothrow();
+writeFileSync(`${outdir}/stall-verify.json`, v.stdout.toString() + v.stderr.toString());
+console.log(v.stdout.toString());
+if (v.exitCode === 0) await $`podman rm -f ${PG}`.quiet().nothrow();
+process.exit(v.exitCode === 0 ? 0 : 1);

@@ -1,0 +1,56 @@
+### [admin] create evil profile (like a bigger plan, plus hostile elements)
+CREATE SETTINGS PROFILE IF NOT EXISTS evil59 SETTINGS max_threads = 64, max_memory_usage = 8000000000, max_execution_time = 0, max_rows_to_read = 0, max_result_rows = 0, SQL_tenant_id = '490c02de-1a4b-4600-a3ea-ae27b38e7547', readonly = 0
+--> HTTP 200 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"937527","memory_usage":"2121550"}
+
+
+### [tenant_a] use evil profile via URL {profile=evil59}
+SELECT getSetting('readonly'), getSetting('max_threads'), getSetting('max_execution_time'), getSetting('max_memory_usage'), getSetting('SQL_tenant_id'), currentProfiles()
+--> HTTP 500 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"66948","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'max_threads' setting in readonly mode: , while trying to set settings profile evil59: in attempt to set the value of setting 'profile' to 'evil59'. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] use evil profile via URL then read {profile=evil59}
+SELECT count() FROM trustiot.telemetry
+--> HTTP 500 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"81301","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'max_threads' setting in readonly mode: , while trying to set settings profile evil59: in attempt to set the value of setting 'profile' to 'evil59'. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] use evil profile via SET in session {session_id=pf1}
+SET profile = 'evil59'
+--> HTTP 500 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"2052515","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'max_threads' setting in readonly mode: , while trying to set settings profile evil59: in attempt to set the value of setting 'profile' to 'evil59'. (READONLY)
+
+### [tenant_a] SET profile then read {session_id=pf1}
+SELECT getSetting('readonly'), getSetting('max_threads'), getSetting('SQL_tenant_id'), count() FROM trustiot.telemetry
+--> HTTP 200 (6 ms) summary={"read_rows":"7","read_bytes":"112","written_rows":"0","written_bytes":"0","total_rows_to_read":"7","result_rows":"1","result_bytes":"12680","elapsed_ns":"5352575","memory_usage":"10085882"}
+1	2	b6c7bd6b-3fc5-46c4-b8bf-4188f7c9ca38	3
+
+### [tenant_a] per-query SETTINGS profile
+SELECT getSetting('max_threads') SETTINGS profile = 'evil59'
+--> HTTP 500 (3 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1504209","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'max_threads' setting in readonly mode: , while trying to set settings profile evil59: in attempt to set the value of setting 'profile' to 'evil59'. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] profile with only non-const settings, bigger plan {profile=bigplan59}
+SELECT getSetting('max_threads')
+--> HTTP 500 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"63299","memory_usage":"0"}
+Code: 180. DB::Exception: There is no settings profile `bigplan59` in `user directories`: , while trying to set settings profile bigplan59: in attempt to set the value of setting 'profile' to 'bigplan59'. (THERE_IS_NO_PROFILE) (version 26.8.22.13 (official build))
+
+### [admin] create bigplan profile without readonly/tenant
+CREATE SETTINGS PROFILE IF NOT EXISTS bigplan59 SETTINGS max_threads = 16, max_concurrent_queries_for_user = 100, max_execution_time = 600, max_memory_usage = 4000000000
+--> HTTP 200 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"759917","memory_usage":"2114190"}
+
+
+### [tenant_a] bigplan via URL {profile=bigplan59}
+SELECT getSetting('max_threads'), getSetting('max_concurrent_queries_for_user'), getSetting('max_execution_time'), getSetting('max_memory_usage'), getSetting('readonly'), currentProfiles()
+--> HTTP 500 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"60017","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'max_threads' setting in readonly mode: , while trying to set settings profile bigplan59: in attempt to set the value of setting 'profile' to 'bigplan59'. (READONLY) (version 26.8.22.13 (official build))
+
+### [tenant_a] bigplan via SETTINGS profile
+SELECT getSetting('max_threads') SETTINGS profile = 'bigplan59'
+--> HTTP 500 (2 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"1218234","memory_usage":"0"}
+Code: 164. DB::Exception: Cannot modify 'max_threads' setting in readonly mode: , while trying to set settings profile bigplan59: in attempt to set the value of setting 'profile' to 'bigplan59'. (READONLY) (version 26.8.22.13 (official build))
+
+### [admin] cleanup profiles
+DROP SETTINGS PROFILE IF EXISTS evil59, bigplan59
+--> HTTP 200 (1 ms) summary={"read_rows":"0","read_bytes":"0","written_rows":"0","written_bytes":"0","total_rows_to_read":"0","result_rows":"0","result_bytes":"0","elapsed_ns":"636531","memory_usage":"2109262"}
+
+
+# summary: 11 probes, 0 responses containing B's tenant id or secret

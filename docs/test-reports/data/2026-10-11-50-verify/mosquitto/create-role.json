@@ -1,0 +1,34 @@
+{
+  "commands": [
+    {
+      "acls": [
+        {
+          "acltype": "publishClientSend",
+          "allow": true,
+          "priority": 0,
+          "topic": "trustiot/v1/gw/%u/up/#"
+        },
+        {
+          "acltype": "subscribePattern",
+          "allow": true,
+          "priority": 0,
+          "topic": "trustiot/v1/gw/%u/down/#"
+        },
+        {
+          "acltype": "publishClientReceive",
+          "allow": true,
+          "priority": 0,
+          "topic": "trustiot/v1/gw/%u/down/#"
+        },
+        {
+          "acltype": "unsubscribePattern",
+          "allow": true,
+          "priority": 0,
+          "topic": "trustiot/v1/gw/%u/down/#"
+        }
+      ],
+      "command": "createRole",
+      "rolename": "trustiot-gateway"
+    }
+  ]
+}

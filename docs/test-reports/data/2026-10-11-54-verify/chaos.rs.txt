@@ -1,0 +1,744 @@
+//! Chaos harness for the outbox (verification of Laysi/trustiot-v2#54). Throwaway probe, not part
+//! of the product. Driven by `chaos.ts`, which starts, kills and restarts these processes.
+//!
+//! Commands (connection URLs come from CHAOS_URL_ADMIN / CHAOS_URL_PRODUCER / CHAOS_URL_CONSUMER):
+//!   setup                       create schemas, roles, tables and the README's minimal grants
+//!   producer <name> <dir>       write events to many aggregates, some transactions rolled back
+//!   consumer <name> <mode>      mode `run` (Consumer::run) or `poll` (poll_once loop with stats)
+//!   replay <reprocess|skip>     move the subscription back to the start
+//!   verify <dir>                check the invariants, print a JSON summary, exit 1 on failure
+#![allow(clippy::all, clippy::pedantic, clippy::restriction, reason = "throwaway probe")]
+
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::io::Write as _;
+use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+
+use contract::{Event, ServiceName};
+use outbox::{
+    Aggregate, Consumer, ConsumerConfig, Delivery, Handler, HandlerError, Outcome, Position,
+    Replay, publish,
+};
+use serde::{Deserialize, Serialize};
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::{AssertSqlSafe, PgPool, Postgres, Transaction};
+use tokio_util::sync::CancellationToken;
+
+const SUBSCRIPTION: &str = "cons.chaos";
+
+#[derive(Serialize, Deserialize)]
+struct Chaos {
+    token: String,
+    agg: String,
+    poison: bool,
+}
+
+impl Event for Chaos {
+    const TYPE: &'static str = "chaos.touched";
+    const VERSION: u32 = 1;
+    const PRODUCER: ServiceName = ServiceName::Assets;
+}
+
+fn url(name: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| panic!("{name} not set"))
+}
+
+fn pool(var: &str, schema: &str, max: u32) -> PgPool {
+    let options = PgConnectOptions::from_str(&url(var))
+        .unwrap()
+        .options([("search_path", schema)]);
+    PgPoolOptions::new()
+        .max_connections(max)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect_lazy_with(options)
+}
+
+/// xorshift, seeded per process.
+struct Rng(u64);
+impl Rng {
+    fn new(salt: u64) -> Self {
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        Self((t ^ (u64::from(std::process::id()) << 32) ^ salt.wrapping_mul(0x9E37_79B9_7F4A_7C15)) | 1)
+    }
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+    fn f(&mut self) -> f64 {
+        (self.next() >> 11) as f64 / (1u64 << 53) as f64
+    }
+    fn range(&mut self, lo: u64, hi: u64) -> u64 {
+        lo + self.next() % (hi - lo + 1)
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    match args.get(1).map(String::as_str) {
+        Some("setup") => setup().await,
+        Some("producer") => producer(&args[2], PathBuf::from(&args[3])).await,
+        Some("consumer") => consumer(&args[2], &args[3], PathBuf::from(&args[4])).await,
+        Some("replay") => replay(&args[2]).await,
+        Some("verify") => verify(PathBuf::from(&args[2])).await,
+        _ => panic!("usage: chaos setup|producer|consumer|replay|verify"),
+    }
+}
+
+async fn setup() {
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&url("CHAOS_URL_ADMIN"))
+        .await
+        .unwrap();
+    let mut c = admin.acquire().await.unwrap();
+    let sql = |s: &'static str| sqlx::raw_sql(AssertSqlSafe(s.to_owned()));
+    sql("CREATE SCHEMA prod; CREATE SCHEMA cons; CREATE SCHEMA other; CREATE SCHEMA secret;
+         CREATE TABLE other.junk (id serial PRIMARY KEY, at timestamptz DEFAULT now());
+         CREATE TABLE secret.tenants (id int PRIMARY KEY, name text);
+         INSERT INTO secret.tenants VALUES (1, 'x');
+         CREATE ROLE producer_role LOGIN PASSWORD 'producer_role';
+         CREATE ROLE consumer_role LOGIN PASSWORD 'consumer_role';
+         ALTER ROLE producer_role SET search_path = prod;
+         ALTER ROLE consumer_role SET search_path = cons;")
+        .execute(&mut *c)
+        .await
+        .unwrap();
+    sql("SET search_path = prod").execute(&mut *c).await.unwrap();
+    outbox::schema::install_producer(&mut c).await.unwrap();
+    sql("CREATE TABLE ledger (id bigserial PRIMARY KEY, agg text NOT NULL, token text NOT NULL UNIQUE);")
+        .execute(&mut *c)
+        .await
+        .unwrap();
+    sql("SET search_path = cons").execute(&mut *c).await.unwrap();
+    outbox::schema::install_consumer(&mut c).await.unwrap();
+    sql("CREATE TABLE handled_log (n bigserial PRIMARY KEY, gen int NOT NULL, event_id uuid NOT NULL,
+            agg text NOT NULL, aseq bigint NOT NULL, token text NOT NULL, replica text NOT NULL);
+         CREATE TABLE gen (g int NOT NULL);
+         INSERT INTO gen VALUES (0);
+         CREATE TABLE aggregate_state (agg text PRIMARY KEY, last_seq bigint NOT NULL, n bigint NOT NULL);
+         CREATE TABLE violations (n bigserial PRIMARY KEY, event_id uuid, agg text, aseq bigint, last_seq bigint);")
+        .execute(&mut *c)
+        .await
+        .unwrap();
+    // The README's "資料庫權限" grants, plus the services' own business tables.
+    sql("GRANT USAGE ON SCHEMA prod TO producer_role;
+         GRANT SELECT, INSERT, UPDATE ON prod.outbox_aggregate TO producer_role;
+         GRANT INSERT ON prod.outbox_event TO producer_role;
+         GRANT SELECT, INSERT ON prod.ledger TO producer_role;
+         GRANT USAGE ON SEQUENCE prod.ledger_id_seq TO producer_role;
+         GRANT USAGE ON SCHEMA prod TO consumer_role;
+         GRANT SELECT ON prod.outbox_event TO consumer_role;
+         GRANT USAGE ON SCHEMA cons TO consumer_role;
+         GRANT SELECT, INSERT, UPDATE, DELETE ON cons.outbox_subscription, cons.outbox_inbox,
+             cons.outbox_dead_letter, cons.outbox_version TO consumer_role;
+         GRANT SELECT, INSERT, UPDATE, DELETE ON cons.handled_log, cons.gen, cons.aggregate_state,
+             cons.violations TO consumer_role;
+         GRANT USAGE ON SEQUENCE cons.handled_log_n_seq, cons.violations_n_seq TO consumer_role;")
+        .execute(&mut *c)
+        .await
+        .unwrap();
+    println!("setup done");
+}
+
+fn log_line(dir: &PathBuf, name: &str, line: &str) {
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join(name))
+        .unwrap();
+    f.write_all(format!("{line}\n").as_bytes()).unwrap();
+}
+
+async fn producer(name: &str, dir: PathBuf) {
+    let pool = pool("CHAOS_URL_PRODUCER", "prod", 6);
+    let incarnation = uuid::Uuid::now_v7().simple().to_string();
+    let file = format!("producer-{name}-{}.log", &incarnation[..12]);
+    let committed = Arc::new(AtomicU64::new(0));
+    let mut tasks = Vec::new();
+    for t in 0..3u64 {
+        let pool = pool.clone();
+        let dir = dir.clone();
+        let file = file.clone();
+        let committed = committed.clone();
+        tasks.push(tokio::spawn(async move {
+            let mut rng = Rng::new(t + 1);
+            loop {
+                if dir.join("STOP").exists() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(rng.range(100, 400))).await;
+                let events = match rng.range(0, 9) {
+                    0..=6 => 1,
+                    7..=8 => 2,
+                    _ => 3,
+                };
+                let rollback = rng.f() < 0.12;
+                let early_xid = rng.f() < 0.35;
+                let mut plan = Vec::new();
+                for _ in 0..events {
+                    // Hot aggregates: the lower of two draws.
+                    let a = rng.range(0, 23).min(rng.range(0, 23));
+                    let token = uuid::Uuid::now_v7().to_string();
+                    plan.push((format!("a{a:02}"), token, rng.f() < 0.03));
+                }
+                let result: Result<bool, sqlx::Error> = async {
+                    let mut tx = pool.begin().await?;
+                    if early_xid {
+                        // Take the transaction ID first, write later: IDs invert against commit order.
+                        sqlx::query("SELECT pg_current_xact_id()::text")
+                            .execute(&mut *tx)
+                            .await?;
+                        tokio::time::sleep(Duration::from_millis(rng.range(0, 60))).await;
+                    }
+                    for (agg, token, poison) in &plan {
+                        let aggregate = Aggregate::new("widget", agg.clone()).unwrap();
+                        publish(
+                            &mut tx,
+                            &aggregate,
+                            &Chaos {
+                                token: token.clone(),
+                                agg: agg.clone(),
+                                poison: *poison,
+                            },
+                            None,
+                        )
+                        .await
+                        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+                        // The ledger row comes after the aggregate lock (taken by publish), so ledger order is commit order.
+                        sqlx::query("INSERT INTO ledger (agg, token) VALUES ($1, $2)")
+                            .bind(agg)
+                            .bind(token)
+                            .execute(&mut *tx)
+                            .await?;
+                        if rng.f() < 0.1 {
+                            tokio::time::sleep(Duration::from_millis(rng.range(0, 30))).await;
+                        }
+                    }
+                    if rollback {
+                        for (_, token, _) in &plan {
+                            log_line(&dir, &file, &format!("R {token}"));
+                        }
+                        tx.rollback().await?;
+                        return Ok(false);
+                    }
+                    for (_, token, _) in &plan {
+                        log_line(&dir, &file, &format!("P {token}"));
+                    }
+                    tx.commit().await?;
+                    for (_, token, _) in &plan {
+                        log_line(&dir, &file, &format!("C {token}"));
+                    }
+                    Ok(true)
+                }
+                .await;
+                match result {
+                    Ok(true) => {
+                        committed.fetch_add(plan.len() as u64, Ordering::Relaxed);
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        log_line(&dir, &file, &format!("E {}", e.to_string().replace('\n', " ")));
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                }
+            }
+        }));
+    }
+    for t in tasks {
+        let _ = t.await;
+    }
+    println!("producer {name} stopped cleanly, committed {}", committed.load(Ordering::Relaxed));
+}
+
+struct Counters {
+    retried_before: AtomicU64,
+    retried_after: AtomicU64,
+    poisoned: AtomicU64,
+    handled: AtomicU64,
+}
+
+struct Projection {
+    replica: String,
+    stats: Arc<Counters>,
+}
+
+impl Handler for Projection {
+    async fn handle(
+        &self,
+        tx: &mut Transaction<'static, Postgres>,
+        delivery: &Delivery,
+    ) -> Result<(), HandlerError> {
+        let event: Chaos = delivery.envelope.decode()?;
+        let mut rng = Rng::new(delivery.position.id() as u64);
+        if rng.f() < 0.03 {
+            self.stats.retried_before.fetch_add(1, Ordering::Relaxed);
+            return Err(HandlerError::retry("chaos: transient failure before write"));
+        }
+        let gnum: i32 = sqlx::query_scalar("SELECT g FROM gen").fetch_one(&mut **tx).await?;
+        let last: Option<i64> = sqlx::query_scalar("SELECT last_seq FROM aggregate_state WHERE agg = $1")
+            .bind(&event.agg)
+            .fetch_optional(&mut **tx)
+            .await?;
+        if let Some(last) = last {
+            if last >= delivery.aggregate_seq {
+                sqlx::query("INSERT INTO violations (event_id, agg, aseq, last_seq) VALUES ($1,$2,$3,$4)")
+                    .bind(*delivery.envelope.id.as_uuid())
+                    .bind(&event.agg)
+                    .bind(delivery.aggregate_seq)
+                    .bind(last)
+                    .execute(&mut **tx)
+                    .await?;
+            }
+        }
+        sqlx::query(
+            "INSERT INTO handled_log (gen, event_id, agg, aseq, token, replica) VALUES ($1,$2,$3,$4,$5,$6)",
+        )
+        .bind(gnum)
+        .bind(*delivery.envelope.id.as_uuid())
+        .bind(&event.agg)
+        .bind(delivery.aggregate_seq)
+        .bind(&event.token)
+        .bind(&self.replica)
+        .execute(&mut **tx)
+        .await?;
+        if event.poison {
+            self.stats.poisoned.fetch_add(1, Ordering::Relaxed);
+            // After writing: the handler's writes must roll back with the dead-lettering.
+            return Err(HandlerError::permanent("chaos: poison event"));
+        }
+        sqlx::query(
+            "INSERT INTO aggregate_state (agg, last_seq, n) VALUES ($1,$2,1) \
+             ON CONFLICT (agg) DO UPDATE SET last_seq = EXCLUDED.last_seq, n = aggregate_state.n + 1",
+        )
+        .bind(&event.agg)
+        .bind(delivery.aggregate_seq)
+        .execute(&mut **tx)
+        .await?;
+        if rng.f() < 0.03 {
+            self.stats.retried_after.fetch_add(1, Ordering::Relaxed);
+            return Err(HandlerError::retry("chaos: transient failure after write"));
+        }
+        if rng.f() < 0.2 {
+            tokio::time::sleep(Duration::from_millis(rng.range(0, 15))).await;
+        }
+        self.stats.handled.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+async fn consumer(name: &str, mode: &str, dir: PathBuf) {
+    let pool = pool("CHAOS_URL_CONSUMER", "cons", 4);
+    let stats = Arc::new(Counters {
+        retried_before: AtomicU64::new(0),
+        retried_after: AtomicU64::new(0),
+        poisoned: AtomicU64::new(0),
+        handled: AtomicU64::new(0),
+    });
+    let config = ConsumerConfig::new(SUBSCRIPTION, "prod")
+        .unwrap()
+        .batch_size(50)
+        .poll_interval(Duration::from_millis(100))
+        .max_backoff(Duration::from_secs(2))
+        .lag_interval(Duration::from_secs(1));
+    let consumer = Consumer::new(
+        pool,
+        config,
+        Projection {
+            replica: name.to_owned(),
+            stats: stats.clone(),
+        },
+    );
+    let stop = CancellationToken::new();
+    {
+        let stop = stop.clone();
+        let dir = dir.clone();
+        tokio::spawn(async move {
+            while !dir.join("STOP_CONSUMERS").exists() {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            stop.cancel();
+        });
+    }
+    let dup = Arc::new(AtomicU64::new(0));
+    let delivered = Arc::new(AtomicU64::new(0));
+    let dead = Arc::new(AtomicU64::new(0));
+    {
+        let consumer = consumer.clone();
+        let (dup, delivered, dead, stats, stop) =
+            (dup.clone(), delivered.clone(), dead.clone(), stats.clone(), stop.clone());
+        let name = name.to_owned();
+        tokio::spawn(async move {
+            while !stop.is_cancelled() {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                let lag = consumer.lag();
+                println!(
+                    "STAT {name} delivered={} dup={} dead={} handled={} retry_before={} retry_after={} lag={:?}",
+                    delivered.load(Ordering::Relaxed),
+                    dup.load(Ordering::Relaxed),
+                    dead.load(Ordering::Relaxed),
+                    stats.handled.load(Ordering::Relaxed),
+                    stats.retried_before.load(Ordering::Relaxed),
+                    stats.retried_after.load(Ordering::Relaxed),
+                    lag.map(|l| (l.events, l.oldest_age.map(|a| a.as_secs_f64())))
+                );
+            }
+        });
+    }
+    if mode == "run" {
+        consumer.run(stop).await.unwrap();
+    } else {
+        // Same loop as `process`, but with the Progress counters visible.
+        loop {
+            match consumer.ensure_subscription().await {
+                Ok(()) => break,
+                Err(_) => tokio::time::sleep(Duration::from_millis(500)).await,
+            }
+        }
+        let monitor = {
+            let consumer = consumer.clone();
+            let stop = stop.clone();
+            tokio::spawn(async move { consumer.monitor_lag(stop).await })
+        };
+        let mut failures = 0u32;
+        while !stop.is_cancelled() {
+            let wait = match consumer.poll_once().await {
+                Ok(p) => {
+                    delivered.fetch_add(p.delivered as u64, Ordering::Relaxed);
+                    dup.fetch_add(p.duplicates as u64, Ordering::Relaxed);
+                    dead.fetch_add(p.dead_lettered as u64, Ordering::Relaxed);
+                    match p.outcome {
+                        Outcome::MoreAvailable => {
+                            failures = 0;
+                            Duration::ZERO
+                        }
+                        Outcome::CaughtUp | Outcome::Busy => {
+                            failures = 0;
+                            Duration::from_millis(100)
+                        }
+                        Outcome::Retry { .. } => {
+                            failures += 1;
+                            Duration::from_millis(100 * 2u64.pow(failures.min(4)))
+                        }
+                    }
+                }
+                Err(_) => {
+                    failures += 1;
+                    Duration::from_millis(100 * 2u64.pow(failures.min(4)))
+                }
+            };
+            tokio::time::sleep(wait).await;
+        }
+        let _ = monitor.await;
+    }
+    println!("consumer {name} stopped cleanly");
+}
+
+async fn replay(mode: &str) {
+    let pool = pool("CHAOS_URL_CONSUMER", "cons", 1);
+    let mode = if mode == "reprocess" { Replay::Reprocess } else { Replay::SkipProcessed };
+    let mut tx = pool.begin().await.unwrap();
+    outbox::replay_from(&mut tx, SUBSCRIPTION, Position::START, mode)
+        .await
+        .unwrap();
+    if mode == Replay::Reprocess {
+        sqlx::query("UPDATE gen SET g = g + 1").execute(&mut *tx).await.unwrap();
+        sqlx::query("DELETE FROM aggregate_state").execute(&mut *tx).await.unwrap();
+    }
+    tx.commit().await.unwrap();
+    println!("replay {mode:?} committed");
+}
+
+async fn verify(dir: PathBuf) {
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url("CHAOS_URL_ADMIN"))
+        .await
+        .unwrap();
+    let mut failures: Vec<String> = Vec::new();
+    let mut fail = |m: String| failures.push(m);
+
+    // Producer-side truth.
+    let events: Vec<(i64, i64, uuid::Uuid, String, i64, String, bool)> = sqlx::query_as(
+        "SELECT id, tx_order, event_id, aggregate_id, aggregate_seq, envelope->'payload'->>'token', \
+         (envelope->'payload'->>'poison')::bool FROM prod.outbox_event ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let ledger: Vec<(i64, String, String)> =
+        sqlx::query_as("SELECT id, agg, token FROM prod.ledger ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    let ev_tokens: HashSet<&str> = events.iter().map(|e| e.5.as_str()).collect();
+    let led_tokens: HashSet<&str> = ledger.iter().map(|e| e.2.as_str()).collect();
+    if ev_tokens != led_tokens || events.len() != ledger.len() {
+        fail(format!(
+            "events and ledger differ: {} events, {} ledger rows, {} tokens only in events, {} only in ledger",
+            events.len(),
+            ledger.len(),
+            ev_tokens.difference(&led_tokens).count(),
+            led_tokens.difference(&ev_tokens).count()
+        ));
+    }
+    // Producer logs.
+    let (mut rolled, mut pending, mut acked, mut errors) = (HashSet::new(), HashSet::new(), HashSet::new(), 0usize);
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("log")
+            || !path.file_name().unwrap().to_string_lossy().starts_with("producer-")
+        {
+            continue;
+        }
+        // Records are `<R|P|C> <36-char token>`; older logs may have records glued together because
+        // a record was written with two write calls from concurrent tasks.
+        let text = std::fs::read_to_string(&path).unwrap();
+        errors += text.lines().filter(|l| l.starts_with("E ")).count();
+        let bytes: Vec<char> = text.chars().collect();
+        let mut i = 0;
+        while i + 38 <= bytes.len() {
+            if matches!(bytes[i], 'R' | 'P' | 'C') && bytes[i + 1] == ' ' && bytes[i + 2 + 8] == '-' && bytes[i + 2 + 13] == '-' {
+                let token: String = bytes[i + 2..i + 38].iter().collect();
+                match bytes[i] {
+                    'R' => rolled.insert(token),
+                    'P' => pending.insert(token),
+                    _ => acked.insert(token),
+                };
+                i += 38;
+            } else {
+                i += 1;
+            }
+        }
+    }
+    let rolled_in_log = rolled.iter().filter(|t| ev_tokens.contains(t.as_str())).count();
+    if rolled_in_log > 0 {
+        fail(format!("{rolled_in_log} events from rolled-back transactions exist"));
+    }
+    let rolled_in_ledger = rolled.iter().filter(|t| led_tokens.contains(t.as_str())).count();
+    if rolled_in_ledger > 0 {
+        fail(format!("{rolled_in_ledger} ledger rows from rolled-back transactions exist"));
+    }
+    let lost_acked: Vec<&String> = acked.iter().filter(|t| !ev_tokens.contains(t.as_str())).collect();
+    if !lost_acked.is_empty() {
+        fail(format!("{} acknowledged commits have no event", lost_acked.len()));
+    }
+    let pending_missing = pending.iter().filter(|t| !ev_tokens.contains(t.as_str())).count();
+    let pending_present = pending.len() - pending_missing;
+
+    // Producer order: ledger id order per aggregate (commit order, serialized by the row lock)
+    // against aggregate_seq.
+    let mut seq_by_token: HashMap<&str, i64> = HashMap::new();
+    for e in &events {
+        seq_by_token.insert(e.5.as_str(), e.4);
+    }
+    let mut ledger_order: BTreeMap<&str, Vec<i64>> = BTreeMap::new();
+    for (_, agg, token) in &ledger {
+        if let Some(s) = seq_by_token.get(token.as_str()) {
+            ledger_order.entry(agg.as_str()).or_default().push(*s);
+        }
+    }
+    for (agg, seqs) in &ledger_order {
+        if !seqs.windows(2).all(|w| w[0] < w[1]) {
+            fail(format!("aggregate {agg}: aggregate_seq does not follow ledger commit order"));
+        }
+        let expected: Vec<i64> = (1..=seqs.len() as i64).collect();
+        if *seqs != expected {
+            fail(format!("aggregate {agg}: sequence has gaps"));
+        }
+    }
+    // tx_order never goes down within an aggregate.
+    let mut last_tx: HashMap<&str, (i64, i64)> = HashMap::new();
+    let mut by_seq = events.iter().collect::<Vec<_>>();
+    by_seq.sort_by_key(|e| (e.3.clone(), e.4));
+    let mut tx_order_inversions = 0;
+    for e in &by_seq {
+        if let Some((tx, id)) = last_tx.get(e.3.as_str()) {
+            if e.1 < *tx || e.0 < *id {
+                tx_order_inversions += 1;
+            }
+        }
+        last_tx.insert(e.3.as_str(), (e.1, e.0));
+    }
+    if tx_order_inversions > 0 {
+        fail(format!("{tx_order_inversions} aggregate events sort before their predecessor"));
+    }
+
+    // Consumer side.
+    let log: Vec<(i64, i32, uuid::Uuid, String, i64)> =
+        sqlx::query_as("SELECT n, gen, event_id, agg, aseq FROM cons.handled_log ORDER BY n")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    let final_gen: i32 = sqlx::query_scalar("SELECT g FROM cons.gen").fetch_one(&pool).await.unwrap();
+    let poison: HashSet<uuid::Uuid> = events.iter().filter(|e| e.6).map(|e| e.2).collect();
+    let good: HashSet<uuid::Uuid> = events.iter().filter(|e| !e.6).map(|e| e.2).collect();
+    let mut per_gen: BTreeMap<i32, Vec<&(i64, i32, uuid::Uuid, String, i64)>> = BTreeMap::new();
+    for l in &log {
+        per_gen.entry(l.1).or_default().push(l);
+    }
+    let mut gen_summary = Vec::new();
+    for (gnum, rows) in &per_gen {
+        let mut seen = HashSet::new();
+        let mut dups = 0;
+        let mut last: HashMap<&str, i64> = HashMap::new();
+        let mut order_violations = 0;
+        for r in rows {
+            if !seen.insert(r.2) {
+                dups += 1;
+            }
+            if let Some(prev) = last.get(r.3.as_str()) {
+                if *prev >= r.4 {
+                    order_violations += 1;
+                }
+            }
+            last.insert(r.3.as_str(), r.4);
+        }
+        if dups > 0 {
+            fail(format!("generation {gnum}: {dups} events handled more than once"));
+        }
+        if order_violations > 0 {
+            fail(format!("generation {gnum}: {order_violations} per-aggregate order violations"));
+        }
+        // Poison events are written then rolled back, so they must never be in the log.
+        let in_log_poison = rows.iter().filter(|r| poison.contains(&r.2)).count();
+        if in_log_poison > 0 {
+            fail(format!("generation {gnum}: {in_log_poison} poison events left handler writes behind"));
+        }
+        let unknown = rows.iter().filter(|r| !good.contains(&r.2)).count();
+        if unknown > 0 {
+            fail(format!("generation {gnum}: {unknown} handled events are not committed non-poison events"));
+        }
+        let complete = seen == good;
+        if *gnum == final_gen && !complete {
+            fail(format!(
+                "final generation {gnum}: handled {} of {} events; {} missing",
+                seen.len(),
+                good.len(),
+                good.difference(&seen).count()
+            ));
+        }
+        // Per aggregate, a generation is a prefix of the aggregate's events (no skipped event).
+        let mut by_agg: BTreeMap<&str, Vec<i64>> = BTreeMap::new();
+        for r in rows {
+            by_agg.entry(r.3.as_str()).or_default().push(r.4);
+        }
+        let mut non_prefix = 0;
+        let mut good_by_agg: BTreeMap<&str, Vec<i64>> = BTreeMap::new();
+        for e in events.iter().filter(|e| !e.6) {
+            good_by_agg.entry(e.3.as_str()).or_default().push(e.4);
+        }
+        for v in good_by_agg.values_mut() {
+            v.sort();
+        }
+        for (agg, got) in &by_agg {
+            let want = &good_by_agg[agg];
+            if got.as_slice() != &want[..got.len().min(want.len())] || got.len() > want.len() {
+                non_prefix += 1;
+            }
+        }
+        if non_prefix > 0 {
+            fail(format!("generation {gnum}: {non_prefix} aggregates skipped an event or reordered"));
+        }
+        gen_summary.push(serde_json::json!({"gen": gnum, "handled": rows.len(), "distinct": seen.len(), "complete": complete}));
+    }
+    // State and bookkeeping.
+    let state: Vec<(String, i64, i64)> =
+        sqlx::query_as("SELECT agg, last_seq, n FROM cons.aggregate_state ORDER BY agg")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    let mut want_state: BTreeMap<&str, (i64, i64)> = BTreeMap::new();
+    for e in events.iter().filter(|e| !e.6) {
+        let s = want_state.entry(e.3.as_str()).or_insert((0, 0));
+        s.0 = s.0.max(e.4);
+        s.1 += 1;
+    }
+    let got_state: BTreeMap<&str, (i64, i64)> = state.iter().map(|s| (s.0.as_str(), (s.1, s.2))).collect();
+    if want_state != got_state {
+        fail("consumer aggregate_state differs from the producer's events".to_owned());
+    }
+    let violations: i64 = sqlx::query_scalar("SELECT count(*) FROM cons.violations").fetch_one(&pool).await.unwrap();
+    if violations > 0 {
+        fail(format!("{violations} in-handler order violations recorded"));
+    }
+    let dead: Vec<(uuid::Uuid,)> = sqlx::query_as("SELECT event_id FROM cons.outbox_dead_letter")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    let dead_set: HashSet<uuid::Uuid> = dead.iter().map(|d| d.0).collect();
+    if dead_set != poison {
+        fail(format!(
+            "dead letters ({}) differ from the poison events ({}): {} missing, {} extra",
+            dead_set.len(),
+            poison.len(),
+            poison.difference(&dead_set).count(),
+            dead_set.difference(&poison).count()
+        ));
+    }
+    let inbox: i64 = sqlx::query_scalar("SELECT count(*) FROM cons.outbox_inbox").fetch_one(&pool).await.unwrap();
+    if inbox as usize != good.len() {
+        fail(format!("inbox has {inbox} rows, expected {}", good.len()));
+    }
+    let inbox_ids: Vec<(uuid::Uuid,)> = sqlx::query_as("SELECT event_id FROM cons.outbox_inbox").fetch_all(&pool).await.unwrap();
+    let inbox_set: HashSet<uuid::Uuid> = inbox_ids.iter().map(|d| d.0).collect();
+    if inbox_set != good {
+        fail("inbox event IDs differ from the committed non-poison events".to_owned());
+    }
+    let pos: (i64, i64) = sqlx::query_as("SELECT position_tx, position_id FROM cons.outbox_subscription")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let maxpos = events.iter().map(|e| (e.1, e.0)).max().unwrap();
+    if pos != maxpos {
+        fail(format!("subscription at {pos:?}, last event at {maxpos:?}"));
+    }
+    let lag: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM prod.outbox_event WHERE (tx_order, id) > ($1, $2)",
+    )
+    .bind(pos.0)
+    .bind(pos.1)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    if lag != 0 {
+        fail(format!("lag is {lag}, expected 0"));
+    }
+    let distinct_aggs: BTreeSet<&str> = events.iter().map(|e| e.3.as_str()).collect();
+    let summary = serde_json::json!({
+        "events_in_outbox": events.len(),
+        "ledger_rows": ledger.len(),
+        "poison_events": poison.len(),
+        "rolled_back_tokens_logged": rolled.len(),
+        "rolled_back_found_in_outbox": rolled_in_log,
+        "committed_acks_logged": acked.len(),
+        "pending_commit_tokens": pending.len(),
+        "pending_commit_present": pending_present,
+        "pending_commit_absent": pending_missing,
+        "producer_error_lines": errors,
+        "aggregates": distinct_aggs.len(),
+        "tx_order_inversions": tx_order_inversions,
+        "final_generation": final_gen,
+        "generations": gen_summary,
+        "handled_log_rows": log.len(),
+        "dead_letters": dead_set.len(),
+        "inbox_rows": inbox,
+        "in_handler_violations": violations,
+        "lag_events": lag,
+        "failures": failures,
+    });
+    println!("{}", serde_json::to_string_pretty(&summary).unwrap());
+    if !summary["failures"].as_array().unwrap().is_empty() {
+        std::process::exit(1);
+    }
+}

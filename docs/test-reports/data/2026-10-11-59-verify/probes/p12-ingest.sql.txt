@@ -1,0 +1,150 @@
+## ingest | whoami
+SELECT currentUser(), currentRoles(), currentProfiles(), getSetting('readonly')
+## ingest | SHOW GRANTS
+SHOW GRANTS
+## ingest | read all tenants (service policy)
+SELECT tenant_id, count() FROM trustiot.telemetry GROUP BY tenant_id ORDER BY 1
+## ingest | read batch_commits
+SELECT count() FROM trustiot.batch_commits
+## ingest | CREATE TABLE
+CREATE TABLE trustiot.injected (a UInt8) ENGINE = MergeTree ORDER BY a
+## ingest | CREATE TABLE in other db
+CREATE TABLE trustiot_logs.injected (a UInt8) ENGINE = MergeTree ORDER BY a
+## ingest | CREATE TABLE IF NOT EXISTS (runtime-style)
+CREATE TABLE IF NOT EXISTS trustiot.telemetry (a UInt8) ENGINE = MergeTree ORDER BY a
+## ingest | CREATE DATABASE
+CREATE DATABASE evil
+## ingest | CREATE VIEW
+CREATE VIEW trustiot.v AS SELECT * FROM trustiot.telemetry
+## ingest | CREATE MATERIALIZED VIEW
+CREATE MATERIALIZED VIEW trustiot.mv ENGINE = Memory AS SELECT * FROM trustiot.telemetry
+## ingest | CREATE TEMPORARY TABLE
+CREATE TEMPORARY TABLE tmp1 (x UInt8) ENGINE = Memory
+## ingest | ALTER ADD COLUMN
+ALTER TABLE trustiot.telemetry ADD COLUMN injected UInt8
+## ingest | ALTER DROP COLUMN
+ALTER TABLE trustiot.telemetry DROP COLUMN value_string
+## ingest | ALTER MODIFY COLUMN
+ALTER TABLE trustiot.telemetry MODIFY COLUMN value_string UInt8
+## ingest | ALTER COMMENT COLUMN
+ALTER TABLE trustiot.telemetry COMMENT COLUMN tenant_id 'x'
+## ingest | ALTER CLEAR COLUMN
+ALTER TABLE trustiot.telemetry CLEAR COLUMN value_string IN PARTITION ID '202610'
+## ingest | ALTER MODIFY TTL
+ALTER TABLE trustiot.telemetry MODIFY TTL toDateTime(received_at) + INTERVAL 1 SECOND
+## ingest | ALTER REMOVE TTL
+ALTER TABLE trustiot.telemetry REMOVE TTL
+## ingest | ALTER MODIFY SETTING
+ALTER TABLE trustiot.telemetry MODIFY SETTING fsync_after_insert = 0
+## ingest | ALTER RESET SETTING
+ALTER TABLE trustiot.telemetry RESET SETTING fsync_after_insert
+## ingest | ALTER ADD CONSTRAINT / DROP CONSTRAINT
+ALTER TABLE trustiot.telemetry DROP CONSTRAINT tenant_id_set
+## ingest | ALTER ADD INDEX
+ALTER TABLE trustiot.telemetry ADD INDEX i value_string TYPE bloom_filter GRANULARITY 1
+## ingest | ALTER ADD PROJECTION
+ALTER TABLE trustiot.telemetry ADD PROJECTION p (SELECT * ORDER BY tenant_id)
+## ingest | ALTER MODIFY ORDER BY
+ALTER TABLE trustiot.telemetry MODIFY ORDER BY (tenant_id, ts)
+## ingest | ALTER MODIFY COMMENT
+ALTER TABLE trustiot.telemetry MODIFY COMMENT 'x'
+## ingest | ALTER UPDATE
+ALTER TABLE trustiot.telemetry UPDATE tenant_id = '{A}' WHERE tenant_id = '{B}'
+## ingest | lightweight UPDATE
+UPDATE trustiot.telemetry SET tenant_id = '{A}' WHERE tenant_id = '{B}'
+## ingest | ALTER DELETE (allowed by grant, documented)
+ALTER TABLE trustiot.telemetry DELETE WHERE value_string = 'no-such-row-xyz'
+## ingest | DELETE FROM no-match (allowed)
+DELETE FROM trustiot.telemetry WHERE value_string = 'no-such-row-xyz'
+## ingest | ALTER FREEZE
+ALTER TABLE trustiot.telemetry FREEZE
+## ingest | ALTER FETCH / MOVE
+ALTER TABLE trustiot.telemetry MOVE PARTITION ID '202610' TO TABLE trustiot.batch_commits
+## ingest | ALTER REPLACE PARTITION FROM
+ALTER TABLE trustiot.telemetry REPLACE PARTITION ID '202610' FROM trustiot.telemetry
+## ingest | ALTER ATTACH PARTITION FROM
+ALTER TABLE trustiot.telemetry ATTACH PARTITION ID '202610' FROM trustiot.telemetry
+## ingest | ALTER DETACH PARTITION
+ALTER TABLE trustiot.telemetry DETACH PARTITION ID '202609'
+## ingest | ALTER DROP DETACHED PARTITION
+ALTER TABLE trustiot.telemetry DROP DETACHED PARTITION ID '202609' SETTINGS allow_drop_detached = 1
+## ingest | ALTER DROP PARTITION (nonexistent partition)
+ALTER TABLE trustiot.telemetry DROP PARTITION ID '199001'
+## ingest | ALTER MATERIALIZE TTL
+ALTER TABLE trustiot.telemetry MATERIALIZE TTL
+## ingest | ALTER RENAME COLUMN
+ALTER TABLE trustiot.telemetry RENAME COLUMN point TO point2
+## ingest | RENAME TABLE
+RENAME TABLE trustiot.telemetry TO trustiot.telemetry_old
+## ingest | EXCHANGE TABLES
+EXCHANGE TABLES trustiot.telemetry AND trustiot.batch_commits
+## ingest | DROP TABLE
+DROP TABLE trustiot.telemetry
+## ingest | DROP DATABASE
+DROP DATABASE trustiot
+## ingest | TRUNCATE
+TRUNCATE TABLE trustiot.telemetry
+## ingest | DETACH TABLE
+DETACH TABLE trustiot.telemetry
+## ingest | OPTIMIZE
+OPTIMIZE TABLE trustiot.telemetry FINAL
+## ingest | SYSTEM STOP MERGES
+SYSTEM STOP MERGES trustiot.telemetry
+## ingest | SYSTEM FLUSH LOGS
+SYSTEM FLUSH LOGS
+## ingest | KILL QUERY
+KILL QUERY WHERE 1 TEST
+## ingest | SYSTEM RELOAD CONFIG
+SYSTEM RELOAD CONFIG
+## ingest | CREATE USER
+CREATE USER ingest_evil IDENTIFIED WITH no_password
+## ingest | CREATE ROLE
+CREATE ROLE evilrole
+## ingest | GRANT to self
+GRANT SELECT ON *.* TO ingest
+## ingest | GRANT role to self
+GRANT trustiot_tenant_reader TO ingest
+## ingest | ALTER ROW POLICY
+ALTER ROW POLICY tenant_isolation ON trustiot.telemetry USING 1
+## ingest | DROP ROW POLICY
+DROP ROW POLICY deny_by_default ON trustiot.telemetry
+## ingest | CREATE ROW POLICY
+CREATE ROW POLICY pwn ON trustiot.telemetry USING 1 TO ingest
+## ingest | ALTER QUOTA
+ALTER QUOTA trustiot_tenant_reader FOR INTERVAL 1 minute MAX queries = 100000
+## ingest | ALTER USER self
+ALTER USER ingest SETTINGS NONE
+## ingest | CREATE SETTINGS PROFILE
+CREATE SETTINGS PROFILE p SETTINGS max_threads = 1
+## ingest | CREATE FUNCTION
+CREATE FUNCTION f AS (x) -> x
+## ingest | system.users / grants
+SELECT count() FROM system.users
+## ingest | system.query_log
+SELECT count() FROM system.query_log
+## ingest | system.parts
+SELECT count() FROM system.parts
+## ingest | system.processes
+SELECT count() FROM system.processes
+## ingest | system.tables
+SELECT name FROM system.tables WHERE database = 'trustiot'
+## ingest | mergeTreeIndex (row policy USING 1 -> allowed?)
+SELECT count() FROM mergeTreeIndex('trustiot', 'telemetry')
+## ingest | SET readonly stuff and write settings (no profile)
+SET max_memory_usage = 0
+## ingest | remote
+SELECT count() FROM remote('127.0.0.1', trustiot.telemetry)
+## ingest | file read
+SELECT * FROM file('/etc/passwd', 'LineAsString')
+## ingest | url
+SELECT * FROM url('http://127.0.0.1:8123/?query=SELECT%201', 'LineAsString')
+## ingest | INSERT with another tenant (by design)
+INSERT INTO trustiot.batch_commits (tenant_id, stream_id, seq, row_count, committed_at) VALUES ('{B}', generateUUIDv4(), 99, 0, now64(3, 'UTC'))
+## ingest | INSERT violating constraint tenant zero
+INSERT INTO trustiot.batch_commits (tenant_id, stream_id, seq, row_count, committed_at) VALUES ('00000000-0000-0000-0000-000000000000', generateUUIDv4(), 99, 0, now64(3, 'UTC'))
+## ingest | INSERT empty point (length constraint)
+INSERT INTO trustiot.telemetry (tenant_id, point, value_type) VALUES ('{A}', '', 'float')
+## ingest | INSERT point too long
+INSERT INTO trustiot.telemetry (tenant_id, point, value_type) SELECT '{A}', repeat('x', 129), 'float'
+## ingest | INSERT two value columns set
+INSERT INTO trustiot.telemetry (tenant_id, point, value_type, value_float, value_string) VALUES ('{A}', 'p', 'float', 1, 'x')

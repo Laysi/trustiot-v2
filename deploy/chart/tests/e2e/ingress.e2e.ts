@@ -1,51 +1,54 @@
 // Ingress e2e test (Laysi/trustiot-v2#62): installs the chart with test doubles into an existing
 // namespace of any cluster with Istio ambient, then checks the cookie check, the public paths,
 // the header rules, path-bypass attempts and an identity-service outage through the real ingress
-// gateway. README.md in this directory lists the prerequisites; run from the repository root:
+// gateway. The /internal slash cases (Laysi/trustiot-v2#255) also need the mesh's path
+// normalization from deploy/istio/istiod-values.yaml. README.md in this directory lists the
+// prerequisites; run from the repository root:
 //
 //   E2E_NAMESPACE=e2e-62 E2E_IDENTITY_IMAGE=<image> bun test ./deploy/chart/tests/e2e/ingress.e2e.ts
 //
 // Not part of `bun test deploy/chart` (the file name has no .test. suffix): it needs a cluster.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import type { Subprocess } from "bun";
-
-const CHART_DIR = join(import.meta.dir, "..", "..");
-const REPO_ROOT = join(CHART_DIR, "..", "..");
-
-function required(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new Error(`${name} is required (see deploy/chart/tests/e2e/README.md)`);
-  return value;
-}
+import { type RawEndpoint, type RawResponse, sendRaw } from "./raw-client.ts";
+import { withTunnelRecovery } from "./tunnel-recovery.ts";
+import {
+  CONTEXT,
+  GATEWAY,
+  IDENTITY_IMAGE,
+  KEEP,
+  KUBECTL,
+  NAMESPACE,
+  OBJECT_PREFIX,
+  RELEASE,
+  REPORT_DIR,
+  freePort,
+  imageValues,
+  installRelease,
+  kubectl,
+  run,
+  uninstallRelease,
+  waitFor,
+} from "./cluster";
 
 const SHAPE = (process.env.E2E_SHAPE ?? "saas") as "saas" | "onprem";
 if (SHAPE !== "saas" && SHAPE !== "onprem") throw new Error("E2E_SHAPE must be saas or onprem");
-const NAMESPACE = required("E2E_NAMESPACE");
-const IDENTITY_IMAGE = required("E2E_IDENTITY_IMAGE");
-const CONTEXT = process.env.E2E_KUBECONTEXT;
-const RELEASE = process.env.E2E_RELEASE ?? "trustiot";
 const PROVIDER = process.env.E2E_AUTHZ_PROVIDER ?? "trustiot-identity";
-const PULL_POLICY = process.env.E2E_IMAGE_PULL_POLICY ?? "IfNotPresent";
 // ext_authz timeout of the mesh extension provider (deploy/istio/istiod-values.yaml).
 const AUTHZ_TIMEOUT_MS = Number(process.env.E2E_AUTHZ_TIMEOUT_MS ?? "500");
 // Reach the gateway's ClusterIP through `ssh -L` on this host (the cluster node), so requests come
 // from the host like cloudflared's. Without it the test uses kubectl port-forward, which enters
 // the gateway pod directly and so skips the ingress NetworkPolicy.
 const SSH_JUMP = process.env.E2E_SSH_JUMP;
-// Directory for the per-request results (JSON); empty means no file.
-const REPORT_DIR = process.env.E2E_REPORT_DIR;
-const KEEP = process.env.E2E_KEEP === "1";
 
 const HOSTS =
   SHAPE === "saas"
     ? { app: "app.saas.trustiot.test", gateway: "gw.saas.trustiot.test", ota: "ota.saas.trustiot.test" }
     : { app: "trustiot.factory.test", gateway: "gw.trustiot.factory.test", ota: "ota.trustiot.factory.test" };
 type HostKey = keyof typeof HOSTS;
-const GATEWAY = `${RELEASE.includes("trustiot") ? RELEASE : `${RELEASE}-trustiot`}-ingress`;
-const OBJECT_PREFIX = RELEASE.includes("trustiot") ? RELEASE : `${RELEASE}-trustiot`;
 // A name of its own, so the test never replaces a certificate it did not create.
 const TLS_SECRET = `trustiot-e2e-tls-${crypto.randomUUID().slice(0, 8)}`;
 // Markers that whoami prints as "Name: <WHOAMI_NAME>" (tests/e2e/values-e2e.yaml).
@@ -54,52 +57,11 @@ const FORGED = `forged.${crypto.randomUUID()}`;
 const VALID_COOKIE = `sid=valid-${crypto.randomUUID().replaceAll("-", "")}`;
 const SLOW_COOKIE = `sid=slow-${crypto.randomUUID().replaceAll("-", "")}`;
 
-function pinnedTool(tool: string): string {
-  const result = Bun.spawnSync({ cmd: ["proto", "bin", tool, "--reporter", "text"], cwd: REPO_ROOT });
-  const path = result.stdout.toString().trim().split("\n").at(-1)?.trim() ?? "";
-  if (result.exitCode !== 0 || !isAbsolute(path) || !existsSync(path)) {
-    throw new Error(`cannot find the pinned ${tool}; run \`proto install\``);
-  }
-  return path;
-}
-const HELM = pinnedTool("helm");
-const KUBECTL = pinnedTool("kubectl");
-
-function run(cmd: string[], allowFailure = false): string {
-  const proc = Bun.spawnSync({ cmd, cwd: CHART_DIR, stdout: "pipe", stderr: "pipe" });
-  if (proc.exitCode !== 0 && !allowFailure) {
-    throw new Error(`${cmd.slice(0, 3).join(" ")} failed (${proc.exitCode}):\n${proc.stderr.toString()}`);
-  }
-  return proc.stdout.toString();
-}
-const kubectl = (...args: string[]) =>
-  run([KUBECTL, ...(CONTEXT ? ["--context", CONTEXT] : []), "--namespace", NAMESPACE, ...args]);
-const helm = (...args: string[]) =>
-  run([HELM, ...(CONTEXT ? ["--kube-context", CONTEXT] : []), "--namespace", NAMESPACE, ...args]);
-
 // ---------------------------------------------------------------------------------------------
-// Raw HTTP/1.1 client: fetch() would normalize the request target (dot segments, encodings),
-// which is exactly what the bypass cases must send unchanged.
+// Raw HTTP/1.1 client (raw-client.ts): fetch() would normalize the request target (dot segments,
+// encodings), which is exactly what the bypass cases must send unchanged.
 
-// ms: time to the first response byte. Envoy keeps the connection open for up to 1 s after a local
-// reply (delayed close), so the time until close would overstate how fast the gateway answered.
-type RawResponse = { status: number; headers: Record<string, string[]>; body: string; ms: number };
-
-let ingress: { host: string; port: number; tls: boolean; ca?: string };
-
-function decodeChunked(body: Buffer): Buffer {
-  const parts: Buffer[] = [];
-  let offset = 0;
-  while (offset < body.length) {
-    const lineEnd = body.indexOf("\r\n", offset);
-    if (lineEnd < 0) break;
-    const size = Number.parseInt(body.subarray(offset, lineEnd).toString(), 16);
-    if (!Number.isFinite(size) || size === 0) break;
-    parts.push(body.subarray(lineEnd + 2, lineEnd + 2 + size));
-    offset = lineEnd + 2 + size + 2;
-  }
-  return Buffer.concat(parts);
-}
+let ingress: RawEndpoint;
 
 type RawOptions = {
   host?: HostKey | string;
@@ -109,81 +71,18 @@ type RawOptions = {
   sni?: string;
 };
 
-// Sends one request. When the tunnel to the gateway (ssh or kubectl port-forward) has died,
-// for example because the SSH session was dropped, reopens it and sends the request once more;
-// any other failure fails the test.
-async function raw(target: string, options: RawOptions = {}): Promise<RawResponse> {
-  try {
-    return await rawOnce(target, options);
-  } catch (error) {
-    if (tunnel === undefined || (tunnel.exitCode === null && tunnel.signalCode === null)) throw error;
-    console.error(`tunnel to the ingress gateway exited (${tunnel.exitCode ?? tunnel.signalCode}); reopening it`);
-    await openTunnel();
-    return rawOnce(target, options);
-  }
-}
-
-async function rawOnce(target: string, options: RawOptions): Promise<RawResponse> {
+// Sends one request. When the tunnel to the gateway (ssh or kubectl port-forward) was lost while
+// the request was in flight, for example because the SSH session was dropped or kubectl printed
+// "lost connection to pod", reopens it and sends the request once more (tunnel-recovery.ts); any
+// other failure, an HTTP status that the test does not expect included, fails the test.
+function raw(target: string, options: RawOptions = {}): Promise<RawResponse> {
   const hostHeader = options.host === undefined ? HOSTS.app : (HOSTS[options.host as HostKey] ?? options.host);
-  const lines = [
-    `${options.method ?? "GET"} ${target} HTTP/1.1`,
-    `host: ${hostHeader}`,
-    "user-agent: trustiot-ingress-e2e",
-    "connection: close",
-    ...(options.headers ?? []).map(([name, value]) => `${name}: ${value}`),
-  ];
-  const request = `${lines.join("\r\n")}\r\n\r\n`;
-  const chunks: Buffer[] = [];
-  const started = performance.now();
-  let firstByte: number | undefined;
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timeout: ${target}`)), 15_000);
-    const finish = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    Bun.connect({
-      hostname: ingress.host,
-      port: ingress.port,
-      tls: ingress.tls
-        ? { serverName: options.sni ?? hostHeader.split(":")[0], ca: ingress.ca }
-        : undefined,
-      socket: {
-        open(socket) {
-          socket.write(request);
-        },
-        data(_socket, data) {
-          firstByte ??= performance.now();
-          chunks.push(Buffer.from(data));
-        },
-        close: finish,
-        end: finish,
-        error(_socket, error) {
-          clearTimeout(timer);
-          reject(error);
-        },
-        connectError(_socket, error) {
-          clearTimeout(timer);
-          reject(error);
-        },
-      },
-    }).catch(reject);
+  const request = { target, method: options.method, hostHeader, headers: options.headers, sni: options.sni };
+  return withTunnelRecovery(() => sendRaw(ingress, request), {
+    tunnel: () => tunnel,
+    reopen: openTunnel,
+    log: (message) => console.error(message),
   });
-  const ms = (firstByte ?? performance.now()) - started;
-  const response = Buffer.concat(chunks);
-  const split = response.indexOf("\r\n\r\n");
-  if (split < 0) throw new Error(`no HTTP response for ${target}: ${JSON.stringify(response.toString())}`);
-  const [statusLine = "", ...headerLines] = response.subarray(0, split).toString().split("\r\n");
-  const status = Number(statusLine.split(" ")[1]);
-  const headers: Record<string, string[]> = {};
-  for (const line of headerLines) {
-    const colon = line.indexOf(":");
-    const name = line.slice(0, colon).trim().toLowerCase();
-    (headers[name] ??= []).push(line.slice(colon + 1).trim());
-  }
-  let body = response.subarray(split + 4);
-  if (headers["transfer-encoding"]?.some((v) => v.toLowerCase().includes("chunked"))) body = decodeChunked(body);
-  return { status, headers, body: body.toString(), ms };
 }
 
 // whoami prints one "Name: value" line per request header value.
@@ -217,33 +116,6 @@ let tunnel: Subprocess | undefined;
 // Cleanup removes only what this run created.
 let releaseCreated = false;
 let tlsSecretCreated = false;
-
-function releaseExists(): boolean {
-  const proc = Bun.spawnSync({
-    cmd: [HELM, ...(CONTEXT ? ["--kube-context", CONTEXT] : []), "--namespace", NAMESPACE, "status", RELEASE],
-    stdout: "ignore",
-    stderr: "pipe",
-  });
-  if (proc.exitCode === 0) return true;
-  if (proc.stderr.toString().includes("not found")) return false;
-  throw new Error(`helm status ${RELEASE} failed:\n${proc.stderr.toString()}`);
-}
-
-async function waitFor(what: string, check: () => boolean | Promise<boolean>, timeoutMs = 120_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await check()) return;
-    await Bun.sleep(500);
-  }
-  throw new Error(`timed out waiting for ${what}`);
-}
-
-async function freePort(): Promise<number> {
-  const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
-  const port = server.port;
-  server.stop(true);
-  return port;
-}
 
 async function openTunnel(): Promise<void> {
   const port = await freePort();
@@ -280,28 +152,12 @@ async function openTunnel(): Promise<void> {
   });
 }
 
-function identityImageValues(): string[] {
-  const match = /^(?<repository>[^@]+?)(?::(?<tag>[\w][\w.-]*))?(?:@(?<digest>sha256:[a-f0-9]{64}))?$/.exec(IDENTITY_IMAGE);
-  if (!match?.groups?.repository) throw new Error(`E2E_IDENTITY_IMAGE is not an image reference: ${IDENTITY_IMAGE}`);
-  const { repository, tag, digest } = match.groups;
-  return [
-    "--set-string",
-    `services.identity.image.repository=${repository}`,
-    "--set-string",
-    `services.identity.image.tag=${tag ?? "latest"}`,
-    "--set-string",
-    `services.identity.image.digest=${digest ?? ""}`,
-    "--set-string",
-    `services.identity.image.pullPolicy=${PULL_POLICY}`,
-  ];
-}
-
 beforeAll(async () => {
   const shapeFiles =
     SHAPE === "saas"
       ? ["values-saas.yaml", "tests/values/saas-instance.yaml"]
       : ["values-onprem.yaml", "tests/values/onprem-instance.yaml"];
-  const extra: string[] = ["--set", `ingress.authzProvider=${PROVIDER}`, ...identityImageValues()];
+  const extra: string[] = ["--set", `ingress.authzProvider=${PROVIDER}`, ...imageValues("identity", IDENTITY_IMAGE)];
   if (SHAPE === "onprem") {
     // Throwaway self-signed certificate for the three hosts; the key never leaves the temp dir.
     const key = join(work, "tls.key");
@@ -338,26 +194,9 @@ beforeAll(async () => {
       "ingress.direct.serviceType=ClusterIP",
     );
   }
-  // Never touch an existing installation: install fails if the release exists, and only a
-  // release this run created is uninstalled afterwards.
-  if (releaseExists()) {
-    throw new Error(`release ${RELEASE} already exists in ${NAMESPACE}; use another E2E_RELEASE or namespace`);
-  }
-  // A failed install removes itself (--rollback-on-failure), and the release counts as this
-  // run's only once install succeeded, so a concurrent run's release is never uninstalled.
-  helm(
-    "install",
-    RELEASE,
-    ".",
-    ...shapeFiles.flatMap((f) => ["--values", f]),
-    "--values",
-    "tests/e2e/values-e2e.yaml",
-    ...extra,
-    "--rollback-on-failure",
-    "--wait",
-    "--timeout",
-    "5m",
-  );
+  // Only a release this run installed counts as its own, so a concurrent run's release is never
+  // uninstalled (cluster.ts).
+  installRelease([...shapeFiles, "tests/e2e/values-e2e.yaml"], extra);
   releaseCreated = true;
   kubectl("wait", `gateway/${GATEWAY}`, "--for=condition=Programmed", "--timeout=180s");
   kubectl("rollout", "status", `deployment/${GATEWAY}-istio`, "--timeout=180s");
@@ -371,14 +210,19 @@ beforeAll(async () => {
 
 afterAll(() => {
   tunnel?.kill();
+  const errors: string[] = [];
+  // A failed report write must not skip the cleanup below.
   if (REPORT_DIR) {
-    mkdirSync(REPORT_DIR, { recursive: true });
-    writeFileSync(join(REPORT_DIR, `ingress-e2e-${SHAPE}.json`), `${JSON.stringify(results, null, 2)}\n`);
+    try {
+      mkdirSync(REPORT_DIR, { recursive: true });
+      writeFileSync(join(REPORT_DIR, `ingress-e2e-${SHAPE}.json`), `${JSON.stringify(results, null, 2)}\n`);
+    } catch (error) {
+      errors.push(`report: ${String(error)}`);
+    }
   }
   if (!KEEP) {
-    const errors: string[] = [];
     for (const [created, cleanup] of [
-      [releaseCreated, () => helm("uninstall", RELEASE, "--wait", "--timeout", "3m")],
+      [releaseCreated, uninstallRelease],
       [tlsSecretCreated, () => kubectl("delete", "secret", TLS_SECRET, "--ignore-not-found")],
     ] as [boolean, () => void][]) {
       if (!created) continue;
@@ -388,13 +232,34 @@ afterAll(() => {
         errors.push(String(error));
       }
     }
-    if (errors.length) throw new Error(`cleanup failed:\n${errors.join("\n")}`);
   }
   rmSync(work, { recursive: true, force: true });
+  if (errors.length) throw new Error(`cleanup failed:\n${errors.join("\n")}`);
 }, 300_000);
 
 // ---------------------------------------------------------------------------------------------
 // Cookie check.
+
+// Spellings of /internal that only the mesh's path normalization (merge slashes, decode %2F)
+// brings back to /internal before the DENY policy matches (Laysi/trustiot-v2#255).
+const INTERNAL_SLASH_CASES = [
+  "//internal",
+  "//internal/tenants",
+  "///internal",
+  "//./internal",
+  "/.//internal/tenants",
+  "/x/..//internal/tenants",
+  "/%2finternal",
+  "/%2finternal/tenants",
+  "/%2Finternal",
+  "/%2f%2finternal",
+  "/./%2finternal",
+];
+
+// Spellings of x-internal-identity with underscores. Envoy forwards headers with underscores
+// unchanged, and CGI/WSGI-style servers read "-" and "_" alike (HTTP_X_INTERNAL_IDENTITY), so
+// the ingress removes all three on every route (Laysi/trustiot-v2#255, F2).
+const UNDERSCORE_IDENTITY_HEADERS = ["x_internal_identity", "x-internal_identity", "x_internal-identity"];
 
 describe("paths that need the cookie", () => {
   test("no cookie or an unknown session: 401 from the identity service, backend not reached", async () => {
@@ -433,6 +298,19 @@ describe("paths that need the cookie", () => {
     expect(response.body).not.toContain(FORGED);
   });
 
+  test("valid cookie plus underscore spellings of the identity header: none reaches the backend", async () => {
+    const response = await raw("/api/whoami", {
+      headers: [["cookie", VALID_COOKIE], ...UNDERSCORE_IDENTITY_HEADERS.map((name): [string, string] => [name, FORGED])],
+    });
+    record("cookie", "valid cookie + underscore identity headers", "/api/whoami", HOSTS.app, response);
+    expect(response.status).toBe(200);
+    expect(response.body).toContain(PROTECTED_MARKER);
+    expect(response.body).not.toContain(FORGED);
+    for (const name of UNDERSCORE_IDENTITY_HEADERS) expect(whoamiHeaderCount(response.body, name)).toBe(0);
+    expect(whoamiHeaderCount(response.body, "x-internal-identity")).toBe(1);
+    expect(whoamiHeader(response.body, "x-internal-identity")).toStartWith("double.");
+  });
+
   test("forged identity header without a cookie: 401", async () => {
     const response = await raw("/api/whoami", { headers: [["x-internal-identity", FORGED]] });
     record("cookie", "forged header, no cookie", "/api/whoami", HOSTS.app, response);
@@ -461,6 +339,22 @@ describe("paths that need the cookie", () => {
         expect(response.status).toBe(expected);
         expect(response.body).not.toContain(PROTECTED_MARKER);
       }
+    }
+  });
+
+  // Laysi/trustiot-v2#255 (F1 of docs/test-reports/2026-10-10-62-e2e-verify.md): without the mesh's
+  // path normalization (deploy/istio/istiod-values.yaml, DECODE_AND_MERGE_SLASHES) these
+  // spellings slip past the /internal* DENY and reach the catch-all backend, which may clean the
+  // path up to /internal/... itself. MERGE_SLASHES alone still lets the %2f forms through.
+  test.each(INTERNAL_SLASH_CASES)("/internal behind doubled or encoded slashes is denied: %s", async (target) => {
+    for (const [cookie, expected] of [
+      [undefined, 401],
+      [VALID_COOKIE, 403],
+    ] as [string | undefined, number][]) {
+      const response = await raw(target, { headers: cookie ? [["cookie", cookie]] : [] });
+      record("internal slashes", cookie ? "valid cookie" : "no cookie", target, HOSTS.app, response);
+      expect(response.body).not.toContain(PROTECTED_MARKER);
+      expect(response.status).toBe(expected);
     }
   });
 
@@ -521,6 +415,53 @@ describe("public paths", () => {
     expect(echo.headers["x-internal-identity"]).toBeUndefined();
     expect(echo.headers["x-forwarded-proto"]).toBe("https");
     expect(response.body).not.toContain(FORGED);
+  });
+
+  test.each([...whoamiPaths, ["login", "app", "/auth/login"], ["health check", "app", "/healthz"]] as [string, HostKey, string][])(
+    "%s: underscore spellings of the identity header are removed",
+    async (name, host, path) => {
+      const response = await raw(path, {
+        host,
+        method: "POST",
+        headers: [...UNDERSCORE_IDENTITY_HEADERS.map((header): [string, string] => [header, FORGED]), ["content-length", "0"]],
+      });
+      record("public", `${name}, underscore identity headers`, path, HOSTS[host], response);
+      expect(response.status).toBe(200);
+      expect(response.body).not.toContain(FORGED);
+      expect(response.body).not.toContain(PROTECTED_MARKER);
+    },
+  );
+
+  // Laysi/trustiot-v2#255 (F3): a gateway, its WebSocket library or a proxy may put the port in
+  // Host. The route matches the host with any port, so the exemption does too, and only on the
+  // public path's own host (deploy/chart/README.md).
+  test("Host with a port: a public path is public on its own host only", async () => {
+    const port = SHAPE === "saas" ? 80 : 443;
+    for (const [host, path, expected] of [
+      [`${HOSTS.gateway}:${port}`, "/mqtt", 200],
+      [`${HOSTS.gateway}:${port}`, "/certs/renew", 200],
+      [`${HOSTS.gateway}:8443`, "/mqtt", 200],
+      [`${HOSTS.app}:${port}`, "/healthz", 200],
+      [`${HOSTS.app}:${port}`, "/auth/login", 200],
+      [`${HOSTS.app}:${port}`, "/mqtt", 401],
+      [`${HOSTS.app}:${port}`, "/certs/renew", 401],
+      [`${HOSTS.app}:${port}`, "/api/whoami", 401],
+      [`${HOSTS.gateway}:${port}`, "/auth/login", 404],
+      [`${HOSTS.ota}:${port}`, "/mqtt", 404],
+    ] as [string, string, number][]) {
+      const response = await raw(path, {
+        host,
+        method: "POST",
+        headers: [
+          ["x-internal-identity", FORGED],
+          ["content-length", "0"],
+        ],
+      });
+      record("public, host with port", `${path} on ${host}`, path, host, response);
+      expect(response.status).toBe(expected);
+      expect(response.body).not.toContain(PROTECTED_MARKER);
+      expect(response.body).not.toContain(FORGED);
+    }
   });
 
   test("GET /healthz answers without a cookie", async () => {

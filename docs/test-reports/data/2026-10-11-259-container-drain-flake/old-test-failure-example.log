@@ -1,0 +1,15 @@
+
+running 1 test
+test pid_1_in_a_container_drains_and_exits_within_the_grace_period ... FAILED
+
+failures:
+
+failures:
+    pid_1_in_a_container_drains_and_exits_within_the_grace_period
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 51.50s
+
+
+thread 'pid_1_in_a_container_drains_and_exits_within_the_grace_period' (225667) panicked at crates/service-kit/tests/container_old.rs:160:29:
+readiness fails within the drain delay
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

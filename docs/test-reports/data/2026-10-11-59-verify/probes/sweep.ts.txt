@@ -1,0 +1,72 @@
+// Sweeps every system table and every table function as tenant A (rotating accounts so the
+// 60 errors/minute quota never hides a result). Usage: bun sweep.ts <out>
+import { readFileSync, writeFileSync } from "node:fs";
+import { ADMIN, q, type Acct } from "./lib.ts";
+
+const w = JSON.parse(readFileSync(new URL("./world.json", import.meta.url).pathname, "utf8"));
+const pool: Acct[] = [];
+async function admin(sql: string) {
+  const r = await q(ADMIN, sql);
+  if (r.status !== 200) throw new Error(sql + r.body);
+  return r.body;
+}
+for (let i = 0; i < 12; i++) {
+  const name = `sweep_a_${i}`;
+  const password = "pw" + crypto.randomUUID().replaceAll("-", "");
+  await admin(`DROP USER IF EXISTS ${name}`);
+  await admin(`CREATE USER ${name} IDENTIFIED WITH sha256_password BY '${password}' SETTINGS PROFILE 'trustiot_tenant_reader', SQL_tenant_id = '${w.tenantA}' CONST`);
+  await admin(`GRANT trustiot_tenant_reader TO ${name}`);
+  pool.push({ user: name, password });
+}
+let n = 0;
+async function asA(sql: string) {
+  for (let tries = 0; tries < 30; tries++) {
+    const acct = pool[n++ % pool.length];
+    const r = await q(acct, sql);
+    if (r.body.includes("QUOTA_EXCEEDED")) continue;
+    return r;
+  }
+  throw new Error("pool exhausted");
+}
+const code = (b: string) => /\(([A-Z_0-9]{3,})\)(?!.*\([A-Z_0-9]{3,}\))/.exec(b)?.[1] ?? "";
+const tables = (await admin("SELECT name FROM system.tables WHERE database = 'system' ORDER BY name")).trim().split("\n");
+let out = `# system tables as tenant A: ${tables.length} tables\n# name | http | detail\n`;
+const allowed: string[] = [];
+let leaks = 0;
+for (const t of tables) {
+  const r = await asA(`SELECT * FROM system.${t} LIMIT 20`);
+  const leak = r.body.includes(w.tenantB) || r.body.includes(w.canaryB) || r.body.includes("tenant_b");
+  if (leak) leaks++;
+  if (r.status === 200) allowed.push(t);
+  out += `${t} | ${r.status} | ${r.status === 200 ? "ROWS=" + (r.body.trim() ? r.body.trim().split("\n").length : 0) : code(r.body)}${leak ? " **MENTIONS-B**" : ""}\n`;
+}
+out += `\n# allowed system tables (HTTP 200): ${allowed.join(", ")}\n# responses mentioning B's tenant id, secret or user name: ${leaks}\n\n`;
+// full dump of what was readable, to inspect by eye
+for (const t of allowed) {
+  const r = await asA(`SELECT * FROM system.${t} LIMIT 5 FORMAT TSV`);
+  out += `## system.${t}\n${r.body.trim().slice(0, 600).replace(/\t/g, " | ")}\n\n`;
+}
+// table functions
+const fns = (await admin("SELECT name FROM system.table_functions ORDER BY name")).trim().split("\n");
+const args: Record<string, string> = {
+  numbers: "10", numbers_mt: "10", zeros: "10", zeros_mt: "10", generateRandom: "'a UInt8', 1, 1, 1", generate_series: "1, 5", generateSeries: "1, 5",
+  null: "'x UInt8'", values: "'x UInt8', 1", format: "'JSONEachRow', '{\"a\":1}'", input: "'x UInt8'", view: "SELECT 1", file: "'/etc/passwd', 'LineAsString'",
+  url: "'http://127.0.0.1:8123/?query=SELECT%201', 'LineAsString'", remote: `'127.0.0.1', trustiot.telemetry`, remoteSecure: `'127.0.0.1', trustiot.telemetry`,
+  cluster: "'default', trustiot.telemetry", clusterAllReplicas: "'default', trustiot.telemetry", merge: "'trustiot', '.*'", mergeTreeIndex: "'trustiot', 'telemetry'",
+  mergeTreeAnalyzeIndexes: "'trustiot', 'telemetry'", mergeTreeProjection: "'trustiot', 'telemetry', 'p'", loop: "trustiot.telemetry", s3: "'http://127.0.0.1:9/b/k', 'CSV'",
+  executable: "'cat /etc/passwd', 'LineAsString'", dictionary: "'trustiot.d'", mysql: "'127.0.0.1:3306','d','t','u','p'", postgresql: "'127.0.0.1:5432','d','t','u','p'",
+  sqlite: "'/tmp/x.db','t'", jdbc: "'jdbc:x','d','t'", odbc: "'dsn','d','t'", hdfs: "'hdfs://x/y','CSV'", fuzzJSON: "'{}'", timeSeriesData: "trustiot.telemetry",
+};
+out += `# table functions as tenant A: ${fns.length}\n# name | http | code | detail\n`;
+for (const f of fns) {
+  const a = args[f] ?? "1";
+  const sql = f === "view" ? "SELECT count() FROM view(SELECT 1)" : `SELECT count() FROM ${f}(${a})`;
+  const r = await asA(sql);
+  const leak = r.body.includes(w.tenantB) || r.body.includes(w.canaryB);
+  if (leak) leaks++;
+  out += `${f} | ${r.status} | ${r.status === 200 ? "ANSWER " + r.body.trim().slice(0, 40) : code(r.body) + " :: " + r.body.trim().replace(/\n/g, " ").slice(0, 160)}${leak ? " **LEAK**" : ""}\n`;
+}
+out += `\n# total leaks: ${leaks}\n`;
+for (let i = 0; i < pool.length; i++) await admin(`DROP USER IF EXISTS ${pool[i].user}`);
+writeFileSync(process.argv[2], out);
+console.log(out);
