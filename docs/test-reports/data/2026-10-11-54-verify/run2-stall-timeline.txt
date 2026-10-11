@@ -1,0 +1,5 @@
+[51.9s] caught up; starting phase A: long WRITE transaction in schema other (30 s)
+[117.0s] during write tx: events 475->1087, processed 344->912, lag 115->136
+[163.3s] after commit: processed 1524, lag 6
+[163.3s] phase B: long READ-ONLY transaction (30 s), no xid
+[239.8s] during read-only tx: events 1638->2430, processed 1567->2328, lag 5->15

@@ -1,0 +1,1331 @@
+The files belonging to this database system will be owned by user "postgres".
+This user must also own the server process.
+
+The database cluster will be initialized with locale "en_US.utf8".
+The default database encoding has accordingly been set to "UTF8".
+The default text search configuration will be set to "english".
+
+Data page checksums are enabled.
+
+fixing permissions on existing directory /var/lib/postgresql/18/docker ... ok
+creating subdirectories ... ok
+selecting dynamic shared memory implementation ... posix
+selecting default "max_connections" ... 100
+selecting default "shared_buffers" ... 128MB
+selecting default time zone ... UTC
+creating configuration files ... ok
+running bootstrap script ... ok
+performing post-bootstrap initialization ... ok
+syncing data to disk ... ok
+
+
+Success. You can now start the database server using:
+
+    pg_ctl -D /var/lib/postgresql/18/docker -l logfile start
+
+waiting for server to start....2026-10-10 18:39:38.908 UTC [42] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+2026-10-10 18:39:38.912 UTC [42] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-10-10 18:39:38.926 UTC [48] LOG:  database system was shut down at 2026-10-10 18:39:37 UTC
+2026-10-10 18:39:38.948 UTC [42] LOG:  database system is ready to accept connections
+ done
+server started
+
+/usr/local/bin/docker-entrypoint.sh: ignoring /docker-entrypoint-initdb.d/*
+
+2026-10-10 18:39:39.129 UTC [42] LOG:  received fast shutdown request
+waiting for server to shut down....2026-10-10 18:39:39.132 UTC [42] LOG:  aborting any active transactions
+2026-10-10 18:39:39.149 UTC [42] LOG:  background worker "logical replication launcher" (PID 51) exited with exit code 1
+2026-10-10 18:39:39.151 UTC [46] LOG:  shutting down
+2026-10-10 18:39:39.154 UTC [46] LOG:  checkpoint starting: shutdown immediate
+2026-10-10 18:39:39.183 UTC [46] LOG:  checkpoint complete: wrote 0 buffers (0.0%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.002 s, sync=0.012 s, total=0.033 s; sync files=2, longest=0.007 s, average=0.006 s; distance=0 kB, estimate=0 kB; lsn=0/1765FC8, redo lsn=0/1765FC8
+2026-10-10 18:39:39.236 UTC [42] LOG:  database system is shut down
+ done
+server stopped
+
+PostgreSQL init process complete; ready for start up.
+
+
+PostgreSQL Database directory appears to contain a database; Skipping initialization
+
+
+PostgreSQL Database directory appears to contain a database; Skipping initialization
+
+
+PostgreSQL Database directory appears to contain a database; Skipping initialization
+
+
+PostgreSQL Database directory appears to contain a database; Skipping initialization
+
+
+PostgreSQL Database directory appears to contain a database; Skipping initialization
+
+sh: locale: not found
+2026-10-10 18:39:35.154 UTC [35] WARNING:  no usable system locales were found
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+2026-10-10 18:39:39.441 UTC [1] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+2026-10-10 18:39:39.441 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+2026-10-10 18:39:39.442 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+2026-10-10 18:39:39.446 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-10-10 18:39:39.462 UTC [62] LOG:  database system was shut down at 2026-10-10 18:39:39 UTC
+2026-10-10 18:39:39.493 UTC [1] LOG:  database system is ready to accept connections
+2026-10-10 18:39:50.880 UTC [90] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:39:50.880 UTC [90] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:39:54.395 UTC [83] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:39:54.399 UTC [83] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:40:09.491 UTC [95] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:40:09.492 UTC [95] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:40:09.700 UTC [78] ERROR:  deadlock detected
+2026-10-10 18:40:09.700 UTC [78] DETAIL:  Process 78 waits for ShareLock on transaction 1484; blocked by process 75.
+	Process 75 waits for ShareLock on transaction 1482; blocked by process 78.
+	Process 78: INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+	Process 75: INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+2026-10-10 18:40:09.700 UTC [78] HINT:  See server log for query details.
+2026-10-10 18:40:09.700 UTC [78] CONTEXT:  while inserting index tuple (0,80) in relation "outbox_aggregate"
+2026-10-10 18:40:09.700 UTC [78] STATEMENT:  INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+2026-10-10 18:40:13.990 UTC [92] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:40:15.956 UTC [74] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:15.956 UTC [82] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:15.956 UTC [112] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:15.957 UTC [106] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:15.958 UTC [111] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:15.958 UTC [75] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:15.959 UTC [80] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:24.512 UTC [130] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:40:31.818 UTC [119] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:40:31.819 UTC [119] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:40:31.831 UTC [117] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:40:31.832 UTC [118] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:40:31.832 UTC [118] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:40:39.677 UTC [131] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:40:39.811 UTC [121] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:39.811 UTC [124] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:39.812 UTC [123] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:39.812 UTC [125] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:39.812 UTC [128] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:39.814 UTC [138] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:39.814 UTC [137] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:39.815 UTC [139] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:39.816 UTC [142] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:39.820 UTC [143] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:39.822 UTC [144] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:39.823 UTC [145] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:39.824 UTC [146] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:39.831 UTC [151] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:39.835 UTC [129] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:39.837 UTC [136] FATAL:  terminating connection due to administrator command
+2026-10-10 18:40:53.603 UTC [189] ERROR:  permission denied for table ledger
+2026-10-10 18:40:53.603 UTC [189] STATEMENT:  select count(*) from prod.ledger
+2026-10-10 18:40:56.731 UTC [194] ERROR:  permission denied for table outbox_aggregate
+2026-10-10 18:40:56.731 UTC [194] STATEMENT:  select count(*) from prod.outbox_aggregate
+2026-10-10 18:40:59.613 UTC [198] ERROR:  permission denied for schema prod2 at character 22
+2026-10-10 18:40:59.613 UTC [198] STATEMENT:  select count(*) from prod2.outbox_event
+2026-10-10 18:41:02.734 UTC [201] ERROR:  permission denied for schema prod2 at character 22
+2026-10-10 18:41:02.734 UTC [201] STATEMENT:  select count(*) from prod2.customers
+2026-10-10 18:41:03.905 UTC [178] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:41:05.170 UTC [207] ERROR:  permission denied for schema secret at character 22
+2026-10-10 18:41:05.170 UTC [207] STATEMENT:  select count(*) from secret.tenants
+2026-10-10 18:41:08.234 UTC [213] ERROR:  permission denied for schema other at character 22
+2026-10-10 18:41:08.234 UTC [213] STATEMENT:  select count(*) from other.junk
+2026-10-10 18:41:08.715 UTC [199] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:41:10.585 UTC [156] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:10.585 UTC [187] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:10.585 UTC [166] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:10.586 UTC [165] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:10.586 UTC [169] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:10.588 UTC [171] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:10.588 UTC [192] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:10.588 UTC [167] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:10.589 UTC [211] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:10.589 UTC [206] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:10.590 UTC [191] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:11.567 UTC [229] ERROR:  permission denied for table outbox_event
+2026-10-10 18:41:11.567 UTC [229] STATEMENT:  insert into prod.outbox_event (tx_order,event_id,event_type,aggregate_type,aggregate_id,aggregate_seq,envelope) values (1, gen_random_uuid(), 't','widget','x',1,'{}')
+2026-10-10 18:41:14.824 UTC [236] ERROR:  permission denied for table outbox_event
+2026-10-10 18:41:14.824 UTC [236] STATEMENT:  update prod.outbox_event set event_type = 'x' where false
+2026-10-10 18:41:17.407 UTC [239] ERROR:  permission denied for table outbox_event
+2026-10-10 18:41:17.407 UTC [239] STATEMENT:  delete from prod.outbox_event where false
+2026-10-10 18:41:20.077 UTC [245] ERROR:  permission denied for table outbox_event
+2026-10-10 18:41:20.077 UTC [245] STATEMENT:  truncate prod.outbox_event
+2026-10-10 18:41:23.636 UTC [250] ERROR:  permission denied for table outbox_event
+2026-10-10 18:41:23.636 UTC [250] STATEMENT:  select id from prod.outbox_event limit 1 for update
+2026-10-10 18:41:27.089 UTC [190] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:41:27.089 UTC [190] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:41:27.091 UTC [243] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:41:27.307 UTC [258] ERROR:  permission denied for table outbox_aggregate
+2026-10-10 18:41:27.307 UTC [258] STATEMENT:  insert into prod.outbox_aggregate values ('widget','zzz',1,1)
+2026-10-10 18:41:30.151 UTC [267] ERROR:  permission denied for schema prod at character 14
+2026-10-10 18:41:30.151 UTC [267] STATEMENT:  create table prod.x (a int)
+2026-10-10 18:41:34.026 UTC [274] ERROR:  permission denied for schema cons at character 14
+2026-10-10 18:41:34.026 UTC [274] STATEMENT:  create table cons.x (a int)
+2026-10-10 18:41:35.266 UTC [181] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:35.267 UTC [232] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:35.267 UTC [186] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:35.267 UTC [230] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:35.268 UTC [237] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:35.268 UTC [261] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:35.268 UTC [269] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:35.269 UTC [251] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:35.269 UTC [262] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:35.270 UTC [253] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:35.271 UTC [252] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:35.272 UTC [260] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:35.273 UTC [263] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:35.274 UTC [268] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:35.276 UTC [226] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:35.278 UTC [259] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:53.311 UTC [285] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:41:56.458 UTC [316] ERROR:  permission denied for table outbox_event
+2026-10-10 18:41:56.458 UTC [316] STATEMENT:  select count(*) from prod.outbox_event
+2026-10-10 18:41:56.591 UTC [1] LOG:  received fast shutdown request
+2026-10-10 18:41:56.593 UTC [1] LOG:  aborting any active transactions
+2026-10-10 18:41:56.593 UTC [308] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.593 UTC [306] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.593 UTC [314] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.593 UTC [265] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.593 UTC [265] STATEMENT:  begin; insert into other.junk default values; select pg_sleep(34); commit;
+2026-10-10 18:41:56.594 UTC [310] FATAL:  canceling authentication due to timeout
+2026-10-10 18:41:56.594 UTC [284] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.596 UTC [312] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.596 UTC [289] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.596 UTC [307] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.597 UTC [299] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.597 UTC [309] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.598 UTC [298] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.599 UTC [297] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.599 UTC [282] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.600 UTC [278] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.600 UTC [296] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.601 UTC [293] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.604 UTC [283] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.606 UTC [281] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.607 UTC [280] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.608 UTC [279] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.627 UTC [317] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.637 UTC [319] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.637 UTC [318] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.646 UTC [272] FATAL:  terminating connection due to administrator command
+2026-10-10 18:41:56.651 UTC [320] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.685 UTC [321] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.693 UTC [322] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.694 UTC [323] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.697 UTC [324] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.711 UTC [325] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.713 UTC [326] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.736 UTC [327] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.759 UTC [328] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.828 UTC [1] LOG:  background worker "logical replication launcher" (PID 65) exited with exit code 1
+2026-10-10 18:41:56.829 UTC [329] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.831 UTC [330] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.845 UTC [333] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.849 UTC [331] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.855 UTC [332] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.865 UTC [334] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.872 UTC [335] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.878 UTC [60] LOG:  shutting down
+2026-10-10 18:41:56.885 UTC [336] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.889 UTC [337] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.894 UTC [60] LOG:  checkpoint starting: shutdown immediate
+2026-10-10 18:41:56.900 UTC [338] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.895 UTC [340] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.904 UTC [339] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.910 UTC [341] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.914 UTC [342] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.924 UTC [343] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.942 UTC [344] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.949 UTC [346] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.953 UTC [345] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.954 UTC [347] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.989 UTC [349] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.991 UTC [348] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.992 UTC [350] FATAL:  the database system is shutting down
+2026-10-10 18:41:56.998 UTC [351] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.011 UTC [352] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.013 UTC [353] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.026 UTC [354] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.034 UTC [355] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.060 UTC [356] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.070 UTC [358] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.073 UTC [357] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.086 UTC [361] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.093 UTC [363] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.094 UTC [360] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.097 UTC [359] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.108 UTC [362] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.117 UTC [364] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.129 UTC [365] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.140 UTC [366] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.154 UTC [367] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.158 UTC [369] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.162 UTC [368] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.173 UTC [370] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.175 UTC [371] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.182 UTC [373] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.183 UTC [372] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.186 UTC [374] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.199 UTC [375] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.232 UTC [376] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.250 UTC [377] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.273 UTC [378] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.285 UTC [379] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.296 UTC [380] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.298 UTC [381] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.313 UTC [382] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.314 UTC [383] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.336 UTC [384] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.356 UTC [385] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.369 UTC [386] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.371 UTC [387] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.380 UTC [388] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.415 UTC [389] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.441 UTC [390] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.444 UTC [391] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.466 UTC [392] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.470 UTC [393] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.482 UTC [394] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.491 UTC [395] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.522 UTC [396] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.554 UTC [60] LOG:  checkpoint complete: wrote 694 buffers (4.2%), wrote 5 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.324 s, sync=0.305 s, total=0.676 s; sync files=147, longest=0.013 s, average=0.003 s; distance=7243 kB, estimate=7243 kB; lsn=0/1E78FB8, redo lsn=0/1E78FB8
+2026-10-10 18:41:57.556 UTC [397] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.613 UTC [398] FATAL:  the database system is shutting down
+2026-10-10 18:41:57.676 UTC [1] LOG:  database system is shut down
+2026-10-10 18:41:58.732 UTC [1] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+2026-10-10 18:41:58.733 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+2026-10-10 18:41:58.733 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+2026-10-10 18:41:58.738 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-10-10 18:41:58.751 UTC [27] LOG:  database system was shut down at 2026-10-10 18:41:57 UTC
+2026-10-10 18:41:58.901 UTC [1] LOG:  database system is ready to accept connections
+2026-10-10 18:42:00.354 UTC [46] ERROR:  permission denied for table outbox_event
+2026-10-10 18:42:00.354 UTC [46] STATEMENT:  update prod.outbox_event set event_type = 'x' where false
+2026-10-10 18:42:03.206 UTC [56] ERROR:  permission denied for table outbox_event
+2026-10-10 18:42:03.206 UTC [56] STATEMENT:  delete from prod.outbox_event where false
+2026-10-10 18:42:07.103 UTC [61] ERROR:  permission denied for schema cons at character 22
+2026-10-10 18:42:07.103 UTC [61] STATEMENT:  select count(*) from cons.outbox_inbox
+2026-10-10 18:42:07.700 UTC [34] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:07.701 UTC [37] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:07.701 UTC [43] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:07.702 UTC [42] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:07.702 UTC [47] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:07.704 UTC [51] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:07.704 UTC [39] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:07.705 UTC [54] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:07.706 UTC [41] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:07.706 UTC [59] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:07.708 UTC [44] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:07.726 UTC [33] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:11.184 UTC [79] ERROR:  permission denied for schema secret at character 22
+2026-10-10 18:42:11.184 UTC [79] STATEMENT:  select count(*) from secret.tenants
+2026-10-10 18:42:14.796 UTC [68] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:42:14.796 UTC [68] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:42:14.805 UTC [70] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:42:14.805 UTC [70] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:42:24.934 UTC [40] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:42:24.934 UTC [40] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:42:24.936 UTC [71] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:42:24.936 UTC [71] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:42:31.412 UTC [75] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:42:31.413 UTC [75] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:42:32.550 UTC [76] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:32.551 UTC [74] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:32.551 UTC [35] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:32.554 UTC [85] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:32.554 UTC [92] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:32.562 UTC [93] FATAL:  terminating connection due to administrator command
+2026-10-10 18:42:40.282 UTC [110] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:42:40.282 UTC [110] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:42:43.783 UTC [111] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:42:51.617 UTC [130] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:42:51.634 UTC [77] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:42:51.634 UTC [77] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:43:02.382 UTC [117] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:43:02.383 UTC [117] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:43:04.312 UTC [98] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:04.318 UTC [102] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:04.318 UTC [103] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:04.318 UTC [100] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:04.318 UTC [135] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:04.318 UTC [137] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:04.318 UTC [138] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:04.319 UTC [141] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:04.321 UTC [142] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:04.322 UTC [99] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:04.324 UTC [136] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:04.325 UTC [101] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:04.326 UTC [143] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:04.329 UTC [134] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:04.335 UTC [139] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:08.833 UTC [149] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:43:08.837 UTC [151] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:43:08.859 UTC [155] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:43:08.859 UTC [155] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:43:17.782 UTC [153] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:43:17.783 UTC [161] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:43:26.709 UTC [162] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:43:26.720 UTC [179] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:43:30.386 UTC [174] ERROR:  deadlock detected
+2026-10-10 18:43:30.386 UTC [174] DETAIL:  Process 174 waits for ShareLock on transaction 8028; blocked by process 175.
+	Process 175 waits for ShareLock on transaction 8027; blocked by process 174.
+	Process 174: INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+	Process 175: INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+2026-10-10 18:43:30.386 UTC [174] HINT:  See server log for query details.
+2026-10-10 18:43:30.386 UTC [174] CONTEXT:  while inserting index tuple (2,67) in relation "outbox_aggregate"
+2026-10-10 18:43:30.386 UTC [174] STATEMENT:  INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+2026-10-10 18:43:32.058 UTC [187] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:43:32.088 UTC [150] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:43:32.088 UTC [150] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:43:40.052 UTC [199] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:43:40.052 UTC [199] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:43:47.885 UTC [175] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:47.885 UTC [182] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:47.885 UTC [181] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:47.887 UTC [203] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:47.887 UTC [206] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:47.890 UTC [180] FATAL:  terminating connection due to administrator command
+2026-10-10 18:43:56.062 UTC [210] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:43:56.062 UTC [217] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:44:06.264 UTC [201] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:44:15.056 UTC [241] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:44:15.066 UTC [237] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:44:19.960 UTC [234] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:44:19.960 UTC [234] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:44:23.602 UTC [243] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:44:26.167 UTC [171] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:26.168 UTC [216] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:26.170 UTC [176] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:26.171 UTC [221] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:26.173 UTC [231] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:26.174 UTC [233] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:31.059 UTC [260] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:44:31.201 UTC [183] FATAL:  terminating connection due to unexpected postmaster exit
+2026-10-10 18:44:31.202 UTC [268] FATAL:  terminating connection due to unexpected postmaster exit
+2026-10-10 18:44:31.202 UTC [267] FATAL:  terminating connection due to unexpected postmaster exit
+2026-10-10 18:44:31.203 UTC [261] FATAL:  terminating connection due to unexpected postmaster exit
+2026-10-10 18:44:31.204 UTC [259] FATAL:  terminating connection due to unexpected postmaster exit
+2026-10-10 18:44:31.204 UTC [263] FATAL:  terminating connection due to unexpected postmaster exit
+2026-10-10 18:44:31.205 UTC [258] FATAL:  terminating connection due to unexpected postmaster exit
+2026-10-10 18:44:35.138 UTC [1] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+2026-10-10 18:44:35.139 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+2026-10-10 18:44:35.139 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+2026-10-10 18:44:35.144 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-10-10 18:44:35.157 UTC [27] LOG:  database system was interrupted; last known up at 2026-10-10 18:41:58 UTC
+2026-10-10 18:44:35.158 UTC [28] FATAL:  the database system is starting up
+2026-10-10 18:44:35.160 UTC [29] FATAL:  the database system is starting up
+2026-10-10 18:44:35.196 UTC [27] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-10-10 18:44:35.201 UTC [27] LOG:  redo starts at 0/1E79030
+2026-10-10 18:44:35.211 UTC [30] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.211 UTC [30] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.255 UTC [31] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.255 UTC [31] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.311 UTC [32] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.311 UTC [32] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.341 UTC [33] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.341 UTC [33] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.380 UTC [34] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.380 UTC [34] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.434 UTC [36] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.434 UTC [36] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.435 UTC [35] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.435 UTC [35] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.455 UTC [37] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.455 UTC [37] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.462 UTC [38] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.462 UTC [38] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.479 UTC [27] LOG:  invalid record length at 0/2790E88: expected at least 24, got 0
+2026-10-10 18:44:35.479 UTC [27] LOG:  redo done at 0/2790E60 system usage: CPU: user: 0.18 s, system: 0.03 s, elapsed: 0.27 s
+2026-10-10 18:44:35.481 UTC [39] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.481 UTC [39] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.516 UTC [25] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-10-10 18:44:35.523 UTC [40] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.523 UTC [40] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.534 UTC [41] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.534 UTC [41] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.559 UTC [42] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.559 UTC [42] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.588 UTC [43] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.588 UTC [43] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.593 UTC [44] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.593 UTC [44] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.614 UTC [45] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.614 UTC [45] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.668 UTC [46] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.668 UTC [46] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.678 UTC [47] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.678 UTC [47] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.714 UTC [48] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.714 UTC [48] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.751 UTC [50] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.751 UTC [50] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.751 UTC [49] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.751 UTC [49] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.761 UTC [51] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.761 UTC [51] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.769 UTC [52] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.769 UTC [52] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.773 UTC [25] LOG:  checkpoint complete: wrote 837 buffers (5.1%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 1 recycled; write=0.146 s, sync=0.096 s, total=0.260 s; sync files=58, longest=0.004 s, average=0.002 s; distance=9311 kB, estimate=9311 kB; lsn=0/2790E88, redo lsn=0/2790E88
+2026-10-10 18:44:35.780 UTC [53] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:44:35.780 UTC [53] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:44:35.785 UTC [1] LOG:  database system is ready to accept connections
+2026-10-10 18:44:47.013 UTC [70] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:44:47.013 UTC [70] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:44:52.732 UTC [60] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:44:52.732 UTC [60] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:44:58.926 UTC [62] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:58.926 UTC [61] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:58.926 UTC [71] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:58.928 UTC [99] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:58.928 UTC [85] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:58.930 UTC [77] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:58.931 UTC [89] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:58.936 UTC [91] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:58.938 UTC [78] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:58.939 UTC [94] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:58.941 UTC [79] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:58.944 UTC [96] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:58.948 UTC [100] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:58.949 UTC [82] FATAL:  terminating connection due to administrator command
+2026-10-10 18:44:58.956 UTC [84] FATAL:  terminating connection due to administrator command
+2026-10-10 18:45:13.160 UTC [126] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:45:26.240 UTC [142] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:45:26.240 UTC [142] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:45:38.491 UTC [110] FATAL:  terminating connection due to administrator command
+2026-10-10 18:45:38.492 UTC [151] FATAL:  terminating connection due to administrator command
+2026-10-10 18:45:38.493 UTC [131] FATAL:  terminating connection due to administrator command
+2026-10-10 18:45:38.493 UTC [156] FATAL:  terminating connection due to administrator command
+2026-10-10 18:45:38.493 UTC [133] FATAL:  terminating connection due to administrator command
+2026-10-10 18:45:38.496 UTC [155] FATAL:  terminating connection due to administrator command
+2026-10-10 18:45:42.464 UTC [147] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:45:58.870 UTC [138] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:45:58.870 UTC [120] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:46:04.879 UTC [190] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:46:06.638 UTC [180] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:06.638 UTC [187] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:06.638 UTC [197] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:06.638 UTC [198] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:06.638 UTC [174] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:06.638 UTC [179] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:06.639 UTC [178] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:06.639 UTC [185] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:09.829 UTC [182] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:46:09.829 UTC [182] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:46:46.386 UTC [220] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:46.386 UTC [222] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:46.386 UTC [221] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:46.386 UTC [219] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:46.386 UTC [228] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:46.386 UTC [223] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:46.388 UTC [237] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:46.389 UTC [233] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:46.389 UTC [235] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:46.389 UTC [231] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:46.389 UTC [224] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:46.390 UTC [249] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:46.391 UTC [232] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:46.391 UTC [238] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:46.392 UTC [234] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:46.393 UTC [236] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:46.395 UTC [239] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:46.395 UTC [244] FATAL:  terminating connection due to administrator command
+2026-10-10 18:46:53.264 UTC [268] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:46:53.264 UTC [268] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:47:01.410 UTC [265] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:47:01.410 UTC [265] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:47:06.976 UTC [282] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:47:23.339 UTC [311] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:47:23.339 UTC [311] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:47:30.757 UTC [260] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:47:32.561 UTC [319] FATAL:  terminating connection due to administrator command
+2026-10-10 18:47:32.561 UTC [323] FATAL:  terminating connection due to administrator command
+2026-10-10 18:47:32.561 UTC [318] FATAL:  terminating connection due to administrator command
+2026-10-10 18:47:32.561 UTC [307] FATAL:  terminating connection due to administrator command
+2026-10-10 18:47:32.562 UTC [310] FATAL:  terminating connection due to administrator command
+2026-10-10 18:47:32.562 UTC [320] FATAL:  terminating connection due to administrator command
+2026-10-10 18:47:32.564 UTC [317] FATAL:  terminating connection due to administrator command
+2026-10-10 18:47:32.564 UTC [316] FATAL:  terminating connection due to administrator command
+2026-10-10 18:47:32.570 UTC [324] FATAL:  terminating connection due to administrator command
+2026-10-10 18:47:32.570 UTC [306] FATAL:  terminating connection due to administrator command
+2026-10-10 18:47:32.570 UTC [257] FATAL:  terminating connection due to administrator command
+2026-10-10 18:47:32.573 UTC [258] FATAL:  terminating connection due to administrator command
+2026-10-10 18:47:32.574 UTC [264] FATAL:  terminating connection due to administrator command
+2026-10-10 18:47:35.976 UTC [327] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:47:35.977 UTC [328] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:47:35.977 UTC [328] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:47:35.979 UTC [329] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:47:35.979 UTC [329] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:47:51.125 UTC [361] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:47:55.765 UTC [357] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:47:55.772 UTC [357] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:48:04.438 UTC [378] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:48:04.449 UTC [376] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:48:11.740 UTC [366] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:11.743 UTC [333] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:11.746 UTC [365] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:11.746 UTC [354] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:11.747 UTC [345] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:11.748 UTC [346] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:11.748 UTC [332] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:11.749 UTC [353] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:29.698 UTC [338] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:48:29.702 UTC [338] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:48:32.899 UTC [402] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:48:32.899 UTC [402] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:48:32.902 UTC [401] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:48:46.508 UTC [410] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:48:46.508 UTC [410] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:48:46.513 UTC [425] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:48:49.429 UTC [340] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:49.430 UTC [391] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:49.430 UTC [364] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:49.430 UTC [422] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:49.430 UTC [419] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:49.430 UTC [341] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:49.430 UTC [415] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:49.430 UTC [411] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:49.432 UTC [420] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:49.432 UTC [386] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:49.433 UTC [363] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:49.434 UTC [389] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:49.436 UTC [414] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:49.437 UTC [421] FATAL:  terminating connection due to administrator command
+2026-10-10 18:48:53.286 UTC [447] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:49:03.977 UTC [433] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:49:03.977 UTC [433] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:49:17.124 UTC [448] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:49:33.674 UTC [492] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:49:33.674 UTC [491] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:49:33.676 UTC [492] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:49:35.873 UTC [25] LOG:  checkpoint starting: time
+2026-10-10 18:49:37.979 UTC [452] FATAL:  terminating connection due to administrator command
+2026-10-10 18:49:37.980 UTC [442] FATAL:  terminating connection due to administrator command
+2026-10-10 18:49:37.981 UTC [455] FATAL:  terminating connection due to administrator command
+2026-10-10 18:49:37.981 UTC [479] FATAL:  terminating connection due to administrator command
+2026-10-10 18:49:37.981 UTC [459] FATAL:  terminating connection due to administrator command
+2026-10-10 18:49:37.983 UTC [477] FATAL:  terminating connection due to administrator command
+2026-10-10 18:49:37.983 UTC [489] FATAL:  terminating connection due to administrator command
+2026-10-10 18:49:37.983 UTC [480] FATAL:  terminating connection due to administrator command
+2026-10-10 18:49:37.984 UTC [501] FATAL:  terminating connection due to administrator command
+2026-10-10 18:49:37.986 UTC [445] FATAL:  terminating connection due to administrator command
+2026-10-10 18:49:37.987 UTC [476] FATAL:  terminating connection due to administrator command
+2026-10-10 18:49:37.989 UTC [478] FATAL:  terminating connection due to administrator command
+2026-10-10 18:49:37.990 UTC [483] FATAL:  terminating connection due to administrator command
+2026-10-10 18:49:37.993 UTC [502] FATAL:  terminating connection due to administrator command
+2026-10-10 18:49:37.994 UTC [503] FATAL:  terminating connection due to administrator command
+2026-10-10 18:49:44.578 UTC [1] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+2026-10-10 18:49:44.579 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+2026-10-10 18:49:44.579 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+2026-10-10 18:49:44.586 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-10-10 18:49:44.614 UTC [28] FATAL:  the database system is starting up
+2026-10-10 18:49:44.615 UTC [27] LOG:  database system was interrupted; last known up at 2026-10-10 18:44:35 UTC
+2026-10-10 18:49:44.616 UTC [29] FATAL:  the database system is starting up
+2026-10-10 18:49:44.650 UTC [30] FATAL:  the database system is starting up
+2026-10-10 18:49:44.682 UTC [27] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-10-10 18:49:44.690 UTC [27] LOG:  redo starts at 0/2790F00
+2026-10-10 18:49:44.739 UTC [31] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:44.739 UTC [31] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:44.763 UTC [32] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:44.763 UTC [32] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:44.849 UTC [33] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:44.849 UTC [33] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:44.865 UTC [34] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:44.865 UTC [34] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:44.893 UTC [35] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:44.893 UTC [35] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:44.940 UTC [36] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:44.940 UTC [36] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.028 UTC [37] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.028 UTC [37] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.046 UTC [38] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.046 UTC [38] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.069 UTC [39] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.069 UTC [39] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.146 UTC [40] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.146 UTC [40] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.194 UTC [41] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.194 UTC [41] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.197 UTC [42] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.197 UTC [42] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.274 UTC [43] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.274 UTC [43] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.276 UTC [44] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.276 UTC [44] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.286 UTC [45] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.286 UTC [45] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.311 UTC [46] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.311 UTC [46] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.317 UTC [47] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.317 UTC [47] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.339 UTC [48] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.339 UTC [48] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.349 UTC [49] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.349 UTC [49] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.366 UTC [50] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.366 UTC [50] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.393 UTC [51] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.393 UTC [51] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.401 UTC [52] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.401 UTC [52] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.411 UTC [53] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.411 UTC [53] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.438 UTC [54] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.438 UTC [54] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.461 UTC [57] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.461 UTC [57] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.463 UTC [56] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.463 UTC [56] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.465 UTC [55] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.465 UTC [55] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.501 UTC [58] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.501 UTC [58] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.514 UTC [60] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.514 UTC [60] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.515 UTC [59] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.515 UTC [59] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.533 UTC [61] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.533 UTC [61] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.541 UTC [27] LOG:  invalid record length at 0/3C477B8: expected at least 24, got 0
+2026-10-10 18:49:45.541 UTC [27] LOG:  redo done at 0/3C47790 system usage: CPU: user: 0.46 s, system: 0.15 s, elapsed: 0.85 s
+2026-10-10 18:49:45.544 UTC [62] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.544 UTC [62] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.573 UTC [63] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.573 UTC [63] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.595 UTC [27] LOG:  recovering prepared transaction 21988 from shared memory
+2026-10-10 18:49:45.599 UTC [25] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-10-10 18:49:45.627 UTC [64] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.627 UTC [64] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.629 UTC [65] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.629 UTC [65] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.632 UTC [66] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.632 UTC [66] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.666 UTC [67] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.666 UTC [67] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.670 UTC [68] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.670 UTC [68] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.678 UTC [69] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.678 UTC [69] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.699 UTC [70] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.699 UTC [70] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.749 UTC [71] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.749 UTC [71] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.771 UTC [72] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.771 UTC [72] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.800 UTC [73] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.800 UTC [73] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.804 UTC [74] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.804 UTC [74] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.844 UTC [75] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.844 UTC [75] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.939 UTC [76] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.939 UTC [76] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:45.968 UTC [77] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:45.968 UTC [77] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:46.012 UTC [78] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:46.012 UTC [78] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:46.033 UTC [79] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:46.033 UTC [79] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:46.049 UTC [80] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:46.049 UTC [80] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:46.079 UTC [81] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:46.079 UTC [81] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:46.108 UTC [25] LOG:  1 two-phase state file was written for a long-running prepared transaction
+2026-10-10 18:49:46.131 UTC [25] LOG:  checkpoint complete: wrote 1690 buffers (10.3%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 1 recycled; write=0.330 s, sync=0.153 s, total=0.536 s; sync files=54, longest=0.010 s, average=0.003 s; distance=21210 kB, estimate=21210 kB; lsn=0/3C477B8, redo lsn=0/3C477B8
+2026-10-10 18:49:46.135 UTC [82] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:49:46.135 UTC [82] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:49:46.156 UTC [1] LOG:  database system is ready to accept connections
+2026-10-10 18:50:08.720 UTC [86] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:08.721 UTC [109] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:08.721 UTC [121] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:08.721 UTC [101] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:08.721 UTC [91] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:08.725 UTC [122] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:08.725 UTC [99] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:08.728 UTC [87] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:08.729 UTC [116] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:08.729 UTC [117] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:08.734 UTC [102] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:08.734 UTC [120] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:08.740 UTC [103] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:08.747 UTC [115] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:08.796 UTC [114] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:08.824 UTC [107] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:15.125 UTC [127] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:50:15.169 UTC [145] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:50:15.170 UTC [143] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:50:17.944 UTC [146] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:50:17.944 UTC [146] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:50:31.775 UTC [154] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:50:46.248 UTC [158] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:50:57.885 UTC [135] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:57.886 UTC [160] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:57.886 UTC [152] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:57.886 UTC [195] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:57.886 UTC [171] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:57.886 UTC [181] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:57.888 UTC [182] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:57.888 UTC [180] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:57.889 UTC [196] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:57.890 UTC [194] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:57.891 UTC [190] FATAL:  terminating connection due to administrator command
+2026-10-10 18:50:57.895 UTC [191] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:00.728 UTC [189] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:51:06.219 UTC [215] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:51:11.322 UTC [206] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:51:11.322 UTC [203] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:51:13.891 UTC [136] ERROR:  deadlock detected
+2026-10-10 18:51:13.891 UTC [136] DETAIL:  Process 136 waits for ShareLock on transaction 25938; blocked by process 199.
+	Process 199 waits for ShareLock on transaction 25939; blocked by process 136.
+	Process 136: INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+	Process 199: INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+2026-10-10 18:51:13.891 UTC [136] HINT:  See server log for query details.
+2026-10-10 18:51:13.891 UTC [136] CONTEXT:  while inserting index tuple (7,111) in relation "outbox_aggregate"
+2026-10-10 18:51:13.891 UTC [136] STATEMENT:  INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+2026-10-10 18:51:17.742 UTC [202] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:51:22.831 UTC [201] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:51:30.939 UTC [136] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:30.942 UTC [220] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:30.942 UTC [228] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:30.942 UTC [228] STATEMENT:  INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+2026-10-10 18:51:30.943 UTC [133] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:30.943 UTC [223] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:30.943 UTC [241] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:30.943 UTC [224] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:30.943 UTC [229] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:30.946 UTC [212] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:30.948 UTC [240] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:30.948 UTC [234] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:30.949 UTC [242] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:30.949 UTC [242] STATEMENT:  SELECT count(*)::bigint, EXTRACT(EPOCH FROM clock_timestamp() - min(stored_at))::float8 FROM (SELECT stored_at FROM outbox_event WHERE (tx_order, id) > ($1, $2) ORDER BY tx_order, id LIMIT $3) AS waiting
+2026-10-10 18:51:30.949 UTC [235] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:30.961 UTC [227] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:30.965 UTC [233] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:35.391 UTC [254] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:51:41.492 UTC [270] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:51:41.492 UTC [270] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:51:47.416 UTC [252] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:51:47.416 UTC [252] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:51:54.898 UTC [1] LOG:  received fast shutdown request
+2026-10-10 18:51:54.906 UTC [1] LOG:  aborting any active transactions
+2026-10-10 18:51:54.907 UTC [262] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.907 UTC [280] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.907 UTC [281] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.909 UTC [257] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.910 UTC [249] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.910 UTC [261] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.910 UTC [279] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.911 UTC [253] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.912 UTC [250] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.914 UTC [276] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.915 UTC [277] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.920 UTC [275] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.921 UTC [269] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.923 UTC [268] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.925 UTC [265] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.941 UTC [264] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.946 UTC [263] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.950 UTC [260] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.955 UTC [248] FATAL:  terminating connection due to administrator command
+2026-10-10 18:51:54.979 UTC [285] FATAL:  the database system is shutting down
+2026-10-10 18:51:54.979 UTC [284] FATAL:  the database system is shutting down
+2026-10-10 18:51:54.980 UTC [286] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.017 UTC [287] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.019 UTC [288] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.020 UTC [289] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.025 UTC [290] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.026 UTC [291] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.052 UTC [1] LOG:  background worker "logical replication launcher" (PID 85) exited with exit code 1
+2026-10-10 18:51:55.054 UTC [292] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.056 UTC [293] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.058 UTC [294] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.063 UTC [295] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.065 UTC [25] LOG:  shutting down
+2026-10-10 18:51:55.074 UTC [25] LOG:  checkpoint starting: shutdown immediate
+2026-10-10 18:51:55.083 UTC [296] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.103 UTC [297] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.113 UTC [298] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.130 UTC [299] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.130 UTC [300] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.137 UTC [301] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.164 UTC [302] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.222 UTC [303] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.225 UTC [304] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.227 UTC [305] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.230 UTC [306] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.234 UTC [307] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.238 UTC [308] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.240 UTC [309] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.251 UTC [310] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.253 UTC [311] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.260 UTC [312] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.274 UTC [314] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.275 UTC [313] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.279 UTC [315] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.287 UTC [316] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.290 UTC [317] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.293 UTC [318] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.305 UTC [319] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.308 UTC [321] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.324 UTC [322] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.327 UTC [320] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.328 UTC [323] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.344 UTC [325] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.350 UTC [326] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.360 UTC [324] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.360 UTC [327] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.362 UTC [328] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.369 UTC [329] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.376 UTC [330] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.378 UTC [331] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.379 UTC [332] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.396 UTC [333] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.402 UTC [334] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.407 UTC [335] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.420 UTC [336] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.424 UTC [337] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.449 UTC [338] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.453 UTC [339] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.457 UTC [340] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.465 UTC [341] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.471 UTC [342] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.495 UTC [343] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.496 UTC [344] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.518 UTC [345] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.538 UTC [347] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.539 UTC [346] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.545 UTC [348] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.619 UTC [349] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.621 UTC [350] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.634 UTC [351] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.657 UTC [352] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.669 UTC [353] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.671 UTC [354] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.710 UTC [355] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.742 UTC [356] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.754 UTC [358] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.755 UTC [357] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.762 UTC [359] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.800 UTC [360] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.859 UTC [361] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.861 UTC [362] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.879 UTC [25] LOG:  checkpoint complete: wrote 1774 buffers (10.8%), wrote 4 SLRU buffers; 0 WAL file(s) added, 0 removed, 1 recycled; write=0.377 s, sync=0.380 s, total=0.815 s; sync files=50, longest=0.014 s, average=0.008 s; distance=15732 kB, estimate=20662 kB; lsn=0/4BA4B00, redo lsn=0/4BA4B00
+2026-10-10 18:51:55.880 UTC [363] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.881 UTC [364] FATAL:  the database system is shutting down
+2026-10-10 18:51:55.966 UTC [1] LOG:  database system is shut down
+2026-10-10 18:51:56.986 UTC [1] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+2026-10-10 18:51:56.987 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+2026-10-10 18:51:56.987 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+2026-10-10 18:51:57.000 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-10-10 18:51:57.023 UTC [27] LOG:  database system was shut down at 2026-10-10 18:51:55 UTC
+2026-10-10 18:51:57.023 UTC [28] FATAL:  the database system is starting up
+2026-10-10 18:51:57.066 UTC [29] FATAL:  the database system is starting up
+2026-10-10 18:51:57.068 UTC [30] FATAL:  the database system is starting up
+2026-10-10 18:51:57.075 UTC [1] LOG:  database system is ready to accept connections
+2026-10-10 18:52:07.453 UTC [37] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:07.455 UTC [62] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:07.455 UTC [62] STATEMENT:  INSERT INTO outbox_subscription (name, source_schema, position_tx, position_id) VALUES ($1, $2, $3, $4) ON CONFLICT (name) DO NOTHING
+2026-10-10 18:52:07.455 UTC [35] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:07.456 UTC [50] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:07.457 UTC [43] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:07.458 UTC [46] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:07.459 UTC [48] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:07.462 UTC [57] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:07.464 UTC [60] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:15.277 UTC [70] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:52:22.385 UTC [69] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:52:29.563 UTC [98] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:52:36.124 UTC [83] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:52:36.267 UTC [67] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:36.267 UTC [68] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:36.270 UTC [91] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:36.270 UTC [95] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:36.270 UTC [108] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:36.270 UTC [75] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:36.271 UTC [97] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:36.272 UTC [103] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:36.272 UTC [89] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:36.273 UTC [90] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:36.273 UTC [106] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:36.274 UTC [107] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:36.274 UTC [96] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:36.275 UTC [104] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:36.276 UTC [105] FATAL:  terminating connection due to administrator command
+2026-10-10 18:52:36.279 UTC [111] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.219 UTC [117] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.219 UTC [119] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.219 UTC [118] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.220 UTC [127] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.220 UTC [120] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.221 UTC [135] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.225 UTC [121] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.225 UTC [125] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.226 UTC [122] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.227 UTC [128] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.228 UTC [152] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.229 UTC [124] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.231 UTC [134] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.238 UTC [144] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.246 UTC [147] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.252 UTC [148] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.255 UTC [149] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.265 UTC [150] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:00.268 UTC [151] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:02.155 UTC [159] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:53:02.155 UTC [159] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:53:10.771 UTC [168] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:53:15.391 UTC [164] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:53:18.671 UTC [193] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:53:24.296 UTC [169] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:53:40.568 UTC [210] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:53:40.568 UTC [210] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:53:40.586 UTC [213] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:53:42.900 UTC [160] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:42.901 UTC [165] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:42.902 UTC [200] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:42.902 UTC [161] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:42.903 UTC [190] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:42.904 UTC [214] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:42.907 UTC [215] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:42.909 UTC [189] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:42.910 UTC [218] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:42.917 UTC [191] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:42.921 UTC [199] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:42.922 UTC [201] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:42.927 UTC [202] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:42.931 UTC [171] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:42.932 UTC [172] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:42.932 UTC [176] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:42.934 UTC [187] FATAL:  terminating connection due to administrator command
+2026-10-10 18:53:49.036 UTC [235] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:54:09.672 UTC [245] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:54:18.560 UTC [236] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:54:27.222 UTC [273] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:54:27.222 UTC [275] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:54:27.222 UTC [273] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:54:27.222 UTC [275] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:54:29.530 UTC [241] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:29.530 UTC [234] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:29.531 UTC [226] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:29.531 UTC [269] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:29.531 UTC [239] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:29.531 UTC [248] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:29.532 UTC [261] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:29.533 UTC [252] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:29.535 UTC [256] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:40.091 UTC [259] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:54:40.093 UTC [303] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:54:45.496 UTC [285] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:54:49.495 UTC [296] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:54:57.537 UTC [287] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:57.537 UTC [299] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:57.537 UTC [289] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:57.539 UTC [300] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:57.539 UTC [300] STATEMENT:  COMMIT
+2026-10-10 18:54:57.539 UTC [306] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:57.539 UTC [315] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:57.540 UTC [298] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:57.541 UTC [319] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:57.541 UTC [309] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:57.541 UTC [308] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:57.542 UTC [316] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:57.542 UTC [318] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:57.543 UTC [233] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:57.543 UTC [321] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:57.548 UTC [317] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:57.550 UTC [307] FATAL:  terminating connection due to administrator command
+2026-10-10 18:54:57.557 UTC [320] FATAL:  terminating connection due to administrator command
+2026-10-10 18:55:01.782 UTC [327] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:55:19.037 UTC [360] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:55:19.037 UTC [360] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:55:19.040 UTC [361] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:55:19.040 UTC [361] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:55:23.796 UTC [335] FATAL:  terminating connection due to administrator command
+2026-10-10 18:55:23.796 UTC [353] FATAL:  terminating connection due to administrator command
+2026-10-10 18:55:23.796 UTC [366] FATAL:  terminating connection due to administrator command
+2026-10-10 18:55:23.796 UTC [343] FATAL:  terminating connection due to administrator command
+2026-10-10 18:55:23.799 UTC [355] FATAL:  terminating connection due to administrator command
+2026-10-10 18:55:23.800 UTC [339] FATAL:  terminating connection due to administrator command
+2026-10-10 18:55:23.801 UTC [354] FATAL:  terminating connection due to administrator command
+2026-10-10 18:55:27.330 UTC [380] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:55:27.331 UTC [380] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:55:35.630 UTC [1] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+2026-10-10 18:55:35.631 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+2026-10-10 18:55:35.631 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+2026-10-10 18:55:35.640 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-10-10 18:55:35.656 UTC [26] LOG:  database system was interrupted; last known up at 2026-10-10 18:51:57 UTC
+2026-10-10 18:55:35.685 UTC [27] FATAL:  the database system is starting up
+2026-10-10 18:55:35.700 UTC [26] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-10-10 18:55:35.706 UTC [26] LOG:  redo starts at 0/4BA4B78
+2026-10-10 18:55:35.711 UTC [28] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.711 UTC [28] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.749 UTC [29] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.749 UTC [29] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.781 UTC [30] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.781 UTC [30] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.797 UTC [31] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.797 UTC [31] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.802 UTC [32] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.802 UTC [32] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.814 UTC [33] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.814 UTC [33] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.846 UTC [34] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.846 UTC [34] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.858 UTC [35] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.858 UTC [35] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.874 UTC [36] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.874 UTC [36] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.894 UTC [37] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.894 UTC [37] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.902 UTC [38] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.902 UTC [38] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.903 UTC [39] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.903 UTC [39] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.910 UTC [40] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.910 UTC [40] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.914 UTC [41] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.914 UTC [41] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.932 UTC [42] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.932 UTC [42] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.936 UTC [43] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.936 UTC [43] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.945 UTC [44] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.945 UTC [44] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.957 UTC [45] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.957 UTC [45] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.960 UTC [46] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.960 UTC [46] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.970 UTC [47] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.970 UTC [47] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.977 UTC [48] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.977 UTC [48] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.991 UTC [49] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.991 UTC [49] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.992 UTC [51] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.992 UTC [51] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:35.994 UTC [50] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:35.994 UTC [50] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.010 UTC [52] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.010 UTC [52] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.026 UTC [53] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.026 UTC [53] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.073 UTC [54] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.073 UTC [54] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.076 UTC [56] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.076 UTC [56] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.076 UTC [55] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.076 UTC [55] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.125 UTC [57] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.125 UTC [57] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.161 UTC [58] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.161 UTC [58] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.171 UTC [59] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.171 UTC [59] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.200 UTC [60] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.200 UTC [60] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.246 UTC [61] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.246 UTC [61] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.251 UTC [62] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.251 UTC [62] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.282 UTC [63] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.282 UTC [63] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.293 UTC [64] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.293 UTC [64] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.317 UTC [65] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.317 UTC [65] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.329 UTC [66] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.329 UTC [66] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.336 UTC [67] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.336 UTC [67] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.337 UTC [68] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.337 UTC [68] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.368 UTC [69] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.368 UTC [69] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.418 UTC [70] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.418 UTC [70] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.421 UTC [71] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.421 UTC [71] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.435 UTC [72] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.435 UTC [72] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.455 UTC [26] LOG:  invalid record length at 0/5C82078: expected at least 24, got 0
+2026-10-10 18:55:36.455 UTC [26] LOG:  redo done at 0/5C82050 system usage: CPU: user: 0.31 s, system: 0.13 s, elapsed: 0.74 s
+2026-10-10 18:55:36.466 UTC [24] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-10-10 18:55:36.516 UTC [73] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.516 UTC [73] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.531 UTC [74] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.531 UTC [74] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.580 UTC [75] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.580 UTC [75] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.589 UTC [76] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.589 UTC [76] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.605 UTC [77] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.605 UTC [77] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.622 UTC [78] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.622 UTC [78] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.625 UTC [79] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.625 UTC [79] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.640 UTC [80] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.640 UTC [80] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.657 UTC [81] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.657 UTC [81] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.708 UTC [82] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.708 UTC [82] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.714 UTC [83] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.714 UTC [83] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.799 UTC [84] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.799 UTC [84] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.822 UTC [85] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.822 UTC [85] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.924 UTC [86] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.924 UTC [86] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.958 UTC [87] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.958 UTC [87] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.959 UTC [88] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.959 UTC [88] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.973 UTC [89] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.973 UTC [89] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:36.988 UTC [90] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:36.988 UTC [90] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:37.001 UTC [91] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:37.001 UTC [91] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:37.023 UTC [92] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:37.023 UTC [92] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:37.048 UTC [24] LOG:  checkpoint complete: wrote 1715 buffers (10.5%), wrote 4 SLRU buffers; 0 WAL file(s) added, 0 removed, 1 recycled; write=0.430 s, sync=0.132 s, total=0.586 s; sync files=64, longest=0.006 s, average=0.003 s; distance=17269 kB, estimate=17269 kB; lsn=0/5C82078, redo lsn=0/5C82078
+2026-10-10 18:55:37.055 UTC [93] FATAL:  the database system is not yet accepting connections
+2026-10-10 18:55:37.055 UTC [93] DETAIL:  Consistent recovery state has not been yet reached.
+2026-10-10 18:55:37.064 UTC [1] LOG:  database system is ready to accept connections
+2026-10-10 18:55:47.741 UTC [105] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:55:59.933 UTC [117] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:56:06.402 UTC [125] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:56:06.405 UTC [138] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:56:09.862 UTC [97] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:09.866 UTC [101] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:09.871 UTC [103] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:09.872 UTC [108] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:09.874 UTC [110] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:09.875 UTC [113] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:09.877 UTC [130] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:09.877 UTC [116] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:09.879 UTC [131] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:09.882 UTC [132] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:09.884 UTC [142] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:19.672 UTC [168] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:56:19.672 UTC [168] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:56:23.807 UTC [144] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:56:23.809 UTC [150] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:56:50.951 UTC [177] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:50.952 UTC [179] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:50.952 UTC [161] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:50.954 UTC [178] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:50.954 UTC [200] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:50.955 UTC [190] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:50.956 UTC [199] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:50.958 UTC [202] FATAL:  terminating connection due to administrator command
+2026-10-10 18:56:55.128 UTC [198] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:56:59.432 UTC [201] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:56:59.432 UTC [201] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:57:14.373 UTC [216] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:57:16.902 UTC [214] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:57:24.009 UTC [213] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:57:31.397 UTC [223] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:57:33.360 UTC [159] FATAL:  terminating connection due to administrator command
+2026-10-10 18:57:33.361 UTC [164] FATAL:  terminating connection due to administrator command
+2026-10-10 18:57:33.362 UTC [172] FATAL:  terminating connection due to administrator command
+2026-10-10 18:57:33.365 UTC [247] FATAL:  terminating connection due to administrator command
+2026-10-10 18:57:33.368 UTC [243] FATAL:  terminating connection due to administrator command
+2026-10-10 18:57:33.368 UTC [243] STATEMENT:  INSERT INTO outbox_event (tx_order, event_id, event_type, tenant_id, aggregate_type, aggregate_id, aggregate_seq, envelope) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+2026-10-10 18:57:33.369 UTC [212] FATAL:  terminating connection due to administrator command
+2026-10-10 18:57:33.373 UTC [230] FATAL:  terminating connection due to administrator command
+2026-10-10 18:57:33.375 UTC [231] FATAL:  terminating connection due to administrator command
+2026-10-10 18:57:33.381 UTC [232] FATAL:  terminating connection due to administrator command
+2026-10-10 18:57:33.385 UTC [242] FATAL:  terminating connection due to administrator command
+2026-10-10 18:57:33.388 UTC [244] FATAL:  terminating connection due to administrator command
+2026-10-10 18:57:33.397 UTC [248] FATAL:  terminating connection due to administrator command
+2026-10-10 18:57:33.399 UTC [249] FATAL:  terminating connection due to administrator command
+2026-10-10 18:57:38.925 UTC [257] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:57:38.926 UTC [257] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:57:39.306 UTC [260] ERROR:  deadlock detected
+2026-10-10 18:57:39.306 UTC [260] DETAIL:  Process 260 waits for ShareLock on transaction 43930; blocked by process 259.
+	Process 259 waits for ShareLock on transaction 43931; blocked by process 260.
+	Process 260: INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+	Process 259: INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+2026-10-10 18:57:39.306 UTC [260] HINT:  See server log for query details.
+2026-10-10 18:57:39.306 UTC [260] CONTEXT:  while inserting index tuple (8,10) in relation "outbox_aggregate"
+2026-10-10 18:57:39.306 UTC [260] STATEMENT:  INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+2026-10-10 18:57:39.307 UTC [259] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:58:09.094 UTC [263] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:09.095 UTC [285] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:09.097 UTC [292] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:09.097 UTC [291] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:09.097 UTC [290] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:09.097 UTC [300] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:09.097 UTC [295] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:09.098 UTC [287] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:09.098 UTC [298] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:09.101 UTC [304] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:09.102 UTC [299] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:16.663 UTC [313] ERROR:  deadlock detected
+2026-10-10 18:58:16.663 UTC [313] DETAIL:  Process 313 waits for ShareLock on transaction 45511; blocked by process 316.
+	Process 316 waits for ShareLock on transaction 45508; blocked by process 313.
+	Process 313: INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+	Process 316: INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+2026-10-10 18:58:16.663 UTC [313] HINT:  See server log for query details.
+2026-10-10 18:58:16.663 UTC [313] CONTEXT:  while inserting index tuple (9,83) in relation "outbox_aggregate"
+2026-10-10 18:58:16.663 UTC [313] STATEMENT:  INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+2026-10-10 18:58:18.783 UTC [320] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:58:23.089 UTC [303] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:58:23.089 UTC [303] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:58:23.149 UTC [325] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:58:24.781 UTC [313] ERROR:  deadlock detected
+2026-10-10 18:58:24.781 UTC [313] DETAIL:  Process 313 waits for ShareLock on transaction 45829; blocked by process 310.
+	Process 310 waits for ShareLock on transaction 45827; blocked by process 313.
+	Process 313: INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+	Process 310: INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+2026-10-10 18:58:24.781 UTC [313] HINT:  See server log for query details.
+2026-10-10 18:58:24.781 UTC [313] CONTEXT:  while inserting index tuple (8,42) in relation "outbox_aggregate"
+2026-10-10 18:58:24.781 UTC [313] STATEMENT:  INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+2026-10-10 18:58:26.291 UTC [321] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:58:26.291 UTC [321] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:58:30.830 UTC [316] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:58:40.007 UTC [345] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:40.007 UTC [351] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:40.007 UTC [344] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:40.007 UTC [343] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:40.007 UTC [317] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:40.007 UTC [264] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:40.010 UTC [326] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:40.010 UTC [338] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:40.010 UTC [332] FATAL:  terminating connection due to administrator command
+2026-10-10 18:58:40.012 UTC [333] FATAL:  terminating connection due to administrator command
+2026-10-10 18:59:03.353 UTC [359] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:59:03.353 UTC [359] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:59:03.354 UTC [358] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:59:06.454 UTC [371] FATAL:  terminating connection due to administrator command
+2026-10-10 18:59:06.454 UTC [370] FATAL:  terminating connection due to administrator command
+2026-10-10 18:59:06.455 UTC [375] FATAL:  terminating connection due to administrator command
+2026-10-10 18:59:06.455 UTC [364] FATAL:  terminating connection due to administrator command
+2026-10-10 18:59:06.457 UTC [376] FATAL:  terminating connection due to administrator command
+2026-10-10 18:59:06.457 UTC [380] FATAL:  terminating connection due to administrator command
+2026-10-10 18:59:06.458 UTC [381] FATAL:  terminating connection due to administrator command
+2026-10-10 18:59:06.458 UTC [384] FATAL:  terminating connection due to administrator command
+2026-10-10 18:59:12.108 UTC [382] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:59:12.114 UTC [395] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:59:12.114 UTC [395] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:59:15.222 UTC [394] LOG:  could not receive data from client: Connection reset by peer
+2026-10-10 18:59:15.223 UTC [394] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 18:59:18.837 UTC [397] ERROR:  deadlock detected
+2026-10-10 18:59:18.837 UTC [397] DETAIL:  Process 397 waits for ShareLock on transaction 47833; blocked by process 369.
+	Process 369 waits for ShareLock on transaction 47834; blocked by process 397.
+	Process 397: INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+	Process 369: INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+2026-10-10 18:59:18.837 UTC [397] HINT:  See server log for query details.
+2026-10-10 18:59:18.837 UTC [397] CONTEXT:  while inserting index tuple (11,19) in relation "outbox_aggregate"
+2026-10-10 18:59:18.837 UTC [397] STATEMENT:  INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) RETURNING last_seq, last_tx
+2026-10-10 18:59:22.916 UTC [388] LOG:  unexpected EOF on client connection with an open transaction
+2026-10-10 19:00:36.149 UTC [24] LOG:  checkpoint starting: time
+2026-10-10 19:04:03.394 UTC [24] LOG:  checkpoint complete: wrote 2049 buffers (12.5%), wrote 7 SLRU buffers; 0 WAL file(s) added, 0 removed, 2 recycled; write=207.111 s, sync=0.083 s, total=207.245 s; sync files=55, longest=0.058 s, average=0.002 s; distance=20549 kB, estimate=20549 kB; lsn=0/74D7688, redo lsn=0/70937A8
+2026-10-10 19:05:36.488 UTC [24] LOG:  checkpoint starting: time
+2026-10-10 19:06:01.742 UTC [24] LOG:  checkpoint complete: wrote 247 buffers (1.5%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=24.919 s, sync=0.287 s, total=25.254 s; sync files=28, longest=0.032 s, average=0.011 s; distance=5540 kB, estimate=19048 kB; lsn=0/76ECDC0, redo lsn=0/75FCA28
+2026-10-10 19:10:36.842 UTC [24] LOG:  checkpoint starting: time
+2026-10-10 19:11:13.297 UTC [24] LOG:  checkpoint complete: wrote 362 buffers (2.2%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=36.397 s, sync=0.024 s, total=36.448 s; sync files=29, longest=0.006 s, average=0.001 s; distance=4167 kB, estimate=17560 kB; lsn=0/7AC6070, redo lsn=0/7A0E870
+2026-10-10 19:15:36.399 UTC [24] LOG:  checkpoint starting: time
+2026-10-10 19:16:22.554 UTC [24] LOG:  checkpoint complete: wrote 455 buffers (2.8%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=45.890 s, sync=0.251 s, total=46.156 s; sync files=27, longest=0.208 s, average=0.010 s; distance=5768 kB, estimate=16381 kB; lsn=0/812EA00, redo lsn=0/7FB0AB8
+2026-10-10 19:20:36.654 UTC [24] LOG:  checkpoint starting: time
+2026-10-10 19:21:21.449 UTC [24] LOG:  checkpoint complete: wrote 443 buffers (2.7%), wrote 5 SLRU buffers; 0 WAL file(s) added, 0 removed, 1 recycled; write=44.710 s, sync=0.058 s, total=44.795 s; sync files=27, longest=0.011 s, average=0.003 s; distance=5554 kB, estimate=15298 kB; lsn=0/85DE1B0, redo lsn=0/851D600
+2026-10-10 19:25:36.552 UTC [24] LOG:  checkpoint starting: time
+2026-10-10 19:26:27.555 UTC [24] LOG:  checkpoint complete: wrote 502 buffers (3.1%), wrote 4 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=50.693 s, sync=0.081 s, total=51.003 s; sync files=25, longest=0.017 s, average=0.004 s; distance=5921 kB, estimate=14361 kB; lsn=0/8C6F038, redo lsn=0/8AE5D20
