@@ -1115,6 +1115,43 @@ fn a_service_without_server_verification_refuses_to_start() {
     }
 }
 
+/// Without a CA for the database server the example service refuses to start: no public or
+/// system root would stand in for it (Laysi/trustiot-v2#272).
+#[test]
+fn a_service_without_a_postgres_ca_refuses_to_start() {
+    for ca_file in [None, Some("")] {
+        let mut env = vec![
+            ("TRUSTIOT__DATABASE__USERNAME", "example_app"),
+            ("TRUSTIOT__DATABASE__PASSWORD", "service-kit-test"),
+            ("TRUSTIOT_POSTGRES_HOST", "postgres.example.internal"),
+            ("TRUSTIOT_POSTGRES_PORT", "5432"),
+            ("TRUSTIOT_POSTGRES_DATABASE", "trustiot"),
+            ("TRUSTIOT_POSTGRES_SSLMODE", "verify-full"),
+        ];
+        if let Some(ca_file) = ca_file {
+            env.push(("TRUSTIOT_POSTGRES_CA_FILE", ca_file));
+        }
+        let (mut child, stdout, _stderr) = spawn_example(&env);
+        let status =
+            wait_exit(&mut child, Duration::from_secs(10)).expect("the service exits by itself");
+        assert_eq!(status.code(), Some(1), "CA file {ca_file:?}");
+        let error = stdout
+            .wait_for_message(
+                "invalid configuration; not starting",
+                Duration::from_secs(2),
+            )
+            .unwrap_or_else(|| panic!("CA file {ca_file:?}: the error is logged"));
+        let text = error["fields"]["error"].as_str().expect("error text");
+        assert!(text.contains("platform.postgres_ca_file"), "{text}");
+        assert!(text.contains("is required"), "{text}");
+        assert!(
+            !stdout.text().contains("service-kit-test"),
+            "the password is logged"
+        );
+        println!("CA file {ca_file:?}: {status}; error: {text}");
+    }
+}
+
 /// End to end: the example service connects with verify-full, and each request's tenant comes
 /// from its verified token; the handler's query has no tenant condition.
 #[tokio::test]

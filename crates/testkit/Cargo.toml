@@ -1,0 +1,37 @@
+[package]
+name = "testkit"
+description = "Test support for TrustIoT v2: the cross-tenant negative test suite (decision 29), test identity tokens, and throwaway containers. A dev-dependency only."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+# Only ever a [dev-dependencies] entry (tools/repo-check enforces it). The suite runs SQL that
+# its macros build from declarations at compile time, so tools/sql-check treats these sources as
+# test code (TEST_SUPPORT).
+
+[dependencies]
+# Signs test identity tokens (`identity`) with a key made for the test process.
+base64.workspace = true
+contract = { path = "../contract" }
+ed25519-dalek.workspace = true
+http.workspace = true
+# A throwaway CA and server certificate for the TLS Postgres (`postgres`).
+rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
+# Calls the service under test over plain HTTP on the loopback interface.
+reqwest.workspace = true
+serde_json.workspace = true
+service-kit = { path = "../service-kit" }
+sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki", "uuid"] }
+tokio = { workspace = true, features = ["sync", "time"] }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+# The self-test's example service.
+axum = { workspace = true, features = ["http1", "json", "tokio"] }
+serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
+
+[lints]
+workspace = true

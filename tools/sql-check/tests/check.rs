@@ -120,6 +120,12 @@ fn listed_paths_exist() {
     for skipped in sql_check::SKIPPED {
         assert!(root.join(skipped).is_dir(), "{skipped} does not exist");
     }
+    for crate_dir in sql_check::TEST_SUPPORT {
+        assert!(
+            root.join(crate_dir).join("Cargo.toml").is_file(),
+            "{crate_dir} is not a crate"
+        );
+    }
     for exception in sql_check::SET_CONFIG_ALLOWED {
         assert!(
             root.join(exception.path).is_file(),

@@ -132,6 +132,8 @@ pub struct Service {
     pub stdout: Output,
     pub stderr: Output,
     pub address: SocketAddr,
+    /// The health port, which serves only `/healthz` and `/readyz`.
+    pub health_address: SocketAddr,
 }
 
 impl Service {
@@ -148,15 +150,20 @@ impl Service {
                     stderr.text()
                 )
             });
-        let address = listening["fields"]["address"]
-            .as_str()
-            .and_then(|address| address.parse().ok())
-            .unwrap_or_else(|| panic!("no address in {listening}"));
+        let parse = |field: &str| -> SocketAddr {
+            listening["fields"][field]
+                .as_str()
+                .and_then(|address| address.parse().ok())
+                .unwrap_or_else(|| panic!("no {field} in {listening}"))
+        };
+        let address = parse("address");
+        let health_address = parse("health_address");
         Self {
             child,
             stdout,
             stderr,
             address,
+            health_address,
         }
     }
 
@@ -200,6 +207,8 @@ pub fn spawn_example(env: &[(&str, &str)]) -> (Child, Output, Output) {
         .env_clear()
         .env("TRUSTIOT__GREETING", "hello from the tests")
         .env("TRUSTIOT__HTTP__LISTEN_ADDR", "127.0.0.1:0")
+        // Not the default 8081: tests run several services at once.
+        .env("TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR", "127.0.0.1:0")
         .env("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", "300ms")
         .env("TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT", "10s")
         .envs(env.iter().copied())

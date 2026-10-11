@@ -69,7 +69,7 @@ struct Platform {
     postgres_port: u16,
     postgres_database: String,
     postgres_sslmode: SslMode,
-    postgres_ca_file: Option<std::path::PathBuf>,
+    postgres_ca_file: std::path::PathBuf,
 }
 
 /// The consumer's roles: the service role processes events, the platform role reads them.

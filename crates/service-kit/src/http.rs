@@ -1,5 +1,5 @@
 //! The HTTP server: request spans and access logs, a handler timeout, panic recovery, and the
-//! health routes.
+//! health routes on the API port. The health port is served separately (crate::service).
 //!
 //! Request logs and spans record the method, the matched route template (never the raw path or
 //! query, which can carry identifiers or tokens), the status, and the duration. Headers and
@@ -32,6 +32,11 @@ pub const MAX_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 pub struct HttpConfig {
     /// The address to listen on. Default `0.0.0.0:8080`.
     pub listen_addr: SocketAddr,
+    /// The address of the health port, which serves only `/healthz` and `/readyz` and answers
+    /// every other path with 404. The kubelet probes this port, so the chart admits connections
+    /// from the node on it alone and never on the API port (crate::health). Default
+    /// `0.0.0.0:8081`.
+    pub health_listen_addr: SocketAddr,
     /// How long a handler may take to produce the response head; streamed bodies are not
     /// limited. A timed-out request gets 504, which the ingress does not retry, so a slow
     /// non-idempotent request is not executed twice. Default 30s.
@@ -43,6 +48,7 @@ impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             listen_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
+            health_listen_addr: SocketAddr::from(([0, 0, 0, 0], 8081)),
             request_timeout: Duration::from_secs(30),
         }
     }
@@ -50,6 +56,14 @@ impl Default for HttpConfig {
 
 impl HttpConfig {
     pub(crate) fn validate(&self) -> Result<(), Invalid> {
+        // Port 0 picks a free port for each listener, so only a fixed port can collide.
+        let health_port = self.health_listen_addr.port();
+        if health_port != 0 && health_port == self.listen_addr.port() {
+            return Err(Invalid::new(
+                "http.health_listen_addr",
+                "must use another port than http.listen_addr",
+            ));
+        }
         if self.request_timeout.is_zero() {
             return Err(Invalid::new(
                 "http.request_timeout",
@@ -270,6 +284,26 @@ mod tests {
             assert_eq!(actual, status);
             assert!(body.is_empty());
         }
+    }
+
+    #[test]
+    fn the_health_port_must_differ_from_the_api_port() {
+        let config = HttpConfig {
+            health_listen_addr: SocketAddr::from(([127, 0, 0, 1], 8080)),
+            ..HttpConfig::default()
+        };
+        assert_eq!(
+            config.validate().expect_err("same port").key,
+            "http.health_listen_addr"
+        );
+        // Port 0 means a free port for each listener.
+        let ephemeral = HttpConfig {
+            listen_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
+            health_listen_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
+            ..HttpConfig::default()
+        };
+        assert!(ephemeral.validate().is_ok());
+        assert!(HttpConfig::default().validate().is_ok());
     }
 
     #[test]

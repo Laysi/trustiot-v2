@@ -615,6 +615,8 @@ impl Example {
                 TEST_PASSWORD,
             )
             .env("TRUSTIOT__HTTP__LISTEN_ADDR", "127.0.0.1:0")
+            // Not the default 8081: tests run several examples at once.
+            .env("TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR", "127.0.0.1:0")
             .env("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", "100ms")
             .env("TRUSTIOT__CONSUMER__POLL_INTERVAL", "100ms")
             .envs(env.iter().copied())

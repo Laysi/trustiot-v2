@@ -16,9 +16,9 @@
 //! | [`Rule::SessionSetting`] | SQL that sets or resets `trustiot.*` settings or the role, calls `set_config` (except with the literal name of a setting in [`SET_CONFIG_SETTINGS`], or of the file's entry in [`SET_CONFIG_ALLOWED`]), or names `pg_settings`, outside [`SESSION_SETTING_ALLOWED`]: only service-kit's tenant module sets the tenant. The check reads string literals, the joined text of each `concat!`, the files `include_str!`/`include_bytes!` name, and the static text a file passes to query builders, joined in source order; a query builder fragment that names `trustiot` is reported too |
 //! | [`Rule::UncheckedInclude`] | `include_str!`/`include_bytes!` of a file the check cannot read (a path that is not a literal, or a missing file), whose SQL it therefore cannot check |
 //!
-//! Test code (files under a `tests` directory and `#[cfg(test)]` modules) may also pass SQL
-//! through a plain variable to the first and third rules, such as a loop over a table of
-//! literals; every other rule applies to it unchanged.
+//! Test code (files under a `tests` directory, `#[cfg(test)]` modules, and the dev-only crates
+//! in [`TEST_SUPPORT`]) may also pass SQL through a plain variable to the first and third rules,
+//! such as a loop over a table of literals; every other rule applies to it unchanged.
 //!
 //! The check reads Rust syntax, not types, so it works on names: a `query` function must be
 //! called as `sqlx::query` or imported from `sqlx`, and a query builder must be a local variable,
@@ -37,6 +37,20 @@ use syn::{Expr, Lit, LitStr, Macro, Pat, Token, UseTree};
 
 /// Files allowed to contain SQL that sets the tenant: the kit's tenant transactions.
 pub const SESSION_SETTING_ALLOWED: &[&str] = &["crates/service-kit/src/tenant.rs"];
+
+/// Crates, relative to the workspace root, whose sources are test code: crates used only as
+/// `[dev-dependencies]` (`tools/repo-check` enforces it), so their SQL never runs in a service.
+/// `crates/testkit` runs the probes of the cross-tenant suite, whose SQL its macros build at
+/// compile time from each declared table name, and passes them on as variables.
+pub const TEST_SUPPORT: &[&str] = &["crates/testkit"];
+
+/// Whether `path` (relative to the workspace root) is test code: under a `tests` directory or
+/// in a [`TEST_SUPPORT`] crate.
+fn is_test_path(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == "tests")
+        || TEST_SUPPORT.iter().any(|dir| path.starts_with(dir))
+}
 
 /// Directories, relative to the workspace root, that the workspace check skips: this tool,
 /// whose source and fixtures name every pattern it rejects. Its fixtures are checked by its own
@@ -337,9 +351,7 @@ pub fn check_source_allowing(
         path,
         dir,
         uses_sqlx: source.contains("sqlx"),
-        test_file: path
-            .components()
-            .any(|component| component.as_os_str() == "tests"),
+        test_file: is_test_path(path),
         test_modules: 0,
         allow_session_setting,
         settings: settings
@@ -526,7 +538,7 @@ struct Checker<'a> {
     builder_types: Vec<String>,
     /// Names known to hold a query builder, one set per function being visited.
     builders: Vec<Vec<String>>,
-    /// The file is in a `tests` directory.
+    /// The file is test code: in a `tests` directory or a [`TEST_SUPPORT`] crate.
     test_file: bool,
     /// How many `#[cfg(test)]` modules enclose the code being visited.
     test_modules: usize,
@@ -1603,6 +1615,34 @@ mod tests {
             .map(|finding| finding.rule)
             .collect::<Vec<_>>();
         assert_eq!(in_tests, [Rule::DynamicSql], "only sql.trim()");
+    }
+
+    #[test]
+    fn test_support_crates_are_test_code() {
+        let source = r#"
+            async fn probe(pool: &sqlx::PgPool, sql: &'static str) {
+                sqlx::query(sql).execute(pool).await.unwrap();
+                let leaked: &'static str = String::from("SELECT 1").leak();
+                sqlx::query(leaked).execute(pool).await.unwrap();
+            }
+        "#;
+        let rules_at = |path: &str| {
+            check_source(Path::new(path), None, source, false)
+                .expect("valid Rust")
+                .into_iter()
+                .map(|finding| finding.rule)
+                .collect::<Vec<_>>()
+        };
+        // The variable is accepted in a test support crate; leaking a String never is.
+        let listed = [Rule::LeakedString];
+        let elsewhere = [Rule::DynamicSql, Rule::LeakedString, Rule::DynamicSql];
+        assert_eq!(rules_at("crates/testkit/src/isolation/postgres.rs"), listed);
+        assert_eq!(
+            rules_at("crates/testkits/src/lib.rs"),
+            elsewhere,
+            "only the listed crate, not a name that starts the same"
+        );
+        assert_eq!(rules_at("services/assets/src/db.rs"), elsewhere);
     }
 
     #[test]

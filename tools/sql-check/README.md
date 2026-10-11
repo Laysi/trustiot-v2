@@ -21,7 +21,8 @@ RLS 防的是程式漏寫租戶條件，不防 SQL 注入：注入的 SQL 以服
 | `UncheckedInclude` | `include_str!`、`include_bytes!` 引入的檔案讀不到（路徑不是字面值，例如 `concat!(env!("OUT_DIR"), …)`，或檔案不存在），無法檢查其中的 SQL | 以相對於原始檔的字面值路徑引入 repo 裡的檔案 |
 
 - 檢查 workspace 內所有 `.rs` 檔（含測試與 `build.rs`），略過 `target`、`node_modules`、`.` 開頭的目錄，以及本工具自己（`SKIPPED`：原始碼與範例檔本來就含有被擋的寫法）。
-- 測試程式（路徑含 `tests` 目錄的檔案，或 `#[cfg(test)]` 模組）的 `DynamicSql`、`DynamicQueryBuilder` 另外接受單一名稱的變數，例如走訪字面值表格的迴圈變數；sqlx 仍要求 `&'static str`，而 `leak` 與 `AssertSqlSafe` 在測試裡一樣被擋。其他規則對測試程式不放寬。
+- 測試程式（路徑含 `tests` 目錄的檔案、`#[cfg(test)]` 模組，或 `TEST_SUPPORT` 列出的 crate）的 `DynamicSql`、`DynamicQueryBuilder` 另外接受單一名稱的變數，例如走訪字面值表格的迴圈變數；sqlx 仍要求 `&'static str`，而 `leak` 與 `AssertSqlSafe` 在測試裡一樣被擋。其他規則對測試程式不放寬。
+- `TEST_SUPPORT` 目前只有 `crates/testkit`：跨租戶負向測試框架以巨集在編譯期從宣告的表名組出每個探測的 SQL（`concat!` 的字面值），再以變數交給 sqlx，所以整個 crate 算測試程式。它只能是 `[dev-dependencies]`（`tools/repo-check` 檢查），SQL 不會進到服務的執行檔。測試確認清單上的路徑是 crate。
 - `SqlBuiltFromStrings` 不認 `FROM` 與 `COPY` 開頭的文字，因為 Containerfile 也這樣開頭。
 - 例外清單有三個，測試確認清單上的路徑存在：
   - `SESSION_SETTING_ALLOWED`：只有 `crates/service-kit/src/tenant.rs` 可以含 `set_config('trustiot.tenant_id', …)`。

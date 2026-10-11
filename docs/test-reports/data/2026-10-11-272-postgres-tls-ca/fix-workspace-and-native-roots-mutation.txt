@@ -1,0 +1,141 @@
+== clippy workspace
+    Checking service-kit v0.1.0 (/home/ruisi/tv2/agents/272/src/crates/service-kit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.31s
+== clippy service-kit no-default
+    Checking service-kit v0.1.0 (/home/ruisi/tv2/agents/272/src/crates/service-kit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.20s
+== test workspace
+     Running unittests src/lib.rs (/home/ruisi/tv2/agents/272/target/debug/deps/contract-7b57383a5611f30a)
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/client.rs (/home/ruisi/tv2/agents/272/target/debug/deps/client-3c70a1d587d32c7b)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+     Running tests/client_logging.rs (/home/ruisi/tv2/agents/272/target/debug/deps/client_logging-cd4f29c9985370fd)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/error_format.rs (/home/ruisi/tv2/agents/272/target/debug/deps/error_format-90c06ca073729b9c)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/events.rs (/home/ruisi/tv2/agents/272/target/debug/deps/events-0d7a0809f557a4ea)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (/home/ruisi/tv2/agents/272/target/debug/deps/ingest-d250c2b5bdbd9e40)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/clickhouse.rs (/home/ruisi/tv2/agents/272/target/debug/deps/clickhouse-0905121cc18e092b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.62s
+     Running tests/migrations.rs (/home/ruisi/tv2/agents/272/target/debug/deps/migrations-1ef0f4ba1a7ec971)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (/home/ruisi/tv2/agents/272/target/debug/deps/openapi-d6f614b9954d0bd3)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/main.rs (/home/ruisi/tv2/agents/272/target/debug/deps/openapi-84c16ef930ba302b)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/openapi.rs (/home/ruisi/tv2/agents/272/target/debug/deps/openapi-020ebbe19875ed50)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (/home/ruisi/tv2/agents/272/target/debug/deps/outbox-711d5493d8b9d6e9)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/crash.rs (/home/ruisi/tv2/agents/272/target/debug/deps/crash-253d0514016b6bb9)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.49s
+     Running tests/delivery.rs (/home/ruisi/tv2/agents/272/target/debug/deps/delivery-998c2a4846cb59a0)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.20s
+     Running tests/metrics.rs (/home/ruisi/tv2/agents/272/target/debug/deps/metrics-0c54f312ea018c2a)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.56s
+     Running tests/notify.rs (/home/ruisi/tv2/agents/272/target/debug/deps/notify-966945c46eb289c8)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.11s
+     Running tests/producer.rs (/home/ruisi/tv2/agents/272/target/debug/deps/producer-af654d6baf9a59f9)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.55s
+     Running unittests src/lib.rs (/home/ruisi/tv2/agents/272/target/debug/deps/protocol-b56a11c7b27c5dd7)
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/adversarial.rs (/home/ruisi/tv2/agents/272/target/debug/deps/adversarial-e59d5e72b19097db)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/allocation.rs (/home/ruisi/tv2/agents/272/target/debug/deps/allocation-9df529a1b33519de)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/compat.rs (/home/ruisi/tv2/agents/272/target/debug/deps/compat-f9eea0a92818d302)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/dependencies.rs (/home/ruisi/tv2/agents/272/target/debug/deps/dependencies-a5c364efddc7f396)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+     Running tests/fuzz.rs (/home/ruisi/tv2/agents/272/target/debug/deps/fuzz-22e3e4f765356a57)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+     Running tests/fuzz_split.rs (/home/ruisi/tv2/agents/272/target/debug/deps/fuzz_split-73cde5760516155f)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+     Running tests/golden.rs (/home/ruisi/tv2/agents/272/target/debug/deps/golden-aae1fabedc3fa168)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/limits.rs (/home/ruisi/tv2/agents/272/target/debug/deps/limits-22c7dbb34953a2b0)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/readme.rs (/home/ruisi/tv2/agents/272/target/debug/deps/readme-534fb3b17c81e6fd)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/robustness.rs (/home/ruisi/tv2/agents/272/target/debug/deps/robustness-b430d313f3b5aa31)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.06s
+     Running tests/split.rs (/home/ruisi/tv2/agents/272/target/debug/deps/split-b9ad5af01e89fa85)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+     Running tests/validation.rs (/home/ruisi/tv2/agents/272/target/debug/deps/validation-dc100de36ffabca4)
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running unittests src/lib.rs (/home/ruisi/tv2/agents/272/target/debug/deps/repo_check-bcdd8915540fedcd)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs (/home/ruisi/tv2/agents/272/target/debug/deps/repository-4bf5f5e43d5bc66f)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running unittests src/lib.rs (/home/ruisi/tv2/agents/272/target/debug/deps/service_kit-5007833173c344ef)
+test result: ok. 75 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+     Running tests/chart_contract.rs (/home/ruisi/tv2/agents/272/target/debug/deps/chart_contract-a384896b47d14545)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/container.rs (/home/ruisi/tv2/agents/272/target/debug/deps/container-69d025e8d2568bc4)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.39s
+     Running tests/dependency_isolation.rs (/home/ruisi/tv2/agents/272/target/debug/deps/dependency_isolation-a99d68f9b643c1bc)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+     Running tests/errors.rs (/home/ruisi/tv2/agents/272/target/debug/deps/errors-a9af121093095631)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+     Running tests/identity.rs (/home/ruisi/tv2/agents/272/target/debug/deps/identity-b505ea9fbd0bb20f)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+     Running tests/identity_adversarial.rs (/home/ruisi/tv2/agents/272/target/debug/deps/identity_adversarial-15827ea852f488c9)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.65s
+     Running tests/job_lock.rs (/home/ruisi/tv2/agents/272/target/debug/deps/job_lock-9de8839a579a9415)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.28s
+     Running tests/lifecycle.rs (/home/ruisi/tv2/agents/272/target/debug/deps/lifecycle-2bd8faafac30d8ba)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.60s
+     Running tests/logging.rs (/home/ruisi/tv2/agents/272/target/debug/deps/logging-d3e397be67caf210)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+     Running tests/otlp.rs (/home/ruisi/tv2/agents/272/target/debug/deps/otlp-c19276558f1c93e2)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+     Running tests/postgres_trust.rs (/home/ruisi/tv2/agents/272/target/debug/deps/postgres_trust-d04413eb277cf5b3)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.30s
+     Running tests/tenant_db.rs (/home/ruisi/tv2/agents/272/target/debug/deps/tenant_db-d9e4ac5be659017e)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.30s
+     Running unittests src/lib.rs (/home/ruisi/tv2/agents/272/target/debug/deps/sql_check-1bc345e149b707e5)
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/check.rs (/home/ruisi/tv2/agents/272/target/debug/deps/check-600082b3a3b97008)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+     Running unittests src/lib.rs (/home/ruisi/tv2/agents/272/target/debug/deps/webpki_roots-32d6e46fad581407)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== test service-kit no-default
+test result: ok. 48 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.66s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.66s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.59s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.32s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== cargo deny
+          └── opentelemetry-otlp v0.33.1 (*)
+    ├ tower-http v0.7.1
+      └── service-kit v0.1.0
+          └── outbox v0.1.0
+
+advisories ok, bans ok, licenses ok, sources ok
+== mutation: sqlx with native roots
+thread 'the_lock_file_gives_sqlx_no_trust_anchor_but_the_configured_ca' (157047) panicked at crates/service-kit/tests/postgres_trust.rs:101:9:
+sqlx-core is built with rustls-native-certs, which trusts more than the configured CA
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.01s
+
