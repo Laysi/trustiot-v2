@@ -7,7 +7,7 @@
 - 有自己的 schema、角色與 RLS，session 存在伺服器端。
 - 有 ext_authz 端點與內部身分簽發。
 - **沒有登入**：服務本身無法建立 session，資料庫角色也沒有寫入權限；MS0 只有測試工具建立 session（見[測試工具怎麼建立 session](#測試工具怎麼建立-session)），不做假登入。登入、登出與 session 寫入在 Laysi/trustiot-v2#103，租戶 API 在 Laysi/trustiot-v2#65。
-- 沒有對外的 HTTP API（`tools/openapi` 登記為 `SERVICES_WITHOUT_API`），也還沒有映像：chart 的 `services.identity.enabled` 維持 `false`，映像與發版流程在 Laysi/trustiot-v2#68。
+- 沒有對外的 HTTP API（`tools/openapi` 登記為 `SERVICES_WITHOUT_API`）。映像見下方[映像](#映像)；chart 的 `services.identity.enabled` 仍維持 `false`，等 nightly 有它的資料庫後由 Laysi/trustiot-v2#65、Laysi/trustiot-v2#77 啟用。
 
 ## 與入口的約定（ext_authz）
 
@@ -119,6 +119,16 @@ openssl pkey -in signing-key.pem -pubout -outform DER | tail -c 32 | basenc --ba
 | `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 每個副本的連線數上限，3–100（至少放得下常駐的 3 條），預設 10 |
 
 啟動後由保溫工作在背景開連線；readiness（健康埠與 API 埠的 `/readyz`）在常駐的 3 條連線開好之後才通過（見[連線池](#連線池)），資料庫連不上時 ext_authz 回 503、readiness 回 503。健康埠（預設 8081）只有 `/healthz` 與 `/readyz`，ext_authz 端點只在 API 埠（8080）。設定、金鑰或路由不能用時以 exit code 1 結束，不開始服務。
+
+## 映像
+
+`deploy/images/identity/image.toml` 宣告這個服務的映像（2026-10-11，Laysi/trustiot-v2#308）：release.yml 把 `identity` 交叉編譯成 `aarch64-unknown-linux-musl` 的靜態執行檔，放進共用的 `deploy/images/rust-binary.Containerfile`（distroless static、UID 65532、`ENTRYPOINT` 是 `/usr/local/bin/identity`），發佈為 `ghcr.io/laysi/trustiot-v2/identity:<版本>`，只有 linux/arm64（[deploy/images/README.md](../../deploy/images/README.md)）。
+
+- 映像裡沒有 shell、私鑰與設定：私鑰由 chart 掛載，其餘都是環境變數（見上方[設定](#設定)）。
+- 啟動不需要資料庫：設定、金鑰與路由可用時就開始服務，健康埠的 `/healthz` 回 200，`/readyz` 等連線池開好才回 200。2026-10-11 在 arm64（lab Mac M1 的 podman）以發佈流程建出的映像、當場產生的金鑰與連不到的資料庫驗證過：`/healthz` 200、`/readyz` 503、沒有 cookie 的 ext_authz 檢查 401（[測試報告](../../docs/test-reports/2026-10-11-308-identity-image.md)）。
+- nightly 的 k3d 以 `scripts/nightly/service-image.ts` 的 `loadServiceImage(platform, "identity")` 建出同樣的映像並匯入節點；目前沒有呼叫端，啟用 `services.identity` 時（Laysi/trustiot-v2#65、Laysi/trustiot-v2#77）接上。
+
+本機試建：`bun scripts/release/plan.ts --tag v0.0.0-rc.1 --dry-run --output plan.json`，再 `bun scripts/release/build.ts --plan plan.json --out <目錄>`（需要 podman、skopeo 與 `proto install` 裝好的工具，見 [scripts/README.md](../../scripts/README.md)）。
 
 ## 測試工具怎麼建立 session
 

@@ -195,6 +195,7 @@ gh api repos/Laysi/trustiot-v2/actions/permissions/fork-pr-workflows-private-rep
 ### 交叉編譯與可重現建置
 
 - `cargo auditable zigbuild --locked --release --target aarch64-unknown-linux-musl`：Zig 當 C 編譯器與連結器（cargo-zigbuild），cargo-auditable 把相依清單嵌進執行檔，syft 才列得出 crate。zig、cargo-zigbuild、cargo-auditable、syft、cosign 都鎖在 `.prototools`，Zig 以官方 minisign 簽章驗證，其餘以 release 附的 checksum 驗證。Rust 在 CI 由 runner 的 rustup 依 `rust-toolchain.toml` 安裝，再加上 musl target。
+- 打包前檢查每個執行檔是 aarch64 的 ELF，而且沒有 program interpreter（PT_INTERP）：動態連結的執行檔在 distroless static 裡找不到載入器與 libc，容器會啟動失敗，所以在建置時就停下（2026-10-11 加入，Laysi/trustiot-v2#308）。Cargo 指令與這兩項檢查在 `scripts/release/lib.ts`，nightly 的服務映像共用（見「nightly.yml」的「服務映像」）。
 - 映像建置不執行任何 arm64 程式，x86 的代管 runner 不需要模擬器。
 - 時間戳一律取 tag 所指 commit 的時間（`SOURCE_DATE_EPOCH`、`podman build --timestamp`、`helm package`），chart 推送時的建立時間也固定，執行檔裡的原始碼路徑換成固定的前綴（`--remap-path-prefix`），所以同一個 commit 以同一組工具重建，會得到相同的映像與 chart digest（2026-10-10 本機驗證，見 [測試報告](../test-reports/2026-10-10-68-release-workflow.md)）。runner 上的 podman 版本不由本 repo 釘選，不同版本打包出的映像層可能不同，所以不保證本機與 CI 建出的 digest 相同。
 
@@ -305,6 +306,18 @@ publish job 在 `release` environment 執行，原本的設計是在 environment
 檢查 3 到 9 全部從 release 自己的 manifest 推導（`scripts/nightly/manifests.ts`），不寫死元件；之後加入的元件（Postgres、ClickHouse、broker 等）會自動被納入 workload 就緒與探針檢查。元件需要的前置（例如 operator）由加入該元件的 issue 在 `scripts/nightly/platform.ts` 補上；各里程碑完成條件的測試也由各自的 issue 加進來。
 
 在 TrustIoT 服務映像出來以前，`smoke.yaml` 的替身服務（`traefik/whoami`，以 digest 釘選）讓通用服務樣板在真叢集上被驗證。
+
+### 服務映像（已備好，尚未啟用）
+
+2026-10-11（Laysi/trustiot-v2#308）：`scripts/nightly/service-image.ts` 的 `loadServiceImage(platform, "<名稱>")` 把 `deploy/images/<名稱>/image.toml` 宣告的 Rust 服務建成映像並匯入叢集：與 release.yml 相同的 Cargo 指令（`scripts/release/lib.ts` 的 `rustCrossCompileCommand`：`cargo auditable zigbuild --locked --release --target aarch64-unknown-linux-musl`）、同樣檢查執行檔是靜態的 aarch64 ELF、同一份 `rust-binary.Containerfile`，經 `containerBuildArgs` 以 docker 建成 `localhost/trustiot-e2e/<名稱>:nightly`，再以上面的 `importImageIntoCluster` 匯入並逐節點確認。所以 nightly 部署的就是發佈會建出的東西（2026-10-11 本機實測兩條路建出的執行檔 SHA-256 相同，[測試報告](../test-reports/2026-10-11-308-identity-image.md)）。
+
+`run.ts` 還沒有呼叫它，nightly.yml 也還不建置 Rust：啟用 `services.identity` 要先有它的資料庫（Laysi/trustiot-v2#58、Laysi/trustiot-v2#60），由 Laysi/trustiot-v2#65、Laysi/trustiot-v2#77 接上。接上時 smoke job 的 setup-proto 要多裝 `rust zig cargo-zigbuild cargo-auditable`。
+
+成本估計（啟用前要決定怎麼省）：2026-10-11 在本機（x86_64、6 個建置 job、負載 3–5）從空的 target 目錄建 identity 與 release-selftest（約 214 個 crate）加上打包與 SBOM 共 196 秒，`target/` 497 MB。runner 是 2 核的 arm64，編譯以 CPU 為主，冷建置估 9–13 分鐘，加上裝 Rust 與三個工具、下載 crate、docker build 與匯入約 1–2 分鐘，每晚多 **10–15 個計費分鐘**（每月約 300–450 分鐘），smoke job 的 `timeout-minutes: 45` 也要重新評估。可以省的做法：
+
+- Rust 編譯快取（`Swatinem/rust-cache`，key 含 target triple 與 release profile，只在排程或 main 上儲存，與 ci.yml 一樣 PR 只讀取）：命中時只重編改過的 crate 與連結，估 2–4 分鐘（含還原約 0.3–0.5 GB 的快取）；佔用 repo 的 10 GB 快取額度。
+- 只在 `services/`、`crates/`、`Cargo.lock` 或 `deploy/images/` 自上次通過以來有變動時才重建；沒變動時沿用上一次的映像（例如存成 artifact）。
+- 不建議改拉 GHCR 上最新的發佈版映像：測到的是已發佈的版本而不是 main 的程式碼，而且 smoke job 要多一個讀取套件的權限。
 
 ### 本機執行
 
