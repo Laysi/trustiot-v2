@@ -1,7 +1,7 @@
 // The dev environment's commands: up, status, seed, env, down and purge. Each one takes the
 // process environment and returns when it is done; `scripts/dev.ts` is the entry point.
 import { createServer } from "node:net";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { registerCleanup } from "./cleanup.ts";
@@ -29,6 +29,7 @@ import {
   dotenv,
   generateCredentials,
   mosquittoPasswordEntry,
+  serviceRoleSql,
   sqlLiteral,
   sqlIdentifier,
 } from "./secrets.ts";
@@ -41,8 +42,11 @@ import {
   SERVICES,
   type ServiceDef,
 } from "./services.ts";
+import { generateDevCertificates } from "./tls.ts";
 import {
   acquireLock,
+  caCertificatePath,
+  ensurePrivateDir,
   loadState,
   removeState,
   resolveInstance,
@@ -50,6 +54,7 @@ import {
   stateDir,
   stateRoot,
   withPrivateFile,
+  writePrivateFile,
   type State,
 } from "./state.ts";
 import {
@@ -61,7 +66,8 @@ import {
   mosquittoAcl,
   namesFor,
   POSTGRES_HBA,
-  POSTGRES_HBA_PATH,
+  postgresCommand,
+  SERVICE_CA_DIR,
   resolvePorts,
   runArgs,
   SERVICE_PORT,
@@ -113,6 +119,15 @@ async function ensureVolume(ctx: Context, name: string): Promise<string> {
     await podmanOk(["volume", "create", "--label", ctx.names.label, volume]);
   }
   return volume;
+}
+
+/**
+ * Removes a volume if there is one. An environment started before the Postgres TLS change has
+ * no `postgres-ca` volume, and `down` must still work on it.
+ */
+async function removeVolumeIfPresent(volume: string): Promise<void> {
+  const exists = await podman(["volume", "exists", volume]);
+  if (exists.code === 0) await podmanOk(["volume", "rm", "--force", volume]);
 }
 
 async function freshVolume(ctx: Context, name: string): Promise<string> {
@@ -202,15 +217,26 @@ export async function up(ctx: Context = context()): Promise<void> {
 
     // New credentials on every start. They live only in the state directory (mode 0600) and in
     // the containers; down deletes the file, and Postgres is told the new password below.
-    const credentials = generateCredentials();
+    const credentials = generateCredentials(
+      Object.fromEntries(
+        SERVICES.flatMap((service) => (service.database ? [[service.name, service.database.role]] : [])),
+      ),
+    );
     const state: State = {
-      version: 1,
+      version: 2,
       instance: ctx.instance,
       startedAt: new Date().toISOString(),
       ports: { ...infraPorts, services: servicePorts },
       credentials,
     };
     saveState(ctx.dir, state);
+
+    // A new CA and server certificate for this run. Only the CA certificate (public) is kept in
+    // the state directory; the server key goes straight into the Postgres config volume below,
+    // and the CA key was never written anywhere.
+    const certificates = generateDevCertificates(ctx.instance);
+    ensurePrivateDir(join(ctx.dir, "tls"));
+    writePrivateFile(caCertificatePath(ctx.dir), certificates.caCertificate);
 
     await ensureNetwork(ctx);
     const pgData = await ensureVolume(ctx, "postgres-data");
@@ -219,9 +245,17 @@ export async function up(ctx: Context = context()): Promise<void> {
     const mqConfig = await freshVolume(ctx, "mosquitto-config");
 
     const pgConfig = await freshVolume(ctx, "postgres-config");
+    // The services' copy of the CA: the volume holds nothing else, so a service never sees the
+    // server key.
+    const pgCa = await freshVolume(ctx, "postgres-ca");
 
     log("starting postgres, clickhouse and mosquitto");
     await writeVolumeFile(pgConfig, "pg_hba.conf", POSTGRES_HBA, "0644", "999:999");
+    await writeVolumeFile(pgConfig, "server.crt", certificates.serverCertificate, "0644", "999:999");
+    // Postgres refuses a key file that others can read, and wants the postgres user as owner.
+    await writeVolumeFile(pgConfig, "server.key", certificates.serverKey, "0600", "999:999");
+    await writeVolumeFile(pgConfig, "ca.crt", certificates.caCertificate, "0644", "999:999");
+    await writeVolumeFile(pgCa, "ca.crt", certificates.caCertificate, "0644", "0:0");
     await writeVolumeFile(mqConfig, "mosquitto.conf", MOSQUITTO_CONFIG, "0644", "1883:1883");
     await writeVolumeFile(mqConfig, "acl", mosquittoAcl(credentials.mqtt.user), "0644", "1883:1883");
     await writeVolumeFile(
@@ -249,7 +283,7 @@ export async function up(ctx: Context = context()): Promise<void> {
             publish: [[infraPorts.postgres, CONTAINER_PORTS.postgres]],
             envFile,
             volumes: [`${pgData}:/var/lib/postgresql`, `${pgConfig}:/etc/trustiot:ro`],
-            command: ["postgres", "-c", `hba_file=${POSTGRES_HBA_PATH}`],
+            command: postgresCommand(),
           }),
         ),
     );
@@ -289,7 +323,7 @@ export async function up(ctx: Context = context()): Promise<void> {
 
     const infraResults = await waitForChecks(
       () => [
-        ...postgresChecks(state),
+        ...postgresChecks(state, certificates.caCertificate),
         ...clickhouseChecks(state),
         ...mosquittoChecks(state),
       ],
@@ -353,10 +387,20 @@ async function preparePostgres(ctx: Context, state: State): Promise<void> {
     {
       stdin:
         `ALTER ROLE ${sqlIdentifier(user)} WITH PASSWORD ${sqlLiteral(password)};\n` +
-        "CREATE EXTENSION IF NOT EXISTS age;\n",
+        "CREATE EXTENSION IF NOT EXISTS age;\n" +
+        // The per-database setup that service-kit's session check requires (no TEMPORARY for
+        // PUBLIC), then one plain login role per service that has a database.
+        readFileSync(join(ctx.repoRoot, DATABASE_SETUP), "utf8") +
+        SERVICES.flatMap((service) => {
+          const login = state.credentials.services[service.name];
+          return login ? [serviceRoleSql(login.user, login.password)] : [];
+        }).join(""),
     },
   );
 }
+
+/** service-kit's per-database template, which its own tests run unchanged. */
+const DATABASE_SETUP = "crates/service-kit/sql/database.sql";
 
 function assertAllOk(ctx: Context, results: CheckResult[]): void {
   printResults(results);
@@ -444,14 +488,26 @@ async function startService(ctx: Context, state: State, service: ServiceDef): Pr
     forget();
   }
   log(`starting ${service.name}`);
-  await podmanOk(
-    runArgs(ctx.instance, {
-      component: service.name,
-      image,
-      memory: "256m",
-      publish: [[state.ports.services[service.name]!, SERVICE_PORT]],
-      env: { ...platformEnv(state.credentials.postgres.database), ...service.env },
-    }),
+  const login = state.credentials.services[service.name];
+  const spec = {
+    component: service.name,
+    image,
+    memory: "256m",
+    publish: [[state.ports.services[service.name]!, SERVICE_PORT]] as [number, number][],
+    env: { ...platformEnv(state.credentials.postgres.database), ...service.env },
+    // The CA that signed the Postgres certificate, where the chart mounts it.
+    volumes: [`${ctx.names.volume("postgres-ca")}:${SERVICE_CA_DIR}:ro`],
+  };
+  if (!login) {
+    await podmanOk(runArgs(ctx.instance, spec));
+    return;
+  }
+  // The role's password goes in an env file, never on the command line.
+  await withPrivateFile(
+    ctx.dir,
+    `${service.name}.env`,
+    dotenv({ TRUSTIOT__DATABASE__USERNAME: login.user, TRUSTIOT__DATABASE__PASSWORD: login.password }),
+    (envFile) => podmanOk(runArgs(ctx.instance, { ...spec, envFile })),
   );
 }
 
@@ -490,7 +546,7 @@ export async function status(ctx: Context = context()): Promise<boolean> {
   const results = [
     ...containerResults,
     ...(await runChecks([
-      ...postgresChecks(state),
+      ...postgresChecks(state, readCaCertificate(ctx)),
       ...clickhouseChecks(state),
       ...mosquittoChecks(state),
       ...serviceChecks(state, SERVICES),
@@ -502,16 +558,43 @@ export async function status(ctx: Context = context()): Promise<boolean> {
   return ok;
 }
 
-/** KEY=value lines (including the passwords) for a shell or a dotenv file. */
-export function envLines(state: State): string {
+/** The variable that carries a service's database login, for example `..._EXAMPLE_SERVICE_DATABASE_USERNAME`. */
+export function serviceLoginVariable(service: string, field: "USERNAME" | "PASSWORD"): string {
+  return `TRUSTIOT_DEV_${service.toUpperCase().replaceAll("-", "_")}_DATABASE_${field}`;
+}
+
+/**
+ * KEY=value lines (including the passwords) for a shell or a dotenv file. `caFile` is the path
+ * of the dev CA certificate.
+ *
+ * Postgres needs TLS: the `PG*` variables make `psql` and every other libpq client verify the
+ * server (`verify-full`, the dev CA, the loopback address that the certificate names). A service
+ * that runs on the host reads the `TRUSTIOT_POSTGRES_*` platform settings (chart names) and its
+ * own role from `TRUSTIOT_DEV_<SERVICE>_DATABASE_{USERNAME,PASSWORD}`, which it takes as
+ * `TRUSTIOT__DATABASE__{USERNAME,PASSWORD}`.
+ */
+export function envLines(state: State, caFile: string): string {
   const { postgres, clickhouse: ch, mqtt } = state.credentials;
   const { ports } = state;
+  const serviceLogins: Record<string, string> = {};
+  for (const [service, login] of Object.entries(state.credentials.services)) {
+    serviceLogins[serviceLoginVariable(service, "USERNAME")] = login.user;
+    serviceLogins[serviceLoginVariable(service, "PASSWORD")] = login.password;
+  }
   return dotenv({
     PGHOST: BIND_ADDRESS,
     PGPORT: ports.postgres,
     PGUSER: postgres.user,
     PGPASSWORD: postgres.password,
     PGDATABASE: postgres.database,
+    PGSSLMODE: "verify-full",
+    PGSSLROOTCERT: caFile,
+    TRUSTIOT_POSTGRES_HOST: BIND_ADDRESS,
+    TRUSTIOT_POSTGRES_PORT: ports.postgres,
+    TRUSTIOT_POSTGRES_DATABASE: postgres.database,
+    TRUSTIOT_POSTGRES_SSLMODE: "verify-full",
+    TRUSTIOT_POSTGRES_CA_FILE: caFile,
+    ...serviceLogins,
     TRUSTIOT_DEV_POSTGRES_URL: `postgres://${postgres.user}:${postgres.password}@${BIND_ADDRESS}:${ports.postgres}/${postgres.database}`,
     CLICKHOUSE_URL: `http://${BIND_ADDRESS}:${ports.clickhouse}`,
     CLICKHOUSE_USER: ch.user,
@@ -525,7 +608,21 @@ export function envLines(state: State): string {
 }
 
 export function printEnv(ctx: Context = context()): void {
-  process.stdout.write(envLines(requireState(ctx)));
+  const state = requireState(ctx);
+  process.stdout.write(envLines(state, readCaPath(ctx)));
+}
+
+/** The CA certificate's path; fails when the file is gone, so `env` never prints a dead path. */
+function readCaPath(ctx: Context): string {
+  const path = caCertificatePath(ctx.dir);
+  if (!existsSync(path)) {
+    throw new Error(`${path} is missing; run the down command and start again with up`);
+  }
+  return path;
+}
+
+function readCaCertificate(ctx: Context): string {
+  return readFileSync(readCaPath(ctx), "utf8");
 }
 
 // --- seed ----------------------------------------------------------------------------------
@@ -643,7 +740,12 @@ export async function down(ctx: Context = context()): Promise<void> {
     const removed = await removeContainers(ctx);
     const networks = await networksWithLabel(ctx.names.label);
     if (networks.length > 0) await podmanOk(["network", "rm", "--force", ...networks]);
-    // The credentials were generated for the containers that are gone.
+    // The credentials and the certificates were generated for the containers that are gone. The
+    // server's private key must not outlive them, so the volumes it was written to go too; `up`
+    // makes new ones.
+    for (const name of ["postgres-config", "postgres-ca"]) {
+      await removeVolumeIfPresent(ctx.names.volume(name));
+    }
     removeState(ctx.dir);
     log(`removed ${removed.length} container(s); data volumes kept (use purge to delete them)`);
   } finally {

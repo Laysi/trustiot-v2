@@ -128,7 +128,7 @@ describe("interrupts", () => {
 
 describe("state file", () => {
   const state = (): State => ({
-    version: 1,
+    version: 2,
     instance: "t",
     startedAt: "2026-10-10T00:00:00.000Z",
     ports: { postgres: 1, clickhouse: 2, mqtt: 3, services: {} },
@@ -148,8 +148,16 @@ describe("state file", () => {
     const dir = join(scratch, "t");
     expect(loadState(dir)).toBeUndefined();
     mkdirSync(dir);
-    writeFileSync(join(dir, "state.json"), '{"version":2}');
+    writeFileSync(join(dir, "state.json"), '{"version":3}');
     expect(() => loadState(dir)).toThrow(/unknown version/);
+  });
+
+  test("a state of the previous version points to down, which keeps the data, not to purge", () => {
+    const dir = join(scratch, "t");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "state.json"), '{"version":1}');
+    expect(() => loadState(dir)).toThrow(/older version.*run the down command \(data volumes are kept\)/);
+    expect(() => loadState(dir)).not.toThrow(/purge/);
   });
 });
 
