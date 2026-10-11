@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import type { Subprocess } from "bun";
+import { freePort } from "./ports.ts";
 import { ConnectionError, type RawEndpoint, type RawRequest, sendRaw } from "./raw-client.ts";
 import { withTunnelRecovery } from "./tunnel-recovery.ts";
 
@@ -18,13 +19,6 @@ afterEach(() => {
   for (const proc of processes.splice(0)) proc.kill();
   for (const server of servers.splice(0)) server.stop(true);
 });
-
-async function freePort(): Promise<number> {
-  const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
-  const port = server.port;
-  server.stop(true);
-  return port;
-}
 
 async function waitListening(port: number): Promise<void> {
   const deadline = Date.now() + 10_000;
