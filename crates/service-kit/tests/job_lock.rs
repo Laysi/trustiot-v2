@@ -1,9 +1,11 @@
 //! Job locks against a real Postgres. Uses `TEST_DATABASE_URL` when set; otherwise starts a
 //! throwaway Postgres container with podman or docker; skipped without either unless `CI` is
-//! set. Each "replica" is its own connection pool, as separate pods would have.
+//! set. Each "replica" is its own connection pool, as separate pods would have. The partition
+//! tests put a TCP proxy between a replica and Postgres and turn it into a black hole.
 
 mod support;
 
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -11,8 +13,12 @@ use std::time::{Duration, Instant};
 use service_kit::job_lock::{JobLock, JobLockError};
 use service_kit::shutdown::Shutdown;
 use sqlx::PgPool;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use support::{Container, container_runtime, runtime_output, unavailable, unique_name};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::task::JoinSet;
 
 /// Postgres for the tests; the version the platform runs is decided with the database
 /// deployment, advisory locks behave the same in every supported release.
@@ -85,6 +91,14 @@ async fn replica(url: &str) -> PgPool {
         .connect(url)
         .await
         .expect("connect a replica's pool")
+}
+
+/// A replica's pool that connects through `proxy`.
+async fn replica_behind(proxy: &Proxy, pool: PgPoolOptions) -> PgPool {
+    pool.max_connections(4)
+        .connect_with(proxy.options.clone())
+        .await
+        .expect("connect a replica's pool through the proxy")
 }
 
 /// The backend holding the advisory lock `key`, if any.
@@ -352,5 +366,274 @@ async fn settle(pool: &PgPool) {
             "connections did not return to the pool"
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// Heartbeat and lock timeout of the partition tests: short, so a run takes seconds.
+const PARTITION_HEARTBEAT: Duration = Duration::from_millis(200);
+const PARTITION_TIMEOUT: Duration = Duration::from_secs(1);
+/// Allowance on top of the lock timeout for timer and scheduling delay on a loaded machine.
+const SCHEDULING_SLACK: Duration = Duration::from_millis(150);
+
+/// A TCP proxy to Postgres that can turn into a black hole: it then drops every byte in both
+/// directions and keeps both connections open, never sending a FIN or a reset. That is what a
+/// network partition looks like to both ends, which notice only once TCP gives up (on Linux,
+/// after about 15 minutes of retransmissions).
+struct Proxy {
+    /// How to connect to the database through this proxy.
+    options: PgConnectOptions,
+    blackhole: Arc<AtomicBool>,
+    accept: tokio::task::JoinHandle<()>,
+}
+
+impl Proxy {
+    async fn start(database_url: &str) -> Self {
+        let direct = PgConnectOptions::from_str(database_url).expect("parse the database URL");
+        let target = tokio::net::lookup_host((direct.get_host(), direct.get_port()))
+            .await
+            .expect("resolve the database host")
+            .next()
+            .expect("the database host has an address");
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind the proxy");
+        let address = listener.local_addr().expect("the proxy's address");
+        let blackhole = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&blackhole);
+        let accept = tokio::spawn(async move {
+            // Dropped, and so aborted, together with the accept task.
+            let mut connections = JoinSet::new();
+            while let Ok((client, _)) = listener.accept().await {
+                let Ok(server) = TcpStream::connect(target).await else {
+                    continue;
+                };
+                let (client_read, client_write) = client.into_split();
+                let (server_read, server_write) = server.into_split();
+                connections.spawn(forward(client_read, server_write, Arc::clone(&flag)));
+                connections.spawn(forward(server_read, client_write, Arc::clone(&flag)));
+            }
+        });
+        Self {
+            options: direct.host(&address.ip().to_string()).port(address.port()),
+            blackhole,
+            accept,
+        }
+    }
+
+    /// From now on, drops all traffic in both directions without closing anything.
+    fn partition(&self) {
+        self.blackhole.store(true, Ordering::SeqCst);
+    }
+}
+
+impl Drop for Proxy {
+    fn drop(&mut self) {
+        self.accept.abort();
+    }
+}
+
+/// Copies one direction of a proxied connection; in black-hole mode it reads and drops.
+async fn forward(mut from: OwnedReadHalf, mut to: OwnedWriteHalf, blackhole: Arc<AtomicBool>) {
+    let mut buffer = vec![0_u8; 8192];
+    loop {
+        match from.read(&mut buffer).await {
+            Ok(read) if read > 0 => {
+                if blackhole.load(Ordering::SeqCst) {
+                    continue;
+                }
+                if to.write_all(&buffer[..read]).await.is_err() {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+    if blackhole.load(Ordering::SeqCst) {
+        // Dropping `to` would send a FIN that tells the other end the connection ended, which a
+        // partition never does. Hold it until the proxy is dropped.
+        std::future::pending::<()>().await;
+        drop(to);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_partitioned_holder_stops_its_job_within_the_lock_timeout() {
+    let Some(database) = database().await else {
+        return;
+    };
+    let job = unique_name("partition");
+    let proxy = Proxy::start(&database.url).await;
+    let admin = replica(&database.url).await;
+    let a = JobLock::new(
+        replica_behind(&proxy, PgPoolOptions::new()).await,
+        "example-service",
+        &job,
+    )
+    .with_heartbeat(PARTITION_HEARTBEAT)
+    .with_timeout(PARTITION_TIMEOUT);
+    let b = JobLock::new(replica(&database.url).await, "example-service", &job);
+    let key = a.key();
+    let ticks = Arc::new(AtomicUsize::new(0));
+    let last_tick = Arc::new(Mutex::new(None::<Instant>));
+    let running = {
+        let ticks = Arc::clone(&ticks);
+        let last_tick = Arc::clone(&last_tick);
+        tokio::spawn(async move {
+            a.run_exclusive(|| async move {
+                loop {
+                    ticks.fetch_add(1, Ordering::SeqCst);
+                    *last_tick.lock().expect("tick lock") = Some(Instant::now());
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+        })
+    };
+    let started = Instant::now();
+    let holder = loop {
+        if let Some(pid) = lock_holder(&admin, key).await {
+            break pid;
+        }
+        assert!(started.elapsed() < Duration::from_secs(5), "never locked");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+
+    // The network between the holder and Postgres starts dropping packets. Then the server ends
+    // the holder's session, as a failover, an idle timeout, TCP keepalive or an admin would: the
+    // server releases the lock, and the holder hears nothing of it.
+    proxy.partition();
+    let partitioned = Instant::now();
+    let terminated: bool = sqlx::query_scalar("SELECT pg_terminate_backend($1)")
+        .bind(holder)
+        .fetch_one(&admin)
+        .await
+        .expect("terminate the holder's session");
+    assert!(terminated);
+    let guard = loop {
+        if let Some(guard) = b.try_acquire().await.expect("try the lock") {
+            break guard;
+        }
+        assert!(
+            partitioned.elapsed() < Duration::from_secs(5),
+            "the server never released the lock"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    let taken_over = Instant::now();
+
+    let wait = PARTITION_TIMEOUT * 5;
+    let Ok(outcome) = tokio::time::timeout(wait, running).await else {
+        panic!(
+            "replica a still ran its job {wait:?} after replica b took the lock ({} ticks so \
+             far): two replicas run the job at once",
+            ticks.load(Ordering::SeqCst)
+        );
+    };
+    let stopped_after = partitioned.elapsed();
+    let outcome = outcome.expect("job task");
+    assert!(
+        matches!(outcome, Err(JobLockError::Lost { .. })),
+        "{outcome:?}"
+    );
+    let last_tick = last_tick.lock().expect("tick lock").expect("the job ran");
+    let overlap = last_tick.saturating_duration_since(taken_over);
+    // Evidence for the test report, shown with `--nocapture`.
+    eprintln!(
+        "lock timeout {PARTITION_TIMEOUT:?}, heartbeat {PARTITION_HEARTBEAT:?}: replica b took \
+         the lock {:?} after the partition; replica a stopped its job {stopped_after:?} after \
+         the partition; both ran the job for {overlap:?}",
+        taken_over - partitioned
+    );
+    // The holder's last confirmed ping went out before the partition, and it stops at the latest
+    // one timeout after that ping, so the overlap and the detection are each within the timeout.
+    assert!(
+        overlap <= PARTITION_TIMEOUT + SCHEDULING_SLACK,
+        "both replicas ran the job for {overlap:?}"
+    );
+    assert!(
+        stopped_after <= PARTITION_TIMEOUT + SCHEDULING_SLACK,
+        "the holder noticed the partition only after {stopped_after:?}"
+    );
+    // The job really stopped.
+    let frozen = ticks.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(ticks.load(Ordering::SeqCst), frozen, "the job kept running");
+    guard.release().await.expect("release");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn taking_and_releasing_the_lock_give_up_within_the_timeout_in_a_partition() {
+    let Some(database) = database().await else {
+        return;
+    };
+    let job = unique_name("partition-queries");
+    let proxy = Proxy::start(&database.url).await;
+    // Each pool keeps the connection it opened on connect. The first two hand it out without
+    // pinging it first, so the lock's own query is what meets the partition; a default pool
+    // pings it before handing it out, and that ping meets the partition.
+    let untested = || PgPoolOptions::new().test_before_acquire(false);
+    let pools = [
+        replica_behind(&proxy, untested()).await,
+        replica_behind(&proxy, untested()).await,
+        replica_behind(&proxy, PgPoolOptions::new()).await,
+    ];
+    for pool in &pools {
+        settle(pool).await;
+    }
+    let [releasing, taking, pinging] = pools
+        .map(|pool| JobLock::new(pool, "example-service", &job).with_timeout(PARTITION_TIMEOUT));
+    let guard = releasing
+        .try_acquire()
+        .await
+        .expect("try the lock")
+        .expect("the lock is free");
+    proxy.partition();
+    let partitioned = Instant::now();
+    let wait = PARTITION_TIMEOUT * 5;
+    let (released, taken, pinged) = tokio::join!(
+        tokio::time::timeout(wait, async {
+            (guard.release().await, partitioned.elapsed())
+        }),
+        tokio::time::timeout(wait, async {
+            (
+                taking.try_acquire().await.map(|guard| guard.is_some()),
+                partitioned.elapsed(),
+            )
+        }),
+        tokio::time::timeout(wait, async {
+            (
+                pinging.try_acquire().await.map(|guard| guard.is_some()),
+                partitioned.elapsed(),
+            )
+        }),
+    );
+    eprintln!(
+        "lock timeout {PARTITION_TIMEOUT:?}, after the partition: release {released:?}; \
+         try_acquire {taken:?}; try_acquire through a pinging pool {pinged:?}"
+    );
+    let (released, released_after) = released.expect("release stops waiting for the database");
+    let (taken, taken_after) = taken.expect("try_acquire stops waiting for the database");
+    let (pinged, pinged_after) =
+        pinged.expect("try_acquire through a pinging pool stops waiting for the database");
+    assert!(
+        matches!(released, Err(JobLockError::Lost { .. })),
+        "{released:?}"
+    );
+    assert!(matches!(taken, Err(JobLockError::Lost { .. })), "{taken:?}");
+    assert!(
+        matches!(
+            pinged,
+            Err(JobLockError::Database {
+                source: sqlx::Error::PoolTimedOut,
+                ..
+            })
+        ),
+        "{pinged:?}"
+    );
+    for elapsed in [released_after, taken_after, pinged_after] {
+        assert!(
+            elapsed <= PARTITION_TIMEOUT + SCHEDULING_SLACK,
+            "{elapsed:?}"
+        );
     }
 }
