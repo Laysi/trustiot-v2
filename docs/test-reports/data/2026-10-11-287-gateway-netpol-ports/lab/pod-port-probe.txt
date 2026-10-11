@@ -1,0 +1,20 @@
+== branch chart, allowedSources [10.42.0.1/32, np-probe 10.42.0.60/32] 2026-10-11T04:11:21.405Z
+policy: [{"from":[{"ipBlock":{"cidr":"10.42.0.1/32"}},{"ipBlock":{"cidr":"10.42.0.60/32"}}],"ports":[{"port":80,"protocol":"TCP"},{"port":15021,"protocol":"TCP"}]}]
+np-probe -> 10.42.0.57:80/ -> HTTP 401 (000 = no connection within 3 s)
+np-probe -> 10.42.0.57:15021/healthz/ready -> HTTP 200 (000 = no connection within 3 s)
+np-probe -> 10.42.0.57:15020/stats/prometheus -> HTTP 000 (000 = no connection within 3 s)
+np-probe -> 10.42.0.57:15090/stats/prometheus -> HTTP 000 (000 = no connection within 3 s)
+np-probe -> 10.42.0.58:80/ -> HTTP 401 (000 = no connection within 3 s)
+np-probe -> 10.42.0.58:15021/healthz/ready -> HTTP 200 (000 = no connection within 3 s)
+np-probe -> 10.42.0.58:15020/stats/prometheus -> HTTP 000 (000 = no connection within 3 s)
+np-probe -> 10.42.0.58:15090/stats/prometheus -> HTTP 000 (000 = no connection within 3 s)
+== main e8f180b policy shape (rule without ports), same sources 2026-10-11T04:12:00.794Z
+policy: [{"from":[{"ipBlock":{"cidr":"10.42.0.1/32"}},{"ipBlock":{"cidr":"10.42.0.60/32"}}]}]
+np-probe -> 10.42.0.57:80/ -> HTTP 401 (000 = no connection within 3 s)
+np-probe -> 10.42.0.57:15021/healthz/ready -> HTTP 200 (000 = no connection within 3 s)
+np-probe -> 10.42.0.57:15020/stats/prometheus -> HTTP 200 (000 = no connection within 3 s)
+np-probe -> 10.42.0.57:15090/stats/prometheus -> HTTP 200 (000 = no connection within 3 s)
+np-probe -> 10.42.0.58:80/ -> HTTP 401 (000 = no connection within 3 s)
+np-probe -> 10.42.0.58:15021/healthz/ready -> HTTP 200 (000 = no connection within 3 s)
+np-probe -> 10.42.0.58:15020/stats/prometheus -> HTTP 200 (000 = no connection within 3 s)
+np-probe -> 10.42.0.58:15090/stats/prometheus -> HTTP 200 (000 = no connection within 3 s)

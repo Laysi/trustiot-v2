@@ -22,6 +22,8 @@ export interface Credentials {
   postgres: Login & { database: string };
   clickhouse: Login & { database: string };
   mqtt: Login;
+  /** Database logins of the services that have a database role, by service name. */
+  services: Record<string, Login>;
 }
 
 /** User names are not secrets; the passwords are generated for every `up`. */
@@ -29,12 +31,40 @@ export const DEV_USER = "trustiot_dev";
 export const POSTGRES_DATABASE = "trustiot";
 export const CLICKHOUSE_DATABASE = "trustiot";
 
-export function generateCredentials(): Credentials {
+/**
+ * New passwords for every component and, for `serviceRoles` (service name to database role
+ * name), a new login per service.
+ */
+export function generateCredentials(serviceRoles: Record<string, string> = {}): Credentials {
   return {
     postgres: { user: DEV_USER, password: randomSecret(), database: POSTGRES_DATABASE },
     clickhouse: { user: DEV_USER, password: randomSecret(), database: CLICKHOUSE_DATABASE },
     mqtt: { user: DEV_USER, password: randomSecret() },
+    services: Object.fromEntries(
+      Object.entries(serviceRoles).map(([service, role]) => [
+        service,
+        { user: role, password: randomSecret() },
+      ]),
+    ),
   };
+}
+
+/**
+ * SQL that creates the service's database role if it is missing and sets its password. The
+ * role is a plain login role: it cannot be a superuser, bypass row-level security, create
+ * databases or roles, or replicate, and it owns nothing, which is what service-kit's session
+ * check demands of a service role. Idempotent, because the data volume outlives `down`.
+ */
+export function serviceRoleSql(role: string, password: string): string {
+  if (!/^[a-z][a-z0-9_]{0,62}$/.test(role)) {
+    throw new Error(`invalid database role name: ${role}`);
+  }
+  const attributes = "LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION";
+  return (
+    `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = ${sqlLiteral(role)}) ` +
+    `THEN CREATE ROLE ${sqlIdentifier(role)} ${attributes}; END IF; END $$;\n` +
+    `ALTER ROLE ${sqlIdentifier(role)} WITH ${attributes} PASSWORD ${sqlLiteral(password)};\n`
+  );
 }
 
 /**

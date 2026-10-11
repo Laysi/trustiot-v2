@@ -1,5 +1,7 @@
 // A thin wrapper around the podman CLI. Arguments are always passed as an array (no shell), and
-// secrets travel through stdin or `--env-file`, never through the argument list.
+// secrets travel through stdin or `--env-file`, never through the argument list. A build only
+// runs with arguments from containerBuildArgs, which checks the build context first.
+import { assertCheckedBuild } from "./build-context.ts";
 
 export interface PodmanResult {
   code: number;
@@ -16,7 +18,8 @@ export interface PodmanOptions {
   timeoutMs?: number;
 }
 
-export async function podman(args: string[], options: PodmanOptions = {}): Promise<PodmanResult> {
+export async function podman(args: readonly string[], options: PodmanOptions = {}): Promise<PodmanResult> {
+  assertCheckedBuild(args);
   const child = Bun.spawn(["podman", ...args], {
     cwd: options.cwd,
     stdin: options.stdin === undefined ? "ignore" : new Blob([options.stdin]),
@@ -33,7 +36,7 @@ export async function podman(args: string[], options: PodmanOptions = {}): Promi
 }
 
 /** Like {@link podman} but throws with podman's own message when the command fails. */
-export async function podmanOk(args: string[], options: PodmanOptions = {}): Promise<string> {
+export async function podmanOk(args: readonly string[], options: PodmanOptions = {}): Promise<string> {
   const result = await podman(args, options);
   if (result.code !== 0) {
     const verb = args.filter((argument) => !argument.startsWith("-")).slice(0, 2).join(" ");

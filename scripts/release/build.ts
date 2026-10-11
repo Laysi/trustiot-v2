@@ -20,6 +20,7 @@
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { containerBuildArgs } from "../lib/build-context.ts";
 import { log, parseOptions, protoTool, rawManifest, requireCheckout, run, runStage, systemTool, tryRun } from "./exec.ts";
 import {
   type CargoPackage,
@@ -169,24 +170,26 @@ async function buildImage(
     "org.opencontainers.image.title": image.name,
   };
   log("build", `building ${image.ref} for ${IMAGE_PLATFORM}`);
+  // containerBuildArgs checks the context and the Containerfile for key and credential files
+  // first, and allows only known options (docs/architecture/secrets.md).
   await run(
     [
       podman,
-      "build",
-      "--platform",
-      IMAGE_PLATFORM,
-      // Fixed timestamps (the commit time) make a rebuild of the same commit byte-identical.
-      "--timestamp",
-      String(plan.sourceDateEpoch),
-      "--pull=missing",
-      "--format",
-      "oci",
-      ...Object.entries(labels).flatMap(([key, value]) => ["--label", `${key}=${value}`]),
-      "--file",
-      containerfile,
-      "--tag",
-      localTag,
-      context,
+      ...containerBuildArgs(context, [
+        "--platform",
+        IMAGE_PLATFORM,
+        // Fixed timestamps (the commit time) make a rebuild of the same commit byte-identical.
+        "--timestamp",
+        String(plan.sourceDateEpoch),
+        "--pull=missing",
+        "--format",
+        "oci",
+        ...Object.entries(labels).flatMap(([key, value]) => ["--label", `${key}=${value}`]),
+        "--file",
+        containerfile,
+        "--tag",
+        localTag,
+      ]),
     ],
     { stream: true },
   );

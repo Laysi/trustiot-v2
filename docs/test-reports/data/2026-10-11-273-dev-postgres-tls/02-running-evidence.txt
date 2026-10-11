@@ -1,0 +1,83 @@
+$ bun scripts/dev.ts env   (passwords redacted)
+PGHOST=127.0.0.1
+PGPORT=25432
+PGUSER=trustiot_dev
+PGPASSWORD=<redacted>
+PGDATABASE=trustiot
+PGSSLMODE=verify-full
+PGSSLROOTCERT=/tmp/claude-1000/-home-ruisi-projects-trustiot-v2/5d2bbbe4-4241-4ab5-b2fe-2e33d3a23171/scratchpad/issue-273/state/trustiot-v2/dev/ev273/tls/ca.crt
+TRUSTIOT_POSTGRES_HOST=127.0.0.1
+TRUSTIOT_POSTGRES_PORT=25432
+TRUSTIOT_POSTGRES_DATABASE=trustiot
+TRUSTIOT_POSTGRES_SSLMODE=verify-full
+TRUSTIOT_POSTGRES_CA_FILE=/tmp/claude-1000/-home-ruisi-projects-trustiot-v2/5d2bbbe4-4241-4ab5-b2fe-2e33d3a23171/scratchpad/issue-273/state/trustiot-v2/dev/ev273/tls/ca.crt
+TRUSTIOT_DEV_EXAMPLE_SERVICE_DATABASE_USERNAME=example_service
+TRUSTIOT_DEV_EXAMPLE_SERVICE_DATABASE_PASSWORD=<redacted>
+TRUSTIOT_DEV_POSTGRES_URL=postgres://trustiot_dev:<redacted>@127.0.0.1:25432/trustiot
+CLICKHOUSE_URL=http://127.0.0.1:28123
+CLICKHOUSE_USER=trustiot_dev
+CLICKHOUSE_PASSWORD=<redacted>
+CLICKHOUSE_DATABASE=trustiot
+MQTT_HOST=127.0.0.1
+MQTT_PORT=21883
+MQTT_USER=trustiot_dev
+MQTT_PASSWORD=<redacted>
+
+$ curl http://127.0.0.1:28080/readyz
+{"status":"ready"}
+
+$ ls -la <state dir> and <state dir>/tls   (the only files up wrote; no private key)
+/tmp/claude-1000/-home-ruisi-projects-trustiot-v2/5d2bbbe4-4241-4ab5-b2fe-2e33d3a23171/scratchpad/issue-273/state/trustiot-v2/dev/ev273:
+總用量 4
+drwx------. 3 ruisi ruisi  80  .
+drwx------. 3 ruisi ruisi  60  ..
+-rw-------. 1 ruisi ruisi 824  state.json
+drwx------. 2 ruisi ruisi  60  tls
+
+/tmp/claude-1000/-home-ruisi-projects-trustiot-v2/5d2bbbe4-4241-4ab5-b2fe-2e33d3a23171/scratchpad/issue-273/state/trustiot-v2/dev/ev273/tls:
+總用量 4
+drwx------. 2 ruisi ruisi  60  .
+drwx------. 3 ruisi ruisi  80  ..
+-rw-------. 1 ruisi ruisi 591  ca.crt
+
+$ grep -rl "PRIVATE KEY" <state dir>   (exit 1 = none)
+exit 1
+
+$ openssl s_client -starttls postgres, right CA, name postgres
+subject=CN=postgres
+issuer=CN=TrustIoT dev CA (ev273)
+Verification: OK
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Verify return code: 0 (ok)
+
+$ openssl s_client -starttls postgres, right CA, name evil.example
+verify error:num=62:hostname mismatch
+0053AE074D7F0000:error:0A000086:SSL routines:tls_post_process_server_certificate:certificate verify failed:ssl/statem/statem_clnt.c:2497:
+Verification error: hostname mismatch
+Verify return code: 62 (hostname mismatch)
+
+$ openssl s_client -starttls postgres, no CA given (system roots only)
+verify error:num=20:unable to get local issuer certificate
+00E32E33C17F0000:error:0A000086:SSL routines:tls_post_process_server_certificate:certificate verify failed:ssl/statem/statem_clnt.c:2497:
+Verification error: unable to get local issuer certificate
+Verify return code: 20 (unable to get local issuer certificate)
+
+$ podman logs <example-service> (tail)
+{"timestamp":"2026-10-11T04:13:50.839766Z","level":"INFO","service":"example-service","target":"opentelemetry","message":"Global tracer provider is set. Traces can now be created using global::tracer() or global::tracer_with_scope().","fields":{"name":"TracerProvider.GlobalSet"}}
+{"timestamp":"2026-10-11T04:13:50.841664Z","level":"INFO","service":"example-service","target":"service_kit::service","message":"starting","fields":{"service.version":"0.1.0","process.pid":1,"http.listen_addr":"0.0.0.0:8080","http.request_timeout_ms":30000,"shutdown.drain_delay_ms":5000,"shutdown.dr
+{"timestamp":"2026-10-11T04:13:50.849959Z","level":"INFO","service":"example-service","target":"service_kit::service","message":"listening","fields":{"address":"0.0.0.0:8080"}}
+
+$ podman inspect: server key volume mode/owner
+total 16
+-rw-r--r--. 1 999 999 591 Oct 11 04:12 ca.crt
+-rw-r--r--. 1 999 999 203 Oct 11 04:11 pg_hba.conf
+-rw-r--r--. 1 999 999 713 Oct 11 04:11 server.crt
+-rw-------. 1 999 999 241 Oct 11 04:11 server.key
+
+$ podman volume ls (ev273)
+trustiot-dev-ev273-postgres-data
+trustiot-dev-ev273-clickhouse-data
+trustiot-dev-ev273-mosquitto-data
+trustiot-dev-ev273-mosquitto-config
+trustiot-dev-ev273-postgres-config
+trustiot-dev-ev273-postgres-ca

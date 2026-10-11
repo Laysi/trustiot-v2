@@ -1,0 +1,21 @@
+// Lab only, Laysi/trustiot-v2#287: from pod np-probe (an allowed source, outside the mesh),
+// connect to each port of every ingress gateway pod in e2e-287 and print the result.
+// usage: KUBECONFIG=... bun pod-probe.ts <label>
+const kubectl = "/home/ruisi/.proto/tools/kubectl/1.36.5/kubectl";
+const label = process.argv[2] ?? "";
+function run(args: string[]): string {
+  const p = Bun.spawnSync({ cmd: [kubectl, "-n", "e2e-287", ...args], stdout: "pipe", stderr: "pipe" });
+  return p.stdout.toString().trim();
+}
+console.log(`== ${label} ${new Date().toISOString()}`);
+console.log(`policy: ${run(["get", "networkpolicy", "trustiot-ingress", "-o", "jsonpath={.spec.ingress}"])}`);
+const ips = run(["get", "pods", "-l", "gateway.networking.k8s.io/gateway-name=trustiot-ingress", "-o", "jsonpath={.items[*].status.podIP}"]).split(" ");
+for (const ip of ips) {
+  for (const [port, path] of [[80, "/"], [15021, "/healthz/ready"], [15020, "/stats/prometheus"], [15090, "/stats/prometheus"]] as const) {
+    const code = run([
+      "exec", "np-probe", "--", "curl", "-s", "-o", "/dev/null", "-m", "3", "-w", "%{http_code}",
+      "-H", "Host: app.saas.trustiot.test", `http://${ip}:${port}${path}`,
+    ]);
+    console.log(`np-probe -> ${ip}:${port}${path} -> HTTP ${code || "(none)"} (000 = no connection within 3 s)`);
+  }
+}

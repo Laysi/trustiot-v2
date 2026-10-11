@@ -6,7 +6,7 @@
 // settings in `TRUSTIOT_<NAME>` variables and service settings in `TRUSTIOT__<SECTION>__<KEY>`.
 // Moving the environment from podman to k3d later changes how the container is started, not
 // what it is given.
-import { CONTAINER_PORTS, type Names } from "./stack.ts";
+import { CONTAINER_PORTS, SERVICE_CA_PATH, type Names } from "./stack.ts";
 
 export interface ServiceDef {
   /** The chart's service key (the `services` map in deploy/chart/values.yaml). */
@@ -17,6 +17,13 @@ export interface ServiceDef {
   hostPort: number;
   /** Service-specific settings, added to the platform settings below. */
   env: Record<string, string>;
+  /**
+   * The service's database role. `up` creates it (a plain login role: no superuser, no
+   * BYPASSRLS, owns nothing) with a fresh password and hands the pair to the service as
+   * `TRUSTIOT__DATABASE__USERNAME` and `TRUSTIOT__DATABASE__PASSWORD`. Omit for a service
+   * without a database.
+   */
+  database?: { role: string };
 }
 
 export const SERVICES: readonly ServiceDef[] = [
@@ -26,6 +33,9 @@ export const SERVICES: readonly ServiceDef[] = [
     cargo: { package: "service-kit", bin: "example-service" },
     hostPort: 18080,
     env: { TRUSTIOT__GREETING: "hello from the dev environment" },
+    // With a database the example registers a `postgres` readiness check, so `/readyz` is only
+    // 200 while the service has a verify-full connection to Postgres.
+    database: { role: "example_service" },
   },
 ];
 
@@ -57,10 +67,12 @@ export function resolveServicePorts(
 
 /**
  * The platform settings every service receives, named as in the chart's `platform` ConfigMap.
- * Dependencies are reached by their network alias. The local database has no TLS, so
- * `TRUSTIOT_POSTGRES_SSLMODE` is `disable` here; the chart's `external` mode only accepts
- * `verify-full`. Per-service database roles and the credential variables arrive with the
- * Postgres and migration issues (Laysi/trustiot-v2#58, Laysi/trustiot-v2#60).
+ * Dependencies are reached by their network alias. The local Postgres serves TLS with a
+ * certificate for that alias, signed by the CA that `up` generates and mounts at
+ * `TRUSTIOT_POSTGRES_CA_FILE`, so services connect with `verify-full` exactly as in a cluster.
+ * A service's database role and password are given separately (`database` in {@link ServiceDef});
+ * the production ones arrive with the Postgres and migration issues (Laysi/trustiot-v2#58,
+ * Laysi/trustiot-v2#60).
  */
 export function platformEnv(database: string): Record<string, string> {
   return {
@@ -68,7 +80,8 @@ export function platformEnv(database: string): Record<string, string> {
     TRUSTIOT_POSTGRES_HOST: "postgres",
     TRUSTIOT_POSTGRES_PORT: String(CONTAINER_PORTS.postgres),
     TRUSTIOT_POSTGRES_DATABASE: database,
-    TRUSTIOT_POSTGRES_SSLMODE: "disable",
+    TRUSTIOT_POSTGRES_SSLMODE: "verify-full",
+    TRUSTIOT_POSTGRES_CA_FILE: SERVICE_CA_PATH,
     TRUSTIOT_CLICKHOUSE_URL: `http://clickhouse:${CONTAINER_PORTS.clickhouse}`,
   };
 }
