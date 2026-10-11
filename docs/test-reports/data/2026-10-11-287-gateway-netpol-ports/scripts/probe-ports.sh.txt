@@ -1,0 +1,17 @@
+#!/bin/bash
+# Lab only (trustiot-mac-m1), Laysi/trustiot-v2#287: from the host (the cloudflared and kubelet
+# source, 10.42.0.1 on cni0), connect to each port of every ingress gateway pod in e2e-287.
+# usage: probe-ports.sh <label>
+set -u
+LABEL=$1
+K="sudo k3s kubectl -n e2e-287"
+echo "== $LABEL $(date -u +%FT%TZ)"
+echo "policy: $($K get networkpolicy trustiot-ingress -o jsonpath='{.spec.ingress}')"
+for ip in $($K get pods -l gateway.networking.k8s.io/gateway-name=trustiot-ingress -o jsonpath='{.items[*].status.podIP}'); do
+  for target in "80/" "15021/healthz/ready" "15020/stats/prometheus" "15090/stats/prometheus"; do
+    port=${target%%/*}
+    path=/${target#*/}
+    code=$(curl -s -o /dev/null -m 3 -w '%{http_code}' -H 'Host: app.saas.trustiot.test' "http://$ip:$port$path")
+    echo "$ip:$port$path -> HTTP ${code} (000 = no connection within 3 s)"
+  done
+done
