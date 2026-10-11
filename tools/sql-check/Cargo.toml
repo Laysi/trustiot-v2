@@ -1,0 +1,16 @@
+[package]
+name = "sql-check"
+description = "Static check that SQL in the TrustIoT v2 workspace is never built from strings (decision 29), enforced by `cargo test`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Line and column numbers of findings.
+proc-macro2 = { workspace = true, features = ["span-locations"] }
+syn = { workspace = true, features = ["full", "parsing", "printing", "visit"] }
+
+[lints]
+workspace = true

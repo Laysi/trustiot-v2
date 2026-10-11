@@ -3,12 +3,73 @@ Service-to-service authorization helpers (decision 27, Laysi/trustiot-v2#63).
 */}}
 
 {{/*
-Source address of kubelet probes in Istio ambient: istio-cni SNATs the kubelet's health checks
-of mesh pods to this link-local address so ztunnel lets them through, so the NetworkPolicy has to
-allow it for probes to pass under default deny.
+Source address of connections from the node in Istio ambient. istio-cni SNATs every connection
+that starts in the node's network namespace and goes to an ambient pod to this link-local
+address, and ztunnel passes it straight to the application port, without mTLS or
+AuthorizationPolicy. Kubelet probes arrive this way, but so does any other process on the node's
+network, such as a hostNetwork pod in another namespace. The NetworkPolicy therefore admits this
+source only on the workload's probe ports ("trustiot.mesh.probePorts").
 */}}
-{{- define "trustiot.mesh.kubeletProbeSource" -}}
+{{- define "trustiot.mesh.hostSource" -}}
 169.254.7.127/32
+{{- end -}}
+
+{{/*
+Container ports and probes of an enabled service or in-cluster component, as its pod spec
+renders them. A component <name> defines "trustiot.<name>.pod", which its own template also
+uses for the container's ports and probes, so the two cannot drift apart.
+Argument: dict "root" $ "name" <service or component>.
+Returns YAML {ports: [{name, containerPort}], probes: {startup, liveness, readiness}}; use with
+fromYaml.
+*/}}
+{{- define "trustiot.mesh.workloadPod" -}}
+{{- $components := include "trustiot.mesh.components" .root | fromYaml -}}
+{{- if hasKey $components .name -}}
+{{- include (printf "trustiot.%s.pod" .name) .root -}}
+{{- else -}}
+{{- $config := include "trustiot.serviceConfig" (dict "root" .root "name" .name "values" (get .root.Values.services .name)) | fromYaml -}}
+{{- dict "ports" $config.ports "probes" $config.probes | toYaml -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+TCP ports that the startup, liveness and readiness probes of a service or in-cluster component
+connect to: the port of each httpGet, tcpSocket and grpc probe, with named ports resolved to the
+container port. exec probes run inside the container and need none. Sorted, without duplicates.
+Argument: dict "root" $ "name" <service or component>.
+Returns YAML {ports: [<number>, ...]}; use with fromYaml.
+*/}}
+{{- define "trustiot.mesh.probePorts" -}}
+{{- $name := .name -}}
+{{- $pod := include "trustiot.mesh.workloadPod" . | fromYaml -}}
+{{- $byName := dict -}}
+{{- range $pod.ports -}}
+{{- $_ := set $byName .name (int .containerPort) -}}
+{{- end -}}
+{{- $keys := list -}}
+{{- range $kind := list "startup" "liveness" "readiness" -}}
+{{- $probe := get ($pod.probes | default dict) $kind | default dict -}}
+{{- range $handler := list "httpGet" "tcpSocket" "grpc" -}}
+{{- with get $probe $handler -}}
+{{- $port := .port -}}
+{{- if kindIs "string" $port -}}
+{{- if not (hasKey $byName $port) -}}
+{{- fail (printf "services.%s: probes.%s uses port %q, which is not in ports" $name $kind $port) -}}
+{{- end -}}
+{{- $port = get $byName $port -}}
+{{- else if not (or (kindIs "float64" $port) (kindIs "int" $port) (kindIs "int64" $port)) -}}
+{{- fail (printf "services.%s: probes.%s.%s needs a port" $name $kind $handler) -}}
+{{- end -}}
+{{- /* Zero-padded so that sortAlpha orders the numbers. */ -}}
+{{- $keys = append $keys (printf "%05d" (int $port)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $ports := list -}}
+{{- range $keys | uniq | sortAlpha -}}
+{{- $ports = append $ports (atoi .) -}}
+{{- end -}}
+{{- dict "ports" $ports | toYaml -}}
 {{- end -}}
 
 {{/*

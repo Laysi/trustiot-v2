@@ -155,3 +155,41 @@ Returns YAML; use with fromYaml.
 -}}
 {{- toYaml $config -}}
 {{- end -}}
+
+{{/*
+Container ports and probes of the collector. The Deployment renders them from here, and the
+NetworkPolicy derives the probe ports from the same definition ("trustiot.mesh.probePorts"), so
+only the health_check port (13133) is open to the node; OTLP (4318) is reachable only through
+the mesh.
+Returns YAML {ports, probes: {startup, liveness, readiness}}; use with fromYaml.
+*/}}
+{{- define "trustiot.otel-collector.pod" -}}
+ports:
+  - name: otlp-http
+    containerPort: 4318
+    protocol: TCP
+  - name: health
+    containerPort: 13133
+    protocol: TCP
+probes:
+  startup:
+    httpGet:
+      path: /
+      port: health
+    periodSeconds: 2
+    failureThreshold: 30
+  liveness:
+    httpGet:
+      path: /
+      port: health
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readiness:
+    httpGet:
+      path: /
+      port: health
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 2
+{{- end -}}

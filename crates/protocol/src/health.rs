@@ -11,6 +11,12 @@
 //!
 //! Heartbeat counters are cumulative since the agent started; the cloud computes rates from the
 //! difference between heartbeats and detects a restart when `agent_uptime_s` decreases.
+//!
+//! [`Heartbeat::validate`] does not cross-check fields against each other (available memory
+//! above the total, more failures than requests, no requests at all): a heartbeat is also the
+//! liveness signal, and refusing one over a counter would make the gateway look offline. The
+//! cloud clamps such values and treats a zero request delta as "no success rate"; the crate
+//! README names who does what (Laysi/trustiot-v2#269).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -134,6 +140,7 @@ pub struct Heartbeat {
     /// When the gateway's client certificate expires.
     pub cert_not_after: UnixMillis,
     /// Read statistics, one entry per configured device.
+    #[serde(deserialize_with = "codec::seq")]
     pub devices: Vec<DeviceStats>,
 }
 
@@ -229,8 +236,12 @@ pub struct DeviceStats {
     /// Failures by kind; a request that failed counts once, under its kind.
     pub failures: FailureCounts,
     /// Requests answered with a Modbus exception, by exception code; at most
-    /// [`MAX_EXCEPTION_CODES`] codes.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    /// [`MAX_EXCEPTION_CODES`] codes. A payload that repeats a code is refused.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "codec::unique_map"
+    )]
     pub exception_codes: BTreeMap<u8, u64>,
     /// The most recent failure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -265,7 +276,8 @@ pub struct LastFailure {
     /// The Modbus exception code, for [`FailureKind::Exception`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exception_code: Option<u8>,
-    /// A short diagnostic such as the OS error; at most [`MAX_FAILURE_DETAIL_BYTES`].
+    /// A short diagnostic such as the OS error; at most [`MAX_FAILURE_DETAIL_BYTES`], without
+    /// U+0000.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
@@ -355,16 +367,22 @@ impl Message for Heartbeat {
                     "more failed points than points read",
                 );
             }
-            if stats
+            let detail = stats
                 .last_failure
                 .as_ref()
-                .and_then(|failure| failure.detail.as_ref())
-                .is_some_and(|detail| detail.len() > MAX_FAILURE_DETAIL_BYTES)
-            {
+                .and_then(|failure| failure.detail.as_deref());
+            if detail.is_some_and(|detail| detail.len() > MAX_FAILURE_DETAIL_BYTES) {
                 issues.push(
                     IssueCode::TooLong,
                     format!("devices[{index}].last_failure.detail"),
                     format!("longer than {MAX_FAILURE_DETAIL_BYTES} bytes"),
+                );
+            }
+            if detail.is_some_and(codec::has_nul) {
+                issues.push(
+                    IssueCode::InvalidValue,
+                    format!("devices[{index}].last_failure.detail"),
+                    "contains U+0000",
                 );
             }
         }

@@ -3,18 +3,25 @@
 //! Mosquitto takes the gateway's username from its client certificate's CN
 //! (`use_identity_as_username`) and replaces `%u` in ACL topics with it. Every gateway client
 //! gets the role [`GATEWAY_ROLE`] with the rules from [`gateway_role_acls`], so a gateway can
-//! publish only under `trustiot/v1/gw/{its CN}/up/` and subscribe only under
-//! `trustiot/v1/gw/{its CN}/down/`. A publish anywhere else gets PUBACK reason code 0x87 (not
-//! authorized) under MQTT 5, which is why gateways must use MQTT 5: MQTT 3.1.1 acknowledges the
-//! publish and silently drops it.
+//! publish only to the `up` channels of `trustiot/v1/gw/{its CN}/` (one exact rule per channel,
+//! no wildcard) and subscribe only under `trustiot/v1/gw/{its CN}/down/`. A publish anywhere
+//! else, including a topic under its own `up/` that is not a protocol channel, gets PUBACK
+//! reason code 0x87 (not authorized) under MQTT 5, which is why gateways must use MQTT 5:
+//! MQTT 3.1.1 acknowledges the publish and silently drops it.
 //!
-//! The roles of the cloud services, the broker's default ACL access and how services
-//! authenticate are deployment decisions (Laysi/trustiot-v2#84); [`crate::topic::Channel`]
-//! documents which channels each side publishes and subscribes.
+//! Dynamic security cannot authorize by the retain flag: its ACL check looks only at the ACL
+//! type, the topic and the client. A gateway may therefore set retain on any of its `up`
+//! channels, but the exact rules bound what it can park on the broker to one retained message
+//! per `up` channel; only [`crate::topic::Channel::Status`] is retained by protocol. The README's
+//! ACL section records this decision and what consumers do with a stray retained message.
+//!
+//! The roles of the cloud services, the broker's default ACL access, the broker-wide limits and
+//! how services authenticate are deployment decisions (Laysi/trustiot-v2#84);
+//! [`crate::topic::Channel`] documents which channels each side publishes and subscribes.
 
 use serde::Serialize;
 
-use crate::topic::{Direction, TOPIC_PREFIX};
+use crate::topic::{Channel, Direction, TOPIC_PREFIX};
 
 /// The dynamic-security role every gateway client is bound to at provisioning.
 pub const GATEWAY_ROLE: &str = "trustiot-gateway";
@@ -33,8 +40,8 @@ pub enum AclType {
     UnsubscribePattern,
 }
 
-/// One dynamic-security ACL entry. Serializes to the JSON object that the `createRole` and
-/// `addRoleACL` commands of `$CONTROL/dynamic-security/v1` expect.
+/// One dynamic-security ACL entry. Serializes to the JSON object that the `createRole`,
+/// `modifyRole` (in `acls`) and `addRoleACL` commands of `$CONTROL/dynamic-security/v1` expect.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AclRule {
     /// What the rule controls.
@@ -47,23 +54,40 @@ pub struct AclRule {
     pub allow: bool,
 }
 
-/// The ACL topic of one direction of the gateway's own tree: `trustiot/v1/gw/%u/{up|down}/#`.
+/// The ACL filter of one direction of the gateway's whole tree: `trustiot/v1/gw/%u/{up|down}/#`.
+/// [`gateway_role_acls`] uses it only for the `down` direction (subscribing and receiving);
+/// publishing is limited to [`gateway_channel_acl_topic`] of each `up` channel, because a
+/// publish rule with a wildcard lets a gateway create any topic under its `up/`.
 pub fn gateway_acl_topic(direction: Direction) -> String {
     format!("{TOPIC_PREFIX}/%u/{}/#", direction.as_str())
 }
 
-/// The rules of [`GATEWAY_ROLE`]. Everything else is denied by the broker's default ACL access
-/// for publishing and subscribing, which is Mosquitto's default.
+/// The exact ACL topic of one channel in the gateway's own tree, without wildcards:
+/// `trustiot/v1/gw/%u/{up|down}/{channel}`.
+pub fn gateway_channel_acl_topic(channel: Channel) -> String {
+    format!(
+        "{TOPIC_PREFIX}/%u/{}/{}",
+        channel.direction().as_str(),
+        channel.name()
+    )
+}
+
+/// The rules of [`GATEWAY_ROLE`]: one exact `publishClientSend` rule per `up` channel, in
+/// [`Channel::ALL`] order, then subscribing, receiving and unsubscribing under the gateway's own
+/// `down/`. Everything else is denied by the broker's default ACL access for publishing and
+/// subscribing, which is Mosquitto's default.
 pub fn gateway_role_acls() -> Vec<AclRule> {
-    let up = gateway_acl_topic(Direction::Up);
     let down = gateway_acl_topic(Direction::Down);
-    vec![
-        AclRule {
+    let up_rules = Channel::ALL
+        .into_iter()
+        .filter(|channel| channel.direction() == Direction::Up)
+        .map(|channel| AclRule {
             acltype: AclType::PublishClientSend,
-            topic: up,
+            topic: gateway_channel_acl_topic(channel),
             priority: 0,
             allow: true,
-        },
+        });
+    let down_rules = [
         AclRule {
             acltype: AclType::SubscribePattern,
             topic: down.clone(),
@@ -82,7 +106,8 @@ pub fn gateway_role_acls() -> Vec<AclRule> {
             priority: 0,
             allow: true,
         },
-    ]
+    ];
+    up_rules.chain(down_rules).collect()
 }
 
 /// Whether `topic` matches the MQTT topic filter `filter` (MQTT 5.0 section 4.7). Topics
@@ -201,6 +226,66 @@ mod tests {
         ] {
             assert!(!may_publish("gw-a", topic), "{topic}");
         }
+        for topic in NON_PROTOCOL_UP_TOPICS {
+            assert!(!may_publish("gw-a", topic), "{topic}");
+        }
+    }
+
+    /// Topics in `gw-a`'s own `up/` subtree that are not protocol channels: the wildcard rule
+    /// before Laysi/trustiot-v2#268 allowed every one of them, retained or not.
+    const NON_PROTOCOL_UP_TOPICS: [&str; 10] = [
+        "trustiot/v1/gw/gw-a/up",
+        "trustiot/v1/gw/gw-a/up/",
+        "trustiot/v1/gw/gw-a/up/spam",
+        "trustiot/v1/gw/gw-a/up/spam/1",
+        "trustiot/v1/gw/gw-a/up/telemetry/extra",
+        "trustiot/v1/gw/gw-a/up/telemetry/",
+        "trustiot/v1/gw/gw-a/up/Telemetry",
+        "trustiot/v1/gw/gw-a/up/telemetry-ack",
+        "trustiot/v1/gw/gw-a/up/config",
+        "trustiot/v1/gw/gw-a/up//telemetry",
+    ];
+
+    #[test]
+    fn publish_rules_are_exact_one_per_up_channel() {
+        let rules = gateway_role_acls();
+        let publish: Vec<&AclRule> = rules
+            .iter()
+            .filter(|rule| rule.acltype == AclType::PublishClientSend)
+            .collect();
+        let up: Vec<Channel> = Channel::ALL
+            .into_iter()
+            .filter(|channel| channel.direction() == Direction::Up)
+            .collect();
+        assert_eq!(publish.len(), up.len());
+        for (rule, channel) in publish.iter().zip(&up) {
+            assert_eq!(
+                rule.topic,
+                format!("trustiot/v1/gw/%u/up/{}", channel.name())
+            );
+            assert!(!rule.topic.contains(['+', '#']), "{}", rule.topic);
+            assert!(rule.allow && rule.priority == 0, "{rule:?}");
+        }
+        // No other rule grants publishing, and no rule denies anything (deny is the default).
+        assert!(rules.iter().all(|rule| rule.allow));
+        let me = GatewayId::new("gw-a").unwrap();
+        for rule in publish {
+            let pattern = substitute(rule, me.as_str()).unwrap();
+            for topic in NON_PROTOCOL_UP_TOPICS {
+                assert!(!filter_matches(&pattern, topic), "{pattern} {topic}");
+                assert!(!filter_covers(&pattern, topic), "{pattern} {topic}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_wildcard_rule_before_the_fix_fails_the_same_check() {
+        // The rule Laysi/trustiot-v2#268 replaced: the same assertions as above must fail for it.
+        let legacy = gateway_acl_topic(Direction::Up).replace("%u", "gw-a");
+        for topic in NON_PROTOCOL_UP_TOPICS {
+            assert!(filter_matches(&legacy, topic), "{topic}");
+            assert!(filter_covers(&legacy, topic), "{topic}");
+        }
     }
 
     #[test]
@@ -267,17 +352,21 @@ mod tests {
     #[test]
     fn rules_serialize_for_dynamic_security() {
         let json = serde_json::to_value(gateway_role_acls()).unwrap();
+        let rule = |acltype: &str, topic: &str| serde_json::json!({ "acltype": acltype, "topic": topic, "priority": 0, "allow": true });
         assert_eq!(
-            json[0],
-            serde_json::json!({
-                "acltype": "publishClientSend",
-                "topic": "trustiot/v1/gw/%u/up/#",
-                "priority": 0,
-                "allow": true
-            })
+            json,
+            serde_json::json!([
+                rule("publishClientSend", "trustiot/v1/gw/%u/up/telemetry"),
+                rule("publishClientSend", "trustiot/v1/gw/%u/up/config-report"),
+                rule("publishClientSend", "trustiot/v1/gw/%u/up/status"),
+                rule("publishClientSend", "trustiot/v1/gw/%u/up/heartbeat"),
+                rule("publishClientSend", "trustiot/v1/gw/%u/up/live"),
+                rule("publishClientSend", "trustiot/v1/gw/%u/up/log"),
+                rule("publishClientSend", "trustiot/v1/gw/%u/up/log-dump"),
+                rule("subscribePattern", "trustiot/v1/gw/%u/down/#"),
+                rule("publishClientReceive", "trustiot/v1/gw/%u/down/#"),
+                rule("unsubscribePattern", "trustiot/v1/gw/%u/down/#"),
+            ])
         );
-        assert_eq!(json[1]["acltype"], "subscribePattern");
-        assert_eq!(json[2]["acltype"], "publishClientReceive");
-        assert_eq!(json[3]["acltype"], "unsubscribePattern");
     }
 }

@@ -1,0 +1,35 @@
+{
+  "aggregates": 24,
+  "committed_acks_logged": 33402,
+  "dead_letters": 1053,
+  "events_in_outbox": 33417,
+  "failures": [],
+  "final_generation": 1,
+  "generations": [
+    {
+      "complete": false,
+      "distinct": 4989,
+      "gen": 0,
+      "handled": 4989
+    },
+    {
+      "complete": true,
+      "distinct": 32364,
+      "gen": 1,
+      "handled": 32364
+    }
+  ],
+  "handled_log_rows": 37353,
+  "in_handler_violations": 0,
+  "inbox_rows": 32364,
+  "lag_events": 0,
+  "ledger_rows": 33417,
+  "pending_commit_absent": 1,
+  "pending_commit_present": 33417,
+  "pending_commit_tokens": 33418,
+  "poison_events": 1053,
+  "producer_error_lines": 131,
+  "rolled_back_found_in_outbox": 0,
+  "rolled_back_tokens_logged": 4592,
+  "tx_order_inversions": 0
+}

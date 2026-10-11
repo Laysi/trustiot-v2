@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { Subprocess } from "bun";
+import { freePort } from "./ports.ts";
 
 const CHART_DIR = join(import.meta.dir, "..", "..");
 const REPO_ROOT = join(CHART_DIR, "..", "..");
@@ -99,13 +100,6 @@ async function waitFor<T>(what: string, check: () => T | undefined | Promise<T |
     await Bun.sleep(2_000);
   }
   throw new Error(`timed out waiting for ${what}`);
-}
-
-async function freePort(): Promise<number> {
-  const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
-  const port = server.port;
-  server.stop(true);
-  return port;
 }
 
 const forwards: Subprocess[] = [];
@@ -353,7 +347,7 @@ beforeAll(async () => {
     .map((f) => readFileSync(join(MIGRATIONS, f), "utf8"))
     .join("\n");
   clickhouse(sql);
-  // The two statements of 0005_logs.sql and deploy/chart/README.md.
+  // The two statements of 0006_logs.sql and deploy/chart/README.md.
   clickhouse(
     `CREATE USER IF NOT EXISTS ${COLLECTOR_USER} IDENTIFIED WITH sha256_password BY '${collectorPassword}';\n` +
       `GRANT trustiot_otel_collector TO ${COLLECTOR_USER};\n`,

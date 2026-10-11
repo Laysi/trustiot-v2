@@ -1,0 +1,36 @@
+## the definer account cannot log in
+[trustiot_tenant_view_definer] SELECT 1
+  -> HTTP 403, read_rows=0: AUTHENTICATION_FAILED: Code: 516. DB::Exception: trustiot_tenant_view_definer: Authentication failed: password is incorrect, or there is no user with such name. (AUTHENTICATION_FAILED)
+[trustiot_tenant_view_definer] SELECT 1
+  -> HTTP 403, read_rows=0: AUTHENTICATION_FAILED: Code: 516. DB::Exception: trustiot_tenant_view_definer: Authentication failed: password is incorrect, or there is no user with such name. (AUTHENTICATION_FAILED)
+## replacing the definer; a definer without its own policy reads nothing; a definer in use cannot be dropped
+[admin] CREATE USER IF NOT EXISTS definer2 IDENTIFIED WITH no_password HOST NONE
+  -> HTTP 200, read_rows=0: 
+[admin] GRANT SELECT ON trustiot.telemetry TO definer2
+  -> HTTP 200, read_rows=0: 
+[admin] ALTER TABLE trustiot.tenant_telemetry MODIFY SQL SECURITY DEFINER DEFINER = definer2
+  -> HTTP 200, read_rows=0: 
+[ta12] SELECT count() FROM trustiot.tenant_telemetry
+  -> HTTP 200, read_rows=0: 0
+[admin] DROP USER definer2
+  -> HTTP 500, read_rows=0: HAVE_DEPENDENT_OBJECTS: Code: 630. DB::Exception: User `definer2` is used as a definer of ['trustiot.tenant_telemetry (23058fa0-d79b-4058-97b3-97e9e75d8907)']. (HAVE_DEPENDENT_OBJECTS) (version 26.8.22.13 (official build))
+[admin] ALTER TABLE trustiot.tenant_telemetry MODIFY SQL SECURITY DEFINER DEFINER = trustiot_tenant_view_definer
+  -> HTTP 200, read_rows=0: 
+[admin] DROP USER definer2
+  -> HTTP 200, read_rows=0: 
+[ta12] SELECT count() FROM trustiot.tenant_telemetry
+  -> HTTP 200, read_rows=8193: 300000
+## the caller's limits cover the rows read inside the view (lim: max_rows_to_read = 100000; mem50: max_memory_usage = 50000000)
+[lim] SELECT count() FROM trustiot.tenant_telemetry WHERE value_string != ''
+  -> HTTP 500, read_rows=32768: TOO_MANY_ROWS: Code: 158. DB::Exception: Limit for rows or bytes to read exceeded, max rows: 100.00 thousand, current rows: 303.10 thousand: While executing MergeTreeSelect(pool: ReadPoolInOrder, algorithm: InOrder). (TOO_MANY_ROWS) (v
+[mem50] SELECT count() FROM trustiot.tenant_telemetry WHERE device_id = '186e13cd-667f-912a-0000-000000000000'
+  -> HTTP 200, read_rows=8193: 10000
+[mem50] SELECT sum(length(range(10000000 + length(value_string)))) FROM trustiot.tenant_telemetry WHERE device_id = '186e13cd-667f-912a-0000-000000000000' AND ts < '2026-10-01 00:00:03'
+  -> HTTP 500, read_rows=16384: MEMORY_LIMIT_EXCEEDED: Code: 241. DB::Exception: Query memory limit exceeded: would use 2.24 GiB (attempt to allocate chunk of 2.24 GiB), maximum: 47.68 MiB: while executing 'FUNCTION range(plus(10000000_UInt32, length(__table1.value_string)) 
+## the quota counts the rows read through the view for the calling account
+[ta13] SELECT duration, queries, read_rows FROM system.quota_usage ORDER BY duration
+  -> HTTP 200, read_rows=2: 60	0	0 | 3600	0	0
+[ta13] SELECT count() FROM trustiot.tenant_telemetry WHERE point = 'p1' AND value_string != ''
+  -> HTTP 200, read_rows=303104: 30000
+[ta13] SELECT duration, queries, read_rows FROM system.quota_usage ORDER BY duration
+  -> HTTP 200, read_rows=2: 60	1	303104 | 3600	1	303104

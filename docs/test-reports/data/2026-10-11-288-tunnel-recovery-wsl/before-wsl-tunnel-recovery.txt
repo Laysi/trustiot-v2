@@ -1,0 +1,87 @@
+bun test v1.4.2 (744846f84)
+
+deploy/chart/tests/e2e/tunnel-recovery.test.ts:
+killed 1 dangling process
+(fail) tunnel dies while a request is in flight > the request fails before the process has exited, the way kubectl behaves (fault injection) [5000.84ms]
+  ^ this test timed out after 5000ms.
+
+# Unhandled error between tests
+-------------------------------
+115 |     // The check that raw() made before #261 looked at exitCode and signalCode right here and
+116 |     // rethrew, because the process had not exited yet.
+117 |     const tunnel = state.tunnel as Subprocess;
+118 |     expect(tunnel.exitCode === null && tunnel.signalCode === null).toBe(true);
+119 |     await tunnel.exited;
+120 |     expect(tunnel.exitCode).toBe(1);
+                                  ^
+error: expect(received).toBe(expected)
+
+Expected: 1
+Received: null
+
+      at <anonymous> (/home/ruisi/tv2/agents/288/src/deploy/chart/tests/e2e/tunnel-recovery.test.ts:120:29)
+-------------------------------
+
+killed 1 dangling process
+(fail) tunnel dies while a request is in flight > reopens the tunnel and sends the request once more [5001.18ms]
+  ^ this test timed out after 5000ms.
+
+# Unhandled error between tests
+-------------------------------
+ 97 |   });
+ 98 |   const ms = (firstByte ?? performance.now()) - started;
+ 99 |   const response = Buffer.concat(chunks);
+100 |   const split = response.indexOf("\r\n\r\n");
+101 |   if (split < 0) {
+102 |     throw new ConnectionError(`no HTTP response for ${request.target}: ${JSON.stringify(response.toString())}`);
+                ^
+ConnectionError: no HTTP response for /api/whoami: ""
+      at sendRaw (/home/ruisi/tv2/agents/288/src/deploy/chart/tests/e2e/raw-client.ts:102:11)
+-------------------------------
+
+ 97 |   });
+ 98 |   const ms = (firstByte ?? performance.now()) - started;
+ 99 |   const response = Buffer.concat(chunks);
+100 |   const split = response.indexOf("\r\n\r\n");
+101 |   if (split < 0) {
+102 |     throw new ConnectionError(`no HTTP response for ${request.target}: ${JSON.stringify(response.toString())}`);
+                ^
+ConnectionError: no HTTP response for /api/whoami: ""
+      at sendRaw (/home/ruisi/tv2/agents/288/src/deploy/chart/tests/e2e/raw-client.ts:102:11)
+(fail) tunnel dies while a request is in flight > a tunnel that exited long before the request is reopened without waiting [147.49ms]
+killed 1 dangling process
+(fail) tunnel dies while a request is in flight > a healthy tunnel needs no recovery [5000.54ms]
+  ^ this test timed out after 5000ms.
+
+# Unhandled error between tests
+-------------------------------
+ 97 |   });
+ 98 |   const ms = (firstByte ?? performance.now()) - started;
+ 99 |   const response = Buffer.concat(chunks);
+100 |   const split = response.indexOf("\r\n\r\n");
+101 |   if (split < 0) {
+102 |     throw new ConnectionError(`no HTTP response for ${request.target}: ${JSON.stringify(response.toString())}`);
+                ^
+ConnectionError: no HTTP response for /api/whoami: ""
+      at sendRaw (/home/ruisi/tv2/agents/288/src/deploy/chart/tests/e2e/raw-client.ts:102:11)
+-------------------------------
+
+(pass) tunnel dies while a request is in flight > retries at most once: a second connection failure is thrown [218.91ms]
+(pass) tunnel dies while a request is in flight > a connection failure while the tunnel stays up is thrown, not retried [253.03ms]
+(pass) tunnel dies while a request is in flight > a connection failure without any tunnel is thrown, not retried [21.81ms]
+killed 1 dangling process
+(fail) tunnel dies while a request is in flight > a failing reopen is thrown [5001.00ms]
+  ^ this test timed out after 5000ms.
+(pass) failures that are not connection failures are never retried > a status the test does not expect is returned and fails the test's assertion [25.20ms]
+(pass) failures that are not connection failures are never retried > status 500 is a result, not a reason to reopen [54.19ms]
+(pass) failures that are not connection failures are never retried > status 502 is a result, not a reason to reopen [66.11ms]
+(pass) failures that are not connection failures are never retried > status 503 is a result, not a reason to reopen [71.74ms]
+(pass) failures that are not connection failures are never retried > status 504 is a result, not a reason to reopen [53.08ms]
+(pass) failures that are not connection failures are never retried > a request that was answered in part is not resent, even though the tunnel is dead [390.81ms]
+(pass) failures that are not connection failures are never retried > an error that is not a ConnectionError is rethrown even though the tunnel is dead [46.25ms]
+
+ 10 pass
+ 5 fail
+ 3 errors
+ 39 expect() calls
+Ran 15 tests across 1 file. [21.42s]

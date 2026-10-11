@@ -11,6 +11,7 @@ variables from secretKeyRef. Its ClickHouse account is created with SQL by the m
 {{- $name := include "trustiot.componentName" $ctx }}
 {{- $configName := include "trustiot.componentName" (dict "root" . "name" "otel-collector-config") }}
 {{- $config := include "trustiot.collector.config" . }}
+{{- $pod := include "trustiot.otel-collector.pod" . | fromYaml }}
 {{- $forward := $collector.forward }}
 {{- if and $forward.enabled (not $forward.endpoint) }}
 {{- fail "observability.collector.forward.endpoint is required when forwarding is enabled" }}
@@ -131,33 +132,15 @@ spec:
                   name: {{ $forward.authHeader.secret.name }}
                   key: {{ $forward.authHeader.secret.key }}
             {{- end }}
+          {{- /* The NetworkPolicy opens the probe ports from the same definition. */}}
           ports:
-            - name: otlp-http
-              containerPort: 4318
-              protocol: TCP
-            - name: health
-              containerPort: 13133
-              protocol: TCP
+            {{- toYaml $pod.ports | nindent 12 }}
           startupProbe:
-            httpGet:
-              path: /
-              port: health
-            periodSeconds: 2
-            failureThreshold: 30
+            {{- toYaml $pod.probes.startup | nindent 12 }}
           livenessProbe:
-            httpGet:
-              path: /
-              port: health
-            periodSeconds: 10
-            timeoutSeconds: 2
-            failureThreshold: 3
+            {{- toYaml $pod.probes.liveness | nindent 12 }}
           readinessProbe:
-            httpGet:
-              path: /
-              port: health
-            periodSeconds: 5
-            timeoutSeconds: 2
-            failureThreshold: 2
+            {{- toYaml $pod.probes.readiness | nindent 12 }}
           resources:
             {{- toYaml $collector.resources | nindent 12 }}
           securityContext:

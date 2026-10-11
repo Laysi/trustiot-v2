@@ -1,6 +1,6 @@
 # scripts
 
-Bun + TypeScript 腳本：本地一鍵啟動（清單 M6）、種子資料與 CI 檢查。Bun 版本鎖在根目錄 `.prototools`。不是 Cargo workspace 成員。腳本只用 Bun 內建的 API，執行時不需要安裝任何 npm 套件；`package.json` 只列型別檢查用的開發相依（`typescript`、`@types/bun`），版本鎖在 `bun.lock`，見下方「型別檢查與測試」。
+Bun + TypeScript 腳本：本地一鍵啟動（清單 M6）、種子資料、CI 檢查與發佈流程（`release/`）。Bun 版本鎖在根目錄 `.prototools`。不是 Cargo workspace 成員。腳本只用 Bun 內建的 API，執行時不需要安裝任何 npm 套件；`package.json` 只列型別檢查用的開發相依（`typescript`、`@types/bun`），版本鎖在 `bun.lock`，見下方「型別檢查與測試」。
 
 ## 本地開發環境
 
@@ -95,7 +95,7 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 之後改用 k3d 的成本低：服務的容器介面（埠、探針、環境變數）本來就照 chart 約定；種子資料、帳密產生與健康檢查不依賴 podman；只需換掉 `up` 與 `down` 啟動容器的那一層（`runArgs` 與 `commands.ts`），改成對 k3d 叢集 `helm install` 加 `kubectl port-forward --address 127.0.0.1`。與正式環境的已知差異：
 
 - Postgres 映像是官方的 `apache/age`；正式環境是 CloudNativePG 加自建的 AGE 映像（Laysi/trustiot-v2#57）。
-- 資料庫沒有 TLS，所以給服務的 `TRUSTIOT_POSTGRES_SSLMODE` 是 `disable`；chart 的 `external` 模式只接受 `verify-full`。
+- 資料庫沒有 TLS，所以給服務的 `TRUSTIOT_POSTGRES_SSLMODE` 是 `disable`；chart 的 `external` 模式只接受 `verify-full`。service-kit 的 Postgres 連線也只接受 `verify-full`（Laysi/trustiot-v2#53），用 Postgres 的服務在這裡會拒絕啟動，第一個這樣的服務加進來之前，這裡的 Postgres 要改成 TLS。
 - Mosquitto 用靜態的帳號、ACL 檔，不加 TLS、不用 dynsec、不經 mqtt-bridge（決策 6 的正式設定在 Laysi/trustiot-v2#84）。
 
 ## CI 檢查
@@ -106,6 +106,43 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 ## nightly
 
 `nightly/` 是 nightly workflow（`.github/workflows/nightly.yml`）的程式：`run.ts` 起 k3d 叢集、對兩份 values 各部署一次並做冒煙測試（`smoke.ts`、`manifests.ts`），輸出 `report.json`、`report.md` 與 `run.log`；`notify.ts` 依結果開、更新或關閉 `nightly-failure` issue。只在 CI 執行（需要 docker、k3d、kubectl、helm），做什麼與失敗怎麼辦見 [CI 與發佈](../docs/architecture/ci-release.md)。`bun test scripts/nightly` 不需要叢集；`renovate.test.ts` 檢查 `renovate.json5` 的釘選規則與 `.prototools` 的 `# renovate:` 註解。
+
+## release/：發佈流程
+
+`.github/workflows/release.yml` 的每個 job 各執行一支腳本，彼此以 JSON 交接（型別在 `release/lib.ts`）。流程、權限與驗證方式見 [CI 與發佈](../docs/architecture/ci-release.md) 的「release.yml」。
+
+| 腳本 | job | 內容 |
+| --- | --- | --- |
+| `release/plan.ts` | plan | 檢查 tag（正式版要在 main 上，且該 commit 在 main 的 ci 通過），列出要發佈的映像（`deploy/images/`）與 chart，`helm lint --strict` |
+| `release/build.ts` | build | 交叉編譯 Rust、建置 arm64 映像（OCI 壓縮檔）與 SPDX SBOM，不推送 |
+| `release/publish.ts` | publish | 推送映像、cosign 簽章與 SBOM attestation，打包、推送並簽章 chart，建立 GitHub Release |
+| `release/verify.ts` | verify | 以唯讀權限驗證發佈結果，輸出驗證報告 |
+
+單元測試：`bun test scripts/release`，也包含在 `bun test scripts` 裡（`lib.test.ts` 不需要任何工具；`plan.test.ts` 在暫存目錄建立 git repo）。
+
+### 本機跑一次完整流程
+
+需要 podman、skopeo，以及 `proto install` 裝好的 bun、helm、zig、cargo-zigbuild、cargo-auditable、syft、cosign，在 repo 根目錄執行。發佈到本機的暫用 registry，並以暫用的 cosign 金鑰簽章：本機模式不寫入公開的透明紀錄，也不建立 GitHub Release，而且只接受本機（`localhost`、`127.0.0.1`）的 registry。`--local-test-key` 與 `--registry` 在 GitHub Actions 裡會被拒絕，正式發佈一律 keyless 簽章、只發佈到 GHCR。映像壓縮檔不小，工作目錄放在 `~/.cache` 而不是 `/tmp`。
+
+```sh
+mkdir -p ~/.cache && work="$(mktemp -d ~/.cache/trustiot-release.XXXXXX)"
+podman run -d --rm --name release-registry -p 127.0.0.1:5068:5000 \
+  docker.io/library/registry:3@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8
+COSIGN_PASSWORD= cosign generate-key-pair --output-key-prefix "$work/test"
+printf '### 其他\n\n- **測試**：本機發佈。\n' > "$work/notes.md"
+
+bun scripts/release/plan.ts --tag v0.0.0-rc.1 --dry-run \
+  --registry 127.0.0.1:5068/laysi/trustiot-v2 --output "$work/plan.json"
+bun scripts/release/build.ts --plan "$work/plan.json" --out "$work/out"
+COSIGN_PASSWORD= bun scripts/release/publish.ts --plan "$work/plan.json" --artifacts "$work/out" \
+  --notes "$work/notes.md" --output "$work/published.json" --local-test-key "$work/test"
+bun scripts/release/verify.ts --plan "$work/plan.json" --published "$work/published.json" \
+  --output "$work/report.md" --local-test-key "$work/test"
+
+podman stop release-registry
+```
+
+`--dry-run` 以目前的 HEAD 規劃，tag 不必存在，也不檢查正式版是否在 main 上、main 的 ci 是否通過（後者以 `GITHUB_TOKEN` 讀 GitHub API）。只要建置映像，前兩步就夠了。同一個版本再跑一次 publish 會得到相同的 digest，不會重複推送；內容不同時 publish 會拒絕覆蓋。
 
 ## 型別檢查與測試
 

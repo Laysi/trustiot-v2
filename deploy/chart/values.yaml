@@ -364,7 +364,7 @@ observability:
   # OpenTelemetry collector (decision 22). Every service sends its logs, traces and metrics to it
   # over OTLP/HTTP (the chart sets TRUSTIOT__TELEMETRY__OTLP_ENDPOINT). The collector redacts
   # credentials, personal data, request bodies and chat content, then writes logs and traces to
-  # the trustiot_logs database in ClickHouse (services/ingest/migrations/clickhouse/0005_logs.sql,
+  # the trustiot_logs database in ClickHouse (services/ingest/migrations/clickhouse/0006_logs.sql,
   # 30 day retention) and, when forwarding is on, also sends them to the customer's SIEM.
   # Metrics are accepted and dropped until their storage is decided (Laysi/trustiot-v2#183).
   collector:
@@ -372,7 +372,7 @@ observability:
     image:
       # opentelemetry-collector-contrib (it has the ClickHouse exporter and the redaction
       # processor), pinned to the multi-arch index digest (arm64 included). Changing the
-      # version can change the exporter's columns: check them against 0005_logs.sql.
+      # version can change the exporter's columns: check them against 0006_logs.sql.
       repository: docker.io/otel/opentelemetry-collector-contrib
       tag: "0.161.0"
       digest: sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1

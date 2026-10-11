@@ -6,3 +6,4 @@
 - `istio/`：Istio ambient 的安裝 values（k3s、OpenShift）與入口用的 ext_authz provider；整個叢集共用，裝 chart 之前先裝。
 - `flux/`：SaaS 的 GitOps 設定（Flux）。地端不裝 Flux。
 - `host/`：主機安裝：k3s、cloudflared。cloudflared 是 SaaS 的主機元件，不在 chart 內。
+- `images/`：release.yml 發佈的 arm64 容器映像，每個子目錄一個，見它的 [README](images/README.md)。

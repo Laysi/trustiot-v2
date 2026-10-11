@@ -78,18 +78,33 @@ fn the_readme_lists_every_topic_with_its_message_and_delivery() {
     }
 }
 
+/// The rows of the ACL table: the table that follows the `| acltype | topic | allow |` header.
+fn acl_table_rows(readme: &str) -> Vec<&str> {
+    let mut lines = readme
+        .lines()
+        .skip_while(|line| *line != "| acltype | topic | allow |");
+    assert!(lines.next().is_some(), "README has no ACL table");
+    assert_eq!(lines.next(), Some("| --- | --- | --- |"));
+    lines.take_while(|line| line.starts_with('|')).collect()
+}
+
 #[test]
 fn the_readme_lists_the_gateway_acl() {
     let readme = readme();
     assert!(readme.contains(&format!("`{GATEWAY_ROLE}`")));
-    for rule in gateway_role_acls() {
-        let acltype = serde_json::to_value(rule.acltype).unwrap();
-        let row = format!(
-            "| `{}` | `{}` | {} |",
-            acltype.as_str().unwrap(),
-            rule.topic,
-            if rule.allow { "是" } else { "否" }
-        );
-        assert!(readme.contains(&row), "README lacks the ACL row {row}");
-    }
+    let generated: Vec<String> = gateway_role_acls()
+        .into_iter()
+        .map(|rule| {
+            let acltype = serde_json::to_value(rule.acltype).unwrap();
+            format!(
+                "| `{}` | `{}` | {} |",
+                acltype.as_str().unwrap(),
+                rule.topic,
+                if rule.allow { "是" } else { "否" }
+            )
+        })
+        .collect();
+    // Exactly the generated rules, in order: a rule in the README that the code does not
+    // generate (such as a stale wildcard rule) fails as well as a missing one.
+    assert_eq!(acl_table_rows(&readme), generated);
 }

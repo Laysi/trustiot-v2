@@ -141,6 +141,8 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/mesh.e2e.ts
 
 邏輯有不需要叢集的單元測試（`tunnel-recovery.test.ts`、`raw-client.test.ts`），由 `bun test deploy/chart` 執行。測試用真正的子行程（`fake-port-forward.ts`，一個 TCP proxy）扮演 kubectl：它在收到請求時切斷連線，300 毫秒後才結束行程，重現上述競態。
 
+給通道行程用的本機埠一律由 `ports.ts` 的 `freePort()` 取得，不要自己 `Bun.listen` 再 `stop`：在 WSL2 上 `stop(true)` 回傳時監聽 socket 還沒關，要等事件迴圈再跑一輪才會關。剛啟動通道就探測該埠的程式會連到這個將死的監聽，誤以為通道已就緒，再把請求送進即將關閉的 socket（`no HTTP response … ""`）。`freePort()` 等到連線被拒絕才回傳（Laysi/trustiot-v2#288，`docs/test-reports/2026-10-11-288-tunnel-recovery-wsl.md`）。
+
 ## 日誌管線（`otel.e2e.ts`）
 
 `otel.e2e.ts` 驗證決策 22 的日誌管線（Laysi/trustiot-v2#73）：以地端型態加 `values-otel-e2e.yaml` 安裝 chart（叢集內 ClickHouse、OpenTelemetry collector，`assets` 換成 `crates/service-kit` 的 example-service），另外部署一個替身 SIEM（同一個 collector 映像，只收帶 Bearer token 的 OTLP/HTTP，把收到的資料印到 stdout），然後檢查：

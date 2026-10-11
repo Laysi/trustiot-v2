@@ -816,7 +816,7 @@ describe("OpenTelemetry collector (decision 22)", () => {
       traces_table_name: "otel_traces",
     });
     expect(container.image).toContain(`:${EXPORTER_VERSION}@`);
-    const sql = readFileSync(join(REPO_ROOT, "services/ingest/migrations/clickhouse/0005_logs.sql"), "utf8");
+    const sql = readFileSync(join(REPO_ROOT, "services/ingest/migrations/clickhouse/0006_logs.sql"), "utf8");
     for (const [table, columns] of Object.entries(EXPORTER_COLUMNS)) {
       const ddl = sql.split(`CREATE TABLE IF NOT EXISTS trustiot_logs.${table}\n`)[1]?.split("\nENGINE")[0] ?? "";
       const defined = [...ddl.matchAll(/^ {4}([A-Za-z]+) /gm)].map((m) => m[1]);
@@ -911,7 +911,11 @@ describe("OpenTelemetry collector (decision 22)", () => {
     const sources = network.ingress[0]?.from.map((peer) => peer.podSelector?.matchLabels["app.kubernetes.io/component"]);
     expect(sources?.sort()).toEqual(services);
     expect(network.ingress[0]?.ports).toEqual([{ port: 15008, protocol: "TCP" }]);
-    expect(network.ingress.at(-1)).toEqual({ from: [{ ipBlock: { cidr: "169.254.7.127/32" } }] });
+    // The kubelet's probes reach only the health_check port; OTLP (4318) comes through the mesh.
+    expect(network.ingress.at(-1)).toEqual({
+      from: [{ ipBlock: { cidr: "169.254.7.127/32" } }],
+      ports: [{ port: 13133, protocol: "TCP" }],
+    });
   });
 
   test("the pod rolls when the configuration changes", () => {
@@ -1178,6 +1182,21 @@ type NetworkPolicySpec = {
 describe("service-to-service authorization (decision 27)", () => {
   const GATEWAY_SA = `${RELEASE}-ingress-istio`;
   const GATEWAY_PODS = { "gateway.networking.k8s.io/gateway-name": `${RELEASE}-ingress` };
+  // istio-cni SNATs every connection from the node's network namespace to an ambient pod to this
+  // address (kubelet probes, but also any hostNetwork process), and ztunnel lets it through
+  // without mTLS or AuthorizationPolicy, so the NetworkPolicy may open only the probe ports.
+  const HOST_SOURCE = "169.254.7.127/32";
+  const isHostRule = (rule: NonNullable<NetworkPolicySpec["ingress"]>[number]) =>
+    (rule.from ?? []).some((peer) => peer.ipBlock?.cidr === HOST_SOURCE);
+  // The rule that admits the host source on the given probe ports.
+  const hostRule = (...ports: number[]) => ({
+    from: [{ ipBlock: { cidr: HOST_SOURCE } }],
+    ports: ports.map((port) => ({ port, protocol: "TCP" })),
+  });
+  // Services probe /healthz and /readyz on their http port (serviceDefaults.probes).
+  const SERVICE_PROBE_PORT = 8080;
+  // Bundled ClickHouse probes /ping on its HTTP port; the native protocol (9000) stays closed.
+  const CLICKHOUSE_PROBE_PORT = 8123;
   const principal = (serviceAccount: string, trustDomain = "cluster.local") =>
     `${trustDomain}/ns/${NAMESPACE}/sa/${serviceAccount}`;
   // The ingress e2e backends plus two services nobody routes to: assets calls alerts, nobody
@@ -1198,7 +1217,7 @@ describe("service-to-service authorization (decision 27)", () => {
   // The services whose pods a NetworkPolicy admits on the HBONE port, and whether the ingress
   // gateway's pods are admitted too.
   function hboneSources(manifests: Manifest[], spec: NetworkPolicySpec) {
-    const hbone = (spec.ingress ?? []).filter((rule) => rule.ports !== undefined);
+    const hbone = (spec.ingress ?? []).filter((rule) => !isHostRule(rule));
     for (const rule of hbone) expect(rule.ports).toEqual([{ port: 15008, protocol: "TCP" }]);
     const peers = hbone.flatMap((rule) => rule.from ?? []);
     for (const peer of peers) expect(peer.ipBlock).toBeUndefined();
@@ -1282,8 +1301,8 @@ describe("service-to-service authorization (decision 27)", () => {
           .map((p) => serviceOf(p.split("/sa/")[1] ?? ""))
           .sort(),
       );
-      // Kubelet probes come from istio-cni's SNAT address.
-      expect(spec.ingress?.at(-1)).toEqual({ from: [{ ipBlock: { cidr: "169.254.7.127/32" } }] });
+      // Kubelet probes come from istio-cni's SNAT address, admitted on the probe port only.
+      expect(spec.ingress?.at(-1)).toEqual(hostRule(SERVICE_PROBE_PORT));
       // Nothing else: no rule opens an application port or admits another source.
       expect(spec.ingress?.length).toBe(principals.length > 0 ? 2 : 1);
     }
@@ -1356,9 +1375,9 @@ describe("service-to-service authorization (decision 27)", () => {
     const spec = networkPolicy(manifests, "clickhouse");
     expect(selects(spec.podSelector.matchLabels ?? {}, labels)).toBe(true);
     expect(hboneSources(manifests, spec)).toEqual({ services: ["ingest", "otel-collector", "telemetry-query"], gateway: false });
-    // The kubelet's GET /ping probes arrive from istio-cni's SNAT address.
+    // The kubelet's GET /ping probes arrive from istio-cni's SNAT address, on the HTTP port only.
     expect(spec.ingress).toHaveLength(2);
-    expect(spec.ingress?.at(-1)).toEqual({ from: [{ ipBlock: { cidr: "169.254.7.127/32" } }] });
+    expect(spec.ingress?.at(-1)).toEqual(hostRule(CLICKHOUSE_PROBE_PORT));
   });
 
   test("ClickHouse refuses everyone while its callers are off, and gets no policy when external", () => {
@@ -1366,7 +1385,7 @@ describe("service-to-service authorization (decision 27)", () => {
     expect(principalsOf(meshPolicy(collectorOnly, "clickhouse"))).toEqual([principal(`${RELEASE}-otel-collector`)]);
     const off = render(SHAPES.saas, ["--set", "observability.collector.enabled=false"]);
     expect(meshPolicy(off, "clickhouse").rules).toBeUndefined();
-    expect(networkPolicy(off, "clickhouse").ingress).toEqual([{ from: [{ ipBlock: { cidr: "169.254.7.127/32" } }] }]);
+    expect(networkPolicy(off, "clickhouse").ingress).toEqual([hostRule(CLICKHOUSE_PROBE_PORT)]);
     const external = render([...SHAPES.saas, E2E_VALUES], enableAllServices);
     expect(external.some((m) => m.metadata.name === `${RELEASE}-clickhouse`)).toBe(false);
   });
@@ -1418,6 +1437,107 @@ describe("service-to-service authorization (decision 27)", () => {
     const result = helmTemplate([...SHAPES.saas, E2E_VALUES], ["--skip-schema-validation", "--set-json", `mesh.calls=${calls}`]);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(expected);
+  });
+
+  type Probe = { httpGet?: { port: number | string }; tcpSocket?: { port: number | string }; grpc?: { port: number }; exec?: unknown };
+  // The TCP ports a workload's startup, liveness and readiness probes connect to, read from the
+  // rendered pod spec with named ports resolved through the container's own ports.
+  function probePorts(workload: Manifest): number[] {
+    const ports = new Set<number>();
+    for (const container of podSpec(workload).containers) {
+      for (const probe of [container.startupProbe, container.livenessProbe, container.readinessProbe] as (Probe | undefined)[]) {
+        if (!probe) continue;
+        for (const port of [probe.httpGet?.port, probe.tcpSocket?.port, probe.grpc?.port]) {
+          if (port === undefined) continue;
+          if (typeof port === "number") {
+            ports.add(port);
+            continue;
+          }
+          const named = container.ports?.find((p) => p.name === port);
+          if (!named) throw new Error(`${workload.metadata.name}: probe port ${port} is not a container port`);
+          ports.add(named.containerPort);
+        }
+      }
+    }
+    return [...ports].sort((a, b) => a - b);
+  }
+  // Every workload with its NetworkPolicy, and the rules of that policy that admit the host source.
+  function hostSourceRules(manifests: Manifest[]) {
+    const workloads = manifests.filter((m) => ["Deployment", "StatefulSet"].includes(m.kind));
+    expect(workloads.length).toBeGreaterThan(0);
+    return workloads.map((workload) => {
+      const spec = networkPolicy(manifests, serviceOf(workload.metadata.name));
+      return { workload, spec, rules: (spec.ingress ?? []).filter(isHostRule) };
+    });
+  }
+  // Overlays on top of each deployment shape, and extra helm arguments.
+  const PROBE_RENDERS: [string, string[], string[]][] = [
+    ["no services", [], []],
+    ["the smoke service", [SMOKE], []],
+    ["every service", [SMOKE], enableAllServices],
+    ["the ingress e2e overlay with calls", [E2E_VALUES], meshArgs],
+  ];
+
+  test.each(SHAPE_NAMES)("%s: the host source reaches only each workload's probe ports", (shape) => {
+    for (const [name, overlays, args] of PROBE_RENDERS) {
+      const manifests = render([...SHAPES[shape], ...overlays], args);
+      for (const { workload, spec, rules } of hostSourceRules(manifests)) {
+        const label = `${name}: ${workload.metadata.name}`;
+        const expected = probePorts(workload);
+        // One rule, with this source alone and exactly the probe ports; none without probe ports.
+        expect({ label, rules }).toEqual({ label, rules: expected.length > 0 ? [hostRule(...expected)] : [] });
+        // No other rule admits an ipBlock: the HBONE rule names pods only.
+        const others = (spec.ingress ?? []).filter((rule) => !isHostRule(rule));
+        expect({ label, ipBlocks: others.flatMap((rule) => (rule.from ?? []).filter((peer) => peer.ipBlock)) }).toEqual({ label, ipBlocks: [] });
+      }
+    }
+  }, SLOW_TEST_MS);
+
+  test("probe ports follow the probe definitions: named and numeric ports, tcpSocket, grpc, and exec", () => {
+    const PORTS = [
+      { name: "http", containerPort: 8080 },
+      { name: "grpc", containerPort: 9090 },
+      { name: "admin", containerPort: 9901 },
+      { name: "data", containerPort: 7000 },
+    ];
+    // smoke-echo with the given probes and ports; with routed=true the ingress gateway routes to
+    // it, so it also has an HBONE rule.
+    const smoke = (probes: object, routed = false) => {
+      const args = ["--set-json", `services.smoke-echo.probes=${JSON.stringify(probes)}`, "--set-json", `services.smoke-echo.ports=${JSON.stringify(PORTS)}`];
+      if (routed) args.push("--set-json", 'ingress.routes=[{"host":"app","path":"/","match":"PathPrefix","service":"smoke-echo"}]');
+      const manifests = render([...SHAPES.saas, SMOKE], args);
+      const workload = find(manifests, "Deployment", `${RELEASE}-smoke-echo`);
+      return { manifests, spec: networkPolicy(manifests, "smoke-echo"), rendered: probePorts(workload) };
+    };
+    const exec = { exec: { command: ["true"] } };
+    // Each probe kind and handler contributes its port; the application's other ports stay closed.
+    const mixed = smoke({
+      startup: { tcpSocket: { port: "admin" } },
+      liveness: { grpc: { port: 9090 } },
+      readiness: { httpGet: { path: "/readyz", port: 8080 } },
+    });
+    expect(mixed.rendered).toEqual([8080, 9090, 9901]);
+    expect(mixed.spec.ingress).toEqual([hostRule(8080, 9090, 9901)]);
+    // A port used by several probes is listed once; startup {} is off and an exec probe adds nothing.
+    const shared = smoke({ startup: {}, liveness: { httpGet: { path: "/healthz", port: "admin" } }, readiness: { tcpSocket: { port: "admin" } } });
+    expect(shared.spec.ingress).toEqual([hostRule(9901)]);
+    expect(smoke({ startup: exec, liveness: { tcpSocket: { port: "grpc" } }, readiness: exec }).spec.ingress).toEqual([hostRule(9090)]);
+    // Only exec probes: the host source gets no rule at all, never one without ports (all ports).
+    const execOnly = smoke({ startup: {}, liveness: exec, readiness: exec });
+    expect(execOnly.spec.policyTypes).toEqual(["Ingress"]);
+    expect(execOnly.spec.ingress).toEqual([]);
+    const routed = smoke({ startup: {}, liveness: exec, readiness: exec }, true);
+    expect(routed.spec.ingress?.filter(isHostRule)).toEqual([]);
+    expect(hboneSources(routed.manifests, routed.spec)).toEqual({ services: [], gateway: true });
+  }, SLOW_TEST_MS);
+
+  test("a probe on a port name the workload does not have fails the render", () => {
+    const result = helmTemplate(
+      [...SHAPES.saas, SMOKE],
+      ["--set-json", 'services.smoke-echo.probes={"readiness":{"tcpSocket":{"port":"metrics"}}}'],
+    );
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(/services\.smoke-echo: probes\.readiness uses port "metrics", which is not in ports/);
   });
 });
 

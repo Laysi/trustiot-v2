@@ -172,18 +172,21 @@ mesh:
 | --- | --- |
 | NetworkPolicy `<release>-default-deny` | 選取 namespace 內所有 pod、不放行任何連入：沒有其他 NetworkPolicy 放行的連線一律拒絕。服務全關時也會產生 |
 | AuthorizationPolicy `<release>-<服務或元件>` | 每個啟用的服務與每個部署的叢集內元件（目前是 `bundled` 的 ClickHouse）一個，ALLOW，以 selector 選它的 pod，只允許呼叫端的 principals（ztunnel 在 L4 執行）。沒有任何呼叫端時是沒有規則的 ALLOW，拒絕所有連線 |
-| NetworkPolicy `<release>-<服務或元件>` | 同上，每個一個：只從同一批呼叫端的 pod（與入口 gateway 的 pod）放行 TCP 15008，也就是 ztunnel 的 HBONE 埠，mesh 內的連線都從這裡進來，不直接連應用程式的埠；另放行 `169.254.7.127/32`，ambient 下 kubelet 的健康檢查由 istio-cni SNAT 成這個位址 |
+| NetworkPolicy `<release>-<服務或元件>` | 同上，每個一個：只從同一批呼叫端的 pod（與入口 gateway 的 pod）放行 TCP 15008，也就是 ztunnel 的 HBONE 埠，mesh 內的連線都從這裡進來，不直接連應用程式的埠；另對節點來源 `169.254.7.127/32`（kubelet 的健康檢查由 istio-cni SNAT 成這個位址）只放行該工作負載探針實際連的 TCP 埠，見下方「節點來源」。只有 exec 探針時不產生這條規則；沒有呼叫端也沒有探針埠時 `ingress: []`，拒絕所有連入 |
 
 - 兩層的分工：AuthorizationPolicy 驗證 mTLS 憑證裡的身分，ztunnel 對每條代理的連線檢查；NetworkPolicy 只看來源 pod 的 label 與 IP，擋的是新建立的 TCP 連線。拿掉 NetworkPolicy 時，清單外的呼叫仍被 ztunnel 重置；拿掉 AuthorizationPolicy 時，清單外的服務連不到對方的 15008，非 mesh 的 pod 連不到任何埠。被拒時呼叫端看到的是連線重置或拒絕，不是 HTTP 403（docs/feasibility/2026-10-10-edge-poc.md）。2026-10-10 在實驗機實測兩個方向（docs/test-reports/2026-10-10-63-mesh-authz.md）。
 - NetworkPolicy 這一層的限制，主要防線是 AuthorizationPolicy：
   - mesh 內的連線都經 15008，所以 NetworkPolicy 只有在 15008 依呼叫端的 pod 限定時才是 mesh 內的第二層；只放行「任何來源的 15008」（2026-10-10 PoC 的寫法）對 mesh 內的呼叫端沒有作用，只擋非 mesh 的 pod。
   - NetworkPolicy 不切斷已建立的連線，而 ztunnel 會保留兩個 pod 之間的 HBONE 連線重複使用。之後才收緊或加上的 NetworkPolicy，對既有連線上的呼叫不起作用，要等連線關閉（實測恢復 NetworkPolicy 後 90 秒內仍持續通過）；AuthorizationPolicy 的變更則立即套用到新的呼叫。
   - NetworkPolicy 依 label 選來源，能在 namespace 裡建 pod 的人可以複製服務的 label 通過它；mTLS 身分來自 ServiceAccount，只有 AuthorizationPolicy 擋得住（實測的 imposter）。
+- 節點來源 `169.254.7.127/32`：ambient 下 istio-cni 在節點上把「從節點的網路命名空間發出、連到 ambient pod」的連線一律 SNAT 成這個位址，pod 裡的 ztunnel 規則看到這個來源就直接交給應用程式的埠，不經 mTLS，也不套用 AuthorizationPolicy。kubelet 的健康檢查這樣進來，節點上其他行程也一樣，例如其他 namespace 的 `hostNetwork` pod 或節點上的系統服務。所以這條規則是兩層都管不到的入口，只能靠 NetworkPolicy 限縮：
+  - chart 只對探針實際連的埠放行：startup、liveness、readiness 探針中 `httpGet`、`tcpSocket`、`grpc` 的埠，具名的埠換成 container port 的數字，exec 探針不需要網路規則（Laysi/trustiot-v2#265）。埠由 `templates/_mesh.tpl` 的 `trustiot.mesh.probePorts` 從 pod 用的同一份探針設定推得：服務來自 `serviceDefaults.probes` 與 `services.<name>.probes`，叢集內元件來自 `trustiot.<元件>.pod`（ClickHouse 是 `templates/_clickhouse.tpl` 的 `trustiot.clickhouse.pod`），不在 values 另寫一份，改探針時 NetworkPolicy 跟著變。chart 測試對兩份 values 的多種組合，逐一比對每個工作負載 pod spec 裡的探針埠與這條規則。
+  - 剩下的開口：服務的探針與 API 共用 `http`（8080），所以節點上的行程仍連得到服務的 API，包括只靠 AuthorizationPolicy 限定呼叫端的 `/internal/` 路徑；代表使用者的請求仍要帶身分服務簽的內部身分 token，由服務自己驗簽（決策 27）。ClickHouse 只剩 HTTP 8123（`/ping` 以外的查詢都要帳密），原生協定 9000 從節點連不到。要完全隔開，健康檢查要改由只回應 `/healthz`、`/readyz` 的獨立埠提供。攻擊者要先控制節點上的 `hostNetwork` 行程，所以這是縱深防禦，不是可直接利用的漏洞。
 - NetworkPolicy 只管連入（`Ingress`），不限制連出：外部依賴（Qdrant Cloud、S3、SMTP、AI 端點、外部資料庫）以主機名稱指定，NetworkPolicy 無法依主機名稱放行。
 - 不部署 waypoint：L4 的身分已足夠。服務之間需要 L7 規則（例如依路徑或方法）時才為該服務加 waypoint，並把它的 AuthorizationPolicy 改成以 `targetRefs` 指向 Service、在 ztunnel 層放行 waypoint 的 ServiceAccount；代表使用者呼叫的授權（內部身分 token）由服務自己驗證，不靠 waypoint（Laysi/trustiot-v2#106）。
 - 叢集測試 `tests/e2e/mesh.e2e.ts` 以真實連線驗證清單內放行、清單外被拒，以及兩層各自生效，用法見該目錄的 README。
-- 叢集內的 ClickHouse 走同一套規則：只有 `mesh.calls` 列出的 `ingest` 與 `telemetry-query`，以及 chart 自動加上的 OpenTelemetry collector（Laysi/trustiot-v2#73）連得到它，其他服務與 pod 都被拒，kubelet 的 `/ping` 探測經 `169.254.7.127/32` 照常通過。還沒有的用戶端加入時要加進來：migration Job（Laysi/trustiot-v2#60）要在 `trustiot.mesh.plan` 加上 Job 當呼叫端（`mesh.calls` 的呼叫端只能是服務；元件之間的呼叫由 plan 自己加，collector 就是這樣），Grafana（Laysi/trustiot-v2#183）同樣。
-- collector 也是 mesh 內的元件（`trustiot.mesh.components` 的 `otel-collector`）：每個啟用的服務都自動是它的呼叫端（送 OTLP），其他 pod 連不到它。它連出到外部 ClickHouse 或 SIEM 不受 NetworkPolicy 限制（只管連入）；SIEM 在同一個 namespace 時，要另外以 NetworkPolicy 放行 collector 的 pod 連它。ClickHouse 的政策只以 chart 測試驗證，2026-10-10 的實驗機測試沒有部署它（見測試報告）。
+- 叢集內的 ClickHouse 走同一套規則：只有 `mesh.calls` 列出的 `ingest` 與 `telemetry-query`，以及 chart 自動加上的 OpenTelemetry collector（Laysi/trustiot-v2#73）連得到它，其他服務與 pod 都被拒，kubelet 的 `/ping` 探測經 `169.254.7.127/32` 照常通過，節點來源只開 HTTP 8123。還沒有的用戶端加入時要加進來：migration Job（Laysi/trustiot-v2#60）要在 `trustiot.mesh.plan` 加上 Job 當呼叫端（`mesh.calls` 的呼叫端只能是服務；元件之間的呼叫由 plan 自己加，collector 就是這樣），Grafana（Laysi/trustiot-v2#183）同樣。ClickHouse 的政策只以 chart 測試驗證，2026-10-10 的實驗機測試沒有部署它（見測試報告）。
+- collector 也是 mesh 內的元件（`trustiot.mesh.components` 的 `otel-collector`，埠與探針定義在 `trustiot.otel-collector.pod`）：每個啟用的服務都自動是它的呼叫端（送 OTLP），其他 pod 連不到它，節點來源只開健康檢查的 13133。它連出到外部 ClickHouse 或 SIEM 不受 NetworkPolicy 限制（只管連入）；SIEM 在同一個 namespace 時，要另外以 NetworkPolicy 放行 collector 的 pod 連它。
 - 預設拒絕套用到 namespace 內所有 pod，包括之後加入的叢集內元件（broker、Postgres 等）：在 mesh 內的元件加進 `trustiot.mesh.components`，由同一份清單產生政策；不在 mesh 內的元件自帶 NetworkPolicy，只放行實際的用戶端（見「擴充 chart」）。chart 測試檢查每個 Deployment 與 StatefulSet 的 pod 都有自己的 NetworkPolicy 與 AuthorizationPolicy。
 
 ### serviceDefaults 與 services.\<name\>
@@ -315,7 +318,7 @@ mesh:
 | `observability.sentry.dsnSecret.key` | `dsn` | |
 | `observability.collector.enabled` | `true` | 部署 OpenTelemetry collector，並把 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` 交給每個服務；見「OpenTelemetry collector」 |
 | `observability.collector.image.repository` | `docker.io/otel/opentelemetry-collector-contrib` | contrib 版才有 ClickHouse exporter 與 redaction processor |
-| `observability.collector.image.tag` | `0.161.0` | 實際版本由 digest 決定；換版本前先對照 exporter 的欄位與 `0005_logs.sql`（測試比對） |
+| `observability.collector.image.tag` | `0.161.0` | 實際版本由 digest 決定；換版本前先對照 exporter 的欄位與 `0006_logs.sql`（測試比對） |
 | `observability.collector.image.digest` | `sha256:fd328de2…5ac1` | 必填（版本固定），multi-arch index 的 digest，含 arm64 |
 | `observability.collector.image.pullPolicy` | `IfNotPresent` | |
 | `observability.collector.clickhouse.user` | `trustiot_collector` | collector 的 ClickHouse 帳號，由 migration Job 建立並授予 `trustiot_otel_collector` 角色；不能是 `default` 或角色本身的名稱 |
@@ -343,7 +346,7 @@ URL 欄位都不接受 `user:password@` 這種帶帳密的寫法。
 
 - 一個副本的 StatefulSet `<release>-clickhouse`，資料在 PVC `data-<release>-clickhouse-0`（`/var/lib/clickhouse`）；StatefulSet 刪除或縮容時保留 PVC。ClusterIP Service 只開 HTTP 8123 與 native 9000。
 - 伺服器設定只有一個 ConfigMap（`<release>-clickhouse-config`，掛成 `config.d`）：監聽位址、關掉 MySQL／PostgreSQL 相容埠與 interserver 埠、日誌只寫 stdout。設定變更時 pod 自動重啟。
-- 帳號、角色、row policy、settings profile 與 quota 一律不寫在設定檔（決策 14；ClickHouse Cloud 不能改設定檔）：由 migration Job（Laysi/trustiot-v2#60）以 bootstrap 管理帳號套用 `services/ingest/migrations/clickhouse/` 的 SQL，存在 ClickHouse 自己的 access storage（PVC 上的 `access/`）。唯一由映像產生的帳號是 bootstrap 管理帳號：映像的 entrypoint 依 `CLICKHOUSE_USER`、`CLICKHOUSE_PASSWORD_FILE`（掛載的 Secret）與 `CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1` 寫進 `users.d`（記憶體 emptyDir），並移除沒有密碼的 `default` 帳號。
+- 帳號、角色、row policy、settings profile 與 quota 一律不寫在設定檔（決策 14；ClickHouse Cloud 不能改設定檔）：由 migration Job（Laysi/trustiot-v2#60）以 bootstrap 管理帳號套用 `services/ingest/migrations/clickhouse/` 的 SQL，存在 ClickHouse 自己的 access storage（PVC 上的 `access/`）。租戶帳號只能讀的 view `trustiot.tenant_telemetry` 與它的 DEFINER 帳號（不能登入）也由這些 SQL 建立，chart 不必為它們設定任何值（Laysi/trustiot-v2#260）。唯一由映像產生的帳號是 bootstrap 管理帳號：映像的 entrypoint 依 `CLICKHOUSE_USER`、`CLICKHOUSE_PASSWORD_FILE`（掛載的 Secret）與 `CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1` 寫進 `users.d`（記憶體 emptyDir），並移除沒有密碼的 `default` 帳號。
 - 根目錄唯讀、以 UID 101 非 root 執行、不能提權、drop 所有 capability；探針是 `GET /ping`。pod 帶 `istio.io/dataplane-mode: ambient` 加入 ambient mesh，服務連 ClickHouse 由 ztunnel 加 mTLS。
 
 磁碟區大小沒有預設值，每個部署在安裝實例的覆寫檔設定 `clickhouse.bundled.storage.size`：每日筆數 × 保存天數 × 約 3.1 bytes（2026-10-09 實測，30 天 52 億筆佔 15.2 GiB）× 1.5（merge 時新舊 part 並存與系統表的餘裕）。例如每天 1 億筆、保存 400 天約 190 GB（遙測表的保存期限暫定 400 天，Laysi/trustiot-v2#92 定案）。磁碟用量的告警與擴充見清單 I2（硬碟水位告警）。
@@ -360,11 +363,11 @@ kubectl -n trustiot create secret generic trustiot-clickhouse-admin --from-liter
 
 - 一個副本的 Deployment `<release>-otel-collector`，ClusterIP Service 只開 OTLP/HTTP 4318；每個服務拿到 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT=http://<release>-otel-collector.<namespace>.svc:4318`，service-kit 因此開啟日誌、trace 與指標的匯出（叢集內明文 HTTP，pod 之間由 ztunnel 加 mTLS）。collector 開啟時服務的自訂 `env` 不能改這個變數，每個服務的資料都經過遮蔽。
 - 設定只有一個 ConfigMap（`<release>-otel-collector-config`），變更時 pod 自動重啟。密碼與 SIEM 的標頭不在設定檔裡：設定以 `${env:...}` 引用環境變數，Deployment 以 `secretKeyRef` 從 values 指定的 Secret 取得。
-- 管線：`memory_limiter` → `redaction`（trace 再加 `transform/redact`）→ exporter。日誌與 trace 寫進 ClickHouse 的 `trustiot_logs.otel_logs`、`trustiot_logs.otel_traces`（`services/ingest/migrations/clickhouse/0005_logs.sql`，保存 30 天，以寫入時間計算）；轉送開啟時同一份遮蔽後的資料也送到 SIEM。指標先收下丟棄（`nop`），存放位置由 Laysi/trustiot-v2#183 決定，服務的匯出不會因此報錯。
+- 管線：`memory_limiter` → `redaction`（trace 再加 `transform/redact`）→ exporter。日誌與 trace 寫進 ClickHouse 的 `trustiot_logs.otel_logs`、`trustiot_logs.otel_traces`（`services/ingest/migrations/clickhouse/0006_logs.sql`，保存 30 天，以寫入時間計算）；轉送開啟時同一份遮蔽後的資料也送到 SIEM。指標先收下丟棄（`nop`），存放位置由 Laysi/trustiot-v2#183 決定，服務的匯出不會因此報錯。
 - ClickHouse exporter 關掉 `create_schema`，只送 `INSERT`；表由 migration 建立。叢集內 ClickHouse 走 native 協定（9000），`external` 走 `clickhouse.external.url` 的 HTTPS，並掛 `clickhouse.external.caSecret` 的 CA。
 - 根目錄唯讀、非 root、不能提權、drop 所有 capability、沒有 ServiceAccount token；探針是 health_check 擴充的 `GET /`（13133，不在 Service 上）。pod 帶 `istio.io/dataplane-mode: ambient` 加入 ambient mesh。
 
-ClickHouse 帳號（決策 14：一律以 SQL 建立，不寫伺服器設定檔）：`0005_logs.sql` 建角色 `trustiot_otel_collector`，只有兩張日誌表的 `INSERT` 與 `SHOW COLUMNS`（exporter 啟動時以 `DESC TABLE` 讀欄位），沒有 `SELECT`，也碰不到其他資料庫。帳號由 migration Job（Laysi/trustiot-v2#60）以 `observability.collector.clickhouse.passwordSecret` 的密碼建立：
+ClickHouse 帳號（決策 14：一律以 SQL 建立，不寫伺服器設定檔）：`0006_logs.sql` 建角色 `trustiot_otel_collector`，只有兩張日誌表的 `INSERT` 與 `SHOW COLUMNS`（exporter 啟動時以 `DESC TABLE` 讀欄位），沒有 `SELECT`，也碰不到其他資料庫。帳號由 migration Job（Laysi/trustiot-v2#60）以 `observability.collector.clickhouse.passwordSecret` 的密碼建立：
 
 ```sql
 CREATE USER trustiot_collector IDENTIFIED WITH sha256_password BY '<password>';
@@ -445,7 +448,7 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 - **新增服務**：在 `values.yaml` 的 `services` 加一個 key，並同步 docs/architecture/deployment.md 的服務表（測試比對兩邊）。服務特有的埠、資源、探針與 Secret 寫在該 key 底下。
 - **服務之間的呼叫**：服務要呼叫另一個服務的內部 API 時，在服務的 issue 把這條呼叫加進 `values.yaml` 的 `mesh.calls`；沒列的呼叫會被重置。服務間授權的規則集中在 `templates/_mesh.tpl` 的 `trustiot.mesh.plan`，AuthorizationPolicy 與 NetworkPolicy 都由它產生，不要為單一服務另外寫政策。
 - **對外的路由**：服務要經入口對外時，在服務的 issue 把路由加進 `values.yaml` 的 `ingress.routes`（預設需要 cookie）。不要新增例外路徑：決策 27 只允許登入、閘道器憑證換發、MQTT 轉接與健康檢查四種，要加第五種必須先改決策。入口的規則集中在 `templates/_ingress.tpl` 的 `trustiot.ingress.plan`；可信的來源 IP 沿用 `trustiot.clientIpSource`，不要另外加欄位。
-- **新增叢集內元件**（broker、Postgres、ClickHouse、Qdrant、collector、Grafana）：放在自己的 `templates/<元件>.yaml`，以 `*.mode` 或開關控制；Service 只能是 ClusterIP；namespace 預設拒絕所有連入：元件在 mesh 內時（pod 帶 `istio.io/dataplane-mode: ambient`）把它加進 `templates/_mesh.tpl` 的 `trustiot.mesh.components`、用戶端列進 `mesh.calls`，AuthorizationPolicy 與 NetworkPolicy 由 chart 產生；不在 mesh 內時自帶 NetworkPolicy，只對實際的用戶端開它的埠，並讓 kubelet 的健康檢查到得了；在 `values.schema.json` 加欄位定義、在本文件加欄位說明（測試檢查 `values.yaml` 每個欄位都在本文件），並更新「元件與開關」與平台設定的表。
+- **新增叢集內元件**（broker、Postgres、ClickHouse、Qdrant、collector、Grafana）：放在自己的 `templates/<元件>.yaml`，以 `*.mode` 或開關控制；Service 只能是 ClusterIP；namespace 預設拒絕所有連入：元件在 mesh 內時（pod 帶 `istio.io/dataplane-mode: ambient`）把它加進 `templates/_mesh.tpl` 的 `trustiot.mesh.components`、用戶端列進 `mesh.calls`，並定義 `trustiot.<元件>.pod`（container ports 與探針，元件的模板也從它渲染，NetworkPolicy 依它只對節點來源開探針埠），AuthorizationPolicy 與 NetworkPolicy 由 chart 產生；不在 mesh 內時自帶 NetworkPolicy，只對實際的用戶端開它的埠，並讓 kubelet 的健康檢查到得了；在 `values.schema.json` 加欄位定義、在本文件加欄位說明（測試檢查 `values.yaml` 每個欄位都在本文件），並更新「元件與開關」與平台設定的表。
 - **Secret**：values 只能出現 `{name, key}` 形式的引用；schema 的 `additionalProperties: false` 會擋下放明文的新欄位。服務要拿新的依賴帳密時，在 `_helpers.tpl` 的 `trustiot.credentialCatalog` 加一列（變數名稱、Secret、可以拿的服務）、在 schema 的 `credentials` 列舉加上名稱，並更新「密鑰的環境變數」表；自訂 `env` 自動不能讀這個帳密。叢集內元件自己產生的帳密 Secret（例如 CloudNativePG 的資料庫帳號，Laysi/trustiot-v2#58）也要加進 `trustiot.dependencySecretRefs`。新的平台變數用 `TRUSTIOT_` 開頭，自動受保留規則保護。
 - **測試**：規則寫進 `tests/chart.test.ts`。`tests/values/` 的兩個安裝實例範例與 `smoke.yaml`（以 traefik/whoami 當替身服務）也供 nightly（Laysi/trustiot-v2#69）在叢集上安裝使用；叢集測試是 `tests/e2e/ingress.e2e.ts`（入口）、`tests/e2e/mesh.e2e.ts`（服務間授權）與 `tests/e2e/otel.e2e.ts`（日誌管線），前兩個共用 `tests/e2e/cluster.ts`，nightly 可直接沿用。`bun test` 的 kubeconform 已帶 CRD schema 目錄，Gateway API 與 Istio 的資源可以直接驗證。兩個實例範例會部署叢集內 ClickHouse（`clickhouse.mode: bundled`）與 collector，在叢集上安裝前要先建立 `trustiot-clickhouse-admin` Secret（見「叢集內的 ClickHouse」）與 collector 的 `trustiot-otel-collector-clickhouse` Secret；叢集測試用 `tests/e2e/values-e2e.yaml` 改成 `external`，不部署 ClickHouse，也關掉 collector。`tests/` 不會打包進 chart（`.helmignore`）。
 

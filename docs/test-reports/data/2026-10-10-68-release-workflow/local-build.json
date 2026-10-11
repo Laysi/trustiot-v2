@@ -1,0 +1,14 @@
+{
+  "tag": "v0.0.0-rc.1",
+  "commit": "ee8c4388772d2dce6c8e93f2b7cd60ec298c803a",
+  "images": [
+    {
+      "name": "release-selftest",
+      "digest": "sha256:182467660b124c93204d556d04aec5ec87dfcd274dd27bfdf85ee2d2248ac2ea",
+      "size": 1136128,
+      "sbomPackages": 13,
+      "archive": "images/release-selftest.oci.tar",
+      "sbom": "images/release-selftest.spdx.json"
+    }
+  ]
+}

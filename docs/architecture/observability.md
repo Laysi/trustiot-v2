@@ -8,9 +8,9 @@
 2. 閘道器：warn 以上隨 MQTT 持續上傳，有流量上限；完整日誌由後台下指令上傳指定時段；不寫 SD 卡。
 3. 地端可以把 OTLP 另外轉送到客戶自己的 SIEM。
 4. 日誌不得包含聊天內容、request body、憑證與個資（[#110](https://github.com/Laysi/trustiot/issues/110)）。
-5. 管線（2026-10-11，Laysi/trustiot-v2#73）：Helm chart 部署 OpenTelemetry collector（contrib 版，以 digest 固定），每個服務以 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` 把 OTLP 送給它；collector 遮蔽後把日誌與 trace 寫進 ClickHouse 的 `trustiot_logs.otel_logs`、`otel_traces`，保存 30 天，以伺服器寫入時間計算（`services/ingest/migrations/clickhouse/0005_logs.sql`）。collector 的 ClickHouse 帳號只能寫入這兩張表，由 migration Job 以 SQL 建立（決策 14）。地端開啟轉送時，同一份遮蔽後的日誌（可加 trace）以 OTLP/HTTP 或 gRPC 送到客戶的 SIEM。設定與欄位見 [chart 的 README](../../deploy/chart/README.md)「OpenTelemetry collector」。
+5. 管線（2026-10-11，Laysi/trustiot-v2#73）：Helm chart 部署 OpenTelemetry collector（contrib 版，以 digest 固定），每個服務以 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` 把 OTLP 送給它；collector 遮蔽後把日誌與 trace 寫進 ClickHouse 的 `trustiot_logs.otel_logs`、`otel_traces`，保存 30 天，以伺服器寫入時間計算（`services/ingest/migrations/clickhouse/0006_logs.sql`）。collector 的 ClickHouse 帳號只能寫入這兩張表，由 migration Job 以 SQL 建立（決策 14）。地端開啟轉送時，同一份遮蔽後的日誌（可加 trace）以 OTLP/HTTP 或 gRPC 送到客戶的 SIEM。設定與欄位見 [chart 的 README](../../deploy/chart/README.md)「OpenTelemetry collector」。
 6. 第 4 點在 collector 再擋一次：名稱像憑證、個資、request body 或聊天內容的屬性一律遮蔽（名單與 service-kit 相同），所有屬性值、日誌 body、span 名稱與 status message 裡的私鑰、URL 帳密、Bearer 與 JWT 等 token、API key、email、電話與身分證字號也遮蔽；遮蔽在寫進 ClickHouse 與轉送 SIEM 之前，適用於所有來源。這和 service-kit 的遮蔽一樣只是最後防線。
-7. Rust 服務的日誌由 `crates/service-kit` 輸出：stdout 每行一個 JSON 物件，請求內的日誌帶 trace id；OTLP 匯出（日誌、trace、指標）預設關閉，設定 collector 位址後才開啟；名稱像憑證、個資或內容的欄位，值一律遮蔽。遮蔽只是最後防線，第 4 點仍要靠程式本身不記錄這些值；格式與規則見[它的 README](../../crates/service-kit/README.md)。
+7. Rust 服務的日誌由 `crates/service-kit` 輸出：stdout 每行一個 JSON 物件，請求內的日誌帶 trace id；OTLP 匯出（日誌、trace、指標）預設關閉，設定 collector 位址後才開啟，collector 位址的路徑不論日誌等級都不進日誌（OpenTelemetry SDK 的診斷日誌只輸出 INFO 以上）；名稱像憑證、個資或內容的欄位，值一律遮蔽。遮蔽只是最後防線，第 4 點仍要靠程式本身不記錄這些值；格式與規則見[它的 README](../../crates/service-kit/README.md)。
 
 看板與告警：
 

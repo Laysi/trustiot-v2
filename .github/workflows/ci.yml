@@ -71,9 +71,9 @@ jobs:
       - name: clippy for service-kit without default features
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: cargo clippy --package service-kit --no-default-features --all-targets --locked -- -D warnings
-      # service-kit's container and job_lock tests and the ingest ClickHouse schema test start
-      # throwaway containers (PID 1, Postgres and ClickHouse) with podman or docker, both on the
-      # hosted runner. GitHub sets CI=true, which
+      # service-kit's container and job_lock tests, the ingest ClickHouse schema test and the
+      # protocol broker ACL test start throwaway containers (PID 1, Postgres, ClickHouse and
+      # Mosquitto) with podman or docker, both on the hosted runner. GitHub sets CI=true, which
       # makes them fail instead of skip when no container runtime works, so a green test step
       # means they ran.
       - name: test

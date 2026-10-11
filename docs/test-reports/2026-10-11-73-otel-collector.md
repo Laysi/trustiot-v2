@@ -4,7 +4,7 @@
 
 ## 環境
 
-- **受測 commit**：分支 `feat/73-otel-collector` 的 `f092ee6`（`4ce2fd1` 合併 main `404817d`），加上 `otel.e2e.ts` 的前置檢查修正（Helm 4 沒有 `helm list --all`，改用與 `cluster.ts` 相同的 `helm status` 檢查；修正隨本報告一起提交）。
+- **受測 commit**：分支 `feat/73-otel-collector` 的 `f092ee6`（`4ce2fd1` 合併 main `404817d`），加上 `otel.e2e.ts` 的前置檢查修正（Helm 4 沒有 `helm list --all`，改用與 `cluster.ts` 相同的 `helm status` 檢查；修正隨本報告一起提交）。受測時日誌表的 migration 叫 `0005_logs.sql`；2026-10-11 合併 main 時因 `0005_tenant_view.sql`（Laysi/trustiot-v2#260）已占用 0005，改名為 `0006_logs.sql`，內容不變。本報告與 `local-redaction.txt` 提到的 `0005_logs.sql`、「migration 0001–0005」都是指受測當時的檔案。
 - **本機**：x86_64 Fedora，podman 6.1.3；bun 1.4.2、helm 4.3.0、kubectl 1.36.5、Rust 工具鏈，皆由 `.prototools` 鎖定。
 - **lab**：`trustiot-mac-m1`（Fedora Asahi，aarch64），k3s v1.36.5+k3s1，Istio 1.30.5 ambient。issue 的驗收條件寫「k3d 測試」，依 2026-10-10 使用者決定改在 lab 的 k3s 上執行（Kubernetes 只在 lab 執行）。
 - **映像**：
