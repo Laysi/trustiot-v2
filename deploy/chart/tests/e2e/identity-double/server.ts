@@ -8,11 +8,16 @@
 //   GET /healthz, GET /readyz                  200 "ok"
 //   anything else                              200 JSON echo of the request (exception routes)
 //
+// Like a TrustIoT service (crates/service-kit), it also listens on a health port (HEALTH_PORT,
+// default 8081, the chart's healthPort) that answers GET /healthz and GET /readyz with 200 and
+// everything else with 404. The chart's probes use that port.
+//
 // The echo lists every request header (repeated headers joined by ", "), so a test can see
 // whether an x-internal-identity header reached this backend. Never deploy this outside a test
 // namespace: any "valid-" session is accepted.
 
 const PORT = Number(process.env.PORT ?? "8080");
+const HEALTH_PORT = Number(process.env.HEALTH_PORT ?? "8081");
 const CHECK_PREFIX = "/internal/ext-authz";
 const SLOW_MS = 3000;
 
@@ -46,6 +51,18 @@ async function check(req: Request, url: URL): Promise<Response> {
   return new Response(null, { status: 200, headers: { "x-internal-identity": identity } });
 }
 
+function isProbe(req: Request, url: URL): boolean {
+  return req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz");
+}
+
+const health = Bun.serve({
+  port: HEALTH_PORT,
+  hostname: "0.0.0.0",
+  fetch(req) {
+    return isProbe(req, new URL(req.url)) ? new Response("ok") : new Response("not found", { status: 404 });
+  },
+});
+
 const server = Bun.serve({
   port: PORT,
   hostname: "0.0.0.0",
@@ -54,9 +71,7 @@ const server = Bun.serve({
     if (url.pathname === CHECK_PREFIX || url.pathname.startsWith(`${CHECK_PREFIX}/`)) {
       return check(req, url);
     }
-    if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
-      return new Response("ok");
-    }
+    if (isProbe(req, url)) return new Response("ok");
     return json(200, {
       service: "identity-double",
       method: req.method,
@@ -71,8 +86,9 @@ const server = Bun.serve({
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.on(signal, () => {
     server.stop(true);
+    health.stop(true);
     process.exit(0);
   });
 }
 
-console.log(`identity double listening on ${server.hostname}:${server.port}`);
+console.log(`identity double listening on ${server.hostname}:${server.port}, health on port ${health.port}`);

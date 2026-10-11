@@ -121,6 +121,8 @@ fn pid_1_in_a_container_drains_and_exits_within_the_grace_period() {
             "no-new-privileges",
             "--publish",
             "127.0.0.1::8080",
+            "--publish",
+            "127.0.0.1::8081",
             "--env",
             "TRUSTIOT__GREETING=hello from a container",
             "--env",
@@ -131,8 +133,10 @@ fn pid_1_in_a_container_drains_and_exits_within_the_grace_period() {
         ],
     );
     let address = container.host_address("8080/tcp");
+    // The default health port, which the chart's probes use.
+    let health = container.host_address("8081/tcp");
     let started = Instant::now();
-    while get(address, "/readyz").map(|response| response.status).ok() != Some(200) {
+    while get(health, "/readyz").map(|response| response.status).ok() != Some(200) {
         assert!(
             started.elapsed() < Duration::from_secs(30),
             "the service never became ready: {:?}",
@@ -158,16 +162,17 @@ fn pid_1_in_a_container_drains_and_exits_within_the_grace_period() {
             .expect("run stop")
     });
 
-    // Readiness fails while the service still serves during the drain delay. The 503 exists
-    // from the moment SIGTERM arrives until the listener closes `DRAIN_DELAY` later, and on a
-    // loaded machine `stop` can take seconds to deliver the signal, so the poll starts with
-    // `stop` and waits for the 503 instead of assuming when it comes. Connections that fail
-    // before the signal, or after the listener closed, are not an answer; they are retried
-    // until the deadline and reported if no 503 was seen.
+    // Readiness fails while the service still serves during the drain delay. The kubelet's port,
+    // the health port, answers 503 from the moment SIGTERM arrives until the process exits (the
+    // API listener closes `DRAIN_DELAY` after the signal), and on a loaded machine `stop` can
+    // take seconds to deliver the signal, so the poll starts with `stop` and waits for the 503
+    // instead of assuming when it comes. Connections that fail before the signal, or after the
+    // process exited, are not an answer; they are retried until the deadline and reported if no
+    // 503 was seen.
     let mut draining = None;
     let mut last_outcome = String::from("no request completed");
     while stop_started.elapsed() < READINESS_FAILS_BY {
-        match get(address, "/readyz") {
+        match get(health, "/readyz") {
             Ok(response) if response.status == 503 => {
                 draining = Some(response);
                 break;

@@ -1,0 +1,49 @@
+bun test v1.4.2 (744846f84)
+
+deploy/chart/tests/chart.test.ts:
+1169 |         if (standIns.has(service)) {
+1170 |           // A whoami stand-in of a test overlay has no health port to probe.
+1171 |           expect({ label, rules }).toEqual({ label, rules: [hostRule(API_PORT)] });
+1172 |           continue;
+1173 |         }
+1174 |         expect({ label, rules }).toEqual({ label, rules: [hostRule(HEALTH_PORT)] });
+                                        ^
+error: expect(received).toEqual(expected)
+
+@@ -13,3 +13,3 @@
+          {
+-           "port": 8081,
++           "port": 8080,
+            "protocol": "TCP",
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (deploy/chart/tests/chart.test.ts:1174:34)
+(fail) service-to-service authorization (decision 27) > saas: the node source reaches every service on its health port only, never its API port [1117.56ms]
+1169 |         if (standIns.has(service)) {
+1170 |           // A whoami stand-in of a test overlay has no health port to probe.
+1171 |           expect({ label, rules }).toEqual({ label, rules: [hostRule(API_PORT)] });
+1172 |           continue;
+1173 |         }
+1174 |         expect({ label, rules }).toEqual({ label, rules: [hostRule(HEALTH_PORT)] });
+                                        ^
+error: expect(received).toEqual(expected)
+
+@@ -13,3 +13,3 @@
+          {
+-           "port": 8081,
++           "port": 8080,
+            "protocol": "TCP",
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (deploy/chart/tests/chart.test.ts:1174:34)
+(fail) service-to-service authorization (decision 27) > onprem: the node source reaches every service on its health port only, never its API port [984.56ms]
+
+ 0 pass
+ 185 filtered out
+ 2 fail
+ 10 expect() calls
+Ran 2 tests across 1 file. [3.90s]

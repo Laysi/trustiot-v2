@@ -1,6 +1,6 @@
 //! The Helm chart's contract with services (deploy/chart/README.md, "chart 與服務的約定"),
-//! checked against the kit's defaults so neither side drifts unnoticed: the HTTP port, the probe
-//! paths, and the time the chart allows between SIGTERM and SIGKILL. Reads the `serviceDefaults`
+//! checked against the kit's defaults so neither side drifts unnoticed: the HTTP port, the health
+//! port and the probe paths on it, and the time the chart allows between SIGTERM and SIGKILL. Reads the `serviceDefaults`
 //! block of deploy/chart/values.yaml line by line; no YAML parser is needed for these keys.
 
 use std::time::Duration;
@@ -60,11 +60,26 @@ fn the_kit_listens_on_the_chart_port() {
 }
 
 #[test]
-fn the_chart_probes_the_kit_health_paths() {
+fn the_kit_serves_health_on_the_chart_health_port() {
+    let block = service_defaults();
+    let port: u16 = value_of(&block, "healthPort:")
+        .expect("healthPort in serviceDefaults")
+        .parse()
+        .expect("healthPort is a number");
+    assert_eq!(HttpConfig::default().health_listen_addr.port(), port);
+}
+
+#[test]
+fn the_chart_probes_the_kit_health_paths_on_the_health_port() {
     let block = service_defaults();
     assert_eq!(value_after(&block, "startup:", "path:"), LIVENESS_PATH);
     assert_eq!(value_after(&block, "liveness:", "path:"), LIVENESS_PATH);
     assert_eq!(value_after(&block, "readiness:", "path:"), READINESS_PATH);
+    // The chart names the health port `health`; the node reaches only the probe ports
+    // (deploy/chart/README.md, "節點來源"), so a probe on `http` would open the API to it.
+    for probe in ["startup:", "liveness:", "readiness:"] {
+        assert_eq!(value_after(&block, probe, "port:"), "health", "{probe}");
+    }
 }
 
 #[test]
