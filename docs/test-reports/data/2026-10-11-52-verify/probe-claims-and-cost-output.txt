@@ -1,0 +1,17 @@
+$ cargo test --release -p service-kit --test probe_tmp -- --nocapture
+(source: probe-claims-and-cost-source.txt; the probe file was not committed)
+
+== sub spellings
+sub 01928f6e-7a3c-7d4e-8f00-0123456789ab -> accepted as 01928f6e-7a3c-7d4e-8f00-0123456789ab
+sub 01928F6E-7A3C-7D4E-8F00-0123456789AB -> accepted as 01928f6e-7a3c-7d4e-8f00-0123456789ab
+sub 01928f6e7a3c7d4e8f000123456789ab -> accepted as 01928f6e-7a3c-7d4e-8f00-0123456789ab
+sub {01928f6e-7a3c-7d4e-8f00-0123456789ab} -> accepted as 01928f6e-7a3c-7d4e-8f00-0123456789ab
+sub urn:uuid:01928f6e-7a3c-7d4e-8f00-0123456789ab -> accepted as 01928f6e-7a3c-7d4e-8f00-0123456789ab
+sub 00000000-0000-0000-0000-000000000000 -> accepted as 00000000-0000-0000-0000-000000000000
+sub ffffffff-ffff-ffff-ffff-ffffffffffff -> accepted as ffffffff-ffff-ffff-ffff-ffffffffffff
+sub 01928f6e-7a3c-4d4e-8f00-0123456789ab -> accepted as 01928f6e-7a3c-4d4e-8f00-0123456789ab
+== per-verification cost (release build)
+typical token: 319.894us per verification (2000 runs)
+forged signature: 427.056us per verification
+malformed header: 1.511us per verification
+test probe ... ok

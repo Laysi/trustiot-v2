@@ -1,0 +1,25 @@
+    Finished `release` profile [optimized] target(s) in 21m 47s
+     Running tests/identity_adversarial.rs (target/release/deps/identity_adversarial-7c40b4d0809c1191)
+
+running 17 tests
+test algorithm_confusion_is_rejected ... ok
+test claims_are_typed_and_required ... ok
+test every_single_character_edit_of_a_valid_token_is_rejected ... edited tokens tried: 28908
+ok
+test header_parameters_are_strict ... ok
+test http_layer_accepts_only_one_well_formed_header ... ok
+test key_ids_select_keys_exactly ... ok
+test key_sets_of_extreme_size_or_depth_do_not_exhaust_the_parser ... ok
+test lifetime_and_leeway_boundaries ... ok
+test nbf_must_be_an_integer_when_present ... ok
+test payload_json_is_strict ... ok
+test rotation_with_old_and_new_keys ... ok
+test signature_malleability_and_degenerate_signatures_are_rejected ... ok
+test size_limits_and_resource_use ... ok
+test the_identity_header_is_read_once_and_nowhere_else ... ok
+test token_shape_and_encoding_are_strict ... ok
+test unusable_key_sets_are_refused_without_echoing_them ... ok
+test weak_public_keys_are_refused ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.78s
+
