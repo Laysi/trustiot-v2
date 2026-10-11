@@ -71,7 +71,9 @@ pub fn unique_name(kind: &str) -> String {
     )
 }
 
-/// A container that is removed (with `rm --force`) when dropped.
+/// A container that is removed when dropped, together with its anonymous volumes: the images of
+/// Postgres, ClickHouse and Mosquitto declare `VOLUME`s, and `rm --force` alone leaves every one
+/// of them behind (a workstation ran out of podman locks that way, Laysi/trustiot-v2#334).
 #[derive(Debug)]
 pub struct Container {
     /// `podman` or `docker`.
@@ -99,7 +101,7 @@ impl Container {
 impl Drop for Container {
     fn drop(&mut self) {
         let _ = Command::new(self.runtime)
-            .args(["rm", "--force", &self.name])
+            .args(["rm", "--force", "--volumes", &self.name])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();

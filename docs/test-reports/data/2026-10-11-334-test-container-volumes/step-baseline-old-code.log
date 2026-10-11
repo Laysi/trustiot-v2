@@ -1,0 +1,40 @@
+   Compiling sqlx-core v0.9.0
+   Compiling uuid v1.28.0
+   Compiling contract v0.1.0 (./crates/contract)
+   Compiling sqlx-postgres v0.9.0
+   Compiling sqlx v0.9.0
+   Compiling service-kit v0.1.0 (./crates/service-kit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.85s
+     Running tests/job_lock.rs (target/debug/deps/job_lock-49929e5d6f796cf0)
+
+running 10 tests
+test a_panicking_job_keeps_its_schedule_and_logs_no_payload ... ok
+test only_one_replica_runs_a_job_scheduled_on_both_at_once ... ok
+test a_job_that_panics_before_returning_its_future_keeps_its_schedule_too ... ok
+test dropped_guards_and_panicking_jobs_release_the_lock ... ok
+test a_lost_session_cancels_the_job_and_frees_the_lock ... ok
+test a_partitioned_holder_stops_its_job_within_the_lock_timeout ... ok
+test periodic_runs_on_two_replicas_never_overlap ... ok
+test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... ok
+test released_locks_return_their_connection_to_the_pool ... ok
+test taking_and_releasing_the_lock_give_up_within_the_timeout_in_a_partition ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.63s
+
+     Running tests/tenant_db.rs (target/debug/deps/tenant_db-ec6cb619313f7180)
+
+running 11 tests
+test a_service_without_a_postgres_ca_refuses_to_start ... ok
+test a_service_without_server_verification_refuses_to_start ... ok
+test connections_verify_the_server_certificate_and_host_name ... ok
+test the_service_role_cannot_bypass_row_level_security ... ok
+test the_tenant_setting_does_not_leak_across_pooled_connections ... ok
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test a_tenant_reads_and_writes_only_its_own_rows ... ok
+test outbox_events_follow_the_tenant_policies ... ok
+test without_a_tenant_no_rows_are_visible_or_writable ... ok
+test the_example_service_serves_each_user_only_their_tenant ... ok
+test sessions_row_level_security_would_not_protect_are_refused ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.02s
+
