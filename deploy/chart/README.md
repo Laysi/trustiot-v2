@@ -252,6 +252,7 @@ mesh:
 | `services.<name>.credentials` | 只給這個服務的依賴帳密，可列 `qdrant-read`、`qdrant-write`、`object-storage`、`smtp`、`ai`，變數見「密鑰的環境變數」；不能放在 `serviceDefaults`，避免每個服務都拿到。`ai` 只能給 `ai-gateway`（決策 28）；`qdrant-read` 與 `qdrant-write` 只能給 `knowledge`，因為 Qdrant 查詢的租戶條件由知識庫服務加上（docs/architecture/rag.md） |
 | `services.<name>.resources` | 逐欄覆寫資源設定 |
 | `services.<name>.podSecurityContext` | 逐欄覆寫；限制同 `serviceDefaults` |
+| `services.<name>.podSecurityContext.fsGroup` | 只有 `identity` 有預設值 `65532`：簽章私鑰檔的權限是 0440、屬於 root 與這個群組，服務以群組身分讀它，容器裡其他使用者讀不到（見「內部身分」）。OpenShift 設成 `null`，由 restricted-v2 SCC 從 namespace 的範圍指派；其他平台拿掉它，身分服務會讀不到私鑰而拒絕啟動 |
 | `services.<name>.securityContext` | 逐欄覆寫；限制同 `serviceDefaults` |
 | `services.<name>.probes` | 每個 probe 整個取代；liveness 與 readiness 不能是空的 |
 | `services.<name>.preStopSleepSeconds` | 覆寫 preStop 等待秒數 |
@@ -281,7 +282,7 @@ mesh:
 | 欄位 | 預設值 | 說明 |
 | --- | --- | --- |
 | `internalIdentity.publicKeys` | `[]` | 身分服務的 Ed25519 公鑰，每把 `{kid, x}`：`kid` 是 1–64 個可見 ASCII 字元、不能重複，`x` 是 32 bytes 公鑰的 base64url（不補 `=`，43 個字元），最多 8 把。chart 組成 JWK Set 放進平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`；schema 只允許這兩個欄位，所以私鑰（`d`）放不進 values 與 ConfigMap。空的時候不設定，服務會拒絕啟動。輪替期間同時列新舊兩把 |
-| `internalIdentity.signingKeySecret.name` | `""` | 放身分服務簽章私鑰的既有 Secret；身分服務啟用時必填（沒有它身分服務拒絕啟動）。私鑰是 PKCS#8 PEM（`openssl genpkey -algorithm ed25519`），以唯讀 volume 只掛進身分服務的 `/etc/trustiot/identity-signing-key/signing-key.pem`，路徑以 `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` 告訴它；任何服務的自訂 `env` 都不能讀這個 Secret 的這個 key。私鑰對應的公鑰必須在 `publicKeys` 裡，身分服務以它找出自己的 `kid`，找不到就拒絕啟動 |
+| `internalIdentity.signingKeySecret.name` | `""` | 放身分服務簽章私鑰的既有 Secret；身分服務啟用時必填（沒有它身分服務拒絕啟動）。私鑰是 PKCS#8 PEM（`openssl genpkey -algorithm ed25519`），以唯讀 volume 只掛進身分服務的 `/etc/trustiot/identity-signing-key/signing-key.pem`，檔案權限 0440（`defaultMode`），只有 root 與 pod 的 `fsGroup`（`services.identity.podSecurityContext.fsGroup`）可讀，路徑以 `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` 告訴它；任何服務的自訂 `env` 都不能讀這個 Secret 的這個 key。私鑰對應的公鑰必須在 `publicKeys` 裡，身分服務以它找出自己的 `kid`，找不到就拒絕啟動 |
 | `internalIdentity.signingKeySecret.key` | `signing-key.pem` | |
 
 身分服務只在啟動時讀私鑰，Kubernetes 不會因 Secret 改變而重啟 pod：換私鑰後要滾動重啟身分服務（`kubectl rollout restart`，或改 `services.identity.podAnnotations`），步驟見 `services/identity/README.md` 的「金鑰輪替」。
@@ -427,7 +428,7 @@ kubectl -n trustiot create secret generic trustiot-clickhouse-admin --from-liter
 
 ## OpenShift 與其他 Kubernetes
 
-- Pod 符合 restricted Pod Security Standard，且不固定 UID，可以在 OpenShift 的 restricted-v2 SCC 下執行。
+- Pod 符合 restricted Pod Security Standard，且不固定 UID，可以在 OpenShift 的 restricted-v2 SCC 下執行。例外是固定的群組 ID：身分服務的 `fsGroup`（`services.identity.podSecurityContext.fsGroup`）與叢集內 ClickHouse 的 UID／GID，在 OpenShift 都設成 `null` 交給 SCC 指派。
 - 預設只排到 arm64 節點；客戶用 x86 主機時，要先加出 amd64 映像（決策 5）再調整 `serviceDefaults.nodeSelector`。
 - chart 需要叢集已裝 Istio ambient 與 Gateway API CRD，並設好 ext_authz provider。k3s 用 `global.platform=k3s`，OpenShift 用 `global.platform=openshift` 或 OpenShift Service Mesh 3，步驟見 `deploy/istio/README.md`。
 - 入口 gateway 的 pod 由 Istio 產生，以 UID 1337 執行，符合 restricted Pod Security Standard（2026-10-10 在 restricted namespace 實測）；OpenShift 的 restricted-v2 SCC 會指派其他 UID，目前沒有 OpenShift 環境可測。

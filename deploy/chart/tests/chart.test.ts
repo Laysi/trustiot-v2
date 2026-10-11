@@ -413,10 +413,16 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61)", () => {
   test("the signing key is mounted read-only into the identity service only", () => {
     const manifests = render([...SHAPES.saas, SMOKE], [...enableAllServices, ...signingKey]);
     const identity = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`));
+    // Mode 0440: root and the pod's fsGroup read the file, no other user in the container can.
     expect(identity.volumes).toContainEqual({
       name: "identity-signing-key",
-      secret: { secretName: "trustiot-identity-signing", items: [{ key: "signing-key.pem", path: "signing-key.pem" }] },
+      secret: {
+        secretName: "trustiot-identity-signing",
+        defaultMode: 0o440,
+        items: [{ key: "signing-key.pem", path: "signing-key.pem" }],
+      },
     });
+    expect(identity.securityContext?.fsGroup).toBe(65532);
     expect(identity.containers[0]?.volumeMounts).toContainEqual({
       name: "identity-signing-key",
       mountPath: "/etc/trustiot/identity-signing-key",
@@ -430,7 +436,17 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61)", () => {
       const text = JSON.stringify(pod);
       expect(text).not.toContain("trustiot-identity-signing");
       expect(text).not.toContain("TRUSTIOT_IDENTITY_SIGNING_KEY_FILE");
+      expect(pod.securityContext?.fsGroup).toBeUndefined();
     }
+    // OpenShift: the SCC assigns the fsGroup; the file mode stays.
+    const openshift = render(
+      [...SHAPES.saas, SMOKE],
+      [...enableAllServices, ...signingKey, "--set", "services.identity.podSecurityContext.fsGroup=null"],
+    );
+    const sccAssigned = podSpec(find(openshift, "Deployment", `${RELEASE}-identity`));
+    expect(sccAssigned.securityContext?.fsGroup).toBeUndefined();
+    expect(sccAssigned.securityContext?.runAsNonRoot).toBe(true);
+    expect(JSON.stringify(sccAssigned.volumes)).toContain('"defaultMode":288');
     // Nothing of the private key reaches a ConfigMap.
     for (const configMap of manifests.filter((m) => m.kind === "ConfigMap")) {
       expect(JSON.stringify(configMap)).not.toContain("trustiot-identity-signing");

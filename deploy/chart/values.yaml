@@ -173,6 +173,11 @@ serviceDefaults:
 services:
   identity:
     enabled: false
+    # The signing key file is mode 0440, owned by root and the pod's fsGroup, so the service reads
+    # it through this group and no other user in the container can (README.md, "內部身分"). On
+    # OpenShift set fsGroup to null: the restricted-v2 SCC assigns one from the namespace range.
+    podSecurityContext:
+      fsGroup: 65532
   assets:
     enabled: false
   certs:

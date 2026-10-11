@@ -98,7 +98,7 @@ GHCR 只接受 classic personal access token，所以以專用機器帳號建立
 chart 的欄位（Laysi/trustiot-v2#61，說明在 [deploy/chart/README.md](../../deploy/chart/README.md) 的「內部身分」）：
 
 - **公鑰**：`internalIdentity.publicKeys`，每把 `{kid, x}`，`x` 是 32 bytes 公鑰的 base64url。chart 組成 JWK Set 放進平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`（ConfigMap）；ConfigMap 改變時每個服務都會滾動更新。公鑰不是祕密，SaaS 寫在安裝實例覆寫檔，不必加密。
-- **私鑰**：`internalIdentity.signingKeySecret` 指向的 Secret（`name`；`key` 預設 `signing-key.pem`），內容是 PKCS#8 PEM，只以唯讀檔案掛進身分服務的 `/etc/trustiot/identity-signing-key/signing-key.pem`。SaaS 的這個 Secret 以 SOPS 加密。
+- **私鑰**：`internalIdentity.signingKeySecret` 指向的 Secret（`name`；`key` 預設 `signing-key.pem`），內容是 PKCS#8 PEM，只以唯讀檔案掛進身分服務的 `/etc/trustiot/identity-signing-key/signing-key.pem`，檔案權限 0440，只有 root 與 pod 的 `fsGroup`（`services.identity.podSecurityContext.fsGroup`，預設 65532；OpenShift 設成 `null` 由 SCC 指派）讀得到。SaaS 的這個 Secret 以 SOPS 加密。
 - **kid 不另外設定**：身分服務啟動時用私鑰對 `publicKeys` 的每個 kid 簽一個測試 token 再驗證，找出自己的 kid。私鑰對應的公鑰不在 `publicKeys` 裡時，新的 pod 拒絕啟動，舊的 pod 繼續服務。身分服務只在啟動時讀私鑰，Secret 改變不會讓它重啟。
 
 為什麼要依這個順序、等多久，見 [crates/service-kit/README.md](../../crates/service-kit/README.md) 的「公鑰與輪替」與 [services/identity/README.md](../../services/identity/README.md) 的「金鑰輪替」。SaaS 的三個步驟各是一個 PR：

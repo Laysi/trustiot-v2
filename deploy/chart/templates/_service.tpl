@@ -279,6 +279,8 @@ spec:
         - name: identity-signing-key
           secret:
             secretName: {{ $signingKey.name }}
+            {{- /* 0440: root and the pod's fsGroup (services.identity.podSecurityContext) only. */}}
+            defaultMode: 288
             items:
               - key: {{ $signingKey.key }}
                 path: {{ include "trustiot.identity.signingKeyFile" .root }}
