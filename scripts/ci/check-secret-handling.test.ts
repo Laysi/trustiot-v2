@@ -1147,6 +1147,22 @@ stringData:
     expect(checkSecretManifests("deploy/chart/templates/ingress.yaml", gateway)).toEqual([]);
   });
 
+  test("the repository scan skips test doubles kept as test evidence, not other scripts", () => {
+    const wrapper = '#!/bin/sh\nexec /usr/bin/podman "$@"\n';
+    const root = tempRoot({
+      ".dockerignore": "*\n",
+      "docs/test-reports/data/2026-10-11-1-x/podman-wrapper.sh": wrapper,
+      "scripts/podman-wrapper.sh": wrapper,
+    });
+    try {
+      expect(messages(checkRepository(root).violations)).toEqual([
+        expect.stringMatching(/^scripts\/podman-wrapper\.sh:2 runs a container tool whose subcommand is not fixed text/),
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("the repository scan reads .tpl helpers and JSON manifests", () => {
     const root = tempRoot({
       ".dockerignore": "*\n",

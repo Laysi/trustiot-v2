@@ -1,0 +1,27 @@
+# Post-fix run on branch fix/285-otlp-endpoint-redaction, after merging origin/main (cc1bef2).
+# Command (build host, CI=1): rcheck.sh 285 'cargo test --locked -p service-kit --test otlp --test logging --test verify_leaks 2>&1 | grep -E "^test |^test result|Running"'
+
+     Running tests/logging.rs
+test logs_are_json_with_trace_ids_and_never_contain_request_data ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+     Running tests/otlp.rs
+test an_endpoint_with_a_query_is_refused_without_printing_it ... ok
+test logs_traces_and_metrics_export_without_request_data ... ok
+test export_is_off_unless_configured ... ok
+test endpoint_path_stays_out_of_output_at_debug_when_the_collector_answers_400 ... ok
+test endpoint_path_stays_out_of_output_at_trace_when_the_collector_answers_400 ... ok
+test endpoint_path_stays_out_of_output_at_debug_when_the_collector_resets ... ok
+test endpoint_path_stays_out_of_output_at_trace_when_the_collector_resets ... ok
+test sdk_targets_cannot_be_turned_up_by_name ... ok
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.96s
+     Running tests/verify_leaks.rs
+test nothing_a_request_carries_reaches_logs_or_otlp_on_any_path ... ok
+test an_unreachable_collector_url_with_a_secret_path_does_not_reach_stdout ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.37s
+
+# Full checks in the same session (same host):
+# cargo fmt --all --check                                                       ok
+# cargo clippy --locked --workspace --all-targets -- -D warnings                ok
+# cargo clippy --locked -p service-kit --no-default-features --all-targets -- -D warnings   ok
+# cargo test --locked --workspace                                               all "test result: ok", 0 failed
+# cargo test --locked -p service-kit --no-default-features                      all "test result: ok", 0 failed

@@ -26,7 +26,7 @@ pub enum Value {
     Int(i64),
     /// A float register value, or any value after scale and offset (rebuild checklist F5).
     Float(f64),
-    /// A string register value, at most [`MAX_TEXT_BYTES`] bytes.
+    /// A string register value, at most [`MAX_TEXT_BYTES`] bytes and without U+0000.
     Text(String),
 }
 
@@ -40,6 +40,9 @@ pub enum ValueError {
         /// The text's length in bytes.
         len: usize,
     },
+    /// The text contains U+0000. The agent strips the NUL padding of a Modbus string register
+    /// before sending it; a NUL that remains is not a measurement, like a NaN float.
+    NulInText,
 }
 
 impl fmt::Display for ValueError {
@@ -50,6 +53,7 @@ impl fmt::Display for ValueError {
                 f,
                 "text value is {len} bytes; the limit is {MAX_TEXT_BYTES} bytes"
             ),
+            Self::NulInText => f.write_str("text value contains U+0000"),
         }
     }
 }
@@ -57,14 +61,18 @@ impl fmt::Display for ValueError {
 impl std::error::Error for ValueError {}
 
 impl Value {
-    /// Checks the invariants the variants cannot express: finite floats and bounded text.
+    /// Checks the invariants the variants cannot express: finite floats, and bounded text
+    /// without U+0000.
     pub fn validate(&self) -> Result<(), ValueError> {
         match self {
             Self::Bool(_) | Self::Int(_) => Ok(()),
             Self::Float(value) if value.is_finite() => Ok(()),
             Self::Float(_) => Err(ValueError::NonFiniteFloat),
-            Self::Text(text) if text.len() <= MAX_TEXT_BYTES => Ok(()),
-            Self::Text(text) => Err(ValueError::TextTooLong { len: text.len() }),
+            Self::Text(text) if text.len() > MAX_TEXT_BYTES => {
+                Err(ValueError::TextTooLong { len: text.len() })
+            }
+            Self::Text(text) if crate::codec::has_nul(text) => Err(ValueError::NulInText),
+            Self::Text(_) => Ok(()),
         }
     }
 }
@@ -180,6 +188,12 @@ mod tests {
             })
         );
         assert_eq!(Value::Text("x".repeat(MAX_TEXT_BYTES)).validate(), Ok(()));
+        assert_eq!(
+            Value::Text("AB\0".to_owned()).validate(),
+            Err(ValueError::NulInText)
+        );
+        // Other control characters are left to whoever renders the text.
+        assert_eq!(Value::Text("a\tb\nc\u{1b}".to_owned()).validate(), Ok(()));
         assert_eq!(Value::Int(i64::MIN).validate(), Ok(()));
     }
 }

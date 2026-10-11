@@ -1,6 +1,6 @@
 # scripts
 
-Bun + TypeScript 腳本：本地一鍵啟動（清單 M6）、種子資料與 CI 檢查。Bun 版本鎖在根目錄 `.prototools`。不是 Cargo workspace 成員。腳本只用 Bun 內建的 API，執行時不需要安裝任何 npm 套件；`package.json` 只列型別檢查用的開發相依（`typescript`、`@types/bun`），版本鎖在 `bun.lock`，見下方「型別檢查與測試」。
+Bun + TypeScript 腳本：本地一鍵啟動（清單 M6）、種子資料、CI 檢查與發佈流程（`release/`）。Bun 版本鎖在根目錄 `.prototools`。不是 Cargo workspace 成員。腳本只用 Bun 內建的 API，執行時不需要安裝任何 npm 套件；`package.json` 只列型別檢查用的開發相依（`typescript`、`@types/bun`），版本鎖在 `bun.lock`，見下方「型別檢查與測試」。
 
 ## 本地開發環境
 
@@ -101,12 +101,49 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 ## CI 檢查
 
 - `ci/check-workflows.ts`：CI 的 `workflow-policy` 檢查。每個 job 要明列 `permissions`，action 與 reusable workflow 要釘 40 字元 commit SHA（本地 action 不必釘，但要放在 `.github/actions/` 下），容器映像要釘 digest，不得使用 `pull_request_target` 與 `workflow_run`；規則與理由見 [CI 與發佈](../docs/architecture/ci-release.md)。執行：`bun scripts/ci/check-workflows.ts`。
-- `ci/check-secret-handling.ts`：同一個 job 的密鑰處理檢查。repo 內每個 Dockerfile 與 Containerfile 不 COPY 金鑰類檔案（也不經目錄或萬用字元帶進 repo 裡的金鑰類檔案）、`ARG` 與 `ENV` 不放密鑰、複製整個 build context 時要有以 `*` 開頭的 ignore 檔；根目錄的 `.dockerignore` 只有 `*`，不用 Dockerfile 專屬的 ignore 檔與 `--ignorefile`；`--build-arg` 只能是字面值的 `NAME=value`、名稱不像密鑰；映像建置一律以 `lib/build-context.ts` 的 `containerBuildArgs(context, options)` 產生 `podman build` 的參數，它會先檢查實際的 context 並只接受白名單內的建置選項（不接受 `--build-context`、`--volume` 這類讓建置讀到 context 以外檔案的選項），其他地方不直接寫建置指令，也不以執行時才決定的子指令呼叫容器工具（`lib/podman.ts` 在執行時擋下不經 `containerBuildArgs` 的建置）；workflow 的 `run` 不寫 `${{ secrets.* }}`；repo 內的 Kubernetes Secret 一律以 SOPS 加密。規則與理由見 [密鑰與權限](../docs/architecture/secrets.md)。執行：`bun scripts/ci/check-secret-handling.ts`。測試檔（`*.test.ts`）不掃描 `--build-arg`，因為它們刻意寫出違規的例子。
+- `ci/check-secret-handling.ts`：同一個 job 的密鑰處理檢查。repo 內每個 Dockerfile 與 Containerfile 不 COPY 金鑰類檔案（也不經目錄或萬用字元帶進 repo 裡的金鑰類檔案）、`ARG` 與 `ENV` 不放密鑰、複製整個 build context 時要有以 `*` 開頭的 ignore 檔；根目錄的 `.dockerignore` 只有 `*`，不用 Dockerfile 專屬的 ignore 檔與 `--ignorefile`；`--build-arg` 只能是字面值的 `NAME=value`、名稱不像密鑰；映像建置一律以 `lib/build-context.ts` 的 `containerBuildArgs(context, options)` 產生 `podman build` 的參數，它會先檢查實際的 context 並只接受白名單內的建置選項（不接受 `--build-context`、`--volume` 這類讓建置讀到 context 以外檔案的選項），其他地方不直接寫建置指令，也不以執行時才決定的子指令呼叫容器工具（`lib/podman.ts` 在執行時擋下不經 `containerBuildArgs` 的建置）；workflow 的 `run` 不寫 `${{ secrets.* }}`；repo 內的 Kubernetes Secret 一律以 SOPS 加密。規則與理由見 [密鑰與權限](../docs/architecture/secrets.md)。執行：`bun scripts/ci/check-secret-handling.ts`。測試檔（`*.test.ts`）不當成腳本掃描，因為它們刻意寫出違規的例子；`docs/test-reports/data/` 裡隨報告保存的測試替身（例如轉傳參數的 podman 包裝腳本）也不掃描，CI 與發佈不會執行它們。
 - `ci/lint-workflows.ts`：CI 的 `workflow-policy` 的另一步，以 `.prototools` 釘選的 actionlint 檢查 workflow 的語法與各處可用的 context，擋下 GitHub 無法解析的檔案（例如 job 層 `env` 用了 `runner.temp`）；不啟用 shellcheck，理由見同一份文件的「Workflow 語法檢查」。執行：`proto install actionlint` 後 `bun scripts/ci/lint-workflows.ts`。
 
 ## nightly
 
 `nightly/` 是 nightly workflow（`.github/workflows/nightly.yml`）的程式：`run.ts` 起 k3d 叢集、對兩份 values 各部署一次並做冒煙測試（`smoke.ts`、`manifests.ts`），輸出 `report.json`、`report.md` 與 `run.log`；`notify.ts` 依結果開、更新或關閉 `nightly-failure` issue。只在 CI 執行（需要 docker、k3d、kubectl、helm），做什麼與失敗怎麼辦見 [CI 與發佈](../docs/architecture/ci-release.md)。`bun test scripts/nightly` 不需要叢集；`renovate.test.ts` 檢查 `renovate.json5` 的釘選規則與 `.prototools` 的 `# renovate:` 註解。
+
+## release/：發佈流程
+
+`.github/workflows/release.yml` 的每個 job 各執行一支腳本，彼此以 JSON 交接（型別在 `release/lib.ts`）。流程、權限與驗證方式見 [CI 與發佈](../docs/architecture/ci-release.md) 的「release.yml」。
+
+| 腳本 | job | 內容 |
+| --- | --- | --- |
+| `release/plan.ts` | plan | 檢查 tag（正式版要在 main 上，且該 commit 在 main 的 ci 通過），列出要發佈的映像（`deploy/images/`）與 chart，`helm lint --strict` |
+| `release/build.ts` | build | 交叉編譯 Rust、建置 arm64 映像（OCI 壓縮檔）與 SPDX SBOM，不推送 |
+| `release/publish.ts` | publish | 推送映像、cosign 簽章與 SBOM attestation，打包、推送並簽章 chart，建立 GitHub Release |
+| `release/verify.ts` | verify | 以唯讀權限驗證發佈結果，輸出驗證報告 |
+
+單元測試：`bun test scripts/release`，也包含在 `bun test scripts` 裡（`lib.test.ts` 不需要任何工具；`plan.test.ts` 在暫存目錄建立 git repo）。
+
+### 本機跑一次完整流程
+
+需要 podman、skopeo，以及 `proto install` 裝好的 bun、helm、zig、cargo-zigbuild、cargo-auditable、syft、cosign，在 repo 根目錄執行。發佈到本機的暫用 registry，並以暫用的 cosign 金鑰簽章：本機模式不寫入公開的透明紀錄，也不建立 GitHub Release，而且只接受本機（`localhost`、`127.0.0.1`）的 registry。`--local-test-key` 與 `--registry` 在 GitHub Actions 裡會被拒絕，正式發佈一律 keyless 簽章、只發佈到 GHCR。映像壓縮檔不小，工作目錄放在 `~/.cache` 而不是 `/tmp`。
+
+```sh
+mkdir -p ~/.cache && work="$(mktemp -d ~/.cache/trustiot-release.XXXXXX)"
+podman run -d --rm --name release-registry -p 127.0.0.1:5068:5000 \
+  docker.io/library/registry:3@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8
+COSIGN_PASSWORD= cosign generate-key-pair --output-key-prefix "$work/test"
+printf '### 其他\n\n- **測試**：本機發佈。\n' > "$work/notes.md"
+
+bun scripts/release/plan.ts --tag v0.0.0-rc.1 --dry-run \
+  --registry 127.0.0.1:5068/laysi/trustiot-v2 --output "$work/plan.json"
+bun scripts/release/build.ts --plan "$work/plan.json" --out "$work/out"
+COSIGN_PASSWORD= bun scripts/release/publish.ts --plan "$work/plan.json" --artifacts "$work/out" \
+  --notes "$work/notes.md" --output "$work/published.json" --local-test-key "$work/test"
+bun scripts/release/verify.ts --plan "$work/plan.json" --published "$work/published.json" \
+  --output "$work/report.md" --local-test-key "$work/test"
+
+podman stop release-registry
+```
+
+`--dry-run` 以目前的 HEAD 規劃，tag 不必存在，也不檢查正式版是否在 main 上、main 的 ci 是否通過（後者以 `GITHUB_TOKEN` 讀 GitHub API）。只要建置映像，前兩步就夠了。同一個版本再跑一次 publish 會得到相同的 digest，不會重複推送；內容不同時 publish 會拒絕覆蓋。
 
 ## 型別檢查與測試
 

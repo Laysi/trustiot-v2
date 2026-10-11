@@ -1,0 +1,32 @@
+// Does a connect right after Listener.stop(true) still reach the stopped listener?
+// Run as diag/d3.ts with `bun diag/d3.ts` (investigation only, not part of the test suite).
+async function freePort(): Promise<number> {
+  const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+  const port = server.port;
+  server.stop(true);
+  return port;
+}
+async function probe(port: number): Promise<string> {
+  try {
+    const s = await Bun.connect({ hostname: "127.0.0.1", port, socket: { data() {} } });
+    s.end();
+    return "connected";
+  } catch (e) {
+    return `refused (${(e as { code?: string }).code})`;
+  }
+}
+const results: Record<string, number> = {};
+for (let i = 0; i < 20; i++) {
+  const port = await freePort();
+  const r = await probe(port);
+  results[r] = (results[r] ?? 0) + 1;
+}
+console.log("probe right after freePort():", JSON.stringify(results));
+const after: Record<string, number> = {};
+for (let i = 0; i < 20; i++) {
+  const port = await freePort();
+  await Bun.sleep(20);
+  const r = await probe(port);
+  after[r] = (after[r] ?? 0) + 1;
+}
+console.log("probe 20 ms after freePort():", JSON.stringify(after));

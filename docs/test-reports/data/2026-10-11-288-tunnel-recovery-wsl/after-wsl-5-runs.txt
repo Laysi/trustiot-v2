@@ -1,0 +1,45 @@
+=== run 1
+deploy/chart/tests/e2e/ports.test.ts:
+(pass) nothing accepts connections on a port right after freePort() returns it [425.13ms]
+(pass) the returned port can be bound at once [30.93ms]
+
+ 17 pass
+ 0 fail
+ 73 expect() calls
+Ran 17 tests across 2 files. [2.90s]
+=== run 2
+deploy/chart/tests/e2e/ports.test.ts:
+(pass) nothing accepts connections on a port right after freePort() returns it [496.04ms]
+(pass) the returned port can be bound at once [31.11ms]
+
+ 17 pass
+ 0 fail
+ 73 expect() calls
+Ran 17 tests across 2 files. [2.98s]
+=== run 3
+deploy/chart/tests/e2e/ports.test.ts:
+(pass) nothing accepts connections on a port right after freePort() returns it [414.86ms]
+(pass) the returned port can be bound at once [30.08ms]
+
+ 17 pass
+ 0 fail
+ 73 expect() calls
+Ran 17 tests across 2 files. [2.83s]
+=== run 4
+deploy/chart/tests/e2e/ports.test.ts:
+(pass) nothing accepts connections on a port right after freePort() returns it [409.48ms]
+(pass) the returned port can be bound at once [30.31ms]
+
+ 17 pass
+ 0 fail
+ 73 expect() calls
+Ran 17 tests across 2 files. [2.81s]
+=== run 5
+deploy/chart/tests/e2e/ports.test.ts:
+(pass) nothing accepts connections on a port right after freePort() returns it [410.67ms]
+(pass) the returned port can be bound at once [29.65ms]
+
+ 17 pass
+ 0 fail
+ 73 expect() calls
+Ran 17 tests across 2 files. [2.89s]

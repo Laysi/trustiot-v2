@@ -178,6 +178,14 @@ impl QueryError {
     }
 }
 
+/// ClickHouse's answer to one statement, with the rows it read.
+#[derive(Debug)]
+pub struct Answer {
+    pub result: Result<String, QueryError>,
+    /// `read_rows` of the `X-ClickHouse-Summary` header, when ClickHouse sent one.
+    pub read_rows: Option<u64>,
+}
+
 /// An account to run queries as.
 #[derive(Clone, Debug)]
 pub struct Account {
@@ -303,11 +311,20 @@ impl ClickHouse {
         sql: &str,
         params: &[(&str, &str)],
     ) -> Result<String, QueryError> {
+        self.send(account, sql, params).await.result
+    }
+
+    /// Runs one statement as `account` and also returns how many rows it read.
+    pub async fn query_with_stats(&self, account: &Account, sql: &str) -> Answer {
+        self.send(account, sql, &[]).await
+    }
+
+    async fn send(&self, account: &Account, sql: &str, params: &[(&str, &str)]) -> Answer {
         let mut url = reqwest::Url::parse(&self.url).expect("valid ClickHouse URL");
         if !params.is_empty() {
             url.query_pairs_mut().extend_pairs(params);
         }
-        let response = self
+        let response = match self
             .client
             .post(url)
             .header("X-ClickHouse-User", &account.user)
@@ -315,20 +332,36 @@ impl ClickHouse {
             .body(sql.to_owned())
             .send()
             .await
-            .map_err(|error| QueryError {
-                status: 0,
-                body: error.to_string(),
-            })?;
+        {
+            Ok(response) => response,
+            Err(error) => {
+                return Answer {
+                    result: Err(QueryError {
+                        status: 0,
+                        body: error.to_string(),
+                    }),
+                    read_rows: None,
+                };
+            }
+        };
         let status = response.status().as_u16();
-        let body = response.text().await.map_err(|error| QueryError {
-            status,
-            body: error.to_string(),
-        })?;
-        if (200..300).contains(&status) {
-            Ok(body)
-        } else {
-            Err(QueryError { status, body })
-        }
+        // X-ClickHouse-Summary is JSON with every counter as a string, for example
+        // {"read_rows":"7",...}.
+        let read_rows = response
+            .headers()
+            .get("X-ClickHouse-Summary")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|summary| serde_json::from_str::<serde_json::Value>(summary).ok())
+            .and_then(|summary| summary["read_rows"].as_str()?.parse().ok());
+        let result = match response.text().await {
+            Ok(body) if (200..300).contains(&status) => Ok(body),
+            Ok(body) => Err(QueryError { status, body }),
+            Err(error) => Err(QueryError {
+                status,
+                body: error.to_string(),
+            }),
+        };
+        Answer { result, read_rows }
     }
 
     pub async fn query(&self, account: &Account, sql: &str) -> Result<String, QueryError> {

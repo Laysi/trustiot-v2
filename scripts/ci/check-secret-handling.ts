@@ -89,6 +89,12 @@ const BUILD_FILE = /^(dockerfile|containerfile)(\..+)?$|\.(dockerfile|containerf
 const IGNORE_FILE = /\.(dockerignore|containerignore)$/i;
 const SCRIPT_FILE = /\.(ts|mts|cts|js|mjs|cjs|sh|bash)$/;
 const TEST_FILE = /\.test\.[cm]?[jt]s$/;
+/**
+ * Recorded test evidence (docs/test-reports/README.md): scripts there are test doubles kept
+ * with a report, such as a podman wrapper that passes its arguments along; CI and the release
+ * never run them. Like test files, they are not scanned as scripts.
+ */
+const EVIDENCE_DIR = "docs/test-reports/data/";
 const YAML_FILE = /\.ya?ml$/;
 /** Kubernetes manifests can also be JSON; YAML parsing reads both. */
 const JSON_FILE = /\.json$/;
@@ -1508,7 +1514,7 @@ export function checkRepository(root: string): Result {
     }
     const inGithub = file.startsWith(".github/");
     const build = isBuildFile(file);
-    const script = SCRIPT_FILE.test(file) && !TEST_FILE.test(file) && file !== SELF;
+    const script = SCRIPT_FILE.test(file) && !TEST_FILE.test(file) && !file.startsWith(EVIDENCE_DIR) && file !== SELF;
     const yaml = YAML_FILE.test(file);
     const template = file.endsWith(".tpl");
     const json = JSON_FILE.test(file);

@@ -1,0 +1,23 @@
+== fixed-natural-load: runs=40 passed=40
+== fixed-stop-delay-1s: runs=5 passed=5
+== fixed-stop-delay-3s: runs=5 passed=5
+== old-stop-delay-1s: runs=5 passed=0
+run-01.log: thread 'pid_1_in_a_container_drains_and_exits_within_the_grace_period' (225667) panicked at crates/service-kit/tests/container_old.rs:160:29: readiness fails within the drain delay 
+run-02.log: thread 'pid_1_in_a_container_drains_and_exits_within_the_grace_period' (229909) panicked at crates/service-kit/tests/container_old.rs:160:29: readiness fails within the drain delay 
+run-03.log: thread 'pid_1_in_a_container_drains_and_exits_within_the_grace_period' (232910) panicked at crates/service-kit/tests/container_old.rs:160:29: readiness fails within the drain delay 
+run-04.log: thread 'pid_1_in_a_container_drains_and_exits_within_the_grace_period' (236607) panicked at crates/service-kit/tests/container_old.rs:160:29: readiness fails within the drain delay 
+run-05.log: thread 'pid_1_in_a_container_drains_and_exits_within_the_grace_period' (240376) panicked at crates/service-kit/tests/container_old.rs:160:29: readiness fails within the drain delay 
+== old-stop-delay-3s: runs=5 passed=0
+run-01.log: thread 'pid_1_in_a_container_drains_and_exits_within_the_grace_period' (277979) panicked at crates/service-kit/tests/container_old.rs:160:29: readiness fails within the drain delay 
+run-02.log: thread 'pid_1_in_a_container_drains_and_exits_within_the_grace_period' (282233) panicked at crates/service-kit/tests/container_old.rs:160:29: readiness fails within the drain delay 
+run-03.log: thread 'pid_1_in_a_container_drains_and_exits_within_the_grace_period' (284993) panicked at crates/service-kit/tests/container_old.rs:160:29: readiness fails within the drain delay 
+run-04.log: thread 'pid_1_in_a_container_drains_and_exits_within_the_grace_period' (289436) panicked at crates/service-kit/tests/container_old.rs:160:29: readiness fails within the drain delay 
+run-05.log: thread 'pid_1_in_a_container_drains_and_exits_within_the_grace_period' (294008) panicked at crates/service-kit/tests/container_old.rs:160:29: readiness fails within the drain delay 
+== old-natural-load: runs=20 passed=17
+run-02.log: thread 'pid_1_in_a_container_drains_and_exits_within_the_grace_period' (326545) panicked at crates/service-kit/tests/container_old.rs:160:29: readiness fails within the drain delay 
+run-03.log: thread 'pid_1_in_a_container_drains_and_exits_within_the_grace_period' (329814) panicked at crates/service-kit/tests/container_old.rs:160:29: readiness fails within the drain delay 
+run-07.log: thread 'pid_1_in_a_container_drains_and_exits_within_the_grace_period' (344606) panicked at crates/service-kit/tests/container_old.rs:160:29: readiness fails within the drain delay 
+== final-burn-load: runs=10 passed=10
+== final-stop-delay-3s: runs=2 passed=2
+== stop duration (ms) of the fixed test, 40 runs under load
+9324 9372 9561 9569 9645 9728 9775 9804 9869 9871 9891 9906 9937 9955 9996 10014 10019 10084 10096 10114 10194 10260 10297 10362 10417 10437 10464 10465 10509 10562 10591 10756 10780 10820 10859 11110 11352 11482 11535 11724 

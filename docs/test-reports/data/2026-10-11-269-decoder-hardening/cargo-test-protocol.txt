@@ -1,0 +1,148 @@
+     Running unittests src/lib.rs (target/debug/deps/protocol-56854fb1676a8b1e)
+test acl::tests::rules_serialize_for_dynamic_security ... ok
+test acl::tests::filter_matching_follows_mqtt ... ok
+test codec::tests::decoding_rejects_trailing_bytes_and_deep_nesting ... ok
+test acl::tests::gateway_subscribes_only_its_own_down_channels ... ok
+test codec::tests::issues_are_bounded ... ok
+test acl::tests::wildcard_usernames_gain_nothing ... ok
+test codec::tests::the_structure_check_accepts_every_well_formed_shape ... ok
+test float::tests::optional_floats_accept_null_and_values ... ok
+test codec::tests::decode_errors_map_to_issue_codes ... ok
+test ids::tests::ids_accept_the_documented_characters ... ok
+test ids::tests::id_errors_do_not_echo_unbounded_input ... ok
+test codec::tests::the_version_marker_accepts_only_one ... ok
+test ids::tests::ids_reject_topic_syntax_and_bad_lengths ... ok
+test ids::tests::model_names_follow_c1 ... ok
+test ids::tests::unix_millis_converts_system_time ... ok
+test open_enum::tests::codes_have_one_shape ... ok
+test ids::tests::sequence_numbers_start_at_one_and_never_wrap ... ok
+test open_enum::tests::unknown_codes_are_kept ... ok
+test topic::tests::channel_names_are_unique_per_direction ... ok
+test topic::tests::delivery_rules ... ok
+test topic::tests::every_topic_parses_back ... ok
+test topic::tests::gateways_subscribe_to_each_down_channel ... ok
+test codec::tests::the_structure_check_refuses_impossible_lengths_before_decoding ... ok
+test topic::tests::topics_have_six_levels ... ok
+test value::tests::floats_narrow_only_when_exact ... ok
+test value::tests::invalid_values_are_reported ... ok
+test topic::tests::foreign_topics_are_rejected ... ok
+test float::tests::every_float_width_and_small_integers_are_accepted ... ok
+test acl::tests::gateway_publishes_only_its_own_up_channels ... ok
+test ids::tests::agent_versions_allow_semver_metadata ... ok
+test codec::tests::head_lengths_match_the_encoder ... ok
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.06s
+     Running tests/adversarial.rs (target/debug/deps/adversarial-2ff4234590ec3ea0)
+test a_gateways_acl_topics_contain_no_wildcard_except_the_trailing_hash ... ok
+test chunked_strings_and_broken_indefinite_items_are_refused ... ok
+test a_repeated_key_in_a_data_map_is_refused ... ok
+test golden_payloads_survive_a_decode_and_encode_byte_for_byte ... ok
+test only_a_map_is_a_message ... ok
+test repeated_keys_are_refused_wherever_a_field_could_be_chosen ... ok
+test nul_is_refused_in_every_free_text ... ok
+test topics_never_parse_into_wildcards_or_other_gateways ... ok
+test integer_and_float_extremes_are_accepted_or_refused_exactly ... ok
+test the_major_version_is_checked_first_and_exactly ... ok
+test a_newer_revision_is_refused_in_every_encoding_a_peer_might_use ... ok
+test identifier_and_text_limits_hold_at_the_byte ... ok
+test a_header_peek_reads_at_most_max_peek_bytes ... ok
+test nesting_beyond_the_limit_is_refused_for_every_container_kind_and_cheap_to_refuse ... ok
+test a_payload_of_exactly_the_limit_is_accepted_and_one_byte_more_is_not ... ok
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+     Running tests/allocation.rs (target/debug/deps/allocation-291610dab5223f1b)
+test declared_lengths_never_drive_allocation ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/compat.rs (target/debug/deps/compat-765528d58ab09bae)
+test absent_optional_fields_take_their_defaults ... ok
+test a_configuration_the_gateway_cannot_apply_is_reported_for_its_version ... ok
+test malformed_open_enum_codes_are_refused ... ok
+test unknown_operations_and_ack_statuses_decode_as_unknown ... ok
+test unknown_codes_of_open_enums_are_kept ... ok
+test closed_enums_refuse_unknown_values ... ok
+test required_fields_are_required ... ok
+test newer_revisions_are_refused_and_the_current_one_accepted ... ok
+test fields_and_sample_elements_from_newer_peers_are_ignored ... ok
+test other_major_versions_are_refused_before_anything_else ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+     Running tests/dependencies.rs (target/debug/deps/dependencies-8fd249713670f6c1)
+test the_gateway_build_pulls_only_pure_rust_crates ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.28s
+     Running tests/fuzz.rs (target/debug/deps/fuzz-aa2066f22eff7e9b)
+test topics_parse_only_when_canonical_and_acl_topics_never_widen ... ok
+test a_gateways_acl_never_matches_another_gateways_topics ... ok
+test a_hostile_array_count_reserves_at_most_a_bounded_amount ... ok
+test decoders_survive_hostile_payloads ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.43s
+     Running tests/fuzz_split.rs (target/debug/deps/fuzz_split-d1b1b4444f62b7fb)
+test filter_matching_agrees_with_the_mqtt_rules_and_acl_coverage_is_sound ... ok
+test random_readings_split_into_bounded_batches_with_consecutive_sequence_numbers ... ok
+test random_logs_and_live_values_split_within_their_limits ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.12s
+     Running tests/golden.rs (target/debug/deps/golden-a4607db7d68b3ad3)
+test every_channel_has_a_golden_case ... ok
+test the_subset_check_catches_lost_and_changed_fields ... ok
+test the_current_golden_files_are_exactly_the_cases ... ok
+test every_case_round_trips ... ok
+test encodings_match_the_current_golden_files ... ok
+test frozen_v1_payloads_still_decode ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/limits.rs (target/debug/deps/limits-8faa20333ccffec4)
+test the_largest_live_control_and_log_request_fit ... ok
+test the_largest_config_report_fits ... ok
+test the_largest_status_fits ... ok
+test the_largest_telemetry_ack_fits ... ok
+test a_heartbeat_for_the_largest_configuration_fits ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+     Running tests/readme.rs (target/debug/deps/readme-3d25ba4094649e49)
+test the_readme_lists_the_gateway_acl ... ok
+test the_readme_lists_every_topic_with_its_message_and_delivery ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/robustness.rs (target/debug/deps/robustness-01da5d912b46312c)
+test huge_declared_lengths_fail_without_allocating ... ok
+test identifiers_with_topic_syntax_are_refused ... ok
+test payloads_that_are_not_maps_are_refused ... ok
+test the_header_of_a_refused_batch_can_still_be_read ... ok
+test deep_nesting_is_refused_even_in_unknown_fields ... ok
+test empty_and_oversized_payloads_are_refused_before_parsing ... ok
+test duplicate_fields_are_refused ... ok
+test trailing_bytes_are_refused ... ok
+test values_round_trip_exactly ... ok
+test values_outside_the_types_are_refused ... ok
+test every_truncation_is_refused ... ok
+test corrupted_bytes_never_panic ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.96s
+     Running tests/split.rs (target/debug/deps/split-843d0b395e3787d3)
+test a_stream_never_wraps_its_sequence_numbers ... ok
+test a_refused_reading_leaves_the_builder_unchanged ... ok
+test limits_outside_the_allowed_range_are_refused ... ok
+test a_change_of_clock_state_closes_the_batch ... ok
+test batches_are_filled_to_the_limit ... ok
+test the_largest_valid_reading_fits_the_smallest_limit ... ok
+test log_dumps_split_into_numbered_parts ... ok
+test log_batches_split_by_the_channel_limit ... ok
+test the_default_limit_is_the_telemetry_channel_limit ... ok
+test live_samples_split_by_the_channel_limit ... ok
+test oversized_input_is_split_into_consecutive_batches_within_the_limit ... ok
+test open_len_is_the_exact_encoded_size ... ok
+test randomized_splits_keep_every_rule ... ok
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.15s
+     Running tests/validation.rs (target/debug/deps/validation-1e0dfc67baefb8e2)
+test an_outdated_configuration_is_reported_as_stale ... ok
+test decode_rejects_what_encode_refuses ... ok
+test every_issue_is_reported_at_once ... ok
+test hosts_are_unicast_addresses_or_dns_names ... ok
+test an_invalid_configuration_is_rejected_on_receipt_with_its_issues ... ok
+test ipv4_mapped_hosts_follow_the_ipv4_rules ... ok
+test devices_follow_the_connection_rules ... ok
+test heartbeat_rules ... ok
+test log_rules ... ok
+test live_rules ... ok
+test points_in_different_address_spaces_never_overlap ... ok
+test status_and_last_will ... ok
+test telemetry_rules ... ok
+test reports_keep_at_most_the_issue_limit ... ok
+test the_samples_are_valid ... ok
+test models_and_points_follow_the_register_rules ... ok
+test a_configuration_holds_at_most_max_devices_and_must_fit_one_message ... ok
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.67s
+test crates/protocol/src/lib.rs - (line 14) ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s

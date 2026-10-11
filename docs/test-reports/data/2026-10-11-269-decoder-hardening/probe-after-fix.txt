@@ -1,0 +1,16 @@
+
+running 1 test
+F1a LogBatch fields repeated key: Err(Malformed("a map key appears twice"))
+F1b Heartbeat exception_codes repeated key: Err(Malformed("a map key appears twice"))
+F2a heartbeat devices x4200: Err(Malformed("Mismatch { name: \"map\", found: 245 }"))
+F2b telemetry series x4200: Err(Malformed("Mismatch { name: \"map\", found: 245 }"))
+Host::new("::ffff:0.0.0.0") accepted: false, canonical: None
+Host::new("::ffff:224.0.0.1") accepted: false, canonical: None
+Host::new("::ffff:255.255.255.255") accepted: false, canonical: None
+Host::new("::ffff:1.2.3.4") accepted: true, canonical: Some("1.2.3.4")
+devices[1] rtu_over_tcp 192.168.10.30:4196, devices[2] modbus_tcp ::ffff:192.168.10.30:4196 -> mixed_transport reported: true
+devices[1] rtu_over_tcp ::ffff:c0a8:a1e:4196, devices[2] modbus_tcp 192.168.10.30:4196 -> mixed_transport reported: true
+test probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+

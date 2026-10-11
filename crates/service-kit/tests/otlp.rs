@@ -221,3 +221,189 @@ fn logs_traces_and_metrics_export_without_request_data() {
         );
     }
 }
+
+// The collector's URL can carry a token in its path (the kit refuses a query, see below). The
+// OpenTelemetry SDK's own diagnostics must not repeat it at any log level while exports fail.
+
+const PATH_CANARY: &str = "endpoint-path-canary-7d41";
+const QUERY_CANARY: &str = "endpoint-query-canary-9e02";
+const ENV_CANARY: &str = "sdk-env-canary-5b6c";
+const RESPONSE_CANARY: &str = "collector-response-canary-3f88";
+
+/// How the failing collector refuses an export.
+#[derive(Clone, Copy, Debug)]
+enum Failure {
+    /// Accepts the connection and closes it without an answer (the SDK's `NetworkError`).
+    Reset,
+    /// Answers 400 with a body, which the SDK treats as not retryable (its `StatusError`).
+    BadRequest,
+}
+
+/// Records the path of every export request and fails each one.
+struct FailingCollector {
+    address: SocketAddr,
+    paths: Arc<Mutex<Vec<String>>>,
+}
+
+impl FailingCollector {
+    fn start(failure: Failure) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind the failing collector");
+        let address = listener.local_addr().expect("collector address");
+        let paths = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&paths);
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { continue };
+                let sink = Arc::clone(&sink);
+                thread::spawn(move || fail(stream, failure, &sink));
+            }
+        });
+        Self { address, paths }
+    }
+
+    fn endpoint(&self) -> String {
+        format!("http://{}/{PATH_CANARY}", self.address)
+    }
+
+    fn paths(&self) -> Vec<String> {
+        self.paths.lock().expect("collector lock").clone()
+    }
+}
+
+fn fail(stream: TcpStream, failure: Failure, sink: &Mutex<Vec<String>>) -> Option<()> {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .ok()?;
+    let mut reader = BufReader::new(stream.try_clone().ok()?);
+    let mut request_line = String::new();
+    reader.read_line(&mut request_line).ok()?;
+    sink.lock()
+        .expect("collector lock")
+        .push(request_line.split_whitespace().nth(1)?.to_owned());
+    if let Failure::BadRequest = failure {
+        let mut stream = stream;
+        let answer = format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            RESPONSE_CANARY.len(),
+            RESPONSE_CANARY
+        );
+        stream.write_all(answer.as_bytes()).ok()?;
+    }
+    Some(())
+}
+
+/// Runs the example service against a collector that fails every export, at `filter`, with
+/// canaries in the endpoint path and in the SDK's own environment variables, and returns what
+/// the process wrote to stdout and stderr together.
+fn output_while_exports_fail(failure: Failure, filter: &str) -> String {
+    let collector = FailingCollector::start(failure);
+    let endpoint = collector.endpoint();
+    let headers = format!("x-api-key={ENV_CANARY}");
+    let env_endpoint = format!("http://127.0.0.1:9/{ENV_CANARY}");
+    let mut service = Service::start(&[
+        ("TRUSTIOT__TELEMETRY__OTLP_ENDPOINT", &endpoint),
+        ("TRUSTIOT__TELEMETRY__LOG_FILTER", filter),
+        // The SDK reads these as well; they must stay out of the output too.
+        ("OTEL_EXPORTER_OTLP_HEADERS", &headers),
+        ("OTEL_EXPORTER_OTLP_ENDPOINT", &env_endpoint),
+        ("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", &env_endpoint),
+    ]);
+    echo_with_canary(&service);
+    // The log exporter runs every second; give it time to fail, then flush everything at
+    // shutdown, which fails as well.
+    thread::sleep(Duration::from_millis(2500));
+    service.signal("TERM");
+    let status = service.wait_exit(Duration::from_secs(30)).expect("exits");
+    assert!(status.success(), "{status}");
+
+    // The exports really went to the canary path and really failed, so without the fix the SDK
+    // would have had a URL to print.
+    let paths = collector.paths();
+    for signal in ["logs", "traces"] {
+        let expected = format!("/{PATH_CANARY}/v1/{signal}");
+        assert!(
+            paths.contains(&expected),
+            "no {signal} export reached the collector: {paths:?}"
+        );
+    }
+    let output = format!(
+        "stdout:\n{}\nstderr:\n{}",
+        service.stdout.text(),
+        service.stderr.text()
+    );
+    assert!(
+        output.contains("echo request") || !matches!(filter, "debug" | "trace"),
+        "the filter `{filter}` did not take effect:\n{output}"
+    );
+    output
+}
+
+fn assert_no_canary(output: &str, context: &str) {
+    for canary in [PATH_CANARY, QUERY_CANARY, ENV_CANARY, RESPONSE_CANARY] {
+        assert!(
+            !output.contains(canary),
+            "`{canary}` reached the output ({context}):\n{output}"
+        );
+    }
+}
+
+#[test]
+fn endpoint_path_stays_out_of_output_at_debug_when_the_collector_resets() {
+    let output = output_while_exports_fail(Failure::Reset, "debug");
+    assert_no_canary(&output, "reset, debug");
+}
+
+#[test]
+fn endpoint_path_stays_out_of_output_at_trace_when_the_collector_resets() {
+    let output = output_while_exports_fail(Failure::Reset, "trace");
+    assert_no_canary(&output, "reset, trace");
+}
+
+#[test]
+fn endpoint_path_stays_out_of_output_at_debug_when_the_collector_answers_400() {
+    let output = output_while_exports_fail(Failure::BadRequest, "debug");
+    assert_no_canary(&output, "400, debug");
+}
+
+#[test]
+fn endpoint_path_stays_out_of_output_at_trace_when_the_collector_answers_400() {
+    let output = output_while_exports_fail(Failure::BadRequest, "trace");
+    assert_no_canary(&output, "400, trace");
+}
+
+#[test]
+fn sdk_targets_cannot_be_turned_up_by_name() {
+    // Directives for the SDK crates are accepted but cannot raise their diagnostics above INFO.
+    let output = output_while_exports_fail(
+        Failure::Reset,
+        "info,opentelemetry=trace,opentelemetry_sdk=trace,opentelemetry-otlp=trace,\
+         opentelemetry-http=trace,reqwest=trace,hyper_util=trace",
+    );
+    assert_no_canary(&output, "targets by name");
+}
+
+#[test]
+fn an_endpoint_with_a_query_is_refused_without_printing_it() {
+    for filter in ["debug", "trace"] {
+        let endpoint = format!("http://127.0.0.1:9/{PATH_CANARY}?token={QUERY_CANARY}");
+        let (mut child, stdout, stderr) = support::spawn_example(&[
+            ("TRUSTIOT__TELEMETRY__OTLP_ENDPOINT", &endpoint),
+            ("TRUSTIOT__TELEMETRY__LOG_FILTER", filter),
+        ]);
+        let status = support::wait_exit(&mut child, Duration::from_secs(20)).expect("exits");
+        assert_eq!(
+            status.code(),
+            Some(1),
+            "an endpoint with a query is refused"
+        );
+        for output in [&stdout, &stderr] {
+            assert!(output.wait_closed(support::OUTPUT_DRAIN_TIMEOUT));
+        }
+        let output = format!("stdout:\n{}\nstderr:\n{}", stdout.text(), stderr.text());
+        assert!(
+            output.contains("telemetry.otlp_endpoint"),
+            "the refusal names the key:\n{output}"
+        );
+        assert_no_canary(&output, filter);
+    }
+}
