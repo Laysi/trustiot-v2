@@ -11,6 +11,7 @@
     "serviceDefaults",
     "services",
     "mesh",
+    "internalIdentity",
     "postgres",
     "clickhouse",
     "qdrant",
@@ -202,6 +203,37 @@
             "items": { "type": "string", "pattern": "^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$" }
           }
         }
+      }
+    },
+    "internalIdentity": {
+      "description": "Internal identity tokens (decision 27): the public keys every service verifies them with, and the identity service's private key.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["publicKeys", "signingKeySecret"],
+      "properties": {
+        "publicKeys": {
+          "description": "Ed25519 public keys as {kid, x}; rendered as the JWK Set TRUSTIOT_INTERNAL_IDENTITY_KEYS. Only these two members, so a private key (d) cannot be listed.",
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kid", "x"],
+            "properties": {
+              "kid": {
+                "description": "Key id: 1 to 64 visible ASCII characters.",
+                "type": "string",
+                "pattern": "^[!-~]{1,64}$"
+              },
+              "x": {
+                "description": "The 32-byte public key in base64url without padding (43 characters, canonical).",
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+              }
+            }
+          }
+        },
+        "signingKeySecret": { "$ref": "#/definitions/secretKeyRef" }
       }
     },
     "postgres": {

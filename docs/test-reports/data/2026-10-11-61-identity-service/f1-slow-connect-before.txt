@@ -1,0 +1,35 @@
+# F1 before the fix: the new test against the old connection handling.
+# Local machine (Fedora, 8 cores), 2026-10-11 21:19 Taipei, load average 3.24 4.60 4.41.
+# Code: 388e9b7 (pool acquire timeout = the 0.4 s check deadline, readiness = one ping) plus only
+# the new test a_slow_database_connect_never_fails_a_check_after_ready and SlowProxy in
+# tests/support/mod.rs; services/identity/src unchanged.
+# The cargo target directory was the queue's shared one; cargo compiled contract, service-kit,
+# identity and testkit from this worktree for this run:
+#    Compiling contract v0.1.0 (<worktree>/crates/contract)
+#    Compiling service-kit v0.1.0 (<worktree>/crates/service-kit)
+#    Compiling identity v0.1.0 (<worktree>/services/identity)
+#    Compiling testkit v0.1.0 (<worktree>/crates/testkit)
+#
+# $ CI=1 cargo test --locked -p identity --test ext_authz a_slow_database_connect -- --nocapture
+# Every new connection waits 1 s in the proxy; the readiness check (0.8 s) and the pool's 0.4 s
+# acquire timeout cut every connect off, so the service never becomes ready (30 s wait).
+
+running 1 test
+
+thread 'a_slow_database_connect_never_fails_a_check_after_ready' (1109931) panicked at services/identity/tests/support/mod.rs:230:13:
+the service did not become ready
+stdout:
+{"timestamp":"2026-10-11T13:20:18.393698Z","level":"INFO","service":"identity","target":"opentelemetry","message":"Global tracer provider is set. Traces can now be created using global::tracer() or global::tracer_with_scope().","fields":{"name":"TracerProvider.GlobalSet"}}
+{"timestamp":"2026-10-11T13:20:18.393837Z","level":"INFO","service":"identity","target":"service_kit::service","message":"starting","fields":{"service.version":"0.1.0","process.pid":1110121,"http.listen_addr":"127.0.0.1:0","http.health_listen_addr":"127.0.0.1:0","http.request_timeout_ms":30000,"shutdown.drain_delay_ms":100,"shutdown.drain_timeout_ms":5000,"telemetry.log_filter":"info","telemetry.otlp_export":false}}
+{"timestamp":"2026-10-11T13:20:18.403386Z","level":"INFO","service":"identity","target":"identity","message":"signing internal identity tokens","fields":{"kid":"2026-10-a","routes":2}}
+{"timestamp":"2026-10-11T13:20:18.403957Z","level":"INFO","service":"identity","target":"service_kit::service","message":"listening","fields":{"address":"127.0.0.1:33961","health_address":"127.0.0.1:35661"}}
+{"timestamp":"2026-10-11T13:20:18.806077Z","level":"WARN","service":"identity","target":"service_kit::health","message":"readiness check failed","fields":{"check":"postgres","error":"database error: database error: pool timed out while waiting for an open connection"}}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test a_slow_database_connect_never_fails_a_check_after_ready ... FAILED
+
+failures:
+
+failures:
+    a_slow_database_connect_never_fails_a_check_after_ready
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 35.01s

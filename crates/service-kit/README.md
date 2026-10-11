@@ -221,7 +221,7 @@ server 端可以在持有者不知情時結束鎖的 session：網路分割時�
 
 ## 內部身分（`identity`）
 
-入口 gateway 驗過 cookie 後，身分服務為每個請求簽一個短效的內部身分 token，放在 `x-internal-identity` 標頭交給後端（[決策 27](../../docs/architecture/decisions.md)、功能重建清單 A4）。每個服務自己驗證簽章、簽發者、受眾與效期，只信簽章，不信任何其他關於呼叫者的資訊。本模組在 `contract` feature 後面；簽發 token 是身分服務的工作（Laysi/trustiot-v2#61）。
+入口 gateway 驗過 cookie 後，身分服務為每個請求簽一個短效的內部身分 token，放在 `x-internal-identity` 標頭交給後端（[決策 27](../../docs/architecture/decisions.md)、功能重建清單 A4）。每個服務自己驗證簽章、簽發者、受眾與效期，只信簽章，不信任何其他關於呼叫者的資訊。本模組在 `contract` feature 後面；簽發 token 是[身分服務](../../services/identity/README.md)的工作。
 
 ```rust
 use axum::extract::FromRef;
@@ -331,7 +331,7 @@ JWS compact serialization（RFC 7515），payload 是 contract 的 `InternalClai
 - 身分服務的公鑰寫成 JWK Set（RFC 7517），放在平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`，服務設定裡是 `platform.internal_identity_keys`。範例：`{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"2026-10-a","x":"<32 bytes 的 base64url>"}]}`。
 - 每把公鑰的 `kty` 必須是 `OKP`、`crv` 必須是 `Ed25519`、`kid` 是 1 到 64 個可見 ASCII 字元且不重複；`alg`、`use`、`key_ops` 可以省略，有寫就必須是 `EdDSA`、`sig`、含 `verify` 的清單；一組最多 8 把。含私鑰（`d`）、小階點、格式不對的公鑰，服務都拒絕啟動，錯誤訊息只寫第幾把與原因，不寫值。
 - 平台設定只由部署決定（`TRUSTIOT__PLATFORM__*` 會被拒絕，chart 的 `services.<name>.env` 也不能設 `TRUSTIOT_` 後接英數字的名稱），所以單一服務的設定無法換掉公鑰。
-- 公鑰不是祕密，放在 chart 的平台設定 ConfigMap；私鑰只在身分服務的 Secret。chart 的 values 欄位與 ConfigMap 由 Laysi/trustiot-v2#61 加入（身分服務出映像之前，沒有服務需要它）。
+- 公鑰不是祕密，放在 chart 的平台設定 ConfigMap；私鑰只在身分服務的 Secret。chart 的欄位是 `internalIdentity.publicKeys`（組成 JWK Set 寫進 ConfigMap）與 `internalIdentity.signingKeySecret`（只掛進身分服務），見 [chart README](../../deploy/chart/README.md) 的「內部身分」。
 - 本機開發：直接設 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`，或寫在設定檔的 `[platform]` 表，值是 JWK Set 的 JSON 字串。
 
 為什麼不由身分服務發布（例如服務在執行時抓 JWKS 端點）：
@@ -345,7 +345,7 @@ JWS compact serialization（RFC 7515），payload 是 contract 的 `InternalClai
 輪替步驟（新舊兩把 key 以 `kid` 區分，例如 `2026-10-a` 換成 `2027-04-a`）：
 
 1. **加新公鑰**：產生新的金鑰對，把新公鑰加進 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`（新舊兩把並存）並部署。確認每個服務都已滾動完成（每個 Deployment 的 `kubectl rollout status` 都完成），身分服務仍用舊私鑰簽章。
-2. **換簽章私鑰**：把身分服務的簽章私鑰換成新的（Secret 與 `kid`），身分服務滾動完成後只簽新 `kid`。步驟 1 沒有全部完成就換，還沒拿到新公鑰的服務會以 `unknown_key` 拒絕新 token。
+2. **換簽章私鑰**：把身分服務的簽章私鑰換成新的（Secret；`kid` 由身分服務啟動時從公鑰找出，見[身分服務的金鑰輪替](../../services/identity/README.md#金鑰輪替)），身分服務滾動完成後只簽新 `kid`。步驟 1 沒有全部完成就換，還沒拿到新公鑰的服務會以 `unknown_key` 拒絕新 token。
 3. **移除舊公鑰**：身分服務滾動完成後至少等 `300 + 5` 秒（效期上限加時鐘誤差），舊 token 全部過期，再從 `TRUSTIOT_INTERNAL_IDENTITY_KEYS` 移除舊公鑰並部署，最後刪除舊私鑰。
 
 私鑰外洩時：立即同時做步驟 1 到 3，不等舊 token 過期。滾動期間部分請求會被拒絕（401），換取外洩的金鑰馬上失效。
@@ -423,7 +423,7 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 - 連線回到 pool 時，kit 再查一次（pool 的 `after_release`，每次歸還一個查詢）：session 層級還有 `trustiot.tenant_id`（有人以 `set_config(..., false)` 或 `SET` 設定，例如藏在 PL/pgSQL `EXECUTE` 字串裡、sql-check 看不到的寫法），就關掉這條連線、不放回 pool，並記一行 ERROR `closed a database session left with a session-level tenant`。否則下一個拿到這條連線的交易會在那個租戶裡執行，包括 `begin_without_tenant` 與 `TenantDb::pool()` 上的直接查詢（Laysi/trustiot-v2#271 驗證的 F-1）。新連線的同類檢查是下面的 `TenantPreset`。
 - `TenantTransaction` 沒有改租戶的方法，`TenantDb` 也沒有以任意租戶開交易的 handler 用方法；`src/tenant.rs` 的 compile-fail doctest 證明這些寫法無法編譯。SQL 裡設定租戶或角色由 `tools/sql-check` 擋下，只有 `src/tenant.rs` 例外。
 - 背景工作沒有使用者身分（見[內部身分](#背景工作沒有使用者身分)），所以決定：代表單一租戶的工作用 `BackgroundTenantDb` 開交易，租戶來自工作本身；要找出「哪些租戶有工作」這種跨租戶查詢，用 `PlatformDb` 與 `PlatformActor::service`，會留紀錄。
-- `BackgroundTenantDb` 是能指定租戶的能力，只有啟動時的 `TenantDb::connect_lazy_with_background(options, pool, ServiceIdentity)` 會一併產生（與 `TenantDb` 共用 pool）。把 `TenantDb` 放進 router 的 state、`BackgroundTenantDb` 只交給背景工作：handler 手上的 `TenantDb` 沒有任何接受租戶的方法，無法把請求裡的租戶拿去開交易（compile-fail doctest 證明）。
+- `BackgroundTenantDb` 是能指定租戶的能力，只有啟動時的 `TenantDb::connect_lazy_with_background(options, pool, ServiceIdentity)` 會一併產生（與 `TenantDb` 共用 pool）。把 `TenantDb` 放進 router 的 state、`BackgroundTenantDb` 只交給背景工作：handler 手上的 `TenantDb` 沒有任何接受租戶的方法，無法把請求裡的租戶拿去開交易（compile-fail doctest 證明）。唯一的例外是身分服務的 session 查詢：查 session 時請求還沒有內部身分，租戶取自剛從資料庫讀出的 session 列，不取自請求，所以由它的 session store 私下持有 `BackgroundTenantDb`，handler 拿不到（見 [services/identity](../../services/identity/README.md) 的「資料庫」）。
 - `PlatformActor::admin(&UserIdentity)` 只有平台管理者（A2）拿得到；`PlatformActor` 沒有其他建構方式。
 
 ### outbox（`crates/outbox`）

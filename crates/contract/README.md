@@ -132,7 +132,7 @@ client 每次失敗都記一筆日誌，欄位有 `peer`、`route`（路由樣�
 
 ## 內部身分
 
-入口 gateway 對每個需要 session 的請求向身分服務換一個短效的內部身分 token，放在 `x-internal-identity` 標頭交給後端：需要 cookie 的路由由身分服務的值覆寫這個標頭，例外路由將它剝除，所以用戶端無法自己帶（決策 27）。token 的格式、驗證、公鑰的發放與輪替見 [`crates/service-kit` 的內部身分一節](../service-kit/README.md#內部身分identity)（Laysi/trustiot-v2#52），簽發在身分服務（Laysi/trustiot-v2#61）；本 crate 只定義雙方共用的標頭與 claims。
+入口 gateway 對每個需要 session 的請求向身分服務換一個短效的內部身分 token，放在 `x-internal-identity` 標頭交給後端：需要 cookie 的路由由身分服務的值覆寫這個標頭，例外路由將它剝除，所以用戶端無法自己帶（決策 27）。token 的格式、驗證、公鑰的發放與輪替見 [`crates/service-kit` 的內部身分一節](../service-kit/README.md#內部身分identity)（Laysi/trustiot-v2#52），簽發在[身分服務](../../services/identity/README.md)；本 crate 只定義雙方共用的標頭與 claims。
 
 | claim | 說明 |
 | --- | --- |

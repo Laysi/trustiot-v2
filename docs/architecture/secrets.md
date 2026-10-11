@@ -58,7 +58,7 @@ chart 的規則（values 只以名稱引用 Secret、values 沒有明文密鑰�
 | 方式 | 用在 | 說明 |
 | --- | --- | --- |
 | Kubernetes Secret，以 `valueFrom.secretKeyRef` 成為環境變數 | 短的字串：API key、密碼、DSN | chart 的 `services.<name>.credentials` 與各 `*Secret` 欄位，values 只寫 Secret 名稱與 key；名稱像密鑰的環境變數只能來自 Secret（schema 與 chart 測試） |
-| Kubernetes Secret，以唯讀 volume 掛成檔案 | 私鑰、憑證、多行的金鑰 | 例如外部資料庫的 CA（`/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`）；之後的 CA 私鑰、內部身分簽章私鑰、broker 伺服器金鑰也掛成檔案，只掛進使用它的那個 pod |
+| Kubernetes Secret，以唯讀 volume 掛成檔案 | 私鑰、憑證、多行的金鑰 | 例如外部資料庫的 CA（`/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`）；內部身分簽章私鑰（`/etc/trustiot/identity-signing-key/signing-key.pem`，只掛進身分服務）；之後的 CA 私鑰、broker 伺服器金鑰也掛成檔案，只掛進使用它的那個 pod |
 | 叢集內元件自己產生的 Secret | 叢集內資料庫的帳號 | 例如 CloudNativePG 產生的資料庫帳號（Laysi/trustiot-v2#58）。值只存在叢集內，不進 git，也不經過人 |
 | 主機上只有 root 能讀的檔案，以 systemd `LoadCredential` 交給服務 | SaaS 主機上的 cloudflared | 不在叢集內，k3s 故障時仍能運作（Laysi/trustiot-v2#64） |
 | GitHub Actions secret，經 step 的 `env` 或 `with` | 發佈流程用的少數金鑰 | ci.yml 不用任何 secret；fork 來的 PR 拿不到 secret（見 [CI 與發佈](ci-release.md)） |
@@ -77,7 +77,7 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 | 根 CA 私鑰 | 簽發 CA 憑證的信任根（閘道器、工作站、broker 憑證的源頭，決策 6、12） | 離線保管：不在叢集、不在 git（加密也不放）、不在任何連網主機；以 age 加密存兩份離線媒體，分別由兩位維運人員保管；只在簽發或撤銷簽發 CA 時取出 | 依 Laysi/trustiot-v2#78 定的地端 CA 階層 | 不注入任何服務 | Laysi/trustiot-v2#78 |
 | 簽發 CA 私鑰 | certs 服務簽發閘道器與工作站憑證、發 CRL | SOPS | 客戶叢集的 Secret（Laysi/trustiot-v2#78 決定由安裝產生或客戶匯入） | 檔案，只掛進 `certs` | Laysi/trustiot-v2#78 |
 | broker 伺服器憑證私鑰 | Mosquitto 的 TLS 伺服器金鑰（閘道器 mTLS 的內層） | 由簽發 CA 簽發，存在叢集 Secret | 同左 | 檔案，只掛進 broker | Laysi/trustiot-v2#84 |
-| 內部身分簽章私鑰（Ed25519） | 身分服務簽內部身分 token（決策 27） | SOPS | 客戶叢集的 Secret | 檔案，只掛進 `identity`；對應的公鑰不是祕密，以 JWK Set 放在平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`（ConfigMap） | Laysi/trustiot-v2#61（格式與輪替：Laysi/trustiot-v2#52、[crates/service-kit/README.md](../../crates/service-kit/README.md)） |
+| 內部身分簽章私鑰（Ed25519） | 身分服務簽內部身分 token（決策 27） | SOPS | 客戶叢集的 Secret | 檔案：chart 的 `internalIdentity.signingKeySecret` 指向的 Secret（PKCS#8 PEM），只掛進 `identity` 的 `/etc/trustiot/identity-signing-key/signing-key.pem`，權限 0440（root 與 pod 的 fsGroup）；對應的公鑰不是祕密，chart 的 `internalIdentity.publicKeys` 組成 JWK Set 放在平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`（ConfigMap） | Laysi/trustiot-v2#61（[services/identity/README.md](../../services/identity/README.md)；格式與輪替：Laysi/trustiot-v2#52、[crates/service-kit/README.md](../../crates/service-kit/README.md)） |
 | OTA 簽章私鑰 | 簽閘道器 agent 與 updater 的發佈檔（決策 11） | GitHub environment secret，只有 main 上的 tag 能用（ci-release.md）；公鑰內建在 updater | 地端使用同一份發佈檔，不另持有 | 只給 release workflow 的簽章步驟 | Laysi/trustiot-v2#164（注意：release.yml 的 `release` environment 已建立，但私有庫在目前的 GitHub Free 方案設不了必要審查者與 tag 規則（決策 30），environment secret 限制不了「只有 main 上的 tag 能用」，Laysi/trustiot-v2#164 要先解決保管方式） |
 | SOPS 叢集私鑰（age） | Flux 解密 `deploy/flux/` 的 Secret | 叢集 `flux-system` namespace 的 Secret `sops-age`，由維運人員在建立叢集時直接建立（不經 git）；離線備份與根 CA 私鑰放在一起 | 不適用（地端不裝 Flux） | 只給 Flux kustomize-controller | Laysi/trustiot-v2#70 |
 | 維運人員的 age 私鑰 | 編輯、輪替 SOPS 檔案；叢集私鑰遺失時的備援 | 各自保管在自己的裝置（建議放在密碼管理器或硬體金鑰），不放共用主機 | 不適用 | 不注入任何服務 | Laysi/trustiot-v2#70 |

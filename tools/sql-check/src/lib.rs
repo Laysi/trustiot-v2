@@ -161,6 +161,13 @@ pub const EXCEPTIONS: &[Exception] = &[
                  SET ROLE NONE as an attack that must fail",
     },
     Exception {
+        path: "services/identity/tests/adversarial.rs",
+        rules: &[Rule::SessionSetting],
+        reason: "attacks the identity service role's session: sets valid, unknown, empty and \
+                 malformed tenant ids with set_config and runs SET ROLE and SET SESSION \
+                 AUTHORIZATION, which row-level security and the database must refuse",
+    },
+    Exception {
         path: "crates/service-kit/tests/tenant_db.rs",
         rules: &[Rule::SessionSetting],
         reason: "sets a session-level tenant with set_config, as nothing may, to test that the \

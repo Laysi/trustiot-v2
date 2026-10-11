@@ -1,0 +1,108 @@
+bun test v1.4.2 (744846f84)
+
+scripts/nightly/platform.test.ts:
+177 | 
+178 |   test("passes and logs every node when the image is present on all of them", async () => {
+179 |     const { state, commands } = fakeCluster(() => ["k3d-nightly-server-0", "k3d-nightly-agent-0"]);
+180 |     await importWith(commands);
+181 |     expect(state.imports).toHaveLength(1);
+182 |     expect(state.inspected).toEqual(["k3d-nightly-server-0", "k3d-nightly-agent-0"]);
+                                  ^
+error: expect(received).toEqual(expected)
+
+- [
+-   "k3d-nightly-server-0",
+-   "k3d-nightly-agent-0",
+- ]
++ []
+
+- Expected  - 4
++ Received  + 1
+
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a74e22e56512f9ea3/scripts/nightly/platform.test.ts:182:29)
+(fail) importImageIntoCluster > passes and logs every node when the image is present on all of them [0.54ms]
+187 |   });
+188 | 
+189 |   test("imports with --mode direct into the right cluster", async () => {
+190 |     const { state, commands } = fakeCluster(() => ["k3d-nightly-server-0", "k3d-nightly-agent-0"]);
+191 |     await importWith(commands);
+192 |     expect(state.imports[0]).toEqual([K3D, "image", "import", IMAGE, "--cluster", CLUSTER, "--mode", "direct"]);
+                                   ^
+error: expect(received).toEqual(expected)
+
+@@ -7,4 +7,2 @@
+    "nightly",
+-   "--mode",
+-   "direct",
+  ]
+
+- Expected  - 2
++ Received  + 0
+
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a74e22e56512f9ea3/scripts/nightly/platform.test.ts:192:30)
+(fail) importImageIntoCluster > imports with --mode direct into the right cluster [0.24ms]
+194 | 
+195 |   test("retries when k3d reports success but a node lacks the image, then passes", async () => {
+196 |     // The first import loses the agent's copy, the way #335's tarball race lost the server's.
+197 |     const { state, commands } = fakeCluster((call) => (call === 1 ? ["k3d-nightly-server-0"] : ["k3d-nightly-server-0", "k3d-nightly-agent-0"]));
+198 |     await importWith(commands);
+199 |     expect(state.imports).toHaveLength(2);
+                                ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 2
+Received length: 1
+
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a74e22e56512f9ea3/scripts/nightly/platform.test.ts:199:27)
+(fail) importImageIntoCluster > retries when k3d reports success but a node lacks the image, then passes [0.22ms]
+                                        ^
+error: expect(received).rejects.toThrow(expected)
+
+Expected promise that rejects
+Received promise that resolved: Promise { <resolved> }
+
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a74e22e56512f9ea3/scripts/nightly/platform.test.ts:209:35)
+(fail) importImageIntoCluster > fails at the import step, naming the image and the node, when every attempt leaves it missing [0.25ms]
+214 |     expect(readFileSync(logPath, "utf8")).toContain(`image ${IMAGE} is NOT present on node k3d-nightly-server-0: FATA[0000] no such image`);
+215 |   });
+216 | 
+217 |   test("names every missing node", async () => {
+218 |     const { commands } = fakeCluster(() => []);
+219 |     await expect(importWith(commands, 1)).rejects.toThrow("k3d-nightly-server-0, k3d-nightly-agent-0 of cluster");
+                                                        ^
+error: expect(received).rejects.toThrow(expected)
+
+Expected promise that rejects
+Received promise that resolved: Promise { <resolved> }
+
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a74e22e56512f9ea3/scripts/nightly/platform.test.ts:219:51)
+(fail) importImageIntoCluster > names every missing node [0.21ms]
+223 |     const { state, commands } = fakeCluster(() => ["k3d-nightly-server-0", "k3d-nightly-agent-0"]);
+224 |     let calls = 0;
+225 |     const flaky: ImportCommands = {
+226 |       ...commands,
+227 |       run: async (runLog, cmd, options) => {
+228 |         if (++calls === 1) throw new CommandError(cmd, failed("ERRO failed to import"));
+                                       ^
+CommandError: `/pinned/k3d image import localhost/trustiot-e2e/identity-double:nightly --cluster nightly` exited with 1:
+ERRO failed to import
+    cmd: [ "/pinned/k3d", "image", "import", "localhost/trustiot-e2e/identity-double:nightly", "--cluster",
+  "nightly"
+],
+ result: {
+  code: 1,
+  stdout: "",
+  stderr: "ERRO failed to import",
+  timedOut: false,
+},
+
+      at run (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a74e22e56512f9ea3/scripts/nightly/platform.test.ts:228:34)
+      at importImageIntoCluster (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a74e22e56512f9ea3/scripts/nightly/platform.ts:202:18)
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a74e22e56512f9ea3/scripts/nightly/platform.test.ts:232:11)
+(fail) importImageIntoCluster > an import command that fails is retried like a missing image [0.31ms]
+
+ 2 pass
+ 10 filtered out
+ 6 fail
+ 17 expect() calls
+Ran 8 tests across 1 file. [20.00ms]
