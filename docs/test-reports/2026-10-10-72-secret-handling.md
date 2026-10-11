@@ -4,7 +4,7 @@
 
 ## 環境
 
-- 本機：Fedora Linux（x86_64），repo 的 git worktree，分支 `feat/72-secrets-policy`，以 main `8ce2dfd` 為基礎，2026-10-11 合併 main `404817d` 後重跑下列全部檢查（下表是合併後的結果）。
+- 本機：Fedora Linux（x86_64），repo 的 git worktree，分支 `feat/72-secrets-policy`，以 main `8ce2dfd` 為基礎，2026-10-11 合併 main（最後一次是 `a4bfe2b`）後重跑下列全部檢查（下表是合併後的結果）。
 - 工具（`.prototools` 釘選，`proto install` 安裝）：bun 1.4.2、helm、kubeconform、actionlint、gitleaks 8.30.1；TypeScript 7.0.2（`bun install --cwd scripts --frozen-lockfile`）。
 - 不需要 Kubernetes 與 lab 機器：檢查是靜態的，chart 測試只用 `helm template` 與 kubeconform。
 
@@ -39,11 +39,11 @@ fixture 的檢查：在 session 的暫存目錄建一個假的 repo（根目錄 
 | 檢查 | 結果 |
 | --- | --- |
 | fixture（[原始輸出](data/2026-10-10-72-secret-handling/fixture-check.txt)） | 結束碼 1，7 項違規：COPY 私鑰、COPY `.env`、`ARG GHCR_TOKEN`、`ENV DATABASE_PASSWORD`、沒有 ignore 檔卻 `COPY .`（列出每一層可能的 context）、`--build-arg NPM_AUTH_TOKEN`、不經 `containerBuildArgs` 的建置指令 |
-| 本分支（[原始輸出](data/2026-10-10-72-secret-handling/repository-check.txt)） | 結束碼 0：159 個檔案、1 個 Containerfile（nightly 的 identity double，`scripts/nightly/platform.ts` 改經 `containerBuildArgs` 建置），沒有違規 |
+| 本分支（[原始輸出](data/2026-10-10-72-secret-handling/repository-check.txt)） | 結束碼 0：169 個檔案、1 個 Containerfile（nightly 的 identity double，`scripts/nightly/platform.ts` 改經 `containerBuildArgs` 建置），沒有違規 |
 | Laysi/trustiot-v2#68 分支的檔案（`cef0f50`） | `deploy/images/rust-binary.Containerfile` 與 `release.yml` 都沒有違規（`release.yml` 只以 action 的 `with` 傳 `AI_API_KEY`，沒有寫進 `run`）；唯一一項是 `scripts/release/build.ts` 直接寫 `podman build` 的參數，兩個分支都進 main 後要改用 `containerBuildArgs(context, options)`；它用到的選項、label 與 tag 都在白名單內（結束碼 1） |
 | `bun run --cwd scripts test` | 14 個檔案、211 個測試：210 通過、1 略過（本地開發環境的 podman e2e，需要 `TRUSTIOT_DEV_E2E=1`），0 失敗；其中 `scripts/ci/check-secret-handling.test.ts` 57 個全過 |
 | `bun run --cwd scripts typecheck` | 通過 |
-| `bun test deploy/chart` | 182 個測試全過（main 的 174 個，加上本 issue 的 8 個）。機器負載高時，渲染兩種型態全部服務的測試超過預設 5 秒，所以本 issue 的渲染測試設 60 秒逾時 |
+| `bun test deploy/chart` | 3 個檔案、204 個測試全過（main 的 196 個，加上本 issue 的 8 個）。機器負載高時，渲染兩種型態全部服務的測試超過預設 5 秒，所以本 issue 的渲染測試設 60 秒逾時 |
 | `bun test deploy/chart -t "values reference Secrets"` | 8 個全過：六個 values 檔（`values.yaml`、兩份部署型態、兩個安裝實例範例、`smoke.yaml`）逐一檢查、規則本身抓得到明文（含小寫 hex 金鑰，字詞組成的長名稱不算）、渲染結果 |
 | `cargo test -p repo-check` | 通過 |
 | `bun scripts/ci/check-workflows.ts` | 3 個檔案，沒有違規（ci.yml 加了一個 step） |

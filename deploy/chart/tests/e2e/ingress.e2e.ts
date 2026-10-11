@@ -13,6 +13,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Subprocess } from "bun";
+import { type RawEndpoint, type RawResponse, sendRaw } from "./raw-client.ts";
+import { withTunnelRecovery } from "./tunnel-recovery.ts";
 import {
   CONTEXT,
   GATEWAY,
@@ -56,28 +58,10 @@ const VALID_COOKIE = `sid=valid-${crypto.randomUUID().replaceAll("-", "")}`;
 const SLOW_COOKIE = `sid=slow-${crypto.randomUUID().replaceAll("-", "")}`;
 
 // ---------------------------------------------------------------------------------------------
-// Raw HTTP/1.1 client: fetch() would normalize the request target (dot segments, encodings),
-// which is exactly what the bypass cases must send unchanged.
+// Raw HTTP/1.1 client (raw-client.ts): fetch() would normalize the request target (dot segments,
+// encodings), which is exactly what the bypass cases must send unchanged.
 
-// ms: time to the first response byte. Envoy keeps the connection open for up to 1 s after a local
-// reply (delayed close), so the time until close would overstate how fast the gateway answered.
-type RawResponse = { status: number; headers: Record<string, string[]>; body: string; ms: number };
-
-let ingress: { host: string; port: number; tls: boolean; ca?: string };
-
-function decodeChunked(body: Buffer): Buffer {
-  const parts: Buffer[] = [];
-  let offset = 0;
-  while (offset < body.length) {
-    const lineEnd = body.indexOf("\r\n", offset);
-    if (lineEnd < 0) break;
-    const size = Number.parseInt(body.subarray(offset, lineEnd).toString(), 16);
-    if (!Number.isFinite(size) || size === 0) break;
-    parts.push(body.subarray(lineEnd + 2, lineEnd + 2 + size));
-    offset = lineEnd + 2 + size + 2;
-  }
-  return Buffer.concat(parts);
-}
+let ingress: RawEndpoint;
 
 type RawOptions = {
   host?: HostKey | string;
@@ -87,81 +71,18 @@ type RawOptions = {
   sni?: string;
 };
 
-// Sends one request. When the tunnel to the gateway (ssh or kubectl port-forward) has died,
-// for example because the SSH session was dropped, reopens it and sends the request once more;
-// any other failure fails the test.
-async function raw(target: string, options: RawOptions = {}): Promise<RawResponse> {
-  try {
-    return await rawOnce(target, options);
-  } catch (error) {
-    if (tunnel === undefined || (tunnel.exitCode === null && tunnel.signalCode === null)) throw error;
-    console.error(`tunnel to the ingress gateway exited (${tunnel.exitCode ?? tunnel.signalCode}); reopening it`);
-    await openTunnel();
-    return rawOnce(target, options);
-  }
-}
-
-async function rawOnce(target: string, options: RawOptions): Promise<RawResponse> {
+// Sends one request. When the tunnel to the gateway (ssh or kubectl port-forward) was lost while
+// the request was in flight, for example because the SSH session was dropped or kubectl printed
+// "lost connection to pod", reopens it and sends the request once more (tunnel-recovery.ts); any
+// other failure, an HTTP status that the test does not expect included, fails the test.
+function raw(target: string, options: RawOptions = {}): Promise<RawResponse> {
   const hostHeader = options.host === undefined ? HOSTS.app : (HOSTS[options.host as HostKey] ?? options.host);
-  const lines = [
-    `${options.method ?? "GET"} ${target} HTTP/1.1`,
-    `host: ${hostHeader}`,
-    "user-agent: trustiot-ingress-e2e",
-    "connection: close",
-    ...(options.headers ?? []).map(([name, value]) => `${name}: ${value}`),
-  ];
-  const request = `${lines.join("\r\n")}\r\n\r\n`;
-  const chunks: Buffer[] = [];
-  const started = performance.now();
-  let firstByte: number | undefined;
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timeout: ${target}`)), 15_000);
-    const finish = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    Bun.connect({
-      hostname: ingress.host,
-      port: ingress.port,
-      tls: ingress.tls
-        ? { serverName: options.sni ?? hostHeader.split(":")[0], ca: ingress.ca }
-        : undefined,
-      socket: {
-        open(socket) {
-          socket.write(request);
-        },
-        data(_socket, data) {
-          firstByte ??= performance.now();
-          chunks.push(Buffer.from(data));
-        },
-        close: finish,
-        end: finish,
-        error(_socket, error) {
-          clearTimeout(timer);
-          reject(error);
-        },
-        connectError(_socket, error) {
-          clearTimeout(timer);
-          reject(error);
-        },
-      },
-    }).catch(reject);
+  const request = { target, method: options.method, hostHeader, headers: options.headers, sni: options.sni };
+  return withTunnelRecovery(() => sendRaw(ingress, request), {
+    tunnel: () => tunnel,
+    reopen: openTunnel,
+    log: (message) => console.error(message),
   });
-  const ms = (firstByte ?? performance.now()) - started;
-  const response = Buffer.concat(chunks);
-  const split = response.indexOf("\r\n\r\n");
-  if (split < 0) throw new Error(`no HTTP response for ${target}: ${JSON.stringify(response.toString())}`);
-  const [statusLine = "", ...headerLines] = response.subarray(0, split).toString().split("\r\n");
-  const status = Number(statusLine.split(" ")[1]);
-  const headers: Record<string, string[]> = {};
-  for (const line of headerLines) {
-    const colon = line.indexOf(":");
-    const name = line.slice(0, colon).trim().toLowerCase();
-    (headers[name] ??= []).push(line.slice(colon + 1).trim());
-  }
-  let body = response.subarray(split + 4);
-  if (headers["transfer-encoding"]?.some((v) => v.toLowerCase().includes("chunked"))) body = decodeChunked(body);
-  return { status, headers, body: body.toString(), ms };
 }
 
 // whoami prints one "Name: value" line per request header value.

@@ -1,6 +1,6 @@
-# This branch (feat/72-secrets-policy, with main 404817d merged in on 2026-10-11)
+# This branch (feat/72-secrets-policy, with main a4bfe2b merged in on 2026-10-11)
 $ bun scripts/ci/check-secret-handling.ts
-secret handling: 159 file(s) checked, 1 container build file(s), no violations
+secret handling: 169 file(s) checked, 1 container build file(s), no violations
 exit status: 0
 # The container build file is deploy/chart/tests/e2e/identity-double/Containerfile; the nightly
 # builds it through containerBuildArgs (scripts/nightly/platform.ts).

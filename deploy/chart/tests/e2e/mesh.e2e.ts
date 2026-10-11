@@ -49,6 +49,8 @@ import {
   uninstallRelease,
   waitFor,
 } from "./cluster";
+import { sendRaw } from "./raw-client.ts";
+import { withTunnelRecovery } from "./tunnel-recovery.ts";
 
 // How long a call may take before it counts as refused. Depending on the NetworkPolicy
 // controller, a refused connection is rejected right away or dropped (a timeout); ztunnel resets
@@ -207,9 +209,13 @@ async function expectGatewayReachesBackends(phase: string) {
     const url = `http://${host}${path}`;
     let status = 0;
     try {
-      const response = await fetch(`http://127.0.0.1:${gatewayPort}${path}`, { headers: { host }, signal: AbortSignal.timeout(15_000) });
+      // Same recovery as ingress.e2e.ts: a tunnel that dies while the request is in flight is
+      // reopened and the request is sent once more (Laysi/trustiot-v2#261).
+      const response = await withTunnelRecovery(
+        () => sendRaw({ host: "127.0.0.1", port: gatewayPort, tls: false }, { target: path, hostHeader: host }),
+        { tunnel: () => tunnel, reopen: openTunnel, log: (message) => console.error(message) },
+      );
       status = response.status;
-      await response.text();
       results.push({ phase, call: name, url, outcome: "response", status });
     } catch (error) {
       results.push({ phase, call: name, url, outcome: "error", message: String(error) });

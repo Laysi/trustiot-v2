@@ -1,0 +1,6 @@
+F1a decode OK, fields = {"device": "0199d0a0-0000-7000-8000-000000000002", "timeout_ms": "OVERRIDDEN"}
+F1b decode OK, exception_codes = [{}, {2: 999}]
+F2 sizes: heartbeat 4217 bytes, telemetry 4244 bytes
+F4 host ::ffff:0.0.0.0: accepted = true
+F4 host ::ffff:224.0.0.1: accepted = true
+F4 host ::ffff:255.255.255.255: accepted = true
