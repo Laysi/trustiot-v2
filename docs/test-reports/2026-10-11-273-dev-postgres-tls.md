@@ -38,8 +38,8 @@ bun scripts/dev.ts purge
 | 檔案位置與權限 | state 目錄 0700，裡面只有 `state.json`（0600）與 `tls/ca.crt`；目錄內沒有任何 `PRIVATE KEY`。伺服器私鑰只在磁碟區 `postgres-config`，0600、擁有者是容器裡的 postgres（999） | [02](data/2026-10-11-273-dev-postgres-tls/02-running-evidence.txt) |
 | `down` | 容器移除；`postgres-config` 與 `postgres-ca` 磁碟區（含私鑰）一併移除，資料磁碟區保留；state 目錄（含 `tls/`）刪除 | [03](data/2026-10-11-273-dev-postgres-tls/03-down-purge.txt) |
 | `purge` | 磁碟區、映像、state 目錄全部刪除，沒有剩下任何檔案 | [03](data/2026-10-11-273-dev-postgres-tls/03-down-purge.txt) |
-| podman 端對端測試 | 1 通過、0 失敗，約 65 秒（編譯快取已暖）。包含：同一個服務映像在容器網路上以對的 CA 與名稱啟動就緒，換成另一個 CA 或憑證沒有的主機名稱則維持 `/healthz` 200、`/readyz` 503；`down` 後憑證與私鑰磁碟區消失；第二次 `up` 的 CA 與密碼都是新的；`purge` 後 `tls/` 與 state 目錄不存在；工作目錄的 `git status --ignored` 前後相同 | [04-e2e.txt](data/2026-10-11-273-dev-postgres-tls/04-e2e.txt) |
-| `bun test scripts/tests` | 94 通過、1 略過（e2e，要 `TRUSTIOT_DEV_E2E=1`）、0 失敗。新增：憑證結構（node 的 `X509Certificate` 與 openssl 兩種解析）、用假的 Postgres 驗證 TLS 檢查（對的 CA 與每個名稱通過、另一個 CA 被拒、憑證沒有的名稱被拒、連不上不算「被拒」）、`env` 輸出、不得提交金鑰的規則 | [05](data/2026-10-11-273-dev-postgres-tls/05-bun-test-scripts-tests.txt) |
+| podman 端對端測試 | 1 通過、0 失敗，在合併 `origin/main` 前後各跑一次（65 秒，編譯快取已暖；合併後 479 秒，含重新編譯）。包含：同一個服務映像在容器網路上以對的 CA 與名稱啟動就緒，換成另一個 CA 或憑證沒有的主機名稱則維持 `/healthz` 200、`/readyz` 503；`down` 後憑證與私鑰磁碟區消失；第二次 `up` 的 CA 與密碼都是新的；`purge` 後 `tls/` 與 state 目錄不存在；工作目錄的 `git status --ignored` 前後相同 | [04-e2e.txt](data/2026-10-11-273-dev-postgres-tls/04-e2e.txt) |
+| `bun test scripts/tests` | 94 通過、1 略過（e2e，要 `TRUSTIOT_DEV_E2E=1`）、0 失敗（合併 `origin/main` 後整個 `bun test scripts`：276 通過、1 略過、0 失敗；建置主機 `ruisi-wsl` 上合併前 185 通過、0 失敗）。新增：憑證結構（node 的 `X509Certificate` 與 openssl 兩種解析）、用假的 Postgres 驗證 TLS 檢查（對的 CA 與每個名稱通過、另一個 CA 被拒、憑證沒有的名稱被拒、連不上不算「被拒」）、`env` 輸出、不得提交金鑰的規則 | [05](data/2026-10-11-273-dev-postgres-tls/05-bun-test-scripts-tests.txt) |
 | 型別檢查 | `bun run --cwd scripts typecheck` 通過 | [06](data/2026-10-11-273-dev-postgres-tls/06-typecheck.txt) |
 
 第一次端對端執行在冷的 cargo 編譯下超過 10 分鐘的測試上限而逾時（機器上同時有其他 agent 在編譯），不是測試失敗；之後先預編再跑，並把上限放寬到 20 分鐘。
