@@ -1,0 +1,69 @@
+<!--
+GitHub Release v0.0.0-rc.1 of Laysi/trustiot-v2, read with the GitHub MCP get_release_by_tag
+on 2026-10-10 (after the run finished). Metadata from the same response:
+  html_url:     https://github.com/Laysi/trustiot-v2/releases/tag/v0.0.0-rc.1
+  author:       github-actions[bot]
+  prerelease:   true
+  draft:        false
+  published_at: 2026-10-10T12:42:22Z
+The body follows unchanged. The notes at the top are the commit-list fallback of
+Laysi/release-notes-action (no AI_MODEL variable is set in the repository).
+-->
+- feat(release): add release stage scripts and the pipeline self-test image
+- build(release): pin cross-compile, SBOM and signing tools
+- feat(service-kit): verify internal identity tokens (#242)
+- feat(scripts): add one-command local dev environment with podman (#241)
+- feat(service-kit): add shared service skeleton for config, health, shutdown and telemetry (#239)
+- test(deploy): add lab install report for the helm chart skeleton
+- feat(deploy): add helm chart skeleton with saas and onprem values
+- docs(test-reports): add contract crate acceptance evidence
+- feat(contract): add M1 errors, event envelope and typed internal client
+- build(workspace): add cargo workspace, toolchain pins and repo skeleton (#225)
+- docs(claude): authorize the gh api fallback for dependencies and milestones
+- docs(claude): let agents triage issues and track waits as dependencies
+- docs(claude): set issue priority at creation without waiting for triage
+- docs(roadmap): keep the Pi double-TLS test pending until hardware exists
+- docs(feasibility): add 2026-10-10 Istio ambient and Cloudflare Tunnel results
+- docs(architecture): route on-prem gateways through the WebSocket path
+- docs(roadmap): apply 2026-10-10 milestone placement decisions
+- docs(architecture): add rebuild decisions, scope, and milestones
+- docs(claude): add CLAUDE.md with work tracking conventions
+
+## 發佈內容
+
+映像只有 linux/arm64；chart 的 `appVersion` 與映像的 tag 都是 `0.0.0-rc.1`，來源 commit 為 `ee8c4388772d2dce6c8e93f2b7cd60ec298c803a`。部署時以 digest 為準。
+
+| 產物 | 參照 | digest |
+| --- | --- | --- |
+| 映像 `release-selftest` | `ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.1` | `sha256:7589584b37823a2ee9226f78e18c337d5a4dd93b18df348888def53fc252b126` |
+| Helm chart `trustiot` | `oci://ghcr.io/laysi/trustiot-v2/charts/trustiot` 版本 `0.0.0-rc.1` | `sha256:802286856c7fc42ae924ed6293e107c847f75b3a20a77a7a7351a146ebf9c481` |
+
+每個映像的 SBOM（SPDX JSON）附在本頁的 assets，也以簽章過的 attestation 存在 registry。
+
+## 驗證
+
+以 GitHub OIDC 的 keyless cosign 簽章，簽章身分是這個 tag 上的 release workflow。套件是私有的，先以有讀取權限的帳號 `cosign login ghcr.io`：
+
+```sh
+cosign verify ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 \
+  --certificate-identity 'https://github.com/Laysi/trustiot-v2/.github/workflows/release.yml@refs/tags/v0.0.0-rc.1' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1 \
+  --certificate-identity 'https://github.com/Laysi/trustiot-v2/.github/workflows/release.yml@refs/tags/v0.0.0-rc.1' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+# SBOM：驗證 attestation 後取出 predicate
+cosign verify-attestation --type spdxjson ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 \
+  --certificate-identity 'https://github.com/Laysi/trustiot-v2/.github/workflows/release.yml@refs/tags/v0.0.0-rc.1' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  | jq -r .payload | base64 -d | jq .predicate
+```
+
+## 驗證結果
+
+2026-10-10T12:42:53Z 由 release workflow 的 verify job 以唯讀權限從 registry 檢查，簽章身分為 `https://github.com/Laysi/trustiot-v2/.github/workflows/release.yml@refs/tags/v0.0.0-rc.1`：
+
+- 映像 `release-selftest`：tag 指向 `sha256:7589584b37823a2ee9226f78e18c337d5a4dd93b18df348888def53fc252b126`；平台 linux/arm64；cosign 簽章驗證通過；SBOM attestation 驗證通過（SPDX-2.3，13 個套件）；匿名拉取被拒（套件為私有）。
+- Helm chart `trustiot`：tag 指向 `sha256:802286856c7fc42ae924ed6293e107c847f75b3a20a77a7a7351a146ebf9c481`；cosign 簽章驗證通過；拉下的 chart 就是發佈的檔案；Chart.yaml 的 version 與 appVersion 都是 `0.0.0-rc.1`；匿名拉取被拒（套件為私有）。
+- 對照：以另一個身分（`refs/tags/v0.0.0-rc.1-not-this-release`）驗證 `release-selftest` 被拒，上列驗證不是空檢查。
+
+執行紀錄：https://github.com/Laysi/trustiot-v2/actions/runs/38052766358
