@@ -17,7 +17,7 @@
  *
  * Path rules: `rust` is the safe direction. It runs unless every changed file is in a short
  * list of paths that nothing in the rust job reads; a new top-level directory or file runs it
- * by default. `cargo-deny` and `helm` read a known, small set of files and run when one of
+ * by default. `cargo-deny`, `helm` and `host` read a known, small set of files and run when one of
  * them changes. Changes to this script, ci.yml, the local actions or the tool pins run every
  * job. `gitleaks` and `workflow-policy` do not depend on this script and always run.
  *
@@ -33,7 +33,7 @@ import { posix, resolve } from "node:path";
 import { CI_WORKFLOW_PATH, newestMainCiRun, parseWorkflowRuns, type WorkflowRun } from "../release/lib.ts";
 
 /** The ci.yml jobs whose run depends on the changed paths, by job id. */
-export const PATH_JOBS = ["rust", "cargo-deny", "helm"] as const;
+export const PATH_JOBS = ["rust", "cargo-deny", "helm", "host"] as const;
 export type PathJob = (typeof PATH_JOBS)[number];
 
 export interface JobDecision {
@@ -140,10 +140,19 @@ export function affectsHelm(path: string): boolean {
   );
 }
 
+/**
+ * The SaaS host installer: its sources, tests, lock file and build all live in `deploy/host`
+ * (checked by changes.test.ts).
+ */
+export function affectsHost(path: string): boolean {
+  return affectsEveryJob(path) || path.startsWith("deploy/host/");
+}
+
 const RULES: Record<PathJob, (path: string) => boolean> = {
   rust: affectsRust,
   "cargo-deny": affectsCargoDeny,
   helm: affectsHelm,
+  host: affectsHost,
 };
 
 /** Every job runs, for the given reason. */

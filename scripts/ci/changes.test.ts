@@ -8,6 +8,7 @@ import {
   affectsCargoDeny,
   affectsEveryJob,
   affectsHelm,
+  affectsHost,
   affectsRust,
   changedFiles,
   decide,
@@ -33,7 +34,7 @@ function running(files: readonly string[]): string[] {
 }
 
 describe("path rules", () => {
-  test("a docs-only change skips rust, cargo-deny and helm", () => {
+  test("a docs-only change skips rust, cargo-deny, helm and host", () => {
     expect(running(["docs/architecture/ci-release.md"])).toEqual([]);
     expect(
       running([
@@ -170,13 +171,36 @@ describe("path rules", () => {
     },
   );
 
+  test.each([
+    "deploy/host/src/install.ts",
+    "deploy/host/tests/install.test.ts",
+    "deploy/host/package.json",
+    "deploy/host/bun.lock",
+    "deploy/host/build.ts",
+    "deploy/host/assets/cloudflare-packaging.asc",
+    ".prototools",
+    ".github/workflows/ci.yml",
+    ".github/actions/setup-proto/action.yml",
+    "scripts/ci/changes.ts",
+  ])("host runs for %s", (path) => {
+    expect(affectsHost(path)).toBe(true);
+  });
+
+  test.each(["deploy/chart/values.yaml", "deploy/README.md", "docs/architecture/deployment.md", "scripts/dev.ts", "crates/protocol/src/lib.rs"])(
+    "host skips %s",
+    (path) => {
+      expect(affectsHost(path)).toBe(false);
+    },
+  );
+
   test("typical pull requests", () => {
+    expect(running(["deploy/host/src/install.ts", "deploy/host/README.md"])).toEqual(["host"]);
     expect(running(["deploy/chart/templates/service.yaml", "deploy/chart/README.md"])).toEqual(["helm"]);
     expect(running(["scripts/dev.ts", "scripts/tests/dev.test.ts"])).toEqual([]);
     expect(running(["crates/outbox/src/lib.rs"])).toEqual(["rust"]);
     expect(running(["crates/outbox/src/lib.rs", "Cargo.lock"])).toEqual(["cargo-deny", "rust"]);
     expect(running(["deploy/chart/values.yaml"])).toEqual(["helm", "rust"]);
-    expect(running([".prototools"])).toEqual(["cargo-deny", "helm", "rust"]);
+    expect(running([".prototools"])).toEqual(["cargo-deny", "helm", "host", "rust"]);
     expect(running([".github/workflows/nightly.yml", "scripts/nightly/run.ts"])).toEqual([]);
   });
 
@@ -302,6 +326,30 @@ describe("guards: files the jobs read are covered", () => {
       }
     }
     expect(checked).toBeGreaterThan(3);
+    expect(uncovered).toEqual([]);
+  });
+
+  test("the host installer reads and imports nothing outside deploy/host, or the rules cover it", () => {
+    const hostDir = join(ROOT, "deploy", "host");
+    const uncovered: string[] = [];
+    let checked = 0;
+    for (const file of sources(hostDir, [".ts"]).filter((path) => !relative(hostDir, path).startsWith("dist/"))) {
+      const source = readFileSync(file, "utf8");
+      const where = relative(ROOT, file);
+      for (const match of source.matchAll(/from\s+["'](\.{1,2}\/[^"']+)["']/g)) {
+        checked++;
+        const imported = posix.normalize(posix.join(posix.dirname(where), match[1] ?? ""));
+        if (!affectsHost(imported)) uncovered.push(`${where}: import of ${imported}`);
+      }
+      for (const match of source.matchAll(/["']([^"'\n]+)["']/g)) {
+        const path = repositoryPath(match[1] ?? "");
+        if (path !== undefined && path.includes("/") && existsSync(join(ROOT, path))) {
+          checked++;
+          if (!affectsHost(path)) uncovered.push(`${where}: "${match[1]}"`);
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
     expect(uncovered).toEqual([]);
   });
 });
@@ -536,8 +584,8 @@ describe("commits compared", () => {
 
 describe("outputs", () => {
   test("one line per job for GITHUB_OUTPUT", () => {
-    expect(outputLines(decide(["docs/a.md", "deploy/chart/Chart.yaml"]))).toBe("rust=false\ncargo-deny=false\nhelm=true\n");
-    expect(outputLines(runEverything("x"))).toBe("rust=true\ncargo-deny=true\nhelm=true\n");
+    expect(outputLines(decide(["docs/a.md", "deploy/chart/Chart.yaml"]))).toBe("rust=false\ncargo-deny=false\nhelm=true\nhost=false\n");
+    expect(outputLines(runEverything("x"))).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\n");
   });
 
   test("the summary lists each job, the reason and the files", () => {
@@ -557,7 +605,7 @@ describe("outputs", () => {
     writeFileSync(stepSummary, "");
     const status = await main({ GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: stepSummary });
     expect(status).toBe(0);
-    expect(readFileSync(output, "utf8")).toBe("rust=true\ncargo-deny=true\nhelm=true\n");
+    expect(readFileSync(output, "utf8")).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\n");
     expect(readFileSync(stepSummary, "utf8")).toContain("| `helm` | yes |");
   });
 });

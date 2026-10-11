@@ -1,0 +1,17 @@
+[package]
+# Stands in for the crates.io `webpki-roots` through `[patch.crates-io]` in the root Cargo.toml,
+# so the name must stay `webpki-roots` and the version must satisfy every requirement on it in
+# the graph (sqlx-core 0.9 asks for "1"). See src/lib.rs for why.
+name = "webpki-roots"
+version = "1.0.9"
+description = "No built-in trust anchors: sqlx trusts only the CA a service configures for Postgres (Laysi/trustiot-v2#272)."
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+rustls-pki-types.workspace = true
+
+[lints]
+workspace = true

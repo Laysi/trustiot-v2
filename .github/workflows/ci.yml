@@ -10,7 +10,7 @@
 #
 # Cost (Laysi/trustiot-v2#309): every job runs on the 2-core arm64 runner, which costs less per
 # minute than x64. The `changes` job (scripts/ci/changes.ts) decides from the changed paths
-# whether `rust`, `cargo-deny` and `helm` run; a job it skips reports as skipped, which counts
+# whether `rust`, `cargo-deny`, `helm` and `host` run; a job it skips reports as skipped, which counts
 # as passed. Each of them runs unless `changes` answered exactly 'false', so a failed or
 # missing answer runs everything. `gitleaks` and `workflow-policy` always run. A new job that
 # should depend on paths gets its rule in scripts/ci/changes.ts and an output of `changes`.
@@ -56,6 +56,7 @@ jobs:
       rust: ${{ steps.decide.outputs.rust }}
       cargo-deny: ${{ steps.decide.outputs.cargo-deny }}
       helm: ${{ steps.decide.outputs.helm }}
+      host: ${{ steps.decide.outputs.host }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -197,6 +198,37 @@ jobs:
       # each validated by kubeconform -strict, plus the chart's own rules and the README field
       # check (deploy/chart/README.md). kubeconform downloads the Kubernetes schemas.
       - run: bun test deploy/chart
+
+  host:
+    name: host
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.host != 'false' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: toolchain
+        uses: ./.github/actions/setup-proto
+        with:
+          tools: bun
+      - name: Install dependencies
+        run: bun install --cwd deploy/host --frozen-lockfile
+      # The SaaS host installer (deploy/host/README.md). Its tests run every step against a
+      # simulated host and score the cloudflared unit with the runner's systemd-analyze; CI=true
+      # makes them fail instead of skip when systemd-analyze or gpg is missing.
+      - name: Type check
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun run --cwd deploy/host typecheck
+      - name: Test
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun run --cwd deploy/host test
+      - name: Build the x86_64 and aarch64 executables
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: bun run --cwd deploy/host build
 
   gitleaks:
     name: gitleaks
