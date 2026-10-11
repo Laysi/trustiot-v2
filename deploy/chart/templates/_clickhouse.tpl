@@ -23,3 +23,39 @@ entities are never configured in files (decision 14).
     </logger>
 </clickhouse>
 {{- end -}}
+
+{{/*
+Container ports and probes of the bundled ClickHouse. The StatefulSet renders them from here, and
+the NetworkPolicy derives the probe ports from the same definition ("trustiot.mesh.probePorts").
+Returns YAML {ports, probes: {startup, liveness, readiness}}; use with fromYaml.
+*/}}
+{{- define "trustiot.clickhouse.pod" -}}
+ports:
+  - name: http
+    containerPort: 8123
+    protocol: TCP
+  - name: native
+    containerPort: 9000
+    protocol: TCP
+probes:
+  startup:
+    httpGet:
+      path: /ping
+      port: http
+    periodSeconds: 5
+    failureThreshold: 60
+  liveness:
+    httpGet:
+      path: /ping
+      port: http
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 6
+  readiness:
+    httpGet:
+      path: /ping
+      port: http
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+{{- end -}}
