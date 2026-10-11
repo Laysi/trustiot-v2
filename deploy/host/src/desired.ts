@@ -53,7 +53,10 @@ export const FIREWALLD_CONFIG = "/etc/firewalld/firewalld.conf";
 // no longer publishes, so repo_gpgcheck=1 makes dnf refuse the repository. The installed
 // package's own signature is verified again afterwards (checkCloudflaredProvenance).
 export const CLOUDFLARE_KEY = cloudflareKey;
-export const CLOUDFLARE_KEY_FINGERPRINT = "CC94B39C77AE7342A68B89628A682D308D4E5E73";
+// Written as `gpg --fingerprint` prints it, so it can be compared by eye with gpg's output.
+const CLOUDFLARE_KEY_FINGERPRINT_GROUPED = "CC94 B39C 77AE 7342 A68B  8962 8A68 2D30 8D4E 5E73";
+/** The fingerprint as 40 hex digits without spaces, the form gpg's machine-readable output uses. */
+export const CLOUDFLARE_KEY_FINGERPRINT = CLOUDFLARE_KEY_FINGERPRINT_GROUPED.replace(/\s+/g, "");
 /** The key ID rpm prints for packages signed with that key: the fingerprint's last 16 digits. */
 export const CLOUDFLARE_KEY_ID = CLOUDFLARE_KEY_FINGERPRINT.slice(-16).toLowerCase();
 export const CLOUDFLARE_KEY_PATH = "/etc/pki/rpm-gpg/RPM-GPG-KEY-cloudflare-packaging";

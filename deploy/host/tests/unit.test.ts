@@ -1,5 +1,6 @@
 // The cloudflared unit, the token parser, the command line and the pinned signing key.
 import { describe, expect, test } from "bun:test";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -115,26 +116,27 @@ describe("cloudflared unit", () => {
 
 describe("tunnel token", () => {
   const id = "0b6c1c3e-4a59-4f33-9d55-5b8a2d7f9e10";
-  const secret = "c2VjcmV0LXZhbHVlLXRoYXQtaXMtbG9uZy1lbm91Z2g=";
+  // Made up at run time; the errors must never quote it.
+  const planted = randomBytes(32).toString("base64");
   const encode = (value: unknown) => new TextEncoder().encode(Buffer.from(JSON.stringify(value)).toString("base64"));
 
   test("accepts a token and reports only the tunnel ID", () => {
-    const token = parseTunnelToken(encode({ a: "acct", t: id, s: secret }));
+    const token = parseTunnelToken(encode({ a: "acct", t: id, s: planted }));
     expect(token.tunnelId).toBe(id);
     expect(token.value).not.toContain("\n");
   });
 
   test("trims the newline a file or a pipe adds", () => {
-    const raw = Buffer.from(JSON.stringify({ a: "acct", t: id, s: secret })).toString("base64");
+    const raw = Buffer.from(JSON.stringify({ a: "acct", t: id, s: planted })).toString("base64");
     expect(parseTunnelToken(new TextEncoder().encode(`  ${raw}\n`)).value).toBe(raw);
   });
 
   test.each([
     ["empty", new TextEncoder().encode("\n")],
-    ["an install command", new TextEncoder().encode(`cloudflared service install ${secret}`)],
+    ["an install command", new TextEncoder().encode(`cloudflared service install ${planted}`)],
     ["not JSON", new TextEncoder().encode(Buffer.from("not json").toString("base64"))],
     ["without the secret", encode({ a: "acct", t: id })],
-    ["with a bad tunnel ID", encode({ a: "acct", t: "not-a-uuid", s: secret })],
+    ["with a bad tunnel ID", encode({ a: "acct", t: "not-a-uuid", s: planted })],
     ["too long", new TextEncoder().encode("A".repeat(5000))],
   ])("rejects a token that is %s, without quoting it", (_name, input) => {
     let error: unknown;
@@ -144,7 +146,7 @@ describe("tunnel token", () => {
       error = caught;
     }
     expect(error).toBeInstanceOf(TokenError);
-    expect((error as Error).message).not.toContain(secret);
+    expect((error as Error).message).not.toContain(planted);
     expect((error as Error).message).not.toContain("AAAA");
   });
 });

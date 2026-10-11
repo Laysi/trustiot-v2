@@ -2,6 +2,7 @@
 // changes nothing, refusals leave the host untouched, and the tunnel token never appears in a
 // command line or the output.
 import { describe, expect, test } from "bun:test";
+import { randomBytes } from "node:crypto";
 import {
   CLOUDFLARE_KEY_PATH,
   CLOUDFLARED_REPO,
@@ -25,10 +26,11 @@ import {
 import { TokenError } from "../src/token.ts";
 import { FAKE_INSTALLER_SHA256, FakeHost } from "./fake-host.ts";
 
-const SECRET = "c2VjcmV0LXRoYXQtbXVzdC1uZXZlci1sZWFr";
+// Made up at run time: the tests check that these values never reach a command line or the output.
+const PLANTED = randomBytes(32).toString("base64");
 const TUNNEL_ID = "0b6c1c3e-4a59-4f33-9d55-5b8a2d7f9e10";
-const TOKEN = makeToken(TUNNEL_ID, SECRET);
-const OTHER_TOKEN = makeToken(TUNNEL_ID, "YW5vdGhlci1zZWNyZXQtdmFsdWUtZm9yLXJvdGF0aW9u");
+const TOKEN = makeToken(TUNNEL_ID, PLANTED);
+const OTHER_TOKEN = makeToken(TUNNEL_ID, randomBytes(32).toString("base64"));
 
 function makeToken(tunnelId: string, secret: string): string {
   return Buffer.from(JSON.stringify({ a: "4f1d0e9c8b7a6f5e4d3c2b1a09f8e7d6", t: tunnelId, s: secret })).toString("base64");
@@ -133,7 +135,7 @@ describe("the tunnel token", () => {
     await run(host, options({ token: new TextEncoder().encode(OTHER_TOKEN) }));
     const commandLines = host.commands.map((command) => command.join(" ")).join("\n");
     const output = host.output.join("\n");
-    for (const secret of [TOKEN, OTHER_TOKEN, SECRET]) {
+    for (const secret of [TOKEN, OTHER_TOKEN, PLANTED]) {
       expect(commandLines).not.toContain(secret);
       expect(output).not.toContain(secret);
     }
