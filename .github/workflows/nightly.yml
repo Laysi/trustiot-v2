@@ -3,9 +3,11 @@
 # deployment shape nobody is using day to day cannot rot unnoticed. Policy, what the test checks and what to do when it fails:
 # docs/architecture/ci-release.md, section nightly.yml.
 #
-# Cost: one job on one hosted arm64 runner, one k3d cluster reused for both values files. The
-# workflow also runs on pull requests that touch the chart or this workflow, so a change is
-# deployed for real before it merges. Those runs are the only extra ones. They report through the
+# Cost: one job on one hosted arm64 runner, one k3d cluster reused for both values files. A pull
+# request that touches the chart or this workflow is deployed for real before it merges, but only
+# once it carries the `smoke` label (Laysi/trustiot-v2#309): the coordinator adds it before
+# merging, and from then on every push re-runs the test. Without the label a pull request event
+# starts the workflow but skips every job, which costs no minutes. Those runs report through the
 # check status, the job summary and the uploaded artifact: a pull request run gets no write token
 # for comments, because it runs the workflow file of the pull request itself.
 #
@@ -28,6 +30,9 @@ on:
         type: boolean
         default: false
   pull_request:
+    # `labeled`, so that adding the `smoke` label starts the test; the default types are
+    # opened, synchronize and reopened. Adding any other label starts nothing (see smoke.if).
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - .github/workflows/nightly.yml
       - .github/actions/setup-proto/**
@@ -42,13 +47,30 @@ permissions: {}
 
 concurrency:
   # A pull request's newer push replaces its running deployment. A scheduled or manual run is
-  # never cancelled; a second one waits, so every night gets its own result.
-  group: nightly-${{ github.event.pull_request.number || github.ref }}
+  # never cancelled; a second one waits, so every night gets its own result. A pull request event
+  # that deploys nothing (no `smoke` label, or another label added) gets a group of its own, so
+  # it cannot cancel a deployment in progress. The condition is the one in smoke.if.
+  group: >-
+    ${{
+      github.event_name != 'pull_request' && format('nightly-{0}', github.ref)
+      || (contains(github.event.pull_request.labels.*.name, 'smoke')
+        && (github.event.action != 'labeled' || github.event.label.name == 'smoke'))
+        && format('nightly-{0}', github.event.pull_request.number)
+      || format('nightly-no-smoke-{0}', github.run_id)
+    }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   smoke:
     name: smoke
+    # Scheduled and manual runs always; a pull request only with the `smoke` label, and for a
+    # `labeled` event only when the label added is `smoke` (GitHub compares strings ignoring case).
+    if: >-
+      ${{
+        github.event_name != 'pull_request'
+        || (contains(github.event.pull_request.labels.*.name, 'smoke')
+          && (github.event.action != 'labeled' || github.event.label.name == 'smoke'))
+      }}
     # arm64, like every node we ship (decision 5): the chart's default nodeSelector is
     # kubernetes.io/arch: arm64, and the nightly must test that shape, not an amd64 override.
     runs-on: ubuntu-24.04-arm
@@ -101,7 +123,7 @@ jobs:
     needs: smoke
     # Also when the smoke job failed or timed out.
     if: ${{ always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch)) }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 5
     permissions:
       contents: read

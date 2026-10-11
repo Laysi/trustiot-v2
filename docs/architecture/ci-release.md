@@ -2,9 +2,9 @@
 
 GitHub Actions，三個 workflow：
 
-1. `ci.yml`：每個 PR（不論目標分支，整合分支也一樣）與推到 main 都跑，全綠才能合併（目前由流程把關，見下方「必要檢查與強制方式」）。Rust 跑 fmt、clippy、測試與 sqlx 離線檢查，並以 cargo-deny 檢查授權與漏洞公告（地端產品不能混入 BSL 等不能轉售的授權）；整合測試以 service container 起含 AGE 的 Postgres、ClickHouse 與 Mosquitto，跑完全部 migration 後跑跨租戶負向測試（RLS、row policy、AGE 角色）；閘道器程式交叉編譯成 aarch64，agent 用 testkit 的假 Modbus 端點跑故障注入測試；前端跑 Bun 安裝、型別檢查、lint、單元測試與建置；重新產生 `api/openapi.json` 與前端 client，有差異就失敗；helm lint，兩份 values 各自 helm template 後以 kubeconform 驗證（`bun test deploy/chart` 一次跑完，也檢查 chart 自己的安全規則，見 `deploy/chart/README.md`）；gitleaks 掃描祕密。各項由哪個 job 負責、哪些還沒加入，見下方「ci.yml 的 job」。Codex 審查設為 PR 的必要檢查，是伺服器端的關卡；本機 pre-commit 只是提早攔下。
+1. `ci.yml`：每個 PR（不論目標分支，整合分支也一樣）與推到 main 都跑，全綠才能合併（目前由流程把關，見下方「必要檢查與強制方式」）。Rust 跑 fmt、clippy、測試與 sqlx 離線檢查，並以 cargo-deny 檢查授權與漏洞公告（地端產品不能混入 BSL 等不能轉售的授權）；整合測試以 service container 起含 AGE 的 Postgres、ClickHouse 與 Mosquitto，跑完全部 migration 後跑跨租戶負向測試（RLS、row policy、AGE 角色）；閘道器程式交叉編譯成 aarch64，agent 用 testkit 的假 Modbus 端點跑故障注入測試；前端跑 Bun 安裝、型別檢查、lint、單元測試與建置；重新產生 `api/openapi.json` 與前端 client，有差異就失敗；helm lint，兩份 values 各自 helm template 後以 kubeconform 驗證（`bun test deploy/chart` 一次跑完，也檢查 chart 自己的安全規則，見 `deploy/chart/README.md`）；gitleaks 掃描祕密。各項由哪個 job 負責、哪些還沒加入，見下方「ci.yml 的 job」。Codex 審查設為 PR 的必要檢查，是伺服器端的關卡；本機 pre-commit 只是提早攔下。2026-10-11 起（Laysi/trustiot-v2#309）每個 job 都在 arm64 runner 上執行，`rust`、`cargo-deny`、`helm` 依變更的路徑決定是否執行，見下方「依變更路徑決定 job」。
 2. `release.yml`：打 tag 時跑。容器映像只出 arm64：Rust 先交叉編譯再放進映像，推到 GHCR，以 cosign 簽章並附 SBOM；SaaS 主機與展示機（Mac M1）都要是 arm64，地端客戶若用 x86 主機，到時再加 amd64。Helm chart 打包推到 GHCR。閘道器 agent 與 updater 的 aarch64 執行檔附建置來源證明，由 CI 以 OTA 簽章金鑰簽章：金鑰存在受保護的 GitHub environment，只有 main 上的 tag 能用，每次簽章都要人工核准。另外產出離線安裝包（MS6）；release notes 沿用 `Laysi/release-notes-action`。
-3. `nightly.yml`：每晚用 k3d 部署整套 chart（兩份 values 各一次），裝好 Istio ambient 後跑冒煙測試與入口 e2e 測試，失敗時開 issue 通知；依賴更新交給 Renovate。做什麼、怎麼通知與失敗時怎麼辦見下方「nightly.yml」與「Renovate」。
+3. `nightly.yml`：每晚用 k3d 部署整套 chart（兩份 values 各一次），裝好 Istio ambient 後跑冒煙測試與入口 e2e 測試，失敗時開 issue 通知；PR 只在帶 `smoke` label 時才部署；依賴更新交給 Renovate。做什麼、怎麼通知與失敗時怎麼辦見下方「nightly.yml」與「Renovate」。
 
 SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定放在 `deploy/flux/`；發版就是合併一個改 chart 版本號的 PR（由 release 流程自動開）。GitHub 不持有任何部署憑證，主機也不必對外開放，叢集只存一把唯讀的 GHCR 拉取 token；Flux 控制器的記憶體算進主機規格（MS3 重測）。地端不裝 Flux，由客戶以 Helm 安裝或用離線安裝包。
 
@@ -48,13 +48,16 @@ Laysi/trustiot-v2#70 以這些公鑰建立 `.sops.yaml`，並把 sops 與 age �
 
 2026-10-10 上線（Laysi/trustiot-v2#67）。同一個 PR 有新的推送時取消舊的執行；推到 main 的每個 commit 各自一個 concurrency group，一律跑完，每個 main commit 都有結果（共用一個 group 時，GitHub 會以較新的執行取代還在排隊的執行，即使沒有設 `cancel-in-progress`）。本機重跑的指令列在 `CLAUDE.md` 的「Build, lint, and test」。
 
+2026-10-11 起（Laysi/trustiot-v2#309）每個 job 都在 2-core 的 arm64 代管 runner（`ubuntu-24.04-arm`）上執行，理由與例外見下方「省 Actions 分鐘數」。`changes` job 先依變更的路徑決定 `rust`、`cargo-deny`、`helm` 要不要執行（見下方「依變更路徑決定 job」）；`gitleaks` 與 `workflow-policy` 每次都執行，不等 `changes`。
+
 | job（檢查名稱） | 內容 |
 | --- | --- |
-| `rust` | `cargo fmt --all --check`；`cargo clippy --workspace --all-targets --locked -- -D warnings`；`cargo test --workspace --locked`（含 `tools/repo-check` 的 repo 規則、`crates/service-kit` 以 `cargo tree` 檢查關閉 `contract` feature 時不依賴 contract，以及之後各 crate 的測試，例如 agent 以 testkit 假 Modbus 端點跑的故障注入測試）。`--workspace` 只建置預設 feature，所以 service-kit 關閉預設 feature 另跑一次 clippy 與測試（`--package service-kit --no-default-features`）。service-kit 的容器測試（以 PID 1 執行的範例服務、advisory lock 用的 Postgres）與 testkit 跨租戶負向測試框架的自我測試（帶 TLS 的 Postgres）用 runner 上的 podman 或 docker 起容器；GitHub 設定 `CI=true`，找不到可用的容器執行環境時這些測試失敗而不是略過，所以測試步驟通過就表示它們真的跑過。全程設 `SQLX_OFFLINE=true`：sqlx 的查詢巨集只讀進版控的 `.sqlx/`，查詢資料沒更新就編譯失敗。接著執行 `cargo run --locked --package openapi` 重新產生 `api/openapi.json`（`tools/openapi`，各服務由程式碼產生的 OpenAPI 規格加上 M1 錯誤 schema 合併而成），有任何差異就印出差異並失敗，所以改了 API 型別卻沒重新產生規格的 PR 過不了；同一項比對也在 `cargo test --workspace` 裡（`tools/openapi/tests/openapi.rs`）。最後把 `crates/protocol` 與 `edge/` 下的每個成員以 `aarch64-unknown-linux-gnu` 建置；還沒有這些 crate 時只留下說明，protocol crate（Laysi/trustiot-v2#50）併入後自動涵蓋。函式庫建置不需要交叉連結器，第一個閘道器執行檔加入時一併加上。前一項失敗時後面幾項照跑，一次回報全部結果 |
+| `changes` | `bun scripts/ci/changes.ts`：比較這次要測的 commit 與一個已測過的 commit，輸出 `rust`、`cargo-deny`、`helm` 各自是否執行（`true` 或 `false`），並在 job summary 列出理由、比較的 commit 與變更的檔案。推到 main 時另以 `actions: read` 讀 main 上近期的 ci 結果；PR 執行的是 PR 自己的腳本，不給它 token。規則見下方「依變更路徑決定 job」 |
+| `rust` | `cargo fmt --all --check`；`cargo clippy --workspace --all-targets --locked -- -D warnings`；`cargo test --workspace --locked`（含 `tools/repo-check` 的 repo 規則、`crates/service-kit` 以 `cargo tree` 檢查關閉 `contract` feature 時不依賴 contract，以及之後各 crate 的測試，例如 agent 以 testkit 假 Modbus 端點跑的故障注入測試）。`--workspace` 只建置預設 feature，所以 service-kit 關閉預設 feature 另跑一次 clippy 與測試（`--package service-kit --no-default-features`）。service-kit 的容器測試（以 PID 1 執行的範例服務、advisory lock 用的 Postgres）與 testkit 跨租戶負向測試框架的自我測試（帶 TLS 的 Postgres）用 runner 上的 podman 或 docker 起容器；GitHub 設定 `CI=true`，找不到可用的容器執行環境時這些測試失敗而不是略過，所以測試步驟通過就表示它們真的跑過。全程設 `SQLX_OFFLINE=true`：sqlx 的查詢巨集只讀進版控的 `.sqlx/`，查詢資料沒更新就編譯失敗。接著執行 `cargo run --locked --package openapi` 重新產生 `api/openapi.json`（`tools/openapi`，各服務由程式碼產生的 OpenAPI 規格加上 M1 錯誤 schema 合併而成），有任何差異就印出差異並失敗，所以改了 API 型別卻沒重新產生規格的 PR 過不了；同一項比對也在 `cargo test --workspace` 裡（`tools/openapi/tests/openapi.rs`）。最後把 `crates/protocol` 與 `edge/` 下的每個成員以 `aarch64-unknown-linux-gnu` 建置；還沒有這些 crate 時只留下說明，protocol crate（Laysi/trustiot-v2#50）併入後自動涵蓋。runner 是 arm64 時主機本身就是這個 target，直接原生建置（沿用前面步驟的編譯快取）；在 x64 主機上才交叉編譯，函式庫建置不需要交叉連結器，第一個閘道器執行檔加入時一併加上。前一項失敗時後面幾項照跑，一次回報全部結果 |
 | `cargo-deny` | `cargo deny --locked check`，規則在根目錄的 `deny.toml`：授權白名單（見下方「授權白名單」）；RustSec 的漏洞、unmaintained 與 unsound 公告一律失敗，要忽略某則公告必須在 `deny.toml` 寫明理由與到期日；Cargo.lock 裡有 yanked 版本就失敗；相依只能來自 crates.io |
 | `helm` | `bun test deploy/chart`：`helm lint --strict`；`values-saas.yaml` 與 `values-onprem.yaml` 各自 helm template 後以 `kubeconform -strict` 驗證（Kubernetes schema 由 kubeconform 下載）；再加上 chart 自己的規則與 README 欄位檢查，見 `deploy/chart/README.md`；入口 e2e 的通道復原邏輯（`deploy/chart/tests/e2e/tunnel-recovery.ts`）有不需要叢集的單元測試，也在這一步跑 |
 | `gitleaks` | 掃描 HEAD 能走到的每個 commit（完整歷史）；merge commit 也以對第一個 parent 的差異掃描，只在合併時加入的內容也查得到。只掃 HEAD，不掃 checkout 時一起抓下來的其他分支。發現時在該檔案與行號標註，附 fingerprint；報告遮蔽祕密值，不會印進紀錄 |
-| `workflow-policy` | `scripts/ci/check-workflows.ts` 檢查 `.github/workflows/` 的 workflow 與 `.github/actions/` 的 action，規則即上方通用規則中的權限、釘選（含本地 action 的位置）與觸發條件三項；`scripts/ci/lint-workflows.ts` 以 actionlint 檢查每個 workflow 的語法、expression 與各 key 可用的 context（2026-10-10，Laysi/trustiot-v2#251；本機 `bun scripts/ci/lint-workflows.ts`）；`scripts/ci/check-secret-handling.ts` 檢查密鑰的處理：repo 內每個 Dockerfile 與 Containerfile 不 COPY 金鑰類檔案、`ARG` 與 `ENV` 不放密鑰、只有旁邊的 ignore 檔以 `*` 開頭時才能複製整個 build context，`--build-arg` 與 `build-args` 不傳密鑰，映像建置一律經 `containerBuildArgs` 檢查實際的 context，`${{ secrets.* }}` 只出現在 step 的 `env` 與 `with`（不寫進 `run`，也不放在 workflow 與 job 層級的 `env`），repo 內的 Kubernetes Secret 一律以 SOPS 加密（規則見 [密鑰與權限](secrets.md)）；再跑 `scripts/` 與 `deploy/chart/tests/` 全部 TypeScript 的型別檢查（2026-10-11，Laysi/trustiot-v2#261）與 `scripts/` 的測試（含本地開發環境 Laysi/trustiot-v2#71 的單元測試；它的端對端測試要以 podman 起整套環境並編譯服務，不在 CI 執行） |
+| `workflow-policy` | `scripts/ci/check-workflows.ts` 檢查 `.github/workflows/` 的 workflow 與 `.github/actions/` 的 action，規則即上方通用規則中的權限、釘選（含本地 action 的位置）與觸發條件三項；`scripts/ci/lint-workflows.ts` 以 actionlint 檢查每個 workflow 的語法、expression 與各 key 可用的 context（2026-10-10，Laysi/trustiot-v2#251；本機 `bun scripts/ci/lint-workflows.ts`）；`scripts/ci/check-secret-handling.ts` 檢查密鑰的處理：repo 內每個 Dockerfile 與 Containerfile 不 COPY 金鑰類檔案、`ARG` 與 `ENV` 不放密鑰、只有旁邊的 ignore 檔以 `*` 開頭時才能複製整個 build context，`--build-arg` 與 `build-args` 不傳密鑰，映像建置一律經 `containerBuildArgs` 檢查實際的 context，`${{ secrets.* }}` 只出現在 step 的 `env` 與 `with`（不寫進 `run`，也不放在 workflow 與 job 層級的 `env`），repo 內的 Kubernetes Secret 一律以 SOPS 加密（規則見 [密鑰與權限](secrets.md)）；再跑 `scripts/` 與 `deploy/chart/tests/` 全部 TypeScript 的型別檢查（2026-10-11，Laysi/trustiot-v2#261）與 `scripts/` 的測試（含本地開發環境 Laysi/trustiot-v2#71 的單元測試；它的端對端測試要以 podman 起整套環境並編譯服務，不在 CI 執行；也含 `changes` 的路徑規則，以及 ci.yml 與 nightly.yml 決定執行與否的條件式，見下方「依變更路徑決定 job」） |
 
 之後由其他 issue 加進 ci.yml 的檢查（加入時同步更新本表與必要檢查清單）：
 
@@ -64,15 +67,48 @@ Laysi/trustiot-v2#70 以這些公鑰建立 `.sops.yaml`，並把 sops 與 age �
 | 擋下把外部輸入拼進 SQL 字串的靜態檢查 | Laysi/trustiot-v2#53 |
 | 前端：Bun 安裝、型別檢查、lint、單元測試、建置；重新產生 API client，有差異就失敗 | Laysi/trustiot-v2#123 |
 
+加入的 job 若只跟部分路徑有關，就在 `scripts/ci/changes.ts` 加它的規則與測試，並由 `changes` 輸出；否則每次都執行。
+
+### 依變更路徑決定 job
+
+2026-10-11 決定（Laysi/trustiot-v2#309）。起因：2026-10-10～11 兩天全組織用掉超過 1,000 個 Actions 分鐘（Free 方案每月 2,000 分鐘，組織內所有 repo 共用），其中多數是只改文件、chart 或腳本的 PR 也照跑約 7 分鐘的 `rust` job。
+
+**比較哪兩個 commit**（`scripts/ci/changes.ts`）：
+
+- PR：GitHub checkout 的 merge commit 對它的第一個 parent（合併當下 base 分支的最新 commit），所以列出的正是合併後會改變的檔案；base 分支之後的變動不算進來。
+- 推到 main：推送的 commit 對「main 上最近一個 ci 通過的 commit」。沿著 first-parent 往回找（最多 50 個），每個 commit 看它最新一次 ci.yml 的 push 執行：還在跑、失敗、被取消或沒有執行（一次推多個 commit 時中間的 commit）的都跳過，它們的變動因此也算進這次的比較。所以 main 上「略過」一定代表「與一個整次 ci 都通過的 commit 相比，這個 job 讀的檔案沒變」；連續合併時上一個 commit 的 ci 還在跑也不必全部重跑；紅燈的 main 在修好以前一直是紅燈（造成紅燈的變動會一直在比較範圍內）。決策 30 的「每個 main commit 都有 CI 結果」仍然成立：略過的 job 狀態是 skipped，整次執行的結論仍是 success，release 的 plan job 照常以它判斷（見「發佈核准」）。讀不到執行紀錄（`changes` 以 `actions: read` 呼叫 GitHub API）或 50 個內都沒有通過的 commit 時，全部 job 都執行。
+- 其他事件、git 比較失敗：全部 job 都執行。
+- 比較時加 `--no-renames`，搬移檔案時新舊兩個路徑都算，從 `crates/` 搬出去的檔案也會讓 `rust` 執行。
+
+**規則**（寧可多跑，不可漏跑）：
+
+| job | 何時執行 |
+| --- | --- |
+| 全部 | `.github/workflows/ci.yml`、`.github/actions/` 下的任何檔案、`scripts/ci/changes.ts` 本身、`.prototools`、`.proto/` 下的任何檔案（`rust`、`cargo-deny`、`bun`、`helm`、`kubeconform` 的版本都從這裡來）有變動 |
+| `rust` | 預設執行，只有在每個變動的檔案都屬於下列「`rust` 不讀的路徑」時才略過：`docs/`、`deploy/`（`deploy/chart/values.yaml` 除外，`crates/service-kit/tests/chart_contract.rs` 讀它）、`scripts/`、`frontend/`、`.github/`（上一列的 ci.yml 與本地 action 除外）、`.githooks/`，以及根目錄的 `README.md`、`renovate.json5`、`.gitleaksignore`、`.dockerignore`、`deny.toml`。不論在哪個目錄，`.rs`、`.sql` 與任何大小寫的 `AGENTS.md` 都會讓它執行（`tools/sql-check` 掃描整個 repo 的 Rust 檔與它們 include 的 SQL，`tools/repo-check` 不允許任何 AGENTS.md）。沒有列出的路徑（`crates/`、`services/`、`edge/`、`factory/`、`tools/`、`api/`、`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`clippy.toml`、`.cargo/`、`CLAUDE.md`、`.gitignore`、`datasets/`、`evals/`，以及之後新增的任何目錄）一律執行 |
+| `cargo-deny` | 任何 `Cargo.toml`、`Cargo.lock`、`deny.toml`、`rust-toolchain.toml`、`.cargo/` 下的檔案有變動 |
+| `helm` | `deploy/chart/`、`deploy/istio/` 下的檔案，或 chart 測試讀的 `scripts/lib/stack.ts`、`services/ingest/tests/common/mod.rs`、`docs/architecture/deployment.md` 有變動 |
+| `gitleaks`、`workflow-policy` | 每次都執行 |
+
+**怎麼確保規則跟得上**：`scripts/ci/changes.test.ts` 逐類列出路徑與預期結果，另有兩項守門測試：掃描 repo 內每個 `.rs` 檔的字串常值與 `include_str!`/`include_bytes!`，凡是指向 repo 內某個路徑的，都必須會讓 `rust` 執行；掃描 `deploy/chart/tests/` 的 TypeScript，凡是讀到 repo 內其他檔案的，都必須會讓 `helm` 執行。所以新測試開始讀某份文件時，若沒有同時更新規則，`workflow-policy` 會失敗。`scripts/ci/workflow-conditions.test.ts` 以 GitHub 自己的 expression 引擎（[`@actions/expressions`](https://www.npmjs.com/package/@actions/expressions)，GitHub 的 actions/languageservices，MIT）計算 ci.yml 與 nightly.yml 的 `if` 與 concurrency：`changes` 回答 `false` 才略過，回答 `true`、空值或 `changes` 本身失敗時都執行，整次執行被取消時不執行。
+
+**失敗時往執行的方向走**：每個依路徑的 job 寫成 `if: !cancelled() && needs.changes.outputs.<job> != 'false'`，`changes` 失敗、逾時或沒寫出結果時照樣執行；`changes.ts` 遇到任何問題也都回答「全部執行」，並在 job summary 寫明原因。
+
+**為何自己寫腳本、不用第三方 action**（例如 `dorny/paths-filter`）：(1) `rust` 的規則是「全部檔案都在忽略清單裡才略過」，用 glob 設定要靠反向比對與量詞設定，不如程式清楚；(2) 規則與守門測試放在一起，由同一個 CI 測試，規則改錯會在 PR 上直接失敗；(3) 推到 main 時要讀 main 上近期的 ci 結果、找出最近一個通過的 commit，本來就要寫程式；(4) 不多一個要追 SHA、會拿到 token 的第三方 action。代價是 `changes` job 本身約 1 個計費分鐘（checkout 完整歷史、裝 Bun）。
+
+**已知的取捨**：`cargo-deny` 的 RustSec 公告是隨時間增加的，略過時新公告要等下一次 Cargo 相關的變動才會被發現；Renovate 的 `vulnerabilityAlerts` 會為有公告的相依開 PR（前提是組織已裝好 Renovate，見下方「Renovate」）。是否加每日的 `cargo deny check advisories` 另案評估。
+
 ### 必要檢查與強制方式
 
-必要檢查清單（ci.yml 的 job 名稱）：`rust`、`cargo-deny`、`helm`、`gitleaks`、`workflow-policy`。
+必要檢查清單（ci.yml 的 job 名稱）：`changes`、`rust`、`cargo-deny`、`helm`、`gitleaks`、`workflow-policy`。依路徑略過的 job 狀態是 skipped，GitHub 把它當作通過（job 層的 `if` 略過時會回報狀態；workflow 層的 `paths` 篩選則根本不會建立 check，必要檢查會一直等待，所以 ci.yml 不用 workflow 層的 `paths`）。
 
-2026-10-10 確認：本 repo 是私有庫，組織在 GitHub Free 方案，分支保護與 ruleset 都不能用（API 回 HTTP 403「Upgrade to GitHub Pro」），GitHub 不會擋下沒通過檢查的合併。方案升級前由流程把關：合併任何 PR 之前，確認上列檢查在該 PR 最新的 commit 上全部通過。方案升級後，在 main 的 ruleset 把上列檢查設為必要檢查。
+2026-10-10 確認：本 repo 是私有庫，組織在 GitHub Free 方案，分支保護與 ruleset 都不能用（API 回 HTTP 403「Upgrade to GitHub Pro」），GitHub 不會擋下沒通過檢查的合併。方案升級前由流程把關：合併任何 PR 之前，確認上列檢查在該 PR 最新的 commit 上全部通過或略過（略過只能來自 `changes` 的判斷）。方案升級後，在 main 的 ruleset 把上列檢查設為必要檢查。
 
 ### 省 Actions 分鐘數
 
-私有庫在 Free 方案的 Actions 分鐘數有上限，所以：同一個 PR 的新推送會取消舊的執行；每個 job 設 `timeout-minutes`；Rust 的編譯快取（`Swatinem/rust-cache`）只在 main 儲存，PR 只讀取；aarch64 一律交叉編譯，不用模擬器；同一項檢查只跑一次。唯一的 arm64 代管 runner（`ubuntu-24.04-arm`）給 nightly 的 `smoke` job，因為 chart 預設的 nodeSelector 是 `kubernetes.io/arch: arm64`（決策 5），叢集架構要與實際出貨的一致；其他 job 都在 x64。
+私有庫在 Free 方案的 Actions 分鐘數有上限，所以：同一個 PR 的新推送會取消舊的執行；每個 job 設 `timeout-minutes`；Rust 的編譯快取（`Swatinem/rust-cache`）只在 main 儲存，PR 只讀取；不用模擬器；同一項檢查只跑一次；`rust`、`cargo-deny`、`helm` 只在相關路徑變動時執行（見上方「依變更路徑決定 job」）；nightly 的 k3d 部署在 PR 上只在帶 `smoke` label 時執行（見下方「nightly.yml」）。
+
+Runner：2026-10-11 依使用者指示（Laysi/trustiot-v2#309），ci.yml 與 nightly.yml 的每個 job 都用 2-core 的 arm64 代管 runner（`ubuntu-24.04-arm`），它每分鐘的價格比 x64 低；不夠用時再議。nightly 的 `smoke` job 原本就必須是 arm64：chart 預設的 nodeSelector 是 `kubernetes.io/arch: arm64`（決策 5），叢集架構要與實際出貨的一致。改用 arm64 前逐項確認過（2026-10-11，見 [測試報告](../test-reports/2026-10-11-309-ci-cost.md)）：setup-proto 的 proto 有 arm64 的 SHA-256；ci.yml 用到的 schema plugin（gitleaks、actionlint、cargo-deny、helm、kubeconform）都解析到存在的 linux arm64 release 資產，checksum 相符，執行檔能在 arm64 Linux 執行；Rust 測試啟動的容器映像（Postgres、ClickHouse、Mosquitto、distroless）都以 multi-arch index 的 digest 釘選，index 內有 linux/arm64；Rust 工具鏈由 runner 映像內建的 rustup 依 `rust-toolchain.toml` 安裝。arm64 runner 上 aarch64 是原生建置，不必交叉編譯。`release.yml` 仍在 x64，是否改用 arm64 另案評估（發佈次數少，且牽涉交叉編譯與可重現建置的設計）。目前沒有因為不能在 arm64 執行而留在 x64 的 ci.yml 或 nightly.yml job。
 
 ### 工具安裝
 
@@ -225,7 +261,19 @@ publish job 在 `release` environment 執行，原本的設計是在 environment
 
 ## nightly.yml
 
-每晚 18:17 UTC（台北 02:17）執行，也可在 main 上手動執行（`workflow_dispatch`，選項 `simulate_failure` 會讓每份 values 在安裝後故意失敗，用來驗證通知）。動到 `deploy/chart/`、`deploy/istio/`、`scripts/nightly/`、`.prototools`、`.proto/plugins/`、`setup-proto` 或 `nightly.yml` 本身的 PR 也會跑，chart 的改動在合併前就先真的部署一次；這些 PR 的執行不寫任何留言（PR 的 workflow 檔由 PR 自己決定，不給它寫入權限），結果看 check 狀態、job summary 與 `nightly-report` artifact。
+每晚 18:17 UTC（台北 02:17）執行，也可在 main 上手動執行（`workflow_dispatch`，選項 `simulate_failure` 會讓每份 values 在安裝後故意失敗，用來驗證通知）。動到 `deploy/chart/`、`deploy/istio/`、`scripts/nightly/`、`.prototools`、`.proto/plugins/`、`setup-proto` 或 `nightly.yml` 本身的 PR，帶有 `smoke` label 時也會跑，chart 的改動在合併前就先真的部署一次；這些 PR 的執行不寫任何留言（PR 的 workflow 檔由 PR 自己決定，不給它寫入權限），結果看 check 狀態、job summary 與 `nightly-report` artifact。
+
+### PR 的部署要加 `smoke` label
+
+2026-10-11 決定（Laysi/trustiot-v2#309）：每次部署約 7 個 arm64 計費分鐘，原本動到上列路徑的 PR 每次推送都部署一次。現在：
+
+- PR 沒有 `smoke` label 時不部署：事件照樣觸發 workflow，但 `smoke` job 被略過（`smoke` check 顯示 skipped），不計費。
+- 協調者在決定合併前替 PR 加上 `smoke` label，加上的當下（`labeled` 事件）部署一次；之後每次推送都重新部署，同一個 PR 較新的推送會取消還在跑的部署。部署通過才合併，與以前相同。
+- 為 PR 加上其他 label 不會部署，也不會取消進行中的部署：這類事件有自己的 concurrency group（`nightly-no-smoke-<run_id>`）。
+- label 名稱比對不分大小寫，與 GitHub 的字串比較相同。
+- 排程與手動執行不受影響。
+- label 在 2026-10-11 建立（顏色 `0e8a16`），說明寫著用途；改名會讓條件失效，要改名就同時改 `nightly.yml` 與本節。
+- 條件寫在 `nightly.yml` 的 `concurrency.group` 與 `smoke.if` 兩處，`scripts/ci/workflow-conditions.test.ts` 以 GitHub 的 expression 引擎逐一驗證上列情境。
 
 ### 做什麼
 
@@ -280,7 +328,7 @@ NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
 
 ### 成本
 
-一次執行一個 job（加上約 1 分鐘的 `notify`），兩份 values 共用一個叢集。實測的分鐘數見 `docs/test-reports/2026-10-10-69-nightly-workflow.md`。
+一次執行一個 job（加上約 1 分鐘的 `notify`），兩份 values 共用一個叢集。實測的分鐘數見 `docs/test-reports/2026-10-10-69-nightly-workflow.md`。兩個 job 都在 arm64 runner 上（`notify` 自 2026-10-11 起，Laysi/trustiot-v2#309）。PR 只在帶 `smoke` label 時部署，見上方「PR 的部署要加 `smoke` label」。
 
 ## Renovate
 

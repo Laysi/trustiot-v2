@@ -121,6 +121,7 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 - `ci/check-workflows.ts`：CI 的 `workflow-policy` 檢查。每個 job 要明列 `permissions`，action 與 reusable workflow 要釘 40 字元 commit SHA（本地 action 不必釘，但要放在 `.github/actions/` 下），容器映像要釘 digest，不得使用 `pull_request_target` 與 `workflow_run`；規則與理由見 [CI 與發佈](../docs/architecture/ci-release.md)。執行：`bun scripts/ci/check-workflows.ts`。
 - `ci/check-secret-handling.ts`：同一個 job 的密鑰處理檢查。repo 內每個 Dockerfile 與 Containerfile 不 COPY 金鑰類檔案（也不經目錄或萬用字元帶進 repo 裡的金鑰類檔案）、`ARG` 與 `ENV` 不放密鑰、複製整個 build context 時要有以 `*` 開頭的 ignore 檔；根目錄的 `.dockerignore` 只有 `*`，不用 Dockerfile 專屬的 ignore 檔與 `--ignorefile`；`--build-arg` 只能是字面值的 `NAME=value`、名稱不像密鑰；映像建置一律以 `lib/build-context.ts` 的 `containerBuildArgs(context, options)` 產生 `podman build` 的參數，它會先檢查實際的 context 並只接受白名單內的建置選項（不接受 `--build-context`、`--volume` 這類讓建置讀到 context 以外檔案的選項），其他地方不直接寫建置指令，也不以執行時才決定的子指令呼叫容器工具（`lib/podman.ts` 在執行時擋下不經 `containerBuildArgs` 的建置）；workflow 的 `run` 不寫 `${{ secrets.* }}`；repo 內的 Kubernetes Secret 一律以 SOPS 加密。規則與理由見 [密鑰與權限](../docs/architecture/secrets.md)。執行：`bun scripts/ci/check-secret-handling.ts`。測試檔（`*.test.ts`）不當成腳本掃描，因為它們刻意寫出違規的例子；`docs/test-reports/data/` 裡隨報告保存的測試替身（例如轉傳參數的 podman 包裝腳本）也不掃描，CI 與發佈不會執行它們。
 - `ci/lint-workflows.ts`：CI 的 `workflow-policy` 的另一步，以 `.prototools` 釘選的 actionlint 檢查 workflow 的語法與各處可用的 context，擋下 GitHub 無法解析的檔案（例如 job 層 `env` 用了 `runner.temp`）；不啟用 shellcheck，理由見同一份文件的「Workflow 語法檢查」。執行：`proto install actionlint` 後 `bun scripts/ci/lint-workflows.ts`。
+- `ci/changes.ts`：CI 的 `changes` job。比較 PR 的 merge commit 與它的第一個 parent（推到 main 時與 main 上最近一個 ci 通過的 commit 比較），依變更的路徑決定 `rust`、`cargo-deny`、`helm` 是否執行，寫進 `GITHUB_OUTPUT` 與 job summary；有任何問題都回答「全部執行」。規則、守門測試與理由見 [CI 與發佈](../docs/architecture/ci-release.md) 的「依變更路徑決定 job」。測試：`bun test scripts/ci/changes.test.ts`；ci.yml 與 nightly.yml 的 `if` 與 concurrency 條件由 `bun test scripts/ci/workflow-conditions.test.ts` 以 GitHub 的 expression 引擎（`@actions/expressions`）驗證。
 
 ## nightly
 
@@ -167,7 +168,7 @@ podman stop release-registry
 
 以下指令都在 repo 根目錄執行：
 
-- 安裝型別檢查用的開發相依：`bun install --cwd scripts --frozen-lockfile`（裝在 `scripts/node_modules/`，不進版控；執行腳本與測試都不需要）
+- 安裝型別檢查用的開發相依：`bun install --cwd scripts --frozen-lockfile`（裝在 `scripts/node_modules/`，不進版控；執行腳本不需要，測試需要：`ci/workflow-conditions.test.ts` 用到 `@actions/expressions`）
 - 型別檢查（`scripts/` 下全部的 `.ts`，加上 `deploy/chart/tests/` 下全部的 `.ts`，後者含要有叢集才能跑的入口 e2e）：`bun run --cwd scripts typecheck`
 - 測試：`bun run --cwd scripts test`，與上方的 `bun test scripts` 跑同一批測試檔；單一測試：`bun run --cwd scripts test -t "<test-name-filter>"`
 
