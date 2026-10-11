@@ -1,0 +1,42 @@
+# Log pipeline e2e overlay (otel.e2e.ts). Use after the on-prem shape and its instance overlay:
+#   -f values-onprem.yaml -f tests/values/onprem-instance.yaml -f tests/e2e/values-otel-e2e.yaml
+# The test adds the Secret names (a fresh set per run), the example service's image and, for the
+# second install step, the collector and the forward to its stand-in SIEM.
+
+ingress:
+  # The test never goes through the ingress gateway; keep it small and off the node's ports.
+  replicas: 1
+  direct:
+    serviceType: ClusterIP
+
+clickhouse:
+  bundled:
+    storage:
+      size: 2Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 1536Mi
+
+services:
+  # crates/service-kit's example-service, standing in for a product service: it answers
+  # POST /v1/echo and logs every request through service-kit.
+  assets:
+    enabled: true
+    env:
+      - name: TRUSTIOT__GREETING
+        value: hello from the log pipeline e2e
+    podSecurityContext:
+      # The distroless nonroot base declares its user by name; give the kubelet the number.
+      runAsUser: 65532
+      runAsGroup: 65532
+
+observability:
+  collector:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi

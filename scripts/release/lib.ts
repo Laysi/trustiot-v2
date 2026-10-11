@@ -616,12 +616,11 @@ export function parseWorkflowRuns(body: unknown): WorkflowRun[] {
 }
 
 /**
- * Why `commit` may not be released as a final version, or undefined when its newest push run of
- * ci.yml on main completed successfully. Runs of other workflows, commits, branches or events
- * do not count, and a newer run that did not succeed outweighs an older success.
+ * The newest (highest id) push run of ci.yml on main for `commit`, or undefined when there is
+ * none. Runs of other workflows, commits, branches or events do not count.
  */
-export function greenCiProblem(runs: readonly WorkflowRun[], commit: string): string | undefined {
-  const onMain = runs
+export function newestMainCiRun(runs: readonly WorkflowRun[], commit: string): WorkflowRun | undefined {
+  return runs
     .filter(
       (run) =>
         (run.path === CI_WORKFLOW_PATH || run.path.startsWith(`${CI_WORKFLOW_PATH}@`)) &&
@@ -629,8 +628,16 @@ export function greenCiProblem(runs: readonly WorkflowRun[], commit: string): st
         run.headBranch === "main" &&
         run.event === "push",
     )
-    .toSorted((a, b) => b.id - a.id);
-  const newest = onMain[0];
+    .toSorted((a, b) => b.id - a.id)[0];
+}
+
+/**
+ * Why `commit` may not be released as a final version, or undefined when its newest push run of
+ * ci.yml on main completed successfully. Runs of other workflows, commits, branches or events
+ * do not count, and a newer run that did not succeed outweighs an older success.
+ */
+export function greenCiProblem(runs: readonly WorkflowRun[], commit: string): string | undefined {
+  const newest = newestMainCiRun(runs, commit);
   const retry = "re-run this release (Re-run all jobs) once ci has passed on main";
   if (newest === undefined) {
     return (

@@ -1,0 +1,14 @@
+FMT_OK
+    Checking openapi v0.1.0 (/home/ruisi/tv2/agents/275/src/tools/openapi)
+    Checking outbox v0.1.0 (/home/ruisi/tv2/agents/275/src/crates/outbox)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.53s
+WS_TEST_DONE
+    Checking service-kit v0.1.0 (/home/ruisi/tv2/agents/275/src/crates/service-kit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.65s
+NODEF_DONE
+$ tsc --noEmit --project tsconfig.json
+(fail) saas shape > rendered manifests pass kubeconform -strict for Kubernetes 1.36.0 [60868.84ms]
+(fail) saas shape > rendered manifests pass kubeconform -strict for Kubernetes 1.36.0 [60868.84ms]
+ 201 pass
+ 1 fail
+Ran 202 tests across 4 files. [81.55s]

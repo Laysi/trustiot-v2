@@ -1,0 +1,23 @@
+{"type":"message","message":"Detected an AI agent environment, printing as NDJSON. Trace logs are written to stderr, while user-facing logs are written to stdout."}
+bun test v1.4.2 (744846f84)
+killed 1 dangling process
+
+deploy/chart/tests/chart.test.ts:
+120 |   return docs.filter(isMap) as Manifest[];
+121 | }
+122 | 
+123 | function render(files: readonly string[], args: string[] = [], release = RELEASE): Manifest[] {
+124 |   const result = helmTemplate(files, args, release);
+125 |   if (result.code !== 0) throw new Error(`helm template failed:\n${result.stderr}`);
+                                                                                        ^
+error: helm template failed:
+
+      at render (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-ad2260244a934a4e7/deploy/chart/tests/chart.test.ts:125:83)
+      at <anonymous> (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-ad2260244a934a4e7/deploy/chart/tests/chart.test.ts:1000:25)
+(fail) service-to-service authorization (decision 27) > no waypoint by default: ztunnel enforces every service policy at L4 [5111.18ms]
+  ^ this test timed out after 5000ms.
+
+ 199 pass
+ 1 fail
+ 1944 expect() calls
+Ran 200 tests across 3 files. [243.75s]

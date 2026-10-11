@@ -1,0 +1,11 @@
+thread 'tokio-rt-worker' (562890) panicked at crates/service-kit/tests/tenant_db.rs:1147:13:
+the service did not become ready
+thread 'the_example_service_serves_each_user_only_their_tenant' (562491) panicked at crates/service-kit/tests/tenant_db.rs:1169:6:
+thread 'tokio-rt-worker' (573782) panicked at crates/service-kit/tests/tenant_db.rs:1147:13:
+the service did not become ready
+thread 'the_example_service_serves_each_user_only_their_tenant' (573396) panicked at crates/service-kit/tests/tenant_db.rs:1169:6:
+thread 'sessions_row_level_security_would_not_protect_are_refused' (573391) panicked at crates/service-kit/tests/tenant_db.rs:757:5:
+database error: pool timed out while waiting for an open connection
+thread 'tokio-rt-worker' (560962) panicked at crates/service-kit/tests/tenant_db.rs:1147:13:
+the service did not become ready
+thread 'the_example_service_serves_each_user_only_their_tenant' (560366) panicked at crates/service-kit/tests/tenant_db.rs:1169:6:

@@ -1,0 +1,12 @@
+// inject-lifecycle.ts <source> <target>: copies a lifecycle.rs and makes the test thread
+// "starved" for 1.5 s between SIGTERM and the first readiness check, in the SIGTERM test.
+const [source, target] = process.argv.slice(2);
+const text = await Bun.file(source).text();
+const marker = `    service.signal("TERM");\n`;
+const at = text.indexOf(marker);
+if (at < 0) throw new Error("no SIGTERM in the source");
+const injected =
+  text.slice(0, at + marker.length) +
+  "    thread::sleep(Duration::from_millis(1500)); // injected: the test thread is starved for 1.5 s\n" +
+  text.slice(at + marker.length);
+await Bun.write(target, injected);
