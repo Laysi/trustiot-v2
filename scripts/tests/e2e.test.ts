@@ -57,6 +57,22 @@ async function podmanList(...args: string[]): Promise<string[]> {
   return out.split("\n").filter(Boolean);
 }
 
+/**
+ * The anonymous volumes (a 64-digit hex name, which podman generates) mounted by the instance's
+ * containers. The images declare `VOLUME`s the instance does not name, so each container gets
+ * some; the named data volumes are the instance's own and carry its label.
+ */
+async function anonymousVolumes(label: string): Promise<string[]> {
+  const containers = await podmanList("ps", "-a", "--filter", label, "--format", "{{.Names}}");
+  if (containers.length === 0) return [];
+  const mounted = await podmanList("inspect", "--format", "{{range .Mounts}}{{.Name}} {{end}}", ...containers);
+  return mounted.flatMap((line) => line.split(/\s+/)).filter((name) => /^[0-9a-f]{64}$/.test(name));
+}
+
+async function volumeExists(name: string): Promise<boolean> {
+  return (await podman(["volume", "exists", name])).code === 0;
+}
+
 function parseEnv(text: string): Record<string, string> {
   return Object.fromEntries(
     text
@@ -233,7 +249,7 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
           const logs = await podman(["logs", container]);
           expect(logs.stdout + logs.stderr, name).not.toContain(firstState.credentials.services["example-service"].password);
         }
-        await podmanOk(["rm", "--force", "--time", "1", ...Object.values(started).map((one) => one.container)]);
+        await podmanOk(["rm", "--force", "--volumes", "--time", "1", ...Object.values(started).map((one) => one.container)]);
 
         // No secret on a terminal during up, status or seed.
         const output = [first, status1].map((run) => run.stdout + run.stderr).join("\n");
@@ -247,7 +263,11 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
         }
 
         expect((await podmanList("ps", "--filter", label, "--format", "{{.Names}}")).length).toBe(3 + SERVICES.length);
+        // Laysi/trustiot-v2#334: down removes the containers' anonymous volumes with them.
+        const anonymous = await anonymousVolumes(label);
+        expect(anonymous.length, "the images declare volumes the instance does not name").toBeGreaterThan(0);
         expect((await dev(env, "down")).code).toBe(0);
+        for (const volume of anonymous) expect(await volumeExists(volume), `anonymous volume ${volume}`).toBe(false);
         expect(await podmanList("ps", "-a", "--filter", label, "--format", "{{.Names}}")).toEqual([]);
         expect(await podmanList("network", "ls", "--filter", label, "--format", "{{.Name}}")).toEqual([]);
         // The data survives down ...

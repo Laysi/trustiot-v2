@@ -1,0 +1,112 @@
+===== cargo fmt --all --check
+exit: 0
+===== cargo clippy --locked -p sql-check -p service-kit -p outbox --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.74s
+exit: 0
+===== cargo test --locked -p sql-check
+     Running unittests src/lib.rs (<target>/debug/deps/sql_check-1bc345e149b707e5)
+test tests::assert_sql_safe_is_always_found ... ok
+test tests::doc_comments_are_not_checked ... ok
+test tests::dynamic_sql_is_found ... ok
+test tests::query_calls_in_macro_definitions_need_static_sql ... ok
+test tests::concat_is_checked_as_its_joined_text ... ok
+test tests::invalid_rust_is_an_error ... ok
+test tests::findings_name_the_file_line_and_rule ... ok
+test tests::only_declared_constants_count_as_static ... ok
+test tests::sql_like_text_needs_a_sql_word_and_a_space ... ok
+test tests::query_builders_take_only_static_text ... ok
+test tests::sql_built_with_strings_is_found ... ok
+test tests::renamed_and_aliased_query_builders_are_followed ... ok
+test tests::static_sql_passes ... ok
+test tests::unrelated_functions_named_query_are_ignored ... ok
+test tests::session_settings_are_found_outside_the_kit ... ok
+test tests::query_builders_in_macros_take_only_static_text ... ok
+test tests::test_code_may_pass_sql_through_variables ... ok
+test tests::query_builder_text_is_checked_joined ... ok
+test tests::included_files_are_checked ... ok
+test tests::test_support_crates_are_test_code ... ok
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/check.rs (<target>/debug/deps/check-600082b3a3b97008)
+test listed_paths_exist ... ok
+test parameterized_sql_is_not_reported ... ok
+test every_rule_is_exercised_by_the_fixture ... ok
+test concatenated_sql_is_reported_on_every_marked_line ... ok
+test the_tenant_module_is_the_only_exception ... ok
+test the_workspace_has_no_string_built_sql ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.93s
+   Doc-tests sql_check
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+exit: 0
+===== cargo test --locked -p repo-check
+     Running unittests src/lib.rs (<target>/debug/deps/repo_check-cb97eb5799213f90)
+test tests::data_statements_comments_and_identifiers_are_not_schema_changes ... ok
+test tests::dev_only_crates_must_be_dev_dependencies ... ok
+test tests::different_rust_pins_fail ... ok
+test tests::inexact_rust_pins_fail ... ok
+test tests::errors_name_the_file_and_key ... ok
+test tests::exact_version_accepts_only_major_minor_patch ... ok
+test tests::matching_rust_pins_pass ... ok
+test tests::metadata_errors_are_reported ... ok
+test tests::member_must_inherit_edition_and_lints ... ok
+test tests::metadata_lists_member_manifests ... ok
+test tests::rust_version_accepts_two_or_three_parts ... ok
+test tests::missing_or_malformed_pins_fail ... ok
+test tests::versions_order_numerically ... ok
+test tests::schema_changes_are_found ... ok
+test tests::rust_version_must_not_exceed_toolchain ... ok
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs (<target>/debug/deps/repository-3bb08d58df261a4f)
+test runtime_sources_are_the_rust_files_under_services_src ... ok
+test agents_md_search_finds_planted_files ... ok
+test dev_only_crates_are_only_dev_dependencies ... ok
+test toolchain_pins_agree ... ok
+test repository_has_no_agents_md ... ok
+test members_inherit_workspace_edition_and_lints ... ok
+test runtime_code_never_changes_the_schema ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+   Doc-tests repo_check
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+exit: 0
+===== cargo test --locked -p service-kit --test tenant_db
+     Running tests/tenant_db.rs (<target>/debug/deps/tenant_db-af17b76684db765f)
+test a_service_without_a_postgres_ca_refuses_to_start ... ok
+test a_service_without_server_verification_refuses_to_start ... ok
+test connections_verify_the_server_certificate_and_host_name ... ok
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+test the_service_role_cannot_bypass_row_level_security ... ok
+test without_a_tenant_no_rows_are_visible_or_writable ... ok
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test a_tenant_reads_and_writes_only_its_own_rows ... ok
+test the_tenant_setting_does_not_leak_across_pooled_connections ... ok
+test outbox_events_follow_the_tenant_policies ... ok
+test the_example_service_serves_each_user_only_their_tenant ... ok
+test sessions_row_level_security_would_not_protect_are_refused ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.06s
+exit: 0
+===== cargo test --locked -p outbox
+     Running unittests src/lib.rs (<target>/debug/deps/outbox-6346494410fd1d80)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/crash.rs (<target>/debug/deps/crash-fa1e1e02a1139b4a)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.57s
+     Running tests/delivery.rs (<target>/debug/deps/delivery-0e66844f7ad45bc1)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.59s
+     Running tests/failure_paths.rs (<target>/debug/deps/failure_paths-f097c40cf50e8483)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.41s
+     Running tests/handler_panic.rs (<target>/debug/deps/handler_panic-fee7fc60425104b2)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.71s
+     Running tests/metrics.rs (<target>/debug/deps/metrics-166047f1506d65a4)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.59s
+     Running tests/notify.rs (<target>/debug/deps/notify-cd727e34219ed2c4)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.81s
+     Running tests/producer.rs (<target>/debug/deps/producer-f301156740a83c38)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.86s
+     Running tests/tenancy.rs (<target>/debug/deps/tenancy-38d1059c26fa9994)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.61s
+     Running tests/verify_271.rs (<target>/debug/deps/verify_271-7d562b96a0b9526b)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.34s
+   Doc-tests outbox
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+exit: 0
+overall: 0
+rcheck: removed 50 dangling test volumes
+rcheck: exit 0 at 02:14:13 (build host)
