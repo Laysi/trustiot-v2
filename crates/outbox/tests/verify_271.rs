@@ -5,8 +5,8 @@
 //!
 //! Tests that show a defect assert the behaviour we want and are `#[ignore]`d with the issue
 //! that tracks it, so the branch stays green; run them with `--ignored` to see them fail. The
-//! `f1_` to `f4_` tests were findings F-1 to F-4 and pass since Laysi/trustiot-v2#271 fixed them; `f5_` is
-//! Laysi/trustiot-v2#333.
+//! `f1_` to `f4_` tests were findings F-1 to F-4 and pass since Laysi/trustiot-v2#271 fixed them;
+//! `f5_` was F-5 and passes since Laysi/trustiot-v2#333 fixed it.
 //!
 //! The handlers here deliberately run SQL that switches the tenant or the role (attacks that must
 //! fail, or findings), so `tools/sql-check` exempts this file from its session-setting rule.
@@ -1042,11 +1042,11 @@ impl Handler for PanicsOnce {
     }
 }
 
-/// F-5, tracked in Laysi/trustiot-v2#333 (present before Laysi/trustiot-v2#271): a handler panic ends `Consumer::run` for good (the panic unwinds
-/// through `tokio::join!` of processing and lag monitoring), so the subscription stops in that
-/// replica and the lag gauges keep their last value.
+/// F-5, fixed by Laysi/trustiot-v2#333 (present before Laysi/trustiot-v2#271): a handler panic
+/// ended `Consumer::run` for good (the panic unwound through `tokio::join!` of processing and
+/// lag monitoring), so the subscription stopped in that replica and the lag gauges kept their
+/// last value. Now the panic is caught and the event retried, and the lag stays current.
 #[tokio::test]
-#[ignore = "Laysi/trustiot-v2#333: a handler panic ends Consumer::run and freezes the lag metric"]
 async fn f5_a_handler_panic_does_not_stop_the_consumer() {
     let Some(database) = database().await else {
         return;
@@ -1076,7 +1076,16 @@ async fn f5_a_handler_panic_does_not_stop_the_consumer() {
     )
     .await;
     let finished = task.is_finished();
-    let lag_gauge = consumer.lag().map(|lag| lag.events);
+    // The monitor measures every 100 ms; wait for a measurement taken after the processing.
+    let lag_gauge = if finished {
+        consumer.lag().map(|lag| lag.events)
+    } else {
+        eventually(CATCH_UP, "a current lag of 0", || async {
+            consumer.lag().filter(|lag| lag.events == 0)
+        })
+        .await;
+        Some(0)
+    };
     let lag_now = consumer.measure_lag().await.expect("lag").events;
     stop.cancel();
     let ended = task.await;
@@ -1090,6 +1099,9 @@ async fn f5_a_handler_panic_does_not_stop_the_consumer() {
         "Consumer::run ended after one handler panic; the subscription no longer advances"
     );
     assert_eq!(processed, 1);
+    assert!(matches!(ended, Ok(Ok(()))), "run ends cleanly on stop");
+    assert_eq!(lag_now, 0);
+    assert_eq!(consumer.lag(), None, "a stopped consumer reports no lag");
 }
 
 // ---- 3b. Concurrent replicas ----
