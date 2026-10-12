@@ -11,7 +11,7 @@ chart 的叢集內 Postgres（`postgres.mode: bundled`，見 [chart 的「叢集
 - 地端客戶可能已經有自己的 CloudNativePG（例如 OpenShift 由 OperatorHub 安裝），chart 再裝一份會衝突。
 - operator 的升級節奏與產品無關（CloudNativePG 約每 2 到 3 個月一個 minor），升級時會滾動更新所有 Postgres pod，應該是平台維運的獨立動作。
 
-誰來裝：每個叢集由維運在裝 chart 之前安裝一次。SaaS 主機在 `deploy/host/README.md` 的安裝步驟裡、Istio 之後；SaaS 的 Flux（Laysi/trustiot-v2#70）部署 chart 時以 operator 已經在跑為前提，和 Istio 一樣不由 Flux 安裝；地端由客戶或我們的安裝人員依本頁安裝。改由 Flux 管理平台元件時，operator 要排在 chart 的 HelmRelease 之前（`dependsOn`）。
+誰來裝：每個叢集由維運在裝 chart 之前安裝一次。SaaS 主機在 `deploy/host/README.md` 的安裝步驟裡、Istio 之後；SaaS 的 Flux（[deploy/flux](../flux/README.md) 的「建立叢集」）部署 chart 時以 operator 已經在跑為前提，和 Istio 一樣不由 Flux 安裝；地端由客戶或我們的安裝人員依本頁安裝。改由 Flux 管理平台元件時，operator 要排在 chart 的 HelmRelease 之前（`dependsOn`）。
 
 ## 版本
 

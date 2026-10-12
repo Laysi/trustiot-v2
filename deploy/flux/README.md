@@ -23,7 +23,7 @@ GHCR 映像 ──(同一個拉取 token)──> kubelet
 | `clusters/saas/flux-system/gotk-sync.yaml` | GitRepository（main，只取 `deploy/flux/`）與根 Kustomization（`prune`、SOPS 解密） | 人 |
 | `clusters/saas/trustiot/chart.yaml` | chart 的 OCIRepository：版本、digest、拉取 token、簽章驗證 | release.yml 的 deploy PR |
 | `clusters/saas/trustiot/values-saas.yaml` | 部署中那一版的 `deploy/chart/values-saas.yaml` | release.yml 的 deploy PR |
-| `clusters/saas/trustiot/values-instance.yaml` | SaaS 安裝實例的覆寫值：主機名稱、外部端點、Secret 名稱 | 人 |
+| `clusters/saas/trustiot/values-instance.yaml` | SaaS 安裝實例的覆寫值：主機名稱、外部端點、Secret 名稱、叢集內資料庫的磁碟區大小 | 人 |
 | `clusters/saas/trustiot/helm-release.yaml`、`namespace.yaml` | HelmRelease 與 namespace（Pod Security `restricted`） | 人 |
 | `clusters/saas/trustiot/*.sops.yaml` | 以 SOPS 加密的 Secret，例如 `ghcr-pull.sops.yaml`；建立後要列進同目錄的 `kustomization.yaml` | 人（`sops edit`） |
 | `github-known-hosts` | GitHub 公布的 SSH 主機金鑰，給 GitRepository 的 Secret 用 | 人（GitHub 換金鑰時） |
@@ -117,14 +117,15 @@ Flux 拉 chart（`chart.yaml` 的 `secretRef`）與 kubelet 拉映像（`values-
 | 欄位 | 內容 |
 | --- | --- |
 | `hosts.app`、`hosts.gateway`、`hosts.ota` | SaaS 的網域（Cloudflare Tunnel 的路由，`deploy/host/README.md`） |
+| `postgres.bundled.storage.size` | 叢集內 Postgres（CloudNativePG，資料與 WAL 共用）的磁碟大小，依主機磁碟與業務資料決定（[chart 的「叢集內的 Postgres」](../chart/README.md#叢集內的-postgres)） |
 | `clickhouse.bundled.storage.size` | 叢集內 ClickHouse 的磁碟大小，依主機磁碟與負載決定 |
 | `qdrant.external.url` | Qdrant Cloud 的叢集網址（Laysi/trustiot-v2#194） |
 
-values 引用的 Secret（`trustiot-clickhouse-admin`、`trustiot-qdrant`、`trustiot-sentry`，以及之後各服務的）都以 SOPS 檔案放在 `clusters/saas/trustiot/`，名稱與 key 見 [密鑰與權限](../../docs/architecture/secrets.md) 的清冊。
+values 引用的 Secret（`trustiot-clickhouse-admin`、`trustiot-otel-collector-clickhouse`、`trustiot-qdrant`、`trustiot-sentry`，以及之後各服務的）都以 SOPS 檔案放在 `clusters/saas/trustiot/`，名稱與 key 見 [密鑰與權限](../../docs/architecture/secrets.md) 的清冊。
 
 ## 建立叢集（一次性）
 
-前提：主機已依 [deploy/host](../host/README.md) 安裝（k3s、cloudflared），Istio ambient 已依 [deploy/istio](../istio/README.md) 安裝。以下 `kubectl` 指令都在主機上以 `sudo k3s kubectl` 執行（經 Cloudflare Access 的維運 SSH）；`kubectl kustomize` 在有 repo 的工作站以 `.prototools` 的 kubectl 執行。
+前提：主機已依 [deploy/host](../host/README.md) 安裝（k3s、cloudflared），Istio ambient 已依 [deploy/istio](../istio/README.md) 安裝，CloudNativePG operator 已依 [deploy/cloudnative-pg](../cloudnative-pg/README.md) 安裝（chart 的 Postgres 是 CloudNativePG 的 Cluster；沒有 operator 時 HelmRelease 因為不認得 `postgresql.cnpg.io/v1` 而停在 not ready）。這兩個是整個叢集共用的平台元件，由人在裝 Flux 之前各裝一次，Flux 不管理它們（決策 5 的 2026-10-12 補充）。以下 `kubectl` 指令都在主機上以 `sudo k3s kubectl` 執行（經 Cloudflare Access 的維運 SSH）；`kubectl kustomize` 在有 repo 的工作站以 `.prototools` 的 kubectl 執行。
 
 1. **收件者**：每位維運人員以 `bun scripts/flux/age.ts age-keygen -o <私鑰檔>` 在自己的裝置產生金鑰對，只交出公鑰；建議至少兩位。
 2. **叢集的 age 金鑰**：由維運人員在可信的機器上產生（同上），公鑰與維運人員的公鑰一起寫進 `.sops.yaml` 的 `age:`，開 PR 合併。私鑰直接建立成叢集的 Secret，不進 git，經 stdin 傳入：
@@ -178,6 +179,8 @@ values 引用的 Secret（`trustiot-clickhouse-admin`、`trustiot-qdrant`、`tru
 | 暫停部署（例如維護期間） | `sudo k3s kubectl -n flux-system patch kustomization flux-system --type=merge -p '{"spec":{"suspend":true}}'`；恢復時改回 `false`。暫停期間合併的 PR 在恢復後才套用 |
 
 不要在叢集上直接改 Flux 管理的物件：下一次同步會改回 git 裡的狀態。要改就改 git。
+
+叢集內 Postgres 的資料不隨 release 刪除：CloudNativePG 的 Cluster 與 ImageCatalog 帶 `helm.sh/resource-policy: keep`，HelmRelease 從 git 移除、或安裝失敗後 Flux 依 remediation 解除安裝時，資料庫與它的磁碟區都會留下。確定不要資料時才明確刪除 Cluster（chart README 的「叢集內的 Postgres」）。重新安裝同名的 release 時，Helm 依物件上的 release 標註接管留下來的 Cluster；這一點還沒在叢集上驗證過。
 
 ## 升級 Flux
 

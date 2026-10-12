@@ -17,6 +17,15 @@ hosts:
   gateway: ""
   ota: ""
 
+postgres:
+  bundled:
+    # Volume size of the bundled Postgres (a CloudNativePG Cluster; data and WAL share the
+    # volume); size it from the host's disk and the business data (deploy/chart/README.md,
+    # 叢集內的 Postgres). The CloudNativePG operator must run in the cluster before Flux installs
+    # the chart (deploy/cloudnative-pg/README.md).
+    storage:
+      size: ""
+
 clickhouse:
   bundled:
     # SOPS-encrypted Secret trustiot-clickhouse-admin, key password (docs/architecture/secrets.md).
@@ -39,3 +48,9 @@ observability:
     environment: production
     dsnSecret:
       name: trustiot-sentry
+  collector:
+    clickhouse:
+      # SOPS-encrypted Secret trustiot-otel-collector-clickhouse, key password: the collector's
+      # ClickHouse account, which the migration Job creates with it (docs/architecture/secrets.md).
+      passwordSecret:
+        name: trustiot-otel-collector-clickhouse
