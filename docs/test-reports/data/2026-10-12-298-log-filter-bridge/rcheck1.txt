@@ -1,0 +1,407 @@
+rcheck: queued on build-host at 11:58:46 as 298-6eb5e3c9; running now: <other job> since 11:56:45
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.26
+    Checking cfg-if v1.0.5
+   Compiling serde_core v1.0.229
+    Checking itoa v1.0.18
+    Checking memchr v2.8.3
+   Compiling libc v0.2.190
+    Checking pin-project-lite v0.2.17
+    Checking futures-core v0.3.34
+   Compiling zmij v1.0.23
+   Compiling serde_json v1.0.151
+   Compiling serde v1.0.229
+    Checking bytes v1.12.1
+    Checking stable_deref_trait v1.2.1
+    Checking futures-sink v0.3.34
+    Checking once_cell v1.21.4
+    Checking smallvec v1.16.3
+    Checking log v0.4.34
+    Checking futures-task v0.3.34
+    Checking tracing-core v0.1.36
+    Checking futures-io v0.3.34
+    Checking slab v0.4.12
+    Checking percent-encoding v2.3.2
+    Checking litemap v0.8.3
+    Checking writeable v0.6.4
+   Compiling icu_normalizer_data v2.3.0
+    Checking utf8_iter v1.0.4
+   Compiling icu_properties_data v2.3.0
+   Compiling zerocopy v0.8.62
+    Checking form_urlencoded v1.2.2
+    Checking http v1.5.0
+    Checking futures-channel v0.3.34
+    Checking tower-service v0.3.3
+    Checking tower-layer v0.3.3
+   Compiling thiserror v2.0.21
+   Compiling httparse v1.10.1
+    Checking sync_wrapper v1.0.2
+    Checking try-lock v0.2.5
+    Checking base64 v0.23.1
+   Compiling getrandom v0.4.3
+    Checking bitflags v2.13.2
+    Checking rand_core v0.10.1
+    Checking want v0.3.2
+    Checking atomic-waker v1.1.2
+    Checking httpdate v1.0.3
+   Compiling syn v3.0.7
+   Compiling syn v2.0.119
+   Compiling autocfg v1.5.1
+    Checking ipnet v2.12.2
+    Checking equivalent v1.0.2
+    Checking typenum v1.20.1
+    Checking hashbrown v0.17.1
+   Compiling find-msvc-tools v0.1.14
+    Checking zeroize v1.9.1
+    Checking http-body v1.1.0
+   Compiling shlex v2.0.1
+   Compiling num-traits v0.2.19
+    Checking http-body-util v0.1.5
+    Checking iana-time-zone v0.1.65
+   Compiling cc v1.7.0
+    Checking errno v0.3.14
+    Checking signal-hook-registry v1.4.8
+    Checking socket2 v0.6.5
+    Checking mio v1.2.4
+    Checking cmov v0.5.4
+   Compiling version_check v0.9.5
+    Checking hybrid-array v0.4.15
+    Checking rustls-pki-types v1.15.1
+    Checking ctutils v0.4.3
+   Compiling getrandom v0.3.4
+   Compiling generic-array v0.14.7
+    Checking getrandom v0.2.17
+   Compiling parking_lot_core v0.9.12
+    Checking untrusted v0.9.0
+    Checking cpufeatures v0.3.1
+   Compiling anyhow v1.0.104
+    Checking uuid v1.28.0
+    Checking indexmap v2.14.2
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking subtle v2.6.1
+    Checking base64ct v1.8.3
+    Checking scopeguard v1.2.0
+   Compiling crossbeam-utils v0.8.23
+    Checking pem-rfc7468 v1.0.0
+    Checking crypto-common v0.1.7
+    Checking block-buffer v0.10.4
+    Checking lock_api v0.4.14
+    Checking rand_core v0.9.5
+    Checking foldhash v0.2.0
+   Compiling semver v1.0.28
+   Compiling rustls v0.23.45
+    Checking allocator-api2 v0.2.21
+    Checking const-oid v0.10.2
+    Checking winnow v1.0.4
+   Compiling either v1.19.0
+    Checking digest v0.11.3
+    Checking der v0.8.2
+   Compiling rustc_version v0.4.1
+    Checking parking_lot v0.12.5
+   Compiling itertools v0.14.0
+   Compiling ring v0.17.14
+    Checking hashbrown v0.16.1
+    Checking toml_parser v1.1.5+spec-1.1.0
+    Checking digest v0.10.7
+    Checking toml_datetime v1.1.2+spec-1.1.0
+    Checking serde_spanned v1.1.2
+    Checking crc-catalog v2.5.0
+    Checking cpufeatures v0.2.17
+    Checking tinyvec v1.13.3
+    Checking parking v2.2.1
+    Checking toml_writer v1.1.3+spec-1.1.0
+    Checking hashlink v0.11.1
+    Checking crossbeam-queue v0.3.14
+    Checking event-listener v5.4.2
+    Checking sha2 v0.10.9
+    Checking toml v1.1.8+spec-1.1.0
+    Checking crc v3.4.0
+   Compiling curve25519-dalek v5.0.0
+    Checking unicode-normalization v0.1.25
+    Checking futures-intrusive v0.5.0
+    Checking spki v0.8.1
+    Checking sha2 v0.11.0
+    Checking hmac v0.13.0
+    Checking chacha20 v0.10.2
+    Checking webpki-roots v1.0.9 (<workdir>/src/crates/webpki-roots-empty)
+    Checking unicode-properties v0.1.4
+    Checking base64 v0.22.1
+    Checking lazy_static v1.5.1
+    Checking unicode-bidi v0.3.18
+    Checking sharded-slab v0.1.7
+    Checking rand v0.10.3
+    Checking hkdf v0.13.0
+    Checking pkcs8 v0.11.0
+    Checking md-5 v0.11.0
+    Checking atoi v2.0.0
+    Checking tracing-log v0.2.0
+    Checking stringprep v0.1.5
+    Checking thread_local v1.1.10
+    Checking dotenvy v0.15.7
+    Checking whoami v2.1.3
+    Checking hex v0.4.3
+    Checking byteorder v1.5.0
+    Checking ryu v1.0.23
+    Checking mime v0.3.17
+    Checking signature v3.0.0
+    Checking serde_path_to_error v0.1.20
+    Checking tracing-subscriber v0.3.23
+   Compiling synstructure v0.14.0
+    Checking axum-core v0.5.6
+    Checking ed25519 v3.0.0
+    Checking matchit v0.8.4
+    Checking humantime v2.4.0
+    Checking time-core v0.1.9
+    Checking num-conv v0.2.2
+    Checking deranged v0.5.8
+    Checking powerfmt v0.2.1
+    Checking pem v4.0.0
+   Compiling release-selftest v0.1.0 (<workdir>/src/tools/release-selftest)
+    Checking ingest v0.1.0 (<workdir>/src/services/ingest)
+    Checking repo-check v0.1.0 (<workdir>/src/tools/repo-check)
+   Compiling tracing-attributes v0.1.31
+   Compiling zerocopy-derive v0.8.62
+   Compiling prost-derive v0.14.4
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling serde_derive v1.0.229
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.4
+   Compiling zerovec-derive v0.11.6
+   Compiling displaydoc v0.2.7
+   Compiling futures-macro v0.3.34
+   Compiling tokio-macros v2.7.2
+    Checking tracing v0.1.44
+   Compiling thiserror-impl v2.0.21
+    Checking zerofrom v0.1.8
+   Compiling utoipa-gen v6.0.1
+    Checking yoke v0.8.3
+    Checking rustls-webpki v0.103.15
+    Checking prost v0.14.4
+    Checking zerovec v0.11.8
+    Checking tokio v1.53.2
+    Checking futures-util v0.3.34
+    Checking zerotrie v0.2.5
+   Compiling async-trait v0.1.92
+    Checking tinystr v0.8.4
+    Checking icu_locale_core v2.3.0
+    Checking potential_utf v0.1.6
+    Checking icu_provider v2.3.1
+    Checking opentelemetry v0.33.1
+    Checking futures-executor v0.3.34
+    Checking icu_collections v2.3.0
+    Checking tower-http v0.7.1
+    Checking tower v0.5.3
+    Checking hyper v1.12.0
+    Checking ppv-lite86 v0.2.21
+    Checking tokio-stream v0.1.19
+    Checking tokio-util v0.7.20
+    Checking icu_normalizer v2.3.0
+    Checking icu_properties v2.3.0
+    Checking chrono v0.4.45
+    Checking rand_chacha v0.9.0
+    Checking serde_urlencoded v0.7.1
+    Checking time v0.3.55
+    Checking half v2.7.1
+    Checking tracing-opentelemetry v0.34.0
+    Checking rand v0.9.5
+    Checking sql-check v0.1.0 (<workdir>/src/tools/sql-check)
+    Checking cbor4ii v1.2.3
+    Checking ed25519-dalek v3.0.0
+    Checking hyper-util v0.1.21
+    Checking opentelemetry_sdk v0.33.1
+    Checking yasna v0.6.0
+    Checking protocol v0.1.0 (<workdir>/src/crates/protocol)
+    Checking utoipa v6.0.0
+    Checking idna_adapter v1.2.2
+    Checking idna v1.1.0
+    Checking rcgen v0.14.10
+    Checking url v2.5.8
+    Checking axum v0.8.9
+    Checking tower-http v0.6.11
+    Checking sqlx-core v0.9.0
+    Checking reqwest v0.13.5
+    Checking opentelemetry-http v0.33.1
+    Checking contract v0.1.0 (<workdir>/src/crates/contract)
+    Checking opentelemetry-proto v0.33.1
+    Checking openapi v0.1.0 (<workdir>/src/tools/openapi)
+    Checking opentelemetry-otlp v0.33.1
+    Checking sqlx-postgres v0.9.0
+    Checking sqlx v0.9.0
+    Checking service-kit v0.1.0 (<workdir>/src/crates/service-kit)
+    Checking outbox v0.1.0 (<workdir>/src/crates/outbox)
+    Checking testkit v0.1.0 (<workdir>/src/crates/testkit)
+    Checking identity v0.1.0 (<workdir>/src/services/identity)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.44s
+test the_example_service_serves_each_user_only_their_tenant ... ok
+test sessions_row_level_security_would_not_protect_are_refused ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.66s
+
+     Running tests/verify_config.rs (<workdir>/target/debug/deps/verify_config-c1fa54cd4123d402)
+
+running 6 tests
+test other_prefixes_and_unrelated_variables_are_ignored ... ok
+test precedence_is_environment_over_file_over_default_and_empty_means_unset ... ok
+test no_error_ever_contains_a_configured_value ... ok
+test required_settings_are_named_and_unknown_or_odd_keys_are_rejected ... ok
+test a_malformed_file_never_echoes_its_content ... ok
+test the_service_reads_no_command_line_argument_or_stdin_as_configuration ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/verify_container.rs (<workdir>/target/debug/deps/verify_container-a599de38271d7b34)
+
+running 1 test
+test sigterm_to_pid_1_flips_readiness_then_drains_and_exits_zero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.61s
+
+     Running tests/verify_job_lock.rs (<workdir>/target/debug/deps/verify_job_lock-2e397ffde5a8ccfa)
+
+running 4 tests
+test eight_replicas_contending_never_run_a_job_twice_at_once ... ok
+test releasing_a_guard_whose_session_died_reports_an_error_not_success ... ok
+test a_panicking_job_and_a_dropped_run_release_the_lock ... ok
+test a_killed_lock_session_stops_the_job_reports_lost_and_leaks_nothing ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.69s
+
+     Running tests/verify_leaks.rs (<workdir>/target/debug/deps/verify_leaks-37512446c9880d7a)
+
+running 2 tests
+test nothing_a_request_carries_reaches_logs_or_otlp_on_any_path ... ok
+test an_unreachable_collector_url_with_a_secret_path_does_not_reach_stdout ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s
+
+     Running tests/verify_shutdown.rs (<workdir>/target/debug/deps/verify_shutdown-c911f71b7e5a0b62)
+
+running 6 tests
+test an_idle_service_exits_zero_right_after_the_drain_delay ... ok
+test idle_keep_alive_connections_do_not_delay_the_exit ... ok
+test a_request_arriving_on_a_keep_alive_connection_during_the_delay_is_served_then_closed ... ok
+test many_requests_in_flight_all_complete_and_the_exit_code_is_zero ... ok
+test a_slow_body_upload_in_flight_is_cut_off_at_the_drain_timeout ... ok
+test a_client_that_stalls_mid_request_is_cut_off_at_the_drain_timeout_not_hung ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.93s
+
+   Doc-tests service_kit
+
+running 5 tests
+test crates/service-kit/src/tenant.rs - tenant::BackgroundTenantDb (line 242) - compile ... ok
+test crates/service-kit/src/tenant.rs - tenant::TenantDb (line 120) - compile ... ok
+test crates/service-kit/src/identity.rs - identity::ServiceIdentity (line 285) ... ok
+test crates/service-kit/src/postgres.rs - postgres::SslMode (line 52) ... ok
+test crates/service-kit/src/identity.rs - identity (line 36) ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 9 tests
+test crates/service-kit/src/identity.rs - identity::UserIdentity (line 194) - compile fail ... ok
+test crates/service-kit/src/tenant.rs - tenant::TenantDb (line 163) - compile fail ... ok
+test crates/service-kit/src/identity.rs - identity::UserIdentity (line 201) - compile fail ... ok
+test crates/service-kit/src/identity.rs - identity::UserIdentity (line 214) - compile fail ... ok
+test crates/service-kit/src/tenant.rs - tenant::TenantDb (line 146) - compile fail ... ok
+test crates/service-kit/src/identity.rs - identity::UserIdentity (line 208) - compile fail ... ok
+test crates/service-kit/src/identity.rs - identity::UserIdentity (line 219) - compile fail ... ok
+test crates/service-kit/src/tenant.rs - tenant::TenantDb (line 138) - compile fail ... ok
+test crates/service-kit/src/tenant.rs - tenant::TenantDb (line 156) - compile fail ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+all doctests ran in 0.37s; merged doctests compilation took 0.30s
+    Checking zerocopy v0.8.62
+    Checking subtle v2.6.1
+    Checking indexmap v2.14.2
+    Checking base64 v0.22.1
+    Checking serde v1.0.229
+    Checking rustls v0.23.45
+    Checking serde_urlencoded v0.7.1
+    Checking axum v0.8.9
+    Checking sqlx-core v0.9.0
+    Checking ppv-lite86 v0.2.21
+    Checking rand_chacha v0.9.0
+    Checking rand v0.9.5
+    Checking opentelemetry_sdk v0.33.1
+    Checking sqlx-postgres v0.9.0
+    Checking opentelemetry-proto v0.33.1
+    Checking sqlx v0.9.0
+    Checking opentelemetry-otlp v0.33.1
+    Checking service-kit v0.1.0 (<workdir>/src/crates/service-kit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.77s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.31s
+
+     Running tests/verify_job_lock.rs (<workdir>/target/debug/deps/verify_job_lock-a72b9e49bf773441)
+
+running 4 tests
+test releasing_a_guard_whose_session_died_reports_an_error_not_success ... ok
+test a_panicking_job_and_a_dropped_run_release_the_lock ... ok
+test a_killed_lock_session_stops_the_job_reports_lost_and_leaks_nothing ... ok
+test eight_replicas_contending_never_run_a_job_twice_at_once ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.72s
+
+     Running tests/verify_leaks.rs (<workdir>/target/debug/deps/verify_leaks-68a2efd5fc4d609e)
+
+running 2 tests
+test nothing_a_request_carries_reaches_logs_or_otlp_on_any_path ... ok
+test an_unreachable_collector_url_with_a_secret_path_does_not_reach_stdout ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s
+
+     Running tests/verify_shutdown.rs (<workdir>/target/debug/deps/verify_shutdown-a85ef99e88e88377)
+
+running 6 tests
+test an_idle_service_exits_zero_right_after_the_drain_delay ... ok
+test idle_keep_alive_connections_do_not_delay_the_exit ... ok
+test a_request_arriving_on_a_keep_alive_connection_during_the_delay_is_served_then_closed ... ok
+test many_requests_in_flight_all_complete_and_the_exit_code_is_zero ... ok
+test a_slow_body_upload_in_flight_is_cut_off_at_the_drain_timeout ... ok
+test a_client_that_stalls_mid_request_is_cut_off_at_the_drain_timeout_not_hung ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.94s
+
+   Doc-tests service_kit
+
+running 1 test
+test crates/service-kit/src/postgres.rs - postgres::SslMode (line 52) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.26s; merged doctests compilation took 0.26s
+test agents_md_search_finds_planted_files ... ok
+test dev_only_crates_are_only_dev_dependencies ... ok
+test members_inherit_workspace_edition_and_lints ... ok
+test toolchain_pins_agree ... ok
+test runtime_code_never_changes_the_schema ... ok
+test repository_has_no_agents_md ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Doc-tests repo_check
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          │   └── testkit v0.1.0 (*)
+          ├── (dev) ingest v0.1.0
+          ├── opentelemetry-http v0.33.1
+          │   └── opentelemetry-otlp v0.33.1
+          │       └── service-kit v0.1.0 (*)
+          ├── opentelemetry-otlp v0.33.1 (*)
+          └── testkit v0.1.0 (*)
+    ├ tower-http v0.7.1
+      └── service-kit v0.1.0
+          ├── identity v0.1.0
+          ├── outbox v0.1.0
+          └── testkit v0.1.0
+              └── (dev) identity v0.1.0 (*)
+
+advisories ok, bans ok, licenses ok, sources ok
+rcheck: removed 31 dangling test volumes
+rcheck: exit 0 at 12:21:41 (build-host, 298-6eb5e3c9)
