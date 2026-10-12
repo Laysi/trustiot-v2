@@ -409,6 +409,8 @@ repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（
 - 只在 `services/`、`crates/`、`Cargo.lock` 或 `deploy/images/` 自上次通過以來有變動時才重建；沒變動時沿用上一次的映像（例如存成 artifact）。
 - 不建議改拉 GHCR 上最新的發佈版映像：測到的是已發佈的版本而不是 main 的程式碼，而且 smoke job 要多一個讀取套件的權限。
 
+2026-10-12 更新（Laysi/trustiot-v2#345）：repo 已改為公開，標準 runner 不計費，上面的「計費分鐘」改看成 nightly 每晚多出的執行時間。公開 repo 的 `ubuntu-24.04-arm` 依文件是 4 vCPU（見「省 Actions 分鐘數」），冷建置可能比上面的估計快，未實測。上列做法仍然適用，理由改為縮短 nightly 的執行時間與 `timeout-minutes` 的餘裕。
+
 ### 本機執行
 
 nightly 只在 CI 跑：本 repo 規定工作站不跑 Kubernetes。要在有 docker 與 openssl 的機器上重現，`proto install` 之後，把 workflow 裡的 `K3S_IMAGE`、`GATEWAY_API_VERSION`、`GATEWAY_CRDS_SHA256`、`ISTIO_VERSION` 設成環境變數：
