@@ -22,6 +22,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
+use crate::codec::sealed::Token;
 use crate::codec::{self, DecodeError, EncodeError, Invalid, IssueCode, Issues, Message, V1};
 use crate::config::MAX_DEVICES;
 use crate::ids::{AgentVersion, ConfigVersion, DeviceId, SessionId, UnixMillis};
@@ -35,7 +36,9 @@ pub const MAX_FAILURE_DETAIL_BYTES: usize = 256;
 /// only, for the codes that do not fit.
 pub const MAX_EXCEPTION_CODES: usize = 16;
 
-/// `up/status` (retained; also the last will): whether a gateway is connected.
+/// `up/status` (retained; also the last will): whether a gateway is connected. Encoded as a map
+/// whose `state` names the variant; [`crate::decode`] reads the state first and then only the
+/// fields of that variant.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum Status {
@@ -112,6 +115,30 @@ impl Status {
 
 impl Message for Status {
     const CHANNEL: Channel = Channel::Status;
+
+    /// Reads `state` first, then decodes the payload as that variant's fields, so that no
+    /// entry of the map is buffered (Laysi/trustiot-v2#290). Both passes skip unknown keys
+    /// without building anything; each refuses a repeated field, as a single pass would.
+    fn decode_item(payload: &[u8], _: Token) -> Result<Self, DecodeError> {
+        /// The variant names of [`Status`], read like serde reads them for the derived enum.
+        #[derive(Deserialize)]
+        #[serde(variant_identifier, rename_all = "snake_case")]
+        enum State {
+            Online,
+            Offline,
+        }
+
+        #[derive(Deserialize)]
+        struct Probe {
+            state: State,
+        }
+
+        let Probe { state } = codec::from_slice(payload)?;
+        match state {
+            State::Online => codec::from_slice(payload).map(Self::Online),
+            State::Offline => codec::from_slice(payload).map(Self::Offline),
+        }
+    }
 }
 
 /// `up/heartbeat`: the gateway's operating metrics, sent every `interval_s` seconds.

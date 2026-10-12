@@ -1,0 +1,151 @@
+// Shared infrastructure of the chaos scripts (re-run for Laysi/trustiot-v2#271): a Postgres
+// container that serves TLS from a CA generated for the run, the connection environment of the
+// chaos binary (verify-full, four roles), a seeded random generator, and helpers.
+// Run from a directory that holds chaos.ts, finish.ts, stall.ts and this file (each as .ts).
+import { $ } from "bun";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+
+export const RUNTIME = process.env.CONTAINER ?? "docker";
+export const IMAGE =
+  "docker.io/library/postgres@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873";
+export const ROLES = ["chaos_prod_app", "chaos_prod_platform", "chaos_cons_app", "chaos_cons_platform"];
+export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Moves the generated certificate and key into place for the postgres user (the key must be
+// readable only by it) and starts the image's entrypoint with TLS on (as the outbox tests do).
+const START_WITH_TLS = `set -eu
+mkdir -p /etc/postgres-tls
+printf '%s' "$CHAOS_TLS_CERT" > /etc/postgres-tls/server.crt
+(umask 077; printf '%s' "$CHAOS_TLS_KEY" > /etc/postgres-tls/server.key)
+chown -R postgres:postgres /etc/postgres-tls
+exec docker-entrypoint.sh postgres -c ssl=on \\
+  -c ssl_cert_file=/etc/postgres-tls/server.crt -c ssl_key_file=/etc/postgres-tls/server.key \\
+  -c max_connections=200 -c max_prepared_transactions=10 -c log_connections=off`;
+
+/** mulberry32: a small seeded generator, so the fault schedule follows from the seed. */
+export function seeded(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export type Run = {
+  bin: string;
+  outdir: string;
+  pg: string;
+  port: number;
+  password: string;
+  seed: number;
+  env: Record<string, string>;
+  psql: (sql: string, user?: string) => Promise<{ ok: boolean; out: string; err: string }>;
+  waitPg: (timeoutS?: number) => Promise<void>;
+  procSeed: (name: string, n: number) => string;
+  log: (s: string) => void;
+};
+
+/** Starts (or, with `reuse`, attaches to) the run's Postgres. `name` distinguishes the scripts. */
+export async function startRun(opts: {
+  bin: string;
+  outdir: string;
+  name: string;
+  port: number;
+  seed: number;
+  reuse?: boolean;
+  logFile: string;
+}): Promise<Run> {
+  const { bin, outdir } = opts;
+  mkdirSync(`${outdir}/procs`, { recursive: true });
+  mkdirSync(`${outdir}/tls`, { recursive: true });
+  const pg = `outbox-chaos-${opts.name}`;
+  const t0 = Date.now();
+  const log = (s: string) => {
+    const line = `[${((Date.now() - t0) / 1000).toFixed(1)}s] ${s}`;
+    appendFileSync(`${outdir}/${opts.logFile}`, line + "\n");
+    console.log(line);
+  };
+  // The password of the superuser and of every role of this run: random, kept only in the
+  // run directory (never copied into the report's data).
+  const stateFile = `${outdir}/run.json`;
+  let password: string;
+  if (opts.reuse && existsSync(stateFile)) {
+    password = JSON.parse(readFileSync(stateFile, "utf8")).password;
+  } else {
+    password = crypto.randomUUID().replaceAll("-", "");
+    writeFileSync(stateFile, JSON.stringify({ password, port: opts.port, seed: opts.seed }));
+  }
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    CHAOS_HOST: "127.0.0.1",
+    CHAOS_PORT: String(opts.port),
+    CHAOS_CA_FILE: `${outdir}/tls/ca.pem`,
+    CHAOS_PASSWORD: password,
+  };
+  const psql = async (sql: string, user = "postgres") => {
+    const r = await $`${RUNTIME} exec -e PGPASSWORD=${password} ${pg} psql -h 127.0.0.1 -U ${user} -d postgres -At -c ${sql}`
+      .quiet()
+      .nothrow();
+    return { ok: r.exitCode === 0, out: r.stdout.toString().trim(), err: r.stderr.toString().trim() };
+  };
+  const waitPg = async (timeoutS = 120) => {
+    const end = Date.now() + timeoutS * 1000;
+    while (Date.now() < end) {
+      if ((await psql("select 1")).ok) return;
+      await sleep(500);
+    }
+    throw new Error("postgres did not come back");
+  };
+  if (!opts.reuse) {
+    const certs = await $`${bin} certs ${outdir}/tls`.quiet().nothrow();
+    if (certs.exitCode !== 0) throw new Error("certs failed: " + certs.stderr.toString());
+    const cert = readFileSync(`${outdir}/tls/server.crt`, "utf8");
+    const key = readFileSync(`${outdir}/tls/server.key`, "utf8");
+    await $`${RUNTIME} rm -f ${pg}`.quiet().nothrow();
+    log(`starting postgres container (${RUNTIME}, memory 1g, TLS from a CA generated for this run)`);
+    const started = Bun.spawnSync([
+      RUNTIME, "run", "-d", "--name", pg, "--memory", "1g",
+      "-e", `POSTGRES_PASSWORD=${password}`, "-e", `CHAOS_TLS_CERT=${cert}`, "-e", `CHAOS_TLS_KEY=${key}`,
+      "-p", `127.0.0.1:${opts.port}:5432`, "--entrypoint", "sh", IMAGE, "-c", START_WITH_TLS,
+    ]);
+    if (started.exitCode !== 0) throw new Error("container start failed: " + started.stderr.toString());
+    await waitPg();
+    await sleep(1500);
+    await waitPg();
+    const ver = await psql("select version()");
+    log(`postgres up: ${ver.out}`);
+    const ssl = await psql("show ssl");
+    log(`ssl = ${ssl.out}`);
+    const r = await $`${bin} setup`.env(env).quiet().nothrow();
+    if (r.exitCode !== 0) throw new Error("setup failed: " + r.stderr.toString() + r.stdout.toString());
+    log("setup done (verify-full connection, four roles, RLS template, grants)");
+  }
+  const procSeed = (name: string, n: number) => {
+    let h = 2166136261;
+    for (const c of `${name}#${n}`) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0;
+    return String((opts.seed * 1000003 + h) % 2 ** 52);
+  };
+  return { bin, outdir, pg, port: opts.port, password, seed: opts.seed, env, psql, waitPg, procSeed, log };
+}
+
+/** The number of events after the subscription's position (independent of the library). */
+export const LAG_SQL = `select count(*) from prod.outbox_event e, cons.outbox_subscription s where (e.tx_order, e.id) > (s.position_tx, s.position_id)`;
+
+export function sumStats(outdir: string, files: string[], keys: string[]) {
+  const tot: Record<string, number> = Object.fromEntries(keys.map((k) => [k, 0]));
+  for (const f of files) {
+    const last = readFileSync(`${outdir}/procs/${f}`, "utf8")
+      .split("\n")
+      .filter((l) => l.startsWith("STAT"))
+      .at(-1);
+    if (!last) continue;
+    for (const k of keys) {
+      const m = last.match(new RegExp(`${k}=(\\d+)`));
+      if (m) tot[k] += Number(m[1]);
+    }
+  }
+  return tot;
+}

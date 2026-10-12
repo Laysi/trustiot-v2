@@ -1,0 +1,26 @@
+// Drain speed of the consumers after the chaos phase, from a run's lag.csv and timeline: the
+// backlog (events after the subscription position) at the first sample at least 10 s after
+// "chaos phase over", and how long it took to reach 0. No faults run in this window and the
+// producers are stopped, so the rate is what the three replicas deliver together, one event per
+// transaction. Usage: bun throughput.ts <prefix> [<prefix> ...]   (files <prefix>-lag.csv and
+// <prefix>-timeline.txt in the current directory)
+import { readFileSync } from "node:fs";
+for (const p of process.argv.slice(2)) {
+  const timeline = readFileSync(`${p}-timeline.txt`, "utf8");
+  const over = Number(timeline.match(/\[([\d.]+)s\] chaos phase over/)![1]);
+  const rows = readFileSync(`${p}-lag.csv`, "utf8").trim().split("\n").slice(1)
+    .map((l) => l.split(",")).filter((r) => !r[0].startsWith("finish")).map((r) => ({ t: Number(r[0]), lag: Number(r[1]) }));
+  const start = rows.find((r) => r.t >= over + 10)!;
+  const zero = rows.find((r) => r.t >= start.t && r.lag === 0);
+  const events = Number(readFileSync(`${p}-verify.json`, "utf8").match(/"events_in_outbox": (\d+)/)![1]);
+  console.log(JSON.stringify({
+    run: p,
+    chaos_over_at_s: over,
+    backlog_at_s: start.t,
+    backlog_events: start.lag,
+    zero_at_s: zero?.t ?? null,
+    drain_s: zero ? Number((zero.t - start.t).toFixed(1)) : null,
+    drain_events_per_s: zero ? Number((start.lag / (zero.t - start.t)).toFixed(1)) : null,
+    events_total: events,
+  }));
+}

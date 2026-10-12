@@ -323,6 +323,175 @@ fn repeated_keys_are_refused_wherever_a_field_could_be_chosen() {
     assert!(TelemetryBatch::decode(&encode_tree(&batch)).is_ok());
 }
 
+/// The map that names the variant of `name`'s internally tagged enum, and the tag's key.
+fn tagged_map<'a>(name: &str, tree: &'a mut Cbor) -> (&'a mut Vec<(Cbor, Cbor)>, &'static str) {
+    match name {
+        n if n.starts_with("status") => (entries(tree), "state"),
+        n if n.starts_with("telemetry-ack") => (entries(child(tree, "outcome")), "status"),
+        _ => (entries(child(tree, "action")), "op"),
+    }
+}
+
+/// `Status`, `TelemetryAck` and `LiveControl` decode their internally tagged map in two passes,
+/// the tag first (Laysi/trustiot-v2#290). The result does not depend on where the tag sits,
+/// fields of other variants are skipped whatever their type or repeats, as serde's single pass
+/// did, and the map follows the rules of every other message map, which the single pass did
+/// not: it read a byte string as text, an integer key as a field index, an array as the enum,
+/// and refused a CBOR tag even in an entry it would skip.
+#[test]
+fn tagged_maps_decode_like_every_other_map() {
+    fn decodes_as<M: Message + PartialEq + std::fmt::Debug>(name: &str, tree: &Cbor) {
+        let expected = decode::<M>(&encode_tree(&golden(name))).unwrap();
+        assert_eq!(decode::<M>(&encode_tree(tree)), Ok(expected), "{name}");
+    }
+    fn check(name: &str, tree: &Cbor) -> Result<(), DecodeError> {
+        let payload = encode_tree(tree);
+        match name {
+            n if n.starts_with("status") => decode::<Status>(&payload).map(drop),
+            n if n.starts_with("telemetry-ack") => decode::<TelemetryAck>(&payload).map(drop),
+            _ => decode::<LiveControl>(&payload).map(drop),
+        }
+    }
+    fn same_as_golden(name: &str, tree: &Cbor) {
+        match name {
+            n if n.starts_with("status") => decodes_as::<Status>(name, tree),
+            n if n.starts_with("telemetry-ack") => decodes_as::<TelemetryAck>(name, tree),
+            _ => decodes_as::<LiveControl>(name, tree),
+        }
+    }
+    let names = [
+        "status-online",
+        "status-offline",
+        "telemetry-ack-committed",
+        "telemetry-ack-duplicate",
+        "telemetry-ack-rejected",
+        "telemetry-ack-retry",
+        "live-control-start",
+        "live-control-renew",
+        "live-control-stop",
+    ];
+    for name in names {
+        // The tag last, after every field of its variant.
+        let mut tree = golden(name);
+        let (map, tag) = tagged_map(name, &mut tree);
+        let at = map.iter().position(|(key, _)| *key == text(tag)).unwrap();
+        let entry = map.remove(at);
+        map.push(entry);
+        same_as_golden(name, &tree);
+
+        // Unknown entries on both sides of the tag, repeated, holding items serde could not
+        // buffer (a tag, a simple value, a negative integer below i64::MIN): skipped, as in
+        // every other map.
+        let mut tree = golden(name);
+        let (map, _) = tagged_map(name, &mut tree);
+        map.insert(
+            0,
+            (text("future"), Cbor::Tag(1, Box::new(Cbor::Integer(0)))),
+        );
+        map.push((text("future"), Cbor::Integer(-(1 << 64))));
+        map.push((
+            text("later"),
+            Cbor::Tag(55_799, Box::new(Cbor::Array(vec![]))),
+        ));
+        same_as_golden(name, &tree);
+
+        // A repeated field of the variant, before the tag, is refused like after it.
+        let mut tree = golden(name);
+        let (map, tag) = tagged_map(name, &mut tree);
+        if let Some(field) = map
+            .iter()
+            .find(|(key, _)| *key != text(tag) && *key != text("v"))
+            .cloned()
+        {
+            map.insert(0, field);
+            assert!(
+                matches!(check(name, &tree), Err(DecodeError::Malformed(_))),
+                "{name}"
+            );
+        }
+
+        // Rules every other map already had.
+        type Change = fn(&mut Vec<(Cbor, Cbor)>, &str);
+        let refused: [(&str, Change); 3] = [
+            ("an integer key", |map, _| {
+                map.insert(0, (Cbor::Integer(0), Cbor::Integer(7)));
+            }),
+            ("a byte string key", |map, _| {
+                map.push((Cbor::Bytes(b"future".to_vec()), Cbor::Integer(7)));
+            }),
+            ("the tag as a byte string", |map, tag| {
+                let entry = map.iter_mut().find(|(key, _)| *key == text(tag)).unwrap();
+                let Cbor::Text(variant) = &entry.1 else {
+                    panic!("a tag is text")
+                };
+                entry.1 = Cbor::Bytes(variant.as_bytes().to_vec());
+            }),
+        ];
+        for (label, change) in refused {
+            let mut tree = golden(name);
+            let (map, tag) = tagged_map(name, &mut tree);
+            change(map, tag);
+            assert!(
+                matches!(check(name, &tree), Err(DecodeError::Malformed(_))),
+                "{name}: {label}"
+            );
+        }
+    }
+
+    // Fields of another variant are skipped whatever their type and however often they repeat,
+    // as the single pass skipped them.
+    let mut retry = golden("telemetry-ack-retry");
+    let (map, _) = tagged_map("telemetry-ack-retry", &mut retry);
+    map.insert(0, (text("records"), text("x")));
+    map.insert(0, (text("records"), Cbor::Null));
+    map.push((text("message"), Cbor::Integer(5)));
+    same_as_golden("telemetry-ack-retry", &retry);
+    let mut stop = golden("live-control-stop");
+    let (map, _) = tagged_map("live-control-stop", &mut stop);
+    map.insert(0, (text("devices"), Cbor::Integer(5)));
+    map.push((text("ttl_s"), text("x")));
+    same_as_golden("live-control-stop", &stop);
+    let mut offline = golden("status-offline");
+    let (map, _) = tagged_map("status-offline", &mut offline);
+    map.insert(0, (text("agent_version"), Cbor::Bool(true)));
+    same_as_golden("status-offline", &offline);
+
+    // A byte string where text belongs, an array instead of the map, and an integer wider than
+    // its field are refused, as in every other message.
+    let mut rejected = golden("telemetry-ack-rejected");
+    let (map, _) = tagged_map("telemetry-ack-rejected", &mut rejected);
+    map.iter_mut()
+        .find(|(key, _)| *key == text("message"))
+        .unwrap()
+        .1 = Cbor::Bytes(b"text".to_vec());
+    assert!(is_malformed::<TelemetryAck>(&encode_tree(&rejected)));
+    let mut batch = golden("telemetry");
+    set(
+        &mut batch,
+        "stream",
+        Some(Cbor::Bytes(b"stream-1".to_vec())),
+    );
+    assert!(is_malformed::<TelemetryBatch>(&encode_tree(&batch)));
+    let mut committed = golden("telemetry-ack-committed");
+    *child(&mut committed, "outcome") = Cbor::Array(vec![text("committed"), Cbor::Integer(7)]);
+    assert!(is_malformed::<TelemetryAck>(&encode_tree(&committed)));
+    let committed = encode_tree(&golden("telemetry-ack-committed"));
+    let records = [&[0x67][..], b"records", &[0x07]].concat();
+    let at = committed
+        .windows(records.len())
+        .position(|window| window == records)
+        .unwrap()
+        + records.len()
+        - 1;
+    let wide = [
+        &committed[..at],
+        &[0x1b, 0, 0, 0, 0, 0, 0, 0, 7],
+        &committed[at + 1..],
+    ]
+    .concat();
+    assert!(is_malformed::<TelemetryAck>(&wide));
+}
+
 #[test]
 fn chunked_strings_and_broken_indefinite_items_are_refused() {
     let batch = golden("telemetry");

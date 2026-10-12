@@ -1,0 +1,75 @@
+{
+  "aggregates": 27,
+  "committed_acks_logged": 1188,
+  "dead_letters": 43,
+  "events_in_outbox": 1188,
+  "failures": [],
+  "final_generation": 0,
+  "generations": [
+    {
+      "complete": true,
+      "distinct": 1145,
+      "gen": 0,
+      "handled": 1145
+    }
+  ],
+  "handled_log_rows": 1145,
+  "in_handler_violations": 0,
+  "inbox_rows": 1145,
+  "lag_events": 0,
+  "ledger_rows": 1188,
+  "pending_commit_absent": 0,
+  "pending_commit_present": 1188,
+  "pending_commit_tokens": 1188,
+  "poison_events": 43,
+  "producer_error_lines": 0,
+  "rolled_back_found_in_outbox": 0,
+  "rolled_back_tokens_logged": 156,
+  "tenants": {
+    "deliveries_checked_against_the_log_rows_tenant": 1145,
+    "delivery_tenant_mismatches": 0,
+    "events_per_tenant_and_handled_in_final_generation": {
+      "01928f6e-7a3c-7d4e-8f00-000000000010": [
+        246,
+        238
+      ],
+      "01928f6e-7a3c-7d4e-8f00-000000000011": [
+        219,
+        209
+      ],
+      "01928f6e-7a3c-7d4e-8f00-000000000012": [
+        246,
+        236
+      ],
+      "01928f6e-7a3c-7d4e-8f00-000000000013": [
+        237,
+        232
+      ],
+      "01928f6e-7a3c-7d4e-8f00-000000000014": [
+        172,
+        164
+      ],
+      "platform-wide": [
+        68,
+        66
+      ]
+    },
+    "probes": {
+      "read_other_tenants": {
+        "total": 58,
+        "unexpected": 0
+      },
+      "write_other_tenant": {
+        "total": 58,
+        "unexpected": 0
+      }
+    },
+    "producer_ledger_tenant_mismatches": 0,
+    "session_tenant_mismatches": 0,
+    "tenant_rows_for_platform_wide_events": 0,
+    "tenant_rows_missing": 0,
+    "tenant_rows_total": 1079,
+    "tenant_rows_wrong_tenant": 0
+  },
+  "tx_order_inversions": 0
+}

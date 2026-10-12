@@ -1,0 +1,59 @@
+// Horizon-stall probe under decision 29's connection model: caught-up consumers, then a long write
+// transaction in another schema, then a long read-only transaction (as the probe of Laysi/trustiot-v2#54's
+// verification). Usage: bun stall.ts <chaos-binary> <outdir> <seed>
+import { $ } from "bun";
+import { appendFileSync, rmSync, writeFileSync } from "node:fs";
+import { LAG_SQL, RUNTIME, sleep, startRun } from "./common.ts";
+
+const [bin, outdir, seedArg] = process.argv.slice(2);
+const run = await startRun({ bin, outdir, name: "stall", port: Number(process.env.CHAOS_PORT ?? "55472"), seed: Number(seedArg ?? "1"), logFile: "stall-timeline.txt" });
+const { env, psql, pg } = run;
+rmSync(`${outdir}/STOP`, { force: true }); rmSync(`${outdir}/STOP_CONSUMERS`, { force: true });
+const t0 = Date.now();
+const spawn = (name: string, args: string[]) => { const f = `${outdir}/procs/${name}.log`; return Bun.spawn([bin, ...args], { env: { ...env, CHAOS_PROC_SEED: run.procSeed(name, 1) }, stdout: Bun.file(f), stderr: Bun.file(f + ".err") }); };
+const procs = [spawn("stall-p1", ["producer", "p1", outdir]), spawn("stall-c1", ["consumer", "c1", "run", outdir]), spawn("stall-c2", ["consumer", "c2", "poll", outdir])];
+const q = `select (select count(*) from prod.outbox_event), (select count(*) from cons.outbox_inbox), (${LAG_SQL})`;
+writeFileSync(`${outdir}/stall.csv`, "t_s,phase,events,processed,lag\n");
+let phase = "warmup";
+async function sample() { const r = await psql(q); const [e, p, l] = r.out.split("|"); appendFileSync(`${outdir}/stall.csv`, `${((Date.now() - t0) / 1000).toFixed(1)},${phase},${e},${p},${l}\n`); return { e: +e, p: +p, l: +l }; }
+for (let i = 0; i < 60; i++) { await sleep(2000); const s = await sample(); if (i > 5 && s.l < 15) break; }
+// Each phase is sampled only while its transaction is open (the probe of #54 kept labelling samples
+// after the transaction had ended).
+run.log("caught up; phase A: long WRITE transaction in schema other (30 s)");
+const aStart = Date.now();
+phase = "write_tx_open";
+const longTx = psql("begin; insert into other.junk default values; select pg_sleep(30); commit;");
+await sleep(1500);
+const a0 = await sample();
+while (Date.now() - aStart < 26_000) { await sleep(2000); await sample(); }
+const a1 = await sample();
+run.log(`during write tx: events ${a0.e}->${a1.e}, processed ${a0.p}->${a1.p}, lag ${a0.l}->${a1.l}`);
+await longTx;
+run.log("write transaction ended");
+phase = "after_commit";
+for (let i = 0; i < 10; i++) { await sleep(1500); await sample(); }
+const a2 = await sample();
+run.log(`after commit: processed ${a2.p}, lag ${a2.l}`);
+run.log("phase B: long READ-ONLY transaction (30 s), no xid");
+const bStart = Date.now();
+phase = "readonly_tx_open";
+const roTx = psql("begin; select count(*) from other.junk; select pg_sleep(30); commit;");
+await sleep(1500);
+const b0 = await sample();
+while (Date.now() - bStart < 26_000) { await sleep(2000); await sample(); }
+const b1 = await sample();
+run.log(`during read-only tx: events ${b0.e}->${b1.e}, processed ${b0.p}->${b1.p}, lag ${b0.l}->${b1.l}`);
+await roTx;
+run.log("read-only transaction ended");
+phase = "wind_down";
+writeFileSync(`${outdir}/STOP`, "");
+await procs[0].exited;
+for (let i = 0; i < 300; i++) { const s = await sample(); if (s.l === 0) break; await sleep(1000); }
+await sleep(3000);
+writeFileSync(`${outdir}/STOP_CONSUMERS`, "");
+await procs[1].exited; await procs[2].exited;
+const v = await $`${bin} verify ${outdir}`.env(env).quiet().nothrow();
+writeFileSync(`${outdir}/stall-verify.json`, v.stdout.toString() + v.stderr.toString());
+console.log(v.stdout.toString());
+if (v.exitCode === 0 || process.env.KEEP_PG !== "1") await $`${RUNTIME} rm -f ${pg}`.quiet().nothrow();
+process.exit(v.exitCode === 0 ? 0 : 1);

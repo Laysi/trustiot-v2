@@ -1,0 +1,23 @@
+rcheck: queued on the build host at 13:38:40 as 359; running now: (other job)
+binary: job_lock-49929e5d6f796cf0
+cores: 20
+ 14:02:28 up 14:37,  5 users,  load average: 2.63, 1.61, 3.75
+round 1 done: runs passed so far 6, failed 0; load average: 22.35, 6.27, 5.24
+round 2 done: runs passed so far 12, failed 0; load average: 38.57, 11.52, 7.01
+round 3 done: runs passed so far 17, failed 1; load average: 35.70, 17.82, 9.65
+round 4 done: runs passed so far 23, failed 1; load average: 43.28, 21.16, 10.98
+round 5 done: runs passed so far 28, failed 2; load average: 36.65, 24.28, 12.79
+round 6 done: runs passed so far 34, failed 2; load average: 48.55, 28.25, 14.42
+--- result lines of all runs
+      2 test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; 
+     34 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+--- failures
+thread 'a_panicking_job_keeps_its_schedule_and_logs_no_payload' (375341) panicked at crates/service-kit/tests/job_lock.rs:76:9:
+Postgres did not start in time
+
+thread 'periodic_runs_on_two_replicas_never_overlap' (381747) panicked at crates/service-kit/tests/job_lock.rs:76:9:
+Postgres did not start in time
+
+total job_lock runs: 36, passed 34, failed 2
+rcheck: removed 360 dangling test volumes
+rcheck: exit 0 at 14:06:35 (the build host, 359)
