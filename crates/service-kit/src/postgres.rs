@@ -15,6 +15,9 @@
 //!   security. A session that fails the check is closed, so a misconfigured role or a migration
 //!   that forgot `ENABLE ROW LEVEL SECURITY` makes the service unready instead of leaking rows
 //!   ([`UnsafeSession`]).
+//! - Every session is checked again when it goes back to the pool: one left with a
+//!   session-level tenant (`set_config(..., false)` or `SET`, which outlive the transaction) is
+//!   closed instead, so the next user never starts in that tenant.
 //!
 //! Tenant-scoped transactions on top of these pools are in `tenant` (`contract` feature).
 
@@ -233,7 +236,13 @@ pub enum SessionRole {
 /// pool's acquire timeout, so a query on such a pool fails with
 /// [`sqlx::Error::PoolTimedOut`]; `tenant::TenantDb` reports it as the [`UnsafeSession`].
 ///
-/// The kit sets `pool`'s `after_connect` callback; one set earlier is replaced.
+/// A session that goes back to the pool with a session-level tenant setting (a transaction-level
+/// one ends with its transaction) is closed rather than kept, and logged at ERROR (`closed a
+/// database session left with a session-level tenant`): its next user would otherwise start in
+/// that tenant, including transactions meant to have none. The check is one query per release.
+///
+/// The kit sets `pool`'s `after_connect` and `after_release` callbacks; ones set earlier are
+/// replaced.
 ///
 /// The server certificate must chain to the root certificate in `options`
 /// ([`PostgresConfig::connect_options`] sets it from [`PostgresConfig::ca_file`]); no public or
@@ -287,9 +296,29 @@ pub(crate) fn connect_lazy_recording(
             let recorder = recorder.clone();
             Box::pin(async move { check_new_session(connection, role, &recorder).await })
         })
+        .after_release(|connection, _metadata| Box::pin(keep_released_session(connection)))
         .connect_lazy_with(options);
     Ok((pool, refusals))
 }
+
+/// Whether a session going back to the pool has no tenant setting left. The query runs after
+/// whatever sqlx queued on the connection (the `ROLLBACK` of a dropped transaction), so it sees
+/// the session as its next user would. A session with a tenant is kept out of the pool (closed);
+/// a failed query closes it too.
+async fn keep_released_session(connection: &mut PgConnection) -> Result<bool, sqlx::Error> {
+    let clean: bool = sqlx::query_scalar(NO_SESSION_TENANT)
+        .fetch_one(connection)
+        .await?;
+    if !clean {
+        // Only service-kit's transactions may choose a tenant, and only for one transaction.
+        tracing::error!("closed a database session left with a session-level tenant");
+    }
+    Ok(clean)
+}
+
+/// True when the session has no tenant setting outside a transaction.
+const NO_SESSION_TENANT: &str =
+    "SELECT NULLIF(current_setting('trustiot.tenant_id', true), '') IS NULL";
 
 async fn check_new_session(
     connection: &mut PgConnection,

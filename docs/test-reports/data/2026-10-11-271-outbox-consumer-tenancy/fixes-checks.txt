@@ -1,0 +1,82 @@
+== host
+Linux 7.2.8-300.fc45.x86_64 x86_64
+rustc 1.99.0 (b940084d7 2026-09-28)
+bun 1.4.2
+podman version 6.1.3
+CI=1 CARGO_BUILD_JOBS=6
+== cargo fmt --all --check
+ok
+== cargo clippy --workspace --all-targets --locked -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 16.03s
+== cargo clippy -p service-kit --no-default-features --all-targets --locked -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.98s
+== cargo test --workspace --locked --no-fail-fast
+exit=0
+suites ok: 77
+passed total: 599
+failed total: 0
+== outbox suites
+     Running unittests src/lib.rs (target/debug/deps/outbox-6346494410fd1d80)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/crash.rs (target/debug/deps/crash-fa1e1e02a1139b4a)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.82s
+     Running tests/delivery.rs (target/debug/deps/delivery-0e66844f7ad45bc1)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.16s
+     Running tests/metrics.rs (target/debug/deps/metrics-166047f1506d65a4)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.87s
+     Running tests/notify.rs (target/debug/deps/notify-cd727e34219ed2c4)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.29s
+     Running tests/producer.rs (target/debug/deps/producer-f301156740a83c38)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.70s
+     Running tests/tenancy.rs (target/debug/deps/tenancy-38d1059c26fa9994)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.61s
+     Running tests/verify_271.rs (target/debug/deps/verify_271-7d562b96a0b9526b)
+test result: ok. 12 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 45.22s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== repeat 1: cargo test --locked -p outbox --test crash --test delivery --test tenancy
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.99s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.37s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.11s
+== repeat 2: cargo test --locked -p outbox --test crash --test delivery --test tenancy
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.86s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.98s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.52s
+== repeat 3: cargo test --locked -p outbox --test crash --test delivery --test tenancy
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.98s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.09s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.85s
+== cargo test --locked -p service-kit --test tenant_db --test postgres_trust
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.41s
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.86s
+== cargo test --locked -p service-kit --no-default-features
+exit=0
+passed total: 122
+== cargo run -p openapi -- --check
+api/openapi.json is up to date
+exit=0
+== cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+== bun install --cwd scripts --frozen-lockfile
+Checked 7 installs across 27 packages (no changes) [8.00ms]
+== bun run --cwd scripts typecheck
+$ tsc --noEmit --project tsconfig.json
+exit=0
+== bun test scripts
+ 526 pass
+ 1 skip
+ 0 fail
+Ran 527 tests across 20 files. [2.91s]
+== bun test deploy/chart
+ 261 pass
+ 0 fail
+Ran 261 tests across 4 files. [33.82s]
+== bun scripts/ci/check-workflows.ts
+workflow policy: 4 file(s) checked, no violations
+exit=0
+== bun scripts/ci/check-secret-handling.ts
+secret handling: 209 file(s) checked, 3 container build file(s), no violations
+exit=0
+== bun scripts/ci/lint-workflows.ts
+actionlint: 3 workflow file(s), no errors
+exit=0
+== done
