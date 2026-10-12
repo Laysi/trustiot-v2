@@ -6,7 +6,7 @@
 mod support;
 
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -374,6 +374,11 @@ const PARTITION_HEARTBEAT: Duration = Duration::from_millis(200);
 const PARTITION_TIMEOUT: Duration = Duration::from_secs(1);
 /// Allowance on top of the lock timeout for timer and scheduling delay on a loaded machine.
 const SCHEDULING_SLACK: Duration = Duration::from_millis(150);
+/// How long the proxy holds back what Postgres says (see [`Proxy::delay_replies`]). It is well
+/// above the time a test needs to see the lock on the server and cut the network, so the client
+/// has certainly not heard of the lock yet when the partition begins, and well below
+/// `PARTITION_TIMEOUT`, so the lock's own queries still finish in time.
+const REPLY_DELAY: Duration = Duration::from_millis(300);
 
 /// A TCP proxy to Postgres that can turn into a black hole: it then drops every byte in both
 /// directions and keeps both connections open, never sending a FIN or a reset. That is what a
@@ -383,6 +388,9 @@ struct Proxy {
     /// How to connect to the database through this proxy.
     options: PgConnectOptions,
     blackhole: Arc<AtomicBool>,
+    /// For each connection through the proxy, how long in milliseconds replies from Postgres are
+    /// held back; see `delay_replies`.
+    reply_delays: Arc<Mutex<Vec<Arc<AtomicU64>>>>,
     accept: tokio::task::JoinHandle<()>,
 }
 
@@ -400,6 +408,8 @@ impl Proxy {
         let address = listener.local_addr().expect("the proxy's address");
         let blackhole = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&blackhole);
+        let reply_delays = Arc::new(Mutex::new(Vec::new()));
+        let delays = Arc::clone(&reply_delays);
         let accept = tokio::spawn(async move {
             // Dropped, and so aborted, together with the accept task.
             let mut connections = JoinSet::new();
@@ -409,14 +419,38 @@ impl Proxy {
                 };
                 let (client_read, client_write) = client.into_split();
                 let (server_read, server_write) = server.into_split();
-                connections.spawn(forward(client_read, server_write, Arc::clone(&flag)));
-                connections.spawn(forward(server_read, client_write, Arc::clone(&flag)));
+                let delay = Arc::new(AtomicU64::new(0));
+                delays
+                    .lock()
+                    .expect("reply delays")
+                    .push(Arc::clone(&delay));
+                connections.spawn(forward(client_read, server_write, Arc::clone(&flag), None));
+                connections.spawn(forward(
+                    server_read,
+                    client_write,
+                    Arc::clone(&flag),
+                    Some(delay),
+                ));
             }
         });
         Self {
             options: direct.host(&address.ip().to_string()).port(address.port()),
             blackhole,
+            reply_delays,
             accept,
+        }
+    }
+
+    /// From now on, holds back every reply of Postgres on the connections that are open now for
+    /// `delay` before it is passed on, in order. A partition that begins in that time drops the
+    /// reply: the server has done what the client asked, the client has not heard of it, and
+    /// no amount of waiting changes that. It is what a slow or loaded machine does by chance,
+    /// made certain. Connections opened later are not held back: opening one takes several
+    /// replies, and a replica whose first attempt failed must be able to connect again.
+    fn delay_replies(&self, delay: Duration) {
+        let millis = u64::try_from(delay.as_millis()).expect("a delay that fits in u64");
+        for connection in self.reply_delays.lock().expect("reply delays").iter() {
+            connection.store(millis, Ordering::SeqCst);
         }
     }
 
@@ -432,14 +466,30 @@ impl Drop for Proxy {
     }
 }
 
-/// Copies one direction of a proxied connection; in black-hole mode it reads and drops.
-async fn forward(mut from: OwnedReadHalf, mut to: OwnedWriteHalf, blackhole: Arc<AtomicBool>) {
+/// Copies one direction of a proxied connection; in black-hole mode it reads and drops. With
+/// `delay_ms`, it holds each chunk back for that long first, and drops it if the partition began
+/// meanwhile, as a network drops what is still in flight.
+async fn forward(
+    mut from: OwnedReadHalf,
+    mut to: OwnedWriteHalf,
+    blackhole: Arc<AtomicBool>,
+    delay_ms: Option<Arc<AtomicU64>>,
+) {
     let mut buffer = vec![0_u8; 8192];
     loop {
         match from.read(&mut buffer).await {
             Ok(read) if read > 0 => {
                 if blackhole.load(Ordering::SeqCst) {
                     continue;
+                }
+                if let Some(delay_ms) = &delay_ms {
+                    let delay = Duration::from_millis(delay_ms.load(Ordering::SeqCst));
+                    if !delay.is_zero() {
+                        tokio::time::sleep(delay).await;
+                    }
+                    if blackhole.load(Ordering::SeqCst) {
+                        continue;
+                    }
                 }
                 if to.write_all(&buffer[..read]).await.is_err() {
                     break;
@@ -471,6 +521,7 @@ async fn a_partitioned_holder_stops_its_job_within_the_lock_timeout() {
     )
     .with_heartbeat(PARTITION_HEARTBEAT)
     .with_timeout(PARTITION_TIMEOUT);
+    proxy.delay_replies(REPLY_DELAY);
     let b = JobLock::new(replica(&database.url).await, "example-service", &job);
     let key = a.key();
     let ticks = Arc::new(AtomicUsize::new(0));
@@ -479,24 +530,36 @@ async fn a_partitioned_holder_stops_its_job_within_the_lock_timeout() {
         let ticks = Arc::clone(&ticks);
         let last_tick = Arc::clone(&last_tick);
         tokio::spawn(async move {
-            a.run_exclusive(|| async move {
-                loop {
-                    ticks.fetch_add(1, Ordering::SeqCst);
-                    *last_tick.lock().expect("tick lock") = Some(Instant::now());
+            loop {
+                let (job_ticks, job_last_tick) = (Arc::clone(&ticks), Arc::clone(&last_tick));
+                let outcome = a
+                    .run_exclusive(|| async move {
+                        loop {
+                            job_ticks.fetch_add(1, Ordering::SeqCst);
+                            *job_last_tick.lock().expect("tick lock") = Some(Instant::now());
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                        }
+                    })
+                    .await;
+                // A loaded machine can make the first attempt miss its lock timeout (the lock
+                // query is then cancelled and the job never runs); the test needs a job that
+                // runs, so it tries again, on a fresh connection.
+                if outcome.is_err() && last_tick.lock().expect("tick lock").is_none() {
                     tokio::time::sleep(Duration::from_millis(20)).await;
+                    continue;
                 }
-            })
-            .await
+                return outcome;
+            }
         })
     };
-    let started = Instant::now();
-    let holder = loop {
-        if let Some(pid) = lock_holder(&admin, key).await {
-            break pid;
-        }
-        assert!(started.elapsed() < Duration::from_secs(5), "never locked");
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    };
+    // The job running is what shows that the holder has the lock. The server holding the lock
+    // shows nothing of the kind: it grants the lock before the holder hears of it, and a
+    // partition that begins in between drops that reply, so the job would never run. The
+    // proxy holds every reply back, to leave that gap open for the whole test.
+    wait_for(&ticks, 1, "the job to start under its lock").await;
+    let holder = lock_holder(&admin, key)
+        .await
+        .expect("the running job's session holds the lock on the server");
 
     // The network between the holder and Postgres starts dropping packets. Then the server ends
     // the holder's session, as a failover, an idle timeout, TCP keepalive or an admin would: the
@@ -582,6 +645,8 @@ async fn taking_and_releasing_the_lock_give_up_within_the_timeout_in_a_partition
     }
     let [releasing, taking, pinging] = pools
         .map(|pool| JobLock::new(pool, "example-service", &job).with_timeout(PARTITION_TIMEOUT));
+    // The guard in hand is what shows that this replica has heard of the lock; the partition
+    // begins only after that.
     let guard = releasing
         .try_acquire()
         .await
@@ -680,13 +745,18 @@ fn capture_logs() -> (Captured, tracing::subscriber::DefaultGuard) {
 /// What a panicking job must not leak: the panic message, which can carry data.
 const SECRET: &str = "secret-customer-data-4711";
 
-/// Waits until `counter` reaches `at_least`.
-async fn wait_for(counter: &AtomicUsize, at_least: usize) {
+/// Upper bound for waiting on something that must happen but not at a fixed moment, such as a
+/// job being called or an event being logged. Only a failure ever waits this long: it is not a
+/// time any test expects to take, and none asserts on how long such a wait lasted.
+const EVENT_WAIT: Duration = Duration::from_secs(10);
+
+/// Waits until `counter` reaches `at_least`; `what` names what is awaited, for the failure.
+async fn wait_for(counter: &AtomicUsize, at_least: usize, what: &str) {
     let started = Instant::now();
     while counter.load(Ordering::SeqCst) < at_least {
         assert!(
-            started.elapsed() < Duration::from_secs(10),
-            "the job only ran {} times",
+            started.elapsed() < EVENT_WAIT,
+            "waited {EVENT_WAIT:?} for {what}: the counter is at {} of {at_least}",
             counter.load(Ordering::SeqCst)
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -717,7 +787,7 @@ where
     ));
 
     // The schedule must reach the fifth call although the first two panicked.
-    wait_for(&calls, 5).await;
+    wait_for(&calls, 5, "the periodic job to be called five times").await;
     assert!(
         !runner.is_finished(),
         "a panicking job ended the schedule of its replica"
@@ -777,21 +847,25 @@ async fn a_job_that_panics_before_returning_its_future_keeps_its_schedule_too() 
     .await;
 }
 
-/// Waits until a captured event satisfies `matches` and returns when it was first seen.
+/// Waits until a captured event at or after position `from` satisfies `matches`, for at most
+/// `within`; `what` names the event for the failure message. Returns the event's position and
+/// when it was first seen.
 async fn wait_for_event(
     captured: &Captured,
+    what: &str,
     within: Duration,
+    from: usize,
     matches: impl Fn(&(tracing::Level, String)) -> bool,
-) -> Instant {
+) -> (usize, Instant) {
     let started = Instant::now();
     loop {
-        if captured.events().iter().any(&matches) {
-            return Instant::now();
+        let events = captured.events();
+        if let Some(offset) = events.iter().skip(from).position(&matches) {
+            return (from + offset, Instant::now());
         }
         assert!(
             started.elapsed() < within,
-            "no such event within {within:?}: {:?}",
-            captured.events()
+            "waited {within:?} for {what} (looking from event {from}); the events: {events:?}"
         );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
@@ -820,21 +894,25 @@ async fn a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout()
     .with_timeout(PARTITION_TIMEOUT);
     let b = JobLock::new(replica(&database.url).await, "example-service", &job);
     let key = a.key();
+    // The proxy holds Postgres's replies back, so the server grants the lock a while before the
+    // replica hears of it. Whatever a test does at the server cannot tell it that the job runs.
+    proxy.delay_replies(REPLY_DELAY);
     let calls = Arc::new(AtomicUsize::new(0));
-    let panic_now = Arc::new(AtomicBool::new(false));
+    // The job's first run cuts the network and fails in the same poll, so that it is certain to
+    // fail while its replica is partitioned and before the heartbeat can declare the lock lost.
+    // Cutting the network from the test, after the job has started, would race with that: the
+    // runtime may poll the heartbeat first, and the job would then be dropped, not panic.
+    let partition = Arc::clone(&proxy.blackhole);
     let shutdown = Shutdown::new();
     let runner = {
         let calls = Arc::clone(&calls);
-        let panic_now = Arc::clone(&panic_now);
         tokio::spawn(
             a.run_periodically(Duration::from_millis(100), shutdown.clone(), move || {
                 let call = calls.fetch_add(1, Ordering::SeqCst);
-                let panic_now = Arc::clone(&panic_now);
+                let partition = Arc::clone(&partition);
                 async move {
                     if call == 0 {
-                        while !panic_now.load(Ordering::SeqCst) {
-                            tokio::time::sleep(Duration::from_millis(5)).await;
-                        }
+                        partition.store(true, Ordering::SeqCst);
                         panic!("the first run fails while its replica is partitioned");
                     }
                     Ok::<(), String>(())
@@ -842,34 +920,31 @@ async fn a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout()
             }),
         )
     };
-    let started = Instant::now();
-    let holder = loop {
-        if let Some(pid) = lock_holder(&admin, key).await {
-            break pid;
-        }
-        assert!(started.elapsed() < Duration::from_secs(5), "never locked");
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    };
-
-    proxy.partition();
-    let terminated: bool = sqlx::query_scalar("SELECT pg_terminate_backend($1)")
-        .bind(holder)
-        .fetch_one(&admin)
-        .await
-        .expect("terminate the holder's session");
-    assert!(terminated);
-    panic_now.store(true, Ordering::SeqCst);
-    let panicked = wait_for_event(&captured, Duration::from_secs(2), |(level, text)| {
-        *level == tracing::Level::ERROR && text.contains(&job) && text.contains("panicked")
-    })
+    // A round that does not hear the server's answer in time gives up and the next one tries
+    // again, so wait for the job's panic, however many rounds that takes.
+    let (panic_event, panicked) = wait_for_event(
+        &captured,
+        "the ERROR event for the job's panic",
+        EVENT_WAIT,
+        0,
+        |(level, text)| {
+            *level == tracing::Level::ERROR && text.contains(&job) && text.contains("panicked")
+        },
+    )
     .await;
     let wait = PARTITION_TIMEOUT * 5;
-    let released = wait_for_event(&captured, wait, |(level, text)| {
-        *level == tracing::Level::WARN
-            && text.contains(&job)
-            && text.contains("scheduled job lock failed")
-            && text.contains("lost the lock")
-    })
+    let (_, released) = wait_for_event(
+        &captured,
+        "the WARN event that the lock was lost after the panic",
+        wait,
+        panic_event + 1,
+        |(level, text)| {
+            *level == tracing::Level::WARN
+                && text.contains(&job)
+                && text.contains("scheduled job lock failed")
+                && text.contains("lost the lock")
+        },
+    )
     .await;
     let gave_up_after = released - panicked;
     // Evidence for the test report, shown with `--nocapture`.
@@ -883,10 +958,12 @@ async fn a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout()
     );
 
     // The schedule goes on: later rounds try again, and each gives up within the timeout too.
+    // Counted from the panic on: the failure that ended the panicked run is the first of three.
     let lock_failures = |captured: &Captured| {
         captured
             .events()
             .iter()
+            .skip(panic_event)
             .filter(|(level, text)| {
                 *level == tracing::Level::WARN
                     && text.contains(&job)
@@ -909,7 +986,18 @@ async fn a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout()
         1,
         "the job ran without its lock"
     );
-    // The server released the lock with the session; another replica takes it.
+    // The cut-off session still holds the lock on the server, which has heard nothing from the
+    // replica. The server ends that session, as a failover, an idle timeout, TCP keepalive or an
+    // admin would; the lock is then free for another replica.
+    let holder = lock_holder(&admin, key)
+        .await
+        .expect("the cut-off session still holds the lock on the server");
+    let terminated: bool = sqlx::query_scalar("SELECT pg_terminate_backend($1)")
+        .bind(holder)
+        .fetch_one(&admin)
+        .await
+        .expect("terminate the holder's session");
+    assert!(terminated);
     eventually_acquires(&b).await;
 
     shutdown.stop();
