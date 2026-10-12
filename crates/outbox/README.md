@@ -104,7 +104,7 @@ context.spawn(async move {
 
 - handler 先做慢的讀取（例如通知模式呼叫內部 API），再寫入；寫入到 commit 之間要短。
 - 寫事件的交易不要包著外部呼叫。
-- lag 指標會反映這種停滯：已 commit 但讀不到的事件也計入。
+- lag 指標會反映這種停滯：已 commit 但讀不到的事件也計入。長寫入交易自己的事件在它 commit 前不算。影響範圍與監控見[長寫入交易與 prepared transaction](#長寫入交易與-prepared-transaction)。
 
 ## 保證與去重
 
@@ -180,10 +180,12 @@ tx.commit().await?;
 
 | 指標 | 單位 | 意義 |
 | --- | --- | --- |
-| `outbox.consumer.lag` | `{event}` | 訂閱位置之後、已 commit 的事件數，最多數到 10 000 |
+| `outbox.consumer.lag` | `{event}` | 訂閱位置之後、已 commit 的事件數，最多數到 10 000（`LAG_COUNT_CAP`），超過仍讀到 10 000 |
 | `outbox.consumer.lag.age` | `s` | 其中最舊一筆寫入至今的秒數；沒有等待中的事件時為 0 |
 
 屬性：`outbox.subscription`（訂閱名稱）、`outbox.source`（產生端 schema）。`Consumer::lag()` 與 `measure_lag()` 在程式內讀同樣的值。
+
+**count 到上限後以 age 判斷**：`outbox.consumer.lag` 只數到 10 000 就停，積壓再多也讀到 10 000，看不出還在惡化或已在排空；`outbox.consumer.lag.age` 沒有上限，會隨最舊的等待事件變老而繼續上升。所以告警條件用 age，不要用 lag 的門檻（超過 10 000 後它不會再增加）；lag 只當積壓規模的參考，讀到 10 000 就表示「至少這麼多」。Laysi/trustiot-v2#54 的獨立驗證中，積壓累積到以 SQL 量得 25 687 個事件時，函式庫的 lag 指標停在上限 10 000，age 達 1 113 秒（[報告](../../docs/test-reports/2026-10-11-54-verify.md)第 3 節）。
 
 指標不會停在舊值（Laysi/trustiot-v2#333）：
 
@@ -246,10 +248,28 @@ ALTER ROLE assets_app SET search_path = assets;      -- 消費端的表在服務
 
 消費端的平台角色看不到產生端的其他資料表，也不能寫產生端的事件（讀取交易是 `READ ONLY`，也沒有寫入權限）；消費端的服務角色完全碰不到產生端的 schema。
 
+### 長寫入交易與 prepared transaction
+
+讀取上限是整個 Postgres 叢集最舊的「有交易 ID」的交易（見[順序與不漏讀](#順序與不漏讀)），不分 schema、不分服務，所以影響範圍是**所有訂閱**，不只是讀這個產生端的那些：
+
+- 任何 schema 的長寫入交易（沒有 outbox 的服務、手動維護、長時間的 migration 或批次寫入）都會讓所有訂閱停在它之前；交易結束後恢復。
+- `PREPARE TRANSACTION` 之後沒人 `COMMIT PREPARED` 或 `ROLLBACK PREPARED` 的交易（`pg_prepared_xacts`）也一樣：它沒有連線，不會因為連線結束而消失，在 Postgres 崩潰復原後仍在，會一直卡住所有訂閱，直到有人收尾。`max_prepared_transactions` 預設為 0（不能 prepare），要開的環境才需要這項監控。
+- 唯讀交易沒有交易 ID，不受影響。
+- 停滯期間事件照常寫入、commit，只是不投遞；結束後從原位置接著處理，不漏事件。
+
+實測（[Laysi/trustiot-v2#271 的混沌報告](../../docs/test-reports/2026-10-12-271-chaos.md)第 4.4 節，沿用 Laysi/trustiot-v2#54 的探針）：一個 30 秒的長寫入交易（在另一個 schema）期間，已處理數固定在 173，事件從 197 增加到 531、lag 從 20 增加到 354，交易結束後約 15 秒內恢復；同樣 30 秒的長唯讀交易期間處理持續增加、lag 降到 0。Laysi/trustiot-v2#54 的報告另量到 lag 指標 332 個事件、age 29 秒（[報告](../../docs/test-reports/2026-10-11-54-verify.md)第 3.3 節）。兩份報告的混沌各有 20 個 15–35 秒的長寫入交易與一個跨 Postgres 崩潰的 prepared transaction，事件都沒有遺失。
+
+上線後的監控建議：
+
+1. **age 告警**（見 [Lag 指標](#lag-指標)）：age 持續超過數分鐘就告警。不論停滯的原因是長交易、prepared transaction、handler 一直失敗還是消費端處理太慢，age 都會上升；它只告訴你有訂閱落後，不會指出原因。
+2. **長寫入交易**：監控 `pg_stat_activity` 中 `backend_xid IS NOT NULL`（已取得交易 ID）且 `xact_start` 距今超過門檻的連線，並看它的 `datname`、`usename`、`application_name`、`state` 與 `query` 找出來源。狀態是 `idle in transaction` 的連線最危險（沒人在做事卻一直擋住），可另設 `idle_in_transaction_session_timeout`。
+3. **未收尾的 prepared transaction**：監控 `pg_prepared_xacts` 的筆數與最舊的 `prepared` 時間；預期是 0，任何一筆超過數分鐘都要處理（`COMMIT PREPARED` 或 `ROLLBACK PREPARED`，依其來源決定）。
+4. 第 2、3 項是資料庫層的監控，由資料庫監控（例如 Postgres exporter 或同等的查詢）提供，不在 outbox 的指標裡。
+
 ## 限制與後續
 
 - 保留期限：`outbox_event` 與 `outbox_inbox` 目前只增不刪。事件層也是操作紀錄（[現場脈絡](../../docs/architecture/field-context.md) AI 記憶第 4 點），保留與查詢介面由 Laysi/trustiot-v2#130 一併決定；刪除事件前要先確認每個訂閱都已讀過。
-- 讀取上限受整個叢集最舊的寫入交易影響，見[順序與不漏讀](#順序與不漏讀)。
+- 讀取上限受整個叢集最舊的寫入交易影響，見[順序與不漏讀](#順序與不漏讀)；影響範圍與監控見[長寫入交易與 prepared transaction](#長寫入交易與-prepared-transaction)。
 - 每個事件一筆交易，適合控制面的事件量；大量資料（遙測）不走 outbox（決策 8）。
 
 ## 測試
