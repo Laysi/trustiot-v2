@@ -1,0 +1,92 @@
+# release.yml run 38295508885 for tag v0.0.0-rc.5 (Laysi/trustiot-v2#310), read with gh on 2026-10-13
+# commit 716740a9fa638a39e4655c54173653a36f2b121d (branch ci/310-release-arm-runner, main 28862e1 merged in)
+
+## attempt 1
+plan: success (2026-10-12T19:07:17Z -> 2026-10-12T19:07:27Z)
+build: success (2026-10-12T19:07:31Z -> 2026-10-12T19:09:58Z)
+publish: failure (2026-10-12T19:10:03Z -> 2026-10-12T19:11:38Z)
+verify: skipped (2026-10-12T19:11:39Z -> 2026-10-12T19:11:38Z)
+report: failure (2026-10-12T19:11:43Z -> 2026-10-12T19:11:47Z)
+deploy-pr: skipped (2026-10-12T19:11:39Z -> 2026-10-12T19:11:39Z)
+
+## attempt 2 (Re-run failed jobs: plan and build are carried over from attempt 1, so their logs are not repeated below)
+publish: success (2026-10-12T19:13:14Z -> 2026-10-12T19:14:16Z)
+plan: success (2026-10-12T19:07:17Z -> 2026-10-12T19:07:27Z)
+build: success (2026-10-12T19:07:31Z -> 2026-10-12T19:09:58Z)
+verify: failure (2026-10-12T19:14:21Z -> 2026-10-12T19:14:37Z)
+report: failure (2026-10-12T19:14:42Z -> 2026-10-12T19:14:48Z)
+deploy-pr: skipped (2026-10-12T19:14:38Z -> 2026-10-12T19:14:37Z)
+
+## attempt 1, plan job (job 114965485756): runner image and the [release:*] lines
+2026-10-12T19:07:18.2455649Z Image: ubuntu-24.04-arm
+2026-10-12T19:07:18.2456226Z Version: 20261004.142.1
+2026-10-12T19:07:24.8182479Z [release:plan] helm lint --strict passed with values-saas.yaml
+2026-10-12T19:07:24.8998690Z [release:plan] helm lint --strict passed with values-onprem.yaml
+2026-10-12T19:07:24.9028590Z [release:plan] v0.0.0-rc.5 → version 0.0.0-rc.5 (prerelease), commit 716740a9fa638a39e4655c54173653a36f2b121d
+2026-10-12T19:07:24.9029469Z [release:plan] image ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.5 (Rust package identity)
+2026-10-12T19:07:24.9030270Z [release:plan] image ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.5 (deploy/images/postgres)
+2026-10-12T19:07:24.9030935Z [release:plan] image ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.5 (Rust package release-selftest)
+2026-10-12T19:07:24.9031853Z [release:plan] chart ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.5
+2026-10-12T19:07:24.9032259Z [release:plan] notes start from v0.0.0-rc.4
+
+## attempt 1, build job (job 114965571598): runner image and the [release:*] lines
+2026-10-12T19:07:32.4195899Z Image: ubuntu-24.04-arm
+2026-10-12T19:07:32.4196619Z Version: 20261004.142.1
+2026-10-12T19:08:09.0745718Z [release:build] cross-compiling identity, release-selftest for aarch64-unknown-linux-musl
+2026-10-12T19:09:25.2296497Z [release:build] building ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.5 for linux/arm64
+2026-10-12T19:09:28.7508060Z [release:build] ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.5 → sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44, SBOM SPDX-2.3 with 213 packages
+2026-10-12T19:09:28.7509223Z [release:build] building ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.5 for linux/arm64
+2026-10-12T19:09:52.6389414Z [release:build] ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.5 → sha256:9b8b6b97eacec3fdc033fd3f1fbf0dfee3ae6f8f94ba21c40f050003bd62faee, SBOM SPDX-2.3 with 142 packages
+2026-10-12T19:09:52.6394405Z [release:build] building ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.5 for linux/arm64
+2026-10-12T19:09:54.4985188Z [release:build] ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.5 → sha256:bc2b33e06519a9d303195f4196ca7c73d9f14357e0106709d9f434e928421743, SBOM SPDX-2.3 with 13 packages
+
+## attempt 1, publish job (job 114966486932): runner image and the [release:*] lines
+2026-10-12T19:10:03.8903716Z Image: ubuntu-24.04-arm
+2026-10-12T19:10:03.8904341Z Version: 20261004.142.1
+2026-10-12T19:10:16.7229850Z [release:publish] pushing ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.5
+2026-10-12T19:10:30.1132289Z [release:publish] ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.5 → sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44: signed, SBOM attested
+2026-10-12T19:10:30.4108755Z [release:publish] pushing ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.5
+2026-10-12T19:10:44.8226750Z [release:publish] ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.5 → sha256:9b8b6b97eacec3fdc033fd3f1fbf0dfee3ae6f8f94ba21c40f050003bd62faee: signed, SBOM attested
+2026-10-12T19:10:45.1198702Z [release:publish] pushing ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.5
+2026-10-12T19:11:00.0141007Z [release:publish] ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.5 → sha256:bc2b33e06519a9d303195f4196ca7c73d9f14357e0106709d9f434e928421743: signed, SBOM attested
+2026-10-12T19:11:13.8158632Z [release:publish] `cosign sign` exited with status 1:
+2026-10-12T19:11:13.8160784Z Error: signing [ghcr.io/laysi/trustiot-v2/charts/trustiot@sha256:1b96b29976798e061d1cab5fb9666bef0f4b625c0d23900b79a510f66c20c7b2]: signing digest: getting keypair and token: retrieving ID token: reading ID token: fetching ambient OIDC credentials: invalid character 'u' looking for beginning of value
+2026-10-12T19:11:13.8194229Z ##[error]`cosign sign` exited with status 1:
+Error: signing [ghcr.io/laysi/trustiot-v2/charts/trustiot@sha256:1b96b29976798e061d1cab5fb9666bef0f4b625c0d23900b79a510f66c20c7b2]: signing digest: getting keypair and token: retrieving ID token: reading ID token: fetching ambient OIDC credentials: invalid character 'u' looking for beginning of value
+2026-10-12T19:11:13.8208890Z ##[error]Process completed with exit code 1.
+
+## attempt 2, publish job (job 114967657796): runner image and the [release:*] lines
+2026-10-12T19:13:15.2176016Z Image: ubuntu-24.04-arm
+2026-10-12T19:13:15.2176721Z Version: 20261004.142.1
+2026-10-12T19:13:30.6033489Z [release:publish] ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.5 is already sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44; not pushing it again
+2026-10-12T19:13:41.8894708Z [release:publish] ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.5 → sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44: signed, SBOM attested
+2026-10-12T19:13:42.3781656Z [release:publish] ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.5 is already sha256:9b8b6b97eacec3fdc033fd3f1fbf0dfee3ae6f8f94ba21c40f050003bd62faee; not pushing it again
+2026-10-12T19:13:52.8992953Z [release:publish] ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.5 → sha256:9b8b6b97eacec3fdc033fd3f1fbf0dfee3ae6f8f94ba21c40f050003bd62faee: signed, SBOM attested
+2026-10-12T19:13:53.4958519Z [release:publish] ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.5 is already sha256:bc2b33e06519a9d303195f4196ca7c73d9f14357e0106709d9f434e928421743; not pushing it again
+2026-10-12T19:14:04.9008791Z [release:publish] ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.5 → sha256:bc2b33e06519a9d303195f4196ca7c73d9f14357e0106709d9f434e928421743: signed, SBOM attested
+2026-10-12T19:14:05.5355745Z [release:publish] ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.5 already holds this chart (sha256:1b96b29976798e061d1cab5fb9666bef0f4b625c0d23900b79a510f66c20c7b2); not pushing it again
+2026-10-12T19:14:11.6154564Z [release:publish] ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.5 → sha256:1b96b29976798e061d1cab5fb9666bef0f4b625c0d23900b79a510f66c20c7b2: signed
+2026-10-12T19:14:14.8917797Z [release:publish] released v0.0.0-rc.5: https://github.com/Laysi/trustiot-v2/releases/tag/v0.0.0-rc.5
+
+## attempt 2, verify job (job 114968072074): runner image and the [release:*] lines
+2026-10-12T19:14:22.1448581Z Image: ubuntu-24.04-arm
+2026-10-12T19:14:22.1449187Z Version: 20261004.142.1
+2026-10-12T19:14:35.6467945Z [release:verify] ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.5 can be pulled anonymously; the package must be private
+2026-10-12T19:14:35.6490158Z ##[error]ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.5 can be pulled anonymously; the package must be private
+2026-10-12T19:14:35.6511160Z ##[error]Process completed with exit code 1.
+
+## runs-on label of every job (GitHub API: actions/runs/38295508885/attempts/<n>/jobs; runner "-" means the job never started)
+attempt 1:
+  plan: labels=ubuntu-24.04-arm runner=started conclusion=success
+  build: labels=ubuntu-24.04-arm runner=started conclusion=success
+  publish: labels=ubuntu-24.04-arm runner=started conclusion=failure
+  verify: labels=ubuntu-24.04-arm runner=- conclusion=skipped
+  report: labels=ubuntu-24.04-arm runner=started conclusion=failure
+  deploy-pr: labels=ubuntu-24.04-arm runner=- conclusion=skipped
+attempt 2:
+  publish: labels=ubuntu-24.04-arm runner=started conclusion=success
+  plan: labels=ubuntu-24.04-arm runner=started conclusion=success
+  build: labels=ubuntu-24.04-arm runner=started conclusion=success
+  verify: labels=ubuntu-24.04-arm runner=started conclusion=failure
+  report: labels=ubuntu-24.04-arm runner=started conclusion=failure
+  deploy-pr: labels=ubuntu-24.04-arm runner=- conclusion=skipped

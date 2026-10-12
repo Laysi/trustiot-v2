@@ -234,6 +234,22 @@ describe("makePlan", () => {
     git(root, ["update-ref", "refs/tags/latest", branch]);
     await expect(plan(root, "latest")).rejects.toThrow("is not a release tag");
   });
+
+  test("refuses a Containerfile that runs a program in the image's stage", async () => {
+    // Laysi/trustiot-v2#310: on the arm64 runner such a RUN would run, but x86 machines could
+    // not build the image without an emulator.
+    const { root } = repo();
+    const pinned = `docker.io/library/debian:13@sha256:${"d".repeat(64)}`;
+    writeFileSync(join(root, "deploy/images/postgres-age/Containerfile"), `FROM ${pinned}\nRUN apt-get update\n`);
+    await expect(plan(root, "v0.3.0-rc.1", true)).rejects.toThrow(
+      "deploy/images/postgres-age/Containerfile: line 2: RUN in the stage of line 1, which builds for the image's platform",
+    );
+    writeFileSync(
+      join(root, "deploy/images/postgres-age/Containerfile"),
+      `FROM --platform=$BUILDPLATFORM ${pinned} AS build\nRUN make\nFROM ${pinned}\nCOPY --from=build /out /\n`,
+    );
+    expect((await plan(root, "v0.3.0-rc.1", true)).images.map((image) => image.name)).toEqual(["identity", "postgres-age"]);
+  });
 });
 
 describe("previousTag", () => {

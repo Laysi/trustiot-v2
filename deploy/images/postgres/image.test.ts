@@ -11,8 +11,8 @@
  * they are skipped locally and fail when CI is set.
  *
  * A build on an arm64 host runs every stage natively, so it would not notice a RUN in an arm64
- * stage, which release.yml's x86 build without an emulator cannot run. The Containerfile tests
- * below check that statically instead.
+ * stage, which a build on an x86 machine without an emulator cannot run (release.yml's plan
+ * refuses such a Containerfile too). The Containerfile tests below check that statically.
  *
  * Postgres starts the way CloudNativePG runs its operand: UID and GID 26, read-only root
  * filesystem, every capability dropped, no privilege escalation, data and sockets on writable

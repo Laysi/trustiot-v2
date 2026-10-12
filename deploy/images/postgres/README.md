@@ -17,7 +17,7 @@ AGE 的檔案只有 `age.so`、`age.control`、`age--*.sql`，另外附 AGE 的 
 
 ## 建置方式
 
-release.yml 在 x86 的代管 runner 上建置，而且不用模擬器，所以 arm64 映像裡不能執行任何程式。`Containerfile` 分三個階段：
+arm64 映像裡不執行任何程式，所以 x86 的機器不用模擬器也能建置。release.yml 原本在 x86 的代管 runner 上建置，Laysi/trustiot-v2#310 起改在 arm64 runner 上，這條規則由它的 plan 檢查。`Containerfile` 分三個階段：
 
 1. `base`：CloudNativePG 的 arm64 映像，只當檔案來源與最終映像的基底。
 2. `build`：同一個 multi-arch index 中建置機架構的映像（`--platform=$BUILDPLATFORM`），所以 `pg_config` 回報的版本與路徑和 arm64 映像相同。從 `base` 複製 arm64 的 PGXS makefile（編譯旗標）與 dpkg 狀態，確認兩邊的 `postgresql-18` 版本都等於 `PG_PACKAGE_VERSION`；裝上交叉編譯器；下載 aarch64 的 `postgresql-server-dev-18` 取得伺服器標頭（兩種架構的標頭只差 `pg_config.h`，但它決定標頭裡 CPU 相關的程式路徑，所以必須是 aarch64 的）；下載並驗證 AGE 原始碼（來源與重試見下一節），以 `aarch64-linux-gnu-gcc` 交叉編譯。
@@ -74,4 +74,4 @@ Renovate 會開 PR 更新 `FROM` 的 tag 與 digest（`renovate.json5` 只允許
 - 不執行映像也能跑的檢查：每個 `FROM` 以 digest 釘選；只有 `--platform=$BUILDPLATFORM` 的階段有 `RUN`；沒有 `SHELL`，每個 `RUN` 都是以 `set -eu` 開頭的 POSIX sh（podman 建 OCI 映像時忽略 `SHELL`，2026-10-11 在 podman 5.8.7 上實際遇到）；最後是 `USER 26`；映像是 linux/arm64、以 UID 26 執行；`age.so` 是 aarch64 的 ELF，帶 AGE 版本的 package note；`age.control` 的版本與 `AGE_VERSION` 相同。
 - 啟動 Postgres 的檢查（需要 arm64 主機或 binfmt 的 arm64 模擬器，沒有時本機略過，設了 `CI` 時失敗）：照 CloudNativePG 的方式以 UID/GID 26、唯讀根檔案系統、drop ALL capabilities、no-new-privileges 啟動，PID 1 就是 postgres；CloudNativePG 呼叫的 `initdb`、`pg_ctl`、`pg_controldata`、`pg_basebackup`、`pg_rewind` 在 PATH 上；`CREATE EXTENSION age` 裝上 `AGE_VERSION`，cypher() 建立並查回一張圖；非 superuser 角色在唯讀交易中不經 `LOAD` 執行 cypher() 查詢。
 
-沒有設 `POSTGRES_IMAGE` 時測試先以 `podman build --platform linux/arm64` 建置；設了就測該映像。ci.yml 的 `postgres-image` job 在 arm64 runner 上以原生方式建置並執行測試，只在本目錄有變更時執行（規則在 `scripts/ci/changes.ts`）。release.yml 在 x86 上交叉編譯，原生建置驗證不到「arm64 階段不能有 `RUN`」，這一點由上面的靜態檢查負責。在 arm64 機器上可直接跑；要測 release 建出的映像時，以 `bun scripts/release/build.ts` 建出 OCI 壓縮檔（[scripts/README.md](../../../scripts/README.md)），`podman pull oci-archive:<檔案>` 後把映像名稱給 `POSTGRES_IMAGE`。
+沒有設 `POSTGRES_IMAGE` 時測試先以 `podman build --platform linux/arm64` 建置；設了就測該映像。ci.yml 的 `postgres-image` job 在 arm64 runner 上以原生方式建置並執行測試，只在本目錄有變更時執行（規則在 `scripts/ci/changes.ts`）。arm64 上的原生建置驗證不到「arm64 階段不能有 `RUN`」，這一點由上面的靜態檢查與 release.yml 的 plan 檢查負責。在 arm64 機器上可直接跑；要測 release 建出的映像時，以 `bun scripts/release/build.ts` 建出 OCI 壓縮檔（[scripts/README.md](../../../scripts/README.md)），`podman pull oci-archive:<檔案>` 後把映像名稱給 `POSTGRES_IMAGE`。
