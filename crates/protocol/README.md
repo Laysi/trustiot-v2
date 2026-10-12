@@ -48,7 +48,7 @@ broker 與每個用戶端接受的 maximum packet size 至少要是 `MIN_MAX_PAC
   - 非文字的鍵、以 byte string 代替文字、以陣列代替 map、比欄位寬的整數編碼（例如 8 bytes 的 `u32`）一律 `decode_failed`。之前會把整數鍵當成欄位序號、略過 byte string 鍵、把 UTF-8 的 byte string 當文字、把陣列依序當成標籤與欄位。
   - 略過的項目裡出現 CBOR tag、`false`/`true`/`null`/`undefined` 以外的 simple value、小於 `i64::MIN` 的負整數，或不是合法 UTF-8 的文字時照常略過。之前整則拒絕。
 
-  `tests/fuzz.rs` 的每個輸入都會比對兩段解碼與 serde 單段解碼的結果，只容許上述編碼造成的差異（`run_tagged`）。`LiveControl` 的設備清單超過 `MAX_LIVE_DEVICES` 時只回報一次 `too_many`，不再逐一列出重複的設備：64 KiB 放得下約 32,000 個 2 bytes 的設備 ID，逐一回報會配置約 180 倍 payload 的記憶體。
+  `tests/fuzz.rs` 的每個輸入都會比對兩段解碼與 serde 單段解碼的結果，只容許上述編碼造成的差異，而且只容許該編碼解釋得了的方向：兩段解碼判為 `decode_failed`，只能歸因於它拒絕的編碼；單段解碼判為 `decode_failed` 而兩段解碼接受或判為 `invalid`，只能歸因於它略過的項目；兩者都接受卻解出不同的訊息一律算失敗（`run_tagged`）。`LiveControl` 的設備清單超過 `MAX_LIVE_DEVICES` 時只回報一次 `too_many`，不再逐一列出重複的設備：64 KiB 放得下約 32,000 個 2 bytes 的設備 ID，逐一回報會配置約 180 倍 payload 的記憶體。
 - **文字不得含 U+0000（協定層）。** 遙測與即時值的文字值、日誌的 `target`、`message`、欄位名稱與值、心跳的 `last_failure.detail`、`TelemetryAck` 拒絕原因的 `message`、`ConfigReport` 每個 issue 的 `path` 與 `message`，含 NUL 時 `encode` 拒絕送出、`decode` 拒絕接收。理由：PostgreSQL 的 `text` 存不了 NUL（雲端寫入會失敗，而且是在已經回應之後才失敗），C 介面會把它當字串結尾；沒有任何欄位需要它。送出端的處理：
   - `LogEntry::new`、`LogEntry::with_field` 與 `Issue::new` 先把 NUL 換成 U+FFFD 再截長度，所以用這些建構函式產生的日誌與 issue 一定送得出去。診斷訊息可能引用惡意 payload 的內容（例如 serde 的 `unknown variant`），雲端回 `rejected` 時 `message` 一律取自 `DecodeError::to_issues` 的 issue。
   - 遙測文字值沒有建構函式：閘道器的 Modbus 字串解碼（Laysi/trustiot-v2#87）要先去掉暫存器補位的結尾 NUL；之後仍含 NUL 的值與 NaN 一樣是 `ValueError::NulInText`，算讀取失敗（`invalid_value`），不送出。

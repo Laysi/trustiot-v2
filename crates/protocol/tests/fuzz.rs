@@ -205,22 +205,49 @@ type Runner = fn(&[u8]) -> Outcome;
 /// passes (Laysi/trustiot-v2#290), a comparison with serde's single pass, which `decode` used
 /// before: both must accept the same message or refuse with the same kind of error, unless the
 /// input uses an encoding that the single pass reads differently from every other message map
-/// ([`single_pass_features`]).
+/// ([`single_pass_features`]). Such an encoding only excuses the direction it explains: the two
+/// passes may find a payload malformed only for an encoding they refuse
+/// ([`TWO_PASS_REFUSES`]), and may accept or find invalid a payload that the single pass finds
+/// malformed only for an encoding they skip ([`TWO_PASS_SKIPS`]). Two accepted messages that
+/// differ are never excused.
 fn run_tagged<M: Message + PartialEq + Debug>(payload: &[u8]) -> Outcome {
     let mut outcome = run::<M>(payload);
     if outcome.violation.is_some() {
         return outcome;
     }
-    if let Some(problem) = single_pass_disagrees::<M>(payload) {
-        let features = single_pass_features(payload);
-        if features.is_empty() {
-            outcome.violation = Some(problem);
-        } else {
-            outcome.single_pass_delta = Some(features.into_iter().collect::<Vec<_>>().join(" + "));
+    let Some(disagreement) = single_pass_disagrees::<M>(payload) else {
+        return outcome;
+    };
+    let features = single_pass_features(payload);
+    let has = |set: &[&str]| features.iter().any(|feature| set.contains(feature));
+    let excused = match disagreement.kind {
+        DisagreementKind::Unexcusable => false,
+        DisagreementKind::Classes {
+            two_pass_malformed,
+            single_pass_malformed,
+        } => {
+            (two_pass_malformed && has(TWO_PASS_REFUSES))
+                || (single_pass_malformed && has(TWO_PASS_SKIPS))
         }
+    };
+    if excused {
+        outcome.single_pass_delta = Some(features.into_iter().collect::<Vec<_>>().join(" + "));
+    } else {
+        outcome.violation = Some(format!(
+            "{} (encoding features: {features:?})",
+            disagreement.text
+        ));
     }
     outcome
 }
+
+/// Features of [`single_pass_features`] that the two passes refuse and the single pass may
+/// accept: they explain only a payload that the two passes find malformed.
+const TWO_PASS_REFUSES: &[&str] = &["non-text key", "byte string", "wide integer", "array"];
+
+/// Features of [`single_pass_features`] that the two passes skip and the single pass refuses:
+/// they explain only a payload that the single pass finds malformed.
+const TWO_PASS_SKIPS: &[&str] = &["item serde cannot buffer", "invalid UTF-8"];
 
 /// What `decode` returned before Laysi/trustiot-v2#290: the same checks before the message
 /// body, then serde's single pass over the whole payload, which buffers the tagged map, then
@@ -260,28 +287,49 @@ fn single_pass<M: Message>(payload: &[u8]) -> Option<Result<M, DecodeError>> {
     )
 }
 
+/// How two-pass `decode` and serde's single pass disagree on one payload.
+struct Disagreement {
+    kind: DisagreementKind,
+    text: String,
+}
+
+enum DisagreementKind {
+    /// No encoding can explain it: the two passes accepted a payload that the checks both
+    /// decoders share refuse, or both accepted different messages.
+    Unexcusable,
+    /// One accepts and the other refuses, or one finds the payload malformed and the other
+    /// invalid.
+    Classes {
+        two_pass_malformed: bool,
+        single_pass_malformed: bool,
+    },
+}
+
 /// Whether two-pass `decode` and serde's single pass disagree on `payload`: one accepts and the
 /// other refuses, they accept different messages, or one finds the payload malformed and the
 /// other invalid.
-fn single_pass_disagrees<M: Message + PartialEq + Debug>(payload: &[u8]) -> Option<String> {
+fn single_pass_disagrees<M: Message + PartialEq + Debug>(payload: &[u8]) -> Option<Disagreement> {
     let two_pass = decode::<M>(payload);
     let Some(single) = single_pass::<M>(payload) else {
-        return two_pass
-            .is_ok()
-            .then(|| "accepted a payload the shared checks refuse".to_owned());
+        return two_pass.is_ok().then(|| Disagreement {
+            kind: DisagreementKind::Unexcusable,
+            text: "accepted a payload the shared checks refuse".to_owned(),
+        });
     };
-    let class = |result: &Result<M, DecodeError>| match result {
-        Ok(_) => "accepted",
-        Err(DecodeError::Invalid(_)) => "invalid",
-        Err(_) => "malformed",
+    let malformed = |result: &Result<M, DecodeError>| matches!(result, Err(error) if !matches!(error, DecodeError::Invalid(_)));
+    let kind = match (&two_pass, &single) {
+        (Ok(two), Ok(one)) if two == one => return None,
+        (Ok(_), Ok(_)) => DisagreementKind::Unexcusable,
+        (Err(_), Err(_)) if malformed(&two_pass) == malformed(&single) => return None,
+        _ => DisagreementKind::Classes {
+            two_pass_malformed: malformed(&two_pass),
+            single_pass_malformed: malformed(&single),
+        },
     };
-    match (&two_pass, &single) {
-        (Ok(two), Ok(one)) if two == one => None,
-        (Err(_), Err(_)) if class(&two_pass) == class(&single) => None,
-        _ => Some(format!(
-            "two passes give {two_pass:?}, a single pass {single:?}"
-        )),
-    }
+    Some(Disagreement {
+        kind,
+        text: format!("two passes give {two_pass:?}, a single pass {single:?}"),
+    })
 }
 
 /// The encodings in `payload` that serde's single pass over an internally tagged enum reads
