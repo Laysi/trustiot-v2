@@ -497,7 +497,7 @@ platform_roles AS (
 ),
 -- The tables with row-level security that one of those roles may use at all.
 platform_tables AS MATERIALIZED (
-    SELECT pr.oid AS role_oid, pr.role_name, r.oid AS rel, r.name AS relation
+    SELECT pr.oid AS role_oid, r.oid AS rel
     FROM platform_roles pr
     CROSS JOIN rels r
     WHERE r.relkind IN ('r', 'p') AND r.relrowsecurity
@@ -511,7 +511,7 @@ platform_tables AS MATERIALIZED (
 -- objects are pinned and record no dependency), another relation (a view, or a table whose own
 -- policies read the tenant), or a type. The check cannot see what such an object does, so it
 -- cannot tell whether the expression reads the tenant setting.
-platform_policies AS MATERIALIZED (
+platform_policy_exprs AS MATERIALIZED (
     SELECT pol.polrelid, pol.polcmd::text AS polcmd, pol.polroles,
            pg_get_expr(pol.polqual, pol.polrelid) AS using_expr,
            pg_get_expr(coalesce(pol.polwithcheck, pol.polqual), pol.polrelid) AS check_expr,
@@ -524,44 +524,80 @@ platform_policies AS MATERIALIZED (
     WHERE $1 AND pol.polpermissive
 ),
 -- A command evaluates USING to filter rows (SELECT, UPDATE, DELETE) and WITH CHECK, or USING
--- when a policy has none, to check new rows (INSERT, UPDATE). A policy applies to a role that
--- has the privileges of (inherits) one of the policy's roles, or to every role (PUBLIC). Per
--- role, table, command, and side: how many expressions the permissive policies that apply to
--- the role give, and how many of them open the table beyond the session's tenant. These count
--- as opening nothing beyond it: an expression that names the tenant setting, calls
--- current_setting, or is false, and every expression of an opaque policy, since it may read
--- the setting where the check cannot see it. Any other expression counts as opening the table.
--- Counting an expression as opening nothing can only refuse more sessions, never accept one,
--- so an expression that reads the setting and still opens every row
+-- when a policy has none, to check new rows (INSERT, UPDATE). The five sides as bits: 1 SELECT,
+-- 2 INSERT, 4 UPDATE USING, 8 UPDATE WITH CHECK, 16 DELETE. A policy counts for its own
+-- command, and a FOR ALL policy for every command. Per policy: has, the sides it gives an
+-- expression; wider, the sides where that expression opens the table beyond the session's
+-- tenant. These count as opening nothing beyond it: an expression that names the tenant
+-- setting, calls current_setting, or is false, and every expression of an opaque policy, since
+-- it may read the setting where the check cannot see it. Any other expression counts as
+-- opening the table. Counting an expression as opening nothing can only refuse more sessions,
+-- never accept one, so an expression that reads the setting and still opens every row
 -- (`<tenant condition> OR true`) is refused too: the check does not try to tell such
 -- expressions apart.
-platform_sides AS (
-    SELECT t.role_oid, t.role_name, t.rel, t.relation, s.command, s.uses_qual,
-           count(e.expr) AS expressions,
-           count(e.expr) FILTER (WHERE e.expr <> $2 AND e.expr <> 'false'
-                                 AND strpos(e.expr, '''trustiot.tenant_id''') = 0
-                                 AND strpos(e.expr, 'current_setting(') = 0
-                                 AND NOT p.opaque) AS wider
-    FROM platform_tables t
-    CROSS JOIN (VALUES ('SELECT', 'r', true), ('INSERT', 'a', false), ('UPDATE', 'w', true),
-                       ('UPDATE', 'w', false), ('DELETE', 'd', true))
-               AS s(command, polcmd, uses_qual)
-    LEFT JOIN platform_policies p
-      ON p.polrelid = t.rel AND p.polcmd IN (s.polcmd, '*')
-         AND (0 = ANY (p.polroles)
-              OR EXISTS (SELECT 1 FROM unnest(p.polroles) AS role
-                         WHERE role <> 0 AND pg_has_role(t.role_oid, role, 'USAGE')))
+platform_policies AS MATERIALIZED (
+    SELECT e.polrelid, e.polroles, 0 = ANY (e.polroles) AS public,
+           CASE WHEN e.using_expr IS NOT NULL THEN s.using_sides ELSE 0 END
+           | CASE WHEN e.check_expr IS NOT NULL THEN s.check_sides ELSE 0 END AS has,
+           CASE WHEN e.using_expr <> $2 AND e.using_expr <> 'false'
+                     AND strpos(e.using_expr, '''trustiot.tenant_id''') = 0
+                     AND strpos(e.using_expr, 'current_setting(') = 0 AND NOT e.opaque
+                THEN s.using_sides ELSE 0 END
+           | CASE WHEN e.check_expr <> $2 AND e.check_expr <> 'false'
+                       AND strpos(e.check_expr, '''trustiot.tenant_id''') = 0
+                       AND strpos(e.check_expr, 'current_setting(') = 0 AND NOT e.opaque
+                  THEN s.check_sides ELSE 0 END AS wider
+    FROM platform_policy_exprs e
     CROSS JOIN LATERAL (
-        SELECT CASE WHEN s.uses_qual THEN p.using_expr ELSE p.check_expr END AS expr
-    ) AS e
-    GROUP BY t.role_oid, t.role_name, t.rel, t.relation, s.command, s.uses_qual
+        SELECT CASE e.polcmd WHEN 'r' THEN 1 WHEN 'w' THEN 4 WHEN 'd' THEN 16 WHEN '*' THEN 21
+                             ELSE 0 END AS using_sides,
+               CASE e.polcmd WHEN 'a' THEN 2 WHEN 'w' THEN 8 WHEN '*' THEN 10
+                             ELSE 0 END AS check_sides
+    ) AS s
+),
+-- A policy applies to a role that has the privileges of (inherits) one of the policy's roles,
+-- or to every role (PUBLIC). The sides that the PUBLIC policies give, per table: the same for
+-- every role, so they are worked out once.
+platform_public AS (
+    SELECT polrelid, bit_or(has) AS has, bit_or(wider) AS wider
+    FROM platform_policies
+    WHERE public
+    GROUP BY polrelid
+),
+-- Which platform role inherits which role a policy names, asked once per pair instead of
+-- once per table, command, and policy. A PUBLIC policy already applies to every role.
+platform_inherits AS MATERIALIZED (
+    SELECT pr.oid AS role_oid, named.role AS policy_role
+    FROM platform_roles pr
+    CROSS JOIN (SELECT DISTINCT role FROM platform_policies, unnest(polroles) AS role
+                WHERE NOT public) AS named
+    WHERE pg_has_role(pr.oid, named.role, 'USAGE')
+),
+-- The sides that the policies naming a role the platform role inherits give, per role and
+-- table.
+platform_named AS (
+    SELECT i.role_oid, p.polrelid, bit_or(p.has) AS has, bit_or(p.wider) AS wider
+    FROM platform_policies p
+    CROSS JOIN LATERAL unnest(p.polroles) AS named(role)
+    JOIN platform_inherits i ON i.policy_role = named.role
+    WHERE NOT p.public
+    GROUP BY i.role_oid, p.polrelid
 ),
 -- The commands only the tenant condition opens to the role: every side the command evaluates
 -- has an expression, and on at least one side none of them opens the table beyond the tenant.
+-- A role and table that no policy applies to has no expression, so nothing is tenant-only.
 platform_tenant_only AS MATERIALIZED (
-    SELECT role_oid, role_name, rel, relation, command FROM platform_sides
-    GROUP BY role_oid, role_name, rel, relation, command
-    HAVING bool_and(expressions > 0) AND bool_or(wider = 0)
+    SELECT t.role_oid, t.rel, c.command
+    FROM platform_tables t
+    LEFT JOIN platform_public pub ON pub.polrelid = t.rel
+    LEFT JOIN platform_named n ON n.role_oid = t.role_oid AND n.polrelid = t.rel
+    CROSS JOIN LATERAL (
+        SELECT coalesce(pub.has, 0) | coalesce(n.has, 0) AS has,
+               coalesce(pub.wider, 0) | coalesce(n.wider, 0) AS wider
+    ) AS m
+    JOIN (VALUES ('SELECT', 1), ('INSERT', 2), ('UPDATE', 12), ('DELETE', 16))
+         AS c(command, sides)
+      ON (m.has & c.sides) = c.sides AND (m.wider & c.sides) <> c.sides
 )
 SELECT problem, relation, role_name, command FROM (
     SELECT 1 AS rank, 'bypasses_rls' AS problem, NULL::text AS relation,
@@ -625,9 +661,12 @@ SELECT problem, relation, role_name, command FROM (
     -- The commands only the tenant condition opens to a platform role that the role may run,
     -- through a table or column privilege. DELETE has no column privilege, and NULLIF makes its
     -- column test NULL.
-    SELECT 4, 'platform_tenant_only', relation, role_name, command FROM platform_tenant_only
-    WHERE has_table_privilege(role_oid, rel, command)
-       OR coalesce(has_any_column_privilege(role_oid, rel, NULLIF(command, 'DELETE')), false)
+    SELECT 4, 'platform_tenant_only', r.name, pr.role_name, o.command
+    FROM platform_tenant_only o
+    JOIN platform_roles pr ON pr.oid = o.role_oid
+    JOIN rels r ON r.oid = o.rel
+    WHERE has_table_privilege(o.role_oid, o.rel, o.command)
+       OR coalesce(has_any_column_privilege(o.role_oid, o.rel, NULLIF(o.command, 'DELETE')), false)
 ) AS problems
 ORDER BY rank, relation, problem, role_name, command
 LIMIT 1

@@ -1,0 +1,22 @@
+// Extracts the probe outcomes (case, check result, rows reached, verdict, mismatch list) of the
+// two #366 probe binaries from an rcheck log, so that two runs can be diffed.
+const [log, out] = Bun.argv.slice(2);
+const lines = (await Bun.file(log).text()).split("\n");
+const keep: string[] = [];
+let binary = "";
+for (const line of lines) {
+  const running = line.match(/Running tests\/(verify_366\w*)\.rs/);
+  if (running) {
+    binary = running[1];
+    keep.push(`##### ${binary}`);
+    continue;
+  }
+  if (!binary.startsWith("verify_366")) continue;
+  if (
+    /^=== case |^  check \(Platform\)|^    \[|^      (no tenant|tenant A)|^  verdict|^=== mismatches|^  \d+\.\d+ /.test(line)
+  ) {
+    keep.push(line);
+  }
+}
+await Bun.write(out, keep.join("\n") + "\n");
+console.log(`${keep.length} lines`);

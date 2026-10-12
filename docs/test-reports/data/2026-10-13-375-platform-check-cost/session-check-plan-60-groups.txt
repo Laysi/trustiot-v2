@@ -1,0 +1,286 @@
+Limit (actual time=74.035..74.055 rows=0.00 loops=1)
+  Buffers: shared hit=9568
+  CTE rels
+    ->  Hash Join (actual time=0.482..0.843 rows=300.00 loops=1)
+          Hash Cond: (c.relnamespace = n_1.oid)
+          Buffers: shared hit=265
+          ->  Seq Scan on pg_class c (actual time=0.005..0.247 rows=513.00 loops=1)
+                Filter: (relkind = ANY ('{r,p,v,m,f}'::"char"[]))
+                Rows Removed by Filter: 1102
+                Buffers: shared hit=105
+          ->  Hash (actual time=0.009..0.009 rows=1.00 loops=1)
+                Buckets: 1024  Batches: 1  Memory Usage: 9kB
+                Buffers: shared hit=1
+                ->  Seq Scan on pg_namespace n_1 (actual time=0.004..0.004 rows=1.00 loops=1)
+                      Filter: ((nspname <> ALL ('{pg_catalog,information_schema}'::name[])) AND (nspname !~~ 'pg\_toast%'::text) AND (nspname !~~ 'pg\_temp%'::text))
+                      Rows Removed by Filter: 3
+                      Buffers: shared hit=1
+          SubPlan 2
+            ->  Index Scan using pg_attribute_relid_attnam_index on pg_attribute a (actual time=0.067..0.374 rows=600.00 loops=1)
+                  Index Cond: (attname = 'tenant_id'::name)
+                  Filter: ((NOT attisdropped) AND (attnum > 0))
+                  Index Searches: 1
+                  Buffers: shared hit=159
+  CTE tenant_data
+    ->  Recursive Union (actual time=0.001..0.443 rows=300.00 loops=1)
+          Storage: Memory  Maximum Storage: 42kB
+          Buffers: shared hit=89
+          ->  CTE Scan on rels rels_1 (actual time=0.001..0.021 rows=300.00 loops=1)
+                Filter: has_tenant
+                Storage: Memory  Maximum Storage: 34kB
+          ->  Hash Join (actual time=0.381..0.383 rows=0.00 loops=1)
+                Hash Cond: (d_1.refobjid = t.oid)
+                Buffers: shared hit=89
+                ->  Hash Join (actual time=0.124..0.339 rows=269.00 loops=1)
+                      Hash Cond: (d_1.objid = rw.oid)
+                      Join Filter: (rw.ev_class <> d_1.refobjid)
+                      Rows Removed by Join Filter: 151
+                      Buffers: shared hit=89
+                      ->  Bitmap Heap Scan on pg_depend d_1 (actual time=0.080..0.254 rows=420.00 loops=1)
+                            Recheck Cond: (refclassid = '1259'::oid)
+                            Filter: (classid = '2618'::oid)
+                            Rows Removed by Filter: 4061
+                            Heap Blocks: exact=53
+                            Buffers: shared hit=75
+                            ->  Bitmap Index Scan on pg_depend_reference_index (actual time=0.069..0.069 rows=5081.00 loops=1)
+                                  Index Cond: (refclassid = '1259'::oid)
+                                  Index Searches: 1
+                                  Buffers: shared hit=22
+                      ->  Hash (actual time=0.035..0.035 rows=147.00 loops=1)
+                            Buckets: 1024  Batches: 1  Memory Usage: 14kB
+                            Buffers: shared hit=14
+                            ->  Seq Scan on pg_rewrite rw (actual time=0.003..0.021 rows=147.00 loops=1)
+                                  Buffers: shared hit=14
+                ->  Hash (actual time=0.025..0.025 rows=300.00 loops=1)
+                      Buckets: 2048  Batches: 1  Memory Usage: 27kB
+                      ->  WorkTable Scan on tenant_data t (actual time=0.001..0.008 rows=300.00 loops=1)
+  CTE reachable
+    ->  Hash Right Semi Join (actual time=3.746..4.248 rows=300.00 loops=1)
+          Hash Cond: (tenant_data.oid = rels_2.oid)
+          Buffers: shared hit=1207
+          ->  CTE Scan on tenant_data (actual time=0.002..0.470 rows=300.00 loops=1)
+                Storage: Memory  Maximum Storage: 26kB
+                Buffers: shared hit=89
+          ->  Hash (actual time=3.734..3.734 rows=300.00 loops=1)
+                Buckets: 1024  Batches: 1  Memory Usage: 27kB
+                Buffers: shared hit=1118
+                ->  CTE Scan on rels rels_2 (actual time=0.019..3.630 rows=300.00 loops=1)
+                      Filter: (has_schema_privilege(relnamespace, 'USAGE'::text) AND (has_table_privilege(oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE'::text) OR has_any_column_privilege(oid, 'SELECT, INSERT, UPDATE'::text)))
+                      Storage: Memory  Maximum Storage: 34kB
+                      Buffers: shared hit=1118
+  CTE platform_roles
+    ->  Seq Scan on pg_authid (actual time=0.013..0.063 rows=61.00 loops=1)
+          Filter: pg_has_role(CURRENT_USER, oid, 'SET'::text)
+          Rows Removed by Filter: 19
+          Buffers: shared hit=2
+  CTE platform_tables
+    ->  Nested Loop (actual time=0.017..8.466 rows=18300.00 loops=1)
+          Join Filter: (has_schema_privilege(pr_1.oid, r_2.relnamespace, 'USAGE'::text) AND (has_table_privilege(pr_1.oid, r_2.oid, 'SELECT, INSERT, UPDATE, DELETE'::text) OR has_any_column_privilege(pr_1.oid, r_2.oid, 'SELECT, INSERT, UPDATE'::text)))
+          Buffers: shared hit=122
+          ->  CTE Scan on rels r_2 (actual time=0.001..0.141 rows=300.00 loops=1)
+                Filter: (relrowsecurity AND (relkind = ANY ('{r,p}'::"char"[])))
+                Storage: Memory  Maximum Storage: 34kB
+          ->  CTE Scan on platform_roles pr_1 (actual time=0.000..0.003 rows=61.00 loops=300)
+                Storage: Memory  Maximum Storage: 19kB
+                Buffers: shared hit=2
+  CTE platform_policy_exprs
+    ->  Seq Scan on pg_policy pol (actual time=0.051..5.036 rows=600.00 loops=1)
+          Filter: polpermissive
+          Buffers: shared hit=1916
+          SubPlan 8
+            ->  Index Scan using pg_depend_depender_index on pg_depend d_2 (actual time=0.001..0.001 rows=0.00 loops=600)
+                  Index Cond: ((classid = '3256'::oid) AND (objid = pol.oid))
+                  Filter: ((refclassid <> '1259'::oid) OR (refobjid <> pol.polrelid))
+                  Rows Removed by Filter: 2
+                  Index Searches: 600
+                  Buffers: shared hit=1801
+  CTE platform_policies
+    ->  CTE Scan on platform_policy_exprs e (actual time=0.057..5.564 rows=600.00 loops=1)
+          Storage: Memory  Maximum Storage: 178kB
+          Buffers: shared hit=1916
+  CTE platform_inherits
+    ->  Nested Loop (actual time=3.069..3.434 rows=121.00 loops=1)
+          Join Filter: pg_has_role(pr_2.oid, role.role, 'USAGE'::text)
+          Rows Removed by Join Filter: 3600
+          ->  CTE Scan on platform_roles pr_2 (actual time=0.000..0.004 rows=61.00 loops=1)
+                Storage: Memory  Maximum Storage: 19kB
+          ->  Materialize (actual time=0.050..0.052 rows=61.00 loops=61)
+                Storage: Memory  Maximum Storage: 18kB
+                ->  HashAggregate (actual time=3.064..3.068 rows=61.00 loops=1)
+                      Group Key: role.role
+                      Batches: 1  Memory Usage: 32kB
+                      ->  Nested Loop (actual time=0.007..2.017 rows=18300.00 loops=1)
+                            ->  CTE Scan on platform_policies (actual time=0.000..0.035 rows=300.00 loops=1)
+                                  Filter: (NOT public)
+                                  Rows Removed by Filter: 300
+                                  Storage: Memory  Maximum Storage: 127kB
+                            ->  Function Scan on unnest role (actual time=0.002..0.004 rows=61.00 loops=300)
+  CTE platform_tenant_only
+    ->  Nested Loop (actual time=45.000..45.002 rows=0.00 loops=1)
+          Join Filter: ((((COALESCE((bit_or(platform_policies_1.wider)), 0) | COALESCE((bit_or(p_2.wider)), 0)) & "*VALUES*".column2) <> "*VALUES*".column2) AND (((COALESCE((bit_or(platform_policies_1.has)), 0) | COALESCE((bit_or(p_2.has)), 0)) & "*VALUES*".column2) = "*VALUES*".column2))
+          Rows Removed by Join Filter: 73200
+          Buffers: shared hit=2038
+          ->  Values Scan on "*VALUES*" (actual time=0.002..0.006 rows=4.00 loops=1)
+          ->  Materialize (actual time=8.400..10.472 rows=18300.00 loops=4)
+                Storage: Memory  Maximum Storage: 1114kB
+                Buffers: shared hit=2038
+                ->  Hash Right Join (actual time=33.597..37.721 rows=18300.00 loops=1)
+                      Hash Cond: ((i.role_oid = t_1.role_oid) AND (p_2.polrelid = t_1.rel))
+                      Buffers: shared hit=2038
+                      ->  HashAggregate (actual time=13.232..14.875 rows=18300.00 loops=1)
+                            Group Key: i.role_oid, p_2.polrelid
+                            Batches: 1  Memory Usage: 1561kB
+                            ->  Hash Join (actual time=3.477..8.463 rows=36300.00 loops=1)
+                                  Hash Cond: (named.role = i.policy_role)
+                                  ->  Nested Loop (actual time=0.010..2.558 rows=18300.00 loops=1)
+                                        ->  CTE Scan on platform_policies p_2 (actual time=0.001..0.055 rows=300.00 loops=1)
+                                              Filter: (NOT public)
+                                              Rows Removed by Filter: 300
+                                              Storage: Memory  Maximum Storage: 127kB
+                                        ->  Function Scan on unnest named (actual time=0.002..0.005 rows=61.00 loops=300)
+                                  ->  Hash (actual time=3.458..3.458 rows=121.00 loops=1)
+                                        Buckets: 1024  Batches: 1  Memory Usage: 13kB
+                                        ->  CTE Scan on platform_inherits i (actual time=3.070..3.448 rows=121.00 loops=1)
+                                              Storage: Memory  Maximum Storage: 20kB
+                      ->  Hash (actual time=20.357..20.358 rows=18300.00 loops=1)
+                            Buckets: 32768 (originally 1024)  Batches: 1 (originally 1)  Memory Usage: 1114kB
+                            Buffers: shared hit=2038
+                            ->  Hash Right Join (actual time=17.835..18.741 rows=18300.00 loops=1)
+                                  Hash Cond: (platform_policies_1.polrelid = t_1.rel)
+                                  Buffers: shared hit=2038
+                                  ->  HashAggregate (actual time=5.853..5.881 rows=300.00 loops=1)
+                                        Group Key: platform_policies_1.polrelid
+                                        Batches: 1  Memory Usage: 72kB
+                                        Buffers: shared hit=1916
+                                        ->  CTE Scan on platform_policies platform_policies_1 (actual time=0.058..5.731 rows=300.00 loops=1)
+                                              Filter: public
+                                              Rows Removed by Filter: 300
+                                              Storage: Memory  Maximum Storage: 127kB
+                                              Buffers: shared hit=1916
+                                  ->  Hash (actual time=11.974..11.974 rows=18300.00 loops=1)
+                                        Buckets: 32768 (originally 1024)  Batches: 1 (originally 1)  Memory Usage: 971kB
+                                        Buffers: shared hit=122
+                                        ->  CTE Scan on platform_tables t_1 (actual time=0.019..10.829 rows=18300.00 loops=1)
+                                              Storage: Memory  Maximum Storage: 828kB
+                                              Buffers: shared hit=122
+  ->  Sort (actual time=74.035..74.042 rows=0.00 loops=1)
+        Sort Key: "*SELECT* 1".rank, "*SELECT* 1".relation COLLATE "C", "*SELECT* 1".problem, "*SELECT* 1".role_name COLLATE "C", "*SELECT* 1".command
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=9568
+        ->  Append (actual time=73.999..74.006 rows=0.00 loops=1)
+              Buffers: shared hit=9562
+              ->  Subquery Scan on "*SELECT* 1" (actual time=0.625..0.625 rows=0.00 loops=1)
+                    Buffers: shared hit=65
+                    ->  Result (actual time=0.624..0.625 rows=0.00 loops=1)
+                          One-Time Filter: (InitPlan 13).col1
+                          Buffers: shared hit=65
+                          InitPlan 13
+                            ->  Seq Scan on pg_authid pg_authid_1 (actual time=0.623..0.623 rows=0.00 loops=1)
+                                  Filter: ((rolsuper OR rolbypassrls) AND pg_has_role(CURRENT_USER, oid, 'MEMBER'::text))
+                                  Rows Removed by Filter: 80
+                                  Buffers: shared hit=65
+              ->  Subquery Scan on "*SELECT* 2" (actual time=0.002..0.002 rows=0.00 loops=1)
+                    ->  Result (actual time=0.002..0.002 rows=0.00 loops=1)
+                          One-Time Filter: (NULLIF(current_setting('trustiot.tenant_id'::text, true), ''::text) IS NOT NULL)
+              ->  Subquery Scan on "*SELECT* 3" (actual time=0.951..0.952 rows=0.00 loops=1)
+                    Buffers: shared hit=265
+                    ->  CTE Scan on rels (actual time=0.951..0.951 rows=0.00 loops=1)
+                          Filter: pg_has_role(CURRENT_USER, relowner, 'MEMBER'::text)
+                          Rows Removed by Filter: 300
+                          Storage: Memory  Maximum Storage: 34kB
+                          Buffers: shared hit=265
+              ->  Subquery Scan on "*SELECT* 4" (actual time=4.300..4.300 rows=0.00 loops=1)
+                    Buffers: shared hit=1207
+                    ->  CTE Scan on reachable (actual time=4.299..4.299 rows=0.00 loops=1)
+                          Filter: ((NOT relrowsecurity) AND (relkind = ANY ('{r,p}'::"char"[])))
+                          Rows Removed by Filter: 300
+                          Storage: Memory  Maximum Storage: 34kB
+                          Buffers: shared hit=1207
+              ->  Subquery Scan on "*SELECT* 5" (actual time=22.817..22.818 rows=0.00 loops=1)
+                    Buffers: shared hit=5883
+                    ->  Nested Loop (actual time=22.816..22.818 rows=0.00 loops=1)
+                          Buffers: shared hit=5883
+                          InitPlan 15
+                            ->  Seq Scan on pg_authid pg_authid_2 (actual time=0.010..0.019 rows=1.00 loops=1)
+                                  Filter: (rolname = CURRENT_USER)
+                                  Rows Removed by Filter: 79
+                                  Buffers: shared hit=2
+                          ->  CTE Scan on reachable r (actual time=0.001..0.074 rows=300.00 loops=1)
+                                Filter: (relrowsecurity AND (relkind = ANY ('{r,p}'::"char"[])))
+                                Storage: Memory  Maximum Storage: 34kB
+                          ->  Bitmap Heap Scan on pg_policy p (actual time=0.073..0.073 rows=0.00 loops=300)
+                                Recheck Cond: (polrelid = r.oid)
+                                Filter: (polpermissive AND (((polqual IS NULL) AND (polwithcheck IS NULL)) OR ((polqual IS NOT NULL) AND (pg_get_expr(polqual, polrelid) <> '(tenant_id = (NULLIF(current_setting(''trustiot.tenant_id''::text, true), ''''::text))::uuid)'::text)) OR ((polwithcheck IS NOT NULL) AND (pg_get_expr(polwithcheck, polrelid) <> '(tenant_id = (NULLIF(current_setting(''trustiot.tenant_id''::text, true), ''''::text))::uuid)'::text))) AND (('0'::oid = ANY (polroles)) OR ((InitPlan 15).col1 <> ALL (polroles))) AND (('0'::oid = ANY (polroles)) OR EXISTS(SubPlan 14)))
+                                Rows Removed by Filter: 2
+                                Heap Blocks: exact=678
+                                Buffers: shared hit=5883
+                                ->  Bitmap Index Scan on pg_policy_polrelid_polname_index (actual time=0.003..0.003 rows=2.85 loops=300)
+                                      Index Cond: (polrelid = r.oid)
+                                      Index Searches: 300
+                                      Buffers: shared hit=600
+                                SubPlan 14
+                                  ->  Function Scan on unnest role_1 (never executed)
+                                        Filter: ((role <> '0'::oid) AND pg_has_role(CURRENT_USER, role, 'MEMBER'::text))
+              ->  Subquery Scan on "*SELECT* 6" (actual time=0.012..0.012 rows=0.00 loops=1)
+                    ->  CTE Scan on reachable reachable_1 (actual time=0.011..0.012 rows=0.00 loops=1)
+                          Filter: ((relkind = 'v'::"char") AND (NOT EXISTS(SubPlan 16)))
+                          Rows Removed by Filter: 300
+                          Storage: Memory  Maximum Storage: 34kB
+                          SubPlan 16
+                            ->  Function Scan on unnest option (never executed)
+                                  Filter: (lower(option) = ANY ('{security_invoker=true,security_invoker=on,security_invoker=yes,security_invoker=1}'::text[]))
+              ->  Subquery Scan on "*SELECT* 7" (actual time=0.014..0.014 rows=0.00 loops=1)
+                    ->  CTE Scan on reachable reachable_2 (actual time=0.013..0.013 rows=0.00 loops=1)
+                          Filter: (relkind = ANY ('{m,f}'::"char"[]))
+                          Rows Removed by Filter: 300
+                          Storage: Memory  Maximum Storage: 34kB
+              ->  Subquery Scan on "*SELECT* 8" (actual time=0.162..0.163 rows=0.00 loops=1)
+                    Buffers: shared hit=102
+                    ->  Nested Loop Anti Join (actual time=0.162..0.163 rows=0.00 loops=1)
+                          Buffers: shared hit=102
+                          ->  Nested Loop (actual time=0.162..0.162 rows=0.00 loops=1)
+                                Join Filter: (p_1.pronamespace = n.oid)
+                                Buffers: shared hit=102
+                                ->  Seq Scan on pg_proc p_1 (actual time=0.161..0.161 rows=0.00 loops=1)
+                                      Filter: (prosecdef AND has_function_privilege(oid, 'EXECUTE'::text) AND (NOT pg_has_role(CURRENT_USER, proowner, 'MEMBER'::text)))
+                                      Rows Removed by Filter: 3413
+                                      Buffers: shared hit=102
+                                ->  Seq Scan on pg_namespace n (never executed)
+                                      Filter: ((nspname <> ALL ('{pg_catalog,information_schema}'::name[])) AND has_schema_privilege(oid, 'USAGE'::text))
+                          ->  Index Scan using pg_depend_depender_index on pg_depend d (never executed)
+                                Index Cond: ((classid = '1255'::oid) AND (objid = p_1.oid))
+                                Filter: (deptype = 'e'::"char")
+                                Index Searches: 0
+              ->  Subquery Scan on "*SELECT* 9" (actual time=0.025..0.025 rows=0.00 loops=1)
+                    Buffers: shared hit=2
+                    ->  Result (actual time=0.024..0.024 rows=0.00 loops=1)
+                          One-Time Filter: has_database_privilege((current_database())::text, 'TEMPORARY'::text)
+                          Buffers: shared hit=2
+              ->  Subquery Scan on "*SELECT* 10" (actual time=0.080..0.080 rows=0.00 loops=1)
+                    ->  CTE Scan on reachable reachable_3 (actual time=0.080..0.080 rows=0.00 loops=1)
+                          Filter: ((relkind = ANY ('{r,p}'::"char"[])) AND has_table_privilege(oid, 'TRUNCATE'::text))
+                          Rows Removed by Filter: 300
+                          Storage: Memory  Maximum Storage: 34kB
+              ->  Subquery Scan on "*SELECT* 11" (actual time=45.008..45.009 rows=0.00 loops=1)
+                    Buffers: shared hit=2038
+                    ->  Nested Loop (actual time=45.008..45.008 rows=0.00 loops=1)
+                          Join Filter: (o.role_oid = pr.oid)
+                          Buffers: shared hit=2038
+                          ->  Hash Join (actual time=45.007..45.007 rows=0.00 loops=1)
+                                Hash Cond: (r_1.oid = o.rel)
+                                Buffers: shared hit=2038
+                                ->  CTE Scan on rels r_1 (actual time=0.000..0.000 rows=1.00 loops=1)
+                                      Storage: Memory  Maximum Storage: 34kB
+                                ->  Hash (actual time=45.001..45.001 rows=0.00 loops=1)
+                                      Buckets: 1024  Batches: 1  Memory Usage: 8kB
+                                      Buffers: shared hit=2038
+                                      ->  CTE Scan on platform_tenant_only o (actual time=45.000..45.001 rows=0.00 loops=1)
+                                            Filter: (has_table_privilege(role_oid, rel, command) OR COALESCE(has_any_column_privilege(role_oid, rel, NULLIF(command, 'DELETE'::text)), false))
+                                            Storage: Memory  Maximum Storage: 17kB
+                                            Buffers: shared hit=2038
+                          ->  CTE Scan on platform_roles pr (never executed)
+                                Storage: Memory  Maximum Storage: 19kB
+Planning:
+  Buffers: shared hit=663
+Planning Time: 4.637 ms
+Execution Time: 75.142 ms
