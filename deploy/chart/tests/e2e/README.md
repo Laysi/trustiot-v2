@@ -1,4 +1,4 @@
-# 叢集測試（入口 gateway、服務間授權）
+# 叢集測試（入口 gateway、服務間授權、日誌管線）
 
 兩個測試共用 `cluster.ts`（環境變數、`.prototools` 鎖定的 helm 與 kubectl、不碰既有安裝的 `helm install`）：
 
@@ -6,6 +6,8 @@
 | --- | --- | --- |
 | `ingress.e2e.ts` | 入口 gateway：cookie 驗證、例外路徑、標頭、路徑繞過、身分服務停機 | Laysi/trustiot-v2#62 |
 | `mesh.e2e.ts` | 服務間授權：清單內的呼叫放行、清單外的被拒，AuthorizationPolicy 與 NetworkPolicy 各自生效，預設拒絕下健康檢查通過 | Laysi/trustiot-v2#63 |
+
+`otel.e2e.ts`（日誌管線，Laysi/trustiot-v2#73）不經入口 gateway，有自己的環境變數，不用 `cluster.ts`，見最後一節。
 
 ## 入口 gateway（`ingress.e2e.ts`）
 
@@ -29,7 +31,7 @@ nightly workflow（Laysi/trustiot-v2#69）每晚在 k3d 叢集上以兩種型態
 | `assets` | traefik/whoami，以 digest 固定 | 需要 cookie 的後端（`hosts.app` 的 `/` 全包路由），回應帶 `Name: protected-backend` |
 | `certs`、`mqtt-bridge` | 同上 | 例外路徑的後端 |
 
-設定在 `values-e2e.yaml`。身分服務的真實版本是 Laysi/trustiot-v2#61，接上後的端到端驗證在 Laysi/trustiot-v2#77。
+設定在 `values-e2e.yaml`。真實的身分服務在 `services/identity`（Laysi/trustiot-v2#61），回應表與替身相同（允許時回 200 並帶 `x-internal-identity`、無效回 401、逾時由入口回 503），但 cookie 是 `__Host-trustiot-session`，還會依 `ingress.routes` 決定 token 的受眾、對不到路由回 403，也需要 Postgres 與簽章私鑰；換成真實版本的端到端驗證在 Laysi/trustiot-v2#77。
 
 ### 前置條件
 
@@ -140,3 +142,53 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/mesh.e2e.ts
 邏輯有不需要叢集的單元測試（`tunnel-recovery.test.ts`、`raw-client.test.ts`），由 `bun test deploy/chart` 執行。測試用真正的子行程（`fake-port-forward.ts`，一個 TCP proxy）扮演 kubectl：它在收到請求時切斷連線，300 毫秒後才結束行程，重現上述競態。
 
 給通道行程用的本機埠一律由 `ports.ts` 的 `freePort()` 取得，不要自己 `Bun.listen` 再 `stop`：在 WSL2 上 `stop(true)` 回傳時監聽 socket 還沒關，要等事件迴圈再跑一輪才會關。剛啟動通道就探測該埠的程式會連到這個將死的監聽，誤以為通道已就緒，再把請求送進即將關閉的 socket（`no HTTP response … ""`）。`freePort()` 等到連線被拒絕才回傳（Laysi/trustiot-v2#288，`docs/test-reports/2026-10-11-288-tunnel-recovery-wsl.md`）。
+
+## 日誌管線（`otel.e2e.ts`）
+
+`otel.e2e.ts` 驗證決策 22 的日誌管線（Laysi/trustiot-v2#73）：以地端型態加 `values-otel-e2e.yaml` 安裝 chart（叢集內 ClickHouse、OpenTelemetry collector，`assets` 換成 `crates/service-kit` 的 example-service），另外部署一個替身 SIEM（同一個 collector 映像，只收帶 Bearer token 的 OTLP/HTTP，把收到的資料印到 stdout），然後檢查：
+
+- example-service 處理一個帶 `traceparent` 的請求後，ClickHouse 的 `trustiot_logs.otel_logs` 出現帶同一個 trace id 的結構化紀錄（服務名稱、等級、method、路由、狀態碼），`otel_traces` 有這個請求的 span；請求 body 裡的 email 與密碼不在任何一筆紀錄裡。
+- 兩張日誌表都是 MergeTree，從伺服器讀回 `TTL ReceivedAt + toIntervalDay(30)`。
+- 替身 SIEM 收到同一個 trace id 的紀錄；不帶標頭送給它時回 401，所以收到的資料是 collector 以 Secret 裡的標頭送來的。
+- 直接以 OTLP 送給 collector 含 email、Bearer token、JWT、密碼、電話與 request body 的日誌與 span 後，ClickHouse 與 SIEM 裡的紀錄都已遮蔽（`****`），任何一個原始值都找不到。
+- collector 的 pod 在 restricted 的 namespace 裡執行，安全設定符合 restricted Pod Security Standard。
+
+安裝分兩步：先只裝 ClickHouse，以 bootstrap 管理帳號在 pod 內套用 `services/ingest/migrations/clickhouse/` 並建立 collector 的帳號（migration Job，Laysi/trustiot-v2#60，之後會做這一步），再 `helm upgrade` 開啟 collector、轉送與 example-service。所有 Secret（ClickHouse 管理帳號、collector 帳號、SIEM token）每次執行重新產生，名稱帶隨機字尾，密碼只寫在本機暫存目錄的檔案與 Secret 裡，不出現在指令列；SQL 經 stdin 送進 pod，管理帳號密碼不離開 pod。結束時移除 release、ClickHouse 的 PVC、替身 SIEM 與這次建立的 Secret。
+
+前置條件：
+
+1. namespace 已建立，建議設 Pod Security `restricted`；不需要 Istio 的 ext_authz provider（測試不經入口 gateway），但 chart 一定會產生入口的 Gateway，叢集要有 Gateway API CRD 與 Istio。測試的身分要能在這個 namespace 管理 chart 的物件，並能 `exec` 進 pod 與 `port-forward`。
+2. example-service 的映像（叢集節點的架構，實驗機是 arm64）要在叢集拉得到。aarch64 的執行檔在本機交叉編譯（musl、靜態連結，只用 Rust 工具鏈內附的 `rust-lld`），再在節點上建映像匯入 containerd：
+
+   ```sh
+   rustup target add aarch64-unknown-linux-musl
+   CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld \
+   CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C linker-flavor=ld.lld -C link-self-contained=yes" \
+     cargo build --locked --release --target aarch64-unknown-linux-musl -p service-kit --bin example-service
+   # 把 target/aarch64-unknown-linux-musl/release/example-service 與 example-service/Containerfile 放進同一個目錄，在節點上：
+   podman build --platform linux/arm64 -t localhost/trustiot-e2e/example-service:73 .
+   podman save --format oci-archive -o example-service.tar localhost/trustiot-e2e/example-service:73
+   sudo k3s ctr -n k8s.io images import example-service.tar
+   ```
+
+3. collector 與 ClickHouse 的映像以 `values.yaml` 的 digest 從 Docker Hub 拉取。
+4. 本機有 `proto install` 裝好的 helm 與 kubectl。
+
+執行（在 repo 根目錄）：
+
+```sh
+E2E_NAMESPACE=e2e-73 \
+E2E_SERVICE_IMAGE=localhost/trustiot-e2e/example-service:73 \
+E2E_IMAGE_PULL_POLICY=Never \
+bun test --timeout 900000 ./deploy/chart/tests/e2e/otel.e2e.ts
+```
+
+| 變數 | 預設 | 說明 |
+| --- | --- | --- |
+| `E2E_NAMESPACE` | 必填 | 測試用的 namespace，必須已存在 |
+| `E2E_SERVICE_IMAGE` | 必填 | example-service 的映像，`repository:tag` 或加上 `@sha256:…` |
+| `E2E_IMAGE_PULL_POLICY` | `IfNotPresent` | 匯入節點的映像用 `Never` |
+| `E2E_KUBECONTEXT` | 目前的 context | kubeconfig 裡的 context |
+| `E2E_RELEASE` | `trustiot` | helm release 名稱；已經存在時直接失敗 |
+| `E2E_REPORT_DIR` | 空 | 設定時把查到的紀錄、TTL 與 SIEM 的摘錄寫成 `otel-e2e.json` |
+| `E2E_KEEP` | 空 | `1` 時測完不移除任何東西，方便查看 |

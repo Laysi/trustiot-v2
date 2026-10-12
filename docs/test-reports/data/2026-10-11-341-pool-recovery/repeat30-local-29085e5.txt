@@ -1,0 +1,396 @@
+# bash rcheck.sh 341 'bash checks.sh' (local queue, CI=1): repeat30.sh output, then each run's test summary lines
+commit: 29085e56181a1486c30f18b40df21964a0f5fbe6 (plus working tree changes: 0 files)
+CI=1 uptime:  23:41:15 up 7 days,  9:09,  1 user,  load average: 0.62, 2.67, 3.79
+  Executable tests/ext_authz.rs (target/debug/deps/ext_authz-de24672821de6e94)
+run  1 ok    14442 ms  load 0.99
+run  2 ok    14232 ms  load 0.84
+run  3 ok    13665 ms  load 0.96
+run  4 ok    14084 ms  load 0.90
+run  5 ok    13702 ms  load 1.07
+run  6 ok    13662 ms  load 0.90
+run  7 ok    14037 ms  load 0.92
+run  8 ok    13989 ms  load 0.85
+run  9 ok    14168 ms  load 0.88
+run 10 ok    13665 ms  load 1.65
+run 11 ok    14123 ms  load 1.63
+run 12 ok    14012 ms  load 1.56
+run 13 ok    14123 ms  load 1.35
+run 14 ok    13962 ms  load 1.12
+run 15 ok    14108 ms  load 1.79
+run 16 ok    14064 ms  load 1.52
+run 17 ok    13954 ms  load 1.47
+run 18 ok    14078 ms  load 1.29
+run 19 ok    14220 ms  load 1.15
+run 20 ok    13809 ms  load 1.13
+run 21 ok    13254 ms  load 0.96
+run 22 ok    13120 ms  load 0.88
+run 23 ok    13266 ms  load 0.83
+run 24 ok    13453 ms  load 0.70
+run 25 ok    13394 ms  load 0.68
+run 26 ok    13310 ms  load 1.04
+run 27 ok    13331 ms  load 1.62
+run 28 ok    13246 ms  load 1.56
+run 29 ok    13154 ms  load 1.43
+run 30 ok    13262 ms  load 1.29
+passed 30 of 30
+
+## run 1
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:41:24.505561Z" "the database connections are open" null
+  "2026-10-11T15:41:26.506740Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:41:27.689015Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.016114452s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:41:24.506487Z" "the database connections are open" null
+  "2026-10-11T15:41:28.511990Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:41:30.153088Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 14.15s
+## run 2
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:41:38.612971Z" "the database connections are open" null
+  "2026-10-11T15:41:40.614296Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:41:41.747614Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.01582905s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:41:38.614502Z" "the database connections are open" null
+  "2026-10-11T15:41:42.620565Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:41:44.268041Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 14.04s
+## run 3
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:41:52.319731Z" "the database connections are open" null
+  "2026-10-11T15:41:54.321058Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:41:55.454627Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.015994094s after the proxy resumed, 7 connections in all
+  "2026-10-11T15:41:52.315234Z" "the database connections are open" null
+  "2026-10-11T15:41:56.318292Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:41:57.960474Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.51s
+## run 4
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:42:06.441270Z" "the database connections are open" null
+  "2026-10-11T15:42:08.442576Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:42:09.626429Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.015484s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:42:06.340792Z" "the database connections are open" null
+  "2026-10-11T15:42:10.346927Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:42:12.041910Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.92s
+## run 5
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:42:20.087764Z" "the database connections are open" null
+  "2026-10-11T15:42:22.089915Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:42:23.220301Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.015660413s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:42:20.087364Z" "the database connections are open" null
+  "2026-10-11T15:42:24.091895Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:42:25.734330Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.55s
+## run 6
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:42:33.685766Z" "the database connections are open" null
+  "2026-10-11T15:42:35.687295Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:42:36.820716Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.016228056s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:42:33.719040Z" "the database connections are open" null
+  "2026-10-11T15:42:37.723593Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:42:39.367846Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.50s
+## run 7
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:42:47.784583Z" "the database connections are open" null
+  "2026-10-11T15:42:49.785909Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:42:50.955524Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.017561076s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:42:47.784728Z" "the database connections are open" null
+  "2026-10-11T15:42:51.789962Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:42:53.591168Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.84s
+## run 8
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:43:01.744467Z" "the database connections are open" null
+  "2026-10-11T15:43:03.745555Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:43:04.876727Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.016709204s after the proxy resumed, 7 connections in all
+  "2026-10-11T15:43:01.741472Z" "the database connections are open" null
+  "2026-10-11T15:43:05.746686Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:43:07.499526Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.80s
+## run 9
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:43:15.959635Z" "the database connections are open" null
+  "2026-10-11T15:43:17.961000Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:43:19.196975Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.017780092s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:43:15.959604Z" "the database connections are open" null
+  "2026-10-11T15:43:19.963802Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:43:21.608391Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.99s
+## run 10
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:43:29.639401Z" "the database connections are open" null
+  "2026-10-11T15:43:31.640802Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:43:32.876499Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.015885431s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:43:29.638156Z" "the database connections are open" null
+  "2026-10-11T15:43:33.644136Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:43:35.291397Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.51s
+## run 11
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:43:43.655006Z" "the database connections are open" null
+  "2026-10-11T15:43:45.656983Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:43:46.790336Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.015345676s after the proxy resumed, 7 connections in all
+  "2026-10-11T15:43:43.712873Z" "the database connections are open" null
+  "2026-10-11T15:43:47.718819Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:43:49.361512Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.95s
+## run 12
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:43:57.710490Z" "the database connections are open" null
+  "2026-10-11T15:43:59.711853Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:44:00.950195Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.01674106s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:43:57.701454Z" "the database connections are open" null
+  "2026-10-11T15:44:01.708276Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:44:03.350873Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.83s
+## run 13
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:44:11.898425Z" "the database connections are open" null
+  "2026-10-11T15:44:13.899347Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:44:15.031498Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.016071684s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:44:11.901564Z" "the database connections are open" null
+  "2026-10-11T15:44:15.905883Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:44:17.497523Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.93s
+## run 14
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:44:25.841327Z" "the database connections are open" null
+  "2026-10-11T15:44:27.843052Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:44:29.128413Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.017076732s after the proxy resumed, 7 connections in all
+  "2026-10-11T15:44:25.850083Z" "the database connections are open" null
+  "2026-10-11T15:44:29.853913Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:44:31.500677Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.80s
+## run 15
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:44:39.839449Z" "the database connections are open" null
+  "2026-10-11T15:44:41.840272Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:44:43.022625Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.034667739s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:44:39.846469Z" "the database connections are open" null
+  "2026-10-11T15:44:43.849652Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:44:45.551041Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.91s
+## run 16
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:44:54.016022Z" "the database connections are open" null
+  "2026-10-11T15:44:56.016872Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:44:57.144776Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.015688616s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:44:54.022184Z" "the database connections are open" null
+  "2026-10-11T15:44:58.026651Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:44:59.670809Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.84s
+## run 17
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:45:07.963842Z" "the database connections are open" null
+  "2026-10-11T15:45:09.965184Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:45:11.202132Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.016509892s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:45:07.911663Z" "the database connections are open" null
+  "2026-10-11T15:45:11.916207Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:45:13.610016Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.76s
+## run 18
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:45:22.029198Z" "the database connections are open" null
+  "2026-10-11T15:45:24.030682Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:45:25.163227Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.015987385s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:45:22.033520Z" "the database connections are open" null
+  "2026-10-11T15:45:26.038732Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:45:27.735279Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.89s
+## run 19
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:45:36.272541Z" "the database connections are open" null
+  "2026-10-11T15:45:38.274200Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:45:39.509488Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.028587369s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:45:36.262705Z" "the database connections are open" null
+  "2026-10-11T15:45:40.268765Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:45:41.960233Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 14.04s
+## run 20
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:45:50.109036Z" "the database connections are open" null
+  "2026-10-11T15:45:52.113853Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:45:53.350055Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.017811786s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:45:50.103350Z" "the database connections are open" null
+  "2026-10-11T15:45:54.108513Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:45:55.755247Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.63s
+## run 21
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:46:03.335364Z" "the database connections are open" null
+  "2026-10-11T15:46:05.337039Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:46:06.626416Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.018398858s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:46:03.318017Z" "the database connections are open" null
+  "2026-10-11T15:46:07.323714Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:46:08.966349Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.10s
+## run 22
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:46:16.462355Z" "the database connections are open" null
+  "2026-10-11T15:46:18.464595Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:46:19.594311Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.017254095s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:46:16.462265Z" "the database connections are open" null
+  "2026-10-11T15:46:20.468390Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:46:22.115754Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 12.97s
+## run 23
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:46:29.713387Z" "the database connections are open" null
+  "2026-10-11T15:46:31.714150Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:46:32.845110Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.017918237s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:46:29.707968Z" "the database connections are open" null
+  "2026-10-11T15:46:33.712828Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:46:35.408229Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.08s
+## run 24
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:46:43.169304Z" "the database connections are open" null
+  "2026-10-11T15:46:45.171134Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:46:46.303089Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.017863446s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:46:43.161147Z" "the database connections are open" null
+  "2026-10-11T15:46:47.165219Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:46:48.812712Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.27s
+## run 25
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:46:56.564596Z" "the database connections are open" null
+  "2026-10-11T15:46:58.566251Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:46:59.695865Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.016799829s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:46:56.564874Z" "the database connections are open" null
+  "2026-10-11T15:47:00.569798Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:47:02.371560Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.24s
+## run 26
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:47:09.884569Z" "the database connections are open" null
+  "2026-10-11T15:47:11.886023Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:47:13.020086Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.017951289s after the proxy resumed, 7 connections in all
+  "2026-10-11T15:47:09.843469Z" "the database connections are open" null
+  "2026-10-11T15:47:13.848659Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:47:15.548295Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.15s
+## run 27
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:47:23.157816Z" "the database connections are open" null
+  "2026-10-11T15:47:25.159630Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:47:26.290900Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.01747007s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:47:23.162338Z" "the database connections are open" null
+  "2026-10-11T15:47:27.166513Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:47:28.810852Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.14s
+## run 28
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:47:36.507077Z" "the database connections are open" null
+  "2026-10-11T15:47:38.508603Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:47:39.640793Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.018126176s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:47:36.429131Z" "the database connections are open" null
+  "2026-10-11T15:47:40.434860Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:47:42.184610Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.05s
+## run 29
+keep-warm round: 3 connections at ready, 4 opened after the cut
+  "2026-10-11T15:47:49.596419Z" "the database connections are open" null
+  "2026-10-11T15:47:51.597849Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:47:52.761237Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.017288793s after the proxy resumed, 7 connections in all
+  "2026-10-11T15:47:49.596603Z" "the database connections are open" null
+  "2026-10-11T15:47:53.601916Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:47:55.245393Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.00s
+## run 30
+keep-warm round: 3 connections at ready, 3 opened after the cut
+  "2026-10-11T15:48:02.862477Z" "the database connections are open" null
+  "2026-10-11T15:48:04.864358Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:48:05.997919Z" "the database connections are open" null
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+slow connect: 3 connections at ready, ready again 2.017692997s after the proxy resumed, 6 connections in all
+  "2026-10-11T15:48:02.868833Z" "the database connections are open" null
+  "2026-10-11T15:48:06.873724Z" "cannot keep the database connections open; not ready" "database error: ... (peer closed the TLS connection)"
+  "2026-10-11T15:48:08.516129Z" "the database connections are open" null
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.11s

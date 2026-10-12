@@ -49,7 +49,7 @@ chart 的 AuthorizationPolicy（CUSTOM）以名稱 `ingress.authzProvider`（預
 | --- | --- | --- |
 | `failOpen` | `false` | 身分服務無法連線或出錯時拒絕請求，不放行 |
 | `timeout` | `0.5s` | Istio 預設 600 秒；身分服務卡住時，請求在 0.5 秒內被拒絕 |
-| `statusOnError` | `"503"` | 預設 403 與「沒有權限」相同；503 讓前端分得出「服務暫時不可用」與「該重新登入」（401） |
+| `statusOnError` | `"503"` | 預設 403 與「沒有權限」相同；503 讓前端分得出「服務暫時不可用」與「該重新登入」（401）。Envoy 把身分服務回的 5xx 也當成出錯，所以身分服務查不到資料庫時回 503，入口一樣回這個值（經入口的實測在 Laysi/trustiot-v2#77） |
 | `pathPrefix` | `/internal/ext-authz` | 身分服務的檢查端點，入口在後面接上原始路徑；入口不路由 `/internal`，外面呼叫不到 |
 | `includeRequestHeadersInCheck` | `[cookie]` | 只把 cookie 交給身分服務（Host、方法、路徑與 Authorization 一律附帶） |
 | `headersToUpstreamOnAllow` | `[x-internal-identity]` | 允許時以身分服務回的值覆寫用戶端帶來的同名標頭，所以身分服務允許時一定要回這個標頭（決策 27） |

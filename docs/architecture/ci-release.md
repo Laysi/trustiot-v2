@@ -96,7 +96,7 @@ Laysi/trustiot-v2#70 建立了 `.sops.yaml`（規則：`deploy/flux/clusters/saa
 | 全部 | `.github/workflows/ci.yml`、`.github/actions/` 下的任何檔案、`scripts/ci/changes.ts` 本身與它直接或間接 import 的 repo 內檔案（目前是 `scripts/release/lib.ts`，推到 main 時由它挑出比較的基準 commit）、`.prototools`、`.proto/` 下的任何檔案（`rust`、`cargo-deny`、`bun`、`helm`、`kubeconform` 的版本都從這裡來）有變動 |
 | `rust` | 預設執行，只有在每個變動的檔案都屬於下列「`rust` 不讀的路徑」時才略過：`docs/`、`deploy/`（`deploy/chart/values.yaml` 除外，`crates/service-kit/tests/chart_contract.rs` 讀它）、`scripts/`、`frontend/`、`.github/`（上一列的 ci.yml 與本地 action 除外）、`.githooks/`，以及根目錄的 `README.md`、`renovate.json5`、`.gitleaksignore`、`.dockerignore`、`deny.toml`。不論在哪個目錄，`.rs`、`.sql` 與任何大小寫的 `AGENTS.md` 都會讓它執行（`tools/sql-check` 掃描整個 repo 的 Rust 檔與它們 include 的 SQL，`tools/repo-check` 不允許任何 AGENTS.md）。沒有列出的路徑（`crates/`、`services/`、`edge/`、`factory/`、`tools/`、`api/`、`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`clippy.toml`、`.cargo/`、`CLAUDE.md`、`.gitignore`、`datasets/`、`evals/`，以及之後新增的任何目錄）一律執行 |
 | `cargo-deny` | 任何 `Cargo.toml`、`Cargo.lock`、`deny.toml`、`rust-toolchain.toml`、`.cargo/` 下的檔案有變動 |
-| `helm` | `deploy/chart/`、`deploy/istio/`、`deploy/flux/`、`scripts/flux/` 下的檔案，或 chart 測試讀的 `scripts/lib/stack.ts`、`services/ingest/tests/common/mod.rs`、`docs/architecture/deployment.md`，或 `bun test deploy/flux` 讀的 `.sops.yaml`、`scripts/release/flux.ts` 有變動（Laysi/trustiot-v2#70） |
+| `helm` | `deploy/chart/`、`deploy/istio/`、`services/ingest/migrations/clickhouse/`、`deploy/flux/`、`scripts/flux/` 下的檔案，或 chart 測試讀的 `scripts/lib/stack.ts`、`services/ingest/tests/common/mod.rs`、`crates/service-kit/src/telemetry/redact.rs`、`docs/architecture/deployment.md`，或 `bun test deploy/flux` 讀的 `.sops.yaml`、`scripts/release/flux.ts` 有變動（`deploy/flux/` 與後兩者來自 Laysi/trustiot-v2#70） |
 | `host` | `deploy/host/` 下的檔案有變動（安裝程式的原始碼、測試、相依與建置都在這個目錄） |
 | `gitleaks`、`workflow-policy` | 每次都執行 |
 
@@ -206,6 +206,7 @@ gh api repos/Laysi/trustiot-v2/actions/permissions/fork-pr-workflows-private-rep
 ### 交叉編譯與可重現建置
 
 - `cargo auditable zigbuild --locked --release --target aarch64-unknown-linux-musl`：Zig 當 C 編譯器與連結器（cargo-zigbuild），cargo-auditable 把相依清單嵌進執行檔，syft 才列得出 crate。zig、cargo-zigbuild、cargo-auditable、syft、cosign 都鎖在 `.prototools`，Zig 以官方 minisign 簽章驗證，其餘以 release 附的 checksum 驗證。Rust 在 CI 由 runner 的 rustup 依 `rust-toolchain.toml` 安裝，再加上 musl target。
+- 打包前檢查每個執行檔是 aarch64 的 ELF，而且沒有 program interpreter（PT_INTERP）：動態連結的執行檔在 distroless static 裡找不到載入器與 libc，容器會啟動失敗，所以在建置時就停下（2026-10-11 加入，Laysi/trustiot-v2#308）。Cargo 指令與靜態連結的檢查在 `scripts/release/rust-build.ts`（不放在 `lib.ts`，因為 `ci/changes.ts` 引用 `lib.ts`，改它會讓 CI 的每個 job 都執行），nightly 的服務映像共用（見「nightly.yml」的「服務映像」）。
 - 映像建置不執行任何 arm64 程式，x86 的代管 runner 不需要模擬器。
 - 時間戳一律取 tag 所指 commit 的時間（`SOURCE_DATE_EPOCH`、`podman build --timestamp`、`helm package`），chart 推送時的建立時間也固定，執行檔裡的原始碼路徑換成固定的前綴（`--remap-path-prefix`），所以同一個 commit 以同一組工具重建，會得到相同的映像與 chart digest（2026-10-10 本機驗證，見 [測試報告](../test-reports/2026-10-10-68-release-workflow.md)）。runner 上的 podman 版本不由本 repo 釘選，不同版本打包出的映像層可能不同，所以不保證本機與 CI 建出的 digest 相同。
 
@@ -296,7 +297,7 @@ publish job 在 `release` environment 執行，原本的設計是在 environment
 
 1. Gateway API 的 standard CRD：從 release 下載 `standard-install.yaml`，SHA-256 與 workflow 裡釘的值相符才套用（`GATEWAY_API_VERSION`、`GATEWAY_CRDS_SHA256`，要一起改）。
 2. Istio ambient：官方 repo 的 `base`、`istiod`、`cni`、`ztunnel` 四個 chart，版本 `ISTIO_VERSION`，用 `deploy/istio/values-k3s.yaml`。istiod 另加一份由 `deploy/istio/istiod-values.yaml` 產生的覆寫：同一個 ext_authz provider（fail closed、0.5 秒逾時、503）為每個 e2e 命名空間各複製一份，名稱 `trustiot-e2e-<shape>`，所以 provider 的設定永遠是 repo 裡那份。
-3. 建出 e2e 的身分服務替身映像（`deploy/chart/tests/e2e/identity-double`），匯入 k3d 節點。
+3. 建出 e2e 的身分服務替身映像（`deploy/chart/tests/e2e/identity-double`），以 `k3d image import --mode direct` 匯入 k3d 節點，並逐一確認每個 server 與 agent 節點的 containerd 都有這個映像（`docker exec <node> crictl inspecti <image>`，節點清單來自 `k3d node list -o json`）；缺任何一個節點就重新匯入，共 3 次，用完仍缺則在這一步失敗，訊息寫出映像與缺少的節點，成功時 log 逐節點記錄「confirmed」。為什麼不能信 k3d 的結束碼：k3d 5.9.0 預設的 tools-node 模式由各節點從共用 volume 匯入 tarball，單一節點失敗只寫 `ERRO` 並照樣以 0 結束，映像沒進節點，e2e 的身分服務（`pullPolicy: IfNotPresent`，`localhost` 無法拉取）就等滿 5 分鐘才逾時，看起來像 chart 出錯（2026-10-11，Laysi/trustiot-v2#335）。`--mode direct` 把 `docker save` 的輸出直接串進各節點的 `ctr image import`，沒有 tools node 與共用 volume，k3d 也會回傳節點的錯誤；它只是降低機率的緩解，保證來自逐節點的確認。
 
 每份 values 依序做：
 
@@ -316,6 +317,18 @@ publish job 在 `release` environment 執行，原本的設計是在 environment
 檢查 3 到 9 全部從 release 自己的 manifest 推導（`scripts/nightly/manifests.ts`），不寫死元件；之後加入的元件（Postgres、ClickHouse、broker 等）會自動被納入 workload 就緒與探針檢查。元件需要的前置（例如 operator）由加入該元件的 issue 在 `scripts/nightly/platform.ts` 補上；各里程碑完成條件的測試也由各自的 issue 加進來。
 
 在 TrustIoT 服務映像出來以前，`smoke.yaml` 的替身服務（`traefik/whoami`，以 digest 釘選）讓通用服務樣板在真叢集上被驗證。
+
+### 服務映像（已備好，尚未啟用）
+
+2026-10-11（Laysi/trustiot-v2#308）：`scripts/nightly/service-image.ts` 的 `loadServiceImage(platform, "<名稱>")` 把 `deploy/images/<名稱>/image.toml` 宣告的 Rust 服務建成映像並匯入叢集：與 release.yml 相同的 Cargo 指令（`scripts/release/rust-build.ts` 的 `rustCrossCompileCommand`：`cargo auditable zigbuild --locked --release --target aarch64-unknown-linux-musl`）、同樣檢查執行檔是靜態的 aarch64 ELF、同一份 `rust-binary.Containerfile`，經 `containerBuildArgs` 以 docker 建成 `localhost/trustiot-e2e/<名稱>:nightly`，再以上面的 `importImageIntoCluster` 匯入並逐節點確認。所以 nightly 部署的就是發佈會建出的東西（2026-10-11 本機實測兩條路建出的執行檔 SHA-256 相同，[測試報告](../test-reports/2026-10-11-308-identity-image.md)）。
+
+`run.ts` 還沒有呼叫它，nightly.yml 也還不建置 Rust：啟用 `services.identity` 要先有它的資料庫（Laysi/trustiot-v2#58、Laysi/trustiot-v2#60），由 Laysi/trustiot-v2#65、Laysi/trustiot-v2#77 接上。接上時 smoke job 的 setup-proto 要多裝 `rust zig cargo-zigbuild cargo-auditable`。
+
+成本估計（啟用前要決定怎麼省）：2026-10-11 在本機（x86_64、6 個建置 job、負載 3–5）從空的 target 目錄建 identity 與 release-selftest（約 214 個 crate）加上打包與 SBOM 共 196 秒，`target/` 497 MB。runner 是 2 核的 arm64，編譯以 CPU 為主，冷建置估 9–13 分鐘，加上裝 Rust 與三個工具、下載 crate、docker build 與匯入約 1–2 分鐘，每晚多 **10–15 個計費分鐘**（每月約 300–450 分鐘），smoke job 的 `timeout-minutes: 45` 也要重新評估。可以省的做法：
+
+- Rust 編譯快取（`Swatinem/rust-cache`，key 含 target triple 與 release profile，只在排程或 main 上儲存，與 ci.yml 一樣 PR 只讀取）：命中時只重編改過的 crate 與連結，估 2–4 分鐘（含還原約 0.3–0.5 GB 的快取）；佔用 repo 的 10 GB 快取額度。
+- 只在 `services/`、`crates/`、`Cargo.lock` 或 `deploy/images/` 自上次通過以來有變動時才重建；沒變動時沿用上一次的映像（例如存成 artifact）。
+- 不建議改拉 GHCR 上最新的發佈版映像：測到的是已發佈的版本而不是 main 的程式碼，而且 smoke job 要多一個讀取套件的權限。
 
 ### 本機執行
 
@@ -337,7 +350,7 @@ NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
 
 ### 失敗時怎麼辦
 
-先看 issue 內文的報告：它列出哪份 values 的哪一項失敗與診斷。要重現就到 Actions 頁手動執行 nightly（選 `simulate_failure` 只用來驗證通知，不用來除錯）。常見原因：Docker Hub 對匿名拉取的流量限制（`traefik/whoami`、k3s 映像與 e2e 替身的基底映像都在 Docker Hub，建立叢集與建置映像已重試）、chart 的改動讓某份 values 裝不起來或讓入口的行為改變、Istio、Gateway API、k3s 或 k3d 版本更新。GitHub 在 repo 60 天沒有活動時會停掉排程 workflow，這個 repo 有活動所以不會發生，但若看到排程停了，到 Actions 頁重新啟用。
+先看 issue 內文的報告：它列出哪份 values 的哪一項失敗與診斷。要重現就到 Actions 頁手動執行 nightly（選 `simulate_failure` 只用來驗證通知，不用來除錯）。常見原因：Docker Hub 對匿名拉取的流量限制（`traefik/whoami`、k3s 映像與 e2e 替身的基底映像都在 Docker Hub，建立叢集與建置映像已重試）、替身映像沒有進到節點（log 的 `identity double image` 段會寫出哪個節點缺映像，匯入已重試）、chart 的改動讓某份 values 裝不起來或讓入口的行為改變、Istio、Gateway API、k3s 或 k3d 版本更新。GitHub 在 repo 60 天沒有活動時會停掉排程 workflow，這個 repo 有活動所以不會發生，但若看到排程停了，到 Actions 頁重新啟用。
 
 ### 成本
 

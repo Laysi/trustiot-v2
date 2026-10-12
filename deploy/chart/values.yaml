@@ -173,6 +173,11 @@ serviceDefaults:
 services:
   identity:
     enabled: false
+    # The signing key file is mode 0440, owned by root and the pod's fsGroup, so the service reads
+    # it through this group and no other user in the container can (README.md, "內部身分"). On
+    # OpenShift set fsGroup to null: the restricted-v2 SCC assigns one from the namespace range.
+    podSecurityContext:
+      fsGroup: 65532
   assets:
     enabled: false
   certs:
@@ -206,9 +211,10 @@ mesh:
   # identities <trustDomain>/ns/<namespace>/sa/<ServiceAccount>.
   trustDomain: cluster.local
   # Who may call whom: <caller>: [<callee>, ...]. Callers are keys under `services`; callees are
-  # keys under `services` or the in-cluster component `clickhouse` (bundled mode). Each service's
-  # issue adds the internal APIs it calls. Calls involving a disabled service or a component
-  # that is not deployed are skipped.
+  # keys under `services` or the in-cluster components `clickhouse` (bundled mode) and
+  # `otel-collector`. Each service's issue adds the internal APIs it calls. Calls involving a
+  # disabled service or a component that is not deployed are skipped. The chart adds the
+  # telemetry calls itself: every service to the collector, the collector to ClickHouse.
   calls:
     # ClickHouse (decision 14): ingest writes telemetry, telemetry-query reads it with per-tenant
     # read-only accounts (docs/architecture/deployment.md).
@@ -216,6 +222,22 @@ mesh:
       - clickhouse
     telemetry-query:
       - clickhouse
+
+# Internal identity (decision 27): for every request that passes the cookie check, the identity
+# service signs a short-lived token for the backend, and every service verifies it with the
+# public keys below. Rotation adds the new public key first, then swaps the private key, then
+# removes the old public key (services/identity/README.md).
+internalIdentity:
+  # The identity service's Ed25519 public keys: {kid, x}, where x is the 32-byte public key in
+  # base64url without padding. Not secret; every service gets them as the platform setting
+  # TRUSTIOT_INTERNAL_IDENTITY_KEYS. Services refuse to start without them.
+  publicKeys: []
+  # Existing Secret with the identity service's private key in PKCS#8 PEM
+  # (`openssl genpkey -algorithm ed25519`), mounted as a read-only file into the identity service
+  # only. Its public key must be in publicKeys, or the identity service refuses to start.
+  signingKeySecret:
+    name: ""
+    key: signing-key.pem
 
 # External dependencies (portability rule 2). Managed or self-hosted differs only in values.
 
@@ -366,3 +388,66 @@ observability:
     dsnSecret:
       name: ""
       key: dsn
+  # OpenTelemetry collector (decision 22). Every service sends its logs, traces and metrics to it
+  # over OTLP/HTTP (the chart sets TRUSTIOT__TELEMETRY__OTLP_ENDPOINT). The collector redacts
+  # credentials, personal data, request bodies and chat content, then writes logs and traces to
+  # the trustiot_logs database in ClickHouse (services/ingest/migrations/clickhouse/0006_logs.sql,
+  # 30 day retention) and, when forwarding is on, also sends them to the customer's SIEM.
+  # Metrics are accepted and dropped until their storage is decided (Laysi/trustiot-v2#183).
+  collector:
+    enabled: true
+    image:
+      # opentelemetry-collector-contrib (it has the ClickHouse exporter and the redaction
+      # processor), pinned to the multi-arch index digest (arm64 included). Changing the
+      # version can change the exporter's columns: check them against 0006_logs.sql.
+      repository: docker.io/otel/opentelemetry-collector-contrib
+      tag: "0.161.0"
+      digest: sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
+      pullPolicy: IfNotPresent
+    # The collector's ClickHouse account. The migration Job creates it with SQL and grants it the
+    # trustiot_otel_collector role (INSERT into the log tables only), never in server
+    # configuration files (decision 14).
+    clickhouse:
+      user: trustiot_collector
+      # Existing Secret with the account's password; required when the collector is enabled.
+      passwordSecret:
+        name: ""
+        key: password
+    # Copy of the redacted logs (and optionally traces) for the customer's SIEM over OTLP.
+    forward:
+      enabled: false
+      # OTLP endpoint of the SIEM: for http the base URL (the exporter appends /v1/logs and
+      # /v1/traces), for grpc https://host:port. https unless the SIEM is on a trusted network.
+      endpoint: ""
+      # http (OTLP/HTTP, protobuf) or grpc.
+      protocol: http
+      # Signals to forward: logs, traces.
+      signals:
+        - logs
+      # Optional header the SIEM authenticates with, for example Authorization. The whole header
+      # value (for example "Bearer <token>") is read from the Secret.
+      authHeader:
+        name: ""
+        valueSecret:
+          name: ""
+          key: value
+      # CA certificate for a SIEM with a private CA; leave the name empty for a public one.
+      caSecret:
+        name: ""
+        key: ca.crt
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+    # The image runs as the numeric non-root UID 10001; it is not fixed here, so OpenShift's
+    # restricted-v2 SCC can assign one.
+    podSecurityContext:
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
+    # The image is multi-arch.
+    nodeSelector: {}
+    tolerations: []

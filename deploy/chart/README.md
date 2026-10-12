@@ -50,7 +50,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | `smtp.*` | 我們的郵件服務 | 客戶的 SMTP | 決策 18 |
 | `ai.*` | 雲端 API | 客戶的 OpenAI 相容端點，例如 vLLM、Ollama | 決策 15、16、26 |
 | `observability.sentry.enabled` | `true`，送 sentry.io | `false`，客戶有自己的 Sentry 時可開 | 決策 24 |
-| OTLP 轉送（欄位隨 Laysi/trustiot-v2#73 的 collector 加入） | 不轉送 | 可轉送到客戶的 SIEM | 決策 22 |
+| `observability.collector.forward.enabled` | `false`：日誌與 trace 只存在我們的 ClickHouse | `false`，客戶要求時在覆寫檔開啟，把遮蔽後的日誌（可加 trace）以 OTLP 轉送到客戶的 SIEM | 決策 22 |
 
 兩種型態相同的部分：Postgres（含 Apache AGE）與 ClickHouse 都在叢集內（`bundled`）；MQTT broker 不直接對外，閘道器一律以 443 的 WebSocket 經入口 gateway 與 mqtt-bridge 連到 broker；cookie 驗證、例外路徑與標頭規則相同（見「入口 gateway」）；chart 產生的 Service 一律是 ClusterIP（測試強制），唯一對外的是 Istio 依 Gateway 產生的入口 Service。SaaS 在 Cloudflare 無法使用時，可改用 `ingress.exposure: direct` 直接對外，閘道器只改 DNS（docs/roadmap/risks.md）。
 
@@ -69,9 +69,10 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | MQTT broker（Mosquitto） | — | 尚未加入 | Laysi/trustiot-v2#84 |
 | Qdrant | `qdrant.mode` | `external` 已接到平台設定；`bundled` 尚未加入 | Laysi/trustiot-v2#194 |
 | 物件儲存、SMTP、AI 端點 | `objectStorage.*`、`smtp.*`、`ai.*` | 一律外部，設定已接到平台設定 | Laysi/trustiot-v2#133、Laysi/trustiot-v2#169、Laysi/trustiot-v2#139 |
-| OpenTelemetry collector 與 OTLP 轉送 | — | 尚未加入；轉送目的地的欄位隨 collector 一起加 | Laysi/trustiot-v2#73 |
+| OpenTelemetry collector 與 OTLP 轉送 | `observability.collector.enabled` | 完成（預設開）：收服務的 OTLP、遮蔽後把日誌與 trace 寫進 ClickHouse 的 `trustiot_logs`，可轉送到 SIEM（見「OpenTelemetry collector」）。帳號由 migration Job 以 SQL 建立；指標先收下丟棄 | Laysi/trustiot-v2#60（建帳號）、Laysi/trustiot-v2#183（指標存放與 Grafana）、Laysi/trustiot-v2#63（服務間授權要放行 collector） |
 | Grafana | — | 尚未加入 | Laysi/trustiot-v2#183 |
 | Sentry | `observability.sentry.*` | 開關、環境名稱與 DSN 已接到每個服務 | Laysi/trustiot-v2#184 |
+| 內部身分（公鑰、簽章私鑰） | `internalIdentity.*` | 完成：公鑰以 JWK Set 放進平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`；簽章私鑰的 Secret 只掛進身分服務；身分服務另外拿到需要 cookie 的路由（`TRUSTIOT_INGRESS_ROUTES`），決定 token 的受眾 | Laysi/trustiot-v2#61；SaaS 的值放進 `deploy/flux/` 由 Laysi/trustiot-v2#70 做 |
 | 密鑰 | 各個 `*Secret` 欄位、`services.<name>.credentials` | values 只存 Secret 名稱與 key；Sentry DSN 給每個服務，其他依賴的帳密只給列出它的服務，外部資料庫的 CA 掛進每個服務；chart 不產生 Secret（測試檢查） | SaaS 的 Secret 以 SOPS 加密放在 `deploy/flux/`（Laysi/trustiot-v2#70）；地端由客戶建立。規則與清冊見 docs/architecture/secrets.md |
 
 ## 服務
@@ -153,7 +154,16 @@ ingress:
     - {host: app, path: /api/assets, match: PathPrefix, service: assets}
 ```
 
-與身分服務的約定（Laysi/trustiot-v2#61 實作）：入口以 `<pathPrefix><原始路徑>` 呼叫身分服務，`pathPrefix` 是 `/internal/ext-authz`，只帶 `cookie`（另有 Host、方法、路徑與 Authorization）；有效時回 200 並一定帶 `x-internal-identity`，入口以它覆寫用戶端帶來的同名標頭；無效時回 401，入口把回應原樣交給用戶端。身分服務無法連線、出錯或超過 0.5 秒時入口回 503（`statusOnError`）。這些設定在 istiod 的 provider，見 `deploy/istio/README.md`。
+與身分服務的約定（Laysi/trustiot-v2#61 實作，細節見 `services/identity/README.md`）：入口以 `<pathPrefix><原始路徑>` 呼叫身分服務，`pathPrefix` 是 `/internal/ext-authz`，只帶 `cookie`（另有 Host、方法、路徑與 Authorization）。
+
+| 身分服務的回應 | 情況 | 入口 |
+| --- | --- | --- |
+| 200，剛好一個 `x-internal-identity` | session 有效，且原始請求的主機與路徑對得到 `ingress.routes` 的一條路由 | 以這個值覆寫用戶端帶來的同名標頭，轉給後端 |
+| 401 `unauthenticated` | 沒有 session cookie、cookie 重複或格式不對、session 不存在、過期或已撤銷 | 原樣交給用戶端 |
+| 403 `permission_denied` | session 有效，但身分服務的路由表對不到這個請求（正常情況下不會發生：入口沒有路由的請求不會呼叫身分服務） | 原樣交給用戶端 |
+| 503 `unavailable` | 資料庫失敗，或 0.4 秒內查不完 | 把 5xx 當成錯誤，回自己的 503（`statusOnError`） |
+
+身分服務無法連線、出錯或超過 0.5 秒時入口也回 503。session cookie 名稱是 `__Host-trustiot-session`。token 的受眾（`aud`）是請求要去的服務：chart 把 `ingress.routes` 換成實際主機名稱後以 `TRUSTIOT_INGRESS_ROUTES` 交給身分服務，身分服務以 Gateway API 的規則比對（主機相同、不看埠號；`Exact` 優先，其次最長、以路徑段為界的 `PathPrefix`）。比對不一致只會造成拒絕，不會放寬權限：token 只有它的受眾接受。入口的設定在 istiod 的 provider，見 `deploy/istio/README.md`。
 
 服務的 pod 帶 `istio.io/dataplane-mode: ambient` 加入 ambient mesh，入口到服務、服務之間由 ztunnel 加 mTLS；`podLabels` 不能改這個 label。服務之間的授權見下一節。
 
@@ -166,7 +176,7 @@ ingress:
 | 欄位 | 預設值 | 說明 |
 | --- | --- | --- |
 | `mesh.trustDomain` | `cluster.local` | mesh 的 SPIFFE trust domain（Istio 的 `meshConfig.trustDomain`）；呼叫端身分寫成 `<trustDomain>/ns/<namespace>/sa/<ServiceAccount>` |
-| `mesh.calls` | `mesh.calls.ingest` 與 `mesh.calls.telemetry-query` 都是 `[clickhouse]` | 誰可以呼叫誰：`<呼叫端>: [<被呼叫端>, ...]`。呼叫端是 `services` 的 key；被呼叫端是 `services` 的 key，或叢集內元件 `clickhouse`（`clickhouse.mode: bundled` 時）。不認得的名稱讓安裝失敗；服務未啟用或元件沒有部署時略過這條，所以可以先列還沒出映像的服務。預設值是決策 14 與 docs/architecture/deployment.md 寫明的 ClickHouse 用戶端：資料接收寫入、時序查詢以每租戶唯讀帳號讀取。各服務的 issue 加入它要呼叫的內部 API |
+| `mesh.calls` | `mesh.calls.ingest` 與 `mesh.calls.telemetry-query` 都是 `[clickhouse]` | 誰可以呼叫誰：`<呼叫端>: [<被呼叫端>, ...]`。呼叫端是 `services` 的 key；被呼叫端是 `services` 的 key，或叢集內元件 `clickhouse`（`clickhouse.mode: bundled` 時）與 `otel-collector`（collector 開啟時）。遙測的呼叫由 chart 自動加上，不必列：每個啟用的服務 → `otel-collector`，`otel-collector` → `clickhouse`。不認得的名稱讓安裝失敗；服務未啟用或元件沒有部署時略過這條，所以可以先列還沒出映像的服務。預設值是決策 14 與 docs/architecture/deployment.md 寫明的 ClickHouse 用戶端：資料接收寫入、時序查詢以每租戶唯讀帳號讀取。各服務的 issue 加入它要呼叫的內部 API |
 
 ```yaml
 mesh:
@@ -195,7 +205,8 @@ mesh:
 - NetworkPolicy 只管連入（`Ingress`），不限制連出：外部依賴（Qdrant Cloud、S3、SMTP、AI 端點、外部資料庫）以主機名稱指定，NetworkPolicy 無法依主機名稱放行。
 - 不部署 waypoint：L4 的身分已足夠。服務之間需要 L7 規則（例如依路徑或方法）時才為該服務加 waypoint，並把它的 AuthorizationPolicy 改成以 `targetRefs` 指向 Service、在 ztunnel 層放行 waypoint 的 ServiceAccount；代表使用者呼叫的授權（內部身分 token）由服務自己驗證，不靠 waypoint（Laysi/trustiot-v2#106）。
 - 叢集測試 `tests/e2e/mesh.e2e.ts` 以真實連線驗證清單內放行、清單外被拒，以及兩層各自生效，用法見該目錄的 README。
-- 叢集內的 ClickHouse 走同一套規則：只有 `mesh.calls` 列出的 `ingest` 與 `telemetry-query` 連得到它，其他服務與 pod 都被拒，kubelet 的 `/ping` 探測經 `169.254.7.127/32` 照常通過，節點來源只開 HTTP 8123。還沒有的用戶端加入時要列進來：migration Job（Laysi/trustiot-v2#60）要在 `trustiot.mesh.plan` 加上 Job 當呼叫端（目前呼叫端只能是服務），OpenTelemetry collector（Laysi/trustiot-v2#73）與 Grafana（Laysi/trustiot-v2#183）同樣。ClickHouse 的政策只以 chart 測試驗證，2026-10-10 的實驗機測試沒有部署它（見測試報告）。
+- 叢集內的 ClickHouse 走同一套規則：只有 `mesh.calls` 列出的 `ingest` 與 `telemetry-query`，以及 chart 自動加上的 OpenTelemetry collector（Laysi/trustiot-v2#73）連得到它，其他服務與 pod 都被拒，kubelet 的 `/ping` 探測經 `169.254.7.127/32` 照常通過，節點來源只開 HTTP 8123。還沒有的用戶端加入時要加進來：migration Job（Laysi/trustiot-v2#60）要在 `trustiot.mesh.plan` 加上 Job 當呼叫端（`mesh.calls` 的呼叫端只能是服務；元件之間的呼叫由 plan 自己加，collector 就是這樣），Grafana（Laysi/trustiot-v2#183）同樣。ClickHouse 的政策只以 chart 測試驗證，2026-10-10 的實驗機測試沒有部署它（見測試報告）。
+- collector 也是 mesh 內的元件（`trustiot.mesh.components` 的 `otel-collector`，埠與探針定義在 `trustiot.otel-collector.pod`）：每個啟用的服務都自動是它的呼叫端（送 OTLP），其他 pod 連不到它，節點來源只開健康檢查的 13133。它連出到外部 ClickHouse 或 SIEM 不受 NetworkPolicy 限制（只管連入）；SIEM 在同一個 namespace 時，要另外以 NetworkPolicy 放行 collector 的 pod 連它。
 - 預設拒絕套用到 namespace 內所有 pod，包括之後加入的叢集內元件（broker、Postgres 等）：在 mesh 內的元件加進 `trustiot.mesh.components`，由同一份清單產生政策；不在 mesh 內的元件自帶 NetworkPolicy，只放行實際的用戶端（見「擴充 chart」）。chart 測試檢查每個 Deployment 與 StatefulSet 的 pod 都有自己的 NetworkPolicy 與 AuthorizationPolicy。
 
 ### serviceDefaults 與 services.\<name\>
@@ -242,6 +253,7 @@ mesh:
 | `services.<name>.credentials` | 只給這個服務的依賴帳密，可列 `qdrant-read`、`qdrant-write`、`object-storage`、`smtp`、`ai`，變數見「密鑰的環境變數」；不能放在 `serviceDefaults`，避免每個服務都拿到。`ai` 只能給 `ai-gateway`（決策 28）；`qdrant-read` 與 `qdrant-write` 只能給 `knowledge`，因為 Qdrant 查詢的租戶條件由知識庫服務加上（docs/architecture/rag.md） |
 | `services.<name>.resources` | 逐欄覆寫資源設定 |
 | `services.<name>.podSecurityContext` | 逐欄覆寫；限制同 `serviceDefaults` |
+| `services.<name>.podSecurityContext.fsGroup` | 只有 `identity` 有預設值 `65532`：簽章私鑰檔的權限是 0440、屬於 root 與這個群組，服務以群組身分讀它，容器裡其他使用者讀不到（見「內部身分」）。OpenShift 設成 `null`，由 restricted-v2 SCC 從 namespace 的範圍指派；其他平台拿掉它，身分服務會讀不到私鑰而拒絕啟動 |
 | `services.<name>.securityContext` | 逐欄覆寫；限制同 `serviceDefaults` |
 | `services.<name>.probes` | 每個 probe 整個取代；liveness 與 readiness 不能是空的 |
 | `services.<name>.preStopSleepSeconds` | 覆寫 preStop 等待秒數 |
@@ -263,6 +275,18 @@ mesh:
 | `ports[].servicePort` | Service 的埠號，預設同 `containerPort` |
 | `ports[].protocol` | `TCP`（預設）、`UDP` 或 `SCTP` |
 | `ports[].appProtocol` | 例如 `http`，供 Istio 判斷協定 |
+
+### 內部身分
+
+決策 27 的內部身分 token：身分服務為每個通過 cookie 驗證的請求簽一個 60 秒的 token，每個服務以這裡的公鑰驗證。格式、驗證規則與輪替在 `crates/service-kit/README.md` 的「內部身分」與 `services/identity/README.md`。
+
+| 欄位 | 預設值 | 說明 |
+| --- | --- | --- |
+| `internalIdentity.publicKeys` | `[]` | 身分服務的 Ed25519 公鑰，每把 `{kid, x}`：`kid` 是 1–64 個可見 ASCII 字元、不能重複，`x` 是 32 bytes 公鑰的 base64url（不補 `=`，43 個字元），最多 8 把。chart 組成 JWK Set 放進平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`；schema 只允許這兩個欄位，所以私鑰（`d`）放不進 values 與 ConfigMap。空的時候不設定，服務會拒絕啟動。輪替期間同時列新舊兩把 |
+| `internalIdentity.signingKeySecret.name` | `""` | 放身分服務簽章私鑰的既有 Secret；身分服務啟用時必填（沒有它身分服務拒絕啟動）。私鑰是 PKCS#8 PEM（`openssl genpkey -algorithm ed25519`），以唯讀 volume 只掛進身分服務的 `/etc/trustiot/identity-signing-key/signing-key.pem`，檔案權限 0440（`defaultMode`），只有 root 與 pod 的 `fsGroup`（`services.identity.podSecurityContext.fsGroup`）可讀，路徑以 `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` 告訴它；任何服務的自訂 `env` 都不能讀這個 Secret 的這個 key。私鑰對應的公鑰必須在 `publicKeys` 裡，身分服務以它找出自己的 `kid`，找不到就拒絕啟動 |
+| `internalIdentity.signingKeySecret.key` | `signing-key.pem` | |
+
+身分服務只在啟動時讀私鑰，Kubernetes 不會因 Secret 改變而重啟 pod：換私鑰後要滾動重啟身分服務（`kubectl rollout restart`，或改 `services.identity.podAnnotations`），步驟見 `services/identity/README.md` 的「金鑰輪替」。
 
 ### 外部依賴
 
@@ -327,6 +351,27 @@ mesh:
 | `observability.sentry.environment` | `""` | 開啟時必填，例如 `production`、`staging` |
 | `observability.sentry.dsnSecret.name` | `""` | 開啟時必填；DSN 含金鑰，放在 Secret |
 | `observability.sentry.dsnSecret.key` | `dsn` | |
+| `observability.collector.enabled` | `true` | 部署 OpenTelemetry collector，並把 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` 交給每個服務；見「OpenTelemetry collector」 |
+| `observability.collector.image.repository` | `docker.io/otel/opentelemetry-collector-contrib` | contrib 版才有 ClickHouse exporter 與 redaction processor |
+| `observability.collector.image.tag` | `0.161.0` | 實際版本由 digest 決定；換版本前先對照 exporter 的欄位與 `0006_logs.sql`（測試比對） |
+| `observability.collector.image.digest` | `sha256:fd328de2…5ac1` | 必填（版本固定），multi-arch index 的 digest，含 arm64 |
+| `observability.collector.image.pullPolicy` | `IfNotPresent` | |
+| `observability.collector.clickhouse.user` | `trustiot_collector` | collector 的 ClickHouse 帳號，由 migration Job 建立並授予 `trustiot_otel_collector` 角色；不能是 `default` 或角色本身的名稱 |
+| `observability.collector.clickhouse.passwordSecret.name` | `""`，開啟時必填 | 放這個帳號密碼的既有 Secret；migration Job 用同一個 Secret 建帳號。服務的自訂 `env` 不能讀它 |
+| `observability.collector.clickhouse.passwordSecret.key` | `password` | |
+| `observability.collector.forward.enabled` | `false` | 把遮蔽後的資料另外以 OTLP 送到客戶的 SIEM |
+| `observability.collector.forward.endpoint` | `""`，開啟時必填 | `http` 時是 OTLP/HTTP 的 base URL（exporter 自己加 `/v1/logs`、`/v1/traces`），`grpc` 時是 `https://主機:埠`；不能帶帳密；SaaS 只接受 https。`http://` 只用在客戶內網可信的路段 |
+| `observability.collector.forward.protocol` | `http` | `http`（OTLP/HTTP protobuf）或 `grpc` |
+| `observability.collector.forward.signals` | `[logs]` | 要轉送的訊號：`logs`、`traces` |
+| `observability.collector.forward.authHeader.name` | `""` | SIEM 驗證用的標頭名稱，例如 `Authorization`；空白代表不送 |
+| `observability.collector.forward.authHeader.valueSecret.name` | `""`，設了標頭名稱時必填 | 放整個標頭值（例如 `Bearer <token>`）的既有 Secret；服務的自訂 `env` 不能讀它 |
+| `observability.collector.forward.authHeader.valueSecret.key` | `value` | |
+| `observability.collector.forward.caSecret.name` | `""` | SIEM 用私有 CA 時才設，endpoint 必須是 https |
+| `observability.collector.forward.caSecret.key` | `ca.crt` | |
+| `observability.collector.resources` | requests `cpu: 50m`、`memory: 128Mi`；limits `cpu: "1"`、`memory: 512Mi` | `memory_limiter` 以記憶體上限的 80% 為界，超過時先拒收（服務端會重試）；2026-10-11 本機實測閒置約 38 MiB |
+| `observability.collector.podSecurityContext` | `runAsNonRoot: true`、`seccompProfile: RuntimeDefault` | 映像的 `USER` 是數字 UID 10001，不固定 UID，OpenShift 可以指派；限制同 `serviceDefaults.podSecurityContext` |
+| `observability.collector.nodeSelector` | `{}` | 映像是 multi-arch，不限架構 |
+| `observability.collector.tolerations` | `[]` | |
 
 URL 欄位都不接受 `user:password@` 這種帶帳密的寫法。
 
@@ -347,12 +392,59 @@ URL 欄位都不接受 `user:password@` 這種帶帳密的寫法。
 kubectl -n trustiot create secret generic trustiot-clickhouse-admin --from-literal=password="$(openssl rand -hex 32)"
 ```
 
+## OpenTelemetry collector
+
+`observability.collector.enabled: true`（預設，SaaS 與地端相同）部署 `templates/otel-collector.yaml`，實作決策 22 的日誌管線：
+
+- 一個副本的 Deployment `<release>-otel-collector`，ClusterIP Service 只開 OTLP/HTTP 4318；每個服務拿到 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT=http://<release>-otel-collector.<namespace>.svc:4318`，service-kit 因此開啟日誌、trace 與指標的匯出（叢集內明文 HTTP，pod 之間由 ztunnel 加 mTLS）。collector 開啟時服務的自訂 `env` 不能改這個變數，每個服務的資料都經過遮蔽。
+- 設定只有一個 ConfigMap（`<release>-otel-collector-config`），變更時 pod 自動重啟。密碼與 SIEM 的標頭不在設定檔裡：設定以 `${env:...}` 引用環境變數，Deployment 以 `secretKeyRef` 從 values 指定的 Secret 取得。
+- 管線：`memory_limiter` → `redaction`（trace 再加 `transform/redact`）→ exporter。日誌與 trace 寫進 ClickHouse 的 `trustiot_logs.otel_logs`、`trustiot_logs.otel_traces`（`services/ingest/migrations/clickhouse/0006_logs.sql`，保存 30 天，以寫入時間計算）；轉送開啟時同一份遮蔽後的資料也送到 SIEM。指標先收下丟棄（`nop`），存放位置由 Laysi/trustiot-v2#183 決定，服務的匯出不會因此報錯。
+- ClickHouse exporter 關掉 `create_schema`，只送 `INSERT`；表由 migration 建立。叢集內 ClickHouse 走 native 協定（9000），`external` 走 `clickhouse.external.url` 的 HTTPS，並掛 `clickhouse.external.caSecret` 的 CA。
+- 根目錄唯讀、非 root、不能提權、drop 所有 capability、沒有 ServiceAccount token；探針是 health_check 擴充的 `GET /`（13133，不在 Service 上）。pod 帶 `istio.io/dataplane-mode: ambient` 加入 ambient mesh。
+
+ClickHouse 帳號（決策 14：一律以 SQL 建立，不寫伺服器設定檔）：`0006_logs.sql` 建角色 `trustiot_otel_collector`，只有兩張日誌表的 `INSERT` 與 `SHOW COLUMNS`（exporter 啟動時以 `DESC TABLE` 讀欄位），沒有 `SELECT`，也碰不到其他資料庫。帳號由 migration Job（Laysi/trustiot-v2#60）以 `observability.collector.clickhouse.passwordSecret` 的密碼建立：
+
+```sql
+CREATE USER trustiot_collector IDENTIFIED WITH sha256_password BY '<password>';
+GRANT trustiot_otel_collector TO trustiot_collector;
+```
+
+migration Job 加入之前要以 bootstrap 管理帳號手動執行這兩句（`tests/e2e/otel.e2e.ts` 就是這樣做）。帳號還不存在時 collector 照常啟動並回報就緒（exporter 記一行 `schema detection failed`），寫入失敗的資料重試 5 分鐘後丟棄；帳號建好後不用重啟就開始寫入（2026-10-11 本機實測）。
+
+遮蔽規則（決策 22、[Laysi/trustiot#110](https://github.com/Laysi/trustiot/issues/110)）在 `templates/_otel-collector.tpl` 的 `trustiot.collector.redactionRules`，對每個來源都一樣，不只 service-kit 的服務：
+
+- 欄位名稱：名稱像憑證、個資、request body 或聊天內容的屬性（resource、scope、日誌、span、span event、指標資料點）與 map 形式的日誌 body，值換成 `****`。名單與 service-kit 相同（`crates/service-kit/src/telemetry/redact.rs`，chart 測試逐一比對它的測試名單），例如 `password`、`authorization`、`cookie`、`token`、`email`、`phone`、`prompt`、`http.request.body`、`message.content`；`http.request.body.size`、`content_type` 這類大小與型別保留。
+- 值的內容：每個屬性值、字串形式的日誌 body、span 名稱與 status message 裡符合下列格式的部分換成 `****`：私鑰、URL 裡的帳密、`Bearer`／`Basic` 標頭值、JWT、常見的 API key 格式、`password=…` 這類鍵值、email、台灣手機與國際電話號碼、身分證字號。
+- 遮蔽發生在所有 exporter 之前，ClickHouse 與 SIEM 拿到的是同一份遮蔽後的資料；不加稽核屬性（`summary: silent`），不透露哪些欄位被遮蔽。
+- 這仍是最後防線：寫在訊息裡、格式不在名單內的內容（例如一段聊天文字）攔不到，程式本身不能記錄這些值（docs/architecture/observability.md）。
+
+轉送到 SIEM（地端，`observability.collector.forward`）：例如客戶的 SIEM 收 OTLP/HTTP、以 Bearer token 驗證、用自己的 CA：
+
+```yaml
+observability:
+  collector:
+    forward:
+      enabled: true
+      endpoint: https://siem.factory.test:4318
+      protocol: http
+      signals: [logs]
+      authHeader:
+        name: Authorization
+        secret: {name: trustiot-siem-auth, key: value}   # 值是 "Bearer <token>"
+      caSecret:
+        name: trustiot-siem-ca
+```
+
+SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 ClickHouse；collector 重啟時佇列裡的資料會遺失。
+
+服務間授權（見「服務間授權（mesh）」）：collector 是 mesh 內的元件，chart 自動讓每個啟用的服務連它、讓它連叢集內的 ClickHouse，kubelet 的健康檢查照常通過；其他連線一律被拒。
+
 ## chart 與服務的約定
 
 服務照下列約定實作，就能直接用通用樣板部署（docs/architecture/deployment.md 的服務設計規則）：
 
-- **設定**：ConfigMap `<release>-platform` 以 `envFrom` 交給每個服務，另外每個服務有 `OTEL_SERVICE_NAME=<服務名稱>`。`TRUSTIOT_` 後接英數字、`SENTRY_` 與 `OTEL_` 開頭的變數只由 chart 設定，`env` 不能覆寫，服務讀到的平台設定一定是 values 決定的值。沒有設定的項目不會出現，服務可以分辨「沒設定」與「空字串」。平台設定變更時 pod 會自動滾動更新。
-- **密鑰**：不放進 ConfigMap，以 `valueFrom.secretKeyRef` 從 values 指定的 Secret 取用。Sentry 開啟時每個服務有 `SENTRY_DSN`；其他依賴的帳密只給在 `services.<name>.credentials` 列出它的服務（見後面「密鑰的環境變數」），Secret 名稱空白的項目不注入。外部 Postgres 與 ClickHouse 的 CA 憑證以唯讀方式掛在 `/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`。服務自己的資料庫帳號（每個服務一個角色，決策 4）隨 Postgres 與 migration 的 issue 加入（Laysi/trustiot-v2#58、Laysi/trustiot-v2#60）。
+- **設定**：ConfigMap `<release>-platform` 以 `envFrom` 交給每個服務，另外每個服務有 `OTEL_SERVICE_NAME=<服務名稱>`，collector 開啟時還有 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT`（service-kit 的 OTLP 匯出位址，見「OpenTelemetry collector」）。`TRUSTIOT_` 後接英數字、`SENTRY_` 與 `OTEL_` 開頭的變數只由 chart 設定，`env` 不能覆寫，服務讀到的平台設定一定是 values 決定的值。沒有設定的項目不會出現，服務可以分辨「沒設定」與「空字串」。平台設定變更時 pod 會自動滾動更新。
+- **密鑰**：不放進 ConfigMap，以 `valueFrom.secretKeyRef` 從 values 指定的 Secret 取用。Sentry 開啟時每個服務有 `SENTRY_DSN`；其他依賴的帳密只給在 `services.<name>.credentials` 列出它的服務（見後面「密鑰的環境變數」），Secret 名稱空白的項目不注入。外部 Postgres 與 ClickHouse 的 CA 憑證以唯讀方式掛在 `/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`；內部身分的簽章私鑰只掛進身分服務（見「內部身分」）。服務自己的資料庫帳號（每個服務一個角色，決策 4）隨 Postgres 與 migration 的 issue 加入（Laysi/trustiot-v2#58、Laysi/trustiot-v2#60）。
 - **埠與探針**：API 監聽 8080（埠名 `http`）；健康埠 8081（埠名 `health`）只提供 `GET /healthz`（startup 與 liveness）與 `GET /readyz`（readiness），其他路徑回 404。探針連健康埠，節點上的行程因此碰不到 API（「節點來源」）。service-kit 預設就是這樣（`http.listen_addr`、`http.health_listen_addr`），`crates/service-kit/tests/chart_contract.rs` 對照 `values.yaml` 檢查。
 - **SIGTERM**：pod 刪除時先等 `preStopSleepSeconds`（預設 5 秒），再送 SIGTERM；服務收到後 readiness 立即回失敗、處理完進行中的請求、主動關閉長連線，在 `drainSeconds`（預設 30 秒）內結束，之後才會被 SIGKILL。服務是容器內的 PID 1，要自己處理 SIGTERM。
 - **執行環境**：根目錄唯讀，只有 `/tmp` 可寫；以非 root 執行，映像的 `USER` 要是數字 UID，並能以 OpenShift 指派的任意 UID 執行；沒有 ServiceAccount token；只排到 arm64 節點。
@@ -364,6 +456,7 @@ kubectl -n trustiot create secret generic trustiot-clickhouse-admin --from-liter
 | `TRUSTIOT_DEPLOYMENT_MODE` | `global.deploymentMode` | 一律 |
 | `TRUSTIOT_APP_HOST`、`TRUSTIOT_GATEWAY_HOST`、`TRUSTIOT_OTA_HOST` | `hosts.*` | 一律 |
 | `TRUSTIOT_CLIENT_IP_SOURCE` | 由 `ingress.exposure` 推導：`cf-connecting-ip` 或 `x-forwarded-for-rightmost` | 一律 |
+| `TRUSTIOT_INTERNAL_IDENTITY_KEYS` | `internalIdentity.publicKeys` 組成的 JWK Set（JSON） | 有公鑰時 |
 | `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE` | `postgres.external.*` | `postgres.mode` 為 `external` |
 | `TRUSTIOT_CLICKHOUSE_URL` | `external`：`clickhouse.external.url`；`bundled`：`http://<release>-clickhouse.<namespace>.svc:8123`（叢集內明文 HTTP，pod 之間由 Istio ambient 的 ztunnel 加上 mTLS） | 一律 |
 | `TRUSTIOT_QDRANT_URL` | `qdrant.external.url` | `qdrant.mode` 為 `external` |
@@ -386,18 +479,25 @@ kubectl -n trustiot create secret generic trustiot-clickhouse-admin --from-liter
 | `TRUSTIOT_SMTP_USERNAME`、`TRUSTIOT_SMTP_PASSWORD` | `smtp.credentialsSecret` | `credentials` 含 `smtp` |
 | `TRUSTIOT_AI_CHAT_API_KEY`、`TRUSTIOT_AI_EMBEDDING_API_KEY`、`TRUSTIOT_AI_RERANK_API_KEY` | `ai.*.apiKeySecret` | `ai-gateway` 的 `credentials` 含 `ai`（決策 28） |
 
+只給身分服務的變數（chart 設定，`TRUSTIOT_` 開頭，自訂 `env` 不能覆寫）：
+
+| 變數 | 來源 | 何時出現 |
+| --- | --- | --- |
+| `TRUSTIOT_INGRESS_ROUTES` | `ingress.routes` 換成實際主機名稱的 JSON 陣列 `[{host, path, match, service}]`，決定 token 的受眾 | 一律（沒有路由時是 `[]`） |
+| `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` | 掛載的簽章私鑰路徑 `/etc/trustiot/identity-signing-key/signing-key.pem` | `internalIdentity.signingKeySecret.name` 有值時 |
+
 ## 擴充 chart
 
 - **新增服務**：在 `values.yaml` 的 `services` 加一個 key，並同步 docs/architecture/deployment.md 的服務表（測試比對兩邊）。服務特有的埠、資源、探針與 Secret 寫在該 key 底下。
 - **服務之間的呼叫**：服務要呼叫另一個服務的內部 API 時，在服務的 issue 把這條呼叫加進 `values.yaml` 的 `mesh.calls`；沒列的呼叫會被重置。服務間授權的規則集中在 `templates/_mesh.tpl` 的 `trustiot.mesh.plan`，AuthorizationPolicy 與 NetworkPolicy 都由它產生，不要為單一服務另外寫政策。
-- **對外的路由**：服務要經入口對外時，在服務的 issue 把路由加進 `values.yaml` 的 `ingress.routes`（預設需要 cookie）。不要新增例外路徑：決策 27 只允許登入、閘道器憑證換發、MQTT 轉接與健康檢查四種，要加第五種必須先改決策。入口的規則集中在 `templates/_ingress.tpl` 的 `trustiot.ingress.plan`；可信的來源 IP 沿用 `trustiot.clientIpSource`，不要另外加欄位。
+- **對外的路由**：服務要經入口對外時，在服務的 issue 把路由加進 `values.yaml` 的 `ingress.routes`（預設需要 cookie）。不要新增例外路徑：決策 27 只允許登入、閘道器憑證換發、MQTT 轉接與健康檢查四種，要加第五種必須先改決策。身分服務以同一份路由決定 token 的受眾（`TRUSTIOT_INGRESS_ROUTES`），所以路由的後端就是收 token 的服務；`ai-gateway` 不驗證內部身分（決策 28），不能有 cookie 路由。入口的規則集中在 `templates/_ingress.tpl` 的 `trustiot.ingress.plan`；可信的來源 IP 沿用 `trustiot.clientIpSource`，不要另外加欄位。
 - **新增叢集內元件**（broker、Postgres、ClickHouse、Qdrant、collector、Grafana）：放在自己的 `templates/<元件>.yaml`，以 `*.mode` 或開關控制；Service 只能是 ClusterIP；namespace 預設拒絕所有連入：元件在 mesh 內時（pod 帶 `istio.io/dataplane-mode: ambient`）把它加進 `templates/_mesh.tpl` 的 `trustiot.mesh.components`、用戶端列進 `mesh.calls`，並定義 `trustiot.<元件>.pod`（container ports 與探針，元件的模板也從它渲染，NetworkPolicy 依它只對節點來源開探針埠），AuthorizationPolicy 與 NetworkPolicy 由 chart 產生；不在 mesh 內時自帶 NetworkPolicy，只對實際的用戶端開它的埠，並讓 kubelet 的健康檢查到得了；在 `values.schema.json` 加欄位定義、在本文件加欄位說明（測試檢查 `values.yaml` 每個欄位都在本文件），並更新「元件與開關」與平台設定的表。
 - **Secret**：values 只能出現 `{name, key}` 形式的引用（測試掃描兩份 values、`values.yaml` 與 `tests/values/` 的每個欄位：名稱像密鑰的欄位只能是 `*Secret` 底下的 `name`、`key` 或 `*Key`，任何值都不能像私鑰、token 或帶帳密的 URL；並確認渲染結果沒有 Secret、只以名稱與 key 讀 Secret）；schema 的 `additionalProperties: false` 會擋下放明文的新欄位。服務要拿新的依賴帳密時，在 `_helpers.tpl` 的 `trustiot.credentialCatalog` 加一列（變數名稱、Secret、可以拿的服務）、在 schema 的 `credentials` 列舉加上名稱，並更新「密鑰的環境變數」表；自訂 `env` 自動不能讀這個帳密。叢集內元件自己產生的帳密 Secret（例如 CloudNativePG 的資料庫帳號，Laysi/trustiot-v2#58）也要加進 `trustiot.dependencySecretRefs`。新的平台變數用 `TRUSTIOT_` 開頭，自動受保留規則保護。
-- **測試**：規則寫進 `tests/chart.test.ts`。`tests/values/` 的兩個安裝實例範例與 `smoke.yaml`（以 traefik/whoami 當替身服務）也供 nightly（Laysi/trustiot-v2#69）在叢集上安裝使用；叢集測試是 `tests/e2e/ingress.e2e.ts`（入口）與 `tests/e2e/mesh.e2e.ts`（服務間授權），共用 `tests/e2e/cluster.ts`，nightly 可直接沿用。`bun test` 的 kubeconform 已帶 CRD schema 目錄，Gateway API 與 Istio 的資源可以直接驗證。兩個實例範例會部署叢集內 ClickHouse（`clickhouse.mode: bundled`），在叢集上安裝前要先建立 `trustiot-clickhouse-admin` Secret（見「叢集內的 ClickHouse」）；叢集測試用 `tests/e2e/values-e2e.yaml` 改成 `external`，不部署 ClickHouse。`tests/` 不會打包進 chart（`.helmignore`）。
+- **測試**：規則寫進 `tests/chart.test.ts`。`tests/values/` 的兩個安裝實例範例與 `smoke.yaml`（以 traefik/whoami 當替身服務）也供 nightly（Laysi/trustiot-v2#69）在叢集上安裝使用；叢集測試是 `tests/e2e/ingress.e2e.ts`（入口）、`tests/e2e/mesh.e2e.ts`（服務間授權）與 `tests/e2e/otel.e2e.ts`（日誌管線），前兩個共用 `tests/e2e/cluster.ts`，nightly 可直接沿用。`bun test` 的 kubeconform 已帶 CRD schema 目錄，Gateway API 與 Istio 的資源可以直接驗證。兩個實例範例會部署叢集內 ClickHouse（`clickhouse.mode: bundled`）與 collector，在叢集上安裝前要先建立 `trustiot-clickhouse-admin` Secret（見「叢集內的 ClickHouse」）與 collector 的 `trustiot-otel-collector-clickhouse` Secret；叢集測試用 `tests/e2e/values-e2e.yaml` 改成 `external`，不部署 ClickHouse，也關掉 collector。`tests/` 不會打包進 chart（`.helmignore`）。
 
 ## OpenShift 與其他 Kubernetes
 
-- Pod 符合 restricted Pod Security Standard，且不固定 UID，可以在 OpenShift 的 restricted-v2 SCC 下執行。
+- Pod 符合 restricted Pod Security Standard，且不固定 UID，可以在 OpenShift 的 restricted-v2 SCC 下執行。例外是固定的群組 ID：身分服務的 `fsGroup`（`services.identity.podSecurityContext.fsGroup`）與叢集內 ClickHouse 的 UID／GID，在 OpenShift 都設成 `null` 交給 SCC 指派。
 - 預設只排到 arm64 節點；客戶用 x86 主機時，要先加出 amd64 映像（決策 5）再調整 `serviceDefaults.nodeSelector`。
 - chart 需要叢集已裝 Istio ambient 與 Gateway API CRD，並設好 ext_authz provider。k3s 用 `global.platform=k3s`，OpenShift 用 `global.platform=openshift` 或 OpenShift Service Mesh 3，步驟見 `deploy/istio/README.md`。
 - 入口 gateway 的 pod 由 Istio 產生，以 UID 1337 執行，符合 restricted Pod Security Standard（2026-10-10 在 restricted namespace 實測）；OpenShift 的 restricted-v2 SCC 會指派其他 UID，目前沒有 OpenShift 環境可測。

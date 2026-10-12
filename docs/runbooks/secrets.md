@@ -95,7 +95,26 @@ GHCR 只接受 classic personal access token，所以以專用機器帳號建立
 
 ### 內部身分簽章金鑰
 
-步驟與等待時間見 [crates/service-kit/README.md](../../crates/service-kit/README.md) 的「公鑰與輪替」：先讓所有服務同時有新舊公鑰，再換身分服務的簽章私鑰，舊 token 全部過期後才移除舊公鑰。SaaS 的公鑰在安裝實例覆寫檔的平台設定，私鑰在 SOPS 的 Secret，三個步驟各是一個 PR；chart 的欄位與私鑰的 Secret 由 Laysi/trustiot-v2#61 加入，屆時補上欄位名稱。
+chart 的欄位（Laysi/trustiot-v2#61，說明在 [deploy/chart/README.md](../../deploy/chart/README.md) 的「內部身分」）：
+
+- **公鑰**：`internalIdentity.publicKeys`，每把 `{kid, x}`，`x` 是 32 bytes 公鑰的 base64url。chart 組成 JWK Set 放進平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`（ConfigMap）；ConfigMap 改變時每個服務都會滾動更新。公鑰不是祕密，SaaS 寫在安裝實例覆寫檔，不必加密。
+- **私鑰**：`internalIdentity.signingKeySecret` 指向的 Secret（`name`；`key` 預設 `signing-key.pem`），內容是 PKCS#8 PEM，只以唯讀檔案掛進身分服務的 `/etc/trustiot/identity-signing-key/signing-key.pem`，檔案權限 0440，只有 root 與 pod 的 `fsGroup`（`services.identity.podSecurityContext.fsGroup`，預設 65532；OpenShift 設成 `null` 由 SCC 指派）讀得到。SaaS 的這個 Secret 以 SOPS 加密。
+- **kid 不另外設定**：身分服務啟動時用私鑰對 `publicKeys` 的每個 kid 簽一個測試 token 再驗證，找出自己的 kid。私鑰對應的公鑰不在 `publicKeys` 裡時，新的 pod 拒絕啟動，舊的 pod 繼續服務。身分服務只在啟動時讀私鑰，Secret 改變不會讓它重啟。
+
+為什麼要依這個順序、等多久，見 [crates/service-kit/README.md](../../crates/service-kit/README.md) 的「公鑰與輪替」與 [services/identity/README.md](../../services/identity/README.md) 的「金鑰輪替」。SaaS 的三個步驟各是一個 PR：
+
+1. **加新公鑰**：產生新的金鑰對，把新公鑰以新的 kid（例如 `2027-04-a`）加進覆寫檔的 `internalIdentity.publicKeys`，新舊並存。合併後確認每個服務都滾動完成：每個 Deployment 都跑 `sudo k3s kubectl -n trustiot rollout status`。
+2. **換簽章私鑰**：以 `sops edit` 把 `signingKeySecret` 指向的 Secret 換成新私鑰。同一個 PR 更新 `services.identity.podAnnotations` 的 `trustiot.io/secret-rotated`，讓身分服務重啟。確認 `deploy/<release>-identity` 的 rollout 完成，而且身分服務的啟動日誌 `signing internal identity tokens` 記的 kid 是新的。
+3. **移除舊公鑰**：身分服務滾動完成後至少等 305 秒（驗證端接受的最長效期 300 秒加 5 秒時鐘誤差），再從 `publicKeys` 移除舊公鑰。合併並滾動完成後，刪除舊私鑰的檔案與備份。
+
+地端由客戶操作，順序相同：
+
+- 公鑰：改 values 後 `helm upgrade`。
+- 私鑰：照「通用步驟：地端」換掉 Secret 的值，再 `kubectl -n <namespace> rollout restart deployment/<release>-identity`。
+
+私鑰外洩時，三個步驟在同一次變更裡完成，不等舊 token 過期。滾動期間有一部分請求會被拒絕（401），換取外洩的金鑰馬上失效。
+
+公鑰的 `x` 由私鑰檔算出：`openssl pkey -in <檔案> -pubout -outform DER | tail -c 32 | basenc --base64url | tr -d "="`。
 
 產生金鑰對時私鑰直接寫進檔案（例如 `openssl genpkey -algorithm ed25519 -out <檔案>`），由檔案貼進 `sops edit`，用完刪除檔案。
 

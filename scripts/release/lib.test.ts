@@ -207,6 +207,8 @@ describe("discoverImages", () => {
   test("the repository's own images are valid", () => {
     const images = discoverImages(ROOT);
     expect(images.map((image) => image.name)).toContain("release-selftest");
+    // Laysi/trustiot-v2#308: the identity service ships as the chart's `identity` service.
+    expect(images).toContainEqual({ kind: "rust", name: "identity", package: "identity" });
   });
 });
 

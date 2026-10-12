@@ -1,12 +1,12 @@
-//! Writing events in the caller's transaction, against a real Postgres (`TEST_DATABASE_URL`,
-//! or a throwaway container; skipped without either unless `CI` is set).
+//! Writing events in the caller's transaction, against a real Postgres with TLS (a throwaway
+//! container; skipped without podman or docker unless `CI` is set).
 
 mod support;
 
 use std::time::Duration;
 
 use contract::EventEnvelope;
-use outbox::{Aggregate, Consumer, ConsumerConfig, PublishError};
+use outbox::{Aggregate, ConsumerConfig, PublishError};
 use support::{Counted, Recorder, database, drain};
 
 #[tokio::test]
@@ -65,8 +65,7 @@ async fn a_rolled_back_transaction_leaves_no_event() {
     assert_eq!(aggregates, 0, "the sequence rolls back with the event");
 
     // A consumer finds nothing; then a committed write is delivered, numbered 1.
-    let consumer = Consumer::new(
-        setup.consumer.clone(),
+    let consumer = setup.subscribe(
         ConsumerConfig::new("rollback", &setup.producer_schema).expect("config"),
         Recorder {
             subscription: "rollback".to_owned(),

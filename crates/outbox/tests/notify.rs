@@ -1,6 +1,6 @@
-//! Notification mode against a real Postgres (`TEST_DATABASE_URL`, or a throwaway container;
-//! skipped without either unless `CI` is set): consumers read the producer's current state,
-//! and a late, replayed, or racing old reading never overwrites a newer one.
+//! Notification mode against a real Postgres with TLS (a throwaway container; skipped without
+//! podman or docker unless `CI` is set): consumers read the producer's current state, and a
+//! late, replayed, or racing old reading never overwrites a newer one.
 
 mod support;
 
@@ -8,9 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use outbox::notify::{store_if_newer, stored_version};
-use outbox::{
-    Aggregate, Consumer, ConsumerConfig, Delivery, Handler, HandlerError, Position, Replay,
-};
+use outbox::{Aggregate, ConsumerConfig, Delivery, Handler, HandlerError, Position, Replay};
 use sqlx::{PgPool, Postgres, Transaction};
 use support::{Counted, Setup, database, drain};
 
@@ -198,8 +196,7 @@ async fn late_and_replayed_events_converge_on_the_current_state() {
     for name in ["a", "b", "c"] {
         rename(&setup, "w", name).await;
     }
-    let consumer = Consumer::new(
-        setup.consumer.clone(),
+    let consumer = setup.subscribe(
         ConsumerConfig::new("mirror", &setup.producer_schema).expect("config"),
         Mirror {
             source: setup.producer.clone(),

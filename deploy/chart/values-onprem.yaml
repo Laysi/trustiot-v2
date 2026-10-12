@@ -28,6 +28,9 @@ observability:
   sentry:
     # Off by default (decision 24); a customer that runs Sentry can enable it in the overlay.
     enabled: false
-
-# Copying logs and traces to the customer's SIEM (decision 22) arrives with the OpenTelemetry
-# collector (Laysi/trustiot-v2#73).
+  # A copy of the redacted logs for the customer's SIEM (decision 22) is off until the customer
+  # asks for it: the instance overlay sets collector.forward (endpoint, protocol, signals and,
+  # when the SIEM needs them, the auth header Secret and CA).
+  collector:
+    forward:
+      enabled: false
