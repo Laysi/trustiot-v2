@@ -1,0 +1,159 @@
+rcheck: queued on the build host at 07:15:56 (Asia/Taipei)
+== published v0.0.0-rc.5 (built on the runner)
+image sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44, COPY layer sha256:b077918520298a559a7cc228df1e1d16b9b079faacfdfb0351d529c6474c534b
+compressed 3278126 bytes, sha256 b077918520298a559a7cc228df1e1d16b9b079faacfdfb0351d529c6474c534b
+uncompressed 6382592 bytes, sha256 8b3d9619d37cb357b044179f07d9d0db705a2ed63db609660791e0575bccc2fb (the layer's diff_id)
+gzip header: 1f 8b 08 00 00 09 6e 88 00 ff
+@0: type "x" name "usr/PaxHeaders.0" prefix "" mode 0000000 uid 0000000 gid 0000000 size 37 mtime 00000000000 link "" magic "ustar" version "00" uname "" gname "" dev , header-sha256 0872ea293234c624
+      pax "37 SCHILY.xattr.user.overlay.origin="
+@1024: type "5" name "usr/" prefix "" mode 0000755 uid 0000000 gid 0000000 size 0 mtime 15263227704 link "" magic "ustar" version "00" uname "" gname "" dev 0000000,0000000 header-sha256 d3160a52730a681f
+@1536: type "5" name "usr/local/" prefix "" mode 0000755 uid 0000000 gid 0000000 size 0 mtime 15263227704 link "" magic "ustar" version "00" uname "" gname "" dev 0000000,0000000 header-sha256 e891c221042e8590
+@2048: type "5" name "usr/local/bin/" prefix "" mode 0000755 uid 0000000 gid 0000000 size 0 mtime 15263227704 link "" magic "ustar" version "00" uname "" gname "" dev 0000000,0000000 header-sha256 7e1f6a889f9c5c97
+@2560: type "0" name "usr/local/bin/identity" prefix "" mode 0000555 uid 0000000 gid 0000000 size 6378112 mtime 15263227704 link "" magic "ustar" version "00" uname "" gname "" dev 0000000,0000000 header-sha256 9c7cc0343a1734a3
+      content sha256 ea8f655bfdbe442a2dc8e190cca8f2423d63ca7632c6f32525e4478d7af27cda
+@6381568: zero block; 1024 bytes from here to the end
+== rebuild (podman as root, arm64 under emulation)
+image sha256:4bb4177e3a5bc0f8d147a480050da98330ab5d81aa010d9d30e9b41233dd26ca, COPY layer sha256:1196df7738c44db9ab270b67e5d58a0bbafcd6ee799c050dbf78c3508dfe3007
+compressed 3277753 bytes, sha256 1196df7738c44db9ab270b67e5d58a0bbafcd6ee799c050dbf78c3508dfe3007
+uncompressed 6381568 bytes, sha256 fe0509b6267de079a37b5f9f359c2d57de1a5d4eede72b5889a4e770510f972c (the layer's diff_id)
+gzip header: 1f 8b 08 00 00 09 6e 88 00 ff
+@0: type "5" name "usr/" prefix "" mode 0000755 uid 0000000 gid 0000000 size 0 mtime 15263227704 link "" magic "ustar" version "00" uname "" gname "" dev 0000000,0000000 header-sha256 d3160a52730a681f
+@512: type "5" name "usr/local/" prefix "" mode 0000755 uid 0000000 gid 0000000 size 0 mtime 15263227704 link "" magic "ustar" version "00" uname "" gname "" dev 0000000,0000000 header-sha256 e891c221042e8590
+@1024: type "5" name "usr/local/bin/" prefix "" mode 0000755 uid 0000000 gid 0000000 size 0 mtime 15263227704 link "" magic "ustar" version "00" uname "" gname "" dev 0000000,0000000 header-sha256 7e1f6a889f9c5c97
+@1536: type "0" name "usr/local/bin/identity" prefix "" mode 0000555 uid 0000000 gid 0000000 size 6378112 mtime 15263227704 link "" magic "ustar" version "00" uname "" gname "" dev 0000000,0000000 header-sha256 9c7cc0343a1734a3
+      content sha256 ea8f655bfdbe442a2dc8e190cca8f2423d63ca7632c6f32525e4478d7af27cda
+@6380544: zero block; 1024 bytes from here to the end
+== 2026-10-12T23:16:12Z apt: podman, skopeo, uidmap (rootless podman needs newuidmap)
+debconf: delaying package configuration, since apt-utils is not installed
+  buildah 1.33.7+ds1-1ubuntu0.24.04.3
+  crun 1.14.1-1
+  golang-github-containers-common 0.57.4+ds1-2ubuntu0.2
+  golang-github-containers-image 5.29.2-2
+  podman 4.9.3+ds1-1ubuntu0.2
+  skopeo 1.13.3+ds1-2ubuntu0.24.04.3
+  uidmap 1:4.13+dfsg1-4ubuntu3.2
+[root] podman as 0:0, graph driver overlay, rootless false
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+Trying to pull gcr.io/distroless/static-debian13@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3...
+Getting image source signatures
+Copying blob sha256:2780920e5dbfbe103d03a583ed75345306e572ec5a48cb10361f046767d9f29a
+Copying blob sha256:c172f21841dff4c8cf45cde46589c1c2616cefe7e819965e92e6d3475c428aa0
+Copying blob sha256:401d177fd1e8a1e0d7a48139788d026e9a2e919ccb122bedd110ac7cf351f53e
+Copying blob sha256:d6b1b89eccacc15c2420b2776d72c1dae334a00805ed9af54bf2f71e4d536f28
+Copying blob sha256:f6069939f718601b38d25ec5ed5631ed047e4da24acec2e252f8f29d251be718
+Copying blob sha256:218cf840d0d95a86231eb9d33d26ac8a520a4299c6096cb70a0c2fb2a87c9e0a
+Copying blob sha256:7c12895b777bcaa8ccae0605b4de635b68fc32d60fa08f421dc3818bf55ee212
+Copying blob sha256:3214acf345c0cc6bbdb56b698a41ccdefc624a09d6beb0d38b5de0b2303ecaf4
+Copying blob sha256:52630fc75a18675c530ed9eba5f55eca09b03e91bd5bc15307918bbc1a7e7296
+Copying blob sha256:dd64bf2dd177757451a98fcdc999a339c35dee5d9872d8f4dc69c8f3c4dd0112
+Copying blob sha256:b839dfae01f66e15c6a8b63520557ed315bdfe036342fa7a0c537259f10d7a9a
+Copying blob sha256:ebddc55facdc6b1f7e0f30816a5fc7cc62f38abdf76c0a8b0a0ce52085754795
+Copying blob sha256:6ed1ef0cb1159b9c93a24ceb88b987c6b3a8adff7160940c7c5e6bfc001f1766
+Copying config sha256:bcff74c94c33712c3758af70114dfb388180cf43e789031b9a6d4195195bf97e
+Writing manifest to image destination
+STEP 2/5: COPY --chmod=0555 identity /usr/local/bin/identity
+--> 9ecae019ab79
+STEP 3/5: USER 65532:65532
+--> 6d8c20a24d72
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/identity"]
+--> 0b1966ad5b0e
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="716740a9fa638a39e4655c54173653a36f2b121d" "org.opencontainers.image.version"="0.0.0-rc.5" "org.opencontainers.image.title"="identity"
+COMMIT localhost/trustiot-release/identity:0.0.0-rc.5
+--> b6081d416d6d
+Successfully tagged localhost/trustiot-release/identity:0.0.0-rc.5
+b6081d416d6d5661f0d07076f6d3bc4e7856900b9cbcdc9bc27e72f922bd9fa1
+Getting image source signatures
+Copying blob sha256:e842bc95a0a8664498b7881e537b5929e419d590f5a9954fb7f81c73c20fc6c7
+Copying blob sha256:621c35e751a51a9a9dc3e80aa0b7fe8be2a93402ea6ccd307d30852cd7776cda
+Copying blob sha256:763a77745f27b86cf26b97887b6842d83720e63b1c48848c0ba9ee54e351d63a
+Copying blob sha256:f0d0eff4c2312a7bd6e21797bdfea5eb35f60e76b555ce2b22794424af2cad36
+Copying blob sha256:275a30dd8ce958b21daa9ad962c6fbc09f98306ee2f486b65c9075dc257b1412
+Copying blob sha256:4d049f83d9cf21d1f5cc0e11deaf36df02790d0e60c1a3829538fb4b61685368
+Copying blob sha256:af5aa97ebe6ce1604747ec1e21af7136ded391bcabe4acef882e718a87c86bcc
+Copying blob sha256:6f1cdceb6a3146f0ccb986521156bef8a422cdbb0863396f7f751f575ba308f4
+Copying blob sha256:bd3cdfae1d3fdd83a2231d608969b38b82349777c2fff9a7c12d54f8ac5c9b38
+Copying blob sha256:4cde6b0bb6f50a5f255eef7b2a42162c661cf776b803225dcac9a659e396bb6b
+Copying blob sha256:ad51d0769d16ba578106a177987dfe3d2e02c1668c852b795b2f6b024068242a
+Copying blob sha256:187cfc6d1e3e8a40a5e64653bcd3239c140807dcf1c09e48021178705a5a6139
+Copying blob sha256:f2392a9484bf6b18f06beaf705b994e31dbb2716c99cf7d03c9c495cd107f364
+Copying blob sha256:fe0509b6267de079a37b5f9f359c2d57de1a5d4eede72b5889a4e770510f972c
+Copying config sha256:b6081d416d6d5661f0d07076f6d3bc4e7856900b9cbcdc9bc27e72f922bd9fa1
+Writing manifest to image destination
+[root] image sha256:4bb4177e3a5bc0f8d147a480050da98330ab5d81aa010d9d30e9b41233dd26ca
+[root] COPY layer sha256:1196df7738c44db9ab270b67e5d58a0bbafcd6ee799c050dbf78c3508dfe3007, diff_id sha256:fe0509b6267de079a37b5f9f359c2d57de1a5d4eede72b5889a4e770510f972c
+[rootless] podman as 1001:1001, graph driver overlay, rootless true
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+Trying to pull gcr.io/distroless/static-debian13@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3...
+Getting image source signatures
+Copying blob sha256:2780920e5dbfbe103d03a583ed75345306e572ec5a48cb10361f046767d9f29a
+Copying blob sha256:c172f21841dff4c8cf45cde46589c1c2616cefe7e819965e92e6d3475c428aa0
+Copying blob sha256:401d177fd1e8a1e0d7a48139788d026e9a2e919ccb122bedd110ac7cf351f53e
+Copying blob sha256:f6069939f718601b38d25ec5ed5631ed047e4da24acec2e252f8f29d251be718
+Copying blob sha256:218cf840d0d95a86231eb9d33d26ac8a520a4299c6096cb70a0c2fb2a87c9e0a
+Copying blob sha256:d6b1b89eccacc15c2420b2776d72c1dae334a00805ed9af54bf2f71e4d536f28
+Copying blob sha256:7c12895b777bcaa8ccae0605b4de635b68fc32d60fa08f421dc3818bf55ee212
+Copying blob sha256:3214acf345c0cc6bbdb56b698a41ccdefc624a09d6beb0d38b5de0b2303ecaf4
+Copying blob sha256:52630fc75a18675c530ed9eba5f55eca09b03e91bd5bc15307918bbc1a7e7296
+Copying blob sha256:dd64bf2dd177757451a98fcdc999a339c35dee5d9872d8f4dc69c8f3c4dd0112
+Copying blob sha256:b839dfae01f66e15c6a8b63520557ed315bdfe036342fa7a0c537259f10d7a9a
+Copying blob sha256:ebddc55facdc6b1f7e0f30816a5fc7cc62f38abdf76c0a8b0a0ce52085754795
+Copying blob sha256:6ed1ef0cb1159b9c93a24ceb88b987c6b3a8adff7160940c7c5e6bfc001f1766
+Copying config sha256:bcff74c94c33712c3758af70114dfb388180cf43e789031b9a6d4195195bf97e
+Writing manifest to image destination
+STEP 2/5: COPY --chmod=0555 identity /usr/local/bin/identity
+--> 02c4a825b190
+STEP 3/5: USER 65532:65532
+--> f1415a8bf263
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/identity"]
+--> 0906056ac3a4
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="716740a9fa638a39e4655c54173653a36f2b121d" "org.opencontainers.image.version"="0.0.0-rc.5" "org.opencontainers.image.title"="identity"
+COMMIT localhost/trustiot-release/identity:0.0.0-rc.5
+--> 6b210c5b5de0
+Successfully tagged localhost/trustiot-release/identity:0.0.0-rc.5
+6b210c5b5de0430c4f243ccdca3ce3360eb6906e0da5ea593ad06a8a74142269
+Getting image source signatures
+Copying blob sha256:e842bc95a0a8664498b7881e537b5929e419d590f5a9954fb7f81c73c20fc6c7
+Copying blob sha256:621c35e751a51a9a9dc3e80aa0b7fe8be2a93402ea6ccd307d30852cd7776cda
+Copying blob sha256:763a77745f27b86cf26b97887b6842d83720e63b1c48848c0ba9ee54e351d63a
+Copying blob sha256:f0d0eff4c2312a7bd6e21797bdfea5eb35f60e76b555ce2b22794424af2cad36
+Copying blob sha256:275a30dd8ce958b21daa9ad962c6fbc09f98306ee2f486b65c9075dc257b1412
+Copying blob sha256:4d049f83d9cf21d1f5cc0e11deaf36df02790d0e60c1a3829538fb4b61685368
+Copying blob sha256:af5aa97ebe6ce1604747ec1e21af7136ded391bcabe4acef882e718a87c86bcc
+Copying blob sha256:6f1cdceb6a3146f0ccb986521156bef8a422cdbb0863396f7f751f575ba308f4
+Copying blob sha256:bd3cdfae1d3fdd83a2231d608969b38b82349777c2fff9a7c12d54f8ac5c9b38
+Copying blob sha256:4cde6b0bb6f50a5f255eef7b2a42162c661cf776b803225dcac9a659e396bb6b
+Copying blob sha256:ad51d0769d16ba578106a177987dfe3d2e02c1668c852b795b2f6b024068242a
+Copying blob sha256:187cfc6d1e3e8a40a5e64653bcd3239c140807dcf1c09e48021178705a5a6139
+Copying blob sha256:f2392a9484bf6b18f06beaf705b994e31dbb2716c99cf7d03c9c495cd107f364
+Copying blob sha256:8b3d9619d37cb357b044179f07d9d0db705a2ed63db609660791e0575bccc2fb
+Copying config sha256:6b210c5b5de0430c4f243ccdca3ce3360eb6906e0da5ea593ad06a8a74142269
+Writing manifest to image destination
+[rootless] image sha256:7f10672d640a3cc2f8e489fe6850e1818625ce746759ba564a3636485f45303f
+[rootless] COPY layer sha256:b077918520298a559a7cc228df1e1d16b9b079faacfdfb0351d529c6474c534b, diff_id sha256:8b3d9619d37cb357b044179f07d9d0db705a2ed63db609660791e0575bccc2fb
+published: image sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44, COPY layer diff_id sha256:8b3d9619d37cb357b044179f07d9d0db705a2ed63db609660791e0575bccc2fb
+== published binary packed again in the x64 container, podman root
+image sha256:4bb4177e3a5bc0f8d147a480050da98330ab5d81aa010d9d30e9b41233dd26ca, COPY layer sha256:1196df7738c44db9ab270b67e5d58a0bbafcd6ee799c050dbf78c3508dfe3007
+compressed 3277753 bytes, sha256 1196df7738c44db9ab270b67e5d58a0bbafcd6ee799c050dbf78c3508dfe3007
+uncompressed 6381568 bytes, sha256 fe0509b6267de079a37b5f9f359c2d57de1a5d4eede72b5889a4e770510f972c (the layer's diff_id)
+gzip header: 1f 8b 08 00 00 09 6e 88 00 ff
+@0: type "5" name "usr/" prefix "" mode 0000755 uid 0000000 gid 0000000 size 0 mtime 15263227704 link "" magic "ustar" version "00" uname "" gname "" dev 0000000,0000000 header-sha256 d3160a52730a681f
+@512: type "5" name "usr/local/" prefix "" mode 0000755 uid 0000000 gid 0000000 size 0 mtime 15263227704 link "" magic "ustar" version "00" uname "" gname "" dev 0000000,0000000 header-sha256 e891c221042e8590
+@1024: type "5" name "usr/local/bin/" prefix "" mode 0000755 uid 0000000 gid 0000000 size 0 mtime 15263227704 link "" magic "ustar" version "00" uname "" gname "" dev 0000000,0000000 header-sha256 7e1f6a889f9c5c97
+@1536: type "0" name "usr/local/bin/identity" prefix "" mode 0000555 uid 0000000 gid 0000000 size 6378112 mtime 15263227704 link "" magic "ustar" version "00" uname "" gname "" dev 0000000,0000000 header-sha256 9c7cc0343a1734a3
+      content sha256 ea8f655bfdbe442a2dc8e190cca8f2423d63ca7632c6f32525e4478d7af27cda
+@6380544: zero block; 1024 bytes from here to the end
+== published binary packed again in the x64 container, podman rootless
+image sha256:7f10672d640a3cc2f8e489fe6850e1818625ce746759ba564a3636485f45303f, COPY layer sha256:b077918520298a559a7cc228df1e1d16b9b079faacfdfb0351d529c6474c534b
+compressed 3278126 bytes, sha256 b077918520298a559a7cc228df1e1d16b9b079faacfdfb0351d529c6474c534b
+uncompressed 6382592 bytes, sha256 8b3d9619d37cb357b044179f07d9d0db705a2ed63db609660791e0575bccc2fb (the layer's diff_id)
+gzip header: 1f 8b 08 00 00 09 6e 88 00 ff
+@0: type "x" name "usr/PaxHeaders.0" prefix "" mode 0000000 uid 0000000 gid 0000000 size 37 mtime 00000000000 link "" magic "ustar" version "00" uname "" gname "" dev , header-sha256 0872ea293234c624
+      pax "37 SCHILY.xattr.user.overlay.origin="
+@1024: type "5" name "usr/" prefix "" mode 0000755 uid 0000000 gid 0000000 size 0 mtime 15263227704 link "" magic "ustar" version "00" uname "" gname "" dev 0000000,0000000 header-sha256 d3160a52730a681f
+@1536: type "5" name "usr/local/" prefix "" mode 0000755 uid 0000000 gid 0000000 size 0 mtime 15263227704 link "" magic "ustar" version "00" uname "" gname "" dev 0000000,0000000 header-sha256 e891c221042e8590
+@2048: type "5" name "usr/local/bin/" prefix "" mode 0000755 uid 0000000 gid 0000000 size 0 mtime 15263227704 link "" magic "ustar" version "00" uname "" gname "" dev 0000000,0000000 header-sha256 7e1f6a889f9c5c97
+@2560: type "0" name "usr/local/bin/identity" prefix "" mode 0000555 uid 0000000 gid 0000000 size 6378112 mtime 15263227704 link "" magic "ustar" version "00" uname "" gname "" dev 0000000,0000000 header-sha256 9c7cc0343a1734a3
+      content sha256 ea8f655bfdbe442a2dc8e190cca8f2423d63ca7632c6f32525e4478d7af27cda
+@6381568: zero block; 1024 bytes from here to the end
+rcheck: removed 0 dangling test volumes
+rcheck: exit 0 at 07:17:38 (the build host)
