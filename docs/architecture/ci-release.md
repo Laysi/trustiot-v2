@@ -4,7 +4,7 @@ GitHub Actions，三個 workflow：
 
 1. `ci.yml`：每個 PR（不論目標分支，整合分支也一樣）與推到 main 都跑，release.yml 開的 deploy PR 則由 release.yml 以 `workflow_dispatch` 觸發（見下方「SaaS 以 GitOps 部署」），全綠才能合併（目前由流程把關，見下方「必要檢查與強制方式」）。Rust 跑 fmt、clippy、測試與 sqlx 離線檢查，並以 cargo-deny 檢查授權與漏洞公告（地端產品不能混入 BSL 等不能轉售的授權）；整合測試以 service container 起含 AGE 的 Postgres、ClickHouse 與 Mosquitto，跑完全部 migration 後跑跨租戶負向測試（RLS、row policy、AGE 角色）；閘道器程式交叉編譯成 aarch64，agent 用 testkit 的假 Modbus 端點跑故障注入測試；前端跑 Bun 安裝、型別檢查、lint、單元測試與建置；重新產生 `api/openapi.json` 與前端 client，有差異就失敗；helm lint，兩份 values 各自 helm template 後以 kubeconform 驗證（`bun test deploy/chart` 一次跑完，也檢查 chart 自己的安全規則，見 `deploy/chart/README.md`）；SaaS 主機安裝程式的型別檢查、測試與建置（`deploy/host`）；gitleaks 掃描祕密。各項由哪個 job 負責、哪些還沒加入，見下方「ci.yml 的 job」。Codex 審查設為 PR 的必要檢查，是伺服器端的關卡；本機 pre-commit 只是提早攔下。2026-10-11 起（Laysi/trustiot-v2#309）每個 job 都在 arm64 runner 上執行，`rust`、`cargo-deny`、`helm`、`host` 依變更的路徑決定是否執行，見下方「依變更路徑決定 job」。
 2. `release.yml`：打 tag 時跑。容器映像只出 arm64：Rust 先交叉編譯再放進映像，推到 GHCR，以 cosign 簽章並附 SBOM；SaaS 主機與展示機（Mac M1）都要是 arm64，地端客戶若用 x86 主機，到時再加 amd64。Helm chart 打包推到 GHCR。閘道器 agent 與 updater 的 aarch64 執行檔附建置來源證明，由 CI 以 OTA 簽章金鑰簽章：金鑰存在受保護的 GitHub environment，只有 main 上的 tag 能用，每次簽章都要人工核准。另外產出離線安裝包（MS6）；release notes 沿用 `Laysi/release-notes-action`。
-3. `nightly.yml`：每晚用 k3d 部署整套 chart（兩份 values 各一次），裝好 Istio ambient 後跑冒煙測試與入口 e2e 測試，失敗時開 issue 通知；PR 只在帶 `smoke` label 時才部署；依賴更新交給 Renovate。做什麼、怎麼通知與失敗時怎麼辦見下方「nightly.yml」與「Renovate」。
+3. `nightly.yml`：每晚用 k3d 部署整套 chart（兩份 values 各一次），裝好 Istio ambient 與 CloudNativePG operator 後跑冒煙測試與入口 e2e 測試，失敗時開 issue 通知；PR 只在帶 `smoke` label 時才部署；依賴更新交給 Renovate。做什麼、怎麼通知與失敗時怎麼辦見下方「nightly.yml」與「Renovate」。
 
 SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定放在 `deploy/flux/`；發版就是合併一個改 chart 版本號的 PR（由 release 流程自動開）。GitHub 不持有任何部署憑證，主機也不必對外開放，叢集只存一把唯讀的 GHCR 拉取 token；Flux 控制器的記憶體算進主機規格（MS3 重測）。地端不裝 Flux，由客戶以 Helm 安裝或用離線安裝包。
 
@@ -56,15 +56,16 @@ Laysi/trustiot-v2#70 建立了 `.sops.yaml`（規則：`deploy/flux/clusters/saa
 
 2026-10-10 上線（Laysi/trustiot-v2#67）。同一個 PR 有新的推送時取消舊的執行；推到 main 的每個 commit 各自一個 concurrency group，一律跑完，每個 main commit 都有結果（共用一個 group 時，GitHub 會以較新的執行取代還在排隊的執行，即使沒有設 `cancel-in-progress`）。本機重跑的指令列在 `CLAUDE.md` 的「Build, lint, and test」。
 
-2026-10-11 起（Laysi/trustiot-v2#309）每個 job 都在 arm64 代管 runner（`ubuntu-24.04-arm`）上執行，理由與例外見下方「省 Actions 分鐘數」。2026-10-11 當時 repo 是私有庫，這個標籤是 2-core；2026-10-12 起 repo 公開，依 GitHub 文件同一個標籤是 4 vCPU、16 GB RAM（私有庫是 2 vCPU、8 GB），規格未實測（Laysi/trustiot-v2#345）。`changes` job 先依變更的路徑決定 `rust`、`cargo-deny`、`helm`、`host` 要不要執行（見下方「依變更路徑決定 job」）；`gitleaks` 與 `workflow-policy` 每次都執行，不等 `changes`。
+2026-10-11 起（Laysi/trustiot-v2#309）每個 job 都在 arm64 代管 runner（`ubuntu-24.04-arm`）上執行，理由與例外見下方「省 Actions 分鐘數」。2026-10-11 當時 repo 是私有庫，這個標籤是 2-core；2026-10-12 起 repo 公開，依 GitHub 文件同一個標籤是 4 vCPU、16 GB RAM（私有庫是 2 vCPU、8 GB），規格未實測（Laysi/trustiot-v2#345）。`changes` job 先依變更的路徑決定 `rust`、`cargo-deny`、`helm`、`host`、`postgres-image` 要不要執行（見下方「依變更路徑決定 job」）；`gitleaks` 與 `workflow-policy` 每次都執行，不等 `changes`。
 
 | job（檢查名稱） | 內容 |
 | --- | --- |
-| `changes` | `bun scripts/ci/changes.ts`：比較這次要測的 commit 與一個已測過的 commit，輸出 `rust`、`cargo-deny`、`helm`、`host` 各自是否執行（`true` 或 `false`），並在 job summary 列出理由、比較的 commit 與變更的檔案。推到 main 時另以 `actions: read` 讀 main 上近期的 ci 結果；PR 執行的是 PR 自己的腳本，不給它 token。規則見下方「依變更路徑決定 job」 |
+| `changes` | `bun scripts/ci/changes.ts`：比較這次要測的 commit 與一個已測過的 commit，輸出 `rust`、`cargo-deny`、`helm`、`host`、`postgres-image` 各自是否執行（`true` 或 `false`），並在 job summary 列出理由、比較的 commit 與變更的檔案。推到 main 時另以 `actions: read` 讀 main 上近期的 ci 結果；PR 執行的是 PR 自己的腳本，不給它 token。規則見下方「依變更路徑決定 job」 |
 | `rust` | `cargo fmt --all --check`；`cargo clippy --workspace --all-targets --locked -- -D warnings`；`cargo test --workspace --locked`（含 `tools/repo-check` 的 repo 規則、`crates/service-kit` 以 `cargo tree` 檢查關閉 `contract` feature 時不依賴 contract，以及之後各 crate 的測試，例如 agent 以 testkit 假 Modbus 端點跑的故障注入測試）。`--workspace` 只建置預設 feature，所以 service-kit 關閉預設 feature 另跑一次 clippy 與測試（`--package service-kit --no-default-features`）。service-kit 的容器測試（以 PID 1 執行的範例服務、advisory lock 用的 Postgres）與 testkit 跨租戶負向測試框架的自我測試（帶 TLS 的 Postgres）用 runner 上的 podman 或 docker 起容器；GitHub 設定 `CI=true`，找不到可用的容器執行環境時這些測試失敗而不是略過，所以測試步驟通過就表示它們真的跑過。全程設 `SQLX_OFFLINE=true`：sqlx 的查詢巨集只讀進版控的 `.sqlx/`，查詢資料沒更新就編譯失敗。接著執行 `cargo run --locked --package openapi` 重新產生 `api/openapi.json`（`tools/openapi`，各服務由程式碼產生的 OpenAPI 規格加上 M1 錯誤 schema 合併而成），有任何差異就印出差異並失敗，所以改了 API 型別卻沒重新產生規格的 PR 過不了；同一項比對也在 `cargo test --workspace` 裡（`tools/openapi/tests/openapi.rs`）。最後把 `crates/protocol` 與 `edge/` 下的每個成員以 `aarch64-unknown-linux-gnu` 建置；還沒有這些 crate 時只留下說明，protocol crate（Laysi/trustiot-v2#50）併入後自動涵蓋。runner 是 arm64 時主機本身就是這個 target，直接原生建置（沿用前面步驟的編譯快取）；在 x64 主機上才交叉編譯，函式庫建置不需要交叉連結器，第一個閘道器執行檔加入時一併加上。前一項失敗時後面幾項照跑，一次回報全部結果 |
 | `cargo-deny` | `cargo deny --locked check`，規則在根目錄的 `deny.toml`：授權白名單（見下方「授權白名單」）；RustSec 的漏洞、unmaintained 與 unsound 公告一律失敗，要忽略某則公告必須在 `deny.toml` 寫明理由與到期日；Cargo.lock 裡有 yanked 版本就失敗；相依只能來自 crates.io |
 | `helm` | `bun test deploy/chart`：`helm lint --strict`；`values-saas.yaml` 與 `values-onprem.yaml` 各自 helm template 後以 `kubeconform -strict` 驗證（Kubernetes schema 由 kubeconform 下載）；再加上 chart 自己的規則與 README 欄位檢查，見 `deploy/chart/README.md`；入口 e2e 的通道復原邏輯（`deploy/chart/tests/e2e/tunnel-recovery.ts`）有不需要叢集的單元測試，也在這一步跑。接著 `bun test deploy/flux`（Laysi/trustiot-v2#70）：SaaS 的 GitOps 樹以 `kubectl kustomize` 建置、以 kubeconform 對釘選版本的 Flux CRD 驗證，Flux 的 manifest 與釘選的 flux CLI 輸出相同，chart 來源的驗簽設定、實例 values 對 chart schema、`.sops.yaml`，見 `deploy/flux/README.md` 的「檢查」 |
 | `host` | SaaS 主機安裝程式（`deploy/host`，Laysi/trustiot-v2#64）：型別檢查；`bun test` 以模擬主機跑每個安裝步驟（乾淨主機一次到位、重跑不改任何東西、拒絕時主機不變、token 不出現在指令列與輸出），並以 runner 的 `systemd-analyze security --offline` 確認 cloudflared unit 的評分不高於 2.0、以 gpg 確認釘選的 Cloudflare 套件簽章金鑰指紋；`CI=true` 時缺 systemd-analyze 或 gpg 會失敗而不是略過；最後編譯 x86_64 與 aarch64 兩個執行檔 |
+| `postgres-image` | 含 AGE 的 Postgres 映像（`deploy/images/postgres`，2026-10-11，Laysi/trustiot-v2#57）：`bun test deploy/images/postgres` 在 arm64 runner 上以原生方式建置映像（經 `containerBuildArgs`，與其他容器建置相同的密鑰檢查），再照 CloudNativePG 的方式（UID 26、唯讀根檔案系統、drop ALL capabilities）啟動 Postgres，`CREATE EXTENSION age` 並執行 cypher() 查詢。這裡的建置在 arm64 上走原生的路，驗證不到「arm64 階段不能有 `RUN`」，所以由測試以靜態方式檢查 Containerfile（每個 `RUN` 都要在 `--platform=$BUILDPLATFORM` 的階段）；release.yml 的 plan 也檢查同一條規則（Laysi/trustiot-v2#310）。只在 `deploy/images/postgres/` 有變更時執行（`changes` job）；Renovate 更新基底映像的 PR 也會觸發，伺服器標頭沒跟著更新時在這裡失敗（升級步驟見該目錄的 README） |
 | `gitleaks` | 掃描 HEAD 能走到的每個 commit（完整歷史）；merge commit 也以對第一個 parent 的差異掃描，只在合併時加入的內容也查得到。只掃 HEAD，不掃 checkout 時一起抓下來的其他分支。發現時在該檔案與行號標註，附 fingerprint；報告遮蔽祕密值，不會印進紀錄 |
 | `workflow-policy` | `scripts/ci/check-workflows.ts` 檢查 `.github/workflows/` 的 workflow 與 `.github/actions/` 的 action，規則即上方通用規則中的權限、釘選（含本地 action 的位置）與觸發條件三項；`scripts/ci/lint-workflows.ts` 以 actionlint 檢查每個 workflow 的語法、expression 與各 key 可用的 context（2026-10-10，Laysi/trustiot-v2#251；本機 `bun scripts/ci/lint-workflows.ts`）；`scripts/ci/check-secret-handling.ts` 檢查密鑰的處理：repo 內每個 Dockerfile 與 Containerfile 不 COPY 金鑰類檔案、`ARG` 與 `ENV` 不放密鑰、只有旁邊的 ignore 檔以 `*` 開頭時才能複製整個 build context，`--build-arg` 與 `build-args` 不傳密鑰，映像建置一律經 `containerBuildArgs` 檢查實際的 context，`${{ secrets.* }}` 只出現在 step 的 `env` 與 `with`（不寫進 `run`，也不放在 workflow 與 job 層級的 `env`），repo 內的 Kubernetes Secret 一律以 SOPS 加密（規則見 [密鑰與權限](secrets.md)）；再跑 `scripts/` 與 `deploy/chart/tests/` 全部 TypeScript 的型別檢查（2026-10-11，Laysi/trustiot-v2#261）與 `scripts/` 的測試（含本地開發環境 Laysi/trustiot-v2#71 的單元測試；它的端對端測試要以 podman 起整套環境並編譯服務，不在 CI 執行；也含 `changes` 的路徑規則，以及 ci.yml 與 nightly.yml 決定執行與否的條件式，見下方「依變更路徑決定 job」） |
 
@@ -100,9 +101,10 @@ Laysi/trustiot-v2#70 建立了 `.sops.yaml`（規則：`deploy/flux/clusters/saa
 | `cargo-deny` | 任何 `Cargo.toml`、`Cargo.lock`、`deny.toml`、`rust-toolchain.toml`、`.cargo/` 下的檔案有變動 |
 | `helm` | `deploy/chart/`、`deploy/istio/`、`services/ingest/migrations/clickhouse/`、`deploy/flux/`、`scripts/flux/` 下的檔案，或 chart 測試讀的 `scripts/lib/stack.ts`、`services/ingest/tests/common/mod.rs`、`crates/service-kit/src/telemetry/redact.rs`、`docs/architecture/deployment.md`，或 `bun test deploy/flux` 讀的 `.sops.yaml`、`scripts/release/flux.ts` 有變動（`deploy/flux/` 與後兩者來自 Laysi/trustiot-v2#70） |
 | `host` | `deploy/host/` 下的檔案有變動（安裝程式的原始碼、測試、相依與建置都在這個目錄） |
+| `postgres-image` | `deploy/images/postgres/` 下的檔案（Containerfile 就是 build context，測試也在這裡），或測試經 `containerBuildArgs` 間接 import 的 `scripts/lib/build-context.ts`、`scripts/ci/check-secret-handling.ts`、`scripts/lib/{stack,state,secrets,cleanup}.ts` 有變動（測試 import 的 `scripts/release/lib.ts` 已在「全部」那一列） |
 | `gitleaks`、`workflow-policy` | 每次都執行 |
 
-**怎麼確保規則跟得上**：`scripts/ci/changes.test.ts` 逐類列出路徑與預期結果，另有兩項守門測試：掃描 repo 內每個 `.rs` 檔的字串常值與 `include_str!`/`include_bytes!`，凡是指向 repo 內某個路徑的，都必須會讓 `rust` 執行；掃描 `deploy/chart/tests/` 與 `deploy/host/` 的 TypeScript，凡是讀到 repo 內其他檔案的，都必須會讓 `helm` 或 `host` 執行。所以新測試開始讀某份文件時，若沒有同時更新規則，`workflow-policy` 會失敗。另一項守門測試沿著 `changes.ts` 的相對 import 一路追下去，每個被 import 的檔案都必須列在 `DECISION_CODE`，也就是會讓全部 job 執行。`scripts/ci/workflow-conditions.test.ts` 以 GitHub 自己的 expression 引擎（[`@actions/expressions`](https://www.npmjs.com/package/@actions/expressions)，GitHub 的 actions/languageservices，MIT）計算 ci.yml 與 nightly.yml 的 `if` 與 concurrency：`changes` 回答 `false` 才略過，回答 `true`、空值或 `changes` 本身失敗時都執行，整次執行被取消時不執行。
+**怎麼確保規則跟得上**：`scripts/ci/changes.test.ts` 逐類列出路徑與預期結果，另有兩項守門測試：掃描 repo 內每個 `.rs` 檔的字串常值與 `include_str!`/`include_bytes!`，凡是指向 repo 內某個路徑的，都必須會讓 `rust` 執行；掃描 `deploy/chart/tests/`、`deploy/host/` 與 `deploy/images/postgres/` 的 TypeScript，凡是讀到或 import repo 內其他檔案的，都必須會讓 `helm`、`host` 或 `postgres-image` 執行。所以新測試開始讀某份文件時，若沒有同時更新規則，`workflow-policy` 會失敗。另一項守門測試沿著 `changes.ts` 的相對 import 一路追下去，每個被 import 的檔案都必須列在 `DECISION_CODE`，也就是會讓全部 job 執行。`scripts/ci/workflow-conditions.test.ts` 以 GitHub 自己的 expression 引擎（[`@actions/expressions`](https://www.npmjs.com/package/@actions/expressions)，GitHub 的 actions/languageservices，MIT）計算 ci.yml 與 nightly.yml 的 `if` 與 concurrency：`changes` 回答 `false` 才略過，回答 `true`、空值或 `changes` 本身失敗時都執行，整次執行被取消時不執行。
 
 **失敗時往執行的方向走**：每個依路徑的 job 寫成 `if: !cancelled() && needs.changes.outputs.<job> != 'false'`，`changes` 失敗、逾時或沒寫出結果時照樣執行；`changes.ts` 遇到任何問題也都回答「全部執行」，並在 job summary 寫明原因。
 
@@ -112,7 +114,7 @@ Laysi/trustiot-v2#70 建立了 `.sops.yaml`（規則：`deploy/flux/clusters/saa
 
 ### 必要檢查與強制方式
 
-必要檢查清單（ci.yml 的 job 名稱）：`changes`、`rust`、`cargo-deny`、`helm`、`host`、`gitleaks`、`workflow-policy`。依路徑略過的 job 狀態是 skipped，GitHub 把它當作通過（job 層的 `if` 略過時會回報狀態；workflow 層的 `paths` 篩選則根本不會建立 check，必要檢查會一直等待，所以 ci.yml 不用 workflow 層的 `paths`）。
+必要檢查清單（ci.yml 的 job 名稱）：`changes`、`rust`、`cargo-deny`、`helm`、`host`、`postgres-image`、`gitleaks`、`workflow-policy`。依路徑略過的 job 狀態是 skipped，GitHub 把它當作通過（job 層的 `if` 略過時會回報狀態；workflow 層的 `paths` 篩選則根本不會建立 check，必要檢查會一直等待，所以 ci.yml 不用 workflow 層的 `paths`）。
 
 2026-10-10 確認：本 repo 是私有庫，組織在 GitHub Free 方案，分支保護與 ruleset 都不能用（API 回 HTTP 403「Upgrade to GitHub Pro」），GitHub 不會擋下沒通過檢查的合併。方案升級前由流程把關：合併任何 PR 之前，確認上列檢查在該 PR 最新的 commit 上全部通過或略過（略過只能來自 `changes` 的判斷）。方案升級後，在 main 的 ruleset 把上列檢查設為必要檢查。
 
@@ -121,7 +123,7 @@ Laysi/trustiot-v2#70 建立了 `.sops.yaml`（規則：`deploy/flux/clusters/saa
 | 選項 | 內容 | 取捨 |
 | --- | --- | --- |
 | A. 維持現況 | 由合併流程確認檢查通過 | 不必改設定；但任何有寫入權限的人（或以其憑證操作的 agent）都能直接推 main 或合併紅燈的 PR，這一點與發佈核准（見下方「發佈核准」）的補償措施依賴同一條流程 |
-| B. 為 main 設 ruleset | 要求經 PR 合併、上列 7 個檢查（`changes`、`rust`、`cargo-deny`、`helm`、`host`、`gitleaks`、`workflow-policy`）為必要檢查、禁止 force push 與刪除；繞過名單只給少數管理員 | 紅燈與跳過檢查在 GitHub 端被擋下，不再靠人記得；代價是「Require branches to be up to date」會讓每次合併前都要更新分支、重跑約 11 分鐘的檢查，要不要開要另外決定；必要檢查以 job 名稱比對，job 改名時要同步改設定 |
+| B. 為 main 設 ruleset | 要求經 PR 合併、上列 8 個檢查（`changes`、`rust`、`cargo-deny`、`helm`、`host`、`postgres-image`、`gitleaks`、`workflow-policy`）為必要檢查、禁止 force push 與刪除；繞過名單只給少數管理員 | 紅燈與跳過檢查在 GitHub 端被擋下，不再靠人記得；代價是「Require branches to be up to date」會讓每次合併前都要更新分支、重跑約 11 分鐘的檢查，要不要開要另外決定；必要檢查以 job 名稱比對，job 改名時要同步改設定 |
 | C. 為 main 設傳統的分支保護 | 同 B 的內容 | 設定較簡單，但設定不在版控；ruleset 可匯出成 JSON、之後較容易比對與重建，所以若要啟用，優先 B |
 
 啟用後，把上方的 2026-10-10 段落改成「已啟用」並更新「GitHub 的 Actions 設定」一節的確認指令。
@@ -144,7 +146,7 @@ Laysi/trustiot-v2#70 建立了 `.sops.yaml`（規則：`deploy/flux/clusters/saa
 | Rust 編譯快取只在 main 儲存，PR 只讀取 | 快取的 10 GB 上限與淘汰規則：PR 各自儲存會把 main 的快取擠掉，下一個 PR 反而變慢 |
 | 不用模擬器 | 速度與可靠性：模擬器慢很多，也多一層會出錯的環境 |
 | 同一項檢查只跑一次 | 速度，以及失敗時只有一個來源 |
-| `rust`、`cargo-deny`、`helm`、`host` 依路徑執行 | PR 的等待時間（`rust` 約 7 分鐘）與 runner 排隊，見上方「依變更路徑決定 job」 |
+| `rust`、`cargo-deny`、`helm`、`host`、`postgres-image` 依路徑執行 | PR 的等待時間（`rust` 約 7 分鐘）與 runner 排隊，見上方「依變更路徑決定 job」 |
 | nightly 的 k3d 部署在 PR 上只在帶 `smoke` label 時執行 | 不再是計費；理由改為 Docker Hub 匿名拉取限制、公開 repo 的 PR 程式碼與審查，以及等待時間，見下方「PR 的部署要加 `smoke` label」 |
 
 2026-10-11 的原文（Laysi/trustiot-v2#309，「私有庫、Free 方案有分鐘上限」這個前提已不成立）：私有庫在 Free 方案的 Actions 分鐘數有上限，所以：同一個 PR 的新推送會取消舊的執行；每個 job 設 `timeout-minutes`；Rust 的編譯快取（`Swatinem/rust-cache`）只在 main 儲存，PR 只讀取；不用模擬器；同一項檢查只跑一次；`rust`、`cargo-deny`、`helm`、`host` 只在相關路徑變動時執行（見上方「依變更路徑決定 job」）；nightly 的 k3d 部署在 PR 上只在帶 `smoke` label 時執行（見下方「nightly.yml」）。
@@ -220,10 +222,10 @@ gh api repos/Laysi/trustiot-v2/actions/permissions/fork-pr-contributor-approval
 
 - 映像：`deploy/images/` 下每個子目錄是一個映像，目錄名就是映像名，也是 chart 裡的服務名；發佈為 `ghcr.io/laysi/trustiot-v2/<名稱>:<版本>`，只有 linux/arm64 一個平台。新增映像只要加目錄，不必改 workflow。
   - Rust 映像：目錄只放 `image.toml`，以 `[rust]` 的 `package` 指定 Cargo 套件，套件有多個執行檔時加 `bin`。執行檔交叉編譯成 `aarch64-unknown-linux-musl` 的靜態執行檔，放進共用的 `deploy/images/rust-binary.Containerfile`：distroless static 基底（以 digest 釘選），以 UID 65532 執行。
-  - 自帶 Containerfile 的映像（例如 Laysi/trustiot-v2#57 含 AGE 的 Postgres）：目錄放 `Containerfile`，目錄本身是 build context。arm64 那一層不能有 `RUN`：要編譯的東西放在 `FROM --platform=$BUILDPLATFORM` 的建置階段交叉編譯，或取用上游已有的 arm64 映像。release.yml 原本在 x86 runner 上建置、沒有模擬器，違反時建置自然失敗；改到 arm64 runner 後（Laysi/trustiot-v2#310）那一層的 `RUN` 能執行，所以改由 plan 檢查（`scripts/release/containerfile.ts` 的 `targetStageRunProblems`），理由見下方「交叉編譯與可重現建置」。
+  - 自帶 Containerfile 的映像（例如 `deploy/images/postgres`，含 AGE 的 CloudNativePG Postgres，Laysi/trustiot-v2#57）：目錄放 `Containerfile`，目錄本身是 build context。arm64 那一層不能有 `RUN`：要編譯的東西放在 `FROM --platform=$BUILDPLATFORM` 的建置階段交叉編譯，或取用上游已有的 arm64 映像。release.yml 原本在 x86 runner 上建置、沒有模擬器，違反時建置自然失敗；改到 arm64 runner 後（Laysi/trustiot-v2#310）那一層的 `RUN` 能執行，所以改由 plan 檢查（`scripts/release/containerfile.ts` 的 `targetStageRunProblems`），理由見下方「交叉編譯與可重現建置」。
 - Helm chart：`ghcr.io/laysi/trustiot-v2/charts/trustiot:<版本>`。打包時 version 與 appVersion 都設成 tag 的版本，repo 裡的 `Chart.yaml` 不改；chart 預設的映像 tag 是 appVersion，所以預設拉同一版的映像（所有服務一起發版，決策 4）。
 - GitHub Release：發版說明（`Laysi/release-notes-action`，從上一個版本的 tag 算起：正式版從上一個正式版，候選版從上一個任何 tag）、每個映像與 chart 的 digest、驗證指令、每個映像的 SBOM（`<名稱>-<版本>.spdx.json`），最後附上 verify job 的驗證結果。候選版標為 prerelease，不會成為 Latest。發版說明要用模型整理時，設定 repo 變數 `AI_MODEL`（與 `AI_BASE_URL`）及 secret `AI_API_KEY`；沒設定或呼叫失敗時，內容是上一版以來的 commit 主旨。
-- `release-selftest`（`tools/release-selftest`）是流程自測用的映像，不是服務：一個連結 C 物件的小程式，執行時印出自己的架構，用來驗證交叉編譯（含 C 編譯器與連結器）、簽章、SBOM 與驗證整條路。它不在 chart 裡，也不部署。第一個服務映像加入後，連同 crate 一起刪除。
+- `release-selftest`（`tools/release-selftest`）是流程自測用的映像，不是服務：一個連結 C 物件的小程式，執行時印出自己的架構，用來驗證交叉編譯（含 C 編譯器與連結器）、簽章、SBOM 與驗證整條路。它不在 chart 裡，也不部署。第一個 Rust 服務映像加入後，連同 crate 一起刪除：`deploy/images/postgres` 雖然是第一個真正的映像，但只走 Containerfile 的路，不經 Rust 的交叉編譯、cargo-auditable 與 SBOM 的 crate 檢查，那一段仍要靠它驗證（2026-10-11，Laysi/trustiot-v2#57）。
 
 ### tag 規則
 
@@ -352,7 +354,7 @@ repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（
 
 ## nightly.yml
 
-每晚 18:17 UTC（台北 02:17）執行，也可在 main 上手動執行（`workflow_dispatch`，選項 `simulate_failure` 會讓每份 values 在安裝後故意失敗，用來驗證通知）。動到 `deploy/chart/`、`deploy/istio/`、`scripts/nightly/`、`.prototools`、`.proto/plugins/`、`setup-proto` 或 `nightly.yml` 本身的 PR，帶有 `smoke` label 時也會跑，chart 的改動在合併前就先真的部署一次；這些 PR 的執行不寫任何留言（PR 的 workflow 檔由 PR 自己決定，不給它寫入權限），結果看 check 狀態、job summary 與 `nightly-report` artifact。
+每晚 18:17 UTC（台北 02:17）執行，也可在 main 上手動執行（`workflow_dispatch`，選項 `simulate_failure` 會讓每份 values 在安裝後故意失敗，用來驗證通知）。動到 `deploy/chart/`、`deploy/istio/`、`deploy/cloudnative-pg/`、`deploy/images/postgres/`、`scripts/nightly/`、`.prototools`、`.proto/plugins/`、`setup-proto` 或 `nightly.yml` 本身的 PR，帶有 `smoke` label 時也會跑，chart 的改動在合併前就先真的部署一次；這些 PR 的執行不寫任何留言（PR 的 workflow 檔由 PR 自己決定，不給它寫入權限），結果看 check 狀態、job summary 與 `nightly-report` artifact。
 
 ### PR 的部署要加 `smoke` label
 
@@ -384,28 +386,31 @@ repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（
 
 `smoke` job 在一台 arm64 的 ubuntu runner（`ubuntu-24.04-arm`）上起一個 k3d 叢集，節點是 arm64，與出貨的架構相同，不覆寫 chart 的 nodeSelector，裝好平台元件，兩份 values（`values-saas.yaml`、`values-onprem.yaml`，各加上 `tests/values/` 的實例覆寫檔與 `smoke.yaml`）依序測試，各用自己的命名空間。k3s 映像是 `rancher/k3s:v1.36.5-k3s1`（SaaS 主機與 lab 的版本），以 multi-arch index 的 digest 釘選，k3s 的設定與正式安裝相同，只關閉 Traefik（決策 27）；ServiceLB 保留，地端型態的入口是 LoadBalancer Service，位址由它指派。
 
-平台元件（`scripts/nightly/platform.ts`，照 `deploy/istio/README.md` 的順序，與 SaaS 主機在裝 chart 前做的事相同）：
+平台元件（`scripts/nightly/platform.ts`，照 `deploy/istio/README.md` 與 `deploy/cloudnative-pg/README.md` 的順序，與 SaaS 主機在裝 chart 前做的事相同）：
 
 1. Gateway API 的 standard CRD：從 release 下載 `standard-install.yaml`，SHA-256 與 workflow 裡釘的值相符才套用（`GATEWAY_API_VERSION`、`GATEWAY_CRDS_SHA256`，要一起改）。
 2. Istio ambient：官方 repo 的 `base`、`istiod`、`cni`、`ztunnel` 四個 chart，版本 `ISTIO_VERSION`，用 `deploy/istio/values-k3s.yaml`。istiod 另加一份由 `deploy/istio/istiod-values.yaml` 產生的覆寫：同一個 ext_authz provider（fail closed、0.5 秒逾時、503）為每個 e2e 命名空間各複製一份，名稱 `trustiot-e2e-<shape>`，所以 provider 的設定永遠是 repo 裡那份。
-3. 建出 e2e 的身分服務替身映像（`deploy/chart/tests/e2e/identity-double`），以 `k3d image import --mode direct` 匯入 k3d 節點，並逐一確認每個 server 與 agent 節點的 containerd 都有這個映像（`docker exec <node> crictl inspecti <image>`，節點清單來自 `k3d node list -o json`）；缺任何一個節點就重新匯入，共 3 次，用完仍缺則在這一步失敗，訊息寫出映像與缺少的節點，成功時 log 逐節點記錄「confirmed」。為什麼不能信 k3d 的結束碼：k3d 5.9.0 預設的 tools-node 模式由各節點從共用 volume 匯入 tarball，單一節點失敗只寫 `ERRO` 並照樣以 0 結束，映像沒進節點，e2e 的身分服務（`pullPolicy: IfNotPresent`，`localhost` 無法拉取）就等滿 5 分鐘才逾時，看起來像 chart 出錯（2026-10-11，Laysi/trustiot-v2#335）。`--mode direct` 把 `docker save` 的輸出直接串進各節點的 `ctr image import`，沒有 tools node 與共用 volume，k3d 也會回傳節點的錯誤；它只是降低機率的緩解，保證來自逐節點的確認。
+3. CloudNativePG operator（叢集內 Postgres 用，Laysi/trustiot-v2#58）：從 release 下載 `cnpg-<版本>.yaml`，SHA-256 與 workflow 裡釘的值相符才以 `kubectl apply --server-side` 套用（`CNPG_VERSION`、`CNPG_MANIFEST_SHA256`，要一起改，且要與 `deploy/cloudnative-pg/README.md` 寫的相同，`bun test scripts/nightly` 檢查）；`cnpg-system` 命名空間設 Pod Security `restricted`，等 chart 用到的 CRD `Established`、operator rollout 完成（它的 webhook 要先起來，Cluster 才建得出來）。
+4. 建出 e2e 的身分服務替身映像（`deploy/chart/tests/e2e/identity-double`），以 `k3d image import --mode direct` 匯入 k3d 節點，並逐一確認每個 server 與 agent 節點的 containerd 都有這個映像（`docker exec <node> crictl inspecti <image>`，節點清單來自 `k3d node list -o json`）；缺任何一個節點就重新匯入，共 3 次，用完仍缺則在這一步失敗，訊息寫出映像與缺少的節點，成功時 log 逐節點記錄「confirmed」。為什麼不能信 k3d 的結束碼：k3d 5.9.0 預設的 tools-node 模式由各節點從共用 volume 匯入 tarball，單一節點失敗只寫 `ERRO` 並照樣以 0 結束，映像沒進節點，e2e 的身分服務（`pullPolicy: IfNotPresent`，`localhost` 無法拉取）就等滿 5 分鐘才逾時，看起來像 chart 出錯（2026-10-11，Laysi/trustiot-v2#335）。`--mode direct` 把 `docker save` 的輸出直接串進各節點的 `ctr image import`，沒有 tools node 與共用 volume，k3d 也會回傳節點的錯誤；它只是降低機率的緩解，保證來自逐節點的確認。
+5. 叢集內 Postgres 的映像：在 arm64 runner 上以原生方式建置 `deploy/images/postgres`（經 `containerBuildArgs`），名稱 `localhost/trustiot-e2e/postgres:nightly`，以同樣的方式匯入並逐節點確認。`tests/values/smoke.yaml` 用這個名稱與 `pullPolicy: Never`，因為映像要等第一次 release 才會發佈；之後可以改拉 GHCR 上已發佈的 digest，省下建置時間。
 
 每份 values 依序做：
 
 1. 命名空間以 Pod Security `restricted`（enforce、warn、audit）建立：chart 要能在最嚴格的等級下安裝，也是 OpenShift 的前提。
-2. 為 chart 渲染出來的 pod 讀取、但 chart 自己不建立的 Secret 建立假值，並為 Gateway listener 引用的 TLS Secret 建立自簽憑證（SaaS 的 Secret 怎麼進叢集見上方「SaaS 的祕密怎麼進叢集」；這裡驗證的是接線，不是帳密）。內建的 ClickHouse（`clickhouse.mode: bundled`，Laysi/trustiot-v2#59）照 `tests/values/<shape>-instance.yaml` 的 `storage.size` 安裝，磁碟區由 k3s 內建的 local-path 提供，管理帳號的 Secret `trustiot-clickhouse-admin` 也是假值；它的 `/ping` 探針與其他 workload 一起被檢查。
+2. 為 chart 渲染出來的 pod 讀取、但 chart 自己不建立的 Secret 建立假值，並為 Gateway listener 引用的 TLS Secret 建立自簽憑證（SaaS 的 Secret 怎麼進叢集見上方「SaaS 的祕密怎麼進叢集」；這裡驗證的是接線，不是帳密）。內建的 ClickHouse（`clickhouse.mode: bundled`，Laysi/trustiot-v2#59）照 `tests/values/<shape>-instance.yaml` 的 `storage.size` 安裝，磁碟區由 k3s 內建的 local-path 提供，管理帳號的 Secret `trustiot-clickhouse-admin` 也是假值；它的 `/ping` 探針與其他 workload 一起被檢查。叢集內的 Postgres（`postgres.mode: bundled`）同樣照實例覆寫檔的 `storage.size` 安裝；CloudNativePG 自己產生的 Secret（`<cluster>-ca`、`-server`、`-app`、`-replication`、`-superuser`）不建假值，否則 operator 會拿假的 CA 去用。
 3. `helm upgrade --install --wait --wait-for-jobs --timeout 5m`。
 4. 讀 `helm get manifest`，每個 Deployment、StatefulSet、DaemonSet 都要 rollout 完成，每個 Job 都要完成。release 一個 workload 都沒有就失敗（`smoke.yaml` 一定會加一個，沒有代表覆寫檔壞了）。
-5. 每個 Gateway 的 `Programmed` 條件為真（Istio 在 helm 結束後才產生入口 pod）。
-6. 沒有 pod 處於 CrashLoopBackOff、ImagePullBackOff、設定錯誤或未就緒；重啟次數記在報告裡。
-7. 每個 Gateway 的 NetworkPolicy 放行的埠，與 Istio 為它產生的 Deployment（探針）和 Service（target port）實際用的埠完全相同：少放行一個，入口就收不到流量或通不過探針；多放行一個，就多開了用不到的埠（例如 Envoy 的指標埠）。chart 的埠是從自己的 Gateway 與 Istio 固定的狀態埠 15021 推得的，這一項以實際安裝的 Istio 版本驗證（Laysi/trustiot-v2#287，見 `deploy/chart/README.md` 的「入口 pod 的埠」）。
-8. 每個 workload 的 HTTP 探針（startup、liveness、readiness），凡是有 Service 對外開那個埠的，那個 Service 的 EndpointSlice 在該埠至少有一個就緒的端點。不經網路呼叫：chart 預設拒絕所有連入（決策 27，Laysi/trustiot-v2#63），API server 的 Service proxy 從節點連 pod，會被 NetworkPolicy 與 AuthorizationPolicy 擋下；探針本身已由 kubelet 經 ambient 的探測位址呼叫過，第 6 項的就緒就是結果。服務的探針連健康埠（`health`，Laysi/trustiot-v2#286），Service 不開這個埠，所以服務只由第 6 項涵蓋；這一項檢查的是 smoke 的替身服務（探針連 `http`）與 ClickHouse 這類由 Service 開放探針埠的工作負載。
-9. `helm uninstall` 之後，release 的每個物件都不存在。
-10. 入口 e2e 測試（`deploy/chart/tests/e2e/ingress.e2e.ts`，Laysi/trustiot-v2#62）：在 `nightly-e2e-<shape>` 命名空間以對應的型態跑一次，驗證 cookie 驗證、例外路徑、路徑繞過與身分服務停機時的行為；這也是 #62 要求的 k3d 測試，每晚執行。請求經 `kubectl port-forward` 直接進入口 pod，所以不涵蓋入口的 NetworkPolicy（那一項只在 lab 以 `E2E_SSH_JUMP` 驗證）。通道在請求進行中斷線時，測試會重開通道並重送一次（Laysi/trustiot-v2#261，細節見該目錄的 README）。
+5. 每個 CloudNativePG Cluster 的 `Ready` 條件為真、phase 是 `Cluster in healthy state`、就緒的 instance 數等於設定的數目（Laysi/trustiot-v2#58）。
+6. 每個 Gateway 的 `Programmed` 條件為真（Istio 在 helm 結束後才產生入口 pod）。
+7. 沒有 pod 處於 CrashLoopBackOff、ImagePullBackOff、設定錯誤或未就緒；重啟次數記在報告裡。
+8. 每個 Gateway 的 NetworkPolicy 放行的埠，與 Istio 為它產生的 Deployment（探針）和 Service（target port）實際用的埠完全相同：少放行一個，入口就收不到流量或通不過探針；多放行一個，就多開了用不到的埠（例如 Envoy 的指標埠）。chart 的埠是從自己的 Gateway 與 Istio 固定的狀態埠 15021 推得的，這一項以實際安裝的 Istio 版本驗證（Laysi/trustiot-v2#287，見 `deploy/chart/README.md` 的「入口 pod 的埠」）。
+9. 每個 workload 的 HTTP 探針（startup、liveness、readiness），凡是有 Service 對外開那個埠的，那個 Service 的 EndpointSlice 在該埠至少有一個就緒的端點。不經網路呼叫：chart 預設拒絕所有連入（決策 27，Laysi/trustiot-v2#63），API server 的 Service proxy 從節點連 pod，會被 NetworkPolicy 與 AuthorizationPolicy 擋下；探針本身已由 kubelet 經 ambient 的探測位址呼叫過，第 7 項的就緒就是結果。服務的探針連健康埠（`health`，Laysi/trustiot-v2#286），Service 不開這個埠，所以服務只由第 7 項涵蓋；這一項檢查的是 smoke 的替身服務（探針連 `http`）與 ClickHouse 這類由 Service 開放探針埠的工作負載。
+10. `helm uninstall` 之後，release 的物件只剩 chart 刻意保留的（`helm.sh/resource-policy: keep`：叢集內 Postgres 的 Cluster 與 ImageCatalog，資料不隨 uninstall 消失），而且這些都還在；接著明確刪除它們，並等到 Cluster 的 PVC 也被刪除：PVC 是 Cluster 的附屬物件，Kubernetes 在 Cluster 刪除後才於背景回收，而且要等掛著它的 Postgres pod 停止，所以這一步最多等 5 分鐘（CloudNativePG 的 smart shutdown 預設 180 秒），逾時就列出還在的 PVC 並失敗。
+11. 入口 e2e 測試（`deploy/chart/tests/e2e/ingress.e2e.ts`，Laysi/trustiot-v2#62）：在 `nightly-e2e-<shape>` 命名空間以對應的型態跑一次，驗證 cookie 驗證、例外路徑、路徑繞過與身分服務停機時的行為；這也是 #62 要求的 k3d 測試，每晚執行。請求經 `kubectl port-forward` 直接進入口 pod，所以不涵蓋入口的 NetworkPolicy（那一項只在 lab 以 `E2E_SSH_JUMP` 驗證）。通道在請求進行中斷線時，測試會重開通道並重送一次（Laysi/trustiot-v2#261，細節見該目錄的 README）。
 
 每份 values 任何一項失敗就停止該份並收集診斷（物件、事件、`describe`、pod 日誌；不含 Secret 內容，輸出可能含 Secret 的指令不寫進日誌）。
 
-檢查 3 到 9 全部從 release 自己的 manifest 推導（`scripts/nightly/manifests.ts`），不寫死元件；之後加入的元件（Postgres、ClickHouse、broker 等）會自動被納入 workload 就緒與探針檢查。元件需要的前置（例如 operator）由加入該元件的 issue 在 `scripts/nightly/platform.ts` 補上；各里程碑完成條件的測試也由各自的 issue 加進來。
+檢查 3 到 10 全部從 release 自己的 manifest 推導（`scripts/nightly/manifests.ts`），不寫死元件；之後加入的元件（broker 等）會自動被納入 workload 就緒與探針檢查，CloudNativePG 的 Cluster 也是從 manifest 找出來的。元件需要的前置（例如 operator）由加入該元件的 issue 在 `scripts/nightly/platform.ts` 補上；各里程碑完成條件的測試也由各自的 issue 加進來。
 
 在 TrustIoT 服務映像出來以前，`smoke.yaml` 的替身服務（`traefik/whoami`，以 digest 釘選）讓通用服務樣板在真叢集上被驗證。
 
@@ -425,7 +430,7 @@ repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（
 
 ### 本機執行
 
-nightly 只在 CI 跑：本 repo 規定工作站不跑 Kubernetes。要在有 docker 與 openssl 的機器上重現，`proto install` 之後，把 workflow 裡的 `K3S_IMAGE`、`GATEWAY_API_VERSION`、`GATEWAY_CRDS_SHA256`、`ISTIO_VERSION` 設成環境變數：
+nightly 只在 CI 跑：本 repo 規定工作站不跑 Kubernetes。要在有 docker 與 openssl 的機器上重現，`proto install` 之後，把 workflow 裡的 `K3S_IMAGE`、`GATEWAY_API_VERSION`、`GATEWAY_CRDS_SHA256`、`ISTIO_VERSION`、`CNPG_VERSION`、`CNPG_MANIFEST_SHA256` 設成環境變數：
 
 ```sh
 NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
@@ -443,7 +448,7 @@ NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
 
 ### 失敗時怎麼辦
 
-先看 issue 內文的報告：它列出哪份 values 的哪一項失敗與診斷。要重現就到 Actions 頁手動執行 nightly（選 `simulate_failure` 只用來驗證通知，不用來除錯）。常見原因：Docker Hub 對匿名拉取的流量限制（`traefik/whoami`、k3s 映像與 e2e 替身的基底映像都在 Docker Hub，建立叢集與建置映像已重試）、替身映像沒有進到節點（log 的 `identity double image` 段會寫出哪個節點缺映像，匯入已重試）、chart 的改動讓某份 values 裝不起來或讓入口的行為改變、Istio、Gateway API、k3s 或 k3d 版本更新。GitHub 在公開 repo 60 天沒有活動時會停掉排程 workflow（[Events that trigger workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)；2026-10-12 起本 repo 是公開的，這條規則開始適用，Laysi/trustiot-v2#345），這個 repo 有活動所以不會發生，但若看到排程停了，到 Actions 頁重新啟用。
+先看 issue 內文的報告：它列出哪份 values 的哪一項失敗與診斷。要重現就到 Actions 頁手動執行 nightly（選 `simulate_failure` 只用來驗證通知，不用來除錯）。常見原因：Docker Hub 對匿名拉取的流量限制（`traefik/whoami`、k3s 映像與 e2e 替身的基底映像都在 Docker Hub，建立叢集與建置映像已重試）、替身或 Postgres 映像沒有進到節點（log 的 `identity double image`、`Postgres image` 段會寫出哪個節點缺映像，匯入已重試）、Cluster 沒有變健康（診斷含 CloudNativePG 的物件、`describe` 與 operator 的 log）、chart 的改動讓某份 values 裝不起來或讓入口的行為改變、Istio、Gateway API、k3s 或 k3d 版本更新。GitHub 在公開 repo 60 天沒有活動時會停掉排程 workflow（[Events that trigger workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)；2026-10-12 起本 repo 是公開的，這條規則開始適用，Laysi/trustiot-v2#345），這個 repo 有活動所以不會發生，但若看到排程停了，到 Actions 頁重新啟用。
 
 ### 成本
 
@@ -468,6 +473,7 @@ PR 標題是 Angular 格式（`chore(deps): …`），標籤 `area:ci` 與 `depe
 不由 Renovate 更新的項目（要手動改）：
 
 - nightly 的 `GATEWAY_API_VERSION` 與 `GATEWAY_CRDS_SHA256`：同上，版本與雜湊要一起換。
+- nightly 的 `CNPG_VERSION` 與 `CNPG_MANIFEST_SHA256`：版本與雜湊要一起換，同時改 `deploy/cloudnative-pg/README.md`（`bun test scripts/nightly` 檢查兩邊相同）；先讀該版的 release notes。
 - `.github/actions/setup-proto/action.yml` 的 `PROTO_VERSION` 與 `PROTO_SHA256_X64`、`PROTO_SHA256_ARM64`：三個值必須一起換，Renovate 只能改版本號。
 - `scripts/lib/stack.ts` 的開發環境映像：只有 digest，tag 寫在註解，Renovate 讀不到。把 tag 寫進字串（`名稱:tag@sha256:…`）就會被納入。
 - `scripts/flux/age.ts` 的 `AGE_VERSION`（age 從原始碼建置的版本）。

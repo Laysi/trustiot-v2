@@ -18,5 +18,5 @@
     "noUnusedParameters": true,
     "skipLibCheck": true
   },
-  "include": ["**/*.ts", "../deploy/chart/tests/**/*.ts", "../deploy/flux/tests/**/*.ts"]
+  "include": ["**/*.ts", "../deploy/chart/tests/**/*.ts", "../deploy/flux/tests/**/*.ts", "../deploy/images/**/*.ts"]
 }

@@ -23,21 +23,27 @@ data:
   {{- with include "trustiot.internalIdentity.jwks" . }}
   TRUSTIOT_INTERNAL_IDENTITY_KEYS: {{ . | quote }}
   {{- end }}
+  {{- /* Where Postgres is; its CA file reaches only the services that use it ("trustiot.caMounts"). */}}
+  TRUSTIOT_POSTGRES_HOST: {{ include "trustiot.postgres.host" . | quote }}
   {{- if eq $v.postgres.mode "external" }}
-  TRUSTIOT_POSTGRES_HOST: {{ $v.postgres.external.host | quote }}
   TRUSTIOT_POSTGRES_PORT: {{ $v.postgres.external.port | quote }}
   TRUSTIOT_POSTGRES_DATABASE: {{ $v.postgres.external.database | quote }}
   TRUSTIOT_POSTGRES_SSLMODE: {{ $v.postgres.external.sslMode | quote }}
+  {{- else }}
+  {{- /* CloudNativePG's read-write Service; its server certificate names this host. */}}
+  TRUSTIOT_POSTGRES_PORT: {{ include "trustiot.postgres.port" . | quote }}
+  TRUSTIOT_POSTGRES_DATABASE: {{ include "trustiot.postgres.database" . | quote }}
+  TRUSTIOT_POSTGRES_SSLMODE: "verify-full"
   {{- end }}
   {{- if eq $v.clickhouse.mode "external" }}
   TRUSTIOT_CLICKHOUSE_URL: {{ $v.clickhouse.external.url | quote }}
+  {{- with $v.clickhouse.external.caSecret.name }}
+  {{- /* Mounted into every service by the service template ("trustiot.caMounts"). */}}
+  TRUSTIOT_CLICKHOUSE_CA_FILE: "/etc/trustiot/clickhouse-ca/ca.crt"
+  {{- end }}
   {{- else }}
   {{- /* Plain HTTP inside the cluster; Istio ambient's ztunnel adds mTLS between pods. */}}
   TRUSTIOT_CLICKHOUSE_URL: {{ printf "http://%s.%s.svc:8123" (include "trustiot.componentName" (dict "root" . "name" "clickhouse")) .Release.Namespace | quote }}
-  {{- end }}
-  {{- /* CA files mounted by the service template ("trustiot.caMounts"). */}}
-  {{- range include "trustiot.caMounts" . | fromYamlArray }}
-  TRUSTIOT_{{ .volume | replace "-" "_" | upper }}_FILE: {{ printf "%s/ca.crt" .dir | quote }}
   {{- end }}
   {{- if eq $v.qdrant.mode "external" }}
   TRUSTIOT_QDRANT_URL: {{ $v.qdrant.external.url | quote }}

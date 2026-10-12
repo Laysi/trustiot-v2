@@ -9,11 +9,13 @@
 //   GATEWAY_API_VERSION          required; Gateway API release whose standard-install.yaml is applied
 //   GATEWAY_CRDS_SHA256           required; SHA-256 of that file
 //   ISTIO_VERSION                required; Istio release of the four Helm charts (deploy/istio/README.md)
+//   CNPG_VERSION                 required; CloudNativePG release whose manifest is applied (deploy/cloudnative-pg/README.md)
+//   CNPG_MANIFEST_SHA256         required; SHA-256 of that manifest
 //   NIGHTLY_OUT                  output directory (default: ./nightly-out)
 //   NIGHTLY_SIMULATE_FAILURE     `true` fails every shape on purpose after its install
 //   GITHUB_STEP_SUMMARY          when set, the Markdown report is appended to it
 //
-// Needs docker (for k3d and the e2e test's image), openssl, and the tools pinned in .prototools:
+// Needs docker (for k3d and the images the tests build), openssl, and the tools pinned in .prototools:
 // bun, helm, k3d and kubectl.
 // Exit status: 0 when every shape passed, 1 when a check failed, 2 on a usage error.
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -44,6 +46,8 @@ export interface VersionPins {
   gatewayApiVersion: string;
   gatewayCrdsSha256: string;
   istioVersion: string;
+  cnpgVersion: string;
+  cnpgManifestSha256: string;
 }
 
 /** The versions the nightly installs, all pinned in nightly.yml; a missing or loose one is an error. */
@@ -52,10 +56,14 @@ export function readPins(env: Record<string, string | undefined>): VersionPins {
   const gatewayApiVersion = env.GATEWAY_API_VERSION ?? "";
   const gatewayCrdsSha256 = env.GATEWAY_CRDS_SHA256 ?? "";
   const istioVersion = env.ISTIO_VERSION ?? "";
+  const cnpgVersion = env.CNPG_VERSION ?? "";
+  const cnpgManifestSha256 = env.CNPG_MANIFEST_SHA256 ?? "";
   if (!/^v\d+\.\d+\.\d+$/.test(gatewayApiVersion)) throw new Error(`GATEWAY_API_VERSION must look like v1.6.1; got ${JSON.stringify(gatewayApiVersion)}`);
   if (!/^[0-9a-f]{64}$/.test(gatewayCrdsSha256)) throw new Error("GATEWAY_CRDS_SHA256 must be 64 lowercase hex digits");
   if (!/^\d+\.\d+\.\d+$/.test(istioVersion)) throw new Error(`ISTIO_VERSION must look like 1.30.5; got ${JSON.stringify(istioVersion)}`);
-  return { image, gatewayApiVersion, gatewayCrdsSha256, istioVersion };
+  if (!/^\d+\.\d+\.\d+$/.test(cnpgVersion)) throw new Error(`CNPG_VERSION must look like 1.30.1; got ${JSON.stringify(cnpgVersion)}`);
+  if (!/^[0-9a-f]{64}$/.test(cnpgManifestSha256)) throw new Error("CNPG_MANIFEST_SHA256 must be 64 lowercase hex digits");
+  return { image, gatewayApiVersion, gatewayCrdsSha256, istioVersion, cnpgVersion, cnpgManifestSha256 };
 }
 
 async function main(): Promise<number> {
@@ -124,6 +132,7 @@ async function main(): Promise<number> {
       {
         repoRoot: REPO_ROOT, outDir, kubeconfig, helm, kubectl, k3d, cluster: CLUSTER, log,
         gatewayApiVersion: pins.gatewayApiVersion, gatewayCrdsSha256: pins.gatewayCrdsSha256, istioVersion: pins.istioVersion,
+        cnpgVersion: pins.cnpgVersion, cnpgManifestSha256: pins.cnpgManifestSha256,
       },
       shapes.map((shape) => shape.name),
     );

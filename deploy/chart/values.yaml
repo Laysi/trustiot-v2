@@ -211,11 +211,17 @@ mesh:
   # identities <trustDomain>/ns/<namespace>/sa/<ServiceAccount>.
   trustDomain: cluster.local
   # Who may call whom: <caller>: [<callee>, ...]. Callers are keys under `services`; callees are
-  # keys under `services` or the in-cluster components `clickhouse` (bundled mode) and
-  # `otel-collector`. Each service's issue adds the internal APIs it calls. Calls involving a
-  # disabled service or a component that is not deployed are skipped. The chart adds the
-  # telemetry calls itself: every service to the collector, the collector to ClickHouse.
+  # keys under `services`, the in-cluster components `clickhouse` (bundled mode) and
+  # `otel-collector`, or `postgres`. Each service's issue adds the internal APIs it calls. Calls
+  # involving a disabled service or a component that is not deployed are skipped. The chart adds
+  # the telemetry calls itself: every service to the collector, the collector to ClickHouse.
+  # `postgres` (bundled or external) is how a service declares that it uses Postgres: only those
+  # services get the server's CA file and, bundled, reach the Postgres pods (README.md).
   calls:
+    # The identity service keeps its sessions, users and tenants in Postgres
+    # (services/identity/README.md).
+    identity:
+      - postgres
     # ClickHouse (decision 14): ingest writes telemetry, telemetry-query reads it with per-tenant
     # read-only accounts (docs/architecture/deployment.md).
     ingest:
@@ -242,16 +248,63 @@ internalIdentity:
 # External dependencies (portability rule 2). Managed or self-hosted differs only in values.
 
 postgres:
-  # bundled: CloudNativePG cluster deployed by this chart (Laysi/trustiot-v2#58).
+  # bundled: a CloudNativePG Cluster deployed by this chart in the release namespace
+  #   (Laysi/trustiot-v2#58). The CloudNativePG operator is a platform component that must already
+  #   run in the cluster (deploy/cloudnative-pg/README.md), like Istio.
   # external: a Postgres with Apache AGE that you run elsewhere.
+  # Services that use Postgres list `postgres` under mesh.calls.
   mode: bundled
+  bundled:
+    image:
+      # Our CloudNativePG operand image: PostgreSQL 18 with Apache AGE (deploy/images/postgres),
+      # published by the release together with the services.
+      repository: ghcr.io/laysi/trustiot-v2/postgres
+      # Empty means Chart.appVersion.
+      tag: ""
+      # sha256 digest; when set, the image is pinned to it.
+      digest: ""
+      pullPolicy: IfNotPresent
+    storage:
+      # Required in bundled mode: data and WAL of the one instance, sized by each deployment
+      # (README.md, 叢集內的 Postgres).
+      size: ""
+      # Empty: the cluster's default StorageClass.
+      storageClassName: ""
+    # Sized for one 8 GB node shared with ClickHouse and the services (README.md); the same in both
+    # deployment shapes.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "2"
+        memory: 1Gi
+    # PostgreSQL memory and connection settings that fit the memory limit above. Only these keys
+    # are accepted; TLS and authentication are set by the chart and CloudNativePG.
+    parameters:
+      shared_buffers: 128MB
+      effective_cache_size: 384MB
+      work_mem: 4MB
+      maintenance_work_mem: 64MB
+      max_connections: 100
+    # The image is built for arm64 only (decision 5).
+    nodeSelector:
+      kubernetes.io/arch: arm64
+    tolerations: []
+    # Where the CloudNativePG operator runs: the NetworkPolicy admits its status checks on the
+    # Postgres pods. Match an operator that the customer already runs (deploy/cloudnative-pg).
+    operator:
+      namespace: cnpg-system
+      podLabels:
+        app.kubernetes.io/name: cloudnative-pg
   external:
     host: ""
     port: 5432
     database: trustiot
     # Server certificate verification (checklist M3); only verify-full is accepted.
     sslMode: verify-full
-    # CA certificate that signed the server certificate; mounted read-only into every service.
+    # CA certificate that signed the server certificate; mounted read-only into the services that
+    # list postgres under mesh.calls.
     caSecret:
       name: ""
       key: ca.crt

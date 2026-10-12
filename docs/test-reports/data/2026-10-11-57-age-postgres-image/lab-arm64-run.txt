@@ -1,0 +1,79 @@
+## podman host
+arm64 trustiot-mac-m1 podman 5.8.7
+## image
+arch=arm64 os=linux user=26 digest=sha256:cb840e1939e3cf785d3ff68f9ba62b9d196a3987e4fd705170a4489735ffea9c
+## container security (podman inspect)
+user=26:26 readonlyRootfs=true capAdd=[] capDrop=[CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_FSETID CAP_KILL CAP_NET_BIND_SERVICE CAP_SETFCAP CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_CHROOT] securityOpt=[no-new-privileges]
+## PID 1
+comm=postgres
+Uid:	26	26	26	26
+Gid:	26	26	26	26
+CapEff:	0000000000000000
+NoNewPrivs:	1
+touch: cannot touch '/usr/lib/postgresql/18/lib/x': Read-only file system
+## psql as postgres
+SELECT version();
+                                                         version                                                          
+--------------------------------------------------------------------------------------------------------------------------
+ PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+(1 row)
+
+CREATE EXTENSION age;
+CREATE EXTENSION
+SELECT extname, extversion FROM pg_extension WHERE extname = 'age';
+ extname | extversion 
+---------+------------
+ age     | 1.8.0
+(1 row)
+
+LOAD 'age';
+LOAD
+SET search_path = ag_catalog, "$user", public;
+SET
+SELECT create_graph('plant');
+ create_graph 
+--------------
+ 
+(1 row)
+
+SELECT * FROM cypher('plant', $$
+  CREATE (:Machine {name: 'press-1'})-[:FEEDS]->(:Machine {name: 'oven-2'})
+$$) AS (v agtype);
+psql:<stdin>:6: NOTICE:  graph "plant" has been created
+ v 
+---
+(0 rows)
+
+SELECT * FROM cypher('plant', $$
+  MATCH (a:Machine)-[:FEEDS]->(b:Machine) RETURN a.name, b.name
+$$) AS (a agtype, b agtype);
+     a     |    b     
+-----------+----------
+ "press-1" | "oven-2"
+(1 row)
+
+CREATE ROLE graph_reader LOGIN;
+CREATE ROLE
+GRANT USAGE ON SCHEMA ag_catalog, plant TO graph_reader;
+GRANT
+GRANT SELECT ON ALL TABLES IN SCHEMA plant TO graph_reader;
+GRANT
+## psql as graph_reader (non-superuser, read-only transaction, no LOAD)
+SELECT current_user, usesuper FROM pg_user WHERE usename = current_user;
+ current_user | usesuper 
+--------------+----------
+ graph_reader | f
+(1 row)
+
+BEGIN READ ONLY;
+BEGIN
+SET LOCAL search_path = ag_catalog, "$user", public;
+SET
+SELECT * FROM cypher('plant', $$ MATCH (m:Machine) RETURN count(m) $$) AS (n agtype);
+ n 
+---
+ 2
+(1 row)
+
+COMMIT;
+COMMIT

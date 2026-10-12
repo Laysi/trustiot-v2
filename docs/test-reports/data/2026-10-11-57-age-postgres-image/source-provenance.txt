@@ -1,0 +1,49 @@
+# Provenance of the pinned sources (2026-10-11, workstation, gpg with throwaway homedirs)
+# gpg and sha256sum printed their messages in the zh_TW locale; they are given here in English.
+
+## Apache AGE 1.8.0 (PG18) source release
+$ curl -sfLO https://archive.apache.org/dist/age/PG18/1.8.0/apache-age-1.8.0-src.tar.gz{,.asc,.sha512}
+$ curl -sfLO https://archive.apache.org/dist/age/KEYS
+$ cat apache-age-1.8.0-src.tar.gz.sha512
+8103dc6a4daec0441c2bdfe4e456be619d04526efa5c4e1a5148a29d7e6359e5df7d9a1fabbc6a6a08f6229c4d6f8634b7bf3554eca8ffb58550382542279866  apache-age-1.8.0-src.tar.gz
+$ sha512sum apache-age-1.8.0-src.tar.gz
+8103dc6a4daec0441c2bdfe4e456be619d04526efa5c4e1a5148a29d7e6359e5df7d9a1fabbc6a6a08f6229c4d6f8634b7bf3554eca8ffb58550382542279866  apache-age-1.8.0-src.tar.gz
+$ gpg --homedir ./gnupg --import KEYS; gpg --homedir ./gnupg --verify apache-age-1.8.0-src.tar.gz.asc apache-age-1.8.0-src.tar.gz
+gpg: Signature made Thu 09 Jul 2026 08:54:52 CST using RSA key 26B6CD9DCD5B0045
+gpg: Good signature from "John Gemignani (Apache GPG key) <jgemignani@apache.org>" [unknown]
+Primary key fingerprint: 4293 0603 8E35 AC05 4DBB  4B58 26B6 CD9D CD5B 0045
+(Containerfile AGE_SHA512 = the published SHA-512 above)
+
+## postgresql-server-dev-18 18.6-1.pgdg13+2 arm64 (server headers)
+$ curl -sfLO https://apt-archive.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/postgresql-server-dev-18_18.6-1.pgdg13%2B2_arm64.deb
+$ sha256sum postgresql-server-dev-18_18.6-1.pgdg13%2B2_arm64.deb
+bb88940b9d12e11e166e8f7dedd30859f3396d4027e00979e0a19dd41fff7f3a  postgresql-server-dev-18_18.6-1.pgdg13%2B2_arm64.deb
+$ curl -sfL https://apt-archive.postgresql.org/pub/repos/apt/dists/trixie-pgdg-archive/InRelease -o InRelease
+$ curl -sfL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o pgdg.asc; gpg --homedir ./gnupg-pgdg --import pgdg.asc
+$ gpg --homedir ./gnupg-pgdg --verify InRelease
+gpg: Good signature from "PostgreSQL Debian Repository" [unknown]
+Primary key fingerprint: B97B 0AFC AA1A 47F0 44F2  44A0 7FCC 7D46 ACCC 4CF8
+Packages.bz2 sha256 in InRelease: b323bd7e5cf520a5d5cf8b0a98f8da10a796591db087fc37c3a2cf9c902ab731
+$ curl -sfL .../dists/trixie-pgdg-archive/main/binary-arm64/Packages.bz2 -o Packages.bz2; sha256sum --check
+Packages.bz2: OK
+$ bzcat Packages.bz2 | grep -B2 -A25 '^Filename: pool/main/p/postgresql-18/postgresql-server-dev-18_18.6-1.pgdg13+2_arm64.deb'
+Filename: pool/main/p/postgresql-18/postgresql-server-dev-18_18.6-1.pgdg13+2_arm64.deb
+SHA256: bb88940b9d12e11e166e8f7dedd30859f3396d4027e00979e0a19dd41fff7f3a
+Version: 18.6-1.pgdg13+2
+(Containerfile PG_SERVER_DEV_SHA256 = the signed index's SHA256 above)
+
+## Only pg_config.h differs between the amd64 and arm64 server-dev packages
+$ diff -rq x-arm64/root x-amd64/root    (both debs extracted with ar + tar)
+Files x-arm64/root/usr/include/postgresql/18/server/pg_config.h and x-amd64/... differ
+Files .../bin/pg_bsd_indent, .../lib/libpgcommon.a, libpgcommon_shlib.a, libpgfeutils.a, libpgport.a, libpgport_shlib.a, regress.so differ (binaries, not used)
+pg_config.h differences: CONFIGURE_ARGS, HAVE_X86_64_POPCNTQ, HAVE_XSAVE_INTRINSICS, HAVE__GET_CPUID,
+HAVE__GET_CPUID_COUNT, PG_VERSION_STR, USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK,
+USE_AVX512_CRC32C_WITH_RUNTIME_CHECK, USE_AVX512_POPCNT_WITH_RUNTIME_CHECK,
+USE_SSE42_CRC32C_WITH_RUNTIME_CHECK, USE_SVE_POPCNT_WITH_RUNTIME_CHECK
+
+## Base image
+$ skopeo inspect docker://ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie --format '{{.Digest}}'
+sha256:37ade18dbdddba430858c72725aceeec66f33fa5333e82ea1df4942f6c1c83a3
+(same digest as the dated tag 18.6-202610050823-minimal-trixie; index with linux/amd64 and linux/arm64)
+arm64 image: User 26, postgresql-18 18.6-1.pgdg13+2 (dpkg status), PGXS host_cpu = aarch64,
+apt sources comment: http://snapshot.debian.org/archive/debian/20260918T000000Z

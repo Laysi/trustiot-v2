@@ -299,7 +299,14 @@ describe("the TrustIoT release", () => {
 describe("values-instance.yaml", () => {
   const instance = Bun.YAML.parse(read(`${APP_DIR}/values-instance.yaml`)) as YamlMap;
   // Decisions for whoever sets up the SaaS cluster (deploy/flux/README.md, "上線前要填的值").
-  const PENDING = ["clickhouse.bundled.storage.size", "hosts.app", "hosts.gateway", "hosts.ota", "qdrant.external.url"];
+  const PENDING = [
+    "clickhouse.bundled.storage.size",
+    "hosts.app",
+    "hosts.gateway",
+    "hosts.ota",
+    "postgres.bundled.storage.size",
+    "qdrant.external.url",
+  ];
 
   const emptyFields = (value: unknown, path = ""): string[] =>
     isMap(value)
@@ -315,17 +322,22 @@ describe("values-instance.yaml", () => {
   test(
     "with the pending fields filled in, the chart at HEAD accepts it and pulls with the pull Secret",
     () => {
-      const merge = (base: unknown, over: unknown): unknown => {
-        if (!isMap(base) || !isMap(over)) return over === "" ? base : over;
-        const out: YamlMap = { ...base };
-        for (const [key, value] of Object.entries(over)) out[key] = merge(base[key], value);
-        return out;
-      };
-      const placeholders = Bun.YAML.parse(read("deploy/chart/tests/values/saas-instance.yaml"));
+      // Only the pending fields take the chart's example values, so a field the chart requires
+      // and this file lacks fails here instead of on the cluster.
+      const placeholders = Bun.YAML.parse(read("deploy/chart/tests/values/saas-instance.yaml")) as YamlMap;
+      const at = (map: YamlMap, path: string): unknown => path.split(".").reduce<unknown>((v, key) => (isMap(v) ? v[key] : undefined), map);
+      const filled = structuredClone(instance);
+      for (const path of PENDING) {
+        const keys = path.split(".");
+        const parent = at(filled, keys.slice(0, -1).join("."));
+        const example = at(placeholders, path);
+        if (!isMap(parent) || example === undefined || example === "") throw new Error(`no example value for ${path}`);
+        parent[keys.at(-1)!] = example;
+      }
       const dir = mkdtempSync(join(tmpdir(), "trustiot-flux-values-"));
       try {
         const merged = join(dir, "values.yaml");
-        writeFileSync(merged, JSON.stringify(merge(placeholders, instance)));
+        writeFileSync(merged, JSON.stringify(filled));
         const result = run([
           pinnedTool("helm"),
           "template",

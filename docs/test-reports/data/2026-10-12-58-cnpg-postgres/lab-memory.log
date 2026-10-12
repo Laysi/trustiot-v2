@@ -1,0 +1,192 @@
+== 2026-10-12T03:47:35Z
+Mem:            7543        4146         597         155        3977        3397
+cnpg-controller-manager-85b486954d-tgxrw   3m    22Mi   
+== 2026-10-12T03:47:50Z
+Mem:            7543        4200         571         155        3948        3342
+cnpg-controller-manager-85b486954d-tgxrw   3m    22Mi   
+== 2026-10-12T03:48:05Z
+Mem:            7543        4142         553         176        4046        3401
+cnpg-controller-manager-85b486954d-tgxrw   3m    22Mi   
+== 2026-10-12T03:48:21Z
+Mem:            7543        4173         519         177        4049        3370
+trustiot-ingress-istio-5ffc564c89-qg7r4   2m    34Mi   
+cnpg-controller-manager-85b486954d-tgxrw   13m   28Mi   
+== 2026-10-12T03:48:36Z
+Mem:            7543        4181         509         180        4055        3362
+trustiot-ingress-istio-5ffc564c89-qg7r4   1m    31Mi   
+trustiot-postgres-1                       36m   57Mi   
+cnpg-controller-manager-85b486954d-tgxrw   26m   32Mi   
+== 2026-10-12T03:48:51Z
+Mem:            7543        4158         574         180        4012        3385
+trustiot-ingress-istio-5ffc564c89-qg7r4   2m    31Mi   
+trustiot-postgres-1                       5m    55Mi   
+cnpg-controller-manager-85b486954d-tgxrw   8m    32Mi   
+== 2026-10-12T03:49:06Z
+Mem:            7543        4202         527         181        4018        3341
+trustiot-ingress-istio-5ffc564c89-qg7r4   2m    31Mi   
+trustiot-postgres-1                       11m   58Mi   
+cnpg-controller-manager-85b486954d-tgxrw   3m    33Mi   
+== 2026-10-12T03:49:21Z
+Mem:            7543        4276         576         186        3898        3266
+trustiot-ingress-istio-5ffc564c89-qg7r4   2m    33Mi   
+trustiot-postgres-1                       9m    62Mi   
+cnpg-controller-manager-85b486954d-tgxrw   4m    32Mi   
+== 2026-10-12T03:49:36Z
+Mem:            7543        4328         518         186        3904        3215
+trustiot-assets-5fccc769d-674tc           2m    2Mi    
+trustiot-ingress-istio-5ffc564c89-qg7r4   2m    32Mi   
+trustiot-postgres-1                       33m   67Mi   
+cnpg-controller-manager-85b486954d-tgxrw   6m    31Mi   
+== 2026-10-12T03:49:52Z
+Mem:            7543        4312         582         185        3856        3231
+trustiot-assets-5fccc769d-674tc           1m    1Mi    
+trustiot-e2e-probe-1e537b5d-unlisted      1m    1Mi    
+trustiot-e2e-probe-1e537b5d-wrong-host    1m    3Mi    
+trustiot-ingress-istio-5ffc564c89-qg7r4   2m    32Mi   
+trustiot-postgres-1                       8m    72Mi   
+cnpg-controller-manager-85b486954d-tgxrw   4m    31Mi   
+== 2026-10-12T03:50:07Z
+Mem:            7543        4341         551         184        3858        3202
+trustiot-assets-5fccc769d-674tc           1m    1Mi    
+trustiot-ingress-istio-5ffc564c89-qg7r4   2m    32Mi   
+trustiot-postgres-1                       8m    71Mi   
+cnpg-controller-manager-85b486954d-tgxrw   4m    30Mi   
+== 2026-10-12T03:50:22Z
+Mem:            7543        4317         554         183        3877        3225
+trustiot-postgres-1   9m    71Mi   
+cnpg-controller-manager-85b486954d-tgxrw   4m    31Mi   
+== 2026-10-12T03:50:37Z
+Mem:            7543        4300         707         155        3713        3243
+cnpg-controller-manager-85b486954d-tgxrw   8m    35Mi   
+== 2026-10-12T03:50:52Z
+Mem:            7543        4280         724         155        3716        3262
+cnpg-controller-manager-85b486954d-tgxrw   8m    35Mi   
+== 2026-10-12T03:51:07Z
+Mem:            7543        4263         738         156        3719        3279
+cnpg-controller-manager-85b486954d-tgxrw   3m    32Mi   
+== 2026-10-12T03:51:23Z
+Mem:            7543        4345         522         177        3874        3197
+cnpg-controller-manager-85b486954d-tgxrw   6m    32Mi   
+== 2026-10-12T03:51:38Z
+Mem:            7543        4306         563         177        3873        3237
+trustiot-ingress-istio-5ffc564c89-bjlg5   3m    31Mi   
+cnpg-controller-manager-85b486954d-tgxrw   24m   33Mi   
+== 2026-10-12T03:51:53Z
+Mem:            7543        4332         553         180        3859        3211
+trustiot-ingress-istio-5ffc564c89-bjlg5   2m    31Mi   
+trustiot-postgres-1                       44m   54Mi   
+cnpg-controller-manager-85b486954d-tgxrw   24m   33Mi   
+== 2026-10-12T03:52:08Z
+Mem:            7543        4316         566         181        3863        3226
+trustiot-ingress-istio-5ffc564c89-bjlg5   2m    31Mi   
+trustiot-postgres-1                       7m    56Mi   
+cnpg-controller-manager-85b486954d-tgxrw   8m    38Mi   
+== 2026-10-12T03:52:23Z
+Mem:            7543        4353         526         182        3867        3189
+trustiot-ingress-istio-5ffc564c89-bjlg5   2m    31Mi   
+trustiot-postgres-1                       14m   58Mi   
+cnpg-controller-manager-85b486954d-tgxrw   8m    38Mi   
+== 2026-10-12T03:52:38Z
+Mem:            7543        4329         573         186        3849        3213
+trustiot-ingress-istio-5ffc564c89-bjlg5   2m    31Mi   
+trustiot-postgres-1                       9m    58Mi   
+cnpg-controller-manager-85b486954d-tgxrw   4m    35Mi   
+== 2026-10-12T03:52:54Z
+Mem:            7543        4342         557         186        3851        3200
+trustiot-assets-6c6d948664-vwlb9          3m    2Mi    
+trustiot-ingress-istio-5ffc564c89-bjlg5   3m    33Mi   
+trustiot-postgres-1                       25m   64Mi   
+cnpg-controller-manager-85b486954d-tgxrw   4m    34Mi   
+== 2026-10-12T03:53:09Z
+Mem:            7543        4374         575         185        3800        3169
+trustiot-assets-6c6d948664-vwlb9          1m    2Mi    
+trustiot-e2e-probe-8b5da3f8-unlisted      1m    1Mi    
+trustiot-ingress-istio-5ffc564c89-bjlg5   2m    32Mi   
+trustiot-postgres-1                       9m    68Mi   
+cnpg-controller-manager-85b486954d-tgxrw   5m    33Mi   
+== 2026-10-12T03:53:24Z
+Mem:            7543        4371         571         184        3806        3171
+trustiot-assets-6c6d948664-vwlb9          1m    1Mi    
+trustiot-ingress-istio-5ffc564c89-bjlg5   3m    32Mi   
+trustiot-postgres-1                       5m    65Mi   
+cnpg-controller-manager-85b486954d-tgxrw   4m    33Mi   
+== 2026-10-12T03:53:39Z
+Mem:            7543        4359         705         156        3656        3183
+cnpg-controller-manager-85b486954d-tgxrw   11m   33Mi   
+== 2026-10-12T03:53:54Z
+Mem:            7543        4358         639         156        3725        3184
+cnpg-controller-manager-85b486954d-tgxrw   5m    33Mi   
+== 2026-10-12T03:54:10Z
+Mem:            7543        4398         509         177        3834        3145
+trustiot-ingress-istio-5ffc564c89-85cxf   3m    34Mi   
+cnpg-controller-manager-85b486954d-tgxrw   23m   36Mi   
+== 2026-10-12T03:54:25Z
+Mem:            7543        4338         576         177        3827        3205
+trustiot-ingress-istio-5ffc564c89-85cxf   2m    34Mi   
+trustiot-postgres-1                       81m   58Mi   
+cnpg-controller-manager-85b486954d-tgxrw   9m    36Mi   
+== 2026-10-12T03:54:40Z
+Mem:            7543        4386         507         181        3852        3156
+trustiot-ingress-istio-5ffc564c89-85cxf   2m    34Mi   
+trustiot-postgres-1                       4m    56Mi   
+cnpg-controller-manager-85b486954d-tgxrw   7m    34Mi   
+== 2026-10-12T03:54:55Z
+Mem:            7543        4398         525         186        3828        3144
+trustiot-assets-5c96d5b9d-hn2h2           3m    1Mi    
+trustiot-e2e-probe-0efc791a-control       3m    1Mi    
+trustiot-e2e-probe-0efc791a-unlisted      2m    3Mi    
+trustiot-e2e-probe-0efc791a-wrong-ca      2m    2Mi    
+trustiot-e2e-probe-0efc791a-wrong-host    3m    3Mi    
+trustiot-ingress-istio-5ffc564c89-85cxf   3m    34Mi   
+trustiot-postgres-1                       28m   72Mi   
+cnpg-controller-manager-85b486954d-tgxrw   5m    35Mi   
+== 2026-10-12T03:55:10Z
+Mem:            7543        4395         579         186        3776        3147
+trustiot-assets-5c96d5b9d-hn2h2           1m    1Mi    
+trustiot-e2e-probe-0efc791a-unlisted      1m    3Mi    
+trustiot-e2e-probe-0efc791a-wrong-host    2m    1Mi    
+trustiot-ingress-istio-5ffc564c89-85cxf   2m    32Mi   
+trustiot-postgres-1                       15m   69Mi   
+cnpg-controller-manager-85b486954d-tgxrw   4m    35Mi   
+== 2026-10-12T03:55:25Z
+Mem:            7543        4391         579         185        3780        3151
+trustiot-assets-5c96d5b9d-hn2h2           1m    1Mi    
+trustiot-e2e-probe-0efc791a-unlisted      1m    3Mi    
+trustiot-ingress-istio-5ffc564c89-85cxf   2m    32Mi   
+trustiot-postgres-1                       6m    67Mi   
+cnpg-controller-manager-85b486954d-tgxrw   4m    35Mi   
+== 2026-10-12T03:55:41Z
+Mem:            7543        4400         565         184        3783        3142
+trustiot-assets-5c96d5b9d-hn2h2           1m    1Mi    
+trustiot-ingress-istio-5ffc564c89-85cxf   2m    32Mi   
+trustiot-postgres-1                       5m    66Mi   
+cnpg-controller-manager-85b486954d-tgxrw   4m    35Mi   
+== 2026-10-12T03:55:56Z
+Mem:            7543        4295         706         155        3719        3248
+cnpg-controller-manager-85b486954d-tgxrw   9m    33Mi   
+== 2026-10-12T03:56:11Z
+Mem:            7543        4303         780         155        3638        3240
+cnpg-controller-manager-85b486954d-tgxrw   4m    35Mi   
+== 2026-10-12T03:56:26Z
+Mem:            7543        4280         799         155        3641        3262
+cnpg-controller-manager-85b486954d-tgxrw   3m    35Mi   
+== 2026-10-12T03:56:41Z
+Mem:            7543        4358         580         177        3803        3185
+trustiot-ingress-istio-5ffc564c89-jn9mw   13m   31Mi   
+cnpg-controller-manager-85b486954d-tgxrw   13m   34Mi   
+== 2026-10-12T03:56:57Z
+Mem:            7543        4289         684         155        3747        3254
+cnpg-controller-manager-85b486954d-tgxrw   24m   36Mi   
+== 2026-10-12T03:57:12Z
+Mem:            7543        4301         754         155        3665        3241
+cnpg-controller-manager-85b486954d-tgxrw   4m    33Mi   
+== 2026-10-12T03:57:27Z
+Mem:            7543        4348         642         156        3730        3195
+cnpg-controller-manager-85b486954d-tgxrw   3m    35Mi   
+== 2026-10-12T03:57:42Z
+Mem:            7543        4365         547         177        3829        3177
+trustiot-ingress-istio-5ffc564c89-dntcl   3m    31Mi   
+cnpg-controller-manager-85b486954d-tgxrw   23m   36Mi   
+== 2026-10-12T03:57:57Z
+Mem:            7543        4383         650         155        3686        3159
+cnpg-controller-manager-85b486954d-tgxrw   14m   35Mi   

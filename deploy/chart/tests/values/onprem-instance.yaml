@@ -12,6 +12,12 @@ ingress:
     # Outer TLS certificate for the three hosts, issued by the customer's CA.
     tlsSecret: trustiot-ingress-tls
 
+postgres:
+  bundled:
+    # Example size; each deployment sizes its volume from its data (README: 叢集內的 Postgres).
+    storage:
+      size: 20Gi
+
 clickhouse:
   bundled:
     # Bootstrap admin password of the bundled ClickHouse; how Secrets reach the cluster is

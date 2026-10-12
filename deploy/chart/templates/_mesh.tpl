@@ -106,6 +106,18 @@ Returns YAML {<name>: bool}; use with fromYaml.
 {{- end -}}
 
 {{/*
+Dependencies that services list in mesh.calls but reach outside the mesh, so they get no
+AuthorizationPolicy or HBONE rule from the plan: Postgres, whose every connection is TLS with
+verify-full and whose bundled pods run outside the ambient mesh (templates/postgres.yaml admits its
+callers with its own NetworkPolicy). The list also decides which services get the server's CA
+("trustiot.postgres.clients"), in external mode too, so a call to it is never skipped as "not
+deployed". Returns YAML {<name>: true}; use with fromYaml.
+*/}}
+{{- define "trustiot.mesh.directCallees" -}}
+{{- dict "postgres" true | toYaml -}}
+{{- end -}}
+
+{{/*
 Who may call each enabled service and in-cluster component. Callers come from two places only:
 - mesh.calls, the list of calls (<caller service>: [<callee service or component>, ...]); a
   call whose caller or callee is disabled is skipped, so the list can name services before
@@ -115,14 +127,16 @@ Who may call each enabled service and in-cluster component. Callers come from tw
 - the telemetry pipeline, fixed in the chart: every enabled service sends OTLP to the
   OpenTelemetry collector, and the collector writes to the bundled ClickHouse (decision 22).
 Every other connection is refused. Callers must be keys under services and callees keys under
-services or components ("trustiot.mesh.components"); other names fail the render.
+services, components ("trustiot.mesh.components") or direct callees ("trustiot.mesh.directCallees",
+which get no entry here); other names fail the render.
 Returns YAML {services: [{name, callers: [service or component keys], ingress: bool}]}; use with
 fromYaml.
 */}}
 {{- define "trustiot.mesh.plan" -}}
 {{- $v := .Values -}}
 {{- $components := include "trustiot.mesh.components" . | fromYaml -}}
-{{- range $name, $running := $components -}}
+{{- $direct := include "trustiot.mesh.directCallees" . | fromYaml -}}
+{{- range $name := concat (keys $components) (keys $direct) -}}
 {{- if hasKey $v.services $name -}}
 {{- fail (printf "services.%s: the name belongs to an in-cluster component" $name) -}}
 {{- end -}}
@@ -136,8 +150,8 @@ fromYaml.
 {{- fail (printf "mesh.calls.%s: must be a list of services" $caller) -}}
 {{- end -}}
 {{- range $callees -}}
-{{- if not (or (hasKey $v.services (toString .)) (hasKey $components (toString .))) -}}
-{{- fail (printf "mesh.calls.%s: unknown callee %q; callees are keys under services or in-cluster components (%s)" $caller (toString .) (keys $components | sortAlpha | join ", ")) -}}
+{{- if not (or (hasKey $v.services (toString .)) (hasKey $components (toString .)) (hasKey $direct (toString .))) -}}
+{{- fail (printf "mesh.calls.%s: unknown callee %q; callees are keys under services or in-cluster components (%s)" $caller (toString .) (concat (keys $components) (keys $direct) | sortAlpha | join ", ")) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

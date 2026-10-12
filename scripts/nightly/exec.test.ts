@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { CommandError, exec, retry, run, RunLog } from "./exec.ts";
+import { CommandError, exec, retry, run, RunLog, waitUntilGone } from "./exec.ts";
 
 describe("exec and run", () => {
   let dir: string;
@@ -61,5 +61,75 @@ describe("exec and run", () => {
       }),
     ).toBe("done");
     await expect(retry(log, 2, 1, async () => Promise.reject(new Error("always")))).rejects.toThrow("always");
+  });
+});
+
+describe("waitUntilGone", () => {
+  /** A clock that only moves when the code under test sleeps, recording each pause. */
+  function fakeClock() {
+    let time = 0;
+    const pauses: number[] = [];
+    return {
+      pauses,
+      clock: {
+        now: () => time,
+        sleep: async (ms: number) => {
+          pauses.push(ms);
+          time += ms;
+        },
+      },
+    };
+  }
+  const VOLUME = "persistentvolumeclaim/trustiot-postgres-1";
+
+  test("returns at once when nothing is left", async () => {
+    const { clock, pauses } = fakeClock();
+    expect(await waitUntilGone("volumes", async () => [], { timeoutMs: 10_000, clock })).toBe(0);
+    expect(pauses).toEqual([]);
+  });
+
+  test("polls until the objects are gone and reports how long it took", async () => {
+    // The garbage collector removes the volume a few polls after its owner was deleted.
+    const answers = [[VOLUME], [VOLUME], []];
+    const { clock, pauses } = fakeClock();
+    let calls = 0;
+    const waited = await waitUntilGone("volumes", async () => answers[calls++] ?? [], { timeoutMs: 10_000, intervalMs: 1_000, clock });
+    expect(calls).toBe(3);
+    expect(pauses).toEqual([1_000, 1_000]);
+    expect(waited).toBe(2_000);
+  });
+
+  test("fails after the bound, naming what it waited for and what is still there", async () => {
+    const { clock, pauses } = fakeClock();
+    let calls = 0;
+    const left = [VOLUME, "persistentvolumeclaim/other"];
+    await expect(
+      waitUntilGone(
+        "the deleted Cluster's volumes",
+        async () => {
+          calls++;
+          return left;
+        },
+        { timeoutMs: 10_000, intervalMs: 3_000, clock },
+      ),
+    ).rejects.toThrow(`timed out after 10 s waiting for the deleted Cluster's volumes; still there: ${VOLUME}, persistentvolumeclaim/other`);
+    // The last pause is cut to the bound, and the objects are listed once more at the bound.
+    expect(pauses).toEqual([3_000, 3_000, 3_000, 1_000]);
+    expect(calls).toBe(5);
+  });
+
+  test("objects that are gone at the check on the bound pass", async () => {
+    const { clock } = fakeClock();
+    let calls = 0;
+    const list = async () => (++calls < 3 ? [VOLUME] : []);
+    expect(await waitUntilGone("volumes", list, { timeoutMs: 2_000, intervalMs: 1_000, clock })).toBe(2_000);
+  });
+
+  test("a failing list ends the wait with its own error", async () => {
+    const { clock, pauses } = fakeClock();
+    await expect(
+      waitUntilGone("volumes", async () => Promise.reject(new Error("kubectl get pvc failed")), { timeoutMs: 10_000, clock }),
+    ).rejects.toThrow("kubectl get pvc failed");
+    expect(pauses).toEqual([]);
   });
 });

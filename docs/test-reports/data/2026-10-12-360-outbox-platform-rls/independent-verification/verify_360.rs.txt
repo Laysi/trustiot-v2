@@ -1,0 +1,522 @@
+// crates/service-kit/tests/verify_360.rs (throwaway probe, not committed; run with
+// `cargo test --locked -p service-kit --test verify_360 -- --nocapture --test-threads=1`).
+// Reconstructed from the run source (final version, as in run3); rustfmt layout may differ.
+//! Independent verification probes for Laysi/trustiot-v2#360 (PR Laysi/trustiot-v2#367).
+//! Throwaway: not committed. Mirrors the `tenant_db.rs` fixture (same roles, same templates).
+#![cfg(feature = "contract")]
+#![allow(clippy::print_stdout, clippy::too_many_lines, reason = "probe output")]
+
+mod support;
+
+use std::sync::Arc;
+
+use contract::ServiceName;
+use service_kit::identity::ServiceIdentity;
+use service_kit::postgres::{self, SessionRole};
+use service_kit::tenant::{PlatformActor, PlatformDb};
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{AssertSqlSafe, Connection, PgConnection};
+use support::postgres::{TlsPostgres, tls_postgres};
+
+const TENANT_A: &str = "01928f6e-7a3c-7d4e-8f00-00000000000a";
+const TENANT_B: &str = "01928f6e-7a3c-7d4e-8f00-00000000000b";
+
+// Same roles and memberships as tenant_db.rs.
+const ROLES: &str = "
+CREATE ROLE example_owner LOGIN PASSWORD 'service-kit-test';
+CREATE ROLE example_app LOGIN PASSWORD 'service-kit-test';
+CREATE ROLE example_platform LOGIN PASSWORD 'service-kit-test';
+CREATE ROLE example_reader LOGIN PASSWORD 'service-kit-test';
+CREATE ROLE example_bypass LOGIN BYPASSRLS PASSWORD 'service-kit-test';
+CREATE ROLE example_owner_member LOGIN PASSWORD 'service-kit-test' IN ROLE example_owner;
+CREATE ROLE example_platform_group NOLOGIN;
+GRANT example_platform_group TO example_platform;
+";
+
+const SEED: &str = "
+INSERT INTO example_items (tenant_id, id, name) VALUES
+    ('01928f6e-7a3c-7d4e-8f00-00000000000a', '00000000-0000-7000-8000-0000000000a1', 'a-1'),
+    ('01928f6e-7a3c-7d4e-8f00-00000000000a', '00000000-0000-7000-8000-0000000000a2', 'a-2'),
+    ('01928f6e-7a3c-7d4e-8f00-00000000000b', '00000000-0000-7000-8000-0000000000b1', 'b-1');
+CREATE TABLE outbox_event (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    tenant_id uuid,
+    envelope jsonb NOT NULL
+);
+";
+
+const OUTBOX_SEED: &str = "
+INSERT INTO outbox_event (tenant_id, envelope) VALUES
+    (NULL, '{\"seed\": \"platform\"}'),
+    ('01928f6e-7a3c-7d4e-8f00-00000000000a', '{\"seed\": \"a\"}');
+";
+
+/// The outbox consumer's reader check (`READS_ALL_TENANTS` in crates/outbox/src/consumer.rs),
+/// copied verbatim.
+const READS_ALL_TENANTS: &str = "\
+    SELECT EXISTS ( \
+        SELECT 1 FROM pg_policy p \
+        WHERE p.polrelid = c.oid AND p.polpermissive AND p.polcmd IN ('r', '*') \
+          AND p.polqual IS NOT NULL AND pg_get_expr(p.polqual, p.polrelid) = 'true' \
+          AND (0 = ANY (p.polroles) OR EXISTS ( \
+              SELECT 1 FROM unnest(p.polroles) AS role \
+              WHERE role <> 0 AND pg_has_role(current_user, role, 'MEMBER'))) \
+    ) AND NOT EXISTS ( \
+        SELECT 1 FROM pg_policy p \
+        WHERE p.polrelid = c.oid AND NOT p.polpermissive AND p.polcmd IN ('r', '*') \
+          AND (0 = ANY (p.polroles) OR EXISTS ( \
+              SELECT 1 FROM unnest(p.polroles) AS role \
+              WHERE role <> 0 AND pg_has_role(current_user, role, 'MEMBER'))) \
+    ) \
+    FROM pg_class c WHERE c.oid = to_regclass('outbox_event') AND c.relrowsecurity";
+
+struct Fixture {
+    postgres: Arc<TlsPostgres>,
+    database: &'static str,
+}
+
+impl Fixture {
+    async fn new(database: &'static str, outbox_template: String) -> Option<Self> {
+        let postgres = tls_postgres(ROLES).await?;
+        let mut admin = PgConnection::connect_with(&postgres.superuser("postgres"))
+            .await
+            .expect("connect as the superuser");
+        sqlx::raw_sql(AssertSqlSafe(format!(
+            "CREATE DATABASE {database} OWNER example_owner"
+        )))
+        .execute(&mut admin)
+        .await
+        .expect("create the database");
+        let fixture = Self { postgres, database };
+        let mut owner = fixture.connect("example_owner").await;
+        sqlx::raw_sql(include_str!("../sql/database.sql"))
+            .execute(&mut owner)
+            .await
+            .expect("database template");
+        sqlx::raw_sql(include_str!("../sql/tenant-table.sql"))
+            .execute(&mut owner)
+            .await
+            .expect("tenant template");
+        sqlx::raw_sql(SEED)
+            .execute(&mut owner)
+            .await
+            .expect("seed");
+        sqlx::raw_sql(AssertSqlSafe(outbox_template))
+            .execute(&mut owner)
+            .await
+            .expect("outbox template");
+        sqlx::raw_sql(OUTBOX_SEED)
+            .execute(&mut owner)
+            .await
+            .expect("outbox seed");
+        Some(fixture)
+    }
+
+    async fn connect(&self, role: &str) -> PgConnection {
+        PgConnection::connect_with(&self.postgres.options(role, self.database))
+            .await
+            .unwrap_or_else(|error| panic!("connect as {role}: {error}"))
+    }
+
+    fn platform_db(&self, role: &str) -> PlatformDb {
+        PlatformDb::connect_lazy(
+            self.postgres.options(role, self.database),
+            PgPoolOptions::new().max_connections(1),
+        )
+        .expect("verify-full options")
+    }
+
+    /// (tenant rows, all rows) in outbox_event, as the owner sees them.
+    async fn outbox_counts(&self) -> (i64, i64) {
+        let mut owner = self.connect("example_owner").await;
+        sqlx::query_as(
+            "SELECT count(*) FILTER (WHERE tenant_id IS NOT NULL), count(*) FROM outbox_event",
+        )
+        .fetch_one(&mut owner)
+        .await
+        .expect("counts")
+    }
+}
+
+fn describe(error: &sqlx::Error) -> String {
+    match error.as_database_error() {
+        Some(db) => format!(
+            "{} {}",
+            db.code().map(|c| c.into_owned()).unwrap_or_default(),
+            db.message()
+        ),
+        None => format!("non-database error: {error}"),
+    }
+}
+
+fn sqlstate(error: &sqlx::Error) -> Option<String> {
+    error
+        .as_database_error()
+        .and_then(|e| e.code())
+        .map(|c| c.into_owned())
+}
+
+/// Runs `stmt` in its own transaction after `setup`; commits on success, rolls back on error.
+async fn attempt(conn: &mut PgConnection, setup: &str, stmt: &str) -> Result<u64, String> {
+    sqlx::raw_sql("BEGIN").execute(&mut *conn).await.expect("begin");
+    if !setup.is_empty() {
+        sqlx::raw_sql(AssertSqlSafe(setup.to_owned()))
+            .execute(&mut *conn)
+            .await
+            .expect("setup");
+    }
+    match sqlx::raw_sql(AssertSqlSafe(stmt.to_owned()))
+        .execute(&mut *conn)
+        .await
+    {
+        Ok(done) => {
+            sqlx::raw_sql("COMMIT")
+                .execute(&mut *conn)
+                .await
+                .expect("commit");
+            Ok(done.rows_affected())
+        }
+        Err(error) => {
+            sqlx::raw_sql("ROLLBACK")
+                .execute(&mut *conn)
+                .await
+                .expect("rollback");
+            Err(describe(&error))
+        }
+    }
+}
+
+fn tenant_write_statements() -> Vec<(&'static str, String)> {
+    let a = TENANT_A;
+    vec![
+        ("single VALUES", format!("INSERT INTO outbox_event (tenant_id, envelope) VALUES ('{a}', '{{}}')")),
+        ("multi-row VALUES (platform-wide + tenant)", format!("INSERT INTO outbox_event (tenant_id, envelope) VALUES (NULL, '{{}}'), ('{a}', '{{}}')")),
+        ("INSERT ... SELECT literal", format!("INSERT INTO outbox_event (tenant_id, envelope) SELECT '{a}'::uuid, '{{}}'::jsonb FROM generate_series(1, 2)")),
+        ("INSERT ... SELECT current_setting", "INSERT INTO outbox_event (tenant_id, envelope) SELECT NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid, '{}'::jsonb".to_owned()),
+        ("data-modifying CTE", format!("WITH w AS (INSERT INTO outbox_event (tenant_id, envelope) VALUES ('{a}', '{{}}')) SELECT 1")),
+        ("PREPARE / EXECUTE", format!("DEALLOCATE ALL; PREPARE p360 (uuid) AS INSERT INTO outbox_event (tenant_id, envelope) VALUES ($1, '{{}}'); EXECUTE p360('{a}')")),
+        ("ON CONFLICT DO NOTHING", format!("INSERT INTO outbox_event (tenant_id, envelope) VALUES ('{a}', '{{}}') ON CONFLICT DO NOTHING")),
+        ("ON CONFLICT (id) DO UPDATE", format!("INSERT INTO outbox_event (id, tenant_id, envelope) OVERRIDING SYSTEM VALUE VALUES (1, '{a}', '{{}}') ON CONFLICT (id) DO UPDATE SET tenant_id = EXCLUDED.tenant_id")),
+        ("MERGE ON false WHEN NOT MATCHED THEN INSERT", format!("MERGE INTO outbox_event t USING (SELECT '{a}'::uuid AS tenant_id) s ON false WHEN NOT MATCHED THEN INSERT (tenant_id, envelope) VALUES (s.tenant_id, '{{}}')")),
+        ("MERGE WHEN MATCHED DO NOTHING / NOT MATCHED INSERT", format!("MERGE INTO outbox_event t USING (SELECT '{a}'::uuid AS tenant_id) s ON t.tenant_id = s.tenant_id WHEN MATCHED THEN DO NOTHING WHEN NOT MATCHED THEN INSERT (tenant_id, envelope) VALUES (s.tenant_id, '{{}}')")),
+        ("INSERT ... RETURNING", format!("INSERT INTO outbox_event (tenant_id, envelope) VALUES ('{a}', '{{}}') RETURNING id")),
+        ("DO block (plpgsql, invoker)", format!("DO $$ BEGIN INSERT INTO outbox_event (tenant_id, envelope) VALUES ('{a}', '{{}}'); END $$")),
+        ("SET LOCAL row_security = off, then INSERT", format!("SET LOCAL row_security = off; INSERT INTO outbox_event (tenant_id, envelope) VALUES ('{a}', '{{}}')")),
+        ("UPDATE a platform-wide event into the tenant", format!("UPDATE outbox_event SET tenant_id = '{a}' WHERE tenant_id IS NULL")),
+        ("DELETE", "DELETE FROM outbox_event".to_owned()),
+        ("TRUNCATE", "TRUNCATE outbox_event".to_owned()),
+    ]
+}
+
+fn object_statements() -> Vec<(&'static str, String)> {
+    let a = TENANT_A;
+    vec![
+        ("CREATE VIEW in public", "CREATE VIEW v360 AS SELECT * FROM outbox_event".to_owned()),
+        ("CREATE FUNCTION SECURITY DEFINER in public", format!("CREATE FUNCTION f360() RETURNS void LANGUAGE sql SECURITY DEFINER AS $f$ INSERT INTO outbox_event (tenant_id, envelope) VALUES ('{a}', '{{}}') $f$")),
+        ("CREATE FUNCTION in pg_temp", "CREATE FUNCTION pg_temp.f360() RETURNS int LANGUAGE sql AS $f$ SELECT 1 $f$".to_owned()),
+        ("CREATE SCHEMA", "CREATE SCHEMA s360".to_owned()),
+        ("CREATE TEMP TABLE", "CREATE TEMP TABLE t360 (x int)".to_owned()),
+        ("CREATE TRIGGER on outbox_event", "CREATE TRIGGER t360 BEFORE INSERT ON outbox_event FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger()".to_owned()),
+        ("CREATE RULE on outbox_event", "CREATE RULE r360 AS ON INSERT TO outbox_event DO INSTEAD NOTHING".to_owned()),
+        ("ALTER TABLE DISABLE ROW LEVEL SECURITY", "ALTER TABLE outbox_event DISABLE ROW LEVEL SECURITY".to_owned()),
+        ("DROP POLICY platform_events_only", "DROP POLICY platform_events_only ON outbox_event".to_owned()),
+        ("ALTER POLICY platform_events_only", "ALTER POLICY platform_events_only ON outbox_event WITH CHECK (true)".to_owned()),
+        ("CREATE POLICY (permissive, for itself)", "CREATE POLICY p360 ON outbox_event FOR INSERT TO example_platform WITH CHECK (true)".to_owned()),
+    ]
+}
+
+fn role_statements() -> Vec<(&'static str, String)> {
+    let a = TENANT_A;
+    let insert = format!("INSERT INTO outbox_event (tenant_id, envelope) VALUES ('{a}', '{{}}')");
+    vec![
+        ("SET ROLE example_app", "SET ROLE example_app".to_owned()),
+        ("SET ROLE example_owner", "SET ROLE example_owner".to_owned()),
+        ("SET ROLE example_reader", "SET ROLE example_reader".to_owned()),
+        ("SET LOCAL ROLE example_app", "SET LOCAL ROLE example_app".to_owned()),
+        ("SET SESSION AUTHORIZATION example_app", "SET SESSION AUTHORIZATION example_app".to_owned()),
+        ("SET SESSION AUTHORIZATION example_owner", "SET SESSION AUTHORIZATION example_owner".to_owned()),
+        ("set_config('role', 'example_app')", "SELECT set_config('role', 'example_app', false)".to_owned()),
+        ("set_config('role', 'example_owner')", "SELECT set_config('role', 'example_owner', false)".to_owned()),
+        ("set_config('session_authorization', 'example_owner')", "SELECT set_config('session_authorization', 'example_owner', false)".to_owned()),
+        ("RESET ROLE, then INSERT", format!("RESET ROLE; {insert}")),
+        ("SET ROLE NONE, then INSERT", format!("SET ROLE NONE; {insert}")),
+        ("SET ROLE example_platform_group (its member role), then INSERT", format!("SET ROLE example_platform_group; {insert}")),
+        ("RESET ALL, then INSERT", format!("RESET ALL; {insert}")),
+    ]
+}
+
+async fn run_list(
+    conn: &mut PgConnection,
+    label: &str,
+    setup: &str,
+    list: &[(&'static str, String)],
+) -> Vec<(String, Result<u64, String>)> {
+    let mut out = Vec::new();
+    for (case, stmt) in list {
+        let result = attempt(conn, setup, stmt).await;
+        println!("[{label}] {case}: {result:?}");
+        out.push(((*case).to_owned(), result));
+    }
+    out
+}
+
+fn template(reader: &str) -> String {
+    include_str!("../sql/outbox-event.sql").replace("example_reader", reader)
+}
+
+/// Probes 1 and 3: every write path and role escape of the producer's platform role.
+#[tokio::test]
+async fn probe_platform_role_tenant_writes_and_escapes() {
+    let Some(fixture) = Fixture::new("v360_writes", template("example_reader")).await else {
+        return;
+    };
+    let before = fixture.outbox_counts().await;
+    println!("owner view before: (tenant rows, all rows) = {before:?}");
+
+    let mut platform = fixture.connect("example_platform").await;
+    let privileges: (bool, bool, bool, String, String) = sqlx::query_as(
+        "SELECT has_schema_privilege('public', 'CREATE'), \
+                has_database_privilege(current_database(), 'CREATE'), \
+                has_database_privilege(current_database(), 'TEMP'), \
+                (SELECT string_agg(p, ',') FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE', \
+                    'TRUNCATE','REFERENCES','TRIGGER']) AS p \
+                 WHERE has_table_privilege('outbox_event', p)), \
+                coalesce((SELECT string_agg(nspname, ',') FROM pg_namespace \
+                 WHERE has_schema_privilege(oid, 'CREATE')), '')",
+    )
+    .fetch_one(&mut platform)
+    .await
+    .expect("privileges");
+    println!(
+        "example_platform: CREATE on public={}, CREATE on database={}, TEMP={}, \
+         privileges on outbox_event=[{}], schemas with CREATE=[{}]",
+        privileges.0, privileges.1, privileges.2, privileges.3, privileges.4
+    );
+    let memberships: Vec<(String, String, bool, bool, bool)> = sqlx::query_as(
+        "SELECT roleid::regrole::text, member::regrole::text, admin_option, inherit_option, \
+                set_option FROM pg_auth_members \
+         WHERE member::regrole::text LIKE 'example%' OR roleid::regrole::text LIKE 'example%' \
+         ORDER BY 1, 2",
+    )
+    .fetch_all(&mut platform)
+    .await
+    .expect("memberships");
+    println!("memberships (role, member, admin, inherit, set): {memberships:?}");
+    let member_of: Vec<(String, bool, bool)> = sqlx::query_as(
+        "SELECT r, pg_has_role('example_platform', r, 'MEMBER'), \
+                pg_has_role('example_platform', r, 'SET') \
+         FROM unnest(ARRAY['example_app','example_owner','example_reader','example_platform_group']) r",
+    )
+    .fetch_all(&mut platform)
+    .await
+    .expect("member of");
+    println!("example_platform member of / may SET ROLE to: {member_of:?}");
+
+    let writes = tenant_write_statements();
+    let tx_setup = format!("SELECT set_config('trustiot.tenant_id', '{TENANT_A}', true)");
+    let mut results = run_list(&mut platform, "tx tenant", &tx_setup, &writes).await;
+    sqlx::raw_sql(AssertSqlSafe(format!(
+        "SELECT set_config('trustiot.tenant_id', '{TENANT_A}', false)"
+    )))
+    .execute(&mut platform)
+    .await
+    .expect("session tenant");
+    results.extend(run_list(&mut platform, "session tenant", "", &writes).await);
+
+    // Extended protocol with a bound parameter (sqlx prepares it), session tenant still set.
+    let bound = sqlx::query("INSERT INTO outbox_event (tenant_id, envelope) VALUES ($1::uuid, '{}')")
+        .bind(TENANT_A)
+        .execute(&mut platform)
+        .await;
+    println!(
+        "[session tenant] extended protocol, bound tenant: {:?}",
+        bound.as_ref().map(|d| d.rows_affected()).map_err(describe)
+    );
+    assert_eq!(bound.as_ref().err().and_then(sqlstate).as_deref(), Some("42501"));
+
+    // COPY FROM STDIN, session tenant set.
+    let copy_result = match platform
+        .copy_in_raw("COPY outbox_event (tenant_id, envelope) FROM STDIN")
+        .await
+    {
+        Ok(mut copy) => {
+            copy.send(format!("{TENANT_A}\t{{}}\n").into_bytes())
+                .await
+                .expect("send");
+            copy.finish().await.map_err(|e| describe(&e))
+        }
+        Err(error) => Err(describe(&error)),
+    };
+    println!("[session tenant] COPY FROM STDIN: {copy_result:?}");
+    assert!(copy_result.is_err(), "COPY must be refused");
+    results.push(("COPY FROM STDIN".to_owned(), copy_result));
+
+    let objects = object_statements();
+    results.extend(run_list(&mut platform, "objects", "", &objects).await);
+    let roles = role_statements();
+    results.extend(run_list(&mut platform, "roles (session tenant)", "", &roles).await);
+    drop(platform);
+    // Role escapes again on a fresh session with the tenant only in the transaction.
+    let mut platform = fixture.connect("example_platform").await;
+    results.extend(run_list(&mut platform, "roles (tx tenant)", &tx_setup, &roles).await);
+
+    let after = fixture.outbox_counts().await;
+    println!("owner view after: (tenant rows, all rows) = {after:?}");
+    assert_eq!(after.0, before.0, "no tenant event landed");
+    let accepted: Vec<_> = results.iter().filter(|(_, r)| r.is_ok()).collect();
+    println!("accepted statements (none may have written a tenant row): {accepted:?}");
+    for (case, result) in &results {
+        if let Err(text) = result {
+            assert!(
+                text.starts_with("42501") || text.starts_with("0A000"),
+                "{case}: unexpected error {text}"
+            );
+        }
+    }
+}
+
+/// Probe 2: the producer's platform role is also the consumer reader role.
+#[tokio::test]
+async fn probe_self_consuming_platform_role() {
+    let Some(fixture) = Fixture::new("v360_self", template("example_platform")).await else {
+        return;
+    };
+    let before = fixture.outbox_counts().await;
+    let mut platform = fixture.connect("example_platform").await;
+    let tx_setup = format!("SELECT set_config('trustiot.tenant_id', '{TENANT_A}', true)");
+    let mut results =
+        run_list(&mut platform, "self tx tenant", &tx_setup, &tenant_write_statements()).await;
+    sqlx::raw_sql(AssertSqlSafe(format!(
+        "SELECT set_config('trustiot.tenant_id', '{TENANT_B}', false)"
+    )))
+    .execute(&mut platform)
+    .await
+    .expect("session tenant");
+    let b_insert = vec![(
+        "single VALUES tenant B, session tenant B",
+        format!("INSERT INTO outbox_event (tenant_id, envelope) VALUES ('{TENANT_B}', '{{}}') RETURNING tenant_id"),
+    )];
+    results.extend(run_list(&mut platform, "self session tenant", "", &b_insert).await);
+    let after = fixture.outbox_counts().await;
+    assert_eq!(after.0, before.0, "no tenant event landed (self-consuming)");
+    for (case, result) in &results {
+        if let Err(text) = result {
+            assert!(text.starts_with("42501") || text.starts_with("0A000"), "{case}: {text}");
+        }
+    }
+    drop(platform);
+
+    // Platform-wide writes still work, reads see every event, the checks accept it.
+    let db = fixture.platform_db("example_platform");
+    let actor = PlatformActor::service(ServiceIdentity::new(ServiceName::Identity));
+    let mut tx = db.begin(actor, "verify-360").await.expect("begin");
+    let returned: Option<String> = sqlx::query_scalar(
+        "INSERT INTO outbox_event (tenant_id, envelope) VALUES (NULL, '{}') RETURNING tenant_id::text",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .expect("a platform-wide event, with RETURNING (it has SELECT now)");
+    assert_eq!(returned, None);
+    tx.commit().await.expect("commit");
+    let reader = db.reader(actor, "outbox-consumer-read");
+    let mut tx = reader.begin().await.expect("reader begin");
+    let seen: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT tenant_id::text FROM outbox_event ORDER BY id")
+            .fetch_all(&mut *tx)
+            .await
+            .expect("read");
+    let reads_all: Option<bool> = sqlx::query_scalar(READS_ALL_TENANTS)
+        .fetch_optional(&mut *tx)
+        .await
+        .expect("reader check");
+    tx.rollback().await.expect("rollback");
+    println!("self-consuming reader sees {seen:?}; READS_ALL_TENANTS = {reads_all:?}");
+    assert_eq!(seen, [None, Some(TENANT_A.to_owned()), None]);
+    assert_eq!(reads_all, Some(true));
+    for (role, as_role) in [
+        ("example_platform", SessionRole::Platform),
+        ("example_app", SessionRole::Service),
+    ] {
+        let mut session = fixture.connect(role).await;
+        let checked = postgres::check_session(&mut session, as_role).await.expect("check");
+        println!("self-consuming: check_session({role}, {as_role:?}) = {checked:?}");
+        assert_eq!(checked, Ok(()));
+    }
+}
+
+/// Probe 4 and the reader check in the normal (separate reader) layout; tenant-table UPDATE.
+#[tokio::test]
+async fn probe_legitimate_paths_and_reader_checks() {
+    let Some(fixture) = Fixture::new("v360_legit", template("example_reader")).await else {
+        return;
+    };
+    let mut app = fixture.connect("example_app").await;
+    let set_a = format!("SELECT set_config('trustiot.tenant_id', '{TENANT_A}', true)");
+    for (case, stmt) in [
+        ("tenant A", format!("INSERT INTO outbox_event (tenant_id, envelope) VALUES ('{TENANT_A}', '{{}}')")),
+        ("tenant B", format!("INSERT INTO outbox_event (tenant_id, envelope) VALUES ('{TENANT_B}', '{{}}')")),
+        ("platform-wide", "INSERT INTO outbox_event (tenant_id, envelope) VALUES (NULL, '{}')".to_owned()),
+    ] {
+        let result = attempt(&mut app, &set_a, &stmt).await;
+        println!("[service role, tenant A] {case}: {result:?}");
+        match case {
+            "tenant A" => assert_eq!(result, Ok(1)),
+            _ => assert!(result.unwrap_err().starts_with("42501")),
+        }
+    }
+    let mut platform = fixture.connect("example_platform").await;
+    let result = attempt(&mut platform, "", "INSERT INTO outbox_event (tenant_id, envelope) VALUES (NULL, '{}')").await;
+    println!("[platform role, no tenant] platform-wide: {result:?}");
+    assert_eq!(result, Ok(1));
+    let result = attempt(
+        &mut platform,
+        "",
+        &format!("INSERT INTO outbox_event (tenant_id, envelope) VALUES ('{TENANT_A}', '{{}}')"),
+    )
+    .await;
+    println!("[platform role, no tenant] tenant A: {result:?}");
+    assert!(result.unwrap_err().starts_with("42501"));
+
+    for (role, expected) in [("example_reader", Some(true)), ("example_platform", Some(false))] {
+        let mut session = fixture.connect(role).await;
+        let reads_all: Option<bool> = sqlx::query_scalar(READS_ALL_TENANTS)
+            .fetch_optional(&mut session)
+            .await
+            .expect("reader check");
+        println!("READS_ALL_TENANTS as {role}: {reads_all:?}");
+        assert_eq!(reads_all, expected);
+    }
+    let mut reader = fixture.connect("example_reader").await;
+    let seen: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT tenant_id::text FROM outbox_event ORDER BY id")
+            .fetch_all(&mut reader)
+            .await
+            .expect("read");
+    println!("reader sees {seen:?}");
+    assert_eq!(seen, [None, Some(TENANT_A.to_owned()), Some(TENANT_A.to_owned()), None]);
+    for (role, as_role) in [
+        ("example_app", SessionRole::Service),
+        ("example_platform", SessionRole::Platform),
+        ("example_reader", SessionRole::Platform),
+    ] {
+        let mut session = fixture.connect(role).await;
+        let checked = postgres::check_session(&mut session, as_role).await.expect("check");
+        println!("check_session({role}, {as_role:?}) = {checked:?}");
+        assert_eq!(checked, Ok(()));
+    }
+
+    // tenant-table.sql, platform_access: UPDATE with and without a self-set tenant.
+    let without = attempt(&mut platform, "", "UPDATE example_items SET name = name").await;
+    let with = attempt(&mut platform, &set_a, "UPDATE example_items SET name = name").await;
+    let moved = attempt(
+        &mut platform,
+        &set_a,
+        &format!("UPDATE example_items SET tenant_id = '{TENANT_B}' WHERE name = 'zzz-none'"),
+    )
+    .await;
+    println!(
+        "platform_access UPDATE rows: without tenant {without:?}, with tenant A {with:?}; \
+         (no-op move) {moved:?}"
+    );
+    assert_eq!(without, with);
+}

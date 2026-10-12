@@ -71,8 +71,8 @@ spec:
 
 {{/*
 Container env: the chart's variables first (OTEL_SERVICE_NAME, the collector endpoint, SENTRY_DSN,
-the credentials the service lists and, for identity, its routes and signing key file), then
-serviceDefaults.env and services.<name>.env.
+the Postgres CA file for a service that uses Postgres, the credentials the service lists and, for
+identity, its routes and signing key file), then serviceDefaults.env and services.<name>.env.
 Custom env cannot take over what the chart controls:
 - names starting with TRUSTIOT_ plus a letter or digit, SENTRY_ or OTEL_ are reserved, so the
   platform settings from the ConfigMap (envFrom loses to env) and the chart's Secrets stay as set;
@@ -80,7 +80,9 @@ Custom env cannot take over what the chart controls:
   service's telemetry goes through the collector's redaction;
 - serviceDefaults.env reaches every service, so it must not read Secrets;
 - secret-like names (as in values.schema.json) come from valueFrom.secretKeyRef only;
-- dependency credentials reach a service only through services.<name>.credentials.
+- dependency credentials reach a service only through services.<name>.credentials;
+- the Secrets an in-cluster component creates for itself (the bundled Postgres's CA key, server key
+  and owner password) are out of reach in every key.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.service.env" -}}
@@ -93,6 +95,7 @@ Returns a YAML list; use with fromYamlArray.
 {{- end -}}
 {{- end -}}
 {{- $protected := include "trustiot.dependencySecretRefs" .root | fromYamlArray -}}
+{{- $protectedSecrets := include "trustiot.dependencySecretNames" .root | fromYamlArray -}}
 {{- range $config.env -}}
 {{- if regexMatch "(?i)^(TRUSTIOT_[A-Z0-9]|SENTRY_|OTEL_)" .name -}}
 {{- fail (printf "services.%s: env %s: names starting with TRUSTIOT_, SENTRY_ or OTEL_ are set by the chart" $name .name) -}}
@@ -110,6 +113,9 @@ Returns a YAML list; use with fromYamlArray.
 {{- if has (printf "%s/%s" .name .key) $protected -}}
 {{- fail (printf "services.%s: env reads the dependency credential %s/%s; list the dependency under services.%s.credentials instead" $name .name .key $name) -}}
 {{- end -}}
+{{- if has .name $protectedSecrets -}}
+{{- fail (printf "services.%s: env reads Secret %s, which an in-cluster component created for itself (the bundled Postgres); services get only what the chart passes on from it" $name .name) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- $env := list (dict "name" "OTEL_SERVICE_NAME" "value" $name) -}}
@@ -120,6 +126,12 @@ Returns a YAML list; use with fromYamlArray.
 {{- with $values.observability.sentry -}}
 {{- if .enabled -}}
 {{- $env = append $env (dict "name" "SENTRY_DSN" "valueFrom" (dict "secretKeyRef" (dict "name" .dsnSecret.name "key" .dsnSecret.key))) -}}
+{{- end -}}
+{{- end -}}
+{{- /* The Postgres server's CA, only where the service template mounts it ("trustiot.caMounts"). */ -}}
+{{- range include "trustiot.caMounts" (dict "root" .root "name" $name) | fromYamlArray -}}
+{{- if eq .volume "postgres-ca" -}}
+{{- $env = append $env (dict "name" "TRUSTIOT_POSTGRES_CA_FILE" "value" (printf "%s/ca.crt" .dir)) -}}
 {{- end -}}
 {{- end -}}
 {{- $credentialEnv := include "trustiot.credentialEnv" (dict "root" .root "name" $name "credentials" ($config.credentials | default list)) | fromYamlArray -}}
@@ -163,7 +175,7 @@ Returns a YAML list; use with fromYamlArray.
 {{- end -}}
 {{- end -}}
 {{- $env := include "trustiot.service.env" . | fromYamlArray -}}
-{{- $caMounts := include "trustiot.caMounts" .root | fromYamlArray -}}
+{{- $caMounts := include "trustiot.caMounts" (dict "root" .root "name" .name) | fromYamlArray -}}
 {{- /* The internal identity signing key reaches the identity service only (decision 27). */ -}}
 {{- $signingKey := dict -}}
 {{- if and (eq .name "identity") .root.Values.internalIdentity.signingKeySecret.name -}}
