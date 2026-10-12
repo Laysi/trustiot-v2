@@ -1,0 +1,45 @@
+rcheck: queued on the build host at 07:24:32 (Asia/Taipei)
+layers/ghcr-identity/26b0c39e0387c9613e5d761c626a41ae248fd8f0cebf5445d173a512bf2df1ce: COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 "comment":"FROM 5d2100980097" "comment":"FROM c3b284fea6d2" "comment":"FROM 45938a1e651f" 
+layers/runner-identity/blobs/sha256/b6081d416d6d5661f0d07076f6d3bc4e7856900b9cbcdc9bc27e72f922bd9fa1: COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 "comment":"FROM 9ecae019ab79" "comment":"FROM 6d8c20a24d72" "comment":"FROM 0b1966ad5b0e" 
+layers-x64/root/oci/blobs/sha256/b6081d416d6d5661f0d07076f6d3bc4e7856900b9cbcdc9bc27e72f922bd9fa1: COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 "comment":"FROM 9ecae019ab79" "comment":"FROM 6d8c20a24d72" "comment":"FROM 0b1966ad5b0e" 
+layers-x64/rootless/oci/blobs/sha256/6b210c5b5de0430c4f243ccdca3ce3360eb6906e0da5ea593ad06a8a74142269: COPY file:d4920a6a12a7bf99b32a811af873f200b13227884a56bac4aa5792e13660347a "comment":"FROM 02c4a825b190" "comment":"FROM f1415a8bf263" "comment":"FROM 0906056ac3a4" 
+variants/root-1/config-0b1966ad5b0e.json: COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 "comment":"FROM 9ecae019ab79" "comment":"FROM 6d8c20a24d72" 
+variants/root-1/config-6d8c20a24d72.json: COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 "comment":"FROM 9ecae019ab79" 
+variants/root-1/config-9ecae019ab79.json: COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 
+variants/root-1/config-b6081d416d6d.json: COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 "comment":"FROM 9ecae019ab79" "comment":"FROM 6d8c20a24d72" "comment":"FROM 0b1966ad5b0e" 
+variants/root-1/config-bcff74c94c33.json: 
+variants/root-2/config-0b1966ad5b0e.json: COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 "comment":"FROM 9ecae019ab79" "comment":"FROM 6d8c20a24d72" 
+variants/root-2/config-6d8c20a24d72.json: COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 "comment":"FROM 9ecae019ab79" 
+variants/root-2/config-9ecae019ab79.json: COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 
+variants/root-2/config-b6081d416d6d.json: COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 "comment":"FROM 9ecae019ab79" "comment":"FROM 6d8c20a24d72" "comment":"FROM 0b1966ad5b0e" 
+variants/root-2/config-bcff74c94c33.json: 
+variants/root-nolayers/config-845546fef20b.json: COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 
+variants/root-nolayers/config-bcff74c94c33.json: 
+variants/root-vfs-nolayers/config-845546fef20b.json: COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 
+variants/root-vfs-nolayers/config-bcff74c94c33.json: 
+variants/root-vfs/config-0b1966ad5b0e.json: COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 "comment":"FROM 9ecae019ab79" "comment":"FROM 6d8c20a24d72" 
+variants/root-vfs/config-6d8c20a24d72.json: COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 "comment":"FROM 9ecae019ab79" 
+variants/root-vfs/config-9ecae019ab79.json: COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 
+variants/root-vfs/config-b6081d416d6d.json: COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 "comment":"FROM 9ecae019ab79" "comment":"FROM 6d8c20a24d72" "comment":"FROM 0b1966ad5b0e" 
+variants/root-vfs/config-bcff74c94c33.json: 
+variants/rootless-1/config-1ce69fe5dfb3.json: COPY file:1d93dd5b97ccc1ef7cae550f36a7c804ffe539755194139307d6792ca8fc84f2 "comment":"FROM 49022262e327" "comment":"FROM eb1cac086c08" "comment":"FROM 379b0943dbd4" 
+variants/rootless-1/config-379b0943dbd4.json: COPY file:1d93dd5b97ccc1ef7cae550f36a7c804ffe539755194139307d6792ca8fc84f2 "comment":"FROM 49022262e327" "comment":"FROM eb1cac086c08" 
+variants/rootless-1/config-49022262e327.json: COPY file:1d93dd5b97ccc1ef7cae550f36a7c804ffe539755194139307d6792ca8fc84f2 
+variants/rootless-1/config-bcff74c94c33.json: 
+variants/rootless-1/config-eb1cac086c08.json: COPY file:1d93dd5b97ccc1ef7cae550f36a7c804ffe539755194139307d6792ca8fc84f2 "comment":"FROM 49022262e327" 
+variants/rootless-2/config-1ce69fe5dfb3.json: COPY file:1d93dd5b97ccc1ef7cae550f36a7c804ffe539755194139307d6792ca8fc84f2 "comment":"FROM 49022262e327" "comment":"FROM eb1cac086c08" "comment":"FROM 379b0943dbd4" 
+variants/rootless-2/config-379b0943dbd4.json: COPY file:1d93dd5b97ccc1ef7cae550f36a7c804ffe539755194139307d6792ca8fc84f2 "comment":"FROM 49022262e327" "comment":"FROM eb1cac086c08" 
+variants/rootless-2/config-49022262e327.json: COPY file:1d93dd5b97ccc1ef7cae550f36a7c804ffe539755194139307d6792ca8fc84f2 
+variants/rootless-2/config-bcff74c94c33.json: 
+variants/rootless-2/config-eb1cac086c08.json: COPY file:1d93dd5b97ccc1ef7cae550f36a7c804ffe539755194139307d6792ca8fc84f2 "comment":"FROM 49022262e327" 
+variants/rootless-nolayers/config-49c36294575e.json: COPY file:1d93dd5b97ccc1ef7cae550f36a7c804ffe539755194139307d6792ca8fc84f2 
+variants/rootless-nolayers/config-bcff74c94c33.json: 
+variants/rootless-vfs-nolayers/config-bcff74c94c33.json: 
+variants/rootless-vfs-nolayers/config-f482003d54b1.json: COPY file:1d93dd5b97ccc1ef7cae550f36a7c804ffe539755194139307d6792ca8fc84f2 
+variants/rootless-vfs/config-53d96711f440.json: COPY file:1d93dd5b97ccc1ef7cae550f36a7c804ffe539755194139307d6792ca8fc84f2 "comment":"FROM ea0e46bf9ef9" "comment":"FROM 62878fcf38dd" 
+variants/rootless-vfs/config-62878fcf38dd.json: COPY file:1d93dd5b97ccc1ef7cae550f36a7c804ffe539755194139307d6792ca8fc84f2 "comment":"FROM ea0e46bf9ef9" 
+variants/rootless-vfs/config-972cda519ae4.json: COPY file:1d93dd5b97ccc1ef7cae550f36a7c804ffe539755194139307d6792ca8fc84f2 "comment":"FROM ea0e46bf9ef9" "comment":"FROM 62878fcf38dd" "comment":"FROM 53d96711f440" 
+variants/rootless-vfs/config-bcff74c94c33.json: 
+variants/rootless-vfs/config-ea0e46bf9ef9.json: COPY file:1d93dd5b97ccc1ef7cae550f36a7c804ffe539755194139307d6792ca8fc84f2 
+rcheck: removed 0 dangling test volumes
+rcheck: exit 0 at 07:28:23 (the build host)

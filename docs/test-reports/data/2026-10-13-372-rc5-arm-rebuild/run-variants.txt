@@ -1,0 +1,36 @@
+rcheck: queued on the build host at 07:19:43 (Asia/Taipei)
+debconf: delaying package configuration, since apt-utils is not installed
+  buildah 1.33.7+ds1-1ubuntu0.24.04.3
+  golang-github-containers-image 5.29.2-2
+  podman 4.9.3+ds1-1ubuntu0.2
+rootless-1: image sha256:b575b122399c237fac9392745b174bd4ca90ab91c3fd736f0b4563863e263ed9, COPY diff_id sha256:8b3d9619d37cb357b044179f07d9d0db705a2ed63db609660791e0575bccc2fb, history comments: FROM 49022262e327, FROM eb1cac086c08, FROM 379b0943dbd4
+rootless-2: image sha256:b575b122399c237fac9392745b174bd4ca90ab91c3fd736f0b4563863e263ed9, COPY diff_id sha256:8b3d9619d37cb357b044179f07d9d0db705a2ed63db609660791e0575bccc2fb, history comments: FROM 49022262e327, FROM eb1cac086c08, FROM 379b0943dbd4
+root-1: image sha256:4bb4177e3a5bc0f8d147a480050da98330ab5d81aa010d9d30e9b41233dd26ca, COPY diff_id sha256:fe0509b6267de079a37b5f9f359c2d57de1a5d4eede72b5889a4e770510f972c, history comments: FROM 9ecae019ab79, FROM 6d8c20a24d72, FROM 0b1966ad5b0e
+rm: cannot remove '/home/runner/storage/root-1/overlay': Device or resource busy
+root-1: FAILED
+root-2: image sha256:4bb4177e3a5bc0f8d147a480050da98330ab5d81aa010d9d30e9b41233dd26ca, COPY diff_id sha256:fe0509b6267de079a37b5f9f359c2d57de1a5d4eede72b5889a4e770510f972c, history comments: FROM 9ecae019ab79, FROM 6d8c20a24d72, FROM 0b1966ad5b0e
+rm: cannot remove '/home/runner/storage/root-2/overlay': Device or resource busy
+root-2: FAILED
+rootless-nolayers: image sha256:dcc4c2884c7e413952b1866ebbddee7336da5f21b47f34975b2cba4ac414e0c2, COPY diff_id sha256:8b3d9619d37cb357b044179f07d9d0db705a2ed63db609660791e0575bccc2fb, history comments: 
+root-nolayers: image sha256:a7a216fb2c5f81cc7a08b44c3946b690b3208ff596cfe309d8589584bbe5f447, COPY diff_id sha256:fe0509b6267de079a37b5f9f359c2d57de1a5d4eede72b5889a4e770510f972c, history comments: 
+rm: cannot remove '/home/runner/storage/root-nolayers/overlay': Device or resource busy
+root-nolayers: FAILED
+rootless-vfs: image sha256:d5630d02eb2a0572528d8a31ed4aed23c098602f30be9f557215e3f2b493b555, COPY diff_id sha256:fe0509b6267de079a37b5f9f359c2d57de1a5d4eede72b5889a4e770510f972c, history comments: FROM ea0e46bf9ef9, FROM 62878fcf38dd, FROM 53d96711f440
+root-vfs: image sha256:4bb4177e3a5bc0f8d147a480050da98330ab5d81aa010d9d30e9b41233dd26ca, COPY diff_id sha256:fe0509b6267de079a37b5f9f359c2d57de1a5d4eede72b5889a4e770510f972c, history comments: FROM 9ecae019ab79, FROM 6d8c20a24d72, FROM 0b1966ad5b0e
+rootless-vfs-nolayers: image sha256:7ae0e279b6796e0f81ad6a1b3e1fc0d77aa901295260cf02a7d80beff3be5b94, COPY diff_id sha256:fe0509b6267de079a37b5f9f359c2d57de1a5d4eede72b5889a4e770510f972c, history comments: 
+root-vfs-nolayers: image sha256:a7a216fb2c5f81cc7a08b44c3946b690b3208ff596cfe309d8589584bbe5f447, COPY diff_id sha256:fe0509b6267de079a37b5f9f359c2d57de1a5d4eede72b5889a4e770510f972c, history comments: 
+published: image sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44, COPY diff_id sha256:8b3d9619d37cb357b044179f07d9d0db705a2ed63db609660791e0575bccc2fb, history comments: FROM 5d2100980097, FROM c3b284fea6d2, FROM 45938a1e651f
+== the intermediate image after COPY: rootless-1 against rootless-2, then rootless-1 against root-1
+-- rootless-1 (/work/out/variants/rootless-1/config-49022262e327.json) against rootless-2 (/work/out/variants/rootless-2/config-49022262e327.json)
+   no difference
+-- rootless-1 (/work/out/variants/rootless-1/config-49022262e327.json) against root-1 (/work/out/variants/root-1/config-9ecae019ab79.json)
+71c71
+<       "created_by": "/bin/sh -c #(nop) COPY file:1d93dd5b97ccc1ef7cae550f36a7c804ffe539755194139307d6792ca8fc84f2 in /usr/local/bin/identity "
+---
+>       "created_by": "/bin/sh -c #(nop) COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 in /usr/local/bin/identity "
+90c90
+<       "sha256:8b3d9619d37cb357b044179f07d9d0db705a2ed63db609660791e0575bccc2fb"
+---
+>       "sha256:fe0509b6267de079a37b5f9f359c2d57de1a5d4eede72b5889a4e770510f972c"
+rcheck: removed 0 dangling test volumes
+rcheck: exit 1 at 07:23:45 (the build host)
