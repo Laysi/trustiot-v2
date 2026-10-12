@@ -109,8 +109,8 @@ user-mode qemu 下，podman 無法執行 arm64 階段的 `RUN`，也無法啟動
 | --- | --- | --- |
 | `plan` | checkout、setup-proto（bun、helm）、git、`plan.ts`（helm lint）、`Laysi/release-notes-action`（composite action，bash、git、jq、curl）、openssl | **可行，已改**：arm64 容器內 `plan.ts` 與 `notes.sh` 通過，產出與 x64 相同；jq、openssl 在 arm64 runner 映像內（[runner-images.txt](data/2026-10-12-310-release-arm-runner/runner-images.txt)） |
 | `build` | setup-proto（bun、zig、cargo-zigbuild、cargo-auditable、syft）、runner 的 rustup、podman、skopeo | **可行，已改**：arm64 容器內以 build.ts 建出 `identity` 與 `release-selftest`，通過 aarch64 ELF 與靜態連結檢查，SBOM 列出 crate。有 `RUN` 的 Containerfile 映像在 arm64 runner 上原生建置，證據是 PR Laysi/trustiot-v2#307 的 `postgres-image` job（見上方）；模擬環境下無法執行 `RUN`。產出與 x64 的差異見上方「重建」 |
-| `publish` | setup-proto（bun、cosign、helm）、skopeo、gh；keyless cosign 用 GitHub OIDC 與 Fulcio | **可行，已改**：arm64 容器內本機測試模式的推送、簽章、SBOM attestation、chart 推送與簽章、重跑都通過。keyless 簽章要 Actions 的 OIDC token，本機無法驗證；cosign 的 keyless 流程與 CPU 架構無關，Fulcio 憑證記錄的是 runner 類型（GitHub 代管），不記錄架構，所以簽章身分（`release.yml@refs/tags/<tag>`）不變。第一次在 arm64 runner 上發 rc 時才會實際證明 |
-| `verify` | setup-proto（bun、cosign、helm）、skopeo | **可行，已改**：arm64 容器內本機測試模式的 verify 通過 |
+| `publish` | setup-proto（bun、cosign、helm）、skopeo、gh；keyless cosign 用 GitHub OIDC 與 Fulcio | **可行，已改**：arm64 容器內本機測試模式的推送、簽章、SBOM attestation、chart 推送與簽章、重跑都通過。keyless 簽章要 Actions 的 OIDC token，本機無法驗證；cosign 的 keyless 流程與 CPU 架構無關，Fulcio 憑證記錄的是 runner 類型（GitHub 代管），不記錄架構，所以簽章身分（`release.yml@refs/tags/<tag>`）不變。arm64 runner 上的實際發佈已由 `v0.0.0-rc.5` 證明，見下方「arm64 runner 上的 rc」 |
+| `verify` | setup-proto（bun、cosign、helm）、skopeo | **可行，已改**：arm64 容器內本機測試模式的 verify 通過。`v0.0.0-rc.5` 的 verify 在 arm64 runner 上執行，停在「套件必須是私有」，與架構無關，見下方 |
 | `deploy-pr` | setup-proto（bun）、GitHub API | **可行，已改**：純 TypeScript，沒有與架構相關的程式；`bun test scripts/release`（含 `deploy.test.ts`、`flux.test.ts`）在 arm64 容器內通過 |
 | `report` | bash、jq、gh | **可行，已改**：兩種 runner 映像都有 jq 1.7 與 GitHub CLI 2.102.0 |
 | `actions/checkout`、`upload-artifact`、`download-artifact` | JavaScript action | 與 runner 架構無關；ci.yml 與 nightly.yml 已在 arm64 上使用 checkout，從 Laysi/trustiot-v2#309 起 |
@@ -121,6 +121,37 @@ workflow 的變更：
 - `scripts/ci/workflow-conditions.test.ts` 加上「release.yml 每個 job 都在 arm64 runner」的檢查；
 - 「`RUN` 只在 `$BUILDPLATFORM` 階段」原本靠 x64 runner 沒有模擬器而自然擋下，改在 arm64 runner 後會失去這層保護，所以改由 plan 檢查（`scripts/release/containerfile.ts`，PR Laysi/trustiot-v2#307 的 Containerfile 通過）；
 - `lib.test.ts` 裡「拒絕執行測試的 Bun 執行檔」的測試原本只在 x64 上有作用；ci.yml 從 Laysi/trustiot-v2#309 起在 arm64 上執行，這項測試等於沒有跑。現在 arm64 上改為確認 aarch64 的 Bun 被接受。
+
+### arm64 runner 上的 rc：`v0.0.0-rc.5`
+
+2026-10-12 19:07 UTC，coordinator 在本分支的 `716740a`（已合併 main `28862e1`）打上簽章 tag `v0.0.0-rc.5`，觸發 release.yml run 38295508885。GitHub 用 tag 指向的 commit 裡的 release.yml，所以 6 個 job 都指定 `ubuntu-24.04-arm`。實際執行的 plan、build、publish、verify、report 都在這個 runner（映像 20261004.142.1）上；deploy-pr 只在 verify 通過後執行，兩次都略過。每個 job 的結果、runner 映像與 `[release:*]` 輸出見 [rc5-run.txt](data/2026-10-12-310-release-arm-runner/rc5-run.txt)。
+
+- **第 1 次執行**：
+  - plan、build 成功。build 在 arm64 上原生建出三個映像，包括有 `RUN` 的 `postgres`。
+  - publish 推送了 `identity`、`postgres`、`release-selftest`，三個都完成 keyless 簽章與 SBOM attestation，也推送了 chart。
+  - 簽 chart 時，cosign 向 Actions 取 OIDC token，得到的回應不是 JSON（`fetching ambient OIDC credentials: invalid character 'u' looking for beginning of value`），publish 失敗。
+  - 同一個 job 稍早已成功取得 6 次 token，所以判斷是 token 服務的暫時錯誤，與 runner 架構無關。
+- **第 2 次執行**：依 [CI 與發佈](../architecture/ci-release.md) 的處理方式，只重跑失敗的 job（Re-run failed jobs）。
+  - publish 沿用第 1 次 build 的產物，三個映像與 chart 的 digest 都與第 1 次相同，所以沒有重新推送，只再簽一次。
+  - chart 完成簽章，建立了 GitHub 預發佈版本，附上三份 SBOM。
+- **verify 失敗在第一項檢查**：`identity` 可以匿名拉取，而套件必須是私有。
+  - 原因與在 x64 上發佈的 rc.4 相同：repo 公開之後新建的 GHCR 套件是公開的，與 runner 架構無關。
+  - 使用者在 2026-10-13 決定 repo 公開期間不處理，轉回私有之後再檢查（Laysi/trustiot-v2#1）。
+  - verify 停在這一項，沒有檢查簽章，所以改由下面的獨立驗證。
+
+獨立驗證在 coordinator 的工作站上執行，用 `.prototools` 釘選的 cosign 3.1.3。憑證身分限定 `release.yml@refs/tags/v0.0.0-rc.5`，issuer 是 `https://token.actions.githubusercontent.com`。結果見 [rc5-cosign-verify.txt](data/2026-10-12-310-release-arm-runner/rc5-cosign-verify.txt)：
+
+| 產出 | digest | `cosign verify` | `cosign verify-attestation --type spdxjson` |
+| --- | --- | --- | --- |
+| `identity` | `sha256:7a042972…` | 通過，2 個簽章 | 通過，2 個；SBOM 213 個套件 |
+| `postgres` | `sha256:9b8b6b97…` | 通過，2 個簽章 | 通過，2 個；SBOM 142 個套件 |
+| `release-selftest` | `sha256:bc2b33e0…` | 通過，2 個簽章 | 通過，2 個；SBOM 13 個套件 |
+| chart `trustiot` | `sha256:1b96b299…` | 通過，1 個簽章 | chart 沒有 SBOM |
+
+- 每個映像有兩個簽章與兩個 attestation，兩次執行各一個。chart 只有一個簽章，因為第 1 次在簽 chart 時就失敗了。
+- SBOM 的套件數與本報告前面的本機建置相同（213、142、13）。
+- `identity` 的 digest 不能和 rc.4 比較，因為兩者不是同一個 commit：rc.4 打在 main 的 `da6b4c8`。在模擬容器重建 `716740a` 再與 rc.5 比較，由 Laysi/trustiot-v2#372 追蹤。
+- GHCR 套件狀態（2026-10-13，不帶認證向 `ghcr.io/token` 要 pull token）：`identity`、`postgres` 回 200，是公開的；`release-selftest`、`charts/trustiot` 回 401，是私有的。
 
 ### repo 的檢查
 
@@ -139,9 +170,9 @@ workflow 的變更：
 | --- | --- |
 | 評估結果逐 job 記錄能否改用 ARM 與理由 | **通過**，見上方「逐 job 評估」：6 個 job 都可行 |
 | 可行的 job 已改用 `ubuntu-24.04-arm`，`bun test scripts/release`、`check-workflows.ts`、`lint-workflows.ts` 通過 | **通過**：全部 6 個 job 都已改，檢查通過 |
-| 以 release 的本機流程證明，產出的映像、SBOM 與簽章流程與改動前相容 | **通過，有兩點保留**：<br>• arm64 上的本機流程（plan、build、publish 兩次、verify）通過，映像只有 linux/arm64，SBOM 格式與套件清單相同，簽章流程相同，chart 與 `release-selftest` 的產出逐位元組相同。<br>• 服務映像（`identity`）的 digest 與 x64 不同；同架構重建仍然逐位元組相同，所以「可重現」改為「在 arm64 上重建」，已寫進 [CI 與發佈](../architecture/ci-release.md)。<br>• 待測：keyless 簽章、GHCR 推送，以及真正 runner 上的 podman 原生執行 `RUN`。release.yml 的部分要等第一次在 arm64 runner 上的 rc 發佈；`RUN` 的部分已有 PR Laysi/trustiot-v2#307 的 CI 證據 |
+| 以 release 的本機流程證明，產出的映像、SBOM 與簽章流程與改動前相容 | **通過，有一點保留**：<br>• arm64 上的本機流程（plan、build、publish 兩次、verify）通過，映像只有 linux/arm64，SBOM 格式與套件清單相同，簽章流程相同，chart 與 `release-selftest` 的產出逐位元組相同。<br>• 保留：服務映像（`identity`）的 digest 與 x64 不同；同架構重建仍然逐位元組相同，所以「可重現」改為「在 arm64 上重建」，已寫進 [CI 與發佈](../architecture/ci-release.md)。<br>• arm64 runner 上的實際發佈（`v0.0.0-rc.5`）：build 原生建出三個映像，包括有 `RUN` 的 `postgres`；publish 完成 GHCR 推送、keyless 簽章、SBOM attestation、chart 簽章與 GitHub Release，簽章以 cosign 獨立驗證通過。verify 因套件公開而停在第一項檢查，與架構無關。見上方「arm64 runner 上的 rc」 |
 
 後續建議：
 
-- 第一次在 arm64 runner 上發 rc 時，在 build host 以本報告的方式（arm64 模擬容器）重建同一個 commit，比較 `identity` 的 digest。這可以證明模擬環境與真正 runner 的結果相同，同時檢查兩邊 podman 版本是否一致。
+- 以本報告的方式（arm64 模擬容器）重建 rc.5 的 commit `716740a`，與 rc.5 的 `identity` digest 比較。這可以證明模擬環境與真正 runner 的結果相同，同時檢查兩邊 podman 版本是否一致。由 Laysi/trustiot-v2#372 追蹤。
 - 若要讓 x86 機器也能重現服務映像，得找出讓 Cargo 的 metadata hash 不受主機影響的方法，目前沒有穩定的做法，不在本次範圍。
