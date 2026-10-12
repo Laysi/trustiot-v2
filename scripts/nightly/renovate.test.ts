@@ -82,7 +82,7 @@ describe("annotated workflow versions", () => {
 
 describe(".prototools", () => {
   // Renovate's proto manager reads these by itself.
-  const BUILT_IN = new Set(["bun", "rust"]);
+  const BUILT_IN = new Set(["bun", "go", "rust"]);
   const annotation = new RegExp(config.customManagers.find((m) => m.managerFilePatterns.some((p) => p.includes("prototools")))!.matchStrings[0]!, "m");
 
   test("every pinned tool is known to Renovate or carries a `# renovate:` annotation", () => {

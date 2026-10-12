@@ -1,0 +1,28 @@
+2026-10-11T13:04:05.141Z cluster v1.36.5+k3s1
+2026-10-11T13:04:52.052Z recorded 228 cluster-scoped objects and 66 workloads elsewhere
+2026-10-11T13:05:11.363Z registry, soft-serve and the git client are ready
+2026-10-11T13:05:33.448Z chart 0.0.1 → sha256:5062550e75feeed0ecc134bd0ad774a29e8997d78097997f8d84f2edacb8a3b3, signed with the trusted key
+2026-10-11T13:05:44.201Z chart 0.0.2 → sha256:45ad3f6171744c3a0d5a1513f12492e29c70e2951c05b5460e44f68e3c4ea82f, signed with the trusted key
+2026-10-11T13:05:55.451Z chart 0.0.3 → sha256:2a61603f691c5dcf9afe2b0ef9293fe7cff516c32153548267b2881138c9b4a5, signed with the other key
+2026-10-11T13:05:56.351Z PASS the registry refuses anonymous pulls: HTTP 401
+2026-10-11T13:06:17.601Z pushed the e2e repository at 010a1a412b8abcce393fb7e603ccfe7d2848d1f4
+2026-10-11T13:06:48.606Z Flux controllers are available
+2026-10-11T13:07:10.226Z bootstrap: 0.0.1 running 27.1 s after the push (git main@sha1:010a1a412b8abcce393fb7e603ccfe7d2848d1f4)
+2026-10-11T13:07:14.268Z PASS the SOPS-encrypted pull Secret is decrypted into the cluster: Secret e2e-70/ghcr-pull type kubernetes.io/dockerconfigjson
+2026-10-11T13:07:18.299Z PASS values-saas.yaml and values-instance.yaml reach the chart, in that order: from-values-saas-0.0.1 from-values-instance
+2026-10-11T13:08:01.912Z deploy: 0.0.2 running 27.6 s after the push (git main@sha1:1c8cab9950ce538b419014a1a628b89df22ce74d)
+2026-10-11T13:08:01.912Z PASS a merged deploy commit is running within the interval: 27.6 s (GitRepository interval 60 s)
+2026-10-11T13:09:06.761Z revert: 0.0.1 running 49.6 s after the push (git main@sha1:40745d64947061ce6d2b4601d20c34196c7d0e82)
+2026-10-11T13:09:06.761Z PASS reverting the deploy commit rolls back within the interval: 49.6 s
+2026-10-11T13:10:21.671Z PASS a chart with a foreign signature is not installed: OCIRepository Ready=False (VerificationError: failed to verify the signature using provider 'cosign': no matching signatures were found for 'registry.e2e-70.svc.cluster.local:5000/charts/trustiot@sha256:2a6); running 0.0.1
+2026-10-11T13:10:55.556Z recovered at be65ba4a14ba861ddbf65997707153a3e9793e60 after 29 s; running 0.0.1
+2026-10-11T13:10:55.556Z teardown
+2026-10-11T13:11:00.112Z suspend the sync, no pruning: done
+2026-10-11T13:11:04.236Z uninstall the release: done
+2026-10-11T13:11:08.032Z delete the sources: done
+2026-10-11T13:11:12.295Z delete the sync: done
+2026-10-11T13:11:25.372Z delete Flux: exit 0
+2026-10-11T13:12:11.713Z delete namespace e2e-70: exit 0
+2026-10-11T13:12:15.352Z delete namespace flux-system: exit 0
+2026-10-11T13:12:56.343Z PASS cluster-scoped objects are identical after teardown: 9 kinds, same sha256
+2026-10-11T13:12:56.344Z PASS no workload outside the test was touched: 66 workloads, 0 changed

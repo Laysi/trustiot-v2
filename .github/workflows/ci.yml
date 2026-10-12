@@ -28,6 +28,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  # release.yml's deploy-pr job starts ci on the deploy branch it pushes: the PR it opens with
+  # GITHUB_TOKEN starts no workflow, and workflow_dispatch is the one event that token may
+  # trigger. The checks attach to the branch's head commit, so they show on that PR.
+  workflow_dispatch:
 
 # No token scopes by default; each job asks for what it needs.
 permissions: {}
@@ -193,11 +197,17 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-proto
         with:
-          tools: bun helm kubeconform
+          tools: bun helm kubeconform kubectl flux
       # helm lint --strict, then helm template with values-saas.yaml and values-onprem.yaml,
       # each validated by kubeconform -strict, plus the chart's own rules and the README field
       # check (deploy/chart/README.md). kubeconform downloads the Kubernetes schemas.
       - run: bun test deploy/chart
+      # The SaaS GitOps tree (deploy/flux/README.md): kustomize build, kubeconform against the
+      # pinned Flux CRDs, Flux's manifests equal to the pinned flux CLI's, the chart source's
+      # signature check, the instance values against the chart schema, and .sops.yaml.
+      - name: deploy/flux
+        if: ${{ !cancelled() }}
+        run: bun test deploy/flux
 
   host:
     name: host

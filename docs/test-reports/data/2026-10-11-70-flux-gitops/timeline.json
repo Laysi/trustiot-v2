@@ -1,0 +1,122 @@
+{
+  "results": [
+    {
+      "name": "the registry refuses anonymous pulls",
+      "passed": true,
+      "detail": "HTTP 401"
+    },
+    {
+      "name": "the SOPS-encrypted pull Secret is decrypted into the cluster",
+      "passed": true,
+      "detail": "Secret e2e-70/ghcr-pull type kubernetes.io/dockerconfigjson"
+    },
+    {
+      "name": "values-saas.yaml and values-instance.yaml reach the chart, in that order",
+      "passed": true,
+      "detail": "from-values-saas-0.0.1 from-values-instance"
+    },
+    {
+      "name": "a merged deploy commit is running within the interval",
+      "passed": true,
+      "detail": "27.6 s (GitRepository interval 60 s)"
+    },
+    {
+      "name": "reverting the deploy commit rolls back within the interval",
+      "passed": true,
+      "detail": "49.6 s"
+    },
+    {
+      "name": "a chart with a foreign signature is not installed",
+      "passed": true,
+      "detail": "OCIRepository Ready=False (VerificationError: failed to verify the signature using provider 'cosign': no matching signatures were found for 'registry.e2e-70.svc.cluster.local:5000/charts/trustiot@sha256:2a6); running 0.0.1"
+    },
+    {
+      "name": "cluster-scoped objects are identical after teardown",
+      "passed": true,
+      "detail": "9 kinds, same sha256"
+    },
+    {
+      "name": "no workload outside the test was touched",
+      "passed": true,
+      "detail": "66 workloads, 0 changed"
+    }
+  ],
+  "timeline": [
+    {
+      "step": "bootstrap",
+      "version": "0.0.1",
+      "chart": "0.0.1+5062550e75fe",
+      "commit": "010a1a412b8abcce393fb7e603ccfe7d2848d1f4",
+      "elapsedSeconds": 27.1,
+      "gitRevision": "main@sha1:010a1a412b8abcce393fb7e603ccfe7d2848d1f4",
+      "appliedRevision": "main@sha1:010a1a412b8abcce393fb7e603ccfe7d2848d1f4",
+      "helmRelease": {
+        "lastTransitionTime": "2026-10-11T13:06:48Z",
+        "message": "Helm install succeeded for release e2e-70/trustiot.v1 with chart trustiot@0.0.1+5062550e75fe",
+        "observedGeneration": 1,
+        "reason": "InstallSucceeded",
+        "status": "True",
+        "type": "Ready"
+      },
+      "helmHistory": [
+        "1:0.0.1+5062550e75fe:deployed"
+      ]
+    },
+    {
+      "step": "deploy",
+      "version": "0.0.2",
+      "chart": "0.0.2+45ad3f617174",
+      "commit": "1c8cab9950ce538b419014a1a628b89df22ce74d",
+      "elapsedSeconds": 27.6,
+      "gitRevision": "main@sha1:1c8cab9950ce538b419014a1a628b89df22ce74d",
+      "appliedRevision": "main@sha1:1c8cab9950ce538b419014a1a628b89df22ce74d",
+      "helmRelease": {
+        "lastTransitionTime": "2026-10-11T13:07:45Z",
+        "message": "Helm upgrade succeeded for release e2e-70/trustiot.v2 with chart trustiot@0.0.2+45ad3f617174",
+        "observedGeneration": 1,
+        "reason": "UpgradeSucceeded",
+        "status": "True",
+        "type": "Ready"
+      },
+      "helmHistory": [
+        "2:0.0.2+45ad3f617174:deployed",
+        "1:0.0.1+5062550e75fe:superseded"
+      ]
+    },
+    {
+      "step": "revert",
+      "version": "0.0.1",
+      "chart": "0.0.1+5062550e75fe",
+      "commit": "40745d64947061ce6d2b4601d20c34196c7d0e82",
+      "elapsedSeconds": 49.6,
+      "gitRevision": "main@sha1:40745d64947061ce6d2b4601d20c34196c7d0e82",
+      "appliedRevision": "main@sha1:40745d64947061ce6d2b4601d20c34196c7d0e82",
+      "helmRelease": {
+        "lastTransitionTime": "2026-10-11T13:08:46Z",
+        "message": "Helm upgrade succeeded for release e2e-70/trustiot.v3 with chart trustiot@0.0.1+5062550e75fe",
+        "observedGeneration": 1,
+        "reason": "UpgradeSucceeded",
+        "status": "True",
+        "type": "Ready"
+      },
+      "helmHistory": [
+        "3:0.0.1+5062550e75fe:deployed",
+        "2:0.0.2+45ad3f617174:superseded"
+      ]
+    },
+    {
+      "step": "foreign signature",
+      "commit": "e96e72b67e17dbd19f414283b492b86c285c7131",
+      "elapsedSeconds": 75,
+      "source": {
+        "lastTransitionTime": "2026-10-11T13:09:47Z",
+        "message": "failed to verify the signature using provider 'cosign': no matching signatures were found for 'registry.e2e-70.svc.cluster.local:5000/charts/trustiot@sha256:2a61603f691c5dcf9afe2b0ef9293fe7cff516c32153548267b2881138c9b4a5'",
+        "observedGeneration": 4,
+        "reason": "VerificationError",
+        "status": "False",
+        "type": "Ready"
+      },
+      "running": "0.0.1"
+    }
+  ]
+}
