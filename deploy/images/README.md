@@ -12,7 +12,7 @@ release.yml 發佈的容器映像。每個子目錄是一個映像，目錄名�
 | `migrate` | migration Job（`tools/migrate`），chart 的 `migrate.image`；Job 執行 `migrate run`，每個服務 pod 的 init container 執行 `migrate wait-for-job`。2026-10-13 加入（Laysi/trustiot-v2#60），nightly 從原始碼建置它 |
 | `release-selftest` | 發佈流程的自測映像（`tools/release-selftest`），不是服務，不部署 |
 
-發佈的 chart 以 digest 固定它部署的映像：`postgres`，以及名稱是 chart `services` 的 key 的映像（`scripts/release/chart-images.ts`，見 [chart README](../chart/README.md)「映像的 digest」）。chart 不部署的映像要列在該檔的 `NOT_DEPLOYED_BY_CHART`，否則發佈停止，`bun test scripts` 也會失敗。
+發佈的 chart 以 digest 固定它部署的映像：`postgres`、`migrate`，以及名稱是 chart `services` 的 key 的映像（`scripts/release/chart-images.ts`，見 [chart README](../chart/README.md)「映像的 digest」）。chart 不部署的映像要列在該檔的 `NOT_DEPLOYED_BY_CHART`，否則發佈停止，`bun test scripts` 也會失敗。
 
 ## Rust 服務
 

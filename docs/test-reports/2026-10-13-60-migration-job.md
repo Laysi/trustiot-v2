@@ -4,7 +4,7 @@
 
 ## 環境
 
-- **受測程式碼**：分支 `feat/60-migration-job`（基於 main `be1cfea`）的工作樹，含 `e4595dd` 之後尚未提交的變更（HTTP client 改用 hyper、文件、chart 測試）；測試之後只改了文件。
+- **受測程式碼**：分支 `feat/60-migration-job` rebase 到 main `041f76c` 之後的工作樹（含發佈流程為 `migrate` 映像寫入 digest 的變更與 service-kit 新的測試容器啟動邏輯）。`migrate-and-sql-check-tests.txt` 是 rebase 之前、HTTP client 改用 hyper 之後的同一套測試；rebase 之後 `cargo test --workspace` 又全部跑過一次（`workspace-checks.txt`）。
 - **Rust 測試**：共用建置主機（x86_64 Linux，Docker），`CI=1`，所以需要容器的測試在沒有容器執行環境時會失敗而不是略過。Postgres 是 `crates/service-kit` 測試共用的 TLS Postgres（PostgreSQL 18），ClickHouse 是 `clickhouse/clickhouse-server` 26.8（以 digest 釘選，與 `services/ingest` 的測試相同）。Rust 1.99.0、zig 0.16.0，皆由 `.prototools` 鎖定。
 - **chart 與腳本測試**：開發用工作站（x86_64 Linux），bun 1.4.2、helm 4.3.0，由 `.prototools` 鎖定。
 - **沒有 Kubernetes**：本 repo 規定工作站不跑 Kubernetes；k3d 上的驗證由 nightly 的 smoke 執行（見「結論」）。
@@ -37,14 +37,14 @@ bun scripts/ci/check-secret-handling.ts
 | 項目 | 結果 |
 | --- | --- |
 | `cargo fmt`、兩次 clippy | 通過，沒有警告 |
-| `cargo test --workspace` | 87 個測試執行檔、641 個測試全部通過（[workspace-checks.txt](data/2026-10-13-60-migration-job/workspace-checks.txt)） |
+| `cargo test --workspace` | 91 個測試執行檔、655 個測試全部通過（[workspace-checks.txt](data/2026-10-13-60-migration-job/workspace-checks.txt)） |
 | `cargo test -p migrate -p sql-check` | 全部通過，逐項名稱見 [migrate-and-sql-check-tests.txt](data/2026-10-13-60-migration-job/migrate-and-sql-check-tests.txt) |
 | OpenAPI | `api/openapi.json is up to date` |
 | `cargo deny` | advisories、bans、licenses、sources 都 ok |
 | aarch64 musl 交叉編譯 | `migrate` 以釘選的 zig 建置成功（release profile） |
 | `bun test deploy/chart` | 304 通過 |
 | `bun test deploy/flux` | 19 通過 |
-| `bun test scripts` | 620 通過、1 略過（podman e2e，需 `TRUSTIOT_DEV_E2E=1`），0 失敗 |
+| `bun test scripts`（含 `scripts/release`，`migrate` 映像的 digest 寫入發佈的 chart） | 649 通過、2 略過（需要 podman 的 e2e），0 失敗 |
 | typecheck、workflow 政策、actionlint、secret handling | 通過，沒有違規 |
 
 migrate 的整合測試涵蓋的情境：

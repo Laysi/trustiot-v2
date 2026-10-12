@@ -281,12 +281,12 @@ mesh:
 
 ### 映像的 digest
 
-我們自己的映像（服務與 `postgres.bundled.image`）的 tag 預設是 `Chart.appVersion`，所以 repo 裡的 chart 不寫 digest：寫死某一次發佈的 digest，之後的版本就會變成「新 tag＋舊 digest」。
+我們自己的映像（服務、`postgres.bundled.image` 與 `migrate.image`）的 tag 預設是 `Chart.appVersion`，所以 repo 裡的 chart 不寫 digest：寫死某一次發佈的 digest，之後的版本就會變成「新 tag＋舊 digest」。
 
-發佈的 chart 以 digest 固定同一次發佈的映像（Laysi/trustiot-v2#57）。release 的 publish 推送映像之後，在這份 chart 的暫存複本寫入它們的 digest 再打包、簽章：服務寫在 `services.<name>.image.digest`（`values.yaml` 沒有這個欄位時加上），Postgres 寫在 `postgres.bundled.image.digest`。所以從 GHCR 拉下的 chart 會 render 出 `<repository>:<版本>@sha256:…`，verify 也會檢查（[CI 與發佈](../../docs/architecture/ci-release.md)「release.yml」）。
+發佈的 chart 以 digest 固定同一次發佈的映像（Laysi/trustiot-v2#57）。release 的 publish 推送映像之後，在這份 chart 的暫存複本寫入它們的 digest 再打包、簽章：服務寫在 `services.<name>.image.digest`（`values.yaml` 沒有這個欄位時加上），Postgres 寫在 `postgres.bundled.image.digest`，migration Job 寫在 `migrate.image.digest`。所以從 GHCR 拉下的 chart 會 render 出 `<repository>:<版本>@sha256:…`，verify 也會檢查（[CI 與發佈](../../docs/architecture/ci-release.md)「release.yml」）。
 
 - `values-saas.yaml`、`values-onprem.yaml` 與 `deploy/flux` 的 values 不覆寫這些映像的 `registry`、`repository`、`tag`、`digest`（`bun test scripts` 檢查）。
-- 安裝實例的覆寫檔也不要動它們。要從自己的 registry 鏡像時，只改 `serviceDefaults.image.registry` 與 `postgres.bundled.image.repository`，鏡像要保留 digest（例如 `skopeo copy --preserve-digests`），digest 才對得上。
+- 安裝實例的覆寫檔也不要動它們。要從自己的 registry 鏡像時，只改 `serviceDefaults.image.registry`、`postgres.bundled.image.repository` 與 `migrate.image.repository`，鏡像要保留 digest（例如 `skopeo copy --preserve-digests`），digest 才對得上。
 - 改用別的映像（例如臨時修補版）時，`tag` 與 `digest` 要一起改，或把 `digest` 設成 `""`。只改 `tag` 時，kubelet 仍然依 digest 拉原本的映像。
 - `tests/values/smoke.yaml` 與 e2e 的 values 用本機建出的映像，套在 repo 裡（沒有 digest）的 chart 上，不受影響。
 
@@ -311,7 +311,7 @@ mesh:
 | `migrate.enabled` | `true` | 部署 migration Job，並在每個服務的 pod 加上等它完成的 init container。關掉時資料庫的 schema、服務角色與 collector 帳號都要另外建立；只有不接真正資料庫的叢集測試（`tests/e2e/values-*.yaml`）關掉它 |
 | `migrate.image.repository` | `ghcr.io/laysi/trustiot-v2/migrate` | migration 映像（[deploy/images/migrate](../images/migrate)），由 release 與服務一起發佈；Job 與服務的 init container 用同一個映像 |
 | `migrate.image.tag` | `""` | 空白時用 `Chart.appVersion` |
-| `migrate.image.digest` | `""` | sha256 digest；設定時以 digest 固定映像 |
+| `migrate.image.digest` | `""` | sha256 digest；設定時以 digest 固定映像。repo 裡留空，發佈的 chart 由 release 寫入同一次發佈的 digest（見「映像的 digest」） |
 | `migrate.image.pullPolicy` | `IfNotPresent` | |
 | `migrate.revision` | `"1"` | 改這個值就讓 Job 重跑一次（Job 名稱跟著變），所有服務也隨之重啟。輪替 `postgres.serviceRolesSecret` 或 collector 的 ClickHouse 密碼後要改它：Job 設定新密碼，服務重啟後讀到新密碼 |
 | `migrate.wait.databases` | `10m` | Job 等 Postgres 與 ClickHouse 開始接受連線的上限（全新安裝時資料庫與 Job 同時建立）；秒、分或 `1h`，最多 1 小時 |

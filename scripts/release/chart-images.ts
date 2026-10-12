@@ -25,24 +25,40 @@ type Values = Record<string, unknown>;
 
 /** The CloudNativePG operand image (deploy/images/postgres); the chart runs it as postgres.bundled.image. */
 export const POSTGRES_IMAGE = "postgres";
+/** The migration Job's image (deploy/images/migrate, Laysi/trustiot-v2#60); the chart runs it as migrate.image. */
+export const MIGRATE_IMAGE = "migrate";
 /**
  * Images a release publishes that the chart does not deploy. Every other image must be a key
- * under the chart's `services` or the Postgres image, so a new image is never left unpinned.
+ * under the chart's `services`, the Postgres image or the migration Job's image, so a new image
+ * is never left unpinned.
  */
 export const NOT_DEPLOYED_BY_CHART: ReadonlySet<string> = new Set(["release-selftest"]);
 /** The deployment shape files shipped in the chart; each is layered over values.yaml. */
 export const SHAPE_VALUES_FILES = ["values-saas.yaml", "values-onprem.yaml"] as const;
 
-/** An image the chart deploys: a service (`services.<name>`) or the bundled Postgres. */
+/**
+ * An image the chart deploys: a service (`services.<name>`, its repository from
+ * serviceDefaults.image.registry), or a component with its own `image` map and repository (the
+ * bundled Postgres, the migration Job).
+ */
 export interface ChartImage {
   name: string;
-  kind: "service" | "postgres";
+  kind: "service" | "postgres" | "migrate";
 }
+
+/** Where a component image keeps its own `repository`, `tag` and `digest`. */
+const OWN_IMAGE_PATHS: Readonly<Record<"postgres" | "migrate", readonly string[]>> = {
+  postgres: ["postgres", "bundled", "image"],
+  migrate: ["migrate", "image"],
+};
 
 /** How the chart deploys the release image `name`; undefined when it does not deploy it. */
 export function chartImage(name: string, values: Values): ChartImage | undefined {
   if (name === POSTGRES_IMAGE) {
     return { name, kind: "postgres" };
+  }
+  if (name === MIGRATE_IMAGE) {
+    return { name, kind: "migrate" };
   }
   if (isMap(values.services) && Object.hasOwn(values.services, name)) {
     return { name, kind: "service" };
@@ -51,14 +67,14 @@ export function chartImage(name: string, values: Values): ChartImage | undefined
     return undefined;
   }
   throw new ReleaseError(
-    `image \`${name}\` is neither deployed by the chart (a key under services, or ${POSTGRES_IMAGE}) nor listed in ` +
+    `image \`${name}\` is neither deployed by the chart (a key under services, ${POSTGRES_IMAGE} or ${MIGRATE_IMAGE}) nor listed in ` +
       "NOT_DEPLOYED_BY_CHART (scripts/release/chart-images.ts); the chart would not pin it",
   );
 }
 
 /** The values field the release writes the image's digest to. */
 export function digestPath(image: ChartImage): string[] {
-  return image.kind === "postgres" ? ["postgres", "bundled", "image", "digest"] : ["services", image.name, "image", "digest"];
+  return image.kind === "service" ? ["services", image.name, "image", "digest"] : [...OWN_IMAGE_PATHS[image.kind], "digest"];
 }
 
 export interface ImageReference {
@@ -117,16 +133,18 @@ export function mergeValues(base: Values, overlay: Values): Values {
 
 /**
  * The reference the templates render for `image` from these values: trustiot.serviceImage in
- * _helpers.tpl (serviceDefaults.image merged with services.<name>.image) and
- * trustiot.postgres.image in _postgres.tpl. chart-images.test.ts checks it against helm template.
+ * _helpers.tpl (serviceDefaults.image merged with services.<name>.image), trustiot.postgres.image
+ * in _postgres.tpl and trustiot.migrate.image in _migrate.tpl. chart-images.test.ts checks it
+ * against helm template.
  */
 export function imageReference(values: Values, image: ChartImage, appVersion: string): ImageReference {
   let settings: Values;
   let repository: string;
-  if (image.kind === "postgres") {
-    const own = getIn(values, ["postgres", "bundled", "image"]);
+  if (image.kind !== "service") {
+    const path = OWN_IMAGE_PATHS[image.kind];
+    const own = getIn(values, path);
     if (!isMap(own)) {
-      throw new ReleaseError("the chart values have no postgres.bundled.image");
+      throw new ReleaseError(`the chart values have no ${path.join(".")}`);
     }
     settings = own;
     repository = scalarText(settings.repository);
@@ -340,8 +358,8 @@ export interface PinOptions {
   appVersion: string;
   /**
    * Local test only: point the chart at the registry the plan pushed to (serviceDefaults.image.
-   * registry, postgres.bundled.image.repository). A release refuses a chart whose repositories
-   * differ from where it pushed.
+   * registry, postgres.bundled.image.repository, migrate.image.repository). A release refuses a
+   * chart whose repositories differ from where it pushed.
    */
   rewriteRepositories: boolean;
 }
@@ -379,8 +397,8 @@ export function pinChartValues(source: string, pins: readonly ChartPin[], option
       if (!options.rewriteRepositories) {
         throw new ReleaseError(`the chart deploys ${name} from ${current.repository}, but the release pushed it to ${pin.repository}`);
       }
-      if (pin.image.kind === "postgres") {
-        set(["postgres", "bundled", "image", "repository"], pin.repository);
+      if (pin.image.kind !== "service") {
+        set([...OWN_IMAGE_PATHS[pin.image.kind], "repository"], pin.repository);
       } else {
         const suffix = `/${name}`;
         if (!pin.repository.endsWith(suffix)) {

@@ -12,6 +12,11 @@
 #[path = "../../../../crates/service-kit/tests/support/postgres.rs"]
 pub mod postgres;
 
+/// The start of that Postgres container (`postgres` above uses it): one logic for every crate's
+/// test containers.
+#[path = "../../../../crates/service-kit/tests/support/start.rs"]
+pub mod start;
+
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -117,7 +122,8 @@ impl Container {
 impl Drop for Container {
     fn drop(&mut self) {
         let _ = Command::new(self.runtime)
-            .args(["rm", "--force", &self.name])
+            // `--volumes`: the image's anonymous volumes go with the container (Laysi/trustiot-v2#334).
+            .args(["rm", "--force", "--volumes", &self.name])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
