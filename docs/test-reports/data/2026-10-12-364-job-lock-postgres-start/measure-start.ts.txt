@@ -1,0 +1,195 @@
+// Saved as .txt like the other scripts under data/ so that no tool picks it up; run it as measure-start.ts.
+// Measures what the Postgres start wait of the service-kit tests waits for, for N containers
+// started at the same moment (as the tests do: one per test, every test of a binary at once).
+//
+// Usage: bun measure-start.ts <containers> <label> [image]
+// Prints one JSON line per container and a summary line. Needs docker (or podman) and a
+// Postgres image that is already pulled. Removes the containers it started.
+import { SQL } from "bun";
+
+const IMAGE =
+  process.argv[4] ??
+  "docker.io/library/postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873";
+const COUNT = Number(process.argv[2] ?? "1");
+const LABEL = process.argv[3] ?? "run";
+const RUNTIME = Bun.which("docker") ? "docker" : "podman";
+const POLL_MS = 250;
+// How long to keep trying before a container counts as failed (seconds; 60 like the old tests).
+const GIVE_UP_MS = Number(process.env.GIVE_UP_S ?? "60") * 1000;
+
+async function sh(args: string[]): Promise<{ ok: boolean; out: string }> {
+  const p = Bun.spawn([RUNTIME, ...args], { stdout: "pipe", stderr: "pipe" });
+  const [out, err] = await Promise.all([
+    new Response(p.stdout).text(),
+    new Response(p.stderr).text(),
+  ]);
+  return { ok: (await p.exited) === 0, out: (out + err).trim() };
+}
+
+async function one(index: number) {
+  const name = `measure-start-${process.pid}-${index}`;
+  const t0 = performance.now();
+  const run = await sh([
+    "run", "--detach", "--name", name, "--memory", "512m",
+    "--env", "POSTGRES_PASSWORD=service-kit-test",
+    "--publish", "127.0.0.1::5432", IMAGE,
+  ]);
+  const runReturned = performance.now() - t0;
+  if (!run.ok) return { name, error: `run failed: ${run.out}` };
+  const port = await sh(["port", name, "5432/tcp"]);
+  const portKnown = performance.now() - t0;
+  const address = port.out.split("\n").map((l) => l.trim()).find((l) => /:\d+$/.test(l));
+  if (!address) return { name, error: `no port: ${port.out}` };
+  const url = `postgres://postgres:service-kit-test@${address}/postgres`;
+  let attempts = 0;
+  let firstOk: number | null = null;
+  let firstOkEpoch = 0;
+  let lastError = "";
+  while (performance.now() - t0 < GIVE_UP_MS) {
+    attempts++;
+    const db = new SQL({ url, max: 1, connectionTimeout: 10, idleTimeout: 1 });
+    try {
+      await db`SELECT 1`;
+      firstOk = performance.now() - t0;
+      firstOkEpoch = Date.now();
+      await db.close();
+      break;
+    } catch (error) {
+      lastError = String(error).slice(0, 120);
+      await db.close().catch(() => {});
+    }
+    await Bun.sleep(POLL_MS);
+  }
+  let diagnosis: Record<string, string> | undefined;
+  if (firstOk === null) diagnosis = await diagnose(name, address, url);
+  // Offsets of the log lines from the container's start, by the container's own clock.
+  const started = (await sh(["inspect", "--format", "{{.State.StartedAt}}", name])).out;
+  const logs = (await sh(["logs", "--timestamps", name])).out.split("\n");
+  const at = (needle: string, last = false): number | null => {
+    const hits = logs.filter((l) => l.includes(needle));
+    const line = last ? hits.at(-1) : hits[0];
+    if (!line) return null;
+    return Date.parse(line.split(" ")[0]!) - Date.parse(started);
+  };
+  // Absolute time of the server's last "ready" log line, to compare with the host's clock.
+  const readyLine = logs.filter((l) => l.includes("database system is ready to accept connections")).at(-1);
+  const readyEpoch = readyLine ? Date.parse(readyLine.split(" ")[0]!) : null;
+  await sh(["rm", "--force", name]);
+  return {
+    name,
+    runReturnedMs: Math.round(runReturned),
+    portKnownMs: Math.round(portKnown),
+    // From container start, by the container's clock.
+    initdbBeganMs: at("The files belonging to this database system"),
+    initProcessCompleteMs: at("PostgreSQL init process complete"),
+    lastReadyToAcceptMs: at("database system is ready to accept connections", true),
+    // From before `run`, by the host clock; this is what the test's wait sees.
+    firstAcceptedConnectionMs: firstOk === null ? null : Math.round(firstOk),
+    // Time from the server's last "ready" log line to the first login from the host, both by
+    // absolute time (the daemon and the host share a clock here).
+    readyToFirstLoginMs:
+      firstOk === null || readyEpoch === null ? null : firstOkEpoch - readyEpoch,
+    attempts,
+    lastError,
+    diagnosis,
+  };
+}
+
+// What a container looks like that never accepted a connection from the host.
+async function diagnose(
+  name: string,
+  address: string,
+  url: string,
+): Promise<Record<string, string>> {
+  const port = address.split(":").at(-1)!;
+  const out: Record<string, string> = {};
+  out.state = (
+    await sh([
+      "inspect",
+      "--format",
+      "status={{.State.Status}} oom={{.State.OOMKilled}} ports={{json .NetworkSettings.Ports}}",
+      name,
+    ])
+  ).out;
+  out.dockerPort = (await sh(["port", name, "5432/tcp"])).out;
+  out.pgIsReadyInside = (await sh(["exec", name, "pg_isready", "-h", "127.0.0.1"])).out;
+  out.hostListeners =
+    (await Bun.$`ss -ltn`.nothrow().text())
+      .split("\n")
+      .filter((line) => line.includes(`:${port}`))
+      .join(" | ") || `no listener on :${port}`;
+  // Raw TCP plus a Postgres SSLRequest: a live server answers one byte, S or N.
+  out.rawProbe = await new Promise<string>((resolve) => {
+    const timer = setTimeout(() => resolve("no answer in 5 s"), 5000);
+    const done = (text: string) => {
+      clearTimeout(timer);
+      resolve(text);
+    };
+    Bun.connect({
+      hostname: "127.0.0.1",
+      port: Number(port),
+      socket: {
+        open(socket) {
+          socket.write(new Uint8Array([0, 0, 0, 8, 4, 210, 22, 47]));
+        },
+        data(socket, data) {
+          done(`answered ${String.fromCharCode(data[0]!)}`);
+          socket.end();
+        },
+        close() {
+          done("closed without an answer");
+        },
+        error(_socket, error) {
+          done(`socket error ${error}`);
+        },
+        connectError(_socket, error) {
+          done(`connect error ${error}`);
+        },
+      },
+    }).catch((error) => done(`connect failed ${error}`));
+  });
+  const retry = new SQL({ url, max: 1, connectionTimeout: 10 });
+  try {
+    await retry`SELECT 1`;
+    out.retryAfterDiagnosis = "ok";
+  } catch (error) {
+    out.retryAfterDiagnosis = String(error).slice(0, 120);
+  }
+  await retry.close().catch(() => {});
+  return out;
+}
+
+const load = (await Bun.file("/proc/loadavg").text()).split(" ").slice(0, 3).join(" ");
+const began = performance.now();
+const results = await Promise.all(Array.from({ length: COUNT }, (_, i) => one(i)));
+const wall = performance.now() - began;
+for (const r of results) console.log(JSON.stringify({ label: LABEL, ...r }));
+const q = (values: number[], p: number) => {
+  const s = [...values].sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.floor((p / 100) * s.length))];
+};
+const ok = results
+  .map((r) => ("firstAcceptedConnectionMs" in r ? r.firstAcceptedConnectionMs : null))
+  .filter((v): v is number => typeof v === "number");
+const phase = (key: string) =>
+  results
+    .map((r) => (r as Record<string, unknown>)[key])
+    .filter((v): v is number => typeof v === "number");
+const stat = (values: number[]) =>
+  values.length
+    ? { min: q(values, 0), p50: q(values, 50), p90: q(values, 90), max: q(values, 100) }
+    : null;
+console.log(
+  JSON.stringify({
+    summary: LABEL,
+    containers: COUNT,
+    failed: COUNT - ok.length,
+    loadavgAtStart: load,
+    wallMs: Math.round(wall),
+    runReturnedMs: stat(phase("runReturnedMs")),
+    initProcessCompleteMs: stat(phase("initProcessCompleteMs")),
+    lastReadyToAcceptMs: stat(phase("lastReadyToAcceptMs")),
+    firstAcceptedConnectionMs: stat(ok),
+    readyToFirstLoginMs: stat(phase("readyToFirstLoginMs")),
+  }),
+);

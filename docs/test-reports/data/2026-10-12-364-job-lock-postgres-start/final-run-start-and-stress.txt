@@ -1,0 +1,124 @@
+rcheck: queued on the build host at 01:42:05 as 364; running now: 360v-7f05cb34 since 01:40:43
+fmt=ok
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.26s
+clippy=ok
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.02s
+     Running tests/job_lock.rs (<build dir>/target/debug/deps/job_lock-c8e13efd8b621b55)
+
+running 10 tests
+test only_one_replica_runs_a_job_scheduled_on_both_at_once ... ok
+test released_locks_return_their_connection_to_the_pool ... ok
+test a_lost_session_cancels_the_job_and_frees_the_lock ... ok
+test a_job_that_panics_before_returning_its_future_keeps_its_schedule_too ... ok
+test a_panicking_job_keeps_its_schedule_and_logs_no_payload ... ok
+test dropped_guards_and_panicking_jobs_release_the_lock ... ok
+test taking_and_releasing_the_lock_give_up_within_the_timeout_in_a_partition ... ok
+test a_partitioned_holder_stops_its_job_within_the_lock_timeout ... ok
+test periodic_runs_on_two_replicas_never_overlap ... ok
+test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.95s
+
+     Running tests/postgres_start.rs (<build dir>/target/debug/deps/postgres_start-f678f030a293d178)
+
+running 3 tests
+test a_server_that_never_comes_up_is_reported_with_what_was_awaited_and_the_container ... ok
+test a_container_whose_published_port_stays_dead_is_replaced ... ok
+test every_container_having_a_dead_port_is_reported_for_each_container ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.90s
+
+     Running tests/verify_job_lock.rs (<build dir>/target/debug/deps/verify_job_lock-2e397ffde5a8ccfa)
+
+running 4 tests
+test releasing_a_guard_whose_session_died_reports_an_error_not_success ... ok
+test a_panicking_job_and_a_dropped_run_release_the_lock ... ok
+test eight_replicas_contending_never_run_a_job_twice_at_once ... ok
+test a_killed_lock_session_stops_the_job_reports_lost_and_leaks_nothing ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.33s
+
+tests=ok
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.42s
+  Executable tests/before_job_lock.rs (<build dir>/target/debug/deps/before_job_lock-20c19ef636af7349)
+  Executable tests/before_verify_job_lock.rs (<build dir>/target/debug/deps/before_verify_job_lock-1bcc9de3e85f6000)
+ 01:46:39 up 1 day,  2:22,  4 users,  load average: 2.30, 5.14, 7.50
+=== start time, server ready to first login, idle host
+{"summary":"idle-60-1","containers":60,"failed":0,"loadavgAtStart":"2.30 5.14 7.50","wallMs":17234,"runReturnedMs":{"min":1240,"p50":2665,"p90":4820,"max":5258},"initProcessCompleteMs":{"min":5346,"p50":9883,"p90":12805,"max":12923},"lastReadyToAcceptMs":{"min":5589,"p50":10152,"p90":12977,"max":13074},"firstAcceptedConnectionMs":{"min":6577,"p50":12004,"p90":15226,"max":15649},"readyToFirstLoginMs":{"min":26,"p50":325,"p90":915,"max":1134}}
+{"summary":"idle-60-2","containers":60,"failed":0,"loadavgAtStart":"12.85 7.32 8.18","wallMs":20209,"runReturnedMs":{"min":2299,"p50":7231,"p90":9562,"max":9680},"initProcessCompleteMs":{"min":9165,"p50":10360,"p90":11059,"max":11219},"lastReadyToAcceptMs":{"min":9344,"p50":10633,"p90":11229,"max":11367},"firstAcceptedConnectionMs":{"min":11587,"p50":14336,"p90":15876,"max":16214},"readyToFirstLoginMs":{"min":31,"p50":276,"p90":729,"max":825}}
+{"summary":"idle-60-3","containers":60,"failed":0,"loadavgAtStart":"18.97 9.31 8.82","wallMs":20960,"runReturnedMs":{"min":1959,"p50":7573,"p90":10131,"max":10244},"initProcessCompleteMs":{"min":9964,"p50":10758,"p90":11492,"max":11651},"lastReadyToAcceptMs":{"min":10199,"p50":11018,"p90":11660,"max":11775},"firstAcceptedConnectionMs":{"min":12005,"p50":14682,"p90":16423,"max":16532},"readyToFirstLoginMs":{"min":47,"p50":400,"p90":793,"max":958}}
+{"summary":"idle-60-4","containers":60,"failed":0,"loadavgAtStart":"23.43 11.01 9.39","wallMs":21010,"runReturnedMs":{"min":2084,"p50":7953,"p90":10054,"max":10191},"initProcessCompleteMs":{"min":9907,"p50":10824,"p90":11486,"max":11619},"lastReadyToAcceptMs":{"min":10133,"p50":11084,"p90":11672,"max":11789},"firstAcceptedConnectionMs":{"min":11896,"p50":14968,"p90":16374,"max":16511},"readyToFirstLoginMs":{"min":41,"p50":470,"p90":816,"max":944}}
+=== stress: before (old tests, a container per test)
+label before; 24 yes; 6 copies of each of before_job_lock, before_verify_job_lock per round; 10 rounds
+load average before the first round: 26.29 13.89 10.47
+round 1 done in 38 s: 12 passed, 0 failed; load average 44.57 20.49 12.85
+round 2 done in 79 s: 10 passed, 2 failed; load average 39.77 25.71 15.36
+round 3 done in 31 s: 12 passed, 0 failed; load average 53.20 30.84 17.47
+round 4 done in 36 s: 12 passed, 0 failed; load average 59.53 35.20 19.44
+round 5 done in 37 s: 12 passed, 0 failed; load average 60.62 38.31 21.08
+round 6 done in 38 s: 12 passed, 0 failed; load average 62.54 41.79 22.98
+round 7 done in 38 s: 12 passed, 0 failed; load average 62.84 44.31 24.53
+round 8 done in 38 s: 12 passed, 0 failed; load average 62.49 46.69 26.17
+round 9 done in 77 s: 8 passed, 4 failed; load average 49.34 47.58 28.17
+round 10 done in 39 s: 12 passed, 0 failed; load average 57.60 50.16 29.86
+--- totals per binary
+before_job_lock: 60 runs, 55 passed, 5 failed; run time min 23.8 s, median 37.1 s, max 77.3 s
+before_verify_job_lock: 60 runs, 59 passed, 1 failed; run time min 26.0 s, median 33.7 s, max 79.3 s
+peak 1-minute load average at the end of a round: 62.84
+--- result lines of all runs
+  55 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+  59 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+   4 test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
+   1 test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
+   1 test result: FAILED. 7 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out
+--- failures
+before_job_lock: test periodic_runs_on_two_replicas_never_overlap ... ok | thread 'a_partitioned_holder_stops_its_job_within_the_lock_timeout' (619506) panicked at crates/service-kit/tests/before_job_lock.rs:76:9: | Postgres did not start in time | test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 65.74s
+before_verify_job_lock: test eight_replicas_contending_never_run_a_job_twice_at_once ... ok | thread 'releasing_a_guard_whose_session_died_reports_an_error_not_success' (619960) panicked at crates/service-kit/tests/before_verify_job_lock.rs:72:9: | Postgres did not start in time | test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 79.32s
+before_job_lock: test periodic_runs_on_two_replicas_never_overlap has been running for over 60 seconds | test periodic_runs_on_two_replicas_never_overlap ... FAILED | thread 'a_job_that_panics_before_returning_its_future_keeps_its_schedule_too' (649786) panicked at crates/service-kit/tests/before_job_lock.rs:76:9: | Postgres did not start in time | ---- periodic_runs_on_two_replicas_never_overlap stdout ---- | thread 'periodic_runs_on_two_replicas_never_overlap' (649795) panicked at crates/service-kit/tests/before_job_lock.rs:76:9:
+before_job_lock: test periodic_runs_on_two_replicas_never_overlap has been running for over 60 seconds | test periodic_runs_on_two_replicas_never_overlap ... FAILED | ---- periodic_runs_on_two_replicas_never_overlap stdout ---- | thread 'periodic_runs_on_two_replicas_never_overlap' (649838) panicked at crates/service-kit/tests/before_job_lock.rs:76:9: | Postgres did not start in time |     periodic_runs_on_two_replicas_never_overlap
+before_job_lock: test periodic_runs_on_two_replicas_never_overlap ... ok | thread 'released_locks_return_their_connection_to_the_pool' (650037) panicked at crates/service-kit/tests/before_job_lock.rs:76:9: | Postgres did not start in time | test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 77.28s
+before_job_lock: test periodic_runs_on_two_replicas_never_overlap ... ok | thread 'a_panicking_job_keeps_its_schedule_and_logs_no_payload' (650074) panicked at crates/service-kit/tests/before_job_lock.rs:76:9: | Postgres did not start in time | test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 73.88s
+=== stress: after (shared container), same load
+label after; 24 yes; 6 copies of each of job_lock, verify_job_lock per round; 10 rounds
+load average before the first round: 44.28 47.64 29.67
+round 1 done in 15 s: 12 passed, 0 failed; load average 44.91 47.64 29.96
+round 2 done in 14 s: 12 passed, 0 failed; load average 44.89 47.52 30.21
+round 3 done in 17 s: 12 passed, 0 failed; load average 46.64 47.81 30.58
+round 4 done in 15 s: 12 passed, 0 failed; load average 44.94 47.41 30.73
+round 5 done in 17 s: 12 passed, 0 failed; load average 41.61 46.51 30.79
+round 6 done in 41 s: 12 passed, 0 failed; load average 35.46 44.41 30.75
+round 7 done in 14 s: 12 passed, 0 failed; load average 36.02 44.24 30.84
+round 8 done in 14 s: 12 passed, 0 failed; load average 35.59 43.75 30.90
+round 9 done in 14 s: 12 passed, 0 failed; load average 37.01 43.69 31.09
+round 10 done in 17 s: 12 passed, 0 failed; load average 36.38 43.14 31.18
+--- totals per binary
+job_lock: 60 runs, 60 passed, 0 failed; run time min 10.9 s, median 14.3 s, max 40.5 s
+verify_job_lock: 60 runs, 60 passed, 0 failed; run time min 8.4 s, median 10.0 s, max 12.4 s
+peak 1-minute load average at the end of a round: 46.64
+--- result lines of all runs
+  60 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+  60 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+--- failures
+=== stress: after, twice the copies
+label after-heavy; 24 yes; 12 copies of each of job_lock, verify_job_lock per round; 10 rounds
+load average before the first round: 31.56 41.32 30.95
+round 1 done in 26 s: 24 passed, 0 failed; load average 35.09 41.48 31.28
+round 2 done in 22 s: 24 passed, 0 failed; load average 42.47 42.76 31.92
+round 3 done in 31 s: 24 passed, 0 failed; load average 45.79 43.68 32.59
+round 4 done in 20 s: 24 passed, 0 failed; load average 50.67 45.21 33.40
+round 5 done in 19 s: 24 passed, 0 failed; load average 53.18 46.06 33.87
+round 6 done in 29 s: 24 passed, 0 failed; load average 51.67 46.57 34.43
+round 7 done in 34 s: 24 passed, 0 failed; load average 47.02 46.13 34.75
+round 8 done in 22 s: 24 passed, 0 failed; load average 48.36 46.52 35.12
+round 9 done in 21 s: 24 passed, 0 failed; load average 53.60 48.00 35.92
+round 10 done in 32 s: 24 passed, 0 failed; load average 48.67 47.53 36.16
+--- totals per binary
+job_lock: 120 runs, 120 passed, 0 failed; run time min 14.0 s, median 19.3 s, max 33.6 s
+verify_job_lock: 120 runs, 120 passed, 0 failed; run time min 11.9 s, median 15.0 s, max 29.1 s
+peak 1-minute load average at the end of a round: 53.6
+--- result lines of all runs
+ 120 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+ 120 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+--- failures
+rcheck: removed 1464 dangling test volumes
+rcheck: exit 0 at 02:05:37 (the build host, 364)

@@ -1,6 +1,7 @@
 //! Job locks against a real Postgres. Uses `TEST_DATABASE_URL` when set; otherwise starts a
-//! throwaway Postgres container with podman or docker; skipped without either unless `CI` is
-//! set. Each "replica" is its own connection pool, as separate pods would have. The partition
+//! throwaway Postgres container with podman or docker, one for the whole binary with a database
+//! per test (`support::postgres::test_database`); skipped without either unless `CI` is set.
+//! Each "replica" is its own connection pool, as separate pods would have. The partition
 //! tests put a TCP proxy between a replica and Postgres and turn it into a black hole.
 
 mod support;
@@ -14,76 +15,12 @@ use service_kit::job_lock::{JobLock, JobLockError};
 use service_kit::shutdown::Shutdown;
 use sqlx::PgPool;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use support::{Container, container_runtime, runtime_output, unavailable, unique_name};
+use support::postgres::test_database;
+use support::unique_name;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
-
-/// Postgres for the tests; the version the platform runs is decided with the database
-/// deployment, advisory locks behave the same in every supported release.
-const POSTGRES_IMAGE: &str = "docker.io/library/postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873";
-
-/// A database for one test; the container, if any, is removed when dropped.
-struct Database {
-    url: String,
-    _container: Option<Container>,
-}
-
-async fn database() -> Option<Database> {
-    if let Some(url) = std::env::var("TEST_DATABASE_URL")
-        .ok()
-        .filter(|url| !url.is_empty())
-    {
-        return Some(Database {
-            url,
-            _container: None,
-        });
-    }
-    let Some(runtime) = container_runtime() else {
-        unavailable("TEST_DATABASE_URL, podman, or docker");
-        return None;
-    };
-    let container = Container {
-        runtime,
-        name: unique_name("postgres"),
-    };
-    runtime_output(
-        runtime,
-        &[
-            "run",
-            "--detach",
-            "--name",
-            &container.name,
-            "--env",
-            "POSTGRES_PASSWORD=service-kit-test",
-            "--publish",
-            "127.0.0.1::5432",
-            POSTGRES_IMAGE,
-        ],
-    );
-    let address = container.host_address("5432/tcp");
-    let url = format!("postgres://postgres:service-kit-test@{address}/postgres");
-    // The image runs initdb with networking off and then restarts; wait for the real server.
-    let started = Instant::now();
-    loop {
-        if let Ok(pool) = PgPool::connect(&url).await
-            && sqlx::query("SELECT 1").execute(&pool).await.is_ok()
-        {
-            pool.close().await;
-            break;
-        }
-        assert!(
-            started.elapsed() < Duration::from_secs(60),
-            "Postgres did not start in time"
-        );
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-    Some(Database {
-        url,
-        _container: Some(container),
-    })
-}
 
 async fn replica(url: &str) -> PgPool {
     PgPoolOptions::new()
@@ -105,6 +42,7 @@ async fn replica_behind(proxy: &Proxy, pool: PgPoolOptions) -> PgPool {
 async fn lock_holder(admin: &PgPool, key: i64) -> Option<i32> {
     sqlx::query_scalar(
         "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND objsubid = 1 \
+         AND database = (SELECT oid FROM pg_database WHERE datname = current_database()) \
          AND ((classid::bigint << 32) | objid::bigint) = $1",
     )
     .bind(key)
@@ -130,7 +68,7 @@ async fn eventually_acquires(lock: &JobLock) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn only_one_replica_runs_a_job_scheduled_on_both_at_once() {
-    let Some(database) = database().await else {
+    let Some(database) = test_database().await else {
         return;
     };
     let job = unique_name("simultaneous");
@@ -191,7 +129,7 @@ async fn only_one_replica_runs_a_job_scheduled_on_both_at_once() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn periodic_runs_on_two_replicas_never_overlap() {
-    let Some(database) = database().await else {
+    let Some(database) = test_database().await else {
         return;
     };
     let job = unique_name("periodic");
@@ -242,7 +180,7 @@ async fn periodic_runs_on_two_replicas_never_overlap() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_lost_session_cancels_the_job_and_frees_the_lock() {
-    let Some(database) = database().await else {
+    let Some(database) = test_database().await else {
         return;
     };
     let job = unique_name("lost");
@@ -292,7 +230,7 @@ async fn a_lost_session_cancels_the_job_and_frees_the_lock() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dropped_guards_and_panicking_jobs_release_the_lock() {
-    let Some(database) = database().await else {
+    let Some(database) = test_database().await else {
         return;
     };
     let job = unique_name("released");
@@ -326,7 +264,7 @@ async fn dropped_guards_and_panicking_jobs_release_the_lock() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn released_locks_return_their_connection_to_the_pool() {
-    let Some(database) = database().await else {
+    let Some(database) = test_database().await else {
         return;
     };
     let job = unique_name("pooled");
@@ -508,7 +446,7 @@ async fn forward(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_partitioned_holder_stops_its_job_within_the_lock_timeout() {
-    let Some(database) = database().await else {
+    let Some(database) = test_database().await else {
         return;
     };
     let job = unique_name("partition");
@@ -626,7 +564,7 @@ async fn a_partitioned_holder_stops_its_job_within_the_lock_timeout() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn taking_and_releasing_the_lock_give_up_within_the_timeout_in_a_partition() {
-    let Some(database) = database().await else {
+    let Some(database) = test_database().await else {
         return;
     };
     let job = unique_name("partition-queries");
@@ -771,7 +709,7 @@ where
     F: FnMut() -> Fut + Send + 'static,
     Fut: Future<Output = Result<(), String>> + Send + 'static,
 {
-    let Some(database) = database().await else {
+    let Some(database) = test_database().await else {
         return;
     };
     let (captured, _logs) = capture_logs();
@@ -878,7 +816,7 @@ async fn wait_for_event(
 /// handling compose.
 #[tokio::test(flavor = "current_thread")]
 async fn a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout() {
-    let Some(database) = database().await else {
+    let Some(database) = test_database().await else {
         return;
     };
     let (captured, _logs) = capture_logs();

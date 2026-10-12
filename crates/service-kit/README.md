@@ -509,13 +509,15 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 | `cargo test -p service-kit --test otlp` | OTLP 匯出到假的接收端：預設關閉、帶 trace id、指標送出、不含 body；collector 連線被重設或回 400 時，`debug`、`trace` 與針對 SDK 的指令下，端點路徑、SDK 環境變數與 collector 回應的 canary 都不出現在 stdout 與 stderr；帶 query 的端點被拒絕且不印出 | 無 |
 | `cargo test -p service-kit --test container` | 範例服務在容器內以 PID 1 執行（唯讀根目錄、任意 UID），`stop` 時收尾並以 0 結束 | podman 或 docker，會拉 `gcr.io/distroless/cc-debian13` |
 | `cargo test -p service-kit --test job_lock` | 兩個副本互斥、session 中斷、guard 釋放、連線回到 pool、工作 panic 後排程繼續且日誌不含 panic 訊息；網路分割（經本機 TCP 代理，代理改成黑洞後丟棄封包但不關連線）時持有者在鎖逾時內停止工作，取鎖與釋放鎖在鎖逾時內放棄 | `TEST_DATABASE_URL`，或 podman 或 docker（會拉 `postgres:18.6-alpine`） |
+| `cargo test -p service-kit --test postgres_start` | 測試用 Postgres 容器的啟動：伺服器起不來時的失敗訊息寫明在等什麼、等多久、最後的錯誤、容器狀態與日誌尾端並移除容器；發佈的連接埠主機端連不上時換新容器，全部都壞時每個容器各有一段訊息 | podman 或 docker |
 | `cargo test -p service-kit --test tenant_db` | 租戶隔離：沒設定租戶查不到也寫不進任何列；租戶 A 讀不到、改不到、寫不進租戶 B 的列；pool 重用連線時租戶不會帶到下一個交易；服務角色不是擁有者、沒有 BYPASSRLS、關不掉 RLS；不安全的連線被拒；平台角色只看得到開放的表，自己設定租戶也沒有多拿到列或指令；outbox 範本（租戶事件、全平台事件、平台角色自己設定租戶後仍寫不進租戶事件、消費端讀取、連線檢查接受各角色）；伺服器憑證與主機名稱驗證；範例服務在 `sslmode` 不是 `verify-full` 或沒有設定 `TRUSTIOT_POSTGRES_CA_FILE` 時拒絕啟動，`/v1/items` 只回 token 租戶的資料 | podman 或 docker（會拉 `postgres:18.6-alpine`，以測試時產生的 CA 啟用 TLS）；不使用 `TEST_DATABASE_URL`，因為測試要以 superuser 建角色，並需要知道伺服器的 CA |
 | `cargo test -p service-kit --test postgres_trust` | 只信任設定的 CA：sqlx 編進來的 `webpki-roots` 是空清單，`Cargo.lock` 裡只有 sqlx 用它、sqlx 沒有載入系統憑證庫等其他信任來源；對真的 Postgres：設定的 CA（含多張 CA 的檔案）連得上，別的 CA 簽的、主機名稱不符的、沒有設定 CA 的都被拒 | 前兩項無；真 Postgres 那項要 podman 或 docker（同 `tenant_db`） |
 | `cargo test -p sql-check` | 由字串組成的 SQL 與 kit 以外的租戶設定（`tools/sql-check`） | 無 |
 | `cargo test -p service-kit --test dependency_isolation` | 關閉 feature 時不依賴 contract，開啟時依賴 | 無 |
 | `cargo test -p service-kit --test chart_contract` | kit 的預設 API 埠、健康埠、探針的路徑與埠（`health`）與收尾時間符合 `deploy/chart/values.yaml` | 無 |
 
-- `TEST_DATABASE_URL` 指向可以任意取 advisory lock 的 Postgres（測試不建表），且不能要求驗證主機名稱，因為分割測試改經 `127.0.0.1` 的代理連線；沒設時每個測試起一個用完即刪的 Postgres 容器。
+- `TEST_DATABASE_URL` 指向可以任意取 advisory lock 的 Postgres（測試不建表），且不能要求驗證主機名稱，因為分割測試改經 `127.0.0.1` 的代理連線；沒設時，`job_lock` 與 `verify_job_lock` 各自的測試程式（binary）啟動一個用完即刪的 Postgres 容器，同一個程式裡的測試共用（`tests/support/postgres.rs` 的 `test_database()`；兩個程式不共用，cargo 一次只跑一個），每個測試用 `CREATE DATABASE` 取得自己的資料庫，advisory lock 屬於資料庫，所以彼此互不可見。
+- 容器的啟動與等待只有一份（`start_postgres()`，`tenant_db` 的 TLS Postgres 也用它）：上限、依據的量測值與失敗訊息的內容見 [`docs/test-reports/2026-10-12-364-job-lock-postgres-start.md`](../../docs/test-reports/2026-10-12-364-job-lock-postgres-start.md)。主機端登入不了、容器內伺服器卻已接受連線（Docker 偶爾沒有建立發佈的連接埠）時，換一個容器重來，最多 3 個。`cargo test -p service-kit --test postgres_start` 測這個行為，需要 podman 或 docker。
 - `tenant_db` 的測試共用一個啟用 TLS 的 Postgres 容器（`tests/support/postgres.rs`，記憶體上限 512 MB），最後一個用到它的測試結束時刪除；每個測試用自己的資料庫。
 - 沒有容器執行環境時，需要它的測試在本機略過，並在 stderr 印出 `skipped:`；設了 `CI` 環境變數時改為失敗，CI 不會默默略過。
 - 加 `-- --nocapture` 會印出測試報告用的數據，例如容器停止花的時間與 exit code。
