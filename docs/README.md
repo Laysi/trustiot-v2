@@ -17,7 +17,7 @@ TrustIoT 將以 Rust 從零重建，不沿用舊架構。本目錄是重建的�
 | [部署與可搬移性](architecture/deployment.md) | 系統架構、服務切分、流量路徑、可搬移規則 |
 | [專案目錄](architecture/repository-layout.md) | repo 的目錄結構與各目錄職責 |
 | [CI 與發佈](architecture/ci-release.md) | GitHub Actions 三個 workflow 與 GitOps 部署 |
-| [密鑰與權限](architecture/secrets.md) | 密鑰的規則、注入方式與清冊；一次性 token 的規則（M3） |
+| [密鑰與權限](architecture/secrets.md) | 密鑰的規則、注入方式與清冊；一次性 token 的規則（M3）；公開 repo 的資訊規則 |
 | [密鑰輪替 runbook](runbooks/secrets.md) | 每項密鑰的輪替步驟與外洩處理 |
 | [知識與文件庫（RAG）](architecture/rag.md) | 多模態設備文件庫的檢索流程與去 AWS 化調整 |
 | [現場脈絡與知識圖（Apache AGE）](architecture/field-context.md) | 機台、生產紀錄、AI 記憶與 Cypher 護欄 |
