@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="5" assertions="39" failures="0" skipped="0" time="72.983108888">
+  <testsuite name="deploy/chart/tests/e2e/otel.e2e.ts" file="deploy/chart/tests/e2e/otel.e2e.ts" tests="5" assertions="39" failures="0" skipped="0" time="72.939960893" hostname="fedora">
+    <testsuite name="log pipeline (decision 22)" file="deploy/chart/tests/e2e/otel.e2e.ts" line="415" tests="5" assertions="39" failures="0" skipped="0" time="17.958" hostname="fedora">
+      <testcase name="a request through the example service lands in ClickHouse as a structured record with its trace id" classname="log pipeline (decision 22)" time="8.571974" file="deploy/chart/tests/e2e/otel.e2e.ts" line="416" assertions="9" />
+      <testcase name="both log tables keep their rows for a limited time (TTL)" classname="log pipeline (decision 22)" time="0.626758" file="deploy/chart/tests/e2e/otel.e2e.ts" line="454" assertions="5" />
+      <testcase name="the SIEM receives the same records, and only with the auth header" classname="log pipeline (decision 22)" time="2.778783" file="deploy/chart/tests/e2e/otel.e2e.ts" line="466" assertions="1" />
+      <testcase name="email, tokens, password and request body are redacted in ClickHouse and at the SIEM" classname="log pipeline (decision 22)" time="5.129211" file="deploy/chart/tests/e2e/otel.e2e.ts" line="486" assertions="20" />
+      <testcase name="the collector runs under the restricted Pod Security Standard" classname="log pipeline (decision 22)" time="0.854422" file="deploy/chart/tests/e2e/otel.e2e.ts" line="617" assertions="4" />
+    </testsuite>
+  </testsuite>
+</testsuites>

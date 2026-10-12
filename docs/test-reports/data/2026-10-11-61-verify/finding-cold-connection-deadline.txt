@@ -1,0 +1,32 @@
+Finding F1: the 0.4 s check deadline also covers opening a database connection.
+
+Setup: debug build, host load average 10 to 14 on 8 cores (other agents), Postgres 18 with TLS in podman.
+Probe: a throwaway test (not kept) started the service at LOG_FILTER=debug, waited for /readyz = 200, then sent
+three identical valid checks.
+
+Result of the three checks:
+  status 503 in 404.4 ms
+  status 200 in 14.8 ms
+  status 200 in 16.3 ms
+
+Service log, annotated (UTC, 2026-10-11):
+  08:57:32.818  listening
+  08:57:33.222  WARN  readiness check failed: pool timed out while waiting for an open connection   (+0.40 s, first connection not open yet)
+  08:57:34.575  first connection finished its row-level security session check
+  08:57:34.578  readiness checks pass again
+  08:57:34.588  session query ok (6.7 ms)  <- on the first connection
+  08:57:34.589  "tenant transaction for background work"  <- begin() for the membership read
+  08:57:34.978  a second "WITH RECURSIVE rels ..." session check query: a second connection was opened for begin()
+  08:57:34.982  ERROR  the session lookup did not finish in time (deadline_ms 400)  -> 503
+  08:57:34.988  next request: both connections now exist, 12 ms, 200
+
+Consequence: the first request(s) after readiness can get 503 whenever opening one connection (TLS, SCRAM,
+the session check query) takes more than about 0.4 s. On the implementer's unloaded 20-core host this does not
+happen; on a loaded 8-core host the implementer's own tests fail:
+
+  cargo test --locked -p identity --test ext_authz  (debug, load 10..14)  -> 4 of 7 fail with 503 where 200 is expected
+  same command with --test-threads=1                                    -> the same 4 fail
+  same command with --release                                           -> 7 of 7 pass (baseline-release-ext-authz.txt)
+
+Fail-closed behaviour is correct (503, no identity header). The risk is availability: pod start, scale-out, or a
+database failover that drops the pool makes the first users see 503 from the gateway.

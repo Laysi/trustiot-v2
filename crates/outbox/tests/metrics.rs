@@ -1,6 +1,7 @@
 //! The lag gauges of a real `outbox-example` process, exported over OTLP/HTTP to a fake
-//! receiver and decoded, against a real Postgres (`TEST_DATABASE_URL`, or a throwaway
-//! container; skipped without either unless `CI` is set).
+//! receiver and decoded, against a real Postgres with TLS (a throwaway container; skipped
+//! without podman or docker unless `CI` is set). The lag is measured as the consumer's platform
+//! role, so it counts every tenant's events and platform-wide ones.
 
 mod support;
 
@@ -10,7 +11,7 @@ use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequ
 use opentelemetry_proto::tonic::common::v1::any_value;
 use opentelemetry_proto::tonic::metrics::v1::{metric, number_data_point};
 use prost::Message as _;
-use support::{Example, FakeCollector, database, eventually};
+use support::{Example, FakeCollector, TENANT_A, TENANT_B, database, eventually};
 
 const SUBSCRIPTION: &str = "outbox-example.widget-names";
 
@@ -91,8 +92,12 @@ async fn the_lag_is_exported_over_otlp() {
             ("TRUSTIOT__CONSUMER__LAG_INTERVAL", "200ms"),
         ],
     );
-    for (id, name) in [("a", "one"), ("b", "two"), ("c", "three")] {
-        let (status, body) = example.rename(id, name);
+    for (id, name, tenant) in [
+        ("a", "one", Some(TENANT_A)),
+        ("b", "two", Some(TENANT_B)),
+        ("c", "three", None),
+    ] {
+        let (status, body) = example.rename(id, name, tenant);
         assert_eq!(status, 200, "{body}");
     }
 

@@ -89,7 +89,8 @@ strip, so all the safety rules live here:
 - public paths (the only cookie-free paths, decision 27) come from a fixed table of host and
   backend; each is one exact path and is exempt only while its backend is enabled, so an
   exemption never falls through to another route;
-- cookie routes come from ingress.routes and must point at an enabled service;
+- cookie routes come from ingress.routes and must point at an enabled service other than
+  ai-gateway, which cannot verify the internal identity the cookie check adds;
 - nothing is routed under /internal, and a host never has the same path twice.
 Returns YAML {public: [...], routes: [...]}; each item has host, hostname, path, match, service
 (the key under services), backend and, for public paths, key. Use with fromYaml.
@@ -145,6 +146,9 @@ Returns YAML {public: [...], routes: [...]}; each item has host, hostname, path,
 {{- fail (printf "%s: %s is already routed for hosts.%s" $where $route.path $route.host) -}}
 {{- end -}}
 {{- $seen = append $seen $id -}}
+{{- if eq $route.service "ai-gateway" -}}
+{{- fail (printf "%s: ai-gateway takes no internal identity tokens and serves only other services (decision 28), so it gets no cookie route" $where) -}}
+{{- end -}}
 {{- $entry := get $v.services $route.service -}}
 {{- if not (and $entry $entry.enabled) -}}
 {{- fail (printf "%s: service %q is not enabled" $where $route.service) -}}

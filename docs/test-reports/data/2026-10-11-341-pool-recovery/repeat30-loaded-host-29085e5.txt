@@ -1,0 +1,36 @@
+rcheck: queued on ruisi-wsl at 23:50:45 as 341-b5207270; running now: nothing
+host: Linux 6.18.40.1-microsoft-standard-WSL2 x86_64, 20 cores; CI=1; Docker version 29.8.2, build 7fc2dff
+  Executable tests/ext_authz.rs (/home/ruisi/tv2/agents/341-b5207270/target/debug/deps/ext_authz-de24672821de6e94)
+run  1 ok    13190 ms  load 19.43  ready again 2.025370655s
+run  2 ok    12776 ms  load 24.36  ready again 2.01785723s
+run  3 ok    10570 ms  load 26.77  ready again 2.024707116s
+run  4 ok    12440 ms  load 29.24  ready again 2.01935894s
+run  5 ok    12557 ms  load 31.69  ready again 2.023502081s
+run  6 ok    12401 ms  load 33.56  ready again 2.013820387s
+run  7 ok    12644 ms  load 35.05  ready again 2.022056896s
+run  8 ok    13090 ms  load 35.81  ready again 2.01726988s
+run  9 ok    12566 ms  load 37.04  ready again 2.019503359s
+run 10 ok    12537 ms  load 37.49  ready again 2.015632809s
+run 11 ok    12970 ms  load 38.18  ready again 2.018706515s
+run 12 ok    12650 ms  load 38.69  ready again 2.021722892s
+run 13 ok    12867 ms  load 39.66  ready again 2.01387864s
+run 14 ok    12607 ms  load 40.03  ready again 2.025675976s
+run 15 ok    10538 ms  load 40.03  ready again 2.017378059s
+run 16 ok    12445 ms  load 40.17  ready again 2.017434841s
+run 17 ok    12464 ms  load 40.28  ready again 2.016253365s
+run 18 ok    10832 ms  load 40.24  ready again 2.018965278s
+run 19 ok    12613 ms  load 40.20  ready again 2.01357246s
+run 20 ok    12782 ms  load 40.21  ready again 2.018150996s
+run 21 ok    12681 ms  load 40.40  ready again 2.0194993s
+run 22 ok    12554 ms  load 40.61  ready again 2.019399384s
+run 23 ok    12556 ms  load 40.55  ready again 2.016131865s
+run 24 ok    12511 ms  load 40.47  ready again 2.016915071s
+run 25 ok    12979 ms  load 40.50  ready again 2.018001802s
+run 26 ok    12614 ms  load 40.35  ready again 2.014070108s
+run 27 ok    12718 ms  load 40.34  ready again 2.013925088s
+run 28 ok    12920 ms  load 40.29  ready again 2.023750342s
+run 29 ok    13006 ms  load 40.36  ready again 2.012917436s
+run 30 ok    12527 ms  load 40.31  ready again 2.017308359s
+passed 30 of 30
+rcheck: removed 30 dangling test volumes
+rcheck: exit 0 at 23:57:39 (ruisi-wsl, 341-b5207270)

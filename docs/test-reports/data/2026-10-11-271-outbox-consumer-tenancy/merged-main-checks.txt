@@ -1,0 +1,90 @@
+== host
+Linux 6.18.33.2-microsoft-standard-WSL2 x86_64
+Docker version 29.7.2, build a7dcaa6
+rustc 1.99.0 (b940084d7 2026-09-28)
+== cargo fmt --all --check
+ok
+== cargo clippy --workspace --all-targets --locked -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.99s
+== cargo clippy -p service-kit --no-default-features --all-targets --locked -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.22s
+== cargo test --workspace --locked
+exit=0
+suites ok: 64
+passed total: 482
+== cargo test --locked -p outbox
+     Running unittests src/lib.rs (/home/ruisi/tv2/agents/271/target/debug/deps/outbox-fce7ce2f44cb81d5)
+test aggregate::tests::ids_are_bounded_and_printable ... ok
+test aggregate::tests::kinds_are_lower_snake_case ... ok
+test consumer::tests::decode_errors_retry_only_newer_versions ... ok
+test consumer::tests::subscription_names_are_checked ... ok
+test position::tests::positions_order_by_transaction_then_row ... ok
+test position::tests::positions_round_trip_as_text ... ok
+test redact::tests::messages_are_replaced_by_kinds ... ok
+test schema::tests::schema_names_need_no_quoting ... ok
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/crash.rs (/home/ruisi/tv2/agents/271/target/debug/deps/crash-7f456a0c7b76ce05)
+test an_event_committed_before_the_producer_is_killed_is_delivered_after_restart ... ok
+test a_consumer_killed_mid_delivery_processes_the_event_once_after_restart ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.52s
+     Running tests/delivery.rs (/home/ruisi/tv2/agents/271/target/debug/deps/delivery-5541f7d5464f1e69)
+test services_need_only_the_documented_grants ... ok
+test begin_runs_in_the_delivery_transaction ... ok
+test failures_are_retried_in_place_or_dead_lettered ... ok
+test a_new_subscription_can_start_after_the_history ... ok
+test an_aggregate_keeps_its_order_when_transaction_ids_are_inverted ... ok
+test shutdown_finishes_the_event_in_flight_and_leaves_the_rest_of_the_batch ... ok
+test an_event_committed_late_is_delivered_not_skipped ... ok
+test a_slow_handler_that_has_not_written_does_not_hold_back_other_consumers ... ok
+test lag_counts_committed_events_not_yet_processed ... ok
+test a_subscription_cannot_switch_producers ... ok
+test replaying_from_a_position_rebuilds_the_same_state ... ok
+test a_duplicate_delivery_is_processed_once ... ok
+test concurrent_writers_and_two_replicas_process_each_event_once_in_order ... ok
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.76s
+     Running tests/metrics.rs (/home/ruisi/tv2/agents/271/target/debug/deps/metrics-172c6330f7ce13e3)
+test the_lag_is_exported_over_otlp ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.15s
+     Running tests/notify.rs (/home/ruisi/tv2/agents/271/target/debug/deps/notify-9197be393e87522a)
+test a_stale_reading_never_overwrites_a_newer_one ... ok
+test late_and_replayed_events_converge_on_the_current_state ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.24s
+     Running tests/producer.rs (/home/ruisi/tv2/agents/271/target/debug/deps/producer-3ef73ddc6aefd32d)
+test events_are_numbered_per_aggregate ... ok
+test an_envelope_is_written_once ... ok
+test a_rolled_back_transaction_leaves_no_event ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.70s
+     Running tests/tenancy.rs (/home/ruisi/tv2/agents/271/target/debug/deps/tenancy-a925bf026d24a702)
+test a_reader_without_the_read_policy_stops_the_consumer ... ok
+test the_platform_role_reads_every_tenant_and_each_event_runs_in_its_tenant ... ok
+test an_event_whose_envelope_names_another_tenant_is_dead_lettered ... ok
+test a_handler_cannot_write_another_tenant ... ok
+test a_service_role_that_can_read_across_tenants_is_refused ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.22s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== repeat 1: cargo test --locked -p outbox --test crash --test delivery --test tenancy
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.93s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.44s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.09s
+== repeat 2: cargo test --locked -p outbox --test crash --test delivery --test tenancy
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.74s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.82s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.57s
+== repeat 3: cargo test --locked -p outbox --test crash --test delivery --test tenancy
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.78s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.75s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.82s
+== cargo test --locked -p service-kit --test tenant_db
+test a_service_without_server_verification_refuses_to_start ... ok
+test connections_verify_the_server_certificate_and_host_name ... ok
+test without_a_tenant_no_rows_are_visible_or_writable ... ok
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test the_service_role_cannot_bypass_row_level_security ... ok
+test the_tenant_setting_does_not_leak_across_pooled_connections ... ok
+test a_tenant_reads_and_writes_only_its_own_rows ... ok
+test outbox_events_follow_the_tenant_policies ... ok
+test the_example_service_serves_each_user_only_their_tenant ... ok
+test sessions_row_level_security_would_not_protect_are_refused ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.78s
+== cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok

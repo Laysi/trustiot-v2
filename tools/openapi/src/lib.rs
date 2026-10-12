@@ -53,6 +53,10 @@ pub const SERVICES: &[Source] = &[];
 /// Directories under `services/` that have no HTTP API of their own to document (workers, for
 /// example). Listing one here is a decision to review.
 pub const SERVICES_WITHOUT_API: &[&str] = &[
+    // MS0 skeleton (Laysi/trustiot-v2#61): its only endpoint is the ingress gateway's ext_authz
+    // check under /internal, which clients never reach and the client API does not describe.
+    // Laysi/trustiot-v2#103 adds the login API and moves it to SERVICES.
+    "identity",
     // Takes gateway telemetry from MQTT and writes it to ClickHouse; no HTTP API besides the
     // health endpoints (docs/architecture/deployment.md). Until Laysi/trustiot-v2#91 builds the
     // service, the crate only holds the ClickHouse schema.
