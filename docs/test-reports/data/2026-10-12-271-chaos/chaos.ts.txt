@@ -238,7 +238,7 @@ await Promise.allSettled(loops);
 // ---- stats from the consumers (last STAT line of every incarnation: a lower bound for the
 // poll-mode replicas, since a kill loses up to 2 s of counting)
 const statFiles = readdirSync(`${outdir}/procs`).filter((f) => f.startsWith("c") && !f.endsWith(".err"));
-const tot = sumStats(outdir, statFiles, ["delivered", "dup", "dead", "handled", "retry_before", "retry_after", "probes"]);
+const tot = sumStats(outdir, statFiles, ["delivered", "dup", "dead", "handled", "retry_before", "retry_after", "probes", "panics"]);
 const finalLag: string[] = [];
 for (const pr of procs.filter((p) => p.kind === "consumer")) {
   const f = `${pr.name}-${String(pr.n).padStart(3, "0")}.log`;

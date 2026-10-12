@@ -1,0 +1,14 @@
+{
+  "tag": "v0.0.0-rc.1",
+  "commit": "0a5b01ca73f2e0c5d43e948ac7a6883de92a218e",
+  "images": [
+    {
+      "name": "postgres",
+      "digest": "sha256:cb840e1939e3cf785d3ff68f9ba62b9d196a3987e4fd705170a4489735ffea9c",
+      "size": 90671616,
+      "sbomPackages": 142,
+      "archive": "images/postgres.oci.tar",
+      "sbom": "images/postgres.spdx.json"
+    }
+  ]
+}

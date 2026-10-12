@@ -1,0 +1,83 @@
+# message counts (timestamps and process IDs removed)
+   3248 ERROR:  new row violates row-level security policy for table "tenant_rows"
+    940 LOG:  could not receive data from client: Connection reset by peer
+    940 LOG:  SSL error: unexpected eof while reading
+    592 FATAL:  terminating connection due to administrator command
+     41 LOG:  unexpected EOF on client connection with an open transaction
+     14 FATAL:  the database system is not yet accepting connections
+     11 FATAL:  the database system is starting up
+      8 FATAL:  terminating connection due to unexpected postmaster exit
+      7 LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+      7 LOG:  database system is ready to accept connections
+      6 LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+      6 LOG:  listening on IPv6 address "::", port 5432
+      6 LOG:  listening on IPv4 address "0.0.0.0", port 5432
+      5 FATAL:  the database system is shutting down
+      5 ERROR:  deadlock detected
+      3 LOG:  shutting down
+      3 LOG:  database system was not properly shut down; automatic recovery in progress
+      3 LOG:  database system is shut down
+      3 LOG:  checkpoint starting: shutdown immediate
+      3 LOG:  checkpoint starting: end-of-recovery immediate wait
+      3 LOG:  aborting any active transactions
+      2 LOG:  received fast shutdown request
+      2 LOG:  checkpoint starting: time
+      1 WARNING:  no usable system locales were found
+      1 LOG:  redo starts at 0/85FB708
+      1 LOG:  redo starts at 0/38775A8
+      1 LOG:  redo starts at 0/24EF2B0
+      1 LOG:  redo done at 0/A84A118 system usage: CPU: user: 0.06 s, system: 0.01 s, elapsed: 0.07 s
+      1 LOG:  redo done at 0/66AA248 system usage: CPU: user: 0.09 s, system: 0.01 s, elapsed: 0.11 s
+      1 LOG:  redo done at 0/3877508 system usage: CPU: user: 0.04 s, system: 0.00 s, elapsed: 0.05 s
+      1 LOG:  recovering prepared transaction 47046 from shared memory
+      1 LOG:  invalid record length at 0/A84A140: expected at least 24, got 0
+      1 LOG:  invalid record length at 0/66AA270: expected at least 24, got 0
+      1 LOG:  invalid record length at 0/3877530: expected at least 24, got 0
+      1 LOG:  database system was shut down at 2026-10-12 05:52:53 UTC
+      1 LOG:  database system was shut down at 2026-10-12 05:42:53 UTC
+      1 LOG:  database system was shut down at 2026-10-12 05:40:26 UTC
+      1 LOG:  database system was shut down at 2026-10-12 05:40:25 UTC
+      1 LOG:  database system was interrupted; last known up at 2026-10-12 05:52:53 UTC
+      1 LOG:  database system was interrupted; last known up at 2026-10-12 05:45:32 UTC
+
+# start-up, recovery, shutdown, with timestamps
+2026-10-12 05:40:26.576 UTC [74] LOG:  database system was shut down at 2026-10-12 05:40:25 UTC
+2026-10-12 05:40:26.583 UTC [68] LOG:  database system is ready to accept connections
+waiting for server to shut down....2026-10-12 05:40:26.669 UTC [68] LOG:  received fast shutdown request
+2026-10-12 05:40:26.673 UTC [72] LOG:  shutting down
+2026-10-12 05:40:26.675 UTC [72] LOG:  checkpoint starting: shutdown immediate
+2026-10-12 05:40:26.700 UTC [68] LOG:  database system is shut down
+2026-10-12 05:40:26.809 UTC [88] LOG:  database system was shut down at 2026-10-12 05:40:26 UTC
+2026-10-12 05:40:26.814 UTC [1] LOG:  database system is ready to accept connections
+2026-10-12 05:42:53.006 UTC [1] LOG:  received fast shutdown request
+2026-10-12 05:42:53.020 UTC [86] LOG:  shutting down
+2026-10-12 05:42:53.022 UTC [86] LOG:  checkpoint starting: shutdown immediate
+2026-10-12 05:42:53.075 UTC [668] FATAL:  the database system is shutting down
+2026-10-12 05:42:53.086 UTC [1] LOG:  database system is shut down
+2026-10-12 05:42:53.513 UTC [35] LOG:  database system was shut down at 2026-10-12 05:42:53 UTC
+2026-10-12 05:42:53.517 UTC [1] LOG:  database system is ready to accept connections
+2026-10-12 05:45:32.368 UTC [35] LOG:  database system was interrupted; last known up at 2026-10-12 05:42:53 UTC
+2026-10-12 05:45:32.496 UTC [35] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-10-12 05:45:32.499 UTC [35] LOG:  redo starts at 0/24EF2B0
+2026-10-12 05:45:32.550 UTC [35] LOG:  redo done at 0/3877508 system usage: CPU: user: 0.04 s, system: 0.00 s, elapsed: 0.05 s
+2026-10-12 05:45:32.598 UTC [1] LOG:  database system is ready to accept connections
+2026-10-12 05:50:39.341 UTC [35] LOG:  database system was interrupted; last known up at 2026-10-12 05:45:32 UTC
+2026-10-12 05:50:39.469 UTC [35] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-10-12 05:50:39.472 UTC [35] LOG:  redo starts at 0/38775A8
+2026-10-12 05:50:39.582 UTC [35] LOG:  redo done at 0/66AA248 system usage: CPU: user: 0.09 s, system: 0.01 s, elapsed: 0.11 s
+2026-10-12 05:50:39.644 UTC [1] LOG:  database system is ready to accept connections
+2026-10-12 05:52:53.011 UTC [1] LOG:  received fast shutdown request
+2026-10-12 05:52:53.029 UTC [33] LOG:  shutting down
+2026-10-12 05:52:53.031 UTC [33] LOG:  checkpoint starting: shutdown immediate
+2026-10-12 05:52:53.070 UTC [650] FATAL:  the database system is shutting down
+2026-10-12 05:52:53.070 UTC [651] FATAL:  the database system is shutting down
+2026-10-12 05:52:53.078 UTC [652] FATAL:  the database system is shutting down
+2026-10-12 05:52:53.090 UTC [653] FATAL:  the database system is shutting down
+2026-10-12 05:52:53.100 UTC [1] LOG:  database system is shut down
+2026-10-12 05:52:53.604 UTC [35] LOG:  database system was shut down at 2026-10-12 05:52:53 UTC
+2026-10-12 05:52:53.609 UTC [1] LOG:  database system is ready to accept connections
+2026-10-12 05:56:31.865 UTC [35] LOG:  database system was interrupted; last known up at 2026-10-12 05:52:53 UTC
+2026-10-12 05:56:32.004 UTC [35] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-10-12 05:56:32.010 UTC [35] LOG:  redo starts at 0/85FB708
+2026-10-12 05:56:32.089 UTC [35] LOG:  redo done at 0/A84A118 system usage: CPU: user: 0.06 s, system: 0.01 s, elapsed: 0.07 s
+2026-10-12 05:56:32.214 UTC [1] LOG:  database system is ready to accept connections

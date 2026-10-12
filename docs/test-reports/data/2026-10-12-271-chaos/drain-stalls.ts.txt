@@ -1,0 +1,25 @@
+// How steadily the consumers drained after the chaos phase: of the 3-second lag samples from 10 s
+// after "chaos phase over" until lag 0, how many show (almost) no progress, and the rate in the
+// others. Usage: bun drain-stalls.ts <prefix> [<prefix> ...]   (files <prefix>-lag.csv and
+// <prefix>-timeline.txt in the current directory)
+import { readFileSync } from "node:fs";
+for (const p of process.argv.slice(2)) {
+  const over = Number(readFileSync(`${p}-timeline.txt`, "utf8").match(/\[([\d.]+)s\] chaos phase over/)![1]);
+  const rows = readFileSync(`${p}-lag.csv`, "utf8").trim().split("\n").slice(1).map((l) => l.split(","))
+    .filter((r) => !r[0].startsWith("finish")).map((r) => ({ t: Number(r[0]), lag: Number(r[1]) }))
+    .filter((r) => r.t >= over + 10);
+  const end = rows.findIndex((r) => r.lag === 0);
+  const drain = end < 0 ? rows : rows.slice(0, end + 1);
+  let stalled = 0, moved = 0, spanMoving = 0;
+  for (let i = 1; i < drain.length; i++) {
+    const d = drain[i - 1].lag - drain[i].lag;
+    const dt = drain[i].t - drain[i - 1].t;
+    if (d <= 3) stalled += dt; else { moved += d; spanMoving += dt; }
+  }
+  console.log(JSON.stringify({
+    run: p,
+    drain_s: Number((drain.at(-1)!.t - drain[0].t).toFixed(1)),
+    seconds_with_at_most_3_events_of_progress_per_sample: Number(stalled.toFixed(1)),
+    events_per_s_in_the_other_samples: Number((moved / spanMoving).toFixed(1)),
+  }));
+}

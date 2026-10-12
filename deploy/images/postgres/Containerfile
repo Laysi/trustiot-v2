@@ -1,0 +1,112 @@
+# CloudNativePG's PostgreSQL 18 operand image with Apache AGE (decision 21, checklist M8).
+# release.yml builds it for linux/arm64 on an x86 runner without an emulator, so no instruction
+# runs in the arm64 image: AGE is cross-compiled in the `build` stage, which runs on the build
+# machine's own architecture, and only its files are copied into the CloudNativePG image.
+# README.md explains the pins below and how to upgrade Postgres and AGE together.
+
+# The CloudNativePG image: in the final image it is linux/arm64; the build stage uses the build
+# machine's variant of the same multi-arch index, so pg_config reports the same version and paths.
+FROM ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie@sha256:37ade18dbdddba430858c72725aceeec66f33fa5333e82ea1df4942f6c1c83a3 AS base
+
+FROM --platform=$BUILDPLATFORM ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie@sha256:37ade18dbdddba430858c72725aceeec66f33fa5333e82ea1df4942f6c1c83a3 AS build
+
+# Apache AGE source release (signed by the AGE release manager; the SHA-512 is the one published
+# next to the tarball on archive.apache.org).
+ARG AGE_VERSION=1.8.0
+ARG AGE_SHA512=8103dc6a4daec0441c2bdfe4e456be619d04526efa5c4e1a5148a29d7e6359e5df7d9a1fabbc6a6a08f6229c4d6f8634b7bf3554eca8ffb58550382542279866
+# Server headers of the exact PostgreSQL build in the base image, for aarch64. Only
+# pg_config.h differs between architectures, but it decides which CPU-specific code paths the
+# headers expose, so the aarch64 one is required. apt-archive keeps every published version.
+ARG PG_PACKAGE_VERSION=18.6-1.pgdg13+2
+ARG PG_SERVER_DEV_SHA256=bb88940b9d12e11e166e8f7dedd30859f3396d4027e00979e0a19dd41fff7f3a
+# Debian snapshot the build tools come from, so a rebuild of the same commit gets the same
+# compiler. It is the snapshot the base image itself was built from (see its apt sources).
+ARG DEBIAN_SNAPSHOT=20260918T000000Z
+# The target is always aarch64: release.yml only publishes linux/arm64 (decision 5).
+ARG TARGETARCH
+
+# Every RUN starts with `set -eu` and is plain POSIX sh: podman ignores SHELL when it builds an
+# OCI image (podman 5 warns "SHELL is not supported for OCI image format"), and release.yml builds
+# with --format oci.
+USER root
+
+# The PostgreSQL build of the arm64 image must be the one the headers below belong to.
+COPY --from=base /var/lib/dpkg/status /tmp/target-dpkg-status
+# PGXS makefiles of the arm64 build: compiler flags and paths for aarch64.
+COPY --from=base /usr/lib/postgresql/18/lib/pgxs/ /usr/lib/postgresql/18/lib/pgxs/
+
+RUN set -eu; \
+    if [ "${TARGETARCH}" != arm64 ]; then \
+      echo "this image is built for linux/arm64 only, not ${TARGETARCH}" >&2; exit 1; \
+    fi; \
+    target_version="$(awk '/^Package: /{p=$2} /^Version: /{if (p=="postgresql-18") print $2}' /tmp/target-dpkg-status)"; \
+    if [ "${target_version}" != "${PG_PACKAGE_VERSION}" ]; then \
+      echo "the base image has postgresql-18 ${target_version:-(none)}, but PG_PACKAGE_VERSION is ${PG_PACKAGE_VERSION}; update the pins together (README.md)" >&2; \
+      exit 1; \
+    fi; \
+    build_version="$(dpkg-query --showformat='${Version}' --show postgresql-client-18)"; \
+    if [ "${build_version}" != "${PG_PACKAGE_VERSION}" ]; then \
+      echo "the build stage has postgresql-client-18 ${build_version}, expected ${PG_PACKAGE_VERSION}" >&2; \
+      exit 1; \
+    fi
+
+# binutils: on an arm64 build machine (the postgres-image job in ci.yml, the lab) Debian's
+# gcc-aarch64-linux-gnu runs the native `as` and `ld`; on x86 it uses the cross binutils it pulls in.
+RUN set -eu; \
+    rm -f /etc/apt/sources.list.d/*; \
+    printf '%s\n' \
+      'Types: deb' \
+      "URIs: http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}" \
+      'Suites: trixie' \
+      'Components: main' \
+      'Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp' \
+      > /etc/apt/sources.list.d/debian-snapshot.sources; \
+    apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Retries=5 update; \
+    apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+      binutils bison ca-certificates curl flex gcc-aarch64-linux-gnu libc6-dev-arm64-cross make; \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+RUN set -eu; \
+    pg_server_dev="postgresql-server-dev-18_$(printf '%s' "${PG_PACKAGE_VERSION}" | sed 's/+/%2B/g')_arm64.deb"; \
+    curl --fail --silent --show-error --location --retry 5 --proto '=https' --tlsv1.2 \
+      --output server-dev.deb \
+      "https://apt-archive.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/${pg_server_dev}"; \
+    echo "${PG_SERVER_DEV_SHA256}  server-dev.deb" | sha256sum --check --strict; \
+    dpkg-deb --extract server-dev.deb /tmp/server-dev; \
+    cp -a /tmp/server-dev/usr/include/postgresql /usr/include/; \
+    grep -q '#define USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK 1' /usr/include/postgresql/18/server/pg_config.h; \
+    curl --fail --silent --show-error --location --retry 5 --proto '=https' --tlsv1.2 \
+      --output age.tar.gz \
+      "https://archive.apache.org/dist/age/PG18/${AGE_VERSION}/apache-age-${AGE_VERSION}-src.tar.gz"; \
+    echo "${AGE_SHA512}  age.tar.gz" | sha512sum --check --strict; \
+    mkdir age; \
+    tar --extract --gzip --file age.tar.gz --strip-components 1 --directory age
+
+# with_llvm=no: no LLVM bitcode for JIT inlining (that would need an aarch64 clang); queries
+# that call AGE functions still run, and JIT still compiles the rest of the plan.
+# libdir: pg_config of the build stage reports the build machine's library directory (x86-64 in a
+# release); point the linker at the aarch64 cross one instead.
+# LDFLAGS_SL: an ELF package note (systemd's ELF package metadata), which is how syft, and so the
+# release SBOM, identifies age.so as Apache AGE; -Xlinker keeps the JSON's commas intact.
+RUN set -eu; \
+    make -C age -j"$(nproc)" \
+      CC=aarch64-linux-gnu-gcc with_llvm=no PG_CONFIG=/usr/lib/postgresql/18/bin/pg_config \
+      libdir=/usr/aarch64-linux-gnu/lib \
+      LDFLAGS_SL="-Xlinker '--package-metadata={\"type\":\"generic\",\"name\":\"apache-age\",\"version\":\"${AGE_VERSION}\",\"license\":\"Apache-2.0\",\"sourceRepo\":\"https://github.com/apache/age\"}'"; \
+    make -C age install \
+      with_llvm=no PG_CONFIG=/usr/lib/postgresql/18/bin/pg_config DESTDIR=/out; \
+    aarch64-linux-gnu-strip --strip-debug /out/usr/lib/postgresql/18/lib/age.so; \
+    aarch64-linux-gnu-readelf --file-header /out/usr/lib/postgresql/18/lib/age.so | grep -q 'Machine: *AArch64'; \
+    aarch64-linux-gnu-readelf --notes /out/usr/lib/postgresql/18/lib/age.so | grep -q "\"version\":\"${AGE_VERSION}\""; \
+    install -D --mode 0644 age/LICENSE /out/usr/share/doc/apache-age/LICENSE; \
+    install -D --mode 0644 age/NOTICE /out/usr/share/doc/apache-age/NOTICE
+
+FROM base
+
+COPY --from=build /out/usr/lib/postgresql/18/lib/ /usr/lib/postgresql/18/lib/
+COPY --from=build /out/usr/share/postgresql/18/extension/ /usr/share/postgresql/18/extension/
+COPY --from=build /out/usr/share/doc/apache-age/ /usr/share/doc/apache-age/
+
+# CloudNativePG runs the instance as the image's postgres user (UID 26, cluster.spec.postgresUID).
+USER 26

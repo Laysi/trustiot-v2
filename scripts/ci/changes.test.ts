@@ -10,6 +10,7 @@ import {
   DECISION_CODE,
   affectsHelm,
   affectsHost,
+  affectsPostgresImage,
   affectsRust,
   changedFiles,
   decide,
@@ -35,7 +36,7 @@ function running(files: readonly string[]): string[] {
 }
 
 describe("path rules", () => {
-  test("a docs-only change skips rust, cargo-deny, helm and host", () => {
+  test("a docs-only change skips rust, cargo-deny, helm, host and postgres-image", () => {
     expect(running(["docs/architecture/ci-release.md"])).toEqual([]);
     expect(
       running([
@@ -211,14 +212,35 @@ describe("path rules", () => {
     },
   );
 
+  test.each([
+    "deploy/images/postgres/Containerfile",
+    "deploy/images/postgres/image.test.ts",
+    "deploy/images/postgres/README.md",
+    ".prototools",
+    ".github/workflows/ci.yml",
+    ".github/actions/setup-proto/action.yml",
+    "scripts/ci/changes.ts",
+    "scripts/release/lib.ts",
+  ])("postgres-image runs for %s", (path) => {
+    expect(affectsPostgresImage(path)).toBe(true);
+  });
+
+  test.each(["deploy/images/README.md", "deploy/images/rust-binary.Containerfile", "deploy/chart/values.yaml", "scripts/release/build.ts", "docs/architecture/ci-release.md"])(
+    "postgres-image skips %s",
+    (path) => {
+      expect(affectsPostgresImage(path)).toBe(false);
+    },
+  );
+
   test("typical pull requests", () => {
+    expect(running(["deploy/images/postgres/Containerfile", "docs/test-reports/2026-10-11-57-age-postgres-image.md"])).toEqual(["postgres-image"]);
     expect(running(["deploy/host/src/install.ts", "deploy/host/README.md"])).toEqual(["host"]);
     expect(running(["deploy/chart/templates/service.yaml", "deploy/chart/README.md"])).toEqual(["helm"]);
     expect(running(["scripts/dev.ts", "scripts/tests/dev.test.ts"])).toEqual([]);
     expect(running(["crates/outbox/src/lib.rs"])).toEqual(["rust"]);
     expect(running(["crates/outbox/src/lib.rs", "Cargo.lock"])).toEqual(["cargo-deny", "rust"]);
     expect(running(["deploy/chart/values.yaml"])).toEqual(["helm", "rust"]);
-    expect(running([".prototools"])).toEqual(["cargo-deny", "helm", "host", "rust"]);
+    expect(running([".prototools"])).toEqual(["cargo-deny", "helm", "host", "postgres-image", "rust"]);
     expect(running([".github/workflows/nightly.yml", "scripts/nightly/run.ts"])).toEqual([]);
   });
 
@@ -435,6 +457,28 @@ describe("guards: files the jobs read are covered", () => {
       }
     }
     expect(checked).toBeGreaterThan(3);
+    expect(uncovered).toEqual([]);
+  });
+
+  test("the Postgres image test reads and imports nothing outside deploy/images/postgres, or the rules cover it", () => {
+    const imageDir = join(ROOT, "deploy", "images", "postgres");
+    const uncovered: string[] = [];
+    let checked = 0;
+    for (const file of sources(imageDir, [".ts"])) {
+      const where = relative(ROOT, file);
+      for (const imported of importsOf(where)) {
+        checked++;
+        if (!affectsPostgresImage(imported)) uncovered.push(`${where}: import of ${imported}`);
+      }
+      for (const match of readFileSync(file, "utf8").matchAll(/["']([^"'\n]+)["']/g)) {
+        const path = repositoryPath(match[1] ?? "");
+        if (path !== undefined && path.includes("/") && existsSync(join(ROOT, path))) {
+          checked++;
+          if (!affectsPostgresImage(path)) uncovered.push(`${where}: "${match[1]}"`);
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
     expect(uncovered).toEqual([]);
   });
 
@@ -726,8 +770,8 @@ describe("commits compared", () => {
 
 describe("outputs", () => {
   test("one line per job for GITHUB_OUTPUT", () => {
-    expect(outputLines(decide(["docs/a.md", "deploy/chart/Chart.yaml"]))).toBe("rust=false\ncargo-deny=false\nhelm=true\nhost=false\n");
-    expect(outputLines(runEverything("x"))).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\n");
+    expect(outputLines(decide(["docs/a.md", "deploy/chart/Chart.yaml"]))).toBe("rust=false\ncargo-deny=false\nhelm=true\nhost=false\npostgres-image=false\n");
+    expect(outputLines(runEverything("x"))).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\npostgres-image=true\n");
   });
 
   test("the summary lists each job, the reason and the files", () => {
@@ -747,7 +791,7 @@ describe("outputs", () => {
     writeFileSync(stepSummary, "");
     const status = await main({ GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: stepSummary });
     expect(status).toBe(0);
-    expect(readFileSync(output, "utf8")).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\n");
+    expect(readFileSync(output, "utf8")).toBe("rust=true\ncargo-deny=true\nhelm=true\nhost=true\npostgres-image=true\n");
     expect(readFileSync(stepSummary, "utf8")).toContain("| `helm` | yes |");
   });
 });
