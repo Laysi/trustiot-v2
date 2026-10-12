@@ -1,0 +1,391 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.62s
+     Running tests/verify_366.rs (target/debug/deps/verify_366-926f747993bd21c0)
+
+running 2 tests
+test cost ... cost S0 300 tables [Service vc_app]: result Ok(()); median 10.0 ms, min 7.2 ms, max 11.2 ms (15 runs)
+cost S0 300 tables, no groups [Platform vc_p]: result Ok(()); median 18.5 ms, min 17.7 ms, max 19.7 ms (15 runs)
+cost S1 + 20 groups without rights [Platform vc_p]: result Ok(()); median 22.8 ms, min 21.7 ms, max 25.5 ms (15 runs)
+cost S2 20 groups with all rights on 300 tables, named in platform_access [Platform vc_p]: result Ok(()); median 167.2 ms, min 165.0 ms, max 170.8 ms (15 runs)
+cost S3 60 groups with all rights on 300 tables, named in platform_access [Platform vc_p]: result Ok(()); median 683.7 ms, min 676.9 ms, max 698.2 ms (15 runs)
+cost S3 service role [Service vc_app]: result Ok(()); median 13.5 ms, min 10.6 ms, max 15.4 ms (15 runs)
+ok
+test probes ... server: PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+
+=== case 1.1 — own SELECT; USING (true) policy on group g joined WITH INHERIT FALSE, SET TRUE
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v1_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+    [v1_g] SELECT 1 FROM items
+      no tenant: Err("ERR 42501 permission denied for table items")
+      tenant A:  Err("ERR 42501 permission denied for table items")
+  verdict: agrees (unsafe, refused)
+
+=== case 1.2 — own SELECT; USING (true) policy on group g joined WITH INHERIT FALSE, SET FALSE
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v2_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+    [v2_g] SELECT 1 FROM items
+      no tenant: Err("ERR 42501 permission denied to set role \"v2_g\"")
+      tenant A:  Err("ERR 42501 permission denied to set role \"v2_g\"")
+  verdict: agrees (unsafe, refused)
+
+=== case 1.3 — control: own SELECT; USING (true) policy on group g joined WITH INHERIT TRUE
+  check (Platform): Err(PermissivePolicy("public.items policy grp_access"))
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(3)
+      tenant A:  Ok(3)
+  verdict: refused for another reason; safe w.r.t. tenant
+
+=== case 1.4 — own INSERT, UPDATE, DELETE; FOR ALL USING/CHECK (true) on group g, INHERIT FALSE, SET FALSE
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v4_p", command: "DELETE" })
+    [as p] INSERT INTO items VALUES ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'planted')
+      no tenant: Err("ERR 42501 new row violates row-level security policy for table \"items\"")
+      tenant A:  Ok(1)
+    [as p] UPDATE items SET name = gen_random_uuid()::text
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+    [as p] DELETE FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 1.5 — own SELECT; p inherits g, g joined h WITH INHERIT FALSE; USING (true) policy on h
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v5_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 1.6 — SET ROLE target g (INHERIT FALSE, SET TRUE) has SELECT; USING (true) policy on h, g joined h WITH INHERIT FALSE
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v6_g", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Err("ERR 42501 permission denied for table items")
+      tenant A:  Err("ERR 42501 permission denied for table items")
+    [v6_g] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 1.7 — SELECT only on group g joined WITH INHERIT FALSE, SET FALSE (unusable)
+  check (Platform): Ok(())
+    [as p] SELECT 1 FROM items
+      no tenant: Err("ERR 42501 permission denied for table items")
+      tenant A:  Err("ERR 42501 permission denied for table items")
+    [v7_g] SELECT 1 FROM items
+      no tenant: Err("ERR 42501 permission denied to set role \"v7_g\"")
+      tenant A:  Err("ERR 42501 permission denied to set role \"v7_g\"")
+  verdict: agrees (safe, accepted)
+
+=== case 1.8 — SELECT on group g joined WITH INHERIT TRUE, SET FALSE; platform_access USING (true) names p
+  check (Platform): Ok(())
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(3)
+      tenant A:  Ok(3)
+    [v8_g] SELECT 1 FROM items
+      no tenant: Err("ERR 42501 permission denied to set role \"v8_g\"")
+      tenant A:  Err("ERR 42501 permission denied to set role \"v8_g\"")
+  verdict: agrees (safe, accepted)
+
+=== case 1.9 — control for 1.8 with SET TRUE
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v9_g", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(3)
+      tenant A:  Ok(3)
+    [v9_g] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 1.10 — platform role created NOINHERIT; own SELECT; USING (true) policy on its group g (plain GRANT)
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v10_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 2.1 — p policy USING (current_setting('trustiot.tenant_id', true)::uuid = tenant_id)
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v11_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 2.2 — p policy USING (tenant_id::text = current_setting('trustiot.tenant_id'))
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v12_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Err("ERR 42704 unrecognized configuration parameter \"trustiot.tenant_id\"")
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 2.3 — p policy USING (<tenant condition> AND true)
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v13_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 2.4 — p policy USING (tenant_id IS NOT DISTINCT FROM NULLIF(...)::uuid)
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v14_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 2.5 — p policy USING (false)
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v15_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 2.6 — p policy USING (tenant_id = '<tenant B>')
+  check (Platform): Ok(())
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(1)
+      tenant A:  Ok(3)
+  verdict: FALSE NEGATIVE (unsafe, accepted)
+
+=== case 2.7 — p policy USING (tenant_id IS NULL)
+  check (Platform): Ok(())
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: FALSE NEGATIVE (unsafe, accepted)
+
+=== case 2.8 — p policy, tenant condition spelled with CAST(... AS uuid) and extra parentheses
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v18_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 2.9 — p policy USING (<tenant condition> OR false)
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v19_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 2.10 — tenant_isolation (PUBLIC) itself spelled as 2.1, no platform policy
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v20_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 3.1 — member of pg_read_all_data, no platform policy
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "pg_read_all_data", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 3.2 — member of pg_write_all_data, no platform policy
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "pg_write_all_data", command: "DELETE" })
+    [as p] INSERT INTO items VALUES ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'planted')
+      no tenant: Err("ERR 42501 new row violates row-level security policy for table \"items\"")
+      tenant A:  Ok(1)
+    [as p] UPDATE items SET name = gen_random_uuid()::text
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+    [as p] DELETE FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 3.3 — INSERT granted to PUBLIC
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v23_p", command: "INSERT" })
+    [as p] INSERT INTO items VALUES ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'planted')
+      no tenant: Err("ERR 42501 new row violates row-level security policy for table \"items\"")
+      tenant A:  Ok(1)
+  verdict: agrees (unsafe, refused)
+
+=== case 3.4 — column privilege UPDATE (name) only
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v24_p", command: "UPDATE" })
+    [as p] UPDATE items SET name = gen_random_uuid()::text
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 3.5 — column privilege INSERT (tenant_id, name) only
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v25_p", command: "INSERT" })
+    [as p] INSERT INTO items VALUES ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'planted')
+      no tenant: Err("ERR 42501 new row violates row-level security policy for table \"items\"")
+      tenant A:  Ok(1)
+  verdict: agrees (unsafe, refused)
+
+=== case 3.6 — SELECT inherited through two levels of groups (h -> g -> p)
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v26_g", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 3.7 — schema other: no USAGE for p; USAGE and SELECT for g reachable only with SET ROLE
+  check (Platform): Err(PlatformTenantOnly { table: "other.items", role: "v27_g", command: "SELECT" })
+    [as p] SELECT 1 FROM other.items
+      no tenant: Err("ERR 42501 permission denied for schema other")
+      tenant A:  Err("ERR 42501 permission denied for schema other")
+    [v27_g] SELECT 1 FROM other.items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 3.8 — schema other: SELECT for p, USAGE only for g reachable with SET ROLE (unusable split)
+  check (Platform): Ok(())
+    [as p] SELECT 1 FROM other.items
+      no tenant: Err("ERR 42501 permission denied for schema other")
+      tenant A:  Err("ERR 42501 permission denied for schema other")
+    [v28_g] SELECT 1 FROM other.items
+      no tenant: Err("ERR 42501 permission denied for table items")
+      tenant A:  Err("ERR 42501 permission denied for table items")
+  verdict: agrees (safe, accepted)
+
+=== case 3.9 — partitioned parent with platform_access, SELECT on parent only
+  check (Platform): Ok(())
+    [as p] SELECT 1 FROM parts
+      no tenant: Ok(3)
+      tenant A:  Ok(3)
+    [as p] SELECT 1 FROM parts_a
+      no tenant: Err("ERR 42501 permission denied for table parts_a")
+      tenant A:  Err("ERR 42501 permission denied for table parts_a")
+  verdict: agrees (safe, accepted)
+
+=== case 3.10 — partitioned: partition parts_a has RLS + tenant_isolation only, SELECT granted on it
+  check (Platform): Err(PlatformTenantOnly { table: "public.parts_a", role: "v30_p", command: "SELECT" })
+    [as p] SELECT 1 FROM parts
+      no tenant: Ok(3)
+      tenant A:  Ok(3)
+    [as p] SELECT 1 FROM parts_a
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 3.11 — partitioned: partition parts_a without RLS, SELECT granted on it
+  check (Platform): Err(UnprotectedTable("public.parts_a"))
+    [as p] SELECT 1 FROM parts_a
+      no tenant: Ok(2)
+      tenant A:  Ok(2)
+  verdict: refused for another reason; safe w.r.t. tenant
+
+=== case 3.12 — SELECT open to p, UPDATE only tenant: SELECT .. FOR UPDATE
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v32_p", command: "UPDATE" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(3)
+      tenant A:  Ok(3)
+    [as p] SELECT 1 FROM items FOR UPDATE
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 3.13 — SELECT and INSERT open to p, UPDATE only tenant: INSERT .. ON CONFLICT DO UPDATE
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v33_p", command: "UPDATE" })
+    [as p] INSERT INTO items VALUES ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'a-1') ON CONFLICT (tenant_id, name) DO UPDATE SET name = 'a-1-upserted'
+      no tenant: Err("ERR 42501 new row violates row-level security policy (USING expression) for table \"items\"")
+      tenant A:  Ok(1)
+  verdict: agrees (unsafe, refused)
+
+=== case 3.14 — SELECT, INSERT, DELETE open to p, UPDATE only tenant: MERGE .. WHEN MATCHED THEN UPDATE
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v34_p", command: "UPDATE" })
+    [as p] MERGE INTO items t USING (SELECT tenant_id, name FROM items WHERE tenant_id = '01928f6e-7a3c-7d4e-8f00-00000000000a') s ON t.tenant_id = s.tenant_id AND t.name = s.name WHEN MATCHED THEN UPDATE SET name = t.name || '-merged'
+      no tenant: Err("ERR 42501 target row violates row-level security policy (USING expression) for table \"items\"")
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 3.15 — SELECT open to p, no UPDATE privilege: SELECT .. FOR UPDATE
+  check (Platform): Ok(())
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(3)
+      tenant A:  Ok(3)
+    [as p] SELECT 1 FROM items FOR UPDATE
+      no tenant: Err("ERR 42501 permission denied for table items")
+      tenant A:  Err("ERR 42501 permission denied for table items")
+  verdict: agrees (safe, accepted)
+
+=== case 3.16 — UPDATE policy for p with WITH CHECK only (no USING), next to tenant_isolation
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v36_p", command: "UPDATE" })
+    [as p] UPDATE items SET name = gen_random_uuid()::text
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 3.17 — templates: platform_access USING/CHECK (true), SELECT, UPDATE for p
+  check (Platform): Ok(())
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(3)
+      tenant A:  Ok(3)
+    [as p] UPDATE items SET name = gen_random_uuid()::text
+      no tenant: Ok(3)
+      tenant A:  Ok(3)
+  verdict: agrees (safe, accepted)
+
+=== case 4.1 — SET ROLE target g (INHERIT FALSE, SET TRUE) has SELECT; policy TO g USING (tenant_id = current_tenant())
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v38_g", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Err("ERR 42501 permission denied for table items")
+      tenant A:  Err("ERR 42501 permission denied for table items")
+    [v38_g] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 4.2 — p policy USING (tenant_id = current_tenant())
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v39_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 4.3 — p policy USING (~~~ tenant_id), a user-defined prefix operator reading the tenant
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v40_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 4.4 — p policy USING (tenant_id IN (SELECT tenant FROM current_tenant_view))
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v41_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 4.5 — p policy USING (tenant_id = NULLIF(current_setting('trustiot.' || 'tenant_id', true), '')::uuid)
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v42_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(0)
+      tenant A:  Ok(2)
+  verdict: agrees (unsafe, refused)
+
+=== case 4.6 — control: p policy USING (length(name) > 0 AND lower(name) <> ''), built-in functions only
+  check (Platform): Ok(())
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(3)
+      tenant A:  Ok(3)
+  verdict: agrees (safe, accepted)
+
+=== case 4.7 — fail closed: p policy USING (always_true()), a function that does not read the tenant
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v44_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(3)
+      tenant A:  Ok(3)
+  verdict: FALSE POSITIVE (safe, refused PlatformTenantOnly)
+
+=== case 4.8 — fail closed: p policy FOR ALL USING (true) WITH CHECK (tenant_id = current_tenant()), SELECT only
+  check (Platform): Err(PlatformTenantOnly { table: "public.items", role: "v45_p", command: "SELECT" })
+    [as p] SELECT 1 FROM items
+      no tenant: Ok(3)
+      tenant A:  Ok(3)
+  verdict: FALSE POSITIVE (safe, refused PlatformTenantOnly)
+
+=== mismatches (4):
+  2.6 p policy USING (tenant_id = '<tenant B>'): FALSE NEGATIVE (unsafe, accepted)
+  2.7 p policy USING (tenant_id IS NULL): FALSE NEGATIVE (unsafe, accepted)
+  4.7 fail closed: p policy USING (always_true()), a function that does not read the tenant: FALSE POSITIVE (safe, refused PlatformTenantOnly)
+  4.8 fail closed: p policy FOR ALL USING (true) WITH CHECK (tenant_id = current_tenant()), SELECT only: FALSE POSITIVE (safe, refused PlatformTenantOnly)
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 38.70s
+

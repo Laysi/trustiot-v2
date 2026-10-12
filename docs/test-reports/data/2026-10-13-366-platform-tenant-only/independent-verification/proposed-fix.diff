@@ -1,0 +1,32 @@
+diff --git a/crates/service-kit/src/postgres.rs b/crates/service-kit/src/postgres.rs
+index 65963db..316b295 100644
+--- a/crates/service-kit/src/postgres.rs
++++ b/crates/service-kit/src/postgres.rs
+@@ -485,7 +485,7 @@ reachable AS (
+ -- inherits or can take with SET ROLE.
+ platform_roles AS (
+     SELECT oid, quote_ident(rolname) AS role_name FROM pg_roles
+-    WHERE $1 AND pg_has_role(current_user, oid, 'MEMBER')
++    WHERE $1 AND pg_has_role(current_user, oid, 'SET')
+ ),
+ -- The tables with row-level security that one of those roles may use at all.
+ platform_tables AS MATERIALIZED (
+@@ -513,7 +513,8 @@ platform_policies AS MATERIALIZED (
+ platform_sides AS (
+     SELECT t.role_oid, t.role_name, t.rel, t.relation, s.command, s.uses_qual,
+            count(e.expr) AS expressions,
+-           count(e.expr) FILTER (WHERE e.expr <> $2) AS wider
++           count(e.expr) FILTER (WHERE e.expr <> $2 AND e.expr <> 'false'
++                                         AND strpos(e.expr, '''trustiot.tenant_id''') = 0) AS wider
+     FROM platform_tables t
+     CROSS JOIN (VALUES ('SELECT', 'r', true), ('INSERT', 'a', false), ('UPDATE', 'w', true),
+                        ('UPDATE', 'w', false), ('DELETE', 'd', true))
+@@ -522,7 +523,7 @@ platform_sides AS (
+       ON p.polrelid = t.rel AND p.polcmd IN (s.polcmd, '*')
+          AND (0 = ANY (p.polroles)
+               OR EXISTS (SELECT 1 FROM unnest(p.polroles) AS role
+-                         WHERE role <> 0 AND pg_has_role(t.role_oid, role, 'MEMBER')))
++                         WHERE role <> 0 AND pg_has_role(t.role_oid, role, 'USAGE')))
+     CROSS JOIN LATERAL (
+         SELECT CASE WHEN s.uses_qual THEN p.using_expr ELSE p.check_expr END AS expr
+     ) AS e
