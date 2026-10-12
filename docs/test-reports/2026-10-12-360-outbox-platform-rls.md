@@ -70,3 +70,44 @@ cargo run --locked -p openapi -- --check
 | 平台角色寫全平台事件、服務角色寫目前租戶的事件、消費端平台角色讀取所有事件仍然可行，連線檢查仍接受套用範本的連線 | 通過 | `outbox_events_follow_the_tenant_policies`、`cargo test -p outbox` |
 | `tenant-table.sql` 的 `platform_access` 已檢查 | 通過 | 上方第二張表；結論：有 `platform_access` 時沒有多拿到權限；只有「給權限卻沒有 `platform_access`」時會多拿到，範本與 README 改寫為不給權限 |
 | 範本與 README 已更新；`cargo test -p service-kit`、`cargo test -p outbox` 通過 | 通過 | 最終檢查 |
+
+## 獨立驗證（2026-10-13）
+
+PR Laysi/trustiot-v2#367（head `a094ab9`）另由獨立驗證在 check queue 的建置主機上以真的 Postgres 18.6 攻擊新範本。原始資料：[independent-verification/](data/2026-10-12-360-outbox-platform-rls/independent-verification/)。其中兩份探針原始碼 `verify_360.rs.txt`（service-kit）與 `outbox-verify_360.rs.txt`（outbox）是驗證者在執行後依實際執行的內容重建的（探針沒有 commit，原始檔已刪除），rustfmt 的排版可能與執行時略有不同，檔頭有註明；`run1-rcheck.txt`、`run2-rcheck.txt`、`run3-rcheck.txt` 是三次執行的輸出（run2 的 1 個失敗是探針本身重複 `PREPARE` 的錯誤，run3 修正後 3 passed）。
+
+### 攻擊了什麼、結果
+
+- **產生端平台角色寫租戶事件**（交易層級與 session 層級各自設定租戶 A 後）：單列與多列 VALUES、`INSERT ... SELECT`、data-modifying CTE、`PREPARE`/`EXECUTE`、extended protocol 綁定參數、`ON CONFLICT DO NOTHING`、`MERGE ... WHEN NOT MATCHED THEN INSERT`、plpgsql `DO` 區塊、`RESET ROLE`／`SET ROLE NONE` 之後再 INSERT，全部 42501 `platform_events_only`。`ON CONFLICT DO UPDATE`、帶 `WHEN MATCHED` 的 MERGE、`INSERT ... RETURNING`、UPDATE、DELETE、TRUNCATE、`CREATE TRIGGER` 因為沒有權限而 42501；`SET LOCAL row_security = off` 42501；`COPY FROM STDIN` 0A000；建立 view、函式、schema、暫存表、rule，關閉 RLS 或改 policy 全部被拒。擁有者在前後數到的租戶事件數相同，沒有任何一筆寫進去。
+- **服務消費自己的事件**（`example_reader` 與 `example_platform` 是同一個角色）：寫租戶事件全部 42501（這時平台角色多了 SELECT，`INSERT ... RETURNING` 也由 `platform_events_only` 擋下）；寫全平台事件、讀取全部事件、`READS_ALL_TENANTS` 為 true、`check_session` 接受都照舊。用 outbox 的真 `Consumer` 跑：`outbox::publish(None)` 成功，自己設定租戶後 `publish(Some(..))` 42501，`ensure_subscription` 成功，drain 結果 delivered 3、dead_lettered 0。
+- **切換角色**：`SET ROLE`、`SET LOCAL ROLE`、`SET SESSION AUTHORIZATION`、`set_config('role' | 'session_authorization', ...)` 全部 42501；`RESET ALL` 後 INSERT 被 RLS 擋下；唯一能切換的 `example_platform_group` 沒有任何權限。
+- **合法的寫入與讀取**：服務角色寫目前租戶的事件、平台角色寫全平台事件、`example_reader` 讀全部事件、三個角色的 `check_session` 都照舊；`tenant-table.sql` 的 `platform_access` 下，平台角色設租戶前後 UPDATE 影響的列數相同（3）。
+- 同時跑的套件：`tenant_db` 12 passed、`cargo test -p outbox` 全部 ok、`cargo test -p testkit` 全部 ok。
+
+結論：修正成立，沒有找到能讓產生端平台角色寫進租戶事件的方法。
+
+### 發現與修正（都是低嚴重度的文件用字，在同一個 PR 修正）
+
+| 發現 | 修正 |
+| --- | --- |
+| `outbox-event.sql` 第 5 點註解說 INSERT 是平台角色「唯一的指令」；服務消費自己的事件時平台角色也有 SELECT | 改成「唯一的寫入指令」，並註明消費自己的事件時它也有 SELECT |
+| `tools/sql-check` 對 `tenant_db.rs` 例外的理由（`src/lib.rs` 與 README）說平台角色「也沒有多拿到其他表的列」，但同一個測試記錄了有權限、沒有 `platform_access` 的表會讓它看到它設定的租戶的列 | 改成：驗證 RLS 不讓它寫租戶的 outbox 事件、有 `platform_access` 的表沒有多給它列，並記錄它有權限而沒有 `platform_access` 的表會讓它看到它設定的租戶的列（中英文同義） |
+| `crates/outbox/README.md`「資料庫權限」最後一段說消費端的平台角色不能寫產生端的事件；服務消費自己的事件時它就是產生端的平台角色，有 INSERT | 補上這個例外：它有 INSERT，但 `platform_events_only` 只讓它寫全平台事件（`tenant_id IS NULL`） |
+
+### 既有資料庫
+
+目前沒有服務套用 `outbox-event.sql`（`services/identity` 的 migration 沒有 outbox，`services/ingest` 用 ClickHouse），所以不需要 migration。範本不是冪等的：已套用舊版範本的資料庫重跑整份範本會在 `CREATE POLICY tenant_isolation` 失敗，所以將來若有資料庫已套用舊版，要另寫只含 `CREATE POLICY platform_events_only` 的 migration。
+
+### 修正後的檢查
+
+合併 main `0bd0ab4` 並修正上述文件後，經 check queue 執行：
+
+```sh
+cargo fmt --all --check
+cargo clippy --locked -p sql-check -p service-kit -p outbox --all-targets -- -D warnings
+cargo test --locked -p sql-check
+cargo test --locked -p repo-check
+cargo test --locked -p service-kit --test tenant_db
+cargo test --locked -p outbox
+```
+
+結果：六項全部 exit 0（`sql-check` 20 + 6、`repo-check` 15 + 7、`tenant_db` 12 passed、`cargo test -p outbox` lib 10、crash 2、delivery 13、failure_paths 3、handler_panic 7、metrics 1、notify 2、producer 3、tenancy 5、verify_271 13）。原始輸出：[after-verification-fixes.log](data/2026-10-12-360-outbox-platform-rls/after-verification-fixes.log)。

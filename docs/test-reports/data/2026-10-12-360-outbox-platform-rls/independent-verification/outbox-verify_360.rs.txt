@@ -1,0 +1,167 @@
+// crates/outbox/tests/verify_360.rs (throwaway probe, not committed; run with
+// `cargo test --locked -p outbox --test verify_360 -- --nocapture`). Reconstructed from the run
+// source; rustfmt layout may differ from what ran.
+//! Independent verification probe for Laysi/trustiot-v2#360 (PR Laysi/trustiot-v2#367).
+//! Throwaway: not committed. A producer whose platform role is also the reader of its own log
+//! (`example_reader` = `example_platform` in service-kit's outbox template), consumed by a real
+//! `Consumer`.
+#![allow(clippy::print_stdout, reason = "probe output")]
+
+mod support;
+
+use std::time::Duration;
+
+use contract::ServiceName;
+use outbox::{Aggregate, Consumer, ConsumerConfig};
+use service_kit::identity::ServiceIdentity;
+use service_kit::postgres::{self as pg, SessionRole};
+use service_kit::tenant::{PlatformActor, PlatformDb};
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{AssertSqlSafe, Connection, PgConnection};
+use support::postgres::TEST_PASSWORD;
+use support::{Counted, Recorder, TENANT_A, TENANT_B, database, drain, tenant, unique};
+
+const DRAIN: Duration = Duration::from_secs(60);
+
+#[tokio::test]
+async fn a_self_consuming_platform_role_reads_everything_and_writes_no_tenant_event() {
+    let Some(database) = database().await else {
+        return;
+    };
+    // The consumer side (consumer schema, service role, Recorder tables) from the harness.
+    let setup = database.setup().await;
+    let sp = unique("selfprod");
+    let app = format!("{sp}_app");
+    let plat = format!("{sp}_platform");
+    database
+        .admin_sql(format!(
+            "CREATE SCHEMA {sp}; \
+             CREATE ROLE {app} LOGIN PASSWORD '{TEST_PASSWORD}'; \
+             CREATE ROLE {plat} LOGIN PASSWORD '{TEST_PASSWORD}'; \
+             ALTER ROLE {app} SET search_path = {sp}; \
+             ALTER ROLE {plat} SET search_path = {sp};"
+        ))
+        .await;
+    let producer = database.pool(&sp).await;
+    let mut conn = producer.acquire().await.expect("producer connection");
+    outbox::schema::install_producer(&mut conn)
+        .await
+        .expect("install producer");
+    let template = include_str!("../../service-kit/sql/outbox-event.sql")
+        .replace("example_app", &app)
+        .replace("example_platform", &plat)
+        .replace("example_reader", &plat);
+    sqlx::raw_sql(AssertSqlSafe(template))
+        .execute(&mut *conn)
+        .await
+        .expect("template with reader = producer platform role");
+    drop(conn);
+    database
+        .admin_sql(format!(
+            "GRANT USAGE ON SCHEMA {sp} TO {app}, {plat}; \
+             GRANT SELECT, INSERT, UPDATE ON {sp}.outbox_aggregate TO {app}, {plat};"
+        ))
+        .await;
+    let policies: Vec<(String, bool, String, String)> = sqlx::query_as(
+        "SELECT polname::text, polpermissive, polcmd::text, \
+                (SELECT string_agg(r::regrole::text, ',') FROM unnest(polroles) r) \
+         FROM pg_policy WHERE polrelid = 'outbox_event'::regclass ORDER BY polname",
+    )
+    .fetch_all(&producer)
+    .await
+    .expect("policies");
+    println!("policies (name, permissive, cmd, roles): {policies:?}");
+
+    // Tenant events written by the superuser (the harness's producer), as in the other tests.
+    for (aggregate, tenant_id) in [("a", Some(tenant(TENANT_A))), ("b", Some(tenant(TENANT_B)))] {
+        let mut tx = producer.begin().await.expect("begin");
+        outbox::publish(
+            &mut tx,
+            &Aggregate::new("widget", aggregate).expect("aggregate"),
+            &Counted { n: 1 },
+            tenant_id,
+        )
+        .await
+        .expect("publish");
+        tx.commit().await.expect("commit");
+    }
+
+    let platform = PlatformDb::connect_lazy(
+        database.postgres.options(&plat),
+        PgPoolOptions::new()
+            .max_connections(4)
+            .acquire_timeout(Duration::from_secs(30)),
+    )
+    .expect("verify-full options");
+    let actor = PlatformActor::service(ServiceIdentity::new(ServiceName::Identity));
+    // A platform-wide event through the real producer path.
+    let mut tx = platform.begin(actor, "verify-360").await.expect("begin");
+    outbox::publish(
+        tx.transaction(),
+        &Aggregate::new("widget", "p").expect("aggregate"),
+        &Counted { n: 1 },
+        None,
+    )
+    .await
+    .expect("platform-wide event by the platform role");
+    tx.commit().await.expect("commit");
+    // A tenant event through the real producer path, after setting the tenant itself.
+    for tenant_text in [TENANT_A, TENANT_B] {
+        let mut tx = platform.begin(actor, "verify-360").await.expect("begin");
+        sqlx::query("SELECT set_config('trustiot.tenant_id', $1, true)")
+            .bind(tenant_text)
+            .execute(&mut **tx.transaction())
+            .await
+            .expect("set tenant");
+        let result = outbox::publish(
+            tx.transaction(),
+            &Aggregate::new("widget", "x").expect("aggregate"),
+            &Counted { n: 1 },
+            Some(tenant(tenant_text)),
+        )
+        .await;
+        println!("self-consuming platform role publishes a {tenant_text} event: {result:?}");
+        assert!(result.is_err(), "refused");
+        drop(tx);
+    }
+
+    // check_session accepts the producer platform role (also the reader).
+    let mut session = PgConnection::connect_with(&database.postgres.options(&plat))
+        .await
+        .expect("connect");
+    let checked = pg::check_session(&mut session, SessionRole::Platform)
+        .await
+        .expect("check");
+    println!("check_session({plat}, Platform) = {checked:?}");
+    assert_eq!(checked, Ok(()));
+    drop(session);
+
+    // A real consumer reading the log as the same platform role.
+    let subscription = "verify-360-self".to_owned();
+    let consumer = Consumer::new(
+        &platform,
+        setup.work.clone(),
+        ConsumerConfig::new(&subscription, &sp).expect("config"),
+        Recorder {
+            subscription: subscription.clone(),
+        },
+    );
+    let ensured = consumer.ensure_subscription().await;
+    println!("ensure_subscription with reader = producer platform role: {ensured:?}");
+    ensured.expect("not CannotReadAllTenants");
+    let progress = drain(&consumer, DRAIN).await;
+    println!("drained: {progress:?}");
+    assert_eq!((progress.delivered, progress.dead_lettered), (3, 0));
+    assert_eq!(setup.seen_count().await, 3);
+    let tenants: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT tenant_id::text FROM outbox_event ORDER BY tenant_id NULLS LAST",
+    )
+    .fetch_all(&producer)
+    .await
+    .expect("events");
+    println!("events in the self-consumed log: {tenants:?}");
+    assert_eq!(
+        tenants,
+        [Some(TENANT_A.to_owned()), Some(TENANT_B.to_owned()), None]
+    );
+}

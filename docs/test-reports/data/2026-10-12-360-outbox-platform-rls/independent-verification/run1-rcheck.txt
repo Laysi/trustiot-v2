@@ -1,0 +1,108 @@
+rcheck: queued on <build-host> at 01:40:38 as 360v-7f05cb34; running now: 310-b18e4dd0 since 01:37:59
+=== PROBE service-kit verify_360
+error[E0499]: cannot borrow `platform` as mutable more than once at a time
+   --> crates/service-kit/tests/verify_360.rs:498:29
+    |
+481 |     let copy = platform
+    |                -------- first mutable borrow occurs here
+...
+498 |     results.extend(run_list(&mut platform, "objects", "", &objects).await);
+    |                             ^^^^^^^^^^^^^ second mutable borrow occurs here
+...
+519 | }
+    | - first borrow might be used here, when `copy` is dropped and runs the destructor for type `Result<PgCopyIn<&mut PgConnection>, sqlx::Error>`
+
+error[E0499]: cannot borrow `platform` as mutable more than once at a time
+   --> crates/service-kit/tests/verify_360.rs:500:29
+    |
+481 |     let copy = platform
+    |                -------- first mutable borrow occurs here
+...
+500 |     results.extend(run_list(&mut platform, "roles (session tenant)", "", &roles).await);
+    |                             ^^^^^^^^^^^^^ second mutable borrow occurs here
+...
+519 | }
+    | - first borrow might be used here, when `copy` is dropped and runs the destructor for type `Result<PgCopyIn<&mut PgConnection>, sqlx::Error>`
+
+error[E0505]: cannot move out of `platform` because it is borrowed
+   --> crates/service-kit/tests/verify_360.rs:501:10
+    |
+415 |     let mut platform = fixture.connect("example_platform").await;
+    |         ------------ binding `platform` declared here
+...
+481 |     let copy = platform
+    |                -------- borrow of `platform` occurs here
+...
+501 |     drop(platform);
+    |          ^^^^^^^^ move out of `platform` occurs here
+...
+519 | }
+    | - borrow might be used here, when `copy` is dropped and runs the destructor for type `Result<PgCopyIn<&mut PgConnection>, sqlx::Error>`
+
+Some errors have detailed explanations: E0499, E0505.
+For more information about an error, try `rustc --explain E0499`.
+error: could not compile `service-kit` (test "verify_360") due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+=== PROBE outbox verify_360
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.43s
+     Running tests/verify_360.rs (<path>)
+
+running 1 test
+policies (name, permissive, cmd, roles): [("consumer_read", true, "r", "selfprod_590069_3_platform"), ("platform_events", true, "a", "selfprod_590069_3_platform"), ("platform_events_only", false, "a", "selfprod_590069_3_platform"), ("tenant_isolation", true, "*", "-")]
+self-consuming platform role publishes a 01928f6e-7a3c-7d4e-8f00-00000000000a event: Err(Database(Database(PgDatabaseError { severity: Error, code: "42501", message: "new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"", detail: None, hint: None, position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("execMain.c"), line: Some(2332), routine: Some("ExecWithCheckOptions") })))
+self-consuming platform role publishes a 01928f6e-7a3c-7d4e-8f00-00000000000b event: Err(Database(Database(PgDatabaseError { severity: Error, code: "42501", message: "new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"", detail: None, hint: None, position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("execMain.c"), line: Some(2332), routine: Some("ExecWithCheckOptions") })))
+check_session(selfprod_590069_3_platform, Platform) = Ok(())
+ensure_subscription with reader = producer platform role: Ok(())
+drained: Progress { delivered: 3, duplicates: 0, dead_lettered: 0, outcome: CaughtUp }
+events in the self-consumed log: [Some("01928f6e-7a3c-7d4e-8f00-00000000000a"), Some("01928f6e-7a3c-7d4e-8f00-00000000000b"), None]
+test a_self_consuming_platform_role_reads_everything_and_writes_no_tenant_event ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.30s
+
+=== SUITE tenant_db
+test a_service_without_a_postgres_ca_refuses_to_start ... ok
+test a_service_without_server_verification_refuses_to_start ... ok
+test connections_verify_the_server_certificate_and_host_name ... ok
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+test the_service_role_cannot_bypass_row_level_security ... ok
+test without_a_tenant_no_rows_are_visible_or_writable ... ok
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test the_tenant_setting_does_not_leak_across_pooled_connections ... ok
+test a_tenant_reads_and_writes_only_its_own_rows ... ok
+test outbox_events_follow_the_tenant_policies ... ok
+test the_example_service_serves_each_user_only_their_tenant ... ok
+test sessions_row_level_security_would_not_protect_are_refused ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.46s
+=== SUITE outbox
+     Running unittests src/lib.rs (<path>)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/crash.rs (<path>)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.60s
+     Running tests/delivery.rs (<path>)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.46s
+     Running tests/failure_paths.rs (<path>)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.48s
+     Running tests/handler_panic.rs (<path>)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.46s
+     Running tests/metrics.rs (<path>)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.66s
+     Running tests/notify.rs (<path>)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.71s
+     Running tests/producer.rs (<path>)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.73s
+     Running tests/tenancy.rs (<path>)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.51s
+     Running tests/verify_271.rs (<path>)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.26s
+     Running tests/verify_360.rs (<path>)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.97s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== SUITE testkit
+     Running unittests src/lib.rs (<path>)
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/postgres_isolation.rs (<path>)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.83s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+rc=1
+rcheck: removed 53 dangling test volumes
+rcheck: exit 1 at 01:42:48 (<build-host>, 360v-7f05cb34)

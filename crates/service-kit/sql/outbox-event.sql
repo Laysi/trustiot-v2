@@ -46,6 +46,7 @@ CREATE POLICY consumer_read ON outbox_event
     USING (true);
 
 -- 5. INSERT only for the producer's roles: the log is append-only, so no role gets UPDATE or
---    DELETE (policy 3 covers INSERT, the only command the platform role has).
+--    DELETE (policy 3 covers INSERT, the only write command the platform role has; it also gets
+--    SELECT when the service consumes its own events and so is `example_reader` too).
 GRANT INSERT ON outbox_event TO example_app, example_platform;
 GRANT SELECT ON outbox_event TO example_reader;

@@ -246,7 +246,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE
 ALTER ROLE assets_app SET search_path = assets;      -- 消費端的表在服務角色的 search_path 第一個 schema
 ```
 
-消費端的平台角色看不到產生端的其他資料表，也不能寫產生端的事件（讀取交易是 `READ ONLY`，也沒有寫入權限）；消費端的服務角色完全碰不到產生端的 schema。
+消費端的平台角色看不到產生端的其他資料表，也不能寫產生端的事件（讀取交易是 `READ ONLY`，也沒有寫入權限）；消費端的服務角色完全碰不到產生端的 schema。例外是服務消費自己的事件時：消費端的平台角色就是產生端的平台角色，有 `outbox_event` 的 INSERT 權限，但 `platform_events_only` 只讓它寫全平台事件（`tenant_id IS NULL`），即使它的 session 自己設定了租戶也寫不進租戶事件。
 
 ### 長寫入交易與 prepared transaction
 
