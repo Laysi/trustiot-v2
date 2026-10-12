@@ -1,0 +1,22 @@
+{
+  "tag": "v0.0.0-rc.1",
+  "commit": "9c183ad4a63272d065b6ac9b5f10f29ab0ed31dd",
+  "images": [
+    {
+      "name": "identity",
+      "digest": "sha256:43fc4baee16a5712aeefb2879f216e3d507175806dd591a5777c616daaa428eb",
+      "size": 4192256,
+      "sbomPackages": 213,
+      "archive": "images/identity.oci.tar",
+      "sbom": "images/identity.spdx.json"
+    },
+    {
+      "name": "release-selftest",
+      "digest": "sha256:eeacdb89066e689e83da74fcc26456eeda372bd67d462a92d339ab00e55f367e",
+      "size": 1135616,
+      "sbomPackages": 13,
+      "archive": "images/release-selftest.oci.tar",
+      "sbom": "images/release-selftest.spdx.json"
+    }
+  ]
+}

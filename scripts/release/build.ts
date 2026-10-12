@@ -6,7 +6,8 @@
  *
  * Rust images: the binaries are cross-compiled for aarch64-unknown-linux-musl in one Cargo
  * run, with Zig as C compiler and linker (cargo-zigbuild) and the dependency list embedded
- * (cargo-auditable), then each is packed with deploy/images/rust-binary.Containerfile.
+ * (cargo-auditable), then each is packed with deploy/images/rust-binary.Containerfile. The
+ * Cargo command is rust-build.ts's rustCrossCompileCommand, which the nightly's service images share.
  * Containerfile images are built from their directory. Builds never run arm64 code: a
  * Containerfile whose RUN steps execute in the arm64 stage fails without an emulator.
  *
@@ -19,7 +20,7 @@
 
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { containerBuildArgs } from "../lib/build-context.ts";
 import { log, parseOptions, protoTool, rawManifest, requireCheckout, run, runStage, systemTool, tryRun } from "./exec.ts";
 import {
@@ -32,24 +33,19 @@ import {
   ReleaseError,
   aarch64ElfProblem,
   imagePlatformProblems,
-  isMap,
   parsePlan,
   renderRustContainerfile,
   resolveBinary,
   rustSpec,
   summarizeSpdx,
 } from "./lib.ts";
+import { rustCrossCompileCommand, staticElfProblem, toolchainChannel } from "./rust-build.ts";
 
 const ROOT = resolve(import.meta.dir, "..", "..");
 
 /** The toolchain that rust-toolchain.toml pins; the same version as `rust` in .prototools. */
 function pinnedToolchain(): string {
-  const file = Bun.TOML.parse(readFileSync(join(ROOT, "rust-toolchain.toml"), "utf8"));
-  const channel = isMap(file) && isMap(file.toolchain) ? file.toolchain.channel : undefined;
-  if (typeof channel !== "string" || channel === "") {
-    throw new ReleaseError("rust-toolchain.toml has no toolchain.channel");
-  }
-  return channel;
+  return toolchainChannel(readFileSync(join(ROOT, "rust-toolchain.toml"), "utf8"));
 }
 
 /** Where Cargo keeps the registry sources that dependency paths start with. */
@@ -84,39 +80,36 @@ async function buildRustBinaries(plan: ReleasePlan): Promise<Map<string, string>
     bins.set(image.name, resolveBinary(rustSpec(image), metadata.packages));
   }
 
-  const zigbuild = await protoTool("cargo-zigbuild");
-  const auditable = await protoTool("cargo-auditable");
-  const zig = await protoTool("zig");
   const packages = [...new Set(images.map((image) => image.package ?? ""))];
+  const { cmd, env } = rustCrossCompileCommand({
+    cargo,
+    zig: await protoTool("zig"),
+    cargoZigbuild: await protoTool("cargo-zigbuild"),
+    cargoAuditable: await protoTool("cargo-auditable"),
+    packages,
+    root: ROOT,
+    cargoHome: cargoHome(),
+    path: process.env.PATH ?? "",
+    version: plan.version,
+    sourceDateEpoch: plan.sourceDateEpoch,
+  });
   log("build", `cross-compiling ${packages.join(", ")} for ${RUST_TARGET}`);
-  await run(
-    [cargo, "auditable", "zigbuild", "--locked", "--release", "--target", RUST_TARGET, "--bins", ...packages.flatMap((pkg) => ["--package", pkg])],
-    {
-      cwd: ROOT,
-      stream: true,
-      env: {
-        // `cargo auditable` and `cargo zigbuild` are found as cargo subcommands on PATH.
-        PATH: `${dirname(auditable)}:${dirname(zigbuild)}:${process.env.PATH ?? ""}`,
-        CARGO_ZIGBUILD_ZIG_PATH: zig,
-        // Readable by crates with option_env!, for example tools/release-selftest.
-        TRUSTIOT_RELEASE_VERSION: plan.version,
-        SOURCE_DATE_EPOCH: String(plan.sourceDateEpoch),
-        // Panic messages carry source paths, which start with the machine's Cargo home or
-        // checkout. Fixed prefixes keep the binary, and so the image digest, the same wherever
-        // it is built. This replaces any RUSTFLAGS from the environment.
-        CARGO_ENCODED_RUSTFLAGS: [`--remap-path-prefix=${cargoHome()}=/cargo`, `--remap-path-prefix=${ROOT}=/build`].join("\x1f"),
-      },
-    },
-  );
+  await run(cmd, { cwd: ROOT, stream: true, env });
   for (const image of images) {
     const bin = bins.get(image.name) ?? "";
     const path = join(metadata.target_directory, RUST_TARGET, "release", bin);
     if (!existsSync(path)) {
       throw new ReleaseError(`cargo did not produce ${path}`);
     }
-    const problem = aarch64ElfProblem(new Uint8Array(readFileSync(path)));
+    const bytes = new Uint8Array(readFileSync(path));
+    const problem = aarch64ElfProblem(bytes);
     if (problem !== undefined) {
       throw new ReleaseError(`${path} is not an aarch64 binary: ${problem}`);
+    }
+    // distroless/static has no dynamic loader or libc.
+    const linking = staticElfProblem(bytes);
+    if (linking !== undefined) {
+      throw new ReleaseError(`${path} is not a static binary: ${linking}`);
     }
     binaries.set(image.name, path);
   }

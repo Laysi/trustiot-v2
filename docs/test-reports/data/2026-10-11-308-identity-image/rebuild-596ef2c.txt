@@ -1,0 +1,145 @@
+rcheck: queued at 23:18:18; running now: 341 since 23:16:38
+rcheck: started at 23:20:33 in /home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a91476ceb03aac6ab
+host: x86_64 8 cores, load 0.49 1.90 3.44, CARGO_BUILD_JOBS=6, HEAD 596ef2c4fd4d1e88238d5ebf09f367f4f803192d, target dir present: yes
+[release:plan] v0.0.0-rc.1 → version 0.0.0-rc.1 (prerelease), commit 596ef2c4fd4d1e88238d5ebf09f367f4f803192d
+[release:plan] image ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.1 (Rust package identity)
+[release:plan] image ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 (Rust package release-selftest)
+[release:plan] chart ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1
+[release:plan] first release: the notes list every commit
+release_build_seconds=13 load 0.57 1.87 3.42
+
+  1.99.0-x86_64-unknown-linux-gnu unchanged - rustc 1.99.0 (b940084d7 2026-09-28)
+
+info: component rust-std for target aarch64-unknown-linux-musl is up to date
+[release:build] cross-compiling identity, release-selftest for aarch64-unknown-linux-musl
+warning: linker stderr: ignoring deprecated linker optimization setting '1'
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `release-selftest` (bin "release-selftest") generated 1 warning
+warning: `identity` (bin "identity") generated 1 warning (1 duplicate)
+    Finished `release` profile [optimized] target(s) in 0.14s
+[release:build] building ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.1 for linux/arm64
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+STEP 2/5: COPY --chmod=0555 identity /usr/local/bin/identity
+--> 9347cf93af51
+STEP 3/5: USER 65532:65532
+--> a6c84ea441db
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/identity"]
+--> f895a9f64d92
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="596ef2c4fd4d1e88238d5ebf09f367f4f803192d" "org.opencontainers.image.version"="0.0.0-rc.1" "org.opencontainers.image.title"="identity"
+COMMIT localhost/trustiot-release/identity:0.0.0-rc.1
+--> 2a023b840383
+Successfully tagged localhost/trustiot-release/identity:0.0.0-rc.1
+2a023b84038393c8771a6040c00ca8d46a73c31adbaa5c783909246460463245
+[release:build] ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.1 → sha256:aa0acb859fd720998a2793a4c3034d62d107f0d11eb7a6bd0578740c3bfea9f2, SBOM SPDX-2.3 with 213 packages
+[release:build] building ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 for linux/arm64
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+STEP 2/5: COPY --chmod=0555 release-selftest /usr/local/bin/release-selftest
+--> e5448a198f09
+STEP 3/5: USER 65532:65532
+--> 500a38b6e6c9
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/release-selftest"]
+--> fcf8ca3f7716
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="596ef2c4fd4d1e88238d5ebf09f367f4f803192d" "org.opencontainers.image.version"="0.0.0-rc.1" "org.opencontainers.image.title"="release-selftest"
+COMMIT localhost/trustiot-release/release-selftest:0.0.0-rc.1
+--> 14a59962716b
+Successfully tagged localhost/trustiot-release/release-selftest:0.0.0-rc.1
+14a59962716b16d2a45022fdfdfcaed65653a7bae2be2ebd563b0e736916d96b
+[release:build] ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 → sha256:6973a934fd0b44ab38e2d1e49682a2fd048883847f9eab57ef8116392dee3f2a, SBOM SPDX-2.3 with 13 packages
+--- build.json
+{
+  "tag": "v0.0.0-rc.1",
+  "commit": "596ef2c4fd4d1e88238d5ebf09f367f4f803192d",
+  "images": [
+    {
+      "name": "identity",
+      "digest": "sha256:aa0acb859fd720998a2793a4c3034d62d107f0d11eb7a6bd0578740c3bfea9f2",
+      "size": 4192256,
+      "sbomPackages": 213,
+      "archive": "images/identity.oci.tar",
+      "sbom": "images/identity.spdx.json"
+    },
+    {
+      "name": "release-selftest",
+      "digest": "sha256:6973a934fd0b44ab38e2d1e49682a2fd048883847f9eab57ef8116392dee3f2a",
+      "size": 1135616,
+      "sbomPackages": 13,
+      "archive": "images/release-selftest.oci.tar",
+      "sbom": "images/release-selftest.spdx.json"
+    }
+  ]
+}
+總用量 5708
+-rw-r--r--. 1 ruisi ruisi 4192256 10月 11 23:20 identity.oci.tar
+-rw-r--r--. 1 ruisi ruisi  471269 10月 11 23:20 identity.spdx.json
+-rw-r--r--. 1 ruisi ruisi 1135616 10月 11 23:20 release-selftest.oci.tar
+-rw-r--r--. 1 ruisi ruisi   34459 10月 11 23:20 release-selftest.spdx.json
+--- nightly helper (podman)
+2026-10-11T15:20:46.307Z == service image localhost/trustiot-e2e/identity:nightly: package identity for aarch64-unknown-linux-musl
+2026-10-11T15:20:46.308Z $ /home/ruisi/.cargo/bin/rustup toolchain install 1.99.0 --profile minimal --no-self-update
+    
+      1.99.0-x86_64-unknown-linux-gnu unchanged - rustc 1.99.0 (b940084d7 2026-09-28)
+    info: syncing channel updates for 1.99.0-x86_64-unknown-linux-gnu
+2026-10-11T15:20:46.648Z $ /home/ruisi/.cargo/bin/rustup target add --toolchain 1.99.0 aarch64-unknown-linux-musl
+    info: component rust-std for target aarch64-unknown-linux-musl is up to date
+2026-10-11T15:20:46.715Z $ /home/ruisi/.cargo/bin/cargo metadata --no-deps --format-version 1 --locked
+2026-10-11T15:20:46.762Z $ /home/ruisi/.cargo/bin/cargo auditable zigbuild --locked --release --target aarch64-unknown-linux-musl --bins --package identity
+    warning: linker stderr: ignoring deprecated linker optimization setting '1'
+      |
+      = note: `#[warn(linker_messages)]` on by default
+    
+    warning: `identity` (bin "identity") generated 1 warning
+        Finished `release` profile [optimized] target(s) in 0.13s
+2026-10-11T15:20:47.099Z $ podman build --platform linux/arm64 --file /tmp/nightly-image-identity-4jgK7v/Containerfile --tag localhost/trustiot-e2e/identity:nightly /tmp/nightly-image-identity-4jgK7v
+    STEP 1/4: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+    STEP 2/4: COPY --chmod=0555 identity /usr/local/bin/identity
+    --> 9ec166c7a9ea
+    STEP 3/4: USER 65532:65532
+    --> 0a795405799d
+    STEP 4/4: ENTRYPOINT ["/usr/local/bin/identity"]
+    COMMIT localhost/trustiot-e2e/identity:nightly
+    --> f10376d1a579
+    Successfully tagged localhost/trustiot-e2e/identity:nightly
+    f10376d1a579385306b61b0cf273598fa92f33b2cb3096c7abd8c3cc07abc571
+2026-10-11T15:20:51.390Z built localhost/trustiot-e2e/identity:nightly from identity (6362000 bytes)
+nightly helper built localhost/trustiot-e2e/identity:nightly
+nightly_helper_build_seconds=5
+    
+      1.99.0-x86_64-unknown-linux-gnu unchanged - rustc 1.99.0 (b940084d7 2026-09-28)
+    info: syncing channel updates for 1.99.0-x86_64-unknown-linux-gnu
+2026-10-11T15:20:46.648Z $ /home/ruisi/.cargo/bin/rustup target add --toolchain 1.99.0 aarch64-unknown-linux-musl
+    info: component rust-std for target aarch64-unknown-linux-musl is up to date
+2026-10-11T15:20:46.715Z $ /home/ruisi/.cargo/bin/cargo metadata --no-deps --format-version 1 --locked
+2026-10-11T15:20:46.762Z $ /home/ruisi/.cargo/bin/cargo auditable zigbuild --locked --release --target aarch64-unknown-linux-musl --bins --package identity
+    warning: linker stderr: ignoring deprecated linker optimization setting '1'
+      |
+      = note: `#[warn(linker_messages)]` on by default
+    
+    warning: `identity` (bin "identity") generated 1 warning
+        Finished `release` profile [optimized] target(s) in 0.13s
+2026-10-11T15:20:47.099Z $ podman build --platform linux/arm64 --file /tmp/nightly-image-identity-4jgK7v/Containerfile --tag localhost/trustiot-e2e/identity:nightly /tmp/nightly-image-identity-4jgK7v
+    STEP 1/4: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+    STEP 2/4: COPY --chmod=0555 identity /usr/local/bin/identity
+    --> 9ec166c7a9ea
+    STEP 3/4: USER 65532:65532
+    --> 0a795405799d
+    STEP 4/4: ENTRYPOINT ["/usr/local/bin/identity"]
+    COMMIT localhost/trustiot-e2e/identity:nightly
+    --> f10376d1a579
+    Successfully tagged localhost/trustiot-e2e/identity:nightly
+    f10376d1a579385306b61b0cf273598fa92f33b2cb3096c7abd8c3cc07abc571
+2026-10-11T15:20:51.390Z built localhost/trustiot-e2e/identity:nightly from identity (6362000 bytes)
+--- images
+time="2026-10-11T23:20:51+08:00" level=info msg="Image operating system mismatch: image uses OS \"linux\"+architecture \"arm64\"+\"v8\", expecting one of \"linux+amd64+\\\"\\\"\""
+localhost/trustiot-308-check/identity-release:0.0.0-rc.1 os=linux arch=arm64 size=9790206 user=65532:65532 entrypoint=[/usr/local/bin/identity] id=2a023b84038393c8771a6040c00ca8d46a73c31adbaa5c783909246460463245
+/home/ruisi/.cache/trustiot-v2-308/localhost_trustiot-308-check_identity-release_0.0.0-rc.1-identity: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped
+17bb1421ce36aa7c756c9cc116a1ac10f003ca512596a534e03346493a41e3d6  /home/ruisi/.cache/trustiot-v2-308/localhost_trustiot-308-check_identity-release_0.0.0-rc.1-identity
+-r-xr-xr-x. 1 ruisi ruisi 6362000 10月 11 23:17 /home/ruisi/.cache/trustiot-v2-308/localhost_trustiot-308-check_identity-release_0.0.0-rc.1-identity
+localhost/trustiot-e2e/identity:nightly os=linux arch=arm64 size=9789491 user=65532:65532 entrypoint=[/usr/local/bin/identity] id=f10376d1a579385306b61b0cf273598fa92f33b2cb3096c7abd8c3cc07abc571
+/home/ruisi/.cache/trustiot-v2-308/localhost_trustiot-e2e_identity_nightly-identity: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped
+17bb1421ce36aa7c756c9cc116a1ac10f003ca512596a534e03346493a41e3d6  /home/ruisi/.cache/trustiot-v2-308/localhost_trustiot-e2e_identity_nightly-identity
+-r-xr-xr-x. 1 ruisi ruisi 6362000 10月 11 23:20 /home/ruisi/.cache/trustiot-v2-308/localhost_trustiot-e2e_identity_nightly-identity
+compressed layer bytes: 4168514 layers: 14
+done
+rcheck: exit 0 at 23:20:53

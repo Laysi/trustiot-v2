@@ -1,0 +1,4 @@
+# The identity service (services/identity): server-side sessions, the ingress gateway's ext_authz
+# check and internal identity signing. Packed with deploy/images/rust-binary.Containerfile.
+[rust]
+package = "identity"
