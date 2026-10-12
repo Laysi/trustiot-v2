@@ -1,0 +1,28 @@
+// Builds the #375 probe from the #366 follow-up probe's cases, main's SESSION_CHECK, and the new body.
+const [followup, mainSource, body, out] = Bun.argv.slice(2);
+const lines = (await Bun.file(followup).text()).split("\n");
+const cases = lines.slice(19, 453).join("\n"); // lines 20..453: constants, cases(), fill, run, short
+const src = await Bun.file(mainSource).text();
+const marker = 'const SESSION_CHECK: &str = r"';
+const start = src.indexOf(marker) + marker.length;
+const end = src.indexOf('";', start);
+const old = src.slice(start, end);
+const header = `//! Throwaway probes for Laysi/trustiot-v2#375 (kept as evidence, not as a test): the session
+//! check of main e2e476b against the rewritten one. The #366 verification cases below are copied
+//! unchanged from verify_366-followup.rs.txt.
+#![cfg(feature = "contract")]
+#![allow(clippy::print_stdout, reason = "probe output is the evidence")]
+#![allow(dead_code, reason = "the copied #366 cases carry probe statements this file does not run")]
+#![allow(clippy::string_slice, reason = "ASCII source text")]
+
+mod support;
+
+use std::time::{Duration, Instant};
+
+use service_kit::postgres::{self, SessionRole};
+use sqlx::{AssertSqlSafe, Connection, PgConnection};
+use support::postgres::{TlsPostgres, tls_postgres};
+
+`;
+const oldConst = `\n\n/// The session check of main e2e476b (Laysi/trustiot-v2#366), unchanged.\nconst OLD_SESSION_CHECK: &str = r"${old}";\n\n`;
+await Bun.write(out, header + cases + oldConst + (await Bun.file(body).text()));
