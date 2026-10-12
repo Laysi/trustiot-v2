@@ -1,0 +1,37 @@
+// Continuation after the orchestrator's drain window expired: restart the consumers, wait for lag 0,
+// verify (as in the harness of Laysi/trustiot-v2#54's verification; same Postgres, same run directory).
+// Usage: bun finish.ts <chaos-binary> <outdir> <seed>
+import { $ } from "bun";
+import { appendFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { LAG_SQL, RUNTIME, sleep, startRun, sumStats } from "./common.ts";
+
+const [bin, outdir, seedArg] = process.argv.slice(2);
+const run = await startRun({ bin, outdir, name: "main", port: Number(process.env.CHAOS_PORT ?? "55471"), seed: Number(seedArg ?? "1"), reuse: true, logFile: "timeline.txt" });
+const { env, psql, pg } = run;
+rmSync(`${outdir}/STOP_CONSUMERS`, { force: true });
+const cons = [["c1", "run"], ["c2", "poll"], ["c3", "poll"]].map(([n, m]) => {
+  const file = `${outdir}/procs/${n}-finish.log`;
+  return Bun.spawn([bin, "consumer", n, m, outdir], { env: { ...env, CHAOS_PROC_SEED: run.procSeed(n, 999) }, stdout: Bun.file(file), stderr: Bun.file(file + ".err") });
+});
+run.log("consumers restarted for the drain, no more faults");
+const t = Date.now();
+let lag = "?";
+while (Date.now() - t < 40 * 60_000) {
+  lag = (await psql(LAG_SQL)).out;
+  appendFileSync(`${outdir}/lag.csv`, `finish+${((Date.now() - t) / 1000).toFixed(0)},${lag},0,\n`);
+  if (lag === "0") break;
+  await sleep(5000);
+}
+run.log(`lag=${lag} after ${((Date.now() - t) / 1000).toFixed(0)}s of drain`);
+await sleep(4000);
+writeFileSync(`${outdir}/STOP_CONSUMERS`, "");
+for (const c of cons) await c.exited;
+const v = await $`${bin} verify ${outdir}`.env(env).quiet().nothrow();
+writeFileSync(`${outdir}/verify.json`, v.stdout.toString() + v.stderr.toString());
+console.log(v.stdout.toString());
+const tot = sumStats(outdir, readdirSync(`${outdir}/procs`).filter((f) => f.startsWith("c") && !f.endsWith(".err")), ["delivered", "dup", "dead", "handled", "retry_before", "retry_after", "probes"]);
+console.log(JSON.stringify({ tot }, null, 2));
+writeFileSync(`${outdir}/finish-stats.json`, JSON.stringify({ tot, drain_lag_final: lag }, null, 2));
+await $`${RUNTIME} logs ${pg}`.quiet().nothrow().then((r) => writeFileSync(`${outdir}/postgres.log`, r.stdout.toString() + r.stderr.toString()));
+if (v.exitCode === 0) await $`${RUNTIME} rm -f ${pg}`.quiet().nothrow();
+process.exit(v.exitCode === 0 ? 0 : 1);

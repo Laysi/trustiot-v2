@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Reduces one run directory on the build host to the small files kept in the report's data
+# directory (the raw run directory has hundreds of process logs and a Postgres log of about 1 MB,
+# and holds the run's throwaway password and TLS key, which are never copied).
+# Usage on the host: bash collect.sh.txt <run-dir> <prefix> <dest-dir>
+set -euo pipefail
+run=$1 prefix=$2 dest=$3
+mkdir -p "$dest"
+for f in timeline.txt lag.csv orchestrator-counts.json verify.json finish-stats.json \
+         stall-timeline.txt stall.csv stall-verify.json grants-timeline.txt; do
+  [ -f "$run/$f" ] && cp "$run/$f" "$dest/$prefix-$f"
+done
+# The last STAT line of every consumer incarnation (poll-mode replicas count progress; a kill
+# loses up to 2 s of counting, so sums over these lines are lower bounds).
+for f in "$run"/procs/c*.log "$run"/procs/stall-c*.log; do
+  [ -f "$f" ] || continue
+  printf '%s: ' "$(basename "$f")"
+  grep '^STAT' "$f" | tail -1 || true
+  echo
+done | grep -v '^$' > "$dest/$prefix-consumer-last-stat.txt" || true
+# Producer error lines by kind (connection kills, restarts and deadlocks are expected).
+cat "$run"/producer-*.log 2> /dev/null | grep '^E ' \
+  | sed -E 's/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}//g; s/https?:[^ ]*//' | cut -c1-150 \
+  | sort | uniq -c | sort -rn > "$dest/$prefix-producer-errors.txt" || true
+# Postgres log: counts by message with process IDs and timestamps removed, plus the lines about
+# start-up, recovery and shutdown with their timestamps.
+if [ -f "$run/postgres.log" ]; then
+  {
+    echo "# message counts (timestamps and process IDs removed)"
+    sed -E 's/^[0-9]{4}-[0-9-]+ [0-9:.]+ UTC \[[0-9]+\] //; s/^\[[0-9]+\] //' "$run/postgres.log" | grep -E '^(LOG|ERROR|FATAL|WARNING|PANIC)' \
+      | sed -E 's/process [0-9]+/process N/g; s/[0-9a-f]{8}-[0-9a-f-]{27}/UUID/g; s/\([0-9,]+\)/(..)/g' | cut -c1-160 | sort | uniq -c | sort -rn | head -40
+    echo
+    echo "# start-up, recovery, shutdown, with timestamps"
+    grep -E 'database system (was|is ready|is shut down)|automatic recovery|redo (starts|done)|received (fast|smart|immediate) shutdown|shutting down|terminating any other active|checkpoint starting: shutdown' "$run/postgres.log" || true
+  } > "$dest/$prefix-postgres-log-summary.txt"
+fi
+ls -la "$dest" | grep "$prefix-"

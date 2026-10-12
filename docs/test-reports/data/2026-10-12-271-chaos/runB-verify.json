@@ -1,0 +1,81 @@
+{
+  "aggregates": 27,
+  "committed_acks_logged": 44337,
+  "dead_letters": 1317,
+  "events_in_outbox": 44340,
+  "failures": [],
+  "final_generation": 1,
+  "generations": [
+    {
+      "complete": false,
+      "distinct": 16264,
+      "gen": 0,
+      "handled": 16264
+    },
+    {
+      "complete": true,
+      "distinct": 43023,
+      "gen": 1,
+      "handled": 43023
+    }
+  ],
+  "handled_log_rows": 59287,
+  "in_handler_violations": 0,
+  "inbox_rows": 43023,
+  "lag_events": 0,
+  "ledger_rows": 44340,
+  "pending_commit_absent": 3,
+  "pending_commit_present": 44340,
+  "pending_commit_tokens": 44343,
+  "poison_events": 1317,
+  "producer_error_lines": 64,
+  "rolled_back_found_in_outbox": 0,
+  "rolled_back_tokens_logged": 6257,
+  "tenants": {
+    "deliveries_checked_against_the_log_rows_tenant": 59287,
+    "delivery_tenant_mismatches": 0,
+    "events_per_tenant_and_handled_in_final_generation": {
+      "01928f6e-7a3c-7d4e-8f00-000000000010": [
+        9574,
+        9295
+      ],
+      "01928f6e-7a3c-7d4e-8f00-000000000011": [
+        9116,
+        8814
+      ],
+      "01928f6e-7a3c-7d4e-8f00-000000000012": [
+        8196,
+        7948
+      ],
+      "01928f6e-7a3c-7d4e-8f00-000000000013": [
+        7585,
+        7373
+      ],
+      "01928f6e-7a3c-7d4e-8f00-000000000014": [
+        7176,
+        6986
+      ],
+      "platform-wide": [
+        2693,
+        2607
+      ]
+    },
+    "probes": {
+      "read_other_tenants": {
+        "total": 3037,
+        "unexpected": 0
+      },
+      "write_other_tenant": {
+        "total": 3037,
+        "unexpected": 0
+      }
+    },
+    "producer_ledger_tenant_mismatches": 0,
+    "session_tenant_mismatches": 0,
+    "tenant_rows_for_platform_wide_events": 0,
+    "tenant_rows_missing": 0,
+    "tenant_rows_total": 55696,
+    "tenant_rows_wrong_tenant": 0
+  },
+  "tx_order_inversions": 0
+}

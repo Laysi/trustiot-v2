@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Builds the chaos binary from chaos.rs.txt and runs one of the scripts, from the repository root.
+# Usage: bash docs/test-reports/data/2026-10-12-271-chaos/run.sh.txt <chaos|stall|grants> <name> [args...]
+#   chaos  <name> <minutes> <seed> <drain-minutes>
+#   stall  <name> <seed>
+#   grants <name>
+# Output goes to ../chaos-out/<name>/ (outside the repository copy). Needs bun, cargo and docker.
+set -uo pipefail
+data=docs/test-reports/data/2026-10-12-271-chaos
+mode=$1 name=$2
+shift 2
+[[ $mode =~ ^(chaos|stall|grants)$ ]] || { echo "unknown mode: $mode" >&2; exit 2; }
+# The name becomes a directory that is deleted first: a plain basename only.
+[[ $name =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || { echo "invalid run name: $name" >&2; exit 2; }
+out=$(cd .. && pwd)/chaos-out/$name
+rm -rf "$out"
+mkdir -p "$out/scripts"
+# The chaos binary is an example of the outbox crate for the run only: it is never committed as Rust.
+example=crates/outbox/examples/chaos.rs
+[ ! -e "$example" ] || { echo "$example exists; not overwriting it" >&2; exit 2; }
+created_dir=
+[ -d crates/outbox/examples ] || created_dir=crates/outbox/examples
+mkdir -p crates/outbox/examples
+# The generated file (and the directory, if this run made it) is removed when the script ends.
+trap 'rm -f "$example"; [ -z "$created_dir" ] || rmdir "$created_dir" 2> /dev/null || true' EXIT
+cp "$data/chaos.rs.txt" "$example"
+cargo build -p outbox --locked --example chaos || { echo "build failed" >&2; exit 2; }
+bin=$(cd "${CARGO_TARGET_DIR:-target}" && pwd)/debug/examples/chaos
+for f in common chaos finish stall grants; do cp "$data/$f.ts.txt" "$out/scripts/$f.ts"; done
+echo "started $(date -u +%FT%TZ), binary $bin"
+# bun runs from the repository root: proto picks the pinned version from .prototools there.
+case $mode in
+  chaos) bun "$out/scripts/chaos.ts" "$bin" "$out" "$1" "$2" "$3" ;;
+  stall) bun "$out/scripts/stall.ts" "$bin" "$out" "$1" ;;
+  grants) bun "$out/scripts/grants.ts" "$bin" "$out" ;;
+esac
+rc=$?
+echo "finished $(date -u +%FT%TZ) exit $rc"
+exit $rc
