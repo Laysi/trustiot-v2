@@ -21,6 +21,15 @@ clickhouse:
         cpu: "2"
         memory: 1536Mi
 
+# No database: the example service runs without one here, so the test needs neither the
+# CloudNativePG operator nor a CA Secret (no service lists postgres under mesh.calls).
+postgres:
+  mode: external
+  external:
+    host: postgres.e2e.trustiot.test
+    caSecret:
+      name: trustiot-e2e-postgres-ca
+
 services:
   # crates/service-kit's example-service, standing in for a product service: it answers
   # POST /v1/echo and logs every request through service-kit.

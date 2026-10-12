@@ -1,7 +1,8 @@
 // Deploys the Helm chart with one values file into a k3d cluster and checks that it works:
-// every workload of the release is ready (the kubelet's HTTP probes answer), each ingress
-// gateway's NetworkPolicy admits exactly the ports its Istio pods use, every Service that
-// exposes a probe routes to a ready pod, and an uninstall leaves nothing behind. Components
+// every workload of the release is ready (the kubelet's HTTP probes answer), every CloudNativePG
+// Cluster is healthy, each ingress gateway's NetworkPolicy admits exactly the ports its Istio pods
+// use, every Service that exposes a probe routes to a ready pod, and an uninstall leaves nothing
+// behind but the objects the chart keeps on purpose (the database), which are then deleted. Components
 // the chart gains later are covered without
 // changes here, because the checks read the release's own manifests (manifests.ts).
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -15,10 +16,13 @@ import {
   gatewayPorts,
   gatewaysOf,
   healthEndpointsOf,
+  keptObjectsOf,
   missingSecrets,
   missingTlsSecrets,
   parseManifests,
   podProblems,
+  postgresClusterProblems,
+  postgresClustersOf,
   readyEndpointsFor,
   restartsOf,
   workloadsOf,
@@ -173,6 +177,21 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         }
         return workloads.map((w) => `${w.kind}/${w.name}`).join(", ");
       })) &&
+      (await check("every CloudNativePG Cluster is healthy", async () => {
+        // The bundled Postgres (Laysi/trustiot-v2#58): the operator creates its pods after helm
+        // has returned, and bootstrapping the database takes a while on a loaded runner.
+        const clusters = postgresClustersOf(parseManifests(manifest));
+        const states: string[] = [];
+        for (const cluster of clusters) {
+          const target = `cluster.postgresql.cnpg.io/${cluster}`;
+          await kubectl(["wait", "--namespace", namespace, "--for=condition=Ready", target, "--timeout=600s"], 630_000);
+          const status = await kubectl(["get", "--namespace", namespace, target, "--output", "json"]);
+          const problems = postgresClusterProblems(JSON.parse(status.stdout));
+          if (problems.length > 0) throw new Error(problems.join("; "));
+          states.push(`${cluster}: healthy`);
+        }
+        return clusters.length === 0 ? "the release has no CloudNativePG Cluster" : states.join(", ");
+      })) &&
       (await check("every Gateway is programmed", async () => {
         // Istio creates a gateway pod for each Gateway object, after helm has returned.
         const gateways = gatewaysOf(parseManifests(manifest));
@@ -232,15 +251,27 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         }
         return routed.join(", ");
       })) &&
-      (await check("helm uninstall leaves no object of the release", async () => {
+      (await check("helm uninstall leaves no object of the release but the kept database", async () => {
         await helm(["uninstall", RELEASE, "--namespace", namespace, "--wait", "--timeout", "3m"], 4 * 60_000);
         const left = await exec(
           [ctx.kubectl, "get", "-f", "-", "--namespace", namespace, "--ignore-not-found", "--output", "name"],
           { ...kube, stdin: manifest, timeoutMs: 60_000 },
         );
         if (left.code !== 0) throw new Error(`kubectl get failed: ${tail(left.stderr.trim(), 400)}`);
-        if (left.stdout.trim() !== "") throw new Error(`still present after uninstall: ${left.stdout.trim().split("\n").join(", ")}`);
-        return "all objects removed";
+        // The chart keeps the database on uninstall (helm.sh/resource-policy: keep); everything
+        // else must be gone, and the kept objects must all still be there.
+        const kept = keptObjectsOf(parseManifests(manifest));
+        const remaining = left.stdout.trim().split("\n").filter((line) => line !== "");
+        const unexpected = remaining.filter((name) => !kept.includes(name));
+        const lost = kept.filter((name) => !remaining.includes(name));
+        if (unexpected.length > 0) throw new Error(`still present after uninstall: ${unexpected.join(", ")}`);
+        if (lost.length > 0) throw new Error(`removed by uninstall although the chart keeps them: ${lost.join(", ")}`);
+        if (kept.length === 0) return "all objects removed";
+        // Deleting a Cluster deletes its volumes; then nothing of the release is left.
+        await kubectl(["delete", "--namespace", namespace, ...kept, "--wait=true", "--timeout=180s"], 200_000);
+        const volumes = await kubectl(["get", "pvc", "--namespace", namespace, "--selector", "cnpg.io/cluster", "--output", "name"]);
+        if (volumes.stdout.trim() !== "") throw new Error(`volumes left after deleting the kept Cluster: ${volumes.stdout.trim().split("\n").join(", ")}`);
+        return `all objects removed; kept on uninstall as intended, then deleted: ${kept.join(", ")}`;
       })) &&
       (await check("ingress e2e test (deploy/chart/tests/e2e)", () => runIngressE2e(ctx, shape.name)));
   } catch (error) {
@@ -303,6 +334,10 @@ async function collectDiagnostics(ctx: SmokeContext, namespace: string, shape: S
   // Helm 4 has no `--all`; with a state flag set it lists only those states, so name them all.
   await section("helm list", [ctx.helm, "list", "--namespace", namespace, "--deployed", "--failed", "--pending", "--superseded", "--uninstalled", "--uninstalling"]);
   await section("objects", [k, "get", "all,configmap,serviceaccount,pvc", "--namespace", namespace, "--output", "wide"]);
+  // The bundled Postgres: the operator's view of it (no Secret data).
+  await section("CloudNativePG", [k, "get", "clusters.postgresql.cnpg.io,databases.postgresql.cnpg.io,imagecatalogs.postgresql.cnpg.io", "--namespace", namespace, "--output", "wide"]);
+  await section("describe CloudNativePG Clusters", [k, "describe", "clusters.postgresql.cnpg.io", "--namespace", namespace]);
+  await section("CloudNativePG operator log", [k, "logs", "deployment/cnpg-controller-manager", "--namespace", "cnpg-system", "--tail=80"]);
   await section("events", [k, "get", "events", "--namespace", namespace, "--sort-by=.lastTimestamp"]);
   await section("pods in all namespaces", [k, "get", "pods", "--all-namespaces", "--output", "wide"]);
   await section("describe pods", [k, "describe", "pods", "--namespace", namespace]);

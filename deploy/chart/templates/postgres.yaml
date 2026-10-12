@@ -1,0 +1,169 @@
+{{- /*
+Bundled Postgres (decisions 21 and 29, checklist M8, Laysi/trustiot-v2#58): one CloudNativePG
+Cluster with our image (PostgreSQL 18 with Apache AGE, deploy/images/postgres). The operator and
+its CRDs are a platform component installed once per cluster (deploy/cloudnative-pg/README.md).
+- TLS: CloudNativePG generates the server CA and certificate; services verify the certificate
+  (verify-full) against the CA's certificate only ("trustiot.postgres.caSecret"), and the server
+  refuses connections without TLS ("trustiot.postgres.pgHba").
+- No superuser credentials exist: superuser access is off, so the postgres role logs in only over
+  the pod's local socket, where the operator works. The database owner is an ordinary role whose
+  password only the migration Job (Laysi/trustiot-v2#60) uses; services get their own roles.
+- The pods stay outside the ambient mesh: TLS already protects every connection, and the
+  operator, which runs outside the mesh, must reach each instance. The NetworkPolicy below admits
+  only the services that list postgres in mesh.calls, the operator and the kubelet.
+- Backups and point-in-time recovery come later through the same operator (Laysi/trustiot-v2#134).
+*/ -}}
+{{- if eq .Values.postgres.mode "bundled" }}
+{{- $pg := .Values.postgres.bundled }}
+{{- $ctx := dict "root" . "name" "postgres" }}
+{{- $cluster := include "trustiot.postgres.clusterName" . }}
+{{- $major := include "trustiot.postgres.majorVersion" . | int }}
+{{- $clients := (include "trustiot.postgres.clients" . | fromYaml).services }}
+apiVersion: postgresql.cnpg.io/v1
+kind: ImageCatalog
+metadata:
+  name: {{ $cluster }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+  annotations:
+    # Kept on helm uninstall, with the Cluster that refers to it.
+    helm.sh/resource-policy: keep
+spec:
+  images:
+    # The image's tag is the TrustIoT version, so the catalog tells CloudNativePG the major.
+    - major: {{ $major }}
+      image: {{ include "trustiot.postgres.image" . }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $cluster }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+  annotations:
+    # helm uninstall (or Flux removing the release) keeps the database: CloudNativePG deletes a
+    # Cluster's volumes with it. Delete the Cluster on purpose to drop the data.
+    helm.sh/resource-policy: keep
+spec:
+  description: TrustIoT Postgres with Apache AGE
+  # One instance on the single node; replicas and backups come from the same operator later
+  # (checklist M8, Laysi/trustiot-v2#134).
+  instances: 1
+  # A PodDisruptionBudget for a single instance would block every node drain.
+  enablePDB: false
+  imageCatalogRef:
+    apiGroup: postgresql.cnpg.io
+    kind: ImageCatalog
+    name: {{ $cluster }}
+    major: {{ $major }}
+  imagePullPolicy: {{ $pg.image.pullPolicy }}
+  {{- with .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- range . }}
+    - name: {{ . }}
+    {{- end }}
+  {{- end }}
+  # No superuser password and no <cluster>-superuser Secret: nothing outside the pod can log in
+  # as postgres.
+  enableSuperuserAccess: false
+  bootstrap:
+    initdb:
+      database: {{ include "trustiot.postgres.database" . }}
+      owner: {{ include "trustiot.postgres.owner" . }}
+      encoding: UTF8
+      # PostgreSQL's built-in C.UTF-8: code point order and Unicode character classes that never
+      # change with the operating system's C library, so an image update cannot corrupt indexes.
+      localeProvider: builtin
+      builtinLocale: C.UTF-8
+  postgresql:
+    # AGE's cypher() needs its parser hook in every session; a non-superuser role cannot LOAD it.
+    shared_preload_libraries:
+      - age
+    parameters:
+      {{- range $key, $value := $pg.parameters }}
+      {{ $key }}: {{ $value | toString | quote }}
+      {{- end }}
+    pg_hba:
+      {{- include "trustiot.postgres.pgHba" . | nindent 6 }}
+  storage:
+    size: {{ $pg.storage.size }}
+    {{- with $pg.storage.storageClassName }}
+    storageClass: {{ . }}
+    {{- end }}
+  resources:
+    {{- toYaml $pg.resources | nindent 4 }}
+  affinity:
+    {{- with $pg.nodeSelector }}
+    nodeSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with $pg.tolerations }}
+    tolerations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  # Labels for every object CloudNativePG creates for this Cluster: its pods stay outside the
+  # ambient mesh even when the namespace joins it (see the NetworkPolicy below).
+  inheritedMetadata:
+    labels:
+      istio.io/dataplane-mode: none
+---
+# AGE in the database, created and upgraded by the operator as a superuser
+# (deploy/images/postgres/README.md). Deleting this object keeps the database.
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: {{ printf "%s-%s" $cluster (include "trustiot.postgres.database" .) }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+spec:
+  cluster:
+    name: {{ $cluster }}
+  name: {{ include "trustiot.postgres.database" . }}
+  owner: {{ include "trustiot.postgres.owner" . }}
+  ensure: present
+  databaseReclaimPolicy: retain
+  extensions:
+    - name: age
+      version: {{ include "trustiot.postgres.ageVersion" . | quote }}
+---
+# The Postgres pods are outside the mesh, so this NetworkPolicy is their only filter besides TLS and
+# passwords: the namespace's default deny applies to them, and this admits PostgreSQL from the
+# services that use it and the instance manager's port from the operator. The kubelet's probes
+# come from the pod's own node, which NetworkPolicy always admits.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "trustiot.componentName" $ctx }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ $cluster }}
+      cnpg.io/podRole: instance
+  policyTypes:
+    - Ingress
+  ingress:
+    {{- if $clients }}
+    - from:
+        {{- range $clients }}
+        - podSelector:
+            matchLabels:
+              {{- include "trustiot.selectorLabels" (dict "root" $ "name" .) | nindent 14 }}
+        {{- end }}
+      ports:
+        - port: {{ include "trustiot.postgres.port" . }}
+          protocol: TCP
+    {{- end }}
+    # The operator's status checks and commands (HTTPS on the instance manager's port).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $pg.operator.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $pg.operator.podLabels | nindent 14 }}
+      ports:
+        - port: {{ include "trustiot.postgres.statusPort" . }}
+          protocol: TCP
+{{- end }}

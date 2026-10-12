@@ -58,8 +58,8 @@ chart 的規則（values 只以名稱引用 Secret、values 沒有明文密鑰�
 | 方式 | 用在 | 說明 |
 | --- | --- | --- |
 | Kubernetes Secret，以 `valueFrom.secretKeyRef` 成為環境變數 | 短的字串：API key、密碼、DSN | chart 的 `services.<name>.credentials` 與各 `*Secret` 欄位，values 只寫 Secret 名稱與 key；名稱像密鑰的環境變數只能來自 Secret（schema 與 chart 測試） |
-| Kubernetes Secret，以唯讀 volume 掛成檔案 | 私鑰、憑證、多行的金鑰 | 例如外部資料庫的 CA（`/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`）；內部身分簽章私鑰（`/etc/trustiot/identity-signing-key/signing-key.pem`，只掛進身分服務）；之後的 CA 私鑰、broker 伺服器金鑰也掛成檔案，只掛進使用它的那個 pod |
-| 叢集內元件自己產生的 Secret | 叢集內資料庫的帳號 | 例如 CloudNativePG 產生的資料庫帳號（Laysi/trustiot-v2#58）。值只存在叢集內，不進 git，也不經過人 |
+| Kubernetes Secret，以唯讀 volume 掛成檔案 | 私鑰、憑證、多行的金鑰 | 例如資料庫的 CA（`/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`，Postgres 的只掛進使用它的服務）；內部身分簽章私鑰（`/etc/trustiot/identity-signing-key/signing-key.pem`，只掛進身分服務）；之後的 CA 私鑰、broker 伺服器金鑰也掛成檔案，只掛進使用它的那個 pod |
+| 叢集內元件自己產生的 Secret | 叢集內資料庫的帳號、CA 與伺服器私鑰 | 例如 CloudNativePG 為叢集內 Postgres 產生的 CA、伺服器憑證與 owner 帳號（Laysi/trustiot-v2#58）。值只存在叢集內，不進 git，也不經過人；chart 把這些 Secret 整個列為服務的自訂 `env` 不能讀的對象，服務只拿到 CA 憑證（掛載時只選 `ca.crt`） |
 | 主機上只有 root 能讀的檔案，以 systemd `LoadCredential` 交給服務 | SaaS 主機上的 cloudflared | 不在叢集內，k3s 故障時仍能運作（Laysi/trustiot-v2#64） |
 | GitHub Actions secret，經 step 的 `env` 或 `with` | 發佈流程用的少數金鑰 | ci.yml 不用任何 secret；fork 來的 PR 拿不到 secret（見 [CI 與發佈](ci-release.md)） |
 | 開發者本機的狀態目錄（0700 目錄、0600 檔案） | 本機開發環境 | 每次 `up` 產生，`down` 刪除（[scripts/README.md](../../scripts/README.md)） |
@@ -86,7 +86,9 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 
 | 密鑰 | 用途與使用者 | SaaS | 地端 | 注入方式 | 實作 issue |
 | --- | --- | --- | --- | --- | --- |
-| Postgres 帳號：superuser、migration 角色、每個服務一個角色、平台後台角色（決策 4、29） | 各服務連 Postgres；migration Job | `bundled`：CloudNativePG 在叢集內產生的 Secret，不進 git | `bundled` 同左；`external`：客戶建立的 Secret | 環境變數，每個服務只拿自己的角色 | Laysi/trustiot-v2#58、Laysi/trustiot-v2#60 |
+| Postgres superuser（`postgres`，`postgres.mode: bundled`） | 只有 CloudNativePG 在 pod 內經 local socket 使用（建立 AGE extension、角色） | 沒有可用的密碼：Cluster 設 `enableSuperuserAccess: false`，`postgres` 沒有密碼、沒有 `<cluster>-superuser` Secret（2026-10-12 實驗機 e2e 驗證） | 同左；`external`：由客戶保管，不交給 chart | 不注入任何服務 | Laysi/trustiot-v2#58 |
+| 叢集內 Postgres 的 CA 與伺服器私鑰（Secret `<cluster>-ca`、`<cluster>-server`） | CloudNativePG 簽發與換發伺服器憑證（90 天，到期前 7 天自動換發） | operator 在叢集內產生，不進 git | 同左；`external` 時客戶只提供 CA 憑證（`postgres.external.caSecret`） | 只有 `<cluster>-ca` 的 `ca.crt` 以唯讀 volume 掛進在 `mesh.calls` 列出 `postgres` 的服務；`ca.key` 與伺服器私鑰不進任何服務（chart 測試） | Laysi/trustiot-v2#58 |
+| Postgres 帳號：資料庫 owner（`trustiot_owner`，migration 用）、每個服務一個角色、平台後台角色（決策 4、29） | migration Job；各服務連 Postgres | `bundled`：owner 的密碼由 CloudNativePG 產生在 `<cluster>-app`；服務角色建議以 DatabaseRole 宣告、密碼放 basic-auth Secret（[deploy/cloudnative-pg](../../deploy/cloudnative-pg/README.md)），不進 git | `bundled` 同左；`external`：客戶建立的 Secret | 環境變數，每個服務只拿自己的角色；`<cluster>-app` 只給 migration Job | Laysi/trustiot-v2#58（owner）、Laysi/trustiot-v2#60（其餘） |
 | AGE 每租戶登入角色（決策 21） | field-context 以租戶專屬角色執行 Cypher | 由程式在建立租戶時產生，不進 git、不經過人 | 同左 | 由 Laysi/trustiot-v2#176 決定 | Laysi/trustiot-v2#176 |
 | 叢集內 ClickHouse 的 bootstrap 管理帳號密碼（`clickhouse.mode: bundled`），Secret `trustiot-clickhouse-admin`、key `password` | ClickHouse 本身；之後的 migration Job（Laysi/trustiot-v2#60） | SOPS（`deploy/flux/`，以 `openssl rand -hex 32` 產生） | 客戶在安裝前建立（`deploy/chart/README.md`「叢集內的 ClickHouse」的指令） | 唯讀 volume 掛成檔案 `/etc/trustiot/clickhouse-admin/password`（`CLICKHOUSE_PASSWORD_FILE`），只掛進 ClickHouse 的 pod；服務的自訂 `env` 不能讀它（chart 測試） | Laysi/trustiot-v2#59、Laysi/trustiot-v2#60 |
 | ClickHouse 帳號：ingest 寫入、每租戶唯讀（決策 14） | ingest、telemetry-query | `bundled`：由 migration Job 以管理帳號建立，存成叢集內的 Secret；每租戶唯讀帳號由 telemetry-query 建立租戶時產生 | 同左 | 環境變數，只給使用該帳號的服務 | Laysi/trustiot-v2#60、Laysi/trustiot-v2#119 |

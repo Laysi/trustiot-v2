@@ -138,9 +138,24 @@ Secret `trustiot-clickhouse-admin`（key `password`）。ClickHouse 只在啟動
 2. 同一個變更把 values 的 `clickhouse.bundled.adminSecretRevision` 加一。升級時 ClickHouse 的 pod 重啟並換上新密碼，migration Job 也拿新密碼連線。
 3. 確認 ClickHouse 的 `/ping` 探針恢復、migration Job 完成；舊密碼不再能登入（以 `clickhouse-client --ask-password` 輸入舊值，確認被拒）。
 
+### 叢集內 Postgres 的 owner 密碼與 TLS 憑證
+
+`postgres.mode: bundled` 時，CloudNativePG 在叢集內產生這些 Secret，值不經過人（`<cluster>` 是 `<release>-postgres`，例如 `trustiot-postgres`；細節見 `deploy/chart/README.md` 的「叢集內的 Postgres」）。superuser 沒有密碼可輪替：`postgres` 只能在 pod 內經 local socket 登入。
+
+資料庫 owner `trustiot_owner` 的密碼（Secret `<cluster>-app`，只給 migration Job）：刪掉 Secret，operator 會以新產生的密碼重建它，並把資料庫裡的角色改成新密碼。
+
+1. `kubectl -n <namespace> delete secret <cluster>-app`
+2. 等 Secret 重建：`kubectl -n <namespace> get secret <cluster>-app` 再次出現，`AGE` 從頭起算。2026-10-12 在實驗機上，Secret 在刪除後 0.1 秒內重建，資料庫的角色再過 0.2 秒換成新密碼（[測試報告](../test-reports/2026-10-12-58-cnpg-postgres.md)）。
+3. 確認新密碼能以 TLS 登入，密碼經管線傳入、不出現在命令列：
+   `{ kubectl -n <namespace> get secret <cluster>-app -o jsonpath='{.data.password}' | base64 -d; echo; } | kubectl -n <namespace> exec -i <cluster>-1 -c postgres -- bash -c 'read -r PGPASSWORD; export PGPASSWORD; psql "host=<cluster>-rw dbname=trustiot user=trustiot_owner sslmode=require" -tAc "select current_user"'`
+   印出 `trustiot_owner` 即成功；以舊密碼執行同一個指令會被拒（`password authentication failed`）。
+4. 舊密碼立即不能建立新連線，但已建立的連線不會被中斷。懷疑外洩時，以 superuser 中止這個角色現有的連線：`kubectl -n <namespace> exec -i <cluster>-1 -c postgres -- psql -d trustiot -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = 'trustiot_owner'"`。migration Job（Laysi/trustiot-v2#60）下次執行時讀新值。
+
+TLS 憑證（`<cluster>-ca`、`<cluster>-server`、`<cluster>-replication`）由 operator 自動換發（效期 90 天，到期前 7 天換發），不必人工處理；服務每條新連線都重讀掛載的 CA 檔，不必重啟。CA 換發時沿用同一把私鑰，所以 CA 私鑰（`<cluster>-ca` 的 `ca.key`）外洩時自動換發沒有用，要換一把新的 CA；這個步驟還沒在叢集上驗證過，遇到時依「外洩處理」先止血並開 `security` issue，驗證後補在這裡。
+
 ### 叢集內產生的帳號
 
-Postgres（CloudNativePG）、ClickHouse、MQTT dynsec、Grafana 的帳號由叢集內產生，值不經過人。各自的 issue 補上指令（Laysi/trustiot-v2#58、Laysi/trustiot-v2#59、Laysi/trustiot-v2#84、Laysi/trustiot-v2#183）。原則：在叢集內重新產生值、更新資料庫裡的帳號、重啟使用它的服務，三步在一次維護中完成；只有懷疑外洩或人員異動時才需要輪替。
+ClickHouse、MQTT dynsec、Grafana 的帳號，與各服務自己的 Postgres 角色，由叢集內產生，值不經過人。各自的 issue 補上指令（Laysi/trustiot-v2#59、Laysi/trustiot-v2#60、Laysi/trustiot-v2#84、Laysi/trustiot-v2#183）；Postgres 的 owner 見上一節。原則：在叢集內重新產生值、更新資料庫裡的帳號、重啟使用它的服務，三步在一次維護中完成；只有懷疑外洩或人員異動時才需要輪替。
 
 ### OTA 簽章私鑰
 

@@ -220,10 +220,14 @@ describe.each(SHAPE_NAMES)("%s shape", (shape) => {
     SLOW_TEST_MS,
   );
 
-  test("services stay off until enabled: only the platform settings, the ingress, bundled ClickHouse, the collector and default deny render", () => {
+  test("services stay off until enabled: only the platform settings, the ingress, bundled Postgres and ClickHouse, the collector and default deny render", () => {
     const manifests = render(files);
     expect(manifests.map((m) => `${m.kind}/${m.metadata.name}`).sort()).toEqual(
       [
+        `ImageCatalog/${RELEASE}-postgres`,
+        `Cluster/${RELEASE}-postgres`,
+        `Database/${RELEASE}-postgres-trustiot`,
+        `NetworkPolicy/${RELEASE}-postgres`,
         `AuthorizationPolicy/${RELEASE}-ingress-cookie-check`,
         `AuthorizationPolicy/${RELEASE}-ingress-deny-internal`,
         `ConfigMap/${RELEASE}-ingress-options`,
@@ -291,9 +295,14 @@ describe("deployment shapes", () => {
     }
   });
 
-  test("external Postgres and ClickHouse are wired only in external mode, bundled ClickHouse in-cluster", () => {
+  test("external Postgres and ClickHouse are wired only in external mode, bundled ones in-cluster", () => {
     const bundled = platformConfig(render(SHAPES.onprem));
-    expect(bundled.TRUSTIOT_POSTGRES_HOST).toBeUndefined();
+    // CloudNativePG's read-write Service, whose server certificate names this host.
+    expect(bundled.TRUSTIOT_POSTGRES_HOST).toBe(`${RELEASE}-postgres-rw.${NAMESPACE}.svc`);
+    expect(bundled.TRUSTIOT_POSTGRES_PORT).toBe("5432");
+    expect(bundled.TRUSTIOT_POSTGRES_DATABASE).toBe("trustiot");
+    expect(bundled.TRUSTIOT_POSTGRES_SSLMODE).toBe("verify-full");
+    // The CA file is per service: only the services that use Postgres have it.
     expect(bundled.TRUSTIOT_POSTGRES_CA_FILE).toBeUndefined();
     expect(bundled.TRUSTIOT_CLICKHOUSE_URL).toBe(`http://${RELEASE}-clickhouse.${NAMESPACE}.svc:8123`);
     const external = platformConfig(
@@ -313,7 +322,7 @@ describe("deployment shapes", () => {
     expect(external.TRUSTIOT_POSTGRES_HOST).toBe("pg.factory.test");
     expect(external.TRUSTIOT_POSTGRES_PORT).toBe("5432");
     expect(external.TRUSTIOT_POSTGRES_SSLMODE).toBe("verify-full");
-    expect(external.TRUSTIOT_POSTGRES_CA_FILE).toBe("/etc/trustiot/postgres-ca/ca.crt");
+    expect(external.TRUSTIOT_POSTGRES_CA_FILE).toBeUndefined();
     expect(external.TRUSTIOT_CLICKHOUSE_URL).toBe("https://ch.factory.test:8443");
     // A publicly trusted ClickHouse certificate needs no CA file.
     expect(external.TRUSTIOT_CLICKHOUSE_CA_FILE).toBeUndefined();
@@ -378,30 +387,45 @@ describe("secrets reach only the services that need them", () => {
     });
   });
 
-  test("an external database CA is mounted read-only into every service", () => {
-    const manifests = render(
-      [...SHAPES.saas, SMOKE],
-      [
-        "--set",
-        "postgres.mode=external",
-        "--set",
-        "postgres.external.host=pg.saas.trustiot.test",
-        "--set",
-        "postgres.external.caSecret.name=trustiot-pg-ca",
-        "--set",
-        "postgres.external.caSecret.key=root.crt",
-      ],
-    );
-    const pod = podSpec(find(manifests, "Deployment", `${RELEASE}-smoke-echo`));
-    expect(pod.volumes).toContainEqual({
+  test("an external Postgres CA is mounted read-only into the services that use Postgres, a ClickHouse CA into every service", () => {
+    const external = [
+      "--set",
+      "postgres.mode=external",
+      "--set",
+      "postgres.external.host=pg.saas.trustiot.test",
+      "--set",
+      "postgres.external.caSecret.name=trustiot-pg-ca",
+      "--set",
+      "postgres.external.caSecret.key=root.crt",
+      "--set",
+      "clickhouse.mode=external",
+      "--set",
+      "clickhouse.external.url=https://ch.saas.trustiot.test:8443",
+      "--set",
+      "clickhouse.external.caSecret.name=trustiot-ch-ca",
+    ];
+    const manifests = render([...SHAPES.saas, SMOKE], [...external, "--set", "services.identity.enabled=true"]);
+    const postgresVolume = {
       name: "postgres-ca",
       secret: { secretName: "trustiot-pg-ca", items: [{ key: "root.crt", path: "ca.crt" }] },
-    });
-    expect(pod.containers[0]?.volumeMounts).toContainEqual({
-      name: "postgres-ca",
-      mountPath: "/etc/trustiot/postgres-ca",
-      readOnly: true,
-    });
+    };
+    const postgresMount = { name: "postgres-ca", mountPath: "/etc/trustiot/postgres-ca", readOnly: true };
+    const clickhouseMount = { name: "clickhouse-ca", mountPath: "/etc/trustiot/clickhouse-ca", readOnly: true };
+    // identity lists postgres under mesh.calls (values.yaml); the smoke service does not.
+    const identity = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`));
+    expect(identity.volumes).toContainEqual(postgresVolume);
+    expect(identity.containers[0]?.volumeMounts).toContainEqual(postgresMount);
+    expect(identity.containers[0]?.env).toContainEqual({ name: "TRUSTIOT_POSTGRES_CA_FILE", value: "/etc/trustiot/postgres-ca/ca.crt" });
+    const smoke = podSpec(find(manifests, "Deployment", `${RELEASE}-smoke-echo`));
+    expect(JSON.stringify(smoke)).not.toContain("postgres-ca");
+    expect(JSON.stringify(smoke)).not.toContain("TRUSTIOT_POSTGRES_CA_FILE");
+    for (const pod of [identity, smoke]) expect(pod.containers[0]?.volumeMounts).toContainEqual(clickhouseMount);
+    expect(platformConfig(manifests).TRUSTIOT_CLICKHOUSE_CA_FILE).toBe("/etc/trustiot/clickhouse-ca/ca.crt");
+    // Listing postgres is what gives a service the CA.
+    const listed = render([...SHAPES.saas, SMOKE], [...external, "--set-json", 'mesh.calls.smoke-echo=["postgres"]']);
+    const listedSmoke = podSpec(find(listed, "Deployment", `${RELEASE}-smoke-echo`));
+    expect(listedSmoke.volumes).toContainEqual(postgresVolume);
+    expect(listedSmoke.containers[0]?.volumeMounts).toContainEqual(postgresMount);
   });
 });
 
@@ -664,42 +688,46 @@ describe("values reference Secrets by name only and hold no secret material", ()
       "postgres.external.caSecret.name=trustiot-pg-ca",
     ];
     names.add("trustiot-pg-ca");
+    // The bundled Postgres's CA certificate, from the Secret CloudNativePG generates.
+    names.add(`${RELEASE}-postgres-ca`);
     for (const shape of SHAPE_NAMES) {
-      const manifests = render([...SHAPES[shape], SMOKE], [...enableAllServices, ...allCredentials]);
-      expect(manifests.filter((m) => m.kind === "Secret")).toEqual([]);
-      let references = 0;
-      for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
-        const pod = podSpec(deployment);
-        for (const volume of pod.volumes ?? []) {
-          const secret = volume.secret as { secretName?: string } | undefined;
-          if (!secret) continue;
-          references += 1;
-          expect(names).toContain(secret.secretName ?? "");
-        }
-        for (const env of pod.containers.flatMap((c) => c.env ?? [])) {
-          const ref = env.valueFrom?.secretKeyRef;
-          if (SECRET_LIKE.test(env.name)) {
-            // Secret-looking variables never carry a literal value.
-            expect(env.value, env.name).toBeUndefined();
-            expect(ref, env.name).toBeDefined();
+      for (const args of [[...enableAllServices, ...allCredentials], enableAllServices]) {
+        const manifests = render([...SHAPES[shape], SMOKE], args);
+        expect(manifests.filter((m) => m.kind === "Secret")).toEqual([]);
+        let references = 0;
+        for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
+          const pod = podSpec(deployment);
+          for (const volume of pod.volumes ?? []) {
+            const secret = volume.secret as { secretName?: string } | undefined;
+            if (!secret) continue;
+            references += 1;
+            expect(names).toContain(secret.secretName ?? "");
           }
-          if (!ref) continue;
-          references += 1;
-          expect(Object.keys(ref).sort()).toEqual(["key", "name"]);
-          expect(names).toContain(ref.name);
+          for (const env of pod.containers.flatMap((c) => c.env ?? [])) {
+            const ref = env.valueFrom?.secretKeyRef;
+            if (SECRET_LIKE.test(env.name)) {
+              // Secret-looking variables never carry a literal value.
+              expect(env.value, env.name).toBeUndefined();
+              expect(ref, env.name).toBeDefined();
+            }
+            if (!ref) continue;
+            references += 1;
+            expect(Object.keys(ref).sort()).toEqual(["key", "name"]);
+            expect(names).toContain(ref.name);
+          }
         }
+        expect(references).toBeGreaterThan(0);
+        // Nothing rendered, ConfigMaps included, carries secret material.
+        // The chart's own `checksum/*` pod annotations are SHA-256 digests of rendered config,
+        // which are random-looking by design.
+        const material = leaves(manifests).flatMap(({ path, value }) => {
+          const digest =
+            path.at(-2) === "annotations" && (path.at(-1) ?? "").startsWith("checksum/") && /^[0-9a-f]{64}$/.test(String(value));
+          const found = typeof value === "string" && !digest ? secretMaterial(value) : undefined;
+          return found ? [`${path.join(".")}: ${found}`] : [];
+        });
+        expect(material).toEqual([]);
       }
-      expect(references).toBeGreaterThan(0);
-      // Nothing rendered, ConfigMaps included, carries secret material.
-      // The chart's own `checksum/*` pod annotations are SHA-256 digests of rendered config,
-      // which are random-looking by design.
-      const material = leaves(manifests).flatMap(({ path, value }) => {
-        const digest =
-          path.at(-2) === "annotations" && (path.at(-1) ?? "").startsWith("checksum/") && /^[0-9a-f]{64}$/.test(String(value));
-        const found = typeof value === "string" && !digest ? secretMaterial(value) : undefined;
-        return found ? [`${path.join(".")}: ${found}`] : [];
-      });
-      expect(material).toEqual([]);
     }
   }, SLOW_TEST_MS);
 });
@@ -905,6 +933,276 @@ describe("bundled ClickHouse (decision 14)", () => {
     expect(spec.volumeClaimTemplates[0]?.spec.storageClassName).toBe("fast-ssd");
     expect(spec.template.spec.nodeSelector).toEqual({ "trustiot.io/role": "data" });
     expect(spec.template.spec.securityContext?.runAsNonRoot).toBe(true);
+  });
+});
+
+describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
+  const cluster = `${RELEASE}-postgres`;
+  type ClusterSpec = YamlMap & {
+    instances: number;
+    enablePDB: boolean;
+    enableSuperuserAccess: boolean;
+    imagePullPolicy: string;
+    imagePullSecrets?: { name: string }[];
+    imageCatalogRef: { apiGroup: string; kind: string; name: string; major: number };
+    bootstrap: { initdb: YamlMap };
+    postgresql: { shared_preload_libraries: string[]; parameters: Record<string, string>; pg_hba: string[] } & YamlMap;
+    storage: { size: string; storageClass?: string };
+    resources: { requests: Record<string, string>; limits: Record<string, string> };
+    affinity: { nodeSelector?: Record<string, string>; tolerations?: YamlMap[] };
+    inheritedMetadata: { labels: Record<string, string> };
+  };
+  type NetworkPolicyRule = { from: YamlMap[]; ports: { port: number; protocol: string }[] };
+  const clusterSpec = (manifests: Manifest[]) => find(manifests, "Cluster", cluster).spec as ClusterSpec;
+  const catalogImages = (manifests: Manifest[]) =>
+    (find(manifests, "ImageCatalog", cluster).spec as { images: { major: number; image: string }[] }).images;
+  const policyRules = (manifests: Manifest[]) => {
+    const spec = find(manifests, "NetworkPolicy", `${RELEASE}-postgres`).spec as {
+      podSelector: { matchLabels: Record<string, string> };
+      policyTypes: string[];
+      ingress: NetworkPolicyRule[];
+    };
+    return spec;
+  };
+  const manifests = render([...SHAPES.saas, SMOKE], ["--set", "services.identity.enabled=true", "--set", "services.certs.enabled=true"]);
+
+  // deploy/images/postgres/Containerfile: `FROM ghcr.io/cloudnative-pg/postgresql:<major>.<minor>-...`
+  // and `ARG AGE_VERSION=<version>`.
+  const containerfile = readFileSync(join(REPO_ROOT, "deploy/images/postgres/Containerfile"), "utf8");
+  const imageMajor = Number(containerfile.match(/^FROM ghcr\.io\/cloudnative-pg\/postgresql:(\d+)\./m)?.[1]);
+  const imageAge = containerfile.match(/^ARG AGE_VERSION=(\S+)$/m)?.[1];
+
+  test("the image catalog, the Cluster and the AGE extension match the image's PostgreSQL major and AGE version", () => {
+    expect(imageMajor).toBeGreaterThanOrEqual(18);
+    expect(imageAge).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(catalogImages(manifests)).toEqual([{ major: imageMajor, image: "localhost/trustiot-e2e/postgres:nightly" }]);
+    const spec = clusterSpec(manifests);
+    expect(spec.imageCatalogRef).toEqual({ apiGroup: "postgresql.cnpg.io", kind: "ImageCatalog", name: cluster, major: imageMajor });
+    const database = find(manifests, "Database", `${cluster}-trustiot`).spec as YamlMap;
+    expect(database).toEqual({
+      cluster: { name: cluster },
+      name: "trustiot",
+      owner: "trustiot_owner",
+      ensure: "present",
+      databaseReclaimPolicy: "retain",
+      extensions: [{ name: "age", version: imageAge }],
+    });
+    // AGE's parser hook is loaded in every session, so no role needs LOAD.
+    expect(spec.postgresql.shared_preload_libraries).toEqual(["age"]);
+  });
+
+  test("the image is the released one by default, pinned by digest when set", () => {
+    const released = render(SHAPES.onprem);
+    expect(catalogImages(released)[0]?.image).toBe(`ghcr.io/laysi/trustiot-v2/postgres:${chart.appVersion}`);
+    expect(clusterSpec(released).imagePullPolicy).toBe("IfNotPresent");
+    const digest = `sha256:${"ab".repeat(32)}`;
+    const pinned = render(SHAPES.onprem, ["--set", `postgres.bundled.image.digest=${digest}`, "--set", "postgres.bundled.image.tag=1.2.3"]);
+    expect(catalogImages(pinned)[0]?.image).toBe(`ghcr.io/laysi/trustiot-v2/postgres:1.2.3@${digest}`);
+    expect(clusterSpec(manifests).imagePullPolicy).toBe("Never");
+  });
+
+  test("one instance without superuser access, an ordinary owner, the built-in locale and the data kept on uninstall", () => {
+    const spec = clusterSpec(manifests);
+    expect(spec.instances).toBe(1);
+    expect(spec.enablePDB).toBe(false);
+    // No superuser password and no <cluster>-superuser Secret.
+    expect(spec.enableSuperuserAccess).toBe(false);
+    expect(spec.superuserSecret).toBeUndefined();
+    // initdb takes the owner's password from a Secret CloudNativePG generates; nothing runs as
+    // superuser at bootstrap besides the operator's own steps.
+    expect(spec.bootstrap.initdb).toEqual({
+      database: "trustiot",
+      owner: "trustiot_owner",
+      encoding: "UTF8",
+      localeProvider: "builtin",
+      builtinLocale: "C.UTF-8",
+    });
+    expect(spec.managed).toBeUndefined();
+    for (const kind of ["Cluster", "ImageCatalog"]) {
+      expect(find(manifests, kind, cluster).metadata.annotations?.["helm.sh/resource-policy"]).toBe("keep");
+    }
+    expect(spec.storage).toEqual({ size: "20Gi" });
+  });
+
+  test("the server refuses connections without TLS, and only sizing parameters come from values", () => {
+    const spec = clusterSpec(manifests);
+    expect(spec.postgresql.pg_hba).toEqual(["hostnossl all all all reject"]);
+    expect(spec.postgresql.parameters).toEqual({
+      shared_buffers: "128MB",
+      effective_cache_size: "384MB",
+      work_mem: "4MB",
+      maintenance_work_mem: "64MB",
+      max_connections: "100",
+    });
+    // The string form takes the same 10–1000 as the number (values.schema.json).
+    const most = clusterSpec(render(SHAPES.saas, ["--set-string", "postgres.bundled.parameters.max_connections=1000"]));
+    expect(most.postgresql.parameters.max_connections).toBe("1000");
+    // CloudNativePG manages TLS and replication itself; the chart sets no certificate of its own.
+    expect(spec.certificates).toBeUndefined();
+    expect(spec.resources).toEqual({ requests: { cpu: "100m", memory: "256Mi" }, limits: { cpu: "2", memory: "1Gi" } });
+    expect(spec.affinity.nodeSelector).toEqual({ "kubernetes.io/arch": "arm64" });
+  });
+
+  test("the Postgres pods stay outside the mesh and admit only the services that use Postgres and the operator", () => {
+    expect(clusterSpec(manifests).inheritedMetadata.labels).toEqual({ "istio.io/dataplane-mode": "none" });
+    const policy = policyRules(manifests);
+    expect(policy.podSelector.matchLabels).toEqual({ "cnpg.io/cluster": cluster, "cnpg.io/podRole": "instance" });
+    expect(policy.policyTypes).toEqual(["Ingress"]);
+    // identity lists postgres under mesh.calls; certs does not.
+    expect(policy.ingress).toEqual([
+      {
+        from: [{ podSelector: { matchLabels: { "app.kubernetes.io/name": "trustiot", "app.kubernetes.io/instance": RELEASE, "app.kubernetes.io/component": "identity" } } }],
+        ports: [{ port: 5432, protocol: "TCP" }],
+      },
+      {
+        from: [
+          {
+            namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "cnpg-system" } },
+            podSelector: { matchLabels: { "app.kubernetes.io/name": "cloudnative-pg" } },
+          },
+        ],
+        ports: [{ port: 8000, protocol: "TCP" }],
+      },
+    ]);
+    // A call to postgres adds no mesh policy: Postgres is outside the mesh.
+    expect(manifests.filter((m) => m.kind === "AuthorizationPolicy" && m.metadata.name.includes("postgres"))).toEqual([]);
+    // Without callers only the operator's rule is left, and a customer's operator can be matched.
+    const none = policyRules(
+      render(SHAPES.onprem, [
+        "--set-json",
+        "mesh.calls.identity=[]",
+        "--set",
+        "postgres.bundled.operator.namespace=operators",
+        "--set-json",
+        'postgres.bundled.operator.podLabels={"app.kubernetes.io/name":"cloudnative-pg","olm.owner":"cnpg"}',
+      ]),
+    );
+    expect(none.ingress).toEqual([
+      {
+        from: [
+          {
+            namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "operators" } },
+            podSelector: { matchLabels: { "app.kubernetes.io/name": "cloudnative-pg", "olm.owner": "cnpg" } },
+          },
+        ],
+        ports: [{ port: 8000, protocol: "TCP" }],
+      },
+    ]);
+  });
+
+  test("services that use Postgres get only the CA certificate of CloudNativePG's CA Secret; no other generated Secret is read", () => {
+    const identity = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`));
+    expect(identity.volumes).toContainEqual({
+      name: "postgres-ca",
+      secret: { secretName: `${cluster}-ca`, items: [{ key: "ca.crt", path: "ca.crt" }] },
+    });
+    expect(identity.containers[0]?.volumeMounts).toContainEqual({ name: "postgres-ca", mountPath: "/etc/trustiot/postgres-ca", readOnly: true });
+    expect(identity.containers[0]?.env).toContainEqual({ name: "TRUSTIOT_POSTGRES_CA_FILE", value: "/etc/trustiot/postgres-ca/ca.crt" });
+    for (const name of ["certs", "smoke-echo"]) {
+      const pod = JSON.stringify(podSpec(find(manifests, "Deployment", `${RELEASE}-${name}`)));
+      expect(pod).not.toContain("postgres-ca");
+      expect(pod).not.toContain("TRUSTIOT_POSTGRES_CA_FILE");
+    }
+    // The CA's private key, the server key and the owner's password stay with the operator.
+    const rendered = JSON.stringify(manifests);
+    expect(rendered).not.toContain("ca.key");
+    for (const suffix of ["server", "app", "replication", "superuser"]) expect(rendered).not.toContain(`${cluster}-${suffix}`);
+  });
+
+  test("the Cluster name stays within CloudNativePG's 50 characters for the longest release name", () => {
+    const release = `r${"x".repeat(52)}`;
+    const long = render(SHAPES.saas, ["--set", "services.identity.enabled=true"], release);
+    const clusters = long.filter((m) => m.kind === "Cluster");
+    expect(clusters).toHaveLength(1);
+    const name = clusters[0]?.metadata.name ?? "";
+    expect(name.length).toBeLessThanOrEqual(50);
+    expect(name).toEndWith("-postgres");
+    expect(find(long, "ImageCatalog", name)).toBeDefined();
+    expect((find(long, "Database", `${name}-trustiot`).spec as { cluster: { name: string } }).cluster.name).toBe(name);
+    const named = (kind: string, suffix: string) => {
+      const found = long.find((m) => m.kind === kind && m.metadata.name.endsWith(suffix));
+      if (!found) throw new Error(`no ${kind} named *${suffix}`);
+      return found;
+    };
+    const config = named("ConfigMap", "-platform").data as Record<string, string>;
+    expect(config.TRUSTIOT_POSTGRES_HOST).toBe(`${name}-rw.${NAMESPACE}.svc`);
+    const identity = podSpec(named("Deployment", "-identity"));
+    expect(identity.volumes).toContainEqual({
+      name: "postgres-ca",
+      secret: { secretName: `${name}-ca`, items: [{ key: "ca.crt", path: "ca.crt" }] },
+    });
+  });
+
+  test("long release names that start alike get different Clusters; a short one keeps its plain name", () => {
+    const clusterName = (release: string) => {
+      const clusters = render(SHAPES.saas, [], release).filter((m) => m.kind === "Cluster");
+      expect(clusters).toHaveLength(1);
+      return clusters[0]?.metadata.name ?? "";
+    };
+    // Both releases share their first 50 characters, more than any shortened prefix keeps.
+    const common = `trustiot-${"y".repeat(41)}`;
+    const [a, b] = [clusterName(`${common}-a`), clusterName(`${common}-b`)];
+    expect(a).not.toBe(b);
+    for (const name of [a, b]) {
+      expect(name.length).toBeLessThanOrEqual(50);
+      expect(name).toMatch(/^trustiot-y+-[0-9a-f]{8}-postgres$/);
+    }
+    // Names that fit stay readable and stable: the default release's Cluster is trustiot-postgres.
+    expect(clusterName(RELEASE)).toBe(`${RELEASE.includes("trustiot") ? RELEASE : `${RELEASE}-trustiot`}-postgres`);
+    const longest = `trustiot-${"z".repeat(32)}`;
+    expect(clusterName(longest)).toBe(`${longest}-postgres`);
+    expect(`${longest}-postgres`).toHaveLength(50);
+  });
+
+  test("placement, storage class and pull Secrets can be set", () => {
+    const placed = clusterSpec(
+      render(SHAPES.onprem, [
+        "--set",
+        "postgres.bundled.storage.storageClassName=fast-ssd",
+        "--set",
+        "postgres.bundled.nodeSelector.trustiot\\.io/role=data",
+        "--set-json",
+        'postgres.bundled.tolerations=[{"key":"dedicated","operator":"Equal","value":"data","effect":"NoSchedule"}]',
+        "--set-json",
+        'global.imagePullSecrets=["ghcr-pull"]',
+      ]),
+    );
+    expect(placed.storage).toEqual({ size: "20Gi", storageClass: "fast-ssd" });
+    expect(placed.affinity.nodeSelector).toEqual({ "kubernetes.io/arch": "arm64", "trustiot.io/role": "data" });
+    expect(placed.affinity.tolerations).toEqual([{ key: "dedicated", operator: "Equal", value: "data", effect: "NoSchedule" }]);
+    expect(placed.imagePullSecrets).toEqual([{ name: "ghcr-pull" }]);
+  });
+
+  test("the Postgres e2e overlay installs the bundled Postgres with the stand-in service as its only client", () => {
+    for (const shape of SHAPE_NAMES) {
+      const e2e = render([...SHAPES[shape], "tests/e2e/values-postgres-e2e.yaml"], ["--set", "services.assets.enabled=true"]);
+      expect(clusterSpec(e2e).storage).toEqual({ size: "1Gi" });
+      // No ClickHouse workload and no collector: the test needs neither their Secrets nor their memory.
+      expect(e2e.filter((m) => m.kind === "StatefulSet" || m.kind === "Deployment").map((m) => m.metadata.name)).toEqual([`${RELEASE}-assets`]);
+      const from = (policyRules(e2e).ingress[0]?.from ?? []) as { podSelector?: { matchLabels: Record<string, string> } }[];
+      expect(from.map((f) => f.podSelector?.matchLabels["app.kubernetes.io/component"])).toEqual(["assets"]);
+      const assets = podSpec(find(e2e, "Deployment", `${RELEASE}-assets`));
+      expect(assets.containers[0]?.env).toContainEqual({ name: "TRUSTIOT_POSTGRES_CA_FILE", value: "/etc/trustiot/postgres-ca/ca.crt" });
+    }
+  });
+
+  test("external mode and the e2e overlays render no Postgres objects", () => {
+    const external = render(SHAPES.saas, [
+      "--set",
+      "postgres.mode=external",
+      "--set",
+      "postgres.external.host=pg.saas.trustiot.test",
+      "--set",
+      "postgres.external.caSecret.name=trustiot-pg-ca",
+    ]);
+    const e2e = SHAPE_NAMES.flatMap((shape) => [
+      render([...SHAPES[shape], E2E_VALUES], ["--set", "ingress.direct.tlsSecret=trustiot-ingress-tls"]),
+      render([...SHAPES[shape], "tests/e2e/values-otel-e2e.yaml"]),
+    ]);
+    for (const rendered of [external, ...e2e]) {
+      expect(rendered.filter((m) => m.apiVersion.startsWith("postgresql.cnpg.io/"))).toEqual([]);
+      expect(rendered.filter((m) => m.metadata.name === `${RELEASE}-postgres`)).toEqual([]);
+    }
   });
 });
 
@@ -2447,6 +2745,42 @@ describe("values validation rejects unsafe or incomplete settings", () => {
     ["IP address as the trust domain", saas, ["--set", "mesh.trustDomain=10.0.0.1"], /\/mesh\/trustDomain/],
     ["callee listed twice", saas, ["--set-json", 'mesh.calls={"smoke-echo":["smoke-echo","smoke-echo"]}'], /\/mesh\/calls/],
     ["callees that are not a list", saas, ["--set-json", 'mesh.calls={"smoke-echo":"smoke-echo"}'], /\/mesh\/calls/],
+    ["bundled Postgres without a volume size", saas, ["--set", "postgres.bundled.storage.size="], /\/postgres\/bundled\/storage\/size/],
+    ["a PostgreSQL setting other than sizing", onprem, ["--set", "postgres.bundled.parameters.ssl=off"], /\/postgres\/bundled\/parameters/],
+    [
+      "a PostgreSQL authentication setting",
+      saas,
+      ["--set", "postgres.bundled.parameters.password_encryption=md5"],
+      /\/postgres\/bundled\/parameters/,
+    ],
+    [
+      "a PostgreSQL memory setting without a unit",
+      onprem,
+      ["--set-string", "postgres.bundled.parameters.shared_buffers=128"],
+      /\/postgres\/bundled\/parameters\/shared_buffers/,
+    ],
+    ["too many Postgres connections", saas, ["--set", "postgres.bundled.parameters.max_connections=5000"], /\/postgres\/bundled\/parameters\/max_connections/],
+    [
+      "too many Postgres connections as a string",
+      saas,
+      ["--set-string", "postgres.bundled.parameters.max_connections=1001"],
+      /\/postgres\/bundled\/parameters\/max_connections/,
+    ],
+    [
+      "too few Postgres connections as a string",
+      saas,
+      ["--set-string", "postgres.bundled.parameters.max_connections=9"],
+      /\/postgres\/bundled\/parameters\/max_connections/,
+    ],
+    ["Postgres without a memory limit", saas, ["--set", "postgres.bundled.resources.limits.memory=null"], /\/postgres\/bundled\/resources\/limits/],
+    [
+      "the CloudNativePG operator without pod labels",
+      onprem,
+      // Maps merge, so remove the default label with null.
+      ["--set", "postgres.bundled.operator.podLabels.app\\.kubernetes\\.io/name=null"],
+      /\/postgres\/bundled\/operator\/podLabels/,
+    ],
+    ["an unknown bundled Postgres field", saas, ["--set", "postgres.bundled.superuser=true"], /superuser/],
   ];
 
   test.each(cases)("%s", (_name, files, args, expected) => {
@@ -2577,6 +2911,24 @@ describe("the templates keep the secret and env boundaries without schema valida
         "observability.collector.forward.authHeader.name=Authorization",
       ],
       /observability\.collector\.forward\.authHeader\.valueSecret\.name is required/,
+    ],
+    // CloudNativePG's Secrets of the bundled Postgres: the owner's password, and the CA's private
+    // key next to the certificate the chart mounts.
+    ...["app/password", "ca/ca.key", "ca/ca.crt", "server/tls.key", "superuser/password"].map(
+      (ref): [string, string[], RegExp] => {
+        const [suffix, key] = ref.split("/");
+        const secret = `${RELEASE}-postgres-${suffix}`;
+        return [
+          `env reading the bundled Postgres's Secret ${secret}/${key}`,
+          ["--set-json", `services.smoke-echo.env=[{"name":"DB_SETTING","valueFrom":{"secretKeyRef":{"name":"${secret}","key":"${key}"}}}]`],
+          new RegExp(`services\\.smoke-echo: env reads Secret ${secret}, which an in-cluster component created for itself`),
+        ];
+      },
+    ),
+    [
+      "a service named after the bundled Postgres",
+      ["--set", "services.postgres.enabled=true"],
+      /services\.postgres: the name belongs to an in-cluster component/,
     ],
   ];
 
@@ -2757,7 +3109,7 @@ describe("documentation and packaging", () => {
   // Leaf paths of values.yaml; services.<entry> collapses to services.<name>, and
   // Kubernetes-native objects under serviceDefaults count as one field.
   function documentedPaths(value: unknown, path: string): string[] {
-    const prefix = ["serviceDefaults.", "clickhouse.bundled.", "observability.collector."].find((p) =>
+    const prefix = ["serviceDefaults.", "clickhouse.bundled.", "postgres.bundled.", "observability.collector."].find((p) =>
       path.startsWith(p),
     );
     const relative = prefix ? path.slice(prefix.length) : "";

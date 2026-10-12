@@ -76,6 +76,8 @@ flowchart TB
 
 入口的路徑（2026-10-10 定案，Laysi/trustiot-v2#62）：入口有三個主機名稱，`hosts.app`（SPA 與 API）、`hosts.gateway`（閘道器）與 `hosts.ota`。不需要 cookie 的例外路徑只有四個，都是完整路徑比對，主機與服務固定：`hosts.app` 的 `/auth/login`（登入）與 `/healthz`（健康檢查）交給身分服務，`hosts.gateway` 的 `/certs/renew`（憑證換發）交給憑證服務、`/mqtt`（MQTT WebSocket）交給 MQTT 轉接服務；同一個路徑在別的主機照樣要 cookie。其他路徑都要 cookie，各服務以 chart 的 `ingress.routes` 加自己的路由；`/internal` 開頭的路徑一律拒絕，mesh 先解碼 `%2F` 並合併連續斜線再比對，所以 `//internal`、`/%2finternal` 也被拒絕（Laysi/trustiot-v2#255）。例外路徑的主機帶埠號（例如 `gw…:443`）也算例外。身分服務的 ext_authz 端點是 `/internal/ext-authz` 加上原始路徑，入口只把 cookie 交給它，逾時 0.5 秒；身分服務停機、出錯或逾時時入口回 503，session 無效時回身分服務的 401。細節與 chart 欄位見 [deploy/chart/README.md](../../deploy/chart/README.md) 的「入口 gateway」，Istio 的安裝與 provider 設定見 [deploy/istio/README.md](../../deploy/istio/README.md)。
 
+平台元件與 chart 的分界（2026-10-12，Laysi/trustiot-v2#58，決策 5 的補充）：叢集層級的東西（Istio ambient、Gateway API CRD、CloudNativePG operator 與它的 CRD）是平台元件，每個叢集在裝 chart 之前各裝一次，版本固定在 `deploy/istio` 與 `deploy/cloudnative-pg`；chart 只產生 namespace 內的物件。Postgres（含 AGE）在兩種型態都是 chart 部署的 CloudNativePG Cluster（`postgres.mode: bundled`，清單 M8，之後的備份與副本由同一個 operator 加上），服務以 verify-full 連 `<cluster>-rw` 這個 Service、只信任 operator 產生的 CA；客戶自己維運 Postgres 時改成 `external`，只差在 values（可搬移規則 2）。細節見 chart README 的「叢集內的 Postgres」。
+
 可搬移的四條規則：
 
 1. 閘道器連線的主機、OTA 下載網址一律用我們自己的網域，搬遷時只改 DNS。
