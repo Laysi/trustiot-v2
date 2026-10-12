@@ -73,7 +73,7 @@ platform role read 3 events (tenant A, tenant B, platform-wide); each handler ra
 | 既有的 outbox 有序、冪等遞送測試全部仍通過，包含 Laysi/trustiot-v2#54 獨立驗證新增的測試 | 通過 | `cargo test -p outbox` 全部通過，crash、delivery、tenancy 重複 3 次通過。Laysi/trustiot-v2#54 的獨立驗證（PR Laysi/trustiot-v2#274）沒有新增進 `cargo test` 的測試，它的 harness 以 `.txt` 存在 data 目錄、需要數十分鐘的多行程混沌執行，本次沒有重跑；保證成立的理由見 outbox README「交易邊界與保證」：交易的切法與每筆交易內的語句順序不變，只換了 pool 與租戶設定 |
 | README 已更新；測試證據存到 `docs/test-reports/` | 通過 | `crates/outbox/README.md`、`crates/service-kit/README.md`、`tools/sql-check/README.md`、`docs/architecture/decisions.md` 決策 29；本報告 |
 
-待測：Laysi/trustiot-v2#54 的混沌 harness 在新連線方式（TLS、四個角色）下的長時間執行。harness 目前直接用一個非 TLS 的角色連線，要先改寫連線方式；本次以上述 `cargo test` 的併發、當機、重播測試與交易邊界的推論代替。
+Laysi/trustiot-v2#54 的混沌 harness 在新連線方式（TLS、四個角色）下的長時間執行：本報告當時以上述 `cargo test` 的併發、當機、重播測試與交易邊界的推論代替，2026-10-12 已補測，見 [2026-10-12-271-chaos](2026-10-12-271-chaos.md)（改寫後的 harness 在 main `b4aae40` 上跑兩次 20 分鐘，順序違反、遺失、重複處理、租戶不符皆為 0）。
 
 ## 5. 獨立驗證的發現與修正（2026-10-11）
 
