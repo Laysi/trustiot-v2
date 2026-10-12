@@ -1,0 +1,213 @@
+######## round 1, x64 (linux/amd64 container, native): the whole release flow
+== 2026-10-12T06:46:30Z (+0s) [x64] host: x86_64, page size 4096, 20 CPUs
+== 2026-10-12T06:46:30Z (+0s) [x64] apt: podman skopeo and the build basics the runner image has
+== 2026-10-12T06:47:32Z (+62s) [x64] rustup 1.29.1 (x86_64-unknown-linux-gnu), checked against the pinned SHA-256
+== 2026-10-12T06:47:34Z (+64s) [x64] proto 0.60.2 (x86_64-unknown-linux-gnu), the archive and SHA-256 of .github/actions/setup-proto
+== 2026-10-12T06:47:36Z (+66s) [x64] proto install: the tools release.yml's jobs list (plan: bun helm; build: bun zig cargo-zigbuild cargo-auditable syft; publish, verify: bun cosign helm)
+label: x64
+uname -m: x86_64
+podman version 4.9.3
+skopeo version 1.13.3
+rustup 1.29.1 (d95a37b6a 2026-08-13)
+proto 0.60.2
+== 2026-10-12T06:49:34Z (+184s) [x64] plan job: plan.ts --dry-run (helm lint runs here)
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.1 → version 0.0.0-rc.1 (prerelease), commit 003e6274c194d45cae73240af868be9173017fb2
+[release:plan] image 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 (Rust package identity)
+[release:plan] image 127.0.0.1:5168/laysi/trustiot-v2/postgres:0.0.0-rc.1 (deploy/images/postgres)
+[release:plan] image 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 (Rust package release-selftest)
+[release:plan] chart 127.0.0.1:5168/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1
+[release:plan] first release: the notes list every commit
+== 2026-10-12T06:49:34Z (+184s) [x64] plan job: release notes (Laysi/release-notes-action ad6ed96 notes.sh, no model configured)
+== 2026-10-12T06:49:34Z (+184s) [x64] build job: build.ts
+[release:build] cross-compiling identity, release-selftest for aarch64-unknown-linux-musl
+    Finished `release` profile [optimized] target(s) in 43.58s
+[release:build] building 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 for linux/arm64
+[release:build] 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 → sha256:8080c5f5ea6154d6d15375ddbc213b1bddf694b7994448e07725ec3d8b55ef21, SBOM SPDX-2.3 with 213 packages
+[release:build] building 127.0.0.1:5168/laysi/trustiot-v2/postgres:0.0.0-rc.1 for linux/arm64
+[2/3] STEP 11/15: RUN set -eu;     if [ "${TARGETARCH}" != arm64 ]; then       echo "this image is built for linux/arm64 only, not ${TARGETARCH}" >&2; exit 1;     fi;     target_version="$(awk '/^Package: /{p=$2} /^Version: /{if (p=="postgresql-18") print $2}' /tmp/target-dpkg-status)";     if [ "${target_version}" != "${PG_PACKAGE_VERSION}" ]; then       echo "the base image has postgresql-18 ${t …
+[release:build] 127.0.0.1:5168/laysi/trustiot-v2/postgres:0.0.0-rc.1 → sha256:040a7fad94dfa3bf8230f884ac588631efaaa8ce274e9c2af04e767a96759b5a, SBOM SPDX-2.3 with 142 packages
+[release:build] building 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 for linux/arm64
+[release:build] 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 → sha256:43f2cb6ad0d5d690a8f7b891ee26c1006beb2cbbe5bc6f1973ce38bdee88a0dd, SBOM SPDX-2.3 with 13 packages
+== 2026-10-12T06:52:05Z (+335s) [x64] build job done
+== 2026-10-12T06:52:05Z (+335s) [x64] publish job: publish.ts in local test mode
+[release:publish] pushing 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 → sha256:8080c5f5ea6154d6d15375ddbc213b1bddf694b7994448e07725ec3d8b55ef21: signed, SBOM attested
+[release:publish] pushing 127.0.0.1:5168/laysi/trustiot-v2/postgres:0.0.0-rc.1
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/postgres:0.0.0-rc.1 → sha256:040a7fad94dfa3bf8230f884ac588631efaaa8ce274e9c2af04e767a96759b5a: signed, SBOM attested
+[release:publish] pushing 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 → sha256:43f2cb6ad0d5d690a8f7b891ee26c1006beb2cbbe5bc6f1973ce38bdee88a0dd: signed, SBOM attested
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1 → sha256:536de43f9275c19fc8a47de5f9c473fa299aa120bf5c4c52b4d983c05cdee76c: signed
+[release:publish] local test: no GitHub Release; its body is in /work/out/release-body.md
+[release:publish] released v0.0.0-rc.1
+== 2026-10-12T06:52:09Z (+339s) [x64] publish job: re-run (same digests, nothing pushed again)
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 is already sha256:8080c5f5ea6154d6d15375ddbc213b1bddf694b7994448e07725ec3d8b55ef21; not pushing it again
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 → sha256:8080c5f5ea6154d6d15375ddbc213b1bddf694b7994448e07725ec3d8b55ef21: signed, SBOM attested
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/postgres:0.0.0-rc.1 is already sha256:040a7fad94dfa3bf8230f884ac588631efaaa8ce274e9c2af04e767a96759b5a; not pushing it again
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/postgres:0.0.0-rc.1 → sha256:040a7fad94dfa3bf8230f884ac588631efaaa8ce274e9c2af04e767a96759b5a: signed, SBOM attested
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 is already sha256:43f2cb6ad0d5d690a8f7b891ee26c1006beb2cbbe5bc6f1973ce38bdee88a0dd; not pushing it again
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 → sha256:43f2cb6ad0d5d690a8f7b891ee26c1006beb2cbbe5bc6f1973ce38bdee88a0dd: signed, SBOM attested
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1 already holds this chart (sha256:536de43f9275c19fc8a47de5f9c473fa299aa120bf5c4c52b4d983c05cdee76c); not pushing it again
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1 → sha256:536de43f9275c19fc8a47de5f9c473fa299aa120bf5c4c52b4d983c05cdee76c: signed
+[release:publish] local test: no GitHub Release; its body is in /work/out/release-body.md
+[release:publish] released v0.0.0-rc.1
+== 2026-10-12T06:52:11Z (+341s) [x64] verify job: verify.ts in local test mode
+[release:verify] 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1: sha256:8080c5f5ea6154d6d15375ddbc213b1bddf694b7994448e07725ec3d8b55ef21, signature and SBOM attestation verified (SPDX-2.3，213 個套件)
+[release:verify] 127.0.0.1:5168/laysi/trustiot-v2/postgres:0.0.0-rc.1: sha256:040a7fad94dfa3bf8230f884ac588631efaaa8ce274e9c2af04e767a96759b5a, signature and SBOM attestation verified (SPDX-2.3，142 個套件)
+[release:verify] 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1: sha256:43f2cb6ad0d5d690a8f7b891ee26c1006beb2cbbe5bc6f1973ce38bdee88a0dd, signature and SBOM attestation verified (SPDX-2.3，13 個套件)
+[release:verify] 127.0.0.1:5168/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1: sha256:536de43f9275c19fc8a47de5f9c473fa299aa120bf5c4c52b4d983c05cdee76c, signature verified, version and appVersion 0.0.0-rc.1
+[release:verify] verified 3 image(s) and the chart
+== 2026-10-12T06:52:12Z (+342s) [x64] bun test scripts/release on this architecture
+ 128 pass
+ 0 fail
+== 2026-10-12T06:52:13Z (+343s) [x64] done
+
+######## round 1, arm64 (linux/arm64 container under qemu-user): stopped at the postgres image's first RUN (chroot isolation)
+== 2026-10-12T06:52:16Z (+0s) [arm64] host: aarch64, page size 4096, 20 CPUs
+== 2026-10-12T06:52:16Z (+0s) [arm64] apt: podman skopeo and the build basics the runner image has
+== 2026-10-12T06:55:57Z (+221s) [arm64] rustup 1.29.1 (aarch64-unknown-linux-gnu), checked against the pinned SHA-256
+== 2026-10-12T06:56:00Z (+224s) [arm64] proto 0.60.2 (aarch64-unknown-linux-gnu), the archive and SHA-256 of .github/actions/setup-proto
+== 2026-10-12T06:56:26Z (+250s) [arm64] proto install: the tools release.yml's jobs list (plan: bun helm; build: bun zig cargo-zigbuild cargo-auditable syft; publish, verify: bun cosign helm)
+label: arm64
+uname -m: aarch64
+podman version 4.9.3
+skopeo version 1.13.3
+rustup 1.29.1 (d95a37b6a 2026-08-13)
+proto 0.60.2
+== 2026-10-12T07:00:38Z (+502s) [arm64] plan job: plan.ts --dry-run (helm lint runs here)
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.1 → version 0.0.0-rc.1 (prerelease), commit 003e6274c194d45cae73240af868be9173017fb2
+[release:plan] image 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 (Rust package identity)
+[release:plan] image 127.0.0.1:5168/laysi/trustiot-v2/postgres:0.0.0-rc.1 (deploy/images/postgres)
+[release:plan] image 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 (Rust package release-selftest)
+[release:plan] chart 127.0.0.1:5168/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1
+[release:plan] first release: the notes list every commit
+== 2026-10-12T07:00:43Z (+507s) [arm64] plan job: release notes (Laysi/release-notes-action ad6ed96 notes.sh, no model configured)
+== 2026-10-12T07:00:43Z (+507s) [arm64] build job: build.ts
+[release:build] cross-compiling identity, release-selftest for aarch64-unknown-linux-musl
+    Finished `release` profile [optimized] target(s) in 21m 44s
+[release:build] building 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 for linux/arm64
+[release:build] 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 → sha256:a2fe0c510c4f78476e09419fa2c26cfd847de75f97c531a80131813a2954e97c, SBOM SPDX-2.3 with 213 packages
+[release:build] building 127.0.0.1:5168/laysi/trustiot-v2/postgres:0.0.0-rc.1 for linux/arm64
+[2/3] STEP 11/15: RUN set -eu;     if [ "${TARGETARCH}" != arm64 ]; then       echo "this image is built for linux/arm64 only, not ${TARGETARCH}" >&2; exit 1;     fi;     target_version="$(awk '/^Package: /{p=$2} /^Version: /{if (p=="postgresql-18") print $2}' /tmp/target-dpkg-status)";     if [ "${target_version}" != "${PG_PACKAGE_VERSION}" ]; then       echo "the base image has postgresql-18 ${t …
+Error during reexec(...): No such file or directory
+Error: building at STEP "RUN set -eu;     if [ "${TARGETARCH}" != arm64 ]; then       echo "this image is built for linux/arm64 only, not ${TARGETARCH}" >&2; exit 1;     fi;     target_version="$(awk '/^Package: /{p=$2} /^Version: /{if (p=="postgresql-18") print $2}' /tmp/target-dpkg-status)";     if [ "${target_version}" != "${PG_PACKAGE_VERSION}" ]; then       echo "the base image has postgresql …
+[release:build] `podman build` exited with status 1; see its output above
+
+######## round 2, arm64 again on round 1's clone and target directory, RUN with crun: postgres failed again, the flow went on without it
+== 2026-10-12T07:36:55Z (+0s) [arm64] host: aarch64, page size 4096, 20 CPUs
+== 2026-10-12T07:36:55Z (+0s) [arm64] apt: podman skopeo and the build basics the runner image has
+== 2026-10-12T07:40:43Z (+228s) [arm64] rustup 1.29.1 (aarch64-unknown-linux-gnu), checked against the pinned SHA-256
+== 2026-10-12T07:40:47Z (+232s) [arm64] proto 0.60.2 (aarch64-unknown-linux-gnu), the archive and SHA-256 of .github/actions/setup-proto
+== 2026-10-12T07:40:52Z (+237s) [arm64] proto install: the tools release.yml's jobs list (plan: bun helm; build: bun zig cargo-zigbuild cargo-auditable syft; publish, verify: bun cosign helm)
+label: arm64
+uname -m: aarch64
+podman version 4.9.3
+skopeo version 1.13.3
+rustup 1.29.1 (d95a37b6a 2026-08-13)
+proto 0.60.2
+== 2026-10-12T07:43:12Z (+377s) [arm64] plan job: plan.ts --dry-run (helm lint runs here)
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.1 → version 0.0.0-rc.1 (prerelease), commit 003e6274c194d45cae73240af868be9173017fb2
+[release:plan] image 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 (Rust package identity)
+[release:plan] image 127.0.0.1:5168/laysi/trustiot-v2/postgres:0.0.0-rc.1 (deploy/images/postgres)
+[release:plan] image 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 (Rust package release-selftest)
+[release:plan] chart 127.0.0.1:5168/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1
+[release:plan] first release: the notes list every commit
+== 2026-10-12T07:43:17Z (+382s) [arm64] plan job: release notes (Laysi/release-notes-action ad6ed96 notes.sh, no model configured)
+== 2026-10-12T07:43:17Z (+382s) [arm64] build job: build.ts
+[release:build] cross-compiling identity, release-selftest for aarch64-unknown-linux-musl
+    Finished `release` profile [optimized] target(s) in 10.19s
+[release:build] building 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 for linux/arm64
+[release:build] 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 → sha256:a2fe0c510c4f78476e09419fa2c26cfd847de75f97c531a80131813a2954e97c, SBOM SPDX-2.3 with 213 packages
+[release:build] building 127.0.0.1:5168/laysi/trustiot-v2/postgres:0.0.0-rc.1 for linux/arm64
+[2/3] STEP 11/15: RUN set -eu;     if [ "${TARGETARCH}" != arm64 ]; then       echo "this image is built for linux/arm64 only, not ${TARGETARCH}" >&2; exit 1;     fi;     target_version="$(awk '/^Package: /{p=$2} /^Version: /{if (p=="postgresql-18") print $2}' /tmp/target-dpkg-status)";     if [ "${target_version}" != "${PG_PACKAGE_VERSION}" ]; then       echo "the base image has postgresql-18 ${t …
+Error: building at STEP "RUN set -eu;     if [ "${TARGETARCH}" != arm64 ]; then       echo "this image is built for linux/arm64 only, not ${TARGETARCH}" >&2; exit 1;     fi;     target_version="$(awk '/^Package: /{p=$2} /^Version: /{if (p=="postgresql-18") print $2}' /tmp/target-dpkg-status)";     if [ "${target_version}" != "${PG_PACKAGE_VERSION}" ]; then       echo "the base image has postgresql …
+[release:build] `podman build` exited with status 1; see its output above
+== 2026-10-12T07:44:58Z (+483s) [arm64] build job FAILED with the postgres image; building the plan without it so the other jobs still run
+[release:build] cross-compiling identity, release-selftest for aarch64-unknown-linux-musl
+    Finished `release` profile [optimized] target(s) in 1.14s
+[release:build] building 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 for linux/arm64
+[release:build] 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 → sha256:a2fe0c510c4f78476e09419fa2c26cfd847de75f97c531a80131813a2954e97c, SBOM SPDX-2.3 with 213 packages
+[release:build] building 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 for linux/arm64
+[release:build] 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 → sha256:43f2cb6ad0d5d690a8f7b891ee26c1006beb2cbbe5bc6f1973ce38bdee88a0dd, SBOM SPDX-2.3 with 13 packages
+== 2026-10-12T07:45:48Z (+533s) [arm64] build job done
+== 2026-10-12T07:45:49Z (+534s) [arm64] publish job: publish.ts in local test mode
+[release:publish] pushing 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 → sha256:a2fe0c510c4f78476e09419fa2c26cfd847de75f97c531a80131813a2954e97c: signed, SBOM attested
+[release:publish] pushing 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 → sha256:43f2cb6ad0d5d690a8f7b891ee26c1006beb2cbbe5bc6f1973ce38bdee88a0dd: signed, SBOM attested
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1 → sha256:536de43f9275c19fc8a47de5f9c473fa299aa120bf5c4c52b4d983c05cdee76c: signed
+[release:publish] local test: no GitHub Release; its body is in /work/out/release-body.md
+[release:publish] released v0.0.0-rc.1
+== 2026-10-12T07:46:09Z (+554s) [arm64] publish job: re-run (same digests, nothing pushed again)
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 is already sha256:a2fe0c510c4f78476e09419fa2c26cfd847de75f97c531a80131813a2954e97c; not pushing it again
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 → sha256:a2fe0c510c4f78476e09419fa2c26cfd847de75f97c531a80131813a2954e97c: signed, SBOM attested
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 is already sha256:43f2cb6ad0d5d690a8f7b891ee26c1006beb2cbbe5bc6f1973ce38bdee88a0dd; not pushing it again
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 → sha256:43f2cb6ad0d5d690a8f7b891ee26c1006beb2cbbe5bc6f1973ce38bdee88a0dd: signed, SBOM attested
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1 already holds this chart (sha256:536de43f9275c19fc8a47de5f9c473fa299aa120bf5c4c52b4d983c05cdee76c); not pushing it again
+[release:publish] 127.0.0.1:5168/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1 → sha256:536de43f9275c19fc8a47de5f9c473fa299aa120bf5c4c52b4d983c05cdee76c: signed
+[release:publish] local test: no GitHub Release; its body is in /work/out/release-body.md
+[release:publish] released v0.0.0-rc.1
+== 2026-10-12T07:46:23Z (+568s) [arm64] verify job: verify.ts in local test mode
+[release:verify] 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1: sha256:a2fe0c510c4f78476e09419fa2c26cfd847de75f97c531a80131813a2954e97c, signature and SBOM attestation verified (SPDX-2.3，213 個套件)
+[release:verify] 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1: sha256:43f2cb6ad0d5d690a8f7b891ee26c1006beb2cbbe5bc6f1973ce38bdee88a0dd, signature and SBOM attestation verified (SPDX-2.3，13 個套件)
+[release:verify] 127.0.0.1:5168/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1: sha256:536de43f9275c19fc8a47de5f9c473fa299aa120bf5c4c52b4d983c05cdee76c, signature verified, version and appVersion 0.0.0-rc.1
+[release:verify] verified 2 image(s) and the chart
+== 2026-10-12T07:46:36Z (+581s) [arm64] bun test scripts/release on this architecture
+ 128 pass
+ 0 fail
+== 2026-10-12T07:46:50Z (+595s) [arm64] run the published release-selftest image on arm64 (no emulator flag; this is the host architecture)
+Error: OCI runtime error: crun: Failed to re-execute libcrun via memory file descriptor
+
+######## round 2, x64b: Cargo rebuild in a fresh clone
+== 2026-10-12T07:31:37Z (+0s) [x64b] host: x86_64, page size 4096, 20 CPUs
+== 2026-10-12T07:31:37Z (+0s) [x64b] apt: podman skopeo and the build basics the runner image has
+== 2026-10-12T07:33:14Z (+97s) [x64b] rustup 1.29.1 (x86_64-unknown-linux-gnu), checked against the pinned SHA-256
+== 2026-10-12T07:33:16Z (+99s) [x64b] proto 0.60.2 (x86_64-unknown-linux-gnu), the archive and SHA-256 of .github/actions/setup-proto
+== 2026-10-12T07:33:39Z (+122s) [x64b] proto install: the tools release.yml's jobs list (plan: bun helm; build: bun zig cargo-zigbuild cargo-auditable syft; publish, verify: bun cosign helm)
+label: x64b
+uname -m: x86_64
+podman version 4.9.3
+skopeo version 1.13.3
+rustup 1.29.1 (d95a37b6a 2026-08-13)
+proto 0.60.2
+== 2026-10-12T07:36:05Z (+268s) [x64b] rebuild: plan.ts, then only the Cargo command of build.ts (rust-build.ts) in this fresh clone
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.1 → version 0.0.0-rc.1 (prerelease), commit 003e6274c194d45cae73240af868be9173017fb2
+[release:plan] image 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 (Rust package identity)
+[release:plan] image 127.0.0.1:5168/laysi/trustiot-v2/postgres:0.0.0-rc.1 (deploy/images/postgres)
+[release:plan] image 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 (Rust package release-selftest)
+[release:plan] chart 127.0.0.1:5168/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1
+[release:plan] first release: the notes list every commit
+    Finished `release` profile [optimized] target(s) in 43.75s
+== 2026-10-12T07:36:54Z (+317s) [x64b] done
+
+######## round 3, arm64b: Cargo rebuild in a fresh clone
+== 2026-10-12T07:59:49Z (+0s) [arm64b] host: aarch64, page size 4096, 20 CPUs
+== 2026-10-12T07:59:49Z (+0s) [arm64b] apt: podman skopeo and the build basics the runner image has
+== 2026-10-12T08:03:33Z (+224s) [arm64b] rustup 1.29.1 (aarch64-unknown-linux-gnu), checked against the pinned SHA-256
+== 2026-10-12T08:03:36Z (+227s) [arm64b] proto 0.60.2 (aarch64-unknown-linux-gnu), the archive and SHA-256 of .github/actions/setup-proto
+== 2026-10-12T08:03:41Z (+232s) [arm64b] proto install: the tools release.yml's jobs list (plan: bun helm; build: bun zig cargo-zigbuild cargo-auditable syft; publish, verify: bun cosign helm)
+label: arm64b
+uname -m: aarch64
+podman version 4.9.3
+skopeo version 1.13.3
+rustup 1.29.1 (d95a37b6a 2026-08-13)
+proto 0.60.2
+== 2026-10-12T08:05:43Z (+354s) [arm64b] rebuild: plan.ts, then only the Cargo command of build.ts (rust-build.ts) in this fresh clone
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.1 → version 0.0.0-rc.1 (prerelease), commit 003e6274c194d45cae73240af868be9173017fb2
+[release:plan] image 127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1 (Rust package identity)
+[release:plan] image 127.0.0.1:5168/laysi/trustiot-v2/postgres:0.0.0-rc.1 (deploy/images/postgres)
+[release:plan] image 127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1 (Rust package release-selftest)
+[release:plan] chart 127.0.0.1:5168/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1
+[release:plan] first release: the notes list every commit
+    Finished `release` profile [optimized] target(s) in 21m 04s
+== 2026-10-12T08:27:12Z (+1643s) [arm64b] done
+

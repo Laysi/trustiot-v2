@@ -1,0 +1,152 @@
+== elfdiff identity: x64 against x64b
+sizes 6376544 / 6376544
+same .rodata                  759224 / 759224
+same .gcc_except_table        251144 / 251144
+same .eh_frame_hdr            68388 / 68388
+same .eh_frame                521656 / 521656
+same .text                    4576796 / 4576796
+same .tdata                   240 / 240
+same .tbss                    476 / 476
+same .data.rel.ro             176112 / 176112
+same .init_array              16 / 16
+same .got                     2736 / 2736
+same .relro_padding           640 / 640
+same .data                    11376 / 11376
+same .bss                     38288 / 38288
+same .comment                 102 / 102
+same .dep-v0                  3377 / 3377
+same .shstrtab                153 / 153
+strings only in a: 0, only in b: 0
+count "x86_64": 0 / 0
+count "aarch64-unknown-linux-gnu": 0 / 0
+count "x86_64-unknown-linux-gnu": 0 / 0
+count "/root/": 0 / 0
+count "/work/": 0 / 0
+== elfdiff identity: arm64 against arm64b
+sizes 6378240 / 6378240
+same .rodata                  759224 / 759224
+same .gcc_except_table        251160 / 251160
+same .eh_frame_hdr            68436 / 68436
+same .eh_frame                522020 / 522020
+same .text                    4578012 / 4578012
+same .tdata                   240 / 240
+same .tbss                    476 / 476
+same .data.rel.ro             176144 / 176144
+same .init_array              16 / 16
+same .got                     2736 / 2736
+same .relro_padding           3040 / 3040
+same .data                    11376 / 11376
+same .bss                     38288 / 38288
+same .comment                 102 / 102
+same .dep-v0                  3377 / 3377
+same .shstrtab                153 / 153
+strings only in a: 0, only in b: 0
+count "x86_64": 0 / 0
+count "aarch64-unknown-linux-gnu": 0 / 0
+count "x86_64-unknown-linux-gnu": 0 / 0
+count "/root/": 0 / 0
+count "/work/": 0 / 0
+== elfdiff identity: x64 against arm64
+sizes 6376544 / 6378240
+DIFF .rodata                  759224 / 759224
+DIFF .gcc_except_table        251144 / 251160
+DIFF .eh_frame_hdr            68388 / 68436
+DIFF .eh_frame                521656 / 522020
+DIFF .text                    4576796 / 4578012
+same .tdata                   240 / 240
+same .tbss                    476 / 476
+DIFF .data.rel.ro             176112 / 176144
+DIFF .init_array              16 / 16
+DIFF .got                     2736 / 2736
+same .relro_padding           640 / 3040
+DIFF .data                    11376 / 11376
+same .bss                     38288 / 38288
+same .comment                 102 / 102
+same .dep-v0                  3377 / 3377
+same .shstrtab                153 / 153
+strings only in a: 54, only in b: 55
+  a: postgres_sslmodev
+  a: modnarodsetybdetconnection reset
+  a: sInvalidAuthoritycontent-encodingU
+  a: {invalid syntax}RSA_PKCS1_SHA384
+  a: 7t!1InputOutputError
+  a: CapacityOverflow
+  a: IeWeKeyUpdateRequest
+  a: InvalidCharacter
+  a: AddrNotAvailable
+  a: MAC tag mismatchj
+  a: InvalidKeyUpdateR(
+  a: www-authenticateInconsistentKeysx
+  a: }0123456789abcdefO
+  a: OwnedRevokedCert
+  a: G@reqwest::connectshouldn't retry!
+  a: invalid header nameinvalid header valueinvalid new lineinvalid response statusinvalid tokentoo many headersinvalid HTTP versionBodypoisoned lock: another task f
+  a: !attempt to join into collection with len > usize::MAX/internal/ext-authzstream did not contain valid UTF-8internal error: entered unreachable codeVec is sized 
+  a: /00000000-0000-0000-0000-000000000000the database connections are opencannot keep the database connections open; not readyEdDSAinternal-identity+jwtsignature op
+  a: }assertion failed: new_left_len <= CAPACITYheader_read_timeoutcore missinga spawned task panicked and the runtime is configured to shut down on unhandled panica
+  a: ping on idle connection returned errorerror from `before_acquire`user auth key and certs must be given togetherexpected a duration with a unit, such as "5s" or 
+  a: LEFT JOIN pg_catalog.pg_range ON pg_type.oid = pg_range.rngtypidfill_cachetype missing dependencyresolved dependencyBUG: panicked while holding a lockerror occu
+  a: n,,nClient KeyServer KeypBSCPQEDXFailed building the Runtimemid > lenassertion failed: k <= self.len()called `Result::unwrap()` on an `Err` valueassetscertsinge
+  a: ProhibitedCharacterProhibitedBidirectionalTextStartsWithCombiningCharacterEmptyStringAlreadyShutdownTimeoutInternalFailurepolled Feed after completionpoll after
+  a: Exporter.Config.InvalidEnvironmentVariableOTEL_EXPORTER_OTLP_COMPRESSIONRUST_MIN_STACKExportLogsServiceResponsepartial_successExportTraceServiceResponseExportMe
+  a: threads should not terminate unexpectedlyOTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCEexpected 'cumulative', 'delta', or 'lowmemory'environment variable val
+  a: */*assertion failed: (*tail).value.is_none()assertion failed: (*next).value.is_some()threads should not terminate unexpectedlyinternal error: entered unreachabl
+  a: builder errorerror sending requesterror following redirectHTTP status server errorHTTP status client error100101102103104105106107108109110111112113114115116117
+  a: polled Feed after completionfatal runtime error: thread result panicked on drop, aborting
+  a: TryFlatten polled after completionMap must not be polled after it returned `Poll::Ready`hyper::upgrade::OnUpgradetower_http::follow_redirect::RequestUriPolicyco
+  a: Ready polled after completionalready calledElapsedoperation timed outCustomLimittoo many redirectscalled after completequeue not emptyURL scheme is not allowedC
+  a: @internal error: entered unreachable codeInvalidEncodingInconsistentComponentsmid > lencalled `Result::unwrap()` on an `Err` valueSHA256SHA384SHA512SHA512_256Un
+  a: u24OtherErrorUnspecifiedPKCS1digest_algdigestinfo_prefixtyppayloadSingleProtocolNameCertificateStatusTypeAES_128_GCMAES_256_GCMCHACHA20_POLY_1305EXPORT_ONLY
+  a: DHEECDHECloseNotifyUnexpectedMessageBadRecordMacRecordOverflowDecompressionFailureNoCertificateBadCertificateUnsupportedCertificateCertificateRevokedCertificate
+  a: SignedDataBadDerBadDerTimeCaUsedAsEndEntityCertExpirednot_afterCertNotValidForNameCertNotValidYetnot_beforeCertRevokedCrlExpirednext_updateEmptyEkuExtensionEndE
+  a: CertificateStatusHpkeSymmetricCipherSuitekdf_idaead_idHpkeKeyConfigkem_idpublic_keysymmetric_cipher_suitesEchConfigContentskey_configmaximum_name_lengthpublic_n
+  a: InvalidRevokedCertSerialNumberIssuerInvalidForCrlParseErrorInvalidConfigListNoCompatibleConfigSniRequiredInvalidDnsNameError
+  a: DefaultTimeProviderno root trust anchors were providedRsaParameterspadding_algRingAlgorithmpublic_key_alg_idu8Randomoperation not supportedWebPkiSupportedAlgori
+  a: ServerNamesInappropriateMessageexpect_typesInappropriateHandshakeMessageInvalidEncryptedClientHelloInvalidMessageNoCertificatesPresentedEncryptErrorPeerMisbehav
+  a: BitStringCertificateTbsCertificateCertRevocationListCertRevocationListExtensionCrlDistributionPointCommonNameInnerCommonNameOuterDistributionPointNameExtensionG
+  a: Cannot merge two `Router`s that both have a fallbackFailed to merge fallbacks. This is a bug in axum. Please file an issueservice.namemessage[REDACTED]SpanRef.L
+  b: postgres_sslmode
+  b: modnarodsetybdet
+  b: bconnection reset
+  b: InvalidAuthoritycontent-encoding
+  b: 9{invalid syntax}RSA_PKCS1_SHA384
+  b: InputOutputError
+  b: CapacityOverflow@
+  b: UKeyUpdateRequest
+  b: InvalidCharacter9
+  b: AddrNotAvailable?4
+  b: MAC tag mismatch
+  b: InvalidKeyUpdatec
+  b: www-authenticateL
+  b: InconsistentKeys=
+  b: }0123456789abcdef
+  b: OwnedRevokedCert_
+  b: reqwest::connectshouldn't retry!
+  b: invalid header nameinvalid header valueinvalid new lineinvalid response statusinvalid tokentoo many headersinvalid HTTP versionpoisoned lock: another task faile
+  b: !/internal/ext-authzattempt to join into collection with len > usize::MAXstream did not contain valid UTF-8internal error: entered unreachable codeVec is sized 
+  b: mid > len/00000000-0000-0000-0000-000000000000the database connections are opencannot keep the database connections open; not readyEdDSAinternal-identity+jwtsig
+  b: }assertion failed: new_left_len <= CAPACITYcore missingheader_read_timeouta spawned task panicked and the runtime is configured to shut down on unhandled panica
+  b: ping on idle connection returned errorerror from `before_acquire`user auth key and certs must be given togetherexpected a duration with a unit, such as "5s" or 
+  b: LEFT JOIN pg_catalog.pg_range ON pg_type.oid = pg_range.rngtypidfill_cachetype missing dependencyresolved dependencyBUG: panicked while holding a lockerror occu
+  b: n,,nClient KeyServer KeypBSCPQEDXFailed building the Runtimemid > lenassertion failed: k <= self.len()called `Result::unwrap()` on an `Err` valueassetscertsinge
+  b: ProhibitedCharacterProhibitedBidirectionalTextStartsWithCombiningCharacterEmptyStringAlreadyShutdownTimeoutInternalFailurepolled Feed after completionpoll after
+  b: Exporter.Config.InvalidEnvironmentVariableOTEL_EXPORTER_OTLP_COMPRESSIONRUST_MIN_STACKExportLogsServiceResponsepartial_successExportTraceServiceResponseExportMe
+  b: OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCEexpected 'cumulative', 'delta', or 'lowmemory'environment variable value is not valid UnicodeUser-AgentOTel-OTL
+  b: assertion failed: (*tail).value.is_none()assertion failed: (*next).value.is_some()threads should not terminate unexpectedly*/*internal error: entered unreachabl
+  b: builder errorerror sending requesterror following redirectHTTP status server errorHTTP status client error100101102103104105106107108109110111112113114115116117
+  b: TryFlatten polled after completionMap must not be polled after it returned `Poll::Ready`tower_http::follow_redirect::RequestUrihyper::upgrade::OnUpgradePolicyRe
+  b: connection closedoperation timed outCustomLimittoo many redirectscalled after completequeue not emptyURL scheme is not allowedClienterror resolving DNSPrevious 
+  b: @internal error: entered unreachable codeInvalidEncodingInconsistentComponentsSHA256SHA384SHA512SHA512_256mid > lencalled `Result::unwrap()` on an `Err` valueUn
+  b: Unspecifiedu24OtherErrorPKCS1digest_algdigestinfo_prefixtyppayloadSingleProtocolNameCertificateStatusTypeAES_128_GCMAES_256_GCMCHACHA20_POLY_1305EXPORT_ONLY
+  b: DHEECDHESignedDataBadDerBadDerTimeCaUsedAsEndEntityCertExpirednot_afterCertNotValidForNameCertNotValidYetnot_beforeCertRevokedCrlExpirednext_updateEmptyEkuExten
+  b: u32FailResolveClientCertPSSRsaSignerschemeEchVersionV18
+  b: CertificateStatusHpkeSymmetricCipherSuitekdf_idaead_idHpkeKeyConfigkem_idpublic_keysymmetric_cipher_suitesEchConfigContentskey_configmaximum_name_lengthpublic_n
+  b: InvalidRevokedCertSerialNumberIssuerInvalidForCrlParseErrorInvalidDnsNameErrorInvalidConfigListNoCompatibleConfigSniRequired
+  b: RsaParameterspadding_algRingAlgorithmpublic_key_alg_idDefaultTimeProviderno root trust anchors were providedu8Randomoperation not supportedWebPkiSupportedAlgori
+  b: ServerNamesInappropriateMessageexpect_typesInappropriateHandshakeMessageInvalidEncryptedClientHelloInvalidMessageNoCertificatesPresentedEncryptErrorPeerMisbehav
+  b: CompressionCertificatePayloadTooLargeHandshakePayloadTooLargeInvalidCcsInvalidContentTypeInvalidCertificateStatusTypeInvalidCertRequestInvalidDhParamsInvalidEmp
+count "x86_64": 0 / 0
+count "aarch64-unknown-linux-gnu": 0 / 0
+count "x86_64-unknown-linux-gnu": 0 / 0
+count "/root/": 0 / 0
+count "/work/": 0 / 0

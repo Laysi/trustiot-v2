@@ -1,0 +1,32 @@
+== actions/runner-images images/ubuntu/Ubuntu2404-Readme.md (main, read 2026-10-12)
+- OS Version: 24.04.5 LTS
+- Kernel Version: 6.17.0-1022-azure
+- Image Version: 20261004.327.1
+- Buildah 1.33.7
+- Docker Client 28.0.4
+- Docker Server 28.0.4
+- jq 1.7
+- OpenSSL 3.0.13-0ubuntu3.16
+- Podman 4.9.3
+- Skopeo 1.13.3
+- GitHub CLI 2.102.0
+- Cargo 1.99.0
+- Rust 1.99.0
+- Rustup 1.29.1
+
+== actions/runner-images images/ubuntu/Ubuntu2404-Arm64-Readme.md (main, read 2026-10-12)
+- OS Version: 24.04.5 LTS
+- Kernel Version: 6.17.0-1022-azure
+- Image Version: 20261004.142.1
+- Buildah 1.33.7
+- Docker Client 28.0.4
+- Docker Server 28.0.4
+- jq 1.7
+- OpenSSL 3.0.13-0ubuntu3.16
+- Podman 4.9.3
+- Skopeo 1.13.3
+- GitHub CLI 2.102.0
+- Cargo 1.99.0
+- Rust 1.99.0
+- Rustup 1.29.1
+

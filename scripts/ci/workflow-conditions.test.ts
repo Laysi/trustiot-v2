@@ -1,7 +1,8 @@
 // The conditions in ci.yml and nightly.yml that decide what runs (Laysi/trustiot-v2#309),
 // evaluated with GitHub's own expression engine (@actions/expressions) against the event
 // payloads GitHub sends, so a typo in an `if` or a concurrency group fails here and not on the
-// first pull request it should have stopped.
+// first pull request it should have stopped. Also the runner of every job in these workflows
+// and in release.yml (Laysi/trustiot-v2#310).
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -231,5 +232,17 @@ describe("nightly.yml", () => {
   test("both jobs run on the arm64 runner", () => {
     expect(jobs.smoke?.["runs-on"]).toBe("ubuntu-24.04-arm");
     expect(jobs.notify?.["runs-on"]).toBe("ubuntu-24.04-arm");
+  });
+});
+
+describe("release.yml", () => {
+  test("every job runs on the arm64 runner", () => {
+    // The build job builds on the architecture the images ship for, and a rebuild that
+    // reproduces a release runs on arm64 too (docs/architecture/ci-release.md).
+    const jobs = jobsOf(workflow("release.yml"));
+    expect(Object.keys(jobs)).toEqual(["plan", "build", "publish", "verify", "deploy-pr", "report"]);
+    for (const [id, job] of Object.entries(jobs)) {
+      expect(`${id}: ${String(job["runs-on"])}`).toBe(`${id}: ubuntu-24.04-arm`);
+    }
   });
 });

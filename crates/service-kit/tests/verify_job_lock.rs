@@ -1,6 +1,7 @@
 //! Independent verification of Laysi/trustiot-v2#51: the advisory-lock tool under failure.
-//! Uses `TEST_DATABASE_URL` when set, otherwise a throwaway Postgres container; skipped without
-//! either unless `CI` is set (like `job_lock.rs`).
+//! Uses `TEST_DATABASE_URL` when set, otherwise a throwaway Postgres container shared by the
+//! tests, each with a database of its own; skipped without either unless `CI` is set (like
+//! `job_lock.rs`).
 //!
 //! Adds to `job_lock.rs`: a stress run in which many replicas contend for one job and the number
 //! of concurrent runs is counted, the lock holder's backend killed mid-job (the job stops, the
@@ -16,70 +17,7 @@ use std::time::{Duration, Instant};
 use service_kit::job_lock::{JobLock, JobLockError};
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
-use support::{Container, container_runtime, runtime_output, unavailable, unique_name};
-
-const POSTGRES_IMAGE: &str = "docker.io/library/postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873";
-
-struct Database {
-    url: String,
-    _container: Option<Container>,
-}
-
-async fn database() -> Option<Database> {
-    if let Some(url) = std::env::var("TEST_DATABASE_URL")
-        .ok()
-        .filter(|url| !url.is_empty())
-    {
-        return Some(Database {
-            url,
-            _container: None,
-        });
-    }
-    let Some(runtime) = container_runtime() else {
-        unavailable("TEST_DATABASE_URL, podman, or docker");
-        return None;
-    };
-    let container = Container {
-        runtime,
-        name: unique_name("verify-postgres"),
-    };
-    runtime_output(
-        runtime,
-        &[
-            "run",
-            "--detach",
-            "--memory",
-            "512m",
-            "--name",
-            &container.name,
-            "--env",
-            "POSTGRES_PASSWORD=service-kit-test",
-            "--publish",
-            "127.0.0.1::5432",
-            POSTGRES_IMAGE,
-        ],
-    );
-    let address = container.host_address("5432/tcp");
-    let url = format!("postgres://postgres:service-kit-test@{address}/postgres");
-    let started = Instant::now();
-    loop {
-        if let Ok(pool) = PgPool::connect(&url).await
-            && sqlx::query("SELECT 1").execute(&pool).await.is_ok()
-        {
-            pool.close().await;
-            break;
-        }
-        assert!(
-            started.elapsed() < Duration::from_secs(60),
-            "Postgres did not start in time"
-        );
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-    Some(Database {
-        url,
-        _container: Some(container),
-    })
-}
+use support::postgres::test_database;
 
 async fn replica(url: &str, connections: u32) -> PgPool {
     PgPoolOptions::new()
@@ -93,6 +31,7 @@ async fn replica(url: &str, connections: u32) -> PgPool {
 async fn holders(admin: &PgPool, key: i64) -> Vec<i32> {
     sqlx::query_scalar(
         "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND objsubid = 1 \
+         AND database = (SELECT oid FROM pg_database WHERE datname = current_database()) \
          AND ((classid::bigint << 32) | objid::bigint) = $1",
     )
     .bind(key)
@@ -102,15 +41,19 @@ async fn holders(admin: &PgPool, key: i64) -> Vec<i32> {
 }
 
 async fn any_advisory_locks(admin: &PgPool) -> i64 {
-    sqlx::query_scalar("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'")
-        .fetch_one(admin)
-        .await
-        .expect("count advisory locks")
+    // Advisory locks belong to a database, and the tests of a binary share one server.
+    sqlx::query_scalar(
+        "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' \
+         AND database = (SELECT oid FROM pg_database WHERE datname = current_database())",
+    )
+    .fetch_one(admin)
+    .await
+    .expect("count advisory locks")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn eight_replicas_contending_never_run_a_job_twice_at_once() {
-    let Some(database) = database().await else {
+    let Some(database) = test_database().await else {
         return;
     };
     let admin = replica(&database.url, 2).await;
@@ -168,7 +111,7 @@ async fn eight_replicas_contending_never_run_a_job_twice_at_once() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_killed_lock_session_stops_the_job_reports_lost_and_leaks_nothing() {
-    let Some(database) = database().await else {
+    let Some(database) = test_database().await else {
         return;
     };
     let admin = replica(&database.url, 2).await;
@@ -236,7 +179,7 @@ async fn a_killed_lock_session_stops_the_job_reports_lost_and_leaks_nothing() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_panicking_job_and_a_dropped_run_release_the_lock() {
-    let Some(database) = database().await else {
+    let Some(database) = test_database().await else {
         return;
     };
     let admin = replica(&database.url, 2).await;
@@ -287,7 +230,7 @@ async fn a_panicking_job_and_a_dropped_run_release_the_lock() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn releasing_a_guard_whose_session_died_reports_an_error_not_success() {
-    let Some(database) = database().await else {
+    let Some(database) = test_database().await else {
         return;
     };
     let admin = replica(&database.url, 2).await;

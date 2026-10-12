@@ -1,0 +1,39 @@
+rustc host: x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
+DIFF  plan.json
+DIFF  bin/identity  6376544 / 6378240 bytes, sha256 eb73f00d15095258 / fd1662799795fa2d
+      differing bytes at equal offsets: 4942747
+      section .rodata: size 759224 / 759224, content differs
+      section .gcc_except_table: size 251144 / 251160, content differs
+      section .eh_frame_hdr: size 68388 / 68436, content differs
+      section .eh_frame: size 521656 / 522020, content differs
+      section .text: size 4576796 / 4578012, content differs
+      section .data.rel.ro: size 176112 / 176144, content differs
+      section .init_array: size 16 / 16, content differs
+      section .got: size 2736 / 2736, content differs
+      section .relro_padding: size 640 / 3040, content differs
+      section .data: size 11376 / 11376, content differs
+SAME  bin/release-selftest  377264 / 377264 bytes, sha256 752dea3cbf3690e9 / 752dea3cbf3690e9
+SAME  cobj/ea708c7824d36062-target.o  2696 / 2696 bytes, sha256 8b4bfebdc7425b3e / 8b4bfebdc7425b3e
+SAME  cobj/librelease_selftest_target.a  2952 / 2952 bytes, sha256 c24e6642e803598e / c24e6642e803598e
+DIFF  image identity digest  sha256:8080c5f5ea6154d6d15375ddbc213b1bddf694b7994448e07725ec3d8b55ef21 / sha256:a2fe0c510c4f78476e09419fa2c26cfd847de75f97c531a80131813a2954e97c
+DIFF  image identity archive size  4198912 / 4197888
+DIFF  sbom identity file bytes
+DIFF  sbom identity without documentNamespace and created
+SAME  sbom identity package list (213 / 213)   
+      namespaces: https://anchore.com/syft/image/127.0.0.1-5168/laysi/trustiot-v2/identity-0658adb8-237e-4922-83bb-e6c033cb1872 / https://anchore.com/syft/image/127.0.0.1-5168/laysi/trustiot-v2/identity-43246640-6e71-46c3-b9f6-f056998fa39b
+      created: 2026-10-12T06:50:34Z / 2026-10-12T07:45:31Z
+DIFF  image postgres  not built in the second run
+SAME  image release-selftest digest  sha256:43f2cb6ad0d5d690a8f7b891ee26c1006beb2cbbe5bc6f1973ce38bdee88a0dd / sha256:43f2cb6ad0d5d690a8f7b891ee26c1006beb2cbbe5bc6f1973ce38bdee88a0dd
+SAME  image release-selftest archive size  1135616 / 1135616
+DIFF  sbom release-selftest file bytes
+SAME  sbom release-selftest without documentNamespace and created
+SAME  sbom release-selftest package list (13 / 13)   
+      namespaces: https://anchore.com/syft/image/127.0.0.1-5168/laysi/trustiot-v2/release-selftest-a4ec9670-b75e-4494-8685-a5a699b09b63 / https://anchore.com/syft/image/127.0.0.1-5168/laysi/trustiot-v2/release-selftest-f67a0613-a3ab-47de-a7ff-344ed3697a50
+      created: 2026-10-12T06:52:05Z / 2026-10-12T07:45:48Z
+SAME  published chart digest  sha256:536de43f9275c19fc8a47de5f9c473fa299aa120bf5c4c52b4d983c05cdee76c / sha256:536de43f9275c19fc8a47de5f9c473fa299aa120bf5c4c52b4d983c05cdee76c
+DIFF  published identity digest
+DIFF  published postgres digest
+SAME  published release-selftest digest
+SAME  x64: publish re-run gives the same published.json
+SAME  arm64: publish re-run gives the same published.json
+RESULT: differences above

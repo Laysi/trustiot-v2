@@ -1,7 +1,8 @@
 # CloudNativePG's PostgreSQL 18 operand image with Apache AGE (decision 21, checklist M8).
-# release.yml builds it for linux/arm64 on an x86 runner without an emulator, so no instruction
-# runs in the arm64 image: AGE is cross-compiled in the `build` stage, which runs on the build
-# machine's own architecture, and only its files are copied into the CloudNativePG image.
+# No instruction runs in the arm64 image, so it builds on an x86 machine without an emulator too
+# (release.yml's plan refuses a RUN there, although it builds on an arm64 runner): AGE is
+# cross-compiled in the `build` stage, which runs on the build machine's own architecture, and
+# only its files are copied into the CloudNativePG image.
 # README.md explains the pins below and how to upgrade Postgres and AGE together.
 
 # The CloudNativePG image: in the final image it is linux/arm64; the build stage uses the build
@@ -108,8 +109,8 @@ RUN set -eu; \
 
 # with_llvm=no: no LLVM bitcode for JIT inlining (that would need an aarch64 clang); queries
 # that call AGE functions still run, and JIT still compiles the rest of the plan.
-# libdir: pg_config of the build stage reports the build machine's library directory (x86-64 in a
-# release); point the linker at the aarch64 cross one instead.
+# libdir: pg_config of the build stage reports the build machine's library directory (x86-64 on an
+# x86 machine); point the linker at the aarch64 cross one instead, which arm64 machines get too.
 # LDFLAGS_SL: an ELF package note (systemd's ELF package metadata), which is how syft, and so the
 # release SBOM, identifies age.so as Apache AGE; -Xlinker keeps the JSON's commas intact.
 RUN set -eu; \

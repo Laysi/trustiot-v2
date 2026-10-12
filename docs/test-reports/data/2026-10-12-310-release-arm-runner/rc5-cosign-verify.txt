@@ -1,0 +1,43 @@
+# Independent verification of v0.0.0-rc.5 (Laysi/trustiot-v2#310), 2026-10-13, coordinator workstation (x86_64)
+# cosign: GitVersion: v3.1.3  (the .prototools pin, from `proto bin cosign`)
+# Every command ran with:
+#   --certificate-identity-regexp '^https://github\.com/Laysi/trustiot-v2/\.github/workflows/release\.yml@refs/tags/v0\.0\.0-rc\.5$'
+#   --certificate-oidc-issuer https://token.actions.githubusercontent.com
+# Private packages were read with a GitHub token that has read:packages (not recorded here).
+
+## ghcr.io/laysi/trustiot-v2/identity@sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44
+cosign verify: exit 0; verified bundles by type: {"https://sigstore.dev/cosign/sign/v1":2,"https://spdx.dev/Document":2}
+cosign verify-attestation --type spdxjson: exit 0; attestations: 2; SPDX packages in the first: 213; predicateType: https://spdx.dev/Document
+  Verification for ghcr.io/laysi/trustiot-v2/identity@sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44 --
+    - The cosign claims were validated
+    - Existence of the claims in the transparency log was verified offline
+    - The code-signing certificate was verified using trusted certificate authority certificates
+
+## ghcr.io/laysi/trustiot-v2/postgres@sha256:9b8b6b97eacec3fdc033fd3f1fbf0dfee3ae6f8f94ba21c40f050003bd62faee
+cosign verify: exit 0; verified bundles by type: {"https://sigstore.dev/cosign/sign/v1":2,"https://spdx.dev/Document":2}
+cosign verify-attestation --type spdxjson: exit 0; attestations: 2; SPDX packages in the first: 142; predicateType: https://spdx.dev/Document
+  Verification for ghcr.io/laysi/trustiot-v2/postgres@sha256:9b8b6b97eacec3fdc033fd3f1fbf0dfee3ae6f8f94ba21c40f050003bd62faee --
+    - The cosign claims were validated
+    - Existence of the claims in the transparency log was verified offline
+    - The code-signing certificate was verified using trusted certificate authority certificates
+
+## ghcr.io/laysi/trustiot-v2/release-selftest@sha256:bc2b33e06519a9d303195f4196ca7c73d9f14357e0106709d9f434e928421743
+cosign verify: exit 0; verified bundles by type: {"https://sigstore.dev/cosign/sign/v1":2,"https://spdx.dev/Document":2}
+cosign verify-attestation --type spdxjson: exit 0; attestations: 2; SPDX packages in the first: 13; predicateType: https://spdx.dev/Document
+  Verification for ghcr.io/laysi/trustiot-v2/release-selftest@sha256:bc2b33e06519a9d303195f4196ca7c73d9f14357e0106709d9f434e928421743 --
+    - The cosign claims were validated
+    - Existence of the claims in the transparency log was verified offline
+    - The code-signing certificate was verified using trusted certificate authority certificates
+
+## ghcr.io/laysi/trustiot-v2/charts/trustiot@sha256:1b96b29976798e061d1cab5fb9666bef0f4b625c0d23900b79a510f66c20c7b2
+cosign verify: exit 0; verified bundles by type: {"https://sigstore.dev/cosign/sign/v1":1}
+  Verification for ghcr.io/laysi/trustiot-v2/charts/trustiot@sha256:1b96b29976798e061d1cab5fb9666bef0f4b625c0d23900b79a510f66c20c7b2 --
+    - The cosign claims were validated
+    - Existence of the claims in the transparency log was verified offline
+    - The code-signing certificate was verified using trusted certificate authority certificates
+
+## Anonymous pull (GET https://ghcr.io/token?scope=repository:laysi/trustiot-v2/<package>:pull, no credentials)
+identity: HTTP 200
+postgres: HTTP 200
+release-selftest: HTTP 401
+charts/trustiot: HTTP 401

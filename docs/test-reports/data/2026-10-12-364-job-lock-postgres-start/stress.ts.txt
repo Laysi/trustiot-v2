@@ -1,0 +1,89 @@
+// Saved as .txt like the other scripts under data/ so that no tool picks it up; run it as stress.ts.
+// Load driver for the service-kit container-backed tests: keeps the CPUs busy with `yes`, and
+// in each round starts several copies of every named test binary at the same moment, each
+// with its own Postgres container(s) as in a loaded CI runner.
+//
+// Usage: bun stress.ts <label> <yes-processes> <copies> <rounds> <binary-prefix>...
+//   <binary-prefix>  a test executable in the cargo target's debug/deps directory, for example
+//                    `job_lock` (the newest `job_lock-<hash>` is used)
+// Needs CARGO_TARGET_DIR and the test executables (cargo test --no-run). Run with CI=1 so that
+// a missing container runtime fails a test instead of skipping it. Prints one line per round
+// and, at the end, the result lines and the distinct failure messages.
+import { readdirSync, statSync } from "node:fs";
+
+const [label, yesCount, copies, rounds, ...prefixes] = process.argv.slice(2);
+if (!label || !yesCount || !copies || !rounds || prefixes.length === 0) {
+  throw new Error("usage: bun stress.ts <label> <yes> <copies> <rounds> <binary-prefix>...");
+}
+const deps = `${process.env.CARGO_TARGET_DIR ?? "target"}/debug/deps`;
+
+function newest(prefix: string): string {
+  const matches = readdirSync(deps)
+    .filter((name) => new RegExp(`^${prefix}-[0-9a-f]+$`).test(name))
+    .map((name) => `${deps}/${name}`)
+    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+  if (!matches[0]) throw new Error(`no test executable for ${prefix} in ${deps}`);
+  return matches[0];
+}
+
+// Resolved before anything is started, so a missing executable cannot leave `yes` running.
+const executables = new Map(prefixes.map((prefix) => [prefix, newest(prefix)]));
+
+const loadavg = async () => (await Bun.file("/proc/loadavg").text()).split(" ").slice(0, 3).join(" ");
+
+const burners = Array.from({ length: Number(yesCount) }, () =>
+  Bun.spawn(["nice", "-n", "10", "yes"], { stdout: "ignore", stderr: "ignore" }),
+);
+// Let the load average build up before the first round.
+await Bun.sleep(30_000);
+
+console.log(`label ${label}; ${yesCount} yes; ${copies} copies of each of ${prefixes.join(", ")} per round; ${rounds} rounds`);
+console.log(`load average before the first round: ${await loadavg()}`);
+
+type Run = { binary: string; ok: boolean; seconds: number; resultLine: string; failure: string };
+const all: Run[] = [];
+let peak = 0;
+for (let round = 1; round <= Number(rounds); round++) {
+  const started = performance.now();
+  const runs = prefixes.flatMap((prefix) =>
+    Array.from({ length: Number(copies) }, async (): Promise<Run> => {
+      const t0 = performance.now();
+      const p = Bun.spawn([executables.get(prefix)!], { stdout: "pipe", stderr: "pipe", env: { ...process.env, CI: "1" } });
+      const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+      const code = await p.exited;
+      const text = out + err;
+      const resultLine = text.split("\n").find((l) => l.startsWith("test result:")) ?? "(no result line)";
+      const failure = text
+        .split("\n")
+        .filter((l) => /panicked at|did not accept|did not start|timed out|never|failed/.test(l))
+        .slice(0, 6)
+        .join(" | ");
+      return { binary: prefix, ok: code === 0, seconds: (performance.now() - t0) / 1000, resultLine, failure };
+    }),
+  );
+  const done = await Promise.all(runs);
+  all.push(...done);
+  const load1 = Number((await loadavg()).split(" ")[0]);
+  peak = Math.max(peak, load1);
+  const failed = done.filter((r) => !r.ok).length;
+  console.log(
+    `round ${round} done in ${Math.round((performance.now() - started) / 1000)} s: ${done.length - failed} passed, ${failed} failed; load average ${await loadavg()}`,
+  );
+}
+for (const b of burners) b.kill();
+
+console.log("--- totals per binary");
+for (const prefix of prefixes) {
+  const mine = all.filter((r) => r.binary === prefix);
+  const secs = mine.map((r) => r.seconds).sort((a, b) => a - b);
+  console.log(
+    `${prefix}: ${mine.length} runs, ${mine.filter((r) => r.ok).length} passed, ${mine.filter((r) => !r.ok).length} failed; run time min ${secs[0]?.toFixed(1)} s, median ${secs[Math.floor(secs.length / 2)]?.toFixed(1)} s, max ${secs.at(-1)?.toFixed(1)} s`,
+  );
+}
+console.log(`peak 1-minute load average at the end of a round: ${peak}`);
+console.log("--- result lines of all runs");
+const counts = new Map<string, number>();
+for (const r of all) counts.set(r.resultLine.replace(/; finished in .*$/, ""), (counts.get(r.resultLine.replace(/; finished in .*$/, "")) ?? 0) + 1);
+for (const [line, n] of counts) console.log(`${String(n).padStart(4)} ${line}`);
+console.log("--- failures");
+for (const r of all.filter((x) => !x.ok)) console.log(`${r.binary}: ${r.failure}`);

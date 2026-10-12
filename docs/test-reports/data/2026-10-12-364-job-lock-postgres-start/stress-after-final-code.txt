@@ -1,0 +1,48 @@
+rcheck: queued on the build host at 02:57:30 as 364e-5076aac4; running now: 366-c97257ca since 02:56:43
+  Executable tests/job_lock.rs (<build dir>/target/debug/deps/job_lock-c8e13efd8b621b55)
+  Executable tests/verify_job_lock.rs (<build dir>/target/debug/deps/verify_job_lock-2e397ffde5a8ccfa)
+ 02:57:50 up 1 day,  3:33,  3 users,  load average: 2.98, 1.54, 2.33
+=== stress: after (shared container, final code), 24 yes, 6 copies of each file
+label after; 24 yes; 6 copies of each of job_lock, verify_job_lock per round; 10 rounds
+load average before the first round: 11.26 3.69 3.03
+round 1 done in 12 s: 12 passed, 0 failed; load average 17.22 5.24 3.54
+round 2 done in 12 s: 12 passed, 0 failed; load average 19.92 6.22 3.88
+round 3 done in 11 s: 12 passed, 0 failed; load average 24.66 7.96 4.48
+round 4 done in 11 s: 12 passed, 0 failed; load average 29.15 9.50 5.02
+round 5 done in 24 s: 12 passed, 0 failed; load average 28.78 11.02 5.65
+round 6 done in 12 s: 12 passed, 0 failed; load average 29.96 11.88 5.99
+round 7 done in 13 s: 12 passed, 0 failed; load average 31.61 13.15 6.50
+round 8 done in 13 s: 12 passed, 0 failed; load average 32.72 14.01 6.85
+round 9 done in 14 s: 12 passed, 0 failed; load average 35.62 15.59 7.49
+round 10 done in 14 s: 12 passed, 0 failed; load average 35.28 16.52 7.92
+--- totals per binary
+job_lock: 60 runs, 60 passed, 0 failed; run time min 9.1 s, median 11.5 s, max 24.3 s
+verify_job_lock: 60 runs, 60 passed, 0 failed; run time min 6.6 s, median 7.7 s, max 9.6 s
+peak 1-minute load average at the end of a round: 35.62
+--- result lines of all runs
+  60 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+  60 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+--- failures
+=== stress: after, twice the copies
+label after-heavy; 24 yes; 12 copies of each of job_lock, verify_job_lock per round; 10 rounds
+load average before the first round: 30.84 17.24 8.43
+round 1 done in 17 s: 24 passed, 0 failed; load average 38.42 19.61 9.35
+round 2 done in 17 s: 24 passed, 0 failed; load average 44.86 22.00 10.30
+round 3 done in 19 s: 24 passed, 0 failed; load average 45.93 23.72 11.12
+round 4 done in 18 s: 24 passed, 0 failed; load average 47.07 25.50 11.98
+round 5 done in 27 s: 24 passed, 0 failed; load average 44.27 26.70 12.74
+round 6 done in 18 s: 24 passed, 0 failed; load average 45.99 28.31 13.58
+round 7 done in 30 s: 24 passed, 0 failed; load average 45.49 30.11 14.66
+round 8 done in 44 s: 24 passed, 0 failed; load average 40.62 31.02 15.63
+round 9 done in 26 s: 24 passed, 0 failed; load average 41.76 32.36 16.58
+round 10 done in 18 s: 24 passed, 0 failed; load average 46.36 33.87 17.33
+--- totals per binary
+job_lock: 120 runs, 120 passed, 0 failed; run time min 12.9 s, median 16.5 s, max 44.1 s
+verify_job_lock: 120 runs, 120 passed, 0 failed; run time min 10.9 s, median 13.2 s, max 40.0 s
+peak 1-minute load average at the end of a round: 47.07
+--- result lines of all runs
+ 120 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+ 120 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+--- failures
+rcheck: removed 376 dangling test volumes
+rcheck: exit 0 at 03:05:18 (the build host, 364e-5076aac4)

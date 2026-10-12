@@ -1,0 +1,15 @@
+# SPDX SBOMs from syft, x64 (round 1) against arm64 (round 2)
+
+== identity
+documentNamespace: https://anchore.com/syft/image/127.0.0.1-5168/laysi/trustiot-v2/identity-0658adb8-237e-4922-83bb-e6c033cb1872 / https://anchore.com/syft/image/127.0.0.1-5168/laysi/trustiot-v2/identity-43246640-6e71-46c3-b9f6-f056998fa39b
+created: 2026-10-12T06:50:34Z / 2026-10-12T07:45:31Z
+packages: 213 / 213; names and versions equal: true
+entries that differ (name@version checksums): 127.0.0.1:5168/laysi/trustiot-v2/identity@0.0.0-rc.1 8080c5f5ea6154d6d15375ddbc213b1bddf694b7994448e07725ec3d8b55ef21
+whole document equal apart from documentNamespace and created: false
+
+== release-selftest
+documentNamespace: https://anchore.com/syft/image/127.0.0.1-5168/laysi/trustiot-v2/release-selftest-a4ec9670-b75e-4494-8685-a5a699b09b63 / https://anchore.com/syft/image/127.0.0.1-5168/laysi/trustiot-v2/release-selftest-f67a0613-a3ab-47de-a7ff-344ed3697a50
+created: 2026-10-12T06:52:05Z / 2026-10-12T07:45:48Z
+packages: 13 / 13; names and versions equal: true
+entries that differ (name@version checksums): none
+whole document equal apart from documentNamespace and created: true
