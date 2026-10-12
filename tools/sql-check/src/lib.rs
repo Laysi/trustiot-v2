@@ -179,7 +179,9 @@ pub const EXCEPTIONS: &[Exception] = &[
         rules: &[Rule::SessionSetting],
         reason: "sets a session-level tenant with set_config, as nothing may, to test that the \
                  pool closes such a session on release instead of handing it to the next user \
-                 (Laysi/trustiot-v2#271)",
+                 (Laysi/trustiot-v2#271); and sets a tenant as the platform role to test that \
+                 row-level security still refuses it a tenant's outbox events and other rows \
+                 (Laysi/trustiot-v2#360)",
     },
 ];
 

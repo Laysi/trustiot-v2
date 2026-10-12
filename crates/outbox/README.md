@@ -199,7 +199,7 @@ tx.commit().await?;
 
 決策 29 的 RLS 與 `SET LOCAL` 由 Laysi/trustiot-v2#53 實作（service-kit 的 `tenant` 模組；`outbox_event` 的 policy 範本是 [`crates/service-kit/sql/outbox-event.sql`](../service-kit/sql/outbox-event.sql)，說明見 [service-kit README 的 outbox 一節](../service-kit/README.md#outboxcratesoutbox)）。消費端照它讀取與處理（Laysi/trustiot-v2#271，2026-10-11）：
 
-- **產生端**：`publish` 只在呼叫端的交易裡執行兩個語句，不另開交易、不改設定。租戶交易用 `outbox::publish(tx.transaction(), ..., Some(tx.tenant_id()))`（`TenantTransaction::transaction()` 交出同一筆交易，租戶設定不變）；全平台事件由產生端平台角色的 `PlatformTransaction::transaction()` 寫。`outbox_event.tenant_id` 來自信封；`tenant_isolation` policy 的 `WITH CHECK` 讓服務角色只寫得進目前租戶的事件，`platform_events` 讓全平台事件（`tenant_id` 為 NULL）只由產生端的平台角色寫（2026-10-10 決定）。插入不使用 `RETURNING`，所以不需要 SELECT policy。
+- **產生端**：`publish` 只在呼叫端的交易裡執行兩個語句，不另開交易、不改設定。租戶交易用 `outbox::publish(tx.transaction(), ..., Some(tx.tenant_id()))`（`TenantTransaction::transaction()` 交出同一筆交易，租戶設定不變）；全平台事件由產生端平台角色的 `PlatformTransaction::transaction()` 寫。`outbox_event.tenant_id` 來自信封；`tenant_isolation` policy 的 `WITH CHECK` 讓服務角色只寫得進目前租戶的事件，`platform_events` 讓全平台事件（`tenant_id` 為 NULL）只由產生端的平台角色寫（2026-10-10 決定），restrictive 的 `platform_events_only` 讓平台角色只寫得進全平台事件，即使它的 session 自己設定了租戶（Laysi/trustiot-v2#360，2026-10-12）。插入不使用 `RETURNING`，所以不需要 SELECT policy。
 - **`outbox_aggregate`**：只有聚合種類、ID 與序號，不是租戶資料；產生端兩個角色都需要讀寫它。
 - **消費端讀取**：投遞本來就跨租戶，`Consumer` 以消費端服務的**平台角色**讀產生端的 `outbox_event`（範本的 `consumer_read`：`FOR SELECT TO <消費端平台角色> USING (true)`）。`Consumer::new` 以 `PlatformDb::reader(PlatformActor::service(<服務>), "outbox-consumer-read")` 建立讀取端：actor 與 purpose 在建立時以 INFO 記一次（`platform database reader`），之後每秒的輪詢只記 DEBUG；讀取都是 `READ ONLY` 交易，資料庫拒絕任何寫入。讀取（`fetch`、lag、`StartFrom::Latest` 的 horizon）都在這種交易裡，與處理事件的交易分開。
 - **讀取端設錯時不會靜靜讀不到**：`ensure_subscription` 檢查 `outbox_event` 開了 RLS 時，有一條 `USING (true)` 的 permissive SELECT policy 套用到讀取端的角色、而且沒有 restrictive policy；沒有就回 `ConsumerError::CannotReadAllTenants`。否則用錯角色（例如服務角色）讀時只會看不到任何事件，lag 也是 0，看起來一切正常。反過來，把跨租戶讀取開給服務角色時，service-kit 拒絕服務角色的每個連線（`UnsafeSession::PermissivePolicy`），消費端回 `ConsumerError::UnsafeSession`。兩者都可由 migration 修正，`is_retryable()` 為真，`run` 會退避重試。
@@ -231,7 +231,7 @@ tx.commit().await?;
 ```sql
 -- 產生端（例：identity）：install_producer 之後執行 service-kit 的 sql/outbox-event.sql，
 -- 以 example_app = identity_app、example_platform = identity_platform、
--- example_reader = 每個消費端的平台角色（例 assets_platform）；它啟用 RLS、建立三條 policy，
+-- example_reader = 每個消費端的平台角色（例 assets_platform）；它啟用 RLS、建立四條 policy，
 -- 並 GRANT INSERT ON outbox_event TO identity_app, identity_platform、
 -- GRANT SELECT ON outbox_event TO assets_platform
 GRANT USAGE ON SCHEMA identity TO identity_app, identity_platform;

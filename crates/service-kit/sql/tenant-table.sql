@@ -28,7 +28,12 @@ CREATE POLICY tenant_isolation ON example_items
     WITH CHECK (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid);
 
 -- 4. Only for tables the platform back office or cross-tenant jobs need: the platform role sees
---    every tenant. Leave it out, and the platform role sees no rows of the table.
+--    every tenant, with the commands step 5 grants it. Policy 3 applies to the platform role
+--    too, but adds nothing here: a platform session that chose its own tenant in
+--    `trustiot.tenant_id` (which PlatformDb never does and tools/sql-check rejects) still sees
+--    every tenant and still has only its grants. Leave the policy out, and grant the platform
+--    role nothing on the table: with a grant but no platform_access, policy 3 alone would give
+--    such a session the rows of the tenant it chose (Laysi/trustiot-v2#360).
 CREATE POLICY platform_access ON example_items
     TO example_platform
     USING (true)
