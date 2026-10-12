@@ -1,0 +1,69 @@
+Docker version 29.8.2, build 7fc2dff
+docker build exit 0
+35:#10 [build 5/8] RUN set -eu;     rm -f /etc/apt/sources.list.d/*;     printf '%s\n'       'Types: deb'       "URIs: http://snapshot.debian.org/archive/debian/20260918T000000Z"       'Suites: trixie'       'Components: main'       'Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp'       > /etc/apt/sources.list.d/debian-snapshot.sources;     apt-get -o Acquire::Check-Valid-Until=false -o
+36:#10 0.570 Get:1 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie InRelease [140 kB]
+37:#10 0.903 Get:2 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 Packages [9678 kB]
+49:#10 4.117   libctf-nobfd0 libctf0 libcurl4t64 libgcc-14-dev-arm64-cross
+64:#10 4.217   cpp-aarch64-linux-gnu curl flex gcc-14-aarch64-linux-gnu
+68:#10 4.217   libcurl4t64 libgcc-14-dev-arm64-cross libgcc-s1-arm64-cross
+75:#10 18.03 Need to get 55.3 MB of archives.
+77:#10 18.03 Get:1 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 m4 amd64 1.4.19-8 [294 kB]
+78:#10 18.23 Get:2 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 flex amd64 2.6.4-8.2+b4 [423 kB]
+79:#10 18.31 Get:3 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libsframe1 amd64 2.44-3 [78.4 kB]
+80:#10 18.31 Get:4 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 binutils-common amd64 2.44-3 [2509 kB]
+81:#10 18.67 Get:5 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libbinutils amd64 2.44-3 [534 kB]
+82:#10 18.74 Get:6 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libgprofng0 amd64 2.44-3 [808 kB]
+83:#10 18.81 Get:7 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libctf-nobfd0 amd64 2.44-3 [156 kB]
+84:#10 18.82 Get:8 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libctf0 amd64 2.44-3 [88.6 kB]
+85:#10 18.82 Get:9 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libjansson4 amd64 2.14-2+b3 [39.8 kB]
+86:#10 18.83 Get:10 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 binutils-x86-64-linux-gnu amd64 2.44-3 [1014 kB]
+87:#10 18.90 Get:11 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 binutils amd64 2.44-3 [265 kB]
+88:#10 18.92 Get:12 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 binutils-aarch64-linux-gnu amd64 2.44-3 [1687 kB]
+89:#10 19.19 Get:13 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 bison amd64 2:3.8.2+dfsg-1+b2 [1170 kB]
+90:#10 19.32 Get:14 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 gcc-14-aarch64-linux-gnu-base amd64 14.2.0-19cross1 [49.7 kB]
+91:#10 19.33 Get:15 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libisl23 amd64 0.27-1 [659 kB]
+92:#10 19.40 Get:16 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libmpfr6 amd64 4.2.2-1 [729 kB]
+93:#10 19.45 Get:17 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libmpc3 amd64 1.3.1-1+b3 [52.2 kB]
+94:#10 19.46 Get:18 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 cpp-14-aarch64-linux-gnu amd64 14.2.0-19cross1 [11.2 MB]
+95:#10 20.71 Get:19 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 cpp-aarch64-linux-gnu amd64 4:14.2.0-1 [4844 B]
+96:#10 20.72 Get:20 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libbrotli1 amd64 1.1.0-2+b7 [307 kB]
+97:#10 20.74 Get:21 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libnghttp2-14 amd64 1.64.0-1.1+deb13u1 [76.2 kB]
+98:#10 20.75 Get:22 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libnghttp3-9 amd64 1.8.0-1 [67.7 kB]
+99:#10 20.75 Get:23 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libpsl5t64 amd64 0.21.2-1.1+b1 [57.2 kB]
+100:#10 20.76 Get:24 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 librtmp1 amd64 2.4+20151223.gitfa8646d.1-2+b5 [58.8 kB]
+101:#10 20.78 Get:25 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libssh2-1t64 amd64 1.11.1-1+deb13u2 [245 kB]
+102:#10 20.79 Get:26 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libcurl4t64 amd64 8.14.1-2+deb13u5 [391 kB]
+103:#10 20.82 Get:27 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 curl amd64 8.14.1-2+deb13u5 [270 kB]
+104:#10 20.85 Get:28 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libcc1-0 amd64 14.2.0-19 [42.8 kB]
+105:#10 20.85 Get:29 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 gcc-14-cross-base all 14.2.0-19cross1 [44.9 kB]
+106:#10 20.85 Get:30 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libc6-arm64-cross all 2.41-11cross1 [1168 kB]
+107:#10 21.44 Get:31 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libgcc-s1-arm64-cross all 14.2.0-19cross1 [54.1 kB]
+108:#10 21.71 Get:32 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libgomp1-arm64-cross all 14.2.0-19cross1 [91.7 kB]
+109:#10 22.31 Get:33 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libitm1-arm64-cross all 14.2.0-19cross1 [26.0 kB]
+110:#10 22.31 Get:34 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libatomic1-arm64-cross all 14.2.0-19cross1 [10.3 kB]
+111:#10 23.07 Get:35 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libasan8-arm64-cross all 14.2.0-19cross1 [436 kB]
+112:#10 23.11 Get:36 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 liblsan0-arm64-cross all 14.2.0-19cross1 [201 kB]
+113:#10 23.11 Get:37 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libtsan2-arm64-cross all 14.2.0-19cross1 [416 kB]
+114:#10 23.84 Get:38 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libstdc++6-arm64-cross all 14.2.0-19cross1 [546 kB]
+115:#10 24.10 Get:39 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libubsan1-arm64-cross all 14.2.0-19cross1 [186 kB]
+116:#10 24.74 Get:40 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libhwasan0-arm64-cross all 14.2.0-19cross1 [256 kB]
+117:#10 25.07 Get:41 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libgcc-14-dev-arm64-cross all 14.2.0-19cross1 [2452 kB]
+118:#10 28.29 Get:42 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 gcc-14-aarch64-linux-gnu amd64 14.2.0-19cross1 [21.6 MB]
+119:#10 30.04 Get:43 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 gcc-aarch64-linux-gnu amd64 4:14.2.0-1 [1448 B]
+120:#10 30.30 Get:44 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 linux-libc-dev-arm64-cross all 6.12.38-1cross1 [2446 kB]
+121:#10 32.08 Get:45 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 libc6-dev-arm64-cross all 2.41-11cross1 [1617 kB]
+122:#10 32.20 Get:46 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main amd64 make amd64 4.4.1-2 [463 kB]
+209:#10 34.66 Selecting previously unselected package libcurl4t64:amd64.
+210:#10 34.66 Preparing to unpack .../25-libcurl4t64_8.14.1-2+deb13u5_amd64.deb ...
+211:#10 34.66 Unpacking libcurl4t64:amd64 (8.14.1-2+deb13u5) ...
+212:#10 34.70 Selecting previously unselected package curl.
+213:#10 34.70 Preparing to unpack .../26-curl_8.14.1-2+deb13u5_amd64.deb ...
+214:#10 34.71 Unpacking curl (8.14.1-2+deb13u5) ...
+303:#10 36.72 Setting up libcurl4t64:amd64 (8.14.1-2+deb13u5) ...
+#17 exporting to image
+#17 exporting layers 0.1s done
+#17 writing image sha256:d9d5a9a95afc4dff3158223181b676042bc09b3c9588256a67c750074de496ef done
+#17 naming to docker.io/library/pg369:before done
+#17 DONE 0.1s
+id=sha256:d9d5a9a95afc4dff3158223181b676042bc09b3c9588256a67c750074de496ef
+layers=["sha256:8227a1264c7ff2f8bd125b585e62c1cec77dd2099c985c33e08d34292d06144f","sha256:29274d1e8c80bdb71f7b0e41824b0b8b5df71e80235353bf3b351a0a785fee41","sha256:790caeded2aabf9f44ff02a50f7877cc2a0605f5d8a77ae39c4749fd8933eed3","sha256:5be35717a0bd8705a6df5c50790397cb1d3114e17694a05d4136c02f26e3389b","sha256:698196ff230e917fe5e55db9bb167fb51e4990f12d99d459cc4333b904f81ebf","sha256:953e5bad7774d2
