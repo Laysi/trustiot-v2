@@ -102,7 +102,7 @@ bun stress.ts after-heavy 24 12 10 job_lock verify_job_lock           # 修正�
 
 ## 最終檢查
 
-在 rebase 到 `origin/main` 的 `da6b4c8`（含 Laysi/trustiot-v2#358）之後，以一個 rcheck 批次執行（第一次跑出兩個問題，已修正：`services/identity` 的測試以 `#[path]` 共用 `tests/support/postgres.rs` 與自己的 `Container`，所以診斷函式改放在 `postgres.rs`；`tools/sql-check` 不接受 `format!` 組成的 `CREATE DATABASE`，改用字面值的表）： `cargo fmt --all --check`、兩個 `cargo clippy`（預設與 `--no-default-features`）、`cargo test --workspace --locked` 與 `cargo test --package service-kit --no-default-features --locked`；輸出：[`final-checks.txt`](data/2026-10-12-364-job-lock-postgres-start/final-checks.txt)。
+在合併 `origin/main` 的 `28862e1` 之後，以一個 rcheck 批次執行（第一次跑出兩個問題，已修正：`services/identity` 的測試以 `#[path]` 共用 `tests/support/postgres.rs` 與自己的 `Container`，所以診斷函式改放在 `postgres.rs`；`tools/sql-check` 不接受 `format!` 組成的 `CREATE DATABASE`，改用字面值的表）： `cargo fmt --all --check`、兩個 `cargo clippy`（預設與 `--no-default-features`）、`cargo test --workspace --locked` 與 `cargo test --package service-kit --no-default-features --locked`；輸出：[`final-checks.txt`](data/2026-10-12-364-job-lock-postgres-start/final-checks.txt)。
 
 ## 結論
 
