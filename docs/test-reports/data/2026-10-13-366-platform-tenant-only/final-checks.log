@@ -1,63 +1,63 @@
 ===== fmt: cargo fmt --all --check
 ===== fmt: exit 0
 ===== clippy-workspace: cargo clippy --workspace --all-targets --locked -- -D warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.87s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.64s
 ===== clippy-workspace: exit 0
 ===== clippy-service-kit-no-default: cargo clippy -p service-kit --no-default-features --all-targets --locked -- -D warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.20s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.23s
 ===== clippy-service-kit-no-default: exit 0
 ===== test-service-kit: cargo test --locked -p service-kit
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.53s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.93s
      Running unittests src/lib.rs (target/debug/deps/service_kit-2cd6c7b08e1e090f)
-test result: ok. 89 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+test result: ok. 89 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
      Running tests/chart_contract.rs (target/debug/deps/chart_contract-371ac2be665eaa01)
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
      Running tests/container.rs (target/debug/deps/container-1b4d7da018f66c45)
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.27s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.30s
      Running tests/dependency_isolation.rs (target/debug/deps/dependency_isolation-2fcd9a42117dc172)
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
      Running tests/errors.rs (target/debug/deps/errors-f33bc8f23cc59ec6)
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
      Running tests/identity.rs (target/debug/deps/identity-e8dedde6b7c4be03)
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
      Running tests/identity_adversarial.rs (target/debug/deps/identity_adversarial-b53c355cd18b2dea)
-test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.17s
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.66s
      Running tests/job_lock.rs (target/debug/deps/job_lock-c8e13efd8b621b55)
-test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.40s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.09s
      Running tests/lifecycle.rs (target/debug/deps/lifecycle-5d18c9ba9e07e7bb)
 test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.05s
      Running tests/logging.rs (target/debug/deps/logging-235c75039a213630)
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
      Running tests/otlp.rs (target/debug/deps/otlp-ac2f660082dcb5a6)
-test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.30s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.33s
      Running tests/postgres_start.rs (target/debug/deps/postgres_start-f678f030a293d178)
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.50s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.83s
      Running tests/postgres_trust.rs (target/debug/deps/postgres_trust-244f7b41e2bd876f)
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.12s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.95s
      Running tests/tenant_db.rs (target/debug/deps/tenant_db-af17b76684db765f)
-test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.32s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.85s
      Running tests/verify_config.rs (target/debug/deps/verify_config-c1fa54cd4123d402)
 test other_prefixes_and_unrelated_variables_are_ignored ... ok
 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/verify_container.rs (target/debug/deps/verify_container-a599de38271d7b34)
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.50s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.43s
      Running tests/verify_job_lock.rs (target/debug/deps/verify_job_lock-2e397ffde5a8ccfa)
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.39s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.45s
      Running tests/verify_leaks.rs (target/debug/deps/verify_leaks-37512446c9880d7a)
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.19s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s
      Running tests/verify_shutdown.rs (target/debug/deps/verify_shutdown-c911f71b7e5a0b62)
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.92s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.93s
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
 ===== test-service-kit: exit 0
 ===== test-service-kit-no-default: cargo test --locked -p service-kit --no-default-features
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.47s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.43s
      Running unittests src/lib.rs (target/debug/deps/service_kit-f1d118ea5c8db5ff)
 test result: ok. 62 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
      Running tests/chart_contract.rs (target/debug/deps/chart_contract-b38bdcd0bb03a78d)
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/container.rs (target/debug/deps/container-73ed04d3a332047f)
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.08s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.05s
      Running tests/dependency_isolation.rs (target/debug/deps/dependency_isolation-0d397bc4f65d5405)
 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
      Running tests/errors.rs (target/debug/deps/errors-93f2d9a919b6ec96)
@@ -67,96 +67,100 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
      Running tests/identity_adversarial.rs (target/debug/deps/identity_adversarial-775ebfb6179a8737)
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/job_lock.rs (target/debug/deps/job_lock-60bb36acf8822019)
-test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.98s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.03s
      Running tests/lifecycle.rs (target/debug/deps/lifecycle-8464cd8d14d66064)
 test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.05s
      Running tests/logging.rs (target/debug/deps/logging-a00000561fcaa7f2)
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
      Running tests/otlp.rs (target/debug/deps/otlp-5668c0b464e48dde)
-test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.33s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.35s
      Running tests/postgres_start.rs (target/debug/deps/postgres_start-4bf8bc45696753e9)
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.86s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.74s
      Running tests/postgres_trust.rs (target/debug/deps/postgres_trust-f85e55cb77120d78)
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.90s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.54s
      Running tests/tenant_db.rs (target/debug/deps/tenant_db-827af6c943e9d7c4)
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/verify_config.rs (target/debug/deps/verify_config-3891c79ba4367b77)
 test other_prefixes_and_unrelated_variables_are_ignored ... ok
 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/verify_container.rs (target/debug/deps/verify_container-6913bc3e022a953e)
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.54s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.39s
      Running tests/verify_job_lock.rs (target/debug/deps/verify_job_lock-a72b9e49bf773441)
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.44s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.41s
      Running tests/verify_leaks.rs (target/debug/deps/verify_leaks-68a2efd5fc4d609e)
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.30s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s
      Running tests/verify_shutdown.rs (target/debug/deps/verify_shutdown-a85ef99e88e88377)
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.94s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.95s
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ===== test-service-kit-no-default: exit 0
 ===== test-outbox: cargo test --locked -p outbox
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.46s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.57s
      Running unittests src/lib.rs (target/debug/deps/outbox-6346494410fd1d80)
 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
      Running tests/crash.rs (target/debug/deps/crash-fa1e1e02a1139b4a)
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.20s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.67s
      Running tests/delivery.rs (target/debug/deps/delivery-0e66844f7ad45bc1)
-test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.03s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.89s
      Running tests/failure_paths.rs (target/debug/deps/failure_paths-f097c40cf50e8483)
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.59s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.68s
      Running tests/handler_panic.rs (target/debug/deps/handler_panic-fee7fc60425104b2)
-test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.73s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.84s
      Running tests/metrics.rs (target/debug/deps/metrics-166047f1506d65a4)
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.68s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.82s
      Running tests/notify.rs (target/debug/deps/notify-cd727e34219ed2c4)
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.27s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.16s
+     Running tests/postgres_start.rs (target/debug/deps/postgres_start-3afc89a9d8ab9489)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.76s
      Running tests/producer.rs (target/debug/deps/producer-f301156740a83c38)
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.75s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.73s
      Running tests/tenancy.rs (target/debug/deps/tenancy-38d1059c26fa9994)
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.06s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.11s
      Running tests/verify_271.rs (target/debug/deps/verify_271-7d562b96a0b9526b)
-test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.49s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.49s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ===== test-outbox: exit 0
 ===== test-testkit: cargo test --locked -p testkit
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.29s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.27s
      Running unittests src/lib.rs (target/debug/deps/testkit-372c6c63ae182ac8)
 test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
      Running tests/container_volumes.rs (target/debug/deps/container_volumes-836320644bc6a699)
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.66s
      Running tests/postgres_isolation.rs (target/debug/deps/postgres_isolation-9ac0a39135d51855)
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.71s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.07s
+     Running tests/postgres_start.rs (target/debug/deps/postgres_start-9dcb81e577189cdd)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.83s
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ===== test-testkit: exit 0
 ===== test-identity: cargo test --locked -p identity
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.82s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.76s
      Running unittests src/lib.rs (target/debug/deps/identity-f94ae056fbd73e7e)
 test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
      Running tests/adversarial.rs (target/debug/deps/adversarial-1172f07f1edf952e)
-test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.87s
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.84s
      Running tests/cross_tenant.rs (target/debug/deps/cross_tenant-948adaab5fd5c38e)
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.52s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.68s
      Running tests/ext_authz.rs (target/debug/deps/ext_authz-de24672821de6e94)
-test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.39s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.58s
      Running tests/token_claims.rs (target/debug/deps/token_claims-fec875e39c1519b4)
-test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ===== test-identity: exit 0
 ===== test-sql-check-repo-check: cargo test --locked -p sql-check -p repo-check
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.03s
      Running unittests src/lib.rs (target/debug/deps/repo_check-cb97eb5799213f90)
 test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/repository.rs (target/debug/deps/repository-3bb08d58df261a4f)
-test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
      Running unittests src/lib.rs (target/debug/deps/sql_check-1bc345e149b707e5)
 test tests::unrelated_functions_named_query_are_ignored ... ok
 test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/check.rs (target/debug/deps/check-600082b3a3b97008)
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.93s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ===== test-sql-check-repo-check: exit 0
 ===== openapi-check: cargo run --locked -p openapi -- --check
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s
      Running `target/debug/openapi --check`
 api/openapi.json is up to date
 ===== openapi-check: exit 0

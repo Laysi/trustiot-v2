@@ -1330,8 +1330,10 @@ struct PlatformMistake {
 }
 
 /// Laysi/trustiot-v2#366: the platform role's session is refused when the platform role, or a
-/// role it belongs to, may run a command on a table with row-level security but the only
-/// permissive policies that apply to it for that command are the tenant condition. Such a grant
+/// role it can become with `SET ROLE`, may run a command on a table with row-level security but
+/// the permissive policies that apply to it for that command may open only the session's tenant
+/// (the tenant condition, however written, or a policy that uses a function, operator, or
+/// relation the check cannot look into). Such a grant
 /// gives `PlatformDb`, which never sets a tenant, nothing, and gives a platform session that sets
 /// a tenant itself that tenant's rows; each case shows both on a plain session, then that the
 /// fix is accepted. The templates stay accepted (here, in
@@ -1367,7 +1369,15 @@ async fn platform_sessions_only_the_tenant_condition_opens_are_refused() {
          INSERT INTO other.private_items VALUES ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'other-a');
          CREATE TABLE locked_items (tenant_id uuid NOT NULL, name text NOT NULL);
          ALTER TABLE locked_items ENABLE ROW LEVEL SECURITY;
-         INSERT INTO locked_items VALUES ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'locked-a');",
+         INSERT INTO locked_items VALUES ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'locked-a');
+         CREATE FUNCTION current_tenant() RETURNS uuid LANGUAGE sql STABLE
+             AS $$ SELECT NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid $$;
+         CREATE FUNCTION is_current_tenant(uuid) RETURNS boolean LANGUAGE sql STABLE
+             AS $$ SELECT $1 = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid $$;
+         CREATE OPERATOR ~~~ (RIGHTARG = uuid, FUNCTION = is_current_tenant);
+         CREATE VIEW current_tenant_view WITH (security_invoker = true) AS
+             SELECT NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid AS tenant;
+         GRANT SELECT ON current_tenant_view TO example_platform, example_platform_switch;",
     )
     .execute(&mut owner)
     .await
@@ -1603,6 +1613,64 @@ async fn platform_sessions_only_the_tenant_condition_opens_are_refused() {
                   REVOKE SELECT ON private_items FROM example_platform;",
         },
         PlatformMistake {
+            // The tenant condition behind a function: the check cannot see the function's body,
+            // so a policy that calls a function that is not built in opens nothing beyond the
+            // tenant as far as the check can tell.
+            mistake: "a policy for the SET ROLE target that reads the tenant through a function",
+            make: "CREATE POLICY switch_function ON private_items TO example_platform_switch
+                       USING (tenant_id = current_tenant());
+                   GRANT SELECT ON private_items TO example_platform_switch;",
+            refused: tenant_only(private, "example_platform_switch", "SELECT"),
+            probe: (Some("example_platform_switch"), "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "DROP POLICY switch_function ON private_items;
+                  REVOKE SELECT ON private_items FROM example_platform_switch;",
+        },
+        PlatformMistake {
+            mistake: "a platform policy that reads the tenant through a function",
+            make: "CREATE POLICY platform_function ON private_items TO example_platform
+                       USING (tenant_id = current_tenant());
+                   GRANT SELECT ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "SELECT"),
+            probe: (None, "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "DROP POLICY platform_function ON private_items;
+                  REVOKE SELECT ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
+            mistake: "a platform policy that reads the tenant through an operator",
+            make: "CREATE POLICY platform_operator ON private_items TO example_platform
+                       USING (~~~ tenant_id);
+                   GRANT SELECT ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "SELECT"),
+            probe: (None, "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "DROP POLICY platform_operator ON private_items;
+                  REVOKE SELECT ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
+            mistake: "a platform policy that reads the tenant through a view",
+            make: "CREATE POLICY platform_view ON private_items TO example_platform
+                       USING (tenant_id IN (SELECT tenant FROM current_tenant_view));
+                   GRANT SELECT ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "SELECT"),
+            probe: (None, "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "DROP POLICY platform_view ON private_items;
+                  REVOKE SELECT ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
+            mistake: "a platform policy that builds the setting's name",
+            make: "CREATE POLICY platform_built_name ON private_items TO example_platform
+                       USING (tenant_id = NULLIF(current_setting('trustiot.' || 'tenant_id', true), '')::uuid);
+                   GRANT SELECT ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "SELECT"),
+            probe: (None, "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "DROP POLICY platform_built_name ON private_items;
+                  REVOKE SELECT ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
             // The check does not count restrictive policies: they can only narrow access, and
             // whether one closes everything the tenant condition opens is not something it
             // judges. The grant still gives PlatformDb nothing, so it is refused all the same.
@@ -1668,6 +1736,32 @@ async fn platform_sessions_only_the_tenant_condition_opens_are_refused() {
         assert_eq!(rows, 0, "no policy, no row, tenant {tenant:?}");
     }
     println!("a grant on a table without any policy: accepted, no row with or without a tenant");
+
+    // Built-in functions and operators record no dependency, so a platform policy that uses
+    // them still counts as opening the table.
+    sqlx::raw_sql(
+        "CREATE POLICY platform_builtin ON private_items TO example_platform
+             USING (length(name) > 0 AND lower(name) <> '');
+         GRANT SELECT ON private_items TO example_platform;",
+    )
+    .execute(&mut owner)
+    .await
+    .expect("a platform policy with built-in functions");
+    assert_eq!(
+        platform_check(&fixture).await,
+        Ok(()),
+        "a platform policy with built-in functions"
+    );
+    let rows = rows_reached(&fixture, None, None, "SELECT name FROM private_items").await;
+    assert_eq!(rows, 2, "the policy opens every row without a tenant");
+    sqlx::raw_sql(
+        "DROP POLICY platform_builtin ON private_items;
+         REVOKE SELECT ON private_items FROM example_platform;",
+    )
+    .execute(&mut owner)
+    .await
+    .expect("drop");
+    println!("a platform policy with built-in functions: accepted, {rows} rows without a tenant");
 
     // A platform policy that reads the tenant setting counts as opening nothing beyond the
     // tenant even when it opens every row: the check refuses rather than judge the expression,

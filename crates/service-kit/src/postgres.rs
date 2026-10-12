@@ -418,16 +418,22 @@ pub enum UnsafeSession {
     /// Platform sessions only ([`SessionRole::Platform`]): `role`, the platform role or a role it
     /// can become with `SET ROLE`, may run `command` (`SELECT`, `INSERT`, `UPDATE`, or `DELETE`)
     /// on `table`, which has row-level security, but the permissive policies that apply to `role`
-    /// for that command open only the session's tenant: each is the tenant condition, reads
-    /// `trustiot.tenant_id` some other way, or is `false`. `PlatformDb` never sets a tenant, so
-    /// the grant gives it nothing; a platform session that set `trustiot.tenant_id` itself would
-    /// reach that tenant's rows. Revoke the grant, or add a policy for the platform role by name
-    /// (`platform_access`).
+    /// for that command may open only the session's tenant: each is the tenant condition, names
+    /// `trustiot.tenant_id` or calls `current_setting` some other way, is `false`, or belongs to
+    /// a policy that uses an object the check cannot look into (a function or operator that is
+    /// not built in, another relation, or a type), which might read the tenant setting.
+    /// `PlatformDb` never sets a tenant, so the grant gives it nothing; a platform session that
+    /// set `trustiot.tenant_id` itself would reach that tenant's rows. Revoke the grant, or add a
+    /// policy for the platform role by name (`platform_access`) that uses only built-in
+    /// functions and operators and the table's own columns.
     #[error(
-        "database role `{role}` may {command} on `{table}`, but the only permissive policies that \
-         apply to it for {command} are the tenant condition, so a platform session that sets \
-         trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a \
-         policy for the platform role by name (platform_access)"
+        "database role `{role}` may {command} on `{table}`, but the permissive policies that \
+         apply to it for {command} open at most the session's tenant as far as the check can \
+         tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or \
+         relation it cannot look into), so a platform session that sets trustiot.tenant_id \
+         itself would reach that tenant's rows; revoke the grant or add a policy for the \
+         platform role by name (platform_access) that uses only built-in functions and the \
+         table's own columns"
     )]
     PlatformTenantOnly {
         /// The table, as `schema.table`.
@@ -500,29 +506,42 @@ platform_tables AS MATERIALIZED (
            OR has_any_column_privilege(pr.oid, r.oid, 'SELECT, INSERT, UPDATE'))
 ),
 -- The permissive policies, each printed once. Restrictive policies only narrow access, so
--- they are not counted.
+-- they are not counted. opaque: the policy's expressions use an object other than its own
+-- table and columns, such as a function or operator that is not built in (built-in catalog
+-- objects are pinned and record no dependency), another relation (a view, or a table whose own
+-- policies read the tenant), or a type. The check cannot see what such an object does, so it
+-- cannot tell whether the expression reads the tenant setting.
 platform_policies AS MATERIALIZED (
-    SELECT polrelid, polcmd::text AS polcmd, polroles,
-           pg_get_expr(polqual, polrelid) AS using_expr,
-           pg_get_expr(coalesce(polwithcheck, polqual), polrelid) AS check_expr
-    FROM pg_policy
-    WHERE $1 AND polpermissive
+    SELECT pol.polrelid, pol.polcmd::text AS polcmd, pol.polroles,
+           pg_get_expr(pol.polqual, pol.polrelid) AS using_expr,
+           pg_get_expr(coalesce(pol.polwithcheck, pol.polqual), pol.polrelid) AS check_expr,
+           EXISTS (
+               SELECT 1 FROM pg_depend d
+               WHERE d.classid = 'pg_policy'::regclass AND d.objid = pol.oid
+                 AND NOT (d.refclassid = 'pg_class'::regclass AND d.refobjid = pol.polrelid)
+           ) AS opaque
+    FROM pg_policy pol
+    WHERE $1 AND pol.polpermissive
 ),
 -- A command evaluates USING to filter rows (SELECT, UPDATE, DELETE) and WITH CHECK, or USING
 -- when a policy has none, to check new rows (INSERT, UPDATE). A policy applies to a role that
 -- has the privileges of (inherits) one of the policy's roles, or to every role (PUBLIC). Per
 -- role, table, command, and side: how many expressions the permissive policies that apply to
--- the role give, and how many of them open the table beyond the session's tenant. An
--- expression that reads the tenant setting, however it is written, or that is false counts as
--- opening nothing beyond it; any other expression counts as opening the table. Counting an
--- expression as opening nothing can only refuse more sessions, never accept one, so an
--- expression that reads the setting and still opens every row (`<tenant condition> OR true`)
--- is refused too: the check does not try to tell such expressions apart.
+-- the role give, and how many of them open the table beyond the session's tenant. These count
+-- as opening nothing beyond it: an expression that names the tenant setting, calls
+-- current_setting, or is false, and every expression of an opaque policy, since it may read
+-- the setting where the check cannot see it. Any other expression counts as opening the table.
+-- Counting an expression as opening nothing can only refuse more sessions, never accept one,
+-- so an expression that reads the setting and still opens every row
+-- (`<tenant condition> OR true`) is refused too: the check does not try to tell such
+-- expressions apart.
 platform_sides AS (
     SELECT t.role_oid, t.role_name, t.rel, t.relation, s.command, s.uses_qual,
            count(e.expr) AS expressions,
            count(e.expr) FILTER (WHERE e.expr <> $2 AND e.expr <> 'false'
-                                 AND strpos(e.expr, '''trustiot.tenant_id''') = 0) AS wider
+                                 AND strpos(e.expr, '''trustiot.tenant_id''') = 0
+                                 AND strpos(e.expr, 'current_setting(') = 0
+                                 AND NOT p.opaque) AS wider
     FROM platform_tables t
     CROSS JOIN (VALUES ('SELECT', 'r', true), ('INSERT', 'a', false), ('UPDATE', 'w', true),
                        ('UPDATE', 'w', false), ('DELETE', 'd', true))
