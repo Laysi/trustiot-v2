@@ -74,7 +74,9 @@ describe("pull Secret", () => {
 describe("age build environment", () => {
   test("uses only the public Go proxy and checksum database and drops overrides", () => {
     const env = goEnvironment("/cache/bin");
-    expect(env).toMatchObject({ GOBIN: "/cache/bin", GOPROXY: "https://proxy.golang.org", GOSUMDB: "sum.golang.org", GOTOOLCHAIN: "local" });
+    // GOENV=off: a `go env -w GONOSUMDB=...` in the user's go env file would otherwise apply,
+    // because go falls back to that file for every variable missing from the environment.
+    expect(env).toMatchObject({ GOENV: "off", GOBIN: "/cache/bin", GOPROXY: "https://proxy.golang.org", GOSUMDB: "sum.golang.org", GOTOOLCHAIN: "local" });
     for (const name of ["GONOSUMDB", "GONOSUMCHECK", "GONOPROXY", "GOPRIVATE", "GOINSECURE"]) {
       expect(name in env && env[name] === undefined).toBe(true);
     }

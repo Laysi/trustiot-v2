@@ -60,6 +60,7 @@ GitHub 預設不讓 Actions 開 PR。repo 設定 **Settings → Actions → Gene
 
 - 以 tag 與 digest 拉 chart，digest 優先：GHCR 的 tag 可以被有寫入權限的人移動，digest 不行。
 - 只接受 release.yml 在**這個 tag** 上的 keyless 簽章（issuer `https://token.actions.githubusercontent.com`，subject `https://github.com/Laysi/trustiot-v2/.github/workflows/release.yml@refs/tags/v<版本>`，皆為完全比對；決策 30）。別的 tag、別的 workflow 或別的 repo 簽的都不接受。驗證失敗時 OCIRepository 的 Ready 為 False，HelmRelease 不升級，正在跑的版本不受影響。
+- 簽章證明的是「release.yml 在這個 tag 上建置並推送」，不是「來自 main」。正式版的 tag 必須在 main 上（release.yml 的 plan 檢查），所以執行的 release.yml 就是 main 上審查過的版本；候選版的 tag 可以在任何分支上，跑的是該分支的 release.yml，由推 tag 的人決定。所以候選版的 deploy PR 是 draft，合併前的審查才是把關。要收緊時，以 tag ruleset 限制誰能建立 `v*` tag（repo 設定，由人決定）。
 - 需要 Flux 2.8 以上才讀得懂 cosign v3 的 bundle 格式；`.prototools` 釘的是 2.9.6。
 - `bun test deploy/flux` 要求 `chart.yaml` 與 `renderChartSource` 對它自己的版本的輸出逐字相同，所以手改（拿掉 `verify`、放寬 subject、拿掉 digest）都會讓 CI 失敗；deploy-pr 遇到被手改過的 `chart.yaml` 也會停下，不會覆寫。
 - Flux 的控制器映像以 digest 釘選；`scripts/flux/components.ts` 寫入 digest 前，以 cosign 驗證 fluxcd 官方 release workflow（`fluxcd/gha-workflows` 的 controller-release，由 `fluxcd/<控制器>` 的 tag 觸發）的 keyless 簽章。
@@ -88,7 +89,7 @@ bun scripts/flux/age.ts age -d -i <私鑰檔> <檔案>  # age 本身
 
 Flux 拉 chart（`chart.yaml` 的 `secretRef`）與 kubelet 拉映像（`values-instance.yaml` 的 `global.imagePullSecrets`）共用 namespace `trustiot` 的 Secret `ghcr-pull`（`kubernetes.io/dockerconfigjson`）。GHCR 只接受 classic personal access token：
 
-1. 以專用的機器帳號（不是任何人的帳號）建立 classic token，只勾 `read:packages`，設定到期日（最長一年），在團隊行事曆記下到期前 14 天的提醒。機器帳號要能讀 `Laysi/trustiot-v2` 的套件。
+1. 以專用的機器帳號（不是任何人的帳號）建立 classic token，只勾 `read:packages`，設定到期日（最長一年），在團隊行事曆記下到期前 14 天的提醒。機器帳號要能讀 `Laysi/trustiot-v2` 的套件，而且只給這些套件的讀取權限：classic token 的 `read:packages` 能讀帳號看得到的每一個套件，不限於這個 repo。
 2. 產生加密的 Secret。token 只經 stdin 傳入，明文只在記憶體與 sops 的 stdin 裡：
 
    ```sh

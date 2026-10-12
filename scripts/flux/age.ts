@@ -29,9 +29,13 @@ type AgeCommand = (typeof AGE_COMMANDS)[number];
 /**
  * The Go environment of the build: the public proxy and checksum database only, and nothing
  * from the caller's environment that could turn the verification off or redirect the download.
+ * GOENV=off also ignores the user's `go env -w` file: go reads a variable that is unset (or
+ * empty) in the environment from that file, so removing GONOSUMDB, GOPRIVATE or GOINSECURE
+ * here would not be enough on its own.
  */
 export function goEnvironment(bin: string): Record<string, string | undefined> {
   return {
+    GOENV: "off",
     GOBIN: bin,
     GOFLAGS: "-mod=readonly -trimpath",
     GOPROXY: "https://proxy.golang.org",
