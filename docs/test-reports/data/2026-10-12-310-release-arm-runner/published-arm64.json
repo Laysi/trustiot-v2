@@ -1,0 +1,22 @@
+{
+  "images": [
+    {
+      "name": "identity",
+      "ref": "127.0.0.1:5168/laysi/trustiot-v2/identity:0.0.0-rc.1",
+      "digest": "sha256:a2fe0c510c4f78476e09419fa2c26cfd847de75f97c531a80131813a2954e97c",
+      "sbomAsset": "identity-0.0.0-rc.1.spdx.json"
+    },
+    {
+      "name": "release-selftest",
+      "ref": "127.0.0.1:5168/laysi/trustiot-v2/release-selftest:0.0.0-rc.1",
+      "digest": "sha256:43f2cb6ad0d5d690a8f7b891ee26c1006beb2cbbe5bc6f1973ce38bdee88a0dd",
+      "sbomAsset": "release-selftest-0.0.0-rc.1.spdx.json"
+    }
+  ],
+  "chart": {
+    "name": "trustiot",
+    "ref": "127.0.0.1:5168/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1",
+    "digest": "sha256:536de43f9275c19fc8a47de5f9c473fa299aa120bf5c4c52b4d983c05cdee76c"
+  },
+  "releaseUrl": ""
+}

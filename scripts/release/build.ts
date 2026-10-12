@@ -8,8 +8,11 @@
  * run, with Zig as C compiler and linker (cargo-zigbuild) and the dependency list embedded
  * (cargo-auditable), then each is packed with deploy/images/rust-binary.Containerfile. The
  * Cargo command is rust-build.ts's rustCrossCompileCommand, which the nightly's service images share.
- * Containerfile images are built from their directory. Builds never run arm64 code: a
- * Containerfile whose RUN steps execute in the arm64 stage fails without an emulator.
+ * release.yml runs this on the arm64 runner and the local flow on any machine, with the same
+ * command: the host's own triple is never the musl target. Containerfile images are built from
+ * their directory. Builds never run code of the image's platform, so x86 machines need no
+ * emulator: a RUN may only execute in a `FROM --platform=$BUILDPLATFORM` stage, which plan
+ * checks (containerfile.ts's targetStageRunProblems).
  *
  * This job runs third-party build code (Cargo build scripts and proc macros), so it has no
  * secrets and a read-only token, and its output is only data:

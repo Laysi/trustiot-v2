@@ -510,10 +510,14 @@ describe("aarch64ElfProblem", () => {
     expect(aarch64ElfProblem(new Uint8Array(0))).toBe("it is not an ELF file");
   });
 
-  test("rejects the x86_64 binary running this test", () => {
-    if (process.arch === "x64") {
-      expect(aarch64ElfProblem(new Uint8Array(readFileSync(process.execPath)))).toContain("ELF machine is 62");
-    }
+  // The Bun executable running this test is a real ELF file: accepted on the arm64 runners
+  // (ci.yml, release.yml), rejected on an x86_64 workstation.
+  test.if(process.platform === "linux" && process.arch === "arm64")("accepts the aarch64 binary running this test", () => {
+    expect(aarch64ElfProblem(new Uint8Array(readFileSync(process.execPath)))).toBeUndefined();
+  });
+
+  test.if(process.platform === "linux" && process.arch === "x64")("rejects the x86_64 binary running this test", () => {
+    expect(aarch64ElfProblem(new Uint8Array(readFileSync(process.execPath)))).toContain("ELF machine is 62");
   });
 });
 

@@ -133,7 +133,7 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 
 | 腳本 | job | 內容 |
 | --- | --- | --- |
-| `release/plan.ts` | plan | 檢查 tag（正式版要在 main 上，且該 commit 在 main 的 ci 通過），列出要發佈的映像（`deploy/images/`）與 chart，`helm lint --strict` |
+| `release/plan.ts` | plan | 檢查 tag（正式版要在 main 上，且該 commit 在 main 的 ci 通過），列出要發佈的映像（`deploy/images/`）與 chart，檢查 Containerfile 只在 `FROM --platform=$BUILDPLATFORM` 的階段 `RUN`（`release/containerfile.ts`），`helm lint --strict` |
 | `release/build.ts` | build | 交叉編譯 Rust、建置 arm64 映像（OCI 壓縮檔）與 SPDX SBOM，不推送 |
 | `release/publish.ts` | publish | 推送映像、cosign 簽章與 SBOM attestation，打包、推送並簽章 chart，建立 GitHub Release |
 | `release/verify.ts` | verify | 以唯讀權限驗證發佈結果，輸出驗證報告 |
@@ -161,6 +161,8 @@ bun scripts/release/verify.ts --plan "$work/plan.json" --published "$work/publis
 
 podman stop release-registry
 ```
+
+主機是 x86_64 或 arm64 都能跑，指令相同，不需要模擬器。release.yml 在 arm64 runner 上建置（Laysi/trustiot-v2#310），所以要重現某次發佈的服務映像 digest，要在 arm64 上跑：x86 上交叉編譯出的服務執行檔功能相同、位元不同（chart 與 `release-selftest` 相同），原因與 x86 上以 qemu-user 模擬 arm64 容器重現的做法見 [CI 與發佈](../docs/architecture/ci-release.md) 的「交叉編譯與可重現建置」與其測試報告。
 
 `--dry-run` 以目前的 HEAD 規劃，tag 不必存在，也不檢查正式版是否在 main 上、main 的 ci 是否通過（後者以 `GITHUB_TOKEN` 讀 GitHub API）。只要建置映像，前兩步就夠了。同一個版本再跑一次 publish 會得到相同的 digest，不會重複推送；內容不同時 publish 會拒絕覆蓋。
 

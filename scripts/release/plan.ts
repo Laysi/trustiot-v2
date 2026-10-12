@@ -8,7 +8,9 @@
  *   A final release (no -rc.N) must be on main (refs/remotes/origin/main), and the newest push
  *   run of ci.yml on main for that commit must have succeeded (lib.ts greenCiProblem). The runs
  *   are read from the GitHub API with GITHUB_TOKEN, which needs `actions: read`.
- * - The images are the directories under deploy/images/ (lib.ts discoverImages).
+ * - The images are the directories under deploy/images/ (lib.ts discoverImages). A Containerfile
+ *   must pin its base images by digest and may RUN only in `FROM --platform=$BUILDPLATFORM`
+ *   stages (lib.ts baseImageProblems, containerfile.ts targetStageRunProblems).
  * - The chart must pass `helm lint --strict` for both deployment modes, as in CI.
  *
  * --dry-run plans a local build of HEAD: the tag need not exist and the main and ci checks are

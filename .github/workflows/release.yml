@@ -3,11 +3,16 @@
 # SBOM for each image and creates the GitHub Release. Policy, verification commands and the
 # procedure when a run fails: docs/architecture/ci-release.md, section release.yml.
 #
+# Every job runs on the standard arm64 runner (`ubuntu-24.04-arm`), like ci.yml and nightly.yml
+# (Laysi/trustiot-v2#310): the images are built on the architecture they ship for, and a
+# rebuild that should reproduce a release's digests must also run on arm64 (ci-release.md,
+# "交叉編譯與可重現建置").
+#
 # Jobs and what each may do (every job lists its own `permissions`):
 # - plan     contents: read, actions: read. Checks the tag (a final release must be on main,
 #            with a green ci run for that commit there), lists what the release publishes,
 #            lints the chart and writes the release notes.
-# - build    contents: read. Cross-compiles and builds the images. It runs third-party build
+# - build    contents: read. Compiles the Rust binaries and builds the images. It runs third-party build
 #            code (Cargo build scripts and proc macros), so it gets no secret and no write
 #            access, and hands over only data: image archives and SBOMs as an artifact.
 # - publish  environment `release`; contents, packages: write; id-token: write. Pushes the
@@ -42,7 +47,7 @@ concurrency:
 jobs:
   plan:
     name: plan
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     permissions:
       actions: read # a final release needs a green ci run of the tagged commit on main
@@ -88,7 +93,7 @@ jobs:
   build:
     name: build
     needs: plan
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     permissions:
       contents: read
@@ -125,7 +130,7 @@ jobs:
   publish:
     name: publish
     needs: [plan, build]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     # Required reviewers and tag rules for this environment need a plan that offers them for
     # private repositories. Until then nothing here gates a release: accepted on 2026-10-10 with
@@ -165,7 +170,7 @@ jobs:
   verify:
     name: verify
     needs: [plan, publish]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     permissions:
       contents: read
@@ -193,7 +198,7 @@ jobs:
   deploy-pr:
     name: deploy-pr
     needs: [plan, publish, verify]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 5
     permissions:
       actions: write # start ci.yml on the deploy branch (workflow_dispatch)
@@ -225,7 +230,7 @@ jobs:
     name: report
     needs: [plan, build, publish, verify, deploy-pr]
     if: ${{ always() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 5
     permissions:
       contents: write # append the verification report to the GitHub Release

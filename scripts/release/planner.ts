@@ -5,9 +5,11 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { targetStageRunProblems } from "./containerfile.ts";
 import { run, systemTool, tryRun } from "./exec.ts";
 import {
   CHART_DIR,
+  type ImageSpec,
   type ReleasePlan,
   type ReleaseVersion,
   ReleaseError,
@@ -108,11 +110,29 @@ export async function makePlan(input: PlanInput): Promise<ReleasePlan> {
     commit,
     sourceDateEpoch,
     repository: input.repository,
-    images: discoverImages(input.root).map((spec) => planImage(spec, version.version, input.registry)),
+    images: checkContainerfiles(input.root, discoverImages(input.root)).map((spec) => planImage(spec, version.version, input.registry)),
     chart: { name, repository: `${input.registry}/charts/${name}`, version: version.version },
   };
   // The other stages read the plan through this validator; fail here if it would not pass.
   return parsePlan(JSON.stringify(plan));
+}
+
+/**
+ * Returns the images unchanged, or throws when a Containerfile image runs a program in a stage
+ * that builds for the image's platform (containerfile.ts targetStageRunProblems).
+ */
+function checkContainerfiles(root: string, images: ImageSpec[]): ImageSpec[] {
+  for (const image of images) {
+    if (image.kind !== "containerfile") {
+      continue;
+    }
+    const where = `${image.context}/Containerfile`;
+    const problems = targetStageRunProblems(readFileSync(join(root, where), "utf8"));
+    if (problems.length > 0) {
+      throw new ReleaseError(`${where}: ${problems.join("; ")}`);
+    }
+  }
+  return images;
 }
 
 /** The release whose tag the notes of `release` start from (lib.ts previousReleaseTag). */
