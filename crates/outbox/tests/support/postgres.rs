@@ -1,39 +1,30 @@
 //! A throwaway Postgres that serves TLS with a certificate from a CA made for this test, so
 //! the consumer's service-kit pools connect with `sslmode=verify-full` as services do.
 //!
-//! Follows `crates/service-kit/tests/support/postgres.rs` (same image, same TLS setup), until a
-//! shared test crate exists; unlike the kit's, every test gets its own container, as the outbox
-//! tests always had.
+//! The image, the TLS setup, and the start (the wait, the replacement of a container whose
+//! published port is dead, the failure message) are `super::start`, which is
+//! `crates/service-kit/tests/support/start.rs`, the same logic as every other crate's tests use;
+//! unlike the kit's, every test gets its own container, as the outbox tests always had.
 
 use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair};
 use sqlx::postgres::{PgConnectOptions, PgSslMode};
 use sqlx::{Connection, PgConnection};
 
-use super::{Container, container_runtime, runtime_output, unavailable, unique};
-
-/// Same image and digest as the kit's tests.
-const POSTGRES_IMAGE: &str = "docker.io/library/postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873";
+use super::start::{
+    POSTGRES_IMAGE, START_LIMITS, START_WITH_TLS, StartLimits, log_in_once, start_postgres_within,
+};
+use super::{Container, container_runtime, unavailable};
 
 /// The password of the superuser and of every role the tests create.
 pub const TEST_PASSWORD: &str = "outbox-test";
 
 /// The server certificate names only this address, which is where the container is published.
 pub const SERVER_HOST: &str = "127.0.0.1";
-
-/// Moves the generated certificate and key into place for the postgres user (the key must be
-/// readable only by it) and starts the image's entrypoint with TLS on.
-const START_WITH_TLS: &str = "set -eu
-mkdir -p /etc/postgres-tls
-printf '%s' \"$TEST_TLS_CERT\" > /etc/postgres-tls/server.crt
-(umask 077; printf '%s' \"$TEST_TLS_KEY\" > /etc/postgres-tls/server.key)
-chown -R postgres:postgres /etc/postgres-tls
-exec docker-entrypoint.sh postgres -c ssl=on \
-  -c ssl_cert_file=/etc/postgres-tls/server.crt -c ssl_key_file=/etc/postgres-tls/server.key";
 
 /// How often a start retries with another port when the one it picked was taken in between, and
 /// how often a restart retries when the port is briefly held by another process.
@@ -74,42 +65,18 @@ impl TlsPostgres {
             unavailable("podman or docker");
             return None;
         };
-        let (ca_pem, certificate, key) = certificates();
-        let container = Container {
+        let postgres = Self::start_within(
+            START_LIMITS,
             runtime,
-            name: format!("outbox-test-{}", unique("postgres").replace('_', "-")),
-        };
-        let cert_env = format!("TEST_TLS_CERT={certificate}");
-        let key_env = format!("TEST_TLS_KEY={key}");
-        let password_env = format!("POSTGRES_PASSWORD={TEST_PASSWORD}");
-        let address = run_container(
-            runtime,
-            &container.name,
-            &[&password_env, &cert_env, &key_env],
+            "postgres-tls",
             fixed_port,
-        );
-        let ca_file =
-            PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{}-ca.pem", container.name));
-        std::fs::write(&ca_file, &ca_pem).expect("write the test CA");
-        let postgres = Self {
-            address,
-            ca_pem,
-            ca_file,
-            container,
-            fixed_port,
-        };
-        // The image runs initdb with networking off and then restarts; wait for the real server.
-        let started = Instant::now();
-        let mut connection = loop {
-            match PgConnection::connect_with(&postgres.options("postgres")).await {
-                Ok(connection) => break connection,
-                Err(error) => assert!(
-                    started.elapsed() < Duration::from_secs(90),
-                    "Postgres with TLS did not start in time: {error}"
-                ),
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        };
+            |_address| false,
+        )
+        .await
+        .unwrap_or_else(|message| panic!("{message}"));
+        let mut connection = PgConnection::connect_with(&postgres.options("postgres"))
+            .await
+            .expect("connect to the started Postgres");
         sqlx::raw_sql(init)
             .execute(&mut connection)
             .await
@@ -118,18 +85,81 @@ impl TlsPostgres {
         Some(postgres)
     }
 
+    /// Starts one container with `runtime`, named from `kind`, through
+    /// [`start_postgres_within`] with `limits`, and returns it once the host can log in with
+    /// `verify-full`. [`Self::start`] and [`Self::start_restartable`] use [`START_LIMITS`] and no
+    /// dead port; a test of the start itself passes shorter limits, and `published_port_dead` to
+    /// make the host's login to an address fail, as it does when Docker did not publish the
+    /// port: the container is then replaced by another one.
+    ///
+    /// The error is the message of [`start_postgres_within`]: what was awaited, for how long, the
+    /// last error, and the state and last log lines of the container.
+    pub async fn start_within(
+        limits: StartLimits,
+        runtime: &'static str,
+        kind: &str,
+        fixed_port: bool,
+        published_port_dead: impl Fn(SocketAddr) -> bool,
+    ) -> Result<Self, String> {
+        let (ca_pem, certificate, key) = certificates();
+        let cert_env = format!("TEST_TLS_CERT={certificate}");
+        let key_env = format!("TEST_TLS_KEY={key}");
+        let password_env = format!("POSTGRES_PASSWORD={TEST_PASSWORD}");
+        let started = start_postgres_within(
+            limits,
+            runtime,
+            kind,
+            "Postgres with TLS",
+            |container| {
+                run_container(
+                    runtime,
+                    &container.name,
+                    &[&password_env, &cert_env, &key_env],
+                    fixed_port,
+                );
+            },
+            |address| {
+                let dead = published_port_dead(address);
+                let options = tls_options(&ca_pem, address.port(), "postgres");
+                async move {
+                    if dead {
+                        return Err("simulated: nothing listens on the published port".to_owned());
+                    }
+                    log_in_once(options).await
+                }
+            },
+        )
+        .await?;
+        let ca_file = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("{}-ca.pem", started.container.name));
+        std::fs::write(&ca_file, &ca_pem).expect("write the test CA");
+        Ok(Self {
+            address: started.address,
+            ca_pem,
+            ca_file,
+            container: started.container,
+            fixed_port,
+        })
+    }
+
     /// Options to connect as `role` to the `postgres` database, verifying the server with the
     /// test CA.
     pub fn options(&self, role: &str) -> PgConnectOptions {
-        PgConnectOptions::new_without_pgpass()
-            .host(SERVER_HOST)
-            .port(self.address.port())
-            .username(role)
-            .password(TEST_PASSWORD)
-            .database("postgres")
-            .ssl_mode(PgSslMode::VerifyFull)
-            .ssl_root_cert_from_pem(self.ca_pem.clone().into_bytes())
+        tls_options(&self.ca_pem, self.address.port(), role)
     }
+}
+
+/// Options to connect to the Postgres published on `port`, verifying the server with the CA in
+/// `ca_pem`.
+fn tls_options(ca_pem: &str, port: u16, role: &str) -> PgConnectOptions {
+    PgConnectOptions::new_without_pgpass()
+        .host(SERVER_HOST)
+        .port(port)
+        .username(role)
+        .password(TEST_PASSWORD)
+        .database("postgres")
+        .ssl_mode(PgSslMode::VerifyFull)
+        .ssl_root_cert_from_pem(ca_pem.to_owned().into_bytes())
 }
 
 impl TlsPostgres {
@@ -163,24 +193,22 @@ impl TlsPostgres {
             attempt += 1;
             std::thread::sleep(Duration::from_millis(500));
         }
-        let mapping = runtime_output(runtime, &["port", &self.container.name, "5432/tcp"]);
         assert_eq!(
-            host_address(&mapping),
+            self.container.host_address("5432/tcp"),
             self.address,
-            "the host port changed across the restart: {mapping}"
+            "the host port changed across the restart"
         );
     }
 }
 
-/// Starts the container and returns the address it is published on: with `fixed_port`, a free
-/// port picked here and requested as `-p 127.0.0.1:<port>:5432`, otherwise one the runtime
-/// assigns.
+/// Starts the container, published on 127.0.0.1: with `fixed_port`, on a free port picked here
+/// and requested as `-p 127.0.0.1:<port>:5432`, otherwise on one the runtime assigns.
 ///
 /// Picking a port and publishing it are two steps, so another process can take the port in
 /// between. The start then fails with a bind error (on Docker leaving a created container
 /// behind, which is removed), and it is retried with a new port up to [`PORT_ATTEMPTS`] times.
 /// Any other failure is not retried.
-fn run_container(runtime: &'static str, name: &str, env: &[&str], fixed_port: bool) -> SocketAddr {
+fn run_container(runtime: &'static str, name: &str, env: &[&str], fixed_port: bool) {
     let mut attempt = 1;
     loop {
         let publish = if fixed_port {
@@ -199,8 +227,7 @@ fn run_container(runtime: &'static str, name: &str, env: &[&str], fixed_port: bo
             .output()
             .unwrap_or_else(|error| panic!("{runtime} run: {error}"));
         if output.status.success() {
-            let mapping = runtime_output(runtime, &["port", name, "5432/tcp"]);
-            return host_address(&mapping);
+            return;
         }
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
@@ -228,14 +255,6 @@ fn port_is_taken(stderr: &str) -> bool {
     ["already in use", "already allocated", "address in use"]
         .iter()
         .any(|text| stderr.contains(text))
-}
-
-/// The host address in the output of `port <container> 5432/tcp`.
-fn host_address(mapping: &str) -> SocketAddr {
-    mapping
-        .lines()
-        .find_map(|line| line.trim().parse().ok())
-        .unwrap_or_else(|| panic!("no host address for 5432: {mapping}"))
 }
 
 impl Drop for TlsPostgres {

@@ -1,4 +1,4 @@
-//! The start of a throwaway Postgres container (`support::postgres::start_postgres`): what it
+//! The start of a throwaway Postgres container (`support::start::start_postgres`): what it
 //! reports when the server never comes up, and that it replaces a container whose published port
 //! the host cannot reach. Needs podman or docker; skipped without one unless `CI` is set.
 
@@ -8,9 +8,9 @@ use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use support::postgres::{
-    POSTGRES_IMAGE, START_LIMITS, StartLimits, TEST_PASSWORD, log_in_once, plain_options,
-    start_postgres_within,
+use support::postgres::{TEST_PASSWORD, plain_options};
+use support::start::{
+    POSTGRES_IMAGE, START_LIMITS, StartLimits, log_in_once, start_postgres_within,
 };
 use support::{Container, container_runtime, runtime_output, unavailable};
 

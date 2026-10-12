@@ -11,6 +11,11 @@
 #[path = "../../../../crates/service-kit/tests/support/postgres.rs"]
 pub mod postgres;
 
+/// The start of that Postgres container (`postgres` above uses it): one logic for every crate's
+/// test containers.
+#[path = "../../../../crates/service-kit/tests/support/start.rs"]
+pub mod start;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
