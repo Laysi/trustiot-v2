@@ -15,7 +15,6 @@ mod support;
 
 use std::collections::HashSet;
 use std::error::Error as _;
-use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -31,7 +30,10 @@ use service_kit::tenant::{BackgroundTenantDb, PlatformActor, PlatformDb, TenantD
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use sqlx::{AssertSqlSafe, PgPool, Postgres, Transaction};
 use support::postgres::{SERVER_HOST, TEST_PASSWORD};
-use support::{Counted, Database, Setup, TENANT_A, TENANT_B, database, eventually, tenant};
+use support::{
+    Counted, Database, Setup, TENANT_A, TENANT_B, database, eventually, restartable_database,
+    tenant,
+};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -1269,30 +1271,10 @@ async fn three_replicas_and_concurrent_writers_process_each_event_once_in_its_te
 
 // ---- 4. Configuration and failure modes ----
 
-/// The name of the container that publishes Postgres on `port`.
-fn container_on(port: u16) -> (String, &'static str) {
-    let needle = format!("127.0.0.1:{port}->5432");
-    for runtime in ["podman", "docker"] {
-        let Ok(output) = Command::new(runtime)
-            .args(["ps", "--format", "{{.Names}} {{.Ports}}"])
-            .output()
-        else {
-            continue;
-        };
-        if let Some(line) = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .find(|line| line.contains(&needle))
-        {
-            let name = line.split_whitespace().next().expect("a name").to_owned();
-            return (name, runtime);
-        }
-    }
-    panic!("no container publishes {needle}");
-}
-
 #[tokio::test]
 async fn a_database_restart_mid_run_loses_and_duplicates_nothing() {
-    let Some(database) = database().await else {
+    // The host port is fixed for this test: Docker reassigns an ephemeral one on restart.
+    let Some(database) = restartable_database().await else {
         return;
     };
     let setup = database.setup().await;
@@ -1316,16 +1298,8 @@ async fn a_database_restart_mid_run_loses_and_duplicates_nothing() {
         async move { (count(setup, "SELECT count(*) FROM ledger").await >= 10).then_some(()) }
     })
     .await;
-    let port = database.postgres.address.port();
-    let (name, runtime) = container_on(port);
-    // SIGKILL and start again: a crash, then crash recovery.
-    let status = Command::new(runtime)
-        .args(["restart", "--time", "0", &name])
-        .status()
-        .expect("restart the container");
-    assert!(status.success(), "{runtime} restart failed");
-    let (_, again) = container_on(port);
-    assert_eq!(again, runtime, "the port mapping survives the restart");
+    // SIGKILL and start again: a crash, then crash recovery, on the same host port.
+    database.postgres.restart();
     for n in 10..20 {
         let group = usize::try_from(n).expect("small");
         eventually(
