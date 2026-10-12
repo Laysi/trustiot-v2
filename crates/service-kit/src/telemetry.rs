@@ -248,6 +248,11 @@ fn span_enabled(metadata: &Metadata<'_>) -> bool {
 /// The log layer's filter: spans as above, events by the configured directives, except that
 /// the OpenTelemetry SDK's diagnostics below INFO are always dropped (they can print the OTLP
 /// endpoint's path; see [`sdk_diagnostic_suppressed`]).
+///
+/// Events bridged from the `log` crate (what `reqwest` sends) need no special case here: the
+/// bridge first asks the subscriber whether a record with the `log` crate's own target is
+/// enabled, so `enabled` sees the real target, and the answer is kept for the event that follows.
+/// The tests in `log_layer.rs` and `tests/otlp.rs` pin this down.
 struct LogFilter {
     targets: Targets,
 }

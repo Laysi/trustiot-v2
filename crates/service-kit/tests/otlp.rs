@@ -407,3 +407,58 @@ fn an_endpoint_with_a_query_is_refused_without_printing_it() {
         assert_no_canary(&output, filter);
     }
 }
+
+/// The `level` and `target` of every JSON log line in `output`.
+fn levels_and_targets(output: &str) -> Vec<(String, String)> {
+    output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|line| {
+            Some((
+                line["level"].as_str()?.to_owned(),
+                line["target"].as_str()?.to_owned(),
+            ))
+        })
+        .collect()
+}
+
+#[test]
+fn target_directives_apply_to_events_reqwest_sends_through_the_log_crate() {
+    // The OTLP exporter's HTTP client is reqwest, which logs through the `log` crate; tracing's
+    // bridge delivers those events and the filter must judge them by reqwest's own target.
+    let from_reqwest =
+        |(level, target): &(String, String)| target.starts_with("reqwest") && level == "DEBUG";
+    let from_hyper_util = |(_, target): &(String, String)| target.starts_with("hyper_util");
+
+    let output = output_while_exports_fail(Failure::Reset, "debug");
+    let events = levels_and_targets(&output);
+    assert!(
+        events.iter().any(from_reqwest),
+        "the baseline has no bridged reqwest event, so the check below proves nothing:\n{output}"
+    );
+
+    let output = output_while_exports_fail(Failure::Reset, "debug,reqwest=warn");
+    let events = levels_and_targets(&output);
+    assert!(
+        !events.iter().any(from_reqwest),
+        "`reqwest=warn` did not silence reqwest's DEBUG events:\n{output}"
+    );
+    assert!(
+        events.iter().any(from_hyper_util),
+        "a directive for reqwest must leave other targets at the default level:\n{output}"
+    );
+    assert_no_canary(&output, "reqwest=warn");
+
+    // A directive can also allow what the default level hides.
+    let output = output_while_exports_fail(Failure::Reset, "info,reqwest=debug");
+    let events = levels_and_targets(&output);
+    assert!(
+        events.iter().any(from_reqwest),
+        "`reqwest=debug` did not allow reqwest's DEBUG events:\n{output}"
+    );
+    assert!(
+        !events.iter().any(from_hyper_util),
+        "only reqwest was turned up:\n{output}"
+    );
+    assert_no_canary(&output, "reqwest=debug");
+}

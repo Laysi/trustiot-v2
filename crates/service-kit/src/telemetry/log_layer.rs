@@ -494,21 +494,97 @@ mod tests {
         assert!(!raw.contains("canary"), "{raw}");
     }
 
+    /// Sends one record through `tracing-log`'s `LogTracer`, the bridge `Telemetry::init`
+    /// installs for the `log` crate, as `log::debug!(target: .., ..)` in a dependency would.
+    fn bridge(target: &str, level: log::Level, message: &str) {
+        use log::Log as _;
+        tracing_log::LogTracer::new().log(
+            &log::Record::builder()
+                .target(target)
+                .level(level)
+                .args(format_args!("{message}"))
+                .build(),
+        );
+    }
+
+    /// The messages of the captured lines.
+    fn messages(capture: &Capture) -> Vec<String> {
+        lines(capture)
+            .iter()
+            .filter_map(|line| line["message"].as_str().map(str::to_owned))
+            .collect()
+    }
+
     #[test]
     fn bridged_log_events_are_judged_by_their_original_target() {
-        // The `log` crate's events carry their real target in a field.
         let (subscriber, capture, _provider) = capture_subscriber("trace");
         tracing::subscriber::with_default(subscriber, || {
-            tracing::debug!(log.target = "opentelemetry-otlp", "bridged sdk debug");
-            tracing::warn!(log.target = "opentelemetry-otlp", "bridged sdk warn");
-            tracing::debug!(log.target = "reqwest::connect", "bridged other");
+            bridge("opentelemetry-otlp", log::Level::Debug, "bridged sdk debug");
+            bridge("opentelemetry-otlp", log::Level::Warn, "bridged sdk warn");
+            bridge("reqwest::connect", log::Level::Debug, "bridged other");
+        });
+        assert_eq!(
+            messages(&capture),
+            ["bridged sdk warn", "bridged other"],
+            "{:?}",
+            lines(&capture)
+        );
+    }
+
+    #[test]
+    fn target_directives_suppress_bridged_log_events() {
+        let (subscriber, capture, _provider) = capture_subscriber("debug,reqwest=warn");
+        tracing::subscriber::with_default(subscriber, || {
+            bridge("reqwest::connect", log::Level::Debug, "reqwest debug");
+            bridge("reqwest::connect", log::Level::Info, "reqwest info");
+            bridge("reqwest", log::Level::Warn, "reqwest warn");
+            bridge("hyper_util::client", log::Level::Debug, "hyper debug");
+            // The same directive applies to events from the same crate sent through tracing.
+            tracing::debug!(target: "reqwest::native", "native reqwest debug");
         });
         let lines = lines(&capture);
-        let kept: Vec<&str> = lines
-            .iter()
-            .filter_map(|line| line["message"].as_str())
-            .collect();
-        assert_eq!(kept, ["bridged sdk warn", "bridged other"], "{lines:?}");
+        assert_eq!(
+            messages(&capture),
+            ["reqwest warn", "hyper debug"],
+            "{lines:?}"
+        );
+        // The line names the dependency's own target, not the bridge's.
+        assert_eq!(lines[0]["target"], "reqwest");
+        assert_eq!(lines[1]["target"], "hyper_util::client");
+    }
+
+    #[test]
+    fn target_directives_allow_bridged_log_events_above_the_default() {
+        let (subscriber, capture, _provider) = capture_subscriber("warn,reqwest=debug,hyper=off");
+        tracing::subscriber::with_default(subscriber, || {
+            bridge("reqwest::connect", log::Level::Debug, "reqwest debug");
+            bridge("reqwest::connect", log::Level::Trace, "reqwest trace");
+            bridge("other", log::Level::Info, "other info");
+            bridge("other", log::Level::Error, "other error");
+            bridge("hyper::proto", log::Level::Error, "hyper error");
+        });
+        assert_eq!(
+            messages(&capture),
+            ["reqwest debug", "other error"],
+            "{:?}",
+            lines(&capture)
+        );
+    }
+
+    #[test]
+    fn bridged_log_events_keep_redaction() {
+        let (subscriber, capture, _provider) = capture_subscriber("debug,reqwest=warn");
+        tracing::subscriber::with_default(subscriber, || {
+            // A suppressed bridged event leaves no trace; native events of the same target
+            // are still redacted.
+            bridge("reqwest", log::Level::Debug, "suppressed canary");
+            bridge("reqwest", log::Level::Warn, "warn kept");
+            tracing::warn!(target: "reqwest", password = "canary-field", "native");
+        });
+        let raw = String::from_utf8(capture.0.lock().expect("capture lock").clone())
+            .expect("JSON is UTF-8");
+        assert!(!raw.contains("canary"), "{raw}");
+        assert_eq!(messages(&capture), ["warn kept", "native"]);
     }
 
     #[test]

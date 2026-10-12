@@ -680,6 +680,16 @@ fn live_rules() {
         IssueCode::Duplicate,
         "action.devices[2]",
     );
+    // A list over the limit is reported once, not with an issue for every repeat: a 64 KiB
+    // payload holds about 32,000 two-byte device IDs (Laysi/trustiot-v2#290).
+    let too_many = with_spec(|s| s.devices = vec![s.devices[0].clone(); 30_000]);
+    assert_eq!(
+        too_many
+            .iter()
+            .map(|issue| (issue.code.as_str(), issue.path.as_str()))
+            .collect::<Vec<_>>(),
+        [("too_many", "action.devices")]
+    );
     has(
         &with_spec(|s| s.interval_ms = 99),
         IssueCode::OutOfRange,

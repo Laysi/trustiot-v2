@@ -1,0 +1,24 @@
+rcheck: queued on the build host at 13:25:50 as 359; running now: (other job)
+ 13:25:51 up 14:01,  3 users,  load average: 1.07, 1.58, 1.31
+   Compiling service-kit v0.1.0 (<build-dir>/src/crates/service-kit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.22s
+  Executable tests/job_lock.rs (<build-dir>/target/debug/deps/job_lock-49929e5d6f796cf0)
+=== new tests, replies held back 300 ms (built in)
+test a_partitioned_holder_stops_its_job_within_the_lock_timeout ... ok
+test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 6.68s
+=== new tests, replies held back 300 ms (second run)
+test a_partitioned_holder_stops_its_job_within_the_lock_timeout ... ok
+test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 6.91s
+=== new tests, runtime frozen 1500 ms between the partition and the panic
+test a_partitioned_holder_stops_its_job_within_the_lock_timeout ... ok
+test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 8.44s
+=== new tests, runtime frozen 1500 ms (second run)
+test a_partitioned_holder_stops_its_job_within_the_lock_timeout ... ok
+test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 8.24s
+ 13:26:22 up 14:01,  3 users,  load average: 1.09, 1.54, 1.30
+rcheck: removed 8 dangling test volumes
+rcheck: exit 0 at 13:26:24 (the build host, 359)

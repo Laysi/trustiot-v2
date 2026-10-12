@@ -1,0 +1,40 @@
+rcheck: queued on the build host at 13:24:12 as 359; running now: (other job)
+ 13:24:12 up 13:59,  3 users,  load average: 0.54, 1.38, 1.20
+warning: `service-kit` (test "job_lock") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.50s
+  Executable tests/job_lock.rs (<build-dir>/target/debug/deps/job_lock-49929e5d6f796cf0)
+=== old tests, no injected condition
+test a_partitioned_holder_stops_its_job_within_the_lock_timeout ... ok
+test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 6.33s
+=== old tests, replies held back 300 ms
+test a_partitioned_holder_stops_its_job_within_the_lock_timeout ... FAILED
+test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... FAILED
+thread 'a_partitioned_holder_stops_its_job_within_the_lock_timeout' (305317) panicked at crates/service-kit/tests/job_lock.rs:590:58:
+the job ran
+thread 'a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout' (305316) panicked at crates/service-kit/tests/job_lock.rs:843:9:
+no such event within 2s: [(Level(Warn), "message=job lock query timed out job=service-kit-test-partition-panic-305315-2 "), (Level(Warn), "message=scheduled job lock failed job=service-kit-test-partition-panic-305315-2 error=lost the lock of job `service-kit-t
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 8 filtered out; finished in 4.40s
+=== old tests, replies held back 300 ms (second run)
+test a_partitioned_holder_stops_its_job_within_the_lock_timeout ... FAILED
+test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... FAILED
+thread 'a_partitioned_holder_stops_its_job_within_the_lock_timeout' (305436) panicked at crates/service-kit/tests/job_lock.rs:590:58:
+the job ran
+thread 'a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout' (305435) panicked at crates/service-kit/tests/job_lock.rs:843:9:
+no such event within 2s: [(Level(Warn), "message=scheduled job lock failed job=service-kit-test-partition-panic-305434-2 error=lost the lock of job `service-kit-test-partition-panic-305434-2`: its database session ended or stopped answering "), (Level(Warn), "
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 8 filtered out; finished in 4.40s
+=== old tests, runtime frozen 1500 ms after the partition
+test a_partitioned_holder_stops_its_job_within_the_lock_timeout ... ok
+test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... FAILED
+thread 'a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout' (305553) panicked at crates/service-kit/tests/job_lock.rs:843:9:
+no such event within 2s: [(Level(Warn), "message=scheduled job lock failed job=service-kit-test-partition-panic-305552-3 error=lost the lock of job `service-kit-test-partition-panic-305552-3`: its database session ended or stopped answering "), (Level(Warn), "
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 5.33s
+=== old tests, runtime frozen 1500 ms after the partition (second run)
+test a_partitioned_holder_stops_its_job_within_the_lock_timeout ... ok
+test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... FAILED
+thread 'a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout' (305671) panicked at crates/service-kit/tests/job_lock.rs:843:9:
+no such event within 2s: [(Level(Warn), "message=scheduled job lock failed job=service-kit-test-partition-panic-305670-2 error=lost the lock of job `service-kit-test-partition-panic-305670-2`: its database session ended or stopped answering "), (Level(Warn), "
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 5.28s
+ 13:24:54 up 14:00,  3 users,  load average: 2.68, 1.91, 1.39
+rcheck: removed 10 dangling test volumes
+rcheck: exit 0 at 13:24:56 (the build host, 359)

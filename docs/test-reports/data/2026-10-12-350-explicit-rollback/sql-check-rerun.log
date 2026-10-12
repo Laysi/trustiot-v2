@@ -1,0 +1,39 @@
+rcheck: queued on build host at 12:53:24 as 350-6b42cb11; running now: 298-6eb5e3c9 since 12:53:15
+fmt-ok
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.23s
+test tests::doc_comments_are_not_checked ... ok
+test tests::assert_sql_safe_is_always_found ... ok
+test tests::invalid_rust_is_an_error ... ok
+test tests::findings_name_the_file_line_and_rule ... ok
+test tests::dynamic_sql_is_found ... ok
+test tests::concat_is_checked_as_its_joined_text ... ok
+test tests::query_calls_in_macro_definitions_need_static_sql ... ok
+test tests::only_declared_constants_count_as_static ... ok
+test tests::query_builders_in_macros_take_only_static_text ... ok
+test tests::sql_like_text_needs_a_sql_word_and_a_space ... ok
+test tests::query_builders_take_only_static_text ... ok
+test tests::included_files_are_checked ... ok
+test tests::session_settings_are_found_outside_the_kit ... ok
+test tests::renamed_and_aliased_query_builders_are_followed ... ok
+test tests::query_builder_text_is_checked_joined ... ok
+test tests::unrelated_functions_named_query_are_ignored ... ok
+test tests::static_sql_passes ... ok
+test tests::sql_built_with_strings_is_found ... ok
+test tests::test_code_may_pass_sql_through_variables ... ok
+test tests::test_support_crates_are_test_code ... ok
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test listed_paths_exist ... ok
+test parameterized_sql_is_not_reported ... ok
+test every_rule_is_exercised_by_the_fixture ... ok
+test concatenated_sql_is_reported_on_every_marked_line ... ok
+test the_tenant_module_is_the_only_exception ... ok
+test the_workspace_has_no_string_built_sql ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+rcheck: removed 0 dangling test volumes
+rcheck: exit 0 at 12:53:34 (build host, 350-6b42cb11)
+
+[exited with code 0]
