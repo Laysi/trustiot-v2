@@ -1,0 +1,6 @@
+     39 E encountered unexpected or invalid data: database error: error communicating with database: Connection reset by peer (os error 104)
+     15 E encountered unexpected or invalid data: writing the event failed: SQLSTATE 57P01
+      5 E encountered unexpected or invalid data: writing the event failed: SQLSTATE 40P01
+      4 E encountered unexpected or invalid data: database error: error communicating with database: peer closed connection without sending TLS close_notify: 
+      1 E encountered unexpected or invalid data: writing the event failed: I/O error
+      1 E encountered unexpected or invalid data: database error: error communicating with database: unexpected end of file

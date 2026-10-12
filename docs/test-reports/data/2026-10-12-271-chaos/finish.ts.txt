@@ -29,7 +29,7 @@ for (const c of cons) await c.exited;
 const v = await $`${bin} verify ${outdir}`.env(env).quiet().nothrow();
 writeFileSync(`${outdir}/verify.json`, v.stdout.toString() + v.stderr.toString());
 console.log(v.stdout.toString());
-const tot = sumStats(outdir, readdirSync(`${outdir}/procs`).filter((f) => f.startsWith("c") && !f.endsWith(".err")), ["delivered", "dup", "dead", "handled", "retry_before", "retry_after", "probes"]);
+const tot = sumStats(outdir, readdirSync(`${outdir}/procs`).filter((f) => f.startsWith("c") && !f.endsWith(".err")), ["delivered", "dup", "dead", "handled", "retry_before", "retry_after", "probes", "panics"]);
 console.log(JSON.stringify({ tot }, null, 2));
 writeFileSync(`${outdir}/finish-stats.json`, JSON.stringify({ tot, drain_lag_final: lag }, null, 2));
 await $`${RUNTIME} logs ${pg}`.quiet().nothrow().then((r) => writeFileSync(`${outdir}/postgres.log`, r.stdout.toString() + r.stderr.toString()));
