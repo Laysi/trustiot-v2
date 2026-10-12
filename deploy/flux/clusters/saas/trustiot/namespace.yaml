@@ -1,0 +1,13 @@
+# The namespace of the TrustIoT release. The chart installs under the restricted Pod Security
+# Standard (deploy/chart/README.md); the chart's pods join the Istio ambient mesh by their own label.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: trustiot
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest

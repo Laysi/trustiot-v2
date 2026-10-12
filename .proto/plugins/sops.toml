@@ -1,0 +1,32 @@
+# proto schema plugin for SOPS (https://github.com/getsops/sops).
+# Downloads the official release binary (a single executable, not an archive)
+# and verifies it against the checksums file published with the release.
+# Reference: https://moonrepo.dev/docs/proto/non-wasm-plugin
+
+name = "sops"
+type = "cli"
+
+[platform.linux]
+download-file = "sops-v{version}.linux.{arch}"
+checksum-file = "sops-v{version}.checksums.txt"
+
+[platform.macos]
+download-file = "sops-v{version}.darwin.{arch}"
+checksum-file = "sops-v{version}.checksums.txt"
+
+[install]
+download-url = "https://github.com/getsops/sops/releases/download/v{version}/{download_file}"
+checksum-url = "https://github.com/getsops/sops/releases/download/v{version}/{checksum_file}"
+# The download is the executable itself; proto stores it under the primary exe-path below.
+unpack = false
+
+[install.arch]
+aarch64 = "arm64"
+x86_64 = "amd64"
+
+[install.exes.sops]
+exe-path = "sops"
+primary = true
+
+[resolve]
+git-url = "https://github.com/getsops/sops"

@@ -1,0 +1,33 @@
+rcheck: queued on build-host at 12:52:55 as 298-6eb5e3c9; running now: <other job> since 12:52:37
+test telemetry::log_layer::tests::bridged_log_events_are_judged_by_their_original_target ... ok
+test telemetry::log_layer::tests::bridged_log_events_keep_redaction ... ok
+test telemetry::log_layer::tests::errors_record_their_source_chain ... ok
+test telemetry::log_layer::tests::events_become_json_lines_with_redacted_fields ... ok
+test telemetry::otlp::tests::exported_spans_have_sensitive_attributes_redacted ... ok
+test telemetry::log_layer::tests::target_directives_allow_bridged_log_events_above_the_default ... ok
+test telemetry::log_layer::tests::trace_ids_survive_a_filter_above_the_span_level ... ok
+test telemetry::otlp::tests::exporter_errors_keep_the_setting_but_not_the_endpoint ... ok
+test telemetry::redact::tests::credentials_personal_data_and_payloads_are_sensitive ... ok
+test telemetry::log_layer::tests::sdk_diagnostics_below_info_are_dropped_at_every_filter ... ok
+test telemetry::log_layer::tests::events_in_spans_carry_the_span_trace_and_span_ids ... ok
+test telemetry::log_layer::tests::target_directives_suppress_bridged_log_events ... ok
+test telemetry::redact::tests::operational_fields_are_kept ... ok
+test telemetry::redact::tests::names_split_at_separators_and_camel_case ... ok
+test telemetry::tests::filter_level_hint_covers_spans_and_configured_events ... ok
+test telemetry::tests::log_filters_are_validated ... ok
+test telemetry::tests::otlp_endpoints_must_be_plain_http_base_urls ... ok
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 72 filtered out; finished in 0.00s
+     Running tests/otlp.rs (<workdir>/target/debug/deps/otlp-ac2f660082dcb5a6)
+test an_endpoint_with_a_query_is_refused_without_printing_it ... ok
+test logs_traces_and_metrics_export_without_request_data ... ok
+test export_is_off_unless_configured ... ok
+test endpoint_path_stays_out_of_output_at_debug_when_the_collector_answers_400 ... ok
+test endpoint_path_stays_out_of_output_at_trace_when_the_collector_answers_400 ... ok
+test endpoint_path_stays_out_of_output_at_debug_when_the_collector_resets ... ok
+test endpoint_path_stays_out_of_output_at_trace_when_the_collector_resets ... ok
+test sdk_targets_cannot_be_turned_up_by_name ... ok
+test target_directives_apply_to_events_reqwest_sends_through_the_log_crate ... ok
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.26s
+test result: ok. 89 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+rcheck: removed 0 dangling test volumes
+rcheck: exit 0 at 12:53:30 (build-host, 298-6eb5e3c9)

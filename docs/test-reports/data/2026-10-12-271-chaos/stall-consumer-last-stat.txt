@@ -1,0 +1,2 @@
+stall-c1.log: STAT c1 delivered=0 dup=0 dead=0 handled=538 retry_before=27 retry_after=13 probes=29 lag=Some((0, None))
+stall-c2.log: STAT c2 delivered=607 dup=0 dead=22 handled=607 retry_before=17 retry_after=17 probes=35 lag=Some((0, None))
