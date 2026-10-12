@@ -7,7 +7,8 @@ use std::process::Command;
 use repo_check::{
     DEV_ONLY_CRATES, PROTOTOOLS, RUNTIME_SOURCE_GLOB, RUST_TOOLCHAIN, WORKSPACE_MANIFEST,
     Workspace, check_member_manifest, check_rust_pins, check_rust_version, find_agents_files,
-    find_runtime_sources, find_schema_changes, non_dev_uses, parse_metadata, prototools_pin,
+    find_container_removal_sources, find_container_removals_without_volumes, find_runtime_sources,
+    find_schema_changes, non_dev_uses, parse_metadata, prototools_pin,
 };
 
 /// `cargo metadata --no-deps --format-version 1` of this workspace.
@@ -177,6 +178,68 @@ fn runtime_sources_are_the_rust_files_under_services_src() {
         "services/a/src/lib.rs",
         "services/a/src/nested/mod.rs",
         "services/b/src/main.rs",
+    ]
+    .iter()
+    .map(|relative| root.join(relative))
+    .collect();
+    assert_eq!(found, expected);
+
+    fs::remove_dir_all(&root).expect("remove the fixture");
+}
+
+/// Laysi/trustiot-v2#334: a container removed with `rm --force` and no `--volumes` leaves the
+/// image's anonymous volumes behind, and enough of them use up podman's locks.
+#[test]
+fn test_containers_are_removed_together_with_their_volumes() {
+    let root = workspace().root;
+    let sources = find_container_removal_sources(&root).expect("walk the sources");
+    assert!(!sources.is_empty(), "expected Rust sources");
+    let mut found = Vec::new();
+    for path in &sources {
+        for line in find_container_removals_without_volumes(&read(path)) {
+            found.push(format!(
+                "{}:{line}",
+                path.strip_prefix(&root).unwrap_or(path).display()
+            ));
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "add \"--volumes\" to these \"rm\", \"--force\" calls so the container's anonymous volumes \
+         go with it:\n{}",
+        found.join("\n")
+    );
+}
+
+/// Proves the search above covers the test code and skips what it should.
+#[test]
+fn container_removal_sources_are_the_rust_files_in_the_code_trees() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("container-removal-sources");
+    if root.exists() {
+        fs::remove_dir_all(&root).expect("clear the previous fixture");
+    }
+    for relative in [
+        "crates/a/tests/support/mod.rs",
+        "services/b/tests/common/mod.rs",
+        "edge/c/tests/broker.rs",
+        "crates/a/README.md",
+        "crates/a/target/debug/build.rs",
+        "crates/a/.hidden/x.rs",
+        "tools/repo-check/src/lib.rs",
+        "tools/sql-check/src/main.rs",
+        "crates/a/src/index.ts",
+    ] {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().expect("fixture paths have a parent"))
+            .expect("create fixture directory");
+        fs::write(&path, "fixture\n").expect("write fixture file");
+    }
+    let found = find_container_removal_sources(&root).expect("walk the fixture");
+    let expected: Vec<PathBuf> = [
+        "crates/a/tests/support/mod.rs",
+        "edge/c/tests/broker.rs",
+        "services/b/tests/common/mod.rs",
+        "tools/sql-check/src/main.rs",
     ]
     .iter()
     .map(|relative| root.join(relative))

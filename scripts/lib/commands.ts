@@ -100,9 +100,15 @@ const log = (message: string) => console.log(message);
 
 // --- containers, network and volumes of one instance ---------------------------------------
 
+/**
+ * Removes the instance's containers together with their anonymous volumes: the images declare
+ * `VOLUME`s the instance does not mount (Mosquitto's log directory, for one), and every one of
+ * them would stay behind and use a podman lock (Laysi/trustiot-v2#334). `--volumes` never
+ * touches the named volumes the instance created (`down` keeps its data volumes).
+ */
 async function removeContainers(ctx: Context): Promise<string[]> {
   const names = await containersWithLabel(ctx.names.label);
-  if (names.length > 0) await podmanOk(["rm", "--force", "--time", "10", ...names]);
+  if (names.length > 0) await podmanOk(["rm", "--force", "--volumes", "--time", "10", ...names]);
   return names;
 }
 
