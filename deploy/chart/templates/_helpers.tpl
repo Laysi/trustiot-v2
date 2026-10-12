@@ -215,6 +215,13 @@ Returns a YAML list; use with fromYamlArray.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- /* The migration accounts of an external Postgres and ClickHouse: only the migration Job. */ -}}
+{{- range $secret := list .Values.postgres.external.migrationSecret .Values.clickhouse.external.migrationSecret -}}
+{{- if $secret.name -}}
+{{- $refs = append $refs (printf "%s/%s" $secret.name $secret.usernameKey) -}}
+{{- $refs = append $refs (printf "%s/%s" $secret.name $secret.passwordKey) -}}
+{{- end -}}
+{{- end -}}
 {{- /* The internal identity signing key: mounted into the identity service only. */ -}}
 {{- with .Values.internalIdentity.signingKeySecret -}}
 {{- if .name -}}
@@ -240,7 +247,12 @@ the database owner's password). Services get what they need from them only throu
 Returns a YAML list of names; use with fromYamlArray.
 */}}
 {{- define "trustiot.dependencySecretNames" -}}
-{{- include "trustiot.postgres.generatedSecrets" . -}}
+{{- $names := include "trustiot.postgres.generatedSecrets" . | fromYamlArray -}}
+{{- /* Every service's database password: each service gets only its own key, from the chart. */ -}}
+{{- with .Values.postgres.serviceRolesSecret.name -}}
+{{- $names = append $names . -}}
+{{- end -}}
+{{- toYaml $names -}}
 {{- end -}}
 
 {{/*

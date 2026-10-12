@@ -59,6 +59,13 @@ const SHAPES = {
 type Shape = keyof typeof SHAPES;
 const SHAPE_NAMES = Object.keys(SHAPES) as Shape[];
 const SMOKE = "tests/values/smoke.yaml";
+// The migration Job's accounts for an external Postgres and ClickHouse, required in external mode.
+const EXTERNAL_MIGRATION = [
+  "--set",
+  "postgres.external.migrationSecret.name=trustiot-pg-migrate",
+  "--set",
+  "clickhouse.external.migrationSecret.name=trustiot-ch-migrate",
+];
 // Ingress e2e overlay: identity, certs, mqtt-bridge and assets on, plus a catch-all cookie route.
 const E2E_VALUES = "tests/e2e/values-e2e.yaml";
 
@@ -220,10 +227,16 @@ describe.each(SHAPE_NAMES)("%s shape", (shape) => {
     SLOW_TEST_MS,
   );
 
-  test("services stay off until enabled: only the platform settings, the ingress, bundled Postgres and ClickHouse, the collector and default deny render", () => {
+  test("services stay off until enabled: only the platform settings, the ingress, bundled Postgres and ClickHouse, the collector, the migration Job and default deny render", () => {
     const manifests = render(files);
-    expect(manifests.map((m) => `${m.kind}/${m.metadata.name}`).sort()).toEqual(
+    // The Job's name ends in a hash of its spec (see the migration Job's tests).
+    const names = manifests.map((m) => `${m.kind}/${m.metadata.name}`.replace(/-migrate-[0-9a-f]{8}$/, "-migrate-<hash>"));
+    expect(names.sort()).toEqual(
       [
+        `ServiceAccount/${RELEASE}-migrate`,
+        `Job/${RELEASE}-migrate-<hash>`,
+        `AuthorizationPolicy/${RELEASE}-migrate`,
+        `NetworkPolicy/${RELEASE}-migrate`,
         `ImageCatalog/${RELEASE}-postgres`,
         `Cluster/${RELEASE}-postgres`,
         `Database/${RELEASE}-postgres-trustiot`,
@@ -317,6 +330,9 @@ describe("deployment shapes", () => {
         "clickhouse.mode=external",
         "--set",
         "clickhouse.external.url=https://ch.factory.test:8443",
+        // The services alone: the migration Job would need a CA for ClickHouse.
+        "--set",
+        "migrate.enabled=false",
       ]),
     );
     expect(external.TRUSTIOT_POSTGRES_HOST).toBe("pg.factory.test");
@@ -353,7 +369,11 @@ describe("secrets reach only the services that need them", () => {
       "--set-json",
       'services.ai-gateway.credentials=["ai"]',
     ]);
-    expect(secretRefs(manifests, "identity")).toEqual({ SENTRY_DSN: "trustiot-sentry/dsn" });
+    expect(secretRefs(manifests, "identity")).toEqual({
+      SENTRY_DSN: "trustiot-sentry/dsn",
+      // Its own database password only (the migration Job's tests).
+      TRUSTIOT__DATABASE__PASSWORD: "trustiot-postgres-roles/identity_app",
+    });
     expect(secretRefs(manifests, "knowledge")).toEqual({
       SENTRY_DSN: "trustiot-sentry/dsn",
       TRUSTIOT_QDRANT_READ_API_KEY: "trustiot-qdrant/read-api-key",
@@ -403,6 +423,7 @@ describe("secrets reach only the services that need them", () => {
       "clickhouse.external.url=https://ch.saas.trustiot.test:8443",
       "--set",
       "clickhouse.external.caSecret.name=trustiot-ch-ca",
+      ...EXTERNAL_MIGRATION,
     ];
     const manifests = render([...SHAPES.saas, SMOKE], [...external, "--set", "services.identity.enabled=true"]);
     const postgresVolume = {
@@ -686,6 +707,7 @@ describe("values reference Secrets by name only and hold no secret material", ()
       "postgres.external.host=pg.trustiot.test",
       "--set",
       "postgres.external.caSecret.name=trustiot-pg-ca",
+      ...EXTERNAL_MIGRATION,
     ];
     names.add("trustiot-pg-ca");
     // The bundled Postgres's CA certificate, from the Secret CloudNativePG generates.
@@ -905,6 +927,9 @@ describe("bundled ClickHouse (decision 14)", () => {
       "clickhouse.external.url=https://ch.saas.trustiot.test:8443",
       "--set",
       "clickhouse.bundled.adminSecret.name=",
+      "--set",
+      "clickhouse.external.caSecret.name=trustiot-ch-ca",
+      ...EXTERNAL_MIGRATION,
     ]);
     expect(external.filter((m) => m.metadata.name.startsWith(`${RELEASE}-clickhouse`))).toEqual([]);
   });
@@ -1008,14 +1033,16 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
     // No superuser password and no <cluster>-superuser Secret.
     expect(spec.enableSuperuserAccess).toBe(false);
     expect(spec.superuserSecret).toBeUndefined();
-    // initdb takes the owner's password from a Secret CloudNativePG generates; nothing runs as
-    // superuser at bootstrap besides the operator's own steps.
+    // initdb takes the owner's password from a Secret CloudNativePG generates; the one statement
+    // the chart adds as superuser gives the owner CREATEROLE, which the migration Job needs to
+    // create the service roles (Laysi/trustiot-v2#60). Nothing else runs as superuser.
     expect(spec.bootstrap.initdb).toEqual({
       database: "trustiot",
       owner: "trustiot_owner",
       encoding: "UTF8",
       localeProvider: "builtin",
       builtinLocale: "C.UTF-8",
+      postInitApplicationSQL: ["ALTER ROLE trustiot_owner CREATEROLE"],
     });
     expect(spec.managed).toBeUndefined();
     for (const kind of ["Cluster", "ImageCatalog"]) {
@@ -1043,15 +1070,18 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
     expect(spec.affinity.nodeSelector).toEqual({ "kubernetes.io/arch": "arm64" });
   });
 
-  test("the Postgres pods stay outside the mesh and admit only the services that use Postgres and the operator", () => {
+  test("the Postgres pods stay outside the mesh and admit only the services that use Postgres, the migration Job and the operator", () => {
     expect(clusterSpec(manifests).inheritedMetadata.labels).toEqual({ "istio.io/dataplane-mode": "none" });
     const policy = policyRules(manifests);
     expect(policy.podSelector.matchLabels).toEqual({ "cnpg.io/cluster": cluster, "cnpg.io/podRole": "instance" });
     expect(policy.policyTypes).toEqual(["Ingress"]);
     // identity lists postgres under mesh.calls; certs does not.
+    const pods = (component: string) => ({
+      podSelector: { matchLabels: { "app.kubernetes.io/name": "trustiot", "app.kubernetes.io/instance": RELEASE, "app.kubernetes.io/component": component } },
+    });
     expect(policy.ingress).toEqual([
       {
-        from: [{ podSelector: { matchLabels: { "app.kubernetes.io/name": "trustiot", "app.kubernetes.io/instance": RELEASE, "app.kubernetes.io/component": "identity" } } }],
+        from: [pods("identity"), pods("migrate")],
         ports: [{ port: 5432, protocol: "TCP" }],
       },
       {
@@ -1066,11 +1096,14 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
     ]);
     // A call to postgres adds no mesh policy: Postgres is outside the mesh.
     expect(manifests.filter((m) => m.kind === "AuthorizationPolicy" && m.metadata.name.includes("postgres"))).toEqual([]);
-    // Without callers only the operator's rule is left, and a customer's operator can be matched.
+    // Without callers and the Job only the operator's rule is left, and a customer's operator can
+    // be matched.
     const none = policyRules(
       render(SHAPES.onprem, [
         "--set-json",
         "mesh.calls.identity=[]",
+        "--set",
+        "migrate.enabled=false",
         "--set",
         "postgres.bundled.operator.namespace=operators",
         "--set-json",
@@ -1103,10 +1136,18 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
       expect(pod).not.toContain("postgres-ca");
       expect(pod).not.toContain("TRUSTIOT_POSTGRES_CA_FILE");
     }
-    // The CA's private key, the server key and the owner's password stay with the operator.
+    // The CA's private key and the server key stay with the operator; the owner's password
+    // reaches the migration Job only.
     const rendered = JSON.stringify(manifests);
     expect(rendered).not.toContain("ca.key");
-    for (const suffix of ["server", "app", "replication", "superuser"]) expect(rendered).not.toContain(`${cluster}-${suffix}`);
+    for (const suffix of ["server", "replication", "superuser"]) expect(rendered).not.toContain(`${cluster}-${suffix}`);
+    const readers = manifests.filter((m) => JSON.stringify(m).includes(`${cluster}-app`));
+    expect(readers.map((m) => m.kind)).toEqual(["Job"]);
+    const job = (readers[0]?.spec as { template: { spec: PodSpec } }).template.spec.containers[0];
+    expect(job?.env?.filter((e) => e.valueFrom?.secretKeyRef?.name === `${cluster}-app`)).toEqual([
+      { name: "TRUSTIOT__POSTGRES__USERNAME", valueFrom: { secretKeyRef: { name: `${cluster}-app`, key: "username" } } },
+      { name: "TRUSTIOT__POSTGRES__PASSWORD", valueFrom: { secretKeyRef: { name: `${cluster}-app`, key: "password" } } },
+    ]);
   });
 
   test("the Cluster name stays within CloudNativePG's 50 characters for the longest release name", () => {
@@ -1194,6 +1235,7 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
       "postgres.external.host=pg.saas.trustiot.test",
       "--set",
       "postgres.external.caSecret.name=trustiot-pg-ca",
+      ...EXTERNAL_MIGRATION,
     ]);
     const e2e = SHAPE_NAMES.flatMap((shape) => [
       render([...SHAPES[shape], E2E_VALUES], ["--set", "ingress.direct.tlsSecret=trustiot-ingress-tls"]),
@@ -1239,6 +1281,267 @@ const EXPORTER_COLUMNS = {
     "Events", "Links",
   ],
 };
+
+describe("migration Job (Laysi/trustiot-v2#60)", () => {
+  type JobSpec = YamlMap & {
+    parallelism: number;
+    completions: number;
+    podReplacementPolicy: string;
+    backoffLimit: number;
+    activeDeadlineSeconds: number;
+    template: { metadata: { labels: Record<string, string>; annotations: Record<string, string> }; spec: PodSpec & { restartPolicy: string } };
+  };
+  type Env = NonNullable<Container["env"]>;
+  const ROLES_SECRET = "trustiot-postgres-roles";
+  const jobsOf = (manifests: Manifest[]) => manifests.filter((m) => m.kind === "Job");
+  const jobOf = (manifests: Manifest[]) => {
+    const jobs = jobsOf(manifests);
+    expect(jobs).toHaveLength(1);
+    return jobs[0] as Manifest;
+  };
+  const jobSpec = (manifests: Manifest[]) => jobOf(manifests).spec as JobSpec;
+  const jobEnv = (manifests: Manifest[]): Env => jobSpec(manifests).template.spec.containers[0]?.env ?? [];
+  const initContainers = (deployment: Manifest) => (podSpec(deployment).initContainers ?? []) as Container[];
+  const envValue = (env: Env, name: string) => env.find((e) => e.name === name);
+  const withIdentity = ["--set", "services.identity.enabled=true", "--set", "services.certs.enabled=true"];
+  const manifests = render(SHAPES.saas, withIdentity);
+
+  test("one Job, named after a hash of its spec, runs the migrate image once, one pod at a time, without a Kubernetes token", () => {
+    const job = jobOf(manifests);
+    expect(job.metadata.name).toMatch(new RegExp(`^${RELEASE}-migrate-[0-9a-f]{8}$`));
+    const spec = jobSpec(manifests);
+    expect({ parallelism: spec.parallelism, completions: spec.completions, podReplacementPolicy: spec.podReplacementPolicy }).toEqual({
+      parallelism: 1,
+      completions: 1,
+      podReplacementPolicy: "Failed",
+    });
+    expect(spec.backoffLimit).toBe(3);
+    expect(spec.activeDeadlineSeconds).toBe(1800);
+    // No ttlSecondsAfterFinished: services that start later still find the Job complete.
+    expect(spec.ttlSecondsAfterFinished).toBeUndefined();
+    const pod = spec.template.spec;
+    expect(pod.restartPolicy).toBe("Never");
+    expect(pod.serviceAccountName).toBe(`${RELEASE}-migrate`);
+    expect(pod.automountServiceAccountToken).toBe(false);
+    expect(find(manifests, "ServiceAccount", `${RELEASE}-migrate`).automountServiceAccountToken).toBe(false);
+    const container = pod.containers[0] as Container & { args: string[] };
+    expect(container.image).toBe(`ghcr.io/laysi/trustiot-v2/migrate:${chart.appVersion}`);
+    expect(container.args).toEqual(["run"]);
+    expect(container.envFrom).toEqual([{ configMapRef: { name: `${RELEASE}-platform` } }]);
+    // In the mesh, so the bundled ClickHouse admits it by its ServiceAccount.
+    expect(spec.template.metadata.labels["istio.io/dataplane-mode"]).toBe("ambient");
+    expect(spec.template.metadata.labels["app.kubernetes.io/component"]).toBe("migrate");
+    // Not a Helm hook: the Job is an ordinary object of the release (README.md, "migration Job").
+    expect(job.metadata.annotations?.["helm.sh/hook"]).toBeUndefined();
+  });
+
+  test("the Job logs in with the owner's generated Secret, the ClickHouse admin, and mounts the service roles' passwords", () => {
+    const env = jobEnv(manifests);
+    const secretRefs = env.filter((e) => e.valueFrom?.secretKeyRef).map((e) => `${e.name}=${e.valueFrom?.secretKeyRef?.name}/${e.valueFrom?.secretKeyRef?.key}`);
+    expect(secretRefs).toEqual([
+      `TRUSTIOT__POSTGRES__USERNAME=${RELEASE}-postgres-app/username`,
+      `TRUSTIOT__POSTGRES__PASSWORD=${RELEASE}-postgres-app/password`,
+      "TRUSTIOT__CLICKHOUSE__PASSWORD=trustiot-clickhouse-admin/password",
+      "TRUSTIOT__CLICKHOUSE__COLLECTOR_PASSWORD=trustiot-otel-collector-clickhouse/password",
+    ]);
+    expect(envValue(env, "TRUSTIOT__CLICKHOUSE__USERNAME")?.value).toBe("trustiot_admin");
+    expect(envValue(env, "TRUSTIOT__CLICKHOUSE__COLLECTOR_USERNAME")?.value).toBe("trustiot_collector");
+    expect(envValue(env, "TRUSTIOT_POSTGRES_CA_FILE")?.value).toBe("/etc/trustiot/postgres-ca/ca.crt");
+    expect(envValue(env, "TRUSTIOT__POSTGRES__ROLE_PASSWORDS_DIR")?.value).toBe("/etc/trustiot/role-passwords");
+    // Only identity uses Postgres here (certs does not), so only its role must have a password.
+    expect(envValue(env, "TRUSTIOT__POSTGRES__REQUIRED_PASSWORDS")?.value).toBe("identity_app");
+    expect(envValue(env, "TRUSTIOT__WAIT__DATABASES")?.value).toBe("10m");
+    expect(envValue(env, "TRUSTIOT__WAIT__LOCK")?.value).toBe("10m");
+    const pod = jobSpec(manifests).template.spec;
+    expect(pod.volumes).toEqual([
+      { name: "postgres-ca", secret: { secretName: `${RELEASE}-postgres-ca`, items: [{ key: "ca.crt", path: "ca.crt" }] } },
+      { name: "role-passwords", secret: { secretName: ROLES_SECRET, defaultMode: 0o444 } },
+    ]);
+    expect(pod.containers[0]?.volumeMounts).toEqual([
+      { name: "postgres-ca", mountPath: "/etc/trustiot/postgres-ca", readOnly: true },
+      { name: "role-passwords", mountPath: "/etc/trustiot/role-passwords", readOnly: true },
+    ]);
+  });
+
+  test("external Postgres and ClickHouse: the Job uses their migration Secrets and CAs, which no service reads", () => {
+    const external = render(SHAPES.onprem, [
+      ...withIdentity,
+      "--set", "postgres.mode=external",
+      "--set", "postgres.external.host=db.factory.test",
+      "--set", "postgres.external.caSecret.name=factory-postgres-ca",
+      "--set", "postgres.external.migrationSecret.name=factory-postgres-migrate",
+      "--set", "clickhouse.mode=external",
+      "--set", "clickhouse.external.url=https://ch.factory.test:8443",
+      "--set", "clickhouse.external.caSecret.name=factory-clickhouse-ca",
+      "--set", "clickhouse.external.migrationSecret.name=factory-clickhouse-migrate",
+    ]);
+    const env = jobEnv(external);
+    const refs = env.filter((e) => e.valueFrom?.secretKeyRef).map((e) => `${e.name}=${e.valueFrom?.secretKeyRef?.name}/${e.valueFrom?.secretKeyRef?.key}`);
+    expect(refs).toEqual([
+      "TRUSTIOT__POSTGRES__USERNAME=factory-postgres-migrate/username",
+      "TRUSTIOT__POSTGRES__PASSWORD=factory-postgres-migrate/password",
+      "TRUSTIOT__CLICKHOUSE__USERNAME=factory-clickhouse-migrate/username",
+      "TRUSTIOT__CLICKHOUSE__PASSWORD=factory-clickhouse-migrate/password",
+      "TRUSTIOT__CLICKHOUSE__COLLECTOR_PASSWORD=trustiot-otel-collector-clickhouse/password",
+    ]);
+    const volumes = jobSpec(external).template.spec.volumes ?? [];
+    expect(volumes.map((v) => JSON.stringify(v))).toContain(
+      JSON.stringify({ name: "clickhouse-ca", secret: { secretName: "factory-clickhouse-ca", items: [{ key: "ca.crt", path: "ca.crt" }] } }),
+    );
+    for (const deployment of external.filter((m) => m.kind === "Deployment")) {
+      expect(JSON.stringify(deployment)).not.toContain("-migrate/");
+      expect(JSON.stringify(deployment)).not.toContain("factory-postgres-migrate");
+      expect(JSON.stringify(deployment)).not.toContain("factory-clickhouse-migrate");
+    }
+  });
+
+  test("each service that uses Postgres gets its own role and only its own password key", () => {
+    const identity = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`)).containers[0] as Container;
+    expect(identity.env?.filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__"))).toEqual([
+      { name: "TRUSTIOT__DATABASE__USERNAME", value: "identity_app" },
+      { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: ROLES_SECRET, key: "identity_app" } } },
+    ]);
+    const certs = JSON.stringify(find(manifests, "Deployment", `${RELEASE}-certs`));
+    expect(certs).not.toContain("TRUSTIOT__DATABASE__");
+    expect(certs).not.toContain(ROLES_SECRET);
+    // A service name with "-" makes a role with "_".
+    const telemetry = render(SHAPES.saas, ["--set", "services.telemetry-query.enabled=true", "--set-json", 'mesh.calls.telemetry-query=["postgres"]']);
+    const tq = podSpec(find(telemetry, "Deployment", `${RELEASE}-telemetry-query`)).containers[0] as Container;
+    expect(envValue(tq.env ?? [], "TRUSTIOT__DATABASE__USERNAME")?.value).toBe("telemetry_query_app");
+    // Custom env cannot read the Secret of every service's password, in any key.
+    const result = helmTemplate(SHAPES.saas, [
+      ...withIdentity,
+      "--set-json",
+      `services.certs.env=[{"name":"STOLEN","valueFrom":{"secretKeyRef":{"name":"${ROLES_SECRET}","key":"identity_app"}}}]`,
+    ]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(`env reads Secret ${ROLES_SECRET}`);
+  });
+
+  test("every service pod waits in an init container for this Job, with a token only that container mounts", () => {
+    const job = jobOf(manifests).metadata.name;
+    const deployments = manifests.filter(isServiceDeployment);
+    expect(deployments.length).toBe(2);
+    for (const deployment of deployments) {
+      const pod = podSpec(deployment);
+      expect(pod.automountServiceAccountToken).toBe(false);
+      const inits = initContainers(deployment);
+      expect(inits.map((c) => c.name)).toEqual(["wait-for-migrations"]);
+      const init = inits[0] as Container & { args: string[] };
+      expect(init.image).toBe(`ghcr.io/laysi/trustiot-v2/migrate:${chart.appVersion}`);
+      expect(init.args).toEqual(["wait-for-job"]);
+      expect(init.env).toEqual([
+        { name: "TRUSTIOT__KUBE__JOB", value: job },
+        { name: "TRUSTIOT__KUBE__NAMESPACE", valueFrom: { fieldRef: { fieldPath: "metadata.namespace" } } },
+        { name: "TRUSTIOT__KUBE__API_URL", value: "https://kubernetes.default.svc" },
+        { name: "TRUSTIOT__KUBE__TOKEN_FILE", value: "/var/run/secrets/trustiot/kube/token" },
+        { name: "TRUSTIOT__KUBE__CA_FILE", value: "/var/run/secrets/trustiot/kube/ca.crt" },
+      ]);
+      expect(init.securityContext).toEqual(pod.containers[0]?.securityContext);
+      expect(init.volumeMounts).toEqual([{ name: "migrate-kube-api", mountPath: "/var/run/secrets/trustiot/kube", readOnly: true }]);
+      expect(pod.volumes).toContainEqual({
+        name: "migrate-kube-api",
+        projected: {
+          defaultMode: 0o444,
+          sources: [
+            { serviceAccountToken: { path: "token", expirationSeconds: 3600 } },
+            { configMap: { name: "kube-root-ca.crt", items: [{ key: "ca.crt", path: "ca.crt" }] } },
+          ],
+        },
+      });
+      for (const container of pod.containers) {
+        expect(JSON.stringify(container.volumeMounts ?? [])).not.toContain("migrate-kube-api");
+      }
+    }
+  });
+
+  test("the services' ServiceAccounts may read this one Job and nothing else", () => {
+    const job = jobOf(manifests).metadata.name;
+    const role = find(manifests, "Role", `${RELEASE}-migrate-status`) as Manifest & { rules: unknown[] };
+    expect(role.rules).toEqual([{ apiGroups: ["batch"], resources: ["jobs"], resourceNames: [job], verbs: ["get"] }]);
+    const binding = find(manifests, "RoleBinding", `${RELEASE}-migrate-status`) as Manifest & { roleRef: unknown; subjects: unknown[] };
+    expect(binding.roleRef).toEqual({ apiGroup: "rbac.authorization.k8s.io", kind: "Role", name: `${RELEASE}-migrate-status` });
+    expect(binding.subjects).toEqual(
+      ["certs", "identity"].map((name) => ({ kind: "ServiceAccount", name: `${RELEASE}-${name}`, namespace: NAMESPACE })),
+    );
+    expect(manifests.filter((m) => m.kind === "ClusterRole" || m.kind === "ClusterRoleBinding")).toEqual([]);
+    // Without services there is nobody to bind.
+    expect(render(SHAPES.saas).filter((m) => m.kind === "Role" || m.kind === "RoleBinding")).toEqual([]);
+  });
+
+  test("nobody connects to the Job's pod, and no NetworkPolicy of the chart restricts egress (the init container reaches the API server)", () => {
+    const labels = jobSpec(manifests).template.metadata.labels;
+    const policy = find(manifests, "AuthorizationPolicy", `${RELEASE}-migrate`).spec as YamlMap & { rules?: unknown };
+    expect(policy.action).toBe("ALLOW");
+    expect(policy.rules).toBeUndefined();
+    const network = find(manifests, "NetworkPolicy", `${RELEASE}-migrate`).spec as { podSelector: { matchLabels: Record<string, string> }; ingress: unknown[] };
+    expect(Object.entries(network.podSelector.matchLabels).every(([key, value]) => labels[key] === value)).toBe(true);
+    expect(network.ingress).toEqual([]);
+    for (const shape of SHAPE_NAMES) {
+      for (const m of render([...SHAPES[shape], SMOKE], enableAllServices).filter((o) => o.kind === "NetworkPolicy")) {
+        expect({ name: m.metadata.name, types: (m.spec as { policyTypes: string[] }).policyTypes }).toEqual({ name: m.metadata.name, types: ["Ingress"] });
+      }
+    }
+  });
+
+  test("the Job's name changes with its image, settings and platform settings, and only then", () => {
+    const name = (args: string[] = []) => jobOf(render(SHAPES.saas, [...withIdentity, ...args])).metadata.name;
+    const base = name();
+    expect(name()).toBe(base);
+    // A service's own settings do not run the Job again.
+    expect(name(["--set", "services.identity.replicas=2"])).toBe(base);
+    for (const change of [
+      ["--set", "migrate.revision=2"],
+      ["--set", "migrate.image.tag=9.9.9"],
+      ["--set", "migrate.wait.lock=5m"],
+      ["--set", "hosts.app=other.saas.trustiot.test"],
+      ["--set", "observability.collector.clickhouse.passwordSecret.name=rotated"],
+    ]) {
+      expect({ change, name: name(change) }).not.toEqual({ change, name: base });
+    }
+  });
+
+  test("the longest release name keeps the Job's name within 63 characters", () => {
+    const release = "a".repeat(53);
+    const long = render(SHAPES.saas, withIdentity, release);
+    const job = jobOf(long).metadata.name;
+    expect(job.length).toBeLessThanOrEqual(63);
+    expect(job).toMatch(/-migrate-[0-9a-f]{8}$/);
+  });
+
+  test("migrate.enabled false renders no Job, no init container and no Job-related access", () => {
+    const off = render(SHAPES.saas, [...withIdentity, "--set", "migrate.enabled=false"]);
+    expect(jobsOf(off)).toEqual([]);
+    expect(off.filter((m) => m.metadata.name.includes("-migrate"))).toEqual([]);
+    for (const deployment of off.filter(isServiceDeployment)) expect(podSpec(deployment).initContainers).toBeUndefined();
+    expect(JSON.stringify(find(off, "NetworkPolicy", `${RELEASE}-postgres`))).not.toContain('"migrate"');
+  });
+
+  test.each([
+    ["a service that uses Postgres without postgres.serviceRolesSecret", ["--set", "services.identity.enabled=true", "--set", "postgres.serviceRolesSecret.name="], /postgres\.serviceRolesSecret\.name is required/],
+    [
+      "external Postgres without its migration Secret",
+      ["--set", "postgres.mode=external", "--set", "postgres.external.host=db.factory.test", "--set", "postgres.external.caSecret.name=ca"],
+      /postgres\.external\.migrationSecret\.name is required/,
+    ],
+    [
+      "external ClickHouse without its migration Secret",
+      ["--set", "clickhouse.mode=external", "--set", "clickhouse.external.url=https://ch.factory.test:8443", "--set", "clickhouse.external.caSecret.name=ca"],
+      /clickhouse\.external\.migrationSecret\.name is required/,
+    ],
+    [
+      "external ClickHouse without a CA",
+      ["--set", "clickhouse.mode=external", "--set", "clickhouse.external.url=https://ch.factory.test:8443", "--set", "clickhouse.external.migrationSecret.name=m"],
+      /clickhouse\.external\.caSecret\.name is required while migrate\.enabled/,
+    ],
+    ["a service named migrate", ["--skip-schema-validation", "--set", "services.migrate.enabled=false"], /services\.migrate: the name belongs to the migration Job/],
+    ["a wait longer than an hour", ["--set", "migrate.wait.lock=2h"], /wait/],
+  ])("the chart refuses %s", (_name, args, expected) => {
+    const result = helmTemplate(SHAPES.saas, args);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(expected);
+  });
+});
 
 describe("OpenTelemetry collector (decision 22)", () => {
   const name = `${RELEASE}-otel-collector`;
@@ -1439,6 +1742,7 @@ describe("OpenTelemetry collector (decision 22)", () => {
       "clickhouse.external.url=https://ch.saas.trustiot.test:8443",
       "--set",
       "clickhouse.external.caSecret.name=ch-ca",
+      ...EXTERNAL_MIGRATION,
     ]);
     expect(configOf(external).exporters.clickhouse).toMatchObject({
       endpoint: "https://ch.saas.trustiot.test:8443",
@@ -1876,10 +2180,11 @@ describe("service-to-service authorization (decision 27)", () => {
     for (const rule of hbone) expect(rule.ports).toEqual([{ port: 15008, protocol: "TCP" }]);
     const peers = hbone.flatMap((rule) => rule.from ?? []);
     for (const peer of peers) expect(peer.ipBlock).toBeUndefined();
+    // Deployments by their name, the migration Job (whose name ends in a hash) as "migrate".
     const services = manifests
-      .filter((m) => m.kind === "Deployment")
+      .filter((m) => m.kind === "Deployment" || m.kind === "Job")
       .filter((d) => peers.some((peer) => peer.podSelector && selects(peer.podSelector.matchLabels, podLabels(d))))
-      .map((d) => serviceOf(d.metadata.name))
+      .map((d) => (d.kind === "Job" ? "migrate" : serviceOf(d.metadata.name)))
       .sort();
     const gateway = peers.some((peer) => JSON.stringify(peer.podSelector?.matchLabels) === JSON.stringify(GATEWAY_PODS));
     return { services, gateway };
@@ -2022,15 +2327,16 @@ describe("service-to-service authorization (decision 27)", () => {
     for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
       expect(selects(policy.selector.matchLabels, podLabels(deployment))).toBe(false);
     }
-    // mesh.calls first, then the collector, which the chart adds itself.
+    // mesh.calls first, then the collector and the migration Job, which the chart adds itself.
     expect(principalsOf(policy)).toEqual([
       principal(`${RELEASE}-ingest`),
       principal(`${RELEASE}-telemetry-query`),
       principal(`${RELEASE}-otel-collector`),
+      principal(`${RELEASE}-migrate`),
     ]);
     const spec = networkPolicy(manifests, "clickhouse");
     expect(selects(spec.podSelector.matchLabels ?? {}, labels)).toBe(true);
-    expect(hboneSources(manifests, spec)).toEqual({ services: ["ingest", "otel-collector", "telemetry-query"], gateway: false });
+    expect(hboneSources(manifests, spec)).toEqual({ services: ["ingest", "migrate", "otel-collector", "telemetry-query"], gateway: false });
     // The kubelet's GET /ping probes arrive from istio-cni's SNAT address, on the HTTP port only.
     expect(spec.ingress).toHaveLength(2);
     expect(spec.ingress?.at(-1)).toEqual(hostRule(CLICKHOUSE_PROBE_PORT));
@@ -2038,8 +2344,8 @@ describe("service-to-service authorization (decision 27)", () => {
 
   test("ClickHouse refuses everyone while its callers are off, and gets no policy when external", () => {
     const collectorOnly = render(SHAPES.saas);
-    expect(principalsOf(meshPolicy(collectorOnly, "clickhouse"))).toEqual([principal(`${RELEASE}-otel-collector`)]);
-    const off = render(SHAPES.saas, ["--set", "observability.collector.enabled=false"]);
+    expect(principalsOf(meshPolicy(collectorOnly, "clickhouse"))).toEqual([principal(`${RELEASE}-otel-collector`), principal(`${RELEASE}-migrate`)]);
+    const off = render(SHAPES.saas, ["--set", "observability.collector.enabled=false", "--set", "migrate.enabled=false"]);
     expect(meshPolicy(off, "clickhouse").rules).toBeUndefined();
     expect(networkPolicy(off, "clickhouse").ingress).toEqual([hostRule(CLICKHOUSE_PROBE_PORT)]);
     const external = render([...SHAPES.saas, E2E_VALUES], enableAllServices);
@@ -2079,8 +2385,9 @@ describe("service-to-service authorization (decision 27)", () => {
     expect(principalsOf(meshPolicy(manifests, "clickhouse"))).toEqual([
       principal(`${RELEASE}-ingest`),
       principal(`${RELEASE}-otel-collector`),
+      principal(`${RELEASE}-migrate`),
     ]);
-    expect(hboneSources(manifests, networkPolicy(manifests, "clickhouse")).services).toEqual(["ingest", "otel-collector"]);
+    expect(hboneSources(manifests, networkPolicy(manifests, "clickhouse")).services).toEqual(["ingest", "migrate", "otel-collector"]);
   });
 
   test.each([
@@ -3109,7 +3416,7 @@ describe("documentation and packaging", () => {
   // Leaf paths of values.yaml; services.<entry> collapses to services.<name>, and
   // Kubernetes-native objects under serviceDefaults count as one field.
   function documentedPaths(value: unknown, path: string): string[] {
-    const prefix = ["serviceDefaults.", "clickhouse.bundled.", "postgres.bundled.", "observability.collector."].find((p) =>
+    const prefix = ["serviceDefaults.", "clickhouse.bundled.", "postgres.bundled.", "observability.collector.", "migrate."].find((p) =>
       path.startsWith(p),
     );
     const relative = prefix ? path.slice(prefix.length) : "";

@@ -71,8 +71,9 @@ spec:
 
 {{/*
 Container env: the chart's variables first (OTEL_SERVICE_NAME, the collector endpoint, SENTRY_DSN,
-the Postgres CA file for a service that uses Postgres, the credentials the service lists and, for
-identity, its routes and signing key file), then serviceDefaults.env and services.<name>.env.
+the Postgres CA file, login role and password for a service that uses Postgres, the credentials
+the service lists and, for identity, its routes and signing key file), then serviceDefaults.env
+and services.<name>.env.
 Custom env cannot take over what the chart controls:
 - names starting with TRUSTIOT_ plus a letter or digit, SENTRY_ or OTEL_ are reserved, so the
   platform settings from the ConfigMap (envFrom loses to env) and the chart's Secrets stay as set;
@@ -82,13 +83,21 @@ Custom env cannot take over what the chart controls:
 - secret-like names (as in values.schema.json) come from valueFrom.secretKeyRef only;
 - dependency credentials reach a service only through services.<name>.credentials;
 - the Secrets an in-cluster component creates for itself (the bundled Postgres's CA key, server key
-  and owner password) are out of reach in every key.
+  and owner password) and postgres.serviceRolesSecret, which holds every service's database
+  password, are out of reach in every key.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.service.env" -}}
 {{- $name := .name -}}
 {{- $config := .config -}}
 {{- $values := .root.Values -}}
+{{- $dbEnv := list -}}
+{{- if and $values.postgres.serviceRolesSecret.name (has $name (include "trustiot.postgres.clients" .root | fromYaml).services) -}}
+{{- /* The service's own Postgres login role and its password, which the migration Job sets. */ -}}
+{{- $role := include "trustiot.migrate.appRole" $name -}}
+{{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__USERNAME" "value" $role) -}}
+{{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $values.postgres.serviceRolesSecret.name "key" $role))) -}}
+{{- end -}}
 {{- range $values.serviceDefaults.env -}}
 {{- if get (.valueFrom | default dict) "secretKeyRef" -}}
 {{- fail (printf "serviceDefaults.env: %s must not read a Secret, because every service gets serviceDefaults.env; set it under services.<name>.env" .name) -}}
@@ -139,7 +148,7 @@ Returns a YAML list; use with fromYamlArray.
 {{- if eq $name "identity" -}}
 {{- $identityEnv = include "trustiot.identity.env" .root | fromYamlArray -}}
 {{- end -}}
-{{- $env = concat $env $credentialEnv $identityEnv ($config.env | default list) -}}
+{{- $env = concat $env $dbEnv $credentialEnv $identityEnv ($config.env | default list) -}}
 {{- $names := list -}}
 {{- range $env -}}
 {{- $names = append $names .name -}}
@@ -176,6 +185,7 @@ Returns a YAML list; use with fromYamlArray.
 {{- end -}}
 {{- $env := include "trustiot.service.env" . | fromYamlArray -}}
 {{- $caMounts := include "trustiot.caMounts" (dict "root" .root "name" .name) | fromYamlArray -}}
+{{- $migrate := include "trustiot.migrate.enabled" .root -}}
 {{- /* The internal identity signing key reaches the identity service only (decision 27). */ -}}
 {{- $signingKey := dict -}}
 {{- if and (eq .name "identity") .root.Values.internalIdentity.signingKeySecret.name -}}
@@ -238,6 +248,11 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if $migrate }}
+      {{- /* Holds the pod until the migration Job is complete (_migrate.tpl). */}}
+      initContainers:
+        - {{ include "trustiot.migrate.initContainer" (dict "root" .root "config" $config) | indent 10 | trim }}
+      {{- end }}
       containers:
         - name: {{ .name }}
           image: {{ include "trustiot.serviceImage" (dict "root" .root "name" .name "image" $config.image) }}
@@ -288,6 +303,9 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: {{ $config.tmpSizeLimit }}
+        {{- if $migrate }}
+        - {{ include "trustiot.migrate.kubeApiVolume" .root | indent 10 | trim }}
+        {{- end }}
         {{- range $caMounts }}
         - name: {{ .volume }}
           secret:

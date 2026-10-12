@@ -8,7 +8,7 @@ import { discoverImages, resolveBinary, RUST_CONTAINERFILE } from "../release/li
 import { CommandError, RunLog } from "./exec.ts";
 import type { ExecOptions, ExecResult } from "./exec.ts";
 import type { ImportCommands } from "./platform.ts";
-import { buildServiceImage, loadServiceImage, serviceImageRef, serviceImageValues } from "./service-image.ts";
+import { buildServiceImage, loadServiceImage, MIGRATE_IMAGE_NAME, serviceImageRef, serviceImageValues } from "./service-image.ts";
 import type { ServiceImageTools } from "./service-image.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -34,6 +34,16 @@ describe("service image names", () => {
     const values = serviceImageValues("identity");
     expect(`${values.repository}:${values.tag}`).toBe(IMAGE);
     expect(values).toMatchObject({ digest: "", pullPolicy: "IfNotPresent" });
+  });
+
+  test("the migration Job's image the nightly builds is the one the smoke values name", () => {
+    const migrate = discoverImages(REPO_ROOT).find((image) => image.name === MIGRATE_IMAGE_NAME);
+    expect(migrate).toMatchObject({ kind: "rust", package: "migrate" });
+    const smoke = Bun.YAML.parse(readFileSync(join(REPO_ROOT, "deploy", "chart", "tests", "values", "smoke.yaml"), "utf8")) as {
+      migrate: { image: { repository: string; tag: string; pullPolicy: string } };
+    };
+    const { digest: _digest, ...expected } = serviceImageValues(MIGRATE_IMAGE_NAME);
+    expect(smoke.migrate.image).toEqual(expected);
   });
 
   test("the repository declares the identity service image, and its package has the one binary", () => {

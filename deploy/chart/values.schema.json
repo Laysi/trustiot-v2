@@ -12,6 +12,7 @@
     "services",
     "mesh",
     "internalIdentity",
+    "migrate",
     "postgres",
     "clickhouse",
     "qdrant",
@@ -236,12 +237,71 @@
         "signingKeySecret": { "$ref": "#/definitions/secretKeyRef" }
       }
     },
+    "migrate": {
+      "description": "The migration Job (tools/migrate, Laysi/trustiot-v2#60) and the init container that holds every service until it has completed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "image", "revision", "wait", "activeDeadlineSeconds", "backoffLimit", "resources", "nodeSelector", "tolerations"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "tag", "digest", "pullPolicy"],
+          "properties": {
+            "repository": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([a-z0-9.:-]*[a-z0-9])?(/[a-z0-9]([a-z0-9._-]*[a-z0-9])?)*$"
+            },
+            "tag": { "type": "string", "pattern": "^$|^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$" },
+            "digest": { "type": "string", "pattern": "^$|^sha256:[a-f0-9]{64}$" },
+            "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "revision": {
+          "description": "Change it to run the Job again, for example after a password rotation.",
+          "oneOf": [
+            { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,63}$" },
+            { "type": "integer", "minimum": 0 }
+          ]
+        },
+        "wait": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["databases", "lock"],
+          "properties": {
+            "databases": { "$ref": "#/definitions/waitDuration" },
+            "lock": { "$ref": "#/definitions/waitDuration" }
+          }
+        },
+        "activeDeadlineSeconds": { "type": "integer", "minimum": 60, "maximum": 86400 },
+        "backoffLimit": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requests", "limits"],
+          "properties": {
+            "requests": { "$ref": "#/definitions/resourceList" },
+            "limits": { "allOf": [{ "$ref": "#/definitions/resourceList" }, { "required": ["memory"] }] }
+          }
+        },
+        "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
+        "tolerations": { "type": "array", "items": { "type": "object" } }
+      }
+    },
     "postgres": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mode", "bundled", "external"],
+      "required": ["mode", "serviceRolesSecret", "bundled", "external"],
       "properties": {
         "mode": { "enum": ["bundled", "external"] },
+        "serviceRolesSecret": {
+          "description": "Existing Secret with one key per service login role (<service>_app), read by the migration Job and, one key each, by the services.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name"],
+          "properties": { "name": { "$ref": "#/definitions/optionalK8sName" } }
+        },
         "bundled": {
           "type": "object",
           "additionalProperties": false,
@@ -317,13 +377,14 @@
         "external": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["host", "port", "database", "sslMode", "caSecret"],
+          "required": ["host", "port", "database", "sslMode", "caSecret", "migrationSecret"],
           "properties": {
             "host": { "$ref": "#/definitions/optionalHostOrIp" },
             "port": { "$ref": "#/definitions/port" },
             "database": { "type": "string", "pattern": "^[a-z_][a-z0-9_]{0,62}$" },
             "sslMode": { "const": "verify-full" },
-            "caSecret": { "$ref": "#/definitions/secretKeyRef" }
+            "caSecret": { "$ref": "#/definitions/secretKeyRef" },
+            "migrationSecret": { "$ref": "#/definitions/credentialsSecret" }
           }
         }
       },
@@ -428,10 +489,11 @@
         "external": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["url", "caSecret"],
+          "required": ["url", "caSecret", "migrationSecret"],
           "properties": {
             "url": { "$ref": "#/definitions/optionalHttpsUrl" },
-            "caSecret": { "$ref": "#/definitions/secretKeyRef" }
+            "caSecret": { "$ref": "#/definitions/secretKeyRef" },
+            "migrationSecret": { "$ref": "#/definitions/credentialsSecret" }
           }
         }
       },
@@ -752,6 +814,22 @@
         "name": { "$ref": "#/definitions/optionalK8sName" },
         "key": { "$ref": "#/definitions/secretKey" }
       }
+    },
+    "credentialsSecret": {
+      "description": "Username and password in one existing Secret; an empty name means not configured.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "usernameKey", "passwordKey"],
+      "properties": {
+        "name": { "$ref": "#/definitions/optionalK8sName" },
+        "usernameKey": { "$ref": "#/definitions/secretKey" },
+        "passwordKey": { "$ref": "#/definitions/secretKey" }
+      }
+    },
+    "waitDuration": {
+      "description": "A duration in whole seconds, minutes or hours, at most one hour (the Job refuses longer waits).",
+      "type": "string",
+      "pattern": "^([1-9][0-9]{0,2}s|[12][0-9]{3}s|3[0-5][0-9]{2}s|3600s|[1-9]m|[1-5][0-9]m|60m|1h)$"
     },
     "aiEndpoint": {
       "type": "object",

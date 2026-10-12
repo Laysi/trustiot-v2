@@ -336,6 +336,52 @@ export function podProblems(podList: { items?: unknown[] }): PodProblem[] {
   return problems;
 }
 
+/** The init container that holds a service pod until the migration Job is complete (deploy/chart/templates/_migrate.tpl). */
+export const MIGRATION_WAIT_CONTAINER = "wait-for-migrations";
+
+/** The migration Jobs of the release (deploy/chart/templates/migrate.yaml), by name. */
+export function migrationJobsOf(objects: K8sObject[]): string[] {
+  return flatten(objects)
+    .filter((o) => o.kind === "Job" && o.metadata?.labels?.["app.kubernetes.io/component"] === "migrate")
+    .flatMap((o) => (o.metadata?.name === undefined ? [] : [o.metadata.name]));
+}
+
+/**
+ * Why the services did not wait for the migration Job (Laysi/trustiot-v2#60), from the Job and
+ * the namespace's pods as `kubectl get -o json` prints them: the Job must have completed, there
+ * must be pods that wait for it, and none of their own containers may have started before the
+ * Job's completionTime. Empty when all of that holds.
+ */
+export function migrationOrderProblems(job: unknown, podList: { items?: unknown[] }): string[] {
+  const status = asMap(asMap(job).status);
+  const completed = Date.parse(asString(status.completionTime) ?? "");
+  if (Number.isNaN(completed)) return ["the migration Job has no completionTime: it has not completed"];
+  const problems: string[] = [];
+  let waiting = 0;
+  for (const raw of asArray(podList.items).filter(isMap)) {
+    const pod = asString(asMap(raw.metadata).name) ?? "(unnamed)";
+    const inits = asArray(asMap(raw.spec).initContainers).filter(isMap);
+    if (!inits.some((init) => init.name === MIGRATION_WAIT_CONTAINER)) continue;
+    waiting += 1;
+    for (const container of asArray(asMap(raw.status).containerStatuses).filter(isMap)) {
+      const name = asString(container.name) ?? "(unnamed)";
+      const states = [asMap(container.state), asMap(container.lastState)];
+      const starts = states.flatMap((state) => [asMap(state.running).startedAt, asMap(state.terminated).startedAt]);
+      const times = starts.flatMap((value) => {
+        const time = Date.parse(asString(value) ?? "");
+        return Number.isNaN(time) ? [] : [time];
+      });
+      if (times.length === 0) {
+        problems.push(`${pod}/${name} has not started`);
+      } else if (Math.min(...times) < completed) {
+        problems.push(`${pod}/${name} started ${new Date(Math.min(...times)).toISOString()}, before the Job completed at ${new Date(completed).toISOString()}`);
+      }
+    }
+  }
+  if (waiting === 0) problems.push(`no pod has the ${MIGRATION_WAIT_CONTAINER} init container`);
+  return problems;
+}
+
 /** Total container restarts per pod, for the report. */
 export function restartsOf(podList: { items?: unknown[] }): Map<string, number> {
   const restarts = new Map<string, number>();

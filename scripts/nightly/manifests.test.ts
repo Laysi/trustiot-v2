@@ -8,6 +8,9 @@ import {
   gatewaysOf,
   healthEndpointsOf,
   keptObjectsOf,
+  MIGRATION_WAIT_CONTAINER,
+  migrationJobsOf,
+  migrationOrderProblems,
   missingTlsSecrets,
   missingSecrets,
   operatorSecretsOf,
@@ -328,6 +331,66 @@ describe("readyEndpointsFor", () => {
   test("no slice, or only endpoints that are not ready, gives 0", () => {
     expect(readyEndpointsFor({}, "http")).toBe(0);
     expect(readyEndpointsFor({ items: [slice([{ name: "http", port: 8080 }], [false])] }, "http")).toBe(0);
+  });
+});
+
+describe("migration order (Laysi/trustiot-v2#60)", () => {
+  const job = { status: { completionTime: "2026-10-13T03:00:10Z" } };
+  const waiter = (name: string, containerStatuses: unknown[]) => ({
+    metadata: { name },
+    spec: { initContainers: [{ name: MIGRATION_WAIT_CONTAINER }], containers: [{ name: "svc" }] },
+    status: { containerStatuses },
+  });
+  const started = (at: string) => ({ name: "svc", state: { running: { startedAt: at } } });
+
+  test("the chart's migration Job is found by its component label", () => {
+    const objects = parseManifests(`
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trustiot-migrate-0b4fb1a7
+  labels:
+    app.kubernetes.io/component: migrate
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: other
+`);
+    expect(migrationJobsOf(objects)).toEqual(["trustiot-migrate-0b4fb1a7"]);
+  });
+
+  test("services that started at or after the Job's completion pass; pods without the init container are ignored", () => {
+    const pods = {
+      items: [
+        waiter("a", [started("2026-10-13T03:00:10Z")]),
+        waiter("b", [started("2026-10-13T03:00:42Z")]),
+        { metadata: { name: "clickhouse-0" }, spec: { containers: [{ name: "c" }] }, status: { containerStatuses: [started("2026-10-13T02:59:00Z")] } },
+      ],
+    };
+    expect(migrationOrderProblems(job, pods)).toEqual([]);
+  });
+
+  test("a container that started before completion, also in an earlier run, is reported", () => {
+    const pods = {
+      items: [
+        waiter("early", [started("2026-10-13T03:00:09Z")]),
+        waiter("restarted", [
+          { name: "svc", state: { running: { startedAt: "2026-10-13T03:01:00Z" } }, lastState: { terminated: { startedAt: "2026-10-13T02:59:59Z" } } },
+        ]),
+        waiter("pending", [{ name: "svc", state: { waiting: { reason: "PodInitializing" } } }]),
+      ],
+    };
+    const problems = migrationOrderProblems(job, pods);
+    expect(problems).toHaveLength(3);
+    expect(problems[0]).toStartWith("early/svc started 2026-10-13T03:00:09.000Z, before the Job completed");
+    expect(problems[1]).toStartWith("restarted/svc started 2026-10-13T02:59:59.000Z");
+    expect(problems[2]).toBe("pending/svc has not started");
+  });
+
+  test("a Job without completionTime, or no waiting pod, is a failure", () => {
+    expect(migrationOrderProblems({ status: {} }, { items: [] })).toEqual(["the migration Job has no completionTime: it has not completed"]);
+    expect(migrationOrderProblems(job, { items: [] })).toEqual([`no pod has the ${MIGRATION_WAIT_CONTAINER} init container`]);
   });
 });
 

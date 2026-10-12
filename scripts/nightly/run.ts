@@ -15,8 +15,9 @@
 //   NIGHTLY_SIMULATE_FAILURE     `true` fails every shape on purpose after its install
 //   GITHUB_STEP_SUMMARY          when set, the Markdown report is appended to it
 //
-// Needs docker (for k3d and the images the tests build), openssl, and the tools pinned in .prototools:
-// bun, helm, k3d and kubectl.
+// Needs docker (for k3d and the images the tests build), openssl, rustup and its cargo, and the
+// tools pinned in .prototools: bun, helm, k3d, kubectl, zig, cargo-zigbuild and cargo-auditable
+// (the migration Job's image is built from source, scripts/nightly/service-image.ts).
 // Exit status: 0 when every shape passed, 1 when a check failed, 2 on a usage error.
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,6 +26,7 @@ import { join, resolve } from "node:path";
 import { exec, pinnedTool, retry, run, RunLog } from "./exec.ts";
 import { isOk, renderMarkdown, type Report, type ShapeResult } from "./report.ts";
 import { installPlatform } from "./platform.ts";
+import { loadServiceImage, MIGRATE_IMAGE_NAME } from "./service-image.ts";
 import { discoverShapes, smokeShape } from "./smoke.ts";
 
 const REPO_ROOT = resolve(import.meta.dir, "..", "..");
@@ -136,6 +138,9 @@ async function main(): Promise<number> {
       },
       shapes.map((shape) => shape.name),
     );
+    // The migration Job's image (tools/migrate), which deploy/chart/tests/values/smoke.yaml names.
+    log.line("== platform: migration Job image");
+    await loadServiceImage({ repoRoot: REPO_ROOT, log, k3d, cluster: CLUSTER }, MIGRATE_IMAGE_NAME);
 
     for (const shape of shapes) {
       shapeResults.push(await smokeShape({ repoRoot: REPO_ROOT, chartDir: CHART_DIR, outDir, kubeconfig, helm, kubectl, log, simulateFailure }, shape));

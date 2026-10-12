@@ -17,6 +17,8 @@ import {
   gatewaysOf,
   healthEndpointsOf,
   keptObjectsOf,
+  migrationJobsOf,
+  migrationOrderProblems,
   missingSecrets,
   missingTlsSecrets,
   parseManifests,
@@ -184,6 +186,18 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
           }
         }
         return workloads.map((w) => `${w.kind}/${w.name}`).join(", ");
+      })) &&
+      (await check("the migration Job completed before any service started", async () => {
+        // Laysi/trustiot-v2#60: every service pod waits in an init container until the Job is
+        // complete, so no service runs on a schema older than its own.
+        const jobs = migrationJobsOf(parseManifests(manifest));
+        if (jobs.length !== 1) throw new Error(`the release should have one migration Job, found ${jobs.length}: ${jobs.join(", ")}`);
+        const job = await kubectl(["get", "--namespace", namespace, `job/${jobs[0]}`, "--output", "json"]);
+        const pods = await kubectl(["get", "pods", "--namespace", namespace, "--output", "json"]);
+        const parsed = JSON.parse(job.stdout) as { status?: { completionTime?: string } };
+        const problems = migrationOrderProblems(parsed, JSON.parse(pods.stdout) as { items?: unknown[] });
+        if (problems.length > 0) throw new Error(problems.join("; "));
+        return `job/${jobs[0]} completed at ${parsed.status?.completionTime}; every service container started after it`;
       })) &&
       (await check("every CloudNativePG Cluster is healthy", async () => {
         // The bundled Postgres (Laysi/trustiot-v2#58): the operator creates its pods after helm

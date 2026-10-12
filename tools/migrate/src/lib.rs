@@ -1,0 +1,131 @@
+//! The migration Job (docs/architecture/deployment.md, "migration Job"; this crate's README).
+//!
+//! - [`run`]: one migration run. It takes a Postgres advisory lock first, so two Jobs never run at
+//!   the same time; then the Postgres part ([`postgres`]: the Job's bookkeeping, the per-database
+//!   setup, every service's roles, schema, outbox tables and migrations, the per-tenant role
+//!   hooks) and the ClickHouse part ([`clickhouse`]: the DDL and the collector's account).
+//! - [`kube::wait_for_job`]: the init container that holds a service's pod until the release's
+//!   migration Job has completed.
+//!
+//! Every step is idempotent: a second run on the same databases changes nothing, which
+//! [`Report::changes`] states and the tests check against the catalogs.
+
+pub mod clickhouse;
+pub mod config;
+pub mod http;
+pub mod kube;
+pub mod postgres;
+pub mod registry;
+pub mod secret;
+
+use std::time::Duration;
+
+use sha2::{Digest, Sha256};
+
+use crate::config::RunConfig;
+use crate::registry::Registry;
+
+/// Why a run failed. Messages never contain passwords.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Postgres: {context}: {source}")]
+    Postgres {
+        context: String,
+        #[source]
+        source: sqlx::Error,
+    },
+    #[error("Postgres did not accept the migration role within {0:?}: {1}")]
+    PostgresUnavailable(Duration, String),
+    #[error("another migration run held the lock for longer than {0:?}")]
+    LockTimeout(Duration),
+    #[error("the migration lock's database session ended during the run; the run is incomplete")]
+    LockLost,
+    #[error("the migration role {role} cannot run migrations: {problem}")]
+    MigrationRole { role: String, problem: String },
+    #[error("role {role}: {problem}")]
+    Role { role: String, problem: String },
+    #[error("schema {schema}: {problem}")]
+    Schema { schema: String, problem: String },
+    #[error(
+        "{component}/{name} changed after it was applied (applied files are append-only: add a \
+         new file instead)"
+    )]
+    Changed { component: String, name: String },
+    #[error("the registry is inconsistent: {0}")]
+    Registry(String),
+    #[error("tenant role hook {hook}: {problem}")]
+    TenantHook { hook: String, problem: String },
+    #[error(transparent)]
+    Password(#[from] secret::PasswordError),
+    #[error("no randomness for a password salt: {0}")]
+    Random(String),
+    #[error("ClickHouse: {0}")]
+    ClickHouse(String),
+}
+
+impl Error {
+    pub(crate) fn postgres(context: impl Into<String>) -> impl FnOnce(sqlx::Error) -> Self {
+        let context = context.into();
+        move |source| Self::Postgres { context, source }
+    }
+}
+
+/// What a run did. A run that found everything in place reports no changes.
+#[derive(Debug, Default)]
+pub struct Report {
+    /// One line per change, for example `applied identity/0001_identity.sql` or
+    /// `created role identity_app`; empty when the run changed nothing.
+    pub changes: Vec<String>,
+    /// Login roles that have no password file; they keep whatever password they have.
+    pub roles_without_password: Vec<String>,
+}
+
+impl Report {
+    pub(crate) fn change(&mut self, change: String) {
+        tracing::info!(change = %change, "migration change");
+        self.changes.push(change);
+    }
+}
+
+/// The SHA-256 of a file's text, in lower-case hex, as the Job records it.
+#[must_use]
+pub fn sha256_hex(text: &str) -> String {
+    use std::fmt::Write as _;
+    let digest = Sha256::digest(text.as_bytes());
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        // Writing to a String cannot fail.
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
+/// One migration run: everything in `registry`, under the migration lock.
+///
+/// # Errors
+///
+/// When a database is not reachable in time, another run holds the lock for too long, or a step
+/// fails. A failed Postgres file leaves nothing behind (one transaction per file); ClickHouse
+/// statements are idempotent, so the next run repeats a half-applied ClickHouse file.
+pub async fn run(config: &RunConfig, registry: &Registry) -> Result<Report, Error> {
+    postgres::check_registry(registry)?;
+    postgres::check_required_passwords(config, registry).await?;
+    let collector = config.collector()?;
+    let mut report = Report::default();
+    let mut session = postgres::Session::connect(config).await?;
+    session.lock(config.wait.lock).await?;
+    session.migrate(config, registry, &mut report).await?;
+    if let Some(settings) = &config.clickhouse {
+        let client = clickhouse::ClickHouse::new(config, settings)?;
+        client.wait_until_up(config.wait.databases).await?;
+        client
+            .migrate(registry, collector.as_ref(), &mut report)
+            .await?;
+    } else {
+        tracing::info!("no ClickHouse settings: the ClickHouse part is skipped");
+    }
+    // Everything ran while this session held the lock; if it ended, another run may have
+    // started in between, so do not report success.
+    session.unlock().await?;
+    Ok(report)
+}

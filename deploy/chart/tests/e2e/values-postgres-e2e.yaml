@@ -4,6 +4,12 @@
 # The test adds the Postgres and example-service images and, for the second install step,
 # turns the example service on with its database role.
 
+# No migration Job: the test creates the example service's role itself, and its ClickHouse is a
+# name only. The Job is tested by the nightly smoke test and
+# docs/test-reports/2026-10-13-60-migration-job.md.
+migrate:
+  enabled: false
+
 ingress:
   # The test never goes through the ingress gateway; keep it small and off the node's ports.
   replicas: 1

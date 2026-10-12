@@ -51,9 +51,10 @@ trustiot
 {{- end -}}
 
 {{/*
-Owner of the database: a login role without superuser, CREATEROLE or BYPASSRLS. CloudNativePG
-generates its password into the Secret <cluster>-app. Only the migration Job
-(Laysi/trustiot-v2#60) may use it; no service may read that Secret ("trustiot.dependencySecretNames").
+Owner of the database and the migration role: a login role with CREATEROLE (granted at bootstrap,
+templates/postgres.yaml) and without superuser or BYPASSRLS. CloudNativePG generates its password
+into the Secret <cluster>-app. Only the migration Job (Laysi/trustiot-v2#60) may use it; no
+service may read that Secret ("trustiot.dependencySecretNames").
 */}}
 {{- define "trustiot.postgres.owner" -}}
 trustiot_owner

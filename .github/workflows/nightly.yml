@@ -41,7 +41,11 @@ on:
       - deploy/chart/**
       - deploy/cloudnative-pg/**
       - deploy/images/postgres/**
+      - deploy/images/migrate/**
       - deploy/istio/**
+      - tools/migrate/**
+      - services/*/migrations/**
+      - crates/service-kit/sql/**
       - scripts/nightly/**
 
 # No token scopes by default; each job asks for what it needs.
@@ -76,7 +80,9 @@ jobs:
     # arm64, like every node we ship (decision 5): the chart's default nodeSelector is
     # kubernetes.io/arch: arm64, and the nightly must test that shape, not an amd64 override.
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 45
+    # 45 minutes before the migration Job's image was built here (Laysi/trustiot-v2#60); a cold
+    # Rust build adds up to about 15 (docs/architecture/ci-release.md, nightly.yml).
+    timeout-minutes: 75
     permissions:
       contents: read
     env:
@@ -102,11 +108,14 @@ jobs:
           persist-credentials: false
       # bun runs the test, helm, k3d and kubectl are the versions pinned in .prototools. Docker,
       # which k3d and the images the tests build need, and openssl are part of the runner image.
+      # zig, cargo-zigbuild and cargo-auditable build the migration Job's image the way release.yml
+      # does; Rust comes from the runner's rustup (scripts/nightly/service-image.ts).
       - uses: ./.github/actions/setup-proto
         with:
-          tools: bun helm k3d kubectl
-      # Installs Gateway API, Istio ambient and CloudNativePG, builds the Postgres image, then per
-      # values file: the smoke deployment and the ingress e2e test (deploy/chart/tests/e2e).
+          tools: bun helm k3d kubectl zig cargo-zigbuild cargo-auditable
+      # Installs Gateway API, Istio ambient and CloudNativePG, builds the Postgres and migration Job
+      # images, then per values file: the smoke deployment and the ingress e2e test
+      # (deploy/chart/tests/e2e).
       - name: Deploy the chart with each values file and run the tests
         # The runner context is not available in job-level env, only in steps.
         env:

@@ -4,10 +4,11 @@
 // deploy/images/rust-binary.Containerfile), tags it `localhost/trustiot-e2e/<name>:nightly` and
 // imports it into every k3d node with importImageIntoCluster. Nothing is pushed.
 //
-// Nothing calls it yet: the nightly enables a real service (`services.identity`) once it has a
-// database for it (Laysi/trustiot-v2#65, Laysi/trustiot-v2#77). The workflow then has to provide
-// rustup (the pinned toolchain comes from rust-toolchain.toml) and the pinned zig, cargo-zigbuild
-// and cargo-auditable (`tools:` of setup-proto). Cost: docs/architecture/ci-release.md, nightly.yml.
+// run.ts builds the migration Job's image (deploy/images/migrate, Laysi/trustiot-v2#60) with it;
+// the nightly enables a real service (`services.identity`) the same way once it has a database
+// for it (Laysi/trustiot-v2#65, Laysi/trustiot-v2#77). The workflow provides rustup (the pinned
+// toolchain comes from rust-toolchain.toml) and the pinned zig, cargo-zigbuild and
+// cargo-auditable (`tools:` of setup-proto). Cost: docs/architecture/ci-release.md, nightly.yml.
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +32,8 @@ import type { ImportCommands, Platform } from "./platform.ts";
 /** Where the nightly keeps service images; build-context.ts accepts `localhost/trustiot-e2e/<image>:<tag>`. */
 export const SERVICE_IMAGE_PREFIX = "localhost/trustiot-e2e";
 export const SERVICE_IMAGE_TAG = "nightly";
+/** The migration Job's image (deploy/images/migrate), which tests/values/smoke.yaml names. */
+export const MIGRATE_IMAGE_NAME = "migrate";
 
 /** The local tag of a service image, for example `localhost/trustiot-e2e/identity:nightly`. */
 export function serviceImageRef(name: string): string {

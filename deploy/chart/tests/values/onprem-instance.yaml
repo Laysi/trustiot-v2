@@ -13,6 +13,9 @@ ingress:
     tlsSecret: trustiot-ingress-tls
 
 postgres:
+  # Every service role's password, one key per role (README: migration Job).
+  serviceRolesSecret:
+    name: trustiot-postgres-roles
   bundled:
     # Example size; each deployment sizes its volume from its data (README: 叢集內的 Postgres).
     storage:
