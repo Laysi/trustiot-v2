@@ -60,9 +60,9 @@ GitHub 預設不讓 Actions 開 PR。repo 設定 **Settings → Actions → Gene
 
 這個設定同時允許 workflow 以 `GITHUB_TOKEN` 核准 PR；[CI 與發佈](../../docs/architecture/ci-release.md)「GitHub 的 Actions 設定」原本把它設為 `false`。打開與否是人的決定（記錄於 Laysi/trustiot-v2#70），考量：
 
-- 在目前的 GitHub Free 方案，分支保護與 ruleset 都不能用，核准不是合併的條件，所以 workflow 能核准 PR 並不會讓它繞過任何強制關卡；合併前的確認由流程把關。
+- main 目前沒有啟用分支保護或 ruleset：repo 2026-10-12 公開後可以啟用，但還沒有啟用，啟用與否由使用者決定（[CI 與發佈](../../docs/architecture/ci-release.md)「必要檢查與強制方式」）。所以核准不是合併的條件，workflow 能核准 PR 並不會讓它繞過任何強制關卡；合併前的確認由流程把關。
 - 能取得 `pull-requests: write` 的只有 `deploy-pr` 這個 job，它不執行任何建置程式碼；fork PR 的 token 一律唯讀。
-- 升級到可用分支保護的方案時，要重新檢視：屆時以 required reviewers 加上「workflow 不能核准」的設定，或改由 GitHub App 開 PR。
+- main 啟用分支保護或 ruleset、並要求核准時，要重新檢視：那時 workflow 的核准就能滿足合併條件，所以要讓這個設定維持關閉（`deploy-pr` 只推分支），或改由 GitHub App 開 PR。
 
 ## 簽章驗證
 
@@ -70,7 +70,7 @@ GitHub 預設不讓 Actions 開 PR。repo 設定 **Settings → Actions → Gene
 
 - 以 tag 與 digest 拉 chart，digest 優先：GHCR 的 tag 可以被有寫入權限的人移動，digest 不行。
 - 只接受 release.yml 在**這個 tag** 上的 keyless 簽章（issuer `https://token.actions.githubusercontent.com`，subject `https://github.com/Laysi/trustiot-v2/.github/workflows/release.yml@refs/tags/v<版本>`，皆為完全比對；決策 30）。別的 tag、別的 workflow 或別的 repo 簽的都不接受。驗證失敗時 OCIRepository 的 Ready 為 False，HelmRelease 不升級，正在跑的版本不受影響。
-- 簽章證明的是「release.yml 在這個 tag 上建置並推送」，不是「來自 main」。正式版的 tag 必須在 main 上（release.yml 的 plan 檢查），所以執行的 release.yml 就是 main 上審查過的版本；候選版的 tag 可以在任何分支上，跑的是該分支的 release.yml，由推 tag 的人決定。所以候選版的 deploy PR 是 draft，合併前的審查才是把關。要收緊時，以 tag ruleset 限制誰能建立 `v*` tag（repo 設定，由人決定）。
+- 簽章證明的是「release.yml 在這個 tag 上建置並推送」，不是「來自 main」。正式版的 tag 必須在 main 上（release.yml 的 plan 檢查），所以執行的 release.yml 就是 main 上審查過的版本；候選版的 tag 可以在任何分支上，跑的是該分支的 release.yml，由推 tag 的人決定。所以候選版的 deploy PR 是 draft，合併前的審查才是把關。要收緊時，以 tag ruleset 限制誰能建立 `v*` tag：repo 設定，由使用者決定；ruleset 在 Free 方案的公開 repo 能不能用尚未驗證（[CI 與發佈](../../docs/architecture/ci-release.md)「必要檢查與強制方式」）。
 - 需要 Flux 2.8 以上才讀得懂 cosign v3 的 bundle 格式；`.prototools` 釘的是 2.9.6。
 - `bun test deploy/flux` 要求 `chart.yaml` 與 `renderChartSource` 對它自己的版本的輸出逐字相同，所以手改（拿掉 `verify`、放寬 subject、拿掉 digest）都會讓 CI 失敗；deploy-pr 遇到被手改過的 `chart.yaml` 也會停下，不會覆寫。
 - Flux 的控制器映像以 digest 釘選；`scripts/flux/components.ts` 寫入 digest 前，以 cosign 驗證 fluxcd 官方 release workflow（`fluxcd/gha-workflows` 的 controller-release，由 `fluxcd/<控制器>` 的 tag 觸發）的 keyless 簽章。

@@ -210,7 +210,7 @@ gh api repos/Laysi/trustiot-v2/actions/permissions/fork-pr-contributor-approval
 
 任何一項與上表不同，就表示設定被改過：先改回，再查組織的稽核紀錄找出原因。
 
-`can_approve_pull_request_reviews` 同時控制「開 PR」與「核准 PR」。release.yml 的 `deploy-pr` job 要以 `GITHUB_TOKEN` 開 deploy PR（Laysi/trustiot-v2#70），設定為 `false` 時它只推分支，job 仍然成功，並在 job summary 與 warning annotation 附上 compare 連結，由人開 PR。改為 `true` 由人決定並記錄在 Laysi/trustiot-v2#70：在目前的 Free 方案，核准不是合併的條件（沒有分支保護），所以多出的「核准」能力不繞過任何強制關卡；有 `pull-requests: write` 的 job 只有 `deploy-pr`，它不執行建置程式碼。改了之後更新上表，升級到能用分支保護的方案時重新檢視（[deploy/flux/README.md](../../deploy/flux/README.md)「需要的 repo 設定」）。
+`can_approve_pull_request_reviews` 同時控制「開 PR」與「核准 PR」。release.yml 的 `deploy-pr` job 要以 `GITHUB_TOKEN` 開 deploy PR（Laysi/trustiot-v2#70），設定為 `false` 時它只推分支，job 仍然成功，並在 job summary 與 warning annotation 附上 compare 連結，由人開 PR。改為 `true` 由使用者決定並記錄在 Laysi/trustiot-v2#70：main 目前沒有啟用分支保護或 ruleset（repo 公開後可以啟用，見上方「必要檢查與強制方式」），核准不是合併的條件，所以多出的「核准」能力不繞過任何強制關卡；有 `pull-requests: write` 的 job 只有 `deploy-pr`，它不執行建置程式碼。改了之後更新上表；main 啟用分支保護或 ruleset 並要求核准時重新檢視，因為那時 workflow 的核准就能滿足合併條件（[deploy/flux/README.md](../../deploy/flux/README.md)「需要的 repo 設定」）。
 
 ## release.yml
 
