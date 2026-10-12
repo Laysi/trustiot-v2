@@ -257,7 +257,8 @@ beforeAll(async () => {
     const status = json<{ status?: { applied?: boolean } }>("get", `databaserole.postgresql.cnpg.io/${ROLE_OBJECT}`).status;
     return status?.applied === true ? true : undefined;
   });
-  // What the migration Job will do as the owner (Laysi/trustiot-v2#60): no temporary tables for
+  // What the migration Job does as the owner in a real install (Laysi/trustiot-v2#60), done here
+  // by the test because values-postgres-e2e.yaml turns the Job off: no temporary tables for
   // anyone, which service-kit requires of every session.
   psql(`SET ROLE ${OWNER};\n${DATABASE_SQL}`);
 

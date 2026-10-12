@@ -325,7 +325,10 @@ beforeAll(async () => {
     ...imageValues(),
   ];
   // Step 1: ClickHouse only, so the schema and the collector's account exist before anything
-  // writes (the migration Job, Laysi/trustiot-v2#60, will do this part on install).
+  // writes. In a real install the migration Job (Laysi/trustiot-v2#60) does this part, but
+  // values-otel-e2e.yaml sets migrate.enabled to false: this test's Postgres is a name only, and
+  // the Job needs a real one (it takes its lock there), so the test applies the ClickHouse files
+  // and creates the account itself.
   helm(
     "install",
     RELEASE,
