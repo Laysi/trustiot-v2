@@ -6,7 +6,7 @@
 
 - 建置主機（check queue）：x86_64 Linux（WSL2），20 核心，Docker；每個測試起一個用完即刪的 `postgres:18.6-alpine`（TLS，`verify-full`）容器。指令經 check queue 執行，環境變數 `CI=1`（沒有容器執行環境時測試失敗而不是略過）。
 - Rust 依 `rust-toolchain.toml`；sqlx 0.9.0、tokio 1.53.2（`Cargo.lock`）。
-- 分支 `fix/350-outbox-explicit-rollback`，基於 main `a7f332b`（含 Laysi/trustiot-v2#333 與 Laysi/trustiot-v2#271）。「舊程式」指 `a7f332b` 的 `crates/outbox/src/consumer.rs`，搭配本分支的新測試。
+- 分支 `fix/350-outbox-explicit-rollback`，基於 main `a7f332b`（含 Laysi/trustiot-v2#333 與 Laysi/trustiot-v2#271），之後合併 main `f8440cb`（含 Laysi/trustiot-v2#352）再跑一次全部檢查。「舊程式」指 `a7f332b` 的 `crates/outbox/src/consumer.rs`，搭配本分支的新測試。
 
 ## 指令
 
@@ -27,16 +27,17 @@ cargo run --locked -p openapi -- --check
 
 ## 結果
 
-原始輸出（已去掉 `Compiling` 行與建置主機的路徑）：[old-vs-new.log](data/2026-10-12-350-explicit-rollback/old-vs-new.log)、[sql-check-rerun.log](data/2026-10-12-350-explicit-rollback/sql-check-rerun.log)。
+原始輸出（已去掉 `Compiling` 行與建置主機的路徑）：[old-vs-new.log](data/2026-10-12-350-explicit-rollback/old-vs-new.log)、[sql-check-rerun.log](data/2026-10-12-350-explicit-rollback/sql-check-rerun.log)、合併 main 後的 [after-merge.log](data/2026-10-12-350-explicit-rollback/after-merge.log)。
 
 | 執行 | `the_probe_sees_…` | `a_failed_delivery_is_rolled_back_…` | `a_begin_hook_that_breaks_…` |
 | --- | --- | --- | --- |
 | 舊程式，第 1 次 | ok | FAILED：`in_begin false, Permanent`，探針看到失敗投遞的 backend 還持有 2 個鎖（`[2]`，交易的 virtualxid 與訂閱的 advisory lock） | FAILED：`duplicate true, Commit`，`begin` 自己 `COMMIT` 的重複投遞被算成 `duplicates: 1`，沒有記進死信 |
 | 舊程式，第 2 次 | ok | FAILED（同上，`[2]`） | FAILED（同上） |
 | 新程式，第 1–3 次 | ok | ok | ok |
+| 新程式合併 main 後，第 1–3 次 | ok | ok | ok |
 
 - 新程式：`cargo test -p outbox` 除了下面一項全部通過（lib 10、crash 2、delivery 13、failure_paths 3、handler_panic 7、metrics 1、notify 2、producer 3、tenancy 5、verify_271 12/13）。
-- `verify_271::a_database_restart_mid_run_loses_and_duplicates_nothing` 在 Docker 建置主機失敗（測試在容器重啟後找不到新的 host port），與本變更無關，由 Laysi/trustiot-v2#348（PR Laysi/trustiot-v2#352）修正；本分支合併 main 後重跑的結果見 PR。
+- `verify_271::a_database_restart_mid_run_loses_and_duplicates_nothing` 在合併前的 Docker 建置主機失敗（測試在容器重啟後找不到新的 host port），與本變更無關，由 Laysi/trustiot-v2#348（PR Laysi/trustiot-v2#352）修正。合併 main 後 `cargo test -p outbox` 全部通過（verify_271 13/13），fmt、clippy、`sql-check`、`repo-check`、openapi 檢查也都通過。
 - 第一次批次中 `sql-check` 的 `the_workspace_has_no_string_built_sql` 失敗：新測試檔以 `set_config` 改租戶（模擬寫錯的 handler）。在 `tools/sql-check` 的 `EXCEPTIONS` 為該檔只免除 `SessionSetting`（與 `verify_271.rs`、`tenant_db.rs` 相同做法）後，`sql-check` 26 個測試、`repo-check` 全部通過，fmt 與 clippy 無警告，`api/openapi.json` 沒有變動。
 
 ### 測試怎麼做到與時序無關
@@ -55,4 +56,4 @@ cargo run --locked -p openapi -- --check
 | --- | --- |
 | 所有失敗路徑都在記死信之前明確回滾；有測試證明 handler 不會因為 lock 競爭被多呼叫一次（真 Postgres） | 通過。`Consumer::deliver` 只在 commit 與 `roll_back`（`rollback().await`）兩處結束投遞交易；`failure_paths` 在真 Postgres 上證明下一筆交易開始前鎖已釋放、呼叫次數剛好，舊程式兩次都失敗、新程式連續三次通過 |
 | 重複投遞的路徑會檢查 `begin` 的交易，或文件寫明不需要的理由；有測試 | 通過。改為 `begin` 回 `Ok` 後立即檢查（在取得訂閱的鎖之前），重複投遞與第一次投遞都涵蓋；`a_begin_hook_that_breaks_the_transaction_is_caught_on_every_path` 驗證 `COMMIT` 與改租戶兩種破壞都進死信、`handle` 不在被破壞的交易執行；舊程式失敗、新程式通過 |
-| `cargo test -p outbox` 通過，README 已更新 | 通過（除已知、由 Laysi/trustiot-v2#348 處理的 Docker 重啟測試）；`crates/outbox/README.md` 的失敗處理表、交易邊界表、測試表與新增的「明確回滾」一節已更新 |
+| `cargo test -p outbox` 通過，README 已更新 | 通過（合併 main 後全部通過）；`crates/outbox/README.md` 的失敗處理表、交易邊界表、測試表與新增的「明確回滾」一節已更新 |
