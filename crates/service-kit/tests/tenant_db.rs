@@ -541,6 +541,10 @@ async fn the_tenant_setting_does_not_leak_across_pooled_connections() {
 /// such a session to anyone.
 const SET_SESSION_TENANT: &str = "SELECT set_config('trustiot.tenant_id', $1, false)";
 
+/// Sets a tenant for the rest of the transaction outside service-kit's tenant transactions, as
+/// nothing may: a platform role that does so must still gain nothing (Laysi/trustiot-v2#360).
+const SET_TRANSACTION_TENANT: &str = "SELECT set_config('trustiot.tenant_id', $1, true)";
+
 /// The service role is not the table owner, has no BYPASSRLS, and cannot turn row-level
 /// security off or around.
 #[tokio::test]
@@ -1070,9 +1074,135 @@ async fn the_platform_role_reads_across_tenants_only_where_allowed() {
     tx.rollback().await.expect("rollback");
 }
 
+/// The tenant template's `platform_access` (Laysi/trustiot-v2#360): `tenant_isolation` applies
+/// to the platform role too, but a platform session that sets a tenant itself gains nothing on a
+/// table with `platform_access` (it already sees every tenant, and its grants still limit the
+/// commands) or on a table it has no grant on. Only a grant without `platform_access` would hand
+/// it the rows of the tenant it set, which is why the template says to grant nothing then.
+#[tokio::test]
+async fn the_platform_role_gains_nothing_by_setting_a_tenant() {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE platform_tenant OWNER example_owner",
+        "platform_tenant",
+    )
+    .await
+    else {
+        return;
+    };
+    let mut owner = fixture.connect("example_owner").await;
+    sqlx::raw_sql(
+        "CREATE TABLE private_items (tenant_id uuid NOT NULL, name text NOT NULL);
+         ALTER TABLE private_items ENABLE ROW LEVEL SECURITY;
+         CREATE POLICY tenant_isolation ON private_items
+             USING (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid)
+             WITH CHECK (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid);
+         GRANT SELECT ON private_items TO example_app;
+         INSERT INTO private_items VALUES ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'secret');",
+    )
+    .execute(&mut owner)
+    .await
+    .expect("a table without platform access, as the template says to leave it");
+
+    let platform = PlatformDb::connect_lazy(
+        fixture.options("example_platform"),
+        PgPoolOptions::new().max_connections(1),
+    )
+    .expect("verify-full options");
+    let actor = PlatformActor::service(ServiceIdentity::new(ServiceName::Assets));
+    let mut tx = platform
+        .begin(actor, "tenant-setting-test")
+        .await
+        .expect("begin");
+    let without_tenant: Vec<String> = sqlx::query_scalar(ITEM_NAMES)
+        .fetch_all(&mut *tx)
+        .await
+        .expect("names");
+    tx.rollback().await.expect("rollback");
+
+    // Each statement in its own transaction, so a refusal does not abort the next one.
+    let in_tenant = async |sql: &'static str| {
+        let mut tx = platform
+            .begin(actor, "tenant-setting-test")
+            .await
+            .expect("begin");
+        sqlx::query(SET_TRANSACTION_TENANT)
+            .bind(TENANT_A)
+            .execute(&mut *tx)
+            .await
+            .expect("set a tenant in the platform transaction");
+        let names = sqlx::query_scalar::<_, String>(sql)
+            .fetch_all(&mut *tx)
+            .await;
+        tx.rollback().await.expect("rollback");
+        names
+    };
+    let with_tenant = in_tenant(ITEM_NAMES).await.expect("names");
+    assert_eq!(
+        without_tenant,
+        ["a-1", "a-2", "b-1"],
+        "platform_access: every tenant"
+    );
+    assert_eq!(
+        with_tenant, without_tenant,
+        "platform_access: the same rows with a tenant set"
+    );
+    for (case, sql) in [
+        (
+            "INSERT, which the template does not grant",
+            "INSERT INTO example_items (tenant_id, id, name) VALUES \
+             ('01928f6e-7a3c-7d4e-8f00-00000000000a', gen_random_uuid(), 'x') RETURNING name",
+        ),
+        (
+            "DELETE, which the template does not grant",
+            "DELETE FROM example_items RETURNING name",
+        ),
+        (
+            "a table without platform_access or a grant",
+            "SELECT name FROM private_items",
+        ),
+    ] {
+        let error = in_tenant(sql).await.expect_err(case);
+        assert_eq!(
+            sqlstate(&error).as_deref(),
+            Some(INSUFFICIENT_PRIVILEGE),
+            "{case}: {error}"
+        );
+        println!("platform role with tenant A set, {case}: refused ({error})");
+    }
+
+    // The case the template rules out: a grant without platform_access. The platform role then
+    // sees no row, until its session sets a tenant itself.
+    sqlx::raw_sql("GRANT SELECT ON private_items TO example_platform;")
+        .execute(&mut owner)
+        .await
+        .expect("grant");
+    let mut tx = platform
+        .begin(actor, "tenant-setting-test")
+        .await
+        .expect("begin");
+    let without_tenant: Vec<String> = sqlx::query_scalar("SELECT name FROM private_items")
+        .fetch_all(&mut *tx)
+        .await
+        .expect("names");
+    tx.rollback().await.expect("rollback");
+    let with_tenant = in_tenant("SELECT name FROM private_items")
+        .await
+        .expect("names");
+    assert_eq!(
+        (without_tenant, with_tenant),
+        (Vec::<String>::new(), vec!["secret".to_owned()]),
+        "a grant without platform_access opens the tenant a platform session sets"
+    );
+    println!(
+        "platform_access: a self-set tenant adds no row or command; a grant without \
+         platform_access would open the self-set tenant's rows, so the template grants nothing"
+    );
+}
+
 /// The outbox template (`sql/outbox-event.sql`): the service role writes events of its tenant
-/// only, platform-wide events come only from the platform role, and a consumer's platform role
-/// reads every tenant's events.
+/// only, platform-wide events come only from the platform role, which writes no tenant's events
+/// even after setting a tenant itself, and a consumer's platform role reads every tenant's
+/// events. The connection check accepts every role's session.
 #[tokio::test]
 async fn outbox_events_follow_the_tenant_policies() {
     let Some(fixture) = Fixture::new("CREATE DATABASE outbox OWNER example_owner", "outbox").await
@@ -1151,6 +1281,83 @@ async fn outbox_events_follow_the_tenant_policies() {
         .expect_err("the platform role writes no tenant's events");
     assert_eq!(sqlstate(&error).as_deref(), Some(INSUFFICIENT_PRIVILEGE));
     drop(tx);
+
+    // Nor after setting a tenant itself (Laysi/trustiot-v2#360): `tenant_isolation` applies to
+    // every role, so only the template's restrictive `platform_events_only` stops this. First
+    // as platform code that went wrong would do it, inside a PlatformDb transaction...
+    for tenant in [TENANT_A, TENANT_B] {
+        let mut tx = platform.begin(actor, "outbox-test").await.expect("begin");
+        sqlx::query(SET_TRANSACTION_TENANT)
+            .bind(tenant)
+            .execute(&mut *tx)
+            .await
+            .expect("set a tenant in the platform transaction");
+        let error = sqlx::query(PUBLISH)
+            .bind(tenant)
+            .execute(&mut *tx)
+            .await
+            .expect_err("the platform role writes no tenant's events after setting the tenant");
+        assert_eq!(
+            sqlstate(&error).as_deref(),
+            Some(INSUFFICIENT_PRIVILEGE),
+            "{error}"
+        );
+        println!("platform role, tenant set to {tenant} in its transaction: refused ({error})");
+        drop(tx);
+    }
+    // ...and with no service-kit involved: a plain session of the platform role, with the tenant
+    // set for the transaction or for the session.
+    let mut session = fixture.connect("example_platform").await;
+    for set in [SET_TRANSACTION_TENANT, SET_SESSION_TENANT] {
+        let mut tx = session.begin().await.expect("begin");
+        sqlx::query(set)
+            .bind(TENANT_A)
+            .execute(&mut *tx)
+            .await
+            .expect("set a tenant");
+        let error = sqlx::query(PUBLISH)
+            .bind(TENANT_A)
+            .execute(&mut *tx)
+            .await
+            .expect_err("a plain platform session writes no tenant's events");
+        assert_eq!(
+            sqlstate(&error).as_deref(),
+            Some(INSUFFICIENT_PRIVILEGE),
+            "{set}: {error}"
+        );
+        tx.rollback().await.expect("rollback");
+        println!("plain platform session, `{set}`: refused ({error})");
+    }
+    // With a tenant set, a platform-wide event is still what the platform role may write.
+    let mut tx = platform.begin(actor, "outbox-test").await.expect("begin");
+    sqlx::query(SET_TRANSACTION_TENANT)
+        .bind(TENANT_A)
+        .execute(&mut *tx)
+        .await
+        .expect("set a tenant");
+    sqlx::query(PUBLISH)
+        .bind(None::<&str>)
+        .execute(&mut *tx)
+        .await
+        .expect("a platform-wide event with a tenant set");
+    tx.rollback().await.expect("rollback");
+
+    // Service-kit's connection check accepts every role's session under the template: the
+    // restrictive policy only narrows what the platform role may write.
+    for (role, as_role) in [
+        ("example_app", SessionRole::Service),
+        ("example_platform", SessionRole::Platform),
+        ("example_reader", SessionRole::Platform),
+    ] {
+        let mut session = fixture.connect(role).await;
+        assert_eq!(
+            postgres::check_session(&mut session, as_role)
+                .await
+                .expect("check"),
+            Ok(()),
+            "{role} as {as_role:?}"
+        );
+    }
 
     let reader = PlatformDb::connect_lazy(
         fixture.options("example_reader"),

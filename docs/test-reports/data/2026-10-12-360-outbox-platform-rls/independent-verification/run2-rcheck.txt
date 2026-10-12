@@ -1,0 +1,132 @@
+rcheck: queued on <build-host> at 01:43:33 as 360v-7f05cb34; running now: 310-b18e4dd0 since 01:42:46
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.99s
+     Running tests/verify_360.rs (<path>)
+
+running 3 tests
+test probe_legitimate_paths_and_reader_checks ... [service role, tenant A] tenant A: Ok(1)
+[service role, tenant A] tenant B: Err("42501 new row violates row-level security policy for table \"outbox_event\"")
+[service role, tenant A] platform-wide: Err("42501 new row violates row-level security policy for table \"outbox_event\"")
+[platform role, no tenant] platform-wide: Ok(1)
+[platform role, no tenant] tenant A: Err("42501 new row violates row-level security policy for table \"outbox_event\"")
+READS_ALL_TENANTS as example_reader: Some(true)
+READS_ALL_TENANTS as example_platform: Some(false)
+reader sees [None, Some("01928f6e-7a3c-7d4e-8f00-00000000000a"), Some("01928f6e-7a3c-7d4e-8f00-00000000000a"), None]
+check_session(example_app, Service) = Ok(())
+check_session(example_platform, Platform) = Ok(())
+check_session(example_reader, Platform) = Ok(())
+platform_access UPDATE rows: without tenant Ok(3), with tenant A Ok(3); (no-op move) Ok(0)
+ok
+test probe_platform_role_tenant_writes_and_escapes ... owner view before: (tenant rows, all rows) = (1, 2)
+example_platform: CREATE on public=false, CREATE on database=false, TEMP=false, privileges on outbox_event=[INSERT], schemas with CREATE=[]
+memberships (role, member, admin, inherit, set): [("example_owner", "example_owner_member", false, true, true), ("example_platform_group", "example_platform", false, true, true)]
+example_platform member of / may SET ROLE to: [("example_app", false, false), ("example_owner", false, false), ("example_reader", false, false), ("example_platform_group", true, true)]
+[tx tenant] single VALUES: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[tx tenant] multi-row VALUES (platform-wide + tenant): Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[tx tenant] INSERT ... SELECT literal: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[tx tenant] INSERT ... SELECT current_setting: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[tx tenant] data-modifying CTE: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[tx tenant] PREPARE / EXECUTE: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[tx tenant] ON CONFLICT DO NOTHING: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[tx tenant] ON CONFLICT (id) DO UPDATE: Err("42501 permission denied for table outbox_event")
+[tx tenant] MERGE ON false WHEN NOT MATCHED THEN INSERT: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[tx tenant] MERGE WHEN MATCHED DO NOTHING / NOT MATCHED INSERT: Err("42501 permission denied for table outbox_event")
+[tx tenant] INSERT ... RETURNING: Err("42501 permission denied for table outbox_event")
+[tx tenant] DO block (plpgsql, invoker): Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[tx tenant] SET LOCAL row_security = off, then INSERT: Err("42501 query would be affected by row-level security policy for table \"outbox_event\"")
+[tx tenant] UPDATE a platform-wide event into the tenant: Err("42501 permission denied for table outbox_event")
+[tx tenant] DELETE: Err("42501 permission denied for table outbox_event")
+[tx tenant] TRUNCATE: Err("42501 permission denied for table outbox_event")
+[session tenant] single VALUES: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[session tenant] multi-row VALUES (platform-wide + tenant): Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[session tenant] INSERT ... SELECT literal: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[session tenant] INSERT ... SELECT current_setting: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[session tenant] data-modifying CTE: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[session tenant] PREPARE / EXECUTE: Err("42P05 prepared statement \"p360\" already exists")
+[session tenant] ON CONFLICT DO NOTHING: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[session tenant] ON CONFLICT (id) DO UPDATE: Err("42501 permission denied for table outbox_event")
+[session tenant] MERGE ON false WHEN NOT MATCHED THEN INSERT: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[session tenant] MERGE WHEN MATCHED DO NOTHING / NOT MATCHED INSERT: Err("42501 permission denied for table outbox_event")
+[session tenant] INSERT ... RETURNING: Err("42501 permission denied for table outbox_event")
+[session tenant] DO block (plpgsql, invoker): Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[session tenant] SET LOCAL row_security = off, then INSERT: Err("42501 query would be affected by row-level security policy for table \"outbox_event\"")
+[session tenant] UPDATE a platform-wide event into the tenant: Err("42501 permission denied for table outbox_event")
+[session tenant] DELETE: Err("42501 permission denied for table outbox_event")
+[session tenant] TRUNCATE: Err("42501 permission denied for table outbox_event")
+[session tenant] extended protocol, bound tenant: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[session tenant] COPY FROM STDIN: Err("0A000 COPY FROM not supported with row-level security")
+[objects] CREATE VIEW in public: Err("42501 permission denied for schema public")
+[objects] CREATE FUNCTION SECURITY DEFINER in public: Err("42501 permission denied for schema public")
+[objects] CREATE FUNCTION in pg_temp: Err("42501 permission denied to create temporary tables in database \"v360_writes\"")
+[objects] CREATE SCHEMA: Err("42501 permission denied for database v360_writes")
+[objects] CREATE TEMP TABLE: Err("42501 permission denied to create temporary tables in database \"v360_writes\"")
+[objects] CREATE TRIGGER on outbox_event: Err("42501 permission denied for table outbox_event")
+[objects] CREATE RULE on outbox_event: Err("42501 must be owner of table outbox_event")
+[objects] ALTER TABLE DISABLE ROW LEVEL SECURITY: Err("42501 must be owner of table outbox_event")
+[objects] DROP POLICY platform_events_only: Err("42501 must be owner of relation outbox_event")
+[objects] ALTER POLICY platform_events_only: Err("42501 must be owner of table outbox_event")
+[objects] CREATE POLICY (permissive, for itself): Err("42501 must be owner of table outbox_event")
+[roles (session tenant)] SET ROLE example_app: Err("42501 permission denied to set role \"example_app\"")
+[roles (session tenant)] SET ROLE example_owner: Err("42501 permission denied to set role \"example_owner\"")
+[roles (session tenant)] SET ROLE example_reader: Err("42501 permission denied to set role \"example_reader\"")
+[roles (session tenant)] SET LOCAL ROLE example_app: Err("42501 permission denied to set role \"example_app\"")
+[roles (session tenant)] SET SESSION AUTHORIZATION example_app: Err("42501 permission denied to set session authorization \"example_app\"")
+[roles (session tenant)] SET SESSION AUTHORIZATION example_owner: Err("42501 permission denied to set session authorization \"example_owner\"")
+[roles (session tenant)] set_config('role', 'example_app'): Err("42501 permission denied to set role \"example_app\"")
+[roles (session tenant)] set_config('role', 'example_owner'): Err("42501 permission denied to set role \"example_owner\"")
+[roles (session tenant)] set_config('session_authorization', 'example_owner'): Err("42501 permission denied to set session authorization \"example_owner\"")
+[roles (session tenant)] RESET ROLE, then INSERT: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[roles (session tenant)] SET ROLE NONE, then INSERT: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[roles (session tenant)] SET ROLE example_platform_group (its member role), then INSERT: Err("42501 permission denied for table outbox_event")
+[roles (session tenant)] RESET ALL, then INSERT: Err("42501 new row violates row-level security policy for table \"outbox_event\"")
+[roles (tx tenant)] SET ROLE example_app: Err("42501 permission denied to set role \"example_app\"")
+[roles (tx tenant)] SET ROLE example_owner: Err("42501 permission denied to set role \"example_owner\"")
+[roles (tx tenant)] SET ROLE example_reader: Err("42501 permission denied to set role \"example_reader\"")
+[roles (tx tenant)] SET LOCAL ROLE example_app: Err("42501 permission denied to set role \"example_app\"")
+[roles (tx tenant)] SET SESSION AUTHORIZATION example_app: Err("42501 permission denied to set session authorization \"example_app\"")
+[roles (tx tenant)] SET SESSION AUTHORIZATION example_owner: Err("42501 permission denied to set session authorization \"example_owner\"")
+[roles (tx tenant)] set_config('role', 'example_app'): Err("42501 permission denied to set role \"example_app\"")
+[roles (tx tenant)] set_config('role', 'example_owner'): Err("42501 permission denied to set role \"example_owner\"")
+[roles (tx tenant)] set_config('session_authorization', 'example_owner'): Err("42501 permission denied to set session authorization \"example_owner\"")
+[roles (tx tenant)] RESET ROLE, then INSERT: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[roles (tx tenant)] SET ROLE NONE, then INSERT: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[roles (tx tenant)] SET ROLE example_platform_group (its member role), then INSERT: Err("42501 permission denied for table outbox_event")
+[roles (tx tenant)] RESET ALL, then INSERT: Err("42501 new row violates row-level security policy for table \"outbox_event\"")
+owner view after: (tenant rows, all rows) = (1, 2)
+accepted statements (none may have written a tenant row): []
+
+thread 'probe_platform_role_tenant_writes_and_escapes' (707387) panicked at crates/service-kit/tests/verify_360.rs:513:13:
+PREPARE / EXECUTE: unexpected error 42P05 prepared statement "p360" already exists
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test probe_self_consuming_platform_role ... [self tx tenant] single VALUES: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[self tx tenant] multi-row VALUES (platform-wide + tenant): Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[self tx tenant] INSERT ... SELECT literal: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[self tx tenant] INSERT ... SELECT current_setting: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[self tx tenant] data-modifying CTE: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[self tx tenant] PREPARE / EXECUTE: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[self tx tenant] ON CONFLICT DO NOTHING: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[self tx tenant] ON CONFLICT (id) DO UPDATE: Err("42501 permission denied for table outbox_event")
+[self tx tenant] MERGE ON false WHEN NOT MATCHED THEN INSERT: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[self tx tenant] MERGE WHEN MATCHED DO NOTHING / NOT MATCHED INSERT: Ok(0)
+[self tx tenant] INSERT ... RETURNING: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[self tx tenant] DO block (plpgsql, invoker): Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+[self tx tenant] SET LOCAL row_security = off, then INSERT: Err("42501 query would be affected by row-level security policy for table \"outbox_event\"")
+[self tx tenant] UPDATE a platform-wide event into the tenant: Err("42501 permission denied for table outbox_event")
+[self tx tenant] DELETE: Err("42501 permission denied for table outbox_event")
+[self tx tenant] TRUNCATE: Err("42501 permission denied for table outbox_event")
+[self session tenant] single VALUES tenant B, session tenant B: Err("42501 new row violates row-level security policy \"platform_events_only\" for table \"outbox_event\"")
+self-consuming reader sees [None, Some("01928f6e-7a3c-7d4e-8f00-00000000000a"), None]; READS_ALL_TENANTS = Some(true)
+self-consuming: check_session(example_platform, Platform) = Ok(())
+self-consuming: check_session(example_app, Service) = Ok(())
+ok
+
+failures:
+
+failures:
+    probe_platform_role_tenant_writes_and_escapes
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.26s
+
+error: test failed, to rerun pass `-p service-kit --test verify_360`
+rcheck: removed 3 dangling test volumes
+rcheck: exit 101 at 02:05:54 (<build-host>, 360v-7f05cb34)

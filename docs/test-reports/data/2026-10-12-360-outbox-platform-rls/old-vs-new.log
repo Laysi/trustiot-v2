@@ -1,0 +1,127 @@
+===== OLD TEMPLATE (origin/main) =====
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.06s
+     Running tests/tenant_db.rs (<target>/debug/deps/tenant_db-af17b76684db765f)
+
+running 2 tests
+platform role with tenant A set, INSERT, which the template does not grant: refused (error returned from database: permission denied for table example_items at line 2793)
+platform role with tenant A set, DELETE, which the template does not grant: refused (error returned from database: permission denied for table example_items at line 2793)
+platform role with tenant A set, a table without platform_access or a grant: refused (error returned from database: permission denied for table private_items at line 2793)
+platform_access: a self-set tenant adds no row or command; a grant without platform_access would open the self-set tenant's rows, so the template grants nothing
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+service role, another tenant event: refused (error returned from database: new row violates row-level security policy for table "outbox_event" at line 2337)
+service role, platform-wide event: refused (error returned from database: new row violates row-level security policy for table "outbox_event" at line 2337)
+
+thread 'outbox_events_follow_the_tenant_policies' (348688) panicked at crates/service-kit/tests/tenant_db.rs:1299:14:
+the platform role writes no tenant's events after setting the tenant: PgQueryResult { rows_affected: 1 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test outbox_events_follow_the_tenant_policies ... FAILED
+
+failures:
+
+failures:
+    outbox_events_follow_the_tenant_policies
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 2.59s
+
+error: test failed, to rerun pass `-p service-kit --test tenant_db`
+old-template exit: 101
+===== NEW TEMPLATE =====
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.04s
+     Running tests/tenant_db.rs (<target>/debug/deps/tenant_db-af17b76684db765f)
+
+running 12 tests
+CA file None: exit status: 1; error: configuration key `platform.postgres_ca_file` is invalid: is required when `database` is set
+sslmode "disable": exit status: 1; error: configuration key `platform.postgres_sslmode` (set by environment variable TRUSTIOT_POSTGRES_SSLMODE) is invalid: only `verify-full` is accepted: services always verify the database server's certificate and host name (checklist M3)
+CA file Some(""): exit status: 1; error: configuration key `platform.postgres_ca_file` is invalid: is required when `database` is set
+test a_service_without_a_postgres_ca_refuses_to_start ... ok
+sslmode "allow": exit status: 1; error: configuration key `platform.postgres_sslmode` (set by environment variable TRUSTIOT_POSTGRES_SSLMODE) is invalid: only `verify-full` is accepted: services always verify the database server's certificate and host name (checklist M3)
+sslmode "prefer": exit status: 1; error: configuration key `platform.postgres_sslmode` (set by environment variable TRUSTIOT_POSTGRES_SSLMODE) is invalid: only `verify-full` is accepted: services always verify the database server's certificate and host name (checklist M3)
+sslmode "require": exit status: 1; error: configuration key `platform.postgres_sslmode` (set by environment variable TRUSTIOT_POSTGRES_SSLMODE) is invalid: only `verify-full` is accepted: services always verify the database server's certificate and host name (checklist M3)
+sslmode "verify-ca": exit status: 1; error: configuration key `platform.postgres_sslmode` (set by environment variable TRUSTIOT_POSTGRES_SSLMODE) is invalid: only `verify-full` is accepted: services always verify the database server's certificate and host name (checklist M3)
+sslmode "": exit status: 1; error: configuration key `platform.postgres_sslmode` is invalid: is required when `database` is set
+test a_service_without_server_verification_refuses_to_start ... ok
+unrelated CA: error communicating with database: invalid peer certificate: UnknownIssuer
+disable row-level security: refused (error returned from database: must be owner of table example_items at line 2931)
+drop the policy: refused (error returned from database: must be owner of relation example_items at line 2931)
+host name mismatch: error communicating with database: invalid peer certificate: certificate not valid for name "localhost"; certificate is only valid for IpAddress(127.0.0.1)
+add a permissive policy: refused (error returned from database: must be owner of table example_items at line 2931)
+test connections_verify_the_server_certificate_and_host_name ... ok
+truncate: refused (error returned from database: permission denied for table example_items at line 2793)
+copy rows into a temporary table: refused (error returned from database: permission denied to create temporary tables in database "roles" at line 4413)
+row_security = off: refused (error returned from database: query would be affected by row-level security policy for table "example_items" at line 125)
+test the_service_role_cannot_bypass_row_level_security ... ok
+platform role with tenant A set, INSERT, which the template does not grant: refused (error returned from database: permission denied for table example_items at line 2793)
+platform role with tenant A set, DELETE, which the template does not grant: refused (error returned from database: permission denied for table example_items at line 2793)
+platform role with tenant A set, a table without platform_access or a grant: refused (error returned from database: permission denied for table private_items at line 2793)
+platform_access: a self-set tenant adds no row or command; a grant without platform_access would open the self-set tenant's rows, so the template grants nothing
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+service role, another tenant event: refused (error returned from database: new row violates row-level security policy for table "outbox_event" at line 2337)
+service role, platform-wide event: refused (error returned from database: new row violates row-level security policy for table "outbox_event" at line 2337)
+one pooled session (pid 101): no tenant after commit, rollback, drop, or error
+without a tenant: 0 rows visible, update 0, delete 0, insert refused: error returned from database: new row violates row-level security policy for table "example_items" at line 2337
+test without_a_tenant_no_rows_are_visible_or_writable ... ok
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+platform role, tenant set to 01928f6e-7a3c-7d4e-8f00-00000000000a in its transaction: refused (error returned from database: new row violates row-level security policy "platform_events_only" for table "outbox_event" at line 2332)
+platform role, tenant set to 01928f6e-7a3c-7d4e-8f00-00000000000b in its transaction: refused (error returned from database: new row violates row-level security policy "platform_events_only" for table "outbox_event" at line 2332)
+tenant A: insert into B refused (error returned from database: new row violates row-level security policy for table "example_items" at line 2337); move to B refused (error returned from database: new row violates row-level security policy for table "example_items" at line 2337)
+test a_tenant_reads_and_writes_only_its_own_rows ... ok
+plain platform session, `SELECT set_config('trustiot.tenant_id', $1, true)`: refused (error returned from database: new row violates row-level security policy "platform_events_only" for table "outbox_event" at line 2332)
+plain platform session, `SELECT set_config('trustiot.tenant_id', $1, false)`: refused (error returned from database: new row violates row-level security policy "platform_events_only" for table "outbox_event" at line 2332)
+a session left with a session-level tenant is closed on release (pids …)
+test the_tenant_setting_does_not_leak_across_pooled_connections ... ok
+outbox: tenant events by the service role, platform-wide by the platform role, all read by the consumer's platform role
+test outbox_events_follow_the_tenant_policies ... ok
+a policy the platform role inherits from a group: refused with Err(PermissivePolicy("public.example_items policy group_access"))
+a tenant table without row-level security: refused with "table `public.loose_items` has a tenant_id column but row-level security is not enabled", accepted once fixed
+a view with its owner's rights: refused with "view `public.item_names` reads tenant data but is not security_invoker", accepted once fixed
+a materialized view: refused with "`public.item_counts` holds tenant data and is a materialized view or foreign table, which row-level security cannot protect", accepted once fixed
+a permissive policy for every role: refused with "public.example_items policy everything applies to the database role and is not exactly the tenant condition, so it may expose other tenants' rows", accepted once fixed
+a widened tenant policy for the service role: refused with "public.example_items policy widened applies to the database role and is not exactly the tenant condition, so it may expose other tenants' rows", accepted once fixed
+a view of tenant data without the tenant column: refused with "view `public.all_names_again` reads tenant data but is not security_invoker", accepted once fixed
+a SECURITY DEFINER function over tenant data: refused with "the database role may execute SECURITY DEFINER function `all_item_names()`, which runs with another role's rights and row-level security visibility", accepted once fixed
+TRUNCATE on a tenant table: refused with "the database role may TRUNCATE tenant table `public.example_items`, which row-level security ignores", accepted once fixed
+temporary tables: refused with "the database role may create temporary tables, which row-level security does not cover and which outlive the transaction on a pooled connection", accepted once fixed
+a platform role's SECURITY DEFINER function: refused with Err(DefinerFunction("platform_names()")), accepted once revoked
+ready after 94 ms
+GET /v1/items: 200 {"items":["a-1","a-2"],"tenant":"01928f6e-7a3c-7d4e-8f00-00000000000a"}
+GET /v1/items: 200 {"items":["b-1"],"tenant":"01928f6e-7a3c-7d4e-8f00-00000000000b"}
+GET /v1/items: 403 {"code":"permission_denied","message_key":"error.permission_denied"}
+test the_example_service_serves_each_user_only_their_tenant ... ok
+test sessions_row_level_security_would_not_protect_are_refused ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.85s
+
+new-template exit: 0
+===== OUTBOX =====
+     Running unittests src/lib.rs (<target>/debug/deps/outbox-6346494410fd1d80)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/crash.rs (<target>/debug/deps/crash-fa1e1e02a1139b4a)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.76s
+     Running tests/delivery.rs (<target>/debug/deps/delivery-0e66844f7ad45bc1)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.81s
+     Running tests/failure_paths.rs (<target>/debug/deps/failure_paths-f097c40cf50e8483)
+test a_failed_delivery_is_rolled_back_before_the_consumer_goes_on ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.15s
+     Running tests/handler_panic.rs (<target>/debug/deps/handler_panic-fee7fc60425104b2)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.88s
+     Running tests/metrics.rs (<target>/debug/deps/metrics-166047f1506d65a4)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.62s
+     Running tests/notify.rs (<target>/debug/deps/notify-cd727e34219ed2c4)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.71s
+     Running tests/producer.rs (<target>/debug/deps/producer-f301156740a83c38)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.20s
+     Running tests/tenancy.rs (<target>/debug/deps/tenancy-38d1059c26fa9994)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.23s
+     Running tests/verify_271.rs (<target>/debug/deps/verify_271-7d562b96a0b9526b)
+test a_failed_delivery_leaves_nothing_and_the_event_is_processed_once ... ok
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.05s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+outbox exit: 0
+===== SQL-CHECK =====
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test the_workspace_has_no_string_built_sql ... FAILED
+thread 'the_workspace_has_no_string_built_sql' (352928) panicked at tools/sql-check/tests/check.rs:105:5:
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.86s
+sql-check exit: 101
+rcheck: removed 51 dangling test volumes
+rcheck: exit 0 at 13:40:26 (build host)
