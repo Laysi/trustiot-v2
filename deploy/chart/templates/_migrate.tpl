@@ -67,6 +67,18 @@ fails `helm install` instead of a Job that fails later.
 {{- fail "postgres.serviceRolesSecret.name is required while a service lists postgres under mesh.calls: the migration Job sets each service role's password from it" -}}
 {{- end -}}
 {{- if include "trustiot.migrate.enabled" . -}}
+{{- /* The Job's image carries every service's migrations, and only a change of its own spec runs
+it again: a service that uses Postgres must be the same release as the Job, or it would start on
+the schema of another release without waiting for anything (decision 4: services are released
+together). */ -}}
+{{- $migrateTag := $v.migrate.image.tag | default $.Chart.AppVersion -}}
+{{- range (include "trustiot.postgres.clients" . | fromYaml).services -}}
+{{- $own := (get $v.services .).image | default dict -}}
+{{- $tag := $own.tag | default $v.serviceDefaults.image.tag | default $.Chart.AppVersion -}}
+{{- if ne $tag $migrateTag -}}
+{{- fail (printf "services.%s: image tag %s differs from migrate.image.tag %s: a service that uses Postgres must come from the same release as the migration Job, which holds its migrations and runs again only when its own spec changes. Set migrate.image.tag (and migrate.image.digest, for a pinned image) to the release of the service, or the service tag to the release of the Job" . $tag $migrateTag) -}}
+{{- end -}}
+{{- end -}}
 {{- if eq $v.postgres.mode "external" -}}
 {{- if not $v.postgres.external.migrationSecret.name -}}
 {{- fail "postgres.external.migrationSecret.name is required in external mode while migrate.enabled is true: the migration Job logs in with it" -}}
@@ -146,8 +158,8 @@ Job stops before any service starts with a role it cannot log in as. */ -}}
 
 {{/*
 The Job's spec without its name. "trustiot.migrate.jobName" hashes it, so the Job gets a new name
-(and runs again) exactly when its image, settings, Secret references, revision or the platform
-settings change; an upgrade that changes none of them leaves the completed Job as it is. The Job
+(and runs again) exactly when its image, settings, Secret references, revision, the platform
+settings or the image of a service that uses Postgres change; an upgrade that changes none of them leaves the completed Job as it is. The Job
 object is immutable, and a new name also avoids patching it.
 */}}
 {{- define "trustiot.migrate.jobSpec" -}}
@@ -174,6 +186,16 @@ template:
       {{- /* The platform settings say where the databases are; a change runs the Job again. */}}
       checksum/platform-config: {{ include (print .Template.BasePath "/platform-config.yaml") . | sha256sum }}
       trustiot.io/migrate-revision: {{ $m.revision | toString | quote }}
+      {{- /* The image of every service that uses Postgres: a new service image (a digest-only
+      hotfix too) runs the Job again, and the service waits for that run instead of starting on
+      the old Job's result. The tag rule in "trustiot.migrate.check" keeps the tags equal; a new
+      digest still needs the migration image of the same release (README.md, "migration Job"). */}}
+      {{- $images := list }}
+      {{- range (include "trustiot.postgres.clients" . | fromYaml).services }}
+      {{- $config := include "trustiot.serviceConfig" (dict "root" $ "name" . "values" (get $v.services .)) | fromYaml }}
+      {{- $images = append $images (printf "%s=%s" . (include "trustiot.serviceImage" (dict "root" $ "name" . "image" $config.image))) }}
+      {{- end }}
+      trustiot.io/service-images: {{ join "," $images | quote }}
   spec:
     serviceAccountName: {{ include "trustiot.componentName" $ctx }}
     automountServiceAccountToken: false

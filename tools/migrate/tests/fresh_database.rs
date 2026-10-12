@@ -56,6 +56,17 @@ const JOIN_OWNER: &str = "GRANT identity_owner TO identity_app";
 const LEAVE_OWNER: &str = "REVOKE identity_owner FROM identity_app";
 const ADD_MEMBER: &str = "GRANT identity_app TO no_createrole";
 const REMOVE_MEMBER: &str = "REVOKE identity_app FROM no_createrole";
+/// Run as identity_app itself: overrides the search_path the Job set for the role.
+const OWN_DATABASE_SEARCH_PATH: &str =
+    "ALTER ROLE identity_app IN DATABASE migrate_fresh SET search_path = public";
+const RESET_DATABASE_SETTINGS: &str =
+    "ALTER ROLE identity_app IN DATABASE migrate_fresh RESET search_path";
+const SET_TIMEOUT: &str = "ALTER ROLE identity_app SET statement_timeout = '1h'";
+const RESET_TIMEOUT: &str = "ALTER ROLE identity_app RESET statement_timeout";
+const GRANT_CREATE: &str = "GRANT CREATE ON SCHEMA identity TO identity_app";
+const REVOKE_CREATE: &str = "REVOKE CREATE ON SCHEMA identity FROM identity_app";
+const GRANT_TEMPORARY: &str = "GRANT TEMPORARY ON DATABASE migrate_fresh TO PUBLIC";
+const REVOKE_TEMPORARY: &str = "REVOKE TEMPORARY ON DATABASE migrate_fresh FROM PUBLIC";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_fresh_database_gets_every_migration_once() {
@@ -250,15 +261,61 @@ async fn a_fresh_database_gets_every_migration_once() {
         "{error}"
     );
 
-    // 8. A service role that gained BYPASSRLS, joined the owner role, or gained a member other
-    //    than the migration role stops the run.
-    for (break_it, repair, what) in [
-        (GIVE_BYPASSRLS, TAKE_BYPASSRLS, "BYPASSRLS"),
-        (JOIN_OWNER, LEAVE_OWNER, "membership in the owner role"),
+    // 8. A service role that gained BYPASSRLS, joined the owner role, gained a member other
+    //    than the migration role, has settings beyond its search_path (for itself or for this
+    //    database), may create in its schema, or may create temporary tables stops the run.
+    //    A service role can set its own settings for a database, so it is broken as itself.
+    let mut as_app = db
+        .connect_with_password("identity_app", &second)
+        .await
+        .expect("identity_app logs in");
+    sqlx::raw_sql(OWN_DATABASE_SEARCH_PATH)
+        .execute(&mut as_app)
+        .await
+        .expect("identity_app sets its own search_path for this database");
+    as_app.close().await.expect("close");
+    let error = migrate::run(&db.config(MIGRATOR), &PRODUCT)
+        .await
+        .expect_err("a per-database setting");
+    assert!(
+        matches!(&error, Error::Role { problem, .. } if problem.contains("settings for this database")),
+        "{error}"
+    );
+    sqlx::raw_sql(RESET_DATABASE_SETTINGS)
+        .execute(&mut admin)
+        .await
+        .expect("an administrator resets them");
+    for (break_it, repair, what, expected) in [
+        (GIVE_BYPASSRLS, TAKE_BYPASSRLS, "BYPASSRLS", "BYPASSRLS"),
+        (
+            JOIN_OWNER,
+            LEAVE_OWNER,
+            "membership in the owner role",
+            "only the migration role may be a member of an owner role",
+        ),
         (
             ADD_MEMBER,
             REMOVE_MEMBER,
             "a member other than the migration role",
+            "another role is a member",
+        ),
+        (
+            SET_TIMEOUT,
+            RESET_TIMEOUT,
+            "a role setting other than search_path",
+            "role settings other than its search_path",
+        ),
+        (
+            GRANT_CREATE,
+            REVOKE_CREATE,
+            "CREATE on its schema",
+            "may create objects",
+        ),
+        (
+            GRANT_TEMPORARY,
+            REVOKE_TEMPORARY,
+            "TEMPORARY for PUBLIC again",
+            "temporary tables",
         ),
     ] {
         sqlx::raw_sql(break_it)
@@ -268,7 +325,10 @@ async fn a_fresh_database_gets_every_migration_once() {
         let error = migrate::run(&db.config(MIGRATOR), &PRODUCT)
             .await
             .expect_err(what);
-        assert!(matches!(error, Error::Role { .. }), "{what}: {error}");
+        assert!(
+            matches!(&error, Error::Role { problem, .. } if problem.contains(expected)),
+            "{what}: {error}"
+        );
         sqlx::raw_sql(repair)
             .execute(&mut admin)
             .await

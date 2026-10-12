@@ -1,66 +1,75 @@
+== migrate and sql-check by name
      Running unittests src/lib.rs
-test config::tests::plain_identifiers ... ok
 test clickhouse::tests::every_product_file_splits ... ok
-test clickhouse::tests::splits_like_the_ingest_tests ... ok
+test config::tests::plain_identifiers ... ok
 test http::tests::credentials_are_sensitive_headers ... ok
-test secret::tests::debug_hides_the_password ... ok
-test kube::tests::reads_the_job_conditions ... ok
 test secret::tests::short_long_and_odd_passwords_are_refused_without_echoing_them ... ok
+test kube::tests::reads_the_job_conditions ... ok
+test clickhouse::tests::splits_like_the_ingest_tests ... ok
+test secret::tests::debug_hides_the_password ... ok
 test http::tests::a_client_never_switches_scheme ... ok
 test secret::tests::the_verifier_matches_rfc_7677 ... ok
 test secret::tests::verifiers_use_fresh_salts ... ok
 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
      Running tests/clickhouse.rs
 test clickhouse_ddl_and_the_collector_account ... ok
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.40s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.89s
      Running tests/concurrent_runs.rs
 test only_one_run_at_a_time ... ok
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.54s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.73s
+     Running tests/file_escapes.rs
+test a_file_that_leaves_its_transaction_or_role_stops_the_run ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.39s
      Running tests/fresh_database.rs
 test a_fresh_database_gets_every_migration_once ... ok
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.31s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.36s
+     Running tests/one_instance_per_cluster.rs
+test a_second_instance_on_the_same_cluster_is_refused ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.10s
      Running tests/outbox_and_tenant_roles.rs
 test outbox_wiring_and_tenant_roles ... ok
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.86s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.27s
      Running tests/registry.rs
 test inconsistent_registries_are_refused ... ok
 test postgres_migrations_follow_the_jobs_rules ... ok
+test the_lint_sees_through_whitespace_and_case ... ok
 test the_product_registry_lists_every_file_in_order ... ok
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/wait_for_job.rs
 test a_failed_job_or_a_refused_token_ends_the_wait_with_an_error ... ok
 test waits_through_missing_and_running_until_complete ... ok
 test an_api_signed_by_another_ca_is_never_believed ... ok
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.00s
+test a_missing_job_names_the_cause_and_the_way_out ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s
      Running unittests src/lib.rs
 test tests::assert_sql_safe_is_always_found ... ok
-test tests::concat_is_checked_as_its_joined_text ... ok
-test tests::doc_comments_are_not_checked ... ok
 test tests::invalid_rust_is_an_error ... ok
-test tests::findings_name_the_file_line_and_rule ... ok
-test tests::dynamic_sql_is_found ... ok
+test tests::doc_comments_are_not_checked ... ok
 test tests::query_calls_in_macro_definitions_need_static_sql ... ok
-test tests::sql_built_with_strings_is_found ... ok
-test tests::renamed_and_aliased_query_builders_are_followed ... ok
-test tests::query_builders_in_macros_take_only_static_text ... ok
-test tests::included_files_are_checked ... ok
-test tests::session_settings_are_found_outside_the_kit ... ok
-test tests::query_builders_take_only_static_text ... ok
+test tests::dynamic_sql_is_found ... ok
 test tests::sql_like_text_needs_a_sql_word_and_a_space ... ok
-test tests::only_declared_constants_count_as_static ... ok
-test tests::static_sql_passes ... ok
 test tests::unrelated_functions_named_query_are_ignored ... ok
+test tests::only_declared_constants_count_as_static ... ok
+test tests::sql_built_with_strings_is_found ... ok
+test tests::concat_is_checked_as_its_joined_text ... ok
 test tests::test_support_crates_are_test_code ... ok
-test tests::query_builder_text_is_checked_joined ... ok
+test tests::findings_name_the_file_line_and_rule ... ok
+test tests::query_builders_in_macros_take_only_static_text ... ok
+test tests::query_builders_take_only_static_text ... ok
+test tests::included_files_are_checked ... ok
+test tests::renamed_and_aliased_query_builders_are_followed ... ok
+test tests::session_settings_are_found_outside_the_kit ... ok
+test tests::static_sql_passes ... ok
 test tests::test_code_may_pass_sql_through_variables ... ok
+test tests::query_builder_text_is_checked_joined ... ok
 test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
      Running tests/check.rs
 test listed_paths_exist ... ok
 test parameterized_sql_is_not_reported ... ok
-test every_rule_is_exercised_by_the_fixture ... ok
 test concatenated_sql_is_reported_on_every_marked_line ... ok
+test every_rule_is_exercised_by_the_fixture ... ok
 test the_allowed_files_are_the_only_exceptions ... ok
 test the_workspace_has_no_string_built_sql ... ok
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.99s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

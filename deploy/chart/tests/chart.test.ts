@@ -442,8 +442,13 @@ describe("secrets reach only the services that need them", () => {
     expect(JSON.stringify(smoke)).not.toContain("TRUSTIOT_POSTGRES_CA_FILE");
     for (const pod of [identity, smoke]) expect(pod.containers[0]?.volumeMounts).toContainEqual(clickhouseMount);
     expect(platformConfig(manifests).TRUSTIOT_CLICKHOUSE_CA_FILE).toBe("/etc/trustiot/clickhouse-ca/ca.crt");
-    // Listing postgres is what gives a service the CA.
-    const listed = render([...SHAPES.saas, SMOKE], [...external, "--set-json", 'mesh.calls.smoke-echo=["postgres"]']);
+    // Listing postgres is what gives a service the CA. The migration Job is off here: the smoke
+    // service's image is not a TrustIoT release, which the Job's tag rule refuses for a service
+    // that uses Postgres (see "a service that uses Postgres must have the migration Job's tag").
+    const listed = render(
+      [...SHAPES.saas, SMOKE],
+      [...external, "--set-json", 'mesh.calls.smoke-echo=["postgres"]', "--set", "migrate.enabled=false"],
+    );
     const listedSmoke = podSpec(find(listed, "Deployment", `${RELEASE}-smoke-echo`));
     expect(listedSmoke.volumes).toContainEqual(postgresVolume);
     expect(listedSmoke.containers[0]?.volumeMounts).toContainEqual(postgresMount);
@@ -1509,17 +1514,52 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     const name = (args: string[] = []) => jobOf(render(SHAPES.saas, [...withIdentity, ...args])).metadata.name;
     const base = name();
     expect(name()).toBe(base);
-    // A service's own settings do not run the Job again.
+    // A service's own settings, or the image of a service that does not use Postgres, do not run
+    // the Job again.
     expect(name(["--set", "services.identity.replicas=2"])).toBe(base);
+    expect(name(["--set", `services.certs.image.digest=sha256:${"2".repeat(64)}`])).toBe(base);
     for (const change of [
       ["--set", "migrate.revision=2"],
-      ["--set", "migrate.image.tag=9.9.9"],
+      // A new image of a service that uses Postgres, a digest-only hotfix too: the service waits
+      // for a run of the Job instead of starting on the old run's result.
+      ["--set", `services.identity.image.digest=sha256:${"1".repeat(64)}`],
+      // A new release: the services that use Postgres move with the Job (the tag rule).
+      ["--set", "migrate.image.tag=9.9.9", "--set", "services.identity.image.tag=9.9.9"],
       ["--set", "migrate.wait.lock=5m"],
       ["--set", "hosts.app=other.saas.trustiot.test"],
       ["--set", "observability.collector.clickhouse.passwordSecret.name=rotated"],
     ]) {
       expect({ change, name: name(change) }).not.toEqual({ change, name: base });
     }
+  });
+
+  test("a service that uses Postgres must have the migration Job's tag", () => {
+    // Only a change of the Job's own spec runs it again, so a service image of another release
+    // would start on a schema the Job never applied, without waiting.
+    for (const [what, args] of [
+      ["only the service moves", ["--set", "services.identity.image.tag=9.9.9"]],
+      ["only the default service tag moves", ["--set", "serviceDefaults.image.tag=9.9.9"]],
+      ["only the Job moves", ["--set", "migrate.image.tag=9.9.9"]],
+    ] as const) {
+      const result = helmTemplate(SHAPES.saas, [...withIdentity, ...args]);
+      expect(result.code, what).not.toBe(0);
+      expect(result.stderr, what).toContain("services.identity: image tag");
+      expect(result.stderr, what).toContain("Set migrate.image.tag");
+    }
+    // The same release renders, whichever field carries it.
+    for (const args of [
+      ["--set", "migrate.image.tag=9.9.9", "--set", "services.identity.image.tag=9.9.9"],
+      ["--set", "migrate.image.tag=9.9.9", "--set", "serviceDefaults.image.tag=9.9.9"],
+    ]) {
+      const identity = find(render(SHAPES.saas, [...withIdentity, ...args]), "Deployment", `${RELEASE}-identity`);
+      expect(podSpec(identity).containers[0]?.image).toBe("ghcr.io/laysi/trustiot-v2/identity:9.9.9");
+      expect(initContainers(identity)[0]?.image).toBe("ghcr.io/laysi/trustiot-v2/migrate:9.9.9");
+    }
+    // A service that does not use Postgres, or a chart without the Job, is not held to it.
+    expect(helmTemplate(SHAPES.saas, [...withIdentity, "--set", "services.certs.image.tag=9.9.9"]).code).toBe(0);
+    expect(
+      helmTemplate(SHAPES.saas, [...withIdentity, "--set", "services.identity.image.tag=9.9.9", "--set", "migrate.enabled=false"]).code,
+    ).toBe(0);
   });
 
   test("the longest release name keeps the Job's name within 63 characters", () => {
@@ -3353,7 +3393,12 @@ describe("service settings merge", () => {
     expect(smokeDeployment([]).containers[0]?.image).toBe(
       "docker.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44",
     );
+    // smoke.yaml tags every TrustIoT image `nightly`; back to the defaults for this check.
     const manifests = render(files, [
+      "--set",
+      "serviceDefaults.image.tag=",
+      "--set",
+      "migrate.image.tag=",
       "--set",
       "services.identity.enabled=true",
       "--set",

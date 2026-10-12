@@ -48,8 +48,12 @@ const RESET_ROLE: &str = "SELECT set_config('role', 'none', true)";
 const SET_SEARCH_PATH: &str = "SELECT set_config('search_path', $1, true)";
 const APPLY_TEMPLATE: &str = "SELECT trustiot_migrate.apply_template($1, $2, $3::jsonb)";
 
+/// Also counts the databases the role owns: roles are cluster-wide, so a migration role that owns
+/// two databases (two TrustIoT instances on one Postgres cluster) would give both instances the
+/// same service roles, passwords and grants.
 const MIGRATOR: &str = "
-SELECT r.rolname::text, r.rolsuper, r.rolcreaterole, r.rolbypassrls, d.datdba = r.oid
+SELECT r.rolname::text, r.rolsuper, r.rolcreaterole, r.rolbypassrls, d.datdba = r.oid,
+       (SELECT count(*) FROM pg_database o WHERE o.datdba = r.oid)
 FROM pg_roles r
 JOIN pg_database d ON d.datname = current_database()
 WHERE r.rolname = current_user";
@@ -70,9 +74,25 @@ SELECT r.rolsuper, r.rolcreaterole, r.rolcreatedb, r.rolcanlogin, r.rolreplicati
        ARRAY(SELECT DISTINCT g.rolname::text FROM pg_auth_members m
              JOIN pg_roles g ON g.oid = m.roleid WHERE m.member = r.oid ORDER BY 1),
        ARRAY(SELECT DISTINCT u.rolname::text FROM pg_auth_members m
-             JOIN pg_roles u ON u.oid = m.member WHERE m.roleid = r.oid ORDER BY 1)
+             JOIN pg_roles u ON u.oid = m.member WHERE m.roleid = r.oid ORDER BY 1),
+       ARRAY(SELECT unnest(s.setconfig) FROM pg_db_role_setting s
+             JOIN pg_database d ON d.oid = s.setdatabase
+             WHERE s.setrole = r.oid AND d.datname = current_database()),
+       EXISTS (SELECT 1 FROM pg_shdepend s
+               WHERE s.refclassid = 'pg_authid'::regclass AND s.refobjid = r.oid AND s.dbid <> 0
+                 AND s.dbid <> (SELECT oid FROM pg_database WHERE datname = current_database()))
 FROM pg_roles r
 WHERE r.rolname = $1";
+
+/// What a login role may do beyond its grants: create in its own schema, or create temporary
+/// tables (database.sql revoked TEMPORARY from PUBLIC once; the database owner can grant it back).
+const LOGIN_EXTRAS: &str = "
+SELECT has_schema_privilege($1, $2, 'CREATE'),
+       has_database_privilege($1, current_database(), 'TEMPORARY')";
+
+/// The file must end in the transaction it started in, as the role it started as.
+const XACT_AND_ROLE: &str =
+    "SELECT pg_current_xact_id()::text, current_user::text, current_setting('role')";
 
 const SCHEMA_OWNER: &str =
     "SELECT pg_get_userbyid(nspowner)::text FROM pg_namespace WHERE nspname = $1";
@@ -145,6 +165,10 @@ struct RoleState {
     config: Vec<String>,
     member_of: Vec<String>,
     members: Vec<String>,
+    /// Settings for this role in this database (ALTER ROLE ... IN DATABASE ... SET).
+    database_config: Vec<String>,
+    /// Owns objects or holds privileges in another database of the cluster.
+    elsewhere: bool,
 }
 
 /// The run's Postgres session, connected as the migration role.
@@ -463,12 +487,13 @@ impl Session {
     /// create roles; it must not be a superuser or bypass row-level security, so nothing it
     /// creates can be more than it is.
     async fn check_migrator(&mut self) -> Result<(), Error> {
-        let (name, superuser, createrole, bypassrls, owns_database): (
+        let (name, superuser, createrole, bypassrls, owns_database, owned): (
             String,
             bool,
             bool,
             bool,
             bool,
+            i64,
         ) = sqlx::query_as(MIGRATOR)
             .fetch_one(&mut self.conn)
             .await
@@ -484,6 +509,12 @@ impl Session {
             )
         } else if !owns_database {
             Some("it does not own the database")
+        } else if owned != 1 {
+            Some(
+                "it owns more than one database; roles are cluster-wide and the Job's role \
+                 names carry no instance name, so one Postgres cluster holds one TrustIoT \
+                 database (docs/runbooks/migrations.md)",
+            )
         } else {
             None
         };
@@ -533,6 +564,10 @@ impl Session {
             .begin()
             .await
             .map_err(Error::postgres(context.clone()))?;
+        let (xact, _, _): (String, String, String) = sqlx::query_as(XACT_AND_ROLE)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(Error::postgres(context.clone()))?;
         if let Some(path) = search_path {
             sqlx::query(SET_SEARCH_PATH)
                 .bind(path)
@@ -557,6 +592,30 @@ impl Session {
                     .execute(migration.sql)
                     .await
                     .map_err(Error::postgres(context.clone()))?;
+                // The file must end where it started: in this transaction, as the role it runs
+                // as. One that ended the transaction (END, COMMIT AND CHAIN, ...) or switched
+                // roles (SET LOCAL ROLE, SET SESSION ROLE) stops the run, and the file is not
+                // recorded. A role switch inside the transaction rolls back with it. After an
+                // END, though, what the file ran up to the END, and what it ran afterwards
+                // outside any transaction, is already committed when this check runs; since the
+                // file is not recorded, the next run applies it again and fails on what is
+                // already there, so it fails closed until a fixed file replaces it. This does
+                // not isolate one service's files from another's: a file can switch to another
+                // owner role and back (tools/migrate/README.md, "migration 檔案的規則").
+                let after: (String, String, String) = sqlx::query_as(XACT_AND_ROLE)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(Error::postgres(context.clone()))?;
+                let (user, role) = (run_as.unwrap_or(&self.migrator), run_as.unwrap_or("none"));
+                if after.0 != xact || after.1 != user || after.2 != role {
+                    return Err(Error::LeftItsContext {
+                        file: label,
+                        now: format!(
+                            "transaction {} instead of {xact}, current_user {}, role setting {}",
+                            after.0, after.1, after.2
+                        ),
+                    });
+                }
                 sqlx::query(RESET_ROLE)
                     .execute(&mut *tx)
                     .await
@@ -594,6 +653,8 @@ impl Session {
             Vec<String>,
             Vec<String>,
             Vec<String>,
+            Vec<String>,
+            bool,
         );
         let row: Option<Row> = sqlx::query_as(ROLE_STATE)
             .bind(role)
@@ -614,6 +675,8 @@ impl Session {
                 config,
                 member_of,
                 members,
+                database_config,
+                elsewhere,
             )| RoleState {
                 superuser,
                 createrole,
@@ -627,6 +690,8 @@ impl Session {
                 config,
                 member_of,
                 members,
+                database_config,
+                elsewhere,
             },
         ))
     }
@@ -679,10 +744,29 @@ impl Session {
                  administrator must remove it",
             );
         }
+        // Roles are cluster-wide and their names carry no instance name, so one Postgres cluster
+        // holds one TrustIoT database. A role that owns objects or holds privileges in another
+        // database belongs to another instance (or was given to this one by hand): sharing it
+        // would let one instance's credentials reach the other's rows.
+        if state.elsewhere {
+            return problem(
+                "owns objects or holds privileges in another database of this Postgres cluster; \
+                 roles are cluster-wide, so one Postgres cluster holds one TrustIoT database \
+                 (docs/runbooks/migrations.md)",
+            );
+        }
+        if !state.database_config.is_empty() {
+            return problem(
+                "has settings for this database (ALTER ROLE ... IN DATABASE ... SET), which \
+                 override the Job's; a database administrator must reset them",
+            );
+        }
         if !state.administered {
             return problem(
-                "exists but the migration role cannot administer it (someone else created it); \
-                 drop it or grant the migration role ADMIN OPTION on it",
+                "exists but the migration role did not create it: another TrustIoT instance on \
+                 this Postgres cluster, or someone else, uses this name. One Postgres cluster \
+                 holds one TrustIoT database; never share the roles by granting the migration \
+                 role ADMIN OPTION on them (docs/runbooks/migrations.md)",
             );
         }
         match kind {
@@ -706,6 +790,16 @@ impl Session {
             RoleKind::Login => {
                 if !state.login {
                     return problem("a service or platform role must be able to log in");
+                }
+                if state
+                    .config
+                    .iter()
+                    .any(|setting| !setting.starts_with("search_path="))
+                {
+                    return problem(
+                        "has role settings other than its search_path (for example a preset \
+                         trustiot.tenant_id); a database administrator must reset them",
+                    );
                 }
                 if !state.member_of.is_empty() {
                     return problem(
@@ -783,6 +877,22 @@ impl Session {
             }
         }
         let wanted = format!("search_path={schema}");
+        for (role, _) in &login_states {
+            let (create, temporary): (bool, bool) = sqlx::query_as(LOGIN_EXTRAS)
+                .bind(role)
+                .bind(&schema)
+                .fetch_one(&mut self.conn)
+                .await
+                .map_err(Error::postgres(format!("read the rights of {role}")))?;
+            if create || temporary {
+                return Err(Error::Role {
+                    role: role.clone(),
+                    problem: "may create objects in its schema or temporary tables; a service \
+                              role only uses what the migrations grant it (decision 29)"
+                        .to_owned(),
+                });
+            }
+        }
         for (role, state) in login_states {
             if !state.config.contains(&wanted) {
                 template(

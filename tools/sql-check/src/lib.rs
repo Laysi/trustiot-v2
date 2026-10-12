@@ -41,14 +41,13 @@ use syn::{Expr, Lit, LitStr, Macro, Pat, Token, UseTree};
 ///   owner role (`set_config('role', ...)` with the role name bound) and sets the schema as
 ///   the transaction's `search_path`. It is a deployment tool that connects as the database
 ///   owner, never a service's runtime code, and sets no tenant;
-/// - the migration Job's registry, which only includes every migration file: a ClickHouse
-///   file's comment names `SET ROLE NONE` (ClickHouse, not Postgres), and the Job's
-///   `tests/registry.rs` refuses role switches, `set_config` and `pg_settings` in every
-///   Postgres migration.
+/// - the migration Job's list of ClickHouse DDL files, which only includes them: a file's
+///   comment names `SET ROLE NONE` (ClickHouse, not Postgres). The rest of the Job's registry
+///   (Postgres migrations, per-tenant role hooks) is checked like any other file.
 pub const SESSION_SETTING_ALLOWED: &[&str] = &[
     "crates/service-kit/src/tenant.rs",
     "tools/migrate/src/postgres.rs",
-    "tools/migrate/src/registry.rs",
+    "tools/migrate/src/clickhouse_files.rs",
 ];
 
 /// Crates, relative to the workspace root, whose sources are test code: crates used only as
@@ -185,6 +184,13 @@ pub const EXCEPTIONS: &[Exception] = &[
         rules: &[Rule::SessionSetting],
         reason: "lists SET ROLE, set_config and pg_settings as text that no service's Postgres \
                  migration may contain, and checks every migration file against the list",
+    },
+    Exception {
+        path: "tools/migrate/tests/file_escapes.rs",
+        rules: &[Rule::SessionSetting],
+        reason: "test migration files run SET LOCAL ROLE and SET SESSION ROLE, as a broken \
+                 service migration would, to test that the migration Job stops the run and \
+                 records nothing (Laysi/trustiot-v2#60)",
     },
     Exception {
         path: "services/identity/tests/adversarial.rs",

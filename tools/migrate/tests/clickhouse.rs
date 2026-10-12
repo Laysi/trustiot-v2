@@ -1,6 +1,6 @@
 //! The ClickHouse part of a run: the product's DDL on a fresh ClickHouse, the collector's
-//! account (created with only its role, password rotation, a tampered account refused), and a
-//! second run that changes nothing.
+//! account (created with only its role, password rotation, a tampered account or collector role
+//! refused), and a second run that changes nothing.
 //!
 //! Needs podman or docker (a throwaway Postgres for the lock and a throwaway ClickHouse);
 //! skipped without one unless `CI` is set.
@@ -171,7 +171,7 @@ async fn clickhouse_ddl_and_the_collector_account() {
         .await
         .expect_err("a tampered account must stop the run");
     assert!(
-        matches!(&error, Error::ClickHouse(text) if text.contains("other roles or grants")),
+        matches!(&error, Error::ClickHouse(text) if text.contains("other roles, grants or settings")),
         "{error}"
     );
     let grants = clickhouse
@@ -221,6 +221,79 @@ async fn clickhouse_ddl_and_the_collector_account() {
         .await
         .expect("the run after the repair");
     assert!(report.changes.is_empty(), "{:?}", report.changes);
+
+    // 6b. The account check would be moot if the collector role itself had more than
+    //     0006_logs.sql grants it: a grant on the role, or another role granted to it, stops the
+    //     run until an administrator revokes it.
+    for (break_it, repair, what) in [
+        (
+            &["GRANT SELECT ON trustiot_logs.* TO trustiot_otel_collector"][..],
+            &["REVOKE SELECT ON trustiot_logs.* FROM trustiot_otel_collector"][..],
+            "a grant on the collector role",
+        ),
+        (
+            &[
+                "CREATE ROLE migrate_test_reader",
+                "GRANT SELECT ON trustiot.* TO migrate_test_reader",
+                "GRANT migrate_test_reader TO trustiot_otel_collector",
+            ][..],
+            &[
+                "REVOKE migrate_test_reader FROM trustiot_otel_collector",
+                "DROP ROLE migrate_test_reader",
+            ][..],
+            "a role granted to the collector role",
+        ),
+    ] {
+        for statement in break_it {
+            clickhouse
+                .query(statement)
+                .await
+                .unwrap_or_else(|error| panic!("{statement}: {error}"));
+        }
+        let error = migrate::run(&config(&db, &clickhouse, &second), &CLICKHOUSE_ONLY)
+            .await
+            .expect_err(what);
+        assert!(
+            matches!(&error, Error::ClickHouse(text) if text.contains("beyond 0006_logs.sql")),
+            "{what}: {error}"
+        );
+        for statement in repair {
+            clickhouse
+                .query(statement)
+                .await
+                .unwrap_or_else(|error| panic!("{statement}: {error}"));
+        }
+        let report = migrate::run(&config(&db, &clickhouse, &second), &CLICKHOUSE_ONLY)
+            .await
+            .expect("the run after the repair");
+        assert!(report.changes.is_empty(), "{what}: {:?}", report.changes);
+    }
+
+    // 6c. Settings on the account (here readonly = 0, which would let it change settings the
+    //     collector role does not need) stop the run too; the administrator drops the account
+    //     and the next run creates it again.
+    clickhouse
+        .query("ALTER USER trustiot_collector SETTINGS readonly = 0")
+        .await
+        .expect("give the account a setting");
+    let error = migrate::run(&config(&db, &clickhouse, &second), &CLICKHOUSE_ONLY)
+        .await
+        .expect_err("an account with settings must stop the run");
+    assert!(
+        matches!(&error, Error::ClickHouse(text) if text.contains("grants or settings")),
+        "{error}"
+    );
+    clickhouse
+        .query("DROP USER trustiot_collector")
+        .await
+        .expect("the administrator drops the account");
+    let report = migrate::run(&config(&db, &clickhouse, &second), &CLICKHOUSE_ONLY)
+        .await
+        .expect("the run after the drop");
+    assert_eq!(
+        report.changes,
+        [format!("created ClickHouse account {COLLECTOR}")]
+    );
 
     // 7. A ClickHouse file that changed after it was applied stops the run.
     let error = migrate::run(&config(&db, &clickhouse, &second), &CHANGED)

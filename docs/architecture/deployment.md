@@ -81,6 +81,8 @@ flowchart TB
 migration Job（2026-10-13，Laysi/trustiot-v2#60，決策 4、14、29，清單 M8）：每個服務的 Postgres migration、ClickHouse DDL 與資料庫角色只由一個 Job 處理，程式是 [tools/migrate](../../tools/migrate/README.md)，SaaS 與地端相同。
 
 - **角色**：Job 以 migration 角色登入，bundled 是資料庫 owner `trustiot_owner`（bootstrap 時給它 CREATEROLE，沒有 SUPERUSER 與 BYPASSRLS），external 是客戶提供的同等角色。它為每個服務建立 `<服務>_owner`（不能登入，擁有 schema 與表，migration 以它執行）、`<服務>_app`（服務登入用，不擁有物件，沒有 BYPASSRLS），需要時再加 `<服務>_platform`；每租戶角色由註冊在 Job 裡的 hook 建立或補回。已存在的角色偏離這些規則時，Job 停止，不自動修改。
+- **一個 Postgres 叢集一個 TrustIoT 資料庫**：角色是叢集層級的，角色名稱不帶實例名稱，同一個叢集上的兩個實例會共用服務角色與密碼。bundled 每個 release 有自己的 Cluster；external 的每個實例要有自己的 Postgres 叢集，Job 遇到 migration 角色擁有第二個資料庫、或角色已在其他資料庫擁有物件或權限時停止。
+- **與服務同一個版本**：Job 的映像帶著每個服務的 migration，只在自己的 spec 改變時再跑，所以用 Postgres 的服務的映像 tag 必須等於 Job 的（chart 檢查）。
 - **一次只跑一個**：整次執行持有一個 Postgres session 層級的 advisory lock，ClickHouse 的部分也在鎖內；第二個 Job 等第一個結束，然後發現沒有事要做。
 - **冪等**：套用過的檔案記在 `trustiot_migrate.applied`（ClickHouse 有自己的一份），內容改了就停止；角色、schema、權限與密碼都先比對再改，設定沒變時再跑一次，資料庫什麼都不變。
 - **服務在 Job 之後啟動**：Job 不是 Helm hook（叢集內的資料庫與 Job 由同一次安裝建立，pre-install hook 會早於資料庫，post-install hook 會與 `--wait` 互等）。Job 的名稱帶它 spec 的 hash，每個服務的 pod 有一個 init container 經 Kubernetes API 等這個 Job 完成，Job 換名時服務跟著滾動更新。細節、權限與失敗時的處理見 chart README 的「migration Job」與 [migration 的 runbook](../runbooks/migrations.md)。

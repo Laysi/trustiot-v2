@@ -90,41 +90,95 @@ fn the_product_registry_lists_every_file_in_order() {
 }
 
 /// Statements a service's Postgres migration must not contain: the Job runs each file in one
-/// transaction as the owner role, inside the schema it created for the service.
+/// transaction as the owner role, inside the schema it created for the service. The Job also
+/// stops a file that left its transaction or its role (tests/file_escapes.rs); this catches the
+/// statements in review, before a file ships.
+const FORBIDDEN: [&str; 23] = [
+    "CREATE SCHEMA",
+    "BEGIN;",
+    "COMMIT;",
+    "ROLLBACK;",
+    "CONCURRENTLY",
+    "CREATE ROLE",
+    "ALTER ROLE",
+    "SET ROLE",
+    "SET LOCAL ROLE",
+    "SET SESSION ROLE",
+    "RESET ROLE",
+    "CREATE USER",
+    "ALTER USER",
+    "CREATE GROUP",
+    "ALTER GROUP",
+    "COMMIT AND",
+    "START TRANSACTION",
+    "ABORT;",
+    "RESET ALL",
+    "SESSION AUTHORIZATION",
+    "SET_CONFIG",
+    "PG_SETTINGS",
+    "SECURITY DEFINER",
+];
+
+/// The first forbidden statement in `sql`. Case does not matter, lines that start with `--` are
+/// skipped, and whitespace runs (spaces, tabs, line breaks) count as one space, so "SET\n  ROLE"
+/// or "SECURITY  DEFINER" cannot slip past; a space before ";" is dropped.
+fn forbidden_in(sql: &str) -> Option<&'static str> {
+    let upper = sql.to_ascii_uppercase();
+    let code: String = upper
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("--"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace(" ;", ";");
+    FORBIDDEN
+        .into_iter()
+        .find(|forbidden| code.contains(forbidden))
+}
+
 #[test]
 fn postgres_migrations_follow_the_jobs_rules() {
     for service in PRODUCT.services {
         for migration in service.migrations {
-            let upper = migration.sql.to_ascii_uppercase();
-            let code: String = upper
-                .lines()
-                .filter(|line| !line.trim_start().starts_with("--"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            for forbidden in [
-                "CREATE SCHEMA",
-                "BEGIN;",
-                "COMMIT;",
-                "ROLLBACK;",
-                "CONCURRENTLY",
-                "CREATE ROLE",
-                "ALTER ROLE",
-                "SET ROLE",
-                "RESET ROLE",
-                "RESET ALL",
-                "SESSION AUTHORIZATION",
-                "SET_CONFIG",
-                "PG_SETTINGS",
-                "SECURITY DEFINER",
-            ] {
-                assert!(
-                    !code.contains(forbidden),
+            if let Some(forbidden) = forbidden_in(migration.sql) {
+                panic!(
                     "{}/{}: {forbidden} is not allowed in a service migration (tools/migrate/README.md)",
-                    service.name,
-                    migration.name
+                    service.name, migration.name
                 );
             }
         }
+    }
+}
+
+/// The lint is not fooled by case, line breaks, tabs or a space before `;`.
+#[test]
+fn the_lint_sees_through_whitespace_and_case() {
+    for (sql, expected) in [
+        ("set\n\tlocal   role identity_owner;", "SET LOCAL ROLE"),
+        ("Set Session\nRole x;", "SET SESSION ROLE"),
+        ("SELECT 1;\ncommit ;", "COMMIT;"),
+        ("commit\nand chain;", "COMMIT AND"),
+        ("start\ttransaction;", "START TRANSACTION"),
+        ("abort ;", "ABORT;"),
+        (
+            "CREATE FUNCTION f() RETURNS int LANGUAGE sql SECURITY\n  DEFINER AS 'SELECT 1';",
+            "SECURITY DEFINER",
+        ),
+        ("create\nuser x;", "CREATE USER"),
+        (
+            "SELECT pg_catalog.set_config('role', 'x', true);",
+            "SET_CONFIG",
+        ),
+    ] {
+        assert_eq!(forbidden_in(sql), Some(expected), "{sql:?}");
+    }
+    for sql in [
+        "-- SET ROLE in a comment line is fine\nCREATE TABLE t (i int);",
+        "CREATE FUNCTION f() RETURNS int LANGUAGE plpgsql AS $$ BEGIN RETURN 1; END; $$;",
+    ] {
+        assert_eq!(forbidden_in(sql), None, "{sql:?}");
     }
 }
 

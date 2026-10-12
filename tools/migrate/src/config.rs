@@ -286,8 +286,9 @@ pub struct KubeSettings {
     /// `TRUSTIOT__KUBE__NAMESPACE`: the release namespace (the chart sets it with the downward
     /// API).
     pub namespace: String,
-    /// `TRUSTIOT__KUBE__API_URL`: the API server, `https://` (the chart builds it from
-    /// `KUBERNETES_SERVICE_HOST` and `_PORT`). `http://` is accepted for 127.0.0.1 only, for tests.
+    /// `TRUSTIOT__KUBE__API_URL`: the API server, `https://` (the chart sets
+    /// `https://kubernetes.default.svc`, a name the API server's certificate carries).
+    /// `http://` is accepted for 127.0.0.1 only, for tests.
     pub api_url: String,
     /// `TRUSTIOT__KUBE__TOKEN_FILE`: the projected ServiceAccount token, read on every request
     /// because the kubelet rotates it.

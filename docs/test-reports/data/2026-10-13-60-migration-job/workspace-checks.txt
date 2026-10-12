@@ -1,9 +1,9 @@
 == fmt
 fmt-ok
 == clippy
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.55s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.96s
 == clippy service-kit no-default
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.13s
 == test
      Running unittests src/lib.rs
 test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
@@ -18,33 +18,37 @@ test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
      Running unittests src/lib.rs
 test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
      Running tests/adversarial.rs
-test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.65s
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.83s
      Running tests/cross_tenant.rs
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.05s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.08s
      Running tests/ext_authz.rs
-test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.98s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.64s
      Running tests/token_claims.rs
 test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
      Running unittests src/lib.rs
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/clickhouse.rs
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.05s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.50s
      Running tests/migrations.rs
 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running unittests src/lib.rs
 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
      Running tests/clickhouse.rs
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.95s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.60s
      Running tests/concurrent_runs.rs
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.05s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.00s
+     Running tests/file_escapes.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.39s
      Running tests/fresh_database.rs
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.95s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.42s
+     Running tests/one_instance_per_cluster.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.25s
      Running tests/outbox_and_tenant_roles.rs
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.51s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.62s
      Running tests/registry.rs
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/wait_for_job.rs
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s
      Running unittests src/lib.rs
 test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running unittests src/main.rs
@@ -54,25 +58,25 @@ test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
      Running unittests src/lib.rs
 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
      Running tests/crash.rs
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.74s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.80s
      Running tests/delivery.rs
-test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.76s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.09s
      Running tests/failure_paths.rs
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.79s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.78s
      Running tests/handler_panic.rs
-test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.69s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.87s
      Running tests/metrics.rs
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.81s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.78s
      Running tests/notify.rs
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.87s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.84s
      Running tests/postgres_start.rs
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.83s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.70s
      Running tests/producer.rs
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.98s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.59s
      Running tests/tenancy.rs
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.69s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.05s
      Running tests/verify_271.rs
-test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.16s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.06s
      Running unittests src/lib.rs
 test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
      Running tests/adversarial.rs
@@ -80,13 +84,13 @@ test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
      Running tests/allocation.rs
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/broker.rs
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.24s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.14s
      Running tests/compat.rs
-test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/dependencies.rs
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
      Running tests/fuzz.rs
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.11s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.02s
      Running tests/fuzz_split.rs
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
      Running tests/golden.rs
@@ -96,7 +100,7 @@ test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
      Running tests/readme.rs
 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/robustness.rs
-test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
      Running tests/split.rs
 test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
      Running tests/validation.rs
@@ -112,35 +116,35 @@ test result: ok. 89 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
      Running tests/chart_contract.rs
 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/container.rs
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.85s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.84s
      Running tests/dependency_isolation.rs
 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
      Running tests/errors.rs
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
      Running tests/identity.rs
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
      Running tests/identity_adversarial.rs
-test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.03s
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.55s
      Running tests/job_lock.rs
-test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.04s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.02s
      Running tests/lifecycle.rs
-test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.05s
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.06s
      Running tests/logging.rs
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
      Running tests/otlp.rs
-test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.24s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.49s
      Running tests/postgres_start.rs
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.86s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.90s
      Running tests/postgres_trust.rs
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.92s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.95s
      Running tests/tenant_db.rs
-test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.72s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.91s
      Running tests/verify_config.rs
 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/verify_container.rs
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.36s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.49s
      Running tests/verify_job_lock.rs
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.45s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.33s
      Running tests/verify_leaks.rs
 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
      Running tests/verify_shutdown.rs
@@ -148,19 +152,19 @@ test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
      Running unittests src/lib.rs
 test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
      Running tests/check.rs
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
      Running unittests src/lib.rs
 test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
      Running tests/container_volumes.rs
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
      Running tests/postgres_isolation.rs
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.26s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.33s
      Running tests/postgres_start.rs
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.80s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.83s
      Running unittests src/lib.rs
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
@@ -173,9 +177,126 @@ test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== migrate and sql-check by name
+     Running unittests src/lib.rs
+test clickhouse::tests::every_product_file_splits ... ok
+test config::tests::plain_identifiers ... ok
+test http::tests::credentials_are_sensitive_headers ... ok
+test secret::tests::short_long_and_odd_passwords_are_refused_without_echoing_them ... ok
+test kube::tests::reads_the_job_conditions ... ok
+test clickhouse::tests::splits_like_the_ingest_tests ... ok
+test secret::tests::debug_hides_the_password ... ok
+test http::tests::a_client_never_switches_scheme ... ok
+test secret::tests::the_verifier_matches_rfc_7677 ... ok
+test secret::tests::verifiers_use_fresh_salts ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running tests/clickhouse.rs
+test clickhouse_ddl_and_the_collector_account ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.89s
+     Running tests/concurrent_runs.rs
+test only_one_run_at_a_time ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.73s
+     Running tests/file_escapes.rs
+test a_file_that_leaves_its_transaction_or_role_stops_the_run ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.39s
+     Running tests/fresh_database.rs
+test a_fresh_database_gets_every_migration_once ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.36s
+     Running tests/one_instance_per_cluster.rs
+test a_second_instance_on_the_same_cluster_is_refused ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.10s
+     Running tests/outbox_and_tenant_roles.rs
+test outbox_wiring_and_tenant_roles ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.27s
+     Running tests/registry.rs
+test inconsistent_registries_are_refused ... ok
+test postgres_migrations_follow_the_jobs_rules ... ok
+test the_lint_sees_through_whitespace_and_case ... ok
+test the_product_registry_lists_every_file_in_order ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/wait_for_job.rs
+test a_failed_job_or_a_refused_token_ends_the_wait_with_an_error ... ok
+test waits_through_missing_and_running_until_complete ... ok
+test an_api_signed_by_another_ca_is_never_believed ... ok
+test a_missing_job_names_the_cause_and_the_way_out ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s
+     Running unittests src/lib.rs
+test tests::assert_sql_safe_is_always_found ... ok
+test tests::invalid_rust_is_an_error ... ok
+test tests::doc_comments_are_not_checked ... ok
+test tests::query_calls_in_macro_definitions_need_static_sql ... ok
+test tests::dynamic_sql_is_found ... ok
+test tests::sql_like_text_needs_a_sql_word_and_a_space ... ok
+test tests::unrelated_functions_named_query_are_ignored ... ok
+test tests::only_declared_constants_count_as_static ... ok
+test tests::sql_built_with_strings_is_found ... ok
+test tests::concat_is_checked_as_its_joined_text ... ok
+test tests::test_support_crates_are_test_code ... ok
+test tests::findings_name_the_file_line_and_rule ... ok
+test tests::query_builders_in_macros_take_only_static_text ... ok
+test tests::query_builders_take_only_static_text ... ok
+test tests::included_files_are_checked ... ok
+test tests::renamed_and_aliased_query_builders_are_followed ... ok
+test tests::session_settings_are_found_outside_the_kit ... ok
+test tests::static_sql_passes ... ok
+test tests::test_code_may_pass_sql_through_variables ... ok
+test tests::query_builder_text_is_checked_joined ... ok
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/check.rs
+test listed_paths_exist ... ok
+test parameterized_sql_is_not_reported ... ok
+test concatenated_sql_is_reported_on_every_marked_line ... ok
+test every_rule_is_exercised_by_the_fixture ... ok
+test the_allowed_files_are_the_only_exceptions ... ok
+test the_workspace_has_no_string_built_sql ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.99s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== service-kit no-default tests
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.28s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.93s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 == openapi
 api/openapi.json is up to date
 == deny
+          └── testkit v0.1.0
+              └── (dev) identity v0.1.0 (*)
+
 advisories ok, bans ok, licenses ok, sources ok
-== aarch64 musl
-    Finished `release` profile [optimized] target(s) in 0.08s
+== bun install
+7 packages installed [35.00ms]
+== bun test deploy/chart
+ 305 pass
+ 0 fail
+Ran 305 tests across 4 files. [27.01s]
+== bun test deploy/flux
+ 19 pass
+ 0 fail
+Ran 19 tests across 1 file. [978.00ms]
+== bun test scripts
+(fail) guards: files the jobs read are covered > every repository path a Rust source names runs rust [14.15ms]
+(fail) guards: files the jobs read are covered > every repository path a Rust source names runs rust [14.15ms]
+ 648 pass
+ 2 skip
+ 1 fail
+Ran 651 tests across 28 files. [1.79s]
+== typecheck
+$ tsc --noEmit --project tsconfig.json
+== check-workflows
+workflow policy: 4 file(s) checked, no violations
+== lint-workflows
+actionlint: 3 workflow file(s), no errors
+== check-secret-handling
+secret handling: 266 file(s) checked, 6 container build file(s), no violations
+== changes rules
+ 169 pass
+ 1 fail
+== overall status 1
+
+# The one failure above (scripts/ci/changes.test.ts: a test string named docs/runbooks/migrations.md,
+# which the guard reads as a file the Rust tests read) was fixed in tools/migrate/tests/wait_for_job.rs;
+# rerun after the fix:
+fmt-ok
+cargo clippy -p migrate --all-targets -D warnings: Finished
+cargo test -p migrate --test wait_for_job: test result: ok. 4 passed; 0 failed
+bun test scripts: 649 pass, 2 skip, 0 fail (Ran 651 tests across 28 files)

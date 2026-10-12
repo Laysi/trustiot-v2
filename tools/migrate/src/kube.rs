@@ -57,8 +57,26 @@ struct Condition {
 pub enum Seen {
     Complete,
     Failed,
-    /// Running, not created yet, or the API did not answer; look again.
+    /// The Job does not exist; look again. The text says why that may be and what to do.
+    Missing(String),
+    /// Running, or the API did not answer; look again.
     Pending(String),
+}
+
+/// What a pod waiting for a Job that does not exist logs. On a fresh install or upgrade the Job
+/// appears within seconds; when it never does, the pod belongs to another release than the one
+/// installed, because an upgrade or rollback deleted the Job this pod's spec names. The wait
+/// goes on (the Deployment's progress deadline surfaces it), so the message names the way out.
+#[must_use]
+pub fn missing_job_message(job: &str) -> String {
+    format!(
+        "the migration Job {job} does not exist. Right after helm install or upgrade it appears \
+         within seconds; if it does not, this pod comes from another release than the one \
+         installed (an upgrade or rollback replaced the Job it waits for): finish the upgrade so \
+         its new pods replace this one, or return to the release that has this Job with \
+         `helm rollback`; to run a Job again on purpose, change migrate.revision \
+         (docs/runbooks/migrations.md)"
+    )
 }
 
 /// Reads the Job's conditions from an API response body.
@@ -104,7 +122,7 @@ async fn look(
             job: settings.job.clone(),
             status: status.as_u16(),
         }),
-        404 => Ok(Seen::Pending("the Job does not exist (yet)".to_owned())),
+        404 => Ok(Seen::Missing(missing_job_message(&settings.job))),
         other => Ok(Seen::Pending(format!("the API answered HTTP {other}"))),
     }
 }
@@ -117,17 +135,7 @@ async fn look(
 /// Job or an API that does not answer is waited out: the kubelet keeps the pod waiting, and the
 /// logs say why every 30 seconds.
 pub async fn wait_for_job(settings: &KubeSettings) -> Result<(), WaitError> {
-    let client = if settings.api_url.starts_with("https://") {
-        http::trusting(&settings.ca_file)?
-    } else {
-        http::plain()
-    };
-    let url = format!(
-        "{}/apis/batch/v1/namespaces/{}/jobs/{}",
-        settings.api_url.trim_end_matches('/'),
-        settings.namespace,
-        settings.job
-    );
+    let (client, url) = client_and_url(settings)?;
     let started = Instant::now();
     let mut reported = None::<Instant>;
     loop {
@@ -141,6 +149,12 @@ pub async fn wait_for_job(settings: &KubeSettings) -> Result<(), WaitError> {
                 return Ok(());
             }
             Seen::Failed => return Err(WaitError::JobFailed(settings.job.clone())),
+            Seen::Missing(why) => {
+                if reported.is_none_or(|at| at.elapsed() >= REPORT_EVERY) {
+                    tracing::warn!(job = %settings.job, state = %why, "waiting for the migration Job");
+                    reported = Some(Instant::now());
+                }
+            }
             Seen::Pending(why) => {
                 if reported.is_none_or(|at| at.elapsed() >= REPORT_EVERY) {
                     tracing::info!(job = %settings.job, state = %why, "waiting for the migration Job");
@@ -150,6 +164,31 @@ pub async fn wait_for_job(settings: &KubeSettings) -> Result<(), WaitError> {
         }
         tokio::time::sleep(POLL_EVERY).await;
     }
+}
+
+/// One look at the Job, as the wait takes it every two seconds.
+///
+/// # Errors
+///
+/// As [`wait_for_job`], except that a failed Job is [`Seen::Failed`].
+pub async fn look_once(settings: &KubeSettings) -> Result<Seen, WaitError> {
+    let (client, url) = client_and_url(settings)?;
+    look(&client, settings, &url).await
+}
+
+fn client_and_url(settings: &KubeSettings) -> Result<(http::Client, String), WaitError> {
+    let client = if settings.api_url.starts_with("https://") {
+        http::trusting(&settings.ca_file)?
+    } else {
+        http::plain()
+    };
+    let url = format!(
+        "{}/apis/batch/v1/namespaces/{}/jobs/{}",
+        settings.api_url.trim_end_matches('/'),
+        settings.namespace,
+        settings.job
+    );
+    Ok((client, url))
 }
 
 #[cfg(test)]

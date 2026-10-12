@@ -11,6 +11,7 @@
 //! [`Report::changes`] states and the tests check against the catalogs.
 
 pub mod clickhouse;
+pub mod clickhouse_files;
 pub mod config;
 pub mod http;
 pub mod kube;
@@ -51,6 +52,12 @@ pub enum Error {
          new file instead)"
     )]
     Changed { component: String, name: String },
+    #[error(
+        "{file} left its transaction or its role ({now}); migration files must not control \
+         transactions or switch roles. It was not recorded as applied; anything it ran after \
+         ending the transaction is already committed (docs/runbooks/migrations.md)"
+    )]
+    LeftItsContext { file: String, now: String },
     #[error("the registry is inconsistent: {0}")]
     Registry(String),
     #[error("tenant role hook {hook}: {problem}")]

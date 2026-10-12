@@ -143,35 +143,6 @@ pub const PRODUCT: Registry = Registry {
             sql: include_str!("../../../services/identity/migrations/postgres/0001_identity.sql"),
         }],
     }],
-    clickhouse: &[
-        Migration {
-            name: "0001_databases.sql",
-            sql: include_str!("../../../services/ingest/migrations/clickhouse/0001_databases.sql"),
-        },
-        Migration {
-            name: "0002_telemetry.sql",
-            sql: include_str!("../../../services/ingest/migrations/clickhouse/0002_telemetry.sql"),
-        },
-        Migration {
-            name: "0003_batch_commits.sql",
-            sql: include_str!(
-                "../../../services/ingest/migrations/clickhouse/0003_batch_commits.sql"
-            ),
-        },
-        Migration {
-            name: "0004_access.sql",
-            sql: include_str!("../../../services/ingest/migrations/clickhouse/0004_access.sql"),
-        },
-        Migration {
-            name: "0005_tenant_view.sql",
-            sql: include_str!(
-                "../../../services/ingest/migrations/clickhouse/0005_tenant_view.sql"
-            ),
-        },
-        Migration {
-            name: "0006_logs.sql",
-            sql: include_str!("../../../services/ingest/migrations/clickhouse/0006_logs.sql"),
-        },
-    ],
+    clickhouse: crate::clickhouse_files::FILES,
     tenant_role_hooks: &[],
 };

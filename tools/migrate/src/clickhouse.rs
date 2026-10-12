@@ -49,6 +49,16 @@ const USER_ROLES: &str = "SELECT granted_role_name, granted_role_is_default, wit
 FROM system.role_grants WHERE user_name = {user:String} ORDER BY granted_role_name FORMAT TSV";
 const USER_GRANTS: &str =
     "SELECT count() FROM system.grants WHERE user_name = {user:String} FORMAT TSV";
+/// The collector role's grants beyond 0006_logs.sql (INSERT and SHOW COLUMNS on the two log
+/// tables), plus roles granted to it: both must be 0, or the account check above is moot.
+const ROLE_EXTRAS: &str = "SELECT
+  (SELECT count() FROM system.grants WHERE role_name = {role:String} AND NOT (
+     database = 'trustiot_logs' AND table IN ('otel_logs', 'otel_traces')
+     AND access_type IN ('INSERT', 'SHOW COLUMNS') AND grant_option = 0 AND is_partial_revoke = 0))
+  + (SELECT count() FROM system.role_grants WHERE role_name = {role:String})
+FORMAT TSV";
+/// Settings or a settings profile on the account (for example readonly = 0).
+const USER_SETTINGS: &str = "SELECT count() FROM system.settings_profile_elements WHERE user_name = {user:String} FORMAT TSV";
 const CREATE_COLLECTOR: &str = "CREATE USER {user:Identifier}
 IDENTIFIED WITH sha256_hash BY {hash:String} SALT {salt:String}
 DEFAULT ROLE trustiot_otel_collector";
@@ -322,6 +332,19 @@ impl ClickHouse {
         report: &mut Report,
     ) -> Result<(), Error> {
         let params = [("user", user)];
+        let extras = self
+            .query(
+                "read the collector role's grants",
+                ROLE_EXTRAS,
+                &[("role", COLLECTOR_ROLE)],
+            )
+            .await?;
+        if extras.trim() != "0" {
+            return Err(Error::ClickHouse(format!(
+                "the role {COLLECTOR_ROLE} has grants or roles beyond 0006_logs.sql; an \
+                 administrator must revoke them (docs/runbooks/migrations.md)"
+            )));
+        }
         let exists = self
             .query("look for the collector account", USER_EXISTS, &params)
             .await?;
@@ -333,13 +356,20 @@ impl ClickHouse {
             let grants = self
                 .query("read the collector account's grants", USER_GRANTS, &params)
                 .await?;
+            let settings = self
+                .query(
+                    "read the collector account's settings",
+                    USER_SETTINGS,
+                    &params,
+                )
+                .await?;
             let roles: Vec<&str> = roles.lines().filter(|line| !line.is_empty()).collect();
             let expected = format!("{COLLECTOR_ROLE}\t1\t0");
-            if roles != [expected.as_str()] || grants.trim() != "0" {
+            if roles != [expected.as_str()] || grants.trim() != "0" || settings.trim() != "0" {
                 // Never repaired by the Job: someone changed the account by hand, and dropping
                 // it is an administrator's decision (DROP USER takes no query parameters either).
                 return Err(Error::ClickHouse(format!(
-                    "the collector account {user} has other roles or grants than \
+                    "the collector account {user} has other roles, grants or settings than \
                      {COLLECTOR_ROLE} as its default role; an administrator must drop it \
                      (DROP USER {user}), and the next run creates it again \
                      (docs/runbooks/migrations.md)"

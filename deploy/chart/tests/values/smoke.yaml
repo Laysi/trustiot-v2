@@ -24,6 +24,13 @@ migrate:
     tag: nightly
     pullPolicy: IfNotPresent
 
+# Every TrustIoT service image of this deployment is the nightly build of the same commit
+# (scripts/nightly/service-image.ts tags them `nightly` too), so a service that uses Postgres has
+# the migration Job's tag, as the chart requires (README.md, "migration Job").
+serviceDefaults:
+  image:
+    tag: nightly
+
 services:
   smoke-echo:
     enabled: true

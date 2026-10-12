@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use migrate::config::KubeSettings;
-use migrate::kube::{WaitError, wait_for_job};
+use migrate::kube::{self as kube, WaitError, look_once, wait_for_job};
 use support::postgres::TestCa;
 use support::{random_hex, scratch_dir};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -135,6 +135,39 @@ async fn waits_through_missing_and_running_until_complete() {
             "the token, without the newline"
         );
     }
+}
+
+/// A pod of an older release whose Job an upgrade deleted gets 404 for good: the wait goes on,
+/// and what it logs names the Job, the likely cause and the way out.
+#[tokio::test]
+async fn a_missing_job_names_the_cause_and_the_way_out() {
+    let ca = TestCa::new("fake Kubernetes API");
+    let (url, seen) = fake_api(&ca, vec![(404, r#"{"kind":"Status","code":404}"#)]).await;
+    let settings = settings(url, &ca, "t");
+    let found = tokio::time::timeout(ENDS_WITHIN, look_once(&settings))
+        .await
+        .expect("one look ends")
+        .expect("a missing Job is not an error");
+    let kube::Seen::Missing(message) = found else {
+        panic!("a 404 must be reported as a missing Job, not {found:?}");
+    };
+    for part in [
+        "trustiot-migrate-r2",
+        "another release",
+        "helm rollback",
+        "migrate.revision",
+        // The runbook's path, without naming it as a file this test reads
+        // (scripts/ci/changes.test.ts).
+        "runbooks/migrations.md",
+    ] {
+        assert!(message.contains(part), "{part:?} missing from: {message}");
+    }
+    assert_eq!(seen.lock().expect("log").len(), 1);
+    let waited = tokio::time::timeout(KEEPS_WAITING_FOR, wait_for_job(&settings)).await;
+    assert!(
+        waited.is_err(),
+        "a missing Job is waited out, never an error"
+    );
 }
 
 #[tokio::test]
