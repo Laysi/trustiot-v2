@@ -42,11 +42,21 @@ GHCR 映像 ──(同一個拉取 token)──> kubelet
 以 `GITHUB_TOKEN` 開的 PR 與推送不會觸發任何 workflow（GitHub 防止 workflow 互相觸發）。唯一的例外是 `workflow_dispatch`，所以 `deploy-pr` job 開完 PR 後以 `actions: write` 在該分支執行 ci.yml（`ci.yml` 因此多了 `workflow_dispatch` 觸發）。結果掛在分支的 head commit 上，PR 的 checks 看得到。合併前照常確認必要檢查全部通過（[CI 與發佈](../../docs/architecture/ci-release.md)「必要檢查與強制方式」）。
 
 - 若沒有看到 ci 的結果（例如 dispatch 失敗，job 會失敗並寫出原因），由人關閉再重新開啟 PR：人觸發的 `reopened` 事件會跑 ci。
+- 合併前確認 PR 只有一個 `github-actions[bot]` 的 commit，而且只改 `chart.yaml` 與 `values-saas.yaml`：有寫入權限的人都能再推 commit 到 `deploy/trustiot-<版本>` 分支（PR 內文也寫了這一條）。
 - 沒有選的做法：GitHub App 或 PAT 的 token 開 PR 會觸發 workflow，但要在 GitHub 存一把能寫 repo 的長期憑證，違反「GitHub 不持有這類憑證」的原則（見 ci-release.md 的「Renovate」）；只推分支、由人開 PR，則不是「自動開 PR」。
 
 ### 需要的 repo 設定
 
-GitHub 預設不讓 Actions 開 PR。repo 設定 **Settings → Actions → General → Workflow permissions → Allow GitHub Actions to create and approve pull requests** 要打開（API 欄位 `can_approve_pull_request_reviews`），否則 `deploy-pr` 會推好分支，然後以「not permitted to create or approve pull requests」失敗，錯誤訊息附上 compare 連結，由人手動開 PR。
+GitHub 預設不讓 Actions 開 PR。repo 設定 **Settings → Actions → General → Workflow permissions → Allow GitHub Actions to create and approve pull requests**（API 欄位 `can_approve_pull_request_reviews`）打開時，`deploy-pr` 自己開 PR。
+
+設定維持關閉（目前的狀態）時，GitHub 以「not permitted to create or approve pull requests」拒絕開 PR。這不算發版失敗，映像與 chart 已經發佈並驗證，所以 `deploy-pr` 仍然成功：
+
+- 分支 `deploy/trustiot-<版本>` 照樣推好，不在分支上執行 ci.yml。
+- job summary 寫出 compare 連結，以及 PR 的標題與內文，可以直接貼上；run 上有一則 warning annotation，同樣附上連結。
+- 由人從 compare 連結開 PR（候選版開成 draft）。人開的 PR 由 `pull_request` 事件照常執行 ci.yml。
+- 重跑時分支保留，結果相同。
+
+其他錯誤（例如 API 失敗、token 權限不足、main 上的 `chart.yaml` 被手改）仍然讓 `deploy-pr` 失敗，release 的 commit status 也是失敗。
 
 這個設定同時允許 workflow 以 `GITHUB_TOKEN` 核准 PR；[CI 與發佈](../../docs/architecture/ci-release.md)「GitHub 的 Actions 設定」原本把它設為 `false`。打開與否是人的決定（記錄於 Laysi/trustiot-v2#70），考量：
 

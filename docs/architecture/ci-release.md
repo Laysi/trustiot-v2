@@ -14,7 +14,7 @@ SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定�
 - chart 以 OCIRepository 拉取，tag 與 digest 都寫在 `deploy/flux/clusters/saas/trustiot/chart.yaml`（digest 優先），只接受 release.yml 在**該版本的 tag** 上的 keyless 簽章（issuer 與 subject 都是完全比對，比下方「簽章與驗證」的 `v.*` 更窄）。這個檔案由 `scripts/release/flux.ts` 產生，`bun test deploy/flux` 要求它與產生的內容逐字相同，所以驗簽不會被手改拿掉或放寬。
 - 發版：release.yml 的 `deploy-pr` job 在 verify 通過後，以 GitHub API 在 main 上做一個 commit（改 `chart.yaml` 與部署中的 `values-saas.yaml` 副本），推到 `deploy/trustiot-<版本>` 並開 PR；候選版開成 draft，版本不比 main 上的新時不開。合併後 Flux 在 1 分鐘內開始升級，Helm 升級失敗時自動 rollback；revert 該 PR 即回到前一版。2026-10-11 在實驗機以一次性的 git 伺服器、registry 與簽章金鑰實測（[測試報告](../test-reports/2026-10-11-70-flux-gitops.md)）。
 - deploy PR 上的 CI：以 `GITHUB_TOKEN` 開的 PR 不觸發 workflow，`workflow_dispatch` 是唯一的例外，所以 `deploy-pr` job 以 `actions: write` 在該分支執行 ci.yml（ci.yml 因此加了 `workflow_dispatch` 觸發），結果掛在分支的 head commit，PR 看得到；dispatch 失敗時由人關閉再重開 PR。沒有改用 GitHub App 或 PAT 開 PR：那要在 GitHub 存一把能寫 repo 的長期憑證。
-- 前提：repo 設定「Allow GitHub Actions to create and approve pull requests」要打開，否則 `deploy-pr` 推好分支後失敗並附上 compare 連結，由人開 PR。這與下方「GitHub 的 Actions 設定」目前的 `false` 相反，由人決定（見該節）。
+- repo 設定「Allow GitHub Actions to create and approve pull requests」打開時，`deploy-pr` 自己開 PR；維持下方「GitHub 的 Actions 設定」目前的 `false` 時，它推好分支後仍然成功，在 job summary 寫出 compare 連結與 PR 的標題、內文，並在 run 上留一則 warning annotation，由人開 PR（人開的 PR 由 `pull_request` 事件跑 ci）。其他錯誤仍讓 job 失敗。打開與否由人決定（見該節）。
 
 ### SaaS 的祕密怎麼進叢集
 
@@ -169,7 +169,7 @@ gh api repos/Laysi/trustiot-v2/actions/permissions/fork-pr-workflows-private-rep
 
 任何一項與上表不同，就表示設定被改過：先改回，再查組織的稽核紀錄找出原因。
 
-`can_approve_pull_request_reviews` 同時控制「開 PR」與「核准 PR」。release.yml 的 `deploy-pr` job 要以 `GITHUB_TOKEN` 開 deploy PR（Laysi/trustiot-v2#70），設定為 `false` 時它只推分支、由人開 PR。改為 `true` 由人決定並記錄在 Laysi/trustiot-v2#70：在目前的 Free 方案，核准不是合併的條件（沒有分支保護），所以多出的「核准」能力不繞過任何強制關卡；有 `pull-requests: write` 的 job 只有 `deploy-pr`，它不執行建置程式碼。改了之後更新上表，升級到能用分支保護的方案時重新檢視（[deploy/flux/README.md](../../deploy/flux/README.md)「需要的 repo 設定」）。
+`can_approve_pull_request_reviews` 同時控制「開 PR」與「核准 PR」。release.yml 的 `deploy-pr` job 要以 `GITHUB_TOKEN` 開 deploy PR（Laysi/trustiot-v2#70），設定為 `false` 時它只推分支，job 仍然成功，並在 job summary 與 warning annotation 附上 compare 連結，由人開 PR。改為 `true` 由人決定並記錄在 Laysi/trustiot-v2#70：在目前的 Free 方案，核准不是合併的條件（沒有分支保護），所以多出的「核准」能力不繞過任何強制關卡；有 `pull-requests: write` 的 job 只有 `deploy-pr`，它不執行建置程式碼。改了之後更新上表，升級到能用分支保護的方案時重新檢視（[deploy/flux/README.md](../../deploy/flux/README.md)「需要的 repo 設定」）。
 
 ## release.yml
 
@@ -198,7 +198,7 @@ gh api repos/Laysi/trustiot-v2/actions/permissions/fork-pr-workflows-private-rep
 | `build` | `contents: read` | 交叉編譯並建置映像、產生 SBOM。它執行第三方的建置程式碼（Cargo build script、proc macro），所以沒有任何 secret 與寫入權限，交出去的只有資料：映像的 OCI 壓縮檔與 SBOM，以 artifact 交給 publish，保留 1 天 |
 | `publish` | `contents: write`、`packages: write`、`id-token: write`；`release` environment | 原封不動推送映像（digest 不變）、簽章、附 SBOM attestation；從 repo 打包、推送並簽章 chart；建立 GitHub Release。不執行建置程式碼 |
 | `verify` | `contents: read`、`packages: read` | 以消費端的方式唯讀檢查發佈結果，見下方「簽章與驗證」 |
-| `deploy-pr` | `contents: write`、`pull-requests: write`、`actions: write` | verify 通過後提議部署到 SaaS（Laysi/trustiot-v2#70）：以 GitHub API 在 main 上做一個 commit（`deploy/flux/` 的 chart 版本、digest 與 `values-saas.yaml` 副本），推到 `deploy/trustiot-<版本>`、開 PR（候選版為 draft），再以 `workflow_dispatch` 在該分支跑 ci.yml。commit 由 GitHub 以 `github-actions[bot]` 建立並簽章，job 不需要 git 憑證。版本不比 main 上部署中的新時不開 PR；重跑時已有的分支與 PR 不重開。見 [deploy/flux/README.md](../../deploy/flux/README.md) |
+| `deploy-pr` | `contents: write`、`pull-requests: write`、`actions: write` | verify 通過後提議部署到 SaaS（Laysi/trustiot-v2#70）：以 GitHub API 在 main 上做一個 commit（`deploy/flux/` 的 chart 版本、digest 與 `values-saas.yaml` 副本），推到 `deploy/trustiot-<版本>`、開 PR（候選版為 draft），再以 `workflow_dispatch` 在該分支跑 ci.yml。commit 由 GitHub 以 `github-actions[bot]` 建立並簽章，job 不需要 git 憑證。版本不比 main 上部署中的新時不開 PR；重跑時已有的分支與 PR 不重開。repo 不允許 Actions 開 PR 時只推分支、以 warning 附上 compare 連結，job 仍然成功。見 [deploy/flux/README.md](../../deploy/flux/README.md) |
 | `report` | `contents: write`、`statuses: write` | 不論前面成敗都執行：在 tag 指向的 commit 上設 commit status `release`（失敗時寫出第一個失敗的 job 與原因，含 `deploy-pr`），並把驗證結果附到 GitHub Release |
 
 沒有長期雲端金鑰，也沒有簽章金鑰：GHCR 以各 job 自己的 `GITHUB_TOKEN` 登入；cosign 以 keyless 方式簽章，憑證由 Sigstore Fulcio 依 publish job 的 GitHub OIDC token 簽發，效期約 10 分鐘。

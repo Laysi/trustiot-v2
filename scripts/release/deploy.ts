@@ -12,6 +12,11 @@
  *
  * A re-run is safe: an existing branch is kept as it is, a PR of the branch (open or closed) is
  * not opened again, and a release that is not newer than what main deploys proposes nothing.
+ *
+ * When the repository setting "Allow GitHub Actions to create and approve pull requests" is off
+ * (the documented default, docs/architecture/ci-release.md), GitHub refuses the PR. That is not a
+ * failure of the release: the branch is pushed, and the outcome `branch-only` carries the compare
+ * link for a person to open the PR (their PR runs ci by itself). Every other refusal throws.
  */
 
 import { type ChartSource, CHART_SOURCE_FILE, SHAPE_VALUES_FILE, deployBranch, isNewerRelease, parseChartSource, renderChartSource, renderShapeValues } from "./flux.ts";
@@ -83,10 +88,22 @@ export interface DeployInput {
 
 export type DeployOutcome =
   | { kind: "not-newer"; deployed: string }
-  | { kind: "proposed"; branch: string; pullRequest: string; created: boolean; branchCreated: boolean; ciDispatched: boolean };
+  | { kind: "proposed"; branch: string; pullRequest: string; created: boolean; branchCreated: boolean; ciDispatched: boolean }
+  | { kind: "branch-only"; branch: string; compare: string; branchCreated: boolean; reason: string; title: string; body: string; draft: boolean };
 
-/** The PR text (zh-TW; PR bodies are read by the team). */
-export function renderPullRequestBody(input: DeployInput, deployed: string): string {
+/** GitHub's answer when the repository does not let workflows open pull requests. */
+const PR_CREATION_DISABLED = /not permitted to create or approve pull requests/i;
+
+/** The PR title, also the subject of the deploy commit. */
+export function pullRequestTitle(version: string): string {
+  return `chore(flux): deploy trustiot ${version}`;
+}
+
+/**
+ * The PR text (zh-TW; PR bodies are read by the team). `openedBy` says who opens the PR:
+ * release.yml itself, or a person from the compare link when Actions may not open PRs.
+ */
+export function renderPullRequestBody(input: DeployInput, deployed: string, openedBy: "workflow" | "person" = "workflow"): string {
   const { plan, published } = input;
   const release = input.published.releaseUrl ? `[${plan.tag}](${input.published.releaseUrl})` : `\`${plan.tag}\``;
   return [
@@ -111,14 +128,21 @@ export function renderPullRequestBody(input: DeployInput, deployed: string): str
     "",
     "## CI",
     "",
-    "以 GITHUB_TOKEN 開的 PR 不會觸發 workflow，所以 release.yml 另以 `workflow_dispatch` 在本分支執行 ci.yml，結果顯示在本 PR 的 checks。若沒有看到 ci 的結果，關閉再重新開啟本 PR 即會觸發。",
+    openedBy === "workflow"
+      ? "以 GITHUB_TOKEN 開的 PR 不會觸發 workflow，所以 release.yml 另以 `workflow_dispatch` 在本分支執行 ci.yml，結果顯示在本 PR 的 checks。若沒有看到 ci 的結果，關閉再重新開啟本 PR 即會觸發。"
+      : "本 PR 由人從 release.yml 推好的分支開立（repo 不允許 Actions 開 PR），`pull_request` 事件會照常執行 ci.yml。",
+    "",
+    "## 合併前確認",
+    "",
+    `- 本 PR 只有一個 \`github-actions[bot]\` 的 commit，而且只改上列兩個檔。有寫入權限的人都能再推 commit 到分支 \`${deployBranch(plan.version)}\`，多出的 commit 不是 release.yml 做的。`,
     "",
   ].join("\n");
 }
 
 /**
- * Proposes deploying the release: returns what it did. Throws a ReleaseError with the next
- * step for a person when GitHub refuses (for example when Actions may not open PRs).
+ * Proposes deploying the release: returns what it did, including `branch-only` when the
+ * repository does not let Actions open PRs. Throws a ReleaseError with the next step for a
+ * person when GitHub refuses anything else.
  */
 export async function proposeDeploy(api: GitHubApi, input: DeployInput): Promise<DeployOutcome> {
   const { plan, published } = input;
@@ -164,7 +188,7 @@ export async function proposeDeploy(api: GitHubApi, input: DeployInput): Promise
     // No author or committer: GitHub makes and signs the commit as the app behind GITHUB_TOKEN.
     const commit = field(
       await expect(api, "creating the commit", "POST", `${repo}/git/commits`, {
-        message: `chore(flux): deploy trustiot ${plan.version}\n\nRelease ${plan.tag}, chart ${published.chart.digest}.\n`,
+        message: `${pullRequestTitle(plan.version)}\n\nRelease ${plan.tag}, chart ${published.chart.digest}.\n`,
         tree,
         parents: [mainSha],
       }),
@@ -185,7 +209,7 @@ export async function proposeDeploy(api: GitHubApi, input: DeployInput): Promise
   }
 
   const created = await api("POST", `${repo}/pulls`, {
-    title: `chore(flux): deploy trustiot ${plan.version}`,
+    title: pullRequestTitle(plan.version),
     head: branch,
     base: "main",
     body: renderPullRequestBody(input, current.version),
@@ -193,11 +217,21 @@ export async function proposeDeploy(api: GitHubApi, input: DeployInput): Promise
   });
   if (created.status !== 201) {
     const compare = `${input.serverUrl ?? "https://github.com"}/${plan.repository}/compare/main...${branch}?expand=1`;
-    const hint = /not permitted to create or approve pull requests/i.test(apiMessage(created))
-      ? ' The repository setting "Allow GitHub Actions to create and approve pull requests" is off (deploy/flux/README.md).'
-      : "";
+    if (PR_CREATION_DISABLED.test(apiMessage(created))) {
+      // No ci dispatch: the PR that a person opens from the compare link starts ci by itself.
+      return {
+        kind: "branch-only",
+        branch,
+        compare,
+        branchCreated,
+        reason: 'the repository setting "Allow GitHub Actions to create and approve pull requests" is off (deploy/flux/README.md)',
+        title: pullRequestTitle(plan.version),
+        body: renderPullRequestBody(input, current.version, "person"),
+        draft: plan.prerelease,
+      };
+    }
     throw new ReleaseError(
-      `opening the deploy PR failed with HTTP ${created.status}: ${apiMessage(created)}.${hint} ` +
+      `opening the deploy PR failed with HTTP ${created.status}: ${apiMessage(created)}. ` +
         `The branch ${branch} is pushed; open the PR by hand: ${compare}`,
     );
   }
@@ -210,4 +244,44 @@ export async function proposeDeploy(api: GitHubApi, input: DeployInput): Promise
     );
   }
   return { kind: "proposed", branch, pullRequest: String(pullRequest), created: true, branchCreated, ciDispatched: true };
+}
+
+/**
+ * What the deploy-pr job reports for an outcome: the job summary (Markdown) and, when a person
+ * has to act, a one-line warning for the run's annotations.
+ */
+export function describeOutcome(outcome: DeployOutcome, version: string): { summary: string; warning?: string } {
+  switch (outcome.kind) {
+    case "not-newer":
+      return { summary: `main already deploys ${outcome.deployed}, which is not older than ${version}: no deploy PR.` };
+    case "proposed":
+      return {
+        summary: outcome.created
+          ? `Opened the deploy PR ${outcome.pullRequest} (branch ${outcome.branch}) and started ci.yml on it.`
+          : `The deploy PR for ${version} already exists: ${outcome.pullRequest}.`,
+      };
+    case "branch-only": {
+      const pushed = outcome.branchCreated ? "Pushed" : "Kept the existing";
+      const warning =
+        `The deploy PR for ${version} was not opened: ${outcome.reason}. ` +
+        `${pushed} branch ${outcome.branch}; open the PR by hand${outcome.draft ? " as a draft" : ""}: ${outcome.compare}`;
+      // Four backticks: the body itself contains code spans.
+      const summary = [
+        `${pushed} branch \`${outcome.branch}\`, but did not open the deploy PR: ${outcome.reason}.`,
+        "",
+        `Open it by hand${outcome.draft ? " **as a draft** (a release candidate)" : ""}: ${outcome.compare}`,
+        "",
+        `Title: \`${outcome.title}\``,
+        "",
+        "<details><summary>Body</summary>",
+        "",
+        "````markdown",
+        outcome.body.trimEnd(),
+        "````",
+        "",
+        "</details>",
+      ].join("\n");
+      return { summary, warning };
+    }
+  }
 }
