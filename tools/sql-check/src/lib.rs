@@ -202,7 +202,10 @@ pub const EXCEPTIONS: &[Exception] = &[
                  row-level security still refuses it a tenant's outbox events and gives it no \
                  extra rows of a table with platform_access, and to record that a table it has \
                  a grant on without platform_access shows it the rows of the tenant it set \
-                 (Laysi/trustiot-v2#360)",
+                 (Laysi/trustiot-v2#360); and takes a role the platform role belongs to with \
+                 set_config('role', ...) and sets a tenant, to show which rows each setup the \
+                 session check refuses for the platform role opens to that tenant \
+                 (Laysi/trustiot-v2#366)",
     },
 ];
 

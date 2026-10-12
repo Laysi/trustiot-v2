@@ -1,0 +1,93 @@
+== mutation: rule off (HAVING false)
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+thread 'the_platform_role_gains_nothing_by_setting_a_tenant' (1097384) panicked at crates/service-kit/tests/tenant_db.rs:1201:5:
+  left: Ok(())
+ right: Err(PlatformTenantOnly { table: "public.private_items", role: "example_platform", command: "SELECT" })
+test the_platform_role_gains_nothing_by_setting_a_tenant ... FAILED
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+thread 'platform_sessions_only_the_tenant_condition_opens_are_refused' (1097383) panicked at crates/service-kit/tests/tenant_db.rs:1702:9:
+  left: Ok(())
+ right: Err(PlatformTenantOnly { table: "public.private_items", role: "example_platform", command: "SELECT" })
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... FAILED
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 10 filtered out; finished in 3.10s
+== mutation: F1 reverted: only the literal tenant condition counts as not opening
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+thread 'platform_sessions_only_the_tenant_condition_opens_are_refused' (1097584) panicked at crates/service-kit/tests/tenant_db.rs:1702:9:
+  left: Ok(())
+ right: Err(PlatformTenantOnly { table: "public.private_items", role: "example_platform", command: "SELECT" })
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... FAILED
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 6.85s
+== mutation: current_setting calls count as opening
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+thread 'platform_sessions_only_the_tenant_condition_opens_are_refused' (1097772) panicked at crates/service-kit/tests/tenant_db.rs:1702:9:
+  left: Ok(())
+ right: Err(PlatformTenantOnly { table: "public.private_items", role: "example_platform", command: "SELECT" })
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... FAILED
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 10.05s
+== mutation: dependency rule off: opaque policies count as opening
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+thread 'platform_sessions_only_the_tenant_condition_opens_are_refused' (1097962) panicked at crates/service-kit/tests/tenant_db.rs:1702:9:
+  left: Ok(())
+ right: Err(PlatformTenantOnly { table: "public.private_items", role: "example_platform_switch", command: "SELECT" })
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... FAILED
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 8.80s
+== mutation: F2 reverted: policy applicability by MEMBER
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+thread 'platform_sessions_only_the_tenant_condition_opens_are_refused' (1098153) panicked at crates/service-kit/tests/tenant_db.rs:1702:9:
+  left: Ok(())
+ right: Err(PlatformTenantOnly { table: "public.private_items", role: "example_platform_switch", command: "SELECT" })
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... FAILED
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 6.53s
+== mutation: F3 reverted: roles by MEMBER
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+thread 'platform_sessions_only_the_tenant_condition_opens_are_refused' (1098342) panicked at crates/service-kit/tests/tenant_db.rs:1803:5:
+  left: Err(PlatformTenantOnly { table: "public.private_items", role: "example_platform_unusable", command: "SELECT" })
+ right: Ok(())
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... FAILED
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 11.24s
+== mutation: session role only
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+thread 'platform_sessions_only_the_tenant_condition_opens_are_refused' (1098532) panicked at crates/service-kit/tests/tenant_db.rs:1702:9:
+  left: Ok(())
+ right: Err(PlatformTenantOnly { table: "public.example_items", role: "example_platform_group", command: "SELECT" })
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... FAILED
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 4.65s
+== mutation: UPDATE judged on USING only
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+thread 'platform_sessions_only_the_tenant_condition_opens_are_refused' (1098722) panicked at crates/service-kit/tests/tenant_db.rs:1702:9:
+  left: Ok(())
+ right: Err(PlatformTenantOnly { table: "public.private_items", role: "example_platform", command: "UPDATE" })
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... FAILED
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 5.90s
+== mutation: column privileges ignored
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+thread 'platform_sessions_only_the_tenant_condition_opens_are_refused' (1098913) panicked at crates/service-kit/tests/tenant_db.rs:1702:9:
+  left: Ok(())
+ right: Err(PlatformTenantOnly { table: "public.private_items", role: "example_platform", command: "SELECT" })
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... FAILED
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 3.71s
+== mutation: restrictive policies counted as permissive
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+thread 'platform_sessions_only_the_tenant_condition_opens_are_refused' (1099104) panicked at crates/service-kit/tests/tenant_db.rs:1702:9:
+  left: Ok(())
+ right: Err(PlatformTenantOnly { table: "public.private_items", role: "example_platform", command: "SELECT" })
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... FAILED
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 10.30s
