@@ -35,6 +35,9 @@ uuid = { workspace = true, features = ["v7"] }
 # Decodes the OTLP metric export the tests receive, to read the lag value itself.
 opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "metrics"] }
 prost = { workspace = true, features = ["std"] }
+# A throwaway CA and server certificate, so the tests' Postgres serves TLS that the consumer's
+# service-kit pools verify (sslmode verify-full).
+rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
 
 [lints]
 workspace = true

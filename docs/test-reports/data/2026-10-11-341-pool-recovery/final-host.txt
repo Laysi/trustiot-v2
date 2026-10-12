@@ -1,0 +1,61 @@
+# bash rcheck.sh 341 'bash tmp-341-final.sh' on commit 450abb9 (build host ruisi-wsl, CI=1), 2026-10-11 23:58 to 2026-10-12 00:05 Asia/Taipei
+rcheck: queued on ruisi-wsl at 23:58:33 as 341-b5207270; running now: nothing
+host: Linux 6.18.40.1-microsoft-standard-WSL2 x86_64, 20 cores; CI=1; Docker version 29.8.2, build 7fc2dff
+== cargo fmt --all --check
+ok
+== cargo clippy --locked --workspace --all-targets -- -D warnings
+ok
+== cargo test --locked -p identity
+ok
+      1 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.94s
+      1 test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.51s
+      1 test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+      1 test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.46s
+== cargo test --locked -p repo-check
+ok
+      1 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+== cargo test --locked -p sql-check
+ok
+      1 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s
+== cargo run --locked -p openapi -- --check
+ok
+checks exit 0
+run  1 ok    12394 ms  load 21.05  ready again 2.018878336s; 3 opened after the cut
+run  2 ok    12600 ms  load 25.46  ready again 2.027745226s; 3 opened after the cut
+run  3 ok    12480 ms  load 28.77  ready again 2.017678267s; 3 opened after the cut
+run  4 ok    12727 ms  load 30.49  ready again 2.016426112s; 3 opened after the cut
+run  5 ok    12499 ms  load 32.84  ready again 2.013726788s; 3 opened after the cut
+run  6 ok    12566 ms  load 33.94  ready again 2.021183747s; 3 opened after the cut
+run  7 ok    12605 ms  load 35.28  ready again 2.01441048s; 3 opened after the cut
+run  8 ok    12581 ms  load 36.01  ready again 2.019667406s; 3 opened after the cut
+run  9 ok    12483 ms  load 37.11  ready again 2.020683147s; 3 opened after the cut
+run 10 ok    12628 ms  load 37.78  ready again 2.018025456s; 3 opened after the cut
+run 11 ok    12222 ms  load 38.40  ready again 2.025041743s; 3 opened after the cut
+run 12 ok    12468 ms  load 38.65  ready again 2.020486035s; 3 opened after the cut
+run 13 ok    12738 ms  load 39.25  ready again 2.013003865s; 3 opened after the cut
+run 14 ok    12623 ms  load 39.36  ready again 2.01784902s; 3 opened after the cut
+run 15 ok    12548 ms  load 39.73  ready again 2.019395017s; 3 opened after the cut
+run 16 ok    12637 ms  load 39.77  ready again 2.015937783s; 3 opened after the cut
+run 17 ok    10640 ms  load 39.88  ready again 2.021638554s; 3 opened after the cut
+run 18 ok    12426 ms  load 40.11  ready again 2.020753232s; 3 opened after the cut
+run 19 ok    12508 ms  load 40.09  ready again 2.019234704s; 3 opened after the cut
+run 20 ok    12272 ms  load 40.28  ready again 2.017880621s; 3 opened after the cut
+run 21 ok    12627 ms  load 40.23  ready again 2.014976032s; 3 opened after the cut
+run 22 ok    12572 ms  load 40.52  ready again 2.013156665s; 3 opened after the cut
+run 23 ok    12582 ms  load 40.51  ready again 2.017391458s; 3 opened after the cut
+run 24 ok    12755 ms  load 40.47  ready again 2.027657514s; 3 opened after the cut
+run 25 ok    10491 ms  load 40.47  ready again 2.015946251s; 3 opened after the cut
+run 26 ok    12550 ms  load 40.61  ready again 2.026634629s; 3 opened after the cut
+run 27 ok    12736 ms  load 40.51  ready again 2.016100813s; 3 opened after the cut
+run 28 ok    12643 ms  load 40.55  ready again 2.021825938s; 3 opened after the cut
+run 29 ok    10533 ms  load 40.54  ready again 2.016765401s; 3 opened after the cut
+run 30 ok    12610 ms  load 40.46  ready again 2.013600887s; 3 opened after the cut
+passed 30 of 30
+rcheck: removed 33 dangling test volumes
+rcheck: exit 0 at 00:05:53 (ruisi-wsl, 341-b5207270)

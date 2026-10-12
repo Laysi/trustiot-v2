@@ -1,16 +1,18 @@
 //! Crashes of a real `outbox-example` process (SIGKILL: no shutdown code runs), against a real
-//! Postgres (`TEST_DATABASE_URL`, or a throwaway container; skipped without either unless `CI`
-//! is set).
+//! Postgres with TLS (a throwaway container; skipped without podman or docker unless `CI` is
+//! set). The consumer reads as its platform role and processes as its service role in the
+//! event's tenant (decision 29).
 
 mod support;
 
 use std::time::Duration;
 
-use support::{Example, database, eventually};
+use support::{Example, TENANT_A, TENANT_B, database, eventually};
 
-/// `(name, applied)` of the consumer's copy of `id`.
-async fn copied(pool: &sqlx::PgPool, id: &str) -> Option<(String, i32)> {
-    sqlx::query_as("SELECT name, applied FROM widget_name WHERE id = $1")
+/// `(name, applied, tenant)` of the consumer's copy of `id`; `tenant` is the tenant the
+/// delivery's transaction was in.
+async fn copied(pool: &sqlx::PgPool, id: &str) -> Option<(String, i32, Option<String>)> {
+    sqlx::query_as("SELECT name, applied, tenant FROM widget_name WHERE id = $1")
         .bind(id)
         .fetch_optional(pool)
         .await
@@ -31,7 +33,7 @@ async fn an_event_committed_before_the_producer_is_killed_is_delivered_after_res
         &setup,
         &[("TRUSTIOT__CONSUMER__PROCESS_AFTER", "1h")],
     );
-    let (status, body) = example.rename("w-1", "pump A");
+    let (status, body) = example.rename("w-1", "pump A", Some(TENANT_A));
     assert_eq!(status, 200, "{body}");
     let event_id = body["event_id"].as_str().expect("event id").to_owned();
     example.kill();
@@ -55,7 +57,7 @@ async fn an_event_committed_before_the_producer_is_killed_is_delivered_after_res
         copied(&setup.consumer, "w-1").await
     })
     .await;
-    assert_eq!(copy, ("pump A".to_owned(), 1));
+    assert_eq!(copy, ("pump A".to_owned(), 1, Some(TENANT_A.to_owned())));
     let inbox: Vec<String> = sqlx::query_scalar("SELECT event_id::text FROM outbox_inbox")
         .fetch_all(&setup.consumer)
         .await
@@ -72,7 +74,7 @@ async fn a_consumer_killed_mid_delivery_processes_the_event_once_after_restart()
 
     // The handler writes the copy, then keeps the transaction open for an hour.
     let example = Example::start(&database, &setup, &[("TRUSTIOT__CONSUMER__HOLD", "1h")]);
-    let (status, body) = example.rename("w-2", "valve");
+    let (status, body) = example.rename("w-2", "valve", Some(TENANT_B));
     assert_eq!(status, 200, "{body}");
     let event_id = body["event_id"].as_str().expect("event id").to_owned();
     let holding = example
@@ -114,12 +116,12 @@ async fn a_consumer_killed_mid_delivery_processes_the_event_once_after_restart()
         copied(&setup.consumer, "w-2").await
     })
     .await;
-    assert_eq!(copy, ("valve".to_owned(), 1));
+    assert_eq!(copy, ("valve".to_owned(), 1, Some(TENANT_B.to_owned())));
     // Later polls do not apply it again.
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(
         copied(&setup.consumer, "w-2").await,
-        Some(("valve".to_owned(), 1))
+        Some(("valve".to_owned(), 1, Some(TENANT_B.to_owned())))
     );
     drop(restarted);
 }
