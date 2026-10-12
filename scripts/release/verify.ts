@@ -9,14 +9,17 @@
  * Every image: its tag points at the published digest; the manifest is one linux/arm64 image;
  * the cosign signature verifies against the release identity (lib.ts keylessVerifyArgs); the
  * SBOM attestation verifies and holds an SPDX document that lists packages; an anonymous pull
- * is refused, so the package is private. The chart: tag, signature, and Chart.yaml version and
- * appVersion. Once per run, a signature check with another identity must fail, so the checks
- * above are known not to pass vacuously.
+ * is refused, so the package is private. The chart: tag, signature, Chart.yaml version and
+ * appVersion, and its image references: every image of this release that the chart deploys
+ * must render as `<repository>:<version>@<published digest>` from the chart's values.yaml alone
+ * and layered with each shipped shape file (chart-images.ts). Once per run, a signature check
+ * with another identity must fail, so the checks above are known not to pass vacuously.
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type ChartPin, chartPinProblems, chartPins, pinnedReference, readChartValues, SHAPE_VALUES_FILES, unpackChart } from "./chart-images.ts";
 import { log, parseOptions, protoTool, run, runStage, setOutput, systemTool, tryRun } from "./exec.ts";
 import {
   type PublishedArtifact,
@@ -186,6 +189,7 @@ await runStage("verify", async () => {
   }
   await checkSignature(plan, access, tools, chart);
   const workDir = mkdtempSync(join(tmpdir(), "trustiot-verify-"));
+  let pins: ChartPin[];
   try {
     await run([
       tools.helm,
@@ -206,13 +210,31 @@ await runStage("verify", async () => {
     if (!isMap(shown) || shown.version !== plan.version || shown.appVersion !== plan.version) {
       throw new ReleaseError(`${chart.ref}: Chart.yaml must have version and appVersion ${plan.version}`);
     }
+    // The images the chart deploys must be this release's, by digest, in every shipped shape.
+    const chartDir = await unpackChart(systemTool("tar"), archive, join(workDir, "unpacked"), plan.chart.name);
+    const { values, shapes } = readChartValues(chartDir);
+    pins = chartPins(plan.images, published.images, values);
+    const problems = chartPinProblems(values, shapes, pins, plan.version);
+    if (problems.length > 0) {
+      throw new ReleaseError(`${chart.ref} does not pin this release's images: ${problems.join("; ")}`);
+    }
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }
   const chartPrivate = await checkPrivate(access, tools, chart.ref);
   log("verify", `${chart.ref}: ${chart.digest}, signature verified, version and appVersion ${plan.version}`);
+  for (const pin of pins) {
+    log("verify", `${chart.ref} deploys ${pinnedReference(pin, plan.version)}`);
+  }
+  const notDeployed = published.images.filter((image) => !pins.some((pin) => pin.image.name === image.name)).map((image) => `\`${image.name}\``);
+  const shapeFiles = SHAPE_VALUES_FILES.map((file) => `\`${file}\``).join("、");
+  const pinned =
+    pins.length === 0
+      ? "chart 不部署這次發佈的任何映像"
+      : `chart 部署的映像以 digest 固定為這次發佈的映像（只用 \`values.yaml\` 與分別疊上 ${shapeFiles} 都相同）：${pins.map((pin) => `\`${pinnedReference(pin, plan.version)}\``).join("、")}` +
+        (notDeployed.length > 0 ? `；${notDeployed.join("、")} 不由 chart 部署` : "");
   lines.push(
-    `- Helm chart \`${chart.name}\`：tag 指向 \`${chart.digest}\`；cosign 簽章驗證通過；拉下的 chart 就是發佈的檔案；Chart.yaml 的 version 與 appVersion 都是 \`${plan.version}\`` +
+    `- Helm chart \`${chart.name}\`：tag 指向 \`${chart.digest}\`；cosign 簽章驗證通過；拉下的 chart 就是發佈的檔案；Chart.yaml 的 version 與 appVersion 都是 \`${plan.version}\`；${pinned}` +
       (chartPrivate ? "；匿名拉取被拒（套件為私有）。" : "。"),
   );
 

@@ -7,10 +7,12 @@
  *     [--output <published.json>] [--local-test-key <prefix>]
  *
  * It runs no build code. The image archives are pushed byte for byte (skopeo
- * --preserve-digests) and only their digests are signed; the chart is packaged here from the
- * repository, not taken from the build job. Versions are immutable: a tag that already points
- * at different content fails the run, while a re-run that produces the same digests (images
- * and chart are built reproducibly) goes on and signs again.
+ * --preserve-digests) and only their digests are signed; the chart is packaged here from a copy
+ * of the repository's chart, not taken from the build job, with the digests of this release's
+ * images written into its values.yaml (chart-images.ts), so the signed chart pins the images it
+ * deploys. Versions are immutable: a tag that already points at different content fails the
+ * run, while a re-run that produces the same digests (images and chart are built reproducibly)
+ * goes on and signs again.
  *
  * Environment in GitHub Actions: GITHUB_TOKEN (packages: write, contents: write), GITHUB_ACTOR,
  * GITHUB_REPOSITORY; cosign takes its signing certificate from the job's OIDC token
@@ -20,6 +22,7 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { type ChartPin, type PinOptions, chartPins, packagePinnedChart, parseValues, pinnedChartValues, pinnedReference } from "./chart-images.ts";
 import { log, parseOptions, protoTool, rawManifest, requireCheckout, run, runStage, setOutput, systemTool, tryRun } from "./exec.ts";
 import {
   CHART_DIR,
@@ -56,13 +59,8 @@ interface Tools {
   helm: string;
 }
 
-async function publishImage(
-  plan: ReleasePlan,
-  image: PlannedImage,
-  artifacts: string,
-  access: RegistryAccess,
-  tools: Tools,
-): Promise<PublishedArtifact & { sbomAsset: string; sbomFile: string }> {
+/** The image archive and SBOM that build wrote for `image`. */
+function buildArtifacts(image: PlannedImage, artifacts: string): { archive: string; sbomFile: string } {
   const archive = join(artifacts, "images", `${image.name}.oci.tar`);
   const sbomFile = join(artifacts, "images", `${image.name}.spdx.json`);
   for (const file of [archive, sbomFile]) {
@@ -70,6 +68,32 @@ async function publishImage(
       throw new ReleaseError(`the build artifacts have no ${file}`);
     }
   }
+  return { archive, sbomFile };
+}
+
+function pinOptions(plan: ReleasePlan, access: RegistryAccess): PinOptions {
+  // A local test also points the chart at its throwaway registry; a release refuses a chart
+  // whose repositories are not where it pushes.
+  return { appVersion: plan.version, rewriteRepositories: access.localKey !== undefined };
+}
+
+/** The chart's pins for these images; throws unless the chart and its shape files take them. */
+function chartPinsFor(plan: ReleasePlan, images: readonly PublishedArtifact[], access: RegistryAccess): ChartPin[] {
+  const chartDir = join(ROOT, CHART_DIR);
+  const values = parseValues(readFileSync(join(chartDir, "values.yaml"), "utf8"), `${CHART_DIR}/values.yaml`);
+  const pins = chartPins(plan.images, images, values);
+  pinnedChartValues(chartDir, pins, pinOptions(plan, access));
+  return pins;
+}
+
+async function publishImage(
+  plan: ReleasePlan,
+  image: PlannedImage,
+  artifacts: string,
+  access: RegistryAccess,
+  tools: Tools,
+): Promise<PublishedArtifact & { sbomAsset: string; sbomFile: string }> {
+  const { archive, sbomFile } = buildArtifacts(image, artifacts);
   const { manifest, digest } = await rawManifest(tools.skopeo, `oci-archive:${archive}`);
   const config = JSON.parse((await run([tools.skopeo, "inspect", "--config", "--raw", `oci-archive:${archive}`])).stdout);
   const problems = imagePlatformProblems(manifest, config);
@@ -112,18 +136,33 @@ async function publishImage(
   return { name: image.name, ref: image.ref, digest, sbomAsset: sbomAssetName(image.name, plan.version), sbomFile };
 }
 
-async function publishChart(plan: ReleasePlan, access: RegistryAccess, tools: Tools, workDir: string): Promise<PublishedArtifact> {
-  const epoch = String(plan.sourceDateEpoch);
+async function publishChart(
+  plan: ReleasePlan,
+  access: RegistryAccess,
+  tools: Tools,
+  workDir: string,
+  images: readonly PublishedArtifact[],
+): Promise<PublishedArtifact> {
+  // The images this chart deploys, pinned to the digests just pushed.
+  const pins = chartPinsFor(plan, images, access);
+  for (const pin of pins) {
+    log("publish", `the chart pins ${pin.image.name} to ${pinnedReference(pin, plan.version)}`);
+  }
+  for (const image of images.filter((candidate) => !pins.some((pin) => pin.image.name === candidate.name))) {
+    log("publish", `the chart does not deploy ${image.name}`);
+  }
   // SOURCE_DATE_EPOCH fixes the timestamps in the package; helm push takes the manifest's
   // created annotation from the file's mtime, in the local time zone. Together they make the
-  // chart's digest the same on every run for the same commit.
-  await run([tools.helm, "package", CHART_DIR, "--version", plan.version, "--app-version", plan.version, "--destination", workDir], {
-    cwd: ROOT,
-    env: { SOURCE_DATE_EPOCH: epoch },
+  // chart's digest the same on every run for the same commit and images.
+  const tgz = await packagePinnedChart(pins, {
+    helm: tools.helm,
+    chartDir: join(ROOT, CHART_DIR),
+    workDir: join(workDir, "chart"),
+    sourceDateEpoch: plan.sourceDateEpoch,
+    ...pinOptions(plan, access),
   });
-  const tgz = join(workDir, `${plan.chart.name}-${plan.version}.tgz`);
-  if (!existsSync(tgz)) {
-    throw new ReleaseError(`helm package did not write ${tgz}`);
+  if (!tgz.endsWith(`/${plan.chart.name}-${plan.version}.tgz`)) {
+    throw new ReleaseError(`helm package wrote ${tgz}, not the planned chart ${plan.chart.name}`);
   }
   utimesSync(tgz, plan.sourceDateEpoch, plan.sourceDateEpoch);
   const content = sha256Digest(new Uint8Array(readFileSync(tgz)));
@@ -214,11 +253,19 @@ await runStage("publish", async () => {
 
   const workDir = mkdtempSync(join(tmpdir(), "trustiot-publish-"));
   try {
+    // Before anything is pushed: the chart must take this build's digests, so a chart that
+    // cannot be pinned stops the release while nothing is published yet.
+    const built: PublishedArtifact[] = [];
+    for (const image of plan.images) {
+      const { digest } = await rawManifest(tools.skopeo, `oci-archive:${buildArtifacts(image, resolve(options.artifacts ?? "")).archive}`);
+      built.push({ name: image.name, ref: image.ref, digest });
+    }
+    chartPinsFor(plan, built, access);
     const images = [];
     for (const image of plan.images) {
       images.push(await publishImage(plan, image, resolve(options.artifacts ?? ""), access, tools));
     }
-    const chart = await publishChart(plan, access, tools, workDir);
+    const chart = await publishChart(plan, access, tools, workDir, images);
     const published = { images: images.map(({ sbomFile: _, ...image }) => image), chart };
     const body = renderReleaseBody(notes, plan, published);
     let releaseUrl: string;
