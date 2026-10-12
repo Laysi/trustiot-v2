@@ -1,9 +1,7 @@
-rcheck: queued on the build host at 03:53:04 as 57-2f3c4739; running now: 374-2d4911ad since 03:51:20
-=== git log --oneline -1; uname -m; which podman skopeo || echo no podman or skopeo on this host
-a563718 snapshot
+rcheck: queued on the build host at 04:05:59 as 57-2f3c4739; running now: 374-2d4911ad since 04:04:24
+=== uname -m
 x86_64
-no podman or skopeo on this host
-=== exit 0: git log --oneline -1; uname -m; which podman skopeo || echo no podman or skopeo on this host
+=== exit 0: uname -m
 === proto install actionlint >/dev/null 2>&1; proto bin actionlint --reporter text | tail -1
 ~/.proto/tools/actionlint/1.7.12/actionlint
 === exit 0: proto install actionlint >/dev/null 2>&1; proto bin actionlint --reporter text | tail -1
@@ -17,32 +15,20 @@ no podman or skopeo on this host
 === bun run --cwd scripts typecheck
 $ tsc --noEmit --project tsconfig.json
 === exit 0: bun run --cwd scripts typecheck
-=== bun test scripts/release/chart-images.test.ts
-bun test v1.4.2 (744846f84)
-
-scripts/release/chart-images.test.ts:
-(pass) chartImage > maps the Postgres image and service keys, skips images the chart does not deploy [0.14ms]
-(pass) chartImage > every image under deploy/images is either deployed by the chart or listed as not deployed [0.21ms]
-(pass) imageReference > follows the templates: registry/name or repository, tag defaults to appVersion, digest when set [0.07ms]
-(pass) imageReference > mergeValues layers like Helm: maps merge, scalars and lists are replaced, null removes [0.02ms]
-(pass) pinChartValues > a release writes only the digests into the repository's values.yaml, keeping its comments [2.41ms]
-(pass) pinChartValues > a local test also points the chart at the registry it pushed to [1.89ms]
-(pass) pinChartValues > refuses a chart that already pins, sets a tag, or names another registry [2.97ms]
-(pass) pinChartValues > edits nested keys only at their own path, keeps inline comments, and adds missing keys [0.35ms]
-(pass) pinChartValues > refuses a target that is not a block mapping or appears twice [0.11ms]
+=== bun test scripts/release/chart-images.test.ts scripts/release/package-privacy.test.ts
 (pass) chartPinProblems > accepts a chart that renders every pinned reference [0.11ms]
 (pass) chartPinProblems > names every image whose digest is not this release's (what verify refuses) [0.07ms]
-(pass) chartPinProblems > catches an overlay that unpins, retags or moves an image [0.14ms]
-(pass) chartPinProblems > no shipped shape file and no file of the SaaS GitOps tree overrides an image of the release [0.30ms]
-(pass) packagePinnedChart > packages the same archive every time, with the pins and nothing else changed [104.02ms]
-(pass) packagePinnedChart > helm template of the packaged chart with values-saas.yaml renders every pinned reference [82.10ms]
-(pass) packagePinnedChart > helm template of the packaged chart with values-onprem.yaml renders every pinned reference [83.52ms]
+(pass) chartPinProblems > catches an overlay that unpins, retags or moves an image [0.13ms]
+(pass) chartPinProblems > no shipped shape file and no file of the SaaS GitOps tree overrides an image of the release [0.31ms]
+(pass) packagePinnedChart > packages the same archive every time, with the pins and nothing else changed [103.38ms]
+(pass) packagePinnedChart > helm template of the packaged chart with values-saas.yaml renders every pinned reference [81.79ms]
+(pass) packagePinnedChart > helm template of the packaged chart with values-onprem.yaml renders every pinned reference [81.09ms]
 
- 16 pass
+ 24 pass
  0 fail
- 54 expect() calls
-Ran 16 tests across 1 file. [290.00ms]
-=== exit 0: bun test scripts/release/chart-images.test.ts
+ 80 expect() calls
+Ran 24 tests across 2 files. [288.00ms]
+=== exit 0: bun test scripts/release/chart-images.test.ts scripts/release/package-privacy.test.ts
 === bun test scripts
 scripts/tests/e2e.test.ts:
 (skip) the dev environment with podman > starts, passes every check, seeds, rotates credentials, stops and purges without leftovers
@@ -51,31 +37,31 @@ scripts/tests/e2e.test.ts:
 (skip) aarch64ElfProblem > accepts the aarch64 binary running this test
 (skip) the dev environment with podman > starts, passes every check, seeds, rotates credentials, stops and purges without leftovers
 
- 636 pass
+ 644 pass
  2 skip
  0 fail
- 1996 expect() calls
-Ran 638 tests across 27 files. [1.73s]
+ 2026 expect() calls
+Ran 646 tests across 28 files. [1.76s]
 === exit 0: bun test scripts
 === bun test deploy/chart
-(pass) sendRaw > a failure after the response head arrived is not a ConnectionError, so it is never retried [2001.59ms]
-(pass) sendRaw > a refused connection is a ConnectionError [2.16ms]
-(pass) sendRaw > a response that never comes is a ConnectionError after the timeout [201.92ms]
+(pass) sendRaw > a failure after the response head arrived is not a ConnectionError, so it is never retried [2001.43ms]
+(pass) sendRaw > a refused connection is a ConnectionError [1.94ms]
+(pass) sendRaw > a response that never comes is a ConnectionError after the timeout [201.89ms]
 
  288 pass
  0 fail
  3097 expect() calls
-Ran 288 tests across 4 files. [24.02s]
+Ran 288 tests across 4 files. [24.19s]
 === exit 0: bun test deploy/chart
 === bun test deploy/flux
 (pass) .sops.yaml > one rule: Secrets under deploy/flux/clusters/saas named *.sops.yaml, data and stringData only [0.14ms]
 (pass) .sops.yaml > every recipient is an age public key, listed once [0.05ms]
-(pass) github-known-hosts > holds exactly GitHub's published host keys [0.30ms]
+(pass) github-known-hosts > holds exactly GitHub's published host keys [0.39ms]
 
  19 pass
  0 fail
  77 expect() calls
-Ran 19 tests across 1 file. [882.00ms]
+Ran 19 tests across 1 file. [885.00ms]
 === exit 0: bun test deploy/flux
 === bun scripts/ci/check-workflows.ts
 workflow policy: 4 file(s) checked, no violations
@@ -84,12 +70,12 @@ workflow policy: 4 file(s) checked, no violations
 actionlint: 3 workflow file(s), no errors
 === exit 0: bun scripts/ci/lint-workflows.ts
 === bun scripts/ci/check-secret-handling.ts
-secret handling: 262 file(s) checked, 6 container build file(s), no violations
+secret handling: 263 file(s) checked, 6 container build file(s), no violations
 === exit 0: bun scripts/ci/check-secret-handling.ts
 === cargo test --locked -p repo-check 2>&1 | grep -E "^test result|FAILED|panicked"
 test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 === exit 0: cargo test --locked -p repo-check 2>&1 | grep -E "^test result|FAILED|panicked"
 rcheck: removed 0 dangling test volumes
-rcheck: exit 0 at 03:56:39 (build host, 57-2f3c4739)
+rcheck: exit 0 at 04:09:22 (build host, 57-2f3c4739)

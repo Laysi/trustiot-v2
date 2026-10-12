@@ -279,7 +279,9 @@ cosign verify-attestation --type spdxjson ghcr.io/laysi/trustiot-v2/<名稱>:<�
 
 chart 以同樣的身分驗證 `ghcr.io/laysi/trustiot-v2/charts/trustiot:<版本>`。每次發佈的 GitHub Release 都列出該版本完整的驗證指令與 digest。SBOM 是 syft 產生的 SPDX 2.3 JSON，以 attestation 附在映像上，也是 GitHub Release 的附件。
 
-verify job 對每個映像檢查：tag 指向 publish 推送的 digest；只有一個平台且是 linux/arm64；簽章與 SBOM attestation 以上述身分（再加上 commit SHA 與觸發事件）驗證通過；匿名拉取被拒，即套件是私有的（套件改為公開時這一項會失敗，見「GHCR 套件的可見性」）。chart 檢查 tag、簽章與 version、appVersion，再解開拉下的 chart，讀它的 `values.yaml` 與 `values-saas.yaml`、`values-onprem.yaml`：chart 部署的每個這次發佈的映像，只用 `values.yaml` 與分別疊上兩個型態檔時，算出的參照都要是 `<repository>:<版本>@<publish 推送的 digest>`（算法與樣板相同，`scripts/release/chart-images.test.ts` 以 `helm template` 比對）。以讀 values 而不是 render 檢查，是因為 render 需要安裝實例的覆寫檔，也要啟用每個服務，verify 不該依賴這些。另外以不屬於這次發佈的身分驗證一次，必須失敗，證明上述檢查不是空檢查。
+verify job 對每個映像檢查：tag 指向 publish 推送的 digest；只有一個平台且是 linux/arm64；簽章與 SBOM attestation 以上述身分（再加上 commit SHA 與觸發事件）驗證通過。chart 檢查 tag、簽章與 version、appVersion，再解開拉下的 chart，讀它的 `values.yaml` 與 `values-saas.yaml`、`values-onprem.yaml`：chart 部署的每個這次發佈的映像，只用 `values.yaml` 與分別疊上兩個型態檔時，算出的參照都要是 `<repository>:<版本>@<publish 推送的 digest>`（算法與樣板相同，`scripts/release/chart-images.test.ts` 以 `helm template` 比對）。以讀 values 而不是 render 檢查，是因為 render 需要安裝實例的覆寫檔，也要啟用每個服務，verify 不該依賴這些。另外以不屬於這次發佈的身分驗證一次，必須失敗，證明上述檢查不是空檢查。以上任一項不通過，verify 立刻失敗。
+
+最後才檢查套件是否私有（2026-10-13 起，Laysi/trustiot-v2#57）：每個映像與 chart 都以匿名方式要求一次，必須被拒（`scripts/release/package-privacy.ts`）。這一項不在第一個公開的套件就停下，而是把每個套件的結果都收集起來：報告的每一列都寫出該套件的結果（私有、可以匿名拉取、或無法判斷），有任何一個不是私有時，報告開頭寫明驗證未通過與是哪些套件；報告照樣寫進 `report` 輸出，由 `report` job 附到 GitHub Release，然後 verify 才失敗，`error` 輸出列出所有公開的套件。verify 仍然失敗，`deploy-pr` 不執行、`release` commit status 是失敗。無法判斷（匿名要求因為其他原因失敗）也算不通過。本機測試模式（`--local-test-key`）的暫用 registry 沒有可見性，不做這一項。
 
 Flux（Laysi/trustiot-v2#70）驗證 chart 時，要用支援 cosign v3 bundle 格式的 Flux（2.8 以上；`.prototools` 釘 2.9.6），`matchOIDCIdentity` 的 issuer 寫 `^https://token\.actions\.githubusercontent\.com$`，subject 寫該版本的完整身分，例如 `^https://github\.com/Laysi/trustiot-v2/\.github/workflows/release\.yml@refs/tags/v1\.2\.0$`（`deploy/flux/clusters/saas/trustiot/chart.yaml`，由 release.yml 的 `deploy-pr` job 寫入）。Flux 只驗證它自己拉的 chart；服務映像由 kubelet 拉取，SaaS 上的映像驗簽要另外的 admission controller（Laysi/trustiot-v2#70 的後續提案）。chart 以 digest 固定它部署的映像（見「發佈內容」），所以簽過的 chart 決定了 kubelet 拉哪一個映像，tag 被移動也不影響；映像本身的簽章仍然只有 admission controller 能在叢集裡檢查。
 
@@ -343,7 +345,9 @@ repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（
 - 套件改為公開後無法再改回私有（「Once you make a package public, you cannot make it private again」）。
 - 可見性在套件的設定頁（Danger Zone，Change visibility）改，不在 repo 設定。
 
-我們現有的套件目前實際是私有還是公開，沒有驗證（要以組織的 Packages 頁或 API 確認）；依上述預設，應該都還是私有。release.yml 的 `verify` job 每次發佈都檢查匿名拉取被拒（`scripts/release/verify.ts` 的 `checkPrivate`），所以只要發佈成功並通過 verify，該版本的映像與 chart 就是私有的。
+我們現有的套件目前實際是私有還是公開，沒有驗證（要以組織的 Packages 頁或 API 確認）；依上述預設，應該都還是私有。release.yml 的 `verify` job 每次發佈都檢查匿名拉取被拒（`scripts/release/package-privacy.ts`），所以只要發佈成功並通過 verify，該版本的映像與 chart 就是私有的。
+
+2026-10-13 更新：`v0.0.0-rc.4` 的 verify 發現 repo 公開後才第一次建立的套件 `identity` 與 `postgres` 可以匿名拉取（Laysi/trustiot-v2#57）；使用者決定 repo 公開期間不處理，轉回私有後再檢查（Laysi/trustiot-v2#1 第 10 項）。為了讓這段期間的發佈仍然做完其他檢查，私有檢查改在 verify 的最後執行（見上方「簽章與驗證」）：套件公開時，候選版的 verify 會先做完每一項其他檢查（簽章、SBOM、chart 與它固定的映像 digest），把結果寫進報告，最後才以私有檢查失敗。所以這段期間 verify 失敗是預期的，要看報告確認失敗的只有私有這一項。
 
 是否把套件改為公開，屬於使用者的決定，不在本次文件更新的範圍：
 

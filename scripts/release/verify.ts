@@ -8,18 +8,24 @@
  *
  * Every image: its tag points at the published digest; the manifest is one linux/arm64 image;
  * the cosign signature verifies against the release identity (lib.ts keylessVerifyArgs); the
- * SBOM attestation verifies and holds an SPDX document that lists packages; an anonymous pull
- * is refused, so the package is private. The chart: tag, signature, Chart.yaml version and
- * appVersion, and its image references: every image of this release that the chart deploys
- * must render as `<repository>:<version>@<published digest>` from the chart's values.yaml alone
- * and layered with each shipped shape file (chart-images.ts). Once per run, a signature check
- * with another identity must fail, so the checks above are known not to pass vacuously.
+ * SBOM attestation verifies and holds an SPDX document that lists packages. The chart: tag,
+ * signature, Chart.yaml version and appVersion, and its image references: every image of this
+ * release that the chart deploys must render as `<repository>:<version>@<published digest>` from
+ * the chart's values.yaml alone and layered with each shipped shape file (chart-images.ts). Once
+ * per run, a signature check with another identity must fail, so the checks above are known not
+ * to pass vacuously. Each of these stops verify at once.
+ *
+ * Last, every image and the chart must refuse an anonymous pull, so the packages are private
+ * (package-privacy.ts). These results are collected rather than thrown one by one: while a
+ * package is public, verify still runs every other check and writes the full report, then fails
+ * naming every package that is not private.
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ChartPin, chartPinProblems, chartPins, pinnedReference, readChartValues, SHAPE_VALUES_FILES, unpackChart } from "./chart-images.ts";
+import { type PackagePrivacy, classifyAnonymousPull, privacyError, privacyNote, privacySummary } from "./package-privacy.ts";
 import { log, parseOptions, protoTool, run, runStage, setOutput, systemTool, tryRun } from "./exec.ts";
 import {
   type PublishedArtifact,
@@ -50,8 +56,6 @@ import {
 
 /** Signature payload types of cosign's bundle format and of its older signature format. */
 const SIGNATURE_TYPES: ReadonlySet<string> = new Set(["https://sigstore.dev/cosign/sign/v1", "cosign container image signature"]);
-/** What skopeo reports when the registry refuses an anonymous request. */
-const ANONYMOUS_REFUSED = /unauthorized|denied|authentication required|forbidden/i;
 
 interface Tools {
   skopeo: string;
@@ -117,19 +121,13 @@ async function checkSbom(plan: ReleasePlan, access: RegistryAccess, tools: Tools
   throw new ReleaseError(`no verified SPDX SBOM attestation for ${artifact.digest} of ${artifact.ref}`);
 }
 
-/** An anonymous request must be refused: the packages are private. */
-async function checkPrivate(access: RegistryAccess, tools: Tools, ref: string): Promise<boolean> {
+/** Requests the artifact anonymously; the package is private when the registry refuses. */
+async function anonymousPull(access: RegistryAccess, tools: Tools, artifact: PublishedArtifact): Promise<PackagePrivacy> {
   if (access.localKey !== undefined) {
-    return false;
+    return { name: artifact.name, ref: artifact.ref, state: "skipped" };
   }
-  const result = await tryRun([tools.skopeo, "inspect", "--raw", "--no-creds", `docker://${ref}`]);
-  if (result.exitCode === 0) {
-    throw new ReleaseError(`${ref} can be pulled anonymously; the package must be private`);
-  }
-  if (!ANONYMOUS_REFUSED.test(result.stderr)) {
-    throw new ReleaseError(`cannot tell whether ${ref} is private: ${result.stderr.trim()}`);
-  }
-  return true;
+  const result = await tryRun([tools.skopeo, "inspect", "--raw", "--no-creds", `docker://${artifact.ref}`]);
+  return classifyAnonymousPull(artifact.name, artifact.ref, result.exitCode, result.stderr);
 }
 
 await runStage("verify", async () => {
@@ -151,7 +149,8 @@ await runStage("verify", async () => {
     await login(access, host, tools);
   }
 
-  const lines: string[] = [];
+  // Report lines of the images and the chart; each ends with its privacy result, added last.
+  const checked: { artifact: PublishedArtifact; line: string }[] = [];
   for (const image of published.images) {
     const planned = plan.images.find((candidate) => candidate.name === image.name);
     if (planned === undefined) {
@@ -167,12 +166,11 @@ await runStage("verify", async () => {
     }
     await checkSignature(plan, access, tools, image);
     const sbom = await checkSbom(plan, access, tools, image);
-    const isPrivate = await checkPrivate(access, tools, image.ref);
     log("verify", `${image.ref}: ${image.digest}, signature and SBOM attestation verified (${sbom})`);
-    lines.push(
-      `- 映像 \`${image.name}\`：tag 指向 \`${image.digest}\`；平台 linux/arm64；cosign 簽章驗證通過；SBOM attestation 驗證通過（${sbom}）` +
-        (isPrivate ? "；匿名拉取被拒（套件為私有）。" : "。"),
-    );
+    checked.push({
+      artifact: image,
+      line: `- 映像 \`${image.name}\`：tag 指向 \`${image.digest}\`；平台 linux/arm64；cosign 簽章驗證通過；SBOM attestation 驗證通過（${sbom}）`,
+    });
   }
 
   const chart = published.chart;
@@ -221,7 +219,6 @@ await runStage("verify", async () => {
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }
-  const chartPrivate = await checkPrivate(access, tools, chart.ref);
   log("verify", `${chart.ref}: ${chart.digest}, signature verified, version and appVersion ${plan.version}`);
   for (const pin of pins) {
     log("verify", `${chart.ref} deploys ${pinnedReference(pin, plan.version)}`);
@@ -233,21 +230,37 @@ await runStage("verify", async () => {
       ? "chart 不部署這次發佈的任何映像"
       : `chart 部署的映像以 digest 固定為這次發佈的映像（只用 \`values.yaml\` 與分別疊上 ${shapeFiles} 都相同）：${pins.map((pin) => `\`${pinnedReference(pin, plan.version)}\``).join("、")}` +
         (notDeployed.length > 0 ? `；${notDeployed.join("、")} 不由 chart 部署` : "");
-  lines.push(
-    `- Helm chart \`${chart.name}\`：tag 指向 \`${chart.digest}\`；cosign 簽章驗證通過；拉下的 chart 就是發佈的檔案；Chart.yaml 的 version 與 appVersion 都是 \`${plan.version}\`；${pinned}` +
-      (chartPrivate ? "；匿名拉取被拒（套件為私有）。" : "。"),
-  );
+  checked.push({
+    artifact: chart,
+    line: `- Helm chart \`${chart.name}\`：tag 指向 \`${chart.digest}\`；cosign 簽章驗證通過；拉下的 chart 就是發佈的檔案；Chart.yaml 的 version 與 appVersion 都是 \`${plan.version}\`；${pinned}`,
+  });
 
   // The same check with an identity this release does not have must fail.
   const first = published.images[0] ?? chart;
   const wrong = access.localKey === undefined ? verifyFlags(plan, access, `${plan.tag}-not-this-release`) : null;
+  let control: string | undefined;
   if (wrong !== null) {
     const result = await tryRun([tools.cosign, "verify", ...wrong, first.ref]);
     if (result.exitCode === 0) {
       throw new ReleaseError(`cosign verify accepted ${first.ref} for a different identity`);
     }
-    lines.push(`- 對照：以另一個身分（\`refs/tags/${plan.tag}-not-this-release\`）驗證 \`${first.name}\` 被拒，上列驗證不是空檢查。`);
+    control = `- 對照：以另一個身分（\`refs/tags/${plan.tag}-not-this-release\`）驗證 \`${first.name}\` 被拒，上列驗證不是空檢查。`;
   }
+
+  // Last: the packages must be private. Every result is collected, so a public package does not
+  // hide the results of the others, and the report is written before verify fails.
+  const privacy: PackagePrivacy[] = [];
+  const lines: string[] = [];
+  for (const { artifact, line } of checked) {
+    const result = await anonymousPull(access, tools, artifact);
+    privacy.push(result);
+    lines.push(`${line}${privacyNote(result)}`);
+  }
+  if (control !== undefined) {
+    lines.push(control);
+  }
+  const notPrivate = privacyError(privacy);
+  const verdict = privacySummary(privacy);
 
   const runUrl =
     process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
@@ -262,6 +275,7 @@ await runStage("verify", async () => {
     "",
     `${new Date().toISOString().replace(/\.\d+Z$/, "Z")} 由 release workflow 的 verify job 以唯讀權限從 registry 檢查，${signer}：`,
     "",
+    ...(verdict === undefined ? [] : [verdict, ""]),
     ...lines,
     ...(runUrl ? ["", `執行紀錄：${runUrl}`] : []),
     "",
@@ -270,6 +284,9 @@ await runStage("verify", async () => {
     writeFileSync(options.output, report);
   }
   setOutput("report", report);
+  if (notPrivate !== undefined) {
+    throw notPrivate;
+  }
   setOutput("verified", String(published.images.length));
   log("verify", `verified ${published.images.length} image(s) and the chart`);
 });
