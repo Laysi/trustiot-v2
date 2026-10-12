@@ -15,7 +15,7 @@
 看板與告警：
 
 1. Grafana 部署在同一個 k3s，查詢日誌與指標並設定告警；主機掛了它也跟著掛，所以 SaaS 另設不跑在同一台主機的外部監控，從外部定時檢查網站、API 與 MQTT 轉接，主機、入口或 Cloudflare Tunnel 掛了會通知人，SaaS 上線前（MS4）完成。
-2. 建議至少要有的告警：資料接收失敗與積壓、閘道器離線、設定套用失敗、AI 呼叫錯誤率與排隊、主機資源、憑證到期、服務間事件積壓（`crates/outbox` 的 `outbox.consumer.lag.age`）。
+2. 建議至少要有的告警：資料接收失敗與積壓、閘道器離線、設定套用失敗、AI 呼叫錯誤率與排隊、主機資源、憑證到期、服務間事件積壓（`crates/outbox` 的 `outbox.consumer.lag.age` 持續上升，以及某個訂閱的 lag 序列沒有資料：消費端停止量測時不回報舊值，見 [outbox README 的 Lag 指標](../../crates/outbox/README.md#lag-指標)）。
 3. 服務的指標以 OpenTelemetry 儀表建立，經 service-kit 的 OTLP 匯出送到 collector；第一個是 2026-10-10 加入的 outbox lag（Laysi/trustiot-v2#54）。collector 目前收下指標後丟棄，存放位置隨 Grafana 決定（Laysi/trustiot-v2#183）。
 
 錯誤追蹤（[#163](https://github.com/Laysi/trustiot/issues/163)、[#166](https://github.com/Laysi/trustiot/issues/166)–[#169](https://github.com/Laysi/trustiot/issues/169)）：

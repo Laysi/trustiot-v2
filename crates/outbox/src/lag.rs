@@ -6,10 +6,15 @@
 //!   is waiting.
 //!
 //! Both carry `outbox.subscription` and `outbox.source` (the producer's schema). The values
-//! come from the last measurement of each live [`crate::Consumer`].
+//! come from the last measurement of each live [`crate::Consumer`], and only while it is
+//! current: a measurement older than [`CURRENT_FOR_INTERVALS`] lag intervals, or one whose
+//! [`crate::Consumer::monitor_lag`] has ended (shutdown, or its task dropped), is no longer
+//! reported, so a consumer that stopped measuring never shows a frozen value. Its series then
+//! stops, which an alert on missing data catches; a consumer that still measures but no longer
+//! processes shows a rising lag and age instead.
 
-use std::sync::{Arc, Mutex, OnceLock, Weak};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::time::{Duration, Instant};
 
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::ObservableGauge;
@@ -19,6 +24,11 @@ use crate::position::Position;
 
 /// The most events a measurement counts; beyond it the lag reads as this value.
 pub const LAG_COUNT_CAP: u32 = 10_000;
+
+/// How many lag intervals a measurement stays current. Measurements normally replace each other
+/// every interval; one that has not been replaced for this long means the measuring loop is
+/// stuck (a query that does not return, a blocked thread) or keeps failing.
+pub const CURRENT_FOR_INTERVALS: u32 = 3;
 
 /// One lag measurement.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -53,7 +63,16 @@ pub(crate) async fn measure(tx: &mut PgConnection, after: Position) -> Result<La
 /// The last measurement of one consumer, read by the gauges' callbacks.
 pub(crate) struct LagCell {
     attributes: [KeyValue; 2],
-    last: Mutex<Option<Lag>>,
+    /// How long a measurement stays current.
+    current_for: Duration,
+    last: Mutex<Option<Reading>>,
+}
+
+/// A measurement and when it was stored.
+#[derive(Clone, Copy)]
+struct Reading {
+    lag: Lag,
+    at: Instant,
 }
 
 /// Every live consumer's cell. Consumers hold the strong references, so a dropped consumer's
@@ -64,44 +83,63 @@ static CELLS: Mutex<Vec<Weak<LagCell>>> = Mutex::new(Vec::new());
 static GAUGES: OnceLock<(ObservableGauge<u64>, ObservableGauge<f64>)> = OnceLock::new();
 
 impl LagCell {
-    /// A cell for one consumer, registering the gauges on first use.
-    pub(crate) fn register(subscription: &str, source: &str) -> Arc<Self> {
+    /// A cell for one consumer that measures every `interval`, registering the gauges on first
+    /// use. A measurement stays current for [`CURRENT_FOR_INTERVALS`] intervals.
+    pub(crate) fn register(subscription: &str, source: &str, interval: Duration) -> Arc<Self> {
         GAUGES.get_or_init(gauges);
         let cell = Arc::new(Self {
             attributes: [
                 KeyValue::new("outbox.subscription", subscription.to_owned()),
                 KeyValue::new("outbox.source", source.to_owned()),
             ],
+            current_for: interval.saturating_mul(CURRENT_FOR_INTERVALS),
             last: Mutex::new(None),
         });
-        let mut cells = CELLS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut cells = CELLS.lock().unwrap_or_else(PoisonError::into_inner);
         cells.retain(|cell| cell.strong_count() > 0);
         cells.push(Arc::downgrade(&cell));
         cell
     }
 
+    /// Stores a measurement taken now.
     pub(crate) fn set(&self, lag: Lag) {
-        *self
-            .last
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lag);
+        *self.last() = Some(Reading {
+            lag,
+            at: Instant::now(),
+        });
     }
 
+    /// Forgets the last measurement: nothing measures this consumer any more.
+    pub(crate) fn clear(&self) {
+        *self.last() = None;
+    }
+
+    /// The last measurement, while it is current.
     pub(crate) fn get(&self) -> Option<Lag> {
-        *self
-            .last
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        let reading = (*self.last())?;
+        (reading.at.elapsed() <= self.current_for).then_some(reading.lag)
+    }
+
+    fn last(&self) -> MutexGuard<'_, Option<Reading>> {
+        self.last.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
-/// Calls `observe` with each live consumer's last measurement and attributes.
+/// Clears a cell when dropped, so that whatever ends the loop measuring it (shutdown, a panic,
+/// its task dropped), the gauges stop reporting the last value.
+pub(crate) struct ClearOnDrop<'a>(pub(crate) &'a LagCell);
+
+impl Drop for ClearOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.clear();
+    }
+}
+
+/// Calls `observe` with each live consumer's current measurement and attributes.
 fn each_measurement(mut observe: impl FnMut(Lag, &[KeyValue])) {
     let cells: Vec<Arc<LagCell>> = CELLS
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .iter()
         .filter_map(Weak::upgrade)
         .collect();
@@ -136,4 +174,53 @@ fn gauges() -> (ObservableGauge<u64>, ObservableGauge<f64>) {
         })
         .build();
     (events, age)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LAG: Lag = Lag {
+        events: 2,
+        oldest_age: Some(Duration::from_secs(5)),
+    };
+
+    /// What the gauges' callbacks report for `subscription` now.
+    fn reported(subscription: &str) -> Option<Lag> {
+        let mut found = None;
+        each_measurement(|lag, attributes| {
+            let ours = attributes.iter().any(|attribute| {
+                attribute.key.as_str() == "outbox.subscription"
+                    && attribute.value.as_str() == subscription
+            });
+            if ours {
+                found = Some(lag);
+            }
+        });
+        found
+    }
+
+    #[test]
+    fn a_measurement_is_reported_until_its_loop_ends() {
+        // Current for an hour: the reading cannot go stale during the test, however loaded.
+        let cell = LagCell::register("lag-test.ended", "producer", Duration::from_secs(1200));
+        assert_eq!(cell.get(), None, "nothing measured yet");
+        assert_eq!(reported("lag-test.ended"), None);
+        cell.set(LAG);
+        assert_eq!(cell.get(), Some(LAG));
+        assert_eq!(reported("lag-test.ended"), Some(LAG));
+        drop(ClearOnDrop(&cell));
+        assert_eq!(cell.get(), None, "the measuring loop ended");
+        assert_eq!(reported("lag-test.ended"), None);
+    }
+
+    #[test]
+    fn a_measurement_that_is_not_replaced_in_time_is_not_reported() {
+        // Current for 3 ms; after sleeping 20 ms the reading is older than that.
+        let cell = LagCell::register("lag-test.stale", "producer", Duration::from_millis(1));
+        cell.set(LAG);
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(cell.get(), None, "a stale reading is not current");
+        assert_eq!(reported("lag-test.stale"), None);
+    }
 }

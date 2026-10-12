@@ -77,7 +77,7 @@ context.spawn(async move {
 - 每個事件一筆服務角色的交易，開在事件的租戶裡：設定租戶 → `begin` → 取得訂閱的鎖 → 查 inbox → `handle` → 記錄事件 ID → 推進位置 → commit。handler 的寫入與「已處理」同時生效：commit 前當機或出錯都不留下任何東西，事件之後會再送一次。`begin` 是可選的掛勾，給 `statement_timeout` 這類交易設定用；租戶不由 handler 設定。
 - handler 只透過 `tx` 寫資料庫。資料庫以外的副作用（呼叫、通知）可能執行多次，要自己冪等。
 - handler 不得結束 `tx`（`COMMIT`、`ROLLBACK`），也不得改它的租戶或角色（`trustiot.tenant_id`、`SET ROLE`）。`handle` 回來後，消費端在同一筆交易查一次：交易仍是開始時那一筆（呼叫 handler 前以 `set_config('outbox.delivery', <UUID>, true)` 設的交易層級標記還在；交易結束標記就消失。不用 `transaction_timestamp()`，因為兩筆交易的時間可能相同），租戶仍是事件的租戶。不符時回滾還開著的部分，記一筆 ERROR，把事件記進死信（`handler ended the delivery's transaction` 或 `handler changed the delivery's tenant`），不重試，因為每次重試都會再犯。handler 自己 `COMMIT` 之前的寫入在消費端拿回控制權時已經 commit，無法撤回；這個檢查保證的是事件不會被處理第二次，並留下紀錄。切換租戶後在回來前又切回原租戶的寫法查不出來，依決策 29 由 `tools/sql-check` 擋設定租戶的 SQL。
-- `run` 在 `Shutdown::stopping` 之後停止，正在處理的事件會先做完；建立 `Consumer` 前要先初始化遙測（`service_kit::run` 已經做了），lag 指標才會接到 OTLP。
+- `run` 在 `Shutdown::stopping` 之後停止，正在處理的事件會先做完；建立 `Consumer` 前要先初始化遙測（`service_kit::run` 已經做了），lag 指標才會接到 OTLP。查詢失敗會退避重試，handler 或輪詢 panic 也會被攔下（見[失敗處理](#失敗處理)），所以只有 `stopping` 會讓處理停止。lag 由另一個 task 量測，不依賴處理迴圈（見 [Lag 指標](#lag-指標)）。
 
 ## 投遞機制（2026-10-10 定案）
 
@@ -144,9 +144,21 @@ tx.commit().await?;
 | `HandlerError::retry(原因)`、`sqlx::Error`、`DecodeError::NewerVersion` | 回滾，以退避（輪詢間隔加倍，上限 `max_backoff`，預設 30 秒）重試同一個事件；後面的事件等它，順序不變。每次失敗記一筆 WARN |
 | `HandlerError::permanent(原因)`、其他 `DecodeError`、無法解析的信封 | 回滾 handler 的寫入，另開交易把事件記進 `outbox_dead_letter` 並跳過，記一筆 ERROR |
 | 不論回傳什麼，handler 結束了交易或改了租戶（見[消費端](#消費端)） | 同上，記進死信；handler 自己 `COMMIT` 之前的寫入已經 commit |
+| `begin` 或 `handle` panic | 消費端攔下 panic，回滾，記一筆 ERROR，以同樣的退避重試（原因 `handler panicked`）；同一事件在同一副本連續第 `MAX_HANDLER_PANICS`（3）次 panic 時記進死信（`handler panicked repeatedly`），之後的事件照常處理。panic 前 handler 已結束交易或改了租戶時，照上一列直接記進死信 |
 
 - 原因（`reason`）會記進日誌與死信表，不能含事件內容或個資；底層錯誤只記 SQLSTATE，因為錯誤訊息可能引用資料值（M2）。`ConsumerError` 與 `PublishError` 的文字同樣只有 SQLSTATE 或失敗種類，原始錯誤仍可由 `source()` 取得。
 - 一直重試的事件會讓訂閱停住，lag 指標隨之上升；死信事件可在修正後以 `replay_from` 重新處理。
+
+### Handler panic（Laysi/trustiot-v2#333，2026-10-12）
+
+原本 handler panic 一次，panic 就經 `tokio::join!` 帶走整個 `run`，該副本從此不再處理，lag 指標也停在最後一次的值（Laysi/trustiot-v2#271 獨立驗證的 F-5）。現在的處理與 service-kit 的週期工作（Laysi/trustiot-v2#284）同一個做法：
+
+- **怎麼攔**：在原地以 `catch_unwind`（`AssertUnwindSafe`）poll handler 的 future，不另開 task。handler 借用投遞交易（`&mut Transaction`），panic 後消費端要拿回這筆交易檢查並回滾；放進 task 就得把交易移進去，panic 時交易在 task 裡被 drop，消費端無從處理。原地攔截也不改變取消語意（投遞被 drop 時 handler 一起 drop），handler 也留在 `outbox.deliver` span 裡。`AssertUnwindSafe` 成立的理由：panic 後 handler 的 future 直接丟棄；交易經檢查後回滾；消費端自己的狀態（panic 次數）在容許 poison 的鎖後面；handler 物件本身的狀態由 handler 負責（之後還會再被呼叫，例如被 poison 的 `Mutex` 要自己處理）。
+- **交易**：panic 時 handler 可能還有送出、尚未讀完結果的陳述。sqlx 在下一個陳述前會讀完並丟掉這些結果，連線仍可使用。消費端先在同一筆交易做與正常回傳時相同的檢查（交易仍是原本那筆、租戶沒變；交易已 abort 時檢查失敗，就當作單純的 panic）。為了讓這個檢查也涵蓋 `begin`，交易層級的標記改在呼叫 `begin` 之前設定（原本與查 inbox 合在同一個查詢）；`begin` 回傳錯誤時也做同樣的檢查。之後**明確回滾**而不是等 drop：回滾完成後交易與訂閱的 advisory lock 都已結束，之後記死信的交易不會因為鎖還在而得到 `Busy`。
+- **連線**：回滾後連線照一般路徑還給 pool。歸還時 service-kit 檢查 session 沒有殘留租戶（有就關掉連線），sqlx 再 ping 一次，沒有回應就關掉；回滾失敗時 sqlx 也會關掉連線，不會把還在交易中的連線放回 pool。測試以每個 pool 只有 1 條連線重現「陳述還在執行時 panic」，下一個事件在同一個 backend、沒有租戶、沒有前一次的寫入。
+- **事件**：panic 可能來自暫時狀況，所以先視為可重試，與 `HandlerError::retry` 同樣退避；但多半是程式或資料造成、每次都會發生，一直重試會讓整個訂閱（所有租戶）永遠停在這個事件。所以同一事件連續第 3 次 panic 就記進死信。次數記在副本的記憶體：一次嘗試沒有 panic 就結束（`begin` 回錯誤、`handle` 回傳）或事件進死信時歸零，重啟也歸零；多個副本輪流處理時各自計數，所以最多約為副本數乘以 3 次，仍有上限。修正後以 `replay_from` 重新處理。
+- **日誌**：每次 panic 記一行 ERROR（`outbox handler panicked; the event is retried`，進死信時 `too many panics in a row for this event`），帶訂閱與事件 ID，不含 panic 訊息；panic hook 另記的那行仍含訊息與位置，所以 panic 訊息不能放資料。`panic = "abort"` 的建置不受影響，行程仍會結束。
+- handler 以外的 panic（消費端自己的程式）也由 `process` 每一輪攔下，記 ERROR 後退避重試；該輪的交易隨之 drop 而回滾，下一輪從資料庫記錄的位置重讀。
 
 ## Lag 指標
 
@@ -157,7 +169,15 @@ tx.commit().await?;
 | `outbox.consumer.lag` | `{event}` | 訂閱位置之後、已 commit 的事件數，最多數到 10 000 |
 | `outbox.consumer.lag.age` | `s` | 其中最舊一筆寫入至今的秒數；沒有等待中的事件時為 0 |
 
-屬性：`outbox.subscription`（訂閱名稱）、`outbox.source`（產生端 schema）。`Consumer::lag()` 與 `measure_lag()` 在程式內讀同樣的值。建議的告警：age 持續超過數分鐘（handler 一直失敗，或有長時間交易）。
+屬性：`outbox.subscription`（訂閱名稱）、`outbox.source`（產生端 schema）。`Consumer::lag()` 與 `measure_lag()` 在程式內讀同樣的值。
+
+指標不會停在舊值（Laysi/trustiot-v2#333）：
+
+- `run` 把量測放在另一個 tokio task（`monitor_lag`），不依賴處理迴圈。處理卡住（handler 一直重試、卡在等待、某個事件一直失敗）時量測照常進行，lag 與 age 持續上升。量測迴圈本身也攔 panic，失敗只記 WARN。
+- 一筆量測只在 `CURRENT_FOR_INTERVALS`（3）個 `lag_interval` 內有效（預設 45 秒）。量測卡住（查詢不回來、執行緒被 handler 卡住）或一直失敗，超過這個時間就不再回報，`Consumer::lag()` 回 `None`。
+- `monitor_lag` 不論因為什麼結束（`stopping`、`run` 的 future 被 drop、task 被 abort），都清掉最後一筆量測，指標不再回報這個訂閱。
+
+所以「消費端停了」只有兩種樣子：lag 與 age 上升，或這個訂閱的序列不再出現。建議的告警：age 持續超過數分鐘（handler 一直失敗，或有長時間交易），以及某個訂閱的序列數分鐘沒有資料（量測停了或卡住；建立訂閱時一直失敗的 `run` 也從未回報）。沒有改成讓 readiness 失敗：每個副本跑同樣的訂閱，readiness 失敗會讓整個服務退出 Service 的 endpoints，背景工作的問題會變成 API 中斷，理由與 service-kit 週期工作的 panic 處理相同。
 
 ## 與租戶隔離（決策 29）的配合
 
@@ -177,7 +197,7 @@ tx.commit().await?;
 | 交易 | 角色 | 內容 |
 | --- | --- | --- |
 | 讀取 | 平台角色，`READ ONLY` | 取讀取上限、讀一批事件；commit 後才處理 |
-| 處理一個事件 | 服務角色，事件的租戶（全平台事件無租戶） | 設定租戶 → `begin` → 訂閱的 advisory lock → 位置未被移動的檢查 → 查 inbox（同時設定交易層級的標記）→ `handle` → 檢查交易與租戶沒被 handler 改掉 → 寫 inbox → 從原位置推進位置 → commit |
+| 處理一個事件 | 服務角色，事件的租戶（全平台事件無租戶） | 設定租戶 → 設定交易層級的標記 → `begin` → 訂閱的 advisory lock → 位置未被移動的檢查 → 查 inbox → `handle` → 檢查交易與租戶沒被 handler 改掉 → 寫 inbox → 從原位置推進位置 → commit |
 | 死信 | 服務角色，無租戶 | 訂閱的 advisory lock → 位置檢查 → 寫死信 → 推進位置 → commit |
 
 原本的保證都不變，因為改的只是每筆交易用哪個 pool、開在哪個租戶，交易的切法與每筆交易裡的語句順序都沒變：
@@ -224,11 +244,12 @@ ALTER ROLE assets_app SET search_path = assets;      -- 消費端的表在服務
 
 | 指令 | 內容 |
 | --- | --- |
-| `cargo test -p outbox --lib` | 聚合、位置、設定的檢查 |
+| `cargo test -p outbox --lib` | 聚合、位置、設定的檢查；lag 量測過期或量測迴圈結束後指標不再回報 |
 | `cargo test -p outbox --test producer` | 回滾不留事件、聚合序號、同一信封只能寫一次 |
 | `cargo test -p outbox --test delivery` | 交易 ID 反轉時仍依序、晚 commit 的事件不漏、並行寫入（兩個租戶）加兩個副本每個事件只處理一次、重複投遞跳過、重播後狀態相同、重試與死信、`begin` 在同一交易、未寫入的 handler 不拖住其他訂閱、收尾時只做完進行中的事件、lag、`StartFrom::Latest`、最小權限（產生端以租戶交易與平台角色寫事件） |
 | `cargo test -p outbox --test tenancy` | 平台角色在 RLS 下讀到兩個租戶與全平台的事件、每個事件在自己的租戶處理且看不到別的租戶；handler 寫別的租戶被拒（42501）；服務角色被開放跨租戶讀取時連線被拒、讀取端沒有 `consumer_read` 時停下；信封租戶與 log 列不符時進死信 |
-| `cargo test -p outbox --test verify_271` | Laysi/trustiot-v2#271 的獨立驗證（[報告](../../docs/test-reports/2026-10-11-271-verify.md)）：handler 以角色、RLS 手法離開租戶都失敗；改租戶、自己 `COMMIT` 的投遞進死信；session 層級的租戶不會帶進下一個交易；`PlatformReader` 的唯讀解除不了；怪異的租戶 ID、角色設錯、設定錯誤、三個副本加並行寫入、資料庫重啟。`f5_` 是 Laysi/trustiot-v2#333（handler panic 停掉 `run`），目前 `#[ignore]` |
+| `cargo test -p outbox --test verify_271` | Laysi/trustiot-v2#271 的獨立驗證（[報告](../../docs/test-reports/2026-10-11-271-verify.md)）：handler 以角色、RLS 手法離開租戶都失敗；改租戶、自己 `COMMIT` 的投遞進死信；session 層級的租戶不會帶進下一個交易；`PlatformReader` 的唯讀解除不了；怪異的租戶 ID、角色設錯、設定錯誤、三個副本加並行寫入、資料庫重啟；`f5_`：handler panic 之後 `run` 繼續處理，lag 持續更新（Laysi/trustiot-v2#333 修正） |
+| `cargo test -p outbox --test handler_panic` | Laysi/trustiot-v2#333：`begin`、`handle` panic 一次時回滾並重試、之後只處理一次；一直 panic 的事件第 3 次進死信、之後的事件照常處理；`run` 遇到 panic 不停、lag 持續更新、停止後不再回報；`begin` 或 `handle` 自己 `COMMIT` 後 panic（或 `begin` 回錯誤）時直接進死信、不重試；陳述還在執行時 panic，同一條連線之後乾淨可用（無租戶、無殘留寫入）；處理卡住時 lag 與 age 上升、`run` 被 drop 後不再回報；量測卡住（log 被鎖）超過 3 個間隔後不再回報、解鎖後恢復 |
 | `cargo test -p outbox --test notify` | 舊讀數不覆蓋新狀態（含副本競爭）、晚到與重播收斂 |
 | `cargo test -p outbox --test crash` | 以 SIGKILL 結束 `outbox-example`：commit 後投遞前、handler 寫入後 commit 前，重啟後各處理一次，且在事件的租戶處理 |
 | `cargo test -p outbox --test metrics` | lag 經 OTLP/HTTP 匯出到假的接收端，解碼後讀到數值 |
