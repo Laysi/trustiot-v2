@@ -267,6 +267,8 @@ async fn a_service_role_that_can_read_across_tenants_is_refused() {
     println!("service role with a cross-tenant read policy: {error}");
 }
 
+/// A reader that cannot see every tenant's events stops the consumer instead of delivering
+/// nothing and reporting no lag.
 #[tokio::test]
 async fn a_reader_without_the_read_policy_stops_the_consumer() {
     let Some(database) = database().await else {
@@ -277,6 +279,7 @@ async fn a_reader_without_the_read_policy_stops_the_consumer() {
     let (ps, app) = (&setup.producer_schema, &setup.consumer_role);
     // The service role may read the table, but only the tenant policy applies to it: without a
     // tenant it sees no event, so as a reader it would deliver nothing and report no lag.
+    // Service-kit's session check refuses such a reader's sessions (Laysi/trustiot-v2#366).
     database.grant_log_read(&setup, app, false).await;
     let (platform, work) = database.consumer_pools(app, app, Duration::from_secs(10));
     let consumer = outbox::Consumer::new(
@@ -291,6 +294,33 @@ async fn a_reader_without_the_read_policy_stops_the_consumer() {
         .ensure_subscription()
         .await
         .expect_err("a reader that sees no tenant");
+    let ConsumerError::UnsafeSession(problem) = &error else {
+        panic!("expected a refused session, got {error:?}");
+    };
+    assert_eq!(
+        problem,
+        &UnsafeSession::PlatformTenantOnly {
+            table: format!("{ps}.outbox_event"),
+            role: app.clone(),
+            command: "SELECT".to_owned(),
+        }
+    );
+    assert!(error.is_retryable(), "a migration can fix it");
+    println!("reader with only the tenant policy: {error}");
+
+    // A read policy for the platform role that opens less than every tenant passes the session
+    // check; ensure_subscription refuses it.
+    database.narrow_log_read(&setup).await;
+    let consumer = setup.subscribe(
+        ConsumerConfig::new("narrow", ps).expect("config"),
+        Recorder {
+            subscription: "narrow".to_owned(),
+        },
+    );
+    let error = consumer
+        .ensure_subscription()
+        .await
+        .expect_err("a reader that sees platform-wide events only");
     assert!(
         matches!(&error, ConsumerError::CannotReadAllTenants { source_schema } if source_schema == ps),
         "{error:?}"

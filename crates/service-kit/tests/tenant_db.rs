@@ -33,7 +33,9 @@ const USER: &str = "01928f6e-7a3c-7d4e-8f00-0123456789ab";
 
 /// The roles of decision 29, created once per Postgres. `example_reader` stands for the
 /// platform role of a service that consumes `example_app`'s outbox events. `example_bypass` and
-/// `example_owner_member` exist only to prove the session check refuses them.
+/// `example_owner_member` exist only to prove the session check refuses them. The platform role
+/// inherits the rights of `example_platform_group`, and can take those of
+/// `example_platform_switch` only with `SET ROLE`; neither has rights unless a test grants them.
 const ROLES: &str = "
 CREATE ROLE example_owner LOGIN PASSWORD 'service-kit-test';
 CREATE ROLE example_app LOGIN PASSWORD 'service-kit-test';
@@ -43,6 +45,8 @@ CREATE ROLE example_bypass LOGIN BYPASSRLS PASSWORD 'service-kit-test';
 CREATE ROLE example_owner_member LOGIN PASSWORD 'service-kit-test' IN ROLE example_owner;
 CREATE ROLE example_platform_group NOLOGIN;
 GRANT example_platform_group TO example_platform;
+CREATE ROLE example_platform_switch NOLOGIN;
+GRANT example_platform_switch TO example_platform WITH INHERIT FALSE;
 ";
 
 /// The seed rows, inserted by the owner (exempt from row-level security).
@@ -971,12 +975,12 @@ async fn the_platform_role_reads_across_tenants_only_where_allowed() {
          CREATE POLICY tenant_isolation ON private_items
              USING (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid)
              WITH CHECK (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid);
-         GRANT SELECT ON private_items TO example_app, example_platform;
+         GRANT SELECT ON private_items TO example_app;
          INSERT INTO private_items VALUES ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'secret');",
     )
     .execute(&mut owner)
     .await
-    .expect("a table without platform access");
+    .expect("a table without platform access, as the template says to leave it");
 
     let identity = Identity::new();
     assert_eq!(
@@ -1009,15 +1013,21 @@ async fn the_platform_role_reads_across_tenants_only_where_allowed() {
             .await
             .expect("names");
         assert_eq!(names, ["a-1", "a-2", "b-1"], "every tenant");
-        let private: i64 = sqlx::query_scalar("SELECT count(*) FROM private_items")
-            .fetch_one(&mut *tx)
-            .await
-            .expect("count");
-        assert_eq!(private, 0, "no platform_access policy, no rows");
         let error = sqlx::query("DELETE FROM example_items")
             .execute(&mut *tx)
             .await
             .expect_err("the template grants the platform role no DELETE");
+        assert_eq!(sqlstate(&error).as_deref(), Some(INSUFFICIENT_PRIVILEGE));
+        tx.rollback().await.expect("rollback");
+        // A table without platform_access gives the platform role no grant, so nothing.
+        let mut tx = platform
+            .begin(actor, "cross-tenant-test")
+            .await
+            .expect("begin");
+        let error = sqlx::query("SELECT count(*) FROM private_items")
+            .execute(&mut *tx)
+            .await
+            .expect_err("no platform_access policy, no grant");
         assert_eq!(sqlstate(&error).as_deref(), Some(INSUFFICIENT_PRIVILEGE));
         tx.rollback().await.expect("rollback");
     }
@@ -1078,7 +1088,9 @@ async fn the_platform_role_reads_across_tenants_only_where_allowed() {
 /// to the platform role too, but a platform session that sets a tenant itself gains nothing on a
 /// table with `platform_access` (it already sees every tenant, and its grants still limit the
 /// commands) or on a table it has no grant on. Only a grant without `platform_access` would hand
-/// it the rows of the tenant it set, which is why the template says to grant nothing then.
+/// it the rows of the tenant it set, which is why the template says to grant nothing then, and
+/// why the session check refuses the platform role's sessions when it has such a grant
+/// (Laysi/trustiot-v2#366).
 #[tokio::test]
 async fn the_platform_role_gains_nothing_by_setting_a_tenant() {
     let Some(fixture) = Fixture::new(
@@ -1170,24 +1182,40 @@ async fn the_platform_role_gains_nothing_by_setting_a_tenant() {
         println!("platform role with tenant A set, {case}: refused ({error})");
     }
 
-    // The case the template rules out: a grant without platform_access. The platform role then
-    // sees no row, until its session sets a tenant itself.
+    // The case the template rules out: a grant without platform_access. The session check
+    // refuses the platform role's new sessions from then on (Laysi/trustiot-v2#366). A plain
+    // session, which skips the check, shows why: it sees no row until it sets a tenant itself.
     sqlx::raw_sql("GRANT SELECT ON private_items TO example_platform;")
         .execute(&mut owner)
         .await
         .expect("grant");
-    let mut tx = platform
-        .begin(actor, "tenant-setting-test")
-        .await
-        .expect("begin");
-    let without_tenant: Vec<String> = sqlx::query_scalar("SELECT name FROM private_items")
-        .fetch_all(&mut *tx)
-        .await
-        .expect("names");
-    tx.rollback().await.expect("rollback");
-    let with_tenant = in_tenant("SELECT name FROM private_items")
-        .await
-        .expect("names");
+    assert_eq!(
+        platform_check(&fixture).await,
+        Err(tenant_only(
+            "public.private_items",
+            "example_platform",
+            "SELECT"
+        ))
+    );
+    let mut session = fixture.connect("example_platform").await;
+    let mut names_in = async |tenant: Option<&str>| {
+        let mut tx = session.begin().await.expect("begin");
+        if let Some(tenant) = tenant {
+            sqlx::query(SET_TRANSACTION_TENANT)
+                .bind(tenant)
+                .execute(&mut *tx)
+                .await
+                .expect("set a tenant");
+        }
+        let names: Vec<String> = sqlx::query_scalar("SELECT name FROM private_items")
+            .fetch_all(&mut *tx)
+            .await
+            .expect("names");
+        tx.rollback().await.expect("rollback");
+        names
+    };
+    let without_tenant = names_in(None).await;
+    let with_tenant = names_in(Some(TENANT_A)).await;
     assert_eq!(
         (without_tenant, with_tenant),
         (Vec::<String>::new(), vec!["secret".to_owned()]),
@@ -1195,7 +1223,375 @@ async fn the_platform_role_gains_nothing_by_setting_a_tenant() {
     );
     println!(
         "platform_access: a self-set tenant adds no row or command; a grant without \
-         platform_access would open the self-set tenant's rows, so the template grants nothing"
+         platform_access would open the self-set tenant's rows, so the template grants nothing \
+         and the session check refuses the platform role's sessions"
+    );
+}
+
+/// The session check of a plain session of the platform role, with the platform role's rules.
+async fn platform_check(fixture: &Fixture) -> Result<(), UnsafeSession> {
+    let mut session = fixture.connect("example_platform").await;
+    postgres::check_session(&mut session, SessionRole::Platform)
+        .await
+        .expect("the check runs")
+}
+
+/// The refusal of a platform session whose `role` may run `command` on `table` where only the
+/// tenant condition opens it.
+fn tenant_only(table: &str, role: &str, command: &str) -> UnsafeSession {
+    UnsafeSession::PlatformTenantOnly {
+        table: table.to_owned(),
+        role: role.to_owned(),
+        command: command.to_owned(),
+    }
+}
+
+/// The rows `sql` reaches in a plain session of the platform role (no session check): in a
+/// transaction that first takes `role` with `SET ROLE` (as `set_config('role', ...)`) when given
+/// and sets `tenant` when given, as platform code that went wrong could. Rolled back. A statement
+/// row-level security refuses (a new row that fails `WITH CHECK`) reaches no row; any other error
+/// fails the test.
+async fn rows_reached(
+    fixture: &Fixture,
+    role: Option<&str>,
+    tenant: Option<&str>,
+    sql: &'static str,
+) -> u64 {
+    let mut session = fixture.connect("example_platform").await;
+    let mut tx = session.begin().await.expect("begin");
+    if let Some(role) = role {
+        sqlx::query("SELECT set_config('role', $1, true)")
+            .bind(role)
+            .execute(&mut *tx)
+            .await
+            .expect("take the role");
+    }
+    if let Some(tenant) = tenant {
+        sqlx::query(SET_TRANSACTION_TENANT)
+            .bind(tenant)
+            .execute(&mut *tx)
+            .await
+            .expect("set a tenant");
+    }
+    let rows = match sqlx::query(sql).execute(&mut *tx).await {
+        Ok(done) => done.rows_affected(),
+        Err(error)
+            if error
+                .to_string()
+                .contains("violates row-level security policy") =>
+        {
+            0
+        }
+        Err(error) => panic!("{sql}: {error}"),
+    };
+    tx.rollback().await.expect("rollback");
+    rows
+}
+
+/// A migration mistake for [`platform_sessions_only_the_tenant_condition_opens_are_refused`].
+struct PlatformMistake {
+    mistake: &'static str,
+    make: &'static str,
+    refused: UnsafeSession,
+    /// What a platform session reaches: `SET ROLE` to this role first (when given), then run
+    /// the statement.
+    probe: (Option<&'static str>, &'static str),
+    /// Whether the probe reaches rows with tenant A set (it never does without a tenant).
+    leaks: bool,
+    fix: &'static str,
+}
+
+/// Laysi/trustiot-v2#366: the platform role's session is refused when the platform role, or a
+/// role it belongs to, may run a command on a table with row-level security but the only
+/// permissive policies that apply to it for that command are the tenant condition. Such a grant
+/// gives `PlatformDb`, which never sets a tenant, nothing, and gives a platform session that sets
+/// a tenant itself that tenant's rows; each case shows both on a plain session, then that the
+/// fix is accepted. The templates stay accepted (here, in
+/// `sessions_row_level_security_would_not_protect_are_refused`, and in
+/// `outbox_events_follow_the_tenant_policies`).
+#[tokio::test]
+async fn platform_sessions_only_the_tenant_condition_opens_are_refused() {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE platform_guard OWNER example_owner",
+        "platform_guard",
+    )
+    .await
+    else {
+        return;
+    };
+    let mut owner = fixture.connect("example_owner").await;
+    sqlx::raw_sql(
+        "CREATE TABLE private_items (tenant_id uuid NOT NULL, name text NOT NULL);
+         ALTER TABLE private_items ENABLE ROW LEVEL SECURITY;
+         CREATE POLICY tenant_isolation ON private_items
+             USING (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid)
+             WITH CHECK (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid);
+         GRANT SELECT, INSERT, UPDATE, DELETE ON private_items TO example_app;
+         INSERT INTO private_items VALUES
+             ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'secret-a'),
+             ('01928f6e-7a3c-7d4e-8f00-00000000000b', 'secret-b');
+         CREATE SCHEMA other;
+         CREATE TABLE other.private_items (tenant_id uuid NOT NULL, name text NOT NULL);
+         ALTER TABLE other.private_items ENABLE ROW LEVEL SECURITY;
+         CREATE POLICY tenant_isolation ON other.private_items
+             USING (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid)
+             WITH CHECK (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid);
+         INSERT INTO other.private_items VALUES ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'other-a');
+         CREATE TABLE locked_items (tenant_id uuid NOT NULL, name text NOT NULL);
+         ALTER TABLE locked_items ENABLE ROW LEVEL SECURITY;
+         INSERT INTO locked_items VALUES ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'locked-a');",
+    )
+    .execute(&mut owner)
+    .await
+    .expect("tables without platform access");
+    assert_eq!(
+        platform_check(&fixture).await,
+        Ok(()),
+        "the tenant template"
+    );
+    let mut app = fixture.connect("example_app").await;
+    assert_eq!(
+        postgres::check_session(&mut app, SessionRole::Service)
+            .await
+            .expect("check"),
+        Ok(()),
+        "the rule is the platform role's only: the service role's tables have only the tenant \
+         condition"
+    );
+
+    let private = "public.private_items";
+    let mistakes = [
+        PlatformMistake {
+            mistake: "SELECT without platform_access",
+            make: "GRANT SELECT ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "SELECT"),
+            probe: (None, "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "REVOKE SELECT ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
+            mistake: "INSERT without platform_access",
+            make: "GRANT INSERT ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "INSERT"),
+            probe: (
+                None,
+                "INSERT INTO private_items VALUES ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'planted')",
+            ),
+            leaks: true,
+            fix: "REVOKE INSERT ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
+            mistake: "UPDATE without platform_access",
+            make: "GRANT UPDATE ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "UPDATE"),
+            probe: (None, "UPDATE private_items SET name = 'changed'"),
+            leaks: true,
+            fix: "REVOKE UPDATE ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
+            mistake: "DELETE without platform_access",
+            make: "GRANT DELETE ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "DELETE"),
+            probe: (None, "DELETE FROM private_items"),
+            leaks: true,
+            fix: "REVOKE DELETE ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
+            mistake: "a column privilege",
+            make: "GRANT SELECT (name) ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "SELECT"),
+            probe: (None, "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "REVOKE SELECT (name) ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
+            mistake: "a privilege for PUBLIC",
+            make: "GRANT SELECT ON private_items TO PUBLIC;",
+            refused: tenant_only(private, "example_platform", "SELECT"),
+            probe: (None, "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "REVOKE SELECT ON private_items FROM PUBLIC;",
+        },
+        PlatformMistake {
+            mistake: "a privilege inherited from a group",
+            make: "GRANT SELECT ON private_items TO example_platform_group;",
+            refused: tenant_only(private, "example_platform", "SELECT"),
+            probe: (None, "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "REVOKE SELECT ON private_items FROM example_platform_group;",
+        },
+        PlatformMistake {
+            // platform_access names the platform role, so it does not apply after SET ROLE.
+            mistake: "a group's privilege on a table with platform_access",
+            make: "GRANT SELECT ON example_items TO example_platform_group;",
+            refused: tenant_only("public.example_items", "example_platform_group", "SELECT"),
+            probe: (Some("example_platform_group"), "SELECT name FROM example_items"),
+            leaks: true,
+            fix: "REVOKE SELECT ON example_items FROM example_platform_group;",
+        },
+        PlatformMistake {
+            mistake: "a privilege the platform role reaches only with SET ROLE",
+            make: "GRANT SELECT ON private_items TO example_platform_switch;",
+            refused: tenant_only(private, "example_platform_switch", "SELECT"),
+            probe: (Some("example_platform_switch"), "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "REVOKE SELECT ON private_items FROM example_platform_switch;",
+        },
+        PlatformMistake {
+            mistake: "a policy for the platform role by name that is the tenant condition",
+            make: "CREATE POLICY platform_tenant ON private_items TO example_platform
+                       USING (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid)
+                       WITH CHECK (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid);
+                   GRANT SELECT ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "SELECT"),
+            probe: (None, "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "DROP POLICY platform_tenant ON private_items;
+                  REVOKE SELECT ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
+            mistake: "a platform policy for SELECT and a DELETE grant",
+            make: "CREATE POLICY platform_read ON private_items FOR SELECT TO example_platform
+                       USING (true);
+                   GRANT SELECT, DELETE ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "DELETE"),
+            probe: (None, "DELETE FROM private_items"),
+            leaks: true,
+            fix: "DROP POLICY platform_read ON private_items;
+                  REVOKE SELECT, DELETE ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
+            // Every row is visible to UPDATE, but only a row of the session's tenant may result:
+            // a session that sets tenant A can move tenant B's rows into tenant A.
+            mistake: "a platform UPDATE policy whose WITH CHECK is the tenant condition",
+            make: "CREATE POLICY platform_update ON private_items FOR UPDATE TO example_platform
+                       USING (true)
+                       WITH CHECK (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid);
+                   GRANT UPDATE ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "UPDATE"),
+            probe: (
+                None,
+                "UPDATE private_items
+                 SET tenant_id = '01928f6e-7a3c-7d4e-8f00-00000000000a', name = 'moved'",
+            ),
+            leaks: true,
+            fix: "DROP POLICY platform_update ON private_items;
+                  REVOKE UPDATE ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
+            mistake: "a table in another schema the platform role may use",
+            make: "GRANT USAGE ON SCHEMA other TO example_platform;
+                   GRANT SELECT ON other.private_items TO example_platform;",
+            refused: tenant_only("other.private_items", "example_platform", "SELECT"),
+            probe: (None, "SELECT name FROM other.private_items"),
+            leaks: true,
+            // Without USAGE on the schema the grant reaches nothing.
+            fix: "REVOKE USAGE ON SCHEMA other FROM example_platform;",
+        },
+        PlatformMistake {
+            // The check does not count restrictive policies: they can only narrow access, and
+            // whether one closes everything the tenant condition opens is not something it
+            // judges. The grant still gives PlatformDb nothing, so it is refused all the same.
+            mistake: "a grant that a restrictive policy closes",
+            make: "CREATE POLICY platform_nothing ON private_items AS RESTRICTIVE
+                       TO example_platform USING (false);
+                   GRANT SELECT ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "SELECT"),
+            probe: (None, "SELECT name FROM private_items"),
+            leaks: false,
+            fix: "DROP POLICY platform_nothing ON private_items;
+                  REVOKE SELECT ON private_items FROM example_platform;",
+        },
+    ];
+    for case in mistakes {
+        let PlatformMistake {
+            mistake,
+            make,
+            refused,
+            probe: (role, sql),
+            leaks,
+            fix,
+        } = case;
+        sqlx::raw_sql(make)
+            .execute(&mut owner)
+            .await
+            .unwrap_or_else(|error| panic!("{mistake}: {error}"));
+        assert_eq!(
+            platform_check(&fixture).await,
+            Err(refused.clone()),
+            "{mistake}"
+        );
+        let without_tenant = rows_reached(&fixture, role, None, sql).await;
+        let with_tenant = rows_reached(&fixture, role, Some(TENANT_A), sql).await;
+        assert_eq!(without_tenant, 0, "{mistake}: nothing without a tenant");
+        assert_eq!(
+            with_tenant > 0,
+            leaks,
+            "{mistake}: {with_tenant} rows with tenant A set"
+        );
+        sqlx::raw_sql(fix)
+            .execute(&mut owner)
+            .await
+            .unwrap_or_else(|error| panic!("{mistake}: {error}"));
+        assert_eq!(platform_check(&fixture).await, Ok(()), "{mistake} fixed");
+        println!(
+            "{mistake}: refused with \"{refused}\"; a plain platform session reaches \
+             {without_tenant} rows without a tenant and {with_tenant} with tenant A set; \
+             accepted once fixed"
+        );
+    }
+
+    // A grant on a table with row-level security and no policy at all reaches no row, with or
+    // without a tenant, so it is accepted.
+    sqlx::raw_sql("GRANT SELECT ON locked_items TO example_platform;")
+        .execute(&mut owner)
+        .await
+        .expect("grant");
+    assert_eq!(platform_check(&fixture).await, Ok(()), "no policy at all");
+    for tenant in [None, Some(TENANT_A)] {
+        let rows = rows_reached(&fixture, None, tenant, "SELECT name FROM locked_items").await;
+        assert_eq!(rows, 0, "no policy, no row, tenant {tenant:?}");
+    }
+    println!("a grant on a table without any policy: accepted, no row with or without a tenant");
+
+    // Through the kit's pool the refusal reaches the caller of PlatformDb, as for TenantDb.
+    sqlx::raw_sql("GRANT SELECT ON private_items TO example_platform;")
+        .execute(&mut owner)
+        .await
+        .expect("grant");
+    let error = platform_refusal_through_pool(fixture.options("example_platform")).await;
+    assert!(
+        matches!(
+            &error,
+            TenantDbError::UnsafeSession(problem)
+                if *problem == tenant_only(private, "example_platform", "SELECT")
+        ),
+        "{error}"
+    );
+    println!("PlatformDb: {error}");
+}
+
+/// Pings a `PlatformDb` for `options` until the pool reports the refusal of the session, like
+/// [`refusal_through_pool`] does for `TenantDb`, and returns the error.
+#[allow(
+    clippy::print_stdout,
+    reason = "evidence for the test report, shown with `--nocapture`"
+)]
+async fn platform_refusal_through_pool(options: PgConnectOptions) -> TenantDbError {
+    for seconds in ACQUIRE_BUDGETS_SECONDS {
+        let pool = PgPoolOptions::new().acquire_timeout(Duration::from_secs(seconds));
+        let db = PlatformDb::connect_lazy(options.clone(), pool).expect("verify-full options");
+        match db.ping().await {
+            Err(TenantDbError::Database(sqlx::Error::PoolTimedOut)) => {
+                println!("no session was checked within {seconds} s; trying a longer timeout");
+            }
+            Err(error) => return error,
+            Ok(()) => panic!("a platform session that must be refused was used"),
+        }
+    }
+    panic!(
+        "the pool reported no refusal within {ACQUIRE_BUDGETS_SECONDS:?} s: no session was \
+         checked in that time"
     );
 }
 
@@ -1389,6 +1785,58 @@ async fn outbox_events_follow_the_tenant_policies() {
         Err(UnsafeSession::PermissivePolicy(
             "public.outbox_event policy consumer_read".to_owned()
         ))
+    );
+
+    // A service that consumes its own events reads them as its own platform role: the template
+    // with `example_reader` replaced by `example_platform` gives the producer's platform role
+    // this policy and grant too. The session check accepts it as producer and reader at once
+    // (Laysi/trustiot-v2#366: SELECT is opened by consumer_read_own, INSERT by platform_events).
+    sqlx::raw_sql(
+        "CREATE POLICY consumer_read_own ON outbox_event FOR SELECT TO example_platform
+             USING (true);
+         GRANT SELECT ON outbox_event TO example_platform;",
+    )
+    .execute(&mut owner)
+    .await
+    .expect("the producer's platform role reads its own events");
+    for (role, as_role) in [
+        ("example_app", SessionRole::Service),
+        ("example_platform", SessionRole::Platform),
+        ("example_reader", SessionRole::Platform),
+    ] {
+        let mut session = fixture.connect(role).await;
+        assert_eq!(
+            postgres::check_session(&mut session, as_role)
+                .await
+                .expect("check"),
+            Ok(()),
+            "{role} as {as_role:?}, the producer's platform role also reading"
+        );
+    }
+    let own_reader = PlatformDb::connect_lazy(
+        fixture.options("example_platform"),
+        PgPoolOptions::new().max_connections(1),
+    )
+    .expect("verify-full options");
+    let mut tx = own_reader
+        .begin(actor, "outbox-delivery")
+        .await
+        .expect("begin");
+    let tenants: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT tenant_id::text FROM outbox_event ORDER BY id")
+            .fetch_all(&mut *tx)
+            .await
+            .expect("read events");
+    sqlx::query(PUBLISH)
+        .bind(None::<&str>)
+        .execute(&mut *tx)
+        .await
+        .expect("a platform-wide event from the same session");
+    tx.rollback().await.expect("rollback");
+    assert_eq!(tenants, [Some(TENANT_A.to_owned()), None]);
+    println!(
+        "outbox: the producer's platform role that also reads its own events passes the session \
+         check and reads every event"
     );
     println!(
         "outbox: tenant events by the service role, platform-wide by the platform role, all \

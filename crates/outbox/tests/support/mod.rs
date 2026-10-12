@@ -216,6 +216,20 @@ impl Database {
         self.admin_sql(sql).await;
     }
 
+    /// Replaces the template's `consumer_read` with a read policy for the consumer's platform
+    /// role that opens only platform-wide events (`tenant_id IS NULL`), as a migration mistake
+    /// would. Service-kit's session check accepts it, since the policy is not the tenant
+    /// condition, but the reader cannot see every tenant's events.
+    pub async fn narrow_log_read(&self, setup: &Setup) {
+        let (ps, reader) = (&setup.producer_schema, &setup.consumer_platform);
+        self.admin_sql(format!(
+            "DROP POLICY consumer_read ON {ps}.outbox_event; \
+             CREATE POLICY platform_wide_read ON {ps}.outbox_event FOR SELECT TO {reader} \
+                 USING (tenant_id IS NULL);"
+        ))
+        .await;
+    }
+
     /// Creates an empty schema.
     pub async fn create_schema(&self, schema: &str) {
         self.admin_sql(format!("CREATE SCHEMA {schema}")).await;

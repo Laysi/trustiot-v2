@@ -1,0 +1,122 @@
+== all tenant_db tests with timing and plan (rule on)
+test a_service_without_a_postgres_ca_refuses_to_start ... ok
+sslmode "prefer": exit status: 1; error: configuration key `platform.postgres_sslmode` (set by environment variable TRUSTIOT_POSTGRES_SSLMODE) is invalid: only `verify-full` is accepted: services alwa
+test a_service_without_server_verification_refuses_to_start ... ok
+unrelated CA: error communicating with database: invalid peer certificate: UnknownIssuer
+test connections_verify_the_server_certificate_and_host_name ... ok
+disable row-level security: refused (error returned from database: must be owner of table example_items at line 2931)
+test the_service_role_cannot_bypass_row_level_security ... ok
+service role, another tenant event: refused (error returned from database: new row violates row-level security policy for table "outbox_event" at line 2337)
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+without a tenant: 0 rows visible, update 0, delete 0, insert refused: error returned from database: new row violates row-level security policy for table "example_items" at line 2337
+test without_a_tenant_no_rows_are_visible_or_writable ... ok
+tenant A: insert into B refused (error returned from database: new row violates row-level security policy for table "example_items" at line 2337); move to B refused (error returned from database: new 
+test a_tenant_reads_and_writes_only_its_own_rows ... ok
+platform role, tenant set to 01928f6e-7a3c-7d4e-8f00-00000000000a in its transaction: refused (error returned from database: new row violates row-level security policy "platform_events_only" for table
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+plain platform session, `SELECT set_config('trustiot.tenant_id', $1, true)`: refused (error returned from database: new row violates row-level security policy "platform_events_only" for table "outbox_
+test the_tenant_setting_does_not_leak_across_pooled_connections ... ok
+SELECT without platform_access: refused with "database role `example_platform` may SELECT on `public.private_items`, but the only permissive policies that apply to it for SELECT are the tenant conditi
+PLAN   CTE rels
+PLAN     ->  Hash Join (actual time=0.788..1.272 rows=301.00 loops=1)
+PLAN   CTE tenant_data
+PLAN     ->  Recursive Union (actual time=0.002..0.474 rows=301.00 loops=1)
+PLAN           ->  CTE Scan on rels rels_1 (actual time=0.001..0.022 rows=301.00 loops=1)
+PLAN                 Filter: has_tenant
+PLAN   CTE reachable
+PLAN     ->  Hash Right Semi Join (actual time=3.775..4.308 rows=301.00 loops=1)
+PLAN           ->  CTE Scan on tenant_data (actual time=0.002..0.500 rows=301.00 loops=1)
+PLAN                 Storage: Memory  Maximum Storage: 26kB
+PLAN                 ->  CTE Scan on rels rels_2 (actual time=0.026..3.651 rows=301.00 loops=1)
+PLAN                       Filter: (has_schema_privilege(relnamespace, 'USAGE'::text) AND (has_table_privilege(oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE'::text) OR has_any_column_privilege(oid, '
+PLAN   CTE platform_tables
+PLAN     ->  Nested Loop (actual time=0.016..13.035 rows=301.00 loops=1)
+PLAN           ->  CTE Scan on rels r_1 (actual time=0.002..0.131 rows=301.00 loops=1)
+PLAN                 Filter: (relrowsecurity AND (relkind = ANY ('{r,p}'::"char"[])))
+PLAN   CTE platform_policies
+PLAN     ->  Seq Scan on pg_policy (actual time=0.042..3.662 rows=602.00 loops=1)
+PLAN   CTE platform_tenant_only
+PLAN     ->  GroupAggregate (actual time=22.930..22.932 rows=0.00 loops=1)
+PLAN                             ->  CTE Scan on platform_policies p_2 (actual time=0.044..3.868 rows=602.00 loops=1)
+PLAN                                   Storage: Memory  Maximum Storage: 108kB
+PLAN                                         ->  CTE Scan on platform_tables t_1 (actual time=0.018..13.211 rows=301.00 loops=1)
+PLAN                                               Storage: Memory  Maximum Storage: 38kB
+PLAN                     ->  CTE Scan on rels (actual time=1.392..1.392 rows=0.00 loops=1)
+PLAN                           Filter: pg_has_role(CURRENT_USER, relowner, 'MEMBER'::text)
+PLAN                     ->  CTE Scan on reachable (actual time=4.361..4.361 rows=0.00 loops=1)
+PLAN                           Filter: ((NOT relrowsecurity) AND (relkind = ANY ('{r,p}'::"char"[])))
+PLAN               ->  Subquery Scan on "*SELECT* 5" (actual time=21.595..21.598 rows=0.00 loops=1)
+PLAN                     Buffers: shared hit=4565
+PLAN                           ->  CTE Scan on reachable r (actual time=0.001..0.079 rows=301.00 loops=1)
+PLAN                                 Filter: (relrowsecurity AND (relkind = ANY ('{r,p}'::"char"[])))
+PLAN                     ->  CTE Scan on reachable reachable_1 (actual time=0.012..0.012 rows=0.00 loops=1)
+PLAN                           Filter: ((relkind = 'v'::"char") AND (NOT EXISTS(SubPlan 13)))
+PLAN                     ->  CTE Scan on reachable reachable_2 (actual time=0.013..0.013 rows=0.00 loops=1)
+PLAN                           Filter: (relkind = ANY ('{m,f}'::"char"[]))
+PLAN                     ->  CTE Scan on reachable reachable_3 (actual time=0.063..0.063 rows=0.00 loops=1)
+PLAN                           Filter: ((relkind = ANY ('{r,p}'::"char"[])) AND has_table_privilege(oid, 'TRUNCATE'::text))
+PLAN               ->  Subquery Scan on "*SELECT* 11" (actual time=22.931..22.932 rows=0.00 loops=1)
+PLAN                     Buffers: shared hit=3123
+PLAN                     ->  CTE Scan on platform_tenant_only (actual time=22.931..22.931 rows=0.00 loops=1)
+PLAN                           Filter: (has_table_privilege(role_oid, rel, command) OR COALESCE(has_any_column_privilege(role_oid, rel, NULLIF(command, 'DELETE'::text)), false))
+PLAN Execution Time: 51.389 ms
+test tmp_366_session_check_plan ... ok
+a tenant table without row-level security: refused with "table `public.loose_items` has a tenant_id column but row-level security is not enabled", accepted once fixed
+test outbox_events_follow_the_tenant_policies ... ok
+TIMING example_app as Service, 301 tables: min 7.408659ms median 7.92734ms max 39.713665ms
+a view with its owner's rights: refused with "view `public.item_names` reads tenant data but is not security_invoker", accepted once fixed
+TIMING example_platform as Platform, 301 tables: min 17.435366ms median 17.981176ms max 54.152082ms
+a view of tenant data without the tenant column: refused with "view `public.all_names_again` reads tenant data but is not security_invoker", accepted once fixed
+TIMING example_platform as Service, 301 tables: min 7.226597ms median 7.787465ms max 35.756869ms
+test tmp_366_session_check_timing ... ok
+TRUNCATE on a tenant table: refused with "the database role may TRUNCATE tenant table `public.example_items`, which row-level security ignores", accepted once fixed
+test the_example_service_serves_each_user_only_their_tenant ... ok
+a policy for the platform role by name that is the tenant condition: refused with "database role `example_platform` may SELECT on `public.private_items`, but the only permissive policies that apply to
+test sessions_row_level_security_would_not_protect_are_refused ... ok
+PlatformDb: refused the database session: database role `example_platform` may SELECT on `public.private_items`, but the only permissive policies that apply to it for SELECT are the tenant condition, 
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.92s
+
+== mutation: rule off (HAVING false)
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+  left: Ok(())
+ right: Err(PlatformTenantOnly { table: "public.private_items", role: "example_platform", command: "SELECT" })
+test the_platform_role_gains_nothing_by_setting_a_tenant ... FAILED
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+  left: Ok(())
+ right: Err(PlatformTenantOnly { table: "public.private_items", role: "example_platform", command: "SELECT" })
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... FAILED
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 12 filtered out; finished in 2.25s
+== mutation: session role only, no member roles
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+  left: Ok(())
+ right: Err(PlatformTenantOnly { table: "public.example_items", role: "example_platform_group", command: "SELECT" })
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... FAILED
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 4.47s
+== mutation: UPDATE judged on USING only
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+  left: Ok(())
+ right: Err(PlatformTenantOnly { table: "public.private_items", role: "example_platform", command: "UPDATE" })
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... FAILED
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 5.67s
+== mutation: column privileges ignored
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+  left: Ok(())
+ right: Err(PlatformTenantOnly { table: "public.private_items", role: "example_platform", command: "SELECT" })
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... FAILED
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 3.52s
+== mutation: restrictive policies counted as permissive
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+  left: Ok(())
+ right: Err(PlatformTenantOnly { table: "public.private_items", role: "example_platform", command: "SELECT" })
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... FAILED
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 6.38s

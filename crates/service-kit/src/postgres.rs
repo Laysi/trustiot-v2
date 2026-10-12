@@ -12,9 +12,10 @@
 //! - Every new session is checked before the pool hands it out: the role must not be a
 //!   superuser, bypass row-level security, or own (or belong to the owner of) any table, and
 //!   every table it can reach that has a `tenant_id` column must be protected by row-level
-//!   security. A session that fails the check is closed, so a misconfigured role or a migration
-//!   that forgot `ENABLE ROW LEVEL SECURITY` makes the service unready instead of leaking rows
-//!   ([`UnsafeSession`]).
+//!   security. A platform role's session must also have, for every command it may run on such a
+//!   table, a policy that opens the table to it beyond the tenant condition. A session that fails
+//!   the check is closed, so a misconfigured role or a migration that forgot `ENABLE ROW LEVEL
+//!   SECURITY` makes the service unready instead of leaking rows ([`UnsafeSession`]).
 //! - Every session is checked again when it goes back to the pool: one left with a
 //!   session-level tenant (`set_config(..., false)` or `SET`, which outlive the transaction) is
 //!   closed instead, so the next user never starts in that tenant.
@@ -224,6 +225,9 @@ pub enum SessionRole {
     Service,
     /// The platform role: policies granted to it by name (`platform_access`) may open a table
     /// across tenants; policies for every role (`PUBLIC`) must still be the tenant condition.
+    /// Where it may run a command on a table with row-level security, a policy other than the
+    /// tenant condition must apply to it for that command
+    /// ([`UnsafeSession::PlatformTenantOnly`]).
     Platform,
 }
 
@@ -411,6 +415,27 @@ pub enum UnsafeSession {
     /// The role may `TRUNCATE` a tenant table; `TRUNCATE` is not subject to row-level security.
     #[error("the database role may TRUNCATE tenant table `{0}`, which row-level security ignores")]
     TruncateAllowed(String),
+    /// Platform sessions only ([`SessionRole::Platform`]): `role`, the platform role or a role it
+    /// belongs to (whose rights it inherits or can take with `SET ROLE`), may run `command`
+    /// (`SELECT`, `INSERT`, `UPDATE`, or `DELETE`) on `table`, which has row-level security, but
+    /// the only permissive policies that apply to `role` for that command are the tenant
+    /// condition. `PlatformDb` never sets a tenant, so the grant gives it nothing; a platform
+    /// session that set `trustiot.tenant_id` itself would reach that tenant's rows. Revoke the
+    /// grant, or add a policy for the platform role by name (`platform_access`).
+    #[error(
+        "database role `{role}` may {command} on `{table}`, but the only permissive policies that \
+         apply to it for {command} are the tenant condition, so a platform session that sets \
+         trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a \
+         policy for the platform role by name (platform_access)"
+    )]
+    PlatformTenantOnly {
+        /// The table, as `schema.table`.
+        table: String,
+        /// The role that holds the privilege: the session's role or a role it belongs to.
+        role: String,
+        /// `SELECT`, `INSERT`, `UPDATE`, or `DELETE`.
+        command: String,
+    },
 }
 
 /// [`TENANT_CONDITION`] as Postgres prints a policy expression (`pg_get_expr`). A tenant
@@ -421,7 +446,8 @@ pub const TENANT_CONDITION_AS_STORED: &str =
 
 /// The session check. `$1`: whether the session is the platform role's; `$2`:
 /// [`TENANT_CONDITION_AS_STORED`]. Problems come back in order of severity; the check reports
-/// the first.
+/// the first. Each row is the problem, the relation (or function) it concerns, and, for
+/// `platform_tenant_only`, the role and the command.
 const SESSION_CHECK: &str = r"
 WITH RECURSIVE rels AS (
     SELECT c.oid, c.relkind, c.relowner, c.relrowsecurity, c.reloptions, c.relnamespace,
@@ -454,23 +480,79 @@ reachable AS (
       AND has_schema_privilege(relnamespace, 'USAGE')
       AND (has_table_privilege(oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE')
            OR has_any_column_privilege(oid, 'SELECT, INSERT, UPDATE'))
+),
+-- Platform sessions only: the session's role and every role it belongs to, whose rights it
+-- inherits or can take with SET ROLE.
+platform_roles AS (
+    SELECT oid, quote_ident(rolname) AS role_name FROM pg_roles
+    WHERE $1 AND pg_has_role(current_user, oid, 'MEMBER')
+),
+-- The tables with row-level security that one of those roles may use at all.
+platform_tables AS MATERIALIZED (
+    SELECT pr.oid AS role_oid, pr.role_name, r.oid AS rel, r.name AS relation
+    FROM platform_roles pr
+    CROSS JOIN rels r
+    WHERE r.relkind IN ('r', 'p') AND r.relrowsecurity
+      AND has_schema_privilege(pr.oid, r.relnamespace, 'USAGE')
+      AND (has_table_privilege(pr.oid, r.oid, 'SELECT, INSERT, UPDATE, DELETE')
+           OR has_any_column_privilege(pr.oid, r.oid, 'SELECT, INSERT, UPDATE'))
+),
+-- The permissive policies, each printed once. Restrictive policies only narrow access, so
+-- they are not counted.
+platform_policies AS MATERIALIZED (
+    SELECT polrelid, polcmd::text AS polcmd, polroles,
+           pg_get_expr(polqual, polrelid) AS using_expr,
+           pg_get_expr(coalesce(polwithcheck, polqual), polrelid) AS check_expr
+    FROM pg_policy
+    WHERE $1 AND polpermissive
+),
+-- A command evaluates USING to filter rows (SELECT, UPDATE, DELETE) and WITH CHECK, or USING
+-- when a policy has none, to check new rows (INSERT, UPDATE). Per role, table, command, and
+-- side: how many expressions the permissive policies that apply to the role give, and how
+-- many of them are not the tenant condition.
+platform_sides AS (
+    SELECT t.role_oid, t.role_name, t.rel, t.relation, s.command, s.uses_qual,
+           count(e.expr) AS expressions,
+           count(e.expr) FILTER (WHERE e.expr <> $2) AS wider
+    FROM platform_tables t
+    CROSS JOIN (VALUES ('SELECT', 'r', true), ('INSERT', 'a', false), ('UPDATE', 'w', true),
+                       ('UPDATE', 'w', false), ('DELETE', 'd', true))
+               AS s(command, polcmd, uses_qual)
+    LEFT JOIN platform_policies p
+      ON p.polrelid = t.rel AND p.polcmd IN (s.polcmd, '*')
+         AND (0 = ANY (p.polroles)
+              OR EXISTS (SELECT 1 FROM unnest(p.polroles) AS role
+                         WHERE role <> 0 AND pg_has_role(t.role_oid, role, 'MEMBER')))
+    CROSS JOIN LATERAL (
+        SELECT CASE WHEN s.uses_qual THEN p.using_expr ELSE p.check_expr END AS expr
+    ) AS e
+    GROUP BY t.role_oid, t.role_name, t.rel, t.relation, s.command, s.uses_qual
+),
+-- The commands only the tenant condition opens to the role: every side the command evaluates
+-- has an expression, and on at least one side all of them are the tenant condition.
+platform_tenant_only AS MATERIALIZED (
+    SELECT role_oid, role_name, rel, relation, command FROM platform_sides
+    GROUP BY role_oid, role_name, rel, relation, command
+    HAVING bool_and(expressions > 0) AND bool_or(wider = 0)
 )
-SELECT problem, relation FROM (
-    SELECT 1 AS rank, 'bypasses_rls' AS problem, NULL::text AS relation
+SELECT problem, relation, role_name, command FROM (
+    SELECT 1 AS rank, 'bypasses_rls' AS problem, NULL::text AS relation,
+           NULL::text AS role_name, NULL::text AS command
     WHERE EXISTS (
         SELECT 1 FROM pg_roles r
         WHERE (r.rolsuper OR r.rolbypassrls) AND pg_has_role(current_user, r.oid, 'MEMBER')
     )
     UNION ALL
-    SELECT 2, 'tenant_preset', NULL
+    SELECT 2, 'tenant_preset', NULL, NULL, NULL
     WHERE NULLIF(current_setting('trustiot.tenant_id', true), '') IS NOT NULL
     UNION ALL
-    SELECT 3, 'owns_relation', name FROM rels WHERE pg_has_role(current_user, relowner, 'MEMBER')
+    SELECT 3, 'owns_relation', name, NULL, NULL FROM rels
+    WHERE pg_has_role(current_user, relowner, 'MEMBER')
     UNION ALL
-    SELECT 4, 'unprotected_table', name FROM reachable
+    SELECT 4, 'unprotected_table', name, NULL, NULL FROM reachable
     WHERE relkind IN ('r', 'p') AND NOT relrowsecurity
     UNION ALL
-    SELECT 4, 'permissive_policy', r.name || ' policy ' || quote_ident(p.polname)
+    SELECT 4, 'permissive_policy', r.name || ' policy ' || quote_ident(p.polname), NULL, NULL
     FROM reachable r
     JOIN pg_policy p ON p.polrelid = r.oid
     WHERE r.relkind IN ('r', 'p') AND r.relrowsecurity AND p.polpermissive
@@ -483,7 +565,7 @@ SELECT problem, relation FROM (
                AND (p.polqual IS NULL OR pg_get_expr(p.polqual, p.polrelid) = $2)
                AND (p.polwithcheck IS NULL OR pg_get_expr(p.polwithcheck, p.polrelid) = $2))
     UNION ALL
-    SELECT 4, 'unprotected_view', name FROM reachable
+    SELECT 4, 'unprotected_view', name, NULL, NULL FROM reachable
     WHERE relkind = 'v'
       AND NOT EXISTS (
           SELECT 1 FROM unnest(reloptions) AS option
@@ -491,9 +573,9 @@ SELECT problem, relation FROM (
                                   'security_invoker=yes', 'security_invoker=1')
       )
     UNION ALL
-    SELECT 4, 'unprotectable', name FROM reachable WHERE relkind IN ('m', 'f')
+    SELECT 4, 'unprotectable', name, NULL, NULL FROM reachable WHERE relkind IN ('m', 'f')
     UNION ALL
-    SELECT 4, 'definer_function', p.oid::regprocedure::text
+    SELECT 4, 'definer_function', p.oid::regprocedure::text, NULL, NULL
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE p.prosecdef
@@ -506,15 +588,25 @@ SELECT problem, relation FROM (
           WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
       )
     UNION ALL
-    SELECT 4, 'temporary_tables', NULL
+    SELECT 4, 'temporary_tables', NULL, NULL, NULL
     WHERE has_database_privilege(current_database(), 'TEMPORARY')
     UNION ALL
-    SELECT 5, 'truncate_allowed', name FROM reachable
+    SELECT 5, 'truncate_allowed', name, NULL, NULL FROM reachable
     WHERE relkind IN ('r', 'p') AND has_table_privilege(oid, 'TRUNCATE')
+    UNION ALL
+    -- The commands only the tenant condition opens to a platform role that the role may run,
+    -- through a table or column privilege. DELETE has no column privilege, and NULLIF makes its
+    -- column test NULL.
+    SELECT 4, 'platform_tenant_only', relation, role_name, command FROM platform_tenant_only
+    WHERE has_table_privilege(role_oid, rel, command)
+       OR coalesce(has_any_column_privilege(role_oid, rel, NULLIF(command, 'DELETE')), false)
 ) AS problems
-ORDER BY rank, relation
+ORDER BY rank, relation, problem, role_name, command
 LIMIT 1
 ";
+
+/// A row of [`SESSION_CHECK`]: the problem, the relation, the role, and the command.
+type SessionCheckRow = (String, Option<String>, Option<String>, Option<String>);
 
 /// Checks that a session of `role` is safe for tenant data: see [`UnsafeSession`]. Pools from
 /// [`connect_lazy`] and the `tenant` module run it on every new connection.
@@ -526,12 +618,12 @@ pub async fn check_session(
     connection: &mut PgConnection,
     role: SessionRole,
 ) -> Result<Result<(), UnsafeSession>, sqlx::Error> {
-    let problem: Option<(String, Option<String>)> = sqlx::query_as(SESSION_CHECK)
+    let problem: Option<SessionCheckRow> = sqlx::query_as(SESSION_CHECK)
         .bind(role == SessionRole::Platform)
         .bind(TENANT_CONDITION_AS_STORED)
         .fetch_optional(&mut *connection)
         .await?;
-    let Some((problem, relation)) = problem else {
+    let Some((problem, relation, role_name, command)) = problem else {
         return Ok(Ok(()));
     };
     let relation = relation.unwrap_or_default();
@@ -546,6 +638,11 @@ pub async fn check_session(
         "definer_function" => UnsafeSession::DefinerFunction(relation),
         "temporary_tables" => UnsafeSession::TemporaryTables,
         "truncate_allowed" => UnsafeSession::TruncateAllowed(relation),
+        "platform_tenant_only" => UnsafeSession::PlatformTenantOnly {
+            table: relation,
+            role: role_name.unwrap_or_default(),
+            command: command.unwrap_or_default(),
+        },
         other => {
             return Err(sqlx::Error::Protocol(format!(
                 "unknown session check result `{other}`"

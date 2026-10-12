@@ -1,0 +1,91 @@
+
+/// Temporary (not committed): how long the session check takes with many template tables.
+#[tokio::test]
+async fn tmp_366_session_check_timing() {
+    let Some(fixture) = Fixture::new("CREATE DATABASE timing OWNER example_owner", "timing").await
+    else {
+        return;
+    };
+    let mut owner = fixture.connect("example_owner").await;
+    sqlx::raw_sql(
+        "DO $$
+         BEGIN
+             FOR i IN 1..300 LOOP
+                 EXECUTE format('CREATE TABLE items_%s (tenant_id uuid NOT NULL, id uuid NOT NULL, name text NOT NULL, PRIMARY KEY (tenant_id, id))', i);
+                 EXECUTE format('ALTER TABLE items_%s ENABLE ROW LEVEL SECURITY', i);
+                 EXECUTE format('CREATE POLICY tenant_isolation ON items_%s USING (tenant_id = NULLIF(current_setting(''trustiot.tenant_id'', true), '''')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting(''trustiot.tenant_id'', true), '''')::uuid)', i);
+                 EXECUTE format('CREATE POLICY platform_access ON items_%s TO example_platform USING (true) WITH CHECK (true)', i);
+                 EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON items_%s TO example_app', i);
+                 EXECUTE format('GRANT SELECT, UPDATE ON items_%s TO example_platform', i);
+             END LOOP;
+         END $$;",
+    )
+    .execute(&mut owner)
+    .await
+    .expect("300 template tables");
+    for (role, as_role) in [
+        ("example_app", SessionRole::Service),
+        ("example_platform", SessionRole::Platform),
+        ("example_platform", SessionRole::Service),
+    ] {
+        let mut session = fixture.connect(role).await;
+        let mut times = Vec::new();
+        for _ in 0..30 {
+            let started = Instant::now();
+            let outcome = postgres::check_session(&mut session, as_role)
+                .await
+                .expect("check");
+            times.push(started.elapsed());
+            if as_role == SessionRole::Platform || role == "example_app" {
+                assert_eq!(outcome, Ok(()));
+            }
+        }
+        times.sort();
+        println!(
+            "TIMING {role} as {as_role:?}, 301 tables: min {:?} median {:?} max {:?}",
+            times[0], times[15], times[29]
+        );
+    }
+}
+
+/// Temporary (not committed): the plan of the session check with many template tables.
+#[tokio::test]
+async fn tmp_366_session_check_plan() {
+    let Some(fixture) = Fixture::new("CREATE DATABASE plan OWNER example_owner", "plan").await
+    else {
+        return;
+    };
+    let mut owner = fixture.connect("example_owner").await;
+    sqlx::raw_sql(
+        "DO $$
+         BEGIN
+             FOR i IN 1..300 LOOP
+                 EXECUTE format('CREATE TABLE items_%s (tenant_id uuid NOT NULL, id uuid NOT NULL, name text NOT NULL, PRIMARY KEY (tenant_id, id))', i);
+                 EXECUTE format('ALTER TABLE items_%s ENABLE ROW LEVEL SECURITY', i);
+                 EXECUTE format('CREATE POLICY tenant_isolation ON items_%s USING (tenant_id = NULLIF(current_setting(''trustiot.tenant_id'', true), '''')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting(''trustiot.tenant_id'', true), '''')::uuid)', i);
+                 EXECUTE format('CREATE POLICY platform_access ON items_%s TO example_platform USING (true) WITH CHECK (true)', i);
+                 EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON items_%s TO example_app', i);
+                 EXECUTE format('GRANT SELECT, UPDATE ON items_%s TO example_platform', i);
+             END LOOP;
+         END $$;",
+    )
+    .execute(&mut owner)
+    .await
+    .expect("300 template tables");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/postgres.rs"))
+        .expect("source");
+    let start = source.find("const SESSION_CHECK: &str = r\"").expect("start") + 30;
+    let end = start + source[start..].find("\";").expect("end");
+    let sql = format!("EXPLAIN (ANALYZE, COSTS OFF) {}", &source[start..end]);
+    let sql: &'static str = Box::leak(sql.into_boxed_str());
+    let mut session = fixture.connect("example_platform").await;
+    let plan: Vec<String> = sqlx::query_scalar(sql)
+        .bind(true)
+        .bind(postgres::TENANT_CONDITION_AS_STORED)
+        .fetch_all(&mut session)
+        .await
+        .expect("plan");
+    for line in plan {
+        println!("PLAN {line}");
+    }
+}

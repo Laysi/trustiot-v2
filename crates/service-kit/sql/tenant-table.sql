@@ -33,7 +33,8 @@ CREATE POLICY tenant_isolation ON example_items
 --    `trustiot.tenant_id` (which PlatformDb never does and tools/sql-check rejects) still sees
 --    every tenant and still has only its grants. Leave the policy out, and grant the platform
 --    role nothing on the table: with a grant but no platform_access, policy 3 alone would give
---    such a session the rows of the tenant it chose (Laysi/trustiot-v2#360).
+--    such a session the rows of the tenant it chose (Laysi/trustiot-v2#360), so service-kit's
+--    connection check refuses the platform role's sessions then (Laysi/trustiot-v2#366).
 CREATE POLICY platform_access ON example_items
     TO example_platform
     USING (true)
