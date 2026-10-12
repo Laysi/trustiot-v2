@@ -1,0 +1,70 @@
+# rcheck on the build host, 2026-10-12, branch perf/290-two-phase-tag-decode at d0e718f (merged onto origin/main a7f332b).
+# Host paths are shortened to <worktree>/; the queue line and the volume cleanup line come from rcheck itself.
+rcheck: queued on ruisi-wsl at 12:33:08 as 290-1ba6f541; running now: 271c-69fb24ec since 12:27:46
+FMT_OK
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.21s
+CLIPPY_EXIT=0
+     Running unittests src/lib.rs (<worktree>/target/debug/deps/protocol-56854fb1676a8b1e)
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/adversarial.rs (<worktree>/target/debug/deps/adversarial-2ff4234590ec3ea0)
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/allocation.rs (<worktree>/target/debug/deps/allocation-291610dab5223f1b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/broker.rs (<worktree>/target/debug/deps/broker-eefbcbcd1d3b3850)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.54s
+     Running tests/compat.rs (<worktree>/target/debug/deps/compat-765528d58ab09bae)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/dependencies.rs (<worktree>/target/debug/deps/dependencies-8fd249713670f6c1)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+     Running tests/fuzz.rs (<worktree>/target/debug/deps/fuzz-aa2066f22eff7e9b)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.34s
+     Running tests/fuzz_split.rs (<worktree>/target/debug/deps/fuzz_split-d1b1b4444f62b7fb)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+     Running tests/golden.rs (<worktree>/target/debug/deps/golden-a4607db7d68b3ad3)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/limits.rs (<worktree>/target/debug/deps/limits-8faa20333ccffec4)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/readme.rs (<worktree>/target/debug/deps/readme-3d25ba4094649e49)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/robustness.rs (<worktree>/target/debug/deps/robustness-01da5d912b46312c)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.02s
+     Running tests/split.rs (<worktree>/target/debug/deps/split-843d0b395e3787d3)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+     Running tests/validation.rs (<worktree>/target/debug/deps/validation-1e0dfc67baefb8e2)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+   Doc-tests protocol
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+TEST_EXIT=0
+   Generated <worktree>/target/doc/protocol/index.html
+DOC_EXIT=0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.03s
+AARCH64_EXIT=0
+    Finished `release` profile [optimized] target(s) in 0.03s
+     Running tests/fuzz.rs (<worktree>/target/release/deps/fuzz-fb7f081399afcab5)
+
+running 5 tests
+test a_gateways_acl_never_matches_another_gateways_topics ... ok
+test a_hostile_array_count_reserves_at_most_a_bounded_amount ... ok
+test decoders_survive_hostile_payloads ... fuzz: 900000 inputs, 236736 accepted, peak allocation 13238266 bytes (max 12.7x payload), slowest 25.302555ms, seed 0x4
+slowest input: config 1044500 bytes a561760163726576016776657273696f6e07666d6f64656c7382a2646e616d65696d733330302d76666466706f696e747384a5636b6579696672657175656e63796d66756e6374696f6e5f636f646503676164647265737319210369646174615f7479706563753136657363616c65fb3f847ae147ae147ba5636b657969656e657267795f77686d66756e6374696f6e5f636f646503676164647265737319210c69646174615f74797065637533326a627974655f6f726465726463646162a6636b65796b74656d70657261747572656d66756e6374696f6e5f636f64650467616464726573730069646174615f7479706563693136657363616c65fb3fb999999999999a666f6666736574fbc044000000000000a4636b65796772756e6e696e6
+worst allocation input: config 1044500 bytes a561760163726576016776657273696f6e07666d6f64656c7382a2646e616d65696d733330302d76666466706f696e747384a5636b6579696672657175656e63796d66756e6374696f6e5f636f646503676164647265737319210369646174615f7479706563753136657363616c65fb3f847ae147ae147ba5636b657969656e657267795f77686d66756e6374696f6e5f636f646503676164647265737319210c69646174615f74797065637533326a627974655f6f726465726463646162a6636b65796b74656d70657261747572656d66756e6374696f6e5f636f64650467616464726573730069646174615f7479706563693136657363616c65fb3fb999999999999a666f6666736574fbc044000000000000a4636b65796772756e6e696e6
+accepted messages that no longer fit after re-encoding: 0
+tagged messages on which two passes and serde's single pass disagree, by encoding feature: {"array": 422, "array + byte string": 4, "array + wide integer": 52, "byte string": 651, "byte string + invalid UTF-8": 6, "byte string + invalid UTF-8 + item serde cannot buffer": 5, "byte string + item serde cannot buffer": 63, "byte string + item serde cannot buffer + non-text key": 2, "byte string + item serde cannot buffer + wide integer": 1, "byte string + non-text key": 825, "byte string + non-text key + wide integer": 142, "byte string + wide integer": 69, "invalid UTF-8": 14, "invalid UTF-8 + wide integer": 3, "item serde cannot buffer": 31, "item serde cannot buffer + wide integer": 8, "non-text key": 60, "non-text key + wide integer": 15, "wide integer": 589}
+ok
+test tagged_maps_decode_in_two_passes_without_buffering ... status: 768 payloads of 88 to 4096 bytes
+  decode: at most 1.36x from 1 KiB up (reason = text (1032 bytes, after the tag), 1495 bytes for 1103); peak 4488 bytes (reason = text (4025 bytes, after the tag), 4096 bytes)
+  serde's single pass: at most 93.5x (session = indefinite map of 0: 0 (2056 bytes, after the tag), 196864 bytes for 2105); peak 196992 bytes
+telemetry-ack: 1280 payloads of 146 to 4096 bytes
+  decode: at most 1.25x from 1 KiB up (code = text (1032 bytes, after the tag), 1483 bytes for 1189); peak 4390 bytes (code = text (3939 bytes, after the tag), 4096 bytes)
+  serde's single pass: at most 91.0x (after_ms = indefinite map of 0: 0 (2056 bytes, after the tag), 196772 bytes for 2163); peak 196900 bytes
+live-control: 960 payloads of 110 to 65536 bytes
+  decode: at most 36.39x from 1 KiB up (devices = indefinite array of "a" (32776 bytes, after the tag), 1196069 bytes for 32872); peak 1588517 bytes (devices = array of "a" (65439 bytes, after the tag), 65535 bytes)
+  serde's single pass: at most 95.8x (future = indefinite map of 0: 0 (32776 bytes, after the tag), 3145892 bytes for 32847); peak 3146148 bytes
+ok
+test topics_parse_only_when_canonical_and_acl_topics_never_widen ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.20s
+
+FUZZ_EXIT=0
+rcheck: removed 4 dangling test volumes
+rcheck: exit 0 at 12:53:08 (ruisi-wsl, 290-1ba6f541)

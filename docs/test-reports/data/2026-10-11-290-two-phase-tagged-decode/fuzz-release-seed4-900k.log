@@ -1,4 +1,4 @@
-   Compiling protocol v0.1.0 (/home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-ad8ab2a058688b1c0/crates/protocol)
+   Compiling protocol v0.1.0 (<worktree>/crates/protocol)
     Finished `release` profile [optimized] target(s) in 28.04s
      Running tests/fuzz.rs (target/release/deps/fuzz-fb7f081399afcab5)
 
