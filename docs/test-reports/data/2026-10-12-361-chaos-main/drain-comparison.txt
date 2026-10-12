@@ -1,0 +1,11 @@
+# bun throughput.ts runA runB runC runD
+{"run":"runA","chaos_over_at_s":1203.4,"backlog_at_s":1213.4,"backlog_events":3427,"zero_at_s":1262.7,"drain_s":49.3,"drain_events_per_s":69.5,"events_total":44959}
+{"run":"runB","chaos_over_at_s":1203.3,"backlog_at_s":1213.4,"backlog_events":7808,"zero_at_s":1330.4,"drain_s":117,"drain_events_per_s":66.7,"events_total":44340}
+{"run":"runC","chaos_over_at_s":1203.9,"backlog_at_s":1216.8,"backlog_events":6242,"zero_at_s":1312.3,"drain_s":95.5,"drain_events_per_s":65.4,"events_total":44709}
+{"run":"runD","chaos_over_at_s":1203.3,"backlog_at_s":1214.1,"backlog_events":19671,"zero_at_s":1873.7,"drain_s":659.6,"drain_events_per_s":29.8,"events_total":45041}
+
+# bun drain-stalls.ts runA runB runC runD
+{"run":"runA","drain_s":49.3,"seconds_with_at_most_3_events_of_progress_per_sample":0,"events_per_s_in_the_other_samples":69.5}
+{"run":"runB","drain_s":117,"seconds_with_at_most_3_events_of_progress_per_sample":0,"events_per_s_in_the_other_samples":66.7}
+{"run":"runC","drain_s":95.5,"seconds_with_at_most_3_events_of_progress_per_sample":0,"events_per_s_in_the_other_samples":65.4}
+{"run":"runD","drain_s":659.6,"seconds_with_at_most_3_events_of_progress_per_sample":12.4,"events_per_s_in_the_other_samples":30.4}

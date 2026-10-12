@@ -13,6 +13,10 @@
 //!
 //! Environment: CHAOS_HOST, CHAOS_PORT, CHAOS_CA_FILE, CHAOS_PASSWORD (one password for the
 //! superuser and every role of this run), CHAOS_PROC_SEED (per process, for the random choices).
+//! Optional handler-panic scenario (Laysi/trustiot-v2#361; off by default, which leaves a run as
+//! it was): CHAOS_PANICS=1 on the producers makes 0.3% of the events always panic in the handler
+//! (dead-lettered as `handler panicked repeatedly` after three panics in a row in one replica);
+//! CHAOS_PANIC_RATE=0.01 on the consumers makes the handler panic at random after its writes.
 //!
 //! Commands:
 //!   certs <dir>                 write ca.pem, server.crt and server.key for 127.0.0.1
@@ -74,6 +78,10 @@ struct Chaos {
     token: String,
     agg: String,
     poison: bool,
+    /// Optional scenario (CHAOS_PANICS=1 on the producers): the handler panics on every attempt
+    /// at this event, so the consumer must dead-letter it after `MAX_HANDLER_PANICS` in a row.
+    #[serde(default)]
+    panics: bool,
 }
 
 impl Event for Chaos {
@@ -347,11 +355,25 @@ async fn producer(name: &str, dir: PathBuf) {
                 // NULL) as the producer's platform role; the others write events of one tenant
                 // as its service role, in a tenant transaction.
                 let platform_wide = rng.f() < 0.06;
-                let mut plan: Vec<(String, String, bool, Option<u64>)> = Vec::new();
+                // The kind of each event: 0 normal, 1 poison (3%, permanent handler error), 2
+                // always-panicking (0.3%, only with CHAOS_PANICS=1; drawn only then, so the
+                // random sequence of a run without the scenario is unchanged).
+                let panics_enabled = std::env::var("CHAOS_PANICS").is_ok_and(|v| v == "1");
+                let mut kind_of = |rng: &mut Rng| -> u8 {
+                    if rng.f() < 0.03 {
+                        1
+                    } else if panics_enabled && rng.f() < 0.003 {
+                        2
+                    } else {
+                        0
+                    }
+                };
+                let mut plan: Vec<(String, String, u8, Option<u64>)> = Vec::new();
                 if platform_wide {
                     for _ in 0..events {
                         let a = rng.range(0, PLATFORM_AGGREGATES - 1);
-                        plan.push((format!("g{a}"), uuid::Uuid::now_v7().to_string(), rng.f() < 0.03, None));
+                        let k = kind_of(&mut rng);
+                        plan.push((format!("g{a}"), uuid::Uuid::now_v7().to_string(), k, None));
                     }
                 } else {
                     // Hot aggregates: the lower of two draws; the first one fixes the tenant.
@@ -368,7 +390,8 @@ async fn producer(name: &str, dir: PathBuf) {
                                 }
                             }
                         };
-                        plan.push((format!("a{a:02}"), uuid::Uuid::now_v7().to_string(), rng.f() < 0.03, Some(tenant)));
+                        let k = kind_of(&mut rng);
+                        plan.push((format!("a{a:02}"), uuid::Uuid::now_v7().to_string(), k, Some(tenant)));
                     }
                 }
                 let result: Result<bool, sqlx::Error> = async {
@@ -391,7 +414,7 @@ async fn producer(name: &str, dir: PathBuf) {
                             .await?;
                         tokio::time::sleep(Duration::from_millis(rng.range(0, 60))).await;
                     }
-                    for (agg, token, poison, tenant) in &plan {
+                    for (agg, token, event_kind, tenant) in &plan {
                         let kind = if tenant.is_some() { "widget" } else { "catalog" };
                         let aggregate = Aggregate::new(kind, agg.clone()).unwrap();
                         let tenant_id: Option<TenantId> = match tenant {
@@ -404,7 +427,8 @@ async fn producer(name: &str, dir: PathBuf) {
                             &Chaos {
                                 token: token.clone(),
                                 agg: agg.clone(),
-                                poison: *poison,
+                                poison: *event_kind == 1,
+                                panics: *event_kind == 2,
                             },
                             tenant_id,
                         )
@@ -463,6 +487,8 @@ struct Counters {
     poisoned: AtomicU64,
     handled: AtomicU64,
     probes: AtomicU64,
+    /// Panics raised on purpose (the optional handler-panic scenario).
+    panicked: AtomicU64,
     /// Handler calls so far in this process: failure injection differs on every attempt, so a
     /// retried event is not doomed to fail again.
     attempts: AtomicU64,
@@ -472,6 +498,10 @@ struct Projection {
     replica: String,
     stats: Arc<Counters>,
     seed: u64,
+    /// Optional scenario (CHAOS_PANIC_RATE on the consumers, e.g. 0.01): the handler panics at
+    /// random, after its writes, before the commit; the consumer must roll back and retry. Zero (the
+    /// default) draws nothing, so the random sequence is the same as without the scenario.
+    panic_rate: f64,
 }
 
 fn sqlstate(error: &sqlx::Error) -> String {
@@ -609,6 +639,16 @@ impl Handler for Projection {
         if rng.f() < 0.05 {
             self.probe(tx, gnum, delivery, &delivery_tenant, &mut rng).await?;
         }
+        if event.panics {
+            // After writing, on every attempt: the writes roll back with each panic, and the
+            // consumer dead-letters the event at its third panic in a row in this replica.
+            self.stats.panicked.fetch_add(1, Ordering::Relaxed);
+            panic!("chaos: always-panicking event");
+        }
+        if self.panic_rate > 0.0 && rng.f() < self.panic_rate {
+            self.stats.panicked.fetch_add(1, Ordering::Relaxed);
+            panic!("chaos: random handler panic after the writes");
+        }
         if event.poison {
             self.stats.poisoned.fetch_add(1, Ordering::Relaxed);
             // After writing: the handler's writes must roll back with the dead-lettering.
@@ -643,6 +683,7 @@ async fn consumer(name: &str, mode: &str, dir: PathBuf) {
         poisoned: AtomicU64::new(0),
         handled: AtomicU64::new(0),
         probes: AtomicU64::new(0),
+        panicked: AtomicU64::new(0),
         attempts: AtomicU64::new(0),
     });
     let config = ConsumerConfig::new(SUBSCRIPTION, "prod")
@@ -659,6 +700,7 @@ async fn consumer(name: &str, mode: &str, dir: PathBuf) {
             replica: name.to_owned(),
             stats: stats.clone(),
             seed: std::env::var("CHAOS_PROC_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(7),
+            panic_rate: std::env::var("CHAOS_PANIC_RATE").ok().and_then(|s| s.parse().ok()).unwrap_or(0.0),
         },
     );
     let stop = CancellationToken::new();
@@ -685,7 +727,7 @@ async fn consumer(name: &str, mode: &str, dir: PathBuf) {
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 let lag = consumer.lag();
                 println!(
-                    "STAT {name} delivered={} dup={} dead={} handled={} retry_before={} retry_after={} probes={} lag={:?}",
+                    "STAT {name} delivered={} dup={} dead={} handled={} retry_before={} retry_after={} probes={} panics={} lag={:?}",
                     delivered.load(Ordering::Relaxed),
                     dup.load(Ordering::Relaxed),
                     dead.load(Ordering::Relaxed),
@@ -693,6 +735,7 @@ async fn consumer(name: &str, mode: &str, dir: PathBuf) {
                     stats.retried_before.load(Ordering::Relaxed),
                     stats.retried_after.load(Ordering::Relaxed),
                     stats.probes.load(Ordering::Relaxed),
+                    stats.panicked.load(Ordering::Relaxed),
                     lag.map(|l| (l.events, l.oldest_age.map(|a| a.as_secs_f64())))
                 );
             }
@@ -774,11 +817,22 @@ async fn verify(dir: PathBuf) {
     // Producer-side truth.
     let events: Vec<EventRow> = sqlx::query_as(
         "SELECT id, tx_order, event_id, aggregate_id, aggregate_seq, envelope->'payload'->>'token', \
-         (envelope->'payload'->>'poison')::bool, tenant_id::text FROM prod.outbox_event ORDER BY id",
+         ((envelope->'payload'->>'poison')::bool OR COALESCE((envelope->'payload'->>'panics')::bool, false)), \
+         tenant_id::text FROM prod.outbox_event ORDER BY id",
     )
     .fetch_all(&pool)
     .await
     .unwrap();
+    // `e.6` above is "ends in the dead letters": poison events (permanent error) and, with the
+    // optional handler-panic scenario, always-panicking events (dead-lettered after 3 panics).
+    let panickers: HashSet<uuid::Uuid> = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT event_id FROM prod.outbox_event WHERE COALESCE((envelope->'payload'->>'panics')::bool, false)",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .collect();
     let ledger: Vec<(i64, String, String, Option<String>)> =
         sqlx::query_as("SELECT id, agg, token, tenant FROM prod.ledger ORDER BY id")
             .fetch_all(&pool)
@@ -1072,11 +1126,21 @@ async fn verify(dir: PathBuf) {
         fail(format!("{n} in-handler {kind} violations recorded"));
     }
     let violation_total: i64 = violations.iter().map(|v| v.1).sum();
-    let dead: Vec<(uuid::Uuid,)> = sqlx::query_as("SELECT event_id FROM cons.outbox_dead_letter")
+    let dead: Vec<(uuid::Uuid, String)> = sqlx::query_as("SELECT event_id, reason FROM cons.outbox_dead_letter")
         .fetch_all(&pool)
         .await
         .unwrap();
     let dead_set: HashSet<uuid::Uuid> = dead.iter().map(|d| d.0).collect();
+    // Each dead letter has the reason of its kind: a panic-looping event "handler panicked
+    // repeatedly", a poison event the handler's own error.
+    let mut dead_reasons: BTreeMap<String, usize> = BTreeMap::new();
+    for (id, reason) in &dead {
+        *dead_reasons.entry(reason.clone()).or_default() += 1;
+        let expected = if panickers.contains(id) { "handler panicked repeatedly" } else { "chaos: poison event" };
+        if reason != expected {
+            fail(format!("dead letter {id} has reason {reason:?}, expected {expected:?}"));
+        }
+    }
     if dead_set != poison {
         fail(format!(
             "dead letters ({}) differ from the poison events ({}): {} missing, {} extra",
@@ -1131,7 +1195,9 @@ async fn verify(dir: PathBuf) {
     let summary = serde_json::json!({
         "events_in_outbox": events.len(),
         "ledger_rows": ledger.len(),
-        "poison_events": poison.len(),
+        "poison_events": poison.len() - panickers.len(),
+        "always_panicking_events": panickers.len(),
+        "dead_letter_reasons": dead_reasons,
         "rolled_back_tokens_logged": rolled.len(),
         "rolled_back_found_in_outbox": rolled_in_log,
         "committed_acks_logged": acked.len(),

@@ -1,0 +1,61 @@
+   Compiling outbox v0.1.0 (<build-host-job-dir>/src/crates/outbox)
+warning: variable does not need to be mutable
+   --> crates/outbox/examples/chaos.rs:362:21
+    |
+362 |                 let mut kind_of = |rng: &mut Rng| -> u8 {
+    |                     ----^^^^^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `outbox` (example "chaos") generated 1 warning (run `cargo fix --example "chaos" -p outbox` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.58s
+started 2026-10-12T07:29:23Z, binary <build-host-job-dir>/target/debug/examples/chaos
+[0.0s] starting postgres container (docker, memory 1g, TLS from a CA generated for this run)
+[3.2s] postgres up: PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+[3.3s] ssl = on
+[3.4s] setup done (verify-full connection, four roles, RLS template, grants)
+PASS  chaos_cons_platform  expect=ok     got=ok     consumer platform role reads the producer's outbox_event (consumer_read policy)  [t]
+PASS  chaos_cons_platform  expect=denied got=denied consumer platform role reads producer business table  [ERROR:  42501: permission denied for table ledger]
+PASS  chaos_cons_platform  expect=denied got=denied consumer platform role reads producer outbox_aggregate  [ERROR:  42501: permission denied for table outbox_aggregate]
+PASS  chaos_cons_platform  expect=denied got=denied consumer platform role reads another producer's outbox_event  [ERROR:  42501: permission denied for schema prod2]
+PASS  chaos_cons_platform  expect=denied got=denied consumer platform role reads another producer's business table  [ERROR:  42501: permission denied for schema prod2]
+PASS  chaos_cons_platform  expect=denied got=denied consumer platform role reads unrelated schema  [ERROR:  42501: permission denied for schema secret]
+PASS  chaos_cons_platform  expect=denied got=denied consumer platform role reads other.junk  [ERROR:  42501: permission denied for schema other]
+PASS  chaos_cons_platform  expect=denied got=denied consumer platform role INSERTs a platform-wide event  [ERROR:  42501: permission denied for table outbox_event]
+PASS  chaos_cons_platform  expect=denied got=denied consumer platform role INSERTs a tenant event  [ERROR:  42501: permission denied for table outbox_event]
+PASS  chaos_cons_platform  expect=denied got=denied consumer platform role UPDATE producer outbox_event (zero rows)  [ERROR:  42501: permission denied for table outbox_event]
+PASS  chaos_cons_platform  expect=denied got=denied consumer platform role DELETE producer outbox_event (zero rows)  [ERROR:  42501: permission denied for table outbox_event]
+PASS  chaos_cons_platform  expect=denied got=denied consumer platform role TRUNCATE producer outbox_event  [ERROR:  42501: permission denied for table outbox_event]
+PASS  chaos_cons_platform  expect=denied got=denied consumer platform role SELECT FOR UPDATE producer outbox_event  [ERROR:  42501: permission denied for table outbox_event]
+PASS  chaos_cons_platform  expect=denied got=denied consumer platform role INSERT producer outbox_aggregate (cannot call publish on producer)  [ERROR:  42501: permission denied for table outbox_aggregate]
+PASS  chaos_cons_platform  expect=denied got=denied consumer platform role CREATE in producer schema  [ERROR:  42501: permission denied for schema prod]
+PASS  chaos_cons_platform  expect=denied got=denied consumer platform role reads the consumer's own tables (they belong to the service role)  [ERROR:  42501: permission denied for schema cons]
+PASS  chaos_cons_platform  expect=ok     got=ok     (control) catalog readable  [t]
+PASS  chaos_cons_app       expect=denied got=denied consumer service role reads the producer's outbox_event  [ERROR:  42501: permission denied for schema prod]
+PASS  chaos_cons_app       expect=denied got=denied consumer service role reads producer business table  [ERROR:  42501: permission denied for schema prod]
+PASS  chaos_cons_app       expect=denied got=denied consumer service role reads unrelated schema  [ERROR:  42501: permission denied for schema secret]
+PASS  chaos_cons_app       expect=denied got=denied consumer service role reads other.junk  [ERROR:  42501: permission denied for schema other]
+PASS  chaos_cons_app       expect=ok     got=ok     consumer service role reads own outbox_inbox  [t]
+PASS  chaos_cons_app       expect=ok     got=ok     consumer service role writes own outbox_dead_letter  [INSERT 0 0]
+PASS  chaos_cons_app       expect=denied got=denied consumer service role CREATE in own schema (not owner)  [ERROR:  42501: permission denied for schema cons]
+PASS  chaos_cons_app       expect=ok     got=ok     consumer service role reads tenant_rows (RLS: no tenant set, sees no row)  [0]
+PASS  chaos_cons_app       expect=denied got=denied consumer service role writes tenant_rows of another tenant (RLS WITH CHECK)  [ERROR:  42501: new row violates row-level security policy for table "tenant_rows"]
+PASS  chaos_cons_app       expect=ok     got=ok     consumer service role writes tenant_rows of the transaction's tenant  [BEGIN]
+PASS  chaos_prod_app       expect=denied got=denied producer service role cannot SELECT its own outbox_event (INSERT only)  [ERROR:  42501: permission denied for table outbox_event]
+PASS  chaos_prod_app       expect=ok     got=ok     producer service role INSERTs an event of the transaction's tenant  [BEGIN]
+PASS  chaos_prod_app       expect=denied got=denied producer service role INSERTs an event of another tenant (RLS WITH CHECK)  [ERROR:  42501: new row violates row-level security policy for table "outbox_event"]
+PASS  chaos_prod_app       expect=denied got=denied producer service role INSERTs a platform-wide event  [ERROR:  42501: new row violates row-level security policy for table "outbox_event"]
+PASS  chaos_prod_app       expect=denied got=denied producer service role UPDATE outbox_event  [ERROR:  42501: permission denied for table outbox_event]
+PASS  chaos_prod_app       expect=denied got=denied producer service role DELETE outbox_event  [ERROR:  42501: permission denied for table outbox_event]
+PASS  chaos_prod_app       expect=denied got=denied producer service role reads consumer tables  [ERROR:  42501: permission denied for schema cons]
+PASS  chaos_prod_app       expect=denied got=denied producer service role reads unrelated schema  [ERROR:  42501: permission denied for schema secret]
+PASS  chaos_prod_app       expect=ok     got=ok     producer service role reads own outbox_aggregate  [t]
+PASS  chaos_prod_platform  expect=ok     got=ok     producer platform role INSERTs a platform-wide event  [INSERT 0 1]
+PASS  chaos_prod_platform  expect=denied got=denied producer platform role INSERTs an event of a tenant without setting the tenant  [ERROR:  42501: new row violates row-level security policy for table "outbox_event"]
+PASS  chaos_prod_platform  expect=ok     got=ok     producer platform role INSERTs an event of a tenant after setting that tenant itself (observation)  [BEGIN]
+PASS  chaos_prod_platform  expect=denied got=denied producer platform role cannot SELECT outbox_event  [ERROR:  42501: permission denied for table outbox_event]
+
+40/40 as expected
+finished 2026-10-12T07:29:30Z exit 0
