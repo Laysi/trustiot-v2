@@ -1,0 +1,36 @@
+content: before=82cbe72fc9f4c720 after=82cbe72fc9f4c720
+modes: before=70bd3adbf44220a9 after=70bd3adbf44220a9
+config: before=0e71bb06665a7dc4 after=0e71bb06665a7dc4
+cfg2: before=452b3744cd6c3324 after=452b3744cd6c3324
+--- listing differences, mtime column removed (empty = identical)
+--- listing lines that differ only by mtime
+22
+< drwxr-xr-x 0/0               0 2026-10-13 02:21 usr/lib/postgresql/18/lib/
+> drwxr-xr-x 0/0               0 2026-10-13 02:22 usr/lib/postgresql/18/lib/
+< -rwxr-xr-x 0/0          819608 2026-10-13 02:21 usr/lib/postgresql/18/lib/age.so
+> -rwxr-xr-x 0/0          819608 2026-10-13 02:22 usr/lib/postgresql/18/lib/age.so
+< drwxr-xr-x 0/0               0 2026-10-13 02:21 usr/share/doc/
+> drwxr-xr-x 0/0               0 2026-10-13 02:22 usr/share/doc/
+< drwxr-xr-x 0/0               0 2026-10-13 02:21 usr/share/doc/apache-age/
+< -rw-r--r-- 0/0           12570 2026-10-13 02:21 usr/share/doc/apache-age/LICENSE
+< -rw-r--r-- 0/0             321 2026-10-13 02:21 usr/share/doc/apache-age/NOTICE
+> drwxr-xr-x 0/0               0 2026-10-13 02:22 usr/share/doc/apache-age/
+> -rw-r--r-- 0/0           12570 2026-10-13 02:22 usr/share/doc/apache-age/LICENSE
+> -rw-r--r-- 0/0             321 2026-10-13 02:22 usr/share/doc/apache-age/NOTICE
+=== sim-wronghash: docker build --build-arg AGE_SHA512=00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 exit 1 after 269 s
+324:#12 2.270 server-dev.deb: OK
+325:#12 2.337 downloading https://dlcdn.apache.org/age/PG18/1.8.0/apache-age-1.8.0-src.tar.gz
+326:#12 3.015 sha512sum: WARNING: 1 computed checksum did NOT match
+327:#12 3.015 age.tar.gz: FAILED
+328:#12 3.015 no usable Apache AGE 1.8.0 from https://dlcdn.apache.org/age/PG18
+329:#12 3.015 downloading https://archive.apache.org/dist/age/PG18/1.8.0/apache-age-1.8.0-src.tar.gz
+330:#12 254.6 sha512sum: WARNING: 1 computed checksum did NOT match
+331:#12 254.6 age.tar.gz: FAILED
+332:#12 254.6 no usable Apache AGE 1.8.0 from https://archive.apache.org/dist/age/PG18
+333:#12 254.6 Apache AGE 1.8.0 could not be downloaded and verified from any source
+334:#12 ERROR: process "/bin/sh -c set -eu;     fetch() {       curl --fail --silent --show-error --location --proto '=https' --tlsv1.2         --connect-timeout 20 --retry 5 --retry-all-errors --retry-delay 5         --output \"$1\" \"$2\";     };     pg_server_dev=\"postgresql-server-dev-18_$(prin
+380:ERROR: failed to build: failed to solve: process "/bin/sh -c set -eu;     fetch() {       curl --fail --silent --show-error --location --proto '=https' --tlsv1.2         --connect-timeout 20 --retry 5 --retry-all-errors --retry-delay 5         --output \"$1\" \"$2\";     };     pg_server_dev=\"p
+
+7 packages installed [37.00ms]
+$ tsc --noEmit --project tsconfig.json
+typecheck-exit=0

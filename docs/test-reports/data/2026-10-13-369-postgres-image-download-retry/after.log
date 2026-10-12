@@ -1,0 +1,68 @@
+56 | }
+57 | 
+58 | async function exec(cmd: string[], stdin?: string): Promise<Result> {
+59 |   const proc = Bun.spawn(cmd, { stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin), stdout: "pipe", stderr: "pipe" });
+                        ^
+error: Executable not found in $PATH: "podman"
+  path: "podman",
+ errno: -2,
+  code: "ENOENT"
+
+      at exec (<build dir>
+      at canRunArm64 (<build dir>
+      at <build dir>
+-------------------------------
+
+
+ 0 pass
+ 1 fail
+ 1 error
+Ran 1 test across 1 file. [14.00ms]
+=== after: docker build  exit 0 after 22 s
+325:#12 2.570 server-dev.deb: OK
+326:#12 2.638 downloading https://dlcdn.apache.org/age/PG18/1.8.0/apache-age-1.8.0-src.tar.gz
+327:#12 3.309 age.tar.gz: OK
+328:#12 DONE 3.4s
+id=sha256:dc7b29387996de6497b64e2418343527c385dea9ca0f85c57a291f8d1e3d52bb
+layers=["sha256:8227a1264c7ff2f8bd125b585e62c1cec77dd2099c985c33e08d34292d06144f","sha256:29274d1e8c80bdb71f7b0e41824b0b8b5df71e80235353bf3b351a0a785fee41","sha256:790caeded2aabf9f44ff02a50f7877cc2a0605f5d8a77ae39c4749fd8933eed3","sha256:20c76e1aa4439f768a770e9824ff5eae4a73a215a62a28ea6b00cfefa09b248f","sha256:3ca3d513f257e0930310f8030c09ac7307269bf1cef83c81b9e6ff4bef7e024a","sha256:e13b8b5541cd95
+=== sim-refused: docker build --build-arg AGE_MIRROR_URL=https://127.0.0.1:9/age exit 0 after 273 s
+324:#12 2.210 server-dev.deb: OK
+325:#12 2.278 downloading https://127.0.0.1:9/age/1.8.0/apache-age-1.8.0-src.tar.gz
+326:#12 2.282 curl: (7) Failed to connect to 127.0.0.1 port 9 after 0 ms: Could not connect to server
+327:#12 7.289 curl: (7) Failed to connect to 127.0.0.1 port 9 after 0 ms: Could not connect to server
+328:#12 12.29 curl: (7) Failed to connect to 127.0.0.1 port 9 after 0 ms: Could not connect to server
+329:#12 17.30 curl: (7) Failed to connect to 127.0.0.1 port 9 after 0 ms: Could not connect to server
+330:#12 22.30 curl: (7) Failed to connect to 127.0.0.1 port 9 after 0 ms: Could not connect to server
+331:#12 27.31 curl: (7) Failed to connect to 127.0.0.1 port 9 after 0 ms: Could not connect to server
+332:#12 27.31 no usable Apache AGE 1.8.0 from https://127.0.0.1:9/age
+333:#12 27.31 downloading https://archive.apache.org/dist/age/PG18/1.8.0/apache-age-1.8.0-src.tar.gz
+334:#12 254.4 age.tar.gz: OK
+335:#12 DONE 254.5s
+id=sha256:dc7b29387996de6497b64e2418343527c385dea9ca0f85c57a291f8d1e3d52bb
+layers=["sha256:8227a1264c7ff2f8bd125b585e62c1cec77dd2099c985c33e08d34292d06144f","sha256:29274d1e8c80bdb71f7b0e41824b0b8b5df71e80235353bf3b351a0a785fee41","sha256:790caeded2aabf9f44ff02a50f7877cc2a0605f5d8a77ae39c4749fd8933eed3","sha256:20c76e1aa4439f768a770e9824ff5eae4a73a215a62a28ea6b00cfefa09b248f","sha256:3ca3d513f257e0930310f8030c09ac7307269bf1cef83c81b9e6ff4bef7e024a","sha256:e13b8b5541cd95
+=== sim-404: docker build --build-arg AGE_MIRROR_URL=https://archive.apache.org/dist/age/PG17 exit 0 after 267 s
+324:#12 2.596 server-dev.deb: OK
+325:#12 2.665 downloading https://archive.apache.org/dist/age/PG17/1.8.0/apache-age-1.8.0-src.tar.gz
+326:#12 3.208 curl: (22) The requested URL returned error: 404
+327:#12 9.335 curl: (22) The requested URL returned error: 404
+328:#12 14.86 curl: (22) The requested URL returned error: 404
+329:#12 21.13 curl: (22) The requested URL returned error: 404
+330:#12 26.67 curl: (22) The requested URL returned error: 404
+331:#12 32.19 curl: (22) The requested URL returned error: 404
+332:#12 32.19 downloading https://archive.apache.org/dist/age/PG18/1.8.0/apache-age-1.8.0-src.tar.gz
+333:#12 32.19 no usable Apache AGE 1.8.0 from https://archive.apache.org/dist/age/PG17
+334:#12 249.9 age.tar.gz: OK
+335:#12 DONE 250.0s
+id=sha256:dc7b29387996de6497b64e2418343527c385dea9ca0f85c57a291f8d1e3d52bb
+layers=["sha256:8227a1264c7ff2f8bd125b585e62c1cec77dd2099c985c33e08d34292d06144f","sha256:29274d1e8c80bdb71f7b0e41824b0b8b5df71e80235353bf3b351a0a785fee41","sha256:790caeded2aabf9f44ff02a50f7877cc2a0605f5d8a77ae39c4749fd8933eed3","sha256:20c76e1aa4439f768a770e9824ff5eae4a73a215a62a28ea6b00cfefa09b248f","sha256:3ca3d513f257e0930310f8030c09ac7307269bf1cef83c81b9e6ff4bef7e024a","sha256:e13b8b5541cd95
+=== sim-badhash: docker build --build-arg AGE_SHA512=0000 exit 1 after 300 s
+324:#12 1.919 server-dev.deb: OK
+325:#12 1.988 downloading https://dlcdn.apache.org/age/PG18/1.8.0/apache-age-1.8.0-src.tar.gz
+326:#12 2.645 sha512sum: 'standard input': no properly formatted checksum lines found
+327:#12 2.645 no usable Apache AGE 1.8.0 from https://dlcdn.apache.org/age/PG18
+328:#12 2.645 downloading https://archive.apache.org/dist/age/PG18/1.8.0/apache-age-1.8.0-src.tar.gz
+329:#12 239.2 sha512sum: 'standard input': no properly formatted checksum lines found
+330:#12 239.2 no usable Apache AGE 1.8.0 from https://archive.apache.org/dist/age/PG18
+331:#12 239.2 Apache AGE 1.8.0 could not be downloaded and verified from any source
+332:#12 ERROR: process "/bin/sh -c set -eu;     fetch() {       curl --fail --silent --show-error --location --proto '=https' --tlsv1.2         --connect-timeout 20 --retry 5 --retry-all-errors --retry-delay 5         --output \"$1\" \"$2\";     };     pg_server_dev=\"postgresql-server-dev-18_$(prin
+376:ERROR: failed to build: failed to solve: process "/bin/sh -c set -eu;     fetch() {       curl --fail --silent --show-error --location --proto '=https' --tlsv1.2         --connect-timeout 20 --retry 5 --retry-all-errors --retry-delay 5         --output \"$1\" \"$2\";     };     pg_server_dev=\"p
