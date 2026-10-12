@@ -518,6 +518,63 @@ pub fn find_schema_changes(source: &str) -> Vec<SchemaChange> {
     found
 }
 
+/// Directories searched for Rust code that removes containers, test support included (the
+/// dev environment's TypeScript is checked by its own end-to-end test). `tools/repo-check` is
+/// left out because its own tests hold the examples.
+pub const CONTAINER_REMOVAL_ROOTS: [&str; 5] = ["crates", "services", "edge", "factory", "tools"];
+
+/// Lists the Rust files under [`CONTAINER_REMOVAL_ROOTS`], sorted. Build output, installed
+/// dependencies, hidden directories and `tools/repo-check` are skipped.
+pub fn find_container_removal_sources(root: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut found = Vec::new();
+    let mut pending: Vec<PathBuf> = CONTAINER_REMOVAL_ROOTS
+        .iter()
+        .map(|name| root.join(name))
+        .filter(|path| path.is_dir())
+        .collect();
+    let own = root.join("tools").join("repo-check");
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if entry.file_type()?.is_dir() {
+                if !is_skipped_dir(&entry.file_name()) && path != own {
+                    pending.push(path);
+                }
+            } else if path.extension() == Some(OsStr::new("rs")) {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// Finds container removals that keep the container's anonymous volumes: an argument list that
+/// starts with `"rm"` and holds `"--force"` (or `"-f"`) but neither `"--volumes"` nor `"-v"`,
+/// as in `.args(["rm", "--force", &name])`. Returns the 1-based line of each `"rm"`.
+///
+/// The Postgres, ClickHouse and Mosquitto images declare `VOLUME`s, so every container the tests
+/// start gets anonymous volumes, and `rm --force` alone leaves them behind: a workstation ran out
+/// of podman locks with 2,011 of them (Laysi/trustiot-v2#334). Lists such as
+/// `["volume", "rm", ...]` or `["image", "rm", ...]` do not start with `"rm"` and are not matched.
+pub fn find_container_removals_without_volumes(source: &str) -> Vec<usize> {
+    let mut found = Vec::new();
+    for (start, _) in source.match_indices("\"rm\"") {
+        // `start` is the byte offset of an ASCII match, so it is a character boundary.
+        let (before, rest) = source.split_at(start);
+        if !before.trim_end().ends_with('[') {
+            continue;
+        }
+        let list = rest.split(']').next().unwrap_or(rest);
+        let has = |argument: &str| list.contains(&format!("\"{argument}\""));
+        if (has("--force") || has("-f")) && !has("--volumes") && !has("-v") {
+            found.push(before.matches('\n').count() + 1);
+        }
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -822,6 +879,42 @@ mod tests {
             let created = "the table was created";
         "#;
         assert_eq!(find_schema_changes(source), Vec::new());
+    }
+
+    #[test]
+    fn container_removals_that_keep_volumes_are_found() {
+        let source = r#"
+            Command::new(runtime).args(["rm", "--force", &self.name]);
+            podmanOk(["rm", "-f", name]);
+            runtime_output(runtime, &[
+                "rm",
+                "--force",
+                &name,
+            ]);
+        "#;
+        assert_eq!(
+            find_container_removals_without_volumes(source),
+            vec![2, 3, 5]
+        );
+    }
+
+    #[test]
+    fn container_removals_with_volumes_and_other_removals_are_not_found() {
+        let source = r#"
+            Command::new(runtime).args(["rm", "--force", "--volumes", &self.name]);
+            podmanOk(["rm", "--force", "--volumes", "--time", "10", ...names]);
+            podmanOk(["rm", "-f", "-v", name]);
+            podmanOk(["volume", "rm", "--force", volume]);
+            podmanOk(["network", "rm", "--force", network]);
+            podmanOk(["image", "rm", "--force", image]);
+            podmanOk(["rmi", "--force", image]);
+            podmanOk(["rm", name]);
+            let unterminated = "rm";
+        "#;
+        assert_eq!(
+            find_container_removals_without_volumes(source),
+            Vec::<usize>::new()
+        );
     }
 
     #[test]

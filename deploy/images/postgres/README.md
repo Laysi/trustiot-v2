@@ -20,8 +20,16 @@ AGE 的檔案只有 `age.so`、`age.control`、`age--*.sql`，另外附 AGE 的 
 arm64 映像裡不執行任何程式，所以 x86 的機器不用模擬器也能建置。release.yml 原本在 x86 的代管 runner 上建置，Laysi/trustiot-v2#310 起改在 arm64 runner 上，這條規則由它的 plan 檢查。`Containerfile` 分三個階段：
 
 1. `base`：CloudNativePG 的 arm64 映像，只當檔案來源與最終映像的基底。
-2. `build`：同一個 multi-arch index 中建置機架構的映像（`--platform=$BUILDPLATFORM`），所以 `pg_config` 回報的版本與路徑和 arm64 映像相同。從 `base` 複製 arm64 的 PGXS makefile（編譯旗標）與 dpkg 狀態，確認兩邊的 `postgresql-18` 版本都等於 `PG_PACKAGE_VERSION`；裝上交叉編譯器；下載 aarch64 的 `postgresql-server-dev-18` 取得伺服器標頭（兩種架構的標頭只差 `pg_config.h`，但它決定標頭裡 CPU 相關的程式路徑，所以必須是 aarch64 的）；下載並驗證 AGE 原始碼，以 `aarch64-linux-gnu-gcc` 交叉編譯。
+2. `build`：同一個 multi-arch index 中建置機架構的映像（`--platform=$BUILDPLATFORM`），所以 `pg_config` 回報的版本與路徑和 arm64 映像相同。從 `base` 複製 arm64 的 PGXS makefile（編譯旗標）與 dpkg 狀態，確認兩邊的 `postgresql-18` 版本都等於 `PG_PACKAGE_VERSION`；裝上交叉編譯器；下載 aarch64 的 `postgresql-server-dev-18` 取得伺服器標頭（兩種架構的標頭只差 `pg_config.h`，但它決定標頭裡 CPU 相關的程式路徑，所以必須是 aarch64 的）；下載並驗證 AGE 原始碼（來源與重試見下一節），以 `aarch64-linux-gnu-gcc` 交叉編譯。
 3. 最終映像：`base` 加上複製進來的 AGE 檔案，沒有 `RUN`。
+
+### 下載的重試與來源
+
+建置時有兩個對外下載，都以釘選的雜湊驗證，所以重試或換來源不影響安全性：
+
+- 兩個下載共用 `Containerfile` 的 `fetch` 函式：`curl --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20`。curl 的 `--retry` 只重試逾時與 HTTP 408、429、5xx，連不上伺服器（curl 錯誤碼 7）不重試，一次暫時的網路問題就會讓 CI、release 與 nightly 的建置失敗（Laysi/trustiot-v2#369）；`--retry-all-errors` 補上這一類。`--connect-timeout` 讓不通的位址不必等到系統預設的逾時（約 76 秒）才放棄。
+- AGE 原始碼先從 Apache 的鏡像（`AGE_MIRROR_URL`，預設 `dlcdn.apache.org`）下載，連不上、下載失敗或雜湊不符時改用 `archive.apache.org`（`AGE_ARCHIVE_URL`）。鏡像只留目前的發行版，版本被移出後仍能從存檔取得；兩個來源都以同一個 SHA-512 驗證，都失敗時建置失敗。兩個 `ARG` 只在 `build` 階段，不影響最終映像的內容。測試失敗路徑時，可把 `AGE_MIRROR_URL` 指向連不上的位址（`--build-arg AGE_MIRROR_URL=https://127.0.0.1:9/age`）。
+- Debian snapshot 的 apt 不必改：`apt-get` 已帶 `-o Acquire::Retries=5`，apt 的重試包含連線失敗。PGDG 的 deb 沒有備援來源，因為 apt-archive.postgresql.org 是唯一保留舊版本的地方。
 
 編譯時的兩個取捨：
 

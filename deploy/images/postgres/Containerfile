@@ -12,8 +12,13 @@ FROM ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie@sha256:37ade18dbdddba
 FROM --platform=$BUILDPLATFORM ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie@sha256:37ade18dbdddba430858c72725aceeec66f33fa5333e82ea1df4942f6c1c83a3 AS build
 
 # Apache AGE source release (signed by the AGE release manager; the SHA-512 is the one published
-# next to the tarball on archive.apache.org).
+# next to the tarball on archive.apache.org). The tarball comes from Apache's mirror network first
+# and from the archive when the mirror cannot be reached or no longer holds the version (a mirror
+# only keeps current releases; the archive keeps all of them and is slower). Whichever source
+# answers, the same SHA-512 decides whether the file is used.
 ARG AGE_VERSION=1.8.0
+ARG AGE_MIRROR_URL=https://dlcdn.apache.org/age/PG18
+ARG AGE_ARCHIVE_URL=https://archive.apache.org/dist/age/PG18
 ARG AGE_SHA512=8103dc6a4daec0441c2bdfe4e456be619d04526efa5c4e1a5148a29d7e6359e5df7d9a1fabbc6a6a08f6229c4d6f8634b7bf3554eca8ffb58550382542279866
 # Server headers of the exact PostgreSQL build in the base image, for aarch64. Only
 # pg_config.h differs between architectures, but it decides which CPU-specific code paths the
@@ -68,19 +73,37 @@ RUN set -eu; \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
+# fetch: curl's --retry alone repeats only timeouts and HTTP 408, 429 and 5xx, so a refused or
+# unreachable connection would fail the build at once; --retry-all-errors repeats those too, and
+# --connect-timeout keeps one dead address from holding the build for minutes. A repeated or
+# redirected download cannot weaken anything: every file is verified against its pinned hash
+# before it is used. A source that fails or serves a file with the wrong hash makes the loop try
+# the next one; the build fails only when every source did.
 RUN set -eu; \
+    fetch() { \
+      curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+        --connect-timeout 20 --retry 5 --retry-all-errors --retry-delay 5 \
+        --output "$1" "$2"; \
+    }; \
     pg_server_dev="postgresql-server-dev-18_$(printf '%s' "${PG_PACKAGE_VERSION}" | sed 's/+/%2B/g')_arm64.deb"; \
-    curl --fail --silent --show-error --location --retry 5 --proto '=https' --tlsv1.2 \
-      --output server-dev.deb \
-      "https://apt-archive.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/${pg_server_dev}"; \
+    fetch server-dev.deb "https://apt-archive.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/${pg_server_dev}"; \
     echo "${PG_SERVER_DEV_SHA256}  server-dev.deb" | sha256sum --check --strict; \
     dpkg-deb --extract server-dev.deb /tmp/server-dev; \
     cp -a /tmp/server-dev/usr/include/postgresql /usr/include/; \
     grep -q '#define USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK 1' /usr/include/postgresql/18/server/pg_config.h; \
-    curl --fail --silent --show-error --location --retry 5 --proto '=https' --tlsv1.2 \
-      --output age.tar.gz \
-      "https://archive.apache.org/dist/age/PG18/${AGE_VERSION}/apache-age-${AGE_VERSION}-src.tar.gz"; \
-    echo "${AGE_SHA512}  age.tar.gz" | sha512sum --check --strict; \
+    age_file="apache-age-${AGE_VERSION}-src.tar.gz"; \
+    age_ok=; \
+    for age_base in "${AGE_MIRROR_URL}" "${AGE_ARCHIVE_URL}"; do \
+      echo "downloading ${age_base}/${AGE_VERSION}/${age_file}"; \
+      if fetch age.tar.gz "${age_base}/${AGE_VERSION}/${age_file}" \
+        && echo "${AGE_SHA512}  age.tar.gz" | sha512sum --check --strict; then \
+        age_ok=1; break; \
+      fi; \
+      echo "no usable Apache AGE ${AGE_VERSION} from ${age_base}" >&2; \
+    done; \
+    if [ -z "${age_ok}" ]; then \
+      echo "Apache AGE ${AGE_VERSION} could not be downloaded and verified from any source" >&2; exit 1; \
+    fi; \
     mkdir age; \
     tar --extract --gzip --file age.tar.gz --strip-components 1 --directory age
 

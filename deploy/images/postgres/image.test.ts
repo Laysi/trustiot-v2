@@ -128,6 +128,26 @@ describe("Containerfile", () => {
     }
   });
 
+  test("every download retries connection errors and is verified against a pinned hash", () => {
+    const instructions = stages(CONTAINERFILE).flatMap((stage) => stage.instructions);
+    const curls = instructions.flatMap((line) => line.match(/\bcurl --[^;]*/g) ?? []);
+    // One curl call, inside the `fetch` function that the downloads share.
+    expect(curls.length).toBe(1);
+    for (const curl of curls) {
+      expect(curl).toContain("--fail");
+      expect(curl).toContain("--retry-all-errors");
+      expect(curl).toContain("--retry-delay");
+      expect(curl).toContain("--connect-timeout");
+    }
+    expect(instructions.join("\n")).toContain("sha256sum --check --strict");
+    // The two AGE sources, mirror first, then the archive; both go through the same SHA-512 check.
+    expect(containerfileArg("AGE_MIRROR_URL")).toMatch(/^https:\/\/dlcdn\.apache\.org\/age\/PG18$/);
+    expect(containerfileArg("AGE_ARCHIVE_URL")).toBe("https://archive.apache.org/dist/age/PG18");
+    const loop = /for age_base in "\$\{AGE_MIRROR_URL\}" "\$\{AGE_ARCHIVE_URL\}"; do[\s\S]*?done;/.exec(instructions.join("\n"))?.[0] ?? "";
+    expect(loop).toContain('fetch age.tar.gz "${age_base}/');
+    expect(loop).toContain('echo "${AGE_SHA512}  age.tar.gz" | sha512sum --check --strict');
+  });
+
   test("ends as the postgres user that CloudNativePG expects", () => {
     const last = stages(CONTAINERFILE).at(-1);
     expect(last?.instructions.filter((line) => /^USER\s/i.test(line)).at(-1)).toBe(`USER ${POSTGRES_UID}`);
@@ -154,13 +174,13 @@ describe("image", () => {
         await run(["podman", "cp", `${created}:${path}`, join(files, path.split("/").at(-1) ?? "")]);
       }
     } finally {
-      await exec(["podman", "rm", "--force", created]);
+      await exec(["podman", "rm", "--force", "--volumes", created]);
     }
   }, BUILD_TIMEOUT_MS);
 
   afterAll(async () => {
     if (container !== "") {
-      await exec(["podman", "rm", "--force", "--time", "0", container]);
+      await exec(["podman", "rm", "--force", "--volumes", "--time", "0", container]);
     }
     if (files !== "") {
       rmSync(files, { recursive: true, force: true });
