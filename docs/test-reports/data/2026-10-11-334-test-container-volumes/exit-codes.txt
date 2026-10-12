@@ -1,0 +1,14 @@
+fmt 0
+clippy 0
+clippy-nodefault 0
+cargo-test 0
+service-kit-nodefault 0
+openapi 0
+deny 0
+scripts-install 0
+scripts-typecheck 0
+scripts-test 0
+chart 0
+workflows 0
+secrets 0
+e2e 0

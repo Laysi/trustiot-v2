@@ -1,0 +1,8 @@
+A. run with a named volume on /mosquitto/data; mounts:
+   volume:trustiot-334-experiment-named->/mosquitto/data
+   volume:<volume-name>->/mosquitto/log
+   
+   after plain 'rm --force': anonymous volume exists: yes
+B. after 'rm --force --volumes': anonymous volume exists: no; named volume exists: yes
+C. 'run --rm' of a container that exits: container exists: no
+   dangling volumes before/after a 'run --rm' of the image: 45/45 (other agents may add some in between)

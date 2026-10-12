@@ -154,13 +154,13 @@ describe("image", () => {
         await run(["podman", "cp", `${created}:${path}`, join(files, path.split("/").at(-1) ?? "")]);
       }
     } finally {
-      await exec(["podman", "rm", "--force", created]);
+      await exec(["podman", "rm", "--force", "--volumes", created]);
     }
   }, BUILD_TIMEOUT_MS);
 
   afterAll(async () => {
     if (container !== "") {
-      await exec(["podman", "rm", "--force", "--time", "0", container]);
+      await exec(["podman", "rm", "--force", "--volumes", "--time", "0", container]);
     }
     if (files !== "") {
       rmSync(files, { recursive: true, force: true });

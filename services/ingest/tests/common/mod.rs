@@ -147,7 +147,8 @@ struct Container {
 impl Drop for Container {
     fn drop(&mut self) {
         let _ = Command::new(self.runtime)
-            .args(["rm", "--force", &self.name])
+            // `--volumes`: the image's anonymous volumes go with the container (Laysi/trustiot-v2#334).
+            .args(["rm", "--force", "--volumes", &self.name])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();

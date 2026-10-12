@@ -207,7 +207,9 @@ fn run_container(runtime: &'static str, name: &str, env: &[&str], fixed_port: bo
             fixed_port && port_is_taken(&stderr) && attempt < PORT_ATTEMPTS,
             "{runtime} run failed (attempt {attempt} of {PORT_ATTEMPTS}): {stderr}"
         );
-        let _ = Command::new(runtime).args(["rm", "--force", name]).output();
+        let _ = Command::new(runtime)
+            .args(["rm", "--force", "--volumes", name])
+            .output();
         attempt += 1;
     }
 }
