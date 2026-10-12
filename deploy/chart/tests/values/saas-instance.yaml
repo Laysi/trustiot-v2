@@ -7,6 +7,14 @@ hosts:
   gateway: gw.saas.trustiot.test
   ota: ota.saas.trustiot.test
 
+internalIdentity:
+  # Example public key; its private key was discarded when it was generated, so nothing can sign
+  # for it. The identity service's private key Secret (signingKeySecret) is left out: the nightly
+  # and e2e installs run an identity double that does not read it.
+  publicKeys:
+    - kid: 2026-10-a
+      x: jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8
+
 clickhouse:
   bundled:
     # Bootstrap admin password of the bundled ClickHouse; how Secrets reach the cluster is
@@ -57,3 +65,8 @@ observability:
     environment: test
     dsnSecret:
       name: trustiot-sentry
+  # The collector's ClickHouse account password (the migration Job creates the account with it).
+  collector:
+    clickhouse:
+      passwordSecret:
+        name: trustiot-otel-collector-clickhouse

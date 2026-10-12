@@ -131,18 +131,41 @@ export function affectsCargoDeny(path: string): boolean {
 
 /** Files outside the chart that `bun test deploy/chart` reads (checked by changes.test.ts). */
 const HELM_READ_FILES: ReadonlySet<string> = new Set([
+  // The collector's key redaction rules are checked against service-kit's names.
+  "crates/service-kit/src/telemetry/redact.rs",
   "docs/architecture/deployment.md",
   "scripts/lib/stack.ts",
   "services/ingest/tests/common/mod.rs",
 ]);
 
-/** `bun test deploy/chart`: the chart, its tests, the mesh values and a few cross-checked files. */
+/**
+ * What `bun test deploy/flux` reads besides deploy/flux/ and the chart (Laysi/trustiot-v2#70):
+ * the SOPS rules and the scripts that its tests load (checked by changes.test.ts).
+ */
+const FLUX_READ_FILES: ReadonlySet<string> = new Set([".sops.yaml", "scripts/release/flux.ts"]);
+
+/**
+ * ClickHouse migrations: the chart tests check the collector's exporter columns against the log
+ * table migration, and the log pipeline e2e test applies the whole directory (it names the
+ * directory itself, so the rule accepts the directory path and every file under it).
+ */
+const HELM_READ_DIR = "services/ingest/migrations/clickhouse";
+
+/**
+ * `bun test deploy/chart` and `bun test deploy/flux`: the chart, its tests, the mesh values, the
+ * ClickHouse migrations, the SaaS GitOps tree and a few cross-checked files.
+ */
 export function affectsHelm(path: string): boolean {
   return (
     affectsEveryJob(path) ||
     path.startsWith("deploy/chart/") ||
     path.startsWith("deploy/istio/") ||
-    HELM_READ_FILES.has(path)
+    path.startsWith("deploy/flux/") ||
+    path.startsWith("scripts/flux/") ||
+    path === HELM_READ_DIR ||
+    path.startsWith(`${HELM_READ_DIR}/`) ||
+    HELM_READ_FILES.has(path) ||
+    FLUX_READ_FILES.has(path)
   );
 }
 

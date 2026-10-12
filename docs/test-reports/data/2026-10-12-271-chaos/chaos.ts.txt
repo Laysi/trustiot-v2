@@ -1,0 +1,255 @@
+// Orchestrator for the outbox chaos run under decision 29's connection model (re-run of the
+// harness of Laysi/trustiot-v2#54's independent verification, for Laysi/trustiot-v2#271).
+// Usage: bun chaos.ts <chaos-binary> <outdir> <minutes> <seed> [drain-minutes]
+import { $ } from "bun";
+import { appendFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { LAG_SQL, ROLES, RUNTIME, seeded, sleep, startRun, sumStats } from "./common.ts";
+
+const [bin, outdir, minutesArg, seedArg, drainArg] = process.argv.slice(2);
+const minutes = Number(minutesArg ?? "20");
+const seed = Number(seedArg ?? "1");
+const drainMinutes = Number(drainArg ?? "15");
+const R = seeded(seed);
+const rnd = (a: number, b: number) => a + R() * (b - a);
+
+const run = await startRun({ bin, outdir, name: "main", port: Number(process.env.CHAOS_PORT ?? "55471"), seed, logFile: "timeline.txt" });
+const { env, psql, waitPg, pg } = run;
+const t0 = Date.now();
+const now = () => ((Date.now() - t0) / 1000).toFixed(1);
+const ev = (s: string) => run.log(s);
+for (const f of readdirSync(outdir)) if (f.startsWith("producer-") || f === "STOP" || f === "STOP_CONSUMERS") rmSync(`${outdir}/${f}`);
+ev(`seed ${seed}, ${minutes} minutes of chaos, drain limit ${drainMinutes} minutes`);
+
+const counts = {
+  producer_kills: 0, consumer_kills: 0, producer_restarts: 0, consumer_restarts: 0,
+  pg_graceful_restarts: 0, pg_crashes_sigkill: 0, pg_terminate_backend_calls: 0, backends_terminated: 0,
+  long_write_txs_other_schema: 0, prepared_tx_across_crash: 0, replays_reprocess: 0, replays_skip: 0,
+};
+
+// ---- processes
+type Proc = { name: string; kind: "producer" | "consumer"; args: string[]; p?: ReturnType<typeof Bun.spawn>; n: number; dead: boolean };
+const procs: Proc[] = [
+  { name: "p1", kind: "producer", args: ["producer", "p1", outdir], n: 0, dead: true },
+  { name: "p2", kind: "producer", args: ["producer", "p2", outdir], n: 0, dead: true },
+  { name: "p3", kind: "producer", args: ["producer", "p3", outdir], n: 0, dead: true },
+  { name: "c1", kind: "consumer", args: ["consumer", "c1", "run", outdir], n: 0, dead: true },
+  { name: "c2", kind: "consumer", args: ["consumer", "c2", "poll", outdir], n: 0, dead: true },
+  { name: "c3", kind: "consumer", args: ["consumer", "c3", "poll", outdir], n: 0, dead: true },
+];
+function start(pr: Proc) {
+  pr.n++;
+  const file = `${outdir}/procs/${pr.name}-${String(pr.n).padStart(3, "0")}.log`;
+  pr.p = Bun.spawn([bin, ...pr.args], {
+    env: { ...env, CHAOS_PROC_SEED: run.procSeed(pr.name, pr.n) },
+    stdout: Bun.file(file),
+    stderr: Bun.file(file + ".err"),
+  });
+  pr.dead = false;
+  pr.p.exited.then(() => { pr.dead = true; });
+}
+let stopping = false;
+
+for (const pr of procs) start(pr);
+ev("started 3 producers and 3 consumers");
+
+const durMs = minutes * 60_000;
+const elapsed = () => Date.now() - t0;
+
+// ---- kill loop
+async function killLoop() {
+  while (!stopping) {
+    await sleep(rnd(2500, 9000));
+    if (stopping) break;
+    const alive = procs.filter((p) => !p.dead);
+    if (!alive.length) continue;
+    const victims = [alive[Math.floor(R() * alive.length)]];
+    if (R() < 0.15) victims.push(alive[Math.floor(R() * alive.length)]);
+    for (const v of new Set(victims)) {
+      if (v.dead) continue;
+      v.p!.kill("SIGKILL");
+      if (v.kind === "producer") counts.producer_kills++; else counts.consumer_kills++;
+      ev(`SIGKILL ${v.name}#${v.n}`);
+      const pause = rnd(300, 4000);
+      (async () => {
+        await sleep(pause);
+        if (stopping) return;
+        start(v);
+        if (v.kind === "producer") counts.producer_restarts++; else counts.consumer_restarts++;
+        ev(`restart ${v.name}#${v.n}`);
+      })();
+    }
+  }
+}
+
+// ---- postgres faults
+let pgDown = false;
+async function pgGraceful() {
+  ev("postgres: graceful restart");
+  pgDown = true;
+  await $`${RUNTIME} restart -t 10 ${pg}`.quiet().nothrow();
+  await waitPg();
+  pgDown = false;
+  counts.pg_graceful_restarts++;
+  ev("postgres: back");
+}
+async function pgCrash() {
+  ev("postgres: SIGKILL the container (crash recovery)");
+  pgDown = true;
+  await $`${RUNTIME} kill ${pg}`.quiet().nothrow();
+  await sleep(rnd(500, 3000));
+  await $`${RUNTIME} start ${pg}`.quiet().nothrow();
+  await waitPg();
+  pgDown = false;
+  counts.pg_crashes_sigkill++;
+  ev("postgres: back after crash");
+}
+const roleList = ROLES.map((r) => `'${r}'`).join(",");
+async function terminateLoop() {
+  while (!stopping) {
+    await sleep(rnd(20_000, 45_000));
+    if (stopping || pgDown) continue;
+    const frac = R() < 0.5 ? "true" : "random() < 0.5";
+    const r = await psql(`select count(*) from (select pg_terminate_backend(pid) from pg_stat_activity where usename in (${roleList}) and ${frac}) t`);
+    counts.pg_terminate_backend_calls++;
+    const n = Number(r.out) || 0;
+    counts.backends_terminated += n;
+    ev(`pg_terminate_backend on ${n} backends (${frac})`);
+  }
+}
+async function longTxLoop() {
+  while (!stopping) {
+    await sleep(rnd(40_000, 75_000));
+    if (stopping || pgDown) continue;
+    const secs = Math.round(rnd(15, 35));
+    counts.long_write_txs_other_schema++;
+    ev(`long write transaction in schema other: ${secs}s`);
+    psql(`begin; insert into other.junk default values; select pg_sleep(${secs}); commit;`).then((r) =>
+      ev(`long transaction ended ok=${r.ok} ${r.err.slice(0, 80)}`));
+  }
+}
+async function preparedAcrossCrash() {
+  ev("prepared transaction in schema other, then crash of postgres while it is held");
+  const r = await psql(`begin; insert into other.junk default values; prepare transaction 'chaos1';`);
+  if (!r.ok) { ev("prepare failed: " + r.err); return; }
+  await sleep(8000);
+  await pgCrash();
+  const after = await psql("select gid from pg_prepared_xacts");
+  ev(`prepared transactions after crash recovery: ${after.out}`);
+  await sleep(15000);
+  const c = await psql("commit prepared 'chaos1'");
+  ev(`commit prepared ok=${c.ok} ${c.err}`);
+  counts.prepared_tx_across_crash++;
+}
+
+// ---- lag sampling (independent of the library: counts events after the subscription position)
+writeFileSync(`${outdir}/lag.csv`, "t_s,lag_events,oldest_other_xact_age_s,events_total\n");
+let maxLag = 0;
+let finished = false;
+async function lagLoop() {
+  while (true) {
+    if (!pgDown) {
+      const r = await psql(
+        `select (${LAG_SQL}),
+                coalesce((select extract(epoch from now() - min(xact_start))::int from pg_stat_activity where backend_xid is not null and datname = 'postgres' and usename = 'postgres' and state <> 'idle' and pid <> pg_backend_pid()), 0),
+                (select count(*) from prod.outbox_event)`);
+      if (r.ok) {
+        const [lag, age, total] = r.out.split("|");
+        appendFileSync(`${outdir}/lag.csv`, `${now()},${lag},${age},${total}\n`);
+        maxLag = Math.max(maxLag, Number(lag));
+      }
+    }
+    if (finished) return;
+    await sleep(3000);
+  }
+}
+
+const loops = [killLoop(), terminateLoop(), longTxLoop(), lagLoop()];
+
+// ---- scripted schedule
+const replayRun = (mode: "reprocess" | "skip") => async () => {
+  ev(`replay (${mode === "reprocess" ? "Reprocess" : "SkipProcessed"} from START) mid-run`);
+  for (let i = 0; i < 20; i++) {
+    const r = await $`${bin} replay ${mode}`.env(env).quiet().nothrow();
+    if (r.exitCode === 0) {
+      if (mode === "reprocess") counts.replays_reprocess++; else counts.replays_skip++;
+      ev(`replay ${mode} committed`);
+      return;
+    }
+    await sleep(1000);
+  }
+  ev(`replay ${mode} FAILED to run`);
+};
+const schedule: { at: number; what: () => Promise<void>; label: string }[] = [
+  { at: 0.12, label: "pg graceful", what: pgGraceful },
+  { at: 0.25, label: "pg crash", what: pgCrash },
+  { at: 0.38, label: "replay reprocess", what: replayRun("reprocess") },
+  { at: 0.5, label: "prepared tx + crash", what: preparedAcrossCrash },
+  { at: 0.62, label: "pg graceful", what: pgGraceful },
+  { at: 0.72, label: "replay skip", what: replayRun("skip") },
+  { at: 0.8, label: "pg crash", what: pgCrash },
+];
+for (const s of schedule) {
+  const wait = s.at * durMs - elapsed();
+  if (wait > 0) await sleep(wait);
+  await s.what();
+}
+const rest = durMs - elapsed();
+if (rest > 0) await sleep(rest);
+
+// ---- wind down
+ev("chaos phase over: stopping producers gracefully, no more faults");
+stopping = true;
+await sleep(500);
+writeFileSync(`${outdir}/STOP`, "");
+// Make sure everything is running for the drain; no more kills.
+await waitPg();
+for (const pr of procs) if (pr.dead) { start(pr); ev(`restart ${pr.name}#${pr.n} for drain`); }
+// Wait for producers to exit.
+for (const pr of procs.filter((p) => p.kind === "producer")) {
+  const t = setTimeout(() => pr.p?.kill("SIGKILL"), 60_000);
+  await pr.p!.exited;
+  clearTimeout(t);
+}
+// Outstanding long tx / prepared tx must be gone for the drain.
+for (let i = 0; i < 60; i++) {
+  const r = await psql("select count(*) from pg_stat_activity where backend_xid is not null and pid <> pg_backend_pid() and usename = 'postgres'");
+  const p = await psql("select count(*) from pg_prepared_xacts");
+  if (r.out === "0" && p.out === "0") break;
+  await sleep(2000);
+}
+let drained = false;
+const drainStart = Date.now();
+while (Date.now() - drainStart < drainMinutes * 60_000) {
+  const r = await psql(LAG_SQL);
+  if (r.ok && r.out === "0") { drained = true; break; }
+  await sleep(1000);
+}
+ev(`drain: lag reached 0 = ${drained} after ${((Date.now() - drainStart) / 1000).toFixed(1)}s`);
+await sleep(4000); // one more lag sample from the library's own gauge
+writeFileSync(`${outdir}/STOP_CONSUMERS`, "");
+for (const pr of procs.filter((p) => p.kind === "consumer")) {
+  const t = setTimeout(() => pr.p?.kill("SIGKILL"), 30_000);
+  await pr.p!.exited;
+  clearTimeout(t);
+}
+finished = true;
+await Promise.allSettled(loops);
+
+// ---- stats from the consumers (last STAT line of every incarnation: a lower bound for the
+// poll-mode replicas, since a kill loses up to 2 s of counting)
+const statFiles = readdirSync(`${outdir}/procs`).filter((f) => f.startsWith("c") && !f.endsWith(".err"));
+const tot = sumStats(outdir, statFiles, ["delivered", "dup", "dead", "handled", "retry_before", "retry_after", "probes", "panics"]);
+const finalLag: string[] = [];
+for (const pr of procs.filter((p) => p.kind === "consumer")) {
+  const f = `${pr.name}-${String(pr.n).padStart(3, "0")}.log`;
+  const last = (await Bun.file(`${outdir}/procs/${f}`).text()).split("\n").filter((l) => l.startsWith("STAT")).at(-1);
+  finalLag.push(`${f}: ${last?.match(/lag=(.*)$/)?.[1]}`);
+}
+const v = await $`${bin} verify ${outdir}`.env(env).quiet().nothrow();
+writeFileSync(`${outdir}/verify.json`, v.stdout.toString() + v.stderr.toString());
+writeFileSync(`${outdir}/orchestrator-counts.json`, JSON.stringify({ seed, minutes, wall_clock_s: Number(now()), counts, handler_side_lower_bounds: tot, max_lag_events_sampled: maxLag, final_library_lag_gauge_last_samples: finalLag, drained, verify_exit: v.exitCode }, null, 2));
+console.log(v.stdout.toString());
+console.log(JSON.stringify({ counts, tot, maxLag, finalLag, drained }, null, 2));
+await $`${RUNTIME} logs ${pg}`.quiet().nothrow().then((r) => writeFileSync(`${outdir}/postgres.log`, r.stdout.toString() + r.stderr.toString()));
+if (v.exitCode === 0 || process.env.KEEP_PG !== "1") await $`${RUNTIME} rm -f ${pg}`.quiet().nothrow();
+process.exit(v.exitCode === 0 ? 0 : 1);

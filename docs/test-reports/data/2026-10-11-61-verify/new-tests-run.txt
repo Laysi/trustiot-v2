@@ -1,0 +1,35 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running tests/adversarial.rs (target/debug/deps/adversarial-1172f07f1edf952e)
+
+running 11 tests
+test cookie_parsing_accepts_only_one_exact_session_cookie ... ok
+test killed_connections_never_turn_into_401_or_200_for_the_wrong_person ... ok
+test memberships_are_isolated_by_tenant_and_by_user ... ok
+log evidence: /home/ruisi/projects/trustiot-v2/.claude/worktrees/agent-a06d17c74a54c7aea/target/tmp/identity-verify-log-evidence-921451-7/trace-logs.txt (124675 bytes)
+test nothing_secret_is_logged_at_any_level ... ok
+test rotation_across_restarts_keeps_old_tokens_valid_and_new_ones_under_the_new_kid ... ok
+test slow_or_locked_database_answers_503_and_recovers_without_failing_open ... ok
+test the_audience_follows_the_route_and_an_allow_carries_only_the_identity_header ... ok
+test session_expiry_and_revocation_are_decided_by_the_database_clock ... ok
+test the_health_port_serves_only_the_health_routes ... ok
+test wrong_credentials_or_database_fail_closed ... ok
+test the_service_refuses_to_start_without_a_usable_matching_signing_key ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 33.61s
+
+     Running tests/token_claims.rs (target/debug/deps/token_claims-fec875e39c1519b4)
+
+running 8 tests
+test a_token_signed_with_another_key_or_under_another_kid_is_rejected ... ok
+test algorithm_confusion_is_rejected_before_any_key_is_used ... ok
+test audience_and_issuer_are_exact ... ok
+test expiry_issued_at_and_skew_boundaries ... ok
+test header_extras_and_type_confusion_are_rejected ... ok
+test rotation_keeps_old_tokens_valid_until_they_expire ... ok
+test the_baseline_forgery_helper_produces_an_accepted_token ... ok
+test payload_or_header_tampering_after_signing_is_rejected ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+

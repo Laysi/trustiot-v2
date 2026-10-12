@@ -1,33 +1,56 @@
 //! Helpers shared by the integration tests: a Postgres to test against, fresh producer and
-//! consumer schemas per test, a test event, and running `outbox-example` as a real process.
+//! consumer schemas and roles per test, a test event, and running `outbox-example` as a real
+//! process.
 //!
-//! The Postgres and process helpers follow `crates/service-kit/tests/support` (same image, same
-//! `TEST_DATABASE_URL` and `CI` rules), until a shared test crate exists.
+//! The Postgres serves TLS and the consumer connects as services do (decision 29): it reads the
+//! producer's `outbox_event` as its platform role, under the row-level security of
+//! `crates/service-kit/sql/outbox-event.sql`, and processes events as its service role, through
+//! service-kit pools that verify the server and check every session. The container and process
+//! helpers follow `crates/service-kit/tests/support` (same image, same `CI` rule), until a
+//! shared test crate exists.
 #![allow(
     dead_code,
     reason = "each test binary includes this module and uses a different subset of it"
 )]
 
+pub mod postgres;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
-use std::str::FromStr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use contract::{Event, ServiceName};
-use outbox::{Consumer, Handler, Outcome};
+use contract::{Event, ServiceName, TenantId};
+use outbox::{Consumer, ConsumerConfig, Handler, Outcome};
 use serde::{Deserialize, Serialize};
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use service_kit::identity::ServiceIdentity;
+use service_kit::tenant::{BackgroundTenantDb, PlatformDb, TenantDb};
+use sqlx::postgres::PgPoolOptions;
 use sqlx::{AssertSqlSafe, PgPool};
 
-/// Same image and digest as the kit's tests.
-const POSTGRES_IMAGE: &str = "docker.io/library/postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873";
+use self::postgres::{TEST_PASSWORD, TlsPostgres};
 
 /// The example service's binary, built by Cargo for these tests.
 pub const EXAMPLE: &str = env!("CARGO_BIN_EXE_outbox-example");
+
+/// Two tenants the tests write events for.
+pub const TENANT_A: &str = "01928f6e-7a3c-7d4e-8f00-00000000000a";
+pub const TENANT_B: &str = "01928f6e-7a3c-7d4e-8f00-00000000000b";
+
+/// [`TENANT_A`] or [`TENANT_B`].
+pub fn tenant(text: &str) -> TenantId {
+    text.parse().expect("a tenant ID")
+}
+
+/// The tenant the tests' events of `aggregate` belong to: [`TENANT_A`] or [`TENANT_B`], fixed
+/// per aggregate, so a test with several aggregates delivers in both tenants.
+pub fn tenant_of(aggregate: &str) -> TenantId {
+    let odd = aggregate.bytes().map(u32::from).sum::<u32>() % 2 == 1;
+    tenant(if odd { TENANT_B } else { TENANT_A })
+}
 
 /// The event the tests write.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -105,96 +128,59 @@ impl Drop for Container {
     }
 }
 
-/// A database for one test; the container, if any, is removed when dropped.
+/// Runs once per Postgres, as decision 29's database template prescribes: no temporary tables,
+/// which service-kit refuses.
+const INIT: &str = include_str!("../../../service-kit/sql/database.sql");
+
+/// A Postgres with TLS for one test; the container is removed when dropped.
 pub struct Database {
+    pub postgres: TlsPostgres,
+    /// The superuser, without TLS, for the example service's migration connection.
     pub url: String,
-    _container: Option<Container>,
 }
 
-/// `TEST_DATABASE_URL` (a superuser connection; each test makes its own schemas and roles), or
-/// a throwaway Postgres container. `None` when neither is available outside CI.
+/// A throwaway Postgres with TLS (podman or docker). `None` when there is no container runtime
+/// outside CI. `TEST_DATABASE_URL` is not used: the tests create roles as the superuser and
+/// need a server whose CA they know.
 pub async fn database() -> Option<Database> {
-    if let Some(url) = std::env::var("TEST_DATABASE_URL")
-        .ok()
-        .filter(|url| !url.is_empty())
-    {
-        return Some(Database {
-            url,
-            _container: None,
-        });
-    }
-    let Some(runtime) = container_runtime() else {
-        unavailable("TEST_DATABASE_URL, podman, or docker");
-        return None;
-    };
-    let container = Container {
-        runtime,
-        name: format!("outbox-test-{}", unique("postgres").replace('_', "-")),
-    };
-    runtime_output(
-        runtime,
-        &[
-            "run",
-            "--detach",
-            "--name",
-            &container.name,
-            "--env",
-            "POSTGRES_PASSWORD=outbox-test",
-            "--publish",
-            "127.0.0.1::5432",
-            POSTGRES_IMAGE,
-        ],
+    Some(with_url(TlsPostgres::start(INIT).await?))
+}
+
+/// Like [`database`], for a test that restarts the container (`Database::postgres.restart()`):
+/// the host port is chosen by the test, so it is the same after the restart on podman and Docker.
+pub async fn restartable_database() -> Option<Database> {
+    Some(with_url(TlsPostgres::start_restartable(INIT).await?))
+}
+
+fn with_url(postgres: TlsPostgres) -> Database {
+    let url = format!(
+        "postgres://postgres:{TEST_PASSWORD}@127.0.0.1:{}/postgres",
+        postgres.address.port()
     );
-    let mapping = runtime_output(runtime, &["port", &container.name, "5432/tcp"]);
-    let address: SocketAddr = mapping
-        .lines()
-        .find_map(|line| line.trim().parse().ok())
-        .unwrap_or_else(|| panic!("no host address for 5432: {mapping}"));
-    let url = format!("postgres://postgres:outbox-test@{address}/postgres");
-    // The image runs initdb with networking off and then restarts; wait for the real server.
-    let started = Instant::now();
-    loop {
-        if let Ok(pool) = PgPool::connect(&url).await
-            && sqlx::query("SELECT 1").execute(&pool).await.is_ok()
-        {
-            pool.close().await;
-            break;
-        }
-        assert!(
-            started.elapsed() < Duration::from_secs(60),
-            "Postgres did not start in time"
-        );
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-    Some(Database {
-        url,
-        _container: Some(container),
-    })
+    Database { postgres, url }
 }
 
 impl Database {
-    /// A pool as the database's own user.
+    /// A pool as the superuser.
     pub async fn admin(&self) -> PgPool {
         PgPoolOptions::new()
             .max_connections(4)
-            .connect(&self.url)
+            .connect_with(self.postgres.options("postgres"))
             .await
             .expect("connect as admin")
     }
 
-    /// A pool whose `search_path` is `schema`, as the database's own user.
+    /// A pool whose `search_path` is `schema`, as the superuser.
     pub async fn pool(&self, schema: &str) -> PgPool {
-        self.pool_as(schema, None).await
+        self.pool_as(schema, "postgres").await
     }
 
-    /// A pool whose `search_path` is `schema`, optionally as another user (password = name).
-    pub async fn pool_as(&self, schema: &str, user: Option<&str>) -> PgPool {
-        let mut options = PgConnectOptions::from_str(&self.url)
-            .expect("parse the database URL")
+    /// A plain pool (no session check) whose `search_path` is `schema`, as `user`.
+    pub async fn pool_as(&self, schema: &str, user: &str) -> PgPool {
+        let options = self
+            .postgres
+            .options(user)
             .options([("search_path", schema)]);
-        if let Some(user) = user {
-            options = options.username(user).password(user);
-        }
         PgPoolOptions::new()
             .max_connections(8)
             .acquire_timeout(Duration::from_secs(30))
@@ -203,25 +189,96 @@ impl Database {
             .expect("connect a pool")
     }
 
-    /// Creates an empty schema.
-    pub async fn create_schema(&self, schema: &str) {
+    /// Runs `sql` as the superuser; identifiers come from [`unique`], never from input.
+    pub async fn admin_sql(&self, sql: String) {
         let admin = self.admin().await;
-        sqlx::raw_sql(AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+        sqlx::raw_sql(AssertSqlSafe(sql))
             .execute(&admin)
             .await
-            .expect("create a schema");
+            .expect("admin statement");
         admin.close().await;
     }
 
+    /// Lets `role` read the producer's `outbox_event` (schema usage and `SELECT`), as a
+    /// migration mistake would; with `policy`, also a policy `service_read` that opens every
+    /// row to it, like `consumer_read` does for the platform role.
+    pub async fn grant_log_read(&self, setup: &Setup, role: &str, policy: bool) {
+        let ps = &setup.producer_schema;
+        let mut sql = format!(
+            "GRANT USAGE ON SCHEMA {ps} TO {role}; GRANT SELECT ON {ps}.outbox_event TO {role};"
+        );
+        if policy {
+            sql.push_str(&format!(
+                " CREATE POLICY service_read ON {ps}.outbox_event FOR SELECT TO {role} USING (true);"
+            ));
+        }
+        self.admin_sql(sql).await;
+    }
+
+    /// Creates an empty schema.
+    pub async fn create_schema(&self, schema: &str) {
+        self.admin_sql(format!("CREATE SCHEMA {schema}")).await;
+    }
+
+    /// A consuming service's pools, as a replica makes them: `platform_role`'s and
+    /// `service_role`'s, both checked by service-kit. A refused session fails a query after
+    /// `acquire_timeout`.
+    pub fn consumer_pools(
+        &self,
+        platform_role: &str,
+        service_role: &str,
+        acquire_timeout: Duration,
+    ) -> (PlatformDb, BackgroundTenantDb) {
+        let pool = || {
+            PgPoolOptions::new()
+                .max_connections(4)
+                .acquire_timeout(acquire_timeout)
+        };
+        let platform = PlatformDb::connect_lazy(self.postgres.options(platform_role), pool())
+            .expect("verify-full options");
+        let (_, work) = TenantDb::connect_lazy_with_background(
+            self.postgres.options(service_role),
+            pool(),
+            ServiceIdentity::new(ServiceName::Assets),
+        )
+        .expect("verify-full options");
+        (platform, work)
+    }
+
     /// A fresh producer schema with the outbox tables and a `widget` table, and a fresh
-    /// consumer schema with the consumer tables and a `seen` table for [`Recorder`].
+    /// consumer schema with the consumer tables and a `seen` table for [`Recorder`], plus the
+    /// roles of decision 29 with the grants in the outbox README:
+    ///
+    /// - The tables belong to the superuser, the migration role.
+    /// - `<producer>_app` and `<producer>_platform` are the producer's service and platform
+    ///   roles; `outbox_event` has row-level security from service-kit's template.
+    /// - `<consumer>_app` is the consumer's service role. Its `search_path` is the consumer
+    ///   schema, and it may use every table created there (default privileges).
+    /// - `<consumer>_platform` is the consumer's platform role, the only one the template's
+    ///   `consumer_read` policy lets read every tenant's events.
     pub async fn setup(&self) -> Setup {
         let producer_schema = unique("producer");
         let consumer_schema = unique("consumer");
-        self.create_schema(&producer_schema).await;
-        self.create_schema(&consumer_schema).await;
-        let producer = self.pool(&producer_schema).await;
-        let consumer = self.pool(&consumer_schema).await;
+        let (ps, cs) = (&producer_schema, &consumer_schema);
+        let producer_role = format!("{ps}_app");
+        let producer_platform = format!("{ps}_platform");
+        let consumer_role = format!("{cs}_app");
+        let consumer_platform = format!("{cs}_platform");
+        self.admin_sql(format!(
+            "CREATE SCHEMA {ps}; CREATE SCHEMA {cs}; \
+             CREATE ROLE {producer_role} LOGIN PASSWORD '{TEST_PASSWORD}'; \
+             CREATE ROLE {producer_platform} LOGIN PASSWORD '{TEST_PASSWORD}'; \
+             CREATE ROLE {consumer_role} LOGIN PASSWORD '{TEST_PASSWORD}'; \
+             CREATE ROLE {consumer_platform} LOGIN PASSWORD '{TEST_PASSWORD}'; \
+             ALTER ROLE {producer_role} SET search_path = {ps}; \
+             ALTER ROLE {producer_platform} SET search_path = {ps}; \
+             ALTER ROLE {consumer_role} SET search_path = {cs}; \
+             ALTER DEFAULT PRIVILEGES IN SCHEMA {cs} \
+                 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {consumer_role};"
+        ))
+        .await;
+        let producer = self.pool(ps).await;
+        let consumer = self.pool(cs).await;
         let mut conn = producer.acquire().await.expect("producer connection");
         outbox::schema::install_producer(&mut conn)
             .await
@@ -237,6 +294,15 @@ impl Database {
         .execute(&mut *conn)
         .await
         .expect("producer business tables");
+        // The producer's migration runs service-kit's template after install_producer.
+        let template = include_str!("../../../service-kit/sql/outbox-event.sql")
+            .replace("example_app", &producer_role)
+            .replace("example_platform", &producer_platform)
+            .replace("example_reader", &consumer_platform);
+        sqlx::raw_sql(AssertSqlSafe(template))
+            .execute(&mut *conn)
+            .await
+            .expect("row-level security on outbox_event");
         drop(conn);
         let mut conn = consumer.acquire().await.expect("consumer connection");
         outbox::schema::install_consumer(&mut conn)
@@ -250,11 +316,30 @@ impl Database {
             .await
             .expect("consumer business tables");
         drop(conn);
+        // The grants of the outbox README (the template grants INSERT on outbox_event to the
+        // producer's roles and SELECT to the consumer's platform role).
+        self.admin_sql(format!(
+            "GRANT USAGE ON SCHEMA {ps} TO {producer_role}, {producer_platform}; \
+             GRANT SELECT, INSERT, UPDATE ON {ps}.outbox_aggregate \
+                 TO {producer_role}, {producer_platform}; \
+             GRANT SELECT, INSERT, UPDATE, DELETE ON {ps}.widget TO {producer_role}; \
+             GRANT USAGE ON SCHEMA {cs} TO {consumer_role}; \
+             GRANT USAGE ON SCHEMA {ps} TO {consumer_platform};"
+        ))
+        .await;
+        let (platform, work) =
+            self.consumer_pools(&consumer_platform, &consumer_role, Duration::from_secs(30));
         Setup {
             producer_schema,
             consumer_schema,
+            producer_role,
+            producer_platform,
+            consumer_role,
+            consumer_platform,
             producer,
             consumer,
+            platform,
+            work,
         }
     }
 }
@@ -269,25 +354,41 @@ const SEEN_DDL: &str = "\
         total bigint NOT NULL, digest text NOT NULL); \
     CREATE TABLE violations (event_id uuid NOT NULL, expected bigint, found bigint NOT NULL)";
 
-/// The two schemas and pools of one test.
+/// The two schemas, roles, and pools of one test.
 pub struct Setup {
     pub producer_schema: String,
     pub consumer_schema: String,
-    /// `search_path` = the producer schema.
+    /// The producer's service role and platform role.
+    pub producer_role: String,
+    pub producer_platform: String,
+    /// The consumer's service role and platform role.
+    pub consumer_role: String,
+    pub consumer_platform: String,
+    /// The superuser, `search_path` = the producer schema: writes events of any tenant.
     pub producer: PgPool,
-    /// `search_path` = the consumer schema.
+    /// The superuser, `search_path` = the consumer schema: inspects what the consumer did.
     pub consumer: PgPool,
+    /// The consumer's platform role pool.
+    pub platform: PlatformDb,
+    /// The consumer's service role pool, for background work.
+    pub work: BackgroundTenantDb,
 }
 
 impl Setup {
-    /// Writes `Counted { n }` for `aggregate` in its own committed transaction.
+    /// A consumer of the producer's log with the consuming service's pools.
+    pub fn subscribe<H: Handler>(&self, config: ConsumerConfig, handler: H) -> Consumer<H> {
+        Consumer::new(&self.platform, self.work.clone(), config, handler)
+    }
+
+    /// Writes `Counted { n }` for `aggregate`, in [`tenant_of`] the aggregate, in its own
+    /// committed transaction.
     pub async fn publish(&self, aggregate: &str, n: i64) -> outbox::Published {
         let mut tx = self.producer.begin().await.expect("begin");
         let published = outbox::publish(
             &mut tx,
             &outbox::Aggregate::new("widget", aggregate).expect("aggregate"),
             &Counted { n },
-            None,
+            Some(tenant_of(aggregate)),
         )
         .await
         .expect("publish");
@@ -495,11 +596,33 @@ impl Example {
     /// listens. The environment is otherwise empty.
     pub fn start(database: &Database, setup: &Setup, env: &[(&str, &str)]) -> Self {
         let mut command = Command::new(EXAMPLE);
+        let port = database.postgres.address.port().to_string();
         command
             .env_clear()
             .env("TRUSTIOT__DATABASE_URL", &database.url)
             .env("TRUSTIOT__PRODUCER_SCHEMA", &setup.producer_schema)
             .env("TRUSTIOT__CONSUMER_SCHEMA", &setup.consumer_schema)
+            .env("TRUSTIOT_POSTGRES_HOST", postgres::SERVER_HOST)
+            .env("TRUSTIOT_POSTGRES_PORT", &port)
+            .env("TRUSTIOT_POSTGRES_DATABASE", "postgres")
+            .env("TRUSTIOT_POSTGRES_SSLMODE", "verify-full")
+            .env("TRUSTIOT_POSTGRES_CA_FILE", &database.postgres.ca_file)
+            .env(
+                "TRUSTIOT__CONSUMER_DATABASE__SERVICE_ROLE",
+                &setup.consumer_role,
+            )
+            .env(
+                "TRUSTIOT__CONSUMER_DATABASE__SERVICE_PASSWORD",
+                TEST_PASSWORD,
+            )
+            .env(
+                "TRUSTIOT__CONSUMER_DATABASE__PLATFORM_ROLE",
+                &setup.consumer_platform,
+            )
+            .env(
+                "TRUSTIOT__CONSUMER_DATABASE__PLATFORM_PASSWORD",
+                TEST_PASSWORD,
+            )
             .env("TRUSTIOT__HTTP__LISTEN_ADDR", "127.0.0.1:0")
             // Not the default 8081: tests run several examples at once.
             .env("TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR", "127.0.0.1:0")
@@ -553,9 +676,10 @@ impl Example {
         );
     }
 
-    /// `PUT /v1/widgets/{id}` with a new name; returns the status and body.
-    pub fn rename(&self, id: &str, name: &str) -> (u16, serde_json::Value) {
-        let body = serde_json::json!({ "name": name }).to_string();
+    /// `PUT /v1/widgets/{id}` with a new name, as an event of `tenant` (platform-wide for
+    /// `None`); returns the status and body.
+    pub fn rename(&self, id: &str, name: &str, tenant: Option<&str>) -> (u16, serde_json::Value) {
+        let body = serde_json::json!({ "name": name, "tenant_id": tenant }).to_string();
         let mut stream = TcpStream::connect_timeout(&self.address, Duration::from_secs(2))
             .expect("connect to the example");
         stream

@@ -44,6 +44,11 @@ broker 與每個用戶端接受的 maximum packet size 至少要是 `MIN_MAX_PAC
 閘道器在客戶現場，可能被入侵，所以每條解碼路徑都當成處理惡意輸入。以下各項是 2026-10-11 獨立驗證（`docs/test-reports/2026-10-11-50-verify.md` 的 F1、F4 與資訊項）之後定下的規則；協定層拒絕的項目有測試（`tests/adversarial.rs`、`tests/validation.rs`），交給下游的項目寫明由誰處理。
 
 - **重複鍵一律拒絕（協定層）。** 訊息結構的欄位重複，以及資料 map（`LogEntry.fields`、`DeviceStats.exception_codes`）的鍵重複，都以 `decode_failed` 拒絕整則訊息，不採「後者勝出」：同一份位元組在不同解碼器上不能得到不同的值，例外碼的計數也不能被悄悄丟掉。同一個整數鍵以不同寬度編碼（`02` 與 `18 02`）也算重複。不認得的鍵重複則照常略過。
+- **以欄位區分種類的 map 分兩段解碼（協定層）。** `Status`（以 `state` 區分）、`TelemetryAck` 的 `outcome`（`status`）與 `LiveControl` 的 `action`（`op`）是 internally tagged 列舉。serde 為它們產生的解碼器會先把 map 中其他所有項目緩衝成中間值，才讀標籤，連不認得、最後會略過的項目也一樣，每個 payload 位元組要配置數十 bytes。`decode` 因此分兩段解碼這三種訊息（Laysi/trustiot-v2#290）：先只讀標籤，再以標籤指定的變體欄位解一次整個 payload。兩段都不建立不認得的項目，重複的欄位照樣拒絕，結果與標籤在 map 中的位置無關；其他變體的欄位照舊略過，不論型別、是否重複。這三個 map 也因此改套其他 map 的規則，下列編碼的結果與之前不同，本 crate 的編碼器與固定樣本都不會產生這些編碼：
+  - 非文字的鍵、以 byte string 代替文字、以陣列代替 map、比欄位寬的整數編碼（例如 8 bytes 的 `u32`）一律 `decode_failed`。之前會把整數鍵當成欄位序號、略過 byte string 鍵、把 UTF-8 的 byte string 當文字、把陣列依序當成標籤與欄位。
+  - 略過的項目裡出現 CBOR tag、`false`/`true`/`null`/`undefined` 以外的 simple value、小於 `i64::MIN` 的負整數，或不是合法 UTF-8 的文字時照常略過。之前整則拒絕。
+
+  `tests/fuzz.rs` 的每個輸入都會比對兩段解碼與 serde 單段解碼的結果，只容許上述編碼造成的差異，而且只容許該編碼解釋得了的方向：兩段解碼判為 `decode_failed`，只能歸因於它拒絕的編碼；單段解碼判為 `decode_failed` 而兩段解碼接受或判為 `invalid`，只能歸因於它略過的項目；兩者都接受卻解出不同的訊息一律算失敗（`run_tagged`）。`LiveControl` 的設備清單超過 `MAX_LIVE_DEVICES` 時只回報一次 `too_many`，不再逐一列出重複的設備：64 KiB 放得下約 32,000 個 2 bytes 的設備 ID，逐一回報會配置約 180 倍 payload 的記憶體。
 - **文字不得含 U+0000（協定層）。** 遙測與即時值的文字值、日誌的 `target`、`message`、欄位名稱與值、心跳的 `last_failure.detail`、`TelemetryAck` 拒絕原因的 `message`、`ConfigReport` 每個 issue 的 `path` 與 `message`，含 NUL 時 `encode` 拒絕送出、`decode` 拒絕接收。理由：PostgreSQL 的 `text` 存不了 NUL（雲端寫入會失敗，而且是在已經回應之後才失敗），C 介面會把它當字串結尾；沒有任何欄位需要它。送出端的處理：
   - `LogEntry::new`、`LogEntry::with_field` 與 `Issue::new` 先把 NUL 換成 U+FFFD 再截長度，所以用這些建構函式產生的日誌與 issue 一定送得出去。診斷訊息可能引用惡意 payload 的內容（例如 serde 的 `unknown variant`），雲端回 `rejected` 時 `message` 一律取自 `DecodeError::to_issues` 的 issue。
   - 遙測文字值沒有建構函式：閘道器的 Modbus 字串解碼（Laysi/trustiot-v2#87）要先去掉暫存器補位的結尾 NUL；之後仍含 NUL 的值與 NaN 一樣是 `ValueError::NulInText`，算讀取失敗（`invalid_value`），不送出。
@@ -244,7 +249,7 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 
 - 宣告的長度或項目數超過剩餘位元組的 payload，在結構檢查時就被拒絕，什麼都不配置（`tests/allocation.rs`）。
 - 每個陣列在項目解出之前最多預留 `SEQ_PREALLOC_BYTES`（4 KiB），之後依實際解出的項目加倍成長；字串依實際長度配置；map 不預留。serde 原本會依宣告的項目數預留（每個集合最多 1 MiB），2026-10-11 實測 1,017 bytes 的惡意心跳讓解碼暫時配置 184,000 bytes（181 倍）、4.2 KB 配置 773 KB（Laysi/trustiot-v2#269）。改用有上限的預留後，同樣宣告 1,000 到 60,000 個項目的心跳、遙測、即時值、日誌與設定 payload，解碼配置高峰都在 4,080 bytes 以下，與宣告數量無關（`tests/fuzz.rs` 的 `a_hostile_array_count_reserves_at_most_a_bounded_amount` 把上限釘在 8 KiB）。
-- 其餘配置與實際解出的內容成正比：Rust 結構比 CBOR 編碼大（例如每台設備的心跳統計在記憶體中約 184 bytes），所以 1 MiB 的設定或心跳解碼時高峰達十多 MB；以 `status`、`state`、`op` 區分種類的 `Status`、`AckOutcome`、`LiveAction`，serde 會先把整個 map 緩衝成中間值，每個輸入位元組約佔 56 bytes，但這些 channel 的上限只有 4–64 KiB。2026-10-11 以 90 萬個惡意輸入實測（release，種子 4）：配置最多是 payload 的 56.2 倍（改之前約 180 倍），絕對高峰 13.2 MB 來自 1 MiB 的設定。`tests/fuzz.rs` 對每個輸入檢查配置不超過 payload 的 200 倍加 64 KiB。雲端同時解碼的訊息數由各服務的並行上限約束，總量等於並行數乘以單則上限。
+- 其餘配置與實際解出的內容成正比：Rust 結構比 CBOR 編碼大（例如每台設備的心跳統計在記憶體中約 184 bytes），所以 1 MiB 的設定或心跳解碼時高峰達十多 MB。以 `state`、`status`、`op` 區分種類的 `Status`、`AckOutcome`、`LiveAction` 分兩段解碼（見「解碼規則與下游責任」），不認得的項目不配置任何記憶體；serde 原本的單段解碼會先把整個 map 緩衝成中間值，同樣的惡意 payload 最多配置約 96 倍（Laysi/trustiot-v2#290）。`tests/fuzz.rs` 的 `tagged_maps_decode_in_two_passes_without_buffering` 以各種形狀與大小的項目探測這三個 channel 直到上限，並釘住結果：`status` 與 `telemetry-ack` 從 1 KiB 起最多 1.4 與 1.3 倍、高峰約 4.5 KB；`live-control` 最多 36.4 倍、高峰 1.59 MB，來自 64 KiB 的設備 ID 陣列（每個 2 bytes 的 ID 在記憶體中佔 24 bytes，陣列又加倍成長），與其他 channel 一樣與實際內容成正比。2026-10-11 以 90 萬個惡意輸入實測（release，種子 4）：兩段解碼之後配置最多是 payload 的 12.7 倍，最壞的是 1 MiB 的設定（之前 56.2 倍，最壞的是以 `op` 區分種類的 `LiveControl`；Laysi/trustiot-v2#269 之前約 180 倍）；絕對高峰 13.2 MB 同樣來自 1 MiB 的設定。`tests/fuzz.rs` 對每個輸入檢查配置不超過 payload 的 200 倍加 64 KiB。雲端同時解碼的訊息數由各服務的並行上限約束，總量等於並行數乘以單則上限。
 
 ## 版本與相容性
 
@@ -264,8 +269,9 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 | 2026-10-11 | 文字中的 U+0000（Laysi/trustiot-v2#269） | 接受 | `encode` 與 `decode` 都拒絕；遙測文字值是 `ValueError::NulInText`，其他欄位是 `invalid_value` |
 | 2026-10-11 | IPv4-mapped 的設備 `host`（Laysi/trustiot-v2#269） | `::ffff:0.0.0.0` 等繞過未指定、多播、廣播位址的檢查；`::ffff:1.2.3.4` 與 `1.2.3.4` 視為不同端點 | 依 IPv4 規則判斷；兩種寫法是同一個端點 |
 | 2026-10-11 | `peek_header` 的大小（Laysi/trustiot-v2#269） | 不限 | 超過 `MAX_PEEK_BYTES` 回 `TooLarge` |
+| 2026-10-11 | `Status`、`TelemetryAck.outcome`、`LiveControl.action` 的非標準編碼（Laysi/trustiot-v2#290） | 非文字的鍵、byte string 文字、陣列形式、過寬的整數照 serde 中間值的規則接受；略過的項目含 CBOR tag、不合法的 UTF-8 等值時拒絕 | 與其他 map 相同：前者 `decode_failed`，後者略過（見「解碼規則與下游責任」） |
 
-解碼配置的改變（`SEQ_PREALLOC_BYTES`）不影響接收範圍，只影響配置量。
+解碼配置的改變（`SEQ_PREALLOC_BYTES`、兩段解碼）只影響配置量；兩段解碼對接收範圍的影響只有上表列出的非標準編碼。
 
 ## 相依套件與 aarch64
 

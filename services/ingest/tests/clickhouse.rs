@@ -1,5 +1,6 @@
 //! The ClickHouse schema against a real server: the migrations apply (twice), the tables have
-//! the settings decision 8 and 14 need, and tenant isolation holds against the attack types of
+//! the settings decision 8 and 14 need, the collector's log tables keep their retention and
+//! accept inserts only from its account, and tenant isolation holds against the attack types of
 //! the 2026-10-09 feasibility test (docs/feasibility/2026-10-09-cloud-poc.md), the independent
 //! verification of Laysi/trustiot-v2#59, and the table functions and system tables that reach a
 //! table without applying row policies (Laysi/trustiot-v2#260).
@@ -2046,14 +2047,234 @@ async fn access_entities_come_from_sql(ch: &ClickHouse) {
         println!("access entities:\n{}", rows.trim());
     }
     let lines: Vec<&str> = rows.lines().collect();
-    // 2 roles, 8 row policies (5 on the tables for the roles, 1 for the view's definer, 2 on the
-    // view), 1 settings profile, 1 quota, 1 user (the view's definer).
-    assert_eq!(lines.len(), 13, "{rows}");
+    // 3 roles (the collector's included), 8 row policies (5 on the tables for the roles, 1 for
+    // the view's definer, 2 on the view), 1 settings profile, 1 quota, 1 user (the view's
+    // definer).
+    assert_eq!(lines.len(), 14, "{rows}");
     for line in lines {
         assert!(
             line.ends_with("\tlocal_directory"),
             "not created by SQL: {line}"
         );
+    }
+}
+
+/// The OpenTelemetry collector's log tables (0006_logs.sql): MergeTree with a retention TTL on
+/// the server's receive time, and an account that can only insert into them.
+async fn log_tables_for_the_collector(ch: &ClickHouse) {
+    for name in ["otel_logs", "otel_traces"] {
+        let row = ch
+            .admin_ok(&format!(
+                "SELECT engine, engine_full FROM system.tables \
+                 WHERE database = 'trustiot_logs' AND name = '{name}' FORMAT JSONEachRow"
+            ))
+            .await;
+        let row: serde_json::Value = serde_json::from_str(row.trim())
+            .unwrap_or_else(|error| panic!("{name}: {error}: {row}"));
+        let info = TableInfo {
+            engine: row["engine"].as_str().expect("a string column").to_owned(),
+            engine_full: row["engine_full"]
+                .as_str()
+                .expect("a string column")
+                .to_owned(),
+        };
+        assert_eq!(info.engine, "MergeTree", "{info:?}");
+        // ClickHouse prints `TTL ReceivedAt + toIntervalDay(30)` for a DateTime column.
+        assert!(
+            info.engine_full
+                .contains("TTL ReceivedAt + toIntervalDay(30)"),
+            "{name} has no 30 day TTL on ReceivedAt: {info:?}"
+        );
+        assert!(
+            info.engine_full.contains("PARTITION BY toDate(ReceivedAt)"),
+            "{info:?}"
+        );
+        #[allow(clippy::print_stdout, reason = "test evidence")]
+        {
+            println!("trustiot_logs.{name}: {}", info.engine_full);
+        }
+    }
+
+    // The account as the migration Job creates it (0006_logs.sql and deploy/chart/README.md).
+    let suffix: String = Uuid::new_v4()
+        .simple()
+        .to_string()
+        .chars()
+        .take(12)
+        .collect();
+    let collector = create_account_with_role(
+        ch,
+        &format!("collector_{suffix}"),
+        "trustiot_otel_collector",
+    )
+    .await;
+    let marker = format!("collector-test-{suffix}");
+    ch.query(
+        &collector,
+        &format!(
+            "INSERT INTO trustiot_logs.otel_logs (Timestamp, TraceId, ServiceName, Body, \
+             LogAttributes) VALUES (now64(9), '4bf92f3577b34da6a3ce929d0e0e4736', 'schema-test', \
+             'request completed', map('test.marker', '{marker}'))"
+        ),
+    )
+    .await
+    .unwrap_or_else(failed);
+    ch.query(
+        &collector,
+        &format!(
+            "INSERT INTO trustiot_logs.otel_traces (Timestamp, TraceId, SpanId, SpanName, \
+             ServiceName, SpanAttributes) VALUES (now64(9), '4bf92f3577b34da6a3ce929d0e0e4736', \
+             '5f1c3e2a9b7d4e60', 'GET /v1/hello', 'schema-test', map('test.marker', '{marker}'))"
+        ),
+    )
+    .await
+    .unwrap_or_else(failed);
+    // The exporter reads the columns at start.
+    let columns = ch
+        .query(&collector, "DESC TABLE trustiot_logs.otel_logs")
+        .await
+        .unwrap_or_else(failed);
+    assert!(columns.contains("LogAttributes"), "{columns}");
+    let received = ch
+        .admin_ok(&format!(
+            "SELECT count() FROM trustiot_logs.otel_logs \
+             WHERE LogAttributes['test.marker'] = '{marker}' AND ReceivedAt >= now() - 60"
+        ))
+        .await;
+    assert_eq!(
+        received.trim(),
+        "1",
+        "ReceivedAt is filled in by the server"
+    );
+
+    for sql in [
+        "SELECT count() FROM trustiot_logs.otel_logs",
+        "SELECT count() FROM trustiot.telemetry",
+        "INSERT INTO trustiot.telemetry (tenant_id, point, value_type) \
+         VALUES (generateUUIDv4(), 'p', 'float')",
+        "CREATE TABLE trustiot_logs.injected (a UInt8) ENGINE = MergeTree ORDER BY a",
+        "ALTER TABLE trustiot_logs.otel_logs MODIFY TTL ReceivedAt + INTERVAL 1 DAY",
+        "ALTER TABLE trustiot_logs.otel_logs DELETE WHERE 1",
+        "TRUNCATE TABLE trustiot_logs.otel_logs",
+        "DROP TABLE trustiot_logs.otel_traces",
+        "CREATE USER injected IDENTIFIED WITH no_password",
+    ] {
+        let error = ch
+            .query(&collector, sql)
+            .await
+            .expect_err("the collector account may only insert log rows");
+        assert_eq!(error.code(), "ACCESS_DENIED", "{sql}: {}", error.body);
+    }
+
+    for table in ["otel_logs", "otel_traces"] {
+        let attributes = if table == "otel_logs" {
+            "LogAttributes"
+        } else {
+            "SpanAttributes"
+        };
+        ch.admin_ok(&format!(
+            "ALTER TABLE trustiot_logs.{table} DELETE WHERE {attributes}['test.marker'] = '{marker}' \
+             SETTINGS mutations_sync = 2"
+        ))
+        .await;
+    }
+    let _ = ch
+        .admin(&format!("DROP USER IF EXISTS {}", collector.user))
+        .await;
+}
+
+/// The log tables and the tenant read path do not share access (Laysi/trustiot-v2#73 with the
+/// access model of Laysi/trustiot-v2#260): no TrustIoT role or definer holds anything on
+/// trustiot_logs except the collector's role, which holds only INSERT and SHOW COLUMNS on the two
+/// log tables; tenant and ingest accounts cannot reach the logs, and the collector's account
+/// cannot reach the telemetry tables or the tenant view.
+async fn logs_and_telemetry_access_stay_apart(world: &World) {
+    let ch = &world.ch;
+    let grants = ch
+        .admin_ok(&format!(
+            "SELECT coalesce(role_name, user_name) AS grantee, access_type, \
+                    ifNull(database, '*'), ifNull(table, '*') \
+             FROM system.grants \
+             WHERE grantee IN ('trustiot_tenant_reader', 'trustiot_ingest', \
+                               'trustiot_otel_collector', '{VIEW_DEFINER}') \
+               AND (database IS NULL OR database = 'trustiot_logs' \
+                    OR grantee = 'trustiot_otel_collector') \
+             ORDER BY 1, toString(access_type), 3, 4 FORMAT TSV"
+        ))
+        .await;
+    #[allow(clippy::print_stdout, reason = "test evidence")]
+    {
+        println!("grants on trustiot_logs or global:\n{}", grants.trim());
+    }
+    let expected = [
+        "trustiot_otel_collector\tINSERT\ttrustiot_logs\totel_logs",
+        "trustiot_otel_collector\tINSERT\ttrustiot_logs\totel_traces",
+        "trustiot_otel_collector\tSHOW COLUMNS\ttrustiot_logs\totel_logs",
+        "trustiot_otel_collector\tSHOW COLUMNS\ttrustiot_logs\totel_traces",
+    ];
+    assert_eq!(grants.trim().lines().collect::<Vec<_>>(), expected);
+
+    let suffix: String = Uuid::new_v4()
+        .simple()
+        .to_string()
+        .chars()
+        .take(12)
+        .collect();
+    let tenant =
+        create_tenant_account(ch, &format!("logs_tenant_{suffix}"), Some(world.tenant_a)).await;
+    let collector = create_account_with_role(
+        ch,
+        &format!("logs_collector_{suffix}"),
+        "trustiot_otel_collector",
+    )
+    .await;
+    let to_logs = [
+        "SELECT count() FROM trustiot_logs.otel_logs",
+        "SELECT count() FROM trustiot_logs.otel_traces",
+        "SELECT Body FROM trustiot_logs.otel_logs LIMIT 1",
+        "DESC TABLE trustiot_logs.otel_traces",
+        "INSERT INTO trustiot_logs.otel_logs (ServiceName, Body) VALUES ('x', 'injected')",
+    ];
+    let to_telemetry = [
+        format!("SELECT count() FROM {TENANT_VIEW}"),
+        format!("SELECT count() FROM {TELEMETRY}"),
+        "SELECT count() FROM trustiot.batch_commits".to_owned(),
+        format!("DESC TABLE {TENANT_VIEW}"),
+        format!("DESC TABLE {TELEMETRY}"),
+    ];
+    let cases = to_logs
+        .iter()
+        .map(|sql| (&tenant, (*sql).to_owned()))
+        .chain(to_logs.iter().map(|sql| (&world.ingest, (*sql).to_owned())))
+        .chain(to_telemetry.into_iter().map(|sql| (&collector, sql)));
+    for (account, sql) in cases {
+        let error = ch
+            .query(account, &sql)
+            .await
+            .expect_err("logs and telemetry must not share access");
+        // A tenant account is readonly, so its INSERT stops at READONLY before the grant check.
+        assert!(
+            matches!(error.code(), "ACCESS_DENIED" | "READONLY"),
+            "{} {sql}: {}",
+            account.user,
+            error.body
+        );
+    }
+    // A tenant account cannot even list the log tables.
+    let listed = ch
+        .query(&tenant, "SHOW TABLES FROM trustiot_logs")
+        .await
+        .unwrap_or_default();
+    assert_eq!(
+        listed.trim(),
+        "",
+        "a tenant account sees the log tables: {listed}"
+    );
+
+    for account in [&tenant, &collector] {
+        let _ = ch
+            .admin(&format!("DROP USER IF EXISTS {}", account.user))
+            .await;
     }
 }
 
@@ -2078,6 +2299,8 @@ async fn clickhouse_schema_and_tenant_isolation() {
     system_tables_tell_tenants_nothing(&world).await;
     table_settings_are_in_place(&world.ch).await;
     access_entities_come_from_sql(&world.ch).await;
+    log_tables_for_the_collector(&world.ch).await;
+    logs_and_telemetry_access_stay_apart(&world).await;
     tenant_read_path_is_a_definer_view(&world).await;
     each_account_sees_its_own_rows(&world).await;
     tenant_attacks_read_nothing_of_another_tenant(&world).await;

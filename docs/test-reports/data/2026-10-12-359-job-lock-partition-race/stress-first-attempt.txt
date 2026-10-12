@@ -1,0 +1,56 @@
+rcheck: queued on the build host at 13:26:32 as 359; running now: (other job)
+binary: job_lock-49929e5d6f796cf0
+20
+ 13:26:36 up 14:01,  4 users,  load average: 2.85, 1.88, 1.41
+round 1 done: runs passed so far 4, failed 2; load average: 20.84, 6.13, 2.83
+round 2 done: runs passed so far 10, failed 2; load average: 37.00, 11.18, 4.59
+round 3 done: runs passed so far 16, failed 2; load average: 46.05, 16.04, 6.43
+round 4 done: runs passed so far 22, failed 2; load average: 53.55, 20.29, 8.10
+round 5 done: runs passed so far 27, failed 3; load average: 40.40, 24.14, 10.38
+round 6 done: runs passed so far 33, failed 3; load average: 51.87, 28.40, 12.17
+      2 test a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout ... FAILED
+      1 test a_partitioned_holder_stops_its_job_within_the_lock_timeout ... FAILED
+      1 test only_one_replica_runs_a_job_scheduled_on_both_at_once ... FAILED
+      1 test result: FAILED. 8 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.53s
+      1 test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.15s
+      1 test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 71.26s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.68s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.77s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.21s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.38s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.72s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.82s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.03s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.19s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.56s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.63s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.86s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.00s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.01s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.41s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.62s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.84s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.96s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.29s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.62s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.67s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.91s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.00s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.64s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.72s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.77s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.90s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.03s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.09s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.18s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.42s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.44s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.67s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.80s
+      1 thread 'a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout' (307356) panicked at crates/service-kit/tests/job_lock.rs:844:9:
+      1 thread 'a_job_that_panics_in_a_partition_gives_up_its_lock_within_the_timeout' (307364) panicked at crates/service-kit/tests/job_lock.rs:844:9:
+      1 thread 'a_partitioned_holder_stops_its_job_within_the_lock_timeout' (307366) panicked at crates/service-kit/tests/job_lock.rs:735:9:
+      1 thread 'only_one_replica_runs_a_job_scheduled_on_both_at_once' (319594) panicked at crates/service-kit/tests/job_lock.rs:76:9:
+total job_lock runs: 36, passed 33, failed 3
+rcheck: removed 360 dangling test volumes
+rcheck: exit 0 at 13:30:05 (the build host, 359)

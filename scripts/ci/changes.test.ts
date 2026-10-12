@@ -155,9 +155,18 @@ describe("path rules", () => {
     "deploy/istio/istiod-values.yaml",
     "scripts/lib/stack.ts",
     "services/ingest/tests/common/mod.rs",
+    "services/ingest/migrations/clickhouse",
+    "services/ingest/migrations/clickhouse/0006_logs.sql",
+    "crates/service-kit/src/telemetry/redact.rs",
     "docs/architecture/deployment.md",
+    "deploy/flux/clusters/saas/trustiot/chart.yaml",
+    "deploy/flux/tests/flux.test.ts",
+    "scripts/flux/lib.ts",
+    "scripts/release/flux.ts",
+    ".sops.yaml",
     ".prototools",
     ".proto/plugins/helm.toml",
+    ".proto/plugins/flux.toml",
     ".proto/plugins/kubeconform.toml",
     ".github/workflows/ci.yml",
     ".github/actions/setup-proto/action.yml",
@@ -166,7 +175,15 @@ describe("path rules", () => {
     expect(affectsHelm(path)).toBe(true);
   });
 
-  test.each(["crates/protocol/src/lib.rs", "docs/README.md", "deploy/images/ingest/image.toml", "scripts/dev.ts", "Cargo.lock"])(
+  test.each([
+    "crates/protocol/src/lib.rs",
+    "docs/README.md",
+    "deploy/images/ingest/image.toml",
+    "scripts/dev.ts",
+    "Cargo.lock",
+    "services/ingest/migrations/clickhouse-old/0001.sql",
+    "crates/service-kit/src/telemetry/mod.rs",
+  ])(
     "helm skips %s",
     (path) => {
       expect(affectsHelm(path)).toBe(false);
@@ -462,6 +479,39 @@ describe("guards: files the jobs read are covered", () => {
       }
     }
     expect(checked).toBeGreaterThan(0);
+    expect(uncovered).toEqual([]);
+  });
+
+  test("every repository file the deploy/flux tests read or import runs helm", () => {
+    const uncovered: string[] = [];
+    let checked = 0;
+    const testsDir = join(ROOT, "deploy", "flux", "tests");
+    const seen = new Set<string>();
+    const visit = (where: string) => {
+      if (seen.has(where)) return;
+      seen.add(where);
+      const source = readFileSync(join(ROOT, where), "utf8");
+      for (const match of source.matchAll(/from\s+["'](\.{1,2}\/[^"']+)["']/g)) {
+        checked++;
+        const imported = posix.normalize(posix.join(posix.dirname(where), match[1] ?? ""));
+        if (!affectsHelm(imported)) uncovered.push(`${where}: import of ${imported}`);
+        visit(imported);
+      }
+      // Files named in the tests themselves; the imported modules are covered as a whole above.
+      if (!where.startsWith("deploy/flux/tests/")) return;
+      for (const match of source.matchAll(/["']([^"'\n]+)["']/g)) {
+        const path = repositoryPath(match[1] ?? "");
+        if (path !== undefined && path.includes("/") && existsSync(join(ROOT, path)) && statSync(join(ROOT, path)).isFile()) {
+          checked++;
+          if (!affectsHelm(path)) uncovered.push(`${where}: "${match[1]}"`);
+        }
+      }
+    };
+    // The unit tests only; the lab e2e runs by hand and is not part of the job.
+    for (const file of sources(testsDir, [".ts"]).filter((path) => !path.includes(`${posix.sep}e2e${posix.sep}`))) {
+      visit(relative(ROOT, file));
+    }
+    expect(checked).toBeGreaterThan(5);
     expect(uncovered).toEqual([]);
   });
 

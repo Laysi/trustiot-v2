@@ -1,0 +1,4 @@
+# tests/fuzz.rs tagged_maps_decode_in_two_passes_without_buffering, debug build, 2026-10-11,
+# run on the branch with two-pass decoding but before LiveControl::validate stopped listing
+# every repeated device of an over-long list (output transcribed from the test run):
+live-control: 960 payloads; decode at most 179.93x (devices = indefinite array of "a", 32776 of 32872 bytes), unknown entries add 0 bytes (baselines [208, 208, 36]); serde's single pass at most 95.8x

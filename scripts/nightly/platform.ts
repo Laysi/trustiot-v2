@@ -5,7 +5,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { containerBuildArgs } from "../lib/build-context.ts";
 
-import { retry, run, RunLog } from "./exec.ts";
+import { exec, retry, run, RunLog } from "./exec.ts";
+import type { ExecOptions, ExecResult } from "./exec.ts";
 
 export const ISTIO_CHART_REPOSITORY = "https://istio-release.storage.googleapis.com/charts";
 /** The mesh extension provider that the chart's AuthorizationPolicy names (ingress.authzProvider). */
@@ -136,6 +137,90 @@ async function waitForGatewayClass(platform: Platform): Promise<void> {
   await run(platform.log, [platform.kubectl, "wait", "--for=condition=Accepted", "gatewayclass/istio", "--timeout=120s"], { ...kube, timeoutMs: 150_000 });
 }
 
+/** The commands the image import runs; tests replace them, so no cluster or docker is needed. */
+export interface ImportCommands {
+  run: (log: RunLog, cmd: string[], options?: ExecOptions) => Promise<ExecResult>;
+  exec: (cmd: string[], options?: ExecOptions) => Promise<ExecResult>;
+}
+
+export const IMPORT_ATTEMPTS = 3;
+const IMPORT_PAUSE_MS = 5_000;
+
+interface K3dNode {
+  name?: string;
+  role?: string;
+  runtimeLabels?: Record<string, string>;
+}
+
+/** The server and agent nodes of a k3d cluster, from `k3d node list -o json`: the nodes with a containerd. */
+export async function clusterNodeNames(
+  platform: Pick<Platform, "k3d" | "cluster">,
+  commands: Pick<ImportCommands, "exec"> = { exec },
+): Promise<string[]> {
+  const cmd = [platform.k3d, "node", "list", "--output", "json"];
+  const result = await commands.exec(cmd, { timeoutMs: 60_000 });
+  if (result.code !== 0) throw new Error(`\`${cmd.join(" ")}\` ${result.timedOut ? "timed out" : `exited with ${result.code}`}: ${result.stderr.trim()}`);
+  let nodes: K3dNode[];
+  try {
+    nodes = JSON.parse(result.stdout) as K3dNode[];
+  } catch {
+    throw new Error(`\`${cmd.join(" ")}\` did not print JSON: ${result.stdout.slice(0, 200)}`);
+  }
+  const names = nodes
+    .filter((node) => node.runtimeLabels?.["k3d.cluster"] === platform.cluster && (node.role === "server" || node.role === "agent"))
+    .map((node) => node.name)
+    .filter((name): name is string => name !== undefined && name !== "");
+  if (names.length === 0) throw new Error(`k3d lists no server or agent node for cluster ${platform.cluster}`);
+  return names;
+}
+
+/**
+ * Imports a local docker image into every node of the k3d cluster, and proves it arrived.
+ *
+ * `k3d image import` is not proof: in its default tools-node mode the nodes import a tarball from
+ * a shared volume, and k3d 5.9.0 only logs a node's failure (`ERRO failed to import images in node
+ * ...: ctr: open /k3d/images/...tar: no such file or directory`), prints "Successfully imported" and
+ * exits 0 (Laysi/trustiot-v2#335; seen in the PR smoke of 2026-10-11, where the image never reached
+ * the node and the e2e's identity Deployment, pullPolicy IfNotPresent and a `localhost` registry
+ * that cannot be pulled from, waited 5 minutes). So after each import every server and agent node
+ * is asked for the image (`crictl inspecti`, which reads containerd's k8s.io namespace, the one
+ * the kubelet uses), a node without it fails the attempt, and the last attempt's failure names the
+ * nodes and the image. This check is the fix.
+ *
+ * Mitigation: `--mode direct` streams `docker save` into each node's `ctr image import`, with no
+ * tools node and no shared volume (the tarball race above), and k3d returns a node's error instead
+ * of logging it. It is a valid mode here because the docker daemon is local to the runner (what
+ * `--mode auto` would pick too).
+ */
+export async function importImageIntoCluster(
+  platform: Pick<Platform, "k3d" | "cluster" | "log">,
+  image: string,
+  commands: ImportCommands = { run, exec },
+  { attempts = IMPORT_ATTEMPTS, pauseMs = IMPORT_PAUSE_MS }: { attempts?: number; pauseMs?: number } = {},
+): Promise<void> {
+  await retry(platform.log, attempts, pauseMs, async () => {
+    await commands.run(platform.log, [platform.k3d, "image", "import", image, "--cluster", platform.cluster, "--mode", "direct"], { timeoutMs: 300_000 });
+    const nodes = await clusterNodeNames(platform, commands);
+    const missing: string[] = [];
+    for (const node of nodes) {
+      const result = await commands.exec(["docker", "exec", node, "crictl", "inspecti", image], { timeoutMs: 60_000 });
+      if (result.code === 0) {
+        platform.log.line(`image ${image} is present on node ${node}`);
+      } else {
+        const reason = result.timedOut ? "timed out" : (result.stderr.trim() || result.stdout.trim() || `exited with ${result.code}`).split("\n").at(-1);
+        platform.log.line(`image ${image} is NOT present on node ${node}: ${reason}`);
+        missing.push(node);
+      }
+    }
+    if (missing.length > 0) {
+      throw new Error(
+        `k3d image import succeeded, but image ${image} is missing on node(s) ${missing.join(", ")} of cluster ${platform.cluster} (checked ${nodes.length} node(s): ${nodes.join(", ")})`,
+      );
+    }
+    platform.log.line(`image ${image} confirmed on ${nodes.length} node(s): ${nodes.join(", ")}`);
+  });
+}
+
 /** Builds the e2e test's identity double and loads it into the cluster nodes. */
 async function loadIdentityDouble(platform: Platform): Promise<void> {
   const context = join(platform.repoRoot, "deploy", "chart", "tests", "e2e", "identity-double");
@@ -145,7 +230,7 @@ async function loadIdentityDouble(platform: Platform): Promise<void> {
       timeoutMs: 600_000,
     }),
   );
-  await run(platform.log, [platform.k3d, "image", "import", IDENTITY_DOUBLE_IMAGE, "--cluster", platform.cluster], { timeoutMs: 300_000 });
+  await importImageIntoCluster(platform, IDENTITY_DOUBLE_IMAGE);
 }
 
 /** Installs everything the chart and its e2e test need, in the order the chart needs it. */

@@ -86,6 +86,13 @@ pub const SET_CONFIG_ALLOWED: &[SettingException] = &[
                  is_schema_name holds (lower-case letters, digits, and _, not pg_*)",
     },
     SettingException {
+        path: "crates/outbox/src/consumer.rs",
+        setting: "outbox.delivery",
+        reason: "a transaction-level marker the consumer sets before calling the handler and \
+                 reads after it, to tell whether the handler ended the transaction; the value \
+                 is a UUID the consumer generates",
+    },
+    SettingException {
         path: "crates/outbox/tests/delivery.rs",
         setting: "outbox_test.tenant",
         reason: "a test-only setting the test handler sets and its policies read",
@@ -123,7 +130,29 @@ pub const EXCEPTIONS: &[Exception] = &[
     Exception {
         path: "crates/outbox/tests/support/mod.rs",
         rules: DYNAMIC_SQL,
-        reason: "creates a per-run schema",
+        reason: "creates per-run schemas, roles, grants, and policies, and runs service-kit's \
+                 outbox policy template with the per-run role names",
+    },
+    Exception {
+        path: "crates/outbox/tests/verify_271.rs",
+        rules: &[
+            Rule::DynamicSql,
+            Rule::AssertSqlSafe,
+            Rule::DynamicQueryBuilder,
+            Rule::LeakedString,
+            Rule::SqlBuiltFromStrings,
+            Rule::SessionSetting,
+        ],
+        reason: "independent verification of Laysi/trustiot-v2#271: test handlers run SET ROLE, \
+                 RESET ALL, and set_config on the tenant with per-run role names, as attacks \
+                 that must fail or as reported findings",
+    },
+    Exception {
+        path: "crates/outbox/tests/failure_paths.rs",
+        rules: &[Rule::SessionSetting],
+        reason: "a test handler's begin hook moves the delivery's transaction to another tenant \
+                 with set_config, as a broken handler would, to test that the consumer \
+                 dead-letters the event (Laysi/trustiot-v2#350)",
     },
     Exception {
         path: "services/ingest/tests/clickhouse.rs",
@@ -137,6 +166,20 @@ pub const EXCEPTIONS: &[Exception] = &[
         ],
         reason: "ClickHouse, not Postgres: creates per-run users, roles, and tenants, and runs \
                  SET ROLE NONE as an attack that must fail",
+    },
+    Exception {
+        path: "services/identity/tests/adversarial.rs",
+        rules: &[Rule::SessionSetting],
+        reason: "attacks the identity service role's session: sets valid, unknown, empty and \
+                 malformed tenant ids with set_config and runs SET ROLE and SET SESSION \
+                 AUTHORIZATION, which row-level security and the database must refuse",
+    },
+    Exception {
+        path: "crates/service-kit/tests/tenant_db.rs",
+        rules: &[Rule::SessionSetting],
+        reason: "sets a session-level tenant with set_config, as nothing may, to test that the \
+                 pool closes such a session on release instead of handing it to the next user \
+                 (Laysi/trustiot-v2#271)",
     },
 ];
 

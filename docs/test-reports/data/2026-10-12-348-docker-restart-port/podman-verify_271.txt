@@ -1,0 +1,21 @@
+   Compiling outbox v0.1.0 (<worktree>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.43s
+     Running tests/verify_271.rs (target/debug/deps/verify_271-7d562b96a0b9526b)
+
+running 13 tests
+test f3_a_handler_commit_does_not_split_the_delivery ... ok
+test f4_a_platform_reader_transaction_stays_read_only ... ok
+test f1_a_platform_wide_event_never_runs_in_a_leaked_tenant ... ok
+test f5_a_handler_panic_does_not_stop_the_consumer ... ok
+test f2_a_handler_that_switches_the_tenant_is_not_committed ... ok
+test a_database_restart_mid_run_loses_and_duplicates_nothing ... ok
+test a_failed_delivery_leaves_nothing_and_the_event_is_processed_once ... ok
+test the_platform_role_reads_the_log_and_nothing_else ... ok
+test odd_tenant_ids_are_dead_lettered_or_run_in_exactly_the_row_tenant ... ok
+test misconfigured_pools_fail_without_processing_anything ... ok
+test three_replicas_and_concurrent_writers_process_each_event_once_in_its_tenant ... ok
+test a_handler_cannot_leave_its_tenant_by_role_or_rls_tricks ... ok
+test unsafe_roles_are_refused_for_either_pool ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 61.39s
+

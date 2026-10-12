@@ -1,0 +1,7 @@
+# crates/service-kit's example-service for the log pipeline e2e (otel.e2e.ts). Build context: a
+# directory holding the example-service binary built for the node's architecture (aarch64 for
+# the lab and production), see ../README.md. Same base and layout as the kit's PID 1 test
+# (crates/service-kit/tests/container.rs): no shell, the service itself is PID 1.
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2
+COPY example-service /usr/local/bin/example-service
+ENTRYPOINT ["/usr/local/bin/example-service"]

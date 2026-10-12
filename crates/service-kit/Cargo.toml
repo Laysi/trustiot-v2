@@ -53,6 +53,10 @@ tracing-opentelemetry.workspace = true
 tracing-subscriber = { workspace = true, features = ["registry", "std", "tracing-log"] }
 
 [dev-dependencies]
+# The `log` crate and its tracing bridge, to send events through the same path a dependency such
+# as reqwest uses (telemetry log filter tests).
+log.workspace = true
+tracing-log = { workspace = true, features = ["log-tracer", "std"] }
 # A throwaway CA and server certificate for the TLS Postgres the tenant tests start.
 rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
 # The black-hole TCP proxy of the job-lock partition tests.

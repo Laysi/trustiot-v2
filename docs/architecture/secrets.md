@@ -6,6 +6,7 @@
 - 輪替與外洩處理的步驟：[密鑰輪替 runbook](../runbooks/secrets.md)。
 - SaaS 的祕密怎麼進叢集：[CI 與發佈](ci-release.md) 的「SaaS 以 GitOps 部署」（SOPS 加 age）。
 - CI 與 GitHub 的權限：[CI 與發佈](ci-release.md) 的通用規則與「GitHub 的 Actions 設定」。
+- repo 公開後，什麼資訊不能寫進 commit、PR、issue、測試報告與 CI log：下方「公開 repo 的資訊規則」。
 
 新增任何密鑰（新的外部服務、新的帳號、新的簽章金鑰）時，在同一個變更裡加進下方清冊與 runbook。
 
@@ -42,6 +43,38 @@
 
 chart 的規則（values 只以名稱引用 Secret、values 沒有明文密鑰、chart 不產生 Secret）由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md](../../deploy/chart/README.md)。
 
+## 公開 repo 的資訊規則
+
+2026-10-12 起 Laysi/trustiot-v2 是公開 repo（Laysi/trustiot-v2#345）。以下內容任何人都讀得到，而且刪除後仍可能留在 fork、快取與第三方的存檔：
+
+- 所有 commit 與歷史、分支、tag、PR 的標題與內文與 review 留言、issue 與留言（含編輯歷史）、GitHub Release 與附件。
+- `docs/`，包括 `docs/test-reports/` 與它的原始資料。
+- Actions 的 log 與 artifact。artifact 的下載是否需要登入未驗證，一律當作公開。
+- 之後若把 GHCR 套件改為公開，連映像與 chart 也是（見 [CI 與發佈](ci-release.md) 的「GHCR 套件的可見性」）。
+
+**不得寫進以上任何一處：**
+
+1. 密鑰：token、密碼、私鑰、kubeconfig、未加密的 Secret、連線字串（規則 1 到 4 已經要求，現在連 PR 描述與 log 也一樣）。以 SOPS 加密的密文是例外，那是設計上要進版控的（[CI 與發佈](ci-release.md) 的「SaaS 的祕密怎麼進叢集」）。
+2. 內部主機名稱與位址：維運用的主機別名、辦公室與實驗室的區域網路位址、不對外的網域與主機名稱、VPN 與內網網段。叢集內的 Pod 與 Service 位址（例如 k3s 的 `10.42.0.0/16`、`*.svc.cluster.local`）不是祕密，可以寫。
+3. 客戶名稱、客戶現場的資訊（廠區、設備、網路配置）與任何個人資料（姓名、email、電話、帳號）。git 的作者 email 本來就隨 commit 公開，不算在內。
+4. 還沒修好的安全弱點的細節：改以 GitHub 的私人安全通報或私下通知處理，修好之後才寫進公開的 issue 與文件。
+
+**寫法：**
+
+- 範例與測試一律用保留的假值：`example.com`、`example.internal`、`192.0.2.0/24`（RFC 5737 的文件用位址）、`<host>` 這類佔位符，不用真實的主機名稱與位址。
+- 測試報告與 CI log：貼指令輸出前先看過。叢集與主機的輸出（`kubectl get nodes -o wide`、`ip addr`、systemd 與 cloudflared 的 log）常帶節點位址與主機名稱，要先遮蔽或刪掉那幾欄。
+- 腳本與 workflow 不把環境變數、設定檔或指令列整份印進 log（規則 4 已要求遮蔽祕密，主機名稱與位址同樣不印）。
+- 推送前檢查 diff 與 PR 描述；gitleaks 只認祕密的形狀，擋不住主機名稱、位址、客戶名稱與個人資料，這些靠人。
+
+**寫進去了怎麼辦：**
+
+- 祕密：視同外洩，依 [密鑰輪替 runbook](../runbooks/secrets.md) 的外洩處理立刻輪替；刪掉 commit、issue 或留言不夠，內容已被複製的風險仍在。
+- 其他資訊：盡快移除，並評估該位址或名稱是否需要更換；歷史改寫是破壞性的，要由使用者決定。
+
+**既有內容：**本規則從 2026-10-12 起適用。公開前已存在於 repo 的內容（例如早期測試報告裡實驗室的主機別名與區域網路位址）是否要清理，由使用者決定，另案處理。
+
+**GitHub 端的掃描設定（待使用者決定）：**公開時使用者只改了可見性，沒有動 secret scanning 與 push protection，現況未驗證。GitHub 文件寫 secret scanning 對公開 repo 自動執行且免費（[About secret scanning](https://docs.github.com/en/code-security/secret-scanning/introduction/about-secret-scanning)）；push protection 在公開 repo 是否預設開啟、是否需要手動啟用，文件頁面沒有寫，未驗證。選項：A. 維持現況，只靠 CI 的 gitleaks（掃完整歷史，但是在推送之後才掃）；B. 在 repo 設定開啟 push protection，祕密在推送時就被擋下，不會進入公開歷史，代價是誤判時推送的人要手動繞過（細節未驗證）。公開 repo 的祕密一旦推上去就算外洩，所以建議 B。
+
 ## 一次性 token 與驗證碼
 
 適用於 email 登入驗證碼（A1，Laysi/trustiot-v2#103）、成員邀請（A3，Laysi/trustiot-v2#105），以及之後任何「只能用一次」的 token（例如換發挑戰，決策 12）。來源是 [#105](https://github.com/Laysi/trustiot/issues/105)：舊系統先讀取、驗證、再清除，兩個併發請求能同時通過；清除失敗仍回 200；token 放在網址的 query。
@@ -58,7 +91,7 @@ chart 的規則（values 只以名稱引用 Secret、values 沒有明文密鑰�
 | 方式 | 用在 | 說明 |
 | --- | --- | --- |
 | Kubernetes Secret，以 `valueFrom.secretKeyRef` 成為環境變數 | 短的字串：API key、密碼、DSN | chart 的 `services.<name>.credentials` 與各 `*Secret` 欄位，values 只寫 Secret 名稱與 key；名稱像密鑰的環境變數只能來自 Secret（schema 與 chart 測試） |
-| Kubernetes Secret，以唯讀 volume 掛成檔案 | 私鑰、憑證、多行的金鑰 | 例如外部資料庫的 CA（`/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`）；之後的 CA 私鑰、內部身分簽章私鑰、broker 伺服器金鑰也掛成檔案，只掛進使用它的那個 pod |
+| Kubernetes Secret，以唯讀 volume 掛成檔案 | 私鑰、憑證、多行的金鑰 | 例如外部資料庫的 CA（`/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`）；內部身分簽章私鑰（`/etc/trustiot/identity-signing-key/signing-key.pem`，只掛進身分服務）；之後的 CA 私鑰、broker 伺服器金鑰也掛成檔案，只掛進使用它的那個 pod |
 | 叢集內元件自己產生的 Secret | 叢集內資料庫的帳號 | 例如 CloudNativePG 產生的資料庫帳號（Laysi/trustiot-v2#58）。值只存在叢集內，不進 git，也不經過人 |
 | 主機上只有 root 能讀的檔案，以 systemd `LoadCredential` 交給服務 | SaaS 主機上的 cloudflared | 不在叢集內，k3s 故障時仍能運作（Laysi/trustiot-v2#64） |
 | GitHub Actions secret，經 step 的 `env` 或 `with` | 發佈流程用的少數金鑰 | ci.yml 不用任何 secret；fork 來的 PR 拿不到 secret（見 [CI 與發佈](ci-release.md)） |
@@ -77,8 +110,8 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 | 根 CA 私鑰 | 簽發 CA 憑證的信任根（閘道器、工作站、broker 憑證的源頭，決策 6、12） | 離線保管：不在叢集、不在 git（加密也不放）、不在任何連網主機；以 age 加密存兩份離線媒體，分別由兩位維運人員保管；只在簽發或撤銷簽發 CA 時取出 | 依 Laysi/trustiot-v2#78 定的地端 CA 階層 | 不注入任何服務 | Laysi/trustiot-v2#78 |
 | 簽發 CA 私鑰 | certs 服務簽發閘道器與工作站憑證、發 CRL | SOPS | 客戶叢集的 Secret（Laysi/trustiot-v2#78 決定由安裝產生或客戶匯入） | 檔案，只掛進 `certs` | Laysi/trustiot-v2#78 |
 | broker 伺服器憑證私鑰 | Mosquitto 的 TLS 伺服器金鑰（閘道器 mTLS 的內層） | 由簽發 CA 簽發，存在叢集 Secret | 同左 | 檔案，只掛進 broker | Laysi/trustiot-v2#84 |
-| 內部身分簽章私鑰（Ed25519） | 身分服務簽內部身分 token（決策 27） | SOPS | 客戶叢集的 Secret | 檔案，只掛進 `identity`；對應的公鑰不是祕密，以 JWK Set 放在平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`（ConfigMap） | Laysi/trustiot-v2#61（格式與輪替：Laysi/trustiot-v2#52、[crates/service-kit/README.md](../../crates/service-kit/README.md)） |
-| OTA 簽章私鑰 | 簽閘道器 agent 與 updater 的發佈檔（決策 11） | GitHub environment secret，只有 main 上的 tag 能用（ci-release.md）；公鑰內建在 updater | 地端使用同一份發佈檔，不另持有 | 只給 release workflow 的簽章步驟 | Laysi/trustiot-v2#164（注意：release.yml 的 `release` environment 已建立，但私有庫在目前的 GitHub Free 方案設不了必要審查者與 tag 規則（決策 30），environment secret 限制不了「只有 main 上的 tag 能用」，Laysi/trustiot-v2#164 要先解決保管方式） |
+| 內部身分簽章私鑰（Ed25519） | 身分服務簽內部身分 token（決策 27） | SOPS | 客戶叢集的 Secret | 檔案：chart 的 `internalIdentity.signingKeySecret` 指向的 Secret（PKCS#8 PEM），只掛進 `identity` 的 `/etc/trustiot/identity-signing-key/signing-key.pem`，權限 0440（root 與 pod 的 fsGroup）；對應的公鑰不是祕密，chart 的 `internalIdentity.publicKeys` 組成 JWK Set 放在平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`（ConfigMap） | Laysi/trustiot-v2#61（[services/identity/README.md](../../services/identity/README.md)；格式與輪替：Laysi/trustiot-v2#52、[crates/service-kit/README.md](../../crates/service-kit/README.md)） |
+| OTA 簽章私鑰 | 簽閘道器 agent 與 updater 的發佈檔（決策 11） | GitHub environment secret，只有 main 上的 tag 能用（ci-release.md）；公鑰內建在 updater | 地端使用同一份發佈檔，不另持有 | 只給 release workflow 的簽章步驟 | Laysi/trustiot-v2#164（注意：release.yml 的 `release` environment 已建立，但私有庫在目前的 GitHub Free 方案設不了必要審查者與 tag 規則（決策 30），environment secret 限制不了「只有 main 上的 tag 能用」，Laysi/trustiot-v2#164 要先解決保管方式。2026-10-12 repo 已公開，Free 方案設得了 environment 的 tag 規則與必要審查者，但尚未設定，限制仍未成立，選項見 [CI 與發佈](ci-release.md) 的「發佈核准」，Laysi/trustiot-v2#345） |
 | SOPS 叢集私鑰（age） | Flux 解密 `deploy/flux/` 的 Secret | 叢集 `flux-system` namespace 的 Secret `sops-age`，由維運人員在建立叢集時直接建立（不經 git）；離線備份與根 CA 私鑰放在一起 | 不適用（地端不裝 Flux） | 只給 Flux kustomize-controller | Laysi/trustiot-v2#70 |
 | 維運人員的 age 私鑰 | 編輯、輪替 SOPS 檔案；叢集私鑰遺失時的備援 | 各自保管在自己的裝置（建議放在密碼管理器或硬體金鑰），不放共用主機 | 不適用 | 不注入任何服務 | Laysi/trustiot-v2#70 |
 
@@ -89,7 +122,8 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 | Postgres 帳號：superuser、migration 角色、每個服務一個角色、平台後台角色（決策 4、29） | 各服務連 Postgres；migration Job | `bundled`：CloudNativePG 在叢集內產生的 Secret，不進 git | `bundled` 同左；`external`：客戶建立的 Secret | 環境變數，每個服務只拿自己的角色 | Laysi/trustiot-v2#58、Laysi/trustiot-v2#60 |
 | AGE 每租戶登入角色（決策 21） | field-context 以租戶專屬角色執行 Cypher | 由程式在建立租戶時產生，不進 git、不經過人 | 同左 | 由 Laysi/trustiot-v2#176 決定 | Laysi/trustiot-v2#176 |
 | 叢集內 ClickHouse 的 bootstrap 管理帳號密碼（`clickhouse.mode: bundled`），Secret `trustiot-clickhouse-admin`、key `password` | ClickHouse 本身；之後的 migration Job（Laysi/trustiot-v2#60） | SOPS（`deploy/flux/`，以 `openssl rand -hex 32` 產生） | 客戶在安裝前建立（`deploy/chart/README.md`「叢集內的 ClickHouse」的指令） | 唯讀 volume 掛成檔案 `/etc/trustiot/clickhouse-admin/password`（`CLICKHOUSE_PASSWORD_FILE`），只掛進 ClickHouse 的 pod；服務的自訂 `env` 不能讀它（chart 測試） | Laysi/trustiot-v2#59、Laysi/trustiot-v2#60 |
-| ClickHouse 帳號：ingest 寫入、OTel 日誌寫入、每租戶唯讀（決策 14、22） | ingest、telemetry-query、collector | `bundled`：由 migration Job 以管理帳號建立，存成叢集內的 Secret；每租戶唯讀帳號由 telemetry-query 建立租戶時產生 | 同左 | 環境變數，只給使用該帳號的服務 | Laysi/trustiot-v2#60、Laysi/trustiot-v2#73、Laysi/trustiot-v2#119 |
+| ClickHouse 帳號：ingest 寫入、每租戶唯讀（決策 14） | ingest、telemetry-query | `bundled`：由 migration Job 以管理帳號建立，存成叢集內的 Secret；每租戶唯讀帳號由 telemetry-query 建立租戶時產生 | 同左 | 環境變數，只給使用該帳號的服務 | Laysi/trustiot-v2#60、Laysi/trustiot-v2#119 |
+| OpenTelemetry collector 的 ClickHouse 帳號密碼（`observability.collector.clickhouse.passwordSecret`，範例 Secret `trustiot-otel-collector-clickhouse`、key `password`） | collector 寫 `trustiot_logs` 的兩張日誌表（決策 14、22）；migration Job 以同一個密碼建立帳號 `trustiot_collector`，只授與角色 `trustiot_otel_collector`（`services/ingest/migrations/clickhouse/0006_logs.sql`） | SOPS（`deploy/flux/`，以 `openssl rand -hex 32` 產生） | 客戶在安裝前建立 | 環境變數 `CLICKHOUSE_PASSWORD`（`secretKeyRef`），只給 collector；服務的自訂 `env` 不能讀它（chart 測試） | Laysi/trustiot-v2#73、Laysi/trustiot-v2#60 |
 | ClickHouse 帳號 `trustiot_tenant_view_definer` | view `trustiot.tenant_telemetry` 的 DEFINER（`services/ingest/migrations/clickhouse/0005_tenant_view.sql`） | 不是密鑰：`IDENTIFIED WITH no_password HOST NONE`，不能登入、沒有密碼要保管或輪替；只有 `SELECT ON trustiot.telemetry` | 同左 | 不注入任何服務 | Laysi/trustiot-v2#260 |
 | MQTT dynsec 管理帳密 | certs、gateway-ops 註冊與停用閘道器（決策 6） | 部署時在叢集內產生的 Secret | 同左 | 環境變數，只給需要的服務 | Laysi/trustiot-v2#82、Laysi/trustiot-v2#84 |
 | Grafana 管理者帳密 | 維運看板（決策 23） | 部署時在叢集內產生；登入改用 SSO 時移除 | 客戶的 Secret | Grafana 自己讀 Secret | Laysi/trustiot-v2#183 |
@@ -104,6 +138,7 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 | 備份用的物件儲存金鑰 | Postgres 的 WAL 與完整備份、ClickHouse 備份（M8） | SOPS；與服務用的金鑰分開、只能寫備份 bucket | 客戶建立的 Secret | 只給備份元件 | Laysi/trustiot-v2#134、Laysi/trustiot-v2#135 |
 | SMTP 帳密 | 通知與報表寄信（決策 18） | SOPS | 客戶的 relay 需要驗證時，客戶建立的 Secret | 環境變數，只給列出 `smtp` 的服務 | Laysi/trustiot-v2#169 |
 | Sentry DSN | 錯誤回報（決策 24） | SOPS | 預設關閉；客戶開啟時由客戶建立 | 環境變數 `SENTRY_DSN`，每個服務 | Laysi/trustiot-v2#184 |
+| SIEM 轉送的認證標頭與 CA（`observability.collector.forward.authHeader.valueSecret`、`observability.collector.forward.caSecret`） | collector 把遮蔽後的日誌以 OTLP 轉送到客戶的 SIEM（決策 22） | 預設不轉送 | 客戶開啟轉送時由客戶建立 | 標頭值是環境變數 `FORWARD_AUTH_HEADER`（`secretKeyRef`），CA 以唯讀 volume 掛成 `/etc/trustiot/forward-ca/ca.crt`，都只給 collector | Laysi/trustiot-v2#73 |
 
 ### 主機、映像與發佈
 
@@ -111,12 +146,13 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 | --- | --- | --- | --- | --- |
 | Cloudflare Tunnel token | SaaS 主機上的 cloudflared 連出（決策 27） | 主機上只有 root 能讀的檔案；不在叢集、不在 git | systemd `LoadCredential` | Laysi/trustiot-v2#64（runbook 在 `deploy/host/README.md`） |
 | 維運 SSH | 經 tunnel 進 SaaS 主機 | 沒有共用密鑰：Cloudflare Access 以個人身分驗證，主機只接受個人的 SSH 公鑰 | 不適用 | Laysi/trustiot-v2#64 |
-| GHCR 拉取 token | SaaS 叢集拉映像與 chart（決策 5） | 專用機器帳號的 classic personal access token，只有 `read:packages`、設定到期日（GHCR 只接受 classic token）；以 SOPS 加密的 `kubernetes.io/dockerconfigjson` Secret 進叢集 | `global.imagePullSecrets` 與 Flux 來源的 `secretRef` | Laysi/trustiot-v2#70 |
+| GHCR 拉取 token | SaaS 叢集拉映像與 chart（決策 5） | 專用機器帳號的 classic personal access token，只有 `read:packages`、設定到期日（GHCR 只接受 classic token）；以 SOPS 加密的 `kubernetes.io/dockerconfigjson` Secret `ghcr-pull`（namespace `trustiot`）進叢集，檔案 `deploy/flux/clusters/saas/trustiot/ghcr-pull.sops.yaml`，以 `bun scripts/flux/ghcr-pull-secret.ts` 從 stdin 產生。GHCR 套件的可見性獨立於 repo：repo 公開後套件仍是私有，所以仍需要這把 token；套件若改為公開才不需要（不可逆，見 [CI 與發佈](ci-release.md) 的「GHCR 套件的可見性」，Laysi/trustiot-v2#345） | `global.imagePullSecrets` 與 Flux 的 OCIRepository `trustiot` 的 `secretRef` | Laysi/trustiot-v2#70 |
+| Flux 的 deploy key | SaaS 叢集的 Flux 以 SSH 讀 main（決策 5） | 只給這個叢集的 ed25519 金鑰；公鑰在 GitHub repo 設定為 read-only deploy key，私鑰只在叢集 `flux-system` namespace 的 Secret `flux-system`（建立叢集時直接建立，不經 git，[deploy/flux/README.md](../../deploy/flux/README.md)） | 只給 Flux source-controller | Laysi/trustiot-v2#70 |
 | 地端的映像取得 | 客戶安裝時拉映像 | 每個客戶一把自己的唯讀 token，或離線安裝包（MS6）；不共用 SaaS 的 token | 客戶建立的 `imagePullSecrets` | Laysi/trustiot-v2#46 |
 | 發版說明的 `AI_API_KEY` | release.yml 以模型整理發版說明（選用） | repo 的 Actions secret | 只經 action 的 `with` 輸入給 `plan` job 產生發版說明的那一步；執行建置程式碼的 `build` job 拿不到任何 secret | Laysi/trustiot-v2#68 |
 | `GITHUB_TOKEN` | 每個 job 的短效 token。發佈用到的權限：`publish` 以 `packages: write` 推映像與 chart 到 GHCR、以 `contents: write` 建 GitHub Release；`verify` 以 `packages: read` 拉回驗證；`report` 以 `contents: write`、`statuses: write` 寫驗證結果與 commit status；`plan` 的 `actions: read` 只讀 ci 的執行結果；`build` 只有 `contents: read` | GitHub 每次執行時產生，job 結束失效；repo 預設唯讀，每個 workflow 設 `permissions: {}`、每個 job 明列權限（`workflow-policy` 檢查）。推 GHCR 不用個人或機器帳號的 token | 不需保管；只經 step 的 `env` 交給需要的指令 | Laysi/trustiot-v2#67、Laysi/trustiot-v2#68 |
 | 映像與 chart 的簽章（cosign keyless） | 只有 `publish` job 有 `id-token: write`：以 GitHub 的 OIDC token 向 Sigstore Fulcio 換約 10 分鐘的簽章憑證，簽章紀錄寫進公開的 Rekor（決策 30） | 沒有長期簽章金鑰，OIDC token 與憑證都是一次性的；簽章身分綁定 release.yml 與 tag，驗證指令見 ci-release.md「release.yml」 | 不需保管 | Laysi/trustiot-v2#68 |
-| `release` environment | `publish` job 的執行環境 | 不是密鑰：目前沒有 environment secret，也設不了必要審查者（決策 30）；新增 environment secret 前要先確認它只交給 `publish` | 不適用 | Laysi/trustiot-v2#68、Laysi/trustiot-v2#164 |
+| `release` environment | `publish` job 的執行環境 | 不是密鑰：目前沒有 environment secret，也沒有設必要審查者（2026-10-10 私有庫設不了，決策 30；2026-10-12 repo 公開後設得了，尚未設定，Laysi/trustiot-v2#345）；新增 environment secret 前要先確認它只交給 `publish` | 不適用 | Laysi/trustiot-v2#68、Laysi/trustiot-v2#164 |
 
 ### 裝置端與應用資料
 

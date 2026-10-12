@@ -8,13 +8,15 @@
 2. 閘道器：warn 以上隨 MQTT 持續上傳，有流量上限；完整日誌由後台下指令上傳指定時段；不寫 SD 卡。
 3. 地端可以把 OTLP 另外轉送到客戶自己的 SIEM。
 4. 日誌不得包含聊天內容、request body、憑證與個資（[#110](https://github.com/Laysi/trustiot/issues/110)）。
-5. Rust 服務的日誌由 `crates/service-kit` 輸出：stdout 每行一個 JSON 物件，請求內的日誌帶 trace id；OTLP 匯出（日誌、trace、指標）預設關閉，設定 collector 位址後才開啟，collector 位址的路徑不論日誌等級都不進日誌（OpenTelemetry SDK 的診斷日誌只輸出 INFO 以上）；名稱像憑證、個資或內容的欄位，值一律遮蔽。遮蔽只是最後防線，第 4 點仍要靠程式本身不記錄這些值；格式與規則見[它的 README](../../crates/service-kit/README.md)。
+5. 管線（2026-10-11，Laysi/trustiot-v2#73）：Helm chart 部署 OpenTelemetry collector（contrib 版，以 digest 固定），每個服務以 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` 把 OTLP 送給它；collector 遮蔽後把日誌與 trace 寫進 ClickHouse 的 `trustiot_logs.otel_logs`、`otel_traces`，保存 30 天，以伺服器寫入時間計算（`services/ingest/migrations/clickhouse/0006_logs.sql`）。collector 的 ClickHouse 帳號只能寫入這兩張表，由 migration Job 以 SQL 建立（決策 14）。地端開啟轉送時，同一份遮蔽後的日誌（可加 trace）以 OTLP/HTTP 或 gRPC 送到客戶的 SIEM。設定與欄位見 [chart 的 README](../../deploy/chart/README.md)「OpenTelemetry collector」。
+6. 第 4 點在 collector 再擋一次：名稱像憑證、個資、request body 或聊天內容的屬性一律遮蔽（名單與 service-kit 相同），所有屬性值、日誌 body、span 名稱與 status message 裡的私鑰、URL 帳密、Bearer 與 JWT 等 token、API key、email、電話與身分證字號也遮蔽；遮蔽在寫進 ClickHouse 與轉送 SIEM 之前，適用於所有來源。這和 service-kit 的遮蔽一樣只是最後防線。
+7. Rust 服務的日誌由 `crates/service-kit` 輸出：stdout 每行一個 JSON 物件，請求內的日誌帶 trace id；OTLP 匯出（日誌、trace、指標）預設關閉，設定 collector 位址後才開啟，collector 位址的路徑不論日誌等級都不進日誌（OpenTelemetry SDK 的診斷日誌只輸出 INFO 以上）；名稱像憑證、個資或內容的欄位，值一律遮蔽。遮蔽只是最後防線，第 4 點仍要靠程式本身不記錄這些值；格式與規則見[它的 README](../../crates/service-kit/README.md)。
 
 看板與告警：
 
 1. Grafana 部署在同一個 k3s，查詢日誌與指標並設定告警；主機掛了它也跟著掛，所以 SaaS 另設不跑在同一台主機的外部監控，從外部定時檢查網站、API 與 MQTT 轉接，主機、入口或 Cloudflare Tunnel 掛了會通知人，SaaS 上線前（MS4）完成。
-2. 建議至少要有的告警：資料接收失敗與積壓、閘道器離線、設定套用失敗、AI 呼叫錯誤率與排隊、主機資源、憑證到期、服務間事件積壓（`crates/outbox` 的 `outbox.consumer.lag.age`）。
-3. 服務的指標以 OpenTelemetry 儀表建立，經 service-kit 的 OTLP 匯出送到 collector；第一個是 2026-10-10 加入的 outbox lag（Laysi/trustiot-v2#54）。
+2. 建議至少要有的告警：資料接收失敗與積壓、閘道器離線、設定套用失敗、AI 呼叫錯誤率與排隊、主機資源、憑證到期、服務間事件積壓（`crates/outbox` 的 `outbox.consumer.lag.age` 持續上升（lag 數量到 10 000 就不再增加，所以看 age）；叢集內長寫入交易與未收尾的 prepared transaction 會讓所有訂閱停住，要另有資料庫層的監控，見 [outbox README](../../crates/outbox/README.md#長寫入交易與-prepared-transaction)；以及某個訂閱的 lag 序列沒有資料：消費端停止量測時不回報舊值，見 [outbox README 的 Lag 指標](../../crates/outbox/README.md#lag-指標)）。
+3. 服務的指標以 OpenTelemetry 儀表建立，經 service-kit 的 OTLP 匯出送到 collector；第一個是 2026-10-10 加入的 outbox lag（Laysi/trustiot-v2#54）。collector 目前收下指標後丟棄，存放位置隨 Grafana 決定（Laysi/trustiot-v2#183）。
 
 錯誤追蹤（[#163](https://github.com/Laysi/trustiot/issues/163)、[#166](https://github.com/Laysi/trustiot/issues/166)–[#169](https://github.com/Laysi/trustiot/issues/169)）：
 

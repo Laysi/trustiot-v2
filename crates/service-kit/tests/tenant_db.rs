@@ -358,7 +358,38 @@ async fn a_tenant_reads_and_writes_only_its_own_rows() {
         .await
         .expect("names");
     assert_eq!(names, ["b-1"]);
+    // The sqlx transaction handed to library code (an outbox handler, `outbox::publish`) is
+    // the same transaction, still in tenant B.
+    let current: Option<String> = sqlx::query_scalar(CURRENT_TENANT)
+        .fetch_one(&mut **tx.transaction())
+        .await
+        .expect("tenant setting");
+    assert_eq!(current.as_deref(), Some(TENANT_B));
     tx.rollback().await.expect("rollback");
+
+    // Background work without a tenant (bookkeeping, platform-wide events) sees and writes no
+    // tenant's rows.
+    let mut tx = background
+        .begin_without_tenant("no-tenant-test")
+        .await
+        .expect("begin without a tenant");
+    let count: i64 = sqlx::query_scalar(COUNT_ITEMS)
+        .fetch_one(&mut *tx)
+        .await
+        .expect("count");
+    assert_eq!(count, 0, "no tenant, no rows");
+    let insert_without_tenant = sqlx::query(INSERT_ITEM)
+        .bind(TENANT_A)
+        .bind("00000000-0000-7000-8000-0000000000a9")
+        .bind("a-9")
+        .execute(&mut *tx)
+        .await
+        .expect_err("no tenant, no writes");
+    assert_eq!(
+        sqlstate(&insert_without_tenant).as_deref(),
+        Some(INSUFFICIENT_PRIVILEGE)
+    );
+    drop(tx);
 
     let no_tenant = db
         .begin(&identity.user(None, false))
@@ -476,7 +507,39 @@ async fn the_tenant_setting_does_not_leak_across_pooled_connections() {
         "the rollback left nothing"
     );
     println!("one pooled session (pid {pid}): no tenant after commit, rollback, drop, or error");
+
+    // A session-level tenant (`set_config(..., false)`) outlives the transaction. The pool
+    // closes such a session when it comes back instead of handing it to the next user
+    // (Laysi/trustiot-v2#271, verification F-1): inside a committed tenant transaction, and
+    // straight on the pool.
+    let mut tx = db.begin(&user_a).await.expect("begin");
+    sqlx::query(SET_SESSION_TENANT)
+        .bind(TENANT_B)
+        .execute(&mut *tx)
+        .await
+        .expect("session-level tenant");
+    tx.commit().await.expect("commit");
+    let (after_tx, setting, rows) = untenanted(db.pool()).await;
+    assert_ne!(after_tx, pid, "the leaking session was closed");
+    assert_eq!((setting, rows), (None, 0), "the next session has no tenant");
+
+    sqlx::query(SET_SESSION_TENANT)
+        .bind(TENANT_B)
+        .execute(db.pool())
+        .await
+        .expect("session-level tenant");
+    let (after_pool, setting, rows) = untenanted(db.pool()).await;
+    assert_ne!(after_pool, after_tx, "the leaking session was closed");
+    assert_eq!((setting, rows), (None, 0), "the next session has no tenant");
+    println!(
+        "a session left with a session-level tenant is closed on release (pids {pid}, \
+         {after_tx}, {after_pool})"
+    );
 }
+
+/// Sets the session's tenant beyond the transaction, as nothing may: the pool must not hand
+/// such a session to anyone.
+const SET_SESSION_TENANT: &str = "SELECT set_config('trustiot.tenant_id', $1, false)";
 
 /// The service role is not the table owner, has no BYPASSRLS, and cannot turn row-level
 /// security off or around.
@@ -954,6 +1017,44 @@ async fn the_platform_role_reads_across_tenants_only_where_allowed() {
         assert_eq!(sqlstate(&error).as_deref(), Some(INSUFFICIENT_PRIVILEGE));
         tx.rollback().await.expect("rollback");
     }
+
+    // A reader's transactions see the same rows but are read-only: the template grants the
+    // platform role UPDATE, and the database still refuses it.
+    let reader = platform.reader(
+        PlatformActor::service(ServiceIdentity::new(ServiceName::Assets)),
+        "reader-test",
+    );
+    assert_eq!(reader.purpose(), "reader-test");
+    let mut tx = reader.begin().await.expect("begin a read");
+    assert_eq!(tx.actor(), reader.actor());
+    let names: Vec<String> = sqlx::query_scalar(ITEM_NAMES)
+        .fetch_all(&mut *tx)
+        .await
+        .expect("names");
+    assert_eq!(names, ["a-1", "a-2", "b-1"], "every tenant");
+    let error = sqlx::query("UPDATE example_items SET name = name")
+        .execute(&mut *tx)
+        .await
+        .expect_err("a reader cannot write");
+    assert_eq!(
+        sqlstate(&error).as_deref(),
+        Some("25006"),
+        "read_only_sql_transaction"
+    );
+    tx.rollback().await.expect("rollback");
+    // Nor can its first statement turn the transaction back to read-write: `begin` has already
+    // run a query, after which Postgres refuses (Laysi/trustiot-v2#271, verification F-4).
+    let mut tx = reader.begin().await.expect("begin a read");
+    let error = sqlx::query("SET TRANSACTION READ WRITE")
+        .execute(&mut *tx)
+        .await
+        .expect_err("READ ONLY stays");
+    assert_eq!(
+        sqlstate(&error).as_deref(),
+        Some("25001"),
+        "active_sql_transaction: read-write mode must be set before any query"
+    );
+    drop(tx);
 
     // The service role still sees only its tenant there.
     let db = fixture.tenant_db(1);

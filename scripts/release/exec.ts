@@ -142,6 +142,17 @@ function escapeAnnotation(text: string): string {
 }
 
 /**
+ * Prints a warning for a stage that succeeded but needs a person's attention; in GitHub Actions
+ * it is also a warning annotation on the run.
+ */
+export function warn(stage: string, message: string): void {
+  console.error(`[release:${stage}] warning: ${message}`);
+  if (process.env.GITHUB_ACTIONS === "true") {
+    console.log(`::warning title=release ${stage}::${escapeAnnotation(message)}`);
+  }
+}
+
+/**
  * Runs a stage. A failure is printed, annotated in GitHub Actions and written to the step
  * output `error` (one line), which the workflow's report job puts in the commit status.
  */

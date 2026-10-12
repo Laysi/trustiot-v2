@@ -109,7 +109,7 @@ kit 的設定與預設值（環境變數以 `TRUSTIOT` 前綴為例）：
 | `http.request_timeout` | `TRUSTIOT__HTTP__REQUEST_TIMEOUT` | `30s` | handler 產生回應標頭的時間上限，逾時回 504；串流的 body 不受限。用 504 而不是 503，是因為入口會重試 503，非冪等的請求可能被執行兩次；必須大於 0，上限 1 小時 |
 | `shutdown.drain_delay` | `TRUSTIOT__SHUTDOWN__DRAIN_DELAY` | `5s` | 收到 SIGTERM 後照常服務多久，等入口、ztunnel 與 kube-proxy 不再送來新請求；上限 1 小時 |
 | `shutdown.drain_timeout` | `TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT` | `20s` | 停止接受連線後，進行中的請求與背景工作結束的時間上限；必須大於 0，上限 1 小時 |
-| `telemetry.log_filter` | `TRUSTIOT__TELEMETRY__LOG_FILTER` | `info` | 預設等級加上以逗號分隔的 `target=level`，例如 `info,sqlx=warn`；OpenTelemetry SDK 的診斷日誌（target 以 `opentelemetry` 開頭）不論怎麼設，DEBUG 與 TRACE 都不輸出，見[日誌與 trace](#日誌與-trace)的 OTLP 匯出一節 |
+| `telemetry.log_filter` | `TRUSTIOT__TELEMETRY__LOG_FILTER` | `info` | 預設等級加上以逗號分隔的 `target=level`，例如 `info,sqlx=warn`，對所有相依套件都有效，包括透過 `log` crate 發出事件的（例如 `reqwest`）：這些事件以原本的 target 比對；OpenTelemetry SDK 的診斷日誌（target 以 `opentelemetry` 開頭）不論怎麼設，DEBUG 與 TRACE 都不輸出，見[日誌與 trace](#日誌與-trace)的 OTLP 匯出一節 |
 | `telemetry.otlp_endpoint` | `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` | 未設定（不匯出） | OTLP/HTTP 接收端的 base URL（日誌、trace、指標都送到這裡），例如 `http://otel-collector:4318`；只接受 `http://`（mesh 已加密這一段），不得含帳密或 query |
 
 時間長度的上限（`service_kit::http::MAX_REQUEST_TIMEOUT`、`service_kit::shutdown::MAX_DRAIN`）：`http.request_timeout`、`shutdown.drain_delay`、`shutdown.drain_timeout` 各自不得超過 1 小時（剛好 1 小時可以），而且 `drain_delay + drain_timeout` 合計也不得超過 1 小時。超過就在啟動時以設定錯誤拒絕（錯誤訊息寫出設定名稱與環境變數，不寫設定值）。沒有上限時，極端值（例如 `500000000000y`）會讓 SIGTERM 後的時間運算溢位而 panic（`drain_timeout`），或讓服務永遠不退出（`drain_delay`）。
@@ -154,7 +154,7 @@ kit 的設定與預設值（環境變數以 `TRUSTIOT` 前綴為例）：
 - `trace_id`、`span_id`：事件在 span 內才有。每個請求在 `http.request` span 內處理；請求帶 W3C `traceparent` 時延續呼叫端的 trace。
 - 每個請求一行 `request completed`（5xx 是 ERROR 等級的 `request failed`），只記 method、路由樣板（不記實際路徑與 query）、狀態碼與耗時；不記標頭與 body。health 端點不記。
 - handler panic 時回 500，並記一行 ERROR `thread panicked`，含位置與 panic 訊息，所以 panic 與 `expect` 的訊息不能放資料。handler 超過 `http.request_timeout` 時回 504，記一行 WARN。兩者的回應 body 見 [contract feature](#contract-feature)。
-- `telemetry.log_filter` 調整等級。span 不受它影響，一律在 INFO 以上建立，等級調到 `warn` 時，warn 日誌仍帶 trace id。
+- `telemetry.log_filter` 調整等級，`target=level` 指令對所有 target 都有效：經 `log` crate 橋接進來的事件（`reqwest` 等相依套件用 `log` 發日誌）以事件原本的 target 比對，日誌行的 `target` 也是原本的，所以 `debug,reqwest=warn` 讓 reqwest 只剩 WARN 以上。span 不受它影響，一律在 INFO 以上建立，等級調到 `warn` 時，warn 日誌仍帶 trace id。
 
 規則（[觀測文件](../../docs/architecture/observability.md)、功能重建清單 M2）：
 
@@ -221,7 +221,7 @@ server 端可以在持有者不知情時結束鎖的 session：網路分割時�
 
 ## 內部身分（`identity`）
 
-入口 gateway 驗過 cookie 後，身分服務為每個請求簽一個短效的內部身分 token，放在 `x-internal-identity` 標頭交給後端（[決策 27](../../docs/architecture/decisions.md)、功能重建清單 A4）。每個服務自己驗證簽章、簽發者、受眾與效期，只信簽章，不信任何其他關於呼叫者的資訊。本模組在 `contract` feature 後面；簽發 token 是身分服務的工作（Laysi/trustiot-v2#61）。
+入口 gateway 驗過 cookie 後，身分服務為每個請求簽一個短效的內部身分 token，放在 `x-internal-identity` 標頭交給後端（[決策 27](../../docs/architecture/decisions.md)、功能重建清單 A4）。每個服務自己驗證簽章、簽發者、受眾與效期，只信簽章，不信任何其他關於呼叫者的資訊。本模組在 `contract` feature 後面；簽發 token 是[身分服務](../../services/identity/README.md)的工作。
 
 ```rust
 use axum::extract::FromRef;
@@ -331,7 +331,7 @@ JWS compact serialization（RFC 7515），payload 是 contract 的 `InternalClai
 - 身分服務的公鑰寫成 JWK Set（RFC 7517），放在平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`，服務設定裡是 `platform.internal_identity_keys`。範例：`{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"2026-10-a","x":"<32 bytes 的 base64url>"}]}`。
 - 每把公鑰的 `kty` 必須是 `OKP`、`crv` 必須是 `Ed25519`、`kid` 是 1 到 64 個可見 ASCII 字元且不重複；`alg`、`use`、`key_ops` 可以省略，有寫就必須是 `EdDSA`、`sig`、含 `verify` 的清單；一組最多 8 把。含私鑰（`d`）、小階點、格式不對的公鑰，服務都拒絕啟動，錯誤訊息只寫第幾把與原因，不寫值。
 - 平台設定只由部署決定（`TRUSTIOT__PLATFORM__*` 會被拒絕，chart 的 `services.<name>.env` 也不能設 `TRUSTIOT_` 後接英數字的名稱），所以單一服務的設定無法換掉公鑰。
-- 公鑰不是祕密，放在 chart 的平台設定 ConfigMap；私鑰只在身分服務的 Secret。chart 的 values 欄位與 ConfigMap 由 Laysi/trustiot-v2#61 加入（身分服務出映像之前，沒有服務需要它）。
+- 公鑰不是祕密，放在 chart 的平台設定 ConfigMap；私鑰只在身分服務的 Secret。chart 的欄位是 `internalIdentity.publicKeys`（組成 JWK Set 寫進 ConfigMap）與 `internalIdentity.signingKeySecret`（只掛進身分服務），見 [chart README](../../deploy/chart/README.md) 的「內部身分」。
 - 本機開發：直接設 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`，或寫在設定檔的 `[platform]` 表，值是 JWK Set 的 JSON 字串。
 
 為什麼不由身分服務發布（例如服務在執行時抓 JWKS 端點）：
@@ -345,7 +345,7 @@ JWS compact serialization（RFC 7515），payload 是 contract 的 `InternalClai
 輪替步驟（新舊兩把 key 以 `kid` 區分，例如 `2026-10-a` 換成 `2027-04-a`）：
 
 1. **加新公鑰**：產生新的金鑰對，把新公鑰加進 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`（新舊兩把並存）並部署。確認每個服務都已滾動完成（每個 Deployment 的 `kubectl rollout status` 都完成），身分服務仍用舊私鑰簽章。
-2. **換簽章私鑰**：把身分服務的簽章私鑰換成新的（Secret 與 `kid`），身分服務滾動完成後只簽新 `kid`。步驟 1 沒有全部完成就換，還沒拿到新公鑰的服務會以 `unknown_key` 拒絕新 token。
+2. **換簽章私鑰**：把身分服務的簽章私鑰換成新的（Secret；`kid` 由身分服務啟動時從公鑰找出，見[身分服務的金鑰輪替](../../services/identity/README.md#金鑰輪替)），身分服務滾動完成後只簽新 `kid`。步驟 1 沒有全部完成就換，還沒拿到新公鑰的服務會以 `unknown_key` 拒絕新 token。
 3. **移除舊公鑰**：身分服務滾動完成後至少等 `300 + 5` 秒（效期上限加時鐘誤差），舊 token 全部過期，再從 `TRUSTIOT_INTERNAL_IDENTITY_KEYS` 移除舊公鑰並部署，最後刪除舊私鑰。
 
 私鑰外洩時：立即同時做步驟 1 到 3，不等舊 token 過期。滾動期間部分請求會被拒絕（401），換取外洩的金鑰馬上失效。
@@ -415,12 +415,15 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 | --- | --- | --- |
 | `TenantDb::begin(&UserIdentity)` | handler | 請求的內部身分 token（已驗證）；token 沒有租戶時回 `TenantDbError::NoTenant`，端點回 403 `permission_denied` |
 | `BackgroundTenantDb::begin(TenantId, purpose)` | 排程工作、事件消費 | 工作本身：事件帶的租戶，或平台角色查詢找出的租戶。以 DEBUG 記下服務、租戶與 `purpose` |
+| `BackgroundTenantDb::begin_without_tenant(purpose)` | 不帶租戶資料的表（例如 outbox 消費端自己的表）、全平台事件的處理 | 不設定租戶：看不到也寫不進任何租戶的列。以 DEBUG 記下服務與 `purpose` |
 | `PlatformDb::begin(PlatformActor, purpose)` | 平台後台、跨租戶的工作 | 不設定租戶；平台角色只看得到表上有 `platform_access` policy 的資料。以 INFO 記一行 `platform database access`（actor、`purpose`），操作本身的紀錄在 Laysi/trustiot-v2#130 |
+| `PlatformDb::reader(PlatformActor, purpose)` → `PlatformReader::begin()` | 每隔幾秒就要跨租戶讀一次的例行工作，例如 outbox 消費端輪詢事件 | 同 `PlatformDb::begin`，但交易是 `READ ONLY`（資料庫拒絕寫入）。`begin()` 在 `BEGIN READ ONLY` 之後立刻執行 `SELECT 1`：在交易的第一個查詢之前，`SET TRANSACTION READ WRITE` 還能改回讀寫，之後 Postgres 拒絕（Laysi/trustiot-v2#271 驗證的 F-4）。actor 與 `purpose` 在建立 `PlatformReader` 時以 INFO 記一次（`platform database reader`），每筆交易只記 DEBUG，免得每秒一行 INFO |
 
 - 交易的第一個陳述就是 `SELECT set_config('trustiot.tenant_id', $1, true)`：等同 `SET LOCAL`，但值以參數綁定。交易結束（commit、rollback、drop、出錯）設定就消失，連線回到 pool 時不帶租戶。
+- 連線回到 pool 時，kit 再查一次（pool 的 `after_release`，每次歸還一個查詢）：session 層級還有 `trustiot.tenant_id`（有人以 `set_config(..., false)` 或 `SET` 設定，例如藏在 PL/pgSQL `EXECUTE` 字串裡、sql-check 看不到的寫法），就關掉這條連線、不放回 pool，並記一行 ERROR `closed a database session left with a session-level tenant`。否則下一個拿到這條連線的交易會在那個租戶裡執行，包括 `begin_without_tenant` 與 `TenantDb::pool()` 上的直接查詢（Laysi/trustiot-v2#271 驗證的 F-1）。新連線的同類檢查是下面的 `TenantPreset`。
 - `TenantTransaction` 沒有改租戶的方法，`TenantDb` 也沒有以任意租戶開交易的 handler 用方法；`src/tenant.rs` 的 compile-fail doctest 證明這些寫法無法編譯。SQL 裡設定租戶或角色由 `tools/sql-check` 擋下，只有 `src/tenant.rs` 例外。
 - 背景工作沒有使用者身分（見[內部身分](#背景工作沒有使用者身分)），所以決定：代表單一租戶的工作用 `BackgroundTenantDb` 開交易，租戶來自工作本身；要找出「哪些租戶有工作」這種跨租戶查詢，用 `PlatformDb` 與 `PlatformActor::service`，會留紀錄。
-- `BackgroundTenantDb` 是能指定租戶的能力，只有啟動時的 `TenantDb::connect_lazy_with_background(options, pool, ServiceIdentity)` 會一併產生（與 `TenantDb` 共用 pool）。把 `TenantDb` 放進 router 的 state、`BackgroundTenantDb` 只交給背景工作：handler 手上的 `TenantDb` 沒有任何接受租戶的方法，無法把請求裡的租戶拿去開交易（compile-fail doctest 證明）。
+- `BackgroundTenantDb` 是能指定租戶的能力，只有啟動時的 `TenantDb::connect_lazy_with_background(options, pool, ServiceIdentity)` 會一併產生（與 `TenantDb` 共用 pool）。把 `TenantDb` 放進 router 的 state、`BackgroundTenantDb` 只交給背景工作：handler 手上的 `TenantDb` 沒有任何接受租戶的方法，無法把請求裡的租戶拿去開交易（compile-fail doctest 證明）。唯一的例外是身分服務的 session 查詢：查 session 時請求還沒有內部身分，租戶取自剛從資料庫讀出的 session 列，不取自請求，所以由它的 session store 私下持有 `BackgroundTenantDb`，handler 拿不到（見 [services/identity](../../services/identity/README.md) 的「資料庫」）。
 - `PlatformActor::admin(&UserIdentity)` 只有平台管理者（A2）拿得到；`PlatformActor` 沒有其他建構方式。
 
 ### outbox（`crates/outbox`）
@@ -430,7 +433,8 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
   1. 服務角色只有 INSERT，`tenant_isolation` 的 `WITH CHECK` 讓它只寫得進目前租戶的事件；不給 SELECT（`publish` 不用 `RETURNING`）。
   2. 全平台事件（`tenant_id` 為 NULL）決定（2026-10-10）：允許，但只由產生端的平台角色經 `PlatformDb` 寫（`platform_events` policy：`FOR INSERT ... WITH CHECK (tenant_id IS NULL)`），會留紀錄；平台角色寫不了任何租戶的事件，服務角色寫不了全平台事件。平台角色另需 `outbox_aggregate` 的權限（outbox README「資料庫權限」中產生端的那幾行）。
   3. 投遞要讀所有租戶的事件，所以消費端以**它的平台角色**讀（`consumer_read` policy：`FOR SELECT TO <消費端平台角色> USING (true)`），不能用服務角色：開放給服務角色的跨租戶 policy 會讓它的連線被拒（`PermissivePolicy`）。handler 的寫入則在消費端服務角色的租戶交易裡。
-- 目前 `outbox::Consumer` 讀取與 handler 交易共用一個 pool，`Handler::begin` 也還沒有設定租戶的 kit 介面；兩者要配合上一點調整（讀取用平台角色的 pool、handler 交易用 `BackgroundTenantDb` 的 pool 並由 kit 設定租戶），列為後續工作。
+- `outbox::Consumer::new(&PlatformDb, BackgroundTenantDb, ...)` 照上一點連線（Laysi/trustiot-v2#271，2026-10-11）：以 `PlatformDb::reader` 的唯讀交易讀事件，每個事件以 `BackgroundTenantDb::begin(事件的租戶, "outbox-delivery")` 開交易，全平台事件與消費端自己的表用 `BackgroundTenantDb::begin_without_tenant`。細節與保證見 [outbox README](../outbox/README.md#與租戶隔離決策-29的配合)。
+- 交給函式庫的交易：`TenantTransaction::transaction()`、`PlatformTransaction::transaction()` 回傳同一筆 sqlx 交易（`&mut Transaction`），給參數是 sqlx 交易的函式庫用，例如 `outbox::publish` 與 outbox 的 handler；租戶設定不變，交易仍由原物件 commit、rollback 或 drop 結束。
 
 ### 角色與 policy 範本
 
@@ -458,7 +462,7 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 | 問題 | 原因 |
 | --- | --- |
 | `BypassesRls` | 角色本身或它所屬的角色是 superuser 或有 `BYPASSRLS` |
-| `TenantPreset` | 連線一開始就有 `trustiot.tenant_id`（角色或資料庫預設值、連線參數） |
+| `TenantPreset` | 連線一開始就有 `trustiot.tenant_id`（角色或資料庫預設值、連線參數）；使用中才設定的 session 層級租戶由歸還時的檢查處理（見[交易](#交易)） |
 | `OwnsRelation` | 角色擁有、或屬於擁有某張表或檢視的角色 |
 | `UnprotectedTable` | 角色能用、有 `tenant_id` 欄的表沒啟用 RLS（含 partition） |
 | `PermissivePolicy` | 套用到角色（`PUBLIC` 或它所屬的角色）的 permissive policy 不是一字不差的租戶條件；平台角色的連線只放行以平台角色本身名稱給它、而且沒給 `PUBLIC` 的 policy，經由它所屬的群組角色取得的不放行 |

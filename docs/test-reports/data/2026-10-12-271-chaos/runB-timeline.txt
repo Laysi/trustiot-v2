@@ -1,0 +1,602 @@
+[0.0s] starting postgres container (docker, memory 1g, TLS from a CA generated for this run)
+[3.1s] postgres up: PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+[3.2s] ssl = on
+[3.3s] setup done (verify-full connection, four roles, RLS template, grants)
+[3.3s] seed 271002, 20 minutes of chaos, drain limit 15 minutes
+[3.3s] started 3 producers and 3 consumers
+[6.3s] SIGKILL p3#1
+[9.9s] restart p3#2
+[14.5s] SIGKILL c1#1
+[17.0s] restart c1#2
+[19.7s] SIGKILL p1#1
+[23.3s] restart p1#2
+[24.6s] SIGKILL p2#1
+[25.7s] restart p2#2
+[26.2s] pg_terminate_backend on 10 backends (random() < 0.5)
+[32.4s] SIGKILL p2#2
+[34.2s] restart p2#3
+[39.7s] SIGKILL c3#1
+[40.8s] restart c3#2
+[47.2s] SIGKILL p2#3
+[49.5s] restart p2#4
+[52.1s] SIGKILL c2#1
+[52.8s] restart c2#2
+[58.4s] SIGKILL c3#2
+[59.3s] restart c3#3
+[63.5s] pg_terminate_backend on 15 backends (random() < 0.5)
+[63.5s] SIGKILL c2#2
+[64.5s] restart c2#3
+[67.8s] SIGKILL p1#2
+[71.5s] restart p1#3
+[75.9s] SIGKILL p3#2
+[77.0s] restart p3#3
+[78.0s] long write transaction in schema other: 15s
+[80.1s] SIGKILL c2#3
+[80.1s] SIGKILL p2#4
+[83.3s] restart p2#5
+[83.3s] SIGKILL c1#2
+[83.3s] SIGKILL p2#5
+[83.5s] restart c2#4
+[85.9s] restart c1#3
+[86.5s] restart p2#6
+[89.4s] SIGKILL p1#3
+[89.8s] restart p1#4
+[93.1s] long transaction ended ok=true 
+[96.1s] SIGKILL p3#3
+[96.6s] restart p3#4
+[101.5s] pg_terminate_backend on 25 backends (true)
+[104.7s] SIGKILL c2#4
+[104.7s] SIGKILL c3#3
+[106.8s] restart c2#5
+[107.0s] restart c3#4
+[108.5s] SIGKILL p1#4
+[111.0s] restart p1#5
+[111.6s] SIGKILL c2#5
+[115.4s] restart c2#6
+[116.8s] SIGKILL c3#4
+[117.9s] restart c3#5
+[120.9s] SIGKILL c3#5
+[120.9s] SIGKILL p2#6
+[123.9s] restart c3#6
+[124.3s] restart p2#7
+[126.0s] SIGKILL c1#3
+[126.0s] SIGKILL p3#4
+[126.5s] restart p3#5
+[128.8s] restart c1#4
+[130.2s] pg_terminate_backend on 12 backends (random() < 0.5)
+[134.2s] SIGKILL p1#5
+[135.7s] restart p1#6
+[141.0s] SIGKILL c2#6
+[142.0s] restart c2#7
+[142.4s] long write transaction in schema other: 30s
+[144.1s] SIGKILL p1#6
+[144.8s] restart p1#7
+[146.6s] SIGKILL p3#5
+[147.3s] postgres: graceful restart
+[147.4s] long transaction ended ok=false FATAL:  terminating connection due to administrator command
+SSL connection has b
+[147.9s] postgres: back
+[149.8s] restart p3#6
+[151.3s] SIGKILL p2#7
+[151.4s] pg_terminate_backend on 22 backends (true)
+[154.1s] restart p2#8
+[155.9s] SIGKILL c3#6
+[159.8s] restart c3#7
+[159.9s] SIGKILL p1#7
+[160.6s] restart p1#8
+[168.9s] SIGKILL c3#7
+[169.7s] restart c3#8
+[172.5s] SIGKILL c3#8
+[172.9s] restart c3#9
+[178.2s] pg_terminate_backend on 28 backends (true)
+[178.5s] SIGKILL c3#9
+[178.5s] SIGKILL c2#7
+[180.9s] restart c2#8
+[181.7s] restart c3#10
+[183.5s] long write transaction in schema other: 23s
+[185.0s] SIGKILL p2#8
+[187.1s] restart p2#9
+[192.2s] SIGKILL c2#8
+[195.0s] SIGKILL p3#6
+[195.4s] restart c2#9
+[195.9s] restart p3#7
+[199.6s] SIGKILL c3#10
+[201.8s] restart c3#11
+[204.1s] SIGKILL c3#11
+[205.3s] restart c3#12
+[206.6s] long transaction ended ok=true 
+[208.8s] SIGKILL p3#7
+[212.8s] restart p3#8
+[216.4s] SIGKILL p1#8
+[217.5s] restart p1#9
+[219.7s] SIGKILL p2#9
+[220.6s] restart p2#10
+[221.5s] pg_terminate_backend on 14 backends (random() < 0.5)
+[225.6s] SIGKILL c2#9
+[227.8s] restart c2#10
+[228.8s] SIGKILL c3#12
+[231.5s] restart c3#13
+[235.4s] SIGKILL c1#4
+[235.4s] SIGKILL c3#13
+[237.2s] restart c3#14
+[238.4s] restart c1#5
+[238.4s] SIGKILL c3#14
+[241.8s] restart c3#15
+[245.8s] pg_terminate_backend on 24 backends (true)
+[246.4s] SIGKILL p2#10
+[246.7s] restart p2#11
+[251.3s] long write transaction in schema other: 31s
+[251.8s] SIGKILL p2#11
+[254.9s] restart p2#12
+[257.8s] SIGKILL c3#15
+[257.8s] SIGKILL c1#5
+[259.2s] restart c1#6
+[260.2s] restart c3#16
+[261.8s] SIGKILL p3#8
+[262.7s] restart p3#9
+[266.0s] SIGKILL p2#12
+[266.7s] pg_terminate_backend on 9 backends (random() < 0.5)
+[268.0s] restart p2#13
+[271.6s] SIGKILL c3#16
+[273.3s] restart c3#17
+[274.2s] SIGKILL c3#17
+[276.6s] restart c3#18
+[277.2s] SIGKILL p1#9
+[279.7s] SIGKILL p3#9
+[280.0s] restart p1#10
+[282.3s] restart p3#10
+[282.4s] long transaction ended ok=true 
+[283.9s] SIGKILL c3#18
+[284.5s] restart c3#19
+[290.0s] SIGKILL c2#10
+[293.6s] restart c2#11
+[294.0s] SIGKILL c2#11
+[295.8s] restart c2#12
+[296.8s] pg_terminate_backend on 23 backends (true)
+[301.9s] SIGKILL c3#19
+[303.3s] restart c3#20
+[303.3s] postgres: SIGKILL the container (crash recovery)
+[305.3s] postgres: back after crash
+[306.2s] SIGKILL p3#10
+[306.7s] restart p3#11
+[310.8s] SIGKILL c3#20
+[311.5s] restart c3#21
+[317.6s] SIGKILL c3#21
+[319.2s] restart c3#22
+[322.3s] long write transaction in schema other: 25s
+[326.5s] SIGKILL p2#13
+[327.3s] restart p2#14
+[330.2s] SIGKILL p1#10
+[331.9s] restart p1#11
+[337.9s] SIGKILL c3#22
+[339.4s] restart c3#23
+[341.4s] pg_terminate_backend on 26 backends (true)
+[342.8s] SIGKILL c2#12
+[342.8s] SIGKILL p3#11
+[344.7s] restart c2#13
+[346.2s] SIGKILL c3#23
+[346.2s] restart p3#12
+[346.9s] restart c3#24
+[347.4s] long transaction ended ok=true 
+[350.4s] SIGKILL c1#6
+[350.7s] restart c1#7
+[357.3s] SIGKILL p3#12
+[361.2s] restart p3#13
+[362.7s] pg_terminate_backend on 11 backends (random() < 0.5)
+[366.1s] SIGKILL c1#7
+[367.2s] restart c1#8
+[374.5s] SIGKILL p1#11
+[375.3s] restart p1#12
+[377.5s] SIGKILL c1#8
+[380.7s] restart c1#9
+[383.1s] SIGKILL p1#12
+[384.3s] restart p1#13
+[385.6s] SIGKILL p1#13
+[388.5s] SIGKILL c2#13
+[388.7s] restart p1#14
+[389.3s] long write transaction in schema other: 18s
+[390.4s] restart c2#14
+[393.6s] SIGKILL p3#13
+[395.0s] restart p3#14
+[396.7s] SIGKILL c1#9
+[399.5s] restart c1#10
+[402.3s] SIGKILL c3#24
+[402.9s] pg_terminate_backend on 10 backends (random() < 0.5)
+[405.0s] SIGKILL p1#14
+[405.0s] SIGKILL c1#10
+[405.0s] restart c3#25
+[406.4s] restart p1#15
+[407.4s] long transaction ended ok=true 
+[407.9s] restart c1#11
+[410.8s] SIGKILL c3#25
+[411.5s] restart c3#26
+[415.5s] SIGKILL c3#26
+[415.8s] restart c3#27
+[420.9s] SIGKILL c1#11
+[421.6s] restart c1#12
+[428.4s] SIGKILL p1#15
+[432.2s] restart p1#16
+[434.8s] SIGKILL p3#14
+[435.7s] restart p3#15
+[438.1s] SIGKILL c1#12
+[438.7s] pg_terminate_backend on 10 backends (random() < 0.5)
+[439.6s] long write transaction in schema other: 16s
+[442.0s] restart c1#13
+[443.8s] SIGKILL p3#15
+[444.9s] restart p3#16
+[446.5s] SIGKILL c1#13
+[449.9s] restart c1#14
+[449.9s] SIGKILL c3#27
+[449.9s] SIGKILL p1#16
+[453.3s] restart c3#28
+[453.6s] restart p1#17
+[455.7s] long transaction ended ok=true 
+[456.0s] SIGKILL p3#16
+[456.4s] restart p3#17
+[458.8s] SIGKILL p3#17
+[458.8s] SIGKILL c2#14
+[459.3s] replay (Reprocess from START) mid-run
+[459.4s] restart p3#18
+[459.4s] replay reprocess committed
+[460.0s] restart c2#15
+[461.8s] SIGKILL p3#18
+[463.7s] restart p3#19
+[465.5s] pg_terminate_backend on 13 backends (random() < 0.5)
+[470.6s] SIGKILL c2#15
+[472.6s] restart c2#16
+[477.4s] SIGKILL p1#17
+[479.5s] restart p1#18
+[486.3s] SIGKILL c3#28
+[489.5s] restart c3#29
+[491.3s] SIGKILL p1#18
+[492.6s] long write transaction in schema other: 22s
+[492.9s] restart p1#19
+[498.9s] SIGKILL p2#14
+[499.8s] pg_terminate_backend on 12 backends (random() < 0.5)
+[502.1s] restart p2#15
+[506.5s] SIGKILL p2#15
+[509.1s] restart p2#16
+[511.5s] SIGKILL p3#19
+[514.7s] long transaction ended ok=true 
+[515.2s] restart p3#20
+[520.1s] SIGKILL c3#29
+[520.8s] restart c3#30
+[522.7s] SIGKILL c3#30
+[526.6s] restart c3#31
+[527.5s] SIGKILL p1#19
+[529.9s] restart p1#20
+[534.3s] SIGKILL p3#20
+[537.9s] restart p3#21
+[539.5s] SIGKILL c1#14
+[539.9s] pg_terminate_backend on 9 backends (random() < 0.5)
+[543.2s] restart c1#15
+[546.3s] SIGKILL p3#21
+[548.1s] restart p3#22
+[551.9s] SIGKILL p3#22
+[555.9s] restart p3#23
+[558.4s] SIGKILL p2#16
+[562.2s] restart p2#17
+[564.4s] SIGKILL p2#17
+[564.8s] restart p2#18
+[566.2s] long write transaction in schema other: 18s
+[568.4s] SIGKILL p3#23
+[571.6s] restart p3#24
+[575.9s] SIGKILL p1#20
+[576.4s] restart p1#21
+[578.6s] SIGKILL p2#18
+[580.4s] pg_terminate_backend on 23 backends (true)
+[581.3s] restart p2#19
+[584.3s] long transaction ended ok=true 
+[585.8s] SIGKILL p3#24
+[585.9s] SIGKILL p2#19
+[587.0s] restart p3#25
+[587.7s] restart p2#20
+[591.4s] SIGKILL p3#25
+[591.4s] SIGKILL p2#20
+[594.2s] restart p2#21
+[595.1s] restart p3#26
+[596.5s] SIGKILL p2#21
+[597.5s] restart p2#22
+[603.1s] pg_terminate_backend on 24 backends (true)
+[603.3s] prepared transaction in schema other, then crash of postgres while it is held
+[605.5s] SIGKILL c2#16
+[605.5s] SIGKILL p1#21
+[607.3s] restart p1#22
+[607.9s] restart c2#17
+[610.7s] SIGKILL c3#31
+[611.4s] postgres: SIGKILL the container (crash recovery)
+[612.4s] restart c3#32
+[613.3s] postgres: back after crash
+[613.4s] prepared transactions after crash recovery: chaos1
+[617.1s] SIGKILL c2#17
+[617.1s] SIGKILL p1#22
+[618.4s] restart c2#18
+[619.3s] restart p1#23
+[619.5s] long write transaction in schema other: 17s
+[623.0s] SIGKILL p3#26
+[623.4s] restart p3#27
+[628.3s] SIGKILL p2#22
+[628.4s] commit prepared ok=true 
+[629.0s] restart p2#23
+[632.1s] SIGKILL c3#32
+[635.9s] restart c3#33
+[636.6s] long transaction ended ok=true 
+[641.0s] SIGKILL c2#18
+[643.2s] pg_terminate_backend on 21 backends (true)
+[643.5s] restart c2#19
+[644.6s] SIGKILL c1#15
+[645.6s] restart c1#16
+[648.8s] SIGKILL c3#33
+[651.9s] restart c3#34
+[656.9s] SIGKILL p3#27
+[657.4s] restart p3#28
+[661.7s] SIGKILL c1#16
+[665.6s] restart c1#17
+[670.1s] SIGKILL c1#17
+[670.2s] pg_terminate_backend on 22 backends (true)
+[670.4s] restart c1#18
+[676.5s] SIGKILL c1#18
+[679.3s] restart c1#19
+[683.8s] SIGKILL c2#19
+[686.7s] restart c2#20
+[689.9s] SIGKILL c2#20
+[691.5s] restart c2#21
+[694.0s] long write transaction in schema other: 28s
+[696.6s] SIGKILL p1#23
+[696.6s] SIGKILL p3#28
+[696.8s] pg_terminate_backend on 9 backends (random() < 0.5)
+[697.3s] restart p1#24
+[699.0s] restart p3#29
+[703.1s] SIGKILL p3#29
+[704.4s] restart p3#30
+[709.8s] SIGKILL p1#24
+[713.6s] restart p1#25
+[716.5s] SIGKILL p3#30
+[716.5s] SIGKILL c3#34
+[717.8s] restart c3#35
+[720.2s] restart p3#31
+[721.6s] SIGKILL p2#23
+[722.1s] long transaction ended ok=true 
+[724.3s] SIGKILL p3#31
+[725.6s] restart p2#24
+[726.5s] restart p3#32
+[730.7s] pg_terminate_backend on 24 backends (true)
+[732.1s] SIGKILL c3#35
+[734.5s] restart c3#36
+[741.0s] SIGKILL p1#25
+[741.0s] SIGKILL p2#24
+[742.6s] restart p2#25
+[743.1s] restart p1#26
+[745.9s] SIGKILL c1#19
+[747.3s] postgres: graceful restart
+[748.6s] postgres: back
+[748.8s] SIGKILL c2#21
+[749.2s] restart c2#22
+[749.4s] restart c1#20
+[751.6s] SIGKILL p2#25
+[753.9s] restart p2#26
+[754.2s] SIGKILL c1#20
+[754.2s] SIGKILL c2#22
+[755.4s] long write transaction in schema other: 31s
+[757.4s] restart c1#21
+[757.4s] restart c2#23
+[757.5s] pg_terminate_backend on 17 backends (true)
+[762.6s] SIGKILL c3#36
+[763.4s] restart c3#37
+[765.2s] SIGKILL c3#37
+[768.9s] SIGKILL p1#26
+[769.1s] restart c3#38
+[769.3s] restart p1#27
+[775.7s] SIGKILL p2#26
+[778.5s] restart p2#27
+[780.7s] SIGKILL c3#38
+[781.9s] restart c3#39
+[785.6s] SIGKILL p1#27
+[786.5s] long transaction ended ok=true 
+[786.7s] restart p1#28
+[791.3s] SIGKILL p3#32
+[793.7s] restart p3#33
+[795.9s] pg_terminate_backend on 14 backends (random() < 0.5)
+[796.3s] SIGKILL c3#39
+[796.3s] SIGKILL p1#28
+[797.6s] restart c3#40
+[797.7s] restart p1#29
+[799.9s] SIGKILL c2#23
+[800.3s] restart c2#24
+[808.2s] SIGKILL p3#33
+[809.8s] restart p3#34
+[814.7s] SIGKILL p1#29
+[814.7s] SIGKILL c3#40
+[816.7s] long write transaction in schema other: 30s
+[816.9s] restart c3#41
+[818.7s] restart p1#30
+[821.5s] SIGKILL p1#30
+[823.1s] restart p1#31
+[823.3s] pg_terminate_backend on 22 backends (true)
+[830.5s] SIGKILL c3#41
+[833.1s] restart c3#42
+[833.2s] SIGKILL c1#21
+[833.2s] SIGKILL p3#34
+[834.3s] restart p3#35
+[836.2s] restart c1#22
+[838.7s] SIGKILL c3#42
+[841.3s] restart c3#43
+[843.0s] SIGKILL p1#31
+[844.8s] restart p1#32
+[846.8s] long transaction ended ok=true 
+[851.7s] SIGKILL c3#43
+[853.4s] restart c3#44
+[853.6s] pg_terminate_backend on 22 backends (true)
+[855.1s] SIGKILL p1#32
+[858.2s] restart p1#33
+[859.7s] SIGKILL p3#35
+[861.9s] restart p3#36
+[866.5s] SIGKILL c1#22
+[867.3s] replay (SkipProcessed from START) mid-run
+[867.4s] replay skip committed
+[870.0s] restart c1#23
+[873.3s] SIGKILL c3#44
+[876.8s] restart c3#45
+[878.1s] long write transaction in schema other: 30s
+[881.0s] SIGKILL c2#24
+[881.8s] restart c2#25
+[887.3s] pg_terminate_backend on 27 backends (true)
+[888.5s] SIGKILL c1#23
+[890.3s] restart c1#24
+[891.2s] SIGKILL c1#24
+[891.8s] restart c1#25
+[900.2s] SIGKILL c1#25
+[901.7s] restart c1#26
+[908.2s] long transaction ended ok=true 
+[909.1s] SIGKILL p1#33
+[910.5s] pg_terminate_backend on 23 backends (true)
+[911.7s] restart p1#34
+[917.9s] SIGKILL c1#26
+[918.7s] restart c1#27
+[922.8s] long write transaction in schema other: 34s
+[924.1s] SIGKILL c2#25
+[925.4s] restart c2#26
+[931.6s] SIGKILL c2#26
+[933.3s] restart c2#27
+[936.6s] SIGKILL c2#27
+[939.1s] restart c2#28
+[942.4s] SIGKILL c2#28
+[943.8s] pg_terminate_backend on 13 backends (random() < 0.5)
+[945.6s] restart c2#29
+[946.2s] SIGKILL p2#27
+[946.2s] SIGKILL c2#29
+[948.8s] restart c2#30
+[948.9s] restart p2#28
+[949.5s] SIGKILL p1#34
+[953.0s] restart p1#35
+[956.9s] long transaction ended ok=true 
+[958.2s] SIGKILL c1#27
+[961.1s] restart c1#28
+[961.1s] SIGKILL c2#30
+[962.4s] restart c2#31
+[963.3s] postgres: SIGKILL the container (crash recovery)
+[965.4s] postgres: back after crash
+[967.6s] SIGKILL c2#31
+[967.6s] SIGKILL p1#35
+[970.1s] restart p1#36
+[970.6s] restart c2#32
+[973.5s] SIGKILL p3#36
+[973.5s] SIGKILL c2#32
+[975.1s] restart p3#37
+[977.4s] restart c2#33
+[980.7s] SIGKILL p1#36
+[981.9s] restart p1#37
+[983.6s] pg_terminate_backend on 23 backends (true)
+[985.7s] long write transaction in schema other: 30s
+[988.5s] SIGKILL c2#33
+[988.5s] SIGKILL p3#37
+[989.0s] restart c2#34
+[991.5s] SIGKILL c3#45
+[991.5s] SIGKILL p1#37
+[992.0s] restart p3#38
+[993.4s] restart c3#46
+[993.6s] restart p1#38
+[994.7s] SIGKILL c1#28
+[997.5s] restart c1#29
+[999.9s] SIGKILL p1#38
+[1001.6s] restart p1#39
+[1003.3s] SIGKILL p3#38
+[1004.8s] restart p3#39
+[1007.5s] SIGKILL c3#46
+[1009.2s] restart c3#47
+[1013.8s] pg_terminate_backend on 15 backends (random() < 0.5)
+[1014.9s] SIGKILL c1#29
+[1015.8s] long transaction ended ok=true 
+[1016.1s] restart c1#30
+[1022.1s] SIGKILL p1#39
+[1025.2s] restart p1#40
+[1030.5s] long write transaction in schema other: 30s
+[1030.6s] SIGKILL p3#39
+[1030.6s] SIGKILL p1#40
+[1032.2s] restart p3#40
+[1033.2s] restart p1#41
+[1037.7s] SIGKILL c2#34
+[1038.2s] restart c2#35
+[1042.2s] SIGKILL p1#41
+[1045.2s] restart p1#42
+[1046.8s] SIGKILL c3#47
+[1047.7s] restart c3#48
+[1051.1s] pg_terminate_backend on 13 backends (random() < 0.5)
+[1051.2s] SIGKILL c1#30
+[1055.0s] restart c1#31
+[1058.3s] SIGKILL c1#31
+[1059.9s] restart c1#32
+[1060.6s] long transaction ended ok=true 
+[1064.6s] SIGKILL c3#48
+[1065.5s] restart c3#49
+[1069.8s] SIGKILL p3#40
+[1072.9s] restart p3#41
+[1074.1s] SIGKILL c3#49
+[1077.1s] restart c3#50
+[1081.8s] long write transaction in schema other: 19s
+[1082.2s] SIGKILL c3#50
+[1083.1s] restart c3#51
+[1087.7s] SIGKILL p3#41
+[1088.6s] restart p3#42
+[1091.4s] pg_terminate_backend on 8 backends (random() < 0.5)
+[1095.6s] SIGKILL c1#32
+[1098.3s] restart c1#33
+[1099.2s] SIGKILL p2#28
+[1099.2s] SIGKILL c1#33
+[1100.9s] long transaction ended ok=true 
+[1102.3s] restart p2#29
+[1103.1s] restart c1#34
+[1105.6s] SIGKILL c1#34
+[1109.4s] restart c1#35
+[1112.3s] SIGKILL p3#42
+[1115.4s] restart p3#43
+[1117.4s] pg_terminate_backend on 28 backends (true)
+[1118.2s] SIGKILL p1#42
+[1121.0s] restart p1#43
+[1126.6s] SIGKILL c3#51
+[1127.1s] restart c3#52
+[1131.3s] long write transaction in schema other: 17s
+[1132.7s] SIGKILL p3#43
+[1134.7s] restart p3#44
+[1137.8s] pg_terminate_backend on 26 backends (true)
+[1139.0s] SIGKILL p3#44
+[1139.9s] restart p3#45
+[1145.9s] SIGKILL p1#43
+[1145.9s] SIGKILL p3#45
+[1147.0s] restart p3#46
+[1148.0s] restart p1#44
+[1148.3s] long transaction ended ok=true 
+[1153.8s] SIGKILL p3#46
+[1156.3s] restart p3#47
+[1159.8s] SIGKILL c2#35
+[1161.7s] restart c2#36
+[1165.9s] pg_terminate_backend on 16 backends (random() < 0.5)
+[1165.9s] SIGKILL p2#29
+[1165.9s] SIGKILL p3#47
+[1168.9s] restart p3#48
+[1169.9s] restart p2#30
+[1174.7s] SIGKILL p2#30
+[1175.4s] restart p2#31
+[1178.0s] SIGKILL c2#36
+[1179.8s] restart c2#37
+[1181.0s] SIGKILL p1#44
+[1181.0s] SIGKILL c3#52
+[1183.1s] restart p1#45
+[1184.6s] restart c3#53
+[1187.0s] SIGKILL p3#48
+[1189.2s] pg_terminate_backend on 6 backends (random() < 0.5)
+[1190.3s] restart p3#49
+[1191.8s] long write transaction in schema other: 30s
+[1193.7s] SIGKILL p1#45
+[1193.7s] SIGKILL p3#49
+[1195.8s] restart p3#50
+[1196.9s] restart p1#46
+[1198.6s] SIGKILL c3#53
+[1198.6s] SIGKILL p3#50
+[1200.9s] restart p3#51
+[1200.9s] restart c3#54
+[1202.7s] SIGKILL c2#37
+[1203.3s] chaos phase over: stopping producers gracefully, no more faults
+[1203.9s] restart c2#38 for drain
+[1221.9s] long transaction ended ok=true 
+[1332.2s] drain: lag reached 0 = true after 108.7s

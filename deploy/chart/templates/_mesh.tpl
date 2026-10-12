@@ -95,13 +95,14 @@ spell it (the SPIFFE ID without "spiffe://"). Argument: dict "root" $ "serviceAc
 
 {{/*
 In-cluster components that services call through the mesh, by name, with whether this
-deployment runs them. They can be callees in mesh.calls, never callers. Their pods carry the
+deployment runs them. They can be callees in mesh.calls, never callers there; the plan adds the
+calls between components itself (the collector writes to ClickHouse). Their pods carry the
 component's selector labels ("trustiot.selectorLabels" with the component name) and the
 ambient label, and the chart generates their policies like a service's.
 Returns YAML {<name>: bool}; use with fromYaml.
 */}}
 {{- define "trustiot.mesh.components" -}}
-{{- dict "clickhouse" (eq .Values.clickhouse.mode "bundled") | toYaml -}}
+{{- dict "clickhouse" (eq .Values.clickhouse.mode "bundled") "otel-collector" .Values.observability.collector.enabled | toYaml -}}
 {{- end -}}
 
 {{/*
@@ -110,10 +111,13 @@ Who may call each enabled service and in-cluster component. Callers come from tw
   call whose caller or callee is disabled is skipped, so the list can name services before
   they ship;
 - the ingress gateway, for every service it routes to (public paths and ingress.routes) and for
-  the identity service, which it calls for the cookie check (ext_authz).
+  the identity service, which it calls for the cookie check (ext_authz);
+- the telemetry pipeline, fixed in the chart: every enabled service sends OTLP to the
+  OpenTelemetry collector, and the collector writes to the bundled ClickHouse (decision 22).
 Every other connection is refused. Callers must be keys under services and callees keys under
 services or components ("trustiot.mesh.components"); other names fail the render.
-Returns YAML {services: [{name, callers: [service keys], ingress: bool}]}; use with fromYaml.
+Returns YAML {services: [{name, callers: [service or component keys], ingress: bool}]}; use with
+fromYaml.
 */}}
 {{- define "trustiot.mesh.plan" -}}
 {{- $v := .Values -}}
@@ -164,6 +168,16 @@ Returns YAML {services: [{name, callers: [service keys], ingress: bool}]}; use w
 {{- if and (get $v.services $caller).enabled (has $name $callees) -}}
 {{- $callers = append $callers $caller -}}
 {{- end -}}
+{{- end -}}
+{{- if eq $name "otel-collector" -}}
+{{- /* Every service exports its logs, traces and metrics to the collector. */ -}}
+{{- range $service, $entry := $v.services -}}
+{{- if and $entry.enabled (not (has $service $callers)) -}}
+{{- $callers = append $callers $service -}}
+{{- end -}}
+{{- end -}}
+{{- else if and (eq $name "clickhouse") (get $components "otel-collector") -}}
+{{- $callers = append $callers "otel-collector" -}}
 {{- end -}}
 {{- $services = append $services (dict "name" $name "callers" $callers "ingress" (has $name $ingressCallees)) -}}
 {{- end -}}

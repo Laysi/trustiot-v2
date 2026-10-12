@@ -30,9 +30,11 @@ cbor4ii = "1.2.3"
 cc = "1.5.1"
 chrono = { version = "0.4.45", default-features = false }
 ed25519-dalek = { version = "3.0.0", default-features = false }
+getrandom = "0.4.3"
 http = "1.5.0"
 humantime = "2.4.0"
 hyper = { version = "1.12.0", default-features = false }
+log = "0.4.34"
 opentelemetry = { version = "0.33.1", default-features = false }
 opentelemetry-otlp = { version = "0.33.1", default-features = false }
 opentelemetry-proto = { version = "0.33.1", default-features = false }
@@ -45,6 +47,7 @@ reqwest = { version = "0.13.5", default-features = false }
 rustls-pki-types = { version = "1.15.1", default-features = false }
 serde = "1.0.229"
 serde_json = "1.0.151"
+sha2 = { version = "0.11.0", default-features = false }
 socket2 = "0.6.5"
 sqlx = { version = "0.9.0", default-features = false }
 syn = { version = "2.0.119", default-features = false }
@@ -52,14 +55,17 @@ thiserror = "2.0.21"
 tokio = "1.53.2"
 tokio-util = "0.7.20"
 toml = "1.1.8"
+tower = { version = "0.5.3", default-features = false }
 tower-http = { version = "0.7.1", default-features = false }
 tracing = "0.1.44"
+tracing-log = { version = "0.2.0", default-features = false }
 tracing-opentelemetry = { version = "0.34.0", default-features = false }
 tracing-subscriber = { version = "0.3.23", default-features = false }
 utoipa = "6.0.0"
 uuid = "1.28.0"
 # The empty stand-in below, for tests that check it is the one in use.
 webpki-roots = { path = "crates/webpki-roots-empty" }
+zeroize = "1.9.1"
 
 # sqlx trusts webpki-roots (Mozilla's public roots) in addition to the configured Postgres CA, and
 # has no option to leave them out. This empty stand-in makes the configured CA the only trust

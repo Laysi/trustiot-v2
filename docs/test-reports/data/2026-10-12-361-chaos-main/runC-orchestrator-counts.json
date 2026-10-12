@@ -1,0 +1,37 @@
+{
+  "seed": 271003,
+  "minutes": 20,
+  "wall_clock_s": 1316.8,
+  "counts": {
+    "producer_kills": 121,
+    "consumer_kills": 112,
+    "producer_restarts": 121,
+    "consumer_restarts": 112,
+    "pg_graceful_restarts": 2,
+    "pg_crashes_sigkill": 3,
+    "pg_terminate_backend_calls": 37,
+    "backends_terminated": 543,
+    "long_write_txs_other_schema": 19,
+    "prepared_tx_across_crash": 1,
+    "replays_reprocess": 1,
+    "replays_skip": 1
+  },
+  "handler_side_lower_bounds": {
+    "delivered": 36542,
+    "dup": 16332,
+    "dead": 1651,
+    "handled": 58131,
+    "retry_before": 1950,
+    "retry_after": 1886,
+    "probes": 3150,
+    "panics": 0
+  },
+  "max_lag_events_sampled": 32012,
+  "final_library_lag_gauge_last_samples": [
+    "c1-051.log: Some((0, None))",
+    "c2-031.log: Some((0, None))",
+    "c3-033.log: Some((0, None))"
+  ],
+  "drained": true,
+  "verify_exit": 0
+}
