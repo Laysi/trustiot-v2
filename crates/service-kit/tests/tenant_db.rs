@@ -35,7 +35,10 @@ const USER: &str = "01928f6e-7a3c-7d4e-8f00-0123456789ab";
 /// platform role of a service that consumes `example_app`'s outbox events. `example_bypass` and
 /// `example_owner_member` exist only to prove the session check refuses them. The platform role
 /// inherits the rights of `example_platform_group`, and can take those of
-/// `example_platform_switch` only with `SET ROLE`; neither has rights unless a test grants them.
+/// `example_platform_switch` only with `SET ROLE`; `example_platform_switch` belongs to
+/// `example_switch_parent` without inheriting its rights. The platform role inherits the rights
+/// of `example_platform_inherited` but cannot `SET ROLE` to it, and can neither inherit nor take
+/// those of `example_platform_unusable`. None of them has rights unless a test grants them.
 const ROLES: &str = "
 CREATE ROLE example_owner LOGIN PASSWORD 'service-kit-test';
 CREATE ROLE example_app LOGIN PASSWORD 'service-kit-test';
@@ -47,6 +50,12 @@ CREATE ROLE example_platform_group NOLOGIN;
 GRANT example_platform_group TO example_platform;
 CREATE ROLE example_platform_switch NOLOGIN;
 GRANT example_platform_switch TO example_platform WITH INHERIT FALSE;
+CREATE ROLE example_switch_parent NOLOGIN;
+GRANT example_switch_parent TO example_platform_switch WITH INHERIT FALSE;
+CREATE ROLE example_platform_inherited NOLOGIN;
+GRANT example_platform_inherited TO example_platform WITH INHERIT TRUE, SET FALSE;
+CREATE ROLE example_platform_unusable NOLOGIN;
+GRANT example_platform_unusable TO example_platform WITH INHERIT FALSE, SET FALSE;
 ";
 
 /// The seed rows, inserted by the owner (exempt from row-level security).
@@ -1248,44 +1257,63 @@ fn tenant_only(table: &str, role: &str, command: &str) -> UnsafeSession {
 
 /// The rows `sql` reaches in a plain session of the platform role (no session check): in a
 /// transaction that first takes `role` with `SET ROLE` (as `set_config('role', ...)`) when given
-/// and sets `tenant` when given, as platform code that went wrong could. Rolled back. A statement
-/// row-level security refuses (a new row that fails `WITH CHECK`) reaches no row; any other error
-/// fails the test.
+/// and sets `tenant` when given, as platform code that went wrong could. Rolled back. The error
+/// is the first statement's that failed.
+async fn try_reach(
+    fixture: &Fixture,
+    role: Option<&str>,
+    tenant: Option<&str>,
+    sql: &'static str,
+) -> Result<u64, sqlx::Error> {
+    async fn run(
+        tx: &mut PgConnection,
+        role: Option<&str>,
+        tenant: Option<&str>,
+        sql: &'static str,
+    ) -> Result<u64, sqlx::Error> {
+        if let Some(role) = role {
+            sqlx::query("SELECT set_config('role', $1, true)")
+                .bind(role)
+                .execute(&mut *tx)
+                .await?;
+        }
+        if let Some(tenant) = tenant {
+            sqlx::query(SET_TRANSACTION_TENANT)
+                .bind(tenant)
+                .execute(&mut *tx)
+                .await?;
+        }
+        Ok(sqlx::query(sql).execute(&mut *tx).await?.rows_affected())
+    }
+    let mut session = fixture.connect("example_platform").await;
+    let mut tx = session.begin().await.expect("begin");
+    let outcome = run(&mut tx, role, tenant, sql).await;
+    tx.rollback().await.expect("rollback");
+    outcome
+}
+
+/// [`try_reach`], where a statement that row-level security refuses (a new row that fails
+/// `WITH CHECK`) or that reads the tenant setting while it is not set reaches no row; any other
+/// error fails the test.
 async fn rows_reached(
     fixture: &Fixture,
     role: Option<&str>,
     tenant: Option<&str>,
     sql: &'static str,
 ) -> u64 {
-    let mut session = fixture.connect("example_platform").await;
-    let mut tx = session.begin().await.expect("begin");
-    if let Some(role) = role {
-        sqlx::query("SELECT set_config('role', $1, true)")
-            .bind(role)
-            .execute(&mut *tx)
-            .await
-            .expect("take the role");
-    }
-    if let Some(tenant) = tenant {
-        sqlx::query(SET_TRANSACTION_TENANT)
-            .bind(tenant)
-            .execute(&mut *tx)
-            .await
-            .expect("set a tenant");
-    }
-    let rows = match sqlx::query(sql).execute(&mut *tx).await {
-        Ok(done) => done.rows_affected(),
-        Err(error)
-            if error
-                .to_string()
-                .contains("violates row-level security policy") =>
-        {
+    match try_reach(fixture, role, tenant, sql).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            let text = error.to_string();
+            assert!(
+                text.contains("violates row-level security policy")
+                    || text
+                        .contains(r#"unrecognized configuration parameter "trustiot.tenant_id""#),
+                "{sql}: {error}"
+            );
             0
         }
-        Err(error) => panic!("{sql}: {error}"),
-    };
-    tx.rollback().await.expect("rollback");
-    rows
+    }
 }
 
 /// A migration mistake for [`platform_sessions_only_the_tenant_condition_opens_are_refused`].
@@ -1489,12 +1517,99 @@ async fn platform_sessions_only_the_tenant_condition_opens_are_refused() {
             fix: "REVOKE USAGE ON SCHEMA other FROM example_platform;",
         },
         PlatformMistake {
+            // Laysi/trustiot-v2#366 verification F2: a policy applies to a role that inherits the
+            // privileges of the policy's role. The role the platform role can SET ROLE to belongs
+            // to example_switch_parent without inheriting, so the parent's policy opens nothing.
+            mistake: "a policy for a role the SET ROLE target belongs to without inheriting",
+            make: "GRANT SELECT ON private_items TO example_platform_switch;
+                   CREATE POLICY parent_access ON private_items TO example_switch_parent
+                       USING (true);",
+            refused: tenant_only(private, "example_platform_switch", "SELECT"),
+            probe: (Some("example_platform_switch"), "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "DROP POLICY parent_access ON private_items;
+                  REVOKE SELECT ON private_items FROM example_platform_switch;",
+        },
+        PlatformMistake {
+            // Laysi/trustiot-v2#366 verification F1: only the session's tenant, written another way.
+            mistake: "a platform policy reading the tenant setting, written the other way round",
+            make: "CREATE POLICY platform_reversed ON private_items TO example_platform
+                       USING (current_setting('trustiot.tenant_id', true)::uuid = tenant_id);
+                   GRANT SELECT ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "SELECT"),
+            probe: (None, "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "DROP POLICY platform_reversed ON private_items;
+                  REVOKE SELECT ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
+            // Laysi/trustiot-v2#366 verification F1: only the session's tenant, written another way.
+            mistake: "a platform policy comparing the tenant setting as text",
+            make: "CREATE POLICY platform_text ON private_items TO example_platform
+                       USING (tenant_id::text = current_setting('trustiot.tenant_id'));
+                   GRANT SELECT ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "SELECT"),
+            probe: (None, "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "DROP POLICY platform_text ON private_items;
+                  REVOKE SELECT ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
+            // Laysi/trustiot-v2#366 verification F1: only the session's tenant, written another way.
+            mistake: "a platform policy that is the tenant condition AND true",
+            make: "CREATE POLICY platform_and_true ON private_items TO example_platform
+                       USING (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid AND true);
+                   GRANT SELECT ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "SELECT"),
+            probe: (None, "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "DROP POLICY platform_and_true ON private_items;
+                  REVOKE SELECT ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
+            // Laysi/trustiot-v2#366 verification F1: only the session's tenant, written another way.
+            mistake: "a platform policy that is the tenant condition OR false",
+            make: "CREATE POLICY platform_or_false ON private_items TO example_platform
+                       USING (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid OR false);
+                   GRANT SELECT ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "SELECT"),
+            probe: (None, "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "DROP POLICY platform_or_false ON private_items;
+                  REVOKE SELECT ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
+            // Laysi/trustiot-v2#366 verification F1: only the session's tenant, written another way.
+            mistake: "a platform policy with IS NOT DISTINCT FROM the tenant setting",
+            make: "CREATE POLICY platform_not_distinct ON private_items TO example_platform
+                       USING (tenant_id IS NOT DISTINCT FROM NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid);
+                   GRANT SELECT ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "SELECT"),
+            probe: (None, "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "DROP POLICY platform_not_distinct ON private_items;
+                  REVOKE SELECT ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
+            // Laysi/trustiot-v2#366 verification F1: only the session's tenant, written another way.
+            mistake: "a platform policy USING (false)",
+            make: "CREATE POLICY platform_false ON private_items TO example_platform
+                       USING (false);
+                   GRANT SELECT ON private_items TO example_platform;",
+            refused: tenant_only(private, "example_platform", "SELECT"),
+            probe: (None, "SELECT name FROM private_items"),
+            leaks: true,
+            fix: "DROP POLICY platform_false ON private_items;
+                  REVOKE SELECT ON private_items FROM example_platform;",
+        },
+        PlatformMistake {
             // The check does not count restrictive policies: they can only narrow access, and
             // whether one closes everything the tenant condition opens is not something it
             // judges. The grant still gives PlatformDb nothing, so it is refused all the same.
+            // (Every row has a tenant, so the restrictive policy lets none through.)
             mistake: "a grant that a restrictive policy closes",
             make: "CREATE POLICY platform_nothing ON private_items AS RESTRICTIVE
-                       TO example_platform USING (false);
+                       TO example_platform USING (tenant_id IS NULL);
                    GRANT SELECT ON private_items TO example_platform;",
             refused: tenant_only(private, "example_platform", "SELECT"),
             probe: (None, "SELECT name FROM private_items"),
@@ -1553,6 +1668,106 @@ async fn platform_sessions_only_the_tenant_condition_opens_are_refused() {
         assert_eq!(rows, 0, "no policy, no row, tenant {tenant:?}");
     }
     println!("a grant on a table without any policy: accepted, no row with or without a tenant");
+
+    // A platform policy that reads the tenant setting counts as opening nothing beyond the
+    // tenant even when it opens every row: the check refuses rather than judge the expression,
+    // so such a policy fails closed.
+    sqlx::raw_sql(
+        "CREATE POLICY platform_or_true ON private_items TO example_platform
+             USING (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid
+                    OR true);
+         GRANT SELECT ON private_items TO example_platform;",
+    )
+    .execute(&mut owner)
+    .await
+    .expect("a platform policy that reads the tenant setting and opens every row");
+    assert_eq!(
+        platform_check(&fixture).await,
+        Err(tenant_only(private, "example_platform", "SELECT")),
+        "fails closed"
+    );
+    let rows = rows_reached(&fixture, None, None, "SELECT name FROM private_items").await;
+    assert_eq!(rows, 2, "the policy does open every row");
+    sqlx::raw_sql(
+        "DROP POLICY platform_or_true ON private_items;
+         REVOKE SELECT ON private_items FROM example_platform;",
+    )
+    .execute(&mut owner)
+    .await
+    .expect("drop");
+    assert_eq!(platform_check(&fixture).await, Ok(()));
+    println!(
+        "<tenant condition> OR true for the platform role: refused (fails closed), {rows} rows"
+    );
+
+    // Laysi/trustiot-v2#366 verification F3: a role the platform role can neither inherit nor
+    // become gives it nothing, so its grant is accepted...
+    sqlx::raw_sql("GRANT SELECT ON private_items TO example_platform_unusable;")
+        .execute(&mut owner)
+        .await
+        .expect("grant");
+    assert_eq!(platform_check(&fixture).await, Ok(()), "an unusable role");
+    for role in [None, Some("example_platform_unusable")] {
+        let error = try_reach(
+            &fixture,
+            role,
+            Some(TENANT_A),
+            "SELECT name FROM private_items",
+        )
+        .await
+        .expect_err("nothing reaches the rows");
+        assert_eq!(
+            sqlstate(&error).as_deref(),
+            Some(INSUFFICIENT_PRIVILEGE),
+            "{role:?}: {error}"
+        );
+        println!("an unusable role's grant, as {role:?} with tenant A set: refused ({error})");
+    }
+    sqlx::raw_sql("REVOKE SELECT ON private_items FROM example_platform_unusable;")
+        .execute(&mut owner)
+        .await
+        .expect("revoke");
+    // ...and so is a role it only inherits from, on a table platform_access opens to it: the
+    // inherited DELETE is the platform role's own, and platform_access applies to it.
+    sqlx::raw_sql("GRANT DELETE ON example_items TO example_platform_inherited;")
+        .execute(&mut owner)
+        .await
+        .expect("grant");
+    assert_eq!(
+        platform_check(&fixture).await,
+        Ok(()),
+        "an inherit-only role"
+    );
+    let without_tenant = rows_reached(&fixture, None, None, "DELETE FROM example_items").await;
+    let with_tenant =
+        rows_reached(&fixture, None, Some(TENANT_A), "DELETE FROM example_items").await;
+    assert_eq!(
+        (without_tenant, with_tenant),
+        (3, 3),
+        "platform_access: every tenant, with or without a tenant set"
+    );
+    let error = try_reach(
+        &fixture,
+        Some("example_platform_inherited"),
+        None,
+        "DELETE FROM example_items",
+    )
+    .await
+    .expect_err("no SET ROLE to an inherit-only role");
+    assert_eq!(
+        sqlstate(&error).as_deref(),
+        Some(INSUFFICIENT_PRIVILEGE),
+        "{error}"
+    );
+    sqlx::raw_sql("REVOKE DELETE ON example_items FROM example_platform_inherited;")
+        .execute(&mut owner)
+        .await
+        .expect("revoke");
+    println!(
+        "an inherit-only role's DELETE on a table with platform_access: accepted, \
+         {without_tenant} rows without a tenant and {with_tenant} with tenant A set; SET ROLE \
+         refused ({error})"
+    );
 
     // Through the kit's pool the refusal reaches the caller of PlatformDb, as for TenantDb.
     sqlx::raw_sql("GRANT SELECT ON private_items TO example_platform;")

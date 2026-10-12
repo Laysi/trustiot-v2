@@ -225,9 +225,9 @@ pub enum SessionRole {
     Service,
     /// The platform role: policies granted to it by name (`platform_access`) may open a table
     /// across tenants; policies for every role (`PUBLIC`) must still be the tenant condition.
-    /// Where it may run a command on a table with row-level security, a policy other than the
-    /// tenant condition must apply to it for that command
-    /// ([`UnsafeSession::PlatformTenantOnly`]).
+    /// Where it, or a role it can become, may run a command on a table with row-level security,
+    /// a policy that opens the table beyond the session's tenant must apply to that role for
+    /// that command ([`UnsafeSession::PlatformTenantOnly`]).
     Platform,
 }
 
@@ -416,12 +416,13 @@ pub enum UnsafeSession {
     #[error("the database role may TRUNCATE tenant table `{0}`, which row-level security ignores")]
     TruncateAllowed(String),
     /// Platform sessions only ([`SessionRole::Platform`]): `role`, the platform role or a role it
-    /// belongs to (whose rights it inherits or can take with `SET ROLE`), may run `command`
-    /// (`SELECT`, `INSERT`, `UPDATE`, or `DELETE`) on `table`, which has row-level security, but
-    /// the only permissive policies that apply to `role` for that command are the tenant
-    /// condition. `PlatformDb` never sets a tenant, so the grant gives it nothing; a platform
-    /// session that set `trustiot.tenant_id` itself would reach that tenant's rows. Revoke the
-    /// grant, or add a policy for the platform role by name (`platform_access`).
+    /// can become with `SET ROLE`, may run `command` (`SELECT`, `INSERT`, `UPDATE`, or `DELETE`)
+    /// on `table`, which has row-level security, but the permissive policies that apply to `role`
+    /// for that command open only the session's tenant: each is the tenant condition, reads
+    /// `trustiot.tenant_id` some other way, or is `false`. `PlatformDb` never sets a tenant, so
+    /// the grant gives it nothing; a platform session that set `trustiot.tenant_id` itself would
+    /// reach that tenant's rows. Revoke the grant, or add a policy for the platform role by name
+    /// (`platform_access`).
     #[error(
         "database role `{role}` may {command} on `{table}`, but the only permissive policies that \
          apply to it for {command} are the tenant condition, so a platform session that sets \
@@ -431,7 +432,7 @@ pub enum UnsafeSession {
     PlatformTenantOnly {
         /// The table, as `schema.table`.
         table: String,
-        /// The role that holds the privilege: the session's role or a role it belongs to.
+        /// The role that holds the privilege: the session's role or a role it can become.
         role: String,
         /// `SELECT`, `INSERT`, `UPDATE`, or `DELETE`.
         command: String,
@@ -481,11 +482,12 @@ reachable AS (
       AND (has_table_privilege(oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE')
            OR has_any_column_privilege(oid, 'SELECT, INSERT, UPDATE'))
 ),
--- Platform sessions only: the session's role and every role it belongs to, whose rights it
--- inherits or can take with SET ROLE.
+-- Platform sessions only: every role the session can become with SET ROLE, itself included.
+-- The rights of roles it only inherits are already the session role's own; a role it can
+-- neither inherit nor become gives it nothing.
 platform_roles AS (
     SELECT oid, quote_ident(rolname) AS role_name FROM pg_roles
-    WHERE $1 AND pg_has_role(current_user, oid, 'MEMBER')
+    WHERE $1 AND pg_has_role(current_user, oid, 'SET')
 ),
 -- The tables with row-level security that one of those roles may use at all.
 platform_tables AS MATERIALIZED (
@@ -507,13 +509,20 @@ platform_policies AS MATERIALIZED (
     WHERE $1 AND polpermissive
 ),
 -- A command evaluates USING to filter rows (SELECT, UPDATE, DELETE) and WITH CHECK, or USING
--- when a policy has none, to check new rows (INSERT, UPDATE). Per role, table, command, and
--- side: how many expressions the permissive policies that apply to the role give, and how
--- many of them are not the tenant condition.
+-- when a policy has none, to check new rows (INSERT, UPDATE). A policy applies to a role that
+-- has the privileges of (inherits) one of the policy's roles, or to every role (PUBLIC). Per
+-- role, table, command, and side: how many expressions the permissive policies that apply to
+-- the role give, and how many of them open the table beyond the session's tenant. An
+-- expression that reads the tenant setting, however it is written, or that is false counts as
+-- opening nothing beyond it; any other expression counts as opening the table. Counting an
+-- expression as opening nothing can only refuse more sessions, never accept one, so an
+-- expression that reads the setting and still opens every row (`<tenant condition> OR true`)
+-- is refused too: the check does not try to tell such expressions apart.
 platform_sides AS (
     SELECT t.role_oid, t.role_name, t.rel, t.relation, s.command, s.uses_qual,
            count(e.expr) AS expressions,
-           count(e.expr) FILTER (WHERE e.expr <> $2) AS wider
+           count(e.expr) FILTER (WHERE e.expr <> $2 AND e.expr <> 'false'
+                                 AND strpos(e.expr, '''trustiot.tenant_id''') = 0) AS wider
     FROM platform_tables t
     CROSS JOIN (VALUES ('SELECT', 'r', true), ('INSERT', 'a', false), ('UPDATE', 'w', true),
                        ('UPDATE', 'w', false), ('DELETE', 'd', true))
@@ -522,14 +531,14 @@ platform_sides AS (
       ON p.polrelid = t.rel AND p.polcmd IN (s.polcmd, '*')
          AND (0 = ANY (p.polroles)
               OR EXISTS (SELECT 1 FROM unnest(p.polroles) AS role
-                         WHERE role <> 0 AND pg_has_role(t.role_oid, role, 'MEMBER')))
+                         WHERE role <> 0 AND pg_has_role(t.role_oid, role, 'USAGE')))
     CROSS JOIN LATERAL (
         SELECT CASE WHEN s.uses_qual THEN p.using_expr ELSE p.check_expr END AS expr
     ) AS e
     GROUP BY t.role_oid, t.role_name, t.rel, t.relation, s.command, s.uses_qual
 ),
 -- The commands only the tenant condition opens to the role: every side the command evaluates
--- has an expression, and on at least one side all of them are the tenant condition.
+-- has an expression, and on at least one side none of them opens the table beyond the tenant.
 platform_tenant_only AS MATERIALIZED (
     SELECT role_oid, role_name, rel, relation, command FROM platform_sides
     GROUP BY role_oid, role_name, rel, relation, command
