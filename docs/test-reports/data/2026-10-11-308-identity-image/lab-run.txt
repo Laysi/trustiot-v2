@@ -1,0 +1,30 @@
+== host: Linux 7.1.13-402.asahi.fc44.aarch64+16k aarch64, podman 5.8.7
+== load the release build's OCI archive
+d30b6c490b2b8200fd6aeee960380799258412175143bc7ad4e4ba03624851a3  identity.oci.tar
+loaded: sha256:5c483ac9975cd246577ccdc2550827e2064ac423dfa155be08da5ade46b3a243
+image os=linux arch=arm64 size=9790206 user=65532:65532 entrypoint=[/usr/local/bin/identity]
+== throwaway settings
+settings: TRUSTIOT_INTERNAL_IDENTITY_KEYS TRUSTIOT_IDENTITY_SIGNING_KEY_FILE TRUSTIOT_INGRESS_ROUTES TRUSTIOT_POSTGRES_HOST TRUSTIOT_POSTGRES_PORT TRUSTIOT_POSTGRES_DATABASE TRUSTIOT_POSTGRES_SSLMODE TRUSTIOT_POSTGRES_CA_FILE TRUSTIOT__DATABASE__USERNAME TRUSTIOT__DATABASE__PASSWORD 
+== run (read-only root filesystem, image's own user, health port 8081 on 127.0.0.1:18308)
+GET /healthz on the health port -> 200 (after 1 s)
+HTTP/1.1 200 OK
+content-type: application/json
+cache-control: no-store
+content-length: 15
+date: Sun, 11 Oct 2026 15:12:50 GMT
+GET /readyz on the health port -> 503 (no database: expected 503)
+GET /internal/ext-authz/ on the API port without a cookie -> 401 (expected 401)
+container state=running restarts=0 user=65532:65532 image=localhost/trustiot-e2e-308/identity:0.0.0-rc.1
+== container log (first 20 lines)
+{"timestamp":"2026-10-11T15:12:50.142617Z","level":"INFO","service":"identity","target":"opentelemetry","message":"Global tracer provider is set. Traces can now be created using global::tracer() or global::tracer_with_scope().","fields":{"name":"TracerProvider.GlobalSet"}}
+{"timestamp":"2026-10-11T15:12:50.142646Z","level":"INFO","service":"identity","target":"service_kit::service","message":"starting","fields":{"service.version":"0.1.0","process.pid":1,"http.listen_addr":"0.0.0.0:8080","http.health_listen_addr":"0.0.0.0:8081","http.request_timeout_ms":30000,"shutdown.drain_delay_ms":5000,"shutdown.drain_timeout_ms":20000,"telemetry.log_filter":"info","telemetry.otl
+{"timestamp":"2026-10-11T15:12:50.142795Z","level":"INFO","service":"identity","target":"identity","message":"signing internal identity tokens","fields":{"kid":"e2e-308","routes":1}}
+{"timestamp":"2026-10-11T15:12:50.143012Z","level":"INFO","service":"identity","target":"service_kit::service","message":"listening","fields":{"address":"0.0.0.0:8080","health_address":"0.0.0.0:8081"}}
+{"timestamp":"2026-10-11T15:12:50.143648Z","level":"WARN","service":"identity","target":"identity::session","message":"cannot keep the database connections open; not ready","fields":{"error":"database error: database error: error communicating with database: failed to lookup address information: Name does not resolve"}}
+{"timestamp":"2026-10-11T15:12:50.154210Z","level":"WARN","service":"identity","target":"service_kit::health","message":"readiness check failed","fields":{"check":"postgres","error":"the database connections are not open yet"}}
+{"timestamp":"2026-10-11T15:12:50.161481Z","level":"INFO","service":"identity","target":"identity::ext_authz","trace_id":"81929e2f2ade29d243de42c96c901558","span_id":"ccb614eeac0a8ccf","message":"denied the ext_authz check","fields":{"reason":"no_session_cookie"}}
+{"timestamp":"2026-10-11T15:12:50.161498Z","level":"INFO","service":"identity","target":"service_kit::http","trace_id":"81929e2f2ade29d243de42c96c901558","span_id":"ccb614eeac0a8ccf","message":"request completed","fields":{"http.request.method":"GET","http.route":"/internal/ext-authz/","http.response.status_code":401,"duration_ms":0.031}}
+log holds neither the database password nor the private key
+== cleanup
+0
+removed /home/trustiot/e2e-308
