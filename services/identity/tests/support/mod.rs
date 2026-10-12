@@ -156,6 +156,40 @@ impl Output {
         self.lines().join("\n")
     }
 
+    /// JSON lines whose `message` is `message`.
+    pub fn count_messages(&self, message: &str) -> usize {
+        self.lines()
+            .iter()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|value| value["message"] == message)
+            .count()
+    }
+
+    /// Waits until at least `count` JSON lines have `message` as their `message`.
+    pub fn wait_for_messages(&self, message: &str, count: usize, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let (lines, changed) = &*self.lines;
+        let mut guard = lines.lock().expect("output lock");
+        loop {
+            let found = guard
+                .iter()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .filter(|value| value["message"] == message)
+                .count();
+            if found >= count {
+                return true;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            guard = changed
+                .wait_timeout(guard, deadline - now)
+                .expect("output lock")
+                .0;
+        }
+    }
+
     /// Waits for the JSON line whose `message` is `message`.
     pub fn wait_for_message(&self, message: &str, timeout: Duration) -> Option<serde_json::Value> {
         let deadline = Instant::now() + timeout;
@@ -222,14 +256,20 @@ impl Service {
 
     /// Waits for `/readyz` on the health port to answer 200.
     pub fn wait_ready(&self, timeout: Duration) {
+        self.wait_readiness(200, timeout);
+    }
+
+    /// Waits until `/readyz` on the health port answers `status`.
+    pub fn wait_readiness(&self, status: u16, timeout: Duration) {
         let deadline = Instant::now() + timeout;
         loop {
-            if request(self.health_address, "GET", "/readyz", &[]).is_ok_and(|r| r.status == 200) {
+            if request(self.health_address, "GET", "/readyz", &[]).is_ok_and(|r| r.status == status)
+            {
                 return;
             }
             assert!(
                 Instant::now() < deadline,
-                "the service did not become ready\nstdout:\n{}",
+                "readiness did not answer {status} within {timeout:?}\nstdout:\n{}",
                 self.stdout.text()
             );
             thread::sleep(Duration::from_millis(100));
@@ -497,11 +537,14 @@ impl Drop for Container {
 /// reaches the server, so opening a database connection (TCP, TLS, SCRAM, service-kit's session
 /// check) takes longer than one ext_authz check may (finding F1 of
 /// docs/test-reports/2026-10-11-61-verify.md) without depending on machine load. It can also cut
-/// every connection it carries, as a database failover does.
+/// every connection it carries, as a database failover does, and hold new connections for as long
+/// as the test needs ([`SlowProxy::pause`]), so a state the service passes through while it
+/// reconnects lasts until the test has seen it.
 pub struct SlowProxy {
     pub port: u16,
     carried: Arc<Mutex<Vec<TcpStream>>>,
     accepted: Arc<AtomicU32>,
+    paused: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl SlowProxy {
@@ -511,13 +554,25 @@ impl SlowProxy {
         let port = listener.local_addr().expect("proxy address").port();
         let carried = Arc::new(Mutex::new(Vec::new()));
         let accepted = Arc::new(AtomicU32::new(0));
-        let (all, count) = (Arc::clone(&carried), Arc::clone(&accepted));
+        let paused = Arc::new((Mutex::new(false), Condvar::new()));
+        let (all, count, gate) = (
+            Arc::clone(&carried),
+            Arc::clone(&accepted),
+            Arc::clone(&paused),
+        );
         thread::spawn(move || {
             for client in listener.incoming() {
                 let Ok(client) = client else { continue };
                 count.fetch_add(1, Ordering::SeqCst);
                 let all = Arc::clone(&all);
+                let gate = Arc::clone(&gate);
                 thread::spawn(move || {
+                    let (lock, resumed) = &*gate;
+                    drop(
+                        resumed
+                            .wait_while(lock.lock().expect("proxy gate"), |paused| *paused)
+                            .expect("proxy gate"),
+                    );
                     thread::sleep(delay);
                     let Ok(server) = TcpStream::connect(upstream) else {
                         return;
@@ -533,7 +588,19 @@ impl SlowProxy {
             port,
             carried,
             accepted,
+            paused,
         }
+    }
+
+    /// Holds every new connection until [`SlowProxy::resume`]; the proxy still accepts them.
+    pub fn pause(&self) {
+        *self.paused.0.lock().expect("proxy gate") = true;
+    }
+
+    /// Lets held and new connections through again, each after the proxy's delay.
+    pub fn resume(&self) {
+        *self.paused.0.lock().expect("proxy gate") = false;
+        self.paused.1.notify_all();
     }
 
     /// Connections the proxy has accepted so far.
