@@ -3,16 +3,21 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { containerBuildArgs } from "../lib/build-context.ts";
 import { lastLines, summarizeBunTest } from "./e2e.ts";
 import { CommandError, RunLog } from "./exec.ts";
 import type { ExecOptions, ExecResult } from "./exec.ts";
 import {
   BASE_PROVIDER,
   clusterNodeNames,
+  CNPG_CRDS,
+  cnpgManifestUrl,
   e2eNamespaceOf,
+  IDENTITY_DOUBLE_IMAGE,
   importImageIntoCluster,
   IMPORT_ATTEMPTS,
   istiodOverlay,
+  POSTGRES_IMAGE,
   providerNameOf,
   verifySha256,
 } from "./platform.ts";
@@ -78,10 +83,12 @@ describe("readPins", () => {
     GATEWAY_API_VERSION: "v1.6.1",
     GATEWAY_CRDS_SHA256: "a".repeat(64),
     ISTIO_VERSION: "1.30.5",
+    CNPG_VERSION: "1.30.1",
+    CNPG_MANIFEST_SHA256: "b".repeat(64),
   };
 
   test("accepts exact pins", () => {
-    expect(readPins(good)).toMatchObject({ gatewayApiVersion: "v1.6.1", istioVersion: "1.30.5" });
+    expect(readPins(good)).toMatchObject({ gatewayApiVersion: "v1.6.1", istioVersion: "1.30.5", cnpgVersion: "1.30.1", cnpgManifestSha256: "b".repeat(64) });
   });
 
   test("rejects a missing or loose pin", () => {
@@ -90,6 +97,54 @@ describe("readPins", () => {
     expect(() => readPins({ ...good, GATEWAY_CRDS_SHA256: "abc" })).toThrow("GATEWAY_CRDS_SHA256");
     expect(() => readPins({ ...good, ISTIO_VERSION: "1.30" })).toThrow("ISTIO_VERSION");
     expect(() => readPins({ ...good, ISTIO_VERSION: undefined })).toThrow("ISTIO_VERSION");
+    expect(() => readPins({ ...good, CNPG_VERSION: "v1.30.1" })).toThrow("CNPG_VERSION");
+    expect(() => readPins({ ...good, CNPG_VERSION: undefined })).toThrow("CNPG_VERSION");
+    expect(() => readPins({ ...good, CNPG_MANIFEST_SHA256: "B".repeat(64) })).toThrow("CNPG_MANIFEST_SHA256");
+  });
+});
+
+describe("CloudNativePG and the bundled Postgres", () => {
+  const workflow = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github", "workflows", "nightly.yml"), "utf8")) as {
+    jobs: { smoke: { env: Record<string, string> } };
+  };
+  const env = workflow.jobs.smoke.env;
+
+  test("the nightly installs the release and hash that deploy/cloudnative-pg/README.md documents", () => {
+    const pins = readPins({ K3S_IMAGE: `rancher/k3s:v1@${DIGEST}`, GATEWAY_API_VERSION: "v1.6.1", GATEWAY_CRDS_SHA256: "a".repeat(64), ISTIO_VERSION: "1.30.5", ...env });
+    const readme = readFileSync(join(REPO_ROOT, "deploy", "cloudnative-pg", "README.md"), "utf8");
+    expect(readme).toContain(cnpgManifestUrl(pins.cnpgVersion));
+    expect(readme).toContain(pins.cnpgManifestSha256);
+    // Every version and hash the README names is the pinned one, so an upgrade cannot miss one.
+    expect([...new Set(readme.match(/\b[0-9a-f]{64}\b/g))]).toEqual([pins.cnpgManifestSha256]);
+    expect([...new Set(readme.match(/cnpg-\d+\.\d+\.\d+\.yaml/g))]).toEqual([`cnpg-${pins.cnpgVersion}.yaml`]);
+  });
+
+  test("the manifest comes from the official release and the CRDs it waits for are the ones the chart uses", () => {
+    expect(cnpgManifestUrl("1.30.1")).toBe("https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v1.30.1/cnpg-1.30.1.yaml");
+    const template = readFileSync(join(REPO_ROOT, "deploy", "chart", "templates", "postgres.yaml"), "utf8");
+    const kinds = [...new Set([...template.matchAll(/^kind: (\w+)$/gm)].map((m) => m[1]))].filter((kind) => kind !== "NetworkPolicy");
+    expect(kinds.map((kind) => `crd/${kind?.toLowerCase()}s.postgresql.cnpg.io`).sort()).toEqual([...CNPG_CRDS].sort());
+  });
+
+  test("the image the nightly builds is the one the smoke values name, never pulled", () => {
+    const smoke = Bun.YAML.parse(readFileSync(join(REPO_ROOT, "deploy", "chart", "tests", "values", "smoke.yaml"), "utf8")) as {
+      postgres: { bundled: { image: { repository: string; tag: string; pullPolicy: string } } };
+    };
+    const image = smoke.postgres.bundled.image;
+    expect(`${image.repository}:${image.tag}`).toBe(POSTGRES_IMAGE);
+    expect(image.pullPolicy).toBe("Never");
+  });
+
+  test("containerBuildArgs accepts the tags of the images the nightly builds", () => {
+    // It checks every --tag against the names the builds use; a name outside them fails the
+    // nightly at the build step, after the cluster is already up.
+    for (const [image, dir] of [
+      [POSTGRES_IMAGE, ["deploy", "images", "postgres"]],
+      [IDENTITY_DOUBLE_IMAGE, ["deploy", "chart", "tests", "e2e", "identity-double"]],
+    ] as const) {
+      const context = join(REPO_ROOT, ...dir);
+      expect(containerBuildArgs(context, ["--tag", image, "--file", join(context, "Containerfile")])).toContain(image);
+    }
   });
 });
 

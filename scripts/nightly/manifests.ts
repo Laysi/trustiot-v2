@@ -9,7 +9,7 @@ type YamlMap = Record<string, unknown>;
 export interface K8sObject {
   apiVersion?: string;
   kind: string;
-  metadata?: { name?: string; namespace?: string; labels?: Record<string, string> };
+  metadata?: { name?: string; namespace?: string; labels?: Record<string, string>; annotations?: Record<string, string> };
   spec?: YamlMap;
   [key: string]: unknown;
 }
@@ -109,7 +109,9 @@ export function workloadsOf(objects: K8sObject[]): Workload[] {
  */
 export function missingSecrets(objects: K8sObject[]): Map<string, Set<string>> {
   const flat = flatten(objects);
-  const created = new Set(flat.filter((o) => o.kind === "Secret").map((o) => o.metadata?.name));
+  const created = new Set<string | undefined>(flat.filter((o) => o.kind === "Secret").map((o) => o.metadata?.name));
+  // CloudNativePG creates these for each Cluster; a dummy one would stop it from making its own.
+  for (const name of operatorSecretsOf(objects)) created.add(name);
   const needed = new Map<string, Set<string>>();
   const need = (name: unknown, key?: unknown): void => {
     if (typeof name !== "string" || created.has(name)) return;
@@ -140,6 +142,63 @@ export function missingSecrets(objects: K8sObject[]): Map<string, Set<string>> {
     }
   }
   return needed;
+}
+
+/** The CloudNativePG Clusters of the release (the bundled Postgres, Laysi/trustiot-v2#58), by name. */
+export function postgresClustersOf(objects: K8sObject[]): string[] {
+  return flatten(objects)
+    .filter((o) => o.kind === "Cluster" && asString(o.apiVersion)?.startsWith("postgresql.cnpg.io/") === true)
+    .flatMap((o) => (o.metadata?.name === undefined ? [] : [o.metadata.name]));
+}
+
+/** Suffixes of the Secrets CloudNativePG creates for a Cluster named <name>: <name>-<suffix>. */
+export const CNPG_SECRET_SUFFIXES = ["ca", "server", "app", "replication", "superuser"] as const;
+
+/** Secrets the operator creates for the release's Clusters, which the release must not create. */
+export function operatorSecretsOf(objects: K8sObject[]): string[] {
+  return postgresClustersOf(objects).flatMap((cluster) => CNPG_SECRET_SUFFIXES.map((suffix) => `${cluster}-${suffix}`));
+}
+
+/**
+ * Why a Cluster (from `kubectl get cluster.postgresql.cnpg.io -o json`) is not healthy; empty when
+ * it is: the operator's phase says so, every instance it asked for is ready and the Ready
+ * condition is true.
+ */
+export function postgresClusterProblems(cluster: unknown): string[] {
+  const name = asString(asMap(asMap(cluster).metadata).name) ?? "(unnamed)";
+  const spec = asMap(asMap(cluster).spec);
+  const status = asMap(asMap(cluster).status);
+  const problems: string[] = [];
+  const phase = asString(status.phase);
+  if (phase !== "Cluster in healthy state") problems.push(`${name}: phase ${JSON.stringify(phase ?? null)}`);
+  const wanted = typeof spec.instances === "number" ? spec.instances : undefined;
+  if (wanted === undefined || status.readyInstances !== wanted) {
+    problems.push(`${name}: ${String(status.readyInstances ?? 0)} of ${String(wanted ?? "?")} instances ready`);
+  }
+  const ready = asArray(status.conditions).filter(isMap).find((c) => c.type === "Ready");
+  if (ready?.status !== "True") problems.push(`${name}: condition Ready is ${asString(ready?.status) ?? "missing"}`);
+  return problems;
+}
+
+/**
+ * Objects the chart keeps on `helm uninstall` (annotation `helm.sh/resource-policy: keep`), named
+ * the way `kubectl get -o name` prints them (`<kind>.<group>/<name>`, `<kind>/<name>` for the
+ * core group). Clusters come first, so deleting the list in order removes a Cluster (and its
+ * volumes) before the image catalog it refers to.
+ */
+export function keptObjectsOf(objects: K8sObject[]): string[] {
+  const kept = flatten(objects).filter((o) => {
+    const annotations = asMap(asMap(o.metadata).annotations);
+    return annotations["helm.sh/resource-policy"] === "keep" && o.metadata?.name !== undefined;
+  });
+  const rank = (o: K8sObject) => (o.kind === "Cluster" ? 0 : 1);
+  return kept
+    .sort((a, b) => rank(a) - rank(b))
+    .map((o) => {
+      const apiVersion = asString(o.apiVersion) ?? "v1";
+      const group = apiVersion.includes("/") ? apiVersion.split("/")[0] : "";
+      return `${o.kind.toLowerCase()}${group ? `.${group}` : ""}/${o.metadata?.name ?? ""}`;
+    });
 }
 
 /** Resolves a probe or Service port (a name or a number) to a container port number. */

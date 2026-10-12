@@ -1,0 +1,50 @@
+# Bundled Postgres e2e overlay (postgres.e2e.ts). Use after a deployment shape and its instance
+# overlay:
+#   -f values-saas.yaml -f tests/values/saas-instance.yaml -f tests/e2e/values-postgres-e2e.yaml
+# The test adds the Postgres and example-service images and, for the second install step,
+# turns the example service on with its database role.
+
+ingress:
+  # The test never goes through the ingress gateway; keep it small and off the node's ports.
+  replicas: 1
+  direct:
+    serviceType: ClusterIP
+
+postgres:
+  mode: bundled
+  bundled:
+    storage:
+      size: 1Gi
+
+# Nothing here writes telemetry: no ClickHouse workload and no collector, so the run needs neither
+# their Secrets nor their memory.
+clickhouse:
+  mode: external
+  external:
+    url: https://clickhouse.e2e.trustiot.test:8443
+
+observability:
+  sentry:
+    # No Sentry Secret in the test namespace.
+    enabled: false
+  collector:
+    enabled: false
+
+services:
+  # crates/service-kit's example-service, standing in for a product service that uses Postgres:
+  # its readiness check opens a verify-full connection with the service's own role.
+  assets:
+    enabled: false
+    env:
+      - name: TRUSTIOT__GREETING
+        value: hello from the postgres e2e
+    podSecurityContext:
+      # The distroless nonroot base declares its user by name; give the kubelet the number.
+      runAsUser: 65532
+      runAsGroup: 65532
+
+mesh:
+  calls:
+    # The stand-in uses Postgres; identity is off.
+    assets:
+      - postgres

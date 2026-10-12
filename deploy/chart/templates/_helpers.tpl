@@ -234,16 +234,33 @@ Returns a YAML list; use with fromYamlArray.
 {{- end -}}
 
 {{/*
-CA certificates of external databases, mounted read-only into every service (they are public
-certificates, kept in Secrets by the operator). Returns a YAML list of
-{volume, secret, key, dir}; use with fromYamlArray.
+Secrets that in-cluster components create for themselves, which no custom env may read in any of
+their keys: CloudNativePG's Secrets of the bundled Postgres (the CA's private key, the server key,
+the database owner's password). Services get what they need from them only through the chart.
+Returns a YAML list of names; use with fromYamlArray.
+*/}}
+{{- define "trustiot.dependencySecretNames" -}}
+{{- include "trustiot.postgres.generatedSecrets" . -}}
+{{- end -}}
+
+{{/*
+CA certificates of the databases that one service connects to, mounted read-only (they are public
+certificates, kept in Secrets): an external ClickHouse's CA into every service, and the Postgres
+server's CA into the services that use Postgres ("trustiot.postgres.clients"), from
+postgres.external.caSecret or, bundled, the certificate in CloudNativePG's <cluster>-ca.
+Argument: dict "root" $ "name" <service>.
+Returns a YAML list of {volume, secret, key, dir}; use with fromYamlArray.
 */}}
 {{- define "trustiot.caMounts" -}}
+{{- $root := .root -}}
 {{- $mounts := list -}}
-{{- range $dependency := list "postgres" "clickhouse" -}}
-{{- $settings := get $.Values $dependency -}}
-{{- if and (eq $settings.mode "external") $settings.external.caSecret.name -}}
-{{- $mounts = append $mounts (dict "volume" (printf "%s-ca" $dependency) "secret" $settings.external.caSecret.name "key" $settings.external.caSecret.key "dir" (printf "/etc/trustiot/%s-ca" $dependency)) -}}
+{{- $postgresCa := include "trustiot.postgres.caSecret" $root | fromYaml -}}
+{{- if and $postgresCa.name (has .name (include "trustiot.postgres.clients" $root | fromYaml).services) -}}
+{{- $mounts = append $mounts (dict "volume" "postgres-ca" "secret" $postgresCa.name "key" $postgresCa.key "dir" "/etc/trustiot/postgres-ca") -}}
+{{- end -}}
+{{- with $root.Values.clickhouse -}}
+{{- if and (eq .mode "external") .external.caSecret.name -}}
+{{- $mounts = append $mounts (dict "volume" "clickhouse-ca" "secret" .external.caSecret.name "key" .external.caSecret.key "dir" "/etc/trustiot/clickhouse-ca") -}}
 {{- end -}}
 {{- end -}}
 {{- toYaml $mounts -}}

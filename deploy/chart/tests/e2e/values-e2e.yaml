@@ -90,6 +90,19 @@ clickhouse:
   external:
     url: https://clickhouse.e2e.trustiot.test:8443
 
+# No database: the stand-ins keep no data, so the test needs neither the CloudNativePG operator
+# nor a CA Secret. The identity double does not use Postgres like the real identity service does.
+postgres:
+  mode: external
+  external:
+    host: postgres.e2e.trustiot.test
+    caSecret:
+      name: trustiot-e2e-postgres-ca
+
+mesh:
+  calls:
+    identity: []
+
 observability:
   sentry:
     # No Sentry Secret in the test namespace.

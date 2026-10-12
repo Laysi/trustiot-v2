@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="7" assertions="50" failures="0" skipped="0" time="129.369845627">
+  <testsuite name="deploy/chart/tests/e2e/postgres.e2e.ts" file="deploy/chart/tests/e2e/postgres.e2e.ts" tests="7" assertions="50" failures="0" skipped="0" time="129.367879438" hostname="fedora">
+    <testsuite name="bundled Postgres (onprem shape)" file="deploy/chart/tests/e2e/postgres.e2e.ts" line="355" tests="7" assertions="50" failures="0" skipped="0" time="63.311" hostname="fedora">
+      <testcase name="the Cluster is healthy with one instance outside the mesh, admitted under the restricted Pod Security Standard" classname="bundled Postgres (onprem shape)" time="0.361629" file="deploy/chart/tests/e2e/postgres.e2e.ts" line="356" assertions="16" />
+      <testcase name="the server runs with TLS, AGE preloaded at the image&apos;s version, the built-in locale, no superuser password and an ordinary owner" classname="bundled Postgres (onprem shape)" time="1.835451" file="deploy/chart/tests/e2e/postgres.e2e.ts" line="388" assertions="10" />
+      <testcase name="AGE runs cypher() in the bundled database" classname="bundled Postgres (onprem shape)" time="0.75057" file="deploy/chart/tests/e2e/postgres.e2e.ts" line="428" assertions="2" />
+      <testcase name="the server refuses a TCP connection without TLS" classname="bundled Postgres (onprem shape)" time="0.361149" file="deploy/chart/tests/e2e/postgres.e2e.ts" line="449" assertions="2" />
+      <testcase name="a service that lists postgres connects with verify-full, with the mounted CA and its own role" classname="bundled Postgres (onprem shape)" time="0.639284" file="deploy/chart/tests/e2e/postgres.e2e.ts" line="460" assertions="8" />
+      <testcase name="the same pod is refused with another CA, a host name the certificate does not list, or without the admitted labels" classname="bundled Postgres (onprem shape)" time="5.278498" file="deploy/chart/tests/e2e/postgres.e2e.ts" line="484" assertions="8" />
+      <testcase name="helm uninstall keeps the database: the Cluster, its image catalog and its volume stay" classname="bundled Postgres (onprem shape)" time="54.087139" file="deploy/chart/tests/e2e/postgres.e2e.ts" line="521" assertions="4" />
+    </testsuite>
+  </testsuite>
+</testsuites>

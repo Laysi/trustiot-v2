@@ -1,0 +1,43 @@
+# Native arm64 build and test on the lab, as the postgres-image job in ci.yml now runs it
+# (after merging main 9b13ad8, Laysi/trustiot-v2#309: every ci.yml job on ubuntu-24.04-arm).
+# trustiot-mac-m1, podman 5.8.7, under the lab lock (acquired 2026-10-11T13:14:38Z, released after cleanup).
+# The workstation's bun ran image.test.ts against the lab's podman (podman remote over an ssh
+# tunnel to a temporary `podman system service` on the lab's 127.0.0.1), without POSTGRES_IMAGE,
+# so the test built the image itself through containerBuildArgs, natively on arm64.
+
+$ CI=1 CONTAINER_HOST=tcp://127.0.0.1:39057 bun test deploy/images/postgres
+
+## Run 1 (Containerfile of dca7fd6): the build failed in the build stage
+time="2026-10-11T21:17:19+08:00" level=warning msg="SHELL is not supported for OCI image format, [/bin/bash -euo pipefail -c] will be ignored. Must use `docker` format"
+[2/3] STEP 15/16: RUN pg_server_dev="postgresql-server-dev-18_${PG_PACKAGE_VERSION/+/%2B}_arm64.deb"; ...
+/bin/sh: 1: Bad substitution
+→ podman 5.8.7 ignores SHELL when it builds an OCI image (release.yml builds with --format oci);
+  podman 6.1.3 on the workstation had only warned that SHELL is not persisted and still used it.
+  The release runner's podman is not pinned, so a release could have failed the same way.
+  Fix: no SHELL; every RUN is POSIX sh starting with `set -eu`; image.test.ts checks both.
+
+## Run 2: the cross compiler found no assembler on an arm64 build machine
+aarch64-linux-gnu-gcc: fatal error: cannot execute 'as': posix_spawnp: No such file or directory
+→ on arm64, Debian's gcc-aarch64-linux-gnu runs the native `as`/`ld`. Fix: install binutils too.
+
+## Run 3 (the fixed Containerfile): all pass
+bun test v1.4.2 (744846f84)
+ 9 pass
+ 0 fail
+ 29 expect() calls
+Ran 9 tests across 1 file. [71.83s]
+(CI=1, so the Postgres tests could not have been skipped; build and test together took 71.8 s)
+
+## The release path still works: x86 cross build of the fixed Containerfile on the workstation
+$ podman build --platform linux/arm64 --format oci --tag localhost/trustiot-e2e/postgres:x86-cross deploy/images/postgres
+Successfully tagged localhost/trustiot-e2e/postgres:x86-cross   (no emulator registered, no SHELL warning)
+age.so is byte-identical to the one in the earlier release build (the RUN rewrite changed no output):
+7301f9108bb1e083e4234adfd0362c28976c76ee17c8ef6ed2fc6bd85daa4e29  age-x86cross.so
+The natively built age.so differs (a different build of the same gcc 14.2.0-19, run on another host
+architecture), as expected; the release only publishes the x86 cross build:
+4d1878bf9634cc4530a5207de07c4a124c9fe07223fd06c6262f082f24867168  age-labnative.so
+
+## Lab cleanup
+podman images -a before and after (sorted ID and name lists): identical after removing the 28 images the
+builds created (the test image, intermediate layers and the arm64 CloudNativePG base)
+no containers left; temporary podman service stopped; ~/e2e-57 removed; lock released

@@ -13,12 +13,14 @@ bun test deploy/chart
 # 只跑名稱含指定字串的檢查
 bun test deploy/chart -t "kubeconform"
 
-# 個別執行（地端把 saas 換成 onprem）
+# 個別執行（地端把 saas 換成 onprem）。一定要帶實例覆寫檔：只帶型態檔時，必填欄位（hosts.*、
+# 叢集內 Postgres 與 ClickHouse 的 storage.size 等）沒有值，schema 驗證就失敗
 helm lint deploy/chart --strict -f deploy/chart/values-saas.yaml -f deploy/chart/tests/values/saas-instance.yaml
 helm template trustiot deploy/chart -n trustiot -f deploy/chart/values-saas.yaml -f deploy/chart/tests/values/saas-instance.yaml > saas.yaml
 kubeconform -strict -summary -kubernetes-version 1.36.0 saas.yaml
 
-# 安裝：第三個 -f 是這個安裝實例的覆寫檔（見下一節）
+# 安裝：叢集要先裝好平台元件（deploy/istio 與 deploy/cloudnative-pg 的 README），
+# 第三個 -f 是這個安裝實例的覆寫檔（見下一節）
 helm install trustiot deploy/chart -n trustiot --create-namespace -f deploy/chart/values-saas.yaml -f <覆寫檔>
 ```
 
@@ -34,7 +36,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | --- | --- | --- |
 | 1 | `values.yaml` | 所有欄位的預設值 |
 | 2 | `values-saas.yaml` 或 `values-onprem.yaml` | 部署型態，也就是 SaaS 與地端的差異 |
-| 3 | 安裝實例的覆寫檔 | 這一個安裝的主機名稱、外部端點與 Secret 名稱。SaaS 的放在 `deploy/flux/`（Laysi/trustiot-v2#70）；地端由客戶安裝時提供；`tests/values/` 有測試用的範例 |
+| 3 | 安裝實例的覆寫檔 | 這一個安裝的主機名稱、外部端點、Secret 名稱與叢集內資料庫的磁碟區大小（`postgres.bundled.storage.size`、`clickhouse.bundled.storage.size`）。SaaS 的放在 `deploy/flux/`（Laysi/trustiot-v2#70）；地端由客戶安裝時提供；`tests/values/` 有測試用的範例 |
 
 `values.schema.json` 驗證合併後的結果：缺欄位、拼錯欄位、以 IP 當主機名稱、在 values 放明文密鑰、SaaS 的外部端點不是 https，都會讓 `helm lint`、`helm template` 與 `helm install` 直接失敗，不會裝出壞掉的版本。
 
@@ -52,7 +54,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | `observability.sentry.enabled` | `true`，送 sentry.io | `false`，客戶有自己的 Sentry 時可開 | 決策 24 |
 | `observability.collector.forward.enabled` | `false`：日誌與 trace 只存在我們的 ClickHouse | `false`，客戶要求時在覆寫檔開啟，把遮蔽後的日誌（可加 trace）以 OTLP 轉送到客戶的 SIEM | 決策 22 |
 
-兩種型態相同的部分：Postgres（含 Apache AGE）與 ClickHouse 都在叢集內（`bundled`）；MQTT broker 不直接對外，閘道器一律以 443 的 WebSocket 經入口 gateway 與 mqtt-bridge 連到 broker；cookie 驗證、例外路徑與標頭規則相同（見「入口 gateway」）；chart 產生的 Service 一律是 ClusterIP（測試強制），唯一對外的是 Istio 依 Gateway 產生的入口 Service。SaaS 在 Cloudflare 無法使用時，可改用 `ingress.exposure: direct` 直接對外，閘道器只改 DNS（docs/roadmap/risks.md）。
+兩種型態相同的部分：Postgres（含 Apache AGE，CloudNativePG 管理）與 ClickHouse 都在叢集內（`bundled`），規格也相同；MQTT broker 不直接對外，閘道器一律以 443 的 WebSocket 經入口 gateway 與 mqtt-bridge 連到 broker；cookie 驗證、例外路徑與標頭規則相同（見「入口 gateway」）；chart 產生的 Service 一律是 ClusterIP（測試強制），唯一對外的是 Istio 依 Gateway 產生的入口 Service。SaaS 在 Cloudflare 無法使用時，可改用 `ingress.exposure: direct` 直接對外，閘道器只改 DNS（docs/roadmap/risks.md）。
 
 ## 元件與開關
 
@@ -63,7 +65,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | Rust 服務（見下一節） | `services.<name>.enabled` | 通用樣板完成；映像還沒出，預設全關 | 各服務的 issue 出映像時改成開 |
 | 入口 gateway（Istio ambient、Gateway API、ext_authz） | `ingress.*` | 完成：Gateway、路由、cookie 驗證、例外路徑、`/internal` 拒絕與 NetworkPolicy；服務的 pod 加入 ambient mesh。Istio 本身與 ext_authz provider 由 `deploy/istio` 安裝。服務的 cookie 路由隨各服務加入 `ingress.routes` | Laysi/trustiot-v2#62；真身分服務的端到端驗證在 Laysi/trustiot-v2#77 |
 | 服務間授權（AuthorizationPolicy、NetworkPolicy） | `mesh.*` | 完成：每個服務自己的 ServiceAccount、依 `mesh.calls` 產生的 AuthorizationPolicy、namespace 預設拒絕的 NetworkPolicy；不部署 waypoint。服務之間的呼叫隨各服務加入 `mesh.calls` | Laysi/trustiot-v2#63；代表使用者呼叫的授權矩陣在 Laysi/trustiot-v2#106 |
-| Postgres（CloudNativePG 加 AGE） | `postgres.mode` | `external` 已接到平台設定；`bundled` 的 operator 與 Cluster 尚未加入 | Laysi/trustiot-v2#57、Laysi/trustiot-v2#58 |
+| Postgres（CloudNativePG 加 AGE） | `postgres.mode` | `bundled`：單一 instance 的 CloudNativePG Cluster、AGE extension 與 NetworkPolicy（見「叢集內的 Postgres」）；CloudNativePG operator 與 CRD 是叢集層級的平台元件，由 [deploy/cloudnative-pg](../cloudnative-pg/README.md) 安裝，不在 chart 裡。`external` 已接到平台設定。含 AGE 的映像在 [deploy/images/postgres](../images/postgres/README.md)，由 release.yml 發佈 | Laysi/trustiot-v2#60（每個服務的角色與 migration）、Laysi/trustiot-v2#134（備份與 PITR） |
 | migration Job | — | 尚未加入 | Laysi/trustiot-v2#60 |
 | ClickHouse | `clickhouse.mode` | `bundled`：單節點 StatefulSet（見「叢集內的 ClickHouse」）；`external` 已接到平台設定。schema、帳號與 row policy 由 migration Job 以 SQL 套用 | Laysi/trustiot-v2#60（migration Job）；admin 密碼的 Secret 見「叢集內的 ClickHouse」與 docs/runbooks/secrets.md |
 | MQTT broker（Mosquitto） | — | 尚未加入 | Laysi/trustiot-v2#84 |
@@ -73,7 +75,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | Grafana | — | 尚未加入 | Laysi/trustiot-v2#183 |
 | Sentry | `observability.sentry.*` | 開關、環境名稱與 DSN 已接到每個服務 | Laysi/trustiot-v2#184 |
 | 內部身分（公鑰、簽章私鑰） | `internalIdentity.*` | 完成：公鑰以 JWK Set 放進平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`；簽章私鑰的 Secret 只掛進身分服務；身分服務另外拿到需要 cookie 的路由（`TRUSTIOT_INGRESS_ROUTES`），決定 token 的受眾 | Laysi/trustiot-v2#61；SaaS 的值放進 `deploy/flux/` 由 Laysi/trustiot-v2#70 做 |
-| 密鑰 | 各個 `*Secret` 欄位、`services.<name>.credentials` | values 只存 Secret 名稱與 key；Sentry DSN 給每個服務，其他依賴的帳密只給列出它的服務，外部資料庫的 CA 掛進每個服務；chart 不產生 Secret（測試檢查） | SaaS 的 Secret 以 SOPS 加密放在 `deploy/flux/`（Laysi/trustiot-v2#70）；地端由客戶建立。規則與清冊見 docs/architecture/secrets.md |
+| 密鑰 | 各個 `*Secret` 欄位、`services.<name>.credentials` | values 只存 Secret 名稱與 key；Sentry DSN 給每個服務，其他依賴的帳密只給列出它的服務；外部 ClickHouse 的 CA 掛進每個服務，Postgres 的 CA 只掛進在 `mesh.calls` 列出 `postgres` 的服務；chart 不產生 Secret（測試檢查），叢集內 Postgres 的 Secret 由 CloudNativePG 產生，服務的自訂 `env` 讀不到 | SaaS 的 Secret 以 SOPS 加密放在 `deploy/flux/`（Laysi/trustiot-v2#70）；地端由客戶建立。規則與清冊見 docs/architecture/secrets.md |
 
 ## 服務
 
@@ -176,7 +178,7 @@ ingress:
 | 欄位 | 預設值 | 說明 |
 | --- | --- | --- |
 | `mesh.trustDomain` | `cluster.local` | mesh 的 SPIFFE trust domain（Istio 的 `meshConfig.trustDomain`）；呼叫端身分寫成 `<trustDomain>/ns/<namespace>/sa/<ServiceAccount>` |
-| `mesh.calls` | `mesh.calls.ingest` 與 `mesh.calls.telemetry-query` 都是 `[clickhouse]` | 誰可以呼叫誰：`<呼叫端>: [<被呼叫端>, ...]`。呼叫端是 `services` 的 key；被呼叫端是 `services` 的 key，或叢集內元件 `clickhouse`（`clickhouse.mode: bundled` 時）與 `otel-collector`（collector 開啟時）。遙測的呼叫由 chart 自動加上，不必列：每個啟用的服務 → `otel-collector`，`otel-collector` → `clickhouse`。不認得的名稱讓安裝失敗；服務未啟用或元件沒有部署時略過這條，所以可以先列還沒出映像的服務。預設值是決策 14 與 docs/architecture/deployment.md 寫明的 ClickHouse 用戶端：資料接收寫入、時序查詢以每租戶唯讀帳號讀取。各服務的 issue 加入它要呼叫的內部 API |
+| `mesh.calls` | `mesh.calls.ingest` 與 `mesh.calls.telemetry-query` 都是 `[clickhouse]`，`mesh.calls.identity` 是 `[postgres]` | 誰可以呼叫誰：`<呼叫端>: [<被呼叫端>, ...]`。呼叫端是 `services` 的 key；被呼叫端是 `services` 的 key、叢集內元件 `clickhouse`（`clickhouse.mode: bundled` 時）與 `otel-collector`（collector 開啟時），或 `postgres`（兩種 `postgres.mode` 都可以列，見下方）。遙測的呼叫由 chart 自動加上，不必列：每個啟用的服務 → `otel-collector`，`otel-collector` → `clickhouse`。不認得的名稱讓安裝失敗；服務未啟用或元件沒有部署時略過這條，所以可以先列還沒出映像的服務。預設值是決策 14 與 docs/architecture/deployment.md 寫明的 ClickHouse 用戶端：資料接收寫入、時序查詢以每租戶唯讀帳號讀取；以及使用 Postgres 的身分服務。各服務的 issue 加入它要呼叫的內部 API，用 Postgres 的服務加上 `postgres` |
 
 ```yaml
 mesh:
@@ -207,7 +209,8 @@ mesh:
 - 叢集測試 `tests/e2e/mesh.e2e.ts` 以真實連線驗證清單內放行、清單外被拒，以及兩層各自生效，用法見該目錄的 README。
 - 叢集內的 ClickHouse 走同一套規則：只有 `mesh.calls` 列出的 `ingest` 與 `telemetry-query`，以及 chart 自動加上的 OpenTelemetry collector（Laysi/trustiot-v2#73）連得到它，其他服務與 pod 都被拒，kubelet 的 `/ping` 探測經 `169.254.7.127/32` 照常通過，節點來源只開 HTTP 8123。還沒有的用戶端加入時要加進來：migration Job（Laysi/trustiot-v2#60）要在 `trustiot.mesh.plan` 加上 Job 當呼叫端（`mesh.calls` 的呼叫端只能是服務；元件之間的呼叫由 plan 自己加，collector 就是這樣），Grafana（Laysi/trustiot-v2#183）同樣。ClickHouse 的政策只以 chart 測試驗證，2026-10-10 的實驗機測試沒有部署它（見測試報告）。
 - collector 也是 mesh 內的元件（`trustiot.mesh.components` 的 `otel-collector`，埠與探針定義在 `trustiot.otel-collector.pod`）：每個啟用的服務都自動是它的呼叫端（送 OTLP），其他 pod 連不到它，節點來源只開健康檢查的 13133。它連出到外部 ClickHouse 或 SIEM 不受 NetworkPolicy 限制（只管連入）；SIEM 在同一個 namespace 時，要另外以 NetworkPolicy 放行 collector 的 pod 連它。
-- 預設拒絕套用到 namespace 內所有 pod，包括之後加入的叢集內元件（broker、Postgres 等）：在 mesh 內的元件加進 `trustiot.mesh.components`，由同一份清單產生政策；不在 mesh 內的元件自帶 NetworkPolicy，只放行實際的用戶端（見「擴充 chart」）。chart 測試檢查每個 Deployment 與 StatefulSet 的 pod 都有自己的 NetworkPolicy 與 AuthorizationPolicy。
+- `postgres` 是「這個服務用 Postgres」的宣告，不經 mesh：Postgres 的每條連線本身就是 TLS 並以 verify-full 驗證伺服器，叢集內的 Postgres pod 也不加入 ambient mesh（見「叢集內的 Postgres」），所以它沒有 AuthorizationPolicy，也不走 HBONE。列出 `postgres` 的服務才會掛上 Postgres 的 CA 並拿到 `TRUSTIOT_POSTGRES_CA_FILE`（`external` 也一樣）；`bundled` 時 `<release>-postgres` 這個 NetworkPolicy 也只放行這些服務的 pod 連 5432。同一份清單決定兩件事，不會一邊有、一邊沒有。
+- 預設拒絕套用到 namespace 內所有 pod，包括之後加入的叢集內元件（broker 等）：在 mesh 內的元件加進 `trustiot.mesh.components`，由同一份清單產生政策；不在 mesh 內的元件自帶 NetworkPolicy，只放行實際的用戶端（見「擴充 chart」），叢集內的 Postgres 就是這樣。chart 測試檢查每個 Deployment 與 StatefulSet 的 pod 都有自己的 NetworkPolicy 與 AuthorizationPolicy。
 
 ### serviceDefaults 與 services.\<name\>
 
@@ -294,12 +297,28 @@ mesh:
 
 | 欄位 | 預設值 | 說明 |
 | --- | --- | --- |
-| `postgres.mode` | `bundled` | `bundled`：CloudNativePG（Laysi/trustiot-v2#58）；`external`：自行維運、含 Apache AGE 的 Postgres |
+| `postgres.mode` | `bundled` | `bundled`：chart 在 release 的 namespace 部署 CloudNativePG 的 Cluster，叢集要先裝好 operator（見「叢集內的 Postgres」）；`external`：自行維運、含 Apache AGE 的 Postgres。用 Postgres 的服務在 `mesh.calls` 列出 `postgres` |
+| `postgres.bundled.image.repository` | `ghcr.io/laysi/trustiot-v2/postgres` | 我們的 CloudNativePG operand 映像：PostgreSQL 18 加 Apache AGE（deploy/images/postgres），由 release 與服務一起發佈 |
+| `postgres.bundled.image.tag` | `""` | 空白時用 `Chart.appVersion`；映像的 tag 是 TrustIoT 的版本，PostgreSQL 的 major 由 chart 寫在 ImageCatalog |
+| `postgres.bundled.image.digest` | `""` | sha256 digest；設定時以 digest 固定映像 |
+| `postgres.bundled.image.pullPolicy` | `IfNotPresent` | |
+| `postgres.bundled.storage.size` | `""`，`bundled` 時必填 | 資料與 WAL 的磁碟區大小，每個部署自己估算，見「叢集內的 Postgres」 |
+| `postgres.bundled.storage.storageClassName` | `""` | 空白時用叢集預設的 StorageClass |
+| `postgres.bundled.resources` | requests `cpu: 100m`、`memory: 256Mi`；limits `cpu: "2"`、`memory: 1Gi` | 兩種型態相同，配合 8 GB 單節點上的 ClickHouse 與服務；schema 要求 `limits.memory`。調高記憶體上限時一起調 `parameters` |
+| `postgres.bundled.parameters.shared_buffers` | `128MB` | PostgreSQL 的記憶體設定，單位 `kB`、`MB` 或 `GB`。依記憶體上限估算：`shared_buffers` 約八分之一、`effective_cache_size` 約八分之三 |
+| `postgres.bundled.parameters.effective_cache_size` | `384MB` | 查詢規劃用的快取估計，不實際配置記憶體 |
+| `postgres.bundled.parameters.work_mem` | `4MB` | 每個排序或 hash 的上限，一個查詢可能用好幾份 |
+| `postgres.bundled.parameters.maintenance_work_mem` | `64MB` | VACUUM、建索引用 |
+| `postgres.bundled.parameters.max_connections` | `100` | 10–1000；每個服務的連線池加總要低於它，並留給 migration Job 與 operator |
+| `postgres.bundled.nodeSelector` | `kubernetes.io/arch: arm64` | 映像只有 arm64（決策 5） |
+| `postgres.bundled.tolerations` | `[]` | |
+| `postgres.bundled.operator.namespace` | `cnpg-system` | CloudNativePG operator 所在的 namespace；NetworkPolicy 只放行它的 pod 連 Postgres pod 的 8000（instance manager） |
+| `postgres.bundled.operator.podLabels.app.kubernetes.io/name` | `cloudnative-pg` | operator pod 的 label，用來選來源；客戶已有自己的 operator（例如由 OperatorHub 安裝）時改成它的 namespace 與 label |
 | `postgres.external.host` | `""` | `external` 時必填；主機名稱或 IPv4 |
 | `postgres.external.port` | `5432` | |
 | `postgres.external.database` | `trustiot` | 資料庫名稱 |
 | `postgres.external.sslMode` | `verify-full` | 只接受 `verify-full`：一律驗證伺服器憑證（清單 M3） |
-| `postgres.external.caSecret.name` | `""` | `external` 時必填；簽發伺服器憑證的 CA 所在的 Secret |
+| `postgres.external.caSecret.name` | `""` | `external` 時必填；簽發伺服器憑證的 CA 所在的 Secret，以唯讀方式只掛進在 `mesh.calls` 列出 `postgres` 的服務 |
 | `postgres.external.caSecret.key` | `ca.crt` | |
 | `clickhouse.mode` | `bundled` | `bundled`：叢集內自管（Laysi/trustiot-v2#59）；`external`：ClickHouse Cloud 等，只當備案（決策 14） |
 | `clickhouse.bundled.image.repository` | `docker.io/clickhouse/clickhouse-server` | |
@@ -375,6 +394,35 @@ mesh:
 
 URL 欄位都不接受 `user:password@` 這種帶帳密的寫法。
 
+## 叢集內的 Postgres
+
+`postgres.mode: bundled`（預設，SaaS 與地端相同）部署 `templates/postgres.yaml`：一個由 CloudNativePG 管理的 Postgres，映像是我們的 PostgreSQL 18 加 Apache AGE（[deploy/images/postgres](../images/postgres/README.md)，決策 21、清單 M8）。
+
+叢集要先裝好 CloudNativePG operator 與它的 CRD（[deploy/cloudnative-pg](../cloudnative-pg/README.md)），chart 不安裝它們：CRD、webhook 與 ClusterRole 是整個叢集共用的，一個叢集只能有一份，和 Istio 一樣是平台元件（決策 5 的 2026-10-12 補充）。沒有 operator 時 `helm install` 因為不認得 `postgresql.cnpg.io/v1` 而失敗，不會裝出半套。
+
+chart 產生的物件（`<cluster>` 是 `<release>-postgres`；CloudNativePG 限制 Cluster 名稱 50 個字元，超過時保留 release 名稱的前段，在 `-postgres` 前加上完整名稱 SHA-256 的前 8 個字元，同一個 namespace 裡開頭相同的 release 不會撞名）：
+
+| 物件 | 內容 |
+| --- | --- |
+| ImageCatalog `<cluster>` | PostgreSQL major 18 對應的映像（`postgres.bundled.image`）。映像的 tag 是 TrustIoT 的版本，CloudNativePG 從這裡得知 major |
+| Cluster `<cluster>` | 一個 instance、不建 PodDisruptionBudget（單一 instance 的 PDB 會擋住節點 drain）、不開 superuser 存取；bootstrap 建立資料庫 `trustiot` 與它的 owner `trustiot_owner`，locale 用 PostgreSQL 內建的 `C.UTF-8`（排序與字元分類不隨作業系統的 C library 改變，換映像不會讓索引失效）；`shared_preload_libraries` 含 `age`；pg_hba 加上 `hostnossl all all all reject`；pod 帶 `istio.io/dataplane-mode: none` |
+| Database `<cluster>-trustiot` | 由 operator 以 superuser 在 `trustiot` 建立 AGE extension，版本變更時執行 `ALTER EXTENSION age UPDATE`；`databaseReclaimPolicy: retain`，刪掉這個物件不會刪資料庫 |
+| NetworkPolicy `<release>-postgres` | 選 Postgres pod（`cnpg.io/cluster`、`cnpg.io/podRole: instance`），只放行在 `mesh.calls` 列出 `postgres` 的服務連 5432，以及 operator（`postgres.bundled.operator`）連 instance manager 的 8000 |
+
+operator 依 Cluster 再產生：pod 與 PVC `<cluster>-1`；Service `<cluster>-rw`（永遠指向 primary，服務連這個）、`<cluster>-ro`、`<cluster>-r`；Secret `<cluster>-ca`、`<cluster>-server`、`<cluster>-replication`、`<cluster>-app`。
+
+- **TLS（清單 M3）**：operator 產生自己的 CA（`<cluster>-ca`）與伺服器憑證（`<cluster>-server`，主機名稱含 `<cluster>-rw.<namespace>.svc`），效期 90 天、到期前 7 天自動換發，不停機；CA 換發時沿用同一把私鑰（CloudNativePG 1.30.1 的 `internal/controller/cluster_pki.go`）。服務的平台設定是 `TRUSTIOT_POSTGRES_HOST=<cluster>-rw.<namespace>.svc`、`TRUSTIOT_POSTGRES_SSLMODE=verify-full`；用 Postgres 的服務掛上 `<cluster>-ca` 裡的 `ca.crt`，volume 的 `items` 只選這個 key，`ca.key` 不會進任何服務的容器。kubelet 會更新掛載的檔案，service-kit 每條新連線都重讀 CA 檔，所以換發不必重啟服務。不走 TLS 的 TCP 連線，不論用戶端的 `sslmode`，都被伺服器的 pg_hba 拒絕。
+- **帳號（決策 4、29）**：沒有 superuser 密碼，也沒有 `<cluster>-superuser` Secret，`postgres` 角色只能在 pod 內經 local socket 登入，operator 就是這樣管理資料庫。owner `trustiot_owner` 是一般的登入角色（沒有 SUPERUSER、CREATEROLE、BYPASSRLS），密碼由 operator 產生在 `<cluster>-app`，只給 migration Job 用（Laysi/trustiot-v2#60）。operator 產生的 Secret（`<cluster>-ca`、`-server`、`-app`、`-replication`、`-superuser`）任何服務的自訂 `env` 都讀不到，寫了就渲染失敗；服務只經 chart 拿到 CA 憑證。每個服務自己的角色與密碼、`crates/service-kit/sql/database.sql` 的權限設定由 Laysi/trustiot-v2#60 加入，做法見 [deploy/cloudnative-pg](../cloudnative-pg/README.md) 的「服務的資料庫角色」。
+- **網路**：Postgres pod 不加入 ambient mesh：每條連線本身已經是 verify-full 的 TLS，而在 mesh 外的 operator 要連每個 instance 的 8000，放進 mesh 會被 AuthorizationPolicy 擋下。namespace 的預設拒絕照樣套用到它，`<release>-postgres` 只放行上表的來源；kubelet 的探針從 pod 所在的節點來，NetworkPolicy 不擋節點本身的連線。namespace 內沒有列 `postgres` 的服務與其他 pod 都連不到。
+- **規格**：資源與參數見「外部依賴」的 `postgres.bundled.*`，兩種型態相同。
+- **刪除**：Cluster 與 ImageCatalog 帶 `helm.sh/resource-policy: keep`，`helm uninstall` 或 Flux 移除 release 時保留資料庫（CloudNativePG 刪 Cluster 時會一起刪掉 PVC，資料就沒了）。確定要刪資料時，明確刪除 Cluster：`kubectl -n <namespace> delete cluster <cluster>`，再刪 ImageCatalog。PVC 不會在 `kubectl delete` 回來時就消失：Kubernetes 在 Cluster 刪除後於背景回收它，等 Postgres 的 pod 停止才刪得掉；要確認時以 `kubectl -n <namespace> get pvc -l cnpg.io/cluster=<cluster>` 查到沒有為止。
+- **升級**：映像隨 chart 版本更新，單一 instance 會短暫中斷。AGE 升級時，`deploy/images/postgres/Containerfile` 的 `AGE_VERSION` 與 `templates/_postgres.tpl` 的 `trustiot.postgres.ageVersion` 一起改（chart 測試比對兩者），operator 執行 `ALTER EXTENSION`。PostgreSQL major 升級要一起改映像的基底與 `trustiot.postgres.majorVersion`（測試同樣比對），步驟要另外驗證，還沒做過。
+- **備份與 PITR** 尚未設定，之後以同一個 operator 加入（Laysi/trustiot-v2#134）。
+
+磁碟區大小沒有預設值，每個部署在安裝實例的覆寫檔設定 `postgres.bundled.storage.size`（資料與 WAL 共用一個磁碟區）。業務資料與知識圖的大小要等服務上線後才量得到，測試範例先用 20Gi；用量告警見清單 I2。
+
+在叢集上檢查：`kubectl -n <namespace> get cluster <cluster>` 的 STATUS 是 `Cluster in healthy state`，`kubectl -n <namespace> get database <cluster>-trustiot` 的 APPLIED 是 `true`。Helm 4 的 `helm install --wait` 依 Cluster 的 `Ready` 條件等到它健康才結束（2026-10-12 實驗機兩種型態都是這樣，約 20 到 26 秒）；Database 的 AGE 不在等待之列，再晚約 20 秒才套用，所以用到 AGE 的 migration 要等 `age` extension 出現再開始（owner 不是 superuser，不能自己建立它）。叢集測試 `tests/e2e/postgres.e2e.ts` 以真實連線驗證 verify-full、錯誤 CA、錯誤主機名稱與沒列 `postgres` 的 pod 被拒、明文連線被拒、沒有 superuser 帳號、uninstall 保留資料，用法見該目錄的 README，實驗機的結果見 [測試報告](../../docs/test-reports/2026-10-12-58-cnpg-postgres.md)。
+
 ## 叢集內的 ClickHouse
 
 `clickhouse.mode: bundled`（預設，SaaS 與地端相同）部署 `templates/clickhouse.yaml`：
@@ -444,7 +492,7 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 服務照下列約定實作，就能直接用通用樣板部署（docs/architecture/deployment.md 的服務設計規則）：
 
 - **設定**：ConfigMap `<release>-platform` 以 `envFrom` 交給每個服務，另外每個服務有 `OTEL_SERVICE_NAME=<服務名稱>`，collector 開啟時還有 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT`（service-kit 的 OTLP 匯出位址，見「OpenTelemetry collector」）。`TRUSTIOT_` 後接英數字、`SENTRY_` 與 `OTEL_` 開頭的變數只由 chart 設定，`env` 不能覆寫，服務讀到的平台設定一定是 values 決定的值。沒有設定的項目不會出現，服務可以分辨「沒設定」與「空字串」。平台設定變更時 pod 會自動滾動更新。
-- **密鑰**：不放進 ConfigMap，以 `valueFrom.secretKeyRef` 從 values 指定的 Secret 取用。Sentry 開啟時每個服務有 `SENTRY_DSN`；其他依賴的帳密只給在 `services.<name>.credentials` 列出它的服務（見後面「密鑰的環境變數」），Secret 名稱空白的項目不注入。外部 Postgres 與 ClickHouse 的 CA 憑證以唯讀方式掛在 `/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`；內部身分的簽章私鑰只掛進身分服務（見「內部身分」）。服務自己的資料庫帳號（每個服務一個角色，決策 4）隨 Postgres 與 migration 的 issue 加入（Laysi/trustiot-v2#58、Laysi/trustiot-v2#60）。
+- **密鑰**：不放進 ConfigMap，以 `valueFrom.secretKeyRef` 從 values 指定的 Secret 取用。Sentry 開啟時每個服務有 `SENTRY_DSN`；其他依賴的帳密只給在 `services.<name>.credentials` 列出它的服務（見後面「密鑰的環境變數」），Secret 名稱空白的項目不注入。資料庫的 CA 憑證以唯讀方式掛在 `/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`：外部 ClickHouse 的掛進每個服務；Postgres 的（`external` 是 `postgres.external.caSecret`，`bundled` 是 CloudNativePG 產生的 CA 裡的 `ca.crt`）只掛進在 `mesh.calls` 列出 `postgres` 的服務。內部身分的簽章私鑰只掛進身分服務（見「內部身分」）。服務自己的資料庫帳號（每個服務一個角色，決策 4）由 migration 的 issue 加入（Laysi/trustiot-v2#60）。
 - **埠與探針**：API 監聽 8080（埠名 `http`）；健康埠 8081（埠名 `health`）只提供 `GET /healthz`（startup 與 liveness）與 `GET /readyz`（readiness），其他路徑回 404。探針連健康埠，節點上的行程因此碰不到 API（「節點來源」）。service-kit 預設就是這樣（`http.listen_addr`、`http.health_listen_addr`），`crates/service-kit/tests/chart_contract.rs` 對照 `values.yaml` 檢查。
 - **SIGTERM**：pod 刪除時先等 `preStopSleepSeconds`（預設 5 秒），再送 SIGTERM；服務收到後 readiness 立即回失敗、處理完進行中的請求、主動關閉長連線，在 `drainSeconds`（預設 30 秒）內結束，之後才會被 SIGKILL。服務是容器內的 PID 1，要自己處理 SIGTERM。
 - **執行環境**：根目錄唯讀，只有 `/tmp` 可寫；以非 root 執行，映像的 `USER` 要是數字 UID，並能以 OpenShift 指派的任意 UID 執行；沒有 ServiceAccount token；只排到 arm64 節點。
@@ -457,16 +505,16 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 | `TRUSTIOT_APP_HOST`、`TRUSTIOT_GATEWAY_HOST`、`TRUSTIOT_OTA_HOST` | `hosts.*` | 一律 |
 | `TRUSTIOT_CLIENT_IP_SOURCE` | 由 `ingress.exposure` 推導：`cf-connecting-ip` 或 `x-forwarded-for-rightmost` | 一律 |
 | `TRUSTIOT_INTERNAL_IDENTITY_KEYS` | `internalIdentity.publicKeys` 組成的 JWK Set（JSON） | 有公鑰時 |
-| `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE` | `postgres.external.*` | `postgres.mode` 為 `external` |
+| `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE` | `external`：`postgres.external.*`；`bundled`：`<release>-postgres-rw.<namespace>.svc`、`5432`、`trustiot`、`verify-full` | 一律 |
 | `TRUSTIOT_CLICKHOUSE_URL` | `external`：`clickhouse.external.url`；`bundled`：`http://<release>-clickhouse.<namespace>.svc:8123`（叢集內明文 HTTP，pod 之間由 Istio ambient 的 ztunnel 加上 mTLS） | 一律 |
 | `TRUSTIOT_QDRANT_URL` | `qdrant.external.url` | `qdrant.mode` 為 `external` |
 | `TRUSTIOT_S3_ENDPOINT`、`_REGION`、`_BUCKET`、`_FORCE_PATH_STYLE` | `objectStorage.*` | 各自有值時；`_FORCE_PATH_STYLE` 隨 bucket |
 | `TRUSTIOT_SMTP_HOST`、`_PORT`、`_SECURITY`、`_FROM` | `smtp.*` | 有 host 時（`_FROM` 有值時） |
 | `TRUSTIOT_AI_CHAT_BASE_URL`、`TRUSTIOT_AI_EMBEDDING_BASE_URL`、`TRUSTIOT_AI_RERANK_BASE_URL` | `ai.*.baseUrl` | 各自有值時 |
-| `TRUSTIOT_POSTGRES_CA_FILE`、`TRUSTIOT_CLICKHOUSE_CA_FILE` | 掛載的 CA 憑證路徑 | 對應的依賴為 `external` 且設定了 `caSecret.name` |
+| `TRUSTIOT_CLICKHOUSE_CA_FILE` | 掛載的 CA 憑證路徑 `/etc/trustiot/clickhouse-ca/ca.crt` | `clickhouse.mode` 為 `external` 且設定了 `caSecret.name` |
 | `SENTRY_ENVIRONMENT` | `observability.sentry.environment` | Sentry 開啟時（`SENTRY_DSN` 來自 Secret，見上） |
 
-`bundled` 模式的叢集內端點，由部署該元件的 issue 加進這張表（ClickHouse 見 `TRUSTIOT_CLICKHOUSE_URL`）。服務連 ClickHouse 的帳號與密碼隨 migration Job 與各服務加入（Laysi/trustiot-v2#60、Laysi/trustiot-v2#91、Laysi/trustiot-v2#119）。
+`TRUSTIOT_POSTGRES_CA_FILE`（`/etc/trustiot/postgres-ca/ca.crt`）不在 ConfigMap：chart 只設給在 `mesh.calls` 列出 `postgres` 的服務，和 CA 的掛載一起出現，`bundled` 與 `external` 都一樣。`bundled` 模式的叢集內端點，由部署該元件的 issue 加進這張表（Postgres 與 ClickHouse 見上面）。服務連 ClickHouse 的帳號與密碼隨 migration Job 與各服務加入（Laysi/trustiot-v2#60、Laysi/trustiot-v2#91、Laysi/trustiot-v2#119）。
 
 密鑰的環境變數（以 `valueFrom.secretKeyRef` 注入，不在 ConfigMap）：
 
@@ -491,14 +539,15 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 - **新增服務**：在 `values.yaml` 的 `services` 加一個 key，並同步 docs/architecture/deployment.md 的服務表（測試比對兩邊）。服務特有的埠、資源、探針與 Secret 寫在該 key 底下。
 - **服務之間的呼叫**：服務要呼叫另一個服務的內部 API 時，在服務的 issue 把這條呼叫加進 `values.yaml` 的 `mesh.calls`；沒列的呼叫會被重置。服務間授權的規則集中在 `templates/_mesh.tpl` 的 `trustiot.mesh.plan`，AuthorizationPolicy 與 NetworkPolicy 都由它產生，不要為單一服務另外寫政策。
 - **對外的路由**：服務要經入口對外時，在服務的 issue 把路由加進 `values.yaml` 的 `ingress.routes`（預設需要 cookie）。不要新增例外路徑：決策 27 只允許登入、閘道器憑證換發、MQTT 轉接與健康檢查四種，要加第五種必須先改決策。身分服務以同一份路由決定 token 的受眾（`TRUSTIOT_INGRESS_ROUTES`），所以路由的後端就是收 token 的服務；`ai-gateway` 不驗證內部身分（決策 28），不能有 cookie 路由。入口的規則集中在 `templates/_ingress.tpl` 的 `trustiot.ingress.plan`；可信的來源 IP 沿用 `trustiot.clientIpSource`，不要另外加欄位。
-- **新增叢集內元件**（broker、Postgres、ClickHouse、Qdrant、collector、Grafana）：放在自己的 `templates/<元件>.yaml`，以 `*.mode` 或開關控制；Service 只能是 ClusterIP；namespace 預設拒絕所有連入：元件在 mesh 內時（pod 帶 `istio.io/dataplane-mode: ambient`）把它加進 `templates/_mesh.tpl` 的 `trustiot.mesh.components`、用戶端列進 `mesh.calls`，並定義 `trustiot.<元件>.pod`（container ports 與探針，元件的模板也從它渲染，NetworkPolicy 依它只對節點來源開探針埠），AuthorizationPolicy 與 NetworkPolicy 由 chart 產生；不在 mesh 內時自帶 NetworkPolicy，只對實際的用戶端開它的埠，並讓 kubelet 的健康檢查到得了；在 `values.schema.json` 加欄位定義、在本文件加欄位說明（測試檢查 `values.yaml` 每個欄位都在本文件），並更新「元件與開關」與平台設定的表。
-- **Secret**：values 只能出現 `{name, key}` 形式的引用（測試掃描兩份 values、`values.yaml` 與 `tests/values/` 的每個欄位：名稱像密鑰的欄位只能是 `*Secret` 底下的 `name`、`key` 或 `*Key`，任何值都不能像私鑰、token 或帶帳密的 URL；並確認渲染結果沒有 Secret、只以名稱與 key 讀 Secret）；schema 的 `additionalProperties: false` 會擋下放明文的新欄位。服務要拿新的依賴帳密時，在 `_helpers.tpl` 的 `trustiot.credentialCatalog` 加一列（變數名稱、Secret、可以拿的服務）、在 schema 的 `credentials` 列舉加上名稱，並更新「密鑰的環境變數」表；自訂 `env` 自動不能讀這個帳密。叢集內元件自己產生的帳密 Secret（例如 CloudNativePG 的資料庫帳號，Laysi/trustiot-v2#58）也要加進 `trustiot.dependencySecretRefs`。新的平台變數用 `TRUSTIOT_` 開頭，自動受保留規則保護。
-- **測試**：規則寫進 `tests/chart.test.ts`。`tests/values/` 的兩個安裝實例範例與 `smoke.yaml`（以 traefik/whoami 當替身服務）也供 nightly（Laysi/trustiot-v2#69）在叢集上安裝使用；叢集測試是 `tests/e2e/ingress.e2e.ts`（入口）、`tests/e2e/mesh.e2e.ts`（服務間授權）與 `tests/e2e/otel.e2e.ts`（日誌管線），前兩個共用 `tests/e2e/cluster.ts`，nightly 可直接沿用。`bun test` 的 kubeconform 已帶 CRD schema 目錄，Gateway API 與 Istio 的資源可以直接驗證。兩個實例範例會部署叢集內 ClickHouse（`clickhouse.mode: bundled`）與 collector，在叢集上安裝前要先建立 `trustiot-clickhouse-admin` Secret（見「叢集內的 ClickHouse」）與 collector 的 `trustiot-otel-collector-clickhouse` Secret；叢集測試用 `tests/e2e/values-e2e.yaml` 改成 `external`，不部署 ClickHouse，也關掉 collector。`tests/` 不會打包進 chart（`.helmignore`）。
+- **新增叢集內元件**（broker、Postgres、ClickHouse、Qdrant、collector、Grafana）：放在自己的 `templates/<元件>.yaml`，以 `*.mode` 或開關控制；Service 只能是 ClusterIP；namespace 預設拒絕所有連入：元件在 mesh 內時（pod 帶 `istio.io/dataplane-mode: ambient`）把它加進 `templates/_mesh.tpl` 的 `trustiot.mesh.components`、用戶端列進 `mesh.calls`，並定義 `trustiot.<元件>.pod`（container ports 與探針，元件的模板也從它渲染，NetworkPolicy 依它只對節點來源開探針埠），AuthorizationPolicy 與 NetworkPolicy 由 chart 產生；不在 mesh 內時（例如叢集內的 Postgres）自帶 NetworkPolicy，只對實際的用戶端開它的埠，並讓 kubelet 的健康檢查到得了；用戶端以 `mesh.calls` 宣告時，把名稱加進 `templates/_mesh.tpl` 的 `trustiot.mesh.directCallees`；在 `values.schema.json` 加欄位定義、在本文件加欄位說明（測試檢查 `values.yaml` 每個欄位都在本文件），並更新「元件與開關」與平台設定的表。
+- **Secret**：values 只能出現 `{name, key}` 形式的引用（測試掃描兩份 values、`values.yaml` 與 `tests/values/` 的每個欄位：名稱像密鑰的欄位只能是 `*Secret` 底下的 `name`、`key` 或 `*Key`，任何值都不能像私鑰、token 或帶帳密的 URL；並確認渲染結果沒有 Secret、只以名稱與 key 讀 Secret）；schema 的 `additionalProperties: false` 會擋下放明文的新欄位。服務要拿新的依賴帳密時，在 `_helpers.tpl` 的 `trustiot.credentialCatalog` 加一列（變數名稱、Secret、可以拿的服務）、在 schema 的 `credentials` 列舉加上名稱，並更新「密鑰的環境變數」表；自訂 `env` 自動不能讀這個帳密。叢集內元件自己產生的 Secret（例如 CloudNativePG 的 CA、伺服器私鑰與資料庫帳號）整個加進 `trustiot.dependencySecretNames`，自訂 `env` 就讀不到它的任何 key。新的平台變數用 `TRUSTIOT_` 開頭，自動受保留規則保護。
+- **測試**：規則寫進 `tests/chart.test.ts`。`tests/values/` 的兩個安裝實例範例與 `smoke.yaml`（以 traefik/whoami 當替身服務）也供 nightly（Laysi/trustiot-v2#69）在叢集上安裝使用；叢集測試是 `tests/e2e/ingress.e2e.ts`（入口）、`tests/e2e/mesh.e2e.ts`（服務間授權）、`tests/e2e/otel.e2e.ts`（日誌管線）與 `tests/e2e/postgres.e2e.ts`（叢集內的 Postgres），前兩個共用 `tests/e2e/cluster.ts`，nightly 可直接沿用。`bun test` 的 kubeconform 已帶 CRD schema 目錄，Gateway API、Istio 與 CloudNativePG 的資源可以直接驗證。兩個實例範例會部署叢集內的 Postgres 與 ClickHouse（`bundled`）與 collector，在叢集上安裝前要先裝好 CloudNativePG operator（見「叢集內的 Postgres」），並建立 `trustiot-clickhouse-admin` Secret（見「叢集內的 ClickHouse」）與 collector 的 `trustiot-otel-collector-clickhouse` Secret；`smoke.yaml` 改用 nightly 自己建置的 Postgres 映像。入口與日誌管線的叢集測試用 `tests/e2e/values-e2e.yaml`、`values-otel-e2e.yaml` 把 Postgres 改成 `external`（沒有服務列出 `postgres`，所以不需要 CA），不部署 Postgres；入口測試的 ClickHouse 也改成 `external`，並關掉 collector。`tests/` 不會打包進 chart（`.helmignore`）。
 
 ## OpenShift 與其他 Kubernetes
 
 - Pod 符合 restricted Pod Security Standard，且不固定 UID，可以在 OpenShift 的 restricted-v2 SCC 下執行。例外是固定的群組 ID：身分服務的 `fsGroup`（`services.identity.podSecurityContext.fsGroup`）與叢集內 ClickHouse 的 UID／GID，在 OpenShift 都設成 `null` 交給 SCC 指派。
-- 預設只排到 arm64 節點；客戶用 x86 主機時，要先加出 amd64 映像（決策 5）再調整 `serviceDefaults.nodeSelector`。
+- 預設只排到 arm64 節點；客戶用 x86 主機時，要先加出 amd64 映像（決策 5）再調整 `serviceDefaults.nodeSelector`（叢集內 Postgres 是 `postgres.bundled.nodeSelector`）。
+- 叢集內的 Postgres 需要 CloudNativePG operator。OpenShift 通常由 OperatorHub 安裝（operator 在 `openshift-operators`），這時把 `postgres.bundled.operator.namespace` 與 `podLabels` 改成它實際的 namespace 與 pod label，NetworkPolicy 才放行它；Postgres pod 的安全設定由 operator 決定。目前沒有 OpenShift 環境可測。
 - chart 需要叢集已裝 Istio ambient 與 Gateway API CRD，並設好 ext_authz provider。k3s 用 `global.platform=k3s`，OpenShift 用 `global.platform=openshift` 或 OpenShift Service Mesh 3，步驟見 `deploy/istio/README.md`。
 - 入口 gateway 的 pod 由 Istio 產生，以 UID 1337 執行，符合 restricted Pod Security Standard（2026-10-10 在 restricted namespace 實測）；OpenShift 的 restricted-v2 SCC 會指派其他 UID，目前沒有 OpenShift 環境可測。
 - `ingress.tunnel.allowedSources` 的預設值是 k3s 單節點的本機位址；其他 CNI 要改成 cloudflared 與 kubelet 實際的來源位址。

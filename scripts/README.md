@@ -112,7 +112,7 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 
 之後改用 k3d 的成本低：服務的容器介面（埠、探針、環境變數）本來就照 chart 約定；種子資料、帳密產生與健康檢查不依賴 podman；只需換掉 `up` 與 `down` 啟動容器的那一層（`runArgs` 與 `commands.ts`），改成對 k3d 叢集 `helm install` 加 `kubectl port-forward --address 127.0.0.1`。與正式環境的已知差異：
 
-- Postgres 映像是官方的 `apache/age`；正式環境是 CloudNativePG 加自建的 AGE 映像（Laysi/trustiot-v2#57）。
+- Postgres 映像是官方的 `apache/age`；正式環境是 CloudNativePG 加自建的 AGE 映像（[deploy/images/postgres](../deploy/images/postgres/README.md)，同為 PostgreSQL 18 與 AGE 1.8.0）。
 - Postgres 的 TLS 憑證來自 `up` 當場產生的開發 CA（2026-10-11，Laysi/trustiot-v2#273），服務與在叢集裡一樣以 `verify-full` 連線；正式環境的憑證由 CloudNativePG 的 CA 或外部 Postgres 的 CA 簽發，CA 由 chart 的 `caSecret` 掛載。這裡的 CA 與伺服器憑證只管本機，每次 `up` 重新產生，信任範圍只有這個實例的服務與工具。
 - Mosquitto 用靜態的帳號、ACL 檔，不加 TLS、不用 dynsec、不經 mqtt-bridge（決策 6 的正式設定在 Laysi/trustiot-v2#84）。
 

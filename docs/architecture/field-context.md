@@ -30,4 +30,4 @@ LLM 自由寫 Cypher 的護欄（隔離由資料庫強制，以下列為驗收�
 6. AGE 的已知缺口：沒有 APOC 與圖演算法、函數長尾有缺、不支援多標籤節點；LLM 用到不支援的函數會報錯，由 agent 重試。需要圖演算法時，用 Rust 的 petgraph 在程式內計算。
 7. 改用 Neo4j 的條件（任一成立就重新評估）：圖演算法需求超出 petgraph 能處理的範圍、單一租戶的邊數超過 10 萬、常態查詢深度超過 5 層且 p95 超過 200 ms、租戶數超過數百（每租戶一個 schema 的上限）。
 
-其他注意：要自建含 AGE 的 Postgres 映像，並跟著 Postgres 版本升級；AGE 1.7.0（2026-01）起才支援 RLS，我們用 schema 權限隔離，不依賴它；這是決策 29「帶租戶資料的表一律啟用 RLS」的明確例外，以上面第 5 條的權限測試取代 RLS 驗收。選型推導見舊 repo 的 `docs/agentic-data-foundation.md` §7–8（[#152](https://github.com/Laysi/trustiot/issues/152)，2026-08-06）。
+其他注意：要自建含 AGE 的 Postgres 映像，並跟著 Postgres 版本升級（2026-10-11 起是 [deploy/images/postgres](../../deploy/images/postgres/README.md)：CloudNativePG 的 PostgreSQL 18 加 AGE 1.8.0，升級步驟在該 README；AGE 要放進 `shared_preload_libraries`，每租戶的登入角色才不必 `LOAD` 就能執行 cypher()）；AGE 1.7.0（2026-01）起才支援 RLS，我們用 schema 權限隔離，不依賴它；這是決策 29「帶租戶資料的表一律啟用 RLS」的明確例外，以上面第 5 條的權限測試取代 RLS 驗收。選型推導見舊 repo 的 `docs/agentic-data-foundation.md` §7–8（[#152](https://github.com/Laysi/trustiot/issues/152)，2026-08-06）。
