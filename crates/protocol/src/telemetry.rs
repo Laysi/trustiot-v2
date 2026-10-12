@@ -15,10 +15,11 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
+use serde::de::{self, DeserializeOwned, IgnoredAny, SeqAccess, Visitor};
 use serde::ser::SerializeTuple;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::codec::sealed::Token;
 use crate::codec::{
     self, DecodeError, EncodeError, Invalid, IssueCode, Issues, MAX_ISSUE_MESSAGE_BYTES, Message,
     V1, encoded_len, head_len,
@@ -204,7 +205,8 @@ pub struct TelemetryAck {
     pub server_time: UnixMillis,
 }
 
-/// What the cloud did with a batch. Encoded as a map whose `status` names the variant.
+/// What the cloud did with a batch. Encoded as a map whose `status` names the variant;
+/// [`crate::decode`] reads the status first and then only the fields of that variant.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum AckOutcome {
@@ -285,6 +287,108 @@ impl Message for TelemetryAck {
         }
         Ok(())
     }
+
+    /// Reads `outcome.status` first, then decodes the payload with the fields of the variant
+    /// it names, so that no entry of the outcome map is buffered (Laysi/trustiot-v2#290).
+    /// Both passes skip unknown keys without building anything; each refuses a repeated
+    /// field, as a single pass would.
+    fn decode_item(payload: &[u8], _: Token) -> Result<Self, DecodeError> {
+        /// The variant names of [`AckOutcome`], read like serde reads them for the derived
+        /// enum: an unknown name is [`AckOutcome::Unknown`].
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum AckStatus {
+            Committed,
+            Duplicate,
+            Rejected,
+            Retry,
+            #[serde(other)]
+            Unknown,
+        }
+
+        #[derive(Deserialize)]
+        struct Probe {
+            outcome: OutcomeProbe,
+        }
+
+        #[derive(Deserialize)]
+        struct OutcomeProbe {
+            status: AckStatus,
+        }
+
+        let Probe {
+            outcome: OutcomeProbe { status },
+        } = codec::from_slice(payload)?;
+        match status {
+            AckStatus::Committed => AckWire::decode(payload, |Records { records }| {
+                AckOutcome::Committed { records }
+            }),
+            AckStatus::Duplicate => AckWire::decode(payload, |Records { records }| {
+                AckOutcome::Duplicate { records }
+            }),
+            AckStatus::Rejected => AckWire::decode(payload, |Rejected { code, message }| {
+                AckOutcome::Rejected { code, message }
+            }),
+            AckStatus::Retry => {
+                AckWire::decode(payload, |Retry { after_ms }| AckOutcome::Retry { after_ms })
+            }
+            AckStatus::Unknown => AckWire::decode(payload, |IgnoredAny| AckOutcome::Unknown),
+        }
+    }
+}
+
+/// A [`TelemetryAck`] whose outcome holds the fields `F` of one [`AckOutcome`] variant: the
+/// second decoding pass, once the status is known. [`AckWire::decode`] takes it apart and
+/// builds the [`TelemetryAck`] field by field, so a field added to one and not the other does
+/// not compile.
+#[derive(Deserialize)]
+struct AckWire<F> {
+    v: V1,
+    stream: StreamId,
+    seq: Seq,
+    outcome: F,
+    server_time: UnixMillis,
+}
+
+impl<F: DeserializeOwned> AckWire<F> {
+    fn decode(
+        payload: &[u8],
+        outcome: impl FnOnce(F) -> AckOutcome,
+    ) -> Result<TelemetryAck, DecodeError> {
+        let Self {
+            v,
+            stream,
+            seq,
+            outcome: fields,
+            server_time,
+        } = codec::from_slice(payload)?;
+        Ok(TelemetryAck {
+            v,
+            stream,
+            seq,
+            outcome: outcome(fields),
+            server_time,
+        })
+    }
+}
+
+/// The fields of [`AckOutcome::Committed`] and [`AckOutcome::Duplicate`].
+#[derive(Deserialize)]
+struct Records {
+    records: u32,
+}
+
+/// The fields of [`AckOutcome::Rejected`].
+#[derive(Deserialize)]
+struct Rejected {
+    code: IssueCode,
+    message: String,
+}
+
+/// The fields of [`AckOutcome::Retry`].
+#[derive(Deserialize)]
+struct Retry {
+    after_ms: u32,
 }
 
 /// The smallest batch size limit a [`BatchBuilder`] accepts. Every valid reading fits in an

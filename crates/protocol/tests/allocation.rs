@@ -115,7 +115,9 @@ fn declared_lengths_never_drive_allocation() {
         assert!(peak < 4 * 1024, "decoding allocated {peak} bytes");
     }
 
-    // The status is an internally tagged enum, which buffers fields before decoding them.
+    // The status is an internally tagged enum. Serde's own decoder for it buffers every field
+    // before it reads the tag; `decode` reads the tag first and skips unknown fields unbuilt
+    // (Laysi/trustiot-v2#290), so a hostile count in one must not allocate either.
     let status = encode(&common::status_online()).unwrap();
     let mut value: Cbor = cbor4ii::serde::from_slice(&status).unwrap();
     let Cbor::Map(entries) = &mut value else {
