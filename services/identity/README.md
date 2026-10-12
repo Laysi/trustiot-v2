@@ -125,7 +125,7 @@ openssl pkey -in signing-key.pem -pubout -outform DER | tail -c 32 | basenc --ba
 | `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` | 只給身分服務：掛載的私鑰路徑 |
 | `TRUSTIOT_INGRESS_ROUTES` | 只給身分服務：cookie 路由，決定受眾 |
 | `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE`、`_CA_FILE` | 平台設定：Postgres 位置；只接受 `verify-full`，`_CA_FILE` 必填，是唯一信任的根憑證 |
-| `TRUSTIOT__DATABASE__USERNAME`、`TRUSTIOT__DATABASE__PASSWORD` | 服務角色 `identity_app` 的帳密（Secret；隨 Laysi/trustiot-v2#58、Laysi/trustiot-v2#60 交付） |
+| `TRUSTIOT__DATABASE__USERNAME`、`TRUSTIOT__DATABASE__PASSWORD` | 服務角色 `identity_app` 的帳密：chart 以 `identity_app` 設定帳號，密碼來自 `postgres.serviceRolesSecret` 的 `identity_app` key；migration Job 以同一個值設定角色的密碼 |
 | `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 每個副本的連線數上限，3–100（至少放得下常駐的 3 條），預設 10 |
 
 啟動後由保溫工作在背景開連線；readiness（健康埠與 API 埠的 `/readyz`）在常駐的 3 條連線開好之後才通過（見[連線池](#連線池)），資料庫連不上時 ext_authz 回 503、readiness 回 503。健康埠（預設 8081）只有 `/healthz` 與 `/readyz`，ext_authz 端點只在 API 埠（8080）。設定、金鑰或路由不能用時以 exit code 1 結束，不開始服務。

@@ -284,7 +284,7 @@ pub async fn snapshot(db: &Database) -> Vec<String> {
 pub struct ClickHouse {
     pub url: String,
     pub admin_password: String,
-    client: reqwest::Client,
+    client: migrate::http::Client,
     _container: Container,
 }
 
@@ -325,8 +325,8 @@ impl ClickHouse {
         let clickhouse = Self {
             url: format!("http://{address}"),
             admin_password,
-            // The Job's own client: reqwest has no TLS provider of its own here.
-            client: migrate::http::plain().expect("build the HTTP client"),
+            // The Job's own client.
+            client: migrate::http::plain(),
             _container: container,
         };
         let started = Instant::now();
@@ -354,20 +354,19 @@ impl ClickHouse {
         password: &str,
         query: &str,
     ) -> Result<String, String> {
+        let auth = migrate::http::Auth::Basic {
+            username: user,
+            password,
+        };
         let response = self
             .client
-            .post(format!("{}/", self.url))
-            .basic_auth(user, Some(password))
-            .body(query.to_owned())
-            .send()
+            .post(&format!("{}/", self.url), &[], auth, query.to_owned())
             .await
             .map_err(|error| error.to_string())?;
-        let status = response.status();
-        let text = response.text().await.map_err(|error| error.to_string())?;
-        if status.is_success() {
-            Ok(text)
+        if response.status.is_success() {
+            Ok(response.body)
         } else {
-            Err(text)
+            Err(response.body)
         }
     }
 

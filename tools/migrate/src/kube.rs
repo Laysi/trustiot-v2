@@ -1,6 +1,7 @@
 //! `migrate wait-for-job`: the init container of every service pod. It holds the pod until the
-//! release revision's migration Job has completed, so a service never starts on a schema older
-//! than its own (docs/architecture/deployment.md, "migration Job").
+//! migration Job named in its settings (the chart names it after a hash of the Job's spec) has
+//! completed, so a service never starts on a schema older than its own
+//! (docs/architecture/deployment.md, "migration Job").
 //!
 //! It reads the Job's status from the Kubernetes API with a projected ServiceAccount token that
 //! only this container mounts; the chart gives the services' ServiceAccounts `get` on that one
@@ -82,7 +83,7 @@ pub fn conditions(body: &str) -> Seen {
 }
 
 async fn look(
-    client: &reqwest::Client,
+    client: &http::Client,
     settings: &KubeSettings,
     url: &str,
 ) -> Result<Seen, WaitError> {
@@ -92,16 +93,13 @@ async fn look(
             path: settings.token_file.display().to_string(),
             message: error.to_string(),
         })?;
-    let response = match client.get(url).bearer_auth(token.trim()).send().await {
+    let response = match client.get(url, http::Auth::Bearer(token.trim())).await {
         Ok(response) => response,
         Err(error) => return Ok(Seen::Pending(format!("the API did not answer: {error}"))),
     };
-    let status = response.status();
+    let status = response.status;
     match status.as_u16() {
-        200 => {
-            let body = response.text().await.unwrap_or_default();
-            Ok(conditions(&body))
-        }
+        200 => Ok(conditions(&response.body)),
         401 | 403 => Err(WaitError::Forbidden {
             job: settings.job.clone(),
             status: status.as_u16(),
@@ -122,7 +120,7 @@ pub async fn wait_for_job(settings: &KubeSettings) -> Result<(), WaitError> {
     let client = if settings.api_url.starts_with("https://") {
         http::trusting(&settings.ca_file)?
     } else {
-        http::plain()?
+        http::plain()
     };
     let url = format!(
         "{}/apis/batch/v1/namespaces/{}/jobs/{}",

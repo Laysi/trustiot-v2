@@ -9,6 +9,7 @@ release.yml 發佈的容器映像。每個子目錄是一個映像，目錄名�
 | 目錄 | 內容 |
 | --- | --- |
 | `identity` | 身分服務（`services/identity`），chart 的 `services.identity`；2026-10-11 加入（Laysi/trustiot-v2#308），arm64 啟動驗證見[測試報告](../../docs/test-reports/2026-10-11-308-identity-image.md) |
+| `migrate` | migration Job（`tools/migrate`），chart 的 `migrate.image`；Job 執行 `migrate run`，每個服務 pod 的 init container 執行 `migrate wait-for-job`。2026-10-13 加入（Laysi/trustiot-v2#60），nightly 從原始碼建置它 |
 | `release-selftest` | 發佈流程的自測映像（`tools/release-selftest`），不是服務，不部署 |
 
 發佈的 chart 以 digest 固定它部署的映像：`postgres`，以及名稱是 chart `services` 的 key 的映像（`scripts/release/chart-images.ts`，見 [chart README](../chart/README.md)「映像的 digest」）。chart 不部署的映像要列在該檔的 `NOT_DEPLOYED_BY_CHART`，否則發佈停止，`bun test scripts` 也會失敗。
@@ -27,7 +28,7 @@ package = "identity"        # Cargo 套件名
 
 ### 在 nightly 的 k3d 使用
 
-`scripts/nightly/service-image.ts` 的 `loadServiceImage(platform, "<目錄名>")` 以發佈相同的 Cargo 指令（`scripts/release/rust-build.ts` 的 `rustCrossCompileCommand`）與同一份 Containerfile 建出映像，標為 `localhost/trustiot-e2e/<目錄名>:nightly`（不推送），再以 `importImageIntoCluster` 匯入每個 k3d 節點並逐一確認。chart 以 `serviceImageValues("<目錄名>")` 的 `repository`、`tag` 與 `pullPolicy: IfNotPresent` 使用它。目前沒有呼叫端；nightly 啟用 `services.identity` 時（Laysi/trustiot-v2#65、Laysi/trustiot-v2#77）才接上，那時 workflow 要另外提供 rustup 與 `.prototools` 的 zig、cargo-zigbuild、cargo-auditable，成本見 [CI 與發佈](../../docs/architecture/ci-release.md) 的「nightly.yml」。
+`scripts/nightly/service-image.ts` 的 `loadServiceImage(platform, "<目錄名>")` 以發佈相同的 Cargo 指令（`scripts/release/rust-build.ts` 的 `rustCrossCompileCommand`）與同一份 Containerfile 建出映像，標為 `localhost/trustiot-e2e/<目錄名>:nightly`（不推送），再以 `importImageIntoCluster` 匯入每個 k3d 節點並逐一確認。chart 以 `serviceImageValues("<目錄名>")` 的 `repository`、`tag` 與 `pullPolicy: IfNotPresent` 使用它。`scripts/nightly/run.ts` 以它建置 `migrate`（Laysi/trustiot-v2#60），nightly.yml 為此提供 rustup 與 `.prototools` 的 zig、cargo-zigbuild、cargo-auditable；服務映像（`services.identity` 等）由 Laysi/trustiot-v2#65、Laysi/trustiot-v2#77 接上。成本見 [CI 與發佈](../../docs/architecture/ci-release.md) 的「nightly.yml」。
 
 ## 自帶 Containerfile 的映像
 

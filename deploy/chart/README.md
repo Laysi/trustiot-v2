@@ -453,7 +453,7 @@ Job 做的事，依序：
 **服務的資料庫帳號**：在 `mesh.calls` 列出 `postgres` 的服務，chart 給它 `TRUSTIOT__DATABASE__USERNAME=<服務>_app` 與從 `postgres.serviceRolesSecret` 同名 key 讀的 `TRUSTIOT__DATABASE__PASSWORD`。Job 開始前先確認這些角色都在 tools/migrate 的服務清單裡、密碼檔都在，否則什麼都不改就停止，避免服務以登不進去的角色啟動。安裝前建立 Secret，例如：
 
 ```sh
-kubectl -n trustiot create secret generic trustiot-postgres-roles --from-literal=identity_app="$(openssl rand -hex 32)"
+openssl rand -hex 32 | tr -d "\n" | kubectl -n trustiot create secret generic trustiot-postgres-roles --from-file=identity_app=/dev/stdin
 ```
 
 SaaS 的這個 Secret 與其他 Secret 一樣以 SOPS 加密放在 `deploy/flux/`。輪替：改 Secret 的 key，再改 `migrate.revision`；Job 設定新密碼，服務以新密碼重啟（步驟見 [docs/runbooks/migrations.md](../../docs/runbooks/migrations.md)）。

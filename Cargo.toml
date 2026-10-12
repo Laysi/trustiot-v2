@@ -26,6 +26,7 @@ repository = "https://github.com/Laysi/trustiot-v2"
 [workspace.dependencies]
 axum = { version = "0.8.9", default-features = false }
 base64 = "0.22.1"
+bytes = "1.12.1"
 cbor4ii = "1.2.3"
 cc = "1.5.1"
 chrono = { version = "0.4.45", default-features = false }
@@ -33,8 +34,10 @@ ed25519-dalek = { version = "3.0.0", default-features = false }
 getrandom = "0.4.3"
 hmac = "0.13.0"
 http = "1.5.0"
+http-body-util = "0.1.5"
 humantime = "2.4.0"
 hyper = { version = "1.12.0", default-features = false }
+hyper-util = { version = "0.1.21", default-features = false }
 log = "0.4.34"
 opentelemetry = { version = "0.33.1", default-features = false }
 opentelemetry-otlp = { version = "0.33.1", default-features = false }

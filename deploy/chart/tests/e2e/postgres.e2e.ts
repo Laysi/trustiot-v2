@@ -8,7 +8,7 @@
 //   3. the server refuses a TCP connection without TLS, whatever the client asks for;
 //   4. a service that lists postgres under mesh.calls connects with verify-full, using the CA
 //      certificate the chart mounts and the read-write Service's host name, with a role of its own
-//      (a CloudNativePG DatabaseRole, the way Laysi/trustiot-v2#60 will add the services' roles);
+//      (a CloudNativePG DatabaseRole, standing in for the migration Job, which this test turns off);
 //   5. the same pod is refused with another CA, with a host name the certificate does not list, and
 //      without the labels the Postgres NetworkPolicy admits.
 // README.md in this directory lists the prerequisites; run from the repository root:
@@ -232,8 +232,9 @@ beforeAll(async () => {
   });
   report.install = { helmSeconds, healthyAtHelmReturn, readySeconds: (Date.now() - started) / 1000 };
 
-  // The service's role, as Laysi/trustiot-v2#60 will declare each service's: a DatabaseRole whose
-  // password is in a basic-auth Secret. The password exists only in a private temp file and the Secret.
+  // The service's role: a DatabaseRole whose password is in a basic-auth Secret, standing in for
+  // the migration Job (tools/migrate), which this test turns off so it needs no migrate image. The
+  // password exists only in a private temp file and the Secret.
   const passwordFile = join(work, "password");
   writeFileSync(passwordFile, hex(24), { mode: 0o600 });
   const usernameFile = join(work, "username");
@@ -403,7 +404,7 @@ describe(`bundled Postgres (${SHAPE} shape)`, () => {
     }
   });
 
-  test("the server runs with TLS, AGE preloaded at the image's version, the built-in locale, no superuser password and an ordinary owner", () => {
+  test("the server runs with TLS, AGE preloaded at the image's version, the built-in locale, no superuser password and an owner without superuser rights", () => {
     const settings = psql(
       "SELECT current_setting('ssl'), current_setting('shared_preload_libraries'), current_setting('server_version_num')::int / 10000, current_setting('max_connections'), current_setting('shared_buffers');",
     ).split("|");
@@ -434,8 +435,10 @@ describe(`bundled Postgres (${SHAPE} shape)`, () => {
       [ROLE, "f", "f", "f", "f", "t", "f"],
       // The superuser has no password: only the local socket in the pod reaches it.
       ["postgres", "t", "t", "t", "t", "t", "t"],
-      // The database owner: a login role, no superuser, CREATEROLE or BYPASSRLS.
-      [OWNER, "f", "f", "f", "f", "t", "f"],
+      // The database owner: a login role, no superuser, CREATEDB or BYPASSRLS. It has CREATEROLE
+      // (postInitApplicationSQL) because the migration Job logs in as it and creates the services'
+      // roles (Laysi/trustiot-v2#60).
+      [OWNER, "f", "t", "f", "f", "t", "f"],
     ]);
     // No Secret with superuser credentials.
     expect(exec([...kubectlArgs(), "get", "secret", `${CLUSTER}-superuser`]).stderr).toContain("NotFound");

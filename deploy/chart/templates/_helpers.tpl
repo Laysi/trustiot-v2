@@ -215,13 +215,6 @@ Returns a YAML list; use with fromYamlArray.
 {{- end -}}
 {{- end -}}
 {{- end -}}
-{{- /* The migration accounts of an external Postgres and ClickHouse: only the migration Job. */ -}}
-{{- range $secret := list .Values.postgres.external.migrationSecret .Values.clickhouse.external.migrationSecret -}}
-{{- if $secret.name -}}
-{{- $refs = append $refs (printf "%s/%s" $secret.name $secret.usernameKey) -}}
-{{- $refs = append $refs (printf "%s/%s" $secret.name $secret.passwordKey) -}}
-{{- end -}}
-{{- end -}}
 {{- /* The internal identity signing key: mounted into the identity service only. */ -}}
 {{- with .Values.internalIdentity.signingKeySecret -}}
 {{- if .name -}}
@@ -241,9 +234,10 @@ Returns a YAML list; use with fromYamlArray.
 {{- end -}}
 
 {{/*
-Secrets that in-cluster components create for themselves, which no custom env may read in any of
-their keys: CloudNativePG's Secrets of the bundled Postgres (the CA's private key, the server key,
-the database owner's password). Services get what they need from them only through the chart.
+Secrets whose keys reach services only through the chart, so no custom env may read them in any
+key: CloudNativePG's Secrets of the bundled Postgres (the CA's private key, the server key, the
+database owner's password), the Secret of every service's database password, and the migration
+accounts of an external Postgres and ClickHouse (only the migration Job uses those).
 Returns a YAML list of names; use with fromYamlArray.
 */}}
 {{- define "trustiot.dependencySecretNames" -}}
@@ -252,7 +246,17 @@ Returns a YAML list of names; use with fromYamlArray.
 {{- with .Values.postgres.serviceRolesSecret.name -}}
 {{- $names = append $names . -}}
 {{- end -}}
-{{- toYaml $names -}}
+{{- if eq .Values.postgres.mode "external" -}}
+{{- with .Values.postgres.external.migrationSecret.name -}}
+{{- $names = append $names . -}}
+{{- end -}}
+{{- end -}}
+{{- if eq .Values.clickhouse.mode "external" -}}
+{{- with .Values.clickhouse.external.migrationSecret.name -}}
+{{- $names = append $names . -}}
+{{- end -}}
+{{- end -}}
+{{- toYaml (uniq $names) -}}
 {{- end -}}
 
 {{/*

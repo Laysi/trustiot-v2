@@ -361,7 +361,7 @@ repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（
 
 ## nightly.yml
 
-每晚 18:17 UTC（台北 02:17）執行，也可在 main 上手動執行（`workflow_dispatch`，選項 `simulate_failure` 會讓每份 values 在安裝後故意失敗，用來驗證通知）。動到 `deploy/chart/`、`deploy/istio/`、`deploy/cloudnative-pg/`、`deploy/images/postgres/`、`scripts/nightly/`、`.prototools`、`.proto/plugins/`、`setup-proto` 或 `nightly.yml` 本身的 PR，帶有 `smoke` label 時也會跑，chart 的改動在合併前就先真的部署一次；這些 PR 的執行不寫任何留言（PR 的 workflow 檔由 PR 自己決定，不給它寫入權限），結果看 check 狀態、job summary 與 `nightly-report` artifact。
+每晚 18:17 UTC（台北 02:17）執行，也可在 main 上手動執行（`workflow_dispatch`，選項 `simulate_failure` 會讓每份 values 在安裝後故意失敗，用來驗證通知）。動到 `deploy/chart/`、`deploy/istio/`、`deploy/cloudnative-pg/`、`deploy/images/postgres/`、`deploy/images/migrate/`、`tools/migrate/`、`services/*/migrations/`、`crates/service-kit/sql/`（後四者是 migration Job 與它套用的 SQL，Laysi/trustiot-v2#60）、`scripts/nightly/`、`.prototools`、`.proto/plugins/`、`setup-proto` 或 `nightly.yml` 本身的 PR，帶有 `smoke` label 時也會跑，chart 的改動在合併前就先真的部署一次；這些 PR 的執行不寫任何留言（PR 的 workflow 檔由 PR 自己決定，不給它寫入權限），結果看 check 狀態、job summary 與 `nightly-report` artifact。
 
 ### PR 的部署要加 `smoke` label
 
@@ -400,13 +400,14 @@ repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（
 3. CloudNativePG operator（叢集內 Postgres 用，Laysi/trustiot-v2#58）：從 release 下載 `cnpg-<版本>.yaml`，SHA-256 與 workflow 裡釘的值相符才以 `kubectl apply --server-side` 套用（`CNPG_VERSION`、`CNPG_MANIFEST_SHA256`，要一起改，且要與 `deploy/cloudnative-pg/README.md` 寫的相同，`bun test scripts/nightly` 檢查）；`cnpg-system` 命名空間設 Pod Security `restricted`，等 chart 用到的 CRD `Established`、operator rollout 完成（它的 webhook 要先起來，Cluster 才建得出來）。
 4. 建出 e2e 的身分服務替身映像（`deploy/chart/tests/e2e/identity-double`），以 `k3d image import --mode direct` 匯入 k3d 節點，並逐一確認每個 server 與 agent 節點的 containerd 都有這個映像（`docker exec <node> crictl inspecti <image>`，節點清單來自 `k3d node list -o json`）；缺任何一個節點就重新匯入，共 3 次，用完仍缺則在這一步失敗，訊息寫出映像與缺少的節點，成功時 log 逐節點記錄「confirmed」。為什麼不能信 k3d 的結束碼：k3d 5.9.0 預設的 tools-node 模式由各節點從共用 volume 匯入 tarball，單一節點失敗只寫 `ERRO` 並照樣以 0 結束，映像沒進節點，e2e 的身分服務（`pullPolicy: IfNotPresent`，`localhost` 無法拉取）就等滿 5 分鐘才逾時，看起來像 chart 出錯（2026-10-11，Laysi/trustiot-v2#335）。`--mode direct` 把 `docker save` 的輸出直接串進各節點的 `ctr image import`，沒有 tools node 與共用 volume，k3d 也會回傳節點的錯誤；它只是降低機率的緩解，保證來自逐節點的確認。
 5. 叢集內 Postgres 的映像：在 arm64 runner 上以原生方式建置 `deploy/images/postgres`（經 `containerBuildArgs`），名稱 `localhost/trustiot-e2e/postgres:nightly`，以同樣的方式匯入並逐節點確認。`tests/values/smoke.yaml` 用這個名稱與 `pullPolicy: Never`，因為映像要等第一次 release 才會發佈；之後可以改拉 GHCR 上已發佈的 digest，省下建置時間。
+6. migration Job 的映像（`tools/migrate`，Laysi/trustiot-v2#60）：以下方「服務映像」的 `loadServiceImage` 從原始碼建成 `localhost/trustiot-e2e/migrate:nightly`，匯入並逐節點確認。`smoke.yaml` 以這個名稱與 `pullPolicy: IfNotPresent` 執行 Job 與每個服務 pod 的 init container。
 
 每份 values 依序做：
 
 1. 命名空間以 Pod Security `restricted`（enforce、warn、audit）建立：chart 要能在最嚴格的等級下安裝，也是 OpenShift 的前提。
 2. 為 chart 渲染出來的 pod 讀取、但 chart 自己不建立的 Secret 建立假值，並為 Gateway listener 引用的 TLS Secret 建立自簽憑證（SaaS 的 Secret 怎麼進叢集見上方「SaaS 的祕密怎麼進叢集」；這裡驗證的是接線，不是帳密）。內建的 ClickHouse（`clickhouse.mode: bundled`，Laysi/trustiot-v2#59）照 `tests/values/<shape>-instance.yaml` 的 `storage.size` 安裝，磁碟區由 k3s 內建的 local-path 提供，管理帳號的 Secret `trustiot-clickhouse-admin` 也是假值；它的 `/ping` 探針與其他 workload 一起被檢查。叢集內的 Postgres（`postgres.mode: bundled`）同樣照實例覆寫檔的 `storage.size` 安裝；CloudNativePG 自己產生的 Secret（`<cluster>-ca`、`-server`、`-app`、`-replication`、`-superuser`）不建假值，否則 operator 會拿假的 CA 去用。
 3. `helm upgrade --install --wait --wait-for-jobs --timeout 5m`。
-4. 讀 `helm get manifest`，每個 Deployment、StatefulSet、DaemonSet 都要 rollout 完成，每個 Job 都要完成。release 一個 workload 都沒有就失敗（`smoke.yaml` 一定會加一個，沒有代表覆寫檔壞了）。
+4. 讀 `helm get manifest`，每個 Deployment、StatefulSet、DaemonSet 都要 rollout 完成，每個 Job 都要完成。release 一個 workload 都沒有就失敗（`smoke.yaml` 一定會加一個，沒有代表覆寫檔壞了）。release 恰好有一個 migration Job（Laysi/trustiot-v2#60），至少有一個 pod 帶著等它的 init container `wait-for-migrations`，而且這些 pod 的每個容器都在 Job 的 `completionTime` 之後才啟動（每個服務 pod 都有這個 init container 由 chart 測試檢查）：這是 #60「Job 完成後服務才啟動」的 k3d 測試（`scripts/nightly/manifests.ts` 的 `migrationOrderProblems`）。
 5. 每個 CloudNativePG Cluster 的 `Ready` 條件為真、phase 是 `Cluster in healthy state`、就緒的 instance 數等於設定的數目（Laysi/trustiot-v2#58）。
 6. 每個 Gateway 的 `Programmed` 條件為真（Istio 在 helm 結束後才產生入口 pod）。
 7. 沒有 pod 處於 CrashLoopBackOff、ImagePullBackOff、設定錯誤或未就緒；重啟次數記在報告裡。
@@ -421,11 +422,11 @@ repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（
 
 在 TrustIoT 服務映像出來以前，`smoke.yaml` 的替身服務（`traefik/whoami`，以 digest 釘選）讓通用服務樣板在真叢集上被驗證。
 
-### 服務映像（已備好，尚未啟用）
+### 服務映像
 
 2026-10-11（Laysi/trustiot-v2#308）：`scripts/nightly/service-image.ts` 的 `loadServiceImage(platform, "<名稱>")` 把 `deploy/images/<名稱>/image.toml` 宣告的 Rust 服務建成映像並匯入叢集：與 release.yml 相同的 Cargo 指令（`scripts/release/rust-build.ts` 的 `rustCrossCompileCommand`：`cargo auditable zigbuild --locked --release --target aarch64-unknown-linux-musl`）、同樣檢查執行檔是靜態的 aarch64 ELF、同一份 `rust-binary.Containerfile`，經 `containerBuildArgs` 以 docker 建成 `localhost/trustiot-e2e/<名稱>:nightly`，再以上面的 `importImageIntoCluster` 匯入並逐節點確認。所以 nightly 部署的就是發佈會建出的東西（2026-10-11 本機實測兩條路建出的執行檔 SHA-256 相同，[測試報告](../test-reports/2026-10-11-308-identity-image.md)）。
 
-`run.ts` 還沒有呼叫它，nightly.yml 也還不建置 Rust：啟用 `services.identity` 要先有它的資料庫（Laysi/trustiot-v2#58、Laysi/trustiot-v2#60），由 Laysi/trustiot-v2#65、Laysi/trustiot-v2#77 接上。接上時 smoke job 的 setup-proto 要多裝 `rust zig cargo-zigbuild cargo-auditable`。
+2026-10-13（Laysi/trustiot-v2#60）起 `run.ts` 以它建置 migration Job 的映像 `migrate`（每個服務 pod 的 init container 也用它），所以 nightly 每次執行都從原始碼建置一次 Rust：smoke job 的 setup-proto 多裝 `zig cargo-zigbuild cargo-auditable`，Rust 由 runner 的 rustup 依 `rust-toolchain.toml` 安裝；`timeout-minutes` 由 45 改為 75，留給下面估計的冷建置時間。目前沒有 Rust 編譯快取，下面的省時做法待決定（另開 issue）。服務本身的映像（例如 `services.identity`）還沒有在 nightly 啟用，由 Laysi/trustiot-v2#65、Laysi/trustiot-v2#77 接上。
 
 成本估計（啟用前要決定怎麼省）：2026-10-11 在本機（x86_64、6 個建置 job、負載 3–5）從空的 target 目錄建 identity 與 release-selftest（約 214 個 crate）加上打包與 SBOM 共 196 秒，`target/` 497 MB。runner 是 2 核的 arm64，編譯以 CPU 為主，冷建置估 9–13 分鐘，加上裝 Rust 與三個工具、下載 crate、docker build 與匯入約 1–2 分鐘，每晚多 **10–15 個計費分鐘**（每月約 300–450 分鐘），smoke job 的 `timeout-minutes: 45` 也要重新評估。可以省的做法：
 

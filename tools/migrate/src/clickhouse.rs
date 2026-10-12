@@ -58,7 +58,7 @@ const PROBE: &str = "SELECT 1 FORMAT TSV";
 
 /// The access-management account's client.
 pub struct ClickHouse {
-    client: reqwest::Client,
+    client: http::Client,
     url: String,
     username: String,
     password: String,
@@ -114,7 +114,7 @@ fn cut(text: &str) -> String {
 
 /// A request that did not get a 200: the status and ClickHouse's error text.
 struct Failure {
-    status: Option<reqwest::StatusCode>,
+    status: Option<u16>,
     text: String,
 }
 
@@ -148,11 +148,10 @@ impl ClickHouse {
                         .to_owned(),
                 )
                 })?;
-            http::trusting(ca)
+            http::trusting(ca).map_err(|error| Error::ClickHouse(error.to_string()))?
         } else {
             http::plain()
-        }
-        .map_err(|error| Error::ClickHouse(error.to_string()))?;
+        };
         Ok(Self {
             client,
             url: url.trim_end_matches('/').to_owned(),
@@ -173,29 +172,29 @@ impl ClickHouse {
             .map(|(name, value)| (format!("param_{name}"), *value))
             .collect();
         pairs.push(("wait_end_of_query".to_owned(), "1"));
+        let pairs: Vec<(&str, &str)> = pairs
+            .iter()
+            .map(|(name, value)| (name.as_str(), *value))
+            .collect();
         let response = self
             .client
-            .post(format!("{}/", self.url))
-            .basic_auth(username, Some(password))
-            .query(&pairs)
-            .body(query.to_owned())
-            .send()
+            .post(
+                &format!("{}/", self.url),
+                &pairs,
+                http::Auth::Basic { username, password },
+                query.to_owned(),
+            )
             .await
             .map_err(|error| Failure {
                 status: None,
                 text: error.to_string(),
             })?;
-        let status = response.status();
-        let text = response.text().await.map_err(|error| Failure {
-            status: Some(status),
-            text: error.to_string(),
-        })?;
-        if status.is_success() {
-            Ok(text)
+        if response.status.is_success() {
+            Ok(response.body)
         } else {
             Err(Failure {
-                status: Some(status),
-                text: cut(&text),
+                status: Some(response.status.as_u16()),
+                text: cut(&response.body),
             })
         }
     }
@@ -214,7 +213,7 @@ impl ClickHouse {
                     "{what}: {}{}",
                     failure
                         .status
-                        .map(|status| format!("HTTP {} ", status.as_u16()))
+                        .map(|status| format!("HTTP {status} "))
                         .unwrap_or_default(),
                     failure.text.trim()
                 ))

@@ -78,7 +78,7 @@ type Manifest = YamlMap & {
 type Container = YamlMap & {
   name: string;
   image: string;
-  env?: { name: string; value?: string; valueFrom?: { secretKeyRef?: { name: string; key: string } } }[];
+  env?: { name: string; value?: string; valueFrom?: { secretKeyRef?: { name: string; key: string }; fieldRef?: { fieldPath: string } } }[];
   envFrom?: { configMapRef?: { name: string } }[];
   ports?: { name: string; containerPort: number; hostPort?: number }[];
   volumeMounts?: YamlMap[];
@@ -1392,6 +1392,27 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
       expect(JSON.stringify(deployment)).not.toContain("-migrate/");
       expect(JSON.stringify(deployment)).not.toContain("factory-postgres-migrate");
       expect(JSON.stringify(deployment)).not.toContain("factory-clickhouse-migrate");
+    }
+    // Custom env cannot read either migration Secret, in any key.
+    for (const [secret, key] of [
+      ["factory-postgres-migrate", "password"],
+      ["factory-clickhouse-migrate", "notes"],
+    ]) {
+      const result = helmTemplate(SHAPES.onprem, [
+        ...withIdentity,
+        "--set", "postgres.mode=external",
+        "--set", "postgres.external.host=db.factory.test",
+        "--set", "postgres.external.caSecret.name=factory-postgres-ca",
+        "--set", "postgres.external.migrationSecret.name=factory-postgres-migrate",
+        "--set", "clickhouse.mode=external",
+        "--set", "clickhouse.external.url=https://ch.factory.test:8443",
+        "--set", "clickhouse.external.caSecret.name=factory-clickhouse-ca",
+        "--set", "clickhouse.external.migrationSecret.name=factory-clickhouse-migrate",
+        "--set-json",
+        `services.certs.env=[{"name":"STOLEN","valueFrom":{"secretKeyRef":{"name":"${secret}","key":"${key}"}}}]`,
+      ]);
+      expect(result.code, secret).not.toBe(0);
+      expect(result.stderr).toContain(`env reads Secret ${secret}`);
     }
   });
 
@@ -3228,7 +3249,7 @@ describe("the templates keep the secret and env boundaries without schema valida
         return [
           `env reading the bundled Postgres's Secret ${secret}/${key}`,
           ["--set-json", `services.smoke-echo.env=[{"name":"DB_SETTING","valueFrom":{"secretKeyRef":{"name":"${secret}","key":"${key}"}}}]`],
-          new RegExp(`services\\.smoke-echo: env reads Secret ${secret}, which an in-cluster component created for itself`),
+          new RegExp(`services\\.smoke-echo: env reads Secret ${secret}, whose keys reach services only through the chart`),
         ];
       },
     ),

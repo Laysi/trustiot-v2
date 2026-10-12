@@ -121,7 +121,7 @@ Flux 拉 chart（`chart.yaml` 的 `secretRef`）與 kubelet 拉映像（`values-
 | `clickhouse.bundled.storage.size` | 叢集內 ClickHouse 的磁碟大小，依主機磁碟與負載決定 |
 | `qdrant.external.url` | Qdrant Cloud 的叢集網址（Laysi/trustiot-v2#194） |
 
-values 引用的 Secret（`trustiot-clickhouse-admin`、`trustiot-otel-collector-clickhouse`、`trustiot-qdrant`、`trustiot-sentry`，以及之後各服務的）都以 SOPS 檔案放在 `clusters/saas/trustiot/`，名稱與 key 見 [密鑰與權限](../../docs/architecture/secrets.md) 的清冊。
+values 引用的 Secret（`trustiot-clickhouse-admin`、`trustiot-otel-collector-clickhouse`、`trustiot-postgres-roles`（每個用 Postgres 的服務一個 `<服務>_app` key，migration Job 以它設定服務角色的密碼）、`trustiot-qdrant`、`trustiot-sentry`，以及之後各服務的）都以 SOPS 檔案放在 `clusters/saas/trustiot/`，名稱與 key 見 [密鑰與權限](../../docs/architecture/secrets.md) 的清冊。
 
 ## 建立叢集（一次性）
 

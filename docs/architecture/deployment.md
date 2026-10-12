@@ -78,6 +78,13 @@ flowchart TB
 
 平台元件與 chart 的分界（2026-10-12，Laysi/trustiot-v2#58，決策 5 的補充）：叢集層級的東西（Istio ambient、Gateway API CRD、CloudNativePG operator 與它的 CRD）是平台元件，每個叢集在裝 chart 之前各裝一次，版本固定在 `deploy/istio` 與 `deploy/cloudnative-pg`；chart 只產生 namespace 內的物件。Postgres（含 AGE）在兩種型態都是 chart 部署的 CloudNativePG Cluster（`postgres.mode: bundled`，清單 M8，之後的備份與副本由同一個 operator 加上），服務以 verify-full 連 `<cluster>-rw` 這個 Service、只信任 operator 產生的 CA；客戶自己維運 Postgres 時改成 `external`，只差在 values（可搬移規則 2）。細節見 chart README 的「叢集內的 Postgres」。
 
+migration Job（2026-10-13，Laysi/trustiot-v2#60，決策 4、14、29，清單 M8）：每個服務的 Postgres migration、ClickHouse DDL 與資料庫角色只由一個 Job 處理，程式是 [tools/migrate](../../tools/migrate/README.md)，SaaS 與地端相同。
+
+- **角色**：Job 以 migration 角色登入，bundled 是資料庫 owner `trustiot_owner`（bootstrap 時給它 CREATEROLE，沒有 SUPERUSER 與 BYPASSRLS），external 是客戶提供的同等角色。它為每個服務建立 `<服務>_owner`（不能登入，擁有 schema 與表，migration 以它執行）、`<服務>_app`（服務登入用，不擁有物件，沒有 BYPASSRLS），需要時再加 `<服務>_platform`；每租戶角色由註冊在 Job 裡的 hook 建立或補回。已存在的角色偏離這些規則時，Job 停止，不自動修改。
+- **一次只跑一個**：整次執行持有一個 Postgres session 層級的 advisory lock，ClickHouse 的部分也在鎖內；第二個 Job 等第一個結束，然後發現沒有事要做。
+- **冪等**：套用過的檔案記在 `trustiot_migrate.applied`（ClickHouse 有自己的一份），內容改了就停止；角色、schema、權限與密碼都先比對再改，設定沒變時再跑一次，資料庫什麼都不變。
+- **服務在 Job 之後啟動**：Job 不是 Helm hook（叢集內的資料庫與 Job 由同一次安裝建立，pre-install hook 會早於資料庫，post-install hook 會與 `--wait` 互等）。Job 的名稱帶它 spec 的 hash，每個服務的 pod 有一個 init container 經 Kubernetes API 等這個 Job 完成，Job 換名時服務跟著滾動更新。細節、權限與失敗時的處理見 chart README 的「migration Job」與 [migration 的 runbook](../runbooks/migrations.md)。
+
 可搬移的四條規則：
 
 1. 閘道器連線的主機、OTA 下載網址一律用我們自己的網域，搬遷時只改 DNS。

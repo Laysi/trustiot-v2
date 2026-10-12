@@ -123,7 +123,7 @@ Returns a YAML list; use with fromYamlArray.
 {{- fail (printf "services.%s: env reads the dependency credential %s/%s; list the dependency under services.%s.credentials instead" $name .name .key $name) -}}
 {{- end -}}
 {{- if has .name $protectedSecrets -}}
-{{- fail (printf "services.%s: env reads Secret %s, which an in-cluster component created for itself (the bundled Postgres); services get only what the chart passes on from it" $name .name) -}}
+{{- fail (printf "services.%s: env reads Secret %s, whose keys reach services only through the chart (the bundled Postgres's own Secrets, the database role passwords, the migration accounts)" $name .name) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

@@ -18,6 +18,11 @@ hosts:
   ota: ""
 
 postgres:
+  # SOPS-encrypted Secret trustiot-postgres-roles: one key per service role (<service>_app), which
+  # the migration Job sets as that role's password and the service logs in with
+  # (docs/architecture/secrets.md, docs/runbooks/migrations.md).
+  serviceRolesSecret:
+    name: trustiot-postgres-roles
   bundled:
     # Volume size of the bundled Postgres (a CloudNativePG Cluster; data and WAL share the
     # volume); size it from the host's disk and the business data (deploy/chart/README.md,

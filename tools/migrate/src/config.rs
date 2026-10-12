@@ -281,7 +281,7 @@ pub struct WaitForJobConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KubeSettings {
-    /// `TRUSTIOT__KUBE__JOB`: the migration Job of this release revision.
+    /// `TRUSTIOT__KUBE__JOB`: the migration Job the pod waits for, named after a hash of its spec.
     pub job: String,
     /// `TRUSTIOT__KUBE__NAMESPACE`: the release namespace (the chart sets it with the downward
     /// API).

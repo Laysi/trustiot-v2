@@ -89,7 +89,7 @@ service-kit 連 Postgres 一律用 `sslmode=verify-full`（Laysi/trustiot-v2#53�
 
 ### 新增服務
 
-在 `lib/services.ts` 的 `SERVICES` 加一筆：服務名稱（chart 的 `services` key）、Cargo package 與 bin、預設本機埠、`TRUSTIOT__<SECTION>__<KEY>` 形式的服務設定。`up` 會以 cargo 編譯、包成映像（`FROM` 是以 digest 鎖定的 distroless）、接上網路、把平台設定（`TRUSTIOT_<NAME>`，名稱與 [deploy/chart/README.md](../deploy/chart/README.md) 相同）當環境變數交給它，並檢查 `/healthz` 與 `/readyz`。服務監聽 8080（chart 的約定）。服務要用 Postgres 時，在 `SERVICES` 的項目加 `database: { role: "<角色名稱>" }`，`up` 會建立這個角色並把帳密交給服務（見上方「Postgres 的 TLS」）；平台設定已含 `verify-full` 與 CA。正式的每個服務一個資料庫角色（決策 4）、migration 與角色的權限隨 Laysi/trustiot-v2#58、Laysi/trustiot-v2#60 加入，這裡建的角色目前沒有任何資料表權限。
+在 `lib/services.ts` 的 `SERVICES` 加一筆：服務名稱（chart 的 `services` key）、Cargo package 與 bin、預設本機埠、`TRUSTIOT__<SECTION>__<KEY>` 形式的服務設定。`up` 會以 cargo 編譯、包成映像（`FROM` 是以 digest 鎖定的 distroless）、接上網路、把平台設定（`TRUSTIOT_<NAME>`，名稱與 [deploy/chart/README.md](../deploy/chart/README.md) 相同）當環境變數交給它，並檢查 `/healthz` 與 `/readyz`。服務監聽 8080（chart 的約定）。服務要用 Postgres 時，在 `SERVICES` 的項目加 `database: { role: "<角色名稱>" }`，`up` 會建立這個角色並把帳密交給服務（見上方「Postgres 的 TLS」）；平台設定已含 `verify-full` 與 CA。正式環境的每個服務一個資料庫角色（決策 4）、migration 與角色的權限由 migration Job（[tools/migrate](../tools/migrate/README.md)）處理；本機環境還沒有接上它，這裡建的角色沒有任何資料表權限。
 
 ### 測試
 

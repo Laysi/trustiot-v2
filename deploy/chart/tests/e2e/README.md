@@ -153,7 +153,7 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/mesh.e2e.ts
 - 直接以 OTLP 送給 collector 含 email、Bearer token、JWT、密碼、電話與 request body 的日誌與 span 後，ClickHouse 與 SIEM 裡的紀錄都已遮蔽（`****`），任何一個原始值都找不到。
 - collector 的 pod 在 restricted 的 namespace 裡執行，安全設定符合 restricted Pod Security Standard。
 
-安裝分兩步：先只裝 ClickHouse，以 bootstrap 管理帳號在 pod 內套用 `services/ingest/migrations/clickhouse/` 並建立 collector 的帳號（migration Job，Laysi/trustiot-v2#60，之後會做這一步），再 `helm upgrade` 開啟 collector、轉送與 example-service。所有 Secret（ClickHouse 管理帳號、collector 帳號、SIEM token）每次執行重新產生，名稱帶隨機字尾，密碼只寫在本機暫存目錄的檔案與 Secret 裡，不出現在指令列；SQL 經 stdin 送進 pod，管理帳號密碼不離開 pod。結束時移除 release、ClickHouse 的 PVC、替身 SIEM 與這次建立的 Secret。
+安裝分兩步：先只裝 ClickHouse，以 bootstrap 管理帳號在 pod 內套用 `services/ingest/migrations/clickhouse/` 並建立 collector 的帳號（正式安裝由 migration Job 做這一步；這個測試以 `migrate.enabled: false` 關閉 Job，自己做，所以不需要 migrate 映像），再 `helm upgrade` 開啟 collector、轉送與 example-service。所有 Secret（ClickHouse 管理帳號、collector 帳號、SIEM token）每次執行重新產生，名稱帶隨機字尾，密碼只寫在本機暫存目錄的檔案與 Secret 裡，不出現在指令列；SQL 經 stdin 送進 pod，管理帳號密碼不離開 pod。結束時移除 release、ClickHouse 的 PVC、替身 SIEM 與這次建立的 Secret。
 
 前置條件：
 
@@ -198,14 +198,14 @@ bun test --timeout 900000 ./deploy/chart/tests/e2e/otel.e2e.ts
 `postgres.e2e.ts` 驗證 `postgres.mode: bundled`（Laysi/trustiot-v2#58，決策 21、29，清單 M3、M8）：以 `E2E_SHAPE` 的型態加 `values-postgres-e2e.yaml` 安裝 chart（CloudNativePG 的 Cluster；ClickHouse 改成 `external`、關掉 collector 與 Sentry），`assets` 換成 `crates/service-kit` 的 example-service，然後檢查：
 
 - Cluster 達到 `Cluster in healthy state`，一個 instance，pod 帶 `istio.io/dataplane-mode: none`，每個容器（含 init container）符合 restricted Pod Security Standard 的要求。
-- 伺服器：`ssl` 開啟、`shared_preload_libraries` 含 `age`、PostgreSQL 18、`max_connections` 與 `shared_buffers` 是 values 的值；`trustiot` 資料庫的 AGE 版本等於 `deploy/images/postgres/Containerfile` 的 `AGE_VERSION`，locale 是內建的 `C.UTF-8`，owner 是 `trustiot_owner`；`postgres` 沒有密碼、`<cluster>-superuser` Secret 不存在；owner 與服務的角色都不是 superuser，也沒有 CREATEROLE、CREATEDB、BYPASSRLS。
+- 伺服器：`ssl` 開啟、`shared_preload_libraries` 含 `age`、PostgreSQL 18、`max_connections` 與 `shared_buffers` 是 values 的值；`trustiot` 資料庫的 AGE 版本等於 `deploy/images/postgres/Containerfile` 的 `AGE_VERSION`，locale 是內建的 `C.UTF-8`，owner 是 `trustiot_owner`；`postgres` 沒有密碼、`<cluster>-superuser` Secret 不存在；owner 與服務的角色都不是 superuser，也沒有 CREATEDB、BYPASSRLS；服務的角色沒有 CREATEROLE，owner 有（bootstrap 的 `postInitApplicationSQL`，migration Job 以它建立服務的角色，Laysi/trustiot-v2#60）。
 - cypher() 在這個資料庫建立、查詢並刪除一張圖。
 - 從 pod 內以 TCP、`sslmode=disable` 連線被伺服器的 pg_hba 拒絕（`no encryption`）。
 - example-service 以自己的角色（CloudNativePG 的 DatabaseRole，密碼在 basic-auth Secret）、chart 掛載的 CA 與 `<cluster>-rw.<namespace>.svc` 連線：pod Ready 代表 readiness 的 Postgres 檢查以 verify-full 成功，伺服器端看得到這個角色的 TLS 連線。
 - 同一個 pod template 的獨立 pod：不改的對照組 Ready；CA 換成叢集的根 CA（`kube-root-ca.crt`）時失敗（`UnknownIssuer`）；主機改成 primary 的 pod IP 時失敗（`not valid for name`）；換掉 `app.kubernetes.io/component` label、不在 `mesh.calls` 的 pod 連不上（NetworkPolicy 擋下，連線到不了 Postgres，ambient 下由 pod 的 ztunnel 重置，沒交換任何憑證或密碼）。
 - `helm uninstall` 後 Cluster、ImageCatalog 與 PVC 都還在，資料也在；Database 物件隨 release 刪除，資料庫保留。
 
-安裝分兩步：先只裝資料庫，等 Cluster 健康、Database 套用後，建立服務的角色（DatabaseRole 與 basic-auth Secret，密碼每次隨機產生，只寫在本機暫存目錄的檔案與 Secret 裡），以 owner 身分在 pod 內執行 `crates/service-kit/sql/database.sql`（之後由 migration Job 做，Laysi/trustiot-v2#60），再 `helm upgrade` 開啟 example-service。SQL 經 stdin 送進 primary，以 `postgres` 角色走 pod 內的 local socket 執行，沒有任何密碼。結束時刪除測試的 pod、NetworkPolicy、DatabaseRole、release，再明確刪除保留下來的 Cluster、ImageCatalog 與 PVC，最後刪除 Secret。
+安裝分兩步：先只裝資料庫，等 Cluster 健康、Database 套用後，建立服務的角色（DatabaseRole 與 basic-auth Secret，密碼每次隨機產生，只寫在本機暫存目錄的檔案與 Secret 裡），以 owner 身分在 pod 內執行 `crates/service-kit/sql/database.sql`（正式安裝由 migration Job 建立角色並執行它；這個測試以 `migrate.enabled: false` 關閉 Job，以 DatabaseRole 代替，所以不需要 migrate 映像），再 `helm upgrade` 開啟 example-service。SQL 經 stdin 送進 primary，以 `postgres` 角色走 pod 內的 local socket 執行，沒有任何密碼。結束時刪除測試的 pod、NetworkPolicy、DatabaseRole、release，再明確刪除保留下來的 Cluster、ImageCatalog 與 PVC，最後刪除 Secret。
 
 前置條件：
 

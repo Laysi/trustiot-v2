@@ -135,8 +135,8 @@ Laysi/trustiot-v2#78 補上確切指令。原則：
 Secret `trustiot-clickhouse-admin`（key `password`）。ClickHouse 只在啟動時讀這個密碼，所以換值之後要讓它重啟：
 
 1. 產生新值：`openssl rand -hex 32`。SaaS 以 `sops edit deploy/flux/<檔名>.sops.yaml` 換掉 `password`；地端由客戶換值，值經管線傳入、不出現在命令列：`openssl rand -hex 32 | tr -d "\n" | kubectl -n trustiot create secret generic trustiot-clickhouse-admin --from-file=password=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -`。
-2. 同一個變更把 values 的 `clickhouse.bundled.adminSecretRevision` 加一。升級時 ClickHouse 的 pod 重啟並換上新密碼，migration Job 也拿新密碼連線。
-3. 確認 ClickHouse 的 `/ping` 探針恢復、migration Job 完成；舊密碼不再能登入（以 `clickhouse-client --ask-password` 輸入舊值，確認被拒）。
+2. 同一個變更把 values 的 `clickhouse.bundled.adminSecretRevision` 加一。升級時 ClickHouse 的 pod 重啟並換上新密碼。migration Job 下一次執行時讀到新密碼；要在同一次升級確認它能以新密碼連線，同時把 `migrate.revision` 改成新的值（[migration Job 的 runbook](migrations.md)）。
+3. 確認 ClickHouse 的 `/ping` 探針恢復、新的 migration Job 完成（有改 `migrate.revision` 時）；舊密碼不再能登入（以 `clickhouse-client --ask-password` 輸入舊值，確認被拒）。
 
 ### 叢集內 Postgres 的 owner 密碼與 TLS 憑證
 
@@ -155,7 +155,7 @@ TLS 憑證（`<cluster>-ca`、`<cluster>-server`、`<cluster>-replication`）由
 
 ### 叢集內產生的帳號
 
-ClickHouse、MQTT dynsec、Grafana 的帳號，與各服務自己的 Postgres 角色，由叢集內產生，值不經過人。各自的 issue 補上指令（Laysi/trustiot-v2#59、Laysi/trustiot-v2#60、Laysi/trustiot-v2#84、Laysi/trustiot-v2#183）；Postgres 的 owner 見上一節。原則：在叢集內重新產生值、更新資料庫裡的帳號、重啟使用它的服務，三步在一次維護中完成；只有懷疑外洩或人員異動時才需要輪替。
+ClickHouse、MQTT dynsec、Grafana 的帳號由叢集內產生，值不經過人。各自的 issue 補上指令（Laysi/trustiot-v2#59、Laysi/trustiot-v2#84、Laysi/trustiot-v2#183）；Postgres 的 owner 見上一節。各服務自己的 Postgres 角色（`postgres.serviceRolesSecret`）與 OpenTelemetry collector 的 ClickHouse 帳號由 migration Job 依 Secret 的值設定，輪替步驟見 [migration Job 的 runbook](migrations.md) 的「輪替服務角色的密碼」。原則：在叢集內重新產生值、更新資料庫裡的帳號、重啟使用它的服務，三步在一次維護中完成；只有懷疑外洩或人員異動時才需要輪替。
 
 ### OTA 簽章私鑰
 
