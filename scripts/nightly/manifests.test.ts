@@ -7,8 +7,12 @@ import {
   gatewayPorts,
   gatewaysOf,
   healthEndpointsOf,
+  keptObjectsOf,
   missingTlsSecrets,
   missingSecrets,
+  operatorSecretsOf,
+  postgresClusterProblems,
+  postgresClustersOf,
   parseManifests,
   podProblems,
   restartsOf,
@@ -167,6 +171,90 @@ spec:
   });
 });
 
+describe("CloudNativePG", () => {
+  const objects = parseManifests(`
+apiVersion: postgresql.cnpg.io/v1
+kind: ImageCatalog
+metadata:
+  name: rel-postgres
+  annotations: { helm.sh/resource-policy: keep }
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: rel-postgres
+  annotations: { helm.sh/resource-policy: keep }
+spec: { instances: 1 }
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata: { name: rel-postgres-trustiot }
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata: { name: not-postgres }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kept-volume
+  annotations: { helm.sh/resource-policy: keep }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: app }
+spec:
+  template:
+    spec:
+      containers:
+        - name: app
+      volumes:
+        - name: postgres-ca
+          secret: { secretName: rel-postgres-ca, items: [{ key: ca.crt, path: ca.crt }] }
+        - name: other
+          secret: { secretName: other-ca }
+`);
+
+  test("finds the release's CloudNativePG Clusters only", () => {
+    expect(postgresClustersOf(objects)).toEqual(["rel-postgres"]);
+  });
+
+  test("never creates a dummy for a Secret the operator makes, so the operator can make its own", () => {
+    expect(operatorSecretsOf(objects)).toEqual([
+      "rel-postgres-ca",
+      "rel-postgres-server",
+      "rel-postgres-app",
+      "rel-postgres-replication",
+      "rel-postgres-superuser",
+    ]);
+    expect([...missingSecrets(objects).keys()]).toEqual(["other-ca"]);
+  });
+
+  test("names the kept objects as kubectl prints them, Clusters first", () => {
+    expect(keptObjectsOf(objects)).toEqual([
+      "cluster.postgresql.cnpg.io/rel-postgres",
+      "imagecatalog.postgresql.cnpg.io/rel-postgres",
+      "persistentvolumeclaim/kept-volume",
+    ]);
+  });
+
+  test("a Cluster is healthy only in the operator's healthy phase, with every instance ready and Ready true", () => {
+    const cluster = (status: Record<string, unknown>, instances = 1) => ({ metadata: { name: "c" }, spec: { instances }, status });
+    const healthy = { phase: "Cluster in healthy state", readyInstances: 1, conditions: [{ type: "Ready", status: "True" }] };
+    expect(postgresClusterProblems(cluster(healthy))).toEqual([]);
+    expect(postgresClusterProblems(cluster({ ...healthy, phase: "Setting up primary" }))).toEqual(['c: phase "Setting up primary"']);
+    expect(postgresClusterProblems(cluster(healthy, 2))).toEqual(["c: 1 of 2 instances ready"]);
+    expect(postgresClusterProblems(cluster({ ...healthy, conditions: [{ type: "Ready", status: "False" }] }))).toEqual([
+      "c: condition Ready is False",
+    ]);
+    expect(postgresClusterProblems({ metadata: { name: "c" } })).toEqual([
+      "c: phase null",
+      "c: 0 of ? instances ready",
+      "c: condition Ready is missing",
+    ]);
+  });
+});
+
 describe("healthEndpointsOf", () => {
   test("resolves probes to the Service ports that reach them", () => {
     const endpoints = healthEndpointsOf(parseManifests(MANIFEST));
@@ -315,6 +403,12 @@ describe("the chart as deployed by the nightly", () => {
       // Every endpoint belongs to a workload of the release.
       const workloadNames = new Set(workloadsOf(objects).map((w) => w.name));
       expect(endpoints.every((e) => workloadNames.has(e.workload))).toBe(true);
+      // The bundled Postgres: its Cluster is checked for health, kept on uninstall and then deleted.
+      expect(postgresClustersOf(objects)).toEqual(["trustiot-postgres"]);
+      expect(keptObjectsOf(objects)).toEqual([
+        "cluster.postgresql.cnpg.io/trustiot-postgres",
+        "imagecatalog.postgresql.cnpg.io/trustiot-postgres",
+      ]);
     }, 60_000);
   }
 });

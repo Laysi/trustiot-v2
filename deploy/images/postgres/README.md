@@ -35,7 +35,7 @@ release.yml 在 x86 的代管 runner 上建置，而且不用模擬器，所以 
 - **以 ImageCatalog（或 ClusterImageCatalog）指定映像，`major: 18`**。CloudNativePG 從 `spec.imageName` 的 tag 讀 PostgreSQL 主版本，我們的 tag 是 TrustIoT 的版本（例如 `0.1.0`），會被拒絕（`spec.imageName: Invalid value: ...: invalid version tag`）。catalog 的 `image` 寫成 `ghcr.io/laysi/trustiot-v2/postgres:<版本>@sha256:<digest>`。
 - **`spec.postgresql.shared_preload_libraries: [age]`**。AGE 的 cypher() 要靠載入時掛上的 parser hook；預先載入後每個 session 都有，不必 `LOAD 'age'`。非 superuser 只能 `LOAD` `$libdir/plugins/` 下的程式庫，所以每租戶的登入角色（決策 21）一定要靠預先載入。
 - 不必改 `postgresUID`、`postgresGID`（預設 26）。CloudNativePG 以 UID/GID 26、`runAsNonRoot`、唯讀根檔案系統、drop ALL capabilities、不允許提權執行這個映像，實測可正常初始化與運作。
-- 每個資料庫要 `CREATE EXTENSION age` 一次（由 migration 做），查詢前把 `ag_catalog` 放進 `search_path` 或寫完整名稱。
+- 每個資料庫要 `CREATE EXTENSION age` 一次：chart 的 Database 物件（`<cluster>-trustiot`）讓 CloudNativePG 以 superuser 建立（Laysi/trustiot-v2#58，見 [chart 的「叢集內的 Postgres」](../../chart/README.md#叢集內的-postgres)）；資料庫 owner 與服務的角色都不是 superuser，不能自己建立。查詢前把 `ag_catalog` 放進 `search_path` 或寫完整名稱。
 
 ## 升級 Postgres 與 AGE
 
@@ -53,7 +53,7 @@ Renovate 會開 PR 更新 `FROM` 的 tag 與 digest（`renovate.json5` 只允許
 ### AGE 新版本
 
 1. 從 `https://archive.apache.org/dist/age/PG18/` 取新版的 `apache-age-<版本>-src.tar.gz`，以同目錄的 `.asc` 與 `https://archive.apache.org/dist/age/KEYS` 驗證簽章，把 `.sha512` 的值填入 `AGE_SHA512`，改 `AGE_VERSION`。
-2. 讀 AGE 的發行說明：新版附 `age--<舊>--<新>.sql` 升級腳本時，既有資料庫以 `ALTER EXTENSION age UPDATE` 升級，由 migration 執行。
+2. 讀 AGE 的發行說明：新版附 `age--<舊>--<新>.sql` 升級腳本時，既有資料庫以 `ALTER EXTENSION age UPDATE` 升級。同一個 PR 把 `deploy/chart/templates/_postgres.tpl` 的 `trustiot.postgres.ageVersion` 改成新版（chart 測試比對它與 `AGE_VERSION`），CloudNativePG 依 Database 物件以 superuser 執行 `ALTER EXTENSION`（Laysi/trustiot-v2#58，見 [chart 的「叢集內的 Postgres」](../../chart/README.md#叢集內的-postgres)）。
 
 ### PostgreSQL 主版本（例如 18 → 19）
 

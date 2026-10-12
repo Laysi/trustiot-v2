@@ -1,6 +1,7 @@
-// The platform components the chart expects to find in a cluster (deploy/istio/README.md): the
-// Gateway API CRDs and Istio ambient with the ext_authz provider the ingress gateway refers to.
-// Installed once on the nightly cluster, the way the SaaS host installs them before the chart.
+// The platform components the chart expects to find in a cluster: the Gateway API CRDs and Istio
+// ambient with the ext_authz provider the ingress gateway refers to (deploy/istio/README.md), and
+// the CloudNativePG operator for the bundled Postgres (deploy/cloudnative-pg/README.md). Installed
+// once on the nightly cluster, the way the SaaS host installs them before the chart.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { containerBuildArgs } from "../lib/build-context.ts";
@@ -12,6 +13,21 @@ export const ISTIO_CHART_REPOSITORY = "https://istio-release.storage.googleapis.
 /** The mesh extension provider that the chart's AuthorizationPolicy names (ingress.authzProvider). */
 export const BASE_PROVIDER = "trustiot-identity";
 export const IDENTITY_DOUBLE_IMAGE = "localhost/trustiot-e2e/identity-double:nightly";
+/**
+ * The bundled Postgres image (deploy/images/postgres), built here because no release has published
+ * it yet; deploy/chart/tests/values/smoke.yaml names it with pullPolicy Never.
+ */
+export const POSTGRES_IMAGE = "localhost/trustiot-e2e/postgres:nightly";
+/** Where the CloudNativePG release manifest installs the operator. */
+export const CNPG_NAMESPACE = "cnpg-system";
+export const CNPG_DEPLOYMENT = "cnpg-controller-manager";
+/** The CRDs the chart's bundled Postgres uses (templates/postgres.yaml). */
+export const CNPG_CRDS = ["clusters", "imagecatalogs", "databases"].map((kind) => `crd/${kind}.postgresql.cnpg.io`);
+
+/** The official single-manifest install of a CloudNativePG release, for example 1.30.1. */
+export function cnpgManifestUrl(version: string): string {
+  return `https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v${version}/cnpg-${version}.yaml`;
+}
 
 export interface Platform {
   repoRoot: string;
@@ -27,6 +43,9 @@ export interface Platform {
   gatewayCrdsSha256: string;
   /** Istio release, for example `1.30.5`, used for all four charts. */
   istioVersion: string;
+  /** CloudNativePG release, for example `1.30.1`, and the SHA-256 of its manifest. */
+  cnpgVersion: string;
+  cnpgManifestSha256: string;
 }
 
 /** The ingress e2e test installs the chart in its own namespace, with its own identity service. */
@@ -75,14 +94,19 @@ export function verifySha256(data: Uint8Array, expected: string, what: string): 
   }
 }
 
-async function installGatewayApi(platform: Platform): Promise<void> {
-  const url = `https://github.com/kubernetes-sigs/gateway-api/releases/download/${platform.gatewayApiVersion}/standard-install.yaml`;
-  const body = await retry(platform.log, 3, 5_000, async () => {
+/** Downloads a release asset, retrying network failures; the caller checks its hash. */
+async function download(platform: Platform, url: string): Promise<Uint8Array> {
+  return retry(platform.log, 3, 5_000, async () => {
     platform.log.line(`GET ${url}`);
     const response = await fetch(url);
     if (!response.ok) throw new Error(`GET ${url} returned ${response.status}`);
     return new Uint8Array(await response.arrayBuffer());
   });
+}
+
+async function installGatewayApi(platform: Platform): Promise<void> {
+  const url = `https://github.com/kubernetes-sigs/gateway-api/releases/download/${platform.gatewayApiVersion}/standard-install.yaml`;
+  const body = await download(platform, url);
   verifySha256(body, platform.gatewayCrdsSha256, `Gateway API ${platform.gatewayApiVersion} standard-install.yaml`);
   const file = join(platform.outDir, "gateway-api-standard-install.yaml");
   writeFileSync(file, body);
@@ -221,6 +245,44 @@ export async function importImageIntoCluster(
   });
 }
 
+/**
+ * The CloudNativePG operator, the way deploy/cloudnative-pg/README.md installs it: the release
+ * manifest after its SHA-256 matches, applied server-side; its namespace enforces the restricted
+ * Pod Security level like the chart's; the CRDs are established and the operator (whose webhook
+ * admits every Cluster) has rolled out before any chart is installed.
+ */
+async function installCloudNativePg(platform: Platform): Promise<void> {
+  const body = await download(platform, cnpgManifestUrl(platform.cnpgVersion));
+  verifySha256(body, platform.cnpgManifestSha256, `CloudNativePG ${platform.cnpgVersion} manifest`);
+  const file = join(platform.outDir, `cnpg-${platform.cnpgVersion}.yaml`);
+  writeFileSync(file, body);
+  const kube = { env: { KUBECONFIG: platform.kubeconfig } };
+  await run(platform.log, [platform.kubectl, "apply", "--server-side", "--filename", file], { ...kube, timeoutMs: 180_000, quiet: true });
+  const levels = ["enforce", "warn", "audit"].map((mode) => `pod-security.kubernetes.io/${mode}=restricted`);
+  await run(platform.log, [platform.kubectl, "label", "namespace", CNPG_NAMESPACE, ...levels, "--overwrite"], { ...kube, timeoutMs: 60_000 });
+  await run(platform.log, [platform.kubectl, "wait", "--for=condition=Established", ...CNPG_CRDS, "--timeout=120s"], { ...kube, timeoutMs: 150_000 });
+  await run(
+    platform.log,
+    [platform.kubectl, "rollout", "status", "--namespace", CNPG_NAMESPACE, `deployment/${CNPG_DEPLOYMENT}`, "--timeout=300s"],
+    { ...kube, timeoutMs: 330_000 },
+  );
+}
+
+/**
+ * Builds the bundled Postgres image natively on the arm64 runner (the Containerfile's build stage
+ * compiles AGE) and loads it into the cluster nodes.
+ */
+async function loadPostgresImage(platform: Platform): Promise<void> {
+  const context = join(platform.repoRoot, "deploy", "images", "postgres");
+  await retry(platform.log, 2, 10_000, () =>
+    // containerBuildArgs checks the context and the Containerfile first (docs/architecture/secrets.md).
+    run(platform.log, ["docker", ...containerBuildArgs(context, ["--tag", POSTGRES_IMAGE, "--file", join(context, "Containerfile")])], {
+      timeoutMs: 900_000,
+    }),
+  );
+  await importImageIntoCluster(platform, POSTGRES_IMAGE);
+}
+
 /** Builds the e2e test's identity double and loads it into the cluster nodes. */
 async function loadIdentityDouble(platform: Platform): Promise<void> {
   const context = join(platform.repoRoot, "deploy", "chart", "tests", "e2e", "identity-double");
@@ -241,6 +303,10 @@ export async function installPlatform(platform: Platform, shapes: string[]): Pro
   platform.log.line("== platform: Istio ambient");
   await installIstio(platform, shapes);
   await waitForGatewayClass(platform);
+  platform.log.line("== platform: CloudNativePG operator");
+  await installCloudNativePg(platform);
   platform.log.line("== platform: identity double image");
   await loadIdentityDouble(platform);
+  platform.log.line("== platform: Postgres image");
+  await loadPostgresImage(platform);
 }

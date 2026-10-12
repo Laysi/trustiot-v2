@@ -233,7 +233,9 @@ describe("path rules", () => {
   );
 
   test("typical pull requests", () => {
-    expect(running(["deploy/images/postgres/Containerfile", "docs/test-reports/2026-10-11-57-age-postgres-image.md"])).toEqual(["postgres-image"]);
+    // The chart pins the image's PostgreSQL major and AGE version, so its tests run too.
+    expect(running(["deploy/images/postgres/Containerfile", "docs/test-reports/2026-10-11-57-age-postgres-image.md"])).toEqual(["helm", "postgres-image"]);
+    expect(running(["deploy/images/postgres/README.md"])).toEqual(["postgres-image"]);
     expect(running(["deploy/host/src/install.ts", "deploy/host/README.md"])).toEqual(["host"]);
     expect(running(["deploy/chart/templates/service.yaml", "deploy/chart/README.md"])).toEqual(["helm"]);
     expect(running(["scripts/dev.ts", "scripts/tests/dev.test.ts"])).toEqual([]);

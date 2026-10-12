@@ -131,8 +131,12 @@ export function affectsCargoDeny(path: string): boolean {
 
 /** Files outside the chart that `bun test deploy/chart` reads (checked by changes.test.ts). */
 const HELM_READ_FILES: ReadonlySet<string> = new Set([
+  // The bundled Postgres e2e runs it as the database owner.
+  "crates/service-kit/sql/database.sql",
   // The collector's key redaction rules are checked against service-kit's names.
   "crates/service-kit/src/telemetry/redact.rs",
+  // The bundled Postgres must match the image's PostgreSQL major and AGE version.
+  "deploy/images/postgres/Containerfile",
   "docs/architecture/deployment.md",
   "scripts/lib/stack.ts",
   "services/ingest/tests/common/mod.rs",

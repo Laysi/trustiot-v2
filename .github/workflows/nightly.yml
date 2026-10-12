@@ -1,4 +1,4 @@
-# Nightly: installs Istio ambient into a k3d cluster, deploys the whole Helm chart once per
+# Nightly: installs Istio ambient and the CloudNativePG operator into a k3d cluster, deploys the whole Helm chart once per
 # values file (SaaS, then on-prem), and runs the smoke test and the ingress e2e test, so a
 # deployment shape nobody is using day to day cannot rot unnoticed. Policy, what the test checks and what to do when it fails:
 # docs/architecture/ci-release.md, section nightly.yml.
@@ -39,6 +39,8 @@ on:
       - .proto/plugins/**
       - .prototools
       - deploy/chart/**
+      - deploy/cloudnative-pg/**
+      - deploy/images/postgres/**
       - deploy/istio/**
       - scripts/nightly/**
 
@@ -88,18 +90,23 @@ jobs:
       GATEWAY_CRDS_SHA256: 24d931f22abd8e40c973264319ead7cfa09d0fb7716b7ab1ee2ff174cb063a73
       # renovate: datasource=github-releases depName=istio/istio
       ISTIO_VERSION: 1.30.5
+      # The operator of the bundled Postgres (deploy/cloudnative-pg/README.md, which names the same
+      # pair; scripts/nightly checks they agree). The release manifest is applied after its SHA-256
+      # matches; bump version and hash together.
+      CNPG_VERSION: 1.30.1
+      CNPG_MANIFEST_SHA256: 37237f145d8138256ea25ae830f87759255665ff08f8d552fdd8224a5ec032fb
       NIGHTLY_SIMULATE_FAILURE: ${{ inputs.simulate_failure && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # bun runs the test, helm, k3d and kubectl are the versions pinned in .prototools. Docker,
-      # which k3d and the e2e test's image build need, and openssl are part of the runner image.
+      # which k3d and the images the tests build need, and openssl are part of the runner image.
       - uses: ./.github/actions/setup-proto
         with:
           tools: bun helm k3d kubectl
-      # Installs Gateway API and Istio ambient, then per values file: the smoke deployment and the
-      # ingress e2e test (deploy/chart/tests/e2e).
+      # Installs Gateway API, Istio ambient and CloudNativePG, builds the Postgres image, then per
+      # values file: the smoke deployment and the ingress e2e test (deploy/chart/tests/e2e).
       - name: Deploy the chart with each values file and run the tests
         # The runner context is not available in job-level env, only in steps.
         env:

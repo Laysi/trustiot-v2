@@ -27,7 +27,7 @@ SaaS 跑在一台單節點 k3s 主機上，主機沒有公網 IP、不開任何�
 | cloudflared 服務 | 寫 `/etc/systemd/system/<unit>.service`（預設 `cloudflared`），啟用並啟動；unit 或 token 有變才重啟 |
 | 驗收檢查 | 服務是 active；`systemd-analyze security <unit>` 不高於 2.0；`ss -tlnp` 與 `ss -ulnp` 沒有任何 80、443 在監聽；沒有 pod 以 hostPort 發布 80、443（那是 NAT 規則，`ss` 看不到）。任何一項不符就以非零結束 |
 
-安裝程式**不做**的事：Istio（[deploy/istio](../istio/README.md)）、TrustIoT chart（[deploy/chart](../chart/README.md)；SaaS 由 Flux 部署，見 [deploy/flux](../flux/README.md)）、Cloudflare 上的 tunnel、路由與 Access 設定（見下方「安裝」）、k3s 升級。
+安裝程式**不做**的事：Istio（[deploy/istio](../istio/README.md)）、CloudNativePG operator（[deploy/cloudnative-pg](../cloudnative-pg/README.md)）、TrustIoT chart（[deploy/chart](../chart/README.md)；SaaS 由 Flux 部署，見 [deploy/flux](../flux/README.md)）、Cloudflare 上的 tunnel、路由與 Access 設定（見下方「安裝」）、k3s 升級。
 
 ### cloudflared 的 systemd 沙箱
 
@@ -89,7 +89,7 @@ bun run --cwd deploy/host build      # deploy/host/dist/ 下的兩個執行檔�
 
    安裝程式逐一檢查 firewalld 的每個 zone 與 policy（約二十個，runtime 與 permanent 各一次），`firewall-cmd` 每次呼叫在小主機上要 0.5 到 10 秒。2026-10-11 在 2 vCPU、3 GB 的 VM 上，乾淨主機的完整安裝約 18 分鐘（其中 k3s 與 k3s-selinux 約 10 分鐘），沒有變更的重跑約 6 到 9 分鐘；輸出停在同一行數分鐘是正常的。
 
-5. **裝 Istio 與 chart。** 依 [deploy/istio/README.md](../istio/README.md) 安裝 Istio ambient，再依 [deploy/flux/README.md](../flux/README.md) 的「建立叢集」裝 Flux，由 Flux 部署 chart（SaaS 型態、`ingress.exposure: tunnel`；release `trustiot`，namespace `trustiot`）。入口的 NetworkPolicy 只放行 `ingress.tunnel.allowedSources`（預設 `10.42.0.1/32`，k3s 主機經 cni0 連 pod 的位址）連 80 與 15021；安裝程式只接受 k3s 預設的 Pod 網段 `10.42.0.0/16`，單節點時 cni0 就是 `10.42.0.1`，所以預設值不用改，cloudflared 的路由也只用 80（[deploy/chart/README.md](../chart/README.md)）。入口 gateway 的 Service 由 Istio 建立，名稱是 `<release>-ingress-istio`：
+5. **裝 Istio、CloudNativePG 與 chart。** 依 [deploy/istio/README.md](../istio/README.md) 安裝 Istio ambient，依 [deploy/cloudnative-pg/README.md](../cloudnative-pg/README.md) 安裝 CloudNativePG operator（chart 的 Postgres 需要它，沒有它時 chart 因為不認得 `postgresql.cnpg.io/v1` 而裝不起來），再依 [deploy/flux/README.md](../flux/README.md) 的「建立叢集」裝 Flux，由 Flux 部署 chart（SaaS 型態、`ingress.exposure: tunnel`；release `trustiot`，namespace `trustiot`）。入口的 NetworkPolicy 只放行 `ingress.tunnel.allowedSources`（預設 `10.42.0.1/32`，k3s 主機經 cni0 連 pod 的位址）連 80 與 15021；安裝程式只接受 k3s 預設的 Pod 網段 `10.42.0.0/16`，單節點時 cni0 就是 `10.42.0.1`，所以預設值不用改，cloudflared 的路由也只用 80（[deploy/chart/README.md](../chart/README.md)）。入口 gateway 的 Service 由 Istio 建立，名稱是 `<release>-ingress-istio`：
 
    ```sh
    sudo k3s kubectl -n trustiot get service trustiot-ingress-istio -o jsonpath='{.spec.clusterIP}{"\n"}'
