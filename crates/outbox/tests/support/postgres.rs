@@ -5,8 +5,9 @@
 //! shared test crate exists; unlike the kit's, every test gets its own container, as the outbox
 //! tests always had.
 
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair};
@@ -34,6 +35,10 @@ chown -R postgres:postgres /etc/postgres-tls
 exec docker-entrypoint.sh postgres -c ssl=on \
   -c ssl_cert_file=/etc/postgres-tls/server.crt -c ssl_key_file=/etc/postgres-tls/server.key";
 
+/// How often a start retries with another port when the one it picked was taken in between, and
+/// how often a restart retries when the port is briefly held by another process.
+const PORT_ATTEMPTS: u32 = 8;
+
 /// A running Postgres with TLS; the container and the CA file are removed when dropped.
 pub struct TlsPostgres {
     pub address: SocketAddr,
@@ -41,13 +46,30 @@ pub struct TlsPostgres {
     pub ca_pem: String,
     /// The same CA in a file, for the example service's `ca_file` setting.
     pub ca_file: PathBuf,
-    _container: Container,
+    container: Container,
+    /// Whether this test chose the host port, which is what lets [`Self::restart`] keep it.
+    fixed_port: bool,
 }
 
 impl TlsPostgres {
     /// Starts a Postgres and runs `init` (static SQL) as the superuser on `postgres`. `None`
     /// (after printing why) when no container runtime is available outside CI.
+    ///
+    /// The runtime assigns the host port, which podman keeps across a restart and Docker does
+    /// not: a test that restarts the container uses [`Self::start_restartable`].
     pub async fn start(init: &'static str) -> Option<Self> {
+        Self::start_with(init, false).await
+    }
+
+    /// Like [`Self::start`], for a test that calls [`Self::restart`]. The test picks a free
+    /// host port itself and publishes it explicitly, because only an explicit port is kept by
+    /// both podman and Docker when the container restarts (Docker reassigns an ephemeral one,
+    /// and every pool and option set made before the restart then points at nothing).
+    pub async fn start_restartable(init: &'static str) -> Option<Self> {
+        Self::start_with(init, true).await
+    }
+
+    async fn start_with(init: &'static str, fixed_port: bool) -> Option<Self> {
         let Some(runtime) = container_runtime() else {
             unavailable("podman or docker");
             return None;
@@ -60,33 +82,12 @@ impl TlsPostgres {
         let cert_env = format!("TEST_TLS_CERT={certificate}");
         let key_env = format!("TEST_TLS_KEY={key}");
         let password_env = format!("POSTGRES_PASSWORD={TEST_PASSWORD}");
-        runtime_output(
+        let address = run_container(
             runtime,
-            &[
-                "run",
-                "--detach",
-                "--name",
-                &container.name,
-                "--env",
-                &password_env,
-                "--env",
-                &cert_env,
-                "--env",
-                &key_env,
-                "--publish",
-                "127.0.0.1::5432",
-                "--entrypoint",
-                "sh",
-                POSTGRES_IMAGE,
-                "-c",
-                START_WITH_TLS,
-            ],
+            &container.name,
+            &[&password_env, &cert_env, &key_env],
+            fixed_port,
         );
-        let mapping = runtime_output(runtime, &["port", &container.name, "5432/tcp"]);
-        let address: SocketAddr = mapping
-            .lines()
-            .find_map(|line| line.trim().parse().ok())
-            .unwrap_or_else(|| panic!("no host address for 5432: {mapping}"));
         let ca_file =
             PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{}-ca.pem", container.name));
         std::fs::write(&ca_file, &ca_pem).expect("write the test CA");
@@ -94,7 +95,8 @@ impl TlsPostgres {
             address,
             ca_pem,
             ca_file,
-            _container: container,
+            container,
+            fixed_port,
         };
         // The image runs initdb with networking off and then restarts; wait for the real server.
         let started = Instant::now();
@@ -128,6 +130,110 @@ impl TlsPostgres {
             .ssl_mode(PgSslMode::VerifyFull)
             .ssl_root_cert_from_pem(self.ca_pem.clone().into_bytes())
     }
+}
+
+impl TlsPostgres {
+    /// Kills the server (SIGKILL, so the next start is crash recovery) and starts it again,
+    /// then checks that it is published on the same host port. Only for a Postgres made by
+    /// [`Self::start_restartable`].
+    ///
+    /// The port is released while the container is down, so another process (an outgoing
+    /// connection of another test, say) can take it just then; the restart is retried, up to
+    /// [`PORT_ATTEMPTS`] times, when the runtime reports that.
+    pub fn restart(&self) {
+        assert!(
+            self.fixed_port,
+            "restart needs a Postgres made by start_restartable"
+        );
+        let runtime = self.container.runtime;
+        let mut attempt = 1;
+        loop {
+            let output = Command::new(runtime)
+                .args(["restart", "--time", "0", &self.container.name])
+                .output()
+                .unwrap_or_else(|error| panic!("{runtime} restart: {error}"));
+            if output.status.success() {
+                break;
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                port_is_taken(&stderr) && attempt < PORT_ATTEMPTS,
+                "{runtime} restart failed (attempt {attempt} of {PORT_ATTEMPTS}): {stderr}"
+            );
+            attempt += 1;
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        let mapping = runtime_output(runtime, &["port", &self.container.name, "5432/tcp"]);
+        assert_eq!(
+            host_address(&mapping),
+            self.address,
+            "the host port changed across the restart: {mapping}"
+        );
+    }
+}
+
+/// Starts the container and returns the address it is published on: with `fixed_port`, a free
+/// port picked here and requested as `-p 127.0.0.1:<port>:5432`, otherwise one the runtime
+/// assigns.
+///
+/// Picking a port and publishing it are two steps, so another process can take the port in
+/// between. The start then fails with a bind error (on Docker leaving a created container
+/// behind, which is removed), and it is retried with a new port up to [`PORT_ATTEMPTS`] times.
+/// Any other failure is not retried.
+fn run_container(runtime: &'static str, name: &str, env: &[&str], fixed_port: bool) -> SocketAddr {
+    let mut attempt = 1;
+    loop {
+        let publish = if fixed_port {
+            format!("127.0.0.1:{}:5432", free_port())
+        } else {
+            "127.0.0.1::5432".to_owned()
+        };
+        let mut command = Command::new(runtime);
+        command.args(["run", "--detach", "--name", name]);
+        for value in env {
+            command.args(["--env", value]);
+        }
+        let output = command
+            .args(["--publish", &publish, "--entrypoint", "sh", POSTGRES_IMAGE])
+            .args(["-c", START_WITH_TLS])
+            .output()
+            .unwrap_or_else(|error| panic!("{runtime} run: {error}"));
+        if output.status.success() {
+            let mapping = runtime_output(runtime, &["port", name, "5432/tcp"]);
+            return host_address(&mapping);
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            fixed_port && port_is_taken(&stderr) && attempt < PORT_ATTEMPTS,
+            "{runtime} run failed (attempt {attempt} of {PORT_ATTEMPTS}): {stderr}"
+        );
+        let _ = Command::new(runtime).args(["rm", "--force", name]).output();
+        attempt += 1;
+    }
+}
+
+/// A port on 127.0.0.1 that nothing listens on right now.
+fn free_port() -> u16 {
+    TcpListener::bind((SERVER_HOST, 0))
+        .and_then(|listener| listener.local_addr())
+        .expect("pick a free port")
+        .port()
+}
+
+/// Whether a runtime's error message says the host port could not be bound.
+fn port_is_taken(stderr: &str) -> bool {
+    let stderr = stderr.to_lowercase();
+    ["already in use", "already allocated", "address in use"]
+        .iter()
+        .any(|text| stderr.contains(text))
+}
+
+/// The host address in the output of `port <container> 5432/tcp`.
+fn host_address(mapping: &str) -> SocketAddr {
+    mapping
+        .lines()
+        .find_map(|line| line.trim().parse().ok())
+        .unwrap_or_else(|| panic!("no host address for 5432: {mapping}"))
 }
 
 impl Drop for TlsPostgres {
