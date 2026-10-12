@@ -27,7 +27,7 @@ pub mod schema;
 pub use aggregate::{Aggregate, InvalidAggregate};
 pub use consumer::{
     Consumer, ConsumerConfig, ConsumerError, Delivery, FailureKind, Handler, HandlerError,
-    InvalidConfig, Outcome, Progress, Replay, StartFrom, replay_from,
+    InvalidConfig, MAX_HANDLER_PANICS, Outcome, Progress, Replay, StartFrom, replay_from,
 };
 pub use lag::Lag;
 pub use position::{InvalidPosition, Position};

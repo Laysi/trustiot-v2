@@ -2,7 +2,9 @@
 
 use std::borrow::Cow;
 use std::error::Error as StdError;
-use std::sync::Arc;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::task::Poll;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -18,8 +20,9 @@ use tracing::Instrument as _;
 use uuid::Uuid;
 
 use crate::aggregate::Aggregate;
-use crate::lag::{Lag, LagCell};
+use crate::lag::{ClearOnDrop, Lag, LagCell};
 use crate::position::Position;
+use crate::redact::SafeSqlx;
 use crate::schema::is_schema_name;
 
 /// The purpose the consumer's platform reader is logged with.
@@ -64,6 +67,13 @@ const LOCK_SUBSCRIPTION: &str = "SELECT pg_advisory_xact_lock(hashtextextended(\
 
 /// The longest subscription name, in bytes.
 pub const MAX_SUBSCRIPTION_LEN: usize = 100;
+
+/// How many times in a row one event may make its handler panic in a replica: the first panics
+/// are retried with backoff like [`HandlerError::retry`], and the event is dead-lettered
+/// (`handler panicked repeatedly`) at this one, so a handler that always panics on an event
+/// cannot stop the subscription for good. An attempt that ends without a panic (`begin` fails
+/// or `handle` returns) starts the count over.
+pub const MAX_HANDLER_PANICS: u32 = 3;
 
 /// Where a new subscription starts reading. Ignored once the subscription exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -152,7 +162,8 @@ impl ConsumerConfig {
         self
     }
 
-    /// How often [`Consumer::run`] measures the lag.
+    /// How often [`Consumer::run`] measures the lag. A measurement is reported for
+    /// [`crate::lag::CURRENT_FOR_INTERVALS`] intervals at most.
     #[must_use]
     pub fn lag_interval(mut self, interval: Duration) -> Self {
         self.lag_interval = interval.max(Duration::from_millis(10));
@@ -239,10 +250,19 @@ impl Delivery {
 /// Keep the time between the handler's first write and the commit short: from its first write
 /// a transaction holds back the read horizon of every consumer in the Postgres cluster (see the
 /// README). Do slow reads, such as an internal API call in notification mode, before writing.
+///
+/// A panic in [`Handler::begin`] or [`Handler::handle`] does not stop the consumer. The
+/// consumer catches it, rolls the delivery's transaction back, logs an ERROR without the panic
+/// message, and retries the event with backoff; at the [`MAX_HANDLER_PANICS`]th panic in a row
+/// it dead-letters the event. The same handler object is called again after a panic, so state
+/// it shares must not be left half-updated (a poisoned `Mutex`, for example). A binary built
+/// with `panic = "abort"` still exits.
 pub trait Handler: Send + Sync + 'static {
-    /// Runs first in each delivery's transaction, after the tenant is set and before the
-    /// consumer touches any table, for transaction settings such as `statement_timeout`. The
-    /// default does nothing.
+    /// Runs first in each delivery's transaction, after the tenant and the consumer's
+    /// transaction marker are set and before the consumer touches any table, for transaction
+    /// settings such as `statement_timeout`. The default does nothing. The rules of
+    /// [`Handler::handle`] for `tx` apply here too; they are checked when `begin` fails or
+    /// panics, and after `handle`.
     fn begin(
         &self,
         tx: &mut Transaction<'static, Postgres>,
@@ -603,6 +623,13 @@ impl DeliveryTransaction {
             Self::NoTenant(tx) => tx.commit().await,
         }
     }
+
+    async fn rollback(self) -> Result<(), sqlx::Error> {
+        match self {
+            Self::Tenant(tx) => tx.rollback().await,
+            Self::NoTenant(tx) => tx.rollback().await,
+        }
+    }
 }
 
 /// The result of trying one event.
@@ -650,6 +677,8 @@ struct Inner<H> {
     config: ConsumerConfig,
     handler: H,
     lag: Arc<LagCell>,
+    /// The event whose handler panicked last in this replica, and how many times in a row.
+    panics: Mutex<Option<(Uuid, u32)>>,
 }
 
 impl<H: Handler> Consumer<H> {
@@ -673,7 +702,11 @@ impl<H: Handler> Consumer<H> {
         handler: H,
     ) -> Self {
         let events = events.reader(PlatformActor::service(work.actor()), READ_PURPOSE);
-        let lag = LagCell::register(&config.subscription, &config.source_schema);
+        let lag = LagCell::register(
+            &config.subscription,
+            &config.source_schema,
+            config.lag_interval,
+        );
         Self {
             inner: Arc::new(Inner {
                 events,
@@ -681,6 +714,7 @@ impl<H: Handler> Consumer<H> {
                 config,
                 handler,
                 lag,
+                panics: Mutex::new(None),
             }),
         }
     }
@@ -838,7 +872,10 @@ impl<H: Handler> Consumer<H> {
         Ok(progress)
     }
 
-    /// The last lag measurement, `None` before the first.
+    /// The last lag measurement while it is current, which is what the gauges report: `None`
+    /// before the first, once [`Consumer::monitor_lag`] has ended (shutdown, or its task
+    /// dropped), and when no measurement has replaced it for
+    /// [`crate::lag::CURRENT_FOR_INTERVALS`] lag intervals.
     #[must_use]
     pub fn lag(&self) -> Option<Lag> {
         self.inner.lag.get()
@@ -860,7 +897,14 @@ impl<H: Handler> Consumer<H> {
 
     /// Creates the subscription, then processes events and measures the lag until `stop` is
     /// cancelled. An event being processed when `stop` fires is finished first. Query failures
-    /// are logged and retried with backoff.
+    /// are logged and retried with backoff, and panics are caught (see [`Handler`]), so only
+    /// `stop` ends processing.
+    ///
+    /// The lag is measured in a task of its own ([`Consumer::monitor_lag`]), which ends with
+    /// `stop` or when this future is dropped. It does not depend on processing: while
+    /// processing is stuck it keeps measuring, so the lag and its age rise instead of freezing.
+    /// If it cannot run at all (a handler that blocks the thread it needs, say), its last
+    /// measurement goes stale and is no longer reported.
     ///
     /// # Errors
     ///
@@ -893,17 +937,30 @@ impl<H: Handler> Consumer<H> {
                 }
             }
         }
-        tokio::join!(self.process(stop.clone()), self.monitor_lag(stop));
+        let mut monitor = {
+            let consumer = self.clone();
+            let stop = stop.clone();
+            AbortOnDrop(tokio::spawn(
+                async move { consumer.monitor_lag(stop).await }.in_current_span(),
+            ))
+        };
+        self.process(stop).await;
+        // `stop` is cancelled, so the monitor ends at its next pause; it catches its panics.
+        let _ = (&mut monitor.0).await;
         Ok(())
     }
 
-    /// Processes events until `stop` is cancelled; the subscription must exist.
+    /// Processes events until `stop` is cancelled; the subscription must exist. A panic,
+    /// whether in the handler or in a poll, is logged at ERROR and retried with backoff.
     pub async fn process(&self, stop: CancellationToken) {
         let config = &self.inner.config;
         let mut failures: u32 = 0;
         while !stop.is_cancelled() {
-            let wait = match self.poll(Some(&stop)).await {
-                Ok(progress) => match progress.outcome {
+            // Handler panics are caught (and counted) per delivery; this catches any other, so
+            // nothing ends the loop but `stop`. A panic drops the poll's transactions, which
+            // roll back; the next poll starts again from the stored position.
+            let wait = match catch_panic(self.poll(Some(&stop))).await {
+                Ok(Ok(progress)) => match progress.outcome {
                     Outcome::CaughtUp | Outcome::Busy => {
                         failures = 0;
                         config.poll_interval
@@ -925,13 +982,22 @@ impl<H: Handler> Consumer<H> {
                         self.backoff(failures)
                     }
                 },
-                Err(error) => {
+                Ok(Err(error)) => {
                     failures = failures.saturating_add(1);
                     tracing::warn!(
                         subscription = config.subscription,
                         error = %error,
                         attempt = failures,
                         "outbox poll failed; retrying"
+                    );
+                    self.backoff(failures)
+                }
+                Err(Panicked) => {
+                    failures = failures.saturating_add(1);
+                    tracing::error!(
+                        subscription = config.subscription,
+                        attempt = failures,
+                        "outbox poll panicked; retrying"
                     );
                     self.backoff(failures)
                 }
@@ -942,15 +1008,25 @@ impl<H: Handler> Consumer<H> {
         }
     }
 
-    /// Measures the lag every `lag_interval` until `stop` is cancelled.
+    /// Measures the lag every `lag_interval` until `stop` is cancelled. Failures are logged at
+    /// WARN and panics at ERROR, and measuring goes on. However this ends (`stop`, or the future
+    /// dropped with its task), the gauges stop reporting the last measurement, and so does a
+    /// failing or stuck measurement after [`crate::lag::CURRENT_FOR_INTERVALS`] intervals.
     pub async fn monitor_lag(&self, stop: CancellationToken) {
+        let _clear = ClearOnDrop(&self.inner.lag);
+        let subscription = &self.inner.config.subscription;
         while !stop.is_cancelled() {
-            if let Err(error) = self.measure_lag().await {
-                tracing::warn!(
-                    subscription = self.inner.config.subscription,
+            match catch_panic(self.measure_lag()).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => tracing::warn!(
+                    subscription,
                     error = %error,
                     "outbox lag could not be measured"
-                );
+                ),
+                Err(Panicked) => tracing::error!(
+                    subscription,
+                    "outbox lag measurement panicked; measuring again next interval"
+                ),
             }
             if !pause(&stop, self.inner.config.lag_interval).await {
                 break;
@@ -1034,9 +1110,39 @@ impl<H: Handler> Consumer<H> {
                 ),
             };
             let tx = delivery_tx.transaction();
-            if let Err(error) = self.inner.handler.begin(tx, &delivery).await {
-                drop(delivery_tx);
-                return self.failed(expected, &row, error).await;
+            // A transaction-level marker identifies the transaction without giving it an ID (a
+            // read, like everything before the handler's first write, so the transaction holds
+            // back no consumer's horizon yet); it ends with the transaction. It is set before
+            // the handler's hooks run, so the check after them covers `begin` too.
+            let marker = Uuid::now_v7().to_string();
+            sqlx::query("SELECT set_config('outbox.delivery', $1, true)")
+                .bind(&marker)
+                .execute(&mut **tx)
+                .await?;
+            match catch_panic(self.inner.handler.begin(tx, &delivery)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    // The attempt ends without a panic, so panics in a row start over.
+                    self.forget_panics(row.event_id);
+                    // As after `handle`: a hook that ended the transaction or moved its tenant
+                    // is dead-lettered, not retried. If the check cannot run (the transaction
+                    // is aborted), the hook's error stands.
+                    if let Ok(Some(broken)) = transaction_broken(tx, &delivery, &marker).await {
+                        drop(delivery_tx);
+                        tracing::error!(
+                            reason = broken.reason(),
+                            "outbox handler's begin hook broke its delivery's transaction"
+                        );
+                        return self.dead_letter(expected, &row, &broken).await;
+                    }
+                    drop(delivery_tx);
+                    return self.failed(expected, &row, error).await;
+                }
+                Err(Panicked) => {
+                    return self
+                        .panicked(expected, &row, delivery_tx, &delivery, &marker)
+                        .await;
+                }
             }
             match self.claim(tx, expected).await? {
                 Claim::Claimed => {}
@@ -1044,21 +1150,23 @@ impl<H: Handler> Consumer<H> {
                 Claim::Moved => return Ok(Step::Moved),
             }
             // Only reads so far: the transaction gets an ID (and holds back every consumer's
-            // horizon) no earlier than the handler's first write. A transaction-level marker
-            // identifies the transaction without giving it an ID; it ends with the transaction.
-            let marker = Uuid::now_v7().to_string();
-            let (fresh, _): (bool, String) = sqlx::query_as(
+            // horizon) no earlier than the handler's first write.
+            let fresh: bool = sqlx::query_scalar(
                 "SELECT NOT EXISTS (SELECT 1 FROM outbox_inbox \
-                 WHERE subscription = $1 AND event_id = $2), \
-                 set_config('outbox.delivery', $3, true)",
+                 WHERE subscription = $1 AND event_id = $2)",
             )
             .bind(&self.inner.config.subscription)
             .bind(row.event_id)
-            .bind(&marker)
             .fetch_one(&mut **tx)
             .await?;
             if fresh {
-                let handled = self.inner.handler.handle(tx, &delivery).await;
+                let Ok(handled) = catch_panic(self.inner.handler.handle(tx, &delivery)).await
+                else {
+                    return self
+                        .panicked(expected, &row, delivery_tx, &delivery, &marker)
+                        .await;
+                };
+                self.forget_panics(row.event_id);
                 // A handler's own failure leaves the transaction aborted, so the check cannot
                 // run; that error then stands.
                 let broken = match transaction_broken(tx, &delivery, &marker).await {
@@ -1115,6 +1223,99 @@ impl<H: Handler> Consumer<H> {
         match error.kind() {
             FailureKind::Retry => Ok(Step::Retry(error)),
             FailureKind::Permanent => self.dead_letter(expected, row, &error).await,
+        }
+    }
+
+    /// [`Handler::begin`] or [`Handler::handle`] panicked while delivering `row` in
+    /// `delivery_tx`, whose transaction marker is `marker`.
+    ///
+    /// The panic unwound out of the handler's future mid-poll and dropped it; the delivery's
+    /// transaction is still here, possibly with a statement the handler started and never
+    /// finished. sqlx reads such a statement's remaining results before the next one runs, so
+    /// the connection can still be used. First, as for a handler that returned, the
+    /// transaction is checked: one the handler ended or moved to another tenant is
+    /// dead-lettered, because no retry fixes that. Then the transaction is rolled back
+    /// explicitly (rather than on drop), so it has ended, and with it the subscription's lock,
+    /// before anything else happens; the connection goes back to the pool through service-kit's
+    /// release check, which closes a session left with a session-level tenant, and sqlx closes
+    /// one that does not answer. A rollback that fails leaves the connection to the pool, which
+    /// closes it.
+    ///
+    /// The panic itself counts as a retryable failure until [`MAX_HANDLER_PANICS`] panics in a
+    /// row for this event, and then as a permanent one.
+    async fn panicked(
+        &self,
+        expected: Position,
+        row: &Row,
+        mut delivery_tx: DeliveryTransaction,
+        delivery: &Delivery,
+        marker: &str,
+    ) -> Result<Step, ConsumerError> {
+        // A transaction the handler left aborted cannot run the check; the panic stands.
+        let broken = transaction_broken(delivery_tx.transaction(), delivery, marker)
+            .await
+            .ok()
+            .flatten();
+        if let Err(error) = delivery_tx.rollback().await {
+            tracing::warn!(
+                error = %SafeSqlx(&error),
+                "outbox delivery could not be rolled back after a handler panic"
+            );
+        }
+        if let Some(broken) = broken {
+            self.forget_panics(row.event_id);
+            // The panic hook has logged the panic with its message; this line carries nothing a
+            // handler could put in one.
+            tracing::error!(
+                reason = broken.reason(),
+                "outbox handler panicked after breaking its delivery's transaction; if it ended \
+                 the transaction, the writes before that may have committed"
+            );
+            return self.dead_letter(expected, row, &broken).await;
+        }
+        let attempt = self.note_panic(row.event_id);
+        if attempt >= MAX_HANDLER_PANICS {
+            self.forget_panics(row.event_id);
+            tracing::error!(
+                attempt,
+                "outbox handler panicked; too many panics in a row for this event"
+            );
+            let error = HandlerError::permanent("handler panicked repeatedly");
+            return self.dead_letter(expected, row, &error).await;
+        }
+        tracing::error!(
+            attempt,
+            limit = MAX_HANDLER_PANICS,
+            "outbox handler panicked; the event is retried"
+        );
+        Ok(Step::Retry(HandlerError::retry("handler panicked")))
+    }
+
+    /// Counts a panic of `event`'s handler; returns how many in a row it has caused.
+    fn note_panic(&self, event: Uuid) -> u32 {
+        let mut panics = self
+            .inner
+            .panics
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let count = match *panics {
+            Some((last, count)) if last == event => count.saturating_add(1),
+            _ => 1,
+        };
+        *panics = Some((event, count));
+        count
+    }
+
+    /// Resets `event`'s panic count: an attempt ended without a panic (`begin` failed or `handle`
+    /// returned), or the event was dead-lettered.
+    fn forget_panics(&self, event: Uuid) {
+        let mut panics = self
+            .inner
+            .panics
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if matches!(*panics, Some((last, _)) if last == event) {
+            *panics = None;
         }
     }
 
@@ -1262,6 +1463,47 @@ pub(crate) async fn horizon(tx: &mut PgConnection) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar("SELECT pg_snapshot_xmin(pg_current_snapshot())::text::bigint")
         .fetch_one(tx)
         .await
+}
+
+/// A future panicked. The panic payload is deliberately not kept: the panic hook has logged it,
+/// and the consumer's own log lines must carry nothing a handler could put in a panic message.
+struct Panicked;
+
+/// Awaits `future`, turning a panic while it is polled into `Err(Panicked)`; the same pattern as
+/// service-kit's periodic jobs (Laysi/trustiot-v2#284).
+///
+/// The future is polled in place under `catch_unwind` rather than spawned as a task: the
+/// handler borrows the delivery's transaction, which the consumer needs back after a panic to
+/// check and roll it back (a task would need it moved in, and a panic would drop it inside the
+/// task); cancellation stays as before (dropping the delivery drops the handler with it); and
+/// the handler stays in the delivery's span. `AssertUnwindSafe` is sound here because nothing
+/// the future touched is used after a panic without being checked: the future is dropped, the
+/// transaction is checked and rolled back, the consumer's own state is behind a lock that
+/// tolerates poisoning, and the handler's state is the handler's to keep consistent (see
+/// [`Handler`]).
+async fn catch_panic<Fut: Future>(future: Fut) -> Result<Fut::Output, Panicked> {
+    let mut future = Box::pin(future);
+    std::future::poll_fn(|context| {
+        match catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(context))) {
+            Ok(Poll::Pending) => Poll::Pending,
+            Ok(Poll::Ready(output)) => Poll::Ready(Ok(output)),
+            Err(payload) => {
+                drop(payload);
+                Poll::Ready(Err(Panicked))
+            }
+        }
+    })
+    .await
+}
+
+/// Aborts the task when dropped, so a dropped [`Consumer::run`] does not leave its lag monitor
+/// running.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// Sleeps for `duration`; false when `stop` was cancelled first.
