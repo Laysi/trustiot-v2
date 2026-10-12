@@ -78,6 +78,11 @@
       allowedVersions: "/^1\\.30\\./",
     },
     {
+      description: "The Postgres image (deploy/images/postgres) stays on PostgreSQL 18: Apache AGE is released per PostgreSQL major, so a new major is a deliberate upgrade. A new minor also needs the server headers pinned in the same Containerfile; the postgres-image job in ci.yml fails until they match (see that directory's README)",
+      matchPackageNames: ["ghcr.io/cloudnative-pg/postgresql"],
+      allowedVersions: "/^18\\./",
+    },
+    {
       description: "k3s image tags look like v1.36.5-k3s1",
       matchPackageNames: ["rancher/k3s"],
       versioning: "loose",

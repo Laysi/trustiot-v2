@@ -1,0 +1,48 @@
+# Lab runs on trustiot-mac-m1 (Mac mini M1, Fedora Asahi Remix 44, aarch64, 16k-page kernel
+# 7.1.13-402.asahi.fc44.aarch64+16k, podman 5.8.7, k3s v1.36.5+k3s1), 2026-10-11, under the lab lock
+
+## The exact release-built archive went to the lab
+workstation: sha256sum release/images/postgres.oci.tar
+c8ae4a1e0af607abe6eac35f6bf50f901feb737208243c6d877f513d3131ea0e
+lab:         sha256sum ~/e2e-57/postgres.oci.tar
+c8ae4a1e0af607abe6eac35f6bf50f901feb737208243c6d877f513d3131ea0e
+lab: podman pull oci-archive:~/e2e-57/postgres.oci.tar; podman tag ... localhost/trustiot-57/postgres:release-local
+lab: podman image inspect → arm64 26 sha256:cb840e1939e3cf785d3ff68f9ba62b9d196a3987e4fd705170a4489735ffea9c
+
+## image.test.ts against the lab's podman (workstation bun, podman remote over an ssh tunnel to a
+## temporary `podman system service` on the lab, bound to the lab's 127.0.0.1)
+$ CONTAINER_HOST=tcp://127.0.0.1:39057 POSTGRES_IMAGE=localhost/trustiot-57/postgres:release-local bun test deploy/images/postgres
+bun test v1.4.2 (744846f84)
+ 8 pass
+ 0 fail
+ 19 expect() calls
+Ran 8 tests across 1 file. [6.45s]
+(step-by-step output of the same run: lab-arm64-run.txt)
+
+## CloudNativePG 1.30.1 (temporary install, removed afterwards)
+cnpg-1.30.1.yaml from https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v1.30.1/cnpg-1.30.1.yaml
+sha256 37237f145d8138256ea25ae830f87759255665ff08f8d552fdd8224a5ec032fb
+kubectl apply --server-side -f cnpg-1.30.1.yaml; rollout status deployment/cnpg-controller-manager → rolled out
+image imported into k3s containerd with `k3s ctr -n k8s.io images import --digests postgres.oci.tar`
+(manifest sha256:cb840e19..., tagged localhost/trustiot-57/postgres:release-local)
+
+First try, Cluster with spec.imageName (no catalog):
+  The Cluster "age" is invalid: spec.imageName: Invalid value: "localhost/trustiot-57/postgres:release-local": invalid version tag
+  → CloudNativePG reads the PostgreSQL major from the tag. Release tags are TrustIoT versions, so
+    the chart must use an ImageCatalog with `major: 18` (deploy/images/postgres/README.md).
+
+Second try: ImageCatalog postgres-age {major: 18, image: localhost/trustiot-57/postgres:release-local@sha256:cb840e19...}
+and Cluster age {instances: 1, imageCatalogRef major 18, imagePullPolicy: Never,
+postgresql.shared_preload_libraries: [age], storage 1Gi (k3s local-path)}
+  → Cluster in healthy state after the image reference was also tagged by digest in containerd
+    (kubelet looks the name@digest reference up as name@digest when pulling is disabled)
+(what the pod ran and the AGE queries: lab-cnpg-cluster.txt)
+
+## Cleanup and restore
+kubectl delete ns e2e-57; kubectl delete -f cnpg-1.30.1.yaml
+kubectl get crd,mutatingwebhookconfiguration,validatingwebhookconfiguration,clusterrole,clusterrolebinding,ns,pv -o name | sort
+  before: 196 lines, sha256 fb9974a812da8f33caba3d938683b13233cd0c5523ff50695cafaf62847a13b2
+  after:  196 lines, sha256 fb9974a812da8f33caba3d938683b13233cd0c5523ff50695cafaf62847a13b2 (diff: identical)
+k3s ctr images rm of the imported image, its tags and the cloudnative-pg operator image → 0 left
+podman rmi of the test image, temporary podman service stopped, ~/e2e-57 removed, lock released
+namespace poc: 8 pods Running before and after

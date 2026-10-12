@@ -10,8 +10,8 @@
 #
 # Cost (Laysi/trustiot-v2#309): every job runs on the 2-core arm64 runner, which costs less per
 # minute than x64. The `changes` job (scripts/ci/changes.ts) decides from the changed paths
-# whether `rust`, `cargo-deny`, `helm` and `host` run; a job it skips reports as skipped, which counts
-# as passed. Each of them runs unless `changes` answered exactly 'false', so a failed or
+# whether `rust`, `cargo-deny`, `helm`, `host` and `postgres-image` run; a job it skips reports as
+# skipped, which counts as passed. Each of them runs unless `changes` answered exactly 'false', so a failed or
 # missing answer runs everything. `gitleaks` and `workflow-policy` always run. A new job that
 # should depend on paths gets its rule in scripts/ci/changes.ts and an output of `changes`.
 #
@@ -61,6 +61,7 @@ jobs:
       cargo-deny: ${{ steps.decide.outputs.cargo-deny }}
       helm: ${{ steps.decide.outputs.helm }}
       host: ${{ steps.decide.outputs.host }}
+      postgres-image: ${{ steps.decide.outputs.postgres-image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -239,6 +240,30 @@ jobs:
       - name: Build the x86_64 and aarch64 executables
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: bun run --cwd deploy/host build
+
+  postgres-image:
+    name: postgres-image
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.postgres-image != 'false' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-proto
+        with:
+          tools: bun
+      # The Postgres image with Apache AGE (deploy/images/postgres/README.md). The test builds it
+      # natively on this arm64 runner, through containerBuildArgs like every container build,
+      # then starts Postgres the way CloudNativePG runs it for CREATE EXTENSION age and cypher()
+      # queries. release.yml cross-compiles it on x86 without an emulator instead; the test checks
+      # statically that every RUN is in a --platform=$BUILDPLATFORM stage, which that build needs.
+      # CI=true makes the test fail instead of skip when the image cannot run.
+      - name: Build and test the image
+        run: bun test deploy/images/postgres
 
   gitleaks:
     name: gitleaks
