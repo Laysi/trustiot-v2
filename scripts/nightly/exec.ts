@@ -126,6 +126,36 @@ export async function retry<T>(
   throw last;
 }
 
+/** The clock waitUntilGone reads and sleeps on; tests pass a fake one. */
+export interface Clock {
+  now(): number;
+  sleep(ms: number): Promise<void>;
+}
+const SYSTEM_CLOCK: Clock = { now: () => Date.now(), sleep: (ms) => Bun.sleep(ms) };
+
+/**
+ * Waits until `list` returns nothing: for objects that Kubernetes removes in the background, such
+ * as the dependents its garbage collector deletes after their owner is gone. Returns how long it
+ * took; after `timeoutMs` it fails with what it waited for and what was still there. An error
+ * from `list` (a failed kubectl) ends the wait at once.
+ */
+export async function waitUntilGone(
+  what: string,
+  list: () => Promise<string[]>,
+  { timeoutMs, intervalMs = 3_000, clock = SYSTEM_CLOCK }: { timeoutMs: number; intervalMs?: number; clock?: Clock },
+): Promise<number> {
+  const started = clock.now();
+  for (;;) {
+    const left = await list();
+    const waited = clock.now() - started;
+    if (left.length === 0) return waited;
+    if (waited >= timeoutMs) {
+      throw new Error(`timed out after ${Math.round(waited / 1000)} s waiting for ${what}; still there: ${left.join(", ")}`);
+    }
+    await clock.sleep(Math.min(intervalMs, timeoutMs - waited));
+  }
+}
+
 /** Path of a tool at the version pinned in .prototools (see deploy/chart/README.md). */
 export async function pinnedTool(tool: string, cwd: string): Promise<string> {
   const result = await exec(["proto", "bin", tool, "--reporter", "text"], { cwd, timeoutMs: 60_000 });

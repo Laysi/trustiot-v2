@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runIngressE2e } from "./e2e.ts";
-import { exec, retry, run, RunLog } from "./exec.ts";
+import { exec, retry, run, RunLog, waitUntilGone } from "./exec.ts";
 import {
   gatewayPortProblems,
   gatewayPorts,
@@ -53,6 +53,14 @@ export interface SmokeContext {
 export const RELEASE = "trustiot";
 const INSTANCE_VALUES = (shape: string): string => `tests/values/${shape}-instance.yaml`;
 const SMOKE_VALUES = "tests/values/smoke.yaml";
+/**
+ * How long the volumes of a deleted CloudNativePG Cluster may take to go. They are the Cluster's
+ * dependents, so Kubernetes' garbage collector deletes them in the background after the Cluster
+ * is gone, and the pvc-protection finalizer holds each one until the Postgres pod that mounts it
+ * has stopped. The pod gets CloudNativePG's smart shutdown window (smartShutdownTimeout, 180 s by
+ * default) before a fast shutdown, so the bound is above it with room for a loaded runner.
+ */
+const CLUSTER_VOLUMES_GONE_MS = 300_000;
 
 /**
  * One shape per `values-<name>.yaml` in the chart, each with its instance overlay and the
@@ -269,9 +277,15 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         if (kept.length === 0) return "all objects removed";
         // Deleting a Cluster deletes its volumes; then nothing of the release is left.
         await kubectl(["delete", "--namespace", namespace, ...kept, "--wait=true", "--timeout=180s"], 200_000);
-        const volumes = await kubectl(["get", "pvc", "--namespace", namespace, "--selector", "cnpg.io/cluster", "--output", "name"]);
-        if (volumes.stdout.trim() !== "") throw new Error(`volumes left after deleting the kept Cluster: ${volumes.stdout.trim().split("\n").join(", ")}`);
-        return `all objects removed; kept on uninstall as intended, then deleted: ${kept.join(", ")}`;
+        const waited = await waitUntilGone(
+          "the deleted Cluster's volumes (PVCs labelled cnpg.io/cluster) to be deleted",
+          async () => {
+            const volumes = await kubectl(["get", "pvc", "--namespace", namespace, "--selector", "cnpg.io/cluster", "--output", "name"]);
+            return volumes.stdout.split("\n").filter((line) => line.trim() !== "");
+          },
+          { timeoutMs: CLUSTER_VOLUMES_GONE_MS },
+        );
+        return `all objects removed; kept on uninstall as intended, then deleted: ${kept.join(", ")}; their volumes were gone after ${Math.round(waited / 1000)} s`;
       })) &&
       (await check("ingress e2e test (deploy/chart/tests/e2e)", () => runIngressE2e(ctx, shape.name)));
   } catch (error) {
