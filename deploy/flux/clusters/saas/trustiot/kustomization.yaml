@@ -1,0 +1,23 @@
+# The TrustIoT release. chart.yaml and values-saas.yaml are rewritten by the deploy PR that
+# release.yml opens for every release; values-instance.yaml and the SOPS-encrypted Secrets are
+# edited by hand (deploy/flux/README.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - chart.yaml
+  - helm-release.yaml
+  # SOPS-encrypted Secrets (*.sops.yaml in this directory) are listed here once they exist,
+  # starting with ghcr-pull.sops.yaml (deploy/flux/README.md, "GHCR 拉取 token").
+configMapGenerator:
+  - name: trustiot-values
+    namespace: trustiot
+    files:
+      - values-saas.yaml
+      - values-instance.yaml
+    options:
+      # A fixed name, so that the HelmRelease can refer to it; the label makes helm-controller
+      # upgrade the release as soon as the values change.
+      disableNameSuffixHash: true
+      labels:
+        reconcile.fluxcd.io/watch: Enabled

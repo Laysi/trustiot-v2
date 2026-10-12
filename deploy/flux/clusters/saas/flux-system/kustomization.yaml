@@ -1,0 +1,19 @@
+# Flux itself. The bootstrap applies this directory once (deploy/flux/README.md); after that Flux
+# manages its own controllers from here. Written by scripts/flux/components.ts: the images are
+# pinned to the digests that their keyless cosign signatures by the fluxcd release workflows
+# cover. `bun test deploy/flux` checks this file against gotk-components.yaml.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - gotk-components.yaml
+  - gotk-sync.yaml
+images:
+  - name: ghcr.io/fluxcd/source-controller
+    newTag: v1.9.6
+    digest: sha256:6a6693172589f8ff26123a231d5fa6ceb194a6efb4dc647cdf057c959f76a2e3
+  - name: ghcr.io/fluxcd/kustomize-controller
+    newTag: v1.9.6
+    digest: sha256:2ebeaa341da77d52b6abbbba5efcee0450d47f8b42f0e6f33b08f9020262d606
+  - name: ghcr.io/fluxcd/helm-controller
+    newTag: v1.6.5
+    digest: sha256:0d52fff5c4d476277b8fcb6beb9041e269adb5db943fe69f5a806ea0c92b1511

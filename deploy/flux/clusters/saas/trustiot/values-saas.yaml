@@ -1,0 +1,31 @@
+# Copied by release.yml from deploy/chart/values-saas.yaml at v0.0.0-rc.3. Do not edit; see deploy/flux/README.md.
+# SaaS deployment shape: multi-tenant, single-node k3s, reached only through Cloudflare Tunnel.
+# Use together with an instance overlay that sets hosts, external endpoints and Secret names
+# (for the SaaS cluster that overlay lives in deploy/flux, Laysi/trustiot-v2#70).
+# README.md documents every field and compares this file with values-onprem.yaml.
+
+global:
+  deploymentMode: saas
+
+ingress:
+  # cloudflared runs on the host and forwards to the ingress gateway's ClusterIP; the host
+  # opens no ports, and only CF-Connecting-IP is trusted as the client IP (decisions 6 and 27).
+  exposure: tunnel
+
+# Postgres (with Apache AGE) and ClickHouse stay bundled in the cluster, as on-prem
+# (decisions 14 and 21); see values.yaml.
+
+qdrant:
+  # Qdrant Cloud (decision 19). The instance overlay sets qdrant.external.url and
+  # qdrant.external.credentialsSecret.
+  mode: external
+
+# objectStorage: hosted S3 or R2 (decision 20). The instance overlay sets the endpoint,
+# region, bucket and credentials Secret.
+# smtp: our email provider. The instance overlay sets host, from and the credentials Secret.
+# ai: cloud LLM, embedding and rerank APIs (decisions 15 and 26), set by the instance overlay.
+
+observability:
+  sentry:
+    # Errors go to sentry.io (decision 24). The instance overlay sets environment and dsnSecret.
+    enabled: true
