@@ -23,6 +23,8 @@ use service_kit::postgres::InsecureConnection;
 use service_kit::shutdown::Shutdown;
 use service_kit::tenant::{BackgroundTenantDb, TenantDb, TenantDbError};
 use sha2::{Digest, Sha256};
+use sqlx::Postgres;
+use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -54,6 +56,15 @@ pub const WARM_CONNECTIONS: u32 = 3;
 
 /// How often the keep-warm task checks the pool ([`PgSessionStore::keep_warm`]).
 pub const KEEP_WARM_INTERVAL: Duration = Duration::from_secs(2);
+
+/// How long a keep-warm round waits before it looks again for a connection it has not confirmed
+/// yet, while checks hold the others or new ones are still being opened.
+const CONFIRM_POLL: Duration = Duration::from_millis(50);
+
+/// The probe a keep-warm round runs on each connection. It fails on a connection the database
+/// dropped, and the backend process ID tells open connections apart, so a round can confirm
+/// [`WARM_CONNECTIONS`] different ones while it holds only one at a time.
+const BACKEND_PID: &str = "SELECT pg_backend_pid()";
 
 /// Upper bound on one lookup or one keep-warm round, [`CONNECT_TIMEOUT`] included, so a database
 /// that stops answering cannot hold tasks and connections forever.
@@ -277,9 +288,9 @@ const MEMBERSHIP_PURPOSE: &str = "ext-authz-membership";
 ///   connection the lookup was opening is finished and kept for the next check. At most
 ///   [`IN_FLIGHT_PER_CONNECTION`] lookups per connection run at once, each for at most
 ///   [`WORK_LIMIT`].
-/// - [`PgSessionStore::keep_warm`] keeps [`WARM_CONNECTIONS`] open, and readiness passes only
-///   while they are, so the gateway sends checks only to a replica that will not have to open a
-///   connection for them.
+/// - [`PgSessionStore::keep_warm`] keeps [`WARM_CONNECTIONS`] open and confirms all of them every
+///   round, and readiness passes only while they are open, so the gateway sends checks only to a
+///   replica that will not have to open a connection for them.
 #[derive(Clone, Debug)]
 pub struct PgSessionStore {
     db: TenantDb,
@@ -322,33 +333,24 @@ impl PgSessionStore {
     }
 
     /// Keeps [`WARM_CONNECTIONS`] open until the service stops, for
-    /// [`service_kit::Context::spawn`]: every [`KEEP_WARM_INTERVAL`] it opens what is missing,
-    /// or else runs `SELECT 1` on one connection (which also replaces a connection the database
-    /// dropped). Readiness ([`SessionStore::ping`]) follows the last round. Logs when the pool
-    /// becomes warm or stops being warm, never a secret.
+    /// [`service_kit::Context::spawn`]: every [`KEEP_WARM_INTERVAL`] a round
+    /// ([`PgSessionStore::warm_up`], at most [`WORK_LIMIT`]) confirms that many different
+    /// connections answer and opens what is missing. Readiness ([`SessionStore::ping`]) passes
+    /// once a round has confirmed them, and fails when a round fails or as soon as it finds a
+    /// connection the database dropped. Logs when readiness changes, never a secret.
     pub async fn keep_warm(self, shutdown: Shutdown) {
-        let mut was_warm = None;
+        let mut readiness = Readiness::new(Arc::clone(&self.warm));
         loop {
             let outcome = tokio::select! {
                 () = shutdown.stopping() => return,
-                outcome = tokio::time::timeout(WORK_LIMIT, self.warm_up()) => {
+                outcome = tokio::time::timeout(WORK_LIMIT, self.warm_up(&mut readiness)) => {
                     outcome.unwrap_or(Err(StoreError::TimedOut))
                 }
             };
-            let warm = outcome.is_ok();
-            self.warm.store(warm, Ordering::Release);
             match outcome {
-                Ok(()) if was_warm != Some(true) => tracing::info!(
-                    connections = WARM_CONNECTIONS,
-                    "the database connections are open"
-                ),
-                Err(error) if was_warm != Some(false) => tracing::warn!(
-                    error = %error,
-                    "cannot keep the database connections open; not ready"
-                ),
-                _ => {}
+                Ok(()) => readiness.ready(),
+                Err(error) => readiness.not_ready(&error),
             }
-            was_warm = Some(warm);
             tokio::select! {
                 () = shutdown.stopping() => return,
                 () = tokio::time::sleep(KEEP_WARM_INTERVAL) => {}
@@ -356,24 +358,60 @@ impl PgSessionStore {
         }
     }
 
-    /// One keep-warm round. When the pool holds fewer than [`WARM_CONNECTIONS`], takes that many
-    /// at once, so the missing ones are opened (a new connection passes service-kit's session
-    /// check, an idle one is pinged before it is handed out). Otherwise runs `SELECT 1` on one,
-    /// which also replaces it when the database dropped it.
-    async fn warm_up(&self) -> Result<(), StoreError> {
+    /// One keep-warm round: confirms that [`WARM_CONNECTIONS`] different connections answer
+    /// [`BACKEND_PID`]. It holds one connection at a time and gives it back before it takes the
+    /// next, so the two a check may need stay free (see [`WARM_CONNECTIONS`]).
+    ///
+    /// 1. It probes every connection that is idle when the round starts. The pool hands out idle
+    ///    connections first in, first out, and a connection given back joins the end, so each of
+    ///    them is taken by this round or by a check (whose acquire pings it first) before a
+    ///    connection given back comes up again. A connection the database dropped, as in a
+    ///    failover, fails its probe: readiness fails at once and the connection is closed, and
+    ///    the pool's minimum opens a replacement in the background.
+    /// 2. Then, until [`WARM_CONNECTIONS`] different connections have answered, it probes the next
+    ///    idle one, opens what the pool lacks below [`WARM_CONNECTIONS`], or waits
+    ///    [`CONFIRM_POLL`] for checks to give theirs back or new ones to open.
+    ///
+    /// The pool's own acquire would instead ping an idle connection and silently reopen a dropped
+    /// one, so the round takes idle connections with `try_acquire`, which hands them out as they
+    /// are.
+    async fn warm_up(&self, readiness: &mut Readiness) -> Result<(), StoreError> {
         let pool = self.db.pool();
-        if pool.size() >= WARM_CONNECTIONS {
-            return Ok(self.db.ping().await?);
+        let mut confirmed = Vec::with_capacity(WARM_CONNECTIONS as usize);
+        for _ in 0..pool.num_idle() {
+            let Some(connection) = pool.try_acquire() else {
+                break;
+            };
+            probe(connection, &mut confirmed, readiness).await;
         }
+        while confirmed.len() < WARM_CONNECTIONS as usize {
+            if let Some(connection) = pool.try_acquire() {
+                if probe(connection, &mut confirmed, readiness).await {
+                    continue;
+                }
+            } else if let Some(missing) = WARM_CONNECTIONS
+                .checked_sub(pool.size())
+                .filter(|missing| *missing > 0)
+            {
+                self.open(missing).await?;
+                continue;
+            }
+            tokio::time::sleep(CONFIRM_POLL).await;
+        }
+        Ok(())
+    }
+
+    /// Opens up to `missing` connections at once: each `SELECT 1` opens one when no connection
+    /// is idle (a new connection passes service-kit's session check first) and gives it back to
+    /// the pool. Errors name a session the check refused.
+    async fn open(&self, missing: u32) -> Result<(), StoreError> {
         let mut opening = JoinSet::new();
-        for _ in 0..WARM_CONNECTIONS {
-            let pool = pool.clone();
-            opening.spawn(async move { pool.acquire().await });
+        for _ in 0..missing {
+            let db = self.db.clone();
+            opening.spawn(async move { db.ping().await });
         }
-        // Hold every connection until all are open, so none is taken twice.
-        let mut held = Vec::new();
         while let Some(joined) = opening.join_next().await {
-            held.push(joined.map_err(|_| StoreError::Interrupted)??);
+            joined.map_err(|_| StoreError::Interrupted)??;
         }
         Ok(())
     }
@@ -444,6 +482,76 @@ impl SessionStore for PgSessionStore {
             Ok(())
         } else {
             Err(StoreError::NotWarm)
+        }
+    }
+}
+
+/// Readiness as the keep-warm task sets it: the flag [`SessionStore::ping`] reads, and one log
+/// line each time it changes (INFO when ready, WARN with the error when not).
+struct Readiness {
+    warm: Arc<AtomicBool>,
+    /// What was logged last; `None` before the first round.
+    logged: Option<bool>,
+}
+
+impl Readiness {
+    const fn new(warm: Arc<AtomicBool>) -> Self {
+        Self { warm, logged: None }
+    }
+
+    fn ready(&mut self) {
+        self.warm.store(true, Ordering::Release);
+        if self.logged != Some(true) {
+            tracing::info!(
+                connections = WARM_CONNECTIONS,
+                "the database connections are open"
+            );
+            self.logged = Some(true);
+        }
+    }
+
+    fn not_ready(&mut self, error: &StoreError) {
+        self.warm.store(false, Ordering::Release);
+        if self.logged != Some(false) {
+            tracing::warn!(
+                error = %error,
+                "cannot keep the database connections open; not ready"
+            );
+            self.logged = Some(false);
+        }
+    }
+}
+
+/// Runs [`BACKEND_PID`] on one connection for a keep-warm round and gives it back. Returns
+/// whether it answered and is one the round had not confirmed yet. A connection that fails is
+/// closed instead, and readiness fails until the round has confirmed enough others.
+async fn probe(
+    mut connection: PoolConnection<Postgres>,
+    confirmed: &mut Vec<i32>,
+    readiness: &mut Readiness,
+) -> bool {
+    match sqlx::query_scalar::<_, i32>(BACKEND_PID)
+        .fetch_one(&mut *connection)
+        .await
+    {
+        Ok(pid) => {
+            // Give it back now rather than on drop: dropping returns it in a background task
+            // (which pings it first), and until that task is done the connection is out of reach
+            // of checks too, so taking the next one meanwhile would hold two. `return_to_pool`
+            // runs that same drop handler in place (sqlx's own `PgListener` calls it this way);
+            // it is hidden from sqlx's docs, so review it when upgrading sqlx.
+            connection.return_to_pool().await;
+            if confirmed.contains(&pid) {
+                false
+            } else {
+                confirmed.push(pid);
+                true
+            }
+        }
+        Err(error) => {
+            connection.close_on_drop();
+            readiness.not_ready(&StoreError::from(error));
+            false
         }
     }
 }

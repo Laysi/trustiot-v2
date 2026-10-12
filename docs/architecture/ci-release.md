@@ -42,13 +42,13 @@ SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定�
 
 Laysi/trustiot-v2#70 以這些公鑰建立 `.sops.yaml`，並把 sops 與 age 鎖進 `.prototools`。地端不裝 Flux，Secret 由客戶以自己的方式建立，chart 只認 Secret 名稱與 key。
 
-通用規則（[#158](https://github.com/Laysi/trustiot/issues/158)、[#120](https://github.com/Laysi/trustiot/issues/120)、[#122](https://github.com/Laysi/trustiot/issues/122)）：每個 workflow 明列最小權限，每個 job 都寫出自己的 `permissions`，workflow 層級設 `permissions: {}`；第三方 action（含 GitHub 官方的 `actions/*` 與 reusable workflow）一律釘 40 字元的 commit SHA，行尾註解寫版本；容器映像（`docker://` action、job 與 service container）釘 digest；需要雲端憑證時用 OIDC，不放長期金鑰；發佈走 GitHub environment 加人工核准（私有 repo 在目前的 GitHub 方案設不了核准，2026-10-10 決定暫時接受，改以補償措施把關，見下方「發佈核准」）；fork 來的 PR 拿不到任何 secret，所以不使用 `pull_request_target` 與 `workflow_run` 觸發。權限、釘選與觸發條件三項由 CI 的 `workflow-policy` job（`scripts/ci/check-workflows.ts`）檢查每個 workflow 與 `.github/actions/` 下的 action；workflow 本身是否為 GitHub 能解析的語法，由同一個 job 以 actionlint 檢查（見下方「Workflow 語法檢查」）。本地 action（`uses: ./...`）不必釘 SHA，因為它隨使用它的變更一起審查，但只能放在 `.github/actions/` 下，本地 reusable workflow 只能直接放在 `.github/workflows/`，才在檢查範圍內；symbolic link 依實際指向的檔案檢查。
+通用規則（[#158](https://github.com/Laysi/trustiot/issues/158)、[#120](https://github.com/Laysi/trustiot/issues/120)、[#122](https://github.com/Laysi/trustiot/issues/122)）：每個 workflow 明列最小權限，每個 job 都寫出自己的 `permissions`，workflow 層級設 `permissions: {}`；第三方 action（含 GitHub 官方的 `actions/*` 與 reusable workflow）一律釘 40 字元的 commit SHA，行尾註解寫版本；容器映像（`docker://` action、job 與 service container）釘 digest；需要雲端憑證時用 OIDC，不放長期金鑰；發佈走 GitHub environment 加人工核准（2026-10-10 私有 repo 在 GitHub Free 方案設不了核准，決定暫時接受，改以補償措施把關；2026-10-12 repo 改為公開後 Free 方案設得了，但尚未設定，是否設定待使用者決定，Laysi/trustiot-v2#345，見下方「發佈核准」）；fork 來的 PR 拿不到任何 secret，所以不使用 `pull_request_target` 與 `workflow_run` 觸發。權限、釘選與觸發條件三項由 CI 的 `workflow-policy` job（`scripts/ci/check-workflows.ts`）檢查每個 workflow 與 `.github/actions/` 下的 action；workflow 本身是否為 GitHub 能解析的語法，由同一個 job 以 actionlint 檢查（見下方「Workflow 語法檢查」）。本地 action（`uses: ./...`）不必釘 SHA，因為它隨使用它的變更一起審查，但只能放在 `.github/actions/` 下，本地 reusable workflow 只能直接放在 `.github/workflows/`，才在檢查範圍內；symbolic link 依實際指向的檔案檢查。
 
 ## ci.yml 的 job
 
 2026-10-10 上線（Laysi/trustiot-v2#67）。同一個 PR 有新的推送時取消舊的執行；推到 main 的每個 commit 各自一個 concurrency group，一律跑完，每個 main commit 都有結果（共用一個 group 時，GitHub 會以較新的執行取代還在排隊的執行，即使沒有設 `cancel-in-progress`）。本機重跑的指令列在 `CLAUDE.md` 的「Build, lint, and test」。
 
-2026-10-11 起（Laysi/trustiot-v2#309）每個 job 都在 2-core 的 arm64 代管 runner（`ubuntu-24.04-arm`）上執行，理由與例外見下方「省 Actions 分鐘數」。`changes` job 先依變更的路徑決定 `rust`、`cargo-deny`、`helm`、`host`、`postgres-image` 要不要執行（見下方「依變更路徑決定 job」）；`gitleaks` 與 `workflow-policy` 每次都執行，不等 `changes`。
+2026-10-11 起（Laysi/trustiot-v2#309）每個 job 都在 arm64 代管 runner（`ubuntu-24.04-arm`）上執行，理由與例外見下方「省 Actions 分鐘數」。2026-10-11 當時 repo 是私有庫，這個標籤是 2-core；2026-10-12 起 repo 公開，依 GitHub 文件同一個標籤是 4 vCPU、16 GB RAM（私有庫是 2 vCPU、8 GB），規格未實測（Laysi/trustiot-v2#345）。`changes` job 先依變更的路徑決定 `rust`、`cargo-deny`、`helm`、`host`、`postgres-image` 要不要執行（見下方「依變更路徑決定 job」）；`gitleaks` 與 `workflow-policy` 每次都執行，不等 `changes`。
 
 | job（檢查名稱） | 內容 |
 | --- | --- |
@@ -75,6 +75,8 @@ Laysi/trustiot-v2#70 以這些公鑰建立 `.sops.yaml`，並把 sops 與 age �
 
 2026-10-11 決定（Laysi/trustiot-v2#309）。起因：2026-10-10～11 兩天全組織用掉超過 1,000 個 Actions 分鐘（Free 方案每月 2,000 分鐘，組織內所有 repo 共用），其中多數是只改文件、chart 或腳本的 PR 也照跑約 7 分鐘的 `rust` job。
 
+2026-10-12（Laysi/trustiot-v2#345）：repo 已改為公開，標準 GitHub 代管 runner 在公開 repo 不計費（見下方「省 Actions 分鐘數」），上述起因（額度）不再成立。這一節的規則與測試全部保留，理由改為：PR 的等待時間（只改文件的 PR 不必等約 7 分鐘的 `rust`）與 runner 的排隊，不再是分鐘額度。要不要把規則簡化掉不屬於本次文件更新，若決定簡化，另開 issue。
+
 **比較哪兩個 commit**（`scripts/ci/changes.ts`）：
 
 - PR：GitHub checkout 的 merge commit 對它的第一個 parent（合併當下 base 分支的最新 commit），所以列出的正是合併後會改變的檔案；base 分支之後的變動不算進來。
@@ -98,7 +100,7 @@ Laysi/trustiot-v2#70 以這些公鑰建立 `.sops.yaml`，並把 sops 與 age �
 
 **失敗時往執行的方向走**：每個依路徑的 job 寫成 `if: !cancelled() && needs.changes.outputs.<job> != 'false'`，`changes` 失敗、逾時或沒寫出結果時照樣執行；`changes.ts` 遇到任何問題也都回答「全部執行」，並在 job summary 寫明原因。
 
-**為何自己寫腳本、不用第三方 action**（例如 `dorny/paths-filter`）：(1) `rust` 的規則是「全部檔案都在忽略清單裡才略過」，用 glob 設定要靠反向比對與量詞設定，不如程式清楚；(2) 規則與守門測試放在一起，由同一個 CI 測試，規則改錯會在 PR 上直接失敗；(3) 推到 main 時要讀 main 上近期的 ci 結果、找出最近一個通過的 commit，本來就要寫程式；(4) 不多一個要追 SHA、會拿到 token 的第三方 action。代價是 `changes` job 本身約 1 個計費分鐘（checkout 完整歷史、裝 Bun）。
+**為何自己寫腳本、不用第三方 action**（例如 `dorny/paths-filter`）：(1) `rust` 的規則是「全部檔案都在忽略清單裡才略過」，用 glob 設定要靠反向比對與量詞設定，不如程式清楚；(2) 規則與守門測試放在一起，由同一個 CI 測試，規則改錯會在 PR 上直接失敗；(3) 推到 main 時要讀 main 上近期的 ci 結果、找出最近一個通過的 commit，本來就要寫程式；(4) 不多一個要追 SHA、會拿到 token 的第三方 action。代價是 `changes` job 本身約 1 分鐘的 runner 時間（checkout 完整歷史、裝 Bun；2026-10-11 當時是計費分鐘，2026-10-12 起公開 repo 不計費，Laysi/trustiot-v2#345）。
 
 **已知的取捨**：`cargo-deny` 的 RustSec 公告是隨時間增加的，略過時新公告要等下一次 Cargo 相關的變動才會被發現；Renovate 的 `vulnerabilityAlerts` 會為有公告的相依開 PR（前提是組織已裝好 Renovate，見下方「Renovate」）。是否加每日的 `cargo deny check advisories` 另案評估。
 
@@ -108,11 +110,40 @@ Laysi/trustiot-v2#70 以這些公鑰建立 `.sops.yaml`，並把 sops 與 age �
 
 2026-10-10 確認：本 repo 是私有庫，組織在 GitHub Free 方案，分支保護與 ruleset 都不能用（API 回 HTTP 403「Upgrade to GitHub Pro」），GitHub 不會擋下沒通過檢查的合併。方案升級前由流程把關：合併任何 PR 之前，確認上列檢查在該 PR 最新的 commit 上全部通過或略過（略過只能來自 `changes` 的判斷）。方案升級後，在 main 的 ruleset 把上列檢查設為必要檢查。
 
+2026-10-12 更新（Laysi/trustiot-v2#345）：上一段的前提（私有庫）已不成立。repo 已改為公開，依 GitHub 文件，Free 組織的公開 repo 可以啟用分支保護（[About protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)：「You can enable branch restrictions in public repositories owned by a GitHub Free organization」），必要檢查的狀態為 successful、skipped 或 neutral 都算通過，所以依路徑略過的 job 不會擋住合併。ruleset 在 Free 方案公開 repo 是否可用，我們讀得到的文件頁面沒有明寫，未驗證；以設定頁或 `gh api repos/Laysi/trustiot-v2/rulesets` 確認。**現況：沒有啟用任何一項。**公開時使用者只改了可見性，沒有設定分支保護或 ruleset，所以 GitHub 仍不會擋下沒通過檢查的合併，仍由流程把關，作法同上。啟用是 repo 設定，不在本次文件更新的範圍，由使用者決定：
+
+| 選項 | 內容 | 取捨 |
+| --- | --- | --- |
+| A. 維持現況 | 由合併流程確認檢查通過 | 不必改設定；但任何有寫入權限的人（或以其憑證操作的 agent）都能直接推 main 或合併紅燈的 PR，這一點與發佈核准（見下方「發佈核准」）的補償措施依賴同一條流程 |
+| B. 為 main 設 ruleset | 要求經 PR 合併、上列 8 個檢查（`changes`、`rust`、`cargo-deny`、`helm`、`host`、`postgres-image`、`gitleaks`、`workflow-policy`）為必要檢查、禁止 force push 與刪除；繞過名單只給少數管理員 | 紅燈與跳過檢查在 GitHub 端被擋下，不再靠人記得；代價是「Require branches to be up to date」會讓每次合併前都要更新分支、重跑約 11 分鐘的檢查，要不要開要另外決定；必要檢查以 job 名稱比對，job 改名時要同步改設定 |
+| C. 為 main 設傳統的分支保護 | 同 B 的內容 | 設定較簡單，但設定不在版控；ruleset 可匯出成 JSON、之後較容易比對與重建，所以若要啟用，優先 B |
+
+啟用後，把上方的 2026-10-10 段落改成「已啟用」並更新「GitHub 的 Actions 設定」一節的確認指令。
+
 ### 省 Actions 分鐘數
 
-私有庫在 Free 方案的 Actions 分鐘數有上限，所以：同一個 PR 的新推送會取消舊的執行；每個 job 設 `timeout-minutes`；Rust 的編譯快取（`Swatinem/rust-cache`）只在 main 儲存，PR 只讀取；不用模擬器；同一項檢查只跑一次；`rust`、`cargo-deny`、`helm`、`host`、`postgres-image` 只在相關路徑變動時執行（見上方「依變更路徑決定 job」）；nightly 的 k3d 部署在 PR 上只在帶 `smoke` label 時執行（見下方「nightly.yml」）。
+**2026-10-12 更新（Laysi/trustiot-v2#345）：額度已不是限制。**2026-10-12 使用者把 repo 改為公開。依 GitHub 文件：
 
-Runner：2026-10-11 依使用者指示（Laysi/trustiot-v2#309），ci.yml 與 nightly.yml 的每個 job 都用 2-core 的 arm64 代管 runner（`ubuntu-24.04-arm`），它每分鐘的價格比 x64 低；不夠用時再議。nightly 的 `smoke` job 原本就必須是 arm64：chart 預設的 nodeSelector 是 `kubernetes.io/arch: arm64`（決策 5），叢集架構要與實際出貨的一致。改用 arm64 前逐項確認過（2026-10-11，見 [測試報告](../test-reports/2026-10-11-309-ci-cost.md)）：setup-proto 的 proto 有 arm64 的 SHA-256；ci.yml 用到的 schema plugin（gitleaks、actionlint、cargo-deny、helm、kubeconform）都解析到存在的 linux arm64 release 資產，checksum 相符，執行檔能在 arm64 Linux 執行；Rust 測試啟動的容器映像（Postgres、ClickHouse、Mosquitto、distroless）都以 multi-arch index 的 digest 釘選，index 內有 linux/arm64；Rust 工具鏈由 runner 映像內建的 rustup 依 `rust-toolchain.toml` 安裝。arm64 runner 上 aarch64 是原生建置，不必交叉編譯。`release.yml` 仍在 x64，是否改用 arm64 另案評估（發佈次數少，且牽涉交叉編譯與可重現建置的設計）。目前沒有因為不能在 arm64 執行而留在 x64 的 ci.yml 或 nightly.yml job。
+- 「Use of the standard GitHub-hosted runners is free and unlimited on public repositories.」（[GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)）；計費頁也寫公開 repo 使用標準 GitHub 代管 runner 免費（[GitHub Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)）。`ubuntu-24.04-arm` 列在同一頁公開 repo 的標準 runner 表內（4 vCPU、16 GB RAM）。計費頁的單價表列了 Linux 2-core（arm64）的價格（那是私有庫的規格與價格），沒有另外為公開 repo 的 arm64 寫免費，所以 arm64 免費是依 runner 頁推得，沒有在帳單上驗證（預期組織用量頁的 Linux ARM 項目不再增加，未驗證）。
+- 較大規格的 runner 永遠計費，即使在公開 repo（計費頁：「Larger runners are always charged for, even when used by public repositories」）。ci.yml、nightly.yml 與 release.yml 目前都用標準標籤；沒有檢查擋下 `runs-on` 誤用較大規格的標籤。
+- 原本組織每月 2,000 分鐘的額度（Free 方案，所有私有 repo 共用，2026-10-11 已用 1,971 分鐘）現在只剩其他私有 repo 使用；本 repo 的 CI 不再佔用，也不會因額度用完而停擺。
+- 快取：每個 repo 預設上限 10 GB，超過就依最後存取時間由舊到新淘汰，7 天沒被存取的項目也會被清掉（[Dependency caching reference](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)）。這是公開 repo 仍要顧的空間。artifact 與 Packages 的儲存見下方「Actions 分鐘數與儲存空間」。
+
+下方 2026-10-11 的做法全部保留，每一項現在的理由：
+
+| 做法 | 現在的理由（原本的理由是省分鐘） |
+| --- | --- |
+| 同一個 PR 的新推送取消舊的執行 | 不讓過時的執行佔著 runner、延後新執行的結果；推到 main 的每個 commit 仍各自跑完（決策 30 的前提） |
+| 每個 job 設 `timeout-minutes` | 卡住的 job 要在合理時間失敗，不佔用 runner 到 GitHub 的預設上限（360 分鐘），也讓失敗訊息早出現 |
+| Rust 編譯快取只在 main 儲存，PR 只讀取 | 快取的 10 GB 上限與淘汰規則：PR 各自儲存會把 main 的快取擠掉，下一個 PR 反而變慢 |
+| 不用模擬器 | 速度與可靠性：模擬器慢很多，也多一層會出錯的環境 |
+| 同一項檢查只跑一次 | 速度，以及失敗時只有一個來源 |
+| `rust`、`cargo-deny`、`helm`、`host`、`postgres-image` 依路徑執行 | PR 的等待時間（`rust` 約 7 分鐘）與 runner 排隊，見上方「依變更路徑決定 job」 |
+| nightly 的 k3d 部署在 PR 上只在帶 `smoke` label 時執行 | 不再是計費；理由改為 Docker Hub 匿名拉取限制、公開 repo 的 PR 程式碼與審查，以及等待時間，見下方「PR 的部署要加 `smoke` label」 |
+
+2026-10-11 的原文（Laysi/trustiot-v2#309，「私有庫、Free 方案有分鐘上限」這個前提已不成立）：私有庫在 Free 方案的 Actions 分鐘數有上限，所以：同一個 PR 的新推送會取消舊的執行；每個 job 設 `timeout-minutes`；Rust 的編譯快取（`Swatinem/rust-cache`）只在 main 儲存，PR 只讀取；不用模擬器；同一項檢查只跑一次；`rust`、`cargo-deny`、`helm`、`host` 只在相關路徑變動時執行（見上方「依變更路徑決定 job」）；nightly 的 k3d 部署在 PR 上只在帶 `smoke` label 時執行（見下方「nightly.yml」）。
+
+Runner：2026-10-11 依使用者指示（Laysi/trustiot-v2#309），ci.yml 與 nightly.yml 的每個 job 都用 2-core 的 arm64 代管 runner（`ubuntu-24.04-arm`），它每分鐘的價格比 x64 低；不夠用時再議。2026-10-12 更新（Laysi/trustiot-v2#345）：repo 公開後價格不再相關，保留 arm64 的理由只剩與出貨架構一致（決策 5）和下列已驗證的項目；上面的「2-core」是私有庫的規格，公開 repo 的同一個標籤依文件是 4 vCPU、16 GB RAM，沒有實測，`rust` 的約 7 分鐘等耗時估計是在 2-core 上量得，之後可能變短。nightly 的 `smoke` job 原本就必須是 arm64：chart 預設的 nodeSelector 是 `kubernetes.io/arch: arm64`（決策 5），叢集架構要與實際出貨的一致。改用 arm64 前逐項確認過（2026-10-11，見 [測試報告](../test-reports/2026-10-11-309-ci-cost.md)）：setup-proto 的 proto 有 arm64 的 SHA-256；ci.yml 用到的 schema plugin（gitleaks、actionlint、cargo-deny、helm、kubeconform）都解析到存在的 linux arm64 release 資產，checksum 相符，執行檔能在 arm64 Linux 執行；Rust 測試啟動的容器映像（Postgres、ClickHouse、Mosquitto、distroless）都以 multi-arch index 的 digest 釘選，index 內有 linux/arm64；Rust 工具鏈由 runner 映像內建的 rustup 依 `rust-toolchain.toml` 安裝。arm64 runner 上 aarch64 是原生建置，不必交叉編譯。`release.yml` 仍在 x64，是否改用 arm64 另案評估（發佈次數少，且牽涉交叉編譯與可重現建置的設計）。目前沒有因為不能在 arm64 執行而留在 x64 的 ci.yml 或 nightly.yml job。
 
 ### 工具安裝
 
@@ -137,6 +168,8 @@ CI 以 `.github/actions/setup-proto` 安裝 proto：版本與兩種架構（x64�
 
 ci.yml 不使用任何 secret，每個 job 的 GITHUB_TOKEN 只有 `contents: read`，checkout 也不把 token 留在 `.git/config`（`persist-credentials: false`）。fork 來的 PR 以 `pull_request` 事件執行，GitHub 不給 secret、token 唯讀；`workflow-policy` 擋下 `pull_request_target` 與 `workflow_run`。repo 層級的 Actions 設定另外保證這幾點，見下一節。
 
+2026-10-12 更新（Laysi/trustiot-v2#345）：repo 公開後任何人都能從 fork 開 PR。依 GitHub 文件，從 fork 觸發的 workflow 不會拿到 secret，`GITHUB_TOKEN` 在 fork 的 PR 是唯讀（[Events that trigger workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)），這與上面 ci.yml 的設計一致，不必改 workflow。要留意的是另一件事：`rust` 等 job 會執行 PR 帶來的程式碼（測試、Cargo build script），在公開 repo 上它是任何人都能送來的程式碼，只是沒有 secret、token 唯讀、runner 用完即棄。所以 fork PR 要不要先經人核准才跑，是這裡的主要防線，見下一節。
+
 ### GitHub 的 Actions 設定
 
 2026-10-10 經使用者同意，以 GitHub API 設定並讀回確認（記錄於 Laysi/trustiot-v2#72）：
@@ -150,6 +183,12 @@ ci.yml 不使用任何 secret，每個 job 的 GITHUB_TOKEN 只有 `contents: re
 | Actions 能否核准 PR（`can_approve_pull_request_reviews`） | `false` | workflow 不能以 `GITHUB_TOKEN` 核准 PR、繞過人工審查 |
 | action 必須釘完整的 commit SHA（`sha_pinning_required`） | `true` | GitHub 拒絕執行沒有釘 SHA 的 action，與 `workflow-policy` 的檢查互為兩層 |
 
+2026-10-12 更新（Laysi/trustiot-v2#345）：repo 改為公開後，表中前三列（fork PR 的 secret、寫入 token、核准）是私有庫專用的設定，GitHub 文件寫明這些選項「only for private repositories」（[Managing GitHub Actions settings for a repository](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository)），公開 repo 不適用，下方指令的第三條也因此不再有意義。公開 repo 的對應行為：
+
+- fork 來的 workflow 不會拿到 secret，token 唯讀（見上一節引用的文件），不能設定，所以不必也不能再「確認」。
+- 核准：文件寫預設是「all first-time contributors require approval to run workflows」。選項（REST API 的 `approval_policy`）：`first_time_contributors_new_to_github`（只有剛加入 GitHub、沒有任何已合併 commit 或 PR 的人要核准）、`first_time_contributors`（預設，沒有已合併 commit 或 PR 的人要核准）、`all_external_contributors`（不是 repo 成員或組織成員的人一律要核准）。**現值未驗證**：使用者公開時沒有動這項設定，以下面的指令讀取（[REST API](https://docs.github.com/en/rest/actions/permissions)）。
+- 待使用者決定：建議設為 `all_external_contributors`。取捨：我們的 PR 都從本 repo 的分支來，沒有外部貢獻者，所以每個 fork PR 都是未知來源，逐次核准的成本幾乎是零；預設值則是只要某人有一個已合併的 PR，之後他的 fork PR 都會直接跑，而 `rust` 與 `helm` 會執行 PR 帶來的程式碼。維持預設的好處只有不必處理核准，等到真有外部貢獻者再改也來得及。
+
 重新確認的指令（需要 repo 的管理權限；每年與人員異動時各做一次，[密鑰輪替 runbook](../runbooks/secrets.md) 也列了這一項）：
 
 ```sh
@@ -159,6 +198,8 @@ gh api repos/Laysi/trustiot-v2/actions/permissions
 gh api repos/Laysi/trustiot-v2/actions/permissions/workflow
 # send_write_tokens_to_workflows: false、send_secrets_and_variables: false、require_approval_for_fork_pr_workflows: true
 gh api repos/Laysi/trustiot-v2/actions/permissions/fork-pr-workflows-private-repos
+# 2026-10-12 起（公開 repo）：approval_policy，預設 first_time_contributors，建議 all_external_contributors
+gh api repos/Laysi/trustiot-v2/actions/permissions/fork-pr-contributor-approval
 ```
 
 任何一項與上表不同，就表示設定被改過：先改回，再查組織的稽核紀錄找出原因。
@@ -197,6 +238,7 @@ gh api repos/Laysi/trustiot-v2/actions/permissions/fork-pr-workflows-private-rep
 ### 交叉編譯與可重現建置
 
 - `cargo auditable zigbuild --locked --release --target aarch64-unknown-linux-musl`：Zig 當 C 編譯器與連結器（cargo-zigbuild），cargo-auditable 把相依清單嵌進執行檔，syft 才列得出 crate。zig、cargo-zigbuild、cargo-auditable、syft、cosign 都鎖在 `.prototools`，Zig 以官方 minisign 簽章驗證，其餘以 release 附的 checksum 驗證。Rust 在 CI 由 runner 的 rustup 依 `rust-toolchain.toml` 安裝，再加上 musl target。
+- 打包前檢查每個執行檔是 aarch64 的 ELF，而且沒有 program interpreter（PT_INTERP）：動態連結的執行檔在 distroless static 裡找不到載入器與 libc，容器會啟動失敗，所以在建置時就停下（2026-10-11 加入，Laysi/trustiot-v2#308）。Cargo 指令與靜態連結的檢查在 `scripts/release/rust-build.ts`（不放在 `lib.ts`，因為 `ci/changes.ts` 引用 `lib.ts`，改它會讓 CI 的每個 job 都執行），nightly 的服務映像共用（見「nightly.yml」的「服務映像」）。
 - 映像建置不執行任何 arm64 程式，x86 的代管 runner 不需要模擬器。
 - 時間戳一律取 tag 所指 commit 的時間（`SOURCE_DATE_EPOCH`、`podman build --timestamp`、`helm package`），chart 推送時的建立時間也固定，執行檔裡的原始碼路徑換成固定的前綴（`--remap-path-prefix`），所以同一個 commit 以同一組工具重建，會得到相同的映像與 chart digest（2026-10-10 本機驗證，見 [測試報告](../test-reports/2026-10-10-68-release-workflow.md)）。runner 上的 podman 版本不由本 repo 釘選，不同版本打包出的映像層可能不同，所以不保證本機與 CI 建出的 digest 相同。
 
@@ -209,7 +251,7 @@ issuer:   https://token.actions.githubusercontent.com
 identity: https://github.com/Laysi/trustiot-v2/.github/workflows/release.yml@refs/tags/<tag>
 ```
 
-GHCR 套件是私有的，驗證前先以有讀取權限的帳號 `cosign login ghcr.io`：
+GHCR 套件目前是私有的（2026-10-12 repo 公開不會改變套件的可見性，見下方「GHCR 套件的可見性」，Laysi/trustiot-v2#345），驗證前先以有讀取權限的帳號 `cosign login ghcr.io`：
 
 ```sh
 cosign verify ghcr.io/laysi/trustiot-v2/<名稱>:<版本> \
@@ -222,13 +264,13 @@ cosign verify-attestation --type spdxjson ghcr.io/laysi/trustiot-v2/<名稱>:<�
 
 chart 以同樣的身分驗證 `ghcr.io/laysi/trustiot-v2/charts/trustiot:<版本>`。每次發佈的 GitHub Release 都列出該版本完整的驗證指令與 digest。SBOM 是 syft 產生的 SPDX 2.3 JSON，以 attestation 附在映像上，也是 GitHub Release 的附件。
 
-verify job 對每個映像檢查：tag 指向 publish 推送的 digest；只有一個平台且是 linux/arm64；簽章與 SBOM attestation 以上述身分（再加上 commit SHA 與觸發事件）驗證通過；匿名拉取被拒，即套件是私有的。chart 檢查 tag、簽章與 version、appVersion。另外以不屬於這次發佈的身分驗證一次，必須失敗，證明上述檢查不是空檢查。
+verify job 對每個映像檢查：tag 指向 publish 推送的 digest；只有一個平台且是 linux/arm64；簽章與 SBOM attestation 以上述身分（再加上 commit SHA 與觸發事件）驗證通過；匿名拉取被拒，即套件是私有的（套件改為公開時這一項會失敗，見「GHCR 套件的可見性」）。chart 檢查 tag、簽章與 version、appVersion。另外以不屬於這次發佈的身分驗證一次，必須失敗，證明上述檢查不是空檢查。
 
 Flux（Laysi/trustiot-v2#70）驗證映像與 chart 時，要用支援 cosign v3 bundle 格式的 Flux（2.8 以上），`matchOIDCIdentity` 的 issuer 寫 `^https://token\.actions\.githubusercontent\.com$`，subject 寫 `^https://github\.com/Laysi/trustiot-v2/\.github/workflows/release\.yml@refs/tags/v.*$`。上方「SaaS 以 GitOps 部署」提到由 release 流程自動開改 chart 版本號的 PR，等 `deploy/flux/` 建立後（Laysi/trustiot-v2#70）再加進 release.yml。
 
 ### 公開的透明紀錄（2026-10-10 決定接受）
 
-keyless 簽章會寫進 Sigstore 公開服務的透明紀錄：Fulcio 簽發的憑證進入公開的憑證透明度日誌，簽章與 attestation 的紀錄進入 Rekor。任何人都能以映像或 chart 的 digest 查到這些紀錄，紀錄中的憑證寫著 repo 名稱 `Laysi/trustiot-v2` 與數字 ID、組織、workflow 路徑、tag、commit SHA、Actions 執行的網址，以及簽章時 repo 是私有的。Rekor 只存簽章與 attestation 內容的雜湊，不存內容本身，所以 SBOM 列出的相依套件與版本不會公開，原始碼與映像內容也查不到（2026-10-10 以 v0.0.0-rc.1 實查，見 [測試報告](../test-reports/2026-10-10-68-release-workflow.md)）。紀錄無法刪除。
+keyless 簽章會寫進 Sigstore 公開服務的透明紀錄：Fulcio 簽發的憑證進入公開的憑證透明度日誌，簽章與 attestation 的紀錄進入 Rekor。任何人都能以映像或 chart 的 digest 查到這些紀錄，紀錄中的憑證寫著 repo 名稱 `Laysi/trustiot-v2` 與數字 ID、組織、workflow 路徑、tag、commit SHA、Actions 執行的網址，以及簽章時 repo 是私有的（2026-10-12 起 repo 公開，之後的簽章寫的是公開，已經簽的紀錄仍寫私有；repo 名稱等中繼資料本來就公開在 GitHub 上，這項揭露的顧慮實質上消失，Laysi/trustiot-v2#345）。Rekor 只存簽章與 attestation 內容的雜湊，不存內容本身，所以 SBOM 列出的相依套件與版本不會公開，原始碼與映像內容也查不到（2026-10-10 以 v0.0.0-rc.1 實查，見 [測試報告](../test-reports/2026-10-10-68-release-workflow.md)）。紀錄無法刪除。
 
 2026-10-10 決定接受（Laysi/trustiot-v2#68 審查，決策 30），理由：
 
@@ -239,7 +281,7 @@ keyless 簽章會寫進 Sigstore 公開服務的透明紀錄：Fulcio 簽發的�
 
 ### 發佈核准（2026-10-10 決定接受的現況）
 
-publish job 在 `release` environment 執行，原本的設計是在 environment 設必要審查者（required reviewers）與只允許 `v*` tag 的部署規則，讓每次發佈都經人工核准。本 repo 是私有庫、組織在 GitHub Free 方案：依 GitHub 文件，Free 方案只能為公開 repo 設定 environment；Pro 與 Team 可以為私有 repo 設定 environment、部署分支與 tag 規則及 environment secret，但必要審查者與等待時間在 Free、Pro、Team 方案都只適用於公開 repo（私有 repo 要 GitHub Enterprise）。所以 environment 擋不下任何發佈：v0.0.0-rc.1 的 publish job 沒有等待核准就執行了。
+publish job 在 `release` environment 執行，原本的設計是在 environment 設必要審查者（required reviewers）與只允許 `v*` tag 的部署規則，讓每次發佈都經人工核准。2026-10-10 當時本 repo 是私有庫、組織在 GitHub Free 方案：依 GitHub 文件，Free 方案只能為公開 repo 設定 environment；Pro 與 Team 可以為私有 repo 設定 environment、部署分支與 tag 規則及 environment secret，但必要審查者與等待時間在 Free、Pro、Team 方案都只適用於公開 repo（私有 repo 要 GitHub Enterprise）。所以 environment 擋不下任何發佈：v0.0.0-rc.1 的 publish job 沒有等待核准就執行了。
 
 2026-10-10 決定（Laysi/trustiot-v2#68 審查，決策 30）：暫不升級 GitHub 方案，repo 維持私有，接受發佈沒有人工核准，以下列補償措施把關：
 
@@ -252,6 +294,16 @@ publish job 在 `release` environment 執行，原本的設計是在 environment
 
 這些措施擋不住有寫入權限的人（或以其憑證操作的 agent）把 main 上 ci 已通過的 commit 打成正式版發佈。workflow 照樣宣告 environment：升級到可為私有 repo 設定必要審查者的方案（目前是 GitHub Enterprise），或 repo 改為公開時，重新檢視本決定，並在 repo 設定的 `release` environment 加上必要審查者（開啟 prevent self-review，推 tag 的人不能自己核准）與 tag 規則 `v*`，不必改 workflow。只升級到 Team 或 Pro 時，可以先加上 tag 規則。
 
+2026-10-12 更新（Laysi/trustiot-v2#345）：上面「repo 改為公開時，重新檢視本決定」的條件已經發生。repo 已公開，依上一段引用的 GitHub 文件，Free 方案可以為公開 repo 設定 environment 的必要審查者與部署規則，GitHub 的方案頁也把「Deployment protection rules for public repositories」列在 Free 方案（[GitHub's plans](https://docs.github.com/en/get-started/learning-about-github/githubs-plans)）。**但現況沒有變：**使用者公開時只改了可見性，`release` environment 沒有設必要審查者或 tag 規則，所以發佈仍然沒有人工核准，上面的補償措施全部仍然適用。是否設定屬於 repo 設定，不在本次文件更新的範圍，由使用者決定：
+
+| 選項 | 內容 | 取捨 |
+| --- | --- | --- |
+| A. 維持現況 | 只靠補償措施 | 不必改設定，單人也能發版；擋不住有寫入權限的人把 main 上 ci 已通過的 commit 打成正式版 |
+| B. 只加 tag 規則 `v*` | environment 只允許 `v*` tag 的 workflow 使用 | 不需要第二個人；`release` environment 的 secret（OTA 簽章私鑰，Laysi/trustiot-v2#164）就能限定給 tag 的 run 使用，但不能限定「main 上的 tag」，那一項仍靠 plan job 的檢查；擋不住有寫入權限的人推 tag |
+| C. 加必要審查者（開啟 prevent self-review）加 tag 規則 | 每次 publish 前，推 tag 以外的人核准 | 真的有人工關卡；代價是每次發佈（含候選版）都要等另一位維運人員，目前維運人員少，至少要兩位審查者；publish 等待核准期間 build 的 artifact 只保留 1 天，等太久要重跑 |
+
+若選 B 或 C，repo 設定改完後更新本節與決策 30，不必改 workflow。
+
 ### 結果怎麼看、失敗怎麼處理
 
 - 每次執行都在 tag 指向的 commit 上留下 commit status `release`：成功是「`<tag>` published and verified」，失敗寫出第一個失敗的 job 與原因，連結到該次執行。成功時 GitHub Release 的最後一節「驗證結果」列出 verify job 檢查過的每一項。
@@ -260,8 +312,33 @@ publish job 在 `release` environment 執行，原本的設計是在 environment
 
 ### Actions 分鐘數與儲存空間
 
-- 一次發佈有 5 個 job，每個 job 的分鐘數各自無條件進位。build 不做 Rust 編譯快取：發佈次數少，快取空間留給 ci.yml。
-- build 交給 publish 的 artifact 只保留 1 天。依 GitHub 文件，Free 方案組織的 Packages 與 Actions artifact 共用 500 MB 儲存空間；GHCR 的容器映像目前不計費（GitHub 承諾改變前至少提前一個月通知）。映像變多變大時，留意 artifact 的大小。
+2026-10-12 更新（Laysi/trustiot-v2#345）：repo 改為公開，以下依公開 repo 的規則重寫；2026-10-10 的原文在各項後面保留。
+
+- 分鐘數：一次發佈有 5 個 job。release.yml 的 job 用 `ubuntu-24.04`（x64 標準 runner），在公開 repo 不計費（見上方「省 Actions 分鐘數」），分鐘數只剩耗時的意義。2026-10-10 的原文：每個 job 的分鐘數各自無條件進位。build 不做 Rust 編譯快取：發佈次數少，快取空間留給 ci.yml（這一點仍然成立：每個 repo 的快取上限是 10 GB）。
+- artifact 儲存：build 交給 publish 的 artifact 只保留 1 天，不變。GitHub 的計費頁把免費額度（artifact 儲存、快取儲存、分鐘數）寫成「對私有 repo」的額度，沒有寫公開 repo 的 artifact 是否計入組織的 500 MB，未驗證；artifact 只留 1 天、發佈次數少，不論是否計入都影響很小。2026-10-10 的原文：依 GitHub 文件，Free 方案組織的 Packages 與 Actions artifact 共用 500 MB 儲存空間。
+- GHCR 容器映像的儲存與流量：GitHub 的 Packages 計費頁寫「Container image storage and bandwidth for the Container registry is currently free」，改變前至少提前一個月通知（[Packages billing](https://docs.github.com/en/billing/concepts/product-billing/github-packages)）；公開套件的 Packages 用量免費。這與 repo 是否公開無關，沒有變。
+
+#### GHCR 套件的可見性（獨立於 repo 的可見性）
+
+repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（[Configuring a package's access control and visibility](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility)）：
+
+- 第一次發佈時套件預設是私有的（「the default visibility is private」）。
+- 與 repo 連結的套件繼承 repo 的存取權限，但不繼承可見性（「inherits the access permissions (but not the visibility) of the linked repository」）。
+- 公開套件允許匿名拉取，不必驗證。
+- 套件改為公開後無法再改回私有（「Once you make a package public, you cannot make it private again」）。
+- 可見性在套件的設定頁（Danger Zone，Change visibility）改，不在 repo 設定。
+
+我們現有的套件目前實際是私有還是公開，沒有驗證（要以組織的 Packages 頁或 API 確認）；依上述預設，應該都還是私有。release.yml 的 `verify` job 每次發佈都檢查匿名拉取被拒（`scripts/release/verify.ts` 的 `checkPrivate`），所以只要發佈成功並通過 verify，該版本的映像與 chart 就是私有的。
+
+是否把套件改為公開，屬於使用者的決定，不在本次文件更新的範圍：
+
+| 選項 | 內容 | 取捨 |
+| --- | --- | --- |
+| A. 維持私有（現況） | SaaS 叢集以唯讀的 GHCR 拉取 token 拉映像與 chart（[密鑰與權限](secrets.md)）；地端客戶各持一把唯讀 token 或用離線安裝包（MS6） | `verify` 的匿名檢查繼續有效；映像不對外；要保管與輪替拉取 token |
+| B. 改為公開 | 任何人可匿名拉取，不需要 `imagePullSecrets` 與拉取 token | 簡化 SaaS 與地端的映像取得，密鑰清冊少一項；**無法改回私有**；映像與 chart 對外可取得（原始碼本來就公開，但 repo 沒有授權檔，是否允許他人使用要另外決定，不屬於本文）；`verify` 的匿名檢查會讓每次發佈失敗，要先改 `scripts/release/verify.ts` 與本文件（另開 issue），否則改公開就會讓下一次發佈的 `verify` 與 `release` commit status 變紅 |
+| C. 只把部分套件改公開 | 例如只有 chart 或某個映像 | 同 B 的不可逆與 verify 要改；每個套件各自決定，管理成本較高 |
+
+建議在決定授權與產品的散佈方式之前維持 A：公開不能回頭，而維持私有隨時可以改。
 
 ## nightly.yml
 
@@ -269,15 +346,29 @@ publish job 在 `release` environment 執行，原本的設計是在 environment
 
 ### PR 的部署要加 `smoke` label
 
-2026-10-11 決定（Laysi/trustiot-v2#309）：每次部署約 7 個 arm64 計費分鐘，原本動到上列路徑的 PR 每次推送都部署一次。現在：
+2026-10-11 決定（Laysi/trustiot-v2#309）：每次部署約 7 個 arm64 計費分鐘（當時是私有庫），原本動到上列路徑的 PR 每次推送都部署一次。現在：
 
-- PR 沒有 `smoke` label 時不部署：事件照樣觸發 workflow，但 `smoke` job 被略過（`smoke` check 顯示 skipped），不計費。
+- PR 沒有 `smoke` label 時不部署：事件照樣觸發 workflow，但 `smoke` job 被略過（`smoke` check 顯示 skipped），不佔 runner（2026-10-11 當時也是不計費的理由）。
 - 協調者在決定合併前替 PR 加上 `smoke` label，加上的當下（`labeled` 事件）部署一次；之後每次推送都重新部署，同一個 PR 較新的推送會取消還在跑的部署。部署通過才合併，與以前相同。
 - 為 PR 加上其他 label 不會部署，也不會取消進行中的部署：這類事件有自己的 concurrency group（`nightly-no-smoke-<run_id>`）。
 - label 名稱比對不分大小寫，與 GitHub 的字串比較相同。
 - 排程與手動執行不受影響。
 - label 在 2026-10-11 建立（顏色 `0e8a16`），說明寫著用途；改名會讓條件失效，要改名就同時改 `nightly.yml` 與本節。
 - 條件寫在 `nightly.yml` 的 `concurrency.group` 與 `smoke.if` 兩處，`scripts/ci/workflow-conditions.test.ts` 以 GitHub 的 expression 引擎逐一驗證上列情境。
+
+2026-10-12 更新（Laysi/trustiot-v2#345）：上面的起因（「計費分鐘」）已不成立，repo 公開後標準 runner 不計費（見「省 Actions 分鐘數」）。label 閘門的行為完全沒變，仍然有效；現在的理由改為：
+
+1. 等待時間：每次部署約 7 分鐘（2-core 的 arm64 量得，公開 repo 的 4 vCPU 可能較短，未實測），原本每個動到 chart 的推送都要多等一次。
+2. Docker Hub 的匿名拉取限制：每次部署都從 Docker Hub 拉 k3s、`traefik/whoami` 與 e2e 替身的基底映像，這個限制是 nightly 常見的失敗原因（見下方「失敗時怎麼辦」）；部署次數越多越可能撞到（推測，未量測），也可能讓排程的夜間執行跟著失敗。
+3. 公開 repo 的 PR 程式碼：`smoke` 會在 runner 上起 docker 與 k3d、執行 PR 帶來的 chart 與腳本。label 由有權限的維運人員在讀過內容之後才加（依 GitHub 的角色，加 label 需要 triage 以上權限），所以它同時是「這份程式碼可以跑部署」的人工關卡；沒有這道閘門時，這個關卡只剩 fork PR 的核准設定（見「GitHub 的 Actions 設定」）。
+
+待使用者決定，是否取消或放寬這道閘門（取消要改 `nightly.yml` 的兩處條件、`workflow-conditions.test.ts` 與本節，另開 issue）：
+
+| 選項 | 內容 | 取捨 |
+| --- | --- | --- |
+| A. 維持現況（建議） | 只有帶 `smoke` label 的 PR 部署 | 不必改任何東西；PR 要等到協調者加 label 才有部署結果；理由 2 與 3 的保護繼續有效 |
+| B. 同 repo 分支的 PR 自動部署，fork 的 PR 仍要 label | 條件加上 head repo 等於 base repo | chart 的改動每次推送都得到回饋，不必手動加 label；每個推送多約 7 分鐘的 runner 時間與一次 Docker Hub 拉取；要改 workflow、測試與文件 |
+| C. 取消閘門 | 動到上列路徑的 PR 一律部署 | 最簡單；理由 1 到 3 全部回來，fork PR 只靠核准設定把關，不建議在公開 repo 這樣做 |
 
 ### 做什麼
 
@@ -311,6 +402,20 @@ publish job 在 `release` environment 執行，原本的設計是在 environment
 
 在 TrustIoT 服務映像出來以前，`smoke.yaml` 的替身服務（`traefik/whoami`，以 digest 釘選）讓通用服務樣板在真叢集上被驗證。
 
+### 服務映像（已備好，尚未啟用）
+
+2026-10-11（Laysi/trustiot-v2#308）：`scripts/nightly/service-image.ts` 的 `loadServiceImage(platform, "<名稱>")` 把 `deploy/images/<名稱>/image.toml` 宣告的 Rust 服務建成映像並匯入叢集：與 release.yml 相同的 Cargo 指令（`scripts/release/rust-build.ts` 的 `rustCrossCompileCommand`：`cargo auditable zigbuild --locked --release --target aarch64-unknown-linux-musl`）、同樣檢查執行檔是靜態的 aarch64 ELF、同一份 `rust-binary.Containerfile`，經 `containerBuildArgs` 以 docker 建成 `localhost/trustiot-e2e/<名稱>:nightly`，再以上面的 `importImageIntoCluster` 匯入並逐節點確認。所以 nightly 部署的就是發佈會建出的東西（2026-10-11 本機實測兩條路建出的執行檔 SHA-256 相同，[測試報告](../test-reports/2026-10-11-308-identity-image.md)）。
+
+`run.ts` 還沒有呼叫它，nightly.yml 也還不建置 Rust：啟用 `services.identity` 要先有它的資料庫（Laysi/trustiot-v2#58、Laysi/trustiot-v2#60），由 Laysi/trustiot-v2#65、Laysi/trustiot-v2#77 接上。接上時 smoke job 的 setup-proto 要多裝 `rust zig cargo-zigbuild cargo-auditable`。
+
+成本估計（啟用前要決定怎麼省）：2026-10-11 在本機（x86_64、6 個建置 job、負載 3–5）從空的 target 目錄建 identity 與 release-selftest（約 214 個 crate）加上打包與 SBOM 共 196 秒，`target/` 497 MB。runner 是 2 核的 arm64，編譯以 CPU 為主，冷建置估 9–13 分鐘，加上裝 Rust 與三個工具、下載 crate、docker build 與匯入約 1–2 分鐘，每晚多 **10–15 個計費分鐘**（每月約 300–450 分鐘），smoke job 的 `timeout-minutes: 45` 也要重新評估。可以省的做法：
+
+- Rust 編譯快取（`Swatinem/rust-cache`，key 含 target triple 與 release profile，只在排程或 main 上儲存，與 ci.yml 一樣 PR 只讀取）：命中時只重編改過的 crate 與連結，估 2–4 分鐘（含還原約 0.3–0.5 GB 的快取）；佔用 repo 的 10 GB 快取額度。
+- 只在 `services/`、`crates/`、`Cargo.lock` 或 `deploy/images/` 自上次通過以來有變動時才重建；沒變動時沿用上一次的映像（例如存成 artifact）。
+- 不建議改拉 GHCR 上最新的發佈版映像：測到的是已發佈的版本而不是 main 的程式碼，而且 smoke job 要多一個讀取套件的權限。
+
+2026-10-12 更新（Laysi/trustiot-v2#345）：repo 已改為公開，標準 runner 不計費，上面的「計費分鐘」改看成 nightly 每晚多出的執行時間。公開 repo 的 `ubuntu-24.04-arm` 依文件是 4 vCPU（見「省 Actions 分鐘數」），冷建置可能比上面的估計快，未實測。上列做法仍然適用，理由改為縮短 nightly 的執行時間與 `timeout-minutes` 的餘裕。
+
 ### 本機執行
 
 nightly 只在 CI 跑：本 repo 規定工作站不跑 Kubernetes。要在有 docker 與 openssl 的機器上重現，`proto install` 之後，把 workflow 裡的 `K3S_IMAGE`、`GATEWAY_API_VERSION`、`GATEWAY_CRDS_SHA256`、`ISTIO_VERSION`、`CNPG_VERSION`、`CNPG_MANIFEST_SHA256` 設成環境變數：
@@ -331,11 +436,11 @@ NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
 
 ### 失敗時怎麼辦
 
-先看 issue 內文的報告：它列出哪份 values 的哪一項失敗與診斷。要重現就到 Actions 頁手動執行 nightly（選 `simulate_failure` 只用來驗證通知，不用來除錯）。常見原因：Docker Hub 對匿名拉取的流量限制（`traefik/whoami`、k3s 映像與 e2e 替身的基底映像都在 Docker Hub，建立叢集與建置映像已重試）、替身或 Postgres 映像沒有進到節點（log 的 `identity double image`、`Postgres image` 段會寫出哪個節點缺映像，匯入已重試）、Cluster 沒有變健康（診斷含 CloudNativePG 的物件、`describe` 與 operator 的 log）、chart 的改動讓某份 values 裝不起來或讓入口的行為改變、Istio、Gateway API、k3s 或 k3d 版本更新。GitHub 在 repo 60 天沒有活動時會停掉排程 workflow，這個 repo 有活動所以不會發生，但若看到排程停了，到 Actions 頁重新啟用。
+先看 issue 內文的報告：它列出哪份 values 的哪一項失敗與診斷。要重現就到 Actions 頁手動執行 nightly（選 `simulate_failure` 只用來驗證通知，不用來除錯）。常見原因：Docker Hub 對匿名拉取的流量限制（`traefik/whoami`、k3s 映像與 e2e 替身的基底映像都在 Docker Hub，建立叢集與建置映像已重試）、替身或 Postgres 映像沒有進到節點（log 的 `identity double image`、`Postgres image` 段會寫出哪個節點缺映像，匯入已重試）、Cluster 沒有變健康（診斷含 CloudNativePG 的物件、`describe` 與 operator 的 log）、chart 的改動讓某份 values 裝不起來或讓入口的行為改變、Istio、Gateway API、k3s 或 k3d 版本更新。GitHub 在公開 repo 60 天沒有活動時會停掉排程 workflow（[Events that trigger workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)；2026-10-12 起本 repo 是公開的，這條規則開始適用，Laysi/trustiot-v2#345），這個 repo 有活動所以不會發生，但若看到排程停了，到 Actions 頁重新啟用。
 
 ### 成本
 
-一次執行一個 job（加上約 1 分鐘的 `notify`），兩份 values 共用一個叢集。實測的分鐘數見 `docs/test-reports/2026-10-10-69-nightly-workflow.md`。兩個 job 都在 arm64 runner 上（`notify` 自 2026-10-11 起，Laysi/trustiot-v2#309）。PR 只在帶 `smoke` label 時部署，見上方「PR 的部署要加 `smoke` label」。
+2026-10-12 起 repo 公開，標準 runner 不計費（Laysi/trustiot-v2#345），這一節的分鐘數只是耗時。一次執行一個 job（加上約 1 分鐘的 `notify`），兩份 values 共用一個叢集。實測的分鐘數見 `docs/test-reports/2026-10-10-69-nightly-workflow.md`。兩個 job 都在 arm64 runner 上（`notify` 自 2026-10-11 起，Laysi/trustiot-v2#309）。PR 只在帶 `smoke` label 時部署，見上方「PR 的部署要加 `smoke` label」。
 
 ## Renovate
 
@@ -362,6 +467,6 @@ PR 標題是 Angular 格式（`chore(deps): …`），標籤 `area:ci` 與 `depe
 
 ### 需要人在 GitHub 組織裝 Renovate
 
-設定檔本身不會執行，要有 Renovate 跑它：組織管理員安裝 Mend 的 Renovate GitHub App，授權給 `Laysi/trustiot-v2`。App 會先開一個 onboarding PR 或直接讀 `renovate.json5`；之後 Dependency Dashboard issue 列出所有待辦。這是管理員動作，agent 不做。App 的代價是第三方存取原始碼，私有庫要確認組織同意；替代做法是用 `renovatebot/github-action` 在我們自己的 workflow 跑，但那需要一個有寫入權限的 token（GitHub App 或 PAT）存成 secret，目前原則是 GitHub 不持有這類憑證，所以優先用 App。
+設定檔本身不會執行，要有 Renovate 跑它：組織管理員安裝 Mend 的 Renovate GitHub App，授權給 `Laysi/trustiot-v2`。App 會先開一個 onboarding PR 或直接讀 `renovate.json5`；之後 Dependency Dashboard issue 列出所有待辦。這是管理員動作，agent 不做。App 的代價是第三方存取原始碼，私有庫要確認組織同意（2026-10-12 起 repo 公開，原始碼本來就任何人讀得到，這項顧慮不再成立；安裝仍是組織管理員的動作，Laysi/trustiot-v2#345）；替代做法是用 `renovatebot/github-action` 在我們自己的 workflow 跑，但那需要一個有寫入權限的 token（GitHub App 或 PAT）存成 secret，目前原則是 GitHub 不持有這類憑證，所以優先用 App。
 
 設定的驗證：`renovate-config-validator` 通過；以 `renovate --platform=local --dry-run=extract` 對這個 repo 抽取依賴（結果在測試報告）。

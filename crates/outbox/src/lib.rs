@@ -2,10 +2,11 @@
 //!
 //! - A producer writes events with [`publish`] in the same transaction as the business change,
 //!   so both commit or neither does.
-//! - A consumer service runs a [`Consumer`] per subscription. It polls the producer's log and
-//!   processes each event in a transaction of its own that also records the event ID and the
-//!   new position: delivery is at least once, processing is once per event ID, and events of
-//!   one aggregate arrive in the order they were written.
+//! - A consumer service runs a [`Consumer`] per subscription. It polls the producer's log as
+//!   the service's platform role and processes each event as its service role, in a
+//!   transaction in the event's tenant (decision 29) that also records the event ID and the new
+//!   position: delivery is at least once, processing is once per event ID, and events of one
+//!   aggregate arrive in the order they were written.
 //! - [`replay_from`] moves a subscription back to re-read the log.
 //! - [`notify`] supports consumers that treat events as notifications and read the producer's
 //!   current state.
@@ -26,7 +27,7 @@ pub mod schema;
 pub use aggregate::{Aggregate, InvalidAggregate};
 pub use consumer::{
     Consumer, ConsumerConfig, ConsumerError, Delivery, FailureKind, Handler, HandlerError,
-    InvalidConfig, Outcome, Progress, Replay, StartFrom, replay_from,
+    InvalidConfig, MAX_HANDLER_PANICS, Outcome, Progress, Replay, StartFrom, replay_from,
 };
 pub use lag::Lag;
 pub use position::{InvalidPosition, Position};

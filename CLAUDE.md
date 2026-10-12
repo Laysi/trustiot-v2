@@ -8,6 +8,8 @@ Bootstrapped on 2026-10-09; the Cargo workspace and toolchain pins landed on 202
 
 Architecture decisions, rebuild scope (items A1–M8), service split, repository layout, and milestones (MS0–MS6) live in `docs/`; start at `docs/README.md`. `docs/` is the source of truth: when a decision changes, update `docs/` in the same change. In `docs/`, a bare `#N` refers to the legacy repo `Laysi/trustiot`; always write legacy references as `Laysi/trustiot#N` in issues and PRs here.
 
+The repository has been public since 2026-10-12: commits, PR and issue text, test reports, and CI logs are readable by anyone. Never put secrets, internal hostnames or LAN addresses, customer names, or personal data in them (cluster pod and service addresses are fine); the rule is in `docs/architecture/secrets.md`, section 「公開 repo 的資訊規則」.
+
 ## Build, lint, and test
 
 `.prototools` pins Rust, Bun, actionlint, cargo-deny, gitleaks, Helm, k3d, kubeconform, kubectl, and the release tools (zig, cargo-zigbuild, cargo-auditable, syft, cosign); tools without a built-in proto plugin get a schema plugin in `.proto/plugins/` that verifies the release checksum. proto installs Rust through rustup and does not shim cargo, so rustup picks the toolchain from `rust-toolchain.toml`: change `rust` in `.prototools` and `channel` in `rust-toolchain.toml` together (`cargo test -p repo-check` fails when they differ). Run every command from the repository root.

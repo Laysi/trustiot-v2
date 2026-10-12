@@ -12,10 +12,10 @@ mod support;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use contract::{ServiceName, TenantRole};
-use identity::session::SessionSecret;
+use identity::session::{SessionSecret, WARM_CONNECTIONS};
 use serde_json::json;
 use service_kit::identity::{IdentityError, IdentityKeys, IdentityVerifier, UserIdentity};
 use sqlx::{Connection, PgConnection};
@@ -606,7 +606,7 @@ async fn an_unreachable_database_fails_closed() {
     let env = base_env(&jwks(&[(&key, KID)]), &key_file, port);
     let env: Vec<(&str, &str)> = env.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
     let service = Service::start(&env);
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let response = check(&service, "/", Some(&cookie(&new_secret())));
     assert_eq!(response.status, 503, "{}", response.raw());
     // Bounded by the check deadline (0.4 s; src/ext_authz/tests.rs proves it in-process), with
@@ -629,21 +629,21 @@ async fn an_unreachable_database_fails_closed() {
     assert_unauthenticated(&check(&service, "/", None));
 }
 
-/// Finding F1 of docs/test-reports/2026-10-11-61-verify.md: opening a database connection may
-/// take longer than a check may, as on a loaded node or a slow network; here a proxy holds every
-/// new connection for 1 s. The service becomes ready only with its connections open, checks
-/// after that never wait for a new one, and when the database drops every connection (a
-/// failover), checks fail closed until the replacements are open and then recover on their own.
-#[tokio::test]
-async fn a_slow_database_connect_never_fails_a_check_after_ready() {
-    let Some(fixture) = Fixture::new(
-        "CREATE DATABASE identity_slow_connect OWNER identity_owner",
-        "identity_slow_connect",
-    )
-    .await
-    else {
-        return;
-    };
+/// How long a test waits for the service to become ready, or for readiness or a log line to
+/// change: several keep-warm rounds (2 s each) plus 1 s connections, on a loaded machine.
+const READINESS_BOUND: Duration = Duration::from_secs(30);
+
+/// The keep-warm task's log lines when readiness changes (src/session.rs).
+const READY_LOG: &str = "the database connections are open";
+const NOT_READY_LOG: &str = "cannot keep the database connections open; not ready";
+
+/// A fixture with one viewer session, and the service connecting through a proxy that holds
+/// every new connection for 1 s (longer than a check may take), started and ready.
+async fn slow_connect_service(
+    create: &'static str,
+    database: &'static str,
+) -> Option<(Fixture, SlowProxy, Service, String)> {
+    let fixture = Fixture::new(create, database).await?;
     fixture.add_user(USER, false).await;
     fixture.add_membership(TENANT_A, USER, "viewer").await;
     let session = cookie(
@@ -659,53 +659,160 @@ async fn a_slow_database_connect_never_fails_a_check_after_ready() {
     );
     let env: Vec<(&str, &str)> = env.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
     let service = Service::start(&env);
-    service.wait_ready(Duration::from_secs(30));
+    service.wait_ready(READINESS_BOUND);
+    Some((fixture, proxy, service, session))
+}
+
+/// The keep-warm task's readiness log lines so far, for the test output.
+fn readiness_log(service: &Service) -> String {
+    service
+        .stdout
+        .lines()
+        .iter()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| value["message"] == READY_LOG || value["message"] == NOT_READY_LOG)
+        .map(|value| {
+            format!(
+                "  {} {} {}",
+                value["timestamp"], value["message"], value["fields"]["error"]
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Sends `count` checks for `session`, 50 ms apart: every one must be allowed with a token the
+/// routed service accepts, and none may make the service open a database connection.
+fn assert_checks_use_open_connections(
+    fixture: &Fixture,
+    proxy: &SlowProxy,
+    service: &Service,
+    session: &str,
+    count: usize,
+    when: &str,
+) {
     let opened = proxy.accepted();
-    assert!(opened >= 3, "ready with {opened} connections");
-
-    // Every check after ready is answered from open connections: none fails, none opens one.
-    for round in 0..20 {
-        let response = check(&service, "/", Some(&session));
-        assert_eq!(response.status, 200, "check {round}: {}", response.raw());
-        verified(&fixture, &response, ServiceName::Assets);
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert_eq!(proxy.accepted(), opened, "a check opened a connection");
-
-    // A failover: every connection is dropped, and each new one takes 1 s again.
-    proxy.cut();
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
-    let mut statuses = Vec::new();
-    loop {
-        let response = check(&service, "/", Some(&session));
-        statuses.push(response.status);
-        if response.status == 200 {
-            verified(&fixture, &response, ServiceName::Assets);
-            break;
-        }
-        assert_eq!(response.status, 503, "after the cut: {}", response.raw());
-        assert!(response.header_values("x-internal-identity").is_empty());
-        assert!(
-            std::time::Instant::now() < deadline,
-            "no recovery after the cut: {statuses:?}"
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    for round in 0..10 {
-        let response = check(&service, "/", Some(&session));
+    for round in 0..count {
+        let response = check(service, "/", Some(session));
         assert_eq!(
             response.status,
             200,
-            "check {round} after recovery ({statuses:?}): {}",
+            "check {round} {when}: {}",
             response.raw()
         );
+        verified(fixture, &response, ServiceName::Assets);
         std::thread::sleep(Duration::from_millis(50));
     }
-    let ready = request(service.health_address, "GET", "/readyz", &[]).expect("readyz");
-    assert_eq!(ready.status, 200, "{}", ready.raw());
+    assert_eq!(
+        proxy.accepted(),
+        opened,
+        "a check {when} opened a database connection"
+    );
+}
+
+/// Finding F1 of docs/test-reports/2026-10-11-61-verify.md and Laysi/trustiot-v2#341: opening a
+/// database connection may take longer than a check may, as on a loaded node or a slow network;
+/// here a proxy holds every new connection for 1 s. The service becomes ready only with its
+/// connections open, and checks after that never wait for a new one. When the database drops
+/// every connection (a failover), checks fail closed, the keep-warm task finds the dropped
+/// connections on its own and readiness fails; once readiness passes again, every check is
+/// answered from open connections.
+#[tokio::test]
+async fn a_slow_database_connect_never_fails_a_check_after_ready() {
+    let Some((fixture, proxy, service, session)) = slow_connect_service(
+        "CREATE DATABASE identity_slow_connect OWNER identity_owner",
+        "identity_slow_connect",
+    )
+    .await
+    else {
+        return;
+    };
+    let opened = proxy.accepted();
+    assert!(opened >= 3, "ready with {opened} connections");
+    assert_checks_use_open_connections(&fixture, &proxy, &service, &session, 20, "after ready");
+
+    // A failover: every connection is dropped, and no new one opens while the proxy is paused,
+    // so whatever the service does meanwhile, it has no open connection.
+    proxy.pause();
+    proxy.cut();
+    let response = check(&service, "/", Some(&session));
+    assert_eq!(response.status, 503, "after the cut: {}", response.raw());
+    assert!(response.header_values("x-internal-identity").is_empty());
+    assert_eq!(
+        response.json(),
+        json!({"code": "unavailable", "message_key": "error.unavailable"})
+    );
+    // The keep-warm task notices without any further check, and readiness fails.
+    service.wait_readiness(503, READINESS_BOUND);
+
+    // Connections open again (each after 1 s): the service recovers on its own, and from the
+    // moment readiness passes, every check is answered from open connections.
+    proxy.resume();
+    let resumed = Instant::now();
+    service.wait_ready(READINESS_BOUND);
+    let recovered_after = resumed.elapsed();
+    assert_checks_use_open_connections(
+        &fixture,
+        &proxy,
+        &service,
+        &session,
+        20,
+        "after readiness returned",
+    );
     println!(
-        "slow connect: {opened} connections at ready, statuses after the cut {statuses:?}, {} connections in all",
-        proxy.accepted()
+        "slow connect: {opened} connections at ready, ready again {recovered_after:?} after the proxy resumed, {} connections in all\n{}",
+        proxy.accepted(),
+        readiness_log(&service)
+    );
+}
+
+/// Laysi/trustiot-v2#341: every keep-warm round confirms all the warm connections, not just one.
+/// After the database drops every connection and no check runs, the keep-warm task alone finds
+/// them (readiness fails, logged), replaces all of them (the proxy sees at least
+/// `WARM_CONNECTIONS` new connections), and passes readiness again; checks then never meet a
+/// dropped connection, so none opens one. A round that pinged one connection would replace only
+/// that one and stay ready, and this test would wait for a readiness failure that never comes.
+#[tokio::test]
+async fn a_keep_warm_round_replaces_every_dropped_connection() {
+    let Some((fixture, proxy, service, session)) = slow_connect_service(
+        "CREATE DATABASE identity_rewarm OWNER identity_owner",
+        "identity_rewarm",
+    )
+    .await
+    else {
+        return;
+    };
+    let not_ready = service.stdout.count_messages(NOT_READY_LOG);
+    let ready = service.stdout.count_messages(READY_LOG);
+    assert!(ready >= 1, "ready without its log line");
+    let opened = proxy.accepted();
+
+    proxy.cut();
+    assert!(
+        service
+            .stdout
+            .wait_for_messages(NOT_READY_LOG, not_ready + 1, READINESS_BOUND),
+        "the keep-warm task did not notice the dropped connections:\n{}",
+        service.stdout.text()
+    );
+    assert!(
+        service
+            .stdout
+            .wait_for_messages(READY_LOG, ready + 1, READINESS_BOUND),
+        "the keep-warm task did not open the connections again:\n{}",
+        service.stdout.text()
+    );
+    // service-kit reuses a readiness result for up to 1 s.
+    service.wait_ready(READINESS_BOUND);
+    let reopened = proxy.accepted() - opened;
+    assert!(
+        reopened >= WARM_CONNECTIONS,
+        "the keep-warm task replaced {reopened} of the {WARM_CONNECTIONS} dropped connections"
+    );
+    assert_checks_use_open_connections(&fixture, &proxy, &service, &session, 10, "after the round");
+    println!(
+        "keep-warm round: {opened} connections at ready, {reopened} opened after the cut\n{}",
+        readiness_log(&service)
     );
 }
 
