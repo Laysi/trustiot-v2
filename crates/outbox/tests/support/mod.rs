@@ -143,12 +143,21 @@ pub struct Database {
 /// outside CI. `TEST_DATABASE_URL` is not used: the tests create roles as the superuser and
 /// need a server whose CA they know.
 pub async fn database() -> Option<Database> {
-    let postgres = TlsPostgres::start(INIT).await?;
+    Some(with_url(TlsPostgres::start(INIT).await?))
+}
+
+/// Like [`database`], for a test that restarts the container (`Database::postgres.restart()`):
+/// the host port is chosen by the test, so it is the same after the restart on podman and Docker.
+pub async fn restartable_database() -> Option<Database> {
+    Some(with_url(TlsPostgres::start_restartable(INIT).await?))
+}
+
+fn with_url(postgres: TlsPostgres) -> Database {
     let url = format!(
         "postgres://postgres:{TEST_PASSWORD}@127.0.0.1:{}/postgres",
         postgres.address.port()
     );
-    Some(Database { postgres, url })
+    Database { postgres, url }
 }
 
 impl Database {
