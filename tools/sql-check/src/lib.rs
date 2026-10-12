@@ -148,6 +148,13 @@ pub const EXCEPTIONS: &[Exception] = &[
                  that must fail or as reported findings",
     },
     Exception {
+        path: "crates/outbox/tests/failure_paths.rs",
+        rules: &[Rule::SessionSetting],
+        reason: "a test handler's begin hook moves the delivery's transaction to another tenant \
+                 with set_config, as a broken handler would, to test that the consumer \
+                 dead-letters the event (Laysi/trustiot-v2#350)",
+    },
+    Exception {
         path: "services/ingest/tests/clickhouse.rs",
         rules: &[
             Rule::DynamicSql,
