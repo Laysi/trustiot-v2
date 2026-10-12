@@ -1,16 +1,20 @@
-filter='^test |TIMING|test result|panicked|left:|right:|Execution Time|PLAN.*CTE |PLAN.*"\*SELECT\* (5|11)"'
-echo "== all tenant_db tests with timing and plan (rule on)"
-cargo test --locked -p service-kit --test tenant_db -- --nocapture 2>&1 | grep -E "$filter" -A1 | grep -v '^--$' | cut -c1-200
+#!/usr/bin/env bash
+# Temporary (not committed): mutation runs for Laysi/trustiot-v2#366. Each mutation breaks one
+# part of SESSION_CHECK in the check queue's copy; the platform tests must fail.
+filter='^test |test result|panicked|left:|right:'
 src=crates/service-kit/src/postgres.rs
 mutate() {
   echo "== mutation: $1"
   git checkout -q -- "$src"
   sed -i "$2" "$src"
   git diff --stat -- "$src" | tail -1
-  cargo test --locked -p service-kit --test tenant_db -- platform --nocapture 2>&1 | grep -E '^test |test result|left:|right:'
+  cargo test --locked -p service-kit --test tenant_db -- platform --nocapture 2>&1 | grep -E "$filter"
 }
 mutate "rule off (HAVING false)" "s/HAVING bool_and(expressions > 0) AND bool_or(wider = 0)/HAVING false/"
-mutate "session role only, no member roles" "s/WHERE \$1 AND pg_has_role(current_user, oid, 'MEMBER')/WHERE \$1 AND rolname = current_user/"
+mutate "F1 reverted: only the literal tenant condition counts as not opening" "s/ AND e.expr <> 'false'//; s/AND strpos(e.expr, '''trustiot.tenant_id''') = 0) AS wider/) AS wider/"
+mutate "F2 reverted: policy applicability by MEMBER" "s/pg_has_role(t.role_oid, role, 'USAGE')/pg_has_role(t.role_oid, role, 'MEMBER')/"
+mutate "F3 reverted: roles by MEMBER" "s/pg_has_role(current_user, oid, 'SET')/pg_has_role(current_user, oid, 'MEMBER')/"
+mutate "session role only" "s/WHERE \$1 AND pg_has_role(current_user, oid, 'SET')/WHERE \$1 AND rolname = current_user/"
 mutate "UPDATE judged on USING only" "s/('UPDATE', 'w', false), //"
 mutate "column privileges ignored" "s/       OR coalesce(has_any_column_privilege(role_oid, rel, NULLIF(command, 'DELETE')), false)//"
 mutate "restrictive policies counted as permissive" "s/    WHERE \$1 AND polpermissive/    WHERE \$1/"

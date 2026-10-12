@@ -1,0 +1,152 @@
+rcheck: queued on <build-host>; running now: 60-3cc06ebe since 03:34:16
+   Compiling opentelemetry_sdk v0.33.1
+   Compiling toml_datetime v1.1.2+spec-1.1.0
+   Compiling serde_spanned v1.1.2
+   Compiling serde_urlencoded v0.7.1
+   Compiling chrono v0.4.45
+   Compiling time-core v0.1.9
+   Compiling idna_adapter v1.2.2
+   Compiling num-conv v0.2.2
+   Compiling idna v1.1.0
+   Compiling toml_writer v1.1.3+spec-1.1.0
+   Compiling deranged v0.5.8
+   Compiling powerfmt v0.2.1
+   Compiling matchit v0.8.4
+   Compiling toml v1.1.8+spec-1.1.0
+   Compiling ed25519-dalek v3.0.0
+   Compiling url v2.5.8
+   Compiling tower-http v0.7.1
+   Compiling tracing-opentelemetry v0.34.0
+   Compiling humantime v2.4.0
+   Compiling time v0.3.55
+   Compiling pem v4.0.0
+   Compiling hyper v1.12.0
+   Compiling tower v0.5.3
+   Compiling tokio-stream v0.1.19
+   Compiling tokio-util v0.7.20
+   Compiling tower-http v0.6.11
+   Compiling sqlx-core v0.9.0
+   Compiling yasna v0.6.0
+   Compiling hyper-util v0.1.21
+   Compiling rcgen v0.14.10
+   Compiling utoipa v6.0.0
+   Compiling opentelemetry-proto v0.33.1
+   Compiling reqwest v0.13.5
+   Compiling axum v0.8.9
+   Compiling sqlx-postgres v0.9.0
+   Compiling opentelemetry-http v0.33.1
+   Compiling contract v0.1.0 (<job-dir>/src/crates/contract)
+   Compiling opentelemetry-otlp v0.33.1
+   Compiling sqlx v0.9.0
+   Compiling service-kit v0.1.0 (<job-dir>/src/crates/service-kit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.38s
+     Running tests/tenant_db.rs (<job-dir>/target/debug/deps/tenant_db-af17b76684db765f)
+
+running 13 tests
+test a_service_without_a_postgres_ca_refuses_to_start ... ok
+test a_service_without_server_verification_refuses_to_start ... ok
+test connections_verify_the_server_certificate_and_host_name ... ok
+test the_service_role_cannot_bypass_row_level_security ... ok
+test without_a_tenant_no_rows_are_visible_or_writable ... ok
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+test a_tenant_reads_and_writes_only_its_own_rows ... ok
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+test the_tenant_setting_does_not_leak_across_pooled_connections ... ok
+test outbox_events_follow_the_tenant_policies ... ok
+test the_example_service_serves_each_user_only_their_tenant ... ok
+test sessions_row_level_security_would_not_protect_are_refused ... ok
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.93s
+
+running 10 tests
+test aggregate::tests::ids_are_bounded_and_printable ... ok
+test aggregate::tests::kinds_are_lower_snake_case ... ok
+test consumer::tests::decode_errors_retry_only_newer_versions ... ok
+test consumer::tests::subscription_names_are_checked ... ok
+test lag::tests::a_measurement_is_reported_until_its_loop_ends ... ok
+test position::tests::positions_order_by_transaction_then_row ... ok
+test position::tests::positions_round_trip_as_text ... ok
+test schema::tests::schema_names_need_no_quoting ... ok
+test redact::tests::messages_are_replaced_by_kinds ... ok
+test lag::tests::a_measurement_that_is_not_replaced_in_time_is_not_reported ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+running 2 tests
+test an_event_committed_before_the_producer_is_killed_is_delivered_after_restart ... ok
+test a_consumer_killed_mid_delivery_processes_the_event_once_after_restart ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.35s
+running 13 tests
+test an_event_committed_late_is_delivered_not_skipped ... ok
+test a_slow_handler_that_has_not_written_does_not_hold_back_other_consumers ... ok
+test failures_are_retried_in_place_or_dead_lettered ... ok
+test an_aggregate_keeps_its_order_when_transaction_ids_are_inverted ... ok
+test a_new_subscription_can_start_after_the_history ... ok
+test shutdown_finishes_the_event_in_flight_and_leaves_the_rest_of_the_batch ... ok
+test lag_counts_committed_events_not_yet_processed ... ok
+test begin_runs_in_the_delivery_transaction ... ok
+test a_subscription_cannot_switch_producers ... ok
+test a_duplicate_delivery_is_processed_once ... ok
+test services_need_only_the_documented_grants ... ok
+test replaying_from_a_position_rebuilds_the_same_state ... ok
+test concurrent_writers_and_two_replicas_process_each_event_once_in_order ... ok
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.59s
+running 3 tests
+test the_probe_sees_an_open_transaction_and_its_advisory_lock ... ok
+test a_begin_hook_that_breaks_the_transaction_is_caught_on_every_path ... ok
+test a_failed_delivery_is_rolled_back_before_the_consumer_goes_on ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.55s
+running 7 tests
+test an_event_that_keeps_panicking_is_dead_lettered_and_the_rest_processed ... ok
+test run_survives_panics_and_keeps_the_lag_current ... ok
+test the_lag_rises_while_processing_is_stuck_and_stops_when_run_is_dropped ... ok
+test a_stuck_lag_measurement_is_not_reported ... ok
+test a_panic_mid_query_leaves_the_session_clean ... ok
+test a_panic_is_retried_and_the_event_then_processed_once ... ok
+test a_hook_that_ends_the_transaction_and_then_panics_is_dead_lettered ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.34s
+running 1 test
+test the_lag_is_exported_over_otlp ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.70s
+running 2 tests
+test late_and_replayed_events_converge_on_the_current_state ... ok
+test a_stale_reading_never_overwrites_a_newer_one ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.14s
+running 3 tests
+test events_are_numbered_per_aggregate ... ok
+test an_envelope_is_written_once ... ok
+test a_rolled_back_transaction_leaves_no_event ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.74s
+running 5 tests
+test an_event_whose_envelope_names_another_tenant_is_dead_lettered ... ok
+test the_platform_role_reads_every_tenant_and_each_event_runs_in_its_tenant ... ok
+test a_handler_cannot_write_another_tenant ... ok
+test a_service_role_that_can_read_across_tenants_is_refused ... ok
+test a_reader_without_the_read_policy_stops_the_consumer ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.85s
+running 13 tests
+test f4_a_platform_reader_transaction_stays_read_only ... ok
+test the_platform_role_reads_the_log_and_nothing_else ... ok
+test f1_a_platform_wide_event_never_runs_in_a_leaked_tenant ... ok
+test f3_a_handler_commit_does_not_split_the_delivery ... ok
+test f5_a_handler_panic_does_not_stop_the_consumer ... ok
+test odd_tenant_ids_are_dead_lettered_or_run_in_exactly_the_row_tenant ... ok
+test f2_a_handler_that_switches_the_tenant_is_not_committed ... ok
+test misconfigured_pools_fail_without_processing_anything ... ok
+test a_database_restart_mid_run_loses_and_duplicates_nothing ... ok
+test a_failed_delivery_leaves_nothing_and_the_event_is_processed_once ... ok
+test three_replicas_and_concurrent_writers_process_each_event_once_in_its_tenant ... ok
+test a_handler_cannot_leave_its_tenant_by_role_or_rls_tricks ... ok
+test unsafe_roles_are_refused_for_either_pool ... ok
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.15s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 23 tests
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+running 2 tests
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.44s
+running 4 tests
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.21s
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+rcheck: removed 0 dangling test volumes
+rcheck: exit 0 at 03:36:52 (<build-host>)

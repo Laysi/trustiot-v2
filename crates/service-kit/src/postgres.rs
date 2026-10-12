@@ -482,7 +482,7 @@ reachable AS (
       AND (has_table_privilege(oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE')
            OR has_any_column_privilege(oid, 'SELECT, INSERT, UPDATE'))
 ),
--- Platform sessions only: every role the session can become with SET ROLE, itself included.
+-- Platform sessions only: every role the session can switch to, itself included.
 -- The rights of roles it only inherits are already the session role's own; a role it can
 -- neither inherit nor become gives it nothing.
 platform_roles AS (
