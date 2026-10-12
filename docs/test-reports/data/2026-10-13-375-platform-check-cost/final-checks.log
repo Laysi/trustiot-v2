@@ -1,0 +1,100 @@
+rcheck: queued on the build host at 05:42:05 as 375-811019fa; running now: nothing
+1.08 1.30 1.07 1/653 1138448
+== fmt
+== EXIT fmt 0
+    Checking service-kit v0.1.0 (<build copy 375-811019fa>/src/crates/service-kit)
+    Checking outbox v0.1.0 (<build copy 375-811019fa>/src/crates/outbox)
+    Checking testkit v0.1.0 (<build copy 375-811019fa>/src/crates/testkit)
+    Checking identity v0.1.0 (<build copy 375-811019fa>/src/services/identity)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.86s
+== EXIT clippy 0
+    Checking opentelemetry-otlp v0.33.1
+    Checking service-kit v0.1.0 (<build copy 375-811019fa>/src/crates/service-kit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.00s
+== EXIT clippy-no-default 0
+     Running unittests src/lib.rs (<build copy 375-811019fa>/target/debug/deps/service_kit-2cd6c7b08e1e090f)
+test result: ok. 89 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+     Running tests/chart_contract.rs (<build copy 375-811019fa>/target/debug/deps/chart_contract-371ac2be665eaa01)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/container.rs (<build copy 375-811019fa>/target/debug/deps/container-1b4d7da018f66c45)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.80s
+     Running tests/dependency_isolation.rs (<build copy 375-811019fa>/target/debug/deps/dependency_isolation-2fcd9a42117dc172)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+     Running tests/errors.rs (<build copy 375-811019fa>/target/debug/deps/errors-f33bc8f23cc59ec6)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+     Running tests/identity.rs (<build copy 375-811019fa>/target/debug/deps/identity-e8dedde6b7c4be03)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+     Running tests/identity_adversarial.rs (<build copy 375-811019fa>/target/debug/deps/identity_adversarial-b53c355cd18b2dea)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.85s
+     Running tests/job_lock.rs (<build copy 375-811019fa>/target/debug/deps/job_lock-c8e13efd8b621b55)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.98s
+     Running tests/lifecycle.rs (<build copy 375-811019fa>/target/debug/deps/lifecycle-5d18c9ba9e07e7bb)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.05s
+     Running tests/logging.rs (<build copy 375-811019fa>/target/debug/deps/logging-235c75039a213630)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+     Running tests/otlp.rs (<build copy 375-811019fa>/target/debug/deps/otlp-ac2f660082dcb5a6)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.32s
+     Running tests/postgres_start.rs (<build copy 375-811019fa>/target/debug/deps/postgres_start-f678f030a293d178)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.84s
+     Running tests/postgres_trust.rs (<build copy 375-811019fa>/target/debug/deps/postgres_trust-244f7b41e2bd876f)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.94s
+     Running tests/tenant_db.rs (<build copy 375-811019fa>/target/debug/deps/tenant_db-af17b76684db765f)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.89s
+     Running tests/verify_config.rs (<build copy 375-811019fa>/target/debug/deps/verify_config-c1fa54cd4123d402)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/verify_container.rs (<build copy 375-811019fa>/target/debug/deps/verify_container-a599de38271d7b34)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.42s
+     Running tests/verify_job_lock.rs (<build copy 375-811019fa>/target/debug/deps/verify_job_lock-2e397ffde5a8ccfa)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.45s
+     Running tests/verify_leaks.rs (<build copy 375-811019fa>/target/debug/deps/verify_leaks-37512446c9880d7a)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+     Running tests/verify_shutdown.rs (<build copy 375-811019fa>/target/debug/deps/verify_shutdown-c911f71b7e5a0b62)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.94s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+== EXIT service-kit 0
+     Running unittests src/lib.rs (<build copy 375-811019fa>/target/debug/deps/outbox-6346494410fd1d80)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/crash.rs (<build copy 375-811019fa>/target/debug/deps/crash-fa1e1e02a1139b4a)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.71s
+     Running tests/delivery.rs (<build copy 375-811019fa>/target/debug/deps/delivery-0e66844f7ad45bc1)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.66s
+     Running tests/failure_paths.rs (<build copy 375-811019fa>/target/debug/deps/failure_paths-f097c40cf50e8483)
+test a_failed_delivery_is_rolled_back_before_the_consumer_goes_on ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.41s
+     Running tests/handler_panic.rs (<build copy 375-811019fa>/target/debug/deps/handler_panic-fee7fc60425104b2)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.79s
+     Running tests/metrics.rs (<build copy 375-811019fa>/target/debug/deps/metrics-166047f1506d65a4)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.83s
+     Running tests/notify.rs (<build copy 375-811019fa>/target/debug/deps/notify-cd727e34219ed2c4)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.26s
+     Running tests/postgres_start.rs (<build copy 375-811019fa>/target/debug/deps/postgres_start-3afc89a9d8ab9489)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.79s
+     Running tests/producer.rs (<build copy 375-811019fa>/target/debug/deps/producer-f301156740a83c38)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.92s
+     Running tests/tenancy.rs (<build copy 375-811019fa>/target/debug/deps/tenancy-38d1059c26fa9994)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.28s
+     Running tests/verify_271.rs (<build copy 375-811019fa>/target/debug/deps/verify_271-7d562b96a0b9526b)
+test a_failed_delivery_leaves_nothing_and_the_event_is_processed_once ... ok
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.26s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== EXIT outbox 0
+     Running unittests src/lib.rs (<build copy 375-811019fa>/target/debug/deps/testkit-372c6c63ae182ac8)
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/container_volumes.rs (<build copy 375-811019fa>/target/debug/deps/container_volumes-836320644bc6a699)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.07s
+     Running tests/postgres_isolation.rs (<build copy 375-811019fa>/target/debug/deps/postgres_isolation-9ac0a39135d51855)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.52s
+     Running tests/postgres_start.rs (<build copy 375-811019fa>/target/debug/deps/postgres_start-9dcb81e577189cdd)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.82s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== EXIT testkit 0
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== EXIT repo-check 0
+api/openapi.json is up to date
+== EXIT openapi 0
+4.07 2.60 1.64 1/668 1151554
+rcheck: removed 0 dangling test volumes
+rcheck: exit 0 at 05:45:49 (build host, 375-811019fa)

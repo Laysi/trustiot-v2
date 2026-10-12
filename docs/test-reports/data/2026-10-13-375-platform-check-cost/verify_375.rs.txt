@@ -1,0 +1,1398 @@
+//! Throwaway probes for Laysi/trustiot-v2#375 (kept as evidence, not as a test): the session
+//! check of main e2e476b against the rewritten one. The #366 verification cases below are copied
+//! unchanged from verify_366-followup.rs.txt.
+#![cfg(feature = "contract")]
+#![allow(clippy::print_stdout, reason = "probe output is the evidence")]
+#![allow(
+    dead_code,
+    reason = "the copied #366 cases carry probe statements this file does not run"
+)]
+#![allow(clippy::string_slice, reason = "ASCII source text")]
+
+mod support;
+
+use std::time::{Duration, Instant};
+
+use service_kit::postgres::{self, SessionRole};
+use sqlx::{AssertSqlSafe, Connection, PgConnection};
+use support::postgres::{TlsPostgres, tls_postgres};
+
+const A: &str = "01928f6e-7a3c-7d4e-8f00-00000000000a";
+const B: &str = "01928f6e-7a3c-7d4e-8f00-00000000000b";
+const INIT: &str = "CREATE ROLE v_owner LOGIN PASSWORD 'service-kit-test';";
+const T: &str = "tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid";
+
+const SEL: &str = "SELECT 1 FROM items";
+const INS: &str = "INSERT INTO items VALUES ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'planted')";
+const UPD: &str = "UPDATE items SET name = gen_random_uuid()::text";
+const DEL: &str = "DELETE FROM items";
+
+const BASE: &str = "
+CREATE TABLE items (tenant_id uuid NOT NULL, name text NOT NULL, PRIMARY KEY (tenant_id, name));
+ALTER TABLE items ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON items USING ({T}) WITH CHECK ({T});
+INSERT INTO items VALUES ('{A}', 'a-1'), ('{A}', 'a-2'), ('{B}', 'b-1');
+";
+
+const OTHER_SCHEMA: &str = "
+SET ROLE v_owner;
+CREATE SCHEMA other;
+CREATE TABLE other.items (tenant_id uuid NOT NULL, name text NOT NULL);
+ALTER TABLE other.items ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON other.items USING ({T}) WITH CHECK ({T});
+INSERT INTO other.items SELECT * FROM public.items;
+RESET ROLE;
+";
+
+const PARTS: &str = "
+SET ROLE v_owner;
+CREATE TABLE parts (tenant_id uuid NOT NULL, name text NOT NULL) PARTITION BY LIST (tenant_id);
+CREATE TABLE parts_a PARTITION OF parts FOR VALUES IN ('{A}');
+CREATE TABLE parts_b PARTITION OF parts FOR VALUES IN ('{B}');
+ALTER TABLE parts ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON parts USING ({T}) WITH CHECK ({T});
+CREATE POLICY platform_access ON parts TO {p} USING (true) WITH CHECK (true);
+INSERT INTO parts SELECT * FROM items;
+RESET ROLE;
+GRANT SELECT ON parts TO {p};
+";
+
+const FUNCS: &str = "
+SET ROLE v_owner;
+CREATE FUNCTION current_tenant() RETURNS uuid LANGUAGE sql STABLE
+    AS $f$ SELECT NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid $f$;
+CREATE FUNCTION is_current_tenant(uuid) RETURNS boolean LANGUAGE sql STABLE
+    AS $f$ SELECT $1 = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid $f$;
+CREATE OPERATOR ~~~ (RIGHTARG = uuid, FUNCTION = is_current_tenant);
+CREATE FUNCTION always_true() RETURNS boolean LANGUAGE sql IMMUTABLE AS $f$ SELECT true $f$;
+CREATE VIEW current_tenant_view WITH (security_invoker = true) AS
+    SELECT NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid AS tenant;
+RESET ROLE;
+GRANT SELECT ON current_tenant_view TO {p}, {g};
+";
+
+type Probe = (Option<&'static str>, &'static str);
+
+struct Case {
+    id: &'static str,
+    name: &'static str,
+    setup: &'static [&'static str],
+    probes: &'static [Probe],
+}
+
+fn cases() -> Vec<Case> {
+    vec![
+        // 1. Membership kind.
+        Case {
+            id: "1.1",
+            name: "own SELECT; USING (true) policy on group g joined WITH INHERIT FALSE, SET TRUE",
+            setup: &["GRANT SELECT ON items TO {p};
+                      GRANT {g} TO {p} WITH INHERIT FALSE, SET TRUE;
+                      CREATE POLICY grp_access ON items TO {g} USING (true) WITH CHECK (true);"],
+            probes: &[(None, SEL), (Some("{g}"), SEL)],
+        },
+        Case {
+            id: "1.2",
+            name: "own SELECT; USING (true) policy on group g joined WITH INHERIT FALSE, SET FALSE",
+            setup: &["GRANT SELECT ON items TO {p};
+                      GRANT {g} TO {p} WITH INHERIT FALSE, SET FALSE;
+                      CREATE POLICY grp_access ON items TO {g} USING (true) WITH CHECK (true);"],
+            probes: &[(None, SEL), (Some("{g}"), SEL)],
+        },
+        Case {
+            id: "1.3",
+            name: "control: own SELECT; USING (true) policy on group g joined WITH INHERIT TRUE",
+            setup: &["GRANT SELECT ON items TO {p};
+                      GRANT {g} TO {p} WITH INHERIT TRUE, SET FALSE;
+                      CREATE POLICY grp_access ON items TO {g} USING (true) WITH CHECK (true);"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "1.4",
+            name: "own INSERT, UPDATE, DELETE; FOR ALL USING/CHECK (true) on group g, INHERIT FALSE, SET FALSE",
+            setup: &["GRANT INSERT, UPDATE, DELETE ON items TO {p};
+                      GRANT {g} TO {p} WITH INHERIT FALSE, SET FALSE;
+                      CREATE POLICY grp_access ON items TO {g} USING (true) WITH CHECK (true);"],
+            probes: &[(None, INS), (None, UPD), (None, DEL)],
+        },
+        Case {
+            id: "1.5",
+            name: "own SELECT; p inherits g, g joined h WITH INHERIT FALSE; USING (true) policy on h",
+            setup: &["GRANT SELECT ON items TO {p};
+                      GRANT {g} TO {p};
+                      GRANT {h} TO {g} WITH INHERIT FALSE;
+                      CREATE POLICY grp_access ON items TO {h} USING (true);"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "1.6",
+            name: "SET ROLE target g (INHERIT FALSE, SET TRUE) has SELECT; USING (true) policy on h, g joined h WITH INHERIT FALSE",
+            setup: &["GRANT SELECT ON items TO {g};
+                      GRANT {g} TO {p} WITH INHERIT FALSE, SET TRUE;
+                      GRANT {h} TO {g} WITH INHERIT FALSE;
+                      CREATE POLICY grp_access ON items TO {h} USING (true);"],
+            probes: &[(None, SEL), (Some("{g}"), SEL)],
+        },
+        Case {
+            id: "1.7",
+            name: "SELECT only on group g joined WITH INHERIT FALSE, SET FALSE (unusable)",
+            setup: &["GRANT SELECT ON items TO {g};
+                      GRANT {g} TO {p} WITH INHERIT FALSE, SET FALSE;"],
+            probes: &[(None, SEL), (Some("{g}"), SEL)],
+        },
+        Case {
+            id: "1.8",
+            name: "SELECT on group g joined WITH INHERIT TRUE, SET FALSE; platform_access USING (true) names p",
+            setup: &["GRANT SELECT ON items TO {g};
+                      GRANT {g} TO {p} WITH INHERIT TRUE, SET FALSE;
+                      CREATE POLICY platform_access ON items TO {p} USING (true) WITH CHECK (true);"],
+            probes: &[(None, SEL), (Some("{g}"), SEL)],
+        },
+        Case {
+            id: "1.9",
+            name: "control for 1.8 with SET TRUE",
+            setup: &["GRANT SELECT ON items TO {g};
+                      GRANT {g} TO {p} WITH INHERIT TRUE, SET TRUE;
+                      CREATE POLICY platform_access ON items TO {p} USING (true) WITH CHECK (true);"],
+            probes: &[(None, SEL), (Some("{g}"), SEL)],
+        },
+        Case {
+            id: "1.10",
+            name: "platform role created NOINHERIT; own SELECT; USING (true) policy on its group g (plain GRANT)",
+            setup: &["ALTER ROLE {p} NOINHERIT;
+                      GRANT SELECT ON items TO {p};
+                      GRANT {g} TO {p};
+                      CREATE POLICY grp_access ON items TO {g} USING (true) WITH CHECK (true);"],
+            probes: &[(None, SEL)],
+        },
+        // 2. Recognising the tenant condition (policy by name for p, next to tenant_isolation).
+        Case {
+            id: "2.1",
+            name: "p policy USING (current_setting('trustiot.tenant_id', true)::uuid = tenant_id)",
+            setup: &["GRANT SELECT ON items TO {p};
+                      CREATE POLICY pv ON items FOR SELECT TO {p}
+                          USING (current_setting('trustiot.tenant_id', true)::uuid = tenant_id);"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "2.2",
+            name: "p policy USING (tenant_id::text = current_setting('trustiot.tenant_id'))",
+            setup: &["GRANT SELECT ON items TO {p};
+                      CREATE POLICY pv ON items FOR SELECT TO {p}
+                          USING (tenant_id::text = current_setting('trustiot.tenant_id'));"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "2.3",
+            name: "p policy USING (<tenant condition> AND true)",
+            setup: &["GRANT SELECT ON items TO {p};
+                      CREATE POLICY pv ON items FOR SELECT TO {p} USING ({T} AND true);"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "2.4",
+            name: "p policy USING (tenant_id IS NOT DISTINCT FROM NULLIF(...)::uuid)",
+            setup: &["GRANT SELECT ON items TO {p};
+                      CREATE POLICY pv ON items FOR SELECT TO {p} USING (tenant_id IS NOT DISTINCT FROM NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid);"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "2.5",
+            name: "p policy USING (false)",
+            setup: &["GRANT SELECT ON items TO {p};
+                      CREATE POLICY pv ON items FOR SELECT TO {p} USING (false);"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "2.6",
+            name: "p policy USING (tenant_id = '<tenant B>')",
+            setup: &["GRANT SELECT ON items TO {p};
+                      CREATE POLICY pv ON items FOR SELECT TO {p} USING (tenant_id = '{B}'::uuid);"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "2.7",
+            name: "p policy USING (tenant_id IS NULL)",
+            setup: &["GRANT SELECT ON items TO {p};
+                      CREATE POLICY pv ON items FOR SELECT TO {p} USING (tenant_id IS NULL);"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "2.8",
+            name: "p policy, tenant condition spelled with CAST(... AS uuid) and extra parentheses",
+            setup: &["GRANT SELECT ON items TO {p};
+                      CREATE POLICY pv ON items FOR SELECT TO {p}
+                          USING (((tenant_id = CAST(NULLIF(current_setting('trustiot.tenant_id', true), '') AS uuid))));"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "2.9",
+            name: "p policy USING (<tenant condition> OR false)",
+            setup: &["GRANT SELECT ON items TO {p};
+                      CREATE POLICY pv ON items FOR SELECT TO {p} USING ({T} OR false);"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "2.10",
+            name: "tenant_isolation (PUBLIC) itself spelled as 2.1, no platform policy",
+            setup: &["DROP POLICY tenant_isolation ON items;
+                      CREATE POLICY tenant_isolation ON items
+                          USING (current_setting('trustiot.tenant_id', true)::uuid = tenant_id)
+                          WITH CHECK (current_setting('trustiot.tenant_id', true)::uuid = tenant_id);
+                      GRANT SELECT ON items TO {p};"],
+            probes: &[(None, SEL)],
+        },
+        // 3. Privilege paths and commands.
+        Case {
+            id: "3.1",
+            name: "member of pg_read_all_data, no platform policy",
+            setup: &["GRANT pg_read_all_data TO {p};"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "3.2",
+            name: "member of pg_write_all_data, no platform policy",
+            setup: &["GRANT pg_write_all_data TO {p};"],
+            probes: &[(None, INS), (None, UPD), (None, DEL)],
+        },
+        Case {
+            id: "3.3",
+            name: "INSERT granted to PUBLIC",
+            setup: &["GRANT INSERT ON items TO PUBLIC;"],
+            probes: &[(None, INS)],
+        },
+        Case {
+            id: "3.4",
+            name: "column privilege UPDATE (name) only",
+            setup: &["GRANT UPDATE (name) ON items TO {p};"],
+            probes: &[(None, UPD)],
+        },
+        Case {
+            id: "3.5",
+            name: "column privilege INSERT (tenant_id, name) only",
+            setup: &["GRANT INSERT (tenant_id, name) ON items TO {p};"],
+            probes: &[(None, INS)],
+        },
+        Case {
+            id: "3.6",
+            name: "SELECT inherited through two levels of groups (h -> g -> p)",
+            setup: &["GRANT {h} TO {g}; GRANT {g} TO {p}; GRANT SELECT ON items TO {h};"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "3.7",
+            name: "schema other: no USAGE for p; USAGE and SELECT for g reachable only with SET ROLE",
+            setup: &[OTHER_SCHEMA,
+                     "GRANT USAGE ON SCHEMA other TO {g};
+                      GRANT SELECT ON other.items TO {g};
+                      GRANT {g} TO {p} WITH INHERIT FALSE, SET TRUE;"],
+            probes: &[(None, "SELECT 1 FROM other.items"), (Some("{g}"), "SELECT 1 FROM other.items")],
+        },
+        Case {
+            id: "3.8",
+            name: "schema other: SELECT for p, USAGE only for g reachable with SET ROLE (unusable split)",
+            setup: &[OTHER_SCHEMA,
+                     "GRANT SELECT ON other.items TO {p};
+                      GRANT USAGE ON SCHEMA other TO {g};
+                      GRANT {g} TO {p} WITH INHERIT FALSE, SET TRUE;"],
+            probes: &[(None, "SELECT 1 FROM other.items"), (Some("{g}"), "SELECT 1 FROM other.items")],
+        },
+        Case {
+            id: "3.9",
+            name: "partitioned parent with platform_access, SELECT on parent only",
+            setup: &[PARTS],
+            probes: &[(None, "SELECT 1 FROM parts"), (None, "SELECT 1 FROM parts_a")],
+        },
+        Case {
+            id: "3.10",
+            name: "partitioned: partition parts_a has RLS + tenant_isolation only, SELECT granted on it",
+            setup: &[PARTS,
+                     "ALTER TABLE parts_a ENABLE ROW LEVEL SECURITY;
+                      CREATE POLICY tenant_isolation ON parts_a USING ({T}) WITH CHECK ({T});
+                      GRANT SELECT ON parts_a TO {p};"],
+            probes: &[(None, "SELECT 1 FROM parts"), (None, "SELECT 1 FROM parts_a")],
+        },
+        Case {
+            id: "3.11",
+            name: "partitioned: partition parts_a without RLS, SELECT granted on it",
+            setup: &[PARTS, "GRANT SELECT ON parts_a TO {p};"],
+            probes: &[(None, "SELECT 1 FROM parts_a")],
+        },
+        Case {
+            id: "3.12",
+            name: "SELECT open to p, UPDATE only tenant: SELECT .. FOR UPDATE",
+            setup: &["CREATE POLICY ps ON items FOR SELECT TO {p} USING (true);
+                      GRANT SELECT, UPDATE ON items TO {p};"],
+            probes: &[(None, SEL), (None, "SELECT 1 FROM items FOR UPDATE")],
+        },
+        Case {
+            id: "3.13",
+            name: "SELECT and INSERT open to p, UPDATE only tenant: INSERT .. ON CONFLICT DO UPDATE",
+            setup: &["CREATE POLICY ps ON items FOR SELECT TO {p} USING (true);
+                      CREATE POLICY pi ON items FOR INSERT TO {p} WITH CHECK (true);
+                      GRANT SELECT, INSERT, UPDATE ON items TO {p};"],
+            probes: &[(None, "INSERT INTO items VALUES ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'a-1') ON CONFLICT (tenant_id, name) DO UPDATE SET name = 'a-1-upserted'")],
+        },
+        Case {
+            id: "3.14",
+            name: "SELECT, INSERT, DELETE open to p, UPDATE only tenant: MERGE .. WHEN MATCHED THEN UPDATE",
+            setup: &["CREATE POLICY ps ON items FOR SELECT TO {p} USING (true);
+                      CREATE POLICY pi ON items FOR INSERT TO {p} WITH CHECK (true);
+                      CREATE POLICY pd ON items FOR DELETE TO {p} USING (true);
+                      GRANT SELECT, INSERT, UPDATE, DELETE ON items TO {p};"],
+            probes: &[(None, "MERGE INTO items t USING (SELECT tenant_id, name FROM items WHERE tenant_id = '01928f6e-7a3c-7d4e-8f00-00000000000a') s ON t.tenant_id = s.tenant_id AND t.name = s.name WHEN MATCHED THEN UPDATE SET name = t.name || '-merged'")],
+        },
+        Case {
+            id: "3.15",
+            name: "SELECT open to p, no UPDATE privilege: SELECT .. FOR UPDATE",
+            setup: &["CREATE POLICY ps ON items FOR SELECT TO {p} USING (true);
+                      GRANT SELECT ON items TO {p};"],
+            probes: &[(None, SEL), (None, "SELECT 1 FROM items FOR UPDATE")],
+        },
+        Case {
+            id: "3.16",
+            name: "UPDATE policy for p with WITH CHECK only (no USING), next to tenant_isolation",
+            setup: &["CREATE POLICY pu ON items FOR UPDATE TO {p} WITH CHECK (true);
+                      GRANT UPDATE ON items TO {p};"],
+            probes: &[(None, UPD)],
+        },
+        Case {
+            id: "3.17",
+            name: "templates: platform_access USING/CHECK (true), SELECT, UPDATE for p",
+            setup: &["CREATE POLICY platform_access ON items TO {p} USING (true) WITH CHECK (true);
+                      GRANT SELECT, UPDATE ON items TO {p};"],
+            probes: &[(None, SEL), (None, UPD)],
+        },
+        // 4. Policies that read the tenant through objects the check cannot look into
+        // (follow-up to the verification, 2026-10-13).
+        Case {
+            id: "4.1",
+            name: "SET ROLE target g (INHERIT FALSE, SET TRUE) has SELECT; policy TO g USING (tenant_id = current_tenant())",
+            setup: &[FUNCS, "GRANT SELECT ON items TO {g};
+                      GRANT {g} TO {p} WITH INHERIT FALSE, SET TRUE;
+                      CREATE POLICY gf ON items TO {g} USING (tenant_id = current_tenant());"],
+            probes: &[(None, SEL), (Some("{g}"), SEL)],
+        },
+        Case {
+            id: "4.2",
+            name: "p policy USING (tenant_id = current_tenant())",
+            setup: &[FUNCS, "GRANT SELECT ON items TO {p};
+                      CREATE POLICY pf ON items FOR SELECT TO {p} USING (tenant_id = current_tenant());"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "4.3",
+            name: "p policy USING (~~~ tenant_id), a user-defined prefix operator reading the tenant",
+            setup: &[FUNCS, "GRANT SELECT ON items TO {p};
+                      CREATE POLICY pf ON items FOR SELECT TO {p} USING (~~~ tenant_id);"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "4.4",
+            name: "p policy USING (tenant_id IN (SELECT tenant FROM current_tenant_view))",
+            setup: &[FUNCS, "GRANT SELECT ON items TO {p};
+                      CREATE POLICY pf ON items FOR SELECT TO {p}
+                          USING (tenant_id IN (SELECT tenant FROM current_tenant_view));"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "4.5",
+            name: "p policy USING (tenant_id = NULLIF(current_setting('trustiot.' || 'tenant_id', true), '')::uuid)",
+            setup: &["GRANT SELECT ON items TO {p};
+                      CREATE POLICY pf ON items FOR SELECT TO {p}
+                          USING (tenant_id = NULLIF(current_setting('trustiot.' || 'tenant_id', true), '')::uuid);"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "4.6",
+            name: "control: p policy USING (length(name) > 0 AND lower(name) <> ''), built-in functions only",
+            setup: &["GRANT SELECT ON items TO {p};
+                      CREATE POLICY pf ON items FOR SELECT TO {p} USING (length(name) > 0 AND lower(name) <> '');"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "4.7",
+            name: "fail closed: p policy USING (always_true()), a function that does not read the tenant",
+            setup: &[FUNCS, "GRANT SELECT ON items TO {p};
+                      CREATE POLICY pf ON items FOR SELECT TO {p} USING (always_true());"],
+            probes: &[(None, SEL)],
+        },
+        Case {
+            id: "4.8",
+            name: "fail closed: p policy FOR ALL USING (true) WITH CHECK (tenant_id = current_tenant()), SELECT only",
+            setup: &[FUNCS, "GRANT SELECT ON items TO {p};
+                      CREATE POLICY pf ON items TO {p} USING (true) WITH CHECK (tenant_id = current_tenant());"],
+            probes: &[(None, SEL)],
+        },
+    ]
+}
+
+fn fill(sql: &str, n: usize) -> String {
+    sql.replace("{T}", T)
+        .replace("{A}", A)
+        .replace("{B}", B)
+        .replace("{p}", &format!("v{n}_p"))
+        .replace("{g}", &format!("v{n}_g"))
+        .replace("{h}", &format!("v{n}_h"))
+}
+
+async fn run(connection: &mut PgConnection, sql: String) {
+    sqlx::raw_sql(AssertSqlSafe(sql.clone()))
+        .execute(connection)
+        .await
+        .unwrap_or_else(|error| panic!("{sql}: {error}"));
+}
+
+fn short(error: &sqlx::Error) -> String {
+    match error {
+        sqlx::Error::Database(db) => {
+            format!("ERR {} {}", db.code().unwrap_or_default(), db.message())
+        }
+        other => format!("ERR {other}"),
+    }
+}
+
+/// The session check of main e2e476b (Laysi/trustiot-v2#366), unchanged.
+const OLD_SESSION_CHECK: &str = r"
+WITH RECURSIVE rels AS (
+    SELECT c.oid, c.relkind, c.relowner, c.relrowsecurity, c.reloptions, c.relnamespace,
+           format('%I.%I', n.nspname, c.relname) AS name,
+           EXISTS (
+               SELECT 1 FROM pg_attribute a
+               WHERE a.attrelid = c.oid AND a.attname = 'tenant_id'
+                 AND a.attnum > 0 AND NOT a.attisdropped
+           ) AS has_tenant
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+      AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+      AND n.nspname NOT LIKE 'pg\_toast%'
+      AND n.nspname NOT LIKE 'pg\_temp%'
+),
+tenant_data(oid) AS (
+    SELECT oid FROM rels WHERE has_tenant
+    UNION
+    SELECT rw.ev_class
+    FROM pg_rewrite rw
+    JOIN pg_depend d ON d.classid = 'pg_rewrite'::regclass AND d.objid = rw.oid
+                    AND d.refclassid = 'pg_class'::regclass
+    JOIN tenant_data t ON t.oid = d.refobjid
+    WHERE rw.ev_class <> d.refobjid
+),
+reachable AS (
+    SELECT * FROM rels
+    WHERE oid IN (SELECT oid FROM tenant_data)
+      AND has_schema_privilege(relnamespace, 'USAGE')
+      AND (has_table_privilege(oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE')
+           OR has_any_column_privilege(oid, 'SELECT, INSERT, UPDATE'))
+),
+-- Platform sessions only: every role the session can switch to, itself included.
+-- The rights of roles it only inherits are already the session role's own; a role it can
+-- neither inherit nor become gives it nothing.
+platform_roles AS (
+    SELECT oid, quote_ident(rolname) AS role_name FROM pg_roles
+    WHERE $1 AND pg_has_role(current_user, oid, 'SET')
+),
+-- The tables with row-level security that one of those roles may use at all.
+platform_tables AS MATERIALIZED (
+    SELECT pr.oid AS role_oid, pr.role_name, r.oid AS rel, r.name AS relation
+    FROM platform_roles pr
+    CROSS JOIN rels r
+    WHERE r.relkind IN ('r', 'p') AND r.relrowsecurity
+      AND has_schema_privilege(pr.oid, r.relnamespace, 'USAGE')
+      AND (has_table_privilege(pr.oid, r.oid, 'SELECT, INSERT, UPDATE, DELETE')
+           OR has_any_column_privilege(pr.oid, r.oid, 'SELECT, INSERT, UPDATE'))
+),
+-- The permissive policies, each printed once. Restrictive policies only narrow access, so
+-- they are not counted. opaque: the policy's expressions use an object other than its own
+-- table and columns, such as a function or operator that is not built in (built-in catalog
+-- objects are pinned and record no dependency), another relation (a view, or a table whose own
+-- policies read the tenant), or a type. The check cannot see what such an object does, so it
+-- cannot tell whether the expression reads the tenant setting.
+platform_policies AS MATERIALIZED (
+    SELECT pol.polrelid, pol.polcmd::text AS polcmd, pol.polroles,
+           pg_get_expr(pol.polqual, pol.polrelid) AS using_expr,
+           pg_get_expr(coalesce(pol.polwithcheck, pol.polqual), pol.polrelid) AS check_expr,
+           EXISTS (
+               SELECT 1 FROM pg_depend d
+               WHERE d.classid = 'pg_policy'::regclass AND d.objid = pol.oid
+                 AND NOT (d.refclassid = 'pg_class'::regclass AND d.refobjid = pol.polrelid)
+           ) AS opaque
+    FROM pg_policy pol
+    WHERE $1 AND pol.polpermissive
+),
+-- A command evaluates USING to filter rows (SELECT, UPDATE, DELETE) and WITH CHECK, or USING
+-- when a policy has none, to check new rows (INSERT, UPDATE). A policy applies to a role that
+-- has the privileges of (inherits) one of the policy's roles, or to every role (PUBLIC). Per
+-- role, table, command, and side: how many expressions the permissive policies that apply to
+-- the role give, and how many of them open the table beyond the session's tenant. These count
+-- as opening nothing beyond it: an expression that names the tenant setting, calls
+-- current_setting, or is false, and every expression of an opaque policy, since it may read
+-- the setting where the check cannot see it. Any other expression counts as opening the table.
+-- Counting an expression as opening nothing can only refuse more sessions, never accept one,
+-- so an expression that reads the setting and still opens every row
+-- (`<tenant condition> OR true`) is refused too: the check does not try to tell such
+-- expressions apart.
+platform_sides AS (
+    SELECT t.role_oid, t.role_name, t.rel, t.relation, s.command, s.uses_qual,
+           count(e.expr) AS expressions,
+           count(e.expr) FILTER (WHERE e.expr <> $2 AND e.expr <> 'false'
+                                 AND strpos(e.expr, '''trustiot.tenant_id''') = 0
+                                 AND strpos(e.expr, 'current_setting(') = 0
+                                 AND NOT p.opaque) AS wider
+    FROM platform_tables t
+    CROSS JOIN (VALUES ('SELECT', 'r', true), ('INSERT', 'a', false), ('UPDATE', 'w', true),
+                       ('UPDATE', 'w', false), ('DELETE', 'd', true))
+               AS s(command, polcmd, uses_qual)
+    LEFT JOIN platform_policies p
+      ON p.polrelid = t.rel AND p.polcmd IN (s.polcmd, '*')
+         AND (0 = ANY (p.polroles)
+              OR EXISTS (SELECT 1 FROM unnest(p.polroles) AS role
+                         WHERE role <> 0 AND pg_has_role(t.role_oid, role, 'USAGE')))
+    CROSS JOIN LATERAL (
+        SELECT CASE WHEN s.uses_qual THEN p.using_expr ELSE p.check_expr END AS expr
+    ) AS e
+    GROUP BY t.role_oid, t.role_name, t.rel, t.relation, s.command, s.uses_qual
+),
+-- The commands only the tenant condition opens to the role: every side the command evaluates
+-- has an expression, and on at least one side none of them opens the table beyond the tenant.
+platform_tenant_only AS MATERIALIZED (
+    SELECT role_oid, role_name, rel, relation, command FROM platform_sides
+    GROUP BY role_oid, role_name, rel, relation, command
+    HAVING bool_and(expressions > 0) AND bool_or(wider = 0)
+)
+SELECT problem, relation, role_name, command FROM (
+    SELECT 1 AS rank, 'bypasses_rls' AS problem, NULL::text AS relation,
+           NULL::text AS role_name, NULL::text AS command
+    WHERE EXISTS (
+        SELECT 1 FROM pg_roles r
+        WHERE (r.rolsuper OR r.rolbypassrls) AND pg_has_role(current_user, r.oid, 'MEMBER')
+    )
+    UNION ALL
+    SELECT 2, 'tenant_preset', NULL, NULL, NULL
+    WHERE NULLIF(current_setting('trustiot.tenant_id', true), '') IS NOT NULL
+    UNION ALL
+    SELECT 3, 'owns_relation', name, NULL, NULL FROM rels
+    WHERE pg_has_role(current_user, relowner, 'MEMBER')
+    UNION ALL
+    SELECT 4, 'unprotected_table', name, NULL, NULL FROM reachable
+    WHERE relkind IN ('r', 'p') AND NOT relrowsecurity
+    UNION ALL
+    SELECT 4, 'permissive_policy', r.name || ' policy ' || quote_ident(p.polname), NULL, NULL
+    FROM reachable r
+    JOIN pg_policy p ON p.polrelid = r.oid
+    WHERE r.relkind IN ('r', 'p') AND r.relrowsecurity AND p.polpermissive
+      AND (0 = ANY (p.polroles)
+           OR EXISTS (SELECT 1 FROM unnest(p.polroles) AS role
+                      WHERE role <> 0 AND pg_has_role(current_user, role, 'MEMBER')))
+      AND NOT ($1 AND NOT 0 = ANY (p.polroles)
+               AND (SELECT oid FROM pg_roles WHERE rolname = current_user) = ANY (p.polroles))
+      AND NOT ((p.polqual IS NOT NULL OR p.polwithcheck IS NOT NULL)
+               AND (p.polqual IS NULL OR pg_get_expr(p.polqual, p.polrelid) = $2)
+               AND (p.polwithcheck IS NULL OR pg_get_expr(p.polwithcheck, p.polrelid) = $2))
+    UNION ALL
+    SELECT 4, 'unprotected_view', name, NULL, NULL FROM reachable
+    WHERE relkind = 'v'
+      AND NOT EXISTS (
+          SELECT 1 FROM unnest(reloptions) AS option
+          WHERE lower(option) IN ('security_invoker=true', 'security_invoker=on',
+                                  'security_invoker=yes', 'security_invoker=1')
+      )
+    UNION ALL
+    SELECT 4, 'unprotectable', name, NULL, NULL FROM reachable WHERE relkind IN ('m', 'f')
+    UNION ALL
+    SELECT 4, 'definer_function', p.oid::regprocedure::text, NULL, NULL
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.prosecdef
+      AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+      AND NOT pg_has_role(current_user, p.proowner, 'MEMBER')
+      AND has_schema_privilege(n.oid, 'USAGE')
+      AND has_function_privilege(p.oid, 'EXECUTE')
+      AND NOT EXISTS (
+          SELECT 1 FROM pg_depend d
+          WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
+      )
+    UNION ALL
+    SELECT 4, 'temporary_tables', NULL, NULL, NULL
+    WHERE has_database_privilege(current_database(), 'TEMPORARY')
+    UNION ALL
+    SELECT 5, 'truncate_allowed', name, NULL, NULL FROM reachable
+    WHERE relkind IN ('r', 'p') AND has_table_privilege(oid, 'TRUNCATE')
+    UNION ALL
+    -- The commands only the tenant condition opens to a platform role that the role may run,
+    -- through a table or column privilege. DELETE has no column privilege, and NULLIF makes its
+    -- column test NULL.
+    SELECT 4, 'platform_tenant_only', relation, role_name, command FROM platform_tenant_only
+    WHERE has_table_privilege(role_oid, rel, command)
+       OR coalesce(has_any_column_privilege(role_oid, rel, NULLIF(command, 'DELETE')), false)
+) AS problems
+ORDER BY rank, relation, problem, role_name, command
+LIMIT 1
+";
+
+// ---------------------------------------------------------------------------------------------
+// Laysi/trustiot-v2#375: the session check before (main e2e476b, `OLD_SESSION_CHECK` above) and
+// after (the `SESSION_CHECK` in src/postgres.rs, read from the source) the rewrite of its
+// platform part.
+//
+// - `differential`: both queries, without their `LIMIT 1`, over the same catalogue states (the
+//   #366 verification cases above and seeded random states), as the platform role and as a
+//   service role; every result row must be identical.
+// - `mutations`: deliberate changes to the new query, each of which the differential must catch.
+// - `timing`: both queries at 300 template tables with 0, 20 (no rights), 20 and 60 groups.
+//
+// Catalogue states are built inside one transaction of the superuser, which then runs the
+// queries after `SET ROLE` to the platform role (`current_user` is all the check looks at) and
+// rolls everything back, roles included.
+// ---------------------------------------------------------------------------------------------
+
+/// The four columns of a problem row.
+type Row = (String, Option<String>, Option<String>, Option<String>);
+
+/// The new query, as committed in src/postgres.rs.
+fn new_session_check() -> String {
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/postgres.rs"))
+        .expect("source");
+    let marker = "const SESSION_CHECK: &str = r\"";
+    let start = source.find(marker).expect("start") + marker.len();
+    let end = start + source[start..].find("\";").expect("end");
+    source[start..end].to_owned()
+}
+
+/// `sql` without its `LIMIT 1`, so that every problem row comes back.
+fn every_row(sql: &str) -> String {
+    assert_eq!(sql.matches("\nLIMIT 1\n").count(), 1, "one LIMIT 1");
+    sql.replace("\nLIMIT 1\n", "\n")
+}
+
+async fn problems(
+    connection: &mut PgConnection,
+    sql: &str,
+    platform: bool,
+) -> Result<Vec<Row>, String> {
+    let mut rows: Vec<Row> = sqlx::query_as(AssertSqlSafe(sql.to_owned()))
+        .bind(platform)
+        .bind(postgres::TENANT_CONDITION_AS_STORED)
+        .fetch_all(&mut *connection)
+        .await
+        .map_err(|error| short(&error))?;
+    rows.sort();
+    Ok(rows)
+}
+
+/// Runs `setup` (superuser, inside the caller's transaction), then both queries as `role` with
+/// `$1` true and false. Returns (old rows, new rows) for each `$1`.
+async fn compare(
+    connection: &mut PgConnection,
+    role: &str,
+    old: &str,
+    new: &str,
+) -> [(Result<Vec<Row>, String>, Result<Vec<Row>, String>); 2] {
+    sqlx::raw_sql(AssertSqlSafe(format!("SET ROLE {role}")))
+        .execute(&mut *connection)
+        .await
+        .expect("set role");
+    let mut out = Vec::new();
+    for platform in [true, false] {
+        // A failing query aborts the transaction: run each in a savepoint.
+        let mut results = Vec::new();
+        for sql in [old, new] {
+            sqlx::raw_sql("SAVEPOINT q")
+                .execute(&mut *connection)
+                .await
+                .expect("savepoint");
+            let result = problems(connection, sql, platform).await;
+            let undo = if result.is_ok() {
+                "RELEASE SAVEPOINT q"
+            } else {
+                "ROLLBACK TO SAVEPOINT q"
+            };
+            sqlx::raw_sql(undo)
+                .execute(&mut *connection)
+                .await
+                .expect("savepoint end");
+            results.push(result);
+        }
+        let new_rows = results.pop().expect("new");
+        let old_rows = results.pop().expect("old");
+        out.push((old_rows, new_rows));
+    }
+    sqlx::raw_sql("RESET ROLE")
+        .execute(&mut *connection)
+        .await
+        .expect("reset role");
+    let second = out.pop().expect("service");
+    let first = out.pop().expect("platform");
+    [first, second]
+}
+
+/// A small deterministic generator (xorshift64*), so that every state can be rebuilt from its
+/// seed.
+struct Rng(u64);
+
+impl Rng {
+    fn new(seed: u64) -> Self {
+        Self(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
+    }
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+    fn below(&mut self, n: usize) -> usize {
+        usize::try_from(self.next() % u64::try_from(n).expect("n")).expect("index")
+    }
+    fn chance(&mut self, percent: u64) -> bool {
+        self.next() % 100 < percent
+    }
+    fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str {
+        items[self.below(items.len())]
+    }
+}
+
+const MEMBERSHIP_OPTIONS: &[&str] = &[
+    "",
+    " WITH INHERIT TRUE, SET TRUE",
+    " WITH INHERIT TRUE, SET FALSE",
+    " WITH INHERIT FALSE, SET TRUE",
+    " WITH INHERIT FALSE, SET FALSE",
+];
+
+const EXPRESSIONS: &[&str] = &[
+    "tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid",
+    "true",
+    "false",
+    "tenant_id IS NULL",
+    "current_setting('trustiot.tenant_id', true)::uuid = tenant_id",
+    "length(name) > 0",
+    "tenant_id = r_current_tenant()",
+    "r_always_true()",
+    "tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid OR true",
+    "tenant_id IN (SELECT tenant FROM r_tenant_view)",
+];
+
+/// The SQL of random state `seed`: the session role `r_p`, groups `r_g<i>`, an unrelated role
+/// `r_u`, tables in `public` and maybe `r_s`, grants (table, column, `PUBLIC`, predefined
+/// roles), memberships with every INHERIT and SET combination, and permissive and restrictive
+/// policies for every command, some of which depend on a function or a view.
+fn random_state(seed: u64) -> String {
+    let mut rng = Rng::new(seed);
+    let mut sql = String::from(
+        "CREATE ROLE r_p; CREATE ROLE r_u;
+         SET ROLE v_owner;
+         CREATE FUNCTION r_current_tenant() RETURNS uuid LANGUAGE sql STABLE
+             AS $f$ SELECT NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid $f$;
+         CREATE FUNCTION r_always_true() RETURNS boolean LANGUAGE sql IMMUTABLE AS $f$ SELECT true $f$;
+         CREATE VIEW r_tenant_view WITH (security_invoker = true) AS
+             SELECT NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid AS tenant;
+         RESET ROLE;\n",
+    );
+    if rng.chance(20) {
+        sql.push_str("ALTER ROLE r_p NOINHERIT;\n");
+    }
+    let groups = rng.below(5);
+    let mut grantees = vec!["r_p".to_owned()];
+    for i in 1..=groups {
+        sql.push_str(&format!("CREATE ROLE r_g{i};\n"));
+        grantees.push(format!("r_g{i}"));
+    }
+    for i in 1..=groups {
+        if rng.chance(65) {
+            let option = rng.pick(MEMBERSHIP_OPTIONS);
+            sql.push_str(&format!("GRANT r_g{i} TO r_p{option};\n"));
+        }
+        for j in (i + 1)..=groups {
+            if rng.chance(25) {
+                let option = rng.pick(MEMBERSHIP_OPTIONS);
+                sql.push_str(&format!("GRANT r_g{j} TO r_g{i}{option};\n"));
+            }
+        }
+    }
+    for predefined in ["pg_read_all_data", "pg_write_all_data"] {
+        if rng.chance(8) {
+            let to = grantees[rng.below(grantees.len())].clone();
+            sql.push_str(&format!("GRANT {predefined} TO {to};\n"));
+        }
+    }
+    let other_schema = rng.chance(40);
+    if other_schema {
+        sql.push_str("SET ROLE v_owner; CREATE SCHEMA r_s; RESET ROLE;\n");
+        for grantee in grantees.iter().map(String::as_str).chain(["PUBLIC"]) {
+            if rng.chance(40) {
+                sql.push_str(&format!("GRANT USAGE ON SCHEMA r_s TO {grantee};\n"));
+            }
+        }
+    }
+    let mut policy_roles: Vec<String> = grantees.clone();
+    policy_roles.push("r_u".to_owned());
+    let tables = 1 + rng.below(3);
+    for t in 1..=tables {
+        let schema = if other_schema && rng.chance(50) {
+            "r_s"
+        } else {
+            "public"
+        };
+        let table = format!("{schema}.r_t{t}");
+        let partitioned = rng.chance(12);
+        sql.push_str("SET ROLE v_owner;\n");
+        if partitioned {
+            sql.push_str(&format!(
+                "CREATE TABLE {table} (tenant_id uuid NOT NULL, name text NOT NULL) PARTITION BY LIST (tenant_id);
+                 CREATE TABLE {schema}.r_t{t}_a PARTITION OF {table} FOR VALUES IN ('{A}');\n"
+            ));
+        } else {
+            sql.push_str(&format!(
+                "CREATE TABLE {table} (tenant_id uuid NOT NULL, name text NOT NULL);\n"
+            ));
+        }
+        if rng.chance(85) {
+            sql.push_str(&format!("ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;\n"));
+        }
+        for p in 0..rng.below(5) {
+            let restrictive = if rng.chance(20) {
+                " AS RESTRICTIVE"
+            } else {
+                ""
+            };
+            let command = rng.pick(&["ALL", "ALL", "SELECT", "INSERT", "UPDATE", "DELETE"]);
+            let to = if rng.chance(30) {
+                String::new()
+            } else {
+                let mut names: Vec<&str> = policy_roles
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|_| rng.chance(40))
+                    .collect();
+                if names.is_empty() {
+                    names.push(policy_roles[rng.below(policy_roles.len())].as_str());
+                }
+                format!(" TO {}", names.join(", "))
+            };
+            let (using, check) = match command {
+                "SELECT" | "DELETE" => (true, false),
+                "INSERT" => (false, true),
+                _ => {
+                    let using = rng.chance(75);
+                    (using, !using || rng.chance(60))
+                }
+            };
+            let mut clause = String::new();
+            if using {
+                clause.push_str(&format!(" USING ({})", rng.pick(EXPRESSIONS)));
+            }
+            if check {
+                clause.push_str(&format!(" WITH CHECK ({})", rng.pick(EXPRESSIONS)));
+            }
+            sql.push_str(&format!(
+                "CREATE POLICY r_pol{p} ON {table}{restrictive} FOR {command}{to}{clause};\n"
+            ));
+        }
+        sql.push_str("RESET ROLE;\n");
+        for grantee in grantees.iter().map(String::as_str).chain(["PUBLIC"]) {
+            if rng.chance(35) {
+                let privileges: Vec<&str> = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE"]
+                    .into_iter()
+                    .filter(|_| rng.chance(45))
+                    .collect();
+                if !privileges.is_empty() {
+                    sql.push_str(&format!(
+                        "GRANT {} ON {table} TO {grantee};\n",
+                        privileges.join(", ")
+                    ));
+                }
+            }
+            if rng.chance(15) {
+                let columns =
+                    rng.pick(&["SELECT (name)", "INSERT (tenant_id, name)", "UPDATE (name)"]);
+                sql.push_str(&format!("GRANT {columns} ON {table} TO {grantee};\n"));
+            }
+        }
+    }
+    sql
+}
+
+/// What the differential saw over all states.
+#[derive(Default)]
+struct Tally {
+    states: usize,
+    mismatches: Vec<String>,
+    platform_rows: usize,
+    states_with_tenant_only: usize,
+    first_problems: std::collections::BTreeMap<String, usize>,
+    errors: usize,
+}
+
+impl Tally {
+    fn record(
+        &mut self,
+        label: &str,
+        results: &[(Result<Vec<Row>, String>, Result<Vec<Row>, String>); 2],
+        setup: &str,
+    ) {
+        self.states += 1;
+        for (index, (old, new)) in results.iter().enumerate() {
+            if old != new {
+                self.mismatches.push(format!(
+                    "{label} ($1 = {}):\n  old: {old:?}\n  new: {new:?}\n  setup:\n{setup}",
+                    index == 0
+                ));
+            }
+        }
+        match &results[0].0 {
+            Ok(rows) => {
+                let tenant_only = rows
+                    .iter()
+                    .filter(|row| row.0 == "platform_tenant_only")
+                    .count();
+                self.platform_rows += tenant_only;
+                if tenant_only > 0 {
+                    self.states_with_tenant_only += 1;
+                }
+                let first = rows
+                    .iter()
+                    .min_by_key(|row| {
+                        // The check's own order: rank first. Rank is not returned, so rebuild it.
+                        let rank = match row.0.as_str() {
+                            "bypasses_rls" => 1,
+                            "tenant_preset" => 2,
+                            "owns_relation" => 3,
+                            "truncate_allowed" => 5,
+                            _ => 4,
+                        };
+                        (
+                            rank,
+                            row.1.clone(),
+                            row.0.clone(),
+                            row.2.clone(),
+                            row.3.clone(),
+                        )
+                    })
+                    .map_or("accepted".to_owned(), |row| row.0.clone());
+                *self.first_problems.entry(first).or_default() += 1;
+            }
+            Err(_) => self.errors += 1,
+        }
+    }
+}
+
+async fn differential_over(
+    connection: &mut PgConnection,
+    old: &str,
+    new: &str,
+    seeds: u64,
+    stop_at_first: bool,
+) -> Tally {
+    let mut tally = Tally::default();
+    // The #366 verification cases (sections 1 to 4), roles v<n>_p, v<n>_g, v<n>_h.
+    for (index, case) in cases().into_iter().enumerate() {
+        let n = index + 1;
+        let mut setup = format!(
+            "CREATE ROLE v{n}_p; CREATE ROLE v{n}_g; CREATE ROLE v{n}_h;
+             SET ROLE v_owner;\n{}\nRESET ROLE;\n",
+            fill(BASE, n)
+        );
+        for step in case.setup {
+            setup.push_str(&fill(step, n));
+            setup.push('\n');
+        }
+        let results = in_rolled_back_state(connection, &setup, &format!("v{n}_p"), old, new).await;
+        tally.record(&format!("case {}", case.id), &results, &setup);
+        if stop_at_first && !tally.mismatches.is_empty() {
+            return tally;
+        }
+    }
+    for seed in 1..=seeds {
+        let setup = random_state(seed);
+        let results = in_rolled_back_state(connection, &setup, "r_p", old, new).await;
+        tally.record(&format!("seed {seed}"), &results, &setup);
+        if stop_at_first && !tally.mismatches.is_empty() {
+            return tally;
+        }
+    }
+    tally
+}
+
+async fn in_rolled_back_state(
+    connection: &mut PgConnection,
+    setup: &str,
+    role: &str,
+    old: &str,
+    new: &str,
+) -> [(Result<Vec<Row>, String>, Result<Vec<Row>, String>); 2] {
+    sqlx::raw_sql("BEGIN")
+        .execute(&mut *connection)
+        .await
+        .expect("begin");
+    sqlx::raw_sql(AssertSqlSafe(setup.to_owned()))
+        .execute(&mut *connection)
+        .await
+        .unwrap_or_else(|error| panic!("{setup}: {error}"));
+    let results = compare(connection, role, old, new).await;
+    sqlx::raw_sql("ROLLBACK")
+        .execute(&mut *connection)
+        .await
+        .expect("rollback");
+    results
+}
+
+async fn differential_database(pg: &TlsPostgres) -> PgConnection {
+    let mut admin = PgConnection::connect_with(&pg.superuser("postgres"))
+        .await
+        .expect("superuser");
+    run(&mut admin, "CREATE DATABASE vdiff OWNER v_owner".to_owned()).await;
+    admin.close().await.expect("close");
+    let mut owner = PgConnection::connect_with(&pg.options("v_owner", "vdiff"))
+        .await
+        .expect("owner");
+    run(&mut owner, include_str!("../sql/database.sql").to_owned()).await;
+    owner.close().await.expect("close");
+    PgConnection::connect_with(&pg.superuser("vdiff"))
+        .await
+        .expect("superuser on vdiff")
+}
+
+const SEEDS: u64 = 1500;
+
+#[tokio::test]
+async fn differential() {
+    let Some(pg) = tls_postgres(INIT).await else {
+        return;
+    };
+    let mut connection = differential_database(&pg).await;
+    let old = every_row(OLD_SESSION_CHECK);
+    let new = every_row(&new_session_check());
+    assert_ne!(old, new, "the new query differs from the old one");
+    let tally = differential_over(&mut connection, &old, &new, SEEDS, false).await;
+    println!(
+        "differential: {} states ({} #366 cases + {SEEDS} seeds); {} with platform_tenant_only rows, {} such rows in all; {} states where the old query failed",
+        tally.states,
+        cases().len(),
+        tally.states_with_tenant_only,
+        tally.platform_rows,
+        tally.errors
+    );
+    println!(
+        "first problem as the platform role (what check_session reports): {:?}",
+        tally.first_problems
+    );
+    println!("mismatches: {}", tally.mismatches.len());
+    for mismatch in tally.mismatches.iter().take(5) {
+        println!("{mismatch}");
+    }
+    assert!(tally.mismatches.is_empty(), "old and new disagree");
+    assert_eq!(tally.errors, 0, "every query ran");
+    assert!(
+        tally.states_with_tenant_only > 100,
+        "the states exercise the platform rule"
+    );
+}
+
+/// Changes to the new query that alter its decisions; the differential must catch each.
+const MUTATIONS: &[(&str, &str, &str)] = &[
+    (
+        "SET role option dropped: every role the session belongs to",
+        "pg_has_role(current_user, oid, 'SET')",
+        "pg_has_role(current_user, oid, 'MEMBER')",
+    ),
+    (
+        "restrictive policies counted",
+        "WHERE $1 AND pol.polpermissive\n",
+        "WHERE $1\n",
+    ),
+    (
+        "pg_depend rule dropped: no policy is opaque",
+        "           ) AS opaque\n",
+        "           ) AND false AS opaque\n",
+    ),
+    (
+        "policy roles matched by membership instead of inheritance",
+        "WHERE pg_has_role(pr.oid, named.role, 'USAGE')",
+        "WHERE pg_has_role(pr.oid, named.role, 'MEMBER')",
+    ),
+    (
+        "PUBLIC policies dropped",
+        "LEFT JOIN platform_public pub ON pub.polrelid = t.rel",
+        "LEFT JOIN platform_public pub ON false",
+    ),
+    (
+        "policies naming a role dropped",
+        "LEFT JOIN platform_named n ON n.role_oid = t.role_oid AND n.polrelid = t.rel",
+        "LEFT JOIN platform_named n ON false",
+    ),
+    (
+        "UPDATE needs both sides tenant-only",
+        "(m.wider & c.sides) <> c.sides",
+        "(m.wider & c.sides) = 0",
+    ),
+    (
+        "FOR ALL policies not counted for INSERT",
+        "WHEN '*' THEN 10",
+        "WHEN '*' THEN 8",
+    ),
+    (
+        "a WITH CHECK expression never opens the table",
+        "THEN s.check_sides ELSE 0 END AS wider",
+        "THEN 0 ELSE 0 END AS wider",
+    ),
+    (
+        "a missing USING expression counted as one",
+        "WHEN e.using_expr IS NOT NULL THEN s.using_sides",
+        "WHEN true THEN s.using_sides",
+    ),
+];
+
+#[tokio::test]
+async fn mutations() {
+    let Some(pg) = tls_postgres(INIT).await else {
+        return;
+    };
+    // Its own database: the differential test may run at the same time.
+    let mut admin = PgConnection::connect_with(&pg.superuser("postgres"))
+        .await
+        .expect("superuser");
+    run(&mut admin, "CREATE DATABASE vmut OWNER v_owner".to_owned()).await;
+    admin.close().await.expect("close");
+    let mut owner = PgConnection::connect_with(&pg.options("v_owner", "vmut"))
+        .await
+        .expect("owner");
+    run(&mut owner, include_str!("../sql/database.sql").to_owned()).await;
+    owner.close().await.expect("close");
+    let mut connection = PgConnection::connect_with(&pg.superuser("vmut"))
+        .await
+        .expect("superuser on vmut");
+    let old = every_row(OLD_SESSION_CHECK);
+    let new = every_row(&new_session_check());
+    let mut missed = Vec::new();
+    for (name, from, to) in MUTATIONS {
+        assert_eq!(
+            new.matches(from).count(),
+            1,
+            "mutation `{name}`: `{from}` occurs once"
+        );
+        let mutant = new.replace(from, to);
+        let tally = differential_over(&mut connection, &old, &mutant, SEEDS, true).await;
+        match tally.mismatches.first() {
+            Some(first) => println!(
+                "mutation `{name}`: caught after {} states, first at {}",
+                tally.states,
+                first.lines().next().unwrap_or_default()
+            ),
+            None => {
+                println!("mutation `{name}`: NOT caught in {} states", tally.states);
+                missed.push(*name);
+            }
+        }
+    }
+    assert!(
+        missed.is_empty(),
+        "mutations the differential missed: {missed:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Timing: the same database and scale as the #366 verification's `cost` test (300 template
+// tables; the platform role vc_p alone; 20 groups without rights; 20 and then 60 groups that
+// hold every privilege on every table and are named in every platform_access policy).
+// ---------------------------------------------------------------------------------------------
+
+const RUNS: usize = 25;
+
+fn loadavg() -> String {
+    std::fs::read_to_string("/proc/loadavg").map_or_else(
+        |error| format!("unreadable: {error}"),
+        |text| text.trim().to_owned(),
+    )
+}
+
+fn summary(times: &mut [Duration]) -> String {
+    times.sort();
+    let ms = |d: Duration| d.as_secs_f64() * 1e3;
+    format!(
+        "median {:.1} ms, min {:.1} ms, max {:.1} ms ({} runs)",
+        ms(times[times.len() / 2]),
+        ms(times[0]),
+        ms(times[times.len() - 1]),
+        times.len()
+    )
+}
+
+async fn time_scenario(pg: &TlsPostgres, label: &str, old: &str, new: &str) {
+    println!("\n[{label}] loadavg before: {}", loadavg());
+    // Same answer, every row.
+    let mut session = PgConnection::connect_with(&pg.options("vc_p", "vcost"))
+        .await
+        .expect("connect");
+    let old_rows = problems(&mut session, &every_row(old), true)
+        .await
+        .expect("old");
+    let new_rows = problems(&mut session, &every_row(new), true)
+        .await
+        .expect("new");
+    assert_eq!(old_rows, new_rows, "{label}: old and new rows");
+    let checked = postgres::check_session(&mut session, SessionRole::Platform)
+        .await
+        .expect("check");
+    println!("[{label}] rows: {old_rows:?}; check_session: {checked:?}");
+    // Warm: one session, each query prepared and run once untimed, then interleaved.
+    for sql in [old, new] {
+        let _: Option<Row> = sqlx::query_as(AssertSqlSafe(sql.to_owned()))
+            .bind(true)
+            .bind(postgres::TENANT_CONDITION_AS_STORED)
+            .fetch_optional(&mut session)
+            .await
+            .expect("warm-up");
+    }
+    let (mut old_warm, mut new_warm) = (Vec::new(), Vec::new());
+    for _ in 0..RUNS {
+        for (sql, times) in [(old, &mut old_warm), (new, &mut new_warm)] {
+            let started = Instant::now();
+            let row: Option<Row> = sqlx::query_as(AssertSqlSafe(sql.to_owned()))
+                .bind(true)
+                .bind(postgres::TENANT_CONDITION_AS_STORED)
+                .fetch_optional(&mut session)
+                .await
+                .expect("query");
+            times.push(started.elapsed());
+            assert!(row.is_none(), "{label}: accepted");
+        }
+    }
+    session.close().await.expect("close");
+    // Cold: the first query on a new connection, as the pool runs it.
+    let (mut old_cold, mut new_cold) = (Vec::new(), Vec::new());
+    for _ in 0..RUNS {
+        for (sql, times) in [(old, &mut old_cold), (new, &mut new_cold)] {
+            let mut fresh = PgConnection::connect_with(&pg.options("vc_p", "vcost"))
+                .await
+                .expect("connect");
+            let started = Instant::now();
+            let row: Option<Row> = sqlx::query_as(AssertSqlSafe(sql.to_owned()))
+                .bind(true)
+                .bind(postgres::TENANT_CONDITION_AS_STORED)
+                .fetch_optional(&mut fresh)
+                .await
+                .expect("query");
+            times.push(started.elapsed());
+            assert!(row.is_none(), "{label}: accepted");
+            fresh.close().await.expect("close");
+        }
+    }
+    println!("[{label}] old, same session:   {}", summary(&mut old_warm));
+    println!("[{label}] new, same session:   {}", summary(&mut new_warm));
+    println!("[{label}] old, new connection: {}", summary(&mut old_cold));
+    println!("[{label}] new, new connection: {}", summary(&mut new_cold));
+    println!("[{label}] loadavg after: {}", loadavg());
+}
+
+#[tokio::test]
+async fn timing() {
+    let Some(pg) = tls_postgres(INIT).await else {
+        return;
+    };
+    let mut admin = PgConnection::connect_with(&pg.superuser("postgres"))
+        .await
+        .expect("superuser");
+    let version: String = sqlx::query_scalar("SELECT version()")
+        .fetch_one(&mut admin)
+        .await
+        .expect("version");
+    println!("server: {version}");
+    run(
+        &mut admin,
+        "CREATE ROLE vc_p LOGIN PASSWORD 'service-kit-test';
+         CREATE ROLE vc_app LOGIN PASSWORD 'service-kit-test';
+         DO $$ BEGIN FOR i IN 1..60 LOOP EXECUTE format('CREATE ROLE vc_g%s NOLOGIN', i); END LOOP; END $$;"
+            .to_owned(),
+    )
+    .await;
+    run(&mut admin, "CREATE DATABASE vcost OWNER v_owner".to_owned()).await;
+    let mut owner = PgConnection::connect_with(&pg.options("v_owner", "vcost"))
+        .await
+        .expect("owner");
+    run(&mut owner, include_str!("../sql/database.sql").to_owned()).await;
+    run(
+        &mut owner,
+        "DO $$
+         DECLARE i int;
+         BEGIN
+           FOR i IN 1..300 LOOP
+             EXECUTE format('CREATE TABLE t%s (tenant_id uuid NOT NULL, id uuid NOT NULL, name text NOT NULL, PRIMARY KEY (tenant_id, id))', i);
+             EXECUTE format('ALTER TABLE t%s ENABLE ROW LEVEL SECURITY', i);
+             EXECUTE format($f$CREATE POLICY tenant_isolation ON t%s USING (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid)$f$, i);
+             EXECUTE format('CREATE POLICY platform_access ON t%s TO vc_p USING (true) WITH CHECK (true)', i);
+             EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON t%s TO vc_app', i);
+             EXECUTE format('GRANT SELECT, UPDATE ON t%s TO vc_p', i);
+           END LOOP;
+         END $$;"
+            .to_owned(),
+    )
+    .await;
+    owner.close().await.expect("close");
+    let mut db_admin = PgConnection::connect_with(&pg.superuser("vcost"))
+        .await
+        .expect("superuser on vcost");
+    let old = OLD_SESSION_CHECK.to_owned();
+    let new = new_session_check();
+
+    time_scenario(&pg, "S0 300 tables, platform role alone", &old, &new).await;
+    run(&mut db_admin, groups_sql(1, 20)).await;
+    time_scenario(&pg, "S1 + 20 groups without rights", &old, &new).await;
+    run(&mut db_admin, group_rights_sql(20)).await;
+    time_scenario(
+        &pg,
+        "S2 20 groups with all rights on 300 tables, named in platform_access",
+        &old,
+        &new,
+    )
+    .await;
+    run(&mut db_admin, groups_sql(21, 60)).await;
+    run(&mut db_admin, group_rights_sql(60)).await;
+    time_scenario(
+        &pg,
+        "S3 60 groups with all rights on 300 tables, named in platform_access",
+        &old,
+        &new,
+    )
+    .await;
+
+    // The plan of the new query at S3.
+    let mut session = PgConnection::connect_with(&pg.options("vc_p", "vcost"))
+        .await
+        .expect("connect");
+    let plan: Vec<String> =
+        sqlx::query_scalar(AssertSqlSafe(format!("EXPLAIN (ANALYZE, COSTS OFF) {new}")))
+            .bind(true)
+            .bind(postgres::TENANT_CONDITION_AS_STORED)
+            .fetch_all(&mut session)
+            .await
+            .expect("plan");
+    for line in plan {
+        println!("PLAN {line}");
+    }
+}
+
+fn groups_sql(from: usize, to: usize) -> String {
+    format!(
+        "DO $$
+         DECLARE roles text;
+         BEGIN
+           SELECT string_agg(format('vc_g%s', g), ', ') INTO roles FROM generate_series({from}, {to}) g;
+           EXECUTE format('GRANT %s TO vc_p', roles);
+         END $$;"
+    )
+}
+
+fn group_rights_sql(to: usize) -> String {
+    format!(
+        "DO $$
+         DECLARE i int; roles text;
+         BEGIN
+           SELECT string_agg(format('vc_g%s', g), ', ') INTO roles FROM generate_series(1, {to}) g;
+           FOR i IN 1..300 LOOP
+             EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON t%s TO %s', i, roles);
+             EXECUTE format('ALTER POLICY platform_access ON t%s TO vc_p, %s', i, roles);
+           END LOOP;
+         END $$;"
+    )
+}
