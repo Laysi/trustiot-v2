@@ -218,8 +218,9 @@ pub struct SessionGrant {
 /// ingress gateway turns into its own 503 (deploy/istio/README.md).
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
-    /// The database failed or refused the session.
-    #[error("database error: {0}")]
+    /// The database failed or refused the session. The message is the [`TenantDbError`]'s own,
+    /// which already names the database, so it is not prefixed again.
+    #[error(transparent)]
     Database(#[from] TenantDbError),
     /// A row holds a value the schema forbids, so it is not trusted.
     #[error("the sessions data is inconsistent: {0}")]
@@ -574,6 +575,26 @@ mod tests {
     use super::*;
 
     const SECRET: [u8; 32] = [7; 32];
+
+    #[test]
+    fn a_store_error_logs_the_tenant_db_message_once() {
+        let failed = StoreError::Database(TenantDbError::Database(sqlx::Error::PoolTimedOut));
+        let message = failed.to_string();
+        assert_eq!(
+            message,
+            TenantDbError::Database(sqlx::Error::PoolTimedOut).to_string()
+        );
+        assert_eq!(message.matches("database error").count(), 1, "{message}");
+        assert!(message.contains("pool timed out"), "{message}");
+
+        for inner in [
+            TenantDbError::NoTenant,
+            TenantDbError::UnsafeSession(service_kit::postgres::UnsafeSession::BypassesRls),
+        ] {
+            let expected = inner.to_string();
+            assert_eq!(StoreError::from(inner).to_string(), expected);
+        }
+    }
 
     fn cookie_headers(values: &[&[u8]]) -> HeaderMap {
         let mut headers = HeaderMap::new();
