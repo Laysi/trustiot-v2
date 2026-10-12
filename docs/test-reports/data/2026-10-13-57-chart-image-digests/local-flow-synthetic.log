@@ -1,0 +1,154 @@
+
+===== environment (2026-10-12T20:05:19Z)
+commit: 7d54e0ff359e0558b51d09000a4e15cefdc5e98e
+Linux 7.2.8-300.fc45.x86_64 x86_64
+podman version 6.1.3
+skopeo version 1.24.1 commit: e9748eb1ea474af8c72e2d92a7f0fd5b7606b9bf
+v4.3.0+gbec5b06
+GitVersion:    v3.1.3
+1.4.2
+
+===== registry and test key (2026-10-12T20:05:19Z)
+
+===== plan (2026-10-12T20:05:20Z)
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.57-rc.1 → version 0.0.57-rc.1 (prerelease), commit 7d54e0ff359e0558b51d09000a4e15cefdc5e98e
+[release:plan] image 127.0.0.1:5157/laysi/trustiot-v2/identity:0.0.57-rc.1 (Rust package identity)
+[release:plan] image 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1 (deploy/images/postgres)
+[release:plan] image 127.0.0.1:5157/laysi/trustiot-v2/release-selftest:0.0.57-rc.1 (Rust package release-selftest)
+[release:plan] chart 127.0.0.1:5157/laysi/trustiot-v2/charts/trustiot:0.0.57-rc.1
+[release:plan] notes start from v0.0.0-rc.5
+
+===== synthetic images instead of build.ts (LOCAL_FLOW_IMAGES=synthetic) (2026-10-12T20:05:20Z)
+identity: 4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e
+postgres: f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a
+release-selftest: f48b2d9ef25eab297ebf11236b86815c8fe18465e240d83bd4bd7c1ca2527329
+
+===== publish, first run (2026-10-12T20:05:22Z)
+[release:publish] pushing 127.0.0.1:5157/laysi/trustiot-v2/identity:0.0.57-rc.1
+[release:publish] 127.0.0.1:5157/laysi/trustiot-v2/identity:0.0.57-rc.1 → sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e: signed, SBOM attested
+[release:publish] pushing 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1
+[release:publish] 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1 → sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a: signed, SBOM attested
+[release:publish] pushing 127.0.0.1:5157/laysi/trustiot-v2/release-selftest:0.0.57-rc.1
+[release:publish] 127.0.0.1:5157/laysi/trustiot-v2/release-selftest:0.0.57-rc.1 → sha256:f48b2d9ef25eab297ebf11236b86815c8fe18465e240d83bd4bd7c1ca2527329: signed, SBOM attested
+[release:publish] the chart pins identity to 127.0.0.1:5157/laysi/trustiot-v2/identity:0.0.57-rc.1@sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e
+[release:publish] the chart pins postgres to 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1@sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a
+[release:publish] the chart does not deploy release-selftest
+[release:publish] 127.0.0.1:5157/laysi/trustiot-v2/charts/trustiot:0.0.57-rc.1 → sha256:3424072994e7c1d9c45396116411543ae1db3b395b2962310488797ff4ead9a1: signed
+[release:publish] local test: no GitHub Release; its body is in ~/.cache/trustiot-release.CkHCMI/release-body.md
+[release:publish] released v0.0.57-rc.1
+
+===== publish, second run (a re-run of the job with the same build) (2026-10-12T20:05:26Z)
+[release:publish] 127.0.0.1:5157/laysi/trustiot-v2/identity:0.0.57-rc.1 is already sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e; not pushing it again
+[release:publish] 127.0.0.1:5157/laysi/trustiot-v2/identity:0.0.57-rc.1 → sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e: signed, SBOM attested
+[release:publish] 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1 is already sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a; not pushing it again
+[release:publish] 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1 → sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a: signed, SBOM attested
+[release:publish] 127.0.0.1:5157/laysi/trustiot-v2/release-selftest:0.0.57-rc.1 is already sha256:f48b2d9ef25eab297ebf11236b86815c8fe18465e240d83bd4bd7c1ca2527329; not pushing it again
+[release:publish] 127.0.0.1:5157/laysi/trustiot-v2/release-selftest:0.0.57-rc.1 → sha256:f48b2d9ef25eab297ebf11236b86815c8fe18465e240d83bd4bd7c1ca2527329: signed, SBOM attested
+[release:publish] the chart pins identity to 127.0.0.1:5157/laysi/trustiot-v2/identity:0.0.57-rc.1@sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e
+[release:publish] the chart pins postgres to 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1@sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a
+[release:publish] the chart does not deploy release-selftest
+[release:publish] 127.0.0.1:5157/laysi/trustiot-v2/charts/trustiot:0.0.57-rc.1 already holds this chart (sha256:3424072994e7c1d9c45396116411543ae1db3b395b2962310488797ff4ead9a1); not pushing it again
+[release:publish] 127.0.0.1:5157/laysi/trustiot-v2/charts/trustiot:0.0.57-rc.1 → sha256:3424072994e7c1d9c45396116411543ae1db3b395b2962310488797ff4ead9a1: signed
+[release:publish] local test: no GitHub Release; its body is in ~/.cache/trustiot-release.CkHCMI/release-body.md
+[release:publish] released v0.0.57-rc.1
+CHECK second publish: the chart was already there and both runs published the same digests
+{
+  "images": [
+    {
+      "name": "identity",
+      "ref": "127.0.0.1:5157/laysi/trustiot-v2/identity:0.0.57-rc.1",
+      "digest": "sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e",
+      "sbomAsset": "identity-0.0.57-rc.1.spdx.json"
+    },
+    {
+      "name": "postgres",
+      "ref": "127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1",
+      "digest": "sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a",
+      "sbomAsset": "postgres-0.0.57-rc.1.spdx.json"
+    },
+    {
+      "name": "release-selftest",
+      "ref": "127.0.0.1:5157/laysi/trustiot-v2/release-selftest:0.0.57-rc.1",
+      "digest": "sha256:f48b2d9ef25eab297ebf11236b86815c8fe18465e240d83bd4bd7c1ca2527329",
+      "sbomAsset": "release-selftest-0.0.57-rc.1.spdx.json"
+    }
+  ],
+  "chart": {
+    "name": "trustiot",
+    "ref": "127.0.0.1:5157/laysi/trustiot-v2/charts/trustiot:0.0.57-rc.1",
+    "digest": "sha256:3424072994e7c1d9c45396116411543ae1db3b395b2962310488797ff4ead9a1"
+  },
+  "releaseUrl": ""
+}
+
+===== verify (2026-10-12T20:05:29Z)
+[release:verify] 127.0.0.1:5157/laysi/trustiot-v2/identity:0.0.57-rc.1: sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e, signature and SBOM attestation verified (SPDX-2.3，1 個套件)
+[release:verify] 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1: sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a, signature and SBOM attestation verified (SPDX-2.3，1 個套件)
+[release:verify] 127.0.0.1:5157/laysi/trustiot-v2/release-selftest:0.0.57-rc.1: sha256:f48b2d9ef25eab297ebf11236b86815c8fe18465e240d83bd4bd7c1ca2527329, signature and SBOM attestation verified (SPDX-2.3，1 個套件)
+[release:verify] 127.0.0.1:5157/laysi/trustiot-v2/charts/trustiot:0.0.57-rc.1: sha256:3424072994e7c1d9c45396116411543ae1db3b395b2962310488797ff4ead9a1, signature verified, version and appVersion 0.0.57-rc.1
+[release:verify] 127.0.0.1:5157/laysi/trustiot-v2/charts/trustiot:0.0.57-rc.1 deploys 127.0.0.1:5157/laysi/trustiot-v2/identity:0.0.57-rc.1@sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e
+[release:verify] 127.0.0.1:5157/laysi/trustiot-v2/charts/trustiot:0.0.57-rc.1 deploys 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1@sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a
+[release:verify] verified 3 image(s) and the chart
+--- report.md
+## 驗證結果
+
+2026-10-12T20:05:30Z 由 release workflow 的 verify job 以唯讀權限從 registry 檢查，以本機測試金鑰驗證簽章（本機測試，不是正式發佈）：
+
+- 映像 `identity`：tag 指向 `sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e`；平台 linux/arm64；cosign 簽章驗證通過；SBOM attestation 驗證通過（SPDX-2.3，1 個套件）。
+- 映像 `postgres`：tag 指向 `sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a`；平台 linux/arm64；cosign 簽章驗證通過；SBOM attestation 驗證通過（SPDX-2.3，1 個套件）。
+- 映像 `release-selftest`：tag 指向 `sha256:f48b2d9ef25eab297ebf11236b86815c8fe18465e240d83bd4bd7c1ca2527329`；平台 linux/arm64；cosign 簽章驗證通過；SBOM attestation 驗證通過（SPDX-2.3，1 個套件）。
+- Helm chart `trustiot`：tag 指向 `sha256:3424072994e7c1d9c45396116411543ae1db3b395b2962310488797ff4ead9a1`；cosign 簽章驗證通過；拉下的 chart 就是發佈的檔案；Chart.yaml 的 version 與 appVersion 都是 `0.0.57-rc.1`；chart 部署的映像以 digest 固定為這次發佈的映像（只用 `values.yaml` 與分別疊上 `values-saas.yaml`、`values-onprem.yaml` 都相同）：`127.0.0.1:5157/laysi/trustiot-v2/identity:0.0.57-rc.1@sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e`、`127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1@sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a`；`release-selftest` 不由 chart 部署。
+
+===== the pulled chart renders the pushed image digests (2026-10-12T20:05:30Z)
+--- helm show values | image digests and repositories
+85-  image:
+86-    # Registry prefix; the image is <registry>/<service name> unless `repository` is set.
+87:    registry: 127.0.0.1:5157/laysi/trustiot-v2
+88-    # Full repository; overrides registry/<service name>.
+175-    # Added by the release (scripts/release/chart-images.ts).
+176-    image:
+177:      digest: sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e
+178-    enabled: false
+262-      # Our CloudNativePG operand image: PostgreSQL 18 with Apache AGE (deploy/images/postgres),
+263-      # published by the release together with the services.
+264:      repository: 127.0.0.1:5157/laysi/trustiot-v2/postgres
+265-      # Empty means Chart.appVersion.
+266-      tag: ""
+267-      # sha256 digest; when set, the image is pinned to it.
+268:      digest: sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a
+269-      pullPolicy: IfNotPresent
+327-      repository: docker.io/clickhouse/clickhouse-server
+328-      tag: "26.8"
+329:      digest: sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c
+330-      pullPolicy: IfNotPresent
+459-      repository: docker.io/otel/opentelemetry-collector-contrib
+460-      tag: "0.161.0"
+461:      digest: sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
+462-      pullPolicy: IfNotPresent
+--- pushed manifests (skopeo, straight from the registry)
+127.0.0.1:5157/laysi/trustiot-v2/identity:0.0.57-rc.1 -> sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e
+127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1 -> sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a
+127.0.0.1:5157/laysi/trustiot-v2/release-selftest:0.0.57-rc.1 -> sha256:f48b2d9ef25eab297ebf11236b86815c8fe18465e240d83bd4bd7c1ca2527329
+--- helm template with values-saas.yaml: image references of this release
+      1 image: 127.0.0.1:5157/laysi/trustiot-v2/identity:0.0.57-rc.1@sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e
+      1 image: 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1@sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a
+--- helm template with values-onprem.yaml: image references of this release
+      1 image: 127.0.0.1:5157/laysi/trustiot-v2/identity:0.0.57-rc.1@sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e
+      1 image: 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1@sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a
+OK   rendered-saas.yaml: identity -> 127.0.0.1:5157/laysi/trustiot-v2/identity:0.0.57-rc.1@sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e (1 reference(s))
+OK   rendered-saas.yaml: postgres -> 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1@sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a (1 reference(s))
+OK   rendered-onprem.yaml: identity -> 127.0.0.1:5157/laysi/trustiot-v2/identity:0.0.57-rc.1@sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e (1 reference(s))
+OK   rendered-onprem.yaml: postgres -> 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1@sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a (1 reference(s))
+
+===== negative probe: a signed chart with a wrong postgres digest (2026-10-12T20:05:31Z)
+2
+re-pushed 127.0.0.1:5157/laysi/trustiot-v2/charts/trustiot:0.0.57-rc.1 as sha256:cdc5f2d918807632388c41511e7d27feb9dd781b644395603d193f4360b58879
+[release:verify] 127.0.0.1:5157/laysi/trustiot-v2/identity:0.0.57-rc.1: sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e, signature and SBOM attestation verified (SPDX-2.3，1 個套件)
+[release:verify] 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1: sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a, signature and SBOM attestation verified (SPDX-2.3，1 個套件)
+[release:verify] 127.0.0.1:5157/laysi/trustiot-v2/release-selftest:0.0.57-rc.1: sha256:f48b2d9ef25eab297ebf11236b86815c8fe18465e240d83bd4bd7c1ca2527329, signature and SBOM attestation verified (SPDX-2.3，1 個套件)
+[release:verify] 127.0.0.1:5157/laysi/trustiot-v2/charts/trustiot:0.0.57-rc.1 does not pin this release's images: values.yaml: postgres is 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1@sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e, not 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1@sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a; values.yaml + values-saas.yaml: postgres is 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1@sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e, not 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1@sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a; values.yaml + values-onprem.yaml: postgres is 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1@sha256:4e0d9c0b2619a5c8ab63aaa9684568bfd7df3a2c5a06a78216ab830c7b85750e, not 127.0.0.1:5157/laysi/trustiot-v2/postgres:0.0.57-rc.1@sha256:f0004ca2b312c680d4d8662a593b14d3b1d1f6535d2e7011e6e619eca345b23a
+CHECK negative probe: verify refused the chart with the wrong postgres digest
+
+===== done (2026-10-12T20:05:33Z)

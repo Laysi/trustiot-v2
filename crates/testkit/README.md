@@ -147,7 +147,7 @@ async fn tenants_are_isolated() {
 ## 其他工具
 
 - `TestIssuer::new()`：每次產生新的金鑰；`tenant_token(audience, tenant, role)`、`token(&claims)` 簽 token，`user(audience, &claims)` 取得 handler 會拿到的 `UserIdentity`。
-- `tls_postgres(init)`：image 與 service-kit 的測試相同（以 digest 鎖定），記憶體上限 512 MB；`init` 是以 superuser 在 `postgres` 資料庫執行一次的靜態 SQL（例如建立角色，密碼用 `TEST_PASSWORD`）。每個測試用自己的資料庫。
+- `tls_postgres(init)`：image 與 service-kit 的測試相同（以 digest 鎖定），記憶體上限 512 MB；`init` 是以 superuser 在 `postgres` 資料庫執行一次的靜態 SQL（例如建立角色，密碼用 `TEST_PASSWORD`）。每個測試用自己的資料庫。容器經 `postgres::start`（與 service-kit、outbox、identity 的測試是同一個檔案，`crates/service-kit/tests/support/start.rs`）啟動：等待有上限（具名常數與量測依據見 [`docs/test-reports/2026-10-12-364-job-lock-postgres-start.md`](../../docs/test-reports/2026-10-12-364-job-lock-postgres-start.md)）、發佈的連接埠失效時換容器、失敗訊息寫明在等什麼並附容器狀態與日誌最後 20 行（不含環境變數）。`start_tls_postgres_within(limits, runtime, kind, published_port_dead)` 是 `tls_postgres` 的啟動部分，`tests/postgres_start.rs` 用它測這些行為。
 - `Container`、`container_runtime()`、`unavailable(what)`：自己起其他容器時用。
 
 ## 執行

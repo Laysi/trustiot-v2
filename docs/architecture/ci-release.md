@@ -224,6 +224,9 @@ gh api repos/Laysi/trustiot-v2/actions/permissions/fork-pr-contributor-approval
   - Rust 映像：目錄只放 `image.toml`，以 `[rust]` 的 `package` 指定 Cargo 套件，套件有多個執行檔時加 `bin`。執行檔交叉編譯成 `aarch64-unknown-linux-musl` 的靜態執行檔，放進共用的 `deploy/images/rust-binary.Containerfile`：distroless static 基底（以 digest 釘選），以 UID 65532 執行。
   - 自帶 Containerfile 的映像（例如 `deploy/images/postgres`，含 AGE 的 CloudNativePG Postgres，Laysi/trustiot-v2#57）：目錄放 `Containerfile`，目錄本身是 build context。arm64 那一層不能有 `RUN`：要編譯的東西放在 `FROM --platform=$BUILDPLATFORM` 的建置階段交叉編譯，或取用上游已有的 arm64 映像。release.yml 原本在 x86 runner 上建置、沒有模擬器，違反時建置自然失敗；改到 arm64 runner 後（Laysi/trustiot-v2#310）那一層的 `RUN` 能執行，所以改由 plan 檢查（`scripts/release/containerfile.ts` 的 `targetStageRunProblems`），理由見下方「交叉編譯與可重現建置」。
 - Helm chart：`ghcr.io/laysi/trustiot-v2/charts/trustiot:<版本>`。打包時 version 與 appVersion 都設成 tag 的版本，repo 裡的 `Chart.yaml` 不改；chart 預設的映像 tag 是 appVersion，所以預設拉同一版的映像（所有服務一起發版，決策 4）。
+  - chart 以 digest 固定同一次發佈的映像（2026-10-13，Laysi/trustiot-v2#57）：publish 推送映像之後，從 `deploy/chart` 的暫存複本打包 chart，並在複本的 `values.yaml` 寫入這次發佈的映像 digest（`scripts/release/chart-images.ts`）。服務映像寫在 `services.<名稱>.image.digest`（欄位不存在時加上），Postgres 映像寫在 `postgres.bundled.image.digest`。所以簽過的 chart 部署的是 `<repository>:<版本>@<digest>`，Flux 以 digest 拉 chart 並驗簽，拿到的映像參照也跟著固定。
+  - repo 裡的 chart 不寫 digest：映像 tag 跟著 appVersion，寫死某一次的 digest 會讓之後的版本變成「新 tag＋舊 digest」。打包前檢查每個要固定的映像在 repo 的 values 裡 digest 是空的、tag 是空的（跟著 appVersion）、repository 就是推送的位置，任一項不符就停止，不會悄悄覆蓋；改寫後的 `values.yaml` 重新解析，必須只差在這些欄位，而且只用 `values.yaml` 與分別疊上 `values-saas.yaml`、`values-onprem.yaml` 時都算出這次的參照。改寫是逐行的文字編輯，註解與排版不變；同一個 commit 與同一組映像 digest 一定得到相同的 chart，所以重跑 publish 會看到「已經是這個 chart」。
+  - 哪些映像由 chart 部署：`postgres`，以及名稱是 chart `services` 的 key 的映像。其他映像要列在 `chart-images.ts` 的 `NOT_DEPLOYED_BY_CHART`（目前只有 `release-selftest`），否則 publish 停止，`bun test scripts` 也會失敗，新映像不會漏掉固定。`deploy/chart` 的型態檔與 `deploy/flux` 的 values（`values-saas.yaml` 副本、`values-instance.yaml`）不能覆寫這些映像的 registry、repository、tag 或 digest，`bun test scripts`（`scripts/release/chart-images.test.ts`）檢查。
 - GitHub Release：發版說明（`Laysi/release-notes-action`，從上一個版本的 tag 算起：正式版從上一個正式版，候選版從上一個任何 tag）、每個映像與 chart 的 digest、驗證指令、每個映像的 SBOM（`<名稱>-<版本>.spdx.json`），最後附上 verify job 的驗證結果。候選版標為 prerelease，不會成為 Latest。發版說明要用模型整理時，設定 repo 變數 `AI_MODEL`（與 `AI_BASE_URL`）及 secret `AI_API_KEY`；沒設定或呼叫失敗時，內容是上一版以來的 commit 主旨。
 - `release-selftest`（`tools/release-selftest`）是流程自測用的映像，不是服務：一個連結 C 物件的小程式，執行時印出自己的架構，用來驗證交叉編譯（含 C 編譯器與連結器）、簽章、SBOM 與驗證整條路。它不在 chart 裡，也不部署。第一個 Rust 服務映像加入後，連同 crate 一起刪除：`deploy/images/postgres` 雖然是第一個真正的映像，但只走 Containerfile 的路，不經 Rust 的交叉編譯、cargo-auditable 與 SBOM 的 crate 檢查，那一段仍要靠它驗證（2026-10-11，Laysi/trustiot-v2#57）。
 
@@ -239,7 +242,7 @@ gh api repos/Laysi/trustiot-v2/actions/permissions/fork-pr-contributor-approval
 | --- | --- | --- |
 | `plan` | `contents: read`、`actions: read` | 檢查 tag（正式版要在 main 上，且該 commit 在 main 的 ci 通過；`actions: read` 只用來讀 ci 的執行結果）、列出要發佈的映像與 chart、`helm lint --strict`（兩種部署型態），產生發版說明。`AI_API_KEY` 只交給產生發版說明的步驟 |
 | `build` | `contents: read` | 交叉編譯並建置映像、產生 SBOM。它執行第三方的建置程式碼（Cargo build script、proc macro），所以沒有任何 secret 與寫入權限，交出去的只有資料：映像的 OCI 壓縮檔與 SBOM，以 artifact 交給 publish，保留 1 天 |
-| `publish` | `contents: write`、`packages: write`、`id-token: write`；`release` environment | 原封不動推送映像（digest 不變）、簽章、附 SBOM attestation；從 repo 打包、推送並簽章 chart；建立 GitHub Release。不執行建置程式碼 |
+| `publish` | `contents: write`、`packages: write`、`id-token: write`；`release` environment | 原封不動推送映像（digest 不變）、簽章、附 SBOM attestation；從 repo 的 chart 複本打包（寫入這次發佈的映像 digest，見「發佈內容」）、推送並簽章 chart；建立 GitHub Release。不執行建置程式碼 |
 | `verify` | `contents: read`、`packages: read` | 以消費端的方式唯讀檢查發佈結果，見下方「簽章與驗證」 |
 | `deploy-pr` | `contents: write`、`pull-requests: write`、`actions: write` | verify 通過後提議部署到 SaaS（Laysi/trustiot-v2#70）：以 GitHub API 在 main 上做一個 commit（`deploy/flux/` 的 chart 版本、digest 與 `values-saas.yaml` 副本），推到 `deploy/trustiot-<版本>`、開 PR（候選版為 draft），再以 `workflow_dispatch` 在該分支跑 ci.yml。commit 由 GitHub 以 `github-actions[bot]` 建立並簽章，job 不需要 git 憑證。版本不比 main 上部署中的新時不開 PR；重跑時已有的分支與 PR 不重開。repo 不允許 Actions 開 PR 時只推分支、以 warning 附上 compare 連結，job 仍然成功。見 [deploy/flux/README.md](../../deploy/flux/README.md) |
 | `report` | `contents: write`、`statuses: write` | 不論前面成敗都執行：在 tag 指向的 commit 上設 commit status `release`（失敗時寫出第一個失敗的 job 與原因，含 `deploy-pr`），並把驗證結果附到 GitHub Release |
@@ -276,9 +279,11 @@ cosign verify-attestation --type spdxjson ghcr.io/laysi/trustiot-v2/<名稱>:<�
 
 chart 以同樣的身分驗證 `ghcr.io/laysi/trustiot-v2/charts/trustiot:<版本>`。每次發佈的 GitHub Release 都列出該版本完整的驗證指令與 digest。SBOM 是 syft 產生的 SPDX 2.3 JSON，以 attestation 附在映像上，也是 GitHub Release 的附件。
 
-verify job 對每個映像檢查：tag 指向 publish 推送的 digest；只有一個平台且是 linux/arm64；簽章與 SBOM attestation 以上述身分（再加上 commit SHA 與觸發事件）驗證通過；匿名拉取被拒，即套件是私有的（套件改為公開時這一項會失敗，見「GHCR 套件的可見性」）。chart 檢查 tag、簽章與 version、appVersion。另外以不屬於這次發佈的身分驗證一次，必須失敗，證明上述檢查不是空檢查。
+verify job 對每個映像檢查：tag 指向 publish 推送的 digest；只有一個平台且是 linux/arm64；簽章與 SBOM attestation 以上述身分（再加上 commit SHA 與觸發事件）驗證通過。chart 檢查 tag、簽章與 version、appVersion，再解開拉下的 chart，讀它的 `values.yaml` 與 `values-saas.yaml`、`values-onprem.yaml`：chart 部署的每個這次發佈的映像，只用 `values.yaml` 與分別疊上兩個型態檔時，算出的參照都要是 `<repository>:<版本>@<publish 推送的 digest>`（算法與樣板相同，`scripts/release/chart-images.test.ts` 以 `helm template` 比對）。以讀 values 而不是 render 檢查，是因為 render 需要安裝實例的覆寫檔，也要啟用每個服務，verify 不該依賴這些。另外以不屬於這次發佈的身分驗證一次，必須失敗，證明上述檢查不是空檢查。以上任一項不通過，verify 立刻失敗。
 
-Flux（Laysi/trustiot-v2#70）驗證 chart 時，要用支援 cosign v3 bundle 格式的 Flux（2.8 以上；`.prototools` 釘 2.9.6），`matchOIDCIdentity` 的 issuer 寫 `^https://token\.actions\.githubusercontent\.com$`，subject 寫該版本的完整身分，例如 `^https://github\.com/Laysi/trustiot-v2/\.github/workflows/release\.yml@refs/tags/v1\.2\.0$`（`deploy/flux/clusters/saas/trustiot/chart.yaml`，由 release.yml 的 `deploy-pr` job 寫入）。Flux 只驗證它自己拉的 chart；服務映像由 kubelet 拉取，SaaS 上的映像驗簽要另外的 admission controller（Laysi/trustiot-v2#70 的後續提案）。
+最後才檢查套件是否私有（2026-10-13 起，Laysi/trustiot-v2#57）：每個映像與 chart 都以匿名方式要求一次，必須被拒（`scripts/release/package-privacy.ts`）。這一項不在第一個公開的套件就停下，而是把每個套件的結果都收集起來：報告的每一列都寫出該套件的結果（私有、可以匿名拉取、或無法判斷），有任何一個不是私有時，報告開頭寫明驗證未通過與是哪些套件；報告照樣寫進 `report` 輸出，由 `report` job 附到 GitHub Release，然後 verify 才失敗，`error` 輸出列出所有公開的套件。verify 仍然失敗，`deploy-pr` 不執行、`release` commit status 是失敗。無法判斷（匿名要求因為其他原因失敗）也算不通過。本機測試模式（`--local-test-key`）的暫用 registry 沒有可見性，不做這一項。
+
+Flux（Laysi/trustiot-v2#70）驗證 chart 時，要用支援 cosign v3 bundle 格式的 Flux（2.8 以上；`.prototools` 釘 2.9.6），`matchOIDCIdentity` 的 issuer 寫 `^https://token\.actions\.githubusercontent\.com$`，subject 寫該版本的完整身分，例如 `^https://github\.com/Laysi/trustiot-v2/\.github/workflows/release\.yml@refs/tags/v1\.2\.0$`（`deploy/flux/clusters/saas/trustiot/chart.yaml`，由 release.yml 的 `deploy-pr` job 寫入）。Flux 只驗證它自己拉的 chart；服務映像由 kubelet 拉取，SaaS 上的映像驗簽要另外的 admission controller（Laysi/trustiot-v2#70 的後續提案）。chart 以 digest 固定它部署的映像（見「發佈內容」），所以簽過的 chart 決定了 kubelet 拉哪一個映像，tag 被移動也不影響；映像本身的簽章仍然只有 admission controller 能在叢集裡檢查。
 
 ### 公開的透明紀錄（2026-10-10 決定接受）
 
@@ -340,7 +345,9 @@ repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（
 - 套件改為公開後無法再改回私有（「Once you make a package public, you cannot make it private again」）。
 - 可見性在套件的設定頁（Danger Zone，Change visibility）改，不在 repo 設定。
 
-我們現有的套件目前實際是私有還是公開，沒有驗證（要以組織的 Packages 頁或 API 確認）；依上述預設，應該都還是私有。release.yml 的 `verify` job 每次發佈都檢查匿名拉取被拒（`scripts/release/verify.ts` 的 `checkPrivate`），所以只要發佈成功並通過 verify，該版本的映像與 chart 就是私有的。
+我們現有的套件目前實際是私有還是公開，沒有驗證（要以組織的 Packages 頁或 API 確認）；依上述預設，應該都還是私有。release.yml 的 `verify` job 每次發佈都檢查匿名拉取被拒（`scripts/release/package-privacy.ts`），所以只要發佈成功並通過 verify，該版本的映像與 chart 就是私有的。
+
+2026-10-13 更新：`v0.0.0-rc.4` 的 verify 發現 repo 公開後才第一次建立的套件 `identity` 與 `postgres` 可以匿名拉取（Laysi/trustiot-v2#57）；使用者決定 repo 公開期間不處理，轉回私有後再檢查（Laysi/trustiot-v2#1 第 10 項）。為了讓這段期間的發佈仍然做完其他檢查，私有檢查改在 verify 的最後執行（見上方「簽章與驗證」）：套件公開時，候選版的 verify 會先做完每一項其他檢查（簽章、SBOM、chart 與它固定的映像 digest），把結果寫進報告，最後才以私有檢查失敗。所以這段期間 verify 失敗是預期的，要看報告確認失敗的只有私有這一項。
 
 是否把套件改為公開，屬於使用者的決定，不在本次文件更新的範圍：
 

@@ -274,7 +274,7 @@ ALTER ROLE assets_app SET search_path = assets;      -- 消費端的表在服務
 
 ## 測試
 
-需要 podman 或 docker：每個測試起一個用完即刪、以測試時產生的 CA 啟用 TLS 的 `postgres:18.6-alpine` 容器，消費端以 service-kit 的 pool（`verify-full`、連線檢查）連線。沒有容器執行環境時在本機略過並印出 `skipped:`；設了 `CI` 時改為失敗。不使用 `TEST_DATABASE_URL`：測試要以 superuser 建角色，並需要知道伺服器的 CA。每個測試的 `Database::setup` 建立產生端與消費端的 schema、決策 29 的四個角色、`outbox_event` 的 RLS（service-kit 的範本）與上面的授權。
+需要 podman 或 docker：每個測試起一個用完即刪、以測試時產生的 CA 啟用 TLS 的 `postgres:18.6-alpine` 容器，消費端以 service-kit 的 pool（`verify-full`、連線檢查）連線。沒有容器執行環境時在本機略過並印出 `skipped:`；設了 `CI` 時改為失敗。容器經 service-kit 測試的同一份啟動邏輯（`crates/service-kit/tests/support/start.rs`，以 `#[path]` 引入）啟動：等待有上限、發佈的連接埠失效時換容器、失敗訊息附容器狀態與日誌（`cargo test -p outbox --test postgres_start` 測這些）。不使用 `TEST_DATABASE_URL`：測試要以 superuser 建角色，並需要知道伺服器的 CA。每個測試的 `Database::setup` 建立產生端與消費端的 schema、決策 29 的四個角色、`outbox_event` 的 RLS（service-kit 的範本）與上面的授權。
 
 | 指令 | 內容 |
 | --- | --- |
@@ -285,6 +285,7 @@ ALTER ROLE assets_app SET search_path = assets;      -- 消費端的表在服務
 | `cargo test -p outbox --test verify_271` | Laysi/trustiot-v2#271 的獨立驗證（[報告](../../docs/test-reports/2026-10-11-271-verify.md)）：handler 以角色、RLS 手法離開租戶都失敗；改租戶、自己 `COMMIT` 的投遞進死信；session 層級的租戶不會帶進下一個交易；`PlatformReader` 的唯讀解除不了；怪異的租戶 ID、角色設錯、設定錯誤、三個副本加並行寫入、資料庫重啟；`f5_`：handler panic 之後 `run` 繼續處理，lag 持續更新（Laysi/trustiot-v2#333 修正） |
 | `cargo test -p outbox --test handler_panic` | Laysi/trustiot-v2#333：`begin`、`handle` panic 一次時回滾並重試、之後只處理一次；一直 panic 的事件第 3 次進死信、之後的事件照常處理；`run` 遇到 panic 不停、lag 持續更新、停止後不再回報；`begin` 或 `handle` 自己 `COMMIT` 後 panic（或 `begin` 回錯誤）時直接進死信、不重試；陳述還在執行時 panic，同一條連線之後乾淨可用（無租戶、無殘留寫入）；處理卡住時 lag 與 age 上升、`run` 被 drop 後不再回報；量測卡住（log 被鎖）超過 3 個間隔後不再回報、解鎖後恢復 |
 | `cargo test -p outbox --test failure_paths` | Laysi/trustiot-v2#350：`begin`、`handle` 回永久或可重試的錯誤時，消費端下一次取連線前，失敗那次投遞的交易與 advisory lock 已經結束（查 `pg_locks`），handler 的呼叫次數剛好、沒有 `Busy`；`begin` 自己 `COMMIT` 或改租戶後回 `Ok`，重複投遞與第一次投遞都進死信，`handle` 不在被破壞的交易裡執行 |
+| `cargo test -p outbox --test postgres_start` | Laysi/trustiot-v2#374：測試用 Postgres 容器的啟動：伺服器起不來時的失敗訊息寫明在等什麼、等多久、最後的錯誤、容器狀態與日誌尾端（不含環境變數）並移除容器；發佈的連接埠主機端連不上時換新容器（含測試自己指定主機連接埠、之後重啟的情況） |
 | `cargo test -p outbox --test notify` | 舊讀數不覆蓋新狀態（含副本競爭）、晚到與重播收斂 |
 | `cargo test -p outbox --test crash` | 以 SIGKILL 結束 `outbox-example`：commit 後投遞前、handler 寫入後 commit 前，重啟後各處理一次，且在事件的租戶處理 |
 | `cargo test -p outbox --test metrics` | lag 經 OTLP/HTTP 匯出到假的接收端，解碼後讀到數值 |

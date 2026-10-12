@@ -221,7 +221,7 @@ mesh:
 | `serviceDefaults.image.registry` | `ghcr.io/laysi/trustiot-v2` | 映像是 `<registry>/<服務名稱>` |
 | `serviceDefaults.image.repository` | `""` | 完整的 repository，設定時取代 `<registry>/<服務名稱>` |
 | `serviceDefaults.image.tag` | `""` | 空白時用 `Chart.yaml` 的 `appVersion`（服務一起發版，決策 4） |
-| `serviceDefaults.image.digest` | `""` | `sha256:` 加 64 個十六進位字元；設定時以 digest 固定映像 |
+| `serviceDefaults.image.digest` | `""` | `sha256:` 加 64 個十六進位字元；設定時以 digest 固定映像。repo 裡留空，發佈的 chart 由 release 在 `services.<name>.image.digest` 寫入各服務映像的 digest（見「映像的 digest」） |
 | `serviceDefaults.image.pullPolicy` | `IfNotPresent` | `Always`、`IfNotPresent` 或 `Never` |
 | `serviceDefaults.replicas` | `1` | 副本數 |
 | `serviceDefaults.ports` | `http` 8080 | 容器埠清單，欄位見下表；Service 開同樣的埠號 |
@@ -279,6 +279,17 @@ mesh:
 | `ports[].protocol` | `TCP`（預設）、`UDP` 或 `SCTP` |
 | `ports[].appProtocol` | 例如 `http`，供 Istio 判斷協定 |
 
+### 映像的 digest
+
+我們自己的映像（服務與 `postgres.bundled.image`）的 tag 預設是 `Chart.appVersion`，所以 repo 裡的 chart 不寫 digest：寫死某一次發佈的 digest，之後的版本就會變成「新 tag＋舊 digest」。
+
+發佈的 chart 以 digest 固定同一次發佈的映像（Laysi/trustiot-v2#57）。release 的 publish 推送映像之後，在這份 chart 的暫存複本寫入它們的 digest 再打包、簽章：服務寫在 `services.<name>.image.digest`（`values.yaml` 沒有這個欄位時加上），Postgres 寫在 `postgres.bundled.image.digest`。所以從 GHCR 拉下的 chart 會 render 出 `<repository>:<版本>@sha256:…`，verify 也會檢查（[CI 與發佈](../../docs/architecture/ci-release.md)「release.yml」）。
+
+- `values-saas.yaml`、`values-onprem.yaml` 與 `deploy/flux` 的 values 不覆寫這些映像的 `registry`、`repository`、`tag`、`digest`（`bun test scripts` 檢查）。
+- 安裝實例的覆寫檔也不要動它們。要從自己的 registry 鏡像時，只改 `serviceDefaults.image.registry` 與 `postgres.bundled.image.repository`，鏡像要保留 digest（例如 `skopeo copy --preserve-digests`），digest 才對得上。
+- 改用別的映像（例如臨時修補版）時，`tag` 與 `digest` 要一起改，或把 `digest` 設成 `""`。只改 `tag` 時，kubelet 仍然依 digest 拉原本的映像。
+- `tests/values/smoke.yaml` 與 e2e 的 values 用本機建出的映像，套在 repo 裡（沒有 digest）的 chart 上，不受影響。
+
 ### 內部身分
 
 決策 27 的內部身分 token：身分服務為每個通過 cookie 驗證的請求簽一個 60 秒的 token，每個服務以這裡的公鑰驗證。格式、驗證規則與輪替在 `crates/service-kit/README.md` 的「內部身分」與 `services/identity/README.md`。
@@ -300,7 +311,7 @@ mesh:
 | `postgres.mode` | `bundled` | `bundled`：chart 在 release 的 namespace 部署 CloudNativePG 的 Cluster，叢集要先裝好 operator（見「叢集內的 Postgres」）；`external`：自行維運、含 Apache AGE 的 Postgres。用 Postgres 的服務在 `mesh.calls` 列出 `postgres` |
 | `postgres.bundled.image.repository` | `ghcr.io/laysi/trustiot-v2/postgres` | 我們的 CloudNativePG operand 映像：PostgreSQL 18 加 Apache AGE（deploy/images/postgres），由 release 與服務一起發佈 |
 | `postgres.bundled.image.tag` | `""` | 空白時用 `Chart.appVersion`；映像的 tag 是 TrustIoT 的版本，PostgreSQL 的 major 由 chart 寫在 ImageCatalog |
-| `postgres.bundled.image.digest` | `""` | sha256 digest；設定時以 digest 固定映像 |
+| `postgres.bundled.image.digest` | `""` | sha256 digest；設定時以 digest 固定映像。repo 裡留空，發佈的 chart 由 release 寫入同一次發佈的 digest（見「映像的 digest」） |
 | `postgres.bundled.image.pullPolicy` | `IfNotPresent` | |
 | `postgres.bundled.storage.size` | `""`，`bundled` 時必填 | 資料與 WAL 的磁碟區大小，每個部署自己估算，見「叢集內的 Postgres」 |
 | `postgres.bundled.storage.storageClassName` | `""` | 空白時用叢集預設的 StorageClass |

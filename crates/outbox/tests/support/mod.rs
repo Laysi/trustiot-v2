@@ -15,6 +15,12 @@
 
 pub mod postgres;
 
+/// The start of the Postgres container: one logic for every crate's tests (this file is in
+/// crates/service-kit/tests, which outbox's tests include as identity's do). It needs the
+/// `Container` and `unique_name` below.
+#[path = "../../../service-kit/tests/support/start.rs"]
+pub mod start;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
@@ -78,7 +84,7 @@ pub fn unavailable(what: &str) {
 }
 
 /// `podman` or `docker`, whichever works.
-fn container_runtime() -> Option<&'static str> {
+pub fn container_runtime() -> Option<&'static str> {
     ["podman", "docker"].into_iter().find(|runtime| {
         Command::new(runtime)
             .arg("--version")
@@ -89,7 +95,7 @@ fn container_runtime() -> Option<&'static str> {
     })
 }
 
-fn runtime_output(runtime: &str, args: &[&str]) -> String {
+pub fn runtime_output(runtime: &str, args: &[&str]) -> String {
     let output = Command::new(runtime)
         .args(args)
         .output()
@@ -112,10 +118,31 @@ pub fn unique(kind: &str) -> String {
     )
 }
 
+/// A name unique to this test process, for a container.
+pub fn unique_name(kind: &str) -> String {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    format!(
+        "outbox-test-{kind}-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 /// A container that is removed when dropped.
-struct Container {
-    runtime: &'static str,
-    name: String,
+pub struct Container {
+    pub runtime: &'static str,
+    pub name: String,
+}
+
+impl Container {
+    /// The host address mapped to `port` inside the container.
+    pub fn host_address(&self, port: &str) -> SocketAddr {
+        let mapping = runtime_output(self.runtime, &["port", &self.name, port]);
+        mapping
+            .lines()
+            .find_map(|line| line.trim().parse().ok())
+            .unwrap_or_else(|| panic!("no host address for {port}: {mapping}"))
+    }
 }
 
 impl Drop for Container {

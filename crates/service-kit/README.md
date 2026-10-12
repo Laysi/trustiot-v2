@@ -520,7 +520,7 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 | `cargo test -p service-kit --test chart_contract` | kit 的預設 API 埠、健康埠、探針的路徑與埠（`health`）與收尾時間符合 `deploy/chart/values.yaml` | 無 |
 
 - `TEST_DATABASE_URL` 指向可以任意取 advisory lock 的 Postgres（測試不建表），且不能要求驗證主機名稱，因為分割測試改經 `127.0.0.1` 的代理連線；沒設時，`job_lock` 與 `verify_job_lock` 各自的測試程式（binary）啟動一個用完即刪的 Postgres 容器，同一個程式裡的測試共用（`tests/support/postgres.rs` 的 `test_database()`；兩個程式不共用，cargo 一次只跑一個），每個測試用 `CREATE DATABASE` 取得自己的資料庫，advisory lock 屬於資料庫，所以彼此互不可見。
-- 容器的啟動與等待只有一份（`start_postgres()`，`tenant_db` 的 TLS Postgres 也用它）：上限、依據的量測值與失敗訊息的內容見 [`docs/test-reports/2026-10-12-364-job-lock-postgres-start.md`](../../docs/test-reports/2026-10-12-364-job-lock-postgres-start.md)。主機端登入不了、容器內伺服器卻已接受連線（Docker 偶爾沒有建立發佈的連接埠）時，換一個容器重來，最多 3 個。`cargo test -p service-kit --test postgres_start` 測這個行為，需要 podman 或 docker。
+- 容器的啟動與等待只有一份（`tests/support/start.rs` 的 `start_postgres()`，`tenant_db` 的 TLS Postgres 也用它；`crates/outbox`、`crates/testkit` 與 `services/identity` 的測試以 `#[path]` 引入同一個檔案，所以修改它時四處都會受影響）：上限、依據的量測值與失敗訊息的內容見 [`docs/test-reports/2026-10-12-364-job-lock-postgres-start.md`](../../docs/test-reports/2026-10-12-364-job-lock-postgres-start.md)。主機端登入不了、容器內伺服器卻已接受連線（Docker 偶爾沒有建立發佈的連接埠）時，換一個容器重來，最多 3 個。`cargo test -p service-kit --test postgres_start` 測這個行為，需要 podman 或 docker。
 - `tenant_db` 的測試共用一個啟用 TLS 的 Postgres 容器（`tests/support/postgres.rs`，記憶體上限 512 MB），最後一個用到它的測試結束時刪除；每個測試用自己的資料庫。
 - 沒有容器執行環境時，需要它的測試在本機略過，並在 stderr 印出 `skipped:`；設了 `CI` 環境變數時改為失敗，CI 不會默默略過。
 - 加 `-- --nocapture` 會印出測試報告用的數據，例如容器停止花的時間與 exit code。

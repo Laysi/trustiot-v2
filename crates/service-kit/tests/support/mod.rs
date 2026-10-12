@@ -6,6 +6,7 @@
 )]
 
 pub mod postgres;
+pub mod start;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
