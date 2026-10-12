@@ -1,0 +1,206 @@
+rcheck: queued on the build host at 14:08:39 as 359; running now: (other job)
+ 14:41:35 up 15:16,  5 users,  load average: 0.65, 0.66, 2.06
+fmt-ok
+    Checking opentelemetry-proto v0.33.1
+    Checking opentelemetry-otlp v0.33.1
+    Checking sqlx v0.9.0
+    Checking service-kit v0.1.0 (<build-dir>/src/crates/service-kit)
+    Checking outbox v0.1.0 (<build-dir>/src/crates/outbox)
+    Checking testkit v0.1.0 (<build-dir>/src/crates/testkit)
+    Checking identity v0.1.0 (<build-dir>/src/services/identity)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.65s
+clippy-rc=0
+    Checking rand v0.9.5
+    Checking opentelemetry_sdk v0.33.1
+    Checking sqlx-postgres v0.9.0
+    Checking opentelemetry-proto v0.33.1
+    Checking sqlx v0.9.0
+    Checking opentelemetry-otlp v0.33.1
+    Checking service-kit v0.1.0 (<build-dir>/src/crates/service-kit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.58s
+     Running unittests src/lib.rs (<build-dir>/target/debug/deps/contract-7b57383a5611f30a)
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/client.rs (<build-dir>/target/debug/deps/client-3c70a1d587d32c7b)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+     Running tests/client_logging.rs (<build-dir>/target/debug/deps/client_logging-cd4f29c9985370fd)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/error_format.rs (<build-dir>/target/debug/deps/error_format-90c06ca073729b9c)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/events.rs (<build-dir>/target/debug/deps/events-0d7a0809f557a4ea)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (<build-dir>/target/debug/deps/identity-b5d115eaf070d5c4)
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+     Running tests/adversarial.rs (<build-dir>/target/debug/deps/adversarial-8d8cccc434a688e1)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.87s
+     Running tests/cross_tenant.rs (<build-dir>/target/debug/deps/cross_tenant-c9025896493602d1)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.41s
+     Running tests/ext_authz.rs (<build-dir>/target/debug/deps/ext_authz-e7fcbb89327177d3)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.73s
+     Running tests/token_claims.rs (<build-dir>/target/debug/deps/token_claims-8dfe1ff389a44842)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+     Running unittests src/lib.rs (<build-dir>/target/debug/deps/ingest-d250c2b5bdbd9e40)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/clickhouse.rs (<build-dir>/target/debug/deps/clickhouse-0905121cc18e092b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.64s
+     Running tests/migrations.rs (<build-dir>/target/debug/deps/migrations-1ef0f4ba1a7ec971)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (<build-dir>/target/debug/deps/openapi-d6f614b9954d0bd3)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/main.rs (<build-dir>/target/debug/deps/openapi-84c16ef930ba302b)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/openapi.rs (<build-dir>/target/debug/deps/openapi-020ebbe19875ed50)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (<build-dir>/target/debug/deps/outbox-7b4f1d0abd6b3afb)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/crash.rs (<build-dir>/target/debug/deps/crash-26afd3c4446a8d7a)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.98s
+     Running tests/delivery.rs (<build-dir>/target/debug/deps/delivery-83ecc39ede28447c)
+test an_event_committed_late_is_delivered_not_skipped ... ok
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.99s
+     Running tests/failure_paths.rs (<build-dir>/target/debug/deps/failure_paths-6539f023fa63ed29)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.44s
+     Running tests/handler_panic.rs (<build-dir>/target/debug/deps/handler_panic-805d51307138b5b7)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.77s
+     Running tests/metrics.rs (<build-dir>/target/debug/deps/metrics-69da0ff21cec597b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.66s
+     Running tests/notify.rs (<build-dir>/target/debug/deps/notify-1a9b791b2d217fd0)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.74s
+     Running tests/producer.rs (<build-dir>/target/debug/deps/producer-8dfc06b41a652f41)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.70s
+     Running tests/tenancy.rs (<build-dir>/target/debug/deps/tenancy-e1df88825fd7f300)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.69s
+     Running tests/verify_271.rs (<build-dir>/target/debug/deps/verify_271-446c111c0ee7b8ef)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.71s
+     Running unittests src/lib.rs (<build-dir>/target/debug/deps/protocol-b56a11c7b27c5dd7)
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running tests/adversarial.rs (<build-dir>/target/debug/deps/adversarial-e59d5e72b19097db)
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/allocation.rs (<build-dir>/target/debug/deps/allocation-9df529a1b33519de)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/broker.rs (<build-dir>/target/debug/deps/broker-a03f790f7257386b)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.76s
+     Running tests/compat.rs (<build-dir>/target/debug/deps/compat-f9eea0a92818d302)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/dependencies.rs (<build-dir>/target/debug/deps/dependencies-a5c364efddc7f396)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+     Running tests/fuzz.rs (<build-dir>/target/debug/deps/fuzz-22e3e4f765356a57)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+     Running tests/fuzz_split.rs (<build-dir>/target/debug/deps/fuzz_split-73cde5760516155f)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+     Running tests/golden.rs (<build-dir>/target/debug/deps/golden-aae1fabedc3fa168)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/limits.rs (<build-dir>/target/debug/deps/limits-22c7dbb34953a2b0)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/readme.rs (<build-dir>/target/debug/deps/readme-534fb3b17c81e6fd)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/robustness.rs (<build-dir>/target/debug/deps/robustness-b430d313f3b5aa31)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+     Running tests/split.rs (<build-dir>/target/debug/deps/split-b9ad5af01e89fa85)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+     Running tests/validation.rs (<build-dir>/target/debug/deps/validation-dc100de36ffabca4)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running unittests src/main.rs (<build-dir>/target/debug/deps/release_selftest-5c77e0b17e25948d)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (<build-dir>/target/debug/deps/repo_check-bcdd8915540fedcd)
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/repository.rs (<build-dir>/target/debug/deps/repository-4bf5f5e43d5bc66f)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running unittests src/lib.rs (<build-dir>/target/debug/deps/service_kit-72494eb280a2559b)
+test result: ok. 89 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+     Running tests/chart_contract.rs (<build-dir>/target/debug/deps/chart_contract-b1fde9479feca0ff)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/container.rs (<build-dir>/target/debug/deps/container-c568d542ff7a06b4)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.00s
+     Running tests/dependency_isolation.rs (<build-dir>/target/debug/deps/dependency_isolation-1b39e06043a99cb7)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+     Running tests/errors.rs (<build-dir>/target/debug/deps/errors-1b27d821dde5c998)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+     Running tests/identity.rs (<build-dir>/target/debug/deps/identity-52f102cf0ec66bfd)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+     Running tests/identity_adversarial.rs (<build-dir>/target/debug/deps/identity_adversarial-3be852673bcdc1ae)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.23s
+     Running tests/job_lock.rs (<build-dir>/target/debug/deps/job_lock-88333ce93092aa1b)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.94s
+     Running tests/lifecycle.rs (<build-dir>/target/debug/deps/lifecycle-6f13c815d94f5e15)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.05s
+     Running tests/logging.rs (<build-dir>/target/debug/deps/logging-a10bacbe6f5add1b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+     Running tests/otlp.rs (<build-dir>/target/debug/deps/otlp-d7d8988761bffcf2)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.28s
+     Running tests/postgres_trust.rs (<build-dir>/target/debug/deps/postgres_trust-a091cc65b513e6dc)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+     Running tests/tenant_db.rs (<build-dir>/target/debug/deps/tenant_db-1a875b540a99aade)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.61s
+     Running tests/verify_config.rs (<build-dir>/target/debug/deps/verify_config-44b8147e10af0ef0)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/verify_container.rs (<build-dir>/target/debug/deps/verify_container-f3c58382ee32a380)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.56s
+     Running tests/verify_job_lock.rs (<build-dir>/target/debug/deps/verify_job_lock-6d0219cfa35ca95c)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.83s
+     Running tests/verify_leaks.rs (<build-dir>/target/debug/deps/verify_leaks-cae8e30550384ebf)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
+     Running tests/verify_shutdown.rs (<build-dir>/target/debug/deps/verify_shutdown-2286a9744560f027)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.93s
+     Running unittests src/lib.rs (<build-dir>/target/debug/deps/sql_check-1bc345e149b707e5)
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/check.rs (<build-dir>/target/debug/deps/check-600082b3a3b97008)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s
+     Running unittests src/lib.rs (<build-dir>/target/debug/deps/testkit-c5f0fb1268aeb8fb)
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/postgres_isolation.rs (<build-dir>/target/debug/deps/postgres_isolation-788328ad6a5d28c5)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.18s
+     Running unittests src/lib.rs (<build-dir>/target/debug/deps/webpki_roots-32d6e46fad581407)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (<build-dir>/target/debug/deps/service_kit-f1d118ea5c8db5ff)
+test result: ok. 62 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+     Running tests/chart_contract.rs (<build-dir>/target/debug/deps/chart_contract-b38bdcd0bb03a78d)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/container.rs (<build-dir>/target/debug/deps/container-73ed04d3a332047f)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.01s
+     Running tests/dependency_isolation.rs (<build-dir>/target/debug/deps/dependency_isolation-0d397bc4f65d5405)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+     Running tests/errors.rs (<build-dir>/target/debug/deps/errors-93f2d9a919b6ec96)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+     Running tests/identity.rs (<build-dir>/target/debug/deps/identity-a8b3ef2aee3fa2af)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/identity_adversarial.rs (<build-dir>/target/debug/deps/identity_adversarial-775ebfb6179a8737)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/job_lock.rs (<build-dir>/target/debug/deps/job_lock-60bb36acf8822019)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.93s
+     Running tests/lifecycle.rs (<build-dir>/target/debug/deps/lifecycle-8464cd8d14d66064)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.05s
+     Running tests/logging.rs (<build-dir>/target/debug/deps/logging-a00000561fcaa7f2)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+     Running tests/otlp.rs (<build-dir>/target/debug/deps/otlp-5668c0b464e48dde)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.27s
+     Running tests/postgres_trust.rs (<build-dir>/target/debug/deps/postgres_trust-f85e55cb77120d78)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.86s
+     Running tests/tenant_db.rs (<build-dir>/target/debug/deps/tenant_db-827af6c943e9d7c4)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/verify_config.rs (<build-dir>/target/debug/deps/verify_config-3891c79ba4367b77)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/verify_container.rs (<build-dir>/target/debug/deps/verify_container-6913bc3e022a953e)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.40s
+     Running tests/verify_job_lock.rs (<build-dir>/target/debug/deps/verify_job_lock-a72b9e49bf773441)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.74s
+     Running tests/verify_leaks.rs (<build-dir>/target/debug/deps/verify_leaks-68a2efd5fc4d609e)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
+     Running tests/verify_shutdown.rs (<build-dir>/target/debug/deps/verify_shutdown-a85ef99e88e88377)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.94s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+ 14:46:27 up 15:21,  6 users,  load average: 1.28, 1.99, 2.39
+rcheck: removed 89 dangling test volumes
+rcheck: exit 0 at 14:46:30 (the build host, 359)
