@@ -1,7 +1,9 @@
-//! Delivery from a producer's log to consumers, against a real Postgres (`TEST_DATABASE_URL`,
-//! or a throwaway container; skipped without either unless `CI` is set): order within an
-//! aggregate, no skipped late commits, once-only processing with concurrent replicas, replay,
-//! retries and dead letters, lag, and least-privilege roles.
+//! Delivery from a producer's log to consumers, against a real Postgres with TLS (a throwaway
+//! container; skipped without podman or docker unless `CI` is set): order within an aggregate,
+//! no skipped late commits, once-only processing with concurrent replicas, replay, retries and
+//! dead letters, lag, and least-privilege roles. Every consumer reads as its platform role under
+//! row-level security and processes each event as its service role in the event's tenant
+//! (decision 29); see `support::Database::setup`.
 
 mod support;
 
@@ -9,19 +11,25 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+use contract::ServiceName;
 use outbox::{
     Aggregate, Consumer, ConsumerConfig, ConsumerError, Delivery, Handler, HandlerError, Outcome,
     Position, Replay, StartFrom,
 };
+use service_kit::identity::ServiceIdentity;
+use service_kit::tenant::{PlatformActor, PlatformDb, TenantDb};
+use sqlx::postgres::PgPoolOptions;
 use sqlx::{AssertSqlSafe, Postgres, Transaction};
-use support::{Counted, Recorder, Setup, database, drain, drain_readable, eventually, unique};
+use support::{
+    Counted, Recorder, Setup, TENANT_A, database, drain, drain_readable, eventually, tenant,
+    tenant_of,
+};
 use tokio_util::sync::CancellationToken;
 
 const DRAIN: Duration = Duration::from_secs(30);
 
 fn recorder(setup: &Setup, subscription: &str) -> Consumer<Recorder> {
-    Consumer::new(
-        setup.consumer.clone(),
+    setup.subscribe(
         ConsumerConfig::new(subscription, &setup.producer_schema)
             .expect("config")
             .poll_interval(Duration::from_millis(20)),
@@ -166,8 +174,7 @@ async fn a_slow_handler_that_has_not_written_does_not_hold_back_other_consumers(
     };
     let setup = database.setup().await;
     setup.publish("w", 1).await;
-    let gated = Consumer::new(
-        setup.consumer.clone(),
+    let gated = setup.subscribe(
         ConsumerConfig::new("gated", &setup.producer_schema).expect("config"),
         Gate {
             entered: tokio::sync::Notify::new(),
@@ -188,8 +195,7 @@ async fn a_slow_handler_that_has_not_written_does_not_hold_back_other_consumers(
     assert_eq!(drain(&other, DRAIN).await.delivered, 2);
 
     // A second replica of the gated subscription finds it busy.
-    let replica = Consumer::new(
-        setup.consumer.clone(),
+    let replica = setup.subscribe(
         ConsumerConfig::new("gated", &setup.producer_schema).expect("config"),
         Recorder {
             subscription: "gated".to_owned(),
@@ -231,8 +237,7 @@ async fn shutdown_finishes_the_event_in_flight_and_leaves_the_rest_of_the_batch(
         setup.publish("w", n).await;
     }
     let stop = CancellationToken::new();
-    let consumer = Consumer::new(
-        setup.consumer.clone(),
+    let consumer = setup.subscribe(
         ConsumerConfig::new("stopping", &setup.producer_schema).expect("config"),
         StopsOnFirst {
             stop: stop.clone(),
@@ -284,9 +289,14 @@ async fn concurrent_writers_and_two_replicas_process_each_event_once_in_order() 
     let stop = CancellationToken::new();
     let mut replicas = Vec::new();
     for _ in 0..2 {
-        let pool = database.pool(&setup.consumer_schema).await;
+        let (platform, work) = database.consumer_pools(
+            &setup.consumer_platform,
+            &setup.consumer_role,
+            Duration::from_secs(30),
+        );
         let consumer = Consumer::new(
-            pool,
+            &platform,
+            work,
             ConsumerConfig::new("stress", &setup.producer_schema)
                 .expect("config")
                 .batch_size(7)
@@ -317,13 +327,14 @@ async fn concurrent_writers_and_two_replicas_process_each_event_once_in_order() 
                         .expect("early write");
                 }
                 tokio::time::sleep(Duration::from_millis(random.next_ms(4))).await;
+                let tenant = tenant_of(&aggregate);
                 outbox::publish(
                     &mut tx,
                     &Aggregate::new("widget", aggregate).expect("aggregate"),
                     &Counted {
                         n: i64::try_from(writer * 1000 + i).expect("small"),
                     },
-                    None,
+                    Some(tenant),
                 )
                 .await
                 .expect("publish");
@@ -485,8 +496,7 @@ async fn failures_are_retried_in_place_or_dead_lettered() {
     for n in 1..=4 {
         published.push(setup.publish(&format!("a{n}"), n).await);
     }
-    let consumer = Consumer::new(
-        setup.consumer.clone(),
+    let consumer = setup.subscribe(
         ConsumerConfig::new("flaky", &setup.producer_schema).expect("config"),
         Flaky {
             inner: Recorder {
@@ -598,8 +608,7 @@ async fn begin_runs_in_the_delivery_transaction() {
         .expect("publish");
         tx.commit().await.expect("commit");
     }
-    let consumer = Consumer::new(
-        setup.consumer.clone(),
+    let consumer = setup.subscribe(
         ConsumerConfig::new("tenant-scoped", &setup.producer_schema).expect("config"),
         TenantScoped,
     );
@@ -657,8 +666,7 @@ async fn a_new_subscription_can_start_after_the_history() {
     for n in 1..=3 {
         history.push((n, setup.publish(&format!("w{n}"), n).await));
     }
-    let consumer = Consumer::new(
-        setup.consumer.clone(),
+    let consumer = setup.subscribe(
         ConsumerConfig::new("from-now", &setup.producer_schema)
             .expect("config")
             .start_from(StartFrom::Latest),
@@ -694,8 +702,7 @@ async fn a_subscription_cannot_switch_producers() {
     let setup = database.setup().await;
     let other = database.setup().await;
     ensured(recorder(&setup, "pinned")).await;
-    let moved = Consumer::new(
-        setup.consumer.clone(),
+    let moved = setup.subscribe(
         ConsumerConfig::new("pinned", &other.producer_schema).expect("config"),
         Recorder {
             subscription: "pinned".to_owned(),
@@ -717,14 +724,16 @@ async fn a_subscription_cannot_switch_producers() {
     assert!(matches!(error, ConsumerError::SourceMismatch { .. }));
 }
 
-/// Runs `sql` as the admin; identifiers come from [`unique`], never from input.
-async fn admin_sql(database: &support::Database, sql: String) {
-    let admin = database.admin().await;
-    sqlx::raw_sql(AssertSqlSafe(sql))
-        .execute(&admin)
+/// Runs `statement` on `pool` and expects SQLSTATE 42501 (insufficient privilege).
+async fn refused(pool: &sqlx::PgPool, statement: String) {
+    let error = sqlx::raw_sql(AssertSqlSafe(statement.clone()))
+        .execute(pool)
         .await
-        .expect("admin statement");
-    admin.close().await;
+        .expect_err(&statement);
+    let sqlx::Error::Database(error) = error else {
+        panic!("{statement}: {error}");
+    };
+    assert_eq!(error.code().as_deref(), Some("42501"), "{statement}");
 }
 
 #[tokio::test]
@@ -732,83 +741,73 @@ async fn services_need_only_the_documented_grants() {
     let Some(database) = database().await else {
         return;
     };
+    // The setup grants only what the README lists: each service uses its own schema's tables,
+    // and only the consumer's platform role reads the producer's `outbox_event`.
     let setup = database.setup().await;
-    let (ps, cs) = (&setup.producer_schema, &setup.consumer_schema);
-    let producer_role = unique("producer_role");
-    let consumer_role = unique("consumer_role");
-    // The grants from the README: each service uses its own schema's tables, and a consumer
-    // may read only the producer's `outbox_event`.
-    admin_sql(
-        &database,
-        format!(
-            "CREATE ROLE {producer_role} LOGIN PASSWORD '{producer_role}'; \
-             CREATE ROLE {consumer_role} LOGIN PASSWORD '{consumer_role}'; \
-             GRANT USAGE ON SCHEMA {ps} TO {producer_role}; \
-             GRANT SELECT, INSERT, UPDATE ON {ps}.outbox_aggregate TO {producer_role}; \
-             GRANT INSERT ON {ps}.outbox_event TO {producer_role}; \
-             GRANT SELECT, INSERT, UPDATE, DELETE ON {ps}.widget TO {producer_role}; \
-             GRANT USAGE ON SCHEMA {cs} TO {consumer_role}; \
-             GRANT SELECT, INSERT, UPDATE, DELETE ON {cs}.outbox_subscription, \
-                 {cs}.outbox_inbox, {cs}.outbox_dead_letter, {cs}.outbox_version, \
-                 {cs}.seen, {cs}.aggregate_state, {cs}.violations TO {consumer_role}; \
-             GRANT USAGE ON SCHEMA {ps} TO {consumer_role}; \
-             GRANT SELECT ON {ps}.outbox_event TO {consumer_role};"
-        ),
-    )
-    .await;
-    let producer = database.pool_as(ps, Some(&producer_role)).await;
-    let consumer_pool = database.pool_as(cs, Some(&consumer_role)).await;
+    let ps = &setup.producer_schema;
 
-    let mut tx = producer.begin().await.expect("begin");
+    // The producer's service role writes a tenant event with its business change, in a tenant
+    // transaction; its platform role writes a platform-wide event.
+    let (_, producer) = TenantDb::connect_lazy_with_background(
+        database.postgres.options(&setup.producer_role),
+        PgPoolOptions::new().max_connections(1),
+        ServiceIdentity::new(ServiceName::Assets),
+    )
+    .expect("verify-full options");
+    let mut tx = producer
+        .begin(tenant(TENANT_A), "publish-test")
+        .await
+        .expect("begin");
     sqlx::query("INSERT INTO widget (id, name) VALUES ('w', 'pump')")
         .execute(&mut *tx)
         .await
         .expect("business write as the producer role");
+    let event_tenant = tx.tenant_id();
     outbox::publish(
-        &mut tx,
+        tx.transaction(),
         &Aggregate::new("widget", "w").expect("aggregate"),
         &Counted { n: 1 },
-        None,
+        Some(event_tenant),
     )
     .await
     .expect("publish as the producer role");
     tx.commit().await.expect("commit");
+    let producer_platform = PlatformDb::connect_lazy(
+        database.postgres.options(&setup.producer_platform),
+        PgPoolOptions::new().max_connections(1),
+    )
+    .expect("verify-full options");
+    let actor = PlatformActor::service(ServiceIdentity::new(ServiceName::Assets));
+    let mut tx = producer_platform
+        .begin(actor, "publish-test")
+        .await
+        .expect("begin");
+    outbox::publish(
+        tx.transaction(),
+        &Aggregate::new("catalog", "c").expect("aggregate"),
+        &Counted { n: 2 },
+        None,
+    )
+    .await
+    .expect("publish a platform-wide event as the platform role");
+    tx.commit().await.expect("commit");
 
-    let consumer = Consumer::new(
-        consumer_pool.clone(),
-        ConsumerConfig::new("least-privilege", ps).expect("config"),
-        Recorder {
-            subscription: "least-privilege".to_owned(),
-        },
-    );
-    consumer.ensure_subscription().await.expect("subscription");
-    assert_eq!(drain(&consumer, DRAIN).await.delivered, 1);
+    let consumer = ensured(recorder(&setup, "least-privilege")).await;
+    assert_eq!(drain(&consumer, DRAIN).await.delivered, 2);
     assert_eq!(consumer.measure_lag().await.expect("lag").events, 0);
 
-    // The consumer role reads the log and nothing else of the producer.
+    // The consumer's platform role reads the log and nothing else of the producer.
+    let platform = database.pool_as(ps, &setup.consumer_platform).await;
     for statement in [
         format!("SELECT count(*) FROM {ps}.widget"),
         format!("SELECT count(*) FROM {ps}.outbox_aggregate"),
         format!("DELETE FROM {ps}.outbox_event"),
     ] {
-        let error = sqlx::raw_sql(AssertSqlSafe(statement.clone()))
-            .execute(&consumer_pool)
-            .await
-            .expect_err(&statement);
-        let sqlx::Error::Database(error) = error else {
-            panic!("{statement}: {error}");
-        };
-        assert_eq!(error.code().as_deref(), Some("42501"), "{statement}");
+        refused(&platform, statement).await;
     }
-
-    producer.close().await;
-    consumer_pool.close().await;
-    admin_sql(
-        &database,
-        format!(
-            "DROP OWNED BY {producer_role}, {consumer_role}; \
-             DROP ROLE {producer_role}; DROP ROLE {consumer_role};"
-        ),
-    )
-    .await;
+    // The consumer's service role cannot reach the producer at all.
+    let service = database.pool_as(ps, &setup.consumer_role).await;
+    refused(&service, format!("SELECT count(*) FROM {ps}.outbox_event")).await;
+    platform.close().await;
+    service.close().await;
 }
