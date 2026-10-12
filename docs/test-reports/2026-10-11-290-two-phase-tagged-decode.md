@@ -8,8 +8,8 @@ issue：Laysi/trustiot-v2#290。來源是 PR Laysi/trustiot-v2#281（Laysi/trust
 - Rust 1.99.0（`rust-toolchain.toml`）；aarch64 交叉建置用 rustup 的 `aarch64-unknown-linux-gnu` 標準函式庫。
 - 分支 `perf/290-two-phase-tag-decode`，從 `main` 開出（merge base `9b13ad8`），2026-10-12 重定基底到 `a7f332b`。
 - 沒有新增相依；`Cargo.toml`、`Cargo.lock` 沒有變更，`tests/dependencies.rs` 的允許清單不變。
-- 建置主機 `ruisi-wsl` 在 2026-10-11 17:10–17:20 之間連不上（`rcheck.sh` 回 255，最後一次是 `websocket: bad handshake`），所以 2026-10-11 的結果都在本機執行。
-- 2026-10-12 分支重定基底到 `main` 的 `a7f332b` 之後，全部檢查在建置主機 `ruisi-wsl`（共用檢查佇列 `rcheck.sh`，`CI=1`，需要容器的 `tests/broker.rs` 也有跑）重跑一次，見「2026-10-12 合併 main 後重跑」。
+- 建置主機 在 2026-10-11 17:10–17:20 之間連不上（`rcheck.sh` 回 255，最後一次是 `websocket: bad handshake`），所以 2026-10-11 的結果都在本機執行。
+- 2026-10-12 分支重定基底到 `main` 的 `a7f332b` 之後，全部檢查在建置主機（共用檢查佇列 `rcheck.sh`，`CI=1`，需要容器的 `tests/broker.rs` 也有跑）重跑一次，見「2026-10-12 合併 main 後重跑」。
 
 ## 指令
 

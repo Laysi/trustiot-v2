@@ -1,6 +1,6 @@
 # rcheck on the build host, 2026-10-12, branch perf/290-two-phase-tag-decode at d0e718f (merged onto origin/main a7f332b).
 # Host paths are shortened to <worktree>/; the queue line and the volume cleanup line come from rcheck itself.
-rcheck: queued on ruisi-wsl at 12:33:08 as 290-1ba6f541; running now: 271c-69fb24ec since 12:27:46
+rcheck: queued on build-host at 12:33:08 as 290-1ba6f541; running now: 271c-69fb24ec since 12:27:46
 FMT_OK
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.21s
 CLIPPY_EXIT=0
@@ -67,4 +67,4 @@ test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 FUZZ_EXIT=0
 rcheck: removed 4 dangling test volumes
-rcheck: exit 0 at 12:53:08 (ruisi-wsl, 290-1ba6f541)
+rcheck: exit 0 at 12:53:08 (build-host, 290-1ba6f541)
