@@ -77,9 +77,19 @@ registry 裡的 manifest digest（skopeo 直接讀取）與 publish 的結果一
 
 ## 待測
 
-- 以 `build.ts` 建置真正映像的完整本機流程（不設 `LOCAL_FLOW_IMAGES`）：check queue 的 build host 目前沒有 podman 與 skopeo（`which` 找不到），工作站不跑大型建置，所以這次沒有執行。`build.ts` 本次沒有修改，publish 與 verify 只讀它輸出的 OCI 壓縮檔與 SBOM，所以上面的流程涵蓋了改動的每一條路徑。有 podman 與 skopeo 的機器上，以上面的指令（不設環境變數）即可重跑。
-- 正式發佈：合併後由 coordinator 打 rc tag，release.yml 在 GHCR 上執行同一套 publish 與 verify。verify 改為最後才檢查套件是否私有，所以下一個 rc 的 verify 會自己檢查 chart 固定的映像 digest（以及每個映像的簽章與 SBOM），結果寫在附到 GitHub Release 的報告；`identity` 與 `postgres` 公開期間（Laysi/trustiot-v2#1 第 10 項）verify 仍會在最後以私有檢查失敗，要確認報告裡只有這一項未通過。
+- 以 `build.ts` 建置真正映像的完整本機流程（不設 `LOCAL_FLOW_IMAGES`）：check queue 的 build host 目前沒有 podman 與 skopeo（`which` 找不到），工作站不跑大型建置，所以這次沒有執行。`build.ts` 本次沒有修改，publish 與 verify 只讀它輸出的 OCI 壓縮檔與 SBOM，所以上面的流程涵蓋了改動的每一條路徑。有 podman 與 skopeo 的機器上，以上面的指令（不設環境變數）即可重跑。真正的映像經過同一套 publish 與 verify，已由下一節的 `v0.0.0-rc.6` 在 GHCR 上驗證。
+
+## 正式 rc：`v0.0.0-rc.6`
+
+PR Laysi/trustiot-v2#376 合併為 main `608f5c5`，main 的 CI 通過後，coordinator 在這個 commit 打了簽章的 tag `v0.0.0-rc.6`：release.yml run [38303663554](https://github.com/Laysi/trustiot-v2/actions/runs/38303663554)，每個 job 都在 `ubuntu-24.04-arm` 上執行。記錄在 [rc6-run.txt](data/2026-10-13-57-chart-image-digests/rc6-run.txt)（job 結果與 runner、publish 與 verify 的記錄行）與 [rc6-independent.txt](data/2026-10-13-57-chart-image-digests/rc6-independent.txt)（coordinator 的獨立檢查）。
+
+| 步驟 | 結果 |
+| --- | --- |
+| plan、build、publish | 成功。publish 推送並簽章三個映像，記錄 `the chart pins identity to ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.6@sha256:a7ec5c66…`、`the chart pins postgres to …/postgres:0.0.0-rc.6@sha256:a69113bc…`、`the chart does not deploy release-selftest`；chart `sha256:87824383…` 簽章；建立 GitHub 預發佈版本 |
+| verify | 三個映像的 tag、平台、簽章與 SBOM attestation（213、142、13 個套件），chart 的 tag、簽章、拉下的檔案、version 與 appVersion，以及 chart 固定的兩個參照（`values.yaml` 單獨與疊上兩個型態檔）都通過；另一個身分的對照驗證被拒。最後只有私有檢查失敗：`identity, postgres can be pulled anonymously …; Every other check passed`，這是 Laysi/trustiot-v2#1 第 10 項記錄的預期結果，`deploy-pr` 因此略過 |
+| report | 把 verify 的報告附到 [GitHub Release](https://github.com/Laysi/trustiot-v2/releases/tag/v0.0.0-rc.6)：開頭寫明驗證未通過與原因，每一列寫出檢查結果；commit status `release` 設為 failure，原因同上 |
+| 獨立檢查（coordinator 工作站） | `helm pull` 拿到 chart `sha256:87824383…`，`helm show values` 有 release 加上的 `services.identity.image.digest: sha256:a7ec5c66…`（附註解）與 `postgres.bundled.image.digest: sha256:a69113bc…`；registry 裡 `identity:0.0.0-rc.6`、`postgres:0.0.0-rc.6` 的 manifest digest 與這兩個值相同；以 rc.6 的身分 `cosign verify` chart 的 digest，exit 0；拉下的 chart 疊上 `values-saas.yaml` 或 `values-onprem.yaml` 加測試用的 instance 覆寫檔 render，`identity` 與 `postgres` 各只有一個參照，都是 `<repository>:0.0.0-rc.6@<上面的 digest>` |
 
 ## 結論
 
-- 「chart 以 digest 引用此映像」：通過（本機）。發佈的 chart 以 digest 固定 `postgres`（與 `identity`）映像，render 結果與 registry 的 manifest digest 相同；重跑 publish 得到同一個 chart；verify 檢查並拒絕 digest 不對的 chart。正式 rc 的驗證待合併後執行：下一個 rc 的 verify 報告會列出 chart 固定的參照與檢查結果。
+- 「chart 以 digest 引用此映像」：通過。本機流程證明發佈的 chart 以 digest 固定 `postgres`（與 `identity`）映像、重跑 publish 得到同一個 chart、verify 拒絕 digest 不對的 chart；`v0.0.0-rc.6` 在 GHCR 上得到同樣的結果，verify 自己檢查了 chart 固定的參照，coordinator 也以 registry 的 manifest digest 獨立確認。
