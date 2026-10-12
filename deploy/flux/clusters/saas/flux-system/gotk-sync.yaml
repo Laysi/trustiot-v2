@@ -1,0 +1,44 @@
+# How Flux follows this repository (deploy/flux/README.md). The cluster only reads: it pulls main
+# over SSH with a read-only deploy key (Secret flux-system, created at bootstrap, never in git)
+# and holds no credential that can write to GitHub; GitHub holds no credential for the cluster.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: flux-system
+  namespace: flux-system
+spec:
+  # How often Flux looks for a new commit on main: a merged deploy PR starts rolling out within
+  # this interval.
+  interval: 1m
+  url: ssh://git@github.com/Laysi/trustiot-v2.git
+  ref:
+    branch: main
+  secretRef:
+    name: flux-system
+  # Only deploy/flux/ goes into the artifact; the rest of the repository never reaches the cluster.
+  ignore: |
+    /*
+    !/deploy/
+    /deploy/*
+    !/deploy/flux/
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: flux-system
+  namespace: flux-system
+spec:
+  interval: 10m
+  # Retry interval after a failed apply.
+  retryInterval: 2m
+  path: ./deploy/flux/clusters/saas
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  # SOPS-encrypted Secrets in this tree are decrypted in memory with the cluster's age key
+  # (Secret sops-age, created at bootstrap, never in git; docs/architecture/ci-release.md).
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age

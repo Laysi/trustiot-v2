@@ -1,0 +1,16 @@
+# SOPS configuration: who can decrypt the SaaS Secrets in deploy/flux/
+# (docs/architecture/ci-release.md, "SaaS 的祕密怎麼進叢集"; deploy/flux/README.md).
+#
+# - Only Kubernetes Secrets named *.sops.yaml under deploy/flux/clusters/saas/ are encrypted, and
+#   only their data and stringData values: names and keys stay readable in a PR, values do not.
+# - Recipients are age public keys: the SaaS cluster's key (its private key is the Secret sops-age
+#   in flux-system, never in git) and one key per operator (each private key stays on that
+#   person's device). Add or remove a recipient, then run `sops updatekeys -y` on every file
+#   (docs/runbooks/secrets.md).
+# - Until the recipients below are filled in, sops refuses to encrypt ("empty key group"), so no
+#   Secret can be committed with a key that nobody holds. `bun test deploy/flux` checks that
+#   every recipient is an age public key.
+creation_rules:
+  - path_regex: (^|/)deploy/flux/clusters/saas/[^/]+(/[^/]+)*\.sops\.yaml$
+    encrypted_regex: ^(data|stringData)$
+    age: []
