@@ -1,0 +1,34 @@
+# v0.0.0-rc.6 (Laysi/trustiot-v2#57): release.yml run 38303663554, tag on main 608f5c5c1e587a3a1c5560b8d63095b2bac1860e
+# https://github.com/Laysi/trustiot-v2/actions/runs/38303663554 , release: https://github.com/Laysi/trustiot-v2/releases/tag/v0.0.0-rc.6
+
+## Jobs (name, conclusion, runner label), from the Actions API
+plan	success	ubuntu-24.04-arm
+build	success	ubuntu-24.04-arm
+publish	success	ubuntu-24.04-arm
+verify	failure	ubuntu-24.04-arm
+report	failure	ubuntu-24.04-arm
+deploy-pr	skipped	ubuntu-24.04-arm
+
+## publish (lines of scripts/release/publish.ts)
+[release:publish] pushing ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.6
+[release:publish] ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.6 → sha256:a7ec5c664b784af14025cf96a9a68c7c0404c78be3cfce80a266bdd8450a0bcd: signed, SBOM attested
+[release:publish] pushing ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.6
+[release:publish] ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.6 → sha256:a69113bc9ed44cc810941248f3a0874371df11b5cd252c417ac793d26e83157b: signed, SBOM attested
+[release:publish] pushing ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.6
+[release:publish] ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.6 → sha256:9d71e29ab47877062e65304fd6d663e6b8a4f8807543f4c1dfab1eaf1aec7e87: signed, SBOM attested
+[release:publish] the chart pins identity to ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.6@sha256:a7ec5c664b784af14025cf96a9a68c7c0404c78be3cfce80a266bdd8450a0bcd
+[release:publish] the chart pins postgres to ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.6@sha256:a69113bc9ed44cc810941248f3a0874371df11b5cd252c417ac793d26e83157b
+[release:publish] the chart does not deploy release-selftest
+[release:publish] ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.6 → sha256:87824383aa3fdffbfa8f0d4d761373c601f0589be6761befc68e129fa78f84f2: signed
+[release:publish] released v0.0.0-rc.6: https://github.com/Laysi/trustiot-v2/releases/tag/v0.0.0-rc.6
+
+## verify (lines of scripts/release/verify.ts)
+[release:verify] ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.6: sha256:a7ec5c664b784af14025cf96a9a68c7c0404c78be3cfce80a266bdd8450a0bcd, signature and SBOM attestation verified (SPDX-2.3，213 個套件)
+[release:verify] ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.6: sha256:a69113bc9ed44cc810941248f3a0874371df11b5cd252c417ac793d26e83157b, signature and SBOM attestation verified (SPDX-2.3，142 個套件)
+[release:verify] ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.6: sha256:9d71e29ab47877062e65304fd6d663e6b8a4f8807543f4c1dfab1eaf1aec7e87, signature and SBOM attestation verified (SPDX-2.3，13 個套件)
+[release:verify] ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.6: sha256:87824383aa3fdffbfa8f0d4d761373c601f0589be6761befc68e129fa78f84f2, signature verified, version and appVersion 0.0.0-rc.6
+[release:verify] ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.6 deploys ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.6@sha256:a7ec5c664b784af14025cf96a9a68c7c0404c78be3cfce80a266bdd8450a0bcd
+[release:verify] ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.6 deploys ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.6@sha256:a69113bc9ed44cc810941248f3a0874371df11b5cd252c417ac793d26e83157b
+[release:verify] identity, postgres can be pulled anonymously (ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.6, ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.6); the packages must be private. Every other check passed; the report lists the results
+##[error]identity, postgres can be pulled anonymously (ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.6, ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.6); the packages must be private. Every other check passed; the report lists the results
+##[error]Process completed with exit code 1.
