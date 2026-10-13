@@ -1,0 +1,148 @@
+diff --git a/crates/contract/src/client.rs b/crates/contract/src/client.rs
+index 7e4aef2..c76d1e7 100644
+--- a/crates/contract/src/client.rs
++++ b/crates/contract/src/client.rs
+@@ -681,7 +681,7 @@ impl CallError {
+     #[must_use]
+     pub fn code(&self) -> ErrorCode {
+         match self.inner.kind {
+-            CallErrorKind::Timeout => ErrorCode::Timeout,
++            CallErrorKind::Timeout => ErrorCode::Unavailable,
+             CallErrorKind::Connect | CallErrorKind::ConnectionReset | CallErrorKind::Transport => {
+                 ErrorCode::Unavailable
+             }
+@@ -690,8 +690,7 @@ impl CallError {
+                 Some(body) if body.code() == ErrorCode::Unauthenticated => ErrorCode::Internal,
+                 Some(body) => body.code(),
+                 None => match self.inner.status.map(|status| status.as_u16()) {
+-                    Some(408 | 504) => ErrorCode::Timeout,
+-                    Some(429 | 502 | 503) => ErrorCode::Unavailable,
++                    Some(408 | 429 | 502 | 503 | 504) => ErrorCode::Unavailable,
+                     _ => ErrorCode::Internal,
+                 },
+             },
+@@ -737,7 +736,7 @@ impl CallError {
+             // peer itself, or of this service's credential, are not.
+             CallErrorKind::ErrorStatus => match self.code() {
+                 ErrorCode::Internal => log_at!(error),
+-                ErrorCode::Unavailable | ErrorCode::Timeout => log_at!(warn),
++                ErrorCode::Unavailable => log_at!(warn),
+                 _ => log_at!(debug),
+             },
+         }
+@@ -990,7 +989,7 @@ mod tests {
+     #[test]
+     fn transport_failures_map_to_m1_codes() {
+         let expected = [
+-            (CallErrorKind::Timeout, ErrorCode::Timeout),
++            (CallErrorKind::Timeout, ErrorCode::Unavailable),
+             (CallErrorKind::Connect, ErrorCode::Unavailable),
+             (CallErrorKind::ConnectionReset, ErrorCode::Unavailable),
+             (CallErrorKind::Transport, ErrorCode::Unavailable),
+@@ -1050,8 +1049,8 @@ mod tests {
+     #[test]
+     fn statuses_without_an_m1_body_map_by_status() {
+         for (status, code) in [
+-            (408, ErrorCode::Timeout),
+-            (504, ErrorCode::Timeout),
++            (408, ErrorCode::Unavailable),
++            (504, ErrorCode::Unavailable),
+             (429, ErrorCode::Unavailable),
+             (502, ErrorCode::Unavailable),
+             (503, ErrorCode::Unavailable),
+diff --git a/crates/contract/src/error.rs b/crates/contract/src/error.rs
+index 1e903ad..1e4c272 100644
+--- a/crates/contract/src/error.rs
++++ b/crates/contract/src/error.rs
+@@ -57,13 +57,11 @@ pub enum ErrorCode {
+     Internal,
+     /// 503: a dependency is down or overloaded, or the service is shutting down; retry later.
+     Unavailable,
+-    /// 504: a dependency did not answer within its timeout; retry later.
+-    Timeout,
+ }
+ 
+ impl ErrorCode {
+     /// Every code, in declaration order.
+-    pub const ALL: [Self; 12] = [
++    pub const ALL: [Self; 11] = [
+         Self::InvalidRequest,
+         Self::ValidationFailed,
+         Self::Unauthenticated,
+@@ -75,7 +73,6 @@ impl ErrorCode {
+         Self::RateLimited,
+         Self::Internal,
+         Self::Unavailable,
+-        Self::Timeout,
+     ];
+ 
+     /// The wire value, for example `not_found`.
+@@ -93,7 +90,6 @@ impl ErrorCode {
+             Self::RateLimited => "rate_limited",
+             Self::Internal => "internal",
+             Self::Unavailable => "unavailable",
+-            Self::Timeout => "timeout",
+         }
+     }
+ 
+@@ -112,7 +108,6 @@ impl ErrorCode {
+             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+             Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+-            Self::Timeout => StatusCode::GATEWAY_TIMEOUT,
+         }
+     }
+ 
+@@ -132,7 +127,6 @@ impl ErrorCode {
+             Self::RateLimited => MessageKey::new("error.rate_limited"),
+             Self::Internal => MessageKey::new("error.internal"),
+             Self::Unavailable => MessageKey::new("error.unavailable"),
+-            Self::Timeout => MessageKey::new("error.timeout"),
+         }
+     }
+ 
+@@ -140,7 +134,7 @@ impl ErrorCode {
+     /// `unavailable` and `timeout`.
+     #[must_use]
+     pub const fn is_retryable(self) -> bool {
+-        matches!(self, Self::RateLimited | Self::Unavailable | Self::Timeout)
++        matches!(self, Self::RateLimited | Self::Unavailable)
+     }
+ }
+ 
+@@ -424,8 +418,7 @@ mod tests {
+             retryable,
+             [
+                 ErrorCode::RateLimited,
+-                ErrorCode::Unavailable,
+-                ErrorCode::Timeout
++                ErrorCode::Unavailable
+             ]
+         );
+     }
+diff --git a/crates/contract/tests/client.rs b/crates/contract/tests/client.rs
+index 38dc85a..3bce555 100644
+--- a/crates/contract/tests/client.rs
++++ b/crates/contract/tests/client.rs
+@@ -198,9 +198,9 @@ async fn a_silent_peer_times_out_as_m1_timeout() {
+     let elapsed = started.elapsed();
+ 
+     assert_eq!(error.kind(), CallErrorKind::Timeout);
+-    assert_eq!(error.code(), ErrorCode::Timeout);
+-    assert_eq!(error.to_error_body(), ErrorBody::new(ErrorCode::Timeout));
+-    assert_eq!(error.code().http_status(), StatusCode::GATEWAY_TIMEOUT);
++    assert_eq!(error.code(), ErrorCode::Unavailable);
++    assert_eq!(error.to_error_body(), ErrorBody::new(ErrorCode::Unavailable));
++    assert_eq!(error.code().http_status(), StatusCode::SERVICE_UNAVAILABLE);
+     assert_eq!(error.peer(), contract::ServiceName::Identity);
+     assert!(
+         elapsed >= timeout,
+@@ -328,7 +328,7 @@ async fn statuses_without_an_m1_body_map_by_status() {
+             504,
+             "text/plain",
+             "upstream request timeout",
+-            ErrorCode::Timeout,
++            ErrorCode::Unavailable,
+         ),
+         (500, "text/html", "<h1>oops</h1>", ErrorCode::Internal),
+         (

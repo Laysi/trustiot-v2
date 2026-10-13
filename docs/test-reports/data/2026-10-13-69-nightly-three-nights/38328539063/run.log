@@ -1,0 +1,966 @@
+2026-10-13T00:42:24.263Z shapes: onprem, saas; k3s image rancher/k3s:v1.36.5-k3s1@sha256:057cfd5a9d51b89f1f0ee139c28d5d5fdd5aa7ddeac2742a0ba90c6dbc0329bb
+2026-10-13T00:42:24.284Z $ /home/runner/.proto/tools/k3d/5.9.0/k3d cluster create nightly --image rancher/k3s:v1.36.5-k3s1@sha256:057cfd5a9d51b89f1f0ee139c28d5d5fdd5aa7ddeac2742a0ba90c6dbc0329bb --servers 1 --agents 0 --no-lb --k3s-arg --disable=traefik@server:0 --kubeconfig-update-default=false --kubeconfig-switch-context=false --wait --timeout 240s
+    [36mINFO[0m[0000] Prep: Network                                
+    [36mINFO[0m[0000] Created network 'k3d-nightly'                
+    [36mINFO[0m[0000] Created image volume k3d-nightly-images      
+    [36mINFO[0m[0000] Starting new tools node...                   
+    [36mINFO[0m[0000] Pulling image 'ghcr.io/k3d-io/k3d-tools:5.9.0' 
+    [36mINFO[0m[0001] Creating node 'k3d-nightly-server-0'         
+    [36mINFO[0m[0002] Pulling image 'rancher/k3s:v1.36.5-k3s1@sha256:057cfd5a9d51b89f1f0ee139c28d5d5fdd5aa7ddeac2742a0ba90c6dbc0329bb' 
+    [36mINFO[0m[0002] Starting node 'k3d-nightly-tools'            
+    [36mINFO[0m[0004] Using the k3d-tools node to gather environment information 
+    [36mINFO[0m[0005] HostIP: using network gateway 172.18.0.1 address 
+    [36mINFO[0m[0005] Starting cluster 'nightly'                   
+    [36mINFO[0m[0005] Starting servers...                          
+    [36mINFO[0m[0005] Starting node 'k3d-nightly-server-0'         
+    [36mINFO[0m[0010] All agents already running.                  
+    [36mINFO[0m[0010] All helpers already running.                 
+    [36mINFO[0m[0010] Injecting records for hostAliases (incl. host.k3d.internal) and for 1 network members into CoreDNS configmap... 
+    [36mINFO[0m[0012] Cluster 'nightly' created successfully!      
+    [36mINFO[0m[0012] You can now use it like this:                
+    export KUBECONFIG=$(/home/runner/.proto/tools/k3d/5.9.0/k3d kubeconfig write nightly)
+    kubectl cluster-info
+2026-10-13T00:42:36.764Z $ /home/runner/.proto/tools/k3d/5.9.0/k3d kubeconfig get nightly
+2026-10-13T00:42:36.789Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl wait --for=condition=Ready node --all --timeout=180s
+    node/k3d-nightly-server-0 condition met
+2026-10-13T00:42:36.939Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl --namespace kube-system wait --for=create deployment/coredns --timeout=120s
+    deployment.apps/coredns condition met
+2026-10-13T00:42:36.981Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl --namespace kube-system rollout status deployment/coredns --timeout=180s
+    Waiting for deployment spec update to be observed...
+    Waiting for deployment spec update to be observed...
+    Waiting for deployment "coredns" rollout to finish: 0 out of 1 new replicas have been updated...
+    Waiting for deployment "coredns" rollout to finish: 0 of 1 updated replicas are available...
+    deployment "coredns" successfully rolled out
+2026-10-13T00:42:44.860Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl version
+    Client Version: v1.36.5
+    Kustomize Version: v5.8.1
+    Server Version: v1.36.5+k3s1
+2026-10-13T00:42:44.896Z == platform: Gateway API CRDs
+2026-10-13T00:42:44.896Z GET https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml
+2026-10-13T00:42:45.103Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl apply --server-side --filename /home/runner/work/_temp/nightly-out/gateway-api-standard-install.yaml
+2026-10-13T00:42:45.903Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl wait --for=condition=Established crd/gateways.gateway.networking.k8s.io crd/httproutes.gateway.networking.k8s.io --timeout=120s
+    customresourcedefinition.apiextensions.k8s.io/gateways.gateway.networking.k8s.io condition met
+    customresourcedefinition.apiextensions.k8s.io/httproutes.gateway.networking.k8s.io condition met
+2026-10-13T00:42:46.174Z == platform: Istio ambient
+2026-10-13T00:42:46.175Z $ /home/runner/.proto/tools/helm/4.3.0/helm upgrade --install istio-base base --repo https://istio-release.storage.googleapis.com/charts --version 1.30.5 --namespace istio-system --create-namespace -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/istio/values-k3s.yaml --wait --timeout 8m
+    Release "istio-base" does not exist. Installing it now.
+    NAME: istio-base
+    LAST DEPLOYED: Tue Oct 13 00:42:46 2026
+    NAMESPACE: istio-system
+    STATUS: deployed
+    REVISION: 1
+    DESCRIPTION: Install complete
+    TEST SUITE: None
+    NOTES:
+    Istio base successfully installed!
+    
+    To learn more about the release, try:
+      $ helm status istio-base -n istio-system
+      $ helm get all istio-base -n istio-system
+2026-10-13T00:42:47.587Z $ /home/runner/.proto/tools/helm/4.3.0/helm upgrade --install istiod istiod --repo https://istio-release.storage.googleapis.com/charts --version 1.30.5 --namespace istio-system --create-namespace -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/istio/values-k3s.yaml -f /home/runner/work/_temp/nightly-out/istiod-nightly.yaml --wait --timeout 8m
+    Release "istiod" does not exist. Installing it now.
+    NAME: istiod
+    LAST DEPLOYED: Tue Oct 13 00:42:47 2026
+    NAMESPACE: istio-system
+    STATUS: deployed
+    REVISION: 1
+    DESCRIPTION: Install complete
+    TEST SUITE: None
+    NOTES:
+    
+    To learn more about the release, try:
+      $ helm status istiod -n istio-system
+      $ helm get all istiod -n istio-system
+    
+    Next steps:
+      * Get started with ambient: https://istio.io/latest/docs/ops/ambient/getting-started/
+      * Review ambient's architecture: https://istio.io/latest/docs/ops/ambient/architecture/
+      * Review the list of actively supported releases, CVE publications and our hardening guide:
+        * https://istio.io/latest/docs/releases/supported-releases/
+        * https://istio.io/latest/news/security/
+        * https://istio.io/latest/docs/ops/best-practices/security/
+    
+    For further documentation see https://istio.io website
+2026-10-13T00:42:55.918Z $ /home/runner/.proto/tools/helm/4.3.0/helm upgrade --install istio-cni cni --repo https://istio-release.storage.googleapis.com/charts --version 1.30.5 --namespace istio-system --create-namespace -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/istio/values-k3s.yaml --wait --timeout 8m
+    Release "istio-cni" does not exist. Installing it now.
+    NAME: istio-cni
+    LAST DEPLOYED: Tue Oct 13 00:42:56 2026
+    NAMESPACE: istio-system
+    STATUS: deployed
+    REVISION: 1
+    DESCRIPTION: Install complete
+    TEST SUITE: None
+    NOTES:
+    
+    To learn more about the release, try:
+      $ helm status istio-cni -n istio-system
+      $ helm get all istio-cni -n istio-system
+    I1013 00:42:56.397179    4342 warnings.go:107] "Warning: spec.template.metadata.annotations[container.apparmor.security.beta.kubernetes.io/install-cni]: deprecated since v1.30; use the \"appArmorProfile\" field instead"
+2026-10-13T00:43:00.901Z $ /home/runner/.proto/tools/helm/4.3.0/helm upgrade --install ztunnel ztunnel --repo https://istio-release.storage.googleapis.com/charts --version 1.30.5 --namespace istio-system --create-namespace -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/istio/values-k3s.yaml --wait --timeout 8m
+    Release "ztunnel" does not exist. Installing it now.
+    NAME: ztunnel
+    LAST DEPLOYED: Tue Oct 13 00:43:01 2026
+    NAMESPACE: istio-system
+    STATUS: deployed
+    REVISION: 1
+    DESCRIPTION: Install complete
+    TEST SUITE: None
+    NOTES:
+    ztunnel successfully installed!
+    
+    To learn more about the release, try:
+      $ helm status ztunnel -n istio-system
+      $ helm get all ztunnel -n istio-system
+2026-10-13T00:43:05.909Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl wait --for=create gatewayclass/istio --timeout=120s
+    gatewayclass.gateway.networking.k8s.io/istio condition met
+2026-10-13T00:43:05.950Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl wait --for=condition=Accepted gatewayclass/istio --timeout=120s
+    gatewayclass.gateway.networking.k8s.io/istio condition met
+2026-10-13T00:43:06.087Z == platform: CloudNativePG operator
+2026-10-13T00:43:06.087Z GET https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v1.30.1/cnpg-1.30.1.yaml
+2026-10-13T00:43:06.318Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl apply --server-side --filename /home/runner/work/_temp/nightly-out/cnpg-1.30.1.yaml
+2026-10-13T00:43:07.017Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl label namespace cnpg-system pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/warn=restricted pod-security.kubernetes.io/audit=restricted --overwrite
+    namespace/cnpg-system labeled
+2026-10-13T00:43:07.069Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl wait --for=condition=Established crd/clusters.postgresql.cnpg.io crd/imagecatalogs.postgresql.cnpg.io crd/databases.postgresql.cnpg.io --timeout=120s
+    customresourcedefinition.apiextensions.k8s.io/clusters.postgresql.cnpg.io condition met
+    customresourcedefinition.apiextensions.k8s.io/imagecatalogs.postgresql.cnpg.io condition met
+    customresourcedefinition.apiextensions.k8s.io/databases.postgresql.cnpg.io condition met
+2026-10-13T00:43:07.456Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl rollout status --namespace cnpg-system deployment/cnpg-controller-manager --timeout=300s
+    Waiting for deployment "cnpg-controller-manager" rollout to finish: 0 of 1 updated replicas are available...
+    deployment "cnpg-controller-manager" successfully rolled out
+2026-10-13T00:43:12.941Z == platform: identity double image
+2026-10-13T00:43:12.944Z $ docker build --tag localhost/trustiot-e2e/identity-double:nightly --file /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/e2e/identity-double/Containerfile /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/e2e/identity-double
+    #0 building with "default" instance using docker driver
+    
+    #1 [internal] load build definition from Containerfile
+    #1 transferring dockerfile: 706B 0.0s done
+    #1 DONE 0.0s
+    
+    #2 [internal] load metadata for docker.io/oven/bun:1.4.2-distroless@sha256:1a0c31c7c5f9d193aedf60fe1cebdeb76ac8f6e29f24be8dd8cbd6df72df26ec
+    #2 ...
+    
+    #3 [auth] oven/bun:pull token for registry-1.docker.io
+    #3 DONE 0.0s
+    
+    #2 [internal] load metadata for docker.io/oven/bun:1.4.2-distroless@sha256:1a0c31c7c5f9d193aedf60fe1cebdeb76ac8f6e29f24be8dd8cbd6df72df26ec
+    #2 DONE 0.9s
+    
+    #4 [internal] load .dockerignore
+    #4 transferring context: 2B done
+    #4 DONE 0.0s
+    
+    #5 [internal] load build context
+    #5 transferring context: 3.74kB done
+    #5 DONE 0.0s
+    
+    #6 [1/2] FROM docker.io/oven/bun:1.4.2-distroless@sha256:1a0c31c7c5f9d193aedf60fe1cebdeb76ac8f6e29f24be8dd8cbd6df72df26ec
+    #6 resolve docker.io/oven/bun:1.4.2-distroless@sha256:1a0c31c7c5f9d193aedf60fe1cebdeb76ac8f6e29f24be8dd8cbd6df72df26ec done
+    #6 extracting sha256:7e92c448ce8a15b2a7ca2f4abe26bfc62bd92ec29916a52e28fbbe9a739f5c04
+    #6 extracting sha256:7e92c448ce8a15b2a7ca2f4abe26bfc62bd92ec29916a52e28fbbe9a739f5c04 done
+    #6 sha256:7e92c448ce8a15b2a7ca2f4abe26bfc62bd92ec29916a52e28fbbe9a739f5c04 85.83kB / 85.83kB 0.1s done
+    #6 sha256:1a0c31c7c5f9d193aedf60fe1cebdeb76ac8f6e29f24be8dd8cbd6df72df26ec 1.61kB / 1.61kB done
+    #6 sha256:99ba982a9142213c751a1709dcf088e63d8601f03b3f211bae037be698fef270 0B / 254.45kB 0.2s
+    #6 sha256:de68841ad46565a7d6eae43c49bbfd20776bcf0fd9c937a1f18ba5ad6d909dde 3.32kB / 3.32kB done
+    #6 sha256:4703df9c2cc99433f27f6230f288835c9d6d56cacbf59931cc0556dca104a34b 4.92kB / 4.92kB done
+    #6 sha256:c172f21841dff4c8cf45cde46589c1c2616cefe7e819965e92e6d3475c428aa0 12.68kB / 12.68kB 0.2s done
+    #6 sha256:99515e7b4d35e0652d3b0fde571b6ec269222ecacc506f026e1758d6261e9109 0B / 288.54kB 0.2s
+    #6 extracting sha256:c172f21841dff4c8cf45cde46589c1c2616cefe7e819965e92e6d3475c428aa0 done
+    #6 sha256:d6b1b89eccacc15c2420b2776d72c1dae334a00805ed9af54bf2f71e4d536f28 0B / 32.09kB 0.2s
+    #6 sha256:99ba982a9142213c751a1709dcf088e63d8601f03b3f211bae037be698fef270 254.45kB / 254.45kB 0.3s done
+    #6 sha256:99515e7b4d35e0652d3b0fde571b6ec269222ecacc506f026e1758d6261e9109 288.54kB / 288.54kB 0.2s done
+    #6 sha256:d6b1b89eccacc15c2420b2776d72c1dae334a00805ed9af54bf2f71e4d536f28 32.09kB / 32.09kB 0.3s done
+    #6 sha256:3214acf345c0cc6bbdb56b698a41ccdefc624a09d6beb0d38b5de0b2303ecaf4 0B / 123B 0.4s
+    #6 sha256:2780920e5dbfbe103d03a583ed75345306e572ec5a48cb10361f046767d9f29a 67B / 67B 0.4s done
+    #6 sha256:7c12895b777bcaa8ccae0605b4de635b68fc32d60fa08f421dc3818bf55ee212 188B / 188B 0.4s
+    #6 sha256:3214acf345c0cc6bbdb56b698a41ccdefc624a09d6beb0d38b5de0b2303ecaf4 123B / 123B 0.5s
+    #6 sha256:3214acf345c0cc6bbdb56b698a41ccdefc624a09d6beb0d38b5de0b2303ecaf4 123B / 123B 0.7s done
+    #6 sha256:52630fc75a18675c530ed9eba5f55eca09b03e91bd5bc15307918bbc1a7e7296 0B / 162B 0.7s
+    #6 sha256:7c12895b777bcaa8ccae0605b4de635b68fc32d60fa08f421dc3818bf55ee212 188B / 188B 0.7s done
+    #6 sha256:52630fc75a18675c530ed9eba5f55eca09b03e91bd5bc15307918bbc1a7e7296 162B / 162B 0.8s
+    #6 sha256:b839dfae01f66e15c6a8b63520557ed315bdfe036342fa7a0c537259f10d7a9a 351B / 351B 0.8s
+    #6 sha256:dd64bf2dd177757451a98fcdc999a339c35dee5d9872d8f4dc69c8f3c4dd0112 80B / 80B 1.0s
+    #6 sha256:b839dfae01f66e15c6a8b63520557ed315bdfe036342fa7a0c537259f10d7a9a 351B / 351B 1.2s done
+    #6 extracting sha256:99515e7b4d35e0652d3b0fde571b6ec269222ecacc506f026e1758d6261e9109
+    #6 sha256:52630fc75a18675c530ed9eba5f55eca09b03e91bd5bc15307918bbc1a7e7296 162B / 162B 1.9s done
+    #6 sha256:dd64bf2dd177757451a98fcdc999a339c35dee5d9872d8f4dc69c8f3c4dd0112 80B / 80B 2.0s done
+    #6 extracting sha256:99515e7b4d35e0652d3b0fde571b6ec269222ecacc506f026e1758d6261e9109 0.0s done
+    #6 sha256:ebddc55facdc6b1f7e0f30816a5fc7cc62f38abdf76c0a8b0a0ce52085754795 311B / 311B 2.1s done
+    #6 sha256:97c08299c7625b0d2269970fdd56cd5a0b9557b02f2b999294737864c0d82b8b 1.05MB / 5.14MB 2.1s
+    #6 sha256:6ed1ef0cb1159b9c93a24ceb88b987c6b3a8adff7160940c7c5e6bfc001f1766 0B / 143.34kB 2.1s
+    #6 sha256:12d64ffa683770b61e5fb78b3c555c852285874b1533b74f0e7e97d53ff280bc 0B / 38.06MB 2.1s
+    #6 sha256:97c08299c7625b0d2269970fdd56cd5a0b9557b02f2b999294737864c0d82b8b 5.14MB / 5.14MB 2.1s done
+    #6 sha256:6ed1ef0cb1159b9c93a24ceb88b987c6b3a8adff7160940c7c5e6bfc001f1766 143.34kB / 143.34kB 2.1s done
+    #6 sha256:12d64ffa683770b61e5fb78b3c555c852285874b1533b74f0e7e97d53ff280bc 32.51MB / 38.06MB 2.3s
+    #6 extracting sha256:99ba982a9142213c751a1709dcf088e63d8601f03b3f211bae037be698fef270 0.0s done
+    #6 sha256:8eecbb09376f10f2edacf5bf1f5dbc32f33b2abb279859ae952a2894f1059a29 204B / 204B 2.2s done
+    #6 sha256:12d64ffa683770b61e5fb78b3c555c852285874b1533b74f0e7e97d53ff280bc 38.06MB / 38.06MB 2.4s done
+    #6 extracting sha256:d6b1b89eccacc15c2420b2776d72c1dae334a00805ed9af54bf2f71e4d536f28 done
+    #6 extracting sha256:2780920e5dbfbe103d03a583ed75345306e572ec5a48cb10361f046767d9f29a done
+    #6 extracting sha256:7c12895b777bcaa8ccae0605b4de635b68fc32d60fa08f421dc3818bf55ee212 done
+    #6 extracting sha256:3214acf345c0cc6bbdb56b698a41ccdefc624a09d6beb0d38b5de0b2303ecaf4 done
+    #6 extracting sha256:52630fc75a18675c530ed9eba5f55eca09b03e91bd5bc15307918bbc1a7e7296
+    #6 extracting sha256:52630fc75a18675c530ed9eba5f55eca09b03e91bd5bc15307918bbc1a7e7296 done
+    #6 extracting sha256:dd64bf2dd177757451a98fcdc999a339c35dee5d9872d8f4dc69c8f3c4dd0112 done
+    #6 extracting sha256:b839dfae01f66e15c6a8b63520557ed315bdfe036342fa7a0c537259f10d7a9a done
+    #6 extracting sha256:ebddc55facdc6b1f7e0f30816a5fc7cc62f38abdf76c0a8b0a0ce52085754795 done
+    #6 extracting sha256:6ed1ef0cb1159b9c93a24ceb88b987c6b3a8adff7160940c7c5e6bfc001f1766 done
+    #6 extracting sha256:97c08299c7625b0d2269970fdd56cd5a0b9557b02f2b999294737864c0d82b8b 0.1s
+    #6 extracting sha256:97c08299c7625b0d2269970fdd56cd5a0b9557b02f2b999294737864c0d82b8b 0.1s done
+    #6 extracting sha256:12d64ffa683770b61e5fb78b3c555c852285874b1533b74f0e7e97d53ff280bc
+    #6 extracting sha256:12d64ffa683770b61e5fb78b3c555c852285874b1533b74f0e7e97d53ff280bc 0.2s done
+    #6 extracting sha256:8eecbb09376f10f2edacf5bf1f5dbc32f33b2abb279859ae952a2894f1059a29
+    #6 extracting sha256:8eecbb09376f10f2edacf5bf1f5dbc32f33b2abb279859ae952a2894f1059a29 done
+    #6 DONE 3.2s
+    
+    #7 [2/2] COPY server.ts /app/server.ts
+    #7 DONE 0.0s
+    
+    #8 exporting to image
+    #8 exporting layers
+    #8 exporting layers 0.5s done
+    #8 writing image sha256:f3ccc31fc4878e352b6233daa6f5c6d82e67523ae5f39166b591ddcdecd8b61e done
+    #8 naming to localhost/trustiot-e2e/identity-double:nightly done
+    #8 DONE 0.6s
+2026-10-13T00:43:20.022Z $ /home/runner/.proto/tools/k3d/5.9.0/k3d image import localhost/trustiot-e2e/identity-double:nightly --cluster nightly --mode direct
+    [36mINFO[0m[0000] Importing image(s) into cluster 'nightly'    
+    [36mINFO[0m[0000] Loading 1 image(s) from runtime into nodes... 
+    [36mINFO[0m[0000] Importing images '[localhost/trustiot-e2e/identity-double:nightly]' into node 'k3d-nightly-server-0'... 
+    [36mINFO[0m[0002] Successfully imported image(s)               
+    [36mINFO[0m[0002] Successfully imported 1 image(s) into 1 cluster(s)
+2026-10-13T00:43:22.811Z image localhost/trustiot-e2e/identity-double:nightly is present on node k3d-nightly-server-0
+2026-10-13T00:43:22.811Z image localhost/trustiot-e2e/identity-double:nightly confirmed on 1 node(s): k3d-nightly-server-0
+2026-10-13T00:43:22.811Z == platform: Postgres image
+2026-10-13T00:43:22.813Z $ docker build --tag localhost/trustiot-e2e/postgres:nightly --file /home/runner/work/trustiot-v2/trustiot-v2/deploy/images/postgres/Containerfile /home/runner/work/trustiot-v2/trustiot-v2/deploy/images/postgres
+    #0 building with "default" instance using docker driver
+    
+    #1 [internal] load build definition from Containerfile
+    #1 transferring dockerfile: 8.65kB done
+    #1 DONE 0.0s
+    
+    #2 [internal] load metadata for ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie@sha256:37ade18dbdddba430858c72725aceeec66f33fa5333e82ea1df4942f6c1c83a3
+    #2 DONE 0.7s
+    
+    #3 [internal] load .dockerignore
+    #3 transferring context: 2B done
+    #3 DONE 0.0s
+    
+    #4 [build 1/8] FROM ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie@sha256:37ade18dbdddba430858c72725aceeec66f33fa5333e82ea1df4942f6c1c83a3
+    #4 resolve ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie@sha256:37ade18dbdddba430858c72725aceeec66f33fa5333e82ea1df4942f6c1c83a3 done
+    #4 sha256:37ade18dbdddba430858c72725aceeec66f33fa5333e82ea1df4942f6c1c83a3 2.69kB / 2.69kB done
+    #4 sha256:092561c5e620451eb3aa21a4427d3798d90fb881acbb08a1544c2d5fece60681 1.95kB / 1.95kB done
+    #4 sha256:dadc59eec6a4103f81d847aa98156b5b5a15dcc6ea299d0443abb4a17e9ce406 3.42kB / 3.42kB done
+    #4 sha256:bd36565c0fdebaf0f3af5c3b4ce610ca085ced32e9e9da850d95912f5f18f47b 0B / 30.19MB 0.1s
+    #4 sha256:6e0661890a94b1628569dfec74f9bfe613abb9ea808ccf0fd5113c4f690dcdfc 0B / 55.94MB 0.1s
+    #4 sha256:732fd620fc09d5b999e236da17c3c4c4eed9b646deb84efb0692eb6179289003 0B / 585B 0.1s
+    #4 sha256:bd36565c0fdebaf0f3af5c3b4ce610ca085ced32e9e9da850d95912f5f18f47b 30.19MB / 30.19MB 0.3s
+    #4 sha256:732fd620fc09d5b999e236da17c3c4c4eed9b646deb84efb0692eb6179289003 585B / 585B 0.2s done
+    #4 sha256:bd36565c0fdebaf0f3af5c3b4ce610ca085ced32e9e9da850d95912f5f18f47b 30.19MB / 30.19MB 0.3s done
+    #4 sha256:6e0661890a94b1628569dfec74f9bfe613abb9ea808ccf0fd5113c4f690dcdfc 8.39MB / 55.94MB 0.4s
+    #4 extracting sha256:bd36565c0fdebaf0f3af5c3b4ce610ca085ced32e9e9da850d95912f5f18f47b 0.1s
+    #4 sha256:6e0661890a94b1628569dfec74f9bfe613abb9ea808ccf0fd5113c4f690dcdfc 16.78MB / 55.94MB 0.7s
+    #4 sha256:6e0661890a94b1628569dfec74f9bfe613abb9ea808ccf0fd5113c4f690dcdfc 20.97MB / 55.94MB 0.8s
+    #4 sha256:6e0661890a94b1628569dfec74f9bfe613abb9ea808ccf0fd5113c4f690dcdfc 28.31MB / 55.94MB 1.0s
+    #4 sha256:6e0661890a94b1628569dfec74f9bfe613abb9ea808ccf0fd5113c4f690dcdfc 31.46MB / 55.94MB 1.1s
+    #4 extracting sha256:bd36565c0fdebaf0f3af5c3b4ce610ca085ced32e9e9da850d95912f5f18f47b 0.8s done
+    #4 sha256:6e0661890a94b1628569dfec74f9bfe613abb9ea808ccf0fd5113c4f690dcdfc 41.94MB / 55.94MB 1.3s
+    #4 sha256:6e0661890a94b1628569dfec74f9bfe613abb9ea808ccf0fd5113c4f690dcdfc 47.19MB / 55.94MB 1.5s
+    #4 sha256:6e0661890a94b1628569dfec74f9bfe613abb9ea808ccf0fd5113c4f690dcdfc 52.43MB / 55.94MB 1.7s
+    #4 sha256:6e0661890a94b1628569dfec74f9bfe613abb9ea808ccf0fd5113c4f690dcdfc 55.94MB / 55.94MB 1.8s
+    #4 extracting sha256:6e0661890a94b1628569dfec74f9bfe613abb9ea808ccf0fd5113c4f690dcdfc
+    #4 sha256:6e0661890a94b1628569dfec74f9bfe613abb9ea808ccf0fd5113c4f690dcdfc 55.94MB / 55.94MB 1.9s done
+    #4 extracting sha256:6e0661890a94b1628569dfec74f9bfe613abb9ea808ccf0fd5113c4f690dcdfc 1.4s done
+    #4 extracting sha256:732fd620fc09d5b999e236da17c3c4c4eed9b646deb84efb0692eb6179289003
+    #4 extracting sha256:732fd620fc09d5b999e236da17c3c4c4eed9b646deb84efb0692eb6179289003 done
+    #4 DONE 4.8s
+    
+    #5 [build 2/8] COPY --from=base /var/lib/dpkg/status /tmp/target-dpkg-status
+    #5 DONE 0.0s
+    
+    #6 [build 3/8] COPY --from=base /usr/lib/postgresql/18/lib/pgxs/ /usr/lib/postgresql/18/lib/pgxs/
+    #6 DONE 0.0s
+    
+    #7 [build 4/8] RUN set -eu;     if [ "arm64" != arm64 ]; then       echo "this image is built for linux/arm64 only, not arm64" >&2; exit 1;     fi;     target_version="$(awk '/^Package: /{p=$2} /^Version: /{if (p=="postgresql-18") print $2}' /tmp/target-dpkg-status)";     if [ "${target_version}" != "18.6-1.pgdg13+2" ]; then       echo "the base image has postgresql-18 ${target_version:-(none)}, but PG_PACKAGE_VERSION is 18.6-1.pgdg13+2; update the pins together (README.md)" >&2;       exit 1;     fi;     build_version="$(dpkg-query --showformat='${Version}' --show postgresql-client-18)";     if [ "${build_version}" != "18.6-1.pgdg13+2" ]; then       echo "the build stage has postgresql-client-18 ${build_version}, expected 18.6-1.pgdg13+2" >&2;       exit 1;     fi
+    #7 DONE 0.1s
+    
+    #8 [build 5/8] RUN set -eu;     rm -f /etc/apt/sources.list.d/*;     printf '%s\n'       'Types: deb'       "URIs: http://snapshot.debian.org/archive/debian/20260918T000000Z"       'Suites: trixie'       'Components: main'       'Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp'       > /etc/apt/sources.list.d/debian-snapshot.sources;     apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Retries=5 update;     apt-get -o Acquire::Retries=5 install -y --no-install-recommends       binutils bison ca-certificates curl flex gcc-aarch64-linux-gnu libc6-dev-arm64-cross make;     rm -rf /var/lib/apt/lists/*
+    #8 0.561 Get:1 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie InRelease [140 kB]
+    #8 0.626 Get:2 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 Packages [9614 kB]
+    #8 1.341 Fetched 9755 kB in 1s (7993 kB/s)
+    #8 1.341 Reading package lists...
+    #8 1.864 Reading package lists...
+    #8 2.379 Building dependency tree...
+    #8 2.564 Reading state information...
+    #8 2.811 ca-certificates is already the newest version (20250419).
+    #8 2.811 The following additional packages will be installed:
+    #8 2.811   binutils-aarch64-linux-gnu binutils-common cpp-14-aarch64-linux-gnu
+    #8 2.811   cpp-aarch64-linux-gnu gcc-14-aarch64-linux-gnu libasan8 libatomic1
+    #8 2.811   libbinutils libbrotli1 libc6-arm64-cross libcc1-0 libctf-nobfd0 libctf0
+    #8 2.811   libcurl4t64 libgcc-14-dev libgomp1 libgprofng0 libhwasan0 libisl23 libitm1
+    #8 2.811   libjansson4 liblsan0 libmpc3 libmpfr6 libnghttp2-14 libnghttp3-9 libpsl5t64
+    #8 2.812   librtmp1 libsframe1 libssh2-1t64 libtsan2 libubsan1
+    #8 2.812   linux-libc-dev-arm64-cross m4
+    #8 2.813 Suggested packages:
+    #8 2.813   binutils-doc gprofng-gui binutils-gold bison-doc gcc-14-locales cpp-14-doc
+    #8 2.813   cpp-doc build-essential flex-doc gcc-14-doc manpages-dev autoconf automake
+    #8 2.813   libtool gdb-aarch64-linux-gnu gcc-doc m4-doc make-doc
+    #8 2.813 Recommended packages:
+    #8 2.813   bash-completion gcc | c-compiler libfl-dev libc6-dev libc-dev publicsuffix
+    #8 2.916 The following NEW packages will be installed:
+    #8 2.916   binutils binutils-aarch64-linux-gnu binutils-common bison
+    #8 2.916   cpp-14-aarch64-linux-gnu cpp-aarch64-linux-gnu curl flex
+    #8 2.916   gcc-14-aarch64-linux-gnu gcc-aarch64-linux-gnu libasan8 libatomic1
+    #8 2.916   libbinutils libbrotli1 libc6-arm64-cross libc6-dev-arm64-cross libcc1-0
+    #8 2.916   libctf-nobfd0 libctf0 libcurl4t64 libgcc-14-dev libgomp1 libgprofng0
+    #8 2.916   libhwasan0 libisl23 libitm1 libjansson4 liblsan0 libmpc3 libmpfr6
+    #8 2.916   libnghttp2-14 libnghttp3-9 libpsl5t64 librtmp1 libsframe1 libssh2-1t64
+    #8 2.917   libtsan2 libubsan1 linux-libc-dev-arm64-cross m4 make
+    #8 3.114 0 upgraded, 41 newly installed, 0 to remove and 0 not upgraded.
+    #8 3.114 Need to get 53.6 MB of archives.
+    #8 3.114 After this operation, 201 MB of additional disk space will be used.
+    #8 3.114 Get:1 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 m4 arm64 1.4.19-8 [285 kB]
+    #8 3.131 Get:2 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 flex arm64 2.6.4-8.2+b4 [412 kB]
+    #8 3.142 Get:3 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libsframe1 arm64 2.44-3 [77.8 kB]
+    #8 3.142 Get:4 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 binutils-common arm64 2.44-3 [2509 kB]
+    #8 3.163 Get:5 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libbinutils arm64 2.44-3 [660 kB]
+    #8 3.165 Get:6 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libgprofng0 arm64 2.44-3 [668 kB]
+    #8 3.168 Get:7 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libctf-nobfd0 arm64 2.44-3 [152 kB]
+    #8 3.168 Get:8 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libctf0 arm64 2.44-3 [84.2 kB]
+    #8 3.169 Get:9 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libjansson4 arm64 2.14-2+b3 [39.2 kB]
+    #8 3.169 Get:10 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 binutils-aarch64-linux-gnu arm64 2.44-3 [820 kB]
+    #8 3.172 Get:11 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 binutils arm64 2.44-3 [262 kB]
+    #8 3.190 Get:12 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 bison arm64 2:3.8.2+dfsg-1+b2 [1149 kB]
+    #8 3.212 Get:13 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libisl23 arm64 0.27-1 [601 kB]
+    #8 3.216 Get:14 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libmpfr6 arm64 4.2.2-1 [685 kB]
+    #8 3.220 Get:15 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libmpc3 arm64 1.3.1-1+b3 [50.5 kB]
+    #8 3.222 Get:16 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 cpp-14-aarch64-linux-gnu arm64 14.2.0-19 [9169 kB]
+    #8 3.257 Get:17 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 cpp-aarch64-linux-gnu arm64 4:14.2.0-1 [4832 B]
+    #8 3.258 Get:18 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libbrotli1 arm64 1.1.0-2+b7 [308 kB]
+    #8 3.261 Get:19 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libnghttp2-14 arm64 1.64.0-1.1+deb13u1 [71.6 kB]
+    #8 3.265 Get:20 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libnghttp3-9 arm64 1.8.0-1 [63.2 kB]
+    #8 3.268 Get:21 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libpsl5t64 arm64 0.21.2-1.1+b1 [57.1 kB]
+    #8 3.270 Get:22 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 librtmp1 arm64 2.4+20151223.gitfa8646d.1-2+b5 [56.8 kB]
+    #8 3.272 Get:23 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libssh2-1t64 arm64 1.11.1-1+deb13u2 [236 kB]
+    #8 3.276 Get:24 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libcurl4t64 arm64 8.14.1-2+deb13u5 [360 kB]
+    #8 3.281 Get:25 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 curl arm64 8.14.1-2+deb13u5 [262 kB]
+    #8 3.284 Get:26 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libcc1-0 arm64 14.2.0-19 [42.2 kB]
+    #8 3.286 Get:27 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libgomp1 arm64 14.2.0-19 [124 kB]
+    #8 3.290 Get:28 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libitm1 arm64 14.2.0-19 [24.2 kB]
+    #8 3.295 Get:29 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libatomic1 arm64 14.2.0-19 [10.1 kB]
+    #8 3.297 Get:30 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libasan8 arm64 14.2.0-19 [2578 kB]
+    #8 3.309 Get:31 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 liblsan0 arm64 14.2.0-19 [1161 kB]
+    #8 3.314 Get:32 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libtsan2 arm64 14.2.0-19 [2383 kB]
+    #8 3.323 Get:33 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libubsan1 arm64 14.2.0-19 [1039 kB]
+    #8 3.329 Get:34 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libhwasan0 arm64 14.2.0-19 [1442 kB]
+    #8 3.337 Get:35 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libgcc-14-dev arm64 14.2.0-19 [2359 kB]
+    #8 3.346 Get:36 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 gcc-14-aarch64-linux-gnu arm64 14.2.0-19 [17.7 MB]
+    #8 3.407 Get:37 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 gcc-aarch64-linux-gnu arm64 4:14.2.0-1 [1440 B]
+    #8 3.408 Get:38 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libc6-arm64-cross all 2.41-11cross1 [1168 kB]
+    #8 3.412 Get:39 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 linux-libc-dev-arm64-cross all 6.12.38-1cross1 [2446 kB]
+    #8 3.420 Get:40 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 libc6-dev-arm64-cross all 2.41-11cross1 [1617 kB]
+    #8 3.431 Get:41 http://snapshot.debian.org/archive/debian/20260918T000000Z trixie/main arm64 make arm64 4.4.1-2 [452 kB]
+    #8 3.586 debconf: unable to initialize frontend: Dialog
+    #8 3.586 debconf: (TERM is not set, so the dialog frontend is not usable.)
+    #8 3.586 debconf: falling back to frontend: Readline
+    #8 3.592 debconf: unable to initialize frontend: Readline
+    #8 3.592 debconf: (This frontend requires a controlling tty.)
+    #8 3.592 debconf: falling back to frontend: Teletype
+    #8 3.596 debconf: unable to initialize frontend: Teletype
+    #8 3.596 debconf: (This frontend requires a controlling tty.)
+    #8 3.596 debconf: falling back to frontend: Noninteractive
+    #8 4.638 Fetched 53.6 MB in 1s (106 MB/s)
+    #8 4.649 Selecting previously unselected package m4.
+    #8 4.649 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 10411 files and directories currently installed.)
+    #8 4.654 Preparing to unpack .../00-m4_1.4.19-8_arm64.deb ...
+    #8 4.655 Unpacking m4 (1.4.19-8) ...
+    #8 4.676 Selecting previously unselected package flex.
+    #8 4.678 Preparing to unpack .../01-flex_2.6.4-8.2+b4_arm64.deb ...
+    #8 4.679 Unpacking flex (2.6.4-8.2+b4) ...
+    #8 4.707 Selecting previously unselected package libsframe1:arm64.
+    #8 4.709 Preparing to unpack .../02-libsframe1_2.44-3_arm64.deb ...
+    #8 4.710 Unpacking libsframe1:arm64 (2.44-3) ...
+    #8 4.724 Selecting previously unselected package binutils-common:arm64.
+    #8 4.726 Preparing to unpack .../03-binutils-common_2.44-3_arm64.deb ...
+    #8 4.727 Unpacking binutils-common:arm64 (2.44-3) ...
+    #8 4.859 Selecting previously unselected package libbinutils:arm64.
+    #8 4.861 Preparing to unpack .../04-libbinutils_2.44-3_arm64.deb ...
+    #8 4.862 Unpacking libbinutils:arm64 (2.44-3) ...
+    #8 4.904 Selecting previously unselected package libgprofng0:arm64.
+    #8 4.906 Preparing to unpack .../05-libgprofng0_2.44-3_arm64.deb ...
+    #8 4.907 Unpacking libgprofng0:arm64 (2.44-3) ...
+    #8 4.947 Selecting previously unselected package libctf-nobfd0:arm64.
+    #8 4.949 Preparing to unpack .../06-libctf-nobfd0_2.44-3_arm64.deb ...
+    #8 4.950 Unpacking libctf-nobfd0:arm64 (2.44-3) ...
+    #8 4.967 Selecting previously unselected package libctf0:arm64.
+    #8 4.969 Preparing to unpack .../07-libctf0_2.44-3_arm64.deb ...
+    #8 4.969 Unpacking libctf0:arm64 (2.44-3) ...
+    #8 4.985 Selecting previously unselected package libjansson4:arm64.
+    #8 4.986 Preparing to unpack .../08-libjansson4_2.14-2+b3_arm64.deb ...
+    #8 4.987 Unpacking libjansson4:arm64 (2.14-2+b3) ...
+    #8 4.999 Selecting previously unselected package binutils-aarch64-linux-gnu.
+    #8 5.000 Preparing to unpack .../09-binutils-aarch64-linux-gnu_2.44-3_arm64.deb ...
+    #8 5.001 Unpacking binutils-aarch64-linux-gnu (2.44-3) ...
+    #8 5.084 Selecting previously unselected package binutils.
+    #8 5.086 Preparing to unpack .../10-binutils_2.44-3_arm64.deb ...
+    #8 5.088 Unpacking binutils (2.44-3) ...
+    #8 5.111 Selecting previously unselected package bison.
+    #8 5.113 Preparing to unpack .../11-bison_2%3a3.8.2+dfsg-1+b2_arm64.deb ...
+    #8 5.115 Unpacking bison (2:3.8.2+dfsg-1+b2) ...
+    #8 5.157 Selecting previously unselected package libisl23:arm64.
+    #8 5.158 Preparing to unpack .../12-libisl23_0.27-1_arm64.deb ...
+    #8 5.159 Unpacking libisl23:arm64 (0.27-1) ...
+    #8 5.198 Selecting previously unselected package libmpfr6:arm64.
+    #8 5.199 Preparing to unpack .../13-libmpfr6_4.2.2-1_arm64.deb ...
+    #8 5.200 Unpacking libmpfr6:arm64 (4.2.2-1) ...
+    #8 5.226 Selecting previously unselected package libmpc3:arm64.
+    #8 5.228 Preparing to unpack .../14-libmpc3_1.3.1-1+b3_arm64.deb ...
+    #8 5.229 Unpacking libmpc3:arm64 (1.3.1-1+b3) ...
+    #8 5.242 Selecting previously unselected package cpp-14-aarch64-linux-gnu.
+    #8 5.244 Preparing to unpack .../15-cpp-14-aarch64-linux-gnu_14.2.0-19_arm64.deb ...
+    #8 5.245 Unpacking cpp-14-aarch64-linux-gnu (14.2.0-19) ...
+    #8 5.600 Selecting previously unselected package cpp-aarch64-linux-gnu.
+    #8 5.602 Preparing to unpack .../16-cpp-aarch64-linux-gnu_4%3a14.2.0-1_arm64.deb ...
+    #8 5.602 Unpacking cpp-aarch64-linux-gnu (4:14.2.0-1) ...
+    #8 5.614 Selecting previously unselected package libbrotli1:arm64.
+    #8 5.616 Preparing to unpack .../17-libbrotli1_1.1.0-2+b7_arm64.deb ...
+    #8 5.617 Unpacking libbrotli1:arm64 (1.1.0-2+b7) ...
+    #8 5.642 Selecting previously unselected package libnghttp2-14:arm64.
+    #8 5.644 Preparing to unpack .../18-libnghttp2-14_1.64.0-1.1+deb13u1_arm64.deb ...
+    #8 5.645 Unpacking libnghttp2-14:arm64 (1.64.0-1.1+deb13u1) ...
+    #8 5.660 Selecting previously unselected package libnghttp3-9:arm64.
+    #8 5.662 Preparing to unpack .../19-libnghttp3-9_1.8.0-1_arm64.deb ...
+    #8 5.663 Unpacking libnghttp3-9:arm64 (1.8.0-1) ...
+    #8 5.677 Selecting previously unselected package libpsl5t64:arm64.
+    #8 5.679 Preparing to unpack .../20-libpsl5t64_0.21.2-1.1+b1_arm64.deb ...
+    #8 5.680 Unpacking libpsl5t64:arm64 (0.21.2-1.1+b1) ...
+    #8 5.693 Selecting previously unselected package librtmp1:arm64.
+    #8 5.695 Preparing to unpack .../21-librtmp1_2.4+20151223.gitfa8646d.1-2+b5_arm64.deb ...
+    #8 5.696 Unpacking librtmp1:arm64 (2.4+20151223.gitfa8646d.1-2+b5) ...
+    #8 5.710 Selecting previously unselected package libssh2-1t64:arm64.
+    #8 5.712 Preparing to unpack .../22-libssh2-1t64_1.11.1-1+deb13u2_arm64.deb ...
+    #8 5.712 Unpacking libssh2-1t64:arm64 (1.11.1-1+deb13u2) ...
+    #8 5.731 Selecting previously unselected package libcurl4t64:arm64.
+    #8 5.733 Preparing to unpack .../23-libcurl4t64_8.14.1-2+deb13u5_arm64.deb ...
+    #8 5.734 Unpacking libcurl4t64:arm64 (8.14.1-2+deb13u5) ...
+    #8 5.760 Selecting previously unselected package curl.
+    #8 5.761 Preparing to unpack .../24-curl_8.14.1-2+deb13u5_arm64.deb ...
+    #8 5.762 Unpacking curl (8.14.1-2+deb13u5) ...
+    #8 5.783 Selecting previously unselected package libcc1-0:arm64.
+    #8 5.785 Preparing to unpack .../25-libcc1-0_14.2.0-19_arm64.deb ...
+    #8 5.786 Unpacking libcc1-0:arm64 (14.2.0-19) ...
+    #8 5.801 Selecting previously unselected package libgomp1:arm64.
+    #8 5.803 Preparing to unpack .../26-libgomp1_14.2.0-19_arm64.deb ...
+    #8 5.804 Unpacking libgomp1:arm64 (14.2.0-19) ...
+    #8 5.821 Selecting previously unselected package libitm1:arm64.
+    #8 5.823 Preparing to unpack .../27-libitm1_14.2.0-19_arm64.deb ...
+    #8 5.824 Unpacking libitm1:arm64 (14.2.0-19) ...
+    #8 5.837 Selecting previously unselected package libatomic1:arm64.
+    #8 5.838 Preparing to unpack .../28-libatomic1_14.2.0-19_arm64.deb ...
+    #8 5.839 Unpacking libatomic1:arm64 (14.2.0-19) ...
+    #8 5.852 Selecting previously unselected package libasan8:arm64.
+    #8 5.854 Preparing to unpack .../29-libasan8_14.2.0-19_arm64.deb ...
+    #8 5.854 Unpacking libasan8:arm64 (14.2.0-19) ...
+    #8 5.980 Selecting previously unselected package liblsan0:arm64.
+    #8 5.982 Preparing to unpack .../30-liblsan0_14.2.0-19_arm64.deb ...
+    #8 5.983 Unpacking liblsan0:arm64 (14.2.0-19) ...
+    #8 6.045 Selecting previously unselected package libtsan2:arm64.
+    #8 6.047 Preparing to unpack .../31-libtsan2_14.2.0-19_arm64.deb ...
+    #8 6.047 Unpacking libtsan2:arm64 (14.2.0-19) ...
+    #8 6.164 Selecting previously unselected package libubsan1:arm64.
+    #8 6.166 Preparing to unpack .../32-libubsan1_14.2.0-19_arm64.deb ...
+    #8 6.167 Unpacking libubsan1:arm64 (14.2.0-19) ...
+    #8 6.225 Selecting previously unselected package libhwasan0:arm64.
+    #8 6.228 Preparing to unpack .../33-libhwasan0_14.2.0-19_arm64.deb ...
+    #8 6.229 Unpacking libhwasan0:arm64 (14.2.0-19) ...
+    #8 6.304 Selecting previously unselected package libgcc-14-dev:arm64.
+    #8 6.308 Preparing to unpack .../34-libgcc-14-dev_14.2.0-19_arm64.deb ...
+    #8 6.309 Unpacking libgcc-14-dev:arm64 (14.2.0-19) ...
+    #8 6.421 Selecting previously unselected package gcc-14-aarch64-linux-gnu.
+    #8 6.423 Preparing to unpack .../35-gcc-14-aarch64-linux-gnu_14.2.0-19_arm64.deb ...
+    #8 6.424 Unpacking gcc-14-aarch64-linux-gnu (14.2.0-19) ...
+    #8 6.837 Selecting previously unselected package gcc-aarch64-linux-gnu.
+    #8 6.839 Preparing to unpack .../36-gcc-aarch64-linux-gnu_4%3a14.2.0-1_arm64.deb ...
+    #8 6.840 Unpacking gcc-aarch64-linux-gnu (4:14.2.0-1) ...
+    #8 6.851 Selecting previously unselected package libc6-arm64-cross.
+    #8 6.853 Preparing to unpack .../37-libc6-arm64-cross_2.41-11cross1_all.deb ...
+    #8 6.854 Unpacking libc6-arm64-cross (2.41-11cross1) ...
+    #8 6.915 Selecting previously unselected package linux-libc-dev-arm64-cross.
+    #8 6.916 Preparing to unpack .../38-linux-libc-dev-arm64-cross_6.12.38-1cross1_all.deb ...
+    #8 6.917 Unpacking linux-libc-dev-arm64-cross (6.12.38-1cross1) ...
+    #8 7.003 Selecting previously unselected package libc6-dev-arm64-cross.
+    #8 7.005 Preparing to unpack .../39-libc6-dev-arm64-cross_2.41-11cross1_all.deb ...
+    #8 7.006 Unpacking libc6-dev-arm64-cross (2.41-11cross1) ...
+    #8 7.097 Selecting previously unselected package make.
+    #8 7.099 Preparing to unpack .../40-make_4.4.1-2_arm64.deb ...
+    #8 7.100 Unpacking make (4.4.1-2) ...
+    #8 7.138 Setting up libbrotli1:arm64 (1.1.0-2+b7) ...
+    #8 7.140 Setting up binutils-common:arm64 (2.44-3) ...
+    #8 7.142 Setting up libpsl5t64:arm64 (0.21.2-1.1+b1) ...
+    #8 7.144 Setting up libnghttp2-14:arm64 (1.64.0-1.1+deb13u1) ...
+    #8 7.145 Setting up libctf-nobfd0:arm64 (2.44-3) ...
+    #8 7.147 Setting up m4 (1.4.19-8) ...
+    #8 7.149 Setting up libgomp1:arm64 (14.2.0-19) ...
+    #8 7.151 Setting up libsframe1:arm64 (2.44-3) ...
+    #8 7.153 Setting up libjansson4:arm64 (2.14-2+b3) ...
+    #8 7.155 Setting up make (4.4.1-2) ...
+    #8 7.157 Setting up libmpfr6:arm64 (4.2.2-1) ...
+    #8 7.159 Setting up librtmp1:arm64 (2.4+20151223.gitfa8646d.1-2+b5) ...
+    #8 7.160 Setting up libc6-arm64-cross (2.41-11cross1) ...
+    #8 7.162 Setting up libmpc3:arm64 (1.3.1-1+b3) ...
+    #8 7.164 Setting up libatomic1:arm64 (14.2.0-19) ...
+    #8 7.166 Setting up libnghttp3-9:arm64 (1.8.0-1) ...
+    #8 7.168 Setting up linux-libc-dev-arm64-cross (6.12.38-1cross1) ...
+    #8 7.169 Setting up libubsan1:arm64 (14.2.0-19) ...
+    #8 7.171 Setting up libhwasan0:arm64 (14.2.0-19) ...
+    #8 7.173 Setting up libasan8:arm64 (14.2.0-19) ...
+    #8 7.174 Setting up bison (2:3.8.2+dfsg-1+b2) ...
+    #8 7.178 update-alternatives: using /usr/bin/bison.yacc to provide /usr/bin/yacc (yacc) in auto mode
+    #8 7.178 update-alternatives: warning: skip creation of /usr/share/man/man1/yacc.1.gz because associated file /usr/share/man/man1/bison.yacc.1.gz (of link group yacc) doesn't exist
+    #8 7.181 Setting up libssh2-1t64:arm64 (1.11.1-1+deb13u2) ...
+    #8 7.182 Setting up libtsan2:arm64 (14.2.0-19) ...
+    #8 7.184 Setting up libbinutils:arm64 (2.44-3) ...
+    #8 7.186 Setting up libisl23:arm64 (0.27-1) ...
+    #8 7.188 Setting up libcc1-0:arm64 (14.2.0-19) ...
+    #8 7.190 Setting up liblsan0:arm64 (14.2.0-19) ...
+    #8 7.191 Setting up libitm1:arm64 (14.2.0-19) ...
+    #8 7.193 Setting up libctf0:arm64 (2.44-3) ...
+    #8 7.195 Setting up flex (2.6.4-8.2+b4) ...
+    #8 7.198 Setting up libcurl4t64:arm64 (8.14.1-2+deb13u5) ...
+    #8 7.200 Setting up binutils-aarch64-linux-gnu (2.44-3) ...
+    #8 7.202 Setting up libc6-dev-arm64-cross (2.41-11cross1) ...
+    #8 7.204 Setting up libgprofng0:arm64 (2.44-3) ...
+    #8 7.206 Setting up cpp-14-aarch64-linux-gnu (14.2.0-19) ...
+    #8 7.208 Setting up curl (8.14.1-2+deb13u5) ...
+    #8 7.210 Setting up libgcc-14-dev:arm64 (14.2.0-19) ...
+    #8 7.212 Setting up binutils (2.44-3) ...
+    #8 7.215 Setting up cpp-aarch64-linux-gnu (4:14.2.0-1) ...
+    #8 7.217 Setting up gcc-14-aarch64-linux-gnu (14.2.0-19) ...
+    #8 7.218 Setting up gcc-aarch64-linux-gnu (4:14.2.0-1) ...
+    #8 7.220 Processing triggers for libc-bin (2.41-12+deb13u4) ...
+    #8 DONE 7.9s
+    
+    #9 [build 6/8] WORKDIR /src
+    #9 DONE 0.0s
+    
+    #10 [build 7/8] RUN set -eu;     fetch() {       curl --fail --silent --show-error --location --proto '=https' --tlsv1.2         --connect-timeout 20 --retry 5 --retry-all-errors --retry-delay 5         --output "$1" "$2";     };     pg_server_dev="postgresql-server-dev-18_$(printf '%s' "18.6-1.pgdg13+2" | sed 's/+/%2B/g')_arm64.deb";     fetch server-dev.deb "https://apt-archive.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/${pg_server_dev}";     echo "bb88940b9d12e11e166e8f7dedd30859f3396d4027e00979e0a19dd41fff7f3a  server-dev.deb" | sha256sum --check --strict;     dpkg-deb --extract server-dev.deb /tmp/server-dev;     cp -a /tmp/server-dev/usr/include/postgresql /usr/include/;     grep -q '#define USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK 1' /usr/include/postgresql/18/server/pg_config.h;     age_file="apache-age-1.8.0-src.tar.gz";     age_ok=;     for age_base in "https://dlcdn.apache.org/age/PG18" "https://archive.apache.org/dist/age/PG18"; do       echo "downloading ${age_base}/1.8.0/${age_file}";       if fetch age.tar.gz "${age_base}/1.8.0/${age_file}"         && echo "8103dc6a4daec0441c2bdfe4e456be619d04526efa5c4e1a5148a29d7e6359e5df7d9a1fabbc6a6a08f6229c4d6f8634b7bf3554eca8ffb58550382542279866  age.tar.gz" | sha512sum --check --strict; then         age_ok=1; break;       fi;       echo "no usable Apache AGE 1.8.0 from ${age_base}" >&2;     done;     if [ -z "${age_ok}" ]; then       echo "Apache AGE 1.8.0 could not be downloaded and verified from any source" >&2; exit 1;     fi;     mkdir age;     tar --extract --gzip --file age.tar.gz --strip-components 1 --directory age
+    #10 0.403 server-dev.deb: OK
+    #10 0.502 downloading https://dlcdn.apache.org/age/PG18/1.8.0/apache-age-1.8.0-src.tar.gz
+    #10 1.925 age.tar.gz: OK
+    #10 DONE 2.2s
+    
+    #11 [build 8/8] RUN set -eu;     make -C age -j"$(nproc)"       CC=aarch64-linux-gnu-gcc with_llvm=no PG_CONFIG=/usr/lib/postgresql/18/bin/pg_config       libdir=/usr/aarch64-linux-gnu/lib       LDFLAGS_SL="-Xlinker '--package-metadata={"type":"generic","name":"apache-age","version":"1.8.0","license":"Apache-2.0","sourceRepo":"https://github.com/apache/age"}'";     make -C age install       with_llvm=no PG_CONFIG=/usr/lib/postgresql/18/bin/pg_config DESTDIR=/out;     aarch64-linux-gnu-strip --strip-debug /out/usr/lib/postgresql/18/lib/age.so;     aarch64-linux-gnu-readelf --file-header /out/usr/lib/postgresql/18/lib/age.so | grep -q 'Machine: *AArch64';     aarch64-linux-gnu-readelf --notes /out/usr/lib/postgresql/18/lib/age.so | grep -q ""version":"1.8.0"";     install -D --mode 0644 age/LICENSE /out/usr/share/doc/apache-age/LICENSE;     install -D --mode 0644 age/NOTICE /out/usr/share/doc/apache-age/NOTICE
+    #11 0.086 make: Entering directory '/src/age'
+    #11 0.109 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/age.o src/backend/age.c
+    #11 0.110 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/catalog/ag_catalog.o src/backend/catalog/ag_catalog.c
+    #11 0.110 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/catalog/ag_graph.o src/backend/catalog/ag_graph.c
+    #11 0.110 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/catalog/ag_label.o src/backend/catalog/ag_label.c
+    #11 0.206 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/catalog/ag_namespace.o src/backend/catalog/ag_namespace.c
+    #11 0.236 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/commands/graph_commands.o src/backend/commands/graph_commands.c
+    #11 0.253 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/commands/label_commands.o src/backend/commands/label_commands.c
+    #11 0.254 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/executor/cypher_create.o src/backend/executor/cypher_create.c
+    #11 0.293 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/executor/cypher_merge.o src/backend/executor/cypher_merge.c
+    #11 0.401 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/executor/cypher_set.o src/backend/executor/cypher_set.c
+    #11 0.455 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/executor/cypher_utils.o src/backend/executor/cypher_utils.c
+    #11 0.508 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/nodes/ag_nodes.o src/backend/nodes/ag_nodes.c
+    #11 0.594 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/nodes/cypher_copyfuncs.o src/backend/nodes/cypher_copyfuncs.c
+    #11 0.612 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/nodes/cypher_outfuncs.o src/backend/nodes/cypher_outfuncs.c
+    #11 0.672 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/nodes/cypher_readfuncs.o src/backend/nodes/cypher_readfuncs.c
+    #11 0.713 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/optimizer/cypher_createplan.o src/backend/optimizer/cypher_createplan.c
+    #11 0.719 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/optimizer/cypher_pathnode.o src/backend/optimizer/cypher_pathnode.c
+    #11 0.802 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/optimizer/cypher_paths.o src/backend/optimizer/cypher_paths.c
+    #11 0.824 /usr/bin/flex -b  -o'src/backend/parser/ag_scanner.c' src/backend/parser/ag_scanner.l
+    #11 0.833 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_analyze.o src/backend/parser/cypher_analyze.c
+    #11 0.839 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_clause.o src/backend/parser/cypher_clause.c
+    #11 0.848 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/executor/cypher_delete.o src/backend/executor/cypher_delete.c
+    #11 0.912 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_expr.o src/backend/parser/cypher_expr.c
+    #11 1.096 /usr/bin/bison -Wno-deprecated  --defines=src/include/parser/cypher_gram_def.h -Werror -Wno-error=conflicts-sr -Wno-error=conflicts-rr -o src/backend/parser/cypher_gram.c src/backend/parser/cypher_gram.y
+    #11 1.101 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_item.o src/backend/parser/cypher_item.c
+    #11 1.231 '/usr/bin/perl' -I ./tools/ ./tools/gen_keywordlist.pl --extern --varname CypherKeyword --output src/include/parser src/include/parser/cypher_kwlist.h
+    #11 1.251 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_parse_agg.o src/backend/parser/cypher_parse_agg.c
+    #11 1.280 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_parse_node.o src/backend/parser/cypher_parse_node.c
+    #11 1.380 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_parser.o src/backend/parser/cypher_parser.c
+    #11 1.438 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_transform_entity.o src/backend/parser/cypher_transform_entity.c
+    #11 1.471 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/age_graphid_ds.o src/backend/utils/adt/age_graphid_ds.c
+    #11 1.504 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/agtype.o src/backend/utils/adt/agtype.c
+    #11 1.558 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/agtype_ext.o src/backend/utils/adt/agtype_ext.c
+    #11 1.562 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/agtype_gin.o src/backend/utils/adt/agtype_gin.c
+    #11 1.633 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/agtype_ops.o src/backend/utils/adt/agtype_ops.c
+    #11 1.777 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/agtype_parser.o src/backend/utils/adt/agtype_parser.c
+    #11 2.117 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/agtype_util.o src/backend/utils/adt/agtype_util.c
+    #11 2.176 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/agtype_raw.o src/backend/utils/adt/agtype_raw.c
+    #11 2.257 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/age_global_graph.o src/backend/utils/adt/age_global_graph.c
+    #11 2.530 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/age_session_info.o src/backend/utils/adt/age_session_info.c
+    #11 2.623 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/age_vle.o src/backend/utils/adt/age_vle.c
+    #11 2.666 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/cypher_funcs.o src/backend/utils/adt/cypher_funcs.c
+    #11 2.692 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/ag_float8_supp.o src/backend/utils/adt/ag_float8_supp.c
+    #11 2.710 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/graphid.o src/backend/utils/adt/graphid.c
+    #11 2.758 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/ag_func.o src/backend/utils/ag_func.c
+    #11 2.816 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/graph_generation.o src/backend/utils/graph_generation.c
+    #11 2.842 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/cache/ag_cache.o src/backend/utils/cache/ag_cache.c
+    #11 2.954 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/cache/agehash.o src/backend/utils/cache/agehash.c
+    #11 3.124 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/load/ag_load_labels.o src/backend/utils/load/ag_load_labels.c
+    #11 3.146 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/load/ag_load_edges.o src/backend/utils/load/ag_load_edges.c
+    #11 3.240 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/load/age_load.o src/backend/utils/load/age_load.c
+    #11 3.264 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/name_validation.o src/backend/utils/name_validation.c
+    #11 3.298 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/ag_guc.o src/backend/utils/ag_guc.c
+    #11 3.328 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/ag_scanner.o src/backend/parser/ag_scanner.c
+    #11 3.350 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_gram.o src/backend/parser/cypher_gram.c
+    #11 3.497 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_keywords.o src/backend/parser/cypher_keywords.c
+    #11 3.589 Building install SQL: age--1.8.0.sql from HEAD
+    #11 6.093 aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -shared -o age.so src/backend/age.o src/backend/catalog/ag_catalog.o src/backend/catalog/ag_graph.o src/backend/catalog/ag_label.o src/backend/catalog/ag_namespace.o src/backend/commands/graph_commands.o src/backend/commands/label_commands.o src/backend/executor/cypher_create.o src/backend/executor/cypher_merge.o src/backend/executor/cypher_set.o src/backend/executor/cypher_utils.o src/backend/nodes/ag_nodes.o src/backend/nodes/cypher_copyfuncs.o src/backend/nodes/cypher_outfuncs.o src/backend/nodes/cypher_readfuncs.o src/backend/optimizer/cypher_createplan.o src/backend/optimizer/cypher_pathnode.o src/backend/optimizer/cypher_paths.o src/backend/parser/ag_scanner.o src/backend/parser/cypher_analyze.o src/backend/parser/cypher_clause.o src/backend/executor/cypher_delete.o src/backend/parser/cypher_expr.o src/backend/parser/cypher_gram.o src/backend/parser/cypher_item.o src/backend/parser/cypher_keywords.o src/backend/parser/cypher_parse_agg.o src/backend/parser/cypher_parse_node.o src/backend/parser/cypher_parser.o src/backend/parser/cypher_transform_entity.o src/backend/utils/adt/age_graphid_ds.o src/backend/utils/adt/agtype.o src/backend/utils/adt/agtype_ext.o src/backend/utils/adt/agtype_gin.o src/backend/utils/adt/agtype_ops.o src/backend/utils/adt/agtype_parser.o src/backend/utils/adt/agtype_util.o src/backend/utils/adt/agtype_raw.o src/backend/utils/adt/age_global_graph.o src/backend/utils/adt/age_session_info.o src/backend/utils/adt/age_vle.o src/backend/utils/adt/cypher_funcs.o src/backend/utils/adt/ag_float8_supp.o src/backend/utils/adt/graphid.o src/backend/utils/ag_func.o src/backend/utils/graph_generation.o src/backend/utils/cache/ag_cache.o src/backend/utils/cache/agehash.o src/backend/utils/load/ag_load_labels.o src/backend/utils/load/ag_load_edges.o src/backend/utils/load/age_load.o src/backend/utils/name_validation.o src/backend/utils/ag_guc.o -L/usr/aarch64-linux-gnu/lib  -Wl,-z,relro -Wl,-z,now  -Wl,--as-needed -Xlinker '--package-metadata={"type":"generic","name":"apache-age","version":"1.8.0","license":"Apache-2.0","sourceRepo":"https://github.com/apache/age"}' -fvisibility=hidden 
+    #11 6.147 make: Leaving directory '/src/age'
+    #11 6.148 make: Entering directory '/src/age'
+    #11 6.181 /bin/mkdir -p '/out/usr/lib/postgresql/18/lib'
+    #11 6.182 /bin/mkdir -p '/out/usr/share/postgresql/18/extension'
+    #11 6.182 /bin/mkdir -p '/out/usr/share/postgresql/18/extension'
+    #11 6.183 /usr/bin/install -c -m 755  age.so '/out/usr/lib/postgresql/18/lib/age.so'
+    #11 6.185 /usr/bin/install -c -m 644 .//age.control '/out/usr/share/postgresql/18/extension/'
+    #11 6.186 /usr/bin/install -c -m 644 .//age--1.6.0--1.7.0.sql .//age--1.7.0--1.8.0.sql age--1.8.0.sql '/out/usr/share/postgresql/18/extension/'
+    #11 6.187 make: Leaving directory '/src/age'
+    #11 DONE 6.3s
+    
+    #12 [stage-2 1/3] COPY --from=build /out/usr/lib/postgresql/18/lib/ /usr/lib/postgresql/18/lib/
+    #12 DONE 0.0s
+    
+    #13 [stage-2 2/3] COPY --from=build /out/usr/share/postgresql/18/extension/ /usr/share/postgresql/18/extension/
+    #13 DONE 0.0s
+    
+    #14 [stage-2 3/3] COPY --from=build /out/usr/share/doc/apache-age/ /usr/share/doc/apache-age/
+    #14 DONE 0.0s
+    
+    #15 exporting to image
+    #15 exporting layers
+    #15 exporting layers 0.2s done
+    #15 writing image sha256:dab9c913695254069b4256881e485580e68a4443182689d74aa7264feb8cc8d9 done
+    #15 naming to localhost/trustiot-e2e/postgres:nightly done
+    #15 DONE 0.2s
+2026-10-13T00:43:45.124Z $ /home/runner/.proto/tools/k3d/5.9.0/k3d image import localhost/trustiot-e2e/postgres:nightly --cluster nightly --mode direct
+    [36mINFO[0m[0000] Importing image(s) into cluster 'nightly'    
+    [36mINFO[0m[0000] Loading 1 image(s) from runtime into nodes... 
+    [36mINFO[0m[0001] Importing images '[localhost/trustiot-e2e/postgres:nightly]' into node 'k3d-nightly-server-0'... 
+    [36mINFO[0m[0005] Successfully imported image(s)               
+    [36mINFO[0m[0005] Successfully imported 1 image(s) into 1 cluster(s)
+2026-10-13T00:43:51.116Z image localhost/trustiot-e2e/postgres:nightly is present on node k3d-nightly-server-0
+2026-10-13T00:43:51.116Z image localhost/trustiot-e2e/postgres:nightly confirmed on 1 node(s): k3d-nightly-server-0
+2026-10-13T00:43:51.116Z == values-onprem.yaml in namespace nightly-onprem
+2026-10-13T00:43:51.117Z -- namespace with the restricted Pod Security level
+2026-10-13T00:43:51.117Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl create namespace nightly-onprem
+    namespace/nightly-onprem created
+2026-10-13T00:43:51.153Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl label namespace nightly-onprem pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/warn=restricted pod-security.kubernetes.io/audit=restricted pod-security.kubernetes.io/enforce-version=latest
+    namespace/nightly-onprem labeled
+2026-10-13T00:43:51.199Z    ok: enforce, warn and audit are restricted
+2026-10-13T00:43:51.199Z -- dummy Secrets for the references the chart makes
+2026-10-13T00:43:51.199Z $ /home/runner/.proto/tools/helm/4.3.0/helm template trustiot /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart --namespace nightly-onprem -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/values-onprem.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/onprem-instance.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/smoke.yaml
+2026-10-13T00:43:51.259Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl create secret generic trustiot-otel-collector-clickhouse --namespace nightly-onprem --from-literal=password=nightly-dummy-value
+    secret/trustiot-otel-collector-clickhouse created
+2026-10-13T00:43:51.294Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl create secret generic trustiot-clickhouse-admin --namespace nightly-onprem --from-literal=password=nightly-dummy-value
+    secret/trustiot-clickhouse-admin created
+2026-10-13T00:43:51.331Z $ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=nightly.test -days 1 -keyout /tmp/nightly-tls-grT13I/tls.key -out /tmp/nightly-tls-grT13I/tls.crt
+    -----
+2026-10-13T00:43:51.337Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl create secret tls trustiot-ingress-tls --namespace nightly-onprem --cert=/tmp/nightly-tls-grT13I/tls.crt --key=/tmp/nightly-tls-grT13I/tls.key
+    secret/trustiot-ingress-tls created
+2026-10-13T00:43:51.372Z    ok: 3 created: trustiot-otel-collector-clickhouse, trustiot-clickhouse-admin, trustiot-ingress-tls
+2026-10-13T00:43:51.372Z -- helm install --wait
+2026-10-13T00:43:51.373Z $ /home/runner/.proto/tools/helm/4.3.0/helm upgrade --install trustiot /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart --namespace nightly-onprem -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/values-onprem.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/onprem-instance.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/smoke.yaml --wait --wait-for-jobs --timeout 5m
+    Release "trustiot" does not exist. Installing it now.
+    NAME: trustiot
+    LAST DEPLOYED: Tue Oct 13 00:43:51 2026
+    NAMESPACE: nightly-onprem
+    STATUS: deployed
+    REVISION: 1
+    DESCRIPTION: Install complete
+    TEST SUITE: None
+    I1013 00:43:51.856270    6736 warnings.go:107] "Warning: configured AuthorizationPolicy will deny all traffic to TCP ports under its scope due to the use of only HTTP attributes in a DENY rule; it is recommended to explicitly specify the port"
+2026-10-13T00:44:17.748Z $ /home/runner/.proto/tools/helm/4.3.0/helm get manifest trustiot --namespace nightly-onprem
+2026-10-13T00:44:17.797Z    ok: release trustiot deployed, 28 objects
+2026-10-13T00:44:17.798Z -- every workload of the release is ready
+2026-10-13T00:44:17.799Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl rollout status --namespace nightly-onprem deployment/trustiot-otel-collector --timeout=180s
+    deployment "trustiot-otel-collector" successfully rolled out
+2026-10-13T00:44:17.866Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl rollout status --namespace nightly-onprem deployment/trustiot-smoke-echo --timeout=180s
+    deployment "trustiot-smoke-echo" successfully rolled out
+2026-10-13T00:44:17.922Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl rollout status --namespace nightly-onprem statefulset/trustiot-clickhouse --timeout=180s
+    statefulset rolling update complete 1 pods at revision trustiot-clickhouse-79b5cd58d7...
+2026-10-13T00:44:17.977Z    ok: Deployment/trustiot-otel-collector, Deployment/trustiot-smoke-echo, StatefulSet/trustiot-clickhouse
+2026-10-13T00:44:17.977Z -- every CloudNativePG Cluster is healthy
+2026-10-13T00:44:17.978Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl wait --namespace nightly-onprem --for=condition=Ready cluster.postgresql.cnpg.io/trustiot-postgres --timeout=600s
+    cluster.postgresql.cnpg.io/trustiot-postgres condition met
+2026-10-13T00:44:18.135Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get --namespace nightly-onprem cluster.postgresql.cnpg.io/trustiot-postgres --output json
+2026-10-13T00:44:18.194Z    ok: trustiot-postgres: healthy
+2026-10-13T00:44:18.194Z -- every Gateway is programmed
+2026-10-13T00:44:18.195Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl wait --namespace nightly-onprem --for=condition=Programmed gateway.gateway.networking.k8s.io/trustiot-ingress --timeout=180s
+    gateway.gateway.networking.k8s.io/trustiot-ingress condition met
+2026-10-13T00:44:18.356Z    ok: trustiot-ingress
+2026-10-13T00:44:18.356Z -- no pod is broken, not ready or crash-looping
+2026-10-13T00:44:18.356Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get pods --namespace nightly-onprem --output json
+                                        101
+                                        1337
+                                        1337
+                                        0
+                                        26,
+                                        101
+                                        26
+                                        65532
+2026-10-13T00:44:18.411Z    ok: 6 pods running or completed
+2026-10-13T00:44:18.411Z -- each Gateway's NetworkPolicy admits exactly the ports its Istio pods use
+2026-10-13T00:44:18.413Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get deployments,services --namespace nightly-onprem --selector gateway.networking.k8s.io/gateway-name=trustiot-ingress --output json
+2026-10-13T00:44:18.465Z    ok: trustiot-ingress: 443, 15021
+2026-10-13T00:44:18.465Z -- Services that expose a health endpoint have ready endpoints
+2026-10-13T00:44:18.467Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get endpointslices --namespace nightly-onprem --selector kubernetes.io/service-name=trustiot-smoke-echo --output json
+2026-10-13T00:44:18.508Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get endpointslices --namespace nightly-onprem --selector kubernetes.io/service-name=trustiot-smoke-echo --output json
+2026-10-13T00:44:18.549Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get endpointslices --namespace nightly-onprem --selector kubernetes.io/service-name=trustiot-clickhouse --output json
+2026-10-13T00:44:18.589Z    ok: trustiot-smoke-echo:http/healthz, trustiot-smoke-echo:http/readyz, trustiot-clickhouse:http/ping
+2026-10-13T00:44:18.590Z -- helm uninstall leaves no object of the release but the kept database
+2026-10-13T00:44:18.590Z $ /home/runner/.proto/tools/helm/4.3.0/helm uninstall trustiot --namespace nightly-onprem --wait --timeout 3m
+    These resources were kept due to the resource policy:
+    
+    release "trustiot" uninstalled
+2026-10-13T00:44:19.235Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl delete --namespace nightly-onprem cluster.postgresql.cnpg.io/trustiot-postgres imagecatalog.postgresql.cnpg.io/trustiot-postgres --wait=true --timeout=180s
+    cluster.postgresql.cnpg.io "trustiot-postgres" deleted from nightly-onprem namespace
+    imagecatalog.postgresql.cnpg.io "trustiot-postgres" deleted from nightly-onprem namespace
+2026-10-13T00:44:19.332Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get pvc --namespace nightly-onprem --selector cnpg.io/cluster --output name
+    persistentvolumeclaim/trustiot-postgres-1
+2026-10-13T00:44:22.375Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get pvc --namespace nightly-onprem --selector cnpg.io/cluster --output name
+    persistentvolumeclaim/trustiot-postgres-1
+2026-10-13T00:44:25.416Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get pvc --namespace nightly-onprem --selector cnpg.io/cluster --output name
+    persistentvolumeclaim/trustiot-postgres-1
+2026-10-13T00:44:28.457Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get pvc --namespace nightly-onprem --selector cnpg.io/cluster --output name
+2026-10-13T00:44:28.496Z    ok: all objects removed; kept on uninstall as intended, then deleted: cluster.postgresql.cnpg.io/trustiot-postgres, imagecatalog.postgresql.cnpg.io/trustiot-postgres; their volumes were gone after 9 s
+2026-10-13T00:44:28.496Z -- ingress e2e test (deploy/chart/tests/e2e)
+2026-10-13T00:44:28.497Z $ ingress e2e as onprem in namespace nightly-e2e-onprem
+    bun test v1.4.2 (744846f84)
+    
+    
+    ::group::deploy/chart/tests/e2e/ingress.e2e.ts:
+    (pass) paths that need the cookie > no cookie or an unknown session: 401 from the identity service, backend not reached [21.63ms]
+    (pass) paths that need the cookie > valid cookie: the backend gets exactly one identity header, from the identity service [22.89ms]
+    (pass) paths that need the cookie > valid cookie plus a forged identity header: the forged value never reaches the backend [5.64ms]
+    (pass) paths that need the cookie > valid cookie plus underscore spellings of the identity header: none reaches the backend [5.68ms]
+    (pass) paths that need the cookie > forged identity header without a cookie: 401 [4.91ms]
+    (pass) paths that need the cookie > x-forwarded-proto is https at the backend, even when the client sends http [11.33ms]
+    (pass) paths that need the cookie > /internal is never reachable: 401 without a cookie, 403 with one [34.29ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: //internal [10.02ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: //internal/tenants [10.60ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: ///internal [10.59ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: //./internal [9.87ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /.//internal/tenants [10.09ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /x/..//internal/tenants [11.03ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2finternal [10.94ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2finternal/tenants [10.15ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2Finternal [10.59ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2f%2finternal [10.48ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /./%2finternal [9.80ms]
+    (pass) paths that need the cookie > an unknown host gets no route [1006.23ms]
+    (pass) public paths > certificate renewal: no cookie needed, the forged identity header is stripped [10.60ms]
+    (pass) public paths > MQTT over WebSocket: no cookie needed, the forged identity header is stripped [11.14ms]
+    (pass) public paths > login on the identity service: no cookie needed, the forged identity header is stripped [8.58ms]
+    (pass) public paths > health check on the identity service: no cookie needed, the forged identity header is stripped [5.07ms]
+    (pass) public paths > certificate renewal: underscore spellings of the identity header are removed [5.49ms]
+    (pass) public paths > MQTT over WebSocket: underscore spellings of the identity header are removed [10.80ms]
+    (pass) public paths > login: underscore spellings of the identity header are removed [5.26ms]
+    (pass) public paths > health check: underscore spellings of the identity header are removed [8.32ms]
+    (pass) public paths > Host with a port: a public path is public on its own host only [2047.88ms]
+    (pass) public paths > GET /healthz answers without a cookie [5.02ms]
+    (pass) public paths > a public path on another host is not public [4031.69ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > the list covers at least 11 forms [0.19ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > dot-dot out of a public path: /healthz/../api/whoami [5.02ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded dot-dot: /healthz/%2e%2e/api/whoami [4.59ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded dot-dot, upper case hex: /healthz/%2E%2E/api/whoami [4.65ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > dot-dot with an encoded slash: /healthz/..%2fapi/whoami [4.49ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded slashes around dot-dot: /healthz%2f..%2fapi/whoami [4.51ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > double leading slash: //api/whoami [4.65ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > double slash after a public path: /healthz//../api/whoami [4.37ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > upper-case public path then dot-dot: /HEALTHZ/../api/whoami [4.47ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > upper-case public path: /HEALTHZ [4.72ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > mixed-case public path: /Auth/Login [4.43ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path of the gateway host, dot-dot: /mqtt/../api/whoami [1003.56ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path in the query string: /api/whoami?x=/healthz [4.75ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path in the query after dot-dot: /api/whoami?/../healthz [4.22ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > semicolon path parameter, then dot-dot: /healthz;/../api/whoami [4.56ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > dot-dot with a semicolon: /healthz/..;/api/whoami [4.32ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > semicolon parameter on a public path: /healthz;x=y [4.50ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > single dot segment: /./api/whoami [4.77ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded single dot: /%2e/api/whoami [5.06ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded hash before a public path: /api/whoami%23/healthz [5.35ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > raw hash before a public path: /api/whoami#/healthz [4.94ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > trailing slash on a public path: /healthz/ [4.92ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path as a prefix: /healthz/api/whoami [4.81ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path plus suffix: /healthzx [5.79ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > backslash dot-dot: /healthz\..\api\whoami [5.29ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded backslash dot-dot: /healthz%5c..%5capi%5cwhoami [5.14ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > absolute-form request target: http://APP_HOST/healthz/../api/whoami [5.07ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded internal prefix: /%69nternal/tenants [4.82ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > internal prefix after dot-dot: /healthz/../internal/tenants [4.59ms]
+    (pass) identity service failures > slow identity service: 503 after the ext_authz timeout, backend not reached [2526.36ms]
+    (pass) identity service failures > identity service down: cookie routes return 503 within the timeout, public paths keep working [31716.01ms]
+    
+    ::endgroup::
+    
+     61 pass
+     0 fail
+     382 expect() calls
+    Ran 61 tests across 1 file. [47.12s]
+2026-10-13T00:45:26.035Z    ok: 61 passed, 0 failed
+2026-10-13T00:45:26.035Z -- delete the namespace
+2026-10-13T00:45:26.076Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl delete namespace nightly-onprem --ignore-not-found --wait=true --timeout=180s
+    namespace "nightly-onprem" deleted
+2026-10-13T00:45:36.767Z    ok: deleted
+2026-10-13T00:45:36.767Z == values-saas.yaml in namespace nightly-saas
+2026-10-13T00:45:36.767Z -- namespace with the restricted Pod Security level
+2026-10-13T00:45:36.767Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl create namespace nightly-saas
+    namespace/nightly-saas created
+2026-10-13T00:45:36.807Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl label namespace nightly-saas pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/warn=restricted pod-security.kubernetes.io/audit=restricted pod-security.kubernetes.io/enforce-version=latest
+    namespace/nightly-saas labeled
+2026-10-13T00:45:36.857Z    ok: enforce, warn and audit are restricted
+2026-10-13T00:45:36.857Z -- dummy Secrets for the references the chart makes
+2026-10-13T00:45:36.857Z $ /home/runner/.proto/tools/helm/4.3.0/helm template trustiot /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart --namespace nightly-saas -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/values-saas.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/saas-instance.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/smoke.yaml
+2026-10-13T00:45:36.918Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl create secret generic trustiot-otel-collector-clickhouse --namespace nightly-saas --from-literal=password=nightly-dummy-value
+    secret/trustiot-otel-collector-clickhouse created
+2026-10-13T00:45:36.954Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl create secret generic trustiot-sentry --namespace nightly-saas --from-literal=dsn=nightly-dummy-value
+    secret/trustiot-sentry created
+2026-10-13T00:45:36.989Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl create secret generic trustiot-clickhouse-admin --namespace nightly-saas --from-literal=password=nightly-dummy-value
+    secret/trustiot-clickhouse-admin created
+2026-10-13T00:45:37.026Z    ok: 3 created: trustiot-otel-collector-clickhouse, trustiot-sentry, trustiot-clickhouse-admin
+2026-10-13T00:45:37.026Z -- helm install --wait
+2026-10-13T00:45:37.026Z $ /home/runner/.proto/tools/helm/4.3.0/helm upgrade --install trustiot /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart --namespace nightly-saas -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/values-saas.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/saas-instance.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/smoke.yaml --wait --wait-for-jobs --timeout 5m
+    Release "trustiot" does not exist. Installing it now.
+    NAME: trustiot
+    LAST DEPLOYED: Tue Oct 13 00:45:37 2026
+    NAMESPACE: nightly-saas
+    STATUS: deployed
+    REVISION: 1
+    DESCRIPTION: Install complete
+    TEST SUITE: None
+    I1013 00:45:37.510513   16280 warnings.go:107] "Warning: configured AuthorizationPolicy will deny all traffic to TCP ports under its scope due to the use of only HTTP attributes in a DENY rule; it is recommended to explicitly specify the port"
+2026-10-13T00:45:58.942Z $ /home/runner/.proto/tools/helm/4.3.0/helm get manifest trustiot --namespace nightly-saas
+2026-10-13T00:45:59.083Z    ok: release trustiot deployed, 28 objects
+2026-10-13T00:45:59.083Z -- every workload of the release is ready
+2026-10-13T00:45:59.083Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl rollout status --namespace nightly-saas deployment/trustiot-otel-collector --timeout=180s
+    deployment "trustiot-otel-collector" successfully rolled out
+2026-10-13T00:45:59.135Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl rollout status --namespace nightly-saas deployment/trustiot-smoke-echo --timeout=180s
+    deployment "trustiot-smoke-echo" successfully rolled out
+2026-10-13T00:45:59.184Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl rollout status --namespace nightly-saas statefulset/trustiot-clickhouse --timeout=180s
+    statefulset rolling update complete 1 pods at revision trustiot-clickhouse-79b5cd58d7...
+2026-10-13T00:45:59.234Z    ok: Deployment/trustiot-otel-collector, Deployment/trustiot-smoke-echo, StatefulSet/trustiot-clickhouse
+2026-10-13T00:45:59.234Z -- every CloudNativePG Cluster is healthy
+2026-10-13T00:45:59.236Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl wait --namespace nightly-saas --for=condition=Ready cluster.postgresql.cnpg.io/trustiot-postgres --timeout=600s
+    cluster.postgresql.cnpg.io/trustiot-postgres condition met
+2026-10-13T00:45:59.392Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get --namespace nightly-saas cluster.postgresql.cnpg.io/trustiot-postgres --output json
+2026-10-13T00:45:59.444Z    ok: trustiot-postgres: healthy
+2026-10-13T00:45:59.444Z -- every Gateway is programmed
+2026-10-13T00:45:59.445Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl wait --namespace nightly-saas --for=condition=Programmed gateway.gateway.networking.k8s.io/trustiot-ingress --timeout=180s
+    gateway.gateway.networking.k8s.io/trustiot-ingress condition met
+2026-10-13T00:45:59.598Z    ok: trustiot-ingress
+2026-10-13T00:45:59.598Z -- no pod is broken, not ready or crash-looping
+2026-10-13T00:45:59.598Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get pods --namespace nightly-saas --output json
+                                        101
+                                        1337
+                                        1337
+                                        0
+                                        26,
+                                        101
+                                        26
+                                        65532
+2026-10-13T00:45:59.653Z    ok: 6 pods running or completed
+2026-10-13T00:45:59.653Z -- each Gateway's NetworkPolicy admits exactly the ports its Istio pods use
+2026-10-13T00:45:59.654Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get deployments,services --namespace nightly-saas --selector gateway.networking.k8s.io/gateway-name=trustiot-ingress --output json
+2026-10-13T00:45:59.705Z    ok: trustiot-ingress: 80, 15021
+2026-10-13T00:45:59.705Z -- Services that expose a health endpoint have ready endpoints
+2026-10-13T00:45:59.706Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get endpointslices --namespace nightly-saas --selector kubernetes.io/service-name=trustiot-smoke-echo --output json
+2026-10-13T00:45:59.747Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get endpointslices --namespace nightly-saas --selector kubernetes.io/service-name=trustiot-smoke-echo --output json
+2026-10-13T00:45:59.787Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get endpointslices --namespace nightly-saas --selector kubernetes.io/service-name=trustiot-clickhouse --output json
+2026-10-13T00:45:59.827Z    ok: trustiot-smoke-echo:http/healthz, trustiot-smoke-echo:http/readyz, trustiot-clickhouse:http/ping
+2026-10-13T00:45:59.827Z -- helm uninstall leaves no object of the release but the kept database
+2026-10-13T00:45:59.827Z $ /home/runner/.proto/tools/helm/4.3.0/helm uninstall trustiot --namespace nightly-saas --wait --timeout 3m
+    These resources were kept due to the resource policy:
+    
+    release "trustiot" uninstalled
+2026-10-13T00:46:00.440Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl delete --namespace nightly-saas cluster.postgresql.cnpg.io/trustiot-postgres imagecatalog.postgresql.cnpg.io/trustiot-postgres --wait=true --timeout=180s
+    cluster.postgresql.cnpg.io "trustiot-postgres" deleted from nightly-saas namespace
+    imagecatalog.postgresql.cnpg.io "trustiot-postgres" deleted from nightly-saas namespace
+2026-10-13T00:46:00.513Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get pvc --namespace nightly-saas --selector cnpg.io/cluster --output name
+    persistentvolumeclaim/trustiot-postgres-1
+2026-10-13T00:46:03.556Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get pvc --namespace nightly-saas --selector cnpg.io/cluster --output name
+    persistentvolumeclaim/trustiot-postgres-1
+2026-10-13T00:46:06.601Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get pvc --namespace nightly-saas --selector cnpg.io/cluster --output name
+    persistentvolumeclaim/trustiot-postgres-1
+2026-10-13T00:46:09.642Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get pvc --namespace nightly-saas --selector cnpg.io/cluster --output name
+2026-10-13T00:46:09.682Z    ok: all objects removed; kept on uninstall as intended, then deleted: cluster.postgresql.cnpg.io/trustiot-postgres, imagecatalog.postgresql.cnpg.io/trustiot-postgres; their volumes were gone after 9 s
+2026-10-13T00:46:09.682Z -- ingress e2e test (deploy/chart/tests/e2e)
+2026-10-13T00:46:09.682Z $ ingress e2e as saas in namespace nightly-e2e-saas
+    bun test v1.4.2 (744846f84)
+    
+    
+    ::group::deploy/chart/tests/e2e/ingress.e2e.ts:
+    (pass) paths that need the cookie > no cookie or an unknown session: 401 from the identity service, backend not reached [3020.87ms]
+    (pass) paths that need the cookie > valid cookie: the backend gets exactly one identity header, from the identity service [1009.87ms]
+    (pass) paths that need the cookie > valid cookie plus a forged identity header: the forged value never reaches the backend [1005.75ms]
+    (pass) paths that need the cookie > valid cookie plus underscore spellings of the identity header: none reaches the backend [1006.20ms]
+    (pass) paths that need the cookie > forged identity header without a cookie: 401 [1004.43ms]
+    (pass) paths that need the cookie > x-forwarded-proto is https at the backend, even when the client sends http [2010.76ms]
+    (pass) paths that need the cookie > /internal is never reachable: 401 without a cookie, 403 with one [6032.99ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: //internal [2009.76ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: //internal/tenants [2009.04ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: ///internal [2009.32ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: //./internal [2008.85ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /.//internal/tenants [2011.22ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /x/..//internal/tenants [2009.24ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2finternal [2010.04ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2finternal/tenants [2008.64ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2Finternal [2008.62ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2f%2finternal [2010.53ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /./%2finternal [2009.46ms]
+    (pass) paths that need the cookie > an unknown host gets no route [2005.67ms]
+    (pass) public paths > certificate renewal: no cookie needed, the forged identity header is stripped [1010.43ms]
+    (pass) public paths > MQTT over WebSocket: no cookie needed, the forged identity header is stripped [1009.84ms]
+    (pass) public paths > login on the identity service: no cookie needed, the forged identity header is stripped [1008.02ms]
+    (pass) public paths > health check on the identity service: no cookie needed, the forged identity header is stripped [1004.09ms]
+    (pass) public paths > certificate renewal: underscore spellings of the identity header are removed [1005.16ms]
+    (pass) public paths > MQTT over WebSocket: underscore spellings of the identity header are removed [1009.59ms]
+    (pass) public paths > login: underscore spellings of the identity header are removed [1007.71ms]
+    (pass) public paths > health check: underscore spellings of the identity header are removed [1004.42ms]
+    (pass) public paths > Host with a port: a public path is public on its own host only [12047.60ms]
+    (pass) public paths > GET /healthz answers without a cookie [1005.03ms]
+    (pass) public paths > a public path on another host is not public [10028.69ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > the list covers at least 11 forms [0.20ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > dot-dot out of a public path: /healthz/../api/whoami [1005.29ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded dot-dot: /healthz/%2e%2e/api/whoami [1004.58ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded dot-dot, upper case hex: /healthz/%2E%2E/api/whoami [1004.11ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > dot-dot with an encoded slash: /healthz/..%2fapi/whoami [1005.29ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded slashes around dot-dot: /healthz%2f..%2fapi/whoami [1004.05ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > double leading slash: //api/whoami [1004.39ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > double slash after a public path: /healthz//../api/whoami [1004.09ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > upper-case public path then dot-dot: /HEALTHZ/../api/whoami [1005.05ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > upper-case public path: /HEALTHZ [1004.96ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > mixed-case public path: /Auth/Login [1004.25ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path of the gateway host, dot-dot: /mqtt/../api/whoami [2003.46ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path in the query string: /api/whoami?x=/healthz [1004.29ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path in the query after dot-dot: /api/whoami?/../healthz [1004.52ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > semicolon path parameter, then dot-dot: /healthz;/../api/whoami [1004.50ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > dot-dot with a semicolon: /healthz/..;/api/whoami [1003.96ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > semicolon parameter on a public path: /healthz;x=y [1005.00ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > single dot segment: /./api/whoami [1003.91ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded single dot: /%2e/api/whoami [1004.20ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded hash before a public path: /api/whoami%23/healthz [1004.59ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > raw hash before a public path: /api/whoami#/healthz [1004.09ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > trailing slash on a public path: /healthz/ [1004.96ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path as a prefix: /healthz/api/whoami [1004.17ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path plus suffix: /healthzx [1004.42ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > backslash dot-dot: /healthz\..\api\whoami [1004.47ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded backslash dot-dot: /healthz%5c..%5capi%5cwhoami [1004.50ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > absolute-form request target: http://APP_HOST/healthz/../api/whoami [1004.40ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded internal prefix: /%69nternal/tenants [1004.37ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > internal prefix after dot-dot: /healthz/../internal/tenants [1004.40ms]
+    (pass) identity service failures > slow identity service: 503 after the ext_authz timeout, backend not reached [7525.83ms]
+    (pass) identity service failures > identity service down: cookie routes return 503 within the timeout, public paths keep working [75032.76ms]
+    
+    ::endgroup::
+    
+     61 pass
+     0 fail
+     382 expect() calls
+    Ran 61 tests across 1 file. [188.52s]
+2026-10-13T00:49:28.607Z    ok: 61 passed, 0 failed
+2026-10-13T00:49:28.608Z -- delete the namespace
+2026-10-13T00:49:28.646Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl delete namespace nightly-saas --ignore-not-found --wait=true --timeout=180s
+    namespace "nightly-saas" deleted
+2026-10-13T00:49:39.252Z    ok: deleted
+2026-10-13T00:49:40.620Z k3d cluster delete exited with 0
+2026-10-13T00:49:40.621Z nightly smoke test passed
