@@ -9,7 +9,8 @@
 - **chart 與腳本測試**：開發用工作站（x86_64 Linux），bun 1.4.2、helm 4.3.0，由 `.prototools` 鎖定。
 - **沒有 Kubernetes**：本 repo 規定工作站不跑 Kubernetes；k3d 上的驗證由 nightly 的 smoke 執行（見「結論」）。
 - **nightly smoke**：GitHub-hosted runner 上的 k3d（`rancher/k3s` v1.36.5-k3s1），PR Laysi/trustiot-v2#379 帶 `smoke` label 時執行，run 38306699376、job 115002384911（2026-10-12 UTC），checkout 的是 PR head `e290c4d` 合併進 main `4edbe05` 的 merge commit；migration Job 的映像從原始碼建置。
-- **第二輪修正（2026-10-13）**：獨立驗證找到的問題修正之後（見「第二輪：獨立驗證的發現與修正」），在 merge main `e2e476b` 之後的工作樹上重跑全部檢查，數字以這一輪為準。
+- **第二輪修正（2026-10-13）**：獨立驗證找到的問題修正之後（見「第二輪：獨立驗證的發現與修正」），在 merge main `e2e476b` 之後的工作樹上重跑全部檢查。
+- **第三輪（2026-10-13）**：依使用者意見改設計（服務角色與 collector 的密碼由 Job 產生、nightly 的 Rust 映像依內容重用），在 merge main `e6caf8e` 之後的工作樹上重跑全部檢查，數字以這一輪為準（見文末「第三輪：Job 產生的密碼與 nightly 的映像快取」）。前面兩輪描述的「密碼檔」「人建立的服務角色 Secret」已被取代。
 
 ## 指令
 
@@ -86,3 +87,45 @@ migrate 的整合測試涵蓋的情境：
 | F9 `config.rs` 的 API URL 註解不對 | 改正 | — | — |
 
 探測的 R1 自帶一份第二輪之前的 lint，所以它的 `NOT CAUGHT` 描述的是舊的 lint；新的 lint 由上表的測試檢查。已知限制（`tools/migrate/README.md`「已知限制」）：檔案能切到另一個服務的 owner 角色再切回來；服務角色能改自己的密碼；服務角色能連 `postgres` 資料庫並在那裡建暫存表（B8）；多個實例共用一個 Postgres 叢集需要角色名稱帶前綴。
+
+## 第三輪：Job 產生的密碼與 nightly 的映像快取
+
+2026-10-13 使用者否決兩個決定：服務角色的密碼由人建立的 Secret 提供（需要人介入，是維運風險），以及 nightly 每天從原始碼建 Rust 映像（CI 額度撐不住）。改為：
+
+- **密碼由 Job 產生**：chart 為每個用 Postgres 的服務宣告空的 `<release>-<服務>-password`、為 collector 宣告 `<release>-otel-collector-password`（`helm.sh/resource-policy: keep`），Job 以自己的 ServiceAccount 經 Kubernetes API 讀取，缺的 key、不能用的值或 `migrate.passwordGeneration` 換了時以 CSPRNG 產生 256 位元的密碼，以帶 `resourceVersion` 的 merge patch 寫回（field manager `trustiot-migrate`），API 回傳的值與寫入的不同就停止，再設定角色與 ClickHouse 帳號。Job 的 Role 只有 `get`、`patch`，以 `resourceNames` 限定這些 Secret；chart 的其他 Role 都不碰 Secret。
+- **nightly 依內容重用映像**：key 是映像每個輸入的 git 物件 hash 的 SHA-256，命中時載入 `docker save` 的 tarball、不裝 Rust 工具、不建置；只有 main 上的排程與手動執行儲存，PR 只還原。
+
+### 指令與結果
+
+| 項目 | 結果 |
+| --- | --- |
+| `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings` | 通過，沒有警告 |
+| `cargo test --locked --workspace` | 94 個測試執行檔、673 個測試全部通過（加上下面 M3 的新測試之前；之後 `cargo test -p migrate` 再跑一次，全部通過） |
+| `cargo test --locked -p migrate` | 全部通過：單元 16，`tests/passwords.rs` 7，其餘整合測試各自通過，逐項名稱見 [round3-generated-passwords.txt](data/2026-10-13-60-migration-job/round3-generated-passwords.txt) |
+| `cargo run -p openapi -- --check` | `api/openapi.json is up to date` |
+| `bun test deploy/chart` | 309 通過 |
+| `bun test deploy/flux` | 19 通過 |
+| `bun run --cwd scripts test`（同 `bun test scripts`） | 672 通過、2 略過（需要 podman 的 e2e），0 失敗 |
+| `bun run --cwd scripts typecheck` | 通過（第一次執行抓到 `chart.test.ts` 的型別錯誤，修正後通過） |
+| `check-workflows`、`lint-workflows`（actionlint）、`check-secret-handling` | 通過，沒有違規 |
+| 變異測試 | 6 個變異；5 個第一次就被抓到，1 個（API 存的值與寫入的不同時不停止）沒被抓到，補上 `a_value_the_api_did_not_store_as_written_stops_the_run` 後被抓到（[round3-mutations.txt](data/2026-10-13-60-migration-job/round3-mutations.txt)） |
+
+`cargo deny` 沒有重跑：這一輪沒有改 `Cargo.toml` 與 `Cargo.lock`。
+
+提交 nightly 快取的 commit 時，pre-commit 的審查擋下三次，都已修正：第一次儲存時快取目錄還不存在（`saveImageForCache` 先建立目錄，測試涵蓋）；PR 的觸發路徑少了映像的輸入（加上 workspace、工具鏈、Containerfile 與 `tools/migrate` 經 path 相依用到的 crate，`image-cache.test.ts` 檢查清單完整）；key 少了建置腳本 import 的檔案（改為整個 `scripts/`）。另外加上 tarball 載入失敗時寫出要刪哪個快取項目。修正後 `bun run --cwd scripts test` 672 通過、2 略過，typecheck、`check-workflows`、actionlint 通過；在建置主機的乾淨快照上 `bun scripts/nightly/image-cache.ts key migrate` 印出 key。[round3-generated-passwords.txt](data/2026-10-13-60-migration-job/round3-generated-passwords.txt) 的 nightly 與 ci 測試清單是修正前的（214 個）。
+
+### 測試涵蓋的情境
+
+- `tests/passwords.rs`（假的 Kubernetes API，`tests/support/secrets.rs`，不需要容器）：第一次執行每個 Secret 一次 `GET`、一次 `PATCH`，填入每個缺的 key（64 個十六進位字元、各不相同），annotation 記下密碼世代；第二次執行只讀不寫；新的世代換掉每個受管的 key、不動其他 key、只換一次；遺失或不能用的 key 單獨重新產生；Secret 在讀寫之間被改過時 API 回 409，重讀後再決定，一直被改時停止而不覆蓋；API 存下的值與寫入的不同時停止，不回報產生；token 被拒、403、API 暫時 503 的重試與上限；Secret 不存在時寫出 `helm upgrade` 與 `migrate.revision` 的處理方式；報告、錯誤與 `Debug` 都不含任何密碼或它的 base64；沒有綁定時不發請求。
+- `tests/fresh_database.rs`：綁定的角色不在服務清單時什麼都不改、Secret 也沒被讀寫；第一次執行由 Job 產生 `identity_app` 的密碼並設定，服務以 Secret 裡的值登入；`passwordGeneration` 改成 2 後換掉密碼、舊的登不進去，再跑一次沒有變更；key 被刪掉時重新產生；別人寫進 Secret 的合格值成為角色的密碼。
+- `tests/clickhouse.rs`：collector 帳號以 Job 產生的密碼建立、寫入，新的世代輪替後舊密碼失效。
+- chart 測試：每個用 Postgres 的服務與 collector 各一個空的密碼 Secret（只有 `type` 與標籤、annotation，沒有 `data`），Job 關閉時也宣告；Job 的 Role 只有 `get`、`patch` 與排序後的 `resourceNames`，chart 其他 Role 都不碰 Secret；服務的 `env` 不能覆寫 `TRUSTIOT__DATABASE__USERNAME`／`PASSWORD`；collector 等 Job 完成才啟動；`passwordGeneration` 只接受數字；移除的欄位（`serviceRolesSecret`、collector 的 `passwordSecret`）被 schema 拒絕。
+- `scripts/ci/check-secret-handling`：template 裡的 Secret 只能是帶 `trustiot.io/filled-by: migrate` 的空 Secret，帶 `data` 或 `stringData` 的仍被拒。
+- nightly：smoke 在第一次安裝後檢查每個密碼 Secret 的 key 都在、是 Job 產生的格式、有世代 annotation（只讀名稱，Secret 的 JSON 不進日誌），uninstall 後密碼 Secret 與資料庫一起保留再刪除；映像快取的 key、載入、儲存與 workflow 條件都有單元測試（`scripts/nightly/image-cache.test.ts`、`service-image.test.ts`、`scripts/ci/workflow-conditions.test.ts`）。
+
+### 沒有執行的
+
+- **真叢集上的 Job 產生密碼**：`deploy/chart/tests/e2e/postgres.e2e.ts` 已改寫成一次安裝（CloudNativePG、叢集內 ClickHouse、collector、migration Job、由 example-service 扮演的 identity），檢查第一次安裝產生 key、服務與 collector Ready，同樣 values 的 `helm upgrade` 與 `helm rollback` 後密碼不變，`migrate.passwordGeneration=2` 後改變且服務與 collector 再次 Ready，刪掉 key 後以 `migrate.revision=2` 重新產生，uninstall 保留密碼 Secret；比較只在測試行程內以 digest 做，輸出只有 `unchanged`／`changed`。這個 e2e 需要 lab 的叢集、lab 鎖與 `e2e-60` namespace，以及 arm64 的 migrate 與 example-service 映像（不能在 lab 的 Mac 上建 Rust），這一輪沒有執行，由協調者執行後補上結果。
+- **nightly 的快取命中**：要等 main 上的排程執行第一次儲存之後才看得到命中；命中時省下的時間待量測。
+- **PR 的 smoke**：這一輪的變更推送後，PR 的 `smoke` label 會讓它再跑一次（Job 產生 collector 的密碼、第一次安裝的 key 檢查）。
+

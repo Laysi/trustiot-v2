@@ -1,0 +1,35 @@
+# Round 3 (2026-10-13) mutations, Laysi/trustiot-v2#60: each mutation was applied to the working
+# tree alone, the named tests were run, and the file was restored. Rust on the shared build host
+# (CI=1), TypeScript with bun 1.4.2 on the workstation.
+
+M1 tools/migrate/src/passwords.rs plan(): drop `Some(_) if !current => Err(Why::Generation)`
+   (a new migrate.passwordGeneration no longer replaces stored keys)
+   FAILED passwords::tests::keys_are_kept_only_when_present_usable_and_of_this_generation
+   FAILED tests/passwords.rs a_new_generation_rotates_every_managed_key_and_nothing_else
+   FAILED tests/fresh_database.rs a_fresh_database_gets_every_migration_once
+   FAILED tests/clickhouse.rs clickhouse_ddl_and_the_collector_account
+
+M2 tools/migrate/src/passwords.rs patch_body(): drop `"resourceVersion": resource_version`
+   (the patch no longer fails when the Secret changed since it was read)
+   FAILED passwords::tests::the_patch_carries_the_resource_version_the_generation_and_only_the_new_keys
+   FAILED tests/passwords.rs a_concurrent_change_is_never_overwritten
+
+M3 tools/migrate/src/passwords.rs fill(): `if !kept` -> `if false && !kept`
+   (the value the API stored is no longer compared with the value written)
+   first run: no test failed (16 unit, 6 in tests/passwords.rs passed) -> added
+   tests/passwords.rs a_value_the_api_did_not_store_as_written_stops_the_run and the fake's
+   rewrite_patched_values; rerun with the mutation:
+   FAILED tests/passwords.rs a_value_the_api_did_not_store_as_written_stops_the_run
+
+M4 scripts/nightly/image-cache.ts gitObjectHashes(): skip the check that the inputs equal HEAD
+   (fail) gitObjectHashes > refuses inputs that differ from HEAD, so the key never describes other sources
+
+M5 .github/workflows/nightly.yml NIGHTLY_SAVES_CACHE: drop `&& github.ref == 'refs/heads/main'`
+   (a manual run of another branch would save the cache)
+   (fail) nightly.yml > the cache of the Rust images (Laysi/trustiot-v2#60) > only scheduled and manual runs on main may save; a pull request never does
+
+M6 scripts/nightly/image-cache.ts imageCacheKey(): key from the number of inputs instead of their hashes
+   (fail) the cache key of a nightly Rust image > is the same for the same inputs, and names the image and its platform
+   (fail) the cache key of a nightly Rust image > changes when any single input changes
+
+All six restored; the unmutated tree passes (see round3-generated-passwords.txt and the report).
