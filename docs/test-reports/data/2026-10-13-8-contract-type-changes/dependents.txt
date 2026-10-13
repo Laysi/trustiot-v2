@@ -1,0 +1,26 @@
+Workspace crates that depend on contract or protocol, from `cargo metadata --format-version 1 --locked`
+(declared dependency kind in brackets) and `cargo tree`, on main f2ff4a8.
+
+contract <- identity [normal], openapi [normal], outbox [normal], service-kit [normal], testkit [normal]
+protocol <- (none)
+
+Crates that reach contract only through another crate: identity, outbox and testkit (through
+service-kit as well); ingest and the other tools do not depend on contract or protocol.
+
+$ cargo tree -i contract --workspace --locked -e normal,dev,build --depth 2
+contract v0.1.0 (<worktree>/crates/contract)
+├── identity v0.1.0 (<worktree>/services/identity)
+├── openapi v0.1.0 (<worktree>/tools/openapi)
+├── outbox v0.1.0 (<worktree>/crates/outbox)
+├── service-kit v0.1.0 (<worktree>/crates/service-kit)
+│   ├── identity v0.1.0 (<worktree>/services/identity)
+│   ├── outbox v0.1.0 (<worktree>/crates/outbox)
+│   └── testkit v0.1.0 (<worktree>/crates/testkit)
+│       [dev-dependencies]
+└── testkit v0.1.0 (<worktree>/crates/testkit) (*)
+
+$ cargo tree -i protocol --workspace --locked -e normal,dev,build
+protocol v0.1.0 (<worktree>/crates/protocol)
+
+$ grep -rn protocol --include=Cargo.toml .
+crates/protocol/Cargo.toml:2:name = "protocol"

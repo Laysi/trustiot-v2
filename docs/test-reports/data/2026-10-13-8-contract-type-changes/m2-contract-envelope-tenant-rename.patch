@@ -1,0 +1,36 @@
+diff --git a/crates/contract/src/event.rs b/crates/contract/src/event.rs
+index 8d13cf9..ded7491 100644
+--- a/crates/contract/src/event.rs
++++ b/crates/contract/src/event.rs
+@@ -130,7 +130,8 @@ pub struct EventEnvelope {
+     /// [`Event::VERSION`] the payload was written with.
+     pub version: u32,
+     /// The tenant the event belongs to; `None` only for platform-wide events.
+-    pub tenant_id: Option<TenantId>,
++    #[serde(rename = "tenant_id")]
++    pub tenant: Option<TenantId>,
+     /// When the change happened, in UTC with millisecond precision.
+     pub occurred_at: DateTime<Utc>,
+     /// [`Event::PRODUCER`] of the payload.
+@@ -167,7 +168,7 @@ impl EventEnvelope {
+             id: EventId::generate(),
+             event_type: E::TYPE.to_owned(),
+             version: E::VERSION,
+-            tenant_id,
++            tenant: tenant_id,
+             occurred_at: Utc::now().trunc_subsecs(3),
+             producer: E::PRODUCER,
+             payload,
+diff --git a/crates/contract/tests/events.rs b/crates/contract/tests/events.rs
+index c462291..63de0d8 100644
+--- a/crates/contract/tests/events.rs
++++ b/crates/contract/tests/events.rs
+@@ -153,7 +153,7 @@ fn new_envelopes_carry_type_version_tenant_time_and_producer() {
+     assert_eq!(envelope.id.as_uuid().get_version(), Some(Version::SortRand));
+     assert_eq!(envelope.event_type, "example.widget_renamed");
+     assert_eq!(envelope.version, 2);
+-    assert_eq!(envelope.tenant_id, Some(tenant()));
++    assert_eq!(envelope.tenant, Some(tenant()));
+     assert_eq!(envelope.producer, ServiceName::Assets);
+     assert_eq!(
+         envelope.occurred_at.nanosecond() % 1_000_000,

@@ -1,0 +1,13 @@
+diff --git a/crates/contract/src/identity.rs b/crates/contract/src/identity.rs
+index 0d5e1c9..38403f2 100644
+--- a/crates/contract/src/identity.rs
++++ b/crates/contract/src/identity.rs
+@@ -35,7 +35,7 @@ pub struct InternalClaims {
+     pub iat: i64,
+     /// Expiry, in seconds since the Unix epoch. Tokens are short-lived; the identity service
+     /// sets the lifetime.
+-    pub exp: i64,
++    pub exp: u64,
+     /// The tenant the user acts in and their role there; `None` until the user has picked or
+     /// joined a tenant. Tenant-scoped endpoints reject a token without one.
+     pub tenant: Option<TenantGrant>,
