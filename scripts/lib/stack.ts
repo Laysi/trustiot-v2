@@ -5,23 +5,26 @@
 
 /**
  * Container images, each pinned by digest of the multi-arch manifest list (amd64 and arm64), so
- * a moved tag cannot change what runs. The comment names the tag the digest was resolved from
- * on 2026-10-10. Update a digest together with the tag.
+ * a moved tag cannot change what runs. Each reference names the tag the digest was resolved from
+ * (first on 2026-10-10) as name:tag@digest: Renovate reads that form and updates every copy of
+ * the same pin in one pull request (renovate.json5).
  */
 export const IMAGES = {
-  // apache/age:release_PG18_1.8.0, PostgreSQL 18 with Apache AGE (decisions 4 and 21).
+  // PostgreSQL 18 with Apache AGE (decisions 4 and 21).
   postgres:
-    "docker.io/apache/age@sha256:47a0b054c3663a3e64a25fc0c5a982f1b58348019274b326a691cdf77f78eb58",
-  // clickhouse/clickhouse-server:26.8 (decision 14).
+    "docker.io/apache/age:release_PG18_1.8.0@sha256:47a0b054c3663a3e64a25fc0c5a982f1b58348019274b326a691cdf77f78eb58",
+  // ClickHouse 26.8 LTS (decision 14). deploy/chart/values.yaml and services/ingest/tests pin the
+  // same image; the chart tests fail when the three differ.
   clickhouse:
-    "docker.io/clickhouse/clickhouse-server@sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c",
-  // eclipse-mosquitto:2.1.2-alpine (decision 6; Docker Hub has no plain 2.1.2 tag).
+    "docker.io/clickhouse/clickhouse-server:26.8@sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c",
+  // Mosquitto 2.1.2 (decision 6; Docker Hub has no plain 2.1.2 tag). crates/protocol/tests pins
+  // the same image.
   mosquitto:
-    "docker.io/library/eclipse-mosquitto@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408",
-  // gcr.io/distroless/cc-debian13:nonroot, the base of the service images. Same digest as the
-  // service-kit container test, which runs the service as PID 1 on it.
+    "docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408",
+  // The base of the service images. Same image as the service-kit container tests, which run the
+  // service as PID 1 on it, and the chart's e2e example service.
   serviceBase:
-    "gcr.io/distroless/cc-debian13@sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2",
+    "gcr.io/distroless/cc-debian13:nonroot@sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2",
 } as const;
 
 export const DIGEST_PATTERN = /@sha256:[0-9a-f]{64}$/;

@@ -1,0 +1,20 @@
+re-extract with manager=regex: {"deps":[{"depName":"docker.io/clickhouse/clickhouse-server","currentValue":"26.8","currentDigest":"sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c","datasource":"docker","replaceString":"repository: docker.io/clickhouse/clickhouse-server\n      tag: \"26.8\"\n      digest: sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c"},{"depName":"docker.io/otel/
+== docker.io/clickhouse/clickhouse-server minor -> 26.9 (result: changed)
+  line 325
+  -       tag: "26.8"
+  +       tag: "26.9"
+  line 326
+  -       digest: sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c
+  +       digest: sha256:387ebbcca253026def04dc79e83d2323ac7d97bf309ddd090a8a3c702573e01a
+== docker.io/clickhouse/clickhouse-server digest -> 26.8 (result: changed)
+  line 326
+  -       digest: sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c
+  +       digest: sha256:dd81097e2c38827a438287d8ae5d4dc8afafbdd0e61e83376fdd7ed4580673b9
+== docker.io/otel/opentelemetry-collector-contrib minor -> 0.162.0 (result: changed)
+  line 457
+  -       tag: "0.161.0"
+  +       tag: "0.162.0"
+  line 458
+  -       digest: sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
+  +       digest: sha256:39923a8e431bd1f57be82411999d389fcfe40857492e4365456d97a4c1f74be6
+exit=0

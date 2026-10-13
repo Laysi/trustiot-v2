@@ -373,8 +373,8 @@ clickhouse:
   bundled:
     image:
       # clickhouse/clickhouse-server 26.8 LTS, pinned to the multi-arch index digest (arm64
-      # included). scripts/lib/stack.ts and services/ingest/tests use the same digest; the chart
-      # tests fail when the three differ.
+      # included). scripts/lib/stack.ts and services/ingest/tests use the same tag and digest; the
+      # chart tests fail when the three differ, and Renovate updates the three together.
       repository: docker.io/clickhouse/clickhouse-server
       tag: "26.8"
       digest: sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c

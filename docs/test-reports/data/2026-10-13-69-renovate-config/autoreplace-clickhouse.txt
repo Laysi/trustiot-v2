@@ -1,0 +1,14 @@
+== scripts/lib/stack.ts
+  line 19
+  -     "docker.io/clickhouse/clickhouse-server:26.8@sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c",
+  +     "docker.io/clickhouse/clickhouse-server:26.8@sha256:dd81097e2c38827a438287d8ae5d4dc8afafbdd0e61e83376fdd7ed4580673b9",
+== services/ingest/tests/common/mod.rs
+  line 18
+  - pub const CLICKHOUSE_IMAGE: &str = "docker.io/clickhouse/clickhouse-server:26.8@sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c";
+  + pub const CLICKHOUSE_IMAGE: &str = "docker.io/clickhouse/clickhouse-server:26.8@sha256:dd81097e2c38827a438287d8ae5d4dc8afafbdd0e61e83376fdd7ed4580673b9";
+== deploy/chart/values.yaml
+  line 326
+  -       digest: sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c
+  +       digest: sha256:dd81097e2c38827a438287d8ae5d4dc8afafbdd0e61e83376fdd7ed4580673b9
+3 update(s), 3 file(s), 0 failed
+exit=0

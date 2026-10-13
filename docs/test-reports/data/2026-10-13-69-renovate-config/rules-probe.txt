@@ -1,0 +1,21 @@
+== before
+proto          go                           github-tags     enabled=true pinDigests=true
+proto          bun                          github-releases enabled=true pinDigests=true
+flux           fluxcd/flux2                 github-releases enabled=true pinDigests=true
+regex          fluxcd/flux2                 github-releases enabled=true pinDigests=false
+regex          kubernetes/kubernetes        github-tags     enabled=true pinDigests=false allowedVersions=/^v?1\.36\./
+github-actions actions/checkout             github-tags     enabled=true pinDigests=true
+github-actions ubuntu                       github-runners  enabled=true pinDigests=true
+flux           ghcr.io/example/oci-source   docker          enabled=true pinDigests=true
+regex          rancher/k3s                  docker          enabled=true pinDigests=true versioning=loose allowedVersions=/^v?1\.36\./
+== after
+proto          go                           github-tags     enabled=true pinDigests=false
+proto          bun                          github-releases enabled=true pinDigests=false
+flux           fluxcd/flux2                 github-releases enabled=false pinDigests=true
+regex          fluxcd/flux2                 github-releases enabled=true pinDigests=false
+regex          kubernetes/kubernetes        github-tags     enabled=true pinDigests=false allowedVersions=/^v?1\.36\./
+github-actions actions/checkout             github-tags     enabled=true pinDigests=true
+github-actions ubuntu                       github-runners  enabled=false pinDigests=true
+flux           ghcr.io/example/oci-source   docker          enabled=true pinDigests=true
+regex          rancher/k3s                  docker          enabled=true pinDigests=true versioning=regex:^v(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)-k3s(?<build>\d+)$ allowedVersions=/^v?1\.36\./
+exit=0

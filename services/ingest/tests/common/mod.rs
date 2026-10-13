@@ -11,11 +11,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// The ClickHouse image the tests run: clickhouse/clickhouse-server 26.8 (decision 14), pinned to
-/// the multi-arch index digest. The local dev environment (`scripts/lib/stack.ts`) and the Helm
-/// chart (`deploy/chart/values.yaml`) pin the same digest; `bun test deploy/chart` checks that
-/// all three agree.
-pub const CLICKHOUSE_IMAGE: &str = "docker.io/clickhouse/clickhouse-server@sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c";
+/// The ClickHouse image the tests run: clickhouse/clickhouse-server 26.8 LTS (decision 14), pinned
+/// to the multi-arch index digest. The local dev environment (`scripts/lib/stack.ts`) and the
+/// Helm chart (`deploy/chart/values.yaml`) pin the same tag and digest; `bun test deploy/chart`
+/// checks that all three agree, and Renovate updates the three in one pull request.
+pub const CLICKHOUSE_IMAGE: &str = "docker.io/clickhouse/clickhouse-server:26.8@sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c";
 
 /// The bootstrap admin account, as the chart and the dev environment name it.
 pub const ADMIN_USER: &str = "trustiot_admin";

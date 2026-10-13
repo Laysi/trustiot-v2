@@ -7,6 +7,9 @@
 //   comment (the workflow-policy job in ci.yml rejects anything else).
 // - Container images stay pinned by digest.
 // - Rust, Bun and the tools in `.prototools` are updated as exact versions.
+// - k3s and kubectl get final releases only, within their minor; the runner of a job (runs-on) is
+//   never changed by Renovate.
+// - Each image is read by exactly one manager (the chart values by the custom manager below).
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: [
@@ -25,6 +28,9 @@
   semanticCommitType: "chore",
   semanticCommitScope: "deps",
   labels: ["area:ci", "dependencies"],
+  // The Dependency Dashboard is an issue like any other here: CLAUDE.md wants an area label and
+  // exactly one priority label on every issue.
+  dependencyDashboardLabels: ["area:ci", "priority:P2"],
   // Exact versions in Cargo.toml and package.json: a bump is a reviewed change, never a range.
   rangeStrategy: "pin",
   // At most this many open pull requests: the nightly and CI are the only checks, and Actions
@@ -45,6 +51,12 @@
   },
   // Container images are always pinned by digest, in every file type Renovate reads here.
   pinDigests: true,
+  // The chart's values give images as repository, tag and digest lines, which the custom manager
+  // below reads. The built-in helm-values manager would read the same images without their digest
+  // and fail to pin them ("Could not determine new digest"), so only the custom manager reads them.
+  "helm-values": {
+    enabled: false,
+  },
   packageRules: [
     {
       description: "Our own images are released together with the chart (decision 4), not by Renovate",
@@ -55,6 +67,22 @@
       description: "Every container image stays pinned by digest",
       matchDatasources: ["docker"],
       pinDigests: true,
+    },
+    {
+      description: "The proto manager reads tool versions from .prototools, which has no place for a digest: a digest pin of a GitHub tag (go from golang/go) would be a no-op update. The tools are verified by proto (built-in plugins) and by the checksums in .proto/plugins instead",
+      matchManagers: ["proto"],
+      pinDigests: false,
+    },
+    {
+      description: "Flux is upgraded through the flux pin in .prototools (the custom manager); in that pull request, bun scripts/flux/components.ts rewrites gotk-components.yaml and the controller digests in kustomization.yaml together, after verifying their signatures (upgrade steps in deploy/flux/README.md). The flux manager would rewrite only gotk-components.yaml, and with pinDigests on it proposed a no-op digest pin of the current version",
+      matchManagers: ["flux"],
+      matchPackageNames: ["fluxcd/flux2"],
+      enabled: false,
+    },
+    {
+      description: "The runner of every job (runs-on) is a deliberate choice recorded in docs/architecture/ci-release.md (Linux arm runners, ubuntu-24.04-arm); a runner image upgrade is a reviewed change, not a bot PR",
+      matchDatasources: ["github-runners"],
+      enabled: false,
     },
     {
       description: "Pin and bump GitHub Actions together as one group",
@@ -68,12 +96,12 @@
       groupName: "rust toolchain",
     },
     {
-      description: "Kubernetes tools follow the k3s minor of the SaaS host and the lab (1.36); a new minor is a deliberate upgrade, not a bot PR",
+      description: "Kubernetes tools follow the k3s minor of the SaaS host and the lab (1.36); a new minor is a deliberate upgrade, not a bot PR. The nightly's k3s is the version deploy/host installs (K3S_VERSION, with the installer's SHA-256, which Renovate cannot compute): a k3s pull request fails bun test scripts/nightly until someone moves the host pins to the same version",
       matchPackageNames: ["rancher/k3s", "kubernetes/kubernetes"],
       allowedVersions: "/^v?1\\.36\\./",
     },
     {
-      description: "Istio: the nightly's charts stay on the minor that the SaaS host and the lab run (deploy/istio/README.md); a new minor is a deliberate upgrade of all four charts together",
+      description: "Istio: the nightly's charts stay on the minor that the SaaS host and the lab run (deploy/istio/README.md); a new minor is a deliberate upgrade of all four charts together. The README's install commands name the same release: an Istio pull request fails bun test scripts/nightly until someone updates them (and upgrades the lab and the SaaS host)",
       matchPackageNames: ["istio/istio"],
       allowedVersions: "/^1\\.30\\./",
     },
@@ -83,9 +111,22 @@
       allowedVersions: "/^18\\./",
     },
     {
-      description: "k3s image tags look like v1.36.5-k3s1",
+      description: "k3s image tags look like v1.36.5-k3s1. Only those final releases are versions: release candidates (v1.36.5-rc2-k3s1) and per-architecture tags do not match, so they are never proposed",
       matchPackageNames: ["rancher/k3s"],
-      versioning: "loose",
+      versioning: "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-k3s(?<build>\\d+)$",
+    },
+    {
+      description: "ClickHouse follows its LTS releases (x.3 and x.8; values.yaml and deploy/chart/README.md record 26.8 LTS). The tag is a floating LTS minor, so a new patch release arrives as a digest update, which changes the chart values, scripts/lib/stack.ts and services/ingest/tests together and is complete. A pull request to the next LTS minor fails the chart tests (CLICKHOUSE_MINOR) on purpose, until someone has repeated decision 14's tenant isolation checks on it",
+      matchPackageNames: ["docker.io/clickhouse/clickhouse-server"],
+      allowedVersions: "/^\\d+\\.(3|8)$/",
+    },
+    {
+      description: "The OpenTelemetry collector: services/ingest/migrations/clickhouse/0006_logs.sql follows the table schema of the ClickHouse exporter of the pinned version. A new digest of the same version is complete. A version change fails the chart tests (EXPORTER_VERSION) on purpose, until someone has compared the new exporter's columns with that migration",
+      matchPackageNames: ["docker.io/otel/opentelemetry-collector-contrib"],
+      matchUpdateTypes: ["major", "minor", "patch"],
+      prBodyNotes: [
+        "This collector version change fails `bun test deploy/chart` on purpose: compare the new ClickHouse exporter's columns with `services/ingest/migrations/clickhouse/0006_logs.sql` (add a migration if they changed), then update `EXPORTER_VERSION` in `deploy/chart/tests/chart.test.ts`.",
+      ],
     },
     {
       description: "Rust crates: one weekly pull request for the semver-compatible updates",
@@ -117,9 +158,9 @@
       ],
     },
     {
-      description: "Images written as name:tag@sha256:digest in source, tests, workflows and values files",
+      description: "Images written as name:tag@sha256:digest in source, tests, workflows, values files and the commands of scripts/README.md. Every copy of a pin is written this way, so one pull request updates them all (scripts/nightly/renovate.test.ts checks it)",
       customType: "regex",
-      managerFilePatterns: ["/\\.(rs|ts|ya?ml)$/"],
+      managerFilePatterns: ["/\\.(rs|ts|ya?ml)$/", "/^scripts/README\\.md$/"],
       matchStrings: [
         "(?<depName>[a-z0-9][a-z0-9./_-]*[a-z0-9]):(?<currentValue>[A-Za-z0-9_][A-Za-z0-9._-]*)@(?<currentDigest>sha256:[a-f0-9]{64})",
       ],
@@ -130,7 +171,7 @@
       customType: "regex",
       managerFilePatterns: ["/^deploy/chart/.*\\.ya?ml$/"],
       matchStrings: [
-        "repository: (?<depName>\\S+)\\n\\s+tag: (?<currentValue>\\S+)\\n\\s+digest: (?<currentDigest>sha256:[a-f0-9]{64})",
+        "repository: [\"']?(?<depName>[^\"'\\s]+)[\"']?\\n\\s+tag: [\"']?(?<currentValue>[^\"'\\s]+)[\"']?\\n\\s+digest: [\"']?(?<currentDigest>sha256:[a-f0-9]{64})[\"']?",
       ],
       datasourceTemplate: "docker",
     },

@@ -1,0 +1,247 @@
+bun	deploy/host/package.json	@types/bun	1.4.2	versioning=npm		patch -> 1.4.3 [renovate/scripts-packages]
+bun	deploy/host/package.json	typescript	7.0.2	versioning=npm		no updates
+bun	scripts/package.json	@actions/expressions	0.3.61	versioning=npm		no updates
+bun	scripts/package.json	@types/bun	1.4.2	versioning=npm		patch -> 1.4.3 [renovate/scripts-packages]
+bun	scripts/package.json	typescript	7.0.2	versioning=npm		no updates
+cargo	Cargo.toml	axum	0.8.9	versioning=cargo		pin -> =0.8.9 [renovate/pin-dependencies]
+cargo	Cargo.toml	base64	0.22.1	versioning=cargo		pin -> =0.22.1 [renovate/pin-dependencies] ; minor -> 0.23.0 [renovate/rust-crates]
+cargo	Cargo.toml	cbor4ii	1.2.3	versioning=cargo		pin -> =1.2.3 [renovate/pin-dependencies]
+cargo	Cargo.toml	cc	1.5.1	versioning=cargo		pin -> =1.7.0 [renovate/pin-dependencies]
+cargo	Cargo.toml	chrono	0.4.45	versioning=cargo		pin -> =0.4.45 [renovate/pin-dependencies]
+cargo	Cargo.toml	ed25519-dalek	3.0.0	versioning=cargo		pin -> =3.0.0 [renovate/pin-dependencies]
+cargo	Cargo.toml	getrandom	0.4.3	versioning=cargo		pin -> =0.4.3 [renovate/pin-dependencies]
+cargo	Cargo.toml	http	1.5.0	versioning=cargo		pin -> =1.5.0 [renovate/pin-dependencies]
+cargo	Cargo.toml	humantime	2.4.0	versioning=cargo		pin -> =2.4.0 [renovate/pin-dependencies]
+cargo	Cargo.toml	hyper	1.12.0	versioning=cargo		pin -> =1.12.0 [renovate/pin-dependencies]
+cargo	Cargo.toml	log	0.4.34	versioning=cargo		pin -> =0.4.34 [renovate/pin-dependencies]
+cargo	Cargo.toml	opentelemetry	0.33.1	versioning=cargo		pin -> =0.33.1 [renovate/pin-dependencies]
+cargo	Cargo.toml	opentelemetry-otlp	0.33.1	versioning=cargo		pin -> =0.33.1 [renovate/pin-dependencies]
+cargo	Cargo.toml	opentelemetry-proto	0.33.1	versioning=cargo		pin -> =0.33.1 [renovate/pin-dependencies]
+cargo	Cargo.toml	opentelemetry_sdk	0.33.1	versioning=cargo		pin -> =0.33.1 [renovate/pin-dependencies]
+cargo	Cargo.toml	percent-encoding	2.3.2	versioning=cargo		pin -> =2.3.2 [renovate/pin-dependencies]
+cargo	Cargo.toml	proc-macro2	1.0.107	versioning=cargo		pin -> =1.0.107 [renovate/pin-dependencies]
+cargo	Cargo.toml	prost	0.14.4	versioning=cargo		pin -> =0.14.4 [renovate/pin-dependencies]
+cargo	Cargo.toml	rcgen	0.14.10	versioning=cargo		pin -> =0.14.10 [renovate/pin-dependencies]
+cargo	Cargo.toml	reqwest	0.13.5	versioning=cargo		pin -> =0.13.5 [renovate/pin-dependencies]
+cargo	Cargo.toml	rustls-pki-types	1.15.1	versioning=cargo		pin -> =1.15.1 [renovate/pin-dependencies]
+cargo	Cargo.toml	serde	1.0.229	versioning=cargo		pin -> =1.0.229 [renovate/pin-dependencies]
+cargo	Cargo.toml	serde_json	1.0.151	versioning=cargo		pin -> =1.0.151 [renovate/pin-dependencies]
+cargo	Cargo.toml	sha2	0.11.0	versioning=cargo		pin -> =0.11.0 [renovate/pin-dependencies]
+cargo	Cargo.toml	socket2	0.6.5	versioning=cargo		pin -> =0.6.5 [renovate/pin-dependencies]
+cargo	Cargo.toml	sqlx	0.9.0	versioning=cargo		pin -> =0.9.0 [renovate/pin-dependencies]
+cargo	Cargo.toml	syn	2.0.119	versioning=cargo		pin -> =2.0.119 [renovate/pin-dependencies] ; major -> 3.0.0 [renovate/syn-3.x]
+cargo	Cargo.toml	thiserror	2.0.21	versioning=cargo		pin -> =2.0.21 [renovate/pin-dependencies]
+cargo	Cargo.toml	tokio	1.53.2	versioning=cargo		pin -> =1.53.2 [renovate/pin-dependencies]
+cargo	Cargo.toml	tokio-util	0.7.20	versioning=cargo		pin -> =0.7.20 [renovate/pin-dependencies]
+cargo	Cargo.toml	toml	1.1.8	versioning=cargo		pin -> =1.1.8 [renovate/pin-dependencies]
+cargo	Cargo.toml	tower	0.5.3	versioning=cargo		pin -> =0.5.3 [renovate/pin-dependencies]
+cargo	Cargo.toml	tower-http	0.7.1	versioning=cargo		pin -> =0.7.1 [renovate/pin-dependencies]
+cargo	Cargo.toml	tracing	0.1.44	versioning=cargo		pin -> =0.1.44 [renovate/pin-dependencies]
+cargo	Cargo.toml	tracing-log	0.2.0	versioning=cargo		pin -> =0.2.0 [renovate/pin-dependencies]
+cargo	Cargo.toml	tracing-opentelemetry	0.34.0	versioning=cargo		pin -> =0.34.0 [renovate/pin-dependencies]
+cargo	Cargo.toml	tracing-subscriber	0.3.23	versioning=cargo		pin -> =0.3.23 [renovate/pin-dependencies]
+cargo	Cargo.toml	utoipa	6.0.0	versioning=cargo		pin -> =6.0.0 [renovate/pin-dependencies]
+cargo	Cargo.toml	uuid	1.28.0	versioning=cargo		pin -> =1.28.0 [renovate/pin-dependencies]
+cargo	Cargo.toml	webpki-roots		versioning=	skip=path-dependency	no updates
+cargo	Cargo.toml	zeroize	1.9.1	versioning=cargo		pin -> =1.9.1 [renovate/pin-dependencies]
+cargo	crates/contract/Cargo.toml	chrono		versioning=	skip=inherited-dependency	no updates
+cargo	crates/contract/Cargo.toml	http		versioning=	skip=inherited-dependency	no updates
+cargo	crates/contract/Cargo.toml	hyper		versioning=	skip=inherited-dependency	no updates
+cargo	crates/contract/Cargo.toml	percent-encoding		versioning=	skip=inherited-dependency	no updates
+cargo	crates/contract/Cargo.toml	reqwest		versioning=	skip=inherited-dependency	no updates
+cargo	crates/contract/Cargo.toml	serde		versioning=	skip=inherited-dependency	no updates
+cargo	crates/contract/Cargo.toml	serde_json		versioning=	skip=inherited-dependency	no updates
+cargo	crates/contract/Cargo.toml	thiserror		versioning=	skip=inherited-dependency	no updates
+cargo	crates/contract/Cargo.toml	tracing		versioning=	skip=inherited-dependency	no updates
+cargo	crates/contract/Cargo.toml	utoipa		versioning=	skip=inherited-dependency	no updates
+cargo	crates/contract/Cargo.toml	uuid		versioning=	skip=inherited-dependency	no updates
+cargo	crates/contract/Cargo.toml	socket2		versioning=	skip=inherited-dependency	no updates
+cargo	crates/contract/Cargo.toml	tokio		versioning=	skip=inherited-dependency	no updates
+cargo	crates/outbox/Cargo.toml	axum		versioning=	skip=inherited-dependency	no updates
+cargo	crates/outbox/Cargo.toml	chrono		versioning=	skip=inherited-dependency	no updates
+cargo	crates/outbox/Cargo.toml	contract		versioning=	skip=path-dependency	no updates
+cargo	crates/outbox/Cargo.toml	opentelemetry		versioning=	skip=inherited-dependency	no updates
+cargo	crates/outbox/Cargo.toml	serde		versioning=	skip=inherited-dependency	no updates
+cargo	crates/outbox/Cargo.toml	serde_json		versioning=	skip=inherited-dependency	no updates
+cargo	crates/outbox/Cargo.toml	service-kit		versioning=	skip=path-dependency	no updates
+cargo	crates/outbox/Cargo.toml	sqlx		versioning=	skip=inherited-dependency	no updates
+cargo	crates/outbox/Cargo.toml	thiserror		versioning=	skip=inherited-dependency	no updates
+cargo	crates/outbox/Cargo.toml	tokio		versioning=	skip=inherited-dependency	no updates
+cargo	crates/outbox/Cargo.toml	tokio-util		versioning=	skip=inherited-dependency	no updates
+cargo	crates/outbox/Cargo.toml	tracing		versioning=	skip=inherited-dependency	no updates
+cargo	crates/outbox/Cargo.toml	uuid		versioning=	skip=inherited-dependency	no updates
+cargo	crates/outbox/Cargo.toml	opentelemetry-proto		versioning=	skip=inherited-dependency	no updates
+cargo	crates/outbox/Cargo.toml	prost		versioning=	skip=inherited-dependency	no updates
+cargo	crates/outbox/Cargo.toml	rcgen		versioning=	skip=inherited-dependency	no updates
+cargo	crates/protocol/Cargo.toml	cbor4ii		versioning=	skip=inherited-dependency	no updates
+cargo	crates/protocol/Cargo.toml	serde		versioning=	skip=inherited-dependency	no updates
+cargo	crates/protocol/Cargo.toml	serde_json		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	axum		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	base64		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	contract		versioning=	skip=path-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	ed25519-dalek		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	humantime		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	opentelemetry		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	opentelemetry-otlp		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	opentelemetry_sdk		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	serde		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	serde_json		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	sqlx		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	thiserror		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	tokio		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	tokio-util		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	toml		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	tower-http		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	tracing		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	tracing-opentelemetry		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	tracing-subscriber		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	log		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	tracing-log		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	rcgen		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	tokio		versioning=	skip=inherited-dependency	no updates
+cargo	crates/service-kit/Cargo.toml	webpki-roots		versioning=	skip=inherited-dependency	no updates
+cargo	crates/testkit/Cargo.toml	base64		versioning=	skip=inherited-dependency	no updates
+cargo	crates/testkit/Cargo.toml	contract		versioning=	skip=path-dependency	no updates
+cargo	crates/testkit/Cargo.toml	ed25519-dalek		versioning=	skip=inherited-dependency	no updates
+cargo	crates/testkit/Cargo.toml	http		versioning=	skip=inherited-dependency	no updates
+cargo	crates/testkit/Cargo.toml	rcgen		versioning=	skip=inherited-dependency	no updates
+cargo	crates/testkit/Cargo.toml	reqwest		versioning=	skip=inherited-dependency	no updates
+cargo	crates/testkit/Cargo.toml	serde_json		versioning=	skip=inherited-dependency	no updates
+cargo	crates/testkit/Cargo.toml	service-kit		versioning=	skip=path-dependency	no updates
+cargo	crates/testkit/Cargo.toml	sqlx		versioning=	skip=inherited-dependency	no updates
+cargo	crates/testkit/Cargo.toml	tokio		versioning=	skip=inherited-dependency	no updates
+cargo	crates/testkit/Cargo.toml	uuid		versioning=	skip=inherited-dependency	no updates
+cargo	crates/testkit/Cargo.toml	axum		versioning=	skip=inherited-dependency	no updates
+cargo	crates/testkit/Cargo.toml	serde		versioning=	skip=inherited-dependency	no updates
+cargo	crates/testkit/Cargo.toml	tokio		versioning=	skip=inherited-dependency	no updates
+cargo	crates/webpki-roots-empty/Cargo.toml	rustls-pki-types		versioning=	skip=inherited-dependency	no updates
+cargo	services/identity/Cargo.toml	axum		versioning=	skip=inherited-dependency	no updates
+cargo	services/identity/Cargo.toml	base64		versioning=	skip=inherited-dependency	no updates
+cargo	services/identity/Cargo.toml	contract		versioning=	skip=path-dependency	no updates
+cargo	services/identity/Cargo.toml	ed25519-dalek		versioning=	skip=inherited-dependency	no updates
+cargo	services/identity/Cargo.toml	serde		versioning=	skip=inherited-dependency	no updates
+cargo	services/identity/Cargo.toml	serde_json		versioning=	skip=inherited-dependency	no updates
+cargo	services/identity/Cargo.toml	service-kit		versioning=	skip=path-dependency	no updates
+cargo	services/identity/Cargo.toml	sha2		versioning=	skip=inherited-dependency	no updates
+cargo	services/identity/Cargo.toml	sqlx		versioning=	skip=inherited-dependency	no updates
+cargo	services/identity/Cargo.toml	thiserror		versioning=	skip=inherited-dependency	no updates
+cargo	services/identity/Cargo.toml	tokio		versioning=	skip=inherited-dependency	no updates
+cargo	services/identity/Cargo.toml	tracing		versioning=	skip=inherited-dependency	no updates
+cargo	services/identity/Cargo.toml	zeroize		versioning=	skip=inherited-dependency	no updates
+cargo	services/identity/Cargo.toml	getrandom		versioning=	skip=inherited-dependency	no updates
+cargo	services/identity/Cargo.toml	rcgen		versioning=	skip=inherited-dependency	no updates
+cargo	services/identity/Cargo.toml	testkit		versioning=	skip=path-dependency	no updates
+cargo	services/identity/Cargo.toml	tower		versioning=	skip=inherited-dependency	no updates
+cargo	services/ingest/Cargo.toml	reqwest		versioning=	skip=inherited-dependency	no updates
+cargo	services/ingest/Cargo.toml	serde_json		versioning=	skip=inherited-dependency	no updates
+cargo	services/ingest/Cargo.toml	tokio		versioning=	skip=inherited-dependency	no updates
+cargo	services/ingest/Cargo.toml	uuid		versioning=	skip=inherited-dependency	no updates
+cargo	tools/openapi/Cargo.toml	contract		versioning=	skip=path-dependency	no updates
+cargo	tools/openapi/Cargo.toml	serde_json		versioning=	skip=inherited-dependency	no updates
+cargo	tools/openapi/Cargo.toml	thiserror		versioning=	skip=inherited-dependency	no updates
+cargo	tools/openapi/Cargo.toml	utoipa		versioning=	skip=inherited-dependency	no updates
+cargo	tools/release-selftest/Cargo.toml	serde_json		versioning=	skip=inherited-dependency	no updates
+cargo	tools/release-selftest/Cargo.toml	cc		versioning=	skip=inherited-dependency	no updates
+cargo	tools/repo-check/Cargo.toml	serde_json		versioning=	skip=inherited-dependency	no updates
+cargo	tools/repo-check/Cargo.toml	toml		versioning=	skip=inherited-dependency	no updates
+cargo	tools/sql-check/Cargo.toml	proc-macro2		versioning=	skip=inherited-dependency	no updates
+cargo	tools/sql-check/Cargo.toml	syn		versioning=	skip=inherited-dependency	no updates
+dockerfile	deploy/chart/tests/e2e/example-service/Containerfile	gcr.io/distroless/cc-debian13	nonroot@e792ab3d241a	versioning=docker		no updates
+dockerfile	deploy/chart/tests/e2e/identity-double/Containerfile	docker.io/oven/bun	1.4.2-distroless@1a0c31c7c5f9	versioning=docker		patch -> 1.4.3-distroless@1aaa515018b0 [renovate/docker.io-oven-bun-1.x]
+dockerfile	deploy/images/postgres/Containerfile	ghcr.io/cloudnative-pg/postgresql	18.6-minimal-trixie@37ade18dbddd	versioning=docker		digest -> 18.6-minimal-trixie@c9be7f221a05 [renovate/ghcr.io-cloudnative-pg-postgresql-18.6-minimal-trixie]
+dockerfile	deploy/images/postgres/Containerfile	ghcr.io/cloudnative-pg/postgresql	18.6-minimal-trixie@37ade18dbddd	versioning=docker		digest -> 18.6-minimal-trixie@c9be7f221a05 [renovate/ghcr.io-cloudnative-pg-postgresql-18.6-minimal-trixie]
+dockerfile	deploy/images/postgres/Containerfile	binutils		versioning=	skip=unspecified-version	no updates
+dockerfile	deploy/images/postgres/Containerfile	bison		versioning=	skip=unspecified-version	no updates
+dockerfile	deploy/images/postgres/Containerfile	ca-certificates		versioning=	skip=unspecified-version	no updates
+dockerfile	deploy/images/postgres/Containerfile	curl		versioning=	skip=unspecified-version	no updates
+dockerfile	deploy/images/postgres/Containerfile	flex		versioning=	skip=unspecified-version	no updates
+dockerfile	deploy/images/postgres/Containerfile	gcc-aarch64-linux-gnu		versioning=	skip=unspecified-version	no updates
+dockerfile	deploy/images/postgres/Containerfile	libc6-dev-arm64-cross		versioning=	skip=unspecified-version	no updates
+dockerfile	deploy/images/postgres/Containerfile	make		versioning=	skip=unspecified-version	no updates
+dockerfile	deploy/images/rust-binary.Containerfile	gcr.io/distroless/static-debian13	nonroot@e2e927ec666b	versioning=docker		no updates
+flux	deploy/flux/clusters/saas/flux-system/gotk-components.yaml	fluxcd/flux2	v2.9.6	versioning=	skip=github-token-required	no updates
+github-actions	.github/workflows/ci.yml	actions/checkout	v7.0.1@3d3c42e5aac5	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/ci.yml	actions/checkout	v7.0.1@3d3c42e5aac5	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/ci.yml	Swatinem/rust-cache	v2.9.2@6323deb102c3	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/ci.yml	actions/checkout	v7.0.1@3d3c42e5aac5	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/ci.yml	actions/checkout	v7.0.1@3d3c42e5aac5	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/ci.yml	actions/checkout	v7.0.1@3d3c42e5aac5	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/ci.yml	actions/checkout	v7.0.1@3d3c42e5aac5	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/ci.yml	actions/checkout	v7.0.1@3d3c42e5aac5	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/ci.yml	actions/checkout	v7.0.1@3d3c42e5aac5	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/ci.yml	ubuntu	24.04-arm	versioning=	skip=disabled	no updates
+github-actions	.github/workflows/ci.yml	ubuntu	24.04-arm	versioning=	skip=disabled	no updates
+github-actions	.github/workflows/ci.yml	ubuntu	24.04-arm	versioning=	skip=disabled	no updates
+github-actions	.github/workflows/ci.yml	ubuntu	24.04-arm	versioning=	skip=disabled	no updates
+github-actions	.github/workflows/ci.yml	ubuntu	24.04-arm	versioning=	skip=disabled	no updates
+github-actions	.github/workflows/ci.yml	ubuntu	24.04-arm	versioning=	skip=disabled	no updates
+github-actions	.github/workflows/ci.yml	ubuntu	24.04-arm	versioning=	skip=disabled	no updates
+github-actions	.github/workflows/ci.yml	ubuntu	24.04-arm	versioning=	skip=disabled	no updates
+github-actions	.github/workflows/nightly.yml	actions/checkout	v7.0.1@3d3c42e5aac5	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/nightly.yml	actions/upload-artifact	v7.0.2@cf430e030ddb	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/nightly.yml	actions/checkout	v7.0.1@3d3c42e5aac5	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/nightly.yml	actions/download-artifact	v8.0.2@9000827ccba6	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/nightly.yml	ubuntu	24.04-arm	versioning=	skip=disabled	no updates
+github-actions	.github/workflows/nightly.yml	ubuntu	24.04-arm	versioning=	skip=disabled	no updates
+github-actions	.github/workflows/release.yml	actions/checkout	v7.0.1@3d3c42e5aac5	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/release.yml	Laysi/release-notes-action	v1.3.0@ad6ed96c1975	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/release.yml	actions/checkout	v7.0.1@3d3c42e5aac5	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/release.yml	actions/upload-artifact	v7.0.1@043fb46d1a93	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/release.yml	actions/checkout	v7.0.1@3d3c42e5aac5	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/release.yml	actions/download-artifact	v8.0.1@3e5f45b2cfb9	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/release.yml	actions/checkout	v7.0.1@3d3c42e5aac5	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/release.yml	actions/checkout	v7.0.1@3d3c42e5aac5	versioning=github-actions	skip=github-token-required	no updates
+github-actions	.github/workflows/release.yml	ubuntu	24.04-arm	versioning=	skip=disabled	no updates
+github-actions	.github/workflows/release.yml	ubuntu	24.04-arm	versioning=	skip=disabled	no updates
+github-actions	.github/workflows/release.yml	ubuntu	24.04-arm	versioning=	skip=disabled	no updates
+github-actions	.github/workflows/release.yml	ubuntu	24.04-arm	versioning=	skip=disabled	no updates
+github-actions	.github/workflows/release.yml	ubuntu	24.04-arm	versioning=	skip=disabled	no updates
+github-actions	.github/workflows/release.yml	ubuntu	24.04-arm	versioning=	skip=disabled	no updates
+kustomize	deploy/flux/clusters/saas/flux-system/kustomization.yaml	ghcr.io/fluxcd/source-controller	v1.9.6@6a6693172589	versioning=	skip=invalid-dependency-specification	no updates
+kustomize	deploy/flux/clusters/saas/flux-system/kustomization.yaml	ghcr.io/fluxcd/kustomize-controller	v1.9.6@2ebeaa341da7	versioning=	skip=invalid-dependency-specification	no updates
+kustomize	deploy/flux/clusters/saas/flux-system/kustomization.yaml	ghcr.io/fluxcd/helm-controller	v1.6.5@0d52fff5c4d4	versioning=	skip=invalid-dependency-specification	no updates
+proto	.prototools	actionlint	1.7.12	versioning=	skip=unsupported-datasource	no updates
+proto	.prototools	bun	1.4.2	versioning=	skip=github-token-required	no updates
+proto	.prototools	cargo-auditable	0.7.6	versioning=	skip=unsupported-datasource	no updates
+proto	.prototools	cargo-deny	0.20.2	versioning=	skip=unsupported-datasource	no updates
+proto	.prototools	cargo-zigbuild	0.23.4	versioning=	skip=unsupported-datasource	no updates
+proto	.prototools	cosign	3.1.3	versioning=	skip=unsupported-datasource	no updates
+proto	.prototools	flux	2.9.6	versioning=	skip=unsupported-datasource	no updates
+proto	.prototools	gitleaks	8.30.1	versioning=	skip=unsupported-datasource	no updates
+proto	.prototools	go	1.27.2	versioning=	skip=github-token-required	no updates
+proto	.prototools	helm	4.3.0	versioning=	skip=unsupported-datasource	no updates
+proto	.prototools	k3d	5.9.0	versioning=	skip=unsupported-datasource	no updates
+proto	.prototools	kubeconform	0.8.0	versioning=	skip=unsupported-datasource	no updates
+proto	.prototools	kubectl	1.36.5	versioning=	skip=unsupported-datasource	no updates
+proto	.prototools	rust	1.99.0	versioning=rust-release-channel		no updates
+proto	.prototools	sops	3.13.3	versioning=	skip=unsupported-datasource	no updates
+proto	.prototools	syft	1.52.0	versioning=	skip=unsupported-datasource	no updates
+proto	.prototools	zig	0.16.0	versioning=	skip=unsupported-datasource	no updates
+rust-toolchain	rust-toolchain.toml	rust	1.99.0	versioning=rust-release-channel		no updates
+regex	.prototools	rhysd/actionlint	1.7.12	versioning=	skip=github-token-required	no updates
+regex	.prototools	rust-secure-code/cargo-auditable	0.7.6	versioning=	skip=github-token-required	no updates
+regex	.prototools	EmbarkStudios/cargo-deny	0.20.2	versioning=	skip=github-token-required	no updates
+regex	.prototools	rust-cross/cargo-zigbuild	0.23.4	versioning=	skip=github-token-required	no updates
+regex	.prototools	sigstore/cosign	3.1.3	versioning=	skip=github-token-required	no updates
+regex	.prototools	fluxcd/flux2	2.9.6	versioning=	skip=github-token-required	no updates
+regex	.prototools	gitleaks/gitleaks	8.30.1	versioning=	skip=github-token-required	no updates
+regex	.prototools	helm/helm	4.3.0	versioning=	skip=github-token-required	no updates
+regex	.prototools	k3d-io/k3d	5.9.0	versioning=	skip=github-token-required	no updates
+regex	.prototools	yannh/kubeconform	0.8.0	versioning=	skip=github-token-required	no updates
+regex	.prototools	kubernetes/kubernetes	1.36.5	versioning=	skip=github-token-required	no updates
+regex	.prototools	getsops/sops	3.13.3	versioning=	skip=github-token-required	no updates
+regex	.prototools	anchore/syft	1.52.0	versioning=	skip=github-token-required	no updates
+regex	.prototools	https://codeberg.org/ziglang/zig	0.16.0	versioning=semver-coerced		minor -> 0.17.0 [renovate/https-codeberg.org-ziglang-zig-0.x]
+regex	.github/workflows/nightly.yml	istio/istio	1.30.5	versioning=	skip=github-token-required	no updates
+regex	.github/workflows/nightly.yml	rancher/k3s	v1.36.5-k3s1@057cfd5a9d51	versioning=regex:^v(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)-k3s(?<build>\d+)$		no updates
+regex	crates/service-kit/tests/container.rs	gcr.io/distroless/cc-debian13	nonroot@e792ab3d241a	versioning=docker		no updates
+regex	crates/service-kit/tests/support/start.rs	docker.io/library/postgres	18.6-alpine@77f585114c32	versioning=docker		no updates
+regex	crates/service-kit/tests/verify_container.rs	gcr.io/distroless/cc-debian13	nonroot@e792ab3d241a	versioning=docker		no updates
+regex	deploy/chart/tests/chart.test.ts	docker.io/traefik/whoami	v1.12.0@c4717a8d1f01	versioning=docker		no updates
+regex	deploy/flux/tests/e2e/lab.e2e.ts	docker.io/library/registry	3.1.2@ddf754342cfc	versioning=docker		no updates
+regex	deploy/flux/tests/e2e/lab.e2e.ts	docker.io/charmcli/soft-serve	v0.9.1@c1baa7e942a6	versioning=docker		minor -> v0.12.3@e8a12ff7f112 [renovate/docker.io-charmcli-soft-serve-0.x]
+regex	deploy/flux/tests/e2e/lab.e2e.ts	docker.io/alpine/git	v2.52.0@4a0e72d49596	versioning=docker		minor -> v2.54.0@ce84fd6a057b [renovate/docker.io-alpine-git-2.x]
+regex	deploy/chart/tests/e2e/values-e2e.yaml	docker.io/traefik/whoami	v1.12.0@c4717a8d1f01	versioning=docker		no updates
+regex	deploy/chart/tests/values/smoke.yaml	docker.io/traefik/whoami	v1.12.0@c4717a8d1f01	versioning=docker		no updates
+regex	deploy/chart/values.yaml	docker.io/clickhouse/clickhouse-server	26.8@110d3d1f8e1e	versioning=docker		minor -> 26.9@387ebbcca253 [renovate/docker.io-clickhouse-clickhouse-server-26.x] ; digest -> 26.8@dd81097e2c38 [renovate/docker.io-clickhouse-clickhouse-server-26.8]
+regex	deploy/chart/values.yaml	docker.io/otel/opentelemetry-collector-contrib	0.161.0@fd328de25524	versioning=docker		minor -> 0.162.0@39923a8e431b [renovate/docker.io-otel-opentelemetry-collector-contrib-0.x]

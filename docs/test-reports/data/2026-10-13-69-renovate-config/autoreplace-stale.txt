@@ -1,0 +1,41 @@
+== deploy/chart/tests/e2e/example-service/Containerfile
+  line 5
+  - FROM gcr.io/distroless/cc-debian13:nonroot@sha256:00000000241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2
+  + FROM gcr.io/distroless/cc-debian13:nonroot@sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2
+== crates/protocol/tests/broker.rs
+  line 37
+  - const MOSQUITTO_IMAGE: &str = "docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:000000002ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408";
+  + const MOSQUITTO_IMAGE: &str = "docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408";
+== crates/service-kit/tests/container.rs
+  line 20
+  - const BASE_IMAGE: &str = "gcr.io/distroless/cc-debian13:nonroot@sha256:00000000241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2";
+  + const BASE_IMAGE: &str = "gcr.io/distroless/cc-debian13:nonroot@sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2";
+== crates/service-kit/tests/verify_container.rs
+  line 19
+  - const BASE_IMAGE: &str = "gcr.io/distroless/cc-debian13:nonroot@sha256:00000000241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2";
+  + const BASE_IMAGE: &str = "gcr.io/distroless/cc-debian13:nonroot@sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2";
+== deploy/chart/tests/chart.test.ts
+  line 3039
+  -       "docker.io/traefik/whoami:v1.12.0@sha256:000000001f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44",
+  +       "docker.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44",
+== scripts/lib/stack.ts
+  line 23
+  -     "docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:000000002ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408",
+  +     "docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408",
+  line 27
+  -     "gcr.io/distroless/cc-debian13:nonroot@sha256:00000000241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2",
+  +     "gcr.io/distroless/cc-debian13:nonroot@sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2",
+== deploy/chart/tests/e2e/values-e2e.yaml
+  line 22
+  -       digest: sha256:000000001f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
+  +       digest: sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
+== deploy/chart/tests/values/smoke.yaml
+  line 23
+  -       digest: sha256:000000001f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
+  +       digest: sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
+== deploy/chart/values.yaml
+  line 458
+  -       digest: sha256:00000000552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
+  +       digest: sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
+10 update(s), 9 file(s), 0 failed
+exit=0

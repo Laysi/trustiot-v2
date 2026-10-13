@@ -1,0 +1,27 @@
+#### real tags 2026-10-13
+before: rancher/k3s versioning=loose allowedVersions=/^v?1\.36\./
+  current v1.36.5-k3s1; not a version under this versioning: (none)
+  can be proposed: v1.36.5-rc1-k3s1, v1.36.5-rc2-k3s1
+before: kubernetes/kubernetes versioning=semver-coerced allowedVersions=/^v?1\.36\./
+  current 1.36.5; not a version under this versioning: (none)
+  can be proposed: (nothing)
+after: rancher/k3s versioning=regex:^v(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)-k3s(?<build>\d+)$ allowedVersions=/^v?1\.36\./
+  current v1.36.5-k3s1; not a version under this versioning: v1.36.0-rc1-k3s1, v1.36.0-rc2-k3s1, v1.36.0-rc3-k3s1, v1.36.1-rc1-k3s1, v1.36.2-rc1-k3s1, v1.36.2-rc2-k3s1, v1.36.2-rc3-k3s1, v1.36.3-rc1-k3s1, v1.36.3-rc2-k3s1, v1.36.4-rc1-k3s1, v1.36.5-rc1-k3s1, v1.36.5-rc2-k3s1, v1.37.0-rc1-k3s1, v1.37.0-rc2-k3s1, v1.37.0-rc3-k3s1, v1.37.0-rc4-k3s1, v1.37.0-rc5-k3s1, v1.37.1-rc1-k3s1, v1.37.1-rc2-k3s1
+  can be proposed: (nothing)
+after: kubernetes/kubernetes versioning=semver-coerced allowedVersions=/^v?1\.36\./
+  current 1.36.5; not a version under this versioning: (none)
+  can be proposed: (nothing)
+#### next patch (synthetic)
+before: rancher/k3s versioning=loose allowedVersions=/^v?1\.36\./
+  current v1.36.5-k3s1; not a version under this versioning: (none)
+  can be proposed: v1.36.5-k3s1-amd64, v1.36.5-k3s2, v1.36.6-rc1-k3s1, v1.36.6-k3s1
+before: kubernetes/kubernetes versioning=semver-coerced allowedVersions=/^v?1\.36\./
+  current 1.36.5; not a version under this versioning: (none)
+  can be proposed: 1.36.6
+after: rancher/k3s versioning=regex:^v(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)-k3s(?<build>\d+)$ allowedVersions=/^v?1\.36\./
+  current v1.36.5-k3s1; not a version under this versioning: v1.36.5-k3s1-amd64, v1.36.6-rc1-k3s1
+  can be proposed: v1.36.5-k3s2, v1.36.6-k3s1
+after: kubernetes/kubernetes versioning=semver-coerced allowedVersions=/^v?1\.36\./
+  current 1.36.5; not a version under this versioning: (none)
+  can be proposed: 1.36.6
+exit=0

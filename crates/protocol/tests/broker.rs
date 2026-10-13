@@ -32,8 +32,9 @@ use protocol::topic::{Channel, Direction, gateway_subscriptions};
 use serde_json::{Value as Json, json};
 
 /// eclipse-mosquitto:2.1.2-alpine, pinned to the multi-arch index digest. The local dev
-/// environment (`scripts/lib/stack.ts`) runs the same digest.
-const MOSQUITTO_IMAGE: &str = "docker.io/library/eclipse-mosquitto@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408";
+/// environment (`scripts/lib/stack.ts`) runs the same tag and digest; Renovate updates both in
+/// one pull request.
+const MOSQUITTO_IMAGE: &str = "docker.io/library/eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408";
 
 /// PUBACK reason code 0x87: not authorized.
 const NOT_AUTHORIZED: u8 = 0x87;
