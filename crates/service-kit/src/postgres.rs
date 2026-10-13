@@ -11,11 +11,12 @@
 //!   therefore reach no server at all.
 //! - Every new session is checked before the pool hands it out: the role must not be a
 //!   superuser, bypass row-level security, or own (or belong to the owner of) any table, and
-//!   every table it can reach that has a `tenant_id` column must be protected by row-level
-//!   security. A platform role's session must also have, for every command it may run on such a
-//!   table, a policy that opens the table to it beyond the tenant condition. A session that fails
-//!   the check is closed, so a misconfigured role or a migration that forgot `ENABLE ROW LEVEL
-//!   SECURITY` makes the service unready instead of leaking rows ([`UnsafeSession`]).
+//!   every table it, or a role it can become with `SET ROLE`, can reach that has a `tenant_id`
+//!   column must be protected by row-level security. A platform role's session must also have,
+//!   for every command it may run on such a table, a policy that opens the table to it beyond
+//!   the tenant condition. A session that fails the check is closed, so a misconfigured role or
+//!   a migration that forgot `ENABLE ROW LEVEL SECURITY` makes the service unready instead of
+//!   leaking rows ([`UnsafeSession`]).
 //! - Every session is checked again when it goes back to the pool: one left with a
 //!   session-level tenant (`set_config(..., false)` or `SET`, which outlive the transaction) is
 //!   closed instead, so the next user never starts in that tenant.
@@ -350,6 +351,15 @@ async fn check_new_session(
 ///
 /// Tenant data is a relation with a `tenant_id` column, or a view or materialized view built on
 /// one, directly or through other views.
+///
+/// The problems that come from a privilege (a table, view, or function the session may use,
+/// temporary tables, `TRUNCATE`) are checked for every role the session can become with
+/// `SET ROLE`, its own role included, and name that role (`role`, quoted as an SQL identifier
+/// where it needs quotes). A role the session inherits from, whether or not it can also become
+/// it, is not checked on its own: its privileges are the session role's, and every policy that
+/// applies to it applies to the session role too, so the problem names the session role. When
+/// both the session role and a role it can become have the same problem, the session role is
+/// named.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum UnsafeSession {
@@ -366,6 +376,18 @@ pub enum UnsafeSession {
          connection default"
     )]
     TenantPreset,
+    /// The role holds the `ADMIN` option on `role`, directly or through a role it belongs to.
+    /// It can grant itself membership in `role` with the `SET` option and then use its rights
+    /// with `SET ROLE`, whatever options its own membership has, so the check could not judge
+    /// which rights the session can take. Service and platform roles administer no role.
+    #[error(
+        "the database role may grant itself role `{role}` (ADMIN option) and then use its rights \
+         with SET ROLE; service and platform roles must not administer roles"
+    )]
+    AdministersRole {
+        /// The role it administers.
+        role: String,
+    },
     /// The role owns, or belongs to the role that owns, a relation. Owners are exempt from
     /// row-level security and can turn it off; relations belong to the migration role.
     #[error(
@@ -373,48 +395,101 @@ pub enum UnsafeSession {
          migration role"
     )]
     OwnsRelation(String),
-    /// A table the role can use has a `tenant_id` column but row-level security is off.
-    #[error("table `{0}` has a tenant_id column but row-level security is not enabled")]
-    UnprotectedTable(String),
-    /// A permissive policy that applies to the role is not exactly the tenant condition
-    /// ([`TENANT_CONDITION`]), so it may let the role see or write other tenants' rows. Names
-    /// the table and the policy.
+    /// `role`, the session's role or a role it can become with `SET ROLE`, may use `table`,
+    /// which has a `tenant_id` column but row-level security off.
     #[error(
-        "{0} applies to the database role and is not exactly the tenant condition, so it may \
-         expose other tenants' rows"
+        "database role `{role}` may use table `{table}`, which has a tenant_id column but \
+         row-level security is not enabled"
     )]
-    PermissivePolicy(String),
-    /// A view the role can use reads tenant data but runs with its owner's rights, so the
-    /// owner's exemption from row-level security applies.
-    #[error("view `{0}` reads tenant data but is not security_invoker")]
-    UnprotectedView(String),
-    /// A materialized view or foreign table the role can use holds tenant data; row-level
-    /// security cannot protect either.
+    UnprotectedTable {
+        /// The table, as `schema.table`.
+        table: String,
+        /// The role that holds the privilege.
+        role: String,
+    },
+    /// A permissive policy that applies to `role` is not exactly the tenant condition
+    /// ([`TENANT_CONDITION`]), so it may let the role see or write other tenants' rows, on a
+    /// table `role` may use. `role` is the session's role or a role it can become with
+    /// `SET ROLE`. A policy applies to a role the session can become when that role has the
+    /// privileges of (inherits) one of the policy's roles, or to every role (`PUBLIC`), as
+    /// Postgres decides; to the session's own role, also when it belongs to one of the policy's
+    /// roles without inheriting it.
     #[error(
-        "`{0}` holds tenant data and is a materialized view or foreign table, which row-level \
-         security cannot protect"
+        "{policy} applies to database role `{role}` and is not exactly the tenant condition, so \
+         it may expose other tenants' rows"
     )]
-    Unprotectable(String),
-    /// The role may run a `SECURITY DEFINER` function owned by another role. The function runs
-    /// with its owner's rights and row-level security visibility (an owner of tenant data, a
-    /// superuser, or a role with cross-tenant policies sees other tenants), so the role must
-    /// not be able to call any.
+    PermissivePolicy {
+        /// The table and the policy, as `schema.table policy name`.
+        policy: String,
+        /// The role that may use the table and that the policy applies to.
+        role: String,
+    },
+    /// A view that `role`, the session's role or a role it can become with `SET ROLE`, may use
+    /// reads tenant data but runs with its owner's rights, so the owner's exemption from
+    /// row-level security applies.
     #[error(
-        "the database role may execute SECURITY DEFINER function `{0}`, which runs with another \
-         role's rights and row-level security visibility"
+        "database role `{role}` may use view `{view}`, which reads tenant data but is not \
+         security_invoker"
     )]
-    DefinerFunction(String),
-    /// The role may create temporary tables in the database. They are not subject to row-level
-    /// security and outlive the transaction on a pooled session, so one tenant's rows could
-    /// reach the next transaction on the connection (`sql/database.sql` revokes the right).
+    UnprotectedView {
+        /// The view, as `schema.view`.
+        view: String,
+        /// The role that holds the privilege.
+        role: String,
+    },
+    /// A materialized view or foreign table that `role`, the session's role or a role it can
+    /// become with `SET ROLE`, may use holds tenant data; row-level security cannot protect
+    /// either.
     #[error(
-        "the database role may create temporary tables, which row-level security does not cover \
-         and which outlive the transaction on a pooled connection"
+        "database role `{role}` may use `{relation}`, which holds tenant data and is a \
+         materialized view or foreign table, which row-level security cannot protect"
     )]
-    TemporaryTables,
-    /// The role may `TRUNCATE` a tenant table; `TRUNCATE` is not subject to row-level security.
-    #[error("the database role may TRUNCATE tenant table `{0}`, which row-level security ignores")]
-    TruncateAllowed(String),
+    Unprotectable {
+        /// The relation, as `schema.name`.
+        relation: String,
+        /// The role that holds the privilege.
+        role: String,
+    },
+    /// `role`, the session's role or a role it can become with `SET ROLE`, may run a
+    /// `SECURITY DEFINER` function owned by a role whose rights the check does not judge: not
+    /// the session role, a role it inherits, or a role it can become. The function runs with its
+    /// owner's rights and row-level security visibility (an owner of tenant data, a superuser,
+    /// or a role with cross-tenant policies sees other tenants), so the session must not be able
+    /// to call any.
+    #[error(
+        "database role `{role}` may execute SECURITY DEFINER function `{function}`, which runs \
+         with another role's rights and row-level security visibility"
+    )]
+    DefinerFunction {
+        /// The function, as `regprocedure` prints it.
+        function: String,
+        /// The role that holds the `EXECUTE` privilege.
+        role: String,
+    },
+    /// `role`, the session's role or a role it can become with `SET ROLE`, may create temporary
+    /// tables in the database. They are not subject to row-level security and outlive the
+    /// transaction (and a `RESET ROLE`) on a pooled session, so one tenant's rows could reach
+    /// the next transaction on the connection (`sql/database.sql` revokes the right).
+    #[error(
+        "database role `{role}` may create temporary tables, which row-level security does not \
+         cover and which outlive the transaction on a pooled connection"
+    )]
+    TemporaryTables {
+        /// The role that holds the `TEMPORARY` privilege.
+        role: String,
+    },
+    /// `role`, the session's role or a role it can become with `SET ROLE`, may `TRUNCATE` a
+    /// tenant table; `TRUNCATE` is not subject to row-level security.
+    #[error(
+        "database role `{role}` may TRUNCATE tenant table `{table}`, which row-level security \
+         ignores"
+    )]
+    TruncateAllowed {
+        /// The table, as `schema.table`.
+        table: String,
+        /// The role that holds the privilege.
+        role: String,
+    },
     /// Platform sessions only ([`SessionRole::Platform`]): `role`, the platform role or a role it
     /// can become with `SET ROLE`, may run `command` (`SELECT`, `INSERT`, `UPDATE`, or `DELETE`)
     /// on `table`, which has row-level security, but the permissive policies that apply to `role`
@@ -453,8 +528,9 @@ pub const TENANT_CONDITION_AS_STORED: &str =
 
 /// The session check. `$1`: whether the session is the platform role's; `$2`:
 /// [`TENANT_CONDITION_AS_STORED`]. Problems come back in order of severity; the check reports
-/// the first. Each row is the problem, the relation (or function) it concerns, and, for
-/// `platform_tenant_only`, the role and the command.
+/// the first. Each row is the problem, the relation (or function) it concerns, the role that
+/// holds the privilege (for the problems that come from one, and `platform_tenant_only`), and,
+/// for `platform_tenant_only`, the command.
 const SESSION_CHECK: &str = r"
 WITH RECURSIVE rels AS (
     SELECT c.oid, c.relkind, c.relowner, c.relrowsecurity, c.reloptions, c.relnamespace,
@@ -481,19 +557,64 @@ tenant_data(oid) AS (
     JOIN tenant_data t ON t.oid = d.refobjid
     WHERE rw.ev_class <> d.refobjid
 ),
+-- Every role the session can switch to, itself included (own), through any chain of memberships
+-- that all have the SET option. The rights of roles it only inherits are already the session
+-- role's own; a role it can neither inherit nor become gives it nothing.
+session_roles AS (
+    SELECT oid, quote_ident(rolname) AS role_name, rolname = current_user AS own
+    FROM pg_roles
+    WHERE pg_has_role(current_user, oid, 'SET')
+),
+-- Of those, the roles whose rights can go beyond the session role's own: itself, and each role it
+-- can become but does not inherit. A role it also inherits has no privilege the session role
+-- lacks, and every policy that applies to it applies to the session role too, so it adds no
+-- problem the session role's own check does not find.
+checked_roles AS (
+    SELECT * FROM session_roles
+    WHERE own OR NOT pg_has_role(current_user, oid, 'USAGE')
+),
+-- The tenant data each of those roles can use. For the session's own role this is what the
+-- session can use without switching roles.
 reachable AS (
-    SELECT * FROM rels
-    WHERE oid IN (SELECT oid FROM tenant_data)
-      AND has_schema_privilege(relnamespace, 'USAGE')
-      AND (has_table_privilege(oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE')
-           OR has_any_column_privilege(oid, 'SELECT, INSERT, UPDATE'))
+    SELECT r.*, sr.oid AS role_oid, sr.role_name, sr.own
+    FROM checked_roles sr
+    CROSS JOIN rels r
+    WHERE r.oid IN (SELECT oid FROM tenant_data)
+      AND has_schema_privilege(sr.oid, r.relnamespace, 'USAGE')
+      AND (has_table_privilege(sr.oid, r.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE')
+           OR has_any_column_privilege(sr.oid, r.oid, 'SELECT, INSERT, UPDATE'))
+),
+-- The permissive policies on tables with row-level security that one of those roles can use,
+-- other than those whose every expression is exactly the tenant condition, each printed once. A
+-- platform session's own policies, which name the platform role itself and not PUBLIC
+-- (platform_access), are left to the platform rule below.
+session_policies AS MATERIALIZED (
+    SELECT p.polrelid, quote_ident(p.polname) AS polname, p.polroles,
+           0 = ANY (p.polroles) AS public
+    FROM pg_policy p
+    WHERE p.polpermissive
+      AND p.polrelid IN (SELECT oid FROM reachable WHERE relkind IN ('r', 'p') AND relrowsecurity)
+      AND NOT ($1 AND NOT 0 = ANY (p.polroles)
+               AND (SELECT oid FROM pg_roles WHERE rolname = current_user) = ANY (p.polroles))
+      AND NOT ((p.polqual IS NOT NULL OR p.polwithcheck IS NOT NULL)
+               AND (p.polqual IS NULL OR pg_get_expr(p.polqual, p.polrelid) = $2)
+               AND (p.polwithcheck IS NULL OR pg_get_expr(p.polwithcheck, p.polrelid) = $2))
+),
+-- Which of the session's roles each role such a policy names applies to, asked once per pair. As
+-- Postgres decides: a role that has the privileges of (inherits) the named role. For the
+-- session's own role also any membership in it, inherited or not, as the check always did:
+-- stricter than Postgres, never looser. A PUBLIC policy applies to every role.
+session_policy_roles AS MATERIALIZED (
+    SELECT sr.oid AS role_oid, named.role AS policy_role
+    FROM checked_roles sr
+    CROSS JOIN (SELECT DISTINCT role FROM session_policies, unnest(polroles) AS role
+                WHERE role <> 0) AS named
+    WHERE pg_has_role(sr.oid, named.role, 'USAGE')
+       OR (sr.own AND pg_has_role(current_user, named.role, 'MEMBER'))
 ),
 -- Platform sessions only: every role the session can switch to, itself included.
--- The rights of roles it only inherits are already the session role's own; a role it can
--- neither inherit nor become gives it nothing.
 platform_roles AS (
-    SELECT oid, quote_ident(rolname) AS role_name FROM pg_roles
-    WHERE $1 AND pg_has_role(current_user, oid, 'SET')
+    SELECT oid, role_name FROM session_roles WHERE $1
 ),
 -- The tables with row-level security that one of those roles may use at all.
 platform_tables AS MATERIALIZED (
@@ -599,37 +720,43 @@ platform_tenant_only AS MATERIALIZED (
          AS c(command, sides)
       ON (m.has & c.sides) = c.sides AND (m.wider & c.sides) <> c.sides
 )
+-- The problems that come from a privilege are found for each role the session can become and
+-- name it. later: the row is for a role other than the session's own, so that when both have
+-- the same problem with the same relation, the session's own role is reported.
 SELECT problem, relation, role_name, command FROM (
     SELECT 1 AS rank, 'bypasses_rls' AS problem, NULL::text AS relation,
-           NULL::text AS role_name, NULL::text AS command
+           NULL::text AS role_name, NULL::text AS command, false AS later
     WHERE EXISTS (
         SELECT 1 FROM pg_roles r
         WHERE (r.rolsuper OR r.rolbypassrls) AND pg_has_role(current_user, r.oid, 'MEMBER')
     )
     UNION ALL
-    SELECT 2, 'tenant_preset', NULL, NULL, NULL
+    SELECT 2, 'tenant_preset', NULL, NULL, NULL, false
     WHERE NULLIF(current_setting('trustiot.tenant_id', true), '') IS NOT NULL
     UNION ALL
-    SELECT 3, 'owns_relation', name, NULL, NULL FROM rels
+    -- A role the session administers it can grant itself with the SET option, so any role
+    -- could be one it can become. pg_has_role counts the ADMIN option through any membership,
+    -- which is at least every case Postgres lets it grant from.
+    SELECT 2, 'administers_role', NULL, quote_ident(r.rolname), NULL, false
+    FROM pg_roles r
+    WHERE pg_has_role(current_user, r.oid, 'MEMBER WITH ADMIN OPTION')
+    UNION ALL
+    SELECT 3, 'owns_relation', name, NULL, NULL, false FROM rels
     WHERE pg_has_role(current_user, relowner, 'MEMBER')
     UNION ALL
-    SELECT 4, 'unprotected_table', name, NULL, NULL FROM reachable
+    SELECT 4, 'unprotected_table', name, role_name, NULL, NOT own FROM reachable
     WHERE relkind IN ('r', 'p') AND NOT relrowsecurity
     UNION ALL
-    SELECT 4, 'permissive_policy', r.name || ' policy ' || quote_ident(p.polname), NULL, NULL
+    SELECT 4, 'permissive_policy', r.name || ' policy ' || p.polname, r.role_name, NULL, NOT r.own
     FROM reachable r
-    JOIN pg_policy p ON p.polrelid = r.oid
-    WHERE r.relkind IN ('r', 'p') AND r.relrowsecurity AND p.polpermissive
-      AND (0 = ANY (p.polroles)
-           OR EXISTS (SELECT 1 FROM unnest(p.polroles) AS role
-                      WHERE role <> 0 AND pg_has_role(current_user, role, 'MEMBER')))
-      AND NOT ($1 AND NOT 0 = ANY (p.polroles)
-               AND (SELECT oid FROM pg_roles WHERE rolname = current_user) = ANY (p.polroles))
-      AND NOT ((p.polqual IS NOT NULL OR p.polwithcheck IS NOT NULL)
-               AND (p.polqual IS NULL OR pg_get_expr(p.polqual, p.polrelid) = $2)
-               AND (p.polwithcheck IS NULL OR pg_get_expr(p.polwithcheck, p.polrelid) = $2))
+    JOIN session_policies p ON p.polrelid = r.oid
+    WHERE r.relkind IN ('r', 'p') AND r.relrowsecurity
+      AND (p.public
+           OR EXISTS (SELECT 1 FROM unnest(p.polroles) AS named(role)
+                      JOIN session_policy_roles a
+                        ON a.policy_role = named.role AND a.role_oid = r.role_oid))
     UNION ALL
-    SELECT 4, 'unprotected_view', name, NULL, NULL FROM reachable
+    SELECT 4, 'unprotected_view', name, role_name, NULL, NOT own FROM reachable
     WHERE relkind = 'v'
       AND NOT EXISTS (
           SELECT 1 FROM unnest(reloptions) AS option
@@ -637,38 +764,44 @@ SELECT problem, relation, role_name, command FROM (
                                   'security_invoker=yes', 'security_invoker=1')
       )
     UNION ALL
-    SELECT 4, 'unprotectable', name, NULL, NULL FROM reachable WHERE relkind IN ('m', 'f')
+    SELECT 4, 'unprotectable', name, role_name, NULL, NOT own FROM reachable
+    WHERE relkind IN ('m', 'f')
     UNION ALL
-    SELECT 4, 'definer_function', p.oid::regprocedure::text, NULL, NULL
+    -- A function owned by the session role, a role it inherits, or a role it can become runs
+    -- with rights this check judges, so it is exempt. One owned by a role the session belongs
+    -- to without inheriting or becoming it runs with rights nothing here judges.
+    SELECT 4, 'definer_function', p.oid::regprocedure::text, sr.role_name, NULL, NOT sr.own
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
+    CROSS JOIN checked_roles sr
     WHERE p.prosecdef
       AND n.nspname NOT IN ('pg_catalog', 'information_schema')
-      AND NOT pg_has_role(current_user, p.proowner, 'MEMBER')
-      AND has_schema_privilege(n.oid, 'USAGE')
-      AND has_function_privilege(p.oid, 'EXECUTE')
+      AND NOT pg_has_role(current_user, p.proowner, 'USAGE')
+      AND p.proowner NOT IN (SELECT oid FROM session_roles)
+      AND has_schema_privilege(sr.oid, n.oid, 'USAGE')
+      AND has_function_privilege(sr.oid, p.oid, 'EXECUTE')
       AND NOT EXISTS (
           SELECT 1 FROM pg_depend d
           WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
       )
     UNION ALL
-    SELECT 4, 'temporary_tables', NULL, NULL, NULL
-    WHERE has_database_privilege(current_database(), 'TEMPORARY')
+    SELECT 4, 'temporary_tables', NULL, role_name, NULL, NOT own FROM checked_roles
+    WHERE has_database_privilege(oid, current_database(), 'TEMPORARY')
     UNION ALL
-    SELECT 5, 'truncate_allowed', name, NULL, NULL FROM reachable
-    WHERE relkind IN ('r', 'p') AND has_table_privilege(oid, 'TRUNCATE')
+    SELECT 5, 'truncate_allowed', name, role_name, NULL, NOT own FROM reachable
+    WHERE relkind IN ('r', 'p') AND has_table_privilege(role_oid, oid, 'TRUNCATE')
     UNION ALL
     -- The commands only the tenant condition opens to a platform role that the role may run,
     -- through a table or column privilege. DELETE has no column privilege, and NULLIF makes its
     -- column test NULL.
-    SELECT 4, 'platform_tenant_only', r.name, pr.role_name, o.command
+    SELECT 4, 'platform_tenant_only', r.name, pr.role_name, o.command, false
     FROM platform_tenant_only o
     JOIN platform_roles pr ON pr.oid = o.role_oid
     JOIN rels r ON r.oid = o.rel
     WHERE has_table_privilege(o.role_oid, o.rel, o.command)
        OR coalesce(has_any_column_privilege(o.role_oid, o.rel, NULLIF(o.command, 'DELETE')), false)
 ) AS problems
-ORDER BY rank, relation, problem, role_name, command
+ORDER BY rank, relation, problem, later, role_name, command
 LIMIT 1
 ";
 
@@ -694,20 +827,37 @@ pub async fn check_session(
         return Ok(Ok(()));
     };
     let relation = relation.unwrap_or_default();
+    let role = role_name.unwrap_or_default();
     Ok(Err(match problem.as_str() {
         "bypasses_rls" => UnsafeSession::BypassesRls,
         "tenant_preset" => UnsafeSession::TenantPreset,
+        "administers_role" => UnsafeSession::AdministersRole { role },
         "owns_relation" => UnsafeSession::OwnsRelation(relation),
-        "unprotected_table" => UnsafeSession::UnprotectedTable(relation),
-        "permissive_policy" => UnsafeSession::PermissivePolicy(relation),
-        "unprotected_view" => UnsafeSession::UnprotectedView(relation),
-        "unprotectable" => UnsafeSession::Unprotectable(relation),
-        "definer_function" => UnsafeSession::DefinerFunction(relation),
-        "temporary_tables" => UnsafeSession::TemporaryTables,
-        "truncate_allowed" => UnsafeSession::TruncateAllowed(relation),
+        "unprotected_table" => UnsafeSession::UnprotectedTable {
+            table: relation,
+            role,
+        },
+        "permissive_policy" => UnsafeSession::PermissivePolicy {
+            policy: relation,
+            role,
+        },
+        "unprotected_view" => UnsafeSession::UnprotectedView {
+            view: relation,
+            role,
+        },
+        "unprotectable" => UnsafeSession::Unprotectable { relation, role },
+        "definer_function" => UnsafeSession::DefinerFunction {
+            function: relation,
+            role,
+        },
+        "temporary_tables" => UnsafeSession::TemporaryTables { role },
+        "truncate_allowed" => UnsafeSession::TruncateAllowed {
+            table: relation,
+            role,
+        },
         "platform_tenant_only" => UnsafeSession::PlatformTenantOnly {
             table: relation,
-            role: role_name.unwrap_or_default(),
+            role,
             command: command.unwrap_or_default(),
         },
         other => {
@@ -832,7 +982,10 @@ mod tests {
     fn refusals_keep_the_last_outcome() {
         let refusals = Refusals::default();
         assert_eq!(refusals.last(), None);
-        let problem = UnsafeSession::UnprotectedTable("public.devices".to_owned());
+        let problem = UnsafeSession::UnprotectedTable {
+            table: "public.devices".to_owned(),
+            role: "assets_app".to_owned(),
+        };
         refusals.record(Some(problem.clone()));
         assert_eq!(refusals.clone().last(), Some(problem));
         refusals.record(None);

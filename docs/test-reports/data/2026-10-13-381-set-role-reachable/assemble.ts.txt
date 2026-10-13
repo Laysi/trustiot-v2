@@ -1,0 +1,37 @@
+// Builds the #381 probe: the #366 verification cases (as copied into the #375 probe), main's
+// SESSION_CHECK (9beb8f7), and the #381 body.
+// Usage: bun assemble.ts <verify_375.rs.txt> <main postgres.rs> <body.rs> <out.rs>
+const [probe375, mainSource, body, out] = Bun.argv.slice(2);
+const p = await Bun.file(probe375).text();
+const casesStart = p.indexOf("const A: &str");
+const casesEnd = p.indexOf("/// The session check of main e2e476b");
+if (casesStart < 0 || casesEnd < 0) throw new Error("cases block");
+const cases = p.slice(casesStart, casesEnd);
+const src = await Bun.file(mainSource).text();
+const marker = 'const SESSION_CHECK: &str = r"';
+const start = src.indexOf(marker) + marker.length;
+const end = src.indexOf('";', start);
+const old = src.slice(start, end);
+const header = `//! Throwaway probes for Laysi/trustiot-v2#381 (kept as evidence, not as a test): the session
+//! check of main 9beb8f7 against the one that also judges the roles a session can become with
+//! SET ROLE. The #366 verification cases below are copied unchanged from verify_375.rs.txt.
+#![cfg(feature = "contract")]
+#![allow(clippy::print_stdout, reason = "probe output is the evidence")]
+#![allow(
+    dead_code,
+    reason = "the copied #366 cases carry probe statements this file does not run"
+)]
+#![allow(clippy::string_slice, reason = "ASCII source text")]
+
+mod support;
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
+
+use service_kit::postgres::{self, SessionRole};
+use sqlx::{AssertSqlSafe, Connection, PgConnection};
+use support::postgres::{TlsPostgres, tls_postgres};
+
+`;
+const oldConst = `/// The session check of main 9beb8f7 (Laysi/trustiot-v2#375), unchanged.\nconst OLD_SESSION_CHECK: &str = r"${old}";\n\n`;
+await Bun.write(out, header + cases + oldConst + (await Bun.file(body).text()));
