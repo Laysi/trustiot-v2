@@ -1,0 +1,39 @@
+rcheck: queued on the build host at 09:46:52 as 69r-6f25387e; running now: nothing
+40
+    Checking tokio-util v0.7.20
+    Checking ppv-lite86 v0.2.21
+    Checking half v2.7.1
+    Checking sqlx-core v0.9.0
+    Checking tower-http v0.6.11
+    Checking cbor4ii v1.2.3
+    Checking rand_chacha v0.9.0
+    Checking rand v0.9.5
+    Checking hyper-util v0.1.21
+    Checking protocol v0.1.0 (<host copy>/src/crates/protocol)
+    Checking opentelemetry_sdk v0.33.1
+    Checking reqwest v0.13.5
+    Checking axum v0.8.9
+    Checking sqlx-postgres v0.9.0
+    Checking contract v0.1.0 (<host copy>/src/crates/contract)
+    Checking opentelemetry-http v0.33.1
+    Checking opentelemetry-proto v0.33.1
+    Checking openapi v0.1.0 (<host copy>/src/tools/openapi)
+    Checking opentelemetry-otlp v0.33.1
+    Checking sqlx v0.9.0
+    Checking service-kit v0.1.0 (<host copy>/src/crates/service-kit)
+    Checking outbox v0.1.0 (<host copy>/src/crates/outbox)
+    Checking testkit v0.1.0 (<host copy>/src/crates/testkit)
+    Checking identity v0.1.0 (<host copy>/src/services/identity)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.65s
+cargo check exit=0
+--- cargo update --dry-run (what lock file maintenance could still move)
+    Updating crates.io index
+     Locking 4 packages to highest Rust 1.99 compatible versions
+ Downgrading crypto-common v0.1.7 -> v0.1.6 (available: v0.1.7)
+    Updating generic-array v0.14.7 -> v0.14.9
+    Updating syn v3.0.7 -> v3.0.9
+    Updating unicode-ident v1.0.26 -> v1.0.27
+note: pass `--verbose` to see 6 unchanged dependencies behind latest
+warning: not updating lockfile due to dry run
+rcheck: removed 0 dangling test volumes
+rcheck: exit 0 at 09:47:08 (build host, 69r-6f25387e)

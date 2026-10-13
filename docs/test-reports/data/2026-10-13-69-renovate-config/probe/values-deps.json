@@ -1,0 +1,117 @@
+[
+  {
+    "deps": [
+      {
+        "depName": "istio/istio",
+        "currentValue": "1.30.5",
+        "datasource": "github-releases",
+        "replaceString": "# renovate: datasource=github-releases depName=istio/istio\n      ISTIO_VERSION: 1.30.5",
+        "packageName": "istio/istio",
+        "skipReason": "github-token-required",
+        "updates": []
+      }
+    ],
+    "matchStrings": [
+      "# renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>\\S+)\\n\\s+[A-Z0-9_]+: \"?(?<currentValue>[^\"\\s]+)\"?"
+    ],
+    "packageFile": ".github/workflows/nightly.yml"
+  },
+  {
+    "deps": [
+      {
+        "depName": "rancher/k3s",
+        "currentValue": "v1.36.5-k3s1",
+        "currentDigest": "sha256:057cfd5a9d51b89f1f0ee139c28d5d5fdd5aa7ddeac2742a0ba90c6dbc0329bb",
+        "datasource": "docker",
+        "replaceString": "rancher/k3s:v1.36.5-k3s1@sha256:057cfd5a9d51b89f1f0ee139c28d5d5fdd5aa7ddeac2742a0ba90c6dbc0329bb",
+        "packageName": "rancher/k3s",
+        "updates": [],
+        "versioning": "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-k3s(?<build>\\d+)$",
+        "warnings": [],
+        "sourceUrl": "https://github.com/k3s-io/k3s",
+        "registryUrl": "https://index.docker.io",
+        "currentVersion": "v1.36.5-k3s1",
+        "fixedVersion": "v1.36.5-k3s1"
+      }
+    ],
+    "matchStrings": [
+      "(?<depName>[a-z0-9][a-z0-9./_-]*[a-z0-9]):(?<currentValue>[A-Za-z0-9_][A-Za-z0-9._-]*)@(?<currentDigest>sha256:[a-f0-9]{64})"
+    ],
+    "datasourceTemplate": "docker",
+    "packageFile": ".github/workflows/nightly.yml"
+  },
+  {
+    "deps": [
+      {
+        "depName": "docker.io/clickhouse/clickhouse-server",
+        "currentValue": "26.8",
+        "currentDigest": "sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c",
+        "datasource": "docker",
+        "replaceString": "repository: docker.io/clickhouse/clickhouse-server\n      tag: \"26.8\"\n      digest: sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c",
+        "packageName": "docker.io/clickhouse/clickhouse-server",
+        "updates": [
+          {
+            "bucket": "non-major",
+            "newVersion": "26.9",
+            "newValue": "26.9",
+            "newMajor": 26,
+            "newMinor": 9,
+            "newPatch": null,
+            "updateType": "minor",
+            "isBreaking": false,
+            "newDigest": "sha256:387ebbcca253026def04dc79e83d2323ac7d97bf309ddd090a8a3c702573e01a",
+            "branchName": "renovate/docker.io-clickhouse-clickhouse-server-26.x"
+          },
+          {
+            "updateType": "digest",
+            "newValue": "26.8",
+            "newDigest": "sha256:dd81097e2c38827a438287d8ae5d4dc8afafbdd0e61e83376fdd7ed4580673b9",
+            "branchName": "renovate/docker.io-clickhouse-clickhouse-server-26.8"
+          }
+        ],
+        "versioning": "docker",
+        "warnings": [],
+        "registryUrl": "https://index.docker.io",
+        "lookupName": "clickhouse/clickhouse-server",
+        "currentVersion": "26.8",
+        "isSingleVersion": true,
+        "fixedVersion": "26.8"
+      },
+      {
+        "depName": "docker.io/otel/opentelemetry-collector-contrib",
+        "currentValue": "0.161.0",
+        "currentDigest": "sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1",
+        "datasource": "docker",
+        "replaceString": "repository: docker.io/otel/opentelemetry-collector-contrib\n      tag: \"0.161.0\"\n      digest: sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1",
+        "packageName": "docker.io/otel/opentelemetry-collector-contrib",
+        "updates": [
+          {
+            "bucket": "non-major",
+            "newVersion": "0.162.0",
+            "newValue": "0.162.0",
+            "newMajor": 0,
+            "newMinor": 162,
+            "newPatch": 0,
+            "updateType": "minor",
+            "isBreaking": false,
+            "newDigest": "sha256:39923a8e431bd1f57be82411999d389fcfe40857492e4365456d97a4c1f74be6",
+            "branchName": "renovate/docker.io-otel-opentelemetry-collector-contrib-0.x"
+          }
+        ],
+        "versioning": "docker",
+        "warnings": [],
+        "sourceUrl": "https://github.com/open-telemetry/opentelemetry-collector-releases",
+        "registryUrl": "https://index.docker.io",
+        "lookupName": "otel/opentelemetry-collector-contrib",
+        "currentVersion": "0.161.0",
+        "isSingleVersion": true,
+        "fixedVersion": "0.161.0"
+      }
+    ],
+    "matchStrings": [
+      "repository: [\"']?(?<depName>[^\"'\\s]+)[\"']?\\n\\s+tag: [\"']?(?<currentValue>[^\"'\\s]+)[\"']?\\n\\s+digest: [\"']?(?<currentDigest>sha256:[a-f0-9]{64})[\"']?"
+    ],
+    "datasourceTemplate": "docker",
+    "packageFile": "deploy/chart/values.yaml"
+  }
+]

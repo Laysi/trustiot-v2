@@ -1,0 +1,35 @@
+rcheck: queued on the build host at 09:47:42 as 69r-6f25387e; running now: nothing
+--- with the = pins
+    Updating crates.io index
+     Locking 4 packages to highest Rust 1.99 compatible versions
+   Unchanged base64 v0.22.1 (available: v0.23.1)
+   Unchanged cc v1.7.0 (available: v1.8.0)
+ Downgrading crypto-common v0.1.7 -> v0.1.6 (available: v0.1.7)
+    Updating generic-array v0.14.7 -> v0.14.9
+   Unchanged matchit v0.8.4 (available: v0.8.6)
+   Unchanged serde_json v1.0.151 (available: v1.0.154)
+   Unchanged sha2 v0.11.0 (available: v0.11.1)
+    Updating syn v3.0.7 -> v3.0.9
+   Unchanged syn v2.0.119 (available: v3.0.9)
+    Updating unicode-ident v1.0.26 -> v1.0.27
+note: to see how you depend on a package, run `cargo tree --invert <dep>@<ver>`
+warning: not updating lockfile due to dry run
+--- without the pins (main requirements)
+0
+cc = "1.5.1"
+    Updating crates.io index
+     Locking 7 packages to highest Rust 1.99 compatible versions
+   Unchanged base64 v0.22.1 (available: v0.23.1)
+    Updating cc v1.7.0 -> v1.8.0
+ Downgrading crypto-common v0.1.7 -> v0.1.6 (available: v0.1.7)
+    Updating generic-array v0.14.7 -> v0.14.9
+   Unchanged matchit v0.8.4 (available: v0.8.6)
+    Updating serde_json v1.0.151 -> v1.0.154
+    Updating sha2 v0.11.0 -> v0.11.1
+    Updating syn v3.0.7 -> v3.0.9
+   Unchanged syn v2.0.119 (available: v3.0.9)
+    Updating unicode-ident v1.0.26 -> v1.0.27
+note: to see how you depend on a package, run `cargo tree --invert <dep>@<ver>`
+warning: not updating lockfile due to dry run
+rcheck: removed 0 dangling test volumes
+rcheck: exit 0 at 09:47:47 (build host, 69r-6f25387e)
