@@ -6,9 +6,11 @@
 //
 // run.ts builds the migration Job's image (deploy/images/migrate, Laysi/trustiot-v2#60) with it;
 // the nightly enables a real service (`services.identity`) the same way once it has a database
-// for it (Laysi/trustiot-v2#65, Laysi/trustiot-v2#77). The workflow provides rustup (the pinned
-// toolchain comes from rust-toolchain.toml) and the pinned zig, cargo-zigbuild and
-// cargo-auditable (`tools:` of setup-proto). Cost: docs/architecture/ci-release.md, nightly.yml.
+// for it (Laysi/trustiot-v2#65, Laysi/trustiot-v2#77). An image whose inputs have not changed
+// since main last built it comes from the cache instead (image-cache.ts). For a build the
+// workflow provides rustup (the pinned toolchain comes from rust-toolchain.toml) and the pinned
+// zig, cargo-zigbuild and cargo-auditable (`tools:` of setup-proto). Cost:
+// docs/architecture/ci-release.md, nightly.yml.
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +28,7 @@ import {
 } from "../release/lib.ts";
 import { rustCrossCompileCommand, staticElfProblem, toolchainChannel } from "../release/rust-build.ts";
 import { exec, pinnedTool, retry, run } from "./exec.ts";
+import { loadCachedImage, saveImageForCache } from "./image-cache.ts";
 import { importImageIntoCluster } from "./platform.ts";
 import type { ImportCommands, Platform } from "./platform.ts";
 
@@ -164,20 +167,36 @@ export async function buildServiceImage(
   return image;
 }
 
+/** Where nightly.yml restores and saves the image tarballs, and whether this run writes one. */
+export interface ImageCache {
+  dir: string;
+  /** Write the tarball after a build: scheduled and manual runs on main only (nightly.yml). */
+  save: boolean;
+}
+
 /**
- * Builds the image of the Rust service `name` and imports it into every node of the nightly's
- * k3d cluster; returns the tag. The chart runs it with `services.<name>.image` set to
- * serviceImageValues(name). For Laysi/trustiot-v2#65 and Laysi/trustiot-v2#77.
+ * Imports the image of the Rust service `name` into every node of the nightly's k3d cluster;
+ * returns the tag. With a cache, the image comes from the tarball nightly.yml restored for the
+ * exact key of its inputs (image-cache.ts), and no Rust tool is looked up or run; without one, or
+ * on a miss, it is built, and written for the cache when `save` is set. The chart runs it with
+ * `services.<name>.image` set to serviceImageValues(name). For Laysi/trustiot-v2#65 and
+ * Laysi/trustiot-v2#77.
  */
 export async function loadServiceImage(
   platform: Pick<Platform, "repoRoot" | "log" | "k3d" | "cluster">,
   name: string,
-  options: { tools?: ServiceImageTools; commands?: ImportCommands; pauseMs?: number } = {},
+  options: { tools?: ServiceImageTools; commands?: ImportCommands; pauseMs?: number; cache?: ImageCache } = {},
 ): Promise<string> {
   const commands = options.commands ?? { run, exec };
-  const tools = options.tools ?? (await findServiceImageTools(platform.repoRoot));
   const pause = options.pauseMs === undefined ? {} : { pauseMs: options.pauseMs };
-  const image = await buildServiceImage(platform, name, tools, commands, pause);
+  const image = serviceImageRef(name);
+  const cache = options.cache;
+  const cached = cache !== undefined && (await loadCachedImage(platform.log, cache.dir, name, image, commands));
+  if (!cached) {
+    const tools = options.tools ?? (await findServiceImageTools(platform.repoRoot));
+    await buildServiceImage(platform, name, tools, commands, pause);
+    if (cache?.save === true) await saveImageForCache(platform.log, cache.dir, name, image, commands);
+  }
   await importImageIntoCluster(platform, image, commands, pause);
   return image;
 }

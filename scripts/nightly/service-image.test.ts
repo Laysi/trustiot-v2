@@ -125,6 +125,13 @@ describe("buildServiceImage and loadServiceImage", () => {
           }
           return ok();
         }
+        // The image cache (image-cache.ts): load, inspect and save.
+        if (cmd[0] === "docker" && cmd[1] === "load") return ok();
+        if (cmd[0] === "docker" && cmd[1] === "image") return ok("linux/arm64\n");
+        if (cmd[0] === "docker" && cmd[1] === "save") {
+          writeFileSync(cmd[3]!, "tarball");
+          return ok();
+        }
         if (cmd[0] === TOOLS.containerTool) {
           const file = cmd[cmd.indexOf("--file") + 1]!;
           seen.context = cmd.at(-1);
@@ -190,6 +197,38 @@ describe("buildServiceImage and loadServiceImage", () => {
     expect(await load(commands)).toBe(IMAGE);
     expect(seen.commands.at(-1)).toEqual([K3D, "image", "import", IMAGE, "--cluster", CLUSTER, "--mode", "direct"]);
     expect(readFileSync(logPath, "utf8")).toContain(`image ${IMAGE} confirmed on 1 node(s): ${NODE}`);
+  });
+
+  test("loadServiceImage takes a cached image without looking up or running any Rust tool", async () => {
+    const cacheDir = join(root, "image-cache");
+    mkdirSync(cacheDir);
+    writeFileSync(join(cacheDir, "identity.tar"), "tarball");
+    const { seen, commands } = fakeTools();
+    // No `tools`: on a hit the pinned build tools need not be installed, and are not looked up.
+    const image = await loadServiceImage({ repoRoot: root, log, k3d: K3D, cluster: CLUSTER }, "identity", {
+      commands,
+      pauseMs: 0,
+      cache: { dir: cacheDir, save: true },
+    });
+    expect(image).toBe(IMAGE);
+    expect(seen.commands.map((cmd) => cmd.slice(0, 2))).toEqual([
+      ["docker", "load"],
+      ["docker", "image"],
+      [K3D, "image"],
+    ]);
+    expect(seen.cargoEnv).toBeUndefined();
+  });
+
+  test("loadServiceImage builds on a miss, and writes the image for the cache only when asked", async () => {
+    for (const save of [false, true]) {
+      const cacheDir = mkdtempSync(join(root, "image-cache-"));
+      const { seen, commands } = fakeTools();
+      await loadServiceImage({ repoRoot: root, log, k3d: K3D, cluster: CLUSTER }, "identity", { tools: TOOLS, commands, pauseMs: 0, cache: { dir: cacheDir, save } });
+      expect(seen.cargoEnv).toBeDefined();
+      expect(seen.commands.some((cmd) => cmd[0] === "docker" && cmd[1] === "save")).toBe(save);
+      expect(existsSync(join(cacheDir, "identity.tar"))).toBe(save);
+      expect(seen.commands.at(-1)?.slice(0, 3)).toEqual([K3D, "image", "import"]);
+    }
   });
 
   test("loadServiceImage fails when the image never reaches the node", async () => {

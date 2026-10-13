@@ -125,7 +125,7 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 
 ## nightly
 
-`nightly/` 是 nightly workflow（`.github/workflows/nightly.yml`）的程式：`run.ts` 起 k3d 叢集、對兩份 values 各部署一次並做冒煙測試（`smoke.ts`、`manifests.ts`），輸出 `report.json`、`report.md` 與 `run.log`；`notify.ts` 依結果開、更新或關閉 `nightly-failure` issue。只在 CI 執行（需要 docker、k3d、kubectl、helm），做什麼與失敗怎麼辦見 [CI 與發佈](../docs/architecture/ci-release.md)。`service-image.ts` 以發佈的方式建出 Rust 服務的映像（`deploy/images/<名稱>/image.toml`）並匯入 k3d 節點，給啟用真服務的 nightly 使用，目前還沒有呼叫端（見 [deploy/images/README.md](../deploy/images/README.md)）。`bun test scripts/nightly` 不需要叢集；`renovate.test.ts` 檢查 `renovate.json5` 的釘選規則與 `.prototools` 的 `# renovate:` 註解。
+`nightly/` 是 nightly workflow（`.github/workflows/nightly.yml`）的程式：`run.ts` 起 k3d 叢集、對兩份 values 各部署一次並做冒煙測試（`smoke.ts`、`manifests.ts`），輸出 `report.json`、`report.md` 與 `run.log`；`notify.ts` 依結果開、更新或關閉 `nightly-failure` issue。只在 CI 執行（需要 docker、k3d、kubectl、helm），做什麼與失敗怎麼辦見 [CI 與發佈](../docs/architecture/ci-release.md)。`service-image.ts` 以發佈的方式建出 Rust 服務的映像（`deploy/images/<名稱>/image.toml`）並匯入 k3d 節點，`run.ts` 以它取得 migration Job 的映像；`image-cache.ts` 算出映像輸入的快取 key，輸入沒變時 nightly 從 Actions 快取載入映像而不建置（見 [deploy/images/README.md](../deploy/images/README.md) 與 CI 與發佈的「服務映像」）。`bun test scripts/nightly` 不需要叢集；`renovate.test.ts` 檢查 `renovate.json5` 的釘選規則與 `.prototools` 的 `# renovate:` 註解。
 
 ## release/：發佈流程
 

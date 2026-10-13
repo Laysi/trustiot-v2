@@ -28,7 +28,7 @@ package = "identity"        # Cargo 套件名
 
 ### 在 nightly 的 k3d 使用
 
-`scripts/nightly/service-image.ts` 的 `loadServiceImage(platform, "<目錄名>")` 以發佈相同的 Cargo 指令（`scripts/release/rust-build.ts` 的 `rustCrossCompileCommand`）與同一份 Containerfile 建出映像，標為 `localhost/trustiot-e2e/<目錄名>:nightly`（不推送），再以 `importImageIntoCluster` 匯入每個 k3d 節點並逐一確認。chart 以 `serviceImageValues("<目錄名>")` 的 `repository`、`tag` 與 `pullPolicy: IfNotPresent` 使用它。`scripts/nightly/run.ts` 以它建置 `migrate`（Laysi/trustiot-v2#60），nightly.yml 為此提供 rustup 與 `.prototools` 的 zig、cargo-zigbuild、cargo-auditable；服務映像（`services.identity` 等）由 Laysi/trustiot-v2#65、Laysi/trustiot-v2#77 接上。成本見 [CI 與發佈](../../docs/architecture/ci-release.md) 的「nightly.yml」。
+`scripts/nightly/service-image.ts` 的 `loadServiceImage(platform, "<目錄名>")` 以發佈相同的 Cargo 指令（`scripts/release/rust-build.ts` 的 `rustCrossCompileCommand`）與同一份 Containerfile 建出映像，標為 `localhost/trustiot-e2e/<目錄名>:nightly`（不推送），再以 `importImageIntoCluster` 匯入每個 k3d 節點並逐一確認。chart 以 `serviceImageValues("<目錄名>")` 的 `repository`、`tag` 與 `pullPolicy: IfNotPresent` 使用它。`scripts/nightly/run.ts` 以它建置 `migrate`（Laysi/trustiot-v2#60），輸入沒變時改從 Actions 快取載入（`scripts/nightly/image-cache.ts`），要建置時 nightly.yml 才提供 rustup 與 `.prototools` 的 zig、cargo-zigbuild、cargo-auditable；服務映像（`services.identity` 等）由 Laysi/trustiot-v2#65、Laysi/trustiot-v2#77 接上。成本見 [CI 與發佈](../../docs/architecture/ci-release.md) 的「nightly.yml」。
 
 ## 自帶 Containerfile 的映像
 

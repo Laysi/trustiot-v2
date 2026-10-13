@@ -229,6 +229,50 @@ describe("nightly.yml", () => {
     expect(jobRuns(jobs.notify?.if, { github, needs: { smoke: { result: "success" } } })).toBe(false);
   });
 
+  describe("the cache of the Rust images (Laysi/trustiot-v2#60)", () => {
+    const steps = (jobs.smoke?.steps ?? []) as YamlMap[];
+    const step = (id: string) => {
+      const found = steps.find((s) => s.id === id);
+      if (found === undefined) throw new Error(`smoke has no step ${id}`);
+      return found;
+    };
+    const savesCache = (github: YamlMap) => truthy(evaluate(expressionOf((jobs.smoke?.env as YamlMap).NIGHTLY_SAVES_CACHE), { github }));
+    const hit = (value: boolean) => ({ "migrate-image-cache": { outputs: { "cache-hit": value ? "true" : "false" } } });
+    const save = steps.find((s) => typeof s.uses === "string" && s.uses.startsWith("actions/cache/save@"));
+    const restore = step("migrate-image-cache");
+
+    test("only scheduled and manual runs on main may save; a pull request never does", () => {
+      expect(savesCache(schedule)).toBe(true);
+      expect(savesCache(dispatch)).toBe(true);
+      expect(savesCache({ ...dispatch, ref: "refs/heads/feature" })).toBe(false);
+      for (const github of [pullRequest("synchronize", ["smoke"]), pullRequest("labeled", ["smoke"], "smoke")]) {
+        expect(savesCache(github)).toBe(false);
+      }
+      // The save step itself requires the same decision, whatever the earlier steps did.
+      const env = { NIGHTLY_SAVES_CACHE: "false" };
+      const built = { ...hit(false), "migrate-image-built": { outputs: { built: "true" } } };
+      expect(jobRuns(save?.if, { github: pullRequest("synchronize", ["smoke"]), env, steps: built }, "failure")).toBe(false);
+      expect(jobRuns(save?.if, { github: schedule, env: { NIGHTLY_SAVES_CACHE: "true" }, steps: built }, "failure")).toBe(true);
+      expect(jobRuns(step("migrate-image-built").if, { github: schedule, env: { NIGHTLY_SAVES_CACHE: "true" }, steps: hit(true) })).toBe(false);
+    });
+
+    test("restores by the exact key only, and saves the same path under the same key", () => {
+      expect(restore.uses).toMatch(/^actions\/cache\/restore@[0-9a-f]{40}$/);
+      const restoreWith = restore.with as YamlMap;
+      expect(Object.keys(restoreWith).sort()).toEqual(["key", "path"]);
+      expect(save?.with).toEqual(restoreWith);
+      expect(restoreWith.key).toBe("${{ steps.migrate-image.outputs.key }}");
+      expect(step("migrate-image").run).toBe('bun scripts/nightly/image-cache.ts key migrate >> "$GITHUB_OUTPUT"');
+    });
+
+    test("installs the Rust build tools only on a miss", () => {
+      const tools = steps.find((s) => s.uses === "./.github/actions/setup-proto" && String((s.with as YamlMap).tools).includes("zig"));
+      expect(jobRuns(tools?.if, { steps: hit(true) })).toBe(false);
+      expect(jobRuns(tools?.if, { steps: hit(false) })).toBe(true);
+      expect(steps.indexOf(tools!)).toBeGreaterThan(steps.indexOf(restore));
+    });
+  });
+
   test("both jobs run on the arm64 runner", () => {
     expect(jobs.smoke?.["runs-on"]).toBe("ubuntu-24.04-arm");
     expect(jobs.notify?.["runs-on"]).toBe("ubuntu-24.04-arm");
