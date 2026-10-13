@@ -1,0 +1,1910 @@
+rcheck: queued on the build host at 06:21:19 (Asia/Taipei)
+binfmt aarch64 handler (registered before this run, not changed by it):
+enabled
+interpreter /usr/bin/qemu-aarch64
+flags: POCF
+offset 0
+magic 7f454c460201010000000000000000000200b700
+mask ffffffffffffff00fffffffffffffffffeffffff
+host docker: 29.8.2
+<eval dir>/run/runner: v0.0.0-rc.5 (tag object 5b7c48cbb461f01f7bb9d4c34723c0457e598a2f) → 716740a9fa638a39e4655c54173653a36f2b121d, committed 1791832004 2026-10-13T03:06:44+08:00
+<eval dir>/run/alt: v0.0.0-rc.5 (tag object 5b7c48cbb461f01f7bb9d4c34723c0457e598a2f) → 716740a9fa638a39e4655c54173653a36f2b121d, committed 1791832004 2026-10-13T03:06:44+08:00
+== 2026-10-12T22:21:23Z (+0s) host: aarch64, page size 4096, 20 CPUs
+== 2026-10-12T22:21:23Z (+0s) apt: podman, skopeo and the build basics the runner image has
+debconf: delaying package configuration, since apt-utils is not installed
+== 2026-10-12T22:25:06Z (+223s) rustup 1.29.1 (aarch64-unknown-linux-gnu), checked against the pinned SHA-256
+/tmp/rustup-init: OK
+error: $HOME differs from euid-obtained home directory: you may be using sudo
+error: $HOME directory: /home/runner
+error: euid-obtained home directory: /root
+info: profile set to minimal
+info: default host tuple is aarch64-unknown-linux-gnu
+info: skipping toolchain installation
+== 2026-10-12T22:25:09Z (+226s) proto 0.60.2 (aarch64-unknown-linux-gnu), the archive and SHA-256 of .github/actions/setup-proto
+/tmp/proto.tar.xz: OK
+== 2026-10-12T22:25:15Z (+232s) proto install: the tools of release.yml's plan job (bun helm) and build job (bun zig cargo-zigbuild cargo-auditable syft)
+✨ There's a new version of proto available, 0.63.1 (currently on 0.60.2)
+✨ Run proto upgrade or install from https://moonrepo.dev/docs/proto/install
+[bun] Installing Bun 1.4.2
+[bun] Downloading pre-built archive bun-linux-aarch64.zip
+[bun] Verifying checksum against SHASUMS256.txt
+[bun] Unpacking archive bun-linux-aarch64.zip
+[bun] Bun 1.4.2 installed (6s)
+
+│ SUCCESS
+│ Bun 1.4.2 has been installed to /home/runner/.proto/tools/bun/1.4.2!
+
+[helm] Installing Helm 4.3.0
+[helm] Downloading pre-built archive helm-v4.3.0-linux-arm64.tar.gz
+[helm] Verifying checksum against helm-v4.3.0-linux-arm64.tar.gz.sha256sum
+[helm] Unpacking archive helm-v4.3.0-linux-arm64.tar.gz
+[helm] Helm 4.3.0 installed (4s)
+
+│ SUCCESS
+│ Helm 4.3.0 has been installed to /home/runner/.proto/tools/helm/4.3.0!
+
+[zig] Installing Zig 0.16.0
+[zig] Downloading pre-built archive zig-aarch64-linux-0.16.0.tar.xz
+[zig] Verifying checksum against zig-aarch64-linux-0.16.0.tar.xz.minisig
+[zig] Unpacking archive zig-aarch64-linux-0.16.0.tar.xz
+[zig] Zig 0.16.0 installed (46s)
+
+│ SUCCESS
+│ Zig 0.16.0 has been installed to /home/runner/.proto/tools/zig/0.16.0!
+
+[cargo-zigbuild] Installing cargo-zigbuild 0.23.4
+[cargo-zigbuild] Downloading pre-built archive cargo-zigbuild-aarch64-unknown-linux-gnu.tar.xz
+[cargo-zigbuild] Verifying checksum against cargo-zigbuild-aarch64-unknown-linux-gnu.tar.xz.sha256
+[cargo-zigbuild] Unpacking archive cargo-zigbuild-aarch64-unknown-linux-gnu.tar.xz
+[cargo-zigbuild] cargo-zigbuild 0.23.4 installed (3s)
+
+│ SUCCESS
+│ cargo-zigbuild 0.23.4 has been installed to /home/runner/.proto/tools/cargo-zigbuild/0.23.4!
+
+[cargo-auditable] Installing cargo-auditable 0.7.6
+[cargo-auditable] Downloading pre-built archive cargo-auditable-aarch64-unknown-linux-gnu.tar.xz
+[cargo-auditable] Verifying checksum against cargo-auditable-aarch64-unknown-linux-gnu.tar.xz.sha256
+[cargo-auditable] Unpacking archive cargo-auditable-aarch64-unknown-linux-gnu.tar.xz
+[cargo-auditable] cargo-auditable 0.7.6 installed (3s)
+
+│ SUCCESS
+│ cargo-auditable 0.7.6 has been installed to /home/runner/.proto/tools/cargo-auditable/0.7.6!
+
+[syft] Installing syft 1.52.0
+[syft] Downloading pre-built archive syft_1.52.0_linux_arm64.tar.gz
+[syft] Verifying checksum against syft_1.52.0_checksums.txt
+[syft] Unpacking archive syft_1.52.0_linux_arm64.tar.gz
+[syft] syft 1.52.0 installed (5s)
+
+│ SUCCESS
+│ syft 1.52.0 has been installed to /home/runner/.proto/tools/syft/1.52.0!
+
+uname -m: aarch64
+page size: 4096
+PRETTY_NAME="Ubuntu 24.04.5 LTS"
+podman version 4.9.3
+skopeo version 1.13.3
+time="2026-10-12T22:26:43Z" level=error msg="Getting info on OCI runtime crun: getting version of OCI runtime crun: `/usr/bin/crun --version` failed: Failed to re-execute libcrun via memory file descriptor\n  (exit status 1)"
+podman graph driver: overlay
+Ubuntu packages:
+  buildah 1.33.7+ds1-1ubuntu0.24.04.3
+  conmon 2.1.10+ds1-1build2
+  crun 1.14.1-1
+  golang-github-containers-common 0.57.4+ds1-2ubuntu0.2
+  golang-github-containers-image 5.29.2-2
+  podman 4.9.3+ds1-1ubuntu0.2
+  skopeo 1.13.3+ds1-2ubuntu0.24.04.3
+rustup 1.29.1 (d95a37b6a 2026-08-13)
+proto 0.60.2
+bun: /home/runner/.proto/tools/bun/1.4.2/bun: ELF 64-bit LSB executable, ARM aarch64
+helm: /home/runner/.proto/tools/helm/4.3.0/helm: ELF 64-bit LSB executable, ARM aarch64
+zig: /home/runner/.proto/tools/zig/0.16.0/zig: ELF 64-bit LSB executable, ARM aarch64
+cargo-zigbuild: /home/runner/.proto/tools/cargo-zigbuild/0.23.4/cargo-zigbuild: ELF 64-bit LSB pie executable, ARM aarch64
+cargo-auditable: /home/runner/.proto/tools/cargo-auditable/0.7.6/cargo-auditable: ELF 64-bit LSB pie executable, ARM aarch64
+syft: /home/runner/.proto/tools/syft/1.52.0/syft: ELF 64-bit LSB executable, ARM aarch64
+bun 1.4.2
+v4.3.0+gbec5b06
+zig 0.16.0
+cargo-zigbuild 0.23.4
+Version:       1.52.0
+== 2026-10-12T22:27:38Z (+375s) [runner] plan.ts --tag v0.0.0-rc.5 in /home/runner/work/trustiot-v2/trustiot-v2
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.5 → version 0.0.0-rc.5 (prerelease), commit 716740a9fa638a39e4655c54173653a36f2b121d
+[release:plan] image ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.5 (Rust package identity)
+[release:plan] image ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.5 (deploy/images/postgres)
+[release:plan] image ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.5 (Rust package release-selftest)
+[release:plan] chart ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.5
+[release:plan] notes start from v0.0.0-rc.4
+== 2026-10-12T22:27:43Z (+380s) [runner] build.ts with CARGO_HOME=/home/runner/.cargo
+info: syncing channel updates for 1.99.0-aarch64-unknown-linux-gnu
+
+  1.99.0-aarch64-unknown-linux-gnu unchanged - rustc 1.99.0 (b940084d7 2026-09-28)
+
+info: downloading component rust-std
+[release:build] cross-compiling identity, release-selftest for aarch64-unknown-linux-musl
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded atoi v2.0.0
+  Downloaded atomic-waker v1.1.2
+  Downloaded block-buffer v0.10.4
+  Downloaded block-buffer v0.12.1
+  Downloaded cpufeatures v0.2.17
+  Downloaded cfg-if v1.0.5
+  Downloaded cpufeatures v0.3.1
+  Downloaded crc v3.4.0
+  Downloaded crypto-common v0.1.7
+  Downloaded generic-array v0.14.7
+  Downloaded futures-io v0.3.34
+  Downloaded errno v0.3.14
+  Downloaded equivalent v1.0.2
+  Downloaded futures-task v0.3.34
+  Downloaded futures-sink v0.3.34
+  Downloaded form_urlencoded v1.2.2
+  Downloaded heck v0.5.0
+  Downloaded httpdate v1.0.3
+  Downloaded futures-macro v0.3.34
+  Downloaded http-body v1.1.0
+  Downloaded itoa v1.0.18
+  Downloaded mime v0.3.17
+  Downloaded lazy_static v1.5.1
+  Downloaded futures-core v0.3.34
+  Downloaded byteorder v1.5.0
+  Downloaded cmov v0.5.4
+  Downloaded anyhow v1.0.104
+  Downloaded axum-core v0.5.6
+  Downloaded autocfg v1.5.1
+  Downloaded crc-catalog v2.5.0
+  Downloaded crossbeam-queue v0.3.14
+  Downloaded rustc_version v0.4.1
+  Downloaded crypto-common v0.2.2
+  Downloaded digest v0.10.7
+  Downloaded digest v0.11.3
+  Downloaded displaydoc v0.2.7
+  Downloaded dotenvy v0.15.7
+  Downloaded either v1.19.0
+  Downloaded foldhash v0.2.0
+  Downloaded futures-executor v0.3.34
+  Downloaded scopeguard v1.2.0
+  Downloaded idna_adapter v1.2.2
+  Downloaded http-body-util v0.1.5
+  Downloaded humantime v2.4.0
+  Downloaded ipnet v2.12.2
+  Downloaded md-5 v0.11.0
+  Downloaded lock_api v0.4.14
+  Downloaded find-msvc-tools v0.1.14
+  Downloaded hex v0.4.3
+  Downloaded async-trait v0.1.92
+  Downloaded chacha20 v0.10.2
+  Downloaded yoke-derive v0.8.4
+  Downloaded zeroize v1.9.1
+  Downloaded zmij v1.0.23
+  Downloaded base64ct v1.8.3
+  Downloaded serde_urlencoded v0.7.1
+  Downloaded crossbeam-utils v0.8.23
+  Downloaded event-listener v5.4.2
+  Downloaded ed25519 v3.0.0
+  Downloaded futures-channel v0.3.34
+  Downloaded httparse v1.10.1
+  Downloaded hybrid-array v0.4.15
+  Downloaded litemap v0.8.3
+  Downloaded matchit v0.8.4
+  Downloaded ctutils v0.4.3
+  Downloaded tokio-macros v2.7.2
+  Downloaded sync_wrapper v1.0.2
+  Downloaded tower-layer v0.3.3
+  Downloaded version_check v0.9.5
+  Downloaded parking v2.2.1
+  Downloaded zerovec-derive v0.11.6
+  Downloaded zerofrom v0.1.8
+  Downloaded zerofrom-derive v0.1.8
+  Downloaded bitflags v2.13.2
+  Downloaded getrandom v0.2.17
+  Downloaded getrandom v0.3.4
+  Downloaded getrandom v0.4.3
+  Downloaded hashlink v0.11.1
+  Downloaded percent-encoding v2.3.2
+  Downloaded hmac v0.13.0
+  Downloaded icu_provider v2.3.1
+  Downloaded allocator-api2 v0.2.21
+  Downloaded const-oid v0.10.2
+  Downloaded serde_spanned v1.1.2
+  Downloaded once_cell v1.21.4
+  Downloaded bytes v1.12.1
+  Downloaded opentelemetry-http v0.33.1
+  Downloaded writeable v0.6.4
+  Downloaded icu_normalizer_data v2.3.0
+  Downloaded icu_locale_core v2.3.0
+  Downloaded log v0.4.34
+  Downloaded flume v0.12.0
+  Downloaded signature v3.0.0
+  Downloaded base64 v0.23.1
+  Downloaded sha1 v0.11.0
+  Downloaded uuid v1.28.0
+  Downloaded yoke v0.8.3
+  Downloaded base64 v0.22.1
+  Downloaded futures-intrusive v0.5.0
+  Downloaded icu_collections v2.3.0
+  Downloaded stable_deref_trait v1.2.1
+  Downloaded opentelemetry-otlp v0.33.1
+  Downloaded icu_properties v2.3.0
+  Downloaded indexmap v2.14.2
+  Downloaded mio v1.2.4
+  Downloaded memchr v2.8.3
+  Downloaded subtle v2.6.1
+  Downloaded ed25519-dalek v3.0.0
+  Downloaded opentelemetry v0.33.1
+  Downloaded http v1.5.0
+  Downloaded cc v1.7.0
+  Downloaded hyper-util v0.1.21
+  Downloaded der v0.8.2
+  Downloaded zerotrie v0.2.5
+  Downloaded thread_local v1.1.10
+  Downloaded idna v1.1.0
+  Downloaded hashbrown v0.16.1
+  Downloaded tower-service v0.3.3
+  Downloaded itertools v0.14.0
+  Downloaded axum v0.8.9
+  Downloaded hashbrown v0.17.1
+  Downloaded hkdf v0.13.0
+  Downloaded icu_properties_data v2.3.0
+  Downloaded futures-util v0.3.34
+  Downloaded hyper v1.12.0
+  Downloaded want v0.3.2
+  Downloaded try-lock v0.2.5
+  Downloaded zerovec v0.11.8
+  Downloaded untrusted v0.9.0
+  Downloaded winnow v1.0.4
+  Downloaded pem-rfc7468 v1.0.0
+  Downloaded prost-derive v0.14.4
+  Downloaded rand_chacha v0.9.0
+  Downloaded rand_core v0.9.5
+  Downloaded sha2 v0.10.9
+  Downloaded signal-hook-registry v1.4.8
+  Downloaded vcpkg v0.2.15
+  Downloaded chrono v0.4.45
+  Downloaded opentelemetry-proto v0.33.1
+  Downloaded shlex v2.0.1
+  Downloaded slab v0.4.12
+  Downloaded spki v0.8.1
+  Downloaded utf8_iter v1.0.4
+  Downloaded thiserror-impl v2.0.21
+  Downloaded toml_writer v1.1.3+spec-1.1.0
+  Downloaded pin-project-lite v0.2.17
+  Downloaded pkg-config v0.3.34
+  Downloaded ppv-lite86 v0.2.21
+  Downloaded opentelemetry_sdk v0.33.1
+  Downloaded curve25519-dalek v5.0.0
+  Downloaded potential_utf v0.1.6
+  Downloaded zerocopy v0.8.62
+  Downloaded rand_core v0.10.1
+  Downloaded quote v1.0.47
+  Downloaded icu_normalizer v2.3.0
+  Downloaded serde_path_to_error v0.1.20
+  Downloaded libc v0.2.190
+  Downloaded sqlx-macros v0.9.0
+  Downloaded stringprep v0.1.5
+  Downloaded tinystr v0.8.4
+  Downloaded thiserror v2.0.21
+  Downloaded synstructure v0.14.0
+  Downloaded tracing-log v0.2.0
+  Downloaded whoami v2.1.3
+  Downloaded num-traits v0.2.19
+  Downloaded sha2 v0.11.0
+  Downloaded parking_lot v0.12.5
+  Downloaded prost v0.14.4
+  Downloaded pkcs8 v0.11.0
+  Downloaded rustls-pki-types v1.15.1
+  Downloaded smallvec v1.16.3
+  Downloaded spin v0.9.9
+  Downloaded toml_parser v1.1.5+spec-1.1.0
+  Downloaded tokio-stream v0.1.19
+  Downloaded libsqlite3-sys v0.37.0
+  Downloaded tracing-attributes v0.1.31
+  Downloaded sharded-slab v0.1.7
+  Downloaded unicode-ident v1.0.26
+  Downloaded parking_lot_core v0.9.12
+  Downloaded semver v1.0.28
+  Downloaded unicode-bidi v0.3.18
+  Downloaded ryu v1.0.23
+  Downloaded serde_derive v1.0.229
+  Downloaded serde_core v1.0.229
+  Downloaded socket2 v0.6.5
+  Downloaded tinyvec v1.13.3
+  Downloaded toml_datetime v1.1.2+spec-1.1.0
+  Downloaded toml v1.1.8+spec-1.1.0
+  Downloaded tracing-opentelemetry v0.34.0
+  Downloaded tracing-core v0.1.36
+  Downloaded unicode-properties v0.1.4
+  Downloaded sqlx-macros-core v0.9.0
+  Downloaded sqlx-mysql v0.9.0
+  Downloaded utoipa v6.0.0
+  Downloaded proc-macro2 v1.0.107
+  Downloaded serde v1.0.229
+  Downloaded sqlx-sqlite v0.9.0
+  Downloaded url v2.5.8
+  Downloaded rand v0.9.5
+  Downloaded rustls-webpki v0.103.15
+  Downloaded tower v0.5.3
+  Downloaded typenum v1.20.1
+  Downloaded rand v0.10.3
+  Downloaded unicode-normalization v0.1.25
+  Downloaded tokio-util v0.7.20
+  Downloaded serde_json v1.0.151
+  Downloaded sqlx-core v0.9.0
+  Downloaded reqwest v0.13.5
+  Downloaded sqlx-postgres v0.9.0
+  Downloaded tower-http v0.6.11
+  Downloaded tower-http v0.7.1
+  Downloaded utoipa-gen v6.0.1
+  Downloaded tracing-subscriber v0.3.23
+  Downloaded sqlx v0.9.0
+  Downloaded syn v2.0.119
+  Downloaded syn v3.0.7
+  Downloaded rustls v0.23.45
+  Downloaded tracing v0.1.44
+  Downloaded tokio v1.53.2
+  Downloaded ring v0.17.14
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.26
+   Compiling quote v1.0.47
+   Compiling libc v0.2.190
+   Compiling cfg-if v1.0.5
+   Compiling futures-core v0.3.34
+   Compiling pin-project-lite v0.2.17
+   Compiling bytes v1.12.1
+   Compiling stable_deref_trait v1.2.1
+   Compiling memchr v2.8.3
+   Compiling futures-sink v0.3.34
+   Compiling itoa v1.0.18
+   Compiling serde_core v1.0.229
+   Compiling once_cell v1.21.4
+   Compiling typenum v1.20.1
+   Compiling smallvec v1.16.3
+   Compiling futures-task v0.3.34
+   Compiling futures-io v0.3.34
+   Compiling tracing-core v0.1.36
+   Compiling log v0.4.34
+   Compiling slab v0.4.12
+   Compiling percent-encoding v2.3.2
+   Compiling writeable v0.6.4
+   Compiling litemap v0.8.3
+   Compiling utf8_iter v1.0.4
+   Compiling icu_properties_data v2.3.0
+   Compiling icu_normalizer_data v2.3.0
+   Compiling shlex v2.0.1
+   Compiling errno v0.3.14
+   Compiling mio v1.2.4
+   Compiling socket2 v0.6.5
+   Compiling find-msvc-tools v0.1.14
+   Compiling zeroize v1.9.1
+   Compiling syn v3.0.7
+   Compiling syn v2.0.119
+   Compiling signal-hook-registry v1.4.8
+   Compiling http v1.5.0
+   Compiling thiserror v2.0.21
+   Compiling cc v1.7.0
+   Compiling form_urlencoded v1.2.2
+   Compiling hybrid-array v0.4.15
+   Compiling futures-channel v0.3.34
+   Compiling tower-service v0.3.3
+   Compiling cmov v0.5.4
+   Compiling version_check v0.9.5
+   Compiling tower-layer v0.3.3
+   Compiling ctutils v0.4.3
+   Compiling httparse v1.10.1
+   Compiling sync_wrapper v1.0.2
+   Compiling http-body v1.1.0
+   Compiling generic-array v0.14.7
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling try-lock v0.2.5
+   Compiling equivalent v1.0.2
+   Compiling bitflags v2.13.2
+   Compiling autocfg v1.5.1
+   Compiling ring v0.17.14
+   Compiling getrandom v0.3.4
+   Compiling zerocopy v0.8.62
+   Compiling want v0.3.2
+   Compiling digest v0.11.3
+   Compiling http-body-util v0.1.5
+   Compiling num-traits v0.2.19
+   Compiling getrandom v0.4.3
+   Compiling parking_lot_core v0.9.12
+   Compiling httpdate v1.0.3
+   Compiling serde v1.0.229
+   Compiling rand_core v0.10.1
+   Compiling atomic-waker v1.1.2
+   Compiling zmij v1.0.23
+   Compiling synstructure v0.14.0
+   Compiling rustls-pki-types v1.15.1
+   Compiling getrandom v0.2.17
+   Compiling subtle v2.6.1
+   Compiling base64 v0.23.1
+   Compiling base64ct v1.8.3
+   Compiling crossbeam-utils v0.8.23
+   Compiling tracing-attributes v0.1.31
+   Compiling scopeguard v1.2.0
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.4
+   Compiling zerovec-derive v0.11.6
+   Compiling displaydoc v0.2.7
+   Compiling futures-macro v0.3.34
+   Compiling tokio-macros v2.7.2
+   Compiling thiserror-impl v2.0.21
+   Compiling tracing v0.1.44
+   Compiling serde_derive v1.0.229
+   Compiling untrusted v0.9.0
+   Compiling futures-util v0.3.34
+   Compiling zerofrom v0.1.8
+   Compiling tokio v1.53.2
+   Compiling anyhow v1.0.104
+   Compiling yoke v0.8.3
+   Compiling ipnet v2.12.2
+   Compiling serde_json v1.0.151
+   Compiling hashbrown v0.17.1
+   Compiling opentelemetry v0.33.1
+   Compiling zerovec v0.11.8
+   Compiling zerotrie v0.2.5
+   Compiling ppv-lite86 v0.2.21
+   Compiling indexmap v2.14.2
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling pem-rfc7468 v1.0.0
+   Compiling lock_api v0.4.14
+   Compiling icu_locale_core v2.3.0
+   Compiling icu_collections v2.3.0
+   Compiling rand_core v0.9.5
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling rustls v0.23.45
+   Compiling foldhash v0.2.0
+   Compiling const-oid v0.10.2
+   Compiling icu_provider v2.3.1
+   Compiling allocator-api2 v0.2.21
+   Compiling either v1.19.0
+   Compiling semver v1.0.28
+   Compiling der v0.8.2
+   Compiling parking_lot v0.12.5
+   Compiling digest v0.10.7
+   Compiling itertools v0.14.0
+   Compiling icu_properties v2.3.0
+   Compiling icu_normalizer v2.3.0
+   Compiling tower v0.5.3
+   Compiling hyper v1.12.0
+   Compiling hashbrown v0.16.1
+   Compiling rustc_version v0.4.1
+   Compiling rand_chacha v0.9.0
+   Compiling idna_adapter v1.2.2
+   Compiling hyper-util v0.1.21
+   Compiling idna v1.1.0
+   Compiling cpufeatures v0.2.17
+   Compiling cpufeatures v0.3.1
+   Compiling tinyvec v1.13.3
+   Compiling parking v2.2.1
+   Compiling url v2.5.8
+   Compiling crc-catalog v2.5.0
+   Compiling event-listener v5.4.2
+   Compiling crc v3.4.0
+   Compiling prost-derive v0.14.4
+   Compiling unicode-normalization v0.1.25
+   Compiling rustls-webpki v0.103.15
+   Compiling sha2 v0.11.0
+   Compiling tower-http v0.6.11
+   Compiling sha2 v0.10.9
+   Compiling crossbeam-queue v0.3.14
+   Compiling uuid v1.28.0
+   Compiling reqwest v0.13.5
+   Compiling rand v0.9.5
+   Compiling hashlink v0.11.1
+   Compiling curve25519-dalek v5.0.0
+   Compiling spki v0.8.1
+   Compiling futures-intrusive v0.5.0
+   Compiling tokio-stream v0.1.19
+   Compiling futures-executor v0.3.34
+   Compiling webpki-roots v1.0.9 (/home/runner/work/trustiot-v2/trustiot-v2/crates/webpki-roots-empty)
+   Compiling chacha20 v0.10.2
+   Compiling hmac v0.13.0
+   Compiling lazy_static v1.5.1
+   Compiling unicode-bidi v0.3.18
+   Compiling unicode-properties v0.1.4
+   Compiling base64 v0.22.1
+   Compiling rand v0.10.3
+   Compiling hkdf v0.13.0
+   Compiling opentelemetry_sdk v0.33.1
+   Compiling sharded-slab v0.1.7
+   Compiling pkcs8 v0.11.0
+   Compiling utoipa-gen v6.0.1
+   Compiling prost v0.14.4
+   Compiling stringprep v0.1.5
+   Compiling atoi v2.0.0
+   Compiling async-trait v0.1.92
+   Compiling md-5 v0.11.0
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.10
+   Compiling whoami v2.1.3
+   Compiling dotenvy v0.15.7
+   Compiling hex v0.4.3
+   Compiling signature v3.0.0
+   Compiling sqlx-core v0.9.0
+   Compiling byteorder v1.5.0
+   Compiling mime v0.3.17
+   Compiling ryu v1.0.23
+   Compiling winnow v1.0.4
+   Compiling serde_urlencoded v0.7.1
+   Compiling opentelemetry-proto v0.33.1
+   Compiling axum-core v0.5.6
+   Compiling toml_parser v1.1.5+spec-1.1.0
+   Compiling ed25519 v3.0.0
+   Compiling opentelemetry-http v0.33.1
+   Compiling tracing-subscriber v0.3.23
+   Compiling chrono v0.4.45
+   Compiling sqlx-postgres v0.9.0
+   Compiling utoipa v6.0.0
+   Compiling toml_datetime v1.1.2+spec-1.1.0
+   Compiling serde_spanned v1.1.2
+   Compiling serde_path_to_error v0.1.20
+   Compiling toml_writer v1.1.3+spec-1.1.0
+   Compiling matchit v0.8.4
+   Compiling ed25519-dalek v3.0.0
+   Compiling tracing-opentelemetry v0.34.0
+   Compiling toml v1.1.8+spec-1.1.0
+   Compiling opentelemetry-otlp v0.33.1
+   Compiling axum v0.8.9
+   Compiling tokio-util v0.7.20
+   Compiling tower-http v0.7.1
+   Compiling humantime v2.4.0
+   Compiling contract v0.1.0 (/home/runner/work/trustiot-v2/trustiot-v2/crates/contract)
+   Compiling release-selftest v0.1.0 (/home/runner/work/trustiot-v2/trustiot-v2/tools/release-selftest)
+   Compiling sqlx v0.9.0
+   Compiling service-kit v0.1.0 (/home/runner/work/trustiot-v2/trustiot-v2/crates/service-kit)
+   Compiling identity v0.1.0 (/home/runner/work/trustiot-v2/trustiot-v2/services/identity)
+warning: linker stderr: ignoring deprecated linker optimization setting '1'
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `release-selftest` (bin "release-selftest") generated 1 warning
+warning: `identity` (bin "identity") generated 1 warning (1 duplicate)
+    Finished `release` profile [optimized] target(s) in 22m 19s
+[release:build] building ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.5 for linux/arm64
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+Trying to pull gcr.io/distroless/static-debian13@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3...
+Getting image source signatures
+Copying blob sha256:d6b1b89eccacc15c2420b2776d72c1dae334a00805ed9af54bf2f71e4d536f28
+Copying blob sha256:f6069939f718601b38d25ec5ed5631ed047e4da24acec2e252f8f29d251be718
+Copying blob sha256:401d177fd1e8a1e0d7a48139788d026e9a2e919ccb122bedd110ac7cf351f53e
+Copying blob sha256:218cf840d0d95a86231eb9d33d26ac8a520a4299c6096cb70a0c2fb2a87c9e0a
+Copying blob sha256:2780920e5dbfbe103d03a583ed75345306e572ec5a48cb10361f046767d9f29a
+Copying blob sha256:c172f21841dff4c8cf45cde46589c1c2616cefe7e819965e92e6d3475c428aa0
+Copying blob sha256:7c12895b777bcaa8ccae0605b4de635b68fc32d60fa08f421dc3818bf55ee212
+Copying blob sha256:3214acf345c0cc6bbdb56b698a41ccdefc624a09d6beb0d38b5de0b2303ecaf4
+Copying blob sha256:52630fc75a18675c530ed9eba5f55eca09b03e91bd5bc15307918bbc1a7e7296
+Copying blob sha256:dd64bf2dd177757451a98fcdc999a339c35dee5d9872d8f4dc69c8f3c4dd0112
+Copying blob sha256:b839dfae01f66e15c6a8b63520557ed315bdfe036342fa7a0c537259f10d7a9a
+Copying blob sha256:ebddc55facdc6b1f7e0f30816a5fc7cc62f38abdf76c0a8b0a0ce52085754795
+Copying blob sha256:6ed1ef0cb1159b9c93a24ceb88b987c6b3a8adff7160940c7c5e6bfc001f1766
+Copying config sha256:bcff74c94c33712c3758af70114dfb388180cf43e789031b9a6d4195195bf97e
+Writing manifest to image destination
+STEP 2/5: COPY --chmod=0555 identity /usr/local/bin/identity
+--> 9ecae019ab79
+STEP 3/5: USER 65532:65532
+--> 6d8c20a24d72
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/identity"]
+--> 0b1966ad5b0e
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="716740a9fa638a39e4655c54173653a36f2b121d" "org.opencontainers.image.version"="0.0.0-rc.5" "org.opencontainers.image.title"="identity"
+COMMIT localhost/trustiot-release/identity:0.0.0-rc.5
+--> b6081d416d6d
+Successfully tagged localhost/trustiot-release/identity:0.0.0-rc.5
+b6081d416d6d5661f0d07076f6d3bc4e7856900b9cbcdc9bc27e72f922bd9fa1
+[release:build] ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.5 → sha256:4bb4177e3a5bc0f8d147a480050da98330ab5d81aa010d9d30e9b41233dd26ca, SBOM SPDX-2.3 with 213 packages
+[release:build] building ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.5 for linux/arm64
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+STEP 2/5: COPY --chmod=0555 release-selftest /usr/local/bin/release-selftest
+--> 674a8e28d3f6
+STEP 3/5: USER 65532:65532
+--> f29c8869e5dc
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/release-selftest"]
+--> 237fb267e357
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="716740a9fa638a39e4655c54173653a36f2b121d" "org.opencontainers.image.version"="0.0.0-rc.5" "org.opencontainers.image.title"="release-selftest"
+COMMIT localhost/trustiot-release/release-selftest:0.0.0-rc.5
+--> 7a7f61ea77d7
+Successfully tagged localhost/trustiot-release/release-selftest:0.0.0-rc.5
+7a7f61ea77d7ff92ecc6e2ebfe91f2e159f89c94d331469076ea11b7c40db585
+[release:build] ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.5 → sha256:6f37a60c17808b4637232e8fa594bbad82a05834e11d375484f04d1f2dcb31be, SBOM SPDX-2.3 with 13 packages
+== 2026-10-12T22:51:10Z (+1787s) [runner] build.ts done
+== 2026-10-12T22:51:10Z (+1787s) [alt] plan.ts --tag v0.0.0-rc.5 in /work/repo
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.5 → version 0.0.0-rc.5 (prerelease), commit 716740a9fa638a39e4655c54173653a36f2b121d
+[release:plan] image ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.5 (Rust package identity)
+[release:plan] image ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.5 (deploy/images/postgres)
+[release:plan] image ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.5 (Rust package release-selftest)
+[release:plan] chart ghcr.io/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.5
+[release:plan] notes start from v0.0.0-rc.4
+== 2026-10-12T22:51:14Z (+1791s) [alt] build.ts with CARGO_HOME=/work/cargo-alt
+info: syncing channel updates for 1.99.0-aarch64-unknown-linux-gnu
+
+  1.99.0-aarch64-unknown-linux-gnu unchanged - rustc 1.99.0 (b940084d7 2026-09-28)
+
+info: component rust-std for target aarch64-unknown-linux-musl is up to date
+[release:build] cross-compiling identity, release-selftest for aarch64-unknown-linux-musl
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded atomic-waker v1.1.2
+  Downloaded cfg-if v1.0.5
+  Downloaded block-buffer v0.12.1
+  Downloaded want v0.3.2
+  Downloaded cpufeatures v0.3.1
+  Downloaded crypto-common v0.2.2
+  Downloaded crypto-common v0.1.7
+  Downloaded crc v3.4.0
+  Downloaded cpufeatures v0.2.17
+  Downloaded equivalent v1.0.2
+  Downloaded errno v0.3.14
+  Downloaded futures-io v0.3.34
+  Downloaded futures-task v0.3.34
+  Downloaded futures-core v0.3.34
+  Downloaded futures-macro v0.3.34
+  Downloaded futures-sink v0.3.34
+  Downloaded block-buffer v0.10.4
+  Downloaded generic-array v0.14.7
+  Downloaded heck v0.5.0
+  Downloaded httpdate v1.0.3
+  Downloaded zerofrom-derive v0.1.8
+  Downloaded http-body v1.1.0
+  Downloaded hex v0.4.3
+  Downloaded itoa v1.0.18
+  Downloaded idna_adapter v1.2.2
+  Downloaded lazy_static v1.5.1
+  Downloaded mime v0.3.17
+  Downloaded yoke-derive v0.8.4
+  Downloaded atoi v2.0.0
+  Downloaded autocfg v1.5.1
+  Downloaded byteorder v1.5.0
+  Downloaded potential_utf v0.1.6
+  Downloaded ctutils v0.4.3
+  Downloaded digest v0.11.3
+  Downloaded ed25519 v3.0.0
+  Downloaded either v1.19.0
+  Downloaded dotenvy v0.15.7
+  Downloaded digest v0.10.7
+  Downloaded foldhash v0.2.0
+  Downloaded hashlink v0.11.1
+  Downloaded find-msvc-tools v0.1.14
+  Downloaded anyhow v1.0.104
+  Downloaded tower-layer v0.3.3
+  Downloaded base64ct v1.8.3
+  Downloaded cmov v0.5.4
+  Downloaded futures-executor v0.3.34
+  Downloaded rustc_version v0.4.1
+  Downloaded http-body-util v0.1.5
+  Downloaded humantime v2.4.0
+  Downloaded percent-encoding v2.3.2
+  Downloaded ipnet v2.12.2
+  Downloaded serde_urlencoded v0.7.1
+  Downloaded scopeguard v1.2.0
+  Downloaded tower-service v0.3.3
+  Downloaded axum-core v0.5.6
+  Downloaded md-5 v0.11.0
+  Downloaded subtle v2.6.1
+  Downloaded async-trait v0.1.92
+  Downloaded stable_deref_trait v1.2.1
+  Downloaded sync_wrapper v1.0.2
+  Downloaded tokio-macros v2.7.2
+  Downloaded crossbeam-utils v0.8.23
+  Downloaded crc-catalog v2.5.0
+  Downloaded crossbeam-queue v0.3.14
+  Downloaded displaydoc v0.2.7
+  Downloaded futures-channel v0.3.34
+  Downloaded form_urlencoded v1.2.2
+  Downloaded event-listener v5.4.2
+  Downloaded hmac v0.13.0
+  Downloaded getrandom v0.2.17
+  Downloaded serde_spanned v1.1.2
+  Downloaded hybrid-array v0.4.15
+  Downloaded matchit v0.8.4
+  Downloaded litemap v0.8.3
+  Downloaded utf8_iter v1.0.4
+  Downloaded chacha20 v0.10.2
+  Downloaded bitflags v2.13.2
+  Downloaded const-oid v0.10.2
+  Downloaded tracing-attributes v0.1.31
+  Downloaded untrusted v0.9.0
+  Downloaded httparse v1.10.1
+  Downloaded getrandom v0.4.3
+  Downloaded lock_api v0.4.14
+  Downloaded log v0.4.34
+  Downloaded icu_provider v2.3.1
+  Downloaded signature v3.0.0
+  Downloaded try-lock v0.2.5
+  Downloaded allocator-api2 v0.2.21
+  Downloaded getrandom v0.3.4
+  Downloaded flume v0.12.0
+  Downloaded tracing-log v0.2.0
+  Downloaded bytes v1.12.1
+  Downloaded icu_locale_core v2.3.0
+  Downloaded icu_normalizer_data v2.3.0
+  Downloaded tracing-core v0.1.36
+  Downloaded sha1 v0.11.0
+  Downloaded base64 v0.22.1
+  Downloaded base64 v0.23.1
+  Downloaded futures-intrusive v0.5.0
+  Downloaded unicode-bidi v0.3.18
+  Downloaded thread_local v1.1.10
+  Downloaded version_check v0.9.5
+  Downloaded zerofrom v0.1.8
+  Downloaded icu_collections v2.3.0
+  Downloaded whoami v2.1.3
+  Downloaded zeroize v1.9.1
+  Downloaded zmij v1.0.23
+  Downloaded opentelemetry-http v0.33.1
+  Downloaded parking v2.2.1
+  Downloaded zerovec-derive v0.11.6
+  Downloaded pkg-config v0.3.34
+  Downloaded rand_chacha v0.9.0
+  Downloaded pem-rfc7468 v1.0.0
+  Downloaded ed25519-dalek v3.0.0
+  Downloaded serde_path_to_error v0.1.20
+  Downloaded tracing-opentelemetry v0.34.0
+  Downloaded unicode-properties v0.1.4
+  Downloaded sha2 v0.10.9
+  Downloaded slab v0.4.12
+  Downloaded shlex v2.0.1
+  Downloaded thiserror v2.0.21
+  Downloaded synstructure v0.14.0
+  Downloaded memchr v2.8.3
+  Downloaded mio v1.2.4
+  Downloaded prost-derive v0.14.4
+  Downloaded rand_core v0.10.1
+  Downloaded url v2.5.8
+  Downloaded rand_core v0.9.5
+  Downloaded quote v1.0.47
+  Downloaded signal-hook-registry v1.4.8
+  Downloaded http v1.5.0
+  Downloaded spki v0.8.1
+  Downloaded sqlx-macros v0.9.0
+  Downloaded icu_properties v2.3.0
+  Downloaded utoipa v6.0.0
+  Downloaded tinystr v0.8.4
+  Downloaded toml_datetime v1.1.2+spec-1.1.0
+  Downloaded indexmap v2.14.2
+  Downloaded yoke v0.8.3
+  Downloaded num-traits v0.2.19
+  Downloaded writeable v0.6.4
+  Downloaded cc v1.7.0
+  Downloaded once_cell v1.21.4
+  Downloaded parking_lot v0.12.5
+  Downloaded hyper-util v0.1.21
+  Downloaded ppv-lite86 v0.2.21
+  Downloaded rustls-pki-types v1.15.1
+  Downloaded smallvec v1.16.3
+  Downloaded stringprep v0.1.5
+  Downloaded spin v0.9.9
+  Downloaded thiserror-impl v2.0.21
+  Downloaded toml_writer v1.1.3+spec-1.1.0
+  Downloaded prost v0.14.4
+  Downloaded typenum v1.20.1
+  Downloaded der v0.8.2
+  Downloaded pkcs8 v0.11.0
+  Downloaded semver v1.0.28
+  Downloaded idna v1.1.0
+  Downloaded unicode-normalization v0.1.25
+  Downloaded hashbrown v0.17.1
+  Downloaded toml_parser v1.1.5+spec-1.1.0
+  Downloaded hashbrown v0.16.1
+  Downloaded itertools v0.14.0
+  Downloaded unicode-ident v1.0.26
+  Downloaded futures-util v0.3.34
+  Downloaded pin-project-lite v0.2.17
+  Downloaded hkdf v0.13.0
+  Downloaded ryu v1.0.23
+  Downloaded axum v0.8.9
+  Downloaded icu_properties_data v2.3.0
+  Downloaded sha2 v0.11.0
+  Downloaded sharded-slab v0.1.7
+  Downloaded parking_lot_core v0.9.12
+  Downloaded proc-macro2 v1.0.107
+  Downloaded serde_core v1.0.229
+  Downloaded socket2 v0.6.5
+  Downloaded tower-http v0.7.1
+  Downloaded hyper v1.12.0
+  Downloaded toml v1.1.8+spec-1.1.0
+  Downloaded utoipa-gen v6.0.1
+  Downloaded tokio-stream v0.1.19
+  Downloaded sqlx-macros-core v0.9.0
+  Downloaded uuid v1.28.0
+  Downloaded tracing-subscriber v0.3.23
+  Downloaded serde_derive v1.0.229
+  Downloaded chrono v0.4.45
+  Downloaded sqlx-mysql v0.9.0
+  Downloaded tinyvec v1.13.3
+  Downloaded opentelemetry v0.33.1
+  Downloaded rustls-webpki v0.103.15
+  Downloaded curve25519-dalek v5.0.0
+  Downloaded opentelemetry-otlp v0.33.1
+  Downloaded sqlx-sqlite v0.9.0
+  Downloaded zerotrie v0.2.5
+  Downloaded rand v0.10.3
+  Downloaded serde v1.0.229
+  Downloaded tower v0.5.3
+  Downloaded rand v0.9.5
+  Downloaded zerovec v0.11.8
+  Downloaded icu_normalizer v2.3.0
+  Downloaded tracing v0.1.44
+  Downloaded tokio-util v0.7.20
+  Downloaded serde_json v1.0.151
+  Downloaded sqlx-core v0.9.0
+  Downloaded sqlx-postgres v0.9.0
+  Downloaded tower-http v0.6.11
+  Downloaded libc v0.2.190
+  Downloaded reqwest v0.13.5
+  Downloaded winnow v1.0.4
+  Downloaded opentelemetry-proto v0.33.1
+  Downloaded vcpkg v0.2.15
+  Downloaded sqlx v0.9.0
+  Downloaded opentelemetry_sdk v0.33.1
+  Downloaded syn v2.0.119
+  Downloaded syn v3.0.7
+  Downloaded zerocopy v0.8.62
+  Downloaded rustls v0.23.45
+  Downloaded tokio v1.53.2
+  Downloaded ring v0.17.14
+  Downloaded libsqlite3-sys v0.37.0
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.26
+   Compiling libc v0.2.190
+   Compiling cfg-if v1.0.5
+   Compiling futures-core v0.3.34
+   Compiling pin-project-lite v0.2.17
+   Compiling bytes v1.12.1
+   Compiling stable_deref_trait v1.2.1
+   Compiling futures-sink v0.3.34
+   Compiling itoa v1.0.18
+   Compiling memchr v2.8.3
+   Compiling once_cell v1.21.4
+   Compiling serde_core v1.0.229
+   Compiling typenum v1.20.1
+   Compiling smallvec v1.16.3
+   Compiling log v0.4.34
+   Compiling futures-io v0.3.34
+   Compiling tracing-core v0.1.36
+   Compiling futures-task v0.3.34
+   Compiling slab v0.4.12
+   Compiling percent-encoding v2.3.2
+   Compiling writeable v0.6.4
+   Compiling litemap v0.8.3
+   Compiling utf8_iter v1.0.4
+   Compiling icu_properties_data v2.3.0
+   Compiling icu_normalizer_data v2.3.0
+   Compiling errno v0.3.14
+   Compiling socket2 v0.6.5
+   Compiling mio v1.2.4
+   Compiling find-msvc-tools v0.1.14
+   Compiling zeroize v1.9.1
+   Compiling shlex v2.0.1
+   Compiling syn v3.0.7
+   Compiling syn v2.0.119
+   Compiling signal-hook-registry v1.4.8
+   Compiling cc v1.7.0
+   Compiling http v1.5.0
+   Compiling thiserror v2.0.21
+   Compiling form_urlencoded v1.2.2
+   Compiling hybrid-array v0.4.15
+   Compiling futures-channel v0.3.34
+   Compiling cmov v0.5.4
+   Compiling version_check v0.9.5
+   Compiling tower-service v0.3.3
+   Compiling tower-layer v0.3.3
+   Compiling ctutils v0.4.3
+   Compiling httparse v1.10.1
+   Compiling sync_wrapper v1.0.2
+   Compiling block-buffer v0.12.1
+   Compiling generic-array v0.14.7
+   Compiling http-body v1.1.0
+   Compiling crypto-common v0.2.2
+   Compiling bitflags v2.13.2
+   Compiling getrandom v0.3.4
+   Compiling autocfg v1.5.1
+   Compiling try-lock v0.2.5
+   Compiling zerocopy v0.8.62
+   Compiling ring v0.17.14
+   Compiling equivalent v1.0.2
+   Compiling want v0.3.2
+   Compiling http-body-util v0.1.5
+   Compiling rand_core v0.10.1
+   Compiling num-traits v0.2.19
+   Compiling digest v0.11.3
+   Compiling httpdate v1.0.3
+   Compiling zmij v1.0.23
+   Compiling parking_lot_core v0.9.12
+   Compiling serde v1.0.229
+   Compiling getrandom v0.4.3
+   Compiling atomic-waker v1.1.2
+   Compiling synstructure v0.14.0
+   Compiling rustls-pki-types v1.15.1
+   Compiling getrandom v0.2.17
+   Compiling ipnet v2.12.2
+   Compiling serde_json v1.0.151
+   Compiling hashbrown v0.17.1
+   Compiling base64 v0.23.1
+   Compiling tracing-attributes v0.1.31
+   Compiling subtle v2.6.1
+   Compiling base64ct v1.8.3
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.4
+   Compiling zerovec-derive v0.11.6
+   Compiling displaydoc v0.2.7
+   Compiling futures-macro v0.3.34
+   Compiling tokio-macros v2.7.2
+   Compiling thiserror-impl v2.0.21
+   Compiling tracing v0.1.44
+   Compiling zerofrom v0.1.8
+   Compiling serde_derive v1.0.229
+   Compiling crossbeam-utils v0.8.23
+   Compiling futures-util v0.3.34
+   Compiling yoke v0.8.3
+   Compiling scopeguard v1.2.0
+   Compiling tokio v1.53.2
+   Compiling untrusted v0.9.0
+   Compiling anyhow v1.0.104
+   Compiling zerovec v0.11.8
+   Compiling zerotrie v0.2.5
+   Compiling opentelemetry v0.33.1
+   Compiling lock_api v0.4.14
+   Compiling indexmap v2.14.2
+   Compiling ppv-lite86 v0.2.21
+   Compiling pem-rfc7468 v1.0.0
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling rand_core v0.9.5
+   Compiling icu_locale_core v2.3.0
+   Compiling icu_collections v2.3.0
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling allocator-api2 v0.2.21
+   Compiling either v1.19.0
+   Compiling icu_provider v2.3.1
+   Compiling semver v1.0.28
+   Compiling rustls v0.23.45
+   Compiling foldhash v0.2.0
+   Compiling const-oid v0.10.2
+   Compiling digest v0.10.7
+   Compiling itertools v0.14.0
+   Compiling hashbrown v0.16.1
+   Compiling icu_normalizer v2.3.0
+   Compiling icu_properties v2.3.0
+   Compiling der v0.8.2
+   Compiling rustc_version v0.4.1
+   Compiling parking_lot v0.12.5
+   Compiling hyper v1.12.0
+   Compiling tower v0.5.3
+   Compiling rand_chacha v0.9.0
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling cpufeatures v0.3.1
+   Compiling hyper-util v0.1.21
+   Compiling cpufeatures v0.2.17
+   Compiling crc-catalog v2.5.0
+   Compiling parking v2.2.1
+   Compiling tinyvec v1.13.3
+   Compiling crc v3.4.0
+   Compiling sha2 v0.10.9
+   Compiling url v2.5.8
+   Compiling event-listener v5.4.2
+   Compiling unicode-normalization v0.1.25
+   Compiling sha2 v0.11.0
+   Compiling crossbeam-queue v0.3.14
+   Compiling prost-derive v0.14.4
+   Compiling rand v0.9.5
+   Compiling rustls-webpki v0.103.15
+   Compiling tower-http v0.6.11
+   Compiling spki v0.8.1
+   Compiling uuid v1.28.0
+   Compiling reqwest v0.13.5
+   Compiling hashlink v0.11.1
+   Compiling curve25519-dalek v5.0.0
+   Compiling futures-intrusive v0.5.0
+   Compiling tokio-stream v0.1.19
+   Compiling futures-executor v0.3.34
+   Compiling webpki-roots v1.0.9 (/work/repo/crates/webpki-roots-empty)
+   Compiling hmac v0.13.0
+   Compiling chacha20 v0.10.2
+   Compiling unicode-bidi v0.3.18
+   Compiling unicode-properties v0.1.4
+   Compiling base64 v0.22.1
+   Compiling lazy_static v1.5.1
+   Compiling rand v0.10.3
+   Compiling hkdf v0.13.0
+   Compiling opentelemetry_sdk v0.33.1
+   Compiling stringprep v0.1.5
+   Compiling sharded-slab v0.1.7
+   Compiling prost v0.14.4
+   Compiling utoipa-gen v6.0.1
+   Compiling pkcs8 v0.11.0
+   Compiling atoi v2.0.0
+   Compiling async-trait v0.1.92
+   Compiling md-5 v0.11.0
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.10
+   Compiling ryu v1.0.23
+   Compiling dotenvy v0.15.7
+   Compiling hex v0.4.3
+   Compiling mime v0.3.17
+   Compiling byteorder v1.5.0
+   Compiling winnow v1.0.4
+   Compiling whoami v2.1.3
+   Compiling signature v3.0.0
+   Compiling sqlx-core v0.9.0
+   Compiling axum-core v0.5.6
+   Compiling ed25519 v3.0.0
+   Compiling toml_parser v1.1.5+spec-1.1.0
+   Compiling opentelemetry-proto v0.33.1
+   Compiling opentelemetry-http v0.33.1
+   Compiling serde_urlencoded v0.7.1
+   Compiling tracing-subscriber v0.3.23
+   Compiling chrono v0.4.45
+   Compiling serde_path_to_error v0.1.20
+   Compiling utoipa v6.0.0
+   Compiling sqlx-postgres v0.9.0
+   Compiling toml_datetime v1.1.2+spec-1.1.0
+   Compiling serde_spanned v1.1.2
+   Compiling matchit v0.8.4
+   Compiling toml_writer v1.1.3+spec-1.1.0
+   Compiling ed25519-dalek v3.0.0
+   Compiling tracing-opentelemetry v0.34.0
+   Compiling axum v0.8.9
+   Compiling toml v1.1.8+spec-1.1.0
+   Compiling opentelemetry-otlp v0.33.1
+   Compiling tokio-util v0.7.20
+   Compiling tower-http v0.7.1
+   Compiling humantime v2.4.0
+   Compiling contract v0.1.0 (/work/repo/crates/contract)
+   Compiling release-selftest v0.1.0 (/work/repo/tools/release-selftest)
+   Compiling sqlx v0.9.0
+   Compiling service-kit v0.1.0 (/work/repo/crates/service-kit)
+   Compiling identity v0.1.0 (/work/repo/services/identity)
+warning: linker stderr: ignoring deprecated linker optimization setting '1'
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `release-selftest` (bin "release-selftest") generated 1 warning
+warning: `identity` (bin "identity") generated 1 warning (1 duplicate)
+    Finished `release` profile [optimized] target(s) in 20m 30s
+[release:build] building ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.5 for linux/arm64
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+STEP 2/5: COPY --chmod=0555 identity /usr/local/bin/identity
+--> 9ecae019ab79
+STEP 3/5: USER 65532:65532
+--> 6d8c20a24d72
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/identity"]
+--> 0b1966ad5b0e
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="716740a9fa638a39e4655c54173653a36f2b121d" "org.opencontainers.image.version"="0.0.0-rc.5" "org.opencontainers.image.title"="identity"
+COMMIT localhost/trustiot-release/identity:0.0.0-rc.5
+--> b6081d416d6d
+Successfully tagged localhost/trustiot-release/identity:0.0.0-rc.5
+b6081d416d6d5661f0d07076f6d3bc4e7856900b9cbcdc9bc27e72f922bd9fa1
+[release:build] ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.5 → sha256:4bb4177e3a5bc0f8d147a480050da98330ab5d81aa010d9d30e9b41233dd26ca, SBOM SPDX-2.3 with 213 packages
+[release:build] building ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.5 for linux/arm64
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+STEP 2/5: COPY --chmod=0555 release-selftest /usr/local/bin/release-selftest
+--> 674a8e28d3f6
+STEP 3/5: USER 65532:65532
+--> f29c8869e5dc
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/release-selftest"]
+--> 237fb267e357
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="716740a9fa638a39e4655c54173653a36f2b121d" "org.opencontainers.image.version"="0.0.0-rc.5" "org.opencontainers.image.title"="release-selftest"
+COMMIT localhost/trustiot-release/release-selftest:0.0.0-rc.5
+--> 7a7f61ea77d7
+Successfully tagged localhost/trustiot-release/release-selftest:0.0.0-rc.5
+7a7f61ea77d7ff92ecc6e2ebfe91f2e159f89c94d331469076ea11b7c40db585
+[release:build] ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.5 → sha256:6f37a60c17808b4637232e8fa594bbad82a05834e11d375484f04d1f2dcb31be, SBOM SPDX-2.3 with 13 packages
+== 2026-10-12T23:12:34Z (+3071s) [alt] build.ts done
+== 2026-10-12T23:12:35Z (+3072s) compare with each other and with the published v0.0.0-rc.5
+######## identity
+SAME  identity image: runner-path rebuild / alt-path rebuild  sha256:4bb4177e3a5bc0f8d147a480050da98330ab5d81aa010d9d30e9b41233dd26ca
+DIFF  identity image: runner-path rebuild / published v0.0.0-rc.5  sha256:4bb4177e3a5bc0f8d147a480050da98330ab5d81aa010d9d30e9b41233dd26ca / sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44
+SAME  identity binary: runner-path rebuild / alt-path rebuild  sha256:ea8f655bfdbe442a2dc8e190cca8f2423d63ca7632c6f32525e4478d7af27cda
+runner-path rebuild:
+  manifest sha256:4bb4177e3a5bc0f8d147a480050da98330ab5d81aa010d9d30e9b41233dd26ca, 2783 bytes
+  config   sha256:b6081d416d6d5661f0d07076f6d3bc4e7856900b9cbcdc9bc27e72f922bd9fa1
+  layer    sha256:92832120f9473c09376218e24a97e0161591d64a3fb7946be9f64c3d54efd7f6 130333 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:7750c1a1cd8e356f717610d15552bd8a4af1801b72b5855c9e8494cc07636e77 12963 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:ebde8b03072095143d724619e4c7ef2fd5c99e080045cfcdb4f2da2731a85d07 302488 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:575c4940d50e1baa1ef86ecbd9cda270f5d55511761b79330ba20259497c78ab 271502 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:97ae0a42274e126686192f377a2b4a112583630eadde1920a761ed910cdbde34 32972 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:02c91f6b395a6b06d17b8985a2db90aef7b09feedff77eff1f7c269161263a9b 75 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:ffdf8cfdbafeabe2762d2dde33e36f1b87dfa967ae34811ff5342ebe8233eb4b 197 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:818beb2a6ac52d3cfb90a96d84cff5123ade753aac5adc2dd8f43347f6fa74eb 132 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:a0ce62815afcb344f5e245b1fe8026bef515df1fa3446ecc272057ba74be8bed 168 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:83717d7c33ed99f82afbd90b8a13fe29f05c433b7c55c2d7e1f2c2df18dfd5d5 91 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:88d89c9f554ae39742eb60ef19cc0198899514f6c95ebf216d7fc3249973e680 361 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:7f53453a06ce9b3dccd47b64b7573be15e40c8f1307713500732d75e2f52a3dc 318 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:f6e0128d9fe84ab5788f9484d4c8d2be45a936953b1020c9d56806277379e9da 144567 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:1196df7738c44db9ab270b67e5d58a0bbafcd6ee799c050dbf78c3508dfe3007 3277753 application/vnd.oci.image.layer.v1.tar+gzip
+  file     usr/local/bin/identity 6378112 bytes, mode 555
+SAME  identity binary: Cargo output / in the rebuilt image  sha256:ea8f655bfdbe442a2dc8e190cca8f2423d63ca7632c6f32525e4478d7af27cda
+config of the rebuilt image:
+  {
+    "architecture": "arm64",
+    "config": {
+      "Entrypoint": [
+        "/usr/local/bin/identity"
+      ],
+      "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"
+      ],
+      "Labels": {
+        "io.buildah.version": "1.33.7",
+        "org.opencontainers.image.revision": "716740a9fa638a39e4655c54173653a36f2b121d",
+        "org.opencontainers.image.source": "https://github.com/Laysi/trustiot-v2",
+        "org.opencontainers.image.title": "identity",
+        "org.opencontainers.image.version": "0.0.0-rc.5"
+      },
+      "User": "65532:65532",
+      "WorkingDir": "/home/nonroot"
+    },
+    "created": "2026-10-12T19:06:44Z",
+    "history": [
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//base-files/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//netbase/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//tzdata/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//tzdata-legacy/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//media-types/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:rootfs"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:passwd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:home"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:group"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:tmp"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //static:nsswitch"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:os_release_debian13"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:cacerts_debian13_arm64_tar"
+      },
+      {
+        "comment": "FROM gcr.io/distroless/static-debian13@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3",
+        "created": "2026-10-12T19:06:44Z",
+        "created_by": "/bin/sh -c #(nop) COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 in /usr/local/bin/identity "
+      },
+      {
+        "comment": "FROM 9ecae019ab79",
+        "created": "2026-10-12T19:06:44Z",
+        "created_by": "/bin/sh -c #(nop) USER 65532:65532",
+        "empty_layer": true
+      },
+      {
+        "comment": "FROM 6d8c20a24d72",
+        "created": "2026-10-12T19:06:44Z",
+        "created_by": "/bin/sh -c #(nop) ENTRYPOINT [\"/usr/local/bin/identity\"]",
+        "empty_layer": true
+      },
+      {
+        "comment": "FROM 0b1966ad5b0e",
+        "created": "2026-10-12T19:06:44Z",
+        "created_by": "/bin/sh -c #(nop) LABEL \"org.opencontainers.image.source\"=\"https://github.com/Laysi/trustiot-v2\" \"org.opencontainers.image.revision\"=\"716740a9fa638a39e4655c54173653a36f2b121d\" \"org.opencontainers.image.version\"=\"0.0.0-rc.5\" \"org.opencontainers.image.title\"=\"identity\"",
+        "empty_layer": true
+      }
+    ],
+    "os": "linux",
+    "rootfs": {
+      "diff_ids": [
+        "sha256:e842bc95a0a8664498b7881e537b5929e419d590f5a9954fb7f81c73c20fc6c7",
+        "sha256:621c35e751a51a9a9dc3e80aa0b7fe8be2a93402ea6ccd307d30852cd7776cda",
+        "sha256:763a77745f27b86cf26b97887b6842d83720e63b1c48848c0ba9ee54e351d63a",
+        "sha256:f0d0eff4c2312a7bd6e21797bdfea5eb35f60e76b555ce2b22794424af2cad36",
+        "sha256:275a30dd8ce958b21daa9ad962c6fbc09f98306ee2f486b65c9075dc257b1412",
+        "sha256:4d049f83d9cf21d1f5cc0e11deaf36df02790d0e60c1a3829538fb4b61685368",
+        "sha256:af5aa97ebe6ce1604747ec1e21af7136ded391bcabe4acef882e718a87c86bcc",
+        "sha256:6f1cdceb6a3146f0ccb986521156bef8a422cdbb0863396f7f751f575ba308f4",
+        "sha256:bd3cdfae1d3fdd83a2231d608969b38b82349777c2fff9a7c12d54f8ac5c9b38",
+        "sha256:4cde6b0bb6f50a5f255eef7b2a42162c661cf776b803225dcac9a659e396bb6b",
+        "sha256:ad51d0769d16ba578106a177987dfe3d2e02c1668c852b795b2f6b024068242a",
+        "sha256:187cfc6d1e3e8a40a5e64653bcd3239c140807dcf1c09e48021178705a5a6139",
+        "sha256:f2392a9484bf6b18f06beaf705b994e31dbb2716c99cf7d03c9c495cd107f364",
+        "sha256:fe0509b6267de079a37b5f9f359c2d57de1a5d4eede72b5889a4e770510f972c"
+      ],
+      "type": "layers"
+    },
+    "variant": "v8"
+  }
+published ghcr.io/laysi/trustiot-v2/identity@sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44, pulled without credentials:
+SAME  identity: published manifest bytes hash to the published digest  sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44
+  manifest sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44, 2783 bytes
+  config   sha256:26b0c39e0387c9613e5d761c626a41ae248fd8f0cebf5445d173a512bf2df1ce
+  layer    sha256:92832120f9473c09376218e24a97e0161591d64a3fb7946be9f64c3d54efd7f6 130333 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:7750c1a1cd8e356f717610d15552bd8a4af1801b72b5855c9e8494cc07636e77 12963 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:ebde8b03072095143d724619e4c7ef2fd5c99e080045cfcdb4f2da2731a85d07 302488 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:575c4940d50e1baa1ef86ecbd9cda270f5d55511761b79330ba20259497c78ab 271502 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:97ae0a42274e126686192f377a2b4a112583630eadde1920a761ed910cdbde34 32972 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:02c91f6b395a6b06d17b8985a2db90aef7b09feedff77eff1f7c269161263a9b 75 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:ffdf8cfdbafeabe2762d2dde33e36f1b87dfa967ae34811ff5342ebe8233eb4b 197 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:818beb2a6ac52d3cfb90a96d84cff5123ade753aac5adc2dd8f43347f6fa74eb 132 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:a0ce62815afcb344f5e245b1fe8026bef515df1fa3446ecc272057ba74be8bed 168 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:83717d7c33ed99f82afbd90b8a13fe29f05c433b7c55c2d7e1f2c2df18dfd5d5 91 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:88d89c9f554ae39742eb60ef19cc0198899514f6c95ebf216d7fc3249973e680 361 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:7f53453a06ce9b3dccd47b64b7573be15e40c8f1307713500732d75e2f52a3dc 318 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:f6e0128d9fe84ab5788f9484d4c8d2be45a936953b1020c9d56806277379e9da 144567 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:b077918520298a559a7cc228df1e1d16b9b079faacfdfb0351d529c6474c534b 3278126 application/vnd.oci.image.layer.v1.tar+gzip
+  file     usr/local/bin/identity 6378112 bytes, mode 555
+manifest, rebuilt against published (diff of jq -S):
+8c8
+<     "digest": "sha256:b6081d416d6d5661f0d07076f6d3bc4e7856900b9cbcdc9bc27e72f922bd9fa1",
+---
+>     "digest": "sha256:26b0c39e0387c9613e5d761c626a41ae248fd8f0cebf5445d173a512bf2df1ce",
+79c79
+<       "digest": "sha256:1196df7738c44db9ab270b67e5d58a0bbafcd6ee799c050dbf78c3508dfe3007",
+---
+>       "digest": "sha256:b077918520298a559a7cc228df1e1d16b9b079faacfdfb0351d529c6474c534b",
+81c81
+<       "size": 3277753
+---
+>       "size": 3278126
+config, rebuilt against published (diff of jq -S):
+81c81
+<       "comment": "FROM 9ecae019ab79",
+---
+>       "comment": "FROM 5d2100980097",
+87c87
+<       "comment": "FROM 6d8c20a24d72",
+---
+>       "comment": "FROM c3b284fea6d2",
+93c93
+<       "comment": "FROM 0b1966ad5b0e",
+---
+>       "comment": "FROM 45938a1e651f",
+115c115
+<       "sha256:fe0509b6267de079a37b5f9f359c2d57de1a5d4eede72b5889a4e770510f972c"
+---
+>       "sha256:8b3d9619d37cb357b044179f07d9d0db705a2ed63db609660791e0575bccc2fb"
+SAME  identity binary: runner-path rebuild / published v0.0.0-rc.5  sha256:ea8f655bfdbe442a2dc8e190cca8f2423d63ca7632c6f32525e4478d7af27cda
+######## release-selftest
+SAME  release-selftest image: runner-path rebuild / alt-path rebuild  sha256:6f37a60c17808b4637232e8fa594bbad82a05834e11d375484f04d1f2dcb31be
+DIFF  release-selftest image: runner-path rebuild / published v0.0.0-rc.5  sha256:6f37a60c17808b4637232e8fa594bbad82a05834e11d375484f04d1f2dcb31be / sha256:bc2b33e06519a9d303195f4196ca7c73d9f14357e0106709d9f434e928421743
+SAME  release-selftest binary: runner-path rebuild / alt-path rebuild  sha256:78769ece32628761b87e88773f7d29423d2a962848b38394d05426680e28a645
+runner-path rebuild:
+  manifest sha256:6f37a60c17808b4637232e8fa594bbad82a05834e11d375484f04d1f2dcb31be, 2782 bytes
+  config   sha256:7a7f61ea77d7ff92ecc6e2ebfe91f2e159f89c94d331469076ea11b7c40db585
+  layer    sha256:92832120f9473c09376218e24a97e0161591d64a3fb7946be9f64c3d54efd7f6 130333 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:7750c1a1cd8e356f717610d15552bd8a4af1801b72b5855c9e8494cc07636e77 12963 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:ebde8b03072095143d724619e4c7ef2fd5c99e080045cfcdb4f2da2731a85d07 302488 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:575c4940d50e1baa1ef86ecbd9cda270f5d55511761b79330ba20259497c78ab 271502 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:97ae0a42274e126686192f377a2b4a112583630eadde1920a761ed910cdbde34 32972 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:02c91f6b395a6b06d17b8985a2db90aef7b09feedff77eff1f7c269161263a9b 75 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:ffdf8cfdbafeabe2762d2dde33e36f1b87dfa967ae34811ff5342ebe8233eb4b 197 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:818beb2a6ac52d3cfb90a96d84cff5123ade753aac5adc2dd8f43347f6fa74eb 132 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:a0ce62815afcb344f5e245b1fe8026bef515df1fa3446ecc272057ba74be8bed 168 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:83717d7c33ed99f82afbd90b8a13fe29f05c433b7c55c2d7e1f2c2df18dfd5d5 91 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:88d89c9f554ae39742eb60ef19cc0198899514f6c95ebf216d7fc3249973e680 361 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:7f53453a06ce9b3dccd47b64b7573be15e40c8f1307713500732d75e2f52a3dc 318 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:f6e0128d9fe84ab5788f9484d4c8d2be45a936953b1020c9d56806277379e9da 144567 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:dcbe1ecc18b529d80a977e247817a9c1e45a1308dfb854918d77752749a09ced 215990 application/vnd.oci.image.layer.v1.tar+gzip
+  file     usr/local/bin/release-selftest 377264 bytes, mode 555
+SAME  release-selftest binary: Cargo output / in the rebuilt image  sha256:78769ece32628761b87e88773f7d29423d2a962848b38394d05426680e28a645
+config of the rebuilt image:
+  {
+    "architecture": "arm64",
+    "config": {
+      "Entrypoint": [
+        "/usr/local/bin/release-selftest"
+      ],
+      "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"
+      ],
+      "Labels": {
+        "io.buildah.version": "1.33.7",
+        "org.opencontainers.image.revision": "716740a9fa638a39e4655c54173653a36f2b121d",
+        "org.opencontainers.image.source": "https://github.com/Laysi/trustiot-v2",
+        "org.opencontainers.image.title": "release-selftest",
+        "org.opencontainers.image.version": "0.0.0-rc.5"
+      },
+      "User": "65532:65532",
+      "WorkingDir": "/home/nonroot"
+    },
+    "created": "2026-10-12T19:06:44Z",
+    "history": [
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//base-files/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//netbase/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//tzdata/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//tzdata-legacy/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//media-types/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:rootfs"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:passwd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:home"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:group"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:tmp"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //static:nsswitch"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:os_release_debian13"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:cacerts_debian13_arm64_tar"
+      },
+      {
+        "comment": "FROM gcr.io/distroless/static-debian13@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3",
+        "created": "2026-10-12T19:06:44Z",
+        "created_by": "/bin/sh -c #(nop) COPY file:45b705c07dd8651f7fe7df9ae11a6d1720170a837f633cdfcac8674f634901e7 in /usr/local/bin/release-selftest "
+      },
+      {
+        "comment": "FROM 674a8e28d3f6",
+        "created": "2026-10-12T19:06:44Z",
+        "created_by": "/bin/sh -c #(nop) USER 65532:65532",
+        "empty_layer": true
+      },
+      {
+        "comment": "FROM f29c8869e5dc",
+        "created": "2026-10-12T19:06:44Z",
+        "created_by": "/bin/sh -c #(nop) ENTRYPOINT [\"/usr/local/bin/release-selftest\"]",
+        "empty_layer": true
+      },
+      {
+        "comment": "FROM 237fb267e357",
+        "created": "2026-10-12T19:06:44Z",
+        "created_by": "/bin/sh -c #(nop) LABEL \"org.opencontainers.image.source\"=\"https://github.com/Laysi/trustiot-v2\" \"org.opencontainers.image.revision\"=\"716740a9fa638a39e4655c54173653a36f2b121d\" \"org.opencontainers.image.version\"=\"0.0.0-rc.5\" \"org.opencontainers.image.title\"=\"release-selftest\"",
+        "empty_layer": true
+      }
+    ],
+    "os": "linux",
+    "rootfs": {
+      "diff_ids": [
+        "sha256:e842bc95a0a8664498b7881e537b5929e419d590f5a9954fb7f81c73c20fc6c7",
+        "sha256:621c35e751a51a9a9dc3e80aa0b7fe8be2a93402ea6ccd307d30852cd7776cda",
+        "sha256:763a77745f27b86cf26b97887b6842d83720e63b1c48848c0ba9ee54e351d63a",
+        "sha256:f0d0eff4c2312a7bd6e21797bdfea5eb35f60e76b555ce2b22794424af2cad36",
+        "sha256:275a30dd8ce958b21daa9ad962c6fbc09f98306ee2f486b65c9075dc257b1412",
+        "sha256:4d049f83d9cf21d1f5cc0e11deaf36df02790d0e60c1a3829538fb4b61685368",
+        "sha256:af5aa97ebe6ce1604747ec1e21af7136ded391bcabe4acef882e718a87c86bcc",
+        "sha256:6f1cdceb6a3146f0ccb986521156bef8a422cdbb0863396f7f751f575ba308f4",
+        "sha256:bd3cdfae1d3fdd83a2231d608969b38b82349777c2fff9a7c12d54f8ac5c9b38",
+        "sha256:4cde6b0bb6f50a5f255eef7b2a42162c661cf776b803225dcac9a659e396bb6b",
+        "sha256:ad51d0769d16ba578106a177987dfe3d2e02c1668c852b795b2f6b024068242a",
+        "sha256:187cfc6d1e3e8a40a5e64653bcd3239c140807dcf1c09e48021178705a5a6139",
+        "sha256:f2392a9484bf6b18f06beaf705b994e31dbb2716c99cf7d03c9c495cd107f364",
+        "sha256:abeca9b2013a224160935cc2563e70ef56868a68433da983e18c12db8ab6e6e9"
+      ],
+      "type": "layers"
+    },
+    "variant": "v8"
+  }
+== 2026-10-12T23:12:42Z (+3079s) done
+container: 3081 s wall clock
+######## results
+==== versions.txt
+uname -m: aarch64
+page size: 4096
+PRETTY_NAME="Ubuntu 24.04.5 LTS"
+podman version 4.9.3
+skopeo version 1.13.3
+time="2026-10-12T22:26:43Z" level=error msg="Getting info on OCI runtime crun: getting version of OCI runtime crun: `/usr/bin/crun --version` failed: Failed to re-execute libcrun via memory file descriptor\n  (exit status 1)"
+podman graph driver: overlay
+Ubuntu packages:
+  buildah 1.33.7+ds1-1ubuntu0.24.04.3
+  conmon 2.1.10+ds1-1build2
+  crun 1.14.1-1
+  golang-github-containers-common 0.57.4+ds1-2ubuntu0.2
+  golang-github-containers-image 5.29.2-2
+  podman 4.9.3+ds1-1ubuntu0.2
+  skopeo 1.13.3+ds1-2ubuntu0.24.04.3
+rustup 1.29.1 (d95a37b6a 2026-08-13)
+proto 0.60.2
+bun: /home/runner/.proto/tools/bun/1.4.2/bun: ELF 64-bit LSB executable, ARM aarch64
+helm: /home/runner/.proto/tools/helm/4.3.0/helm: ELF 64-bit LSB executable, ARM aarch64
+zig: /home/runner/.proto/tools/zig/0.16.0/zig: ELF 64-bit LSB executable, ARM aarch64
+cargo-zigbuild: /home/runner/.proto/tools/cargo-zigbuild/0.23.4/cargo-zigbuild: ELF 64-bit LSB pie executable, ARM aarch64
+cargo-auditable: /home/runner/.proto/tools/cargo-auditable/0.7.6/cargo-auditable: ELF 64-bit LSB pie executable, ARM aarch64
+syft: /home/runner/.proto/tools/syft/1.52.0/syft: ELF 64-bit LSB executable, ARM aarch64
+bun 1.4.2
+v4.3.0+gbec5b06
+zig 0.16.0
+cargo-zigbuild 0.23.4
+Version:       1.52.0
+==== plan-runner.json
+{
+  "tag": "v0.0.0-rc.5",
+  "version": "0.0.0-rc.5",
+  "prerelease": true,
+  "commit": "716740a9fa638a39e4655c54173653a36f2b121d",
+  "sourceDateEpoch": 1791832004,
+  "repository": "Laysi/trustiot-v2",
+  "images": [
+    {
+      "name": "identity",
+      "kind": "rust",
+      "package": "identity",
+      "repository": "ghcr.io/laysi/trustiot-v2/identity",
+      "ref": "ghcr.io/laysi/trustiot-v2/identity:0.0.0-rc.5"
+    },
+    {
+      "name": "postgres",
+      "kind": "containerfile",
+      "context": "deploy/images/postgres",
+      "repository": "ghcr.io/laysi/trustiot-v2/postgres",
+      "ref": "ghcr.io/laysi/trustiot-v2/postgres:0.0.0-rc.5"
+    },
+    {
+      "name": "release-selftest",
+      "kind": "rust",
+      "package": "release-selftest",
+      "repository": "ghcr.io/laysi/trustiot-v2/release-selftest",
+      "ref": "ghcr.io/laysi/trustiot-v2/release-selftest:0.0.0-rc.5"
+    }
+  ],
+  "chart": {
+    "name": "trustiot",
+    "repository": "ghcr.io/laysi/trustiot-v2/charts/trustiot",
+    "version": "0.0.0-rc.5"
+  }
+}
+==== build-runner.json
+{
+  "tag": "v0.0.0-rc.5",
+  "commit": "716740a9fa638a39e4655c54173653a36f2b121d",
+  "images": [
+    {
+      "name": "identity",
+      "digest": "sha256:4bb4177e3a5bc0f8d147a480050da98330ab5d81aa010d9d30e9b41233dd26ca",
+      "size": 4197376,
+      "sbomPackages": 213,
+      "archive": "images/identity.oci.tar",
+      "sbom": "images/identity.spdx.json"
+    },
+    {
+      "name": "release-selftest",
+      "digest": "sha256:6f37a60c17808b4637232e8fa594bbad82a05834e11d375484f04d1f2dcb31be",
+      "size": 1135616,
+      "sbomPackages": 13,
+      "archive": "images/release-selftest.oci.tar",
+      "sbom": "images/release-selftest.spdx.json"
+    }
+  ]
+}
+==== build-alt.json
+{
+  "tag": "v0.0.0-rc.5",
+  "commit": "716740a9fa638a39e4655c54173653a36f2b121d",
+  "images": [
+    {
+      "name": "identity",
+      "digest": "sha256:4bb4177e3a5bc0f8d147a480050da98330ab5d81aa010d9d30e9b41233dd26ca",
+      "size": 4197376,
+      "sbomPackages": 213,
+      "archive": "images/identity.oci.tar",
+      "sbom": "images/identity.spdx.json"
+    },
+    {
+      "name": "release-selftest",
+      "digest": "sha256:6f37a60c17808b4637232e8fa594bbad82a05834e11d375484f04d1f2dcb31be",
+      "size": 1135616,
+      "sbomPackages": 13,
+      "archive": "images/release-selftest.oci.tar",
+      "sbom": "images/release-selftest.spdx.json"
+    }
+  ]
+}
+==== binaries.sha256
+ea8f655bfdbe442a2dc8e190cca8f2423d63ca7632c6f32525e4478d7af27cda  runner/bin/identity
+78769ece32628761b87e88773f7d29423d2a962848b38394d05426680e28a645  runner/bin/release-selftest
+ea8f655bfdbe442a2dc8e190cca8f2423d63ca7632c6f32525e4478d7af27cda  alt/bin/identity
+78769ece32628761b87e88773f7d29423d2a962848b38394d05426680e28a645  alt/bin/release-selftest
+==== rustc-vV.txt
+rustc 1.99.0 (b940084d7 2026-09-28)
+binary: rustc
+commit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4
+commit-date: 2026-09-28
+host: aarch64-unknown-linux-gnu
+release: 1.99.0
+LLVM version: 23.1.1
+==== compare.txt
+######## identity
+SAME  identity image: runner-path rebuild / alt-path rebuild  sha256:4bb4177e3a5bc0f8d147a480050da98330ab5d81aa010d9d30e9b41233dd26ca
+DIFF  identity image: runner-path rebuild / published v0.0.0-rc.5  sha256:4bb4177e3a5bc0f8d147a480050da98330ab5d81aa010d9d30e9b41233dd26ca / sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44
+SAME  identity binary: runner-path rebuild / alt-path rebuild  sha256:ea8f655bfdbe442a2dc8e190cca8f2423d63ca7632c6f32525e4478d7af27cda
+runner-path rebuild:
+  manifest sha256:4bb4177e3a5bc0f8d147a480050da98330ab5d81aa010d9d30e9b41233dd26ca, 2783 bytes
+  config   sha256:b6081d416d6d5661f0d07076f6d3bc4e7856900b9cbcdc9bc27e72f922bd9fa1
+  layer    sha256:92832120f9473c09376218e24a97e0161591d64a3fb7946be9f64c3d54efd7f6 130333 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:7750c1a1cd8e356f717610d15552bd8a4af1801b72b5855c9e8494cc07636e77 12963 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:ebde8b03072095143d724619e4c7ef2fd5c99e080045cfcdb4f2da2731a85d07 302488 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:575c4940d50e1baa1ef86ecbd9cda270f5d55511761b79330ba20259497c78ab 271502 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:97ae0a42274e126686192f377a2b4a112583630eadde1920a761ed910cdbde34 32972 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:02c91f6b395a6b06d17b8985a2db90aef7b09feedff77eff1f7c269161263a9b 75 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:ffdf8cfdbafeabe2762d2dde33e36f1b87dfa967ae34811ff5342ebe8233eb4b 197 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:818beb2a6ac52d3cfb90a96d84cff5123ade753aac5adc2dd8f43347f6fa74eb 132 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:a0ce62815afcb344f5e245b1fe8026bef515df1fa3446ecc272057ba74be8bed 168 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:83717d7c33ed99f82afbd90b8a13fe29f05c433b7c55c2d7e1f2c2df18dfd5d5 91 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:88d89c9f554ae39742eb60ef19cc0198899514f6c95ebf216d7fc3249973e680 361 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:7f53453a06ce9b3dccd47b64b7573be15e40c8f1307713500732d75e2f52a3dc 318 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:f6e0128d9fe84ab5788f9484d4c8d2be45a936953b1020c9d56806277379e9da 144567 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:1196df7738c44db9ab270b67e5d58a0bbafcd6ee799c050dbf78c3508dfe3007 3277753 application/vnd.oci.image.layer.v1.tar+gzip
+  file     usr/local/bin/identity 6378112 bytes, mode 555
+SAME  identity binary: Cargo output / in the rebuilt image  sha256:ea8f655bfdbe442a2dc8e190cca8f2423d63ca7632c6f32525e4478d7af27cda
+config of the rebuilt image:
+  {
+    "architecture": "arm64",
+    "config": {
+      "Entrypoint": [
+        "/usr/local/bin/identity"
+      ],
+      "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"
+      ],
+      "Labels": {
+        "io.buildah.version": "1.33.7",
+        "org.opencontainers.image.revision": "716740a9fa638a39e4655c54173653a36f2b121d",
+        "org.opencontainers.image.source": "https://github.com/Laysi/trustiot-v2",
+        "org.opencontainers.image.title": "identity",
+        "org.opencontainers.image.version": "0.0.0-rc.5"
+      },
+      "User": "65532:65532",
+      "WorkingDir": "/home/nonroot"
+    },
+    "created": "2026-10-12T19:06:44Z",
+    "history": [
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//base-files/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//netbase/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//tzdata/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//tzdata-legacy/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//media-types/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:rootfs"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:passwd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:home"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:group"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:tmp"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //static:nsswitch"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:os_release_debian13"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:cacerts_debian13_arm64_tar"
+      },
+      {
+        "comment": "FROM gcr.io/distroless/static-debian13@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3",
+        "created": "2026-10-12T19:06:44Z",
+        "created_by": "/bin/sh -c #(nop) COPY file:f48d364a6cb8dc4003db86b27d3868b2f7db3736abe31464073500b6776dee02 in /usr/local/bin/identity "
+      },
+      {
+        "comment": "FROM 9ecae019ab79",
+        "created": "2026-10-12T19:06:44Z",
+        "created_by": "/bin/sh -c #(nop) USER 65532:65532",
+        "empty_layer": true
+      },
+      {
+        "comment": "FROM 6d8c20a24d72",
+        "created": "2026-10-12T19:06:44Z",
+        "created_by": "/bin/sh -c #(nop) ENTRYPOINT [\"/usr/local/bin/identity\"]",
+        "empty_layer": true
+      },
+      {
+        "comment": "FROM 0b1966ad5b0e",
+        "created": "2026-10-12T19:06:44Z",
+        "created_by": "/bin/sh -c #(nop) LABEL \"org.opencontainers.image.source\"=\"https://github.com/Laysi/trustiot-v2\" \"org.opencontainers.image.revision\"=\"716740a9fa638a39e4655c54173653a36f2b121d\" \"org.opencontainers.image.version\"=\"0.0.0-rc.5\" \"org.opencontainers.image.title\"=\"identity\"",
+        "empty_layer": true
+      }
+    ],
+    "os": "linux",
+    "rootfs": {
+      "diff_ids": [
+        "sha256:e842bc95a0a8664498b7881e537b5929e419d590f5a9954fb7f81c73c20fc6c7",
+        "sha256:621c35e751a51a9a9dc3e80aa0b7fe8be2a93402ea6ccd307d30852cd7776cda",
+        "sha256:763a77745f27b86cf26b97887b6842d83720e63b1c48848c0ba9ee54e351d63a",
+        "sha256:f0d0eff4c2312a7bd6e21797bdfea5eb35f60e76b555ce2b22794424af2cad36",
+        "sha256:275a30dd8ce958b21daa9ad962c6fbc09f98306ee2f486b65c9075dc257b1412",
+        "sha256:4d049f83d9cf21d1f5cc0e11deaf36df02790d0e60c1a3829538fb4b61685368",
+        "sha256:af5aa97ebe6ce1604747ec1e21af7136ded391bcabe4acef882e718a87c86bcc",
+        "sha256:6f1cdceb6a3146f0ccb986521156bef8a422cdbb0863396f7f751f575ba308f4",
+        "sha256:bd3cdfae1d3fdd83a2231d608969b38b82349777c2fff9a7c12d54f8ac5c9b38",
+        "sha256:4cde6b0bb6f50a5f255eef7b2a42162c661cf776b803225dcac9a659e396bb6b",
+        "sha256:ad51d0769d16ba578106a177987dfe3d2e02c1668c852b795b2f6b024068242a",
+        "sha256:187cfc6d1e3e8a40a5e64653bcd3239c140807dcf1c09e48021178705a5a6139",
+        "sha256:f2392a9484bf6b18f06beaf705b994e31dbb2716c99cf7d03c9c495cd107f364",
+        "sha256:fe0509b6267de079a37b5f9f359c2d57de1a5d4eede72b5889a4e770510f972c"
+      ],
+      "type": "layers"
+    },
+    "variant": "v8"
+  }
+published ghcr.io/laysi/trustiot-v2/identity@sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44, pulled without credentials:
+SAME  identity: published manifest bytes hash to the published digest  sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44
+  manifest sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44, 2783 bytes
+  config   sha256:26b0c39e0387c9613e5d761c626a41ae248fd8f0cebf5445d173a512bf2df1ce
+  layer    sha256:92832120f9473c09376218e24a97e0161591d64a3fb7946be9f64c3d54efd7f6 130333 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:7750c1a1cd8e356f717610d15552bd8a4af1801b72b5855c9e8494cc07636e77 12963 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:ebde8b03072095143d724619e4c7ef2fd5c99e080045cfcdb4f2da2731a85d07 302488 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:575c4940d50e1baa1ef86ecbd9cda270f5d55511761b79330ba20259497c78ab 271502 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:97ae0a42274e126686192f377a2b4a112583630eadde1920a761ed910cdbde34 32972 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:02c91f6b395a6b06d17b8985a2db90aef7b09feedff77eff1f7c269161263a9b 75 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:ffdf8cfdbafeabe2762d2dde33e36f1b87dfa967ae34811ff5342ebe8233eb4b 197 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:818beb2a6ac52d3cfb90a96d84cff5123ade753aac5adc2dd8f43347f6fa74eb 132 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:a0ce62815afcb344f5e245b1fe8026bef515df1fa3446ecc272057ba74be8bed 168 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:83717d7c33ed99f82afbd90b8a13fe29f05c433b7c55c2d7e1f2c2df18dfd5d5 91 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:88d89c9f554ae39742eb60ef19cc0198899514f6c95ebf216d7fc3249973e680 361 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:7f53453a06ce9b3dccd47b64b7573be15e40c8f1307713500732d75e2f52a3dc 318 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:f6e0128d9fe84ab5788f9484d4c8d2be45a936953b1020c9d56806277379e9da 144567 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:b077918520298a559a7cc228df1e1d16b9b079faacfdfb0351d529c6474c534b 3278126 application/vnd.oci.image.layer.v1.tar+gzip
+  file     usr/local/bin/identity 6378112 bytes, mode 555
+manifest, rebuilt against published (diff of jq -S):
+8c8
+<     "digest": "sha256:b6081d416d6d5661f0d07076f6d3bc4e7856900b9cbcdc9bc27e72f922bd9fa1",
+---
+>     "digest": "sha256:26b0c39e0387c9613e5d761c626a41ae248fd8f0cebf5445d173a512bf2df1ce",
+79c79
+<       "digest": "sha256:1196df7738c44db9ab270b67e5d58a0bbafcd6ee799c050dbf78c3508dfe3007",
+---
+>       "digest": "sha256:b077918520298a559a7cc228df1e1d16b9b079faacfdfb0351d529c6474c534b",
+81c81
+<       "size": 3277753
+---
+>       "size": 3278126
+config, rebuilt against published (diff of jq -S):
+81c81
+<       "comment": "FROM 9ecae019ab79",
+---
+>       "comment": "FROM 5d2100980097",
+87c87
+<       "comment": "FROM 6d8c20a24d72",
+---
+>       "comment": "FROM c3b284fea6d2",
+93c93
+<       "comment": "FROM 0b1966ad5b0e",
+---
+>       "comment": "FROM 45938a1e651f",
+115c115
+<       "sha256:fe0509b6267de079a37b5f9f359c2d57de1a5d4eede72b5889a4e770510f972c"
+---
+>       "sha256:8b3d9619d37cb357b044179f07d9d0db705a2ed63db609660791e0575bccc2fb"
+SAME  identity binary: runner-path rebuild / published v0.0.0-rc.5  sha256:ea8f655bfdbe442a2dc8e190cca8f2423d63ca7632c6f32525e4478d7af27cda
+######## release-selftest
+SAME  release-selftest image: runner-path rebuild / alt-path rebuild  sha256:6f37a60c17808b4637232e8fa594bbad82a05834e11d375484f04d1f2dcb31be
+DIFF  release-selftest image: runner-path rebuild / published v0.0.0-rc.5  sha256:6f37a60c17808b4637232e8fa594bbad82a05834e11d375484f04d1f2dcb31be / sha256:bc2b33e06519a9d303195f4196ca7c73d9f14357e0106709d9f434e928421743
+SAME  release-selftest binary: runner-path rebuild / alt-path rebuild  sha256:78769ece32628761b87e88773f7d29423d2a962848b38394d05426680e28a645
+runner-path rebuild:
+  manifest sha256:6f37a60c17808b4637232e8fa594bbad82a05834e11d375484f04d1f2dcb31be, 2782 bytes
+  config   sha256:7a7f61ea77d7ff92ecc6e2ebfe91f2e159f89c94d331469076ea11b7c40db585
+  layer    sha256:92832120f9473c09376218e24a97e0161591d64a3fb7946be9f64c3d54efd7f6 130333 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:7750c1a1cd8e356f717610d15552bd8a4af1801b72b5855c9e8494cc07636e77 12963 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:ebde8b03072095143d724619e4c7ef2fd5c99e080045cfcdb4f2da2731a85d07 302488 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:575c4940d50e1baa1ef86ecbd9cda270f5d55511761b79330ba20259497c78ab 271502 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:97ae0a42274e126686192f377a2b4a112583630eadde1920a761ed910cdbde34 32972 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:02c91f6b395a6b06d17b8985a2db90aef7b09feedff77eff1f7c269161263a9b 75 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:ffdf8cfdbafeabe2762d2dde33e36f1b87dfa967ae34811ff5342ebe8233eb4b 197 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:818beb2a6ac52d3cfb90a96d84cff5123ade753aac5adc2dd8f43347f6fa74eb 132 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:a0ce62815afcb344f5e245b1fe8026bef515df1fa3446ecc272057ba74be8bed 168 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:83717d7c33ed99f82afbd90b8a13fe29f05c433b7c55c2d7e1f2c2df18dfd5d5 91 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:88d89c9f554ae39742eb60ef19cc0198899514f6c95ebf216d7fc3249973e680 361 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:7f53453a06ce9b3dccd47b64b7573be15e40c8f1307713500732d75e2f52a3dc 318 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:f6e0128d9fe84ab5788f9484d4c8d2be45a936953b1020c9d56806277379e9da 144567 application/vnd.oci.image.layer.v1.tar+gzip
+  layer    sha256:dcbe1ecc18b529d80a977e247817a9c1e45a1308dfb854918d77752749a09ced 215990 application/vnd.oci.image.layer.v1.tar+gzip
+  file     usr/local/bin/release-selftest 377264 bytes, mode 555
+SAME  release-selftest binary: Cargo output / in the rebuilt image  sha256:78769ece32628761b87e88773f7d29423d2a962848b38394d05426680e28a645
+config of the rebuilt image:
+  {
+    "architecture": "arm64",
+    "config": {
+      "Entrypoint": [
+        "/usr/local/bin/release-selftest"
+      ],
+      "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"
+      ],
+      "Labels": {
+        "io.buildah.version": "1.33.7",
+        "org.opencontainers.image.revision": "716740a9fa638a39e4655c54173653a36f2b121d",
+        "org.opencontainers.image.source": "https://github.com/Laysi/trustiot-v2",
+        "org.opencontainers.image.title": "release-selftest",
+        "org.opencontainers.image.version": "0.0.0-rc.5"
+      },
+      "User": "65532:65532",
+      "WorkingDir": "/home/nonroot"
+    },
+    "created": "2026-10-12T19:06:44Z",
+    "history": [
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//base-files/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//netbase/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//tzdata/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//tzdata-legacy/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build @trixie//media-types/arm64:data_statusd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:rootfs"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:passwd"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:home"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:group"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:tmp"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //static:nsswitch"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:os_release_debian13"
+      },
+      {
+        "created": "1970-01-01T00:00:00Z",
+        "created_by": "bazel build //common:cacerts_debian13_arm64_tar"
+      },
+      {
+        "comment": "FROM gcr.io/distroless/static-debian13@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3",
+        "created": "2026-10-12T19:06:44Z",
+        "created_by": "/bin/sh -c #(nop) COPY file:45b705c07dd8651f7fe7df9ae11a6d1720170a837f633cdfcac8674f634901e7 in /usr/local/bin/release-selftest "
+      },
+      {
+        "comment": "FROM 674a8e28d3f6",
+        "created": "2026-10-12T19:06:44Z",
+        "created_by": "/bin/sh -c #(nop) USER 65532:65532",
+        "empty_layer": true
+      },
+      {
+        "comment": "FROM f29c8869e5dc",
+        "created": "2026-10-12T19:06:44Z",
+        "created_by": "/bin/sh -c #(nop) ENTRYPOINT [\"/usr/local/bin/release-selftest\"]",
+        "empty_layer": true
+      },
+      {
+        "comment": "FROM 237fb267e357",
+        "created": "2026-10-12T19:06:44Z",
+        "created_by": "/bin/sh -c #(nop) LABEL \"org.opencontainers.image.source\"=\"https://github.com/Laysi/trustiot-v2\" \"org.opencontainers.image.revision\"=\"716740a9fa638a39e4655c54173653a36f2b121d\" \"org.opencontainers.image.version\"=\"0.0.0-rc.5\" \"org.opencontainers.image.title\"=\"release-selftest\"",
+        "empty_layer": true
+      }
+    ],
+    "os": "linux",
+    "rootfs": {
+      "diff_ids": [
+        "sha256:e842bc95a0a8664498b7881e537b5929e419d590f5a9954fb7f81c73c20fc6c7",
+        "sha256:621c35e751a51a9a9dc3e80aa0b7fe8be2a93402ea6ccd307d30852cd7776cda",
+        "sha256:763a77745f27b86cf26b97887b6842d83720e63b1c48848c0ba9ee54e351d63a",
+        "sha256:f0d0eff4c2312a7bd6e21797bdfea5eb35f60e76b555ce2b22794424af2cad36",
+        "sha256:275a30dd8ce958b21daa9ad962c6fbc09f98306ee2f486b65c9075dc257b1412",
+        "sha256:4d049f83d9cf21d1f5cc0e11deaf36df02790d0e60c1a3829538fb4b61685368",
+        "sha256:af5aa97ebe6ce1604747ec1e21af7136ded391bcabe4acef882e718a87c86bcc",
+        "sha256:6f1cdceb6a3146f0ccb986521156bef8a422cdbb0863396f7f751f575ba308f4",
+        "sha256:bd3cdfae1d3fdd83a2231d608969b38b82349777c2fff9a7c12d54f8ac5c9b38",
+        "sha256:4cde6b0bb6f50a5f255eef7b2a42162c661cf776b803225dcac9a659e396bb6b",
+        "sha256:ad51d0769d16ba578106a177987dfe3d2e02c1668c852b795b2f6b024068242a",
+        "sha256:187cfc6d1e3e8a40a5e64653bcd3239c140807dcf1c09e48021178705a5a6139",
+        "sha256:f2392a9484bf6b18f06beaf705b994e31dbb2716c99cf7d03c9c495cd107f364",
+        "sha256:abeca9b2013a224160935cc2563e70ef56868a68433da983e18c12db8ab6e6e9"
+      ],
+      "type": "layers"
+    },
+    "variant": "v8"
+  }
+rcheck: removed 0 dangling test volumes
+rcheck: exit 0 at 07:12:44 (the build host)

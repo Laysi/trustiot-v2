@@ -1,0 +1,59 @@
+Laysi/trustiot-v2#381: how Postgres 18.6 treats an ADMIN-only membership and a SET chain behind a
+membership that only inherits (throwaway postgres:18.6-alpine container, psql inside it).
+
+== setup, as the superuser
+CREATE ROLE p_app LOGIN;
+CREATE ROLE p_admin_only NOLOGIN;
+GRANT p_admin_only TO p_app WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;
+CREATE ROLE p_g NOLOGIN;
+CREATE ROLE p_h NOLOGIN;
+GRANT p_g TO p_app WITH INHERIT TRUE, SET FALSE;
+GRANT p_h TO p_g WITH INHERIT FALSE, SET TRUE;
+
+== as p_app (psql -U p_app)
+SELECT session_user, current_user;
+SELECT 'self SET' AS what, pg_has_role(current_user, 'p_app', 'SET') AS yes
+UNION ALL SELECT 'admin_only SET', pg_has_role(current_user, 'p_admin_only', 'SET')
+UNION ALL SELECT 'h via INHERIT-only g then SET', pg_has_role(current_user, 'p_h', 'SET');
+SET ROLE p_admin_only;
+SET ROLE p_h;
+GRANT p_admin_only TO p_app WITH SET TRUE;
+SELECT 'after self-grant: admin_only SET' AS what, pg_has_role(current_user, 'p_admin_only', 'SET') AS yes;
+SET ROLE p_admin_only;
+SELECT current_user;
+
+== output
+ session_user | current_user
+--------------+--------------
+ p_app        | p_app
+
+             what              | yes
+-------------------------------+-----
+ self SET                      | t
+ admin_only SET                | f
+ h via INHERIT-only g then SET | f
+
+ERROR:  permission denied to set role "p_admin_only"
+ERROR:  permission denied to set role "p_h"
+               what               | yes
+----------------------------------+-----
+ after self-grant: admin_only SET | t
+
+ current_user
+--------------
+ p_admin_only
+
+== pg_auth_members afterwards
+     role     | member | grantor  | admin_option | inherit_option | set_option
+--------------+--------+----------+--------------+----------------+------------
+ p_admin_only | p_app  | postgres | t            | f              | f
+ p_g          | p_app  | postgres | f            | t              | f
+ p_h          | p_g    | postgres | f            | f              | t
+ p_admin_only | p_app  | p_app    | f            | t              | t
+
+Findings:
+- pg_has_role(current_user, current_user, 'SET') is true: the session's own role is in the set.
+- A SET chain needs the SET option on every membership: p_h is not reachable through p_g, which
+  p_app only inherits, and SET ROLE p_h is refused.
+- A role with only the ADMIN option on another can grant itself that role WITH SET TRUE and then
+  SET ROLE to it. The check does not count such roles (README, limits); a follow-up is proposed.

@@ -1,0 +1,62 @@
+test timing ... server: PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+
+[T0 300 tables, service role alone] loadavg before: 1.48 1.44 2.13 1/683 1213930
+[T0 300 tables, service role alone] roles the session can become (itself included): 1; check_session: Ok(())
+[T0 300 tables, service role alone] old, same session:   median 7.5 ms, min 7.1 ms, max 10.5 ms (25 runs)
+[T0 300 tables, service role alone] new, same session:   median 8.3 ms, min 7.8 ms, max 11.2 ms (25 runs)
+[T0 300 tables, service role alone] old, new connection: median 34.0 ms, min 33.1 ms, max 35.0 ms (25 runs)
+[T0 300 tables, service role alone] new, new connection: median 35.8 ms, min 35.2 ms, max 38.0 ms (25 runs)
+[T0 300 tables, service role alone] loadavg after: 1.37 1.41 2.12 3/684 1213930
+
+[T1 + 20 SET-only groups with all rights on 300 tables] loadavg before: 1.37 1.41 2.12 1/683 1213930
+[T1 + 20 SET-only groups with all rights on 300 tables] roles the session can become (itself included): 21; check_session: Ok(())
+[T1 + 20 SET-only groups with all rights on 300 tables] old, same session:   median 7.5 ms, min 7.2 ms, max 9.0 ms (25 runs)
+[T1 + 20 SET-only groups with all rights on 300 tables] new, same session:   median 17.2 ms, min 16.2 ms, max 18.9 ms (25 runs)
+[T1 + 20 SET-only groups with all rights on 300 tables] old, new connection: median 34.3 ms, min 33.5 ms, max 35.4 ms (25 runs)
+[T1 + 20 SET-only groups with all rights on 300 tables] new, new connection: median 44.9 ms, min 44.3 ms, max 46.0 ms (25 runs)
+[T1 + 20 SET-only groups with all rights on 300 tables] loadavg after: 1.34 1.41 2.11 2/684 1213930
+
+[T2 + 60 SET-only groups with all rights on 300 tables] loadavg before: 1.34 1.41 2.11 1/683 1213930
+[T2 + 60 SET-only groups with all rights on 300 tables] roles the session can become (itself included): 61; check_session: Ok(())
+[T2 + 60 SET-only groups with all rights on 300 tables] old, same session:   median 7.7 ms, min 7.2 ms, max 9.6 ms (25 runs)
+[T2 + 60 SET-only groups with all rights on 300 tables] new, same session:   median 34.6 ms, min 33.1 ms, max 36.7 ms (25 runs)
+[T2 + 60 SET-only groups with all rights on 300 tables] old, new connection: median 35.0 ms, min 33.9 ms, max 39.6 ms (25 runs)
+[T2 + 60 SET-only groups with all rights on 300 tables] new, new connection: median 63.4 ms, min 62.6 ms, max 65.5 ms (25 runs)
+[T2 + 60 SET-only groups with all rights on 300 tables] loadavg after: 1.28 1.39 2.10 3/684 1213930
+
+[S0 300 tables, platform role alone] loadavg before: 1.28 1.39 2.10 2/684 1213930
+[S0 300 tables, platform role alone] roles the session can become (itself included): 1; check_session: Ok(())
+[S0 300 tables, platform role alone] old, same session:   median 12.2 ms, min 11.8 ms, max 14.3 ms (25 runs)
+[S0 300 tables, platform role alone] new, same session:   median 11.2 ms, min 10.8 ms, max 14.9 ms (25 runs)
+[S0 300 tables, platform role alone] old, new connection: median 41.5 ms, min 40.4 ms, max 45.0 ms (25 runs)
+[S0 300 tables, platform role alone] new, new connection: median 41.8 ms, min 40.7 ms, max 46.4 ms (25 runs)
+[S0 300 tables, platform role alone] loadavg after: 1.50 1.44 2.11 3/684 1213930
+
+[S1 + 20 groups without rights] loadavg before: 1.50 1.44 2.11 1/683 1213930
+[S1 + 20 groups without rights] roles the session can become (itself included): 21; check_session: Ok(())
+[S1 + 20 groups without rights] old, same session:   median 19.7 ms, min 19.1 ms, max 21.2 ms (25 runs)
+[S1 + 20 groups without rights] new, same session:   median 25.9 ms, min 25.0 ms, max 29.4 ms (25 runs)
+[S1 + 20 groups without rights] old, new connection: median 58.2 ms, min 56.6 ms, max 62.8 ms (25 runs)
+[S1 + 20 groups without rights] new, new connection: median 65.1 ms, min 63.6 ms, max 81.5 ms (25 runs)
+[S1 + 20 groups without rights] loadavg after: 1.42 1.42 2.10 3/684 1213930
+
+[S2 20 groups with all rights on 300 tables, named in platform_access] loadavg before: 1.42 1.42 2.10 1/683 1213930
+[S2 20 groups with all rights on 300 tables, named in platform_access] roles the session can become (itself included): 21; check_session: Ok(())
+[S2 20 groups with all rights on 300 tables, named in platform_access] old, same session:   median 20.2 ms, min 19.7 ms, max 24.6 ms (25 runs)
+[S2 20 groups with all rights on 300 tables, named in platform_access] new, same session:   median 28.1 ms, min 26.9 ms, max 30.8 ms (25 runs)
+[S2 20 groups with all rights on 300 tables, named in platform_access] old, new connection: median 52.4 ms, min 51.2 ms, max 56.5 ms (25 runs)
+[S2 20 groups with all rights on 300 tables, named in platform_access] new, new connection: median 57.8 ms, min 57.0 ms, max 59.4 ms (25 runs)
+[S2 20 groups with all rights on 300 tables, named in platform_access] loadavg after: 1.39 1.41 2.09 3/684 1213930
+
+[S3 60 groups with all rights on 300 tables, named in platform_access] loadavg before: 1.39 1.41 2.09 1/683 1213930
+[S3 60 groups with all rights on 300 tables, named in platform_access] roles the session can become (itself included): 61; check_session: Ok(())
+[S3 60 groups with all rights on 300 tables, named in platform_access] old, same session:   median 59.6 ms, min 57.9 ms, max 61.0 ms (25 runs)
+[S3 60 groups with all rights on 300 tables, named in platform_access] new, same session:   median 116.7 ms, min 114.8 ms, max 120.1 ms (25 runs)
+[S3 60 groups with all rights on 300 tables, named in platform_access] old, new connection: median 90.5 ms, min 88.9 ms, max 95.1 ms (25 runs)
+[S3 60 groups with all rights on 300 tables, named in platform_access] new, new connection: median 149.0 ms, min 146.2 ms, max 151.4 ms (25 runs)
+[S3 60 groups with all rights on 300 tables, named in platform_access] loadavg after: 1.22 1.38 2.07 2/684 1213930
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 59.29s
+
+timing exit 0

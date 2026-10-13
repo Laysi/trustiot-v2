@@ -1,0 +1,35 @@
+rcheck: queued on the build host at 07:30:59 (Asia/Taipei)
+== 2026-10-12T23:38:47Z x86_64: apt: podman, skopeo, uidmap
+debconf: delaying package configuration, since apt-utils is not installed
+  buildah 1.33.7+ds1-1ubuntu0.24.04.3
+  podman 4.9.3+ds1-1ubuntu0.2
+  uidmap 1:4.13+dfsg1-4ubuntu3.2
+user: uid=1001(runner) gid=1001(runner) groups=1001(runner)
+SAME  attempt 1, identity: sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44, published sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44
+SAME  attempt 1, release-selftest: sha256:bc2b33e06519a9d303195f4196ca7c73d9f14357e0106709d9f434e928421743, published sha256:bc2b33e06519a9d303195f4196ca7c73d9f14357e0106709d9f434e928421743
+SAME  attempt 2, identity: sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44, published sha256:7a042972e7d25d3de66b7573982c04125bc04933b20ae3a923249ed848fcfa44
+SAME  attempt 2, release-selftest: sha256:bc2b33e06519a9d303195f4196ca7c73d9f14357e0106709d9f434e928421743, published sha256:bc2b33e06519a9d303195f4196ca7c73d9f14357e0106709d9f434e928421743
+== 2026-10-12T23:39:53Z aarch64: apt: podman, skopeo, uidmap
+debconf: delaying package configuration, since apt-utils is not installed
+  buildah 1.33.7+ds1-1ubuntu0.24.04.3
+  podman 4.9.3+ds1-1ubuntu0.2
+  uidmap 1:4.13+dfsg1-4ubuntu3.2
+user: uid=1001(runner) gid=1001(runner) groups=1001(runner)
+FAILED  attempt 1, identity: rootless podman did not build; /work/out/pack-rootless-arm64/1-identity/build.log:
+time="2026-10-12T23:42:40Z" level=warning msg="\"/\" is not a shared mount, this could cause issues or missing mounts with rootless containers"
+cannot clone: Invalid argument
+Error: cannot re-exec process
+FAILED  attempt 1, release-selftest: rootless podman did not build; /work/out/pack-rootless-arm64/1-release-selftest/build.log:
+time="2026-10-12T23:42:40Z" level=warning msg="\"/\" is not a shared mount, this could cause issues or missing mounts with rootless containers"
+cannot clone: Invalid argument
+Error: cannot re-exec process
+FAILED  attempt 2, identity: rootless podman did not build; /work/out/pack-rootless-arm64/2-identity/build.log:
+time="2026-10-12T23:42:42Z" level=warning msg="\"/\" is not a shared mount, this could cause issues or missing mounts with rootless containers"
+cannot clone: Invalid argument
+Error: cannot re-exec process
+FAILED  attempt 2, release-selftest: rootless podman did not build; /work/out/pack-rootless-arm64/2-release-selftest/build.log:
+time="2026-10-12T23:42:43Z" level=warning msg="\"/\" is not a shared mount, this could cause issues or missing mounts with rootless containers"
+cannot clone: Invalid argument
+Error: cannot re-exec process
+rcheck: removed 0 dangling test volumes
+rcheck: exit 0 at 07:42:45 (the build host)

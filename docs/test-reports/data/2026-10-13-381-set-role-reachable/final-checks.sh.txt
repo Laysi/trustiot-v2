@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Temporary (not committed): final checks for Laysi/trustiot-v2#381.
+set -o pipefail
+status=0
+step() {
+  local name=$1
+  shift
+  echo "===== $name: $*"
+  "$@" > "step.log" 2>&1
+  local rc=$?
+  grep -vE '^\s*(Compiling|Checking|Downloaded|Downloading|Blocking)' step.log \
+    | grep -E 'test result|^test .*(FAILED|ignored)|panicked|^error|^warning|failures:|up to date|Finished|Running|skipped:' \
+    | sed -E 's#\(/[^)]*/target/#(target/#'
+  echo "===== $name: exit $rc"
+  [[ $rc -eq 0 ]] || status=1
+}
+echo "load: $(cat /proc/loadavg)"
+step fmt cargo fmt --all --check
+step clippy-workspace cargo clippy --workspace --all-targets --locked -- -D warnings
+step clippy-service-kit-no-default cargo clippy -p service-kit --no-default-features --all-targets --locked -- -D warnings
+step test-service-kit cargo test --locked -p service-kit
+step test-service-kit-no-default cargo test --locked -p service-kit --no-default-features
+step test-outbox cargo test --locked -p outbox
+step test-testkit cargo test --locked -p testkit
+step test-identity cargo test --locked -p identity
+step test-sql-check-repo-check cargo test --locked -p sql-check -p repo-check
+step openapi-check cargo run --locked -p openapi -- --check
+rm -f step.log
+echo "load: $(cat /proc/loadavg)"
+echo "===== overall: $status"
+exit $status
