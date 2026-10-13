@@ -1,0 +1,3 @@
+ INFO: Validating renovate.json5
+ INFO: Config validated successfully against 1 file(s)
+exit=0

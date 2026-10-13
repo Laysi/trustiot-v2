@@ -467,27 +467,39 @@ NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
 
 | 範圍 | 做法 |
 | --- | --- |
-| Rust crate | Renovate 的 cargo manager 更新 `Cargo.toml` 與 `Cargo.lock`；版本固定為精確值（`rangeStrategy: pin`），minor 與 patch 每週合成一個 PR |
+| Rust crate | Renovate 的 cargo manager 更新 `Cargo.toml` 與 `Cargo.lock`；版本固定為精確值（`rangeStrategy: pin`），minor 與 patch 每週合成一個 PR。第一次的「pin dependencies」PR 把 `[workspace.dependencies]` 的每個需求改成 `Cargo.lock` 裡的版本（`=x.y.z`，例如 `cc` 的 `1.5.1` 改成 `=1.7.0`），不改 `Cargo.lock`；2026-10-13 先在本機套用同樣的釘選，`cargo check --workspace --all-targets --locked` 通過（Laysi/trustiot-v2#69，見 [測試報告](../test-reports/2026-10-13-69-renovate-config.md)）。釘選之後，每月的 lock file maintenance 不再移動這些直接相依，它們只由每週的 `rust crates` PR 更新 |
 | Bun 套件 | `scripts/` 的 `package.json` 與 `bun.lock`，每週一個 PR |
-| GitHub Actions | `helpers:pinGitHubActionDigestsToSemver`：每個 `uses:` 維持 40 字元 commit SHA，行尾註解維持版本 |
+| GitHub Actions | `helpers:pinGitHubActionDigestsToSemver`：每個 `uses:` 維持 40 字元 commit SHA，行尾註解維持版本。job 的 runner（`runs-on`，目前都是 `ubuntu-24.04-arm`）不由 Renovate 更新：用哪種 runner 是刻意的選擇（見上方「省 Actions 分鐘數」的 Runner），所以 `github-runners` 資料來源關閉，不會開「update dependency ubuntu」的 PR |
 | Istio 與其他寫在 workflow env 的版本 | env 上方寫 `# renovate:` 註解（資料來源與套件名稱）即由自訂規則更新；Istio 停在 1.30 minor。Gateway API 的版本與雜湊要一起改，不由 Renovate 更新 |
-| 容器映像 | `pinDigests: true`；原始碼、測試、workflow 與 values 裡寫成 `名稱:tag@sha256:…` 的映像由自訂規則讀取，更新時 tag 與 digest 一起換；chart 的 `repository`／`tag`／`digest` 分三行寫法也有規則；`deploy/images/` 的 Containerfile（release.yml 的映像基底）由 Renovate 內建的 dockerfile manager 讀取；`rancher/k3s` 與 kubectl 停在 1.36 minor，換 minor 是刻意的升級 |
-| `.prototools` | Renovate 的 proto manager 認得 `bun`、`go` 與 `rust`；有 schema 外掛的工具（`.proto/plugins/` 下的每一個，含 release.yml 用的 zig、cargo-zigbuild、cargo-auditable、syft、cosign，以及 flux、sops）在 pin 上方寫 `# renovate:` 註解，由自訂規則更新。`flux` 的更新 PR 要在同一個 PR 執行 `bun scripts/flux/components.ts` 重寫 Flux 的 manifest 與控制器 digest，否則 `bun test deploy/flux` 失敗（[deploy/flux/README.md](../../deploy/flux/README.md)「升級 Flux」）。上游在 GitHub 的工具以 `owner/repo` 命名；zig 的上游在 Codeberg（GitHub 上的 repo 在 0.15.2 之後沒有 tag），以 `git-tags` 讀 Codeberg repo 的 tag。新增工具時照樣寫註解，`bun test scripts/nightly` 會檢查註解存在、且指向外掛 `git-url` 的上游 |
+| 容器映像 | `pinDigests: true`；原始碼、測試、workflow 與 values 裡寫成 `名稱:tag@sha256:…` 的映像由自訂規則讀取，更新時 tag 與 digest 一起換；chart 的 `repository`／`tag`／`digest` 分三行寫法也有規則，tag 有沒有引號都讀得到（讀到的是去掉引號的 tag），Renovate 內建的 helm-values manager 關閉，每個映像只由一個 manager 讀取（helm-values 讀不到 digest，2026-10-13 的 Dashboard 因此出現「Could not determine new digest」）；`deploy/images/` 的 Containerfile（release.yml 的映像基底）由 Renovate 內建的 dockerfile manager 讀取；`rancher/k3s` 與 kubectl 停在 1.36 minor，換 minor 是刻意的升級；兩者都只會拿到正式版：k3s 的 tag 以 regex versioning 解析，只有 `vX.Y.Z-k3sN` 算版本，RC（例如 `v1.36.5-rc2-k3s1`）與單一架構的 tag 不會被提議，kubectl 用 Renovate 預設的 versioning，`-rc.N` 等預發布版本視為不穩定、不會取代穩定版的 pin。ClickHouse 只跟 LTS（`allowedVersions` 只允許 `.3` 與 `.8` 的 minor，values 與 chart README 記的是 26.8 LTS），tag 是浮動的 LTS minor（`"26.8"`）加 digest：tag 指向的 patch 版更新時，Renovate 開只換 digest 的 PR；換到下一個 LTS minor 的 PR 刻意會失敗，見下方「同一個 pin 的多份副本」 |
+| `.prototools` | Renovate 的 proto manager 認得 `bun`、`go` 與 `rust`，只更新版本，不釘 digest（`.prototools` 沒有寫 digest 的地方；`go` 來自 GitHub tag，Renovate 預設會提議一個什麼都不改的 digest 釘選）；有 schema 外掛的工具（`.proto/plugins/` 下的每一個，含 release.yml 用的 zig、cargo-zigbuild、cargo-auditable、syft、cosign，以及 flux、sops）在 pin 上方寫 `# renovate:` 註解，由自訂規則更新。`flux` 的更新 PR 要在同一個 PR 執行 `bun scripts/flux/components.ts` 重寫 Flux 的 manifest 與控制器 digest，否則 `bun test deploy/flux` 失敗（[deploy/flux/README.md](../../deploy/flux/README.md)「升級 Flux」）。Renovate 內建的 flux manager 不更新 `gotk-components.yaml` 的 Flux 版本：它只會重寫那個檔案、不會重寫控制器 digest 也不驗簽，Flux 版本只由 `.prototools` 的 pin 帶動。上游在 GitHub 的工具以 `owner/repo` 命名；zig 的上游在 Codeberg（GitHub 上的 repo 在 0.15.2 之後沒有 tag），以 `git-tags` 讀 Codeberg repo 的 tag。新增工具時照樣寫註解，`bun test scripts/nightly` 會檢查註解存在、且指向外掛 `git-url` 的上游 |
 | Rust 工具鏈 | `.prototools` 的 `rust` 與 `rust-toolchain.toml` 的 `channel` 合成一個 PR，兩處同時改（`repo-check` 要求兩者相同） |
 
-PR 標題是 Angular 格式（`chore(deps): …`），標籤 `area:ci` 與 `dependencies`；同時開著的 PR 最多 5 個、每小時最多 2 個，週一 06:00 前（台北時間）才開，資安修補不受排程限制。
+PR 標題是 Angular 格式（`chore(deps): …`），標籤 `area:ci` 與 `dependencies`；Dependency Dashboard issue（Laysi/trustiot-v2#389）帶 `area:ci` 與 `priority:P2`（`dependencyDashboardLabels`，符合每張 issue 要有 area 標籤與恰好一個 priority 標籤的規則）；同時開著的 PR 最多 5 個、每小時最多 2 個，週一 06:00 前（台北時間）才開，資安修補不受排程限制。
 
 不由 Renovate 更新的項目（要手動改）：
 
 - nightly 的 `GATEWAY_API_VERSION` 與 `GATEWAY_CRDS_SHA256`：同上，版本與雜湊要一起換。
 - nightly 的 `CNPG_VERSION` 與 `CNPG_MANIFEST_SHA256`：版本與雜湊要一起換，同時改 `deploy/cloudnative-pg/README.md`（`bun test scripts/nightly` 檢查兩邊相同）；先讀該版的 release notes。
 - `.github/actions/setup-proto/action.yml` 的 `PROTO_VERSION` 與 `PROTO_SHA256_X64`、`PROTO_SHA256_ARM64`：三個值必須一起換，Renovate 只能改版本號。
-- `scripts/lib/stack.ts` 的開發環境映像：只有 digest，tag 寫在註解，Renovate 讀不到。把 tag 寫進字串（`名稱:tag@sha256:…`）就會被納入。
 - `scripts/flux/age.ts` 的 `AGE_VERSION`（age 從原始碼建置的版本）。
 - Flux 控制器映像的 digest（`deploy/flux/clusters/saas/flux-system/kustomization.yaml`）：隨 `flux` 的 pin 由 `bun scripts/flux/components.ts` 重寫，不單獨更新。
+
+### 同一個 pin 的多份副本
+
+同一個映像或工具版本常寫在好幾個檔案（chart、開發環境、測試）。Renovate 的 PR 必須一次改完每一份，否則 CI 失敗或副本互相不一致。規則（2026-10-13，Laysi/trustiot-v2#69）：
+
+- 每一份映像都寫成 Renovate 讀得到的形式：`名稱:tag@sha256:…`（原始碼、測試、workflow、values 與 `scripts/README.md` 的指令），或 chart values 的 `repository`／`tag`／`digest` 三行，或 Containerfile 的 `FROM`。同一個映像名稱與 tag 的更新，不論在哪個檔案、由哪個 manager 讀到，都進同一個分支，所以一個 PR 改完所有副本。`scripts/lib/stack.ts`、`services/ingest/tests/common/mod.rs` 與 `crates/protocol/tests/broker.rs` 原本只寫 digest、Renovate 讀不到，2026-10-13 補上 tag。
+- `bun test scripts/nightly` 檢查：這些檔案裡每個 digest 都屬於 Renovate 讀得到的 pin（例外只有由工具重寫的 Flux 控制器與 chart 來源）；同一個映像名稱與 tag 的每一份 digest 都相同；同一個映像只有一種寫法。
+- 刻意擋下的更新（PR 會開，但 CI 失敗，要有人完成另一半）：
+  - ClickHouse 換 LTS minor：chart 測試的 `CLICKHOUSE_MINOR`（`deploy/chart/tests/chart.test.ts`）只接受 26.8。決策 14 的租戶隔離分析與 `services/ingest` 的內省測試是在 26.8 上做的，換 minor 要先重做，再改這個常數。同一個 minor 的新 digest 不受影響，三份（values、`stack.ts`、`mod.rs`）在同一個 PR 更新。
+  - OpenTelemetry collector 換版本：`services/ingest/migrations/clickhouse/0006_logs.sql` 照 v0.161.0 exporter 的表結構寫。chart 測試的 `EXPORTER_VERSION` 只接受那個版本，並檢查 exporter 的欄位都在 migration 裡；換版本要先對照新版 exporter 的欄位（有變就加 migration），再改常數。Renovate 的這類 PR 帶一段說明（`prBodyNotes`）。同一版本的新 digest 只在 values 一處，單獨的 PR 就完整。
+  - k3s：nightly 的 `K3S_IMAGE` 必須是 SaaS 主機安裝程式（`deploy/host/src/desired.ts`）的 `K3S_VERSION`。主機的 pin 還有官方安裝程式的 SHA-256，Renovate 算不出來，所以 k3s 的 PR 在 `bun test scripts/nightly` 失敗，要有人更新主機的版本、安裝程式網址與 SHA-256。
+  - Istio：nightly 的 `ISTIO_VERSION` 必須與 `deploy/istio/README.md` 安裝指令的版本相同。Istio 的 PR 在 `bun test scripts/nightly` 失敗，要有人更新 README，並升級 lab 與 SaaS 主機。
+- 其他已在上面列出的組合：Rust 工具鏈（同一個群組）、Flux（`components.ts`）、CloudNativePG 的 Postgres（`postgres-image` job 檢查伺服器標頭）。
 
 ### 需要人在 GitHub 組織裝 Renovate
 
 設定檔本身不會執行，要有 Renovate 跑它：組織管理員安裝 Mend 的 Renovate GitHub App，授權給 `Laysi/trustiot-v2`。App 會先開一個 onboarding PR 或直接讀 `renovate.json5`；之後 Dependency Dashboard issue 列出所有待辦。這是管理員動作，agent 不做。App 的代價是第三方存取原始碼，私有庫要確認組織同意（2026-10-12 起 repo 公開，原始碼本來就任何人讀得到，這項顧慮不再成立；安裝仍是組織管理員的動作，Laysi/trustiot-v2#345）；替代做法是用 `renovatebot/github-action` 在我們自己的 workflow 跑，但那需要一個有寫入權限的 token（GitHub App 或 PAT）存成 secret，目前原則是 GitHub 不持有這類憑證，所以優先用 App。
 
-設定的驗證：`renovate-config-validator` 通過；以 `renovate --platform=local --dry-run=extract` 對這個 repo 抽取依賴（結果在測試報告）。
+設定的驗證：`renovate-config-validator --strict` 通過；以 `renovate --platform=local --dry-run=lookup` 對這個 repo 抽取依賴並查詢更新（2026-10-13 起以釘選 digest 的 Renovate 容器映像用 podman 執行，proto 無法管理 Renovate；指令與結果見 [測試報告](../test-reports/2026-10-13-69-renovate-config.md)）。本機沒有 GitHub token，所以 GitHub 上的資料來源（Actions、`github-releases`、`github-tags`）查不到，那些規則改以 Renovate 本身的規則比對程式驗證；`bun test scripts/nightly` 檢查設定裡的規則。

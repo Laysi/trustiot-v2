@@ -800,15 +800,23 @@ describe("bundled ClickHouse (decision 14)", () => {
     return match[1];
   }
 
-  test("the image is pinned to the same digest as the dev environment and the schema tests", () => {
-    const chartDigest = digestOf(container.image);
-    expect(container.image).toStartWith("docker.io/clickhouse/clickhouse-server:26.8@");
+  // The ClickHouse LTS minor that decision 14's tenant isolation analysis and the introspection
+  // tests of services/ingest were checked against. Renovate proposes only LTS minors and updates
+  // the digest of this one on its own (renovate.json5); a pull request to the next LTS fails here
+  // on purpose until someone has repeated those checks and moved this constant.
+  const CLICKHOUSE_MINOR = "26.8";
+
+  test("the image is the checked LTS minor, pinned like the dev environment and the schema tests", () => {
+    digestOf(container.image);
+    expect(container.image).toStartWith(`docker.io/clickhouse/clickhouse-server:${CLICKHOUSE_MINOR}@`);
     const stack = readFileSync(join(REPO_ROOT, "scripts/lib/stack.ts"), "utf8");
     const devImage = stack.match(/clickhouse:\s*"([^"]+)"/)?.[1] ?? "";
     const schemaTests = readFileSync(join(REPO_ROOT, "services/ingest/tests/common/mod.rs"), "utf8");
     const testImage = schemaTests.match(/CLICKHOUSE_IMAGE: &str = "([^"]+)"/)?.[1] ?? "";
-    expect(digestOf(devImage)).toBe(chartDigest);
-    expect(digestOf(testImage)).toBe(chartDigest);
+    // Same tag and digest in all three: Renovate reads each as one copy of the same pin and
+    // updates them in one pull request.
+    expect(devImage).toBe(container.image);
+    expect(testImage).toBe(container.image);
   });
 
   test("one replica with a retained data volume, reachable through a ClusterIP Service only", () => {
@@ -1225,7 +1233,11 @@ type CollectorConfig = {
 
 // Columns the ClickHouse exporter of the pinned collector inserts
 // (exporter/clickhouseexporter/internal/sqltemplates/{logs,traces}_insert.sql of
-// opentelemetry-collector-contrib v0.161.0, plus the optional EventName of logs).
+// opentelemetry-collector-contrib v0.161.0, plus the optional EventName of logs). This is the
+// guard on collector upgrades: a Renovate pull request that changes the collector's tag fails
+// the tests below until someone has compared the new exporter's columns with 0006_logs.sql (and
+// added a migration if they changed) and moved this version. A new digest of the same version
+// passes on its own (renovate.json5).
 const EXPORTER_VERSION = "0.161.0";
 const EXPORTER_COLUMNS = {
   otel_logs: [
@@ -1281,9 +1293,10 @@ describe("OpenTelemetry collector (decision 22)", () => {
     return names;
   }
 
-  test("the image is the contrib distribution pinned to its multi-arch digest", () => {
-    expect(container.image).toBe(
-      `docker.io/otel/opentelemetry-collector-contrib:${EXPORTER_VERSION}@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1`,
+  test("the image is the contrib distribution of the checked version, pinned by digest", () => {
+    // The digest lives in values.yaml only, so a new digest of the same version needs no edit here.
+    expect(container.image).toMatch(
+      new RegExp(`^docker\\.io/otel/opentelemetry-collector-contrib:${EXPORTER_VERSION.replaceAll(".", "\\.")}@sha256:[0-9a-f]{64}$`),
     );
     expect(container.args).toEqual(["--config=/etc/otelcol/config.yaml"]);
   });

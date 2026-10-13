@@ -1,0 +1,73 @@
+
+=== A: the branch as committed
+
+ 26 pass
+ 0 fail
+ 24 pass
+ 0 fail
+
+=== B: ClickHouse 26.8 digest pull request (all three copies, as Renovate plans it)
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+ 26 pass
+ 0 fail
+ 24 pass
+ 0 fail
+
+=== C: the same update in values.yaml only (what main's config would have opened)
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+(fail) bundled ClickHouse (decision 14) > the image is the checked LTS minor, pinned like the dev environment and the schema tests [0.47ms]
+(fail) bundled ClickHouse (decision 14) > the image is the checked LTS minor, pinned like the dev environment and the schema tests [0.47ms]
+ 25 pass
+ 1 fail
+(fail) every copy of a pin is updated by the same pull request > all copies of an image and tag carry the same digest [0.25ms]
+(fail) every copy of a pin is updated by the same pull request > all copies of an image and tag carry the same digest [0.25ms]
+ 23 pass
+ 1 fail
+
+=== D: a pull request to the next LTS minor, 27.3 (made-up digest)
+ 3 files changed, 4 insertions(+), 4 deletions(-)
+(fail) bundled ClickHouse (decision 14) > the image is the checked LTS minor, pinned like the dev environment and the schema tests [0.44ms]
+(fail) bundled ClickHouse (decision 14) > the image is the checked LTS minor, pinned like the dev environment and the schema tests [0.44ms]
+ 25 pass
+ 1 fail
+ 24 pass
+ 0 fail
+
+=== E: collector digest pull request, same version 0.161.0 (made-up digest)
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+ 26 pass
+ 0 fail
+ 24 pass
+ 0 fail
+
+=== F: collector version pull request, 0.162.0
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+(fail) OpenTelemetry collector (decision 22) > the image is the contrib distribution of the checked version, pinned by digest [0.43ms]
+(fail) OpenTelemetry collector (decision 22) > ClickHouse gets inserts only, into tables the migrations own [0.26ms]
+(fail) OpenTelemetry collector (decision 22) > the image is the contrib distribution of the checked version, pinned by digest [0.43ms]
+(fail) OpenTelemetry collector (decision 22) > ClickHouse gets inserts only, into tables the migrations own [0.26ms]
+ 24 pass
+ 2 fail
+(fail) every copy of a pin is updated by the same pull request > a collector version change carries a note about the guard in the chart tests [0.37ms]
+(fail) every copy of a pin is updated by the same pull request > a collector version change carries a note about the guard in the chart tests [0.37ms]
+ 23 pass
+ 1 fail
+
+=== G: k3s pull request to v1.36.6-k3s1 (nightly.yml only; the host pins need the installer SHA-256)
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+ 26 pass
+ 0 fail
+(fail) every copy of a pin is updated by the same pull request > the nightly's k3s and Istio are the versions the SaaS host and the lab install [0.27ms]
+(fail) every copy of a pin is updated by the same pull request > the nightly's k3s and Istio are the versions the SaaS host and the lab install [0.27ms]
+ 23 pass
+ 1 fail
+
+=== H: Istio pull request to 1.30.6 (nightly.yml only)
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+ 26 pass
+ 0 fail
+(fail) every copy of a pin is updated by the same pull request > the nightly's k3s and Istio are the versions the SaaS host and the lab install [0.32ms]
+(fail) every copy of a pin is updated by the same pull request > the nightly's k3s and Istio are the versions the SaaS host and the lab install [0.32ms]
+ 23 pass
+ 1 fail
+rcheck: removed 0 dangling test volumes

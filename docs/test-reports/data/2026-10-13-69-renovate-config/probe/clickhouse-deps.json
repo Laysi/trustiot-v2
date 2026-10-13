@@ -1,0 +1,77 @@
+[
+  {
+    "matchStrings": [
+      "(?<depName>[a-z0-9][a-z0-9./_-]*[a-z0-9]):(?<currentValue>[A-Za-z0-9_][A-Za-z0-9._-]*)@(?<currentDigest>sha256:[a-f0-9]{64})"
+    ],
+    "datasourceTemplate": "docker",
+    "packageFile": "scripts/lib/stack.ts",
+    "depName": "docker.io/clickhouse/clickhouse-server",
+    "currentValue": "26.8",
+    "currentDigest": "sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c",
+    "datasource": "docker",
+    "replaceString": "docker.io/clickhouse/clickhouse-server:26.8@sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c",
+    "packageName": "docker.io/clickhouse/clickhouse-server",
+    "versioning": "docker",
+    "warnings": [],
+    "registryUrl": "https://index.docker.io",
+    "lookupName": "clickhouse/clickhouse-server",
+    "currentVersion": "26.8",
+    "fixedVersion": "26.8",
+    "updateType": "digest",
+    "newValue": "26.8",
+    "newDigest": "sha256:dd81097e2c38827a438287d8ae5d4dc8afafbdd0e61e83376fdd7ed4580673b9",
+    "branchName": "renovate/docker.io-clickhouse-clickhouse-server-26.8",
+    "manager": "regex",
+    "depIndex": 1
+  },
+  {
+    "matchStrings": [
+      "(?<depName>[a-z0-9][a-z0-9./_-]*[a-z0-9]):(?<currentValue>[A-Za-z0-9_][A-Za-z0-9._-]*)@(?<currentDigest>sha256:[a-f0-9]{64})"
+    ],
+    "datasourceTemplate": "docker",
+    "packageFile": "services/ingest/tests/common/mod.rs",
+    "depName": "docker.io/clickhouse/clickhouse-server",
+    "currentValue": "26.8",
+    "currentDigest": "sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c",
+    "datasource": "docker",
+    "replaceString": "docker.io/clickhouse/clickhouse-server:26.8@sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c",
+    "packageName": "docker.io/clickhouse/clickhouse-server",
+    "versioning": "docker",
+    "warnings": [],
+    "registryUrl": "https://index.docker.io",
+    "lookupName": "clickhouse/clickhouse-server",
+    "currentVersion": "26.8",
+    "fixedVersion": "26.8",
+    "updateType": "digest",
+    "newValue": "26.8",
+    "newDigest": "sha256:dd81097e2c38827a438287d8ae5d4dc8afafbdd0e61e83376fdd7ed4580673b9",
+    "branchName": "renovate/docker.io-clickhouse-clickhouse-server-26.8",
+    "manager": "regex",
+    "depIndex": 0
+  },
+  {
+    "matchStrings": [
+      "repository: [\"']?(?<depName>[^\"'\\s]+)[\"']?\\n\\s+tag: [\"']?(?<currentValue>[^\"'\\s]+)[\"']?\\n\\s+digest: [\"']?(?<currentDigest>sha256:[a-f0-9]{64})[\"']?"
+    ],
+    "datasourceTemplate": "docker",
+    "packageFile": "deploy/chart/values.yaml",
+    "depName": "docker.io/clickhouse/clickhouse-server",
+    "currentValue": "26.8",
+    "currentDigest": "sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c",
+    "datasource": "docker",
+    "replaceString": "repository: docker.io/clickhouse/clickhouse-server\n      tag: \"26.8\"\n      digest: sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c",
+    "packageName": "docker.io/clickhouse/clickhouse-server",
+    "versioning": "docker",
+    "warnings": [],
+    "registryUrl": "https://index.docker.io",
+    "lookupName": "clickhouse/clickhouse-server",
+    "currentVersion": "26.8",
+    "fixedVersion": "26.8",
+    "updateType": "digest",
+    "newValue": "26.8",
+    "newDigest": "sha256:dd81097e2c38827a438287d8ae5d4dc8afafbdd0e61e83376fdd7ed4580673b9",
+    "branchName": "renovate/docker.io-clickhouse-clickhouse-server-26.8",
+    "manager": "regex",
+    "depIndex": 0
+  }
+]
