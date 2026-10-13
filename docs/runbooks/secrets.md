@@ -155,7 +155,7 @@ TLS 憑證（`<cluster>-ca`、`<cluster>-server`、`<cluster>-replication`）由
 
 ### 叢集內產生的帳號
 
-ClickHouse、MQTT dynsec、Grafana 的帳號由叢集內產生，值不經過人。各自的 issue 補上指令（Laysi/trustiot-v2#59、Laysi/trustiot-v2#84、Laysi/trustiot-v2#183）；Postgres 的 owner 見上一節。各服務自己的 Postgres 角色（`postgres.serviceRolesSecret`）與 OpenTelemetry collector 的 ClickHouse 帳號由 migration Job 依 Secret 的值設定，輪替步驟見 [migration Job 的 runbook](migrations.md) 的「輪替服務角色的密碼」。原則：在叢集內重新產生值、更新資料庫裡的帳號、重啟使用它的服務，三步在一次維護中完成；只有懷疑外洩或人員異動時才需要輪替。
+ClickHouse、MQTT dynsec、Grafana 的帳號由叢集內產生，值不經過人。各自的 issue 補上指令（Laysi/trustiot-v2#59、Laysi/trustiot-v2#84、Laysi/trustiot-v2#183）；Postgres 的 owner 見上一節。各服務自己的 Postgres 角色與 OpenTelemetry collector 的 ClickHouse 帳號，密碼由 migration Job 產生並設定（`<release>-<服務>-password`、`<release>-otel-collector-password`），沒有人經手；輪替是調大 `migrate.passwordGeneration`，步驟見 [migration Job 的 runbook](migrations.md) 的「輪替服務角色與 collector 的密碼」，資料遺失時見同一份的「密碼 Secret 的資料遺失」。原則：在叢集內重新產生值、更新資料庫裡的帳號、重啟使用它的服務，三步在一次維護中完成；只有懷疑外洩或人員異動時才需要輪替。
 
 ### OTA 簽章私鑰
 

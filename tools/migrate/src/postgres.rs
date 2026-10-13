@@ -16,6 +16,7 @@ use sqlx::postgres::PgConnectOptions;
 use sqlx::{Connection, Executor, PgConnection, Row};
 
 use crate::config::{RunConfig, is_plain_identifier};
+use crate::passwords::Passwords;
 use crate::registry::{
     DATABASE, Migration, OUTBOX_EVENT_TEMPLATE, Registry, Service, TenantRoleHook,
 };
@@ -178,43 +179,31 @@ pub struct Session {
     locked: bool,
 }
 
-/// Checks, before anything runs, that every role in `postgres.required_passwords` is a login
-/// role of the registry and has a usable password file.
+/// Checks, before anything runs, that every role in `passwords.postgres` is a login role of the
+/// registry: the chart binds a Secret to the role of every service of the deployment that uses
+/// Postgres, and a role the Job does not create would get a password nobody logs in with.
 ///
 /// # Errors
 ///
-/// [`Error::Role`] for the first role that is not, [`Error::Password`] for an unusable file.
-pub async fn check_required_passwords(
-    config: &RunConfig,
-    registry: &Registry,
-) -> Result<(), Error> {
-    let required = config.postgres.required_passwords();
-    if required.is_empty() {
+/// [`Error::Role`] for the first role that is not.
+pub fn check_password_bindings(config: &RunConfig, registry: &Registry) -> Result<(), Error> {
+    let Some(settings) = &config.passwords else {
         return Ok(());
-    }
+    };
+    let bindings = settings
+        .postgres()
+        .map_err(|error| Error::Kube(format!("{}: {}", error.key, error.message)))?;
     let login_roles: BTreeSet<String> = registry
         .services
         .iter()
         .flat_map(Service::login_roles)
         .collect();
-    for role in required {
-        if !login_roles.contains(role) {
+    for binding in bindings {
+        if !login_roles.contains(&binding.owner) {
             return Err(Error::Role {
-                role: role.to_owned(),
+                role: binding.owner,
                 problem: "a service of this deployment logs in with it, but no service in \
                           tools/migrate's registry has it; register the service there"
-                    .to_owned(),
-            });
-        }
-        let found = match &config.postgres.role_passwords_dir {
-            Some(dir) => Password::read(dir, role).await?,
-            None => None,
-        };
-        if found.is_none() {
-            return Err(Error::Role {
-                role: role.to_owned(),
-                problem: "a service of this deployment logs in with it, but its password file \
-                          is missing; add the key to postgres.serviceRolesSecret"
                     .to_owned(),
             });
         }
@@ -433,7 +422,7 @@ impl Session {
         Ok(())
     }
 
-    /// The whole Postgres part.
+    /// The whole Postgres part, after [`Self::check_migrator`].
     ///
     /// # Errors
     ///
@@ -442,9 +431,9 @@ impl Session {
         &mut self,
         config: &RunConfig,
         registry: &Registry,
+        passwords: &Passwords,
         report: &mut Report,
     ) -> Result<(), Error> {
-        self.check_migrator().await?;
         sqlx::raw_sql(BOOTSTRAP)
             .execute(&mut self.conn)
             .await
@@ -458,7 +447,8 @@ impl Session {
         self.apply_once("database", &DATABASE, None, None, Apply::File, report)
             .await?;
         for service in registry.services {
-            self.ensure_service(config, service, report).await?;
+            self.ensure_service(config, passwords, service, report)
+                .await?;
         }
         for service in registry.services {
             self.ensure_outbox(registry, service, report).await?;
@@ -486,7 +476,11 @@ impl Session {
     /// The migration role must own the database (for database.sql and to create schemas) and
     /// create roles; it must not be a superuser or bypass row-level security, so nothing it
     /// creates can be more than it is.
-    async fn check_migrator(&mut self) -> Result<(), Error> {
+    ///
+    /// # Errors
+    ///
+    /// [`Error::MigrationRole`] when it does not qualify.
+    pub async fn check_migrator(&mut self) -> Result<(), Error> {
         let (name, superuser, createrole, bypassrls, owns_database, owned): (
             String,
             bool,
@@ -840,6 +834,7 @@ impl Session {
     async fn ensure_service(
         &mut self,
         config: &RunConfig,
+        passwords: &Passwords,
         service: &Service,
         report: &mut Report,
     ) -> Result<(), Error> {
@@ -905,28 +900,26 @@ impl Session {
                 .map_err(Error::postgres(format!("set the search_path of {role}")))?;
                 report.change(format!("set the search_path of {role} to {schema}"));
             }
-            self.ensure_password(config, &role, report).await?;
+            self.ensure_password(config, passwords.postgres(&role), &role, report)
+                .await?;
         }
         Ok(())
     }
 
-    /// Sets `role`'s password from its file when the role cannot log in with it yet. The check
-    /// is a real login, since only a superuser can read the stored verifier; so a run with the
-    /// right passwords in place changes nothing.
+    /// Sets `role`'s password to the one in its Secret when the role cannot log in with it yet.
+    /// The check is a real login, since only a superuser can read the stored verifier; so a run
+    /// with the right passwords in place changes nothing.
     async fn ensure_password(
         &mut self,
         config: &RunConfig,
+        password: Option<&Password>,
         role: &str,
         report: &mut Report,
     ) -> Result<(), Error> {
-        let password = match &config.postgres.role_passwords_dir {
-            Some(dir) => Password::read(dir, role).await?,
-            None => None,
-        };
         let Some(password) = password else {
             tracing::warn!(
                 role,
-                "no password file for this role; its password is left as it is"
+                "no Secret is bound to this role; its password is left as it is"
             );
             report.roles_without_password.push(role.to_owned());
             return Ok(());

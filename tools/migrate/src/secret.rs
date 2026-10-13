@@ -1,18 +1,20 @@
-//! Passwords the Job sets: where they come from, what it accepts, and the hashed forms it sends
+//! Passwords the Job sets: how it generates them, what it accepts, and the hashed forms it sends
 //! instead of the plaintext.
 
 use std::fmt;
-use std::path::Path;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
-/// Fewer characters than this is refused: the chart's instructions generate 64 hex digits.
+/// Fewer characters than this is refused; the Job generates 64 hex digits.
 pub const MIN_PASSWORD_CHARS: usize = 16;
-/// More is refused too; no generator the runbooks name comes close.
+/// More is refused too.
 pub const MAX_PASSWORD_CHARS: usize = 512;
+
+/// Random bytes in a generated password: 256 bits.
+pub const GENERATED_BYTES: usize = 32;
 
 /// PBKDF2 iterations of the SCRAM verifier: Postgres's own default (`scram_iterations`).
 const SCRAM_ITERATIONS: u32 = 4096;
@@ -34,17 +36,8 @@ pub enum PasswordError {
         "the password of {owner} must have between {MIN_PASSWORD_CHARS} and {MAX_PASSWORD_CHARS} characters"
     )]
     Length { owner: String },
-    #[error(
-        "the password of {owner} must be printable ASCII without spaces (for example \
-         `openssl rand -hex 32`); a trailing newline from `echo` is a common cause"
-    )]
+    #[error("the password of {owner} must be printable ASCII without spaces")]
     Characters { owner: String },
-    #[error("cannot read the password of {owner} from {path}: {source}")]
-    Read {
-        owner: String,
-        path: String,
-        source: std::io::Error,
-    },
 }
 
 impl Password {
@@ -71,28 +64,29 @@ impl Password {
         Ok(Self(value))
     }
 
-    /// Reads the password of `owner` from `dir/<owner>` (a mounted Secret key). `Ok(None)` when
-    /// the file does not exist.
+    /// A new password: [`GENERATED_BYTES`] bytes from the operating system's CSPRNG, as 64
+    /// lower-case hex digits (256 bits; within the limits above and ASCII, so Postgres and
+    /// ClickHouse hash it the same way).
     ///
     /// # Errors
     ///
-    /// When the file exists but cannot be read or holds an unacceptable password.
-    pub async fn read(dir: &Path, owner: &str) -> Result<Option<Self>, PasswordError> {
-        let path = dir.join(owner);
-        match tokio::fs::read(&path).await {
-            Ok(bytes) => {
-                let text = String::from_utf8(bytes).map_err(|_| PasswordError::Characters {
-                    owner: owner.to_owned(),
-                })?;
-                Self::new(owner, text).map(Some)
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(source) => Err(PasswordError::Read {
-                owner: owner.to_owned(),
-                path: path.display().to_string(),
-                source,
-            }),
-        }
+    /// When the operating system has no randomness.
+    pub fn generate() -> Result<Self, getrandom::Error> {
+        let mut bytes = [0_u8; GENERATED_BYTES];
+        getrandom::fill(&mut bytes)?;
+        Ok(Self(hex(&bytes)))
+    }
+
+    /// Reads a password from bytes kept elsewhere (a Secret key).
+    ///
+    /// # Errors
+    ///
+    /// When the bytes are not an acceptable password; the error never contains them.
+    pub fn from_bytes(owner: &str, bytes: Vec<u8>) -> Result<Self, PasswordError> {
+        let text = String::from_utf8(bytes).map_err(|_| PasswordError::Characters {
+            owner: owner.to_owned(),
+        })?;
+        Self::new(owner, text)
     }
 
     /// The plaintext, for logging in with it.
@@ -201,6 +195,24 @@ mod tests {
         let long = "x".repeat(MAX_PASSWORD_CHARS + 1);
         assert!(Password::new("r", long).is_err());
         assert!(Password::new("r", "0123456789abcdef".to_owned()).is_ok());
+    }
+
+    #[test]
+    fn generated_passwords_are_256_bit_hex_and_never_repeat() {
+        let first = Password::generate().expect("random");
+        let second = Password::generate().expect("random");
+        assert_ne!(first, second);
+        for password in [&first, &second] {
+            assert_eq!(password.expose().len(), GENERATED_BYTES * 2);
+            assert!(
+                password
+                    .expose()
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            );
+            assert!(Password::new("r", password.expose().to_owned()).is_ok());
+        }
+        assert!(Password::from_bytes("r", vec![0xff; 20]).is_err());
     }
 
     #[test]

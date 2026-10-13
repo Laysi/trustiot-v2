@@ -40,7 +40,10 @@
  *    16-byte tag), and the `sops` block has a version, a modification time, an encrypted MAC
  *    and age recipients with their wrapped data keys. Kustomize `secretGenerator` is not
  *    used: its literals, files and env files are plain text this check cannot verify. Templates
- *    (Helm `.yaml` and `.tpl` files with `{{ }}`) may not declare a Secret or a templated kind.
+ *    (Helm `.yaml` and `.tpl` files with `{{ }}`) may not declare a Secret or a templated kind,
+ *    except an empty Secret the migration Job fills: labelled `trustiot.io/filled-by: migrate`,
+ *    with no key but apiVersion, kind, metadata and type, and no template action that could add
+ *    one (docs/architecture/secrets.md).
  *    Manifests may also be JSON files.
  * 6. The build context is chosen at build time, which a static check cannot see, so every
  *    container build takes its arguments from `containerBuildArgs` (scripts/lib/build-context.ts),
@@ -1411,12 +1414,89 @@ function siblingKeys(lines: readonly string[], index: number, column: number, da
   return keys;
 }
 
+/** The label that marks a Secret the chart declares empty for the migration Job to fill. */
+const FILLED_BY_LINE = /^[ \t]*trustiot\.io\/filled-by:[ \t]*migrate[ \t]*$/;
+/** The only keys such a Secret may have: no `data`, no `stringData`, nothing that could carry them. */
+const EMPTY_SECRET_KEYS = new Set(["apiVersion", "kind", "metadata", "type"]);
+/** Template actions that render nothing: control flow, variables and comments. */
+const SILENT_ACTION = /^[ \t]*\{\{-?[ \t]*(?:if\b|else\b|end\b|range\b|with\b|\/\*|\$[A-Za-z_][A-Za-z0-9_]*[ \t]*:?=)/;
+/** A whole-line template action that renders text, and the indentation it renders it at. */
+const INDENTED_ACTION = /\|[ \t]*n?indent[ \t]+(\d+)[ \t]*-?\}\}[ \t]*$/;
+
+/**
+ * The lines of the mapping that holds the key at `column` on line `index`, up to a document
+ * separator, a list item, or a line indented less.
+ */
+function mappingLines(lines: readonly string[], index: number, column: number, dashed: boolean): number[] {
+  const indentOf = (line: string) => {
+    const match = /^([ \t]*)(-[ \t]+)?/.exec(line);
+    return { indent: (match?.[1] ?? "").length + (match?.[2] ?? "").length, dash: match?.[2] !== undefined };
+  };
+  const separator = (line: string) => /^(---|\.\.\.)([ \t]|$)/.test(line);
+  const inside: number[] = [index];
+  for (let i = index + 1; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (separator(line)) break;
+    if (!NON_YAML_LINE.test(line)) {
+      const { indent, dash } = indentOf(line);
+      if (indent < column || (indent === column && dash)) break;
+    }
+    inside.push(i);
+  }
+  if (!dashed) {
+    for (let i = index - 1; i >= 0; i -= 1) {
+      const line = lines[i] ?? "";
+      if (separator(line)) break;
+      if (!NON_YAML_LINE.test(line)) {
+        const { indent, dash } = indentOf(line);
+        if (indent < column) break;
+        inside.push(i);
+        if (indent === column && dash) break;
+        continue;
+      }
+      inside.push(i);
+    }
+  }
+  return inside.sort((a, b) => a - b);
+}
+
+/**
+ * Whether the Secret declared on line `index` is one the chart may declare: empty, for the
+ * migration Job to fill (docs/architecture/secrets.md). It carries the label
+ * `trustiot.io/filled-by: migrate`; its keys are only apiVersion, kind, metadata and type (no
+ * `data` or `stringData`), none of them templated; and every whole-line template action inside
+ * it renders deeper than those keys (`| nindent 4`). Text cannot prove what a template renders
+ * (a templated value could still hold a line break), so the chart tests check every rendered
+ * Secret too: only apiVersion, kind, metadata and type.
+ */
+function isEmptyFilledSecret(lines: readonly string[], index: number, column: number, dashed: boolean): boolean {
+  const inside = mappingLines(lines, index, column, dashed);
+  if (!inside.some((i) => FILLED_BY_LINE.test(lines[i] ?? ""))) return false;
+  for (const i of inside) {
+    const line = lines[i] ?? "";
+    if (!/^[ \t]*\{\{/.test(line)) {
+      // A key of the Secret itself (at the column of its kind), or anything deeper.
+      const key = /^([ \t]*)(?:-[ \t]+)?([^\s:#][^:#]*?)[ \t]*:/.exec(line);
+      const indent = /^([ \t]*(?:-[ \t]+)?)/.exec(line)?.[1]?.length ?? 0;
+      if (!NON_YAML_LINE.test(line) && indent === column && (key === null || !EMPTY_SECRET_KEYS.has(key[2] ?? "") || line.includes("{{"))) {
+        return false;
+      }
+      continue;
+    }
+    if (SILENT_ACTION.test(line)) continue;
+    const indented = INDENTED_ACTION.exec(line);
+    if (indented === null || Number(indented[1]) <= column) return false;
+  }
+  return true;
+}
+
 /**
  * Rule 5 for a template that is not plain YAML (a Helm `.yaml` template or `.tpl` helper): it
  * fails when it declares a Secret, or a kind that is itself templated and could render one,
  * because what it renders cannot be verified here. The chart tests check rendered output.
  * A `kind: Secret` in a reference to a Secret by name (a Gateway's `certificateRefs`, with
- * `name` or `group` beside it and no `apiVersion`) is not a declaration.
+ * `name` or `group` beside it and no `apiVersion`) is not a declaration. The one exception is an
+ * empty Secret the migration Job fills (`isEmptyFilledSecret`): it carries no value to verify.
  */
 export function checkTemplateText(file: string, source: string): Violation[] {
   const lines = source.split(/\r?\n/);
@@ -1433,6 +1513,10 @@ export function checkTemplateText(file: string, source: string): Violation[] {
     const dashed = match[2] !== undefined;
     const siblings = siblingKeys(lines, index, (match[1] ?? "").length + (match[2] ?? "").length, dashed);
     if (!siblings.includes("apiVersion") && (siblings.includes("name") || siblings.includes("group"))) {
+      return;
+    }
+    const column = (match[1] ?? "").length + (match[2] ?? "").length;
+    if (/^secret$/i.test(value) && isEmptyFilledSecret(lines, index, column, dashed)) {
       return;
     }
     violations.push({

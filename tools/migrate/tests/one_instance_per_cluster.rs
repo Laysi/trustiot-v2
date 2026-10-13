@@ -12,7 +12,7 @@ mod support;
 use migrate::Error;
 use migrate::registry::PRODUCT;
 use support::postgres::tls_postgres;
-use support::{Database, MIGRATOR, MIGRATOR_INIT, random_hex, snapshot, superuser};
+use support::{Database, MIGRATOR, MIGRATOR_INIT, snapshot, superuser};
 
 const CREATE_A: &str = "CREATE DATABASE migrate_instance_a OWNER trustiot_owner";
 const CREATE_B: &str = "CREATE DATABASE migrate_instance_b OWNER trustiot_owner";
@@ -34,17 +34,17 @@ async fn a_second_instance_on_the_same_cluster_is_refused() {
         return;
     };
     let a = Database::create(postgres.clone(), CREATE_A, "migrate_instance_a").await;
-    let password_a = random_hex();
-    a.set_password_file("identity_app", &password_a);
+    a.bind("identity_app");
     migrate::run(&a.config(MIGRATOR), &PRODUCT)
         .await
         .expect("the first instance's run");
+    let password_a = a.password("identity_app");
     let before = snapshot(&a).await;
 
     // 1. The same migration role owns a second database: the run on it stops before it creates
     //    anything, since it would reuse (and re-password) the first instance's roles.
     let b = Database::create(postgres.clone(), CREATE_B, "migrate_instance_b").await;
-    b.set_password_file("identity_app", &random_hex());
+    b.bind("identity_app");
     let error = migrate::run(&b.config(MIGRATOR), &PRODUCT)
         .await
         .expect_err("a migration role that owns two databases must be refused");
@@ -63,6 +63,10 @@ async fn a_second_instance_on_the_same_cluster_is_refused() {
         "the refused run created nothing in the second database"
     );
     drop(on_b);
+    assert!(
+        b.secrets.seen().is_empty(),
+        "the refused run read and wrote no Secret"
+    );
     assert_eq!(snapshot(&a).await, before, "the first instance changed");
     a.connect_with_password("identity_app", &password_a)
         .await
@@ -84,7 +88,7 @@ async fn a_second_instance_on_the_same_cluster_is_refused() {
         .await
         .expect("share the roles");
     let before = snapshot(&a).await;
-    c.set_password_file("identity_app", &random_hex());
+    c.bind("identity_app");
     let error = migrate::run(&c.config(SECOND_MIGRATOR), &PRODUCT)
         .await
         .expect_err("roles of another database must be refused");

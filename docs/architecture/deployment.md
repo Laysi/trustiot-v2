@@ -85,7 +85,8 @@ migration Job（2026-10-13，Laysi/trustiot-v2#60，決策 4、14、29，清單 
 - **與服務同一個版本**：Job 的映像帶著每個服務的 migration，只在自己的 spec 改變時再跑，所以用 Postgres 的服務的映像 tag 必須等於 Job 的（chart 檢查）。
 - **一次只跑一個**：整次執行持有一個 Postgres session 層級的 advisory lock，ClickHouse 的部分也在鎖內；第二個 Job 等第一個結束，然後發現沒有事要做。
 - **冪等**：套用過的檔案記在 `trustiot_migrate.applied`（ClickHouse 有自己的一份），內容改了就停止；角色、schema、權限與密碼都先比對再改，設定沒變時再跑一次，資料庫什麼都不變。
-- **服務在 Job 之後啟動**：Job 不是 Helm hook（叢集內的資料庫與 Job 由同一次安裝建立，pre-install hook 會早於資料庫，post-install hook 會與 `--wait` 互等）。Job 的名稱帶它 spec 的 hash，每個服務的 pod 有一個 init container 經 Kubernetes API 等這個 Job 完成，Job 換名時服務跟著滾動更新。細節、權限與失敗時的處理見 chart README 的「migration Job」與 [migration 的 runbook](../runbooks/migrations.md)。
+- **密碼由 Job 產生**（2026-10-13 依使用者意見改定）：服務登入角色與 collector 的 ClickHouse 帳號是 Job 建立的內部帳號，密碼也由它在叢集內產生，沒有人建立、複製或輪替。chart 為每個消費者宣告一個沒有資料的 Secret，Job 以只能 `get`、`patch` 這些 Secret 的 Role 填入缺的密碼，再把角色與帳號設成 Secret 裡的值；輪替是調大 `migrate.passwordGeneration`。規則見 [密鑰與權限](secrets.md) 的「migration Job 產生的密碼」。
+- **服務在 Job 之後啟動**：Job 不是 Helm hook（叢集內的資料庫與 Job 由同一次安裝建立，pre-install hook 會早於資料庫，post-install hook 會與 `--wait` 互等）。Job 的名稱帶它 spec 的 hash，每個服務與 collector 的 pod 有一個 init container 經 Kubernetes API 等這個 Job 完成，Job 換名時它們跟著滾動更新。細節、權限與失敗時的處理見 chart README 的「migration Job」與 [migration 的 runbook](../runbooks/migrations.md)。
 
 可搬移的四條規則：
 

@@ -1,14 +1,11 @@
 # Bundled Postgres e2e overlay (postgres.e2e.ts). Use after a deployment shape and its instance
 # overlay:
 #   -f values-saas.yaml -f tests/values/saas-instance.yaml -f tests/e2e/values-postgres-e2e.yaml
-# The test adds the Postgres and example-service images and, for the second install step,
-# turns the example service on with its database role.
+# The test adds the Postgres, example-service and migrate images and the name of the ClickHouse
+# admin Secret it creates for the run.
 
-# No migration Job: the test creates the example service's role itself, and its ClickHouse is a
-# name only. The Job is tested by the nightly smoke test and
-# docs/test-reports/2026-10-13-60-migration-job.md.
-migrate:
-  enabled: false
+# The migration Job runs as in a real install: it creates the roles and generates their
+# passwords into the Secrets the chart declares (Laysi/trustiot-v2#60).
 
 ingress:
   # The test never goes through the ingress gateway; keep it small and off the node's ports.
@@ -22,25 +19,40 @@ postgres:
     storage:
       size: 1Gi
 
-# Nothing here writes telemetry: no ClickHouse workload and no collector, so the run needs neither
-# their Secrets nor their memory.
+# The bundled ClickHouse and the collector, so the Job also generates the collector's password and
+# the collector has to start with it. Small enough for the lab cluster.
 clickhouse:
-  mode: external
-  external:
-    url: https://clickhouse.e2e.trustiot.test:8443
+  mode: bundled
+  bundled:
+    storage:
+      size: 2Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 1536Mi
 
 observability:
   sentry:
     # No Sentry Secret in the test namespace.
     enabled: false
   collector:
-    enabled: false
+    enabled: true
+    forward:
+      enabled: false
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
 
 services:
-  # crates/service-kit's example-service, standing in for a product service that uses Postgres:
-  # its readiness check opens a verify-full connection with the service's own role.
-  assets:
-    enabled: false
+  # crates/service-kit's example-service, playing the identity service: identity uses Postgres
+  # (mesh.calls), so the chart gives it the role identity_app and the password the Job generates,
+  # and the example service's readiness check opens a verify-full connection with them.
+  identity:
+    enabled: true
     env:
       - name: TRUSTIOT__GREETING
         value: hello from the postgres e2e
@@ -48,9 +60,3 @@ services:
       # The distroless nonroot base declares its user by name; give the kubelet the number.
       runAsUser: 65532
       runAsGroup: 65532
-
-mesh:
-  calls:
-    # The stand-in uses Postgres; identity is off.
-    assets:
-      - postgres

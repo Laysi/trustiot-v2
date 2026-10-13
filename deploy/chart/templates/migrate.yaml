@@ -1,9 +1,12 @@
 {{- /*
 Migration Job (tools/migrate, Laysi/trustiot-v2#60; helpers and the reasons in _migrate.tpl):
-- the Job, named after a hash of its spec, with its own ServiceAccount, which holds no Kubernetes
-  permission and mounts no token;
-- a Role that lets the ServiceAccounts of the enabled services read that one Job, which their
-  init containers poll until it is complete.
+- the Job, named after a hash of its spec, with its own ServiceAccount, whose token only the Job's
+  container mounts;
+- a Role that lets that ServiceAccount get and patch exactly the password Secrets of
+  templates/passwords.yaml, which the Job fills: no create (which cannot be limited by name and
+  would let it create a token Secret for any ServiceAccount), no list or watch, no other Secret;
+- a Role that lets the ServiceAccounts of the enabled services and of the collector read that one
+  Job, which their init containers poll until it is complete.
 The Job is kept after it completes: services that start later (a restart, a new replica) still
 find it complete. Helm deletes it when an upgrade renders a Job with another name.
 */ -}}
@@ -55,16 +58,59 @@ spec:
   policyTypes:
     - Ingress
   ingress: []
+{{- $fills := include "trustiot.migrate.passwordSecrets" . | fromYamlArray }}
+{{- if $fills }}
+---
+# The password Secrets the Job fills, by name; nothing else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "trustiot.componentName" $ctx }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    resourceNames:
+      {{- range $fills }}
+      - {{ .name }}
+      {{- end }}
+    verbs:
+      - get
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "trustiot.componentName" $ctx }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "trustiot.componentName" $ctx }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "trustiot.componentName" $ctx }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- $services := list }}
 {{- range $name, $entry := .Values.services }}
 {{- if $entry.enabled }}
 {{- $services = append $services $name }}
 {{- end }}
 {{- end }}
+{{- /* The collector waits for the Job too: it starts with the password the Job generates. */}}
+{{- if .Values.observability.collector.enabled }}
+{{- $services = append $services "otel-collector" }}
+{{- end }}
 {{- if $services }}
 {{- $status := dict "root" . "name" "migrate-status" }}
 ---
-# Read access to this release's migration Job, for the services' init containers only.
+# Read access to this release's migration Job, for the init containers of the services and the
+# collector only.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

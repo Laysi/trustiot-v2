@@ -241,7 +241,7 @@
       "description": "The migration Job (tools/migrate, Laysi/trustiot-v2#60) and the init container that holds every service until it has completed.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "image", "revision", "wait", "activeDeadlineSeconds", "backoffLimit", "resources", "nodeSelector", "tolerations"],
+      "required": ["enabled", "image", "revision", "passwordGeneration", "wait", "activeDeadlineSeconds", "backoffLimit", "resources", "nodeSelector", "tolerations"],
       "properties": {
         "enabled": { "type": "boolean" },
         "image": {
@@ -259,10 +259,17 @@
           }
         },
         "revision": {
-          "description": "Change it to run the Job again, for example after a password rotation.",
+          "description": "Change it to run the Job again, for example after a password Secret lost its data.",
           "oneOf": [
             { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,63}$" },
             { "type": "integer", "minimum": 0 }
+          ]
+        },
+        "passwordGeneration": {
+          "description": "Increase it to rotate every password the Job generates (service login roles, the collector's ClickHouse account).",
+          "oneOf": [
+            { "type": "string", "pattern": "^[0-9]{1,9}$" },
+            { "type": "integer", "minimum": 0, "maximum": 999999999 }
           ]
         },
         "wait": {
@@ -292,16 +299,9 @@
     "postgres": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mode", "serviceRolesSecret", "bundled", "external"],
+      "required": ["mode", "bundled", "external"],
       "properties": {
         "mode": { "enum": ["bundled", "external"] },
-        "serviceRolesSecret": {
-          "description": "Existing Secret with one key per service login role (<service>_app), read by the migration Job and, one key each, by the services.",
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["name"],
-          "properties": { "name": { "$ref": "#/definitions/optionalK8sName" } }
-        },
         "bundled": {
           "type": "object",
           "additionalProperties": false,
@@ -646,15 +646,14 @@
             "clickhouse": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["user", "passwordSecret"],
+              "required": ["user"],
               "properties": {
                 "user": {
                   "description": "Account created by the migration Job with the trustiot_otel_collector role.",
                   "type": "string",
                   "pattern": "^[a-z][a-z0-9_]{0,62}$",
                   "not": { "enum": ["default", "trustiot_otel_collector"] }
-                },
-                "passwordSecret": { "$ref": "#/definitions/secretKeyRef" }
+                }
               }
             },
             "forward": {
@@ -705,9 +704,7 @@
             },
             "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
             "tolerations": { "type": "array", "items": { "type": "object" } }
-          },
-          "if": { "properties": { "enabled": { "const": true } } },
-          "then": { "properties": { "clickhouse": { "properties": { "passwordSecret": { "properties": { "name": { "minLength": 1 } } } } } } }
+          }
         }
       }
     }

@@ -83,8 +83,11 @@ Custom env cannot take over what the chart controls:
 - secret-like names (as in values.schema.json) come from valueFrom.secretKeyRef only;
 - dependency credentials reach a service only through services.<name>.credentials;
 - the Secrets an in-cluster component creates for itself (the bundled Postgres's CA key, server key
-  and owner password) and postgres.serviceRolesSecret, which holds every service's database
-  password, are out of reach in every key.
+  and owner password) and the password Secrets the migration Job fills (each service's and the
+  collector's) are out of reach in every key: a service gets its own database password only
+  through the chart;
+- for a service that uses Postgres, TRUSTIOT__DATABASE__USERNAME and TRUSTIOT__DATABASE__PASSWORD
+  are the chart's.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.service.env" -}}
@@ -92,11 +95,12 @@ Returns a YAML list; use with fromYamlArray.
 {{- $config := .config -}}
 {{- $values := .root.Values -}}
 {{- $dbEnv := list -}}
-{{- if and $values.postgres.serviceRolesSecret.name (has $name (include "trustiot.postgres.clients" .root | fromYaml).services) -}}
-{{- /* The service's own Postgres login role and its password, which the migration Job sets. */ -}}
-{{- $role := include "trustiot.migrate.appRole" $name -}}
-{{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__USERNAME" "value" $role) -}}
-{{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $values.postgres.serviceRolesSecret.name "key" $role))) -}}
+{{- if has $name (include "trustiot.postgres.clients" .root | fromYaml).services -}}
+{{- /* The service's own Postgres login role and its password, which the migration Job generates
+into the service's own Secret and sets. */ -}}
+{{- $secret := include "trustiot.migrate.passwordSecret" (dict "root" .root "component" $name) | fromYaml -}}
+{{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__USERNAME" "value" $secret.key) -}}
+{{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $secret.name "key" $secret.key))) -}}
 {{- end -}}
 {{- range $values.serviceDefaults.env -}}
 {{- if get (.valueFrom | default dict) "secretKeyRef" -}}
@@ -111,6 +115,9 @@ Returns a YAML list; use with fromYamlArray.
 {{- end -}}
 {{- if and $values.observability.collector.enabled (regexMatch "(?i)^TRUSTIOT__TELEMETRY__OTLP_ENDPOINT$" .name) -}}
 {{- fail (printf "services.%s: env %s is set by the chart: it points at the OpenTelemetry collector (observability.collector)" $name .name) -}}
+{{- end -}}
+{{- if and $dbEnv (regexMatch "(?i)^TRUSTIOT__DATABASE__(USERNAME|PASSWORD)$" .name) -}}
+{{- fail (printf "services.%s: env %s is set by the chart: the service's login role and the password the migration Job generates for it" $name .name) -}}
 {{- end -}}
 {{- if regexMatch "(?i)(secret|passw|passphrase|pwd|token|api_?key|(^|_)key$|dsn|private|credential)" .name -}}
 {{- $from := .valueFrom | default dict -}}

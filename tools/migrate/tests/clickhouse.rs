@@ -1,6 +1,7 @@
 //! The ClickHouse part of a run: the product's DDL on a fresh ClickHouse, the collector's
-//! account (created with only its role, password rotation, a tampered account or collector role
-//! refused), and a second run that changes nothing.
+//! account (created with only its role and the password the run generates into its Secret,
+//! password rotation, a tampered account or collector role refused), and a second run that
+//! changes nothing.
 //!
 //! Needs podman or docker (a throwaway Postgres for the lock and a throwaway ClickHouse);
 //! skipped without one unless `CI` is set.
@@ -11,10 +12,11 @@ use migrate::Error;
 use migrate::config::RunConfig;
 use migrate::registry::{Migration, PRODUCT, Registry};
 use support::postgres::tls_postgres;
-use support::{ClickHouse, Database, MIGRATOR, MIGRATOR_INIT, random_hex};
+use support::{ClickHouse, Database, MIGRATOR, MIGRATOR_INIT};
 
 const CREATE: &str = "CREATE DATABASE migrate_clickhouse OWNER trustiot_owner";
 const COLLECTOR: &str = "trustiot_collector";
+const COLLECTOR_SECRET: &str = "trustiot-otel-collector-password";
 
 /// What a run can change in ClickHouse, as text, without the volatile columns.
 const SNAPSHOT: [&str; 7] = [
@@ -43,11 +45,18 @@ async fn snapshot(clickhouse: &ClickHouse) -> Vec<String> {
     rows
 }
 
-fn config(db: &Database, clickhouse: &ClickHouse, password: &str) -> RunConfig {
+fn config(db: &Database, clickhouse: &ClickHouse) -> RunConfig {
     let mut config = db.config(MIGRATOR);
     config.platform.clickhouse_url = Some(clickhouse.url.clone());
-    config.clickhouse = Some(clickhouse.settings(Some((COLLECTOR, password))));
+    config.clickhouse = Some(clickhouse.settings());
+    config.passwords = db.passwords(Some((COLLECTOR, COLLECTOR_SECRET)));
     config
+}
+
+fn collector_password(db: &Database) -> String {
+    db.secrets
+        .value(COLLECTOR_SECRET, COLLECTOR)
+        .expect("the collector's Secret holds its password")
 }
 
 /// The product without its Postgres services, so this binary's runs touch ClickHouse and the
@@ -77,10 +86,10 @@ async fn clickhouse_ddl_and_the_collector_account() {
         return;
     };
     let db = Database::create(postgres, CREATE, "migrate_clickhouse").await;
-    let first = random_hex();
+    db.secrets.declare(COLLECTOR_SECRET);
 
     // 1. A fresh ClickHouse gets every file once, and the collector account.
-    let report = migrate::run(&config(&db, &clickhouse, &first), &CLICKHOUSE_ONLY)
+    let report = migrate::run(&config(&db, &clickhouse), &CLICKHOUSE_ONLY)
         .await
         .expect("the first run");
     for migration in PRODUCT.clickhouse {
@@ -91,11 +100,13 @@ async fn clickhouse_ddl_and_the_collector_account() {
             report.changes
         );
     }
-    assert!(
-        report
-            .changes
-            .contains(&format!("created ClickHouse account {COLLECTOR}"))
-    );
+    for expected in [
+        format!("generated the password of {COLLECTOR} in Secret {COLLECTOR_SECRET} (it had none)"),
+        format!("created ClickHouse account {COLLECTOR}"),
+    ] {
+        assert!(report.changes.contains(&expected), "{:?}", report.changes);
+    }
+    let first = collector_password(&db);
     let tables = clickhouse
         .query("SELECT name FROM system.tables WHERE database = 'trustiot_logs' ORDER BY name FORMAT TSV")
         .await
@@ -129,7 +140,7 @@ async fn clickhouse_ddl_and_the_collector_account() {
     assert_eq!(roles, "trustiot_otel_collector\n");
     // 3. A second run changes nothing.
     let before = snapshot(&clickhouse).await;
-    let report = migrate::run(&config(&db, &clickhouse, &first), &CLICKHOUSE_ONLY)
+    let report = migrate::run(&config(&db, &clickhouse), &CLICKHOUSE_ONLY)
         .await
         .expect("the second run");
     assert!(report.changes.is_empty(), "{:?}", report.changes);
@@ -139,17 +150,23 @@ async fn clickhouse_ddl_and_the_collector_account() {
         "the second run changed ClickHouse"
     );
 
-    // 4. Rotation: a new password is set, the old one stops working.
-    let second = random_hex();
-    let report = migrate::run(&config(&db, &clickhouse, &second), &CLICKHOUSE_ONLY)
+    // 4. Rotation: a new password generation generates a new password and sets it; the old
+    //    one stops working.
+    db.set_generation("2");
+    let report = migrate::run(&config(&db, &clickhouse), &CLICKHOUSE_ONLY)
         .await
         .expect("the rotation run");
     assert_eq!(
         report.changes,
-        [format!(
-            "set the password of ClickHouse account {COLLECTOR}"
-        )]
+        [
+            format!(
+                "generated the password of {COLLECTOR} in Secret {COLLECTOR_SECRET} (password generation 2)"
+            ),
+            format!("set the password of ClickHouse account {COLLECTOR}"),
+        ]
     );
+    let second = collector_password(&db);
+    assert_ne!(second, first);
     assert!(
         clickhouse
             .query_as(COLLECTOR, &first, "SELECT 1")
@@ -167,7 +184,7 @@ async fn clickhouse_ddl_and_the_collector_account() {
         .query("GRANT SELECT ON trustiot.telemetry TO trustiot_collector")
         .await
         .expect("tamper with the account");
-    let error = migrate::run(&config(&db, &clickhouse, &second), &CLICKHOUSE_ONLY)
+    let error = migrate::run(&config(&db, &clickhouse), &CLICKHOUSE_ONLY)
         .await
         .expect_err("a tampered account must stop the run");
     assert!(
@@ -185,7 +202,7 @@ async fn clickhouse_ddl_and_the_collector_account() {
         .query("DROP USER trustiot_collector")
         .await
         .expect("the administrator drops the account");
-    let report = migrate::run(&config(&db, &clickhouse, &second), &CLICKHOUSE_ONLY)
+    let report = migrate::run(&config(&db, &clickhouse), &CLICKHOUSE_ONLY)
         .await
         .expect("the run after the drop");
     assert_eq!(
@@ -206,7 +223,7 @@ async fn clickhouse_ddl_and_the_collector_account() {
         .query("SET DEFAULT ROLE NONE TO trustiot_collector")
         .await
         .expect("turn the default role off");
-    let error = migrate::run(&config(&db, &clickhouse, &second), &CLICKHOUSE_ONLY)
+    let error = migrate::run(&config(&db, &clickhouse), &CLICKHOUSE_ONLY)
         .await
         .expect_err("an account without its default role must stop the run");
     assert!(
@@ -217,7 +234,7 @@ async fn clickhouse_ddl_and_the_collector_account() {
         .query("SET DEFAULT ROLE trustiot_otel_collector TO trustiot_collector")
         .await
         .expect("turn the default role back on");
-    let report = migrate::run(&config(&db, &clickhouse, &second), &CLICKHOUSE_ONLY)
+    let report = migrate::run(&config(&db, &clickhouse), &CLICKHOUSE_ONLY)
         .await
         .expect("the run after the repair");
     assert!(report.changes.is_empty(), "{:?}", report.changes);
@@ -250,7 +267,7 @@ async fn clickhouse_ddl_and_the_collector_account() {
                 .await
                 .unwrap_or_else(|error| panic!("{statement}: {error}"));
         }
-        let error = migrate::run(&config(&db, &clickhouse, &second), &CLICKHOUSE_ONLY)
+        let error = migrate::run(&config(&db, &clickhouse), &CLICKHOUSE_ONLY)
             .await
             .expect_err(what);
         assert!(
@@ -263,7 +280,7 @@ async fn clickhouse_ddl_and_the_collector_account() {
                 .await
                 .unwrap_or_else(|error| panic!("{statement}: {error}"));
         }
-        let report = migrate::run(&config(&db, &clickhouse, &second), &CLICKHOUSE_ONLY)
+        let report = migrate::run(&config(&db, &clickhouse), &CLICKHOUSE_ONLY)
             .await
             .expect("the run after the repair");
         assert!(report.changes.is_empty(), "{what}: {:?}", report.changes);
@@ -276,7 +293,7 @@ async fn clickhouse_ddl_and_the_collector_account() {
         .query("ALTER USER trustiot_collector SETTINGS readonly = 0")
         .await
         .expect("give the account a setting");
-    let error = migrate::run(&config(&db, &clickhouse, &second), &CLICKHOUSE_ONLY)
+    let error = migrate::run(&config(&db, &clickhouse), &CLICKHOUSE_ONLY)
         .await
         .expect_err("an account with settings must stop the run");
     assert!(
@@ -287,7 +304,7 @@ async fn clickhouse_ddl_and_the_collector_account() {
         .query("DROP USER trustiot_collector")
         .await
         .expect("the administrator drops the account");
-    let report = migrate::run(&config(&db, &clickhouse, &second), &CLICKHOUSE_ONLY)
+    let report = migrate::run(&config(&db, &clickhouse), &CLICKHOUSE_ONLY)
         .await
         .expect("the run after the drop");
     assert_eq!(
@@ -296,7 +313,7 @@ async fn clickhouse_ddl_and_the_collector_account() {
     );
 
     // 7. A ClickHouse file that changed after it was applied stops the run.
-    let error = migrate::run(&config(&db, &clickhouse, &second), &CHANGED)
+    let error = migrate::run(&config(&db, &clickhouse), &CHANGED)
         .await
         .expect_err("a changed file must stop the run");
     assert!(matches!(error, Error::Changed { .. }), "{error}");

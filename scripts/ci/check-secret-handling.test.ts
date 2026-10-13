@@ -1103,6 +1103,51 @@ stringData:
     expect(checkTemplateText("deploy/chart/templates/_service.tpl", "kind: Deployment\nspec: {{ .x }}\n")).toEqual([]);
   });
 
+  test("a template may declare only an empty Secret that the migration Job fills", () => {
+    const file = "deploy/chart/templates/passwords.yaml";
+    const empty = [
+      '{{- range include "trustiot.migrate.passwordSecrets" . | fromYamlArray }}',
+      "---",
+      "apiVersion: v1",
+      "kind: Secret",
+      "metadata:",
+      "  name: {{ .name }}",
+      "  labels:",
+      '    {{- include "trustiot.componentLabels" (dict "root" $ "name" .component) | nindent 4 }}',
+      "    trustiot.io/filled-by: migrate",
+      "  annotations:",
+      "    helm.sh/resource-policy: keep",
+      "type: Opaque",
+      "{{- end }}",
+      "",
+    ].join("\n");
+    expect(checkSecretManifests(file, empty)).toEqual([]);
+    expect(checkTemplateText(file, empty)).toEqual([]);
+    // The chart's own template passes.
+    const chart = readFileSync(join(import.meta.dir, "..", "..", file), "utf8");
+    expect(checkSecretManifests(file, chart)).toEqual([]);
+    // Anything that carries or could add a value fails, and so does a Secret without the label.
+    for (const [what, source] of [
+      ["data", empty.replace("type: Opaque", "type: Opaque\ndata:\n  x: eA==")],
+      ["stringData", empty.replace("type: Opaque", "stringData:\n  x: y\ntype: Opaque")],
+      ["a templated data key", empty.replace("type: Opaque", "type: Opaque\ndata: {{ .Values.x }}")],
+      ["a templated type", empty.replace("type: Opaque", "type: {{ .Values.type }}")],
+      ["an action at the Secret's own level", empty.replace("type: Opaque", "type: Opaque\n{{ toYaml .Values.extra }}")],
+      ["an action that renders at that level", empty.replace("type: Opaque", "type: Opaque\n{{- toYaml .Values.extra | nindent 0 }}")],
+      ["no filled-by label", empty.replace("    trustiot.io/filled-by: migrate\n", "")],
+      ["another filler", empty.replace("filled-by: migrate", "filled-by: someone")],
+    ] as const) {
+      expect(messages(checkSecretManifests(file, source)), what).toEqual([
+        expect.stringMatching(/^deploy\/chart\/templates\/passwords\.yaml:4 a template that declares a Secret/),
+      ]);
+    }
+    // The label in another document does not excuse a Secret.
+    const two = `${empty}---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: other\ndata:\n  {{- toYaml .Values.x | nindent 2 }}\n`;
+    expect(messages(checkSecretManifests(file, two))).toEqual([
+      expect.stringMatching(/^deploy\/chart\/templates\/passwords\.yaml:16 a template that declares a Secret/),
+    ]);
+  });
+
   test("template declarations are found with comments and next to template actions, references by name are not", () => {
     const commented = [
       "{{- if .Values.enabled }}",

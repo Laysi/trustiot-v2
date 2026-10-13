@@ -35,31 +35,31 @@ Postgres 的角色屬於整個叢集，不屬於某個資料庫；Job 建立的�
 
 Job 遇到這種部署會停止，不改任何角色：migration 角色擁有超過一個資料庫時寫出 `it owns more than one database`；角色在叢集的其他資料庫擁有物件或權限時寫出 `owns objects or holds privileges in another database`；角色不是這個 migration 角色建立的時寫出 `exists but the migration role did not create it`。處理方式是把第二個實例搬到自己的 Postgres 叢集（新叢集上第一次執行 Job 就會建立它自己的角色），再刪掉舊叢集上那個多出來的資料庫。
 
-## 安裝前：服務角色的密碼
+## 服務角色與 collector 的密碼
 
-在 `mesh.calls` 列出 `postgres` 的每個服務，`postgres.serviceRolesSecret` 都要有一個 `<服務>_app` 的 key（例如 `identity_app`）；少一個時 Job 什麼都不改就停止。
+不用準備：在 `mesh.calls` 列出 `postgres` 的每個服務、以及 OpenTelemetry collector，各有一個 chart 宣告的空 Secret（`<release>-<服務>-password`、`<release>-otel-collector-password`），Job 第一次執行時產生密碼寫進去、再以它設定角色與帳號（[密鑰與權限](../architecture/secrets.md) 的「migration Job 產生的密碼」）。沒有人需要看到或複製這些密碼；要確認時只看 key 是否存在，不要印出值：`kubectl -n <namespace> get secret <release>-identity-password -o jsonpath='{.data}' | jq 'keys'`。
 
-- SaaS：在 `deploy/flux/` 的 SOPS 檔案加上這個 key（`sops edit`，值以 `openssl rand -hex 32` 產生，不放在指令列，見[密鑰輪替](secrets.md)的「準備」）。
-- 地端：值經管線傳入，不寫成檔案、不出現在命令列（[密鑰與權限](../architecture/secrets.md) 的規則 3）：`openssl rand -hex 32 | tr -d "\n" | kubectl -n <namespace> create secret generic trustiot-postgres-roles --from-file=identity_app=/dev/stdin`（`tr` 去掉結尾的換行）。之後的服務各加一個 key：以 `kubectl -n <namespace> edit secret trustiot-postgres-roles` 在編輯器裡加上 base64 編碼的值。
+## 輪替服務角色與 collector 的密碼
 
-密碼要有 16 到 512 個字元，只能是可列印的 ASCII、不含空白，結尾也不能有換行（服務從同一個 key 讀到的密碼會含那個換行）；不符時 Job 停止，訊息不含密碼本身。
+1. 把 `migrate.passwordGeneration` 調大一（SaaS：在覆寫檔改，經 PR 合併後由 Flux 套用；地端：`helm upgrade --reuse-values --set migrate.passwordGeneration=<新值>` 或改 values 檔）。Job 名稱跟著變，所以 Job 重跑；它為每個密碼 Secret 產生新密碼、更新 annotation `trustiot.io/password-generation`，再設定角色與帳號。服務與 collector 的 init container 改等新的 Job，所以它們跟著滾動更新，以新密碼連線。
+2. 確認：新 Job 的日誌對每個 Secret 有 `generated the password of <角色或帳號> in Secret <名稱> (password generation <新值>)`，接著有 `set the password of <角色>`（collector 是 `set the password of ClickHouse account <帳號>`）；`kubectl -n <namespace> rollout status deploy/<release>-<服務>` 與 collector 的 rollout 完成，服務健康。
+3. 舊密碼在 Job 設定新密碼的那一刻失效。Postgres 已建立的連線不受影響，直到服務的舊 pod 被換掉；舊 pod 在這段時間開新連線會失敗（readiness 讓它退出負載平衡）。舊的 collector 寫 ClickHouse 會失敗並重試（每批最多 5 分鐘），新的 collector 就緒後恢復。Postgres 一個角色只有一個密碼，這段時間無法省掉；需要時在低流量時段輪替。懷疑外洩時，再以 superuser 中止舊連線：`kubectl -n <namespace> exec -i <cluster>-1 -c postgres -- psql -d trustiot -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '<角色>'"`。
 
-## 輪替服務角色的密碼
+同一個值再跑一次（例如改 `migrate.revision`）不會再換密碼：annotation 已經記著這一代。
 
-Job 每次執行都先以 Secret 的密碼登入一次，登不進去才設定新密碼，所以只要讓 Job 再跑一次：
+## 密碼 Secret 的資料遺失
 
-1. 換掉 Secret 裡該角色的值（SaaS：`sops edit`；地端：上一節的方式）。
-2. 把 `migrate.revision` 改成新的值（例如日期 `"2026-10-13"`）。chart 看不到 Secret 的內容，改 revision 才會產生新名稱的 Job；服務的 init container 改等新的 Job，所以服務跟著滾動更新，以新密碼連線。SaaS 在同一個 PR 改 SOPS 檔案與覆寫檔的 `migrate.revision`。
-3. 確認：新 Job 的日誌有 `set the password of <角色>`，`kubectl -n <namespace> rollout status deploy/<release>-<服務>` 完成，服務健康。
-4. 舊密碼在 Job 設定新密碼的那一刻失效，已建立的連線不受影響，直到服務的舊 pod 被換掉。懷疑外洩時，再以 superuser 中止舊連線：`kubectl -n <namespace> exec -i <cluster>-1 -c postgres -- psql -d trustiot -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '<角色>'"`。
+有人刪了密碼 Secret 的 key 或整個 Secret，或以 `helm upgrade --force-replace` 換掉了它（換掉時不帶資料）：已在執行的 pod 不受影響（環境變數在啟動時讀好），但之後重啟的 pod 讀不到 key 會停在 `CreateContainerConfigError`。處理：
 
-滾動更新期間，舊版 pod 若重新連線會用到舊密碼而失敗；這段時間很短，服務以 readiness 退出負載平衡。
+1. 把 `migrate.revision` 改成新的值再升級（SaaS 經 PR，地端 `helm upgrade`）。Helm 升級時重建被刪掉的 Secret（空的），Job 重跑時為缺的 key 產生新密碼並設定角色，日誌有 `generated the password of <角色> in Secret <名稱> (it had none)`。
+2. 服務與 collector 隨新的 Job 名稱滾動更新，以新密碼連線。
 
-服務角色可以自己 `ALTER ROLE ... PASSWORD` 改掉自己的密碼（Postgres 允許每個角色改自己的密碼，Job 擋不住）。服務程式不會這樣做；若發生（例如服務被入侵），同一個服務的其他 pod 以 Secret 的密碼登不進去，直到 Job 再跑一次把密碼設回 Secret 的值：改 `migrate.revision` 讓 Job 重跑，並調查原因。
+Job 不能建立 Secret（它的 Role 沒有 `create`）：Secret 不存在時它停止，日誌寫出 `Secret <名稱>: does not exist` 與上面的處理方式。一般的 `helm upgrade` 與 `helm rollback`、Flux 的升級與 rollback 都不動這些 Secret 的資料（chart 渲染出的 Secret 沒有 `data`）。
+
+服務角色可以自己 `ALTER ROLE ... PASSWORD` 改掉自己的密碼（Postgres 允許每個角色改自己的密碼，Job 擋不住）。服務程式不會這樣做；若發生（例如服務被入侵），同一個服務的其他 pod 以 Secret 的密碼登不進去，直到 Job 再跑一次把密碼設回 Secret 的值：改 `migrate.revision` 讓 Job 重跑，並調查原因；懷疑外洩時改做上一節的輪替。
 
 Postgres 若開著 `log_statement = 'all'`（或 `log_min_duration_statement` 記下每一句），伺服器的日誌會記下 Job 設定密碼的那一句，裡面是 SCRAM-SHA-256 的 verifier（伺服器本來就存的值，不是密碼；2026-10-13 的驗證確認日誌裡沒有明文密碼）。verifier 仍可用來離線猜密碼，所以 Postgres 的伺服器日誌要當成敏感資料保管。這個設定只有 superuser 能改，migration 角色關不掉它；需要時請資料庫管理者調整。
 
-OpenTelemetry collector 的 ClickHouse 密碼（`observability.collector.clickhouse.passwordSecret`）同樣由 Job 依 Secret 設定：做第 1、2 步，Job 的日誌有 `set the password of ClickHouse account <帳號>`。collector 不等 Job，也不會因 Job 換名而重啟，所以再 `kubectl -n <namespace> rollout restart deploy -l app.kubernetes.io/component=otel-collector`；重啟之前它寫不進日誌；collector 對每批日誌最多重試 5 分鐘，超過就丟掉，所以 Job 完成後立即重啟。
 
 ## Job 停止時
 
@@ -68,7 +68,10 @@ Job 遇到下列情況會停止，不自動修改；修好之後，Job 依 `migr
 | 日誌中的原因 | 意思 | 處理 |
 | --- | --- | --- |
 | `it is a superuser` / `it has BYPASSRLS` / `it lacks CREATEROLE` / `it does not own the database` | migration 角色不符合規則 | bundled：補 CREATEROLE（上方）；external：請客戶的資料庫管理者調整 |
-| `its password file is missing` / `no service in tools/migrate's registry` | 服務要用的角色沒有密碼，或那個服務沒有登記在 tools/migrate | 補 Secret 的 key；後者是程式的錯，開 issue |
+| `no service in tools/migrate's registry` | 服務要用的角色沒有登記在 tools/migrate | 程式的錯，開 issue |
+| `Secret <名稱>: does not exist` | 密碼 Secret 被刪掉了 | 見上方「密碼 Secret 的資料遺失」 |
+| `Secret <名稱>: the API refused to get it` / `refused to patch it` | Job 的 Role 不在或被改過 | 確認 `<release>-migrate` 的 Role 與 RoleBinding 存在且與 chart 渲染的相同（`helm get manifest`）；不要放寬它 |
+| `Secret <名稱>: changed 5 times while the run filled it` | 有別的程式在同時寫這個 Secret | 找出寫入者（`kubectl get secret -o yaml` 的 `managedFields`）並停掉它；只有 `trustiot-migrate` 該寫 `data` |
 | `has SUPERUSER, CREATEROLE, CREATEDB or REPLICATION` / `has BYPASSRLS` | 有人改過服務的角色 | 先查是誰、為什麼改（稽核），再以 superuser `ALTER ROLE <角色> NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS` |
 | `must not be a member` / `another role is a member` / `only the migration role may be a member` | 角色多了成員關係，會讓別的角色拿到它的權限 | 稽核後以 superuser `REVOKE <角色> FROM <成員>` 或 `REVOKE <其他角色> FROM <角色>` |
 | `exists but the migration role did not create it` | 角色不是這個 migration 角色建立的：同一個 Postgres 叢集上有另一個 TrustIoT 實例，或有人手動建了同名角色 | 另一個實例：見上方「一個 Postgres 叢集只放一個 TrustIoT 資料庫」。手動建立的：確認沒有在用之後以 superuser `DROP ROLE`，下一次 Job 重建它。不要給 migration 角色 ADMIN OPTION 來繞過 |

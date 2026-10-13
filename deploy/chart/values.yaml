@@ -260,10 +260,14 @@ migrate:
     # sha256 digest; when set, the image is pinned to it.
     digest: ""
     pullPolicy: IfNotPresent
-  # Change it to run the Job again without another change, for example after rotating a password
-  # in postgres.serviceRolesSecret or the collector's ClickHouse password. The services restart
-  # too, so they read the new password.
+  # Change it to run the Job again without another change, for example after a password Secret
+  # lost its data (docs/runbooks/migrations.md). The services restart too.
   revision: "1"
+  # The Job generates the password of every service's Postgres login role and of the collector's
+  # ClickHouse account into one Secret per consumer (templates/passwords.yaml); nobody sets them.
+  # Increase this number to rotate all of them: the next run generates new passwords, sets them,
+  # and the services and the collector restart with them (docs/runbooks/secrets.md).
+  passwordGeneration: "1"
   # How long the Job waits for Postgres and ClickHouse to accept connections, and for another run
   # to release the migration lock (TRUSTIOT__WAIT__DATABASES, TRUSTIOT__WAIT__LOCK).
   wait:
@@ -294,12 +298,9 @@ postgres:
   # external: a Postgres with Apache AGE that you run elsewhere.
   # Services that use Postgres list `postgres` under mesh.calls.
   mode: bundled
-  # Existing Secret with the password of every service's login role, one key per role, named
-  # after it: <service>_app, with "-" in the service name written "_" (identity_app). The
-  # migration Job sets the passwords; each service gets only its own key, as
-  # TRUSTIOT__DATABASE__PASSWORD. Required while a service lists postgres under mesh.calls.
-  serviceRolesSecret:
-    name: ""
+  # Each such service logs in with its own role, <service>_app ("-" in the service name written
+  # "_"), whose password the migration Job generates into the Secret <release>-<service>-password
+  # (migrate.passwordGeneration); the service gets it as TRUSTIOT__DATABASE__PASSWORD.
   bundled:
     image:
       # Our CloudNativePG operand image: PostgreSQL 18 with Apache AGE (deploy/images/postgres),
@@ -519,13 +520,10 @@ observability:
       pullPolicy: IfNotPresent
     # The collector's ClickHouse account. The migration Job creates it with SQL and grants it the
     # trustiot_otel_collector role (INSERT into the log tables only), never in server
-    # configuration files (decision 14).
+    # configuration files (decision 14), with a password it generates into the Secret
+    # <release>-otel-collector-password (migrate.passwordGeneration).
     clickhouse:
       user: trustiot_collector
-      # Existing Secret with the account's password; required when the collector is enabled.
-      passwordSecret:
-        name: ""
-        key: password
     # Copy of the redacted logs (and optionally traces) for the customer's SIEM over OTLP.
     forward:
       enabled: false
@@ -561,6 +559,7 @@ observability:
       runAsNonRoot: true
       seccompProfile:
         type: RuntimeDefault
-    # The image is multi-arch.
+    # The image is multi-arch; while migrate.enabled is true the pod also runs the migration image
+    # (its init container), which is arm64 only, so the chart adds kubernetes.io/arch: arm64.
     nodeSelector: {}
     tolerations: []

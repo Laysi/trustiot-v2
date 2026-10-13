@@ -1,7 +1,8 @@
 //! The migration Job (docs/architecture/deployment.md, "migration Job"; this crate's README).
 //!
 //! - [`run`]: one migration run. It takes a Postgres advisory lock first, so two Jobs never run at
-//!   the same time; then the Postgres part ([`postgres`]: the Job's bookkeeping, the per-database
+//!   the same time; then fills the Secrets that hold the generated passwords ([`passwords`]),
+//!   the Postgres part ([`postgres`]: the Job's bookkeeping, the per-database
 //!   setup, every service's roles, schema, outbox tables and migrations, the per-tenant role
 //!   hooks) and the ClickHouse part ([`clickhouse`]: the DDL and the collector's account).
 //! - [`kube::wait_for_job`]: the init container that holds a service's pod until the release's
@@ -15,6 +16,7 @@ pub mod clickhouse_files;
 pub mod config;
 pub mod http;
 pub mod kube;
+pub mod passwords;
 pub mod postgres;
 pub mod registry;
 pub mod secret;
@@ -68,6 +70,10 @@ pub enum Error {
     Random(String),
     #[error("ClickHouse: {0}")]
     ClickHouse(String),
+    #[error("Secret {secret}: {problem}")]
+    Secret { secret: String, problem: String },
+    #[error("Kubernetes API: {0}")]
+    Kube(String),
 }
 
 impl Error {
@@ -83,7 +89,8 @@ pub struct Report {
     /// One line per change, for example `applied identity/0001_identity.sql` or
     /// `created role identity_app`; empty when the run changed nothing.
     pub changes: Vec<String>,
-    /// Login roles that have no password file; they keep whatever password they have.
+    /// Login roles whose password the run does not manage (no Secret is bound to them in
+    /// `passwords.postgres`); they keep whatever password they have.
     pub roles_without_password: Vec<String>,
 }
 
@@ -116,17 +123,26 @@ pub fn sha256_hex(text: &str) -> String {
 /// statements are idempotent, so the next run repeats a half-applied ClickHouse file.
 pub async fn run(config: &RunConfig, registry: &Registry) -> Result<Report, Error> {
     postgres::check_registry(registry)?;
-    postgres::check_required_passwords(config, registry).await?;
-    let collector = config.collector()?;
+    postgres::check_password_bindings(config, registry)?;
     let mut report = Report::default();
     let mut session = postgres::Session::connect(config).await?;
     session.lock(config.wait.lock).await?;
-    session.migrate(config, registry, &mut report).await?;
+    session.check_migrator().await?;
+    // Under the lock, so two runs never generate a password for the same key; after the
+    // migration role passed its checks, so a refused run writes no Secret; before any role is
+    // set, so a role is always set to the password its Secret holds.
+    let passwords = match &config.passwords {
+        Some(settings) => passwords::converge(settings, config.wait.databases, &mut report).await?,
+        None => passwords::Passwords::default(),
+    };
+    session
+        .migrate(config, registry, &passwords, &mut report)
+        .await?;
     if let Some(settings) = &config.clickhouse {
         let client = clickhouse::ClickHouse::new(config, settings)?;
         client.wait_until_up(config.wait.databases).await?;
         client
-            .migrate(registry, collector.as_ref(), &mut report)
+            .migrate(registry, passwords.collector(), &mut report)
             .await?;
     } else {
         tracing::info!("no ClickHouse settings: the ClickHouse part is skipped");

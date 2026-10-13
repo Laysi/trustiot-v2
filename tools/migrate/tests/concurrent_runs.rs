@@ -15,7 +15,7 @@ use migrate::Error;
 use migrate::registry::PRODUCT;
 use sqlx::Connection;
 use support::postgres::tls_postgres;
-use support::{Database, MIGRATOR, MIGRATOR_INIT, random_hex};
+use support::{Database, MIGRATOR, MIGRATOR_INIT};
 
 const CREATE: &str = "CREATE DATABASE migrate_concurrent OWNER trustiot_owner";
 const HOLD_LOCK: &str = "SELECT pg_advisory_lock($1, $2)";
@@ -31,7 +31,7 @@ async fn only_one_run_at_a_time() {
         return;
     };
     let db = Database::create(postgres, CREATE, "migrate_concurrent").await;
-    db.set_password_file("identity_app", &random_hex());
+    db.bind("identity_app");
     let (class, object) = migrate::postgres::LOCK_KEY;
 
     // 1. While another session holds the lock, a run waits and gives up at its bound, having

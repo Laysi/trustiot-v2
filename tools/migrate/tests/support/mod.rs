@@ -1,6 +1,7 @@
 //! Helpers of the migration Job's integration tests: a throwaway Postgres with TLS (shared with
-//! crates/service-kit's tests), a throwaway ClickHouse, run settings pointing at them, and a
-//! snapshot of what a run can change, to prove that a second run changes nothing.
+//! crates/service-kit's tests), a throwaway ClickHouse, a fake Kubernetes API that holds the
+//! Secrets the Job fills (`secrets`), run settings pointing at them, and a snapshot of what a run
+//! can change, to prove that a second run changes nothing.
 //!
 //! Roles are cluster-wide, so each test binary that runs the product registry has one test and
 //! its own Postgres container (the shared container lives as long as one binary).
@@ -17,17 +18,23 @@ pub mod postgres;
 #[path = "../../../../crates/service-kit/tests/support/start.rs"]
 pub mod start;
 
+pub mod secrets;
+
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use migrate::config::{ClickHouseSettings, Platform, PostgresSettings, RunConfig, WaitSettings};
+use migrate::config::{
+    ClickHouseSettings, PasswordSettings, Platform, PostgresSettings, RunConfig, WaitSettings,
+};
 use service_kit::postgres::SslMode;
 use sqlx::{Connection, PgConnection};
 
 use postgres::{SERVER_HOST, TEST_PASSWORD, TlsPostgres};
+use secrets::FakeSecrets;
 
 /// The migration role the tests give the Job: a database owner with CREATEROLE, as the chart's
 /// CloudNativePG bootstrap makes `trustiot_owner`; and a role without CREATEROLE, which the Job
@@ -144,13 +151,22 @@ pub fn scratch_dir(name: &str) -> PathBuf {
     dir
 }
 
-/// A fresh database owned by the migration role, with the server's CA in a file.
+/// A fresh database owned by the migration role, with the server's CA in a file, and the fake
+/// Kubernetes API that holds the Secrets of the login roles the tests bind.
 pub struct Database {
     pub postgres: std::sync::Arc<TlsPostgres>,
     pub name: String,
     pub ca_file: PathBuf,
-    /// Where the role password files go (`postgres.role_passwords_dir`).
-    pub passwords: PathBuf,
+    pub secrets: FakeSecrets,
+    /// Login roles whose passwords the run manages (`passwords.postgres`).
+    bound: Mutex<Vec<String>>,
+    /// `passwords.generation`
+    generation: Mutex<String>,
+}
+
+/// The Secret the tests bind to `role`: one per role, as the chart declares one per service.
+pub fn secret_of(role: &str) -> String {
+    format!("{}-postgres", role.replace('_', "-"))
 }
 
 impl Database {
@@ -170,13 +186,13 @@ impl Database {
         let dir = scratch_dir(&name);
         let ca_file = dir.join("ca.crt");
         std::fs::write(&ca_file, &postgres.ca_pem).expect("write the CA");
-        let passwords = dir.join("role-passwords");
-        std::fs::create_dir_all(&passwords).expect("create the password directory");
         Self {
             postgres,
             name,
             ca_file,
-            passwords,
+            secrets: FakeSecrets::start().await,
+            bound: Mutex::default(),
+            generation: Mutex::new("1".to_owned()),
         }
     }
 
@@ -195,9 +211,34 @@ impl Database {
             .await
     }
 
-    /// Writes `password` as the password file of `role`.
-    pub fn set_password_file(&self, role: &str, password: &str) {
-        std::fs::write(self.passwords.join(role), password).expect("write a password file");
+    /// Lets the run manage `role`'s password: declares its empty Secret, as the chart does, and
+    /// binds it in every later `config`.
+    pub fn bind(&self, role: &str) {
+        self.secrets.declare(&secret_of(role));
+        self.bound
+            .lock()
+            .expect("bound roles")
+            .push(role.to_owned());
+    }
+
+    /// Stops binding `role`, as the chart does when its service is turned off.
+    pub fn unbind(&self, role: &str) {
+        self.bound
+            .lock()
+            .expect("bound roles")
+            .retain(|bound| bound != role);
+    }
+
+    /// The password the run keeps for `role` in its Secret.
+    pub fn password(&self, role: &str) -> String {
+        self.secrets
+            .value(&secret_of(role), role)
+            .unwrap_or_else(|| panic!("the Secret of {role} holds no password"))
+    }
+
+    /// Changes `passwords.generation` of every later `config` (a rotation).
+    pub fn set_generation(&self, generation: &str) {
+        *self.generation.lock().expect("generation") = generation.to_owned();
     }
 
     /// Run settings: Postgres only (no ClickHouse), as `role`, short waits.
@@ -215,15 +256,33 @@ impl Database {
             postgres: PostgresSettings {
                 username: role.to_owned(),
                 password: TEST_PASSWORD.to_owned(),
-                role_passwords_dir: Some(self.passwords.clone()),
-                required_passwords: None,
             },
             clickhouse: None,
+            passwords: self.passwords(None),
             wait: WaitSettings {
                 databases: Duration::from_secs(30),
                 lock: Duration::from_secs(120),
             },
         }
+    }
+}
+
+impl Database {
+    /// `passwords.*` for the bound roles and `collector` (`account=secret`); none when nothing
+    /// is bound.
+    pub fn passwords(&self, collector: Option<(&str, &str)>) -> Option<PasswordSettings> {
+        let bound = self.bound.lock().expect("bound roles").clone();
+        if bound.is_empty() && collector.is_none() {
+            return None;
+        }
+        let secrets: Vec<String> = bound.iter().map(|role| secret_of(role)).collect();
+        let pairs: Vec<(&str, &str)> = bound
+            .iter()
+            .map(String::as_str)
+            .zip(secrets.iter().map(String::as_str))
+            .collect();
+        let generation = self.generation.lock().expect("generation").clone();
+        Some(self.secrets.settings(&generation, &pairs, collector))
     }
 }
 
@@ -377,12 +436,10 @@ impl ClickHouse {
     }
 
     /// Settings that point a run at this ClickHouse.
-    pub fn settings(&self, collector: Option<(&str, &str)>) -> ClickHouseSettings {
+    pub fn settings(&self) -> ClickHouseSettings {
         ClickHouseSettings {
             username: CLICKHOUSE_ADMIN.to_owned(),
             password: self.admin_password.clone(),
-            collector_username: collector.map(|(user, _)| user.to_owned()),
-            collector_password: collector.map(|(_, password)| password.to_owned()),
         }
     }
 }

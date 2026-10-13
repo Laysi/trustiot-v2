@@ -1,19 +1,27 @@
-// Bundled Postgres e2e test (Laysi/trustiot-v2#58; decisions 21 and 29, checklist M3 and M8):
-// installs the chart with `postgres.mode: bundled` into an existing namespace of a cluster where
-// the CloudNativePG operator runs (deploy/cloudnative-pg/README.md), then checks that
+// Bundled Postgres e2e test (Laysi/trustiot-v2#58, Laysi/trustiot-v2#60; decisions 21 and 29,
+// checklist M3 and M8): installs the chart with `postgres.mode: bundled`, the bundled ClickHouse,
+// the collector and the migration Job in one `helm install`, as a real install does, into an
+// existing namespace of a cluster where the CloudNativePG operator runs
+// (deploy/cloudnative-pg/README.md), then checks that
 //   1. the Cluster becomes healthy with one instance outside the mesh, under the restricted Pod
 //      Security Standard, and the data survives `helm uninstall`;
 //   2. the server runs with TLS, Apache AGE preloaded and installed at the image's version, the
 //      built-in C.UTF-8 locale, no superuser password and an ordinary database owner;
 //   3. the server refuses a TCP connection without TLS, whatever the client asks for;
-//   4. a service that lists postgres under mesh.calls connects with verify-full, using the CA
-//      certificate the chart mounts and the read-write Service's host name, with a role of its own
-//      (a CloudNativePG DatabaseRole, standing in for the migration Job, which this test turns off);
+//   4. the migration Job generates the passwords into the empty Secrets the chart declares, and a
+//      service that lists postgres under mesh.calls (identity, played by the example service)
+//      connects with verify-full as the role the Job created, using the CA certificate the chart
+//      mounts and the read-write Service's host name; the collector starts with its password too;
 //   5. the same pod is refused with another CA, with a host name the certificate does not list, and
-//      without the labels the Postgres NetworkPolicy admits.
+//      without the labels the Postgres NetworkPolicy admits;
+//   6. `helm upgrade` with the same values and `helm rollback` keep the generated passwords; a new
+//      migrate.passwordGeneration replaces them and the service and the collector become ready
+//      again with the new ones; a lost key is regenerated when the Job runs again
+//      (migrate.revision). Passwords are compared by digest inside this script; it prints and
+//      records only "unchanged" or "changed", never a value or a digest.
 // README.md in this directory lists the prerequisites; run from the repository root:
 //
-//   E2E_NAMESPACE=e2e-58 E2E_POSTGRES_IMAGE=<image> E2E_SERVICE_IMAGE=<image> \
+//   E2E_NAMESPACE=e2e-60 E2E_POSTGRES_IMAGE=<image> E2E_SERVICE_IMAGE=<image> E2E_MIGRATE_IMAGE=<image> \
 //     bun test --timeout 900000 ./deploy/chart/tests/e2e/postgres.e2e.ts
 //
 // Not part of `bun test deploy/chart` (the file name has no .test. suffix): it needs a cluster.
@@ -34,6 +42,7 @@ function required(name: string): string {
 const NAMESPACE = required("E2E_NAMESPACE");
 const POSTGRES_IMAGE = required("E2E_POSTGRES_IMAGE");
 const SERVICE_IMAGE = required("E2E_SERVICE_IMAGE");
+const MIGRATE_IMAGE = required("E2E_MIGRATE_IMAGE");
 const SHAPE = process.env.E2E_SHAPE ?? "onprem";
 const CONTEXT = process.env.E2E_KUBECONTEXT;
 const RELEASE = process.env.E2E_RELEASE ?? "trustiot";
@@ -50,14 +59,19 @@ if (CLUSTER.length > 50) throw new Error(`E2E_RELEASE ${RELEASE} is too long: th
 const DATABASE = "trustiot";
 const OWNER = "trustiot_owner";
 const RUN = crypto.randomUUID().replaceAll("-", "").slice(0, 8);
+// The service that uses Postgres: identity, whose role the migration Job's registry knows, played
+// by the example service (its readiness opens a verify-full session as that role).
+const SERVICE = "identity";
+const ROLE = "identity_app";
+// The password Secrets the chart declares and the Job fills (templates/passwords.yaml).
+const SERVICE_SECRET = `${PREFIX}-${SERVICE}-password`;
+const COLLECTOR_SECRET = `${PREFIX}-otel-collector-password`;
+const PASSWORD_SECRETS = [SERVICE_SECRET, COLLECTOR_SECRET];
 // Names of their own, so the test never replaces a Secret or object it did not create.
-const ROLE = `e2e_app_${RUN}`;
-const ROLE_OBJECT = `trustiot-e2e-role-${RUN}`;
+const ADMIN_SECRET = `trustiot-e2e-ch-admin-${RUN}`;
 const PROBE = `trustiot-e2e-probe-${RUN}`;
 // deploy/images/postgres/Containerfile: `ARG AGE_VERSION=<version>`.
 const AGE_VERSION = readFileSync(join(REPO_ROOT, "deploy/images/postgres/Containerfile"), "utf8").match(/^ARG AGE_VERSION=(\S+)$/m)?.[1];
-// Run once per database by its owner before any service connects (decision 29).
-const DATABASE_SQL = readFileSync(join(REPO_ROOT, "crates/service-kit/sql/database.sql"), "utf8");
 
 function pinnedTool(tool: string): string {
   const result = Bun.spawnSync({ cmd: ["proto", "bin", tool, "--reporter", "text"], cwd: REPO_ROOT });
@@ -171,7 +185,7 @@ function imageValues(path: string, image: string, what: string): string[] {
 
 const work = mkdtempSync(join(tmpdir(), "trustiot-postgres-e2e-"));
 // What this run created and still has to remove; the uninstall test hands the kept Cluster over.
-const created = { secret: false, role: false, release: false, cluster: false, probePolicy: false, probes: [] as string[] };
+const created = { secret: false, passwordSecrets: false, release: false, cluster: false, clickhouse: false, probePolicy: false, probes: [] as string[] };
 const report: Record<string, unknown> = { run: RUN, shape: SHAPE, namespace: NAMESPACE, release: RELEASE, cluster: CLUSTER };
 
 function hex(bytes: number): string {
@@ -186,17 +200,83 @@ const base = [
   "--values",
   "tests/e2e/values-postgres-e2e.yaml",
   ...imageValues("postgres.bundled.image", POSTGRES_IMAGE, "E2E_POSTGRES_IMAGE"),
+  ...imageValues(`services.${SERVICE}.image`, SERVICE_IMAGE, "E2E_SERVICE_IMAGE"),
+  ...imageValues("migrate.image", MIGRATE_IMAGE, "E2E_MIGRATE_IMAGE"),
+  "--set",
+  `clickhouse.bundled.adminSecret.name=${ADMIN_SECRET}`,
 ];
+
+interface StoredSecret {
+  metadata: {
+    annotations?: Record<string, string>;
+    labels?: Record<string, string>;
+    managedFields?: { manager: string; fieldsV1?: { "f:data"?: Record<string, unknown> } }[];
+  };
+  data?: Record<string, string>;
+}
+const secret = (name: string) => json<StoredSecret>("get", "secret", name);
+// A digest of every password Secret's data, kept in this process only: compared, never printed.
+function passwordDigest(): string {
+  const hash = new Bun.CryptoHasher("sha256");
+  for (const name of PASSWORD_SECRETS) {
+    const data = secret(name).data ?? {};
+    for (const key of Object.keys(data).sort()) hash.update(`${name}/${key}=${data[key]}\n`);
+  }
+  return hash.digest("hex");
+}
+const compared = (before: string, after: string) => (before === after ? "unchanged" : "changed");
+
+// What the password Secrets hold, by name only: their keys, the generation that made them and who
+// wrote the data.
+function passwordSecretsShape() {
+  return PASSWORD_SECRETS.map((name) => {
+    const found = secret(name);
+    return {
+      name,
+      keys: Object.keys(found.data ?? {}).sort(),
+      generation: found.metadata.annotations?.["trustiot.io/password-generation"],
+      keep: found.metadata.annotations?.["helm.sh/resource-policy"],
+      filledBy: found.metadata.labels?.["trustiot.io/filled-by"],
+      dataManagers: (found.metadata.managedFields ?? []).filter((f) => f.fieldsV1?.["f:data"] !== undefined).map((f) => f.manager),
+    };
+  });
+}
+
+const jobName = () => {
+  const jobs = json<{ items: { metadata: { name: string }; status?: { succeeded?: number } }[] }>(
+    "get",
+    "jobs",
+    "--selector",
+    `app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=migrate`,
+  ).items;
+  if (jobs.length !== 1) throw new Error(`expected one migration Job, found ${jobs.length}`);
+  return jobs[0]?.metadata.name ?? "";
+};
+
+// helm upgrade with the test's values plus `extra`, waiting for every workload and the Job.
+function upgrade(...extra: string[]) {
+  helm("upgrade", RELEASE, ".", ...base, ...extra, "--wait", "--timeout", "10m");
+}
+// Waits until the service and the collector run only pods of their current template, all Ready.
+function rolledOut() {
+  for (const deployment of [`${PREFIX}-${SERVICE}`, `${PREFIX}-otel-collector`]) {
+    kubectl("rollout", "status", `deployment/${deployment}`, "--timeout=600s");
+  }
+}
 
 beforeAll(async () => {
   if (!AGE_VERSION) throw new Error("deploy/images/postgres/Containerfile has no ARG AGE_VERSION");
+  // The chart refuses a service that uses Postgres with another tag than the migration Job's.
+  if (imageParts(SERVICE_IMAGE, "E2E_SERVICE_IMAGE").tag !== imageParts(MIGRATE_IMAGE, "E2E_MIGRATE_IMAGE").tag) {
+    throw new Error("E2E_SERVICE_IMAGE and E2E_MIGRATE_IMAGE must have the same tag: the chart holds a service that uses Postgres to the migration Job's release");
+  }
   // Never touch an existing installation (the same check as cluster.ts).
   const status = exec([HELM, ...(CONTEXT ? ["--kube-context", CONTEXT] : []), "--namespace", NAMESPACE, "status", RELEASE]);
   if (status.code === 0) throw new Error(`release ${RELEASE} already exists in ${NAMESPACE}; use another E2E_RELEASE or namespace`);
   if (!status.stderr.includes("not found")) throw new Error(`helm status ${RELEASE} failed:\n${status.stderr}`);
   // The operator is a platform component (deploy/cloudnative-pg); discovery needs no cluster-wide rights.
   const resources = run([KUBECTL, ...(CONTEXT ? ["--context", CONTEXT] : []), "api-resources", "--api-group=postgresql.cnpg.io", "--output", "name"]);
-  for (const kind of ["clusters", "imagecatalogs", "databases", "databaseroles"]) {
+  for (const kind of ["clusters", "imagecatalogs", "databases"]) {
     if (!resources.split("\n").includes(`${kind}.postgresql.cnpg.io`)) {
       throw new Error(`the cluster has no ${kind}.postgresql.cnpg.io; install CloudNativePG first (deploy/cloudnative-pg/README.md)`);
     }
@@ -204,9 +284,12 @@ beforeAll(async () => {
   // The Cluster's name follows the release, and an uninstalled release keeps its Cluster, image
   // catalog and volume (helm.sh/resource-policy: keep). Cleanup deletes them by that name, so
   // refuse to start when any of them is already there: they hold someone's data.
+  // The password Secrets are kept the same way, and would hand this run an earlier run's passwords.
   const leftovers = [
     kubectl("get", `cluster.postgresql.cnpg.io/${CLUSTER}`, `imagecatalog.postgresql.cnpg.io/${CLUSTER}`, "--ignore-not-found", "--output", "name"),
     kubectl("get", "pvc", "--selector", `cnpg.io/cluster=${CLUSTER}`, "--output", "name"),
+    kubectl("get", "pvc", `data-${PREFIX}-clickhouse-0`, "--ignore-not-found", "--output", "name"),
+    kubectl("get", "secret", ...PASSWORD_SECRETS, "--ignore-not-found", "--output", "name"),
   ]
     .join("\n")
     .split("\n")
@@ -217,12 +300,23 @@ beforeAll(async () => {
     );
   }
 
-  // Step 1: the database alone. From here on the Cluster, its image catalog and its volume are
+  // The bundled ClickHouse's bootstrap admin password, fresh for this run, in a private temp file
+  // so it never appears in argv. The migration Job uses it to create the collector's account.
+  const adminFile = join(work, "clickhouse-admin");
+  writeFileSync(adminFile, hex(24), { mode: 0o600 });
+  created.secret = true;
+  kubectl("create", "secret", "generic", ADMIN_SECRET, `--from-file=password=${adminFile}`);
+
+  // One install, as a real one: the databases, the migration Job, which waits for them, generates
+  // the passwords and creates the roles, and the service and the collector, which wait for the
+  // Job. From here on the Cluster, its image catalog, the volumes and the password Secrets are
   // this run's (checked above), so cleanup removes them even when the install fails halfway.
   const started = Date.now();
   created.release = true;
   created.cluster = true;
-  helm("install", RELEASE, ".", ...base, "--rollback-on-failure", "--wait", "--timeout", "10m");
+  created.clickhouse = true;
+  created.passwordSecrets = true;
+  helm("install", RELEASE, ".", ...base, "--rollback-on-failure", "--wait", "--timeout", "15m");
   const helmSeconds = (Date.now() - started) / 1000;
   const healthyAtHelmReturn = clusterStatus().phase === "Cluster in healthy state";
   kubectl("wait", `cluster.postgresql.cnpg.io/${CLUSTER}`, "--for=condition=Ready", "--timeout=600s");
@@ -230,58 +324,7 @@ beforeAll(async () => {
     const status = json<{ status?: { applied?: boolean; message?: string } }>("get", `database.postgresql.cnpg.io/${CLUSTER}-${DATABASE}`).status;
     return status?.applied === true ? true : undefined;
   });
-  report.install = { helmSeconds, healthyAtHelmReturn, readySeconds: (Date.now() - started) / 1000 };
-
-  // The service's role: a DatabaseRole whose password is in a basic-auth Secret, standing in for
-  // the migration Job (tools/migrate), which this test turns off so it needs no migrate image. The
-  // password exists only in a private temp file and the Secret.
-  const passwordFile = join(work, "password");
-  writeFileSync(passwordFile, hex(24), { mode: 0o600 });
-  const usernameFile = join(work, "username");
-  writeFileSync(usernameFile, ROLE, { mode: 0o600 });
-  created.secret = true;
-  kubectl("create", "secret", "generic", ROLE_OBJECT, "--type=kubernetes.io/basic-auth", `--from-file=username=${usernameFile}`, `--from-file=password=${passwordFile}`);
-  created.role = true;
-  kubectlIn(
-    JSON.stringify({
-      apiVersion: "postgresql.cnpg.io/v1",
-      kind: "DatabaseRole",
-      metadata: { name: ROLE_OBJECT },
-      spec: { cluster: { name: CLUSTER }, name: ROLE, ensure: "present", login: true, passwordSecret: { name: ROLE_OBJECT } },
-    }),
-    "apply",
-    "-f",
-    "-",
-  );
-  await waitFor(`DatabaseRole ${ROLE_OBJECT} applied`, () => {
-    const status = json<{ status?: { applied?: boolean } }>("get", `databaserole.postgresql.cnpg.io/${ROLE_OBJECT}`).status;
-    return status?.applied === true ? true : undefined;
-  });
-  // What the migration Job does as the owner in a real install (Laysi/trustiot-v2#60), done here
-  // by the test because values-postgres-e2e.yaml turns the Job off: no temporary tables for
-  // anyone, which service-kit requires of every session.
-  psql(`SET ROLE ${OWNER};\n${DATABASE_SQL}`);
-
-  // Step 2: the example service, connecting with its role.
-  helm(
-    "upgrade",
-    RELEASE,
-    ".",
-    ...base,
-    "--set",
-    "services.assets.enabled=true",
-    ...imageValues("services.assets.image", SERVICE_IMAGE, "E2E_SERVICE_IMAGE"),
-    "--set-json",
-    `services.assets.env=${JSON.stringify([
-      { name: "TRUSTIOT__GREETING", value: "hello from the postgres e2e" },
-      { name: "TRUSTIOT__DATABASE__USERNAME", value: ROLE },
-      { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: ROLE_OBJECT, key: "password" } } },
-    ])}`,
-    "--rollback-on-failure",
-    "--wait",
-    "--timeout",
-    "8m",
-  );
+  report.install = { helmSeconds, healthyAtHelmReturn, readySeconds: (Date.now() - started) / 1000, job: jobName() };
 }, 1_200_000);
 
 afterAll(() => {
@@ -295,14 +338,16 @@ afterAll(() => {
   const steps: [boolean, () => unknown][] = [
     [created.probes.length > 0, () => kubectl("delete", "pod", ...created.probes, "--ignore-not-found", "--wait=true")],
     [created.probePolicy, () => kubectl("delete", "networkpolicy", PROBE, "--ignore-not-found")],
-    // The role goes while its Cluster still runs, so the operator can finish with it.
-    [created.role, () => kubectl("delete", `databaserole.postgresql.cnpg.io/${ROLE_OBJECT}`, "--ignore-not-found", "--wait=true", "--timeout=120s")],
     [created.release, () => helm("uninstall", RELEASE, "--wait", "--timeout", "3m")],
+    // Kept on uninstall (helm.sh/resource-policy: keep), like the Cluster below.
+    [created.passwordSecrets, () => kubectl("delete", "secret", ...PASSWORD_SECRETS, "--ignore-not-found")],
+    // The ClickHouse StatefulSet keeps its volume on uninstall (persistentVolumeClaimRetentionPolicy).
+    [created.clickhouse, () => kubectl("delete", "pvc", `data-${PREFIX}-clickhouse-0`, "--ignore-not-found", "--wait=true", "--timeout=180s")],
     // Kept on uninstall (helm.sh/resource-policy: keep): deleting the Cluster deletes its volume.
     [created.cluster, () => kubectl("delete", `cluster.postgresql.cnpg.io/${CLUSTER}`, "--ignore-not-found", "--wait=true", "--timeout=180s")],
     [created.cluster, () => kubectl("delete", `imagecatalog.postgresql.cnpg.io/${CLUSTER}`, "--ignore-not-found", "--wait=true")],
     [created.cluster, () => kubectl("delete", "pvc", "--selector", `cnpg.io/cluster=${CLUSTER}`, "--ignore-not-found", "--wait=true", "--timeout=180s")],
-    [created.secret, () => kubectl("delete", "secret", ROLE_OBJECT, "--ignore-not-found")],
+    [created.secret, () => kubectl("delete", "secret", ADMIN_SECRET, "--ignore-not-found")],
   ];
   for (const [done, cleanup] of steps) {
     if (!done) continue;
@@ -352,7 +397,7 @@ function startProbe(suffix: string, edit: (spec: Pod["spec"] & Record<string, un
   }
   const deployment = json<{ spec: { template: { metadata: { labels: Record<string, string> }; spec: Pod["spec"] & Record<string, unknown> } } }>(
     "get",
-    `deployment/${PREFIX}-assets`,
+    `deployment/${PREFIX}-${SERVICE}`,
   );
   const labels = { ...deployment.spec.template.metadata.labels, "trustiot-e2e/probe": RUN };
   const spec = structuredClone(deployment.spec.template.spec);
@@ -423,7 +468,7 @@ describe(`bundled Postgres (${SHAPE} shape)`, () => {
       .split("\n")
       .map((line) => line.split("|"));
     report.roles = roles.map(([name, superuser, createrole, createdb, bypassrls, login, noPassword]) => ({
-      name: name === ROLE ? "e2e_app_<run>" : name,
+      name,
       superuser,
       createrole,
       createdb,
@@ -432,7 +477,8 @@ describe(`bundled Postgres (${SHAPE} shape)`, () => {
       noPassword,
     }));
     expect(roles).toEqual([
-      // The service's role: a login without any privilege beyond its own.
+      // The service's role, which the migration Job created: a login without any privilege beyond
+      // its own.
       [ROLE, "f", "f", "f", "f", "t", "f"],
       // The superuser has no password: only the local socket in the pod reaches it.
       ["postgres", "t", "t", "t", "t", "t", "t"],
@@ -443,7 +489,7 @@ describe(`bundled Postgres (${SHAPE} shape)`, () => {
     ]);
     // No Secret with superuser credentials.
     expect(exec([...kubectlArgs(), "get", "secret", `${CLUSTER}-superuser`]).stderr).toContain("NotFound");
-    // No temporary tables for anyone (crates/service-kit/sql/database.sql, run as the owner).
+    // No temporary tables for anyone (crates/service-kit/sql/database.sql, run by the Job).
     expect(psql(`SELECT has_database_privilege('${ROLE}', '${DATABASE}', 'TEMPORARY');`)).toBe("f");
   });
 
@@ -479,8 +525,36 @@ describe(`bundled Postgres (${SHAPE} shape)`, () => {
     expect(result.stderr).toContain("no encryption");
   });
 
+  test("the migration Job generated the passwords into the empty Secrets the chart declares, and nothing else holds them", () => {
+    const shape = passwordSecretsShape();
+    report.passwordSecrets = shape;
+    expect(shape).toEqual([
+      { name: SERVICE_SECRET, keys: [ROLE], generation: "1", keep: "keep", filledBy: "migrate", dataManagers: ["trustiot-migrate"] },
+      { name: COLLECTOR_SECRET, keys: ["trustiot_collector"], generation: "1", keep: "keep", filledBy: "migrate", dataManagers: ["trustiot-migrate"] },
+    ]);
+    for (const name of PASSWORD_SECRETS) {
+      for (const value of Object.values(secret(name).data ?? {})) {
+        // 64 hex digits, base64-encoded: 88 characters.
+        expect(Buffer.from(value, "base64").toString()).toMatch(/^[0-9a-f]{64}$/);
+      }
+    }
+    // The Job's log names what it generated, never a value.
+    const logs = kubectl("logs", `job/${jobName()}`);
+    expect(logs).toContain(`generated the password of ${ROLE} in Secret ${SERVICE_SECRET} (it had none)`);
+    expect(logs).toContain(`generated the password of trustiot_collector in Secret ${COLLECTOR_SECRET} (it had none)`);
+    for (const name of PASSWORD_SECRETS) {
+      for (const value of Object.values(secret(name).data ?? {})) {
+        expect(logs.includes(value) || logs.includes(Buffer.from(value, "base64").toString())).toBe(false);
+      }
+    }
+    // The collector started with its password: Ready, not waiting on a missing key.
+    const collector = json<{ items: Pod[] }>("get", "pods", "--selector", `app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=otel-collector`).items;
+    expect(collector.length).toBe(1);
+    expect(ready(collector[0] as Pod)).toBe(true);
+  });
+
   test("a service that lists postgres connects with verify-full, with the mounted CA and its own role", () => {
-    const pods = json<{ items: Pod[] }>("get", "pods", "--selector", `app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=assets`).items.filter(
+    const pods = json<{ items: Pod[] }>("get", "pods", "--selector", `app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=${SERVICE}`).items.filter(
       (pod) => pod.metadata.labels?.["pod-template-hash"] !== undefined,
     );
     expect(pods.length).toBe(1);
@@ -540,11 +614,63 @@ describe(`bundled Postgres (${SHAPE} shape)`, () => {
     for (const pod of [wrongCa, wrongHost, unlisted]) expect(ready(json<Pod>("get", "pod", pod))).toBe(false);
   }, 600_000);
 
-  test("helm uninstall keeps the database: the Cluster, its image catalog and its volume stay", () => {
+  test("helm upgrade with the same values and helm rollback keep the generated passwords", () => {
     for (const probe of created.probes) kubectl("delete", "pod", probe, "--ignore-not-found", "--wait=true");
     created.probes = [];
-    kubectl("delete", `databaserole.postgresql.cnpg.io/${ROLE_OBJECT}`, "--wait=true", "--timeout=120s");
-    created.role = false;
+    const job = jobName();
+    const before = passwordDigest();
+    upgrade();
+    // Same values, same Job: it does not run again, and Helm leaves the data it never rendered.
+    expect(jobName()).toBe(job);
+    const afterUpgrade = compared(before, passwordDigest());
+    helm("rollback", RELEASE, "1", "--wait", "--timeout", "10m");
+    const afterRollback = compared(before, passwordDigest());
+    report.sameValues = { upgrade: afterUpgrade, rollback: afterRollback };
+    console.log(`password Secrets after upgrade with the same values: ${afterUpgrade}; after rollback: ${afterRollback}`);
+    expect(afterUpgrade).toBe("unchanged");
+    expect(afterRollback).toBe("unchanged");
+    rolledOut();
+  }, 1_200_000);
+
+  test("a new password generation replaces every password, and the service and the collector become ready with the new ones", () => {
+    const job = jobName();
+    const before = passwordDigest();
+    upgrade("--set", "migrate.passwordGeneration=2");
+    rolledOut();
+    const after = compared(before, passwordDigest());
+    report.rotation = { secrets: after, newJob: jobName() !== job, generations: passwordSecretsShape().map((s) => s.generation) };
+    console.log(`password Secrets after migrate.passwordGeneration=2: ${after}`);
+    expect(after).toBe("changed");
+    expect(jobName()).not.toBe(job);
+    expect(passwordSecretsShape().map((s) => s.generation)).toEqual(["2", "2"]);
+    const logs = kubectl("logs", `job/${jobName()}`);
+    expect(logs).toContain(`generated the password of ${ROLE} in Secret ${SERVICE_SECRET} (password generation 2)`);
+    expect(logs).toContain(`set the password of ${ROLE}`);
+    expect(logs).toContain("set the password of ClickHouse account trustiot_collector");
+    // Ready again: the service's readiness opened a verify-full session with the new password.
+    for (const component of [SERVICE, "otel-collector"]) {
+      const pods = json<{ items: Pod[] }>("get", "pods", "--selector", `app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=${component}`).items;
+      expect(pods.length, component).toBeGreaterThan(0);
+      for (const pod of pods) expect(ready(pod), pod.metadata.name).toBe(true);
+    }
+  }, 1_200_000);
+
+  test("a lost key is regenerated when the Job runs again", () => {
+    const before = passwordDigest();
+    kubectl("patch", "secret", SERVICE_SECRET, "--type", "json", "--patch", JSON.stringify([{ op: "remove", path: `/data/${ROLE}` }]));
+    upgrade("--set", "migrate.passwordGeneration=2", "--set", "migrate.revision=2");
+    rolledOut();
+    const after = compared(before, passwordDigest());
+    report.lostKey = { secrets: after, keys: passwordSecretsShape().map((s) => s.keys) };
+    console.log(`password Secrets after a lost key and migrate.revision=2: ${after}`);
+    expect(after).toBe("changed");
+    expect(Object.keys(secret(SERVICE_SECRET).data ?? {})).toEqual([ROLE]);
+    expect(kubectl("logs", `job/${jobName()}`)).toContain(`generated the password of ${ROLE} in Secret ${SERVICE_SECRET} (it had none)`);
+  }, 1_200_000);
+
+  test("helm uninstall keeps the database and the passwords: the Cluster, its image catalog, its volume and the password Secrets stay", () => {
+    for (const probe of created.probes) kubectl("delete", "pod", probe, "--ignore-not-found", "--wait=true");
+    created.probes = [];
     psql(`CREATE TABLE e2e_kept_${RUN} (id int); INSERT INTO e2e_kept_${RUN} VALUES (1);`);
     helm("uninstall", RELEASE, "--wait", "--timeout", "3m");
     created.release = false;
@@ -554,7 +680,10 @@ describe(`bundled Postgres (${SHAPE} shape)`, () => {
     expect(exec([...kubectlArgs(), "get", `database.postgresql.cnpg.io/${CLUSTER}-${DATABASE}`]).stderr).toContain("NotFound");
     expect(psql(`SELECT count(*) FROM e2e_kept_${RUN};`)).toBe("1");
     const pvcs = kubectl("get", "pvc", "--selector", `cnpg.io/cluster=${CLUSTER}`, "--output", "name").trim();
-    report.keptAfterUninstall = { objects: kept.trim().split("\n"), pvcs: pvcs.split("\n") };
+    // The password Secrets stay too, so a reinstall finds the passwords the roles still have.
+    const secrets = kubectl("get", "secret", ...PASSWORD_SECRETS, "--output", "name").trim().split("\n").sort();
+    report.keptAfterUninstall = { objects: kept.trim().split("\n"), pvcs: pvcs.split("\n"), secrets };
     expect(pvcs).not.toBe("");
+    expect(secrets).toEqual(PASSWORD_SECRETS.map((name) => `secret/${name}`).sort());
   }, 300_000);
 });

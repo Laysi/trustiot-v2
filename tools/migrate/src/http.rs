@@ -30,7 +30,8 @@ use tokio_rustls::TlsConnector;
 /// retry or fail the run.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Larger response bodies are refused: the Job reads one Job object or a short query result.
+/// Larger response bodies are refused: the Job reads one Job or Secret object or a short query
+/// result.
 const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 /// Query values are percent-encoded except RFC 3986's unreserved characters.
@@ -167,7 +168,37 @@ impl Client {
         auth: Auth<'_>,
         body: String,
     ) -> Result<Response, RequestError> {
-        self.send(Method::POST, url, query, auth, Some(body)).await
+        self.send(
+            Method::POST,
+            url,
+            query,
+            auth,
+            Some(("text/plain; charset=utf-8", body)),
+        )
+        .await
+    }
+
+    /// `PATCH url?query` with `body` as a JSON merge patch (RFC 7386), as the Kubernetes API
+    /// takes it.
+    ///
+    /// # Errors
+    ///
+    /// When there is no complete response within [`REQUEST_TIMEOUT`]; any status is a response.
+    pub async fn merge_patch(
+        &self,
+        url: &str,
+        query: &[(&str, &str)],
+        auth: Auth<'_>,
+        body: String,
+    ) -> Result<Response, RequestError> {
+        self.send(
+            Method::PATCH,
+            url,
+            query,
+            auth,
+            Some(("application/merge-patch+json", body)),
+        )
+        .await
     }
 
     async fn send(
@@ -176,7 +207,7 @@ impl Client {
         url: &str,
         query: &[(&str, &str)],
         auth: Auth<'_>,
-        body: Option<String>,
+        body: Option<(&'static str, String)>,
     ) -> Result<Response, RequestError> {
         tokio::time::timeout(
             REQUEST_TIMEOUT,
@@ -192,7 +223,7 @@ impl Client {
         url: &str,
         query: &[(&str, &str)],
         auth: Auth<'_>,
-        body: Option<String>,
+        body: Option<(&'static str, String)>,
     ) -> Result<Response, RequestError> {
         let uri: Uri = url
             .parse()
@@ -267,11 +298,15 @@ impl Client {
             .uri(target)
             .header(HOST, authority.as_str())
             .header(AUTHORIZATION, auth.header()?);
-        if body.is_some() {
-            builder = builder.header(CONTENT_TYPE, "text/plain; charset=utf-8");
-        }
+        let body = match body {
+            Some((content_type, body)) => {
+                builder = builder.header(CONTENT_TYPE, content_type);
+                body
+            }
+            None => String::new(),
+        };
         let request = builder
-            .body(Full::new(Bytes::from(body.unwrap_or_default())))
+            .body(Full::new(Bytes::from(body)))
             .map_err(|error| RequestError(format!("cannot build the request: {error}")))?;
 
         let tcp = TcpStream::connect((host.as_str(), port))

@@ -31,18 +31,53 @@ services that wait for the Job.
 {{/*
 Login role of a service that uses Postgres, as tools/migrate names it (registry.rs,
 Service::app_role): the service name with "-" written "_", then "_app". Its password is the key of
-the same name in postgres.serviceRolesSecret. Argument: the service name.
+the same name in the service's password Secret ("trustiot.migrate.passwordSecrets").
+Argument: the service name.
 */}}
 {{- define "trustiot.migrate.appRole" -}}
 {{- printf "%s_app" (replace "-" "_" .) -}}
 {{- end -}}
 
 {{/*
-Where the Job mounts postgres.serviceRolesSecret: one file per login role, named after it
-(TRUSTIOT__POSTGRES__ROLE_PASSWORDS_DIR).
+The Secrets that hold the generated passwords (docs/architecture/secrets.md, "migration Job 產生的密碼"),
+one per consumer, so a node's kubelet can read only the passwords of the pods scheduled on it:
+- each enabled service that lists postgres under mesh.calls: "<release>-<service>-password", with
+  its login role's password under the key "<service>_app";
+- the OpenTelemetry collector, when enabled: "<release>-otel-collector-password", with its
+  ClickHouse account's password under the key named after the account.
+templates/passwords.yaml declares them without data; the migration Job generates each password and
+writes it in (tools/migrate/src/passwords.rs). They are declared whether or not migrate.enabled is
+true: with the Job turned off, whatever replaces it fills them (only the cluster tests do that).
+Returns a YAML list of {name, key, kind (postgres or clickhouse), component}; use with fromYamlArray.
 */}}
-{{- define "trustiot.migrate.rolePasswordsDir" -}}
-/etc/trustiot/role-passwords
+{{- define "trustiot.migrate.passwordSecrets" -}}
+{{- $secrets := list -}}
+{{- range (include "trustiot.postgres.clients" . | fromYaml).services -}}
+{{- $secrets = append $secrets (dict "name" (include "trustiot.componentName" (dict "root" $ "name" (printf "%s-password" .))) "key" (include "trustiot.migrate.appRole" .) "kind" "postgres" "component" .) -}}
+{{- end -}}
+{{- with .Values.observability.collector -}}
+{{- if .enabled -}}
+{{- $secrets = append $secrets (dict "name" (include "trustiot.componentName" (dict "root" $ "name" "otel-collector-password")) "key" .clickhouse.user "kind" "clickhouse" "component" "otel-collector") -}}
+{{- end -}}
+{{- end -}}
+{{- toYaml $secrets -}}
+{{- end -}}
+
+{{/*
+The password Secret of one consumer, as {name, key}. Argument: dict "root" $ "component" <service
+name, or otel-collector>. Returns YAML; use with fromYaml.
+*/}}
+{{- define "trustiot.migrate.passwordSecret" -}}
+{{- $found := dict -}}
+{{- range include "trustiot.migrate.passwordSecrets" .root | fromYamlArray -}}
+{{- if eq .component $.component -}}
+{{- $found = dict "name" .name "key" .key -}}
+{{- end -}}
+{{- end -}}
+{{- if not $found.name -}}
+{{- fail (printf "internal: %s has no password Secret" .component) -}}
+{{- end -}}
+{{- toYaml $found -}}
 {{- end -}}
 
 {{/*
@@ -62,9 +97,6 @@ fails `helm install` instead of a Job that fails later.
 {{- if hasKey $v.services $reserved -}}
 {{- fail (printf "services.%s: the name belongs to the migration Job" $reserved) -}}
 {{- end -}}
-{{- end -}}
-{{- if and (include "trustiot.migrate.enabled" .) (include "trustiot.postgres.clients" . | fromYaml).services (not $v.postgres.serviceRolesSecret.name) -}}
-{{- fail "postgres.serviceRolesSecret.name is required while a service lists postgres under mesh.calls: the migration Job sets each service role's password from it" -}}
 {{- end -}}
 {{- if include "trustiot.migrate.enabled" . -}}
 {{- /* The Job's image carries every service's migrations, and only a change of its own spec runs
@@ -100,8 +132,8 @@ together). */ -}}
 
 {{/*
 Env of the Job's container: where the databases are comes from the platform settings (envFrom);
-this adds the CA file, the migration accounts, the service roles' password directory, the
-collector's account and the waits. Credentials come from Secrets only.
+this adds the CA file, the migration accounts, the password Secrets it fills (names only, never a
+value) and the waits. Credentials come from Secrets only.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.migrate.env" -}}
@@ -122,18 +154,6 @@ Returns a YAML list; use with fromYamlArray.
 {{- $env = append $env (dict "name" "TRUSTIOT__POSTGRES__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" .name "key" .passwordKey))) -}}
 {{- end -}}
 {{- end -}}
-{{- if $v.postgres.serviceRolesSecret.name -}}
-{{- $env = append $env (dict "name" "TRUSTIOT__POSTGRES__ROLE_PASSWORDS_DIR" "value" (include "trustiot.migrate.rolePasswordsDir" .)) -}}
-{{- /* The roles of the enabled services that use Postgres: each must have a password, or the
-Job stops before any service starts with a role it cannot log in as. */ -}}
-{{- $required := list -}}
-{{- range (include "trustiot.postgres.clients" . | fromYaml).services -}}
-{{- $required = append $required (include "trustiot.migrate.appRole" .) -}}
-{{- end -}}
-{{- if $required -}}
-{{- $env = append $env (dict "name" "TRUSTIOT__POSTGRES__REQUIRED_PASSWORDS" "value" (join "," $required)) -}}
-{{- end -}}
-{{- end -}}
 {{- if eq $v.clickhouse.mode "bundled" -}}
 {{- with $v.clickhouse.bundled -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__CLICKHOUSE__USERNAME" "value" .adminUser) -}}
@@ -145,10 +165,29 @@ Job stops before any service starts with a role it cannot log in as. */ -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__CLICKHOUSE__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" .name "key" .passwordKey))) -}}
 {{- end -}}
 {{- end -}}
-{{- with $v.observability.collector -}}
-{{- if .enabled -}}
-{{- $env = append $env (dict "name" "TRUSTIOT__CLICKHOUSE__COLLECTOR_USERNAME" "value" .clickhouse.user) -}}
-{{- $env = append $env (dict "name" "TRUSTIOT__CLICKHOUSE__COLLECTOR_PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" .clickhouse.passwordSecret.name "key" .clickhouse.passwordSecret.key))) -}}
+{{- /* The password Secrets the Job fills, as key=Secret pairs, and how it reaches them: the
+Kubernetes API with its own projected token ("trustiot.migrate.kubeApiVolume"), whose Role in
+migrate.yaml allows get and patch on exactly these Secrets. passwordGeneration renews every
+password (a rotation); a new value also renames the Job, so the services restart with the new
+passwords. */ -}}
+{{- $secrets := include "trustiot.migrate.passwordSecrets" . | fromYamlArray -}}
+{{- if $secrets -}}
+{{- $dir := include "trustiot.migrate.kubeDir" . -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__API_URL" "value" "https://kubernetes.default.svc") -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__NAMESPACE" "valueFrom" (dict "fieldRef" (dict "fieldPath" "metadata.namespace"))) -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__TOKEN_FILE" "value" (printf "%s/token" $dir)) -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__CA_FILE" "value" (printf "%s/ca.crt" $dir)) -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__GENERATION" "value" ($v.migrate.passwordGeneration | toString)) -}}
+{{- $postgres := list -}}
+{{- range $secrets -}}
+{{- if eq .kind "postgres" -}}
+{{- $postgres = append $postgres (printf "%s=%s" .key .name) -}}
+{{- else -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR" "value" (printf "%s=%s" .key .name)) -}}
+{{- end -}}
+{{- end -}}
+{{- if $postgres -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__POSTGRES" "value" (join "," $postgres)) -}}
 {{- end -}}
 {{- end -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__WAIT__DATABASES" "value" $v.migrate.wait.databases) -}}
@@ -158,9 +197,10 @@ Job stops before any service starts with a role it cannot log in as. */ -}}
 
 {{/*
 The Job's spec without its name. "trustiot.migrate.jobName" hashes it, so the Job gets a new name
-(and runs again) exactly when its image, settings, Secret references, revision, the platform
-settings or the image of a service that uses Postgres change; an upgrade that changes none of them leaves the completed Job as it is. The Job
-object is immutable, and a new name also avoids patching it.
+(and runs again) exactly when its image, settings, Secret references, revision, password
+generation, the platform settings or the image of a service that uses Postgres change; an upgrade
+that changes none of them leaves the completed Job as it is. The Job object is immutable, and a
+new name also avoids patching it.
 */}}
 {{- define "trustiot.migrate.jobSpec" -}}
 {{- $v := .Values -}}
@@ -168,6 +208,7 @@ object is immutable, and a new name also avoids patching it.
 {{- $ctx := dict "root" . "name" "migrate" -}}
 {{- $postgresCa := include "trustiot.postgres.caSecret" . | fromYaml -}}
 {{- $clickhouseCa := and (eq $v.clickhouse.mode "external") $v.clickhouse.external.caSecret.name -}}
+{{- $fills := include "trustiot.migrate.passwordSecrets" . | fromYamlArray -}}
 # One pod at a time, and a retry only after the previous pod has fully stopped; the advisory lock
 # in Postgres keeps two runs apart even across Jobs.
 parallelism: 1
@@ -243,9 +284,11 @@ template:
             mountPath: /etc/trustiot/clickhouse-ca
             readOnly: true
           {{- end }}
-          {{- if $v.postgres.serviceRolesSecret.name }}
-          - name: role-passwords
-            mountPath: {{ include "trustiot.migrate.rolePasswordsDir" . }}
+          {{- if $fills }}
+          {{- /* The token that fills the password Secrets: only this container, and only while
+          there are Secrets to fill. */}}
+          - name: migrate-kube-api
+            mountPath: {{ include "trustiot.migrate.kubeDir" . }}
             readOnly: true
           {{- end }}
     volumes:
@@ -265,13 +308,8 @@ template:
             - key: {{ $v.clickhouse.external.caSecret.key }}
               path: ca.crt
       {{- end }}
-      {{- if $v.postgres.serviceRolesSecret.name }}
-      - name: role-passwords
-        secret:
-          secretName: {{ $v.postgres.serviceRolesSecret.name }}
-          {{- /* 0444, read-only: the container runs only the Job, under a UID the platform may
-          assign (no fsGroup), so the files stay readable to it whatever that UID is. */}}
-          defaultMode: 292
+      {{- if $fills }}
+      - {{ include "trustiot.migrate.kubeApiVolume" . | indent 8 | trim }}
       {{- end }}
 {{- end -}}
 
@@ -326,7 +364,11 @@ volumeMounts:
     readOnly: true
 {{- end -}}
 
-{{/* The volume the init container mounts: a short-lived token and the cluster's CA certificate. */}}
+{{/*
+The volume the init container (and the Job, to fill the password Secrets) mounts: a short-lived
+token and the cluster's CA certificate. 0444: the containers run under a UID the platform may
+assign (no fsGroup), so the files stay readable whatever that UID is.
+*/}}
 {{- define "trustiot.migrate.kubeApiVolume" -}}
 name: migrate-kube-api
 projected:

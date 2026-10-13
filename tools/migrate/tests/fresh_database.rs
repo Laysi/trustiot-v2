@@ -1,6 +1,7 @@
 //! The product's Postgres migrations on a fresh database, as CI runs them (issue acceptance:
 //! "CI 在全新資料庫上跑完全部 migration"): the roles of decision 29, a second run that changes
-//! nothing, password rotation, and the refusals.
+//! nothing, the generated password and its rotation, a lost or edited password, and the
+//! refusals.
 //!
 //! Needs podman or docker (a throwaway Postgres with TLS); skipped without one unless `CI` is
 //! set. One test only: roles are cluster-wide, and this binary has its own Postgres.
@@ -12,7 +13,7 @@ use migrate::registry::{Migration, Outbox, PRODUCT, Registry, Service};
 use service_kit::postgres::{SessionRole, check_session};
 use sqlx::Connection;
 use support::postgres::tls_postgres;
-use support::{Database, MIGRATOR, MIGRATOR_INIT, random_hex, snapshot};
+use support::{Database, MIGRATOR, MIGRATOR_INIT, snapshot};
 
 const CREATE: &str = "CREATE DATABASE migrate_fresh OWNER trustiot_owner";
 
@@ -74,30 +75,26 @@ async fn a_fresh_database_gets_every_migration_once() {
         return;
     };
     let db = Database::create(postgres, CREATE, "migrate_fresh").await;
-    let first = random_hex();
+    db.bind("identity_app");
 
-    // 0. A role a service of the deployment logs in with must be in the registry and have a
-    //    password file; otherwise the run stops before it changes anything.
-    for (required, what) in [
-        ("identity_app", "its password file is missing"),
-        (
-            "identity_app,nobody_app",
-            "no service in tools/migrate's registry",
-        ),
-    ] {
-        if what.contains("registry") {
-            db.set_password_file("identity_app", &first);
-        }
-        let mut config = db.config(MIGRATOR);
-        config.postgres.required_passwords = Some(required.to_owned());
-        let error = migrate::run(&config, &PRODUCT)
-            .await
-            .expect_err("a required role without a password must stop the run");
-        assert!(
-            matches!(&error, Error::Role { problem, .. } if problem.contains(what)),
-            "{required}: {error}"
-        );
+    // 0. A role bound to a Secret must be a login role of the registry; otherwise the run stops
+    //    before it changes anything, the Secrets included.
+    let mut config = db.config(MIGRATOR);
+    if let Some(passwords) = config.passwords.as_mut() {
+        passwords.postgres =
+            Some("identity_app=identity-app-postgres,nobody_app=nobody".to_owned());
     }
+    let error = migrate::run(&config, &PRODUCT)
+        .await
+        .expect_err("a bound role that no service has must stop the run");
+    assert!(
+        matches!(&error, Error::Role { problem, .. } if problem.contains("no service in tools/migrate's registry")),
+        "{error}"
+    );
+    assert!(
+        db.secrets.seen().is_empty(),
+        "the refused run touched no Secret"
+    );
     let mut admin = sqlx::PgConnection::connect_with(&db.postgres.superuser(&db.name))
         .await
         .expect("connect as the superuser");
@@ -105,12 +102,11 @@ async fn a_fresh_database_gets_every_migration_once() {
         .fetch_one(&mut admin)
         .await
         .expect("look for the Job's objects");
-    assert_eq!(touched, 0, "the refused runs created nothing");
-    let mut config = db.config(MIGRATOR);
-    config.postgres.required_passwords = Some("identity_app".to_owned());
+    assert_eq!(touched, 0, "the refused run created nothing");
 
-    // 1. The first run applies everything.
-    let report = migrate::run(&config, &PRODUCT)
+    // 1. The first run applies everything; it generates the service role's password into the
+    //    role's empty Secret and sets it.
+    let report = migrate::run(&db.config(MIGRATOR), &PRODUCT)
         .await
         .expect("the first run");
     for expected in [
@@ -120,6 +116,7 @@ async fn a_fresh_database_gets_every_migration_once() {
         "created role identity_app",
         "created schema identity owned by identity_owner",
         "set the search_path of identity_app to identity",
+        "generated the password of identity_app in Secret identity-app-postgres (it had none)",
         "set the password of identity_app",
         "applied identity/0001_identity.sql",
     ] {
@@ -130,6 +127,29 @@ async fn a_fresh_database_gets_every_migration_once() {
         );
     }
     assert!(report.roles_without_password.is_empty());
+    let first = db.password("identity_app");
+    assert_eq!(first.len(), 64, "256 bits as hex digits");
+    let secret = db.secrets.get("identity-app-postgres").expect("the Secret");
+    assert_eq!(
+        secret
+            .annotations
+            .get(migrate::passwords::GENERATION_ANNOTATION)
+            .map(String::as_str),
+        Some("1")
+    );
+    for (index, seen) in db.secrets.seen().iter().enumerate() {
+        assert!(seen.authorized, "the run sends the ServiceAccount token");
+        let expected = if index == 1 {
+            "PATCH /api/v1/namespaces/release-ns/secrets/identity-app-postgres?fieldManager=trustiot-migrate HTTP/1.1"
+        } else {
+            "GET /api/v1/namespaces/release-ns/secrets/identity-app-postgres HTTP/1.1"
+        };
+        assert_eq!(
+            seen.line, expected,
+            "only GET and PATCH of the bound Secret"
+        );
+    }
+    assert_eq!(db.secrets.seen().len(), 2, "one GET and one PATCH");
 
     // 2. Decision 29 in the catalogs (pg_roles and pg_tables).
     let app: (bool, bool, bool, bool, bool, bool) = sqlx::query_as(ROLE_ATTRIBUTES)
@@ -191,7 +211,7 @@ async fn a_fresh_database_gets_every_migration_once() {
     let mut app_conn = db
         .connect_with_password("identity_app", &first)
         .await
-        .expect("identity_app logs in with its password file");
+        .expect("identity_app logs in with the password in its Secret");
     check_session(&mut app_conn, SessionRole::Service)
         .await
         .expect("run the session check")
@@ -220,13 +240,21 @@ async fn a_fresh_database_gets_every_migration_once() {
         "the second run changed the catalogs"
     );
 
-    // 5. Rotation: a new password file sets the password, and only that.
-    let second = random_hex();
-    db.set_password_file("identity_app", &second);
+    // 5. Rotation: a new password generation generates a new password and sets it, and only
+    //    that; the old one stops working.
+    db.set_generation("2");
     let report = migrate::run(&db.config(MIGRATOR), &PRODUCT)
         .await
         .expect("the rotation run");
-    assert_eq!(report.changes, ["set the password of identity_app"]);
+    assert_eq!(
+        report.changes,
+        [
+            "generated the password of identity_app in Secret identity-app-postgres (password generation 2)",
+            "set the password of identity_app"
+        ]
+    );
+    let second = db.password("identity_app");
+    assert_ne!(second, first);
     assert!(
         db.connect_with_password("identity_app", &first)
             .await
@@ -241,6 +269,40 @@ async fn a_fresh_database_gets_every_migration_once() {
         .expect("the run after rotation");
     assert!(report.changes.is_empty(), "{:?}", report.changes);
     assert_eq!(snapshot(&db).await, before);
+
+    // 5b. A lost key (a deleted key, or a Secret that helm upgrade --force-replace emptied) gets
+    //     a new password on the next run; a value someone else wrote is what the role gets.
+    db.secrets
+        .write("identity-app-postgres", "identity_app", None);
+    let report = migrate::run(&db.config(MIGRATOR), &PRODUCT)
+        .await
+        .expect("the run after the key was lost");
+    assert_eq!(
+        report.changes,
+        [
+            "generated the password of identity_app in Secret identity-app-postgres (it had none)",
+            "set the password of identity_app"
+        ]
+    );
+    let third = db.password("identity_app");
+    assert_ne!(third, second);
+    db.connect_with_password("identity_app", &third)
+        .await
+        .expect("the regenerated password logs in");
+    let edited = support::random_hex();
+    db.secrets.write(
+        "identity-app-postgres",
+        "identity_app",
+        Some(edited.as_bytes()),
+    );
+    let report = migrate::run(&db.config(MIGRATOR), &PRODUCT)
+        .await
+        .expect("the run after an edit");
+    assert_eq!(report.changes, ["set the password of identity_app"]);
+    db.connect_with_password("identity_app", &edited)
+        .await
+        .expect("the role follows its Secret");
+    let second = edited;
 
     // 6. An applied file that changed stops the run.
     let error = migrate::run(&db.config(MIGRATOR), &CHANGED)

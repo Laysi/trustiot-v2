@@ -347,6 +347,52 @@ export function migrationJobsOf(objects: K8sObject[]): string[] {
 }
 
 /**
+ * The Secrets the migration Job fills with the passwords it generates (Laysi/trustiot-v2#60), each
+ * with the keys it writes, from the Job's TRUSTIOT__PASSWORDS__POSTGRES (`role=Secret,...`) and
+ * TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR (`account=Secret`).
+ */
+export function passwordSecretsOf(objects: K8sObject[]): Map<string, string[]> {
+  const secrets = new Map<string, string[]>();
+  for (const object of flatten(objects)) {
+    if (object.kind !== "Job" || object.metadata?.labels?.["app.kubernetes.io/component"] !== "migrate") continue;
+    const template = podTemplate(object);
+    if (template === undefined) continue;
+    for (const container of containersOf(template.spec)) {
+      for (const env of asArray(container.env).filter(isMap)) {
+        if (env.name !== "TRUSTIOT__PASSWORDS__POSTGRES" && env.name !== "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR") continue;
+        for (const binding of (asString(env.value) ?? "").split(",").filter((b) => b !== "")) {
+          const [key, secret] = binding.split("=");
+          if (key === undefined || secret === undefined || key === "" || secret === "") continue;
+          secrets.set(secret, [...(secrets.get(secret) ?? []), key].sort());
+        }
+      }
+    }
+  }
+  return secrets;
+}
+
+/**
+ * Why a password Secret (`kubectl get secret -o json`) does not hold what the migration Job
+ * generates: every key present as 64 hex digits, and the generation annotation set. Empty when it
+ * does. The problems name the Secret and the key, never a value.
+ */
+export function passwordSecretProblems(name: string, keys: string[], secret: unknown): string[] {
+  const data = asMap(asMap(secret).data);
+  const annotations = asMap(asMap(asMap(secret).metadata).annotations);
+  const problems: string[] = [];
+  for (const key of keys) {
+    const value = asString(data[key]);
+    if (value === undefined) {
+      problems.push(`${name}: key ${key} is missing`);
+    } else if (!/^[0-9a-f]{64}$/.test(Buffer.from(value, "base64").toString("latin1"))) {
+      problems.push(`${name}: key ${key} is not a password the Job generates`);
+    }
+  }
+  if (asString(annotations["trustiot.io/password-generation"]) === undefined) problems.push(`${name}: no trustiot.io/password-generation annotation`);
+  return problems;
+}
+
+/**
  * Why the services did not wait for the migration Job (Laysi/trustiot-v2#60), from the Job and
  * the namespace's pods as `kubectl get -o json` prints them: the Job must have completed, there
  * must be pods that wait for it, and none of their own containers may have started before the

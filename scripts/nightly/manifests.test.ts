@@ -13,6 +13,8 @@ import {
   migrationOrderProblems,
   missingTlsSecrets,
   missingSecrets,
+  passwordSecretProblems,
+  passwordSecretsOf,
   operatorSecretsOf,
   postgresClusterProblems,
   postgresClustersOf,
@@ -138,6 +140,49 @@ describe("workloadsOf", () => {
       "Deployment/web",
       "Job/migrate",
     ]);
+  });
+});
+
+describe("password Secrets of the migration Job", () => {
+  const job = (env: { name: string; value: string }[]) =>
+    parseManifests(`apiVersion: batch/v1
+kind: Job
+metadata: { name: rel-migrate-1, labels: { app.kubernetes.io/component: migrate } }
+spec:
+  template:
+    spec:
+      containers:
+        - name: migrate
+          env: ${JSON.stringify(env)}
+`);
+
+  test("are read from the Job's bindings, with the keys it writes", () => {
+    const objects = job([
+      { name: "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR", value: "trustiot_collector=rel-otel-collector-password" },
+      { name: "TRUSTIOT__PASSWORDS__POSTGRES", value: "assets_app=rel-assets-password,identity_app=rel-identity-password" },
+      { name: "TRUSTIOT__WAIT__DATABASES", value: "10m" },
+    ]);
+    expect(Object.fromEntries(passwordSecretsOf(objects))).toEqual({
+      "rel-otel-collector-password": ["trustiot_collector"],
+      "rel-assets-password": ["assets_app"],
+      "rel-identity-password": ["identity_app"],
+    });
+    expect(passwordSecretsOf(job([])).size).toBe(0);
+  });
+
+  test("hold a generated password under every key, named without its value", () => {
+    const generated = Buffer.from("ab".repeat(32)).toString("base64");
+    const secret = (data: Record<string, string>, annotated = true) => ({
+      metadata: annotated ? { annotations: { "trustiot.io/password-generation": "1" } } : {},
+      data,
+    });
+    expect(passwordSecretProblems("s", ["a_app"], secret({ a_app: generated }))).toEqual([]);
+    expect(passwordSecretProblems("s", ["a_app"], secret({}))).toEqual(["s: key a_app is missing"]);
+    const short = Buffer.from("not-generated").toString("base64");
+    const problems = passwordSecretProblems("s", ["a_app"], secret({ a_app: short }, false));
+    expect(problems).toEqual(["s: key a_app is not a password the Job generates", "s: no trustiot.io/password-generation annotation"]);
+    expect(problems.join(" ")).not.toContain(short);
+    expect(problems.join(" ")).not.toContain("not-generated");
   });
 });
 
@@ -468,10 +513,16 @@ describe("the chart as deployed by the nightly", () => {
       expect(endpoints.every((e) => workloadNames.has(e.workload))).toBe(true);
       // The bundled Postgres: its Cluster is checked for health, kept on uninstall and then deleted.
       expect(postgresClustersOf(objects)).toEqual(["trustiot-postgres"]);
+      // The password Secrets the migration Job fills are kept too (Laysi/trustiot-v2#60); the
+      // smoke values enable the collector, whose ClickHouse password the Job generates.
       expect(keptObjectsOf(objects)).toEqual([
         "cluster.postgresql.cnpg.io/trustiot-postgres",
+        "secret/trustiot-otel-collector-password",
         "imagecatalog.postgresql.cnpg.io/trustiot-postgres",
       ]);
+      expect([...passwordSecretsOf(objects)]).toEqual([["trustiot-otel-collector-password", ["trustiot_collector"]]]);
+      // The empty Secret is the release's own: no dummy is made for it.
+      expect(missingSecrets(objects).has("trustiot-otel-collector-password")).toBe(false);
     }, 60_000);
   }
 });

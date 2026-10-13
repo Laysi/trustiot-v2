@@ -10,7 +10,7 @@ use migrate::registry::{Migration, Outbox, Registry, Service, TenantRoleHook};
 use service_kit::postgres::{SessionRole, check_session};
 use sqlx::{Connection, PgConnection};
 use support::postgres::tls_postgres;
-use support::{Database, MIGRATOR, MIGRATOR_INIT, random_hex, snapshot};
+use support::{Database, MIGRATOR, MIGRATOR_INIT, snapshot};
 
 const CREATE: &str = "CREATE DATABASE migrate_outbox OWNER trustiot_owner";
 
@@ -137,13 +137,16 @@ async fn outbox_wiring_and_tenant_roles() {
         return;
     };
     let db = Database::create(postgres, CREATE, "migrate_outbox").await;
-    let passwords: Vec<(&str, String)> = LOGIN_ROLES
-        .iter()
-        .map(|role| (*role, random_hex()))
-        .collect();
-    for (role, password) in &passwords {
-        db.set_password_file(role, password);
+    // The login roles of the services in the registry, as the chart binds the enabled ones.
+    for role in &LOGIN_ROLES[..4] {
+        db.bind(role);
     }
+    let passwords = |roles: &[&'static str]| -> Vec<(&'static str, String)> {
+        roles
+            .iter()
+            .map(|role| (*role, db.password(role)))
+            .collect()
+    };
 
     // 1. Producer and one consumer.
     migrate::run(&db.config(MIGRATOR), &ONE_CONSUMER)
@@ -186,9 +189,12 @@ async fn outbox_wiring_and_tenant_roles() {
         .await
         .expect("read the consumer's grants");
     assert!(writes, "the consumer's service role writes its inbox");
-    check_sessions(&db, &passwords[..4]).await;
+    check_sessions(&db, &passwords(&LOGIN_ROLES[..4])).await;
 
     // 2. A second consumer joins: the policy names both, and both read the events.
+    for role in &LOGIN_ROLES[4..] {
+        db.bind(role);
+    }
     migrate::run(&db.config(MIGRATOR), &TWO_CONSUMERS)
         .await
         .expect("the run with two consumers");
@@ -196,7 +202,7 @@ async fn outbox_wiring_and_tenant_roles() {
         readers(&mut admin).await,
         ["obx_consumer_platform", "obx_second_platform"]
     );
-    check_sessions(&db, &passwords).await;
+    check_sessions(&db, &passwords(&LOGIN_ROLES)).await;
 
     // 3. Tenants appear: the hook gives each a role on the next run; a run after that changes
     //    nothing.
@@ -246,6 +252,9 @@ async fn outbox_wiring_and_tenant_roles() {
     assert!(usage);
 
     // 5. The first consumer leaves: the policy and the grants follow.
+    for role in &LOGIN_ROLES[2..4] {
+        db.unbind(role);
+    }
     migrate::run(&db.config(MIGRATOR), &LAST_CONSUMER)
         .await
         .expect("the run with one consumer left");

@@ -221,11 +221,9 @@ Returns a YAML list; use with fromYamlArray.
 {{- $refs = append $refs (printf "%s/%s" .name .key) -}}
 {{- end -}}
 {{- end -}}
-{{- /* The collector's ClickHouse password and the SIEM's auth header: only the collector. */ -}}
+{{- /* The SIEM's auth header: only the collector. (Its ClickHouse password is in a Secret the
+migration Job fills, which "trustiot.dependencySecretNames" protects in every key.) */ -}}
 {{- with .Values.observability.collector -}}
-{{- if and .enabled .clickhouse.passwordSecret.name -}}
-{{- $refs = append $refs (printf "%s/%s" .clickhouse.passwordSecret.name .clickhouse.passwordSecret.key) -}}
-{{- end -}}
 {{- if and .enabled .forward.enabled .forward.authHeader.name .forward.authHeader.valueSecret.name -}}
 {{- $refs = append $refs (printf "%s/%s" .forward.authHeader.valueSecret.name .forward.authHeader.valueSecret.key) -}}
 {{- end -}}
@@ -236,15 +234,15 @@ Returns a YAML list; use with fromYamlArray.
 {{/*
 Secrets whose keys reach services only through the chart, so no custom env may read them in any
 key: CloudNativePG's Secrets of the bundled Postgres (the CA's private key, the server key, the
-database owner's password), the Secret of every service's database password, and the migration
-accounts of an external Postgres and ClickHouse (only the migration Job uses those).
+database owner's password), the password Secrets the migration Job fills (each service's database
+password and the collector's ClickHouse password; the chart hands each consumer only its own), and
+the migration accounts of an external Postgres and ClickHouse (only the migration Job uses those).
 Returns a YAML list of names; use with fromYamlArray.
 */}}
 {{- define "trustiot.dependencySecretNames" -}}
 {{- $names := include "trustiot.postgres.generatedSecrets" . | fromYamlArray -}}
-{{- /* Every service's database password: each service gets only its own key, from the chart. */ -}}
-{{- with .Values.postgres.serviceRolesSecret.name -}}
-{{- $names = append $names . -}}
+{{- range include "trustiot.migrate.passwordSecrets" . | fromYamlArray -}}
+{{- $names = append $names .name -}}
 {{- end -}}
 {{- if eq .Values.postgres.mode "external" -}}
 {{- with .Values.postgres.external.migrationSecret.name -}}

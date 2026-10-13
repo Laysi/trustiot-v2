@@ -10,8 +10,6 @@ use serde::Deserialize;
 use service_kit::config::{Invalid, Validate};
 use service_kit::postgres::{PostgresConfig, SslMode};
 
-use crate::secret::Password;
-
 /// How long the Job waits by default for each database to accept it and for another run's lock.
 pub const DEFAULT_WAIT: Duration = Duration::from_secs(600);
 
@@ -27,6 +25,10 @@ pub struct RunConfig {
     /// Absent: the run does not touch ClickHouse (for example a test of the Postgres part).
     #[serde(default)]
     pub clickhouse: Option<ClickHouseSettings>,
+    /// Absent: the run sets no password (every login role keeps the one it has, and no
+    /// collector account is managed).
+    #[serde(default)]
+    pub passwords: Option<PasswordSettings>,
     #[serde(default)]
     pub wait: WaitSettings,
 }
@@ -53,7 +55,7 @@ pub struct Platform {
     pub clickhouse_ca_file: Option<PathBuf>,
 }
 
-/// `postgres.*`: the migration role and where the service roles' passwords are.
+/// `postgres.*`: the migration role.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PostgresSettings {
@@ -61,31 +63,6 @@ pub struct PostgresSettings {
     pub username: String,
     /// `TRUSTIOT__POSTGRES__PASSWORD`
     pub password: String,
-    /// `TRUSTIOT__POSTGRES__ROLE_PASSWORDS_DIR`: a directory with one file per login role, named
-    /// after the role (a mounted Secret). A role without a file keeps the password it has; a role
-    /// the run creates without one has none and cannot log in.
-    #[serde(default)]
-    pub role_passwords_dir: Option<PathBuf>,
-    /// `TRUSTIOT__POSTGRES__REQUIRED_PASSWORDS`: login roles, separated by commas, that a service
-    /// of this deployment logs in with (the chart lists the enabled services that use Postgres).
-    /// Each must be a login role of the registry and have a password file, or the run fails
-    /// before it changes anything: a service must never start with a role it cannot log in as.
-    #[serde(default)]
-    pub required_passwords: Option<String>,
-}
-
-impl PostgresSettings {
-    /// The roles of `required_passwords`, without blanks.
-    #[must_use]
-    pub fn required_passwords(&self) -> Vec<&str> {
-        self.required_passwords
-            .as_deref()
-            .unwrap_or_default()
-            .split(',')
-            .map(str::trim)
-            .filter(|role| !role.is_empty())
-            .collect()
-    }
 }
 
 impl fmt::Debug for PostgresSettings {
@@ -93,13 +70,11 @@ impl fmt::Debug for PostgresSettings {
         f.debug_struct("PostgresSettings")
             .field("username", &self.username)
             .field("password", &"<redacted>")
-            .field("role_passwords_dir", &self.role_passwords_dir)
-            .field("required_passwords", &self.required_passwords)
             .finish()
     }
 }
 
-/// `clickhouse.*`: the account that applies the DDL and the accounts the run creates.
+/// `clickhouse.*`: the account that applies the DDL and creates the collector's account.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClickHouseSettings {
@@ -108,13 +83,6 @@ pub struct ClickHouseSettings {
     pub username: String,
     /// `TRUSTIOT__CLICKHOUSE__PASSWORD`
     pub password: String,
-    /// `TRUSTIOT__CLICKHOUSE__COLLECTOR_USERNAME`: the OpenTelemetry collector's account, created
-    /// with the role `trustiot_otel_collector` only. Set together with the password, or neither.
-    #[serde(default)]
-    pub collector_username: Option<String>,
-    /// `TRUSTIOT__CLICKHOUSE__COLLECTOR_PASSWORD`
-    #[serde(default)]
-    pub collector_password: Option<String>,
 }
 
 impl fmt::Debug for ClickHouseSettings {
@@ -122,10 +90,146 @@ impl fmt::Debug for ClickHouseSettings {
         f.debug_struct("ClickHouseSettings")
             .field("username", &self.username)
             .field("password", &"<redacted>")
-            .field("collector_username", &self.collector_username)
-            .field("collector_password", &"<redacted>")
             .finish()
     }
+}
+
+/// `passwords.*`: the Kubernetes Secrets that hold the passwords of the login roles and the
+/// collector account the run manages. The chart declares them empty; the run generates every
+/// missing password, writes it into its Secret, and sets each role or account to the password
+/// in its Secret (src/passwords.rs). Nobody else handles them.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PasswordSettings {
+    /// `TRUSTIOT__PASSWORDS__API_URL`: the API server, `https://` (the chart sets
+    /// `https://kubernetes.default.svc`). `http://` is accepted for 127.0.0.1 only, for tests.
+    pub api_url: String,
+    /// `TRUSTIOT__PASSWORDS__NAMESPACE`: the release namespace, where the Secrets are.
+    pub namespace: String,
+    /// `TRUSTIOT__PASSWORDS__TOKEN_FILE`: the Job's projected ServiceAccount token, read on
+    /// every request.
+    pub token_file: PathBuf,
+    /// `TRUSTIOT__PASSWORDS__CA_FILE`: the cluster CA (`kube-root-ca.crt`), the only trust anchor.
+    pub ca_file: PathBuf,
+    /// `TRUSTIOT__PASSWORDS__GENERATION`: the chart's `migrate.passwordGeneration`. A Secret
+    /// whose annotation records another generation gets new passwords for every key the run
+    /// manages in it (a rotation).
+    pub generation: String,
+    /// `TRUSTIOT__PASSWORDS__POSTGRES`: `role=secret` pairs separated by commas: the login role
+    /// and the Secret whose key of the same name holds its password.
+    #[serde(default)]
+    pub postgres: Option<String>,
+    /// `TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR`: `account=secret`: the OpenTelemetry
+    /// collector's ClickHouse account, created with the role `trustiot_otel_collector` only, and
+    /// the Secret whose key of the same name holds its password. Needs `clickhouse.*`.
+    #[serde(default)]
+    pub clickhouse_collector: Option<String>,
+}
+
+/// One password the run manages: whose it is and where it is kept.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Binding {
+    /// The login role or account, also the key in the Secret.
+    pub owner: String,
+    /// The Secret in the release namespace.
+    pub secret: String,
+}
+
+impl PasswordSettings {
+    /// The Postgres login roles and their Secrets.
+    ///
+    /// # Errors
+    ///
+    /// When a pair is not `role=secret` with valid names.
+    pub fn postgres(&self) -> Result<Vec<Binding>, Invalid> {
+        bindings("passwords.postgres", self.postgres.as_deref())
+    }
+
+    /// The collector's account and its Secret.
+    ///
+    /// # Errors
+    ///
+    /// When the value is not one `account=secret` pair with valid names.
+    pub fn clickhouse_collector(&self) -> Result<Option<Binding>, Invalid> {
+        let key = "passwords.clickhouse_collector";
+        let mut found = bindings(key, self.clickhouse_collector.as_deref())?;
+        if found.len() > 1 {
+            return Err(Invalid::new(key, "must be one account=secret pair"));
+        }
+        Ok(found.pop())
+    }
+}
+
+fn bindings(key: &str, value: Option<&str>) -> Result<Vec<Binding>, Invalid> {
+    let mut found: Vec<Binding> = Vec::new();
+    for pair in value.unwrap_or_default().split(',').map(str::trim) {
+        if pair.is_empty() {
+            continue;
+        }
+        let Some((owner, secret)) = pair.split_once('=') else {
+            return Err(Invalid::new(
+                key,
+                "must list name=secret pairs, separated by commas",
+            ));
+        };
+        let (owner, secret) = (owner.trim(), secret.trim());
+        if !is_plain_identifier(owner) {
+            return Err(Invalid::new(
+                key,
+                "names must be lower-case role or account names (letters, digits, _)",
+            ));
+        }
+        if !is_object_name(secret) {
+            return Err(Invalid::new(
+                key,
+                "Secrets must be Kubernetes object names (lower-case letters, digits, - and .)",
+            ));
+        }
+        if found.iter().any(|binding| binding.owner == owner) {
+            return Err(Invalid::new(key, "lists a name twice"));
+        }
+        found.push(Binding {
+            owner: owner.to_owned(),
+            secret: secret.to_owned(),
+        });
+    }
+    Ok(found)
+}
+
+/// A Kubernetes object name (DNS-1123 subdomain): lower-case letters, digits, `-` and `.`,
+/// starting and ending with a letter or digit, at most 253 characters.
+#[must_use]
+pub fn is_object_name(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= 253
+        && text.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'.'
+        })
+        && text.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && text.ends_with(|c: char| c.is_ascii_alphanumeric())
+}
+
+/// A Kubernetes namespace or Job name (DNS-1123 label).
+fn is_dns_label(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= 63
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !text.starts_with('-')
+        && !text.ends_with('-')
+}
+
+/// The API server URL rule of `kube.api_url` and `passwords.api_url`.
+fn check_api_url(key: &str, url: &str) -> Result<(), Invalid> {
+    let loopback = url.starts_with("http://127.0.0.1:");
+    if !(url.starts_with("https://") || loopback) || url.contains('@') {
+        return Err(Invalid::new(
+            key,
+            "must be an https:// URL without credentials (http:// only on 127.0.0.1)",
+        ));
+    }
+    Ok(())
 }
 
 /// `wait.*`: how long the run waits before it gives up.
@@ -179,18 +283,38 @@ impl Validate for RunConfig {
                 "must be a lower-case role name (letters, digits, _)",
             ));
         }
-        let required = self.postgres.required_passwords();
-        if required.iter().any(|role| !is_plain_identifier(role)) {
-            return Err(Invalid::new(
-                "postgres.required_passwords",
-                "must list lower-case role names (letters, digits, _), separated by commas",
-            ));
-        }
-        if !required.is_empty() && self.postgres.role_passwords_dir.is_none() {
-            return Err(Invalid::new(
-                "postgres.required_passwords",
-                "needs postgres.role_passwords_dir, where the passwords are",
-            ));
+        if let Some(passwords) = &self.passwords {
+            check_api_url("passwords.api_url", &passwords.api_url)?;
+            if !is_dns_label(&passwords.namespace) {
+                return Err(Invalid::new(
+                    "passwords.namespace",
+                    "must be a Kubernetes namespace name (DNS label)",
+                ));
+            }
+            if !is_generation(&passwords.generation) {
+                return Err(Invalid::new(
+                    "passwords.generation",
+                    "must be 1 to 63 letters, digits, '.', '_' or '-'",
+                ));
+            }
+            let postgres = passwords.postgres()?;
+            let collector = passwords.clickhouse_collector()?;
+            if collector.is_some() && self.clickhouse.is_none() {
+                return Err(Invalid::new(
+                    "passwords.clickhouse_collector",
+                    "needs clickhouse.*, the account that creates the collector's account",
+                ));
+            }
+            // One key holds one password: a Postgres role and the collector account in the same
+            // Secret must not share a name.
+            if let Some(collector) = &collector
+                && postgres.contains(collector)
+            {
+                return Err(Invalid::new(
+                    "passwords.clickhouse_collector",
+                    "uses the same key of the same Secret as a Postgres role",
+                ));
+            }
         }
         if let Some(clickhouse) = &self.clickhouse {
             match self.platform.clickhouse_url.as_deref() {
@@ -207,25 +331,6 @@ impl Validate for RunConfig {
                     "clickhouse.username",
                     "must be a lower-case account name (letters, digits, _)",
                 ));
-            }
-            match (
-                &clickhouse.collector_username,
-                &clickhouse.collector_password,
-            ) {
-                (None, None) => {}
-                (Some(name), Some(_)) if is_plain_identifier(name) => {}
-                (Some(_), Some(_)) => {
-                    return Err(Invalid::new(
-                        "clickhouse.collector_username",
-                        "must be a lower-case account name (letters, digits, _)",
-                    ));
-                }
-                _ => {
-                    return Err(Invalid::new(
-                        "clickhouse.collector_password",
-                        "set the collector's user name and password together, or neither",
-                    ));
-                }
             }
         }
         check_wait("wait.databases", self.wait.databases)?;
@@ -247,26 +352,16 @@ impl RunConfig {
             password: self.postgres.password.clone(),
         }
     }
+}
 
-    /// The collector account and its password, when configured.
-    ///
-    /// # Errors
-    ///
-    /// When the password is not acceptable.
-    pub fn collector(&self) -> Result<Option<(String, Password)>, crate::secret::PasswordError> {
-        let Some(clickhouse) = &self.clickhouse else {
-            return Ok(None);
-        };
-        match (
-            &clickhouse.collector_username,
-            &clickhouse.collector_password,
-        ) {
-            (Some(name), Some(password)) => {
-                Ok(Some((name.clone(), Password::new(name, password.clone())?)))
-            }
-            _ => Ok(None),
-        }
-    }
+/// A password generation: 1 to 63 ASCII letters, digits, `.`, `_` or `-` (it is kept in an
+/// annotation and compared as text).
+#[must_use]
+pub fn is_generation(text: &str) -> bool {
+    (1..=63).contains(&text.len())
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 /// Settings of `migrate wait-for-job`, the init container that holds a service's pod until the
@@ -300,35 +395,19 @@ pub struct KubeSettings {
 impl Validate for WaitForJobConfig {
     fn validate(&self) -> Result<(), Invalid> {
         let kube = &self.kube;
-        let dns_label = |text: &str| {
-            !text.is_empty()
-                && text.len() <= 63
-                && text
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-                && !text.starts_with('-')
-                && !text.ends_with('-')
-        };
-        if !dns_label(&kube.job) {
+        if !is_dns_label(&kube.job) {
             return Err(Invalid::new(
                 "kube.job",
                 "must be a Kubernetes object name (DNS label)",
             ));
         }
-        if !dns_label(&kube.namespace) {
+        if !is_dns_label(&kube.namespace) {
             return Err(Invalid::new(
                 "kube.namespace",
                 "must be a Kubernetes namespace name (DNS label)",
             ));
         }
-        let loopback = kube.api_url.starts_with("http://127.0.0.1:");
-        if !(kube.api_url.starts_with("https://") || loopback) || kube.api_url.contains('@') {
-            return Err(Invalid::new(
-                "kube.api_url",
-                "must be an https:// URL without credentials (http:// only on 127.0.0.1)",
-            ));
-        }
-        Ok(())
+        check_api_url("kube.api_url", &kube.api_url)
     }
 }
 
@@ -352,6 +431,71 @@ mod tests {
             &"a".repeat(64),
         ] {
             assert!(!is_plain_identifier(bad), "{bad}");
+        }
+    }
+
+    fn settings(postgres: &str, collector: &str) -> PasswordSettings {
+        PasswordSettings {
+            api_url: "https://kubernetes.default.svc".to_owned(),
+            namespace: "trustiot".to_owned(),
+            token_file: PathBuf::from("/token"),
+            ca_file: PathBuf::from("/ca.crt"),
+            generation: "1".to_owned(),
+            postgres: Some(postgres.to_owned()),
+            clickhouse_collector: Some(collector.to_owned()),
+        }
+    }
+
+    #[test]
+    fn password_bindings() {
+        let ok = settings(
+            " identity_app=trustiot-identity-password , assets_app=trustiot-assets-password,",
+            "trustiot_collector=trustiot-otel-collector-password",
+        );
+        assert_eq!(
+            ok.postgres().expect("valid"),
+            [
+                Binding {
+                    owner: "identity_app".to_owned(),
+                    secret: "trustiot-identity-password".to_owned()
+                },
+                Binding {
+                    owner: "assets_app".to_owned(),
+                    secret: "trustiot-assets-password".to_owned()
+                },
+            ]
+        );
+        assert_eq!(
+            ok.clickhouse_collector().expect("valid"),
+            Some(Binding {
+                owner: "trustiot_collector".to_owned(),
+                secret: "trustiot-otel-collector-password".to_owned()
+            })
+        );
+        assert_eq!(settings("", "").postgres().expect("empty"), []);
+        for bad in [
+            "identity_app",
+            "Identity=s",
+            "identity_app=Secret",
+            "identity_app=-s",
+            "identity_app=s,identity_app=t",
+            "identity_app=s/../t",
+        ] {
+            assert!(settings(bad, "").postgres().is_err(), "{bad}");
+        }
+        assert!(
+            settings("", "a=s,b=t").clickhouse_collector().is_err(),
+            "one collector account"
+        );
+    }
+
+    #[test]
+    fn generations() {
+        for good in ["1", "2026-10-13", "v2.rotated_after-incident"] {
+            assert!(is_generation(good), "{good}");
+        }
+        for bad in ["", "a b", "x/y", "ü", &"1".repeat(64)] {
+            assert!(!is_generation(bad), "{bad}");
         }
     }
 }
