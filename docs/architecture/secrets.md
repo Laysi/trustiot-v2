@@ -53,7 +53,8 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
 - **放在哪裡**：chart 為每個消費者宣告一個 Secret（`<release>-<服務>-password`、`<release>-otel-collector-password`），key 是角色或帳號名稱。每個消費者一個，而不是共用一個，所以節點的 kubelet（node authorizer）只讀得到排在該節點的 pod 用到的密碼。
 - **誰填**：migration Job 在 migration 鎖內，以作業系統的 CSPRNG 為缺的 key 產生 256 位元的密碼（64 個十六進位字元），以帶 `resourceVersion` 的 merge patch 寫入；之後把角色與帳號設成 Secret 裡的值（Postgres 只送 SCRAM-SHA-256 verifier、ClickHouse 只送加鹽的 SHA-256，明文不進 SQL）。日誌、錯誤訊息與測試輸出只有名稱，沒有密碼、密碼的 hash 或 Secret 的資料。
 - **權限**：Job 的 projected token 只掛進 Job 的容器；它的 Role 只有這些 Secret 的 `get`、`patch`（`resourceNames`）。沒有 `create`：它無法以名稱限制，而且能替 namespace 裡任何 ServiceAccount 建立 `kubernetes.io/service-account-token` Secret；也沒有 `list`、`watch`。服務與 collector 的 ServiceAccount 沒有新的權限，各自以 `secretKeyRef` 讀自己的 key。
-- **輪替**：調大 `migrate.passwordGeneration`；Secret 的 annotation `trustiot.io/password-generation` 記錄已套用的值，所以重跑不會再換一次。服務與 collector 隨 Job 名稱滾動更新。舊 pod 在被換掉之前開新連線會被拒（Postgres 一個角色只有一個密碼），已開的 Postgres 連線不受影響；步驟與這段時間見 [docs/runbooks/secrets.md](../runbooks/secrets.md)。
+- **輪替**：調大 `migrate.passwordGeneration`；Secret 的 annotation `trustiot.io/password-generation` 記錄已套用的值，以數字比較、只往上走，所以重跑不會再換一次，rollback 渲染出較小的值時也不換（之後升級回來同樣不換）。服務與 collector 隨 Job 名稱滾動更新。舊 pod 在被換掉之前開新連線會被拒（Postgres 一個角色只有一個密碼），已開的 Postgres 連線不受影響；步驟與這段時間見 [docs/runbooks/secrets.md](../runbooks/secrets.md)。
+- **只信任 Job 填過的物件**：Job 寫入時在同一個 patch 記下 Secret 的 `metadata.uid`（annotation `trustiot.io/password-secret-uid`，chart 不渲染）；uid 不符時（有人刪掉再建一個同名的 Secret、或從備份還原）每個 key 都重新產生，所以預先建好、帶著自選密碼的 Secret 不會被採用。剩下的風險：能 patch 這些 Secret 的人本來就讀得到它們，不在這條規則要擋的範圍。
 - **資料遺失**：Helm 不擁有這些 Secret 的資料（渲染結果沒有 `data`），升級與 rollback 都保留 Job 寫的值；有人刪了 key 或 Secret、或以 `helm upgrade --force-replace` 換掉它時，改 `migrate.revision` 再升級：Helm 重建 Secret，Job 產生新密碼並設定（[docs/runbooks/migrations.md](../runbooks/migrations.md)）。
 - **不提供外部覆寫**：客戶自己的 secret manager 不能指定這些密碼。它們不離開叢集，只給 Job 建立的帳號使用；讓人指定就回到人要建立、保管、輪替密碼的做法。客戶有這個需求時另開 issue 決定。
 

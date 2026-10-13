@@ -24,6 +24,8 @@ pub struct Stored {
     pub data: BTreeMap<String, Vec<u8>>,
     pub annotations: BTreeMap<String, String>,
     pub resource_version: u64,
+    /// `metadata.uid`: new for every object the fake creates.
+    pub uid: String,
 }
 
 /// One request the fake saw.
@@ -112,9 +114,30 @@ impl FakeSecrets {
             name.to_owned(),
             Stored {
                 resource_version: version,
+                uid: format!("00000000-0000-4000-8000-{version:012}"),
                 ..Stored::default()
             },
         );
+    }
+
+    /// Deletes the Secret and creates another object under its name with the same data and
+    /// annotations, as someone who copied it (or restored it from a backup) would: only the
+    /// uid differs.
+    pub fn recreate(&self, name: &str) {
+        let mut state = self.state();
+        let version = state.bump();
+        let secret = state.secrets.get_mut(name).expect("a declared Secret");
+        secret.uid = format!("00000000-0000-4000-8000-{version:012}");
+        secret.resource_version = version;
+    }
+
+    /// Another writer sets an annotation.
+    pub fn annotate(&self, name: &str, key: &str, value: &str) {
+        let mut state = self.state();
+        let version = state.bump();
+        let secret = state.secrets.get_mut(name).expect("a declared Secret");
+        secret.annotations.insert(key.to_owned(), value.to_owned());
+        secret.resource_version = version;
     }
 
     /// Deletes the Secret, as `kubectl delete secret` would.
@@ -352,6 +375,7 @@ fn render(name: &str, secret: &Stored) -> String {
             "name": name,
             "namespace": NAMESPACE,
             "resourceVersion": secret.resource_version.to_string(),
+            "uid": secret.uid,
             "annotations": secret.annotations,
         },
         "type": "Opaque",

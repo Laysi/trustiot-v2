@@ -4,10 +4,17 @@
 //! - the chart declares one Secret per consumer (each service that uses Postgres, and the
 //!   collector) without any data, so it never renders a password;
 //! - this module, run by the Job while it holds the migration lock, reads each Secret, generates
-//!   a 256-bit password for every key it manages that is missing, unusable, or was made for
-//!   another password generation (`migrate.passwordGeneration`), and writes it with one JSON
-//!   merge patch that carries the Secret's `resourceVersion`, so a concurrent change of the Secret
-//!   makes the patch fail instead of being overwritten;
+//!   a 256-bit password for every key it manages that is missing or unusable, and for every key
+//!   when the Secret is not the object the Job filled (its uid differs from the one the Job
+//!   recorded) or records an older or no password generation (`migrate.passwordGeneration`), and
+//!   writes them with one JSON merge patch that carries the Secret's `resourceVersion`, so a
+//!   concurrent change of the Secret makes the patch fail instead of being overwritten;
+//! - generations only go up: a lower requested generation (a rollback renders the older value)
+//!   keeps the passwords and the higher generation the Secret records, so a rollback and the
+//!   re-upgrade after it do not rotate again;
+//! - the data is bound to the object: a Secret created by someone else under the same name (and
+//!   adopted by Helm) cannot carry a password of their choosing, because they cannot know the
+//!   uid the API will give it;
 //! - the rest of the run then sets each role and account to the password in its Secret.
 //!
 //! The Job's ServiceAccount may only `get` and `patch` exactly these Secrets (the chart's Role
@@ -29,6 +36,10 @@ use crate::{Error, Report, http};
 
 /// The annotation that records which password generation the Secret's passwords were made for.
 pub const GENERATION_ANNOTATION: &str = "trustiot.io/password-generation";
+
+/// The annotation that records the uid of the Secret the Job filled. The data is trusted only
+/// while it equals the Secret's own `metadata.uid`; the chart never renders it.
+pub const UID_ANNOTATION: &str = "trustiot.io/password-secret-uid";
 
 /// The field manager of the run's patches, as `metadata.managedFields` shows it.
 pub const FIELD_MANAGER: &str = "trustiot-migrate";
@@ -67,17 +78,32 @@ pub enum Why {
     Missing,
     /// The key does not hold an acceptable password.
     Unusable,
-    /// The Secret's passwords were made for another generation, or it records none: a rotation.
+    /// The Secret records an older generation than the requested one, or none it can read: a
+    /// rotation.
     Generation,
+    /// The Secret is not the object the Job filled: it records another uid, or none (a Secret
+    /// created by someone else, or restored from a backup).
+    Unbound,
 }
 
 impl Why {
-    fn describe(self, generation: &str) -> String {
+    fn describe(self, generation: u64) -> String {
         match self {
             Self::Missing => "it had none".to_owned(),
             Self::Unusable => "the stored one was not usable".to_owned(),
             Self::Generation => format!("password generation {generation}"),
+            Self::Unbound => "the Secret is not the one the Job filled".to_owned(),
         }
+    }
+}
+
+/// A password generation: 1 to 9 decimal digits (the chart's schema allows no other).
+#[must_use]
+pub fn parse_generation(text: &str) -> Option<u64> {
+    if (1..=9).contains(&text.len()) && text.bytes().all(|byte| byte.is_ascii_digit()) {
+        text.parse().ok()
+    } else {
+        None
     }
 }
 
@@ -97,28 +123,41 @@ struct Metadata {
     #[serde(default)]
     resource_version: String,
     #[serde(default)]
+    uid: String,
+    #[serde(default)]
     annotations: BTreeMap<String, String>,
 }
 
-/// For each owner: the password its key holds, or why it needs a new one.
-fn plan(
-    secret: &Secret,
-    owners: &[&str],
-    generation: &str,
-) -> Vec<(String, Result<Password, Why>)> {
-    let current = secret
-        .metadata
-        .annotations
+/// What the run does with one Secret: the generation it records, and for each owner the
+/// password its key holds or why it gets a new one.
+struct Plan {
+    generation: u64,
+    keys: Vec<(String, Result<Password, Why>)>,
+}
+
+/// What to do with `secret` when the run asks for generation `requested`. Every key is renewed
+/// when the Secret is not bound to its own uid, or records no generation it can read, or an older
+/// one; a newer recorded generation wins over the requested one (generations only go up). Then
+/// each key is kept when it holds a usable password, and renewed when it is missing or unusable.
+fn plan(secret: &Secret, owners: &[&str], requested: u64) -> Plan {
+    let annotations = &secret.metadata.annotations;
+    let bound = !secret.metadata.uid.is_empty()
+        && annotations.get(UID_ANNOTATION) == Some(&secret.metadata.uid);
+    let recorded = annotations
         .get(GENERATION_ANNOTATION)
-        .map(String::as_str)
-        == Some(generation);
-    owners
+        .and_then(|text| parse_generation(text));
+    let (renew_all, generation) = match recorded {
+        _ if !bound => (Some(Why::Unbound), requested),
+        Some(recorded) if recorded >= requested => (None, recorded),
+        _ => (Some(Why::Generation), requested),
+    };
+    let keys = owners
         .iter()
         .map(|owner| {
-            let decided = match secret.data.get(*owner) {
-                None => Err(Why::Missing),
-                Some(_) if !current => Err(Why::Generation),
-                Some(value) => STANDARD
+            let decided = match (secret.data.get(*owner), renew_all) {
+                (None, _) => Err(Why::Missing),
+                (Some(_), Some(why)) => Err(why),
+                (Some(value), None) => STANDARD
                     .decode(value)
                     .ok()
                     .and_then(|bytes| Password::from_bytes(owner, bytes).ok())
@@ -126,14 +165,16 @@ fn plan(
             };
             ((*owner).to_owned(), decided)
         })
-        .collect()
+        .collect();
+    Plan { generation, keys }
 }
 
-/// The merge patch that stores `generated` and records `generation`, valid only while the
-/// Secret is still at `resource_version`.
+/// The merge patch that stores `generated` and records `generation` and the Secret's `uid`,
+/// valid only while the Secret is still at `resource_version`.
 fn patch_body(
     resource_version: &str,
-    generation: &str,
+    uid: &str,
+    generation: u64,
     generated: &[(String, Password)],
 ) -> String {
     let data: Map<String, Value> = generated
@@ -148,7 +189,10 @@ fn patch_body(
     json!({
         "metadata": {
             "resourceVersion": resource_version,
-            "annotations": { GENERATION_ANNOTATION: generation },
+            "annotations": {
+                GENERATION_ANNOTATION: generation.to_string(),
+                UID_ANNOTATION: uid,
+            },
         },
         "data": data,
     })
@@ -296,7 +340,7 @@ async fn fill(
     api: &Api,
     secret: &str,
     owners: &[&str],
-    generation: &str,
+    requested: u64,
     report: &mut Report,
 ) -> Result<BTreeMap<String, Password>, Error> {
     for _ in 0..MAX_CONFLICTS {
@@ -305,9 +349,16 @@ async fn fill(
             // Only a patch is answered with a conflict.
             Answer::Conflict => continue,
         };
+        if found.metadata.uid.is_empty() {
+            return Err(Error::Secret {
+                secret: secret.to_owned(),
+                problem: "the API returned it without metadata.uid".to_owned(),
+            });
+        }
+        let Plan { generation, keys } = plan(&found, owners, requested);
         let mut passwords = BTreeMap::new();
         let mut generated = Vec::new();
-        for (owner, decided) in plan(&found, owners, generation) {
+        for (owner, decided) in keys {
             match decided {
                 Ok(password) => {
                     passwords.insert(owner, password);
@@ -326,7 +377,12 @@ async fn fill(
             .iter()
             .map(|(owner, password, _)| (owner.clone(), password.clone()))
             .collect();
-        let body = patch_body(&found.metadata.resource_version, generation, &new);
+        let body = patch_body(
+            &found.metadata.resource_version,
+            &found.metadata.uid,
+            generation,
+            &new,
+        );
         match api.request(secret, Some(&body)).await? {
             Answer::Conflict => {
                 tracing::info!(
@@ -396,10 +452,16 @@ pub async fn converge(
     if by_secret.is_empty() {
         return Ok(Passwords::default());
     }
+    let requested = parse_generation(&settings.generation).ok_or_else(|| {
+        Error::Kube(format!(
+            "TRUSTIOT__PASSWORDS__GENERATION: {:?} is not a password generation (1 to 9 decimal digits)",
+            settings.generation
+        ))
+    })?;
     let api = Api::new(settings, wait)?;
     let mut filled: BTreeMap<(String, String), Password> = BTreeMap::new();
     for (secret, owners) in &by_secret {
-        for (owner, password) in fill(&api, secret, owners, &settings.generation, report).await? {
+        for (owner, password) in fill(&api, secret, owners, requested, report).await? {
             filled.insert(((*secret).to_owned(), owner), password);
         }
     }
@@ -427,14 +489,22 @@ pub async fn converge(
 mod tests {
     use super::*;
 
+    const UID: &str = "6a1f2c3e-0000-4000-8000-000000000001";
+
+    /// Each owner and the password it keeps, or why it gets a new one.
+    type Decisions = Vec<(String, Result<String, Why>)>;
+
+    /// A Secret the Job filled (bound to its uid) that records `generation`.
     fn secret(generation: Option<&str>, data: &[(&str, &str)]) -> Secret {
         let mut annotations = BTreeMap::new();
         if let Some(generation) = generation {
             annotations.insert(GENERATION_ANNOTATION.to_owned(), generation.to_owned());
         }
+        annotations.insert(UID_ANNOTATION.to_owned(), UID.to_owned());
         Secret {
             metadata: Metadata {
                 resource_version: "7".to_owned(),
+                uid: UID.to_owned(),
                 annotations,
             },
             data: data
@@ -444,11 +514,17 @@ mod tests {
         }
     }
 
-    fn decisions(found: &Secret, owners: &[&str]) -> Vec<(String, Result<String, Why>)> {
-        plan(found, owners, "2")
+    fn decisions(found: &Secret, owners: &[&str]) -> Decisions {
+        decisions_for(found, owners, 2).1
+    }
+
+    fn decisions_for(found: &Secret, owners: &[&str], requested: u64) -> (u64, Decisions) {
+        let Plan { generation, keys } = plan(found, owners, requested);
+        let keys = keys
             .into_iter()
             .map(|(owner, decided)| (owner, decided.map(|password| password.expose().to_owned())))
-            .collect()
+            .collect();
+        (generation, keys)
     }
 
     const GOOD: &str = "0123456789abcdef0123456789abcdef";
@@ -465,8 +541,8 @@ mod tests {
             ]
         );
         // A rotation renews every key, usable or not; so does a Secret that records no
-        // generation (someone filled it by hand).
-        for recorded in [Some("1"), None] {
+        // generation (someone filled it by hand), or one it cannot read.
+        for recorded in [Some("1"), None, Some("v2"), Some("02x"), Some("1234567890")] {
             assert_eq!(
                 decisions(
                     &secret(recorded, &[("a_app", GOOD), ("b_app", GOOD)]),
@@ -509,17 +585,97 @@ mod tests {
     }
 
     #[test]
-    fn the_patch_carries_the_resource_version_the_generation_and_only_the_new_keys() {
+    fn generations_only_go_up() {
+        let owners = ["a_app", "b_app"];
+        let full = secret(Some("3"), &[("a_app", GOOD), ("b_app", GOOD)]);
+        // A rollback asks for an older generation: the passwords stay, and the Secret keeps
+        // recording 3, so the re-upgrade to 3 changes nothing either.
+        for requested in [1, 2, 3] {
+            assert_eq!(
+                decisions_for(&full, &owners, requested),
+                (
+                    3,
+                    vec![
+                        ("a_app".to_owned(), Ok(GOOD.to_owned())),
+                        ("b_app".to_owned(), Ok(GOOD.to_owned())),
+                    ]
+                ),
+                "requested {requested}"
+            );
+        }
+        // A key lost under an older requested generation is filled under the recorded one.
+        assert_eq!(
+            decisions_for(&secret(Some("3"), &[("a_app", GOOD)]), &owners, 1),
+            (
+                3,
+                vec![
+                    ("a_app".to_owned(), Ok(GOOD.to_owned())),
+                    ("b_app".to_owned(), Err(Why::Missing)),
+                ]
+            )
+        );
+        // A newer one rotates and records it.
+        assert_eq!(
+            decisions_for(&full, &owners, 4),
+            (
+                4,
+                vec![
+                    ("a_app".to_owned(), Err(Why::Generation)),
+                    ("b_app".to_owned(), Err(Why::Generation)),
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn data_is_trusted_only_in_the_object_the_job_filled() {
+        let owners = ["a_app", "b_app"];
+        // Someone created the Secret with a password of their choosing and a matching
+        // generation, but cannot know the uid the API gave it: every key is renewed.
+        let mut planted = secret(Some("2"), &[("a_app", GOOD), ("b_app", GOOD)]);
+        planted.metadata.uid = "6a1f2c3e-0000-4000-8000-000000000002".to_owned();
+        let mut unrecorded = secret(Some("2"), &[("a_app", GOOD), ("b_app", GOOD)]);
+        unrecorded.metadata.annotations.remove(UID_ANNOTATION);
+        for found in [&planted, &unrecorded] {
+            assert_eq!(
+                decisions_for(found, &owners, 2),
+                (
+                    2,
+                    vec![
+                        ("a_app".to_owned(), Err(Why::Unbound)),
+                        ("b_app".to_owned(), Err(Why::Unbound)),
+                    ]
+                )
+            );
+        }
+        // Even with a newer generation recorded: the generation of an unbound Secret is not
+        // trusted either.
+        let mut newer = secret(Some("9"), &[("a_app", GOOD)]);
+        newer.metadata.uid = "other".to_owned();
+        assert_eq!(decisions_for(&newer, &owners, 2).0, 2);
+    }
+
+    #[test]
+    fn generations_are_decimal_digits() {
+        assert_eq!(parse_generation("1"), Some(1));
+        assert_eq!(parse_generation("999999999"), Some(999_999_999));
+        for bad in ["", "v2", "1.0", "-1", " 1", "1234567890", "٣"] {
+            assert_eq!(parse_generation(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_patch_carries_the_resource_version_the_generation_the_uid_and_only_the_new_keys() {
         let password = Password::new("a_app", GOOD.to_owned()).expect("valid");
         let body: Value =
-            serde_json::from_str(&patch_body("41", "3", &[("a_app".to_owned(), password)]))
+            serde_json::from_str(&patch_body("41", UID, 3, &[("a_app".to_owned(), password)]))
                 .expect("JSON");
         assert_eq!(
             body,
             json!({
                 "metadata": {
                     "resourceVersion": "41",
-                    "annotations": { GENERATION_ANNOTATION: "3" },
+                    "annotations": { GENERATION_ANNOTATION: "3", UID_ANNOTATION: UID },
                 },
                 "data": { "a_app": STANDARD.encode(GOOD) },
             })

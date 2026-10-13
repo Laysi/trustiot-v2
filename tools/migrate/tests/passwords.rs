@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use migrate::passwords::{GENERATION_ANNOTATION, Passwords, converge};
+use migrate::passwords::{GENERATION_ANNOTATION, Passwords, UID_ANNOTATION, converge};
 use migrate::{Error, Report};
 use support::secrets::FakeSecrets;
 
@@ -236,6 +236,118 @@ async fn a_new_generation_rotates_every_managed_key_and_nothing_else() {
         "a rotation happens once: {:?}",
         report.changes
     );
+}
+
+#[tokio::test]
+async fn a_rollback_keeps_the_passwords_and_so_does_the_re_upgrade() {
+    // Flux's remediation rolls back to the release before the rotation, which renders the older
+    // migrate.passwordGeneration, and then upgrades again (Laysi/trustiot-v2#60 round 4, R5).
+    let fake = fake().await;
+    converge(&settings(&fake, "2"), WAIT, &mut Report::default())
+        .await
+        .expect("the first run");
+    converge(&settings(&fake, "3"), WAIT, &mut Report::default())
+        .await
+        .expect("the rotation");
+    let rotated = every_value(&fake);
+    for requested in ["2", "1", "3"] {
+        let mut report = Report::default();
+        converge(&settings(&fake, requested), WAIT, &mut report)
+            .await
+            .expect("a rollback or a re-upgrade");
+        assert!(
+            report.changes.is_empty(),
+            "generation {requested}: {:?}",
+            report.changes
+        );
+        assert_eq!(every_value(&fake), rotated, "generation {requested}");
+        for secret in [IDENTITY, ASSETS, COLLECTOR] {
+            assert_eq!(generation_of(&fake, secret).as_deref(), Some("3"));
+        }
+    }
+    // A key lost while the older generation is requested is filled under the recorded one, so
+    // the re-upgrade after it rotates nothing either.
+    fake.write(IDENTITY, "identity_app", None);
+    let mut report = Report::default();
+    converge(&settings(&fake, "1"), WAIT, &mut report)
+        .await
+        .expect("the run that fills the lost key");
+    assert_eq!(
+        report.changes,
+        [format!(
+            "generated the password of identity_app in Secret {IDENTITY} (it had none)"
+        )]
+    );
+    assert_eq!(generation_of(&fake, IDENTITY).as_deref(), Some("3"));
+    let mut report = Report::default();
+    converge(&settings(&fake, "3"), WAIT, &mut report)
+        .await
+        .expect("the re-upgrade");
+    assert!(report.changes.is_empty(), "{:?}", report.changes);
+}
+
+#[tokio::test]
+async fn a_secret_someone_else_created_never_keeps_its_passwords() {
+    // Someone deletes the kept Secret and creates one under the same name with passwords of
+    // their choosing and the Job's annotations; Helm adopts it on the next install (R2). The uid
+    // the Job recorded is not the new object's, so every key is replaced.
+    let fake = fake().await;
+    converge(&settings(&fake, "1"), WAIT, &mut Report::default())
+        .await
+        .expect("the first run");
+    let uid = fake.get(IDENTITY).expect("declared").uid;
+    assert_eq!(
+        fake.get(IDENTITY)
+            .expect("declared")
+            .annotations
+            .get(UID_ANNOTATION),
+        Some(&uid),
+        "the Job records the uid of the Secret it filled"
+    );
+    let chosen = "c".repeat(64);
+    fake.write(IDENTITY, "identity_app", Some(chosen.as_bytes()));
+    fake.recreate(IDENTITY);
+    let assets = fake.value(ASSETS, "assets_app");
+    let mut report = Report::default();
+    let passwords = converge(&settings(&fake, "1"), WAIT, &mut report)
+        .await
+        .expect("the run after the Secret was replaced");
+    assert_eq!(
+        report.changes,
+        [format!(
+            "generated the password of identity_app in Secret {IDENTITY} (the Secret is not the one the Job filled)"
+        )]
+    );
+    let stored = fake.value(IDENTITY, "identity_app").expect("filled");
+    assert_ne!(stored, chosen, "the chosen password was replaced");
+    assert_eq!(
+        passwords
+            .postgres("identity_app")
+            .map(|password| password.expose().to_owned()),
+        Some(stored)
+    );
+    let replaced = fake.get(IDENTITY).expect("declared");
+    assert_eq!(
+        replaced.annotations.get(UID_ANNOTATION),
+        Some(&replaced.uid)
+    );
+    assert_ne!(replaced.uid, uid);
+    assert_eq!(
+        fake.value(ASSETS, "assets_app"),
+        assets,
+        "other Secrets are left alone"
+    );
+    // A forged uid annotation does not help: it must equal the object's own uid.
+    fake.annotate(
+        IDENTITY,
+        UID_ANNOTATION,
+        "00000000-0000-4000-8000-999999999999",
+    );
+    let mut report = Report::default();
+    converge(&settings(&fake, "1"), WAIT, &mut report)
+        .await
+        .expect("the run after a forged annotation");
+    assert_eq!(report.changes.len(), 1, "{:?}", report.changes);
 }
 
 #[tokio::test]

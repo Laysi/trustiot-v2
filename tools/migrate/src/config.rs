@@ -294,7 +294,7 @@ impl Validate for RunConfig {
             if !is_generation(&passwords.generation) {
                 return Err(Invalid::new(
                     "passwords.generation",
-                    "must be 1 to 63 letters, digits, '.', '_' or '-'",
+                    "must be 1 to 9 decimal digits (generations are compared as numbers and only go up)",
                 ));
             }
             let postgres = passwords.postgres()?;
@@ -354,14 +354,11 @@ impl RunConfig {
     }
 }
 
-/// A password generation: 1 to 63 ASCII letters, digits, `.`, `_` or `-` (it is kept in an
-/// annotation and compared as text).
+/// A password generation: 1 to 9 decimal digits, as the chart's schema allows. Generations are
+/// compared as numbers: only a higher one rotates (`passwords::plan`).
 #[must_use]
 pub fn is_generation(text: &str) -> bool {
-    (1..=63).contains(&text.len())
-        && text
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    crate::passwords::parse_generation(text).is_some()
 }
 
 /// Settings of `migrate wait-for-job`, the init container that holds a service's pod until the
@@ -491,10 +488,19 @@ mod tests {
 
     #[test]
     fn generations() {
-        for good in ["1", "2026-10-13", "v2.rotated_after-incident"] {
+        for good in ["1", "2", "20261013", "999999999"] {
             assert!(is_generation(good), "{good}");
         }
-        for bad in ["", "a b", "x/y", "ü", &"1".repeat(64)] {
+        for bad in [
+            "",
+            "a b",
+            "x/y",
+            "ü",
+            "2026-10-13",
+            "v2",
+            "1234567890",
+            &"1".repeat(64),
+        ] {
             assert!(!is_generation(bad), "{bad}");
         }
     }

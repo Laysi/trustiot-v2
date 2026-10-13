@@ -16,7 +16,7 @@
 
 1. 檢查設定：`TRUSTIOT__PASSWORDS__POSTGRES` 列的每個登入角色（chart 填入部署中用 Postgres 的服務的 `<服務>_app`）都要在服務清單裡，否則什麼都不改就停止。
 2. 以 migration 角色連 Postgres（只接受 `verify-full`），資料庫還沒起來時等（`TRUSTIOT__WAIT__DATABASES`）。migration 角色必須擁有資料庫、有 CREATEROLE，不能是 superuser、不能有 BYPASSRLS，也不能擁有其他資料庫：角色是叢集層級的，角色名稱不帶實例名稱，所以一個 Postgres 叢集只放一個 TrustIoT 資料庫（runbook 的「一個 Postgres 叢集只放一個 TrustIoT 資料庫」）。
-   取得鎖、確認 migration 角色之後，填密碼 Secret（[`src/passwords.rs`](src/passwords.rs)）：經 Kubernetes API 讀 `TRUSTIOT__PASSWORDS__*` 列的每個 Secret，缺的 key、不能用的值、或 annotation `trustiot.io/password-generation` 不等於 `TRUSTIOT__PASSWORDS__GENERATION` 時，以作業系統的 CSPRNG 產生 256 位元的密碼（64 個十六進位字元），以帶 `resourceVersion` 的 JSON merge patch（field manager `trustiot-migrate`）寫回並更新 annotation；Secret 在讀與寫之間被改過時 API 回 409，Job 重讀再決定，連續 5 次就停止。Secret 不存在、API 拒絕存取時停止並寫出處理方式；API 沒回應或回 429、5xx 時在 `TRUSTIOT__WAIT__DATABASES` 內重試。日誌與錯誤只寫角色、帳號與 Secret 的名稱，不寫密碼、hash 或 Secret 的資料。
+   取得鎖、確認 migration 角色之後，填密碼 Secret（[`src/passwords.rs`](src/passwords.rs)）：經 Kubernetes API 讀 `TRUSTIOT__PASSWORDS__*` 列的每個 Secret，缺的 key、不能用的值、Secret 不是 Job 填過的那個物件（annotation `trustiot.io/password-secret-uid` 不等於它的 `metadata.uid`，例如有人刪掉後自己建了同名的 Secret，或從備份還原），或 `TRUSTIOT__PASSWORDS__GENERATION` 大於 annotation `trustiot.io/password-generation` 記的代（沒記、或記的不是數字也算）時，以作業系統的 CSPRNG 產生 256 位元的密碼（64 個十六進位字元），以帶 `resourceVersion` 的 JSON merge patch（field manager `trustiot-migrate`）寫回，同一個 patch 記下 Secret 的 uid 與代；代以數字比較、只往上走：要求的代較小（rollback 渲染出舊值）時保留現有的密碼、記的代不變，所以之後升級回來也不會再換一次；Secret 在讀與寫之間被改過時 API 回 409，Job 重讀再決定，連續 5 次就停止。Secret 不存在、API 拒絕存取時停止並寫出處理方式；API 沒回應或回 429、5xx 時在 `TRUSTIOT__WAIT__DATABASES` 內重試。日誌與錯誤只寫角色、帳號與 Secret 的名稱，不寫密碼、hash 或 Secret 的資料。
 3. `sql/bootstrap.sql`（Job 自己的紀錄表 `trustiot_migrate.applied`）與 `sql/` 的編號檔案（`0001_helpers.sql`：下方「SQL 怎麼組」的函式），再套用 `crates/service-kit/sql/database.sql`。
 4. 每個服務（[`src/registry.rs`](src/registry.rs) 的 `PRODUCT`，依序）：
    - 角色：`<schema>_owner`（NOLOGIN NOINHERIT，擁有 schema 與每個物件；migration 角色以 PostgreSQL 16 的 `createrole_self_grant = 'set'` 取得 SET 權限，但不繼承它的權限）、`<schema>_app`（LOGIN NOINHERIT）、需要時 `<schema>_platform`（決策 29 的平台角色）。不存在就建立；存在就檢查，偏離規則就停止（見 runbook 的表）：屬性、成員關係、不是這個 migration 角色建立的、在叢集的其他資料庫擁有物件或權限、有這個資料庫專屬的設定；登入角色另外不能有 `search_path` 以外的角色設定，也不能在自己的 schema 建立物件或建立暫存表。
@@ -69,7 +69,7 @@ Job 自己的設定：
 | `TRUSTIOT__POSTGRES__USERNAME`、`__PASSWORD` | migration 角色 |
 | `TRUSTIOT__CLICKHOUSE__USERNAME`、`__PASSWORD` | 有 access management 的 ClickHouse 帳號 |
 | `TRUSTIOT__PASSWORDS__API_URL`、`__NAMESPACE`、`__TOKEN_FILE`、`__CA_FILE` | 密碼 Secret 所在的 Kubernetes API（`https://`；`http://` 只接受 127.0.0.1，給測試用）、namespace、projected token（每次請求都重讀）與唯一的信任根 |
-| `TRUSTIOT__PASSWORDS__GENERATION` | 密碼的代（chart 的 `migrate.passwordGeneration`）；Secret 記的不同就全部重新產生 |
+| `TRUSTIOT__PASSWORDS__GENERATION` | 密碼的代（chart 的 `migrate.passwordGeneration`，1 到 9 位數字）；比 Secret 記的大才全部重新產生，較小時保留 |
 | `TRUSTIOT__PASSWORDS__POSTGRES` | 逗號分隔的 `角色=Secret`；key 是角色名稱 |
 | `TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR` | `帳號=Secret`：collector 的 ClickHouse 帳號與放它密碼的 Secret；不設就不管 collector 的帳號 |
 | `TRUSTIOT__WAIT__DATABASES`、`__LOCK` | 等資料庫、等另一次執行的上限（例如 `10m`） |
@@ -97,6 +97,6 @@ Job 自己的設定：
 | `tests/concurrent_runs.rs` | 鎖被持有時執行會等，到上限就放棄且什麼都沒改；同時開始的兩次執行都成功，只有一次套用變更 |
 | `tests/outbox_and_tenant_roles.rs` | outbox 的表、policy 與讀者的增減；每租戶角色 hook 為新租戶建立角色，還原的資料庫少了角色時補回 |
 | `tests/clickhouse.rs` | ClickHouse DDL 套用一次、改過的檔案被拒；collector 帳號以 Job 產生的密碼建立、寫入，新的密碼世代輪替，多了權限、設定或角色不是預設角色時停止；collector 角色多了權限或角色時停止 |
-| `tests/passwords.rs` | 密碼 Secret 對假的 API：第一次填入每個缺的 key（256 位元十六進位，各不相同），第二次只讀不寫；新的世代換掉每個受管的 key、不動其他 key、只換一次；遺失或不能用的 key 單獨重新產生；Secret 不存在時停止並寫出處理方式；讀寫之間被改過時重讀，一直被改時停止而不覆蓋；拒絕的 token 與 403、API 暫時 503 的重試與上限；報告、錯誤與 `Debug` 都不含密碼或它的 base64；沒有綁定時不發請求（不需要容器） |
+| `tests/passwords.rs` | 密碼 Secret 對假的 API：第一次填入每個缺的 key（256 位元十六進位，各不相同），第二次只讀不寫；新的世代換掉每個受管的 key、不動其他 key、只換一次；較小的世代（rollback）不換、之後升級回來也不換；不是 Job 填過的 Secret 物件（uid 不同，含帶著同代 annotation 與自選密碼的）每個 key 都重新產生，別人只改 annotation 時也一樣；遺失或不能用的 key 單獨重新產生；Secret 不存在時停止並寫出處理方式；讀寫之間被改過時重讀，一直被改時停止而不覆蓋；拒絕的 token 與 403、API 暫時 503 的重試與上限；報告、錯誤與 `Debug` 都不含密碼或它的 base64；沒有綁定時不發請求（不需要容器） |
 | `tests/wait_for_job.rs` | `wait-for-job` 對一個假的 API server：等到完成、失敗與拒絕的 token、不信任其他 CA；Job 不存在時繼續等，訊息寫出 Job 名稱、原因與處理方式 |
 | `tests/registry.rs` | `PRODUCT` 列出每個檔案、檔案符合規則（大小寫與空白的變化也擋得到）、不一致的清單被拒絕（不需要資料庫） |
