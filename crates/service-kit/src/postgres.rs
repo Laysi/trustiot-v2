@@ -720,9 +720,10 @@ platform_tenant_only AS MATERIALIZED (
          AS c(command, sides)
       ON (m.has & c.sides) = c.sides AND (m.wider & c.sides) <> c.sides
 )
--- The problems that come from a privilege are found for each role the session can become and
--- name it. later: the row is for a role other than the session's own, so that when both have
--- the same problem with the same relation, the session's own role is reported.
+-- The problems that come from a privilege are found for each role the session can become, and
+-- each row names that role. later is true when the row is for a role other than the session's
+-- own, so that when both have the same problem with the same relation, the session's own role
+-- is reported.
 SELECT problem, relation, role_name, command FROM (
     SELECT 1 AS rank, 'bypasses_rls' AS problem, NULL::text AS relation,
            NULL::text AS role_name, NULL::text AS command, false AS later
