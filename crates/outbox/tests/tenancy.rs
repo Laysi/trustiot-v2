@@ -261,7 +261,10 @@ async fn a_service_role_that_can_read_across_tenants_is_refused() {
     };
     assert_eq!(
         problem,
-        &UnsafeSession::PermissivePolicy(format!("{ps}.outbox_event policy service_read"))
+        &UnsafeSession::PermissivePolicy {
+            policy: format!("{ps}.outbox_event policy service_read"),
+            role: app.clone(),
+        }
     );
     assert!(error.is_retryable(), "a migration can fix it");
     println!("service role with a cross-tenant read policy: {error}");

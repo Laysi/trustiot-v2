@@ -38,7 +38,16 @@ const USER: &str = "01928f6e-7a3c-7d4e-8f00-0123456789ab";
 /// `example_platform_switch` only with `SET ROLE`; `example_platform_switch` belongs to
 /// `example_switch_parent` without inheriting its rights. The platform role inherits the rights
 /// of `example_platform_inherited` but cannot `SET ROLE` to it, and can neither inherit nor take
-/// those of `example_platform_unusable`. None of them has rights unless a test grants them.
+/// those of `example_platform_unusable`. The service role has the same kinds of memberships
+/// (Laysi/trustiot-v2#381): it can become `example_app_switch` and `example_alias` only with
+/// `SET ROLE`; through `example_app_switch` also `example_app_switch_parent` (a chain of
+/// `SET` memberships), and `example_app_switch` inherits `example_app_switch_group`, which the
+/// service role can neither inherit nor become; it inherits `example_app_group` and through it
+/// can become `example_app_group_switch` only with `SET ROLE`; it inherits
+/// `example_app_inherited` without being able to become it, and through it can neither inherit
+/// nor become `example_app_inherited_switch`; and it can neither inherit nor become
+/// `example_app_unusable`. `example_administrator` only holds the ADMIN option on
+/// `example_app_switch`. None of them has rights unless a test grants them.
 const ROLES: &str = "
 CREATE ROLE example_owner LOGIN PASSWORD 'service-kit-test';
 CREATE ROLE example_app LOGIN PASSWORD 'service-kit-test';
@@ -56,6 +65,26 @@ CREATE ROLE example_platform_inherited NOLOGIN;
 GRANT example_platform_inherited TO example_platform WITH INHERIT TRUE, SET FALSE;
 CREATE ROLE example_platform_unusable NOLOGIN;
 GRANT example_platform_unusable TO example_platform WITH INHERIT FALSE, SET FALSE;
+CREATE ROLE example_app_switch NOLOGIN;
+GRANT example_app_switch TO example_app WITH INHERIT FALSE, SET TRUE;
+CREATE ROLE example_alias NOLOGIN;
+GRANT example_alias TO example_app WITH INHERIT FALSE, SET TRUE;
+CREATE ROLE example_app_switch_parent NOLOGIN;
+GRANT example_app_switch_parent TO example_app_switch WITH INHERIT FALSE, SET TRUE;
+CREATE ROLE example_app_switch_group NOLOGIN;
+GRANT example_app_switch_group TO example_app_switch WITH INHERIT TRUE, SET FALSE;
+CREATE ROLE example_app_group NOLOGIN;
+GRANT example_app_group TO example_app;
+CREATE ROLE example_app_group_switch NOLOGIN;
+GRANT example_app_group_switch TO example_app_group WITH INHERIT FALSE, SET TRUE;
+CREATE ROLE example_app_inherited NOLOGIN;
+GRANT example_app_inherited TO example_app WITH INHERIT TRUE, SET FALSE;
+CREATE ROLE example_app_inherited_switch NOLOGIN;
+GRANT example_app_inherited_switch TO example_app_inherited WITH INHERIT FALSE, SET TRUE;
+CREATE ROLE example_app_unusable NOLOGIN;
+GRANT example_app_unusable TO example_app WITH INHERIT FALSE, SET FALSE;
+CREATE ROLE example_administrator LOGIN PASSWORD 'service-kit-test';
+GRANT example_app_switch TO example_administrator WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;
 ";
 
 /// The seed rows, inserted by the owner (exempt from row-level security).
@@ -653,6 +682,7 @@ async fn sessions_row_level_security_would_not_protect_are_refused() {
         check_as(options, SessionRole::Service).await
     }
     let item_table = "public.example_items".to_owned();
+    let app = "example_app".to_owned();
     assert_eq!(check(&fixture.options("example_app")).await, Ok(()));
     assert_eq!(
         check_as(&fixture.options("example_platform"), SessionRole::Platform).await,
@@ -661,9 +691,10 @@ async fn sessions_row_level_security_would_not_protect_are_refused() {
     // The policy that opens the table to the platform role is refused for a service session.
     assert_eq!(
         check(&fixture.options("example_platform")).await,
-        Err(UnsafeSession::PermissivePolicy(
-            "public.example_items policy platform_access".to_owned()
-        ))
+        Err(UnsafeSession::PermissivePolicy {
+            policy: "public.example_items policy platform_access".to_owned(),
+            role: "example_platform".to_owned(),
+        })
     );
     assert_eq!(
         check(&fixture.postgres.superuser("guard")).await,
@@ -704,9 +735,10 @@ async fn sessions_row_level_security_would_not_protect_are_refused() {
     let refused = check_as(&fixture.options("example_platform"), SessionRole::Platform).await;
     assert_eq!(
         refused,
-        Err(UnsafeSession::PermissivePolicy(
-            "public.example_items policy group_access".to_owned()
-        ))
+        Err(UnsafeSession::PermissivePolicy {
+            policy: "public.example_items policy group_access".to_owned(),
+            role: "example_platform".to_owned(),
+        })
     );
     sqlx::raw_sql("DROP POLICY group_access ON example_items;")
         .execute(&mut owner)
@@ -722,14 +754,20 @@ async fn sessions_row_level_security_would_not_protect_are_refused() {
             "a tenant table without row-level security",
             "CREATE TABLE loose_items (tenant_id uuid NOT NULL, name text);
              GRANT SELECT ON loose_items TO example_app;",
-            UnsafeSession::UnprotectedTable("public.loose_items".to_owned()),
+            UnsafeSession::UnprotectedTable {
+                table: "public.loose_items".to_owned(),
+                role: app.clone(),
+            },
             "ALTER TABLE loose_items ENABLE ROW LEVEL SECURITY;",
         ),
         (
             "a view with its owner's rights",
             "CREATE VIEW item_names AS SELECT tenant_id, name FROM example_items;
              GRANT SELECT ON item_names TO example_app;",
-            UnsafeSession::UnprotectedView("public.item_names".to_owned()),
+            UnsafeSession::UnprotectedView {
+                view: "public.item_names".to_owned(),
+                role: app.clone(),
+            },
             "ALTER VIEW item_names SET (security_invoker = true);",
         ),
         (
@@ -737,13 +775,19 @@ async fn sessions_row_level_security_would_not_protect_are_refused() {
             "CREATE MATERIALIZED VIEW item_counts AS
                  SELECT tenant_id, count(*) AS items FROM example_items GROUP BY tenant_id;
              GRANT SELECT ON item_counts TO example_app;",
-            UnsafeSession::Unprotectable("public.item_counts".to_owned()),
+            UnsafeSession::Unprotectable {
+                relation: "public.item_counts".to_owned(),
+                role: app.clone(),
+            },
             "REVOKE SELECT ON item_counts FROM example_app;",
         ),
         (
             "a permissive policy for every role",
             "CREATE POLICY everything ON example_items FOR SELECT USING (true);",
-            UnsafeSession::PermissivePolicy("public.example_items policy everything".to_owned()),
+            UnsafeSession::PermissivePolicy {
+                policy: "public.example_items policy everything".to_owned(),
+                role: app.clone(),
+            },
             "DROP POLICY everything ON example_items;",
         ),
         (
@@ -751,7 +795,10 @@ async fn sessions_row_level_security_would_not_protect_are_refused() {
             "CREATE POLICY widened ON example_items TO example_app
                  USING (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid
                         OR name = 'shared');",
-            UnsafeSession::PermissivePolicy("public.example_items policy widened".to_owned()),
+            UnsafeSession::PermissivePolicy {
+                policy: "public.example_items policy widened".to_owned(),
+                role: app.clone(),
+            },
             "DROP POLICY widened ON example_items;",
         ),
         (
@@ -759,20 +806,29 @@ async fn sessions_row_level_security_would_not_protect_are_refused() {
             "CREATE VIEW all_names AS SELECT name FROM example_items;
              CREATE VIEW all_names_again AS SELECT name FROM all_names;
              GRANT SELECT ON all_names_again TO example_app;",
-            UnsafeSession::UnprotectedView("public.all_names_again".to_owned()),
+            UnsafeSession::UnprotectedView {
+                view: "public.all_names_again".to_owned(),
+                role: app.clone(),
+            },
             "ALTER VIEW all_names_again SET (security_invoker = true);",
         ),
         (
             "a SECURITY DEFINER function over tenant data",
             "CREATE FUNCTION all_item_names() RETURNS SETOF text LANGUAGE sql SECURITY DEFINER
                  AS 'SELECT name FROM example_items';",
-            UnsafeSession::DefinerFunction("all_item_names()".to_owned()),
+            UnsafeSession::DefinerFunction {
+                function: "all_item_names()".to_owned(),
+                role: app.clone(),
+            },
             "REVOKE EXECUTE ON FUNCTION all_item_names() FROM PUBLIC;",
         ),
         (
             "TRUNCATE on a tenant table",
             "GRANT TRUNCATE ON example_items TO example_app;",
-            UnsafeSession::TruncateAllowed(item_table.clone()),
+            UnsafeSession::TruncateAllowed {
+                table: item_table.clone(),
+                role: app.clone(),
+            },
             "REVOKE TRUNCATE ON example_items FROM example_app;",
         ),
         (
@@ -780,7 +836,7 @@ async fn sessions_row_level_security_would_not_protect_are_refused() {
             "DO $$ BEGIN
                  EXECUTE format('GRANT TEMPORARY ON DATABASE %I TO example_app', current_database());
              END $$;",
-            UnsafeSession::TemporaryTables,
+            UnsafeSession::TemporaryTables { role: app.clone() },
             "DO $$ BEGIN
                  EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM example_app', current_database());
              END $$;",
@@ -824,9 +880,10 @@ async fn sessions_row_level_security_would_not_protect_are_refused() {
     let refused = check(&fixture.options("example_app")).await;
     assert_eq!(
         refused,
-        Err(UnsafeSession::DefinerFunction(
-            "platform_names()".to_owned()
-        ))
+        Err(UnsafeSession::DefinerFunction {
+            function: "platform_names()".to_owned(),
+            role: app.clone(),
+        })
     );
     sqlx::raw_sql("REVOKE EXECUTE ON FUNCTION platform_names() FROM PUBLIC;")
         .execute(&mut superuser)
@@ -1265,6 +1322,17 @@ async fn try_reach(
     tenant: Option<&str>,
     sql: &'static str,
 ) -> Result<u64, sqlx::Error> {
+    try_reach_as(fixture, "example_platform", role, tenant, sql).await
+}
+
+/// [`try_reach`] in a plain session of `login`.
+async fn try_reach_as(
+    fixture: &Fixture,
+    login: &str,
+    role: Option<&str>,
+    tenant: Option<&str>,
+    sql: &'static str,
+) -> Result<u64, sqlx::Error> {
     async fn run(
         tx: &mut PgConnection,
         role: Option<&str>,
@@ -1285,7 +1353,7 @@ async fn try_reach(
         }
         Ok(sqlx::query(sql).execute(&mut *tx).await?.rows_affected())
     }
-    let mut session = fixture.connect("example_platform").await;
+    let mut session = fixture.connect(login).await;
     let mut tx = session.begin().await.expect("begin");
     let outcome = run(&mut tx, role, tenant, sql).await;
     tx.rollback().await.expect("rollback");
@@ -1904,6 +1972,536 @@ async fn platform_refusal_through_pool(options: PgConnectOptions) -> TenantDbErr
     );
 }
 
+/// A setup for [`sessions_are_checked_for_every_role_they_can_become`].
+struct SetRoleCase {
+    case: &'static str,
+    /// The role the session logs in as, and the rules it is checked with.
+    session: (&'static str, SessionRole),
+    make: &'static str,
+    /// The refusal, or `None` when the session is accepted.
+    refused: Option<UnsafeSession>,
+    /// What a plain session of the login role can do without a tenant: take this role with
+    /// `SET ROLE` first (when given), then run the statement. `Some(n)`: it succeeds and reports
+    /// `n` rows; `None`: Postgres refuses it for lack of privilege.
+    probes: &'static [(Option<&'static str>, &'static str, Option<u64>)],
+    fix: &'static str,
+}
+
+fn unprotected_table(table: &str, role: &str) -> UnsafeSession {
+    UnsafeSession::UnprotectedTable {
+        table: table.to_owned(),
+        role: role.to_owned(),
+    }
+}
+
+fn permissive_policy(policy: &str, role: &str) -> UnsafeSession {
+    UnsafeSession::PermissivePolicy {
+        policy: policy.to_owned(),
+        role: role.to_owned(),
+    }
+}
+
+const LOOSE_ITEMS: &str = "SELECT name FROM loose_items";
+const SWITCH_ITEMS: &str = "SELECT name FROM switch_items";
+const KEEP_ITEMS: &str = "CREATE TEMPORARY TABLE kept_items (tenant_id uuid, name text)";
+
+/// Laysi/trustiot-v2#381: a session is checked for every role it can become with `SET ROLE`,
+/// not only for its own: a privilege that a role it can become holds, through a direct `SET`
+/// membership, a chain of them, or one of a group it inherits, is refused like the session's own
+/// and names that role. Each refused setup shows on a plain session that `SET ROLE` reaches
+/// other tenants' rows (or truncates, or creates a temporary table) without any tenant set.
+/// Memberships the session can only inherit, or can neither inherit nor use for `SET ROLE`, keep
+/// the results they had before.
+#[tokio::test]
+async fn sessions_are_checked_for_every_role_they_can_become() {
+    let Some(fixture) =
+        Fixture::new("CREATE DATABASE set_role OWNER example_owner", "set_role").await
+    else {
+        return;
+    };
+    let mut owner = fixture.connect("example_owner").await;
+    sqlx::raw_sql(
+        "CREATE TABLE loose_items (tenant_id uuid NOT NULL, name text NOT NULL);
+         INSERT INTO loose_items VALUES
+             ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'loose-a'),
+             ('01928f6e-7a3c-7d4e-8f00-00000000000b', 'loose-b');
+         CREATE TABLE switch_items (tenant_id uuid NOT NULL, name text NOT NULL);
+         ALTER TABLE switch_items ENABLE ROW LEVEL SECURITY;
+         CREATE POLICY tenant_isolation ON switch_items
+             USING (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid)
+             WITH CHECK (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid);
+         INSERT INTO switch_items VALUES
+             ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'switch-a'),
+             ('01928f6e-7a3c-7d4e-8f00-00000000000b', 'switch-b');
+         CREATE VIEW item_names AS SELECT tenant_id, name FROM example_items;
+         CREATE MATERIALIZED VIEW item_counts AS
+             SELECT tenant_id, count(*) AS items FROM example_items GROUP BY tenant_id;
+         CREATE FUNCTION all_item_names() RETURNS SETOF text LANGUAGE sql SECURITY DEFINER
+             AS 'SELECT name FROM example_items';
+         REVOKE EXECUTE ON FUNCTION all_item_names() FROM PUBLIC;",
+    )
+    .execute(&mut owner)
+    .await
+    .expect("tenant data no role of the session may use yet");
+    let app = ("example_app", SessionRole::Service);
+    let platform = ("example_platform", SessionRole::Platform);
+    assert_eq!(check_login(&fixture, app).await, Ok(()), "the service role");
+    assert_eq!(
+        check_login(&fixture, platform).await,
+        Ok(()),
+        "the platform role"
+    );
+
+    let loose = "public.loose_items";
+    let switch = "example_app_switch";
+    let cases = [
+        SetRoleCase {
+            case: "a table without row-level security that a SET ROLE target may use",
+            session: app,
+            make: "GRANT SELECT ON loose_items TO example_app_switch;",
+            refused: Some(unprotected_table(loose, switch)),
+            probes: &[
+                (Some("example_app_switch"), LOOSE_ITEMS, Some(2)),
+                (None, LOOSE_ITEMS, None),
+            ],
+            fix: "REVOKE SELECT ON loose_items FROM example_app_switch;",
+        },
+        SetRoleCase {
+            case: "a role the session reaches through a chain of SET memberships",
+            session: app,
+            make: "GRANT SELECT ON loose_items TO example_app_switch_parent;",
+            refused: Some(unprotected_table(loose, "example_app_switch_parent")),
+            probes: &[
+                (Some("example_app_switch_parent"), LOOSE_ITEMS, Some(2)),
+                (Some("example_app_switch"), LOOSE_ITEMS, None),
+            ],
+            fix: "REVOKE SELECT ON loose_items FROM example_app_switch_parent;",
+        },
+        SetRoleCase {
+            case: "a role the session reaches with SET through a group it inherits",
+            session: app,
+            make: "GRANT SELECT ON loose_items TO example_app_group_switch;",
+            refused: Some(unprotected_table(loose, "example_app_group_switch")),
+            probes: &[
+                (Some("example_app_group_switch"), LOOSE_ITEMS, Some(2)),
+                (None, LOOSE_ITEMS, None),
+            ],
+            fix: "REVOKE SELECT ON loose_items FROM example_app_group_switch;",
+        },
+        SetRoleCase {
+            case: "a privilege a SET ROLE target inherits",
+            session: app,
+            make: "GRANT SELECT ON loose_items TO example_app_switch_group;",
+            refused: Some(unprotected_table(loose, switch)),
+            probes: &[
+                (Some("example_app_switch"), LOOSE_ITEMS, Some(2)),
+                (Some("example_app_switch_group"), LOOSE_ITEMS, None),
+            ],
+            fix: "REVOKE SELECT ON loose_items FROM example_app_switch_group;",
+        },
+        SetRoleCase {
+            case: "a privilege for PUBLIC: the session's own role is named",
+            session: app,
+            make: "GRANT SELECT ON loose_items TO PUBLIC;",
+            refused: Some(unprotected_table(loose, "example_app")),
+            probes: &[
+                (None, LOOSE_ITEMS, Some(2)),
+                (Some("example_alias"), LOOSE_ITEMS, Some(2)),
+            ],
+            fix: "REVOKE SELECT ON loose_items FROM PUBLIC;",
+        },
+        SetRoleCase {
+            case: "a privilege of a SET ROLE target whose name sorts before the session role's",
+            session: app,
+            make: "GRANT SELECT ON loose_items TO example_alias;",
+            refused: Some(unprotected_table(loose, "example_alias")),
+            probes: &[(Some("example_alias"), LOOSE_ITEMS, Some(2))],
+            fix: "REVOKE SELECT ON loose_items FROM example_alias;",
+        },
+        SetRoleCase {
+            case: "a permissive policy for a SET ROLE target",
+            session: app,
+            make: "GRANT SELECT ON switch_items TO example_app_switch;
+                   CREATE POLICY switch_all ON switch_items FOR SELECT TO example_app_switch
+                       USING (true);",
+            refused: Some(permissive_policy(
+                "public.switch_items policy switch_all",
+                switch,
+            )),
+            probes: &[(Some("example_app_switch"), SWITCH_ITEMS, Some(2))],
+            fix: "DROP POLICY switch_all ON switch_items;
+                  REVOKE SELECT ON switch_items FROM example_app_switch;",
+        },
+        SetRoleCase {
+            case: "a permissive policy for PUBLIC on a table only a SET ROLE target may use",
+            session: app,
+            make: "GRANT SELECT ON switch_items TO example_app_switch;
+                   CREATE POLICY everyone ON switch_items FOR SELECT USING (true);",
+            refused: Some(permissive_policy(
+                "public.switch_items policy everyone",
+                switch,
+            )),
+            probes: &[
+                (Some("example_app_switch"), SWITCH_ITEMS, Some(2)),
+                (None, SWITCH_ITEMS, None),
+            ],
+            fix: "DROP POLICY everyone ON switch_items;
+                  REVOKE SELECT ON switch_items FROM example_app_switch;",
+        },
+        SetRoleCase {
+            case: "a permissive policy for a role a SET ROLE target inherits",
+            session: app,
+            make: "GRANT SELECT ON switch_items TO example_app_switch;
+                   CREATE POLICY via_group ON switch_items FOR SELECT TO example_app_switch_group
+                       USING (true);",
+            refused: Some(permissive_policy(
+                "public.switch_items policy via_group",
+                switch,
+            )),
+            probes: &[(Some("example_app_switch"), SWITCH_ITEMS, Some(2))],
+            fix: "DROP POLICY via_group ON switch_items;
+                  REVOKE SELECT ON switch_items FROM example_app_switch;",
+        },
+        SetRoleCase {
+            // Postgres applies a policy to a role that inherits one of the policy's roles; the
+            // SET ROLE target belongs to example_app_switch_parent without inheriting it, and
+            // example_app_switch_parent itself may not use the table.
+            case: "a permissive policy for a role a SET ROLE target belongs to without inheriting",
+            session: app,
+            make: "GRANT SELECT ON switch_items TO example_app_switch;
+                   CREATE POLICY parent_only ON switch_items FOR SELECT
+                       TO example_app_switch_parent USING (true);",
+            refused: None,
+            probes: &[
+                (Some("example_app_switch"), SWITCH_ITEMS, Some(0)),
+                (Some("example_app_switch_parent"), SWITCH_ITEMS, None),
+            ],
+            fix: "DROP POLICY parent_only ON switch_items;
+                  REVOKE SELECT ON switch_items FROM example_app_switch;",
+        },
+        SetRoleCase {
+            case: "a view without security_invoker that a SET ROLE target may use",
+            session: app,
+            make: "GRANT SELECT ON item_names TO example_app_switch;",
+            refused: Some(UnsafeSession::UnprotectedView {
+                view: "public.item_names".to_owned(),
+                role: switch.to_owned(),
+            }),
+            probes: &[(
+                Some("example_app_switch"),
+                "SELECT name FROM item_names",
+                Some(3),
+            )],
+            fix: "REVOKE SELECT ON item_names FROM example_app_switch;",
+        },
+        SetRoleCase {
+            case: "a materialized view that a SET ROLE target may use",
+            session: app,
+            make: "GRANT SELECT ON item_counts TO example_app_switch;",
+            refused: Some(UnsafeSession::Unprotectable {
+                relation: "public.item_counts".to_owned(),
+                role: switch.to_owned(),
+            }),
+            probes: &[(
+                Some("example_app_switch"),
+                "SELECT items FROM item_counts",
+                Some(2),
+            )],
+            fix: "REVOKE SELECT ON item_counts FROM example_app_switch;",
+        },
+        SetRoleCase {
+            case: "TRUNCATE for a SET ROLE target",
+            session: app,
+            make: "GRANT TRUNCATE ON example_items TO example_app_switch;",
+            refused: Some(UnsafeSession::TruncateAllowed {
+                table: "public.example_items".to_owned(),
+                role: switch.to_owned(),
+            }),
+            probes: &[
+                (
+                    Some("example_app_switch"),
+                    "TRUNCATE example_items",
+                    Some(0),
+                ),
+                (None, "TRUNCATE example_items", None),
+            ],
+            fix: "REVOKE TRUNCATE ON example_items FROM example_app_switch;",
+        },
+        SetRoleCase {
+            case: "a SECURITY DEFINER function a SET ROLE target may execute",
+            session: app,
+            make: "GRANT EXECUTE ON FUNCTION all_item_names() TO example_app_switch;",
+            refused: Some(UnsafeSession::DefinerFunction {
+                function: "all_item_names()".to_owned(),
+                role: switch.to_owned(),
+            }),
+            probes: &[
+                (
+                    Some("example_app_switch"),
+                    "SELECT all_item_names()",
+                    Some(3),
+                ),
+                (None, "SELECT all_item_names()", None),
+            ],
+            fix: "REVOKE EXECUTE ON FUNCTION all_item_names() FROM example_app_switch;",
+        },
+        SetRoleCase {
+            case: "temporary tables for a SET ROLE target",
+            session: app,
+            make: "DO $$ BEGIN
+                       EXECUTE format('GRANT TEMPORARY ON DATABASE %I TO example_app_switch',
+                                      current_database());
+                   END $$;",
+            refused: Some(UnsafeSession::TemporaryTables {
+                role: switch.to_owned(),
+            }),
+            probes: &[
+                (Some("example_app_switch"), KEEP_ITEMS, Some(0)),
+                (None, KEEP_ITEMS, None),
+            ],
+            fix: "DO $$ BEGIN
+                      EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM example_app_switch',
+                                     current_database());
+                  END $$;",
+        },
+        SetRoleCase {
+            case: "a table without row-level security that the platform role's SET ROLE target \
+                   may use",
+            session: platform,
+            make: "GRANT SELECT ON loose_items TO example_platform_switch;",
+            refused: Some(unprotected_table(loose, "example_platform_switch")),
+            probes: &[
+                (Some("example_platform_switch"), LOOSE_ITEMS, Some(2)),
+                (None, LOOSE_ITEMS, None),
+            ],
+            fix: "REVOKE SELECT ON loose_items FROM example_platform_switch;",
+        },
+        // Memberships without SET keep the results the check gave before.
+        SetRoleCase {
+            case: "a privilege of a role the session only inherits (refused as before)",
+            session: app,
+            make: "GRANT SELECT ON loose_items TO example_app_inherited;",
+            refused: Some(unprotected_table(loose, "example_app")),
+            probes: &[
+                (None, LOOSE_ITEMS, Some(2)),
+                (Some("example_app_inherited"), LOOSE_ITEMS, None),
+            ],
+            fix: "REVOKE SELECT ON loose_items FROM example_app_inherited;",
+        },
+        SetRoleCase {
+            case: "privileges of a role the session can neither inherit nor become (accepted as \
+                   before)",
+            session: app,
+            make: "GRANT SELECT, TRUNCATE ON loose_items TO example_app_unusable;
+                   GRANT SELECT ON item_names TO example_app_unusable;
+                   GRANT EXECUTE ON FUNCTION all_item_names() TO example_app_unusable;
+                   DO $$ BEGIN
+                       EXECUTE format('GRANT TEMPORARY ON DATABASE %I TO example_app_unusable',
+                                      current_database());
+                   END $$;",
+            refused: None,
+            probes: &[
+                (None, LOOSE_ITEMS, None),
+                (None, "SELECT all_item_names()", None),
+                (None, KEEP_ITEMS, None),
+                (Some("example_app_unusable"), LOOSE_ITEMS, None),
+            ],
+            fix: "REVOKE SELECT, TRUNCATE ON loose_items FROM example_app_unusable;
+                  REVOKE SELECT ON item_names FROM example_app_unusable;
+                  REVOKE EXECUTE ON FUNCTION all_item_names() FROM example_app_unusable;
+                  DO $$ BEGIN
+                      EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM example_app_unusable',
+                                     current_database());
+                  END $$;",
+        },
+        SetRoleCase {
+            // SET ROLE needs the SET option on every membership of the chain.
+            case: "a role behind a membership the session only inherits, with SET from there \
+                   (accepted as before)",
+            session: app,
+            make: "GRANT SELECT ON loose_items TO example_app_inherited_switch;",
+            refused: None,
+            probes: &[
+                (Some("example_app_inherited_switch"), LOOSE_ITEMS, None),
+                (None, LOOSE_ITEMS, None),
+            ],
+            fix: "REVOKE SELECT ON loose_items FROM example_app_inherited_switch;",
+        },
+        SetRoleCase {
+            // The policy does not apply to the session (it does not inherit the policy's role),
+            // but the check has always counted any membership for the session's own role.
+            case: "a permissive policy for a role the session can neither inherit nor become, on \
+                   a table it may use (refused as before)",
+            session: app,
+            make: "CREATE POLICY unusable_all ON example_items TO example_app_unusable
+                       USING (true);",
+            refused: Some(permissive_policy(
+                "public.example_items policy unusable_all",
+                "example_app",
+            )),
+            probes: &[(None, "SELECT name FROM example_items", Some(0))],
+            fix: "DROP POLICY unusable_all ON example_items;",
+        },
+    ];
+    for case in cases {
+        let SetRoleCase {
+            case,
+            session,
+            make,
+            refused,
+            probes,
+            fix,
+        } = case;
+        sqlx::raw_sql(make)
+            .execute(&mut owner)
+            .await
+            .unwrap_or_else(|error| panic!("{case}: {error}"));
+        assert_eq!(
+            check_login(&fixture, session).await,
+            refused.clone().map_or(Ok(()), Err),
+            "{case}"
+        );
+        let mut reached = Vec::new();
+        for &(role, sql, expected) in probes {
+            let result = try_reach_as(&fixture, session.0, role, None, sql).await;
+            match (&result, expected) {
+                (Ok(rows), Some(expected)) => assert_eq!(*rows, expected, "{case}: {sql}"),
+                (Err(error), None) => assert_eq!(
+                    sqlstate(error).as_deref(),
+                    Some(INSUFFICIENT_PRIVILEGE),
+                    "{case}: {sql}: {error}"
+                ),
+                _ => panic!("{case}: as {role:?}, {sql}: {result:?}, expected {expected:?}"),
+            }
+            reached.push(format!(
+                "as {}: {}",
+                role.unwrap_or(session.0),
+                result.map_or_else(|_| "refused".to_owned(), |rows| format!("{rows} rows"))
+            ));
+        }
+        sqlx::raw_sql(fix)
+            .execute(&mut owner)
+            .await
+            .unwrap_or_else(|error| panic!("{case}: {error}"));
+        assert_eq!(check_login(&fixture, session).await, Ok(()), "{case} fixed");
+        let verdict = refused.map_or_else(
+            || "accepted".to_owned(),
+            |problem| format!("refused with \"{problem}\""),
+        );
+        println!(
+            "{case}: {verdict}; without a tenant {}; accepted once fixed",
+            reached.join(", ")
+        );
+    }
+
+    // A SECURITY DEFINER function owned by a role the session belongs to without inheriting or
+    // becoming it runs with rights the check does not judge, so it is refused like one of any
+    // other owner (before Laysi/trustiot-v2#381, any membership in the owner exempted it).
+    let mut superuser = PgConnection::connect_with(&fixture.postgres.superuser("set_role"))
+        .await
+        .expect("connect as the superuser");
+    sqlx::raw_sql(
+        "GRANT SELECT ON loose_items TO example_app_unusable;
+         CREATE FUNCTION unusable_names() RETURNS SETOF text LANGUAGE sql SECURITY DEFINER
+             AS 'SELECT name FROM public.loose_items';
+         ALTER FUNCTION unusable_names() OWNER TO example_app_unusable;",
+    )
+    .execute(&mut superuser)
+    .await
+    .expect("a definer function of a role the service role cannot use");
+    let refused = check_login(&fixture, app).await;
+    assert_eq!(
+        refused,
+        Err(UnsafeSession::DefinerFunction {
+            function: "unusable_names()".to_owned(),
+            role: "example_app".to_owned(),
+        })
+    );
+    let through_function = try_reach_as(&fixture, app.0, None, None, "SELECT unusable_names()")
+        .await
+        .expect("the function runs with its owner's rights");
+    assert_eq!(through_function, 2, "both tenants' rows");
+    sqlx::raw_sql(
+        "DROP FUNCTION unusable_names();
+         REVOKE SELECT ON loose_items FROM example_app_unusable;",
+    )
+    .execute(&mut superuser)
+    .await
+    .expect("drop the function");
+    assert_eq!(check_login(&fixture, app).await, Ok(()));
+    println!(
+        "a SECURITY DEFINER function of a role the session can neither inherit nor become: \
+         refused with {refused:?}; through it the session reads {through_function} rows without \
+         a tenant; accepted once dropped"
+    );
+
+    // The ADMIN option: a role that administers another can grant itself that role with SET
+    // and take its rights, whatever the options of its own membership, so it is refused.
+    sqlx::raw_sql("GRANT SELECT ON loose_items TO example_app_switch;")
+        .execute(&mut owner)
+        .await
+        .expect("grant");
+    let administrator = ("example_administrator", SessionRole::Service);
+    let refused = check_login(&fixture, administrator).await;
+    assert_eq!(
+        refused,
+        Err(UnsafeSession::AdministersRole {
+            role: "example_app_switch".to_owned(),
+        })
+    );
+    let before = try_reach_as(
+        &fixture,
+        administrator.0,
+        Some("example_app_switch"),
+        None,
+        LOOSE_ITEMS,
+    )
+    .await
+    .expect_err("its own membership has no SET option");
+    assert_eq!(
+        sqlstate(&before).as_deref(),
+        Some(INSUFFICIENT_PRIVILEGE),
+        "{before}"
+    );
+    let mut session = fixture.connect(administrator.0).await;
+    let mut tx = session.begin().await.expect("begin");
+    sqlx::raw_sql("GRANT example_app_switch TO example_administrator WITH INHERIT FALSE, SET TRUE")
+        .execute(&mut *tx)
+        .await
+        .expect("the administrator grants itself the role");
+    sqlx::query("SELECT set_config('role', 'example_app_switch', true)")
+        .execute(&mut *tx)
+        .await
+        .expect("and takes it");
+    let rows = sqlx::query(LOOSE_ITEMS)
+        .execute(&mut *tx)
+        .await
+        .expect("read")
+        .rows_affected();
+    tx.rollback().await.expect("rollback");
+    assert_eq!(rows, 2, "both tenants' rows");
+    sqlx::raw_sql("REVOKE SELECT ON loose_items FROM example_app_switch;")
+        .execute(&mut owner)
+        .await
+        .expect("revoke");
+    println!(
+        "a role with the ADMIN option on another: refused with {refused:?}; SET ROLE first \
+         refused ({before}), then after granting itself the role it reads {rows} rows without a \
+         tenant"
+    );
+}
+
+/// The session check of a plain session of `login`, with the rules of `role`.
+async fn check_login(
+    fixture: &Fixture,
+    (login, role): (&str, SessionRole),
+) -> Result<(), UnsafeSession> {
+    let mut session = fixture.connect(login).await;
+    postgres::check_session(&mut session, role)
+        .await
+        .expect("the check runs")
+}
+
 /// The outbox template (`sql/outbox-event.sql`): the service role writes events of its tenant
 /// only, platform-wide events come only from the platform role, which writes no tenant's events
 /// even after setting a tenant itself, and a consumer's platform role reads every tenant's
@@ -2091,9 +2689,10 @@ async fn outbox_events_follow_the_tenant_policies() {
         postgres::check_session(&mut reader_session, SessionRole::Service)
             .await
             .expect("check"),
-        Err(UnsafeSession::PermissivePolicy(
-            "public.outbox_event policy consumer_read".to_owned()
-        ))
+        Err(UnsafeSession::PermissivePolicy {
+            policy: "public.outbox_event policy consumer_read".to_owned(),
+            role: "example_reader".to_owned(),
+        })
     );
 
     // A service that consumes its own events reads them as its own platform role: the template

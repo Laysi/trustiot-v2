@@ -186,7 +186,9 @@ pub const EXCEPTIONS: &[Exception] = &[
                  (Laysi/trustiot-v2#360); and takes a role the platform role belongs to with \
                  set_config('role', ...) and sets a tenant, to show which rows each setup the \
                  session check refuses for the platform role opens to that tenant \
-                 (Laysi/trustiot-v2#366)",
+                 (Laysi/trustiot-v2#366); and takes a role the service or platform role can \
+                 become with set_config('role', ...) to show what each setup the session check \
+                 refuses for that role reaches without a tenant (Laysi/trustiot-v2#381)",
     },
 ];
 
