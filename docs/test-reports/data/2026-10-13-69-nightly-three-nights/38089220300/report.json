@@ -1,0 +1,142 @@
+{
+  "startedAt": "2026-10-10T21:51:47.571Z",
+  "finishedAt": "2026-10-10T21:58:11.735Z",
+  "k3sImage": "rancher/k3s:v1.36.5-k3s1@sha256:057cfd5a9d51b89f1f0ee139c28d5d5fdd5aa7ddeac2742a0ba90c6dbc0329bb",
+  "shapes": [
+    {
+      "shape": "onprem",
+      "ok": true,
+      "checks": [
+        {
+          "name": "namespace with the restricted Pod Security level",
+          "ok": true,
+          "detail": "enforce, warn and audit are restricted",
+          "durationMs": 94
+        },
+        {
+          "name": "dummy Secrets for the references the chart makes",
+          "ok": true,
+          "detail": "2 created: trustiot-clickhouse-admin, trustiot-ingress-tls",
+          "durationMs": 136
+        },
+        {
+          "name": "helm install --wait",
+          "ok": true,
+          "detail": "release trustiot deployed, 18 objects",
+          "durationMs": 18070
+        },
+        {
+          "name": "every workload of the release is ready",
+          "ok": true,
+          "detail": "Deployment/trustiot-smoke-echo, StatefulSet/trustiot-clickhouse",
+          "durationMs": 111
+        },
+        {
+          "name": "every Gateway is programmed",
+          "ok": true,
+          "detail": "trustiot-ingress",
+          "durationMs": 176
+        },
+        {
+          "name": "no pod is broken, not ready or crash-looping",
+          "ok": true,
+          "detail": "4 pods running or completed",
+          "durationMs": 73
+        },
+        {
+          "name": "Services that expose a health endpoint have ready endpoints",
+          "ok": true,
+          "detail": "trustiot-smoke-echo:http/healthz, trustiot-smoke-echo:http/readyz, trustiot-clickhouse:http/ping",
+          "durationMs": 139
+        },
+        {
+          "name": "helm uninstall leaves no object of the release",
+          "ok": true,
+          "detail": "all objects removed",
+          "durationMs": 653
+        },
+        {
+          "name": "ingress e2e test (deploy/chart/tests/e2e)",
+          "ok": true,
+          "detail": "61 passed, 0 failed",
+          "durationMs": 62641
+        },
+        {
+          "name": "delete the namespace",
+          "ok": true,
+          "detail": "deleted",
+          "durationMs": 10501
+        }
+      ],
+      "durationMs": 92596
+    },
+    {
+      "shape": "saas",
+      "ok": true,
+      "checks": [
+        {
+          "name": "namespace with the restricted Pod Security level",
+          "ok": true,
+          "detail": "enforce, warn and audit are restricted",
+          "durationMs": 101
+        },
+        {
+          "name": "dummy Secrets for the references the chart makes",
+          "ok": true,
+          "detail": "2 created: trustiot-sentry, trustiot-clickhouse-admin",
+          "durationMs": 134
+        },
+        {
+          "name": "helm install --wait",
+          "ok": true,
+          "detail": "release trustiot deployed, 18 objects",
+          "durationMs": 10031
+        },
+        {
+          "name": "every workload of the release is ready",
+          "ok": true,
+          "detail": "Deployment/trustiot-smoke-echo, StatefulSet/trustiot-clickhouse",
+          "durationMs": 107
+        },
+        {
+          "name": "every Gateway is programmed",
+          "ok": true,
+          "detail": "trustiot-ingress",
+          "durationMs": 169
+        },
+        {
+          "name": "no pod is broken, not ready or crash-looping",
+          "ok": true,
+          "detail": "4 pods running or completed",
+          "durationMs": 56
+        },
+        {
+          "name": "Services that expose a health endpoint have ready endpoints",
+          "ok": true,
+          "detail": "trustiot-smoke-echo:http/healthz, trustiot-smoke-echo:http/readyz, trustiot-clickhouse:http/ping",
+          "durationMs": 146
+        },
+        {
+          "name": "helm uninstall leaves no object of the release",
+          "ok": true,
+          "detail": "all objects removed",
+          "durationMs": 567
+        },
+        {
+          "name": "ingress e2e test (deploy/chart/tests/e2e)",
+          "ok": true,
+          "detail": "61 passed, 0 failed",
+          "durationMs": 198704
+        },
+        {
+          "name": "delete the namespace",
+          "ok": true,
+          "detail": "deleted",
+          "durationMs": 10524
+        }
+      ],
+      "durationMs": 220539
+    }
+  ],
+  "ok": true
+}

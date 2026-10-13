@@ -1,0 +1,154 @@
+{
+  "startedAt": "2026-10-11T21:59:43.930Z",
+  "finishedAt": "2026-10-11T22:06:02.955Z",
+  "k3sImage": "rancher/k3s:v1.36.5-k3s1@sha256:057cfd5a9d51b89f1f0ee139c28d5d5fdd5aa7ddeac2742a0ba90c6dbc0329bb",
+  "shapes": [
+    {
+      "shape": "onprem",
+      "ok": true,
+      "checks": [
+        {
+          "name": "namespace with the restricted Pod Security level",
+          "ok": true,
+          "detail": "enforce, warn and audit are restricted",
+          "durationMs": 81
+        },
+        {
+          "name": "dummy Secrets for the references the chart makes",
+          "ok": true,
+          "detail": "3 created: trustiot-otel-collector-clickhouse, trustiot-clickhouse-admin, trustiot-ingress-tls",
+          "durationMs": 169
+        },
+        {
+          "name": "helm install --wait",
+          "ok": true,
+          "detail": "release trustiot deployed, 24 objects",
+          "durationMs": 18830
+        },
+        {
+          "name": "every workload of the release is ready",
+          "ok": true,
+          "detail": "Deployment/trustiot-otel-collector, Deployment/trustiot-smoke-echo, StatefulSet/trustiot-clickhouse",
+          "durationMs": 141
+        },
+        {
+          "name": "every Gateway is programmed",
+          "ok": true,
+          "detail": "trustiot-ingress",
+          "durationMs": 153
+        },
+        {
+          "name": "no pod is broken, not ready or crash-looping",
+          "ok": true,
+          "detail": "5 pods running or completed",
+          "durationMs": 49
+        },
+        {
+          "name": "each Gateway's NetworkPolicy admits exactly the ports its Istio pods use",
+          "ok": true,
+          "detail": "trustiot-ingress: 443, 15021",
+          "durationMs": 52
+        },
+        {
+          "name": "Services that expose a health endpoint have ready endpoints",
+          "ok": true,
+          "detail": "trustiot-smoke-echo:http/healthz, trustiot-smoke-echo:http/readyz, trustiot-clickhouse:http/ping",
+          "durationMs": 122
+        },
+        {
+          "name": "helm uninstall leaves no object of the release",
+          "ok": true,
+          "detail": "all objects removed",
+          "durationMs": 542
+        },
+        {
+          "name": "ingress e2e test (deploy/chart/tests/e2e)",
+          "ok": true,
+          "detail": "61 passed, 0 failed",
+          "durationMs": 59001
+        },
+        {
+          "name": "delete the namespace",
+          "ok": true,
+          "detail": "deleted",
+          "durationMs": 10666
+        }
+      ],
+      "durationMs": 89807
+    },
+    {
+      "shape": "saas",
+      "ok": true,
+      "checks": [
+        {
+          "name": "namespace with the restricted Pod Security level",
+          "ok": true,
+          "detail": "enforce, warn and audit are restricted",
+          "durationMs": 81
+        },
+        {
+          "name": "dummy Secrets for the references the chart makes",
+          "ok": true,
+          "detail": "3 created: trustiot-otel-collector-clickhouse, trustiot-sentry, trustiot-clickhouse-admin",
+          "durationMs": 164
+        },
+        {
+          "name": "helm install --wait",
+          "ok": true,
+          "detail": "release trustiot deployed, 24 objects",
+          "durationMs": 10881
+        },
+        {
+          "name": "every workload of the release is ready",
+          "ok": true,
+          "detail": "Deployment/trustiot-otel-collector, Deployment/trustiot-smoke-echo, StatefulSet/trustiot-clickhouse",
+          "durationMs": 141
+        },
+        {
+          "name": "every Gateway is programmed",
+          "ok": true,
+          "detail": "trustiot-ingress",
+          "durationMs": 153
+        },
+        {
+          "name": "no pod is broken, not ready or crash-looping",
+          "ok": true,
+          "detail": "5 pods running or completed",
+          "durationMs": 51
+        },
+        {
+          "name": "each Gateway's NetworkPolicy admits exactly the ports its Istio pods use",
+          "ok": true,
+          "detail": "trustiot-ingress: 80, 15021",
+          "durationMs": 50
+        },
+        {
+          "name": "Services that expose a health endpoint have ready endpoints",
+          "ok": true,
+          "detail": "trustiot-smoke-echo:http/healthz, trustiot-smoke-echo:http/readyz, trustiot-clickhouse:http/ping",
+          "durationMs": 116
+        },
+        {
+          "name": "helm uninstall leaves no object of the release",
+          "ok": true,
+          "detail": "all objects removed",
+          "durationMs": 489
+        },
+        {
+          "name": "ingress e2e test (deploy/chart/tests/e2e)",
+          "ok": true,
+          "detail": "61 passed, 0 failed",
+          "durationMs": 198588
+        },
+        {
+          "name": "delete the namespace",
+          "ok": true,
+          "detail": "deleted",
+          "durationMs": 10618
+        }
+      ],
+      "durationMs": 221333
+    }
+  ],
+  "ok": true
+}
