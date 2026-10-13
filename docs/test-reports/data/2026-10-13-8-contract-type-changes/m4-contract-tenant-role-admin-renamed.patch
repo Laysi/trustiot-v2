@@ -1,0 +1,40 @@
+diff --git a/crates/contract/src/identity.rs b/crates/contract/src/identity.rs
+index 0d5e1c9..5a5777f 100644
+--- a/crates/contract/src/identity.rs
++++ b/crates/contract/src/identity.rs
+@@ -71,7 +71,8 @@ pub enum TenantRole {
+     /// Also changes devices, models, alert rules and other configuration.
+     Editor,
+     /// Also manages members, the plan, and tenant settings.
+-    Admin,
++    #[serde(rename = "admin")]
++    Owner,
+     /// A role this build does not know, from a newer identity service during a rolling update.
+     /// It grants nothing; the identity service never issues it.
+     #[serde(other)]
+@@ -93,7 +94,7 @@ impl TenantRole {
+         match self {
+             Self::Viewer => Some(0),
+             Self::Editor => Some(1),
+-            Self::Admin => Some(2),
++            Self::Owner => Some(2),
+             Self::Unrecognized => None,
+         }
+     }
+@@ -213,12 +214,12 @@ mod tests {
+ 
+     #[test]
+     fn roles_include_lower_roles_and_unknown_roles_grant_nothing() {
+-        use TenantRole::{Admin, Editor, Unrecognized, Viewer};
+-        assert!(Admin.includes(Editor) && Admin.includes(Viewer) && Editor.includes(Viewer));
+-        assert!(!Viewer.includes(Editor) && !Editor.includes(Admin));
++        use TenantRole::{Owner, Editor, Unrecognized, Viewer};
++        assert!(Owner.includes(Editor) && Owner.includes(Viewer) && Editor.includes(Viewer));
++        assert!(!Viewer.includes(Editor) && !Editor.includes(Owner));
+         let unknown: TenantRole = serde_json::from_value(json!("auditor")).expect("deserialize");
+         assert_eq!(unknown, Unrecognized);
+-        for role in [Viewer, Editor, Admin, Unrecognized] {
++        for role in [Viewer, Editor, Owner, Unrecognized] {
+             assert!(!Unrecognized.includes(role), "{role:?}");
+             assert!(!role.includes(Unrecognized), "{role:?}");
+         }

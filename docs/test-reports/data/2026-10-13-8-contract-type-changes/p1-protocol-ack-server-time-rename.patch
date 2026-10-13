@@ -1,0 +1,23 @@
+diff --git a/crates/protocol/src/telemetry.rs b/crates/protocol/src/telemetry.rs
+index 4e1148c..c906f31 100644
+--- a/crates/protocol/src/telemetry.rs
++++ b/crates/protocol/src/telemetry.rs
+@@ -202,7 +202,8 @@ pub struct TelemetryAck {
+     pub outcome: AckOutcome,
+     /// The cloud's clock when it sent the acknowledgement. Informational; a gateway may use it
+     /// to notice that its own clock is wrong.
+-    pub server_time: UnixMillis,
++    #[serde(rename = "server_time")]
++    pub sent_at: UnixMillis,
+ }
+ 
+ /// What the cloud did with a batch. Encoded as a map whose `status` names the variant;
+@@ -367,7 +368,7 @@ impl<F: DeserializeOwned> AckWire<F> {
+             stream,
+             seq,
+             outcome: outcome(fields),
+-            server_time,
++            sent_at: server_time,
+         })
+     }
+ }
