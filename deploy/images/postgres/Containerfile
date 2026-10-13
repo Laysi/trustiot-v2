@@ -7,9 +7,9 @@
 
 # The CloudNativePG image: in the final image it is linux/arm64; the build stage uses the build
 # machine's variant of the same multi-arch index, so pg_config reports the same version and paths.
-FROM ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie@sha256:37ade18dbdddba430858c72725aceeec66f33fa5333e82ea1df4942f6c1c83a3 AS base
+FROM ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie@sha256:c9be7f221a05b18fe65259d9136affbabe3b39ad91c3b68f8f2f990a45f35f38 AS base
 
-FROM --platform=$BUILDPLATFORM ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie@sha256:37ade18dbdddba430858c72725aceeec66f33fa5333e82ea1df4942f6c1c83a3 AS build
+FROM --platform=$BUILDPLATFORM ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie@sha256:c9be7f221a05b18fe65259d9136affbabe3b39ad91c3b68f8f2f990a45f35f38 AS build
 
 # Apache AGE source release (signed by the AGE release manager; the SHA-512 is the one published
 # next to the tarball on archive.apache.org). The tarball comes from Apache's mirror network first
