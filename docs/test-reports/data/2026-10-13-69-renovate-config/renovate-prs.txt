@@ -1,0 +1,38 @@
+Renovate pull requests requested from the Dependency Dashboard (Laysi/trustiot-v2#389) on 2026-10-13, merged by squash
+
+PR #393 chore(deps): update github actions
+  head 2656d4b, merged 2026-10-13T01:37:57Z as e6caf8e
+  ci run 38332732278 (pull_request): success; no nightly run (release.yml is not in its paths)
+PR #391 chore(deps): update ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie docker digest to c9be7f2
+  rebased by Renovate onto main e6caf8e (head a8266ff), merged 2026-10-13T01:55:26Z as 0161279
+  ci run 38333163021 (pull_request, merge commit bcbf519): success, postgres-image job built and tested the image
+  nightly run 38333162837 (pull_request, merge commit bcbf519): success, both values files 61 passed 0 failed
+PR #392 chore(deps): update docker.io/oven/bun docker tag to v1.4.3
+  rebased by Renovate onto main 0161279 (head b91ef0c), merged 2026-10-13T02:05:23Z as 659788c
+  ci run 38334542624 (pull_request, merge commit ab4d081): success
+  nightly run 38334542704 (pull_request, merge commit ab4d081): success, built the identity double from the new base, both values files 61 passed 0 failed
+
+Pinned lines each merge commit changed, and what the upstream tag resolved to when checked (pr-evidence.sh):
+checked at 2026-10-13T01:56:48Z
+
+== e6caf8e chore(deps): update github actions (#393)
+-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
++      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
++      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+action actions/download-artifact v8.0.2: pinned 9000827ccba6bdab643e8b6fd33ac0654aef8333, tag resolves to 9000827ccba6bdab643e8b6fd33ac0654aef8333: MATCH
+action actions/upload-artifact v7.0.2: pinned cf430e030ddbb5b0abf93d22962f4752f3646cd9, tag resolves to cf430e030ddbb5b0abf93d22962f4752f3646cd9: MATCH
+
+== 0161279 chore(deps): update ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie docker digest to c9be7f2 (#391)
+-FROM ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie@sha256:37ade18dbdddba430858c72725aceeec66f33fa5333e82ea1df4942f6c1c83a3 AS base
++FROM ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie@sha256:c9be7f221a05b18fe65259d9136affbabe3b39ad91c3b68f8f2f990a45f35f38 AS base
+-FROM --platform=$BUILDPLATFORM ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie@sha256:37ade18dbdddba430858c72725aceeec66f33fa5333e82ea1df4942f6c1c83a3 AS build
++FROM --platform=$BUILDPLATFORM ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie@sha256:c9be7f221a05b18fe65259d9136affbabe3b39ad91c3b68f8f2f990a45f35f38 AS build
+image ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie: pinned sha256:c9be7f221a05b18fe65259d9136affbabe3b39ad91c3b68f8f2f990a45f35f38, tag resolves to sha256:c9be7f221a05b18fe65259d9136affbabe3b39ad91c3b68f8f2f990a45f35f38: MATCH
+
+checked at 2026-10-13T02:05:25Z
+
+== 659788c chore(deps): update docker.io/oven/bun docker tag to v1.4.3 (#392)
+-FROM docker.io/oven/bun:1.4.2-distroless@sha256:1a0c31c7c5f9d193aedf60fe1cebdeb76ac8f6e29f24be8dd8cbd6df72df26ec
++FROM docker.io/oven/bun:1.4.3-distroless@sha256:1aaa515018b0b37d95dbdebd55d1b7f37ad258a6289ba63e4bc3b9c9e3038697
+image docker.io/oven/bun:1.4.3-distroless: pinned sha256:1aaa515018b0b37d95dbdebd55d1b7f37ad258a6289ba63e4bc3b9c9e3038697, tag resolves to sha256:1aaa515018b0b37d95dbdebd55d1b7f37ad258a6289ba63e4bc3b9c9e3038697: MATCH

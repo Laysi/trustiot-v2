@@ -1,0 +1,60 @@
+renovate/docker.io-alpine-git-2.x (1 update(s), 1 file(s))
+  regex	deploy/flux/tests/e2e/lab.e2e.ts	docker.io/alpine/git	v2.52.0@4a0e72d49596 -> minor v2.54.0@ce84fd6a057b
+renovate/docker.io-charmcli-soft-serve-0.x (1 update(s), 1 file(s))
+  regex	deploy/flux/tests/e2e/lab.e2e.ts	docker.io/charmcli/soft-serve	v0.9.1@c1baa7e942a6 -> minor v0.12.3@e8a12ff7f112
+renovate/docker.io-clickhouse-clickhouse-server-26.8 (3 update(s), 3 file(s))
+  regex	scripts/lib/stack.ts	docker.io/clickhouse/clickhouse-server	26.8@110d3d1f8e1e -> digest 26.8@dd81097e2c38
+  regex	services/ingest/tests/common/mod.rs	docker.io/clickhouse/clickhouse-server	26.8@110d3d1f8e1e -> digest 26.8@dd81097e2c38
+  regex	deploy/chart/values.yaml	docker.io/clickhouse/clickhouse-server	26.8@110d3d1f8e1e -> digest 26.8@dd81097e2c38
+renovate/docker.io-otel-opentelemetry-collector-contrib-0.x (1 update(s), 1 file(s))
+  regex	deploy/chart/values.yaml	docker.io/otel/opentelemetry-collector-contrib	0.161.0@fd328de25524 -> minor 0.162.0@39923a8e431b
+renovate/https-codeberg.org-ziglang-zig-0.x (1 update(s), 1 file(s))
+  regex	.prototools	https://codeberg.org/ziglang/zig	0.16.0 -> minor 0.17.0
+renovate/pin-dependencies (40 update(s), 1 file(s))
+  cargo	Cargo.toml	axum	0.8.9 -> pin =0.8.9
+  cargo	Cargo.toml	base64	0.22.1 -> pin =0.22.1
+  cargo	Cargo.toml	cbor4ii	1.2.3 -> pin =1.2.3
+  cargo	Cargo.toml	cc	1.5.1 -> pin =1.7.0
+  cargo	Cargo.toml	chrono	0.4.45 -> pin =0.4.45
+  cargo	Cargo.toml	ed25519-dalek	3.0.0 -> pin =3.0.0
+  cargo	Cargo.toml	getrandom	0.4.3 -> pin =0.4.3
+  cargo	Cargo.toml	http	1.5.0 -> pin =1.5.0
+  cargo	Cargo.toml	humantime	2.4.0 -> pin =2.4.0
+  cargo	Cargo.toml	hyper	1.12.0 -> pin =1.12.0
+  cargo	Cargo.toml	log	0.4.34 -> pin =0.4.34
+  cargo	Cargo.toml	opentelemetry	0.33.1 -> pin =0.33.1
+  cargo	Cargo.toml	opentelemetry-otlp	0.33.1 -> pin =0.33.1
+  cargo	Cargo.toml	opentelemetry-proto	0.33.1 -> pin =0.33.1
+  cargo	Cargo.toml	opentelemetry_sdk	0.33.1 -> pin =0.33.1
+  cargo	Cargo.toml	percent-encoding	2.3.2 -> pin =2.3.2
+  cargo	Cargo.toml	proc-macro2	1.0.107 -> pin =1.0.107
+  cargo	Cargo.toml	prost	0.14.4 -> pin =0.14.4
+  cargo	Cargo.toml	rcgen	0.14.10 -> pin =0.14.10
+  cargo	Cargo.toml	reqwest	0.13.5 -> pin =0.13.5
+  cargo	Cargo.toml	rustls-pki-types	1.15.1 -> pin =1.15.1
+  cargo	Cargo.toml	serde	1.0.229 -> pin =1.0.229
+  cargo	Cargo.toml	serde_json	1.0.151 -> pin =1.0.151
+  cargo	Cargo.toml	sha2	0.11.0 -> pin =0.11.0
+  cargo	Cargo.toml	socket2	0.6.5 -> pin =0.6.5
+  cargo	Cargo.toml	sqlx	0.9.0 -> pin =0.9.0
+  cargo	Cargo.toml	syn	2.0.119 -> pin =2.0.119
+  cargo	Cargo.toml	thiserror	2.0.21 -> pin =2.0.21
+  cargo	Cargo.toml	tokio	1.53.2 -> pin =1.53.2
+  cargo	Cargo.toml	tokio-util	0.7.20 -> pin =0.7.20
+  cargo	Cargo.toml	toml	1.1.8 -> pin =1.1.8
+  cargo	Cargo.toml	tower	0.5.3 -> pin =0.5.3
+  cargo	Cargo.toml	tower-http	0.7.1 -> pin =0.7.1
+  cargo	Cargo.toml	tracing	0.1.44 -> pin =0.1.44
+  cargo	Cargo.toml	tracing-log	0.2.0 -> pin =0.2.0
+  cargo	Cargo.toml	tracing-opentelemetry	0.34.0 -> pin =0.34.0
+  cargo	Cargo.toml	tracing-subscriber	0.3.23 -> pin =0.3.23
+  cargo	Cargo.toml	utoipa	6.0.0 -> pin =6.0.0
+  cargo	Cargo.toml	uuid	1.28.0 -> pin =1.28.0
+  cargo	Cargo.toml	zeroize	1.9.1 -> pin =1.9.1
+renovate/rust-crates (1 update(s), 1 file(s))
+  cargo	Cargo.toml	base64	0.22.1 -> minor 0.23.0
+renovate/scripts-packages (2 update(s), 2 file(s))
+  bun	deploy/host/package.json	@types/bun	1.4.2 -> patch 1.4.3
+  bun	scripts/package.json	@types/bun	1.4.2 -> patch 1.4.3
+renovate/syn-3.x (1 update(s), 1 file(s))
+  cargo	Cargo.toml	syn	2.0.119 -> major 3.0.0

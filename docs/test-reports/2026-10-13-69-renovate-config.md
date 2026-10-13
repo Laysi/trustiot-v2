@@ -1,6 +1,6 @@
 # Renovate 設定修正：第一個 Dependency Dashboard 顯示的問題
 
-對應 issue：Laysi/trustiot-v2#69 的第二條驗收條件「Renovate 開出的 PR 保持 SHA 與 digest 釘選」的前置工作。Renovate GitHub App 於 2026-10-13 建立 Dependency Dashboard（Laysi/trustiot-v2#389），列出的更新與警告顯示 `renovate.json5` 有五個問題，第一次排程（2026-10-19 週一 06:00 前，台北時間）前要修正；另外確認第一次「pin dependencies」PR 對 Rust workspace 相依加上的 `=` 釘選不會讓 workspace 建置失敗。
+對應 issue：Laysi/trustiot-v2#69 的第二條驗收條件「Renovate 開出的 PR 保持 SHA 與 digest 釘選」。Renovate GitHub App 於 2026-10-13 建立 Dependency Dashboard（Laysi/trustiot-v2#389），列出的更新與警告顯示 `renovate.json5` 有五個問題，第一次排程（2026-10-19 週一 06:00 前，台北時間）前要修正；另外確認第一次「pin dependencies」PR 對 Rust workspace 相依加上的 `=` 釘選不會讓 workspace 建置失敗。第二輪（同一天）處理同一個 pin 寫在好幾個檔案的情況，讓 ClickHouse 只跟 LTS（見「同一個 pin 的多份副本」）。最後一節是從 Dashboard 提前要求的三個 Renovate PR 的證據。
 
 ## 環境
 
@@ -8,7 +8,7 @@
 - Renovate：容器映像 `ghcr.io/renovatebot/renovate:44.155.1@sha256:f5796f26088c0f5debb07c16fa9e801145e4d3ba9717d9cc22ca8cd265e2a0eb`（2026-10-12 建立的 multi-arch index），以 podman 執行。proto 沒有 Renovate 的 plugin，所以用釘選 digest 的官方映像，這是組織規則允許的最窄替代做法。Mend 代管的 App 跑的版本不由我們決定，可能較新。
 - 沒有 GitHub token：本機執行時 Renovate 對 GitHub 上的資料來源（GitHub Actions、`github-releases`、`github-tags`，例如 `go`、`fluxcd/flux2`、`kubernetes/kubernetes`）一律標 `github-token-required` 不查詢。這些依賴的規則改以 Renovate 本身的程式（package rule 比對、versioning 與版本篩選、auto-replace）在同一個映像裡驗證，見下方。Docker Hub 與 ghcr 的查詢不需要 token。
 - Rust 的建置檢查：建置主機（x86_64，經 check queue `rcheck.sh`），Rust 1.99.0。
-- 分支 `fix/69-renovate-config`，基於 main `45f29d7`。「之前」是 main 的 `renovate.json5`，「之後」是本分支的。
+- 分支 `fix/69-renovate-config`。第一輪基於 main `45f29d7`：「之前」是 main 的 `renovate.json5`，「之後」是第一輪的設定。第二輪基於 main `659788c`（已含 #391–#393），「最終」是第二輪的設定與檔案。
 - 日期：2026-10-13（Asia/Taipei）。
 
 ## 指令
@@ -97,7 +97,7 @@ dry run 的依賴與更新逐行列在 [lookup-before.tsv](data/2026-10-13-69-re
 
 其他 values 檔：`deploy/chart/tests/values/smoke.yaml` 與 `deploy/chart/tests/e2e/values-e2e.yaml` 的 whoami 是不加引號的 `v1.12.0`，修正前後都讀得到；`values-saas.yaml`、`values-onprem.yaml` 與 `deploy/flux/` 的 values 沒有映像。`deploy/flux/clusters/saas/flux-system/kustomization.yaml` 的 Flux 控制器映像被 kustomize manager 以 `invalid-dependency-specification` 略過（`newTag` 加 `digest`），它們本來就由 `bun scripts/flux/components.ts` 重寫，不需要 Renovate。
 
-ClickHouse 的浮動 tag：values 的 `"26.8"` 釘在 `110d3d1f…`，而 2026-10-13 的 `26.8` 已指向 `dd81097e…`（skopeo 查到的 index digest），所以修正後會多一個只換 digest 的 PR（分支 `renovate/docker.io-clickhouse-clickhouse-server-26.8`），帶進 26.8 的新 patch 版。每一種更新（digest、minor）都會重寫 digest，符合「浮動 minor tag 加 digest」可以接受的條件。另外 Renovate 會提議 `26.9`：ClickHouse 的 LTS 是每年的 `.3` 與 `.8`，26.9 不是 LTS，支援期較短；可行性驗證用的是 26.8 LTS。要不要讓 Renovate 只提議 LTS（例如 `allowedVersions` 只允許 `.3`、`.8`）是產品決定，本次沒有改，列為後續。
+ClickHouse 的浮動 tag：values 的 `"26.8"` 釘在 `110d3d1f…`，而 2026-10-13 的 `26.8` 已指向 `dd81097e…`（skopeo 查到的 index digest），所以修正後會多一個只換 digest 的 PR（分支 `renovate/docker.io-clickhouse-clickhouse-server-26.8`），帶進 26.8 的新 patch 版。每一種更新（digest、minor）都會重寫 digest，符合「浮動 minor tag 加 digest」可以接受的條件。另外 Renovate 會提議 `26.9`：ClickHouse 的 LTS 是每年的 `.3` 與 `.8`，26.9 不是 LTS，支援期較短；values 與 `deploy/chart/README.md` 記的是 26.8 LTS。第二輪讓 ClickHouse 只跟 LTS，並發現這個只換 digest 的 PR 只改 values.yaml、會讓 CI 失敗（另外兩份副本沒被讀到），見「同一個 pin 的多份副本」。
 
 ### 4. Dashboard 的標籤
 
@@ -149,5 +149,103 @@ dry run 規劃的 40 個釘選（[pins.txt](data/2026-10-13-69-renovate-config/p
 - `=` 釘選在 `serde`、`syn`、`proc-macro2`、`tokio` 這類很多 crate 共用的相依上：某個相依的新版要求更高的 patch（例如新的 `serde_json` 要求更新的 `serde`）時，必須和那個被釘選的 crate 在同一個 PR 一起升，否則 Renovate 的 lock 更新會失敗。目前 minor 與 patch 都合在每週的 `rust crates` PR，通常會一起升；若某個更新單獨開 PR（例如 major 或 `minimumReleaseAge` 等規則日後拆開），可能出現 artifact 錯誤，要手動合併處理。
 - 釘選之後，每月的 lock file maintenance 只移動間接相依；直接相依的 patch（`cc` 1.8.0、`serde_json` 1.0.154、`sha2` 0.11.1）改由 `rust crates` PR 帶進，資安修補由 `vulnerabilityAlerts` 隨時開 PR。
 - `renovate-config-validator` 不檢查 `regex:` versioning 的內容；由 `bun test scripts/nightly` 編譯並以實際 tag 測試。
-- ClickHouse 是否只跟 LTS（見上方第 3 項）待決定。
 - 第 4、5 項與 `github-tags` 的實際查詢，在 App 下一次執行後看 Dashboard 確認。
+- 刻意擋下的四種 PR（ClickHouse 換 LTS minor、collector 換版本、k3s、Istio）會開出來但 CI 失敗，要有人完成另一半，見下一節。
+- `docker.io/library/registry` 在 `deploy/flux/tests/e2e/lab.e2e.ts`（`3.1.2`）與 `scripts/README.md`（`3`）是兩個 tag，今天剛好同一個 digest；它們是各自獨立的 pin，會分開更新。
+
+## 同一個 pin 的多份副本（第二輪）
+
+### 問題
+
+Renovate 的 PR 只改它讀得到的副本。第一輪修正後的 dry run 有一個只換 digest 的 ClickHouse PR（`26.8@110d3d1f… → 26.8@dd81097e…`），但它只改 `deploy/chart/values.yaml`：`scripts/lib/stack.ts` 與 `services/ingest/tests/common/mod.rs` 寫成 `docker.io/clickhouse/clickhouse-server@sha256:…`，沒有 tag，Renovate 讀不到；chart 測試要求三份相同，這個 PR 的 CI 會失敗（下方模擬 C）。另外 chart 測試寫死 collector 的 digest，連同一版本的新 digest 也會讓 CI 失敗。
+
+### 變更
+
+- 只寫 digest 的映像都補上 tag（`名稱:tag@sha256:…`）：`stack.ts` 的四個映像（AGE、ClickHouse、Mosquitto、服務映像的 distroless 基底）、`mod.rs` 的 ClickHouse、`crates/protocol/tests/broker.rs` 的 Mosquitto。digest 不變；podman 與 docker 都接受這個寫法（podman 6.1.3 實際 `run` 與 `rmi` 過）。
+- `scripts/README.md` 的指令也由映像的自訂 manager 讀取。
+- ClickHouse 只跟 LTS：`allowedVersions: "/^\\d+\\.(3|8)$/"`。
+- chart 測試：ClickHouse 比對三份完整的 `名稱:tag@digest`，minor 由 `CLICKHOUSE_MINOR` 固定；collector 不再寫死 digest，版本由 `EXPORTER_VERSION` 固定。collector 換版本的 PR 帶 `prBodyNotes` 說明。
+- `scripts/nightly/renovate.test.ts` 新增：Renovate 讀映像的檔案裡每個 digest 都屬於讀得到的 pin；同一個映像與 tag 的每份 digest 相同；同一個映像只有一種寫法；ClickHouse 的 LTS 規則；collector 的說明；nightly 的 k3s、Istio 與主機的版本相同。原本的「Istio 版本有被讀到」測試寫死 1.30.5，每個 Istio PR 都會因此失敗，改成讀 workflow 裡的值。
+- 文件：`docs/architecture/ci-release.md`「同一個 pin 的多份副本」、`deploy/chart/README.md` 與 `values.yaml` 的說明。
+
+### 每個 pin
+
+「完整」表示一個 Renovate PR 改完所有副本，CI 會過；「刻意擋下」表示 PR 會開，但 CI 失敗，直到有人完成 Renovate 做不到的部分。
+
+| pin | 副本與讀取的 manager | PR |
+| --- | --- | --- |
+| `docker.io/clickhouse/clickhouse-server:26.8` | `deploy/chart/values.yaml`（chart values 自訂 manager）、`scripts/lib/stack.ts`、`services/ingest/tests/common/mod.rs`（`名稱:tag@digest` 自訂 manager，第二輪補 tag） | digest：完整（三個檔案一個分支，模擬 B 通過）。換 LTS minor：刻意擋下（`CLICKHOUSE_MINOR`；決策 14 的租戶隔離分析與 `services/ingest` 的內省測試是在 26.8 上做的） |
+| `docker.io/otel/opentelemetry-collector-contrib:0.161.0` | `deploy/chart/values.yaml`（chart values）；e2e 從 values 讀，chart 測試不再寫 digest | digest：完整（模擬 E 通過）。換版本：刻意擋下（`EXPORTER_VERSION`；`0006_logs.sql` 照 v0.161.0 exporter 的表結構） |
+| `gcr.io/distroless/cc-debian13:nonroot` | `crates/service-kit/tests/container.rs`、`verify_container.rs`、`scripts/lib/stack.ts`（`名稱:tag@digest`，`stack.ts` 第二輪補 tag）、`deploy/chart/tests/e2e/example-service/Containerfile`（dockerfile manager） | 完整：四個檔案、兩個 manager 同一個分支 |
+| `docker.io/library/eclipse-mosquitto:2.1.2-alpine` | `crates/protocol/tests/broker.rs`、`scripts/lib/stack.ts`（第二輪兩份都補 tag；之前都讀不到，不會更新） | 完整：兩個檔案一個分支 |
+| `docker.io/traefik/whoami:v1.12.0` | `deploy/chart/tests/chart.test.ts`、`deploy/chart/tests/e2e/values-e2e.yaml`、`deploy/chart/tests/values/smoke.yaml`（`名稱:tag@digest`） | 完整：三個檔案一個分支 |
+| `docker.io/apache/age:release_PG18_1.8.0` | `scripts/lib/stack.ts`（第二輪補 tag；tag 不是版本號，只會有 digest 更新） | 完整（一份） |
+| `docker.io/library/registry:3.1.2` 與 `:3` | `deploy/flux/tests/e2e/lab.e2e.ts`；`scripts/README.md`（第二輪起讀取） | 完整：兩個 tag 各自一個分支 |
+| `docker.io/library/postgres:18.6-alpine` | `crates/service-kit/tests/support/start.rs` | 完整（一份） |
+| `ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie` | `deploy/images/postgres/Containerfile` 的兩個 `FROM`（dockerfile manager） | digest：完整（#391 改了兩行）。換 minor：`postgres-image` job 檢查伺服器標頭（既有，見該目錄的 README） |
+| `docker.io/oven/bun:*-distroless`、`gcr.io/distroless/static-debian13:nonroot`、`docker.io/charmcli/soft-serve`、`docker.io/alpine/git` | 各一份（Containerfile 或 `lab.e2e.ts`） | 完整 |
+| `rancher/k3s` | `.github/workflows/nightly.yml`（`名稱:tag@digest`）；主機的 `K3S_VERSION`、安裝程式網址與 SHA-256（`deploy/host/src/desired.ts`）Renovate 讀不到，SHA-256 也算不出來 | 刻意擋下（新測試；模擬 G）。之前不會失敗，nightly 會悄悄和主機不同版 |
+| Istio（`ISTIO_VERSION`） | `nightly.yml`（`# renovate:` 註解）；`deploy/istio/README.md` 的四個 `helm install --version` 讀不到 | 刻意擋下（新測試；模擬 H）。lab 與 SaaS 主機要手動升級 |
+| Flux | `.prototools` 的 `flux`；`gotk-components.yaml` 與 `kustomization.yaml` 的控制器 digest 由 `components.ts` 重寫 | 刻意擋下（既有，`bun test deploy/flux`） |
+| Rust 工具鏈 | `.prototools` 的 `rust` 與 `rust-toolchain.toml` | 完整（同一個群組；`repo-check` 檢查兩者相同） |
+| GitHub Actions | 三個 workflow 與本地 action 的每個 `uses:` | 完整（同一個群組；#393） |
+| `@types/bun` | `scripts/` 與 `deploy/host/` 的 `package.json` | 完整（同一個群組） |
+| Rust crate | 根目錄 `Cargo.toml` 的 `[workspace.dependencies]` 與 `Cargo.lock` | 完整（一份） |
+| `.prototools` 的其他工具（bun、go、kubectl、helm、zig 等） | 各一份；測試裡出現的版本號是假路徑的範例，不是副本 | 完整 |
+| 不由 Renovate 更新 | `GATEWAY_API_VERSION`、`CNPG_VERSION`、`PROTO_VERSION`、`AGE_VERSION`（`docs/architecture/ci-release.md` 的清單） | 手動 |
+
+### Dry run（最終設定）
+
+`renovate-config-validator --strict` 通過（[validator-final.txt](data/2026-10-13-69-renovate-config/validator-final.txt)）。`--dry-run=lookup` 的結果在 [lookup-final.tsv](data/2026-10-13-69-renovate-config/lookup-final.tsv)，依分支整理在 [branches-final.txt](data/2026-10-13-69-renovate-config/branches-final.txt)：
+
+- ClickHouse：只有 `renovate/docker.io-clickhouse-clickhouse-server-26.8` 一個分支，3 個更新、3 個檔案（`deploy/chart/values.yaml`、`scripts/lib/stack.ts`、`services/ingest/tests/common/mod.rs`），都是 `26.8@110d3d1f8e1e → 26.8@dd81097e2c38`。第一輪的 `26.9@387ebbcca253` 不再出現。
+- 以 Renovate 的 auto-replace 依序套用這個分支的三個更新（[autoreplace-clickhouse.txt](data/2026-10-13-69-renovate-config/autoreplace-clickhouse.txt)）：三個檔案各改一行 digest，沒有失敗。
+- 沒有警告。
+
+其他映像今天沒有新 digest，所以另外做一份「tag 已經移動」的快照（[make-stale.ts](data/2026-10-13-69-renovate-config/make-stale.ts)：distroless、Mosquitto、whoami、collector、registry、AGE 的 digest 改成假的舊值，所有副本一起改，改了哪些檔案見 [stale-files.txt](data/2026-10-13-69-renovate-config/stale-files.txt)），再跑一次 dry run（[lookup-stale.tsv](data/2026-10-13-69-renovate-config/lookup-stale.tsv)、[branches-stale.txt](data/2026-10-13-69-renovate-config/branches-stale.txt)）：
+
+| 分支 | 更新 | 檔案 |
+| --- | --- | --- |
+| `renovate/gcr.io-distroless-cc-debian13-nonroot` | 4 | `example-service/Containerfile`（dockerfile）、`container.rs`、`verify_container.rs`、`stack.ts` |
+| `renovate/docker.io-library-eclipse-mosquitto-2.1.2-alpine` | 2 | `broker.rs`、`stack.ts` |
+| `renovate/docker.io-traefik-whoami-v1.12.0` | 3 | `chart.test.ts`、`values-e2e.yaml`、`smoke.yaml` |
+| `renovate/docker.io-otel-opentelemetry-collector-contrib-0.161.0` | 1 | `values.yaml`（只換 digest；換版本的 `0.162.0` 是另一個分支） |
+| `renovate/docker.io-library-registry-3.1.2`、`…-registry-3` | 1、1 | `lab.e2e.ts`；`scripts/README.md` |
+| `renovate/docker.io-apache-age-release_PG18_1.8.0` | 1 | `stack.ts` |
+
+這些分支以 auto-replace 套用的結果在 [autoreplace-stale.txt](data/2026-10-13-69-renovate-config/autoreplace-stale.txt)：10 個更新、9 個檔案，沒有失敗。
+
+### 模擬每一種 PR 的 CI
+
+[pr-simulation.ts](data/2026-10-13-69-renovate-config/pr-simulation.ts) 在建置主機的分支副本上依序套用每一種 PR 會做的改動，跑那個 PR 在 CI 會跑的 chart 測試（`bun test deploy/chart -t "bundled ClickHouse|OpenTelemetry collector"`）與 `bun test scripts/nightly/renovate.test.ts`，再還原。指令：`bash rcheck.sh 69r 'bun pr-simulation.tmp.ts'`（腳本暫時放在工作目錄，跑完刪除）；輸出：[pr-simulation.log](data/2026-10-13-69-renovate-config/pr-simulation.log)。
+
+| 情境 | chart 測試 | renovate.test.ts | 結論 |
+| --- | --- | --- | --- |
+| A：本分支不改 | 26 pass | 24 pass | |
+| B：ClickHouse 26.8 的 digest PR（三份） | 26 pass | 24 pass | 完整 |
+| C：同一個更新只改 values.yaml（第一輪設定會開的 PR） | ClickHouse 測試失敗 | 「同一個映像與 tag 的 digest 相同」失敗 | 第二輪修正的問題 |
+| D：換到 LTS 27.3（假 digest） | `CLICKHOUSE_MINOR` 失敗 | 24 pass | 刻意擋下 |
+| E：collector 同一版本的新 digest | 26 pass | 24 pass | 完整 |
+| F：collector 換到 0.162.0 | `EXPORTER_VERSION` 的兩個測試失敗 | collector 說明測試失敗 | 刻意擋下 |
+| G：k3s 換到 v1.36.6-k3s1（只改 nightly.yml） | 26 pass | nightly 與主機版本測試失敗 | 刻意擋下 |
+| H：Istio 換到 1.30.6（只改 nightly.yml） | 26 pass | nightly 與主機版本測試失敗 | 刻意擋下 |
+
+H 第一次跑時，原本寫死 1.30.5 的「Istio 版本有被讀到」測試也失敗；改成讀 workflow 的值之後重跑，只剩刻意的那一個。
+
+### 其他檢查
+
+- `bun test scripts/nightly` 112 pass、0 fail；`bun run --cwd scripts typecheck` 通過。
+- 把 `stack.ts` 的 ClickHouse 改回只寫 digest，新測試有兩個失敗（讀不到的 digest、副本不一致），還原後通過。
+- 建置主機（rcheck，`CI=1`，容器測試以 docker 執行、不會略過）：`cargo fmt --all --check` 通過；`cargo clippy --locked -p protocol -p ingest -p service-kit --all-targets -- -D warnings` 通過；`cargo test --locked -p protocol --test broker` 2 passed（以 `eclipse-mosquitto:2.1.2-alpine@sha256:…` 啟動 broker）；`cargo test --locked -p ingest` 全部通過（以 `clickhouse-server:26.8@sha256:…` 啟動 ClickHouse）；`cargo test --locked -p repo-check` 通過；`bun test scripts` 660 pass、2 skip、0 fail；`bun run --cwd scripts typecheck` 通過；`bun test deploy/chart` 288 pass、0 fail；`bun scripts/ci/check-secret-handling.ts` 沒有違規。
+
+## 第二條驗收條件：Renovate 開出的 PR 保持 SHA 與 digest 釘選
+
+2026-10-13 從 Dashboard 提前要求的三個 PR，各代表一種更新，都已 squash 合併。證據：[renovate-prs.txt](data/2026-10-13-69-renovate-config/renovate-prs.txt)，比對上游的腳本 [renovate-prs-evidence.sh](data/2026-10-13-69-renovate-config/renovate-prs-evidence.sh)（列出每個合併 commit 改動的釘選行，再查上游 tag 當時解析到的 commit 或 digest）。
+
+| PR | 更新種類 | 釘選 | 上游比對 | CI |
+| --- | --- | --- | --- | --- |
+| Laysi/trustiot-v2#393 | GitHub Actions | `actions/upload-artifact` 與 `actions/download-artifact` 各換成 40 字元 commit SHA，行尾版本註解跟著改（`# v7.0.2`、`# v8.0.2`） | 兩個 SHA 都與 tag 解析到的 commit 相同（MATCH） | ci run 38332732278 成功；沒有觸發 nightly（release.yml 不在它的路徑內） |
+| Laysi/trustiot-v2#391 | 只換 digest | `deploy/images/postgres/Containerfile` 的兩個 `FROM` 都只換 digest（`37ade18d… → c9be7f22…`），tag `18.6-minimal-trixie` 不變 | digest 與 tag 當時解析到的相同（MATCH） | 在當時 main 的合併 commit 上 ci run 38333163021 成功（含 `postgres-image` job 建置並測試映像）；PR 的 nightly smoke run 38333162837 成功，兩份 values 都 61 passed、0 failed |
+| Laysi/trustiot-v2#392 | tag 與 digest | identity double 的 `FROM docker.io/oven/bun:1.4.2-distroless@… → 1.4.3-distroless@sha256:1aaa5150…`，tag 與 digest 一起換 | digest 與 tag 當時解析到的相同（MATCH） | 在當時 main 的合併 commit 上 ci run 38334542624 成功；PR 的 nightly smoke run 38334542704 成功（以新基底建置 identity double），兩份 values 都 61 passed、0 failed |
+
+這份證據涵蓋從 Dashboard 提前要求的三種更新。本分支的設定修正，處理的是 Dashboard 在第一次排程（2026-10-19）前顯示的問題，以及上面多份副本的情況；排程開出的 PR 要在之後各自檢查。

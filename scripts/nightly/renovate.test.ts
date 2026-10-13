@@ -17,6 +17,8 @@ interface Rule {
   matchPackageNames?: string[];
   allowedVersions?: string;
   versioning?: string;
+  matchUpdateTypes?: string[];
+  prBodyNotes?: string[];
 }
 interface Manager {
   customType: string;
@@ -30,6 +32,7 @@ interface Config {
   pinDigests?: boolean;
   rangeStrategy?: string;
   ignorePresets?: string[];
+  ignorePaths?: string[];
   packageRules: Rule[];
   customManagers: Manager[];
 }
@@ -83,7 +86,10 @@ describe("annotated workflow versions", () => {
   test("the Istio version is one of them", () => {
     const text = readFileSync(join(REPO_ROOT, ".github", "workflows", "nightly.yml"), "utf8");
     const groups = [...text.matchAll(new RegExp(manager!.matchStrings[0]!, "g"))].map((m) => m.groups);
-    expect(groups).toContainEqual(expect.objectContaining({ depName: "istio/istio", currentValue: "1.30.5" }));
+    // Read from the workflow, not written here: a Renovate pull request changes only nightly.yml.
+    const istio = /ISTIO_VERSION: (\d+\.\d+\.\d+)$/m.exec(text)?.[1];
+    expect(istio).toBeDefined();
+    expect(groups).toContainEqual(expect.objectContaining({ depName: "istio/istio", currentValue: istio }));
   });
 });
 
@@ -235,5 +241,107 @@ describe("chart values images", () => {
       expect({ file, read: read.sort() }).toEqual({ file, read: expected.sort() });
     }
     expect(pinned).toBeGreaterThan(0);
+  });
+});
+
+// Every copy of a pin must be one Renovate reads and updates in the same pull request; a copy it
+// cannot read stays behind, and the pull request fails CI or leaves the copies disagreeing.
+describe("every copy of a pin is updated by the same pull request", () => {
+  const imageManagers = config.customManagers.filter((m) => m.matchStrings.some((s) => s.includes("currentDigest")));
+  const generic = imageManagers.find((m) => m.managerFilePatterns.some((p) => p.includes("rs|ts|ya?ml")))!;
+  const patternOf = (pattern: string) => new RegExp(pattern.replace(/^\/|\/$/g, ""));
+  // The repository's files as Renovate sees them: tracked files, minus ignorePaths.
+  const files = Bun.spawnSync(["git", "ls-files", "--cached", "--others", "--exclude-standard"], { cwd: REPO_ROOT })
+    .stdout.toString()
+    .split("\n")
+    .filter((file) => file !== "" && !(config.ignorePaths ?? []).some((glob) => new Bun.Glob(glob).match(file)));
+  // The dockerfile manager reads FROM lines in the same name:tag@digest form.
+  const isContainerfile = (file: string) => /(^|\/)(Containerfile|Dockerfile)$|\.Containerfile$/.test(file);
+  // Digests that no image manager reads, each written by a tool instead of Renovate.
+  const WRITTEN_BY_TOOLS: Record<string, string> = {
+    "deploy/flux/clusters/saas/flux-system/kustomization.yaml": "Flux controller images, rewritten by scripts/flux/components.ts with the flux pin",
+    "deploy/flux/clusters/saas/trustiot/chart.yaml": "the chart release.yml published, written by scripts/release/flux.ts",
+  };
+
+  interface Pin {
+    file: string;
+    image: string;
+    tag: string;
+    digest: string;
+  }
+  const pins: Pin[] = [];
+  const unread: string[] = [];
+  for (const file of files) {
+    const managers = imageManagers.filter((m) => m.managerFilePatterns.some((p) => patternOf(p).test(file)));
+    const readers = isContainerfile(file) ? [generic] : managers;
+    if (readers.length === 0) continue;
+    const text = readFileSync(join(REPO_ROOT, file), "utf8");
+    const read = new Set<string>();
+    for (const manager of readers) {
+      for (const match of text.matchAll(new RegExp(manager.matchStrings[0]!, "g"))) {
+        const { depName, currentValue, currentDigest } = match.groups!;
+        pins.push({ file, image: depName!, tag: currentValue!, digest: currentDigest! });
+        read.add(currentDigest!);
+      }
+    }
+    const all = [...text.matchAll(/sha256:[a-f0-9]{64}/g)].map((m) => m[0]);
+    if (all.some((digest) => !read.has(digest)) && WRITTEN_BY_TOOLS[file] === undefined) unread.push(file);
+  }
+
+  test("every digest in a file Renovate reads for images is part of a pin it reads", () => {
+    expect(pins.length).toBeGreaterThan(10);
+    // A bare name@sha256:… (no tag) is the usual cause: write it as name:tag@sha256:….
+    expect(unread).toEqual([]);
+  });
+
+  test("an image is always spelled the same way (Renovate tells copies apart by the spelling)", () => {
+    const canonical = (image: string) => image.replace(/^docker\.io\//, "").replace(/^library\//, "");
+    const spellings = new Map<string, Set<string>>();
+    for (const { image } of pins) spellings.set(canonical(image), (spellings.get(canonical(image)) ?? new Set()).add(image));
+    expect([...spellings].filter(([, set]) => set.size > 1).map(([, set]) => [...set])).toEqual([]);
+  });
+
+  test("all copies of an image and tag carry the same digest", () => {
+    const digests = new Map<string, Set<string>>();
+    for (const { image, tag, digest } of pins) digests.set(`${image}:${tag}`, (digests.get(`${image}:${tag}`) ?? new Set()).add(digest));
+    expect([...digests].filter(([, set]) => set.size > 1).map(([pin]) => pin)).toEqual([]);
+    // The images this was written for, each pinned in more than one file.
+    const copies = (image: string) => new Set(pins.filter((p) => p.image === image).map((p) => p.file)).size;
+    expect(copies("docker.io/clickhouse/clickhouse-server")).toBe(3);
+    expect(copies("docker.io/library/eclipse-mosquitto")).toBe(2);
+    expect(copies("gcr.io/distroless/cc-debian13")).toBe(4);
+  });
+
+  test("ClickHouse gets LTS minors only, and its floating tag is one", () => {
+    const lts = allowed(rulesFor((r) => r.matchPackageNames?.includes("docker.io/clickhouse/clickhouse-server") ?? false));
+    for (const tag of ["26.8", "27.3", "27.8"]) expect({ tag, allowed: lts.test(tag) }).toEqual({ tag, allowed: true });
+    // 26.9 is what the dashboard proposed on 2026-10-13; a full version would replace the floating tag.
+    for (const tag of ["26.9", "27.1", "26.8.22.13", "latest"]) expect({ tag, allowed: lts.test(tag) }).toEqual({ tag, allowed: false });
+    for (const { tag } of pins.filter((p) => p.image === "docker.io/clickhouse/clickhouse-server")) expect(lts.test(tag)).toBe(true);
+  });
+
+  test("a collector version change carries a note about the guard in the chart tests", () => {
+    const rule = rulesFor((r) => r.matchPackageNames?.includes("docker.io/otel/opentelemetry-collector-contrib") ?? false);
+    expect(rule.matchUpdateTypes).toEqual(["major", "minor", "patch"]);
+    expect(rule.prBodyNotes?.join(" ")).toContain("EXPORTER_VERSION");
+    const chartTests = readFileSync(join(REPO_ROOT, "deploy", "chart", "tests", "chart.test.ts"), "utf8");
+    const version = /^const EXPORTER_VERSION = "([^"]+)";$/m.exec(chartTests)?.[1];
+    const collector = pins.find((p) => p.image === "docker.io/otel/opentelemetry-collector-contrib" && p.file === "deploy/chart/values.yaml");
+    expect(collector?.tag).toBe(version);
+  });
+
+  test("the nightly's k3s and Istio are the versions the SaaS host and the lab install", () => {
+    const nightly = readFileSync(join(REPO_ROOT, ".github", "workflows", "nightly.yml"), "utf8");
+    const k3s = /K3S_IMAGE: rancher\/k3s:(v\d+\.\d+\.\d+)-(k3s\d+)@/.exec(nightly);
+    const host = readFileSync(join(REPO_ROOT, "deploy", "host", "src", "desired.ts"), "utf8");
+    const hostVersion = /^export const K3S_VERSION = "([^"]+)";$/m.exec(host)?.[1];
+    expect(hostVersion).toBe(`${k3s?.[1]}+${k3s?.[2]}`);
+    const installer = `https://raw.githubusercontent.com/k3s-io/k3s/${encodeURIComponent(hostVersion!)}/install.sh`;
+    expect(host).toContain(`K3S_INSTALLER_URL = "${installer}"`);
+    const istio = /ISTIO_VERSION: (\S+)/.exec(nightly)?.[1];
+    const readme = readFileSync(join(REPO_ROOT, "deploy", "istio", "README.md"), "utf8");
+    const installed = [...readme.matchAll(/--version (\S+)/g)].map((m) => m[1]);
+    expect(installed).toHaveLength(4);
+    expect(new Set(installed)).toEqual(new Set([istio]));
   });
 });

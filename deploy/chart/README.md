@@ -333,8 +333,8 @@ mesh:
 | `postgres.external.caSecret.key` | `ca.crt` | |
 | `clickhouse.mode` | `bundled` | `bundled`：叢集內自管（Laysi/trustiot-v2#59）；`external`：ClickHouse Cloud 等，只當備案（決策 14） |
 | `clickhouse.bundled.image.repository` | `docker.io/clickhouse/clickhouse-server` | |
-| `clickhouse.bundled.image.tag` | `26.8` | 26.8 LTS；實際版本由 digest 決定 |
-| `clickhouse.bundled.image.digest` | `sha256:110d3d1f…b40c` | 必填（版本固定），multi-arch index 的 digest，含 arm64；必須與 `scripts/lib/stack.ts` 和 `services/ingest/tests/common/mod.rs` 相同（測試比對） |
+| `clickhouse.bundled.image.tag` | `26.8` | 26.8 LTS；實際版本由 digest 決定。Renovate 只提議 LTS 的 minor（`.3`、`.8`），換 minor 的 PR 會被 chart 測試擋下，要先重做決策 14 的檢查（[CI 與發佈](../../docs/architecture/ci-release.md)「Renovate」） |
+| `clickhouse.bundled.image.digest` | 見 `values.yaml` | 必填（版本固定），multi-arch index 的 digest，含 arm64；tag 與 digest 必須與 `scripts/lib/stack.ts` 和 `services/ingest/tests/common/mod.rs` 相同（測試比對），Renovate 在同一個 PR 更新三處 |
 | `clickhouse.bundled.image.pullPolicy` | `IfNotPresent` | |
 | `clickhouse.bundled.adminUser` | `trustiot_admin` | bootstrap 管理帳號，有 access management 權限，只給 migration Job 使用；不能是 `default` |
 | `clickhouse.bundled.adminSecret.name` | `""`，`bundled` 時必填 | 放 bootstrap 管理帳號密碼的既有 Secret；服務的自訂 `env` 不能讀它 |
@@ -383,8 +383,8 @@ mesh:
 | `observability.sentry.dsnSecret.key` | `dsn` | |
 | `observability.collector.enabled` | `true` | 部署 OpenTelemetry collector，並把 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT` 交給每個服務；見「OpenTelemetry collector」 |
 | `observability.collector.image.repository` | `docker.io/otel/opentelemetry-collector-contrib` | contrib 版才有 ClickHouse exporter 與 redaction processor |
-| `observability.collector.image.tag` | `0.161.0` | 實際版本由 digest 決定；換版本前先對照 exporter 的欄位與 `0006_logs.sql`（測試比對） |
-| `observability.collector.image.digest` | `sha256:fd328de2…5ac1` | 必填（版本固定），multi-arch index 的 digest，含 arm64 |
+| `observability.collector.image.tag` | `0.161.0` | 實際版本由 digest 決定；換版本前先對照 exporter 的欄位與 `0006_logs.sql`（測試比對）：Renovate 換版本的 PR 會被 chart 測試的 `EXPORTER_VERSION` 擋下，直到有人對照過並改那個常數 |
+| `observability.collector.image.digest` | 見 `values.yaml` | 必填（版本固定），multi-arch index 的 digest，含 arm64；同一版本的新 digest 由 Renovate 單獨更新 |
 | `observability.collector.image.pullPolicy` | `IfNotPresent` | |
 | `observability.collector.clickhouse.user` | `trustiot_collector` | collector 的 ClickHouse 帳號，由 migration Job 建立並授予 `trustiot_otel_collector` 角色；不能是 `default` 或角色本身的名稱 |
 | `observability.collector.clickhouse.passwordSecret.name` | `""`，開啟時必填 | 放這個帳號密碼的既有 Secret；migration Job 用同一個 Secret 建帳號。服務的自訂 `env` 不能讀它 |
