@@ -42,8 +42,10 @@
  *    used: its literals, files and env files are plain text this check cannot verify. Templates
  *    (Helm `.yaml` and `.tpl` files with `{{ }}`) may not declare a Secret or a templated kind,
  *    except an empty Secret the migration Job fills: labelled `trustiot.io/filled-by: migrate`,
- *    with no key but apiVersion, kind, metadata and type, and no template action that could add
- *    one (docs/architecture/secrets.md).
+ *    with no key but apiVersion, kind, metadata and type, and no template action but the few
+ *    lines `FILLED_SECRET_ACTIONS` names word for word (docs/architecture/secrets.md). No template
+ *    may use a function that makes or reads secret material (`lookup`, `rand*`, `gen*`,
+ *    `derivePassword`, ...; `checkTemplateFunctions`).
  *    Manifests may also be JSON files.
  * 6. The build context is chosen at build time, which a static check cannot see, so every
  *    container build takes its arguments from `containerBuildArgs` (scripts/lib/build-context.ts),
@@ -1418,10 +1420,19 @@ function siblingKeys(lines: readonly string[], index: number, column: number, da
 const FILLED_BY_LINE = /^[ \t]*trustiot\.io\/filled-by:[ \t]*migrate[ \t]*$/;
 /** The only keys such a Secret may have: no `data`, no `stringData`, nothing that could carry them. */
 const EMPTY_SECRET_KEYS = new Set(["apiVersion", "kind", "metadata", "type"]);
-/** Template actions that render nothing: control flow, variables and comments. */
-const SILENT_ACTION = /^[ \t]*\{\{-?[ \t]*(?:if\b|else\b|end\b|range\b|with\b|\/\*|\$[A-Za-z_][A-Za-z0-9_]*[ \t]*:?=)/;
-/** A whole-line template action that renders text, and the indentation it renders it at. */
-const INDENTED_ACTION = /\|[ \t]*n?indent[ \t]+(\d+)[ \t]*-?\}\}[ \t]*$/;
+/**
+ * The only lines with a template action that such a Secret may hold, compared whole (trimmed):
+ * its name from the helper's list, the chart's standard labels, and the end of the range that
+ * declares one per consumer. Anything else (a templated annotation or label, a value from
+ * `.Values`, a function call, text after an action on the same line) is refused: a heuristic
+ * for "renders nothing" was bypassed in Laysi/trustiot-v2#60 round 4 (R1), so the exception is
+ * exact. The chart tests check the rendered Secrets key for key.
+ */
+const FILLED_SECRET_ACTIONS = new Set([
+  "name: {{ .name }}",
+  '{{- include "trustiot.componentLabels" (dict "root" $ "name" .component) | nindent 4 }}',
+  "{{- end }}",
+]);
 
 /**
  * The lines of the mapping that holds the key at `column` on line `index`, up to a document
@@ -1464,28 +1475,24 @@ function mappingLines(lines: readonly string[], index: number, column: number, d
  * Whether the Secret declared on line `index` is one the chart may declare: empty, for the
  * migration Job to fill (docs/architecture/secrets.md). It carries the label
  * `trustiot.io/filled-by: migrate`; its keys are only apiVersion, kind, metadata and type (no
- * `data` or `stringData`), none of them templated; and every whole-line template action inside
- * it renders deeper than those keys (`| nindent 4`). Text cannot prove what a template renders
- * (a templated value could still hold a line break), so the chart tests check every rendered
- * Secret too: only apiVersion, kind, metadata and type.
+ * `data` or `stringData`); and every line with a template action is one of
+ * `FILLED_SECRET_ACTIONS`, word for word. The chart tests check the rendered Secrets too.
  */
 function isEmptyFilledSecret(lines: readonly string[], index: number, column: number, dashed: boolean): boolean {
   const inside = mappingLines(lines, index, column, dashed);
   if (!inside.some((i) => FILLED_BY_LINE.test(lines[i] ?? ""))) return false;
   for (const i of inside) {
     const line = lines[i] ?? "";
-    if (!/^[ \t]*\{\{/.test(line)) {
-      // A key of the Secret itself (at the column of its kind), or anything deeper.
-      const key = /^([ \t]*)(?:-[ \t]+)?([^\s:#][^:#]*?)[ \t]*:/.exec(line);
-      const indent = /^([ \t]*(?:-[ \t]+)?)/.exec(line)?.[1]?.length ?? 0;
-      if (!NON_YAML_LINE.test(line) && indent === column && (key === null || !EMPTY_SECRET_KEYS.has(key[2] ?? "") || line.includes("{{"))) {
-        return false;
-      }
+    if (line.includes("{{")) {
+      if (!FILLED_SECRET_ACTIONS.has(line.trim())) return false;
       continue;
     }
-    if (SILENT_ACTION.test(line)) continue;
-    const indented = INDENTED_ACTION.exec(line);
-    if (indented === null || Number(indented[1]) <= column) return false;
+    // A key of the Secret itself (at the column of its kind), or anything deeper.
+    const key = /^([ \t]*)(?:-[ \t]+)?([^\s:#][^:#]*?)[ \t]*:/.exec(line);
+    const indent = /^([ \t]*(?:-[ \t]+)?)/.exec(line)?.[1]?.length ?? 0;
+    if (!NON_YAML_LINE.test(line) && indent === column && (key === null || !EMPTY_SECRET_KEYS.has(key[2] ?? ""))) {
+      return false;
+    }
   }
   return true;
 }
@@ -1500,7 +1507,7 @@ function isEmptyFilledSecret(lines: readonly string[], index: number, column: nu
  */
 export function checkTemplateText(file: string, source: string): Violation[] {
   const lines = source.split(/\r?\n/);
-  const violations: Violation[] = [];
+  const violations: Violation[] = [...checkTemplateFunctions(file, source)];
   lines.forEach((line, index) => {
     const match = KIND_LINE.exec(line);
     if (match === null) {
@@ -1525,6 +1532,84 @@ export function checkTemplateText(file: string, source: string): Violation[] {
       message: "a template that declares a Secret (or a templated kind) cannot be verified as encrypted; keep Secrets in SOPS-encrypted YAML files, and let the chart reference Secrets by name only",
     });
   });
+  return violations;
+}
+
+/**
+ * Template functions that make secret material or read it from the cluster (rule 5): `lookup`
+ * (reads any object the installing identity can read, Secrets included), the `rand*` and
+ * `uuid*` functions and `shuffle` (random values a template would put into a manifest), the
+ * `gen*` certificate and key functions, `derivePassword`, `htpasswd`, `bcrypt`, the AES
+ * functions, and `getHostByName` (renders what the network answers). A chart template has no
+ * business with any of them: passwords come from the migration Job, everything else from
+ * Secrets the chart only names. The rule covers every Helm template and helper in the repository
+ * and lives here, in the check that runs on every pull request, rather than in the chart's own
+ * tests, which run only when the chart changes.
+ */
+const FORBIDDEN_TEMPLATE_FUNCTION =
+  /(?<![.$\w])(lookup|rand[A-Za-z]*|uuidv[0-9]|shuffle|gen(?:CA|CAWithKey|PrivateKey|SelfSignedCert|SelfSignedCertWithKey|SignedCert|SignedCertWithKey)|derivePassword|htpasswd|bcrypt|encryptAES|decryptAES|getHostByName)\b/;
+
+/**
+ * The code of every template action, with its offset: string literals ("…" with escapes, `…`,
+ * '…' runes) and comments blanked, the way Go's template lexer reads them, so a `}}` inside a
+ * string does not end the action and a name inside a string or comment is not a call. An action
+ * left open at the end of the file runs to the end.
+ */
+export function templateActions(source: string): { offset: number; code: string }[] {
+  const actions: { offset: number; code: string }[] = [];
+  let i = 0;
+  while (true) {
+    const start = source.indexOf("{{", i);
+    if (start < 0) break;
+    let code = "";
+    let j = start + 2;
+    while (j < source.length) {
+      const c = source[j] ?? "";
+      if (source.startsWith("}}", j)) {
+        j += 2;
+        break;
+      }
+      if (source.startsWith("/*", j)) {
+        const end = source.indexOf("*/", j + 2);
+        j = end < 0 ? source.length : end + 2;
+        code += " ";
+        continue;
+      }
+      if (c === '"' || c === "'") {
+        j += 1;
+        while (j < source.length && source[j] !== c) j += source[j] === "\\" ? 2 : 1;
+        j += 1;
+        code += '""';
+        continue;
+      }
+      if (c === "`") {
+        const end = source.indexOf("`", j + 1);
+        j = end < 0 ? source.length : end + 1;
+        code += '""';
+        continue;
+      }
+      code += c;
+      j += 1;
+    }
+    actions.push({ offset: start, code });
+    i = j;
+  }
+  return actions;
+}
+
+/** Every use of a forbidden function in a template action (strings and comments excluded). */
+export function checkTemplateFunctions(file: string, source: string): Violation[] {
+  const violations: Violation[] = [];
+  for (const action of templateActions(source)) {
+    // Function names only: not a field (.Values.lookup) or a variable.
+    const used = FORBIDDEN_TEMPLATE_FUNCTION.exec(action.code);
+    if (used === null) continue;
+    violations.push({
+      file,
+      line: lineAt(source, action.offset),
+      message: `template function ${used[1]} makes or reads secret material at render time; a chart template may not use lookup, rand*, uuid*, shuffle, gen* keys and certificates, derivePassword, htpasswd, bcrypt, the AES functions or getHostByName (docs/architecture/secrets.md)`,
+    });
+  }
   return violations;
 }
 
