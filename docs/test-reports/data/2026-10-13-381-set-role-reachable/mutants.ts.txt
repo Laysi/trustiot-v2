@@ -1,0 +1,92 @@
+// Writes one mutated copy of src/postgres.rs per mutation into <out>/NN.rs, plus <out>/names.txt.
+// The mutations are the ones the #381 probe (verify_381.rs, MUTATIONS) applies to the query.
+// Usage: bun mutants.ts <postgres.rs> <out dir>
+const [source, out] = Bun.argv.slice(2);
+const src = await Bun.file(source).text();
+const mutations: [string, string, string][] = [
+  [
+    "reachable: the session's own role only",
+    "    WHERE r.oid IN (SELECT oid FROM tenant_data)\n      AND has_schema_privilege(sr.oid,",
+    "    WHERE sr.own AND r.oid IN (SELECT oid FROM tenant_data)\n      AND has_schema_privilege(sr.oid,",
+  ],
+  [
+    "policy applies: the session instead of the role",
+    "WHERE pg_has_role(sr.oid, named.role, 'USAGE')",
+    "WHERE pg_has_role(current_user, named.role, 'USAGE')",
+  ],
+  [
+    "policy applies: any role of the session, not the one that may use the table",
+    "ON a.policy_role = named.role AND a.role_oid = r.role_oid",
+    "ON a.policy_role = named.role",
+  ],
+  [
+    "policy applies: membership instead of inheritance for every role",
+    "WHERE pg_has_role(sr.oid, named.role, 'USAGE')",
+    "WHERE pg_has_role(sr.oid, named.role, 'MEMBER')",
+  ],
+  [
+    "policy applies: the session role's non-inherited memberships dropped",
+    "       OR (sr.own AND pg_has_role(current_user, named.role, 'MEMBER'))\n",
+    "\n",
+  ],
+  [
+    "definer functions: the session's own EXECUTE only",
+    "has_function_privilege(sr.oid, p.oid, 'EXECUTE')",
+    "has_function_privilege(p.oid, 'EXECUTE')",
+  ],
+  [
+    "temporary tables: the session's own privilege only",
+    "has_database_privilege(oid, current_database(), 'TEMPORARY')",
+    "has_database_privilege(current_database(), 'TEMPORARY')",
+  ],
+  [
+    "TRUNCATE: the session's own privilege only",
+    "has_table_privilege(role_oid, oid, 'TRUNCATE')",
+    "has_table_privilege(oid, 'TRUNCATE')",
+  ],
+  [
+    "roles the session can become: by membership",
+    "    WHERE pg_has_role(current_user, oid, 'SET')\n",
+    "    WHERE pg_has_role(current_user, oid, 'MEMBER')\n",
+  ],
+  [
+    "roles the session can become: by inheritance",
+    "    WHERE pg_has_role(current_user, oid, 'SET')\n",
+    "    WHERE pg_has_role(current_user, oid, 'USAGE')\n",
+  ],
+  [
+    "the session's own role no longer reported first",
+    "ORDER BY rank, relation, problem, later, role_name, command",
+    "ORDER BY rank, relation, problem, role_name, command",
+  ],
+  [
+    "platform exemption for policies naming any role of the session",
+    "               AND (SELECT oid FROM pg_roles WHERE rolname = current_user) = ANY (p.polroles))\n      AND NOT ((p.polqual",
+    "               AND EXISTS (SELECT 1 FROM session_roles s WHERE s.oid = ANY (p.polroles)))\n      AND NOT ((p.polqual",
+  ],
+  [
+    "definer exemption: any membership in the owner, as before",
+    "      AND NOT pg_has_role(current_user, p.proowner, 'USAGE')\n      AND p.proowner NOT IN (SELECT oid FROM session_roles)\n",
+    "      AND NOT pg_has_role(current_user, p.proowner, 'MEMBER')\n",
+  ],
+  [
+    "ADMIN option not refused",
+    "WHERE pg_has_role(current_user, r.oid, 'MEMBER WITH ADMIN OPTION')",
+    "WHERE false",
+  ],
+  [
+    "checked roles: the inherited ones instead of the others",
+    "WHERE own OR NOT pg_has_role(current_user, oid, 'USAGE')",
+    "WHERE own OR pg_has_role(current_user, oid, 'USAGE')",
+  ],
+];
+const names: string[] = [];
+for (const [index, [name, from, to]] of mutations.entries()) {
+  const n = src.split(from).length - 1;
+  if (n !== 1) throw new Error(`${name}: ${n} matches`);
+  const id = String(index + 1).padStart(2, "0");
+  await Bun.write(`${out}/${id}.rs`, src.replace(from, to));
+  names.push(`${id} ${name}`);
+}
+await Bun.write(`${out}/names.txt`, names.join("\n") + "\n");
+console.log(names.join("\n"));

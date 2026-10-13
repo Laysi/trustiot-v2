@@ -1,0 +1,683 @@
+load: 0.26 0.68 1.15 1/642 1258466
+tenant_db exit 0
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.08s
+== mutation 01: reachable: the session's own role only
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test sessions_are_checked_for_every_role_they_can_become ... FAILED
+thread 'sessions_are_checked_for_every_role_they_can_become' (1259028) panicked at crates/service-kit/tests/tenant_db.rs:2359:9:
+  left: Ok(())
+ right: Err(UnprotectedTable { table: "public.loose_items", role: "example_app_switch" })
+test result: FAILED. 13 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.10s
+== mutation 01 exit 101
+== mutation 02: policy applies: the session instead of the role
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test sessions_are_checked_for_every_role_they_can_become ... FAILED
+thread 'sessions_are_checked_for_every_role_they_can_become' (1259464) panicked at crates/service-kit/tests/tenant_db.rs:2359:9:
+  left: Ok(())
+ right: Err(PermissivePolicy { policy: "public.switch_items policy switch_all", role: "example_app_switch" })
+test result: FAILED. 13 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.11s
+== mutation 02 exit 101
+== mutation 03: policy applies: any role of the session, not the one that may use the table
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test sessions_are_checked_for_every_role_they_can_become ... FAILED
+thread 'sessions_are_checked_for_every_role_they_can_become' (1259898) panicked at crates/service-kit/tests/tenant_db.rs:2359:9:
+  left: Err(PermissivePolicy { policy: "public.switch_items policy parent_only", role: "example_app_switch" })
+ right: Ok(())
+test result: FAILED. 13 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.90s
+== mutation 03 exit 101
+== mutation 04: policy applies: membership instead of inheritance for every role
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test sessions_are_checked_for_every_role_they_can_become ... FAILED
+thread 'sessions_are_checked_for_every_role_they_can_become' (1260333) panicked at crates/service-kit/tests/tenant_db.rs:2359:9:
+  left: Err(PermissivePolicy { policy: "public.switch_items policy parent_only", role: "example_app_switch" })
+ right: Ok(())
+test result: FAILED. 13 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.99s
+== mutation 04 exit 101
+== mutation 05: policy applies: the session role's non-inherited memberships dropped
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test sessions_are_checked_for_every_role_they_can_become ... FAILED
+thread 'sessions_are_checked_for_every_role_they_can_become' (1260764) panicked at crates/service-kit/tests/tenant_db.rs:2359:9:
+  left: Ok(())
+ right: Err(PermissivePolicy { policy: "public.example_items policy unusable_all", role: "example_app" })
+test result: FAILED. 13 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.78s
+== mutation 05 exit 101
+== mutation 06: definer functions: the session's own EXECUTE only
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test sessions_are_checked_for_every_role_they_can_become ... FAILED
+thread 'sessions_are_checked_for_every_role_they_can_become' (1261197) panicked at crates/service-kit/tests/tenant_db.rs:2359:9:
+  left: Ok(())
+ right: Err(DefinerFunction { function: "all_item_names()", role: "example_app_switch" })
+test result: FAILED. 13 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.39s
+== mutation 06 exit 101
+== mutation 07: temporary tables: the session's own privilege only
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test sessions_are_checked_for_every_role_they_can_become ... FAILED
+thread 'sessions_are_checked_for_every_role_they_can_become' (1261643) panicked at crates/service-kit/tests/tenant_db.rs:2359:9:
+  left: Ok(())
+ right: Err(TemporaryTables { role: "example_app_switch" })
+test result: FAILED. 13 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.88s
+== mutation 07 exit 101
+== mutation 08: TRUNCATE: the session's own privilege only
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test sessions_are_checked_for_every_role_they_can_become ... FAILED
+thread 'sessions_are_checked_for_every_role_they_can_become' (1262073) panicked at crates/service-kit/tests/tenant_db.rs:2359:9:
+  left: Ok(())
+ right: Err(TruncateAllowed { table: "public.example_items", role: "example_app_switch" })
+test result: FAILED. 13 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.64s
+== mutation 08 exit 101
+== mutation 09: roles the session can become: by membership
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test sessions_are_checked_for_every_role_they_can_become ... FAILED
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... FAILED
+thread 'sessions_are_checked_for_every_role_they_can_become' (1262523) panicked at crates/service-kit/tests/tenant_db.rs:2359:9:
+  left: Err(DefinerFunction { function: "all_item_names()", role: "example_app_unusable" })
+ right: Ok(())
+thread 'platform_sessions_only_the_tenant_condition_opens_are_refused' (1262521) panicked at crates/service-kit/tests/tenant_db.rs:1871:5:
+  left: Err(PlatformTenantOnly { table: "public.private_items", role: "example_platform_unusable", command: "SELECT" })
+ right: Ok(())
+test result: FAILED. 12 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.41s
+== mutation 09 exit 101
+== mutation 10: roles the session can become: by inheritance
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test sessions_are_checked_for_every_role_they_can_become ... FAILED
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... FAILED
+thread 'sessions_are_checked_for_every_role_they_can_become' (1262952) panicked at crates/service-kit/tests/tenant_db.rs:2359:9:
+  left: Ok(())
+ right: Err(UnprotectedTable { table: "public.loose_items", role: "example_app_switch" })
+thread 'platform_sessions_only_the_tenant_condition_opens_are_refused' (1262951) panicked at crates/service-kit/tests/tenant_db.rs:1770:9:
+  left: Ok(())
+ right: Err(PlatformTenantOnly { table: "public.private_items", role: "example_platform_switch", command: "SELECT" })
+test result: FAILED. 12 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.95s
+== mutation 10 exit 101
+== mutation 11: the session's own role no longer reported first
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test sessions_are_checked_for_every_role_they_can_become ... FAILED
+test sessions_row_level_security_would_not_protect_are_refused ... FAILED
+thread 'sessions_are_checked_for_every_role_they_can_become' (1263387) panicked at crates/service-kit/tests/tenant_db.rs:2359:9:
+  left: Err(UnprotectedTable { table: "public.loose_items", role: "example_alias" })
+ right: Err(UnprotectedTable { table: "public.loose_items", role: "example_app" })
+thread 'sessions_row_level_security_would_not_protect_are_refused' (1263389) panicked at crates/service-kit/tests/tenant_db.rs:850:9:
+  left: Err(DefinerFunction { function: "all_item_names()", role: "example_alias" })
+ right: Err(DefinerFunction { function: "all_item_names()", role: "example_app" })
+test result: FAILED. 12 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.99s
+== mutation 11 exit 101
+== mutation 12: platform exemption for policies naming any role of the session
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test sessions_row_level_security_would_not_protect_are_refused ... FAILED
+thread 'sessions_row_level_security_would_not_protect_are_refused' (1263820) panicked at crates/service-kit/tests/tenant_db.rs:736:5:
+  left: Ok(())
+ right: Err(PermissivePolicy { policy: "public.example_items policy group_access", role: "example_platform" })
+test result: FAILED. 13 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.89s
+== mutation 12 exit 101
+== mutation 13: definer exemption: any membership in the owner, as before
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+test sessions_are_checked_for_every_role_they_can_become ... FAILED
+thread 'sessions_are_checked_for_every_role_they_can_become' (1264250) panicked at crates/service-kit/tests/tenant_db.rs:2413:5:
+  left: Ok(())
+ right: Err(DefinerFunction { function: "unusable_names()", role: "example_app" })
+test result: FAILED. 13 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.90s
+== mutation 13 exit 101
+== mutation 14: ADMIN option not refused
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test sessions_are_checked_for_every_role_they_can_become ... FAILED
+thread 'sessions_are_checked_for_every_role_they_can_become' (1264684) panicked at crates/service-kit/tests/tenant_db.rs:2446:5:
+  left: Ok(())
+ right: Err(AdministersRole { role: "example_app_switch" })
+test result: FAILED. 13 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.88s
+== mutation 14 exit 101
+== mutation 15: checked roles: the inherited ones instead of the others
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test sessions_are_checked_for_every_role_they_can_become ... FAILED
+thread 'sessions_are_checked_for_every_role_they_can_become' (1265121) panicked at crates/service-kit/tests/tenant_db.rs:2359:9:
+  left: Ok(())
+ right: Err(UnprotectedTable { table: "public.loose_items", role: "example_app_switch" })
+test result: FAILED. 13 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.98s
+== mutation 15 exit 101
+load: 1.27 1.21 1.27 1/657 1265426
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.17s
+     Running tests/verify_381.rs (target/debug/deps/verify_381-76748d82b548ba57)
+
+running 2 tests
+mutation `reachable: the session's own role only`: caught after 38 states, first at case 4.1: platform C4: rows for v38_g differ from the oracle
+mutation `policy applies: the session instead of the role`: caught after 38 states, first at case 4.1: platform C4: rows for v38_g differ from the oracle
+mutation `policy applies: any role of the session, not the one that may use the table`: caught after 6 states, first at case 1.6: platform C4: rows for v6_g differ from the oracle
+mutation `policy applies: membership instead of inheritance for every role`: caught after 6 states, first at case 1.6: platform C4: rows for v6_g differ from the oracle
+mutation `policy applies: the session role's non-inherited memberships dropped`: caught after 1 states, first at case 1.1: platform C1: own rows differ from main beyond the new rules
+mutation `definer functions: the session's own EXECUTE only`: caught after 137 states, first at seed 92: platform C4: rows for r_g1 differ from the oracle
+mutation `temporary tables: the session's own privilege only`: caught after 58 states, first at seed 13: platform C4: rows for r_g2 differ from the oracle
+mutation `TRUNCATE: the session's own privilege only`: caught after 47 states, first at seed 2: platform C4: rows for r_g3 differ from the oracle
+mutation `roles the session can become: by membership`: caught after 7 states, first at case 1.7: platform C1: own rows differ from main beyond the new rules
+mutation `roles the session can become: by inheritance`: caught after 6 states, first at case 1.6: platform C1: own rows differ from main beyond the new rules
+mutation `the session's own role no longer reported first`: caught after 61 states, first at seed 16: platform C3: the first row names Some("r_g1"), but the session role has the same problem
+mutation `definer exemption: any membership in the owner, as before`: caught after 222 states, first at seed 177: platform C4: rows for r_g1 differ from the oracle
+test differential has been running for over 60 seconds
+test mutations has been running for over 60 seconds
+mutation `ADMIN option not refused`: caught after 113 states, first at seed 68: platform C6: administers_role rows {}, expected {"r_a"}
+mutation `checked roles: the inherited ones instead of the others`: caught after 38 states, first at case 4.1: platform C4: rows for v38_g differ from the oracle
+mutation `platform exemption for policies naming any role of the session`: caught after 1 states, first at case 1.1: platform C1: own rows differ from main beyond the new rules
+test mutations ... ok
+differential: 1545 states (45 #366 cases + 1500 seeds); 401 with a SET-only membership; 1389 roles the session can become beyond its own (863 of them also inherited, so skipped); 0 states where a query failed
+SET-only states where the new query reports a (problem, relation) main does not: platform 241, service 241; such rows by problem: {"administers_role": 142, "definer_function": 52, "permissive_policy": 147, "temporary_tables": 72, "truncate_allowed": 208, "unprotectable": 24, "unprotected_table": 52, "unprotected_view": 30}
+states main accepts and the new query refuses: platform 34, service 39; rows naming a role other than the session's: 2553
+first problem as the service role (what check_session reports with the new query): {"accepted": 129, "administers_role": 71, "definer_function": 67, "permissive_policy": 646, "temporary_tables": 66, "truncate_allowed": 40, "unprotectable": 245, "unprotected_table": 232, "unprotected_view": 49}
+states without a SET-only membership where an unjudged definer owner or the ADMIN option applies: 64
+failures: 0
+test differential ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 130.96s
+
+differential exit 0
+load: 1.12 1.21 1.26 2/640 1265842
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/verify_381.rs (target/debug/deps/verify_381-76748d82b548ba57)
+
+running 1 test
+test timing ... server: PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+
+[T0 300 tables, service role alone] loadavg before: 1.12 1.21 1.26 1/668 1265903
+[T0 300 tables, service role alone] roles the session can become (itself included): 1; check_session: Ok(())
+[T0 300 tables, service role alone] old, same session:   median 7.4 ms, min 7.0 ms, max 9.4 ms (25 runs)
+[T0 300 tables, service role alone] new, same session:   median 9.2 ms, min 8.2 ms, max 10.3 ms (25 runs)
+[T0 300 tables, service role alone] old, new connection: median 33.6 ms, min 33.0 ms, max 38.4 ms (25 runs)
+[T0 300 tables, service role alone] new, new connection: median 35.3 ms, min 34.6 ms, max 40.4 ms (25 runs)
+[T0 300 tables, service role alone] loadavg after: 1.11 1.21 1.26 2/669 1265903
+
+[T1 + 20 SET-only groups with all rights on 300 tables] loadavg before: 1.11 1.21 1.26 1/668 1265903
+[T1 + 20 SET-only groups with all rights on 300 tables] roles the session can become (itself included): 21; check_session: Ok(())
+[T1 + 20 SET-only groups with all rights on 300 tables] old, same session:   median 7.6 ms, min 7.1 ms, max 9.5 ms (25 runs)
+[T1 + 20 SET-only groups with all rights on 300 tables] new, same session:   median 17.7 ms, min 16.6 ms, max 20.1 ms (25 runs)
+[T1 + 20 SET-only groups with all rights on 300 tables] old, new connection: median 34.5 ms, min 33.6 ms, max 37.5 ms (25 runs)
+[T1 + 20 SET-only groups with all rights on 300 tables] new, new connection: median 45.1 ms, min 43.6 ms, max 49.0 ms (25 runs)
+[T1 + 20 SET-only groups with all rights on 300 tables] loadavg after: 1.10 1.20 1.25 2/669 1265905
+
+[T2 + 60 SET-only groups with all rights on 300 tables] loadavg before: 1.10 1.20 1.25 1/668 1265905
+[T2 + 60 SET-only groups with all rights on 300 tables] roles the session can become (itself included): 61; check_session: Ok(())
+[T2 + 60 SET-only groups with all rights on 300 tables] old, same session:   median 7.7 ms, min 7.3 ms, max 9.6 ms (25 runs)
+[T2 + 60 SET-only groups with all rights on 300 tables] new, same session:   median 35.1 ms, min 33.5 ms, max 37.0 ms (25 runs)
+[T2 + 60 SET-only groups with all rights on 300 tables] old, new connection: median 35.0 ms, min 34.2 ms, max 36.6 ms (25 runs)
+[T2 + 60 SET-only groups with all rights on 300 tables] new, new connection: median 64.1 ms, min 63.0 ms, max 66.7 ms (25 runs)
+[T2 + 60 SET-only groups with all rights on 300 tables] loadavg after: 1.09 1.20 1.25 3/669 1265905
+
+[S0 300 tables, platform role alone] loadavg before: 1.09 1.20 1.25 2/669 1265905
+[S0 300 tables, platform role alone] roles the session can become (itself included): 1; check_session: Ok(())
+[S0 300 tables, platform role alone] old, same session:   median 12.3 ms, min 11.5 ms, max 13.7 ms (25 runs)
+[S0 300 tables, platform role alone] new, same session:   median 11.3 ms, min 10.8 ms, max 14.4 ms (25 runs)
+[S0 300 tables, platform role alone] old, new connection: median 41.5 ms, min 40.1 ms, max 42.1 ms (25 runs)
+[S0 300 tables, platform role alone] new, new connection: median 42.0 ms, min 41.2 ms, max 44.3 ms (25 runs)
+[S0 300 tables, platform role alone] loadavg after: 1.00 1.18 1.25 3/669 1265905
+
+[S1 + 20 groups without rights] loadavg before: 1.00 1.18 1.25 1/668 1265905
+[S1 + 20 groups without rights] roles the session can become (itself included): 21; check_session: Ok(())
+[S1 + 20 groups without rights] old, same session:   median 19.3 ms, min 18.8 ms, max 21.0 ms (25 runs)
+[S1 + 20 groups without rights] new, same session:   median 18.4 ms, min 18.0 ms, max 21.8 ms (25 runs)
+[S1 + 20 groups without rights] old, new connection: median 57.5 ms, min 56.3 ms, max 63.2 ms (25 runs)
+[S1 + 20 groups without rights] new, new connection: median 58.4 ms, min 57.5 ms, max 59.7 ms (25 runs)
+[S1 + 20 groups without rights] loadavg after: 0.92 1.15 1.24 3/669 1265905
+
+[S2 20 groups with all rights on 300 tables, named in platform_access] loadavg before: 0.92 1.15 1.24 1/668 1265905
+[S2 20 groups with all rights on 300 tables, named in platform_access] roles the session can become (itself included): 21; check_session: Ok(())
+[S2 20 groups with all rights on 300 tables, named in platform_access] old, same session:   median 20.0 ms, min 19.1 ms, max 23.9 ms (25 runs)
+[S2 20 groups with all rights on 300 tables, named in platform_access] new, same session:   median 20.3 ms, min 19.7 ms, max 24.1 ms (25 runs)
+[S2 20 groups with all rights on 300 tables, named in platform_access] old, new connection: median 51.8 ms, min 50.7 ms, max 55.1 ms (25 runs)
+[S2 20 groups with all rights on 300 tables, named in platform_access] new, new connection: median 52.0 ms, min 50.8 ms, max 57.2 ms (25 runs)
+[S2 20 groups with all rights on 300 tables, named in platform_access] loadavg after: 0.93 1.15 1.24 2/669 1265905
+
+[S3 60 groups with all rights on 300 tables, named in platform_access] loadavg before: 0.93 1.15 1.24 1/668 1265905
+[S3 60 groups with all rights on 300 tables, named in platform_access] roles the session can become (itself included): 61; check_session: Ok(())
+[S3 60 groups with all rights on 300 tables, named in platform_access] old, same session:   median 58.8 ms, min 56.8 ms, max 62.0 ms (25 runs)
+[S3 60 groups with all rights on 300 tables, named in platform_access] new, same session:   median 58.3 ms, min 56.3 ms, max 62.6 ms (25 runs)
+[S3 60 groups with all rights on 300 tables, named in platform_access] old, new connection: median 89.6 ms, min 87.9 ms, max 90.8 ms (25 runs)
+[S3 60 groups with all rights on 300 tables, named in platform_access] new, new connection: median 91.7 ms, min 89.9 ms, max 93.4 ms (25 runs)
+[S3 60 groups with all rights on 300 tables, named in platform_access] loadavg after: 0.88 1.13 1.23 2/669 1265905
+PLAN Limit (actual time=103.193..103.216 rows=0.00 loops=1)
+PLAN   Buffers: shared hit=7560
+PLAN   CTE rels
+PLAN     ->  Hash Join (actual time=0.506..0.900 rows=300.00 loops=1)
+PLAN           Hash Cond: (c.relnamespace = n_1.oid)
+PLAN           Buffers: shared hit=313
+PLAN           ->  Seq Scan on pg_class c (actual time=0.004..0.277 rows=513.00 loops=1)
+PLAN                 Filter: (relkind = ANY ('{r,p,v,m,f}'::"char"[]))
+PLAN                 Rows Removed by Filter: 1102
+PLAN                 Buffers: shared hit=153
+PLAN           ->  Hash (actual time=0.008..0.009 rows=1.00 loops=1)
+PLAN                 Buckets: 1024  Batches: 1  Memory Usage: 9kB
+PLAN                 Buffers: shared hit=1
+PLAN                 ->  Seq Scan on pg_namespace n_1 (actual time=0.004..0.004 rows=1.00 loops=1)
+PLAN                       Filter: ((nspname <> ALL ('{pg_catalog,information_schema}'::name[])) AND (nspname !~~ 'pg\_toast%'::text) AND (nspname !~~ 'pg\_temp%'::text))
+PLAN                       Rows Removed by Filter: 3
+PLAN                       Buffers: shared hit=1
+PLAN           SubPlan 2
+PLAN             ->  Index Scan using pg_attribute_relid_attnam_index on pg_attribute a (actual time=0.065..0.397 rows=600.00 loops=1)
+PLAN                   Index Cond: (attname = 'tenant_id'::name)
+PLAN                   Filter: ((NOT attisdropped) AND (attnum > 0))
+PLAN                   Index Searches: 1
+PLAN                   Buffers: shared hit=159
+PLAN   CTE tenant_data
+PLAN     ->  Recursive Union (actual time=0.001..0.461 rows=300.00 loops=1)
+PLAN           Storage: Memory  Maximum Storage: 42kB
+PLAN           Buffers: shared hit=89
+PLAN           ->  CTE Scan on rels rels_1 (actual time=0.001..0.020 rows=300.00 loops=1)
+PLAN                 Filter: has_tenant
+PLAN                 Storage: Memory  Maximum Storage: 34kB
+PLAN           ->  Hash Join (actual time=0.400..0.402 rows=0.00 loops=1)
+PLAN                 Hash Cond: (d_1.refobjid = t.oid)
+PLAN                 Buffers: shared hit=89
+PLAN                 ->  Hash Join (actual time=0.142..0.350 rows=269.00 loops=1)
+PLAN                       Hash Cond: (d_1.objid = rw.oid)
+PLAN                       Join Filter: (rw.ev_class <> d_1.refobjid)
+PLAN                       Rows Removed by Join Filter: 151
+PLAN                       Buffers: shared hit=89
+PLAN                       ->  Bitmap Heap Scan on pg_depend d_1 (actual time=0.097..0.271 rows=420.00 loops=1)
+PLAN                             Recheck Cond: (refclassid = '1259'::oid)
+PLAN                             Filter: (classid = '2618'::oid)
+PLAN                             Rows Removed by Filter: 4061
+PLAN                             Heap Blocks: exact=53
+PLAN                             Buffers: shared hit=75
+PLAN                             ->  Bitmap Index Scan on pg_depend_reference_index (actual time=0.085..0.085 rows=5081.00 loops=1)
+PLAN                                   Index Cond: (refclassid = '1259'::oid)
+PLAN                                   Index Searches: 1
+PLAN                                   Buffers: shared hit=22
+PLAN                       ->  Hash (actual time=0.034..0.034 rows=147.00 loops=1)
+PLAN                             Buckets: 1024  Batches: 1  Memory Usage: 14kB
+PLAN                             Buffers: shared hit=14
+PLAN                             ->  Seq Scan on pg_rewrite rw (actual time=0.003..0.020 rows=147.00 loops=1)
+PLAN                                   Buffers: shared hit=14
+PLAN                 ->  Hash (actual time=0.024..0.025 rows=300.00 loops=1)
+PLAN                       Buckets: 4096  Batches: 1  Memory Usage: 43kB
+PLAN                       ->  WorkTable Scan on tenant_data t (actual time=0.000..0.008 rows=300.00 loops=1)
+PLAN   CTE session_roles
+PLAN     ->  Seq Scan on pg_authid pg_authid_1 (actual time=0.012..0.112 rows=61.00 loops=1)
+PLAN           Filter: pg_has_role(CURRENT_USER, oid, 'SET'::text)
+PLAN           Rows Removed by Filter: 79
+PLAN           Buffers: shared hit=3
+PLAN   CTE checked_roles
+PLAN     ->  CTE Scan on session_roles (actual time=0.013..0.150 rows=61.00 loops=1)
+PLAN           Filter: (own OR (NOT pg_has_role(CURRENT_USER, oid, 'USAGE'::text)))
+PLAN           Storage: Memory  Maximum Storage: 19kB
+PLAN           Buffers: shared hit=3
+PLAN   CTE reachable
+PLAN     ->  Nested Loop (actual time=0.617..32.266 rows=18300.00 loops=1)
+PLAN           Join Filter: (has_schema_privilege(sr_1.oid, r_2.relnamespace, 'USAGE'::text) AND (has_table_privilege(sr_1.oid, r_2.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE'::text) OR has_any_column_privilege(sr_1.oid, r_2.oid, 'SELECT, INSERT, UPDATE'::text)))
+PLAN           Buffers: shared hit=1196
+PLAN           ->  CTE Scan on checked_roles sr_1 (actual time=0.014..0.165 rows=61.00 loops=1)
+PLAN                 Storage: Memory  Maximum Storage: 19kB
+PLAN                 Buffers: shared hit=3
+PLAN           ->  Materialize (actual time=0.010..0.020 rows=300.00 loops=61)
+PLAN                 Storage: Memory  Maximum Storage: 34kB
+PLAN                 Buffers: shared hit=89
+PLAN                 ->  Hash Join (actual time=0.575..0.684 rows=300.00 loops=1)
+PLAN                       Hash Cond: (r_2.oid = tenant_data.oid)
+PLAN                       Buffers: shared hit=89
+PLAN                       ->  CTE Scan on rels r_2 (actual time=0.000..0.038 rows=300.00 loops=1)
+PLAN                             Storage: Memory  Maximum Storage: 34kB
+PLAN                       ->  Hash (actual time=0.564..0.565 rows=300.00 loops=1)
+PLAN                             Buckets: 1024  Batches: 1  Memory Usage: 19kB
+PLAN                             Buffers: shared hit=89
+PLAN                             ->  HashAggregate (actual time=0.526..0.541 rows=300.00 loops=1)
+PLAN                                   Group Key: tenant_data.oid
+PLAN                                   Batches: 1  Memory Usage: 48kB
+PLAN                                   Buffers: shared hit=89
+PLAN                                   ->  CTE Scan on tenant_data (actual time=0.002..0.488 rows=300.00 loops=1)
+PLAN                                         Storage: Memory  Maximum Storage: 26kB
+PLAN                                         Buffers: shared hit=89
+PLAN   CTE session_policies
+PLAN     ->  Nested Loop (actual time=2.491..24.437 rows=300.00 loops=1)
+PLAN           Buffers: shared hit=5747
+PLAN           ->  HashAggregate (actual time=2.334..2.392 rows=300.00 loops=1)
+PLAN                 Group Key: [reachable_4.oid]
+PLAN                 Batches: 1  Memory Usage: 56kB
+PLAN                 ->  CTE Scan on reachable reachable_4 (actual time=0.001..1.175 rows=18300.00 loops=1)
+PLAN                       Filter: (relrowsecurity AND (relkind = ANY ('{r,p}'::"char"[])))
+PLAN                       Storage: Memory  Maximum Storage: 1766kB
+PLAN           ->  Bitmap Heap Scan on pg_policy p_2 (actual time=0.071..0.071 rows=1.00 loops=300)
+PLAN                 Recheck Cond: (polrelid = reachable_4.oid)
+PLAN                 Filter: (polpermissive AND (((polqual IS NULL) AND (polwithcheck IS NULL)) OR ((polqual IS NOT NULL) AND (pg_get_expr(polqual, polrelid) <> '(tenant_id = (NULLIF(current_setting(''trustiot.tenant_id''::text, true), ''''::text))::uuid)'::text)) OR ((polwithcheck IS NOT NULL) AND (pg_get_expr(polwithcheck, polrelid) <> '(tenant_id = (NULLIF(current_setting(''trustiot.tenant_id''::text, true), ''''::text))::uuid)'::text))))
+PLAN                 Rows Removed by Filter: 1
+PLAN                 Heap Blocks: exact=678
+PLAN                 Buffers: shared hit=5747
+PLAN                 ->  Bitmap Index Scan on pg_policy_polrelid_polname_index (actual time=0.003..0.003 rows=2.85 loops=300)
+PLAN                       Index Cond: (polrelid = reachable_4.oid)
+PLAN                       Index Searches: 300
+PLAN                       Buffers: shared hit=600
+PLAN   CTE session_policy_roles
+PLAN     ->  Nested Loop (actual time=3.602..3.603 rows=0.00 loops=1)
+PLAN           Join Filter: (pg_has_role(sr_2.oid, role.role, 'USAGE'::text) OR (sr_2.own AND pg_has_role(CURRENT_USER, role.role, 'MEMBER'::text)))
+PLAN           Rows Removed by Join Filter: 3721
+PLAN           ->  CTE Scan on checked_roles sr_2 (actual time=0.000..0.003 rows=61.00 loops=1)
+PLAN                 Storage: Memory  Maximum Storage: 19kB
+PLAN           ->  Materialize (actual time=0.053..0.054 rows=61.00 loops=61)
+PLAN                 Storage: Memory  Maximum Storage: 18kB
+PLAN                 ->  HashAggregate (actual time=3.214..3.218 rows=61.00 loops=1)
+PLAN                       Group Key: role.role
+PLAN                       Batches: 1  Memory Usage: 32kB
+PLAN                       ->  Nested Loop (actual time=0.005..2.143 rows=18300.00 loops=1)
+PLAN                             ->  CTE Scan on session_policies (actual time=0.000..0.020 rows=300.00 loops=1)
+PLAN                                   Storage: Memory  Maximum Storage: 110kB
+PLAN                             ->  Function Scan on unnest role (actual time=0.002..0.004 rows=61.00 loops=300)
+PLAN                                   Filter: (role <> '0'::oid)
+PLAN   CTE platform_roles
+PLAN     ->  Result (actual time=0.000..0.001 rows=0.00 loops=1)
+PLAN           One-Time Filter: false
+PLAN   CTE platform_tables
+PLAN     ->  Nested Loop (actual time=0.001..0.001 rows=0.00 loops=1)
+PLAN           Join Filter: (has_schema_privilege(pr_1.oid, r_3.relnamespace, 'USAGE'::text) AND (has_table_privilege(pr_1.oid, r_3.oid, 'SELECT, INSERT, UPDATE, DELETE'::text) OR has_any_column_privilege(pr_1.oid, r_3.oid, 'SELECT, INSERT, UPDATE'::text)))
+PLAN           ->  CTE Scan on platform_roles pr_1 (actual time=0.001..0.001 rows=0.00 loops=1)
+PLAN                 Storage: Memory  Maximum Storage: 17kB
+PLAN           ->  CTE Scan on rels r_3 (never executed)
+PLAN                 Filter: (relrowsecurity AND (relkind = ANY ('{r,p}'::"char"[])))
+PLAN                 Storage: Memory  Maximum Storage: 34kB
+PLAN   CTE platform_policy_exprs
+PLAN     ->  Result (never executed)
+PLAN           One-Time Filter: false
+PLAN           SubPlan 12
+PLAN             ->  Index Scan using pg_depend_depender_index on pg_depend d_2 (never executed)
+PLAN                   Index Cond: ((classid = '3256'::oid) AND (objid = oid))
+PLAN                   Filter: ((refclassid <> '1259'::oid) OR (refobjid <> polrelid))
+PLAN                   Index Searches: 0
+PLAN   CTE platform_policies
+PLAN     ->  CTE Scan on platform_policy_exprs e (never executed)
+PLAN           Storage: Memory  Maximum Storage: 17kB
+PLAN   CTE platform_inherits
+PLAN     ->  Nested Loop (never executed)
+PLAN           Join Filter: pg_has_role(pr_2.oid, role_1.role, 'USAGE'::text)
+PLAN           ->  CTE Scan on platform_roles pr_2 (never executed)
+PLAN                 Storage: Memory  Maximum Storage: 17kB
+PLAN           ->  HashAggregate (never executed)
+PLAN                 Group Key: role_1.role
+PLAN                 ->  Nested Loop (never executed)
+PLAN                       ->  CTE Scan on platform_policies (never executed)
+PLAN                             Filter: (NOT public)
+PLAN                             Storage: Memory  Maximum Storage: 17kB
+PLAN                       ->  Function Scan on unnest role_1 (never executed)
+PLAN   CTE platform_tenant_only
+PLAN     ->  Hash Left Join (actual time=0.002..0.004 rows=0.00 loops=1)
+PLAN           Hash Cond: ((t_1.role_oid = n_2.role_oid) AND (t_1.rel = n_2.polrelid))
+PLAN           Filter: ((((COALESCE((bit_or(platform_policies_1.wider)), 0) | COALESCE(n_2.wider, 0)) & "*VALUES*".column2) <> "*VALUES*".column2) AND (((COALESCE((bit_or(platform_policies_1.has)), 0) | COALESCE(n_2.has, 0)) & "*VALUES*".column2) = "*VALUES*".column2))
+PLAN           ->  Nested Loop (actual time=0.002..0.002 rows=0.00 loops=1)
+PLAN                 ->  Nested Loop Left Join (actual time=0.002..0.002 rows=0.00 loops=1)
+PLAN                       Join Filter: (platform_policies_1.polrelid = t_1.rel)
+PLAN                       ->  CTE Scan on platform_tables t_1 (actual time=0.001..0.002 rows=0.00 loops=1)
+PLAN                             Storage: Memory  Maximum Storage: 17kB
+PLAN                       ->  HashAggregate (never executed)
+PLAN                             Group Key: platform_policies_1.polrelid
+PLAN                             ->  CTE Scan on platform_policies platform_policies_1 (never executed)
+PLAN                                   Filter: public
+PLAN                                   Storage: Memory  Maximum Storage: 17kB
+PLAN                 ->  Values Scan on "*VALUES*" (never executed)
+PLAN           ->  Hash (never executed)
+PLAN                 ->  Subquery Scan on n_2 (never executed)
+PLAN                       ->  HashAggregate (never executed)
+PLAN                             Group Key: i.role_oid, p_3.polrelid
+PLAN                             ->  Nested Loop (never executed)
+PLAN                                   ->  CTE Scan on platform_policies p_3 (never executed)
+PLAN                                         Filter: (NOT public)
+PLAN                                         Storage: Memory  Maximum Storage: 17kB
+PLAN                                   ->  Hash Join (never executed)
+PLAN                                         Hash Cond: (named.role = i.policy_role)
+PLAN                                         ->  Function Scan on unnest named (never executed)
+PLAN                                         ->  Hash (never executed)
+PLAN                                               ->  CTE Scan on platform_inherits i (never executed)
+PLAN                                                     Storage: Memory  Maximum Storage: 17kB
+PLAN   ->  Sort (actual time=103.193..103.200 rows=0.00 loops=1)
+PLAN         Sort Key: "*SELECT* 1".rank, "*SELECT* 1".relation COLLATE "C", "*SELECT* 1".problem, "*SELECT* 1".later, "*SELECT* 1".role_name COLLATE "C", "*SELECT* 1".command
+PLAN         Sort Method: quicksort  Memory: 25kB
+PLAN         Buffers: shared hit=7560
+PLAN         ->  Append (actual time=103.139..103.147 rows=0.00 loops=1)
+PLAN               Buffers: shared hit=7549
+PLAN               ->  Subquery Scan on "*SELECT* 1" (actual time=0.580..0.581 rows=0.00 loops=1)
+PLAN                     Buffers: shared hit=66
+PLAN                     ->  Result (actual time=0.580..0.580 rows=0.00 loops=1)
+PLAN                           One-Time Filter: (InitPlan 17).col1
+PLAN                           Buffers: shared hit=66
+PLAN                           InitPlan 17
+PLAN                             ->  Seq Scan on pg_authid pg_authid_2 (actual time=0.579..0.579 rows=0.00 loops=1)
+PLAN                                   Filter: ((rolsuper OR rolbypassrls) AND pg_has_role(CURRENT_USER, oid, 'MEMBER'::text))
+PLAN                                   Rows Removed by Filter: 140
+PLAN                                   Buffers: shared hit=66
+PLAN               ->  Subquery Scan on "*SELECT* 2" (actual time=0.003..0.003 rows=0.00 loops=1)
+PLAN                     ->  Result (actual time=0.002..0.002 rows=0.00 loops=1)
+PLAN                           One-Time Filter: (NULLIF(current_setting('trustiot.tenant_id'::text, true), ''::text) IS NOT NULL)
+PLAN               ->  Subquery Scan on "*SELECT* 3" (actual time=0.238..0.238 rows=0.00 loops=1)
+PLAN                     Buffers: shared hit=3
+PLAN                     ->  Seq Scan on pg_authid (actual time=0.238..0.238 rows=0.00 loops=1)
+PLAN                           Filter: pg_has_role(CURRENT_USER, oid, 'MEMBER WITH ADMIN OPTION'::text)
+PLAN                           Rows Removed by Filter: 140
+PLAN                           Buffers: shared hit=3
+PLAN               ->  Subquery Scan on "*SELECT* 4" (actual time=1.016..1.016 rows=0.00 loops=1)
+PLAN                     Buffers: shared hit=313
+PLAN                     ->  CTE Scan on rels (actual time=1.016..1.016 rows=0.00 loops=1)
+PLAN                           Filter: pg_has_role(CURRENT_USER, relowner, 'MEMBER'::text)
+PLAN                           Rows Removed by Filter: 300
+PLAN                           Storage: Memory  Maximum Storage: 34kB
+PLAN                           Buffers: shared hit=313
+PLAN               ->  Subquery Scan on "*SELECT* 5" (actual time=37.351..37.351 rows=0.00 loops=1)
+PLAN                     Buffers: shared hit=1196
+PLAN                     ->  CTE Scan on reachable (actual time=37.351..37.351 rows=0.00 loops=1)
+PLAN                           Filter: ((NOT relrowsecurity) AND (relkind = ANY ('{r,p}'::"char"[])))
+PLAN                           Rows Removed by Filter: 18300
+PLAN                           Storage: Memory  Maximum Storage: 1766kB
+PLAN                           Buffers: shared hit=1196
+PLAN               ->  Subquery Scan on "*SELECT* 6" (actual time=38.181..38.182 rows=0.00 loops=1)
+PLAN                     Buffers: shared hit=5747
+PLAN                     ->  Hash Join (actual time=38.180..38.181 rows=0.00 loops=1)
+PLAN                           Hash Cond: (r.oid = p.polrelid)
+PLAN                           Join Filter: (p.public OR EXISTS(SubPlan 18))
+PLAN                           Rows Removed by Join Filter: 18300
+PLAN                           Buffers: shared hit=5747
+PLAN                           ->  CTE Scan on reachable r (actual time=0.002..1.280 rows=18300.00 loops=1)
+PLAN                                 Filter: (relrowsecurity AND (relkind = ANY ('{r,p}'::"char"[])))
+PLAN                                 Storage: Memory  Maximum Storage: 1766kB
+PLAN                           ->  Hash (actual time=24.734..24.734 rows=300.00 loops=1)
+PLAN                                 Buckets: 1024  Batches: 1  Memory Usage: 103kB
+PLAN                                 Buffers: shared hit=5747
+PLAN                                 ->  CTE Scan on session_policies p (actual time=2.494..24.614 rows=300.00 loops=1)
+PLAN                                       Storage: Memory  Maximum Storage: 110kB
+PLAN                                       Buffers: shared hit=5747
+PLAN                           SubPlan 18
+PLAN                             ->  Hash Join (actual time=0.000..0.000 rows=0.00 loops=18300)
+PLAN                                   Hash Cond: (named_1.role = a_1.policy_role)
+PLAN                                   ->  Function Scan on unnest named_1 (actual time=0.005..0.005 rows=1.00 loops=1)
+PLAN                                   ->  Hash (actual time=0.000..0.000 rows=0.00 loops=18300)
+PLAN                                         Buckets: 1024  Batches: 1  Memory Usage: 8kB
+PLAN                                         ->  CTE Scan on session_policy_roles a_1 (actual time=0.000..0.000 rows=0.00 loops=18300)
+PLAN                                               Filter: (role_oid = r.role_oid)
+PLAN                                               Storage: Memory  Maximum Storage: 17kB
+PLAN               ->  Subquery Scan on "*SELECT* 7" (actual time=0.583..0.583 rows=0.00 loops=1)
+PLAN                     ->  CTE Scan on reachable reachable_1 (actual time=0.582..0.582 rows=0.00 loops=1)
+PLAN                           Filter: ((relkind = 'v'::"char") AND (NOT EXISTS(SubPlan 19)))
+PLAN                           Rows Removed by Filter: 18300
+PLAN                           Storage: Memory  Maximum Storage: 1766kB
+PLAN                           SubPlan 19
+PLAN                             ->  Function Scan on unnest option (never executed)
+PLAN                                   Filter: (lower(option) = ANY ('{security_invoker=true,security_invoker=on,security_invoker=yes,security_invoker=1}'::text[]))
+PLAN               ->  Subquery Scan on "*SELECT* 8" (actual time=0.789..0.789 rows=0.00 loops=1)
+PLAN                     ->  CTE Scan on reachable reachable_2 (actual time=0.788..0.788 rows=0.00 loops=1)
+PLAN                           Filter: (relkind = ANY ('{m,f}'::"char"[]))
+PLAN                           Rows Removed by Filter: 18300
+PLAN                           Storage: Memory  Maximum Storage: 1766kB
+PLAN               ->  Subquery Scan on "*SELECT* 9" (actual time=0.172..0.174 rows=0.00 loops=1)
+PLAN                     Buffers: shared hit=102
+PLAN                     ->  Nested Loop (actual time=0.172..0.173 rows=0.00 loops=1)
+PLAN                           Join Filter: (has_function_privilege(sr.oid, p_1.oid, 'EXECUTE'::text) AND has_schema_privilege(sr.oid, n.oid, 'USAGE'::text))
+PLAN                           Buffers: shared hit=102
+PLAN                           ->  Nested Loop Anti Join (actual time=0.171..0.172 rows=0.00 loops=1)
+PLAN                                 Buffers: shared hit=102
+PLAN                                 ->  Nested Loop (actual time=0.171..0.171 rows=0.00 loops=1)
+PLAN                                       Join Filter: (p_1.pronamespace = n.oid)
+PLAN                                       Buffers: shared hit=102
+PLAN                                       ->  Seq Scan on pg_proc p_1 (actual time=0.170..0.171 rows=0.00 loops=1)
+PLAN                                             Filter: (prosecdef AND (NOT (ANY (proowner = (hashed SubPlan 20).col1))) AND (NOT pg_has_role(CURRENT_USER, proowner, 'USAGE'::text)))
+PLAN                                             Rows Removed by Filter: 3413
+PLAN                                             Buffers: shared hit=102
+PLAN                                             SubPlan 20
+PLAN                                               ->  CTE Scan on session_roles session_roles_1 (never executed)
+PLAN                                                     Storage: Memory  Maximum Storage: 19kB
+PLAN                                       ->  Seq Scan on pg_namespace n (never executed)
+PLAN                                             Filter: (nspname <> ALL ('{pg_catalog,information_schema}'::name[]))
+PLAN                                 ->  Index Scan using pg_depend_depender_index on pg_depend d (never executed)
+PLAN                                       Index Cond: ((classid = '1255'::oid) AND (objid = p_1.oid))
+PLAN                                       Filter: (deptype = 'e'::"char")
+PLAN                                       Index Searches: 0
+PLAN                           ->  CTE Scan on checked_roles sr (never executed)
+PLAN                                 Storage: Memory  Maximum Storage: 19kB
+PLAN               ->  Subquery Scan on "*SELECT* 10" (actual time=0.598..0.598 rows=0.00 loops=1)
+PLAN                     Buffers: shared hit=122
+PLAN                     ->  CTE Scan on checked_roles (actual time=0.598..0.598 rows=0.00 loops=1)
+PLAN                           Filter: has_database_privilege(oid, (current_database())::text, 'TEMPORARY'::text)
+PLAN                           Rows Removed by Filter: 61
+PLAN                           Storage: Memory  Maximum Storage: 19kB
+PLAN                           Buffers: shared hit=122
+PLAN               ->  Subquery Scan on "*SELECT* 11" (actual time=23.600..23.600 rows=0.00 loops=1)
+PLAN                     ->  CTE Scan on reachable reachable_3 (actual time=23.599..23.599 rows=0.00 loops=1)
+PLAN                           Filter: ((relkind = ANY ('{r,p}'::"char"[])) AND has_table_privilege(role_oid, oid, 'TRUNCATE'::text))
+PLAN                           Rows Removed by Filter: 18300
+PLAN                           Storage: Memory  Maximum Storage: 1766kB
+PLAN               ->  Subquery Scan on "*SELECT* 12" (actual time=0.024..0.024 rows=0.00 loops=1)
+PLAN                     ->  Nested Loop (actual time=0.023..0.024 rows=0.00 loops=1)
+PLAN                           Join Filter: (o.role_oid = pr.oid)
+PLAN                           ->  Hash Join (actual time=0.023..0.023 rows=0.00 loops=1)
+PLAN                                 Hash Cond: (r_1.oid = o.rel)
+PLAN                                 ->  CTE Scan on rels r_1 (actual time=0.001..0.001 rows=1.00 loops=1)
+PLAN                                       Storage: Memory  Maximum Storage: 34kB
+PLAN                                 ->  Hash (actual time=0.004..0.004 rows=0.00 loops=1)
+PLAN                                       Buckets: 1024  Batches: 1  Memory Usage: 8kB
+PLAN                                       ->  CTE Scan on platform_tenant_only o (actual time=0.003..0.003 rows=0.00 loops=1)
+PLAN                                             Filter: (has_table_privilege(role_oid, rel, command) OR COALESCE(has_any_column_privilege(role_oid, rel, NULLIF(command, 'DELETE'::text)), false))
+PLAN                                             Storage: Memory  Maximum Storage: 17kB
+PLAN                           ->  CTE Scan on platform_roles pr (never executed)
+PLAN                                 Storage: Memory  Maximum Storage: 17kB
+PLAN Planning:
+PLAN   Buffers: shared hit=672
+PLAN Planning Time: 4.796 ms
+PLAN Execution Time: 104.065 ms
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 55.63s
+
+timing exit 0
+load: 0.88 1.13 1.23 1/643 1265919
+===== tenant-db.log
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.23s
+
+running 14 tests
+CA file None: exit status: 1; error: configuration key `platform.postgres_ca_file` is invalid: is required when `database` is set
+sslmode "disable": exit status: 1; error: configuration key `platform.postgres_sslmode` (set by environment variable TRUSTIOT_POSTGRES_SSLMODE) is invalid: only `verify-full` is accepted: services always verify the database server's certificate and host name (checklist M3)
+CA file Some(""): exit status: 1; error: configuration key `platform.postgres_ca_file` is invalid: is required when `database` is set
+test a_service_without_a_postgres_ca_refuses_to_start ... sslmode "allow": exit status: 1; error: configuration key `platform.postgres_sslmode` (set by environment variable TRUSTIOT_POSTGRES_SSLMODE) is invalid: only `verify-full` is accepted: services always verify the database server's certificate and host name (checklist M3)
+ok
+sslmode "prefer": exit status: 1; error: configuration key `platform.postgres_sslmode` (set by environment variable TRUSTIOT_POSTGRES_SSLMODE) is invalid: only `verify-full` is accepted: services always verify the database server's certificate and host name (checklist M3)
+sslmode "require": exit status: 1; error: configuration key `platform.postgres_sslmode` (set by environment variable TRUSTIOT_POSTGRES_SSLMODE) is invalid: only `verify-full` is accepted: services always verify the database server's certificate and host name (checklist M3)
+sslmode "verify-ca": exit status: 1; error: configuration key `platform.postgres_sslmode` (set by environment variable TRUSTIOT_POSTGRES_SSLMODE) is invalid: only `verify-full` is accepted: services always verify the database server's certificate and host name (checklist M3)
+sslmode "": exit status: 1; error: configuration key `platform.postgres_sslmode` is invalid: is required when `database` is set
+test a_service_without_server_verification_refuses_to_start ... ok
+unrelated CA: error communicating with database: invalid peer certificate: UnknownIssuer
+host name mismatch: error communicating with database: invalid peer certificate: certificate not valid for name "localhost"; certificate is only valid for IpAddress(127.0.0.1)
+test connections_verify_the_server_certificate_and_host_name ... ok
+disable row-level security: refused (error returned from database: must be owner of table example_items at line 2931)
+drop the policy: refused (error returned from database: must be owner of relation example_items at line 2931)
+add a permissive policy: refused (error returned from database: must be owner of table example_items at line 2931)
+truncate: refused (error returned from database: permission denied for table example_items at line 2793)
+copy rows into a temporary table: refused (error returned from database: permission denied to create temporary tables in database "roles" at line 4413)
+row_security = off: refused (error returned from database: query would be affected by row-level security policy for table "example_items" at line 125)
+test the_service_role_cannot_bypass_row_level_security ... ok
+platform role with tenant A set, INSERT, which the template does not grant: refused (error returned from database: permission denied for table example_items at line 2793)
+platform role with tenant A set, DELETE, which the template does not grant: refused (error returned from database: permission denied for table example_items at line 2793)
+platform role with tenant A set, a table without platform_access or a grant: refused (error returned from database: permission denied for table private_items at line 2793)
+one pooled session (pid 116): no tenant after commit, rollback, drop, or error
+service role, another tenant event: refused (error returned from database: new row violates row-level security policy for table "outbox_event" at line 2337)
+service role, platform-wide event: refused (error returned from database: new row violates row-level security policy for table "outbox_event" at line 2337)
+without a tenant: 0 rows visible, update 0, delete 0, insert refused: error returned from database: new row violates row-level security policy for table "example_items" at line 2337
+test without_a_tenant_no_rows_are_visible_or_writable ... ok
+test the_platform_role_reads_across_tenants_only_where_allowed ... ok
+platform role, tenant set to 01928f6e-7a3c-7d4e-8f00-00000000000a in its transaction: refused (error returned from database: new row violates row-level security policy "platform_events_only" for table "outbox_event" at line 2332)
+platform role, tenant set to 01928f6e-7a3c-7d4e-8f00-00000000000b in its transaction: refused (error returned from database: new row violates row-level security policy "platform_events_only" for table "outbox_event" at line 2332)
+platform_access: a self-set tenant adds no row or command; a grant without platform_access would open the self-set tenant's rows, so the template grants nothing and the session check refuses the platform role's sessions
+test the_platform_role_gains_nothing_by_setting_a_tenant ... ok
+tenant A: insert into B refused (error returned from database: new row violates row-level security policy for table "example_items" at line 2337); move to B refused (error returned from database: new row violates row-level security policy for table "example_items" at line 2337)
+test a_tenant_reads_and_writes_only_its_own_rows ... ok
+a session left with a session-level tenant is closed on release (pids 116, 136, 143)
+test the_tenant_setting_does_not_leak_across_pooled_connections ... ok
+plain platform session, `SELECT set_config('trustiot.tenant_id', $1, true)`: refused (error returned from database: new row violates row-level security policy "platform_events_only" for table "outbox_event" at line 2332)
+plain platform session, `SELECT set_config('trustiot.tenant_id', $1, false)`: refused (error returned from database: new row violates row-level security policy "platform_events_only" for table "outbox_event" at line 2332)
+a table without row-level security that a SET ROLE target may use: refused with "database role `example_app_switch` may use table `public.loose_items`, which has a tenant_id column but row-level security is not enabled"; without a tenant as example_app_switch: 2 rows, as example_app: refused; accepted once fixed
+SELECT without platform_access: refused with "database role `example_platform` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a role the session reaches through a chain of SET memberships: refused with "database role `example_app_switch_parent` may use table `public.loose_items`, which has a tenant_id column but row-level security is not enabled"; without a tenant as example_app_switch_parent: 2 rows, as example_app_switch: refused; accepted once fixed
+INSERT without platform_access: refused with "database role `example_platform` may INSERT on `public.private_items`, but the permissive policies that apply to it for INSERT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a policy the platform role inherits from a group: refused with Err(PermissivePolicy { policy: "public.example_items policy group_access", role: "example_platform" })
+a tenant table without row-level security: refused with "database role `example_app` may use table `public.loose_items`, which has a tenant_id column but row-level security is not enabled", accepted once fixed
+outbox: the producer's platform role that also reads its own events passes the session check and reads every event
+outbox: tenant events by the service role, platform-wide by the platform role, all read by the consumer's platform role
+test outbox_events_follow_the_tenant_policies ... ok
+a role the session reaches with SET through a group it inherits: refused with "database role `example_app_group_switch` may use table `public.loose_items`, which has a tenant_id column but row-level security is not enabled"; without a tenant as example_app_group_switch: 2 rows, as example_app: refused; accepted once fixed
+UPDATE without platform_access: refused with "database role `example_platform` may UPDATE on `public.private_items`, but the permissive policies that apply to it for UPDATE open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a view with its owner's rights: refused with "database role `example_app` may use view `public.item_names`, which reads tenant data but is not security_invoker", accepted once fixed
+a materialized view: refused with "database role `example_app` may use `public.item_counts`, which holds tenant data and is a materialized view or foreign table, which row-level security cannot protect", accepted once fixed
+a privilege a SET ROLE target inherits: refused with "database role `example_app_switch` may use table `public.loose_items`, which has a tenant_id column but row-level security is not enabled"; without a tenant as example_app_switch: 2 rows, as example_app_switch_group: refused; accepted once fixed
+DELETE without platform_access: refused with "database role `example_platform` may DELETE on `public.private_items`, but the permissive policies that apply to it for DELETE open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a permissive policy for every role: refused with "public.example_items policy everything applies to database role `example_app` and is not exactly the tenant condition, so it may expose other tenants' rows", accepted once fixed
+a widened tenant policy for the service role: refused with "public.example_items policy widened applies to database role `example_app` and is not exactly the tenant condition, so it may expose other tenants' rows", accepted once fixed
+a privilege for PUBLIC: the session's own role is named: refused with "database role `example_app` may use table `public.loose_items`, which has a tenant_id column but row-level security is not enabled"; without a tenant as example_app: 2 rows, as example_alias: 2 rows; accepted once fixed
+a column privilege: refused with "database role `example_platform` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a view of tenant data without the tenant column: refused with "database role `example_app` may use view `public.all_names_again`, which reads tenant data but is not security_invoker", accepted once fixed
+a privilege of a SET ROLE target whose name sorts before the session role's: refused with "database role `example_alias` may use table `public.loose_items`, which has a tenant_id column but row-level security is not enabled"; without a tenant as example_alias: 2 rows; accepted once fixed
+a SECURITY DEFINER function over tenant data: refused with "database role `example_app` may execute SECURITY DEFINER function `all_item_names()`, which runs with another role's rights and row-level security visibility", accepted once fixed
+a privilege for PUBLIC: refused with "database role `example_platform` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+TRUNCATE on a tenant table: refused with "database role `example_app` may TRUNCATE tenant table `public.example_items`, which row-level security ignores", accepted once fixed
+a permissive policy for a SET ROLE target: refused with "public.switch_items policy switch_all applies to database role `example_app_switch` and is not exactly the tenant condition, so it may expose other tenants' rows"; without a tenant as example_app_switch: 2 rows; accepted once fixed
+temporary tables: refused with "database role `example_app` may create temporary tables, which row-level security does not cover and which outlive the transaction on a pooled connection", accepted once fixed
+a privilege inherited from a group: refused with "database role `example_platform` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a permissive policy for PUBLIC on a table only a SET ROLE target may use: refused with "public.switch_items policy everyone applies to database role `example_app_switch` and is not exactly the tenant condition, so it may expose other tenants' rows"; without a tenant as example_app_switch: 2 rows, as example_app: refused; accepted once fixed
+a platform role's SECURITY DEFINER function: refused with Err(DefinerFunction { function: "platform_names()", role: "example_app" }), accepted once revoked
+a group's privilege on a table with platform_access: refused with "database role `example_platform_group` may SELECT on `public.example_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 2 with tenant A set; accepted once fixed
+a permissive policy for a role a SET ROLE target inherits: refused with "public.switch_items policy via_group applies to database role `example_app_switch` and is not exactly the tenant condition, so it may expose other tenants' rows"; without a tenant as example_app_switch: 2 rows; accepted once fixed
+a privilege the platform role reaches only with SET ROLE: refused with "database role `example_platform_switch` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a permissive policy for a role a SET ROLE target belongs to without inheriting: accepted; without a tenant as example_app_switch: 0 rows, as example_app_switch_parent: refused; accepted once fixed
+ready after 99 ms
+GET /v1/items: 200 {"items":["a-1","a-2"],"tenant":"01928f6e-7a3c-7d4e-8f00-00000000000a"}
+GET /v1/items: 200 {"items":["b-1"],"tenant":"01928f6e-7a3c-7d4e-8f00-00000000000b"}
+GET /v1/items: 403 {"code":"permission_denied","message_key":"error.permission_denied"}
+test the_example_service_serves_each_user_only_their_tenant ... ok
+a view without security_invoker that a SET ROLE target may use: refused with "database role `example_app_switch` may use view `public.item_names`, which reads tenant data but is not security_invoker"; without a tenant as example_app_switch: 3 rows; accepted once fixed
+a policy for the platform role by name that is the tenant condition: refused with "database role `example_platform` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a materialized view that a SET ROLE target may use: refused with "database role `example_app_switch` may use `public.item_counts`, which holds tenant data and is a materialized view or foreign table, which row-level security cannot protect"; without a tenant as example_app_switch: 2 rows; accepted once fixed
+a platform policy for SELECT and a DELETE grant: refused with "database role `example_platform` may DELETE on `public.private_items`, but the permissive policies that apply to it for DELETE open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+TRUNCATE for a SET ROLE target: refused with "database role `example_app_switch` may TRUNCATE tenant table `public.example_items`, which row-level security ignores"; without a tenant as example_app_switch: 0 rows, as example_app: refused; accepted once fixed
+a platform UPDATE policy whose WITH CHECK is the tenant condition: refused with "database role `example_platform` may UPDATE on `public.private_items`, but the permissive policies that apply to it for UPDATE open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 2 with tenant A set; accepted once fixed
+a SECURITY DEFINER function a SET ROLE target may execute: refused with "database role `example_app_switch` may execute SECURITY DEFINER function `all_item_names()`, which runs with another role's rights and row-level security visibility"; without a tenant as example_app_switch: 3 rows, as example_app: refused; accepted once fixed
+a table in another schema the platform role may use: refused with "database role `example_platform` may SELECT on `other.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+temporary tables for a SET ROLE target: refused with "database role `example_app_switch` may create temporary tables, which row-level security does not cover and which outlive the transaction on a pooled connection"; without a tenant as example_app_switch: 0 rows, as example_app: refused; accepted once fixed
+a policy for a role the SET ROLE target belongs to without inheriting: refused with "database role `example_platform_switch` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a table without row-level security that the platform role's SET ROLE target may use: refused with "database role `example_platform_switch` may use table `public.loose_items`, which has a tenant_id column but row-level security is not enabled"; without a tenant as example_platform_switch: 2 rows, as example_platform: refused; accepted once fixed
+a platform policy reading the tenant setting, written the other way round: refused with "database role `example_platform` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a privilege of a role the session only inherits (refused as before): refused with "database role `example_app` may use table `public.loose_items`, which has a tenant_id column but row-level security is not enabled"; without a tenant as example_app: 2 rows, as example_app_inherited: refused; accepted once fixed
+a platform policy comparing the tenant setting as text: refused with "database role `example_platform` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a platform policy that is the tenant condition AND true: refused with "database role `example_platform` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+privileges of a role the session can neither inherit nor become (accepted as before): accepted; without a tenant as example_app: refused, as example_app: refused, as example_app: refused, as example_app_unusable: refused; accepted once fixed
+a platform policy that is the tenant condition OR false: refused with "database role `example_platform` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a role behind a membership the session only inherits, with SET from there (accepted as before): accepted; without a tenant as example_app_inherited_switch: refused, as example_app: refused; accepted once fixed
+a permissive policy for a role the session can neither inherit nor become, on a table it may use (refused as before): refused with "public.example_items policy unusable_all applies to database role `example_app` and is not exactly the tenant condition, so it may expose other tenants' rows"; without a tenant as example_app: 0 rows; accepted once fixed
+a platform policy with IS NOT DISTINCT FROM the tenant setting: refused with "database role `example_platform` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a platform policy USING (false): refused with "database role `example_platform` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a SECURITY DEFINER function of a role the session can neither inherit nor become: refused with Err(DefinerFunction { function: "unusable_names()", role: "example_app" }); through it the session reads 2 rows without a tenant; accepted once dropped
+test sessions_row_level_security_would_not_protect_are_refused ... ok
+a role with the ADMIN option on another: refused with Err(AdministersRole { role: "example_app_switch" }); SET ROLE first refused (error returned from database: permission denied to set role "example_app_switch" at line 6936), then after granting itself the role it reads 2 rows without a tenant
+test sessions_are_checked_for_every_role_they_can_become ... ok
+a policy for the SET ROLE target that reads the tenant through a function: refused with "database role `example_platform_switch` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a platform policy that reads the tenant through a function: refused with "database role `example_platform` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a platform policy that reads the tenant through an operator: refused with "database role `example_platform` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a platform policy that reads the tenant through a view: refused with "database role `example_platform` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a platform policy that builds the setting's name: refused with "database role `example_platform` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 1 with tenant A set; accepted once fixed
+a grant that a restrictive policy closes: refused with "database role `example_platform` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns"; a plain platform session reaches 0 rows without a tenant and 0 with tenant A set; accepted once fixed
+a grant on a table without any policy: accepted, no row with or without a tenant
+a platform policy with built-in functions: accepted, 2 rows without a tenant
+<tenant condition> OR true for the platform role: refused (fails closed), 2 rows
+an unusable role's grant, as None with tenant A set: refused (error returned from database: permission denied for table private_items at line 2793)
+an unusable role's grant, as Some("example_platform_unusable") with tenant A set: refused (error returned from database: permission denied to set role "example_platform_unusable" at line 6936)
+an inherit-only role's DELETE on a table with platform_access: accepted, 3 rows without a tenant and 3 with tenant A set; SET ROLE refused (error returned from database: permission denied to set role "example_platform_inherited" at line 6936)
+PlatformDb: refused the database session: database role `example_platform` may SELECT on `public.private_items`, but the permissive policies that apply to it for SELECT open at most the session's tenant as far as the check can tell (the tenant condition, a read of trustiot.tenant_id, or a function, operator, or relation it cannot look into), so a platform session that sets trustiot.tenant_id itself would reach that tenant's rows; revoke the grant or add a policy for the platform role by name (platform_access) that uses only built-in functions and the table's own columns
+test platform_sessions_only_the_tenant_condition_opens_are_refused ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.08s
+
+
+[exited with code 0]
