@@ -1,0 +1,488 @@
+2026-10-10T21:51:47.721Z shapes: onprem, saas; k3s image rancher/k3s:v1.36.5-k3s1@sha256:057cfd5a9d51b89f1f0ee139c28d5d5fdd5aa7ddeac2742a0ba90c6dbc0329bb
+2026-10-10T21:51:47.790Z $ /home/runner/.proto/tools/k3d/5.9.0/k3d cluster create nightly --image rancher/k3s:v1.36.5-k3s1@sha256:057cfd5a9d51b89f1f0ee139c28d5d5fdd5aa7ddeac2742a0ba90c6dbc0329bb --servers 1 --agents 0 --no-lb --k3s-arg --disable=traefik@server:0 --kubeconfig-update-default=false --kubeconfig-switch-context=false --wait --timeout 240s
+    [36mINFO[0m[0000] Prep: Network                                
+    [36mINFO[0m[0000] Created network 'k3d-nightly'                
+    [36mINFO[0m[0000] Created image volume k3d-nightly-images      
+    [36mINFO[0m[0000] Starting new tools node...                   
+    [36mINFO[0m[0001] Creating node 'k3d-nightly-server-0'         
+    [36mINFO[0m[0001] Pulling image 'ghcr.io/k3d-io/k3d-tools:5.9.0' 
+    [36mINFO[0m[0002] Pulling image 'rancher/k3s:v1.36.5-k3s1@sha256:057cfd5a9d51b89f1f0ee139c28d5d5fdd5aa7ddeac2742a0ba90c6dbc0329bb' 
+    [36mINFO[0m[0008] Starting node 'k3d-nightly-tools'            
+    [36mINFO[0m[0008] Using the k3d-tools node to gather environment information 
+    [36mINFO[0m[0008] HostIP: using network gateway 172.18.0.1 address 
+    [36mINFO[0m[0008] Starting cluster 'nightly'                   
+    [36mINFO[0m[0008] Starting servers...                          
+    [36mINFO[0m[0008] Starting node 'k3d-nightly-server-0'         
+    [36mINFO[0m[0014] All agents already running.                  
+    [36mINFO[0m[0014] All helpers already running.                 
+    [36mINFO[0m[0014] Injecting records for hostAliases (incl. host.k3d.internal) and for 1 network members into CoreDNS configmap... 
+    [36mINFO[0m[0016] Cluster 'nightly' created successfully!      
+    [36mINFO[0m[0016] You can now use it like this:                
+    export KUBECONFIG=$(/home/runner/.proto/tools/k3d/5.9.0/k3d kubeconfig write nightly)
+    kubectl cluster-info
+2026-10-10T21:52:03.904Z $ /home/runner/.proto/tools/k3d/5.9.0/k3d kubeconfig get nightly
+2026-10-10T21:52:03.928Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl wait --for=condition=Ready node --all --timeout=180s
+    node/k3d-nightly-server-0 condition met
+2026-10-10T21:52:04.074Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl --namespace kube-system wait --for=create deployment/coredns --timeout=120s
+    deployment.apps/coredns condition met
+2026-10-10T21:52:06.127Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl --namespace kube-system rollout status deployment/coredns --timeout=180s
+    Waiting for deployment spec update to be observed...
+    Waiting for deployment spec update to be observed...
+    Waiting for deployment "coredns" rollout to finish: 0 out of 1 new replicas have been updated...
+    Waiting for deployment "coredns" rollout to finish: 0 of 1 updated replicas are available...
+    deployment "coredns" successfully rolled out
+2026-10-10T21:52:24.107Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl version
+    Client Version: v1.36.5
+    Kustomize Version: v5.8.1
+    Server Version: v1.36.5+k3s1
+2026-10-10T21:52:24.166Z == platform: Gateway API CRDs
+2026-10-10T21:52:24.166Z GET https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml
+2026-10-10T21:52:24.489Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl apply --server-side --filename /home/runner/work/_temp/nightly-out/gateway-api-standard-install.yaml
+2026-10-10T21:52:26.108Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl wait --for=condition=Established crd/gateways.gateway.networking.k8s.io crd/httproutes.gateway.networking.k8s.io --timeout=120s
+    customresourcedefinition.apiextensions.k8s.io/gateways.gateway.networking.k8s.io condition met
+    customresourcedefinition.apiextensions.k8s.io/httproutes.gateway.networking.k8s.io condition met
+2026-10-10T21:52:26.402Z == platform: Istio ambient
+2026-10-10T21:52:26.403Z $ /home/runner/.proto/tools/helm/4.3.0/helm upgrade --install istio-base base --repo https://istio-release.storage.googleapis.com/charts --version 1.30.5 --namespace istio-system --create-namespace -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/istio/values-k3s.yaml --wait --timeout 8m
+    Release "istio-base" does not exist. Installing it now.
+    NAME: istio-base
+    LAST DEPLOYED: Sat Oct 10 21:52:27 2026
+    NAMESPACE: istio-system
+    STATUS: deployed
+    REVISION: 1
+    DESCRIPTION: Install complete
+    TEST SUITE: None
+    NOTES:
+    Istio base successfully installed!
+    
+    To learn more about the release, try:
+      $ helm status istio-base -n istio-system
+      $ helm get all istio-base -n istio-system
+2026-10-10T21:52:28.545Z $ /home/runner/.proto/tools/helm/4.3.0/helm upgrade --install istiod istiod --repo https://istio-release.storage.googleapis.com/charts --version 1.30.5 --namespace istio-system --create-namespace -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/istio/values-k3s.yaml -f /home/runner/work/_temp/nightly-out/istiod-nightly.yaml --wait --timeout 8m
+    Release "istiod" does not exist. Installing it now.
+    NAME: istiod
+    LAST DEPLOYED: Sat Oct 10 21:52:29 2026
+    NAMESPACE: istio-system
+    STATUS: deployed
+    REVISION: 1
+    DESCRIPTION: Install complete
+    TEST SUITE: None
+    NOTES:
+    
+    To learn more about the release, try:
+      $ helm status istiod -n istio-system
+      $ helm get all istiod -n istio-system
+    
+    Next steps:
+      * Get started with ambient: https://istio.io/latest/docs/ops/ambient/getting-started/
+      * Review ambient's architecture: https://istio.io/latest/docs/ops/ambient/architecture/
+      * Review the list of actively supported releases, CVE publications and our hardening guide:
+        * https://istio.io/latest/docs/releases/supported-releases/
+        * https://istio.io/latest/news/security/
+        * https://istio.io/latest/docs/ops/best-practices/security/
+    
+    For further documentation see https://istio.io website
+2026-10-10T21:52:35.250Z $ /home/runner/.proto/tools/helm/4.3.0/helm upgrade --install istio-cni cni --repo https://istio-release.storage.googleapis.com/charts --version 1.30.5 --namespace istio-system --create-namespace -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/istio/values-k3s.yaml --wait --timeout 8m
+    Release "istio-cni" does not exist. Installing it now.
+    NAME: istio-cni
+    LAST DEPLOYED: Sat Oct 10 21:52:35 2026
+    NAMESPACE: istio-system
+    STATUS: deployed
+    REVISION: 1
+    DESCRIPTION: Install complete
+    TEST SUITE: None
+    NOTES:
+    
+    To learn more about the release, try:
+      $ helm status istio-cni -n istio-system
+      $ helm get all istio-cni -n istio-system
+    I1010 21:52:36.069630    4038 warnings.go:107] "Warning: spec.template.metadata.annotations[container.apparmor.security.beta.kubernetes.io/install-cni]: deprecated since v1.30; use the \"appArmorProfile\" field instead"
+2026-10-10T21:52:39.217Z $ /home/runner/.proto/tools/helm/4.3.0/helm upgrade --install ztunnel ztunnel --repo https://istio-release.storage.googleapis.com/charts --version 1.30.5 --namespace istio-system --create-namespace -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/istio/values-k3s.yaml --wait --timeout 8m
+    Release "ztunnel" does not exist. Installing it now.
+    NAME: ztunnel
+    LAST DEPLOYED: Sat Oct 10 21:52:39 2026
+    NAMESPACE: istio-system
+    STATUS: deployed
+    REVISION: 1
+    DESCRIPTION: Install complete
+    TEST SUITE: None
+    NOTES:
+    ztunnel successfully installed!
+    
+    To learn more about the release, try:
+      $ helm status ztunnel -n istio-system
+      $ helm get all ztunnel -n istio-system
+2026-10-10T21:52:42.228Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl wait --for=create gatewayclass/istio --timeout=120s
+    gatewayclass.gateway.networking.k8s.io/istio condition met
+2026-10-10T21:52:42.289Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl wait --for=condition=Accepted gatewayclass/istio --timeout=120s
+    gatewayclass.gateway.networking.k8s.io/istio condition met
+2026-10-10T21:52:42.471Z == platform: identity double image
+2026-10-10T21:52:42.471Z $ docker build --tag localhost/trustiot-e2e/identity-double:nightly --file /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/e2e/identity-double/Containerfile /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/e2e/identity-double
+    #0 building with "default" instance using docker driver
+    
+    #1 [internal] load build definition from Containerfile
+    #1 transferring dockerfile: 701B done
+    #1 DONE 0.0s
+    
+    #2 [auth] oven/bun:pull token for registry-1.docker.io
+    #2 DONE 0.0s
+    
+    #3 [internal] load metadata for docker.io/oven/bun:1.4.2-distroless@sha256:1a0c31c7c5f9d193aedf60fe1cebdeb76ac8f6e29f24be8dd8cbd6df72df26ec
+    #3 DONE 0.6s
+    
+    #4 [internal] load .dockerignore
+    #4 transferring context: 2B done
+    #4 DONE 0.0s
+    
+    #5 [internal] load build context
+    #5 transferring context: 3.10kB done
+    #5 DONE 0.0s
+    
+    #6 [1/2] FROM docker.io/oven/bun:1.4.2-distroless@sha256:1a0c31c7c5f9d193aedf60fe1cebdeb76ac8f6e29f24be8dd8cbd6df72df26ec
+    #6 resolve docker.io/oven/bun:1.4.2-distroless@sha256:1a0c31c7c5f9d193aedf60fe1cebdeb76ac8f6e29f24be8dd8cbd6df72df26ec done
+    #6 extracting sha256:7e92c448ce8a15b2a7ca2f4abe26bfc62bd92ec29916a52e28fbbe9a739f5c04 done
+    #6 sha256:c172f21841dff4c8cf45cde46589c1c2616cefe7e819965e92e6d3475c428aa0 0B / 12.68kB 0.1s
+    #6 sha256:99515e7b4d35e0652d3b0fde571b6ec269222ecacc506f026e1758d6261e9109 0B / 288.54kB 0.1s
+    #6 sha256:de68841ad46565a7d6eae43c49bbfd20776bcf0fd9c937a1f18ba5ad6d909dde 3.32kB / 3.32kB done
+    #6 sha256:7e92c448ce8a15b2a7ca2f4abe26bfc62bd92ec29916a52e28fbbe9a739f5c04 85.83kB / 85.83kB 0.1s done
+    #6 sha256:1a0c31c7c5f9d193aedf60fe1cebdeb76ac8f6e29f24be8dd8cbd6df72df26ec 1.61kB / 1.61kB done
+    #6 sha256:4703df9c2cc99433f27f6230f288835c9d6d56cacbf59931cc0556dca104a34b 4.92kB / 4.92kB done
+    #6 sha256:99ba982a9142213c751a1709dcf088e63d8601f03b3f211bae037be698fef270 0B / 254.45kB 0.1s
+    #6 sha256:c172f21841dff4c8cf45cde46589c1c2616cefe7e819965e92e6d3475c428aa0 12.68kB / 12.68kB 0.1s done
+    #6 sha256:99515e7b4d35e0652d3b0fde571b6ec269222ecacc506f026e1758d6261e9109 288.54kB / 288.54kB 0.1s done
+    #6 sha256:99ba982a9142213c751a1709dcf088e63d8601f03b3f211bae037be698fef270 254.45kB / 254.45kB 0.2s
+    #6 extracting sha256:c172f21841dff4c8cf45cde46589c1c2616cefe7e819965e92e6d3475c428aa0 done
+    #6 sha256:d6b1b89eccacc15c2420b2776d72c1dae334a00805ed9af54bf2f71e4d536f28 32.09kB / 32.09kB 0.2s
+    #6 sha256:2780920e5dbfbe103d03a583ed75345306e572ec5a48cb10361f046767d9f29a 67B / 67B 0.2s
+    #6 sha256:99ba982a9142213c751a1709dcf088e63d8601f03b3f211bae037be698fef270 254.45kB / 254.45kB 0.2s done
+    #6 sha256:7c12895b777bcaa8ccae0605b4de635b68fc32d60fa08f421dc3818bf55ee212 0B / 188B 0.6s
+    #6 sha256:7c12895b777bcaa8ccae0605b4de635b68fc32d60fa08f421dc3818bf55ee212 188B / 188B 0.8s
+    #6 sha256:d6b1b89eccacc15c2420b2776d72c1dae334a00805ed9af54bf2f71e4d536f28 32.09kB / 32.09kB 0.8s done
+    #6 sha256:2780920e5dbfbe103d03a583ed75345306e572ec5a48cb10361f046767d9f29a 67B / 67B 1.0s done
+    #6 sha256:7c12895b777bcaa8ccae0605b4de635b68fc32d60fa08f421dc3818bf55ee212 188B / 188B 1.3s done
+    #6 sha256:dd64bf2dd177757451a98fcdc999a339c35dee5d9872d8f4dc69c8f3c4dd0112 80B / 80B 1.8s
+    #6 sha256:52630fc75a18675c530ed9eba5f55eca09b03e91bd5bc15307918bbc1a7e7296 162B / 162B 1.9s
+    #6 sha256:dd64bf2dd177757451a98fcdc999a339c35dee5d9872d8f4dc69c8f3c4dd0112 80B / 80B 1.9s done
+    #6 sha256:52630fc75a18675c530ed9eba5f55eca09b03e91bd5bc15307918bbc1a7e7296 162B / 162B 1.9s done
+    #6 sha256:ebddc55facdc6b1f7e0f30816a5fc7cc62f38abdf76c0a8b0a0ce52085754795 311B / 311B 2.1s
+    #6 sha256:b839dfae01f66e15c6a8b63520557ed315bdfe036342fa7a0c537259f10d7a9a 351B / 351B 2.1s
+    #6 sha256:3214acf345c0cc6bbdb56b698a41ccdefc624a09d6beb0d38b5de0b2303ecaf4 123B / 123B 2.0s done
+    #6 sha256:ebddc55facdc6b1f7e0f30816a5fc7cc62f38abdf76c0a8b0a0ce52085754795 311B / 311B 2.1s done
+    #6 sha256:6ed1ef0cb1159b9c93a24ceb88b987c6b3a8adff7160940c7c5e6bfc001f1766 143.34kB / 143.34kB 2.3s
+    #6 sha256:b839dfae01f66e15c6a8b63520557ed315bdfe036342fa7a0c537259f10d7a9a 351B / 351B 2.3s done
+    #6 sha256:97c08299c7625b0d2269970fdd56cd5a0b9557b02f2b999294737864c0d82b8b 0B / 5.14MB 3.1s
+    #6 sha256:97c08299c7625b0d2269970fdd56cd5a0b9557b02f2b999294737864c0d82b8b 5.14MB / 5.14MB 3.5s
+    #6 sha256:6ed1ef0cb1159b9c93a24ceb88b987c6b3a8adff7160940c7c5e6bfc001f1766 143.34kB / 143.34kB 3.7s done
+    #6 sha256:97c08299c7625b0d2269970fdd56cd5a0b9557b02f2b999294737864c0d82b8b 5.14MB / 5.14MB 3.7s done
+    #6 extracting sha256:99515e7b4d35e0652d3b0fde571b6ec269222ecacc506f026e1758d6261e9109 0.0s done
+    #6 sha256:12d64ffa683770b61e5fb78b3c555c852285874b1533b74f0e7e97d53ff280bc 0B / 38.06MB 3.7s
+    #6 sha256:8eecbb09376f10f2edacf5bf1f5dbc32f33b2abb279859ae952a2894f1059a29 0B / 204B 3.7s
+    #6 sha256:12d64ffa683770b61e5fb78b3c555c852285874b1533b74f0e7e97d53ff280bc 38.06MB / 38.06MB 3.9s
+    #6 sha256:8eecbb09376f10f2edacf5bf1f5dbc32f33b2abb279859ae952a2894f1059a29 204B / 204B 3.7s done
+    #6 sha256:12d64ffa683770b61e5fb78b3c555c852285874b1533b74f0e7e97d53ff280bc 38.06MB / 38.06MB 4.1s done
+    #6 extracting sha256:99ba982a9142213c751a1709dcf088e63d8601f03b3f211bae037be698fef270 0.0s done
+    #6 extracting sha256:d6b1b89eccacc15c2420b2776d72c1dae334a00805ed9af54bf2f71e4d536f28
+    #6 extracting sha256:d6b1b89eccacc15c2420b2776d72c1dae334a00805ed9af54bf2f71e4d536f28 done
+    #6 extracting sha256:2780920e5dbfbe103d03a583ed75345306e572ec5a48cb10361f046767d9f29a done
+    #6 extracting sha256:7c12895b777bcaa8ccae0605b4de635b68fc32d60fa08f421dc3818bf55ee212 done
+    #6 extracting sha256:3214acf345c0cc6bbdb56b698a41ccdefc624a09d6beb0d38b5de0b2303ecaf4 done
+    #6 extracting sha256:52630fc75a18675c530ed9eba5f55eca09b03e91bd5bc15307918bbc1a7e7296 done
+    #6 extracting sha256:dd64bf2dd177757451a98fcdc999a339c35dee5d9872d8f4dc69c8f3c4dd0112 done
+    #6 extracting sha256:b839dfae01f66e15c6a8b63520557ed315bdfe036342fa7a0c537259f10d7a9a done
+    #6 extracting sha256:ebddc55facdc6b1f7e0f30816a5fc7cc62f38abdf76c0a8b0a0ce52085754795 done
+    #6 extracting sha256:6ed1ef0cb1159b9c93a24ceb88b987c6b3a8adff7160940c7c5e6bfc001f1766 done
+    #6 extracting sha256:97c08299c7625b0d2269970fdd56cd5a0b9557b02f2b999294737864c0d82b8b
+    #6 extracting sha256:97c08299c7625b0d2269970fdd56cd5a0b9557b02f2b999294737864c0d82b8b 0.2s done
+    #6 extracting sha256:12d64ffa683770b61e5fb78b3c555c852285874b1533b74f0e7e97d53ff280bc
+    #6 extracting sha256:12d64ffa683770b61e5fb78b3c555c852285874b1533b74f0e7e97d53ff280bc 0.3s done
+    #6 extracting sha256:8eecbb09376f10f2edacf5bf1f5dbc32f33b2abb279859ae952a2894f1059a29
+    #6 extracting sha256:8eecbb09376f10f2edacf5bf1f5dbc32f33b2abb279859ae952a2894f1059a29 done
+    #6 DONE 5.8s
+    
+    #7 [2/2] COPY server.ts /app/server.ts
+    #7 DONE 0.0s
+    
+    #8 exporting to image
+    #8 exporting layers
+    #8 exporting layers 0.7s done
+    #8 writing image sha256:49498a69e33586f332e82a0bc93c5da1db38e7640966cca0557c41d9cddc78e3 done
+    #8 naming to localhost/trustiot-e2e/identity-double:nightly done
+    #8 DONE 0.8s
+2026-10-10T21:52:50.034Z $ /home/runner/.proto/tools/k3d/5.9.0/k3d image import localhost/trustiot-e2e/identity-double:nightly --cluster nightly
+    [36mINFO[0m[0000] Importing image(s) into cluster 'nightly'    
+    [36mINFO[0m[0000] Starting new tools node...                   
+    [36mINFO[0m[0000] Starting node 'k3d-nightly-tools'            
+    [36mINFO[0m[0000] Saving 1 image(s) from runtime...            
+    [36mINFO[0m[0002] Importing images into nodes...               
+    [36mINFO[0m[0002] Importing images from tarball '/k3d/images/k3d-nightly-images-20261010215250.tar' into node 'k3d-nightly-server-0'... 
+    [36mINFO[0m[0004] Removing the tarball(s) from image volume... 
+    [36mINFO[0m[0005] Removing k3d-tools node...                   
+    [36mINFO[0m[0006] Successfully imported image(s)               
+    [36mINFO[0m[0006] Successfully imported 1 image(s) into 1 cluster(s)
+2026-10-10T21:52:56.096Z == values-onprem.yaml in namespace nightly-onprem
+2026-10-10T21:52:56.096Z -- namespace with the restricted Pod Security level
+2026-10-10T21:52:56.096Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl create namespace nightly-onprem
+    namespace/nightly-onprem created
+2026-10-10T21:52:56.137Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl label namespace nightly-onprem pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/warn=restricted pod-security.kubernetes.io/audit=restricted pod-security.kubernetes.io/enforce-version=latest
+    namespace/nightly-onprem labeled
+2026-10-10T21:52:56.190Z    ok: enforce, warn and audit are restricted
+2026-10-10T21:52:56.190Z -- dummy Secrets for the references the chart makes
+2026-10-10T21:52:56.190Z $ /home/runner/.proto/tools/helm/4.3.0/helm template trustiot /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart --namespace nightly-onprem -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/values-onprem.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/onprem-instance.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/smoke.yaml
+2026-10-10T21:52:56.244Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl create secret generic trustiot-clickhouse-admin --namespace nightly-onprem --from-literal=password=nightly-dummy-value
+    secret/trustiot-clickhouse-admin created
+2026-10-10T21:52:56.284Z $ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=nightly.test -days 1 -keyout /tmp/nightly-tls-eTCm5z/tls.key -out /tmp/nightly-tls-eTCm5z/tls.crt
+    -----
+2026-10-10T21:52:56.289Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl create secret tls trustiot-ingress-tls --namespace nightly-onprem --cert=/tmp/nightly-tls-eTCm5z/tls.crt --key=/tmp/nightly-tls-eTCm5z/tls.key
+    secret/trustiot-ingress-tls created
+2026-10-10T21:52:56.326Z    ok: 2 created: trustiot-clickhouse-admin, trustiot-ingress-tls
+2026-10-10T21:52:56.326Z -- helm install --wait
+2026-10-10T21:52:56.326Z $ /home/runner/.proto/tools/helm/4.3.0/helm upgrade --install trustiot /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart --namespace nightly-onprem -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/values-onprem.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/onprem-instance.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/smoke.yaml --wait --wait-for-jobs --timeout 5m
+    Release "trustiot" does not exist. Installing it now.
+    NAME: trustiot
+    LAST DEPLOYED: Sat Oct 10 21:52:56 2026
+    NAMESPACE: nightly-onprem
+    STATUS: deployed
+    REVISION: 1
+    DESCRIPTION: Install complete
+    TEST SUITE: None
+    I1010 21:52:56.742153    4894 warnings.go:107] "Warning: configured AuthorizationPolicy will deny all traffic to TCP ports under its scope due to the use of only HTTP attributes in a DENY rule; it is recommended to explicitly specify the port"
+2026-10-10T21:53:14.346Z $ /home/runner/.proto/tools/helm/4.3.0/helm get manifest trustiot --namespace nightly-onprem
+2026-10-10T21:53:14.396Z    ok: release trustiot deployed, 18 objects
+2026-10-10T21:53:14.397Z -- every workload of the release is ready
+2026-10-10T21:53:14.398Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl rollout status --namespace nightly-onprem deployment/trustiot-smoke-echo --timeout=180s
+    deployment "trustiot-smoke-echo" successfully rolled out
+2026-10-10T21:53:14.454Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl rollout status --namespace nightly-onprem statefulset/trustiot-clickhouse --timeout=180s
+    statefulset rolling update complete 1 pods at revision trustiot-clickhouse-79b5cd58d7...
+2026-10-10T21:53:14.508Z    ok: Deployment/trustiot-smoke-echo, StatefulSet/trustiot-clickhouse
+2026-10-10T21:53:14.508Z -- every Gateway is programmed
+2026-10-10T21:53:14.509Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl wait --namespace nightly-onprem --for=condition=Programmed gateway.gateway.networking.k8s.io/trustiot-ingress --timeout=180s
+    gateway.gateway.networking.k8s.io/trustiot-ingress condition met
+2026-10-10T21:53:14.684Z    ok: trustiot-ingress
+2026-10-10T21:53:14.684Z -- no pod is broken, not ready or crash-looping
+2026-10-10T21:53:14.685Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get pods --namespace nightly-onprem --output json
+                                        101
+                                        1337
+                                        1337
+                                        65532
+2026-10-10T21:53:14.757Z    ok: 4 pods running or completed
+2026-10-10T21:53:14.757Z -- Services that expose a health endpoint have ready endpoints
+2026-10-10T21:53:14.759Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get endpointslices --namespace nightly-onprem --selector kubernetes.io/service-name=trustiot-smoke-echo --output json
+2026-10-10T21:53:14.810Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get endpointslices --namespace nightly-onprem --selector kubernetes.io/service-name=trustiot-smoke-echo --output json
+2026-10-10T21:53:14.853Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get endpointslices --namespace nightly-onprem --selector kubernetes.io/service-name=trustiot-clickhouse --output json
+2026-10-10T21:53:14.896Z    ok: trustiot-smoke-echo:http/healthz, trustiot-smoke-echo:http/readyz, trustiot-clickhouse:http/ping
+2026-10-10T21:53:14.896Z -- helm uninstall leaves no object of the release
+2026-10-10T21:53:14.896Z $ /home/runner/.proto/tools/helm/4.3.0/helm uninstall trustiot --namespace nightly-onprem --wait --timeout 3m
+    release "trustiot" uninstalled
+2026-10-10T21:53:15.549Z    ok: all objects removed
+2026-10-10T21:53:15.549Z -- ingress e2e test (deploy/chart/tests/e2e)
+2026-10-10T21:53:15.549Z $ ingress e2e as onprem in namespace nightly-e2e-onprem
+    bun test v1.4.2 (744846f84)
+    
+    
+    ::group::deploy/chart/tests/e2e/ingress.e2e.ts:
+    (pass) paths that need the cookie > no cookie or an unknown session: 401 from the identity service, backend not reached [23.40ms]
+    (pass) paths that need the cookie > valid cookie: the backend gets exactly one identity header, from the identity service [6.18ms]
+    (pass) paths that need the cookie > valid cookie plus a forged identity header: the forged value never reaches the backend [6.02ms]
+    (pass) paths that need the cookie > valid cookie plus underscore spellings of the identity header: none reaches the backend [18.44ms]
+    (pass) paths that need the cookie > forged identity header without a cookie: 401 [6.13ms]
+    (pass) paths that need the cookie > x-forwarded-proto is https at the backend, even when the client sends http [14.38ms]
+    (pass) paths that need the cookie > /internal is never reachable: 401 without a cookie, 403 with one [74.53ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: //internal [12.37ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: //internal/tenants [12.40ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: ///internal [12.56ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: //./internal [12.44ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /.//internal/tenants [10.87ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /x/..//internal/tenants [11.67ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2finternal [10.71ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2finternal/tenants [11.02ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2Finternal [12.56ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2f%2finternal [11.73ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /./%2finternal [10.91ms]
+    (pass) paths that need the cookie > an unknown host gets no route [1008.33ms]
+    (pass) public paths > certificate renewal: no cookie needed, the forged identity header is stripped [11.95ms]
+    (pass) public paths > MQTT over WebSocket: no cookie needed, the forged identity header is stripped [10.74ms]
+    (pass) public paths > login on the identity service: no cookie needed, the forged identity header is stripped [9.10ms]
+    (pass) public paths > health check on the identity service: no cookie needed, the forged identity header is stripped [6.30ms]
+    (pass) public paths > certificate renewal: underscore spellings of the identity header are removed [5.65ms]
+    (pass) public paths > MQTT over WebSocket: underscore spellings of the identity header are removed [10.89ms]
+    (pass) public paths > login: underscore spellings of the identity header are removed [4.95ms]
+    (pass) public paths > health check: underscore spellings of the identity header are removed [5.23ms]
+    (pass) public paths > Host with a port: a public path is public on its own host only [2063.65ms]
+    (pass) public paths > GET /healthz answers without a cookie [10.92ms]
+    (pass) public paths > a public path on another host is not public [4031.42ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > the list covers at least 11 forms [0.69ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > dot-dot out of a public path: /healthz/../api/whoami [5.36ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded dot-dot: /healthz/%2e%2e/api/whoami [5.33ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded dot-dot, upper case hex: /healthz/%2E%2E/api/whoami [5.02ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > dot-dot with an encoded slash: /healthz/..%2fapi/whoami [5.32ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded slashes around dot-dot: /healthz%2f..%2fapi/whoami [5.01ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > double leading slash: //api/whoami [5.49ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > double slash after a public path: /healthz//../api/whoami [5.47ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > upper-case public path then dot-dot: /HEALTHZ/../api/whoami [5.38ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > upper-case public path: /HEALTHZ [6.05ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > mixed-case public path: /Auth/Login [6.10ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path of the gateway host, dot-dot: /mqtt/../api/whoami [1005.30ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path in the query string: /api/whoami?x=/healthz [5.77ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path in the query after dot-dot: /api/whoami?/../healthz [4.62ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > semicolon path parameter, then dot-dot: /healthz;/../api/whoami [4.72ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > dot-dot with a semicolon: /healthz/..;/api/whoami [4.58ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > semicolon parameter on a public path: /healthz;x=y [4.84ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > single dot segment: /./api/whoami [4.81ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded single dot: /%2e/api/whoami [4.99ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded hash before a public path: /api/whoami%23/healthz [5.15ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > raw hash before a public path: /api/whoami#/healthz [5.18ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > trailing slash on a public path: /healthz/ [5.74ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path as a prefix: /healthz/api/whoami [5.62ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path plus suffix: /healthzx [5.73ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > backslash dot-dot: /healthz\..\api\whoami [5.52ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded backslash dot-dot: /healthz%5c..%5capi%5cwhoami [5.39ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > absolute-form request target: http://APP_HOST/healthz/../api/whoami [5.75ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded internal prefix: /%69nternal/tenants [4.85ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > internal prefix after dot-dot: /healthz/../internal/tenants [5.96ms]
+    (pass) identity service failures > slow identity service: 503 after the ext_authz timeout, backend not reached [2535.72ms]
+    (pass) identity service failures > identity service down: cookie routes return 503 within the timeout, public paths keep working [31907.30ms]
+    
+    ::endgroup::
+    
+     61 pass
+     0 fail
+     382 expect() calls
+    Ran 61 tests across 1 file. [52.22s]
+2026-10-10T21:54:18.190Z    ok: 61 passed, 0 failed
+2026-10-10T21:54:18.191Z -- delete the namespace
+2026-10-10T21:54:18.238Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl delete namespace nightly-onprem --ignore-not-found --wait=true --timeout=180s
+    namespace "nightly-onprem" deleted
+2026-10-10T21:54:28.692Z    ok: deleted
+2026-10-10T21:54:28.692Z == values-saas.yaml in namespace nightly-saas
+2026-10-10T21:54:28.692Z -- namespace with the restricted Pod Security level
+2026-10-10T21:54:28.693Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl create namespace nightly-saas
+    namespace/nightly-saas created
+2026-10-10T21:54:28.740Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl label namespace nightly-saas pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/warn=restricted pod-security.kubernetes.io/audit=restricted pod-security.kubernetes.io/enforce-version=latest
+    namespace/nightly-saas labeled
+2026-10-10T21:54:28.793Z    ok: enforce, warn and audit are restricted
+2026-10-10T21:54:28.793Z -- dummy Secrets for the references the chart makes
+2026-10-10T21:54:28.793Z $ /home/runner/.proto/tools/helm/4.3.0/helm template trustiot /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart --namespace nightly-saas -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/values-saas.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/saas-instance.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/smoke.yaml
+2026-10-10T21:54:28.850Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl create secret generic trustiot-sentry --namespace nightly-saas --from-literal=dsn=nightly-dummy-value
+    secret/trustiot-sentry created
+2026-10-10T21:54:28.890Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl create secret generic trustiot-clickhouse-admin --namespace nightly-saas --from-literal=password=nightly-dummy-value
+    secret/trustiot-clickhouse-admin created
+2026-10-10T21:54:28.927Z    ok: 2 created: trustiot-sentry, trustiot-clickhouse-admin
+2026-10-10T21:54:28.927Z -- helm install --wait
+2026-10-10T21:54:28.927Z $ /home/runner/.proto/tools/helm/4.3.0/helm upgrade --install trustiot /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart --namespace nightly-saas -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/values-saas.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/saas-instance.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/smoke.yaml --wait --wait-for-jobs --timeout 5m
+    Release "trustiot" does not exist. Installing it now.
+    NAME: trustiot
+    LAST DEPLOYED: Sat Oct 10 21:54:29 2026
+    NAMESPACE: nightly-saas
+    STATUS: deployed
+    REVISION: 1
+    DESCRIPTION: Install complete
+    TEST SUITE: None
+    I1010 21:54:29.319883   10998 warnings.go:107] "Warning: configured AuthorizationPolicy will deny all traffic to TCP ports under its scope due to the use of only HTTP attributes in a DENY rule; it is recommended to explicitly specify the port"
+2026-10-10T21:54:38.912Z $ /home/runner/.proto/tools/helm/4.3.0/helm get manifest trustiot --namespace nightly-saas
+2026-10-10T21:54:38.958Z    ok: release trustiot deployed, 18 objects
+2026-10-10T21:54:38.958Z -- every workload of the release is ready
+2026-10-10T21:54:38.958Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl rollout status --namespace nightly-saas deployment/trustiot-smoke-echo --timeout=180s
+    deployment "trustiot-smoke-echo" successfully rolled out
+2026-10-10T21:54:39.014Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl rollout status --namespace nightly-saas statefulset/trustiot-clickhouse --timeout=180s
+    statefulset rolling update complete 1 pods at revision trustiot-clickhouse-79b5cd58d7...
+2026-10-10T21:54:39.065Z    ok: Deployment/trustiot-smoke-echo, StatefulSet/trustiot-clickhouse
+2026-10-10T21:54:39.065Z -- every Gateway is programmed
+2026-10-10T21:54:39.065Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl wait --namespace nightly-saas --for=condition=Programmed gateway.gateway.networking.k8s.io/trustiot-ingress --timeout=180s
+    gateway.gateway.networking.k8s.io/trustiot-ingress condition met
+2026-10-10T21:54:39.234Z    ok: trustiot-ingress
+2026-10-10T21:54:39.234Z -- no pod is broken, not ready or crash-looping
+2026-10-10T21:54:39.234Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get pods --namespace nightly-saas --output json
+                                        101
+                                        1337
+                                        1337
+                                        65532
+2026-10-10T21:54:39.290Z    ok: 4 pods running or completed
+2026-10-10T21:54:39.290Z -- Services that expose a health endpoint have ready endpoints
+2026-10-10T21:54:39.292Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get endpointslices --namespace nightly-saas --selector kubernetes.io/service-name=trustiot-smoke-echo --output json
+2026-10-10T21:54:39.343Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get endpointslices --namespace nightly-saas --selector kubernetes.io/service-name=trustiot-smoke-echo --output json
+2026-10-10T21:54:39.392Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get endpointslices --namespace nightly-saas --selector kubernetes.io/service-name=trustiot-clickhouse --output json
+2026-10-10T21:54:39.436Z    ok: trustiot-smoke-echo:http/healthz, trustiot-smoke-echo:http/readyz, trustiot-clickhouse:http/ping
+2026-10-10T21:54:39.436Z -- helm uninstall leaves no object of the release
+2026-10-10T21:54:39.436Z $ /home/runner/.proto/tools/helm/4.3.0/helm uninstall trustiot --namespace nightly-saas --wait --timeout 3m
+    release "trustiot" uninstalled
+2026-10-10T21:54:40.003Z    ok: all objects removed
+2026-10-10T21:54:40.003Z -- ingress e2e test (deploy/chart/tests/e2e)
+2026-10-10T21:54:40.003Z $ ingress e2e as saas in namespace nightly-e2e-saas
+    bun test v1.4.2 (744846f84)
+    
+    
+    ::group::deploy/chart/tests/e2e/ingress.e2e.ts:
+    (pass) paths that need the cookie > no cookie or an unknown session: 401 from the identity service, backend not reached [3020.34ms]
+    (pass) paths that need the cookie > valid cookie: the backend gets exactly one identity header, from the identity service [1006.38ms]
+    (pass) paths that need the cookie > valid cookie plus a forged identity header: the forged value never reaches the backend [1013.15ms]
+    (pass) paths that need the cookie > valid cookie plus underscore spellings of the identity header: none reaches the backend [1006.46ms]
+    (pass) paths that need the cookie > forged identity header without a cookie: 401 [1010.89ms]
+    (pass) paths that need the cookie > x-forwarded-proto is https at the backend, even when the client sends http [2013.68ms]
+    (pass) paths that need the cookie > /internal is never reachable: 401 without a cookie, 403 with one [6036.42ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: //internal [2013.27ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: //internal/tenants [2013.02ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: ///internal [2010.57ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: //./internal [2009.97ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /.//internal/tenants [2010.22ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /x/..//internal/tenants [2010.38ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2finternal [2010.70ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2finternal/tenants [2013.38ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2Finternal [2011.80ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /%2f%2finternal [2011.65ms]
+    (pass) paths that need the cookie > /internal behind doubled or encoded slashes is denied: /./%2finternal [2011.43ms]
+    (pass) paths that need the cookie > an unknown host gets no route [2007.21ms]
+    (pass) public paths > certificate renewal: no cookie needed, the forged identity header is stripped [1010.93ms]
+    (pass) public paths > MQTT over WebSocket: no cookie needed, the forged identity header is stripped [1010.77ms]
+    (pass) public paths > login on the identity service: no cookie needed, the forged identity header is stripped [1009.17ms]
+    (pass) public paths > health check on the identity service: no cookie needed, the forged identity header is stripped [1008.32ms]
+    (pass) public paths > certificate renewal: underscore spellings of the identity header are removed [1010.88ms]
+    (pass) public paths > MQTT over WebSocket: underscore spellings of the identity header are removed [1010.19ms]
+    (pass) public paths > login: underscore spellings of the identity header are removed [1008.94ms]
+    (pass) public paths > health check: underscore spellings of the identity header are removed [1005.25ms]
+    (pass) public paths > Host with a port: a public path is public on its own host only [12057.77ms]
+    (pass) public paths > GET /healthz answers without a cookie [1005.07ms]
+    (pass) public paths > a public path on another host is not public [10029.68ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > the list covers at least 11 forms [0.18ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > dot-dot out of a public path: /healthz/../api/whoami [1005.79ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded dot-dot: /healthz/%2e%2e/api/whoami [1006.15ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded dot-dot, upper case hex: /healthz/%2E%2E/api/whoami [1005.08ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > dot-dot with an encoded slash: /healthz/..%2fapi/whoami [1004.97ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded slashes around dot-dot: /healthz%2f..%2fapi/whoami [1006.01ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > double leading slash: //api/whoami [1006.02ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > double slash after a public path: /healthz//../api/whoami [1005.93ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > upper-case public path then dot-dot: /HEALTHZ/../api/whoami [1009.46ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > upper-case public path: /HEALTHZ [1005.84ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > mixed-case public path: /Auth/Login [1005.53ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path of the gateway host, dot-dot: /mqtt/../api/whoami [2003.66ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path in the query string: /api/whoami?x=/healthz [1005.60ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path in the query after dot-dot: /api/whoami?/../healthz [1005.64ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > semicolon path parameter, then dot-dot: /healthz;/../api/whoami [1005.11ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > dot-dot with a semicolon: /healthz/..;/api/whoami [1006.04ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > semicolon parameter on a public path: /healthz;x=y [1005.08ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > single dot segment: /./api/whoami [1005.39ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded single dot: /%2e/api/whoami [1005.81ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded hash before a public path: /api/whoami%23/healthz [1005.06ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > raw hash before a public path: /api/whoami#/healthz [1005.06ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > trailing slash on a public path: /healthz/ [1005.02ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path as a prefix: /healthz/api/whoami [1005.21ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > public path plus suffix: /healthzx [1004.45ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > backslash dot-dot: /healthz\..\api\whoami [1005.63ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded backslash dot-dot: /healthz%5c..%5capi%5cwhoami [1005.86ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > absolute-form request target: http://APP_HOST/healthz/../api/whoami [1005.01ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > encoded internal prefix: /%69nternal/tenants [1006.11ms]
+    (pass) path-bypass attempts never reach a cookie route without a cookie > internal prefix after dot-dot: /healthz/../internal/tenants [1005.10ms]
+    (pass) identity service failures > slow identity service: 503 after the ext_authz timeout, backend not reached [7529.02ms]
+    (pass) identity service failures > identity service down: cookie routes return 503 within the timeout, public paths keep working [74903.10ms]
+    
+    ::endgroup::
+    
+     61 pass
+     0 fail
+     382 expect() calls
+    Ran 61 tests across 1 file. [188.28s]
+2026-10-10T21:57:58.707Z    ok: 61 passed, 0 failed
+2026-10-10T21:57:58.707Z -- delete the namespace
+2026-10-10T21:57:58.754Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl delete namespace nightly-saas --ignore-not-found --wait=true --timeout=180s
+    namespace "nightly-saas" deleted
+2026-10-10T21:58:09.231Z    ok: deleted
+2026-10-10T21:58:11.735Z k3d cluster delete exited with 0
+2026-10-10T21:58:11.736Z nightly smoke test passed
