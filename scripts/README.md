@@ -271,7 +271,7 @@ bun scripts/release/verify.ts --plan "$work/plan.json" --published "$work/publis
 podman stop release-registry
 ```
 
-主機是 x86_64 或 arm64 都能跑，指令相同，不需要模擬器。release.yml 在 arm64 runner 上建置（Laysi/trustiot-v2#310），所以要重現某次發佈的服務映像 digest，要在 arm64 上跑：x86 上交叉編譯出的服務執行檔功能相同、位元不同（chart 與 `release-selftest` 相同），原因與 x86 上以 qemu-user 模擬 arm64 容器重現的做法見 [CI 與發佈](../docs/architecture/ci-release.md) 的「交叉編譯與可重現建置」與其測試報告。
+主機是 x86_64 或 arm64 都能跑，指令相同，不需要模擬器。release.yml 在 arm64 runner 上建置（Laysi/trustiot-v2#310），所以要重現某次發佈的服務映像 digest，要在 arm64 上跑：x86 上交叉編譯出的服務執行檔功能相同、位元不同（chart 相同），原因與 x86 上以 qemu-user 模擬 arm64 容器重現的做法見 [CI 與發佈](../docs/architecture/ci-release.md) 的「交叉編譯與可重現建置」與其測試報告。
 
 本機模式打包的 chart 除了寫入映像 digest，也把 `serviceDefaults.image.registry` 與 `postgres.bundled.image.repository` 改成本機的 registry，chart 指向的就是剛推送的映像；正式發佈不改 registry，chart 裡的 repository 與推送的位置不同時 publish 停止。檢查打包出的 chart：`helm pull oci://127.0.0.1:5068/laysi/trustiot-v2/charts/trustiot --version 0.0.0-rc.1 --plain-http`，再以 `helm show values` 看 digest。
 

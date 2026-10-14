@@ -55,7 +55,7 @@ describe("privacyError", () => {
   test("several public packages are all named, before anything else", () => {
     const results: PackagePrivacy[] = [
       { name: "identity", ref: REF("identity"), state: "public" },
-      privateResult("release-selftest"),
+      privateResult("migrate"),
       { name: "postgres", ref: REF("postgres"), state: "public" },
       { name: "trustiot", ref: CHART_REF, state: "public" },
     ];
@@ -64,7 +64,7 @@ describe("privacyError", () => {
     for (const ref of [REF("identity"), REF("postgres"), CHART_REF]) {
       expect(message).toContain(ref);
     }
-    expect(message).not.toContain(REF("release-selftest"));
+    expect(message).not.toContain(REF("migrate"));
   });
 
   test("an unknown visibility fails too, and is named with the registry's answer", () => {

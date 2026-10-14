@@ -206,7 +206,8 @@ describe("discoverImages", () => {
 
   test("the repository's own images are valid", () => {
     const images = discoverImages(ROOT);
-    expect(images.map((image) => image.name)).toContain("release-selftest");
+    expect(images).toContainEqual({ kind: "containerfile", name: "postgres", context: "deploy/images/postgres" });
+    expect(images).toContainEqual({ kind: "rust", name: "migrate", package: "migrate" });
     // Laysi/trustiot-v2#308: the identity service ships as the chart's `identity` service.
     expect(images).toContainEqual({ kind: "rust", name: "identity", package: "identity" });
   });

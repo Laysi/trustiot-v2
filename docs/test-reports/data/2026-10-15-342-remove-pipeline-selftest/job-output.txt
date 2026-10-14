@@ -1,0 +1,605 @@
+rcheck: queued on the build host at 02:32:48 as 342-1fb678e0; running now: 402-6ac99627 since 02:32:47
+=== environment ===
+Linux x86_64
+podman version 5.7.0
+skopeo version 1.21.0-dev
+CARGO_TARGET_DIR is set
+
+=== proto install ===
+[rust] Installing Rust with specification 1.99.0
+[cargo-zigbuild] Installing cargo-zigbuild with specification 0.23.4
+[helm] Installing Helm with specification 4.3.0
+[zig] Installing Zig with specification 0.16.0
+[actionlint] Installing actionlint with specification 1.7.12
+[cosign] Installing cosign with specification 3.1.3
+[gitleaks] Installing gitleaks with specification 8.30.1
+[flux] Installing flux with specification 2.9.6
+[go] Installing Go with specification 1.27.2
+[k3d] Installing k3d with specification 5.9.0
+[kubectl] Installing kubectl with specification 1.36.5
+[syft] Installing syft with specification 1.52.0
+[bun] Installing Bun with specification 1.4.2
+[cargo-auditable] Installing cargo-auditable with specification 0.7.6
+[sops] Installing sops with specification 3.13.3
+[kubeconform] Installing kubeconform with specification 0.8.0
+[cargo-deny] Installing cargo-deny with specification 0.20.2
+[kubeconform] kubeconform 0.8.0 installed
+[k3d] k3d 5.9.0 installed
+[actionlint] actionlint 1.7.12 installed
+[cargo-zigbuild] cargo-zigbuild 0.23.4 installed
+[sops] sops 3.13.3 installed
+[cosign] cosign 3.1.3 installed
+[flux] flux 2.9.6 installed
+[bun] Bun 1.4.2 installed
+[gitleaks] gitleaks 8.30.1 installed
+[cargo-auditable] cargo-auditable 0.7.6 installed
+[rust] Rust 1.99.0 installed
+[helm] Helm 4.3.0 installed
+[go] Go 1.27.2 installed
+[cargo-deny] cargo-deny 0.20.2 installed
+[syft] syft 1.52.0 installed
+[kubectl] kubectl 1.36.5 installed
+[zig] Zig 0.16.0 installed
+
+│ SUCCESS
+│ Installed kubeconform, k3d, actionlint, cargo-zigbuild, sops, cosign, flux, bun, gitleaks, cargo-auditable, rust, helm, go, cargo-deny, syft, kubectl, and zig in 0s!
+
+--- proto install: exit 0
+zig: ~/.proto/tools/zig/0.16.0/zig
+cargo-zigbuild: ~/.proto/tools/cargo-zigbuild/0.23.4/cargo-zigbuild
+cargo-auditable: ~/.proto/tools/cargo-auditable/0.7.6/cargo-auditable
+syft: ~/.proto/tools/syft/1.52.0/syft
+helm: ~/.proto/tools/helm/4.3.0/helm
+
+=== cargo fmt ===
+--- cargo fmt: exit 0
+
+=== cargo clippy ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s
+--- cargo clippy: exit 0
+
+=== cargo test ===
+     13 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      4 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.32s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.63s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.69s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.87s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.62s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.98s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.21s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.55s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.40s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.02s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.70s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.64s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.23s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.57s
+      2 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.14s
+      1 test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.06s
+      1 test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.97s
+      1 test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+      1 test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.05s
+      1 test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+      1 test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.68s
+      1 test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.68s
+      1 test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+      1 test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.15s
+      1 test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+      1 test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+      1 test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.08s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.58s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.79s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.64s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.79s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.58s
+      1 test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+      1 test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+      1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+      1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+      1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.76s
+      1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.76s
+      1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.66s
+      1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.60s
+      1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.48s
+      1 test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+      1 test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+      1 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+      1 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.41s
+      1 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s
+      4 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+      1 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.74s
+      1 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.31s
+      1 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.04s
+      3 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.93s
+      1 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.28s
+      1 test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+      1 test result: ok. 89 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.22s
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.04s
+--- cargo test: exit 0
+
+=== cargo deny ===
+          │   ├── identity v0.1.0 (*)
+          │   └── migrate v0.1.0 (*)
+          └── testkit v0.1.0 (*)
+
+advisories ok, bans ok, licenses ok, sources ok
+--- cargo deny: exit 0
+
+=== bun install ===
+bun install v1.4.2 (744846f84)
+
++ @actions/expressions@0.3.61
++ @types/bun@1.4.2
++ typescript@7.0.2
+
+7 packages installed [9.00ms]
+--- bun install: exit 0
+
+=== typecheck ===
+$ tsc --noEmit --project tsconfig.json
+--- typecheck: exit 0
+
+=== bun test scripts ===
+(skip) the dev environment with podman > up uses images of this machine's platform although the store holds Mosquitto for another one
+(skip) the dev environment with podman > starts, passes every check, seeds, rotates credentials, stops and purges without leftovers
+
+ 873 pass
+ 4 skip
+ 0 fail
+ 3182 expect() calls
+Ran 877 tests across 36 files. [2.39s]
+--- bun test scripts: exit 0
+
+=== bun test scripts/release ===
+
+ 153 pass
+ 1 skip
+ 0 fail
+ 423 expect() calls
+Ran 154 tests across 8 files. [689.00ms]
+--- bun test scripts/release: exit 0
+
+=== check-workflows ===
+workflow policy: 4 file(s) checked, no violations
+--- check-workflows: exit 0
+
+=== check-secret-handling ===
+secret handling: 402 file(s) checked, 6 container build file(s), no violations
+--- check-secret-handling: exit 0
+
+=== cargo tree identity ===
+cc v1.7.0
+[build-dependencies]
+└── ring v0.17.14
+    ├── rustls v0.23.46
+    └── rustls-webpki v0.103.15
+--- cargo tree identity: exit 0
+
+=== cargo tree assets ===
+cc v1.7.0
+[build-dependencies]
+└── ring v0.17.14
+    ├── rustls v0.23.46
+    └── rustls-webpki v0.103.15
+--- cargo tree assets: exit 0
+
+=== cargo tree migrate ===
+cc v1.7.0
+[build-dependencies]
+└── ring v0.17.14
+    ├── rustls v0.23.46
+    └── rustls-webpki v0.103.15
+--- cargo tree migrate: exit 0
+
+=== plan ===
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.1 → version 0.0.0-rc.1 (prerelease), commit 68a9e530de4402a602e3004e59911fef58154eef
+[release:plan] image 127.0.0.1:5068/laysi/trustiot-v2/assets:0.0.0-rc.1 (Rust package assets)
+[release:plan] image 127.0.0.1:5068/laysi/trustiot-v2/identity:0.0.0-rc.1 (Rust package identity)
+[release:plan] image 127.0.0.1:5068/laysi/trustiot-v2/migrate:0.0.0-rc.1 (Rust package migrate)
+[release:plan] image 127.0.0.1:5068/laysi/trustiot-v2/postgres:0.0.0-rc.1 (deploy/images/postgres)
+[release:plan] chart 127.0.0.1:5068/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1
+[release:plan] first release: the notes list every commit
+--- plan: exit 0
+
+=== plan.json ===
+{
+  "tag": "v0.0.0-rc.1",
+  "version": "0.0.0-rc.1",
+  "images": [
+    {
+      "name": "assets",
+      "kind": "rust",
+      "package": "assets"
+    },
+    {
+      "name": "identity",
+      "kind": "rust",
+      "package": "identity"
+    },
+    {
+      "name": "migrate",
+      "kind": "rust",
+      "package": "migrate"
+    },
+    {
+      "name": "postgres",
+      "kind": "containerfile"
+    }
+  ],
+  "chart": {
+    "name": "trustiot",
+    "repository": "127.0.0.1:5068/laysi/trustiot-v2/charts/trustiot",
+    "version": "0.0.0-rc.1"
+  }
+}
+--- plan.json: exit 0
+
+=== build ===
+info: syncing channel updates for 1.99.0-x86_64-unknown-linux-gnu
+
+  1.99.0-x86_64-unknown-linux-gnu unchanged - rustc 1.99.0 (b940084d7 2026-09-28)
+
+info: component rust-std for target aarch64-unknown-linux-musl is up to date
+[release:build] cross-compiling assets, identity, migrate for aarch64-unknown-linux-musl
+warning: linker stderr: ignoring deprecated linker optimization setting '1'
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `identity` (bin "identity") generated 1 warning
+warning: `assets` (bin "assets") generated 1 warning (1 duplicate)
+warning: `migrate` (bin "migrate") generated 1 warning (1 duplicate)
+    Finished `release` profile [optimized] target(s) in 0.10s
+[release:build] building 127.0.0.1:5068/laysi/trustiot-v2/assets:0.0.0-rc.1 for linux/arm64
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+Trying to pull gcr.io/distroless/static-debian13@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3...
+Getting image source signatures
+Copying config sha256:bcff74c94c33712c3758af70114dfb388180cf43e789031b9a6d4195195bf97e
+Writing manifest to image destination
+STEP 2/5: COPY --chmod=0555 assets /usr/local/bin/assets
+--> 777c374b4a65
+STEP 3/5: USER 65532:65532
+--> 2e227cd3fda4
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/assets"]
+--> 86105a923ca1
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="68a9e530de4402a602e3004e59911fef58154eef" "org.opencontainers.image.version"="0.0.0-rc.1" "org.opencontainers.image.title"="assets"
+COMMIT localhost/trustiot-release/assets:0.0.0-rc.1
+--> bdc85d22350e
+Successfully tagged localhost/trustiot-release/assets:0.0.0-rc.1
+bdc85d22350e51c81a505c8a78695e1dc3276e27e676117929dd00940e4116ad
+[release:build] 127.0.0.1:5068/laysi/trustiot-v2/assets:0.0.0-rc.1 → sha256:a580411c77dd9ae5d40bba4f6f82b6a74ba9830315e8ca89f7c028b94e0b60c0, SBOM SPDX-2.3 with 214 packages
+[release:build] building 127.0.0.1:5068/laysi/trustiot-v2/identity:0.0.0-rc.1 for linux/arm64
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+STEP 2/5: COPY --chmod=0555 identity /usr/local/bin/identity
+--> bb9f452acbdf
+STEP 3/5: USER 65532:65532
+--> 0a46b3e6e93f
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/identity"]
+--> 9a7c7bfe0933
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="68a9e530de4402a602e3004e59911fef58154eef" "org.opencontainers.image.version"="0.0.0-rc.1" "org.opencontainers.image.title"="identity"
+COMMIT localhost/trustiot-release/identity:0.0.0-rc.1
+--> 74a8da5e58ab
+Successfully tagged localhost/trustiot-release/identity:0.0.0-rc.1
+74a8da5e58abf551e3e53cd252f8ab74be3fadf165586b2dbdc8e46b0a1ec3c3
+[release:build] 127.0.0.1:5068/laysi/trustiot-v2/identity:0.0.0-rc.1 → sha256:d07b5add8d51f08112fa21c98d68f5fa7b0f90ba1d50f97c78fff19b4fdfd76e, SBOM SPDX-2.3 with 214 packages
+[release:build] building 127.0.0.1:5068/laysi/trustiot-v2/migrate:0.0.0-rc.1 for linux/arm64
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+STEP 2/5: COPY --chmod=0555 migrate /usr/local/bin/migrate
+--> a8e9e8d7da6e
+STEP 3/5: USER 65532:65532
+--> cb6d6428e58b
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/migrate"]
+--> fa4e6a5ca264
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="68a9e530de4402a602e3004e59911fef58154eef" "org.opencontainers.image.version"="0.0.0-rc.1" "org.opencontainers.image.title"="migrate"
+COMMIT localhost/trustiot-release/migrate:0.0.0-rc.1
+--> 68689fd734b1
+Successfully tagged localhost/trustiot-release/migrate:0.0.0-rc.1
+68689fd734b17b536591bf2119e62f43ef4333e7ba5d9deb18e096a5f1f74532
+[release:build] 127.0.0.1:5068/laysi/trustiot-v2/migrate:0.0.0-rc.1 → sha256:e6303320c951fe99dd67ba0e1f689963e97ed328f097ab3592adadeda4d2a7fd, SBOM SPDX-2.3 with 215 packages
+[release:build] building 127.0.0.1:5068/laysi/trustiot-v2/postgres:0.0.0-rc.1 for linux/arm64
+[1/3] STEP 1/1: FROM ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie@sha256:c9be7f221a05b18fe65259d9136affbabe3b39ad91c3b68f8f2f990a45f35f38 AS base
+Trying to pull ghcr.io/cloudnative-pg/postgresql@sha256:c9be7f221a05b18fe65259d9136affbabe3b39ad91c3b68f8f2f990a45f35f38...
+Getting image source signatures
+Copying config sha256:00983e1476cf9b1f9c32d4435e71265d8763fdad4472a275a57322c3a9fba909
+Writing manifest to image destination
+--> 00983e1476cf
+[2/3] STEP 1/17: FROM --platform=linux/amd64 ghcr.io/cloudnative-pg/postgresql:18.6-minimal-trixie@sha256:c9be7f221a05b18fe65259d9136affbabe3b39ad91c3b68f8f2f990a45f35f38 AS build
+Trying to pull ghcr.io/cloudnative-pg/postgresql@sha256:c9be7f221a05b18fe65259d9136affbabe3b39ad91c3b68f8f2f990a45f35f38...
+Getting image source signatures
+Copying config sha256:9ff14d8ddafe9054956b1e607d42d26619dde71033b6557e43a8476ac21e0b1c
+Writing manifest to image destination
+[2/3] STEP 2/17: ARG AGE_VERSION=1.8.0
+--> 9a66862eba31
+[2/3] STEP 3/17: ARG AGE_MIRROR_URL=https://dlcdn.apache.org/age/PG18
+--> 20569ccdb3aa
+[2/3] STEP 4/17: ARG AGE_ARCHIVE_URL=https://archive.apache.org/dist/age/PG18
+--> e6c5049f55f7
+[2/3] STEP 5/17: ARG AGE_SHA512=8103dc6a4daec0441c2bdfe4e456be619d04526efa5c4e1a5148a29d7e6359e5df7d9a1fabbc6a6a08f6229c4d6f8634b7bf3554eca8ffb58550382542279866
+--> 77b3c127e029
+[2/3] STEP 6/17: ARG PG_PACKAGE_VERSION=18.6-1.pgdg13+2
+--> f2c70ebfcd25
+[2/3] STEP 7/17: ARG PG_SERVER_DEV_SHA256=bb88940b9d12e11e166e8f7dedd30859f3396d4027e00979e0a19dd41fff7f3a
+--> f67615e8a7a7
+[2/3] STEP 8/17: ARG DEBIAN_SNAPSHOT=20260918T000000Z
+--> 40de2b83b4c1
+[2/3] STEP 9/17: ARG TARGETARCH
+--> f63cc0b32a02
+[2/3] STEP 10/17: USER root
+--> cc558e880fbc
+[2/3] STEP 11/17: COPY --from=base /var/lib/dpkg/status /tmp/target-dpkg-status
+--> 03b58a82cc38
+[2/3] STEP 12/17: COPY --from=base /usr/lib/postgresql/18/lib/pgxs/ /usr/lib/postgresql/18/lib/pgxs/
+--> b646d0b8aec7
+[2/3] STEP 13/17: RUN set -eu;     if [ "${TARGETARCH}" != arm64 ]; then       echo "this image is built for linux/arm64 only, not ${TARGETARCH}" >&2; exit 1;     fi;     target_version="$(awk '/^Package: /{p=$2} /^Version: /{if (p=="postgresql-18") print $2}' /tmp/target-dpkg-status)";     if [ "${target_version}" != "${PG_PACKAGE_VERSION}" ]; then       echo "the base image has postgresql-18 ${target_version:-(none)}, but PG_PACKAGE_VERSION is ${PG_PACKAGE_VERSION}; update the pins together (README.md)" >&2;       exit 1;     fi;     build_version="$(dpkg-query --showformat='${Version}' --show postgresql-client-18)";     if [ "${build_version}" != "${PG_PACKAGE_VERSION}" ]; then       echo "the build stage has postgresql-client-18 ${build_version}, expected ${PG_PACKAGE_VERSION}" >&2;       exit 1;     fi
+--> 380fe9c8716f
+[2/3] STEP 14/17: RUN set -eu;     rm -f /etc/apt/sources.list.d/*;     printf '%s\n'       'Types: deb'       "URIs: http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}"       'Suites: trixie'       'Components: main'       'Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp'       > /etc/apt/sources.list.d/debian-snapshot.sources;     apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Retries=5 update;     apt-get -o Acquire::Retries=5 install -y --no-install-recommends       binutils bison ca-certificates curl flex gcc-aarch64-linux-gnu libc6-dev-arm64-cross make;     rm -rf /var/lib/apt/lists/*
+Fetched 9819 kB in 2s (4151 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+ca-certificates is already the newest version (20250419).
+The following additional packages will be installed:
+  binutils-aarch64-linux-gnu binutils-common binutils-x86-64-linux-gnu
+  cpp-14-aarch64-linux-gnu cpp-aarch64-linux-gnu gcc-14-aarch64-linux-gnu
+  gcc-14-aarch64-linux-gnu-base gcc-14-cross-base libasan8-arm64-cross
+  libatomic1-arm64-cross libbinutils libbrotli1 libc6-arm64-cross libcc1-0
+  libctf-nobfd0 libctf0 libcurl4t64 libgcc-14-dev-arm64-cross
+  libgcc-s1-arm64-cross libgomp1-arm64-cross libgprofng0
+  libhwasan0-arm64-cross libisl23 libitm1-arm64-cross libjansson4
+  liblsan0-arm64-cross libmpc3 libmpfr6 libnghttp2-14 libnghttp3-9 libpsl5t64
+  librtmp1 libsframe1 libssh2-1t64 libstdc++6-arm64-cross libtsan2-arm64-cross
+  libubsan1-arm64-cross linux-libc-dev-arm64-cross m4
+Suggested packages:
+  binutils-doc gprofng-gui binutils-gold bison-doc gcc-14-locales cpp-14-doc
+  cpp-doc build-essential flex-doc gcc-14-doc manpages-dev autoconf automake
+  libtool gdb-aarch64-linux-gnu gcc-doc m4-doc make-doc
+Recommended packages:
+  bash-completion gcc | c-compiler libfl-dev publicsuffix
+The following NEW packages will be installed:
+  binutils binutils-aarch64-linux-gnu binutils-common
+  binutils-x86-64-linux-gnu bison cpp-14-aarch64-linux-gnu
+  cpp-aarch64-linux-gnu curl flex gcc-14-aarch64-linux-gnu
+  gcc-14-aarch64-linux-gnu-base gcc-14-cross-base gcc-aarch64-linux-gnu
+  libasan8-arm64-cross libatomic1-arm64-cross libbinutils libbrotli1
+  libc6-arm64-cross libc6-dev-arm64-cross libcc1-0 libctf-nobfd0 libctf0
+  libcurl4t64 libgcc-14-dev-arm64-cross libgcc-s1-arm64-cross
+  libgomp1-arm64-cross libgprofng0 libhwasan0-arm64-cross libisl23
+  libitm1-arm64-cross libjansson4 liblsan0-arm64-cross libmpc3 libmpfr6
+  libnghttp2-14 libnghttp3-9 libpsl5t64 librtmp1 libsframe1 libssh2-1t64
+  libstdc++6-arm64-cross libtsan2-arm64-cross libubsan1-arm64-cross
+  linux-libc-dev-arm64-cross m4 make
+0 upgraded, 46 newly installed, 0 to remove and 0 not upgraded.
+Need to get 55.3 MB of archives.
+After this operation, 221 MB of additional disk space will be used.
+Fetched 55.3 MB in 4s (13.4 MB/s)
+update-alternatives: using /usr/bin/bison.yacc to provide /usr/bin/yacc (yacc) in auto mode
+update-alternatives: warning: skip creation of /usr/share/man/man1/yacc.1.gz because associated file /usr/share/man/man1/bison.yacc.1.gz (of link group yacc) doesn't exist
+--> 654c2815fa2a
+[2/3] STEP 15/17: WORKDIR /src
+--> 94aabb5e504f
+[2/3] STEP 16/17: RUN set -eu;     fetch() {       curl --fail --silent --show-error --location --proto '=https' --tlsv1.2         --connect-timeout 20 --retry 5 --retry-all-errors --retry-delay 5         --output "$1" "$2";     };     pg_server_dev="postgresql-server-dev-18_$(printf '%s' "${PG_PACKAGE_VERSION}" | sed 's/+/%2B/g')_arm64.deb";     fetch server-dev.deb "https://apt-archive.postgresql.org/pub/repos/apt/pool/main/p/postgresql-18/${pg_server_dev}";     echo "${PG_SERVER_DEV_SHA256}  server-dev.deb" | sha256sum --check --strict;     dpkg-deb --extract server-dev.deb /tmp/server-dev;     cp -a /tmp/server-dev/usr/include/postgresql /usr/include/;     grep -q '#define USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK 1' /usr/include/postgresql/18/server/pg_config.h;     age_file="apache-age-${AGE_VERSION}-src.tar.gz";     age_ok=;     for age_base in "${AGE_MIRROR_URL}" "${AGE_ARCHIVE_URL}"; do       echo "downloading ${age_base}/${AGE_VERSION}/${age_file}";       if fetch age.tar.gz "${age_base}/${AGE_VERSION}/${age_file}"         && echo "${AGE_SHA512}  age.tar.gz" | sha512sum --check --strict; then         age_ok=1; break;       fi;       echo "no usable Apache AGE ${AGE_VERSION} from ${age_base}" >&2;     done;     if [ -z "${age_ok}" ]; then       echo "Apache AGE ${AGE_VERSION} could not be downloaded and verified from any source" >&2; exit 1;     fi;     mkdir age;     tar --extract --gzip --file age.tar.gz --strip-components 1 --directory age
+server-dev.deb: OK
+downloading https://dlcdn.apache.org/age/PG18/1.8.0/apache-age-1.8.0-src.tar.gz
+curl: (28) Connection timed out after 20005 milliseconds
+age.tar.gz: OK
+--> a515e1386400
+[2/3] STEP 17/17: RUN set -eu;     make -C age -j"$(nproc)"       CC=aarch64-linux-gnu-gcc with_llvm=no PG_CONFIG=/usr/lib/postgresql/18/bin/pg_config       libdir=/usr/aarch64-linux-gnu/lib       LDFLAGS_SL="-Xlinker '--package-metadata={\"type\":\"generic\",\"name\":\"apache-age\",\"version\":\"${AGE_VERSION}\",\"license\":\"Apache-2.0\",\"sourceRepo\":\"https://github.com/apache/age\"}'";     make -C age install       with_llvm=no PG_CONFIG=/usr/lib/postgresql/18/bin/pg_config DESTDIR=/out;     aarch64-linux-gnu-strip --strip-debug /out/usr/lib/postgresql/18/lib/age.so;     aarch64-linux-gnu-readelf --file-header /out/usr/lib/postgresql/18/lib/age.so | grep -q 'Machine: *AArch64';     aarch64-linux-gnu-readelf --notes /out/usr/lib/postgresql/18/lib/age.so | grep -q "\"version\":\"${AGE_VERSION}\"";     install -D --mode 0644 age/LICENSE /out/usr/share/doc/apache-age/LICENSE;     install -D --mode 0644 age/NOTICE /out/usr/share/doc/apache-age/NOTICE
+make: Entering directory '/src/age'
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/age.o src/backend/age.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/catalog/ag_catalog.o src/backend/catalog/ag_catalog.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/catalog/ag_graph.o src/backend/catalog/ag_graph.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/catalog/ag_label.o src/backend/catalog/ag_label.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/catalog/ag_namespace.o src/backend/catalog/ag_namespace.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/commands/graph_commands.o src/backend/commands/graph_commands.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/commands/label_commands.o src/backend/commands/label_commands.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/executor/cypher_create.o src/backend/executor/cypher_create.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/executor/cypher_merge.o src/backend/executor/cypher_merge.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/executor/cypher_set.o src/backend/executor/cypher_set.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/executor/cypher_utils.o src/backend/executor/cypher_utils.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/nodes/ag_nodes.o src/backend/nodes/ag_nodes.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/nodes/cypher_copyfuncs.o src/backend/nodes/cypher_copyfuncs.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/nodes/cypher_outfuncs.o src/backend/nodes/cypher_outfuncs.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/nodes/cypher_readfuncs.o src/backend/nodes/cypher_readfuncs.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/optimizer/cypher_createplan.o src/backend/optimizer/cypher_createplan.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/optimizer/cypher_pathnode.o src/backend/optimizer/cypher_pathnode.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/optimizer/cypher_paths.o src/backend/optimizer/cypher_paths.c
+/usr/bin/flex -b  -o'src/backend/parser/ag_scanner.c' src/backend/parser/ag_scanner.l
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_analyze.o src/backend/parser/cypher_analyze.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_clause.o src/backend/parser/cypher_clause.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/executor/cypher_delete.o src/backend/executor/cypher_delete.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_expr.o src/backend/parser/cypher_expr.c
+/usr/bin/bison -Wno-deprecated  --defines=src/include/parser/cypher_gram_def.h -Werror -Wno-error=conflicts-sr -Wno-error=conflicts-rr -o src/backend/parser/cypher_gram.c src/backend/parser/cypher_gram.y
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_item.o src/backend/parser/cypher_item.c
+'/usr/bin/perl' -I ./tools/ ./tools/gen_keywordlist.pl --extern --varname CypherKeyword --output src/include/parser src/include/parser/cypher_kwlist.h
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_parse_agg.o src/backend/parser/cypher_parse_agg.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_parse_node.o src/backend/parser/cypher_parse_node.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_transform_entity.o src/backend/parser/cypher_transform_entity.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/age_graphid_ds.o src/backend/utils/adt/age_graphid_ds.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/agtype.o src/backend/utils/adt/agtype.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/agtype_ext.o src/backend/utils/adt/agtype_ext.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/agtype_gin.o src/backend/utils/adt/agtype_gin.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/agtype_ops.o src/backend/utils/adt/agtype_ops.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/agtype_parser.o src/backend/utils/adt/agtype_parser.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/agtype_util.o src/backend/utils/adt/agtype_util.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/agtype_raw.o src/backend/utils/adt/agtype_raw.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/age_global_graph.o src/backend/utils/adt/age_global_graph.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/age_session_info.o src/backend/utils/adt/age_session_info.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/age_vle.o src/backend/utils/adt/age_vle.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/cypher_funcs.o src/backend/utils/adt/cypher_funcs.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/ag_float8_supp.o src/backend/utils/adt/ag_float8_supp.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/adt/graphid.o src/backend/utils/adt/graphid.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/ag_func.o src/backend/utils/ag_func.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/graph_generation.o src/backend/utils/graph_generation.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/cache/ag_cache.o src/backend/utils/cache/ag_cache.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/cache/agehash.o src/backend/utils/cache/agehash.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/load/ag_load_labels.o src/backend/utils/load/ag_load_labels.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/load/ag_load_edges.o src/backend/utils/load/ag_load_edges.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/load/age_load.o src/backend/utils/load/age_load.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/name_validation.o src/backend/utils/name_validation.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/utils/ag_guc.o src/backend/utils/ag_guc.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/ag_scanner.o src/backend/parser/ag_scanner.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_gram.o src/backend/parser/cypher_gram.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_keywords.o src/backend/parser/cypher_keywords.c
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -I.//src/include -I.//src/include/parser -I. -I./ -I/usr/include/postgresql/18/server -I/usr/include/postgresql/internal -Wdate-time -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE  -I/usr/include/libxml2     -c -o src/backend/parser/cypher_parser.o src/backend/parser/cypher_parser.c
+Building install SQL: age--1.8.0.sql from HEAD
+aarch64-linux-gnu-gcc -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -Wmissing-variable-declarations -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -g -g -O2 -Werror=implicit-function-declaration -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -mbranch-protection=standard -fPIC -fvisibility=hidden -MMD -MP -shared -o age.so src/backend/age.o src/backend/catalog/ag_catalog.o src/backend/catalog/ag_graph.o src/backend/catalog/ag_label.o src/backend/catalog/ag_namespace.o src/backend/commands/graph_commands.o src/backend/commands/label_commands.o src/backend/executor/cypher_create.o src/backend/executor/cypher_merge.o src/backend/executor/cypher_set.o src/backend/executor/cypher_utils.o src/backend/nodes/ag_nodes.o src/backend/nodes/cypher_copyfuncs.o src/backend/nodes/cypher_outfuncs.o src/backend/nodes/cypher_readfuncs.o src/backend/optimizer/cypher_createplan.o src/backend/optimizer/cypher_pathnode.o src/backend/optimizer/cypher_paths.o src/backend/parser/ag_scanner.o src/backend/parser/cypher_analyze.o src/backend/parser/cypher_clause.o src/backend/executor/cypher_delete.o src/backend/parser/cypher_expr.o src/backend/parser/cypher_gram.o src/backend/parser/cypher_item.o src/backend/parser/cypher_keywords.o src/backend/parser/cypher_parse_agg.o src/backend/parser/cypher_parse_node.o src/backend/parser/cypher_parser.o src/backend/parser/cypher_transform_entity.o src/backend/utils/adt/age_graphid_ds.o src/backend/utils/adt/agtype.o src/backend/utils/adt/agtype_ext.o src/backend/utils/adt/agtype_gin.o src/backend/utils/adt/agtype_ops.o src/backend/utils/adt/agtype_parser.o src/backend/utils/adt/agtype_util.o src/backend/utils/adt/agtype_raw.o src/backend/utils/adt/age_global_graph.o src/backend/utils/adt/age_session_info.o src/backend/utils/adt/age_vle.o src/backend/utils/adt/cypher_funcs.o src/backend/utils/adt/ag_float8_supp.o src/backend/utils/adt/graphid.o src/backend/utils/ag_func.o src/backend/utils/graph_generation.o src/backend/utils/cache/ag_cache.o src/backend/utils/cache/agehash.o src/backend/utils/load/ag_load_labels.o src/backend/utils/load/ag_load_edges.o src/backend/utils/load/age_load.o src/backend/utils/name_validation.o src/backend/utils/ag_guc.o -L/usr/aarch64-linux-gnu/lib  -Wl,-z,relro -Wl,-z,now  -Wl,--as-needed -Xlinker '--package-metadata={"type":"generic","name":"apache-age","version":"1.8.0","license":"Apache-2.0","sourceRepo":"https://github.com/apache/age"}' -fvisibility=hidden 
+make: Leaving directory '/src/age'
+make: Entering directory '/src/age'
+/bin/mkdir -p '/out/usr/lib/postgresql/18/lib'
+/bin/mkdir -p '/out/usr/share/postgresql/18/extension'
+/bin/mkdir -p '/out/usr/share/postgresql/18/extension'
+/usr/bin/install -c -m 755  age.so '/out/usr/lib/postgresql/18/lib/age.so'
+/usr/bin/install -c -m 644 .//age.control '/out/usr/share/postgresql/18/extension/'
+/usr/bin/install -c -m 644 .//age--1.6.0--1.7.0.sql .//age--1.7.0--1.8.0.sql age--1.8.0.sql '/out/usr/share/postgresql/18/extension/'
+make: Leaving directory '/src/age'
+--> cb47d26f56b3
+[3/3] STEP 1/6: FROM 00983e1476cf9b1f9c32d4435e71265d8763fdad4472a275a57322c3a9fba909
+[3/3] STEP 2/6: COPY --from=build /out/usr/lib/postgresql/18/lib/ /usr/lib/postgresql/18/lib/
+--> ab3189b9eb85
+[3/3] STEP 3/6: COPY --from=build /out/usr/share/postgresql/18/extension/ /usr/share/postgresql/18/extension/
+--> 0a8392d1d56d
+[3/3] STEP 4/6: COPY --from=build /out/usr/share/doc/apache-age/ /usr/share/doc/apache-age/
+--> 5fb749096289
+[3/3] STEP 5/6: USER 26
+--> 9545fcc15c0c
+[3/3] STEP 6/6: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="68a9e530de4402a602e3004e59911fef58154eef" "org.opencontainers.image.version"="0.0.0-rc.1" "org.opencontainers.image.title"="postgres"
+[3/3] COMMIT localhost/trustiot-release/postgres:0.0.0-rc.1
+--> 683ea9a4dd3a
+Successfully tagged localhost/trustiot-release/postgres:0.0.0-rc.1
+683ea9a4dd3a3b0190f652d78d0592de000a5df595c863b8b3e8d29adb23a358
+[release:build] 127.0.0.1:5068/laysi/trustiot-v2/postgres:0.0.0-rc.1 → sha256:0d41478d2b2d7d1f802e07f445cfdde563512dede50f68f4855885cd4472b50e, SBOM SPDX-2.3 with 142 packages
+--- build: exit 0
+
+=== build.json ===
+{
+  "tag": "v0.0.0-rc.1",
+  "commit": "68a9e530de4402a602e3004e59911fef58154eef",
+  "images": [
+    {
+      "name": "assets",
+      "digest": "sha256:a580411c77dd9ae5d40bba4f6f82b6a74ba9830315e8ca89f7c028b94e0b60c0",
+      "size": 4399616,
+      "sbomPackages": 214,
+      "archive": "images/assets.oci.tar",
+      "sbom": "images/assets.spdx.json"
+    },
+    {
+      "name": "identity",
+      "digest": "sha256:d07b5add8d51f08112fa21c98d68f5fa7b0f90ba1d50f97c78fff19b4fdfd76e",
+      "size": 4516864,
+      "sbomPackages": 214,
+      "archive": "images/identity.oci.tar",
+      "sbom": "images/identity.spdx.json"
+    },
+    {
+      "name": "migrate",
+      "digest": "sha256:e6303320c951fe99dd67ba0e1f689963e97ed328f097ab3592adadeda4d2a7fd",
+      "size": 3926528,
+      "sbomPackages": 215,
+      "archive": "images/migrate.oci.tar",
+      "sbom": "images/migrate.spdx.json"
+    },
+    {
+      "name": "postgres",
+      "digest": "sha256:0d41478d2b2d7d1f802e07f445cfdde563512dede50f68f4855885cd4472b50e",
+      "size": 87012352,
+      "sbomPackages": 142,
+      "archive": "images/postgres.oci.tar",
+      "sbom": "images/postgres.spdx.json"
+    }
+  ]
+}
+--- build.json: exit 0
+
+=== archives and SBOMs ===
+assets.oci.tar  4399616 bytes
+assets.spdx.json  474496 bytes  214 packages  ring: true  cc: false
+identity.oci.tar  4516864 bytes
+identity.spdx.json  477103 bytes  214 packages  ring: true  cc: false
+migrate.oci.tar  3926528 bytes
+migrate.spdx.json  478837 bytes  215 packages  ring: true  cc: false
+postgres.oci.tar  87012352 bytes
+postgres.spdx.json  681672 bytes  142 packages  ring: false  cc: false
+--- archives and SBOMs: exit 0
+
+=== ring with the release toolchain ===
+    Finished `release` profile [optimized] target(s) in 2.40s
+--- ring with the release toolchain: exit 0
+
+=== the C compiler cc used for ring ===
+CC_aarch64-unknown-linux-musl = None
+CC_aarch64_unknown_linux_musl = Some(~/.cache/cargo-zigbuild/0.23.4/wrappers/2df4/zigcc-aarch64-unknown-linux-musl-5d3b.sh)
+compiler runs with -c: 24, of which C files: 13, assembly files: 11
+assembly files compiled:
+  aesv8-armx-linux64.S
+  aesv8-gcm-armv8-linux64.S
+  armv8-mont-linux64.S
+  chacha-armv8-linux64.S
+  chacha20_poly1305_armv8-linux64.S
+  ghash-neon-armv8-linux64.S
+  ghashv8-armx-linux64.S
+  p256-armv8-asm-linux64.S
+  sha256-armv8-linux64.S
+  sha512-armv8-linux64.S
+  vpaes-armv8-linux64.S
+--- the C compiler cc used for ring: exit 0
+
+=== ring with a zig cc that compiles nothing ===
+Error: Failed to collect `zig cc` options
+Caused by:
+    Failed to run `zig cc -v` with status exit status: 1: zig-broken-cc: refusing to compile ~/.cache/cargo-zigbuild/0.23.4/.intentionally-empty-file.c
+--- ring with a zig cc that compiles nothing: exit 1
+
+=== ring with a zig cc that cannot compile ring ===
+warning: ring@0.17.14: zig-broken-cc: refusing to compile ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ring-0.17.14/crypto/curve25519/curve25519.c
+error: failed to run custom build command for `ring v0.17.14`
+Caused by:
+  cargo:warning=zig-broken-cc: refusing to compile ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ring-0.17.14/crypto/curve25519/curve25519.c
+  error occurred in cc-rs: command did not execute successfully (status code exit status: 1): "~/.cache/cargo-zigbuild/0.23.4/wrappers/2df4/zigcc-aarch64-unknown-linux-musl-5d3b.sh" "-O3" "-ffunction-sections" "-fdata-sections" "-fPIC" "--target=aarch64-unknown-linux-musl" "-I" "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ring-0.17.14/include" "-I" "~/.cargo/registry/src/index.crates.io
+--- ring with a zig cc that cannot compile ring: exit 101
+
+=== no aarch64-linux-musl-gcc on PATH ===
+--- no aarch64-linux-musl-gcc on PATH: exit 0
+
+=== ring without cargo-zigbuild ===
+warning: ring@0.17.14: Compiler family detection failed due to error: ToolNotFound: failed to find tool "aarch64-linux-musl-gcc": No such file or directory (os error 2)
+warning: ring@0.17.14: Compiler family detection failed due to error: ToolNotFound: failed to find tool "aarch64-linux-musl-gcc": No such file or directory (os error 2)
+error: failed to run custom build command for `ring v0.17.14`
+Caused by:
+  cargo:warning=Compiler family detection failed due to error: ToolNotFound: failed to find tool "aarch64-linux-musl-gcc": No such file or directory (os error 2)
+  cargo:warning=Compiler family detection failed due to error: ToolNotFound: failed to find tool "aarch64-linux-musl-gcc": No such file or directory (os error 2)
+  error occurred in cc-rs: failed to find tool "aarch64-linux-musl-gcc": No such file or directory (os error 2)
+--- ring without cargo-zigbuild: exit 101
+
+ALL STEPS AS EXPECTED
+
+=== cleanup ===
+images in the job's own store: 22
+work directory and the job's podman store removed
+-- leftovers:
+ls: cannot access 'target/release-342.*': No such file or directory
+rcheck: removed 0 dangling test volumes
+rcheck: exit 0 at 02:41:21 (build host, 342-1fb678e0)
