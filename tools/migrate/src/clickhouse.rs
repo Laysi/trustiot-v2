@@ -65,6 +65,21 @@ DEFAULT ROLE trustiot_otel_collector";
 const SET_PASSWORD: &str =
     "ALTER USER {user:Identifier} IDENTIFIED WITH sha256_hash BY {hash:String} SALT {salt:String}";
 const PROBE: &str = "SELECT 1 FORMAT TSV";
+/// The accounts the Job made for the collector, past and present: every account granted the
+/// collector role. Only the Job's `CREATE USER ... DEFAULT ROLE` grants it (an administrator who
+/// grants it by hand makes that account one the Job manages). `system.role_grants` has one row
+/// per grant, with the grantee in `user_name` (or `role_name` for a role) and the granted role in
+/// `granted_role_name`, as `USER_ROLES` reads it; tests/clickhouse.rs (step 6d) runs this against
+/// the pinned ClickHouse 26.8 image.
+const COLLECTOR_ACCOUNTS: &str = "SELECT DISTINCT user_name FROM system.role_grants
+WHERE granted_role_name = {role:String} AND user_name IS NOT NULL ORDER BY user_name FORMAT TSV";
+/// How many host rules let the account log in; `HOST NONE` leaves none.
+const USER_HOSTS: &str = "SELECT length(host_ip) + length(host_names) + length(host_names_regexp)
+  + length(host_names_like) FROM system.users WHERE name = {user:String} FORMAT TSV";
+/// Revokes an account's login without dropping it: reversible with `HOST ANY`, which is what
+/// `CREATE USER` gives it.
+const LOGIN_NONE: &str = "ALTER USER {user:Identifier} HOST NONE";
+const LOGIN_ANY: &str = "ALTER USER {user:Identifier} HOST ANY";
 
 /// The access-management account's client.
 pub struct ClickHouse {
@@ -283,6 +298,51 @@ impl ClickHouse {
         if let Some((user, password)) = collector {
             self.ensure_collector(user, password, report).await?;
         }
+        self.retire_collectors(collector.map(|(user, _)| user.as_str()), report)
+            .await
+    }
+
+    /// Whether `user` may log in from any host at all.
+    async fn can_log_in(&self, user: &str) -> Result<bool, Error> {
+        let hosts = self
+            .query(
+                &format!("read the hosts of {user}"),
+                USER_HOSTS,
+                &[("user", user)],
+            )
+            .await?;
+        Ok(hosts.trim() != "0")
+    }
+
+    /// Revokes the login of every collector account but `keep` (the collector is off, or its
+    /// account was renamed): nothing uses it any more, and its password stays in a kept Secret.
+    /// Never drops it; the next run that needs it lets it log in again.
+    async fn retire_collectors(
+        &self,
+        keep: Option<&str>,
+        report: &mut Report,
+    ) -> Result<(), Error> {
+        let accounts = self
+            .query(
+                "list the collector accounts",
+                COLLECTOR_ACCOUNTS,
+                &[("role", COLLECTOR_ROLE)],
+            )
+            .await?;
+        for user in accounts.lines().filter(|line| !line.is_empty()) {
+            if Some(user) == keep || !self.can_log_in(user).await? {
+                continue;
+            }
+            self.query(
+                &format!("revoke the login of {user}"),
+                LOGIN_NONE,
+                &[("user", user)],
+            )
+            .await?;
+            report.change(format!(
+                "revoked the login of ClickHouse account {user}: the collector no longer uses it"
+            ));
+        }
         Ok(())
     }
 
@@ -388,6 +448,21 @@ impl ClickHouse {
             self.query("create the collector account", CREATE_COLLECTOR, &auth)
                 .await?;
             report.change(format!("created ClickHouse account {user}"));
+            return Ok(());
+        }
+        if !self.can_log_in(user).await? {
+            // A run that did not need the account revoked its login; it is needed again. The
+            // Secret's password first, so the account never logs in again with an older one.
+            self.query("set the collector account's password", SET_PASSWORD, &auth)
+                .await?;
+            report.change(format!("set the password of ClickHouse account {user}"));
+            self.query(
+                &format!("let {user} log in again"),
+                LOGIN_ANY,
+                &[("user", user)],
+            )
+            .await?;
+            report.change(format!("let ClickHouse account {user} log in again"));
             return Ok(());
         }
         match self.send(user, password.expose(), PROBE, &[]).await {

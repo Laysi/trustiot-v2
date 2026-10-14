@@ -81,9 +81,28 @@ SELECT r.rolsuper, r.rolcreaterole, r.rolcreatedb, r.rolcanlogin, r.rolreplicati
              WHERE s.setrole = r.oid AND d.datname = current_database()),
        EXISTS (SELECT 1 FROM pg_shdepend s
                WHERE s.refclassid = 'pg_authid'::regclass AND s.refobjid = r.oid AND s.dbid <> 0
-                 AND s.dbid <> (SELECT oid FROM pg_database WHERE datname = current_database()))
+                 AND s.dbid <> (SELECT oid FROM pg_database WHERE datname = current_database())),
+       coalesce(shobj_description(r.oid, 'pg_authid'), '')
 FROM pg_roles r
 WHERE r.rolname = $1";
+
+/// The comment the Job puts on every login role it creates: what marks a role as one whose login
+/// the Job manages (`retire_login_roles`), never its name. Changing a role's comment needs
+/// CREATEROLE and ADMIN OPTION on it, which service roles do not have.
+const LOGIN_ROLE_MARKER: &str = "trustiot-migrate:login-role";
+
+/// Login roles the Job marked that no service of the registry has any more (the service was
+/// removed from the registry or renamed) and that can still log in. Only roles the migration role
+/// administers: another instance's roles, the cluster's superuser and a customer's own accounts
+/// are never among them, whatever their comment.
+const RETIRED_LOGIN_ROLES: &str = "
+SELECT r.rolname::text FROM pg_roles r
+WHERE r.rolcanlogin AND NOT r.rolsuper
+  AND shobj_description(r.oid, 'pg_authid') = $1
+  AND r.rolname <> ALL ($2::text[])
+  AND EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles me ON me.oid = m.member
+              WHERE m.roleid = r.oid AND me.rolname = current_user AND m.admin_option)
+ORDER BY 1";
 
 /// What a login role may do beyond its grants: create in its own schema, or create temporary
 /// tables (database.sql revoked TEMPORARY from PUBLIC once; the database owner can grant it back).
@@ -119,9 +138,16 @@ WHERE n.nspname = $1 AND c.relname = 'outbox_event' AND p.polname = 'consumer_re
 const CREATE_OWNER_ROLE: &str = "SET LOCAL createrole_self_grant = 'set';
 CREATE ROLE example_role NOLOGIN NOINHERIT;
 SET LOCAL createrole_self_grant = ''";
-/// A service or platform role: logs in, inherits nothing. The migration role only administers
-/// it (Postgres gives the creating role ADMIN OPTION, without SET or INHERIT).
-const CREATE_LOGIN_ROLE: &str = "CREATE ROLE example_role LOGIN NOINHERIT";
+/// A service or platform role: inherits nothing, and logs in only once `ensure_login` has set
+/// the password of its Secret. The migration role only administers it (Postgres gives the
+/// creating role ADMIN OPTION, without SET or INHERIT). The comment marks it as the Job's.
+const CREATE_LOGIN_ROLE: &str = "CREATE ROLE example_role NOLOGIN NOINHERIT;
+COMMENT ON ROLE example_role IS example_marker";
+const MARK_LOGIN_ROLE: &str = "COMMENT ON ROLE example_role IS example_marker";
+/// A login role logs in exactly while a Secret holds its password; NOLOGIN keeps the role, what
+/// it owns and its grants, so turning the service on again only needs LOGIN back.
+const ALLOW_LOGIN: &str = "ALTER ROLE example_role LOGIN";
+const REVOKE_LOGIN: &str = "ALTER ROLE example_role NOLOGIN";
 /// A per-tenant role of a hook: created without login; the hook's template grants it what it
 /// needs.
 const CREATE_TENANT_ROLE: &str = "CREATE ROLE example_role NOLOGIN NOINHERIT";
@@ -170,6 +196,8 @@ struct RoleState {
     database_config: Vec<String>,
     /// Owns objects or holds privileges in another database of the cluster.
     elsewhere: bool,
+    /// The role's comment (`LOGIN_ROLE_MARKER` on the Job's login roles), or empty.
+    comment: String,
 }
 
 /// The run's Postgres session, connected as the migration role.
@@ -450,6 +478,7 @@ impl Session {
             self.ensure_service(config, passwords, service, report)
                 .await?;
         }
+        self.retire_login_roles(registry, report).await?;
         for service in registry.services {
             self.ensure_outbox(registry, service, report).await?;
         }
@@ -649,6 +678,7 @@ impl Session {
             Vec<String>,
             Vec<String>,
             bool,
+            String,
         );
         let row: Option<Row> = sqlx::query_as(ROLE_STATE)
             .bind(role)
@@ -671,6 +701,7 @@ impl Session {
                 members,
                 database_config,
                 elsewhere,
+                comment,
             )| RoleState {
                 superuser,
                 createrole,
@@ -686,6 +717,7 @@ impl Session {
                 members,
                 database_config,
                 elsewhere,
+                comment,
             },
         ))
     }
@@ -705,14 +737,14 @@ impl Session {
                     RoleKind::Login => CREATE_LOGIN_ROLE,
                     RoleKind::Tenant => CREATE_TENANT_ROLE,
                 };
-                template(
-                    &mut self.conn,
-                    None,
-                    create,
-                    json!({ "example_role": [role] }),
-                )
-                .await
-                .map_err(Error::postgres(format!("create role {role}")))?;
+                let replacements = if kind == RoleKind::Login {
+                    json!({ "example_role": [role], "example_marker": LOGIN_ROLE_MARKER })
+                } else {
+                    json!({ "example_role": [role] })
+                };
+                template(&mut self.conn, None, create, replacements)
+                    .await
+                    .map_err(Error::postgres(format!("create role {role}")))?;
                 report.change(format!("created role {role}"));
                 self.role_state(role).await?.ok_or_else(|| Error::Role {
                     role: role.to_owned(),
@@ -782,9 +814,6 @@ impl Session {
                 }
             }
             RoleKind::Login => {
-                if !state.login {
-                    return problem("a service or platform role must be able to log in");
-                }
                 if state
                     .config
                     .iter()
@@ -805,6 +834,18 @@ impl Session {
                         "another role is a member of this service or platform role and could use \
                          its rights; a database administrator must revoke it",
                     );
+                }
+                if state.comment != LOGIN_ROLE_MARKER {
+                    // A role created before the Job marked its login roles.
+                    template(
+                        &mut self.conn,
+                        None,
+                        MARK_LOGIN_ROLE,
+                        json!({ "example_role": [role], "example_marker": LOGIN_ROLE_MARKER }),
+                    )
+                    .await
+                    .map_err(Error::postgres(format!("mark role {role}")))?;
+                    report.change(format!("marked role {role} as a login role of the Job"));
                 }
             }
             RoleKind::Tenant => {
@@ -900,8 +941,92 @@ impl Session {
                 .map_err(Error::postgres(format!("set the search_path of {role}")))?;
                 report.change(format!("set the search_path of {role} to {schema}"));
             }
-            self.ensure_password(config, passwords.postgres(&role), &role, report)
-                .await?;
+            self.ensure_login(
+                config,
+                passwords.postgres(&role),
+                &role,
+                state.login,
+                report,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// A login role logs in exactly while a Secret is bound to it (the chart binds the roles of
+    /// the services this deployment runs). Bound, it gets the Secret's password and LOGIN, the
+    /// password first, so it never logs in with an older one; unbound (the service was turned
+    /// off), it loses LOGIN and keeps everything else.
+    async fn ensure_login(
+        &mut self,
+        config: &RunConfig,
+        password: Option<&Password>,
+        role: &str,
+        can_log_in: bool,
+        report: &mut Report,
+    ) -> Result<(), Error> {
+        match (password, can_log_in) {
+            (Some(password), true) => self.ensure_password(config, password, role, report).await,
+            (Some(password), false) => {
+                self.set_password(password, role, report).await?;
+                self.set_login(role, ALLOW_LOGIN).await?;
+                report.change(format!("let role {role} log in"));
+                Ok(())
+            }
+            (None, can_log_in) => {
+                tracing::warn!(
+                    role,
+                    "no Secret is bound to this role, so it does not log in"
+                );
+                report.roles_without_password.push(role.to_owned());
+                if can_log_in {
+                    self.set_login(role, REVOKE_LOGIN).await?;
+                    report.change(format!(
+                        "revoked the login of role {role}: no Secret is bound to it"
+                    ));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    async fn set_login(&mut self, role: &str, statement: &'static str) -> Result<(), Error> {
+        template(
+            &mut self.conn,
+            None,
+            statement,
+            json!({ "example_role": [role] }),
+        )
+        .await
+        .map_err(Error::postgres(format!("change the login of {role}")))
+    }
+
+    /// Revokes the login of every role the Job marked that no service of `registry` has any
+    /// more. Never drops it: it may own objects, and NOLOGIN is undone by the next run whose
+    /// registry has it again.
+    async fn retire_login_roles(
+        &mut self,
+        registry: &Registry,
+        report: &mut Report,
+    ) -> Result<(), Error> {
+        let current: Vec<String> = registry
+            .services
+            .iter()
+            .flat_map(Service::login_roles)
+            .collect();
+        let retired: Vec<String> = sqlx::query_scalar(RETIRED_LOGIN_ROLES)
+            .bind(LOGIN_ROLE_MARKER)
+            .bind(&current)
+            .fetch_all(&mut self.conn)
+            .await
+            .map_err(Error::postgres(
+                "list the login roles no service has any more",
+            ))?;
+        for role in retired {
+            self.set_login(&role, REVOKE_LOGIN).await?;
+            report.change(format!(
+                "revoked the login of role {role}: no service in tools/migrate's registry has it"
+            ));
         }
         Ok(())
     }
@@ -912,18 +1037,10 @@ impl Session {
     async fn ensure_password(
         &mut self,
         config: &RunConfig,
-        password: Option<&Password>,
+        password: &Password,
         role: &str,
         report: &mut Report,
     ) -> Result<(), Error> {
-        let Some(password) = password else {
-            tracing::warn!(
-                role,
-                "no Secret is bound to this role; its password is left as it is"
-            );
-            report.roles_without_password.push(role.to_owned());
-            return Ok(());
-        };
         let options: PgConnectOptions = config
             .postgres()
             .connect_options()
@@ -942,6 +1059,16 @@ impl Session {
                 });
             }
         }
+        self.set_password(password, role, report).await
+    }
+
+    /// Sets `role`'s password to `password`, as a SCRAM-SHA-256 verifier.
+    async fn set_password(
+        &mut self,
+        password: &Password,
+        role: &str,
+        report: &mut Report,
+    ) -> Result<(), Error> {
         let verifier = password
             .scram_verifier()
             .map_err(|error| Error::Random(error.to_string()))?;

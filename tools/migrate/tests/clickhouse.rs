@@ -312,6 +312,78 @@ async fn clickhouse_ddl_and_the_collector_account() {
         [format!("created ClickHouse account {COLLECTOR}")]
     );
 
+    // 6d. Leftover accounts (Laysi/trustiot-v2#60 round 4, R3): with the collector off, its
+    //     account can no longer log in, though it stays (HOST NONE, never dropped); turned on
+    //     again, it logs in with its password. A renamed account retires the old one.
+    let password = collector_password(&db);
+    let mut off = config(&db, &clickhouse);
+    off.passwords = db.passwords(None);
+    let report = migrate::run(&off, &CLICKHOUSE_ONLY)
+        .await
+        .expect("the run with the collector off");
+    assert_eq!(
+        report.changes,
+        [format!(
+            "revoked the login of ClickHouse account {COLLECTOR}: the collector no longer uses it"
+        )]
+    );
+    assert!(
+        clickhouse
+            .query_as(COLLECTOR, &password, "SELECT 1")
+            .await
+            .is_err(),
+        "a retired account cannot log in"
+    );
+    let report = migrate::run(&off, &CLICKHOUSE_ONLY)
+        .await
+        .expect("the second run with the collector off");
+    assert!(report.changes.is_empty(), "{:?}", report.changes);
+    let report = migrate::run(&config(&db, &clickhouse), &CLICKHOUSE_ONLY)
+        .await
+        .expect("the run with the collector on again");
+    assert_eq!(
+        report.changes,
+        [
+            format!("set the password of ClickHouse account {COLLECTOR}"),
+            format!("let ClickHouse account {COLLECTOR} log in again")
+        ]
+    );
+    clickhouse
+        .query_as(COLLECTOR, &password, "SELECT 1")
+        .await
+        .expect("the account logs in again with its password");
+    let mut renamed = config(&db, &clickhouse);
+    renamed.passwords = db.passwords(Some(("trustiot_collector_b", COLLECTOR_SECRET)));
+    let report = migrate::run(&renamed, &CLICKHOUSE_ONLY)
+        .await
+        .expect("the run with a renamed account");
+    assert!(
+        report.changes.contains(&format!(
+            "revoked the login of ClickHouse account {COLLECTOR}: the collector no longer uses it"
+        )),
+        "{:?}",
+        report.changes
+    );
+    assert!(
+        report
+            .changes
+            .contains(&"created ClickHouse account trustiot_collector_b".to_owned())
+    );
+    clickhouse
+        .query("DROP USER trustiot_collector_b")
+        .await
+        .expect("clean up the renamed account");
+    let report = migrate::run(&config(&db, &clickhouse), &CLICKHOUSE_ONLY)
+        .await
+        .expect("back to the first account");
+    assert_eq!(
+        report.changes,
+        [
+            format!("set the password of ClickHouse account {COLLECTOR}"),
+            format!("let ClickHouse account {COLLECTOR} log in again")
+        ]
+    );
+
     // 7. A ClickHouse file that changed after it was applied stops the run.
     let error = migrate::run(&config(&db, &clickhouse), &CHANGED)
         .await

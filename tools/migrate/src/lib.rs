@@ -89,8 +89,8 @@ pub struct Report {
     /// One line per change, for example `applied identity/0001_identity.sql` or
     /// `created role identity_app`; empty when the run changed nothing.
     pub changes: Vec<String>,
-    /// Login roles whose password the run does not manage (no Secret is bound to them in
-    /// `passwords.postgres`); they keep whatever password they have.
+    /// Login roles of the registry that no Secret is bound to in `passwords.postgres` (their
+    /// service is not part of this deployment): the run leaves them NOLOGIN.
     pub roles_without_password: Vec<String>,
 }
 

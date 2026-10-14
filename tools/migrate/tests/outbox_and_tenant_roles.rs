@@ -104,6 +104,13 @@ const TENANT_B: &str = "obx_tenant_0000000000000000000000000000000b";
 const TENANT_USAGE: &str = "SELECT has_schema_privilege($1, 'obx_producer', 'USAGE')";
 const DROP_TENANT_A: &str = "DROP OWNED BY obx_tenant_0000000000000000000000000000000a;
 DROP ROLE obx_tenant_0000000000000000000000000000000a";
+const CAN_LOG_IN: &str = "SELECT rolcanlogin FROM pg_roles WHERE rolname = $1";
+/// Login roles the Job does not manage: one with the Job's marker that the migration role does
+/// not administer (made by the superuser, as a customer's account or CloudNativePG's would be),
+/// and one the migration role made by hand without the marker.
+const FOREIGN_LOGIN: &str = "CREATE ROLE obx_foreign_login LOGIN;
+COMMENT ON ROLE obx_foreign_login IS 'trustiot-migrate:login-role'";
+const UNMARKED_LOGIN: &str = "CREATE ROLE obx_unmarked_login LOGIN";
 
 async fn check_sessions(db: &Database, passwords: &[(&str, String)]) {
     for (role, password) in passwords {
@@ -251,13 +258,31 @@ async fn outbox_wiring_and_tenant_roles() {
         .expect("read the rebuilt role's grant");
     assert!(usage);
 
-    // 5. The first consumer leaves: the policy and the grants follow.
+    // 5. The first consumer leaves: the policy and the grants follow, and its login roles,
+    //    which no service of the registry has any more, can no longer log in (they stay, NOLOGIN).
+    let former_passwords = passwords(&LOGIN_ROLES[2..4]);
     for role in &LOGIN_ROLES[2..4] {
         db.unbind(role);
     }
-    migrate::run(&db.config(MIGRATOR), &LAST_CONSUMER)
+    let report = migrate::run(&db.config(MIGRATOR), &LAST_CONSUMER)
         .await
         .expect("the run with one consumer left");
+    for role in &LOGIN_ROLES[2..4] {
+        let expected = format!(
+            "revoked the login of role {role}: no service in tools/migrate's registry has it"
+        );
+        assert!(
+            report.changes.contains(&expected),
+            "missing {expected:?} in {:?}",
+            report.changes
+        );
+    }
+    for (role, password) in &former_passwords {
+        assert!(
+            db.connect_with_password(role, password).await.is_err(),
+            "{role} no longer logs in"
+        );
+    }
     assert_eq!(readers(&mut admin).await, ["obx_second_platform"]);
     let former: bool = sqlx::query_scalar(CAN_READ_EVENTS)
         .bind("obx_consumer_platform")
@@ -269,4 +294,67 @@ async fn outbox_wiring_and_tenant_roles() {
         .await
         .expect("the repeated run");
     assert!(report.changes.is_empty(), "{:?}", report.changes);
+
+    // 6. A service turned off in the deployment (still in the registry, no Secret bound): its
+    //    roles lose LOGIN; turned on again, they get their Secret's password, then LOGIN.
+    for role in &LOGIN_ROLES[4..] {
+        db.unbind(role);
+    }
+    let report = migrate::run(&db.config(MIGRATOR), &LAST_CONSUMER)
+        .await
+        .expect("the run with the second consumer off");
+    assert_eq!(
+        report.changes,
+        LOGIN_ROLES[4..]
+            .iter()
+            .map(|role| format!("revoked the login of role {role}: no Secret is bound to it"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(report.roles_without_password, LOGIN_ROLES[4..]);
+    for role in &LOGIN_ROLES[4..] {
+        let login: bool = sqlx::query_scalar(CAN_LOG_IN)
+            .bind(role)
+            .fetch_one(&mut admin)
+            .await
+            .expect("read the role");
+        assert!(!login, "{role} is NOLOGIN");
+        db.bind(role);
+    }
+    let report = migrate::run(&db.config(MIGRATOR), &LAST_CONSUMER)
+        .await
+        .expect("the run with the second consumer on again");
+    assert_eq!(
+        report.changes,
+        LOGIN_ROLES[4..]
+            .iter()
+            .flat_map(|role| [
+                format!("set the password of {role}"),
+                format!("let role {role} log in")
+            ])
+            .collect::<Vec<_>>()
+    );
+    check_sessions(&db, &passwords(&LOGIN_ROLES[4..])).await;
+
+    // 7. Login roles the Job does not manage keep their login, whatever their name or comment.
+    sqlx::raw_sql(FOREIGN_LOGIN)
+        .execute(&mut admin)
+        .await
+        .expect("create a role the migration role does not administer");
+    let mut as_migrator = db.connect(MIGRATOR).await;
+    sqlx::raw_sql(UNMARKED_LOGIN)
+        .execute(&mut as_migrator)
+        .await
+        .expect("create an unmarked role as the migration role");
+    let report = migrate::run(&db.config(MIGRATOR), &LAST_CONSUMER)
+        .await
+        .expect("the run beside roles it does not manage");
+    assert!(report.changes.is_empty(), "{:?}", report.changes);
+    for role in ["obx_foreign_login", "obx_unmarked_login"] {
+        let login: bool = sqlx::query_scalar(CAN_LOG_IN)
+            .bind(role)
+            .fetch_one(&mut admin)
+            .await
+            .expect("read the role");
+        assert!(login, "{role} keeps its login");
+    }
 }
