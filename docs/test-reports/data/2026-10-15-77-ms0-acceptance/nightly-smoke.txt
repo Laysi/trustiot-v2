@@ -1,0 +1,124 @@
+Nightly smoke of PR Laysi/trustiot-v2#415 (Laysi/trustiot-v2#77): GitHub Actions run 38598985337, head 8a6b7ac, event pull_request (label smoke), runner ubuntu-24.04-arm.
+Source: the run artifact nightly-report (report.json, e2e/mesh-e2e.json). Result: passed.
+k3s image: rancher/k3s:v1.36.5-k3s1@sha256:057cfd5a9d51b89f1f0ee139c28d5d5fdd5aa7ddeac2742a0ba90c6dbc0329bb
+Smoke step: 2026-10-14T16:33:24.136Z -> 2026-10-14T16:45:44.261Z (740.1 s)
+
+== values-onprem.yaml: passed (checks 133.2 s)
+- [ok] namespace with the restricted Pod Security level (0.1 s): enforce, warn and audit are restricted
+- [ok] the identity service's signing key and the values of the API check (0.1 s): Secret trustiot-nightly-identity-signing-key (key nightly-1); values-api-onprem.yaml: identity and assets, provider trustiot-smoke-onprem
+- [ok] dummy Secrets for the references the chart makes (0.2 s): 2 created: trustiot-clickhouse-admin, trustiot-ingress-tls
+- [ok] helm install --wait (37.9 s): release trustiot deployed, 50 objects
+- [ok] every workload of the release is ready (0.4 s): Deployment/trustiot-otel-collector, Deployment/trustiot-assets, Deployment/trustiot-identity, Deployment/trustiot-smoke-echo, StatefulSet/trustiot-clickhouse, Job/trustiot-migrate-92710d65
+- [ok] the migration Job completed before any service started (0.1 s): job/trustiot-migrate-92710d65 completed at 2026-10-14T16:38:31Z; every service container started after it
+- [ok] the migration Job generated every password into its Secret (0.1 s): trustiot-otel-collector-password: trustiot_collector; trustiot-assets-password: assets_app, assets_platform; trustiot-identity-password: identity_app
+- [ok] every CloudNativePG Cluster is healthy (0.2 s): trustiot-postgres: healthy
+- [ok] every Gateway is programmed (0.2 s): trustiot-ingress
+- [ok] no pod is broken, not ready or crash-looping (0.1 s): 9 pods running or completed
+- [ok] each Gateway's NetworkPolicy admits exactly the ports its Istio pods use (0.1 s): trustiot-ingress: 443, 15021
+- [ok] Services that expose a health endpoint have ready endpoints (0.1 s): trustiot-smoke-echo:http/healthz, trustiot-smoke-echo:http/readyz, trustiot-clickhouse:http/ping
+- [ok] through the ingress, a new tenant reaches the assets service, a forged identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77) (4.5 s): POST /api/identity/v1/tenants as a platform administrator: 201, tenant 01a13b47-c027-758c-8b10-398afe108a90; GET /api/assets/v1/tenant as its member: 200 with that tenant after 2 s; without a cookie: 401 unauthenticated; the administrator without a tenant: 403 permission_denied; a forged identity header that the assets service accepts directly: 401 unauthenticated through the ingress without a cookie, 403 permission_denied with the administrator's cookie; the member's cookie with Host :443 and :8443: 200 with the tenant; on 6 path spellings the mesh normalizes: 200 with the tenant
+- [ok] helm uninstall leaves no object of the release but the kept database and password Secrets (20.0 s): all objects removed; kept on uninstall as intended, then deleted: cluster.postgresql.cnpg.io/trustiot-postgres, secret/trustiot-assets-password, secret/trustiot-identity-password, secret/trustiot-otel-collector-password, imagecatalog.postgresql.cnpg.io/trustiot-postgres; their volumes were gone after 18 s
+- [ok] ingress e2e test (deploy/chart/tests/e2e) (58.7 s): 69 passed, 0 failed
+- [ok] delete the namespace (10.6 s): deleted
+
+== values-saas.yaml: passed (checks 329.4 s)
+- [ok] namespace with the restricted Pod Security level (0.1 s): enforce, warn and audit are restricted
+- [ok] the identity service's signing key and the values of the API check (0.0 s): Secret trustiot-nightly-identity-signing-key (key nightly-1); values-api-saas.yaml: identity and assets, provider trustiot-smoke-saas
+- [ok] dummy Secrets for the references the chart makes (0.2 s): 2 created: trustiot-sentry, trustiot-clickhouse-admin
+- [ok] helm install --wait (32.1 s): release trustiot deployed, 50 objects
+- [ok] every workload of the release is ready (0.4 s): Deployment/trustiot-otel-collector, Deployment/trustiot-assets, Deployment/trustiot-identity, Deployment/trustiot-smoke-echo, StatefulSet/trustiot-clickhouse, Job/trustiot-migrate-559cccc8
+- [ok] the migration Job completed before any service started (0.1 s): job/trustiot-migrate-559cccc8 completed at 2026-10-14T16:40:40Z; every service container started after it
+- [ok] the migration Job generated every password into its Secret (0.1 s): trustiot-otel-collector-password: trustiot_collector; trustiot-assets-password: assets_app, assets_platform; trustiot-identity-password: identity_app
+- [ok] every CloudNativePG Cluster is healthy (0.2 s): trustiot-postgres: healthy
+- [ok] every Gateway is programmed (0.2 s): trustiot-ingress
+- [ok] no pod is broken, not ready or crash-looping (0.1 s): 9 pods running or completed
+- [ok] each Gateway's NetworkPolicy admits exactly the ports its Istio pods use (0.1 s): trustiot-ingress: 80, 15021
+- [ok] Services that expose a health endpoint have ready endpoints (0.1 s): trustiot-smoke-echo:http/healthz, trustiot-smoke-echo:http/readyz, trustiot-clickhouse:http/ping
+- [ok] through the ingress, a new tenant reaches the assets service, a forged identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77) (16.5 s): POST /api/identity/v1/tenants as a platform administrator: 201, tenant 01a13b49-b96e-727e-91b9-8c61bea65e34; GET /api/assets/v1/tenant as its member: 200 with that tenant after 1 s; without a cookie: 401 unauthenticated; the administrator without a tenant: 403 permission_denied; a forged identity header that the assets service accepts directly: 401 unauthenticated through the ingress without a cookie, 403 permission_denied with the administrator's cookie; the member's cookie with Host :80 and :8443: 200 with the tenant; on 6 path spellings the mesh normalizes: 200 with the tenant
+- [ok] helm uninstall leaves no object of the release but the kept database and password Secrets (19.3 s): all objects removed; kept on uninstall as intended, then deleted: cluster.postgresql.cnpg.io/trustiot-postgres, secret/trustiot-assets-password, secret/trustiot-identity-password, secret/trustiot-otel-collector-password, imagecatalog.postgresql.cnpg.io/trustiot-postgres; their volumes were gone after 18 s
+- [ok] ingress e2e test (deploy/chart/tests/e2e) (209.8 s): 69 passed, 0 failed
+- [ok] service-to-service authorization e2e test (deploy/chart/tests/e2e/mesh.e2e.ts) (39.7 s): 5 passed, 0 failed
+- [ok] delete the namespace (10.7 s): deleted
+
+== service-to-service authorization e2e (mesh.e2e.ts, SaaS shape): every call it made
+- phase both layers: 7 pods, all ready: true
+- phase both layers (settling): assets -> certs (listed) -> HTTP 200 (4 ms)
+- phase both layers: outsider -> ingress gateway pod (only the host may connect) -> error ECONNREFUSED (1 ms)
+- phase both layers: gateway -> identity (public /healthz) -> HTTP 200
+- phase both layers: gateway -> certs (public /certs/renew) -> HTTP 200
+- phase both layers: gateway -> mqtt-bridge (public /mqtt) -> HTTP 200
+- phase both layers: certs -> assets (the listed call reversed) -> error ECONNRESET (2 ms)
+- phase both layers: assets -> alerts (alerts has no caller) -> error ECONNRESET (2 ms)
+- phase both layers: mqtt-bridge -> identity (only the gateway may call it) -> error ECONNRESET (2 ms)
+- phase both layers: stranger -> certs (mesh identity that is not a service) -> error ECONNRESET (2 ms)
+- phase both layers: outsider -> certs Service (no mesh identity) -> error ECONNREFUSED (2 ms)
+- phase both layers: outsider -> certs pod IP, application port -> error ECONNREFUSED (1 ms)
+- phase both layers: imposter -> certs (assets labels, not its ServiceAccount) -> error ECONNRESET (4 ms)
+- phase NetworkPolicy only (settling): imposter -> certs (assets labels, not its ServiceAccount) -> error ECONNRESET (2 ms)
+- phase NetworkPolicy only (settling): imposter -> certs (assets labels, not its ServiceAccount) -> HTTP 200 (2 ms)
+- phase NetworkPolicy only: certs -> assets (the listed call reversed) -> error ECONNRESET (2 ms)
+- phase NetworkPolicy only: assets -> alerts (alerts has no caller) -> error ECONNRESET (2 ms)
+- phase NetworkPolicy only: mqtt-bridge -> identity (only the gateway may call it) -> error ECONNRESET (2 ms)
+- phase NetworkPolicy only: stranger -> certs (mesh identity that is not a service) -> error ECONNRESET (2 ms)
+- phase NetworkPolicy only: outsider -> certs Service (no mesh identity) -> error ECONNREFUSED (2 ms)
+- phase NetworkPolicy only: outsider -> certs pod IP, application port -> error ECONNREFUSED (1 ms)
+- phase NetworkPolicy only: outsider -> ingress gateway pod (only the host may connect) -> error ECONNREFUSED (1 ms)
+- phase NetworkPolicy only: assets -> certs (listed) -> HTTP 200 (2 ms)
+- phase NetworkPolicy only: gateway -> identity (public /healthz) -> HTTP 200
+- phase NetworkPolicy only: gateway -> certs (public /certs/renew) -> HTTP 200
+- phase NetworkPolicy only: gateway -> mqtt-bridge (public /mqtt) -> HTTP 200
+- phase neither layer (settling): outsider -> ingress gateway pod (only the host may connect) -> HTTP 200 (2 ms)
+- phase neither layer (settling): certs -> assets (the listed call reversed) -> HTTP 200 (3 ms)
+- phase neither layer (settling): assets -> alerts (alerts has no caller) -> HTTP 200 (4 ms)
+- phase neither layer (settling): mqtt-bridge -> identity (only the gateway may call it) -> HTTP 200 (3 ms)
+- phase neither layer (settling): stranger -> certs (mesh identity that is not a service) -> HTTP 200 (3 ms)
+- phase neither layer (settling): outsider -> certs Service (no mesh identity) -> HTTP 200 (2 ms)
+- phase neither layer (settling): outsider -> certs pod IP, application port -> HTTP 200 (1 ms)
+- phase neither layer: certs -> assets (the listed call reversed) -> HTTP 200 (2 ms)
+- phase neither layer: assets -> alerts (alerts has no caller) -> HTTP 200 (2 ms)
+- phase neither layer: mqtt-bridge -> identity (only the gateway may call it) -> HTTP 200 (3 ms)
+- phase neither layer: stranger -> certs (mesh identity that is not a service) -> HTTP 200 (2 ms)
+- phase neither layer: outsider -> certs Service (no mesh identity) -> HTTP 200 (3 ms)
+- phase neither layer: outsider -> certs pod IP, application port -> HTTP 200 (1 ms)
+- phase neither layer: assets -> certs (listed) -> HTTP 200 (2 ms)
+- phase AuthorizationPolicy only (settling): certs -> assets (the listed call reversed) -> HTTP 200 (2 ms)
+- phase AuthorizationPolicy only (settling): certs -> assets (the listed call reversed) -> error ECONNRESET (2 ms)
+- phase AuthorizationPolicy only (settling): assets -> alerts (alerts has no caller) -> error ECONNRESET (2 ms)
+- phase AuthorizationPolicy only (settling): mqtt-bridge -> identity (only the gateway may call it) -> error ECONNRESET (2 ms)
+- phase AuthorizationPolicy only (settling): stranger -> certs (mesh identity that is not a service) -> error ECONNRESET (2 ms)
+- phase AuthorizationPolicy only (settling): outsider -> certs Service (no mesh identity) -> error ECONNRESET (2 ms)
+- phase AuthorizationPolicy only (settling): outsider -> certs pod IP, application port -> error ECONNRESET (1 ms)
+- phase AuthorizationPolicy only (settling): imposter -> certs (assets labels, not its ServiceAccount) -> error ECONNRESET (2 ms)
+- phase AuthorizationPolicy only: certs -> assets (the listed call reversed) -> error ECONNRESET (2 ms)
+- phase AuthorizationPolicy only: assets -> alerts (alerts has no caller) -> error ECONNRESET (2 ms)
+- phase AuthorizationPolicy only: mqtt-bridge -> identity (only the gateway may call it) -> error ECONNRESET (2 ms)
+- phase AuthorizationPolicy only: stranger -> certs (mesh identity that is not a service) -> error ECONNRESET (3 ms)
+- phase AuthorizationPolicy only: outsider -> certs Service (no mesh identity) -> error ECONNRESET (2 ms)
+- phase AuthorizationPolicy only: outsider -> certs pod IP, application port -> error ECONNRESET (1 ms)
+- phase AuthorizationPolicy only: imposter -> certs (assets labels, not its ServiceAccount) -> error ECONNRESET (2 ms)
+- phase AuthorizationPolicy only: outsider -> ingress gateway pod (only the host may connect) -> HTTP 200 (2 ms)
+- phase AuthorizationPolicy only: assets -> certs (listed) -> HTTP 200 (3 ms)
+- phase AuthorizationPolicy only: gateway -> identity (public /healthz) -> HTTP 200
+- phase AuthorizationPolicy only: gateway -> certs (public /certs/renew) -> HTTP 200
+- phase AuthorizationPolicy only: gateway -> mqtt-bridge (public /mqtt) -> HTTP 200
+- phase both layers again (settling): outsider -> ingress gateway pod (only the host may connect) -> error ECONNREFUSED (1 ms)
+- phase both layers again: certs -> assets (the listed call reversed) -> error ECONNRESET (2 ms)
+- phase both layers again: assets -> alerts (alerts has no caller) -> error ECONNRESET (2 ms)
+- phase both layers again: mqtt-bridge -> identity (only the gateway may call it) -> error ECONNRESET (2 ms)
+- phase both layers again: stranger -> certs (mesh identity that is not a service) -> error ECONNRESET (2 ms)
+- phase both layers again: outsider -> certs Service (no mesh identity) -> error ECONNREFUSED (2 ms)
+- phase both layers again: outsider -> certs pod IP, application port -> error ECONNREFUSED (1 ms)
+- phase both layers again: imposter -> certs (assets labels, not its ServiceAccount) -> error ECONNRESET (2 ms)
+- phase both layers again: assets -> certs (listed) -> HTTP 200 (2 ms)
+- phase both layers again: gateway -> identity (public /healthz) -> HTTP 200
+- phase both layers again: gateway -> certs (public /certs/renew) -> HTTP 200
+- phase both layers again: gateway -> mqtt-bridge (public /mqtt) -> HTTP 200
+- phase both layers again: 7 pods, all ready: true
+
+== Time added, compared with the nightly smoke of PR Laysi/trustiot-v2#411 (run 38545261461, head 88d0c21, the last run before this change)
+Smoke step: 667.4 s before, 740.1 s now.
+values-onprem.yaml checks: 131.5 s before, 133.2 s now.
+values-saas.yaml checks: 267.7 s before, 329.4 s now.
+  through the ingress, a new tenant reaches the assets service, a forged identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77): 4.9 s -> 16.5 s
+  ingress e2e test (deploy/chart/tests/e2e): 199.4 s -> 209.8 s
+  new: service-to-service authorization e2e test (deploy/chart/tests/e2e/mesh.e2e.ts): 39.7 s
