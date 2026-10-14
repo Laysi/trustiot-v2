@@ -386,13 +386,23 @@ clickhouse:
     # Bootstrap account with access management, created by the image from the variables below
     # and used only by the migration Job. The image's passwordless "default" user is removed.
     adminUser: trustiot_admin
-    # Existing Secret with the bootstrap account's password; required in bundled mode.
+    # Its password is generated in the cluster (Laysi/trustiot-v2#403): the ClickHouse pod's init
+    # container, which runs the migration image (arm64 only, so the chart adds
+    # kubernetes.io/arch: arm64 to nodeSelector), fills the Secret
+    # <release>-clickhouse-admin-password, which the chart declares empty, and the server starts
+    # with that password; the migration Job reads it from the Secret. Nobody creates the Secret.
+    # Increase this number to rotate the password: the upgrade restarts ClickHouse, whose init
+    # container generates a new one first (docs/runbooks/secrets.md).
+    adminPasswordGeneration: "1"
+    # Only for installations from before Laysi/trustiot-v2#403 that still use a Secret a person
+    # created: its name (and key) here make the server read that Secret instead, and there is no
+    # init container. Leave the name empty, the default, to have the password generated;
+    # README.md, "叢集內的 ClickHouse", has the move.
     adminSecret:
       name: ""
       key: password
-    # The server reads the password only at start. After changing the Secret, change this value
-    # too, so the upgrade restarts ClickHouse with the new password before the migration Job
-    # uses it.
+    # With adminSecret only: the server reads the password only at start, so after changing that
+    # Secret change this value too, so the upgrade restarts ClickHouse with the new password.
     adminSecretRevision: "1"
     storage:
       # Required in bundled mode; each deployment sizes it for its own load and retention:

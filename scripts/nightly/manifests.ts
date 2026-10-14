@@ -349,7 +349,10 @@ export function migrationJobsOf(objects: K8sObject[]): string[] {
 /**
  * The Secrets the migration Job fills with the passwords it generates (Laysi/trustiot-v2#60), each
  * with the keys it writes, from the Job's TRUSTIOT__PASSWORDS__POSTGRES (`role=Secret,...`) and
- * TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR (`account=Secret`).
+ * TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR (`account=Secret`); and the bundled ClickHouse's admin
+ * password Secret, which the ClickHouse pod's init container fills and the Job reads
+ * (Laysi/trustiot-v2#403), from TRUSTIOT__CLICKHOUSE__PASSWORD_SECRET, keyed by the account in
+ * TRUSTIOT__CLICKHOUSE__USERNAME.
  */
 export function passwordSecretsOf(objects: K8sObject[]): Map<string, string[]> {
   const secrets = new Map<string, string[]>();
@@ -358,7 +361,13 @@ export function passwordSecretsOf(objects: K8sObject[]): Map<string, string[]> {
     const template = podTemplate(object);
     if (template === undefined) continue;
     for (const container of containersOf(template.spec)) {
-      for (const env of asArray(container.env).filter(isMap)) {
+      const envs = asArray(container.env).filter(isMap);
+      const adminSecret = asString(envs.find((env) => env.name === "TRUSTIOT__CLICKHOUSE__PASSWORD_SECRET")?.value);
+      const adminUser = asString(envs.find((env) => env.name === "TRUSTIOT__CLICKHOUSE__USERNAME")?.value);
+      if (adminSecret !== undefined && adminSecret !== "" && adminUser !== undefined && adminUser !== "") {
+        secrets.set(adminSecret, [...(secrets.get(adminSecret) ?? []), adminUser].sort());
+      }
+      for (const env of envs) {
         if (env.name !== "TRUSTIOT__PASSWORDS__POSTGRES" && env.name !== "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR") continue;
         for (const binding of (asString(env.value) ?? "").split(",").filter((b) => b !== "")) {
           const [key, secret] = binding.split("=");

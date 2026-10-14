@@ -3,8 +3,10 @@ Migration Job (tools/migrate, Laysi/trustiot-v2#60; helpers and the reasons in _
 - the Job, named after a hash of its spec, with its own ServiceAccount, whose token only the Job's
   container mounts;
 - a Role that lets that ServiceAccount get and patch exactly the password Secrets of
-  templates/passwords.yaml, which the Job fills: no create (which cannot be limited by name and
-  would let it create a token Secret for any ServiceAccount), no list or watch, no other Secret;
+  templates/passwords.yaml that the Job fills, and get the bundled ClickHouse's admin password
+  Secret, which the ClickHouse pod's init container fills: no create (which cannot be limited by
+  name and would let it create a token Secret for any ServiceAccount), no list or watch, no other
+  Secret;
 - a Role that lets the ServiceAccounts of the enabled services and of the collector read that one
   Job, which their init containers poll until it is complete.
 The Job is kept after it completes: services that start later (a restart, a new replica) still
@@ -59,9 +61,11 @@ spec:
     - Ingress
   ingress: []
 {{- $fills := include "trustiot.migrate.passwordSecretObjects" . | fromYamlArray }}
-{{- if $fills }}
+{{- $admin := include "trustiot.clickhouse.adminPassword" . | fromYaml }}
+{{- if include "trustiot.migrate.usesApi" . }}
 ---
-# The password Secrets the Job fills, by name; nothing else.
+# The password Secrets the Job fills, by name, and the bundled ClickHouse's generated admin
+# password, which it only reads; nothing else.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -69,6 +73,7 @@ metadata:
   labels:
     {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
 rules:
+  {{- if $fills }}
   - apiGroups:
       - ""
     resources:
@@ -80,6 +85,17 @@ rules:
     verbs:
       - get
       - patch
+  {{- end }}
+  {{- if $admin.generated }}
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    resourceNames:
+      - {{ $admin.name }}
+    verbs:
+      - get
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
