@@ -4,7 +4,7 @@
 
 ## 環境
 
-- **lab Pi**（`trustiot-lab`）：與 2026-10-12 相同，Raspberry Pi 4 Model B Rev 1.4、Raspberry Pi OS Lite arm64（Debian 13），systemd 257.13、cryptsetup 2.7.5；TPM 為 Infineon SLB9670，接在 SPI0 的 CE0。持有 `~/e2e.lock`（owner `Laysi/trustiot-v2#74`）的時段：
+- **lab 的 Pi**：與 2026-10-12 相同，Raspberry Pi 4 Model B Rev 1.4、Raspberry Pi OS Lite arm64（Debian 13），systemd 257.13、cryptsetup 2.7.5；TPM 為 Infineon SLB9670，接在 SPI0 的 CE0。持有 `~/e2e.lock`（owner `Laysi/trustiot-v2#74`）的時段：
 
   | 時段（UTC，2026-10-14） | 內容 |
   | --- | --- |
@@ -14,7 +14,7 @@
   | 07:24–07:28:28 | 卡插回 Pi 開機、驗證、還原設定、釋放鎖 |
 
 - **另一台電腦**：x86\_64 工作站，Fedora 44（kernel 7.2.8），cryptsetup 2.8.8、systemd 259.9、tpm2-tss 4.1.3、util-linux 2.41.5、udisks2 2.11.2、fish 4.6.0。TPM 是主機板內建的 firmware TPM 2.0（ACPI `MSFT0101`，驅動 `tpm_crb`），與 lab Pi 的 SLB9670 是不同的 TPM。SD 卡經讀卡機接上，出現為 `/dev/sdc`。
-- LUKS 測試密碼沿用 2026-10-12 在工作站產生的那一個，只存在工作站，沒有進 repo，也沒有留在 Pi 上；原始資料裡的 LUKS salt、digest 與 TPM 封裝資料已遮蔽。
+- LUKS 測試密碼沿用 2026-10-12 在工作站產生的那一個，只存在工作站，沒有進 repo，也沒有留在 Pi 上；原始資料裡的 LUKS salt、digest 與 TPM 封裝資料已遮蔽，Pi 的主機名稱與登入帳號（兩者同名）改成 `<pi>`。
 
 ## 指令
 

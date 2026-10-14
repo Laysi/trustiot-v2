@@ -4,7 +4,7 @@
 
 ## 環境
 
-- **lab Pi**（`trustiot-lab`）：Raspberry Pi 4 Model B Rev 1.4、2 GB，Raspberry Pi OS Lite arm64（Debian 13），kernel 6.18.50+rpt-rpi-v8，systemd 257.13-1~deb13u1；TPM 為 Infineon SLB9670（韌體 7.63.3353.0），接在 SPI0 的 CE0。測試期間另裝 `tpm2-tools` 5.7-1+b1、`cryptsetup-bin` 2:2.7.5-2、`systemd-cryptsetup` 257.13-1~deb13u1（libtss2 4.1.3-1.2）。lab Pi 由 Laysi/trustiot-v2#74、#75、#76 共用，改系統設定、重開機與每次量測都持有 `~/e2e.lock`（owner `Laysi/trustiot-v2#74`）：
+- **lab 的 Pi**：Raspberry Pi 4 Model B Rev 1.4、2 GB，Raspberry Pi OS Lite arm64（Debian 13），kernel 6.18.50+rpt-rpi-v8，systemd 257.13-1~deb13u1；TPM 為 Infineon SLB9670（韌體 7.63.3353.0），接在 SPI0 的 CE0。測試期間另裝 `tpm2-tools` 5.7-1+b1、`cryptsetup-bin` 2:2.7.5-2、`systemd-cryptsetup` 257.13-1~deb13u1（libtss2 4.1.3-1.2）。lab Pi 由 Laysi/trustiot-v2#74、#75、#76 共用，改系統設定、重開機與每次量測都持有 `~/e2e.lock`（owner `Laysi/trustiot-v2#74`）：
 
   | 時段（UTC，2026-10-12） | 內容 |
   | --- | --- |
@@ -16,7 +16,7 @@
 - **broker**：`docker.io/library/eclipse-mosquitto:2.1.2-alpine`（digest `sha256:12436df85d6b2b91e63c71184da35ec89400a98abdc688a78b1403a11ecf44b4`），只開 mTLS 的 listener；設定見可行性文件的「測試環境與重現」。
 - **測試程式**：閘道器端 `gw`（tss-esapi 7.7.0、rustls 0.23.45 加 ring 0.17.14、rcgen 0.14.10、p256 0.13.2）以 cargo-zigbuild 交叉編譯成 aarch64（glibc 2.41）；驗證端 `verifier`（axum 0.8.9、p256 0.13.2）在工作站執行。依 2026-10-09 的決定不進 repo，原始碼在工作站的 `~/poc-gw/74/` 與 Pi 的 `~/poc-74/`。
 - **另一台電腦**：rootless podman 的 Debian 13 容器（`debian:trixie@sha256:bcf83fd8af414eda0c0a99d25a4e61dedd88e7aac7f7bc519d04555ff0c40ec5` 加 `cryptsetup-bin` 2:2.7.5-2、`systemd-cryptsetup` 257.13-1~deb13u1、`swtpm` 0.7.1-1.5、`tpm2-tools`）。
-- 所有金鑰、憑證與 LUKS 測試密碼都在測試時產生，只存在工作站與 Pi 的測試目錄，沒有進 repo；原始資料裡的 LUKS salt、digest 與 TPM 封裝資料已遮蔽，區網位址改成 `<lab-pi>`。
+- 所有金鑰、憑證與 LUKS 測試密碼都在測試時產生，只存在工作站與 Pi 的測試目錄，沒有進 repo；原始資料裡的 LUKS salt、digest 與 TPM 封裝資料已遮蔽，區網位址改成 `<lab-pi>`，Pi 的主機名稱改成 `<pi>`。
 
 ## 指令
 
