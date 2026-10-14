@@ -4,6 +4,9 @@
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
+import { collectInstallEvidence } from "./install-evidence.ts";
+import { runInstall, WAIT_ARGS } from "./install.ts";
+
 export const CHART_DIR = join(import.meta.dir, "..", "..");
 export const REPO_ROOT = join(CHART_DIR, "..", "..");
 
@@ -51,6 +54,8 @@ export function run(cmd: string[], allowFailure = false, stdin?: string): string
 }
 export const kubectlArgs = (...args: string[]) => [KUBECTL, ...(CONTEXT ? ["--context", CONTEXT] : []), "--namespace", NAMESPACE, ...args];
 export const kubectl = (...args: string[]) => run(kubectlArgs(...args));
+// For the evidence of a failed install: a request that hangs because the API server does is cut.
+const kubectlForEvidence = (args: string[]) => kubectl("--request-timeout=30s", ...args);
 export const helm = (...args: string[]) =>
   run([HELM, ...(CONTEXT ? ["--kube-context", CONTEXT] : []), "--namespace", NAMESPACE, ...args]);
 
@@ -95,24 +100,21 @@ export function imageValues(service: string, image: string): string[] {
   ];
 }
 
-// Installs the release and waits for it. Never touches an existing installation: fails when the
-// release exists, and a failed install removes itself (--rollback-on-failure), so the caller
+// Installs the release and waits for it (install.ts has the rules and the reasons). Never touches an
+// existing installation, and a failed install keeps its evidence and removes itself, so the caller
 // counts the release as its own (and uninstalls it) only once this returns.
 export function installRelease(valuesFiles: string[], extra: string[]): void {
-  if (releaseExists()) {
-    throw new Error(`release ${RELEASE} already exists in ${NAMESPACE}; use another E2E_RELEASE or namespace`);
-  }
-  helm(
-    "install",
-    RELEASE,
-    ".",
-    ...valuesFiles.flatMap((f) => ["--values", f]),
-    ...extra,
-    "--rollback-on-failure",
-    "--wait",
-    "--timeout",
-    "5m",
-  );
+  runInstall({
+    release: RELEASE,
+    namespace: NAMESPACE,
+    releaseExists,
+    install: () => {
+      helm("install", RELEASE, ".", ...valuesFiles.flatMap((f) => ["--values", f]), ...extra, ...WAIT_ARGS);
+    },
+    collectEvidence: () => collectInstallEvidence(kubectlForEvidence, () => helm("history", RELEASE)),
+    uninstall: uninstallRelease,
+    reportDir: REPORT_DIR || undefined,
+  });
 }
 
 export function uninstallRelease(): void {

@@ -10,7 +10,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runIngressE2e } from "./e2e.ts";
+import { installEvidenceSection, runIngressE2e } from "./e2e.ts";
 import { exec, retry, run, RunLog, waitUntilGone } from "./exec.ts";
 import {
   gatewayPortProblems,
@@ -396,6 +396,11 @@ async function collectDiagnostics(ctx: SmokeContext, namespace: string, shape: S
   for (const pod of names.stdout.split("\n").filter((line) => line !== "")) {
     await section(`logs ${pod}`, [k, "logs", pod, "--namespace", namespace, "--all-containers", "--tail=80"]);
   }
+  // Last, because the report keeps the end of a long text. The ingress e2e installs the chart into
+  // a namespace of its own, which is deleted before this runs; the test saved what it saw of that
+  // namespace when its install failed (Laysi/trustiot-v2#399).
+  const installEvidence = installEvidenceSection(ctx.outDir, shape.name);
+  if (installEvidence !== undefined) sections.push(installEvidence);
   const text = sections.join("\n");
   writeFileSync(join(ctx.outDir, `diagnostics-${shape.name}.txt`), text);
   return text;
