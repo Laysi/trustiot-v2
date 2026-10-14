@@ -4,7 +4,7 @@
 
 ## 環境
 
-- **受測程式碼**：分支 `feat/65-assets-skeleton`，rebase 到 main `71769da` 之後。全部檢查在 `255dca9` 跑過一次；之後的 commit 只改了 `scripts/`（常數改名）、文件與 testkit 報告的文字，受影響的測試在 `772dd19`、`ca83d7c` 重跑（見 `workspace-checks.txt`）。
+- **受測程式碼**：分支 `feat/65-assets-skeleton`，rebase 到 main `71769da` 之後。全部檢查先在 `255dca9` 跑過一次，修正後在加入本報告的 `4808c96`（程式碼與分支最新的 commit 相同，之後只改報告）整套重跑；中間的 `772dd19`、`ca83d7c` 也各自重跑受影響的測試（見 `workspace-checks.txt`）。
 - **Rust 測試**：建置主機（x86_64 Linux，Docker），經檢查佇列執行，`CI=1`，所以需要容器的測試沒有容器時會失敗而不是略過。Postgres 是 testkit 的 TLS Postgres（PostgreSQL 18），產品 schema 由 migration Job 本身套用（`testkit::product`）。Rust 1.99.0、zig 0.16.0、cargo-zigbuild 0.23.4，皆由 `.prototools` 鎖定。
 - **chart 與腳本測試**：建置主機與開發用工作站（x86_64 Linux），bun 1.4.2、helm 4.3.0，由 `.prototools` 鎖定。
 - **沒有 Kubernetes**：本 repo 規定工作站不跑 Kubernetes。經入口的 k3d 驗證由 nightly 的 smoke 執行（`scripts/nightly/api.ts`），要等 PR 帶 `smoke` label 時跑，見「結論」。

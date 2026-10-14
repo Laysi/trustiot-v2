@@ -48,6 +48,36 @@ zig: zig 0.16.0
 <host copy>/target/aarch64-unknown-linux-musl/release/assets:   ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped
 <host copy>/target/aarch64-unknown-linux-musl/release/identity: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped
 
+## Commit 4808c96 (this report added; the code is that of the branch head): everything again
+
+$ cargo fmt --all --check; cargo clippy --workspace --all-targets --locked -- -D warnings
+$ cargo clippy -p service-kit --no-default-features --all-targets --locked -- -D warnings
+$ cargo test --workspace --locked; cargo run --locked -q -p openapi -- --check; cargo deny --locked check
+$ bun install --cwd scripts --frozen-lockfile; bun test deploy/chart; bun test deploy/flux
+$ bun test scripts; bun run --cwd scripts typecheck
+fmt=0
+clippy=0
+kit=0
+test=0
+ok binaries: 99 failed: 0
+api/openapi.json is up to date
+advisories ok, bans ok, licenses ok, sources ok
+install=0
+chart=0
+flux=0
+scripts=0
+typecheck=0
+ 313 pass
+ 0 fail
+Ran 313 tests across 4 files. [30.10s]
+ 19 pass
+ 0 fail
+Ran 19 tests across 1 file. [1168.00ms]
+ 759 pass
+ 2 skip
+ 0 fail
+Ran 761 tests across 33 files. [2.29s]
+
 ## Local (development workstation, light checks)
 
 $ bun scripts/ci/check-secret-handling.ts
