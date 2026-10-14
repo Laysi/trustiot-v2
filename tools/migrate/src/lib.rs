@@ -7,11 +7,15 @@
 //!   hooks) and the ClickHouse part ([`clickhouse`]: the DDL and the collector's account).
 //! - [`kube::wait_for_job`]: the init container that holds a service's pod until the release's
 //!   migration Job has completed.
+//! - [`clickhouse_admin::generate`]: the bundled ClickHouse's init container, which generates
+//!   its bootstrap admin password into the Secret the chart declares before the server starts;
+//!   the run reads it from there.
 //!
 //! Every step is idempotent: a second run on the same databases changes nothing, which
 //! [`Report::changes`] states and the tests check against the catalogs.
 
 pub mod clickhouse;
+pub mod clickhouse_admin;
 pub mod clickhouse_files;
 pub mod config;
 pub mod http;
@@ -139,8 +143,8 @@ pub async fn run(config: &RunConfig, registry: &Registry) -> Result<Report, Erro
         .migrate(config, registry, &passwords, &mut report)
         .await?;
     if let Some(settings) = &config.clickhouse {
-        let client = clickhouse::ClickHouse::new(config, settings)?;
-        client.wait_until_up(config.wait.databases).await?;
+        let client =
+            clickhouse::ClickHouse::connect(config, settings, config.wait.databases).await?;
         client
             .migrate(registry, passwords.collector(), &mut report)
             .await?;

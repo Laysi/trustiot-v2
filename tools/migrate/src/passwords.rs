@@ -1,5 +1,7 @@
-//! The passwords of the service login roles and of the collector's ClickHouse account. Nobody
-//! creates, copies or rotates them (docs/architecture/secrets.md):
+//! The passwords of the service login roles and of the collector's ClickHouse account, and (through
+//! [`crate::clickhouse_admin`], run by the bundled ClickHouse's init container with the same rules)
+//! of the bundled ClickHouse's bootstrap admin account. Nobody creates, copies or rotates them
+//! (docs/architecture/secrets.md):
 //!
 //! - the chart declares one Secret per consumer (each service that uses Postgres, and the
 //!   collector) without any data, so it never renders a password;
@@ -21,11 +23,12 @@
 //! - the rest of the run then sets each role and account to the password in its Secret.
 //!
 //! The Job's ServiceAccount may only `get` and `patch` exactly these Secrets (the chart's Role
-//! lists them by name). Nothing here logs a password, a hash of one, or a Secret's data: reports
+//! lists them by name), and only `get` the admin Secret, which ClickHouse's ServiceAccount alone
+//! may `patch`. Nothing here logs a password, a hash of one, or a Secret's data: reports
 //! and errors name roles, accounts and Secrets only.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -216,6 +219,11 @@ impl Foreign {
     }
 }
 
+/// Whether the Secret is the object tools/migrate filled: it records its own uid.
+fn is_bound(metadata: &Metadata) -> bool {
+    !metadata.uid.is_empty() && metadata.annotations.get(UID_ANNOTATION) == Some(&metadata.uid)
+}
+
 /// What the run does with one Secret: the generation it records, and for each owner the
 /// password its key holds or why it gets a new one.
 struct Plan {
@@ -231,8 +239,7 @@ struct Plan {
 /// each key is kept when it holds a usable password, and renewed when it is missing or unusable.
 fn plan(secret: &Secret, owners: &[&str], requested: u64) -> Plan {
     let annotations = &secret.metadata.annotations;
-    let bound = !secret.metadata.uid.is_empty()
-        && annotations.get(UID_ANNOTATION) == Some(&secret.metadata.uid);
+    let bound = is_bound(&secret.metadata);
     let recorded = annotations
         .get(GENERATION_ANNOTATION)
         .and_then(|text| parse_generation(text));
@@ -330,18 +337,56 @@ enum Answer {
     Conflict,
 }
 
+/// How to reach the Secrets of the release namespace.
+#[derive(Clone, Copy)]
+pub(crate) struct Access<'a> {
+    pub api_url: &'a str,
+    pub namespace: &'a str,
+    pub token_file: &'a Path,
+    pub ca_file: &'a Path,
+}
+
+impl<'a> From<&'a PasswordSettings> for Access<'a> {
+    fn from(settings: &'a PasswordSettings) -> Self {
+        Self {
+            api_url: &settings.api_url,
+            namespace: &settings.namespace,
+            token_file: &settings.token_file,
+            ca_file: &settings.ca_file,
+        }
+    }
+}
+
+/// What the errors of one caller tell an operator to do: when the Secret does not exist, and
+/// when the API refuses access to it.
+#[derive(Clone, Copy)]
+pub(crate) struct Hints {
+    pub missing: &'static str,
+    pub refused: &'static str,
+}
+
+/// The migration Job's hints for the Secrets it fills.
+const JOB_FILLS: Hints = Hints {
+    missing: "does not exist. The chart declares it without data and the Job fills it: run helm \
+              upgrade, which creates it again, with migrate.revision changed so the Job runs \
+              again (docs/runbooks/migrations.md)",
+    refused: "the chart's Role lets the Job's ServiceAccount get and patch exactly the Secrets it \
+              fills",
+};
+
 /// The Secrets endpoint of the release namespace.
-struct Api {
+pub(crate) struct Api {
     client: http::Client,
     base: String,
     token_file: PathBuf,
     wait: Duration,
+    hints: Hints,
 }
 
 impl Api {
-    fn new(settings: &PasswordSettings, wait: Duration) -> Result<Self, Error> {
-        let client = if settings.api_url.starts_with("https://") {
-            http::trusting(&settings.ca_file).map_err(|error| Error::Kube(error.to_string()))?
+    pub(crate) fn new(access: Access<'_>, wait: Duration, hints: Hints) -> Result<Self, Error> {
+        let client = if access.api_url.starts_with("https://") {
+            http::trusting(access.ca_file).map_err(|error| Error::Kube(error.to_string()))?
         } else {
             http::plain()
         };
@@ -349,11 +394,12 @@ impl Api {
             client,
             base: format!(
                 "{}/api/v1/namespaces/{}/secrets",
-                settings.api_url.trim_end_matches('/'),
-                settings.namespace
+                access.api_url.trim_end_matches('/'),
+                access.namespace
             ),
-            token_file: settings.token_file.clone(),
+            token_file: access.token_file.to_path_buf(),
             wait,
+            hints,
         })
     }
 
@@ -402,18 +448,11 @@ impl Api {
                             });
                     }
                     409 if patch.is_some() => return Ok(Answer::Conflict),
-                    404 => {
-                        return Err(failed(
-                            "does not exist. The chart declares it without data and the Job fills \
-                             it: run helm upgrade, which creates it again, with migrate.revision \
-                             changed so the Job runs again (docs/runbooks/migrations.md)"
-                                .to_owned(),
-                        ));
-                    }
+                    404 => return Err(failed(self.hints.missing.to_owned())),
                     status @ (401 | 403) => {
                         return Err(failed(format!(
-                            "the API refused to {verb} it (HTTP {status}); the chart's Role lets the \
-                             Job's ServiceAccount get and patch exactly the Secrets it fills"
+                            "the API refused to {verb} it (HTTP {status}); {}",
+                            self.hints.refused
                         )));
                     }
                     status @ (429 | 500..=599) => format!("the API answered HTTP {status}"),
@@ -459,8 +498,42 @@ fn reason(body: &str) -> String {
     }
 }
 
+/// The password that the Secret `secret` holds for `owner`, read once: `None` while the Secret
+/// is not the object tools/migrate filled (not filled yet, or created by someone else) or the key
+/// holds no usable password. Never a value someone else put into an object of their own.
+///
+/// # Errors
+///
+/// [`Error::Secret`] when the Secret is missing, is being deleted, or the API refuses access or
+/// does not answer within the API's wait.
+pub(crate) async fn read_bound(
+    api: &Api,
+    secret: &str,
+    owner: &str,
+) -> Result<Option<Password>, Error> {
+    let found = match api.request(secret, None).await? {
+        Answer::Secret(found) => found,
+        // Only a patch is answered with a conflict.
+        Answer::Conflict => return Ok(None),
+    };
+    if found.metadata.deletion_timestamp.is_some() {
+        return Err(Error::Secret {
+            secret: secret.to_owned(),
+            problem: "is being deleted (metadata.deletionTimestamp is set)".to_owned(),
+        });
+    }
+    if !is_bound(&found.metadata) {
+        return Ok(None);
+    }
+    Ok(found
+        .data
+        .get(owner)
+        .and_then(|value| STANDARD.decode(value).ok())
+        .and_then(|bytes| Password::from_bytes(owner, bytes).ok()))
+}
+
 /// Fills one Secret and returns the password of each owner.
-async fn fill(
+pub(crate) async fn fill(
     api: &Api,
     secret: &str,
     owners: &[&str],
@@ -605,7 +678,7 @@ pub async fn converge(
             settings.generation
         ))
     })?;
-    let api = Api::new(settings, wait)?;
+    let api = Api::new(settings.into(), wait, JOB_FILLS)?;
     let mut filled: BTreeMap<(String, String), Password> = BTreeMap::new();
     for (secret, owners) in &by_secret {
         for (owner, password) in fill(&api, secret, owners, requested, report).await? {
