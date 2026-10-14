@@ -1,0 +1,16 @@
+## aes-128-gcm
+The 'numbers' are in 1000s of bytes per second processed.
+type             16 bytes     64 bytes    256 bytes   1024 bytes   8192 bytes  16384 bytes
+AES-128-GCM      12598.77k    30165.95k    52747.26k    65180.16k    69914.62k    70131.71k
+
+## aes-256-gcm
+The 'numbers' are in 1000s of bytes per second processed.
+type             16 bytes     64 bytes    256 bytes   1024 bytes   8192 bytes  16384 bytes
+AES-256-GCM      10828.04k    25517.41k    44627.33k    55041.02k    58900.48k    59138.05k
+
+## chacha20-poly1305
+The 'numbers' are in 1000s of bytes per second processed.
+type             16 bytes     64 bytes    256 bytes   1024 bytes   8192 bytes  16384 bytes
+ChaCha20-Poly1305    77470.31k   139311.42k   252874.24k   311032.32k   317784.06k   321175.55k
+
+OpenSSL 3.5.7 9 Jun 2026 (Library: OpenSSL 3.5.7 9 Jun 2026)

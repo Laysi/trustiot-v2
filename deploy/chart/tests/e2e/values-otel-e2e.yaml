@@ -3,6 +3,12 @@
 # The test adds the Secret names (a fresh set per run), the example service's image and, for the
 # second install step, the collector and the forward to its stand-in SIEM.
 
+# No migration Job: the test applies the ClickHouse migrations and creates the collector's account
+# itself (step 1), and its Postgres is a name only. The Job is tested by the nightly smoke test and
+# docs/test-reports/2026-10-13-60-migration-job.md.
+migrate:
+  enabled: false
+
 ingress:
   # The test never goes through the ingress gateway; keep it small and off the node's ports.
   replicas: 1

@@ -1,0 +1,25 @@
+Round-5 lab e2e: binaries and images (2026-10-14)
+
+Source: feat/60-migration-job at 94b3614e9a979f7cc7aba552bd4e9634bf303cd2 (worktree clean and at that commit when
+the build host copy was made). Commands, runner RBAC and run script: the round4-lab-e2e-* files in this directory
+(same procedure; only the head and the namespace's token differ).
+
+Build (build host, check queue, label 60e2e; zig 0.16.0 and cargo-zigbuild 0.23.4 from proto):
+  cargo zigbuild --locked --release --target aarch64-unknown-linux-musl -p service-kit --bin example-service -p migrate --bin migrate
+  Finished `release` profile in 41.97 s (finished 2026-10-14T06:37:29Z)
+
+Binaries (aarch64-unknown-linux-musl), SHA-256:
+  example-service  6301920 bytes  e7d3cb23b3c3df36f5671992218f8eba37cd131ee2acf8c59db0dc41bbd9387d  (same as round 4)
+  migrate          5891280 bytes  95ceddf5869d5c05f73dc06b4cc14709e6e55c7584acc5354228ecedcb7a8ca6
+
+Images (podman on the workstation, linux/arm64, tag 60; imported with `sudo k3s ctr -n k8s.io images import`
+after removing the old refs; OCI manifest digest on the node):
+  localhost/trustiot-e2e/example-service:60  sha256:d092547e29ea956c06faab885993dc3e99a38ff900c87c70d6643a8960e23a67
+      podman image ID 36d9310eb267ef916a8efcb87626071d6ccadd4caa60932a2d9735f618f38b32 (same as round 4)
+  localhost/trustiot-e2e/migrate:60          sha256:35bc4be7314b008dd750c484e0ba53a2399268589ba08d3c51448a1b3e0ebf68
+      podman image ID 889e37c39df815a7642f8ee71bd2c890e59eba1e2d925bcd230102a7f784dfb7
+  localhost/trustiot-e2e/postgres:60         sha256:a69113bc9ed44cc810941248f3a0874371df11b5cd252c417ac793d26e83157b
+      the published v0.0.0-rc.6 image, unchanged
+
+Cluster: k3s v1.36.5+k3s1, Istio 1.30.5 ambient, CloudNativePG 1.30.1 (not touched by this run),
+namespace e2e-60 with Pod Security restricted.

@@ -1,0 +1,65 @@
+# Mutation checks for the round 2 fixes (2026-10-13). Each mutation removes one check from the
+# working tree of the fixes (a throwaway copy on the shared build host, restored with
+# git checkout after each run); the named test must fail. Command per mutation, from the
+# repository root: perl -0pi -e 's/<from>/<to>/' <file>, then the test, then git checkout -- <file>.
+#
+# M1  postgres.rs  "} else if owned != 1 {"               -> "} else if owned == -1 {"
+# M2  postgres.rs  "if state.elsewhere {"                  -> "if false && state.elsewhere {"
+# M3  postgres.rs  "if after.0 != xact || after.1 != user" -> "if after.1 != user"   (no transaction check)
+# M4  postgres.rs  "if after.0 != xact || after.1 != user || after.2 != role {" -> "if after.0 != xact {"
+# M5  postgres.rs  "if create || temporary {"              -> "if false && (create || temporary) {"
+# M6  postgres.rs  "if !state.database_config.is_empty() {" -> "if false {"
+# M7  postgres.rs  ".any(|setting| !setting.starts_with(\"search_path=\"))" -> ".any(|setting| setting.is_empty())"
+# M8  clickhouse.rs "if extras.trim() != \"0\" {"          -> "if false {"
+# M9  clickhouse.rs "|| settings.trim() != \"0\" {"         -> "{"
+# M10 _migrate.tpl "{{- if ne $tag $migrateTag -}}"        -> "{{- if false -}}"
+
+=== MUTATION M1-owned-databases (tools/migrate/src/postgres.rs) -> cargo test --locked -p migrate --test one_instance_per_cluster
+MUTATION M1-owned-databases: caught
+test a_second_instance_on_the_same_cluster_is_refused ... FAILED
+thread 'a_second_instance_on_the_same_cluster_is_refused' panicked at tools/migrate/tests/one_instance_per_cluster.rs:51:5:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.78s
+=== MUTATION M2-elsewhere (tools/migrate/src/postgres.rs) -> cargo test --locked -p migrate --test one_instance_per_cluster
+MUTATION M2-elsewhere: caught
+test a_second_instance_on_the_same_cluster_is_refused ... FAILED
+thread 'a_second_instance_on_the_same_cluster_is_refused' panicked at tools/migrate/tests/one_instance_per_cluster.rs:91:5:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.03s
+=== MUTATION M3-xact (tools/migrate/src/postgres.rs) -> cargo test --locked -p migrate --test file_escapes
+MUTATION M3-xact: caught
+test a_file_that_leaves_its_transaction_or_role_stops_the_run ... FAILED
+thread 'a_file_that_leaves_its_transaction_or_role_stops_the_run' panicked at tools/migrate/tests/file_escapes.rs:159:10:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.39s
+=== MUTATION M4-user-and-role (tools/migrate/src/postgres.rs) -> cargo test --locked -p migrate --test file_escapes
+MUTATION M4-user-and-role: caught
+test a_file_that_leaves_its_transaction_or_role_stops_the_run ... FAILED
+thread 'a_file_that_leaves_its_transaction_or_role_stops_the_run' panicked at tools/migrate/tests/file_escapes.rs:96:14:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.18s
+=== MUTATION M5-login-extras (tools/migrate/src/postgres.rs) -> cargo test --locked -p migrate --test fresh_database
+MUTATION M5-login-extras: caught
+test a_fresh_database_gets_every_migration_once ... FAILED
+thread 'a_fresh_database_gets_every_migration_once' panicked at tools/migrate/tests/fresh_database.rs:327:14:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.24s
+=== MUTATION M6-database-config (tools/migrate/src/postgres.rs) -> cargo test --locked -p migrate --test fresh_database
+MUTATION M6-database-config: caught
+test a_fresh_database_gets_every_migration_once ... FAILED
+thread 'a_fresh_database_gets_every_migration_once' panicked at tools/migrate/tests/fresh_database.rs:279:10:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.83s
+=== MUTATION M7-role-settings (tools/migrate/src/postgres.rs) -> cargo test --locked -p migrate --test fresh_database
+MUTATION M7-role-settings: caught
+test a_fresh_database_gets_every_migration_once ... FAILED
+thread 'a_fresh_database_gets_every_migration_once' panicked at tools/migrate/tests/fresh_database.rs:327:14:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.16s
+=== MUTATION M8-collector-role-extras (tools/migrate/src/clickhouse.rs) -> cargo test --locked -p migrate --test clickhouse
+MUTATION M8-collector-role-extras: caught
+test clickhouse_ddl_and_the_collector_account ... FAILED
+thread 'clickhouse_ddl_and_the_collector_account' panicked at tools/migrate/tests/clickhouse.rs:255:14:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.07s
+=== MUTATION M9-collector-settings (tools/migrate/src/clickhouse.rs) -> cargo test --locked -p migrate --test clickhouse
+MUTATION M9-collector-settings: caught
+test clickhouse_ddl_and_the_collector_account ... FAILED
+thread 'clickhouse_ddl_and_the_collector_account' panicked at tools/migrate/tests/clickhouse.rs:281:10:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.68s
+=== MUTATION M10-chart-tag-rule (deploy/chart/templates/_migrate.tpl) -> bun test deploy/chart
+MUTATION M10-chart-tag-rule: caught
+(fail) migration Job (Laysi/trustiot-v2#60) > a service that uses Postgres must have the migration Job's tag [57.28ms]
+mutations caught: 10, not caught: 0

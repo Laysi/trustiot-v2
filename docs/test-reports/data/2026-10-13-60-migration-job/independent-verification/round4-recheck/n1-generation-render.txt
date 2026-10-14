@@ -1,0 +1,6 @@
+values-file integer 2 ->               value: "2"
+--set 2 ->               value: "2"
+values-file integer 1000000 ->               value: "1e+06"
+--set 1000000 ->               value: "1000000"
+values-file integer 20261014 ->               value: "2.0261014e+07"
+--set 20261014 ->               value: "20261014"

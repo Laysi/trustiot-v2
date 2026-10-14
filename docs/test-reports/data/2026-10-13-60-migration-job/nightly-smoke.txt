@@ -1,0 +1,73 @@
+# nightly.yml smoke on PR #379 (label smoke), run 38306699376, job 115002384911, 2026-10-12 UTC.
+# Checked out 4df7310 = merge of the PR head e290c4d into main 4edbe05 (GitHub's pull request merge ref).
+# k3d (rancher/k3s v1.36.5-k3s1) on a GitHub-hosted runner; both values files; the migration Job image
+# built from source (localhost/trustiot-e2e/migrate:nightly). Step lines of the job log, timestamps of
+# the runner prefix removed; the full log is the run's nightly-report artifact.
+
+2026-10-12T20:50:16.593Z == platform: Gateway API CRDs
+2026-10-12T20:50:17.839Z == platform: Istio ambient
+2026-10-12T20:50:38.781Z == platform: CloudNativePG operator
+2026-10-12T20:50:45.614Z == platform: identity double image
+2026-10-12T20:50:53.886Z == platform: Postgres image
+2026-10-12T20:51:24.339Z == platform: migration Job image
+2026-10-12T20:51:24.396Z == service image localhost/trustiot-e2e/migrate:nightly: package migrate for aarch64-unknown-linux-musl
+2026-10-12T20:53:18.319Z == values-onprem.yaml in namespace nightly-onprem
+2026-10-12T20:53:18.320Z -- namespace with the restricted Pod Security level
+2026-10-12T20:53:18.409Z    ok: enforce, warn and audit are restricted
+2026-10-12T20:53:18.409Z -- dummy Secrets for the references the chart makes
+2026-10-12T20:53:18.631Z    ok: 4 created: trustiot-otel-collector-clickhouse, trustiot-clickhouse-admin, trustiot-postgres-roles, trustiot-ingress-tls
+2026-10-12T20:53:18.631Z -- helm install --wait
+2026-10-12T20:53:54.089Z    ok: release trustiot deployed, 34 objects
+2026-10-12T20:53:54.089Z -- every workload of the release is ready
+2026-10-12T20:53:54.376Z    ok: Deployment/trustiot-otel-collector, Deployment/trustiot-smoke-echo, StatefulSet/trustiot-clickhouse, Job/trustiot-migrate-0db7ab6a
+2026-10-12T20:53:54.376Z -- the migration Job completed before any service started
+2026-10-12T20:53:54.475Z    ok: job/trustiot-migrate-0db7ab6a completed at 2026-10-12T20:53:48Z; every service container started after it
+2026-10-12T20:53:54.475Z -- every CloudNativePG Cluster is healthy
+2026-10-12T20:53:54.714Z    ok: trustiot-postgres: healthy
+2026-10-12T20:53:54.714Z -- every Gateway is programmed
+2026-10-12T20:53:54.883Z    ok: trustiot-ingress
+2026-10-12T20:53:54.883Z -- no pod is broken, not ready or crash-looping
+2026-10-12T20:53:54.941Z    ok: 7 pods running or completed
+2026-10-12T20:53:54.941Z -- each Gateway's NetworkPolicy admits exactly the ports its Istio pods use
+2026-10-12T20:53:55.000Z    ok: trustiot-ingress: 443, 15021
+2026-10-12T20:53:55.000Z -- Services that expose a health endpoint have ready endpoints
+2026-10-12T20:53:55.124Z    ok: trustiot-smoke-echo:http/healthz, trustiot-smoke-echo:http/readyz, trustiot-clickhouse:http/ping
+2026-10-12T20:53:55.124Z -- helm uninstall leaves no object of the release but the kept database
+2026-10-12T20:54:05.175Z    ok: all objects removed; kept on uninstall as intended, then deleted: cluster.postgresql.cnpg.io/trustiot-postgres, imagecatalog.postgresql.cnpg.io/trustiot-postgres; their volumes were gone after 9 s
+2026-10-12T20:54:05.175Z -- ingress e2e test (deploy/chart/tests/e2e)
+     61 pass
+     0 fail
+    Ran 61 tests across 1 file. [48.87s]
+2026-10-12T20:55:04.469Z    ok: 61 passed, 0 failed
+2026-10-12T20:55:04.469Z -- delete the namespace
+2026-10-12T20:55:15.080Z    ok: deleted
+2026-10-12T20:55:15.080Z == values-saas.yaml in namespace nightly-saas
+2026-10-12T20:55:15.080Z -- namespace with the restricted Pod Security level
+2026-10-12T20:55:15.165Z    ok: enforce, warn and audit are restricted
+2026-10-12T20:55:15.165Z -- dummy Secrets for the references the chart makes
+2026-10-12T20:55:15.380Z    ok: 4 created: trustiot-otel-collector-clickhouse, trustiot-sentry, trustiot-clickhouse-admin, trustiot-postgres-roles
+2026-10-12T20:55:15.380Z -- helm install --wait
+2026-10-12T20:55:44.380Z    ok: release trustiot deployed, 34 objects
+2026-10-12T20:55:44.380Z -- every workload of the release is ready
+2026-10-12T20:55:44.674Z    ok: Deployment/trustiot-otel-collector, Deployment/trustiot-smoke-echo, StatefulSet/trustiot-clickhouse, Job/trustiot-migrate-223614fb
+2026-10-12T20:55:44.675Z -- the migration Job completed before any service started
+2026-10-12T20:55:44.774Z    ok: job/trustiot-migrate-223614fb completed at 2026-10-12T20:55:41Z; every service container started after it
+2026-10-12T20:55:44.774Z -- every CloudNativePG Cluster is healthy
+2026-10-12T20:55:45.005Z    ok: trustiot-postgres: healthy
+2026-10-12T20:55:45.005Z -- every Gateway is programmed
+2026-10-12T20:55:45.171Z    ok: trustiot-ingress
+2026-10-12T20:55:45.171Z -- no pod is broken, not ready or crash-looping
+2026-10-12T20:55:45.226Z    ok: 7 pods running or completed
+2026-10-12T20:55:45.226Z -- each Gateway's NetworkPolicy admits exactly the ports its Istio pods use
+2026-10-12T20:55:45.277Z    ok: trustiot-ingress: 80, 15021
+2026-10-12T20:55:45.277Z -- Services that expose a health endpoint have ready endpoints
+2026-10-12T20:55:45.395Z    ok: trustiot-smoke-echo:http/healthz, trustiot-smoke-echo:http/readyz, trustiot-clickhouse:http/ping
+2026-10-12T20:55:45.395Z -- helm uninstall leaves no object of the release but the kept database
+2026-10-12T20:55:55.408Z    ok: all objects removed; kept on uninstall as intended, then deleted: cluster.postgresql.cnpg.io/trustiot-postgres, imagecatalog.postgresql.cnpg.io/trustiot-postgres; their volumes were gone after 9 s
+2026-10-12T20:55:55.408Z -- ingress e2e test (deploy/chart/tests/e2e)
+     61 pass
+     0 fail
+    Ran 61 tests across 1 file. [188.17s]
+2026-10-12T20:59:14.043Z    ok: 61 passed, 0 failed
+2026-10-12T20:59:14.043Z -- delete the namespace
+2026-10-12T20:59:24.757Z    ok: deleted

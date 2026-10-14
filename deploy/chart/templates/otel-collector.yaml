@@ -3,7 +3,9 @@ OpenTelemetry collector (decision 22): receives OTLP from every service, redacts
 and traces to ClickHouse's trustiot_logs database and optionally forwards them to the customer's
 SIEM. The configuration is "trustiot.collector.config"; Secrets reach it only as environment
 variables from secretKeyRef. Its ClickHouse account is created with SQL by the migration Job
-(decision 14), not here.
+(decision 14), not here, with a password the Job generates into the collector's own Secret
+(templates/passwords.yaml); while the Job runs, the collector waits for it in an init container,
+like the services, so it never starts before its password exists.
 */ -}}
 {{- $collector := .Values.observability.collector }}
 {{- if $collector.enabled }}
@@ -22,8 +24,17 @@ variables from secretKeyRef. Its ClickHouse account is created with SQL by the m
 {{- if and $forward.enabled $forward.authHeader.name (not $forward.authHeader.valueSecret.name) }}
 {{- fail "observability.collector.forward.authHeader.valueSecret.name is required when authHeader.name is set" }}
 {{- end }}
-{{- if not $collector.clickhouse.passwordSecret.name }}
-{{- fail "observability.collector.clickhouse.passwordSecret.name is required when the collector is enabled" }}
+{{- $password := include "trustiot.migrate.passwordSecret" (dict "root" . "component" "otel-collector") | fromYaml }}
+{{- $migrate := include "trustiot.migrate.enabled" . }}
+{{- $containerSecurity := dict "allowPrivilegeEscalation" false "readOnlyRootFilesystem" true "capabilities" (dict "drop" (list "ALL")) }}
+{{- $nodeSelector := $collector.nodeSelector | default dict }}
+{{- if $migrate }}
+{{- /* The init container runs the migration image, which is built for arm64 only (decision 5). */}}
+{{- $arch := get $nodeSelector "kubernetes.io/arch" }}
+{{- if and $arch (ne $arch "arm64") }}
+{{- fail "observability.collector.nodeSelector: kubernetes.io/arch must be arm64 while migrate.enabled is true: the collector waits for the migration Job in an init container that runs the migration image, which is built for arm64 only" }}
+{{- end }}
+{{- $nodeSelector = merge (dict "kubernetes.io/arch" "arm64") $nodeSelector }}
 {{- end }}
 {{- $clickhouseCa := and (eq .Values.clickhouse.mode "external") .Values.clickhouse.external.caSecret.name }}
 apiVersion: v1
@@ -103,13 +114,19 @@ spec:
         - name: {{ . }}
         {{- end }}
       {{- end }}
-      {{- with $collector.nodeSelector }}
+      {{- with $nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with $collector.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $migrate }}
+      initContainers:
+        {{- /* Holds the pod until the migration Job, which creates the account and its password,
+        is complete (_migrate.tpl). */}}
+        - {{ include "trustiot.migrate.initContainer" (dict "root" . "config" (dict "securityContext" $containerSecurity)) | indent 10 | trim }}
       {{- end }}
       containers:
         - name: otel-collector
@@ -123,8 +140,8 @@ spec:
             - name: CLICKHOUSE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ $collector.clickhouse.passwordSecret.name }}
-                  key: {{ $collector.clickhouse.passwordSecret.key }}
+                  name: {{ $password.name }}
+                  key: {{ $password.key }}
             {{- if and $forward.enabled $forward.authHeader.name }}
             - name: FORWARD_AUTH_HEADER
               valueFrom:
@@ -144,10 +161,7 @@ spec:
           resources:
             {{- toYaml $collector.resources | nindent 12 }}
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: [ALL]
+            {{- toYaml $containerSecurity | nindent 12 }}
           volumeMounts:
             - name: config
               mountPath: /etc/otelcol
@@ -166,6 +180,9 @@ spec:
         - name: config
           configMap:
             name: {{ $configName }}
+        {{- if $migrate }}
+        - {{ include "trustiot.migrate.kubeApiVolume" . | indent 10 | trim }}
+        {{- end }}
         {{- if $clickhouseCa }}
         - name: clickhouse-ca
           secret:

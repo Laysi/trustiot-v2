@@ -18,6 +18,8 @@ hosts:
   ota: ""
 
 postgres:
+  # The service roles' and the collector's passwords need no entry here: the migration Job
+  # generates them into Secrets the chart declares (docs/architecture/secrets.md).
   bundled:
     # Volume size of the bundled Postgres (a CloudNativePG Cluster; data and WAL share the
     # volume); size it from the host's disk and the business data (deploy/chart/README.md,
@@ -48,9 +50,3 @@ observability:
     environment: production
     dsnSecret:
       name: trustiot-sentry
-  collector:
-    clickhouse:
-      # SOPS-encrypted Secret trustiot-otel-collector-clickhouse, key password: the collector's
-      # ClickHouse account, which the migration Job creates with it (docs/architecture/secrets.md).
-      passwordSecret:
-        name: trustiot-otel-collector-clickhouse

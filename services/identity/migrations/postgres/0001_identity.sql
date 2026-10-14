@@ -1,14 +1,14 @@
 -- Identity service schema (Laysi/trustiot-v2#61): users, tenant memberships and server-side
 -- sessions (decisions 4, 13, 29). Run by the migration role `identity_owner`, which owns
 -- everything here; the service role `identity_app` owns nothing (crates/service-kit/README.md,
--- "角色與 policy 範本"). The migration Job (Laysi/trustiot-v2#60) creates both roles, runs
--- crates/service-kit/sql/database.sql once per database, and applies these files in order.
+-- "角色與 policy 範本"). The migration Job (tools/migrate) creates both roles and the schema
+-- `identity` owned by `identity_owner`, runs crates/service-kit/sql/database.sql once per
+-- database, and applies these files in order as `identity_owner`, each in one transaction.
 --
 -- MS0 grants the service role only SELECT: it checks sessions but cannot create, extend or
 -- revoke them, and nothing in the service creates a session (no fake login, checklist A1). The
 -- login flow (Laysi/trustiot-v2#103) adds the writes it needs in a later file.
 
-CREATE SCHEMA identity;
 GRANT USAGE ON SCHEMA identity TO identity_app;
 
 -- Users span tenants, so this is not tenant data (no `tenant_id`, no row-level security).

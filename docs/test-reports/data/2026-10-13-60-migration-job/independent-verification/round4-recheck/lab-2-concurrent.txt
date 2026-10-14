@@ -1,0 +1,27 @@
+STARTED trustiot-migrate-0db15862 (Helm) and trustiot-migrate-0db15862-copy (copy)
+TOUCHED both Secrets 367 times in 45 s
+HELM upgrade generation 2 exit=0 
+JOBLOG trustiot-migrate-0db15862 "reading it again": 0
+JOBLOG trustiot-migrate-0db15862 "changed 5 times": 0
+JOBLOG trustiot-migrate-0db15862 "waiting for the migration lock": 0
+JOBLOG trustiot-migrate-0db15862 "generated the password": 2
+JOBLOG trustiot-migrate-0db15862 "set the password of identity_app": 1
+JOBLOG trustiot-migrate-0db15862 "password generation 2": 2
+JOBLOG trustiot-migrate-0db15862-copy "reading it again": 0
+JOBLOG trustiot-migrate-0db15862-copy "changed 5 times": 0
+JOBLOG trustiot-migrate-0db15862-copy "waiting for the migration lock": 0
+JOBLOG trustiot-migrate-0db15862-copy "generated the password": 0
+JOBLOG trustiot-migrate-0db15862-copy "set the password of identity_app": 0
+JOBLOG trustiot-migrate-0db15862-copy "password generation 2": 0
+SECRET trustiot-identity-password keys=[identity_app(len 64)] generation=2 bound managers=[helm/Apply kubectl-create/Update+data trustiot-migrate/Update+data kubectl-annotate/Update]
+SECRET trustiot-otel-collector-password keys=[trustiot_collector(len 64)] generation=2 bound managers=[helm/Apply trustiot-migrate/Update+data kubectl-annotate/Update]
+COMPARE concurrent vs install: identity_app:changed trustiot_collector:changed
+JOBS trustiot-migrate-0db15862(ok=1,failed=0,active=0) trustiot-migrate-0db15862-copy(ok=1,failed=0,active=0)
+POD trustiot-clickhouse-0 Running clickhouse:ready=true,restarts=0,running
+POD trustiot-identity-6b6856cf76-rf7zj Running identity:ready=true,restarts=0,running
+POD trustiot-ingress-istio-7847ff9f6c-kmbsw Running istio-proxy:ready=true,restarts=0,running
+POD trustiot-migrate-0db15862-copy-8qsdd Succeeded migrate:ready=false,restarts=0,terminated:Completed
+POD trustiot-migrate-0db15862-ct9mh Succeeded migrate:ready=false,restarts=0,terminated:Completed
+POD trustiot-otel-collector-d7dc5f567-q2c6r Running otel-collector:ready=true,restarts=0,running
+POD trustiot-postgres-1 Running postgres:ready=true,restarts=0,running
+LOGIN identity_app with the Secret's password: exit=0 out=1 err=

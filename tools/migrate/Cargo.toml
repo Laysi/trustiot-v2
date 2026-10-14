@@ -1,0 +1,58 @@
+[package]
+name = "migrate"
+description = "TrustIoT v2 migration Job: applies every service's Postgres migrations and the ClickHouse DDL with the migration role, creates the service roles idempotently, and gates service pods until it has finished."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "migrate"
+path = "src/main.rs"
+test = false
+doc = false
+
+[dependencies]
+# SCRAM-SHA-256 verifiers for the service roles' passwords, computed here so a plaintext password
+# never appears in an SQL statement.
+base64.workspace = true
+getrandom.workspace = true
+hmac.workspace = true
+# The outbox tables' DDL (crates/outbox/src/schema.rs), applied in producers' and consumers'
+# schemas.
+outbox = { path = "../../crates/outbox" }
+# The Kubernetes API (wait-for-job) and an HTTPS ClickHouse: HTTP/1.1 over hyper with rustls and
+# ring, and only the CA the deployment names as trust anchor (no system or public roots). Not
+# reqwest: see src/http.rs.
+bytes.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+percent-encoding.workspace = true
+rustls = { workspace = true, features = ["ring", "std", "tls12"] }
+rustls-pki-types = { workspace = true, features = ["std"] }
+tokio-rustls = { workspace = true, features = ["ring"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+# Configuration (the platform settings and TRUSTIOT__* variables), JSON logs, and verify-full
+# Postgres connections. No contract feature: the Job handles no internal identity.
+service-kit = { path = "../../crates/service-kit", default-features = false }
+sha2.workspace = true
+# Same TLS stack as service-kit: every connection verifies the server (checklist M3).
+sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "macros", "net", "rt-multi-thread", "time"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# The TLS Postgres the integration tests start (shared with crates/service-kit's tests).
+rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
+# The fake Kubernetes API of the wait-for-job tests serves HTTPS (tokio-rustls, a normal
+# dependency) with a certificate from a test CA.
+tokio = { workspace = true, features = ["io-util", "net", "sync"] }
+
+[lints]
+workspace = true

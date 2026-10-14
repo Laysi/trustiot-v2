@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-60
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: e2e-60-runner
+  namespace: e2e-60
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-60-runner-admin
+  namespace: e2e-60
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: admin}
+subjects: [{kind: ServiceAccount, name: e2e-60-runner, namespace: e2e-60}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-60-runner-extra
+  namespace: e2e-60
+rules:
+  - apiGroups: [postgresql.cnpg.io]
+    resources: [clusters, imagecatalogs, databases, databaseroles]
+    verbs: ["*"]
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [gateways, httproutes]
+    verbs: ["*"]
+  - apiGroups: [security.istio.io]
+    resources: [authorizationpolicies]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-60-runner-extra
+  namespace: e2e-60
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: e2e-60-runner-extra}
+subjects: [{kind: ServiceAccount, name: e2e-60-runner, namespace: e2e-60}]

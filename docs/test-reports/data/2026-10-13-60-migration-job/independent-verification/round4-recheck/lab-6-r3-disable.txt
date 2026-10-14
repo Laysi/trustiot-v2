@@ -1,0 +1,18 @@
+ROLES before identity_app:LOGIN:trustiot-migrate:login-role identity_owner:NOLOGIN:- trustiot_owner:LOGIN:-
+CH before exit=0 trustiot_collector	1 
+HELM upgrade --set services.identity.enabled=false --set observability.collector.enabled=false exit=0 after 3 s 
+JOBLOG trustiot-migrate-cdde73f9 "revoked the login of role identity_app": 1
+JOBLOG trustiot-migrate-cdde73f9 "revoked the login of ClickHouse account": 1
+JOBLOG trustiot-migrate-cdde73f9 "no Secret is bound to this role": 1
+ROLES after identity_app:NOLOGIN:trustiot-migrate:login-role identity_owner:NOLOGIN:- trustiot_owner:LOGIN:-
+CH after exit=0 trustiot_collector	0 
+LOGIN identity_app with the kept Secret's password: exit=2 out= err=psql: error: connection to server at "127.0.0.1", port 5432 failed: FATAL:  role "identity_app" is not permitted to log in
+SECRET trustiot-identity-password keys=[identity_app(len 64)] generation=4 bound managers=[helm/Apply kubectl-create/Update+data trustiot-migrate/Update+data]
+SECRET trustiot-otel-collector-password keys=[trustiot_collector(len 64)] generation=4 bound managers=[helm/Apply trustiot-migrate/Update+data]
+COMPARE disabled vs gen4: identity_app:same trustiot_collector:same
+JOBS trustiot-migrate-cdde73f9(ok=1,failed=0,active=0)
+POD trustiot-clickhouse-0 Running clickhouse:ready=true,restarts=0,running
+POD trustiot-identity-756789456c-92bdj Running identity:ready=true,restarts=0,running
+POD trustiot-ingress-istio-7847ff9f6c-kmbsw Running istio-proxy:ready=true,restarts=0,running
+POD trustiot-migrate-cdde73f9-dsr7x Succeeded migrate:ready=false,restarts=0,terminated:Completed
+POD trustiot-postgres-1 Running postgres:ready=true,restarts=0,running

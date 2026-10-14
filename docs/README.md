@@ -19,6 +19,7 @@ TrustIoT 將以 Rust 從零重建，不沿用舊架構。本目錄是重建的�
 | [CI 與發佈](architecture/ci-release.md) | GitHub Actions 三個 workflow 與 GitOps 部署 |
 | [密鑰與權限](architecture/secrets.md) | 密鑰的規則、注入方式與清冊；一次性 token 的規則（M3）；公開 repo 的資訊規則 |
 | [密鑰輪替 runbook](runbooks/secrets.md) | 每項密鑰的輪替步驟與外洩處理 |
+| [migration Job runbook](runbooks/migrations.md) | 既有叢集補 owner 的 CREATEROLE、一個 Postgres 叢集一個 TrustIoT 資料庫、服務資料庫密碼的輪替、Job 停止或服務等不到 Job 時的處理 |
 | [知識與文件庫（RAG）](architecture/rag.md) | 多模態設備文件庫的檢索流程與去 AWS 化調整 |
 | [現場脈絡與知識圖（Apache AGE）](architecture/field-context.md) | 機台、生產紀錄、AI 記憶與 Cypher 護欄 |
 | [觀測：日誌、看板、錯誤追蹤](architecture/observability.md) | 日誌、Grafana、外部監控、Sentry |
@@ -32,6 +33,7 @@ TrustIoT 將以 Rust 從零重建，不沿用舊架構。本目錄是重建的�
 | [風險與待定事項](roadmap/risks.md) | 重建期間的風險與尚未決定的事 |
 | [可行性測試結果](feasibility/2026-10-09-cloud-poc.md) | 2026-10-09 第一批雲端 PoC 的實測結果 |
 | [可行性測試結果（2026-10-10）](feasibility/2026-10-10-edge-poc.md) | MS0 前的 Istio ambient 與 Cloudflare Tunnel 實測結果 |
+| [可行性測試結果（2026-10-13）](feasibility/2026-10-13-double-tls-pi.md) | MS1 前在 lab 的 Pi 上量的雙層 TLS（WebSocket 內包 mTLS）CPU 與延遲 |
 | [可行性測試結果（2026-10-13）](feasibility/2026-10-13-gateway-memory.md) | 閘道器在 lab Pi 上的記憶體用量、採購規格與 G1 記憶體上限的建議 |
 | [測試報告](test-reports/README.md) | 驗收證據、e2e 與效能測試報告的存放與命名規則 |
 | [資料來源](references.md) | 決策引用的外部文件 |
