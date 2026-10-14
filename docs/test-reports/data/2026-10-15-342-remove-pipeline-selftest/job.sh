@@ -46,10 +46,19 @@ cleanup() {
   echo
   echo "=== cleanup ==="
   echo "images in the job's own store: $(podman images --all --quiet | wc -l)"
-  # Files in the store belong to the user namespace's IDs, so remove them from inside it.
-  podman unshare rm -rf "$work/podman" || echo "cleanup: removing the job's podman store failed"
+  # Files in the store belong to the user namespace's IDs, and podman mounts the store's overlay
+  # directory there, so unmount and remove it from inside that namespace.
+  # shellcheck disable=SC2016 # expanded by the inner shell
+  podman unshare sh -c '
+    awk -v dir="$1" "index(\$5, dir) == 1 { print \$5 }" /proc/self/mountinfo | sort -r | xargs -r umount
+    rm -rf "$1"
+  ' sh "$work/podman" || echo "cleanup: removing the job's podman store failed"
   rm -rf "$work"
-  echo "work directory and the job's podman store removed"
+  if [[ -e $work ]]; then
+    echo "cleanup: $work is still there"
+  else
+    echo "work directory and the job's podman store removed"
+  fi
 }
 trap cleanup EXIT
 
@@ -109,17 +118,32 @@ zig=$(proto bin zig --reporter text)
 zigbuild=$(proto bin cargo-zigbuild --reporter text)
 auditable=$(proto bin cargo-auditable --reporter text)
 release_path="$(dirname "$auditable"):$(dirname "$zigbuild"):$PATH"
+# The lines of a Cargo run that say what was built and why it failed, with local paths masked.
+mask() { sed -u "s|$work|<work>|g; s|$root|<host copy>|g; s|$HOME|~|g"; }
+cargo_summary() {
+  grep -E 'Compiling ring|Finished|^error|error occurred in cc-rs|refusing to compile|^Error|Caused by|Failed to run|failed to find tool' |
+    mask | cut -c1-400
+}
 ring_build() {
   local dir=$1
   shift
   env PATH="$release_path" CARGO_TARGET_DIR="$work/$dir" "$@" \
-    cargo auditable zigbuild --locked --release --target aarch64-unknown-linux-musl -p ring@0.17.14 2>&1 | tail -25
+    cargo auditable zigbuild --locked --release --target aarch64-unknown-linux-musl -p ring@0.17.14 2>&1 | cargo_summary
 }
 
 # 1. Control: the release toolchain compiles ring, and cc reports Zig's wrapper as the target's
-#    C compiler (CC_ENABLE_DEBUG_OUTPUT makes cc print the variables it read).
+#    C compiler (CC_ENABLE_DEBUG_OUTPUT makes cc print the variables it read and the commands).
 must_pass "ring with the release toolchain" ring_build ring-ok CARGO_ZIGBUILD_ZIG_PATH="$zig" CC_ENABLE_DEBUG_OUTPUT=1
-must_pass "the C compiler cc used for ring" bash -o pipefail -c "grep -h -E '^(CC_aarch64|TARGET_CC|CC =|running)' '$work'/ring-ok/aarch64-unknown-linux-musl/release/build/ring-*/output | sed 's|$root|<host copy>|g; s|$HOME|~|g' | sort -u"
+ring_output() { cat "$work"/ring-ok/aarch64-unknown-linux-musl/release/build/ring-*/output; }
+compiler_report() {
+  ring_output | grep -E '^(CC_aarch64[-_a-z0-9]*|TARGET_CC|CC) = ' | sort -u | mask
+  local compiles
+  compiles=$(ring_output | grep -E '^running: .*zigcc-aarch64-unknown-linux-musl.*"-c" ' || true)
+  echo "compiler runs with -c: $(grep -c . <<< "$compiles"), of which C files: $(grep -c '\.c"' <<< "$compiles"), assembly files: $(grep -c '\.S"' <<< "$compiles")"
+  echo "assembly files compiled:"
+  grep -o '[^/"]*\.S"' <<< "$compiles" | tr -d '"' | sort | sed 's/^/  /'
+}
+must_pass "the C compiler cc used for ring" compiler_report
 
 # 2. A broken C cross compiler: Zig as cargo-zigbuild runs it, except that `zig cc` fails on
 #    the C or assembly source files that match a pattern.
@@ -148,7 +172,10 @@ must_fail "ring with a zig cc that cannot compile ring" ring_build ring-broken-r
 
 # 3. No C cross compiler: plain cargo, without cargo-zigbuild, so cc has no CC_<target>.
 must_pass "no aarch64-linux-musl-gcc on PATH" bash -o pipefail -c '! command -v aarch64-linux-musl-gcc'
-must_fail "ring without cargo-zigbuild" bash -o pipefail -c "CARGO_TARGET_DIR='$work/ring-plain' cargo build --locked --release --target aarch64-unknown-linux-musl -p ring@0.17.14 2>&1 | tail -25"
+plain_ring_build() {
+  CARGO_TARGET_DIR="$work/ring-plain" cargo build --locked --release --target aarch64-unknown-linux-musl -p ring@0.17.14 2>&1 | cargo_summary
+}
+must_fail "ring without cargo-zigbuild" plain_ring_build
 
 echo
 if ((${#failed[@]} > 0)); then
