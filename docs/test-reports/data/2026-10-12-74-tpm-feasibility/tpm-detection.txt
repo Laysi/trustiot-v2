@@ -1,4 +1,4 @@
-# Laysi/trustiot-v2#74, lab Pi, 2026-10-12. Console output copied from the session.
+# Laysi/trustiot-v2#74, lab gateway, 2026-10-12. Console output copied from the session.
 
 ## Boot 2026-10-12T08:42Z with dtparam=spi=on + dtoverlay=tpm-slb9670 (stock overlay, CE1)
 $ sudo dmesg | grep tpm_tis

@@ -1,4 +1,4 @@
-== luksDump of the container copied from the lab Pi
+== luksDump of the container copied from the lab gateway
 LUKS header information
 Version:       	2
 Epoch:         	5
@@ -107,7 +107,7 @@ Cannot use device ctl, name is invalid or still in use.
 Failed to activate with TPM2 acquired key: Operation not supported
 RESULT control (own TPM) exit=1
 
-== 2b. the lab Pi's container with this (different) TPM
+== 2b. the lab gateway's container with this (different) TPM
 Cannot initialize device-mapper. Is dm_mod kernel module loaded?
 Cannot initialize device-mapper. Is dm_mod kernel module loaded?
 Cannot use device poc74data, name is invalid or still in use.
@@ -122,7 +122,7 @@ TPM2 operation failed, falling back to traditional unlocking: State not recovera
 Password querying disabled via 'headless' option.
 RESULT other-TPM systemd-cryptsetup exit=1
 
-== 2c. load the sealed blob from the Pi's token directly under this TPM's SRK
+== 2c. load the sealed blob from the gateway's token directly under this TPM's SRK
 -rw-r--r--. 1 root root 128 Oct 12 10:03 /tmp/blob.priv
 -rw-r--r--. 1 root root  80 Oct 12 10:03 /tmp/blob.pub
 WARNING:esys:src/tss2-esys/api/Esys_Load.c:324:Esys_Load_Finish() Received TPM Error 

@@ -1,23 +1,23 @@
-# 雙層 TLS 在 Pi 上的 CPU 與延遲（2026-10-12、2026-10-13）
+# 雙層 TLS 在閘道器上的 CPU 與延遲（2026-10-12、2026-10-13）
 
 對應 issue：Laysi/trustiot-v2#75。
 
-- 結論與設計影響寫在[可行性測試結果（2026-10-13）](../feasibility/2026-10-13-double-tls-pi.md)。
-- 原始資料在 [data/2026-10-13-75-double-tls-pi/](data/2026-10-13-75-double-tls-pi/)。工作站的位址在資料裡已換成 `<workstation>`，指令裡的 `$PI_HOST` 是 Pi 的 ssh 主機。
+- 結論與設計影響寫在[可行性測試結果（2026-10-13）](../feasibility/2026-10-13-double-tls-gateway.md)。
+- 原始資料在 [data/2026-10-13-75-double-tls-gateway/](data/2026-10-13-75-double-tls-gateway/)。工作站的位址在資料裡已換成 `<workstation>`，指令裡的 `$GATEWAY_HOST` 是閘道器的 ssh 主機。
 
 ## 環境
 
-| 項目 | 閘道器端（lab 的 Pi） | 伺服器端（工作站） |
+| 項目 | 閘道器端（lab 的閘道器） | 伺服器端（工作站） |
 | --- | --- | --- |
-| 硬體 | Raspberry Pi 4 Model B Rev 1.4。CPU：Cortex-A72（CPU part 0xd08），4 核，600–1800 MHz，`ondemand` 調速。`Features: fp asimd evtstrm crc32 cpuid`，沒有 AES 與 PMULL。記憶體 2 GB（1844 MiB） | x86\_64 8 核（有 AES-NI） |
+| 硬體 | lab 的閘道器，裝置樹回報的型號是 Raspberry Pi 4 Model B Rev 1.4。CPU：Cortex-A72（CPU part 0xd08），4 核，600–1800 MHz，`ondemand` 調速。`Features: fp asimd evtstrm crc32 cpuid`，沒有 AES 與 PMULL。記憶體 2 GB（1844 MiB） | x86\_64 8 核（有 AES-NI） |
 | OS | Raspberry Pi OS Lite arm64（Debian 13 Trixie），kernel 6.18.50+rpt-rpi-v8，glibc 2.41，OpenSSL 3.5.7（`openssl speed` 用） | Fedora 44，kernel 7.2.8，podman 5.8.7（rootless，`--network host`），Bun 1.4.2 |
 | 程式 | 閘道器替身 `gw` 與 `aeadbench`。Rust 1.99.0，以 cargo-zigbuild 0.23.4 加 Zig 0.16.0 交叉編譯成 `aarch64-unknown-linux-gnu.2.36`，Release 建置。crate 見下方 | Mosquitto `docker.io/library/eclipse-mosquitto:2.1.2-alpine`（digest `sha256:12436df85d6b2b91e63c71184da35ec89400a98abdc688a78b1403a11ecf44b4`，OpenSSL 3.5.8）；Envoy 取自 `docker.io/istio/proxyv2:1.30.5`（digest `sha256:324ec9f74e9194c43b16e859497d67567c93d3d1e5f0804a88ed48002e668f62`，Envoy 1.38.5，BoringSSL）；轉接服務 `relay`（同一個 Rust 專案） |
 
 crate 版本：rustls 0.23.45（`ring`、`aws_lc_rs`、`prefer-post-quantum`）、tokio-rustls 0.26.6、tokio-tungstenite 與 tungstenite 0.30.0、tokio 1.53.2、ring 0.17.14、aws-lc-rs 1.18.1（aws-lc-sys 0.45.0）、rcgen 0.14.10、hdrhistogram 7.6.0。
 
-測試程式不進 repo：原始碼在工作站的 `~/poc-gw/75/`，Pi 上的執行檔在 `~/poc-75/`。
+測試程式不進 repo：原始碼在工作站的 `~/poc-gw/75/`，閘道器上的執行檔在 `~/poc-75/`。
 
-**Pi 端（`gw`）**
+**閘道器端（`gw`）**
 
 - 兩層都只開 TLS 1.3。
 - 內層用 ECDSA P-256 的軟體金鑰做用戶端憑證，CN 是 `gw-0001`。
@@ -38,18 +38,18 @@ crate 版本：rustls 0.23.45（`ring`、`aws_lc_rs`、`prefer-post-quantum`）�
 
 - 轉接服務每 50 秒送一次 WebSocket ping，WebSocket 緩衝區設定與用戶端相同。
 - Mosquitto 只開 mTLS（`require_certificate true`、`use_identity_as_username true`），另外設了 `set_tcp_nodelay true` 與 `persistence false`。
-- 量測時沒有訂閱者，訊息由 broker 直接丟棄。這不影響 Pi 端的成本。
+- 量測時沒有訂閱者，訊息由 broker 直接丟棄。這不影響閘道器端的成本。
 
 測試用的 CA、伺服器憑證與閘道器憑證，都由 `rcgen` 在工作站上產生（`~/poc-gw/75/pki/`），沒有進 repo。
 
-**Pi 的鎖與狀態**
+**閘道器的鎖與狀態**
 
-每個量測窗口都持有 Pi 上的 `~/e2e.lock`，窗口結束立刻釋放。窗口開始時，以及每次量測前，都記錄了 Pi 的狀態：
+每個量測窗口都持有閘道器上的 `~/e2e.lock`，窗口結束立刻釋放。窗口開始時，以及每次量測前，都記錄了閘道器的狀態：
 
 - 負載、溫度與 `vcgencmd get_throttled`
 - CPU 用量最高的 5 個程序
 
-2026-10-13 各窗口中，量測前的 Pi load1 不超過 0.29，溫度 46–50 °C，`throttled=0x0`；工作站的 load1 在 0.05–1.54 之間。
+2026-10-13 各窗口中，量測前的閘道器 load1 不超過 0.29，溫度 46–50 °C，`throttled=0x0`；工作站的 load1 在 0.05–1.54 之間。
 
 | 窗口（UTC） | 內容 |
 | --- | --- |
@@ -62,17 +62,17 @@ crate 版本：rustls 0.23.45（`ring`、`aws_lc_rs`、`prefer-post-quantum`）�
 | 2026-10-13 05:48:08–06:15:51 | ring 的對照，以及不設套件順序的對照 |
 | 2026-10-13 06:17:52–06:33:09 | 閒置，每條路徑 5 分鐘 |
 
-各窗口的取得與釋放時間、事前檢查的輸出，都在 [windows.txt](data/2026-10-13-75-double-tls-pi/windows.txt)。
+各窗口的取得與釋放時間、事前檢查的輸出，都在 [windows.txt](data/2026-10-13-75-double-tls-gateway/windows.txt)。
 
-**Pi 的停機**
+**閘道器的停機**
 
-- 2026-10-12 約 10:12Z，工作站換了網路，Pi 也隨即離線。Pi 在 2026-10-13 約 03:27Z 斷電重開後恢復。
+- 2026-10-12 約 10:12Z，工作站換了網路，閘道器也隨即離線。閘道器在 2026-10-13 約 03:27Z 斷電重開後恢復。
 - 這段期間本 issue 沒有持有 lock，也沒有量測。
-- 2026-10-12 的窗口都在 09:01:19Z 前結束；2026-10-13 的窗口都在重開之後，而且開始前都確認了 Pi 閒置。所以停機不影響已記錄的結果。
+- 2026-10-12 的窗口都在 09:01:19Z 前結束；2026-10-13 的窗口都在重開之後，而且開始前都確認了閘道器閒置。所以停機不影響已記錄的結果。
 
 ## 指令
 
-祕密只有測試用的私鑰，放在 `~/poc-gw/75/pki/` 與 Pi 的 `~/poc-75/pki/`，不進 repo。
+祕密只有測試用的私鑰，放在 `~/poc-gw/75/pki/` 與閘道器的 `~/poc-75/pki/`，不進 repo。
 
 ```sh
 # 工作站：建置（Rust 版本跟隨 repo 的 rust-toolchain.toml）、產生測試 PKI
@@ -80,10 +80,10 @@ cargo build --release --manifest-path ~/poc-gw/75/Cargo.toml
 (cd ~/poc-gw/75 && ./target/release/pki)
 CARGO_ZIGBUILD_ZIG_PATH=~/.proto/tools/zig/0.16.0/zig ~/.proto/tools/cargo-zigbuild/0.23.4/cargo-zigbuild \
   zigbuild --release --manifest-path ~/poc-gw/75/Cargo.toml --target aarch64-unknown-linux-gnu.2.36 --bin gw --bin aeadbench
-# 複製到 Pi：PI_HOST 是 Pi 的 ssh 主機，沒有設定時停在這一行
-: "${PI_HOST:?set PI_HOST to the ssh host of the lab Pi}"
-scp target/aarch64-unknown-linux-gnu/release/{gw,aeadbench} "$PI_HOST:poc-75/"
-scp pki/{outer-roots.pem,inner-ca.pem,gw.pem,gw.key} "$PI_HOST:poc-75/pki/"
+# 複製到閘道器：GATEWAY_HOST 是閘道器的 ssh 主機，沒有設定時停在這一行
+: "${GATEWAY_HOST:?set GATEWAY_HOST to the ssh host of the lab gateway}"
+scp target/aarch64-unknown-linux-gnu/release/{gw,aeadbench} "$GATEWAY_HOST:poc-75/"
+scp pki/{outer-roots.pem,inner-ca.pem,gw.pem,gw.key} "$GATEWAY_HOST:poc-75/pki/"
 
 # 工作站：伺服器端（srv/ 內是 mosquitto.conf、envoy.yaml 與伺服器憑證）
 podman run -d --name poc75-mosquitto --network host -v ~/poc-gw/75/srv:/srv:ro,Z \
@@ -94,12 +94,12 @@ podman run -d --name poc75-envoy --network host -v ~/poc-gw/75/srv:/srv:ro,Z \
 ./target/release/relay --listen 0.0.0.0:18752 --upstream 127.0.0.1:18750 \
   --tls-cert pki/saas-chain.pem --tls-key pki/saas.key
 
-# 工作站：依序取得 Pi 的 lock、跑各組量測、釋放（每組一個窗口），再彙整成表格與去識別化的資料
+# 工作站：依序取得閘道器的 lock、跑各組量測、釋放（每組一個窗口），再彙整成表格與去識別化的資料
 bun ~/poc-gw/75/run.ts aead reconnect awslc-chacha awslc-aes128 other idle
-bun ~/poc-gw/75/analyze.ts docs/test-reports/data/2026-10-13-75-double-tls-pi
+bun ~/poc-gw/75/analyze.ts docs/test-reports/data/2026-10-13-75-double-tls-gateway
 ```
 
-`run.ts` 對每次量測在 Pi 上執行的指令如下（`<path>` 與 `<scenario>` 見下表）：
+`run.ts` 對每次量測在閘道器上執行的指令如下（`<path>` 與 `<scenario>` 見下表）：
 
 ```sh
 cd ~/poc-75 && ./gw <path> --provider aws-lc-rs|ring \
@@ -139,7 +139,7 @@ cp pki-rev/crl-revoked.pem srv-rev/crl.pem && podman kill --signal HUP poc75-mos
 
 ### AEAD
 
-數字取自 [aead.json](data/2026-10-13-75-double-tls-pi/aead.json) 與 [openssl-speed.txt](data/2026-10-13-75-double-tls-pi/openssl-speed.txt)。每次加密的時間（µs），ring 與 aws-lc-rs 的差距不到 2%，下表取 ring：
+數字取自 [aead.json](data/2026-10-13-75-double-tls-gateway/aead.json) 與 [openssl-speed.txt](data/2026-10-13-75-double-tls-gateway/openssl-speed.txt)。每次加密的時間（µs），ring 與 aws-lc-rs 的差距不到 2%，下表取 ring：
 
 | 大小 | AES-128-GCM | AES-256-GCM | ChaCha20-Poly1305 |
 | --- | --- | --- | --- |
@@ -152,13 +152,13 @@ cp pki-rev/crl-revoked.pem srv-rev/crl.pem && podman kill --signal HUP poc75-mos
 
 ### 穩態
 
-逐筆的資料在 [awslc-chacha.jsonl](data/2026-10-13-75-double-tls-pi/awslc-chacha.jsonl)、[awslc-aes128.jsonl](data/2026-10-13-75-double-tls-pi/awslc-aes128.jsonl)、[other.jsonl](data/2026-10-13-75-double-tls-pi/other.jsonl) 與 [idle.jsonl](data/2026-10-13-75-double-tls-pi/idle.jsonl)。每筆記錄包含：
+逐筆的資料在 [awslc-chacha.jsonl](data/2026-10-13-75-double-tls-gateway/awslc-chacha.jsonl)、[awslc-aes128.jsonl](data/2026-10-13-75-double-tls-gateway/awslc-aes128.jsonl)、[other.jsonl](data/2026-10-13-75-double-tls-gateway/other.jsonl) 與 [idle.jsonl](data/2026-10-13-75-double-tls-gateway/idle.jsonl)。每筆記錄包含：
 
 - 協商結果：兩層的套件與 key exchange
 - 程序的 user 與 sys CPU 秒數、整機忙碌比例
 - 上行與下行的位元組數
 - QoS1 往返與送出路徑的 p50、p90、p99、最大值
-- 送出的筆數，以及 Pi 與工作站的負載
+- 送出的筆數，以及閘道器與工作站的負載
 
 每秒訊息數取自實際送出的筆數，各路徑相同：S1 1.1、S2 33.0、延遲 10.0、壓力 510、極限約 4,998。下表的 CPU 是閘道器程序占單核的百分比，provider 為 aws-lc-rs；RTT 是 QoS1 往返的 p50 與 p99（ms）。
 
@@ -188,13 +188,13 @@ cp pki-rev/crl-revoked.pem srv-rev/crl.pem && podman kill --signal HUP poc75-mos
 - **不設套件順序的對照**（aws-lc-rs 預設，兩層協商出 AES-256-GCM）：
   - 壓力：基準 4.12%、SaaS 5.70%、地端 5.67%
   - 極限：基準 30.7%、SaaS 32.4%、地端 37.6%
-- **Pi 端送出路徑**：延遲情境的 p50 / p99（ms）如下。
+- **閘道器端送出路徑**：延遲情境的 p50 / p99（ms）如下。
   - ChaCha20：基準 0.043 / 0.048，SaaS 0.059 / 0.090，地端 0.071 / 0.102
   - AES-128：基準 0.055 / 0.075，SaaS 0.083 / 0.125，地端 0.083 / 0.126
 
 ### 重連
 
-逐筆的資料在 [reconnect.jsonl](data/2026-10-13-75-double-tls-pi/reconnect.jsonl)，兩層都用 ChaCha20，n=30。完整握手與 resumption 都列 p50 / p99（ms）與每次的 CPU（ms）。
+逐筆的資料在 [reconnect.jsonl](data/2026-10-13-75-double-tls-gateway/reconnect.jsonl)，兩層都用 ChaCha20，n=30。完整握手與 resumption 都列 p50 / p99（ms）與每次的 CPU（ms）。
 
 | 路徑 | provider，key exchange | 完整握手 | 完整 CPU | resumption | resumption CPU | 冷啟動（ms / CPU ms） |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -228,8 +228,8 @@ cp pki-rev/crl-revoked.pem srv-rev/crl.pem && podman kill --signal HUP poc75-mos
 
 ### resumption 與撤銷
 
-- 換成撤銷的 CRL 並送 SIGHUP 後，閘道器帶舊 ticket 重連：連線被拒，收到 `AlertReceived(CertificateRevoked)`。Mosquitto 的紀錄是 `certificate verify failed`。證據在 [revtest-revoked-client.txt](data/2026-10-13-75-double-tls-pi/revtest-revoked-client.txt) 與 [revtest-mosquitto-control.log](data/2026-10-13-75-double-tls-pi/revtest-mosquitto-control.log)。
-- 對照組，CRL 不變、只送 SIGHUP：之後兩次重連都是完整握手，見 [revtest-control-client.json](data/2026-10-13-75-double-tls-pi/revtest-control-client.json)。
+- 換成撤銷的 CRL 並送 SIGHUP 後，閘道器帶舊 ticket 重連：連線被拒，收到 `AlertReceived(CertificateRevoked)`。Mosquitto 的紀錄是 `certificate verify failed`。證據在 [revtest-revoked-client.txt](data/2026-10-13-75-double-tls-gateway/revtest-revoked-client.txt) 與 [revtest-mosquitto-control.log](data/2026-10-13-75-double-tls-gateway/revtest-mosquitto-control.log)。
+- 對照組，CRL 不變、只送 SIGHUP：之後兩次重連都是完整握手，見 [revtest-control-client.json](data/2026-10-13-75-double-tls-gateway/revtest-control-client.json)。
 - 對照組，不送 SIGHUP：重連會 resume。
 - 結論：SIGHUP 讓舊的 ticket 全部作廢。
 
@@ -242,10 +242,10 @@ cp pki-rev/crl-revoked.pem srv-rev/crl.pem && podman kill --signal HUP poc75-mos
 
 逐條對照驗收條件：
 
-- [x] **結果檔記錄 CPU 使用率、p50 與 p99 延遲、測試頻率與硬體版本**：通過，見[可行性測試結果（2026-10-13）](../feasibility/2026-10-13-double-tls-pi.md)的「穩態 CPU」「延遲」「連線建立與重連」「頻率假設」「測試環境」各節，以及本報告。
+- [x] **結果檔記錄 CPU 使用率、p50 與 p99 延遲、測試頻率與硬體版本**：通過，見[可行性測試結果（2026-10-13）](../feasibility/2026-10-13-double-tls-gateway.md)的「穩態 CPU」「延遲」「連線建立與重連」「頻率假設」「測試環境」各節，以及本報告。
 - [x] **勾選 docs/roadmap/milestones.md 的雙層 TLS 項目**：已勾選，並連到結果檔。
 - [x] **若 CPU 或延遲超出可接受範圍，在結果檔寫出對閘道器設計的影響**：沒有超出。
-  - 可接受範圍的定義：S2 不超過單核的 5%；Pi 端每則的延遲 p99 不超過 10 ms；重連成本遠小於 0.4–3.5 秒。
+  - 可接受範圍的定義：S2 不超過單核的 5%；閘道器端每則的延遲 p99 不超過 10 ms；重連成本遠小於 0.4–3.5 秒。
   - 實測：S2 最多 0.56%；送出路徑 p99 最多 0.97 ms，在 S2 與 AES-128 時；完整握手 14 ms，加 TPM 約 70 ms。
   - 結果檔另外寫了設定上的建議：套件順序、resumption、crypto provider 與 Mosquitto 的 nodelay。
 

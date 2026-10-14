@@ -275,4 +275,4 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 
 ## 相依套件與 aarch64
 
-閘道器是 Raspberry Pi（`aarch64-unknown-linux-gnu`），本 crate 只能依賴純 Rust、不需要 C 工具鏈的 crate（[專案目錄](../../docs/architecture/repository-layout.md)）。`tests/dependencies.rs` 以 `cargo metadata --filter-platform aarch64-unknown-linux-gnu` 列出編進閘道器的所有 crate，與允許清單（`cbor4ii`、解碼半精度浮點數的 `half` 及其相依的 `cfg-if`、`zerocopy`，`serde`，以及只在建置機器上執行的 derive 巨集相關 crate）不同就失敗，也檢查沒有 crate 連結原生函式庫。新增相依時先確認它是純 Rust、能編到 aarch64，再更新清單。
+閘道器的目標平台是 `aarch64-unknown-linux-gnu`，本 crate 只能依賴純 Rust、不需要 C 工具鏈的 crate（[專案目錄](../../docs/architecture/repository-layout.md)）。`tests/dependencies.rs` 以 `cargo metadata --filter-platform aarch64-unknown-linux-gnu` 列出編進閘道器的所有 crate，與允許清單（`cbor4ii`、解碼半精度浮點數的 `half` 及其相依的 `cfg-if`、`zerocopy`，`serde`，以及只在建置機器上執行的 derive 巨集相關 crate）不同就失敗，也檢查沒有 crate 連結原生函式庫。新增相依時先確認它是純 Rust、能編到 aarch64，再更新清單。

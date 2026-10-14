@@ -1,18 +1,18 @@
-# 閘道器（trustiot-gw）的記憶體用量與採購規格：lab Pi 實測（2026-10-12 至 2026-10-13）
+# 閘道器（trustiot-gw）的記憶體用量與採購規格：lab 的閘道器實測（2026-10-12 至 2026-10-13）
 
-對應 issue：Laysi/trustiot-v2#76。原始資料在 [data/2026-10-13-76-gateway-memory/](data/2026-10-13-76-gateway-memory/)（Pi 的主機名稱已換成 `<pi>`），結論與建議在[可行性測試結果（2026-10-13）](../feasibility/2026-10-13-gateway-memory.md)。
+對應 issue：Laysi/trustiot-v2#76。原始資料在 [data/2026-10-13-76-gateway-memory/](data/2026-10-13-76-gateway-memory/)（閘道器的主機名稱已換成 `<gateway>`），結論與建議在[可行性測試結果（2026-10-13）](../feasibility/2026-10-13-gateway-memory.md)。
 
-在 lab 的 Raspberry Pi 4（2 GB）量 OS 基線，再以 Rust 閘道器雛形（Modbus 輪詢、protocol crate 的 `BatchBuilder` 與 CBOR、超過記憶體上限寫磁碟的離線緩衝、MQTT 5、WebSocket 內的 mTLS）量不同設備數與緩衝上限下的尖峰記憶體，包含上傳中斷、配置器與 zram 交換的影響。
+在 lab 的閘道器（2 GB）量 OS 基線，再以 Rust 閘道器雛形（Modbus 輪詢、protocol crate 的 `BatchBuilder` 與 CBOR、超過記憶體上限寫磁碟的離線緩衝、MQTT 5、WebSocket 內的 mTLS）量不同設備數與緩衝上限下的尖峰記憶體，包含上傳中斷、配置器與 zram 交換的影響。
 
 ## 環境
 
-- **機器**：lab 的 Raspberry Pi 4 Model B Rev 1.4，2 GB（可見 1,844 MiB），Raspberry Pi OS Lite arm64（Debian 13.7），kernel 6.18.50+rpt-rpi-v8，glibc 2.41，systemd 257。zram swap 1.8 GiB（zstd，優先序 100），`vm.swappiness` 60，核心命令列含 `cgroup_disable=memory`。
-- **Pi 上的 OS 狀態**：13 個執行中的服務（NetworkManager、wpa\_supplicant、bluetooth、avahi-daemon、ssh、journald、udevd、logind、timesyncd、cron、dbus、getty\@tty1、user\@1000）；649 個套件，含 Laysi/trustiot-v2#74 留下的 `tpm2-tools`、`cryptsetup-bin`、`systemd-cryptsetup`、`tpm-udev` 與 `dtoverlay=tpm-slb9670-ce0`，沒有 TPM 常駐服務，#74 的 LUKS 測試容器與 crypttab 項目已移除。清單在 [baseline-info/](data/2026-10-13-76-gateway-memory/baseline-info/)（2026-10-13）與 [baseline-info-prereboot/](data/2026-10-13-76-gateway-memory/baseline-info-prereboot/)（2026-10-12，#74 重開機之前，套件清單相同）。
+- **機器**：lab 的閘道器，裝置樹回報的型號是 Raspberry Pi 4 Model B Rev 1.4，2 GB（可見 1,844 MiB），Raspberry Pi OS Lite arm64（Debian 13.7），kernel 6.18.50+rpt-rpi-v8，glibc 2.41，systemd 257。zram swap 1.8 GiB（zstd，優先序 100），`vm.swappiness` 60，核心命令列含 `cgroup_disable=memory`。
+- **閘道器上的 OS 狀態**：13 個執行中的服務（NetworkManager、wpa\_supplicant、bluetooth、avahi-daemon、ssh、journald、udevd、logind、timesyncd、cron、dbus、getty\@tty1、user\@1000）；649 個套件，含 Laysi/trustiot-v2#74 留下的 `tpm2-tools`、`cryptsetup-bin`、`systemd-cryptsetup`、`tpm-udev` 與 `dtoverlay=tpm-slb9670-ce0`，沒有 TPM 常駐服務，#74 的 LUKS 測試容器與 crypttab 項目已移除。清單在 [baseline-info/](data/2026-10-13-76-gateway-memory/baseline-info/)（2026-10-13）與 [baseline-info-prereboot/](data/2026-10-13-76-gateway-memory/baseline-info-prereboot/)（2026-10-12，#74 重開機之前，套件清單相同）。
 - **工作站**：Fedora 44（kernel 7.2.8），podman 5.8.7，proto 0.62.3，Bun 1.4.2，Rust 1.99.0（`.prototools` 與 `rust-toolchain.toml` 的版本），Zig 0.16.0 與 cargo-zigbuild 0.23.4（`.prototools` 的版本），openssl 3.5.9。
-- **伺服器端**（工作站，podman 無根）：Mosquitto 2.1.2（`docker.io/library/eclipse-mosquitto@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408`，mTLS 監聽 `require_certificate true`、`use_identity_as_username true`、`tls_version tlsv1.3`，另有只在本機回送位址發布的明文監聽給雲端模擬器）；Modbus 模擬器在 `docker.io/library/debian:bookworm-slim@sha256:a4672c0cb26fbdde88e38fa2dfb6c681942306680e41e4378b28770b6e79ee91` 內（由 glibc 2.36 為目標的二進位檔，Modbus TCP 與 RTU-over-TCP 兩個埠）；WebSocket 轉接（外層 TLS 終結、WebSocket 轉成到 Mosquitto 的 TCP）與雲端模擬器（解碼每批、依（閘道器，串流）追蹤序號高水位、回傳 `TelemetryAck`）是原生程式。埠 18761（轉接）、18762 與 18763（Mosquitto）、18764 與 18765（Modbus）。測試 CA 與所有憑證與金鑰由 `openssl`（ECDSA P-256）在測試時產生、有效 30 天、沒有提交；用戶端金鑰測完已從 Pi 刪除。
-- **閘道器雛形**：交叉編譯到 `aarch64-unknown-linux-gnu.2.36`（glibc）與 `aarch64-unknown-linux-musl`，release、LTO thin、`panic=abort`；tokio 1.53.2、rustls 0.23.45（ring 0.17.14）、tokio-rustls 0.26.6、tokio-tungstenite 0.30.0、rumqttc 0.25.1（只用 MQTT 5 封包編解碼）、本 repo 的 protocol crate（commit `b2b9232`，cbor4ii 1.2.3）。程式碼約 1,600 行，依 2026-10-09 的決定不進 repo：工作站 `~/poc-gw/76/`，Pi `~/poc-76/`。三個版本：`gw-glibc`（`smoke-d10`）、`gw-glibc-v2`（加上 `--batching series`；steady、outage-d250 的 c0/c1/c4/c16、alloc 與 caps 群組，`alloc-musl` 用 `gw-musl-v2`）、`gw-glibc-v3`（取樣多了 zram 與 pswpin、pswpout 欄位；big2、swap、outage3 群組與 synth-c512 之後的執行）。`gw-glibc-v3` 的 sha256 為 `6bab86044b134db5…`，`gw-musl-v3` 為 `138c4b8c5d16d16b…`。
+- **伺服器端**（工作站，podman 無根）：Mosquitto 2.1.2（`docker.io/library/eclipse-mosquitto@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408`，mTLS 監聽 `require_certificate true`、`use_identity_as_username true`、`tls_version tlsv1.3`，另有只在本機回送位址發布的明文監聽給雲端模擬器）；Modbus 模擬器在 `docker.io/library/debian:bookworm-slim@sha256:a4672c0cb26fbdde88e38fa2dfb6c681942306680e41e4378b28770b6e79ee91` 內（由 glibc 2.36 為目標的二進位檔，Modbus TCP 與 RTU-over-TCP 兩個埠）；WebSocket 轉接（外層 TLS 終結、WebSocket 轉成到 Mosquitto 的 TCP）與雲端模擬器（解碼每批、依（閘道器，串流）追蹤序號高水位、回傳 `TelemetryAck`）是原生程式。埠 18761（轉接）、18762 與 18763（Mosquitto）、18764 與 18765（Modbus）。測試 CA 與所有憑證與金鑰由 `openssl`（ECDSA P-256）在測試時產生、有效 30 天、沒有提交；用戶端金鑰測完已從閘道器刪除。
+- **閘道器雛形**：交叉編譯到 `aarch64-unknown-linux-gnu.2.36`（glibc）與 `aarch64-unknown-linux-musl`，release、LTO thin、`panic=abort`；tokio 1.53.2、rustls 0.23.45（ring 0.17.14）、tokio-rustls 0.26.6、tokio-tungstenite 0.30.0、rumqttc 0.25.1（只用 MQTT 5 封包編解碼）、本 repo 的 protocol crate（commit `b2b9232`，cbor4ii 1.2.3）。程式碼約 1,600 行，依 2026-10-09 的決定不進 repo：工作站 `~/poc-gw/76/`，閘道器 `~/poc-76/`。三個版本：`gw-glibc`（`smoke-d10`）、`gw-glibc-v2`（加上 `--batching series`；steady、outage-d250 的 c0/c1/c4/c16、alloc 與 caps 群組，`alloc-musl` 用 `gw-musl-v2`）、`gw-glibc-v3`（取樣多了 zram 與 pswpin、pswpout 欄位；big2、swap、outage3 群組與 synth-c512 之後的執行）。`gw-glibc-v3` 的 sha256 為 `6bab86044b134db5…`，`gw-musl-v3` 為 `138c4b8c5d16d16b…`。
 - **雛形的設定**（除非另寫）：每台設備 20 個資料點（32 位元浮點，40 個暫存器，一次 FC3），每秒一輪；每 4 台設備一條 Modbus 連線（TCP 與 RTU-over-TCP 輪流）；設備 ID 為 36 字元的 UUID 樣式，資料點鍵 16 字元（如 `measure_point_01`）；批次上限 256 KiB（`MAX_BULK_BYTES`）；每 10 秒結束開啟中的批次；一次送一批、收到 `TelemetryAck` 才送下一批；確認逾時 30 秒；MQTT keepalive 60 秒；重連退避 1 到 10 秒；tokio 預設工作執行緒（4）；WebSocket 讀寫緩衝區預設 128 KiB；組批方式預設為到達順序。
-- **鎖**：測量時持有 Pi 上的 `~/e2e.lock`（owner `Laysi/trustiot-v2#76`），時間見「鎖與中斷」。
+- **鎖**：測量時持有閘道器上的 `~/e2e.lock`（owner `Laysi/trustiot-v2#76`），時間見「鎖與中斷」。
 
 ## 指令
 
@@ -20,13 +20,13 @@
 
 ```sh
 # 在 ~/poc-gw/76（含 Cargo.toml、harness/）；環境與位址由 env.json 提供，不進 repo
-bun harness/build.ts                    # 主機：relay、cloudsim；modsim 以 x86_64-unknown-linux-gnu.2.36；Pi：gw（glibc、musl）、ballast
+bun harness/build.ts                    # 主機：relay、cloudsim；modsim 以 x86_64-unknown-linux-gnu.2.36；閘道器：gw（glibc、musl）、ballast
 bun harness/pki.ts pki                  # 一次性 CA、轉接、broker 與用戶端憑證
 bun harness/stack.ts up                 # Mosquitto 與 Modbus 模擬器（podman）、轉接、雲端模擬器
-bun harness/deploy.ts v3                # 二進位檔與用戶端憑證到 Pi 的 ~/poc-76
+bun harness/deploy.ts v3                # 二進位檔與用戶端憑證到閘道器的 ~/poc-76
 ```
 
-量測：每個群組在一個鎖視窗內執行，結束就放鎖。群組內每次執行由 `harness/scenario.ts` 在 Pi 上以 `setsid` 啟動 `bin/gw-glibc-v3`（`oom_score_adj` 設 1000），等 `exit` 檔出現，再取回 `samples.csv`、`summary.json`、`counters.json` 與雲端模擬器的記錄：
+量測：每個群組在一個鎖視窗內執行，結束就放鎖。群組內每次執行由 `harness/scenario.ts` 在閘道器上以 `setsid` 啟動 `bin/gw-glibc-v3`（`oom_score_adj` 設 1000），等 `exit` 檔出現，再取回 `samples.csv`、`summary.json`、`counters.json` 與雲端模擬器的記錄：
 
 ```sh
 bun harness/matrix.ts base+steadyall   # 基線 24 筆樣本，加 steady-d{1,10,50,100,250} 與三個形狀變體
@@ -41,7 +41,7 @@ bun harness/analyze.ts                 # 整理成 summary.json
 bun harness/export.ts <repo>/docs/test-reports/data/2026-10-13-76-gateway-memory   # 清掉位址後複製資料
 ```
 
-單次執行等同於在 Pi 上（`~/poc-76`）：
+單次執行等同於在閘道器上（`~/poc-76`）：
 
 ```sh
 ./bin/gw-glibc-v3 --devices 250 --points 20 --per-endpoint 4 --poll-ms 1000 --duration-secs 300 \
@@ -63,8 +63,8 @@ bun harness/export.ts <repo>/docs/test-reports/data/2026-10-13-76-gateway-memory
 | 視窗 | 取得 | 釋放 | 內容 |
 | --- | --- | --- | --- |
 | 1 | 2026-10-12T09:07:00Z | 2026-10-12T09:13:46Z | 開機後（#74 重開機前）的基線（原狀與停掉藍牙、avahi 的對照）；`smoke-d10` |
-| 2 | 2026-10-12T10:04:14Z | 2026-10-12T10:11:34Z | 基線取樣時 Pi 的網路中斷約 5 分鐘，視窗作廢，沒有資料 |
-| 3 | 2026-10-12T10:11:35Z | 2026-10-13T03:51:12Z | `base+steadyall`；10:12Z 起 Pi 斷電斷網、工作站的有線連線也斷了（約 17 小時），Pi 於 2026-10-13T03:27Z 開機，這個視窗裡 10:12Z 前後的基線取樣作廢，steady 與形狀變體都在 03:30Z 以後執行 |
+| 2 | 2026-10-12T10:04:14Z | 2026-10-12T10:11:34Z | 基線取樣時閘道器的網路中斷約 5 分鐘，視窗作廢，沒有資料 |
+| 3 | 2026-10-12T10:11:35Z | 2026-10-13T03:51:12Z | `base+steadyall`；10:12Z 起閘道器斷電斷網、工作站的有線連線也斷了（約 17 小時），閘道器於 2026-10-13T03:27Z 開機，這個視窗裡 10:12Z 前後的基線取樣作廢，steady 與形狀變體都在 03:30Z 以後執行 |
 | 4 | 2026-10-13T03:51:26Z | 2026-10-13T04:15:29Z | 基線（取得後 30 秒起）與 `outage-d250-c{0,1,4,16}` |
 | 5 | 2026-10-13T04:15:45Z | 2026-10-13T04:47:07Z | `alloc` |
 | 6 | 2026-10-13T07:03:07Z | 2026-10-13T07:34:38Z | `caps` |
@@ -75,7 +75,7 @@ bun harness/export.ts <repo>/docs/test-reports/data/2026-10-13-76-gateway-memory
 | 11 | 2026-10-13T08:33:59Z | 2026-10-13T08:44:39Z | 安全閥改 50 MiB 的 swap 執行（`swap-ballast1250-c384`） |
 | 12 | 2026-10-13T08:46:21Z | 2026-10-13T09:05:33Z | `outage3` |
 
-Pi 的重開機與中斷：（1）2026-10-12T09:14Z 前後 #74 為 LUKS 開機解鎖重開機（視窗 1 在它之前結束）；（2）2026-10-12T10:12Z 至 2026-10-13T03:27Z 斷電斷網（協調者的記錄：journal 只有一次開機，首筆時間是 fake-hwclock 的 2026-10-12T10:12Z 前後），視窗 2 與視窗 3 的前半作廢，作廢的資料沒有使用；（3）2026-10-14T03:04Z 前後再重開機，發生在所有視窗結束之後，不影響資料。作廢的樣本留在本機，不提交（`baseline-suspect-interrupted-run` 等）。
+閘道器的重開機與中斷：（1）2026-10-12T09:14Z 前後 #74 為 LUKS 開機解鎖重開機（視窗 1 在它之前結束）；（2）2026-10-12T10:12Z 至 2026-10-13T03:27Z 斷電斷網（協調者的記錄：journal 只有一次開機，首筆時間是 fake-hwclock 的 2026-10-12T10:12Z 前後），視窗 2 與視窗 3 的前半作廢，作廢的資料沒有使用；（3）2026-10-14T03:04Z 前後再重開機，發生在所有視窗結束之後，不影響資料。作廢的樣本留在本機，不提交（`baseline-suspect-interrupted-run` 等）。
 
 ### OS 基線
 
@@ -165,7 +165,7 @@ Pi 的重開機與中斷：（1）2026-10-12T09:14Z 前後 #74 為 LUKS 開機�
 ### 收尾
 
 - 工作站：`bun harness/stack.ts down` 已停止轉接、雲端模擬器與兩個 podman 容器（在工作站重開機之前，容器仍在執行；工作站重開機後確認沒有 `poc76-*` 容器）。
-- Pi：`~/poc-76/` 留有二進位檔與輸出（約 17 MB，不含緩衝的磁碟檔）；測試用戶端金鑰、憑證與 CA 已刪除。沒有安裝套件、沒有改任何系統設定；2026-10-12 的對照曾暫停藍牙與 avahi，結束時已啟動回來。
+- 閘道器：`~/poc-76/` 留有二進位檔與輸出（約 17 MB，不含緩衝的磁碟檔）；測試用戶端金鑰、憑證與 CA 已刪除。沒有安裝套件、沒有改任何系統設定；2026-10-12 的對照曾暫停藍牙與 avahi，結束時已啟動回來。
 
 ## 結論
 
