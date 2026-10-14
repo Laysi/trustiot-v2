@@ -2,14 +2,16 @@
 // every workload of the release is ready (the kubelet's HTTP probes answer), every CloudNativePG
 // Cluster is healthy, each ingress gateway's NetworkPolicy admits exactly the ports its Istio pods
 // use, every Service that exposes a probe routes to a ready pod, the migration Job generated the
-// passwords into the Secrets the chart declares, and an uninstall leaves nothing behind but the
-// objects the chart keeps on purpose (the database and the password Secrets), which are then
-// deleted. Components the chart gains later are covered without changes here, because the checks
-// read the release's own manifests (manifests.ts).
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+// passwords into the Secrets the chart declares, the identity and assets services built from the
+// commit answer through the ingress with a session cookie (api.ts, Laysi/trustiot-v2#65), and an
+// uninstall leaves nothing behind but the objects the chart keeps on purpose (the database and the
+// password Secrets), which are then deleted. Components the chart gains later are covered without
+// changes here, because the checks read the release's own manifests (manifests.ts).
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { apiValues, createSigningKey, routesOfValues, runApiCheck, SIGNING_KEY_SECRET } from "./api.ts";
 import { runIngressE2e } from "./e2e.ts";
 import { exec, retry, run, RunLog, waitUntilGone } from "./exec.ts";
 import {
@@ -17,6 +19,7 @@ import {
   gatewayPorts,
   gatewaysOf,
   healthEndpointsOf,
+  ingressHostsOf,
   keptObjectsOf,
   migrationJobsOf,
   migrationOrderProblems,
@@ -32,6 +35,7 @@ import {
   restartsOf,
   workloadsOf,
 } from "./manifests.ts";
+import { smokeNamespaceOf, smokeProviderNameOf } from "./platform.ts";
 import type { Check, ShapeResult } from "./report.ts";
 import { tail } from "./report.ts";
 
@@ -90,7 +94,7 @@ export function discoverShapes(chartDir: string): Shape[] {
 }
 
 export function namespaceOf(shape: Shape): string {
-  return `nightly-${shape.name}`;
+  return smokeNamespaceOf(shape.name);
 }
 
 /** The `-f` arguments for helm, as absolute paths. */
@@ -131,6 +135,10 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
   let manifest = "";
   let passed = false;
   let diagnostics: string | undefined;
+  // The shape's values files, then the API check's values (api.ts) once they are written.
+  const values = valuesArgs(ctx.chartDir, shape);
+  // The certificate the smoke made for an HTTPS listener, which the API check trusts.
+  let ingressCa: string | undefined;
   try {
     passed =
       (await check("namespace with the restricted Pod Security level", async () => {
@@ -139,21 +147,31 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         await kubectl(["label", "namespace", namespace, ...labels, "pod-security.kubernetes.io/enforce-version=latest"]);
         return "enforce, warn and audit are restricted";
       })) &&
+      (await check("the identity service's signing key and the values of the API check", async () => {
+        // Laysi/trustiot-v2#65: the release runs the identity and assets services built from this
+        // commit, behind the smoke namespace's ext_authz provider (platform.ts), and the identity
+        // service signs with a key generated here for this run only.
+        const publicKey = await createSigningKey(ctx.log, ctx, namespace);
+        const file = join(ctx.outDir, `values-api-${shape.name}.yaml`);
+        const routes = routesOfValues(ctx.chartDir, shape.valuesFiles);
+        writeFileSync(file, Bun.YAML.stringify(apiValues(shape.name, publicKey, routes), null, 2));
+        values.push("-f", file);
+        return `Secret ${SIGNING_KEY_SECRET} (key ${publicKey.kid}); ${file}: identity and assets, provider ${smokeProviderNameOf(shape.name)}`;
+      })) &&
       (await check("dummy Secrets for the references the chart makes", async () => {
         // Secrets reach a cluster from outside the chart (Laysi/trustiot-v2#72); the smoke test
-        // checks the wiring, so every Secret the rendered pods read gets a dummy value.
-        const rendered = await helm(
-          ["template", RELEASE, ctx.chartDir, "--namespace", namespace, ...valuesArgs(ctx.chartDir, shape)],
-          120_000,
-          true,
-        );
-        const missing = missingSecrets(parseManifests(rendered.stdout));
+        // checks the wiring, so every Secret the rendered pods read gets a dummy value, except
+        // the signing key made above.
+        const rendered = await helm(["template", RELEASE, ctx.chartDir, "--namespace", namespace, ...values], 120_000, true);
+        const objects = parseManifests(rendered.stdout);
+        const missing = missingSecrets(objects);
+        missing.delete(SIGNING_KEY_SECRET);
         for (const [name, keys] of missing) {
           const literals = [...keys].map((key) => `--from-literal=${key}=nightly-dummy-value`);
           await kubectl(["create", "secret", "generic", name, "--namespace", namespace, ...literals]);
         }
-        const tls = missingTlsSecrets(parseManifests(rendered.stdout));
-        for (const name of tls) await createTlsSecret(ctx, namespace, name);
+        const tls = missingTlsSecrets(objects);
+        for (const name of tls) ingressCa = await createTlsSecret(ctx, namespace, name, ingressHostsOf(objects));
         const created = [...missing.keys(), ...tls];
         return created.length === 0 ? "none needed" : `${created.length} created: ${created.join(", ")}`;
       })) &&
@@ -162,7 +180,7 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
           [
             "upgrade", "--install", RELEASE, ctx.chartDir,
             "--namespace", namespace,
-            ...valuesArgs(ctx.chartDir, shape),
+            ...values,
             "--wait", "--wait-for-jobs", "--timeout", "5m",
           ],
           6 * 60_000,
@@ -295,6 +313,9 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         }
         return routed.join(", ");
       })) &&
+      (await check("through the ingress, a new tenant reaches the assets service (Laysi/trustiot-v2#65)", () =>
+        runApiCheck(ctx, namespace, parseManifests(manifest), ingressCa, `nightly smoke ${shape.name}`),
+      )) &&
       (await check("helm uninstall leaves no object of the release but the kept database and password Secrets", async () => {
         await helm(["uninstall", RELEASE, "--namespace", namespace, "--wait", "--timeout", "3m"], 4 * 60_000);
         const left = await exec(
@@ -354,20 +375,27 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
 }
 
 /**
- * A self-signed certificate under the given Secret name, for a Gateway listener. The key lives in
- * a private temporary directory only as long as the command needs it and is never logged.
+ * A self-signed certificate for the ingress hosts under the given Secret name, for a Gateway
+ * listener; returns the certificate, which the API check trusts. The key lives in a private
+ * temporary directory only as long as the command needs it and is never logged.
  */
-async function createTlsSecret(ctx: SmokeContext, namespace: string, name: string): Promise<void> {
+async function createTlsSecret(ctx: SmokeContext, namespace: string, name: string, hosts: string[]): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), "nightly-tls-"));
   try {
     const cert = join(dir, "tls.crt");
     const key = join(dir, "tls.key");
-    await run(ctx.log, ["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-subj", "/CN=nightly.test", "-days", "1", "-keyout", key, "-out", cert], { timeoutMs: 30_000 });
+    const names = hosts.map((host) => `DNS:${host}`).join(",");
+    await run(
+      ctx.log,
+      ["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-subj", "/CN=nightly.test", "-addext", `subjectAltName=${names}`, "-days", "1", "-keyout", key, "-out", cert],
+      { timeoutMs: 30_000 },
+    );
     await run(
       ctx.log,
       [ctx.kubectl, "create", "secret", "tls", name, "--namespace", namespace, `--cert=${cert}`, `--key=${key}`],
       { env: { KUBECONFIG: ctx.kubeconfig }, timeoutMs: 60_000 },
     );
+    return readFileSync(cert, "utf8");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

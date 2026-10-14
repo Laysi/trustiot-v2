@@ -45,6 +45,27 @@ describe("sendRaw", () => {
     expect(server.received[0]).toContain("\r\nx-test: 1\r\n");
   });
 
+  test("sends a body after the head, with its length in bytes", async () => {
+    const server = tcpServer((socket) => {
+      socket.write("HTTP/1.1 201 Created\r\nContent-Length: 2\r\n\r\n{}");
+      socket.end();
+    });
+    const body = JSON.stringify({ name: "nightly ü" });
+    const response = await sendRaw({ host: "127.0.0.1", port: server.port, tls: false }, { ...request, method: "POST", body });
+    expect(response.status).toBe(201);
+    const sent = server.received.join("");
+    expect(sent).toStartWith("POST /a//b/../c?x=1 HTTP/1.1\r\n");
+    expect(sent).toContain(`\r\ncontent-length: ${Buffer.byteLength(body)}\r\n`);
+    expect(sent).toEndWith(`\r\n\r\n${body}`);
+    // Without a body there is no content-length.
+    const plain = tcpServer((socket) => {
+      socket.write("HTTP/1.1 204 No Content\r\n\r\n");
+      socket.end();
+    });
+    await sendRaw({ host: "127.0.0.1", port: plain.port, tls: false }, request);
+    expect(plain.received.join("")).not.toContain("content-length");
+  });
+
   test("decodes a chunked body", async () => {
     const server = tcpServer((socket) => {
       socket.write("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n");

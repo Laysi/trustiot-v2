@@ -1,12 +1,14 @@
 // Reuse of the nightly's Rust images by content (Laysi/trustiot-v2#60): a Rust image is built
 // only when something that goes into it changed. The key is a digest of the git object hashes
-// (trees and blobs) of every input of the build; nightly.yml restores `<dir>/<name>.tar` under
-// that exact key with actions/cache, run.ts loads it instead of building, and on a miss run.ts
-// builds the image and, in a scheduled or manual run on main, writes the tarball that nightly.yml
-// then saves. Why a pull request cannot plant an image here: docs/architecture/ci-release.md,
-// nightly.yml.
+// (trees and blobs) of every input of the build; nightly.yml restores the directory with
+// `<name>.tar` of every image in NIGHTLY_IMAGES under that exact key with actions/cache, run.ts
+// loads them instead of building, and on a miss run.ts builds the images and, in a scheduled or
+// manual run on main, writes the tarballs that nightly.yml then saves together. Why a pull
+// request cannot plant an image here: docs/architecture/ci-release.md, nightly.yml.
 //
-//   bun scripts/nightly/image-cache.ts key <image>     prints key=<cache key> (for $GITHUB_OUTPUT)
+//   bun scripts/nightly/image-cache.ts key             prints key=<cache key of NIGHTLY_IMAGES> (for $GITHUB_OUTPUT)
+//   bun scripts/nightly/image-cache.ts key <image>     prints key=<cache key of one image>
+//   bun scripts/nightly/image-cache.ts complete <dir>  prints built=true when <dir> holds every tarball of NIGHTLY_IMAGES
 import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -48,6 +50,14 @@ export function imageCacheInputs(name: string): string[] {
 /** Bump to drop every cached image at once, for example when the tarball's format changes. */
 export const IMAGE_CACHE_VERSION = "v1";
 
+/**
+ * The Rust images the nightly builds from the commit and deploys: the migration Job's
+ * (Laysi/trustiot-v2#60), and the identity and assets services the smoke test calls through the
+ * ingress (Laysi/trustiot-v2#65). They share one cache entry, since every Rust change reaches all
+ * of them anyway (each key covers the whole workspace).
+ */
+export const NIGHTLY_IMAGES = ["migrate", "identity", "assets"] as const;
+
 const NAME = /^[a-z0-9][a-z0-9-]*$/;
 
 /** The git object hash of each path at HEAD, in order; throws when a path is not in HEAD. */
@@ -87,9 +97,29 @@ export async function imageCacheKey(name: string, hashes: ObjectHashes): Promise
   return `nightly-image-${name}-${IMAGE_PLATFORM.replace("/", "-")}-${digest.digest("hex")}`;
 }
 
+/**
+ * The key of the one cache entry that holds the tarballs of `names` (NIGHTLY_IMAGES): a SHA-256
+ * over each image's own key, so it changes exactly when one of them does.
+ */
+export async function imagesCacheKey(names: readonly string[], hashes: ObjectHashes): Promise<string> {
+  if (names.length === 0) throw new Error("no image to key");
+  const keys = await Promise.all(names.map((name) => imageCacheKey(name, hashes)));
+  const digest = new Bun.CryptoHasher("sha256");
+  digest.update(`${IMAGE_CACHE_VERSION}\n${keys.join("\n")}\n`);
+  return `nightly-images-${IMAGE_PLATFORM.replace("/", "-")}-${digest.digest("hex")}`;
+}
+
 /** The tarball of image `name` in the cache directory. */
 export function imageCacheFile(dir: string, name: string): string {
   return join(dir, `${name}.tar`);
+}
+
+/**
+ * Whether `dir` holds the tarball of every image in `names`: nightly.yml saves the entry only
+ * then, so a restored entry never lacks an image (a hit installs no build tools).
+ */
+export function cacheComplete(dir: string, names: readonly string[]): boolean {
+  return names.every((name) => existsSync(imageCacheFile(dir, name)));
 }
 
 /** What became of the restored tarball. */
@@ -116,7 +146,7 @@ export async function loadCachedImage(
   }
   const unusable = (problem: string): CachedImage => {
     const message =
-      `the cached ${image} cannot be used (${problem}); building it instead. Delete the Actions cache entry nightly-image-${name}-… ` +
+      `the cached ${image} cannot be used (${problem}); building it instead. Delete the Actions cache entry nightly-images-… that holds it ` +
       "(the repository's Actions caches page, or `gh cache delete <key>` with the key the workflow printed), or every run until the inputs change builds again";
     log.line(message);
     if (process.env.GITHUB_ACTIONS === "true") console.log(`::warning title=Nightly image cache::${message}`);
@@ -159,14 +189,21 @@ export async function saveImageForCache(
 }
 
 if (import.meta.main) {
-  const [command, name] = process.argv.slice(2);
-  if (command !== "key" || name === undefined) {
-    console.error("usage: bun scripts/nightly/image-cache.ts key <image>");
+  const [command, argument, ...rest] = process.argv.slice(2);
+  const usage = "usage: bun scripts/nightly/image-cache.ts key [<image>] | complete <dir>";
+  if (rest.length > 0 || !(command === "key" || (command === "complete" && argument !== undefined))) {
+    console.error(usage);
     process.exit(2);
+  }
+  if (command === "complete") {
+    if (cacheComplete(argument!, NIGHTLY_IMAGES)) console.log("built=true");
+    process.exit(0);
   }
   const repoRoot = resolve(import.meta.dir, "..", "..");
   try {
-    console.log(`key=${await imageCacheKey(name, gitObjectHashes(repoRoot))}`);
+    const hashes = gitObjectHashes(repoRoot);
+    const key = argument === undefined ? await imagesCacheKey(NIGHTLY_IMAGES, hashes) : await imageCacheKey(argument, hashes);
+    console.log(`key=${key}`);
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     process.exit(1);

@@ -527,3 +527,60 @@ async fn an_endpoint_that_writes_across_tenants_fails() {
         "{failures}"
     );
 }
+
+/// A table with one row per tenant, keyed by `tenant_id` (Laysi/trustiot-v2#65).
+const SETTINGS_TABLE: &str = "
+CREATE TABLE example_settings (tenant_id uuid PRIMARY KEY, theme text NOT NULL);
+ALTER TABLE example_settings ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON example_settings
+    USING (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid);
+GRANT SELECT, INSERT ON example_settings TO example_app;
+";
+
+/// `$2` is the tenant id for such a table; it is not stored, but Postgres needs its type.
+const SEED_SETTINGS: &str =
+    "INSERT INTO example_settings (tenant_id, theme) SELECT $1, $3 WHERE $2::uuid IS NOT NULL";
+
+/// A table that holds one row per tenant cannot take the two rows per tenant the suite seeds
+/// into other tables; `one_per_tenant` seeds one, whose id is the tenant id, and every probe
+/// still runs. With row-level security off, the same table fails.
+#[tokio::test]
+async fn a_table_with_one_row_per_tenant_is_attacked_too() {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE testkit_one_per_tenant OWNER example_owner",
+        "testkit_one_per_tenant",
+    )
+    .await
+    else {
+        return;
+    };
+    fixture.as_owner(SETTINGS_TABLE).await;
+    let issuer = TestIssuer::new();
+    let store = || {
+        fixture.store().table(pg_table!(
+            "example_settings",
+            seed = SEED_SETTINGS,
+            one_per_tenant
+        ))
+    };
+    let report = Suite::new(SERVICE, &issuer, store())
+        .without_api("the database probes only")
+        .run(None)
+        .await;
+    println!("{report}");
+    report.assert_isolated();
+
+    fixture
+        .as_owner("ALTER TABLE example_settings DISABLE ROW LEVEL SECURITY")
+        .await;
+    let off = Suite::new(SERVICE, &issuer, store())
+        .without_api("the database probes only")
+        .run(None)
+        .await;
+    let failures = off.failures().join("\n");
+    assert!(
+        failures.contains("example_settings"),
+        "the suite must fail with row-level security off:\n{failures}"
+    );
+}

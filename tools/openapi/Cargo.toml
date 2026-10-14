@@ -8,7 +8,10 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+# The services whose specs go into api/openapi.json (SERVICES in src/lib.rs).
+assets = { path = "../../services/assets" }
 contract = { path = "../../crates/contract" }
+identity = { path = "../../services/identity" }
 serde_json.workspace = true
 thiserror.workspace = true
 utoipa.workspace = true

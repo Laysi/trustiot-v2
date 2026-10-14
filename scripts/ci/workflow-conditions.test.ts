@@ -229,7 +229,7 @@ describe("nightly.yml", () => {
     expect(jobRuns(jobs.notify?.if, { github, needs: { smoke: { result: "success" } } })).toBe(false);
   });
 
-  describe("the cache of the Rust images (Laysi/trustiot-v2#60)", () => {
+  describe("the cache of the Rust images (Laysi/trustiot-v2#60, Laysi/trustiot-v2#65)", () => {
     const steps = (jobs.smoke?.steps ?? []) as YamlMap[];
     const step = (id: string) => {
       const found = steps.find((s) => s.id === id);
@@ -237,9 +237,9 @@ describe("nightly.yml", () => {
       return found;
     };
     const savesCache = (github: YamlMap) => truthy(evaluate(expressionOf((jobs.smoke?.env as YamlMap).NIGHTLY_SAVES_CACHE), { github }));
-    const hit = (value: boolean) => ({ "migrate-image-cache": { outputs: { "cache-hit": value ? "true" : "false" } } });
+    const hit = (value: boolean) => ({ "rust-images-cache": { outputs: { "cache-hit": value ? "true" : "false" } } });
     const save = steps.find((s) => typeof s.uses === "string" && s.uses.startsWith("actions/cache/save@"));
-    const restore = step("migrate-image-cache");
+    const restore = step("rust-images-cache");
 
     test("only scheduled and manual runs on main may save; a pull request never does", () => {
       expect(savesCache(schedule)).toBe(true);
@@ -250,10 +250,12 @@ describe("nightly.yml", () => {
       }
       // The save step itself requires the same decision, whatever the earlier steps did.
       const env = { NIGHTLY_SAVES_CACHE: "false" };
-      const built = { ...hit(false), "migrate-image-built": { outputs: { built: "true" } } };
+      const built = { ...hit(false), "rust-images-built": { outputs: { built: "true" } } };
       expect(jobRuns(save?.if, { github: pullRequest("synchronize", ["smoke"]), env, steps: built }, "failure")).toBe(false);
       expect(jobRuns(save?.if, { github: schedule, env: { NIGHTLY_SAVES_CACHE: "true" }, steps: built }, "failure")).toBe(true);
-      expect(jobRuns(step("migrate-image-built").if, { github: schedule, env: { NIGHTLY_SAVES_CACHE: "true" }, steps: hit(true) })).toBe(false);
+      expect(jobRuns(step("rust-images-built").if, { github: schedule, env: { NIGHTLY_SAVES_CACHE: "true" }, steps: hit(true) })).toBe(false);
+      // Without every tarball (the step printed nothing) there is nothing to save.
+      expect(jobRuns(save?.if, { github: schedule, env: { NIGHTLY_SAVES_CACHE: "true" }, steps: hit(false) }, "failure")).toBe(false);
     });
 
     test("restores by the exact key only, and saves the same path under the same key", () => {
@@ -261,8 +263,11 @@ describe("nightly.yml", () => {
       const restoreWith = restore.with as YamlMap;
       expect(Object.keys(restoreWith).sort()).toEqual(["key", "path"]);
       expect(save?.with).toEqual(restoreWith);
-      expect(restoreWith.key).toBe("${{ steps.migrate-image.outputs.key }}");
-      expect(step("migrate-image").run).toBe('bun scripts/nightly/image-cache.ts key migrate >> "$GITHUB_OUTPUT"');
+      expect(restoreWith.key).toBe("${{ steps.rust-images.outputs.key }}");
+      expect(restoreWith.path).toBe("${{ runner.temp }}/image-cache");
+      // The key of every image together, and the save only when the directory holds them all.
+      expect(step("rust-images").run).toBe('bun scripts/nightly/image-cache.ts key >> "$GITHUB_OUTPUT"');
+      expect(step("rust-images-built").run).toBe('bun scripts/nightly/image-cache.ts complete "$RUNNER_TEMP/image-cache" >> "$GITHUB_OUTPUT"');
     });
 
     test("installs the Rust build tools only on a miss", () => {

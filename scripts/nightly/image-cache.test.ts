@@ -5,12 +5,32 @@ import { join, relative } from "node:path";
 
 import { exec, RunLog } from "./exec.ts";
 import type { ExecOptions, ExecResult } from "./exec.ts";
-import { gitObjectHashes, imageCacheFile, imageCacheInputs, imageCacheKey, loadCachedImage, saveImageForCache } from "./image-cache.ts";
+import {
+  NIGHTLY_IMAGES,
+  cacheComplete,
+  gitObjectHashes,
+  imageCacheFile,
+  imageCacheInputs,
+  imageCacheKey,
+  imagesCacheKey,
+  loadCachedImage,
+  saveImageForCache,
+} from "./image-cache.ts";
 import type { ObjectHashes } from "./image-cache.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 
-/** tools/migrate and every local crate it reaches through path dependencies or the workspace's [patch]. */
+/** The package directory of each nightly image (deploy/images/<name>/image.toml). */
+const PACKAGE_DIRS: Record<(typeof NIGHTLY_IMAGES)[number], string> = {
+  migrate: "tools/migrate",
+  identity: "services/identity",
+  assets: "services/assets",
+};
+
+/**
+ * The packages of the nightly's images and every local crate they reach through path dependencies
+ * (dev-dependencies too, which errs on the side of more) or the workspace's [patch].
+ */
 function migrateCrates(): string[] {
   const seen = new Set<string>();
   const visit = (dir: string) => {
@@ -22,7 +42,7 @@ function migrateCrates(): string[] {
       if (existsSync(join(REPO_ROOT, target, "Cargo.toml"))) visit(target);
     }
   };
-  visit("tools/migrate");
+  for (const name of NIGHTLY_IMAGES) visit(PACKAGE_DIRS[name]);
   const root = readFileSync(join(REPO_ROOT, "Cargo.toml"), "utf8");
   for (const match of root.matchAll(/path\s*=\s*"([^"]+)"/g)) {
     if (existsSync(join(REPO_ROOT, match[1]!, "Cargo.toml"))) visit(match[1]!);
@@ -93,9 +113,9 @@ describe("the cache key of a nightly Rust image", () => {
     for (const member of root.workspace.members) expect(under(member.replace(/\/\*$/, "")), member).toBe(true);
   });
 
-  test("a pull request that changes what goes into the migration Job's image can run the smoke test", () => {
+  test("a pull request that changes what goes into a nightly image can run the smoke test", () => {
     // nightly.yml's pull_request paths: a labelled pull request runs the smoke only when it
-    // touches one of them, so a change to the image's build must be among them.
+    // touches one of them, so a change to an image's build must be among them.
     const workflow = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github", "workflows", "nightly.yml"), "utf8")) as {
       on: { pull_request: { paths: string[] } };
     };
@@ -104,18 +124,59 @@ describe("the cache key of a nightly Rust image", () => {
     for (const file of ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".prototools", "deploy/images/rust-binary.Containerfile", ".dockerignore", ".github/workflows/nightly.yml"]) {
       expect(paths, file).toContain(file);
     }
-    for (const dir of ["deploy/images/migrate", "scripts", ".proto/plugins"]) expect(paths, dir).toContain(`${dir}/**`);
-    // Every other input of the key is in the list too, except the Rust directories as a whole:
-    // only the crates above go into this image.
-    for (const input of imageCacheInputs("migrate").filter((path) => !["crates", "services", "tools", "edge", "factory"].includes(path))) {
-      expect(paths.includes(input) || paths.includes(`${input}/**`), input).toBe(true);
+    for (const dir of ["scripts", ".proto/plugins", ...NIGHTLY_IMAGES.map((name) => `deploy/images/${name}`)]) {
+      expect(paths, dir).toContain(`${dir}/**`);
+    }
+    // Every other input of the keys is in the list too, except the Rust directories as a whole:
+    // only the crates above go into these images.
+    for (const name of NIGHTLY_IMAGES) {
+      for (const input of imageCacheInputs(name).filter((path) => !["crates", "services", "tools", "edge", "factory"].includes(path))) {
+        expect(paths.includes(input) || paths.includes(`${input}/**`), input).toBe(true);
+      }
     }
     // The SQL the Job embeds.
     expect(paths).toContain("services/*/migrations/**");
   });
 
   test("every input exists in this repository, so the key step cannot fail on a renamed path unnoticed", () => {
-    for (const path of imageCacheInputs("migrate")) expect(existsSync(join(REPO_ROOT, path)), path).toBe(true);
+    for (const name of NIGHTLY_IMAGES) {
+      for (const path of imageCacheInputs(name)) expect(existsSync(join(REPO_ROOT, path)), path).toBe(true);
+    }
+  });
+});
+
+describe("the one cache entry of the nightly's images", () => {
+  const hashesOf = (names: readonly string[]) =>
+    Object.fromEntries([...new Set(names.flatMap((name) => imageCacheInputs(name)))].map((path, index) => [path, index.toString(16).padStart(40, "0")]));
+
+  test("has a key of its own that changes with any image's key", async () => {
+    const table = hashesOf(NIGHTLY_IMAGES);
+    const key = await imagesCacheKey(NIGHTLY_IMAGES, hashesFrom(table));
+    expect(key).toMatch(/^nightly-images-linux-arm64-[0-9a-f]{64}$/);
+    expect(await imagesCacheKey(NIGHTLY_IMAGES, hashesFrom(table))).toBe(key);
+    // Only assets' own directory changed: the shared key changes.
+    expect(await imagesCacheKey(NIGHTLY_IMAGES, hashesFrom({ ...table, "deploy/images/assets": "f".repeat(40) }))).not.toBe(key);
+    // Another set of images is another entry.
+    expect(await imagesCacheKey(["migrate"], hashesFrom(table))).not.toBe(key);
+    await expect(imagesCacheKey([], hashesFrom(table))).rejects.toThrow("no image");
+  });
+
+  test("is complete only with every image's tarball, so a hit never lacks one", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nightly-image-cache-complete-"));
+    try {
+      expect(cacheComplete(dir, NIGHTLY_IMAGES)).toBe(false);
+      for (const name of NIGHTLY_IMAGES.slice(0, -1)) writeFileSync(imageCacheFile(dir, name), "tarball");
+      expect(cacheComplete(dir, NIGHTLY_IMAGES)).toBe(false);
+      writeFileSync(imageCacheFile(dir, NIGHTLY_IMAGES.at(-1)!), "tarball");
+      expect(cacheComplete(dir, NIGHTLY_IMAGES)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the images are the ones deploy/images builds from Rust", () => {
+    // Which values deploy them: service-image.test.ts.
+    for (const name of NIGHTLY_IMAGES) expect(existsSync(join(REPO_ROOT, "deploy", "images", name, "image.toml")), name).toBe(true);
   });
 });
 
@@ -204,7 +265,7 @@ describe("loading and saving the cached image", () => {
     expect(await loadCachedImage(new RunLog(path), dir, "migrate", IMAGE, broken)).toBe("unusable");
     const last = logged(path).at(-1)!;
     expect(last).toContain("docker load failed: docker load: unexpected EOF); building it instead");
-    expect(last).toContain("Delete the Actions cache entry nightly-image-migrate-");
+    expect(last).toContain("Delete the Actions cache entry nightly-images-");
   });
 
   test("an image docker loaded without the expected tag is not used", async () => {

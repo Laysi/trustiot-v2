@@ -19,10 +19,13 @@ import {
   istiodOverlay,
   POSTGRES_IMAGE,
   providerNameOf,
+  smokeNamespaceOf,
+  smokeProviderNameOf,
   verifySha256,
 } from "./platform.ts";
 import type { ImportCommands } from "./platform.ts";
 import { readPins } from "./run.ts";
+import { discoverShapes, namespaceOf } from "./smoke.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const DIGEST = `sha256:${"a".repeat(64)}`;
@@ -35,12 +38,23 @@ describe("istiodOverlay", () => {
   };
   const original = (Bun.YAML.parse(base) as typeof overlay).meshConfig.extensionProviders.find((p) => p.name === BASE_PROVIDER)!;
 
-  test("repeats the repository's provider once per e2e namespace", () => {
-    expect(overlay.meshConfig.extensionProviders.map((p) => p.name)).toEqual(["trustiot-e2e-onprem", "trustiot-e2e-saas"]);
+  test("repeats the repository's provider once per e2e namespace and once per smoke namespace", () => {
+    expect(overlay.meshConfig.extensionProviders.map((p) => p.name)).toEqual([
+      "trustiot-e2e-onprem",
+      "trustiot-e2e-saas",
+      "trustiot-smoke-onprem",
+      "trustiot-smoke-saas",
+    ]);
     expect(overlay.meshConfig.extensionProviders.map((p) => p.envoyExtAuthzHttp.service)).toEqual([
       "trustiot-identity.nightly-e2e-onprem.svc.cluster.local",
       "trustiot-identity.nightly-e2e-saas.svc.cluster.local",
+      "trustiot-identity.nightly-onprem.svc.cluster.local",
+      "trustiot-identity.nightly-saas.svc.cluster.local",
     ]);
+    // The smoke installs the chart in the namespace its provider names (smoke.ts).
+    for (const shape of discoverShapes(join(REPO_ROOT, "deploy", "chart"))) {
+      expect(namespaceOf(shape)).toBe(smokeNamespaceOf(shape.name));
+    }
   });
 
   test("keeps every other provider setting and the rest of the values", () => {
@@ -64,6 +78,8 @@ describe("istiodOverlay", () => {
   test("names follow the shape", () => {
     expect(e2eNamespaceOf("saas")).toBe("nightly-e2e-saas");
     expect(providerNameOf("saas")).toBe("trustiot-e2e-saas");
+    expect(smokeNamespaceOf("saas")).toBe("nightly-saas");
+    expect(smokeProviderNameOf("saas")).toBe("trustiot-smoke-saas");
   });
 });
 

@@ -58,6 +58,19 @@ export function providerNameOf(shape: string): string {
   return `trustiot-e2e-${shape}`;
 }
 
+/** The smoke test installs the chart with one values file in this namespace (smoke.ts). */
+export function smokeNamespaceOf(shape: string): string {
+  return `nightly-${shape}`;
+}
+
+/**
+ * The provider of the smoke namespace's identity service: the smoke runs the real identity and
+ * assets services and calls them through the ingress (Laysi/trustiot-v2#65, api.ts).
+ */
+export function smokeProviderNameOf(shape: string): string {
+  return `trustiot-smoke-${shape}`;
+}
+
 interface Provider {
   name: string;
   envoyExtAuthzHttp: { service: string; [key: string]: unknown };
@@ -66,8 +79,10 @@ interface Provider {
 
 /**
  * istiod values for the nightly: deploy/istio/istiod-values.yaml with its one provider repeated
- * for the identity service of each e2e namespace, so the settings (fail closed, 0.5 s timeout,
- * 503 on error, headers) stay the repository's own and cannot drift from what the test checks.
+ * for the identity service of each e2e namespace and of each smoke namespace, so the settings
+ * (fail closed, 0.5 s timeout, 503 on error, headers) stay the repository's own and cannot drift
+ * from what the tests check. The identity service of the release "trustiot" is
+ * `trustiot-identity`, the provider's own name.
  */
 export function istiodOverlay(base: string, shapes: string[]): string {
   const values = Bun.YAML.parse(base) as { meshConfig?: { extensionProviders?: Provider[] }; [key: string]: unknown };
@@ -75,14 +90,18 @@ export function istiodOverlay(base: string, shapes: string[]): string {
   if (provider === undefined) {
     throw new Error(`deploy/istio/istiod-values.yaml has no extension provider named ${BASE_PROVIDER}`);
   }
-  const providers = shapes.map((shape) => ({
+  const copy = (name: string, namespace: string): Provider => ({
     ...structuredClone(provider),
-    name: providerNameOf(shape),
+    name,
     envoyExtAuthzHttp: {
       ...structuredClone(provider.envoyExtAuthzHttp),
-      service: `${BASE_PROVIDER}.${e2eNamespaceOf(shape)}.svc.cluster.local`,
+      service: `${BASE_PROVIDER}.${namespace}.svc.cluster.local`,
     },
-  }));
+  });
+  const providers = [
+    ...shapes.map((shape) => copy(providerNameOf(shape), e2eNamespaceOf(shape))),
+    ...shapes.map((shape) => copy(smokeProviderNameOf(shape), smokeNamespaceOf(shape))),
+  ];
   return Bun.YAML.stringify({ ...values, meshConfig: { ...values.meshConfig, extensionProviders: providers } }, null, 2);
 }
 

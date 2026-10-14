@@ -5,8 +5,10 @@ import { dirname, join } from "node:path";
 
 import { dynamicAarch64Binary, ELF_X86_64, elfFile, PT_LOAD, staticAarch64Binary } from "../release/elf-fixture.ts";
 import { discoverImages, resolveBinary, RUST_CONTAINERFILE } from "../release/lib.ts";
+import { apiValues } from "./api.ts";
 import { CommandError, RunLog } from "./exec.ts";
 import type { ExecOptions, ExecResult } from "./exec.ts";
+import { NIGHTLY_IMAGES } from "./image-cache.ts";
 import type { ImportCommands } from "./platform.ts";
 import { buildServiceImage, installBuildTools, loadServiceImage, MIGRATE_IMAGE_NAME, serviceImageRef, serviceImageValues } from "./service-image.ts";
 import type { ServiceImageTools } from "./service-image.ts";
@@ -57,6 +59,19 @@ describe("service image names", () => {
     const bins = (manifest.bin ?? []).map((bin) => ({ name: bin.name, kind: ["bin"] }));
     if (identity?.kind === "rust") {
       expect(resolveBinary(identity, [{ name: manifest.package.name, targets: bins }])).toBe("identity");
+    }
+  });
+
+  test("the service images the nightly builds are the ones the API check's values deploy", () => {
+    // Laysi/trustiot-v2#65: the smoke enables identity and assets and calls them through the ingress (api.ts).
+    const values = apiValues("saas", { kid: "k", x: "x" }, []) as { services: Record<string, { enabled?: boolean; image?: Record<string, string> }> };
+    const services = NIGHTLY_IMAGES.filter((image) => image !== MIGRATE_IMAGE_NAME);
+    expect(Object.keys(values.services).sort()).toEqual([...services].sort());
+    for (const name of services) {
+      expect(discoverImages(REPO_ROOT).find((image) => image.name === name), name).toMatchObject({ kind: "rust", package: name });
+      const { digest: _digest, ...expected } = serviceImageValues(name);
+      expect(values.services[name]?.enabled, name).toBe(true);
+      expect(values.services[name]?.image, name).toEqual(expected);
     }
   });
 });

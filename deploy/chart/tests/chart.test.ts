@@ -1647,6 +1647,55 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     }
   });
 
+  test("a service whose platform role logs in (assets) gets both passwords from its one Secret, and the Job fills both keys", () => {
+    // Laysi/trustiot-v2#65: an outbox consumer reads its producers' events as its platform role,
+    // so the chart binds <schema>_platform too ("trustiot.migrate.platformLogins"), in the same
+    // Secret; tools/migrate/tests/registry.rs keeps that list in line with the registry.
+    const ASSETS_SECRET = `${RELEASE}-assets-password`;
+    const both = render(SHAPES.saas, [...withIdentity, "--set", "services.assets.enabled=true"]);
+    expect(envValue(jobEnv(both), "TRUSTIOT__PASSWORDS__POSTGRES")?.value).toBe(
+      `assets_app=${ASSETS_SECRET},assets_platform=${ASSETS_SECRET},identity_app=${IDENTITY_SECRET}`,
+    );
+    // One Secret per consumer, however many keys it holds, and the Job's Role names each once.
+    const secrets = both.filter((m) => m.kind === "Secret").map((m) => m.metadata.name);
+    expect(secrets).toEqual([ASSETS_SECRET, IDENTITY_SECRET, COLLECTOR_SECRET]);
+    expect(passwordSecretNames(both)).toEqual([...secrets].sort());
+    const role = find(both, "Role", `${RELEASE}-migrate`) as Manifest & { rules: { resourceNames: string[] }[] };
+    expect(role.rules[0]?.resourceNames).toEqual(secrets);
+    const assets = podSpec(find(both, "Deployment", `${RELEASE}-assets`)).containers[0] as Container;
+    expect(assets.env?.filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__"))).toEqual([
+      { name: "TRUSTIOT__DATABASE__USERNAME", value: "assets_app" },
+      { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: ASSETS_SECRET, key: "assets_app" } } },
+      { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "assets_platform" },
+      { name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD", valueFrom: { secretKeyRef: { name: ASSETS_SECRET, key: "assets_platform" } } },
+    ]);
+    // identity's platform role exists for platform-wide events but logs in with nothing.
+    const identity = podSpec(find(both, "Deployment", `${RELEASE}-identity`)).containers[0] as Container;
+    expect(JSON.stringify(identity.env)).not.toContain("PLATFORM_");
+    expect(JSON.stringify(identity)).not.toContain(ASSETS_SECRET);
+    // The service's platform login is the chart's too, and no other service may read its Secret.
+    for (const name of ["TRUSTIOT__DATABASE__PLATFORM_USERNAME", "TRUSTIOT__DATABASE__PLATFORM_PASSWORD"]) {
+      const result = helmTemplate(SHAPES.saas, [
+        ...withIdentity,
+        "--set",
+        "services.assets.enabled=true",
+        "--set-json",
+        `services.assets.env=[{"name":"${name}","valueFrom":{"secretKeyRef":{"name":"elsewhere","key":"k"}}}]`,
+      ]);
+      expect(result.code, name).not.toBe(0);
+      expect(result.stderr, name).toContain(`services.assets: env ${name} is set by the chart`);
+    }
+    const stolen = helmTemplate(SHAPES.saas, [
+      ...withIdentity,
+      "--set",
+      "services.assets.enabled=true",
+      "--set-json",
+      `services.identity.env=[{"name":"STOLEN","valueFrom":{"secretKeyRef":{"name":"${ASSETS_SECRET}","key":"assets_platform"}}}]`,
+    ]);
+    expect(stolen.code).not.toBe(0);
+    expect(stolen.stderr).toContain(`env reads Secret ${ASSETS_SECRET}`);
+  });
+
   test("every service pod waits in an init container for this Job, with a token only that container mounts", () => {
     const job = jobOf(manifests).metadata.name;
     const deployments = manifests.filter(isServiceDeployment);

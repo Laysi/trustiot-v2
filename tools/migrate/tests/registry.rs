@@ -53,42 +53,92 @@ fn assert_lists(what: &str, dir: &Path, listed: &[Migration]) {
     }
 }
 
-/// A login role logs in only while a Secret is bound to it, and the chart binds exactly one per
-/// service: `<schema>_app` ("trustiot.migrate.passwordSecrets" with "trustiot.migrate.appRole" in
-/// deploy/chart/templates/_migrate.tpl). A product service with a platform role would get a role
-/// that never logs in, so none may have one until the chart binds `<schema>_platform` as well and
-/// this test checks that binding instead (Laysi/trustiot-v2#65 adds the first such service).
+/// The body of the chart helper `name` in deploy/chart/templates/_migrate.tpl.
+fn chart_helper(chart: &str, name: &str) -> String {
+    chart
+        .split(&format!(r#"{{{{- define "{name}" -}}}}"#))
+        .nth(1)
+        .and_then(|rest| rest.split("{{- end -}}\n\n").next())
+        .unwrap_or_else(|| panic!("the chart helper {name}"))
+        .to_owned()
+}
+
+/// A login role logs in only while a Secret is bound to it. The chart binds `<schema>_app` for
+/// every service that uses Postgres, and `<schema>_platform` only for the services listed in
+/// "trustiot.migrate.platformLogins" (both in "trustiot.migrate.passwordSecrets",
+/// deploy/chart/templates/_migrate.tpl). The rule (Laysi/trustiot-v2#65): an outbox consumer
+/// reads its producers' events as its platform role, so every consumer of the product must be
+/// listed, or it could not run; and only a service whose platform role the registry creates may
+/// be listed, or the Job would refuse the binding. A producer that is no consumer (identity) keeps
+/// its platform role NOLOGIN until it needs one.
 #[test]
 fn the_chart_binds_every_login_role_of_the_product() {
     let chart = fs::read_to_string(repo_root().join("deploy/chart/templates/_migrate.tpl"))
         .expect("read the chart's migration helpers");
-    let helper = chart
-        .split(r#"{{- define "trustiot.migrate.passwordSecrets" -}}"#)
-        .nth(1)
-        .and_then(|rest| rest.split("{{- end -}}\n\n").next())
-        .expect("the chart's password Secret bindings");
-    let postgres_bindings: Vec<&str> = helper
+    let bindings = chart_helper(&chart, "trustiot.migrate.passwordSecrets");
+    let postgres_bindings: Vec<&str> = bindings
         .lines()
         .filter(|line| line.contains(r#""kind" "postgres""#))
         .collect();
     assert_eq!(
         postgres_bindings.len(),
-        1,
+        2,
         "the chart's Postgres password bindings changed; update this test: {postgres_bindings:?}"
     );
     assert!(
-        postgres_bindings[0].contains(r#""key" (include "trustiot.migrate.appRole" .)"#),
-        "the chart binds another key than <schema>_app; update this test: {}",
+        postgres_bindings[0].contains(r#""key" (include "trustiot.migrate.appRole" .)"#)
+            && postgres_bindings[0].contains(r#""role" "app""#),
+        "the chart's first binding is not <schema>_app; update this test: {}",
         postgres_bindings[0]
     );
-    for service in PRODUCT.services {
+    assert!(
+        postgres_bindings[1].contains(r#""key" (include "trustiot.migrate.platformRole" .)"#)
+            && postgres_bindings[1].contains(r#""role" "platform""#),
+        "the chart's second binding is not <schema>_platform; update this test: {}",
+        postgres_bindings[1]
+    );
+    for (helper, suffix) in [
+        ("trustiot.migrate.appRole", "_app"),
+        ("trustiot.migrate.platformRole", "_platform"),
+    ] {
+        let body = chart_helper(&chart, helper);
         assert!(
-            !service.platform_role,
-            "{}: has a platform role, but the chart binds a password Secret only to {}; bind the \
-             platform role in \"trustiot.migrate.passwordSecrets\" too, or it stays NOLOGIN",
-            service.name,
-            service.app_role()
+            body.contains(&format!(r#"printf "%s{suffix}" (replace "-" "_" .)"#)),
+            "{helper} no longer names roles as tools/migrate does (Service::app_role, \
+             Service::platform_role): {body}"
         );
+    }
+
+    let logins_helper = chart_helper(&chart, "trustiot.migrate.platformLogins");
+    let listed: Vec<&str> = logins_helper
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .collect();
+    assert!(
+        logins_helper.contains("list ") && !listed.is_empty(),
+        "trustiot.migrate.platformLogins is no longer a literal list; update this test: \
+         {logins_helper}"
+    );
+    for name in &listed {
+        let service = PRODUCT
+            .service(name)
+            .unwrap_or_else(|| panic!("{name}: in the chart's platform logins but not registered"));
+        assert!(
+            service.platform_role,
+            "{name}: the chart binds {name}_platform, but the registry creates no platform role"
+        );
+    }
+    for service in PRODUCT.services {
+        if !service.outbox.consumes.is_empty() {
+            assert!(
+                listed.contains(&service.name),
+                "{}: consumes {:?} as its platform role, so list it in \
+                 \"trustiot.migrate.platformLogins\" or its platform role stays NOLOGIN",
+                service.name,
+                service.outbox.consumes
+            );
+        }
     }
 }
 

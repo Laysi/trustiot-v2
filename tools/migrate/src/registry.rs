@@ -131,18 +131,48 @@ pub const OUTBOX_EVENT_TEMPLATE: Migration = Migration {
 
 /// The product: what the released migration Job applies.
 pub const PRODUCT: Registry = Registry {
-    services: &[Service {
-        name: "identity",
-        platform_role: false,
-        outbox: Outbox {
-            producer: false,
-            consumes: &[],
+    services: &[
+        // Writes `identity.tenant_created` (Laysi/trustiot-v2#65) with its service role, in the
+        // new tenant's transaction. Its platform role exists because the outbox policy names one
+        // (platform-wide events), but the chart binds no Secret to it, so it stays NOLOGIN.
+        Service {
+            name: "identity",
+            platform_role: true,
+            outbox: Outbox {
+                producer: true,
+                consumes: &[],
+            },
+            migrations: &[
+                Migration {
+                    name: "0001_identity.sql",
+                    sql: include_str!(
+                        "../../../services/identity/migrations/postgres/0001_identity.sql"
+                    ),
+                },
+                Migration {
+                    name: "0002_tenants.sql",
+                    sql: include_str!(
+                        "../../../services/identity/migrations/postgres/0002_tenants.sql"
+                    ),
+                },
+            ],
         },
-        migrations: &[Migration {
-            name: "0001_identity.sql",
-            sql: include_str!("../../../services/identity/migrations/postgres/0001_identity.sql"),
-        }],
-    }],
+        // Reads identity's events as its platform role, so the chart binds a password to
+        // `assets_platform` as well ("trustiot.migrate.platformLogins" in
+        // deploy/chart/templates/_migrate.tpl).
+        Service {
+            name: "assets",
+            platform_role: true,
+            outbox: Outbox {
+                producer: false,
+                consumes: &["identity"],
+            },
+            migrations: &[Migration {
+                name: "0001_assets.sql",
+                sql: include_str!("../../../services/assets/migrations/postgres/0001_assets.sql"),
+            }],
+        },
+    ],
     clickhouse: crate::clickhouse_files::FILES,
     tenant_role_hooks: &[],
 };

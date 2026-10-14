@@ -22,12 +22,14 @@ const ESCAPE_ROWS: &str =
 const PLANTED: &str = "SELECT to_regclass('identity.escape_plant') IS NOT NULL";
 const ENDED_FIRST: &str = "SELECT to_regclass('escape.escape_end_first') IS NOT NULL";
 
-/// The product's identity service, then a service `escape` with one file.
+/// The product's services (identity, and assets, which consumes identity's events), then a
+/// service `escape` with one file.
 macro_rules! with_escape_file {
     ($name:literal, $sql:literal) => {
         Registry {
             services: &[
                 PRODUCT.services[0],
+                PRODUCT.services[1],
                 Service {
                     name: "escape",
                     platform_role: false,

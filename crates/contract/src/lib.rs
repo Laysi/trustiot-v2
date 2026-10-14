@@ -8,6 +8,7 @@
 //! - [`id`]: typed UUIDv7 identifiers (portability rule 3 in `docs/architecture/deployment.md`).
 //! - [`event`]: the versioned envelope for events that cross service boundaries through the
 //!   outbox.
+//! - [`events`]: the events themselves, one module per producing service.
 //! - [`identity`]: the claims of the internal identity token (decision 27) and the header that
 //!   carries it.
 //! - [`client`]: the typed HTTP/JSON client for synchronous internal API calls: a timeout is
@@ -22,6 +23,7 @@
 pub mod client;
 pub mod error;
 pub mod event;
+pub mod events;
 pub mod id;
 pub mod identity;
 pub mod json;

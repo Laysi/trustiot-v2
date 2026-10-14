@@ -222,6 +222,10 @@ mesh:
     # (services/identity/README.md).
     identity:
       - postgres
+    # The assets service keeps its data in Postgres and reads the identity service's events from
+    # there as its platform role (services/assets/README.md).
+    assets:
+      - postgres
     # ClickHouse (decision 14): ingest writes telemetry, telemetry-query reads it with per-tenant
     # read-only accounts (docs/architecture/deployment.md).
     ingest:

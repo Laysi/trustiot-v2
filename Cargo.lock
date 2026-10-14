@@ -63,6 +63,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "assets"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "contract",
+ "identity",
+ "outbox",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "service-kit",
+ "sqlx",
+ "testkit",
+ "tokio",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1006,9 +1026,11 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "chrono",
  "contract",
  "ed25519-dalek",
  "getrandom 0.4.3",
+ "outbox",
  "rcgen",
  "serde",
  "serde_json",
@@ -1020,6 +1042,7 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+ "utoipa",
  "zeroize",
 ]
 
@@ -1278,7 +1301,9 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 name = "openapi"
 version = "0.1.0"
 dependencies = [
+ "assets",
  "contract",
+ "identity",
  "serde_json",
  "thiserror",
  "utoipa",
@@ -2236,6 +2261,7 @@ dependencies = [
  "contract",
  "ed25519-dalek",
  "http",
+ "migrate",
  "rcgen",
  "reqwest",
  "serde",

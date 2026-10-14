@@ -449,6 +449,54 @@ export function gatewaysOf(objects: K8sObject[]): string[] {
     .flatMap((o) => (o.metadata?.name === undefined ? [] : [o.metadata.name]));
 }
 
+/** The listener of the release's ingress Gateway: where its Service takes requests, and whether over TLS. */
+export interface IngressListener {
+  gateway: string;
+  port: number;
+  tls: boolean;
+}
+
+/**
+ * The one HTTP or HTTPS listener of the release's one Gateway (the chart's ingress: HTTP on 80
+ * for the tunnel, HTTPS on 443 when exposed directly). Istio's gateway Service has the same port.
+ */
+export function ingressListenerOf(objects: K8sObject[]): IngressListener {
+  const gateways = flatten(objects).filter((o) => o.kind === "Gateway");
+  if (gateways.length !== 1) throw new Error(`the release should have one Gateway, found ${gateways.length}`);
+  const gateway = gateways[0]!;
+  const listeners = asArray(asMap(gateway.spec).listeners)
+    .filter(isMap)
+    .filter((listener) => listener.protocol === "HTTP" || listener.protocol === "HTTPS");
+  if (listeners.length !== 1) throw new Error(`Gateway ${gateway.metadata?.name} should have one HTTP or HTTPS listener, found ${listeners.length}`);
+  const listener = listeners[0]!;
+  const port = listener.port;
+  if (typeof port !== "number") throw new Error(`Gateway ${gateway.metadata?.name}: listener ${String(listener.name)} has no port`);
+  return { gateway: gateway.metadata?.name ?? "", port, tls: listener.protocol === "HTTPS" };
+}
+
+/**
+ * The release's platform settings (templates/platform-config.yaml, the ConfigMap every service
+ * reads through envFrom): non-secret values such as TRUSTIOT_APP_HOST and
+ * TRUSTIOT_POSTGRES_DATABASE.
+ */
+export function platformSettingsOf(objects: K8sObject[]): Record<string, string> {
+  const maps = flatten(objects).filter((o) => o.kind === "ConfigMap" && o.metadata?.labels?.["app.kubernetes.io/component"] === "platform");
+  if (maps.length !== 1) throw new Error(`the release should have one platform settings ConfigMap, found ${maps.length}`);
+  const settings: Record<string, string> = {};
+  for (const [key, value] of Object.entries(asMap(maps[0]!.data))) {
+    if (typeof value === "string") settings[key] = value;
+  }
+  return settings;
+}
+
+/** The host names of the release's three ingress hosts (hosts.app, hosts.gateway, hosts.ota). */
+export function ingressHostsOf(objects: K8sObject[]): string[] {
+  const settings = platformSettingsOf(objects);
+  const hosts = ["TRUSTIOT_APP_HOST", "TRUSTIOT_GATEWAY_HOST", "TRUSTIOT_OTA_HOST"].map((key) => settings[key]);
+  if (hosts.some((host) => host === undefined || host === "")) throw new Error("the platform settings lack an ingress host");
+  return hosts as string[];
+}
+
 /**
  * TLS Secrets that the release's Gateway listeners refer to but the release does not create: the
  * installing environment provides them (the customer's certificate on-prem), so the nightly cluster

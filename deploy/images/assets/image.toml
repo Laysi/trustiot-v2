@@ -1,0 +1,4 @@
+# The assets service (services/assets): tenants' sites, devices and data points; MS0 skeleton with
+# the consumer of identity.tenant_created. Packed with deploy/images/rust-binary.Containerfile.
+[rust]
+package = "assets"

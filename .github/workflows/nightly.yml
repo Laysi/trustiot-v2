@@ -14,8 +14,8 @@
 # Jobs and what each may do (every job lists its own `permissions`):
 # - smoke   contents: read. Runs the chart and the stand-in service images on a throwaway
 #           cluster; it has no write access and no secret, and hands over only the report. Its
-#           Rust image is rebuilt only when an input changed; scheduled and manual runs on main
-#           save it to the Actions cache, pull requests only restore (see the cache steps).
+#           Rust images are rebuilt only when an input changed; scheduled and manual runs on main
+#           save them to the Actions cache, pull requests only restore (see the cache steps).
 # - notify  issues: write; actions: read. Scheduled and manual runs only: opens or updates the
 #           failure issue, or closes it when a night passes again, with the workflow's own
 #           GITHUB_TOKEN. No external service, no extra secret.
@@ -41,9 +41,10 @@ on:
       - .proto/plugins/**
       - .prototools
       - .dockerignore
-      # What goes into the migration Job's image (scripts/nightly/image-cache.ts): the workspace,
-      # the toolchain, the build scripts and every local crate tools/migrate builds from
-      # (scripts/nightly/image-cache.test.ts keeps this list complete).
+      # What goes into the nightly's Rust images (scripts/nightly/image-cache.ts, NIGHTLY_IMAGES):
+      # the workspace, the toolchain, the build scripts and every local crate tools/migrate,
+      # services/identity and services/assets build from (scripts/nightly/image-cache.test.ts
+      # keeps this list complete).
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
@@ -52,13 +53,18 @@ on:
       - crates/contract/**
       - crates/outbox/**
       - crates/service-kit/**
+      - crates/testkit/**
       - crates/webpki-roots-empty/**
       - deploy/chart/**
       - deploy/cloudnative-pg/**
       - deploy/images/postgres/**
       - deploy/images/migrate/**
+      - deploy/images/identity/**
+      - deploy/images/assets/**
       - deploy/istio/**
       - tools/migrate/**
+      - services/identity/**
+      - services/assets/**
       - services/*/migrations/**
 
 # No token scopes by default; each job asks for what it needs.
@@ -95,9 +101,11 @@ jobs:
     runs-on: ubuntu-24.04-arm
     # 45 minutes before the migration Job's image was built here (Laysi/trustiot-v2#60), plus its
     # cold build when no cached image matches: 1 min 37 s in PR run 38330343474, so about 2 min
-    # with the build tools (docs/architecture/ci-release.md, nightly.yml). A cache hit adds only
-    # the load and the import.
-    timeout-minutes: 48
+    # with the build tools (docs/architecture/ci-release.md, nightly.yml). Laysi/trustiot-v2#65
+    # adds the identity and assets images (two more cold builds that reuse the first one's
+    # dependencies) and per shape their rollout and the API check through the ingress. A cache
+    # hit adds only the loads and the imports.
+    timeout-minutes: 55
     permissions:
       contents: read
     env:
@@ -130,50 +138,52 @@ jobs:
       - uses: ./.github/actions/setup-proto
         with:
           tools: bun helm k3d kubectl
-      # The migration Job's image (deploy/images/migrate) is reused while nothing that goes into it
-      # changed: the key is a digest of the git object hashes of every input of the build
-      # (scripts/nightly/image-cache.ts). Exact key only, no restore-keys: an image of other
-      # sources would test code that is not this commit's.
-      - name: Compute the cache key of the migration Job's image
-        id: migrate-image
-        run: bun scripts/nightly/image-cache.ts key migrate >> "$GITHUB_OUTPUT"
-      - name: Restore the migration Job's image
-        id: migrate-image-cache
+      # The Rust images (NIGHTLY_IMAGES in scripts/nightly/image-cache.ts: deploy/images/migrate,
+      # identity and assets) are reused while nothing that goes into them changed: the key is a
+      # digest of the git object hashes of every input of their builds. One entry holds every
+      # tarball, and it is saved only with all of them. Exact key only, no restore-keys: an image
+      # of other sources would test code that is not this commit's.
+      - name: Compute the cache key of the Rust images
+        id: rust-images
+        run: bun scripts/nightly/image-cache.ts key >> "$GITHUB_OUTPUT"
+      - name: Restore the Rust images
+        id: rust-images-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/image-cache/migrate.tar
-          key: ${{ steps.migrate-image.outputs.key }}
-      # Only for a build: zig, cargo-zigbuild and cargo-auditable build the image the way
+          path: ${{ runner.temp }}/image-cache
+          key: ${{ steps.rust-images.outputs.key }}
+      # Only for a build: zig, cargo-zigbuild and cargo-auditable build the images the way
       # release.yml does; Rust comes from the runner's rustup (scripts/nightly/service-image.ts).
       # When a restored tarball turns out unusable, run.ts warns, installs them itself with proto
       # and builds.
-      - name: Install the tools that build the migration Job's image
-        if: ${{ steps.migrate-image-cache.outputs.cache-hit != 'true' }}
+      - name: Install the tools that build the Rust images
+        if: ${{ steps.rust-images-cache.outputs.cache-hit != 'true' }}
         uses: ./.github/actions/setup-proto
         with:
           tools: zig cargo-zigbuild cargo-auditable
-      # Installs Gateway API, Istio ambient and CloudNativePG, builds the Postgres and migration Job
-      # images, then per values file: the smoke deployment and the ingress e2e test
+      # Installs Gateway API, Istio ambient and CloudNativePG, builds the Postgres and Rust images,
+      # then per values file: the smoke deployment with its API check and the ingress e2e test
       # (deploy/chart/tests/e2e).
       - name: Deploy the chart with each values file and run the tests
         # The runner context is not available in job-level env, only in steps.
         env:
           NIGHTLY_OUT: ${{ runner.temp }}/nightly-out
           NIGHTLY_IMAGE_CACHE_DIR: ${{ runner.temp }}/image-cache
-          NIGHTLY_IMAGE_CACHE_SAVE: ${{ env.NIGHTLY_SAVES_CACHE == 'true' && steps.migrate-image-cache.outputs.cache-hit != 'true' }}
+          NIGHTLY_IMAGE_CACHE_SAVE: ${{ env.NIGHTLY_SAVES_CACHE == 'true' && steps.rust-images-cache.outputs.cache-hit != 'true' }}
         run: bun scripts/nightly/run.ts
-      # A built image is saved even when a shape failed: it comes from the sources alone.
-      - name: Check for a built migration Job image to save
-        id: migrate-image-built
-        if: ${{ always() && env.NIGHTLY_SAVES_CACHE == 'true' && steps.migrate-image-cache.outputs.cache-hit != 'true' }}
-        run: |
-          if [[ -f "$RUNNER_TEMP/image-cache/migrate.tar" ]]; then echo "built=true" >> "$GITHUB_OUTPUT"; fi
-      - name: Save the migration Job's image
-        if: ${{ always() && env.NIGHTLY_SAVES_CACHE == 'true' && steps.migrate-image-built.outputs.built == 'true' }}
+      # Built images are saved even when a shape failed: they come from the sources alone. Only
+      # with every tarball, so a later hit never lacks one (a run that stopped halfway saves
+      # nothing, and the next one builds again).
+      - name: Check for every built Rust image to save
+        id: rust-images-built
+        if: ${{ always() && env.NIGHTLY_SAVES_CACHE == 'true' && steps.rust-images-cache.outputs.cache-hit != 'true' }}
+        run: bun scripts/nightly/image-cache.ts complete "$RUNNER_TEMP/image-cache" >> "$GITHUB_OUTPUT"
+      - name: Save the Rust images
+        if: ${{ always() && env.NIGHTLY_SAVES_CACHE == 'true' && steps.rust-images-built.outputs.built == 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/image-cache/migrate.tar
-          key: ${{ steps.migrate-image.outputs.key }}
+          path: ${{ runner.temp }}/image-cache
+          key: ${{ steps.rust-images.outputs.key }}
       - name: Upload the report and the run log
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

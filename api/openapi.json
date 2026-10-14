@@ -1,6 +1,38 @@
 {
   "components": {
     "schemas": {
+      "AssetsTenant": {
+        "description": "The caller's tenant as this service knows it.",
+        "properties": {
+          "created_at": {
+            "description": "When this service learned of the tenant, by the database clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The tenant's ID."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "CreateTenant": {
+        "description": "The body of `POST /api/identity/v1/tenants`. Unknown fields are ignored.",
+        "properties": {
+          "name": {
+            "description": "What people call the tenant: 1 to 100 characters after trimming, no control characters.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
       "ErrorBody": {
         "description": "The JSON body of every error response (M1). Clients ignore fields they do not know, so\nfields are only ever added as optional ones.",
         "properties": {
@@ -78,6 +110,35 @@
         "maxLength": 128,
         "pattern": "^[a-z0-9_]+(\\.[a-z0-9_]+)+$",
         "type": "string"
+      },
+      "Tenant": {
+        "description": "A tenant.",
+        "properties": {
+          "created_at": {
+            "description": "When the tenant was created, by the database clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name, trimmed.",
+            "type": "string"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The tenant's ID (UUIDv7)."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "name",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "TenantId": {
+        "description": "A tenant: one customer organisation; every tenant-scoped row and event carries it.\n\nSerialized as a lowercase hyphenated UUID string.",
+        "format": "uuid",
+        "type": "string"
       }
     }
   },
@@ -86,5 +147,158 @@
     "version": "0.1.0"
   },
   "openapi": "3.1.0",
-  "paths": {}
+  "paths": {
+    "/api/assets/v1/tenant": {
+      "get": {
+        "operationId": "getAssetsTenant",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetsTenant"
+                }
+              }
+            },
+            "description": "The caller's tenant."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The user has not picked or joined a tenant (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The service has not processed the tenant's creation yet (`not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "The caller's tenant, once this service has processed its `identity.tenant_created`.",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/api/identity/v1/tenants": {
+      "post": {
+        "operationId": "createTenant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTenant"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tenant"
+                }
+              }
+            },
+            "description": "The tenant was created, and `identity.tenant_created` written in the same transaction."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The body is not a JSON object with a string `name` (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The user is not a platform administrator (`permission_denied`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The name is empty, longer than 100 characters, or holds a control character (`validation_failed`, field `/name`, `tenant.name_invalid`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed; nothing was created (`unavailable`)."
+          }
+        },
+        "summary": "Creates a tenant. Platform administrators only.",
+        "tags": [
+          "identity"
+        ]
+      }
+    }
+  },
+  "tags": [
+    {
+      "description": "Sites, devices and data points (services/assets).",
+      "name": "assets"
+    },
+    {
+      "description": "Sessions, users and tenants (services/identity).",
+      "name": "identity"
+    }
+  ]
 }
