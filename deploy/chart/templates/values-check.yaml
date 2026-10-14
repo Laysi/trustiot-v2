@@ -1,0 +1,6 @@
+{{- /*
+Renders nothing: it refuses values that hold a line break ("trustiot.values.singleLine" in
+_helpers.tpl), whether or not schema validation runs, so that no value printed into a manifest can
+start another line or document (docs/architecture/secrets.md, Laysi/trustiot-v2#398).
+*/ -}}
+{{- $_ := include "trustiot.values.singleLine" (dict "path" "" "value" .Values) -}}

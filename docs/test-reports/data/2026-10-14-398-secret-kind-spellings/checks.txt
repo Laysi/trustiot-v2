@@ -1,0 +1,22 @@
+rcheck: queued on the build host at 16:11:47 as 398-c89b16d3; running now: nothing
+7 packages installed [35.00ms]
+secret handling: 288 file(s) checked, 6 container build file(s), no violations
+check-secret-handling exit=0
+ 2 skip
+ 0 fail
+ 2454 expect() calls
+Ran 750 tests across 29 files. [2.05s]
+$ tsc --noEmit --project tsconfig.json
+typecheck exit=0
+(pass) values reference Secrets by name only and hold no secret material > with every optional component on, in every mode, the only Secrets rendered are the migration Job's empty password Secrets [509.91ms]
+(pass) the templates keep the secret and env boundaries without schema validation > a value with a line break and a document separator that adds a Secret [29.08ms]
+ 316 pass
+ 0 fail
+Ran 316 tests across 4 files. [30.22s]
+ 19 pass
+ 0 fail
+Ran 19 tests across 1 file. [2.70s]
+workflow policy: 4 file(s) checked, no violations
+rcheck: removed 0 dangling test volumes
+rcheck: exit 0 at 16:12:25 (build host, 398-c89b16d3)
+rcheck exit=0

@@ -1,0 +1,74 @@
+// Probe for Laysi/trustiot-v2#398: for each way of writing or printing a Secret in a chart
+// template, run rule 5 of scripts/ci/check-secret-handling.ts as it was before the fix and as it
+// is now, and render the chart with the pinned helm to show what it really renders.
+//
+// Usage: bun probe.ts <old check-secret-handling.ts> <new check-secret-handling.ts>
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+
+const [oldPath, newPath] = process.argv.slice(2).map((path) => resolve(path));
+const before = await import(oldPath ?? "");
+const after = await import(newPath ?? "");
+const helm = Bun.spawnSync(["proto", "bin", "helm", "--reporter", "text"]).stdout.toString().trim().split("\n").at(-1) ?? "";
+
+// The name is a template action, so every form is a template (as in the chart), not plain YAML.
+const meta = "metadata:\n  name: {{ .Release.Name }}-leak\n";
+const data = "data:\n  value: eA==\n";
+const secretWith = (kindText: string) => `apiVersion: v1\n${kindText}\n${meta}${data}`;
+const toYamlDict =
+  '{{ toYaml (dict "apiVersion" "v1" "kind" "Secret" "metadata" (dict "name" "leak") "data" (dict "value" "eA==")) }}\n';
+const leak = { apiVersion: "v1", kind: "Secret", metadata: { name: "leak" }, data: { value: "eA==" } };
+const values = JSON.stringify({
+  extraObject: leak,
+  extraObjects: [leak],
+  something: "apiVersion: v1\nkind: Secret\nmetadata:\n  name: leak\ndata:\n  value: eA==\n",
+});
+
+const forms: [string, Record<string, string>][] = [
+  ["kind : Secret", { "leak.yaml": secretWith("kind : Secret") }],
+  ["kind: !!str Secret", { "leak.yaml": secretWith("kind: !!str Secret") }],
+  ["kind: &k Secret", { "leak.yaml": secretWith("kind: &k Secret") }],
+  ['"kind": Secret', { "leak.yaml": secretWith('"kind": Secret') }],
+  ["kind: on the next line", { "leak.yaml": secretWith("kind:\n  Secret") }],
+  ["kind: |- block scalar", { "leak.yaml": secretWith("kind: |-\n  Secret") }],
+  ["kind: >- block scalar", { "leak.yaml": secretWith("kind: >-\n  Secret") }],
+  ["flow style", { "leak.yaml": "{apiVersion: v1, kind: Secret, metadata: {name: {{ .Release.Name }}-leak}, data: {value: eA==}}\n" }],
+  ["JSON", { "leak.yaml": `{{- if true }}\n${JSON.stringify(leak, null, 2)}\n{{- end }}\n` }],
+  ['{{ "kind: Secret" }}', { "leak.yaml": `apiVersion: v1\n{{ "kind: Secret" }}\n${meta}${data}` }],
+  ["toYaml (dict ...) in the template", { "leak.yaml": toYamlDict }],
+  ["toYaml (dict ...) in a .tpl helper", { "_leak.tpl": `{{- define "leak" -}}\n${toYamlDict}{{- end }}\n`, "leak.yaml": '{{ include "leak" . }}\n' }],
+  ["toYaml .Values.extraObject", { "leak.yaml": "{{ toYaml .Values.extraObject }}\n" }],
+  ["range .Values.extraObjects + toYaml", { "leak.yaml": "{{- range .Values.extraObjects }}\n---\n{{ toYaml . }}\n{{- end }}\n" }],
+  ["tpl .Values.something", { "leak.yaml": "{{ tpl .Values.something . }}\n" }],
+  ['"\\x6bind": Secret (escaped key)', { "leak.yaml": secretWith('"\\x6bind": Secret') }],
+  ["? kind (explicit key)", { "leak.yaml": secretWith("? kind\n: Secret") }],
+  ["<<: {kind: Secret} (merge key)", { "leak.yaml": `apiVersion: v1\n<<: {kind: Secret}\n${meta}${data}` }],
+  ['ki{{ "" }}nd: Secret', { "leak.yaml": secretWith('ki{{ "" }}nd: Secret') }],
+  ["toJson .Values.extraObject", { "leak.yaml": "{{ toJson .Values.extraObject }}\n" }],
+];
+
+function scan(check: { checkRepository: (root: string) => { violations: unknown[] } }, root: string): number {
+  return check.checkRepository(root).violations.length;
+}
+
+console.log("form | before: violations | after: violations | helm template: Secrets with data");
+for (const [what, templates] of forms) {
+  const root = mkdtempSync(join(tmpdir(), "probe-398-"));
+  try {
+    const files: Record<string, string> = { ".dockerignore": "*\n", "chart/Chart.yaml": "apiVersion: v2\nname: probe\nversion: 0.1.0\n" };
+    for (const [path, source] of Object.entries(templates)) files[`chart/templates/${path}`] = source;
+    for (const [path, content] of Object.entries(files)) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), content);
+    }
+    writeFileSync(join(root, "values.json"), values);
+    const rendered = Bun.spawnSync([helm, "template", "probe", join(root, "chart"), "-f", join(root, "values.json")]);
+    const docs = Bun.YAML.parse(rendered.stdout.toString()) as unknown;
+    const list = (Array.isArray(docs) ? docs : [docs]) as { kind?: unknown; data?: unknown }[];
+    const secrets = rendered.exitCode === 0 ? list.filter((d) => d?.kind === "Secret" && d.data !== undefined).length : `helm failed: ${rendered.stderr.toString().trim().split("\n")[0]}`;
+    console.log(`${what} | ${scan(before, root)} | ${scan(after, root)} | ${secrets}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
