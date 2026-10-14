@@ -1,0 +1,28 @@
+{
+ "spec": {
+  "id": "synth-c384-ballast575",
+  "devices": 250,
+  "synthetic": 20000,
+  "durationSecs": 420,
+  "bufMemBytes": 402653184,
+  "outage": {
+   "atSecs": 30,
+   "forSecs": 300
+  },
+  "ballastMiB": 1150, "note": "half of the ballast was untouched calloc zeros, so only about 575 MiB was resident",
+  "minAvailMb": 100
+ },
+ "exit": "exit=0",
+ "started": "2026-10-13T08:10:11Z",
+ "events": [],
+ "cloud": {
+  "t": 1791880003,
+  "batches": 3109,
+  "records": 8402000,
+  "bytes": 813923945,
+  "dups": 0,
+  "gaps": 0,
+  "bad": 0
+ },
+ "note": "post-processing done by hand after the harness hung"
+}

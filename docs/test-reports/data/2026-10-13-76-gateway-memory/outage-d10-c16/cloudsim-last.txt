@@ -1,0 +1,3 @@
+{"t":1791881515,"batches":34,"records":66200,"bytes":1525451,"dups":0,"gaps":0,"bad":0}
+{"t":1791881515,"batches":34,"records":66200,"bytes":1525451,"dups":0,"gaps":0,"bad":0}
+{"t":1791881530,"batches":34,"records":66200,"bytes":1525451,"dups":0,"gaps":0,"bad":0}

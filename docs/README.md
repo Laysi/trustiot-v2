@@ -34,6 +34,7 @@ TrustIoT 將以 Rust 從零重建，不沿用舊架構。本目錄是重建的�
 | [可行性測試結果](feasibility/2026-10-09-cloud-poc.md) | 2026-10-09 第一批雲端 PoC 的實測結果 |
 | [可行性測試結果（2026-10-10）](feasibility/2026-10-10-edge-poc.md) | MS0 前的 Istio ambient 與 Cloudflare Tunnel 實測結果 |
 | [可行性測試結果（2026-10-13）](feasibility/2026-10-13-double-tls-pi.md) | MS1 前在 lab 的 Pi 上量的雙層 TLS（WebSocket 內包 mTLS）CPU 與延遲 |
+| [可行性測試結果（2026-10-13）](feasibility/2026-10-13-gateway-memory.md) | 閘道器在 lab Pi 上的記憶體用量、採購規格與 G1 記憶體上限的建議 |
 | [測試報告](test-reports/README.md) | 驗收證據、e2e 與效能測試報告的存放與命名規則 |
 | [資料來源](references.md) | 決策引用的外部文件 |
 

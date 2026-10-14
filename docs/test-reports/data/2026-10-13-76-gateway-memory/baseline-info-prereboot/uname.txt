@@ -1,0 +1,19 @@
+Linux <pi> 6.18.50+rpt-rpi-v8 #1 SMP PREEMPT Debian 1:6.18.50-1+rpt1 (2026-09-11) aarch64 GNU/Linux
+PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
+NAME="Debian GNU/Linux"
+VERSION_ID="13"
+VERSION="13 (trixie)"
+VERSION_CODENAME=trixie
+DEBIAN_VERSION_FULL=13.7
+ID=debian
+HOME_URL="https://www.debian.org/"
+SUPPORT_URL="https://www.debian.org/support"
+BUG_REPORT_URL="https://bugs.debian.org/"
+coherent_pool=1M 8250.nr_uarts=0 snd_bcm2835.enable_headphones=0 cgroup_disable=memory numa_policy=interleave nvme.max_host_mem_size_mb=32 snd_bcm2835.enable_headphones=1 snd_bcm2835.enable_hdmi=1 snd_bcm2835.enable_hdmi=0  numa=fake=1 system_heap.max_order=0 iommu_dma_numa_policy=interleave smsc95xx.macaddr=<mac-address> vc_mem.mem_base=0x3ec00000 vc_mem.mem_size=0x40000000  console=ttyS0,115200 console=tty1 root=PARTUUID=<partuuid> rootfstype=ext4 fsck.repair=yes rootwait
+60
+Filename				Type		Size		Used		Priority
+/dev/zram0                              partition	1888252		0		100
+1933574144
+lzo-rle lzo lz4 [zstd] 
+ldd (Debian GLIBC 2.41-12+rpt1+deb13u4) 2.41
+systemd 257 (257.13-1~deb13u1)
