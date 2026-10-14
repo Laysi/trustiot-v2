@@ -67,6 +67,7 @@ rcheck.sh 398 'bun test deploy/chart -t "every optional component on"'
 - `bun test deploy/chart`：316 個測試，0 失敗。新的「with every optional component on, in every mode, the only Secrets rendered are the migration Job's empty password Secrets」通過（saas 與 onprem 兩種 shape，各以 bundled 與 external 兩種 mode 渲染，共 4 次）；新的四個換行案例（略過 schema 驗證，值、CR、map key 的 LS、清單項目的 NEL）都讓 `helm template` 失敗，訊息指出欄位。
 - `bun test deploy/flux`：19 個測試，0 失敗（SaaS 的 instance values 沒有換行，通過新的檢查）。
 - `bun scripts/ci/check-workflows.ts`：沒有違規。
+- PR Laysi/trustiot-v2#408 的第一次 CI 在 `rust` job 失敗：`tools/migrate/tests/registry.rs` 的 `the_chart_binds_every_login_role_of_the_product` 以 `"kind" "postgres"` 找 `_migrate.tpl` 的綁定，改名後找不到。測試改成比對 `"database" "postgres"`，嚴格程度不變；建置主機上 `cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked` 全部通過（[checks-rust.txt](data/2026-10-14-398-secret-kind-spellings/checks-rust.txt)）。
 
 ### 渲染檢查的突變測試
 
