@@ -142,6 +142,8 @@ const HELM_READ_FILES: ReadonlySet<string> = new Set([
   "docs/architecture/deployment.md",
   "scripts/lib/stack.ts",
   "services/ingest/tests/common/mod.rs",
+  // The labels and annotations the Job keeps on the password Secrets it binds.
+  "tools/migrate/src/passwords.rs",
 ]);
 
 /**

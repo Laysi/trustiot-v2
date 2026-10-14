@@ -1485,6 +1485,52 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     expect(off.filter((m) => m.kind === "Secret").map((m) => m.metadata.name)).toEqual([IDENTITY_SECRET, COLLECTOR_SECRET]);
   });
 
+  test("every label and annotation the chart and Helm put on the password Secrets is one the Job keeps when it binds them", () => {
+    // tools/migrate/src/passwords.rs strips every other key in the patch that binds a Secret
+    // (Laysi/trustiot-v2#60 round 5, N3); a chart key missing there would be removed on the first
+    // fill and put back by every upgrade (round 6, L1).
+    const source = readFileSync(join(REPO_ROOT, "tools/migrate/src/passwords.rs"), "utf8");
+    const constants = new Map([...source.matchAll(/pub const ([A-Z_]+): &str = "([^"]+)";/g)].map((m) => [m[1]!, m[2]!]));
+    const allowlist = (name: string): Set<string> => {
+      const body = new RegExp(`const ${name}: &\\[&str\\] = &\\[([^\\]]*)\\];`).exec(source)?.[1];
+      if (body === undefined) throw new Error(`${name} not found in passwords.rs`);
+      const items = body
+        .split(",")
+        .map((item) => item.trim())
+        .filter((item) => item !== "");
+      return new Set(
+        items.map((item) => {
+          const literal = /^"([^"]+)"$/.exec(item)?.[1];
+          const value = literal ?? constants.get(item);
+          if (value === undefined) throw new Error(`${name}: cannot read ${item}`);
+          return value;
+        }),
+      );
+    };
+    const labels = allowlist("KEPT_LABELS");
+    const annotations = allowlist("KEPT_ANNOTATIONS");
+    // Helm adds these to every object it installs (ownership, which an adoption checks).
+    for (const key of ["meta.helm.sh/release-name", "meta.helm.sh/release-namespace"]) expect(annotations).toContain(key);
+    const configurations = [
+      manifests,
+      render(SHAPES.onprem, withIdentity),
+      render(SHAPES.saas, [...enableAllServices, "--set-json", 'mesh.calls.telemetry-query=["postgres"]']),
+      render(SHAPES.saas, [...withIdentity, "--set", "migrate.enabled=false"]),
+    ];
+    let checked = 0;
+    for (const rendered of configurations) {
+      for (const secret of rendered.filter((m) => m.kind === "Secret" && m.metadata.labels?.["trustiot.io/filled-by"] === "migrate")) {
+        for (const key of Object.keys(secret.metadata.labels ?? {})) expect(labels, `${secret.metadata.name} label ${key}`).toContain(key);
+        for (const key of Object.keys(secret.metadata.annotations ?? {})) {
+          expect(annotations, `${secret.metadata.name} annotation ${key}`).toContain(key);
+        }
+        checked++;
+      }
+    }
+    // Both kinds: a service's and the collector's, in every configuration.
+    expect(checked).toBeGreaterThanOrEqual(8);
+  });
+
   test("the Job's ServiceAccount may get and patch exactly the password Secrets, and no other Role touches Secrets", () => {
     const everything = render(SHAPES.saas, [...enableAllServices, "--set-json", 'mesh.calls.telemetry-query=["postgres"]']);
     for (const rendered of [manifests, everything]) {
