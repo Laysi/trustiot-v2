@@ -8,7 +8,8 @@ import { join } from "node:path";
 
 import { collectInstallEvidence } from "../../deploy/chart/tests/e2e/install-evidence.ts";
 import { evidenceFile, runInstall } from "../../deploy/chart/tests/e2e/install.ts";
-import { installEvidencePath, installEvidenceSection, takeInstallEvidence } from "./e2e.ts";
+import { E2E_SUITES, installEvidencePath, installEvidenceSection, MESH_E2E_SHAPE, suitesOf, takeInstallEvidence } from "./e2e.ts";
+import { discoverShapes } from "./smoke.ts";
 import { renderMarkdown, type Report } from "./report.ts";
 
 let outDir: string;
@@ -88,7 +89,7 @@ describe("evidence of a failed install in the report", () => {
     expect(failingInstall()).toBeInstanceOf(Error);
     expect(existsSync(evidenceFile(reportDir, "trustiot"))).toBe(true);
 
-    const destination = installEvidencePath(outDir, "saas");
+    const destination = installEvidencePath(outDir, "ingress", "saas");
     const taken = takeInstallEvidence(reportDir, destination);
 
     expect(taken).toContain("### install-failure-trustiot.txt");
@@ -97,15 +98,15 @@ describe("evidence of a failed install in the report", () => {
     // The next shape's run starts from an empty directory, so it cannot overwrite or inherit it.
     expect(readdirSync(reportDir)).toEqual([]);
 
-    const section = installEvidenceSection(outDir, "saas");
+    const section = installEvidenceSection(outDir, "ingress", "saas");
     expect(section).toContain("the release did not install");
     expect(section).toContain("ErrImageNeverPull");
-    expect(installEvidenceSection(outDir, "onprem")).toBeUndefined();
+    expect(installEvidenceSection(outDir, "ingress", "onprem")).toBeUndefined();
   });
 
   test("the nightly report shows the events and the workload state of the failed install", () => {
     failingInstall();
-    takeInstallEvidence(reportDir, installEvidencePath(outDir, "saas"));
+    takeInstallEvidence(reportDir, installEvidencePath(outDir, "ingress", "saas"));
     const report: Report = {
       startedAt: "2026-10-14T07:00:00Z",
       finishedAt: "2026-10-14T07:20:00Z",
@@ -117,7 +118,7 @@ describe("evidence of a failed install in the report", () => {
           ok: false,
           durationMs: 1000,
           checks: [{ name: "ingress e2e test", ok: false, detail: "the e2e test exited with 1", durationMs: 1000 }],
-          diagnostics: `### objects\nnothing\n\n${installEvidenceSection(outDir, "saas")}`,
+          diagnostics: `### objects\nnothing\n\n${installEvidenceSection(outDir, "ingress", "saas")}`,
         },
       ],
     };
@@ -132,10 +133,48 @@ describe("evidence of a failed install in the report", () => {
 
   test("a run without a failed install adds nothing", () => {
     writeFileSync(join(reportDir, "ingress-e2e-saas.json"), "[]");
-    expect(takeInstallEvidence(reportDir, installEvidencePath(outDir, "saas"))).toBeUndefined();
-    expect(existsSync(installEvidencePath(outDir, "saas"))).toBe(false);
+    expect(takeInstallEvidence(reportDir, installEvidencePath(outDir, "ingress", "saas"))).toBeUndefined();
+    expect(existsSync(installEvidencePath(outDir, "ingress", "saas"))).toBe(false);
     // The test's own report file stays.
     expect(readdirSync(reportDir)).toEqual(["ingress-e2e-saas.json"]);
-    expect(takeInstallEvidence(join(outDir, "no-such-directory"), installEvidencePath(outDir, "saas"))).toBeUndefined();
+    expect(takeInstallEvidence(join(outDir, "no-such-directory"), installEvidencePath(outDir, "ingress", "saas"))).toBeUndefined();
+  });
+});
+
+describe("which cluster e2e tests run after each shape (Laysi/trustiot-v2#77)", () => {
+  const shapes = discoverShapes(join(import.meta.dir, "..", "..", "deploy", "chart")).map((shape) => shape.name);
+
+  test("the ingress test runs for every shape, the service-to-service test once, after it, for the shape it is written for", () => {
+    expect(shapes).toContain(MESH_E2E_SHAPE);
+    for (const shape of shapes) {
+      expect(suitesOf(shape)).toEqual(shape === MESH_E2E_SHAPE ? ["ingress", "mesh"] : ["ingress"]);
+    }
+  });
+
+  test("the service-to-service test installs the shape it runs with", () => {
+    const test = readFileSync(join(import.meta.dir, "..", "..", "deploy", "chart", "tests", "e2e", E2E_SUITES.mesh.file), "utf8");
+    expect(test).toContain(`"values-${MESH_E2E_SHAPE}.yaml", "tests/values/${MESH_E2E_SHAPE}-instance.yaml"`);
+  });
+
+  test("every suite and shape gets its own namespace and its own evidence file", () => {
+    const namespaces = new Set<string>();
+    const evidence = new Set<string>();
+    for (const shape of shapes) {
+      for (const suite of suitesOf(shape)) {
+        namespaces.add(E2E_SUITES[suite].namespace(shape));
+        evidence.add(installEvidencePath(outDir, suite, shape));
+      }
+    }
+    const runs = shapes.flatMap((shape) => suitesOf(shape)).length;
+    expect(namespaces.size).toBe(runs);
+    expect(evidence.size).toBe(runs);
+    // The smoke namespaces (platform.ts) are not among them.
+    for (const shape of shapes) expect(namespaces.has(`nightly-${shape}`)).toBe(false);
+  });
+
+  test("the mesh test's failed install is shown under its own heading", () => {
+    writeFileSync(installEvidencePath(outDir, "mesh", MESH_E2E_SHAPE), "### install-failure-trustiot.txt\nDeployment/trustiot-certs: desired=1 replicas=1\n");
+    expect(installEvidenceSection(outDir, "mesh", MESH_E2E_SHAPE)).toStartWith("### mesh e2e: the release did not install");
+    expect(installEvidenceSection(outDir, "ingress", MESH_E2E_SHAPE)).toBeUndefined();
   });
 });

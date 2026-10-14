@@ -1,0 +1,30 @@
+# Laysi/trustiot-v2#77: checks on the build host through the check queue (rcheck), worktree before the commit.
+# Commands: the report's 指令 section.
+rcheck: queued on the build host at 00:14:53 as 77-f8a99c9e; running now: nothing
+== bun test deploy/chart
+(pass) sendRaw > a failure after the response head arrived is not a ConnectionError, so it is never retried [2002.91ms]
+(pass) sendRaw > a refused connection is a ConnectionError [1.69ms]
+(pass) sendRaw > a response that never comes is a ConnectionError after the timeout [202.00ms]
+
+ 369 pass
+ 0 fail
+ 3943 expect() calls
+Ran 369 tests across 7 files. [32.21s]
+== bun test scripts
+
+ 830 pass
+ 2 skip
+ 0 fail
+ 2965 expect() calls
+Ran 832 tests across 34 files. [2.40s]
+== typecheck
+$ tsc --noEmit --project tsconfig.json
+== check-workflows
+workflow policy: 4 file(s) checked, no violations
+== check-secret-handling
+secret handling: 399 file(s) checked, 6 container build file(s), no violations
+== lint-workflows
+actionlint: 3 workflow file(s), no errors
+rcheck: removed 0 dangling test volumes
+rcheck: exit 0 at 00:15:38 (build host, 77-f8a99c9e)
+exit=0
