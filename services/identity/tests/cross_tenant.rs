@@ -1,7 +1,8 @@
 //! Cross-tenant negative tests (decision 29, crates/testkit): the identity service's role
-//! cannot read or change another tenant's memberships, tenant or events, and every relation it
-//! can reach is declared. The schema is the product's, applied by the migration Job as in a
-//! deployment (`testkit::product`), so the outbox tables the Job creates are covered too.
+//! cannot read or change another tenant's memberships, tenant, events or event aggregates'
+//! sequences, and every relation it can reach is declared. The schema is the product's, applied
+//! by the migration Job as in a deployment (`testkit::product`), so the outbox tables the Job
+//! creates are covered too.
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set. Run with `--nocapture` to see every probe.
@@ -32,6 +33,12 @@ const SEED_EVENT: &str = "INSERT INTO identity.outbox_event
      envelope)
 VALUES (1, $2::uuid, 'testkit.canary', $1::uuid, 'testkit', $3, 1, '{}'::jsonb)";
 
+/// One aggregate of the tenant, its sequence in the outbox (Laysi/trustiot-v2#413): the canary
+/// is the aggregate id; the table has no column for `$2`.
+const SEED_AGGREGATE: &str = "INSERT INTO identity.outbox_aggregate
+    (aggregate_type, aggregate_id, tenant_id, last_seq, last_tx)
+SELECT 'testkit', $3, $1::uuid, 1, 1 WHERE $2::uuid IS NOT NULL";
+
 #[tokio::test(flavor = "multi_thread")]
 async fn tenants_are_isolated() {
     let Some(product) = product_postgres(&["identity_app"]).await else {
@@ -51,6 +58,9 @@ async fn tenants_are_isolated() {
     // The service role only inserts events (no SELECT or UPDATE): the probes check that it
     // cannot write one for another tenant.
     .table(pg_table!("identity.outbox_event", seed = SEED_EVENT))
+    // The service role reads and advances the sequence of its tenant's aggregates only: the
+    // probes check that it neither sees nor changes another tenant's (Laysi/trustiot-v2#413).
+    .table(pg_table!("identity.outbox_aggregate", seed = SEED_AGGREGATE))
     .exempt(
         "identity.users",
         "users span tenants: the platform-wide user record, no tenant data (services/identity/README.md)",
@@ -60,11 +70,6 @@ async fn tenants_are_isolated() {
         "a session belongs to a user and is found by its cookie hash before any tenant is known; \
          the tenant role is always read from memberships under row-level security \
          (services/identity/README.md)",
-    )
-    .exempt(
-        "identity.outbox_aggregate",
-        "the outbox's per-aggregate sequence numbers (crates/outbox): aggregate kind, id and \
-         counters, no tenant column; the events themselves are tenant data and declared above",
     );
 
     let issuer = TestIssuer::new();

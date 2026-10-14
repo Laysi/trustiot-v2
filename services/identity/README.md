@@ -77,7 +77,7 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 | 角色 | 權限 |
 | --- | --- |
 | `identity_owner`（migration 角色） | 擁有 schema 與所有表 |
-| `identity_app`（服務角色） | `identity.users`、`identity.memberships`、`identity.sessions` 的 `SELECT`；`identity.tenants` 的 `SELECT`、`INSERT`；outbox 的寫入權限（`outbox_event` 的 `INSERT`、`outbox_aggregate` 的 `SELECT`、`INSERT`、`UPDATE`，由 migration Job 授權，見 [crates/outbox](../../crates/outbox/README.md)） |
+| `identity_app`（服務角色） | `identity.users`、`identity.memberships`、`identity.sessions` 的 `SELECT`；`identity.tenants` 的 `SELECT`、`INSERT`；outbox 的寫入權限（`outbox_event` 的 `INSERT`、`outbox_aggregate` 的 `SELECT`、`INSERT`、`UPDATE`，由 migration Job 授權，見 [crates/outbox](../../crates/outbox/README.md)）；兩張表都有 RLS，它只碰得到目前租戶的事件與聚合 |
 | `identity_platform`（平台角色） | 身分服務是 outbox 的產生端，outbox 的 policy 要有平台角色（全平台事件用），所以 Job 建立它；目前沒有程式以它連線，chart 不綁它的密碼，它維持 `NOLOGIN` |
 
 | 表 | 內容 | RLS |
@@ -86,7 +86,7 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 | `memberships` | `(tenant_id, user_id)` 與角色 `tenant_role`（`viewer`、`editor`、`admin`；不叫 `role`，因為 `tools/sql-check` 把 `UPDATE` 這個名稱的欄位當成切換資料庫角色而拒絕） | 照 `crates/service-kit/sql/tenant-table.sql` 的 `tenant_isolation` |
 | `sessions` | `token_hash`、使用者、`active_tenant_id`、建立、到期與撤銷時間 | 無 |
 | `tenants` | 租戶 ID（整個主鍵）、名稱（1–100 個字元）、建立時間 | 照 `tenant-table.sql` 的 `tenant_isolation` |
-| `outbox_event`、`outbox_aggregate` | 這個服務寫出的事件（由 Job 建立，見 [crates/outbox](../../crates/outbox/README.md)） | outbox 範本的 policy |
+| `outbox_event`、`outbox_aggregate` | 這個服務寫出的事件與每個聚合的序號（由 Job 建立，見 [crates/outbox](../../crates/outbox/README.md)）；`tenant` 聚合屬於該租戶 | outbox 範本的 policy（`outbox-event.sql`、`outbox-aggregate.sql`） |
 
 為什麼 `sessions` 不是租戶資料：查 session 時還不知道租戶（只有 cookie），使用者也可以切換目前的租戶，所以 session 屬於使用者，沒有 `tenant_id`。它記的租戶叫 `active_tenant_id`，不叫 `tenant_id`，連線檢查與 `tools/sql-check` 才不會把它當成租戶欄位。角色一律在那個租戶的 RLS 交易裡從 `memberships` 讀。
 
@@ -213,4 +213,4 @@ CARGO_BUILD_JOBS=2 cargo test -p identity
 | `tests/token_claims.rs` | 驗證者另寫：竄改、改簽、改受眾、改時間的 token 都過不了 service-kit 的驗證器，輪替期間舊 token 在效期內仍有效（不需要資料庫） |
 | `src/tenants.rs` | 租戶名稱的規則（去空白、長度以字元計、控制字元、格式字元與行／段落分隔符）；只接受 JSON 的 `Content-Type`（可帶參數，表單、`text/plain`、相近的型別與兩個 `Content-Type` 都拒絕） |
 | `tests/tenants.rs` | 真的服務與 migration Job 套用的產品 schema：平台管理者的 session 經這個服務的 ext_authz 換成 token 後建立租戶得到 201，列與 `identity.tenant_created` 在同一個交易（同一個 `xmin`）；撤銷寫 outbox 的權限時回 503 且沒有留下列；不是平台管理者 403（租戶的 `admin` 也是）、沒有 token 401、平台管理者給資產服務的 token 401、沒有 `Content-Type` 或是表單與 `text/plain` 400、壞的 body 400、壞的名稱 422，都不建立租戶；`application/json; charset=utf-8` 201；日誌不含租戶名稱 |
-| `tests/cross_tenant.rs` | 產品 schema（`testkit::product`）上，服務角色讀不到也改不了其他租戶的 `memberships`、`tenants`（每個租戶一列）與 `outbox_event`（讀、無租戶讀、更新、搬移、插入五種探測），服務角色碰得到的每個關聯都已宣告：`users`、`sessions` 不是租戶資料、`outbox_aggregate` 是 outbox 的記錄而豁免；建立租戶的 API 不讀租戶資料而豁免 |
+| `tests/cross_tenant.rs` | 產品 schema（`testkit::product`）上，服務角色讀不到也改不了其他租戶的 `memberships`、`tenants`（每個租戶一列）、`outbox_event` 與 `outbox_aggregate`（讀、無租戶讀、更新、搬移、插入五種探測；`outbox_aggregate` 在 2026-10-15 前豁免，Laysi/trustiot-v2#413 起照租戶表測），服務角色碰得到的每個關聯都已宣告：`users`、`sessions` 不是租戶資料而豁免；建立租戶的 API 不讀租戶資料而豁免 |
