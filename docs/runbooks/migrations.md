@@ -86,6 +86,25 @@ Job 第一次填入一個密碼 Secret 時（以及 Secret 被別人重建、或
 - 症狀：Job 的日誌寫 `Secret <名稱>: the API refused to patch it`（HTTP 400 或 403，依政策引擎而定），叢集的事件或政策報告寫出拒絕的是哪個政策；這時 Job 的 Role 本身沒有問題，不要放寬它。
 - 處理，二選一：讓那個政策豁免兩種密碼 Secret（`<release>-<服務>-password`、`<release>-otel-collector-password`，標籤 `trustiot.io/filled-by=migrate`）；或改用會自動加上那個 key 的 mutating 政策，它也會在 Job 的 patch 上把 key 加回去，patch 就會通過。改好之後 Job 依 `migrate.backoffLimit` 重試，重試用完時刪掉失敗的 Job，讓下一次升級或調和重建它。
 
+### 安裝或升級時密碼 Secret 的 apply conflict
+
+症狀：`helm install` 或 `helm upgrade` 失敗，訊息有 `conflict occurred while applying object <namespace>/<release>-…-password` 與 `conflicts with "<field manager>"`（2026-10-14 在 lab 叢集上以 helm 4.3.0 重現）。
+
+原因：有人在 chart 之前先建立了這個密碼 Secret，而且在 chart 也會設定的 key 上（例如標籤 `app.kubernetes.io/component`、annotation `trustiot.io/description`）放了不同的值。helm 4 預設以 server-side apply 安裝，所以拒絕接手別的 field manager 擁有、值又不同的欄位。
+
+先當成安全事件處理。錯誤訊息裡的 field manager 只是用戶端自己填的名稱（例如 `kubectl-create`），只能當線索，不能證明是誰；實際建立者要從 API server 的 audit log 確認，前提是叢集有開 audit log 而且紀錄還在。Job 若已經跑過（安裝失敗時 Job 照樣會執行），它已經拿掉白名單以外的每個 key、換掉 Secret 裡的密碼（日誌有 `removed from Secret …` 與 `(the Secret is not the one the Job filled)`）；衝突的那兩個 key 在白名單裡，所以還留著對方的值。這不會洩漏密碼，只會擋住安裝與升級。
+
+處理，二選一：
+
+- 直接用 Helm 時：`helm upgrade … --force-conflicts`，以 chart 的值接手這些欄位，Job 綁定的密碼不變（lab 已確認）。之後確認 `trustiot.io/password-secret-uid` 等於 Secret 自己的 uid：`kubectl -n <namespace> get secret <名稱> -o jsonpath='{.metadata.uid} {.metadata.annotations.trustiot\.io/password-secret-uid}'`。
+- 任何部署工具都適用：刪掉這個 Secret，再依上方「密碼 Secret 的資料遺失」改 `migrate.revision` 升級。Helm 重建空的 Secret，Job 產生新密碼，所以這個服務的密碼會輪替一次。
+
+Flux（helm-controller v1.6.5，隨 `.prototools` 釘選的 flux 2.9.6 安裝；以下依 `deploy/flux/clusters/saas/flux-system/gotk-components.yaml` 裡 HelmRelease CRD 的欄位說明，**沒有在叢集上驗證**）：
+
+- `spec.install.serverSideApply` 預設開啟。`spec.upgrade.serverSideApply` 預設 `auto`，沿用 release 之前的方式。CRD 說 server-side apply「always forces conflicts with other field managers」，所以這個衝突應該不會擋住 Flux 的安裝或升級，helm-controller 會像 `--force-conflicts` 一樣接手。
+- 不要為了它設 `spec.upgrade.force`。CRD 說它在 server-side apply 下沒有作用；在 client-side apply 下則是「replacement strategy」，也就是上方禁止的 `--force-replace`。
+- 衝突沒有消失時，改用刪除 Secret 再改 `migrate.revision` 的做法。
+
 ## 停用服務之後留下的 Secret
 
 在 values 關掉一個服務（或把它的 `mesh.calls` 拿掉 `postgres`）之後，下一次 Job 把它的登入角色改成 `NOLOGIN`，日誌有 `revoked the login of role <服務>_app: no Secret is bound to it`；服務從 tools/migrate 的服務清單移除或改名時是 `... no service in tools/migrate's registry has it`。關掉 collector 或改它的帳號名稱時，舊的 ClickHouse 帳號改成 `HOST NONE`，日誌有 `revoked the login of ClickHouse account <帳號>: the collector no longer uses it`。角色與帳號不刪除（可能擁有物件；重新啟用時 Job 先設 Secret 的密碼再恢復登入）。只有 Job 標記過、migration 角色有 ADMIN OPTION 的角色會被改，superuser、客戶的帳號、其他實例的角色不會。ClickHouse 沒有可以標記帳號的地方，所以 Job 把拿到 `trustiot_otel_collector` 角色、但不是目前 collector 帳號的帳號都當成它的：外部 ClickHouse 上不要把這個角色給自己的帳號，給了的帳號會被改成 `HOST NONE`（以管理帳號 `ALTER USER <帳號> HOST ANY` 並 `REVOKE trustiot_otel_collector FROM <帳號>` 復原）。Job 執行時用的 migration 帳號本身不會被改，在 ClickHouse 設定檔（`users.xml` 或 `users.d/`）裡定義的帳號也不會（`ALTER USER` 改不了它們，Job 也從不建立這種帳號）。`NOLOGIN` 不中斷已經開著的連線；被關掉的服務的 pod 隨升級刪除，懷疑還有連線時以 superuser 執行 `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '<角色>'`。
