@@ -396,7 +396,7 @@ describe("bundled ClickHouse admin password generated in the cluster (Laysi/trus
     const accounts = [...chartAccounts, "default"].sort();
     const can = (account: string, verb: string, resource = `secret/${ADMIN_SECRET}`) =>
       exec([...kubectlArgs(), "auth", "can-i", verb, resource, `--as=system:serviceaccount:${NAMESPACE}:${account}`]).stdout.trim();
-    const access: Record<string, Record<string, string>> = {};
+    const access: Record<string, { get: string; patch: string; list: string; create: string }> = {};
     for (const account of accounts) {
       access[account] = { get: can(account, "get"), patch: can(account, "patch"), list: can(account, "list", "secrets"), create: can(account, "create", "secrets") };
     }
@@ -405,7 +405,7 @@ describe("bundled ClickHouse admin password generated in the cluster (Laysi/trus
     expect(accounts).toContain(STATEFULSET);
     for (const account of accounts) {
       const own = account === STATEFULSET;
-      expect({ account, ...access[account] }).toEqual({ account, get: own ? "yes" : "no", patch: own ? "yes" : "no", list: "no", create: "no" });
+      expect({ account, ...(access[account] ?? { get: "", patch: "", list: "", create: "" }) }).toEqual({ account, get: own ? "yes" : "no", patch: own ? "yes" : "no", list: "no", create: "no" });
     }
   }, 300_000);
 });

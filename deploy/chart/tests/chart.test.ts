@@ -1744,7 +1744,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
         apiVersion: "v1",
         kind: "Secret",
         metadata: {
-          name: names[i],
+          name: names[i] ?? "",
           labels: {
             "helm.sh/chart": `trustiot-${chart.version}`,
             "app.kubernetes.io/name": "trustiot",
