@@ -296,7 +296,10 @@ async fn outbox_wiring_and_tenant_roles() {
     assert!(report.changes.is_empty(), "{:?}", report.changes);
 
     // 6. A service turned off in the deployment (still in the registry, no Secret bound): its
-    //    roles lose LOGIN; turned on again, they get their Secret's password, then LOGIN.
+    //    roles lose LOGIN. Turned on again, each gets its Secret's password, then LOGIN: the
+    //    service role through the Secret Helm kept and adopts again (its password, nothing
+    //    generated), the platform role through a Secret declared anew (empty, so the Job
+    //    generates its password first).
     for role in &LOGIN_ROLES[4..] {
         db.unbind(role);
     }
@@ -318,20 +321,27 @@ async fn outbox_wiring_and_tenant_roles() {
             .await
             .expect("read the role");
         assert!(!login, "{role} is NOLOGIN");
-        db.bind(role);
     }
+    let kept = db.password("obx_second_app");
+    db.rebind("obx_second_app");
+    db.bind("obx_second_platform");
     let report = migrate::run(&db.config(MIGRATOR), &LAST_CONSUMER)
         .await
         .expect("the run with the second consumer on again");
     assert_eq!(
         report.changes,
-        LOGIN_ROLES[4..]
-            .iter()
-            .flat_map(|role| [
-                format!("set the password of {role}"),
-                format!("let role {role} log in")
-            ])
-            .collect::<Vec<_>>()
+        [
+            "generated the password of obx_second_platform in Secret obx-second-platform-postgres (it had none)",
+            "set the password of obx_second_app",
+            "let role obx_second_app log in",
+            "set the password of obx_second_platform",
+            "let role obx_second_platform log in",
+        ]
+    );
+    assert_eq!(
+        db.password("obx_second_app"),
+        kept,
+        "the kept Secret's password is the one the role gets back"
     );
     check_sessions(&db, &passwords(&LOGIN_ROLES[4..])).await;
 

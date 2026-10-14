@@ -221,6 +221,19 @@ impl Database {
             .push(role.to_owned());
     }
 
+    /// Binds `role` again to the Secret it already has, as when its service is turned on again
+    /// and Helm adopts the Secret it kept (`helm.sh/resource-policy: keep`) with its data.
+    pub fn rebind(&self, role: &str) {
+        assert!(
+            self.secrets.get(&secret_of(role)).is_some(),
+            "{role} has no kept Secret to bind again"
+        );
+        self.bound
+            .lock()
+            .expect("bound roles")
+            .push(role.to_owned());
+    }
+
     /// Stops binding `role`, as the chart does when its service is turned off.
     pub fn unbind(&self, role: &str) {
         self.bound
