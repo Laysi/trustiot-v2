@@ -162,7 +162,7 @@ migrate 的整合測試涵蓋的情境：
 | `cargo test --locked -p migrate --test clickhouse`（R3 的 ClickHouse 部分） | 1 通過。這是 pre-commit 審查要求「重新啟用帳號時先設 Secret 的密碼、再恢復 `HOST ANY`」之前的版本；修改後的版本由 PR CI 執行 |
 | `cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`（2026-10-14，在建置主機上的 R3 commit 之後，經檢查佇列） | 通過，沒有警告 |
 | `cargo test --locked --workspace`、`cargo run --locked -p openapi -- --check`（同上） | 全部通過，0 失敗；`api/openapi.json is up to date`。這次建置主機上沒有 docker 或 podman，所以在不設 `CI` 的情況下執行，需要容器的測試（`tools/migrate` 的 Postgres 與 ClickHouse 整合測試，包括 R3 在 `tests/outbox_and_tenant_roles.rs` 的第 5 到 7 步與 `tests/clickhouse.rs` 的第 6d 步）都略過。設了 `CI` 的同一批檢查在第一個容器測試就停住（`tests/clickhouse.rs`：`podman or docker is required when CI is set`）；`migrate` 的 19 個單元測試在那之前通過 |
-| 需要容器的 Rust 測試 | 由推送後 PR CI 的 `rust` job 執行（`cargo test --workspace`，設了 `CI` 時缺容器就失敗而不是略過），執行編號由協調者補上 |
+| 需要容器的 Rust 測試 | 由推送後 PR CI 的 `rust` job 執行（`cargo test --workspace`，設了 `CI` 時缺容器就失敗而不是略過）。33dd568 的 run 38516149613 在 `tests/outbox_and_tenant_roles.rs` 第 6 步失敗：測試以 `db.bind` 重新宣告了空的 Secret，卻沒有預期 Job 先產生密碼；產品的順序是對的。`c433820` 修正預期，並補上 Helm 保留後重新接手的 Secret 這條路徑（不產生密碼，先設密碼再 LOGIN）。c433820 的 run 38517891393 跑過 `migrate` 的每個容器測試執行檔，全部通過；20e3a9a 的 CI run 38519171335 與 smoke run 38519171296 都通過 |
 
 `Cargo.toml` 與 `Cargo.lock` 沒有改，所以 `cargo deny` 不重跑。
 
@@ -211,3 +211,47 @@ pre-commit 的審查在這一輪擋下三次：
 **2026-10-13 在 332ed66 的先行執行**：兩種 shape 各 10 通過、1 失敗；失敗的是測試本身的錯誤（讀 Secret 時沒有 `--show-managed-fields`，已在 `064a325` 修正）。那次的原始檔隨工作站的 /tmp 清除而遺失，上面的結果是修正後在 `33dd568` 重跑的。
 
 **清理**：兩次執行之後刪除 namespace `e2e-60`；`kubectl get clusters.postgresql.cnpg.io -A` 沒有任何 Cluster、沒有屬於這次執行的 PV。三個 `:60` 映像留在節點上給獨立驗證重用；CloudNativePG 與 lab 鎖由協調者處理。建置主機上的副本、本機的暫存檔與 kubeconfig 已刪除。
+
+## 第五輪：第四輪的獨立複驗
+
+2026-10-14 獨立驗證以 33dd568 的程式碼與 lab 映像複驗第四輪。結論如下：
+
+- R1 到 R6 都成立，第三輪的 R1 繞過方式全部被拒。
+- 在 lab 上以真的 Job 確認了以下各點：
+  - 預先建立的 Secret 不會被採用。
+  - 兩個同時執行、真的遇到 409 的 Job 會收斂。
+  - `log_statement=all` 的日誌裡只有 SCRAM verifier。
+  - 洩漏掃描沒有找到任何值。
+  - R3 的停用與重新啟用順序正確。
+  - 服務角色無法偽造標記。
+
+新的發現與處理：
+
+| 發現 | 處理 | 證據 |
+| --- | --- | --- |
+| N1（低到中，第四輪改成數字比較後才出現）values 檔裡的整數 `passwordGeneration` 到 1000000 以上時，`toString` 會渲染成科學記號（`1e+06`、`2.0261014e+07`）。schema 接受這個值，Job 拒絕它，所以每次執行都失敗，升級進入 remediation。`--set` 給的是字串，不受影響 | 修正。新增 `trustiot.decimal`：整數以 `%d` 渲染、字串照原樣，其他值讓渲染失敗。`passwordGeneration` 經過它之後，不是 1 到 9 位數字也讓渲染失敗；`migrate.revision` 的 annotation 也改用它（它只進 hash，原本不會壞，但同樣會變成科學記號）。chart 渲染進程式會解析的設定的其他數字只有 port 與 `max_connections`，schema 把它們限制在遠低於 1000000 的範圍 | chart 測試「passwordGeneration and revision from a values file render as exact decimals…」：values 檔的整數 `20261014`、`1000000`、`999999999`、`0`、加引號的字串、`--set`，以及必須失敗的 10 位數（整數與字串） |
+| N3（低）預先建立、被 Helm 接手的 Secret 保留建立者放的 annotation、標籤、ownerReferences 與 finalizers，Job 再把密碼寫進去：replicator 或 reflector 可能把密碼複製到建立者讀得到的 namespace，owner 可能讓 Secret 被垃圾回收 | 修正。綁定 Secret 的同一個 merge patch（第一次填入、別人建立的物件、從備份還原）把白名單以外的每個 annotation 與標籤、`ownerReferences`、`finalizers` 設成 null。白名單是 chart 的、Helm 的 ownership annotation、Flux helm-controller 的兩個標籤，以及 Job 的兩個 annotation。報告只寫 key。已綁定的 Secret 不再處理。pre-commit 審查另外指出兩點並已修正：（一）文件原本說「能 patch 就讀得到」並不精確，RBAC 分開授予 `get` 與 `patch`，但沒有 `get` 的 patch 也能寫入自選的密碼，所以文件改為「patch 權限等同能取得密碼，只能給受信任的主體」；（二）正在刪除（有 `deletionTimestamp`）的 Secret 一律在 patch 之前停止，否則拿掉 finalizer 會讓 Secret 消失，角色卻已經設成它的密碼 | 單元測試 `binding_a_secret_removes_metadata_neither_the_chart_nor_the_job_sets`（patch 內容），`tests/passwords.rs` 的 `binding_a_foreign_secret_removes_metadata_neither_the_chart_nor_the_job_sets` 與 `a_secret_being_deleted_is_never_filled` |
+| N4（低）ClickHouse 停用規則會鎖住任何拿到 `trustiot_otel_collector` 的帳號（lab 上手動建立的帳號也被鎖） | 修正與文件。查詢排除 `currentUser()`，也就是 Job 自己執行時用的帳號。ClickHouse 沒有可以標記帳號的地方，所以其他拿到這個角色的帳號仍然算是 Job 的：runbook、`secrets.md` 與 README 寫明外部 ClickHouse 上不要把這個角色給自己的帳號，以及怎麼復原。`currentUser()` 的測試沒有加：測試用 ClickHouse 的管理帳號是設定檔定義的，不能授予角色，要另建一個 SQL 帳號來當 migration 帳號，不便宜 | 程式與文件；實際行為由 PR CI 的 `tests/clickhouse.rs` 第 6d 步涵蓋（預期沒變） |
+| N2（既有的弱點）`check-secret-handling` 不認得 `kind` 的其他寫法，也不認得由樣板動作組出來的 Secret | 不在這個 PR 處理，由協調者開後續 issue | — |
+| 文件：`--force-replace` 的機制 | 修正。它不是刪除再建立，而是以 chart 渲染的內容整個取代物件（PUT replace）：Secret 的 uid 不變，但資料與 annotation 被清空；同名 Job 的取代因 `spec.selector … immutable` 失敗。結論不變 | runbook |
+| 選做：chart 只綁定 `<schema>_app`，有平台角色的服務會讓平台角色停在 NOLOGIN | 加上防護。`tests/registry.rs` 的 `the_chart_binds_every_login_role_of_the_product` 固定 chart 的 Postgres 綁定是每個服務一個 `<schema>_app`，而且產品的服務清單裡不能有平台角色；Laysi/trustiot-v2#65 加入第一個平台角色時要一併修改 chart 與這個測試。`scripts/ci/changes.ts` 把這個測試讀的 `_migrate.tpl` 列進 rust job 的輸入 | 測試 |
+
+### 指令與結果
+
+| 項目 | 結果 |
+| --- | --- |
+| `bun test deploy/chart` | 310 通過 |
+| `bun test scripts` | 693 通過，2 略過（需要 podman 的 e2e），0 失敗 |
+| `bun run --cwd scripts typecheck` | 通過 |
+| `bun scripts/ci/check-secret-handling.ts` | 285 個檔案，沒有違規 |
+| `bun test scripts/ci/changes.test.ts` | 170 通過 |
+| 經檢查佇列：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings` | 通過 |
+| 經檢查佇列：`env -u CI cargo test --locked -p migrate` | 全部通過：單元 20 個、`tests/passwords.rs` 11 個、`tests/registry.rs` 5 個、`tests/wait_for_job.rs` 4 個。建置主機沒有容器執行環境，所以不設 `CI` 執行，需要容器的 6 個測試執行檔（`clickhouse`、`concurrent_runs`、`file_escapes`、`fresh_database`、`one_instance_per_cluster`、`outbox_and_tenant_roles`）都略過 |
+| 經檢查佇列：`cargo run --locked -p openapi -- --check` | `api/openapi.json is up to date` |
+| 需要容器的 Rust 測試 | 由推送後 PR CI 的 `rust` job 執行，執行編號由協調者補上。這一輪改到的部分（N3 的 metadata 移除、N4 的帳號查詢）逐步對照了這些測試的預期：fake 宣告的空 Secret、chart 渲染的 Secret 都只有白名單內的 metadata，不會多出報告行；第 6d 步沒有把角色給 migration 帳號，預期不變 |
+
+pre-commit 審查在這一輪擋下三次，都已修正：
+- N3：「patch 就讀得到」的說法不精確。
+- N3：正在刪除的 Secret。
+- 平台角色的防護：原本只檢查 `_platform` 字樣，改為逐項比對 chart 的 Postgres 綁定。
+- N1、N4 與 `--force-replace` 的文件一次就通過。
