@@ -17,12 +17,12 @@
 
 ### 資料表
 
-所有 SQL 都不寫 schema 名稱，資料表落在連線 `search_path` 的第一個 schema，也就是該服務自己的 schema。因此每個服務的資料庫角色要設定 `search_path`（例如 `ALTER ROLE assets SET search_path = assets`）。migration Job 每次部署都執行 `install_producer`（產生事件的服務）與 `install_consumer`（消費事件的服務）；兩者都可重複執行，之後的變更只能以新的冪等語句往後加，不能改既有語句。
+所有 SQL 都不寫 schema 名稱，資料表落在連線 `search_path` 的第一個 schema，也就是該服務自己的 schema。因此每個服務的資料庫角色要設定 `search_path`（例如 `ALTER ROLE assets SET search_path = assets`）。migration Job 每次部署都執行 `install_producer`（產生事件的服務）與 `install_consumer`（消費事件的服務）；兩者都可重複執行，之後的變更只能以新的冪等語句往後加，不能改既有語句。產生端在 `install_producer` 之後還要各執行一次 service-kit 的兩個範本：[`sql/outbox-event.sql`](../service-kit/sql/outbox-event.sql)（`outbox_event` 的 RLS）與 [`sql/outbox-aggregate.sql`](../service-kit/sql/outbox-aggregate.sql)（`outbox_aggregate` 的租戶欄位與 RLS，見[聚合的租戶隔離](#聚合的租戶隔離laysitrustiot-v24132026-10-15)），migration Job 都會做。
 
 | 資料表 | 位置 | 內容 |
 | --- | --- | --- |
 | `outbox_event` | 產生端 | 事件紀錄，只增不改；`tenant_id` 給 RLS 用 |
-| `outbox_aggregate` | 產生端 | 每個聚合最後一筆事件的序號與排序交易 |
+| `outbox_aggregate` | 產生端 | 每個聚合最後一筆事件的序號與排序交易；`tenant_id` 是聚合所屬的租戶（全平台的聚合為 NULL），給 RLS 用 |
 | `outbox_subscription` | 消費端 | 每個訂閱讀到的位置，與它讀的產生端 schema |
 | `outbox_inbox` | 消費端 | 已處理的事件 ID（去重） |
 | `outbox_dead_letter` | 消費端 | 永久失敗、已跳過的事件與原因 |
@@ -40,6 +40,7 @@ tx.commit().await?;
 - `publish` 只接受交易（`&mut Transaction`），不能在交易外寫事件。交易回滾，事件與它的序號一起消失。
 - 每個事件屬於一個聚合（`Aggregate`：種類加 ID，例如 `tenant` 加租戶 ID）。同一聚合的事件依寫入順序送達，不同聚合之間不保證順序。寫入時會鎖住該聚合在 `outbox_aggregate` 的列直到交易結束，同一聚合的寫入因此排隊；`REPEATABLE READ` 以上的隔離層級則會以序列化錯誤失敗，由呼叫端重試整筆交易。
 - `Published::aggregate_seq` 是事件在聚合內的序號（1、2、3…），通知模式拿它當版本。
+- 聚合屬於它的事件的租戶，或屬於平台（全平台事件）：第一筆事件決定。之後別的租戶（或平台角色）為它寫事件，資料庫以 SQLSTATE 42501 拒絕，該聚合的序號不變（見[聚合的租戶隔離](#聚合的租戶隔離laysitrustiot-v24132026-10-15)）。所以聚合 ID 要是服務自己產生、全平台唯一的值（例如 UUID），不能是租戶自己選的值（例如租戶輸入的序號）；要用這種值時，在前面加上租戶 ID。
 
 ### 消費端
 
@@ -200,7 +201,7 @@ tx.commit().await?;
 決策 29 的 RLS 與 `SET LOCAL` 由 Laysi/trustiot-v2#53 實作（service-kit 的 `tenant` 模組；`outbox_event` 的 policy 範本是 [`crates/service-kit/sql/outbox-event.sql`](../service-kit/sql/outbox-event.sql)，說明見 [service-kit README 的 outbox 一節](../service-kit/README.md#outboxcratesoutbox)）。消費端照它讀取與處理（Laysi/trustiot-v2#271，2026-10-11）：
 
 - **產生端**：`publish` 只在呼叫端的交易裡執行兩個語句，不另開交易、不改設定。租戶交易用 `outbox::publish(tx.transaction(), ..., Some(tx.tenant_id()))`（`TenantTransaction::transaction()` 交出同一筆交易，租戶設定不變）；全平台事件由產生端平台角色的 `PlatformTransaction::transaction()` 寫。`outbox_event.tenant_id` 來自信封；`tenant_isolation` policy 的 `WITH CHECK` 讓服務角色只寫得進目前租戶的事件，`platform_events` 讓全平台事件（`tenant_id` 為 NULL）只由產生端的平台角色寫（2026-10-10 決定），restrictive 的 `platform_events_only` 讓平台角色只寫得進全平台事件，即使它的 session 自己設定了租戶（Laysi/trustiot-v2#360，2026-10-12）。插入不使用 `RETURNING`，所以不需要 SELECT policy。
-- **`outbox_aggregate`**：只有聚合種類、ID 與序號，不是租戶資料；產生端兩個角色都需要讀寫它。
+- **`outbox_aggregate`**：聚合的序號與排序交易決定該聚合之後事件的序號與順序，所以是租戶資料（2026-10-15 起，Laysi/trustiot-v2#413）：表有 `tenant_id` 與 RLS，服務角色只讀寫目前租戶的聚合，平台角色只讀寫全平台的聚合，即使它的 session 自己設定了租戶。做法與理由見[聚合的租戶隔離](#聚合的租戶隔離laysitrustiot-v24132026-10-15)。
 - **消費端讀取**：投遞本來就跨租戶，`Consumer` 以消費端服務的**平台角色**讀產生端的 `outbox_event`（範本的 `consumer_read`：`FOR SELECT TO <消費端平台角色> USING (true)`）。`Consumer::new` 以 `PlatformDb::reader(PlatformActor::service(<服務>), "outbox-consumer-read")` 建立讀取端：actor 與 purpose 在建立時以 INFO 記一次（`platform database reader`），之後每秒的輪詢只記 DEBUG；讀取都是 `READ ONLY` 交易，資料庫拒絕任何寫入。讀取（`fetch`、lag、`StartFrom::Latest` 的 horizon）都在這種交易裡，與處理事件的交易分開。
 - **讀取端設錯時不會靜靜讀不到**：`ensure_subscription` 檢查 `outbox_event` 開了 RLS 時，有一條 `USING (true)` 的 permissive SELECT policy 套用到讀取端的角色、而且沒有 restrictive policy；沒有就回 `ConsumerError::CannotReadAllTenants`。否則讀取端角色看不到所有租戶時只會漏讀事件，lag 也是 0，看起來一切正常：例如 policy 只開放全平台事件（`USING (tenant_id IS NULL)`）。讀取端角色有 `SELECT`、卻只有租戶條件（例如用服務角色讀）時，service-kit 先拒絕它的連線（`UnsafeSession::PlatformTenantOnly`，Laysi/trustiot-v2#366），消費端回 `ConsumerError::UnsafeSession`。反過來，把跨租戶讀取開給服務角色時，service-kit 拒絕服務角色的每個連線（`UnsafeSession::PermissivePolicy`），消費端回 `ConsumerError::UnsafeSession`。這些都可由 migration 修正，`is_retryable()` 為真，`run` 會退避重試。
 - **消費端處理**：每個事件一筆**服務角色**的交易，由 service-kit 開在事件的租戶裡：`BackgroundTenantDb::begin(delivery.tenant(), "outbox-delivery")`，第一個陳述就是設定租戶，handler 拿到的 `tx` 是同一筆交易。RLS 讓 handler 只讀得到、寫得進該租戶的列；寫入別的租戶被資料庫以 SQLSTATE 42501 拒絕，依一般資料庫錯誤重試（事件留在原位、lag 上升），不會寫進去。
@@ -233,9 +234,11 @@ tx.commit().await?;
 -- 以 example_app = identity_app、example_platform = identity_platform、
 -- example_reader = 每個消費端的平台角色（例 assets_platform）；它啟用 RLS、建立四條 policy，
 -- 並 GRANT INSERT ON outbox_event TO identity_app, identity_platform、
--- GRANT SELECT ON outbox_event TO assets_platform
+-- GRANT SELECT ON outbox_event TO assets_platform。
+-- 接著執行 sql/outbox-aggregate.sql（同樣的 example_app、example_platform）：它加上
+-- outbox_aggregate.tenant_id、啟用 RLS、建立三條 policy，
+-- 並 GRANT SELECT, INSERT, UPDATE ON outbox_aggregate TO identity_app, identity_platform
 GRANT USAGE ON SCHEMA identity TO identity_app, identity_platform;
-GRANT SELECT, INSERT, UPDATE ON identity.outbox_aggregate TO identity_app, identity_platform;
 
 -- 消費端（例：assets 讀 identity 的事件）
 GRANT USAGE ON SCHEMA identity TO assets_platform;   -- 平台角色只讀得到 outbox_event
@@ -247,6 +250,40 @@ ALTER ROLE assets_app SET search_path = assets;      -- 消費端的表在服務
 ```
 
 消費端的平台角色看不到產生端的其他資料表，也不能寫產生端的事件（讀取交易是 `READ ONLY`，也沒有寫入權限）；消費端的服務角色完全碰不到產生端的 schema。例外是服務消費自己的事件時：消費端的平台角色就是產生端的平台角色，有 `outbox_event` 的 INSERT 權限，但 `platform_events_only` 只讓它寫全平台事件（`tenant_id IS NULL`），即使它的 session 自己設定了租戶也寫不進租戶事件。
+
+### 聚合的租戶隔離（Laysi/trustiot-v2#413，2026-10-15）
+
+**問題**：`outbox_aggregate` 記錄每個聚合最後一筆事件的序號（`last_seq`）與排序交易（`last_tx`），產生端兩個角色原本都能直接 `SELECT`、`INSERT`、`UPDATE`，表沒有 RLS。身分服務成為產生端（Laysi/trustiot-v2#65）之後，聚合是 `tenant` 加租戶 ID，所以 `identity_app` 能列出每個租戶的 ID，也能改別的租戶聚合的 `last_seq`、`last_tx`，影響那個租戶之後事件的序號（通知模式的版本）與排序。
+
+**做法：租戶欄位加 RLS**（service-kit 的 [`sql/outbox-aggregate.sql`](../service-kit/sql/outbox-aggregate.sql)）：
+
+- `outbox_aggregate.tenant_id uuid`：聚合所屬的租戶，全平台的聚合（全平台事件的聚合）為 NULL。`publish` 寫入時帶信封的租戶，與 `outbox_event.tenant_id` 同一個值；只有第一筆事件寫進去，之後的事件不改它。
+- RLS 與 `outbox_event` 同一套：`tenant_isolation`（所有角色，`USING` 與 `WITH CHECK` 一字不差是決策 29 的租戶條件，連線檢查認得它）讓服務角色只讀寫目前租戶的聚合，沒有租戶時一列都看不到；`platform_aggregates`（`TO` 產生端平台角色，`tenant_id IS NULL`，FOR ALL，因為 upsert 要讀回、插入、更新）讓平台角色讀寫全平台的聚合；restrictive 的 `platform_aggregates_only` 讓平台角色即使自己設定了租戶，也碰不到任何租戶的聚合（同 Laysi/trustiot-v2#360 的理由）。權限是 `SELECT, INSERT, UPDATE`，沒有 `DELETE`（序號不能重來）、不給 `TRUNCATE`。
+- **主鍵不變**，仍是 `(aggregate_type, aggregate_id)`，不加租戶：一個聚合只有一個序號、一個列鎖。`outbox_event` 的 `UNIQUE (aggregate_type, aggregate_id, aggregate_seq)`、消費端 `outbox_version` 的鍵、通知模式的版本都以聚合種類加 ID 識別聚合。別的租戶為同一個聚合寫事件時，`publish` 的 upsert 撞到既有的列，Postgres 以 `UPDATE` policy 的 `USING` 檢查那一列，不符就以 42501 拒絕（不是略過），所以不會開出第二個序號，也不會推進原本的序號。
+- **聚合內有序不變**：`publish` 的語句只多了 `tenant_id` 一欄，同一聚合的寫入仍以該列的鎖排隊，`last_tx` 照舊帶著排序交易往前；[順序與不漏讀](#順序與不漏讀)的推論不受影響（測試 `an_aggregate_keeps_its_order_when_transaction_ids_are_inverted` 照舊通過）。
+- **欄位與它的 policy 在同一筆交易出現**，所以欄位放在範本裡，不放進 `PRODUCER_DDL`：service-kit 對「能用、有 `tenant_id` 欄、但沒開 RLS」的表會拒絕角色的每個連線（`UnprotectedTable`），欄位若先在 `install_producer` 的交易 commit，範本之前（或範本失敗時）服務角色就連不上。代價是只跑 `install_producer`、不跑範本的產生端，`publish` 會因為沒有這個欄位失敗；migration Job 一定兩者都跑，測試的 `Database::setup` 也是。
+
+**升級**（已經跑過舊版 Job 的資料庫）：範本是新檔案，Job 在下一次執行時套用它一次（記在 `trustiot_migrate.applied`，component `<服務>.outbox`），既有的 `outbox-event.sql` 沒改，所以「已套用的檔案不再修改」的規則照舊成立。範本在同一筆交易裡：
+
+1. 加上 `tenant_id`，把每個既有聚合設成它**最後一筆事件**的租戶（以 `outbox_event` 的 `UNIQUE (aggregate_type, aggregate_id, aggregate_seq)` 對到 `last_seq`；執行範本的 owner 角色不受 RLS 限制）。`publish` 一定在同一筆交易寫聚合與事件，所以每個聚合都找得到最後一筆事件；找不到的（只有手動寫入才會有）維持 NULL，成為全平台的聚合。
+2. 回填之後才設預設值 `NULLIF(current_setting('trustiot.tenant_id', true), '')::uuid`：還在跑舊版程式的 pod（滾動更新期間）寫新聚合時不帶 `tenant_id`，拿到交易的租戶，正好是 RLS 接受的值，所以不會失敗；既有的列不受預設值影響。
+3. 啟用 RLS、建立三條 policy、授權。
+
+升級期間（範本那筆交易持有 `outbox_aggregate` 的鎖）寫事件的交易會等它結束。`tools/migrate/tests/outbox_and_tenant_roles.rs` 把 schema 改回舊版的樣子、放進舊版寫的事件後再跑 Job，確認只套用這個檔案、每個聚合拿到最後一筆事件的租戶、下一次執行沒有變更。
+
+**不採用的做法**：
+
+| 做法 | 不採用的原因 |
+| --- | --- |
+| `SECURITY DEFINER` 函式推進序號，服務角色不直接讀寫這張表 | service-kit 的連線檢查拒絕能執行別的角色擁有的 `SECURITY DEFINER` 函式的連線（決策 29 的實作細節，Laysi/trustiot-v2#381），要放寬就是改決策 29 的規則；tools/migrate 的 migration 規則也不允許建這種函式。函式以 owner 的權限執行，不受任何 RLS 限制，寫錯一處就是跨租戶；它能依據的租戶也只有 `trustiot.tenant_id`，而服務角色自己就改得了這個設定（決策 29 的威脅模型），保證不會比 RLS 強。`aggregate_version` 也得再寫一個函式，跨租戶負向測試框架也測不到函式 |
+| 租戶欄位加進主鍵（每個租戶各自的聚合空間） | 兩個租戶的同一個聚合種類加 ID 會各有一個從 1 開始的序號，撞上 `outbox_event` 的 `UNIQUE (aggregate_type, aggregate_id, aggregate_seq)` 與消費端以種類加 ID 為鍵的 `outbox_version`；要改這些就改了「聚合」的意義與通知模式的版本。聚合本來就只屬於一個擁有者 |
+| 不要 `outbox_aggregate`，序號改由 `outbox_event` 算（`max(aggregate_seq)` 加 advisory lock） | 改了聚合內排序的機制（列鎖換成 advisory lock、`REPEATABLE READ` 下的失敗由序列化錯誤變成唯一鍵衝突），超出這個 issue 的範圍（不改順序保證）；服務角色也得拿到讀自己租戶事件的權限 |
+
+**限制**：
+
+- 唯一鍵看得出列存在：別的租戶為一個已存在的聚合寫事件時得到 42501，而不是成功，所以知道種類加 ID 的人能確認「這個聚合在別的租戶存在」，看不到序號與租戶。`outbox_event` 的唯一鍵與每張表的主鍵本來就有同樣的性質；聚合 ID 照上面的規則由服務產生，租戶選不了它。
+- 那次被拒的 upsert 在檢查前會先鎖住既有的列，所以它會等那個聚合進行中的寫入結束，而它自己的交易在回滾前一直持有那個鎖。這只會讓同一聚合的寫入多等一下，不會改序號；而且只發生在服務程式為別的租戶的聚合 ID 寫事件時（程式錯誤）。
+- 表的擁有者（migration 角色）與 superuser 不受 RLS 限制，測試以 superuser 寫的事件不檢查聚合的租戶。
 
 ### 長寫入交易與 prepared transaction
 
@@ -281,7 +318,7 @@ ALTER ROLE assets_app SET search_path = assets;      -- 消費端的表在服務
 | `cargo test -p outbox --lib` | 聚合、位置、設定的檢查；lag 量測過期或量測迴圈結束後指標不再回報 |
 | `cargo test -p outbox --test producer` | 回滾不留事件、聚合序號、同一信封只能寫一次 |
 | `cargo test -p outbox --test delivery` | 交易 ID 反轉時仍依序、晚 commit 的事件不漏、並行寫入（兩個租戶）加兩個副本每個事件只處理一次、重複投遞跳過、重播後狀態相同、重試與死信、`begin` 在同一交易、未寫入的 handler 不拖住其他訂閱、收尾時只做完進行中的事件、lag、`StartFrom::Latest`、最小權限（產生端以租戶交易與平台角色寫事件） |
-| `cargo test -p outbox --test tenancy` | 平台角色在 RLS 下讀到兩個租戶與全平台的事件、每個事件在自己的租戶處理且看不到別的租戶；handler 寫別的租戶被拒（42501）；服務角色被開放跨租戶讀取時連線被拒、讀取端只有租戶條件時連線被拒（`PlatformTenantOnly`）、讀取端的 policy 看不到所有租戶時停下（`CannotReadAllTenants`）；信封租戶與 log 列不符時進死信 |
+| `cargo test -p outbox --test tenancy` | 平台角色在 RLS 下讀到兩個租戶與全平台的事件、每個事件在自己的租戶處理且看不到別的租戶；handler 寫別的租戶被拒（42501）；服務角色被開放跨租戶讀取時連線被拒、讀取端只有租戶條件時連線被拒（`PlatformTenantOnly`）、讀取端的 policy 看不到所有租戶時停下（`CannotReadAllTenants`）；信封租戶與 log 列不符時進死信；產生端的服務角色在租戶交易裡看不到、也改不了別的租戶與全平台的聚合（讀取、`aggregate_version`、直接 `UPDATE`、插入、搬移、`publish` 都被拒或讀不到，42501），平台角色只碰得到全平台的聚合，被拒之後每個聚合都沒變，原租戶的序號接著往下（Laysi/trustiot-v2#413） |
 | `cargo test -p outbox --test verify_271` | Laysi/trustiot-v2#271 的獨立驗證（[報告](../../docs/test-reports/2026-10-11-271-verify.md)）：handler 以角色、RLS 手法離開租戶都失敗；改租戶、自己 `COMMIT` 的投遞進死信；session 層級的租戶不會帶進下一個交易；`PlatformReader` 的唯讀解除不了；怪異的租戶 ID、角色設錯、設定錯誤、三個副本加並行寫入、資料庫重啟；`f5_`：handler panic 之後 `run` 繼續處理，lag 持續更新（Laysi/trustiot-v2#333 修正） |
 | `cargo test -p outbox --test handler_panic` | Laysi/trustiot-v2#333：`begin`、`handle` panic 一次時回滾並重試、之後只處理一次；一直 panic 的事件第 3 次進死信、之後的事件照常處理；`run` 遇到 panic 不停、lag 持續更新、停止後不再回報；`begin` 或 `handle` 自己 `COMMIT` 後 panic（或 `begin` 回錯誤）時直接進死信、不重試；陳述還在執行時 panic，同一條連線之後乾淨可用（無租戶、無殘留寫入）；處理卡住時 lag 與 age 上升、`run` 被 drop 後不再回報；量測卡住（log 被鎖）超過 3 個間隔後不再回報、解鎖後恢復 |
 | `cargo test -p outbox --test failure_paths` | Laysi/trustiot-v2#350：`begin`、`handle` 回永久或可重試的錯誤時，消費端下一次取連線前，失敗那次投遞的交易與 advisory lock 已經結束（查 `pg_locks`），handler 的呼叫次數剛好、沒有 `Busy`；`begin` 自己 `COMMIT` 或改租戶後回 `Ok`，重複投遞與第一次投遞都進死信，`handle` 不在被破壞的交易裡執行 |

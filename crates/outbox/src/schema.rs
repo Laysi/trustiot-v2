@@ -11,9 +11,16 @@ use sqlx::PgConnection;
 ///
 /// - `outbox_aggregate` holds, per aggregate, the last sequence number and the ordering
 ///   transaction of its last event. Writing an event updates this row, which serializes the
-///   writers of one aggregate and carries the order forward (see the README).
+///   writers of one aggregate and carries the order forward (see the README). Its `tenant_id`
+///   column is not here: it comes with its row-level security in service-kit's
+///   `sql/outbox-aggregate.sql`, in one transaction, because service-kit refuses the sessions of
+///   a role that may use a table with a `tenant_id` column and no row-level security
+///   (Laysi/trustiot-v2#413). [`crate::publish`] needs that column.
 /// - `outbox_event` is the append-only log. `tenant_id` duplicates the envelope's tenant so the
 ///   row-level security policies of decision 29 can filter on it.
+///
+/// A producer runs [`install_producer`], then service-kit's `sql/outbox-event.sql` and
+/// `sql/outbox-aggregate.sql` once each with its roles; the migration job does all three.
 pub const PRODUCER_DDL: &str = r"
 CREATE TABLE IF NOT EXISTS outbox_aggregate (
     aggregate_type text NOT NULL,

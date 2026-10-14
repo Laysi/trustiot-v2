@@ -1,6 +1,7 @@
-//! The outbox wiring (crates/outbox, crates/service-kit/sql/outbox-event.sql) and the per-tenant
-//! role hook, with a test registry: a producer, its consumers, and a hook over the producer's
-//! tenant table. The product has no producer yet (Laysi/trustiot-v2#65 adds the first).
+//! The outbox wiring (crates/outbox, crates/service-kit/sql/outbox-event.sql and
+//! outbox-aggregate.sql) and the per-tenant role hook, with a test registry: a producer, its
+//! consumers, and a hook over the producer's tenant table. It also upgrades a producer schema
+//! from before outbox-aggregate.sql (Laysi/trustiot-v2#413).
 //!
 //! Needs podman or docker; skipped without one unless `CI` is set.
 
@@ -87,6 +88,41 @@ const LOGIN_ROLES: [&str; 6] = [
 
 const POLICIES: &str = "SELECT polname::text FROM pg_policy
 WHERE polrelid = 'obx_producer.outbox_event'::regclass ORDER BY 1";
+const AGGREGATE_POLICIES: &str = "SELECT polname::text FROM pg_policy
+WHERE polrelid = 'obx_producer.outbox_aggregate'::regclass ORDER BY 1";
+const AGGREGATE_RLS: &str =
+    "SELECT relrowsecurity FROM pg_class WHERE oid = 'obx_producer.outbox_aggregate'::regclass";
+/// Every aggregate with its tenant, as the superuser sees them.
+const AGGREGATE_TENANTS: &str = "SELECT aggregate_type || '/' || aggregate_id, tenant_id::text
+FROM obx_producer.outbox_aggregate ORDER BY 1";
+/// What the producer's service role sees outside a tenant transaction.
+const VISIBLE_AGGREGATES: &str = "SELECT count(*) FROM obx_producer.outbox_aggregate";
+/// Turns the producer schema back into what the Job left before outbox-aggregate.sql existed
+/// (Laysi/trustiot-v2#413): `outbox_aggregate` without the tenant column, its policies, or
+/// row-level security, and the file not recorded. The grants stay, as the Job's
+/// `PRODUCER_GRANTS` gave them then.
+const BEFORE_THE_AGGREGATE_TEMPLATE: &str = "
+DROP POLICY tenant_isolation ON obx_producer.outbox_aggregate;
+DROP POLICY platform_aggregates ON obx_producer.outbox_aggregate;
+DROP POLICY platform_aggregates_only ON obx_producer.outbox_aggregate;
+ALTER TABLE obx_producer.outbox_aggregate DISABLE ROW LEVEL SECURITY;
+ALTER TABLE obx_producer.outbox_aggregate DROP COLUMN tenant_id;
+DELETE FROM trustiot_migrate.applied
+WHERE component = 'obx-producer.outbox' AND name = 'outbox-aggregate.sql';
+";
+/// What a producer on that version wrote: events of tenant A's and tenant B's aggregates and a
+/// platform-wide one, each aggregate's sequence without a tenant.
+const OLD_EVENTS: &str = "
+INSERT INTO obx_producer.outbox_event
+    (tx_order, event_id, event_type, tenant_id, aggregate_type, aggregate_id, aggregate_seq, envelope)
+VALUES
+    (1, gen_random_uuid(), 'test.event', '00000000-0000-0000-0000-00000000000a', 'widget', 'a', 1, '{}'),
+    (2, gen_random_uuid(), 'test.event', '00000000-0000-0000-0000-00000000000a', 'widget', 'a', 2, '{}'),
+    (3, gen_random_uuid(), 'test.event', '00000000-0000-0000-0000-00000000000b', 'widget', 'b', 1, '{}'),
+    (4, gen_random_uuid(), 'test.event', NULL, 'catalog', 'c', 1, '{}');
+INSERT INTO obx_producer.outbox_aggregate (aggregate_type, aggregate_id, last_seq, last_tx) VALUES
+    ('widget', 'a', 2, 2), ('widget', 'b', 1, 3), ('catalog', 'c', 1, 4);
+";
 const READERS: &str = "SELECT ARRAY(SELECT rolname::text FROM pg_roles r JOIN pg_policy p
     ON r.oid = ANY (p.polroles)
     WHERE p.polrelid = 'obx_producer.outbox_event'::regclass AND p.polname = 'consumer_read'
@@ -138,6 +174,13 @@ async fn readers(admin: &mut PgConnection) -> Vec<String> {
         .expect("read the readers")
 }
 
+async fn aggregate_policies(admin: &mut PgConnection) -> Vec<String> {
+    sqlx::query_scalar(AGGREGATE_POLICIES)
+        .fetch_all(admin)
+        .await
+        .expect("read the aggregate policies")
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn outbox_wiring_and_tenant_roles() {
     let Some(postgres) = tls_postgres(MIGRATOR_INIT).await else {
@@ -177,6 +220,15 @@ async fn outbox_wiring_and_tenant_roles() {
         "the outbox-event.sql template, as it is on main"
     );
     assert_eq!(readers(&mut admin).await, ["obx_consumer_platform"]);
+    assert_eq!(
+        aggregate_policies(&mut admin).await,
+        [
+            "platform_aggregates",
+            "platform_aggregates_only",
+            "tenant_isolation"
+        ],
+        "the outbox-aggregate.sql template"
+    );
     for (schema, table, owner) in [
         ("obx_producer", "outbox_event", "obx_producer_owner"),
         ("obx_producer", "outbox_aggregate", "obx_producer_owner"),
@@ -197,6 +249,76 @@ async fn outbox_wiring_and_tenant_roles() {
         .expect("read the consumer's grants");
     assert!(writes, "the consumer's service role writes its inbox");
     check_sessions(&db, &passwords(&LOGIN_ROLES[..4])).await;
+
+    // 1b. A database that ran the Job before outbox-aggregate.sql existed, with aggregates in
+    //     it (Laysi/trustiot-v2#413): the next run applies the new file and only that, gives
+    //     every aggregate the tenant of its last event, and the run after it changes nothing.
+    //     outbox-event.sql, applied before, is not applied again.
+    sqlx::raw_sql(BEFORE_THE_AGGREGATE_TEMPLATE)
+        .execute(&mut admin)
+        .await
+        .expect("the producer schema before outbox-aggregate.sql");
+    sqlx::raw_sql(OLD_EVENTS)
+        .execute(&mut admin)
+        .await
+        .expect("events of the version before outbox-aggregate.sql");
+    assert!(aggregate_policies(&mut admin).await.is_empty());
+    let report = migrate::run(&db.config(MIGRATOR), &ONE_CONSUMER)
+        .await
+        .expect("the run on the database from before outbox-aggregate.sql");
+    assert_eq!(
+        report.changes,
+        ["applied obx-producer.outbox/outbox-aggregate.sql"]
+    );
+    let tenants: Vec<(String, Option<String>)> = sqlx::query_as(AGGREGATE_TENANTS)
+        .fetch_all(&mut admin)
+        .await
+        .expect("read the aggregates");
+    assert_eq!(
+        tenants,
+        [
+            ("catalog/c".to_owned(), None),
+            (
+                "widget/a".to_owned(),
+                Some("00000000-0000-0000-0000-00000000000a".to_owned())
+            ),
+            (
+                "widget/b".to_owned(),
+                Some("00000000-0000-0000-0000-00000000000b".to_owned())
+            ),
+        ],
+        "each aggregate has the tenant of its last event"
+    );
+    let rls: bool = sqlx::query_scalar(AGGREGATE_RLS)
+        .fetch_one(&mut admin)
+        .await
+        .expect("read the table");
+    assert!(rls, "row-level security on outbox_aggregate");
+    assert_eq!(
+        aggregate_policies(&mut admin).await,
+        [
+            "platform_aggregates",
+            "platform_aggregates_only",
+            "tenant_isolation"
+        ]
+    );
+    check_sessions(&db, &passwords(&LOGIN_ROLES[..4])).await;
+    let mut app = db
+        .connect_with_password("obx_producer_app", &db.password("obx_producer_app"))
+        .await
+        .expect("obx_producer_app logs in");
+    let visible: i64 = sqlx::query_scalar(VISIBLE_AGGREGATES)
+        .fetch_one(&mut app)
+        .await
+        .expect("read as the service role");
+    assert_eq!(visible, 0, "no aggregate without a tenant");
+    app.close().await.expect("close");
+    let before = snapshot(&db).await;
+    let report = migrate::run(&db.config(MIGRATOR), &ONE_CONSUMER)
+        .await
+        .expect("the repeated run");
+    assert!(report.changes.is_empty(), "{:?}", report.changes);
+    assert_eq!(snapshot(&db).await, before);
 
     // 2. A second consumer joins: the policy names both, and both read the events.
     for role in &LOGIN_ROLES[4..] {

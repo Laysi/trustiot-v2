@@ -293,7 +293,8 @@ impl Database {
     ///
     /// - The tables belong to the superuser, the migration role.
     /// - `<producer>_app` and `<producer>_platform` are the producer's service and platform
-    ///   roles; `outbox_event` has row-level security from service-kit's template.
+    ///   roles; `outbox_event` and `outbox_aggregate` have row-level security from service-kit's
+    ///   templates.
     /// - `<consumer>_app` is the consumer's service role. Its `search_path` is the consumer
     ///   schema, and it may use every table created there (default privileges).
     /// - `<consumer>_platform` is the consumer's platform role, the only one the template's
@@ -345,6 +346,15 @@ impl Database {
             .execute(&mut *conn)
             .await
             .expect("row-level security on outbox_event");
+        // And then the template for the aggregates' tenant column and row-level security
+        // (Laysi/trustiot-v2#413), which grants both producer roles what `publish` needs.
+        let template = include_str!("../../../service-kit/sql/outbox-aggregate.sql")
+            .replace("example_app", &producer_role)
+            .replace("example_platform", &producer_platform);
+        sqlx::raw_sql(AssertSqlSafe(template))
+            .execute(&mut *conn)
+            .await
+            .expect("row-level security on outbox_aggregate");
         drop(conn);
         let mut conn = consumer.acquire().await.expect("consumer connection");
         outbox::schema::install_consumer(&mut conn)
@@ -358,12 +368,11 @@ impl Database {
             .await
             .expect("consumer business tables");
         drop(conn);
-        // The grants of the outbox README (the template grants INSERT on outbox_event to the
-        // producer's roles and SELECT to the consumer's platform role).
+        // The grants of the outbox README (the templates grant INSERT on outbox_event and
+        // SELECT, INSERT, UPDATE on outbox_aggregate to the producer's roles, and SELECT on
+        // outbox_event to the consumer's platform role).
         self.admin_sql(format!(
             "GRANT USAGE ON SCHEMA {ps} TO {producer_role}, {producer_platform}; \
-             GRANT SELECT, INSERT, UPDATE ON {ps}.outbox_aggregate \
-                 TO {producer_role}, {producer_platform}; \
              GRANT SELECT, INSERT, UPDATE, DELETE ON {ps}.widget TO {producer_role}; \
              GRANT USAGE ON SCHEMA {cs} TO {consumer_role}; \
              GRANT USAGE ON SCHEMA {ps} TO {consumer_platform};"

@@ -7,18 +7,24 @@
 //!   handler sees and writes only that tenant's rows, and a platform-wide event's handler none;
 //! - a service role that a policy lets read across tenants is refused by service-kit, and a
 //!   reader without the read policy stops the consumer instead of reading nothing;
-//! - an event whose envelope names another tenant than its log row is never processed.
+//! - an event whose envelope names another tenant than its log row is never processed;
+//! - the producer's roles reach only their own aggregates in `outbox_aggregate`: another
+//!   tenant's sequence can be neither read nor advanced (Laysi/trustiot-v2#413).
 
 mod support;
 
 use std::error::Error as _;
 use std::time::Duration;
 
-use contract::TenantId;
+use contract::{ServiceName, TenantId};
 use outbox::{
     Aggregate, ConsumerConfig, ConsumerError, Delivery, Handler, HandlerError, Outcome, Position,
+    PublishError, Published,
 };
+use service_kit::identity::ServiceIdentity;
 use service_kit::postgres::UnsafeSession;
+use service_kit::tenant::{BackgroundTenantDb, PlatformActor, PlatformDb, TenantDb};
+use sqlx::postgres::PgPoolOptions;
 use sqlx::{Postgres, Transaction};
 use support::{Counted, Recorder, Setup, TENANT_A, TENANT_B, database, drain, tenant};
 
@@ -49,7 +55,7 @@ async fn create_tables(setup: &Setup) {
 }
 
 /// Writes `Counted { n }` as an event of `tenant` (platform-wide for `None`), as the superuser.
-async fn publish(setup: &Setup, aggregate: &str, tenant: Option<TenantId>) -> outbox::Published {
+async fn publish(setup: &Setup, aggregate: &str, tenant: Option<TenantId>) -> Published {
     let mut tx = setup.producer.begin().await.expect("begin");
     let published = outbox::publish(
         &mut tx,
@@ -375,4 +381,266 @@ async fn an_event_whose_envelope_names_another_tenant_is_dead_lettered() {
         .await
         .expect("seen");
     assert_eq!(seen, [consistent.event_id.to_string()]);
+}
+
+/// Every aggregate as the superuser sees it: kind/id, tenant, last sequence number and ordering
+/// transaction.
+const ALL_AGGREGATES: &str = "SELECT aggregate_type || '/' || aggregate_id, tenant_id::text, \
+     last_seq, last_tx FROM outbox_aggregate ORDER BY 1";
+/// The aggregates a role sees.
+const VISIBLE_AGGREGATES: &str =
+    "SELECT aggregate_type || '/' || aggregate_id FROM outbox_aggregate ORDER BY 1";
+/// Rewinds an aggregate's sequence, as a service role that wanted to reorder another tenant's
+/// later events would.
+const REWIND_AGGREGATE: &str = "UPDATE outbox_aggregate SET last_seq = 0, last_tx = 0 \
+     WHERE aggregate_type = $1 AND aggregate_id = $2";
+/// Creates an aggregate of the tenant `$1` (or of the platform) directly, without an event.
+const PLANT_AGGREGATE: &str = "INSERT INTO outbox_aggregate \
+     (aggregate_type, aggregate_id, tenant_id, last_seq, last_tx) \
+     VALUES ('widget', 'planted', $1, 1, 0)";
+/// Moves every aggregate the role sees into the tenant `$1`.
+const MOVE_AGGREGATES: &str = "UPDATE outbox_aggregate SET tenant_id = $1";
+/// The ordering transactions of an aggregate's events, in sequence order.
+const EVENT_ORDER: &str = "SELECT tx_order FROM outbox_event \
+     WHERE aggregate_type = $1 AND aggregate_id = $2 ORDER BY aggregate_seq";
+
+/// One aggregate as [`ALL_AGGREGATES`] reads it.
+type AggregateRow = (String, Option<String>, i64, i64);
+
+/// The SQLSTATE of a database error.
+fn code(error: &sqlx::Error) -> Option<String> {
+    error
+        .as_database_error()
+        .and_then(|error| error.code())
+        .map(|code| code.into_owned())
+}
+
+/// The SQLSTATE of the database error behind a failed publish.
+fn publish_code(error: &PublishError) -> Option<String> {
+    match error {
+        PublishError::Database(error) => code(error),
+        _ => None,
+    }
+}
+
+/// Publishes `Counted { n }` for `aggregate` in a transaction of the producer's service role in
+/// `tenant`; commits on success and rolls back on failure.
+async fn publish_in(
+    service: &BackgroundTenantDb,
+    tenant: TenantId,
+    aggregate: &Aggregate,
+    n: i64,
+) -> Result<Published, PublishError> {
+    let mut tx = service.begin(tenant, "publish-test").await.expect("begin");
+    match outbox::publish(tx.transaction(), aggregate, &Counted { n }, Some(tenant)).await {
+        Ok(published) => {
+            tx.commit().await.expect("commit");
+            Ok(published)
+        }
+        Err(error) => {
+            tx.rollback().await.expect("rollback");
+            Err(error)
+        }
+    }
+}
+
+/// Publishes `Counted { n }` for `aggregate` with `tenant` as the producer's platform role, which
+/// sets no tenant; commits on success and rolls back on failure.
+async fn publish_as_platform(
+    platform: &PlatformDb,
+    aggregate: &Aggregate,
+    tenant: Option<TenantId>,
+    n: i64,
+) -> Result<Published, PublishError> {
+    let actor = PlatformActor::service(ServiceIdentity::new(ServiceName::Assets));
+    let mut tx = platform.begin(actor, "publish-test").await.expect("begin");
+    match outbox::publish(tx.transaction(), aggregate, &Counted { n }, tenant).await {
+        Ok(published) => {
+            tx.commit().await.expect("commit");
+            Ok(published)
+        }
+        Err(error) => {
+            tx.rollback().await.expect("rollback");
+            Err(error)
+        }
+    }
+}
+
+/// Laysi/trustiot-v2#413: `outbox_aggregate` holds each aggregate's sequence and ordering
+/// transaction. Under service-kit's `sql/outbox-aggregate.sql`, the producer's service role in a
+/// tenant transaction neither reads nor changes another tenant's aggregate, through `publish`,
+/// `aggregate_version` or plain SQL, and the producer's platform role reaches platform
+/// aggregates only. The refused attempts leave every row as it was, and the owner tenant's
+/// sequence and order go on where they were.
+#[tokio::test]
+async fn the_producer_roles_reach_only_their_own_aggregates() {
+    let Some(database) = database().await else {
+        return;
+    };
+    let setup = database.setup().await;
+    let (_, service) = TenantDb::connect_lazy_with_background(
+        database.postgres.options(&setup.producer_role),
+        PgPoolOptions::new().max_connections(1),
+        ServiceIdentity::new(ServiceName::Assets),
+    )
+    .expect("verify-full options");
+    let platform = PlatformDb::connect_lazy(
+        database.postgres.options(&setup.producer_platform),
+        PgPoolOptions::new().max_connections(1),
+    )
+    .expect("verify-full options");
+    let (a, b) = (tenant(TENANT_A), tenant(TENANT_B));
+    let of_a = Aggregate::new("widget", "of-a").expect("aggregate");
+    let of_b = Aggregate::new("widget", "of-b").expect("aggregate");
+    let catalog = Aggregate::new("catalog", "shared").expect("aggregate");
+
+    // Each aggregate's first event: tenant A's, tenant B's, and a platform-wide one.
+    let first = publish_in(&service, a, &of_a, 1).await.expect("A's event");
+    assert_eq!(first.aggregate_seq, 1);
+    publish_in(&service, b, &of_b, 2).await.expect("B's event");
+    publish_as_platform(&platform, &catalog, None, 3)
+        .await
+        .expect("a platform-wide event");
+    let before: Vec<AggregateRow> = sqlx::query_as(ALL_AGGREGATES)
+        .fetch_all(&setup.producer)
+        .await
+        .expect("read the aggregates");
+    assert_eq!(
+        before
+            .iter()
+            .map(|(name, tenant, ..)| (name.as_str(), tenant.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("catalog/shared", None),
+            ("widget/of-a", Some(TENANT_A)),
+            ("widget/of-b", Some(TENANT_B)),
+        ],
+        "each aggregate belongs to the tenant of its first event, or to the platform"
+    );
+
+    // Tenant B's transaction sees its own aggregate only, reads the others' versions as absent,
+    // and changes nothing of A's or the platform's.
+    let mut tx = service.begin(b, "probe").await.expect("begin");
+    let visible: Vec<String> = sqlx::query_scalar(VISIBLE_AGGREGATES)
+        .fetch_all(&mut *tx)
+        .await
+        .expect("read as B");
+    assert_eq!(visible, ["widget/of-b"], "B sees its own aggregate only");
+    for aggregate in [&of_a, &catalog] {
+        let version = outbox::aggregate_version(&mut tx, aggregate)
+            .await
+            .expect("aggregate version as B");
+        assert_eq!(version, None, "B reads {aggregate}'s version as absent");
+        let rewound = sqlx::query(REWIND_AGGREGATE)
+            .bind(aggregate.kind())
+            .bind(aggregate.id())
+            .execute(&mut *tx)
+            .await
+            .expect("an update that finds no row");
+        assert_eq!(rewound.rows_affected(), 0, "B cannot rewind {aggregate}");
+    }
+    tx.rollback().await.expect("rollback");
+    for (case, owner) in [("tenant A", Some(a)), ("the platform", None)] {
+        let mut tx = service.begin(b, "probe").await.expect("begin");
+        let error = sqlx::query(PLANT_AGGREGATE)
+            .bind(owner.map(|owner| *owner.as_uuid()))
+            .execute(&mut *tx)
+            .await
+            .expect_err("B plants an aggregate");
+        assert_eq!(code(&error).as_deref(), Some("42501"), "{case}: {error}");
+        tx.rollback().await.expect("rollback");
+        println!("tenant B creating an aggregate of {case}: refused ({error})");
+    }
+    let mut tx = service.begin(b, "probe").await.expect("begin");
+    let error = sqlx::query(MOVE_AGGREGATES)
+        .bind(a.as_uuid())
+        .execute(&mut *tx)
+        .await
+        .expect_err("B moves its aggregate into A");
+    assert_eq!(code(&error).as_deref(), Some("42501"), "{error}");
+    tx.rollback().await.expect("rollback");
+    println!("tenant B moving its aggregate into tenant A: refused ({error})");
+    for aggregate in [&of_a, &catalog] {
+        let error = publish_in(&service, b, aggregate, 4)
+            .await
+            .expect_err("B's event for an aggregate that is not B's");
+        assert_eq!(
+            publish_code(&error).as_deref(),
+            Some("42501"),
+            "{aggregate}: {error}"
+        );
+        println!("tenant B publishing for {aggregate}: refused ({error})");
+    }
+
+    // Outside a tenant, the service role sees no aggregate at all.
+    let mut tx = service
+        .begin_without_tenant("probe")
+        .await
+        .expect("begin without a tenant");
+    let visible: Vec<String> = sqlx::query_scalar(VISIBLE_AGGREGATES)
+        .fetch_all(&mut *tx)
+        .await
+        .expect("read without a tenant");
+    assert!(visible.is_empty(), "without a tenant: {visible:?}");
+    tx.rollback().await.expect("rollback");
+
+    // The platform role sees and writes platform aggregates only.
+    let actor = PlatformActor::service(ServiceIdentity::new(ServiceName::Assets));
+    let mut tx = platform.begin(actor, "probe").await.expect("begin");
+    let visible: Vec<String> = sqlx::query_scalar(VISIBLE_AGGREGATES)
+        .fetch_all(&mut *tx)
+        .await
+        .expect("read as the platform role");
+    assert_eq!(visible, ["catalog/shared"], "the platform role");
+    let version = outbox::aggregate_version(&mut tx, &of_a)
+        .await
+        .expect("aggregate version as the platform role");
+    assert_eq!(
+        version, None,
+        "the platform role reads A's version as absent"
+    );
+    tx.rollback().await.expect("rollback");
+    let error = publish_as_platform(&platform, &of_a, None, 5)
+        .await
+        .expect_err("a platform-wide event for A's aggregate");
+    assert_eq!(publish_code(&error).as_deref(), Some("42501"), "{error}");
+    println!("the platform role publishing for widget/of-a: refused ({error})");
+    let new = Aggregate::new("widget", "new").expect("aggregate");
+    let error = publish_as_platform(&platform, &new, Some(a), 6)
+        .await
+        .expect_err("the platform role writes no tenant's aggregate");
+    assert_eq!(publish_code(&error).as_deref(), Some("42501"), "{error}");
+    println!("the platform role publishing a tenant A event: refused ({error})");
+
+    // Every refused attempt left every aggregate as it was.
+    let after: Vec<AggregateRow> = sqlx::query_as(ALL_AGGREGATES)
+        .fetch_all(&setup.producer)
+        .await
+        .expect("read the aggregates");
+    assert_eq!(after, before, "the refused attempts changed no aggregate");
+
+    // Tenant A's sequence and order go on where they were.
+    let second = publish_in(&service, a, &of_a, 7).await.expect("A's event");
+    assert_eq!(second.aggregate_seq, 2, "A's sequence goes on at 2");
+    let mut tx = service.begin(a, "probe").await.expect("begin");
+    let version = outbox::aggregate_version(&mut tx, &of_a)
+        .await
+        .expect("aggregate version as A");
+    assert_eq!(version, Some(2), "A reads its own version");
+    tx.rollback().await.expect("rollback");
+    let order: Vec<i64> = sqlx::query_scalar(EVENT_ORDER)
+        .bind(of_a.kind())
+        .bind(of_a.id())
+        .fetch_all(&setup.producer)
+        .await
+        .expect("read A's events");
+    assert_eq!(order.len(), 2, "two events of A's aggregate");
+    assert!(
+        order[0] <= order[1],
+        "A's events keep their order: {order:?}"
+    );
+    println!(
+        "outbox_aggregate: B saw widget/of-b only, the platform role catalog/shared only, a \
+         session without a tenant nothing; A's sequence went on to 2"
+    );
 }
