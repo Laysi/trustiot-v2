@@ -1,0 +1,3 @@
+[    5.925755] tpm_tis_spi spi0.0: 2.0 TPM (device-id 0x1B, rev-id 16)
+IDX BOOT ID                          FIRST ENTRY                 LAST ENTRY
+  0 03bf42c9336541f9abac28e39e89dcac Mon 2026-10-12 17:15:57 CST Mon 2026-10-12 18:02:48 CST

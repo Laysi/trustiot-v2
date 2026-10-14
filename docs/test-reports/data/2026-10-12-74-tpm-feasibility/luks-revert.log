@@ -1,0 +1,13 @@
+fstab restored
+  UNIT LOAD ACTIVE SUB DESCRIPTION
+
+0 loaded units listed.
+To show all installed unit files use 'systemctl list-unit-files'.
+ls: cannot access '/etc/crypttab': No such file or directory
+proc            /proc           proc    defaults          0       0
+PARTUUID=0ff2576b-01  /boot/firmware  vfat    defaults          0       2
+PARTUUID=0ff2576b-02  /               ext4    defaults,noatime  0       1
+loop0       loop 
+- 0x81000001
+- 0x81000100
+0

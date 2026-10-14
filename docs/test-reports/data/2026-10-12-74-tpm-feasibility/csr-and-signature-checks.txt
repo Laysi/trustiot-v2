@@ -1,0 +1,24 @@
+# Laysi/trustiot-v2#74, 2026-10-12. Console output copied from the session (workstation side).
+
+## CSR made on the lab Pi, signed inside the TPM (gw csr --handle 0x81000100 --cn gw-lab-01)
+$ openssl req -in gw-lab-01.csr -noout -verify -subject
+Certificate request self-signature verify OK
+subject=CN=gw-lab-01
+$ openssl req -in gw-lab-01.csr -noout -pubkey | diff - gw-lab-01-tpm-public-key.pem && echo csr-key-matches-tpm-key
+csr-key-matches-tpm-key
+$ openssl x509 -req -in gw-lab-01.csr -CA ca.pem -CAkey ca.key -CAserial ca.srl -days 30 -sha256 -extfile client.ext -out gw-lab-01.pem
+$ openssl x509 -in gw-lab-01.pem -noout -subject -issuer -ext extendedKeyUsage
+subject=CN=gw-lab-01
+issuer=CN=TrustIoT PoC 74 Test CA
+X509v3 Extended Key Usage:
+    TLS Web Client Authentication
+
+## The "valid" challenge signature from challenge-first-exchange.txt, checked with OpenSSL
+$ printf 'trustiot-v2 challenge v1\ndevice=gw-lab-01\npurpose=cert-renewal\nnonce=rvcx6ABI6piiIMI3AyDCj8PBMWy7HQE-IUwWkmXtaDg\nexpires=1791795938\n' > msg.txt
+$ printf '%s' 'MEQCIDiS4kjjVBUDOno5DY6+DdE94qGPzDiQg8hU09rXwNZ5AiBmnoSwFIqRQ8XD5J/hyiCtkzmCuUmmyNkqkGorcYFSWw==' | base64 -d > sig.der
+$ openssl dgst -sha256 -verify gw-lab-01-tpm-public-key.pem -signature sig.der msg.txt
+Verified OK
+$ openssl asn1parse -inform DER -in sig.der
+    0:d=0  hl=2 l=  68 cons: SEQUENCE
+    2:d=1  hl=2 l=  32 prim: INTEGER           :3892E248E35415033A7A390D8EBE0DD13DE2A18FCC389083C854D3DAD7C0D679
+   36:d=1  hl=2 l=  32 prim: INTEGER           :669E84B0148A9143C5C3E49FE1CA20AD933982B949A6C8D92A906A2B7181525B

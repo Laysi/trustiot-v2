@@ -1,0 +1,46 @@
+# Laysi/trustiot-v2#74, lab Pi, 2026-10-12. Console output copied from the session.
+
+## Boot 2026-10-12T08:42Z with dtparam=spi=on + dtoverlay=tpm-slb9670 (stock overlay, CE1)
+$ sudo dmesg | grep tpm_tis
+[    5.867863] tpm_tis_spi spi0.1: probe with driver tpm_tis_spi failed with error -110
+$ echo spi0.1 | sudo tee /sys/bus/spi/drivers/tpm_tis_spi/bind
+tee: /sys/bus/spi/drivers/tpm_tis_spi/bind: Connection timed out
+[   67.915982] tpm_tis_spi spi0.1: probe with driver tpm_tis_spi failed with error -110
+$ cat /proc/device-tree/soc/spi@7e204000/slb9670@1/compatible
+infineon,slb9670
+$ pinctrl get 7-11
+ 7: op -- pu | hi // GPIO7 = output
+ 8: op -- pu | hi // GPIO8 = output
+ 9: a0    pd | lo // GPIO9 = SPI0_MISO
+10: a0    pd | lo // GPIO10 = SPI0_MOSI
+11: a0    pd | lo // GPIO11 = SPI0_SCLK
+
+## Raw TIS read of DID_VID (locality 0, 0xD40F00) on spidev0.0 (CE0), 1 MHz, mode 0
+$ sudo ./spiprobe /dev/spidev0.0
+/dev/spidev0.0 rx: 00 00 00 01 d1 15 1b 00 00 00 00 01 00 00 00 00 01 00 00 00 00 01 00 00
+no wait state; DID_VID = 001b15d1
+(0x15D1 = Infineon, 0x001B = SLB9670)
+
+## Boot 2026-10-12T08:45Z with dtparam=spi=on + dtoverlay=tpm-slb9670-ce0 (CE0 copy of the overlay)
+$ ls -la /dev/tpm*
+crw-rw---- 1 tss root  10,   224 Oct 12 16:45 /dev/tpm0
+crw-rw---- 1 tss tss  237, 65536 Oct 12 16:45 /dev/tpmrm0
+$ sudo dmesg | grep -i tpm | grep -v 'systemd\[1\]'
+[    5.702928] tpm_tis_spi spi0.0: 2.0 TPM (device-id 0x1B, rev-id 16)
+[    5.705347] tpm tpm0: A TPM error (256) occurred attempting the self test
+[    5.705368] tpm tpm0: starting up the TPM manually
+$ sudo dmesg | grep 'systemd\[1\]' | grep -i tpm
+systemd-pcrextend.socket - TPM PCR Measurements skipped, unmet condition check ConditionSecurity=measured-uki
+systemd-pcrlock.socket - Make TPM PCR Policy skipped, unmet condition check ConditionSecurity=measured-uki
+systemd-pcrmachine.service - TPM PCR Machine ID Measurement skipped, unmet condition check ConditionSecurity=measured-uki
+systemd-tpm2-setup-early.service - Early TPM SRK Setup skipped, unmet condition check ConditionSecurity=measured-uki
+systemd-tpm2-setup.service - TPM SRK Setup skipped, unmet condition check ConditionSecurity=measured-uki
+
+## Existing persistent key 0x81000001 vs. a primary made from the tpm2-tools default template
+$ sudo tpm2_readpublic -c 0x81000001 | head -1
+name: 000baf00e32cb5c291be5cf413e1b54f3c148a4022a08e941a408e27edb7af34956c
+$ sudo tpm2_createprimary -C o -g sha256 -G ecc256:aes128cfb -c /tmp/srk74.ctx >/dev/null; sudo tpm2_readpublic -c /tmp/srk74.ctx | head -1
+name: 000baf00e32cb5c291be5cf413e1b54f3c148a4022a08e941a408e27edb7af34956c
+$ sudo tpm2_getcap handles-nv-index
+- 0x1C00002
+- 0x1C0000A

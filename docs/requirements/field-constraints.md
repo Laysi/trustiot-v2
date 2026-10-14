@@ -8,6 +8,6 @@
 - 設備可能一直保持連線卻永遠不回應，keepalive 偵測不到（[#159](https://github.com/Laysi/trustiot/issues/159)、[#164](https://github.com/Laysi/trustiot/issues/164)）。
 - 曾有設備靜默停擺 2.5 小時，程式外觀卻完全正常（[#151](https://github.com/Laysi/trustiot/issues/151)）。
 - 現場轉換器的 port 各不相同（實測過 502、8886，常見還有 4196、8899），不能用固定白名單（[#140](https://github.com/Laysi/trustiot/issues/140)）。
-- SLB9670 做 RSA 運算會逾時，只能用 ECC P-256；重刷 SD 卡後 TPM 內的狀態仍在（[#81](https://github.com/Laysi/trustiot/issues/81)）。
+- SLB9670 做 RSA 運算會逾時，只能用 ECC P-256；重刷 SD 卡後 TPM 內的狀態仍在（[#81](https://github.com/Laysi/trustiot/issues/81)）。ECDSA P-256 簽章每次約 70 ms；Pi 4 的韌體不做 measured boot；lab 的模組在軟體重開機時不會被重置，PCR 只在斷電後歸零（2026-10-12 lab Pi 實測，[可行性測試結果（2026-10-12）](../feasibility/2026-10-12-tpm-poc.md)）。
 - 企業網路常只放行 443，閘道器所有對外連線都要能走 443；舊系統曾因自己的出站白名單漏開 8443 而部署卡死（[#83](https://github.com/Laysi/trustiot/issues/83)）。
 - 所有閘道器共用出廠憑證，ID 又可能從標籤或出貨紀錄取得，就可以被冒充（[#118](https://github.com/Laysi/trustiot/issues/118)）。
