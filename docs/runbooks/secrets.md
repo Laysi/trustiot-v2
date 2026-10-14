@@ -132,11 +132,22 @@ Laysi/trustiot-v2#78 補上確切指令。原則：
 
 ### 叢集內 ClickHouse 的管理帳號密碼
 
-Secret `trustiot-clickhouse-admin`（key `password`）。ClickHouse 只在啟動時讀這個密碼，所以換值之後要讓它重啟：
+`clickhouse.mode: bundled` 時，bootstrap 管理帳號（`clickhouse.bundled.adminUser`，預設 `trustiot_admin`）的密碼由 ClickHouse pod 的 init container `admin-password` 在叢集內產生，放在 Secret `<release>-clickhouse-admin-password`（key 是帳號名稱），沒有人建立或複製它（Laysi/trustiot-v2#403；設計見 `docs/architecture/secrets.md`「叢集內 ClickHouse 管理帳號的密碼」）。ClickHouse 只在啟動時讀這個密碼，所以輪替就是讓 init container 先產生新密碼、再讓伺服器重啟：
 
-1. 產生新值：`openssl rand -hex 32`。SaaS 以 `sops edit deploy/flux/<檔名>.sops.yaml` 換掉 `password`；地端由客戶換值，值經管線傳入、不出現在命令列：`openssl rand -hex 32 | tr -d "\n" | kubectl -n trustiot create secret generic trustiot-clickhouse-admin --from-file=password=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -`。
-2. 同一個變更把 values 的 `clickhouse.bundled.adminSecretRevision` 加一。升級時 ClickHouse 的 pod 重啟並換上新密碼。migration Job 下一次執行時讀到新密碼；要在同一次升級確認它能以新密碼連線，同時把 `migrate.revision` 改成新的值（[migration Job 的 runbook](migrations.md)）。
-3. 確認 ClickHouse 的 `/ping` 探針恢復、新的 migration Job 完成（有改 `migrate.revision` 時）；舊密碼不再能登入（以 `clickhouse-client --ask-password` 輸入舊值，確認被拒）。
+1. 把 values 的 `clickhouse.bundled.adminPasswordGeneration` 加一（SaaS 改 `deploy/flux/clusters/saas/trustiot/values-instance.yaml`，地端改安裝實例的覆寫檔），升級。ClickHouse 的 pod 重啟，init container 產生新密碼寫進 Secret，伺服器以新密碼啟動；migration Job 不重跑，服務不重啟（它們不用這個帳號）。ClickHouse 是單一副本，重啟期間 collector 寫不進日誌，在 5 分鐘內重試。
+2. 確認：`kubectl -n <namespace> logs <release>-clickhouse-0 -c admin-password` 有 `generated the password of <帳號> in Secret <release>-clickhouse-admin-password`（日誌只有 Secret 與帳號的名稱與產生的原因）；`kubectl -n <namespace> get secret <release>-clickhouse-admin-password -o jsonpath='{.metadata.annotations.trustiot\.io/password-generation}'` 是新的代；ClickHouse 的 `/ping` 探針恢復（pod Ready）。
+3. 確認伺服器接受 Secret 裡的密碼，密碼不離開 pod：`kubectl -n <namespace> exec <release>-clickhouse-0 -c clickhouse -- bash -c 'exec clickhouse-client --user "$CLICKHOUSE_USER" --password "$(cat "$CLICKHOUSE_PASSWORD_FILE")" --query "SELECT currentUser()"'`，輸出是帳號名稱。需要以管理帳號手動執行 SQL 時（例如 [migration Job 的 runbook](migrations.md) 的 `DROP USER`、`REVOKE`）也用這個方式。
+4. 下一次 migration Job（例如下一次升級）以新密碼連線。要當場確認，同一次升級把 `migrate.revision` 也改成新的值，Job 換名重跑。
+
+代只往上走：`helm rollback` 或 Flux 升級失敗後的 rollback 渲染出較小的值時，init container 保留現有的密碼（pod 因為 checksum 改變而重啟一次，密碼不變），之後再升級回來也不換。
+
+**Secret 遺失**（有人刪了 key 或整個 Secret）：已經在跑的 ClickHouse 不受影響，但下一次 Job 讀不到密碼，等到 `migrate.wait.databases` 用完失敗，日誌寫出 Secret 的名稱與這個處理方式。把 `clickhouse.bundled.adminPasswordGeneration` 加一再升級：Helm 重建被刪掉的 Secret，ClickHouse 重啟，init container 產生新密碼。Secret 不存在時 init container 不能建立它，會失敗並寫出同樣的處理方式，ClickHouse 停在 `Init`。不要自己建立這個 Secret：init container 不信任不是它填過的物件（uid 不同），會換掉裡面的值。
+
+**從人建立的 Secret 搬過來**（Laysi/trustiot-v2#403 之前的安裝，values 設了 `clickhouse.bundled.adminSecret.name`，例如 `trustiot-clickhouse-admin`）：
+
+1. 在一次升級把 `clickhouse.bundled.adminSecret.name` 改回空白（刪掉這個欄位）；`adminSecretRevision` 之後不再有作用，也可一併刪掉。ClickHouse 重啟，init container 產生新密碼，伺服器改用它；migration Job 因為讀密碼的方式改變而換名重跑，以新密碼連線（服務與 collector 隨新的 Job 名稱滾動更新一次）。
+2. 確認 ClickHouse Ready、新的 Job 完成，並照上面第 3 步確認伺服器接受新密碼。
+3. 刪掉舊的 Secret：地端 `kubectl -n <namespace> delete secret <舊名稱>`；SaaS 刪掉 `deploy/flux/clusters/saas/trustiot/` 裡它的 SOPS 檔與 kustomization 的引用。舊密碼已經不能登入（bootstrap 帳號由映像的 entrypoint 依每次啟動的密碼寫成）。
 
 ### 叢集內 Postgres 的 owner 密碼與 TLS 憑證
 

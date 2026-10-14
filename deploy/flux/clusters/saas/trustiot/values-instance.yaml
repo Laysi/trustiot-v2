@@ -30,9 +30,8 @@ postgres:
 
 clickhouse:
   bundled:
-    # SOPS-encrypted Secret trustiot-clickhouse-admin, key password (docs/architecture/secrets.md).
-    adminSecret:
-      name: trustiot-clickhouse-admin
+    # The bootstrap admin password needs no entry here either: ClickHouse's init container
+    # generates it into a Secret the chart declares (docs/architecture/secrets.md).
     # Volume size of the bundled ClickHouse; size it from the host's disk and expected load
     # (deploy/chart/README.md, 叢集內的 ClickHouse).
     storage:

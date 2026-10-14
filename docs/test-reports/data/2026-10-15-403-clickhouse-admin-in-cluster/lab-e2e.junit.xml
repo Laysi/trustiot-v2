@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="5" assertions="20" failures="0" skipped="0" time="101.66206234">
+  <testsuite name="deploy/chart/tests/e2e/clickhouse-admin.e2e.ts" file="deploy/chart/tests/e2e/clickhouse-admin.e2e.ts" tests="5" assertions="20" failures="0" skipped="0" time="101.660180856" hostname="fedora">
+    <testsuite name="bundled ClickHouse admin password generated in the cluster (Laysi/trustiot-v2#403)" file="deploy/chart/tests/e2e/clickhouse-admin.e2e.ts" line="284" tests="5" assertions="20" failures="0" skipped="0" time="81.098" hostname="fedora">
+      <testcase name="an installation that names an existing Secret keeps working the old way" classname="bundled ClickHouse admin password generated in the cluster (Laysi/trustiot-v2#403)" time="1.709884" file="deploy/chart/tests/e2e/clickhouse-admin.e2e.ts" line="290" assertions="4" />
+      <testcase name="moving over: the init container generates the password into the chart&apos;s Secret before ClickHouse starts with it" classname="bundled ClickHouse admin password generated in the cluster (Laysi/trustiot-v2#403)" time="27.622892" file="deploy/chart/tests/e2e/clickhouse-admin.e2e.ts" line="301" assertions="5" />
+      <testcase name="a rotation: a higher adminPasswordGeneration restarts ClickHouse with a new password, and the old one is refused" classname="bundled ClickHouse admin password generated in the cluster (Laysi/trustiot-v2#403)" time="15.487026" file="deploy/chart/tests/e2e/clickhouse-admin.e2e.ts" line="343" assertions="3" />
+      <testcase name="a rollback to the release before the rotation keeps the new password, and so does the upgrade after it" classname="bundled ClickHouse admin password generated in the cluster (Laysi/trustiot-v2#403)" time="32.308524" file="deploy/chart/tests/e2e/clickhouse-admin.e2e.ts" line="368" assertions="4" />
+      <testcase name="only ClickHouse&apos;s ServiceAccount may get and patch the Secret; no other ServiceAccount may read it" classname="bundled ClickHouse admin password generated in the cluster (Laysi/trustiot-v2#403)" time="3.972844" file="deploy/chart/tests/e2e/clickhouse-admin.e2e.ts" line="390" assertions="4" />
+    </testsuite>
+  </testsuite>
+</testsuites>

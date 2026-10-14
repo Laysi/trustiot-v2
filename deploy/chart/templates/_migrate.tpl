@@ -144,6 +144,31 @@ Role names each once. Returns a YAML list; use with fromYamlArray.
 {{- end -}}
 
 {{/*
+Every Secret the chart declares empty for tools/migrate to fill, once each: {name, component}. The
+migration Job's password Secrets ("trustiot.migrate.passwordSecretObjects"), then the bundled
+ClickHouse's admin password Secret while the chart generates that password
+("trustiot.clickhouse.adminPassword"), which the ClickHouse pod's init container fills.
+templates/passwords.yaml declares one per entry. Returns a YAML list; use with fromYamlArray.
+*/}}
+{{- define "trustiot.filledSecretObjects" -}}
+{{- $objects := include "trustiot.migrate.passwordSecretObjects" . | fromYamlArray -}}
+{{- $admin := include "trustiot.clickhouse.adminPassword" . | fromYaml -}}
+{{- if $admin.generated -}}
+{{- $objects = append $objects (dict "name" $admin.name "component" "clickhouse") -}}
+{{- end -}}
+{{- toYaml $objects -}}
+{{- end -}}
+
+{{/*
+Whether the migration Job reaches the Kubernetes API: to fill its password Secrets, or to read
+the bundled ClickHouse's generated admin password. Its token is mounted only then.
+*/}}
+{{- define "trustiot.migrate.usesApi" -}}
+{{- $admin := include "trustiot.clickhouse.adminPassword" . | fromYaml -}}
+{{- if or (include "trustiot.migrate.passwordSecrets" . | fromYamlArray) $admin.generated -}}true{{- end -}}
+{{- end -}}
+
+{{/*
 One password of a consumer, as {name, key}. Argument: dict "root" $ "component" <service name, or
 otel-collector> and optionally "role" "platform" (default: the service's own login role, or the
 collector's account). Returns YAML; use with fromYaml.
@@ -247,9 +272,16 @@ Returns a YAML list; use with fromYamlArray.
 {{- end -}}
 {{- end -}}
 {{- if eq $v.clickhouse.mode "bundled" -}}
-{{- with $v.clickhouse.bundled -}}
-{{- $env = append $env (dict "name" "TRUSTIOT__CLICKHOUSE__USERNAME" "value" .adminUser) -}}
-{{- $env = append $env (dict "name" "TRUSTIOT__CLICKHOUSE__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" .adminSecret.name "key" .adminSecret.key))) -}}
+{{- $admin := include "trustiot.clickhouse.adminPassword" . | fromYaml -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__CLICKHOUSE__USERNAME" "value" $v.clickhouse.bundled.adminUser) -}}
+{{- if $admin.generated -}}
+{{- /* The Job reads the generated password from its Secret through the API (get only, by name,
+in migrate.yaml's Role) when it is about to use ClickHouse, and again while ClickHouse refuses it:
+an environment variable would keep the value of the moment the pod started, which a rotation can
+replace (tools/migrate/src/clickhouse_admin.rs). The key is the account. */ -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__CLICKHOUSE__PASSWORD_SECRET" "value" $admin.name) -}}
+{{- else -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__CLICKHOUSE__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $admin.name "key" $admin.key))) -}}
 {{- end -}}
 {{- else -}}
 {{- with $v.clickhouse.external.migrationSecret -}}
@@ -257,13 +289,14 @@ Returns a YAML list; use with fromYamlArray.
 {{- $env = append $env (dict "name" "TRUSTIOT__CLICKHOUSE__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" .name "key" .passwordKey))) -}}
 {{- end -}}
 {{- end -}}
-{{- /* The password Secrets the Job fills, as key=Secret pairs, and how it reaches them: the
-Kubernetes API with its own projected token ("trustiot.migrate.kubeApiVolume"), whose Role in
-migrate.yaml allows get and patch on exactly these Secrets. passwordGeneration renews every
+{{- /* The password Secrets the Job fills, as key=Secret pairs, and how it reaches them and the
+bundled ClickHouse's generated admin Secret: the Kubernetes API with its own projected token
+("trustiot.migrate.kubeApiVolume"), whose Role in migrate.yaml allows get and patch on exactly the
+Secrets it fills, and get on the admin Secret. passwordGeneration renews every
 password (a rotation); a new value also renames the Job, so the services restart with the new
 passwords. */ -}}
 {{- $secrets := include "trustiot.migrate.passwordSecrets" . | fromYamlArray -}}
-{{- if $secrets -}}
+{{- if include "trustiot.migrate.usesApi" . -}}
 {{- $dir := include "trustiot.migrate.kubeDir" . -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__API_URL" "value" "https://kubernetes.default.svc") -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__NAMESPACE" "valueFrom" (dict "fieldRef" (dict "fieldPath" "metadata.namespace"))) -}}
@@ -300,7 +333,7 @@ new name also avoids patching it.
 {{- $ctx := dict "root" . "name" "migrate" -}}
 {{- $postgresCa := include "trustiot.postgres.caSecret" . | fromYaml -}}
 {{- $clickhouseCa := and (eq $v.clickhouse.mode "external") $v.clickhouse.external.caSecret.name -}}
-{{- $fills := include "trustiot.migrate.passwordSecrets" . | fromYamlArray -}}
+{{- $usesApi := include "trustiot.migrate.usesApi" . -}}
 # One pod at a time, and a retry only after the previous pod has fully stopped; the advisory lock
 # in Postgres keeps two runs apart even across Jobs.
 parallelism: 1
@@ -376,9 +409,9 @@ template:
             mountPath: /etc/trustiot/clickhouse-ca
             readOnly: true
           {{- end }}
-          {{- if $fills }}
-          {{- /* The token that fills the password Secrets: only this container, and only while
-          there are Secrets to fill. */}}
+          {{- if $usesApi }}
+          {{- /* The token that fills the password Secrets and reads the generated ClickHouse admin
+          password: only this container, and only while there is one of those. */}}
           - name: migrate-kube-api
             mountPath: {{ include "trustiot.migrate.kubeDir" . }}
             readOnly: true
@@ -400,7 +433,7 @@ template:
             - key: {{ $v.clickhouse.external.caSecret.key }}
               path: ca.crt
       {{- end }}
-      {{- if $fills }}
+      {{- if $usesApi }}
       - {{ include "trustiot.migrate.kubeApiVolume" . | indent 8 | trim }}
       {{- end }}
 {{- end -}}

@@ -9,7 +9,8 @@
 //      ClickHouse and at the SIEM.
 // README.md in this directory lists the prerequisites; run from the repository root:
 //
-//   E2E_NAMESPACE=e2e-73 E2E_SERVICE_IMAGE=<image> bun test --timeout 900000 ./deploy/chart/tests/e2e/otel.e2e.ts
+//   E2E_NAMESPACE=e2e-73 E2E_SERVICE_IMAGE=<image> E2E_MIGRATE_IMAGE=<image> \
+//     bun test --timeout 900000 ./deploy/chart/tests/e2e/otel.e2e.ts
 //
 // Not part of `bun test deploy/chart` (the file name has no .test. suffix): it needs a cluster.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -31,6 +32,9 @@ function required(name: string): string {
 
 const NAMESPACE = required("E2E_NAMESPACE");
 const SERVICE_IMAGE = required("E2E_SERVICE_IMAGE");
+// The bundled ClickHouse's init container runs the migration image to generate its admin password
+// (Laysi/trustiot-v2#403), though this test turns the migration Job itself off.
+const MIGRATE_IMAGE = required("E2E_MIGRATE_IMAGE");
 const CONTEXT = process.env.E2E_KUBECONTEXT;
 const RELEASE = process.env.E2E_RELEASE ?? "trustiot";
 const PULL_POLICY = process.env.E2E_IMAGE_PULL_POLICY ?? "IfNotPresent";
@@ -39,8 +43,10 @@ const KEEP = process.env.E2E_KEEP === "1";
 
 const PREFIX = RELEASE.includes("trustiot") ? RELEASE : `${RELEASE}-trustiot`;
 const RUN = crypto.randomUUID().replaceAll("-", "").slice(0, 8);
+// The bundled ClickHouse's admin password Secret, which the chart declares empty and ClickHouse's
+// init container fills; Helm keeps it on uninstall.
+const ADMIN_SECRET = `${PREFIX}-clickhouse-admin-password`;
 // Names of their own, so the test never replaces a Secret or object it did not create.
-const ADMIN_SECRET = `trustiot-e2e-ch-admin-${RUN}`;
 // The chart declares the collector's password Secret empty for the migration Job to fill; this
 // test turns the Job off, so it fills the Secret itself.
 const COLLECTOR_SECRET = `${PREFIX}-otel-collector-password`;
@@ -127,7 +133,7 @@ async function portForward(service: string, remotePort: number): Promise<string>
 }
 
 // Runs SQL in the ClickHouse pod as the bootstrap admin. The password stays in the pod: the client
-// reads it from the mounted Secret file, and the SQL comes on stdin.
+// reads it from the file the init container wrote, and the SQL comes on stdin.
 function clickhouse(sql: string): string {
   return kubectlIn(
     sql,
@@ -247,24 +253,24 @@ function siemManifests(): string {
   return objects.map((o) => JSON.stringify(o)).join("\n---\n");
 }
 
-function imageValues(): string[] {
-  const match = /^(?<repository>[^@]+?)(?::(?<tag>[\w][\w.-]*))?(?:@(?<digest>sha256:[a-f0-9]{64}))?$/.exec(SERVICE_IMAGE);
-  if (!match?.groups?.repository) throw new Error(`E2E_SERVICE_IMAGE is not an image reference: ${SERVICE_IMAGE}`);
+function imageValues(path: string, image: string, what: string): string[] {
+  const match = /^(?<repository>[^@]+?)(?::(?<tag>[\w][\w.-]*))?(?:@(?<digest>sha256:[a-f0-9]{64}))?$/.exec(image);
+  if (!match?.groups?.repository) throw new Error(`${what} is not an image reference: ${image}`);
   const { repository, tag, digest } = match.groups;
   return [
     "--set-string",
-    `services.assets.image.repository=${repository}`,
+    `${path}.repository=${repository}`,
     "--set-string",
-    `services.assets.image.tag=${tag ?? "latest"}`,
+    `${path}.tag=${tag ?? "latest"}`,
     "--set-string",
-    `services.assets.image.digest=${digest ?? ""}`,
+    `${path}.digest=${digest ?? ""}`,
     "--set-string",
-    `services.assets.image.pullPolicy=${PULL_POLICY}`,
+    `${path}.pullPolicy=${PULL_POLICY}`,
   ];
 }
 
 const work = mkdtempSync(join(tmpdir(), "trustiot-otel-e2e-"));
-const created = { secrets: false, siem: false, release: false, collectorSecret: false };
+const created = { secrets: false, siem: false, release: false, collectorSecret: false, adminSecret: false };
 const report: Record<string, unknown> = { run: RUN, namespace: NAMESPACE, release: RELEASE, collectorImage: COLLECTOR_IMAGE };
 const traceId = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
 let collectorUrl = "";
@@ -296,15 +302,17 @@ beforeAll(async () => {
   }
   // The chart keeps the collector's password Secret on uninstall (helm.sh/resource-policy keep);
   // one left by an earlier run would be adopted with its old password, so refuse it.
-  const leftover = Bun.spawnSync({ cmd: [...kubectlArgs(), "get", "secret", COLLECTOR_SECRET], stdout: "ignore", stderr: "pipe" });
-  if (leftover.exitCode === 0) {
-    throw new Error(`${NAMESPACE} already has Secret ${COLLECTOR_SECRET} from an earlier run; delete it first`);
+  for (const kept of [COLLECTOR_SECRET, ADMIN_SECRET]) {
+    const leftover = Bun.spawnSync({ cmd: [...kubectlArgs(), "get", "secret", kept], stdout: "ignore", stderr: "pipe" });
+    if (leftover.exitCode === 0) {
+      throw new Error(`${NAMESPACE} already has Secret ${kept} from an earlier run; delete it first`);
+    }
   }
-  // Fresh passwords, written to files in a private temp dir so they never appear in argv.
+  // Fresh passwords, written to files in a private temp dir so they never appear in argv. The
+  // ClickHouse admin password is generated in the cluster.
   const collectorPassword = hex(32);
   siemToken = hex(24);
   created.secrets = true;
-  kubectl("create", "secret", "generic", ADMIN_SECRET, `--from-file=password=${secretFile("admin", hex(24))}`);
   kubectl(
     "create",
     "secret",
@@ -324,16 +332,16 @@ beforeAll(async () => {
     "--values",
     "tests/e2e/values-otel-e2e.yaml",
     "--set",
-    `clickhouse.bundled.adminSecret.name=${ADMIN_SECRET}`,
-    "--set",
     `observability.collector.clickhouse.user=${COLLECTOR_USER}`,
-    ...imageValues(),
+    ...imageValues("services.assets.image", SERVICE_IMAGE, "E2E_SERVICE_IMAGE"),
+    ...imageValues("migrate.image", MIGRATE_IMAGE, "E2E_MIGRATE_IMAGE"),
   ];
   // Step 1: ClickHouse only, so the schema and the collector's account exist before anything
   // writes. In a real install the migration Job (Laysi/trustiot-v2#60) does this part, but
   // values-otel-e2e.yaml sets migrate.enabled to false: this test's Postgres is a name only, and
   // the Job needs a real one (it takes its lock there), so the test applies the ClickHouse files
   // and creates the account itself.
+  created.adminSecret = true;
   helm(
     "install",
     RELEASE,
@@ -412,9 +420,10 @@ afterAll(() => {
     // The StatefulSet keeps its volume on uninstall (persistentVolumeClaimRetentionPolicy).
     [created.release, () => kubectl("delete", "pvc", `data-${PREFIX}-clickhouse-0`, "--ignore-not-found", "--wait=true")],
     [created.siem, () => kubectl("delete", "deployment,service,configmap,networkpolicy", SIEM, "--ignore-not-found", "--wait=true")],
-    [created.secrets, () => kubectl("delete", "secret", ADMIN_SECRET, SIEM, "--ignore-not-found")],
+    [created.secrets, () => kubectl("delete", "secret", SIEM, "--ignore-not-found")],
     // Kept by Helm on uninstall.
     [created.collectorSecret, () => kubectl("delete", "secret", COLLECTOR_SECRET, "--ignore-not-found")],
+    [created.adminSecret, () => kubectl("delete", "secret", ADMIN_SECRET, "--ignore-not-found")],
   ];
   for (const [done, cleanup] of steps) {
     if (!done) continue;

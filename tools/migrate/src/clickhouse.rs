@@ -16,9 +16,10 @@
 use std::time::{Duration, Instant};
 
 use crate::config::{ClickHouseSettings, RunConfig};
+use crate::passwords::Api;
 use crate::registry::{Migration, Registry};
 use crate::secret::Password;
-use crate::{Error, Report, http, sha256_hex};
+use crate::{Error, Report, clickhouse_admin, http, sha256_hex};
 
 /// The role `0006_logs.sql` creates for the collector: INSERT and SHOW COLUMNS on the two log
 /// tables, nothing else.
@@ -157,6 +158,13 @@ impl Failure {
     }
 }
 
+/// How ClickHouse answered the access-management account's login.
+enum Answer {
+    Accepted,
+    /// It refused the password; ClickHouse's error text, which never holds the password.
+    Refused(String),
+}
+
 impl ClickHouse {
     /// A client for `TRUSTIOT_CLICKHOUSE_URL`; an `https://` URL needs
     /// `TRUSTIOT_CLICKHOUSE_CA_FILE`, the only CA it trusts.
@@ -164,7 +172,7 @@ impl ClickHouse {
     /// # Errors
     ///
     /// When the URL is https without a CA file, or the client cannot be built.
-    pub fn new(config: &RunConfig, settings: &ClickHouseSettings) -> Result<Self, Error> {
+    fn new(config: &RunConfig, username: &str, password: String) -> Result<Self, Error> {
         let url =
             config.platform.clickhouse_url.clone().ok_or_else(|| {
                 Error::ClickHouse("TRUSTIOT_CLICKHOUSE_URL is not set".to_owned())
@@ -188,9 +196,81 @@ impl ClickHouse {
         Ok(Self {
             client,
             url: url.trim_end_matches('/').to_owned(),
-            username: settings.username.clone(),
-            password: settings.password.clone(),
+            username: username.to_owned(),
+            password,
         })
+    }
+
+    /// A client for the access-management account of `settings`, once ClickHouse answers a query
+    /// as it, waiting up to `wait` (on a fresh install ClickHouse starts next to the Job).
+    ///
+    /// With `password_secret`, the password comes from that Secret, which the bundled
+    /// ClickHouse's init container fills before the server starts (src/clickhouse_admin.rs): the
+    /// run waits until it is filled, and while ClickHouse refuses the password it read, it reads
+    /// the Secret again. That is a rotation in progress: the init container writes the new
+    /// password into the Secret just before the server restarts with it, so the server can refuse
+    /// a password read a moment earlier, or still run with the old one for a moment after.
+    ///
+    /// # Errors
+    ///
+    /// When ClickHouse did not answer, or did not accept the password, within `wait`; when the
+    /// Secret is missing, unreadable or not filled in time.
+    pub async fn connect(
+        config: &RunConfig,
+        settings: &ClickHouseSettings,
+        wait: Duration,
+    ) -> Result<Self, Error> {
+        let deadline = Instant::now() + wait;
+        let (secret, passwords) = match (
+            &settings.password,
+            &settings.password_secret,
+            &config.passwords,
+        ) {
+            (Some(password), None, _) => {
+                let client = Self::new(config, &settings.username, password.clone())?;
+                client.wait_for_answer(deadline, false).await?;
+                return Ok(client);
+            }
+            (None, Some(secret), Some(passwords)) => (secret, passwords),
+            _ => {
+                return Err(Error::ClickHouse(
+                    "internal: the settings name no usable source for the ClickHouse password"
+                        .to_owned(),
+                ));
+            }
+        };
+        let api = Api::new(passwords.into(), wait, clickhouse_admin::JOB_HINTS)?;
+        let account = settings.username.as_str();
+        let mut client = Self::new(config, account, String::new())?;
+        let mut reported = None::<Instant>;
+        loop {
+            let password =
+                clickhouse_admin::wait_for_password(&api, secret, account, deadline).await?;
+            password.expose().clone_into(&mut client.password);
+            match client.wait_for_answer(deadline, true).await? {
+                Answer::Accepted => return Ok(client),
+                Answer::Refused(text) => {
+                    if Instant::now() >= deadline {
+                        return Err(Error::ClickHouse(format!(
+                            "did not accept {account} with the password in Secret {secret} within \
+                             {wait:?}: {text}. The server reads the password only when it starts, \
+                             and its init container writes it into the Secret first; restart \
+                             ClickHouse if the Secret was replaced (docs/runbooks/secrets.md)"
+                        )));
+                    }
+                    if reported.is_none_or(|at: Instant| at.elapsed() >= REPORT_EVERY) {
+                        tracing::warn!(
+                            secret = %secret,
+                            account,
+                            "ClickHouse refused the admin password in the Secret (a rotation in \
+                             progress?); reading it again"
+                        );
+                        reported = Some(Instant::now());
+                    }
+                    tokio::time::sleep(RETRY_EVERY).await;
+                }
+            }
+        }
     }
 
     async fn send(
@@ -253,31 +333,47 @@ impl ClickHouse {
             })
     }
 
-    /// Waits until ClickHouse answers a query as the access-management account. On a fresh
-    /// install its pod starts next to the Job.
+    /// Waits until ClickHouse answers a query as the access-management account, until
+    /// `deadline`. With `refusal_ends_wait`, a refused login ends the wait at once (the caller
+    /// reads the password again); otherwise it is retried like any other failure.
     ///
     /// # Errors
     ///
-    /// When it did not answer within `wait`.
-    pub async fn wait_until_up(&self, wait: Duration) -> Result<(), Error> {
+    /// When it did not answer by `deadline`.
+    async fn wait_for_answer(
+        &self,
+        deadline: Instant,
+        refusal_ends_wait: bool,
+    ) -> Result<Answer, Error> {
         let started = Instant::now();
         let mut reported = None::<Instant>;
         loop {
-            match self.query("ping", PROBE, &[]).await {
-                Ok(_) => return Ok(()),
-                Err(error) => {
-                    if started.elapsed() >= wait {
-                        return Err(Error::ClickHouse(format!(
-                            "not reachable within {wait:?}: {error}"
-                        )));
-                    }
-                    if reported.is_none_or(|at| at.elapsed() >= REPORT_EVERY) {
-                        tracing::warn!(error = %error, "ClickHouse does not answer yet; retrying");
-                        reported = Some(Instant::now());
-                    }
-                    tokio::time::sleep(RETRY_EVERY).await;
-                }
+            let failure = match self.send(&self.username, &self.password, PROBE, &[]).await {
+                Ok(_) => return Ok(Answer::Accepted),
+                Err(failure) => failure,
+            };
+            let error = format!(
+                "{}{}",
+                failure
+                    .status
+                    .map(|status| format!("HTTP {status} "))
+                    .unwrap_or_default(),
+                failure.text.trim()
+            );
+            if refusal_ends_wait && failure.is_authentication() {
+                return Ok(Answer::Refused(error));
             }
+            if Instant::now() >= deadline {
+                return Err(Error::ClickHouse(format!(
+                    "not reachable within {:?}: ping: {error}",
+                    started.elapsed()
+                )));
+            }
+            if reported.is_none_or(|at| at.elapsed() >= REPORT_EVERY) {
+                tracing::warn!(error = %error, "ClickHouse does not answer yet; retrying");
+                reported = Some(Instant::now());
+            }
+            tokio::time::sleep(RETRY_EVERY).await;
         }
     }
 

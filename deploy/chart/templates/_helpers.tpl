@@ -232,7 +232,9 @@ Returns a YAML list; use with fromYamlArray.
 {{- $refs = append $refs (printf "%s/%s" .name .key) -}}
 {{- end -}}
 {{- end -}}
-{{- /* The bundled ClickHouse's bootstrap admin password: only the migration Job may use it. */ -}}
+{{- /* The bundled ClickHouse's bootstrap admin password in an existing Secret (adminSecret):
+only ClickHouse and the migration Job may use it. The generated one is in
+"trustiot.dependencySecretNames". */ -}}
 {{- if eq .Values.clickhouse.mode "bundled" -}}
 {{- with .Values.clickhouse.bundled.adminSecret -}}
 {{- if .name -}}
@@ -260,14 +262,21 @@ migration Job fills, which "trustiot.dependencySecretNames" protects in every ke
 Secrets whose keys reach services only through the chart, so no custom env may read them in any
 key: CloudNativePG's Secrets of the bundled Postgres (the CA's private key, the server key, the
 database owner's password), the password Secrets the migration Job fills (each service's database
-password and the collector's ClickHouse password; the chart hands each consumer only its own), and
-the migration accounts of an external Postgres and ClickHouse (only the migration Job uses those).
+password and the collector's ClickHouse password; the chart hands each consumer only its own), the
+bundled ClickHouse's generated admin password Secret, and the migration accounts of an external
+Postgres and ClickHouse (only the migration Job uses those).
 Returns a YAML list of names; use with fromYamlArray.
 */}}
 {{- define "trustiot.dependencySecretNames" -}}
 {{- $names := include "trustiot.postgres.generatedSecrets" . | fromYamlArray -}}
 {{- range include "trustiot.migrate.passwordSecrets" . | fromYamlArray -}}
 {{- $names = append $names .name -}}
+{{- end -}}
+{{- /* The bundled ClickHouse's generated admin password: only its init container and the
+migration Job (through the API) may use it. */ -}}
+{{- $admin := include "trustiot.clickhouse.adminPassword" . | fromYaml -}}
+{{- if $admin.generated -}}
+{{- $names = append $names $admin.name -}}
 {{- end -}}
 {{- if eq .Values.postgres.mode "external" -}}
 {{- with .Values.postgres.external.migrationSecret.name -}}

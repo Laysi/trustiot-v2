@@ -5,11 +5,13 @@
 //! content type and whether the token matched, never a body.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use migrate::config::PasswordSettings;
+use migrate::config::{AdminSettings, PasswordSettings};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -229,6 +231,31 @@ impl FakeSecrets {
             generation: generation.to_owned(),
             postgres: Some(pairs(postgres)),
             clickhouse_collector: collector.map(|pair| pairs(&[pair])),
+        }
+    }
+
+    /// Settings of the bundled ClickHouse's init container for this fake: it fills `account` in
+    /// `secret` for `generation` and writes the password to `password_file`.
+    pub fn admin_settings(
+        &self,
+        secret: &str,
+        account: &str,
+        generation: &str,
+        password_file: &Path,
+    ) -> AdminSettings {
+        let dir = scratch_dir("kube-token");
+        let token_file = dir.join("token");
+        std::fs::write(&token_file, format!("{}\n", self.token)).expect("write the token");
+        AdminSettings {
+            api_url: self.url.clone(),
+            namespace: NAMESPACE.to_owned(),
+            token_file,
+            ca_file: dir.join("unused-ca.crt"),
+            secret: secret.to_owned(),
+            account: account.to_owned(),
+            generation: generation.to_owned(),
+            password_file: password_file.to_path_buf(),
+            wait: Duration::from_secs(120),
         }
     }
 

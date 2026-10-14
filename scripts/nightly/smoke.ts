@@ -242,10 +242,12 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         if (problems.length > 0) throw new Error(problems.join("; "));
         return `job/${jobs[0]} completed at ${parsed.status?.completionTime}; every service container started after it`;
       })) &&
-      (await check("the migration Job generated every password into its Secret", async () => {
+      (await check("every password generated in the cluster is in its Secret", async () => {
         // Laysi/trustiot-v2#60: the chart declares the password Secrets empty and the Job fills
-        // them on the first install. The Secret's JSON holds the passwords: it is read quietly
-        // and only key names reach the log and the report.
+        // them on the first install; the bundled ClickHouse's init container fills its admin
+        // password Secret, which the Job then logs in with (Laysi/trustiot-v2#403). The Secret's
+        // JSON holds the passwords: it is read quietly and only key names reach the log and the
+        // report.
         const secrets = passwordSecretsOf(parseManifests(manifest));
         const problems: string[] = [];
         for (const [name, keys] of secrets) {

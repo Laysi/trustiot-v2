@@ -1,0 +1,14 @@
+bun test v1.4.2 (744846f84)
+
+deploy/chart/tests/e2e/clickhouse-admin.e2e.ts:
+after the move: {"restarted":true,"initExitCode":0,"secret":{"keys":["trustiot_admin"],"generation":"1","bound":true,"keep":"keep","filledBy":"migrate","generatedShape":true},"generatedLogged":true,"passwordInLog":false,"newPassword":{"accepted":true},"oldPassword":{"accepted":false,"error":"Code 516"}}
+after deleting the old Secret and restarting the pod: {"restarted":true,"secret":"unchanged","log":"kept","login":{"accepted":true}}
+after adminPasswordGeneration=2: {"secret":"changed","generation":"2","bound":true,"generatedLogged":true,"newPassword":{"accepted":true},"oldPassword":{"accepted":false,"error":"Code 516"}}
+after a rollback to generation 1: {"secret":"unchanged","generation":"2","log":"kept","login":{"accepted":true}}; after the upgrade back to 2: {"secret":"unchanged","generation":"2","login":{"accepted":true}}
+access to trustiot-clickhouse-admin-password: {"default":{"get":"no","patch":"no","list":"no","create":"no"},"trustiot-clickhouse":{"get":"yes","patch":"yes","list":"no","create":"no"},"trustiot-ingress-istio":{"get":"no","patch":"no","list":"no","create":"no"}}
+
+ 5 pass
+ 0 fail
+ 20 expect() calls
+Ran 5 tests across 1 file. [101.66s]
+rc=0

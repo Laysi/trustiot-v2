@@ -170,6 +170,21 @@ spec:
     expect(passwordSecretsOf(job([])).size).toBe(0);
   });
 
+  test("include the bundled ClickHouse's generated admin password, keyed by the account the Job logs in as", () => {
+    const objects = job([
+      { name: "TRUSTIOT__CLICKHOUSE__USERNAME", value: "trustiot_admin" },
+      { name: "TRUSTIOT__CLICKHOUSE__PASSWORD_SECRET", value: "rel-clickhouse-admin-password" },
+      { name: "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR", value: "trustiot_collector=rel-otel-collector-password" },
+    ]);
+    expect(Object.fromEntries(passwordSecretsOf(objects))).toEqual({
+      "rel-clickhouse-admin-password": ["trustiot_admin"],
+      "rel-otel-collector-password": ["trustiot_collector"],
+    });
+    // A password in an existing Secret (clickhouse.bundled.adminSecret) or an external
+    // ClickHouse's migration account is not one the release generates.
+    expect(passwordSecretsOf(job([{ name: "TRUSTIOT__CLICKHOUSE__USERNAME", value: "trustiot_admin" }])).size).toBe(0);
+  });
+
   test("hold a generated password under every key, named without its value", () => {
     const generated = Buffer.from("ab".repeat(32)).toString("base64");
     const secret = (data: Record<string, string>, annotated = true) => ({
@@ -515,14 +530,21 @@ describe("the chart as deployed by the nightly", () => {
       expect(postgresClustersOf(objects)).toEqual(["trustiot-postgres"]);
       // The password Secrets the migration Job fills are kept too (Laysi/trustiot-v2#60); the
       // smoke values enable the collector, whose ClickHouse password the Job generates.
+      // So is the bundled ClickHouse's admin password Secret, which its init container fills and
+      // the Job reads (Laysi/trustiot-v2#403).
       expect(keptObjectsOf(objects)).toEqual([
         "cluster.postgresql.cnpg.io/trustiot-postgres",
         "secret/trustiot-otel-collector-password",
+        "secret/trustiot-clickhouse-admin-password",
         "imagecatalog.postgresql.cnpg.io/trustiot-postgres",
       ]);
-      expect([...passwordSecretsOf(objects)]).toEqual([["trustiot-otel-collector-password", ["trustiot_collector"]]]);
-      // The empty Secret is the release's own: no dummy is made for it.
+      expect([...passwordSecretsOf(objects)]).toEqual([
+        ["trustiot-clickhouse-admin-password", ["trustiot_admin"]],
+        ["trustiot-otel-collector-password", ["trustiot_collector"]],
+      ]);
+      // The empty Secrets are the release's own: no dummy is made for them.
       expect(missingSecrets(objects).has("trustiot-otel-collector-password")).toBe(false);
+      expect(missingSecrets(objects).has("trustiot-clickhouse-admin-password")).toBe(false);
     }, 60_000);
   }
 });

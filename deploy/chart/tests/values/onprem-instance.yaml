@@ -20,10 +20,8 @@ postgres:
 
 clickhouse:
   bundled:
-    # Bootstrap admin password of the bundled ClickHouse; how Secrets reach the cluster is
-    # decided in Laysi/trustiot-v2#72.
-    adminSecret:
-      name: trustiot-clickhouse-admin
+    # The bootstrap admin password is generated in the cluster (Laysi/trustiot-v2#403): no
+    # Secret to name here.
     # Example size; each deployment sizes its volume from its load (README: 叢集內的 ClickHouse).
     storage:
       size: 100Gi

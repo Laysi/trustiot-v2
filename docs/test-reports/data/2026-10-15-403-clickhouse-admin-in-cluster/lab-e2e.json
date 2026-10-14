@@ -1,0 +1,93 @@
+{
+  "run": "b91fa5bd",
+  "namespace": "e2e-403",
+  "release": "trustiot",
+  "oldWay": {
+    "login": {
+      "accepted": true
+    },
+    "initContainers": [],
+    "generatedSecret": false
+  },
+  "move": {
+    "restarted": true,
+    "initExitCode": 0,
+    "secret": {
+      "keys": [
+        "trustiot_admin"
+      ],
+      "generation": "1",
+      "bound": true,
+      "keep": "keep",
+      "filledBy": "migrate",
+      "generatedShape": true
+    },
+    "generatedLogged": true,
+    "passwordInLog": false,
+    "newPassword": {
+      "accepted": true
+    },
+    "oldPassword": {
+      "accepted": false,
+      "error": "Code 516"
+    }
+  },
+  "restartAfterMove": {
+    "restarted": true,
+    "secret": "unchanged",
+    "log": "kept",
+    "login": {
+      "accepted": true
+    }
+  },
+  "rotation": {
+    "secret": "changed",
+    "generation": "2",
+    "bound": true,
+    "generatedLogged": true,
+    "newPassword": {
+      "accepted": true
+    },
+    "oldPassword": {
+      "accepted": false,
+      "error": "Code 516"
+    }
+  },
+  "rollback": {
+    "rollback": {
+      "secret": "unchanged",
+      "generation": "2",
+      "log": "kept",
+      "login": {
+        "accepted": true
+      }
+    },
+    "upgrade": {
+      "secret": "unchanged",
+      "generation": "2",
+      "login": {
+        "accepted": true
+      }
+    }
+  },
+  "access": {
+    "default": {
+      "get": "no",
+      "patch": "no",
+      "list": "no",
+      "create": "no"
+    },
+    "trustiot-clickhouse": {
+      "get": "yes",
+      "patch": "yes",
+      "list": "no",
+      "create": "no"
+    },
+    "trustiot-ingress-istio": {
+      "get": "no",
+      "patch": "no",
+      "list": "no",
+      "create": "no"
+    }
+  }
+}

@@ -11,7 +11,9 @@
 //   4. the migration Job generates the passwords into the empty Secrets the chart declares, and a
 //      service that lists postgres under mesh.calls (identity, played by the example service)
 //      connects with verify-full as the role the Job created, using the CA certificate the chart
-//      mounts and the read-write Service's host name; the collector starts with its password too;
+//      mounts and the read-write Service's host name; the collector starts with its password too,
+//      and the Job logs in to ClickHouse with the admin password that ClickHouse's init container
+//      generated (Laysi/trustiot-v2#403);
 //   5. the same pod is refused with another CA, with a host name the certificate does not list, and
 //      without the labels the Postgres NetworkPolicy admits;
 //   6. `helm upgrade` with the same values and `helm rollback` keep the generated passwords; a new
@@ -67,8 +69,11 @@ const ROLE = "identity_app";
 const SERVICE_SECRET = `${PREFIX}-${SERVICE}-password`;
 const COLLECTOR_SECRET = `${PREFIX}-otel-collector-password`;
 const PASSWORD_SECRETS = [SERVICE_SECRET, COLLECTOR_SECRET];
+// The bundled ClickHouse's admin password, which its pod's init container generates into the
+// empty Secret the chart declares and the Job reads (Laysi/trustiot-v2#403).
+const ADMIN_SECRET = `${PREFIX}-clickhouse-admin-password`;
+const ADMIN_ACCOUNT = "trustiot_admin";
 // Names of their own, so the test never replaces a Secret or object it did not create.
-const ADMIN_SECRET = `trustiot-e2e-ch-admin-${RUN}`;
 const PROBE = `trustiot-e2e-probe-${RUN}`;
 // deploy/images/postgres/Containerfile: `ARG AGE_VERSION=<version>`.
 const AGE_VERSION = readFileSync(join(REPO_ROOT, "deploy/images/postgres/Containerfile"), "utf8").match(/^ARG AGE_VERSION=(\S+)$/m)?.[1];
@@ -185,12 +190,8 @@ function imageValues(path: string, image: string, what: string): string[] {
 
 const work = mkdtempSync(join(tmpdir(), "trustiot-postgres-e2e-"));
 // What this run created and still has to remove; the uninstall test hands the kept Cluster over.
-const created = { secret: false, passwordSecrets: false, release: false, cluster: false, clickhouse: false, probePolicy: false, probes: [] as string[] };
+const created = { passwordSecrets: false, release: false, cluster: false, clickhouse: false, probePolicy: false, probes: [] as string[] };
 const report: Record<string, unknown> = { run: RUN, shape: SHAPE, namespace: NAMESPACE, release: RELEASE, cluster: CLUSTER };
-
-function hex(bytes: number): string {
-  return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
-}
 
 const base = [
   "--values",
@@ -202,8 +203,6 @@ const base = [
   ...imageValues("postgres.bundled.image", POSTGRES_IMAGE, "E2E_POSTGRES_IMAGE"),
   ...imageValues(`services.${SERVICE}.image`, SERVICE_IMAGE, "E2E_SERVICE_IMAGE"),
   ...imageValues("migrate.image", MIGRATE_IMAGE, "E2E_MIGRATE_IMAGE"),
-  "--set",
-  `clickhouse.bundled.adminSecret.name=${ADMIN_SECRET}`,
 ];
 
 interface StoredSecret {
@@ -293,7 +292,7 @@ beforeAll(async () => {
     kubectl("get", `cluster.postgresql.cnpg.io/${CLUSTER}`, `imagecatalog.postgresql.cnpg.io/${CLUSTER}`, "--ignore-not-found", "--output", "name"),
     kubectl("get", "pvc", "--selector", `cnpg.io/cluster=${CLUSTER}`, "--output", "name"),
     kubectl("get", "pvc", `data-${PREFIX}-clickhouse-0`, "--ignore-not-found", "--output", "name"),
-    kubectl("get", "secret", ...PASSWORD_SECRETS, "--ignore-not-found", "--output", "name"),
+    kubectl("get", "secret", ...PASSWORD_SECRETS, ADMIN_SECRET, "--ignore-not-found", "--output", "name"),
   ]
     .join("\n")
     .split("\n")
@@ -303,13 +302,6 @@ beforeAll(async () => {
       `${NAMESPACE} already has ${leftovers.join(", ")}, which this run would delete when it cleans up; use another E2E_RELEASE or namespace, or remove them yourself first`,
     );
   }
-
-  // The bundled ClickHouse's bootstrap admin password, fresh for this run, in a private temp file
-  // so it never appears in argv. The migration Job uses it to create the collector's account.
-  const adminFile = join(work, "clickhouse-admin");
-  writeFileSync(adminFile, hex(24), { mode: 0o600 });
-  created.secret = true;
-  kubectl("create", "secret", "generic", ADMIN_SECRET, `--from-file=password=${adminFile}`);
 
   // One install, as a real one: the databases, the migration Job, which waits for them, generates
   // the passwords and creates the roles, and the service and the collector, which wait for the
@@ -344,14 +336,13 @@ afterAll(() => {
     [created.probePolicy, () => kubectl("delete", "networkpolicy", PROBE, "--ignore-not-found")],
     [created.release, () => helm("uninstall", RELEASE, "--wait", "--timeout", "3m")],
     // Kept on uninstall (helm.sh/resource-policy: keep), like the Cluster below.
-    [created.passwordSecrets, () => kubectl("delete", "secret", ...PASSWORD_SECRETS, "--ignore-not-found")],
+    [created.passwordSecrets, () => kubectl("delete", "secret", ...PASSWORD_SECRETS, ADMIN_SECRET, "--ignore-not-found")],
     // The ClickHouse StatefulSet keeps its volume on uninstall (persistentVolumeClaimRetentionPolicy).
     [created.clickhouse, () => kubectl("delete", "pvc", `data-${PREFIX}-clickhouse-0`, "--ignore-not-found", "--wait=true", "--timeout=180s")],
     // Kept on uninstall (helm.sh/resource-policy: keep): deleting the Cluster deletes its volume.
     [created.cluster, () => kubectl("delete", `cluster.postgresql.cnpg.io/${CLUSTER}`, "--ignore-not-found", "--wait=true", "--timeout=180s")],
     [created.cluster, () => kubectl("delete", `imagecatalog.postgresql.cnpg.io/${CLUSTER}`, "--ignore-not-found", "--wait=true")],
     [created.cluster, () => kubectl("delete", "pvc", "--selector", `cnpg.io/cluster=${CLUSTER}`, "--ignore-not-found", "--wait=true", "--timeout=180s")],
-    [created.secret, () => kubectl("delete", "secret", ADMIN_SECRET, "--ignore-not-found")],
   ];
   for (const [done, cleanup] of steps) {
     if (!done) continue;
@@ -551,6 +542,17 @@ describe(`bundled Postgres (${SHAPE} shape)`, () => {
         expect(logs.includes(value) || logs.includes(Buffer.from(value, "base64").toString())).toBe(false);
       }
     }
+    // ClickHouse's init container generated the admin password the Job logged in with
+    // (Laysi/trustiot-v2#403), into the Secret the chart declares, bound to it like the others.
+    const admin = json<StoredSecret>("get", "secret", ADMIN_SECRET, "--show-managed-fields");
+    report.adminSecret = {
+      keys: Object.keys(admin.data ?? {}),
+      generation: admin.metadata.annotations?.["trustiot.io/password-generation"],
+      bound: admin.metadata.annotations?.["trustiot.io/password-secret-uid"] === admin.metadata.uid,
+    };
+    expect(report.adminSecret).toEqual({ keys: [ADMIN_ACCOUNT], generation: "1", bound: true });
+    expect(Buffer.from(admin.data?.[ADMIN_ACCOUNT] ?? "", "base64").toString()).toMatch(/^[0-9a-f]{64}$/);
+    expect(logs.includes(admin.data?.[ADMIN_ACCOUNT] ?? "-")).toBe(false);
     // The collector started with its password: Ready, not waiting on a missing key.
     const collector = json<{ items: Pod[] }>("get", "pods", "--selector", `app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=otel-collector`).items;
     expect(collector.length).toBe(1);

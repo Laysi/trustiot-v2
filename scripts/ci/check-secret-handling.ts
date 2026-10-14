@@ -42,7 +42,8 @@
  *    used: its literals, files and env files are plain text this check cannot verify. Templates
  *    (every file under a chart's `templates/` but NOTES.txt, read per chart, and other `.yaml`
  *    and `.tpl` files with `{{ }}`) may not declare a Secret or a templated kind, except an empty
- *    Secret the migration Job fills: labelled `trustiot.io/filled-by: migrate`, with no key but
+ *    Secret that tools/migrate fills (the migration Job, or the bundled ClickHouse's init
+ *    container for its admin password): labelled `trustiot.io/filled-by: migrate`, with no key but
  *    apiVersion, kind, metadata and type, and no template action but the few lines
  *    `FILLED_SECRET_ACTIONS` names word for word (docs/architecture/secrets.md). A template is
  *    read as YAML with its actions set aside, so every spelling of a kind is found, and a kind not
@@ -1719,7 +1720,8 @@ function mappingLines(lines: readonly string[], index: number, column: number, d
 
 /**
  * Whether the text of the Secret declared on line `index` is one the chart may declare: empty,
- * for the migration Job to fill (docs/architecture/secrets.md). It carries the label
+ * for tools/migrate to fill (the migration Job, or the bundled ClickHouse's init container;
+ * docs/architecture/secrets.md). It carries the label
  * `trustiot.io/filled-by: migrate`; its keys are only apiVersion, kind, metadata and type (no
  * `data` or `stringData`); and every line with a template action is one of
  * `FILLED_SECRET_ACTIONS`, word for word. The parsed object is checked as well

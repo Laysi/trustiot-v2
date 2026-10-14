@@ -6,6 +6,7 @@
 | --- | --- |
 | `migrate run`（或不帶參數） | 一次 migration（chart 的 Job）。結束碼 0 完成、1 失敗、2 設定或參數不能用 |
 | `migrate wait-for-job` | 服務 pod 的 init container：經 Kubernetes API 等設定裡的 Job 完成；Job 失敗時以 1 結束 |
+| `migrate clickhouse-admin-password` | 叢集內 ClickHouse pod 的 init container（Laysi/trustiot-v2#403）：在 chart 宣告的空 Secret 產生 bootstrap 管理帳號的密碼（規則同下方的密碼 Secret，代是 `clickhouse.bundled.adminPasswordGeneration`），再寫成 ClickHouse 映像讀的檔案（[`src/clickhouse_admin.rs`](src/clickhouse_admin.rs)） |
 | `cargo test -p migrate` | 單元測試與整合測試（下方「測試」） |
 
 映像是 `deploy/images/migrate`（`image.toml`），與服務一樣由 release 流程建置與簽章。
@@ -26,7 +27,7 @@
    - 以 `<schema>_owner` 依序套用 `migrations/postgres/` 的每個檔案，一個檔案一個交易，`search_path` 是該 schema；已套用的檔案若內容改了就停止。檔案執行完後比對交易 ID、`current_user` 與 `role` 設定，與執行前不同（檔案結束了交易或切換了角色）就停止，不記錄這個檔案（下方「檔案的規則」）。
    - 所有服務之後：帶 Job 標記、migration 角色有 ADMIN OPTION、還能登入、但服務清單裡已經沒有任何服務用它的角色（服務從清單移除或改名）一律 `NOLOGIN`。挑選依標記與 ADMIN OPTION，不依名稱，所以 CloudNativePG 的 superuser、客戶自己的帳號、另一個實例的角色都不會被碰。
 5. 每租戶角色的 hook（`TenantRoleHook`）：以服務的 owner 角色讀租戶表，每個租戶的角色不存在就以 NOLOGIN NOINHERIT 建立，再執行 hook 的範本。角色是叢集層級的物件，不在資料庫備份裡，所以還原的資料庫在下一次執行時取回它們。目前沒有 hook，AGE 的每租戶角色在 Laysi/trustiot-v2#176 接上。
-6. ClickHouse（有設定 `TRUSTIOT_CLICKHOUSE_URL` 與 `TRUSTIOT__CLICKHOUSE__*` 時）：以有 access management 的帳號依序套用 `services/ingest/migrations/clickhouse/`，記在 ClickHouse 的 `trustiot_migrate.applied`；collector 的帳號（`TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR`，密碼也來自它的 Secret）不存在就建立，只有預設角色 `trustiot_otel_collector`；存在但多了角色、權限或設定（含 settings profile）就停止，不自動刪除（`DROP USER` 是管理者的決定）；collector 關閉或帳號改名之後，其他拿到 `trustiot_otel_collector` 角色的帳號（只有 Job 的 `CREATE USER ... DEFAULT ROLE` 會給；Job 自己執行時用的帳號 `currentUser()` 與設定檔定義的帳號除外）改成 `HOST NONE`，不能再登入但不刪除，collector 再開啟時先設 Secret 的密碼、再恢復成 `HOST ANY`；`trustiot_otel_collector` 角色本身多了 `0006_logs.sql` 以外的權限或角色時也停止；密碼登不進去才重設。`https` 的 ClickHouse 只信任 `TRUSTIOT_CLICKHOUSE_CA_FILE`，不用系統的根憑證。
+6. ClickHouse（有設定 `TRUSTIOT_CLICKHOUSE_URL` 與 `TRUSTIOT__CLICKHOUSE__*` 時）：以有 access management 的帳號（叢集內 ClickHouse 時密碼經 Kubernetes API 從它的 init container 填的 Secret 讀取：Secret 還沒填好時等待，ClickHouse 拒絕時重讀再試，只採用 init container 填過的物件裡的值）依序套用 `services/ingest/migrations/clickhouse/`，記在 ClickHouse 的 `trustiot_migrate.applied`；collector 的帳號（`TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR`，密碼也來自它的 Secret）不存在就建立，只有預設角色 `trustiot_otel_collector`；存在但多了角色、權限或設定（含 settings profile）就停止，不自動刪除（`DROP USER` 是管理者的決定）；collector 關閉或帳號改名之後，其他拿到 `trustiot_otel_collector` 角色的帳號（只有 Job 的 `CREATE USER ... DEFAULT ROLE` 會給；Job 自己執行時用的帳號 `currentUser()` 與設定檔定義的帳號除外）改成 `HOST NONE`，不能再登入但不刪除，collector 再開啟時先設 Secret 的密碼、再恢復成 `HOST ANY`；`trustiot_otel_collector` 角色本身多了 `0006_logs.sql` 以外的權限或角色時也停止；密碼登不進去才重設。`https` 的 ClickHouse 只信任 `TRUSTIOT_CLICKHOUSE_CA_FILE`，不用系統的根憑證。
 
 每一步都先比對再改，所以設定沒變時再跑一次什麼都不變；每一項變更寫成一行日誌，結果的 `changes` 也列出它們，測試據此與 catalog 的快照確認第二次執行沒有變更。
 
@@ -70,7 +71,7 @@ Job 自己的設定：
 | 變數 | 內容 |
 | --- | --- |
 | `TRUSTIOT__POSTGRES__USERNAME`、`__PASSWORD` | migration 角色 |
-| `TRUSTIOT__CLICKHOUSE__USERNAME`、`__PASSWORD` | 有 access management 的 ClickHouse 帳號 |
+| `TRUSTIOT__CLICKHOUSE__USERNAME`，與 `__PASSWORD` 或 `__PASSWORD_SECRET` 其中之一 | 有 access management 的 ClickHouse 帳號；`__PASSWORD_SECRET` 是放它密碼的 Secret 名稱（叢集內 ClickHouse 的 `<release>-clickhouse-admin-password`，key 是帳號名稱），經 `TRUSTIOT__PASSWORDS__*` 的 API 設定讀取，所以兩者要一起設 |
 | `TRUSTIOT__PASSWORDS__API_URL`、`__NAMESPACE`、`__TOKEN_FILE`、`__CA_FILE` | 密碼 Secret 所在的 Kubernetes API（`https://`；`http://` 只接受 127.0.0.1，給測試用）、namespace、projected token（每次請求都重讀）與唯一的信任根 |
 | `TRUSTIOT__PASSWORDS__GENERATION` | 密碼的代（chart 的 `migrate.passwordGeneration`，1 到 9 位數字）；比 Secret 記的大才全部重新產生，較小時保留 |
 | `TRUSTIOT__PASSWORDS__POSTGRES` | 逗號分隔的 `角色=Secret`；key 是角色名稱 |
@@ -78,6 +79,8 @@ Job 自己的設定：
 | `TRUSTIOT__WAIT__DATABASES`、`__LOCK` | 等資料庫、等另一次執行的上限（例如 `10m`） |
 
 `wait-for-job` 的設定：`TRUSTIOT__KUBE__JOB`、`__NAMESPACE`、`__API_URL`（`https://`）、`__TOKEN_FILE`（每次請求都重讀）、`__CA_FILE`（唯一的信任根）。
+
+`clickhouse-admin-password` 的設定：`TRUSTIOT__ADMIN__API_URL`、`__NAMESPACE`、`__TOKEN_FILE`、`__CA_FILE`（同上）、`__SECRET`（chart 宣告的空 Secret）、`__ACCOUNT`（管理帳號，也是 Secret 的 key）、`__GENERATION`（1 到 9 位數字）、`__PASSWORD_FILE`（絕對路徑，寫成只有擁有者能讀的檔案，先寫暫存檔再改名）、`__WAIT`（API 不回應時重試的上限，預設 10 分鐘）。
 
 `scripts/dev.ts up` 在本機執行同一個 binary（Laysi/trustiot-v2#336），不改這個 crate：`up` 以 superuser 建立 migration 角色 `trustiot_owner`（擁有資料庫、有 CREATEROLE、不是 superuser，`tests/support/mod.rs` 的 `MIGRATOR_INIT` 是同一種形狀），以 `cargo build --package migrate` 建出 binary，用平台設定與上表的變數（不帶參數）執行。密碼 Secret 沒有 Kubernetes：`scripts/lib/secret-api.ts` 在 127.0.0.1 的隨機埠起一個只回答 `GET` 與帶 `resourceVersion` 的 merge `PATCH` 的替身，宣告一個空的 Secret，`TRUSTIOT__PASSWORDS__API_URL` 指向它（`http://` 只接受 127.0.0.1，正是為這種用途保留的），所以 `identity_app` 的密碼走叢集裡一樣的程式路徑產生並設定，登入角色不是 NOLOGIN。替身只在 Job 執行期間存在，Secret 在記憶體裡；選擇它而不是讓這個 crate 接受另一個密碼來源的理由見 [scripts/README.md](../../scripts/README.md) 的「密碼的決定」。本機的 Job 不處理 ClickHouse，也不管 `example-service` 的角色（它不在 `PRODUCT` 裡，由 `up` 自己建立）。
 
@@ -101,5 +104,6 @@ Job 自己的設定：
 | `tests/outbox_and_tenant_roles.rs` | outbox 的表、policy 與讀者的增減；`outbox-aggregate.sql` 之前的資料庫（`outbox_aggregate` 沒有租戶欄位與 RLS、已有舊版寫的聚合）再跑一次只套用這個檔案、每個聚合拿到最後一筆事件的租戶、服務角色在沒有租戶時看不到任何聚合，下一次執行沒有變更（Laysi/trustiot-v2#413）；每租戶角色 hook 為新租戶建立角色，還原的資料庫少了角色時補回；從服務清單移除的服務的登入角色變成 NOLOGIN、舊密碼登不進去；部署關掉的服務（沒有綁定 Secret）變成 NOLOGIN，重新開啟時先設密碼再 LOGIN；沒有 Job 標記、或 migration 角色沒有 ADMIN OPTION 的登入角色不受影響 |
 | `tests/clickhouse.rs` | ClickHouse DDL 套用一次、改過的檔案被拒；collector 帳號以 Job 產生的密碼建立、寫入，新的密碼世代輪替，多了權限、設定或角色不是預設角色時停止；collector 角色多了權限或角色時停止；collector 關閉或帳號改名時舊帳號不能再登入（`HOST NONE`），再開啟時恢復 |
 | `tests/passwords.rs` | 密碼 Secret 對假的 API：第一次填入每個缺的 key（256 位元十六進位，各不相同），第二次只讀不寫；新的世代換掉每個受管的 key、不動其他 key、只換一次；較小的世代（rollback）不換、之後升級回來也不換；不是 Job 填過的 Secret 物件（uid 不同，含帶著同代 annotation 與自選密碼的）每個 key 都重新產生，別人只改 annotation 時也一樣，綁定時拿掉白名單以外的 annotation、標籤、ownerReferences 與 finalizers（報告只寫 key），已綁定的不再動；遺失或不能用的 key 單獨重新產生；Secret 不存在時停止並寫出處理方式；讀寫之間被改過時重讀，一直被改時停止而不覆蓋；拒絕的 token 與 403、API 暫時 503 的重試與上限；報告、錯誤與 `Debug` 都不含密碼或它的 base64；沒有綁定時不發請求（不需要容器） |
+| `tests/clickhouse_admin.rs` | `clickhouse-admin-password` 對假的 API：第一次填入並寫出 0400 的檔案、第二次只讀不寫，留下的暫存檔不影響；新的代輪替一次，rollback 不換；別人建立的 Secret（uid 不同）不採用；Secret 不存在或被拒時停止並寫出處理方式。對拋棄式 ClickHouse：Job 只用 init container 寫入的密碼，被拒時重讀 Secret，等到上限時的訊息寫出 Secret 名稱；未綁定的 Secret 裡的值不使用；全新安裝時 Job 等 Secret 填好才連線 |
 | `tests/wait_for_job.rs` | `wait-for-job` 對一個假的 API server：等到完成、失敗與拒絕的 token、不信任其他 CA；Job 不存在時繼續等，訊息寫出 Job 名稱、原因與處理方式 |
 | `tests/registry.rs` | `PRODUCT` 列出每個檔案、檔案符合規則（大小寫與空白的變化也擋得到）、不一致的清單被拒絕；chart 綁定密碼的登入角色（`_migrate.tpl` 的兩條 Postgres 綁定與 `trustiot.migrate.platformLogins`）與 `PRODUCT` 的角色一致（不需要資料庫） |

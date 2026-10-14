@@ -1,4 +1,4 @@
-# 叢集測試（入口 gateway、服務間授權、日誌管線、叢集內的 Postgres）
+# 叢集測試（入口 gateway、服務間授權、日誌管線、叢集內的 Postgres、ClickHouse 管理帳號密碼）
 
 兩個測試共用 `cluster.ts`（環境變數、`.prototools` 鎖定的 helm 與 kubectl、不碰既有安裝的 `helm install`）：
 
@@ -7,7 +7,7 @@
 | `ingress.e2e.ts` | 入口 gateway：cookie 驗證、例外路徑、標頭、路徑繞過、身分服務停機 | Laysi/trustiot-v2#62 |
 | `mesh.e2e.ts` | 服務間授權：清單內的呼叫放行、清單外的被拒，AuthorizationPolicy 與 NetworkPolicy 各自生效，預設拒絕下健康檢查通過 | Laysi/trustiot-v2#63 |
 
-`otel.e2e.ts`（日誌管線，Laysi/trustiot-v2#73）與 `postgres.e2e.ts`（叢集內的 Postgres，Laysi/trustiot-v2#58）不經入口 gateway，有自己的環境變數，不用 `cluster.ts`，見最後兩節。
+`otel.e2e.ts`（日誌管線，Laysi/trustiot-v2#73）、`postgres.e2e.ts`（叢集內的 Postgres，Laysi/trustiot-v2#58）與 `clickhouse-admin.e2e.ts`（叢集內 ClickHouse 的管理帳號密碼，Laysi/trustiot-v2#403）不經入口 gateway，有自己的環境變數，不用 `cluster.ts`，見最後三節。
 
 ## 入口 gateway（`ingress.e2e.ts`）
 
@@ -162,7 +162,7 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/mesh.e2e.ts
 - 直接以 OTLP 送給 collector 含 email、Bearer token、JWT、密碼、電話與 request body 的日誌與 span 後，ClickHouse 與 SIEM 裡的紀錄都已遮蔽（`****`），任何一個原始值都找不到。
 - collector 的 pod 在 restricted 的 namespace 裡執行，安全設定符合 restricted Pod Security Standard。
 
-安裝分兩步：先只裝 ClickHouse，以 bootstrap 管理帳號在 pod 內套用 `services/ingest/migrations/clickhouse/` 並建立 collector 的帳號（正式安裝由 migration Job 做這一步，也由它產生 collector 的密碼；這個測試以 `migrate.enabled: false` 關閉 Job，自己做，所以不需要 migrate 映像），再 `helm upgrade` 開啟 collector、轉送與 example-service。chart 宣告的 collector 密碼 Secret（`<release>-otel-collector-password`，空的）出現後，測試把同一個密碼寫進去，代替 Job 的那一步；Job 本身產生密碼的流程由 `postgres.e2e.ts` 驗證。ClickHouse 管理帳號、collector 帳號與 SIEM token 每次執行重新產生，測試自己建立的 Secret 名稱帶隨機字尾，密碼只寫在本機暫存目錄的檔案（權限 0600）與 Secret 裡，不出現在指令列；SQL 經 stdin 送進 pod，管理帳號密碼不離開 pod。collector 的密碼 Secret 在 uninstall 時保留（`helm.sh/resource-policy: keep`），開始前若已存在就停止。結束時移除 release、ClickHouse 的 PVC、替身 SIEM、這次建立的 Secret 與 collector 的密碼 Secret。
+安裝分兩步：先只裝 ClickHouse，以 bootstrap 管理帳號在 pod 內套用 `services/ingest/migrations/clickhouse/` 並建立 collector 的帳號（正式安裝由 migration Job 做這一步，也由它產生 collector 的密碼；這個測試以 `migrate.enabled: false` 關閉 Job，自己做；但 ClickHouse 的 init container 以 migrate 映像產生管理帳號密碼，所以仍需要 migrate 映像），再 `helm upgrade` 開啟 collector、轉送與 example-service。chart 宣告的 collector 密碼 Secret（`<release>-otel-collector-password`，空的）出現後，測試把同一個密碼寫進去，代替 Job 的那一步；Job 本身產生密碼的流程由 `postgres.e2e.ts` 驗證。collector 帳號與 SIEM token 每次執行重新產生，測試自己建立的 Secret 名稱帶隨機字尾，密碼只寫在本機暫存目錄的檔案（權限 0600）與 Secret 裡，不出現在指令列；ClickHouse 管理帳號的密碼由 init container 在叢集內產生（Laysi/trustiot-v2#403），SQL 經 stdin 送進 pod，pod 內的 client 讀 init container 寫的檔案，管理帳號密碼不離開 pod。collector 與 ClickHouse 管理帳號的密碼 Secret 在 uninstall 時保留（`helm.sh/resource-policy: keep`），開始前若已存在就停止。結束時移除 release、ClickHouse 的 PVC、替身 SIEM、這次建立的 Secret 與兩個保留的密碼 Secret。
 
 前置條件：
 
@@ -180,14 +180,16 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/mesh.e2e.ts
    sudo k3s ctr -n k8s.io images import example-service.tar
    ```
 
-3. collector 與 ClickHouse 的映像以 `values.yaml` 的 digest 從 Docker Hub 拉取。
-4. 本機有 `proto install` 裝好的 helm 與 kubectl。
+3. migrate 映像（`deploy/images/migrate`）要在叢集拉得到，建法見「叢集內的 Postgres」；tag 不必和 example-service 相同（Job 關閉時沒有這個限制）。
+4. collector 與 ClickHouse 的映像以 `values.yaml` 的 digest 從 Docker Hub 拉取。
+5. 本機有 `proto install` 裝好的 helm 與 kubectl。
 
 執行（在 repo 根目錄）：
 
 ```sh
 E2E_NAMESPACE=e2e-73 \
 E2E_SERVICE_IMAGE=localhost/trustiot-e2e/example-service:73 \
+E2E_MIGRATE_IMAGE=localhost/trustiot-e2e/migrate:73 \
 E2E_IMAGE_PULL_POLICY=Never \
 bun test --timeout 900000 ./deploy/chart/tests/e2e/otel.e2e.ts
 ```
@@ -196,6 +198,7 @@ bun test --timeout 900000 ./deploy/chart/tests/e2e/otel.e2e.ts
 | --- | --- | --- |
 | `E2E_NAMESPACE` | 必填 | 測試用的 namespace，必須已存在 |
 | `E2E_SERVICE_IMAGE` | 必填 | example-service 的映像，`repository:tag` 或加上 `@sha256:…` |
+| `E2E_MIGRATE_IMAGE` | 必填 | migrate 映像，ClickHouse 的 init container 用它產生管理帳號密碼 |
 | `E2E_IMAGE_PULL_POLICY` | `IfNotPresent` | 匯入節點的映像用 `Never` |
 | `E2E_KUBECONTEXT` | 目前的 context | kubeconfig 裡的 context |
 | `E2E_RELEASE` | `trustiot` | helm release 名稱；已經存在時直接失敗 |
@@ -210,6 +213,7 @@ bun test --timeout 900000 ./deploy/chart/tests/e2e/otel.e2e.ts
 - 伺服器：`ssl` 開啟、`shared_preload_libraries` 含 `age`、PostgreSQL 18、`max_connections` 與 `shared_buffers` 是 values 的值；`trustiot` 資料庫的 AGE 版本等於 `deploy/images/postgres/Containerfile` 的 `AGE_VERSION`，locale 是內建的 `C.UTF-8`，owner 是 `trustiot_owner`；`postgres` 沒有密碼、`<cluster>-superuser` Secret 不存在；owner 與服務的角色都不是 superuser，也沒有 CREATEDB、BYPASSRLS；服務的角色沒有 CREATEROLE，owner 有（bootstrap 的 `postInitApplicationSQL`，migration Job 以它建立服務的角色，Laysi/trustiot-v2#60）。
 - cypher() 在這個資料庫建立、查詢並刪除一張圖。
 - 從 pod 內以 TCP、`sslmode=disable` 連線被伺服器的 pg_hba 拒絕（`no encryption`）。
+- ClickHouse 的 init container 把管理帳號密碼產生進 `<release>-clickhouse-admin-password`（key 是帳號名稱、annotation `trustiot.io/password-generation` 是 `1`、`keep`，值是 64 個十六進位字元），Job 經 API 讀到它並以它連上 ClickHouse。
 - Job 把密碼產生進 chart 宣告的空 Secret（`<release>-identity-password`、`<release>-otel-collector-password`）：每個 Secret 只有該有的 key、annotation `trustiot.io/password-generation` 是 `1`、帶 `helm.sh/resource-policy: keep`，`data` 只由 field manager `trustiot-migrate` 寫入；值是 64 個十六進位字元；Job 的日誌寫出產生了哪個角色的密碼，不含任何值。collector Ready。
 - example-service 以 Job 建立的角色 `identity_app`、chart 掛載的 CA 與 `<cluster>-rw.<namespace>.svc` 連線：pod Ready 代表 readiness 的 Postgres 檢查以 verify-full 成功，伺服器端看得到這個角色的 TLS 連線。
 - 同一個 pod template 的獨立 pod：不改的對照組 Ready；CA 換成叢集的根 CA（`kube-root-ca.crt`）時失敗（`UnknownIssuer`）；主機改成 primary 的 pod IP 時失敗（`not valid for name`）；換掉 `app.kubernetes.io/component` label、不在 `mesh.calls` 的 pod 連不上（NetworkPolicy 擋下，連線到不了 Postgres，ambient 下由 pod 的 ztunnel 重置，沒交換任何憑證或密碼）。
@@ -220,12 +224,12 @@ bun test --timeout 900000 ./deploy/chart/tests/e2e/otel.e2e.ts
 
 密碼的比較只在測試的行程裡做（`data` 的 SHA-256），輸出與報告只有 `unchanged` 或 `changed`，不印任何值或 digest。
 
-測試只建立一個 Secret：ClickHouse 的 bootstrap 管理帳號（名稱帶隨機字尾，密碼每次隨機產生，只寫在本機暫存目錄的檔案與 Secret 裡）。服務與 collector 的密碼全由 Job 產生。測試查資料庫的 SQL 經 stdin 送進 primary，以 `postgres` 角色走 pod 內的 local socket 執行，沒有任何密碼。開始前，同名的 Cluster、ImageCatalog、它們的 PVC、ClickHouse 的 PVC 或兩個密碼 Secret 已經存在（之前 uninstall 保留下來的）時直接失敗，不碰它們。結束時刪除測試的 pod、NetworkPolicy、release，再明確刪除保留下來的密碼 Secret、ClickHouse 的 PVC、Cluster、ImageCatalog 與 PVC，最後刪除管理帳號的 Secret。
+測試不建立任何 Secret：ClickHouse 的管理帳號密碼由它的 init container 產生（Laysi/trustiot-v2#403），服務與 collector 的密碼全由 Job 產生。測試查資料庫的 SQL 經 stdin 送進 primary，以 `postgres` 角色走 pod 內的 local socket 執行，沒有任何密碼。開始前，同名的 Cluster、ImageCatalog、它們的 PVC、ClickHouse 的 PVC 或三個密碼 Secret 已經存在（之前 uninstall 保留下來的）時直接失敗，不碰它們。結束時刪除測試的 pod、NetworkPolicy、release，再明確刪除保留下來的密碼 Secret、ClickHouse 的 PVC、Cluster、ImageCatalog 與 PVC。
 
 前置條件：
 
 1. 叢集已依 `deploy/cloudnative-pg/README.md` 裝好 CloudNativePG operator，並有 Istio ambient 與 Gateway API CRD（chart 一定會產生入口的 Gateway；測試不經入口）。
-2. namespace 已建立，設 Pod Security `restricted`。測試的身分要能在這個 namespace 管理 chart 的物件（含 `postgresql.cnpg.io` 的 Cluster、ImageCatalog、Database，`gateway.networking.k8s.io` 的 Gateway、HTTPRoute 與 `security.istio.io` 的 AuthorizationPolicy，內建的 `admin` ClusterRole 都不含；還有 migration Job 的 Role 與 RoleBinding，它們只給 Job 讀寫兩個密碼 Secret），並能 `exec` 進 pod、讀 pod 與 Job 的 log、讀 Secret。
+2. namespace 已建立，設 Pod Security `restricted`。測試的身分要能在這個 namespace 管理 chart 的物件（含 `postgresql.cnpg.io` 的 Cluster、ImageCatalog、Database，`gateway.networking.k8s.io` 的 Gateway、HTTPRoute 與 `security.istio.io` 的 AuthorizationPolicy，內建的 `admin` ClusterRole 都不含；還有 migration Job 與 ClickHouse 的 Role 與 RoleBinding，它們只給 Job 讀寫兩個密碼 Secret、讀 ClickHouse 的管理帳號 Secret，給 ClickHouse 讀寫它自己的那一個），並能 `exec` 進 pod、讀 pod 與 Job 的 log、讀 Secret。
 3. Postgres 映像（`deploy/images/postgres`）、example-service 的映像（建法見「日誌管線」）與 migrate 映像（`deploy/images/migrate`）要在叢集拉得到；example-service 與 migrate 的映像 tag 要相同（chart 要求用 Postgres 的服務與 Job 同一個版本）。Postgres 映像沒有 `RUN` 在 arm64 階段，x86 主機可以不靠模擬器建出 arm64 映像，再匯入節點：
 
    ```sh
@@ -267,4 +271,41 @@ bun test --timeout 900000 ./deploy/chart/tests/e2e/postgres.e2e.ts
 | `E2E_KUBECONTEXT` | 目前的 context | kubeconfig 裡的 context |
 | `E2E_RELEASE` | `trustiot` | helm release 名稱；release、或同名的 Cluster、ImageCatalog、PVC 與密碼 Secret（之前 uninstall 保留下來的）已經存在時直接失敗，不碰它們 |
 | `E2E_REPORT_DIR` | 空 | 設定時把伺服器設定、角色、密碼 Secret 的形狀（名稱、key、世代，沒有值）、拒絕訊息、`unchanged`/`changed` 與保留的物件寫成 `postgres-e2e-<shape>.json` |
+| `E2E_KEEP` | 空 | `1` 時測完不移除任何東西，方便查看 |
+
+## 叢集內 ClickHouse 的管理帳號密碼（`clickhouse-admin.e2e.ts`）
+
+`clickhouse-admin.e2e.ts` 驗證叢集內 ClickHouse 的 bootstrap 管理帳號密碼在叢集內產生（Laysi/trustiot-v2#403）：以地端型態加 `values-otel-e2e.yaml` 只安裝 ClickHouse（collector、服務與 migration Job 都關掉，不需要 Postgres 或 CloudNativePG），然後依序檢查：
+
+- 舊的安裝方式：`clickhouse.bundled.adminSecret.name` 指向測試建立的 Secret 時，ClickHouse 接受那個密碼，沒有 init container，也沒有產生的 Secret。
+- 搬移：拿掉 `adminSecret` 再 `helm upgrade`：ClickHouse 重啟，init container `admin-password` 以 0 結束，Secret `<release>-clickhouse-admin-password` 只有帳號名稱一個 key、值是 64 個十六進位字元、代是 `1`、綁定（`trustiot.io/password-secret-uid` 等於它的 uid）、帶 `keep` 與 `trustiot.io/filled-by: migrate`；init container 的日誌寫出產生了密碼、不含密碼；新密碼被接受，舊密碼被拒（`Code 516`）。刪掉舊 Secret 再重啟 pod，密碼不變、日誌沒有再產生。
+- 輪替：`adminPasswordGeneration=2` 升級後 Secret 換成代 `2` 的新密碼，新密碼被接受、前一個被拒。
+- rollback 回輪替前的版本：密碼與代都不變；再升級回代 `2` 也不變。
+- 權限：只有 ClickHouse 的 ServiceAccount 能 `get`、`patch` 這個 Secret；chart 的其他 ServiceAccount 與 namespace 的 `default` 都不能，所有人都不能 `list`、`create` Secret（`kubectl auth can-i --as`）。
+
+密碼只在測試的行程裡比較（SHA-256），送進 pod 時經 stdin；輸出與報告只有 `unchanged`、`changed` 與 ClickHouse 的錯誤碼。開始前同名的 release、產生的 Secret 或 ClickHouse 的 PVC 已存在時直接失敗；結束時移除 release、PVC、產生的 Secret 與測試建立的舊 Secret。
+
+前置條件：
+
+1. namespace 已建立，設 Pod Security `restricted`；叢集要有 Gateway API CRD 與 Istio（chart 一定會產生入口的 Gateway）。測試的身分要能在這個 namespace 管理 chart 的物件（含 Gateway、HTTPRoute 與 AuthorizationPolicy）、Role 與 RoleBinding，讀 pod 的 log 與 Secret、`exec` 進 pod，並能以 `--as` 模擬這個 namespace 的 ServiceAccount（內建的 `admin` ClusterRole 都有）。
+2. migrate 映像要在叢集拉得到，建法見「叢集內的 Postgres」。
+3. 本機有 `proto install` 裝好的 helm 與 kubectl。
+
+執行（在 repo 根目錄）：
+
+```sh
+E2E_NAMESPACE=e2e-403 \
+E2E_MIGRATE_IMAGE=localhost/trustiot-e2e/migrate:403 \
+E2E_IMAGE_PULL_POLICY=Never \
+bun test --timeout 900000 ./deploy/chart/tests/e2e/clickhouse-admin.e2e.ts
+```
+
+| 變數 | 預設 | 說明 |
+| --- | --- | --- |
+| `E2E_NAMESPACE` | 必填 | 測試用的 namespace，必須已存在 |
+| `E2E_MIGRATE_IMAGE` | 必填 | migrate 映像，`repository:tag` 或加上 `@sha256:…` |
+| `E2E_IMAGE_PULL_POLICY` | `IfNotPresent` | 匯入節點的映像用 `Never` |
+| `E2E_KUBECONTEXT` | 目前的 context | kubeconfig 裡的 context |
+| `E2E_RELEASE` | `trustiot` | helm release 名稱 |
+| `E2E_REPORT_DIR` | 空 | 設定時把每一步的結果（沒有任何值或 digest）寫成 `clickhouse-admin-e2e.json` |
 | `E2E_KEEP` | 空 | `1` 時測完不移除任何東西，方便查看 |
