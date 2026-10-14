@@ -1,0 +1,52 @@
+The tools/migrate tests of Laysi/trustiot-v2#403 by name (build host, CI=1, so the
+container-backed tests ran against throwaway ClickHouse containers instead of skipping),
+2026-10-15 01:03 Asia/Taipei, before the final wording of two error hints and a clippy fix in a
+unit test. checks.txt has the whole workspace passing at 8c8d7b6, whose Rust code is the
+branch's final Rust code (the later commits change only TypeScript tests and docs).
+  cargo test --locked -p migrate --test clickhouse_admin --test passwords --test clickhouse --lib
+(in order: the lib unit tests, clickhouse.rs, clickhouse_admin.rs, passwords.rs)
+
+test clickhouse::tests::splits_like_the_ingest_tests ... ok
+test config::tests::clickhouse_admin_settings ... ok
+test config::tests::password_bindings ... ok
+test clickhouse::tests::every_product_file_splits ... ok
+test config::tests::plain_identifiers ... ok
+test config::tests::generations ... ok
+test config::tests::the_clickhouse_password_comes_from_exactly_one_place ... ok
+test http::tests::credentials_are_sensitive_headers ... ok
+test kube::tests::reads_the_job_conditions ... ok
+test passwords::tests::generations_are_decimal_digits ... ok
+test passwords::tests::data_is_trusted_only_in_the_object_the_job_filled ... ok
+test passwords::tests::binding_a_secret_removes_metadata_neither_the_chart_nor_the_job_sets ... ok
+test http::tests::a_client_never_switches_scheme ... ok
+test passwords::tests::only_a_plain_status_reason_is_quoted ... ok
+test passwords::tests::keys_are_kept_only_when_present_usable_and_of_this_generation ... ok
+test passwords::tests::generations_only_go_up ... ok
+test secret::tests::debug_hides_the_password ... ok
+test passwords::tests::the_patch_carries_the_resource_version_the_generation_the_uid_and_only_the_new_keys ... ok
+test secret::tests::generated_passwords_are_256_bit_hex_and_never_repeat ... ok
+test secret::tests::short_long_and_odd_passwords_are_refused_without_echoing_them ... ok
+test secret::tests::the_verifier_matches_rfc_7677 ... ok
+test secret::tests::verifiers_use_fresh_salts ... ok
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+test clickhouse_ddl_and_the_collector_account ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.20s
+test a_missing_secret_or_refused_access_stops_it_with_the_way_out ... ok
+test a_secret_someone_else_created_is_never_trusted ... ok
+test the_init_container_fills_the_secret_and_the_file_once ... ok
+test a_new_generation_rotates_once_and_a_rollback_keeps_it ... ok
+test on_a_fresh_install_the_job_waits_for_the_init_container ... ok
+test the_job_uses_only_the_password_the_init_container_wrote_and_rereads_it_when_refused ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.70s
+test nothing_bound_makes_no_request ... ok
+test a_value_the_api_did_not_store_as_written_stops_the_run ... ok
+test a_secret_being_deleted_is_never_filled ... ok
+test a_first_run_fills_the_empty_secrets_and_a_second_changes_nothing ... ok
+test binding_a_foreign_secret_removes_metadata_neither_the_chart_nor_the_job_sets ... ok
+test a_secret_someone_else_created_never_keeps_its_passwords ... ok
+test a_new_generation_rotates_every_managed_key_and_nothing_else ... ok
+test a_lost_or_unusable_key_is_regenerated_alone ... ok
+test a_concurrent_change_is_never_overwritten ... ok
+test a_rollback_keeps_the_passwords_and_so_does_the_re_upgrade ... ok
+test refused_access_and_transient_failures ... ok
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.05s

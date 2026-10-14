@@ -1,0 +1,25 @@
+# 2026-10-14T17:40:51Z secrets before the install:
+I1015 01:40:54.597382  337803 warnings.go:107] "Warning: configured AuthorizationPolicy will deny all traffic to TCP ports under its scope due to the use of only HTTP attributes in a DENY rule; it is recommended to explicitly specify the port"
+# 2026-10-14T17:41:03Z helm install --wait exit 0
+init admin-password: exit 0 Completed
+Ready=True
+nodeSelector={"kubernetes.io/arch":"arm64"}
+keys: trustiot_admin (length 88 base64)
+generation=1 bound=true
+# init container log:
+{"timestamp":"2026-10-14T17:40:58.140433Z","level":"INFO","service":"migrate","target":"opentelemetry","message":"Global tracer provider is set. Traces can now be created using global::tracer() or global::tracer_with_scope().","fields":{"name":"TracerProvider.GlobalSet"}}
+{"timestamp":"2026-10-14T17:40:58.287202Z","level":"INFO","service":"migrate","target":"migrate","message":"migration change","fields":{"change":"generated the password of trustiot_admin in Secret trustiot-clickhouse-admin-password (it had none)"}}
+{"timestamp":"2026-10-14T17:40:58.287494Z","level":"INFO","service":"migrate","target":"migrate::clickhouse_admin","message":"the bootstrap admin password is in place","fields":{"secret":"[REDACTED]","account":"trustiot_admin","file":"/etc/trustiot/clickhouse-admin/password"}}
+# ClickHouse accepts the password from the file the init container wrote:
+trustiot_admin
+# file mode in the server container:
+400 101:101 /etc/trustiot/clickhouse-admin/password
+# cleanup
+These resources were kept due to the resource policy:
+[Secret] trustiot-clickhouse-admin-password
+
+release "trustiot" uninstalled
+persistentvolumeclaim "data-trustiot-clickhouse-0" deleted from e2e-403 namespace
+secret "trustiot-clickhouse-admin-password" deleted from e2e-403 namespace
+NAME                                          READY   STATUS        RESTARTS   AGE
+pod/trustiot-ingress-istio-77946fb9f9-5twvq   1/1     Terminating   0          17s

@@ -1,0 +1,194 @@
+Workspace checks for Laysi/trustiot-v2#403 (build host, through the check queue, label 403)
+
+Run 1: the rebased branch at 8c8d7b6 (commits 1250209 and 8c8d7b6 on main 37863e0), 2026-10-15
+01:28 to 01:36 Asia/Taipei. One command, every step's exit code printed as NAME=<code>:
+  cargo fmt --all --check; cargo clippy --locked --workspace --all-targets -- -D warnings;
+  cargo clippy --locked -p service-kit --no-default-features --all-targets -- -D warnings;
+  cargo test --locked --workspace (failures and skips only); cargo test --locked -p service-kit
+  --no-default-features; bun test scripts; bun run --cwd scripts typecheck; bun test deploy/flux;
+  bun test deploy/chart; cargo deny --locked check; bun scripts/ci/check-secret-handling.ts;
+  bun scripts/ci/check-workflows.ts; cargo zigbuild --locked --release --target
+  aarch64-unknown-linux-musl -p migrate --bin migrate (the binary of the lab image).
+The typecheck errors were fixed in a91f0e5 (run 2). cargo deny fails on RUSTSEC-2026-0346
+(rustls 0.23.45), which main has too: Cargo.lock is not changed by this branch.
+
+rcheck: queued on the build host at 01:28:36 as 403-d66bacf8; running now: 410-1d665aa2 since 01:28:31
+snapshot
+FMT=0
+CLIPPY=0
+CLIPPY_SK=0
+test an_event_committed_late_is_delivered_not_skipped ... ok
+TEST=0
+TEST_SK=0
+
+7 packages installed [12.00ms]
+2026-10-14T17:35:40.139Z image localhost/trustiot-e2e/identity-double:nightly is present on node k3d-nightly-server-0
+2026-10-14T17:35:40.139Z image localhost/trustiot-e2e/identity-double:nightly is present on node k3d-nightly-agent-0
+2026-10-14T17:35:40.139Z image localhost/trustiot-e2e/identity-double:nightly confirmed on 2 node(s): k3d-nightly-server-0, k3d-nightly-agent-0
+
+scripts/flux/lib.test.ts:
+
+scripts/tests/migrate.test.ts:
+
+scripts/tests/protocol.test.ts:
+
+scripts/tests/secrets.test.ts:
+
+scripts/tests/env.test.ts:
+
+scripts/tests/tls.test.ts:
+
+scripts/tests/secret-api.test.ts:
+
+scripts/tests/state.test.ts:
+
+scripts/tests/stack.test.ts:
+
+scripts/tests/policy.test.ts:
+
+scripts/tests/e2e.test.ts:
+(skip) the dev environment with podman > starts, passes every check, seeds, rotates credentials, stops and purges without leftovers
+
+scripts/tests/product-logins.test.ts:
+
+scripts/tests/identity.test.ts:
+
+2 tests skipped:
+(skip) aarch64ElfProblem > accepts the aarch64 binary running this test
+(skip) the dev environment with podman > starts, passes every check, seeds, rotates credentials, stops and purges without leftovers
+
+ 843 pass
+ 2 skip
+ 0 fail
+ 3002 expect() calls
+Ran 845 tests across 35 files. [2.44s]
+SCRIPTS=0
+$ tsc --noEmit --project tsconfig.json
+../deploy/chart/tests/chart.test.ts(1747,11): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type 'string | undefined' is not assignable to type 'string'.
+      Type 'undefined' is not assignable to type 'string'.
+../deploy/chart/tests/e2e/clickhouse-admin.e2e.ts(408,66): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Object literal may only specify known properties, and 'get' does not exist in type '{ account: string; }'.
+error: script "typecheck" exited with code 1
+TYPECHECK=1
+bun test v1.4.2 (744846f84)
+
+deploy/flux/tests/flux.test.ts:
+
+ 19 pass
+ 0 fail
+ 80 expect() calls
+Ran 19 tests across 1 file. [976.00ms]
+FLUX=0
+bun test v1.4.2 (744846f84)
+
+deploy/chart/tests/ingress-authz.test.ts:
+
+deploy/chart/tests/chart.test.ts:
+
+deploy/chart/tests/e2e/install-evidence.test.ts:
+
+deploy/chart/tests/e2e/install.test.ts:
+
+deploy/chart/tests/e2e/ports.test.ts:
+
+deploy/chart/tests/e2e/tunnel-recovery.test.ts:
+
+deploy/chart/tests/e2e/raw-client.test.ts:
+
+ 378 pass
+ 0 fail
+ 4210 expect() calls
+Ran 378 tests across 7 files. [34.49s]
+CHART=0
+      │       └── sqlx v0.9.0 (*)
+      └── tokio-rustls v0.26.6
+          └── migrate v0.1.0 (*)
+
+advisories FAILED, bans ok, licenses ok, sources ok
+DENY=1
+secret handling: 401 file(s) checked, 6 container build file(s), no violations
+workflow policy: 4 file(s) checked, no violations
+warning: `migrate` (bin "migrate") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 0.14s
+b5ecfef0b06248378651de7993a02c9bd31dba71eca422bf56b6d28961158d1a  <host copy>/target/aarch64-unknown-linux-musl/release/migrate
+rcheck: removed 0 dangling test volumes
+rcheck: exit 0 at 01:36:21 (build host, 403-d66bacf8)
+
+Run 2: a91f0e5 (the type fixes), 2026-10-15 01:37 Asia/Taipei: typecheck, the chart's migration
+Job tests, and the cargo deny advisory in full (exit 141 is the head of the dependency tree being
+cut by the pipe).
+
+rcheck: queued on the build host at 01:37:09 as 403-d66bacf8; running now: nothing
+7 packages installed [12.00ms]
+$ tsc --noEmit --project tsconfig.json
+TYPECHECK=0
+ 284 filtered out
+ 0 fail
+ 819 expect() calls
+Ran 33 tests across 1 file. [6.03s]
+error[vulnerability]: `Debug` impls for client session values expose TLS secrets
+    ┌─ <host copy>/src/Cargo.lock:145:1
+    ├ ID: RUSTSEC-2026-0346
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0346
+    ├ The `Debug` implementations of `Tls12ClientSessionValue` and
+    ├ Announcement: https://github.com/rustls/rustls/pull/3299
+    ├ Solution: Upgrade to >=0.23.46 (try `cargo update -p rustls`)
+    ├ rustls v0.23.45
+      ├── migrate v0.1.0
+      │   └── testkit v0.1.0
+      │       ├── (dev) assets v0.1.0
+      │       │   └── openapi v0.1.0
+      │       └── (dev) identity v0.1.0
+      │           ├── (dev) assets v0.1.0 (*)
+      │           └── openapi v0.1.0 (*)
+      ├── sqlx-core v0.9.0
+      │   ├── sqlx v0.9.0
+      │   │   ├── assets v0.1.0 (*)
+      │   │   ├── identity v0.1.0 (*)
+      │   │   ├── migrate v0.1.0 (*)
+      │   │   ├── outbox v0.1.0
+      │   │   │   ├── assets v0.1.0 (*)
+      │   │   │   ├── identity v0.1.0 (*)
+      │   │   │   └── migrate v0.1.0 (*)
+      │   │   ├── service-kit v0.1.0
+      │   │   │   ├── assets v0.1.0 (*)
+      │   │   │   ├── identity v0.1.0 (*)
+      │   │   │   ├── migrate v0.1.0 (*)
+      │   │   │   ├── outbox v0.1.0 (*)
+      │   │   │   └── testkit v0.1.0 (*)
+rcheck: removed 0 dangling test volumes
+rcheck: exit 141 at 01:37:21 (build host, 403-d66bacf8)
+
+Run 3: a91f0e5 with this report added (the final code; no Rust change since run 1), 2026-10-15
+01:43 Asia/Taipei: typecheck, bun test scripts, bun test deploy/flux, bun test deploy/chart and
+the two CI scripts.
+
+rcheck: queued on the build host at 01:43:47 as 403-d66bacf8; running now: nothing
+7 packages installed [46.00ms]
+$ tsc --noEmit --project tsconfig.json
+TYPECHECK=0
+ 843 pass
+ 2 skip
+ 0 fail
+ 3002 expect() calls
+Ran 845 tests across 35 files. [2.64s]
+SCRIPTS=0
+ 19 pass
+ 0 fail
+ 80 expect() calls
+Ran 19 tests across 1 file. [1060.00ms]
+FLUX=0
+deploy/chart/tests/e2e/raw-client.test.ts:
+
+ 378 pass
+ 0 fail
+ 4210 expect() calls
+Ran 378 tests across 7 files. [34.92s]
+CHART=0
+secret handling: 403 file(s) checked, 6 container build file(s), no violations
+workflow policy: 4 file(s) checked, no violations
+rcheck: removed 0 dangling test volumes
+rcheck: exit 0 at 01:44:31 (build host, 403-d66bacf8)
