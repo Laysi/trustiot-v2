@@ -1,0 +1,11 @@
+TPM2 device supports SHA256 PCR bank but none of the selected PCRs are valid! Firmware apparently did not initialize any of the selected PCRs. Proceeding anyway with SHA256 bank. PCR policy effectively unenforced!
+New TPM2 token enrolled as key slot 1.
+== PCR 15 before
+  sha256:
+    15: 0x0000000000000000000000000000000000000000000000000000000000000000
+RESULT unlock with PCR 15 at its boot value: OK
+== PCR 15 after extend
+  sha256:
+    15: 0x2F60673DC26E6E88C560DECF9260B7591EB9A1B85D7A6E5887756C31978330F1
+Failed to unseal secret using TPM2: Operation not permitted
+RESULT unlock after PCR 15 was extended: refused

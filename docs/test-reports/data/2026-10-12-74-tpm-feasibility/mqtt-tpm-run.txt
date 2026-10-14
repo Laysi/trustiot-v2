@@ -1,0 +1,7 @@
+iter,key,tcp_ms,tls_ms,connack_ms,tpm_signs,tpm_sign_ms,tls_version,cipher_suite
+SUBSCRIBE gw/gw-lab-01/# -> type 0x90 return code 0x01
+received on gw/gw-lab-01/telemetry (QoS 1): hello from the TPM-backed gateway
+PUBACK for packet id 3
+0,tpm,0.76,76.21,1.42,1,73.33,Some(TLSv1_3),Some(TLS13_AES_256_GCM_SHA384)
+1,tpm,0.22,71.66,1.77,1,69.55,Some(TLSv1_3),Some(TLS13_AES_256_GCM_SHA384)
+2,tpm,0.26,71.83,1.71,1,69.69,Some(TLSv1_3),Some(TLS13_AES_256_GCM_SHA384)

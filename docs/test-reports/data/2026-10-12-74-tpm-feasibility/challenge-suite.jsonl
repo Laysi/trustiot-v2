@@ -1,0 +1,9 @@
+{"body":{"result":"verified; a real certificate service would now check registration and tenant state and sign the CSR"},"case":"valid","expected":200,"status":200,"verdict":"PASS"}
+{"body":{"error":"unknown or already used nonce"},"case":"replay-same-body","expected":409,"status":409,"verdict":"PASS"}
+{"body":{"error":"signature does not verify with the registered key"},"case":"tampered-signature","expected":401,"status":401,"verdict":"PASS"}
+{"body":{"error":"unknown or already used nonce"},"case":"retry-after-failed-attempt","expected":409,"status":409,"verdict":"PASS"}
+{"body":{"error":"nonce was issued for another device or purpose"},"case":"wrong-purpose","expected":403,"status":403,"verdict":"PASS"}
+{"body":{"error":"nonce was issued for another device or purpose"},"case":"wrong-device","expected":403,"status":403,"verdict":"PASS"}
+{"body":{"error":"signature does not verify with the registered key"},"case":"extended-expiry-in-message","expected":401,"status":401,"verdict":"PASS"}
+{"body":{"error":"unknown or already used nonce"},"case":"unknown-nonce","expected":409,"status":409,"verdict":"PASS"}
+{"body":{"error":"challenge expired"},"case":"expired","expected":410,"status":410,"verdict":"PASS"}

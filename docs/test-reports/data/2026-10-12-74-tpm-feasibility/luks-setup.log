@@ -1,0 +1,70 @@
+New TPM2 token enrolled as key slot 1.
+LUKS header information
+Version:       	2
+Epoch:         	5
+Metadata area: 	16384 [bytes]
+Keyslots area: 	16744448 [bytes]
+UUID:          	324c1042-8e50-46c8-b435-2b73722a177d
+Label:         	poc74data
+Subsystem:     	(no subsystem)
+Flags:       	(no flags)
+
+Data segments:
+  0: crypt
+	offset: 16777216 [bytes]
+	length: (whole device)
+	cipher: aes-xts-plain64
+	sector: 4096 [bytes]
+
+Keyslots:
+  0: luks2
+	Key:        512 bits
+	Priority:   normal
+	Cipher:     aes-xts-plain64
+	Cipher key: 512 bits
+	PBKDF:      argon2id
+	Time cost:  4
+	Memory:     262144
+	Threads:    4
+	Salt: <redacted>
+	AF stripes: 4000
+	AF hash:    sha256
+	Area offset:32768 [bytes]
+	Area length:258048 [bytes]
+	Digest ID:  0
+  1: luks2
+	Key:        512 bits
+	Priority:   normal
+	Cipher:     aes-xts-plain64
+	Cipher key: 512 bits
+	PBKDF:      pbkdf2
+	Hash:       sha512
+	Iterations: 1000
+	Salt: <redacted>
+	AF stripes: 4000
+	AF hash:    sha512
+	Area offset:290816 [bytes]
+	Area length:258048 [bytes]
+	Digest ID:  0
+Tokens:
+  0: systemd-tpm2
+	tpm2-hash-pcrs:   
+	tpm2-pcr-bank:    n/a
+	tpm2-pubkey: <redacted>
+	            (null)
+	tpm2-pubkey-pcrs: 
+	tpm2-primary-alg: ecc
+	tpm2-pin:         false
+	tpm2-pcrlock:     false
+	tpm2-salt:        false
+	tpm2-srk:         true
+	tpm2-pcrlock-nv:  false
+	tpm2-policy-hash: <redacted>
+	tpm2-blob: <redacted>
+	Keyslot:    1
+Digests:
+  0: pbkdf2
+	Hash:       sha256
+	Iterations: 45134
+	Salt: <redacted>
+	Digest: <redacted>

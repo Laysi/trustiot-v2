@@ -1,0 +1,30 @@
+== 2026-10-14T07:19:45Z card rootfs /dev/sdc2, bootfs /dev/sdc1
+Unmounted /dev/sdc1.
+/dev/sdc2 ro,relatime,seclabel,norecovery
+== this computer's TPM
+PATH        DEVICE      DRIVER
+/dev/tpmrm0 MSFT0101:00 tpm_crb_acpi
+== container (on the Pi: bf5a105c-5f2e-4199-ae0e-9e6106c3afa6, token 6a12d50f..., metadata 9fe72952...)
+bf5a105c-5f2e-4199-ae0e-9e6106c3afa6
+6a12d50f9e2072d7cae54df00806401f013e4d01bd2f3c110c471ee1ab239ce5  -
+9fe72952b4f0b304f4e448d382909db6b09ceac2d534eeba9fb5457482a8efd0  -
+== A: TPM only, cryptsetup (expect failure)
+WARNING:esys:src/tss2-esys/api/Esys_Load.c:324:Esys_Load_Finish() Received TPM Error 
+ERROR:esys:src/tss2-esys/api/Esys_Load.c:112:Esys_Load() Esys Finish ErrorCode (0x000001df) 
+TPM key integrity check failed. Key enrolled in superblock most likely does not belong to this TPM.
+沒有可用的 token。
+命令失敗，代碼 -1（參數錯誤或缺少參數）。
+exit 1
+== B: TPM only, systemd-cryptsetup as the Pi does at boot (expect failure)
+WARNING:esys:src/tss2-esys/api/Esys_Load.c:324:Esys_Load_Finish() Received TPM Error 
+ERROR:esys:src/tss2-esys/api/Esys_Load.c:112:Esys_Load() Esys Finish ErrorCode (0x000001df) 
+TPM key integrity check failed. Key enrolled in superblock most likely does not belong to this TPM.
+Set cipher aes, mode xts-plain64, key size 512 bits for device /mnt/poc74-card/var/lib/trustiot-poc74/data.luks.
+WARNING:esys:src/tss2-esys/api/Esys_Load.c:324:Esys_Load_Finish() Received TPM Error 
+ERROR:esys:src/tss2-esys/api/Esys_Load.c:112:Esys_Load() Esys Finish ErrorCode (0x000001df) 
+TPM key integrity check failed. Key enrolled in superblock most likely does not belong to this TPM.
+Password querying disabled via 'headless' option.
+exit 1
+== C: control, test passphrase (expect success)
+exit 0
+== card unmounted, safe to remove

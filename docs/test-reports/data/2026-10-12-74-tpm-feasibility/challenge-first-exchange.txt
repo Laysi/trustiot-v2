@@ -1,0 +1,3 @@
+challenge: {"device_id":"gw-lab-01","expires_at":1791795938,"nonce":"rvcx6ABI6piiIMI3AyDCj8PBMWy7HQE-IUwWkmXtaDg","purpose":"cert-renewal"}
+redeem body: {"device_id":"gw-lab-01","nonce":"rvcx6ABI6piiIMI3AyDCj8PBMWy7HQE-IUwWkmXtaDg","purpose":"cert-renewal","signature":"MEQCIDiS4kjjVBUDOno5DY6+DdE94qGPzDiQg8hU09rXwNZ5AiBmnoSwFIqRQ8XD5J/hyiCtkzmCuUmmyNkqkGorcYFSWw=="}
+TPM sign: 72571 us
