@@ -21,7 +21,7 @@
 4. 每個服務（[`src/registry.rs`](src/registry.rs) 的 `PRODUCT`，依序）：
    - 角色：`<schema>_owner`（NOLOGIN NOINHERIT，擁有 schema 與每個物件；migration 角色以 PostgreSQL 16 的 `createrole_self_grant = 'set'` 取得 SET 權限，但不繼承它的權限）、`<schema>_app`（NOINHERIT，只在綁定了 Secret 時 LOGIN）、需要時 `<schema>_platform`（決策 29 的平台角色）。登入角色建立時帶 Job 的標記（`COMMENT ON ROLE ... IS 'trustiot-migrate:login-role'`；這之前建立的在下一次執行補上）。不存在就建立；存在就檢查，偏離規則就停止（見 runbook 的表）：屬性、成員關係、不是這個 migration 角色建立的、在叢集的其他資料庫擁有物件或權限、有這個資料庫專屬的設定；登入角色另外不能有 `search_path` 以外的角色設定，也不能在自己的 schema 建立物件或建立暫存表。
    - schema `<schema>`，owner 是 `<schema>_owner`；登入角色的 `search_path` 是自己的 schema。
-   - 登入角色的密碼：取上一步 Secret 裡的值，先以它實際登入，登不進去才 `ALTER ROLE ... PASSWORD`，送出的是 Job 自己算的 SCRAM-SHA-256 verifier，明文不進 SQL；登入角色只在綁定了 Secret 時能登入：綁定了但是 NOLOGIN（剛建立、或服務重新開啟）就先設 Secret 的密碼再 `ALTER ROLE ... LOGIN`，所以不會以舊密碼登入；沒有綁定 Secret（例如這次部署沒開的服務、chart 沒有綁定的平台角色）就 `NOLOGIN`，記在結果的 `roles_without_password`。不 `DROP`：角色可能擁有物件，`NOLOGIN` 也能在服務重新開啟時還原。
+   - 登入角色的密碼：取上一步 Secret 裡的值，先以它實際登入，登不進去才 `ALTER ROLE ... PASSWORD`，送出的是 Job 自己算的 SCRAM-SHA-256 verifier，明文不進 SQL；登入角色只在綁定了 Secret 時能登入：綁定了但是 NOLOGIN（剛建立、或服務重新開啟）就先設 Secret 的密碼再 `ALTER ROLE ... LOGIN`，所以不會以舊密碼登入；沒有綁定 Secret（例如這次部署沒開的服務、chart 沒有綁定的平台角色）就 `NOLOGIN`，記在結果的 `roles_without_password`；日誌只在把能登入的角色改成 `NOLOGIN` 時記 WARN，本來就不能登入的（例如 chart 不綁的 `identity_platform`、一直沒開的服務）每次執行記一行 INFO。不 `DROP`：角色可能擁有物件，`NOLOGIN` 也能在服務重新開啟時還原。
    - outbox（`crates/outbox`）：依 `Outbox` 的設定建立 producer 或 consumer 的表，producer 的 `crates/service-kit/sql/outbox-event.sql` 只套用一次，consumer 的平台角色加進 producer 的讀者。
    - 以 `<schema>_owner` 依序套用 `migrations/postgres/` 的每個檔案，一個檔案一個交易，`search_path` 是該 schema；已套用的檔案若內容改了就停止。檔案執行完後比對交易 ID、`current_user` 與 `role` 設定，與執行前不同（檔案結束了交易或切換了角色）就停止，不記錄這個檔案（下方「檔案的規則」）。
    - 所有服務之後：帶 Job 標記、migration 角色有 ADMIN OPTION、還能登入、但服務清單裡已經沒有任何服務用它的角色（服務從清單移除或改名）一律 `NOLOGIN`。挑選依標記與 ADMIN OPTION，不依名稱，所以 CloudNativePG 的 superuser、客戶自己的帳號、另一個實例的角色都不會被碰。
@@ -34,7 +34,7 @@
 
 1. 檔案放在 `services/<服務>/migrations/postgres/NNNN_<名稱>.sql`。
 2. 在 `src/registry.rs` 的 `PRODUCT` 加上這個服務與每個檔案（`include_str!`，依檔名順序）；之後的新檔案加在最後。`tests/registry.rs` 在少列、順序錯、重複或內容不同時失敗。consumer 要排在它讀的 producer 之後。
-3. 服務在 chart 的 `mesh.calls` 列出 `postgres`；chart 為它宣告密碼 Secret `<release>-<服務>-password`，Job 產生 `<schema>_app` 的密碼（chart README「migration Job」）。服務以平台角色連線時（outbox 的消費端以它讀 producer 的事件），把服務加進 `deploy/chart/templates/_migrate.tpl` 的 `trustiot.migrate.platformLogins`：同一個 Secret 多一個 `<schema>_platform` key，服務多拿到 `TRUSTIOT__DATABASE__PLATFORM_USERNAME`、`_PASSWORD`。`tests/registry.rs` 檢查這份清單只列有平台角色的服務，而且每個 consumer 都在裡面；producer 的平台角色沒有程式用它連線時不列，維持 `NOLOGIN`。
+3. 服務在 chart 的 `mesh.calls` 列出 `postgres`；chart 為它宣告密碼 Secret `<release>-<服務>-password`，Job 產生 `<schema>_app` 的密碼（chart README「migration Job」）。服務以平台角色連線時（outbox 的消費端以它讀 producer 的事件），把服務加進 `deploy/chart/templates/_migrate.tpl` 的 `trustiot.migrate.platformLogins`：同一個 Secret 多一個 `<schema>_platform` key，服務多拿到 `TRUSTIOT__DATABASE__PLATFORM_USERNAME`、`_PASSWORD`。`tests/registry.rs` 檢查這份清單只列有平台角色的服務，而且每個 consumer 都在裡面；producer 的平台角色沒有程式用它連線時不列，維持 `NOLOGIN`，並寫進同一個測試的 `UNBOUND_PLATFORM_ROLES`（附理由，目前只有 `identity`）。有平台角色的服務一定在 chart 的清單或 `UNBOUND_PLATFORM_ROLES` 其中之一，不能兩邊都在，所以不會有平台角色在沒人注意下維持 `NOLOGIN`。
 
 目前 `PRODUCT` 有兩個服務（2026-10-14，Laysi/trustiot-v2#65）：`identity`（`0001_identity.sql`、`0002_tenants.sql`；outbox producer，所以有平台角色 `identity_platform`，但 chart 不綁它的密碼）與 `assets`（`0001_assets.sql`；消費 `identity` 的事件，`assets_platform` 由 chart 綁定密碼）。
 
