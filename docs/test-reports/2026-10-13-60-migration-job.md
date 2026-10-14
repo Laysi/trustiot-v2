@@ -216,22 +216,24 @@ pre-commit 的審查在這一輪擋下三次：
 
 2026-10-14 獨立驗證以 33dd568 的程式碼與 lab 映像複驗第四輪。結論如下：
 
-- R1 到 R6 都成立，第三輪的 R1 繞過方式全部被拒。
+- R1 到 R6 都成立，第三輪的 R1 繞過方式全部被拒（[r1-probe.txt](data/2026-10-13-60-migration-job/independent-verification/round4-recheck/r1-probe.txt)、[r1-render.txt](data/2026-10-13-60-migration-job/independent-verification/round4-recheck/r1-render.txt)）。
 - 在 lab 上以真的 Job 確認了以下各點：
-  - 預先建立的 Secret 不會被採用。
-  - 兩個同時執行、真的遇到 409 的 Job 會收斂。
-  - `log_statement=all` 的日誌裡只有 SCRAM verifier。
-  - 洩漏掃描沒有找到任何值。
-  - R3 的停用與重新啟用順序正確。
-  - 服務角色無法偽造標記。
+  - 預先建立的 Secret 不會被採用（[lab-1-preseed.txt](data/2026-10-13-60-migration-job/independent-verification/round4-recheck/lab-1-preseed.txt)）。
+  - 兩個同時執行、真的遇到 409 的 Job 會收斂（[lab-2-concurrent.txt](data/2026-10-13-60-migration-job/independent-verification/round4-recheck/lab-2-concurrent.txt)、[lab-3-conflict.txt](data/2026-10-13-60-migration-job/independent-verification/round4-recheck/lab-3-conflict.txt)）。
+  - `log_statement=all` 的日誌裡只有 SCRAM verifier（[lab-4-logstatement.txt](data/2026-10-13-60-migration-job/independent-verification/round4-recheck/lab-4-logstatement.txt)）。
+  - 洩漏掃描沒有找到任何值（[lab-5-leaks.txt](data/2026-10-13-60-migration-job/independent-verification/round4-recheck/lab-5-leaks.txt)）。
+  - R3 的停用與重新啟用順序正確（[lab-6-r3-disable.txt](data/2026-10-13-60-migration-job/independent-verification/round4-recheck/lab-6-r3-disable.txt)、[lab-7-r3-enable.txt](data/2026-10-13-60-migration-job/independent-verification/round4-recheck/lab-7-r3-enable.txt)）。
+  - 服務角色無法偽造標記（[lab-8-forge.txt](data/2026-10-13-60-migration-job/independent-verification/round4-recheck/lab-8-forge.txt)）。
+
+複驗的輸出只寫 key、長度、`same`／`changed` 與計數，沒有密碼或 Secret 的資料；複製進來時逐檔檢查過，沒有需要遮蔽的內容。驗證者的 probe 腳本含本機路徑，沒有放進來。
 
 新的發現與處理：
 
 | 發現 | 處理 | 證據 |
 | --- | --- | --- |
-| N1（低到中，第四輪改成數字比較後才出現）values 檔裡的整數 `passwordGeneration` 到 1000000 以上時，`toString` 會渲染成科學記號（`1e+06`、`2.0261014e+07`）。schema 接受這個值，Job 拒絕它，所以每次執行都失敗，升級進入 remediation。`--set` 給的是字串，不受影響 | 修正。新增 `trustiot.decimal`：整數以 `%d` 渲染、字串照原樣，其他值讓渲染失敗。`passwordGeneration` 經過它之後，不是 1 到 9 位數字也讓渲染失敗；`migrate.revision` 的 annotation 也改用它（它只進 hash，原本不會壞，但同樣會變成科學記號）。chart 渲染進程式會解析的設定的其他數字只有 port 與 `max_connections`，schema 把它們限制在遠低於 1000000 的範圍 | chart 測試「passwordGeneration and revision from a values file render as exact decimals…」：values 檔的整數 `20261014`、`1000000`、`999999999`、`0`、加引號的字串、`--set`，以及必須失敗的 10 位數（整數與字串） |
+| N1（低到中，第四輪改成數字比較後才出現）values 檔裡的整數 `passwordGeneration` 到 1000000 以上時，`toString` 會渲染成科學記號（`1e+06`、`2.0261014e+07`）。schema 接受這個值，Job 拒絕它，所以每次執行都失敗，升級進入 remediation。`--set` 給的是字串，不受影響 | 修正。新增 `trustiot.decimal`：整數以 `%d` 渲染、字串照原樣，其他值讓渲染失敗。`passwordGeneration` 經過它之後，不是 1 到 9 位數字也讓渲染失敗；`migrate.revision` 的 annotation 也改用它（它只進 hash，原本不會壞，但同樣會變成科學記號）。chart 渲染進程式會解析的設定的其他數字只有 port 與 `max_connections`，schema 把它們限制在遠低於 1000000 的範圍 | chart 測試「passwordGeneration and revision from a values file render as exact decimals…」：values 檔的整數 `20261014`、`1000000`、`999999999`、`0`、加引號的字串、`--set`，以及必須失敗的 10 位數（整數與字串）。複驗時的渲染：[n1-generation-render.txt](data/2026-10-13-60-migration-job/independent-verification/round4-recheck/n1-generation-render.txt) |
 | N3（低）預先建立、被 Helm 接手的 Secret 保留建立者放的 annotation、標籤、ownerReferences 與 finalizers，Job 再把密碼寫進去：replicator 或 reflector 可能把密碼複製到建立者讀得到的 namespace，owner 可能讓 Secret 被垃圾回收 | 修正。綁定 Secret 的同一個 merge patch（第一次填入、別人建立的物件、從備份還原）把白名單以外的每個 annotation 與標籤、`ownerReferences`、`finalizers` 設成 null。白名單是 chart 的、Helm 的 ownership annotation、Flux helm-controller 的兩個標籤，以及 Job 的兩個 annotation。報告只寫 key。已綁定的 Secret 不再處理。pre-commit 審查另外指出兩點並已修正：（一）文件原本說「能 patch 就讀得到」並不精確，RBAC 分開授予 `get` 與 `patch`，但沒有 `get` 的 patch 也能寫入自選的密碼，所以文件改為「patch 權限等同能取得密碼，只能給受信任的主體」；（二）正在刪除（有 `deletionTimestamp`）的 Secret 一律在 patch 之前停止，否則拿掉 finalizer 會讓 Secret 消失，角色卻已經設成它的密碼 | 單元測試 `binding_a_secret_removes_metadata_neither_the_chart_nor_the_job_sets`（patch 內容），`tests/passwords.rs` 的 `binding_a_foreign_secret_removes_metadata_neither_the_chart_nor_the_job_sets` 與 `a_secret_being_deleted_is_never_filled` |
-| N4（低）ClickHouse 停用規則會鎖住任何拿到 `trustiot_otel_collector` 的帳號（lab 上手動建立的帳號也被鎖） | 修正與文件。查詢排除 `currentUser()`，也就是 Job 自己執行時用的帳號。ClickHouse 沒有可以標記帳號的地方，所以其他拿到這個角色的帳號仍然算是 Job 的：runbook、`secrets.md` 與 README 寫明外部 ClickHouse 上不要把這個角色給自己的帳號，以及怎麼復原。`currentUser()` 的測試沒有加：測試用 ClickHouse 的管理帳號是設定檔定義的，不能授予角色，要另建一個 SQL 帳號來當 migration 帳號，不便宜 | 程式與文件；實際行為由 PR CI 的 `tests/clickhouse.rs` 第 6d 步涵蓋（預期沒變） |
+| N4（低）ClickHouse 停用規則會鎖住任何拿到 `trustiot_otel_collector` 的帳號（lab 上手動建立的帳號也被鎖） | 修正與文件。查詢排除 `currentUser()`，也就是 Job 自己執行時用的帳號。ClickHouse 沒有可以標記帳號的地方，所以其他拿到這個角色的帳號仍然算是 Job 的：runbook、`secrets.md` 與 README 寫明外部 ClickHouse 上不要把這個角色給自己的帳號，以及怎麼復原。`currentUser()` 的測試沒有加：測試用 ClickHouse 的管理帳號是設定檔定義的，不能授予角色，要另建一個 SQL 帳號來當 migration 帳號，不便宜 | 程式與文件；實際行為由 PR CI 的 `tests/clickhouse.rs` 第 6d 步涵蓋（預期沒變）。lab 上的重現：[lab-9-ch-admin-collector.txt](data/2026-10-13-60-migration-job/independent-verification/round4-recheck/lab-9-ch-admin-collector.txt)（設定檔定義的管理帳號不能授予角色；手動建立、拿到角色的 `verify_ops` 被鎖） |
 | N2（既有的弱點）`check-secret-handling` 不認得 `kind` 的其他寫法，也不認得由樣板動作組出來的 Secret | 不在這個 PR 處理，由協調者開後續 issue | — |
 | 文件：`--force-replace` 的機制 | 修正。它不是刪除再建立，而是以 chart 渲染的內容整個取代物件（PUT replace）：Secret 的 uid 不變，但資料與 annotation 被清空；同名 Job 的取代因 `spec.selector … immutable` 失敗。結論不變 | runbook |
 | 選做：chart 只綁定 `<schema>_app`，有平台角色的服務會讓平台角色停在 NOLOGIN | 加上防護。`tests/registry.rs` 的 `the_chart_binds_every_login_role_of_the_product` 固定 chart 的 Postgres 綁定是每個服務一個 `<schema>_app`，而且產品的服務清單裡不能有平台角色；Laysi/trustiot-v2#65 加入第一個平台角色時要一併修改 chart 與這個測試。`scripts/ci/changes.ts` 把這個測試讀的 `_migrate.tpl` 列進 rust job 的輸入 | 測試 |
@@ -248,7 +250,7 @@ pre-commit 的審查在這一輪擋下三次：
 | 經檢查佇列：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings` | 通過 |
 | 經檢查佇列：`env -u CI cargo test --locked -p migrate` | 全部通過：單元 20 個、`tests/passwords.rs` 11 個、`tests/registry.rs` 5 個、`tests/wait_for_job.rs` 4 個。建置主機沒有容器執行環境，所以不設 `CI` 執行，需要容器的 6 個測試執行檔（`clickhouse`、`concurrent_runs`、`file_escapes`、`fresh_database`、`one_instance_per_cluster`、`outbox_and_tenant_roles`）都略過 |
 | 經檢查佇列：`cargo run --locked -p openapi -- --check` | `api/openapi.json is up to date` |
-| 需要容器的 Rust 測試 | 由推送後 PR CI 的 `rust` job 執行，執行編號由協調者補上。這一輪改到的部分（N3 的 metadata 移除、N4 的帳號查詢）逐步對照了這些測試的預期：fake 宣告的空 Secret、chart 渲染的 Secret 都只有白名單內的 metadata，不會多出報告行；第 6d 步沒有把角色給 migration 帳號，預期不變 |
+| 需要容器的 Rust 測試 | 由推送後 PR CI 的 `rust` job 執行。`94b3614` 的 CI run 38523153117 八個 job 全部通過；`rust` job 設了 `CI`，缺容器時失敗而不會略過，跑了 migrate 的每個測試執行檔：單元 20、`clickhouse` 1、`concurrent_runs` 1、`file_escapes` 1、`fresh_database` 1、`one_instance_per_cluster` 1、`outbox_and_tenant_roles` 1、`passwords` 11（含 N3 的 `binding_a_foreign_secret_removes_metadata_neither_the_chart_nor_the_job_sets` 與 `a_secret_being_deleted_is_never_filled`）、`registry` 5、`wait_for_job` 4，共 46 個全部 ok（節錄：[round5-ci-migrate-tests.txt](data/2026-10-13-60-migration-job/round5-ci-migrate-tests.txt)）。nightly smoke run 38523153166 通過。這一輪改到的部分（N3 的 metadata 移除、N4 的帳號查詢）逐步對照了這些測試的預期：fake 宣告的空 Secret、chart 渲染的 Secret 都只有白名單內的 metadata，不會多出報告行；第 6d 步沒有把角色給 migration 帳號，預期不變 |
 
 pre-commit 審查在這一輪擋下三次，都已修正：
 - N3：「patch 就讀得到」的說法不精確。
@@ -291,5 +293,39 @@ pre-commit 審查在這一輪擋下三次，都已修正：
 | `bun scripts/ci/check-secret-handling.ts` | 285 個檔案，沒有違規 |
 | 經檢查佇列：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings` | 通過 |
 | 經檢查佇列：`env -u CI cargo test --locked -p migrate` | 全部通過：單元 20 個、`tests/passwords.rs` 11 個、`tests/registry.rs` 5 個、`tests/wait_for_job.rs` 4 個。建置主機沒有容器執行環境，需要容器的 6 個測試執行檔都略過，由推送後的 PR CI 執行 |
+| 需要容器的 Rust 測試 | `2f5e934` 自己的 CI（run 38524180108 與 38524180182）被 `26da8bb` 的推送取消；`26da8bb`（同樣的程式碼加上第五輪 lab e2e 的證據）的 CI run 38524537987 八個 job 全部通過，nightly smoke run 38524538005 通過。`rust` job 設了 `CI`，跑了 migrate 的每個測試執行檔：單元 20、`clickhouse` 1（10.07 秒，L3 改過的查詢對測試用 ClickHouse 執行）、`concurrent_runs` 1、`file_escapes` 1、`fresh_database` 1、`one_instance_per_cluster` 1、`outbox_and_tenant_roles` 1、`passwords` 11、`registry` 5、`wait_for_job` 4，共 46 個全部 ok（節錄：[round6-ci-migrate-tests.txt](data/2026-10-13-60-migration-job/round6-ci-migrate-tests.txt)） |
 
 這一輪的 pre-commit 審查每個 commit 都一次通過。
+
+## 第七輪：N3 的 lab 驗證與 N5
+
+2026-10-14 獨立驗證在 lab 上以真的 Job 驗證 N3（綁定時拿掉外來的 metadata、正在刪除的 Secret 不填）。
+
+### 環境
+
+- **叢集**：lab 的 Mac mini M1，與[第四輪 lab e2e](#第四輪-lab-e2e) 相同的 k3s、Istio ambient 與 CloudNativePG 1.30.1，namespace `e2e-60`，helm 4.3.0。
+- **映像**：第五輪 lab e2e 用的同一批，建自 `94b3614`。`localhost/trustiot-e2e/migrate:60` 為 `sha256:35bc4be7314b008dd750c484e0ba53a2399268589ba08d3c51448a1b3e0ebf68`，其中 migrate 二進位的 SHA-256 為 `95ceddf5869d5c05f73dc06b4cc14709e6e55c7584acc5354228ecedcb7a8ca6`；其他映像見 [round5-lab-e2e-binaries-and-images.txt](data/2026-10-13-60-migration-job/round5-lab-e2e-binaries-and-images.txt)。
+- **指令**：驗證者自己的 probe 腳本（含本機路徑，沒有放進 repo）。它以 `kubectl` 預先建立 Secret，以 `helm install`／`helm upgrade` 安裝與升級 chart，讀 Job 日誌、Secret 的 metadata 與 managedFields，再用 `psql` 登入。輸出只寫 key、長度、`same`／`changed` 與計數，Secret 的 uid annotation 等於 Secret 自己的 uid 時寫成 `<own uid>`；沒有密碼或 Secret 的資料。複製進來時逐檔檢查過，沒有需要遮蔽的內容。
+
+### 結果
+
+| 檢查 | 結果 | 證據 |
+| --- | --- | --- |
+| 1. 預先建立 `trustiot-identity-password`：Helm 的 ownership metadata、世代 `1`、replicator 與 reflector 的 annotation、標籤 `copy-me`、指向 ConfigMap `verify-owner` 的 ownerReference、finalizer `example.com/hold`、偽造的 `helm` Apply managedFields（API server 不採用，記成 `kubectl-create`），然後 `helm install` | 通過。Job 日誌有 `(the Secret is not the one the Job filled)` 與一行 `removed from Secret …`，列出三個 annotation、標籤 `copy-me`、`ownerReferences` 與 `finalizers`；這些都不見了，chart 的標籤與 annotation 都在，uid annotation 等於 Secret 自己的 uid。以預先放的密碼登入失敗（`password authentication failed`），以 Secret 的密碼登入成功，服務 Ready。只留下白名單內的 `helm.toolkit.fluxcd.io/name=planted`（chart 不渲染它）；第五輪已判斷這無害 | [lab-4-n3-preseed-noconflict.txt](data/2026-10-13-60-migration-job/independent-verification/round5-recheck/lab-4-n3-preseed-noconflict.txt) |
+| 2. 接著以 `migrate.revision=71` `helm upgrade` | 通過。exit 0，Job 再跑一次，沒有 `removed` 也沒有 `generated`，metadata 不變，兩個密碼都 `same` | [lab-5-n3-after-noconflict.txt](data/2026-10-13-60-migration-job/independent-verification/round5-recheck/lab-5-n3-after-noconflict.txt) |
+| 3. 刪掉原本的 owner ConfigMap `verify-owner`，等 15 秒 | 通過。Secret 還在，資料 `same`，服務仍能登入 | [lab-5-n3-after-noconflict.txt](data/2026-10-13-60-migration-job/independent-verification/round5-recheck/lab-5-n3-after-noconflict.txt) |
+| 4. 在 collector 的 Secret 加 finalizer 再刪除它（`deletionTimestamp` 已設），以 `migrate.revision=72` 升級 | 通過。Job 日誌有 `is being deleted`，沒有產生也沒有設定任何密碼，Secret 的 resourceVersion 不變。依 runbook 復原：拿掉 finalizer、等 Secret 消失、以 `migrate.revision=73` 升級；Helm 重建 Secret，Job 日誌有 `generated the password of trustiot_collector … (it had none)` 與 `set the password of ClickHouse account`，collector 與服務 Ready | [lab-6-n3-deleting.txt](data/2026-10-13-60-migration-job/independent-verification/round5-recheck/lab-6-n3-deleting.txt) |
+
+同一輪也在 lab 外以 `helm template` 複驗 N1 的各種寫法：[n1-probe.txt](data/2026-10-13-60-migration-job/independent-verification/round5-recheck/n1-probe.txt)（values 檔、`--set`、`--set-string`、`--set-json`，各有跳過 schema 的版本）。
+
+### 新的發現
+
+| 發現 | 處理 | 證據 |
+| --- | --- | --- |
+| N5（低，可用性）第一次嘗試時，預先建立的 Secret 另外在 chart 自己也會設定的 key 放了不同的值：標籤 `app.kubernetes.io/component=planted` 與 annotation `trustiot.io/description=planted`。helm 4.3.0 預設以 server-side apply 安裝，`helm install` 與之後每次 `helm upgrade` 都失敗：`conflict occurred while applying object e2e-60/trustiot-identity-password /v1, Kind=Secret: Apply failed with 2 conflicts: conflicts with "kubectl-create" …`。安裝失敗時 Job 照樣執行，正確綁定並拿掉外來的 key，但兩個白名單內的 key 留著預先放的值與欄位擁有權。`helm upgrade --force-conflicts` 成功（revision 3），Helm 接手這些欄位（`helm/Apply`），資料不變。只需要在 namespace 建立 Secret 的權限；影響只有可用性，看得到也能復原，不洩漏密碼。同樣的權限本來就能用任何預先建立的同名物件擋住 Helm 安裝（Helm 拒絕接手它不能採用的物件） | 只寫進文件。runbook 新增「安裝或升級時密碼 Secret 的 apply conflict」（`f5f8ad5`）：要搜尋的訊息、先當成安全事件處理、`helm upgrade … --force-conflicts` 或刪掉 Secret 再改 `migrate.revision`（這會輪替該服務的密碼）。Flux 的部分依釘選的 flux 2.9.6（helm-controller v1.6.5）在 `deploy/flux/clusters/saas/flux-system/gotk-components.yaml` 的 HelmRelease CRD 說明撰寫：server-side apply 一律強制接手其他 field manager 的衝突，所以應該不會擋住 Flux；不要用 `spec.upgrade.force`，它在 client-side apply 下是 runbook 禁止的取代 | [lab-1-n3-preseed.txt](data/2026-10-13-60-migration-job/independent-verification/round5-recheck/lab-1-n3-preseed.txt)、[lab-2-n3-after.txt](data/2026-10-13-60-migration-job/independent-verification/round5-recheck/lab-2-n3-after.txt)（升級失敗；probe 截斷了錯誤的最後一行）、[lab-3-force-conflicts.txt](data/2026-10-13-60-migration-job/independent-verification/round5-recheck/lab-3-force-conflicts.txt) |
+
+### 結論
+
+- N3 在 lab 上成立：外來的 annotation、標籤、ownerReferences 與 finalizers 在綁定時拿掉，綁定之後的升級與 owner 消失都不影響 Secret，正在刪除的 Secret 不會被填，runbook 的復原步驟有效。
+- N5 由 runbook 處理，不改程式。
+- 待測：N5 在 Flux 下的行為（helm-controller 是否確實強制接手衝突）。runbook 的這部分只依 CRD 說明，沒有在叢集上驗證；這次的 lab 沒有 Flux。

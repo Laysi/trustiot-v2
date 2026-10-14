@@ -1,0 +1,109 @@
+PR Laysi/trustiot-v2#379, CI run 38523153117 (head 94b3614), job rust: the cargo test output of the migrate crate.
+Copied from the job log with colour codes removed. GitHub interleaves cargo's stderr (the "Running" lines) with
+stdout (the tests), so a "Running" line can appear after the tests of its binary. CI sets CI=true, so a test
+that needs a container fails instead of skipping.
+
+2026-10-14T06:39:03.0885091Z running 20 tests
+2026-10-14T06:39:03.0889074Z test clickhouse::tests::splits_like_the_ingest_tests ... ok
+2026-10-14T06:39:03.0894208Z test config::tests::password_bindings ... ok
+2026-10-14T06:39:03.0894688Z test clickhouse::tests::every_product_file_splits ... ok
+2026-10-14T06:39:03.0895413Z test http::tests::a_client_never_switches_scheme ... ok
+2026-10-14T06:39:03.0895938Z test http::tests::credentials_are_sensitive_headers ... ok
+2026-10-14T06:39:03.0897007Z test kube::tests::reads_the_job_conditions ... ok
+2026-10-14T06:39:03.0897770Z test passwords::tests::binding_a_secret_removes_metadata_neither_the_chart_nor_the_job_sets ... ok
+2026-10-14T06:39:03.0898555Z test passwords::tests::data_is_trusted_only_in_the_object_the_job_filled ... ok
+2026-10-14T06:39:03.0899787Z test passwords::tests::generations_are_decimal_digits ... ok
+2026-10-14T06:39:03.0900386Z test passwords::tests::generations_only_go_up ... ok
+2026-10-14T06:39:03.0901008Z test passwords::tests::only_a_plain_status_reason_is_quoted ... ok
+2026-10-14T06:39:03.0901692Z test passwords::tests::keys_are_kept_only_when_present_usable_and_of_this_generation ... ok
+2026-10-14T06:39:03.0902874Z test passwords::tests::the_patch_carries_the_resource_version_the_generation_the_uid_and_only_the_new_keys ... ok
+2026-10-14T06:39:03.0903618Z test secret::tests::debug_hides_the_password ... ok
+2026-10-14T06:39:03.0904295Z test secret::tests::generated_passwords_are_256_bit_hex_and_never_repeat ... ok
+2026-10-14T06:39:03.0905219Z test secret::tests::short_long_and_odd_passwords_are_refused_without_echoing_them ... ok
+2026-10-14T06:39:03.0912989Z      Running unittests src/lib.rs (target/debug/deps/migrate-ac4b7aa02956e5c3)
+2026-10-14T06:39:03.0913664Z test config::tests::plain_identifiers ... ok
+2026-10-14T06:39:03.0914092Z test config::tests::generations ... ok
+2026-10-14T06:39:03.1335869Z test secret::tests::the_verifier_matches_rfc_7677 ... ok
+2026-10-14T06:39:03.1761076Z test secret::tests::verifiers_use_fresh_salts ... ok
+2026-10-14T06:39:03.1761643Z 
+2026-10-14T06:39:03.1761901Z test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+2026-10-14T06:39:03.1762603Z 
+2026-10-14T06:39:03.1766115Z      Running tests/clickhouse.rs (target/debug/deps/clickhouse-9e1940fbd95668c4)
+2026-10-14T06:39:03.1777973Z 
+2026-10-14T06:39:03.1778324Z running 1 test
+2026-10-14T06:39:11.3726246Z test clickhouse_ddl_and_the_collector_account ... ok
+2026-10-14T06:39:11.3727012Z 
+2026-10-14T06:39:11.3727566Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.19s
+2026-10-14T06:39:11.3727968Z 
+2026-10-14T06:39:11.3731557Z      Running tests/concurrent_runs.rs (target/debug/deps/concurrent_runs-7b764c56b5e626ef)
+2026-10-14T06:39:11.3743466Z 
+2026-10-14T06:39:11.3743873Z running 1 test
+2026-10-14T06:39:22.0895997Z test only_one_run_at_a_time ... ok
+2026-10-14T06:39:22.0896529Z 
+2026-10-14T06:39:22.0896817Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.72s
+2026-10-14T06:39:22.0897166Z 
+2026-10-14T06:39:22.0901449Z      Running tests/file_escapes.rs (target/debug/deps/file_escapes-bd7698d555a26f97)
+2026-10-14T06:39:22.0912205Z 
+2026-10-14T06:39:22.0912967Z running 1 test
+2026-10-14T06:39:25.5280985Z test a_file_that_leaves_its_transaction_or_role_stops_the_run ... ok
+2026-10-14T06:39:25.5281420Z 
+2026-10-14T06:39:25.5281697Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.44s
+2026-10-14T06:39:25.5282630Z 
+2026-10-14T06:39:25.5285086Z      Running tests/fresh_database.rs (target/debug/deps/fresh_database-24791108fb474769)
+2026-10-14T06:39:25.5297935Z 
+2026-10-14T06:39:25.5298367Z running 1 test
+2026-10-14T06:39:30.8367588Z test a_fresh_database_gets_every_migration_once ... ok
+2026-10-14T06:39:30.8368321Z 
+2026-10-14T06:39:30.8368911Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.31s
+2026-10-14T06:39:30.8369868Z 
+2026-10-14T06:39:30.8375153Z      Running tests/one_instance_per_cluster.rs (target/debug/deps/one_instance_per_cluster-807998af58815615)
+2026-10-14T06:39:30.8384569Z 
+2026-10-14T06:39:30.8384948Z running 1 test
+2026-10-14T06:39:33.9772509Z test a_second_instance_on_the_same_cluster_is_refused ... ok
+2026-10-14T06:39:33.9772921Z 
+2026-10-14T06:39:33.9773185Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.14s
+2026-10-14T06:39:33.9773554Z 
+2026-10-14T06:39:33.9778637Z      Running tests/outbox_and_tenant_roles.rs (target/debug/deps/outbox_and_tenant_roles-76dc150f5c575ab1)
+2026-10-14T06:39:33.9789950Z 
+2026-10-14T06:39:33.9790227Z running 1 test
+2026-10-14T06:39:42.0921661Z test outbox_wiring_and_tenant_roles ... ok
+2026-10-14T06:39:42.0922789Z 
+2026-10-14T06:39:42.0923340Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.11s
+2026-10-14T06:39:42.0923784Z 
+2026-10-14T06:39:42.0924721Z      Running tests/passwords.rs (target/debug/deps/passwords-423689abeae781ad)
+2026-10-14T06:39:42.0935479Z 
+2026-10-14T06:39:42.0935760Z running 11 tests
+2026-10-14T06:39:42.1046720Z test a_first_run_fills_the_empty_secrets_and_a_second_changes_nothing ... ok
+2026-10-14T06:39:42.1094018Z test a_lost_or_unusable_key_is_regenerated_alone ... ok
+2026-10-14T06:39:42.1096638Z test a_new_generation_rotates_every_managed_key_and_nothing_else ... ok
+2026-10-14T06:39:42.1106247Z test a_concurrent_change_is_never_overwritten ... ok
+2026-10-14T06:39:42.1107229Z test a_secret_being_deleted_is_never_filled ... ok
+2026-10-14T06:39:42.1135115Z test a_value_the_api_did_not_store_as_written_stops_the_run ... ok
+2026-10-14T06:39:42.1143426Z test nothing_bound_makes_no_request ... ok
+2026-10-14T06:39:42.1201875Z test binding_a_foreign_secret_removes_metadata_neither_the_chart_nor_the_job_sets ... ok
+2026-10-14T06:39:42.1210011Z test a_secret_someone_else_created_never_keeps_its_passwords ... ok
+2026-10-14T06:39:42.1286718Z test a_rollback_keeps_the_passwords_and_so_does_the_re_upgrade ... ok
+2026-10-14T06:39:48.1287260Z test refused_access_and_transient_failures ... ok
+2026-10-14T06:39:48.1287619Z 
+2026-10-14T06:39:48.1287903Z test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.03s
+2026-10-14T06:39:48.1288243Z 
+2026-10-14T06:39:48.1292953Z      Running tests/registry.rs (target/debug/deps/registry-6d964051862c6bc1)
+2026-10-14T06:39:48.1302335Z 
+2026-10-14T06:39:48.1302521Z running 5 tests
+2026-10-14T06:39:48.1309580Z test inconsistent_registries_are_refused ... ok
+2026-10-14T06:39:48.1310157Z test the_chart_binds_every_login_role_of_the_product ... ok
+2026-10-14T06:39:48.1310919Z test the_lint_sees_through_whitespace_and_case ... ok
+2026-10-14T06:39:48.1312171Z      Running tests/wait_for_job.rs (target/debug/deps/wait_for_job-c786147524f6475c)
+2026-10-14T06:39:48.1314885Z test postgres_migrations_follow_the_jobs_rules ... ok
+2026-10-14T06:39:48.1315435Z test the_product_registry_lists_every_file_in_order ... ok
+2026-10-14T06:39:48.1315685Z 
+2026-10-14T06:39:48.1315962Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-14T06:39:48.1316366Z 
+2026-10-14T06:39:48.1321393Z 
+2026-10-14T06:39:48.1321627Z running 4 tests
+2026-10-14T06:39:50.1472764Z test a_failed_job_or_a_refused_token_ends_the_wait_with_an_error ... ok
+2026-10-14T06:39:52.1480141Z test waits_through_missing_and_running_until_complete ... ok
+2026-10-14T06:39:54.1358754Z test an_api_signed_by_another_ca_is_never_believed ... ok
+2026-10-14T06:39:54.1392925Z test a_missing_job_names_the_cause_and_the_way_out ... ok
+2026-10-14T06:39:54.1393247Z 
+2026-10-14T06:39:54.1393518Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s

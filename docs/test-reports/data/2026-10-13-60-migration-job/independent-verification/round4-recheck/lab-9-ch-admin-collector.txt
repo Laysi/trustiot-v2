@@ -1,0 +1,9 @@
+GRANT exit=239  Received exception from server (version 26.8.22):
+HELM upgrade --set migrate.revision=91 exit=0 after 10 s 
+JOBLOG trustiot-migrate-46220e5b "revoked the login of ClickHouse account": 0
+CH admin login afterwards: exit=0 1 
+HELM upgrade --set migrate.revision=92 exit=0 after 10 s 
+JOBLOG trustiot-migrate-52316eb6 "revoked the login of ClickHouse account": 1
+JOBLOG trustiot-migrate-52316eb6 "revoked the login of role": 0
+CH exit=0 trustiot_collector	1 
+CH ops exit=0 verify_ops	0 

@@ -1,0 +1,32 @@
+HELM upgrade --set migrate.revision=71 exit=1 after 3 s I1014 14:49:48.275556  103920 warnings.go:107] "Warning: configured AuthorizationPolicy will deny all traffic to TCP ports under its scope due to the use of only HTTP attributes in a DENY rule; it is recommended to explicitly specify the port"
+level=WARN msg="upgrade failed" name=trustiot error="conflict occurred while applying object e2e-60/trustiot-identity-password /v1, Kind=Secret: Apply failed with 2 conflicts: conflicts with \"kubectl-create\" using v1:\n- .metadata.annotations.trustiot.io/description\n- .metadata.labels.app.kubernetes.io/component"
+Error: UPGRADE FAILED: conflict occurred while applying object e2e-60/trustiot-identity-password /v1, Kind=Secret: Apply failed with 2 conflicts: conflicts with "kubectl-create" using v1:
+- .metadata.annotations.trustiot.io/description
+- 
+JOBLOG trustiot-migrate-65f0410e "removed from Secret": 1
+JOBLOG trustiot-migrate-65f0410e "generated the password": 2
+META after upgrade labels{app.kubernetes.io/component=planted app.kubernetes.io/managed-by=Helm helm.toolkit.fluxcd.io/name=planted} annotations{meta.helm.sh/release-name=trustiot meta.helm.sh/release-namespace=e2e-60 trustiot.io/description=planted trustiot.io/password-generation=1 trustiot.io/password-secret-uid=<own uid>} ownerReferences=0 finalizers=[] managers=[kubectl-create/Update trustiot-migrate/Update]
+SECRET trustiot-otel-collector-password keys=[trustiot_collector(len 64)] generation=1 bound managers=[helm/Apply trustiot-migrate/Update+data]
+COMPARE n3-upgrade vs n3-install: trustiot_collector:same
+JOBS trustiot-migrate-0c3e6256(ok=1,failed=0,active=0) trustiot-migrate-65f0410e(ok=1,failed=0,active=0)
+POD trustiot-clickhouse-0 Running clickhouse:ready=true,restarts=0,running
+POD trustiot-identity-5b4bfd8ff4-k4whl Running identity:ready=false,restarts=0,running
+POD trustiot-identity-5bcc8df47c-whcqj Running identity:ready=true,restarts=0,running
+POD trustiot-ingress-istio-7847ff9f6c-st9v4 Running istio-proxy:ready=true,restarts=0,running
+POD trustiot-migrate-0c3e6256-fwpbx Succeeded migrate:ready=false,restarts=0,terminated:Completed
+POD trustiot-migrate-65f0410e-fj8z5 Succeeded migrate:ready=false,restarts=0,terminated:Completed
+POD trustiot-otel-collector-5fc5ccf6df-m6jvc Running otel-collector:ready=false,restarts=0,running
+POD trustiot-otel-collector-78498d87b4-2vv5p Running otel-collector:ready=true,restarts=0,running
+POD trustiot-postgres-1 Running postgres:ready=true,restarts=0,running
+AFTER deleting the former owner: Secret exists=true
+SECRET trustiot-otel-collector-password keys=[trustiot_collector(len 64)] generation=1 bound managers=[helm/Apply trustiot-migrate/Update+data]
+COMPARE n3-owner-gone vs n3-upgrade: trustiot_collector:same
+JOBS trustiot-migrate-0c3e6256(ok=1,failed=0,active=0) trustiot-migrate-65f0410e(ok=1,failed=0,active=0)
+POD trustiot-clickhouse-0 Running clickhouse:ready=true,restarts=0,running
+POD trustiot-identity-5b4bfd8ff4-k4whl Running identity:ready=true,restarts=0,running
+POD trustiot-ingress-istio-7847ff9f6c-st9v4 Running istio-proxy:ready=true,restarts=0,running
+POD trustiot-migrate-0c3e6256-fwpbx Succeeded migrate:ready=false,restarts=0,terminated:Completed
+POD trustiot-migrate-65f0410e-fj8z5 Succeeded migrate:ready=false,restarts=0,terminated:Completed
+POD trustiot-otel-collector-5fc5ccf6df-m6jvc Running otel-collector:ready=true,restarts=0,running
+POD trustiot-postgres-1 Running postgres:ready=true,restarts=0,running
+LOGIN identity_app with the Secret's password: exit=0 out=1 err=
