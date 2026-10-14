@@ -89,3 +89,51 @@ actionlint: 3 workflow file(s), no errors
 $ bun test scripts/ci/changes.test.ts
  170 pass
  0 fail
+
+## Review fixes (d408323, a056ffc, 1892af4, 69af6cd) merged with main 871bfee: merge commit 8879efd
+
+The tree as committed in 8879efd, on the build host through the check queue (CI=1).
+
+$ cargo fmt --all --check; cargo clippy --workspace --all-targets --locked -- -D warnings
+$ cargo clippy -p service-kit --no-default-features --all-targets --locked -- -D warnings
+$ cargo test --workspace --locked; cargo run --locked -q -p openapi -- --check; cargo deny --locked check
+$ bun install --cwd scripts --frozen-lockfile; bun test deploy/chart; bun test deploy/flux
+$ bun test scripts; bun run --cwd scripts typecheck; bun scripts/ci/check-secret-handling.ts
+fmt=0
+clippy=0
+kit=0
+test=0
+ok binaries: 99 failed lines: 0
+test every_new_tenant_gets_one_row_whatever_is_replayed ... ok
+test tenants::tests::names_are_trimmed_and_bounded ... ok
+test tenants::tests::only_a_json_content_type_is_accepted ... ok
+test platform_administrators_create_tenants_with_their_event ... ok
+test the_chart_binds_every_login_role_of_the_product ... ok
+api/openapi.json is up to date
+advisories ok, bans ok, licenses ok, sources ok
+install=0
+chart=0
+flux=0
+scripts=0
+typecheck=0
+secret-handling=0
+secret handling: 398 file(s) checked, 6 container build file(s), no violations
+ 350 pass
+ 0 fail
+Ran 350 tests across 6 files. [31.60s]
+ 19 pass
+ 0 fail
+Ran 19 tests across 1 file. [1018.00ms]
+ 817 pass
+ 2 skip
+ 0 fail
+Ran 819 tests across 34 files. [2.36s]
+(pass) migration Job (Laysi/trustiot-v2#60) > a service whose platform role logs in (assets) gets both passwords from its one Secret, and the Job fills both keys
+(pass) e2e overlays > ingress.e2e.ts, saas: no pod reads a password Secret that nothing fills
+(pass) e2e overlays > ingress.e2e.ts, onprem: no pod reads a password Secret that nothing fills
+(pass) e2e overlays > mesh.e2e.ts: no pod reads a password Secret that nothing fills
+(pass) e2e overlays > otel.e2e.ts, step 1 (ClickHouse only): no pod reads a password Secret that nothing fills
+(pass) e2e overlays > otel.e2e.ts, step 2 (the collector and the example service): no pod reads a password Secret that nothing fills
+(pass) e2e overlays > postgres.e2e.ts, saas: no pod reads a password Secret that nothing fills
+(pass) e2e overlays > postgres.e2e.ts, onprem: no pod reads a password Secret that nothing fills
+(pass) e2e overlays > the check catches a stand-in that keeps postgres under mesh.calls without the migration Job
