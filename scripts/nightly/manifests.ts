@@ -475,6 +475,21 @@ export function ingressListenerOf(objects: K8sObject[]): IngressListener {
 }
 
 /**
+ * The Service of one component of the release (`app.kubernetes.io/component`, a key under
+ * `services`) and the number of its port named `portName`.
+ */
+export function servicePortOf(objects: K8sObject[], component: string, portName: string): { service: string; port: number } {
+  const services = flatten(objects).filter((o) => o.kind === "Service" && o.metadata?.labels?.["app.kubernetes.io/component"] === component);
+  if (services.length !== 1) throw new Error(`the release should have one Service of ${component}, found ${services.length}`);
+  const service = services[0]!;
+  const port = asArray(asMap(service.spec).ports)
+    .filter(isMap)
+    .find((candidate) => candidate.name === portName)?.port;
+  if (typeof port !== "number") throw new Error(`Service ${service.metadata?.name} has no port named ${portName}`);
+  return { service: service.metadata?.name ?? "", port };
+}
+
+/**
  * The release's platform settings (templates/platform-config.yaml, the ConfigMap every service
  * reads through envFrom): non-secret values such as TRUSTIOT_APP_HOST and
  * TRUSTIOT_POSTGRES_DATABASE.

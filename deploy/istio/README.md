@@ -30,7 +30,7 @@ k3s 也可以把同樣的 values 放進 k3s 的 `HelmChart` 資源（`valuesCont
 
 ## 路徑正規化
 
-`istiod-values.yaml` 設 `meshConfig.pathNormalization.normalization: DECODE_AND_MERGE_SLASHES`。mesh 裡每個 Envoy（入口 gateway、waypoint）在路由與 AuthorizationPolicy 比對之前，先把路徑的 `%2F`、`%5C`（大小寫不拘）解碼成 `/`、`\`，依 RFC 3986 處理 `.` 與 `..`，再把連續的 `/` 合併成一個，之後轉給後端的也是正規化後的路徑。所以 Envoy 比對的路徑與後端看到的路徑相同。
+`istiod-values.yaml` 設 `meshConfig.pathNormalization.normalization: DECODE_AND_MERGE_SLASHES`。mesh 裡每個 Envoy（入口 gateway、waypoint）在路由與 AuthorizationPolicy 比對之前，先把路徑的 `%2F`、`%5C`（大小寫不拘）解碼成 `/`、`\`，依 RFC 3986 處理 `.` 與 `..`，再把連續的 `/` 合併成一個，之後轉給後端的也是正規化後的路徑。所以 Envoy 比對的路徑與後端看到的路徑相同。ext_authz 送給身分服務的也是正規化後的路徑：2026-10-15 由 Laysi/trustiot-v2#77 以入口 e2e 的替身觀察，並由 nightly 以真的身分服務確認（`/api/identity/../assets/v1/tenant` 拿到給資產服務的 token）。
 
 為什麼需要（Laysi/trustiot-v2#255）：Istio 預設（`BASE`）只處理 `.` 與 `..`，不合併斜線、不解碼 `%2F`。chart 以 DENY `/internal*` 擋住服務之間的內部 API（決策 27），但 `//internal/tenants`、`/x/..//internal/tenants`、`/%2finternal/tenants` 這些寫法比對不到 `/internal*`，會落到 `/` 這類全包路由；後端若把它們整理成 `/internal/...`，帶有效 cookie 的使用者就呼叫得到內部 API（2026-10-10 獨立驗證的 F1，[報告](../../docs/test-reports/2026-10-10-62-e2e-verify.md)）。`MERGE_SLASHES` 擋得住雙斜線，擋不住 `%2f`；`DECODE_AND_MERGE_SLASHES` 全部擋下（2026-10-11 實測，[報告](../../docs/test-reports/2026-10-11-255-path-normalization.md)）。
 

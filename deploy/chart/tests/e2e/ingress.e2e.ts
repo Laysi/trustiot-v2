@@ -93,6 +93,15 @@ function whoamiHeader(body: string, header: string): string | undefined {
   const line = body.split("\n").find((l) => l.toLowerCase().startsWith(`${header.toLowerCase()}:`));
   return line?.slice(line.indexOf(":") + 1).trim();
 }
+// What the cookie check was asked about: the identity double puts the Host and the path of the
+// check request into the claims of the identity header it returns (identity-double/server.ts),
+// and whoami echoes that header.
+function checkedRequest(body: string): { host: unknown; path: unknown } {
+  const header = whoamiHeader(body, "x-internal-identity");
+  if (header === undefined || !header.startsWith("double.")) throw new Error(`no identity header from the double in:\n${body}`);
+  const claims = JSON.parse(Buffer.from(header.slice("double.".length), "base64url").toString("utf8")) as { host?: unknown; path?: unknown };
+  return { host: claims.host, path: claims.path };
+}
 
 const results: Record<string, unknown>[] = [];
 function record(group: string, name: string, target: string, host: string, response: RawResponse) {
@@ -256,6 +265,9 @@ const INTERNAL_SLASH_CASES = [
   "/./%2finternal",
 ];
 
+// Spellings of /api/whoami that the mesh's path normalization turns into /api/whoami.
+const NORMALIZED_WHOAMI_CASES = ["//api/whoami", "/api//whoami", "/./api/whoami", "/api/./whoami", "/api/x/../whoami", "/api%2fwhoami", "/api%2Fwhoami"];
+
 // Spellings of x-internal-identity with underscores. Envoy forwards headers with underscores
 // unchanged, and CGI/WSGI-style servers read "-" and "_" alike (HTTP_X_INTERNAL_IDENTITY), so
 // the ingress removes all three on every route (Laysi/trustiot-v2#255, F2).
@@ -356,6 +368,33 @@ describe("paths that need the cookie", () => {
       expect(response.body).not.toContain(PROTECTED_MARKER);
       expect(response.status).toBe(expected);
     }
+  });
+
+  // Laysi/trustiot-v2#77, from the notes of Laysi/trustiot-v2#255 (deploy/chart/README.md, "Host"
+  // with a port; deploy/istio/README.md, path normalization): what the gateway hands to the
+  // identity service. The Host reaches the check as the client sent it, port included, and the
+  // services' audience lookup (services/identity/src/audience.rs) ignores the port.
+  test("the cookie check gets the client's Host as sent, with or without a port", async () => {
+    const port = SHAPE === "saas" ? 80 : 443;
+    for (const host of [HOSTS.app, `${HOSTS.app}:${port}`, `${HOSTS.app}:8443`]) {
+      const response = await raw("/api/whoami", { host, headers: [["cookie", VALID_COOKIE]] });
+      record("checked request", `Host ${host}`, "/api/whoami", host, response);
+      expect(response.status).toBe(200);
+      expect(response.body).toContain(PROTECTED_MARKER);
+      expect(checkedRequest(response.body)).toEqual({ host, path: "/api/whoami" });
+    }
+  });
+
+  // The mesh normalizes the path before routing and authorization (DECODE_AND_MERGE_SLASHES), so
+  // the cookie check and the backend both see /api/whoami, never the spelling the client sent.
+  test.each(NORMALIZED_WHOAMI_CASES)("the cookie check and the backend get the normalized path: %s", async (target) => {
+    const response = await raw(target, { headers: [["cookie", VALID_COOKIE]] });
+    record("checked request", "normalized path", target, HOSTS.app, response);
+    expect(response.status).toBe(200);
+    expect(response.body).toContain(PROTECTED_MARKER);
+    expect(checkedRequest(response.body)).toEqual({ host: HOSTS.app, path: "/api/whoami" });
+    // whoami echoes its request line first.
+    expect(response.body).toContain("GET /api/whoami HTTP/1.1");
   });
 
   test("an unknown host gets no route", async () => {

@@ -7,12 +7,22 @@
 // /api/assets/v1/tenant, 200 with the same ID). Without a cookie the ingress answers 401, and the
 // administrator, who has no tenant, gets 403 from the assets service.
 //
+// Then the edges of the MS0 completion criteria (Laysi/trustiot-v2#77), with the real services:
+// a forged identity header, signed with the deployment's own key so the assets service accepts it
+// when it reaches it directly (checked through a port-forward that bypasses the ingress), never
+// gets through the ingress: without a cookie the gateway answers 401, and with the
+// administrator's cookie the assets service sees only the administrator's token (403). A Host
+// with a port, and spellings of the path that the mesh normalizes, still reach the assets service
+// with a token addressed to it (200 with the tenant), so the identity service resolves the
+// audience from the Host and path the gateway hands it, not from what the client wrote.
+//
 // Nothing logs in yet (Laysi/trustiot-v2#103), so the check makes its two sessions the way the
 // service's own tests do: rows in identity.users, identity.memberships and identity.sessions,
 // written as the database superuser over the Postgres pod's local socket. Only the SHA-256 of a
 // session secret reaches the database and the SQL; the secret itself lives in this process and is
 // never logged. The cluster and its sessions are thrown away after the run.
 import type { Subprocess } from "bun";
+import { createPrivateKey, sign as signWithKey } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,7 +33,7 @@ import { freePort } from "../../deploy/chart/tests/e2e/ports.ts";
 import { withTunnelRecovery } from "../../deploy/chart/tests/e2e/tunnel-recovery.ts";
 import { run } from "./exec.ts";
 import type { RunLog } from "./exec.ts";
-import { ingressListenerOf, platformSettingsOf, postgresClustersOf } from "./manifests.ts";
+import { ingressListenerOf, platformSettingsOf, postgresClustersOf, servicePortOf } from "./manifests.ts";
 import type { K8sObject } from "./manifests.ts";
 import { smokeProviderNameOf } from "./platform.ts";
 import { serviceImageValues } from "./service-image.ts";
@@ -126,17 +136,24 @@ export function apiValues(shape: string, publicKey: { kid: string; x: string }, 
   };
 }
 
+/** Signs with the identity service's key, so the check can forge a header the services accept. */
+export interface TokenSigner {
+  kid: string;
+  sign(data: Uint8Array): Uint8Array;
+}
+
 /**
  * Generates the identity service's Ed25519 signing key into SIGNING_KEY_STORE in `namespace` and
- * returns its public key for internalIdentity.publicKeys. The private key exists only in a private
- * temporary directory while the commands need it and in the Secret; nothing logs it.
+ * returns its public key for internalIdentity.publicKeys, and a signer for the forged identity
+ * header of the check. The private key exists only in a private temporary directory while the
+ * commands need it, in the Secret, and in this process as a key object; nothing logs it.
  */
 export async function createSigningKey(
   log: RunLog,
   kube: { kubectl: string; kubeconfig: string },
   namespace: string,
   commands: { run: typeof run } = { run },
-): Promise<{ kid: string; x: string }> {
+): Promise<{ publicKey: { kid: string; x: string }; signer: TokenSigner }> {
   const dir = mkdtempSync(join(tmpdir(), "nightly-signing-key-"));
   try {
     const key = join(dir, "signing-key.pem");
@@ -144,16 +161,49 @@ export async function createSigningKey(
     await commands.run(log, ["openssl", "genpkey", "-algorithm", "ed25519", "-out", key], { timeoutMs: 30_000 });
     await commands.run(log, ["openssl", "pkey", "-in", key, "-pubout", "-outform", "DER", "-out", der], { timeoutMs: 30_000 });
     const x = ed25519PublicKeyX(new Uint8Array(await Bun.file(der).arrayBuffer()));
+    const privateKey = createPrivateKey(await Bun.file(key).text());
     await commands.run(
       log,
       [kube.kubectl, "create", "secret", "generic", SIGNING_KEY_STORE, "--namespace", namespace, `--from-file=signing-key.pem=${key}`],
       { env: { KUBECONFIG: kube.kubeconfig }, timeoutMs: 60_000, quiet: true },
     );
-    return { kid: SIGNING_KEY_ID, x };
+    return {
+      publicKey: { kid: SIGNING_KEY_ID, x },
+      signer: { kid: SIGNING_KEY_ID, sign: (data) => new Uint8Array(signWithKey(null, data, privateKey)) },
+    };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+/** The protected header of an internal identity token (services/identity/src/issuer.rs), in its field order. */
+export function identityTokenHeader(kid: string): string {
+  return JSON.stringify({ alg: "EdDSA", typ: "internal-identity+jwt", kid });
+}
+
+/**
+ * An internal identity token that the client writes itself: a viewer of `tenantId`, addressed to
+ * the assets service, valid for a minute from `nowSecs`, in the format and with the key the
+ * identity service signs with (services/identity/src/issuer.rs, contract::InternalClaims). The
+ * assets service accepts it when it reaches it; only the ingress may keep it away.
+ */
+export function forgeIdentityToken(signer: TokenSigner, userId: string, tenantId: string, nowSecs: number): string {
+  const claims = {
+    iss: "identity",
+    sub: uuid(userId),
+    aud: "assets",
+    iat: nowSecs,
+    exp: nowSecs + 60,
+    tenant: { id: uuid(tenantId), role: "viewer" },
+    platform_admin: false,
+  };
+  const encode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
+  const signed = `${encode(identityTokenHeader(signer.kid))}.${encode(JSON.stringify(claims))}`;
+  return `${signed}.${Buffer.from(signer.sign(Buffer.from(signed, "ascii"))).toString("base64url")}`;
+}
+
+/** The identity header of decision 27, which only the ingress may set (services read it, crates/service-kit). */
+export const IDENTITY_HEADER = "x-internal-identity";
 
 /** A session the check makes: the cookie value it sends, and the hash the identity service looks up. */
 export interface TestSession {
@@ -237,11 +287,22 @@ function summary(response: RawResponse): string {
   return `${response.status} ${response.body.slice(0, 200).replaceAll("\n", " ")}`;
 }
 
+/** What checkTenantApi made, for the checks that follow it. */
+export interface TenantApiResult {
+  /** The report line. */
+  detail: string;
+  tenantId: string;
+  /** The platform administrator without a tenant. */
+  admin: TestSession;
+  /** The viewer acting in the new tenant. */
+  member: TestSession;
+}
+
 /**
  * The check itself. `appHost` is hosts.app, where the cookie routes are; `name` is the tenant's
- * name. Returns the report line; throws with what was awaited or what differed.
+ * name. Returns the report line and what it made; throws with what was awaited or what differed.
  */
-export async function checkTenantApi(deps: ApiCheckDeps, appHost: string, name: string): Promise<string> {
+export async function checkTenantApi(deps: ApiCheckDeps, appHost: string, name: string): Promise<TenantApiResult> {
   const sleep = deps.sleep ?? Bun.sleep;
   const now = deps.now ?? Date.now;
   const routeMs = deps.limits?.routeMs ?? ROUTE_LIMIT_MS;
@@ -327,10 +388,101 @@ export async function checkTenantApi(deps: ApiCheckDeps, appHost: string, name: 
   const body = JSON.parse(served.response.body) as { tenant_id?: unknown };
   if (body.tenant_id !== tenantId) throw new Error(`the assets service answered 200 with ${served.response.body.slice(0, 200)}, not tenant ${tenantId}`);
 
-  return (
+  const detail =
     `POST ${TENANTS_PATH} as a platform administrator: 201, tenant ${tenantId}; ` +
     `GET ${ASSETS_TENANT_PATH} as its member: 200 with that tenant after ${Math.round(served.waitedMs / 1000)} s; ` +
-    "without a cookie: 401 unauthenticated; the administrator without a tenant: 403 permission_denied"
+    "without a cookie: 401 unauthenticated; the administrator without a tenant: 403 permission_denied";
+  return { detail, tenantId, admin, member };
+}
+
+/**
+ * Spellings of the assets service's tenant path that the mesh's path normalization
+ * (deploy/istio/istiod-values.yaml, DECODE_AND_MERGE_SLASHES) turns into ASSETS_TENANT_PATH. The
+ * last one starts on the identity service's own prefix: the gateway routes it to the assets
+ * service, so the identity service must address the token from the normalized path too, or the
+ * assets service would refuse it (401 wrong audience).
+ */
+export const NORMALIZED_TENANT_PATHS = [
+  "//api/assets/v1/tenant",
+  "/api/assets//v1/tenant",
+  "/api/assets/v1/./tenant",
+  "/api/assets/v1%2ftenant",
+  "/api%2Fassets/v1/tenant",
+  "/api/identity/../assets/v1/tenant",
+] as const;
+
+/** What checkIngressEdges needs besides the gateway: the assets service without the ingress, and the forger. */
+export interface EdgeCheckDeps {
+  /** Sends one request to the ingress gateway. */
+  send: (request: RawRequest) => Promise<RawResponse>;
+  /** Sends one request straight to the assets service, past the ingress and the mesh's policies. */
+  sendToAssets: (request: RawRequest) => Promise<RawResponse>;
+  /** A fresh forged token of a viewer of `tenantId` for the assets service (forgeIdentityToken). */
+  forge: (tenantId: string) => string;
+  log: (line: string) => void;
+}
+
+/**
+ * The completion criteria's edges with the real services (Laysi/trustiot-v2#77), after
+ * checkTenantApi: `listenerPort` is the Gateway listener's port. Returns the report line; throws
+ * naming the case that differed.
+ */
+export async function checkIngressEdges(deps: EdgeCheckDeps, appHost: string, listenerPort: number, made: TenantApiResult): Promise<string> {
+  const { tenantId, admin, member } = made;
+  const cookie = (session: TestSession): [string, string] => ["cookie", `${SESSION_COOKIE}=${session.cookie}`];
+  const forged = (): [string, string] => [IDENTITY_HEADER, deps.forge(tenantId)];
+  const servesTenant = (response: RawResponse): boolean => {
+    if (response.status !== 200) return false;
+    try {
+      return (JSON.parse(response.body) as { tenant_id?: unknown }).tenant_id === tenantId;
+    } catch {
+      return false;
+    }
+  };
+
+  // 1. The forged header is one the assets service accepts: sent past the ingress, it serves the tenant.
+  const direct = await deps.sendToAssets({ target: ASSETS_TENANT_PATH, hostHeader: appHost, headers: [forged()] });
+  if (!servesTenant(direct)) {
+    throw new Error(
+      `the assets service, called past the ingress with the forged identity header, answered ${summary(direct)}; ` +
+        "it must accept it (200 with the tenant), or the forged-header checks below prove nothing",
+    );
+  }
+  deps.log("the assets service accepts the forged identity header when it reaches it");
+
+  // 2. Through the ingress without a cookie: the gateway refuses it before any service.
+  const anonymous = await deps.send({ target: ASSETS_TENANT_PATH, hostHeader: appHost, headers: [forged()] });
+  if (anonymous.status !== 401 || errorCode(anonymous.body) !== "unauthenticated") {
+    throw new Error(`a forged identity header without a cookie answered ${summary(anonymous)} through the ingress, expected 401 unauthenticated`);
+  }
+
+  // 3. With the administrator's cookie: the assets service sees the administrator's token only.
+  const replaced = await deps.send({ target: ASSETS_TENANT_PATH, hostHeader: appHost, headers: [cookie(admin), forged()] });
+  if (replaced.status !== 403 || errorCode(replaced.body) !== "permission_denied") {
+    throw new Error(
+      `the administrator's cookie with a forged identity header answered ${summary(replaced)} through the ingress, ` +
+        "expected 403 permission_denied (the administrator's own token, without a tenant)",
+    );
+  }
+
+  // 4. Host with a port (deploy/chart/README.md): the same route and audience as without one.
+  const hosts = [`${appHost}:${listenerPort}`, `${appHost}:8443`];
+  for (const host of hosts) {
+    const response = await deps.send({ target: ASSETS_TENANT_PATH, hostHeader: host, headers: [cookie(member)] });
+    if (!servesTenant(response)) throw new Error(`the member's cookie with Host ${host} answered ${summary(response)}, expected 200 with tenant ${tenantId}`);
+  }
+
+  // 5. Path spellings the mesh normalizes: the identity service addresses the token from the normalized path.
+  for (const target of NORMALIZED_TENANT_PATHS) {
+    const response = await deps.send({ target, hostHeader: appHost, headers: [cookie(member)] });
+    if (!servesTenant(response)) throw new Error(`the member's cookie on ${target} answered ${summary(response)}, expected 200 with tenant ${tenantId}`);
+  }
+
+  return (
+    "a forged identity header that the assets service accepts directly: 401 unauthenticated through the ingress without a cookie, " +
+    "403 permission_denied with the administrator's cookie; " +
+    `the member's cookie with Host ${hosts.map((host) => host.slice(appHost.length)).join(" and ")}: 200 with the tenant; ` +
+    `on ${NORMALIZED_TENANT_PATHS.length} path spellings the mesh normalizes: 200 with the tenant`
   );
 }
 
@@ -346,7 +498,14 @@ export interface ApiCheckContext {
  * CloudNativePG primary, requests through `kubectl port-forward` to the ingress gateway's Service
  * (`ca`: the certificate the smoke made for an HTTPS listener).
  */
-export async function runApiCheck(ctx: ApiCheckContext, namespace: string, objects: K8sObject[], ca: string | undefined, name: string): Promise<string> {
+export async function runApiCheck(
+  ctx: ApiCheckContext,
+  namespace: string,
+  objects: K8sObject[],
+  ca: string | undefined,
+  name: string,
+  signer: TokenSigner,
+): Promise<string> {
   const env = { KUBECONFIG: ctx.kubeconfig };
   const settings = platformSettingsOf(objects);
   const appHost = settings.TRUSTIOT_APP_HOST;
@@ -359,6 +518,7 @@ export async function runApiCheck(ctx: ApiCheckContext, namespace: string, objec
   if (primary === "") throw new Error(`Cluster ${clusters[0]} has no current primary`);
   const listener = ingressListenerOf(objects);
   if (listener.tls && ca === undefined) throw new Error(`Gateway ${listener.gateway} listens with TLS, but the smoke made no certificate for it`);
+  const assets = servicePortOf(objects, "assets", "http");
 
   // SQL on stdin; the output (row counts only) and the SQL stay out of the log.
   const psql = async (sql: string) => {
@@ -369,18 +529,57 @@ export async function runApiCheck(ctx: ApiCheckContext, namespace: string, objec
     );
   };
 
-  let tunnel: Subprocess | undefined;
-  let endpoint: RawEndpoint | undefined;
-  const openTunnel = async () => {
-    tunnel?.kill();
+  const gateway = new PortForward(ctx, namespace, `service/${listener.gateway}-istio`, listener.port, listener.tls ? { ca } : undefined);
+  // The assets service without the ingress: kubectl port-forward enters its pod, so the request
+  // passes neither the gateway nor the mesh's policies, only the service's own token check.
+  const direct = new PortForward(ctx, namespace, `service/${assets.service}`, assets.port, undefined);
+  try {
+    await gateway.open();
+    const made = await checkTenantApi({ psql, send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, name);
+    await direct.open();
+    const edges = await checkIngressEdges(
+      {
+        send: (request) => gateway.send(request),
+        sendToAssets: (request) => direct.send(request),
+        forge: (tenantId) => forgeIdentityToken(signer, crypto.randomUUID(), tenantId, Math.floor(Date.now() / 1000)),
+        log: (line) => ctx.log.line(line),
+      },
+      appHost,
+      listener.port,
+      made,
+    );
+    return `${made.detail}; ${edges}`;
+  } finally {
+    gateway.close();
+    direct.close();
+  }
+}
+
+/**
+ * A `kubectl port-forward` to `target` on a free local port, reopened when it is lost while a GET
+ * is in flight (tunnel-recovery.ts). `tls`: the target speaks HTTPS with this CA.
+ */
+class PortForward {
+  private tunnel: Subprocess | undefined;
+  private endpoint: RawEndpoint | undefined;
+
+  constructor(
+    private readonly ctx: ApiCheckContext,
+    private readonly namespace: string,
+    private readonly target: string,
+    private readonly remotePort: number,
+    private readonly tls: { ca: string | undefined } | undefined,
+  ) {}
+
+  async open(): Promise<void> {
+    this.tunnel?.kill();
     const port = await freePort();
-    ctx.log.line(`$ ${ctx.kubectl} port-forward --namespace ${namespace} service/${listener.gateway}-istio ${port}:${listener.port}`);
-    tunnel = Bun.spawn([ctx.kubectl, "port-forward", "--namespace", namespace, `service/${listener.gateway}-istio`, `${port}:${listener.port}`], {
-      env: { ...process.env, ...env },
-      stdout: "ignore",
-      stderr: "ignore",
-    });
-    endpoint = { host: "127.0.0.1", port, tls: listener.tls, ...(ca === undefined ? {} : { ca }) };
+    const args = [this.ctx.kubectl, "port-forward", "--namespace", this.namespace, this.target, `${port}:${this.remotePort}`];
+    this.ctx.log.line(`$ ${args.join(" ")}`);
+    const tunnel = Bun.spawn(args, { env: { ...process.env, KUBECONFIG: this.ctx.kubeconfig }, stdout: "ignore", stderr: "ignore" });
+    this.tunnel = tunnel;
+    const ca = this.tls?.ca;
+    this.endpoint = { host: "127.0.0.1", port, tls: this.tls !== undefined, ...(ca === undefined ? {} : { ca }) };
     const started = Date.now();
     for (;;) {
       try {
@@ -388,22 +587,23 @@ export async function runApiCheck(ctx: ApiCheckContext, namespace: string, objec
         socket.end();
         return;
       } catch {
-        if (tunnel.exitCode !== null) throw new Error(`kubectl port-forward to ${listener.gateway}-istio exited with ${tunnel.exitCode}`);
-        if (Date.now() - started > 60_000) throw new Error(`timed out after 60 s waiting for kubectl port-forward to ${listener.gateway}-istio to listen`);
+        if (tunnel.exitCode !== null) throw new Error(`kubectl port-forward to ${this.target} exited with ${tunnel.exitCode}`);
+        if (Date.now() - started > 60_000) throw new Error(`timed out after 60 s waiting for kubectl port-forward to ${this.target} to listen`);
         await Bun.sleep(500);
       }
     }
-  };
-  try {
-    await openTunnel();
-    const send = (request: RawRequest) => {
-      const attempt = () => sendRaw(endpoint!, request);
-      // Only a GET is sent again after the tunnel was lost: a POST may have reached the service.
-      if ((request.method ?? "GET") !== "GET") return attempt();
-      return withTunnelRecovery(attempt, { tunnel: () => tunnel, reopen: openTunnel, log: (line) => ctx.log.line(line) });
-    };
-    return await checkTenantApi({ psql, send, log: (line) => ctx.log.line(line) }, appHost, name);
-  } finally {
-    tunnel?.kill();
+  }
+
+  send(request: RawRequest): Promise<RawResponse> {
+    const endpoint = this.endpoint;
+    if (endpoint === undefined) return Promise.reject(new Error(`the port-forward to ${this.target} is not open`));
+    const attempt = () => sendRaw(this.endpoint ?? endpoint, request);
+    // Only a GET is sent again after the tunnel was lost: a POST may have reached the service.
+    if ((request.method ?? "GET") !== "GET") return attempt();
+    return withTunnelRecovery(attempt, { tunnel: () => this.tunnel, reopen: () => this.open(), log: (line) => this.ctx.log.line(line) });
+  }
+
+  close(): void {
+    this.tunnel?.kill();
   }
 }
