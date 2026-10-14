@@ -368,11 +368,15 @@ pub struct ClickHouse {
 
 impl ClickHouse {
     pub async fn start() -> Option<Self> {
+        Self::start_with_password(format!("ch-admin-{}", unique_name("pw"))).await
+    }
+
+    /// A ClickHouse whose bootstrap admin logs in with `admin_password`.
+    pub async fn start_with_password(admin_password: String) -> Option<Self> {
         let Some(runtime) = container_runtime() else {
             unavailable("podman or docker");
             return None;
         };
-        let admin_password = format!("ch-admin-{}", unique_name("pw"));
         let container = Container {
             runtime,
             name: unique_name("clickhouse"),
@@ -452,7 +456,8 @@ impl ClickHouse {
     pub fn settings(&self) -> ClickHouseSettings {
         ClickHouseSettings {
             username: CLICKHOUSE_ADMIN.to_owned(),
-            password: self.admin_password.clone(),
+            password: Some(self.admin_password.clone()),
+            password_secret: None,
         }
     }
 }

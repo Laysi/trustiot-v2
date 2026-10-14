@@ -1,0 +1,94 @@
+# Laysi/trustiot-v2#413, 2026-10-15, build host through the check queue (CI=1), same job as
+# workspace-checks.txt (413-d06ba850), in this order:
+#   cargo test --locked -p outbox --test tenancy the_producer_roles -- --nocapture
+#   cargo test --locked -p outbox --test delivery an_aggregate_keeps_its_order -- --nocapture
+#   cargo test --locked -p service-kit --test tenant_db outbox_aggregates -- --nocapture
+#   cargo test --locked -p identity --test cross_tenant -- --nocapture
+#   cargo test --locked -p migrate --test outbox_and_tenant_roles -- --nocapture
+
+running 1 test
+tenant B creating an aggregate of tenant A: refused (error returned from database: new row violates row-level security policy for table "outbox_aggregate" at line 2337)
+tenant B creating an aggregate of the platform: refused (error returned from database: new row violates row-level security policy for table "outbox_aggregate" at line 2337)
+tenant B moving its aggregate into tenant A: refused (error returned from database: new row violates row-level security policy for table "outbox_aggregate" at line 2337)
+tenant B publishing for widget/of-a: refused (writing the event failed: SQLSTATE 42501)
+tenant B publishing for catalog/shared: refused (writing the event failed: SQLSTATE 42501)
+the platform role publishing for widget/of-a: refused (writing the event failed: SQLSTATE 42501)
+the platform role publishing a tenant A event: refused (writing the event failed: SQLSTATE 42501)
+outbox_aggregate: B saw widget/of-b only, the platform role catalog/shared only, a session without a tenant nothing; A's sequence went on to 2
+test the_producer_roles_reach_only_their_own_aggregates ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 2.43s
+
+test an_aggregate_keeps_its_order_when_transaction_ids_are_inverted ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 2.68s
+
+running 1 test
+service role in tenant A, upsert of an aggregate of tenant B: refused (error returned from database: new row violates row-level security policy (USING expression) for table "outbox_aggregate" at line 2362)
+service role in tenant A, upsert of an aggregate of the platform: refused (error returned from database: new row violates row-level security policy (USING expression) for table "outbox_aggregate" at line 2362)
+platform role, tenant set: false, upsert of tenant A's aggregate: refused (error returned from database: new row violates row-level security policy (USING expression) for table "outbox_aggregate" at line 2362)
+platform role, tenant set: true, upsert of tenant A's aggregate: refused (error returned from database: new row violates row-level security policy "platform_aggregates_only" for table "outbox_aggregate" at line 2332)
+plain platform session, `SELECT set_config('trustiot.tenant_id', $1, true)`: tenant A's aggregates hidden, writes refused
+plain platform session, `SELECT set_config('trustiot.tenant_id', $1, false)`: tenant A's aggregates hidden, writes refused
+test outbox_aggregates_follow_the_tenant_policies ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 2.77s
+
+
+running 1 test
+result | subject | probe | outcome
+pass | identity.memberships | coverage | declared table
+pass | identity.outbox_aggregate | coverage | declared table
+pass | identity.outbox_event | coverage | declared table
+pass | identity.sessions | coverage | exempt table: a session belongs to a user and is found by its cookie hash before any tenant is known; the tenant role is always read from memberships under row-level security (services/identity/README.md)
+pass | identity.tenants | coverage | declared table
+pass | identity.users | coverage | exempt table: users span tenants: the platform-wide user record, no tenant data (services/identity/README.md)
+pass | POST /api/identity/v1/tenants | coverage | exempt: platform administrators only, and it creates a new tenant whose ID the service makes: it takes no tenant from the request and serves no existing tenant's data (tests/tenants.rs covers it)
+pass | identity.memberships | seed | 2 rows per tenant
+pass | identity.tenants | seed | 1 row per tenant (one_per_tenant)
+pass | identity.outbox_event | seed | 2 rows per tenant
+pass | identity.outbox_aggregate | seed | 2 rows per tenant
+pass | postgres | session as tenant A | the kit accepts the service role's session
+pass | identity.memberships | read as tenant A | 2 rows visible, all own, none of tenant B
+pass | identity.memberships | read without a tenant | no row visible
+pass | identity.memberships | update own rows as tenant A | refused (42501)
+pass | identity.memberships | move own rows into tenant B | refused (42501)
+pass | identity.memberships | insert into tenant B | refused (42501)
+pass | identity.tenants | read as tenant A | 1 rows visible, all own, none of tenant B
+pass | identity.tenants | read without a tenant | no row visible
+pass | identity.tenants | update own rows as tenant A | refused (42501)
+pass | identity.tenants | move own rows into tenant B | refused (42501)
+pass | identity.tenants | insert into tenant B | refused (42501)
+pass | identity.outbox_event | read as tenant A | refused (42501)
+pass | identity.outbox_event | read without a tenant | refused (42501)
+pass | identity.outbox_event | update own rows as tenant A | refused (42501)
+pass | identity.outbox_event | move own rows into tenant B | refused (42501)
+pass | identity.outbox_event | insert into tenant B | refused (42501)
+pass | identity.outbox_aggregate | read as tenant A | 2 rows visible, all own, none of tenant B
+pass | identity.outbox_aggregate | read without a tenant | no row visible
+pass | identity.outbox_aggregate | update own rows as tenant A | 2 rows reached, none of tenant B
+pass | identity.outbox_aggregate | move own rows into tenant B | refused (42501)
+pass | identity.outbox_aggregate | insert into tenant B | refused (42501)
+pass | postgres | session as tenant B | the kit accepts the service role's session
+pass | identity.memberships | read as tenant B | 2 rows visible, all own, none of tenant A
+pass | identity.memberships | update own rows as tenant B | refused (42501)
+pass | identity.memberships | move own rows into tenant A | refused (42501)
+pass | identity.memberships | insert into tenant A | refused (42501)
+pass | identity.tenants | read as tenant B | 1 rows visible, all own, none of tenant A
+pass | identity.tenants | update own rows as tenant B | refused (42501)
+pass | identity.tenants | move own rows into tenant A | refused (42501)
+pass | identity.tenants | insert into tenant A | refused (42501)
+pass | identity.outbox_event | read as tenant B | refused (42501)
+pass | identity.outbox_event | update own rows as tenant B | refused (42501)
+pass | identity.outbox_event | move own rows into tenant A | refused (42501)
+pass | identity.outbox_event | insert into tenant A | refused (42501)
+pass | identity.outbox_aggregate | read as tenant B | 2 rows visible, all own, none of tenant A
+pass | identity.outbox_aggregate | update own rows as tenant B | 2 rows reached, none of tenant A
+pass | identity.outbox_aggregate | move own rows into tenant A | refused (42501)
+pass | identity.outbox_aggregate | insert into tenant A | refused (42501)
+49 probes, 0 failed
+test tenants_are_isolated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.88s
+
+test outbox_wiring_and_tenant_roles ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.48s

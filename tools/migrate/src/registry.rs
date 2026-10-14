@@ -19,7 +19,8 @@ pub struct Migration {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Outbox {
     /// The service writes events: `outbox::install_producer` on every run, then
-    /// crates/service-kit/sql/outbox-event.sql once. Needs a platform role.
+    /// crates/service-kit/sql/outbox-event.sql and outbox-aggregate.sql once each. Needs a
+    /// platform role.
     pub producer: bool,
     /// The producers this service reads events from (their names): `outbox::install_consumer`
     /// on every run, and its platform role becomes a reader of each producer's `outbox_event`.
@@ -127,6 +128,16 @@ pub const DATABASE: Migration = Migration {
 pub const OUTBOX_EVENT_TEMPLATE: Migration = Migration {
     name: "outbox-event.sql",
     sql: include_str!("../../../crates/service-kit/sql/outbox-event.sql"),
+};
+
+/// The tenant column, row-level security and grants of the outbox's `outbox_aggregate`
+/// (crates/service-kit/sql/outbox-aggregate.sql, Laysi/trustiot-v2#413), applied once per
+/// producer with its roles, after [`OUTBOX_EVENT_TEMPLATE`]. A producer that ran the Job before
+/// this template gets it on its next run, with every existing aggregate in the tenant of its
+/// last event.
+pub const OUTBOX_AGGREGATE_TEMPLATE: Migration = Migration {
+    name: "outbox-aggregate.sql",
+    sql: include_str!("../../../crates/service-kit/sql/outbox-aggregate.sql"),
 };
 
 /// The product: what the released migration Job applies.

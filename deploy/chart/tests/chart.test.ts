@@ -166,11 +166,11 @@ function platformConfig(manifests: Manifest[]): Record<string, string> {
 }
 
 /**
- * The password Secrets a render must declare: one per enabled service that lists postgres under
- * mesh.calls (its Deployment carries TRUSTIOT__DATABASE__USERNAME) and one for the collector,
- * when it is rendered.
+ * The password Secrets of the migration Job a render must declare: one per enabled service that
+ * lists postgres under mesh.calls (its Deployment carries TRUSTIOT__DATABASE__USERNAME) and one
+ * for the collector, when it is rendered.
  */
-function passwordSecretNames(manifests: Manifest[]): string[] {
+function jobPasswordSecretNames(manifests: Manifest[]): string[] {
   const names: string[] = [];
   for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
     const env = podSpec(deployment).containers[0]?.env ?? [];
@@ -178,6 +178,22 @@ function passwordSecretNames(manifests: Manifest[]): string[] {
     if (deployment.metadata.name.endsWith("-otel-collector")) names.push(`${deployment.metadata.name}-password`);
   }
   return names.sort();
+}
+
+/**
+ * The bundled ClickHouse's admin password Secret, when its pod generates the password: the Secret
+ * its init container `admin-password` fills (Laysi/trustiot-v2#403).
+ */
+function adminPasswordSecretNames(manifests: Manifest[]): string[] {
+  return manifests
+    .filter((m) => m.kind === "StatefulSet" && m.metadata.labels?.["app.kubernetes.io/component"] === "clickhouse")
+    .flatMap((m) => ((podSpec(m).initContainers ?? []) as Container[]).filter((c) => c.name === "admin-password"))
+    .map((c) => c.env?.find((e) => e.name === "TRUSTIOT__ADMIN__SECRET")?.value ?? "(no TRUSTIOT__ADMIN__SECRET)");
+}
+
+/** Every Secret a render must declare empty for tools/migrate to fill. */
+function passwordSecretNames(manifests: Manifest[]): string[] {
+  return [...jobPasswordSecretNames(manifests), ...adminPasswordSecretNames(manifests)].sort();
 }
 
 function readYaml(relativePath: string): YamlMap {
@@ -279,6 +295,11 @@ describe.each(SHAPE_NAMES)("%s shape", (shape) => {
         `ServiceAccount/${RELEASE}-clickhouse`,
         `Service/${RELEASE}-clickhouse`,
         `StatefulSet/${RELEASE}-clickhouse`,
+        // The bootstrap admin password: declared empty, filled by ClickHouse's init container,
+        // whose Role may get and patch only it (Laysi/trustiot-v2#403).
+        `Secret/${RELEASE}-clickhouse-admin-password`,
+        `Role/${RELEASE}-clickhouse`,
+        `RoleBinding/${RELEASE}-clickhouse`,
         `ConfigMap/${RELEASE}-otel-collector-config`,
         `ServiceAccount/${RELEASE}-otel-collector`,
         `Service/${RELEASE}-otel-collector`,
@@ -644,8 +665,9 @@ describe("values reference Secrets by name only and hold no secret material", ()
       if (path.at(-2) === "credentials" && path.at(-3) !== undefined && CREDENTIAL_NAME.test(text)) continue;
       if (/Secret$/.test(field) && path.findLastIndex((segment) => SECRET_LIKE.test(segment)) === path.length - 1 && SECRET_NAME.test(text)) continue;
       if (/SecretRevision$/.test(field) && /^\d{1,9}$/.test(text)) continue;
-      // A counter that renews generated passwords (migrate.passwordGeneration), never a password.
-      if (/^passwordGeneration$/.test(field) && /^\d{1,9}$/.test(String(value))) continue;
+      // A counter that renews generated passwords (migrate.passwordGeneration,
+      // clickhouse.bundled.adminPasswordGeneration), never a password.
+      if (/^(passwordGeneration|adminPasswordGeneration)$/.test(field) && /^\d{1,9}$/.test(String(value))) continue;
       if (owner >= 0 && path.length === owner + 2 && field === "name" && SECRET_NAME.test(text)) continue;
       if (owner >= 0 && path.length === owner + 2 && /^(key|.+Key)$/.test(field) && SECRET_DATA_KEY.test(text)) continue;
       // imagePullSecrets: a list of names or of {name} objects.
@@ -1010,7 +1032,7 @@ describe("bundled ClickHouse (decision 14)", () => {
     }
   });
 
-  test("the bootstrap admin password comes from a mounted Secret, never the environment", () => {
+  test("the bootstrap admin password is generated in the cluster before the server starts, and read from a file in memory", () => {
     const env = Object.fromEntries((container.env ?? []).map((e) => [e.name, e]));
     expect(env.CLICKHOUSE_PASSWORD).toBeUndefined();
     expect(env.CLICKHOUSE_USER?.value).toBe("trustiot_admin");
@@ -1018,11 +1040,80 @@ describe("bundled ClickHouse (decision 14)", () => {
     expect(env.CLICKHOUSE_PASSWORD_FILE?.value).toBe("/etc/trustiot/clickhouse-admin/password");
     for (const e of container.env ?? []) expect(e.valueFrom).toBeUndefined();
     const volumes = Object.fromEntries((pod.volumes ?? []).map((v) => [v.name as string, v]));
-    expect(volumes["admin-password"]).toMatchObject({
-      secret: { secretName: "trustiot-clickhouse-admin", items: [{ key: "password", path: "password" }] },
-    });
+    // Laysi/trustiot-v2#403: the init container writes the password the Secret holds into memory;
+    // the server mounts it read-only and never mounts the Secret or a token.
+    expect(volumes["admin-password"]).toEqual({ name: "admin-password", emptyDir: { medium: "Memory", sizeLimit: "1Mi" } });
+    expect(container.volumeMounts).toContainEqual({ name: "admin-password", mountPath: "/etc/trustiot/clickhouse-admin", readOnly: true });
+    expect(JSON.stringify(container)).not.toContain("migrate-kube-api");
     // The entrypoint writes the account, with its password, into users.d: memory only.
     expect(volumes["users-d"]).toMatchObject({ emptyDir: { medium: "Memory" } });
+    const secret = `${RELEASE}-clickhouse-admin-password`;
+    const inits = (pod.initContainers ?? []) as (Container & { args: string[]; imagePullPolicy: string })[];
+    expect(inits.map((c) => c.name)).toEqual(["admin-password"]);
+    const init = inits[0] as Container & { args: string[]; imagePullPolicy: string };
+    expect(init.image).toBe(`ghcr.io/laysi/trustiot-v2/migrate:${chart.appVersion}`);
+    expect(init.args).toEqual(["clickhouse-admin-password"]);
+    expect(init.env).toEqual([
+      { name: "TRUSTIOT__ADMIN__API_URL", value: "https://kubernetes.default.svc" },
+      { name: "TRUSTIOT__ADMIN__NAMESPACE", valueFrom: { fieldRef: { fieldPath: "metadata.namespace" } } },
+      { name: "TRUSTIOT__ADMIN__TOKEN_FILE", value: "/var/run/secrets/trustiot/kube/token" },
+      { name: "TRUSTIOT__ADMIN__CA_FILE", value: "/var/run/secrets/trustiot/kube/ca.crt" },
+      { name: "TRUSTIOT__ADMIN__SECRET", value: secret },
+      { name: "TRUSTIOT__ADMIN__ACCOUNT", value: "trustiot_admin" },
+      { name: "TRUSTIOT__ADMIN__GENERATION", value: "1" },
+      { name: "TRUSTIOT__ADMIN__PASSWORD_FILE", value: "/etc/trustiot/clickhouse-admin/password" },
+    ]);
+    expect(init.envFrom).toBeUndefined();
+    expect(init.volumeMounts).toEqual([
+      { name: "admin-password", mountPath: "/etc/trustiot/clickhouse-admin" },
+      { name: "migrate-kube-api", mountPath: "/var/run/secrets/trustiot/kube", readOnly: true },
+    ]);
+    // Restricted Pod Security, like the server.
+    expect(init.securityContext).toEqual({ allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } });
+    expect(init.resources?.limits?.memory).toBe("128Mi");
+    // The token of ClickHouse's own ServiceAccount, which only the init container mounts.
+    expect(volumes["migrate-kube-api"]).toEqual({
+      name: "migrate-kube-api",
+      projected: {
+        defaultMode: 0o444,
+        sources: [
+          { serviceAccountToken: { path: "token", expirationSeconds: 3600 } },
+          { configMap: { name: "kube-root-ca.crt", items: [{ key: "ca.crt", path: "ca.crt" }] } },
+        ],
+      },
+    });
+    // The migration image is arm64 only.
+    expect(pod.nodeSelector).toEqual({ "kubernetes.io/arch": "arm64" });
+    // The Secret is the chart's own, empty (templates/passwords.yaml), and ClickHouse's
+    // ServiceAccount may get and patch it and nothing else.
+    expect(find(manifests, "Secret", secret)).toMatchObject({ metadata: { labels: { "app.kubernetes.io/component": "clickhouse", "trustiot.io/filled-by": "migrate" } } });
+    const role = find(manifests, "Role", name) as Manifest & { rules: unknown[] };
+    expect(role.rules).toEqual([{ apiGroups: [""], resources: ["secrets"], resourceNames: [secret], verbs: ["get", "patch"] }]);
+    const binding = find(manifests, "RoleBinding", name) as Manifest & { roleRef: unknown; subjects: unknown[] };
+    expect(binding.roleRef).toEqual({ apiGroup: "rbac.authorization.k8s.io", kind: "Role", name });
+    expect(binding.subjects).toEqual([{ kind: "ServiceAccount", name, namespace: NAMESPACE }]);
+  });
+
+  test("an installation from before Laysi/trustiot-v2#403 keeps reading its existing Secret until it moves over", () => {
+    const legacy = render(SHAPES.saas, ["--set", "clickhouse.bundled.adminSecret.name=trustiot-clickhouse-admin"]);
+    const legacyPod = podSpec(find(legacy, "StatefulSet", name));
+    const volumes = Object.fromEntries((legacyPod.volumes ?? []).map((v) => [v.name as string, v]));
+    expect(volumes["admin-password"]).toEqual({
+      name: "admin-password",
+      secret: { secretName: "trustiot-clickhouse-admin", defaultMode: 0o440, items: [{ key: "password", path: "password" }] },
+    });
+    expect(volumes["migrate-kube-api"]).toBeUndefined();
+    expect(legacyPod.initContainers).toBeUndefined();
+    expect(legacyPod.nodeSelector).toBeUndefined();
+    // No generated Secret, and no Role for ClickHouse.
+    expect(legacy.filter((m) => m.metadata.name === `${RELEASE}-clickhouse-admin-password`)).toEqual([]);
+    expect(legacy.filter((m) => m.kind === "Role" && m.metadata.name === name)).toEqual([]);
+    // The pod template is the one the chart rendered before Laysi/trustiot-v2#403 for the same
+    // values, so the upgrade that brings this chart does not restart ClickHouse.
+    const annotations = (find(legacy, "StatefulSet", name).spec as { template: { metadata: { annotations: Record<string, string> } } }).template.metadata
+      .annotations;
+    const before = new Bun.CryptoHasher("sha256").update(JSON.stringify(["trustiot-clickhouse-admin", "password", "1"])).digest("hex");
+    expect(annotations["checksum/admin-secret"]).toBe(before);
   });
 
   test("the server configuration holds no users, roles, profiles, quotas or row policies", () => {
@@ -1041,16 +1132,45 @@ describe("bundled ClickHouse (decision 14)", () => {
     expect(mounts).toContainEqual({ name: "config", mountPath: "/etc/clickhouse-server/config.d", readOnly: true });
   });
 
-  test("the pod rolls when the server configuration or the admin password revision changes", () => {
-    const annotationsOf = (rendered: Manifest[]) =>
-      (find(rendered, "StatefulSet", name).spec as { template: { metadata: { annotations: Record<string, string> } } })
-        .template.metadata.annotations;
+  test("the pod rolls when the server configuration or the admin password generation changes", () => {
+    const templateOf = (rendered: Manifest[]) =>
+      (find(rendered, "StatefulSet", name).spec as { template: { metadata: { annotations: Record<string, string> }; spec: PodSpec } })
+        .template;
+    const annotationsOf = (rendered: Manifest[]) => templateOf(rendered).metadata.annotations;
     const before = annotationsOf(manifests);
     expect(before["checksum/clickhouse-config"]).toMatch(/^[0-9a-f]{64}$/);
     expect(before["checksum/admin-secret"]).toMatch(/^[0-9a-f]{64}$/);
-    const rotated = annotationsOf(render(SHAPES.saas, ["--set", "clickhouse.bundled.adminSecretRevision=2"]));
+    // A rotation: the new pod's init container generates the new password before the server
+    // starts with it (the generation reaches it in the pod template too).
+    const rotatedRender = render(SHAPES.saas, ["--set", "clickhouse.bundled.adminPasswordGeneration=2"]);
+    const rotated = annotationsOf(rotatedRender);
     expect(rotated["checksum/admin-secret"]).not.toBe(before["checksum/admin-secret"]);
     expect(rotated["checksum/clickhouse-config"]).toBe(before["checksum/clickhouse-config"]);
+    const generation = ((templateOf(rotatedRender).spec.initContainers ?? []) as Container[])[0]?.env?.find((e) => e.name === "TRUSTIOT__ADMIN__GENERATION");
+    expect(generation?.value).toBe("2");
+    // A rotation touches neither the migration Job nor the services: the Job reads the password
+    // when it next runs.
+    const jobs = (rendered: Manifest[]) => rendered.filter((m) => m.kind === "Job").map((m) => m.metadata.name);
+    expect(jobs(rotatedRender)).toEqual(jobs(manifests));
+    // adminSecretRevision is for an existing Secret only, and leaves a generated password alone.
+    const revised = annotationsOf(render(SHAPES.saas, ["--set", "clickhouse.bundled.adminSecretRevision=2"]));
+    expect(revised["checksum/admin-secret"]).toBe(before["checksum/admin-secret"]);
+    const legacy = ["--set", "clickhouse.bundled.adminSecret.name=trustiot-clickhouse-admin"];
+    const legacyBefore = annotationsOf(render(SHAPES.saas, legacy));
+    const legacyRevised = annotationsOf(render(SHAPES.saas, [...legacy, "--set", "clickhouse.bundled.adminSecretRevision=2"]));
+    expect(legacyRevised["checksum/admin-secret"]).not.toBe(legacyBefore["checksum/admin-secret"]);
+    // A generation from a values file renders as exact digits, like migrate.passwordGeneration.
+    const dir = mkdtempSync(join(tmpdir(), "trustiot-chart-"));
+    try {
+      const file = join(dir, "generation.yaml");
+      writeFileSync(file, "clickhouse:\n  bundled:\n    adminPasswordGeneration: 20261015\n");
+      const fromFile = ((templateOf(render([...SHAPES.saas, file])).spec.initContainers ?? []) as Container[])[0]?.env?.find(
+        (e) => e.name === "TRUSTIOT__ADMIN__GENERATION",
+      );
+      expect(fromFile?.value).toBe("20261015");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("external mode renders no ClickHouse workload", () => {
@@ -1067,6 +1187,53 @@ describe("bundled ClickHouse (decision 14)", () => {
     ]);
     expect(external.filter((m) => m.metadata.name.startsWith(`${RELEASE}-clickhouse`))).toEqual([]);
   });
+
+  test("services and the collector cannot read the admin password: no mount, no env, no envFrom, no Role", () => {
+    // Laysi/trustiot-v2#403 acceptance: only ClickHouse's init container (get and patch) and the
+    // migration Job (get, through the API) reach the generated Secret.
+    const secret = `${RELEASE}-clickhouse-admin-password`;
+    for (const shape of SHAPE_NAMES) {
+      const rendered = render([...SHAPES[shape], SMOKE], enableAllServices);
+      expect(passwordSecretNames(rendered)).toContain(secret);
+      const workloads = rendered.filter((m) => m.kind === "Deployment" || m.kind === "StatefulSet" || m.kind === "Job");
+      const readers: string[] = [];
+      for (const workload of workloads) {
+        const spec = podSpec(workload);
+        for (const c of [...spec.containers, ...((spec.initContainers ?? []) as Container[])]) {
+          const text = JSON.stringify({ env: c.env ?? [], envFrom: c.envFrom ?? [] });
+          if (text.includes(`"${secret}"`)) readers.push(`${workload.kind}/${workload.metadata.name}/${c.name}`);
+        }
+        if (JSON.stringify(spec.volumes ?? []).includes(`"${secret}"`)) readers.push(`${workload.kind}/${workload.metadata.name} volume`);
+      }
+      // The init container and the Job name it (as a setting, never a secretKeyRef or a volume).
+      expect(readers.sort()).toEqual([`Job/${jobsOf(rendered)[0]}/migrate`, `StatefulSet/${RELEASE}-clickhouse/admin-password`]);
+      for (const workload of workloads) {
+        const spec = podSpec(workload);
+        for (const c of [...spec.containers, ...((spec.initContainers ?? []) as Container[])]) {
+          expect(c.env?.some((e) => e.valueFrom?.secretKeyRef?.name === secret) ?? false).toBe(false);
+        }
+      }
+      // The Roles that name it, and who they are bound to.
+      type Rule = { apiGroups?: string[]; resources?: string[]; resourceNames?: string[]; verbs: string[] };
+      const grants = rendered
+        .filter((m) => m.kind === "Role")
+        .flatMap((role) =>
+          ((role as Manifest & { rules: Rule[] }).rules ?? [])
+            .filter((rule) => (rule.resources ?? []).includes("secrets") && (rule.resourceNames ?? []).includes(secret))
+            .map((rule) => {
+              const binding = rendered.find((m) => m.kind === "RoleBinding" && (m as Manifest & { roleRef: { name: string } }).roleRef.name === role.metadata.name) as
+                | (Manifest & { subjects: { name: string }[] })
+                | undefined;
+              return `${(binding?.subjects ?? []).map((s) => s.name).join(",")}: ${rule.verbs.join(",")}`;
+            }),
+        );
+      expect(grants.sort()).toEqual([`${RELEASE}-clickhouse: get,patch`, `${RELEASE}-migrate: get`]);
+    }
+  });
+
+  function jobsOf(rendered: Manifest[]): string[] {
+    return rendered.filter((m) => m.kind === "Job").map((m) => m.metadata.name);
+  }
 
   test("the ingress e2e overlay installs no ClickHouse, so its helm install --wait needs no admin Secret", () => {
     for (const shape of SHAPE_NAMES) {
@@ -1090,7 +1257,8 @@ describe("bundled ClickHouse (decision 14)", () => {
       template: { spec: PodSpec };
     };
     expect(spec.volumeClaimTemplates[0]?.spec.storageClassName).toBe("fast-ssd");
-    expect(spec.template.spec.nodeSelector).toEqual({ "trustiot.io/role": "data" });
+    // The chart adds the architecture of the init container's migration image.
+    expect(spec.template.spec.nodeSelector).toEqual({ "trustiot.io/role": "data", "kubernetes.io/arch": "arm64" });
     expect(spec.template.spec.securityContext?.runAsNonRoot).toBe(true);
   });
 });
@@ -1350,7 +1518,7 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
 
   test("the Postgres e2e overlay installs the bundled databases, the migration Job, the collector and identity as the only Postgres client", () => {
     for (const shape of SHAPE_NAMES) {
-      const e2e = render([...SHAPES[shape], "tests/e2e/values-postgres-e2e.yaml"], ["--set", "clickhouse.bundled.adminSecret.name=trustiot-e2e-ch-admin"]);
+      const e2e = render([...SHAPES[shape], "tests/e2e/values-postgres-e2e.yaml"]);
       expect(clusterSpec(e2e).storage).toEqual({ size: "1Gi" });
       // One install, as a real one (Laysi/trustiot-v2#60): the Job generates the passwords of
       // identity's role and of the collector's ClickHouse account.
@@ -1358,7 +1526,12 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
         [`${RELEASE}-clickhouse`, `${RELEASE}-identity`, `${RELEASE}-otel-collector`].sort(),
       );
       expect(e2e.filter((m) => m.kind === "Job").map((m) => m.metadata.labels?.["app.kubernetes.io/component"])).toEqual(["migrate"]);
-      expect(passwordSecretNames(e2e)).toEqual([`${RELEASE}-identity-password`, `${RELEASE}-otel-collector-password`]);
+      // And ClickHouse's init container generates its admin password (Laysi/trustiot-v2#403).
+      expect(passwordSecretNames(e2e)).toEqual([
+        `${RELEASE}-clickhouse-admin-password`,
+        `${RELEASE}-identity-password`,
+        `${RELEASE}-otel-collector-password`,
+      ]);
       const from = (policyRules(e2e).ingress[0]?.from ?? []) as { podSelector?: { matchLabels: Record<string, string> } }[];
       expect(from.map((f) => f.podSelector?.matchLabels["app.kubernetes.io/component"]).sort()).toEqual(["identity", "migrate"]);
       const identity = podSpec(find(e2e, "Deployment", `${RELEASE}-identity`));
@@ -1438,6 +1611,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
   type Env = NonNullable<Container["env"]>;
   const IDENTITY_SECRET = `${RELEASE}-identity-password`;
   const COLLECTOR_SECRET = `${RELEASE}-otel-collector-password`;
+  const ADMIN_SECRET = `${RELEASE}-clickhouse-admin-password`;
   const jobsOf = (manifests: Manifest[]) => manifests.filter((m) => m.kind === "Job");
   const jobOf = (manifests: Manifest[]) => {
     const jobs = jobsOf(manifests);
@@ -1486,13 +1660,16 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     const env = jobEnv(manifests);
     const secretRefs = env.filter((e) => e.valueFrom?.secretKeyRef).map((e) => `${e.name}=${e.valueFrom?.secretKeyRef?.name}/${e.valueFrom?.secretKeyRef?.key}`);
     // The Job reads no password it fills from an env Secret reference: it reads and writes them
-    // through the API, so they never sit in its environment before it decides on them.
+    // through the API, so they never sit in its environment before it decides on them. The
+    // bundled ClickHouse's generated admin password too: the Job reads it through the API when it
+    // is about to use ClickHouse, and again while ClickHouse refuses it (Laysi/trustiot-v2#403).
     expect(secretRefs).toEqual([
       `TRUSTIOT__POSTGRES__USERNAME=${RELEASE}-postgres-app/username`,
       `TRUSTIOT__POSTGRES__PASSWORD=${RELEASE}-postgres-app/password`,
-      "TRUSTIOT__CLICKHOUSE__PASSWORD=trustiot-clickhouse-admin/password",
     ]);
     expect(envValue(env, "TRUSTIOT__CLICKHOUSE__USERNAME")?.value).toBe("trustiot_admin");
+    expect(envValue(env, "TRUSTIOT__CLICKHOUSE__PASSWORD_SECRET")?.value).toBe(`${RELEASE}-clickhouse-admin-password`);
+    expect(envValue(env, "TRUSTIOT__CLICKHOUSE__PASSWORD")).toBeUndefined();
     expect(envValue(env, "TRUSTIOT_POSTGRES_CA_FILE")?.value).toBe("/etc/trustiot/postgres-ca/ca.crt");
     expect(env.filter((e) => e.name.startsWith("TRUSTIOT__PASSWORDS__"))).toEqual([
       { name: "TRUSTIOT__PASSWORDS__API_URL", value: "https://kubernetes.default.svc" },
@@ -1524,27 +1701,50 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
       { name: "postgres-ca", mountPath: "/etc/trustiot/postgres-ca", readOnly: true },
       { name: "migrate-kube-api", mountPath: "/var/run/secrets/trustiot/kube", readOnly: true },
     ]);
-    // Nothing to fill (no service uses Postgres, no collector): no token at all.
-    const nothing = render(SHAPES.saas, ["--set", "observability.collector.enabled=false"]);
+    // Nothing to fill (no service uses Postgres, no collector) but the generated ClickHouse admin
+    // password to read: the token and the API settings, and a Role that only reads that Secret.
+    const adminOnly = render(SHAPES.saas, ["--set", "observability.collector.enabled=false"]);
+    const adminEnv = jobEnv(adminOnly);
+    expect(adminEnv.filter((e) => e.name.startsWith("TRUSTIOT__PASSWORDS__")).map((e) => e.name)).toEqual([
+      "TRUSTIOT__PASSWORDS__API_URL",
+      "TRUSTIOT__PASSWORDS__NAMESPACE",
+      "TRUSTIOT__PASSWORDS__TOKEN_FILE",
+      "TRUSTIOT__PASSWORDS__CA_FILE",
+      "TRUSTIOT__PASSWORDS__GENERATION",
+    ]);
+    expect(JSON.stringify(jobSpec(adminOnly).template.spec)).toContain("migrate-kube-api");
+    const adminRole = find(adminOnly, "Role", `${RELEASE}-migrate`) as Manifest & { rules: unknown[] };
+    expect(adminRole.rules).toEqual([{ apiGroups: [""], resources: ["secrets"], resourceNames: [`${RELEASE}-clickhouse-admin-password`], verbs: ["get"] }]);
+    // Nothing at all to reach through the API (an existing admin Secret): no token at all.
+    const nothing = render(SHAPES.saas, ["--set", "observability.collector.enabled=false", "--set", "clickhouse.bundled.adminSecret.name=trustiot-clickhouse-admin"]);
     const bare = jobSpec(nothing).template.spec;
     expect(JSON.stringify(bare)).not.toContain("migrate-kube-api");
     expect(JSON.stringify(bare)).not.toContain("TRUSTIOT__PASSWORDS__");
     expect(nothing.filter((m) => m.kind === "Secret" || m.kind === "Role")).toEqual([]);
+    // There the Job reads the existing Secret from its environment, as before Laysi/trustiot-v2#403.
+    expect(envValue(jobEnv(nothing), "TRUSTIOT__CLICKHOUSE__PASSWORD")?.valueFrom).toEqual({
+      secretKeyRef: { name: "trustiot-clickhouse-admin", key: "password" },
+    });
+    expect(envValue(jobEnv(nothing), "TRUSTIOT__CLICKHOUSE__PASSWORD_SECRET")).toBeUndefined();
   });
 
-  test("the password Secrets: one per consumer, without data, kept by Helm, labelled as filled by the Job", () => {
+  test("the password Secrets: one per consumer, without data, kept by Helm, labelled as filled by tools/migrate", () => {
     const secrets = manifests.filter((m) => m.kind === "Secret");
-    expect(secrets.map((m) => m.metadata.name)).toEqual([IDENTITY_SECRET, COLLECTOR_SECRET]);
+    expect(secrets.map((m) => m.metadata.name)).toEqual([IDENTITY_SECRET, COLLECTOR_SECRET, ADMIN_SECRET]);
     // Exactly this shape, every key and value: scripts/ci/check-secret-handling.ts lets the
     // template through only because nothing in it is a value (Laysi/trustiot-v2#60 round 4, R1).
-    // In particular the chart never renders the Job's own annotations (the generation and the
-    // Secret's uid), which the Job alone writes.
-    for (const [secret, component] of secrets.map((s, i) => [s, ["identity", "otel-collector"][i] ?? ""] as const)) {
+    // In particular the chart never renders the annotations tools/migrate writes (the generation
+    // and the Secret's uid). The last one is the bundled ClickHouse's admin password, which its
+    // pod's init container fills (Laysi/trustiot-v2#403).
+    const components = ["identity", "otel-collector", "clickhouse"];
+    const names = [IDENTITY_SECRET, COLLECTOR_SECRET, ADMIN_SECRET];
+    for (const [i, secret] of secrets.entries()) {
+      const component = components[i] ?? "";
       expect(secret).toEqual({
         apiVersion: "v1",
         kind: "Secret",
         metadata: {
-          name: `${RELEASE}-${component}-password`,
+          name: names[i] ?? "",
           labels: {
             "helm.sh/chart": `trustiot-${chart.version}`,
             "app.kubernetes.io/name": "trustiot",
@@ -1557,18 +1757,18 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
           },
           annotations: {
             "helm.sh/resource-policy": "keep",
-            "trustiot.io/description": "Generated by the migration Job; rotate with migrate.passwordGeneration.",
+            "trustiot.io/description": "Generated in the cluster by tools/migrate; nobody sets it (docs/architecture/secrets.md).",
           },
         },
         type: "Opaque",
       });
     }
     // Each consumer's own component, so a node's kubelet reads only the passwords of its pods.
-    expect(secrets.map((m) => m.metadata.labels?.["app.kubernetes.io/component"])).toEqual(["identity", "otel-collector"]);
+    expect(secrets.map((m) => m.metadata.labels?.["app.kubernetes.io/component"])).toEqual(components);
     // Declared with the Job turned off too: whatever replaces the Job fills them, and the
-    // consumers read them the same way.
+    // consumers read them the same way. ClickHouse's init container fills its own regardless.
     const off = render(SHAPES.saas, [...withIdentity, "--set", "migrate.enabled=false"]);
-    expect(off.filter((m) => m.kind === "Secret").map((m) => m.metadata.name)).toEqual([IDENTITY_SECRET, COLLECTOR_SECRET]);
+    expect(off.filter((m) => m.kind === "Secret").map((m) => m.metadata.name)).toEqual(names);
   });
 
   test("every label and annotation the chart and Helm put on the password Secrets is one the Job keeps when it binds them", () => {
@@ -1617,25 +1817,31 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     expect(checked).toBeGreaterThanOrEqual(8);
   });
 
-  test("the Job's ServiceAccount may get and patch exactly the password Secrets, and no other Role touches Secrets", () => {
+  test("the Job's ServiceAccount may get and patch exactly its password Secrets and get the ClickHouse admin Secret, and no other Role but ClickHouse's touches Secrets", () => {
     const everything = render(SHAPES.saas, [...enableAllServices, "--set-json", 'mesh.calls.telemetry-query=["postgres"]']);
     for (const rendered of [manifests, everything]) {
-      const fills = passwordSecretNames(rendered);
+      const fills = jobPasswordSecretNames(rendered);
       const role = find(rendered, "Role", `${RELEASE}-migrate`) as Manifest & {
         rules: { apiGroups: string[]; resources: string[]; resourceNames?: string[]; verbs: string[] }[];
       };
       expect(role.rules.map((rule) => ({ ...rule, resourceNames: [...(rule.resourceNames ?? [])].sort() }))).toEqual([
         { apiGroups: [""], resources: ["secrets"], resourceNames: fills, verbs: ["get", "patch"] },
+        { apiGroups: [""], resources: ["secrets"], resourceNames: [ADMIN_SECRET], verbs: ["get"] },
       ]);
       const binding = find(rendered, "RoleBinding", `${RELEASE}-migrate`) as Manifest & { roleRef: unknown; subjects: unknown[] };
       expect(binding.roleRef).toEqual({ apiGroup: "rbac.authorization.k8s.io", kind: "Role", name: `${RELEASE}-migrate` });
       expect(binding.subjects).toEqual([{ kind: "ServiceAccount", name: `${RELEASE}-migrate`, namespace: NAMESPACE }]);
-      // Every Role of the chart: only the Job's may name secrets (or a wildcard), and no Role
+      // Every Role of the chart: only the Job's and ClickHouse's (which names only the admin
+      // Secret, "bundled ClickHouse" above) may name secrets (or a wildcard), and no Role
       // anywhere may create, list, watch, update or delete them.
+      const allowed = [`${RELEASE}-migrate`, `${RELEASE}-clickhouse`];
       for (const other of rendered.filter((m) => m.kind === "Role" || m.kind === "ClusterRole")) {
-        const rules = (other as Manifest & { rules: { apiGroups?: string[]; resources?: string[] }[] }).rules;
+        const rules = (other as Manifest & { rules: { apiGroups?: string[]; resources?: string[]; verbs?: string[] }[] }).rules;
         const touches = rules.some((rule) => (rule.resources ?? []).some((r) => r === "secrets" || r === "*") && (rule.apiGroups ?? []).some((g) => g === "" || g === "*"));
-        expect({ role: other.metadata.name, touches }).toEqual({ role: other.metadata.name, touches: other.metadata.name === `${RELEASE}-migrate` });
+        expect({ role: other.metadata.name, touches }).toEqual({ role: other.metadata.name, touches: allowed.includes(other.metadata.name) && other.kind === "Role" });
+        for (const rule of rules.filter((r) => (r.resources ?? []).includes("secrets"))) {
+          expect((rule.verbs ?? []).filter((verb) => verb !== "get" && verb !== "patch"), other.metadata.name).toEqual([]);
+        }
       }
     }
     expect(passwordSecretNames(everything)).toContain(`${RELEASE}-telemetry-query-password`);
@@ -1743,9 +1949,10 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
       `assets_app=${ASSETS_SECRET},assets_platform=${ASSETS_SECRET},identity_app=${IDENTITY_SECRET}`,
     );
     // One Secret per consumer, however many keys it holds, and the Job's Role names each once.
-    const secrets = both.filter((m) => m.kind === "Secret").map((m) => m.metadata.name);
+    // (ClickHouse's admin Secret is the init container's, and the Job's Role only reads it.)
+    const secrets = both.filter((m) => m.kind === "Secret" && m.metadata.name !== ADMIN_SECRET).map((m) => m.metadata.name);
     expect(secrets).toEqual([ASSETS_SECRET, IDENTITY_SECRET, COLLECTOR_SECRET]);
-    expect(passwordSecretNames(both)).toEqual([...secrets].sort());
+    expect(passwordSecretNames(both)).toEqual([...secrets, ADMIN_SECRET].sort());
     const role = find(both, "Role", `${RELEASE}-migrate`) as Manifest & { rules: { resourceNames: string[] }[] };
     expect(role.rules[0]?.resourceNames).toEqual(secrets);
     const assets = podSpec(find(both, "Deployment", `${RELEASE}-assets`)).containers[0] as Container;
@@ -1829,9 +2036,32 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
       ["certs", "identity", "otel-collector"].map((name) => ({ kind: "ServiceAccount", name: `${RELEASE}-${name}`, namespace: NAMESPACE })),
     );
     expect(manifests.filter((m) => m.kind === "ClusterRole" || m.kind === "ClusterRoleBinding")).toEqual([]);
-    // Without services and without the collector there is nobody to bind, and nothing to fill.
+    // Without services and without the collector there is nobody to bind and nothing for the Job
+    // to fill: it only reads ClickHouse's admin Secret, and ClickHouse fills that one itself.
+    const alone = render(SHAPES.saas, ["--set", "observability.collector.enabled=false"]);
+    expect(alone.filter((m) => m.kind === "Role" || m.kind === "RoleBinding").map((m) => `${m.kind}/${m.metadata.name}`)).toEqual([
+      `Role/${RELEASE}-clickhouse`,
+      `Role/${RELEASE}-migrate`,
+      `RoleBinding/${RELEASE}-clickhouse`,
+      `RoleBinding/${RELEASE}-migrate`,
+    ]);
+    expect((find(alone, "Role", `${RELEASE}-migrate`) as Manifest & { rules: unknown[] }).rules).toEqual([
+      { apiGroups: [""], resources: ["secrets"], resourceNames: [ADMIN_SECRET], verbs: ["get"] },
+    ]);
+    // With ClickHouse external there is nothing to read either.
     expect(
-      render(SHAPES.saas, ["--set", "observability.collector.enabled=false"]).filter((m) => m.kind === "Role" || m.kind === "RoleBinding"),
+      render(SHAPES.saas, [
+        "--set",
+        "observability.collector.enabled=false",
+        "--set",
+        "clickhouse.mode=external",
+        "--set",
+        "clickhouse.external.url=https://clickhouse.example.com:8443",
+        "--set",
+        "clickhouse.external.caSecret.name=clickhouse-ca",
+        "--set",
+        "clickhouse.external.migrationSecret.name=clickhouse-migration",
+      ]).filter((m) => m.kind === "Role" || m.kind === "RoleBinding"),
     ).toEqual([]);
   });
 
@@ -3197,10 +3427,16 @@ describe("values validation rejects unsafe or incomplete settings", () => {
     ["external Qdrant without a URL", saas, ["--set", "qdrant.external.url="], /\/qdrant\/external\/url/],
     ["Sentry on without a DSN Secret", saas, ["--set", "observability.sentry.dsnSecret.name="], /dsnSecret/],
     [
-      "bundled ClickHouse without an admin password Secret",
+      "a ClickHouse admin password generation that is not a whole number",
       saas,
-      ["--set", "clickhouse.bundled.adminSecret.name="],
-      /\/clickhouse\/bundled\/adminSecret\/name/,
+      ["--set-string", "clickhouse.bundled.adminPasswordGeneration=v2"],
+      /\/clickhouse\/bundled\/adminPasswordGeneration/,
+    ],
+    [
+      "a ClickHouse admin password generation of ten digits",
+      saas,
+      ["--set-string", "clickhouse.bundled.adminPasswordGeneration=1234567890"],
+      /\/clickhouse\/bundled\/adminPasswordGeneration/,
     ],
     ["ClickHouse image without a digest", saas, ["--set", "clickhouse.bundled.image.digest="], /digest/],
     [
@@ -3409,13 +3645,24 @@ describe("values validation rejects unsafe or incomplete settings", () => {
       /env reads the dependency credential trustiot-ai-chat\/api-key/,
     ],
     [
-      "ClickHouse bootstrap admin password read through custom env",
+      "ClickHouse bootstrap admin password, in an existing Secret, read through custom env",
       saas,
       [
+        "--set",
+        "clickhouse.bundled.adminSecret.name=trustiot-clickhouse-admin",
         "--set-json",
         'services.smoke-echo.env=[{"name":"CH_ADMIN_PASSWORD","valueFrom":{"secretKeyRef":{"name":"trustiot-clickhouse-admin","key":"password"}}}]',
       ],
       /env reads the dependency credential trustiot-clickhouse-admin\/password/,
+    ],
+    [
+      "generated ClickHouse bootstrap admin password read through custom env",
+      saas,
+      [
+        "--set-json",
+        'services.smoke-echo.env=[{"name":"CH_ADMIN","valueFrom":{"secretKeyRef":{"name":"trustiot-clickhouse-admin-password","key":"trustiot_admin"}}}]',
+      ],
+      /env reads Secret trustiot-clickhouse-admin-password, whose keys reach services only through the chart/,
     ],
     [
       "duplicate env names",
@@ -3781,6 +4028,24 @@ describe("the templates keep the secret and env boundaries without schema valida
       ["--set", "services.postgres.enabled=true"],
       /services\.postgres: the name belongs to an in-cluster component/,
     ],
+    [
+      "a ClickHouse admin password generation the init container would refuse",
+      ["--set-string", "clickhouse.bundled.adminPasswordGeneration=v2"],
+      /clickhouse\.bundled\.adminPasswordGeneration: "v2" must render as 1 to 9 decimal digits/,
+    ],
+    [
+      "env that reads the generated ClickHouse admin password",
+      [
+        "--set-json",
+        'services.smoke-echo.env=[{"name":"CH_ADMIN","valueFrom":{"secretKeyRef":{"name":"trustiot-clickhouse-admin-password","key":"trustiot_admin"}}}]',
+      ],
+      /env reads Secret trustiot-clickhouse-admin-password/,
+    ],
+    [
+      "a ClickHouse node selector for another architecture while the admin password is generated",
+      ["--set", "clickhouse.bundled.nodeSelector.kubernetes\\.io/arch=amd64"],
+      /clickhouse\.bundled\.nodeSelector: kubernetes\.io\/arch must be arm64 while the chart generates the admin password/,
+    ],
   ];
 
   test.each(cases)("%s", (_name, args, expected) => {
@@ -4025,12 +4290,7 @@ describe("e2e overlays", () => {
   // `filledByTest` lists the password Secrets the test fills itself in its place.
   type E2eInstall = { name: string; files: string[]; args: string[]; migrate: boolean; filledByTest: string[] };
   const OTEL_VALUES = "tests/e2e/values-otel-e2e.yaml";
-  const otelArgs = [
-    "--set",
-    "clickhouse.bundled.adminSecret.name=trustiot-e2e-ch-admin",
-    "--set",
-    "observability.collector.clickhouse.user=trustiot_collector_e2e",
-  ];
+  const otelArgs = ["--set", "observability.collector.clickhouse.user=trustiot_collector_e2e"];
   const INSTALLS: E2eInstall[] = [
     ...SHAPE_NAMES.map((shape) => ({
       name: `ingress.e2e.ts, ${shape}`,
@@ -4073,10 +4333,17 @@ describe("e2e overlays", () => {
       // The test writes the collector's password into it once Helm has declared it.
       filledByTest: [`${RELEASE}-otel-collector-password`],
     },
+    ...[[], ["--set", "clickhouse.bundled.adminSecret.name=trustiot-e2e-ch-admin"]].map((extra) => ({
+      name: `clickhouse-admin.e2e.ts, ${extra.length === 0 ? "generated" : "an existing Secret"}`,
+      files: [...SHAPES.onprem, OTEL_VALUES],
+      args: ["--set", "observability.collector.enabled=false", "--set", "services.assets.enabled=false", ...extra],
+      migrate: false,
+      filledByTest: [],
+    })),
     ...SHAPE_NAMES.map((shape) => ({
       name: `postgres.e2e.ts, ${shape}`,
       files: [...SHAPES[shape], "tests/e2e/values-postgres-e2e.yaml"],
-      args: ["--set", "clickhouse.bundled.adminSecret.name=trustiot-e2e-ch-admin"],
+      args: [],
       migrate: true,
       filledByTest: [],
     })),

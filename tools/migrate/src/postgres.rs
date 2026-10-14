@@ -18,7 +18,8 @@ use sqlx::{Connection, Executor, PgConnection, Row};
 use crate::config::{RunConfig, is_plain_identifier};
 use crate::passwords::Passwords;
 use crate::registry::{
-    DATABASE, Migration, OUTBOX_EVENT_TEMPLATE, Registry, Service, TenantRoleHook,
+    DATABASE, Migration, OUTBOX_AGGREGATE_TEMPLATE, OUTBOX_EVENT_TEMPLATE, Registry, Service,
+    TenantRoleHook,
 };
 use crate::secret::Password;
 use crate::{Error, Report, sha256_hex};
@@ -155,9 +156,9 @@ const CREATE_SCHEMA: &str = "CREATE SCHEMA example_schema AUTHORIZATION example_
 const SET_ROLE_SEARCH_PATH: &str = "ALTER ROLE example_role SET search_path = example_schema";
 /// The verifier is a SCRAM-SHA-256 hash (crate::secret), so the plaintext never reaches SQL.
 const SET_PASSWORD: &str = "ALTER ROLE example_role PASSWORD example_verifier";
-/// crates/outbox/README.md, "資料庫權限": the producer's roles.
-const PRODUCER_GRANTS: &str = "GRANT USAGE ON SCHEMA example_schema TO example_roles;
-GRANT SELECT, INSERT, UPDATE ON example_schema.outbox_aggregate TO example_roles";
+/// crates/outbox/README.md, "資料庫權限": the producer's roles reach its schema. The templates
+/// grant the outbox tables themselves (outbox-event.sql and outbox-aggregate.sql).
+const PRODUCER_GRANTS: &str = "GRANT USAGE ON SCHEMA example_schema TO example_roles";
 /// The consumer's own tables, for its service role.
 const CONSUMER_GRANTS: &str = "GRANT USAGE ON SCHEMA example_schema TO example_roles;
 GRANT SELECT, INSERT, UPDATE, DELETE ON example_schema.outbox_subscription,
@@ -1161,6 +1162,22 @@ impl Session {
                 Some(&owner),
                 Some(&schema),
                 Apply::Template(replacements),
+                report,
+            )
+            .await?;
+            // The aggregates' tenant column and its row-level security, in one transaction
+            // (Laysi/trustiot-v2#413). A producer schema made before this file was added gets it
+            // on the next run: the file is new there, so the rule that applied files never
+            // change still holds.
+            self.apply_once(
+                &component,
+                &OUTBOX_AGGREGATE_TEMPLATE,
+                Some(&owner),
+                Some(&schema),
+                Apply::Template(json!({
+                    "example_app": [service.app_role()],
+                    "example_platform": [platform],
+                })),
                 report,
             )
             .await?;

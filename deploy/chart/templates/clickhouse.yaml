@@ -4,6 +4,11 @@ inside the cluster. The server configuration ("trustiot.clickhouse.serverConfig"
 listening, ports and logging only. Users, roles, row policies, settings profiles and quotas are
 created with SQL by the migration Job from services/ingest/migrations/clickhouse; the only
 account the image creates is the bootstrap admin, from CLICKHOUSE_USER and the password file.
+Its password is generated in the cluster (Laysi/trustiot-v2#403, "trustiot.clickhouse.adminPassword"
+in _clickhouse.tpl): the pod's init container fills the empty Secret of templates/passwords.yaml
+and the file the server reads, so the Role below lets ClickHouse's ServiceAccount get and patch
+that one Secret. With clickhouse.bundled.adminSecret set, the server reads an existing Secret
+instead, and there is no init container and no Role.
 */ -}}
 {{- if eq .Values.clickhouse.mode "bundled" }}
 {{- $ch := .Values.clickhouse.bundled }}
@@ -11,6 +16,16 @@ account the image creates is the bootstrap admin, from CLICKHOUSE_USER and the p
 {{- $pod := include "trustiot.clickhouse.pod" . | fromYaml }}
 {{- $name := include "trustiot.componentName" $ctx }}
 {{- $configName := include "trustiot.componentName" (dict "root" . "name" "clickhouse-config") }}
+{{- $admin := include "trustiot.clickhouse.adminPassword" . | fromYaml }}
+{{- $nodeSelector := $ch.nodeSelector | default dict }}
+{{- if $admin.generated }}
+{{- /* The init container runs the migration image, which is built for arm64 only (decision 5). */}}
+{{- $arch := get $nodeSelector "kubernetes.io/arch" }}
+{{- if and $arch (ne $arch "arm64") }}
+{{- fail "clickhouse.bundled.nodeSelector: kubernetes.io/arch must be arm64 while the chart generates the admin password: the pod's init container runs the migration image, which is built for arm64 only" }}
+{{- end }}
+{{- $nodeSelector = merge (dict "kubernetes.io/arch" "arm64") $nodeSelector }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -80,9 +95,15 @@ spec:
       annotations:
         # Restart when the server configuration changes.
         checksum/clickhouse-config: {{ include "trustiot.clickhouse.serverConfig" . | sha256sum }}
-        # The entrypoint reads the admin password only at start; changing the Secret reference
-        # or adminSecretRevision (after a password rotation) restarts the server.
+        # The entrypoint reads the admin password only at start. A new adminPasswordGeneration
+        # restarts the server, whose init container generates the new password first; with an
+        # existing Secret (adminSecret), changing its reference or adminSecretRevision (after a
+        # rotation) restarts it.
+        {{- if $admin.generated }}
+        checksum/admin-secret: {{ list $admin.name $admin.key (include "trustiot.clickhouse.adminPasswordGeneration" .) | toJson | sha256sum }}
+        {{- else }}
         checksum/admin-secret: {{ list $ch.adminSecret.name $ch.adminSecret.key $ch.adminSecretRevision | toJson | sha256sum }}
+        {{- end }}
     spec:
       serviceAccountName: {{ $name }}
       automountServiceAccountToken: false
@@ -97,13 +118,17 @@ spec:
         - name: {{ . }}
         {{- end }}
       {{- end }}
-      {{- with $ch.nodeSelector }}
+      {{- with $nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with $ch.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $admin.generated }}
+      initContainers:
+        - {{ include "trustiot.clickhouse.adminInitContainer" . | nindent 10 | trim }}
       {{- end }}
       containers:
         - name: clickhouse
@@ -112,9 +137,9 @@ spec:
           env:
             - name: CLICKHOUSE_USER
               value: {{ $ch.adminUser | quote }}
-            # Read from the mounted Secret, so the password is not in the environment.
+            # Read from a mounted file, so the password is not in the environment.
             - name: CLICKHOUSE_PASSWORD_FILE
-              value: /etc/trustiot/clickhouse-admin/password
+              value: {{ printf "%s/password" (include "trustiot.clickhouse.adminPasswordDir" .) }}
             # The bootstrap account may create users, roles, row policies, profiles and quotas.
             - name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT
               value: "1"
@@ -146,7 +171,7 @@ spec:
             - name: tmp
               mountPath: /tmp
             - name: admin-password
-              mountPath: /etc/trustiot/clickhouse-admin
+              mountPath: {{ include "trustiot.clickhouse.adminPasswordDir" . }}
               readOnly: true
       volumes:
         - name: config
@@ -160,13 +185,24 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
+        {{- if $admin.generated }}
+        # Filled by the init container from the Secret it generates the password into; in
+        # memory, never on disk, and gone with the pod.
+        - name: admin-password
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - {{ include "trustiot.migrate.kubeApiVolume" . | indent 10 | trim }}
+        {{- else }}
         - name: admin-password
           secret:
             secretName: {{ $ch.adminSecret.name }}
-            defaultMode: 0440
+            {{- /* 0440, written in decimal: YAML 1.1 (Kubernetes) reads a leading 0 as octal, YAML 1.2 does not. */}}
+            defaultMode: 288
             items:
               - key: {{ $ch.adminSecret.key }}
                 path: password
+        {{- end }}
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -182,4 +218,40 @@ spec:
         resources:
           requests:
             storage: {{ $ch.storage.size }}
+{{- if $admin.generated }}
+---
+# The admin password Secret, by name; nothing else. get and patch only: no create (which cannot be
+# limited by name), no list or watch. Only the init container mounts this ServiceAccount's token.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    resourceNames:
+      - {{ $admin.name }}
+    verbs:
+      - get
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- end }}

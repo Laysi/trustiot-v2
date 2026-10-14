@@ -420,6 +420,7 @@
           "required": [
             "image",
             "adminUser",
+            "adminPasswordGeneration",
             "adminSecret",
             "adminSecretRevision",
             "storage",
@@ -450,9 +451,19 @@
               "pattern": "^[a-z][a-z0-9_]{0,62}$",
               "not": { "const": "default" }
             },
-            "adminSecret": { "$ref": "#/definitions/secretKeyRef" },
+            "adminPasswordGeneration": {
+              "description": "Increase it to rotate the generated admin password: ClickHouse restarts and its init container generates a new one first.",
+              "oneOf": [
+                { "type": "string", "pattern": "^[0-9]{1,9}$" },
+                { "type": "integer", "minimum": 0, "maximum": 999999999 }
+              ]
+            },
+            "adminSecret": {
+              "description": "Only for installations from before Laysi/trustiot-v2#403: an existing Secret with the admin password. Empty name: the password is generated in the cluster.",
+              "$ref": "#/definitions/secretKeyRef"
+            },
             "adminSecretRevision": {
-              "description": "Change after rotating the admin Secret; restarts ClickHouse so it reads the new password.",
+              "description": "With adminSecret only: change after rotating that Secret; restarts ClickHouse so it reads the new password.",
               "oneOf": [
                 { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,63}$" },
                 { "type": "integer", "minimum": 0 }
@@ -508,7 +519,6 @@
             "properties": {
               "bundled": {
                 "properties": {
-                  "adminSecret": { "properties": { "name": { "minLength": 1 } } },
                   "storage": { "properties": { "size": { "minLength": 1 } } }
                 }
               }

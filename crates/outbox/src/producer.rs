@@ -41,6 +41,12 @@ pub enum PublishError {
 /// `REPEATABLE READ` or `SERIALIZABLE`, a concurrent writer of the same aggregate makes this
 /// fail with a serialization error instead of waiting.
 ///
+/// An aggregate belongs to the tenant of its events, or to the platform: its first event decides.
+/// With row-level security (service-kit's `sql/outbox-aggregate.sql`), the service role writes
+/// only aggregates of the transaction's tenant and the platform role only platform aggregates;
+/// an event for an aggregate of another tenant fails with SQLSTATE 42501 and leaves that
+/// aggregate's sequence as it was.
+///
 /// # Errors
 ///
 /// [`PublishError`]; after a database error the transaction is aborted.
@@ -66,18 +72,23 @@ pub async fn write(
     envelope: &EventEnvelope,
 ) -> Result<Published, PublishError> {
     let json = serde_json::to_string(envelope).map_err(|_| PublishError::Serialize)?;
+    let tenant = envelope.tenant_id.map(|tenant| *tenant.as_uuid());
     // The upsert locks the aggregate's row until the transaction ends. `last_tx` carries the
     // ordering transaction forward: an event never sorts before the previous event of its
     // aggregate, even when this transaction's ID is older than that event's transaction.
+    // `tenant_id` is written by the first event only; under row-level security, the upsert of an
+    // aggregate that belongs to another tenant fails (42501) instead of updating it.
     let (seq, tx_order): (i64, i64) = sqlx::query_as(
-        "INSERT INTO outbox_aggregate AS a (aggregate_type, aggregate_id, last_seq, last_tx) \
-         VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint) \
+        "INSERT INTO outbox_aggregate AS a \
+         (aggregate_type, aggregate_id, tenant_id, last_seq, last_tx) \
+         VALUES ($1, $2, $3, 1, pg_current_xact_id()::text::bigint) \
          ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE \
          SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx) \
          RETURNING last_seq, last_tx",
     )
     .bind(aggregate.kind())
     .bind(aggregate.id())
+    .bind(tenant)
     .fetch_one(&mut **tx)
     .await?;
     // No RETURNING: with row-level security, returning rows would also need a SELECT policy.
@@ -88,7 +99,7 @@ pub async fn write(
     .bind(tx_order)
     .bind(envelope.id.as_uuid())
     .bind(&envelope.event_type)
-    .bind(envelope.tenant_id.map(|tenant| *tenant.as_uuid()))
+    .bind(tenant)
     .bind(aggregate.kind())
     .bind(aggregate.id())
     .bind(seq)
@@ -105,7 +116,9 @@ pub async fn write(
 ///
 /// A producer that serves notification-mode consumers returns it with the aggregate's state,
 /// read in the same transaction (or snapshot) as the state, so the consumer can tell which of
-/// two readings is newer; see [`crate::notify`].
+/// two readings is newer; see [`crate::notify`]. Row-level security applies: in a tenant
+/// transaction an aggregate of another tenant (or of the platform) reads as `None`, so read it in
+/// the transaction of the tenant the state belongs to.
 ///
 /// # Errors
 ///

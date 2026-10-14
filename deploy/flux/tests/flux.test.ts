@@ -357,6 +357,15 @@ describe("values-instance.yaml", () => {
         const identity = parseAll(result.stdout).find((m) => m.kind === "Deployment" && m.metadata.name === "trustiot-identity");
         const pod = (spec(identity!).template as { spec: { imagePullSecrets: { name: string }[] } }).spec;
         expect(pod.imagePullSecrets).toEqual([{ name: GHCR_PULL_NAME }]);
+        // Laysi/trustiot-v2#403: the bundled ClickHouse's admin password is generated in the
+        // cluster into the Secret the chart declares, so this directory needs no Secret for it.
+        const objects = parseAll(result.stdout);
+        const admin = objects.find((m) => m.kind === "Secret" && m.metadata.name === "trustiot-clickhouse-admin-password");
+        expect(admin?.metadata.labels?.["trustiot.io/filled-by"]).toBe("migrate");
+        const clickhouse = objects.find((m) => m.kind === "StatefulSet" && m.metadata.name === "trustiot-clickhouse");
+        const clickhousePod = (spec(clickhouse!).template as { spec: { initContainers?: { name: string }[]; imagePullSecrets: { name: string }[] } }).spec;
+        expect(clickhousePod.initContainers?.map((c) => c.name)).toEqual(["admin-password"]);
+        expect(clickhousePod.imagePullSecrets).toEqual([{ name: GHCR_PULL_NAME }]);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

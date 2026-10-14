@@ -74,22 +74,33 @@ impl fmt::Debug for PostgresSettings {
     }
 }
 
-/// `clickhouse.*`: the account that applies the DDL and creates the collector's account.
+/// `clickhouse.*`: the account that applies the DDL and creates the collector's account, and
+/// where its password comes from: exactly one of `password` and `password_secret`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClickHouseSettings {
     /// `TRUSTIOT__CLICKHOUSE__USERNAME`: an account with access management (the bundled
     /// ClickHouse's bootstrap admin).
     pub username: String,
-    /// `TRUSTIOT__CLICKHOUSE__PASSWORD`
-    pub password: String,
+    /// `TRUSTIOT__CLICKHOUSE__PASSWORD`: the password itself (an external ClickHouse's migration
+    /// account, or a bundled one whose admin Secret a person created).
+    #[serde(default)]
+    pub password: Option<String>,
+    /// `TRUSTIOT__CLICKHOUSE__PASSWORD_SECRET`: the Secret, in the release namespace, whose key
+    /// named after the account holds the password that the bundled ClickHouse's init container
+    /// generated (src/clickhouse_admin.rs). The run reads it through the Kubernetes API of
+    /// `passwords.*` once ClickHouse is about to be used, and reads it again while ClickHouse
+    /// refuses it (a rotation restarts ClickHouse with a new password).
+    #[serde(default)]
+    pub password_secret: Option<String>,
 }
 
 impl fmt::Debug for ClickHouseSettings {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ClickHouseSettings")
             .field("username", &self.username)
-            .field("password", &"<redacted>")
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("password_secret", &self.password_secret)
             .finish()
     }
 }
@@ -332,6 +343,29 @@ impl Validate for RunConfig {
                     "must be a lower-case account name (letters, digits, _)",
                 ));
             }
+            match (&clickhouse.password, &clickhouse.password_secret) {
+                (Some(_), None) => {}
+                (None, Some(secret)) => {
+                    if !is_object_name(secret) {
+                        return Err(Invalid::new(
+                            "clickhouse.password_secret",
+                            "must be a Kubernetes object name (lower-case letters, digits, - and .)",
+                        ));
+                    }
+                    if self.passwords.is_none() {
+                        return Err(Invalid::new(
+                            "clickhouse.password_secret",
+                            "needs passwords.*, the Kubernetes API the Secret is read from",
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(Invalid::new(
+                        "clickhouse.password",
+                        "set exactly one of clickhouse.password and clickhouse.password_secret",
+                    ));
+                }
+            }
         }
         check_wait("wait.databases", self.wait.databases)?;
         check_wait("wait.lock", self.wait.lock)
@@ -405,6 +439,91 @@ impl Validate for WaitForJobConfig {
             ));
         }
         check_api_url("kube.api_url", &kube.api_url)
+    }
+}
+
+/// Settings of `migrate clickhouse-admin-password`, the init container of the bundled ClickHouse
+/// that makes sure its bootstrap admin password exists before the server starts
+/// (src/clickhouse_admin.rs).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClickHouseAdminConfig {
+    pub admin: AdminSettings,
+}
+
+/// `admin.*`: the Secret that holds the bootstrap admin password, how to reach it, and where the
+/// server reads the password.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdminSettings {
+    /// `TRUSTIOT__ADMIN__API_URL`: the API server, `https://` (the chart sets
+    /// `https://kubernetes.default.svc`). `http://` is accepted for 127.0.0.1 only, for tests.
+    pub api_url: String,
+    /// `TRUSTIOT__ADMIN__NAMESPACE`: the release namespace, where the Secret is.
+    pub namespace: String,
+    /// `TRUSTIOT__ADMIN__TOKEN_FILE`: the projected ServiceAccount token of the ClickHouse pod,
+    /// which only the init container mounts; read on every request.
+    pub token_file: PathBuf,
+    /// `TRUSTIOT__ADMIN__CA_FILE`: the cluster CA (`kube-root-ca.crt`), the only trust anchor.
+    pub ca_file: PathBuf,
+    /// `TRUSTIOT__ADMIN__SECRET`: the Secret the chart declares empty for it.
+    pub secret: String,
+    /// `TRUSTIOT__ADMIN__ACCOUNT`: the bootstrap admin account, also the key in the Secret.
+    pub account: String,
+    /// `TRUSTIOT__ADMIN__GENERATION`: the chart's `clickhouse.bundled.adminPasswordGeneration`;
+    /// a higher one than the Secret records generates a new password (a rotation).
+    pub generation: String,
+    /// `TRUSTIOT__ADMIN__PASSWORD_FILE`: where the server's entrypoint reads the password
+    /// (`CLICKHOUSE_PASSWORD_FILE`), on a volume in memory that only this pod mounts.
+    pub password_file: PathBuf,
+    /// `TRUSTIOT__ADMIN__WAIT`: how long it retries an API server that does not answer. Default
+    /// 10 minutes.
+    #[serde(
+        default = "default_wait",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub wait: Duration,
+}
+
+fn default_wait() -> Duration {
+    DEFAULT_WAIT
+}
+
+impl Validate for ClickHouseAdminConfig {
+    fn validate(&self) -> Result<(), Invalid> {
+        let admin = &self.admin;
+        check_api_url("admin.api_url", &admin.api_url)?;
+        if !is_dns_label(&admin.namespace) {
+            return Err(Invalid::new(
+                "admin.namespace",
+                "must be a Kubernetes namespace name (DNS label)",
+            ));
+        }
+        if !is_object_name(&admin.secret) {
+            return Err(Invalid::new(
+                "admin.secret",
+                "must be a Kubernetes object name (lower-case letters, digits, - and .)",
+            ));
+        }
+        if !is_plain_identifier(&admin.account) {
+            return Err(Invalid::new(
+                "admin.account",
+                "must be a lower-case account name (letters, digits, _)",
+            ));
+        }
+        if !is_generation(&admin.generation) {
+            return Err(Invalid::new(
+                "admin.generation",
+                "must be 1 to 9 decimal digits (generations are compared as numbers and only go up)",
+            ));
+        }
+        if !admin.password_file.is_absolute() || admin.password_file.file_name().is_none() {
+            return Err(Invalid::new(
+                "admin.password_file",
+                "must be an absolute path to a file",
+            ));
+        }
+        check_wait("admin.wait", admin.wait)
     }
 }
 
@@ -484,6 +603,121 @@ mod tests {
             settings("", "a=s,b=t").clickhouse_collector().is_err(),
             "one collector account"
         );
+    }
+
+    fn run_config(
+        password: Option<&str>,
+        password_secret: Option<&str>,
+        passwords: bool,
+    ) -> RunConfig {
+        RunConfig {
+            platform: Platform {
+                postgres_host: "postgres".to_owned(),
+                postgres_port: 5432,
+                postgres_database: "trustiot".to_owned(),
+                postgres_sslmode: SslMode::VerifyFull,
+                postgres_ca_file: PathBuf::from("/ca.crt"),
+                clickhouse_url: Some("http://clickhouse:8123".to_owned()),
+                clickhouse_ca_file: None,
+            },
+            postgres: PostgresSettings {
+                username: "trustiot_owner".to_owned(),
+                password: "unused".to_owned(),
+            },
+            clickhouse: Some(ClickHouseSettings {
+                username: "trustiot_admin".to_owned(),
+                password: password.map(str::to_owned),
+                password_secret: password_secret.map(str::to_owned),
+            }),
+            passwords: passwords.then(|| settings("", "")),
+            wait: WaitSettings::default(),
+        }
+    }
+
+    #[test]
+    fn the_clickhouse_password_comes_from_exactly_one_place() {
+        let key = |config: RunConfig| config.validate().err().map(|invalid| invalid.key);
+        assert_eq!(key(run_config(Some("a-password"), None, false)), None);
+        assert_eq!(
+            key(run_config(
+                None,
+                Some("trustiot-clickhouse-admin-password"),
+                true
+            )),
+            None
+        );
+        // The Secret is read through the API of passwords.*.
+        assert_eq!(
+            key(run_config(
+                None,
+                Some("trustiot-clickhouse-admin-password"),
+                false
+            ))
+            .as_deref(),
+            Some("clickhouse.password_secret")
+        );
+        assert_eq!(
+            key(run_config(None, Some("Not/A-Name"), true)).as_deref(),
+            Some("clickhouse.password_secret")
+        );
+        for (password, secret) in [(None, None), (Some("a-password"), Some("s"))] {
+            assert_eq!(
+                key(run_config(password, secret, true)).as_deref(),
+                Some("clickhouse.password")
+            );
+        }
+        // Debug never shows the password.
+        let config = run_config(Some("a-secret-value"), None, false);
+        assert!(!format!("{config:?}").contains("a-secret-value"));
+    }
+
+    fn admin_config() -> ClickHouseAdminConfig {
+        ClickHouseAdminConfig {
+            admin: AdminSettings {
+                api_url: "https://kubernetes.default.svc".to_owned(),
+                namespace: "trustiot".to_owned(),
+                token_file: PathBuf::from("/token"),
+                ca_file: PathBuf::from("/ca.crt"),
+                secret: "trustiot-clickhouse-admin-password".to_owned(),
+                account: "trustiot_admin".to_owned(),
+                generation: "1".to_owned(),
+                password_file: PathBuf::from("/etc/trustiot/clickhouse-admin/password"),
+                wait: DEFAULT_WAIT,
+            },
+        }
+    }
+
+    /// A key of the settings and a change that makes it invalid.
+    type Breakage = (&'static str, fn(&mut AdminSettings));
+
+    #[test]
+    fn clickhouse_admin_settings() {
+        assert!(admin_config().validate().is_ok());
+        let broken: [Breakage; 7] = [
+            ("admin.api_url", |a| {
+                a.api_url = "http://kubernetes.default.svc".to_owned();
+            }),
+            ("admin.namespace", |a| a.namespace = "Trust_IoT".to_owned()),
+            ("admin.secret", |a| a.secret = "a/b".to_owned()),
+            ("admin.account", |a| a.account = "Admin".to_owned()),
+            ("admin.generation", |a| a.generation = "v2".to_owned()),
+            ("admin.password_file", |a| {
+                a.password_file = PathBuf::from("relative/password");
+            }),
+            ("admin.wait", |a| a.wait = Duration::ZERO),
+        ];
+        for (key, change) in broken {
+            let mut config = admin_config();
+            change(&mut config.admin);
+            assert_eq!(
+                config
+                    .validate()
+                    .err()
+                    .map(|invalid| invalid.key)
+                    .as_deref(),
+                Some(key)
+            );
+        }
     }
 
     #[test]

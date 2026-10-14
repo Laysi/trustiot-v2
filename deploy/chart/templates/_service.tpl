@@ -138,7 +138,7 @@ outbox consumer reads its producers' events with. */ -}}
 {{- fail (printf "services.%s: env reads the dependency credential %s/%s; list the dependency under services.%s.credentials instead" $name .name .key $name) -}}
 {{- end -}}
 {{- if has .name $protectedSecrets -}}
-{{- fail (printf "services.%s: env reads Secret %s, whose keys reach services only through the chart (the bundled Postgres's own Secrets, the database role passwords, the migration accounts)" $name .name) -}}
+{{- fail (printf "services.%s: env reads Secret %s, whose keys reach services only through the chart (the bundled Postgres's own Secrets, the passwords generated in the cluster, the migration accounts)" $name .name) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
