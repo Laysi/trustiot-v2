@@ -1,0 +1,172 @@
+# Independent verification probes (verify_60.rs, verify_60_clickhouse.rs; written by the verifier, not part
+# of the PR) rerun on 2026-10-13 against the round 2 fixes: copied into tools/migrate/tests/ for this run
+# only, then removed. cargo test --locked -p migrate --test verify_60 --test verify_60_clickhouse -- --nocapture
+# --test-threads=1, shared build host (x86_64 Linux, Docker, CI=1). PROBE lines and test results only.
+# R1 reimplements the lint as it was before round 2 (its own copy), so its NOT CAUGHT lines describe the old
+# lint; the new lint is tested by tools/migrate/tests/registry.rs the_lint_sees_through_whitespace_and_case.
+
+test verify_60_postgres ... PROBE A1 fresh run changes: ["applied migrate/0001_helpers.sql", "applied database/database.sql", "created role identity_owner", "created role identity_app", "created schema identity owned by identity_owner", "set the search_path of identity_app to identity", "set the password of identity_app", "applied identity/0001_identity.sql"]
+PROBE A2 memberships in the service roles (member <- role: admin/inherit/set by grantor): trustiot_owner <- identity_app: true/false/false by postgres; trustiot_owner <- identity_owner: true/false/false by postgres; trustiot_owner <- identity_owner: false/false/true by trustiot_owner
+PROBE B0 server version: 18.6
+PROBE B1 roles identity_app is a member of (besides itself): NULL
+PROBE B1 roles identity_app can SET ROLE to (besides itself): NULL
+PROBE B2 as identity_app: SET ROLE identity_owner: ERR 42501 permission denied to set role "identity_owner"
+PROBE B2 as identity_app: SET ROLE trustiot_owner: ERR 42501 permission denied to set role "trustiot_owner"
+PROBE B2 as identity_app: SET SESSION AUTHORIZATION trustiot_owner: ERR 42501 permission denied to set session authorization "trustiot_owner"
+PROBE B2 as identity_app: CREATE TABLE identity.p (i int): ERR 42501 permission denied for schema identity
+PROBE B2 as identity_app: CREATE TABLE public.p (i int): ERR 42501 permission denied for schema public
+PROBE B2 as identity_app: CREATE TEMP TABLE p (i int): ERR 42501 permission denied to create temporary tables in database "v60_a"
+PROBE B2 as identity_app: CREATE SCHEMA p: ERR 42501 permission denied for database v60_a
+PROBE B2 as identity_app: CREATE FUNCTION identity.f() RETURNS int LANGUAGE sql AS 'SELECT 1': ERR 42501 permission denied for schema identity
+PROBE B2 as identity_app: CREATE VIEW identity.v AS SELECT 1: ERR 42501 permission denied for schema identity
+PROBE B2 as identity_app: ALTER ROLE identity_app BYPASSRLS: ERR 42501 permission denied to alter role
+PROBE B2 as identity_app: ALTER ROLE identity_app CREATEROLE: ERR 42501 permission denied to alter role
+PROBE B2 as identity_app: ALTER ROLE identity_app CREATEDB: ERR 42501 permission denied to alter role
+PROBE B2 as identity_app: GRANT identity_app TO identity_owner: ERR 42501 permission denied to grant role "identity_app"
+PROBE B2 as identity_app: GRANT identity_owner TO identity_app: ERR 42501 permission denied to grant role "identity_owner"
+PROBE B2 as identity_app: CREATE ROLE v60_by_app: ERR 42501 permission denied to create role
+PROBE B2 as identity_app: SELECT * FROM trustiot_migrate.applied: ERR 42501 permission denied for schema trustiot_migrate
+PROBE B2 as identity_app: SELECT trustiot_migrate.apply_template(NULL, 'SELECT 1', '{}'::jsonb): ERR 42501 permission denied for schema trustiot_migrate
+PROBE B2 as identity_app: TRUNCATE identity.sessions: ERR 42501 permission denied for table sessions
+PROBE B2 as identity_app: ALTER TABLE identity.memberships DISABLE ROW LEVEL SECURITY: ERR 42501 must be owner of table memberships
+PROBE B3 check_session(Service) on the fresh database: Ok(Ok(()))
+PROBE B4 as identity_app: ALTER ROLE identity_app SET statement_timeout = '1s': OK
+PROBE B4 as identity_app: ALTER ROLE identity_app IN DATABASE v60_a SET search_path = public: OK
+PROBE B4 as identity_app: ALTER ROLE identity_app PASSWORD (self): OK
+PROBE B5 Job after the service role changed its own password and defaults: Err(Role { role: "identity_app", problem: "has settings for this database (ALTER ROLE ... IN DATABASE ... SET), which override the Job's; a database administrator must reset them" })
+PROBE B5 role-level and per-database settings of identity_app after that run: *:{search_path=identity,statement_timeout=1s} v60_a:{search_path=public}
+PROBE B5 effective search_path of a new identity_app session: public
+PROBE B5 check_session(Service) with the per-database search_path override: Ok(Ok(()))
+PROBE B6 as identity_app: ALTER ROLE identity_app SET trustiot.tenant_id (preset tenant): ERR 42501 permission denied to set parameter "trustiot.tenant_id"
+PROBE B6 check_session(Service) with the preset tenant: Ok(Ok(()))
+PROBE B6 memberships visible without a tenant transaction: 0
+PROBE B6 Job with the preset tenant: Err(Role { role: "identity_app", problem: "has settings for this database (ALTER ROLE ... IN DATABASE ... SET), which override the Job's; a database administrator must reset them" })
+PROBE B7 Job after the undo: Ok([])
+PROBE B8 identity_app connects to database postgres: OK
+PROBE B8 identity_app: CREATE TEMP TABLE in database postgres: OK
+PROBE C1 as trustiot_owner: ALTER ROLE identity_app BYPASSRLS: ERR 42501 permission denied to alter role
+PROBE C1 as trustiot_owner: ALTER ROLE identity_app CREATEDB: ERR 42501 permission denied to alter role
+PROBE C1 as trustiot_owner: ALTER ROLE identity_app REPLICATION: ERR 42501 permission denied to alter role
+PROBE C1 as trustiot_owner: ALTER ROLE identity_app SUPERUSER: ERR 42501 permission denied to alter role
+PROBE C1 as trustiot_owner: ALTER ROLE trustiot_owner BYPASSRLS: ERR 42501 permission denied to alter role
+PROBE C1 as trustiot_owner: ALTER ROLE trustiot_owner CREATEDB: ERR 42501 permission denied to alter role
+PROBE C1 as trustiot_owner: CREATE ROLE v60_evil LOGIN BYPASSRLS: ERR 42501 permission denied to create role
+PROBE C1 as trustiot_owner: CREATE ROLE v60_evil2 SUPERUSER: ERR 42501 permission denied to create role
+PROBE C1 as trustiot_owner: GRANT pg_read_all_data TO identity_app: ERR 42501 permission denied to grant role "pg_read_all_data"
+PROBE C1 as trustiot_owner: GRANT pg_write_all_data TO identity_owner: ERR 42501 permission denied to grant role "pg_write_all_data"
+PROBE C1 as trustiot_owner: GRANT pg_signal_backend TO identity_app: ERR 42501 permission denied to grant role "pg_signal_backend"
+PROBE C1 as trustiot_owner: ALTER ROLE no_createrole PASSWORD 'probe-not-allowed-000001': ERR 42501 permission denied to alter role
+PROBE C2 as trustiot_owner: GRANT identity_owner TO identity_app (ADMIN on both): OK
+PROBE C2 Job after that grant: Err(Role { role: "identity_owner", problem: "only the migration role may be a member of an owner role" })
+PROBE C2 undo: OK
+PROBE C3 as trustiot_owner: CREATE ROLE v60_extra LOGIN (an unmanaged login role): OK
+PROBE C3 Job with an extra role the migration role made: Ok([])
+PROBE C4 FORCE ROW LEVEL SECURITY on identity.memberships: false
+PROBE C4 as trustiot_owner: SET ROLE identity_owner then read every tenant's memberships: OK / rows=2
+PROBE C5 as identity_owner: GRANT CREATE ON SCHEMA identity TO identity_app: OK OK
+PROBE C5 Job after that grant: Err(Role { role: "identity_app", problem: "may create objects in its schema or temporary tables; a service role only uses what the migrations grant it (decision 29)" })
+PROBE C5 as identity_app: CREATE TABLE identity.p (i int): OK
+PROBE C5 check_session(Service) with an identity_app-owned table: Ok(Err(OwnsRelation("identity.p")))
+PROBE C6 as trustiot_owner (database owner): GRANT TEMPORARY ON DATABASE v60_a TO PUBLIC: OK
+PROBE C6 Job after that grant: Err(Role { role: "identity_app", problem: "may create objects in its schema or temporary tables; a service role only uses what the migrations grant it (decision 29)" })
+PROBE C6 check_session(Service) after TEMPORARY was given back to PUBLIC: Ok(Err(TemporaryTables))
+PROBE C7 Job after the C undo: Ok([])
+PROBE D1 name quote + statement: ERR P0001 name for example_role is not a plain lower-case identifier
+PROBE D1 name semicolon: ERR P0001 name for example_role is not a plain lower-case identifier
+PROBE D1 name dollar quote: ERR P0001 name for example_role is not a plain lower-case identifier
+PROBE D1 name Cyrillic i lookalike: ERR P0001 name for example_role is not a plain lower-case identifier
+PROBE D1 name fullwidth underscore: ERR P0001 name for example_role is not a plain lower-case identifier
+PROBE D1 name 64 bytes: ERR P0001 name for example_role is not a plain lower-case identifier
+PROBE D1 name 63 bytes (control, allowed): OK
+PROBE D1 name pg_ prefix: ERR P0001 name for example_role is not a plain lower-case identifier
+PROBE D1 name example_ prefix: ERR P0001 name for example_role is not a plain lower-case identifier
+PROBE D1 name upper case: ERR P0001 name for example_role is not a plain lower-case identifier
+PROBE D1 name empty string: ERR P0001 name for example_role is not a plain lower-case identifier
+PROBE D1 name empty list: ERR P0001 placeholder example_role needs at least one name
+PROBE D1 name nested list: ERR P0001 name for example_role is not a plain lower-case identifier
+PROBE D1 name object: ERR P0001 placeholder example_role needs a list of names or a string
+PROBE D1 name number: ERR P0001 placeholder example_role needs a list of names or a string
+PROBE D1 name null: ERR P0001 placeholder example_role needs a list of names or a string
+PROBE D1 name keyword (quoted by quote_ident): OK
+PROBE D1 name trailing newline: ERR P0001 name for example_role is not a plain lower-case identifier
+PROBE D1 roles created by D1 (only the 63-byte and keyword controls may exist): v60_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,user
+PROBE D2 literal single quote: ERR P0001 value for example_value has characters a literal here never needs
+PROBE D2 literal backslash: ERR P0001 value for example_value has characters a literal here never needs
+PROBE D2 literal dollar quote: OK -> a$$b
+PROBE D2 literal semicolon: ERR P0001 value for example_value has characters a literal here never needs
+PROBE D2 literal newline: ERR P0001 value for example_value has characters a literal here never needs
+PROBE D2 literal non-ASCII: ERR P0001 value for example_value has characters a literal here never needs
+PROBE D2 literal 256 chars: ERR P0001 value for example_value has characters a literal here never needs
+PROBE D2 literal SCRAM-like (control): OK -> SCRAM-SHA-256$4096:c2FsdA==$a2V5:c2Vy
+PROBE D2 literal contains .example_x: ERR P0001 the template has a placeholder without a replacement
+PROBE D3 literal holding another placeholder: OK -> q.identity_app
+PROBE D4 upper-case placeholder: ERR P0001 placeholder EXAMPLE_ROLE is not example_<lower-case name>
+PROBE D4 not example_: ERR P0001 placeholder role is not example_<lower-case name>
+PROBE D4 unused placeholder: OK
+PROBE D5 run_as with an injection attempt: ERR 22023 role "identity_owner; CREATE ROLE v60_pwn" does not exist
+PROBE D5 run_as a login role the migration role cannot SET to: ERR 42501 permission denied to set role "identity_app"
+PROBE D6 as identity_owner (via SET ROLE): call apply_template: OK ERR 42501 permission denied for schema trustiot_migrate
+PROBE D7 ACL of trustiot_migrate and apply_template: {trustiot_owner=UC/trustiot_owner} | {trustiot_owner=X/trustiot_owner}
+PROBE F1 rotation run: Ok(["set the password of identity_app"])
+PROBE F2 server log contains the new plaintext password: false
+PROBE F2 server log contains the old plaintext password: false
+PROBE F3 server log lines with a SCRAM verifier: 1 Some("2026-10-12 21:48:33.136 UTC [104] DETAIL:  Parameters: $1 = NULL, $2 = 'ALTER ROLE example_role PASSWORD example_verifier', $3 = '{\"example_role\":[\"identity_app\"],\"example_verifier\":\"SCRAM-SHA-256$4096:<117 more chars>")
+PROBE F4 SCRAM verifier salt of identity_app (superuser view): spZjAqnpBKBZAjwSkhlLRg==
+PROBE G1 run with a file using END: Err(LeftItsContext { file: "vsone/0001_end.sql", now: "transaction 794 instead of 792, current_user trustiot_owner, role setting none" })
+PROBE G1 next run (fresh session) after END: Err(Postgres { context: "apply vsone/0001_end.sql", source: Database(PgDatabaseError { severity: Error, code: "42P07", message: "relation \"vsone_t1\" already exists", detail: None, hint: None, position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("heap.c"), line: Some(1194), routine: Some("heap_create_with_catalog") }) })
+PROBE G1 run with a file using SET LOCAL ROLE NONE: Err(LeftItsContext { file: "vstwo/0001_set_local_role.sql", now: "transaction 800 instead of 800, current_user trustiot_owner, role setting none" })
+PROBE G1 next run (fresh session) after SET LOCAL ROLE NONE: Err(LeftItsContext { file: "vstwo/0001_set_local_role.sql", now: "transaction 801 instead of 801, current_user trustiot_owner, role setting none" })
+PROBE G1 run with a file using SET LOCAL ROLE <other owner>: Err(LeftItsContext { file: "vsthree/0001_other_owner.sql", now: "transaction 806 instead of 806, current_user identity_owner, role setting identity_owner" })
+PROBE G1 next run (fresh session) after SET LOCAL ROLE <other owner>: Err(LeftItsContext { file: "vsthree/0001_other_owner.sql", now: "transaction 807 instead of 807, current_user identity_owner, role setting identity_owner" })
+PROBE G1 run with a file using SET LOCAL ROLE <other owner> and back: Ok(["created role vsfour_owner", "created role vsfour_app", "created schema vsfour owned by vsfour_owner", "set the search_path of vsfour_app to vsfour", "applied vsfour/0001_other_owner_and_back.sql"])
+PROBE G1 next run (fresh session) after SET LOCAL ROLE <other owner> and back: Ok([])
+PROBE G1 run with a file using SET SESSION ROLE <other owner>: Err(LeftItsContext { file: "vsfive/0001_session_role.sql", now: "transaction 817 instead of 817, current_user identity_owner, role setting identity_owner" })
+PROBE G1 next run (fresh session) after SET SESSION ROLE <other owner>: Err(LeftItsContext { file: "vsfive/0001_session_role.sql", now: "transaction 818 instead of 818, current_user identity_owner, role setting identity_owner" })
+PROBE G2 roles created by the files, and who administers them (= who created them): v60_after_end admin by trustiot_owner
+PROBE G3 tables the probe files left in schema identity, with owners: v60_cross2 owner identity_owner
+PROBE G4 probe files recorded as applied: vsfour/0001_other_owner_and_back.sql
+PROBE H1 run with a failing file: Err(Postgres { context: "apply vsixtyb/0001_half.sql", source: Database(PgDatabaseError { severity: Error, code: "22012", message: "division by zero", detail: None, hint: None, position: None, where: None, schema: None, table: None, column: None, data_type: None, constraint: None, file: Some("int.c"), line: Some(870), routine: Some("int4div") }) })
+PROBE H2 the failing file's first table, and its record: 0 tables, 0 records
+PROBE E1 Job of instance B (database v60_b, same migration role): Err(MigrationRole { role: "trustiot_owner", problem: "it owns more than one database; roles are cluster-wide and the Job's role names carry no instance name, so one Postgres cluster holds one TrustIoT database (docs/runbooks/migrations.md)" })
+PROBE E2 instance A's service logs in with A's password: Ok("OK")
+PROBE E3 instance B's credentials log in to instance A's database: error returned from database: password authentication failed for user "identity_app" at line 317
+PROBE E4 databases owned by the migration role: v60_a,v60_b
+PROBE E5 instance A's next Job: Err(MigrationRole { role: "trustiot_owner", problem: "it owns more than one database; roles are cluster-wide and the Job's role names carry no instance name, so one Postgres cluster holds one TrustIoT database (docs/runbooks/migrations.md)" })
+test verify_60_registry_rule_gaps ... PROBE R1 "END;": NOT CAUGHT
+PROBE R1 "ABORT;": NOT CAUGHT
+PROBE R1 "COMMIT AND CHAIN;": NOT CAUGHT
+PROBE R1 "commit ;": NOT CAUGHT
+PROBE R1 "START TRANSACTION;": NOT CAUGHT
+PROBE R1 "SET LOCAL ROLE NONE;": NOT CAUGHT
+PROBE R1 "SET SESSION ROLE identity_owner;": NOT CAUGHT
+PROBE R1 "SET  ROLE NONE;": NOT CAUGHT
+PROBE R1 "SET\nROLE NONE;": NOT CAUGHT
+PROBE R1 "CREATE USER x;": NOT CAUGHT
+PROBE R1 "ALTER USER identity_app BYPASSRLS;": NOT CAUGHT
+PROBE R1 "CREATE GROUP x;": NOT CAUGHT
+PROBE R1 "ALTER GROUP identity_owner ADD USER identity_app;": NOT CAUGHT
+PROBE R1 "GRANT identity_owner TO identity_app;": NOT CAUGHT
+PROBE R1 "CREATE FUNCTION f() RETURNS int LANGUAGE sql SECURITY\n  DEFINER AS 'SELECT 1';": NOT CAUGHT
+PROBE R1 "ALTER SCHEMA identity OWNER TO identity_app;": NOT CAUGHT
+PROBE R1 "ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO identity_app;": NOT CAUGHT
+PROBE R1 "DO $$ BEGIN EXECUTE 'RE' || 'SET ROLE'; END $$;": caught by ["SET ROLE"]
+test verify_60_tls_host_names ... PROBE T1 https://127.0.0.1 (name in the certificate): Ok(200)
+PROBE T2 https://localhost (same server, name not in the certificate): Err(RequestError("TLS with localhost: invalid peer certificate: certificate not valid for name \"localhost\"; certificate is only valid for IpAddress(127.0.0.1)"))
+PROBE T3 plain client asked for https: Err(RequestError("https needs a CA file, and none was configured"))
+PROBE T4 ClickHouse::new with an https URL and no CA file: Err(ClickHouse("an https ClickHouse needs TRUSTIOT_CLICKHOUSE_CA_FILE: the Job trusts only the CA the deployment names (clickhouse.external.caSecret)"))
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.24s
+test verify_60_clickhouse ... PROBE K1 first run: Ok(["applied migrate/0001_helpers.sql", "applied database/database.sql", "applied clickhouse/0001_databases.sql", "applied clickhouse/0002_telemetry.sql", "applied clickhouse/0003_batch_commits.sql", "applied clickhouse/0004_access.sql", "applied clickhouse/0005_tenant_view.sql", "applied clickhouse/0006_logs.sql", "created ClickHouse account v60_collector"])
+PROBE K1 collector reads trustiot_logs.otel_logs (must fail): Err("Code: 497. DB::Exception: v60_collector: Not enough privileges. To execute this query, it's necessary to have the grant ")
+PROBE K1 grants of the collector role: Ok("SHOW COLUMNS\ttrustiot_logs\totel_logs\t0\t0\nSHOW COLUMNS\ttrustiot_logs\totel_traces\t0\t0\nINSERT\ttrustiot_logs\totel_logs\t0\t0\nINSERT\ttrustiot_logs\totel_traces\t0\t0\n")
+PROBE K2 admin: GRANT SELECT ON trustiot_logs.* TO trustiot_otel_collector: Ok("")
+PROBE K2 Job after the role gained SELECT: Err(ClickHouse("the role trustiot_otel_collector has grants or roles beyond 0006_logs.sql; an administrator must revoke them (docs/runbooks/migrations.md)"))
+PROBE K2 collector reads trustiot_logs.otel_logs now: Ok("0\n")
+PROBE K3 account drift: settings profile with readonly = 0: alter=Ok("OK") job=Err(ClickHouse("the collector account v60_collector has other roles, grants or settings than trustiot_otel_collector as its default role; an administrator must drop it (DROP USER v60_collector), and the next run creates it again (docs/runbooks/migrations.md)"))
+PROBE K3 account drift: GRANTEES ANY: alter=Ok("OK") job=Err(ClickHouse("the collector account v60_collector has other roles, grants or settings than trustiot_otel_collector as its default role; an administrator must drop it (DROP USER v60_collector), and the next run creates it again (docs/runbooks/migrations.md)"))
+PROBE K3 Job after the administrator dropped the drifted account: Ok(["created ClickHouse account v60_collector"])
+PROBE K4 rotation: Ok(["set the password of ClickHouse account v60_collector"])
+PROBE K4 query_log rows containing the new password: Ok("0\n")
+PROBE K4 query_log rows containing the old password: Ok("0\n")
+PROBE K4 logged CREATE/ALTER USER text: Ok("")
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.87s
+rcheck: removed 0 dangling test volumes

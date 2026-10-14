@@ -1,0 +1,60 @@
+bun test v1.4.2 (744846f84)
+
+deploy/chart/tests/e2e/postgres.e2e.ts:
+password Secrets after upgrade with the same values: unchanged; after rollback: unchanged
+ 99 |   });
+100 |   return { code: proc.exitCode ?? -1, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+101 | }
+102 | function run(cmd: string[], stdin?: string): string {
+103 |   const result = exec(cmd, stdin);
+104 |   if (result.code !== 0) throw new Error(`${cmd.slice(0, 5).join(" ")} failed (${result.code}):\n${result.stderr}`);
+                                                                                                                        ^
+error: ~/.proto/tools/helm/4.3.0/helm --namespace e2e-60 upgrade trustiot failed (1):
+level=WARN msg="failed to update release" name=trustiot revision=3 error="update: failed to update: Put \"https://127.0.0.1:16443/api/v1/namespaces/e2e-60/secrets/sh.helm.release.v1.trustiot.v3\": net/http: TLS handshake timeout"
+level=WARN msg="upgrade failed" name=trustiot error="could not get information about the resource: Get \"https://127.0.0.1:16443/apis/networking.k8s.io/v1/namespaces/e2e-60/networkpolicies/trustiot-ingress\": net/http: TLS handshake timeout - error from a previous attempt: http2: client connection lost"
+level=WARN msg="failed to update release" name=trustiot revision=4 error="update: failed to update: Put \"https://127.0.0.1:16443/api/v1/namespaces/e2e-60/secrets/sh.helm.release.v1.trustiot.v4\": net/http: TLS handshake timeout"
+Error: UPGRADE FAILED: could not get information about the resource: Get "https://127.0.0.1:16443/apis/networking.k8s.io/v1/namespaces/e2e-60/networkpolicies/trustiot-ingress": net/http: TLS handshake timeout - error from a previous attempt: http2: client connection lost
+
+      at run (<worktree>/deploy/chart/tests/e2e/postgres.e2e.ts:104:115)
+      at upgrade (<worktree>/deploy/chart/tests/e2e/postgres.e2e.ts:262:3)
+      at <anonymous> (<worktree>/deploy/chart/tests/e2e/postgres.e2e.ts:642:5)
+(fail) bundled Postgres (saas shape) > a new password generation replaces every password, and the service and the collector become ready with the new ones [81862.41ms]
+ 99 |   });
+100 |   return { code: proc.exitCode ?? -1, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+101 | }
+102 | function run(cmd: string[], stdin?: string): string {
+103 |   const result = exec(cmd, stdin);
+104 |   if (result.code !== 0) throw new Error(`${cmd.slice(0, 5).join(" ")} failed (${result.code}):\n${result.stderr}`);
+                                                                                                                        ^
+error: ~/.proto/tools/kubectl/1.36.5/kubectl --namespace e2e-60 get secret failed (1):
+Unable to connect to the server: net/http: TLS handshake timeout
+
+      at run (<worktree>/deploy/chart/tests/e2e/postgres.e2e.ts:104:115)
+      at json (<worktree>/deploy/chart/tests/e2e/postgres.e2e.ts:112:51)
+      at passwordDigest (<worktree>/deploy/chart/tests/e2e/postgres.e2e.ts:223:18)
+      at <anonymous> (<worktree>/deploy/chart/tests/e2e/postgres.e2e.ts:665:20)
+(fail) bundled Postgres (saas shape) > a rollback to the older password generation keeps the new passwords, and so does the upgrade after it [10024.94ms]
+ 99 |   });
+100 |   return { code: proc.exitCode ?? -1, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+101 | }
+102 | function run(cmd: string[], stdin?: string): string {
+103 |   const result = exec(cmd, stdin);
+104 |   if (result.code !== 0) throw new Error(`${cmd.slice(0, 5).join(" ")} failed (${result.code}):\n${result.stderr}`);
+                                                                                                                        ^
+error: ~/.proto/tools/kubectl/1.36.5/kubectl --namespace e2e-60 get secret failed (1):
+Unable to connect to the server: net/http: TLS handshake timeout
+
+      at run (<worktree>/deploy/chart/tests/e2e/postgres.e2e.ts:104:115)
+      at json (<worktree>/deploy/chart/tests/e2e/postgres.e2e.ts:112:51)
+      at passwordDigest (<worktree>/deploy/chart/tests/e2e/postgres.e2e.ts:223:18)
+      at <anonymous> (<worktree>/deploy/chart/tests/e2e/postgres.e2e.ts:686:20)
+(fail) bundled Postgres (saas shape) > a lost key is regenerated when the Job runs again [10025.30ms]
+ 99 |   });
+100 |   return { code: proc.exitCode ?? -1, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+101 | }
+102 | function run(cmd: string[], stdin?: string): string {
+103 |   const result = exec(cmd, stdin);
+104 |   if (result.code !== 0) throw new Error(`${cmd.slice(0, 5).join(" ")} failed (${result.code}):\n${result.stderr}`);
+                                                                                                                        ^
+error: ~/.proto/tools/kubectl/1.36.5/kubectl --namespace e2e-60 get cluster.postgresql.cnpg.io/trustiot-postgres failed (1):
+E1014 13:36:26.835507   50208 memcache.go:265] "Unhandled Error" err="couldn't get current server API group list: Get \"https://127.0.0.1:16443/api?timeout=32s\": net/http: TLS handshake timeout"

@@ -1,0 +1,21 @@
+DELETING trustiot-otel-collector-password: deletionTimestamp set=true, rv=631476
+HELM upgrade revision 72 (no wait) exit=0 
+JOBLOG trustiot-migrate-9d8264c3 "is being deleted": 1
+JOBLOG trustiot-migrate-9d8264c3 "generated the password": 0
+JOBLOG trustiot-migrate-9d8264c3 "set the password": 0
+AFTER Job: resourceVersion unchanged=true, keys=trustiot_collector
+HELM upgrade --set migrate.revision=73 exit=0 after 11 s 
+JOBLOG trustiot-migrate-493b55e1 "generated the password of trustiot_collector": 1
+JOBLOG trustiot-migrate-493b55e1 "(it had none)": 1
+JOBLOG trustiot-migrate-493b55e1 "set the password of ClickHouse account": 1
+SECRET trustiot-identity-password keys=[identity_app(len 64)] generation=1 bound managers=[helm/Apply kubectl-create/Update+data trustiot-migrate/Update+data]
+SECRET trustiot-otel-collector-password keys=[trustiot_collector(len 64)] generation=1 bound managers=[helm/Apply trustiot-migrate/Update+data]
+COMPARE n3-recovered vs n3-owner-gone: identity_app:same trustiot_collector:changed
+JOBS trustiot-migrate-493b55e1(ok=1,failed=0,active=0)
+POD trustiot-clickhouse-0 Running clickhouse:ready=true,restarts=0,running
+POD trustiot-identity-5b4bfd8ff4-j9gzd Running identity:ready=true,restarts=0,running
+POD trustiot-identity-5c8d84fc4b-l2lcd Running identity:ready=true,restarts=0,running
+POD trustiot-ingress-istio-7847ff9f6c-fhvsd Running istio-proxy:ready=true,restarts=0,running
+POD trustiot-migrate-493b55e1-hczf9 Succeeded migrate:ready=false,restarts=0,terminated:Completed
+POD trustiot-otel-collector-86d58f445c-kdhdg Running otel-collector:ready=true,restarts=0,running
+POD trustiot-postgres-1 Running postgres:ready=true,restarts=0,running

@@ -8,8 +8,13 @@ import {
   gatewaysOf,
   healthEndpointsOf,
   keptObjectsOf,
+  MIGRATION_WAIT_CONTAINER,
+  migrationJobsOf,
+  migrationOrderProblems,
   missingTlsSecrets,
   missingSecrets,
+  passwordSecretProblems,
+  passwordSecretsOf,
   operatorSecretsOf,
   postgresClusterProblems,
   postgresClustersOf,
@@ -135,6 +140,49 @@ describe("workloadsOf", () => {
       "Deployment/web",
       "Job/migrate",
     ]);
+  });
+});
+
+describe("password Secrets of the migration Job", () => {
+  const job = (env: { name: string; value: string }[]) =>
+    parseManifests(`apiVersion: batch/v1
+kind: Job
+metadata: { name: rel-migrate-1, labels: { app.kubernetes.io/component: migrate } }
+spec:
+  template:
+    spec:
+      containers:
+        - name: migrate
+          env: ${JSON.stringify(env)}
+`);
+
+  test("are read from the Job's bindings, with the keys it writes", () => {
+    const objects = job([
+      { name: "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR", value: "trustiot_collector=rel-otel-collector-password" },
+      { name: "TRUSTIOT__PASSWORDS__POSTGRES", value: "assets_app=rel-assets-password,identity_app=rel-identity-password" },
+      { name: "TRUSTIOT__WAIT__DATABASES", value: "10m" },
+    ]);
+    expect(Object.fromEntries(passwordSecretsOf(objects))).toEqual({
+      "rel-otel-collector-password": ["trustiot_collector"],
+      "rel-assets-password": ["assets_app"],
+      "rel-identity-password": ["identity_app"],
+    });
+    expect(passwordSecretsOf(job([])).size).toBe(0);
+  });
+
+  test("hold a generated password under every key, named without its value", () => {
+    const generated = Buffer.from("ab".repeat(32)).toString("base64");
+    const secret = (data: Record<string, string>, annotated = true) => ({
+      metadata: annotated ? { annotations: { "trustiot.io/password-generation": "1" } } : {},
+      data,
+    });
+    expect(passwordSecretProblems("s", ["a_app"], secret({ a_app: generated }))).toEqual([]);
+    expect(passwordSecretProblems("s", ["a_app"], secret({}))).toEqual(["s: key a_app is missing"]);
+    const short = Buffer.from("not-generated").toString("base64");
+    const problems = passwordSecretProblems("s", ["a_app"], secret({ a_app: short }, false));
+    expect(problems).toEqual(["s: key a_app is not a password the Job generates", "s: no trustiot.io/password-generation annotation"]);
+    expect(problems.join(" ")).not.toContain(short);
+    expect(problems.join(" ")).not.toContain("not-generated");
   });
 });
 
@@ -331,6 +379,66 @@ describe("readyEndpointsFor", () => {
   });
 });
 
+describe("migration order (Laysi/trustiot-v2#60)", () => {
+  const job = { status: { completionTime: "2026-10-13T03:00:10Z" } };
+  const waiter = (name: string, containerStatuses: unknown[]) => ({
+    metadata: { name },
+    spec: { initContainers: [{ name: MIGRATION_WAIT_CONTAINER }], containers: [{ name: "svc" }] },
+    status: { containerStatuses },
+  });
+  const started = (at: string) => ({ name: "svc", state: { running: { startedAt: at } } });
+
+  test("the chart's migration Job is found by its component label", () => {
+    const objects = parseManifests(`
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trustiot-migrate-0b4fb1a7
+  labels:
+    app.kubernetes.io/component: migrate
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: other
+`);
+    expect(migrationJobsOf(objects)).toEqual(["trustiot-migrate-0b4fb1a7"]);
+  });
+
+  test("services that started at or after the Job's completion pass; pods without the init container are ignored", () => {
+    const pods = {
+      items: [
+        waiter("a", [started("2026-10-13T03:00:10Z")]),
+        waiter("b", [started("2026-10-13T03:00:42Z")]),
+        { metadata: { name: "clickhouse-0" }, spec: { containers: [{ name: "c" }] }, status: { containerStatuses: [started("2026-10-13T02:59:00Z")] } },
+      ],
+    };
+    expect(migrationOrderProblems(job, pods)).toEqual([]);
+  });
+
+  test("a container that started before completion, also in an earlier run, is reported", () => {
+    const pods = {
+      items: [
+        waiter("early", [started("2026-10-13T03:00:09Z")]),
+        waiter("restarted", [
+          { name: "svc", state: { running: { startedAt: "2026-10-13T03:01:00Z" } }, lastState: { terminated: { startedAt: "2026-10-13T02:59:59Z" } } },
+        ]),
+        waiter("pending", [{ name: "svc", state: { waiting: { reason: "PodInitializing" } } }]),
+      ],
+    };
+    const problems = migrationOrderProblems(job, pods);
+    expect(problems).toHaveLength(3);
+    expect(problems[0]).toStartWith("early/svc started 2026-10-13T03:00:09.000Z, before the Job completed");
+    expect(problems[1]).toStartWith("restarted/svc started 2026-10-13T02:59:59.000Z");
+    expect(problems[2]).toBe("pending/svc has not started");
+  });
+
+  test("a Job without completionTime, or no waiting pod, is a failure", () => {
+    expect(migrationOrderProblems({ status: {} }, { items: [] })).toEqual(["the migration Job has no completionTime: it has not completed"]);
+    expect(migrationOrderProblems(job, { items: [] })).toEqual([`no pod has the ${MIGRATION_WAIT_CONTAINER} init container`]);
+  });
+});
+
 describe("pods", () => {
   const pod = (name: string, status: Record<string, unknown>) => ({ metadata: { name }, status });
 
@@ -405,10 +513,16 @@ describe("the chart as deployed by the nightly", () => {
       expect(endpoints.every((e) => workloadNames.has(e.workload))).toBe(true);
       // The bundled Postgres: its Cluster is checked for health, kept on uninstall and then deleted.
       expect(postgresClustersOf(objects)).toEqual(["trustiot-postgres"]);
+      // The password Secrets the migration Job fills are kept too (Laysi/trustiot-v2#60); the
+      // smoke values enable the collector, whose ClickHouse password the Job generates.
       expect(keptObjectsOf(objects)).toEqual([
         "cluster.postgresql.cnpg.io/trustiot-postgres",
+        "secret/trustiot-otel-collector-password",
         "imagecatalog.postgresql.cnpg.io/trustiot-postgres",
       ]);
+      expect([...passwordSecretsOf(objects)]).toEqual([["trustiot-otel-collector-password", ["trustiot_collector"]]]);
+      // The empty Secret is the release's own: no dummy is made for it.
+      expect(missingSecrets(objects).has("trustiot-otel-collector-password")).toBe(false);
     }, 60_000);
   }
 });

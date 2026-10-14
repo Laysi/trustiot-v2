@@ -1,0 +1,16 @@
+LOG_STATEMENT all
+HELM upgrade --set migrate.passwordGeneration=4 exit=0 after 9 s 
+SECRET trustiot-identity-password keys=[identity_app(len 64)] generation=4 bound managers=[helm/Apply kubectl-create/Update+data trustiot-migrate/Update+data]
+SECRET trustiot-otel-collector-password keys=[trustiot_collector(len 64)] generation=4 bound managers=[helm/Apply trustiot-migrate/Update+data]
+COMPARE gen4 vs conflict: identity_app:changed trustiot_collector:changed
+JOBS trustiot-migrate-aae71ee0(ok=1,failed=0,active=0)
+POD trustiot-clickhouse-0 Running clickhouse:ready=true,restarts=0,running
+POD trustiot-identity-6b6856cf76-rf7zj Running identity:ready=true,restarts=0,running
+POD trustiot-identity-756789456c-92bdj Running identity:ready=true,restarts=0,running
+POD trustiot-ingress-istio-7847ff9f6c-kmbsw Running istio-proxy:ready=true,restarts=0,running
+POD trustiot-migrate-aae71ee0-m64c5 Succeeded migrate:ready=false,restarts=0,terminated:Completed
+POD trustiot-otel-collector-796f7c7c78-dk6mk Running otel-collector:ready=true,restarts=0,running
+POD trustiot-otel-collector-d7dc5f567-q2c6r Succeeded otel-collector:ready=false,restarts=0,terminated:Completed
+POD trustiot-postgres-1 Running postgres:ready=true,restarts=0,running
+PGLOG 95767 chars: password values 0,0; SCRAM-SHA-256$ verifiers 1; ALTER ROLE statements 0; PASSWORD keyword 1
+LOG_STATEMENT reverted

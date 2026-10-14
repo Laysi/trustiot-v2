@@ -307,7 +307,8 @@ describe("every copy of a pin is updated by the same pull request", () => {
     expect([...digests].filter(([, set]) => set.size > 1).map(([pin]) => pin)).toEqual([]);
     // The images this was written for, each pinned in more than one file.
     const copies = (image: string) => new Set(pins.filter((p) => p.image === image).map((p) => p.file)).size;
-    expect(copies("docker.io/clickhouse/clickhouse-server")).toBe(3);
+    // The chart, the dev environment, services/ingest/tests and tools/migrate/tests.
+    expect(copies("docker.io/clickhouse/clickhouse-server")).toBe(4);
     expect(copies("docker.io/library/eclipse-mosquitto")).toBe(2);
     expect(copies("gcr.io/distroless/cc-debian13")).toBe(4);
   });

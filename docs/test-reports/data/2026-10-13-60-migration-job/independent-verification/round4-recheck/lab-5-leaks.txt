@@ -1,0 +1,24 @@
+LEAK positive control: password Secrets JSON (must be > 0): 2 in 3343 chars
+LEAK events: 0 in 251153 chars
+LEAK describe job: 0 in 4604 chars
+LEAK describe pod: 0 in 34078 chars
+LEAK describe deployment: 0 in 15014 chars
+LEAK describe statefulset: 0 in 4028 chars
+LEAK describe cluster.postgresql.cnpg.io: 0 in 8622 chars
+LEAK describe secret (Data section has sizes only): 0 in 4095 chars
+LEAK job, pod and cluster objects: 0 in 229584 chars
+LEAK log trustiot-clickhouse-0/clickhouse: 0 in 31166 chars
+LEAK log trustiot-identity-6b6856cf76-rf7zj/wait-for-migrations: 0 in 692 chars
+LEAK log trustiot-identity-6b6856cf76-rf7zj/identity: 0 in 1827 chars
+LEAK log trustiot-identity-756789456c-92bdj/wait-for-migrations: 0 in 692 chars
+LEAK log trustiot-identity-756789456c-92bdj/identity: 0 in 1191 chars
+LEAK log trustiot-ingress-istio-7847ff9f6c-kmbsw/istio-proxy: 0 in 4402 chars
+LEAK log trustiot-migrate-aae71ee0-m64c5/migrate: 0 in 1884 chars
+LEAK log trustiot-otel-collector-796f7c7c78-dk6mk/wait-for-migrations: 0 in 692 chars
+LEAK log trustiot-otel-collector-796f7c7c78-dk6mk/otel-collector: 0 in 9883 chars
+LEAK log trustiot-postgres-1/bootstrap-controller: 0 in 393 chars
+LEAK log trustiot-postgres-1/postgres: 0 in 101540 chars
+LEAK helm release sh.helm.release.v1.trustiot.v1: 0 in 448529 chars
+LEAK helm release sh.helm.release.v1.trustiot.v2: 0 in 448552 chars
+LEAK helm release sh.helm.release.v1.trustiot.v3: 0 in 448550 chars
+LEAK helm get all: 0 in 69452 chars

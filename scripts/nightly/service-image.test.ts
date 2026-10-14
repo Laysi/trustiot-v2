@@ -8,7 +8,7 @@ import { discoverImages, resolveBinary, RUST_CONTAINERFILE } from "../release/li
 import { CommandError, RunLog } from "./exec.ts";
 import type { ExecOptions, ExecResult } from "./exec.ts";
 import type { ImportCommands } from "./platform.ts";
-import { buildServiceImage, loadServiceImage, serviceImageRef, serviceImageValues } from "./service-image.ts";
+import { buildServiceImage, installBuildTools, loadServiceImage, MIGRATE_IMAGE_NAME, serviceImageRef, serviceImageValues } from "./service-image.ts";
 import type { ServiceImageTools } from "./service-image.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -34,6 +34,16 @@ describe("service image names", () => {
     const values = serviceImageValues("identity");
     expect(`${values.repository}:${values.tag}`).toBe(IMAGE);
     expect(values).toMatchObject({ digest: "", pullPolicy: "IfNotPresent" });
+  });
+
+  test("the migration Job's image the nightly builds is the one the smoke values name", () => {
+    const migrate = discoverImages(REPO_ROOT).find((image) => image.name === MIGRATE_IMAGE_NAME);
+    expect(migrate).toMatchObject({ kind: "rust", package: "migrate" });
+    const smoke = Bun.YAML.parse(readFileSync(join(REPO_ROOT, "deploy", "chart", "tests", "values", "smoke.yaml"), "utf8")) as {
+      migrate: { image: { repository: string; tag: string; pullPolicy: string } };
+    };
+    const { digest: _digest, ...expected } = serviceImageValues(MIGRATE_IMAGE_NAME);
+    expect(smoke.migrate.image).toEqual(expected);
   });
 
   test("the repository declares the identity service image, and its package has the one binary", () => {
@@ -93,6 +103,7 @@ describe("buildServiceImage and loadServiceImage", () => {
     binary = staticAarch64Binary() as Uint8Array | null,
     imageBuildFailures = 0,
     hasImage = true,
+    loadFails = false,
   } = {}) {
     const seen: Seen = { commands: [], imports: 0 };
     const target = join(root, "target");
@@ -113,6 +124,18 @@ describe("buildServiceImage and loadServiceImage", () => {
             mkdirSync(out, { recursive: true });
             writeFileSync(join(out, "identity"), binary);
           }
+          return ok();
+        }
+        // The image cache (image-cache.ts): load, inspect and save.
+        if (cmd[0] === "docker" && cmd[1] === "load") {
+          if (loadFails) throw new Error("docker load: unexpected EOF");
+          return ok();
+        }
+        // The fallback's tool install: a test that reaches it stops there.
+        if (cmd[0] === "proto") throw new Error("proto install reached");
+        if (cmd[0] === "docker" && cmd[1] === "image") return ok("linux/arm64\n");
+        if (cmd[0] === "docker" && cmd[1] === "save") {
+          writeFileSync(cmd[3]!, "tarball");
           return ok();
         }
         if (cmd[0] === TOOLS.containerTool) {
@@ -180,6 +203,80 @@ describe("buildServiceImage and loadServiceImage", () => {
     expect(await load(commands)).toBe(IMAGE);
     expect(seen.commands.at(-1)).toEqual([K3D, "image", "import", IMAGE, "--cluster", CLUSTER, "--mode", "direct"]);
     expect(readFileSync(logPath, "utf8")).toContain(`image ${IMAGE} confirmed on 1 node(s): ${NODE}`);
+  });
+
+  test("loadServiceImage takes a cached image without looking up or running any Rust tool", async () => {
+    const cacheDir = join(root, "image-cache");
+    mkdirSync(cacheDir);
+    writeFileSync(join(cacheDir, "identity.tar"), "tarball");
+    const { seen, commands } = fakeTools();
+    // No `tools`: on a hit the pinned build tools need not be installed, and are not looked up.
+    const image = await loadServiceImage({ repoRoot: root, log, k3d: K3D, cluster: CLUSTER }, "identity", {
+      commands,
+      pauseMs: 0,
+      cache: { dir: cacheDir, save: true },
+    });
+    expect(image).toBe(IMAGE);
+    expect(seen.commands.map((cmd) => cmd.slice(0, 2))).toEqual([
+      ["docker", "load"],
+      ["docker", "image"],
+      [K3D, "image"],
+    ]);
+    expect(seen.cargoEnv).toBeUndefined();
+  });
+
+  test("loadServiceImage builds on a miss, and writes the image for the cache only when asked", async () => {
+    for (const save of [false, true]) {
+      const cacheDir = mkdtempSync(join(root, "image-cache-"));
+      const { seen, commands } = fakeTools();
+      await loadServiceImage({ repoRoot: root, log, k3d: K3D, cluster: CLUSTER }, "identity", { tools: TOOLS, commands, pauseMs: 0, cache: { dir: cacheDir, save } });
+      expect(seen.cargoEnv).toBeDefined();
+      expect(seen.commands.some((cmd) => cmd[0] === "docker" && cmd[1] === "save")).toBe(save);
+      expect(existsSync(join(cacheDir, "identity.tar"))).toBe(save);
+      expect(seen.commands.at(-1)?.slice(0, 3)).toEqual([K3D, "image", "import"]);
+    }
+  });
+
+  test("loadServiceImage builds when the cached tarball cannot be loaded, and says so", async () => {
+    const cacheDir = join(root, "image-cache");
+    mkdirSync(cacheDir);
+    writeFileSync(join(cacheDir, "identity.tar"), "partial");
+    const { seen, commands } = fakeTools({ loadFails: true });
+    const image = await loadServiceImage({ repoRoot: root, log, k3d: K3D, cluster: CLUSTER }, "identity", {
+      tools: TOOLS,
+      commands,
+      pauseMs: 0,
+      cache: { dir: cacheDir, save: false },
+    });
+    expect(image).toBe(IMAGE);
+    expect(seen.commands[0]?.slice(0, 2)).toEqual(["docker", "load"]);
+    expect(seen.cargoEnv).toBeDefined();
+    expect(seen.commands.at(-1)?.slice(0, 3)).toEqual([K3D, "image", "import"]);
+    expect(readFileSync(logPath, "utf8")).toContain(`the cached ${IMAGE} cannot be used (docker load failed: docker load: unexpected EOF); building it instead`);
+  });
+
+  test("loadServiceImage installs the build tools the workflow skipped before it falls back to a build", async () => {
+    const cacheDir = join(root, "image-cache");
+    mkdirSync(cacheDir);
+    writeFileSync(join(cacheDir, "identity.tar"), "partial");
+    const { seen, commands } = fakeTools({ loadFails: true });
+    // No `tools`: as in CI, where a hit skipped installing them.
+    await expect(
+      loadServiceImage({ repoRoot: root, log, k3d: K3D, cluster: CLUSTER }, "identity", { commands, pauseMs: 0, cache: { dir: cacheDir, save: false } }),
+    ).rejects.toThrow("proto install reached");
+    expect(seen.commands.at(-1)).toEqual(["proto", "install", "zig"]);
+  });
+
+  test("installBuildTools installs each pinned build tool with its own proto install, in the repository", async () => {
+    const seen: { cmd: string[]; cwd?: string }[] = [];
+    const run = async (_log: RunLog, cmd: string[], options?: ExecOptions) => {
+      seen.push({ cmd, cwd: options?.cwd });
+      return ok();
+    };
+    await installBuildTools({ repoRoot: root, log }, { run });
+    expect(seen).toEqual(
+      ["zig", "cargo-zigbuild", "cargo-auditable"].map((tool) => ({ cmd: ["proto", "install", tool], cwd: root })),
+    );
   });
 
   test("loadServiceImage fails when the image never reaches the node", async () => {

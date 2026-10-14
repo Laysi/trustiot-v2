@@ -65,17 +65,17 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | Rust 服務（見下一節） | `services.<name>.enabled` | 通用樣板完成；映像還沒出，預設全關 | 各服務的 issue 出映像時改成開 |
 | 入口 gateway（Istio ambient、Gateway API、ext_authz） | `ingress.*` | 完成：Gateway、路由、cookie 驗證、例外路徑、`/internal` 拒絕與 NetworkPolicy；服務的 pod 加入 ambient mesh。Istio 本身與 ext_authz provider 由 `deploy/istio` 安裝。服務的 cookie 路由隨各服務加入 `ingress.routes` | Laysi/trustiot-v2#62；真身分服務的端到端驗證在 Laysi/trustiot-v2#77 |
 | 服務間授權（AuthorizationPolicy、NetworkPolicy） | `mesh.*` | 完成：每個服務自己的 ServiceAccount、依 `mesh.calls` 產生的 AuthorizationPolicy、namespace 預設拒絕的 NetworkPolicy；不部署 waypoint。服務之間的呼叫隨各服務加入 `mesh.calls` | Laysi/trustiot-v2#63；代表使用者呼叫的授權矩陣在 Laysi/trustiot-v2#106 |
-| Postgres（CloudNativePG 加 AGE） | `postgres.mode` | `bundled`：單一 instance 的 CloudNativePG Cluster、AGE extension 與 NetworkPolicy（見「叢集內的 Postgres」）；CloudNativePG operator 與 CRD 是叢集層級的平台元件，由 [deploy/cloudnative-pg](../cloudnative-pg/README.md) 安裝，不在 chart 裡。`external` 已接到平台設定。含 AGE 的映像在 [deploy/images/postgres](../images/postgres/README.md)，由 release.yml 發佈 | Laysi/trustiot-v2#60（每個服務的角色與 migration）、Laysi/trustiot-v2#134（備份與 PITR） |
-| migration Job | — | 尚未加入 | Laysi/trustiot-v2#60 |
-| ClickHouse | `clickhouse.mode` | `bundled`：單節點 StatefulSet（見「叢集內的 ClickHouse」）；`external` 已接到平台設定。schema、帳號與 row policy 由 migration Job 以 SQL 套用 | Laysi/trustiot-v2#60（migration Job）；admin 密碼的 Secret 見「叢集內的 ClickHouse」與 docs/runbooks/secrets.md |
+| Postgres（CloudNativePG 加 AGE） | `postgres.mode` | `bundled`：單一 instance 的 CloudNativePG Cluster、AGE extension 與 NetworkPolicy（見「叢集內的 Postgres」）；CloudNativePG operator 與 CRD 是叢集層級的平台元件，由 [deploy/cloudnative-pg](../cloudnative-pg/README.md) 安裝，不在 chart 裡。`external` 已接到平台設定。含 AGE 的映像在 [deploy/images/postgres](../images/postgres/README.md)，由 release.yml 發佈。每個服務的角色與 migration 由 migration Job 處理 | Laysi/trustiot-v2#134（備份與 PITR） |
+| migration Job | `migrate.enabled` | 完成（預設開）：每個服務的 Postgres migration、ClickHouse DDL、服務角色與 collector 的 ClickHouse 帳號；每個服務的 pod 以 init container 等它完成才啟動（見「migration Job」） | Laysi/trustiot-v2#60；第一個 outbox 生產端在 Laysi/trustiot-v2#65，每租戶的 AGE 角色在 Laysi/trustiot-v2#176 |
+| ClickHouse | `clickhouse.mode` | `bundled`：單節點 StatefulSet（見「叢集內的 ClickHouse」）；`external` 已接到平台設定。schema、帳號與 row policy 由 migration Job 以 SQL 套用 | admin 密碼的 Secret 見「叢集內的 ClickHouse」與 docs/runbooks/secrets.md |
 | MQTT broker（Mosquitto） | — | 尚未加入 | Laysi/trustiot-v2#84 |
 | Qdrant | `qdrant.mode` | `external` 已接到平台設定；`bundled` 尚未加入 | Laysi/trustiot-v2#194 |
 | 物件儲存、SMTP、AI 端點 | `objectStorage.*`、`smtp.*`、`ai.*` | 一律外部，設定已接到平台設定 | Laysi/trustiot-v2#133、Laysi/trustiot-v2#169、Laysi/trustiot-v2#139 |
-| OpenTelemetry collector 與 OTLP 轉送 | `observability.collector.enabled` | 完成（預設開）：收服務的 OTLP、遮蔽後把日誌與 trace 寫進 ClickHouse 的 `trustiot_logs`，可轉送到 SIEM（見「OpenTelemetry collector」）。帳號由 migration Job 以 SQL 建立；指標先收下丟棄 | Laysi/trustiot-v2#60（建帳號）、Laysi/trustiot-v2#183（指標存放與 Grafana）、Laysi/trustiot-v2#63（服務間授權要放行 collector） |
+| OpenTelemetry collector 與 OTLP 轉送 | `observability.collector.enabled` | 完成（預設開）：收服務的 OTLP、遮蔽後把日誌與 trace 寫進 ClickHouse 的 `trustiot_logs`，可轉送到 SIEM（見「OpenTelemetry collector」）。帳號由 migration Job 以 SQL 建立；指標先收下丟棄 | Laysi/trustiot-v2#183（指標存放與 Grafana）、Laysi/trustiot-v2#63（服務間授權要放行 collector） |
 | Grafana | — | 尚未加入 | Laysi/trustiot-v2#183 |
 | Sentry | `observability.sentry.*` | 開關、環境名稱與 DSN 已接到每個服務 | Laysi/trustiot-v2#184 |
 | 內部身分（公鑰、簽章私鑰） | `internalIdentity.*` | 完成：公鑰以 JWK Set 放進平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`；簽章私鑰的 Secret 只掛進身分服務；身分服務另外拿到需要 cookie 的路由（`TRUSTIOT_INGRESS_ROUTES`），決定 token 的受眾 | Laysi/trustiot-v2#61；SaaS 的值放進 `deploy/flux/` 由 Laysi/trustiot-v2#70 做 |
-| 密鑰 | 各個 `*Secret` 欄位、`services.<name>.credentials` | values 只存 Secret 名稱與 key；Sentry DSN 給每個服務，其他依賴的帳密只給列出它的服務；外部 ClickHouse 的 CA 掛進每個服務，Postgres 的 CA 只掛進在 `mesh.calls` 列出 `postgres` 的服務；chart 不產生 Secret（測試檢查），叢集內 Postgres 的 Secret 由 CloudNativePG 產生，服務的自訂 `env` 讀不到 | SaaS 的 Secret 以 SOPS 加密放在 `deploy/flux/`（Laysi/trustiot-v2#70）；地端由客戶建立。規則與清冊見 docs/architecture/secrets.md |
+| 密鑰 | 各個 `*Secret` 欄位、`services.<name>.credentials` | values 只存 Secret 名稱與 key；Sentry DSN 給每個服務，其他依賴的帳密只給列出它的服務；外部 ClickHouse 的 CA 掛進每個服務，Postgres 的 CA 只掛進在 `mesh.calls` 列出 `postgres` 的服務；chart 不渲染任何密鑰值（測試檢查），它宣告的 Secret 只有 migration Job 填入的空 Secret；叢集內 Postgres 的 Secret 由 CloudNativePG 產生，服務的自訂 `env` 讀不到；每個服務的資料庫密碼與 collector 的 ClickHouse 密碼由 migration Job 產生，各放在自己的 Secret（`<release>-<服務>-password`、`<release>-otel-collector-password`），只給該服務或 collector，migration 帳號只給 migration Job | SaaS 的 Secret 以 SOPS 加密放在 `deploy/flux/`（Laysi/trustiot-v2#70）；地端由客戶建立。規則與清冊見 docs/architecture/secrets.md |
 
 ## 服務
 
@@ -207,7 +207,7 @@ mesh:
 - NetworkPolicy 只管連入（`Ingress`），不限制連出：外部依賴（Qdrant Cloud、S3、SMTP、AI 端點、外部資料庫）以主機名稱指定，NetworkPolicy 無法依主機名稱放行。
 - 不部署 waypoint：L4 的身分已足夠。服務之間需要 L7 規則（例如依路徑或方法）時才為該服務加 waypoint，並把它的 AuthorizationPolicy 改成以 `targetRefs` 指向 Service、在 ztunnel 層放行 waypoint 的 ServiceAccount；代表使用者呼叫的授權（內部身分 token）由服務自己驗證，不靠 waypoint（Laysi/trustiot-v2#106）。
 - 叢集測試 `tests/e2e/mesh.e2e.ts` 以真實連線驗證清單內放行、清單外被拒，以及兩層各自生效，用法見該目錄的 README。
-- 叢集內的 ClickHouse 走同一套規則：只有 `mesh.calls` 列出的 `ingest` 與 `telemetry-query`，以及 chart 自動加上的 OpenTelemetry collector（Laysi/trustiot-v2#73）連得到它，其他服務與 pod 都被拒，kubelet 的 `/ping` 探測經 `169.254.7.127/32` 照常通過，節點來源只開 HTTP 8123。還沒有的用戶端加入時要加進來：migration Job（Laysi/trustiot-v2#60）要在 `trustiot.mesh.plan` 加上 Job 當呼叫端（`mesh.calls` 的呼叫端只能是服務；元件之間的呼叫由 plan 自己加，collector 就是這樣），Grafana（Laysi/trustiot-v2#183）同樣。ClickHouse 的政策只以 chart 測試驗證，2026-10-10 的實驗機測試沒有部署它（見測試報告）。
+- 叢集內的 ClickHouse 走同一套規則：只有 `mesh.calls` 列出的 `ingest` 與 `telemetry-query`，以及 chart 自動加上的 OpenTelemetry collector（Laysi/trustiot-v2#73）與 migration Job（`migrate.enabled` 為 true 時，Laysi/trustiot-v2#60）連得到它，其他服務與 pod 都被拒，kubelet 的 `/ping` 探測經 `169.254.7.127/32` 照常通過，節點來源只開 HTTP 8123。`mesh.calls` 的呼叫端只能是服務，元件之間的呼叫由 `trustiot.mesh.plan` 自己加（`_mesh.tpl`），collector 與 migration Job 都是這樣；還沒有的 Grafana（Laysi/trustiot-v2#183）加入時也要這樣加進來。ClickHouse 的政策只以 chart 測試驗證，2026-10-10 的實驗機測試沒有部署它（見測試報告）。
 - collector 也是 mesh 內的元件（`trustiot.mesh.components` 的 `otel-collector`，埠與探針定義在 `trustiot.otel-collector.pod`）：每個啟用的服務都自動是它的呼叫端（送 OTLP），其他 pod 連不到它，節點來源只開健康檢查的 13133。它連出到外部 ClickHouse 或 SIEM 不受 NetworkPolicy 限制（只管連入）；SIEM 在同一個 namespace 時，要另外以 NetworkPolicy 放行 collector 的 pod 連它。
 - `postgres` 是「這個服務用 Postgres」的宣告，不經 mesh：Postgres 的每條連線本身就是 TLS 並以 verify-full 驗證伺服器，叢集內的 Postgres pod 也不加入 ambient mesh（見「叢集內的 Postgres」），所以它沒有 AuthorizationPolicy，也不走 HBONE。列出 `postgres` 的服務才會掛上 Postgres 的 CA 並拿到 `TRUSTIOT_POSTGRES_CA_FILE`（`external` 也一樣）；`bundled` 時 `<release>-postgres` 這個 NetworkPolicy 也只放行這些服務的 pod 連 5432。同一份清單決定兩件事，不會一邊有、一邊沒有。
 - 預設拒絕套用到 namespace 內所有 pod，包括之後加入的叢集內元件（broker 等）：在 mesh 內的元件加進 `trustiot.mesh.components`，由同一份清單產生政策；不在 mesh 內的元件自帶 NetworkPolicy，只放行實際的用戶端（見「擴充 chart」），叢集內的 Postgres 就是這樣。chart 測試檢查每個 Deployment 與 StatefulSet 的 pod 都有自己的 NetworkPolicy 與 AuthorizationPolicy。
@@ -281,12 +281,12 @@ mesh:
 
 ### 映像的 digest
 
-我們自己的映像（服務與 `postgres.bundled.image`）的 tag 預設是 `Chart.appVersion`，所以 repo 裡的 chart 不寫 digest：寫死某一次發佈的 digest，之後的版本就會變成「新 tag＋舊 digest」。
+我們自己的映像（服務、`postgres.bundled.image` 與 `migrate.image`）的 tag 預設是 `Chart.appVersion`，所以 repo 裡的 chart 不寫 digest：寫死某一次發佈的 digest，之後的版本就會變成「新 tag＋舊 digest」。
 
-發佈的 chart 以 digest 固定同一次發佈的映像（Laysi/trustiot-v2#57）。release 的 publish 推送映像之後，在這份 chart 的暫存複本寫入它們的 digest 再打包、簽章：服務寫在 `services.<name>.image.digest`（`values.yaml` 沒有這個欄位時加上），Postgres 寫在 `postgres.bundled.image.digest`。所以從 GHCR 拉下的 chart 會 render 出 `<repository>:<版本>@sha256:…`，verify 也會檢查（[CI 與發佈](../../docs/architecture/ci-release.md)「release.yml」）。
+發佈的 chart 以 digest 固定同一次發佈的映像（Laysi/trustiot-v2#57）。release 的 publish 推送映像之後，在這份 chart 的暫存複本寫入它們的 digest 再打包、簽章：服務寫在 `services.<name>.image.digest`（`values.yaml` 沒有這個欄位時加上），Postgres 寫在 `postgres.bundled.image.digest`，migration Job 寫在 `migrate.image.digest`。所以從 GHCR 拉下的 chart 會 render 出 `<repository>:<版本>@sha256:…`，verify 也會檢查（[CI 與發佈](../../docs/architecture/ci-release.md)「release.yml」）。
 
 - `values-saas.yaml`、`values-onprem.yaml` 與 `deploy/flux` 的 values 不覆寫這些映像的 `registry`、`repository`、`tag`、`digest`（`bun test scripts` 檢查）。
-- 安裝實例的覆寫檔也不要動它們。要從自己的 registry 鏡像時，只改 `serviceDefaults.image.registry` 與 `postgres.bundled.image.repository`，鏡像要保留 digest（例如 `skopeo copy --preserve-digests`），digest 才對得上。
+- 安裝實例的覆寫檔也不要動它們。要從自己的 registry 鏡像時，只改 `serviceDefaults.image.registry`、`postgres.bundled.image.repository` 與 `migrate.image.repository`，鏡像要保留 digest（例如 `skopeo copy --preserve-digests`），digest 才對得上。
 - 改用別的映像（例如臨時修補版）時，`tag` 與 `digest` 要一起改，或把 `digest` 設成 `""`。只改 `tag` 時，kubelet 仍然依 digest 拉原本的映像。
 - `tests/values/smoke.yaml` 與 e2e 的 values 用本機建出的映像，套在 repo 裡（沒有 digest）的 chart 上，不受影響。
 
@@ -301,6 +301,27 @@ mesh:
 | `internalIdentity.signingKeySecret.key` | `signing-key.pem` | |
 
 身分服務只在啟動時讀私鑰，Kubernetes 不會因 Secret 改變而重啟 pod：換私鑰後要滾動重啟身分服務（`kubectl rollout restart`，或改 `services.identity.podAnnotations`），步驟見 `services/identity/README.md` 的「金鑰輪替」。
+
+### migration Job
+
+做法與理由見後面的「migration Job」一節。
+
+| 欄位 | 預設值 | 說明 |
+| --- | --- | --- |
+| `migrate.enabled` | `true` | 部署 migration Job，並在每個服務的 pod 加上等它完成的 init container。關掉時資料庫的 schema、服務角色與 collector 帳號都要另外建立；只有不接真正資料庫的叢集測試（`tests/e2e/values-*.yaml`）關掉它 |
+| `migrate.image.repository` | `ghcr.io/laysi/trustiot-v2/migrate` | migration 映像（[deploy/images/migrate](../images/migrate)），由 release 與服務一起發佈；Job 與服務的 init container 用同一個映像 |
+| `migrate.image.tag` | `""` | 空白時用 `Chart.appVersion`。必須等於每個在 `mesh.calls` 列出 `postgres` 的服務的 tag（chart 檢查，見「migration Job」的「版本一致」） |
+| `migrate.image.digest` | `""` | sha256 digest；設定時以 digest 固定映像。repo 裡留空，發佈的 chart 由 release 寫入同一次發佈的 digest（見「映像的 digest」）。只以 digest 換掉某個服務的映像時（例如修補），migration 映像也要換成同一次發佈的 tag 與 digest |
+| `migrate.image.pullPolicy` | `IfNotPresent` | |
+| `migrate.revision` | `"1"` | 改這個值就讓 Job 重跑一次（Job 名稱跟著變），所有服務也隨之重啟。資料庫還原或改接之後、密碼 Secret 的資料遺失之後要改它：Job 補回角色、重新產生遺失的密碼（見「migration Job」的「產生的密碼」） |
+| `migrate.passwordGeneration` | `"1"` | 數字（最多 9 位）。調大就輪替 Job 產生的每一個密碼（服務的登入角色、collector 的 ClickHouse 帳號）：下一次執行產生新密碼並設定，Job 名稱跟著變，服務與 collector 以新密碼重啟。只往上走：比 Secret 記的小（rollback）時不換。值本身不是密鑰 |
+| `migrate.wait.databases` | `10m` | Job 等 Postgres 與 ClickHouse 開始接受連線的上限（全新安裝時資料庫與 Job 同時建立）；秒、分或 `1h`，最多 1 小時 |
+| `migrate.wait.lock` | `10m` | 等另一次執行釋放 migration 鎖的上限 |
+| `migrate.activeDeadlineSeconds` | `1800` | Kubernetes 在這麼多秒後停掉 Job；要大於上面兩個等待加上執行時間 |
+| `migrate.backoffLimit` | `3` | 失敗後重試的次數；每次執行都是冪等的 |
+| `migrate.resources` | requests `cpu: 20m`、`memory: 32Mi`；limits `cpu: "1"`、`memory: 128Mi` | Job 與每個服務的 init container 共用；schema 要求 `limits.memory` |
+| `migrate.nodeSelector` | `kubernetes.io/arch: arm64` | 映像只有 arm64（決策 5） |
+| `migrate.tolerations` | `[]` | |
 
 ### 外部依賴
 
@@ -329,8 +350,11 @@ mesh:
 | `postgres.external.port` | `5432` | |
 | `postgres.external.database` | `trustiot` | 資料庫名稱 |
 | `postgres.external.sslMode` | `verify-full` | 只接受 `verify-full`：一律驗證伺服器憑證（清單 M3） |
-| `postgres.external.caSecret.name` | `""` | `external` 時必填；簽發伺服器憑證的 CA 所在的 Secret，以唯讀方式只掛進在 `mesh.calls` 列出 `postgres` 的服務 |
+| `postgres.external.caSecret.name` | `""` | `external` 時必填；簽發伺服器憑證的 CA 所在的 Secret，以唯讀方式只掛進在 `mesh.calls` 列出 `postgres` 的服務與 migration Job |
 | `postgres.external.caSecret.key` | `ca.crt` | |
+| `postgres.external.migrationSecret.name` | `""`，`external` 且 Job 開啟時必填 | migration 角色的帳密所在的既有 Secret：資料庫的 owner，有 CREATEROLE，沒有 SUPERUSER 與 BYPASSRLS，而且不擁有其他資料庫（Job 檢查，不符就停止）。一個 Postgres 叢集只能放一個 TrustIoT 資料庫：角色是叢集層級的，Job 建立的角色名稱不帶實例名稱，兩個實例會共用同一組服務角色與密碼（見「migration Job」）。只給 migration Job |
+| `postgres.external.migrationSecret.usernameKey` | `username` | |
+| `postgres.external.migrationSecret.passwordKey` | `password` | |
 | `clickhouse.mode` | `bundled` | `bundled`：叢集內自管（Laysi/trustiot-v2#59）；`external`：ClickHouse Cloud 等，只當備案（決策 14） |
 | `clickhouse.bundled.image.repository` | `docker.io/clickhouse/clickhouse-server` | |
 | `clickhouse.bundled.image.tag` | `26.8` | 26.8 LTS；實際版本由 digest 決定。Renovate 只提議 LTS 的 minor（`.3`、`.8`），換 minor 的 PR 會被 chart 測試擋下，要先重做決策 14 的檢查（[CI 與發佈](../../docs/architecture/ci-release.md)「Renovate」） |
@@ -347,8 +371,11 @@ mesh:
 | `clickhouse.bundled.nodeSelector` | `{}` | 映像是 multi-arch，不限架構 |
 | `clickhouse.bundled.tolerations` | `[]` | |
 | `clickhouse.external.url` | `""` | `external` 時必填；只接受 https，例如 `https://abc.clickhouse.cloud:8443` |
-| `clickhouse.external.caSecret.name` | `""` | 私有 CA 簽發時才設定 |
+| `clickhouse.external.caSecret.name` | `""` | 服務只在私有 CA 簽發時需要；migration Job 開啟時必填：Job 只信任這個 CA、不信任公開根憑證，伺服器用公開 CA 時把那個根憑證放進來 |
 | `clickhouse.external.caSecret.key` | `ca.crt` | |
+| `clickhouse.external.migrationSecret.name` | `""`，`external` 且 Job 開啟時必填 | 有 access management 權限的帳號的帳密所在的既有 Secret（叢集內 ClickHouse 對應的是 `adminSecret`），只給 migration Job |
+| `clickhouse.external.migrationSecret.usernameKey` | `username` | |
+| `clickhouse.external.migrationSecret.passwordKey` | `password` | |
 | `qdrant.mode` | `""`，必填 | `external`（SaaS，Qdrant Cloud）或 `bundled`（地端自架，Laysi/trustiot-v2#194） |
 | `qdrant.external.url` | `""` | `external` 時必填；只接受 https |
 | `qdrant.external.credentialsSecret.name` | `""` | 放 API key 的 Secret |
@@ -386,9 +413,7 @@ mesh:
 | `observability.collector.image.tag` | `0.161.0` | 實際版本由 digest 決定；換版本前先對照 exporter 的欄位與 `0006_logs.sql`（測試比對）：Renovate 換版本的 PR 會被 chart 測試的 `EXPORTER_VERSION` 擋下，直到有人對照過並改那個常數 |
 | `observability.collector.image.digest` | 見 `values.yaml` | 必填（版本固定），multi-arch index 的 digest，含 arm64；同一版本的新 digest 由 Renovate 單獨更新 |
 | `observability.collector.image.pullPolicy` | `IfNotPresent` | |
-| `observability.collector.clickhouse.user` | `trustiot_collector` | collector 的 ClickHouse 帳號，由 migration Job 建立並授予 `trustiot_otel_collector` 角色；不能是 `default` 或角色本身的名稱 |
-| `observability.collector.clickhouse.passwordSecret.name` | `""`，開啟時必填 | 放這個帳號密碼的既有 Secret；migration Job 用同一個 Secret 建帳號。服務的自訂 `env` 不能讀它 |
-| `observability.collector.clickhouse.passwordSecret.key` | `password` | |
+| `observability.collector.clickhouse.user` | `trustiot_collector` | collector 的 ClickHouse 帳號，由 migration Job 建立並授予 `trustiot_otel_collector` 角色，密碼由 Job 產生在 `<release>-otel-collector-password`（key 是帳號名稱）；不能是 `default` 或角色本身的名稱 |
 | `observability.collector.forward.enabled` | `false` | 把遮蔽後的資料另外以 OTLP 送到客戶的 SIEM |
 | `observability.collector.forward.endpoint` | `""`，開啟時必填 | `http` 時是 OTLP/HTTP 的 base URL（exporter 自己加 `/v1/logs`、`/v1/traces`），`grpc` 時是 `https://主機:埠`；不能帶帳密；SaaS 只接受 https。`http://` 只用在客戶內網可信的路段 |
 | `observability.collector.forward.protocol` | `http` | `http`（OTLP/HTTP protobuf）或 `grpc` |
@@ -405,6 +430,43 @@ mesh:
 
 URL 欄位都不接受 `user:password@` 這種帶帳密的寫法。
 
+## migration Job
+
+`migrate.enabled: true`（預設，SaaS 與地端相同）部署 `templates/migrate.yaml`，程式是 [tools/migrate](../../tools/migrate/README.md)（Laysi/trustiot-v2#60，決策 4、14、29，清單 M8）。每次執行都是冪等的：設定沒變時再跑一次，資料庫裡什麼都不變（測試比對整份 catalog）。
+
+Job 做的事，依序：
+
+1. 以 migration 角色（`bundled` 是 owner `trustiot_owner`，`external` 是 `postgres.external.migrationSecret`）用 verify-full 連上 Postgres，取得 session 層級的 advisory lock，整次執行都持有，ClickHouse 的部分也在鎖內；同時有另一次執行時就等它結束（`migrate.wait.lock`）。資料庫還沒起來時先等（`migrate.wait.databases`）。migration 角色必須擁有資料庫、有 CREATEROLE，不能是 superuser、不能有 BYPASSRLS，也不能擁有其他資料庫，不符就停止。
+   接著在鎖內填密碼 Secret（「產生的密碼」）：缺的、不能用的、屬於較舊的 `migrate.passwordGeneration`、或在不是 Job 填過的 Secret 物件裡的 key 產生新密碼寫進去，之後的步驟把每個角色與帳號設成 Secret 裡的密碼。
+2. 套用 `crates/service-kit/sql/database.sql`（收回 PUBLIC 的 TEMPORARY 等）。
+3. 為每個有 Postgres migration 的服務建立角色與 schema：`<服務>_owner`（不能登入，擁有 schema 與每張表，migration 以它執行）、`<服務>_app`（服務登入用，不擁有任何物件，沒有 BYPASSRLS，`search_path` 是自己的 schema）、需要時還有 `<服務>_platform`（決策 29 的平台角色）。登入角色的密碼來自該服務的密碼 Secret（見下方「產生的密碼」）：先以這個密碼實際登入，登不進去才設定（只送 SCRAM-SHA-256 的 verifier，明文不進 SQL），所以密碼沒變時什麼都不改。已存在的角色若有 SUPERUSER、BYPASSRLS、CREATEROLE、多了成員關係、在叢集的其他資料庫擁有物件或權限、有 `search_path` 以外的角色設定或這個資料庫專屬的設定，或服務角色能在自己的 schema 建立物件、能建立暫存表，Job 停止並寫出原因，不自動修改。
+4. 以 `<服務>_owner` 角色依序套用該服務 `migrations/postgres/` 的每個檔案，一個檔案一個交易，記在 `trustiot_migrate.applied`；已套用的檔案內容若改了，Job 停止（migration 只能新增檔案）；檔案結束時若已離開原本的交易或角色（`END`、`COMMIT AND CHAIN`、`SET LOCAL ROLE` 等），Job 停止且不記錄這個檔案。outbox 的表與權限（`crates/outbox`、`crates/service-kit/sql/outbox-event.sql`）依 tools/migrate 的服務清單接上；每租戶角色的 hook 在這一步依租戶表建立或補回角色（目前沒有服務註冊，AGE 角色在 Laysi/trustiot-v2#176）。
+5. ClickHouse：以有 access management 的帳號（`bundled` 是 `clickhouse.bundled.adminUser`，`external` 是 `clickhouse.external.migrationSecret`）套用 `services/ingest/migrations/clickhouse/`，每個檔案記在 ClickHouse 自己的 `trustiot_migrate.applied`；collector 開啟時建立 `observability.collector.clickhouse.user`，只授予 `trustiot_otel_collector` 角色（設為預設角色），密碼來自 collector 的密碼 Secret。帳號已存在但多了其他角色、權限或設定時，Job 停止，由管理者決定是否刪除；`trustiot_otel_collector` 角色多了 `0006_logs.sql` 以外的權限或角色時也停止。
+
+**順序**：每個服務與 collector 的 pod 有一個 init container `wait-for-migrations`（同一個映像的 `migrate wait-for-job`），每 2 秒向 Kubernetes API 讀一次這個 Job，Job 完成才讓服務的容器啟動；Job 失敗時 init container 也失敗，pod 依 kubelet 的退避重試，修好之後自動繼續。所以 `helm install --wait` 與 `helm upgrade --wait` 都等到 Job 完成、服務就緒才結束，服務不會在比自己舊的 schema 上啟動。Job 不是 Helm hook：叢集內的 Postgres 與 ClickHouse 由同一次安裝建立，`pre-install` hook 會在資料庫存在之前執行；`post-install` hook 又要等 `--wait` 等的服務就緒，而服務在等 Job，兩者互等。
+
+**Job 何時再跑**：Job 的名稱是 `<release>-migrate-<8 位 hash>`，hash 來自 Job 的整份 spec（映像、設定、Secret 的名稱、`migrate.revision`、`migrate.passwordGeneration`、每個在 `mesh.calls` 列出 `postgres` 的服務的映像參照）與平台設定的 checksum。升級時這些有任何改變，就產生新名稱的 Job（Helm 刪掉舊的），服務的 init container 也改等新的 Job，所以服務跟著滾動更新；都沒變時沿用已完成的 Job，服務不重啟。換新版本（映像的 tag 隨 `Chart.appVersion`）一定會跑。Secret 的內容改了（例如 migration 帳號的密碼）chart 看不到，要同時改 `migrate.revision`；Job 產生的密碼則以 `migrate.passwordGeneration` 輪替。完成的 Job 保留到下一次換名為止（沒有 `ttlSecondsAfterFinished`），之後才啟動的 pod（重啟、擴充）仍然找得到它。升級進行中，舊版的 pod 若被重建，它的 init container 會等已被刪除的舊 Job，直到滾動更新把它換掉；這時它的日誌寫出等的是哪個 Job、可能的原因與處理方式。資料庫從備份還原、或改接另一個資料庫之後，也要改 `migrate.revision`：角色與密碼是叢集層級的，不在資料庫備份裡，Job 再跑一次才會補回。
+
+**版本一致**：Job 的映像帶著每個服務的 migration，而 Job 只在自己的 spec 改變時再跑。用 Postgres 的服務換了映像（只換 digest 也算）時，Job 的 spec 跟著變，所以 Job 再跑一次、服務等它跑完才啟動；但 Job 套用的是它自己映像裡的 migration。所以在 `mesh.calls` 列出 `postgres` 的服務，映像的 tag（`services.<name>.image.tag`、`serviceDefaults.image.tag`，空白時 `Chart.appVersion`）必須等於 `migrate.image.tag`，不同時 chart 渲染失敗；否則服務會在另一個版本的 schema 上啟動，沒有 Job 替它套用 migration。只以 digest 換掉服務映像（修補）時，`migrate.image.tag` 與 `migrate.image.digest` 也要換成同一次發佈的。
+
+**一個 Postgres 叢集一個 TrustIoT 資料庫**：Postgres 的角色是叢集層級的，Job 建立的角色名稱（`identity_app` 等）不帶實例名稱，所以同一個 Postgres 叢集上的兩個 TrustIoT 資料庫會共用同一組服務角色、密碼與權限，一個實例的帳號就能讀另一個實例的資料。Job 拒絕這種部署：migration 角色擁有第二個資料庫時停止；另一個 migration 角色遇到已在其他資料庫擁有物件或權限、或不是它建立的角色時也停止，不修改它。`bundled` 每個 release 有自己的 Cluster；`external` 的每個實例要用自己的 Postgres 叢集，也不要以 `ADMIN OPTION` 把一個實例的角色分給另一個（[docs/runbooks/migrations.md](../../docs/runbooks/migrations.md)）。
+
+**權限**：Job 的 pod 與 ServiceAccount 都是 `automountServiceAccountToken: false`；有密碼 Secret 要填時，只有 Job 的容器掛一個 1 小時效期的 projected token 與叢集的 CA，Role `<release>-migrate` 只讓它 `get` 與 `patch` 這些 Secret（以 `resourceNames` 列名）：沒有 `create`（無法以名稱限制，而且能替 namespace 裡任何 ServiceAccount 建 token Secret）、`list`、`watch`，也碰不到別的 Secret；chart 的其他 Role 都不碰 Secret（測試檢查）。服務與 collector 的 pod 仍然 `automountServiceAccountToken: false`；只有 init container 掛同樣的 projected token 與 CA（`kube-root-ca.crt`），Role `<release>-migrate-status` 只讓服務與 collector 的 ServiceAccount `get` 這一個 Job，沒有任何新的 Secret 權限。chart 的 NetworkPolicy 都只限制連入，init container 可以連到 API server。Job 的 pod 在 ambient mesh 內，叢集內的 ClickHouse 以它的 ServiceAccount 放行它；`<release>-postgres` 的 NetworkPolicy 也放行它；沒有任何東西能連進 Job 的 pod。
+
+**服務的資料庫帳號**：在 `mesh.calls` 列出 `postgres` 的服務，chart 給它 `TRUSTIOT__DATABASE__USERNAME=<服務>_app` 與從自己的 Secret `<release>-<服務>-password` 同名 key 讀的 `TRUSTIOT__DATABASE__PASSWORD`；這兩個名稱保留給 chart，自訂 `env` 不能設定。Job 開始前先確認這些角色都在 tools/migrate 的服務清單裡，否則什麼都不改就停止。
+
+**產生的密碼**（docs/architecture/secrets.md）：服務登入角色與 collector 的 ClickHouse 帳號是 Job 自己建立的內部帳號，密碼也由它產生，沒有人建立、複製或輪替它們。
+
+- chart 為每個用 Postgres 的服務與 collector 各宣告一個 Secret（`templates/passwords.yaml`）：沒有 `data`、`stringData`，帶 `helm.sh/resource-policy: keep` 與標籤 `trustiot.io/filled-by: migrate`。每個消費者一個 Secret，所以節點的 kubelet 只讀得到排在它上面的 pod 的密碼。`migrate.enabled` 關掉時也宣告，由取代 Job 的人填入（只有叢集測試這樣做）。
+- Job 在 migration 鎖內讀每個 Secret；缺的 key、不能用的值、`migrate.passwordGeneration` 大於 annotation `trustiot.io/password-generation` 記的代、或 annotation `trustiot.io/password-secret-uid` 不等於 Secret 的 `metadata.uid`（不是 Job 填過的那個物件）時，以作業系統的 CSPRNG 產生 256 位元的新密碼（64 個十六進位字元），用一個帶 `resourceVersion` 的 JSON merge patch（field manager `trustiot-migrate`）寫回，同一個 patch 記下代與 uid（chart 不渲染這兩個 annotation）；Secret 在讀與寫之間被別人改過時 API 拒絕這個 patch，Job 重讀再決定，不會覆蓋別人的寫入。之後把每個角色與帳號設成 Secret 裡的值。日誌只寫角色、帳號與 Secret 的名稱，不寫密碼、密碼的 hash 或 Secret 的資料。
+- Helm 不擁有這些 Secret 的資料：升級與 rollback 渲染出的 Secret 都沒有 `data`，所以 Job 寫的值保留下來（`tests/e2e/postgres.e2e.ts` 在叢集上以釘選的 helm 檢查升級與 rollback 後資料不變）。Flux 的 HelmRelease 沒有開 drift detection，升級失敗時的 rollback 也一樣保留；將來開 drift detection 時見 [deploy/flux/README.md](../flux/README.md)。
+- 輪替：調大 `migrate.passwordGeneration`。Job 名稱跟著變，新的 Job 產生並設定新密碼，服務與 collector 的 pod 以新的 Job 名稱滾動更新、讀到新密碼。從 Job 設定新密碼到舊 pod 被換掉之間，舊 pod 已經開著的 Postgres 連線不受影響（Postgres 只在登入時驗密碼），但舊 pod 開新連線會被拒；舊的 collector 寫 ClickHouse 時也會被拒（新連線要驗密碼，外部 ClickHouse 走 HTTPS 時每個請求都驗），在這段時間重試（最多 5 分鐘），新的 collector 就緒後恢復。Postgres 一個角色只有一個密碼，要完全避免這段時間得輪流使用兩個角色，目前不做；需要零中斷時在低流量時段輪替。代只往上走：`helm rollback`（或 Flux 升級失敗後的 rollback）渲染出較小的值時 Job 保留現有的密碼，記的代不變，之後再升級回來也不換。
+- 只信任 Job 自己填過的 Secret 物件：Job 寫入時記下 Secret 的 uid，之後讀到的 uid 不同（有人刪掉 Secret 再建一個同名的、帶 Helm 的 ownership metadata 讓 `helm install` 接手，或從備份還原）就把每個 key 當成不能用，產生新密碼。只能建立 Secret 的人事先不知道 uid，所以無法讓 Job 採用他選的密碼；能 patch 這些 Secret 的主體（即使沒有 `get`）能寫入自選的密碼或加上 replicator 的 annotation，所以 patch 權限等同能取得密碼，只能給受信任的主體；chart 只給 Job。
+- 資料遺失（有人刪了 key 或整個 Secret、或以 `helm upgrade --force-replace` 換掉了 Secret；這個 chart 不要用 `--force-replace`，原因見 runbook）：改 `migrate.revision` 再升級。Helm 升級時重建被刪掉的 Secret，Job 重跑時為缺的 key 產生新密碼並設定，服務重啟後以新密碼登入。Job 不能建立 Secret，所以 Secret 不存在時它停止並寫出這個處理方式。
+- 停用某個服務時，下一次 Job 讓它的登入角色 `NOLOGIN`（角色、它擁有的物件與權限都留著，重新啟用時 Job 先設密碼再恢復 LOGIN）；關掉 collector 或改它的帳號名稱時，舊的 ClickHouse 帳號改成 `HOST NONE`。Secret 留著（`keep`），Role 不再列它；裡面的密碼已經登不進去，清掉的步驟見 [docs/runbooks/migrations.md](../../docs/runbooks/migrations.md) 的「停用服務之後留下的 Secret」。
+
+**失敗時**：Job 在 `migrate.backoffLimit` 次重試後失敗，服務停在 `Init`，舊版的 pod 繼續服務。看 `kubectl -n <namespace> logs job/<release>-migrate-<hash>`（JSON 行，只寫 stdout）；每一項變更與停止的原因都寫在裡面，不含密碼。處理方式見 [docs/runbooks/migrations.md](../../docs/runbooks/migrations.md)。
+
 ## 叢集內的 Postgres
 
 `postgres.mode: bundled`（預設，SaaS 與地端相同）部署 `templates/postgres.yaml`：一個由 CloudNativePG 管理的 Postgres，映像是我們的 PostgreSQL 18 加 Apache AGE（[deploy/images/postgres](../images/postgres/README.md)，決策 21、清單 M8）。
@@ -418,12 +480,12 @@ chart 產生的物件（`<cluster>` 是 `<release>-postgres`；CloudNativePG 限
 | ImageCatalog `<cluster>` | PostgreSQL major 18 對應的映像（`postgres.bundled.image`）。映像的 tag 是 TrustIoT 的版本，CloudNativePG 從這裡得知 major |
 | Cluster `<cluster>` | 一個 instance、不建 PodDisruptionBudget（單一 instance 的 PDB 會擋住節點 drain）、不開 superuser 存取；bootstrap 建立資料庫 `trustiot` 與它的 owner `trustiot_owner`，locale 用 PostgreSQL 內建的 `C.UTF-8`（排序與字元分類不隨作業系統的 C library 改變，換映像不會讓索引失效）；`shared_preload_libraries` 含 `age`；pg_hba 加上 `hostnossl all all all reject`；pod 帶 `istio.io/dataplane-mode: none` |
 | Database `<cluster>-trustiot` | 由 operator 以 superuser 在 `trustiot` 建立 AGE extension，版本變更時執行 `ALTER EXTENSION age UPDATE`；`databaseReclaimPolicy: retain`，刪掉這個物件不會刪資料庫 |
-| NetworkPolicy `<release>-postgres` | 選 Postgres pod（`cnpg.io/cluster`、`cnpg.io/podRole: instance`），只放行在 `mesh.calls` 列出 `postgres` 的服務連 5432，以及 operator（`postgres.bundled.operator`）連 instance manager 的 8000 |
+| NetworkPolicy `<release>-postgres` | 選 Postgres pod（`cnpg.io/cluster`、`cnpg.io/podRole: instance`），只放行在 `mesh.calls` 列出 `postgres` 的服務與 migration Job 連 5432，以及 operator（`postgres.bundled.operator`）連 instance manager 的 8000 |
 
 operator 依 Cluster 再產生：pod 與 PVC `<cluster>-1`；Service `<cluster>-rw`（永遠指向 primary，服務連這個）、`<cluster>-ro`、`<cluster>-r`；Secret `<cluster>-ca`、`<cluster>-server`、`<cluster>-replication`、`<cluster>-app`。
 
 - **TLS（清單 M3）**：operator 產生自己的 CA（`<cluster>-ca`）與伺服器憑證（`<cluster>-server`，主機名稱含 `<cluster>-rw.<namespace>.svc`），效期 90 天、到期前 7 天自動換發，不停機；CA 換發時沿用同一把私鑰（CloudNativePG 1.30.1 的 `internal/controller/cluster_pki.go`）。服務的平台設定是 `TRUSTIOT_POSTGRES_HOST=<cluster>-rw.<namespace>.svc`、`TRUSTIOT_POSTGRES_SSLMODE=verify-full`；用 Postgres 的服務掛上 `<cluster>-ca` 裡的 `ca.crt`，volume 的 `items` 只選這個 key，`ca.key` 不會進任何服務的容器。kubelet 會更新掛載的檔案，service-kit 每條新連線都重讀 CA 檔，所以換發不必重啟服務。不走 TLS 的 TCP 連線，不論用戶端的 `sslmode`，都被伺服器的 pg_hba 拒絕。
-- **帳號（決策 4、29）**：沒有 superuser 密碼，也沒有 `<cluster>-superuser` Secret，`postgres` 角色只能在 pod 內經 local socket 登入，operator 就是這樣管理資料庫。owner `trustiot_owner` 是一般的登入角色（沒有 SUPERUSER、CREATEROLE、BYPASSRLS），密碼由 operator 產生在 `<cluster>-app`，只給 migration Job 用（Laysi/trustiot-v2#60）。operator 產生的 Secret（`<cluster>-ca`、`-server`、`-app`、`-replication`、`-superuser`）任何服務的自訂 `env` 都讀不到，寫了就渲染失敗；服務只經 chart 拿到 CA 憑證。每個服務自己的角色與密碼、`crates/service-kit/sql/database.sql` 的權限設定由 Laysi/trustiot-v2#60 加入，做法見 [deploy/cloudnative-pg](../cloudnative-pg/README.md) 的「服務的資料庫角色」。
+- **帳號（決策 4、29）**：沒有 superuser 密碼，也沒有 `<cluster>-superuser` Secret，`postgres` 角色只能在 pod 內經 local socket 登入，operator 就是這樣管理資料庫。owner `trustiot_owner` 是登入角色，沒有 SUPERUSER、BYPASSRLS；bootstrap 時以 `postInitApplicationSQL` 給它 CREATEROLE（Laysi/trustiot-v2#60），因為它也是 migration 角色，要建立每個服務的角色。PostgreSQL 16 起 CREATEROLE 不能建立 superuser、BYPASSRLS 或 REPLICATION 角色，也不能改它沒有 ADMIN 的角色。密碼由 operator 產生在 `<cluster>-app`，只給 migration Job 用。2026-10-13 之前 bootstrap 的 Cluster 沒有 CREATEROLE，要照 [docs/runbooks/migrations.md](../../docs/runbooks/migrations.md) 補一次。operator 產生的 Secret（`<cluster>-ca`、`-server`、`-app`、`-replication`、`-superuser`）任何服務的自訂 `env` 都讀不到，寫了就渲染失敗；服務只經 chart 拿到 CA 憑證。每個服務自己的角色、密碼與 `crates/service-kit/sql/database.sql` 的權限設定由 migration Job 處理（見「migration Job」）。
 - **網路**：Postgres pod 不加入 ambient mesh：每條連線本身已經是 verify-full 的 TLS，而在 mesh 外的 operator 要連每個 instance 的 8000，放進 mesh 會被 AuthorizationPolicy 擋下。namespace 的預設拒絕照樣套用到它，`<release>-postgres` 只放行上表的來源；kubelet 的探針從 pod 所在的節點來，NetworkPolicy 不擋節點本身的連線。namespace 內沒有列 `postgres` 的服務與其他 pod 都連不到。
 - **規格**：資源與參數見「外部依賴」的 `postgres.bundled.*`，兩種型態相同。
 - **刪除**：Cluster 與 ImageCatalog 帶 `helm.sh/resource-policy: keep`，`helm uninstall` 或 Flux 移除 release 時保留資料庫（CloudNativePG 刪 Cluster 時會一起刪掉 PVC，資料就沒了）。確定要刪資料時，明確刪除 Cluster：`kubectl -n <namespace> delete cluster <cluster>`，再刪 ImageCatalog。PVC 不會在 `kubectl delete` 回來時就消失：Kubernetes 在 Cluster 刪除後於背景回收它，等 Postgres 的 pod 停止才刪得掉；要確認時以 `kubectl -n <namespace> get pvc -l cnpg.io/cluster=<cluster>` 查到沒有為止。
@@ -432,7 +494,7 @@ operator 依 Cluster 再產生：pod 與 PVC `<cluster>-1`；Service `<cluster>-
 
 磁碟區大小沒有預設值，每個部署在安裝實例的覆寫檔設定 `postgres.bundled.storage.size`（資料與 WAL 共用一個磁碟區）。業務資料與知識圖的大小要等服務上線後才量得到，測試範例先用 20Gi；用量告警見清單 I2。
 
-在叢集上檢查：`kubectl -n <namespace> get cluster <cluster>` 的 STATUS 是 `Cluster in healthy state`，`kubectl -n <namespace> get database <cluster>-trustiot` 的 APPLIED 是 `true`。Helm 4 的 `helm install --wait` 依 Cluster 的 `Ready` 條件等到它健康才結束（2026-10-12 實驗機兩種型態都是這樣，約 20 到 26 秒）；Database 的 AGE 不在等待之列，再晚約 20 秒才套用，所以用到 AGE 的 migration 要等 `age` extension 出現再開始（owner 不是 superuser，不能自己建立它）。叢集測試 `tests/e2e/postgres.e2e.ts` 以真實連線驗證 verify-full、錯誤 CA、錯誤主機名稱與沒列 `postgres` 的 pod 被拒、明文連線被拒、沒有 superuser 帳號、uninstall 保留資料，用法見該目錄的 README，實驗機的結果見 [測試報告](../../docs/test-reports/2026-10-12-58-cnpg-postgres.md)。
+在叢集上檢查：`kubectl -n <namespace> get cluster <cluster>` 的 STATUS 是 `Cluster in healthy state`，`kubectl -n <namespace> get database <cluster>-trustiot` 的 APPLIED 是 `true`。Helm 4 的 `helm install --wait` 依 Cluster 的 `Ready` 條件等到它健康才結束（2026-10-12 實驗機兩種型態都是這樣，約 20 到 26 秒）；Database 的 AGE 不在等待之列，再晚約 20 秒才套用，所以用到 AGE 的 migration 要等 `age` extension 出現再開始（owner 不是 superuser，不能自己建立它；目前沒有服務的 migration 用到 AGE，第一個用到的 issue 要在 migration Job 加上這個等待，Laysi/trustiot-v2#176）。叢集測試 `tests/e2e/postgres.e2e.ts` 以真實連線驗證 verify-full、錯誤 CA、錯誤主機名稱與沒列 `postgres` 的 pod 被拒、明文連線被拒、沒有 superuser 帳號、uninstall 保留資料，用法見該目錄的 README，實驗機的結果見 [測試報告](../../docs/test-reports/2026-10-12-58-cnpg-postgres.md)。
 
 ## 叢集內的 ClickHouse
 
@@ -456,19 +518,20 @@ kubectl -n trustiot create secret generic trustiot-clickhouse-admin --from-liter
 `observability.collector.enabled: true`（預設，SaaS 與地端相同）部署 `templates/otel-collector.yaml`，實作決策 22 的日誌管線：
 
 - 一個副本的 Deployment `<release>-otel-collector`，ClusterIP Service 只開 OTLP/HTTP 4318；每個服務拿到 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT=http://<release>-otel-collector.<namespace>.svc:4318`，service-kit 因此開啟日誌、trace 與指標的匯出（叢集內明文 HTTP，pod 之間由 ztunnel 加 mTLS）。collector 開啟時服務的自訂 `env` 不能改這個變數，每個服務的資料都經過遮蔽。
-- 設定只有一個 ConfigMap（`<release>-otel-collector-config`），變更時 pod 自動重啟。密碼與 SIEM 的標頭不在設定檔裡：設定以 `${env:...}` 引用環境變數，Deployment 以 `secretKeyRef` 從 values 指定的 Secret 取得。
+- 設定只有一個 ConfigMap（`<release>-otel-collector-config`），變更時 pod 自動重啟。密碼與 SIEM 的標頭不在設定檔裡：設定以 `${env:...}` 引用環境變數，Deployment 以 `secretKeyRef` 取得（ClickHouse 密碼從 migration Job 產生的 `<release>-otel-collector-password`，SIEM 標頭從 values 指定的 Secret）。
+- migration Job 開啟時，pod 先以 init container `wait-for-migrations` 等 Job 完成（和服務一樣），所以第一次安裝時不會在密碼產生之前啟動、也不會因為讀不到 key 而報錯；這個 init container 跑的是只有 arm64 的 migration 映像，所以 chart 在 `nodeSelector` 加上 `kubernetes.io/arch: arm64`。
 - 管線：`memory_limiter` → `redaction`（trace 再加 `transform/redact`）→ exporter。日誌與 trace 寫進 ClickHouse 的 `trustiot_logs.otel_logs`、`trustiot_logs.otel_traces`（`services/ingest/migrations/clickhouse/0006_logs.sql`，保存 30 天，以寫入時間計算）；轉送開啟時同一份遮蔽後的資料也送到 SIEM。指標先收下丟棄（`nop`），存放位置由 Laysi/trustiot-v2#183 決定，服務的匯出不會因此報錯。
 - ClickHouse exporter 關掉 `create_schema`，只送 `INSERT`；表由 migration 建立。叢集內 ClickHouse 走 native 協定（9000），`external` 走 `clickhouse.external.url` 的 HTTPS，並掛 `clickhouse.external.caSecret` 的 CA。
 - 根目錄唯讀、非 root、不能提權、drop 所有 capability、沒有 ServiceAccount token；探針是 health_check 擴充的 `GET /`（13133，不在 Service 上）。pod 帶 `istio.io/dataplane-mode: ambient` 加入 ambient mesh。
 
-ClickHouse 帳號（決策 14：一律以 SQL 建立，不寫伺服器設定檔）：`0006_logs.sql` 建角色 `trustiot_otel_collector`，只有兩張日誌表的 `INSERT` 與 `SHOW COLUMNS`（exporter 啟動時以 `DESC TABLE` 讀欄位），沒有 `SELECT`，也碰不到其他資料庫。帳號由 migration Job（Laysi/trustiot-v2#60）以 `observability.collector.clickhouse.passwordSecret` 的密碼建立：
+ClickHouse 帳號（決策 14：一律以 SQL 建立，不寫伺服器設定檔）：`0006_logs.sql` 建角色 `trustiot_otel_collector`，只有兩張日誌表的 `INSERT` 與 `SHOW COLUMNS`（exporter 啟動時以 `DESC TABLE` 讀欄位），沒有 `SELECT`，也碰不到其他資料庫。帳號由 migration Job（Laysi/trustiot-v2#60）以它產生在 `<release>-otel-collector-password` 的密碼建立（以 SHA-256 hash 送出，明文不進 SQL），效果等於：
 
 ```sql
 CREATE USER trustiot_collector IDENTIFIED WITH sha256_password BY '<password>';
 GRANT trustiot_otel_collector TO trustiot_collector;
 ```
 
-migration Job 加入之前要以 bootstrap 管理帳號手動執行這兩句（`tests/e2e/otel.e2e.ts` 就是這樣做）。帳號還不存在時 collector 照常啟動並回報就緒（exporter 記一行 `schema detection failed`），寫入失敗的資料重試 5 分鐘後丟棄；帳號建好後不用重啟就開始寫入（2026-10-11 本機實測）。
+`migrate.enabled: false` 時要以 bootstrap 管理帳號手動執行這兩句，並把密碼寫進 `<release>-otel-collector-password`（`tests/e2e/otel.e2e.ts` 就是這樣做）。帳號還不存在時 collector 照常啟動並回報就緒（exporter 記一行 `schema detection failed`），寫入失敗的資料重試 5 分鐘後丟棄；帳號建好後不用重啟就開始寫入（2026-10-11 本機實測）。
 
 遮蔽規則（決策 22、[Laysi/trustiot#110](https://github.com/Laysi/trustiot/issues/110)）在 `templates/_otel-collector.tpl` 的 `trustiot.collector.redactionRules`，對每個來源都一樣，不只 service-kit 的服務：
 
@@ -525,7 +588,7 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 | `TRUSTIOT_CLICKHOUSE_CA_FILE` | 掛載的 CA 憑證路徑 `/etc/trustiot/clickhouse-ca/ca.crt` | `clickhouse.mode` 為 `external` 且設定了 `caSecret.name` |
 | `SENTRY_ENVIRONMENT` | `observability.sentry.environment` | Sentry 開啟時（`SENTRY_DSN` 來自 Secret，見上） |
 
-`TRUSTIOT_POSTGRES_CA_FILE`（`/etc/trustiot/postgres-ca/ca.crt`）不在 ConfigMap：chart 只設給在 `mesh.calls` 列出 `postgres` 的服務，和 CA 的掛載一起出現，`bundled` 與 `external` 都一樣。`bundled` 模式的叢集內端點，由部署該元件的 issue 加進這張表（Postgres 與 ClickHouse 見上面）。服務連 ClickHouse 的帳號與密碼隨 migration Job 與各服務加入（Laysi/trustiot-v2#60、Laysi/trustiot-v2#91、Laysi/trustiot-v2#119）。
+`TRUSTIOT_POSTGRES_CA_FILE`（`/etc/trustiot/postgres-ca/ca.crt`）不在 ConfigMap：chart 只設給在 `mesh.calls` 列出 `postgres` 的服務，和 CA 的掛載一起出現，`bundled` 與 `external` 都一樣。`bundled` 模式的叢集內端點，由部署該元件的 issue 加進這張表（Postgres 與 ClickHouse 見上面）。服務連 ClickHouse 的帳號與密碼還沒有：ingest 的寫入帳號在 ingest 服務加入時由 migration Job 建立（Laysi/trustiot-v2#91），每租戶唯讀帳號由 Laysi/trustiot-v2#119 加入。
 
 密鑰的環境變數（以 `valueFrom.secretKeyRef` 注入，不在 ConfigMap）：
 

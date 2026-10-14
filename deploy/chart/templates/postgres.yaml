@@ -6,11 +6,13 @@ its CRDs are a platform component installed once per cluster (deploy/cloudnative
   (verify-full) against the CA's certificate only ("trustiot.postgres.caSecret"), and the server
   refuses connections without TLS ("trustiot.postgres.pgHba").
 - No superuser credentials exist: superuser access is off, so the postgres role logs in only over
-  the pod's local socket, where the operator works. The database owner is an ordinary role whose
-  password only the migration Job (Laysi/trustiot-v2#60) uses; services get their own roles.
+  the pod's local socket, where the operator works. The database owner is a role with CREATEROLE
+  but without SUPERUSER or BYPASSRLS, whose password only the migration Job (Laysi/trustiot-v2#60)
+  uses; the Job creates the services' own roles.
 - The pods stay outside the ambient mesh: TLS already protects every connection, and the
   operator, which runs outside the mesh, must reach each instance. The NetworkPolicy below admits
-  only the services that list postgres in mesh.calls, the operator and the kubelet.
+  only the services that list postgres in mesh.calls, the migration Job, the operator and the
+  kubelet.
 - Backups and point-in-time recovery come later through the same operator (Laysi/trustiot-v2#134).
 */ -}}
 {{- if eq .Values.postgres.mode "bundled" }}
@@ -75,6 +77,13 @@ spec:
       # change with the operating system's C library, so an image update cannot corrupt indexes.
       localeProvider: builtin
       builtinLocale: C.UTF-8
+      # The migration Job logs in as the owner and creates each service's roles (tools/migrate,
+      # Laysi/trustiot-v2#60), so the owner gets CREATEROLE, as a superuser, once at bootstrap.
+      # Since PostgreSQL 16 CREATEROLE cannot make a superuser, a BYPASSRLS or REPLICATION role,
+      # or change a role it was not given ADMIN on. A Cluster bootstrapped before this needs the
+      # same statement once (docs/runbooks/migrations.md).
+      postInitApplicationSQL:
+        - ALTER ROLE {{ include "trustiot.postgres.owner" . }} CREATEROLE
   postgresql:
     # AGE's cypher() needs its parser hook in every session; a non-superuser role cannot LOAD it.
     shared_preload_libraries:
@@ -144,9 +153,14 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    {{- if $clients }}
+    {{- $sources := $clients }}
+    {{- if include "trustiot.migrate.enabled" . }}
+    {{- /* The migration Job (tools/migrate). */}}
+    {{- $sources = append $sources "migrate" }}
+    {{- end }}
+    {{- if $sources }}
     - from:
-        {{- range $clients }}
+        {{- range $sources }}
         - podSelector:
             matchLabels:
               {{- include "trustiot.selectorLabels" (dict "root" $ "name" .) | nindent 14 }}

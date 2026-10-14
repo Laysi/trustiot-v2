@@ -4,10 +4,13 @@
 // deploy/images/rust-binary.Containerfile), tags it `localhost/trustiot-e2e/<name>:nightly` and
 // imports it into every k3d node with importImageIntoCluster. Nothing is pushed.
 //
-// Nothing calls it yet: the nightly enables a real service (`services.identity`) once it has a
-// database for it (Laysi/trustiot-v2#65, Laysi/trustiot-v2#77). The workflow then has to provide
-// rustup (the pinned toolchain comes from rust-toolchain.toml) and the pinned zig, cargo-zigbuild
-// and cargo-auditable (`tools:` of setup-proto). Cost: docs/architecture/ci-release.md, nightly.yml.
+// run.ts builds the migration Job's image (deploy/images/migrate, Laysi/trustiot-v2#60) with it;
+// the nightly enables a real service (`services.identity`) the same way once it has a database
+// for it (Laysi/trustiot-v2#65, Laysi/trustiot-v2#77). An image whose inputs have not changed
+// since main last built it comes from the cache instead (image-cache.ts). For a build the
+// workflow provides rustup (the pinned toolchain comes from rust-toolchain.toml) and the pinned
+// zig, cargo-zigbuild and cargo-auditable (`tools:` of setup-proto). Cost:
+// docs/architecture/ci-release.md, nightly.yml.
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,12 +28,15 @@ import {
 } from "../release/lib.ts";
 import { rustCrossCompileCommand, staticElfProblem, toolchainChannel } from "../release/rust-build.ts";
 import { exec, pinnedTool, retry, run } from "./exec.ts";
+import { loadCachedImage, saveImageForCache } from "./image-cache.ts";
 import { importImageIntoCluster } from "./platform.ts";
 import type { ImportCommands, Platform } from "./platform.ts";
 
 /** Where the nightly keeps service images; build-context.ts accepts `localhost/trustiot-e2e/<image>:<tag>`. */
 export const SERVICE_IMAGE_PREFIX = "localhost/trustiot-e2e";
 export const SERVICE_IMAGE_TAG = "nightly";
+/** The migration Job's image (deploy/images/migrate), which tests/values/smoke.yaml names. */
+export const MIGRATE_IMAGE_NAME = "migrate";
 
 /** The local tag of a service image, for example `localhost/trustiot-e2e/identity:nightly`. */
 export function serviceImageRef(name: string): string {
@@ -59,6 +65,19 @@ export interface ServiceImageTools {
 }
 
 /** Finds the tools: rustup and cargo on PATH, the rest at the versions pinned in .prototools. */
+/** The pinned tools a build needs besides rustup (`tools:` of nightly.yml's setup-proto step). */
+export const BUILD_TOOLS = ["zig", "cargo-zigbuild", "cargo-auditable"];
+
+/**
+ * Installs the pinned build tools, one `proto install <tool>` each (proto installs a single tool
+ * per call when it is given a name; the version comes from .prototools).
+ */
+export async function installBuildTools(context: Pick<Platform, "repoRoot" | "log">, commands: Pick<ImportCommands, "run"> = { run }): Promise<void> {
+  for (const tool of BUILD_TOOLS) {
+    await commands.run(context.log, ["proto", "install", tool], { cwd: context.repoRoot, timeoutMs: 600_000 });
+  }
+}
+
 export async function findServiceImageTools(repoRoot: string): Promise<ServiceImageTools> {
   const onPath = (name: string): string => {
     const path = Bun.which(name);
@@ -66,7 +85,7 @@ export async function findServiceImageTools(repoRoot: string): Promise<ServiceIm
     return path;
   };
   const [zig, cargoZigbuild, cargoAuditable] = await Promise.all(
-    ["zig", "cargo-zigbuild", "cargo-auditable"].map((tool) => pinnedTool(tool, repoRoot)),
+    BUILD_TOOLS.map((tool) => pinnedTool(tool, repoRoot)),
   );
   return { rustup: onPath("rustup"), cargo: onPath("cargo"), zig: zig!, cargoZigbuild: cargoZigbuild!, cargoAuditable: cargoAuditable!, containerTool: "docker" };
 }
@@ -161,20 +180,43 @@ export async function buildServiceImage(
   return image;
 }
 
+/** Where nightly.yml restores and saves the image tarballs, and whether this run writes one. */
+export interface ImageCache {
+  dir: string;
+  /** Write the tarball after a build: scheduled and manual runs on main only (nightly.yml). */
+  save: boolean;
+}
+
 /**
- * Builds the image of the Rust service `name` and imports it into every node of the nightly's
- * k3d cluster; returns the tag. The chart runs it with `services.<name>.image` set to
- * serviceImageValues(name). For Laysi/trustiot-v2#65 and Laysi/trustiot-v2#77.
+ * Imports the image of the Rust service `name` into every node of the nightly's k3d cluster;
+ * returns the tag. With a cache, the image comes from the tarball nightly.yml restored for the
+ * exact key of its inputs (image-cache.ts), and no Rust tool is looked up or run; without one, or
+ * on a miss, it is built, and written for the cache when `save` is set. A tarball that cannot be
+ * used is reported and the image built instead, after installing the build tools nightly.yml
+ * skipped on the hit. The chart runs it with
+ * `services.<name>.image` set to serviceImageValues(name). For Laysi/trustiot-v2#65 and
+ * Laysi/trustiot-v2#77.
  */
 export async function loadServiceImage(
   platform: Pick<Platform, "repoRoot" | "log" | "k3d" | "cluster">,
   name: string,
-  options: { tools?: ServiceImageTools; commands?: ImportCommands; pauseMs?: number } = {},
+  options: { tools?: ServiceImageTools; commands?: ImportCommands; pauseMs?: number; cache?: ImageCache } = {},
 ): Promise<string> {
   const commands = options.commands ?? { run, exec };
-  const tools = options.tools ?? (await findServiceImageTools(platform.repoRoot));
   const pause = options.pauseMs === undefined ? {} : { pauseMs: options.pauseMs };
-  const image = await buildServiceImage(platform, name, tools, commands, pause);
+  const image = serviceImageRef(name);
+  const cache = options.cache;
+  const cached = cache === undefined ? "missing" : await loadCachedImage(platform.log, cache.dir, name, image, commands);
+  if (cached !== "loaded") {
+    if (cached === "unusable" && options.tools === undefined) {
+      // nightly.yml installs the build tools only on a miss; a hit whose tarball turned out
+      // unusable installs them here (the pinned versions, through proto).
+      await installBuildTools(platform, commands);
+    }
+    const tools = options.tools ?? (await findServiceImageTools(platform.repoRoot));
+    await buildServiceImage(platform, name, tools, commands, pause);
+    if (cache?.save === true) await saveImageForCache(platform.log, cache.dir, name, image, commands);
+  }
   await importImageIntoCluster(platform, image, commands, pause);
   return image;
 }

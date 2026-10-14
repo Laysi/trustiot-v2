@@ -1103,6 +1103,109 @@ stringData:
     expect(checkTemplateText("deploy/chart/templates/_service.tpl", "kind: Deployment\nspec: {{ .x }}\n")).toEqual([]);
   });
 
+  test("a template may declare only an empty Secret that the migration Job fills", () => {
+    const file = "deploy/chart/templates/passwords.yaml";
+    const empty = [
+      '{{- range include "trustiot.migrate.passwordSecrets" . | fromYamlArray }}',
+      "---",
+      "apiVersion: v1",
+      "kind: Secret",
+      "metadata:",
+      "  name: {{ .name }}",
+      "  labels:",
+      '    {{- include "trustiot.componentLabels" (dict "root" $ "name" .component) | nindent 4 }}',
+      "    trustiot.io/filled-by: migrate",
+      "  annotations:",
+      "    helm.sh/resource-policy: keep",
+      "type: Opaque",
+      "{{- end }}",
+      "",
+    ].join("\n");
+    expect(checkSecretManifests(file, empty)).toEqual([]);
+    expect(checkTemplateText(file, empty)).toEqual([]);
+    // The chart's own template passes.
+    const chart = readFileSync(join(import.meta.dir, "..", "..", file), "utf8");
+    expect(checkSecretManifests(file, chart)).toEqual([]);
+    // Anything that carries or could add a value fails, and so does a Secret without the label.
+    for (const [what, source] of [
+      ["data", empty.replace("type: Opaque", "type: Opaque\ndata:\n  x: eA==")],
+      ["stringData", empty.replace("type: Opaque", "stringData:\n  x: y\ntype: Opaque")],
+      ["a templated data key", empty.replace("type: Opaque", "type: Opaque\ndata: {{ .Values.x }}")],
+      ["a templated type", empty.replace("type: Opaque", "type: {{ .Values.type }}")],
+      ["an action at the Secret's own level", empty.replace("type: Opaque", "type: Opaque\n{{ toYaml .Values.extra }}")],
+      ["an action that renders at that level", empty.replace("type: Opaque", "type: Opaque\n{{- toYaml .Values.extra | nindent 0 }}")],
+      ["no filled-by label", empty.replace("    trustiot.io/filled-by: migrate\n", "")],
+      ["another filler", empty.replace("filled-by: migrate", "filled-by: someone")],
+      // The independent verifier's probes (Laysi/trustiot-v2#60 round 4, R1): each passed the
+      // earlier heuristic, and helm rendered data and a random annotation from the first ones.
+      ["an annotation from values", empty.replace("keep\n", "keep\n    trustiot.io/x: {{ .Values.anything | quote }}\n")],
+      ["an annotation from randAlphaNum", empty.replace("keep\n", "keep\n    trustiot.io/x: {{ randAlphaNum 32 | quote }}\n")],
+      ["an annotation from a lookup", empty.replace("keep\n", 'keep\n    trustiot.io/x: {{ (lookup "v1" "Secret" .Release.Namespace "other").data | toJson | quote }}\n')],
+      ["a label from randAlphaNum", empty.replace("filled-by: migrate\n", "filled-by: migrate\n    x: {{ randAlphaNum 32 }}\n")],
+      ["data after a comment action", empty.replace("type: Opaque", "type: Opaque\n{{/* note */}}data: {x: eA==}")],
+      ["data after an if action", empty.replace("type: Opaque", "type: Opaque\n{{ if true }}data: {x: eA==}{{ end }}")],
+      ["stringData after a variable action", empty.replace("type: Opaque", "type: Opaque\n{{ $v := 1 }}stringData: {x: {{ randAlphaNum 32 }}}")],
+      ["data after an else action", empty.replace("type: Opaque", "type: Opaque\n{{ if false }}{{ else }}data: {x: eA==}{{ end }}")],
+      // Lines that look like the allowed ones but are not them, word for word.
+      ["another name", empty.replace("name: {{ .name }}", "name: {{ .Values.name }}")],
+      ["text after the end", empty.replace("{{- end }}", "{{- end }}data: {x: eA==}")],
+      ["a silent action on its own line", empty.replace("type: Opaque", "type: Opaque\n{{- if true }}\n{{- end }}")],
+    ] as const) {
+      // The Secret is refused; a forbidden function is reported on its own line as well.
+      expect(
+        messages(checkSecretManifests(file, source)).filter((m) => !/ template function /.test(m)),
+        what,
+      ).toEqual([expect.stringMatching(/^deploy\/chart\/templates\/passwords\.yaml:4 a template that declares a Secret/)]);
+    }
+    // The label in another document does not excuse a Secret.
+    const two = `${empty}---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: other\ndata:\n  {{- toYaml .Values.x | nindent 2 }}\n`;
+    expect(messages(checkSecretManifests(file, two))).toEqual([
+      expect.stringMatching(/^deploy\/chart\/templates\/passwords\.yaml:16 a template that declares a Secret/),
+    ]);
+  });
+
+  test("no template may make or read secret material: lookup, rand*, gen*, derivePassword and the like", () => {
+    const file = "deploy/chart/templates/x.yaml";
+    for (const [fn, action] of [
+      ["lookup", '{{ (lookup "v1" "Secret" .Release.Namespace "s").data }}'],
+      ["randAlphaNum", "{{ randAlphaNum 32 }}"],
+      ["randBytes", "{{- randBytes 32 | b64enc -}}"],
+      ["randInt", "{{ randInt 0 9 }}"],
+      ["uuidv4", "{{ uuidv4 }}"],
+      ["shuffle", '{{ shuffle "abc" }}'],
+      ["genPrivateKey", '{{ genPrivateKey "ed25519" }}'],
+      ["genCA", '{{ (genCA "ca" 365).Key }}'],
+      ["genSelfSignedCert", '{{ genSelfSignedCert "x" nil nil 365 }}'],
+      ["genSignedCert", '{{ genSignedCert "x" nil nil 365 $ca }}'],
+      ["derivePassword", '{{ derivePassword 1 "long" "p" "u" "s" }}'],
+      ["htpasswd", '{{ htpasswd "u" "p" }}'],
+      ["bcrypt", '{{ bcrypt "p" }}'],
+      ["encryptAES", '{{ encryptAES "k" "t" }}'],
+      ["getHostByName", '{{ getHostByName "example.test" }}'],
+    ] as const) {
+      // In a ConfigMap too, and in a helper, spread over lines.
+      const configMap = `apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\ndata:\n  x: ${action}\n`;
+      expect(messages(checkSecretManifests(file, configMap)), fn).toEqual([expect.stringMatching(new RegExp(`^${file}:6 template function ${fn} `))]);
+      const helper = `{{- define "x" -}}\n{{-\n  ${action.replace(/^\{\{-? ?/, "").replace(/ ?-?\}\}$/, "")}\n-}}\n{{- end }}\n`;
+      expect(messages(checkTemplateText("deploy/chart/templates/_x.tpl", helper)), fn).toEqual([
+        expect.stringMatching(new RegExp(`^deploy/chart/templates/_x\\.tpl:2 template function ${fn} `)),
+      ]);
+    }
+    // A "}}" inside a string does not end the action (Go's template lexer reads strings whole).
+    for (const action of [
+      '{{ printf "}}" (lookup "v1" "Secret" .Release.Namespace "s") }}',
+      "{{ printf `}}` (randAlphaNum 8) }}",
+      "{{ printf \"\\\"}}\" (randAlphaNum 8) }}",
+      "{{ /* }} */ randAlphaNum 8 }}",
+    ]) {
+      const configMap = `apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\ndata:\n  x: ${action}\n`;
+      expect(messages(checkSecretManifests(file, configMap)), action).toEqual([expect.stringMatching(/^deploy\/chart\/templates\/x\.yaml:6 template function (lookup|randAlphaNum) /)]);
+    }
+    // Names that only contain one of the words, and comments that mention one, are fine.
+    const fine = `{{/* never lookup or randAlphaNum here */}}\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Values.lookupTable | default "random" }}\n`;
+    expect(checkSecretManifests(file, fine)).toEqual([]);
+  });
+
   test("template declarations are found with comments and next to template actions, references by name are not", () => {
     const commented = [
       "{{- if .Values.enabled }}",

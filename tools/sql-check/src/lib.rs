@@ -13,7 +13,7 @@
 //! | [`Rule::DynamicQueryBuilder`] | `QueryBuilder::new`/`with_arguments`, `push`, `push_unseparated`, and `separated` with anything but static SQL; values go through `push_bind` |
 //! | [`Rule::LeakedString`] | `.leak()` and `Box::leak` in files that use sqlx: a leaked `String` passes runtime text as `&'static str` |
 //! | [`Rule::SqlBuiltFromStrings`] | `format!`, `format_args!`, `write!`, `writeln!`, `+`, `push_str`, and `insert_str` with text that starts like SQL (`SELECT`, `WHERE`, ...) |
-//! | [`Rule::SessionSetting`] | SQL that sets or resets `trustiot.*` settings or the role, calls `set_config` (except with the literal name of a setting in [`SET_CONFIG_SETTINGS`], or of the file's entry in [`SET_CONFIG_ALLOWED`]), or names `pg_settings`, outside [`SESSION_SETTING_ALLOWED`]: only service-kit's tenant module sets the tenant. The check reads string literals, the joined text of each `concat!`, the files `include_str!`/`include_bytes!` name, and the static text a file passes to query builders, joined in source order; a query builder fragment that names `trustiot` is reported too |
+//! | [`Rule::SessionSetting`] | SQL that sets or resets `trustiot.*` settings or the role, calls `set_config` (except with the literal name of a setting in [`SET_CONFIG_SETTINGS`], or of the file's entry in [`SET_CONFIG_ALLOWED`]), or names `pg_settings`, outside [`SESSION_SETTING_ALLOWED`]: only service-kit's tenant module sets the tenant, and only the migration Job switches roles. The check reads string literals, the joined text of each `concat!`, the files `include_str!`/`include_bytes!` name, and the static text a file passes to query builders, joined in source order; a query builder fragment that names `trustiot` is reported too |
 //! | [`Rule::UncheckedInclude`] | `include_str!`/`include_bytes!` of a file the check cannot read (a path that is not a literal, or a missing file), whose SQL it therefore cannot check |
 //!
 //! Test code (files under a `tests` directory, `#[cfg(test)]` modules, and the dev-only crates
@@ -35,8 +35,20 @@ use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
 use syn::{Expr, Lit, LitStr, Macro, Pat, Token, UseTree};
 
-/// Files allowed to contain SQL that sets the tenant: the kit's tenant transactions.
-pub const SESSION_SETTING_ALLOWED: &[&str] = &["crates/service-kit/src/tenant.rs"];
+/// Files allowed to contain SQL that sets the tenant or the role:
+/// - the kit's tenant transactions;
+/// - the migration Job's Postgres part, which runs each service's migrations as that service's
+///   owner role (`set_config('role', ...)` with the role name bound) and sets the schema as
+///   the transaction's `search_path`. It is a deployment tool that connects as the database
+///   owner, never a service's runtime code, and sets no tenant;
+/// - the migration Job's list of ClickHouse DDL files, which only includes them: a file's
+///   comment names `SET ROLE NONE` (ClickHouse, not Postgres). The rest of the Job's registry
+///   (Postgres migrations, per-tenant role hooks) is checked like any other file.
+pub const SESSION_SETTING_ALLOWED: &[&str] = &[
+    "crates/service-kit/src/tenant.rs",
+    "tools/migrate/src/postgres.rs",
+    "tools/migrate/src/clickhouse_files.rs",
+];
 
 /// Crates, relative to the workspace root, whose sources are test code: crates used only as
 /// `[dev-dependencies]` (`tools/repo-check` enforces it), so their SQL never runs in a service.
@@ -166,6 +178,19 @@ pub const EXCEPTIONS: &[Exception] = &[
         ],
         reason: "ClickHouse, not Postgres: creates per-run users, roles, and tenants, and runs \
                  SET ROLE NONE as an attack that must fail",
+    },
+    Exception {
+        path: "tools/migrate/tests/registry.rs",
+        rules: &[Rule::SessionSetting],
+        reason: "lists SET ROLE, set_config and pg_settings as text that no service's Postgres \
+                 migration may contain, and checks every migration file against the list",
+    },
+    Exception {
+        path: "tools/migrate/tests/file_escapes.rs",
+        rules: &[Rule::SessionSetting],
+        reason: "test migration files run SET LOCAL ROLE and SET SESSION ROLE, as a broken \
+                 service migration would, to test that the migration Job stops the run and \
+                 records nothing (Laysi/trustiot-v2#60)",
     },
     Exception {
         path: "services/identity/tests/adversarial.rs",
