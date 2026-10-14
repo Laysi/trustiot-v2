@@ -120,6 +120,7 @@ const eventsJson = {
   items: [
     { type: "Warning", reason: "BackOff", involvedObject: { kind: "Pod", name: "trustiot-identity-7d9f-abcde" }, message: "Back-off restarting failed container identity in pod trustiot-identity-7d9f-abcde", lastTimestamp: "2026-10-15T01:12:40Z", count: 5, metadata: { annotations: { note: ANNOTATION } } },
     { type: "Warning", reason: "Unhealthy", involvedObject: { kind: "Pod", name: "trustiot-identity-7d9f-abcde" }, message: `Readiness probe failed: ${PROBE_OUTPUT}`, lastTimestamp: "2026-10-15T01:12:30Z" },
+    { type: "Warning", reason: "ProbeWarning", involvedObject: { kind: "Pod", name: "trustiot-identity-7d9f-abcde" }, message: `Liveness probe warning: Probe terminated redirects, Response body: ${PROBE_OUTPUT}`, lastTimestamp: "2026-10-15T01:12:25Z" },
     { type: "Warning", reason: "Unhealthy", involvedObject: { kind: "Pod", name: "trustiot-identity-7d9f-abcde" }, message: "Readiness probe failed: HTTP probe failed with statuscode: 503", lastTimestamp: "2026-10-15T01:12:20Z" },
     { type: "Warning", reason: "Failed", involvedObject: { kind: "Pod", name: "trustiot-assets-5c8d-fghij" }, message: `Failed to pull image "registry.example.test/trustiot/assets:nightly": pull access denied, repository does not exist or may require authorization: server message: insufficient_scope: authorization failed (see https://registry.example.test/token?service=x&scope=y&token=${URL_TOKEN})`, lastTimestamp: "2026-10-15T01:12:10Z" },
     { type: "Normal", reason: "Scheduled", involvedObject: { kind: "Pod", name: "trustiot-identity-7d9f-abcde" }, message: `Successfully assigned ${NAMESPACE}/trustiot-identity-7d9f-abcde to k3d-nightly-server-0`, lastTimestamp: "2026-10-15T01:11:00Z" },
@@ -256,6 +257,7 @@ describe("the diagnostics of a failed shape", () => {
     expect(order.every((index) => index >= 0)).toBe(true);
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(events).toContain("BackOff Pod/trustiot-identity-7d9f-abcde x5: Back-off restarting failed container identity");
+    expect(events).toContain("ProbeWarning Pod/trustiot-identity-7d9f-abcde: Liveness probe warning: (probe output not shown)");
   });
 });
 
@@ -321,6 +323,8 @@ describe("free text", () => {
     const viaPath = probeMessage(`Readiness probe failed: Get "http://10.42.0.5:8080/${PROBE_OUTPUT}": EOF`);
     expect(viaPath).toBe("Readiness probe failed: EOF");
     expect(probeMessage(`Startup probe failed: line one\n${PROBE_OUTPUT}`)).toBe("Startup probe failed: (probe output not shown)");
+    // A probe that passed with a warning: an HTTP probe stopped at a redirect writes the response body.
+    expect(probeMessage(`Readiness probe warning: Probe terminated redirects, Response body: ${PROBE_OUTPUT}`)).toBe("Readiness probe warning: (probe output not shown)");
     // A message that is not in the kubelet's wording is not shown at all.
     expect(probeMessage(`Readiness probe failed <${PROBE_OUTPUT}>: HTTP probe failed with statuscode: 503`)).toBe("(probe message not shown)");
     expect(probeMessage(PROBE_OUTPUT)).toBe("(probe message not shown)");

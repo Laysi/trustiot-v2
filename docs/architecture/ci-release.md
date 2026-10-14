@@ -517,7 +517,7 @@ NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
 **事件的 message 還可能帶什麼**（逐一檢查過的結論）：
 
 - kubelet 與控制器自己寫的句子（`Back-off restarting failed container`、`0/1 nodes are available: 1 Insufficient memory`、`secret "x" not found`）：名稱與數字，保留。
-- 探針失敗：`HTTP probe failed with statuscode: 503` 是 kubelet 寫的，保留；指令探針（exec）的 message 是指令印出的內容，保留就等於收了應用程式的輸出。所以探針失敗的原因不是照抄，而是整句比對 kubelet 與網路層（Go 的 `dial tcp ...: connection refused`、`context deadline exceeded`、`EOF`）的句型後，以固定的措辭顯示（狀態碼只取三位數字）；比對不上的，包括指令探針的輸出與在這些句型前後多出來的字，只留 `Readiness probe failed: (probe output not shown)`，不是 kubelet 的句式的整句不顯示。不用「前綴符合就整句保留」，因為指令可以印出 `context deadline exceeded <任何值>`。
+- 探針失敗：`HTTP probe failed with statuscode: 503` 是 kubelet 寫的，保留；指令探針（exec）的 message 是指令印出的內容，保留就等於收了應用程式的輸出。所以探針失敗的原因不是照抄，而是整句比對 kubelet 與網路層（Go 的 `dial tcp ...: connection refused`、`context deadline exceeded`、`EOF`）的句型後，以固定的措辭顯示（狀態碼只取三位數字）；比對不上的，包括指令探針的輸出與在這些句型前後多出來的字，只留 `Readiness probe failed: (probe output not shown)`，不是 kubelet 的句式的整句不顯示。不用「前綴符合就整句保留」，因為指令可以印出 `context deadline exceeded <任何值>`。探針通過但帶警告的事件（reason `ProbeWarning`）同樣處理：HTTP 探針停在轉址時，kubelet 寫的是 `Probe terminated redirects, Response body: <回應內容>`，只留 `Readiness probe warning: (probe output not shown)`。
 - 映像拉取失敗的 message 帶映像名稱與 registry 的回應，其中可能有帶 token 的 URL：URL 的使用者資訊與查詢字串（`?token=...`）一律移除，其餘保留。
 - 每個自由文字欄位壓成一行、最多 300 字元（超過的留開頭 200 與結尾 100：映像拉取的錯誤是一長串，最後一段才是原因，例如 `no such host`），所以多行的 message 不能偽造出新的一節；報告把診斷放在程式碼區塊裡，內容裡的三個反引號會被換掉，不能跳出區塊。
 

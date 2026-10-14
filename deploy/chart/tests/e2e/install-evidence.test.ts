@@ -162,11 +162,19 @@ describe("free text", () => {
 
   test("a failed probe's output is shown only when the kubelet or the network wrote it", () => {
     const output = `${crypto.randomUUID()}${crypto.randomUUID()}`;
-    const event = (message: string) => ({ type: "Warning", reason: "Unhealthy", involvedObject: { kind: "Pod", name: "p" }, message, lastTimestamp: "2026-10-15T00:00:00Z" });
-    const lines = formatEvents({ items: [event(`Readiness probe failed: ${output}`), event("Readiness probe failed: HTTP probe failed with statuscode: 503")] });
+    const event = (message: string, reason = "Unhealthy") => ({ type: "Warning", reason, involvedObject: { kind: "Pod", name: "p" }, message, lastTimestamp: "2026-10-15T00:00:00Z" });
+    const lines = formatEvents({
+      items: [
+        event(`Readiness probe failed: ${output}`),
+        event("Readiness probe failed: HTTP probe failed with statuscode: 503"),
+        // An HTTP probe that stops at a redirect passes with a warning that carries the response body.
+        event(`Liveness probe warning: Probe terminated redirects, Response body: ${output}`, "ProbeWarning"),
+      ],
+    });
     expect(lines.join("\n")).not.toContain(output);
     expect(lines[0]).toContain("Readiness probe failed: (probe output not shown)");
     expect(lines[1]).toContain("Readiness probe failed: HTTP probe failed with statuscode: 503");
+    expect(lines[2]).toContain("ProbeWarning Pod/p: Liveness probe warning: (probe output not shown)");
   });
 
   test("a multi-line message cannot inject a line into the evidence", () => {

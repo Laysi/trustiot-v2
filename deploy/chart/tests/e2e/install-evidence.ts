@@ -7,8 +7,8 @@
 // told apart from one that is safe to publish. What the evidence can still hold is text that
 // Kubernetes controllers and the kubelet write (conditions, event messages, waiting reasons), and
 // two kinds of text in them are removed too: a URL's user info and query string (a registry or
-// webhook URL can carry a token), and the output of a failed probe (a command probe's event
-// message is what the command printed).
+// webhook URL can carry a token), and the output of a probe (a command probe's event message is
+// what the command printed, and an HTTP probe's warning carries the response body).
 //
 // The nightly diagnostics (scripts/nightly/diagnostics.ts, Laysi/trustiot-v2#410) build on the
 // same formatting and the same rules.
@@ -148,10 +148,12 @@ const PROBE_ERRORS: readonly (readonly [RegExp, string])[] = [
  * the network stack wrote (`HTTP probe failed with statuscode: 503`, `connection refused`), shown in
  * a fixed wording. Anything else, a command probe's output above all, is cut to the part the
  * kubelet wrote: `Readiness probe failed: (probe output not shown)`. The caller passes the message
- * of an `Unhealthy` event, which is always a probe's.
+ * of a `PROBE_EVENT_REASONS` event, which is always a probe's. A `ProbeWarning` is a probe that
+ * passed with a warning; an HTTP probe that stops at a redirect writes
+ * `Readiness probe warning: Probe terminated redirects, Response body: <body>`, so it is cut too.
  */
 export function probeMessage(message: string): string {
-  const match = /^((?:Readiness|Liveness|Startup) probe (?:failed|errored and resulted in unknown state)): ([\s\S]*)$/.exec(message);
+  const match = /^((?:Readiness|Liveness|Startup) probe (?:failed|warning|errored and resulted in unknown state)): ([\s\S]*)$/.exec(message);
   // Not the kubelet's wording, so not known to be free of an application's text.
   if (match === null) return "(probe message not shown)";
   const [, head = "", rawOutput = ""] = match;
@@ -199,6 +201,9 @@ export function formatPods(list: unknown): string[] {
   });
 }
 
+/** The reasons of the kubelet's events whose message ends in a probe's output. */
+export const PROBE_EVENT_REASONS: ReadonlySet<string> = new Set(["Unhealthy", "ProbeWarning"]);
+
 /** Events, oldest first, the newest `MAX_EVENTS` of them. */
 export function formatEvents(list: unknown): string[] {
   const events = itemsOf(list).map((event) => {
@@ -206,7 +211,7 @@ export function formatEvents(list: unknown): string[] {
     const times = Number(text(event.count)) > 1 ? ` x${text(event.count)}` : "";
     return {
       when,
-      line: `${when || "(no time)"} ${oneLine(event.type) || "Normal"} ${oneLine(event.reason)} ${oneLine(field(event, "involvedObject", "kind"))}/${oneLine(field(event, "involvedObject", "name"))}${times}: ${oneLine(event.reason === "Unhealthy" ? probeMessage(text(event.message)) : event.message)}`,
+      line: `${when || "(no time)"} ${oneLine(event.type) || "Normal"} ${oneLine(event.reason)} ${oneLine(field(event, "involvedObject", "kind"))}/${oneLine(field(event, "involvedObject", "name"))}${times}: ${oneLine(PROBE_EVENT_REASONS.has(text(event.reason)) ? probeMessage(text(event.message)) : event.message)}`,
     };
   });
   // Timestamps are RFC 3339 in UTC, so their text sorts like the time.
