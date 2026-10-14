@@ -2540,6 +2540,10 @@ describe("ingress gateway (decision 27)", () => {
     "route list, %s: every routed request is behind the cookie check except the listed exceptions",
     (_name, { shape, files, args }) => {
       const manifests = render(files, args);
+      // The evaluation reads one hostname per HTTPRoute and one path match per rule; a second one,
+      // or a header or method match, would be left out of the proof without failing it.
+      for (const route of manifests.filter((m) => m.kind === "HTTPRoute")) expect((route.spec as { hostnames: string[] }).hostnames).toHaveLength(1);
+      for (const { rule } of rules(manifests)) expect(rule.matches.map((match) => Object.keys(match))).toEqual([["path"]]);
       const routes: RouteRule[] = rules(manifests).map(({ host, rule }) => ({
         hostname: host,
         path: rule.matches[0]?.path.value ?? "",
