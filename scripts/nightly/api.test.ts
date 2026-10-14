@@ -18,7 +18,7 @@ import {
   newSession,
   routesOfValues,
   SESSION_COOKIE,
-  SIGNING_KEY_SECRET,
+  SIGNING_KEY_STORE,
   TENANTS_PATH,
 } from "./api.ts";
 import { pinnedTool } from "./exec.ts";
@@ -288,7 +288,7 @@ describe("the API check's values on each deployment shape", () => {
         expect(routes.some((r) => r.includes(`"value":"${path}"`) && r.includes(settings.TRUSTIOT_APP_HOST!)), path).toBe(true);
       }
       // The smoke creates the signing key Secret itself, before the dummy Secrets.
-      expect([...missingSecrets(objects).keys()]).toContain(SIGNING_KEY_SECRET);
+      expect([...missingSecrets(objects).keys()]).toContain(SIGNING_KEY_STORE);
       // What the check reads from the release.
       expect(settings.TRUSTIOT_POSTGRES_DATABASE).toBeTruthy();
       expect(ingressHostsOf(objects)).toHaveLength(3);

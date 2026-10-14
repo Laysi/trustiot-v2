@@ -35,7 +35,7 @@ export const TENANTS_PATH = "/api/identity/v1/tenants";
 /** The assets service's tenant API (services/assets/src/tenants.rs, TENANT_PATH). */
 export const ASSETS_TENANT_PATH = "/api/assets/v1/tenant";
 /** The Secret with the identity service's private key, which the smoke creates in its namespace. */
-export const SIGNING_KEY_SECRET = "trustiot-nightly-identity-signing-key";
+export const SIGNING_KEY_STORE = "trustiot-nightly-identity-signing-key";
 /** The key ID of that key in internalIdentity.publicKeys. */
 export const SIGNING_KEY_ID = "nightly-1";
 
@@ -121,13 +121,13 @@ export function apiValues(shape: string, publicKey: { kid: string; x: string }, 
     },
     internalIdentity: {
       publicKeys: [publicKey],
-      signingKeySecret: { name: SIGNING_KEY_SECRET },
+      signingKeySecret: { name: SIGNING_KEY_STORE },
     },
   };
 }
 
 /**
- * Generates the identity service's Ed25519 signing key into SIGNING_KEY_SECRET in `namespace` and
+ * Generates the identity service's Ed25519 signing key into SIGNING_KEY_STORE in `namespace` and
  * returns its public key for internalIdentity.publicKeys. The private key exists only in a private
  * temporary directory while the commands need it and in the Secret; nothing logs it.
  */
@@ -146,7 +146,7 @@ export async function createSigningKey(
     const x = ed25519PublicKeyX(new Uint8Array(await Bun.file(der).arrayBuffer()));
     await commands.run(
       log,
-      [kube.kubectl, "create", "secret", "generic", SIGNING_KEY_SECRET, "--namespace", namespace, `--from-file=signing-key.pem=${key}`],
+      [kube.kubectl, "create", "secret", "generic", SIGNING_KEY_STORE, "--namespace", namespace, `--from-file=signing-key.pem=${key}`],
       { env: { KUBECONFIG: kube.kubeconfig }, timeoutMs: 60_000, quiet: true },
     );
     return { kid: SIGNING_KEY_ID, x };

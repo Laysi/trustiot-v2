@@ -9,9 +9,9 @@
 // changes here, because the checks read the release's own manifests (manifests.ts).
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
-import { apiValues, createSigningKey, routesOfValues, runApiCheck, SIGNING_KEY_SECRET } from "./api.ts";
+import { apiValues, createSigningKey, routesOfValues, runApiCheck, SIGNING_KEY_STORE } from "./api.ts";
 import { runIngressE2e } from "./e2e.ts";
 import { exec, retry, run, RunLog, waitUntilGone } from "./exec.ts";
 import {
@@ -156,7 +156,7 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         const routes = routesOfValues(ctx.chartDir, shape.valuesFiles);
         writeFileSync(file, Bun.YAML.stringify(apiValues(shape.name, publicKey, routes), null, 2));
         values.push("-f", file);
-        return `Secret ${SIGNING_KEY_SECRET} (key ${publicKey.kid}); ${file}: identity and assets, provider ${smokeProviderNameOf(shape.name)}`;
+        return `Secret ${SIGNING_KEY_STORE} (key ${publicKey.kid}); ${basename(file)}: identity and assets, provider ${smokeProviderNameOf(shape.name)}`;
       })) &&
       (await check("dummy Secrets for the references the chart makes", async () => {
         // Secrets reach a cluster from outside the chart (Laysi/trustiot-v2#72); the smoke test
@@ -165,7 +165,7 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         const rendered = await helm(["template", RELEASE, ctx.chartDir, "--namespace", namespace, ...values], 120_000, true);
         const objects = parseManifests(rendered.stdout);
         const missing = missingSecrets(objects);
-        missing.delete(SIGNING_KEY_SECRET);
+        missing.delete(SIGNING_KEY_STORE);
         for (const [name, keys] of missing) {
           const literals = [...keys].map((key) => `--from-literal=${key}=nightly-dummy-value`);
           await kubectl(["create", "secret", "generic", name, "--namespace", namespace, ...literals]);
