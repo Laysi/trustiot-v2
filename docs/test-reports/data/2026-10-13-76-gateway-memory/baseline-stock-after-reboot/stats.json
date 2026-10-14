@@ -1,0 +1,129 @@
+{
+ "label": "stock-after-reboot",
+ "used_kb": {
+  "min": 162876,
+  "median": 163396,
+  "max": 163984,
+  "n": 24
+ },
+ "MemTotal": {
+  "min": 1888912,
+  "median": 1888912,
+  "max": 1888912,
+  "n": 24
+ },
+ "MemFree": {
+  "min": 1552196,
+  "median": 1552792,
+  "max": 1553304,
+  "n": 24
+ },
+ "MemAvailable": {
+  "min": 1724928,
+  "median": 1725524,
+  "max": 1726036,
+  "n": 24
+ },
+ "Buffers": {
+  "min": 20192,
+  "median": 20200,
+  "max": 20200,
+  "n": 24
+ },
+ "Cached": {
+  "min": 199580,
+  "median": 199588,
+  "max": 199588,
+  "n": 24
+ },
+ "Slab": {
+  "min": 43484,
+  "median": 43512,
+  "max": 43524,
+  "n": 24
+ },
+ "SReclaimable": {
+  "min": 18400,
+  "median": 18400,
+  "max": 18400,
+  "n": 24
+ },
+ "SUnreclaim": {
+  "min": 25084,
+  "median": 25112,
+  "max": 25124,
+  "n": 24
+ },
+ "KernelStack": {
+  "min": 2480,
+  "median": 2508,
+  "max": 2524,
+  "n": 24
+ },
+ "PageTables": {
+  "min": 1716,
+  "median": 1728,
+  "max": 2156,
+  "n": 24
+ },
+ "Shmem": {
+  "min": 7204,
+  "median": 7212,
+  "max": 7212,
+  "n": 24
+ },
+ "AnonPages": {
+  "min": 25312,
+  "median": 25412,
+  "max": 25556,
+  "n": 24
+ },
+ "Mapped": {
+  "min": 40760,
+  "median": 40796,
+  "max": 40956,
+  "n": 24
+ },
+ "Dirty": {
+  "min": 0,
+  "median": 0,
+  "max": 16,
+  "n": 24
+ },
+ "SwapTotal": {
+  "min": 1888252,
+  "median": 1888252,
+  "max": 1888252,
+  "n": 24
+ },
+ "SwapFree": {
+  "min": 1888252,
+  "median": 1888252,
+  "max": 1888252,
+  "n": 24
+ },
+ "Percpu": {
+  "min": 720,
+  "median": 720,
+  "max": 720,
+  "n": 24
+ },
+ "Committed_AS": {
+  "min": 94020,
+  "median": 94272,
+  "max": 94272,
+  "n": 24
+ },
+ "CmaTotal": {
+  "min": 524288,
+  "median": 524288,
+  "max": 524288,
+  "n": 24
+ },
+ "CmaFree": {
+  "min": 513164,
+  "median": 513164,
+  "max": 513164,
+  "n": 24
+ }
+}

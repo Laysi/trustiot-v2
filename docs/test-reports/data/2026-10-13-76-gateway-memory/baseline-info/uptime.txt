@@ -1,0 +1,17 @@
+ 11:51:27 up 24 min,  1 user,  load average: 0.10, 0.12, 0.09
+0.10 0.12 0.09 1/153 4294
+    PID USER     COMMAND           RSS
+    624 root     NetworkManager  19568
+      1 root     systemd         14352
+   4193 trustio+ systemd         12212
+    289 root     systemd-journal 11248
+   4282 root     sshd-session    10444
+    338 root     systemd-udevd   10160
+    588 root     systemd-logind   8512
+    327 systemd+ systemd-timesyn  7808
+    801 root     sshd             7544
+   4291 trustio+ sshd-session     7032
+    626 root     wpa_supplicant   6816
+    581 root     bluetoothd       6252
+    584 message+ dbus-daemon      4532
+   4221 trustio+ dbus-daemon      3872

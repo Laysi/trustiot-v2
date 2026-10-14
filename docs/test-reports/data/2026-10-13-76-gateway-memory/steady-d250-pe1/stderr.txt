@@ -1,0 +1,2 @@
+gw: 250 devices x 20 points, poll 1s, cap 16777216 B, batch limit 262144 B, 250 tasks
+gw: drain complete after 201.035311ms
