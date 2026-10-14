@@ -69,7 +69,7 @@ fn the_chart_binds_every_login_role_of_the_product() {
         .expect("the chart's password Secret bindings");
     let postgres_bindings: Vec<&str> = helper
         .lines()
-        .filter(|line| line.contains(r#""kind" "postgres""#))
+        .filter(|line| line.contains(r#""database" "postgres""#))
         .collect();
     assert_eq!(
         postgres_bindings.len(),

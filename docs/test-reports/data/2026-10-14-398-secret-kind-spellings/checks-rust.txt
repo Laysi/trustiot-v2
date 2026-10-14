@@ -1,0 +1,24 @@
+rcheck: queued on the build host at 17:10:21 as 398-c89b16d3; running now: nothing
+FMT-OK
+    Checking identity v0.1.0 (<host copy>/src/services/identity)
+    Checking migrate v0.1.0 (<host copy>/src/tools/migrate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.49s
+CLIPPY-OK
+94
+test inconsistent_registries_are_refused ... ok
+test the_chart_binds_every_login_role_of_the_product ... ok
+test the_product_registry_lists_every_file_in_order ... ok
+test the_lint_sees_through_whitespace_and_case ... ok
+test postgres_migrations_follow_the_jobs_rules ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+7 packages installed [33.00ms]
+ 2 skip
+ 0 fail
+ 2454 expect() calls
+Ran 750 tests across 29 files. [2.10s]
+ 316 pass
+ 0 fail
+Ran 316 tests across 4 files. [30.50s]
+rcheck: removed 0 dangling test volumes
+rcheck: exit 0 at 17:16:36 (build host, 398-c89b16d3)
+rcheck exit=0

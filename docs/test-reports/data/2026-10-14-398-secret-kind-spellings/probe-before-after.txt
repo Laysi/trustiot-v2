@@ -1,0 +1,21 @@
+form | before: violations | after: violations | helm template: Secrets with data
+kind : Secret | 0 | 1 | 1
+kind: !!str Secret | 0 | 1 | 1
+kind: &k Secret | 0 | 1 | 1
+"kind": Secret | 0 | 1 | 1
+kind: on the next line | 0 | 1 | 1
+kind: |- block scalar | 0 | 1 | 1
+kind: >- block scalar | 0 | 1 | 1
+flow style | 0 | 1 | 1
+JSON | 0 | 1 | 1
+{{ "kind: Secret" }} | 0 | 2 | 1
+toYaml (dict ...) in the template | 0 | 2 | 1
+toYaml (dict ...) in a .tpl helper | 0 | 2 | 1
+toYaml .Values.extraObject | 0 | 1 | 1
+range .Values.extraObjects + toYaml | 0 | 1 | 1
+tpl .Values.something | 0 | 2 | 1
+"\x6bind": Secret (escaped key) | 0 | 1 | 1
+? kind (explicit key) | 0 | 1 | 1
+<<: {kind: Secret} (merge key) | 0 | 1 | 1
+ki{{ "" }}nd: Secret | 0 | 1 | 1
+toJson .Values.extraObject | 0 | 1 | 1

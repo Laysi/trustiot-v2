@@ -140,6 +140,8 @@ const HELM_READ_FILES: ReadonlySet<string> = new Set([
   // The bundled Postgres must match the image's PostgreSQL major and AGE version.
   "deploy/images/postgres/Containerfile",
   "docs/architecture/deployment.md",
+  // Rule 5 applied to the chart rendered with every optional component on (Laysi/trustiot-v2#398).
+  "scripts/ci/check-secret-handling.ts",
   "scripts/lib/stack.ts",
   "services/ingest/tests/common/mod.rs",
   // The labels and annotations the Job keeps on the password Secrets it binds.

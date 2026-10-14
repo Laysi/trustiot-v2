@@ -86,6 +86,31 @@ Mutates "dst". Argument: dict "dst" <map> "src" <map>.
 {{- end -}}
 
 {{/*
+Fails when a string in the values, or a key of a map in them, holds a line break (a YAML reader
+also breaks lines at NEL, LS and PS). Templates print values into lines of a manifest, so a value
+that could start another line or document could add an object, a Secret with data included
+(docs/architecture/secrets.md, Laysi/trustiot-v2#398). Values hold names and settings, never
+multi-line text. Argument: dict "path" <dotted path so far, "" at the top> "value" <value>.
+*/}}
+{{- define "trustiot.values.singleLine" -}}
+{{- $break := "[\\r\\n\\x{0085}\\x{2028}\\x{2029}]" -}}
+{{- if kindIs "map" .value -}}
+{{- range $key, $value := .value -}}
+{{- if regexMatch $break $key -}}
+{{- fail (printf "%s: a key holds a line break; values are single lines, so that nothing printed from them can start another line or document of a manifest" (default "values" $.path)) -}}
+{{- end -}}
+{{- $_ := include "trustiot.values.singleLine" (dict "path" (ternary $key (printf "%s.%s" $.path $key) (eq $.path "")) "value" $value) -}}
+{{- end -}}
+{{- else if kindIs "slice" .value -}}
+{{- range $index, $item := .value -}}
+{{- $_ := include "trustiot.values.singleLine" (dict "path" (printf "%s[%d]" $.path $index) "value" $item) -}}
+{{- end -}}
+{{- else if and (kindIs "string" .value) (regexMatch $break .value) -}}
+{{- fail (printf "%s: holds a line break; values are single lines, so that nothing printed from them can start another line or document of a manifest" .path) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Effective settings of one service: serviceDefaults overridden by the service entry.
 Each probe is replaced as a whole and env is appended to the defaults.
 Argument: dict "root" $ "name" <service> "values" <service entry>.

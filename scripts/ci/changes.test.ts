@@ -153,6 +153,8 @@ describe("path rules", () => {
     "deploy/chart/tests/chart.test.ts",
     "deploy/chart/tests/e2e/tunnel-recovery.ts",
     "deploy/istio/istiod-values.yaml",
+    // The chart tests check the rendered chart with its rendered-manifest rule.
+    "scripts/ci/check-secret-handling.ts",
     "scripts/lib/stack.ts",
     "services/ingest/tests/common/mod.rs",
     "services/ingest/migrations/clickhouse",
@@ -308,9 +310,11 @@ describe("guards: files the jobs read are covered", () => {
       }
       expect(`${file}: ${computed.join(", ")}`).toBe(`${file}: `);
       for (const specifier of specifiers.filter((specifier) => /^\.{1,2}\//.test(specifier))) {
-        const imported = posix.normalize(posix.join(posix.dirname(file), specifier));
-        expect(existsSync(join(root, imported))).toBe(true);
-        pending.push(imported);
+        const path = posix.normalize(posix.join(posix.dirname(file), specifier));
+        // Bun also resolves a specifier without its extension (`./cluster` for cluster.ts).
+        const imported = [path, `${path}.ts`].find((candidate) => existsSync(join(root, candidate)) && statSync(join(root, candidate)).isFile());
+        expect(imported, `${file}: ${specifier}`).toBeDefined();
+        pending.push(imported ?? path);
       }
     }
     seen.delete(entry);
@@ -445,10 +449,16 @@ describe("guards: files the jobs read are covered", () => {
     expect(affectsRust(repositoryPath("/../../docs/architecture/deployment.md", "crates/x") ?? "")).toBe(false);
   });
 
-  test("every repository file the chart tests read runs helm", () => {
+  test("every repository file the chart tests read or import runs helm", () => {
     const uncovered: string[] = [];
     let checked = 0;
     for (const file of sources(join(ROOT, "deploy", "chart", "tests"), [".ts"])) {
+      // Imports, followed through other files: chart.test.ts imports the secret check's
+      // rendered-manifest rule (Laysi/trustiot-v2#398).
+      for (const imported of importsOf(relative(ROOT, file))) {
+        checked++;
+        if (!affectsHelm(imported)) uncovered.push(`${relative(ROOT, file)}: import of ${imported}`);
+      }
       const source = readFileSync(file, "utf8");
       for (const match of source.matchAll(/["']([^"'\n]+)["']/g)) {
         const path = repositoryPath(match[1] ?? "");

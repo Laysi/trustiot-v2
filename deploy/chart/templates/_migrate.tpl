@@ -80,16 +80,16 @@ one per consumer, so a node's kubelet can read only the passwords of the pods sc
 templates/passwords.yaml declares them without data; the migration Job generates each password and
 writes it in (tools/migrate/src/passwords.rs). They are declared whether or not migrate.enabled is
 true: with the Job turned off, whatever replaces it fills them (only the cluster tests do that).
-Returns a YAML list of {name, key, kind (postgres or clickhouse), component}; use with fromYamlArray.
+Returns a YAML list of {name, key, database (postgres or clickhouse), component}; use with fromYamlArray.
 */}}
 {{- define "trustiot.migrate.passwordSecrets" -}}
 {{- $secrets := list -}}
 {{- range (include "trustiot.postgres.clients" . | fromYaml).services -}}
-{{- $secrets = append $secrets (dict "name" (include "trustiot.componentName" (dict "root" $ "name" (printf "%s-password" .))) "key" (include "trustiot.migrate.appRole" .) "kind" "postgres" "component" .) -}}
+{{- $secrets = append $secrets (dict "name" (include "trustiot.componentName" (dict "root" $ "name" (printf "%s-password" .))) "key" (include "trustiot.migrate.appRole" .) "database" "postgres" "component" .) -}}
 {{- end -}}
 {{- with .Values.observability.collector -}}
 {{- if .enabled -}}
-{{- $secrets = append $secrets (dict "name" (include "trustiot.componentName" (dict "root" $ "name" "otel-collector-password")) "key" .clickhouse.user "kind" "clickhouse" "component" "otel-collector") -}}
+{{- $secrets = append $secrets (dict "name" (include "trustiot.componentName" (dict "root" $ "name" "otel-collector-password")) "key" .clickhouse.user "database" "clickhouse" "component" "otel-collector") -}}
 {{- end -}}
 {{- end -}}
 {{- toYaml $secrets -}}
@@ -212,7 +212,7 @@ passwords. */ -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__GENERATION" "value" (include "trustiot.migrate.passwordGeneration" .)) -}}
 {{- $postgres := list -}}
 {{- range $secrets -}}
-{{- if eq .kind "postgres" -}}
+{{- if eq .database "postgres" -}}
 {{- $postgres = append $postgres (printf "%s=%s" .key .name) -}}
 {{- else -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR" "value" (printf "%s=%s" .key .name)) -}}
