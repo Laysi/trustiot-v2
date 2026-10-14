@@ -1,0 +1,75 @@
+### helm list
+(no helm release in this throwaway namespace)
+
+### object names (no data)
+pod/bad-image
+pod/exits-nonzero
+pod/never-ready
+pod/out-of-memory
+configmap/istio-ca-crl
+configmap/istio-ca-root-cert
+configmap/kube-root-ca.crt
+serviceaccount/default
+
+### Nodes
+(none)
+
+### Pods and warning events of the other namespaces (Istio, CloudNativePG operator, k3s)
+(none)
+
+### CloudNativePG Clusters
+(not available: kubectl get exited with 1: error: the server doesn't have a resource type "clusters")
+
+### Gateways
+(none)
+
+### PersistentVolumeClaims
+(none)
+
+### Jobs
+(none)
+
+### StatefulSets
+(none)
+
+### DaemonSets
+(none)
+
+### Deployments
+(none)
+
+### ReplicaSets
+(none)
+
+### Pods
+Pod/bad-image: phase=Pending conditions: PodReadyToStartContainers=True; Initialized=True; Ready=False (ContainersNotReady: containers with unready status: [assets]); ContainersReady=False (ContainersNotReady: containers with unready status: [assets]); PodScheduled=True
+  assets: waiting (ImagePullBackOff: Back-off pulling image "registry.invalid/trustiot/assets:nightly": ErrImagePull: failed to pull and unpack image "registry.invalid/trustiot/assets:nightly": failed to resolve reference "registry.inval... (68 characters cut) ...istry.invalid/v2/trustiot/assets/manifests/nightly": dial tcp: lookup registry.invalid: no such host), ready=false, restarts=0
+Pod/exits-nonzero: phase=Running conditions: PodReadyToStartContainers=True; Initialized=True; Ready=False (ContainersNotReady: containers with unready status: [identity]); ContainersReady=False (ContainersNotReady: containers with unready status: [identity]); PodScheduled=True
+  identity: terminated (exit 3, Error), ready=false, restarts=3; last exit 3, Error
+Pod/never-ready: phase=Running conditions: PodReadyToStartContainers=True; Initialized=True; Ready=False (ContainersNotReady: containers with unready status: [dashboard]); ContainersReady=False (ContainersNotReady: containers with unready status: [dashboard]); PodScheduled=True
+  dashboard: running, ready=false, restarts=0
+Pod/out-of-memory: phase=Running conditions: PodReadyToStartContainers=True; Initialized=True; Ready=False (ContainersNotReady: containers with unready status: [ingest]); ContainersReady=False (ContainersNotReady: containers with unready status: [ingest]); PodScheduled=True
+  ingest: terminated (exit 137, OOMKilled), ready=false, restarts=3; last exit 137, OOMKilled
+
+### Events
+2026-10-14T17:12:30.403408Z Normal Scheduled Pod/bad-image: Successfully assigned e2e-410/bad-image to <lab-node>
+2026-10-14T17:12:30.414864Z Normal Scheduled Pod/exits-nonzero: Successfully assigned e2e-410/exits-nonzero to <lab-node>
+2026-10-14T17:12:30.434541Z Normal Scheduled Pod/out-of-memory: Successfully assigned e2e-410/out-of-memory to <lab-node>
+2026-10-14T17:12:30.447868Z Normal Scheduled Pod/never-ready: Successfully assigned e2e-410/never-ready to <lab-node>
+2026-10-14T17:12:30Z Normal Pulled Pod/never-ready: Container image "docker.io/rancher/mirrored-library-busybox:1.37.0" already present on machine and can be accessed by the pod
+2026-10-14T17:12:30Z Normal Created Pod/never-ready: Container created
+2026-10-14T17:12:31Z Normal Started Pod/never-ready: Container started
+2026-10-14T17:12:53Z Normal BackOff Pod/bad-image x2: Back-off pulling image "registry.invalid/trustiot/assets:nightly"
+2026-10-14T17:12:53Z Warning Failed Pod/bad-image x2: Error: ImagePullBackOff
+2026-10-14T17:13:06Z Normal Pulling Pod/bad-image x3: Pulling image "registry.invalid/trustiot/assets:nightly"
+2026-10-14T17:13:06Z Warning Failed Pod/bad-image x3: Failed to pull image "registry.invalid/trustiot/assets:nightly": failed to pull and unpack image "registry.invalid/trustiot/assets:nightly": failed to resolve reference "registry.invalid/trustiot/asse... (52 characters cut) ...istry.invalid/v2/trustiot/assets/manifests/nightly": dial tcp: lookup registry.invalid: no such host
+2026-10-14T17:13:06Z Warning Failed Pod/bad-image x3: Error: ErrImagePull
+2026-10-14T17:13:07Z Normal Pulled Pod/exits-nonzero x4: Container image "docker.io/rancher/mirrored-library-busybox:1.37.0" already present on machine and can be accessed by the pod
+2026-10-14T17:13:07Z Normal Created Pod/exits-nonzero x4: Container created
+2026-10-14T17:13:07Z Normal Started Pod/exits-nonzero x4: Container started
+2026-10-14T17:13:08Z Warning BackOff Pod/exits-nonzero x3: Back-off restarting failed container identity in pod exits-nonzero_e2e-410(e758a527-a3be-4f14-8772-48dc263b125f)
+2026-10-14T17:13:09Z Normal Pulled Pod/out-of-memory x4: Container image "docker.io/rancher/mirrored-library-busybox:1.37.0" already present on machine and can be accessed by the pod
+2026-10-14T17:13:09Z Normal Created Pod/out-of-memory x4: Container created
+2026-10-14T17:13:09Z Normal Started Pod/out-of-memory x4: Container started
+2026-10-14T17:13:10Z Warning BackOff Pod/out-of-memory x3: Back-off restarting failed container ingest in pod out-of-memory_e2e-410(e9103839-37c4-42b7-9cb5-72cb185bd18a)
+2026-10-14T17:13:12Z Warning Unhealthy Pod/never-ready x10: Readiness probe failed: (probe output not shown)

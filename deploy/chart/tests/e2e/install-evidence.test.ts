@@ -3,7 +3,7 @@
 // not ready, and a fake kubectl plays the cluster. Runs with `bun test deploy/chart`.
 import { describe, expect, test } from "bun:test";
 
-import { collectInstallEvidence, formatEvents, formatInstallEvidence, MAX_EVENTS, MAX_FIELD_CHARS, oneLine } from "./install-evidence.ts";
+import { collectInstallEvidence, formatEvents, formatInstallEvidence, KEPT_TAIL_CHARS, MAX_EVENTS, MAX_FIELD_CHARS, oneLine } from "./install-evidence.ts";
 
 // A value the test must never see in the evidence: it stands for an environment value or a
 // Secret's data, and is made at run time so that no credential-looking literal is in the file.
@@ -142,7 +142,39 @@ describe("free text", () => {
   test("is one line, cut at the limit", () => {
     expect(oneLine("a\n  b\tc")).toBe("a b c");
     const long = "x".repeat(MAX_FIELD_CHARS + 50);
-    expect(oneLine(long)).toBe(`${"x".repeat(MAX_FIELD_CHARS)}... (50 characters cut)`);
+    expect(oneLine(long)).toBe(`${"x".repeat(MAX_FIELD_CHARS - KEPT_TAIL_CHARS)}... (50 characters cut) ...${"x".repeat(KEPT_TAIL_CHARS)}`);
+  });
+
+  test("a long message keeps its start and its end, where a chain of errors names the cause", () => {
+    const message = `Failed to pull image: ${"a ".repeat(200)}dial tcp: lookup registry.example.test: no such host`;
+    const line = oneLine(message);
+    expect(line.startsWith("Failed to pull image: a a")).toBe(true);
+    expect(line.endsWith("lookup registry.example.test: no such host")).toBe(true);
+    expect(line).toContain(" characters cut) ...");
+  });
+
+  test("a URL's user info and query string are removed (Laysi/trustiot-v2#410)", () => {
+    const token = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+    const line = oneLine(`pull failed: https://user:${token}@registry.example.test/v2/x/manifests/y?token=${token}&scope=z 401`);
+    expect(line).toBe("pull failed: https://(user info removed)@registry.example.test/v2/x/manifests/y?(query removed) 401");
+    expect(oneLine('Get "http://10.42.0.5:8080/healthz": connection refused')).toBe('Get "http://10.42.0.5:8080/healthz": connection refused');
+  });
+
+  test("a failed probe's output is shown only when the kubelet or the network wrote it", () => {
+    const output = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+    const event = (message: string, reason = "Unhealthy") => ({ type: "Warning", reason, involvedObject: { kind: "Pod", name: "p" }, message, lastTimestamp: "2026-10-15T00:00:00Z" });
+    const lines = formatEvents({
+      items: [
+        event(`Readiness probe failed: ${output}`),
+        event("Readiness probe failed: HTTP probe failed with statuscode: 503"),
+        // An HTTP probe that stops at a redirect passes with a warning that carries the response body.
+        event(`Liveness probe warning: Probe terminated redirects, Response body: ${output}`, "ProbeWarning"),
+      ],
+    });
+    expect(lines.join("\n")).not.toContain(output);
+    expect(lines[0]).toContain("Readiness probe failed: (probe output not shown)");
+    expect(lines[1]).toContain("Readiness probe failed: HTTP probe failed with statuscode: 503");
+    expect(lines[2]).toContain("ProbeWarning Pod/p: Liveness probe warning: (probe output not shown)");
   });
 
   test("a multi-line message cannot inject a line into the evidence", () => {
