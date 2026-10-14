@@ -14,7 +14,10 @@
 //!   re-upgrade after it do not rotate again;
 //! - the data is bound to the object: a Secret created by someone else under the same name (and
 //!   adopted by Helm) cannot carry a password of their choosing, because they cannot know the
-//!   uid the API will give it;
+//!   uid the API will give it; and the patch that binds a Secret also removes every label and
+//!   annotation the chart and the Job do not set, its ownerReferences and its finalizers, so
+//!   metadata someone put on it beforehand (a replicator's annotation, an owner that would
+//!   garbage-collect it) never applies to generated passwords;
 //! - the rest of the run then sets each role and account to the password in its Secret.
 //!
 //! The Job's ServiceAccount may only `get` and `patch` exactly these Secrets (the chart's Role
@@ -40,6 +43,34 @@ pub const GENERATION_ANNOTATION: &str = "trustiot.io/password-generation";
 /// The annotation that records the uid of the Secret the Job filled. The data is trusted only
 /// while it equals the Secret's own `metadata.uid`; the chart never renders it.
 pub const UID_ANNOTATION: &str = "trustiot.io/password-secret-uid";
+
+/// The labels a password Secret keeps when the Job binds it: the chart's own for these Secrets
+/// (deploy/chart/templates/passwords.yaml with "trustiot.componentLabels"; keep in step with the
+/// chart, whose tests pin the rendered labels), and the two that Flux's helm-controller puts on
+/// every object of a HelmRelease (deploy/flux), which the next upgrade would only add again.
+const KEPT_LABELS: &[&str] = &[
+    "app.kubernetes.io/component",
+    "app.kubernetes.io/instance",
+    "app.kubernetes.io/managed-by",
+    "app.kubernetes.io/name",
+    "app.kubernetes.io/part-of",
+    "app.kubernetes.io/version",
+    "helm.sh/chart",
+    "helm.toolkit.fluxcd.io/name",
+    "helm.toolkit.fluxcd.io/namespace",
+    "trustiot.io/filled-by",
+];
+
+/// The annotations a password Secret keeps when the Job binds it: the chart's, Helm's ownership
+/// annotations (without them the next upgrade could not adopt the Secret), and the Job's own.
+const KEPT_ANNOTATIONS: &[&str] = &[
+    "helm.sh/resource-policy",
+    "meta.helm.sh/release-name",
+    "meta.helm.sh/release-namespace",
+    "trustiot.io/description",
+    GENERATION_ANNOTATION,
+    UID_ANNOTATION,
+];
 
 /// The field manager of the run's patches, as `metadata.managedFields` shows it.
 pub const FIELD_MANAGER: &str = "trustiot-migrate";
@@ -126,6 +157,63 @@ struct Metadata {
     uid: String,
     #[serde(default)]
     annotations: BTreeMap<String, String>,
+    #[serde(default)]
+    labels: BTreeMap<String, String>,
+    #[serde(default)]
+    owner_references: Vec<Value>,
+    #[serde(default)]
+    finalizers: Vec<String>,
+    /// Set while the Secret is being deleted.
+    #[serde(default)]
+    deletion_timestamp: Option<String>,
+}
+
+/// What the patch that binds a Secret removes: metadata neither the chart nor the Job sets. Names
+/// only, which the report gives; never a value.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Foreign {
+    annotations: Vec<String>,
+    labels: Vec<String>,
+    owner_references: bool,
+    finalizers: bool,
+}
+
+impl Foreign {
+    fn of(metadata: &Metadata) -> Self {
+        let outside = |keys: &BTreeMap<String, String>, kept: &[&str]| {
+            keys.keys()
+                .filter(|key| !kept.contains(&key.as_str()))
+                .cloned()
+                .collect()
+        };
+        Self {
+            annotations: outside(&metadata.annotations, KEPT_ANNOTATIONS),
+            labels: outside(&metadata.labels, KEPT_LABELS),
+            owner_references: !metadata.owner_references.is_empty(),
+            finalizers: !metadata.finalizers.is_empty(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    fn describe(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        parts.extend(
+            self.annotations
+                .iter()
+                .map(|key| format!("annotation {key}")),
+        );
+        parts.extend(self.labels.iter().map(|key| format!("label {key}")));
+        if self.owner_references {
+            parts.push("ownerReferences".to_owned());
+        }
+        if self.finalizers {
+            parts.push("finalizers".to_owned());
+        }
+        parts.join(", ")
+    }
 }
 
 /// What the run does with one Secret: the generation it records, and for each owner the
@@ -133,6 +221,8 @@ struct Metadata {
 struct Plan {
     generation: u64,
     keys: Vec<(String, Result<Password, Why>)>,
+    /// Removed by the patch: empty unless the run binds the Secret now.
+    foreign: Foreign,
 }
 
 /// What to do with `secret` when the run asks for generation `requested`. Every key is renewed
@@ -166,16 +256,30 @@ fn plan(secret: &Secret, owners: &[&str], requested: u64) -> Plan {
             ((*owner).to_owned(), decided)
         })
         .collect();
-    Plan { generation, keys }
+    // An already bound Secret keeps its metadata. Whoever changed it holds patch on it, which
+    // already lets them write a password of their choosing that the Job then sets, so patch on
+    // these Secrets is for trusted principals only (the chart grants it to the Job alone;
+    // docs/architecture/secrets.md).
+    let foreign = if bound {
+        Foreign::default()
+    } else {
+        Foreign::of(&secret.metadata)
+    };
+    Plan {
+        generation,
+        keys,
+        foreign,
+    }
 }
 
-/// The merge patch that stores `generated` and records `generation` and the Secret's `uid`,
-/// valid only while the Secret is still at `resource_version`.
+/// The merge patch that stores `generated`, records `generation` and the Secret's `uid`, and
+/// removes `foreign`, valid only while the Secret is still at `resource_version`.
 fn patch_body(
     resource_version: &str,
     uid: &str,
     generation: u64,
     generated: &[(String, Password)],
+    foreign: &Foreign,
 ) -> String {
     let data: Map<String, Value> = generated
         .iter()
@@ -186,17 +290,37 @@ fn patch_body(
             )
         })
         .collect();
-    json!({
-        "metadata": {
-            "resourceVersion": resource_version,
-            "annotations": {
-                GENERATION_ANNOTATION: generation.to_string(),
-                UID_ANNOTATION: uid,
-            },
-        },
-        "data": data,
-    })
-    .to_string()
+    let mut annotations: Map<String, Value> = foreign
+        .annotations
+        .iter()
+        .map(|key| (key.clone(), Value::Null))
+        .collect();
+    annotations.insert(
+        GENERATION_ANNOTATION.to_owned(),
+        Value::String(generation.to_string()),
+    );
+    annotations.insert(UID_ANNOTATION.to_owned(), Value::String(uid.to_owned()));
+    let mut metadata = Map::new();
+    metadata.insert(
+        "resourceVersion".to_owned(),
+        Value::String(resource_version.to_owned()),
+    );
+    metadata.insert("annotations".to_owned(), Value::Object(annotations));
+    if !foreign.labels.is_empty() {
+        let labels = foreign
+            .labels
+            .iter()
+            .map(|key| (key.clone(), Value::Null))
+            .collect();
+        metadata.insert("labels".to_owned(), Value::Object(labels));
+    }
+    if foreign.owner_references {
+        metadata.insert("ownerReferences".to_owned(), Value::Null);
+    }
+    if foreign.finalizers {
+        metadata.insert("finalizers".to_owned(), Value::Null);
+    }
+    json!({ "metadata": metadata, "data": data }).to_string()
 }
 
 /// What a request to the API came to.
@@ -355,7 +479,23 @@ async fn fill(
                 problem: "the API returned it without metadata.uid".to_owned(),
             });
         }
-        let Plan { generation, keys } = plan(&found, owners, requested);
+        if found.metadata.deletion_timestamp.is_some() {
+            // Writing passwords into it, and setting roles to them, would leave nothing for the
+            // services to read once it is gone (and the patch that binds it removes finalizers
+            // that may be holding it).
+            return Err(Error::Secret {
+                secret: secret.to_owned(),
+                problem: "is being deleted (metadata.deletionTimestamp is set). Once it is gone, \
+                          run helm upgrade, which creates it again, with migrate.revision changed \
+                          so the Job runs again (docs/runbooks/migrations.md)"
+                    .to_owned(),
+            });
+        }
+        let Plan {
+            generation,
+            keys,
+            foreign,
+        } = plan(&found, owners, requested);
         let mut passwords = BTreeMap::new();
         let mut generated = Vec::new();
         for (owner, decided) in keys {
@@ -382,6 +522,7 @@ async fn fill(
             &found.metadata.uid,
             generation,
             &new,
+            &foreign,
         );
         match api.request(secret, Some(&body)).await? {
             Answer::Conflict => {
@@ -408,6 +549,12 @@ async fn fill(
                             ),
                         });
                     }
+                }
+                if !foreign.is_empty() {
+                    report.change(format!(
+                        "removed from Secret {secret} what neither the chart nor the Job sets: {}",
+                        foreign.describe()
+                    ));
                 }
                 for (owner, password, why) in generated {
                     report.change(format!(
@@ -506,6 +653,7 @@ mod tests {
                 resource_version: "7".to_owned(),
                 uid: UID.to_owned(),
                 annotations,
+                ..Metadata::default()
             },
             data: data
                 .iter()
@@ -519,7 +667,9 @@ mod tests {
     }
 
     fn decisions_for(found: &Secret, owners: &[&str], requested: u64) -> (u64, Decisions) {
-        let Plan { generation, keys } = plan(found, owners, requested);
+        let Plan {
+            generation, keys, ..
+        } = plan(found, owners, requested);
         let keys = keys
             .into_iter()
             .map(|(owner, decided)| (owner, decided.map(|password| password.expose().to_owned())))
@@ -667,9 +817,14 @@ mod tests {
     #[test]
     fn the_patch_carries_the_resource_version_the_generation_the_uid_and_only_the_new_keys() {
         let password = Password::new("a_app", GOOD.to_owned()).expect("valid");
-        let body: Value =
-            serde_json::from_str(&patch_body("41", UID, 3, &[("a_app".to_owned(), password)]))
-                .expect("JSON");
+        let body: Value = serde_json::from_str(&patch_body(
+            "41",
+            UID,
+            3,
+            &[("a_app".to_owned(), password)],
+            &Foreign::default(),
+        ))
+        .expect("JSON");
         assert_eq!(
             body,
             json!({
@@ -680,6 +835,96 @@ mod tests {
                 "data": { "a_app": STANDARD.encode(GOOD) },
             })
         );
+    }
+
+    /// A Secret someone else made: chart and Helm metadata, plus their own.
+    fn foreign_secret() -> Secret {
+        let pairs = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect()
+        };
+        Secret {
+            metadata: Metadata {
+                resource_version: "9".to_owned(),
+                uid: UID.to_owned(),
+                annotations: pairs(&[
+                    ("helm.sh/resource-policy", "keep"),
+                    ("meta.helm.sh/release-name", "r"),
+                    ("meta.helm.sh/release-namespace", "ns"),
+                    (GENERATION_ANNOTATION, "1"),
+                    ("replicator.example/replicate-to", "elsewhere"),
+                    ("reflector.example/reflection-allowed", "true"),
+                ]),
+                labels: pairs(&[
+                    ("app.kubernetes.io/instance", "r"),
+                    ("trustiot.io/filled-by", "migrate"),
+                    ("copy-me", "yes"),
+                ]),
+                owner_references: vec![json!({"kind": "ConfigMap", "name": "x", "uid": "u"})],
+                finalizers: vec!["example.com/hold".to_owned()],
+                deletion_timestamp: None,
+            },
+            data: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn binding_a_secret_removes_metadata_neither_the_chart_nor_the_job_sets() {
+        let found = foreign_secret();
+        let foreign = plan(&found, &["a_app"], 1).foreign;
+        assert_eq!(
+            foreign,
+            Foreign {
+                annotations: vec![
+                    "reflector.example/reflection-allowed".to_owned(),
+                    "replicator.example/replicate-to".to_owned()
+                ],
+                labels: vec!["copy-me".to_owned()],
+                owner_references: true,
+                finalizers: true,
+            }
+        );
+        assert_eq!(
+            foreign.describe(),
+            "annotation reflector.example/reflection-allowed, annotation \
+             replicator.example/replicate-to, label copy-me, ownerReferences, finalizers"
+        );
+        let password = Password::new("a_app", GOOD.to_owned()).expect("valid");
+        let body: Value = serde_json::from_str(&patch_body(
+            "9",
+            UID,
+            1,
+            &[("a_app".to_owned(), password)],
+            &foreign,
+        ))
+        .expect("JSON");
+        assert_eq!(
+            body,
+            json!({
+                "metadata": {
+                    "resourceVersion": "9",
+                    "annotations": {
+                        "reflector.example/reflection-allowed": null,
+                        "replicator.example/replicate-to": null,
+                        GENERATION_ANNOTATION: "1",
+                        UID_ANNOTATION: UID,
+                    },
+                    "labels": { "copy-me": null },
+                    "ownerReferences": null,
+                    "finalizers": null,
+                },
+                "data": { "a_app": STANDARD.encode(GOOD) },
+            })
+        );
+        // Once bound, the Secret's metadata is left alone.
+        let mut bound = foreign_secret();
+        bound
+            .metadata
+            .annotations
+            .insert(UID_ANNOTATION.to_owned(), UID.to_owned());
+        assert!(plan(&bound, &["a_app"], 1).foreign.is_empty());
     }
 
     #[test]

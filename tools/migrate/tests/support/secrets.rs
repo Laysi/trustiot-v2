@@ -23,6 +23,11 @@ pub const NAMESPACE: &str = "release-ns";
 pub struct Stored {
     pub data: BTreeMap<String, Vec<u8>>,
     pub annotations: BTreeMap<String, String>,
+    pub labels: BTreeMap<String, String>,
+    pub owner_references: Vec<Value>,
+    pub finalizers: Vec<String>,
+    /// `metadata.deletionTimestamp`, set while the Secret is being deleted.
+    pub deletion_timestamp: Option<String>,
     pub resource_version: u64,
     /// `metadata.uid`: new for every object the fake creates.
     pub uid: String,
@@ -128,6 +133,15 @@ impl FakeSecrets {
         let version = state.bump();
         let secret = state.secrets.get_mut(name).expect("a declared Secret");
         secret.uid = format!("00000000-0000-4000-8000-{version:012}");
+        secret.resource_version = version;
+    }
+
+    /// Another writer changes the Secret's metadata or data.
+    pub fn edit(&self, name: &str, change: impl FnOnce(&mut Stored)) {
+        let mut state = self.state();
+        let version = state.bump();
+        let secret = state.secrets.get_mut(name).expect("a declared Secret");
+        change(secret);
         secret.resource_version = version;
     }
 
@@ -309,8 +323,10 @@ impl FakeSecrets {
     }
 }
 
-/// Applies a merge patch of `metadata.resourceVersion`, `metadata.annotations` and `data`; any
-/// other field is refused (400), and a stale `resourceVersion` is a conflict (409).
+/// Applies a merge patch of `metadata.resourceVersion`, `metadata.annotations`,
+/// `metadata.labels`, `metadata.ownerReferences`, `metadata.finalizers` (each only set to null)
+/// and `data`; any other field is refused (400), and a stale `resourceVersion` is a conflict
+/// (409).
 fn apply(secret: &mut Stored, patch: &Value) -> Result<(), u16> {
     let patch = patch.as_object().ok_or(400_u16)?;
     if patch.keys().any(|key| key != "metadata" && key != "data") {
@@ -321,10 +337,16 @@ fn apply(secret: &mut Stored, patch: &Value) -> Result<(), u16> {
         Some(value) => value.as_object().ok_or(400_u16)?,
         None => &empty,
     };
-    if metadata
-        .keys()
-        .any(|key| key != "resourceVersion" && key != "annotations")
-    {
+    if metadata.keys().any(|key| {
+        ![
+            "resourceVersion",
+            "annotations",
+            "labels",
+            "ownerReferences",
+            "finalizers",
+        ]
+        .contains(&key.as_str())
+    }) {
         return Err(400);
     }
     if let Some(version) = metadata.get("resourceVersion")
@@ -332,18 +354,34 @@ fn apply(secret: &mut Stored, patch: &Value) -> Result<(), u16> {
     {
         return Err(409);
     }
-    if let Some(annotations) = metadata.get("annotations") {
-        for (key, value) in annotations.as_object().ok_or(400_u16)? {
+    for (field, map) in [
+        ("annotations", &mut secret.annotations),
+        ("labels", &mut secret.labels),
+    ] {
+        let Some(patch) = metadata.get(field) else {
+            continue;
+        };
+        for (key, value) in patch.as_object().ok_or(400_u16)? {
             match value {
                 Value::Null => {
-                    secret.annotations.remove(key);
+                    map.remove(key);
                 }
                 Value::String(text) => {
-                    secret.annotations.insert(key.clone(), text.clone());
+                    map.insert(key.clone(), text.clone());
                 }
                 _ => return Err(400),
             }
         }
+    }
+    match metadata.get("ownerReferences") {
+        None => {}
+        Some(Value::Null) => secret.owner_references.clear(),
+        Some(_) => return Err(400),
+    }
+    match metadata.get("finalizers") {
+        None => {}
+        Some(Value::Null) => secret.finalizers.clear(),
+        Some(_) => return Err(400),
     }
     if let Some(data) = patch.get("data") {
         for (key, value) in data.as_object().ok_or(400_u16)? {
@@ -377,6 +415,10 @@ fn render(name: &str, secret: &Stored) -> String {
             "resourceVersion": secret.resource_version.to_string(),
             "uid": secret.uid,
             "annotations": secret.annotations,
+            "labels": secret.labels,
+            "ownerReferences": secret.owner_references,
+            "finalizers": secret.finalizers,
+            "deletionTimestamp": secret.deletion_timestamp,
         },
         "type": "Opaque",
         "data": data,

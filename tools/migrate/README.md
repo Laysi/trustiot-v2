@@ -98,6 +98,6 @@ Job 自己的設定：
 | `tests/concurrent_runs.rs` | 鎖被持有時執行會等，到上限就放棄且什麼都沒改；同時開始的兩次執行都成功，只有一次套用變更 |
 | `tests/outbox_and_tenant_roles.rs` | outbox 的表、policy 與讀者的增減；每租戶角色 hook 為新租戶建立角色，還原的資料庫少了角色時補回；從服務清單移除的服務的登入角色變成 NOLOGIN、舊密碼登不進去；部署關掉的服務（沒有綁定 Secret）變成 NOLOGIN，重新開啟時先設密碼再 LOGIN；沒有 Job 標記、或 migration 角色沒有 ADMIN OPTION 的登入角色不受影響 |
 | `tests/clickhouse.rs` | ClickHouse DDL 套用一次、改過的檔案被拒；collector 帳號以 Job 產生的密碼建立、寫入，新的密碼世代輪替，多了權限、設定或角色不是預設角色時停止；collector 角色多了權限或角色時停止；collector 關閉或帳號改名時舊帳號不能再登入（`HOST NONE`），再開啟時恢復 |
-| `tests/passwords.rs` | 密碼 Secret 對假的 API：第一次填入每個缺的 key（256 位元十六進位，各不相同），第二次只讀不寫；新的世代換掉每個受管的 key、不動其他 key、只換一次；較小的世代（rollback）不換、之後升級回來也不換；不是 Job 填過的 Secret 物件（uid 不同，含帶著同代 annotation 與自選密碼的）每個 key 都重新產生，別人只改 annotation 時也一樣；遺失或不能用的 key 單獨重新產生；Secret 不存在時停止並寫出處理方式；讀寫之間被改過時重讀，一直被改時停止而不覆蓋；拒絕的 token 與 403、API 暫時 503 的重試與上限；報告、錯誤與 `Debug` 都不含密碼或它的 base64；沒有綁定時不發請求（不需要容器） |
+| `tests/passwords.rs` | 密碼 Secret 對假的 API：第一次填入每個缺的 key（256 位元十六進位，各不相同），第二次只讀不寫；新的世代換掉每個受管的 key、不動其他 key、只換一次；較小的世代（rollback）不換、之後升級回來也不換；不是 Job 填過的 Secret 物件（uid 不同，含帶著同代 annotation 與自選密碼的）每個 key 都重新產生，別人只改 annotation 時也一樣，綁定時拿掉白名單以外的 annotation、標籤、ownerReferences 與 finalizers（報告只寫 key），已綁定的不再動；遺失或不能用的 key 單獨重新產生；Secret 不存在時停止並寫出處理方式；讀寫之間被改過時重讀，一直被改時停止而不覆蓋；拒絕的 token 與 403、API 暫時 503 的重試與上限；報告、錯誤與 `Debug` 都不含密碼或它的 base64；沒有綁定時不發請求（不需要容器） |
 | `tests/wait_for_job.rs` | `wait-for-job` 對一個假的 API server：等到完成、失敗與拒絕的 token、不信任其他 CA；Job 不存在時繼續等，訊息寫出 Job 名稱、原因與處理方式 |
 | `tests/registry.rs` | `PRODUCT` 列出每個檔案、檔案符合規則（大小寫與空白的變化也擋得到）、不一致的清單被拒絕（不需要資料庫） |

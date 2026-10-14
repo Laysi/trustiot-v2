@@ -49,7 +49,7 @@ Job 遇到這種部署會停止，不改任何角色：migration 角色擁有超
 
 同一個值再跑一次（例如改 `migrate.revision`）不會再換密碼：annotation 已經記著這一代。代以數字比較、只往上走：`helm rollback`（或 Flux 的 HelmRelease 升級失敗後以 `strategy: rollback` 回復）渲染出較小的值時，Job 保留現有的密碼，記的代不變，日誌沒有 `generated the password`；之後再升級回較大的值也不換，因為 Secret 記的已經是它。要真的換，就調到比 Secret 記的更大的值（`kubectl -n <namespace> get secret <release>-identity-password -o jsonpath='{.metadata.annotations.trustiot\.io/password-generation}'`）。
 
-Job 只信任它自己填過的 Secret 物件：寫入時在 annotation `trustiot.io/password-secret-uid` 記下 Secret 的 uid。Secret 被刪掉後重建（包括有人自己建一個同名、帶 Helm ownership metadata 的 Secret 讓 `helm install` 接手）或從備份還原時 uid 變了，下一次 Job 把每個 key 都重新產生並設定，日誌寫 `(the Secret is not the one the Job filled)`；服務隨新的 Job 名稱滾動更新。
+Job 只信任它自己填過的 Secret 物件：寫入時在 annotation `trustiot.io/password-secret-uid` 記下 Secret 的 uid。Secret 被刪掉後重建（包括有人自己建一個同名、帶 Helm ownership metadata 的 Secret 讓 `helm install` 接手）或從備份還原時 uid 變了，下一次 Job 把每個 key 都重新產生並設定，日誌寫 `(the Secret is not the one the Job filled)`；同一次寫入也拿掉 chart 與 Job 不設定的 annotation、標籤、`ownerReferences` 與 `finalizers`，日誌有 `removed from Secret <名稱> what neither the chart nor the Job sets: <key 清單>`（只有 key，沒有值）；服務隨新的 Job 名稱滾動更新。
 
 ## 密碼 Secret 的資料遺失
 
@@ -97,6 +97,7 @@ Job 遇到下列情況會停止，不自動修改；修好之後，Job 依 `migr
 | `it is a superuser` / `it has BYPASSRLS` / `it lacks CREATEROLE` / `it does not own the database` | migration 角色不符合規則 | bundled：補 CREATEROLE（上方）；external：請客戶的資料庫管理者調整 |
 | `no service in tools/migrate's registry` | 服務要用的角色沒有登記在 tools/migrate | 程式的錯，開 issue |
 | `Secret <名稱>: does not exist` | 密碼 Secret 被刪掉了 | 見上方「密碼 Secret 的資料遺失」 |
+| `Secret <名稱>: is being deleted` | 密碼 Secret 正在刪除（有 `deletionTimestamp`，可能被 finalizer 擋著）；Job 不把密碼寫進一個即將消失的 Secret | 找出擋著它的 finalizer 與原因（`kubectl get secret <名稱> -o jsonpath='{.metadata.finalizers}'`），讓刪除完成，再依「密碼 Secret 的資料遺失」處理 |
 | `Secret <名稱>: the API refused to get it` / `refused to patch it` | Job 的 Role 不在或被改過 | 確認 `<release>-migrate` 的 Role 與 RoleBinding 存在且與 chart 渲染的相同（`helm get manifest`）；不要放寬它 |
 | `Secret <名稱>: changed 5 times while the run filled it` | 有別的程式在同時寫這個 Secret | 找出寫入者（`kubectl get secret -o yaml` 的 `managedFields`）並停掉它；只有 `trustiot-migrate` 該寫 `data` |
 | `has SUPERUSER, CREATEROLE, CREATEDB or REPLICATION` / `has BYPASSRLS` | 有人改過服務的角色 | 先查是誰、為什麼改（稽核），再以 superuser `ALTER ROLE <角色> NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS` |
