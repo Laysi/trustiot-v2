@@ -256,6 +256,17 @@ pre-commit 審查在這一輪擋下三次，都已修正：
 - 平台角色的防護：原本只檢查 `_platform` 字樣，改為逐項比對 chart 的 Postgres 綁定。
 - N1、N4 與 `--force-replace` 的文件一次就通過。
 
+### 第五輪 lab e2e
+
+2026-10-14（台北時間）在 lab 的 Mac mini M1 上，以 `deploy/chart/tests/e2e/postgres.e2e.ts` 對第五輪的程式碼（`94b3614`，工作樹乾淨）各跑一次 `saas` 與 `onprem`：兩種 shape 都是 12 個測試全部通過、82 個斷言，0 失敗，第一次執行就通過，沒有環境問題。環境、指令、runner 的權限與清理方式同[第四輪 lab e2e](#第四輪-lab-e2e)（CloudNativePG 1.30.1、namespace `e2e-60`、API 轉送改用自動重連的版本）。
+
+- **二進位與映像**：建置主機以檢查佇列重建（42.0 秒）。example-service 的 SHA-256 與第四輪相同（`e7d3cb23…387d`），migrate 是 `95ceddf5…8ca6`（第四輪是 `4d73fbe2…bbe2`，第五輪改了 N3、N4）。節點上的映像 digest：`localhost/trustiot-e2e/example-service:60` 為 `sha256:d092547e29ea956c06faab885993dc3e99a38ff900c87c70d6643a8960e23a67`（不變），`localhost/trustiot-e2e/migrate:60` 為 `sha256:35bc4be7314b008dd750c484e0ba53a2399268589ba08d3c51448a1b3e0ebf68`，`localhost/trustiot-e2e/postgres:60` 為 `sha256:a69113bc9ed44cc810941248f3a0874371df11b5cd252c417ac793d26e83157b`（發佈的 `v0.0.0-rc.6`，不變）。完整清單在 [round5-lab-e2e-binaries-and-images.txt](data/2026-10-13-60-migration-job/round5-lab-e2e-binaries-and-images.txt)。
+- **時間**：saas 06:38:01Z 到 06:41:10Z（整個檔案 189.0 秒），onprem 06:41:10Z 到 06:44:36Z（205.8 秒）。
+- **逐項**：12 項與第四輪相同，全部通過。重要的幾項：Job 產生的兩個密碼 Secret 是世代 `1`、`bound: true`、寫 `data` 的只有 `trustiot-migrate`；同樣 values 的 `helm upgrade` 與 `rollback` 後 `unchanged`（saas 60.4 秒、onprem 60.2 秒）；`passwordGeneration=2` 後 `changed`、服務與 collector 再次 Ready（15.2 秒、11.8 秒）；rollback 到世代 1 與升級回 2 都 `unchanged`（21.9 秒、22.6 秒）；刪掉 key 後以 `migrate.revision=2` 重跑 `changed`（12.9 秒、19.4 秒）；uninstall 保留 Cluster、ImageCatalog、PVC 與兩個密碼 Secret（3.2 秒、22.4 秒）。`helm install --wait` 返回 saas 33.6 秒、onprem 33.3 秒，整組 Ready 約 46 秒。N1 的 `trustiot.decimal` 渲染由 `--set migrate.passwordGeneration=2` 與 `migrate.revision=2` 的升級涵蓋；N3 在這個 e2e 只涵蓋正常路徑（第一次安裝綁定後，寫 `data` 的只有 `trustiot-migrate`），這個 e2e 不會預先放入外來的標籤、annotation、ownerReference 或 finalizer，那部分由 `tests/passwords.rs` 涵蓋；N4 由 collector 在兩次輪替前後都 Ready 涵蓋。
+- **原始資料**：[saas](data/2026-10-13-60-migration-job/round5-lab-e2e-saas-output.txt)、[onprem](data/2026-10-13-60-migration-job/round5-lab-e2e-onprem-output.txt)（輸出只有 `unchanged`／`changed`）、[saas](data/2026-10-13-60-migration-job/round5-lab-e2e-saas.json)、[onprem](data/2026-10-13-60-migration-job/round5-lab-e2e-onprem.json)（Secret 的形狀，沒有值），JUnit 在同目錄的 `round5-lab-e2e-*.junit.xml`。
+- **範圍**：受測的是 `94b3614`。之後的 `16a8d67`、`e797188`、`0cb76a3`（L1 與 L3，其中 `e797188` 改了 migrate 的 ClickHouse 查詢）不在這次的映像裡；Postgres 的執行路徑沒有改，ClickHouse 的新查詢由 `tests/clickhouse.rs` 在 CI 執行。
+- **清理**：兩次執行之後刪除 namespace `e2e-60`；沒有 Cluster 與屬於這次執行的 PV；三個 `:60` 映像留在節點上；kubeconfig、SSH 轉送、建置主機上的副本與本機暫存檔已刪除。
+
 ## 第六輪：第五輪的程式層複驗
 
 2026-10-14 獨立驗證在程式層複驗第五輪（head 94b3614）。N1、N3、N4 與服務清單的防護都成立：
