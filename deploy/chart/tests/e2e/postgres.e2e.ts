@@ -208,6 +208,7 @@ const base = [
 
 interface StoredSecret {
   metadata: {
+    uid?: string;
     annotations?: Record<string, string>;
     labels?: Record<string, string>;
     managedFields?: { manager: string; fieldsV1?: { "f:data"?: Record<string, unknown> } }[];
@@ -226,15 +227,18 @@ function passwordDigest(): string {
 }
 const compared = (before: string, after: string) => (before === after ? "unchanged" : "changed");
 
-// What the password Secrets hold, by name only: their keys, the generation that made them and who
-// wrote the data.
+// What the password Secrets hold, by name only: their keys, the generation that made them, whether
+// the Job bound the data to this object (its uid) and who wrote the data. kubectl leaves
+// managedFields out of its output unless asked (found by the lab run of 2026-10-13, where
+// dataManagers came back empty).
 function passwordSecretsShape() {
   return PASSWORD_SECRETS.map((name) => {
-    const found = secret(name);
+    const found = json<StoredSecret>("get", "secret", name, "--show-managed-fields");
     return {
       name,
       keys: Object.keys(found.data ?? {}).sort(),
       generation: found.metadata.annotations?.["trustiot.io/password-generation"],
+      bound: found.metadata.uid !== undefined && found.metadata.annotations?.["trustiot.io/password-secret-uid"] === found.metadata.uid,
       keep: found.metadata.annotations?.["helm.sh/resource-policy"],
       filledBy: found.metadata.labels?.["trustiot.io/filled-by"],
       dataManagers: (found.metadata.managedFields ?? []).filter((f) => f.fieldsV1?.["f:data"] !== undefined).map((f) => f.manager),
@@ -529,8 +533,8 @@ describe(`bundled Postgres (${SHAPE} shape)`, () => {
     const shape = passwordSecretsShape();
     report.passwordSecrets = shape;
     expect(shape).toEqual([
-      { name: SERVICE_SECRET, keys: [ROLE], generation: "1", keep: "keep", filledBy: "migrate", dataManagers: ["trustiot-migrate"] },
-      { name: COLLECTOR_SECRET, keys: ["trustiot_collector"], generation: "1", keep: "keep", filledBy: "migrate", dataManagers: ["trustiot-migrate"] },
+      { name: SERVICE_SECRET, keys: [ROLE], generation: "1", bound: true, keep: "keep", filledBy: "migrate", dataManagers: ["trustiot-migrate"] },
+      { name: COLLECTOR_SECRET, keys: ["trustiot_collector"], generation: "1", bound: true, keep: "keep", filledBy: "migrate", dataManagers: ["trustiot-migrate"] },
     ]);
     for (const name of PASSWORD_SECRETS) {
       for (const value of Object.values(secret(name).data ?? {})) {
@@ -654,6 +658,29 @@ describe(`bundled Postgres (${SHAPE} shape)`, () => {
       for (const pod of pods) expect(ready(pod), pod.metadata.name).toBe(true);
     }
   }, 1_200_000);
+
+  test("a rollback to the older password generation keeps the new passwords, and so does the upgrade after it", () => {
+    // Flux's remediation (strategy: rollback) does this after a failed upgrade: the rollback
+    // renders migrate.passwordGeneration=1 again, and generations only go up.
+    const before = passwordDigest();
+    const revisions = JSON.parse(helm("history", RELEASE, "--output", "json")) as { revision: number }[];
+    const beforeRotation = Math.max(...revisions.map((r) => r.revision)) - 1;
+    helm("rollback", RELEASE, String(beforeRotation), "--wait", "--timeout", "10m");
+    rolledOut();
+    const afterRollback = compared(before, passwordDigest());
+    const rollbackLog = kubectl("logs", `job/${jobName()}`);
+    upgrade("--set", "migrate.passwordGeneration=2");
+    rolledOut();
+    const afterUpgrade = compared(before, passwordDigest());
+    const generations = passwordSecretsShape().map((s) => s.generation);
+    report.rollbackAfterRotation = { rollback: afterRollback, upgrade: afterUpgrade, generations };
+    console.log(`password Secrets after a rollback to generation 1: ${afterRollback}; after the upgrade back to 2: ${afterUpgrade}`);
+    expect(afterRollback).toBe("unchanged");
+    expect(afterUpgrade).toBe("unchanged");
+    expect(generations).toEqual(["2", "2"]);
+    expect(rollbackLog).not.toContain("generated the password");
+    expect(kubectl("logs", `job/${jobName()}`)).not.toContain("generated the password");
+  }, 1_800_000);
 
   test("a lost key is regenerated when the Job runs again", () => {
     const before = passwordDigest();
