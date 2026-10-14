@@ -90,6 +90,8 @@ const RUST_IGNORED_FILES: ReadonlySet<string> = new Set([
 const RUST_READ_FILES: ReadonlySet<string> = new Set([
   // crates/service-kit/tests/chart_contract.rs
   "deploy/chart/values.yaml",
+  // tools/migrate/tests/registry.rs: which login roles the chart binds a Secret to
+  "deploy/chart/templates/_migrate.tpl",
 ]);
 
 /**

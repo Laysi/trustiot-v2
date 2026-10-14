@@ -53,6 +53,45 @@ fn assert_lists(what: &str, dir: &Path, listed: &[Migration]) {
     }
 }
 
+/// A login role logs in only while a Secret is bound to it, and the chart binds exactly one per
+/// service: `<schema>_app` ("trustiot.migrate.passwordSecrets" with "trustiot.migrate.appRole" in
+/// deploy/chart/templates/_migrate.tpl). A product service with a platform role would get a role
+/// that never logs in, so none may have one until the chart binds `<schema>_platform` as well and
+/// this test checks that binding instead (Laysi/trustiot-v2#65 adds the first such service).
+#[test]
+fn the_chart_binds_every_login_role_of_the_product() {
+    let chart = fs::read_to_string(repo_root().join("deploy/chart/templates/_migrate.tpl"))
+        .expect("read the chart's migration helpers");
+    let helper = chart
+        .split(r#"{{- define "trustiot.migrate.passwordSecrets" -}}"#)
+        .nth(1)
+        .and_then(|rest| rest.split("{{- end -}}\n\n").next())
+        .expect("the chart's password Secret bindings");
+    let postgres_bindings: Vec<&str> = helper
+        .lines()
+        .filter(|line| line.contains(r#""kind" "postgres""#))
+        .collect();
+    assert_eq!(
+        postgres_bindings.len(),
+        1,
+        "the chart's Postgres password bindings changed; update this test: {postgres_bindings:?}"
+    );
+    assert!(
+        postgres_bindings[0].contains(r#""key" (include "trustiot.migrate.appRole" .)"#),
+        "the chart binds another key than <schema>_app; update this test: {}",
+        postgres_bindings[0]
+    );
+    for service in PRODUCT.services {
+        assert!(
+            !service.platform_role,
+            "{}: has a platform role, but the chart binds a password Secret only to {}; bind the \
+             platform role in \"trustiot.migrate.passwordSecrets\" too, or it stays NOLOGIN",
+            service.name,
+            service.app_role()
+        );
+    }
+}
+
 /// Every service directory with `migrations/postgres` is in the registry with all its files;
 /// the ClickHouse list is `services/ingest/migrations/clickhouse`.
 #[test]
