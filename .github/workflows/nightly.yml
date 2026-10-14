@@ -40,6 +40,7 @@ on:
       - .github/actions/setup-proto/**
       - .proto/plugins/**
       - .prototools
+      - .dockerignore
       # What goes into the migration Job's image (scripts/nightly/image-cache.ts): the workspace,
       # the toolchain, the build scripts and every local crate tools/migrate builds from
       # (scripts/nightly/image-cache.test.ts keeps this list complete).
@@ -144,6 +145,8 @@ jobs:
           key: ${{ steps.migrate-image.outputs.key }}
       # Only for a build: zig, cargo-zigbuild and cargo-auditable build the image the way
       # release.yml does; Rust comes from the runner's rustup (scripts/nightly/service-image.ts).
+      # When a restored tarball turns out unusable, run.ts warns, installs them itself with proto
+      # and builds.
       - name: Install the tools that build the migration Job's image
         if: ${{ steps.migrate-image-cache.outputs.cache-hit != 'true' }}
         uses: ./.github/actions/setup-proto

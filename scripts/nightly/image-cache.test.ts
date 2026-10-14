@@ -80,11 +80,17 @@ describe("the cache key of a nightly Rust image", () => {
     for (const path of ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".prototools", "deploy/images/rust-binary.Containerfile", "scripts"]) {
       expect(inputs).toContain(path);
     }
+    // How CI builds it: the ignore file a container build reads, the workflow and the action that
+    // installs the build tools (Laysi/trustiot-v2#60 round 4, R6).
+    for (const path of [".dockerignore", ".github/workflows/nightly.yml", ".github/actions/setup-proto"]) expect(inputs).toContain(path);
     // Every path dependency reachable from tools/migrate, and every [patch] path, lies under an input.
     const under = (path: string) => inputs.some((input) => path === input || path.startsWith(`${input}/`));
     const crates = migrateCrates();
     for (const dir of crates) expect(under(dir), dir).toBe(true);
     expect(crates.length).toBeGreaterThan(2);
+    // Every workspace member directory is under an input (a false miss costs a build).
+    const root = Bun.TOML.parse(readFileSync(join(REPO_ROOT, "Cargo.toml"), "utf8")) as { workspace: { members: string[] } };
+    for (const member of root.workspace.members) expect(under(member.replace(/\/\*$/, "")), member).toBe(true);
   });
 
   test("a pull request that changes what goes into the migration Job's image can run the smoke test", () => {
@@ -95,13 +101,13 @@ describe("the cache key of a nightly Rust image", () => {
     };
     const paths = workflow.on.pull_request.paths;
     for (const dir of migrateCrates()) expect(paths, dir).toContain(`${dir}/**`);
-    for (const file of ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".prototools", "deploy/images/rust-binary.Containerfile"]) {
+    for (const file of ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".prototools", "deploy/images/rust-binary.Containerfile", ".dockerignore", ".github/workflows/nightly.yml"]) {
       expect(paths, file).toContain(file);
     }
     for (const dir of ["deploy/images/migrate", "scripts", ".proto/plugins"]) expect(paths, dir).toContain(`${dir}/**`);
     // Every other input of the key is in the list too, except the Rust directories as a whole:
     // only the crates above go into this image.
-    for (const input of imageCacheInputs("migrate").filter((path) => !["crates", "services", "tools"].includes(path))) {
+    for (const input of imageCacheInputs("migrate").filter((path) => !["crates", "services", "tools", "edge", "factory"].includes(path))) {
       expect(paths.includes(input) || paths.includes(`${input}/**`), input).toBe(true);
     }
     // The SQL the Job embeds.
@@ -163,31 +169,51 @@ describe("loading and saving the cached image", () => {
 
   test("a miss runs nothing", async () => {
     const { seen, commands } = fakeDocker();
-    expect(await loadCachedImage(log, dir, "migrate", IMAGE, commands)).toBe(false);
+    expect(await loadCachedImage(log, dir, "migrate", IMAGE, commands)).toBe("missing");
     expect(seen).toEqual([]);
   });
 
   test("a hit loads the tarball and checks the image's platform", async () => {
     writeFileSync(imageCacheFile(dir, "migrate"), "tarball");
     const { seen, commands } = fakeDocker();
-    expect(await loadCachedImage(log, dir, "migrate", IMAGE, commands)).toBe(true);
+    expect(await loadCachedImage(log, dir, "migrate", IMAGE, commands)).toBe("loaded");
     expect(seen).toEqual([
       ["docker", "load", "--input", join(dir, "migrate.tar")],
       ["docker", "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", IMAGE],
     ]);
   });
 
-  test("a cached image for another platform fails the run", async () => {
+  /** The run log's lines, without their time stamps. */
+  const logged = (path: string) =>
+    readFileSync(path, "utf8")
+      .trimEnd()
+      .split("\n")
+      .map((line) => line.replace(/^\S+ /, ""));
+
+  test("a cached image for another platform is not used: the caller builds, and the run says why", async () => {
+    const path = join(dir, "run.log");
     writeFileSync(imageCacheFile(dir, "migrate"), "tarball");
-    await expect(loadCachedImage(log, dir, "migrate", IMAGE, fakeDocker("linux/amd64").commands)).rejects.toThrow("linux/amd64");
+    expect(await loadCachedImage(new RunLog(path), dir, "migrate", IMAGE, fakeDocker("linux/amd64").commands)).toBe("unusable");
+    expect(logged(path).at(-1)).toContain(`the cached ${IMAGE} cannot be used (it is for linux/amd64, not linux/arm64); building it instead`);
   });
 
-  test("a tarball docker cannot load fails the run and says how to drop the entry", async () => {
+  test("a partial or corrupt tarball is not used: the caller builds, and the run says how to drop the entry", async () => {
+    const path = join(dir, "run.log");
     writeFileSync(imageCacheFile(dir, "migrate"), "not a tarball");
-    const broken = { run: async () => Promise.reject(new Error("docker load: unexpected EOF")) };
-    const failure = loadCachedImage(log, dir, "migrate", IMAGE, broken);
-    await expect(failure).rejects.toThrow("unexpected EOF");
-    await expect(loadCachedImage(log, dir, "migrate", IMAGE, broken)).rejects.toThrow("Delete the Actions cache entry nightly-image-migrate-");
+    const broken = { run: async () => Promise.reject(new Error("docker load: unexpected EOF\nmore output")) };
+    expect(await loadCachedImage(new RunLog(path), dir, "migrate", IMAGE, broken)).toBe("unusable");
+    const last = logged(path).at(-1)!;
+    expect(last).toContain("docker load failed: docker load: unexpected EOF); building it instead");
+    expect(last).toContain("Delete the Actions cache entry nightly-image-migrate-");
+  });
+
+  test("an image docker loaded without the expected tag is not used", async () => {
+    writeFileSync(imageCacheFile(dir, "migrate"), "tarball");
+    const run = async (_log: RunLog, cmd: string[]) => {
+      if (cmd[1] === "image") throw new Error("No such image");
+      return ok();
+    };
+    expect(await loadCachedImage(log, dir, "migrate", IMAGE, { run })).toBe("unusable");
   });
 
   test("saving writes the tarball under its final name only when docker save finished", async () => {

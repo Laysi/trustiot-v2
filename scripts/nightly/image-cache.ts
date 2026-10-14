@@ -18,8 +18,11 @@ import type { ExecOptions, ExecResult, RunLog } from "./exec.ts";
  * Everything that decides what is in a Rust image the nightly builds, relative to the repository
  * root: the workspace and its lock file, the toolchain and the pinned build tools, every Rust
  * directory (a false miss costs one build, a false hit tests code that is not the commit's), the
- * image's own directory, the Containerfile, and every script: the build runs service-image.ts,
- * which imports scripts/release, scripts/lib and the nightly's helpers, and those import more.
+ * image's own directory, the Containerfile and the ignore file a container build reads, every
+ * script (the build runs service-image.ts, which imports scripts/release, scripts/lib and the
+ * nightly's helpers, and those import more), and how CI sets up the build: nightly.yml and the
+ * setup-proto action that installs the tools. The whole workflow file, since the steps that build
+ * cannot be told apart from the rest by path; a change to it costs one build.
  */
 export function imageCacheInputs(name: string): string[] {
   return [
@@ -31,9 +34,14 @@ export function imageCacheInputs(name: string): string[] {
     "crates",
     "services",
     "tools",
+    "edge",
+    "factory",
     `deploy/images/${name}`,
     "deploy/images/rust-binary.Containerfile",
+    ".dockerignore",
     "scripts",
+    ".github/workflows/nightly.yml",
+    ".github/actions/setup-proto",
   ];
 }
 
@@ -84,9 +92,15 @@ export function imageCacheFile(dir: string, name: string): string {
   return join(dir, `${name}.tar`);
 }
 
+/** What became of the restored tarball. */
+export type CachedImage = "loaded" | "missing" | "unusable";
+
 /**
- * Loads image `name` from the restored tarball into docker and returns true, or returns false when
- * there is no tarball (a miss). The loaded image must be the expected tag for linux/arm64.
+ * Loads image `name` from the restored tarball into docker. "missing" when there is no tarball (a
+ * miss); "unusable" when docker cannot load it (a partial or corrupt tarball), it does not hold the
+ * expected tag, or the image is not for linux/arm64: the caller builds the image instead, and the
+ * run says so (a GitHub warning in CI), since the bad entry stays under its key until the inputs
+ * change.
  */
 export async function loadCachedImage(
   log: RunLog,
@@ -94,32 +108,36 @@ export async function loadCachedImage(
   name: string,
   image: string,
   commands: { run: typeof run } = { run },
-): Promise<boolean> {
+): Promise<CachedImage> {
   const file = imageCacheFile(dir, name);
   if (!existsSync(file)) {
     log.line(`no cached image at ${file}: building ${image}`);
-    return false;
+    return "missing";
   }
-  // A bad entry stays under its key until the inputs change, so say how to get rid of it.
-  const unusable = (problem: string) =>
-    new Error(
-      `the cached ${image} cannot be used: ${problem}. Delete the Actions cache entry nightly-image-${name}-… ` +
-        "(the repository's Actions caches page, or `gh cache delete <key>` with the key the workflow printed) and run again",
-    );
+  const unusable = (problem: string): CachedImage => {
+    const message =
+      `the cached ${image} cannot be used (${problem}); building it instead. Delete the Actions cache entry nightly-image-${name}-… ` +
+      "(the repository's Actions caches page, or `gh cache delete <key>` with the key the workflow printed), or every run until the inputs change builds again";
+    log.line(message);
+    if (process.env.GITHUB_ACTIONS === "true") console.log(`::warning title=Nightly image cache::${message}`);
+    return "unusable";
+  };
+  const reason = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0]!;
   try {
     await commands.run(log, ["docker", "load", "--input", file], { timeoutMs: 300_000 });
   } catch (error) {
-    throw unusable(error instanceof Error ? error.message : String(error));
+    return unusable(`docker load failed: ${reason(error)}`);
   }
-  const inspected = await commands.run(log, ["docker", "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", image], { timeoutMs: 60_000 }).catch(
-    (error: unknown) => {
-      throw unusable(`it does not hold ${image} (${error instanceof Error ? error.message : String(error)})`);
-    },
-  );
-  const platform = inspected.stdout.trim();
-  if (platform !== IMAGE_PLATFORM) throw unusable(`it is for ${platform}, not ${IMAGE_PLATFORM}`);
+  let platform: string;
+  try {
+    const inspected = await commands.run(log, ["docker", "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", image], { timeoutMs: 60_000 });
+    platform = inspected.stdout.trim();
+  } catch (error) {
+    return unusable(`it does not hold ${image}: ${reason(error)}`);
+  }
+  if (platform !== IMAGE_PLATFORM) return unusable(`it is for ${platform}, not ${IMAGE_PLATFORM}`);
   log.line(`loaded ${image} from the cache, no Rust build`);
-  return true;
+  return "loaded";
 }
 
 /** Writes image `name` as the tarball nightly.yml saves; a partial file never takes the final name. */

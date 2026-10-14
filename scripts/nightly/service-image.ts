@@ -65,6 +65,19 @@ export interface ServiceImageTools {
 }
 
 /** Finds the tools: rustup and cargo on PATH, the rest at the versions pinned in .prototools. */
+/** The pinned tools a build needs besides rustup (`tools:` of nightly.yml's setup-proto step). */
+export const BUILD_TOOLS = ["zig", "cargo-zigbuild", "cargo-auditable"];
+
+/**
+ * Installs the pinned build tools, one `proto install <tool>` each (proto installs a single tool
+ * per call when it is given a name; the version comes from .prototools).
+ */
+export async function installBuildTools(context: Pick<Platform, "repoRoot" | "log">, commands: Pick<ImportCommands, "run"> = { run }): Promise<void> {
+  for (const tool of BUILD_TOOLS) {
+    await commands.run(context.log, ["proto", "install", tool], { cwd: context.repoRoot, timeoutMs: 600_000 });
+  }
+}
+
 export async function findServiceImageTools(repoRoot: string): Promise<ServiceImageTools> {
   const onPath = (name: string): string => {
     const path = Bun.which(name);
@@ -72,7 +85,7 @@ export async function findServiceImageTools(repoRoot: string): Promise<ServiceIm
     return path;
   };
   const [zig, cargoZigbuild, cargoAuditable] = await Promise.all(
-    ["zig", "cargo-zigbuild", "cargo-auditable"].map((tool) => pinnedTool(tool, repoRoot)),
+    BUILD_TOOLS.map((tool) => pinnedTool(tool, repoRoot)),
   );
   return { rustup: onPath("rustup"), cargo: onPath("cargo"), zig: zig!, cargoZigbuild: cargoZigbuild!, cargoAuditable: cargoAuditable!, containerTool: "docker" };
 }
@@ -178,7 +191,9 @@ export interface ImageCache {
  * Imports the image of the Rust service `name` into every node of the nightly's k3d cluster;
  * returns the tag. With a cache, the image comes from the tarball nightly.yml restored for the
  * exact key of its inputs (image-cache.ts), and no Rust tool is looked up or run; without one, or
- * on a miss, it is built, and written for the cache when `save` is set. The chart runs it with
+ * on a miss, it is built, and written for the cache when `save` is set. A tarball that cannot be
+ * used is reported and the image built instead, after installing the build tools nightly.yml
+ * skipped on the hit. The chart runs it with
  * `services.<name>.image` set to serviceImageValues(name). For Laysi/trustiot-v2#65 and
  * Laysi/trustiot-v2#77.
  */
@@ -191,8 +206,13 @@ export async function loadServiceImage(
   const pause = options.pauseMs === undefined ? {} : { pauseMs: options.pauseMs };
   const image = serviceImageRef(name);
   const cache = options.cache;
-  const cached = cache !== undefined && (await loadCachedImage(platform.log, cache.dir, name, image, commands));
-  if (!cached) {
+  const cached = cache === undefined ? "missing" : await loadCachedImage(platform.log, cache.dir, name, image, commands);
+  if (cached !== "loaded") {
+    if (cached === "unusable" && options.tools === undefined) {
+      // nightly.yml installs the build tools only on a miss; a hit whose tarball turned out
+      // unusable installs them here (the pinned versions, through proto).
+      await installBuildTools(platform, commands);
+    }
     const tools = options.tools ?? (await findServiceImageTools(platform.repoRoot));
     await buildServiceImage(platform, name, tools, commands, pause);
     if (cache?.save === true) await saveImageForCache(platform.log, cache.dir, name, image, commands);
