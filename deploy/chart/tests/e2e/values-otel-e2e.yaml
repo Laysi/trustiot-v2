@@ -28,13 +28,21 @@ clickhouse:
         memory: 1536Mi
 
 # No database: the example service runs without one here, so the test needs neither the
-# CloudNativePG operator nor a CA Secret (no service lists postgres under mesh.calls).
+# CloudNativePG operator nor a CA Secret (no enabled service lists postgres under mesh.calls, see
+# below).
 postgres:
   mode: external
   external:
     host: postgres.e2e.trustiot.test
     caSecret:
       name: trustiot-e2e-postgres-ca
+
+# values.yaml lists postgres for assets, which the example service plays here. Without the Job
+# nothing fills the password Secret the chart would give it, so the pod would never start
+# (chart.test.ts, "e2e overlays").
+mesh:
+  calls:
+    assets: []
 
 services:
   # crates/service-kit's example-service, standing in for a product service: it answers

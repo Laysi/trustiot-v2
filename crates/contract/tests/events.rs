@@ -13,6 +13,7 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Timelike, Utc};
 use contract::event::parse_payload;
+use contract::events::identity::TenantCreated;
 use contract::{DecodeError, EncodeError, Event, EventEnvelope, ServiceName, TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -144,6 +145,22 @@ fn old_versions_decode_with_the_current_consumer() {
         "version 1 is upgraded to the current type"
     );
     assert_eq!(decoded[1].1, widget_renamed());
+}
+
+/// `identity.tenant_created` (Laysi/trustiot-v2#65): the payload is an empty object, and the
+/// tenant is the envelope's.
+#[test]
+fn tenant_created_decodes_every_version() {
+    let decoded = decode_fixtures::<TenantCreated>();
+    let names: Vec<&str> = decoded.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["v1"]);
+    let tenant: TenantId = "01928f6e-7a3c-7d4e-8f00-00000000000b"
+        .parse()
+        .expect("tenant id");
+    let envelope = EventEnvelope::new(&TenantCreated {}, Some(tenant)).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Identity);
+    assert_eq!(envelope.payload, json!({}));
+    assert_eq!(envelope.tenant_id, Some(tenant));
 }
 
 #[test]

@@ -10,6 +10,7 @@
 | `isolation::postgres` | Postgres 的 store：`PgStore`、`pg_table!`、`pg_view!` |
 | `identity` | `TestIssuer`：以測試行程產生的 Ed25519 金鑰簽內部身分 token，`jwks()` 就是服務的 `TRUSTIOT_INTERNAL_IDENTITY_KEYS` |
 | `postgres` | `tls_postgres(init)`：帶 TLS 的拋棄式 Postgres（service-kit 只接受 `verify-full`），同一個測試執行檔共用一個容器 |
+| `product` | `product_postgres(logins)`：在 `tls_postgres` 上以 migration Job 本身（`migrate::run` 與 `PRODUCT`）套用整個產品的 schema，與部署得到的一樣（Laysi/trustiot-v2#65）；見[產品 schema](#產品-schema) |
 | `container` | podman 或 docker 的容器，drop 時刪除；`unavailable(what)`：本機缺容器執行環境時略過測試，設了 `CI` 時改為失敗 |
 
 ## 新服務怎麼接上
@@ -21,7 +22,7 @@
    testkit = { path = "../../crates/testkit" }
    ```
 
-2. 建 `tests/cross_tenant.rs`。資料庫照服務正式的方式準備：以 migration 角色跑完全部 migration（含 service-kit 的 [`sql/database.sql`](../service-kit/sql/database.sql)），服務角色、平台角色照 [service-kit 的角色範本](../service-kit/README.md#角色與-policy-範本)。
+2. 建 `tests/cross_tenant.rs`。資料庫照服務正式的方式準備：以 migration 角色跑完全部 migration（含 service-kit 的 [`sql/database.sql`](../service-kit/sql/database.sql)），服務角色、平台角色照 [service-kit 的角色範本](../service-kit/README.md#角色與-policy-範本)。服務已登記在 `tools/migrate` 的 `PRODUCT` 時，直接用 `product_postgres`（見[產品 schema](#產品-schema)），outbox 的表與其他服務的 schema 也一起有了，例子是 `services/identity/tests/cross_tenant.rs` 與 `services/assets/tests/cross_tenant.rs`。
 3. 啟動服務：用 `TestIssuer::jwks()` 當 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`，資料庫連線用服務角色、`verify-full` 與 `TlsPostgres::ca_pem`（以子行程啟動時把它寫成 `TRUSTIOT_POSTGRES_CA_FILE` 指向的檔案）。可以在測試行程裡以 `axum::serve` 跑服務的 router，或像 service-kit 的範例服務那樣啟動子行程。
 4. 宣告每張表、每個端點，跑 suite：
 
@@ -81,6 +82,7 @@ async fn tenants_are_isolated() {
 | 宣告 | 用在 | 說明 |
 | --- | --- | --- |
 | `pg_table!("name", seed = "…")` | 有 `tenant_id` 的表 | 名稱是字串字面值，`table`（在 `public`）或 `schema.table`，小寫、不加引號。seed 是 seeder 執行的靜態 SQL，插入一列：`$1` 租戶 id（uuid）、`$2` 新的列 id（uuid）、`$3` canary（text）；`$2` 或 `$3` 至少存一個在讀得到的欄位。需要父列的表用一個語句一起插：`WITH parent AS (INSERT INTO devices (tenant_id, id, name) VALUES ($1, gen_random_uuid(), $3) RETURNING tenant_id, id) INSERT INTO points (tenant_id, id, device_id, name) SELECT tenant_id, $2, id, $3 FROM parent` |
+| `pg_table!("name", seed = "…", one_per_tenant)` | 每個租戶最多一列的表（`tenant_id` 就是主鍵，例如 `identity.tenants`、`assets.tenants`） | 每個租戶只種一列，不管端點要幾列；那一列的 id（`$2`）就是租戶 id，所以讀得到它的 `tenant_id` 就算讀得到那一列。Postgres 要每個參數都有型別，seed 沒存 `$2` 或 `$3` 時仍要提到它們，例如 `INSERT INTO assets.tenants (tenant_id) SELECT $1 WHERE $2::uuid IS NOT NULL AND $3::text IS NOT NULL` |
 | `pg_view!("name")` | 建在租戶表上的 `security_invoker` 檢視 | 只讀；攻擊者至少要看到一列（正向對照） |
 | `PgStore::exempt("schema.name", "理由")` | 服務角色用得到、但沒有租戶資料的關聯 | 有 `tenant_id` 欄的不能豁免 |
 | `Endpoint::list(path, table)` | 列出呼叫者租戶資料的 `GET` | 路徑沒有參數 |
@@ -123,7 +125,7 @@ async fn tenants_are_isolated() {
 
 ## 證明測得出漏洞
 
-`tests/postgres_isolation.rs` 以同一份宣告測試四種狀況，`cargo test -p testkit` 每次都跑：
+`tests/postgres_isolation.rs` 以同一份宣告測試前四種狀況，另以一張每個租戶一列的表測 `one_per_tenant`，`cargo test -p testkit` 每次都跑：
 
 | 測試 | 狀況 | 預期 |
 | --- | --- | --- |
@@ -131,6 +133,7 @@ async fn tenants_are_isolated() {
 | `a_forgotten_table_fails` | 多一張服務角色讀得到、但沒宣告的租戶表 | 只有覆蓋檢查失敗 |
 | `an_endpoint_that_reads_across_tenants_fails` | `GET /v1/items/{id}` 改用 migration 角色讀（RLS 管不到） | 端點探測抓到 B 的資料；資料庫探測全部通過 |
 | `an_endpoint_that_writes_across_tenants_fails` | `PUT /v1/items/{id}` 改用 migration 角色寫 | 回 200 而不是 404，而且 B 的列被改 |
+| `a_table_with_one_row_per_tenant_is_attacked_too` | 一張 `one_per_tenant` 的表，RLS 開著、再關掉 | 開著時通過；關掉時失敗，失敗寫出那張表 |
 
 ## 擴充：ClickHouse 與 AGE
 
@@ -143,6 +146,12 @@ async fn tenants_are_isolated() {
 - 端點探測只用 admin 身分；租戶內角色（viewer、editor）的權限檢查是各服務自己的測試。
 - 外洩以 marker 判斷：回應若把 id 轉成別的格式（例如 base64），就看不出來，這種端點要另外寫測試。
 - 豁免的關聯不種資料也不攻擊，豁免理由要經審查。
+
+## 產品 schema
+
+`product::product_postgres(&["identity_app", ...])` 起一個 `tls_postgres`（`init` 是 `PRODUCT_INIT`：migration 角色 `trustiot_owner`，與 chart 的 bundled Postgres 一樣有 `CREATEROLE`、不是 superuser），建資料庫 `trustiot`，以 `migrate::run(&config, &PRODUCT)` 套用每個服務的角色、schema、outbox 的表與 policy、migration，與部署時 migration Job 做的完全相同。Job 不會讓沒有綁 Secret 的登入角色登入（維持 `NOLOGIN`），所以參數列出測試要用來登入的角色，只有它們以 `TEST_PASSWORD` 取得 `LOGIN`，就像 chart 的 Secret 給它們密碼。回傳的 `ProductPostgres` 有 `platform_env()`（服務子行程要的 `TRUSTIOT_POSTGRES_*`，CA 寫成暫存檔，drop 時刪除）與 `superuser()`（不受 RLS 限制的連線，給種資料與檢查用）。
+
+角色是整個叢集共用的，Job 也拒絕擁有兩個資料庫的 migration 角色，所以一個容器只套用一次產品；同一個測試執行檔的測試共用它與資料庫 `trustiot`：每個測試用自己的資料（新的租戶、新的使用者），不要假設表是空的。需要 podman 或 docker，沒有時略過，設了 `CI` 時失敗。
 
 ## 其他工具
 

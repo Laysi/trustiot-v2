@@ -7,6 +7,7 @@
 | `error` | M1 錯誤格式：`ErrorBody`、`ErrorCode`、`MessageKey`、`FieldError` |
 | `id` | `TenantId`、`UserId`、`EventId`：新 ID 一律 UUIDv7（[可搬移規則 3](../../docs/architecture/deployment.md)） |
 | `event` | `Event` trait 與事件信封 `EventEnvelope` |
+| `events` | 事件本身，每個產生端服務一個子模組；目前有 `events::identity::TenantCreated`（`identity.tenant_created`，Laysi/trustiot-v2#65） |
 | `identity` | 內部身分標頭 `x-internal-identity`、claims `InternalClaims`、遮蔽內容的 `InternalToken` |
 | `client` | 內部 API 的 `Endpoint` 與有型別的 client `InternalClient<S>` |
 | `service` | `ServiceName` 與型別層級的服務標記（`service::Identity` 等） |
@@ -118,7 +119,7 @@ client 每次失敗都記一筆日誌，欄位有 `peer`、`route`（路由樣�
 
 新增事件：
 
-1. 在產生端服務的契約旁實作 `Event`：`TYPE` 是 `<領域>.<事件>`，小寫英數與底線（例如 `identity.tenant_created`），全系統唯一，永不改名、不重用，格式錯誤會在第一次呼叫 `EventEnvelope::new` 的地方編譯失敗；`VERSION = 1`；`PRODUCER` 是唯一會產生它的服務。
+1. 在 `src/events/<產生端服務>.rs` 實作 `Event`（第一個事件建立該檔案，並在 `src/events.rs` 加上模組）：`TYPE` 是 `<領域>.<事件>`，小寫英數與底線（例如 `identity.tenant_created`），全系統唯一，永不改名、不重用，格式錯誤會在第一次呼叫 `EventEnvelope::new` 的地方編譯失敗；`VERSION = 1`；`PRODUCER` 是唯一會產生它的服務。
 2. payload 必須序列化成 JSON 物件，不用 `deny_unknown_fields`。
 3. 新增固定樣本 `tests/fixtures/events/<TYPE>/v1.json`（完整信封），並在 `tests/events.rs` 加一個呼叫 `decode_fixtures::<該事件>()` 的測試。
 

@@ -7,6 +7,8 @@
 //! - [`identity`]: internal identity tokens signed with a key made for the test process.
 //! - [`postgres`]: a throwaway Postgres with TLS, which service-kit's `verify-full` connections
 //!   need.
+//! - [`product`]: that Postgres with the whole product's schema, applied by the migration Job
+//!   (`tools/migrate`) itself.
 //! - [`container`]: podman or docker containers removed on drop, and the rule that a missing
 //!   container runtime skips a test locally but fails it in CI.
 //!
@@ -16,3 +18,4 @@ pub mod container;
 pub mod identity;
 pub mod isolation;
 pub mod postgres;
+pub mod product;

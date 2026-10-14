@@ -1,7 +1,8 @@
 // Raw HTTP/1.1 client of the ingress e2e test (Laysi/trustiot-v2#62, #261): fetch() would
 // normalize the request target (dot segments, encodings), which is exactly what the bypass cases
 // must send unchanged. Kept apart from ingress.e2e.ts so a unit test can drive it without a
-// cluster (raw-client.test.ts, tunnel-recovery.test.ts).
+// cluster (raw-client.test.ts, tunnel-recovery.test.ts). The nightly's API check through the
+// ingress (scripts/nightly/api.ts, Laysi/trustiot-v2#65) sends its requests with it too.
 
 // ms: time to the first response byte. Envoy keeps the connection open for up to 1 s after a local
 // reply (delayed close), so the time until close would overstate how fast the gateway answered.
@@ -17,6 +18,8 @@ export type RawRequest = {
   headers?: [string, string][];
   // TLS server name (on-prem shape); defaults to the Host header without its port.
   sni?: string;
+  // Request body, sent with its content-length (the nightly's API check posts JSON with it).
+  body?: string;
 };
 
 // The request never produced an HTTP response because the connection failed: refused, reset,
@@ -52,8 +55,9 @@ export async function sendRaw(
     "user-agent: trustiot-ingress-e2e",
     "connection: close",
     ...(request.headers ?? []).map(([name, value]) => `${name}: ${value}`),
+    ...(request.body === undefined ? [] : [`content-length: ${Buffer.byteLength(request.body)}`]),
   ];
-  const text = `${lines.join("\r\n")}\r\n\r\n`;
+  const text = `${lines.join("\r\n")}\r\n\r\n${request.body ?? ""}`;
   const chunks: Buffer[] = [];
   const started = performance.now();
   let firstByte: number | undefined;

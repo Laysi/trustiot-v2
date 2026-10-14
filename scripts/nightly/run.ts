@@ -15,13 +15,14 @@
 //   NIGHTLY_SIMULATE_FAILURE     `true` fails every shape on purpose after its install
 //   NIGHTLY_IMAGE_CACHE_DIR      where nightly.yml restored the Rust image tarballs (image-cache.ts);
 //                                unset: always build
-//   NIGHTLY_IMAGE_CACHE_SAVE     `true` writes a built image there for nightly.yml to save
+//   NIGHTLY_IMAGE_CACHE_SAVE     `true` writes the built images there for nightly.yml to save
 //   GITHUB_STEP_SUMMARY          when set, the Markdown report is appended to it
 //
 // Needs docker (for k3d and the images the tests build), openssl and the tools pinned in
-// .prototools: bun, helm, k3d and kubectl. Building the migration Job's image from source
-// (scripts/nightly/service-image.ts), which happens only when no cached image matches its inputs,
-// also needs rustup and its cargo, zig, cargo-zigbuild and cargo-auditable.
+// .prototools: bun, helm, k3d and kubectl. Building the Rust images from source (NIGHTLY_IMAGES:
+// the migration Job's and the services', scripts/nightly/service-image.ts), which happens only
+// when no cached image matches their inputs, also needs rustup and its cargo, zig, cargo-zigbuild
+// and cargo-auditable.
 // Exit status: 0 when every shape passed, 1 when a check failed, 2 on a usage error.
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,7 +31,8 @@ import { join, resolve } from "node:path";
 import { exec, pinnedTool, retry, run, RunLog } from "./exec.ts";
 import { isOk, renderMarkdown, type Report, type ShapeResult } from "./report.ts";
 import { installPlatform } from "./platform.ts";
-import { loadServiceImage, MIGRATE_IMAGE_NAME } from "./service-image.ts";
+import { NIGHTLY_IMAGES } from "./image-cache.ts";
+import { loadServiceImage } from "./service-image.ts";
 import { discoverShapes, smokeShape } from "./smoke.ts";
 
 const REPO_ROOT = resolve(import.meta.dir, "..", "..");
@@ -142,11 +144,14 @@ async function main(): Promise<number> {
       },
       shapes.map((shape) => shape.name),
     );
-    // The migration Job's image (tools/migrate), which deploy/chart/tests/values/smoke.yaml names.
-    log.line("== platform: migration Job image");
+    // The Rust images deploy/chart/tests/values/smoke.yaml names: the migration Job's
+    // (tools/migrate) and the services the smoke calls through the ingress (identity, assets).
     const cacheDir = process.env.NIGHTLY_IMAGE_CACHE_DIR;
     const cache = cacheDir ? { cache: { dir: cacheDir, save: process.env.NIGHTLY_IMAGE_CACHE_SAVE === "true" } } : {};
-    await loadServiceImage({ repoRoot: REPO_ROOT, log, k3d, cluster: CLUSTER }, MIGRATE_IMAGE_NAME, cache);
+    for (const name of NIGHTLY_IMAGES) {
+      log.line(`== platform: ${name} image`);
+      await loadServiceImage({ repoRoot: REPO_ROOT, log, k3d, cluster: CLUSTER }, name, cache);
+    }
 
     for (const shape of shapes) {
       shapeResults.push(await smokeShape({ repoRoot: REPO_ROOT, chartDir: CHART_DIR, outDir, kubeconfig, helm, kubectl, log, simulateFailure }, shape));

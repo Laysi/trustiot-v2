@@ -14,14 +14,14 @@
 
 依序，全部在一個 Postgres session 層級的 advisory lock 內（key `(0x7472_7573, 0x6d69_6772)`）；另一次執行持有鎖時，等它結束（`TRUSTIOT__WAIT__LOCK`）：
 
-1. 檢查設定：`TRUSTIOT__PASSWORDS__POSTGRES` 列的每個登入角色（chart 填入部署中用 Postgres 的服務的 `<服務>_app`）都要在服務清單裡，否則什麼都不改就停止。
+1. 檢查設定：`TRUSTIOT__PASSWORDS__POSTGRES` 列的每個登入角色（chart 填入部署中用 Postgres 的服務的 `<服務>_app`，以及 outbox 消費端的 `<服務>_platform`）都要在服務清單裡，否則什麼都不改就停止。
 2. 以 migration 角色連 Postgres（只接受 `verify-full`），資料庫還沒起來時等（`TRUSTIOT__WAIT__DATABASES`）。migration 角色必須擁有資料庫、有 CREATEROLE，不能是 superuser、不能有 BYPASSRLS，也不能擁有其他資料庫：角色是叢集層級的，角色名稱不帶實例名稱，所以一個 Postgres 叢集只放一個 TrustIoT 資料庫（runbook 的「一個 Postgres 叢集只放一個 TrustIoT 資料庫」）。
    取得鎖、確認 migration 角色之後，填密碼 Secret（[`src/passwords.rs`](src/passwords.rs)）：經 Kubernetes API 讀 `TRUSTIOT__PASSWORDS__*` 列的每個 Secret，缺的 key、不能用的值、Secret 不是 Job 填過的那個物件（annotation `trustiot.io/password-secret-uid` 不等於它的 `metadata.uid`，例如有人刪掉後自己建了同名的 Secret，或從備份還原），或 `TRUSTIOT__PASSWORDS__GENERATION` 大於 annotation `trustiot.io/password-generation` 記的代（沒記、或記的不是數字也算）時，以作業系統的 CSPRNG 產生 256 位元的密碼（64 個十六進位字元），以帶 `resourceVersion` 的 JSON merge patch（field manager `trustiot-migrate`）寫回，同一個 patch 記下 Secret 的 uid 與代；代以數字比較、只往上走：要求的代較小（rollback 渲染出舊值）時保留現有的密碼、記的代不變，所以之後升級回來也不會再換一次；Secret 在讀與寫之間被改過時 API 回 409，Job 重讀再決定，連續 5 次就停止。Secret 不存在、API 拒絕存取時停止並寫出處理方式；API 沒回應或回 429、5xx 時在 `TRUSTIOT__WAIT__DATABASES` 內重試。日誌與錯誤只寫角色、帳號與 Secret 的名稱，不寫密碼、hash 或 Secret 的資料。
 3. `sql/bootstrap.sql`（Job 自己的紀錄表 `trustiot_migrate.applied`）與 `sql/` 的編號檔案（`0001_helpers.sql`：下方「SQL 怎麼組」的函式），再套用 `crates/service-kit/sql/database.sql`。
 4. 每個服務（[`src/registry.rs`](src/registry.rs) 的 `PRODUCT`，依序）：
    - 角色：`<schema>_owner`（NOLOGIN NOINHERIT，擁有 schema 與每個物件；migration 角色以 PostgreSQL 16 的 `createrole_self_grant = 'set'` 取得 SET 權限，但不繼承它的權限）、`<schema>_app`（NOINHERIT，只在綁定了 Secret 時 LOGIN）、需要時 `<schema>_platform`（決策 29 的平台角色）。登入角色建立時帶 Job 的標記（`COMMENT ON ROLE ... IS 'trustiot-migrate:login-role'`；這之前建立的在下一次執行補上）。不存在就建立；存在就檢查，偏離規則就停止（見 runbook 的表）：屬性、成員關係、不是這個 migration 角色建立的、在叢集的其他資料庫擁有物件或權限、有這個資料庫專屬的設定；登入角色另外不能有 `search_path` 以外的角色設定，也不能在自己的 schema 建立物件或建立暫存表。
    - schema `<schema>`，owner 是 `<schema>_owner`；登入角色的 `search_path` 是自己的 schema。
-   - 登入角色的密碼：取上一步 Secret 裡的值，先以它實際登入，登不進去才 `ALTER ROLE ... PASSWORD`，送出的是 Job 自己算的 SCRAM-SHA-256 verifier，明文不進 SQL；登入角色只在綁定了 Secret 時能登入：綁定了但是 NOLOGIN（剛建立、或服務重新開啟）就先設 Secret 的密碼再 `ALTER ROLE ... LOGIN`，所以不會以舊密碼登入；沒有綁定 Secret（例如這次部署沒開的服務、平台角色）就 `NOLOGIN`，記在結果的 `roles_without_password`。不 `DROP`：角色可能擁有物件，`NOLOGIN` 也能在服務重新開啟時還原。
+   - 登入角色的密碼：取上一步 Secret 裡的值，先以它實際登入，登不進去才 `ALTER ROLE ... PASSWORD`，送出的是 Job 自己算的 SCRAM-SHA-256 verifier，明文不進 SQL；登入角色只在綁定了 Secret 時能登入：綁定了但是 NOLOGIN（剛建立、或服務重新開啟）就先設 Secret 的密碼再 `ALTER ROLE ... LOGIN`，所以不會以舊密碼登入；沒有綁定 Secret（例如這次部署沒開的服務、chart 沒有綁定的平台角色）就 `NOLOGIN`，記在結果的 `roles_without_password`；日誌只在把能登入的角色改成 `NOLOGIN` 時記 WARN，本來就不能登入的（例如 chart 不綁的 `identity_platform`、一直沒開的服務）每次執行記一行 INFO。不 `DROP`：角色可能擁有物件，`NOLOGIN` 也能在服務重新開啟時還原。
    - outbox（`crates/outbox`）：依 `Outbox` 的設定建立 producer 或 consumer 的表，producer 的 `crates/service-kit/sql/outbox-event.sql` 只套用一次，consumer 的平台角色加進 producer 的讀者。
    - 以 `<schema>_owner` 依序套用 `migrations/postgres/` 的每個檔案，一個檔案一個交易，`search_path` 是該 schema；已套用的檔案若內容改了就停止。檔案執行完後比對交易 ID、`current_user` 與 `role` 設定，與執行前不同（檔案結束了交易或切換了角色）就停止，不記錄這個檔案（下方「檔案的規則」）。
    - 所有服務之後：帶 Job 標記、migration 角色有 ADMIN OPTION、還能登入、但服務清單裡已經沒有任何服務用它的角色（服務從清單移除或改名）一律 `NOLOGIN`。挑選依標記與 ADMIN OPTION，不依名稱，所以 CloudNativePG 的 superuser、客戶自己的帳號、另一個實例的角色都不會被碰。
@@ -34,7 +34,9 @@
 
 1. 檔案放在 `services/<服務>/migrations/postgres/NNNN_<名稱>.sql`。
 2. 在 `src/registry.rs` 的 `PRODUCT` 加上這個服務與每個檔案（`include_str!`，依檔名順序）；之後的新檔案加在最後。`tests/registry.rs` 在少列、順序錯、重複或內容不同時失敗。consumer 要排在它讀的 producer 之後。
-3. 服務在 chart 的 `mesh.calls` 列出 `postgres`；chart 為它宣告密碼 Secret `<release>-<服務>-password`，Job 產生 `<schema>_app` 的密碼（chart README「migration Job」）。
+3. 服務在 chart 的 `mesh.calls` 列出 `postgres`；chart 為它宣告密碼 Secret `<release>-<服務>-password`，Job 產生 `<schema>_app` 的密碼（chart README「migration Job」）。服務以平台角色連線時（outbox 的消費端以它讀 producer 的事件），把服務加進 `deploy/chart/templates/_migrate.tpl` 的 `trustiot.migrate.platformLogins`：同一個 Secret 多一個 `<schema>_platform` key，服務多拿到 `TRUSTIOT__DATABASE__PLATFORM_USERNAME`、`_PASSWORD`。`tests/registry.rs` 檢查這份清單只列有平台角色的服務，而且每個 consumer 都在裡面；producer 的平台角色沒有程式用它連線時不列，維持 `NOLOGIN`，並寫進同一個測試的 `UNBOUND_PLATFORM_ROLES`（附理由，目前只有 `identity`）。有平台角色的服務一定在 chart 的清單或 `UNBOUND_PLATFORM_ROLES` 其中之一，不能兩邊都在，所以不會有平台角色在沒人注意下維持 `NOLOGIN`。
+
+目前 `PRODUCT` 有兩個服務（2026-10-14，Laysi/trustiot-v2#65）：`identity`（`0001_identity.sql`、`0002_tenants.sql`；outbox producer，所以有平台角色 `identity_platform`，但 chart 不綁它的密碼）與 `assets`（`0001_assets.sql`；消費 `identity` 的事件，`assets_platform` 由 chart 綁定密碼）。
 
 檔案的規則（`tests/registry.rs` 檢查，不分大小寫，連續的空白、tab 與換行當成一個空白）：
 
@@ -100,4 +102,4 @@ Job 自己的設定：
 | `tests/clickhouse.rs` | ClickHouse DDL 套用一次、改過的檔案被拒；collector 帳號以 Job 產生的密碼建立、寫入，新的密碼世代輪替，多了權限、設定或角色不是預設角色時停止；collector 角色多了權限或角色時停止；collector 關閉或帳號改名時舊帳號不能再登入（`HOST NONE`），再開啟時恢復 |
 | `tests/passwords.rs` | 密碼 Secret 對假的 API：第一次填入每個缺的 key（256 位元十六進位，各不相同），第二次只讀不寫；新的世代換掉每個受管的 key、不動其他 key、只換一次；較小的世代（rollback）不換、之後升級回來也不換；不是 Job 填過的 Secret 物件（uid 不同，含帶著同代 annotation 與自選密碼的）每個 key 都重新產生，別人只改 annotation 時也一樣，綁定時拿掉白名單以外的 annotation、標籤、ownerReferences 與 finalizers（報告只寫 key），已綁定的不再動；遺失或不能用的 key 單獨重新產生；Secret 不存在時停止並寫出處理方式；讀寫之間被改過時重讀，一直被改時停止而不覆蓋；拒絕的 token 與 403、API 暫時 503 的重試與上限；報告、錯誤與 `Debug` 都不含密碼或它的 base64；沒有綁定時不發請求（不需要容器） |
 | `tests/wait_for_job.rs` | `wait-for-job` 對一個假的 API server：等到完成、失敗與拒絕的 token、不信任其他 CA；Job 不存在時繼續等，訊息寫出 Job 名稱、原因與處理方式 |
-| `tests/registry.rs` | `PRODUCT` 列出每個檔案、檔案符合規則（大小寫與空白的變化也擋得到）、不一致的清單被拒絕（不需要資料庫） |
+| `tests/registry.rs` | `PRODUCT` 列出每個檔案、檔案符合規則（大小寫與空白的變化也擋得到）、不一致的清單被拒絕；chart 綁定密碼的登入角色（`_migrate.tpl` 的兩條 Postgres 綁定與 `trustiot.migrate.platformLogins`）與 `PRODUCT` 的角色一致（不需要資料庫） |

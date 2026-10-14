@@ -17,20 +17,29 @@ doc = false
 axum = { workspace = true, features = ["http1", "json", "tokio"] }
 # Strict base64url: token segments and the session cookie have exactly one encoding.
 base64.workspace = true
+# `created_at` of a tenant, read from Postgres and returned in the API.
+chrono = { workspace = true, features = ["serde"] }
 contract = { path = "../../crates/contract" }
 # Signs internal identity tokens with Ed25519 and reads the signing key from a PKCS#8 PEM file
 # (the format `openssl genpkey -algorithm ed25519` writes). `zeroize` wipes the key on drop.
 ed25519-dalek = { workspace = true, features = ["fast", "pem", "pkcs8", "zeroize"] }
+# Writes `identity.tenant_created` in the transaction that creates the tenant.
+outbox = { path = "../../crates/outbox" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 service-kit = { path = "../../crates/service-kit" }
 # The database stores only the SHA-256 of a session cookie.
 sha2.workspace = true
 # Same TLS stack as service-kit: every connection verifies the server (checklist M3).
-sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
+sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
 tracing.workspace = true
+# Tenant names: the Unicode general category of each character (control, format and separator
+# characters are refused). Already in the build through sqlx's SCRAM (stringprep).
+unicode-properties = { workspace = true, features = ["general-category"] }
+# The client API's OpenAPI document (tools/openapi merges it into api/openapi.json).
+utoipa = { workspace = true, features = ["chrono", "uuid"] }
 # Wipes the private key file's text after parsing.
 zeroize.workspace = true
 

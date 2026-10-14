@@ -67,6 +67,7 @@ tracing = "0.1.44"
 tracing-log = { version = "0.2.0", default-features = false }
 tracing-opentelemetry = { version = "0.34.0", default-features = false }
 tracing-subscriber = { version = "0.3.23", default-features = false }
+unicode-properties = { version = "0.1.4", default-features = false }
 utoipa = "6.0.0"
 uuid = "1.28.0"
 # The empty stand-in below, for tests that check it is the one in use.

@@ -53,41 +53,127 @@ fn assert_lists(what: &str, dir: &Path, listed: &[Migration]) {
     }
 }
 
-/// A login role logs in only while a Secret is bound to it, and the chart binds exactly one per
-/// service: `<schema>_app` ("trustiot.migrate.passwordSecrets" with "trustiot.migrate.appRole" in
-/// deploy/chart/templates/_migrate.tpl). A product service with a platform role would get a role
-/// that never logs in, so none may have one until the chart binds `<schema>_platform` as well and
-/// this test checks that binding instead (Laysi/trustiot-v2#65 adds the first such service).
+/// The body of the chart helper `name` in deploy/chart/templates/_migrate.tpl.
+fn chart_helper(chart: &str, name: &str) -> String {
+    chart
+        .split(&format!(r#"{{{{- define "{name}" -}}}}"#))
+        .nth(1)
+        .and_then(|rest| rest.split("{{- end -}}\n\n").next())
+        .unwrap_or_else(|| panic!("the chart helper {name}"))
+        .to_owned()
+}
+
+/// The services whose platform role the registry creates but the chart leaves unbound on
+/// purpose, so the role stays NOLOGIN, each with the reason. Add a service here only with a
+/// reason; once code connects as the role, move the service to the chart's
+/// "trustiot.migrate.platformLogins" instead.
+const UNBOUND_PLATFORM_ROLES: &[(&str, &str)] = &[(
+    "identity",
+    "outbox producer only: the outbox policies need the role for platform-wide events, and no \
+     platform-wide reader connects as it yet",
+)];
+
+/// A login role logs in only while a Secret is bound to it. The chart binds `<schema>_app` for
+/// every service that uses Postgres, and `<schema>_platform` only for the services listed in
+/// "trustiot.migrate.platformLogins" (both in "trustiot.migrate.passwordSecrets",
+/// deploy/chart/templates/_migrate.tpl). The rule (Laysi/trustiot-v2#65): an outbox consumer
+/// reads its producers' events as its platform role, so every consumer of the product must be
+/// listed, or it could not run; only a service whose platform role the registry creates may be
+/// listed, or the Job would refuse the binding; and every service with a platform role is either
+/// listed or in [`UNBOUND_PLATFORM_ROLES`] with a reason, never both, so no platform role stays
+/// NOLOGIN unnoticed.
 #[test]
 fn the_chart_binds_every_login_role_of_the_product() {
     let chart = fs::read_to_string(repo_root().join("deploy/chart/templates/_migrate.tpl"))
         .expect("read the chart's migration helpers");
-    let helper = chart
-        .split(r#"{{- define "trustiot.migrate.passwordSecrets" -}}"#)
-        .nth(1)
-        .and_then(|rest| rest.split("{{- end -}}\n\n").next())
-        .expect("the chart's password Secret bindings");
-    let postgres_bindings: Vec<&str> = helper
+    let bindings = chart_helper(&chart, "trustiot.migrate.passwordSecrets");
+    let postgres_bindings: Vec<&str> = bindings
         .lines()
         .filter(|line| line.contains(r#""database" "postgres""#))
         .collect();
     assert_eq!(
         postgres_bindings.len(),
-        1,
+        2,
         "the chart's Postgres password bindings changed; update this test: {postgres_bindings:?}"
     );
     assert!(
-        postgres_bindings[0].contains(r#""key" (include "trustiot.migrate.appRole" .)"#),
-        "the chart binds another key than <schema>_app; update this test: {}",
+        postgres_bindings[0].contains(r#""key" (include "trustiot.migrate.appRole" .)"#)
+            && postgres_bindings[0].contains(r#""role" "app""#),
+        "the chart's first binding is not <schema>_app; update this test: {}",
         postgres_bindings[0]
     );
-    for service in PRODUCT.services {
+    assert!(
+        postgres_bindings[1].contains(r#""key" (include "trustiot.migrate.platformRole" .)"#)
+            && postgres_bindings[1].contains(r#""role" "platform""#),
+        "the chart's second binding is not <schema>_platform; update this test: {}",
+        postgres_bindings[1]
+    );
+    for (helper, suffix) in [
+        ("trustiot.migrate.appRole", "_app"),
+        ("trustiot.migrate.platformRole", "_platform"),
+    ] {
+        let body = chart_helper(&chart, helper);
         assert!(
-            !service.platform_role,
-            "{}: has a platform role, but the chart binds a password Secret only to {}; bind the \
-             platform role in \"trustiot.migrate.passwordSecrets\" too, or it stays NOLOGIN",
+            body.contains(&format!(r#"printf "%s{suffix}" (replace "-" "_" .)"#)),
+            "{helper} no longer names roles as tools/migrate does (Service::app_role, \
+             Service::platform_role): {body}"
+        );
+    }
+
+    let logins_helper = chart_helper(&chart, "trustiot.migrate.platformLogins");
+    let listed: Vec<&str> = logins_helper.split('"').skip(1).step_by(2).collect();
+    assert!(
+        logins_helper.contains("list ") && !listed.is_empty(),
+        "trustiot.migrate.platformLogins is no longer a literal list; update this test: \
+         {logins_helper}"
+    );
+    for name in &listed {
+        let service = PRODUCT
+            .service(name)
+            .unwrap_or_else(|| panic!("{name}: in the chart's platform logins but not registered"));
+        assert!(
+            service.platform_role,
+            "{name}: the chart binds {name}_platform, but the registry creates no platform role"
+        );
+    }
+    for service in PRODUCT.services {
+        if !service.outbox.consumes.is_empty() {
+            assert!(
+                listed.contains(&service.name),
+                "{}: consumes {:?} as its platform role, so list it in \
+                 \"trustiot.migrate.platformLogins\" or its platform role stays NOLOGIN",
+                service.name,
+                service.outbox.consumes
+            );
+        }
+    }
+
+    for &(name, reason) in UNBOUND_PLATFORM_ROLES {
+        let service = PRODUCT.service(name).unwrap_or_else(|| {
+            panic!("{name}: in UNBOUND_PLATFORM_ROLES but not registered; remove it")
+        });
+        assert!(
+            service.platform_role,
+            "{name}: in UNBOUND_PLATFORM_ROLES, but the registry creates no platform role; remove it"
+        );
+        assert!(!reason.trim().is_empty(), "{name}: give the reason");
+        assert!(
+            !listed.contains(&name),
+            "{name}: both bound by the chart and in UNBOUND_PLATFORM_ROLES; remove it from \
+             UNBOUND_PLATFORM_ROLES"
+        );
+    }
+    for service in PRODUCT.services.iter().filter(|s| s.platform_role) {
+        let unbound = UNBOUND_PLATFORM_ROLES
+            .iter()
+            .any(|(name, _)| *name == service.name);
+        assert!(
+            listed.contains(&service.name) || unbound,
+            "{}: the registry creates {}_platform, but the chart binds no Secret to it, so it \
+             stays NOLOGIN: list the service in \"trustiot.migrate.platformLogins\" or, when no \
+             code connects as the role, add it to UNBOUND_PLATFORM_ROLES with the reason",
             service.name,
-            service.app_role()
+            service.name
         );
     }
 }

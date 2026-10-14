@@ -126,7 +126,12 @@ async fn a_fresh_database_gets_every_migration_once() {
             report.changes
         );
     }
-    assert!(report.roles_without_password.is_empty());
+    // Only identity_app is bound here: identity's platform role has no Secret in the chart
+    // either, and the assets service is not part of this deployment, so its roles stay NOLOGIN.
+    assert_eq!(
+        report.roles_without_password,
+        ["identity_platform", "assets_app", "assets_platform"]
+    );
     let first = db.password("identity_app");
     assert_eq!(first.len(), 64, "256 bits as hex digits");
     let secret = db.secrets.get("identity-app-postgres").expect("the Secret");
@@ -176,7 +181,10 @@ async fn a_fresh_database_gets_every_migration_once() {
         .fetch_one(&mut admin)
         .await
         .expect("count tables");
-    assert_eq!(tables, 3, "users, memberships, sessions");
+    assert_eq!(
+        tables, 6,
+        "users, memberships, sessions, tenants, and the outbox's outbox_aggregate and outbox_event"
+    );
     for (query, what) in [
         (
             TABLES_NOT_OWNED_BY_OWNER,

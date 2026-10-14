@@ -71,21 +71,52 @@ Argument: the service name.
 {{- end -}}
 
 {{/*
+Platform role of a service, as tools/migrate names it (registry.rs, Service::platform_role): the
+service name with "-" written "_", then "_platform". Argument: the service name.
+*/}}
+{{- define "trustiot.migrate.platformRole" -}}
+{{- printf "%s_platform" (replace "-" "_" .) -}}
+{{- end -}}
+
+{{/*
+The services whose platform role logs in (Laysi/trustiot-v2#65): the role that reads across
+tenants (service-kit's PlatformDb), which every outbox consumer needs to read its producers'
+events. tools/migrate creates a platform role for every service its registry marks, but a role
+logs in only while a Secret is bound to it, and the chart binds one only to the services listed
+here: a platform role nobody logs in with stays NOLOGIN (identity's, for example, exists for
+platform-wide events it does not write yet). tools/migrate/tests/registry.rs checks this list
+against the registry: every consumer is in it, and nothing without a platform role is.
+Returns a YAML list; use with fromYamlArray.
+*/}}
+{{- define "trustiot.migrate.platformLogins" -}}
+{{- list "assets" | toYaml -}}
+{{- end -}}
+
+{{/*
 The Secrets that hold the generated passwords (docs/architecture/secrets.md, "migration Job 產生的密碼"),
 one per consumer, so a node's kubelet can read only the passwords of the pods scheduled on it:
 - each enabled service that lists postgres under mesh.calls: "<release>-<service>-password", with
-  its login role's password under the key "<service>_app";
+  its login role's password under the key "<service>_app" (role "app"), and, for a service in
+  "trustiot.migrate.platformLogins", its platform role's password under "<service>_platform" (role
+  "platform") in the same Secret;
 - the OpenTelemetry collector, when enabled: "<release>-otel-collector-password", with its
   ClickHouse account's password under the key named after the account.
 templates/passwords.yaml declares them without data; the migration Job generates each password and
 writes it in (tools/migrate/src/passwords.rs). They are declared whether or not migrate.enabled is
 true: with the Job turned off, whatever replaces it fills them (only the cluster tests do that).
-Returns a YAML list of {name, key, database (postgres or clickhouse), component}; use with fromYamlArray.
+Returns a YAML list of {name, key, database (postgres or clickhouse), component, role (app or
+platform, postgres only)}, one per key, so a Secret with two keys appears twice; use with
+fromYamlArray, and "trustiot.migrate.passwordSecretObjects" for the Secrets themselves.
 */}}
 {{- define "trustiot.migrate.passwordSecrets" -}}
 {{- $secrets := list -}}
+{{- $platformLogins := include "trustiot.migrate.platformLogins" . | fromYamlArray -}}
 {{- range (include "trustiot.postgres.clients" . | fromYaml).services -}}
-{{- $secrets = append $secrets (dict "name" (include "trustiot.componentName" (dict "root" $ "name" (printf "%s-password" .))) "key" (include "trustiot.migrate.appRole" .) "database" "postgres" "component" .) -}}
+{{- $name := include "trustiot.componentName" (dict "root" $ "name" (printf "%s-password" .)) -}}
+{{- $secrets = append $secrets (dict "name" $name "key" (include "trustiot.migrate.appRole" .) "database" "postgres" "component" . "role" "app") -}}
+{{- if has . $platformLogins -}}
+{{- $secrets = append $secrets (dict "name" $name "key" (include "trustiot.migrate.platformRole" .) "database" "postgres" "component" . "role" "platform") -}}
+{{- end -}}
 {{- end -}}
 {{- with .Values.observability.collector -}}
 {{- if .enabled -}}
@@ -96,20 +127,49 @@ Returns a YAML list of {name, key, database (postgres or clickhouse), component}
 {{- end -}}
 
 {{/*
-The password Secret of one consumer, as {name, key}. Argument: dict "root" $ "component" <service
-name, or otel-collector>. Returns YAML; use with fromYaml.
+The password Secrets themselves, once each: {name, component}, in the order of
+"trustiot.migrate.passwordSecrets". templates/passwords.yaml declares one per entry and the Job's
+Role names each once. Returns a YAML list; use with fromYamlArray.
+*/}}
+{{- define "trustiot.migrate.passwordSecretObjects" -}}
+{{- $objects := list -}}
+{{- $seen := list -}}
+{{- range include "trustiot.migrate.passwordSecrets" . | fromYamlArray -}}
+{{- if not (has .name $seen) -}}
+{{- $seen = append $seen .name -}}
+{{- $objects = append $objects (dict "name" .name "component" .component) -}}
+{{- end -}}
+{{- end -}}
+{{- toYaml $objects -}}
+{{- end -}}
+
+{{/*
+One password of a consumer, as {name, key}. Argument: dict "root" $ "component" <service name, or
+otel-collector> and optionally "role" "platform" (default: the service's own login role, or the
+collector's account). Returns YAML; use with fromYaml.
 */}}
 {{- define "trustiot.migrate.passwordSecret" -}}
 {{- $found := dict -}}
+{{- $role := .role | default "app" -}}
 {{- range include "trustiot.migrate.passwordSecrets" .root | fromYamlArray -}}
-{{- if eq .component $.component -}}
+{{- if and (eq .component $.component) (eq (.role | default "app") $role) -}}
 {{- $found = dict "name" .name "key" .key -}}
 {{- end -}}
 {{- end -}}
 {{- if not $found.name -}}
-{{- fail (printf "internal: %s has no password Secret" .component) -}}
+{{- fail (printf "internal: %s has no password Secret for its %s role" .component $role) -}}
 {{- end -}}
 {{- toYaml $found -}}
+{{- end -}}
+
+{{/*
+Whether a service's platform role logs in: it uses Postgres and is in
+"trustiot.migrate.platformLogins". Argument: dict "root" $ "name" <service name>.
+*/}}
+{{- define "trustiot.migrate.platformLogin" -}}
+{{- range include "trustiot.migrate.passwordSecrets" .root | fromYamlArray -}}
+{{- if and (eq .component $.name) (eq (.role | default "") "platform") -}}true{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

@@ -58,7 +58,7 @@ spec:
   policyTypes:
     - Ingress
   ingress: []
-{{- $fills := include "trustiot.migrate.passwordSecrets" . | fromYamlArray }}
+{{- $fills := include "trustiot.migrate.passwordSecretObjects" . | fromYamlArray }}
 {{- if $fills }}
 ---
 # The password Secrets the Job fills, by name; nothing else.

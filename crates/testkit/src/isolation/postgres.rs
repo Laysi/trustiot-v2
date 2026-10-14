@@ -91,6 +91,9 @@ pub struct TableSql {
     pub move_to: Option<&'static str>,
     /// Inserts one row: `$1` tenant id (uuid), `$2` row id (uuid), `$3` canary (text).
     pub seed: Option<&'static str>,
+    /// The table holds at most one row per tenant (its key is `tenant_id`): one row is seeded
+    /// per tenant, and that row's id is the tenant id.
+    pub one_per_tenant: bool,
 }
 
 /// A table or view in the suite. Make one with [`pg_table!`](crate::pg_table) or
@@ -124,9 +127,23 @@ impl PgTable {
 /// `WITH parent AS (INSERT INTO devices (tenant_id, id, name) VALUES ($1, gen_random_uuid(), $3)
 /// RETURNING tenant_id, id) INSERT INTO points (tenant_id, id, device_id, name) SELECT
 /// tenant_id, $2, id, $3 FROM parent`.
+///
+/// A table with one row per tenant (`tenant_id` is its key, such as a tenant's settings) adds
+/// `one_per_tenant`: `pg_table!("assets.tenants", seed = "...", one_per_tenant)`. The suite then
+/// seeds one row per tenant whatever the endpoints ask for, and that row's id (`$2`) is the
+/// tenant id, so a read that shows the row's `tenant_id` shows the row. Postgres needs every
+/// parameter to have a type, so a seed that does not store `$2` or `$3` still names them, for
+/// example `INSERT INTO assets.tenants (tenant_id) SELECT $1 WHERE $2::uuid IS NOT NULL AND
+/// $3::text IS NOT NULL`.
 #[macro_export]
 macro_rules! pg_table {
     ($table:literal, seed = $seed:expr $(,)?) => {
+        $crate::pg_table!(@table $table, $seed, false)
+    };
+    ($table:literal, seed = $seed:expr, one_per_tenant $(,)?) => {
+        $crate::pg_table!(@table $table, $seed, true)
+    };
+    (@table $table:literal, $seed:expr, $one_per_tenant:literal) => {
         $crate::isolation::postgres::PgTable::from_sql($crate::isolation::postgres::TableSql {
             name: $table,
             kind: $crate::isolation::postgres::RelationKind::Table,
@@ -138,6 +155,7 @@ macro_rules! pg_table {
             )),
             move_to: Some(concat!("UPDATE ", $table, " SET tenant_id = $1")),
             seed: Some($seed),
+            one_per_tenant: $one_per_tenant,
         })
     };
 }
@@ -154,6 +172,7 @@ macro_rules! pg_view {
             update_own: None,
             move_to: None,
             seed: None,
+            one_per_tenant: false,
         })
     };
 }
@@ -596,9 +615,17 @@ impl Store for PgStore {
             let read = sql.read;
             let Some(seed) = sql.seed else { continue };
             let mut rows = Vec::new();
+            let count = if sql.one_per_tenant {
+                1
+            } else {
+                rows_per_tenant
+            };
             for side in [Side::A, Side::B] {
-                for _ in 0..rows_per_tenant {
-                    let row = SeededRow::new(sql.name, side);
+                for _ in 0..count {
+                    let mut row = SeededRow::new(sql.name, side);
+                    if sql.one_per_tenant {
+                        row.id = Uuid::from(world.tenant(side));
+                    }
                     match sqlx::query(seed)
                         .bind(Uuid::from(world.tenant(side)))
                         .bind(row.id)
@@ -632,11 +659,12 @@ impl Store for PgStore {
                             ),
                         );
                     } else {
-                        report.pass(
-                            sql.name,
-                            "seed",
-                            format!("{rows_per_tenant} rows per tenant"),
-                        );
+                        let what = if sql.one_per_tenant {
+                            "1 row per tenant (one_per_tenant)".to_owned()
+                        } else {
+                            format!("{count} rows per tenant")
+                        };
+                        report.pass(sql.name, "seed", what);
                     }
                 }
                 Err(error) => {
@@ -742,9 +770,16 @@ mod tests {
             Some("UPDATE app.items SET tenant_id = $1")
         );
         assert_eq!(table.sql.seed, Some(SEED));
+        assert!(!table.sql.one_per_tenant);
         let view = crate::pg_view!("item_names");
         assert_eq!(view.sql.kind, RelationKind::View);
         assert!(view.sql.update_own.is_none() && view.sql.seed.is_none());
+        let single = crate::pg_table!("app.settings", seed = SEED, one_per_tenant);
+        assert!(single.sql.one_per_tenant);
+        assert_eq!(
+            single.sql.read,
+            "SELECT testkit_row::text FROM app.settings AS testkit_row"
+        );
     }
 
     #[test]

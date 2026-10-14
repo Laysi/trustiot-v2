@@ -17,6 +17,8 @@ base64.workspace = true
 contract = { path = "../contract" }
 ed25519-dalek.workspace = true
 http.workspace = true
+# The migration Job, which `product` runs to apply the whole product's Postgres schema.
+migrate = { path = "../../tools/migrate" }
 # A throwaway CA and server certificate for the TLS Postgres (`postgres`).
 rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
 # Calls the service under test over plain HTTP on the loopback interface.

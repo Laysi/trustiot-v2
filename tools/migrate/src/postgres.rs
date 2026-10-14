@@ -956,7 +956,9 @@ impl Session {
     /// A login role logs in exactly while a Secret is bound to it (the chart binds the roles of
     /// the services this deployment runs). Bound, it gets the Secret's password and LOGIN, the
     /// password first, so it never logs in with an older one; unbound (the service was turned
-    /// off), it loses LOGIN and keeps everything else.
+    /// off), it loses LOGIN and keeps everything else. Only taking a login away is a warning: a
+    /// role that already could not log in and stays so (a platform role the chart leaves unbound,
+    /// such as `identity_platform`, or a service that stays off) is logged at INFO on every run.
     async fn ensure_login(
         &mut self,
         config: &RunConfig,
@@ -973,18 +975,24 @@ impl Session {
                 report.change(format!("let role {role} log in"));
                 Ok(())
             }
-            (None, can_log_in) => {
+            (None, true) => {
                 tracing::warn!(
+                    role,
+                    "no Secret is bound to this role any more, so it no longer logs in"
+                );
+                report.roles_without_password.push(role.to_owned());
+                self.set_login(role, REVOKE_LOGIN).await?;
+                report.change(format!(
+                    "revoked the login of role {role}: no Secret is bound to it"
+                ));
+                Ok(())
+            }
+            (None, false) => {
+                tracing::info!(
                     role,
                     "no Secret is bound to this role, so it does not log in"
                 );
                 report.roles_without_password.push(role.to_owned());
-                if can_log_in {
-                    self.set_login(role, REVOKE_LOGIN).await?;
-                    report.change(format!(
-                        "revoked the login of role {role}: no Secret is bound to it"
-                    ));
-                }
                 Ok(())
             }
         }

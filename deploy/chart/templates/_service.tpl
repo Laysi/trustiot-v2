@@ -87,7 +87,8 @@ Custom env cannot take over what the chart controls:
   collector's) are out of reach in every key: a service gets its own database password only
   through the chart;
 - for a service that uses Postgres, TRUSTIOT__DATABASE__USERNAME and TRUSTIOT__DATABASE__PASSWORD
-  are the chart's.
+  are the chart's, and so are TRUSTIOT__DATABASE__PLATFORM_USERNAME and
+  TRUSTIOT__DATABASE__PLATFORM_PASSWORD (set for a service whose platform role logs in).
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.service.env" -}}
@@ -101,6 +102,13 @@ into the service's own Secret and sets. */ -}}
 {{- $secret := include "trustiot.migrate.passwordSecret" (dict "root" .root "component" $name) | fromYaml -}}
 {{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__USERNAME" "value" $secret.key) -}}
 {{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $secret.name "key" $secret.key))) -}}
+{{- /* Its platform role too, when it logs in ("trustiot.migrate.platformLogins"): the role an
+outbox consumer reads its producers' events with. */ -}}
+{{- if include "trustiot.migrate.platformLogin" (dict "root" .root "name" $name) -}}
+{{- $platform := include "trustiot.migrate.passwordSecret" (dict "root" .root "component" $name "role" "platform") | fromYaml -}}
+{{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__PLATFORM_USERNAME" "value" $platform.key) -}}
+{{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__PLATFORM_PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $platform.name "key" $platform.key))) -}}
+{{- end -}}
 {{- end -}}
 {{- range $values.serviceDefaults.env -}}
 {{- if get (.valueFrom | default dict) "secretKeyRef" -}}
@@ -116,8 +124,8 @@ into the service's own Secret and sets. */ -}}
 {{- if and $values.observability.collector.enabled (regexMatch "(?i)^TRUSTIOT__TELEMETRY__OTLP_ENDPOINT$" .name) -}}
 {{- fail (printf "services.%s: env %s is set by the chart: it points at the OpenTelemetry collector (observability.collector)" $name .name) -}}
 {{- end -}}
-{{- if and $dbEnv (regexMatch "(?i)^TRUSTIOT__DATABASE__(USERNAME|PASSWORD)$" .name) -}}
-{{- fail (printf "services.%s: env %s is set by the chart: the service's login role and the password the migration Job generates for it" $name .name) -}}
+{{- if and $dbEnv (regexMatch "(?i)^TRUSTIOT__DATABASE__(PLATFORM_)?(USERNAME|PASSWORD)$" .name) -}}
+{{- fail (printf "services.%s: env %s is set by the chart: the service's login roles and the passwords the migration Job generates for them" $name .name) -}}
 {{- end -}}
 {{- if regexMatch "(?i)(secret|passw|passphrase|pwd|token|api_?key|(^|_)key$|dsn|private|credential)" .name -}}
 {{- $from := .valueFrom | default dict -}}

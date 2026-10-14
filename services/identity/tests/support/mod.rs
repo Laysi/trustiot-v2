@@ -398,6 +398,17 @@ pub fn request(
     target: &str,
     headers: &[(&str, &str)],
 ) -> std::io::Result<Response> {
+    request_with_body(address, method, target, headers, b"")
+}
+
+/// [`request`] with a body, sent with its `Content-Length`.
+pub fn request_with_body(
+    address: SocketAddr,
+    method: &str,
+    target: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+) -> std::io::Result<Response> {
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))?;
     stream.set_read_timeout(Some(Duration::from_secs(20)))?;
     let mut head = format!("{method} {target} HTTP/1.1\r\nConnection: close\r\n");
@@ -410,8 +421,9 @@ pub fn request(
     for (name, value) in headers {
         head.push_str(&format!("{name}: {value}\r\n"));
     }
-    head.push_str("Content-Length: 0\r\n\r\n");
+    head.push_str(&format!("Content-Length: {}\r\n\r\n", body.len()));
     stream.write_all(head.as_bytes())?;
+    stream.write_all(body)?;
     let mut raw = Vec::new();
     stream.read_to_end(&mut raw)?;
     parse_response(&raw)

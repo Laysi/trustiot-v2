@@ -1,0 +1,23 @@
+# Laysi/trustiot-v2#65, 2026-10-14: the chart test "e2e overlays" (deploy/chart/tests/chart.test.ts)
+# against the e2e overlays of e15b09a (the PR head whose smoke failed in the ingress e2e) and
+# after the fix (69af6cd). Development workstation, bun 1.4.2, helm 4.3.0 from .prototools.
+
+## Overlays of e15b09a (tests/e2e/values-e2e.yaml and values-otel-e2e.yaml restored temporarily)
+
+$ bun test deploy/chart/tests/chart.test.ts -t "e2e overlays"
++   "Deployment/trustiot-assets reads trustiot-assets-password",
+(fail) e2e overlays > ingress.e2e.ts, saas: no pod reads a password Secret that nothing fills
++   "Deployment/trustiot-assets reads trustiot-assets-password",
+(fail) e2e overlays > ingress.e2e.ts, onprem: no pod reads a password Secret that nothing fills
++   "Deployment/trustiot-assets reads trustiot-assets-password",
+(fail) e2e overlays > otel.e2e.ts, step 2 (the collector and the example service): no pod reads a password Secret that nothing fills
+ 6 pass
+ 3 fail
+
+## After the fix (mesh.calls.assets: [] in both overlays)
+
+$ bun test deploy/chart/tests/chart.test.ts -t "e2e overlays"
+ 9 pass
+ 287 filtered out
+ 0 fail
+ 33 expect() calls
