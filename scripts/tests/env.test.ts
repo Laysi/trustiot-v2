@@ -93,6 +93,15 @@ describe("env for the identity service", () => {
     expect(text).not.toContain("PRIVATE KEY");
   });
 
+  test("prints a platform login under its own variables, after the service's own role", () => {
+    const current = withIdentity();
+    current.credentials.services["assets-platform"] = { user: "assets_platform", password: "platform-generated" };
+    const env = parse(envLines(current, caFile, identity));
+    expect(env.TRUSTIOT_DEV_ASSETS_PLATFORM_DATABASE_USERNAME).toBe("assets_platform");
+    expect(env.TRUSTIOT_DEV_ASSETS_PLATFORM_DATABASE_PASSWORD).toBe("platform-generated");
+    expect(serviceLoginVariable("assets-platform", "PASSWORD")).toBe("TRUSTIOT_DEV_ASSETS_PLATFORM_DATABASE_PASSWORD");
+  });
+
   test("a shell that evals the output gets the JSON values back unchanged", () => {
     const script =
       'set -a; eval "$1"; set +a; printf "%s\\n%s\\n%s" "$TRUSTIOT_INTERNAL_IDENTITY_KEYS" "$TRUSTIOT_INGRESS_ROUTES" "$TRUSTIOT_DEV_IDENTITY_DATABASE_PASSWORD"';

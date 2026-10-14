@@ -1,0 +1,7 @@
+bun test v1.4.2 (744846f84)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 02s
+
+ 1 pass
+ 0 fail
+ 178 expect() calls
+Ran 1 test across 1 file. [227.69s]

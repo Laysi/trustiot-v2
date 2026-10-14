@@ -6,6 +6,7 @@
 // reaches the password Secrets through the stand-in Kubernetes API (lib/secret-api.ts), which
 // `up` starts for the length of the run. Passwords reach the Job only through its environment
 // and a token file (mode 0600, removed afterwards), never through the argument list.
+import type { ProductLogin } from "./product-logins.ts";
 import { startSecretApi } from "./secret-api.ts";
 import { BIND_ADDRESS } from "./stack.ts";
 import { withPrivateFile } from "./state.ts";
@@ -15,15 +16,22 @@ export const MIGRATION_ROLE = "trustiot_owner";
 
 /** The namespace and the Secret the stand-in declares; names only, nothing is secret about them. */
 export const STORE_NAMESPACE = "trustiot-dev";
-export const IDENTITY_LOGIN_STORE = "dev-identity-password";
+
+/** The part of a {@link ProductLogin} the Job's password settings need. */
+export type PasswordLogin = Pick<ProductLogin, "role" | "secret">;
 
 /**
  * The Job's `TRUSTIOT__PASSWORDS__POSTGRES` value: the login roles it manages and the Secret
  * that holds each one's password. The services with a database role of their own that `up`
  * creates itself (`SERVICES`) are not in the Job's service list and are not listed.
  */
-export function passwordBindings(roles: readonly string[]): string {
-  return roles.map((role) => `${role}=${IDENTITY_LOGIN_STORE}`).join(",");
+export function passwordBindings(logins: readonly PasswordLogin[]): string {
+  return logins.map(({ role, secret }) => `${role}=${secret}`).join(",");
+}
+
+/** The Secrets the stand-in API declares for these logins, each once, in order. */
+export function secretNames(logins: readonly PasswordLogin[]): string[] {
+  return [...new Set(logins.map(({ secret }) => secret))];
 }
 
 export interface MigrationRun {
@@ -34,8 +42,8 @@ export interface MigrationRun {
   login: { user: string; password: string };
   /** Directory for the token file (the instance's state directory). */
   stateDir: string;
-  /** The login roles the Job gives a password to: today `identity_app`. */
-  roles: readonly string[];
+  /** The login roles the Job gives a password to, and the Secret of each (lib/product-logins.ts). */
+  logins: readonly PasswordLogin[];
 }
 
 export interface MigrationResult {
@@ -66,7 +74,7 @@ export function jobEnvironment(
     // Unused for `http://`, but the setting is required; the dev CA is a file that exists.
     TRUSTIOT__PASSWORDS__CA_FILE: run.postgres.caFile,
     TRUSTIOT__PASSWORDS__GENERATION: "1",
-    TRUSTIOT__PASSWORDS__POSTGRES: passwordBindings(run.roles),
+    TRUSTIOT__PASSWORDS__POSTGRES: passwordBindings(run.logins),
     TRUSTIOT__WAIT__DATABASES: "2m",
     TRUSTIOT__WAIT__LOCK: "2m",
   };
@@ -100,7 +108,7 @@ export function reportedChanges(log: string): number | undefined {
 }
 
 export async function runMigrationJob(run: MigrationRun): Promise<MigrationResult> {
-  const api = startSecretApi(STORE_NAMESPACE, [IDENTITY_LOGIN_STORE]);
+  const api = startSecretApi(STORE_NAMESPACE, secretNames(run.logins));
   try {
     return await withPrivateFile(run.stateDir, "kube-token", `${api.token}\n`, async (tokenFile) => {
       const child = Bun.spawn([run.binary], {
@@ -116,8 +124,8 @@ export async function runMigrationJob(run: MigrationRun): Promise<MigrationResul
         child.exited,
       ]);
       const passwords: Record<string, string> = {};
-      for (const role of run.roles) {
-        const value = api.value(IDENTITY_LOGIN_STORE, role);
+      for (const { role, secret } of run.logins) {
+        const value = api.value(secret, role);
         if (value) passwords[role] = value;
       }
       const hidden = [run.login.password, api.token, ...Object.values(passwords)];
@@ -127,7 +135,7 @@ export async function runMigrationJob(run: MigrationRun): Promise<MigrationResul
             scrub(`${stdout}${stderr}`.trim(), hidden),
         );
       }
-      for (const role of run.roles) {
+      for (const { role } of run.logins) {
         if (!passwords[role]) {
           throw new Error(`the migration Job finished but left no password for ${role}`);
         }
