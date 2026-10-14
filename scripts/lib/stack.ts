@@ -79,15 +79,51 @@ export interface ContainerSpec {
   command?: string[];
 }
 
+/**
+ * The platform of the machine the dev environment runs on, as podman spells it (`linux/amd64`,
+ * `linux/arm64`): the containers run natively, never under emulation. podman matches a name
+ * to whatever copy the local store holds under it, whatever its architecture, so every image
+ * the environment builds from or starts from a registry names this platform
+ * (Laysi/trustiot-v2#406). `arch` is Node's `process.arch`.
+ */
+export function nativePlatform(arch: string = process.arch): string {
+  switch (arch) {
+    case "x64":
+      return "linux/amd64";
+    case "arm64":
+      return "linux/arm64";
+    default:
+      throw new Error(`the dev environment runs on x86_64 and aarch64 machines; this one reports "${arch}"`);
+  }
+}
+
+/**
+ * The message for an image whose architecture is not the machine's: what happened and what to
+ * do about it, because the symptom (`exec container process ... No such file or directory`)
+ * names neither.
+ */
+export function platformMismatchMessage(image: string, actual: string, expected: string): string {
+  return (
+    `the image ${image} is ${actual}, but this machine runs ${expected}, so its container cannot start ` +
+    `(podman reports "exec container process ... No such file or directory"). The podman store probably ` +
+    `holds a copy of the base image for another architecture, for example from a local arm64 release build. ` +
+    `Remove that copy (podman rmi <base image>) and run the command again.`
+  );
+}
+
 /** The `podman run` arguments for one container, detached, on the instance's network. */
-export function runArgs(instance: string, spec: ContainerSpec): string[] {
+export function runArgs(instance: string, spec: ContainerSpec, platform: string = nativePlatform()): string[] {
   const names = namesFor(instance);
-  if (!DIGEST_PATTERN.test(spec.image) && !spec.image.startsWith("localhost/")) {
+  const pinned = DIGEST_PATTERN.test(spec.image);
+  if (!pinned && !spec.image.startsWith("localhost/")) {
     throw new Error(`image of ${spec.component} is not pinned by digest: ${spec.image}`);
   }
   const args = [
     "run",
     "--detach",
+    // A registry image is selected by platform, so a cached copy for another architecture is
+    // replaced by a pull instead of being started. Local builds already have the right one.
+    ...(pinned ? ["--platform", platform] : []),
     "--name",
     names.container(spec.component),
     "--network",

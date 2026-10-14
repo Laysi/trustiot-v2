@@ -96,6 +96,20 @@ export function containerfile(base: string, service: ServiceDef): string {
   ].join("\n");
 }
 
+/**
+ * The options of the service image build. `--platform` makes podman take the base image for
+ * this platform even when the store holds a copy of the same base for another architecture
+ * (Laysi/trustiot-v2#406).
+ */
+export function serviceBuildOptions(
+  names: Names,
+  image: string,
+  containerfilePath: string,
+  platform: string,
+): string[] {
+  return ["--quiet", "--platform", platform, ...imageLabelArgs(names), "--tag", image, "--file", containerfilePath];
+}
+
 export function imageLabelArgs(names: Names): string[] {
   return ["--label", names.label];
 }

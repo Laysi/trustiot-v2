@@ -38,6 +38,8 @@ Bun + TypeScript 腳本：本地一鍵啟動（清單 M6）、種子資料、CI 
 | Mosquitto 2.1.2（決策 6） | `eclipse-mosquitto:2.1.2-alpine` | `127.0.0.1:11883`（不加 TLS） | `TRUSTIOT_DEV_MQTT_PORT` |
 | `example-service`（service-kit 的示範服務） | 本機編譯後包進 `distroless/cc-debian13` | `http://127.0.0.1:18080`，`/healthz`、`/readyz` | `TRUSTIOT_DEV_PORT_EXAMPLE_SERVICE` |
 
+映像一律用這台機器的原生平台（`linux/amd64` 或 `linux/arm64`，由 `process.arch` 推得，見 `lib/stack.ts` 的 `nativePlatform`）：建置範例服務映像的 `podman build` 與啟動 digest 映像的 `podman run` 都帶 `--platform`。原因：podman 以名稱在本機儲存裡找映像，不看架構；儲存裡已有同一個基底的別的架構的複本（例如照下方「本機跑一次完整流程」在 x86_64 工作站建過 arm64 映像）時，沒有 `--platform` 會直接用那份複本，建出的服務映像起不來，錯誤只有 `exec container process ... No such file or directory`（Laysi/trustiot-v2#406）。有 `--platform` 時 podman 會改拉原生架構的複本。`up` 建完服務映像還會檢查它的架構，不符就停止並說明原因與處理方式。
+
 其他環境變數：`TRUSTIOT_DEV_INSTANCE`（預設 `default`；同時要跑兩份環境時換名稱，並用上面的變數換埠）。
 
 容器之間在同一個 podman 網路，以元件名稱互連（`postgres`、`clickhouse`、`mosquitto`）。
@@ -173,7 +175,7 @@ bun test scripts                              # 純函式：密碼產生、檔�
 TRUSTIOT_DEV_E2E=1 bun test scripts/tests/e2e.test.ts   # 用 podman 起一份獨立環境，走完 up、seed、換密碼重啟、down、purge，並在主機上啟動身分服務試 ext_authz
 ```
 
-端對端測試要編譯 `migrate`、`identity` 與範例服務（記憶體少的機器設 `CARGO_BUILD_JOBS=2`），用自己的實例名稱、狀態目錄與隨機埠，不會動到平常使用的環境。身分服務的部分：Job 建立的角色形狀（`identity_app` 能登入、`identity_owner` 與 `identity_platform` 不能、`trustiot_owner` 擁有資料庫）、`env` 印出的設定能在主機上啟動身分服務並通過 `/readyz`、以 `seed` 印出的 cookie 呼叫 ext_authz 得到 200 與剛好一個 `x-internal-identity`（以 `env` 的公鑰驗證簽章與 claims）、無效、缺少與格式錯誤的 cookie 回 401、對不到路由的主機回 403、私鑰檔權限 0600 且是狀態目錄裡唯一的私鑰、私鑰內容與密碼不在任何指令輸出與服務日誌、`down` 保留金鑰與 cookie（再 `up` 後換了 `identity_app` 的密碼，同一個 cookie 與公鑰仍有效）、`purge` 刪除它們。其餘它另外證明：範例服務以 `verify-full` 連上 Postgres 並通過 `/readyz`；同一個服務映像換成另一個 CA，或換成憑證沒有的主機名稱，仍在執行（`/healthz` 200）但不會就緒（`/readyz` 503）；`down` 之後憑證與私鑰磁碟區都沒了，`purge` 之後狀態目錄與 `tls/` 也沒了；repo 的工作目錄沒有因此多出任何檔案。
+端對端測試要編譯 `migrate`、`identity` 與範例服務（記憶體少的機器設 `CARGO_BUILD_JOBS=2`），用自己的實例名稱、狀態目錄與隨機埠，不會動到平常使用的環境。身分服務的部分：Job 建立的角色形狀（`identity_app` 能登入、`identity_owner` 與 `identity_platform` 不能、`trustiot_owner` 擁有資料庫）、`env` 印出的設定能在主機上啟動身分服務並通過 `/readyz`、以 `seed` 印出的 cookie 呼叫 ext_authz 得到 200 與剛好一個 `x-internal-identity`（以 `env` 的公鑰驗證簽章與 claims）、無效、缺少與格式錯誤的 cookie 回 401、對不到路由的主機回 403、私鑰檔權限 0600 且是狀態目錄裡唯一的私鑰、私鑰內容與密碼不在任何指令輸出與服務日誌、`down` 保留金鑰與 cookie（再 `up` 後換了 `identity_app` 的密碼，同一個 cookie 與公鑰仍有效）、`purge` 刪除它們。其餘它另外證明：範例服務以 `verify-full` 連上 Postgres 並通過 `/readyz`；同一個服務映像換成另一個 CA，或換成憑證沒有的主機名稱，仍在執行（`/healthz` 200）但不會就緒（`/readyz` 503）；`down` 之後憑證與私鑰磁碟區都沒了，`purge` 之後狀態目錄與 `tls/` 也沒了；repo 的工作目錄沒有因此多出任何檔案。另有兩個情境測試（Laysi/trustiot-v2#406）：先以 `podman pull --platform` 在儲存裡放進別的架構的服務基底，或別的架構的 Mosquitto，再 `up`，證明服務映像與 Mosquitto 都是這台機器的架構、服務就緒；儲存裡本來就有別的架構的複本時測試直接拒絕執行、不改動任何東西；否則測試結束時把名稱還原成原生複本，並以映像 ID 移除自己拉的那份，不動儲存裡其他映像。因為會改動 podman 儲存裡的映像，同一台機器上不要同時跑兩份端對端測試。
 
 ## 機制的決定（2026-10-10）
 

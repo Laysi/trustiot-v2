@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
+import { containerBuildArgs } from "../lib/build-context.ts";
 import {
   assertDistinctPorts,
   BIND_ADDRESS,
@@ -9,6 +13,8 @@ import {
   MOSQUITTO_CONFIG,
   mosquittoAcl,
   namesFor,
+  nativePlatform,
+  platformMismatchMessage,
   POSTGRES_CONFIG_DIR,
   POSTGRES_HBA,
   POSTGRES_HBA_PATH,
@@ -24,6 +30,7 @@ import {
   platformEnv,
   portVariable,
   resolveServicePorts,
+  serviceBuildOptions,
   SERVICES,
   type ServiceDef,
 } from "../lib/services.ts";
@@ -232,5 +239,62 @@ describe("services", () => {
     const text = containerfile(IMAGES.serviceBase, example);
     expect(text).toContain(`FROM ${IMAGES.serviceBase}`);
     expect(text).toContain('ENTRYPOINT ["/usr/local/bin/example-service"]');
+  });
+});
+
+describe("native platform (Laysi/trustiot-v2#406)", () => {
+  test("is derived from the machine's architecture, one case per supported one", () => {
+    expect(nativePlatform("x64")).toBe("linux/amd64");
+    expect(nativePlatform("arm64")).toBe("linux/arm64");
+    expect(nativePlatform()).toBe(process.arch === "x64" ? "linux/amd64" : "linux/arm64");
+  });
+
+  test("refuses an architecture the images are not built for", () => {
+    expect(() => nativePlatform("riscv64")).toThrow(/x86_64 and aarch64.*riscv64/);
+  });
+
+  for (const [arch, platform] of [
+    ["x64", "linux/amd64"],
+    ["arm64", "linux/arm64"],
+  ] as const) {
+    test(`the service image build names ${platform} on ${arch}`, () => {
+      const dir = mkdtempSync(join(tmpdir(), "trustiot-platform-test-"));
+      try {
+        const file = join(dir, "Containerfile");
+        writeFileSync(file, containerfile(IMAGES.serviceBase, SERVICES[0]!));
+        const names = namesFor("t");
+        const options = serviceBuildOptions(names, names.image("example-service"), file, nativePlatform(arch));
+        expect(options[options.indexOf("--platform") + 1]).toBe(platform);
+        // The option and its value pass the build-context guard that every build goes through.
+        expect(containerBuildArgs(dir, options)).toContain(platform);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test(`a registry image runs as ${platform} on ${arch}`, () => {
+      const args = runArgs("t", spec(), nativePlatform(arch));
+      expect(args[args.indexOf("--platform") + 1]).toBe(platform);
+      // Before the image, so that it is an option of `run` and not part of the command.
+      expect(args.indexOf("--platform")).toBeLessThan(args.indexOf(IMAGES.postgres));
+    });
+  }
+
+  test("every registry image of the environment is started for the platform", () => {
+    for (const image of [IMAGES.postgres, IMAGES.clickhouse, IMAGES.mosquitto]) {
+      expect(runArgs("t", spec({ image }), "linux/amd64")).toContain("--platform");
+    }
+  });
+
+  test("a locally built image has no platform option: it is built natively already", () => {
+    expect(runArgs("t", spec({ image: "localhost/trustiot-dev-t-x:dev" }))).not.toContain("--platform");
+  });
+
+  test("the mismatch message names the cause and the way out", () => {
+    const message = platformMismatchMessage("localhost/trustiot-dev-t-x:dev", "linux/arm64", "linux/amd64");
+    expect(message).toContain("linux/arm64");
+    expect(message).toContain("linux/amd64");
+    expect(message).toContain("another architecture");
+    expect(message).toContain("podman rmi");
   });
 });

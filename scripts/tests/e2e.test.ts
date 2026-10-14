@@ -26,7 +26,7 @@ import { DEV_TENANT_ID, DEV_USER_ID, newCookie, SESSION_COOKIE_NAME } from "../l
 import { podman, podmanOk } from "../lib/podman.ts";
 import { DEV_USER, POSTGRES_DATABASE } from "../lib/secrets.ts";
 import { SERVICES, platformEnv } from "../lib/services.ts";
-import { namesFor, runArgs, SERVICE_PORT } from "../lib/stack.ts";
+import { IMAGES, namesFor, runArgs, SERVICE_PORT } from "../lib/stack.ts";
 import { generateDevCertificates } from "../lib/tls.ts";
 
 const ENABLED = process.env.TRUSTIOT_DEV_E2E === "1";
@@ -342,6 +342,73 @@ async function startProbe(
 }
 
 describe.skipIf(!ENABLED)("the dev environment with podman", () => {
+  // Laysi/trustiot-v2#406: podman uses the copy of an image that the store holds under a name,
+  // whatever its architecture. A copy for the other architecture, left by a local arm64
+  // release build for example, made `up` build service images that cannot start. Each scenario
+  // leaves the store as it found it. Mosquitto stands for the registry images that `up` starts
+  // (Postgres and ClickHouse take the same path and are large).
+  for (const [title, refs] of [
+    ["the service base", [IMAGES.serviceBase]],
+    ["Mosquitto", [IMAGES.mosquitto]],
+  ] as const) {
+    test(
+      `up uses images of this machine's platform although the store holds ${title} for another one`,
+      async () => {
+        const native = process.arch === "arm64" ? "linux/arm64" : "linux/amd64";
+        const foreign = native === "linux/arm64" ? "linux/amd64" : "linux/arm64";
+        const platformOf = async (image: string) =>
+          (await podmanOk(["image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", image])).trim();
+        const idOf = async (image: string) => (await podmanOk(["image", "inspect", "--format", "{{.Id}}", image])).trim();
+        // A foreign copy that is in the store already would be replaced by `up` and could not be
+        // put back as it was, so the test refuses to start and changes nothing.
+        for (const ref of refs) {
+          if ((await podman(["image", "exists", ref])).code === 0) {
+            expect(
+              await platformOf(ref),
+              `the podman store already holds ${ref} for ${foreign}; remove that copy (podman rmi) before running this test`,
+            ).toBe(native);
+          }
+        }
+        const pulled: string[] = [];
+        const instance = `e2e-${Math.random().toString(36).slice(2, 8)}`;
+        const state = mkdtempSync(join(tmpdir(), "trustiot-dev-e2e-"));
+        const env = {
+          TRUSTIOT_DEV_INSTANCE: instance,
+          XDG_STATE_HOME: state,
+          TRUSTIOT_DEV_POSTGRES_PORT: String(await freePort()),
+          TRUSTIOT_DEV_CLICKHOUSE_PORT: String(await freePort()),
+          TRUSTIOT_DEV_MQTT_PORT: String(await freePort()),
+        };
+        try {
+          for (const ref of refs) {
+            await podmanOk(["pull", "--quiet", "--platform", foreign, ref]);
+            pulled.push(await idOf(ref));
+          }
+          // The precondition of the bug: the names the environment uses now resolve to the other
+          // architecture.
+          for (const ref of refs) expect(await platformOf(ref), `${ref} before up`).toBe(foreign);
+
+          const up = await dev(env, "up");
+          // The end of the output names the failure; the start is cargo's progress.
+          expect(up.code, `up failed:\n${(up.stdout + up.stderr).slice(-2000)}`).toBe(0);
+          expect(up.stdout).toContain("every check passed");
+          const names = namesFor(instance);
+          expect(await platformOf(names.image(SERVICES[0]!.name))).toBe(native);
+          for (const ref of refs) expect(await platformOf(ref), `${ref} after up`).toBe(native);
+          for (const service of SERVICES) expect(up.stdout).toContain(`ok   ${service.name}: GET /readyz`);
+        } finally {
+          await dev(env, "purge");
+          rmSync(state, { recursive: true, force: true });
+          // Put the store back: the names point to this machine's copies again, and the copies
+          // pulled here (by ID, nothing else) are removed.
+          for (const ref of refs) await podman(["pull", "--quiet", "--platform", native, ref]);
+          for (const id of pulled) await podman(["rmi", id]);
+        }
+      },
+      SLOW_MS,
+    );
+  }
+
   test(
     "starts, passes every check, seeds, rotates credentials, stops and purges without leftovers",
     async () => {
