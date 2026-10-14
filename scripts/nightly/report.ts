@@ -14,7 +14,7 @@ export interface ShapeResult {
   shape: string;
   ok: boolean;
   checks: Check[];
-  /** Cluster state and pod logs, collected when a check failed. */
+  /** What is not ready and why, collected when a check failed (diagnostics.ts: status fields and events, no Pod spec, no log). */
   diagnostics?: string;
   durationMs: number;
 }
@@ -48,6 +48,14 @@ function cell(text: string): string {
   return text.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }
 
+/**
+ * Text for a code fence: a line of backticks in it (an event message is free text) would end the
+ * fence and let the rest render as Markdown in a public issue, with links and mentions.
+ */
+export function fenced(text: string): string {
+  return text.replace(/```/g, "'''");
+}
+
 /** Keeps the end of a long text, where the error usually is. */
 export function tail(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
@@ -66,7 +74,7 @@ export function renderMarkdown(report: Report, maxDiagnosticChars = 12_000): str
     lines.push("**The cluster could not be set up or torn down:**");
     lines.push("");
     lines.push("```");
-    lines.push(tail(report.infraError, maxDiagnosticChars));
+    lines.push(fenced(tail(report.infraError, maxDiagnosticChars)));
     lines.push("```");
   }
   for (const shape of report.shapes) {
@@ -85,7 +93,7 @@ export function renderMarkdown(report: Report, maxDiagnosticChars = 12_000): str
       lines.push("<details><summary>diagnostics</summary>");
       lines.push("");
       lines.push("```");
-      lines.push(tail(shape.diagnostics, maxDiagnosticChars));
+      lines.push(fenced(tail(shape.diagnostics, maxDiagnosticChars)));
       lines.push("```");
       lines.push("");
       lines.push("</details>");

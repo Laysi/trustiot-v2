@@ -17,6 +17,7 @@ import { basename, join } from "node:path";
 
 import { apiValues, createSigningKey, routesOfValues, runApiCheck, SIGNING_KEY_STORE } from "./api.ts";
 import type { TokenSigner } from "./api.ts";
+import { gatherDiagnostics } from "./diagnostics.ts";
 import { E2E_SUITES, installEvidenceSection, runClusterE2e, suitesOf } from "./e2e.ts";
 import { exec, retry, run, RunLog, waitUntilGone } from "./exec.ts";
 import {
@@ -117,6 +118,10 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
     run(ctx.log, [ctx.helm, ...args], { ...kube, timeoutMs, quiet });
   const kubectl = (args: string[], timeoutMs = 120_000) =>
     run(ctx.log, [ctx.kubectl, ...args], { ...kube, timeoutMs });
+  // For `--output json` reads that code parses: a Pod's JSON holds its spec, with the environment
+  // values, so it stays out of the run log, which is uploaded as an artifact (Laysi/trustiot-v2#410).
+  const kubectlJson = (args: string[], timeoutMs = 120_000) =>
+    run(ctx.log, [ctx.kubectl, ...args], { ...kube, timeoutMs, quiet: true });
   const checks: Check[] = [];
   const started = Date.now();
   ctx.log.line(`== values-${shape.name}.yaml in namespace ${namespace}`);
@@ -230,8 +235,8 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         // complete, so no service runs on a schema older than its own.
         const jobs = migrationJobsOf(parseManifests(manifest));
         if (jobs.length !== 1) throw new Error(`the release should have one migration Job, found ${jobs.length}: ${jobs.join(", ")}`);
-        const job = await kubectl(["get", "--namespace", namespace, `job/${jobs[0]}`, "--output", "json"]);
-        const pods = await kubectl(["get", "pods", "--namespace", namespace, "--output", "json"]);
+        const job = await kubectlJson(["get", "--namespace", namespace, `job/${jobs[0]}`, "--output", "json"]);
+        const pods = await kubectlJson(["get", "pods", "--namespace", namespace, "--output", "json"]);
         const parsed = JSON.parse(job.stdout) as { status?: { completionTime?: string } };
         const problems = migrationOrderProblems(parsed, JSON.parse(pods.stdout) as { items?: unknown[] });
         if (problems.length > 0) throw new Error(problems.join("; "));
@@ -264,7 +269,7 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         for (const cluster of clusters) {
           const target = `cluster.postgresql.cnpg.io/${cluster}`;
           await kubectl(["wait", "--namespace", namespace, "--for=condition=Ready", target, "--timeout=600s"], 630_000);
-          const status = await kubectl(["get", "--namespace", namespace, target, "--output", "json"]);
+          const status = await kubectlJson(["get", "--namespace", namespace, target, "--output", "json"]);
           const problems = postgresClusterProblems(JSON.parse(status.stdout));
           if (problems.length > 0) throw new Error(problems.join("; "));
           states.push(`${cluster}: healthy`);
@@ -280,7 +285,7 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         return gateways.length === 0 ? "the release has no Gateway" : gateways.join(", ");
       })) &&
       (await check("no pod is broken, not ready or crash-looping", async () => {
-        const pods = await kubectl(["get", "pods", "--namespace", namespace, "--output", "json"]);
+        const pods = await kubectlJson(["get", "pods", "--namespace", namespace, "--output", "json"]);
         const list = JSON.parse(pods.stdout) as { items?: unknown[] };
         const problems = podProblems(list);
         if (problems.length > 0) throw new Error(problems.map((p) => `${p.pod}: ${p.problem}`).join("; "));
@@ -296,7 +301,7 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         const objects = parseManifests(manifest);
         const found: string[] = [];
         for (const gateway of gatewaysOf(objects)) {
-          const generated = await kubectl([
+          const generated = await kubectlJson([
             "get", "deployments,services", "--namespace", namespace,
             "--selector", `gateway.networking.k8s.io/gateway-name=${gateway}`, "--output", "json",
           ]);
@@ -318,7 +323,7 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         const routed: string[] = [];
         for (const endpoint of endpoints) {
           await retry(ctx.log, 6, 5_000, async () => {
-            const slices = await kubectl([
+            const slices = await kubectlJson([
               "get", "endpointslices", "--namespace", namespace,
               "--selector", `kubernetes.io/service-name=${endpoint.service}`, "--output", "json",
             ], 30_000);
@@ -422,29 +427,27 @@ async function createTlsSecret(ctx: SmokeContext, namespace: string, name: strin
   }
 }
 
-/** Cluster state and pod logs of a failed shape. Nothing here prints a Secret's data. */
+/**
+ * What is not ready in a failed shape, and why (diagnostics.ts, Laysi/trustiot-v2#410): status
+ * fields, conditions, restart counts, termination reasons and events. The report is public, so
+ * there is no Pod spec, no container log and no `describe` in it.
+ */
 async function collectDiagnostics(ctx: SmokeContext, namespace: string, shape: Shape): Promise<string> {
   const kube = { env: { KUBECONFIG: ctx.kubeconfig }, timeoutMs: 60_000 };
-  const sections: string[] = [];
-  const section = async (title: string, cmd: string[]): Promise<void> => {
+  const command = async (cmd: string[]): Promise<string> => {
     const result = await exec(cmd, kube);
-    sections.push(`### ${title}\n${(result.stdout + result.stderr).trim()}\n`);
+    if (result.code !== 0) {
+      throw new Error(`${cmd.slice(0, 2).join(" ")} ${result.timedOut ? "timed out" : `exited with ${result.code}`}: ${tail(result.stderr.trim(), 300)}`);
+    }
+    return result.stdout;
   };
-  const k = ctx.kubectl;
-  // Helm 4 has no `--all`; with a state flag set it lists only those states, so name them all.
-  await section("helm list", [ctx.helm, "list", "--namespace", namespace, "--deployed", "--failed", "--pending", "--superseded", "--uninstalled", "--uninstalling"]);
-  await section("objects", [k, "get", "all,configmap,serviceaccount,pvc", "--namespace", namespace, "--output", "wide"]);
-  // The bundled Postgres: the operator's view of it (no Secret data).
-  await section("CloudNativePG", [k, "get", "clusters.postgresql.cnpg.io,databases.postgresql.cnpg.io,imagecatalogs.postgresql.cnpg.io", "--namespace", namespace, "--output", "wide"]);
-  await section("describe CloudNativePG Clusters", [k, "describe", "clusters.postgresql.cnpg.io", "--namespace", namespace]);
-  await section("CloudNativePG operator log", [k, "logs", "deployment/cnpg-controller-manager", "--namespace", "cnpg-system", "--tail=80"]);
-  await section("events", [k, "get", "events", "--namespace", namespace, "--sort-by=.lastTimestamp"]);
-  await section("pods in all namespaces", [k, "get", "pods", "--all-namespaces", "--output", "wide"]);
-  await section("describe pods", [k, "describe", "pods", "--namespace", namespace]);
-  const names = await exec([k, "get", "pods", "--namespace", namespace, "--output", "name"], kube);
-  for (const pod of names.stdout.split("\n").filter((line) => line !== "")) {
-    await section(`logs ${pod}`, [k, "logs", pod, "--namespace", namespace, "--all-containers", "--tail=80"]);
-  }
+  const sections = [
+    await gatherDiagnostics(namespace, {
+      kubectl: (args) => command([ctx.kubectl, ...args]),
+      // Helm 4 has no `--all`; with a state flag set it lists only those states, so name them all.
+      helmList: () => command([ctx.helm, "list", "--namespace", namespace, "--deployed", "--failed", "--pending", "--superseded", "--uninstalled", "--uninstalling"]),
+    }),
+  ];
   // Last, because the report keeps the end of a long text. The ingress e2e installs the chart into
   // a namespace of its own, which is deleted before this runs; the test saved what it saw of that
   // namespace when its install failed (Laysi/trustiot-v2#399).
