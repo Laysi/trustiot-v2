@@ -1,0 +1,37 @@
+
+running 1 test
+result | subject | probe | outcome
+pass | assets.outbox_dead_letter | coverage | exempt table: the outbox consumer's bookkeeping (crates/outbox): subscription positions and processed or failed event IDs, no tenant data; the consumer reads and writes it in transactions without a tenant
+pass | assets.outbox_inbox | coverage | exempt table: the outbox consumer's bookkeeping (crates/outbox): subscription positions and processed or failed event IDs, no tenant data; the consumer reads and writes it in transactions without a tenant
+pass | assets.outbox_subscription | coverage | exempt table: the outbox consumer's bookkeeping (crates/outbox): subscription positions and processed or failed event IDs, no tenant data; the consumer reads and writes it in transactions without a tenant
+pass | assets.outbox_version | coverage | exempt table: the versions notification-mode consumers stored per aggregate (crates/outbox), no tenant data; unused by this service so far
+pass | assets.tenants | coverage | declared table
+pass | assets.tenants | seed | 1 row per tenant (one_per_tenant)
+pass | postgres | session as tenant A | the kit accepts the service role's session
+pass | assets.tenants | read as tenant A | 1 rows visible, all own, none of tenant B
+pass | assets.tenants | read without a tenant | no row visible
+pass | assets.tenants | update own rows as tenant A | refused (42501)
+pass | assets.tenants | move own rows into tenant B | refused (42501)
+pass | assets.tenants | insert into tenant B | refused (42501)
+pass | postgres | session as tenant B | the kit accepts the service role's session
+pass | assets.tenants | read as tenant B | 1 rows visible, all own, none of tenant A
+pass | assets.tenants | update own rows as tenant B | refused (42501)
+pass | assets.tenants | move own rows into tenant A | refused (42501)
+pass | assets.tenants | insert into tenant A | refused (42501)
+pass | GET /api/assets/v1/tenant | list as tenant A | 200: all 1 own rows, nothing of tenant B
+pass | GET /api/assets/v1/tenant | without a tenant | 403, nothing shown
+pass | api | tenant B rows after tenant A's endpoint probes | 1 rows, all unchanged
+pass | GET /api/assets/v1/tenant | list as tenant B | 200: all 1 own rows, nothing of tenant A
+pass | GET /api/assets/v1/tenant | without a tenant | 403, nothing shown
+pass | api | tenant A rows after tenant B's endpoint probes | 1 rows, all unchanged
+23 probes, 0 failed
+test tenants_are_isolated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.45s
+
+
+running 1 test
+test every_new_tenant_gets_one_row_whatever_is_replayed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.83s
+

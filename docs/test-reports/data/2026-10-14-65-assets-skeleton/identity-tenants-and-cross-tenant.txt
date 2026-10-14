@@ -1,0 +1,53 @@
+
+running 1 test
+result | subject | probe | outcome
+pass | identity.memberships | coverage | declared table
+pass | identity.outbox_aggregate | coverage | exempt table: the outbox's per-aggregate sequence numbers (crates/outbox): aggregate kind, id and counters, no tenant column; the events themselves are tenant data and declared above
+pass | identity.outbox_event | coverage | declared table
+pass | identity.sessions | coverage | exempt table: a session belongs to a user and is found by its cookie hash before any tenant is known; the tenant role is always read from memberships under row-level security (services/identity/README.md)
+pass | identity.tenants | coverage | declared table
+pass | identity.users | coverage | exempt table: users span tenants: the platform-wide user record, no tenant data (services/identity/README.md)
+pass | POST /api/identity/v1/tenants | coverage | exempt: platform administrators only, and it creates a new tenant whose ID the service makes: it takes no tenant from the request and serves no existing tenant's data (tests/tenants.rs covers it)
+pass | identity.memberships | seed | 2 rows per tenant
+pass | identity.tenants | seed | 1 row per tenant (one_per_tenant)
+pass | identity.outbox_event | seed | 2 rows per tenant
+pass | postgres | session as tenant A | the kit accepts the service role's session
+pass | identity.memberships | read as tenant A | 2 rows visible, all own, none of tenant B
+pass | identity.memberships | read without a tenant | no row visible
+pass | identity.memberships | update own rows as tenant A | refused (42501)
+pass | identity.memberships | move own rows into tenant B | refused (42501)
+pass | identity.memberships | insert into tenant B | refused (42501)
+pass | identity.tenants | read as tenant A | 1 rows visible, all own, none of tenant B
+pass | identity.tenants | read without a tenant | no row visible
+pass | identity.tenants | update own rows as tenant A | refused (42501)
+pass | identity.tenants | move own rows into tenant B | refused (42501)
+pass | identity.tenants | insert into tenant B | refused (42501)
+pass | identity.outbox_event | read as tenant A | refused (42501)
+pass | identity.outbox_event | read without a tenant | refused (42501)
+pass | identity.outbox_event | update own rows as tenant A | refused (42501)
+pass | identity.outbox_event | move own rows into tenant B | refused (42501)
+pass | identity.outbox_event | insert into tenant B | refused (42501)
+pass | postgres | session as tenant B | the kit accepts the service role's session
+pass | identity.memberships | read as tenant B | 2 rows visible, all own, none of tenant A
+pass | identity.memberships | update own rows as tenant B | refused (42501)
+pass | identity.memberships | move own rows into tenant A | refused (42501)
+pass | identity.memberships | insert into tenant A | refused (42501)
+pass | identity.tenants | read as tenant B | 1 rows visible, all own, none of tenant A
+pass | identity.tenants | update own rows as tenant B | refused (42501)
+pass | identity.tenants | move own rows into tenant A | refused (42501)
+pass | identity.tenants | insert into tenant A | refused (42501)
+pass | identity.outbox_event | read as tenant B | refused (42501)
+pass | identity.outbox_event | update own rows as tenant B | refused (42501)
+pass | identity.outbox_event | move own rows into tenant A | refused (42501)
+pass | identity.outbox_event | insert into tenant A | refused (42501)
+39 probes, 0 failed
+test tenants_are_isolated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.92s
+
+
+running 1 test
+test platform_administrators_create_tenants_with_their_event ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.77s
+

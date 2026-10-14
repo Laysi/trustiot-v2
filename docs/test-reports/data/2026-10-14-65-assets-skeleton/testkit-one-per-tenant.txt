@@ -1,0 +1,60 @@
+
+running 1 test
+result | subject | probe | outcome
+pass | public.example_items | coverage | declared table
+pass | public.example_settings | coverage | declared table
+pass | api | coverage | no HTTP API: the database probes only
+pass | example_items | seed | 2 rows per tenant
+pass | example_settings | seed | 1 row per tenant (one_per_tenant)
+pass | postgres | session as tenant A | the kit accepts the service role's session
+pass | example_items | read as tenant A | 2 rows visible, all own, none of tenant B
+pass | example_items | read without a tenant | no row visible
+pass | example_items | update own rows as tenant A | 2 rows reached, none of tenant B
+pass | example_items | move own rows into tenant B | refused (42501)
+pass | example_items | insert into tenant B | refused (42501)
+pass | example_settings | read as tenant A | 1 rows visible, all own, none of tenant B
+pass | example_settings | read without a tenant | no row visible
+pass | example_settings | update own rows as tenant A | refused (42501)
+pass | example_settings | move own rows into tenant B | refused (42501)
+pass | example_settings | insert into tenant B | refused (42501)
+pass | postgres | session as tenant B | the kit accepts the service role's session
+pass | example_items | read as tenant B | 2 rows visible, all own, none of tenant A
+pass | example_items | update own rows as tenant B | 2 rows reached, none of tenant A
+pass | example_items | move own rows into tenant A | refused (42501)
+pass | example_items | insert into tenant A | refused (42501)
+pass | example_settings | read as tenant B | 1 rows visible, all own, none of tenant A
+pass | example_settings | update own rows as tenant B | refused (42501)
+pass | example_settings | move own rows into tenant A | refused (42501)
+pass | example_settings | insert into tenant A | refused (42501)
+25 probes, 0 failed
+result | subject | probe | outcome
+pass | public.example_items | coverage | declared table
+pass | public.example_settings | coverage | declared table
+pass | api | coverage | no HTTP API: the database probes only
+pass | example_items | seed | 2 rows per tenant
+pass | example_settings | seed | 1 row per tenant (one_per_tenant)
+pass | postgres | session as tenant A | the kit accepts the service role's session
+pass | example_items | read as tenant A | 2 rows visible, all own, none of tenant B
+pass | example_items | read without a tenant | no row visible
+pass | example_items | update own rows as tenant A | 2 rows reached, none of tenant B
+pass | example_items | move own rows into tenant B | refused (42501)
+pass | example_items | insert into tenant B | refused (42501)
+pass | example_settings | read as tenant A | 1 rows visible, all own, none of tenant B
+pass | example_settings | read without a tenant | no row visible
+pass | example_settings | update own rows as tenant A | refused (42501)
+pass | example_settings | move own rows into tenant B | refused (42501)
+pass | example_settings | insert into tenant B | refused (42501)
+pass | postgres | session as tenant B | the kit accepts the service role's session
+pass | example_items | read as tenant B | 2 rows visible, all own, none of tenant A
+pass | example_items | update own rows as tenant B | 2 rows reached, none of tenant A
+pass | example_items | move own rows into tenant A | refused (42501)
+pass | example_items | insert into tenant A | refused (42501)
+pass | example_settings | read as tenant B | 1 rows visible, all own, none of tenant A
+pass | example_settings | update own rows as tenant B | refused (42501)
+pass | example_settings | move own rows into tenant A | refused (42501)
+pass | example_settings | insert into tenant A | refused (42501)
+25 probes, 0 failed
+test a_table_with_one_row_per_tenant_is_attacked_too ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 13.13s
+

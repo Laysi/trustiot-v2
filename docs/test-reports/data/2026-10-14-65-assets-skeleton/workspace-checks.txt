@@ -1,0 +1,61 @@
+# Laysi/trustiot-v2#65, 2026-10-14: the repository checks, run on the build host through the
+# check queue (CI=1, so container-backed tests run and would fail instead of skipping).
+# Paths under the host's working copy are printed as <host copy>.
+
+## Branch feat/65-assets-skeleton rebased onto main 71769da (commit 255dca9)
+
+$ cargo fmt --all --check && cargo clippy --workspace --all-targets --locked -- -D warnings \
+    && cargo test --workspace --locked && cargo run --locked -q -p openapi -- --check \
+    && cargo deny --locked check && bun install --cwd scripts --frozen-lockfile \
+    && bun test deploy/chart && bun test scripts && bun run --cwd scripts typecheck
+api/openapi.json is up to date
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.79s     (clippy, last line)
+99                                                                         (test binaries with "test result: ok", none FAILED)
+advisories ok, bans ok, licenses ok, sources ok
+chart.log: 313 pass
+chart.log: 0 fail
+chart.log:Ran 313 tests across 4 files. [30.46s]
+scripts.log:(fail) scripts/ holds no fixed credentials > no literal is assigned to a secret-looking name
+scripts.log: 758 pass
+scripts.log: 1 fail
+-> fixed in 772dd19 (the constant holding the signing key Secret's name is SIGNING_KEY_STORE)
+
+## Commit 772dd19
+
+$ bun test scripts; bun run --cwd scripts typecheck; bun test deploy/flux
+$ cargo clippy -p service-kit --no-default-features --all-targets --locked -- -D warnings
+$ cargo test --locked -p migrate --test registry --test fresh_database --test file_escapes
+exit codes scripts=0 typecheck=0 flux=0 kit=0 migrate=0
+scripts.log: 759 pass
+scripts.log: 0 fail
+scripts.log:Ran 761 tests across 33 files. [2.14s]        (2 skipped)
+flux.log: 19 pass
+flux.log: 0 fail
+test a_file_that_leaves_its_transaction_or_role_stops_the_run ... ok
+test a_fresh_database_gets_every_migration_once ... ok
+test inconsistent_registries_are_refused ... ok
+test the_lint_sees_through_whitespace_and_case ... ok
+test the_chart_binds_every_login_role_of_the_product ... ok
+test the_product_registry_lists_every_file_in_order ... ok
+test postgres_migrations_follow_the_jobs_rules ... ok
+
+## Commit ca83d7c: the release target (as release.yml builds the images)
+
+$ export CARGO_ZIGBUILD_ZIG_PATH="$(proto bin zig --reporter text)"
+$ cargo zigbuild --locked --release --target aarch64-unknown-linux-musl -p assets -p identity
+zig: zig 0.16.0
+    Finished `release` profile [optimized] target(s) in 38.46s
+<host copy>/target/aarch64-unknown-linux-musl/release/assets:   ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped
+<host copy>/target/aarch64-unknown-linux-musl/release/identity: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, stripped
+
+## Local (development workstation, light checks)
+
+$ bun scripts/ci/check-secret-handling.ts
+secret handling: 289 file(s) checked, 6 container build file(s), no violations
+$ bun scripts/ci/check-workflows.ts
+workflow policy: 4 file(s) checked, no violations
+$ bun scripts/ci/lint-workflows.ts
+actionlint: 3 workflow file(s), no errors
+$ bun test scripts/ci/changes.test.ts
+ 170 pass
+ 0 fail
