@@ -40,13 +40,17 @@
  *    16-byte tag), and the `sops` block has a version, a modification time, an encrypted MAC
  *    and age recipients with their wrapped data keys. Kustomize `secretGenerator` is not
  *    used: its literals, files and env files are plain text this check cannot verify. Templates
- *    (Helm `.yaml` and `.tpl` files with `{{ }}`) may not declare a Secret or a templated kind,
- *    except an empty Secret the migration Job fills: labelled `trustiot.io/filled-by: migrate`,
- *    with no key but apiVersion, kind, metadata and type, and no template action but the few
- *    lines `FILLED_SECRET_ACTIONS` names word for word (docs/architecture/secrets.md). No template
- *    may use a function that makes or reads secret material (`lookup`, `rand*`, `gen*`,
- *    `derivePassword`, ...; `checkTemplateFunctions`).
- *    Manifests may also be JSON files.
+ *    (every file under a chart's `templates/` but NOTES.txt, read per chart, and other `.yaml`
+ *    and `.tpl` files with `{{ }}`) may not declare a Secret or a templated kind, except an empty
+ *    Secret the migration Job fills: labelled `trustiot.io/filled-by: migrate`, with no key but
+ *    apiVersion, kind, metadata and type, and no template action but the few lines
+ *    `FILLED_SECRET_ACTIONS` names word for word (docs/architecture/secrets.md). A template is
+ *    read as YAML with its actions set aside, so every spelling of a kind is found, and a kind not
+ *    written `kind: <Kind>` is refused; its actions may not print at document level except an
+ *    include of a helper that declares whole manifests, may not spell a kind key in a string, and
+ *    may not use `tpl` (see "Helm templates" below). No template may use a function that makes or
+ *    reads secret material (`lookup`, `rand*`, `gen*`, `derivePassword`, ...;
+ *    `checkTemplateFunctions`). Manifests may also be JSON files.
  * 6. The build context is chosen at build time, which a static check cannot see, so every
  *    container build takes its arguments from `containerBuildArgs` (scripts/lib/build-context.ts),
  *    which checks the directory it then builds and fails when that context would send a key or
@@ -1362,15 +1366,257 @@ function leafStrings(value: unknown): unknown[] {
   return [value];
 }
 
+// --- Helm templates -------------------------------------------------------------------------
+//
+// A template's text is not the manifest it renders, so rule 5 reads a template in two ways.
+//
+// 1. As YAML (`checkUnitKinds`): every template action is taken out (a placeholder where it
+//    prints inside a line, nothing where it stands on lines of its own or prints nothing) and the
+//    rest goes through the YAML parser, one unit at a time (the file's own text, and each `define`
+//    body). The parser resolves every way YAML can spell a key or a value (quotes, escapes, tags,
+//    anchors and aliases, merge keys, a space before the colon, the value on the next line, block
+//    scalars, flow and JSON style), so the rule does not depend on a list of spellings. Instead,
+//    every `kind` key the parser finds must come from a line written the one way this check reads
+//    word for word, `kind: <Kind>` (quoted or not, or a template action); any other spelling is
+//    refused, whatever its value. Those lines then decide: a Secret, or a kind that is a template
+//    action, is refused, except a reference to a Secret by name and the empty Secret the
+//    migration Job fills.
+// 2. By what its actions print (`analyzeTemplate`, `checkChartTemplates`): text that an action
+//    prints is invisible to the parser, so an action may not print where its output starts a
+//    manifest's own keys (at document level), except an `include` of a chart helper that is
+//    itself verified to declare whole manifests the same way. A string literal in an action may
+//    not spell a kind key, and `tpl` (which renders values as a template) is not used.
+//
+// What a deliberately obfuscated template computes (a kind assembled from pieces at render time)
+// is beyond a text check; the chart tests render the chart with every optional component on and
+// check the rendered Secrets (deploy/chart/tests/chart.test.ts).
+
 /** A `kind:` line, possibly a list item, with an optional trailing comment. */
 const KIND_LINE = /^([ \t]*)(-[ \t]+)?kind:[ \t]*(.*?)[ \t]*(?:#.*)?$/;
 /** Lines that hold only template actions or comments; they do not end a YAML mapping. */
 const NON_YAML_LINE = /^[ \t]*(?:\{\{.*\}\}[ \t]*|#.*)?$/;
+/** The value of a `kind:` line this check reads word for word: a name, quoted or not. */
+const KIND_NAME = /^[A-Za-z][A-Za-z0-9]*$/;
+/** Stands in for a template action that prints inside a line, so the line still parses. */
+const ACTION_PLACEHOLDER = "TRUSTIOT_TEMPLATE_ACTION";
+/**
+ * Replaces the key of the `kind:` line with this index, to see where the parser reads it: a key
+ * of its own, so that two kinds in one mapping cannot hide each other (YAML parsers differ on
+ * which duplicate key wins).
+ */
+const KIND_KEY = /^TRUSTIOT_KIND_LINE_(\d+)$/;
+const kindKey = (index: number) => `TRUSTIOT_KIND_LINE_${index}`;
+const DOCUMENT_MARKER = /^(---|\.\.\.)([ \t]|$)/;
+
+/** Template functions whose output is always a single line. */
+const SINGLE_LINE_FUNCTIONS: ReadonlySet<string> = new Set([
+  "quote",
+  "squote",
+  "toJson",
+  "toRawJson",
+  "b64enc",
+  "sha256sum",
+  "sha1sum",
+  "adler32sum",
+  "int",
+  "int64",
+  "float64",
+  "len",
+  "atoi",
+]);
+/** Template functions that print a structure over several lines. */
+const MULTI_LINE_FUNCTION = /(?<![.$\w])(toYaml|toPrettyJson|toToml)\b/;
+
+const SECRET_IN_TEMPLATE =
+  "a template that declares a Secret (or a templated kind) cannot be verified as encrypted; keep Secrets in SOPS-encrypted YAML files, and let the chart reference Secrets by name only";
+const UNREADABLE_KIND =
+  "declares a kind this check cannot read word for word (a quoted or escaped key, a tag or an anchor, a space before the colon, the value on another line or in a block scalar, flow or JSON style, or a key built by a template action); write it as `kind: <Kind>` on one line";
+const REPEATED_KIND =
+  "this kind reaches more than one object through a YAML anchor, alias or merge key, so what it declares cannot be checked line by line; write each object's kind on its own line";
+const DUPLICATE_KIND =
+  "this object has more than one kind key, and YAML readers differ on which one wins; write one kind per object";
+const LIST_KIND =
+  "a List renders its items from whatever its template prints, which this check cannot see; declare each object as a document of its own";
+const UNPARSEABLE =
+  "cannot be read as YAML once its template actions are set aside, so the kinds it renders cannot be checked; keep each action inside a value or on lines of its own";
+const TEMPLATED_ROOT_KEY =
+  "a template action builds a top-level key of this manifest, which could be its kind; write the manifest's own keys as text";
+const DOCUMENT_LEVEL_PRINT =
+  "prints where its output starts a manifest's own keys (at document level, not indented under a key), so values, toYaml, toJson, strings or helpers could add a whole object, a Secret included, that no check sees; print there only an include of a chart helper that declares whole manifests itself, and indent everything else under its key with nindent (docs/architecture/secrets.md)";
+const KIND_LITERAL =
+  "a string in a template action spells a kind key, so the action can print or build an object of any kind; write kinds as `kind: <Kind>` text, and name map keys something other than kind";
+const LINE_BREAK_LITERAL =
+  "a string in a template action holds a line break, so what the action prints can start another line or document of the manifest; print structure as text, or with toYaml and nindent under its key";
+const FILES_ACCESS =
+  "a template action reads a file of the chart (.Files), whose lines it prints where no check reads them as manifests; keep manifests in templates/";
+const SECRET_IN_HELPER =
+  "a helper declares a Secret; only a template (not a helper or the text outside a define) may declare the empty Secret the migration Job fills, because the text around an include of a helper can add data to it";
+/** Line breaks as YAML readers count them (libyaml and go-yaml also break lines at NEL, LS and PS). */
+const LINE_BREAK = /[\r\n\u0085\u2028\u2029]/;
+const TPL_FUNCTION =
+  "template function tpl renders text from values as a template, so whatever it prints cannot be checked; write the template in the chart instead";
+
+/** One template action of a source. */
+export interface TemplateAction {
+  /** Offset of its `{{`. */
+  offset: number;
+  /** Offset just past its `}}`, or the end of the source for an action left open. */
+  end: number;
+  /** Its code, with string literals replaced by `""` and comments by a space. */
+  code: string;
+  /** Its string literals, decoded the way Go reads them. */
+  literals: string[];
+}
+
+/** Decodes the body of a Go string literal (interpreted `"…"`, rune `'…'`; raw `` `…` `` is as is). */
+function goString(body: string, quote: string): string {
+  if (quote === "`") return body;
+  const simple: Record<string, string> = { a: "\x07", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v" };
+  let out = "";
+  for (let i = 0; i < body.length; i += 1) {
+    const c = body[i] ?? "";
+    if (c !== "\\") {
+      out += c;
+      continue;
+    }
+    const next = body[i + 1] ?? "";
+    i += 1;
+    const hex = (length: number) => {
+      const digits = body.slice(i + 1, i + 1 + length);
+      i += length;
+      const code = Number.parseInt(digits, 16);
+      return Number.isNaN(code) ? "" : String.fromCodePoint(code);
+    };
+    if (next in simple) out += simple[next];
+    else if (next === "x") out += hex(2);
+    else if (next === "u") out += hex(4);
+    else if (next === "U") out += hex(8);
+    else if (/[0-7]/.test(next)) {
+      out += String.fromCharCode(Number.parseInt(body.slice(i, i + 3), 8));
+      i += 2;
+    } else out += next;
+  }
+  return out;
+}
+
+/**
+ * The template actions of a source, with their offsets: string literals ("…" with escapes, `…`,
+ * '…' runes) and comments blanked in the code, the way Go's template lexer reads them, so a `}}`
+ * inside a string does not end the action and a name inside a string or comment is not a call.
+ * An action left open at the end of the file runs to the end.
+ */
+export function templateActions(source: string): TemplateAction[] {
+  const actions: TemplateAction[] = [];
+  let i = 0;
+  while (true) {
+    const start = source.indexOf("{{", i);
+    if (start < 0) break;
+    let code = "";
+    const literals: string[] = [];
+    let j = start + 2;
+    while (j < source.length) {
+      const c = source[j] ?? "";
+      if (source.startsWith("}}", j)) {
+        j += 2;
+        break;
+      }
+      if (source.startsWith("/*", j)) {
+        const end = source.indexOf("*/", j + 2);
+        j = end < 0 ? source.length : end + 2;
+        code += " ";
+        continue;
+      }
+      if (c === '"' || c === "'") {
+        const open = j;
+        j += 1;
+        while (j < source.length && source[j] !== c) j += source[j] === "\\" ? 2 : 1;
+        literals.push(goString(source.slice(open + 1, Math.min(j, source.length)), c));
+        j += 1;
+        code += '""';
+        continue;
+      }
+      if (c === "`") {
+        const end = source.indexOf("`", j + 1);
+        literals.push(source.slice(j + 1, end < 0 ? source.length : end));
+        j = end < 0 ? source.length : end + 1;
+        code += '""';
+        continue;
+      }
+      code += c;
+      j += 1;
+    }
+    actions.push({ offset: start, end: Math.min(j, source.length), code, literals });
+    i = j;
+  }
+  return actions;
+}
+
+type ActionRole = "silent" | "open" | "define" | "end" | "print";
+
+/** What an action does to the text around it. */
+interface ClassifiedAction extends TemplateAction {
+  role: ActionRole;
+  /** Whether it writes text where it stands (a print, and a `block`, which runs its body there). */
+  prints: boolean;
+  /** The helper it includes or defines: its name, or null when the name is not a string literal. */
+  helper?: string | null;
+  /** N of an `indent N` or `nindent N` that ends its pipeline. */
+  indent?: number;
+  /** Its pipeline ends in a function whose output is always one line. */
+  singleLine: boolean;
+  /** Its pipeline calls a function that prints a structure over several lines. */
+  multiLine: boolean;
+}
+
+/** Splits an action's code (strings already blanked) into its pipeline's commands. */
+function pipelineCommands(code: string): string[] {
+  const commands: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < code.length; i += 1) {
+    const c = code[i];
+    if (c === "(") depth += 1;
+    else if (c === ")") depth -= 1;
+    else if (c === "|" && depth === 0) {
+      commands.push(code.slice(start, i));
+      start = i + 1;
+    }
+  }
+  commands.push(code.slice(start));
+  return commands.map((command) => command.trim());
+}
+
+function classifyAction(action: TemplateAction): ClassifiedAction {
+  // Drop the trim markers: `{{- ` and ` -}}`.
+  const code = action.code.replace(/^-(?=\s)/, "").replace(/(?<=\s)-$/, "").trim();
+  const word = /^[A-Za-z_]\w*/.exec(code)?.[0] ?? "";
+  const named = /^\w+\s+""/.test(code) ? (action.literals[0] ?? null) : null;
+  const base = { ...action, prints: false, singleLine: false, multiLine: false };
+  if (code === "" || /^\$\w*\s*:?=/.test(code) || ["else", "break", "continue", "fail"].includes(word)) {
+    return { ...base, role: "silent" };
+  }
+  if (["if", "range", "with"].includes(word)) return { ...base, role: "open" };
+  if (word === "end") return { ...base, role: "end" };
+  if (word === "define") return { ...base, role: "define", helper: named };
+  if (word === "block") return { ...base, role: "define", prints: true, helper: named };
+  const commands = pipelineCommands(code);
+  const last = commands.at(-1) ?? "";
+  const indent = /^n?indent\s+(\d+)$/.exec(last)?.[1];
+  return {
+    ...base,
+    role: "print",
+    prints: true,
+    helper: word === "include" || word === "template" ? named : undefined,
+    indent: indent === undefined ? undefined : Number(indent),
+    singleLine: SINGLE_LINE_FUNCTIONS.has(/^\S*/.exec(last)?.[0] ?? ""),
+    multiLine: MULTI_LINE_FUNCTION.test(code),
+  };
+}
 
 /**
  * The keys of the mapping that holds the key at `column` on line `index`, found by indentation
  * the way YAML reads them. Template action lines are skipped, since text cannot show which of
- * their branches renders.
+ * their branches renders. Used only for text that does not parse as YAML.
  */
 function siblingKeys(lines: readonly string[], index: number, column: number, dashed: boolean): string[] {
   const keys: string[] = [];
@@ -1418,6 +1664,7 @@ function siblingKeys(lines: readonly string[], index: number, column: number, da
 
 /** The label that marks a Secret the chart declares empty for the migration Job to fill. */
 const FILLED_BY_LINE = /^[ \t]*trustiot\.io\/filled-by:[ \t]*migrate[ \t]*$/;
+const FILLED_BY_LABEL = "trustiot.io/filled-by";
 /** The only keys such a Secret may have: no `data`, no `stringData`, nothing that could carry them. */
 const EMPTY_SECRET_KEYS = new Set(["apiVersion", "kind", "metadata", "type"]);
 /**
@@ -1443,11 +1690,10 @@ function mappingLines(lines: readonly string[], index: number, column: number, d
     const match = /^([ \t]*)(-[ \t]+)?/.exec(line);
     return { indent: (match?.[1] ?? "").length + (match?.[2] ?? "").length, dash: match?.[2] !== undefined };
   };
-  const separator = (line: string) => /^(---|\.\.\.)([ \t]|$)/.test(line);
   const inside: number[] = [index];
   for (let i = index + 1; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
-    if (separator(line)) break;
+    if (DOCUMENT_MARKER.test(line)) break;
     if (!NON_YAML_LINE.test(line)) {
       const { indent, dash } = indentOf(line);
       if (indent < column || (indent === column && dash)) break;
@@ -1457,7 +1703,7 @@ function mappingLines(lines: readonly string[], index: number, column: number, d
   if (!dashed) {
     for (let i = index - 1; i >= 0; i -= 1) {
       const line = lines[i] ?? "";
-      if (separator(line)) break;
+      if (DOCUMENT_MARKER.test(line)) break;
       if (!NON_YAML_LINE.test(line)) {
         const { indent, dash } = indentOf(line);
         if (indent < column) break;
@@ -1472,11 +1718,12 @@ function mappingLines(lines: readonly string[], index: number, column: number, d
 }
 
 /**
- * Whether the Secret declared on line `index` is one the chart may declare: empty, for the
- * migration Job to fill (docs/architecture/secrets.md). It carries the label
+ * Whether the text of the Secret declared on line `index` is one the chart may declare: empty,
+ * for the migration Job to fill (docs/architecture/secrets.md). It carries the label
  * `trustiot.io/filled-by: migrate`; its keys are only apiVersion, kind, metadata and type (no
  * `data` or `stringData`); and every line with a template action is one of
- * `FILLED_SECRET_ACTIONS`, word for word. The chart tests check the rendered Secrets too.
+ * `FILLED_SECRET_ACTIONS`, word for word. The parsed object is checked as well
+ * (`isEmptyFilledObject`), and the chart tests check the rendered Secrets.
  */
 function isEmptyFilledSecret(lines: readonly string[], index: number, column: number, dashed: boolean): boolean {
   const inside = mappingLines(lines, index, column, dashed);
@@ -1497,42 +1744,390 @@ function isEmptyFilledSecret(lines: readonly string[], index: number, column: nu
   return true;
 }
 
+/** Whether a parsed object is an empty Secret for the migration Job: allowed keys and its label. */
+function isEmptyFilledObject(object: YamlMap): boolean {
+  const metadata = isMap(object.metadata) ? object.metadata : {};
+  const labels = isMap(metadata.labels) ? metadata.labels : {};
+  // The kind is under its marker key (`checkUnitKinds`).
+  return Object.keys(object).every((key) => EMPTY_SECRET_KEYS.has(key) || KIND_KEY.test(key)) && labels[FILLED_BY_LABEL] === "migrate";
+}
+
+/** Whether a parsed object refers to another object by name (a Gateway's `certificateRefs`). */
+function isReference(object: YamlMap): boolean {
+  return !("apiVersion" in object) && ("name" in object || "group" in object);
+}
+
+/** What `checkUnitKinds` found in one unit. */
+interface UnitKinds {
+  /** Whether the unit parsed as YAML. */
+  parsed: boolean;
+  /** Whether a top-level key of a document is built by a template action. */
+  templatedRootKey: boolean;
+  /** Whether the unit declares a Secret (an allowed one included). */
+  declaresSecret: boolean;
+  violations: Violation[];
+}
+
 /**
- * Rule 5 for a template that is not plain YAML (a Helm `.yaml` template or `.tpl` helper): it
- * fails when it declares a Secret, or a kind that is itself templated and could render one,
- * because what it renders cannot be verified here. The chart tests check rendered output.
- * A `kind: Secret` in a reference to a Secret by name (a Gateway's `certificateRefs`, with
- * `name` or `group` beside it and no `apiVersion`) is not a declaration. The one exception is an
- * empty Secret the migration Job fills (`isEmptyFilledSecret`): it carries no value to verify.
+ * Rule 5 for one unit of a template, or for rendered manifests. `lines` is the unit's text with
+ * template actions taken out (`ACTION_PLACEHOLDER` where one printed inside a line); `original`
+ * is the template's own text, for the word-for-word rules of the migration Job's Secret
+ * (undefined for rendered manifests, which hold no actions). `emptySecretAllowed` is false for a
+ * helper, which may not declare even the migration Job's empty Secret.
+ *
+ * Every `kind:` line written the readable way gets a key of its own (`kindKey`), then the unit is
+ * parsed: any `kind` key the parser still finds (in any letter case, at any depth) was written
+ * some other way and is refused, and so is an object with more than one kind, and a marked line
+ * that reaches more than one object (an anchor or a merge key). The marked lines are then judged
+ * by the objects the parser built for them.
  */
-export function checkTemplateText(file: string, source: string): Violation[] {
-  const lines = source.split(/\r?\n/);
-  const violations: Violation[] = [...checkTemplateFunctions(file, source)];
-  lines.forEach((line, index) => {
+function checkUnitKinds(file: string, lines: readonly string[], original?: readonly string[], emptySecretAllowed = true): UnitKinds {
+  const canonical = new Map<number, { value: string; templated: boolean }>();
+  const marked = lines.map((line, index) => {
     const match = KIND_LINE.exec(line);
-    if (match === null) {
-      return;
-    }
+    if (match === null) return line;
     const value = (match[3] ?? "").replace(/^(["'])(.*)\1$/, "$2");
-    if (!/^secret$/i.test(value) && !value.includes("{{")) {
+    const source = original === undefined ? undefined : KIND_LINE.exec(original[index] ?? "");
+    const templated = value.includes(ACTION_PLACEHOLDER) || (source?.[3] ?? "").includes("{{");
+    if (!templated && !KIND_NAME.test(value)) return line;
+    canonical.set(index, { value, templated });
+    return `${match[1] ?? ""}${match[2] ?? ""}${kindKey(index)}: kind`;
+  });
+  let parsed: unknown;
+  try {
+    parsed = Bun.YAML.parse(marked.join("\n"));
+  } catch {
+    return { parsed: false, templatedRootKey: false, declaresSecret: false, violations: [] };
+  }
+  const found = new Map<number, YamlMap[]>();
+  let unreadable = false;
+  let duplicate: number | undefined;
+  const visit = (node: unknown, path: Set<object>) => {
+    if (node === null || typeof node !== "object" || path.has(node)) return;
+    path.add(node);
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item, path);
+    } else {
+      const kinds = Object.keys(node).filter((key) => /^kind$/i.test(key) || KIND_KEY.test(key));
+      for (const key of kinds) {
+        const marker = KIND_KEY.exec(key);
+        if (marker === null) {
+          unreadable = true;
+        } else {
+          const index = Number(marker[1]);
+          found.set(index, [...(found.get(index) ?? []), node as YamlMap]);
+          if (kinds.length > 1) duplicate = Math.min(duplicate ?? index, index);
+        }
+      }
+      for (const value of Object.values(node as YamlMap)) visit(value, path);
+    }
+    path.delete(node);
+  };
+  visit(parsed, new Set());
+
+  const violations: Violation[] = [];
+  const report = (index: number, message: string) => violations.push({ file, line: index + 1, message });
+  if (unreadable) {
+    // Point at the first line that mentions a kind the readable way does not cover.
+    const at = lines.findIndex((line, index) => /kind/i.test(line) && !found.has(index));
+    report(at >= 0 ? at : Math.max(0, lines.findIndex((line) => line.trim() !== "")), UNREADABLE_KIND);
+  }
+  if (duplicate !== undefined) report(duplicate, DUPLICATE_KIND);
+  const documents = Array.isArray(parsed) ? parsed : [parsed];
+  const roots = documents.flatMap((document) => (Array.isArray(document) ? document : [document]));
+  let declaresSecret = false;
+  for (const [index, objects] of [...found].sort(([a], [b]) => a - b)) {
+    const { value, templated } = canonical.get(index) ?? { value: "", templated: true };
+    if (objects.length > 1) {
+      report(index, REPEATED_KIND);
+      continue;
+    }
+    const object = objects[0] ?? {};
+    if (!templated && /List$/.test(value)) {
+      report(index, LIST_KIND);
+      continue;
+    }
+    if (!templated && !/^secret$/i.test(value)) continue;
+    // A reference sits inside another object; a manifest of its own is never one.
+    if (!roots.includes(object) && isReference(object)) continue;
+    declaresSecret = true;
+    const source = original === undefined ? undefined : KIND_LINE.exec(original[index] ?? "");
+    const match = source ?? KIND_LINE.exec(lines[index] ?? "");
+    const column = (match?.[1] ?? "").length + (match?.[2] ?? "").length;
+    const filled =
+      !templated &&
+      isEmptyFilledObject(object) &&
+      (original === undefined || isEmptyFilledSecret(original, index, column, match?.[2] !== undefined));
+    if (filled && !emptySecretAllowed) report(index, SECRET_IN_HELPER);
+    else if (!filled) report(index, SECRET_IN_TEMPLATE);
+  }
+  const templatedRootKey = roots.some((root) => isMap(root) && Object.keys(root).some((key) => key.includes(ACTION_PLACEHOLDER)));
+  return { parsed: true, templatedRootKey, declaresSecret, violations };
+}
+
+/**
+ * Rule 5 for text that does not parse as YAML even with its actions taken out: the `kind:` lines
+ * are judged by indentation alone (the rule before Laysi/trustiot-v2#398), and any other line that
+ * looks like a kind key is refused, since the parser cannot vouch for it.
+ */
+function checkUnparsedKinds(file: string, lines: readonly string[], original: readonly string[]): Violation[] {
+  const violations: Violation[] = [];
+  lines.forEach((line, index) => {
+    if (!/kind/i.test(line)) return;
+    const match = KIND_LINE.exec(original[index] ?? "");
+    const value = (match?.[3] ?? "").replace(/^(["'])(.*)\1$/, "$2");
+    if (match === null || !(KIND_NAME.test(value) || value.includes("{{"))) {
+      if (/(^|[\s{,[?-])["']?kind["']?[ \t]*:/i.test(line)) violations.push({ file, line: index + 1, message: UNREADABLE_KIND });
       return;
     }
+    if (!/^secret$/i.test(value) && !value.includes("{{")) return;
     const dashed = match[2] !== undefined;
-    const siblings = siblingKeys(lines, index, (match[1] ?? "").length + (match[2] ?? "").length, dashed);
-    if (!siblings.includes("apiVersion") && (siblings.includes("name") || siblings.includes("group"))) {
-      return;
-    }
     const column = (match[1] ?? "").length + (match[2] ?? "").length;
-    if (/^secret$/i.test(value) && isEmptyFilledSecret(lines, index, column, dashed)) {
-      return;
-    }
-    violations.push({
-      file,
-      line: index + 1,
-      message: "a template that declares a Secret (or a templated kind) cannot be verified as encrypted; keep Secrets in SOPS-encrypted YAML files, and let the chart reference Secrets by name only",
-    });
+    const siblings = siblingKeys(original, index, column, dashed);
+    if (!siblings.includes("apiVersion") && (siblings.includes("name") || siblings.includes("group"))) return;
+    if (/^secret$/i.test(value) && isEmptyFilledSecret(original, index, column, dashed)) return;
+    violations.push({ file, line: index + 1, message: SECRET_IN_TEMPLATE });
   });
   return violations;
+}
+
+/** One printing action whose output starts at document level. */
+interface DocumentLevelPrint {
+  line: number;
+  /** The helper it includes: its name, null for a computed name, undefined when it is no include. */
+  helper?: string | null;
+}
+
+/** One unit of a template: the file's own text, or the body of one `define`. */
+interface TemplateUnit {
+  /** The helper a `define` body declares; undefined for the file's own text. */
+  helper?: string | null;
+  /** Whether Helm renders it as manifests: the own text of a file whose name does not start with `_`. */
+  rendered: boolean;
+  parsed: boolean;
+  templatedRootKey: boolean;
+  declaresSecret: boolean;
+  documentLevel: DocumentLevelPrint[];
+}
+
+/** One template file, read for rule 5. */
+interface TemplateAnalysis {
+  units: TemplateUnit[];
+  /** What the file breaks by itself; prints at document level are judged across the chart. */
+  violations: Violation[];
+}
+
+/**
+ * The nearest line above `from` (inclusive), in the same document, that is indented less than
+ * `column`: the key that output indented to `column` falls under. None means the output starts the
+ * document's own keys.
+ */
+function hasParentKey(lines: readonly string[], from: number, column: number): boolean {
+  for (let i = from; i >= 0; i -= 1) {
+    const line = lines[i] ?? "";
+    if (DOCUMENT_MARKER.test(line)) return false;
+    if (line.trim() === "" || /^[ \t]*#/.test(line)) continue;
+    if ((/^[ \t]*/.exec(line)?.[0].length ?? 0) < column) return true;
+  }
+  return false;
+}
+
+/** Reads one template file into units and checks what it breaks by itself (see `checkChartTemplates`). */
+function analyzeTemplate(file: string, source: string): TemplateAnalysis {
+  const original = source.split(/\r?\n/);
+  const actions = templateActions(source).map(classifyAction);
+  const violations: Violation[] = [...checkTemplateFunctions(file, source)];
+
+  // Which characters belong to an action, to tell the text of a line from its actions.
+  const inAction = new Uint8Array(source.length);
+  for (const action of actions) inAction.fill(1, action.offset, action.end);
+  const textOf = (from: number, to: number) => {
+    let text = "";
+    for (let i = from; i < to; i += 1) if (inAction[i] === 0) text += source[i];
+    return text;
+  };
+  const lineStart = (offset: number) => source.lastIndexOf("\n", offset - 1) + 1;
+  const lineEnd = (offset: number) => {
+    const end = source.indexOf("\n", offset);
+    return end < 0 ? source.length : end;
+  };
+
+  // Units: the file's own text (0) and each define body, which ends at the define's own `end`.
+  const units: TemplateUnit[] = [{ rendered: !posix.basename(file).startsWith("_"), parsed: true, templatedRootKey: false, declaresSecret: false, documentLevel: [] }];
+  const unitOf: number[] = [];
+  const textUnits: number[] = [];
+  const stack: (number | undefined)[] = [];
+  let current = 0;
+  for (const action of actions) {
+    textUnits.push(current);
+    unitOf.push(current);
+    if (action.role === "define") {
+      units.push({ helper: action.helper, rendered: false, parsed: true, templatedRootKey: false, declaresSecret: false, documentLevel: [] });
+      stack.push(current);
+      current = units.length - 1;
+    } else if (action.role === "open") {
+      stack.push(undefined);
+    } else if (action.role === "end") {
+      const outer = stack.pop();
+      if (outer !== undefined) current = outer;
+    }
+  }
+  textUnits.push(current);
+
+  // A string in an action that spells a kind key (`{{ "kind: Secret" }}`, `dict "kind" "Secret"`)
+  // or holds a line break (`{{ printf "x\n---\n..." }}` printed into a line), and a chart file
+  // printed by an action. Values cannot hold a line break either: the chart refuses them when it
+  // renders ("trustiot.values.singleLine"), so what an action prints into a line stays in it.
+  for (const action of actions) {
+    const line = lineAt(source, action.offset);
+    if (action.literals.some((literal) => /^\s*kind\s*$/i.test(literal) || /\bkind\b["']?\s*:/i.test(literal))) {
+      violations.push({ file, line, message: KIND_LITERAL });
+    }
+    if (action.literals.some((literal) => LINE_BREAK.test(literal))) violations.push({ file, line, message: LINE_BREAK_LITERAL });
+    if (/\.Files\b/.test(action.code)) violations.push({ file, line, message: FILES_ACCESS });
+  }
+
+  // Each unit's text with the actions taken out, line for line with the source. An action that
+  // prints inside a line becomes ACTION_PLACEHOLDER; one on lines of its own, or one that prints
+  // nothing, disappears. Line breaks inside an action are kept, after the line it ends on.
+  const standalone = actions.map(
+    (action) => textOf(lineStart(action.offset), action.offset).trim() === "" && textOf(action.end, lineEnd(action.end)).trim() === "",
+  );
+  const unitText = (unit: number): string[] => {
+    let out = "";
+    let pending = 0;
+    const emit = (text: string) => {
+      const newline = text.indexOf("\n");
+      if (pending > 0 && newline >= 0) {
+        out += `${text.slice(0, newline + 1)}${"\n".repeat(pending)}${text.slice(newline + 1)}`;
+        pending = 0;
+      } else {
+        out += text;
+      }
+    };
+    let position = 0;
+    actions.forEach((action, index) => {
+      const text = source.slice(position, action.offset);
+      emit(textUnits[index] === unit ? text : text.replace(/[^\n]/g, ""));
+      if (unitOf[index] === unit && action.prints && !standalone[index]) out += ACTION_PLACEHOLDER;
+      pending += (source.slice(action.offset, action.end).match(/\n/g) ?? []).length;
+      position = action.end;
+    });
+    const rest = source.slice(position);
+    emit(textUnits[actions.length] === unit ? rest : rest.replace(/[^\n]/g, ""));
+    out += "\n".repeat(pending);
+    return out.split(/\r?\n/);
+  };
+
+  units.forEach((unit, index) => {
+    const lines = unitText(index);
+    const kinds = checkUnitKinds(file, lines, original, unit.rendered);
+    unit.parsed = kinds.parsed;
+    unit.templatedRootKey = kinds.templatedRootKey;
+    unit.declaresSecret = kinds.declaresSecret;
+    if (kinds.parsed) {
+      violations.push(...kinds.violations);
+    } else {
+      violations.push(...checkUnparsedKinds(file, lines, original));
+      if (unit.rendered) violations.push({ file, line: 1, message: UNPARSEABLE });
+    }
+    if (unit.rendered && unit.templatedRootKey) {
+      // Usually a key at the start of a line; the first line of the unit otherwise.
+      const at = lines.findIndex((line) => /^[^\s#][^:]*:/.test(line) && line.split(":")[0]?.includes(ACTION_PLACEHOLDER));
+      violations.push({ file, line: at >= 0 ? at + 1 : 1, message: TEMPLATED_ROOT_KEY });
+    }
+    // Prints whose output can start a line: at what column, and whether a key holds it.
+    actions.forEach((action, i) => {
+      if (unitOf[i] !== index || !action.prints) return;
+      const start = lineStart(action.offset);
+      const before = textOf(start, action.offset);
+      const led = /^(?:---[ \t]+)?[ \t]*$/.test(before);
+      const textFollows = textOf(action.end, lineEnd(action.end)).trim() !== "";
+      let column: number | undefined;
+      if (led) {
+        const lead = /^---[ \t]/.test(before) ? 0 : (/^[ \t]*/.exec(source.slice(start))?.[0].length ?? 0);
+        column = action.indent ?? (action.singleLine || textFollows ? lead : 0);
+      } else if (action.indent !== undefined) {
+        column = action.indent;
+      } else if (action.multiLine && !action.singleLine) {
+        column = 0;
+      }
+      if (column === undefined) return;
+      const line = lineAt(source, action.offset);
+      if (column === 0 || !hasParentKey(lines, led ? line - 2 : line - 1, column)) {
+        unit.documentLevel.push({ line, helper: action.helper });
+      }
+    });
+  });
+  return { units, violations };
+}
+
+/**
+ * Rule 5 for the templates of Helm charts, read together because a template prints the helpers
+ * that any file of the chart defines. Each file must pass `analyzeTemplate`'s own rules, and the
+ * rendered text of a template (not a helper) may print at document level only an `include` or
+ * `template` of a helper that declares whole manifests itself: every body defined under that name
+ * parses, builds no top-level key with an action, declares no Secret (not even the migration
+ * Job's: a template printed after it could add data to it), and prints at document level only
+ * such helpers in turn.
+ */
+export function checkChartTemplates(files: readonly { file: string; source: string }[]): Violation[] {
+  const analyses = files.map(({ file, source }) => ({ file, ...analyzeTemplate(file, source) }));
+  const bodies = new Map<string, TemplateUnit[]>();
+  for (const { units } of analyses) {
+    for (const unit of units) {
+      if (typeof unit.helper === "string") bodies.set(unit.helper, [...(bodies.get(unit.helper) ?? []), unit]);
+    }
+  }
+  const verdicts = new Map<string, boolean>();
+  const declaresManifests = (name: string | null | undefined, visiting: ReadonlySet<string> = new Set()): boolean => {
+    if (typeof name !== "string" || visiting.has(name)) return false;
+    const known = verdicts.get(name);
+    if (known !== undefined) return known;
+    const next = new Set([...visiting, name]);
+    const found = bodies.get(name) ?? [];
+    const verdict =
+      found.length > 0 &&
+      found.every(
+        (unit) =>
+          unit.parsed &&
+          !unit.templatedRootKey &&
+          !unit.declaresSecret &&
+          unit.documentLevel.every((print) => declaresManifests(print.helper, next)),
+      );
+    if (visiting.size === 0) verdicts.set(name, verdict);
+    return verdict;
+  };
+  const violations: Violation[] = analyses.flatMap((analysis) => analysis.violations);
+  for (const { file, units } of analyses) {
+    for (const unit of units.filter((u) => u.rendered)) {
+      for (const print of unit.documentLevel) {
+        if (!declaresManifests(print.helper)) violations.push({ file, line: print.line, message: DOCUMENT_LEVEL_PRINT });
+      }
+    }
+  }
+  const unique = new Map(violations.map((v) => [`${v.file}\0${v.line}\0${v.message}`, v]));
+  return [...unique.values()].sort((a, b) => (a.file === b.file ? a.line - b.line : a.file < b.file ? -1 : 1));
+}
+
+/**
+ * Rule 5 for one template (a Helm `.yaml` template or `.tpl` helper), on its own: the helpers it
+ * prints must be defined in the same text. The repository scan reads each chart's templates
+ * together (`checkChartTemplates`).
+ */
+export function checkTemplateText(file: string, source: string): Violation[] {
+  return checkChartTemplates([{ file, source }]);
+}
+
+/**
+ * Rule 5 for manifests a chart rendered (`helm template`): they hold no template actions, so they
+ * are read as YAML only. The only Secret allowed is the empty one the migration Job fills
+ * (`isEmptyFilledObject`), every kind must be written `kind: <Kind>` so that what Helm and the API
+ * server read is what this check read, and the text must parse.
+ */
+export function checkRenderedManifests(file: string, rendered: string): Violation[] {
+  const result = checkUnitKinds(file, rendered.split(/\r?\n/));
+  return result.parsed ? result.violations : [{ file, line: 1, message: "rendered manifests do not parse as YAML" }];
 }
 
 /**
@@ -1548,67 +2143,25 @@ export function checkTemplateText(file: string, source: string): Violation[] {
  */
 const FORBIDDEN_TEMPLATE_FUNCTION =
   /(?<![.$\w])(lookup|rand[A-Za-z]*|uuidv[0-9]|shuffle|gen(?:CA|CAWithKey|PrivateKey|SelfSignedCert|SelfSignedCertWithKey|SignedCert|SignedCertWithKey)|derivePassword|htpasswd|bcrypt|encryptAES|decryptAES|getHostByName)\b/;
+/** `tpl` renders text from values as a template: what it prints is out of every check's sight. */
+const TPL = /(?<![.$\w])tpl\b/;
 
-/**
- * The code of every template action, with its offset: string literals ("…" with escapes, `…`,
- * '…' runes) and comments blanked, the way Go's template lexer reads them, so a `}}` inside a
- * string does not end the action and a name inside a string or comment is not a call. An action
- * left open at the end of the file runs to the end.
- */
-export function templateActions(source: string): { offset: number; code: string }[] {
-  const actions: { offset: number; code: string }[] = [];
-  let i = 0;
-  while (true) {
-    const start = source.indexOf("{{", i);
-    if (start < 0) break;
-    let code = "";
-    let j = start + 2;
-    while (j < source.length) {
-      const c = source[j] ?? "";
-      if (source.startsWith("}}", j)) {
-        j += 2;
-        break;
-      }
-      if (source.startsWith("/*", j)) {
-        const end = source.indexOf("*/", j + 2);
-        j = end < 0 ? source.length : end + 2;
-        code += " ";
-        continue;
-      }
-      if (c === '"' || c === "'") {
-        j += 1;
-        while (j < source.length && source[j] !== c) j += source[j] === "\\" ? 2 : 1;
-        j += 1;
-        code += '""';
-        continue;
-      }
-      if (c === "`") {
-        const end = source.indexOf("`", j + 1);
-        j = end < 0 ? source.length : end + 1;
-        code += '""';
-        continue;
-      }
-      code += c;
-      j += 1;
-    }
-    actions.push({ offset: start, code });
-    i = j;
-  }
-  return actions;
-}
-
-/** Every use of a forbidden function in a template action (strings and comments excluded). */
+/** Every use of a forbidden function, and of `tpl`, in a template action (strings and comments excluded). */
 export function checkTemplateFunctions(file: string, source: string): Violation[] {
   const violations: Violation[] = [];
   for (const action of templateActions(source)) {
     // Function names only: not a field (.Values.lookup) or a variable.
     const used = FORBIDDEN_TEMPLATE_FUNCTION.exec(action.code);
-    if (used === null) continue;
-    violations.push({
-      file,
-      line: lineAt(source, action.offset),
-      message: `template function ${used[1]} makes or reads secret material at render time; a chart template may not use lookup, rand*, uuid*, shuffle, gen* keys and certificates, derivePassword, htpasswd, bcrypt, the AES functions or getHostByName (docs/architecture/secrets.md)`,
-    });
+    if (used !== null) {
+      violations.push({
+        file,
+        line: lineAt(source, action.offset),
+        message: `template function ${used[1]} makes or reads secret material at render time; a chart template may not use lookup, rand*, uuid*, shuffle, gen* keys and certificates, derivePassword, htpasswd, bcrypt, the AES functions or getHostByName (docs/architecture/secrets.md)`,
+      });
+    }
+    if (TPL.test(action.code)) {
+      violations.push({ file, line: lineAt(source, action.offset), message: TPL_FUNCTION });
+    }
   }
   return violations;
 }
@@ -1671,7 +2224,15 @@ export function checkRepository(root: string): Result {
   const files = listFiles(root);
   const violations: Violation[] = [...checkRootIgnore(root)];
   const buildFiles: string[] = [];
-  let checked = 0;
+  // Helm renders every file under a chart's templates/ (all but NOTES.txt), whatever its
+  // extension, and a template prints helpers from any file of the chart, so they are read together.
+  const chartRoots = files.filter((file) => posix.basename(file) === "Chart.yaml").map((file) => posix.dirname(file));
+  const isChartTemplate = (file: string) =>
+    posix.basename(file) !== "NOTES.txt" &&
+    chartRoots.some((chart) => file.startsWith(chart === "." ? "templates/" : `${chart}/templates/`));
+  const chartTemplates = files.filter(isChartTemplate).map((file) => ({ file, source: readFileSync(join(root, file), "utf8") }));
+  violations.push(...checkChartTemplates(chartTemplates));
+  let checked = chartTemplates.length;
   for (const file of files) {
     const name = posix.basename(file);
     if (IGNORE_FILE.test(name) && name !== ".dockerignore" && name !== ".containerignore") {
@@ -1687,7 +2248,7 @@ export function checkRepository(root: string): Result {
     const yaml = YAML_FILE.test(file);
     const template = file.endsWith(".tpl");
     const json = JSON_FILE.test(file);
-    if (!build && !script && !yaml && !template && !json) {
+    if ((!build && !script && !yaml && !template && !json) || isChartTemplate(file)) {
       continue;
     }
     const source = readFileSync(join(root, file), "utf8");
