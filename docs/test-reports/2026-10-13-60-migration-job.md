@@ -255,3 +255,30 @@ pre-commit 審查在這一輪擋下三次，都已修正：
 - N3：正在刪除的 Secret。
 - 平台角色的防護：原本只檢查 `_platform` 字樣，改為逐項比對 chart 的 Postgres 綁定。
 - N1、N4 與 `--force-replace` 的文件一次就通過。
+
+## 第六輪：第五輪的程式層複驗
+
+2026-10-14 獨立驗證在程式層複驗第五輪（head 94b3614）。N1、N3、N4 與服務清單的防護都成立：
+- N1：values 檔與 `--set` 共 23 種寫法都渲染成正確的十進位或讓渲染失敗。
+- N3：managedFields 留不住外來的 key，Helm 與 Flux 的 ownership 在拿掉外來 metadata 之後仍在。
+
+剩下三個低風險項目：
+
+| 發現 | 處理 | 證據 |
+| --- | --- | --- |
+| L1（低）`tools/migrate/src/passwords.rs` 的 `KEPT_LABELS`、`KEPT_ANNOTATIONS` 跟 chart 之間只靠一行註解對應 | 修正。chart 測試讀這兩個陣列（Job 的 annotation 常數也解析出值），在四種渲染設定下檢查兩種密碼 Secret 的每個標籤與 annotation、以及 Helm 的兩個 ownership annotation 都在白名單裡。這兩種 Secret 是服務的與 collector 的；四種設定是 saas、onprem、全部服務、Job 關閉。`scripts/ci/changes.ts` 把 `passwords.rs` 列為 chart 測試讀的檔案 | chart 測試「every label and annotation the chart and Helm put on the password Secrets is one the Job keeps…」。從白名單拿掉 `app.kubernetes.io/part-of` 時這個測試失敗，並寫出 Secret 與 key |
+| L3（低）在 ClickHouse 設定檔（`users_xml`）定義的帳號若拿到 `trustiot_otel_collector`，`ALTER USER … HOST NONE` 改不了它，Job 每次都停 | 修正。查詢只選 `system.users` 的 storage 不是 `users_xml` 的帳號，`currentUser()` 仍然排除。runbook 與 README 一併更新。沒有加測試：測試用 ClickHouse 只有設定檔定義的管理帳號，要做出「設定檔帳號拿到角色」得改容器的設定，不便宜 | 程式與文件；PR CI 的 `tests/clickhouse.rs` 第 6d 步會跑這個查詢 |
+| L2（低）叢集政策（Kyverno、Gatekeeper）若要求 Secret 一定要帶某個只有 post-renderer 或 Flux `spec.commonMetadata` 才會加的 key，會拒絕 Job 綁定時拿掉 metadata 的 patch，Job 每次都停 | 只寫進文件，不加新的設定。runbook 新增「要求 Secret 帶某個標籤或 annotation 的叢集政策」：症狀是 `refused to patch it` 加上指名這個 Secret 的 admission 拒絕；處理是讓政策豁免兩種密碼 Secret，或改用會自動加上那個 key 的 mutating 政策；也寫明第一次填入時會拿掉一次 post-renderer 或 `commonMetadata` 加的 key。SaaS 的 HelmRelease 兩者都沒用 | runbook |
+
+### 指令與結果
+
+| 項目 | 結果 |
+| --- | --- |
+| `bun test deploy/chart` | 311 通過 |
+| `bun test scripts` | 693 通過，2 略過（需要 podman 的 e2e），0 失敗 |
+| `bun run --cwd scripts typecheck` | 通過 |
+| `bun scripts/ci/check-secret-handling.ts` | 285 個檔案，沒有違規 |
+| 經檢查佇列：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings` | 通過 |
+| 經檢查佇列：`env -u CI cargo test --locked -p migrate` | 全部通過：單元 20 個、`tests/passwords.rs` 11 個、`tests/registry.rs` 5 個、`tests/wait_for_job.rs` 4 個。建置主機沒有容器執行環境，需要容器的 6 個測試執行檔都略過，由推送後的 PR CI 執行 |
+
+這一輪的 pre-commit 審查每個 commit 都一次通過。
