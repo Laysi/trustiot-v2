@@ -1,0 +1,41 @@
+# Laysi/trustiot-v2#413, 2026-10-15, build host through the check queue (CI=1).
+# Each mutation was made in the worktree, checked, and undone; the restored
+# crates/service-kit/sql/outbox-aggregate.sql has the same SHA-256 as before
+# (c4e4e3c4b10eee0bfbcdcb0897dc38619cf88705bc5294d4085f752d4a1e2dfc).
+
+## M1: outbox-aggregate.sql without the restrictive policy platform_aggregates_only
+## (00:18, Taipei). The policy list check fails first:
+
+$ cargo test --locked -p service-kit --test tenant_db outbox_aggregates -- --nocapture
+thread 'outbox_aggregates_follow_the_tenant_policies' (246653) panicked at crates/service-kit/tests/tenant_db.rs:2863:5:
+assertion `left == right` failed
+  left: [("platform_aggregates", true, Some("(tenant_id IS NULL)"), Some("(tenant_id IS NULL)")), ("tenant_isolation", true, Some("(tenant_id = (NULLIF(current_setting('trustiot.tenant_id'::text, true), ''::text))::uuid)"), Some("(tenant_id = (NULLIF(current_setting('trustiot.tenant_id'::text, true), ''::text))::uuid)"))]
+ right: [("platform_aggregates", true, Some("(tenant_id IS NULL)"), Some("(tenant_id IS NULL)")), ("platform_aggregates_only", false, Some("(tenant_id IS NULL)"), Some("(tenant_id IS NULL)")), ("tenant_isolation", true, Some("(tenant_id = (NULLIF(current_setting('trustiot.tenant_id'::text, true), ''::text))::uuid)"), Some("(tenant_id = (NULLIF(current_setting('trustiot.tenant_id'::text, true), ''::text))::uuid)"))]
+test outbox_aggregates_follow_the_tenant_policies ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 2.53s
+
+## M1b: the same mutation, with the policy list check also inverted (assert_ne!) so the
+## behaviour checks run (00:19). A platform transaction that set tenant A itself sees tenant A's
+## aggregates:
+
+$ cargo test --locked -p service-kit --test tenant_db outbox_aggregates -- --nocapture
+service role in tenant A, upsert of an aggregate of tenant B: refused (error returned from database: new row violates row-level security policy (USING expression) for table "outbox_aggregate" at line 2362)
+service role in tenant A, upsert of an aggregate of the platform: refused (error returned from database: new row violates row-level security policy (USING expression) for table "outbox_aggregate" at line 2362)
+platform role, tenant set: false, upsert of tenant A's aggregate: refused (error returned from database: new row violates row-level security policy (USING expression) for table "outbox_aggregate" at line 2362)
+thread 'outbox_aggregates_follow_the_tenant_policies' (247166) panicked at crates/service-kit/tests/tenant_db.rs:2994:9:
+assertion `left == right` failed: the platform role, tenant set: true
+  left: ["catalog/c", "widget/a", "widget/eventless", "widget/old-binary"]
+ right: ["catalog/c", "widget/eventless"]
+test outbox_aggregates_follow_the_tenant_policies ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 2.67s
+
+## M2: outbox-aggregate.sql without `ALTER TABLE outbox_aggregate ENABLE ROW LEVEL SECURITY`
+## (00:20). The identity service's cross-tenant suite fails: service-kit refuses identity_app's
+## sessions because outbox_aggregate has a tenant_id column but no row-level security.
+
+$ cargo test --locked -p identity --test cross_tenant -- --nocapture
+FAIL | postgres | session as tenant A | refused the database session: database role `identity_app` may use table `identity.outbox_aggregate`, which has a tenant_id column but row-level security is not enabled
+FAIL | postgres | session as tenant B | refused the database session: database role `identity_app` may use table `identity.outbox_aggregate`, which has a tenant_id column but row-level security is not enabled
+13 probes, 2 failed
+test tenants_are_isolated ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.46s

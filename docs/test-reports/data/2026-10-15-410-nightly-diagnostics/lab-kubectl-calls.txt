@@ -1,0 +1,14 @@
+kubectl get all,configmap,secret,serviceaccount,pvc --namespace e2e-410 --output name
+kubectl get nodes --output json
+kubectl get deployments --namespace e2e-410 --output json
+kubectl get statefulsets --namespace e2e-410 --output json
+kubectl get daemonsets --namespace e2e-410 --output json
+kubectl get replicasets --namespace e2e-410 --output json
+kubectl get jobs --namespace e2e-410 --output json
+kubectl get pods --namespace e2e-410 --output json
+kubectl get persistentvolumeclaims --namespace e2e-410 --output json
+kubectl get clusters.postgresql.cnpg.io --namespace e2e-410 --output json
+kubectl get gateways.gateway.networking.k8s.io --namespace e2e-410 --output json
+kubectl get events --namespace e2e-410 --output json
+kubectl get pods --all-namespaces --output json
+kubectl get events --all-namespaces --output json

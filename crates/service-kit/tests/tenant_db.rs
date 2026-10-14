@@ -2752,6 +2752,312 @@ async fn outbox_events_follow_the_tenant_policies() {
     );
 }
 
+/// The outbox tables as crates/outbox created them before `sql/outbox-aggregate.sql`
+/// (Laysi/trustiot-v2#413), with the columns the template reads, and what an older producer
+/// wrote into them: two events of tenant A's aggregate, one of tenant B's, a platform-wide one,
+/// and an aggregate without an event, which `publish` never leaves.
+const OUTBOX_BEFORE_THE_AGGREGATE_TEMPLATE: &str = "
+CREATE TABLE outbox_aggregate (
+    aggregate_type text NOT NULL,
+    aggregate_id text NOT NULL,
+    last_seq bigint NOT NULL,
+    last_tx bigint NOT NULL,
+    PRIMARY KEY (aggregate_type, aggregate_id)
+);
+CREATE TABLE outbox_event (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    tenant_id uuid,
+    aggregate_type text NOT NULL,
+    aggregate_id text NOT NULL,
+    aggregate_seq bigint NOT NULL,
+    UNIQUE (aggregate_type, aggregate_id, aggregate_seq)
+);
+INSERT INTO outbox_event (tenant_id, aggregate_type, aggregate_id, aggregate_seq) VALUES
+    ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'widget', 'a', 1),
+    ('01928f6e-7a3c-7d4e-8f00-00000000000a', 'widget', 'a', 2),
+    ('01928f6e-7a3c-7d4e-8f00-00000000000b', 'widget', 'b', 1),
+    (NULL, 'catalog', 'c', 1);
+INSERT INTO outbox_aggregate (aggregate_type, aggregate_id, last_seq, last_tx) VALUES
+    ('widget', 'a', 2, 2), ('widget', 'b', 1, 3), ('catalog', 'c', 1, 4), ('widget', 'eventless', 1, 5);
+";
+
+/// The upsert `outbox::publish` runs: `$1` kind, `$2` id, `$3` the event's tenant.
+const UPSERT_AGGREGATE: &str = "INSERT INTO outbox_aggregate AS a
+    (aggregate_type, aggregate_id, tenant_id, last_seq, last_tx)
+    VALUES ($1, $2, $3::uuid, 1, pg_current_xact_id()::text::bigint)
+    ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE
+    SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx)
+    RETURNING last_seq";
+
+/// The same upsert as crates/outbox wrote it before the tenant column existed.
+const UPSERT_AGGREGATE_BEFORE_413: &str = "INSERT INTO outbox_aggregate AS a
+    (aggregate_type, aggregate_id, last_seq, last_tx)
+    VALUES ($1, $2, 1, pg_current_xact_id()::text::bigint)
+    ON CONFLICT (aggregate_type, aggregate_id) DO UPDATE
+    SET last_seq = a.last_seq + 1, last_tx = GREATEST(a.last_tx, EXCLUDED.last_tx)
+    RETURNING last_seq";
+
+const VISIBLE_AGGREGATES: &str =
+    "SELECT aggregate_type || '/' || aggregate_id FROM outbox_aggregate ORDER BY 1";
+
+/// Every aggregate as the owner sees it: kind/id, tenant, last sequence number.
+async fn aggregates_as_owner(fixture: &Fixture) -> Vec<(String, Option<String>, i64)> {
+    let mut owner = fixture.connect("example_owner").await;
+    sqlx::query_as(
+        "SELECT aggregate_type || '/' || aggregate_id, tenant_id::text, last_seq
+         FROM outbox_aggregate ORDER BY 1",
+    )
+    .fetch_all(&mut owner)
+    .await
+    .expect("the owner reads every aggregate")
+}
+
+/// The outbox aggregate template (`sql/outbox-aggregate.sql`, Laysi/trustiot-v2#413), run on
+/// tables that already hold aggregates, as in a database that ran the outbox before it: every
+/// aggregate gets the tenant of its last event. Then the service role reads and advances only
+/// its tenant's aggregates: the upsert `publish` runs is refused (42501) for another tenant's or
+/// a platform aggregate instead of advancing it, and a writer that leaves the tenant out (a
+/// producer still on the version before the template) gets the transaction's tenant. The
+/// platform role reaches only platform aggregates, even after setting a tenant itself. The
+/// connection check accepts every role's session.
+#[tokio::test]
+async fn outbox_aggregates_follow_the_tenant_policies() {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE outbox_aggregate OWNER example_owner",
+        "outbox_aggregate",
+    )
+    .await
+    else {
+        return;
+    };
+    let mut owner = fixture.connect("example_owner").await;
+    sqlx::raw_sql(OUTBOX_BEFORE_THE_AGGREGATE_TEMPLATE)
+        .execute(&mut owner)
+        .await
+        .expect("the outbox tables before the template");
+    sqlx::raw_sql(include_str!("../sql/outbox-aggregate.sql"))
+        .execute(&mut owner)
+        .await
+        .expect("run the outbox aggregate template");
+    let some = |id: &str| Some(id.to_owned());
+    assert_eq!(
+        aggregates_as_owner(&fixture).await,
+        [
+            ("catalog/c".to_owned(), None, 1),
+            ("widget/a".to_owned(), some(TENANT_A), 2),
+            ("widget/b".to_owned(), some(TENANT_B), 1),
+            ("widget/eventless".to_owned(), None, 1),
+        ],
+        "each aggregate has the tenant of its last event"
+    );
+    let policies: Vec<(String, bool, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT polname::text, polpermissive, pg_get_expr(polqual, polrelid),
+                pg_get_expr(polwithcheck, polrelid)
+         FROM pg_policy WHERE polrelid = 'outbox_aggregate'::regclass ORDER BY 1",
+    )
+    .fetch_all(&mut owner)
+    .await
+    .expect("read the policies");
+    let null = Some("(tenant_id IS NULL)".to_owned());
+    let tenant_condition = Some(postgres::TENANT_CONDITION_AS_STORED.to_owned());
+    assert_eq!(
+        policies,
+        [
+            (
+                "platform_aggregates".to_owned(),
+                true,
+                null.clone(),
+                null.clone()
+            ),
+            (
+                "platform_aggregates_only".to_owned(),
+                false,
+                null.clone(),
+                null
+            ),
+            (
+                "tenant_isolation".to_owned(),
+                true,
+                tenant_condition.clone(),
+                tenant_condition
+            ),
+        ]
+    );
+
+    // The connection check accepts the producer's roles, and the consumer's platform role, which
+    // gets nothing on this table.
+    for (role, as_role) in [
+        ("example_app", SessionRole::Service),
+        ("example_platform", SessionRole::Platform),
+        ("example_reader", SessionRole::Platform),
+    ] {
+        let mut session = fixture.connect(role).await;
+        assert_eq!(
+            postgres::check_session(&mut session, as_role)
+                .await
+                .expect("check"),
+            Ok(()),
+            "{role} as {as_role:?}"
+        );
+    }
+
+    // The service role in tenant A.
+    let identity = Identity::new();
+    let db = fixture.tenant_db(1);
+    let mut tx = db
+        .begin(&identity.user(Some(TENANT_A), false))
+        .await
+        .expect("begin");
+    let visible: Vec<String> = sqlx::query_scalar(VISIBLE_AGGREGATES)
+        .fetch_all(&mut *tx)
+        .await
+        .expect("read as A");
+    assert_eq!(visible, ["widget/a"], "A sees its own aggregate only");
+    let seq: i64 = sqlx::query_scalar(UPSERT_AGGREGATE)
+        .bind("widget")
+        .bind("a")
+        .bind(TENANT_A)
+        .fetch_one(&mut *tx)
+        .await
+        .expect("A advances its aggregate");
+    assert_eq!(seq, 3);
+    let old: i64 = sqlx::query_scalar(UPSERT_AGGREGATE_BEFORE_413)
+        .bind("widget")
+        .bind("old-binary")
+        .fetch_one(&mut *tx)
+        .await
+        .expect("a producer on the version before the template writes a new aggregate");
+    assert_eq!(old, 1);
+    tx.commit().await.expect("commit");
+    for (aggregate, owned_by) in [("b", "tenant B"), ("eventless", "the platform")] {
+        let mut tx = db
+            .begin(&identity.user(Some(TENANT_A), false))
+            .await
+            .expect("begin");
+        let error = sqlx::query_scalar::<_, i64>(UPSERT_AGGREGATE)
+            .bind("widget")
+            .bind(aggregate)
+            .bind(TENANT_A)
+            .fetch_one(&mut *tx)
+            .await
+            .expect_err("A advances an aggregate that is not A's");
+        assert_eq!(
+            sqlstate(&error).as_deref(),
+            Some(INSUFFICIENT_PRIVILEGE),
+            "{owned_by}: {error}"
+        );
+        println!(
+            "service role in tenant A, upsert of an aggregate of {owned_by}: refused ({error})"
+        );
+        drop(tx);
+    }
+    let visible: Vec<String> = sqlx::query_scalar(VISIBLE_AGGREGATES)
+        .fetch_all(db.pool())
+        .await
+        .expect("read without a tenant");
+    assert!(
+        visible.is_empty(),
+        "no aggregate without a tenant: {visible:?}"
+    );
+
+    // The platform role: platform aggregates only, also after setting a tenant itself, in a
+    // PlatformDb transaction and on a plain session (Laysi/trustiot-v2#360).
+    let platform = PlatformDb::connect_lazy(
+        fixture.options("example_platform"),
+        PgPoolOptions::new().max_connections(1),
+    )
+    .expect("verify-full options");
+    let actor = PlatformActor::service(ServiceIdentity::new(ServiceName::Identity));
+    let mut tx = platform.begin(actor, "outbox-test").await.expect("begin");
+    let seq: i64 = sqlx::query_scalar(UPSERT_AGGREGATE)
+        .bind("catalog")
+        .bind("c")
+        .bind(None::<&str>)
+        .fetch_one(&mut *tx)
+        .await
+        .expect("the platform role advances a platform aggregate");
+    assert_eq!(seq, 2);
+    tx.commit().await.expect("commit");
+    for set in [None, Some(SET_TRANSACTION_TENANT)] {
+        let mut tx = platform.begin(actor, "outbox-test").await.expect("begin");
+        if let Some(set) = set {
+            sqlx::query(set)
+                .bind(TENANT_A)
+                .execute(&mut *tx)
+                .await
+                .expect("set a tenant in the platform transaction");
+        }
+        let visible: Vec<String> = sqlx::query_scalar(VISIBLE_AGGREGATES)
+            .fetch_all(&mut *tx)
+            .await
+            .expect("read as the platform role");
+        assert_eq!(
+            visible,
+            ["catalog/c", "widget/eventless"],
+            "the platform role, tenant set: {}",
+            set.is_some()
+        );
+        let error = sqlx::query_scalar::<_, i64>(UPSERT_AGGREGATE)
+            .bind("widget")
+            .bind("a")
+            .bind(set.map(|_| TENANT_A))
+            .fetch_one(&mut *tx)
+            .await
+            .expect_err("the platform role advances tenant A's aggregate");
+        assert_eq!(
+            sqlstate(&error).as_deref(),
+            Some(INSUFFICIENT_PRIVILEGE),
+            "{error}"
+        );
+        println!(
+            "platform role, tenant set: {}, upsert of tenant A's aggregate: refused ({error})",
+            set.is_some()
+        );
+        drop(tx);
+    }
+    let mut session = fixture.connect("example_platform").await;
+    for set in [SET_TRANSACTION_TENANT, SET_SESSION_TENANT] {
+        let mut tx = session.begin().await.expect("begin");
+        sqlx::query(set)
+            .bind(TENANT_A)
+            .execute(&mut *tx)
+            .await
+            .expect("set a tenant");
+        let visible: Vec<String> = sqlx::query_scalar(VISIBLE_AGGREGATES)
+            .fetch_all(&mut *tx)
+            .await
+            .expect("read on a plain platform session");
+        assert_eq!(visible, ["catalog/c", "widget/eventless"], "`{set}`");
+        let error = sqlx::query_scalar::<_, i64>(UPSERT_AGGREGATE)
+            .bind("widget")
+            .bind("new")
+            .bind(TENANT_A)
+            .fetch_one(&mut *tx)
+            .await
+            .expect_err("a plain platform session creates a tenant's aggregate");
+        assert_eq!(
+            sqlstate(&error).as_deref(),
+            Some(INSUFFICIENT_PRIVILEGE),
+            "`{set}`: {error}"
+        );
+        tx.rollback().await.expect("rollback");
+        println!("plain platform session, `{set}`: tenant A's aggregates hidden, writes refused");
+    }
+
+    // Only the writes that were allowed changed anything.
+    assert_eq!(
+        aggregates_as_owner(&fixture).await,
+        [
+            ("catalog/c".to_owned(), None, 2),
+            ("widget/a".to_owned(), some(TENANT_A), 3),
+            ("widget/b".to_owned(), some(TENANT_B), 1),
+            ("widget/eventless".to_owned(), None, 1),
+            ("widget/old-binary".to_owned(), some(TENANT_A), 1),
+        ],
+        "a writer that leaves the tenant out gets the transaction's tenant"
+    );
+}
+
 /// The example service refuses to start when its database settings do not verify the server,
 /// and the error names the variable without repeating its value.
 #[test]
