@@ -1,5 +1,6 @@
 # Nightly: installs Istio ambient and the CloudNativePG operator into a k3d cluster, deploys the whole Helm chart once per
-# values file (SaaS, then on-prem), and runs the smoke test and the ingress e2e test, so a
+# values file (SaaS, then on-prem), and runs the smoke test and the ingress e2e test (plus, once,
+# the service-to-service authorization e2e test), so a
 # deployment shape nobody is using day to day cannot rot unnoticed. Policy, what the test checks and what to do when it fails:
 # docs/architecture/ci-release.md, section nightly.yml.
 #
@@ -104,7 +105,8 @@ jobs:
     # with the build tools (docs/architecture/ci-release.md, nightly.yml). Laysi/trustiot-v2#65
     # adds the identity and assets images (two more cold builds that reuse the first one's
     # dependencies) and per shape their rollout and the API check through the ingress. A cache
-    # hit adds only the loads and the imports.
+    # hit adds only the loads and the imports. Laysi/trustiot-v2#77 adds the service-to-service e2e
+    # test once (SaaS shape, no image build) and about a dozen requests per shape.
     timeout-minutes: 55
     permissions:
       contents: read
@@ -163,7 +165,7 @@ jobs:
           tools: zig cargo-zigbuild cargo-auditable
       # Installs Gateway API, Istio ambient and CloudNativePG, builds the Postgres and Rust images,
       # then per values file: the smoke deployment with its API check and the ingress e2e test
-      # (deploy/chart/tests/e2e).
+      # (deploy/chart/tests/e2e), and after the SaaS one the service-to-service e2e test (mesh.e2e.ts).
       - name: Deploy the chart with each values file and run the tests
         # The runner context is not available in job-level env, only in steps.
         env:

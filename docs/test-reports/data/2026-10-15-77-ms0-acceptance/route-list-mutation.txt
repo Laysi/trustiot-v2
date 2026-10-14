@@ -1,0 +1,38 @@
+# Laysi/trustiot-v2#77: the route-list tests against two broken versions of templates/ingress.yaml, then the restored template.
+# bun test deploy/chart/tests/chart.test.ts -t "route list" on the development workstation (bun 1.4.2, helm 4.3.0).
+## mutation: exemption without the port form (`<host>:*` removed from notHosts)
+exit code 1
+0 pass
+7 fail
+(fail) ingress gateway (decision 27) > route list, saas: every service, routes that overlap the exceptions: every routed request is behind the cookie check except the listed exceptions [217.84ms]
+(fail) ingress gateway (decision 27) > route list, saas: the nightly smoke with its API routes: every routed request is behind the cookie check except the listed exceptions [103.54ms]
+(fail) ingress gateway (decision 27) > route list, saas: the ingress e2e overlay: every routed request is behind the cookie check except the listed exceptions [80.64ms]
+(fail) ingress gateway (decision 27) > route list, onprem: every service, routes that overlap the exceptions: every routed request is behind the cookie check except the listed exceptions [210.76ms]
+(fail) ingress gateway (decision 27) > route list, onprem: the nightly smoke with its API routes: every routed request is behind the cookie check except the listed exceptions [100.49ms]
+(fail) ingress gateway (decision 27) > route list, onprem: the ingress e2e overlay: every routed request is behind the cookie check except the listed exceptions [81.19ms]
+(fail) ingress gateway (decision 27) > route list, saas: the service-to-service e2e overlay: every routed request is behind the cookie check except the listed exceptions [85.44ms]
+first problems reported:
++   "app.saas.trustiot.test:80/auth/login: a listed exception, but the cookie check applies to it",
++   "app.saas.trustiot.test:80/healthz: a listed exception, but the cookie check applies to it",
++   "app.saas.trustiot.test:8443/auth/login: a listed exception, but the cookie check applies to it",
++   "app.saas.trustiot.test:8443/healthz: a listed exception, but the cookie check applies to it",
+
+## mutation: exemption rules that no longer check the exempt paths on other hosts
+exit code 1
+2 pass
+5 fail
+(fail) ingress gateway (decision 27) > route list, saas: every service, routes that overlap the exceptions: every routed request is behind the cookie check except the listed exceptions [227.75ms]
+(fail) ingress gateway (decision 27) > route list, saas: the ingress e2e overlay: every routed request is behind the cookie check except the listed exceptions [107.46ms]
+(fail) ingress gateway (decision 27) > route list, onprem: every service, routes that overlap the exceptions: every routed request is behind the cookie check except the listed exceptions [214.33ms]
+(fail) ingress gateway (decision 27) > route list, onprem: the ingress e2e overlay: every routed request is behind the cookie check except the listed exceptions [78.35ms]
+(fail) ingress gateway (decision 27) > route list, saas: the service-to-service e2e overlay: every routed request is behind the cookie check except the listed exceptions [83.82ms]
+first problems reported:
++   "app.saas.trustiot.test/certs/renew: reaches trustiot-assets through app.saas.trustiot.test/ without the cookie check",
++   "app.saas.trustiot.test/mqtt: reaches trustiot-assistant through app.saas.trustiot.test/mqtt without the cookie check",
++   "app.saas.trustiot.test:80/certs/renew: reaches trustiot-assets through app.saas.trustiot.test/ without the cookie check",
++   "app.saas.trustiot.test:80/mqtt: reaches trustiot-assistant through app.saas.trustiot.test/mqtt without the cookie check",
+
+## template restored
+exit code 0
+7 pass
+0 fail

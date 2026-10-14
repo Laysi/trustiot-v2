@@ -5,14 +5,19 @@
 // passwords into the Secrets the chart declares, the identity and assets services built from the
 // commit answer through the ingress with a session cookie (api.ts, Laysi/trustiot-v2#65), and an
 // uninstall leaves nothing behind but the objects the chart keeps on purpose (the database and the
-// password Secrets), which are then deleted. Components the chart gains later are covered without
+// password Secrets), which are then deleted. The same request through the ingress also proves the
+// MS0 edges with the real services (api.ts, Laysi/trustiot-v2#77): a forged identity header never
+// gets through, and a Host with a port or a path the mesh normalizes reaches the right service.
+// After the ingress e2e test, the SaaS shape also runs the service-to-service authorization e2e
+// test (mesh.e2e.ts, e2e.ts). Components the chart gains later are covered without
 // changes here, because the checks read the release's own manifests (manifests.ts).
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 import { apiValues, createSigningKey, routesOfValues, runApiCheck, SIGNING_KEY_STORE } from "./api.ts";
-import { installEvidenceSection, runIngressE2e } from "./e2e.ts";
+import type { TokenSigner } from "./api.ts";
+import { E2E_SUITES, installEvidenceSection, runClusterE2e, suitesOf } from "./e2e.ts";
 import { exec, retry, run, RunLog, waitUntilGone } from "./exec.ts";
 import {
   gatewayPortProblems,
@@ -132,6 +137,14 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
     }
   }
 
+  /** The cluster e2e tests of this shape (e2e.ts), in order; the first failure stops the rest. */
+  async function clusterE2eTests(): Promise<boolean> {
+    for (const suite of suitesOf(shape.name)) {
+      if (!(await check(E2E_SUITES[suite].title, () => runClusterE2e(ctx, suite, shape.name)))) return false;
+    }
+    return true;
+  }
+
   let manifest = "";
   let passed = false;
   let diagnostics: string | undefined;
@@ -139,6 +152,8 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
   const values = valuesArgs(ctx.chartDir, shape);
   // The certificate the smoke made for an HTTPS listener, which the API check trusts.
   let ingressCa: string | undefined;
+  // Signs the API check's forged identity header with the identity service's key.
+  let signer: TokenSigner | undefined;
   try {
     passed =
       (await check("namespace with the restricted Pod Security level", async () => {
@@ -151,7 +166,9 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         // Laysi/trustiot-v2#65: the release runs the identity and assets services built from this
         // commit, behind the smoke namespace's ext_authz provider (platform.ts), and the identity
         // service signs with a key generated here for this run only.
-        const publicKey = await createSigningKey(ctx.log, ctx, namespace);
+        const key = await createSigningKey(ctx.log, ctx, namespace);
+        const publicKey = key.publicKey;
+        signer = key.signer;
         const file = join(ctx.outDir, `values-api-${shape.name}.yaml`);
         const routes = routesOfValues(ctx.chartDir, shape.valuesFiles);
         writeFileSync(file, Bun.YAML.stringify(apiValues(shape.name, publicKey, routes), null, 2));
@@ -313,8 +330,12 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         }
         return routed.join(", ");
       })) &&
-      (await check("through the ingress, a new tenant reaches the assets service (Laysi/trustiot-v2#65)", () =>
-        runApiCheck(ctx, namespace, parseManifests(manifest), ingressCa, `nightly smoke ${shape.name}`),
+      (await check(
+        "through the ingress, a new tenant reaches the assets service, a forged identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77)",
+        () => {
+          if (signer === undefined) throw new Error("no signing key was made for this shape");
+          return runApiCheck(ctx, namespace, parseManifests(manifest), ingressCa, `nightly smoke ${shape.name}`, signer);
+        },
       )) &&
       (await check("helm uninstall leaves no object of the release but the kept database and password Secrets", async () => {
         await helm(["uninstall", RELEASE, "--namespace", namespace, "--wait", "--timeout", "3m"], 4 * 60_000);
@@ -345,7 +366,7 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         );
         return `all objects removed; kept on uninstall as intended, then deleted: ${kept.join(", ")}; their volumes were gone after ${Math.round(waited / 1000)} s`;
       })) &&
-      (await check("ingress e2e test (deploy/chart/tests/e2e)", () => runIngressE2e(ctx, shape.name)));
+      (await clusterE2eTests());
   } catch (error) {
     // The checks catch their own errors; this is a bug in the smoke test itself.
     const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
@@ -427,8 +448,10 @@ async function collectDiagnostics(ctx: SmokeContext, namespace: string, shape: S
   // Last, because the report keeps the end of a long text. The ingress e2e installs the chart into
   // a namespace of its own, which is deleted before this runs; the test saved what it saw of that
   // namespace when its install failed (Laysi/trustiot-v2#399).
-  const installEvidence = installEvidenceSection(ctx.outDir, shape.name);
-  if (installEvidence !== undefined) sections.push(installEvidence);
+  for (const suite of suitesOf(shape.name)) {
+    const installEvidence = installEvidenceSection(ctx.outDir, suite, shape.name);
+    if (installEvidence !== undefined) sections.push(installEvidence);
+  }
   const text = sections.join("\n");
   writeFileSync(join(ctx.outDir, `diagnostics-${shape.name}.txt`), text);
   return text;

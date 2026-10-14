@@ -6,6 +6,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { checkRenderedManifests } from "../../../scripts/ci/check-secret-handling.ts";
+import { routeListProblems, sampleRequests } from "./ingress-authz.ts";
+import type { PolicyRule, RouteRule } from "./ingress-authz.ts";
 import { COMMAND_TIMEOUT_MS, SLOW_TEST_MS, throwIfTimedOut, useProcessTestTimeouts } from "./timing.ts";
 
 // Every test starts helm, and some also kubeconform: see timing.ts for the limits.
@@ -2498,6 +2500,71 @@ describe("ingress gateway (decision 27)", () => {
     expect(deny.rules).toEqual([{ to: [{ operation: { paths: ["/internal*"] } }] }]);
     for (const { rule } of rules(manifests)) expect(rule.matches[0]?.path.value).not.toStartWith("/internal");
   });
+
+  // The route-list proof of the MS0 criterion "with the identity service down the ingress refuses
+  // everything but the listed exceptions" (Laysi/trustiot-v2#77, docs/roadmap/ms0-acceptance.md):
+  // ext_authz fails closed (deploy/istio, checked below), so a request is refused while the
+  // identity service is down exactly when the cookie check applies to it. ingress-authz.ts
+  // evaluates the rendered HTTPRoutes and the check the way the gateway does.
+  const ROUTE_LIST = [
+    { host: "app", path: "/", match: "PathPrefix", service: "assets" },
+    { host: "app", path: "/api/identity", match: "PathPrefix", service: "identity" },
+    { host: "app", path: "/api/assets", match: "PathPrefix", service: "assets" },
+    // Prefixes and paths that overlap the exceptions, on their own host and on the others.
+    { host: "app", path: "/auth", match: "PathPrefix", service: "identity" },
+    { host: "app", path: "/healthz/details", match: "Exact", service: "identity" },
+    { host: "app", path: "/mqtt", match: "PathPrefix", service: "assistant" },
+    { host: "gateway", path: "/", match: "PathPrefix", service: "gateway-ops" },
+    { host: "gateway", path: "/certs", match: "PathPrefix", service: "certs" },
+    { host: "gateway", path: "/healthz", match: "Exact", service: "certs" },
+    { host: "gateway", path: "/auth/login", match: "Exact", service: "certs" },
+    { host: "ota", path: "/", match: "PathPrefix", service: "gateway-ops" },
+    { host: "ota", path: "/mqtt", match: "Exact", service: "mqtt-bridge" },
+  ];
+  // What the nightly smoke adds for its API check (scripts/nightly/api.ts, API_ROUTES).
+  const SMOKE_API = [
+    "--set", "services.identity.enabled=true",
+    "--set", "services.assets.enabled=true",
+    "--set-json", `ingress.routes=${JSON.stringify([
+      { host: "app", path: "/api/identity", match: "PathPrefix", service: "identity" },
+      { host: "app", path: "/api/assets", match: "PathPrefix", service: "assets" },
+    ])}`,
+  ];
+  const ROUTE_LIST_CASES = SHAPE_NAMES.flatMap((shape) => [
+    { name: `${shape}: every service, routes that overlap the exceptions`, shape, files: SHAPES[shape], args: [...enableAllServices, "--set-json", `ingress.routes=${JSON.stringify(ROUTE_LIST)}`] },
+    { name: `${shape}: the nightly smoke with its API routes`, shape, files: [...SHAPES[shape], SMOKE], args: SMOKE_API },
+    { name: `${shape}: the ingress e2e overlay`, shape, files: [...SHAPES[shape], E2E_VALUES], args: [] },
+  ]).concat([{ name: "saas: the service-to-service e2e overlay", shape: "saas", files: [...SHAPES.saas, E2E_VALUES, "tests/e2e/values-mesh-e2e.yaml"], args: [] }]);
+
+  test.each(ROUTE_LIST_CASES.map((c) => [c.name, c] as const))(
+    "route list, %s: every routed request is behind the cookie check except the listed exceptions",
+    (_name, { shape, files, args }) => {
+      const manifests = render(files, args);
+      // The evaluation reads one hostname per HTTPRoute and one path match per rule; a second one,
+      // or a header or method match, would be left out of the proof without failing it.
+      for (const route of manifests.filter((m) => m.kind === "HTTPRoute")) expect((route.spec as { hostnames: string[] }).hostnames).toHaveLength(1);
+      for (const { rule } of rules(manifests)) expect(rule.matches.map((match) => Object.keys(match))).toEqual([["path"]]);
+      const routes: RouteRule[] = rules(manifests).map(({ host, rule }) => ({
+        hostname: host,
+        path: rule.matches[0]?.path.value ?? "",
+        match: rule.matches[0]?.path.type as RouteRule["match"],
+        public: strips(rule),
+        backend: rule.backendRefs[0]?.name ?? "",
+      }));
+      // Decision 27's exceptions whose backend this render runs: the others are neither routed nor exempt.
+      const running = new Set(manifests.filter((m) => m.kind === "Deployment").map((m) => m.metadata.name));
+      const exceptions = PUBLIC_PATHS[shape].filter(([, , backend]) => running.has(backend)).map(([hostname, path]) => ({ hostname, path }));
+      expect(exceptions.length).toBeGreaterThan(0);
+      const check = policy(manifests, "cookie-check");
+      expect(check.action).toBe("CUSTOM");
+      const ports = [shape === "saas" ? 80 : 443, 8443];
+      expect(routeListProblems(routes, check.rules as PolicyRule[], exceptions, ports)).toEqual([]);
+      // Not a vacuous pass: the render has cookie routes, and each exception has its route.
+      expect(routes.filter((r) => !r.public).length).toBeGreaterThan(0);
+      expect(routes.filter((r) => r.public).length).toBe(exceptions.length);
+      expect(sampleRequests(routes, exceptions, ports).length).toBeGreaterThan(routes.length);
+    },
+  );
 
   // Istio's status port on every gateway pod. Istio fixes it: its kube-gateway injection template
   // probes it (startup and readiness, GET /healthz/ready) and lists it in the gateway's Service as

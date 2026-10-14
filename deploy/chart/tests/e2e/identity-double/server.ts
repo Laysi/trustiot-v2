@@ -2,7 +2,10 @@
 // The real service is Laysi/trustiot-v2#61; this one only mimics its ext_authz contract:
 //
 //   ANY /internal/ext-authz/<original path>   the ingress gateway's ext_authz check
-//       cookie sid=valid-<id>  -> 200 with x-internal-identity: double.<base64url claims>
+//       cookie sid=valid-<id>  -> 200 with x-internal-identity: double.<base64url claims>; the
+//                                claims hold the Host and the path the check request carried
+//                                (Laysi/trustiot-v2#77), which ingress.e2e.ts compares with the
+//                                client's request
 //       cookie sid=slow-<id>   -> same, after a 3 s delay (longer than the ext_authz timeout)
 //       anything else          -> 401 {"code":"unauthenticated"}
 //   GET /healthz, GET /readyz                  200 "ok"
@@ -46,6 +49,8 @@ async function check(req: Request, url: URL): Promise<Response> {
     sub: `user-${sid}`,
     tenant: "tenant-e2e",
     path: url.pathname.slice(CHECK_PREFIX.length) || "/",
+    // The original request's Host as the gateway passes it to the check, port included or not.
+    host: req.headers.get("host"),
   };
   const identity = `double.${Buffer.from(JSON.stringify(claims)).toString("base64url")}`;
   return new Response(null, { status: 200, headers: { "x-internal-identity": identity } });
