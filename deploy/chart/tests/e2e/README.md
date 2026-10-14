@@ -23,6 +23,14 @@
 
 nightly workflow（Laysi/trustiot-v2#69）每晚在 k3d 叢集上以兩種型態各跑一次：裝好 Gateway API 與 Istio ambient、為每個型態的測試命名空間在 istiod 加一個 provider、建置身分服務替身並匯入節點，做法見 [CI 與發佈](../../../../docs/architecture/ci-release.md) 的 nightly.yml 一節與 `scripts/nightly/platform.ts`；那邊請求經 `kubectl port-forward`，不涵蓋入口的 NetworkPolicy。
 
+### 安裝與等待（Laysi/trustiot-v2#399）
+
+2026-10-14 nightly 的 saas ingress e2e 在 `helm install --rollback-on-failure --wait --timeout 5m` 開始約 3 秒後以 `resource Deployment/…/trustiot-identity not ready. status: InProgress, message: Available: 0/1` 失敗並回滾，5 分鐘的上限還差得遠；同樣的程式碼重跑就過。
+
+- **等待方式**：helm 4.3.0 的 `--wait`（`watcher`）在 CLI 預設開 8 個並行算狀態的 worker（`pkg/cmd/flags.go` 的 `cliDefaultStatusComputeWorkers`），為舊版物件算出的狀態可能比新版的晚送達；watcher 在所有資源第一次都是 `Current` 時就停止，結束時回報它最後收到的狀態，所以事後才到的 `InProgress` 會讓等待在幾秒內以失敗結束。改用 `--wait=legacy`（flag 要寫成 `=` 形式，單寫 `--wait` 是 `watcher`）：每 2 秒輪詢，以 Deployment 的就緒條件判斷，沒有事件順序的問題。取捨：legacy 不等 Gateway、HTTPRoute 這類 helm 不認得的種類，也不等 Job（要加 `--wait-for-jobs`）；這兩個測試的 release 沒有 Job（`migrate.enabled: false`），Gateway 與入口 gateway 自己的 Deployment 由測試接著以 `kubectl wait --for=condition=Programmed` 與 `kubectl rollout status` 等。原因的推導與沒有證實的部分見 [CI 與發佈](../../../../docs/architecture/ci-release.md) 的 nightly.yml 一節。
+- **失敗時**：不加 `--rollback-on-failure`，因為回滾會刪掉物件，也就刪掉為什麼沒有就緒的證據。安裝失敗時 `install.ts` 先收集 namespace 的事件，以及 Deployment、ReplicaSet、Pod 的狀態（`install-evidence.ts`，另有 `helm history`），再移除這個 release；證據寫在 `E2E_REPORT_DIR/install-failure-<release>.txt`，沒設 `E2E_REPORT_DIR` 時放在錯誤訊息裡。release 名稱已被佔用（helm 回 `cannot reuse a name that is still in use`）時不是這次執行建立的，不收集也不移除。nightly 把這個檔案併進該型態的 diagnostics。
+- **證據裡沒有什麼**：repo 是公開的，所以證據只從白名單欄位組成（名稱、副本數、conditions、容器狀態、事件）；Pod 的 spec（環境變數的值、volume）、Secret 與 ConfigMap 不讀，容器的 log 也不收（應用程式可能把憑證寫進 log，無法與可公開的行區分），每個自由文字欄位截成一行、最多 300 字元。剩下的自由文字是 Kubernetes 控制器與 kubelet 寫的（conditions、事件訊息、waiting 的原因）。
+
 ### 替身
 
 | 服務 | 替身 | 說明 |
@@ -74,10 +82,10 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/ingress.e2e.ts
 | `E2E_KUBECONTEXT` | 目前的 context | kubeconfig 裡的 context；kubeconfig 本身用 `KUBECONFIG` |
 | `E2E_RELEASE` | `trustiot` | helm release 名稱；provider 的 `service` 要跟著改 |
 | `E2E_SSH_JUMP` | 空 | 設定時經 `ssh -L` 由這台主機連入口的 ClusterIP，請求來源與 cloudflared 相同，會經過入口的 NetworkPolicy；空白時用 `kubectl port-forward`，直接進入口 pod，不經過 NetworkPolicy |
-| `E2E_REPORT_DIR` | 空 | 設定時把每個請求的結果寫成 `ingress-e2e-<shape>.json` |
+| `E2E_REPORT_DIR` | 空 | 設定時把每個請求的結果寫成 `ingress-e2e-<shape>.json`；安裝失敗時另外寫 `install-failure-<release>.txt`（見「安裝與等待」） |
 | `E2E_KEEP` | 空 | `1` 時測完不移除 release，方便查看 |
 
-測試以 `helm install --wait` 安裝；release 已經存在時直接失敗，不碰既有的安裝。結束時只移除這次建立的 release 與 TLS Secret（名稱帶隨機字尾）。身分服務停機的測試會暫時把替身 scale 到 0，結束時恢復。請求一律以自寫的 HTTP/1.1 客戶端送出原始的請求行，`fetch` 會先把 `..` 與編碼正規化，測不到繞過。
+測試以 `helm install --wait=legacy --timeout 5m` 安裝（`install.ts`）；release 已經存在時直接失敗，不碰既有的安裝。為什麼是 `legacy`、為什麼不加 `--rollback-on-failure`，以及失敗時留下什麼，見「安裝與等待」。結束時只移除這次建立的 release 與 TLS Secret（名稱帶隨機字尾）。身分服務停機的測試會暫時把替身 scale 到 0，結束時恢復。請求一律以自寫的 HTTP/1.1 客戶端送出原始的請求行，`fetch` 會先把 `..` 與編碼正規化，測不到繞過。
 
 ## 服務間授權（`mesh.e2e.ts`）
 
