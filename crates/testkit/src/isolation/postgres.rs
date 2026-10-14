@@ -659,11 +659,12 @@ impl Store for PgStore {
                             ),
                         );
                     } else {
-                        report.pass(
-                            sql.name,
-                            "seed",
-                            format!("{rows_per_tenant} rows per tenant"),
-                        );
+                        let what = if sql.one_per_tenant {
+                            "1 row per tenant (one_per_tenant)".to_owned()
+                        } else {
+                            format!("{count} rows per tenant")
+                        };
+                        report.pass(sql.name, "seed", what);
                     }
                 }
                 Err(error) => {
