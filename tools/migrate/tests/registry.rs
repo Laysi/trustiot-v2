@@ -110,11 +110,7 @@ fn the_chart_binds_every_login_role_of_the_product() {
     }
 
     let logins_helper = chart_helper(&chart, "trustiot.migrate.platformLogins");
-    let listed: Vec<&str> = logins_helper
-        .split('"')
-        .skip(1)
-        .step_by(2)
-        .collect();
+    let listed: Vec<&str> = logins_helper.split('"').skip(1).step_by(2).collect();
     assert!(
         logins_helper.contains("list ") && !listed.is_empty(),
         "trustiot.migrate.platformLogins is no longer a literal list; update this test: \
