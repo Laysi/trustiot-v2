@@ -103,9 +103,14 @@ postgres:
     caSecret:
       name: trustiot-e2e-postgres-ca
 
+# No service calls Postgres: the identity double and the whoami stand-in for assets use no
+# database. Listing postgres would give them the database variables, whose passwords come from
+# a Secret that only the migration Job fills, and the Job is off here, so the pods would never
+# start (chart.test.ts, "e2e overlays").
 mesh:
   calls:
     identity: []
+    assets: []
 
 observability:
   sentry:

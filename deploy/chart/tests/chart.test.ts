@@ -3855,3 +3855,138 @@ describe("documentation and packaging", () => {
     }
   });
 });
+
+describe("e2e overlays", () => {
+  // Every install of the cluster tests (tests/e2e/*.e2e.ts), rendered with the values files and
+  // the arguments that decide what runs and which Secrets it reads; images and per-run names are
+  // left out or fixed. `migrate` says whether the install runs the migration Job, and
+  // `filledByTest` lists the password Secrets the test fills itself in its place.
+  type E2eInstall = { name: string; files: string[]; args: string[]; migrate: boolean; filledByTest: string[] };
+  const OTEL_VALUES = "tests/e2e/values-otel-e2e.yaml";
+  const otelArgs = [
+    "--set",
+    "clickhouse.bundled.adminSecret.name=trustiot-e2e-ch-admin",
+    "--set",
+    "observability.collector.clickhouse.user=trustiot_collector_e2e",
+  ];
+  const INSTALLS: E2eInstall[] = [
+    ...SHAPE_NAMES.map((shape) => ({
+      name: `ingress.e2e.ts, ${shape}`,
+      files: [...SHAPES[shape], E2E_VALUES],
+      args: [
+        "--set",
+        "ingress.authzProvider=trustiot-identity",
+        ...(shape === "onprem" ? ["--set", "ingress.direct.tlsSecret=trustiot-e2e-tls", "--set", "ingress.direct.serviceType=ClusterIP"] : []),
+      ],
+      migrate: false,
+      filledByTest: [],
+    })),
+    { name: "mesh.e2e.ts", files: [...SHAPES.saas, E2E_VALUES, "tests/e2e/values-mesh-e2e.yaml"], args: [], migrate: false, filledByTest: [] },
+    {
+      name: "otel.e2e.ts, step 1 (ClickHouse only)",
+      files: [...SHAPES.onprem, OTEL_VALUES],
+      args: [...otelArgs, "--set", "observability.collector.enabled=false", "--set", "services.assets.enabled=false"],
+      migrate: false,
+      filledByTest: [],
+    },
+    {
+      name: "otel.e2e.ts, step 2 (the collector and the example service)",
+      files: [...SHAPES.onprem, OTEL_VALUES],
+      args: [
+        ...otelArgs,
+        "--set",
+        "observability.collector.forward.enabled=true",
+        "--set",
+        "observability.collector.forward.endpoint=http://trustiot-e2e-siem.trustiot.svc:4318",
+        "--set-json",
+        'observability.collector.forward.signals=["logs","traces"]',
+        "--set",
+        "observability.collector.forward.authHeader.name=Authorization",
+        "--set",
+        "observability.collector.forward.authHeader.valueSecret.name=trustiot-e2e-siem",
+        "--set",
+        "observability.collector.forward.authHeader.valueSecret.key=header",
+      ],
+      migrate: false,
+      // The test writes the collector's password into it once Helm has declared it.
+      filledByTest: [`${RELEASE}-otel-collector-password`],
+    },
+    ...SHAPE_NAMES.map((shape) => ({
+      name: `postgres.e2e.ts, ${shape}`,
+      files: [...SHAPES[shape], "tests/e2e/values-postgres-e2e.yaml"],
+      args: ["--set", "clickhouse.bundled.adminSecret.name=trustiot-e2e-ch-admin"],
+      migrate: true,
+      filledByTest: [],
+    })),
+  ];
+
+  function workloadPodSpec(m: Manifest): PodSpec | undefined {
+    const spec = m.spec as { template?: { spec?: PodSpec }; jobTemplate?: { spec?: { template?: { spec?: PodSpec } } } } | undefined;
+    if (["Deployment", "StatefulSet", "DaemonSet", "Job"].includes(m.kind)) return spec?.template?.spec;
+    if (m.kind === "CronJob") return spec?.jobTemplate?.spec?.template?.spec;
+    if (m.kind === "Pod") return m.spec as PodSpec;
+    return undefined;
+  }
+
+  const isMigrationJob = (m: Manifest) => m.kind === "Job" && m.metadata.labels?.["app.kubernetes.io/component"] === "migrate";
+
+  // "<kind>/<name> reads <Secret>" for every Secret a workload's pods read: environment
+  // variables, envFrom and volumes, projected ones included, in every container.
+  function secretReads(manifests: Manifest[]): { read: string; secret: string }[] {
+    const reads = new Map<string, string>();
+    for (const m of manifests) {
+      const pod = workloadPodSpec(m);
+      if (pod === undefined) continue;
+      const read = (secret: string | undefined) => {
+        if (secret) reads.set(`${m.kind}/${m.metadata.name} reads ${secret}`, secret);
+      };
+      for (const container of [...pod.containers, ...((pod.initContainers ?? []) as Container[])]) {
+        for (const env of container.env ?? []) read(env.valueFrom?.secretKeyRef?.name);
+        for (const from of (container.envFrom ?? []) as { secretRef?: { name?: string } }[]) read(from.secretRef?.name);
+      }
+      for (const volume of pod.volumes ?? []) {
+        read((volume.secret as { secretName?: string } | undefined)?.secretName);
+        const projected = volume.projected as { sources?: { secret?: { name?: string } }[] } | undefined;
+        for (const source of projected?.sources ?? []) read(source.secret?.name);
+      }
+    }
+    return [...reads].map(([read, secret]) => ({ read, secret })).sort((a, b) => a.read.localeCompare(b.read));
+  }
+
+  // The reads of password Secrets that nothing fills. Without the migration Job, a Secret the Job
+  // would fill (label trustiot.io/filled-by: migrate) stays empty, so a pod that reads a key of it
+  // never starts and `helm install --wait` runs into its timeout. PR Laysi/trustiot-v2#411's smoke
+  // (2026-10-14) failed so: values.yaml gave assets postgres, and the ingress overlay's whoami
+  // stand-in for assets kept it.
+  function unfilledReads(manifests: Manifest[], filledByTest: readonly string[]): string[] {
+    if (manifests.some(isMigrationJob)) return [];
+    const unfilled = new Set(
+      manifests
+        .filter((m) => m.kind === "Secret" && m.metadata.labels?.["trustiot.io/filled-by"] === "migrate")
+        .map((m) => m.metadata.name)
+        .filter((name) => !filledByTest.includes(name)),
+    );
+    return secretReads(manifests)
+      .filter(({ secret }) => unfilled.has(secret))
+      .map(({ read }) => read);
+  }
+
+  for (const install of INSTALLS) {
+    test(`${install.name}: no pod reads a password Secret that nothing fills`, () => {
+      const manifests = render(install.files, install.args);
+      expect(manifests.filter(isMigrationJob).length, "migration Jobs").toBe(install.migrate ? 1 : 0);
+      expect(manifests.filter((m) => workloadPodSpec(m) !== undefined).length).toBeGreaterThan(0);
+      expect(unfilledReads(manifests, install.filledByTest)).toEqual([]);
+    });
+  }
+
+  test("the check catches a stand-in that keeps postgres under mesh.calls without the migration Job", () => {
+    // values.yaml's calls of assets, which the ingress overlay's whoami stand-in must not keep.
+    const ingress = INSTALLS[0];
+    if (ingress === undefined) throw new Error("no ingress install");
+    const manifests = render(ingress.files, [...ingress.args, "--set-json", 'mesh.calls.assets=["postgres"]']);
+    expect(unfilledReads(manifests, [])).toEqual([`Deployment/${RELEASE}-assets reads ${RELEASE}-assets-password`]);
+    // A Secret the test fills itself is no finding.
+    expect(unfilledReads(manifests, [`${RELEASE}-assets-password`])).toEqual([]);
+  });
+});
