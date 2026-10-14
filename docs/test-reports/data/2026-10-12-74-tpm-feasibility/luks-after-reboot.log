@@ -1,0 +1,50 @@
+Laysi/trustiot-v2#74 2026-10-12T09:14:09Z (REBOOTING at 2026-10-12T09:15:54Z for LUKS boot unlock test)
+2026-10-12 17:16:05
+2026-10-12T10:02:28Z
+active
+active
+TARGET         SOURCE                FSTYPE OPTIONS
+/mnt/poc74data /dev/mapper/poc74data ext4   rw,relatime
+Laysi/trustiot-v2#74 marker written 2026-10-12T09:14:35Z
+written before reboot 2026-10-12T09:15:54Z
+/dev/mapper/poc74data is active and is in use.
+  type:    LUKS2
+  cipher:  aes-xts-plain64
+  keysize: 512 bits
+  key location: keyring
+  device:  /dev/loop1
+  loop:    /var/lib/trustiot-poc74/data.luks
+[    6.443058] <pi> systemd[1]: Starting systemd-cryptsetup@poc74data.service - Cryptography Setup for poc74data...
+[    6.656408] <pi> systemd-cryptsetup[557]: Set cipher aes, mode xts-plain64, key size 512 bits for device /var/lib/trustiot-poc74/data.luks.
+[    6.656644] <pi> systemd-cryptsetup[557]: Automatically discovered security TPM2 token unlocks volume.
+[    8.253374] <pi> systemd[1]: Finished systemd-cryptsetup@poc74data.service - Cryptography Setup for poc74data.
+[    8.259219] <pi> systemd[1]: Starting systemd-fsck@dev-mapper-poc74data.service - File System Check on /dev/mapper/poc74data...
+[    8.334909] <pi> systemd-fsck[612]: e2fsck 1.47.2 (1-Jan-2025)
+[    8.336328] <pi> systemd-fsck[612]: poc74data: clean, 13/12288 files, 1840/12288 blocks
+[    8.341561] <pi> systemd[1]: Finished systemd-fsck@dev-mapper-poc74data.service - File System Check on /dev/mapper/poc74data.
+[    8.345208] <pi> systemd[1]: Mounting mnt-poc74data.mount - /mnt/poc74data...
+[    8.395629] <pi> systemd[1]: Mounted mnt-poc74data.mount - /mnt/poc74data.
+1.810s systemd-cryptsetup@poc74data.service
+  82ms systemd-fsck@dev-mapper-poc74data.service
+  50ms mnt-poc74data.mount
+Startup finished in 2.156s (kernel) + 13.803s (userspace) = 15.960s 
+multi-user.target reached after 9.315s in userspace.
+Oct 12 17:15:57 <pi> systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
+Oct 12 17:15:57 <pi> systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
+Oct 12 17:16:11 <pi> systemd[864]: Listening on gpg-agent-browser.socket - GnuPG cryptographic agent and passphrase cache (access for web browsers).
+Oct 12 17:16:11 <pi> systemd[864]: Listening on gpg-agent-extra.socket - GnuPG cryptographic agent and passphrase cache (restricted).
+Oct 12 17:16:11 <pi> systemd[864]: Starting gpg-agent.socket - GnuPG cryptographic agent and passphrase cache...
+ask-check-done
+  sha256:
+    0 : 0x0000000000000000000000000000000000000000000000000000000000000000
+    1 : 0x0000000000000000000000000000000000000000000000000000000000000000
+    2 : 0x0000000000000000000000000000000000000000000000000000000000000000
+    3 : 0x0000000000000000000000000000000000000000000000000000000000000000
+    4 : 0x0000000000000000000000000000000000000000000000000000000000000000
+    5 : 0x0000000000000000000000000000000000000000000000000000000000000000
+    6 : 0x0000000000000000000000000000000000000000000000000000000000000000
+    7 : 0x0000000000000000000000000000000000000000000000000000000000000000
+    10: 0x0000000000000000000000000000000000000000000000000000000000000000
+    11: 0x0000000000000000000000000000000000000000000000000000000000000000
+    14: 0x0000000000000000000000000000000000000000000000000000000000000000
+    15: 0x2F60673DC26E6E88C560DECF9260B7591EB9A1B85D7A6E5887756C31978330F1

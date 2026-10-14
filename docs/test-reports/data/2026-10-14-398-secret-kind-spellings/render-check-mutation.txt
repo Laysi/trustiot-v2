@@ -1,0 +1,32 @@
+Mutation: deploy/chart/templates/zz-mutation-398.yaml, added for this run only and removed afterwards.
+The base64 string decodes to "x", a document separator, and a Secret named mutation-leak with
+data v: eA==. With it, `bun scripts/ci/check-secret-handling.ts` printed
+"secret handling: 289 file(s) checked, 6 container build file(s), no violations":
+the text rule does not see a Secret that a template assembles at render time.
+
+{{- if .Values.observability.collector.forward.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mutation
+  annotations:
+    note: {{ "eAotLS0KYXBpVmVyc2lvbjogdjEKa2luZDogU2VjcmV0Cm1ldGFkYXRhOgogIG5hbWU6IG11dGF0aW9uLWxlYWsKZGF0YToKICB2OiBlQT09" | b64dec }}
+{{- end }}
+
+$ rcheck.sh 398 'bun test deploy/chart -t "every optional component on" 2>&1 | grep -A12 "error:" | head -16'
+rcheck: queued on the build host at 16:12:51 as 398-c89b16d3; running now: 399-78febde4 since 16:12:24
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   {
++     "file": "saas, bundled/bundled/bundled",
++     "line": 1028,
++     "message": "a template that declares a Secret (or a templated kind) cannot be verified as encrypted; keep Secrets in SOPS-encrypted YAML files, and let the chart reference Secrets by name only",
++   },
++ ]
+
+- Expected  - 1
++ Received  + 7
+rcheck: removed 0 dangling test volumes
+rcheck: exit 1 at 16:12:58 (build host, 398-c89b16d3)

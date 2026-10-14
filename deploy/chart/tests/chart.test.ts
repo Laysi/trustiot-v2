@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { checkRenderedManifests } from "../../../scripts/ci/check-secret-handling.ts";
 import { COMMAND_TIMEOUT_MS, SLOW_TEST_MS, throwIfTimedOut, useProcessTestTimeouts } from "./timing.ts";
 
 // Every test starts helm, and some also kubeconform: see timing.ts for the limits.
@@ -789,6 +790,89 @@ describe("values reference Secrets by name only and hold no secret material", ()
           return found ? [`${path.join(".")}: ${found}`] : [];
         });
         expect(material).toEqual([]);
+      }
+    }
+  }, SLOW_TEST_MS);
+
+  // Laysi/trustiot-v2#398: scripts/ci/check-secret-handling.ts judges templates by their text,
+  // which cannot show what a template computes, and a template that renders only under some
+  // settings is out of reach of the renders above. So the chart is also rendered with every
+  // optional component on, in each of its modes, and every Secret in the output must be one of
+  // the migration Job's empty password Secrets. The switches are read from values.yaml (every
+  // boolean `enabled`) and values.schema.json (every `mode` enum), so a new component is covered
+  // without changing this test; the two shapes cover deploymentMode and ingress exposure.
+  test("with every optional component on, in every mode, the only Secrets rendered are the migration Job's empty password Secrets", () => {
+    const switches = leaves(defaults)
+      .filter(({ path, value }) => path.at(-1) === "enabled" && typeof value === "boolean")
+      .map(({ path }) => path.join("."));
+    expect(switches).toEqual(
+      expect.arrayContaining([
+        "services.identity.enabled",
+        "migrate.enabled",
+        "observability.sentry.enabled",
+        "observability.collector.enabled",
+        "observability.collector.forward.enabled",
+      ]),
+    );
+    const modes: { path: string; values: string[] }[] = [];
+    const findModes = (node: unknown, path: string[]) => {
+      if (!isMap(node) || !isMap(node.properties)) return;
+      for (const [key, property] of Object.entries(node.properties)) {
+        if (key === "mode" && isMap(property) && Array.isArray(property.enum)) {
+          modes.push({ path: [...path, key].join("."), values: property.enum.map(String) });
+        }
+        findModes(property, [...path, key]);
+      }
+    };
+    findModes(JSON.parse(readFileSync(join(CHART_DIR, "values.schema.json"), "utf8")), []);
+    expect(modes.map((mode) => mode.path)).toEqual(expect.arrayContaining(["postgres.mode", "clickhouse.mode", "qdrant.mode"]));
+    const shapeSettings = SHAPE_NAMES.map((shape) => readYaml(SHAPES[shape][0]) as { global: { deploymentMode: string }; ingress: { exposure: string } });
+    expect(shapeSettings.map((values) => values.global.deploymentMode).sort()).toEqual(["onprem", "saas"]);
+    expect(shapeSettings.map((values) => values.ingress.exposure).sort()).toEqual(["direct", "tunnel"]);
+    // What the components need once they are on: endpoints, and the Secrets they read by name.
+    const settings = [
+      ...EXTERNAL_MIGRATION,
+      ...["--set", "postgres.external.host=pg.trustiot.test", "--set", "postgres.external.caSecret.name=trustiot-pg-ca"],
+      ...["--set", "clickhouse.external.url=https://ch.trustiot.test:8443", "--set", "clickhouse.external.caSecret.name=trustiot-ch-ca"],
+      ...["--set", "qdrant.external.url=https://qdrant.trustiot.test:6333", "--set", "qdrant.external.credentialsSecret.name=trustiot-qdrant"],
+      ...["--set", "objectStorage.credentialsSecret.name=trustiot-object-storage", "--set", "smtp.credentialsSecret.name=trustiot-smtp"],
+      ...["chat", "embedding", "rerank"].flatMap((use) => ["--set", `ai.${use}.apiKeySecret.name=trustiot-ai-${use}`]),
+      ...["--set", "internalIdentity.signingKeySecret.name=trustiot-identity-signing"],
+      ...["--set", "observability.sentry.environment=test", "--set", "observability.sentry.dsnSecret.name=trustiot-sentry"],
+      ...["--set", "observability.collector.forward.endpoint=https://siem.trustiot.test:4318"],
+      ...["--set", "observability.collector.forward.authHeader.name=Authorization"],
+      ...["--set", "observability.collector.forward.authHeader.valueSecret.name=trustiot-siem"],
+      ...["--set", "observability.collector.forward.caSecret.name=trustiot-siem-ca"],
+      ...["--set-json", 'global.imagePullSecrets=["ghcr-pull"]'],
+      ...["--set-json", 'services.knowledge.credentials=["qdrant-read","qdrant-write","object-storage","smtp"]'],
+      ...["--set-json", 'services.ai-gateway.credentials=["ai","smtp"]'],
+    ];
+    const rounds = Math.max(...modes.map((mode) => mode.values.length));
+    for (const shape of SHAPE_NAMES) {
+      for (let round = 0; round < rounds; round += 1) {
+        const args = [
+          ...switches.flatMap((path) => ["--set", `${path}=true`]),
+          ...modes.flatMap((mode) => ["--set", `${mode.path}=${mode.values[round % mode.values.length]}`]),
+          ...settings,
+        ];
+        const where = `${shape}, ${modes.map((mode) => mode.values[round % mode.values.length]).join("/")}`;
+        const result = helmTemplate([...SHAPES[shape], SMOKE], args);
+        expect(result.stderr, where).toBe("");
+        expect(result.code, where).toBe(0);
+        // The text rule, applied to the output: every kind is written the way both this check and
+        // Helm read it, and the only Secret is the Job's empty one.
+        expect(checkRenderedManifests(where, result.stdout)).toEqual([]);
+        const manifests = parseManifests(result.stdout);
+        const objects = manifests.flatMap((m) => [m, ...((Array.isArray(m.items) ? m.items : []) as Manifest[])]);
+        const secrets = objects.filter((m) => /^secret$/i.test(String(m.kind)));
+        expect(secrets.length, where).toBeGreaterThan(0);
+        expect(secrets.map((m) => m.metadata.name).sort(), where).toEqual(passwordSecretNames(manifests));
+        for (const secret of secrets) {
+          expect(Object.keys(secret).sort(), `${where}: ${secret.metadata.name}`).toEqual(["apiVersion", "kind", "metadata", "type"]);
+          expect(secret.type).toBe("Opaque");
+          expect(secret.metadata.labels?.["trustiot.io/filled-by"]).toBe("migrate");
+          expect(secret.metadata.annotations?.["helm.sh/resource-policy"]).toBe("keep");
+        }
       }
     }
   }, SLOW_TEST_MS);
@@ -3487,6 +3571,17 @@ describe("values validation rejects unsafe or incomplete settings", () => {
 describe("the templates keep the secret and env boundaries without schema validation", () => {
   const files = [...SHAPES.saas, SMOKE];
   const cases: [string, string[], RegExp][] = [
+    // Laysi/trustiot-v2#398: a value printed into a line cannot start another document, such as
+    // a Secret with data, because no value may hold a line break (YAML also breaks at CR, NEL,
+    // LS and PS), in a string, a map key or a list item.
+    [
+      "a value with a line break and a document separator that adds a Secret",
+      ["--set-json", 'observability.sentry.environment="test\\n---\\napiVersion: v1\\nkind: Secret\\nmetadata:\\n  name: leak\\ndata:\\n  v: eA=="'],
+      /observability\.sentry\.environment: holds a line break; values are single lines/,
+    ],
+    ["a value with a carriage return", ["--set-json", 'hosts.app="app.saas.trustiot.test\\r---"'], /hosts\.app: holds a line break/],
+    ["a map key with a line separator", ["--set-json", 'serviceDefaults.podAnnotations={"a\\u2028kind: Secret":"x"}'], /serviceDefaults\.podAnnotations: a key holds a line break/],
+    ["a list item with a next-line character", ["--set-json", 'global.imagePullSecrets=["pull\\u0085---"]'], /global\.imagePullSecrets\[0\]: holds a line break/],
     [
       "env that overrides a platform setting",
       ["--set-json", 'services.smoke-echo.env=[{"name":"TRUSTIOT_CLIENT_IP_SOURCE","value":"x-forwarded-for"}]'],

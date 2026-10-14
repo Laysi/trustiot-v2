@@ -38,7 +38,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | 2 | `values-saas.yaml` 或 `values-onprem.yaml` | 部署型態，也就是 SaaS 與地端的差異 |
 | 3 | 安裝實例的覆寫檔 | 這一個安裝的主機名稱、外部端點、Secret 名稱與叢集內資料庫的磁碟區大小（`postgres.bundled.storage.size`、`clickhouse.bundled.storage.size`）。SaaS 的放在 `deploy/flux/`（Laysi/trustiot-v2#70）；地端由客戶安裝時提供；`tests/values/` 有測試用的範例 |
 
-`values.schema.json` 驗證合併後的結果：缺欄位、拼錯欄位、以 IP 當主機名稱、在 values 放明文密鑰、SaaS 的外部端點不是 https，都會讓 `helm lint`、`helm template` 與 `helm install` 直接失敗，不會裝出壞掉的版本。
+`values.schema.json` 驗證合併後的結果：缺欄位、拼錯欄位、以 IP 當主機名稱、在 values 放明文密鑰、SaaS 的外部端點不是 https，都會讓 `helm lint`、`helm template` 與 `helm install` 直接失敗，不會裝出壞掉的版本。values 裡的字串、map key 與清單項目都不能含換行（CR、LF，以及 YAML 也當成換行的 NEL、LS、PS）：`templates/values-check.yaml` 在渲染時拒絕，略過 schema 驗證也一樣，因為印進 manifest 某一行的值不能開出新的一行或新的文件（docs/architecture/secrets.md，Laysi/trustiot-v2#398）。
 
 ## SaaS 與地端的差異
 

@@ -104,7 +104,7 @@ one per consumer, so a node's kubelet can read only the passwords of the pods sc
 templates/passwords.yaml declares them without data; the migration Job generates each password and
 writes it in (tools/migrate/src/passwords.rs). They are declared whether or not migrate.enabled is
 true: with the Job turned off, whatever replaces it fills them (only the cluster tests do that).
-Returns a YAML list of {name, key, kind (postgres or clickhouse), component, role (app or
+Returns a YAML list of {name, key, database (postgres or clickhouse), component, role (app or
 platform, postgres only)}, one per key, so a Secret with two keys appears twice; use with
 fromYamlArray, and "trustiot.migrate.passwordSecretObjects" for the Secrets themselves.
 */}}
@@ -113,14 +113,14 @@ fromYamlArray, and "trustiot.migrate.passwordSecretObjects" for the Secrets them
 {{- $platformLogins := include "trustiot.migrate.platformLogins" . | fromYamlArray -}}
 {{- range (include "trustiot.postgres.clients" . | fromYaml).services -}}
 {{- $name := include "trustiot.componentName" (dict "root" $ "name" (printf "%s-password" .)) -}}
-{{- $secrets = append $secrets (dict "name" $name "key" (include "trustiot.migrate.appRole" .) "kind" "postgres" "component" . "role" "app") -}}
+{{- $secrets = append $secrets (dict "name" $name "key" (include "trustiot.migrate.appRole" .) "database" "postgres" "component" . "role" "app") -}}
 {{- if has . $platformLogins -}}
-{{- $secrets = append $secrets (dict "name" $name "key" (include "trustiot.migrate.platformRole" .) "kind" "postgres" "component" . "role" "platform") -}}
+{{- $secrets = append $secrets (dict "name" $name "key" (include "trustiot.migrate.platformRole" .) "database" "postgres" "component" . "role" "platform") -}}
 {{- end -}}
 {{- end -}}
 {{- with .Values.observability.collector -}}
 {{- if .enabled -}}
-{{- $secrets = append $secrets (dict "name" (include "trustiot.componentName" (dict "root" $ "name" "otel-collector-password")) "key" .clickhouse.user "kind" "clickhouse" "component" "otel-collector") -}}
+{{- $secrets = append $secrets (dict "name" (include "trustiot.componentName" (dict "root" $ "name" "otel-collector-password")) "key" .clickhouse.user "database" "clickhouse" "component" "otel-collector") -}}
 {{- end -}}
 {{- end -}}
 {{- toYaml $secrets -}}
@@ -272,7 +272,7 @@ passwords. */ -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__GENERATION" "value" (include "trustiot.migrate.passwordGeneration" .)) -}}
 {{- $postgres := list -}}
 {{- range $secrets -}}
-{{- if eq .kind "postgres" -}}
+{{- if eq .database "postgres" -}}
 {{- $postgres = append $postgres (printf "%s=%s" .key .name) -}}
 {{- else -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR" "value" (printf "%s=%s" .key .name)) -}}

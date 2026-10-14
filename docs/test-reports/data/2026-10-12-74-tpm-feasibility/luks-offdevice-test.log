@@ -1,0 +1,137 @@
+== luksDump of the container copied from the lab Pi
+LUKS header information
+Version:       	2
+Epoch:         	5
+Metadata area: 	16384 [bytes]
+Keyslots area: 	16744448 [bytes]
+UUID:          	324c1042-8e50-46c8-b435-2b73722a177d
+Label:         	poc74data
+Subsystem:     	(no subsystem)
+Flags:       	(no flags)
+
+Data segments:
+  0: crypt
+	offset: 16777216 [bytes]
+	length: (whole device)
+	cipher: aes-xts-plain64
+	sector: 4096 [bytes]
+
+Keyslots:
+  0: luks2
+	Key:        512 bits
+	Priority:   normal
+	Cipher:     aes-xts-plain64
+	Cipher key: 512 bits
+	PBKDF:      argon2id
+	Time cost:  4
+	Memory:     262144
+	Threads:    4
+	Salt: <redacted>
+	AF stripes: 4000
+	AF hash:    sha256
+	Area offset:32768 [bytes]
+	Area length:258048 [bytes]
+	Digest ID:  0
+  1: luks2
+	Key:        512 bits
+	Priority:   normal
+	Cipher:     aes-xts-plain64
+	Cipher key: 512 bits
+	PBKDF:      pbkdf2
+	Hash:       sha512
+	Iterations: 1000
+	Salt: <redacted>
+	AF stripes: 4000
+	AF hash:    sha512
+	Area offset:290816 [bytes]
+	Area length:258048 [bytes]
+	Digest ID:  0
+Tokens:
+  0: systemd-tpm2
+	tpm2-hash-pcrs:   
+	tpm2-pcr-bank:    n/a
+	tpm2-pubkey: <redacted>
+	            (null)
+	tpm2-pubkey-pcrs: 
+	tpm2-primary-alg: ecc
+	tpm2-pin:         false
+	tpm2-pcrlock:     false
+	tpm2-salt:        false
+	tpm2-srk:         true
+	tpm2-pcrlock-nv:  false
+	tpm2-policy-hash: <redacted>
+	tpm2-blob: <redacted>
+	Keyslot:    1
+Digests:
+  0: pbkdf2
+	Hash:       sha256
+	Iterations: 45134
+	Salt: <redacted>
+	Digest: <redacted>
+
+== 1. computer without a TPM
+ls: cannot access '/dev/tpm*': No such file or directory
+ERROR:tcti:src/tss2-tcti/tcti-device.c:455:Tss2_Tcti_Device_Init() Failed to open specified TCTI device file /dev/tpmrm0: No such file or directory 
+Failed to create TPM2 context: State not recoverable
+RESULT no-TPM cryptsetup exit=1
+Cannot initialize device-mapper. Is dm_mod kernel module loaded?
+Cannot initialize device-mapper. Is dm_mod kernel module loaded?
+Cannot use device poc74data, name is invalid or still in use.
+Set cipher aes, mode xts-plain64, key size 512 bits for device /data/data.luks.
+Cannot initialize device-mapper. Is dm_mod kernel module loaded?
+Cannot use device poc74data, name is invalid or still in use.
+Automatically discovered security TPM2 token unlocks volume.
+ERROR:tcti:src/tss2-tcti/tcti-device.c:455:Tss2_Tcti_Device_Init() Failed to open specified TCTI device file /dev/tpmrm0: No such file or directory 
+Failed to create TPM2 context: State not recoverable
+TPM2 operation failed, falling back to traditional unlocking: State not recoverable
+Password querying disabled via 'headless' option.
+RESULT no-TPM systemd-cryptsetup exit=1
+
+== 2. computer with a different TPM (swtpm 2.0)
+TPM2_PT_MANUFACTURER:
+  raw: 0x49424D00
+  value: "IBM"
+name: 000b1280761ef4608f4c88ea3e38bf84a5a2b9eef0e733ab82ac66a90ffafeb897f8
+
+== 2a. positive control: a container enrolled against this swtpm
+New TPM2 token enrolled as key slot 1.
+Cannot initialize device-mapper. Is dm_mod kernel module loaded?
+Cannot initialize device-mapper. Is dm_mod kernel module loaded?
+Cannot use device ctl, name is invalid or still in use.
+Set cipher aes, mode xts-plain64, key size 512 bits for device /tmp/control.luks.
+Cannot initialize device-mapper. Is dm_mod kernel module loaded?
+Cannot use device ctl, name is invalid or still in use.
+Automatically discovered security TPM2 token unlocks volume.
+Cannot initialize device-mapper. Is dm_mod kernel module loaded?
+Cannot use device ctl, name is invalid or still in use.
+Failed to activate with TPM2 acquired key: Operation not supported
+RESULT control (own TPM) exit=1
+
+== 2b. the lab Pi's container with this (different) TPM
+Cannot initialize device-mapper. Is dm_mod kernel module loaded?
+Cannot initialize device-mapper. Is dm_mod kernel module loaded?
+Cannot use device poc74data, name is invalid or still in use.
+Set cipher aes, mode xts-plain64, key size 512 bits for device /data/data.luks.
+Cannot initialize device-mapper. Is dm_mod kernel module loaded?
+Cannot use device poc74data, name is invalid or still in use.
+Automatically discovered security TPM2 token unlocks volume.
+WARNING:esys:src/tss2-esys/api/Esys_Load.c:324:Esys_Load_Finish() Received TPM Error 
+ERROR:esys:src/tss2-esys/api/Esys_Load.c:112:Esys_Load() Esys Finish ErrorCode (0x000001df) 
+Failed to unseal secret using TPM2: State not recoverable
+TPM2 operation failed, falling back to traditional unlocking: State not recoverable
+Password querying disabled via 'headless' option.
+RESULT other-TPM systemd-cryptsetup exit=1
+
+== 2c. load the sealed blob from the Pi's token directly under this TPM's SRK
+-rw-r--r--. 1 root root 128 Oct 12 10:03 /tmp/blob.priv
+-rw-r--r--. 1 root root  80 Oct 12 10:03 /tmp/blob.pub
+WARNING:esys:src/tss2-esys/api/Esys_Load.c:324:Esys_Load_Finish() Received TPM Error 
+ERROR:esys:src/tss2-esys/api/Esys_Load.c:112:Esys_Load() Esys Finish ErrorCode (0x000001df) 
+ERROR: Esys_Load(0x1DF) - tpm:parameter(1):integrity check failed
+ERROR: Unable to run tpm2_load
+RESULT tpm2_load on other TPM exit=1
+
+== 3. control: the copy is intact and opens with the test passphrase (keyslot 0)
+# podman run --rm -i -v <copy dir>:/data:ro localhost/poc74-offdevice:1 \
+#   cryptsetup open --test-passphrase --key-slot 0 --key-file=- /data/data.luks < <passphrase file kept off the repo>
+RESULT passphrase slot exit=0

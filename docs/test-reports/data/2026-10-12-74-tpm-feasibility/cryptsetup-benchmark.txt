@@ -1,0 +1,4 @@
+# Algorithm |       Key |      Encryption |      Decryption
+    aes-xts        512b        82.7 MiB/s        83.8 MiB/s
+#            Algorithm |       Key |      Encryption |      Decryption
+xchacha12,aes-adiantum        256b       239.6 MiB/s       251.1 MiB/s

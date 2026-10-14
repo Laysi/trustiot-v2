@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 
@@ -10,6 +10,8 @@ import {
   checkBuildArgsInText,
   checkBuildFile,
   checkBuildInvocations,
+  checkChartTemplates,
+  checkRenderedManifests,
   contextPath,
   shellWords,
   checkRepository,
@@ -1098,8 +1100,8 @@ stringData:
     expect(messages(checkSecretManifests("deploy/chart/templates/any.yaml", quoted))).toEqual([
       expect.stringMatching(/^deploy\/chart\/templates\/any\.yaml:2 a template that declares a Secret \(or a templated kind\)/),
     ]);
-    // Other templates are skipped.
-    expect(checkSecretManifests("deploy/chart/templates/cm.yaml", "kind: ConfigMap\ndata:\n  {{- x }}\n")).toEqual([]);
+    // Other templates are skipped (output indented under its key: see the document-level tests).
+    expect(checkSecretManifests("deploy/chart/templates/cm.yaml", "kind: ConfigMap\ndata:\n  {{- x | nindent 2 }}\n")).toEqual([]);
     expect(checkTemplateText("deploy/chart/templates/_service.tpl", "kind: Deployment\nspec: {{ .x }}\n")).toEqual([]);
   });
 
@@ -1151,9 +1153,10 @@ stringData:
       ["text after the end", empty.replace("{{- end }}", "{{- end }}data: {x: eA==}")],
       ["a silent action on its own line", empty.replace("type: Opaque", "type: Opaque\n{{- if true }}\n{{- end }}")],
     ] as const) {
-      // The Secret is refused; a forbidden function is reported on its own line as well.
+      // The Secret is refused; a forbidden function, and an action that prints at document level,
+      // are reported on their own lines as well.
       expect(
-        messages(checkSecretManifests(file, source)).filter((m) => !/ template function /.test(m)),
+        messages(checkSecretManifests(file, source)).filter((m) => !/ template function | prints where its output starts /.test(m)),
         what,
       ).toEqual([expect.stringMatching(/^deploy\/chart\/templates\/passwords\.yaml:4 a template that declares a Secret/)]);
     }
@@ -1222,10 +1225,15 @@ stringData:
     expect(messages(checkTemplateText("deploy/chart/templates/x.yaml", commented))).toEqual([
       expect.stringMatching(/^deploy\/chart\/templates\/x\.yaml:3 a template that declares a Secret/),
       expect.stringMatching(/^deploy\/chart\/templates\/x\.yaml:9 a template that declares a Secret/),
+      // The action left open prints at document level.
+      expect.stringMatching(/^deploy\/chart\/templates\/x\.yaml:10 prints where its output starts a manifest's own keys/),
     ]);
-    // A List item that declares a Secret has apiVersion beside it.
+    // A List item that declares a Secret has apiVersion beside it; the List itself is refused too.
     const list = "apiVersion: v1\nkind: List\nitems:\n  - apiVersion: v1\n    kind: Secret\n    metadata:\n      name: {{ .x }}\n";
-    expect(checkTemplateText("deploy/chart/templates/list.yaml", list)).toHaveLength(1);
+    expect(messages(checkTemplateText("deploy/chart/templates/list.yaml", list))).toEqual([
+      expect.stringMatching(/^deploy\/chart\/templates\/list\.yaml:2 a List renders its items/),
+      expect.stringMatching(/^deploy\/chart\/templates\/list\.yaml:5 a template that declares a Secret/),
+    ]);
     const listKindFirst = "items:\n  - kind: Secret\n    apiVersion: v1\n    metadata:\n      name: x\n";
     expect(checkTemplateText("deploy/chart/templates/list.yaml", listKindFirst)).toHaveLength(1);
     // The Gateway's TLS certificate is a reference to a Secret by name, not a declaration.
@@ -1280,6 +1288,254 @@ stringData:
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// Laysi/trustiot-v2#398: rule 5 found a Secret only by a `kind: Secret` line, so every other way
+// of writing one, and every Secret that a template action prints, passed while helm rendered a
+// Secret with data. Each form in the issue's 重現 section is refused here, read the way the
+// repository scan reads a chart: all its templates together.
+describe("templates: every way to write or print a Secret", () => {
+  const CHART = "deploy/chart";
+  // A template action in each form, as in the chart: plain YAML would go through the SOPS rule.
+  const meta = "metadata:\n  name: {{ .Release.Name }}-leak\n";
+  const data = "data:\n  value: eA==\n";
+  /** A Secret with data whose kind is written as `kindText`. */
+  const secretWith = (kindText: string) => `apiVersion: v1\n${kindText}\n${meta}${data}`;
+  const toYamlDict =
+    '{{ toYaml (dict "apiVersion" "v1" "kind" "Secret" "metadata" (dict "name" "leak") "data" (dict "value" "eA==")) }}\n';
+
+  /** Runs the repository scan on a chart made of `templates` (paths under templates/). */
+  function scanChart(templates: Record<string, string>): string[] {
+    const files: Record<string, string> = { ".dockerignore": "*\n", [`${CHART}/Chart.yaml`]: "apiVersion: v2\nname: probe\nversion: 0.1.0\n" };
+    for (const [path, source] of Object.entries(templates)) files[`${CHART}/templates/${path}`] = source;
+    const root = tempRoot(files);
+    try {
+      return messages(checkRepository(root).violations);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  const UNREADABLE = / declares a kind this check cannot read word for word/;
+  const DOCUMENT_LEVEL = / prints where its output starts a manifest's own keys/;
+  const KIND_STRING = / a string in a template action spells a kind key/;
+  const TPL = / template function tpl renders text from values/;
+  const SECRET = / a template that declares a Secret/;
+
+  // [what, templates, the file and line that must be reported, and why]
+  const issueForms: [string, Record<string, string>, string, RegExp][] = [
+    ["a space before the colon", { "leak.yaml": secretWith("kind : Secret") }, "leak.yaml:2", UNREADABLE],
+    ["a !!str tag", { "leak.yaml": secretWith("kind: !!str Secret") }, "leak.yaml:2", UNREADABLE],
+    ["an anchor", { "leak.yaml": secretWith("kind: &k Secret") }, "leak.yaml:2", UNREADABLE],
+    ["a double-quoted key", { "leak.yaml": secretWith('"kind": Secret') }, "leak.yaml:2", UNREADABLE],
+    ["a single-quoted key", { "leak.yaml": secretWith("'kind': Secret") }, "leak.yaml:2", UNREADABLE],
+    ["the value on the next line", { "leak.yaml": secretWith("kind:\n  Secret") }, "leak.yaml:2", UNREADABLE],
+    ["a literal block scalar", { "leak.yaml": secretWith("kind: |-\n  Secret") }, "leak.yaml:2", UNREADABLE],
+    ["a folded block scalar", { "leak.yaml": secretWith("kind: >-\n  Secret") }, "leak.yaml:2", UNREADABLE],
+    ["flow style", { "leak.yaml": "{apiVersion: v1, kind: Secret, metadata: {name: {{ .Release.Name }}-leak}, data: {value: eA==}}\n" }, "leak.yaml:1", UNREADABLE],
+    [
+      "flow style over several lines",
+      { "leak.yaml": "{\n  apiVersion: v1,\n  kind: Secret,\n  metadata: {name: {{ .Release.Name }}-leak},\n  data: {value: eA==}\n}\n" },
+      "leak.yaml:3",
+      UNREADABLE,
+    ],
+    [
+      "JSON",
+      { "leak.yaml": `{{- if true }}\n${JSON.stringify({ apiVersion: "v1", kind: "Secret", metadata: { name: "leak" }, data: { value: "eA==" } }, null, 2)}\n{{- end }}\n` },
+      "leak.yaml:4",
+      UNREADABLE,
+    ],
+    ["the kind line printed by an action", { "leak.yaml": `apiVersion: v1\n{{ "kind: Secret" }}\n${meta}${data}` }, "leak.yaml:2", KIND_STRING],
+    ["toYaml of a dict in the template", { "leak.yaml": toYamlDict }, "leak.yaml:1", KIND_STRING],
+    [
+      "toYaml of a dict in a .tpl helper",
+      { "_leak.tpl": `{{- define "leak" -}}\n${toYamlDict}{{- end }}\n`, "leak.yaml": '{{ include "leak" . }}\n' },
+      "_leak.tpl:2",
+      KIND_STRING,
+    ],
+    ["toYaml of an object from values", { "leak.yaml": "{{ toYaml .Values.extraObject }}\n" }, "leak.yaml:1", DOCUMENT_LEVEL],
+    [
+      "toYaml of objects from values, one document each",
+      { "leak.yaml": "{{- range .Values.extraObjects }}\n---\n{{ toYaml . }}\n{{- end }}\n" },
+      "leak.yaml:3",
+      DOCUMENT_LEVEL,
+    ],
+    ["tpl of a value", { "leak.yaml": "{{ tpl .Values.something . }}\n" }, "leak.yaml:1", TPL],
+  ];
+
+  test.each(issueForms)("refuses %s", (_what, templates, where, reason) => {
+    expect(scanChart(templates)).toContainEqual(expect.stringMatching(new RegExp(`^${CHART}/templates/${where} ${reason.source.slice(1)}`)));
+  });
+
+  test("the toYaml of a dict in a helper is refused where it is printed, even with the kind key built elsewhere", () => {
+    // The helper's map keys come from a variable, so no string spells kind; printing the helper
+    // at document level is what is refused.
+    const helper = '{{- define "leak" -}}\n{{ toYaml (dict $.key "Secret" "data" (dict "value" "eA==")) }}\n{{- end }}\n';
+    expect(scanChart({ "_leak.tpl": helper, "leak.yaml": '{{ include "leak" (dict "key" .Values.k) }}\n' })).toEqual([
+      expect.stringMatching(new RegExp(`^${CHART}/templates/leak\\.yaml:1 ${DOCUMENT_LEVEL.source.slice(1)}`)),
+    ]);
+  });
+
+  // Further spellings, refused by the same rules rather than by a pattern for each.
+  const otherForms: [string, Record<string, string>, RegExp][] = [
+    ["an escaped key", { "leak.yaml": secretWith('"\\x6bind": Secret') }, UNREADABLE],
+    ["an escaped value", { "leak.yaml": secretWith('kind: "Sec\\x72et"') }, UNREADABLE],
+    ["an explicit key", { "leak.yaml": secretWith("? kind\n: Secret") }, UNREADABLE],
+    ["a key in another letter case", { "leak.yaml": secretWith("Kind: Secret") }, UNREADABLE],
+    ["a !!binary value", { "leak.yaml": secretWith("kind: !!binary U2VjcmV0") }, UNREADABLE],
+    ["an alias as the key", { "leak.yaml": `x: &k kind\n${secretWith("*k : Secret")}` }, UNREADABLE],
+    ["a merge key", { "leak.yaml": `apiVersion: v1\n<<: {kind: Secret}\n${meta}${data}` }, UNREADABLE],
+    ["a merged anchor", { "leak.yaml": `base: &base\n  kind: Secret\napiVersion: v1\n<<: *base\n${meta}${data}` }, / reaches more than one object/],
+    ["two kinds in one object", { "leak.yaml": `apiVersion: v1\nkind: ConfigMap\nkind: Secret\n${meta}${data}` }, / has more than one kind key/],
+    ["a key built from an action and text", { "leak.yaml": secretWith('ki{{ "" }}nd: Secret') }, / builds a top-level key/],
+    ["a key that an action starts", { "leak.yaml": secretWith('{{ "ki" }}nd: Secret') }, DOCUMENT_LEVEL],
+    ["a key that an action ends", { "leak.yaml": secretWith('kind{{ "" }}: Secret') }, / builds a top-level key/],
+    ["a Go escape in a string", { "leak.yaml": `apiVersion: v1\n{{ "\\x6bind: Secret" }}\n${meta}${data}` }, KIND_STRING],
+    ["a raw string", { "leak.yaml": `apiVersion: v1\n{{ \`kind: Secret\` }}\n${meta}${data}` }, KIND_STRING],
+    ["printf with a kind key", { "leak.yaml": `apiVersion: v1\n{{ printf "%s: %s" "kind" .Values.k }}\n${meta}${data}` }, KIND_STRING],
+    ["toJson of values", { "leak.yaml": "{{ toJson .Values.extraObject }}\n" }, DOCUMENT_LEVEL],
+    ["a string from values", { "leak.yaml": "{{ .Values.extraManifest }}\n" }, DOCUMENT_LEVEL],
+    ["a file of the chart", { "leak.yaml": '{{ .Files.Get "files/leak.yaml" }}\n' }, DOCUMENT_LEVEL],
+    ["a file of the chart inside a value", { "leak.yaml": `apiVersion: v1\nkind: ConfigMap\n${meta}data:\n  x: {{ $.Files.Get "files/leak.yaml" }}\n` }, / reads a file of the chart/],
+    [
+      "a string with a line break printed into a value",
+      { "leak.yaml": `apiVersion: v1\nkind: ConfigMap\n${meta}  annotations:\n    note: {{ printf "x\\n---\\napiVersion: v1\\nki%s: Secret\\ndata:\\n  v: eA==" "nd" }}\n` },
+      / holds a line break, so what the action prints can start another line/,
+    ],
+    ["a raw string with a line break", { "leak.yaml": `apiVersion: v1\nkind: ConfigMap\n${meta}data:\n  x: {{ \`a\n---\` }}\n` }, / holds a line break/],
+    [
+      "the migration Job's empty Secret outside a template",
+      { "_filled.tpl": "apiVersion: v1\nkind: Secret\nmetadata:\n  name: x\n  labels:\n    trustiot.io/filled-by: migrate\ntype: Opaque\n" },
+      / a helper declares a Secret; only a template/,
+    ],
+    ["toYaml indented at the start of a document", { "leak.yaml": "---\n{{ toYaml .Values.extraObject | nindent 2 }}\n" }, DOCUMENT_LEVEL],
+    ["toYaml at the level of a manifest's own keys", { "leak.yaml": `apiVersion: v1\nkind: ConfigMap\n${meta}{{ toYaml .Values.extra }}\n` }, DOCUMENT_LEVEL],
+    ["toYaml after text on a line, without nindent", { "leak.yaml": `apiVersion: v1\nkind: ConfigMap\nmetadata: {{ toYaml .Values.extra }}\n` }, DOCUMENT_LEVEL],
+    ["a List of objects from values", { "leak.yaml": "apiVersion: v1\nkind: List\nitems:\n  {{- toYaml .Values.extraObjects | nindent 2 }}\n" }, / a List renders its items/],
+    ["an include with a computed name", { "leak.yaml": "{{ include .Values.helper . }}\n" }, DOCUMENT_LEVEL],
+    ["an include of a helper that prints values", { "_leak.tpl": '{{- define "leak" -}}\n{{ toYaml .Values.extraObject }}\n{{- end }}\n', "leak.yaml": '{{ include "leak" . }}\n' }, DOCUMENT_LEVEL],
+    ["an include of a helper that is not defined", { "leak.yaml": '{{ template "missing" . }}\n' }, DOCUMENT_LEVEL],
+    ["a template file with another extension", { "leak.txt": secretWith("kind: Secret") }, SECRET],
+    ["a Secret of its own that only looks like a reference", { "leak.yaml": `kind: Secret\nname: {{ .Release.Name }}\n${data}` }, SECRET],
+    ["text that does not parse once actions are set aside", { "leak.yaml": `apiVersion: v1\nkind: ConfigMap\n${meta}data: [\n` }, / cannot be read as YAML once its template actions are set aside/],
+  ];
+
+  test.each(otherForms)("refuses %s", (_what, templates, reason) => {
+    expect(scanChart(templates)).toContainEqual(expect.stringMatching(reason));
+  });
+
+  test("a helper that declares even the migration Job's empty Secret may not be printed at document level", () => {
+    const filled = [
+      '{{- define "filled" -}}',
+      "apiVersion: v1",
+      "kind: Secret",
+      "metadata:",
+      "  name: {{ .name }}",
+      "  labels:",
+      "    trustiot.io/filled-by: migrate",
+      "type: Opaque",
+      "{{- end }}",
+      "",
+    ].join("\n");
+    // A template that prints it could add data after it. (The helper itself is refused as well:
+    // its define line is a template action the Secret may not hold.)
+    expect(scanChart({ "_filled.tpl": filled, "leak.yaml": `{{ include "filled" . }}\n${data}` })).toContainEqual(
+      expect.stringMatching(new RegExp(`^${CHART}/templates/leak\\.yaml:1 ${DOCUMENT_LEVEL.source.slice(1)}`)),
+    );
+  });
+
+  test("the chart's own templates pass, read together as the repository scan reads them", () => {
+    const templates = join(REPOSITORY_ROOT, CHART, "templates");
+    const files = readdirSync(templates)
+      .sort()
+      .map((name) => ({ file: `${CHART}/templates/${name}`, source: readFileSync(join(templates, name), "utf8") }));
+    expect(files.length).toBeGreaterThan(10);
+    expect(checkChartTemplates(files)).toEqual([]);
+  });
+
+  test("prints under a key, includes of helpers that declare manifests, and references by name pass", () => {
+    const helpers = [
+      '{{- define "labels" -}}',
+      "app: {{ .name }}",
+      "{{- with .extra }}",
+      "{{ toYaml . }}",
+      "{{- end }}",
+      "{{- end }}",
+      '{{- define "account" -}}',
+      "apiVersion: v1",
+      "kind: ServiceAccount",
+      "metadata:",
+      "  name: {{ .name }}",
+      "  labels:",
+      '    {{- include "labels" . | nindent 4 }}',
+      "{{- end }}",
+      "",
+    ].join("\n");
+    const template = [
+      "{{- range $name, $entry := .Values.services }}",
+      "---",
+      '{{ include "account" (dict "name" $name) }}',
+      "---",
+      "apiVersion: v1",
+      "kind: ConfigMap",
+      "metadata:",
+      "  name: {{ $name }}",
+      "  labels:",
+      '    {{- include "labels" (dict "name" $name) | nindent 4 }}',
+      "data:",
+      "  {{- range $key, $value := $entry.settings }}",
+      "  {{ $key }}: {{ $value | toString | quote }}",
+      "  {{- end }}",
+      "  resources: {{ toYaml $entry.resources | nindent 4 }}",
+      "  config.yaml: |",
+      "    {{- toYaml $entry.config | nindent 4 }}",
+      "    kind: not a key, only text in a block scalar",
+      "---",
+      "apiVersion: gateway.networking.k8s.io/v1",
+      "kind: Gateway",
+      "spec:",
+      "  listeners:",
+      "    - tls:",
+      "        certificateRefs:",
+      "          - kind: Secret",
+      '            group: ""',
+      "            name: {{ $entry.tlsSecret }}",
+      "{{- end }}",
+      "",
+    ].join("\n");
+    expect(scanChart({ "_helpers.tpl": helpers, "app.yaml": template })).toEqual([]);
+  });
+
+  test("rendered manifests: the migration Job's empty Secret passes; anything else that is or could be a Secret does not", () => {
+    const filled = [
+      "# Source: trustiot/templates/passwords.yaml",
+      "apiVersion: v1",
+      "kind: Secret",
+      "metadata:",
+      "  name: trustiot-identity-password",
+      "  labels:",
+      "    trustiot.io/filled-by: migrate",
+      "  annotations:",
+      "    helm.sh/resource-policy: keep",
+      "type: Opaque",
+      "---",
+      "apiVersion: v1",
+      "kind: ConfigMap",
+      "metadata:",
+      "  name: settings",
+      "",
+    ].join("\n");
+    expect(checkRenderedManifests("rendered", filled)).toEqual([]);
+    for (const [what, rendered, reason] of [
+      ["data", filled.replace("type: Opaque", `type: Opaque\n${data}`), SECRET],
+      ["no filled-by label", filled.replace("    trustiot.io/filled-by: migrate\n", ""), SECRET],
+      ["a kind YAML readers disagree on", filled.replace("kind: Secret", "kind: !!binary U2VjcmV0"), UNREADABLE],
+      ["a second kind", filled.replace("kind: ConfigMap", "kind: ConfigMap\nkind: Secret"), / has more than one kind key/],
+      ["text that does not parse", `${filled}data: [\n`, / do not parse as YAML/],
+    ] as const) {
+      expect(messages(checkRenderedManifests("rendered", rendered)), what).toContainEqual(expect.stringMatching(reason));
     }
   });
 });

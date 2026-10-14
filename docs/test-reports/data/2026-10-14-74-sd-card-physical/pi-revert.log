@@ -1,0 +1,16 @@
+fstab restored
+  UNIT LOAD ACTIVE SUB DESCRIPTION
+
+0 loaded units listed.
+To show all installed unit files use 'systemctl list-unit-files'.
+== after revert
+ls: cannot access '/etc/crypttab': No such file or directory
+fstab equals backup
+ls: cannot access '/etc/systemd/system/systemd-cryptsetup@poc74data.service.d': No such file or directory
+ls: cannot access '/var/lib/trustiot-poc74': No such file or directory
+ls: cannot access '/mnt/poc74data': No such file or directory
+control
+- 0x81000001
+- 0x81000100
+lock released 2026-10-14T07:28:28Z
+ls: cannot access '/home/<pi>/e2e.lock': No such file or directory

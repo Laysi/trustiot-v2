@@ -89,7 +89,7 @@ fn the_chart_binds_every_login_role_of_the_product() {
     let bindings = chart_helper(&chart, "trustiot.migrate.passwordSecrets");
     let postgres_bindings: Vec<&str> = bindings
         .lines()
-        .filter(|line| line.contains(r#""kind" "postgres""#))
+        .filter(|line| line.contains(r#""database" "postgres""#))
         .collect();
     assert_eq!(
         postgres_bindings.len(),
