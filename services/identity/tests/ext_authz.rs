@@ -24,11 +24,13 @@ use support::{
     Service, SlowProxy, TestKey, cookie, jwks, new_secret, request, run_to_exit, scratch_dir,
 };
 
-/// The roles of decision 29 for this service, created once per Postgres. The migration Job
-/// (Laysi/trustiot-v2#60) creates them in a deployment.
+/// The roles of decision 29 for this service, created once per Postgres, with the service role's
+/// `search_path` on its schema. The migration Job (Laysi/trustiot-v2#60) creates them so in a
+/// deployment.
 const ROLES: &str = "
 CREATE ROLE identity_owner LOGIN PASSWORD 'service-kit-test';
 CREATE ROLE identity_app LOGIN PASSWORD 'service-kit-test';
+ALTER ROLE identity_app SET search_path = identity;
 ";
 
 const MIGRATION: &str = include_str!("../migrations/postgres/0001_identity.sql");
@@ -116,6 +118,7 @@ impl Fixture {
             .execute(&mut owner)
             .await
             .expect("run the migration");
+        support::record_release_migrations(&mut owner).await;
         Some(fixture)
     }
 

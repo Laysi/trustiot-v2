@@ -2,25 +2,30 @@
 //! the per-tenant role hooks. The files are compiled into the binary, so the Job of a release
 //! applies exactly the schema of that release.
 //!
-//! Adding a service's Postgres migrations: list the service in [`PRODUCT`] with every file of
-//! its `migrations/postgres/` in order (`tests/registry.rs` fails when a file is missing, out of
-//! order, or listed twice). A new file is a new entry at the end; applied files never change.
+//! Adding a service's Postgres migrations: list every file of its `migrations/postgres/` in
+//! order in the service's `src/schema.rs` (a [`service_kit::migrations::Schema`]), include that
+//! file here with `#[path]` and list the service in [`PRODUCT`] from it (`tests/registry.rs`
+//! fails when a file is missing, out of order, or listed twice). The service's readiness check
+//! compiles the same file, so the Job applies exactly what the service expects
+//! (Laysi/trustiot-v2#402). A new file is a new entry at the end; applied files never change.
 
-/// One SQL file, compiled in.
-#[derive(Clone, Copy, Debug)]
-pub struct Migration {
-    /// File name, for example `0001_identity.sql`; files apply in this order.
-    pub name: &'static str,
-    /// The file's text.
-    pub sql: &'static str,
-}
+/// One SQL file, compiled in. The same type the services' readiness check uses.
+pub use service_kit::migrations::Migration;
+
+/// The identity service's files (compiled into the service as well).
+#[path = "../../../services/identity/src/schema.rs"]
+mod identity_schema;
+
+/// The assets service's files (compiled into the service as well).
+#[path = "../../../services/assets/src/schema.rs"]
+mod assets_schema;
 
 /// The outbox tables (crates/outbox) in a service's schema.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Outbox {
     /// The service writes events: `outbox::install_producer` on every run, then
-    /// crates/service-kit/sql/outbox-event.sql and outbox-aggregate.sql once each. Needs a
-    /// platform role.
+    /// crates/service-kit/sql/outbox-event.sql and outbox-aggregate.sql once each, recorded under
+    /// [`service_kit::migrations::outbox_component`]. Needs a platform role.
     pub producer: bool,
     /// The producers this service reads events from (their names): `outbox::install_consumer`
     /// on every run, and its platform role becomes a reader of each producer's `outbox_event`.
@@ -65,6 +70,17 @@ impl Service {
     pub fn platform_role(&self) -> Option<String> {
         self.platform_role
             .then(|| format!("{}_platform", self.schema()))
+    }
+
+    /// What the service's readiness check expects (service-kit's `migrations`): the files the
+    /// Job records in the service's schema.
+    #[must_use]
+    pub fn expected(&self) -> service_kit::migrations::Schema {
+        service_kit::migrations::Schema {
+            service: self.name,
+            outbox_producer: self.outbox.producer,
+            migrations: self.migrations,
+        }
     }
 
     /// The login roles: the service role, then the platform role.
@@ -118,27 +134,18 @@ impl Registry {
 }
 
 /// crates/service-kit/sql/database.sql: run once per database before any service connects.
-pub const DATABASE: Migration = Migration {
-    name: "database.sql",
-    sql: include_str!("../../../crates/service-kit/sql/database.sql"),
-};
+pub const DATABASE: Migration = service_kit::migrations::DATABASE;
 
 /// The outbox policy template (crates/service-kit/sql/outbox-event.sql), applied once per
 /// producer with its roles.
-pub const OUTBOX_EVENT_TEMPLATE: Migration = Migration {
-    name: "outbox-event.sql",
-    sql: include_str!("../../../crates/service-kit/sql/outbox-event.sql"),
-};
+pub const OUTBOX_EVENT_TEMPLATE: Migration = service_kit::migrations::OUTBOX_EVENT;
 
 /// The tenant column, row-level security and grants of the outbox's `outbox_aggregate`
 /// (crates/service-kit/sql/outbox-aggregate.sql, Laysi/trustiot-v2#413), applied once per
 /// producer with its roles, after [`OUTBOX_EVENT_TEMPLATE`]. A producer that ran the Job before
 /// this template gets it on its next run, with every existing aggregate in the tenant of its
 /// last event.
-pub const OUTBOX_AGGREGATE_TEMPLATE: Migration = Migration {
-    name: "outbox-aggregate.sql",
-    sql: include_str!("../../../crates/service-kit/sql/outbox-aggregate.sql"),
-};
+pub const OUTBOX_AGGREGATE_TEMPLATE: Migration = service_kit::migrations::OUTBOX_AGGREGATE;
 
 /// The product: what the released migration Job applies.
 pub const PRODUCT: Registry = Registry {
@@ -147,41 +154,25 @@ pub const PRODUCT: Registry = Registry {
         // new tenant's transaction. Its platform role exists because the outbox policy names one
         // (platform-wide events), but the chart binds no Secret to it, so it stays NOLOGIN.
         Service {
-            name: "identity",
+            name: identity_schema::SCHEMA.service,
             platform_role: true,
             outbox: Outbox {
-                producer: true,
+                producer: identity_schema::SCHEMA.outbox_producer,
                 consumes: &[],
             },
-            migrations: &[
-                Migration {
-                    name: "0001_identity.sql",
-                    sql: include_str!(
-                        "../../../services/identity/migrations/postgres/0001_identity.sql"
-                    ),
-                },
-                Migration {
-                    name: "0002_tenants.sql",
-                    sql: include_str!(
-                        "../../../services/identity/migrations/postgres/0002_tenants.sql"
-                    ),
-                },
-            ],
+            migrations: identity_schema::SCHEMA.migrations,
         },
         // Reads identity's events as its platform role, so the chart binds a password to
         // `assets_platform` as well ("trustiot.migrate.platformLogins" in
         // deploy/chart/templates/_migrate.tpl).
         Service {
-            name: "assets",
+            name: assets_schema::SCHEMA.service,
             platform_role: true,
             outbox: Outbox {
-                producer: false,
+                producer: assets_schema::SCHEMA.outbox_producer,
                 consumes: &["identity"],
             },
-            migrations: &[Migration {
-                name: "0001_assets.sql",
-                sql: include_str!("../../../services/assets/migrations/postgres/0001_assets.sql"),
-            }],
+            migrations: assets_schema::SCHEMA.migrations,
         },
     ],
     clickhouse: crate::clickhouse_files::FILES,

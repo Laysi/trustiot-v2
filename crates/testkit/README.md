@@ -84,7 +84,7 @@ async fn tenants_are_isolated() {
 | `pg_table!("name", seed = "…")` | 有 `tenant_id` 的表 | 名稱是字串字面值，`table`（在 `public`）或 `schema.table`，小寫、不加引號。seed 是 seeder 執行的靜態 SQL，插入一列：`$1` 租戶 id（uuid）、`$2` 新的列 id（uuid）、`$3` canary（text）；`$2` 或 `$3` 至少存一個在讀得到的欄位。需要父列的表用一個語句一起插：`WITH parent AS (INSERT INTO devices (tenant_id, id, name) VALUES ($1, gen_random_uuid(), $3) RETURNING tenant_id, id) INSERT INTO points (tenant_id, id, device_id, name) SELECT tenant_id, $2, id, $3 FROM parent` |
 | `pg_table!("name", seed = "…", one_per_tenant)` | 每個租戶最多一列的表（`tenant_id` 就是主鍵，例如 `identity.tenants`、`assets.tenants`） | 每個租戶只種一列，不管端點要幾列；那一列的 id（`$2`）就是租戶 id，所以讀得到它的 `tenant_id` 就算讀得到那一列。Postgres 要每個參數都有型別，seed 沒存 `$2` 或 `$3` 時仍要提到它們，例如 `INSERT INTO assets.tenants (tenant_id) SELECT $1 WHERE $2::uuid IS NOT NULL AND $3::text IS NOT NULL` |
 | `pg_view!("name")` | 建在租戶表上的 `security_invoker` 檢視 | 只讀；攻擊者至少要看到一列（正向對照） |
-| `PgStore::exempt("schema.name", "理由")` | 服務角色用得到、但沒有租戶資料的關聯 | 有 `tenant_id` 欄的不能豁免 |
+| `PgStore::exempt("schema.name", "理由")` | 服務角色用得到、但沒有租戶資料的關聯，例如 migration Job 在每個服務 schema 寫的 `trustiot_migrate_applied`（服務角色只能讀，Laysi/trustiot-v2#402） | 有 `tenant_id` 欄的不能豁免 |
 | `Endpoint::list(path, table)` | 列出呼叫者租戶資料的 `GET` | 路徑沒有參數 |
 | `Endpoint::get(path, table)`、`Endpoint::item(method, path, table)` | 針對單一列的請求 | 路徑剛好一個參數，例如 `/v1/devices/{id}`，代入列 id |
 | `Endpoint::create(method, path, table)` | 建立資料的請求 | 路徑沒有參數；body 裡能指定租戶的地方寫 `{tenant}` |

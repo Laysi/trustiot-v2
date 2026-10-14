@@ -6,6 +6,8 @@
 //! - [`shutdown`]: SIGTERM handling for PID 1 in a container, with draining.
 //! - [`telemetry`]: JSON logs with trace ids, optional OTLP export, no sensitive field values.
 //! - [`job_lock`]: Postgres advisory locks so a scheduled job runs on one replica at a time.
+//! - [`migrations`]: what a service expects of its schema, and the readiness check that keeps it
+//!   unready until the migration Job has applied every file it expects.
 //! - [`postgres`]: Postgres pools that always verify the server and refuse sessions row-level
 //!   security would not protect (decision 29, checklist M3).
 //! - `identity` (with the default `contract` feature): verification of the internal identity
@@ -22,6 +24,7 @@ pub mod http;
 #[cfg(feature = "contract")]
 pub mod identity;
 pub mod job_lock;
+pub mod migrations;
 pub mod postgres;
 mod service;
 pub mod shutdown;

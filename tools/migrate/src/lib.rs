@@ -27,8 +27,6 @@ pub mod secret;
 
 use std::time::Duration;
 
-use sha2::{Digest, Sha256};
-
 use crate::config::RunConfig;
 use crate::registry::Registry;
 
@@ -105,17 +103,11 @@ impl Report {
     }
 }
 
-/// The SHA-256 of a file's text, in lower-case hex, as the Job records it.
+/// The SHA-256 of a file's text, in lower-case hex, as the Job records it: service-kit's, so
+/// the records and the services' readiness check hash alike (Laysi/trustiot-v2#402).
 #[must_use]
 pub fn sha256_hex(text: &str) -> String {
-    use std::fmt::Write as _;
-    let digest = Sha256::digest(text.as_bytes());
-    let mut hex = String::with_capacity(64);
-    for byte in digest {
-        // Writing to a String cannot fail.
-        let _ = write!(hex, "{byte:02x}");
-    }
-    hex
+    service_kit::migrations::sha256_hex(text)
 }
 
 /// One migration run: everything in `registry`, under the migration lock.

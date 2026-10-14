@@ -74,6 +74,13 @@ impl Service {
     /// keys `jwks`, with the roles the chart gives it, and waits until it is ready. The
     /// environment is otherwise empty, so the developer's own variables cannot leak in.
     pub async fn start(product: &ProductPostgres, jwks: &str) -> Self {
+        let service = Self::spawn(product, jwks).await;
+        service.wait_ready().await;
+        service
+    }
+
+    /// Like [`Service::start`], but returns once the service listens, ready or not.
+    pub async fn spawn(product: &ProductPostgres, jwks: &str) -> Self {
         let mut command = Command::new(ASSETS);
         command
             .env_clear()
@@ -113,31 +120,44 @@ impl Service {
                 .and_then(|address| address.parse().ok())
                 .unwrap_or_else(|| panic!("no {field} in {listening}"))
         };
-        let service = Self {
+        Self {
             child,
             base_url: format!("http://{}", address("address")),
             health: address("health_address"),
             stdout,
             stderr,
-        };
-        service.wait_ready().await;
-        service
+        }
     }
 
     /// Waits until `/readyz` answers 200: both roles opened a session that passed service-kit's
-    /// row-level security check.
-    async fn wait_ready(&self) {
+    /// row-level security check, and the database has every migration the image expects.
+    pub async fn wait_ready(&self) {
+        self.wait_readiness(200).await;
+    }
+
+    /// The status `/readyz` answers now, if it answers.
+    pub async fn readiness(&self) -> Option<u16> {
+        let url = format!("http://{}/readyz", self.health);
+        reqwest::get(&url)
+            .await
+            .ok()
+            .map(|response| response.status().as_u16())
+    }
+
+    /// Waits until `/readyz` answers `status`.
+    pub async fn wait_readiness(&self, status: u16) {
         let url = format!("http://{}/readyz", self.health);
         let deadline = Instant::now() + START_LIMIT;
         loop {
             if let Ok(response) = reqwest::get(&url).await
-                && response.status() == 200
+                && response.status() == status
             {
                 return;
             }
             assert!(
                 Instant::now() < deadline,
-                "the assets service was not ready within {START_LIMIT:?}\nstdout:\n{}",
+                "/readyz of the assets service did not answer {status} within \
+                 {START_LIMIT:?}\nstdout:\n{}",
                 self.stdout.text()
             );
             tokio::time::sleep(Duration::from_millis(100)).await;

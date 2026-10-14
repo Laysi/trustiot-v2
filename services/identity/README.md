@@ -72,7 +72,7 @@ token 只給請求要去的服務。chart 把 `ingress.routes` 換成實際主�
 
 ## 資料庫
 
-schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/trustiot-v2#60）以 migration 角色依檔名順序套用；執行期程式碼不建表、不改表（`tools/repo-check` 檢查）。角色照 [`crates/service-kit` 的角色與 policy 範本](../../crates/service-kit/README.md)：
+schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/trustiot-v2#60）以 migration 角色依檔名順序套用；執行期程式碼不建表、不改表（`tools/repo-check` 檢查）。檔案清單在 `src/schema.rs`，Job 與服務的 readiness 編譯同一份：資料庫缺少這一版預期的檔案（或套用了別的版本）時 `/readyz` 回 503，日誌寫出檔案（Laysi/trustiot-v2#402，[service-kit 的 migration 檢查](../../crates/service-kit/README.md#migration-檢查migrations)）。角色照 [`crates/service-kit` 的角色與 policy 範本](../../crates/service-kit/README.md)：
 
 | 角色 | 權限 |
 | --- | --- |
@@ -87,6 +87,7 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 | `sessions` | `token_hash`、使用者、`active_tenant_id`、建立、到期與撤銷時間 | 無 |
 | `tenants` | 租戶 ID（整個主鍵）、名稱（1–100 個字元）、建立時間 | 照 `tenant-table.sql` 的 `tenant_isolation` |
 | `outbox_event`、`outbox_aggregate` | 這個服務寫出的事件與每個聚合的序號（由 Job 建立，見 [crates/outbox](../../crates/outbox/README.md)）；`tenant` 聚合屬於該租戶 | outbox 範本的 policy（`outbox-event.sql`、`outbox-aggregate.sql`） |
+| `trustiot_migrate_applied` | migration Job 在這個 schema 套用過的檔案（component、檔名、SHA-256），由 Job 寫入；`identity_app` 只能 `SELECT`，給 readiness 的 migration 檢查用 | 無：不是租戶資料 |
 
 為什麼 `sessions` 不是租戶資料：查 session 時還不知道租戶（只有 cookie），使用者也可以切換目前的租戶，所以 session 屬於使用者，沒有 `tenant_id`。它記的租戶叫 `active_tenant_id`，不叫 `tenant_id`，連線檢查與 `tools/sql-check` 才不會把它當成租戶欄位。角色一律在那個租戶的 RLS 交易裡從 `memberships` 讀。
 
@@ -200,7 +201,7 @@ MS0 沒有登入，測試以 migration 角色直接寫表（`tests/ext_authz.rs`
 CARGO_BUILD_JOBS=2 cargo test -p identity
 ```
 
-`tests/ext_authz.rs` 需要 podman 或 docker：起一個帶 TLS 的暫時 Postgres（與 `crates/service-kit` 的測試共用同一份支援程式），每個測試建自己的資料庫、套用 migration、以 `identity_app` 啟動真的 binary。`tests/tenants.rs` 與 `tests/cross_tenant.rs`（[crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試）用 testkit 的 TLS Postgres，schema 由 migration Job 的程式套用（`testkit::product`）。沒有容器時都略過，設了 `CI` 時改為失敗。
+`tests/ext_authz.rs` 需要 podman 或 docker：起一個帶 TLS 的暫時 Postgres（與 `crates/service-kit` 的測試共用同一份支援程式），每個測試建自己的資料庫、套用 migration、以 `identity_app` 啟動真的 binary（它與 `tests/adversarial.rs` 只套用 `0001_identity.sql`，並代替 Job 寫入這一版每個檔案的紀錄，`tests/support/mod.rs` 的 `record_release_migrations`，readiness 的 migration 檢查才會通過）。`tests/tenants.rs` 與 `tests/cross_tenant.rs`（[crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試）用 testkit 的 TLS Postgres，schema 由 migration Job 的程式套用（`testkit::product`）。沒有容器時都略過，設了 `CI` 時改為失敗。
 
 | 測試 | 驗證 |
 | --- | --- |
@@ -213,4 +214,5 @@ CARGO_BUILD_JOBS=2 cargo test -p identity
 | `tests/token_claims.rs` | 驗證者另寫：竄改、改簽、改受眾、改時間的 token 都過不了 service-kit 的驗證器，輪替期間舊 token 在效期內仍有效（不需要資料庫） |
 | `src/tenants.rs` | 租戶名稱的規則（去空白、長度以字元計、控制字元、格式字元與行／段落分隔符）；只接受 JSON 的 `Content-Type`（可帶參數，表單、`text/plain`、相近的型別與兩個 `Content-Type` 都拒絕） |
 | `tests/tenants.rs` | 真的服務與 migration Job 套用的產品 schema：平台管理者的 session 經這個服務的 ext_authz 換成 token 後建立租戶得到 201，列與 `identity.tenant_created` 在同一個交易（同一個 `xmin`）；撤銷寫 outbox 的權限時回 503 且沒有留下列；不是平台管理者 403（租戶的 `admin` 也是）、沒有 token 401、平台管理者給資產服務的 token 401、沒有 `Content-Type` 或是表單與 `text/plain` 400、壞的 body 400、壞的名稱 422，都不建立租戶；`application/json; charset=utf-8` 201；日誌不含租戶名稱 |
-| `tests/cross_tenant.rs` | 產品 schema（`testkit::product`）上，服務角色讀不到也改不了其他租戶的 `memberships`、`tenants`（每個租戶一列）、`outbox_event` 與 `outbox_aggregate`（讀、無租戶讀、更新、搬移、插入五種探測；`outbox_aggregate` 在 2026-10-15 前豁免，Laysi/trustiot-v2#413 起照租戶表測），服務角色碰得到的每個關聯都已宣告：`users`、`sessions` 不是租戶資料而豁免；建立租戶的 API 不讀租戶資料而豁免 |
+| `tests/migrations.rs` | 真的服務與 migration Job 套用的產品 schema（Laysi/trustiot-v2#402）：Job 寫的紀錄就是 `src/schema.rs` 預期的清單（outbox 的兩個範本與兩個檔案），服務 ready 並記 INFO；以 superuser 拿掉 `0002_tenants.sql` 的紀錄時，新的行程 503，ERROR 日誌的 `missing` 寫出它，已經通過的行程維持 ready；紀錄回來後同一個行程轉為 ready；`outbox-aggregate.sql` 的 SHA-256 不同時 503，`changed` 寫出它；`identity_app` 讀得到自己的紀錄、讀不到 `trustiot_migrate.applied` 與 `assets` 的紀錄，也不能新增、修改、刪除自己的紀錄 |
+| `tests/cross_tenant.rs` | 產品 schema（`testkit::product`）上，服務角色讀不到也改不了其他租戶的 `memberships`、`tenants`（每個租戶一列）、`outbox_event` 與 `outbox_aggregate`（讀、無租戶讀、更新、搬移、插入五種探測；`outbox_aggregate` 在 2026-10-15 前豁免，Laysi/trustiot-v2#413 起照租戶表測），服務角色碰得到的每個關聯都已宣告：`users`、`sessions`、`trustiot_migrate_applied` 不是租戶資料而豁免；建立租戶的 API 不讀租戶資料而豁免 |
