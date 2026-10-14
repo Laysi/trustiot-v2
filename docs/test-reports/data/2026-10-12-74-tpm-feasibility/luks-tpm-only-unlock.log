@@ -1,0 +1,8 @@
+RESULT token-only unlock test (no passphrase): 1.503 s
+RESULT token-only unlock test (no passphrase): 1.382 s
+RESULT token-only unlock test (no passphrase): 1.385 s
+RESULT tpm2_load of the sealed blob on this TPM: OK
+ERROR: Could not read serialized ESYS_TR from disk
+ERROR: Could not load session context
+ERROR: Argument neither a session nor a transient.
+ERROR: Unable to run tpm2_flushcontext

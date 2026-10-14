@@ -1,0 +1,26 @@
+name: 000bf004996fb0cfa49252476dc030f93cfb6cba58f54f95288062c288fa8369eaf6
+qualified name: 000bd635e623efc2346ea6bac12344543435f8be82f7743bda1842e20345ca51387a
+name-alg:
+  value: sha256
+  raw: 0xb
+attributes:
+  value: fixedtpm|fixedparent|sensitivedataorigin|userwithauth|sign
+  raw: 0x40072
+type:
+  value: ecc
+  raw: 0x23
+curve-id:
+  value: NIST p256
+  raw: 0x3
+kdfa-alg:
+  value: null
+  raw: 0x10
+kdfa-halg:
+  value: (null)
+  raw: 0x0
+scheme:
+  value: ecdsa
+  raw: 0x18
+scheme-halg:
+  value: sha256
+  raw: 0xb

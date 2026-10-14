@@ -140,6 +140,26 @@ openssl pkey -in signing-key.pem -pubout -outform DER | tail -c 32 | basenc --ba
 
 本機試建：`bun scripts/release/plan.ts --tag v0.0.0-rc.1 --dry-run --output plan.json`，再 `bun scripts/release/build.ts --plan plan.json --out <目錄>`（需要 podman、skopeo 與 `proto install` 裝好的工具，見 [scripts/README.md](../../scripts/README.md)）。
 
+## 本機啟動
+
+本機開發環境（`bun scripts/dev.ts`，[scripts/README.md](../../scripts/README.md) 的「身分服務」）備好了身分服務要的東西（Laysi/trustiot-v2#336）：
+
+- `up`：以 migration Job（`tools/migrate`，不改程式）建立 `identity_owner`、`identity_app` 與 `identity` schema 並套用 `migrations/postgres/`；產生 Ed25519 簽章私鑰（`<狀態目錄>/identity/signing-key.pem`，0600，沿用已有的）。
+- `seed`：建立開發使用者、`admin` 成員資格與一筆 session（寫法照下一節），印出 cookie。
+- `env`：印出 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`（公鑰）、`TRUSTIOT_IDENTITY_SIGNING_KEY_FILE`（路徑）、`TRUSTIOT_INGRESS_ROUTES`（`localhost` 的每個路徑給 `assets`）與 `TRUSTIOT_DEV_IDENTITY_DATABASE_{USERNAME,PASSWORD}`。
+
+```sh
+bun scripts/dev.ts up && bun scripts/dev.ts seed
+set -a; eval "$(bun scripts/dev.ts env)"; set +a
+TRUSTIOT__DATABASE__USERNAME="$TRUSTIOT_DEV_IDENTITY_DATABASE_USERNAME" \
+TRUSTIOT__DATABASE__PASSWORD="$TRUSTIOT_DEV_IDENTITY_DATABASE_PASSWORD" \
+  cargo run -p identity
+curl -i -H 'Host: localhost' -H 'Cookie: __Host-trustiot-session=<seed 印出的值>' \
+  http://127.0.0.1:8080/internal/ext-authz/api/anything
+```
+
+`/readyz`（健康埠 8081）回 200 之後，有效的 cookie 回 200 與一個 `x-internal-identity`，無效的 cookie 回 401，不在路由表的主機回 403。本機沒有入口 gateway，所以呼叫的人自己帶 `Host` 與 `Cookie`。`TRUSTIOT_DEV_IDENTITY_DATABASE_PASSWORD` 是 Job 為 `identity_app` 產生的密碼，每次 `up` 重新產生。
+
 ## 測試工具怎麼建立 session
 
 MS0 沒有登入，測試以 migration 角色直接寫表（`tests/ext_authz.rs` 的 `add_session`）：
