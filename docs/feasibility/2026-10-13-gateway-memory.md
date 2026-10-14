@@ -1,6 +1,6 @@
 # 可行性測試結果（2026-10-13 閘道器的記憶體用量與採購規格）
 
-這一頁記錄 MS1 開始前、在 lab 的 Raspberry Pi 4（2 GB）上對閘道器（trustiot-gw）記憶體用量的實測（Laysi/trustiot-v2#76）。測試程式是依本 repo 的 protocol crate 寫的 Rust 閘道器雛形：Modbus 輪詢、`BatchBuilder` 組批與 CBOR 編碼、超過上限就寫磁碟的記憶體緩衝、MQTT 5、WebSocket 內的 mTLS（外層 TLS 加內層 mTLS 的雙層 TLS）。結論是記憶體不是閘道器的瓶頸：OS 基線約 160 MiB，程式本身在 250 台設備下常駐約 9 MiB，上傳中斷時尖峰約等於 9 MiB 加上緩衝上限。真正要訂的是緩衝上限與它的強制方式。建議 G1 的記憶體上限預設 16 MiB、可調上限 64 MiB；採購最低 1 GB、建議 2 GB。這是採購與上限的決定，使用者已於 2026-10-14 同意（PR Laysi/trustiot-v2#397）。
+這一頁記錄 MS1 開始前、在 lab 的閘道器（2 GB）上對閘道器程式（trustiot-gw）記憶體用量的實測（Laysi/trustiot-v2#76）。測試程式是依本 repo 的 protocol crate 寫的 Rust 閘道器雛形：Modbus 輪詢、`BatchBuilder` 組批與 CBOR 編碼、超過上限就寫磁碟的記憶體緩衝、MQTT 5、WebSocket 內的 mTLS（外層 TLS 加內層 mTLS 的雙層 TLS）。結論是記憶體不是閘道器的瓶頸：OS 基線約 160 MiB，程式本身在 250 台設備下常駐約 9 MiB，上傳中斷時尖峰約等於 9 MiB 加上緩衝上限。真正要訂的是緩衝上限與它的強制方式。建議 G1 的記憶體上限預設 16 MiB、可調上限 64 MiB；採購最低 1 GB、建議 2 GB。這是採購與上限的決定，使用者已於 2026-10-14 同意（PR Laysi/trustiot-v2#397）。
 
 | 項目 | 結論 | 關鍵數字 | 對決策的影響 |
 | --- | --- | --- | --- |
@@ -13,18 +13,18 @@
 
 ## 測試環境
 
-- 機器：lab 的 Raspberry Pi 4 Model B Rev 1.4，2 GB（可見 1,844 MiB），Raspberry Pi OS Lite arm64（Debian 13.7 Trixie），kernel 6.18.50+rpt-rpi-v8，glibc 2.41，systemd 257。CPU 是 Cortex-A72，沒有 ARMv8 Crypto Extensions，AES 由軟體執行。swap 是 1.8 GiB 的 zram（zstd，優先序 100），`vm.swappiness` 60。
-- 這台 Pi 的核心命令列帶有 `cgroup_disable=memory`（Raspberry Pi OS 預設），所以記憶體 cgroup 不可用：systemd 的 `MemoryMax` 不生效，也讀不到 `memory.peak`。
-- 量測時 Pi 上的狀態（2026-10-13 的基線）：13 個執行中的服務（NetworkManager、wpa\_supplicant、bluetooth、avahi-daemon、ssh、journald、udevd、logind、timesyncd、cron、dbus、getty、user\@1000）；649 個套件，其中有 Laysi/trustiot-v2#74 留下的 `tpm2-tools`、`cryptsetup-bin`、`systemd-cryptsetup` 與 SPI/TPM 裝置樹 overlay，沒有 TPM 常駐服務，LUKS 測試容器已移除。2026-10-12 的基線（#74 的 LUKS 開機解鎖重開機之前）與 2026-10-13 相差不到 1 MiB。
+- 機器：lab 的閘道器，裝置樹回報的型號是 Raspberry Pi 4 Model B Rev 1.4，2 GB（可見 1,844 MiB），Raspberry Pi OS Lite arm64（Debian 13.7 Trixie），kernel 6.18.50+rpt-rpi-v8，glibc 2.41，systemd 257。CPU 是 Cortex-A72，沒有 ARMv8 Crypto Extensions，AES 由軟體執行。swap 是 1.8 GiB 的 zram（zstd，優先序 100），`vm.swappiness` 60。
+- 這台閘道器的核心命令列帶有 `cgroup_disable=memory`（Raspberry Pi OS 預設），所以記憶體 cgroup 不可用：systemd 的 `MemoryMax` 不生效，也讀不到 `memory.peak`。
+- 量測時閘道器上的狀態（2026-10-13 的基線）：13 個執行中的服務（NetworkManager、wpa\_supplicant、bluetooth、avahi-daemon、ssh、journald、udevd、logind、timesyncd、cron、dbus、getty、user\@1000）；649 個套件，其中有 Laysi/trustiot-v2#74 留下的 `tpm2-tools`、`cryptsetup-bin`、`systemd-cryptsetup` 與 SPI/TPM 裝置樹 overlay，沒有 TPM 常駐服務，LUKS 測試容器已移除。2026-10-12 的基線（#74 的 LUKS 開機解鎖重開機之前）與 2026-10-13 相差不到 1 MiB。
 - 工作站（伺服器端，用 podman 跑在無根容器）：Fedora 44，podman 5.8.7；Mosquitto 2.1.2（`docker.io/library/eclipse-mosquitto`，以 digest `sha256:38c0da4f…` 固定；mTLS 監聽、`require_certificate`、`use_identity_as_username`、TLS 1.3）；Modbus 模擬器在 `debian:bookworm-slim`（digest `sha256:a4672c0c…`）容器內；WebSocket 轉接與雲端模擬器（解碼批次、依串流追蹤序號高水位、回傳 `TelemetryAck`）是工作站上的原生程式。測試 CA 與所有憑證在執行時以 openssl 產生（ECDSA P-256），沒有提交。
 - 閘道器雛形：Rust 1.99.0，以 Zig 0.16.0 與 cargo-zigbuild 0.23.4 交叉編譯到 `aarch64-unknown-linux-gnu.2.36`（glibc）與 `aarch64-unknown-linux-musl`；tokio 1.53.2、rustls 0.23.45（ring 0.17.14，與 repo 的 Cargo.lock 相同）、tokio-rustls 0.26.6、tokio-tungstenite 0.30.0、rumqttc 0.25.1（只用它的 MQTT 5 封包編解碼）、protocol crate（本 repo 的 `b2b9232`，批次大小上限 256 KiB）。
-- 測試程式依 2026-10-09 的決定不進 repo：原始碼在工作站的 `~/poc-gw/76/`，Pi 上在 `~/poc-76/`。完整的指令、參數與每次執行的資料見[測試報告](../test-reports/2026-10-13-76-gateway-memory.md)。
+- 測試程式依 2026-10-09 的決定不進 repo：原始碼在工作站的 `~/poc-gw/76/`，閘道器上在 `~/poc-76/`。完整的指令、參數與每次執行的資料見[測試報告](../test-reports/2026-10-13-76-gateway-memory.md)。
 
 ## 雛形與模擬的方式
 
 - 資料路徑：每個輪詢工作讀自己那組設備（每台 1 次 FC3，40 個暫存器，也就是 20 個 32 位元浮點資料點，約 1 秒一輪），產生 `Reading`，交給收集器；收集器用 `BatchBuilder`（上限 256 KiB）組批並以 CBOR 編碼，每 10 秒結束開啟中的批次。批次進入離線緩衝：記憶體內的已編碼批次合計不超過上限，超過的批次以 `fsync` 寫進磁碟檔、記憶體只留標記，所以先進先出。上傳端一次只送一批（QoS 1，加上雲端的 `TelemetryAck`，收到確認才送下一批，與 G1 相同）。
 - 連線：TCP、外層 TLS（只驗伺服器，ring）、WebSocket（subprotocol `mqtt`，`write_buffer_size`、`read_buffer_size` 預設 128 KiB）、內層 TLS（用戶端憑證，直達 Mosquitto）、MQTT 5（keepalive 60 秒）。工作站上的轉接程式只做 WebSocket 與 TCP 的搬運，沒有 Cloudflare 與 Istio。
-- 設備：用工作站上的 Modbus 模擬器（podman）同時提供 Modbus TCP 與 RTU-over-TCP 兩種封裝（各占一半的端點，CRC 與站號都處理）。選這個而不是 Pi 上的 pty 對：現場不論 TCP 或 RS485 轉換器，閘道器都是從 TCP 連線讀（F1、F2），只有 RTU 的線速率限制（例如 9600 bps 的匯流排一秒讀不了幾台）是模擬器沒有的，那會讓實際資料率更低，不會讓記憶體更高。每 4 台設備共用一條連線（`field-constraints.md` 沒有現場設備數的資料，這是假設；另測了每台一條連線的 250 條）。
+- 設備：用工作站上的 Modbus 模擬器（podman）同時提供 Modbus TCP 與 RTU-over-TCP 兩種封裝（各占一半的端點，CRC 與站號都處理）。選這個而不是閘道器上的 pty 對：現場不論 TCP 或 RS485 轉換器，閘道器都是從 TCP 連線讀（F1、F2），只有 RTU 的線速率限制（例如 9600 bps 的匯流排一秒讀不了幾台）是模擬器沒有的，那會讓實際資料率更低，不會讓記憶體更高。每 4 台設備共用一條連線（`field-constraints.md` 沒有現場設備數的資料，這是假設；另測了每台一條連線的 250 條）。
 - 設備數與資料率的範圍是假設：docs 沒有每台閘道器的設備數與輪詢頻率。測 1、10、50、100、250 台，每台 20 個資料點、每秒一輪（最高 5,000 筆讀值每秒）；另測 100 台各 60 個資料點、250 台每 5 秒一輪、250 台每台一條連線。
 - 每秒取樣：程式內的取樣執行緒讀 `/proc/self/status`、`smaps_rollup`、`/proc/meminfo`、`/sys/block/zram0/mm_stat` 與 glibc 的 `mallinfo2`，並每秒清除峰值（`clear_refs`）。尖峰 RSS 取每一秒區間的 `VmHWM` 最大值。
 
@@ -32,7 +32,7 @@
 
 ### OS 基線
 
-2026-10-13T03:51Z 起每 5 秒取樣一次，共 24 筆，開機約 24 分鐘後，Pi 上沒有別的測試在跑（持有 `~/e2e.lock`）：
+2026-10-13T03:51Z 起每 5 秒取樣一次，共 24 筆，開機約 24 分鐘後，閘道器上沒有別的測試在跑（持有 `~/e2e.lock`）：
 
 | 項目 | 數值 |
 | --- | --- |
@@ -43,7 +43,7 @@
 | 核心 Slab | 42.5 MiB（不可回收 24.5 MiB）；AnonPages 24.8 MiB；分頁快取 194.9 MiB（可回收，已算進 MemAvailable） |
 | swap | zram 1.8 GiB，使用 0 |
 
-停掉藍牙與 avahi 後（2026-10-12 的對照）已用只從 160.1 MiB 降到 159.5 MiB（使用者空間 PSS 少 3.3 MiB），所以「精簡服務」在採購規格上可以忽略。要注意 2026-10-12T10:12Z 之後的 24 筆樣本是在 Pi 斷電重開機後約 1 到 3 分鐘取的，視為作廢，沒有使用（見測試報告）。
+停掉藍牙與 avahi 後（2026-10-12 的對照）已用只從 160.1 MiB 降到 159.5 MiB（使用者空間 PSS 少 3.3 MiB），所以「精簡服務」在採購規格上可以忽略。要注意 2026-10-12T10:12Z 之後的 24 筆樣本是在閘道器斷電重開機後約 1 到 3 分鐘取的，視為作廢，沒有使用（見測試報告）。
 
 ### 常駐（沒有中斷，緩衝上限 16 MiB）
 
@@ -125,7 +125,7 @@ G1 要求一次只送一批、收到確認才送下一批。實測補送速度�
 
 ### zram 交換
 
-Pi 預設的 1.8 GiB zram（zstd）在所有一般測試裡使用量都是 0。為了看記憶體吃緊時的行為，用一個占 1,250 MiB 的壓艙程式（一半不可壓縮、一半可壓縮，並在 `oom_score_adj` 設 1000）把可用記憶體壓到 391 MiB，再讓閘道器填 384 MiB 的緩衝（合成讀值每秒 20,000 筆）：
+閘道器預設的 1.8 GiB zram（zstd）在所有一般測試裡使用量都是 0。為了看記憶體吃緊時的行為，用一個占 1,250 MiB 的壓艙程式（一半不可壓縮、一半可壓縮，並在 `oom_score_adj` 設 1000）把可用記憶體壓到 391 MiB，再讓閘道器填 384 MiB 的緩衝（合成讀值每秒 20,000 筆）：
 
 - MemAvailable 掉到約 120 MiB 時核心才開始換出，換出的幾乎都是壓艙程式的冷頁（708 MiB 換出，zram 壓縮後占 338 MiB 的 RAM，約 2.1 比 1）；閘道器自己的 VmSwap 最多 44 MiB，尖峰 RSS 465 MiB（壓艙實際只常駐約 575 MiB、沒有換出的對照組是 499 MiB），CPU 與資料遺失沒有差別（840 萬筆全數確認）。
 - 最低 MemAvailable 66 MiB，系統沒有 OOM，SSH 持續可用。
@@ -142,7 +142,7 @@ Pi 預設的 1.8 GiB zram（zstd）在所有一般測試裡使用量都是 0。�
 ### G1 的記憶體上限
 
 - 以「所有設備合計、已編碼批次的位元組」計，預設 16 MiB，設定上限 64 MiB，超過就把批次寫磁碟（決策 9 不變）。用位元組而不是筆數，因為每筆編碼後 23 到 93 bytes。
-- 由程式自己強制。這台 Pi 的核心命令列有 `cgroup_disable=memory`，`MemoryMax` 無法當安全網；若映像（D5）要用，要改核心命令列並另外量它的記憶體成本（本次沒量）。
+- 由程式自己強制。這台閘道器的核心命令列有 `cgroup_disable=memory`，`MemoryMax` 無法當安全網；若映像（D5）要用，要改核心命令列並另外量它的記憶體成本（本次沒量）。
 - 16 MiB 的理由：（1）尖峰 RSS 約 26 到 30 MiB，64 MiB 時約 75 MiB，都遠小於可用量；（2）現場停電通常連網路一起斷，記憶體內的資料會遺失，上限越大，停電時可能丟失的資料越多。16 MiB 在 250 台、逐系列組批時約 2.5 分鐘的資料，在 50 台以下是 12 分鐘以上，在 10 台時是 1 小時；若要更短的風險窗口，調低上限即可，上限 0 的尖峰只有 11 MiB；（3）上限越低寫 SD 越多：一律寫磁碟（上限 0）時 250 台每天寫 10 GB（逐系列）到 39 GB（到達順序），只有中斷期間才會發生，但要知道。
 - 64 MiB 當上限是因為更大時有碎片、補送時間與保存期限（G1 的最長保存時間）的問題，而不是 RAM 不夠。
 - 給 #15 的實作要求：逐系列組批（資料量 1/4，見上）；glibc 並固定 `MALLOC_MMAP_THRESHOLD_`（或 `mallopt`）；批次上限維持 256 KiB；心跳帶上緩衝的位元組數與寫進磁碟的批次數（H1 已列）。

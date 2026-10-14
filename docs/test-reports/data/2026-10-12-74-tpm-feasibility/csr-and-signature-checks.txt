@@ -1,6 +1,6 @@
 # Laysi/trustiot-v2#74, 2026-10-12. Console output copied from the session (workstation side).
 
-## CSR made on the lab Pi, signed inside the TPM (gw csr --handle 0x81000100 --cn gw-lab-01)
+## CSR made on the lab gateway, signed inside the TPM (gw csr --handle 0x81000100 --cn gw-lab-01)
 $ openssl req -in gw-lab-01.csr -noout -verify -subject
 Certificate request self-signature verify OK
 subject=CN=gw-lab-01

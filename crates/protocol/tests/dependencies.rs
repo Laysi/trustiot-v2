@@ -1,4 +1,4 @@
-//! The gateway (a Raspberry Pi, `aarch64-unknown-linux-gnu`) builds this crate, so everything
+//! The gateway (`aarch64-unknown-linux-gnu`) builds this crate, so everything
 //! it pulls in must be pure Rust: no native library, no C toolchain, no cloud SDK. This test
 //! pins the crates compiled for the gateway target; adding one fails it until someone checks
 //! the crate and extends the list. `cargo build -p protocol --target aarch64-unknown-linux-gnu`

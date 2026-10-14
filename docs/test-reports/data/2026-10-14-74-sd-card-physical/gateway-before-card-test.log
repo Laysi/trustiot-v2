@@ -24,10 +24,10 @@ Laysi/trustiot-v2#74 before the physical SD-card test 2026-10-14T06:58:40Z
 1.863s systemd-cryptsetup@poc74data.service
   53ms mnt-poc74data.mount
 == journalctl -b -u systemd-cryptsetup@poc74data.service -o short-monotonic
-[    6.408594] <pi> systemd[1]: Starting systemd-cryptsetup@poc74data.service - Cryptography Setup for poc74data...
-[    6.634857] <pi> systemd-cryptsetup[550]: Set cipher aes, mode xts-plain64, key size 512 bits for device /var/lib/trustiot-poc74/data.luks.
-[    6.635090] <pi> systemd-cryptsetup[550]: Automatically discovered security TPM2 token unlocks volume.
-[    8.272054] <pi> systemd[1]: Finished systemd-cryptsetup@poc74data.service - Cryptography Setup for poc74data.
+[    6.408594] <gateway> systemd[1]: Starting systemd-cryptsetup@poc74data.service - Cryptography Setup for poc74data...
+[    6.634857] <gateway> systemd-cryptsetup[550]: Set cipher aes, mode xts-plain64, key size 512 bits for device /var/lib/trustiot-poc74/data.luks.
+[    6.635090] <gateway> systemd-cryptsetup[550]: Automatically discovered security TPM2 token unlocks volume.
+[    8.272054] <gateway> systemd[1]: Finished systemd-cryptsetup@poc74data.service - Cryptography Setup for poc74data.
 == container fingerprint: cryptsetup luksUUID; token export --token-id 0 | sha256sum; luksDump --dump-json-metadata | sha256sum
 bf5a105c-5f2e-4199-ae0e-9e6106c3afa6
 6a12d50f9e2072d7cae54df00806401f013e4d01bd2f3c110c471ee1ab239ce5  -

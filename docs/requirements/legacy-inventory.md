@@ -181,7 +181,7 @@
 | 錯誤頁與錯誤追蹤 | — | 沒有（[#163](https://github.com/Laysi/trustiot/issues/163)、[#166](https://github.com/Laysi/trustiot/issues/166)–[#169](https://github.com/Laysi/trustiot/issues/169)）；只有讀取使用者資訊失敗時的重試畫面 |
 | 操作紀錄 | — | 部分：只有閘道器佈建事件 |
 | 服務日誌 | 開發者 | 部分：只有容器 stdout 與 CloudWatch，沒有集中查詢與告警 |
-| 閘道器日誌 | 平台人員 | 部分：元件日誌寫在 Pi 的 SD 卡（INFO 級、上限 50 MB），要 SSH 進去看；系統 journal 只在記憶體；不上傳雲端 |
+| 閘道器日誌 | 平台人員 | 部分：元件日誌寫在閘道器的 SD 卡（INFO 級、上限 50 MB），要 SSH 進去看；系統 journal 只在記憶體；不上傳雲端 |
 
 ## 維運與開發工具
 

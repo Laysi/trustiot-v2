@@ -1,0 +1,35 @@
+== 2026-10-14T07:28:00Z card back in the lab gateway, booted at about 07:24Z (uptime 4 min)
+== systemctl is-active systemd-cryptsetup@poc74data.service mnt-poc74data.mount
+active
+active
+== /mnt/poc74data/marker.txt
+Laysi/trustiot-v2#74 marker written 2026-10-14T06:58:20Z
+Laysi/trustiot-v2#74 before the physical SD-card test 2026-10-14T06:58:40Z
+== systemd-analyze blame
+1.887s systemd-cryptsetup@poc74data.service
+ 686ms systemd-fsck@dev-disk-by\x2dpartuuid-0ff2576b\x2d01.service
+  76ms systemd-fsck@dev-mapper-poc74data.service
+  47ms mnt-poc74data.mount
+== journalctl -b -u systemd-cryptsetup@poc74data.service -u mnt-poc74data.mount -u systemd-fsck@dev-mapper-poc74data.service -o short-monotonic
+[    6.235094] <gateway> systemd[1]: Starting systemd-cryptsetup@poc74data.service - Cryptography Setup for poc74data...
+[    6.508876] <gateway> systemd-cryptsetup[536]: Set cipher aes, mode xts-plain64, key size 512 bits for device /var/lib/trustiot-poc74/data.luks.
+[    6.509165] <gateway> systemd-cryptsetup[536]: Automatically discovered security TPM2 token unlocks volume.
+[    8.122102] <gateway> systemd[1]: Finished systemd-cryptsetup@poc74data.service - Cryptography Setup for poc74data.
+[    8.127214] <gateway> systemd[1]: Starting systemd-fsck@dev-mapper-poc74data.service - File System Check on /dev/mapper/poc74data...
+[    8.197875] <gateway> systemd-fsck[613]: e2fsck 1.47.2 (1-Jan-2025)
+[    8.199249] <gateway> systemd-fsck[613]: poc74data: clean, 13/12288 files, 1840/12288 blocks
+[    8.203592] <gateway> systemd[1]: Finished systemd-fsck@dev-mapper-poc74data.service - File System Check on /dev/mapper/poc74data.
+[    8.207255] <gateway> systemd[1]: Mounting mnt-poc74data.mount - /mnt/poc74data...
+[    8.254356] <gateway> systemd[1]: Mounted mnt-poc74data.mount - /mnt/poc74data.
+== container fingerprint: cryptsetup luksUUID; token export --token-id 0 | sha256sum; luksDump --dump-json-metadata | sha256sum
+bf5a105c-5f2e-4199-ae0e-9e6106c3afa6
+6a12d50f9e2072d7cae54df00806401f013e4d01bd2f3c110c471ee1ab239ce5  -
+9fe72952b4f0b304f4e448d382909db6b09ceac2d534eeba9fb5457482a8efd0  -
+== journalctl -b -k | grep EXT4-fs (the gateway lost power while running before the card was pulled)
+[    4.422776] <gateway> kernel: EXT4-fs (mmcblk0p2): orphan cleanup on readonly fs
+[    4.422800] <gateway> kernel: EXT4-fs (mmcblk0p2): mounted filesystem 02f61d5e-92cb-4f9c-a781-099d97795020 ro with ordered data mode. Quota mode: none.
+[    4.431894] <gateway> kernel: EXT4-fs (mmcblk0p2): re-mounted 02f61d5e-92cb-4f9c-a781-099d97795020 r/w.
+[    8.255667] <gateway> kernel: EXT4-fs (dm-0): mounted filesystem 7aa2ec44-fe1b-4996-91fe-108b7c020abf r/w with ordered data mode. Quota mode: none.
+== fsck of the boot partition
+[    5.660107] <gateway> systemd-fsck[378]: fsck.fat 4.2 (2021-01-31)
+[    5.660107] <gateway> systemd-fsck[378]: /dev/mmcblk0p1: 439 files, 153201/1032408 clusters

@@ -10,6 +10,8 @@ Architecture decisions, rebuild scope (items A1–M8), service split, repository
 
 The repository has been public since 2026-10-12: commits, PR and issue text, test reports, and CI logs are readable by anyone. Never put secrets, internal hostnames or LAN addresses, customer names, or personal data in them (cluster pod and service addresses are fine); the rule is in `docs/architecture/secrets.md`, section 「公開 repo 的資訊規則」.
 
+The gateway hardware is the TrustIoT gateway: it is developed on the Raspberry Pi platform and runs Raspberry Pi OS, but it is not a Raspberry Pi. Never call it a Pi in code, docs, commits, issues or PRs (no "Pi", "lab Pi", `<pi>` or `PI_HOST`): write "TrustIoT gateway" or "gateway" (zh-TW 閘道器), and "lab gateway" (lab 的閘道器) for the unit used in tests. Upstream software names stay as they are, such as Raspberry Pi OS and `vcgencmd`.
+
 ## Build, lint, and test
 
 `.prototools` pins Rust, Bun, Go, actionlint, cargo-deny, gitleaks, Helm, k3d, kubeconform, kubectl, the GitOps tools (flux, sops), and the release tools (zig, cargo-zigbuild, cargo-auditable, syft, cosign); tools without a built-in proto plugin get a schema plugin in `.proto/plugins/` that verifies the release checksum. proto installs Rust through rustup and does not shim cargo, so rustup picks the toolchain from `rust-toolchain.toml`: change `rust` in `.prototools` and `channel` in `rust-toolchain.toml` together (`cargo test -p repo-check` fails when they differ). Run every command from the repository root.
