@@ -1,9 +1,9 @@
-2026-10-12T09:05:00: Client gw-lab-01-0 [<lab-pi>:43012] disconnected.
-2026-10-12T09:05:00: New connection from <lab-pi>:43014 on port 8883.
-2026-10-12T09:05:00: New client connected from <lab-pi>:43014 as gw-lab-01-1 (p4, c1, k60, u'gw-lab-01').
+2026-10-12T09:05:00: Client gw-lab-01-0 [<lab-gateway>:43012] disconnected.
+2026-10-12T09:05:00: New connection from <lab-gateway>:43014 on port 8883.
+2026-10-12T09:05:00: New client connected from <lab-gateway>:43014 as gw-lab-01-1 (p4, c1, k60, u'gw-lab-01').
 2026-10-12T09:05:00: Client gw-lab-01-1 negotiated TLSv1.3 cipher TLS_AES_256_GCM_SHA384
-2026-10-12T09:05:00: Client gw-lab-01-1 [<lab-pi>:43014] disconnected.
-2026-10-12T09:05:00: New connection from <lab-pi>:43026 on port 8883.
-2026-10-12T09:05:00: New client connected from <lab-pi>:43026 as gw-lab-01-2 (p4, c1, k60, u'gw-lab-01').
+2026-10-12T09:05:00: Client gw-lab-01-1 [<lab-gateway>:43014] disconnected.
+2026-10-12T09:05:00: New connection from <lab-gateway>:43026 on port 8883.
+2026-10-12T09:05:00: New client connected from <lab-gateway>:43026 as gw-lab-01-2 (p4, c1, k60, u'gw-lab-01').
 2026-10-12T09:05:00: Client gw-lab-01-2 negotiated TLSv1.3 cipher TLS_AES_256_GCM_SHA384
-2026-10-12T09:05:00: Client gw-lab-01-2 [<lab-pi>:43026] disconnected.
+2026-10-12T09:05:00: Client gw-lab-01-2 [<lab-gateway>:43026] disconnected.

@@ -207,7 +207,7 @@ pub struct SystemStats {
     pub agent_starts_since_boot: u32,
 }
 
-/// Raspberry Pi power and throttling flags, as `vcgencmd get_throttled` reports them.
+/// The gateway's power and throttling flags, as `vcgencmd get_throttled` reports them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Throttling {
     /// The flags right now.
@@ -216,7 +216,7 @@ pub struct Throttling {
     pub since_boot: ThrottleFlags,
 }
 
-/// One set of Raspberry Pi power and throttling flags.
+/// One set of power and throttling flags.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThrottleFlags {
     /// The supply voltage is too low.

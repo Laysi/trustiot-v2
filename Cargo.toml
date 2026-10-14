@@ -110,7 +110,7 @@ unwrap_used = "warn"
 
 [profile.release]
 # Release binaries are built once per tag (docs/architecture/ci-release.md), so trade build
-# time for smaller, faster binaries; the gateway runs on a memory-constrained Pi.
+# time for smaller, faster binaries; the gateway runs on a memory-constrained board.
 codegen-units = 1
 lto = "thin"
 # Drop debug info but keep symbol names so panics and Sentry stack traces stay readable.
