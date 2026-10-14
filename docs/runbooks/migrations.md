@@ -77,6 +77,15 @@ Postgres 若開著 `log_statement = 'all'`（或 `log_min_duration_statement` �
 
 `helm upgrade --cleanup-on-fail`（Flux 的 HelmRelease 設了 `upgrade.cleanupOnFail: true`，見 `deploy/flux/clusters/saas/trustiot/helm-release.yaml`）在升級失敗時刪掉這次升級新建立的物件，包括這次才宣告的密碼 Secret（例如同一次升級新開的服務），`helm.sh/resource-policy: keep` 擋不住（2026-10-13 在 lab 叢集上確認）。Job 可能已經以它設定了角色的密碼。不需要手動處理：下一次成功的升級重建空的 Secret，Job 為它產生新密碼並設定（日誌有 `(it had none)`），叢集自己恢復。Flux 失敗後的 rollback（`strategy: rollback`）渲染出較舊的 `migrate.passwordGeneration` 時也不換密碼（上方「輪替服務角色與 collector 的密碼」）。
 
+### 要求 Secret 帶某個標籤或 annotation 的叢集政策
+
+Job 第一次填入一個密碼 Secret 時（以及 Secret 被別人重建、或從備份還原之後），會在同一個 patch 拿掉 chart 與 Job 都不設定的標籤與 annotation（[密鑰與權限](../architecture/secrets.md) 的「只信任 Job 填過的物件」）。所以由 Helm post-renderer 或 Flux HelmRelease 的 `spec.commonMetadata` 加上的 key，在第一次填入時會被拿掉一次；之後的升級會把它們加回來，Job 不再動已綁定的 Secret。SaaS 的 HelmRelease 兩者都沒用。
+
+叢集若有政策（例如 Kyverno 或 Gatekeeper）要求 Secret 一定要帶某個只有 post-renderer 或 `commonMetadata` 會加的標籤或 annotation，admission 會拒絕 Job 的這個 patch，Job 每次執行都停在同一個 Secret：
+
+- 症狀：Job 的日誌寫 `Secret <名稱>: the API refused to patch it`（HTTP 400 或 403，依政策引擎而定），叢集的事件或政策報告寫出拒絕的是哪個政策；這時 Job 的 Role 本身沒有問題，不要放寬它。
+- 處理，二選一：讓那個政策豁免兩種密碼 Secret（`<release>-<服務>-password`、`<release>-otel-collector-password`，標籤 `trustiot.io/filled-by=migrate`）；或改用會自動加上那個 key 的 mutating 政策，它也會在 Job 的 patch 上把 key 加回去，patch 就會通過。改好之後 Job 依 `migrate.backoffLimit` 重試，重試用完時刪掉失敗的 Job，讓下一次升級或調和重建它。
+
 ## 停用服務之後留下的 Secret
 
 在 values 關掉一個服務（或把它的 `mesh.calls` 拿掉 `postgres`）之後，下一次 Job 把它的登入角色改成 `NOLOGIN`，日誌有 `revoked the login of role <服務>_app: no Secret is bound to it`；服務從 tools/migrate 的服務清單移除或改名時是 `... no service in tools/migrate's registry has it`。關掉 collector 或改它的帳號名稱時，舊的 ClickHouse 帳號改成 `HOST NONE`，日誌有 `revoked the login of ClickHouse account <帳號>: the collector no longer uses it`。角色與帳號不刪除（可能擁有物件；重新啟用時 Job 先設 Secret 的密碼再恢復登入）。只有 Job 標記過、migration 角色有 ADMIN OPTION 的角色會被改，superuser、客戶的帳號、其他實例的角色不會。ClickHouse 沒有可以標記帳號的地方，所以 Job 把拿到 `trustiot_otel_collector` 角色、但不是目前 collector 帳號的帳號都當成它的：外部 ClickHouse 上不要把這個角色給自己的帳號，給了的帳號會被改成 `HOST NONE`（以管理帳號 `ALTER USER <帳號> HOST ANY` 並 `REVOKE trustiot_otel_collector FROM <帳號>` 復原）。Job 執行時用的 migration 帳號本身不會被改，在 ClickHouse 設定檔（`users.xml` 或 `users.d/`）裡定義的帳號也不會（`ALTER USER` 改不了它們，Job 也從不建立這種帳號）。`NOLOGIN` 不中斷已經開著的連線；被關掉的服務的 pod 隨升級刪除，懷疑還有連線時以 superuser 執行 `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '<角色>'`。
@@ -98,7 +107,7 @@ Job 遇到下列情況會停止，不自動修改；修好之後，Job 依 `migr
 | `no service in tools/migrate's registry` | 服務要用的角色沒有登記在 tools/migrate | 程式的錯，開 issue |
 | `Secret <名稱>: does not exist` | 密碼 Secret 被刪掉了 | 見上方「密碼 Secret 的資料遺失」 |
 | `Secret <名稱>: is being deleted` | 密碼 Secret 正在刪除（有 `deletionTimestamp`，可能被 finalizer 擋著）；Job 不把密碼寫進一個即將消失的 Secret | 找出擋著它的 finalizer 與原因（`kubectl get secret <名稱> -o jsonpath='{.metadata.finalizers}'`），讓刪除完成，再依「密碼 Secret 的資料遺失」處理 |
-| `Secret <名稱>: the API refused to get it` / `refused to patch it` | Job 的 Role 不在或被改過 | 確認 `<release>-migrate` 的 Role 與 RoleBinding 存在且與 chart 渲染的相同（`helm get manifest`）；不要放寬它 |
+| `Secret <名稱>: the API refused to get it` / `refused to patch it` | 只有 `refused to patch it`、而且是 admission 政策拒絕時，見上方「要求 Secret 帶某個標籤或 annotation 的叢集政策」。其他情況：Job 的 Role 不在或被改過 | 確認 `<release>-migrate` 的 Role 與 RoleBinding 存在且與 chart 渲染的相同（`helm get manifest`）；不要放寬它 |
 | `Secret <名稱>: changed 5 times while the run filled it` | 有別的程式在同時寫這個 Secret | 找出寫入者（`kubectl get secret -o yaml` 的 `managedFields`）並停掉它；只有 `trustiot-migrate` 該寫 `data` |
 | `has SUPERUSER, CREATEROLE, CREATEDB or REPLICATION` / `has BYPASSRLS` | 有人改過服務的角色 | 先查是誰、為什麼改（稽核），再以 superuser `ALTER ROLE <角色> NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS` |
 | `must not be a member` / `another role is a member` / `only the migration role may be a member` | 角色多了成員關係，會讓別的角色拿到它的權限 | 稽核後以 superuser `REVOKE <角色> FROM <成員>` 或 `REVOKE <其他角色> FROM <角色>` |
