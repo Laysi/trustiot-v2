@@ -129,3 +129,44 @@ migrate 的整合測試涵蓋的情境：
 - **nightly 的快取命中**：要等 main 上的排程執行第一次儲存之後才看得到命中；命中時省下的時間待量測。
 - **PR 的 smoke**：這一輪的變更推送後，PR 的 `smoke` label 會讓它再跑一次（Job 產生 collector 的密碼、第一次安裝的 key 檢查）。
 
+## 第四輪：CI 修正與第三輪獨立驗證的發現
+
+2026-10-13 先合併 `origin/main`（merge commit，未 rebase）。main 新增的 Renovate 規則（Laysi/trustiot-v2#394）在 ci.yml 的 `workflow-policy` 擋下 `tools/migrate/tests/support/mod.rs` 的 ClickHouse 映像：只有 `name@sha256:…`。改成 `name:tag@sha256:…`，tag 與 digest 同 `services/ingest/tests/common/mod.rs`；`renovate.test.ts` 的同一映像份數由 3 改為 4。分支沒有其他裸 digest。
+
+### 發現與處理
+
+| 發現 | 處理 | 證據 |
+| --- | --- | --- |
+| R1（中）`check-secret-handling` 的空 Secret 例外可以繞過：值來自 values、`randAlphaNum` 或 `lookup` 的 annotation 與標籤，以及同一行在無輸出動作之後的 `data:`／`stringData:` | 修正。Secret 樣板裡含 `{{` 的行只能逐字等於三行已知的行（名稱、chart 標準標籤的 include、`{{- end }}`）。另加全 repo 規則：任何 Helm 樣板與 helper 都不能用 `lookup`、`rand*`、`uuidv*`、`shuffle`、`gen*` 憑證與金鑰函式、`derivePassword`、`htpasswd`、`bcrypt`、AES 函式、`getHostByName`，以會略過字串與註解的 tokenizer 判斷。規則放在每個 PR 都跑的 `check-secret-handling.ts`，不放在只有 chart 變動時才跑的 chart 測試。chart 測試改成逐欄比對渲染出的密碼 Secret，包括標籤與 annotation 的集合與值 | `scripts/ci/check-secret-handling.test.ts` 的「a template may declare only an empty Secret that the migration Job fills」與「no template may make or read secret material」：驗證者的 8 個 probe 與另外 3 個變形都必須被拒，chart 自己的形狀是通過的對照組（60 通過） |
+| R2（低）預先建立的 Secret 會被 Helm 接手，Job 保留裡面自選的密碼 | 修正。Job 寫入時在同一個 merge patch 記下 `trustiot.io/password-secret-uid: <metadata.uid>`，只有在它等於 Secret 目前的 uid 時才信任資料，否則每個 key 都重新產生。chart 不渲染這個 annotation，R1 的逐欄比對涵蓋這一點。剩下的風險寫進文件：能 patch 這些 Secret 的人本來就讀得到；從備份還原會改變 uid，下一次 Job 會重新產生並收斂 | `tests/passwords.rs` 的 `a_secret_someone_else_created_never_keeps_its_passwords`（重建的 Secret 帶同代 annotation 與自選密碼、偽造的 uid annotation），單元測試 `data_is_trusted_only_in_the_object_the_job_filled`；e2e 的第一次安裝檢查兩個 Secret 都是 `bound: true` |
+| R3（低）服務停用、改名，或 collector 換帳號之後，舊的登入仍然有效 | 修正。Postgres：登入角色只在綁定了 Secret 時 LOGIN，沒有綁定就 `NOLOGIN`，重新綁定時先設 Secret 的密碼再 LOGIN；服務清單已經沒有的角色也改成 `NOLOGIN`。只挑 Job 建立時以 `COMMENT ON ROLE ... IS 'trustiot-migrate:login-role'` 標記、且 migration 角色有 ADMIN OPTION 的角色，不依名稱挑選，也不 `DROP`。ClickHouse：拿到 `trustiot_otel_collector` 角色、但不是目前 collector 帳號的帳號改成 `HOST NONE`（不刪除），collector 再開啟時恢復成 `HOST ANY`。留下的 Secret 的刪除步驟寫進 runbook 的「停用服務之後留下的 Secret」 | `tests/outbox_and_tenant_roles.rs` 第 5 到 7 步：移出服務清單、部署中關掉再打開，以及沒有標記或沒有 ADMIN OPTION 的角色不受影響。`tests/clickhouse.rs` 第 6d 步：關掉、再打開、改名 |
+| R4（低）Secret 已經 patch、`ALTER ROLE` 還沒執行時失敗，重啟的 pod 會讀到角色還沒有的密碼 | 接受，寫進 runbook 的「輪替到一半 Job 失敗時」：這個順序不會留下一個沒有任何 Secret 記得密碼的角色，Job 重試成功後就收斂 | 文件 |
+| R5（低）Flux 的 rollback remediation 渲染較舊的 `passwordGeneration`，字串比較讓每次 rollback 與再升級都輪替一次 | 修正。代以數字比較（1 到 9 位數字，與 chart 的 schema 一致），只往上走：要求的代較小時保留現有的密碼與記的代。在較小的代之下補填遺失的 key 時，記的是較大的那一代，所以之後升級回來也不會再輪替。`--cleanup-on-fail` 會刪掉那次升級新建的密碼 Secret（即使有 `keep`），下一次成功的 Job 會重新產生，這點寫進 runbook | `tests/passwords.rs` 的 `a_rollback_keeps_the_passwords_and_so_does_the_re_upgrade`，單元測試 `generations_only_go_up`、`generations_are_decimal_digits`；e2e 新增「rollback 到較舊的代不換密碼，之後升級回來也不換」 |
+| R6（低）nightly 映像快取的 key 少了輸入；不完整或損壞的 tarball 讓 nightly 失敗 | 修正。key 加上 `.dockerignore`、`nightly.yml`、`.github/actions/setup-proto`，以及 workspace 成員 `edge/`、`factory/`，測試檢查每個成員目錄都在輸入裡；`.dockerignore` 也加進 nightly 的 PR 路徑。tarball 無法載入、沒有預期的 tag 或平台不對時，改為寫一行說明並發出 GitHub warning，以 proto 安裝命中時略過的建置工具，再從原始碼建置 | `scripts/nightly/image-cache.test.ts` 與 `service-image.test.ts` 的新案例 |
+| `helm upgrade --force-replace`（lab 確認） | runbook 寫明不要用，以及原因：它清空兩種密碼 Secret 的資料與 annotation，接著取代同名 Job 時失敗（`spec.selector … immutable`），升級停在 FAILED，Job 不會再跑。看到這種失敗要立刻改 `migrate.revision` 再一般地升級 | 文件 |
+| e2e 測試本身的錯誤，由 2026-10-13 在 332ed66 上的 lab 先行執行發現：兩種 shape 都是 10 通過、1 失敗 | 修正。`postgres.e2e.ts` 讀密碼 Secret 的 `managedFields` 時沒有加 `--show-managed-fields`；`kubectl get -o json` 預設不輸出這個欄位，所以 `dataManagers` 是空的。以 `--show-managed-fields` 讀同一個 Secret 時，寫 `data` 的只有 `trustiot-migrate`，`helm` 只有 `f:metadata` 與 `f:type`。現在以 `--show-managed-fields` 讀取。其他 e2e 檔與 `scripts/nightly/smoke.ts` 都沒有依賴 `managedFields` 的讀取，Flux 的 lab e2e 只是把它刪掉再比對 | 修正後的結果由下一次 lab e2e 補上 |
+
+### 指令與結果
+
+| 項目 | 結果 |
+| --- | --- |
+| `bun test scripts/nightly`（合併 main 並修正映像寫法之後） | 136 通過 |
+| `bun test scripts`（R6 之後） | 全部通過，2 略過（需要 podman 的 e2e），0 失敗 |
+| `bun test scripts/nightly`（R6 之後） | 139 通過 |
+| `bun test scripts/ci` | 300 通過 |
+| `bun run --cwd scripts typecheck` | 通過，包括 `deploy/chart/tests/e2e/postgres.e2e.ts` |
+| `bun test deploy/chart` | 309 通過 |
+| `bun test deploy/flux` | 19 通過 |
+| `check-workflows`、`lint-workflows`（actionlint）、`check-secret-handling` | 通過，沒有違規 |
+| `cargo clippy -p migrate`、`cargo test -p migrate`（R2、R5 之後） | 通過：單元 19 個、`tests/passwords.rs` 9 個，其餘整合測試也通過 |
+| `cargo test --locked -p migrate --test clickhouse`（R3 的 ClickHouse 部分） | 1 通過。這是 pre-commit 審查要求「重新啟用帳號時先設 Secret 的密碼、再恢復 `HOST ANY`」之前的版本；修改後的版本由 PR CI 執行 |
+| `cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`（2026-10-14，在建置主機上的 R3 commit 之後，經檢查佇列） | 通過，沒有警告 |
+| `cargo test --locked --workspace`、`cargo run --locked -p openapi -- --check`（同上） | 全部通過，0 失敗；`api/openapi.json is up to date`。這次建置主機上沒有 docker 或 podman，所以在不設 `CI` 的情況下執行，需要容器的測試（`tools/migrate` 的 Postgres 與 ClickHouse 整合測試，包括 R3 在 `tests/outbox_and_tenant_roles.rs` 的第 5 到 7 步與 `tests/clickhouse.rs` 的第 6d 步）都略過。設了 `CI` 的同一批檢查在第一個容器測試就停住（`tests/clickhouse.rs`：`podman or docker is required when CI is set`）；`migrate` 的 19 個單元測試在那之前通過 |
+| 需要容器的 Rust 測試 | 由推送後 PR CI 的 `rust` job 執行（`cargo test --workspace`，設了 `CI` 時缺容器就失敗而不是略過），執行編號由協調者補上 |
+
+`Cargo.toml` 與 `Cargo.lock` 沒有改，所以 `cargo deny` 不重跑。
+
+pre-commit 的審查在這一輪擋下三次：
+- `proto install` 一次只裝一個工具，退回建置時改為逐一安裝，測試涵蓋。
+- 重新啟用 collector 帳號時，原本先恢復 `HOST ANY` 再檢查密碼，改為先設 Secret 的密碼。
+- 審查認為 `system.role_grants` 沒有 `granted_role_name` 與 `user_name` 欄位。這兩個欄位存在：`USER_ROLES` 也讀它們，`tests/clickhouse.rs` 第 6d 步對釘選的 ClickHouse 26.8 跑過這個查詢。所以只補上說明欄位的註解。
