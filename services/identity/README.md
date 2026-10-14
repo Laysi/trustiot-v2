@@ -165,7 +165,7 @@ openssl pkey -in signing-key.pem -pubout -outform DER | tail -c 32 | basenc --ba
 
 本機開發環境（`bun scripts/dev.ts`，[scripts/README.md](../../scripts/README.md) 的「身分服務」）備好了身分服務要的東西（Laysi/trustiot-v2#336）：
 
-- `up`：以 migration Job（`tools/migrate`，不改程式）建立 `identity_owner`、`identity_app` 與 `identity` schema 並套用 `migrations/postgres/`；產生 Ed25519 簽章私鑰（`<狀態目錄>/identity/signing-key.pem`，0600，沿用已有的）。
+- `up`：以 migration Job（`tools/migrate`，不改程式）建立 `identity_owner`、`identity_app` 與 `identity` schema 並套用 `migrations/postgres/`（Job 套用整個產品，`identity_platform` 與資產服務的角色也會建立，沒綁密碼的維持 `NOLOGIN`）；產生 Ed25519 簽章私鑰（`<狀態目錄>/identity/signing-key.pem`，0600，沿用已有的）。
 - `seed`：建立開發使用者、`admin` 成員資格與一筆 session（寫法照下一節），印出 cookie。
 - `env`：印出 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`（公鑰）、`TRUSTIOT_IDENTITY_SIGNING_KEY_FILE`（路徑）、`TRUSTIOT_INGRESS_ROUTES`（`localhost` 的每個路徑給 `assets`）與 `TRUSTIOT_DEV_IDENTITY_DATABASE_{USERNAME,PASSWORD}`。
 

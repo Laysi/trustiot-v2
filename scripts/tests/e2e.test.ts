@@ -403,7 +403,9 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
         expect(firstState.credentials.services.identity.user).toBe("identity_app");
         expect(firstState.credentials.services.identity.password).toMatch(/^[0-9a-f]{64}$/);
         const roles = await psql(instance, "SELECT rolname || ':' || rolcanlogin || ':' || rolsuper FROM pg_roles WHERE rolname LIKE 'identity_%' OR rolname = 'trustiot_owner' ORDER BY 1");
-        expect(roles).toEqual(["identity_app:true:false", "identity_owner:false:false", "trustiot_owner:true:false"]);
+        // identity_platform exists because identity writes outbox events (Laysi/trustiot-v2#65); no
+        // Secret is bound to it, so it stays NOLOGIN like every role the dev environment does not run.
+        expect(roles).toEqual(["identity_app:true:false", "identity_owner:false:false", "identity_platform:false:false", "trustiot_owner:true:false"]);
         expect(await psql(instance, "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'trustiot'")).toEqual(["trustiot_owner"]);
 
         const printed = await dev(env, "env");

@@ -75,7 +75,7 @@ service-kit 連 Postgres 一律用 `sslmode=verify-full`（Laysi/trustiot-v2#53�
 
 1. 產生 Ed25519 簽章私鑰（`node:crypto`，PKCS#8 PEM），存在 `$XDG_STATE_HOME/trustiot-v2/dev/<實例>/identity/signing-key.pem`（目錄 0700、檔案 0600，與 Postgres 的 CA 同一個狀態目錄）。已經有金鑰就沿用並檢查：不是 Ed25519 PKCS#8 PEM、或其他使用者讀得到的檔案，`up` 拒絕並說明怎麼處理，錯誤訊息不引用檔案內容。沿用是為了讓正在跑的身分服務簽出的 token 不因 `up` 失效，也讓 `TRUSTIOT_INTERNAL_IDENTITY_KEYS` 不變。
 2. 建立 migration 角色 `trustiot_owner`（LOGIN、CREATEROLE、不是 superuser、沒有 BYPASSRLS，並成為資料庫 `trustiot` 的擁有者）：這是 migration Job 要求的形狀（[tools/migrate](../tools/migrate/README.md) 「一次執行做什麼」第 2 步），也是 chart 的 CloudNativePG 給 `trustiot_owner` 的樣子。它的密碼每次 `up` 重新產生，只存在 `up` 的行程與它啟動的 Job 的環境裡，不寫進檔案。
-3. 以 `cargo build --package migrate` 建出 migration Job 的 binary，**不加參數、不用本機專用的設定**執行它（環境變數與 chart 的 Job 相同：`TRUSTIOT_POSTGRES_*`、`TRUSTIOT__POSTGRES__*`、`TRUSTIOT__PASSWORDS__*`），所以 `identity_owner`、`identity_app` 兩個角色、`identity` schema、`database.sql`、`services/identity/migrations/postgres/` 的每個檔案與 RLS 都由 Job 的程式建立，`dev.ts` 沒有另一套套用 DDL 的邏輯。Job 不處理 ClickHouse（沒有設定 ClickHouse 的連線）。
+3. 以 `cargo build --package migrate` 建出 migration Job 的 binary，**不加參數、不用本機專用的設定**執行它（環境變數與 chart 的 Job 相同：`TRUSTIOT_POSTGRES_*`、`TRUSTIOT__POSTGRES__*`、`TRUSTIOT__PASSWORDS__*`），所以 `identity_owner`、`identity_app` 兩個角色、`identity` schema、`database.sql`、`services/identity/migrations/postgres/` 的每個檔案與 RLS 都由 Job 的程式建立，`dev.ts` 沒有另一套套用 DDL 的邏輯。Job 套用整個 `PRODUCT`，所以 Laysi/trustiot-v2#65 起也建立身分服務的 outbox 表與平台角色 `identity_platform`、資產服務的角色與 `assets` schema；只有 `identity_app` 綁了密碼，其他登入角色維持 NOLOGIN。Job 不處理 ClickHouse（沒有設定 ClickHouse 的連線）。
 4. Job 產生的 `identity_app` 密碼存進本機的 state 檔，與其他服務的登入一起（`env` 印出它）。
 
 `example-service` 的角色與密碼仍由 `up` 自己建立（`lib/secrets.ts` 的 `serviceRoleSql`）：它不在 Job 的服務清單（`tools/migrate/src/registry.rs` 的 `PRODUCT`）裡。Job 與 `up` 的角色互不干擾，Job 只動它自己標記過的登入角色。
@@ -173,7 +173,7 @@ bun test scripts                              # 純函式：密碼產生、檔�
 TRUSTIOT_DEV_E2E=1 bun test scripts/tests/e2e.test.ts   # 用 podman 起一份獨立環境，走完 up、seed、換密碼重啟、down、purge，並在主機上啟動身分服務試 ext_authz
 ```
 
-端對端測試要編譯 `migrate`、`identity` 與範例服務（記憶體少的機器設 `CARGO_BUILD_JOBS=2`），用自己的實例名稱、狀態目錄與隨機埠，不會動到平常使用的環境。身分服務的部分：Job 建立的角色形狀（`identity_app` 能登入、`identity_owner` 不能、`trustiot_owner` 擁有資料庫）、`env` 印出的設定能在主機上啟動身分服務並通過 `/readyz`、以 `seed` 印出的 cookie 呼叫 ext_authz 得到 200 與剛好一個 `x-internal-identity`（以 `env` 的公鑰驗證簽章與 claims）、無效、缺少與格式錯誤的 cookie 回 401、對不到路由的主機回 403、私鑰檔權限 0600 且是狀態目錄裡唯一的私鑰、私鑰內容與密碼不在任何指令輸出與服務日誌、`down` 保留金鑰與 cookie（再 `up` 後換了 `identity_app` 的密碼，同一個 cookie 與公鑰仍有效）、`purge` 刪除它們。其餘它另外證明：範例服務以 `verify-full` 連上 Postgres 並通過 `/readyz`；同一個服務映像換成另一個 CA，或換成憑證沒有的主機名稱，仍在執行（`/healthz` 200）但不會就緒（`/readyz` 503）；`down` 之後憑證與私鑰磁碟區都沒了，`purge` 之後狀態目錄與 `tls/` 也沒了；repo 的工作目錄沒有因此多出任何檔案。
+端對端測試要編譯 `migrate`、`identity` 與範例服務（記憶體少的機器設 `CARGO_BUILD_JOBS=2`），用自己的實例名稱、狀態目錄與隨機埠，不會動到平常使用的環境。身分服務的部分：Job 建立的角色形狀（`identity_app` 能登入、`identity_owner` 與 `identity_platform` 不能、`trustiot_owner` 擁有資料庫）、`env` 印出的設定能在主機上啟動身分服務並通過 `/readyz`、以 `seed` 印出的 cookie 呼叫 ext_authz 得到 200 與剛好一個 `x-internal-identity`（以 `env` 的公鑰驗證簽章與 claims）、無效、缺少與格式錯誤的 cookie 回 401、對不到路由的主機回 403、私鑰檔權限 0600 且是狀態目錄裡唯一的私鑰、私鑰內容與密碼不在任何指令輸出與服務日誌、`down` 保留金鑰與 cookie（再 `up` 後換了 `identity_app` 的密碼，同一個 cookie 與公鑰仍有效）、`purge` 刪除它們。其餘它另外證明：範例服務以 `verify-full` 連上 Postgres 並通過 `/readyz`；同一個服務映像換成另一個 CA，或換成憑證沒有的主機名稱，仍在執行（`/healthz` 200）但不會就緒（`/readyz` 503）；`down` 之後憑證與私鑰磁碟區都沒了，`purge` 之後狀態目錄與 `tls/` 也沒了；repo 的工作目錄沒有因此多出任何檔案。
 
 ## 機制的決定（2026-10-10）
 
