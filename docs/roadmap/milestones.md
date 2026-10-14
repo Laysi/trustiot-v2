@@ -28,7 +28,7 @@
 - [x] Cloudflare Tunnel：主機上的 cloudflared 把所有產品流量交給入口 gateway 的 ClusterIP（不開主機埠），入口只接受本機來源，cloudflared 在 systemd 沙箱設定下正常運作；閘道器的 mTLS 包在 WebSocket 內，經 tunnel、入口 gateway 與 MQTT 轉接服務連到 broker，客戶端憑證、CRL 與 dynsec 照常運作；WebSocket 閒置多久會被切斷（MQTT keepalive 要設多短）；Cloudflare 維護時斷線後自動重連，並靠離線緩衝補送；HTTP 串流在 125 秒逾時下靠心跳維持。結果見[可行性測試結果（2026-10-10）](../feasibility/2026-10-10-edge-poc.md)；Pi 上的雙層 TLS 拆成下一項。
 - [ ] 雙層 TLS 在 Pi 上的 CPU 用量與延遲（從 Cloudflare Tunnel 一項拆出）：目前沒有可測的機器，等 lab Pi 到位後與 TPM mTLS 一起測。
 - [ ] 閘道器 Rust 程式用 TPM 金鑰做 mTLS：先試 rustls 外部簽章，不行就改走 tpm2-pkcs11；並驗證用 TPM 金鑰簽伺服器挑戰以換發憑證，以及資料分割區的 LUKS 由 TPM 自動解鎖。
-- [x] 閘道器（trustiot-gw）的記憶體用量：在 lab 的 Pi 上量 OS 基線，加上 Rust 閘道器程式（WebSocket 內的 mTLS、MQTT、離線緩衝、Modbus 輪詢）在不同設備數與緩衝量下的尖峰，用來評估閘道器採購的記憶體規格。結果見[可行性測試結果（2026-10-13）](../feasibility/2026-10-13-gateway-memory.md)：OS 基線約 160 MiB，程式尖峰約 9 MiB 加緩衝上限；建議 G1 的記憶體上限預設 16 MiB、上限 64 MiB，採購最低 1 GB、建議 2 GB（待人確認）。
+- [x] 閘道器（trustiot-gw）的記憶體用量：在 lab 的 Pi 上量 OS 基線，加上 Rust 閘道器程式（WebSocket 內的 mTLS、MQTT、離線緩衝、Modbus 輪詢）在不同設備數與緩衝量下的尖峰，用來評估閘道器採購的記憶體規格。結果見[可行性測試結果（2026-10-13）](../feasibility/2026-10-13-gateway-memory.md)：OS 基線約 160 MiB，程式尖峰約 9 MiB 加緩衝上限；建議 G1 的記憶體上限預設 16 MiB、上限 64 MiB，採購最低 1 GB、建議 2 GB（2026-10-14 使用者同意）。
 - [x] 薄的 OpenAI 相容 client 搭配 vLLM、Ollama：工具呼叫、用量、推理欄位、串流取消、區分 429 與逾時，以及地端模型做 SQL 分析的品質。
 - [x] 警報腳本 Rhai 與 WASM 比較：AI 寫對的比例、沙箱限制（規則改為只在雲端執行，不需在 Pi 上測）。
 - [ ] 自建 OTA 在 lab 的 Pi 上驗證自動回滾。

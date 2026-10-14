@@ -1,12 +1,12 @@
 # 閘道器（trustiot-gw）的記憶體用量與採購規格：lab Pi 實測（2026-10-12 至 2026-10-13）
 
-對應 issue：Laysi/trustiot-v2#76。原始資料在 [data/2026-10-13-76-gateway-memory/](data/2026-10-13-76-gateway-memory/)，結論與建議在[可行性測試結果（2026-10-13）](../feasibility/2026-10-13-gateway-memory.md)。
+對應 issue：Laysi/trustiot-v2#76。原始資料在 [data/2026-10-13-76-gateway-memory/](data/2026-10-13-76-gateway-memory/)（Pi 的主機名稱已換成 `<pi>`），結論與建議在[可行性測試結果（2026-10-13）](../feasibility/2026-10-13-gateway-memory.md)。
 
 在 lab 的 Raspberry Pi 4（2 GB）量 OS 基線，再以 Rust 閘道器雛形（Modbus 輪詢、protocol crate 的 `BatchBuilder` 與 CBOR、超過記憶體上限寫磁碟的離線緩衝、MQTT 5、WebSocket 內的 mTLS）量不同設備數與緩衝上限下的尖峰記憶體，包含上傳中斷、配置器與 zram 交換的影響。
 
 ## 環境
 
-- **機器**：lab 的 Raspberry Pi 4 Model B Rev 1.4（`trustiot-lab`），2 GB（可見 1,844 MiB），Raspberry Pi OS Lite arm64（Debian 13.7），kernel 6.18.50+rpt-rpi-v8，glibc 2.41，systemd 257。zram swap 1.8 GiB（zstd，優先序 100），`vm.swappiness` 60，核心命令列含 `cgroup_disable=memory`。
+- **機器**：lab 的 Raspberry Pi 4 Model B Rev 1.4，2 GB（可見 1,844 MiB），Raspberry Pi OS Lite arm64（Debian 13.7），kernel 6.18.50+rpt-rpi-v8，glibc 2.41，systemd 257。zram swap 1.8 GiB（zstd，優先序 100），`vm.swappiness` 60，核心命令列含 `cgroup_disable=memory`。
 - **Pi 上的 OS 狀態**：13 個執行中的服務（NetworkManager、wpa\_supplicant、bluetooth、avahi-daemon、ssh、journald、udevd、logind、timesyncd、cron、dbus、getty\@tty1、user\@1000）；649 個套件，含 Laysi/trustiot-v2#74 留下的 `tpm2-tools`、`cryptsetup-bin`、`systemd-cryptsetup`、`tpm-udev` 與 `dtoverlay=tpm-slb9670-ce0`，沒有 TPM 常駐服務，#74 的 LUKS 測試容器與 crypttab 項目已移除。清單在 [baseline-info/](data/2026-10-13-76-gateway-memory/baseline-info/)（2026-10-13）與 [baseline-info-prereboot/](data/2026-10-13-76-gateway-memory/baseline-info-prereboot/)（2026-10-12，#74 重開機之前，套件清單相同）。
 - **工作站**：Fedora 44（kernel 7.2.8），podman 5.8.7，proto 0.62.3，Bun 1.4.2，Rust 1.99.0（`.prototools` 與 `rust-toolchain.toml` 的版本），Zig 0.16.0 與 cargo-zigbuild 0.23.4（`.prototools` 的版本），openssl 3.5.9。
 - **伺服器端**（工作站，podman 無根）：Mosquitto 2.1.2（`docker.io/library/eclipse-mosquitto@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408`，mTLS 監聽 `require_certificate true`、`use_identity_as_username true`、`tls_version tlsv1.3`，另有只在本機回送位址發布的明文監聽給雲端模擬器）；Modbus 模擬器在 `docker.io/library/debian:bookworm-slim@sha256:a4672c0cb26fbdde88e38fa2dfb6c681942306680e41e4378b28770b6e79ee91` 內（由 glibc 2.36 為目標的二進位檔，Modbus TCP 與 RTU-over-TCP 兩個埠）；WebSocket 轉接（外層 TLS 終結、WebSocket 轉成到 Mosquitto 的 TCP）與雲端模擬器（解碼每批、依（閘道器，串流）追蹤序號高水位、回傳 `TelemetryAck`）是原生程式。埠 18761（轉接）、18762 與 18763（Mosquitto）、18764 與 18765（Modbus）。測試 CA 與所有憑證與金鑰由 `openssl`（ECDSA P-256）在測試時產生、有效 30 天、沒有提交；用戶端金鑰測完已從 Pi 刪除。
