@@ -60,8 +60,20 @@ describe("chartImage", () => {
     expect(chartImage("postgres", VALUES)).toEqual(POSTGRES);
     expect(chartImage("migrate", VALUES)).toEqual(MIGRATE);
     expect(chartImage("identity", VALUES)).toEqual(IDENTITY);
-    expect(chartImage("release-selftest", VALUES)).toBeUndefined();
     expect(() => chartImage("factory-tool", VALUES)).toThrow(/neither deployed by the chart/);
+    // No published image is undeployed at the moment, so the skip is checked with a set of its own.
+    const notDeployed = new Set(["factory-tool"]);
+    expect(chartImage("factory-tool", VALUES, notDeployed)).toBeUndefined();
+    expect(chartImage("identity", VALUES, notDeployed)).toEqual(IDENTITY);
+  });
+
+  test("chartPins pins every published image the chart deploys and skips the ones it does not", () => {
+    const specs = [...discoverImages(ROOT), { kind: "rust" as const, name: "factory-tool", package: "factory-tool" }];
+    const planned = specs.map((spec) => planImage(spec, VERSION, REGISTRY));
+    const published = planned.map((image) => ({ name: image.name, ref: image.ref, digest: digest("e") }));
+    expect(() => chartPins(planned, published, VALUES)).toThrow(/factory-tool/);
+    const pins = chartPins(planned, published, VALUES, new Set(["factory-tool"]));
+    expect(pins.map((pin) => pin.image.name).sort()).toEqual(discoverImages(ROOT).map((spec) => spec.name).sort());
   });
 
   test("every image under deploy/images is either deployed by the chart or listed as not deployed", () => {
