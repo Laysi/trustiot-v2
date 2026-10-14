@@ -18,10 +18,10 @@ Bun + TypeScript 腳本：本地一鍵啟動（清單 M6）、種子資料、CI 
 
 | 動作 | 指令 | 說明 |
 | --- | --- | --- |
-| 啟動 | `bun scripts/dev.ts up` | 產生新的密碼、起好所有容器並等到每項健康檢查都通過，再以 migration Job（`tools/migrate`）建立身分服務的角色並套用它的 migration；有任何一項失敗就以非 0 結束。身分服務的簽章金鑰在這時產生（已有就沿用）；身分服務本身不由 `up` 啟動，見下方「身分服務」 |
+| 啟動 | `bun scripts/dev.ts up` | 產生新的密碼、起好所有容器並等到每項健康檢查都通過，再以 migration Job（`tools/migrate`）建立每個服務的角色、套用它的 migration，並為每個登入角色產生密碼（見「migration Job 與服務的登入角色」）；有任何一項失敗就以非 0 結束。身分服務的簽章金鑰在這時產生（已有就沿用）；身分服務本身不由 `up` 啟動，見下方「身分服務」 |
 | 種子資料 | `bun scripts/dev.ts seed` | 載入開發用資料（含身分服務的開發使用者、租戶成員資格與 session），可重複執行，結束前讀回確認；印出開發 session 的 cookie |
 | 狀態 | `bun scripts/dev.ts status` | 重跑健康與安全檢查（含「錯誤密碼與匿名連線被拒」） |
-| 連線設定 | `bun scripts/dev.ts env` | 以 `KEY=value` 印出連線設定與密碼，輸出含標準的 `PG*` 變數（含 TLS：`PGSSLMODE=verify-full`、`PGSSLROOTCERT`）與服務的 `TRUSTIOT_POSTGRES_*` 平台設定，bash 可用 `set -a; eval "$(bun scripts/dev.ts env)"; set +a`，之後直接 `psql`；見下方「Postgres 的 TLS」；身分服務要的設定（公鑰、私鑰路徑、路由、`identity_app` 帳密）見「身分服務」 |
+| 連線設定 | `bun scripts/dev.ts env` | 以 `KEY=value` 印出連線設定與密碼，輸出含標準的 `PG*` 變數（含 TLS：`PGSSLMODE=verify-full`、`PGSSLROOTCERT`）與服務的 `TRUSTIOT_POSTGRES_*` 平台設定，bash 可用 `set -a; eval "$(bun scripts/dev.ts env)"; set +a`，之後直接 `psql`；見下方「Postgres 的 TLS」；每個服務登入角色的帳密（`identity_app`、`assets_app`、`assets_platform`）見「migration Job 與服務的登入角色」；身分服務要的其他設定（公鑰、私鑰路徑、路由）見「身分服務」 |
 | 關閉 | `bun scripts/dev.ts down` | 移除容器與網路，刪除密碼、憑證與伺服器私鑰；資料磁碟區保留，身分服務的簽章金鑰與開發 session 的 cookie 也保留（資料磁碟區裡的 session 還在，見「身分服務」） |
 | 清除 | `bun scripts/dev.ts purge` | 移除容器、網路、資料磁碟區（含 session）、建好的服務映像、密碼、憑證、簽章金鑰與狀態；加 `--images` 連拉下來的映像一併移除 |
 
@@ -69,35 +69,66 @@ service-kit 連 Postgres 一律用 `sslmode=verify-full`（Laysi/trustiot-v2#53�
 - 憑證 90 天後過期；長時間開著的環境在 `status` 會失敗，`down` 再 `up` 即換新。
 - 從加入 TLS 之前啟動的環境升級：`status`、`seed`、`env` 會說狀態檔是舊版寫的；先 `bun scripts/dev.ts down`（不讀狀態檔，移除舊容器，資料磁碟區保留，沒有 TLS 磁碟區也沒關係）再 `up`，資料與種子都還在，不需要 `purge`。
 
-### 身分服務
+### migration Job 與服務的登入角色
 
-身分服務（`services/identity`，Laysi/trustiot-v2#61）在本機的前提由 `up` 與 `seed` 備好，服務本身在主機上以 `cargo run -p identity` 啟動（Laysi/trustiot-v2#336；容器映像與 chart 的啟用在 Laysi/trustiot-v2#68、Laysi/trustiot-v2#308）。本機沒有入口 gateway 或 Istio，ext_authz 直接呼叫服務的 `/internal/ext-authz<路徑>`。
+`up` 以 migration Job（`tools/migrate`）建立 `PRODUCT`（`tools/migrate/src/registry.rs`）每個服務的角色與 schema，並讓服務的登入角色能以 `env` 印出的帳密登入（Laysi/trustiot-v2#336、Laysi/trustiot-v2#407）。這一節適用每個服務；身分服務自己的前提（簽章金鑰、開發 session）見下一節「身分服務」。
 
 #### `up` 做的事
 
-1. 產生 Ed25519 簽章私鑰（`node:crypto`，PKCS#8 PEM），存在 `$XDG_STATE_HOME/trustiot-v2/dev/<實例>/identity/signing-key.pem`（目錄 0700、檔案 0600，與 Postgres 的 CA 同一個狀態目錄）。已經有金鑰就沿用並檢查：不是 Ed25519 PKCS#8 PEM、或其他使用者讀得到的檔案，`up` 拒絕並說明怎麼處理，錯誤訊息不引用檔案內容。沿用是為了讓正在跑的身分服務簽出的 token 不因 `up` 失效，也讓 `TRUSTIOT_INTERNAL_IDENTITY_KEYS` 不變。
-2. 建立 migration 角色 `trustiot_owner`（LOGIN、CREATEROLE、不是 superuser、沒有 BYPASSRLS，並成為資料庫 `trustiot` 的擁有者）：這是 migration Job 要求的形狀（[tools/migrate](../tools/migrate/README.md) 「一次執行做什麼」第 2 步），也是 chart 的 CloudNativePG 給 `trustiot_owner` 的樣子。它的密碼每次 `up` 重新產生，只存在 `up` 的行程與它啟動的 Job 的環境裡，不寫進檔案。
-3. 以 `cargo build --package migrate` 建出 migration Job 的 binary，**不加參數、不用本機專用的設定**執行它（環境變數與 chart 的 Job 相同：`TRUSTIOT_POSTGRES_*`、`TRUSTIOT__POSTGRES__*`、`TRUSTIOT__PASSWORDS__*`），所以 `identity_owner`、`identity_app` 兩個角色、`identity` schema、`database.sql`、`services/identity/migrations/postgres/` 的每個檔案與 RLS 都由 Job 的程式建立，`dev.ts` 沒有另一套套用 DDL 的邏輯。Job 套用整個 `PRODUCT`，所以 Laysi/trustiot-v2#65 起也建立身分服務的 outbox 表與平台角色 `identity_platform`、資產服務的角色與 `assets` schema；只有 `identity_app` 綁了密碼，其他登入角色維持 NOLOGIN。Job 不處理 ClickHouse（沒有設定 ClickHouse 的連線）。
-4. Job 產生的 `identity_app` 密碼存進本機的 state 檔，與其他服務的登入一起（`env` 印出它）。
+1. 建立 migration 角色 `trustiot_owner`（LOGIN、CREATEROLE、不是 superuser、沒有 BYPASSRLS，並成為資料庫 `trustiot` 的擁有者）：這是 migration Job 要求的形狀（[tools/migrate](../tools/migrate/README.md) 「一次執行做什麼」第 2 步），也是 chart 的 CloudNativePG 給 `trustiot_owner` 的樣子。它的密碼每次 `up` 重新產生，只存在 `up` 的行程與它啟動的 Job 的環境裡，不寫進檔案。
+2. 以 `cargo build --package migrate` 建出 migration Job 的 binary，**不加參數、不用本機專用的設定**執行它（環境變數與 chart 的 Job 相同：`TRUSTIOT_POSTGRES_*`、`TRUSTIOT__POSTGRES__*`、`TRUSTIOT__PASSWORDS__*`），所以每個服務的 `<schema>_owner`、`<schema>_app`（有平台角色的服務還有 `<schema>_platform`）、schema、`database.sql`、`services/<名稱>/migrations/postgres/` 的每個檔案、outbox 表與 RLS 都由 Job 的程式建立，`dev.ts` 沒有另一套套用 DDL 的邏輯。Job 不處理 ClickHouse（沒有設定 ClickHouse 的連線）。
+3. Job 為每個綁了 Secret 的登入角色產生的密碼存進本機的 state 檔，與其他服務的登入一起（`env` 印出它們，見下）。
 
-`example-service` 的角色與密碼仍由 `up` 自己建立（`lib/secrets.ts` 的 `serviceRoleSql`）：它不在 Job 的服務清單（`tools/migrate/src/registry.rs` 的 `PRODUCT`）裡。Job 與 `up` 的角色互不干擾，Job 只動它自己標記過的登入角色。
+`example-service` 的角色與密碼仍由 `up` 自己建立（`lib/secrets.ts` 的 `serviceRoleSql`）：它不在 Job 的服務清單（`PRODUCT`）裡。Job 與 `up` 的角色互不干擾，Job 只動它自己標記過的登入角色。
+
+#### 哪些角色綁密碼
+
+登入角色只在綁了 Secret 時能登入，Job 把沒有綁定的設成 NOLOGIN（`tools/migrate/src/lib.rs` 的 `Report::roles_without_password`）。本機綁的角色與 chart 相同（`deploy/chart/templates/_migrate.tpl` 的 `trustiot.migrate.passwordSecrets`）：
+
+- `PRODUCT` 每個服務的 `<schema>_app`；
+- chart 的 `trustiot.migrate.platformLogins` 列出的服務的 `<schema>_platform`（outbox 的消費端以它讀 producer 的事件，Laysi/trustiot-v2#65；目前是 `assets`）。其他平台角色（`identity_platform`）沒有程式以它連線，chart 不綁，本機也不綁，維持 NOLOGIN；`<schema>_owner` 只供 Job 與 `seed` 以 `SET ROLE` 使用，永遠不能登入。
+
+清單在 `lib/product-logins.ts`（`PRODUCT_SERVICES`、`PLATFORM_LOGIN_SERVICES`），`up` 與 `env` 都由它得出角色、Secret 與 state 的鍵：每個服務一個 Secret `dev-<服務>-password`（與 chart 的 `<release>-<服務>-password` 一樣，一個 Secret 放兩個 key），state 檔的鍵是服務名稱（平台角色是 `<服務>-platform`）。`tests/product-logins.test.ts` 讀 `registry.rs` 與 `_migrate.tpl`，在 `PRODUCT` 多一個服務、或 chart 多綁一個平台角色而這份清單沒跟上時失敗，訊息說明要改 `lib/product-logins.ts` 的哪一個清單。
+
+**新增一個服務到 `PRODUCT` 時**：把服務名稱加進 `PRODUCT_SERVICES`；它的平台角色若由 chart 綁（加進 `trustiot.migrate.platformLogins`），也加進 `PLATFORM_LOGIN_SERVICES`。其餘（Secret 的宣告、`env` 的變數、state 檔）都由清單產生，不必再改。
 
 #### 密碼的決定（2026-10-14）
 
-叢集裡，Job 把每個服務登入角色的密碼產生到 Kubernetes Secret（`TRUSTIOT__PASSWORDS__*`：API 位址、namespace、token 檔、CA 檔），沒有綁定 Secret 的登入角色是 NOLOGIN。本機沒有 Kubernetes，所以要決定 `identity_app` 的密碼從哪裡來。
+叢集裡，Job 把每個服務登入角色的密碼產生到 Kubernetes Secret（`TRUSTIOT__PASSWORDS__*`：API 位址、namespace、token 檔、CA 檔），沒有綁定 Secret 的登入角色是 NOLOGIN。本機沒有 Kubernetes，所以要決定服務登入角色的密碼從哪裡來。
 
 | 做法 | 取捨 |
 | --- | --- |
-| **本機的 Secret API 替身（採用）**：`lib/secret-api.ts`，`up` 在 Job 執行的這段時間於 127.0.0.1 起一個只回答 Job 問的兩種請求（`GET` 與帶 `resourceVersion` 的 merge `PATCH`）的伺服器，宣告一個空的 Secret，Job 用它的一般路徑填入 | `tools/migrate` 一行都不改，Job 的程式路徑（產生 256 位元密碼、patch、以密碼登入、登不進去才 `ALTER ROLE`、再 `LOGIN`）與叢集相同；代價是多維護一個約 150 行的替身，它得跟 Job 對 API 的用法同步（`tests/secret-api.test.ts` 與端對端測試會在不同步時失敗） |
+| **本機的 Secret API 替身（採用）**：`lib/secret-api.ts`，`up` 在 Job 執行的這段時間於 127.0.0.1 起一個只回答 Job 問的兩種請求（`GET` 與帶 `resourceVersion` 的 merge `PATCH`）的伺服器，宣告空的 Secret（每個服務一個，同 chart），Job 用它的一般路徑填入 | `tools/migrate` 一行都不改，Job 的程式路徑（產生 256 位元密碼、patch、以密碼登入、登不進去才 `ALTER ROLE`、再 `LOGIN`）與叢集相同；代價是多維護一個約 150 行的替身，它得跟 Job 對 API 的用法同步（`tests/secret-api.test.ts` 與端對端測試會在不同步時失敗） |
 | 讓 `tools/migrate` 接受本機用的另一個密碼來源（例如從檔案或環境變數讀） | 本機不需要替身，但 Job 多出只有本機走的路徑：產品程式裡的「本機例外」會讓叢集與本機行為分岔，也多一條可能被誤設的設定（`tools/migrate` 的信任邊界是 Secret API） |
 | `dev.ts` 自己 `ALTER ROLE ... LOGIN PASSWORD` | 最簡單，但等於在 `dev.ts` 另寫一套 Job 的角色邏輯，Job 把角色留成 NOLOGIN 時本機與叢集看到的狀態不同，違反「不要另寫一套」 |
 
 替身的細節：
 
 - 只聽 `127.0.0.1` 的隨機埠，每個請求要帶本次產生的 bearer token（256 位元，放在 `kube-token.<隨機>` 檔，0600，Job 結束就刪除；Job 的 `TRUSTIOT__PASSWORDS__API_URL` 是 `http://127.0.0.1:<埠>`，這是 Job 為測試與這個用途保留的唯一的非 TLS 位址）。
-- Secret 只在記憶體裡，`up` 讀回 `identity_app` 的值之後伺服器就關閉；密碼不寫進替身自己的檔案，只進 state 檔（`state.json`，0600，`down` 與 `purge` 刪除），與其他本機帳密相同。每次 `up` 的 Secret 是新的物件，所以 Job 每次都產生新密碼並以 `ALTER ROLE` 換掉資料磁碟區裡舊的，行為與「Secret 被刪除後重建」相同。
-- 密碼不出現在任何指令列：Job 只透過環境變數與 token 檔收到設定（不帶參數，環境不繼承呼叫者的 `TRUSTIOT*`）；Job 失敗時印出它的日誌，印出前把已知的密碼與 token 取代掉（Job 本來就不記錄密碼）；`up`、`status`、`seed` 都不印密碼，`env` 是唯一印出 `identity_app` 密碼的指令（issue 的範圍要求）。
+- Secret 只在記憶體裡，`up` 讀回每個登入角色的值之後伺服器就關閉；密碼不寫進替身自己的檔案，只進 state 檔（`state.json`，0600，`down` 與 `purge` 刪除），與其他本機帳密相同。每次 `up` 的 Secret 是新的物件，所以 Job 每次都產生新密碼並以 `ALTER ROLE` 換掉資料磁碟區裡舊的，行為與「Secret 被刪除後重建」相同。
+- 密碼不出現在任何指令列：Job 只透過環境變數與 token 檔收到設定（不帶參數，環境不繼承呼叫者的 `TRUSTIOT*`）；Job 失敗時印出它的日誌，印出前把已知的密碼與 token 取代掉（Job 本來就不記錄密碼）；`up`、`status`、`seed` 都不印密碼，`env` 是唯一印出服務登入密碼的指令（issue 的範圍要求）。
 
+#### `env` 印出的服務登入
+
+每個綁了密碼的登入角色印兩個變數，名稱照 `TRUSTIOT_DEV_<服務>_DATABASE_{USERNAME,PASSWORD}` 的慣例（服務名稱大寫、`-` 寫成 `_`）：
+
+| 變數 | 角色 |
+| --- | --- |
+| `TRUSTIOT_DEV_IDENTITY_DATABASE_USERNAME`、`..._PASSWORD` | `identity_app` |
+| `TRUSTIOT_DEV_ASSETS_DATABASE_USERNAME`、`..._PASSWORD` | `assets_app` |
+| `TRUSTIOT_DEV_ASSETS_PLATFORM_DATABASE_USERNAME`、`..._PASSWORD` | `assets_platform` |
+
+使用者把它們設成服務讀的 `TRUSTIOT__DATABASE__USERNAME` 與 `TRUSTIOT__DATABASE__PASSWORD`（平台角色是 chart 給服務的 `TRUSTIOT__DATABASE__PLATFORM_USERNAME` 與 `TRUSTIOT__DATABASE__PLATFORM_PASSWORD`）。端對端測試以這些帳密逐一以 `verify-full` 登入本機 Postgres。
+
+### 身分服務
+
+身分服務（`services/identity`，Laysi/trustiot-v2#61）在本機的前提由 `up` 與 `seed` 備好，服務本身在主機上以 `cargo run -p identity` 啟動（Laysi/trustiot-v2#336；容器映像與 chart 的啟用在 Laysi/trustiot-v2#68、Laysi/trustiot-v2#308）。本機沒有入口 gateway 或 Istio，ext_authz 直接呼叫服務的 `/internal/ext-authz<路徑>`。
+
+#### `up` 做的事
+
+身分服務的前提有一步在 `up` 做；Job 與它的角色見上一節。
+
+1. 產生 Ed25519 簽章私鑰（`node:crypto`，PKCS#8 PEM），存在 `$XDG_STATE_HOME/trustiot-v2/dev/<實例>/identity/signing-key.pem`（目錄 0700、檔案 0600，與 Postgres 的 CA 同一個狀態目錄）。已經有金鑰就沿用並檢查：不是 Ed25519 PKCS#8 PEM、或其他使用者讀得到的檔案，`up` 拒絕並說明怎麼處理，錯誤訊息不引用檔案內容。沿用是為了讓正在跑的身分服務簽出的 token 不因 `up` 失效，也讓 `TRUSTIOT_INTERNAL_IDENTITY_KEYS` 不變。
 #### `env` 印出的變數怎麼依服務區分
 
 `env` 一次印出全部，服務各讀自己要的（服務忽略不認得的平台設定，kit 的規則）；含 JSON 的值以單引號包起來，`eval` 與 dotenv 讀得懂，`podman --env-file` 不會用到它們：
@@ -107,7 +138,7 @@ service-kit 連 Postgres 一律用 `sslmode=verify-full`（Laysi/trustiot-v2#53�
 | `TRUSTIOT_INTERNAL_IDENTITY_KEYS` | 所有以 service-kit 驗證內部身分的服務，也包含身分服務自己 | JWK Set（只有公鑰；`kid` 是 `dev-` 加公鑰雜湊的前 12 個字元，換金鑰就換 `kid`）；身分服務在簽章私鑰的公鑰不在這裡時拒絕啟動 |
 | `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` | 只有身分服務 | 私鑰檔的**路徑**，不是內容 |
 | `TRUSTIOT_INGRESS_ROUTES` | 只有身分服務 | 本機的 cookie 路由：`localhost` 的每個路徑（`PathPrefix /`）給 `assets`（kit 的範例服務 `GET /v1/whoami` 接受的受眾）；沒有入口 gateway，所以呼叫 ext_authz 的人自己帶 `Host: localhost` |
-| `TRUSTIOT_DEV_IDENTITY_DATABASE_USERNAME`、`..._PASSWORD` | 只有身分服務 | `identity_app` 與 Job 產生的密碼；照其他服務的慣例（見「Postgres 的 TLS」），由使用者設成服務讀的 `TRUSTIOT__DATABASE__USERNAME` 與 `TRUSTIOT__DATABASE__PASSWORD` |
+| `TRUSTIOT_DEV_IDENTITY_DATABASE_USERNAME`、`..._PASSWORD` | 只有身分服務 | `identity_app` 與 Job 產生的密碼，見上一節「`env` 印出的服務登入」 |
 | `TRUSTIOT_POSTGRES_*` | 所有服務 | 與原本相同（`verify-full`、開發 CA 的路徑） |
 
 #### 在主機上啟動身分服務
@@ -166,7 +197,7 @@ curl -i -H 'Host: localhost' -H 'Cookie: __Host-trustiot-session=<seed 印出的
 
 ### 新增服務
 
-在 `lib/services.ts` 的 `SERVICES` 加一筆：服務名稱（chart 的 `services` key）、Cargo package 與 bin、預設本機埠、`TRUSTIOT__<SECTION>__<KEY>` 形式的服務設定。`up` 會以 cargo 編譯、包成映像（`FROM` 是以 digest 鎖定的 distroless）、接上網路、把平台設定（`TRUSTIOT_<NAME>`，名稱與 [deploy/chart/README.md](../deploy/chart/README.md) 相同）當環境變數交給它，並檢查 `/healthz` 與 `/readyz`。服務監聽 8080（chart 的約定）。服務要用 Postgres 時，在 `SERVICES` 的項目加 `database: { role: "<角色名稱>" }`，`up` 會建立這個角色並把帳密交給服務（見上方「Postgres 的 TLS」）；平台設定已含 `verify-full` 與 CA。正式環境的每個服務一個資料庫角色（決策 4）、migration 與角色的權限由 migration Job（[tools/migrate](../tools/migrate/README.md)）處理。`up` 現在會跑這個 Job（見「身分服務」），所以服務已在 Job 的服務清單（`registry.rs` 的 `PRODUCT`）裡的話，不要再在 `database` 宣告角色：Job 建它的 `<schema>_app`，密碼經 Secret 替身取得（`lib/migrate.ts` 的 `roles` 與 `commands.ts` 的 `migrateDatabase`）；不在清單裡的服務（例如 `example-service`）仍由 `up` 建立一般的登入角色，沒有任何資料表權限。
+在 `lib/services.ts` 的 `SERVICES` 加一筆：服務名稱（chart 的 `services` key）、Cargo package 與 bin、預設本機埠、`TRUSTIOT__<SECTION>__<KEY>` 形式的服務設定。`up` 會以 cargo 編譯、包成映像（`FROM` 是以 digest 鎖定的 distroless）、接上網路、把平台設定（`TRUSTIOT_<NAME>`，名稱與 [deploy/chart/README.md](../deploy/chart/README.md) 相同）當環境變數交給它，並檢查 `/healthz` 與 `/readyz`。服務監聽 8080（chart 的約定）。服務要用 Postgres 時，在 `SERVICES` 的項目加 `database: { role: "<角色名稱>" }`，`up` 會建立這個角色並把帳密交給服務（見上方「Postgres 的 TLS」）；平台設定已含 `verify-full` 與 CA。正式環境的每個服務一個資料庫角色（決策 4）、migration 與角色的權限由 migration Job（[tools/migrate](../tools/migrate/README.md)）處理。`up` 現在會跑這個 Job（見「migration Job 與服務的登入角色」），所以服務已在 Job 的服務清單（`registry.rs` 的 `PRODUCT`）裡的話，不要再在 `database` 宣告角色：Job 建它的 `<schema>_app`，密碼經 Secret 替身取得，要在 `lib/product-logins.ts` 登記（`tests/product-logins.test.ts` 在漏登記時失敗）；不在清單裡的服務（例如 `example-service`）仍由 `up` 建立一般的登入角色，沒有任何資料表權限。
 
 ### 測試
 
@@ -175,7 +206,7 @@ bun test scripts                              # 純函式：密碼產生、檔�
 TRUSTIOT_DEV_E2E=1 bun test scripts/tests/e2e.test.ts   # 用 podman 起一份獨立環境，走完 up、seed、換密碼重啟、down、purge，並在主機上啟動身分服務試 ext_authz
 ```
 
-端對端測試要編譯 `migrate`、`identity` 與範例服務（記憶體少的機器設 `CARGO_BUILD_JOBS=2`），用自己的實例名稱、狀態目錄與隨機埠，不會動到平常使用的環境。身分服務的部分：Job 建立的角色形狀（`identity_app` 能登入、`identity_owner` 與 `identity_platform` 不能、`trustiot_owner` 擁有資料庫）、`env` 印出的設定能在主機上啟動身分服務並通過 `/readyz`、以 `seed` 印出的 cookie 呼叫 ext_authz 得到 200 與剛好一個 `x-internal-identity`（以 `env` 的公鑰驗證簽章與 claims）、無效、缺少與格式錯誤的 cookie 回 401、對不到路由的主機回 403、私鑰檔權限 0600 且是狀態目錄裡唯一的私鑰、私鑰內容與密碼不在任何指令輸出與服務日誌、`down` 保留金鑰與 cookie（再 `up` 後換了 `identity_app` 的密碼，同一個 cookie 與公鑰仍有效）、`purge` 刪除它們。其餘它另外證明：範例服務以 `verify-full` 連上 Postgres 並通過 `/readyz`；同一個服務映像換成另一個 CA，或換成憑證沒有的主機名稱，仍在執行（`/healthz` 200）但不會就緒（`/readyz` 503）；`down` 之後憑證與私鑰磁碟區都沒了，`purge` 之後狀態目錄與 `tls/` 也沒了；repo 的工作目錄沒有因此多出任何檔案。另有兩個情境測試（Laysi/trustiot-v2#406）：先以 `podman pull --platform` 在儲存裡放進別的架構的服務基底，或別的架構的 Mosquitto，再 `up`，證明服務映像與 Mosquitto 都是這台機器的架構、服務就緒；儲存裡本來就有別的架構的複本時測試直接拒絕執行、不改動任何東西；否則測試結束時把名稱還原成原生複本，並以映像 ID 移除自己拉的那份，不動儲存裡其他映像。因為會改動 podman 儲存裡的映像，同一台機器上不要同時跑兩份端對端測試。
+端對端測試要編譯 `migrate`、`identity` 與範例服務（記憶體少的機器設 `CARGO_BUILD_JOBS=2`），用自己的實例名稱、狀態目錄與隨機埠，不會動到平常使用的環境。身分服務的部分：Job 建立的角色形狀（`PRODUCT` 每個服務綁了密碼的登入角色 `identity_app`、`assets_app`、`assets_platform` 能登入，`identity_owner`、`identity_platform`、`assets_owner` 不能，`trustiot_owner` 擁有資料庫）、`env` 印出的每個登入角色的帳密都能以 `verify-full` 登入本機 Postgres、沒綁密碼的角色登不進去、再 `up` 之後每個登入角色換了密碼且舊密碼失效、`env` 印出的設定能在主機上啟動身分服務並通過 `/readyz`、以 `seed` 印出的 cookie 呼叫 ext_authz 得到 200 與剛好一個 `x-internal-identity`（以 `env` 的公鑰驗證簽章與 claims）、無效、缺少與格式錯誤的 cookie 回 401、對不到路由的主機回 403、私鑰檔權限 0600 且是狀態目錄裡唯一的私鑰、私鑰內容與密碼不在任何指令輸出與服務日誌、`down` 保留金鑰與 cookie（再 `up` 後換了 `identity_app` 的密碼，同一個 cookie 與公鑰仍有效）、`purge` 刪除它們。其餘它另外證明：範例服務以 `verify-full` 連上 Postgres 並通過 `/readyz`；同一個服務映像換成另一個 CA，或換成憑證沒有的主機名稱，仍在執行（`/healthz` 200）但不會就緒（`/readyz` 503）；`down` 之後憑證與私鑰磁碟區都沒了，`purge` 之後狀態目錄與 `tls/` 也沒了；repo 的工作目錄沒有因此多出任何檔案。另有兩個情境測試（Laysi/trustiot-v2#406）：先以 `podman pull --platform` 在儲存裡放進別的架構的服務基底，或別的架構的 Mosquitto，再 `up`，證明服務映像與 Mosquitto 都是這台機器的架構、服務就緒；儲存裡本來就有別的架構的複本時測試直接拒絕執行、不改動任何東西；否則測試結束時把名稱還原成原生複本，並以映像 ID 移除自己拉的那份，不動儲存裡其他映像。因為會改動 podman 儲存裡的映像，同一台機器上不要同時跑兩份端對端測試。
 
 ## 機制的決定（2026-10-10）
 
@@ -191,7 +222,7 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 
 - Postgres 映像是官方的 `apache/age`；正式環境是 CloudNativePG 加自建的 AGE 映像（[deploy/images/postgres](../deploy/images/postgres/README.md)，同為 PostgreSQL 18 與 AGE 1.8.0）。
 - Postgres 的 TLS 憑證來自 `up` 當場產生的開發 CA（2026-10-11，Laysi/trustiot-v2#273），服務與在叢集裡一樣以 `verify-full` 連線；正式環境的憑證由 CloudNativePG 的 CA 或外部 Postgres 的 CA 簽發，CA 由 chart 的 `caSecret` 掛載。這裡的 CA 與伺服器憑證只管本機，每次 `up` 重新產生，信任範圍只有這個實例的服務與工具。
-- 服務登入角色的密碼：叢集由 migration Job 產生進 Kubernetes Secret；本機的 Job 是同一個 binary，Secret 由 `lib/secret-api.ts` 的替身提供（「身分服務」的「密碼的決定」）。替身不驗證 ServiceAccount 與 RBAC，那些由 lab 的 chart 測試驗證。
+- 服務登入角色的密碼：叢集由 migration Job 產生進 Kubernetes Secret；本機的 Job 是同一個 binary，Secret 由 `lib/secret-api.ts` 的替身提供（「migration Job 與服務的登入角色」的「密碼的決定」）。替身不驗證 ServiceAccount 與 RBAC，那些由 lab 的 chart 測試驗證。
 - Mosquitto 用靜態的帳號、ACL 檔，不加 TLS、不用 dynsec、不經 mqtt-bridge（決策 6 的正式設定在 Laysi/trustiot-v2#84）。
 
 ## CI 檢查

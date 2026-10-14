@@ -12,9 +12,7 @@ import {
   DEV_TENANT_ID,
   DEV_USER_ID,
   ensureSigningKey,
-  IDENTITY_APP_ROLE,
   IDENTITY_DIR,
-  IDENTITY_SERVICE,
   identityEnv,
   liveSessionSql,
   newCookie,
@@ -34,6 +32,7 @@ import {
   type CheckResult,
 } from "./health.ts";
 import { MIGRATION_ROLE, runMigrationJob } from "./migrate.ts";
+import { productLogins } from "./product-logins.ts";
 import { publishRetained, readRetained } from "./mqtt.ts";
 import {
   containersWithLabel,
@@ -449,11 +448,12 @@ const DATABASE_SETUP = "crates/service-kit/sql/database.sql";
  * Applies the product's migrations with the migration Job (tools/migrate), as in a cluster: it
  * creates each service's roles and schema, applies the service's migrations, and generates the
  * password of each service login role into a Secret, which here is the stand-in API of
- * lib/secret-api.ts. The identity service's password is read back and kept in the state file with
- * the other service logins, so `env` can print it.
+ * lib/secret-api.ts. The password of every login role the chart binds (lib/product-logins.ts) is
+ * read back and kept in the state file with the other service logins, so `env` can print it.
  */
 async function migrateDatabase(ctx: Context, state: State, migrationPassword: string): Promise<void> {
   const binary = await cargoBuild(ctx, { package: "migrate", bin: "migrate" });
+  const logins = productLogins();
   log("running the migration Job (tools/migrate)");
   const result = await runMigrationJob({
     binary,
@@ -464,14 +464,15 @@ async function migrateDatabase(ctx: Context, state: State, migrationPassword: st
     },
     login: { user: MIGRATION_ROLE, password: migrationPassword },
     stateDir: ctx.dir,
-    roles: [IDENTITY_APP_ROLE],
+    logins,
   });
-  const password = result.passwords[IDENTITY_APP_ROLE]!;
-  state.credentials.services[IDENTITY_SERVICE] = { user: IDENTITY_APP_ROLE, password };
+  for (const login of logins) {
+    state.credentials.services[login.stateKey] = { user: login.role, password: result.passwords[login.role]! };
+  }
   saveState(ctx.dir, state);
   log(
     `migration Job finished${result.changes === undefined ? "" : `: ${result.changes} change(s)`}; ` +
-      `${IDENTITY_APP_ROLE} can log in`,
+      `${logins.map((login) => login.role).join(", ")} can log in`,
   );
 }
 
@@ -647,7 +648,9 @@ export function serviceLoginVariable(service: string, field: "USERNAME" | "PASSW
  * server (`verify-full`, the dev CA, the loopback address that the certificate names). A service
  * that runs on the host reads the `TRUSTIOT_POSTGRES_*` platform settings (chart names) and its
  * own role from `TRUSTIOT_DEV_<SERVICE>_DATABASE_{USERNAME,PASSWORD}`, which it takes as
- * `TRUSTIOT__DATABASE__{USERNAME,PASSWORD}`.
+ * `TRUSTIOT__DATABASE__{USERNAME,PASSWORD}`. Every login the state file holds is printed: the
+ * product's service roles and bound platform roles (lib/product-logins.ts; the platform role of
+ * `assets` is `TRUSTIOT_DEV_ASSETS_PLATFORM_DATABASE_*`) and `example-service`'s.
  *
  * With `identity` (the instance has a signing key), the lines for the identity service follow:
  * `TRUSTIOT_INTERNAL_IDENTITY_KEYS` is a platform setting every service verifies tokens with;

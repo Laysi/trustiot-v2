@@ -18,12 +18,15 @@ import { describe, expect, test } from "bun:test";
 import { createPublicKey, verify } from "node:crypto";
 import { request } from "node:http";
 import { createServer } from "node:net";
+import { SQL } from "bun";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { serviceLoginVariable } from "../lib/commands.ts";
 import { DEV_TENANT_ID, DEV_USER_ID, newCookie, SESSION_COOKIE_NAME } from "../lib/identity.ts";
 import { podman, podmanOk } from "../lib/podman.ts";
+import { productLogins } from "../lib/product-logins.ts";
 import { DEV_USER, POSTGRES_DATABASE } from "../lib/secrets.ts";
 import { SERVICES, platformEnv } from "../lib/services.ts";
 import { IMAGES, namesFor, runArgs, SERVICE_PORT } from "../lib/stack.ts";
@@ -259,6 +262,36 @@ async function psql(instance: string, sql: string): Promise<string[]> {
   return output.split("\n").filter(Boolean);
 }
 
+/**
+ * Logs in to the published Postgres as `login` over TLS, verifying the server with the dev CA
+ * (`verify-full` against the loopback address the certificate names), and returns the role the
+ * session runs as. A role without a password or NOLOGIN makes this throw.
+ */
+async function loginAs(
+  port: number,
+  database: string,
+  caFile: string,
+  login: { user: string; password: string },
+): Promise<string> {
+  const connection = new SQL({
+    adapter: "postgres",
+    hostname: "127.0.0.1",
+    port,
+    database,
+    username: login.user,
+    password: login.password,
+    tls: { ca: readFileSync(caFile, "utf8"), rejectUnauthorized: true },
+    max: 1,
+    connectionTimeout: 30,
+  });
+  try {
+    const rows = await connection`SELECT current_user AS who`;
+    return rows[0].who as string;
+  } finally {
+    await connection.close();
+  }
+}
+
 /** What the services read: the dev cookie from `seed`'s output. */
 function seededCookie(output: string): string {
   const match = /^ {2}Cookie: (__Host-trustiot-session=[A-Za-z0-9_-]{43})$/m.exec(output);
@@ -463,16 +496,31 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
         const firstKey = readFileSync(signingKeyFile, "utf8");
         const signingKeyBody = firstKey.split("\n")[1]!;
         expect(signingKeyBody.length).toBeGreaterThan(20);
-        // The migration Job ran, with the same code as in a cluster, and left identity_app able to
-        // log in with the password it generated (the role is NOLOGIN without a bound Secret).
+        // The migration Job ran, with the same code as in a cluster, and left every login role the
+        // chart binds (lib/product-logins.ts) able to log in with the password it generated (a
+        // role is NOLOGIN without a bound Secret).
         expect(first.stdout).toContain("running the migration Job (tools/migrate)");
         expect(first.stdout).toContain("migration Job finished");
-        expect(firstState.credentials.services.identity.user).toBe("identity_app");
-        expect(firstState.credentials.services.identity.password).toMatch(/^[0-9a-f]{64}$/);
-        const roles = await psql(instance, "SELECT rolname || ':' || rolcanlogin || ':' || rolsuper FROM pg_roles WHERE rolname LIKE 'identity_%' OR rolname = 'trustiot_owner' ORDER BY 1");
+        const logins = productLogins();
+        expect(logins.map((login) => login.role)).toEqual(["identity_app", "assets_app", "assets_platform"]);
+        for (const login of logins) {
+          expect(firstState.credentials.services[login.stateKey].user).toBe(login.role);
+          expect(firstState.credentials.services[login.stateKey].password).toMatch(/^[0-9a-f]{64}$/);
+        }
+        expect(new Set(logins.map((login) => firstState.credentials.services[login.stateKey].password)).size).toBe(logins.length);
+        const roles = await psql(instance, "SELECT rolname || ':' || rolcanlogin || ':' || rolsuper FROM pg_roles WHERE rolname LIKE 'identity_%' OR rolname LIKE 'assets_%' OR rolname = 'trustiot_owner' ORDER BY 1");
         // identity_platform exists because identity writes outbox events (Laysi/trustiot-v2#65); no
-        // Secret is bound to it, so it stays NOLOGIN like every role the dev environment does not run.
-        expect(roles).toEqual(["identity_app:true:false", "identity_owner:false:false", "identity_platform:false:false", "trustiot_owner:true:false"]);
+        // Secret is bound to it, so it stays NOLOGIN, like the owner roles. assets_platform reads
+        // identity's events, so the chart and this environment bind a password to it.
+        expect(roles).toEqual([
+          "assets_app:true:false",
+          "assets_owner:false:false",
+          "assets_platform:true:false",
+          "identity_app:true:false",
+          "identity_owner:false:false",
+          "identity_platform:false:false",
+          "trustiot_owner:true:false",
+        ]);
         expect(await psql(instance, "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'trustiot'")).toEqual(["trustiot_owner"]);
 
         const printed = await dev(env, "env");
@@ -491,6 +539,27 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
         expect(JSON.parse(settings.TRUSTIOT_INGRESS_ROUTES!)[0].host).toBe("localhost");
         expect(settings.TRUSTIOT_DEV_IDENTITY_DATABASE_USERNAME).toBe("identity_app");
         expect(settings.TRUSTIOT_DEV_IDENTITY_DATABASE_PASSWORD).toBe(firstState.credentials.services.identity.password);
+        // Every login role of the product logs in over TLS with exactly the credentials `env`
+        // prints (variables named TRUSTIOT_DEV_<SERVICE>[_PLATFORM]_DATABASE_{USERNAME,PASSWORD}).
+        const postgresPort = Number(settings.TRUSTIOT_POSTGRES_PORT);
+        const database = settings.TRUSTIOT_POSTGRES_DATABASE!;
+        for (const login of logins) {
+          const printedLogin = {
+            user: settings[serviceLoginVariable(login.stateKey, "USERNAME")]!,
+            password: settings[serviceLoginVariable(login.stateKey, "PASSWORD")]!,
+          };
+          expect(printedLogin.user, login.role).toBe(login.role);
+          expect(printedLogin.password, login.role).toBe(firstState.credentials.services[login.stateKey].password);
+          expect(await loginAs(postgresPort, database, caFile, printedLogin), login.role).toBe(login.role);
+        }
+        // The roles that no Secret is bound to cannot log in, whatever the password.
+        for (const role of ["identity_platform", "identity_owner", "assets_owner"]) {
+          const refused = await loginAs(postgresPort, database, caFile, { user: role, password: "not-the-password" }).then(
+            () => false,
+            () => true,
+          );
+          expect(refused, `${role} must not log in`).toBe(true);
+        }
         expect(printed.stdout).not.toContain("PRIVATE KEY");
         expect(printed.stdout).not.toContain(signingKeyBody);
 
@@ -527,7 +596,7 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
           identityLog = await identity.stop();
         }
         // Neither key material nor a password reaches the identity service's log.
-        for (const secret of [signingKeyBody, firstState.credentials.services.identity.password, cookie.slice(cookie.indexOf("=") + 1)]) {
+        for (const secret of [signingKeyBody, ...logins.map((login) => firstState.credentials.services[login.stateKey].password), cookie.slice(cookie.indexOf("=") + 1)]) {
           expect(identityLog).not.toContain(secret);
         }
 
@@ -565,7 +634,7 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
           firstState.credentials.clickhouse.password,
           firstState.credentials.mqtt.password,
           firstState.credentials.services["example-service"].password,
-          firstState.credentials.services.identity.password,
+          ...logins.map((login) => firstState.credentials.services[login.stateKey].password),
           signingKeyBody,
         ]) {
           expect(output).not.toContain(secret);
@@ -614,7 +683,16 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
         // password; the session in the kept data still works with the same cookie.
         expect(second.stdout).toContain("identity signing key: kept");
         expect(readFileSync(signingKeyFile, "utf8")).toBe(firstKey);
-        expect(secondState.credentials.services.identity.password).not.toBe(firstState.credentials.services.identity.password);
+        // Every login role got a new password from the second Job run, and only the new one logs in.
+        for (const login of logins) {
+          const before = firstState.credentials.services[login.stateKey];
+          const after = secondState.credentials.services[login.stateKey];
+          expect(after.user, login.role).toBe(login.role);
+          expect(after.password, login.role).not.toBe(before.password);
+          expect(await loginAs(postgresPort, database, caFile, after), login.role).toBe(login.role);
+          const stale = await loginAs(postgresPort, database, caFile, before).then(() => false, () => true);
+          expect(stale, `${login.role}: the old password must stop working`).toBe(true);
+        }
         expect(seededCookie(reseeded.stdout)).toBe(cookie);
         expect(reseeded.stdout).toContain("kept the identity dev session");
         const secondSettings = parseEnv((await dev(env, "env")).stdout);
