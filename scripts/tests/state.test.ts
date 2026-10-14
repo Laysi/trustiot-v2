@@ -18,6 +18,7 @@ import {
   acquireLock,
   ensurePrivateDir,
   loadState,
+  removeStateExcept,
   resolveInstance,
   saveState,
   stateDir,
@@ -202,5 +203,22 @@ describe("lock", () => {
     expect(() => acquireLock(scratch, "t")).toThrow(/another command/);
     expect(readdirSync(scratch)).toEqual(["t.lock"]);
     release();
+  });
+});
+
+describe("removeStateExcept", () => {
+  test("removes everything but the named entries, which is what down leaves", () => {
+    mkdirSync(join(scratch, "identity"));
+    writeFileSync(join(scratch, "identity", "signing-key.pem"), "k");
+    mkdirSync(join(scratch, "tls"));
+    writeFileSync(join(scratch, "tls", "ca.crt"), "c");
+    writeFileSync(join(scratch, "state.json"), "{}");
+    removeStateExcept(scratch, ["identity"]);
+    expect(readdirSync(scratch)).toEqual(["identity"]);
+    expect(readdirSync(join(scratch, "identity"))).toEqual(["signing-key.pem"]);
+  });
+
+  test("does nothing for a directory that does not exist", () => {
+    expect(() => removeStateExcept(join(scratch, "absent"), ["identity"])).not.toThrow();
   });
 });

@@ -1,0 +1,5 @@
+## helm upgrade --set migrate.revision=71 --force-conflicts (same values as n3-after)
+HELM exit=0 REVISION: 3 Upgrade complete
+SECRET trustiot-identity-password keys=[identity_app(len 64)] generation=1 bound managers=[helm/Apply kubectl-create/Update+data trustiot-migrate/Update+data]
+SECRET trustiot-otel-collector-password keys=[trustiot_collector(len 64)] generation=1 bound managers=[helm/Apply trustiot-migrate/Update+data]
+JOBS trustiot-migrate-0c3e6256(ok=1) trustiot-migrate-65f0410e(ok=1)

@@ -32,6 +32,9 @@ CREATE ROLE identity_app LOGIN PASSWORD 'service-kit-test';
 ";
 
 const MIGRATION: &str = include_str!("../migrations/postgres/0001_identity.sql");
+/// The migration Job creates the service's schema, owned by the owner role, before it runs the
+/// migrations (tools/migrate); the tests do the same as the owner.
+const SCHEMA: &str = "CREATE SCHEMA identity";
 const DATABASE_TEMPLATE: &str = include_str!("../../../crates/service-kit/sql/database.sql");
 
 const APP: &str = "app.saas.trustiot.test";
@@ -105,6 +108,10 @@ impl Fixture {
             .execute(&mut owner)
             .await
             .expect("run the database template");
+        sqlx::raw_sql(SCHEMA)
+            .execute(&mut owner)
+            .await
+            .expect("create the schema");
         sqlx::raw_sql(MIGRATION)
             .execute(&mut owner)
             .await

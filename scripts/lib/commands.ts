@@ -8,6 +8,23 @@ import { containerBuildArgs } from "./build-context.ts";
 import { registerCleanup } from "./cleanup.ts";
 import { clickhouse } from "./clickhouse.ts";
 import {
+  createSessionSql,
+  DEV_TENANT_ID,
+  DEV_USER_ID,
+  ensureSigningKey,
+  IDENTITY_APP_ROLE,
+  IDENTITY_DIR,
+  IDENTITY_SERVICE,
+  identityEnv,
+  liveSessionSql,
+  newCookie,
+  cookieHeader,
+  readCookie,
+  signingKeyCheck,
+  writeCookie,
+  type IdentityEnv,
+} from "./identity.ts";
+import {
   clickhouseChecks,
   mosquittoChecks,
   postgresChecks,
@@ -16,6 +33,7 @@ import {
   waitForChecks,
   type CheckResult,
 } from "./health.ts";
+import { MIGRATION_ROLE, runMigrationJob } from "./migrate.ts";
 import { publishRetained, readRetained } from "./mqtt.ts";
 import {
   containersWithLabel,
@@ -29,7 +47,9 @@ import {
 import {
   dotenv,
   generateCredentials,
+  migrationRoleSql,
   mosquittoPasswordEntry,
+  randomSecret,
   serviceRoleSql,
   sqlLiteral,
   sqlIdentifier,
@@ -50,6 +70,7 @@ import {
   ensurePrivateDir,
   loadState,
   removeState,
+  removeStateExcept,
   resolveInstance,
   saveState,
   stateDir,
@@ -237,6 +258,13 @@ export async function up(ctx: Context = context()): Promise<void> {
       credentials,
     };
     saveState(ctx.dir, state);
+    // The migration role's password is new for every run and known only to this run and to the
+    // Job it starts; it is not stored.
+    const migrationPassword = randomSecret();
+    // The identity signing key is kept across runs (down keeps it); a bad one stops here, before
+    // anything is started.
+    const signingKey = ensureSigningKey(ctx.dir);
+    log(`identity signing key: ${signingKey.created ? "generated" : "kept"} (mode 0600, state directory)`);
 
     // A new CA and server certificate for this run. Only the CA certificate (public) is kept in
     // the state directory; the server key goes straight into the Postgres config volume below,
@@ -326,7 +354,7 @@ export async function up(ctx: Context = context()): Promise<void> {
       }),
     );
 
-    await preparePostgres(ctx, state);
+    await preparePostgres(ctx, state, migrationPassword);
 
     const infraResults = await waitForChecks(
       () => [
@@ -337,6 +365,8 @@ export async function up(ctx: Context = context()): Promise<void> {
       120_000,
     );
     assertAllOk(ctx, infraResults);
+
+    await migrateDatabase(ctx, state, migrationPassword);
 
     for (const service of SERVICES) await startService(ctx, state, service);
     if (SERVICES.length > 0) {
@@ -359,7 +389,7 @@ export async function up(ctx: Context = context()): Promise<void> {
  * Apache AGE is enabled in the database explicitly as well, so the health check never depends
  * on an init script of the image (which only runs on an empty data volume).
  */
-async function preparePostgres(ctx: Context, state: State): Promise<void> {
+async function preparePostgres(ctx: Context, state: State, migrationPassword: string): Promise<void> {
   const container = ctx.names.container("postgres");
   const { user, database, password } = state.credentials.postgres;
   await waitFor(
@@ -395,6 +425,8 @@ async function preparePostgres(ctx: Context, state: State): Promise<void> {
       stdin:
         `ALTER ROLE ${sqlIdentifier(user)} WITH PASSWORD ${sqlLiteral(password)};\n` +
         "CREATE EXTENSION IF NOT EXISTS age;\n" +
+        // The role the migration Job connects as, and the owner of the database (migrateDatabase).
+        migrationRoleSql(MIGRATION_ROLE, migrationPassword, database) +
         // The per-database setup that service-kit's session check requires (no TEMPORARY for
         // PUBLIC), then one plain login role per service that has a database.
         readFileSync(join(ctx.repoRoot, DATABASE_SETUP), "utf8") +
@@ -408,6 +440,36 @@ async function preparePostgres(ctx: Context, state: State): Promise<void> {
 
 /** service-kit's per-database template, which its own tests run unchanged. */
 const DATABASE_SETUP = "crates/service-kit/sql/database.sql";
+
+/**
+ * Applies the product's migrations with the migration Job (tools/migrate), as in a cluster: it
+ * creates each service's roles and schema, applies the service's migrations, and generates the
+ * password of each service login role into a Secret, which here is the stand-in API of
+ * lib/secret-api.ts. The identity service's password is read back and kept in the state file with
+ * the other service logins, so `env` can print it.
+ */
+async function migrateDatabase(ctx: Context, state: State, migrationPassword: string): Promise<void> {
+  const binary = await cargoBuild(ctx, { package: "migrate", bin: "migrate" });
+  log("running the migration Job (tools/migrate)");
+  const result = await runMigrationJob({
+    binary,
+    postgres: {
+      port: state.ports.postgres,
+      database: state.credentials.postgres.database,
+      caFile: readCaPath(ctx),
+    },
+    login: { user: MIGRATION_ROLE, password: migrationPassword },
+    stateDir: ctx.dir,
+    roles: [IDENTITY_APP_ROLE],
+  });
+  const password = result.passwords[IDENTITY_APP_ROLE]!;
+  state.credentials.services[IDENTITY_SERVICE] = { user: IDENTITY_APP_ROLE, password };
+  saveState(ctx.dir, state);
+  log(
+    `migration Job finished${result.changes === undefined ? "" : `: ${result.changes} change(s)`}; ` +
+      `${IDENTITY_APP_ROLE} can log in`,
+  );
+}
 
 function assertAllOk(ctx: Context, results: CheckResult[]): void {
   printResults(results);
@@ -433,6 +495,7 @@ function printEndpoints(state: State): void {
   for (const [name, port] of Object.entries(ports.services)) {
     log(`  ${name.padEnd(16)} http://${BIND_ADDRESS}:${port}`);
   }
+  log("  identity         not started: run it on the host with the settings of the env command");
   log("");
   log("Credentials are generated for this run and stored only in the state directory.");
   log("Print them for your shell with: bun scripts/dev.ts env");
@@ -441,7 +504,8 @@ function printEndpoints(state: State): void {
 // --- services ------------------------------------------------------------------------------
 
 /** Builds the service's binary with cargo and returns its path. */
-async function cargoBuild(ctx: Context, service: ServiceDef): Promise<string> {
+async function cargoBuild(ctx: Context, target: { package: string; bin: string }): Promise<string> {
+  const service = { cargo: target };
   log(`building ${service.cargo.package} (${service.cargo.bin}) with cargo`);
   const child = Bun.spawn(
     [
@@ -473,7 +537,7 @@ async function cargoBuild(ctx: Context, service: ServiceDef): Promise<string> {
 }
 
 async function startService(ctx: Context, state: State, service: ServiceDef): Promise<void> {
-  const binary = await cargoBuild(ctx, service);
+  const binary = await cargoBuild(ctx, service.cargo);
   const buildDir = mkdtempSync(join(ctx.dir, `build-${service.name}-`));
   const image = ctx.names.image(service.name);
   const forget = registerCleanup(() => rmSync(buildDir, { recursive: true, force: true }));
@@ -550,8 +614,10 @@ export async function status(ctx: Context = context()): Promise<boolean> {
     const ok = running.includes(ctx.names.container(component));
     return { name: `container ${component}`, ok, detail: ok ? "running" : "not running" };
   });
+  const key = signingKeyCheck(ctx.dir);
   const results = [
     ...containerResults,
+    { name: "identity: signing key", ok: key.ok, detail: key.detail },
     ...(await runChecks([
       ...postgresChecks(state, readCaCertificate(ctx)),
       ...clickhouseChecks(state),
@@ -579,8 +645,14 @@ export function serviceLoginVariable(service: string, field: "USERNAME" | "PASSW
  * that runs on the host reads the `TRUSTIOT_POSTGRES_*` platform settings (chart names) and its
  * own role from `TRUSTIOT_DEV_<SERVICE>_DATABASE_{USERNAME,PASSWORD}`, which it takes as
  * `TRUSTIOT__DATABASE__{USERNAME,PASSWORD}`.
+ *
+ * With `identity` (the instance has a signing key), the lines for the identity service follow:
+ * `TRUSTIOT_INTERNAL_IDENTITY_KEYS` is a platform setting every service verifies tokens with;
+ * `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` (a path, never the key) and `TRUSTIOT_INGRESS_ROUTES` are
+ * for the identity service only; its database login is `TRUSTIOT_DEV_IDENTITY_DATABASE_*` like
+ * every other service's. The JSON values are single-quoted.
  */
-export function envLines(state: State, caFile: string): string {
+export function envLines(state: State, caFile: string, identity?: IdentityEnv): string {
   const { postgres, clickhouse: ch, mqtt } = state.credentials;
   const { ports } = state;
   const serviceLogins: Record<string, string> = {};
@@ -588,6 +660,14 @@ export function envLines(state: State, caFile: string): string {
     serviceLogins[serviceLoginVariable(service, "USERNAME")] = login.user;
     serviceLogins[serviceLoginVariable(service, "PASSWORD")] = login.password;
   }
+  const identityLines: Record<string, string> = identity
+    ? {
+        TRUSTIOT_INTERNAL_IDENTITY_KEYS: identity.keys,
+        TRUSTIOT_IDENTITY_SIGNING_KEY_FILE: identity.signingKeyFile,
+        TRUSTIOT_INGRESS_ROUTES: identity.routes,
+      }
+    : {};
+  const quoted = ["TRUSTIOT_INTERNAL_IDENTITY_KEYS", "TRUSTIOT_INGRESS_ROUTES"];
   return dotenv({
     PGHOST: BIND_ADDRESS,
     PGPORT: ports.postgres,
@@ -611,12 +691,13 @@ export function envLines(state: State, caFile: string): string {
     MQTT_PORT: ports.mqtt,
     MQTT_USER: mqtt.user,
     MQTT_PASSWORD: mqtt.password,
-  });
+    ...identityLines,
+  }, { quoted });
 }
 
 export function printEnv(ctx: Context = context()): void {
   const state = requireState(ctx);
-  process.stdout.write(envLines(state, readCaPath(ctx)));
+  process.stdout.write(envLines(state, readCaPath(ctx), identityEnv(ctx.dir)));
 }
 
 /** The CA certificate's path; fails when the file is gone, so `env` never prints a dead path. */
@@ -682,6 +763,8 @@ export async function seed(ctx: Context = context()): Promise<void> {
   await publishRetained(endpoint, login, SEED_TOPIC, SEED_MESSAGE);
   log(`published retained message on ${SEED_TOPIC}`);
 
+  const cookie = await seedIdentitySession(ctx, state);
+
   // Read everything back, so a seed that silently did nothing is an error.
   const problems: string[] = [];
   const machines = await podmanOk(
@@ -735,6 +818,57 @@ export async function seed(ctx: Context = context()): Promise<void> {
   if (retained !== SEED_MESSAGE) problems.push("the retained MQTT message was not stored");
   if (problems.length > 0) throw new Error(`seed verification failed: ${problems.join("; ")}`);
   log(`seed verified: 2 machines (table and graph), ${rows} telemetry rows, 1 retained message`);
+  log("");
+  log(`identity dev session (user ${DEV_USER_ID}, tenant ${DEV_TENANT_ID}, role admin), valid for ext_authz:`);
+  log(`  Cookie: ${cookieHeader(cookie)}`);
+}
+
+/** Runs SQL in the Postgres container over its unix socket (no password anywhere) and returns the output. */
+async function psqlOutput(ctx: Context, state: State, sql: string): Promise<string> {
+  const { user, database } = state.credentials.postgres;
+  const output = await podmanOk(
+    [
+      "exec",
+      "--interactive",
+      ctx.names.container("postgres"),
+      "psql",
+      `--username=${user}`,
+      `--dbname=${database}`,
+      "--no-psqlrc",
+      "--quiet",
+      "--tuples-only",
+      "--no-align",
+      "--set=ON_ERROR_STOP=1",
+      "--file=-",
+    ],
+    { stdin: sql },
+  );
+  return output.trim();
+}
+
+/**
+ * The development user and membership come from `services/identity/seed/postgres`; this adds the
+ * session, which needs a random cookie and so cannot be a static file. The cookie is kept in the
+ * state directory (it is the only copy: the database stores its hash) and reused while the
+ * session behind it is valid for at least another hour; otherwise a new one is made. The cookie
+ * is a development credential and is printed by `seed`, as the issue asks; nothing else here
+ * prints a secret.
+ */
+async function seedIdentitySession(ctx: Context, state: State): Promise<string> {
+  const live = async (cookie: string) => (await psqlOutput(ctx, state, liveSessionSql(cookie))) === "1";
+  let cookie = readCookie(ctx.dir);
+  if (cookie === undefined || !(await live(cookie))) {
+    cookie = newCookie();
+    // The file first: a cookie without a session is replaced by the next seed, a session whose
+    // cookie nobody has is just unused.
+    writeCookie(ctx.dir, cookie);
+    await psqlOutput(ctx, state, createSessionSql(cookie));
+    log("created the identity dev session");
+  } else {
+    log("kept the identity dev session");
+  }
+  if (!(await live(cookie))) throw new Error("seed verification failed: the identity dev session is not valid");
+  return cookie;
 }
 
 // --- down, purge ---------------------------------------------------------------------------
@@ -753,8 +887,13 @@ export async function down(ctx: Context = context()): Promise<void> {
     for (const name of ["postgres-config", "postgres-ca"]) {
       await removeVolumeIfPresent(ctx.names.volume(name));
     }
-    removeState(ctx.dir);
-    log(`removed ${removed.length} container(s); data volumes kept (use purge to delete them)`);
+    // The identity signing key and the dev session cookie stay: the sessions are in the data
+    // volume, which stays too (purge removes all of it).
+    removeStateExcept(ctx.dir, [IDENTITY_DIR]);
+    log(
+      `removed ${removed.length} container(s); data volumes and the identity signing key kept ` +
+        "(use purge to delete them)",
+    );
   } finally {
     release();
   }

@@ -1,0 +1,13 @@
+bun test v1.4.2 (744846f84)
+
+deploy/chart/tests/e2e/postgres.e2e.ts:
+password Secrets after upgrade with the same values: unchanged; after rollback: unchanged
+password Secrets after migrate.passwordGeneration=2: changed
+password Secrets after a rollback to generation 1: unchanged; after the upgrade back to 2: unchanged
+password Secrets after a lost key and migrate.revision=2: changed
+
+ 12 pass
+ 0 fail
+ 82 expect() calls
+Ran 12 tests across 1 file. [188.96s]
+rc=0

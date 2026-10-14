@@ -1,0 +1,1 @@
+{"drained":true,"produced":1500000,"formed":540,"acked":540,"records_acked":1500000,"reconnects":21,"modbus_ok":75000,"modbus_err":0,"spilled_batches":372,"spilled_bytes":94060615,"peak_buf_mem_b":1048548,"peak_buf_disk_batches":330}

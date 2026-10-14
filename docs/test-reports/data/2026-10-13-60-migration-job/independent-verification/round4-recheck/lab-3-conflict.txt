@@ -1,0 +1,27 @@
+STARTED trustiot-migrate-0db15862-a and trustiot-migrate-0db15862-b (generation 3), writer running
+WRITER 6418 annotation patches
+JOBLOG trustiot-migrate-0db15862-a "reading it again": 4
+JOBLOG trustiot-migrate-0db15862-a "changed 5 times": 0
+JOBLOG trustiot-migrate-0db15862-a "generated the password": 2
+JOBLOG trustiot-migrate-0db15862-a "password generation 3": 2
+JOBLOG trustiot-migrate-0db15862-a "set the password of identity_app": 1
+LOCK trustiot-migrate-0db15862-a waited_ms=0
+JOBLOG trustiot-migrate-0db15862-b "reading it again": 0
+JOBLOG trustiot-migrate-0db15862-b "changed 5 times": 0
+JOBLOG trustiot-migrate-0db15862-b "generated the password": 0
+JOBLOG trustiot-migrate-0db15862-b "password generation 3": 0
+JOBLOG trustiot-migrate-0db15862-b "set the password of identity_app": 0
+LOCK trustiot-migrate-0db15862-b waited_ms=2001
+SECRET trustiot-identity-password keys=[identity_app(len 64)] generation=3 bound managers=[helm/Apply kubectl-create/Update+data trustiot-migrate/Update+data verify-writer/Update]
+SECRET trustiot-otel-collector-password keys=[trustiot_collector(len 64)] generation=3 bound managers=[helm/Apply trustiot-migrate/Update+data verify-writer/Update]
+COMPARE conflict vs concurrent: identity_app:changed trustiot_collector:changed
+JOBS trustiot-migrate-0db15862(ok=1,failed=0,active=0) trustiot-migrate-0db15862-a(ok=1,failed=0,active=0) trustiot-migrate-0db15862-b(ok=1,failed=0,active=0)
+POD trustiot-clickhouse-0 Running clickhouse:ready=true,restarts=0,running
+POD trustiot-identity-6b6856cf76-rf7zj Running identity:ready=true,restarts=0,running
+POD trustiot-ingress-istio-7847ff9f6c-kmbsw Running istio-proxy:ready=true,restarts=0,running
+POD trustiot-migrate-0db15862-a-hv9x5 Succeeded migrate:ready=false,restarts=0,terminated:Completed
+POD trustiot-migrate-0db15862-b-zxfbs Succeeded migrate:ready=false,restarts=0,terminated:Completed
+POD trustiot-migrate-0db15862-ct9mh Succeeded migrate:ready=false,restarts=0,terminated:Completed
+POD trustiot-otel-collector-d7dc5f567-q2c6r Running otel-collector:ready=true,restarts=0,running
+POD trustiot-postgres-1 Running postgres:ready=true,restarts=0,running
+LOGIN identity_app with the Secret's password: exit=0 out=1 err=

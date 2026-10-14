@@ -52,11 +52,12 @@ manifest 加進叢集的東西（2026-10-12 在實驗機逐一確認，見測試
 
 ## 服務的資料庫角色
 
-chart 只建立資料庫、owner 與 AGE extension。每個服務自己的登入角色（決策 4、29）與 migration Job 由 Laysi/trustiot-v2#60 加入，做法建議（2026-10-12 在實驗機以 e2e 驗證過前兩點，見測試報告）：
+chart 只透過 operator 建立資料庫、owner 與 AGE extension。每個服務自己的角色（決策 4、29）由 migration Job（[tools/migrate](../../tools/migrate/README.md)，Laysi/trustiot-v2#60）建立，做法與理由：
 
-- 以 CloudNativePG 1.30 的 DatabaseRole 物件宣告每個服務的角色（`login: true`，不給 SUPERUSER、CREATEROLE、BYPASSRLS），密碼放在 `kubernetes.io/basic-auth` 類型的 Secret（`username`、`password`），由 `passwordSecret` 指向它。operator 以 superuser 建立角色，之後改密碼只要改 Secret。
-- 服務以 `TRUSTIOT__DATABASE__USERNAME`、`TRUSTIOT__DATABASE__PASSWORD` 拿到自己的帳密（身分服務與 `example-service` 已經用這兩個名稱），只給該服務，與 `services.<name>.credentials` 同一套規則，並把這兩個名稱保留給 chart。
-- migration Job 用 owner `trustiot_owner`（Secret `<cluster>-app`），先套用 `crates/service-kit/sql/database.sql`（收回 PUBLIC 的 TEMPORARY），再建各服務的 schema 與權限。Job 的 pod 要加進 `<release>-postgres` NetworkPolicy 的來源。
-- 也可以不用密碼：DatabaseRole 的 `clientCertificate` 讓 operator 簽發用戶端憑證，搭配 service-kit 的用戶端憑證支援與一條 `hostssl ... cert` 的 pg_hba 規則。需要時在 Laysi/trustiot-v2#60 決定。
-- AGE 的權限：extension 由 operator 以 superuser 建立，owner 沒有 `ag_catalog` 的 USAGE、`ag_catalog.ag_graph` 的 INSERT 與 `ag_catalog.ag_label` 的 SELECT（2026-10-12 在實驗機查得三項都是 false），所以 owner 與服務角色都不能自己 `create_graph`。誰建立圖、要由 superuser 給哪些權限，在 Laysi/trustiot-v2#60 與 Laysi/trustiot-v2#176（每租戶的 AGE 角色）決定。
-- AGE 的時機：`helm install --wait` 只等 Cluster 健康，Database 的 `age` extension 再晚約 20 秒才建立（實驗機），用到 AGE 的 migration 要先等它出現（`SELECT 1 FROM pg_extension WHERE extname = 'age'`）。
+- **不用 DatabaseRole 物件**：2026-10-12 的建議是以 CloudNativePG 的 DatabaseRole 宣告角色，但決策 29 的角色不只一個登入角色：每個服務還有擁有 schema 與表的 `<服務>_owner`、需要時有 `<服務>_platform`、之後還有每租戶的角色，它們的屬性、成員關係與權限要和 migration 一起冪等地建立與檢查，而且外部 Postgres（`postgres.mode: external`）沒有 operator。所以角色統一由 Job 以 SQL 建立，bundled 與 external 走同一條路。
+- **migration 角色是 owner**：Job 以 `trustiot_owner`（Secret `<cluster>-app`）登入。chart 在 Cluster 的 `bootstrap.initdb.postInitApplicationSQL` 給它 CREATEROLE（operator 在 bootstrap 時以 superuser 執行一次）。PostgreSQL 16 起 CREATEROLE 不能建立 superuser、BYPASSRLS 或 REPLICATION 角色，也只能管理自己建立（有 ADMIN）的角色，所以 owner 碰不到 `postgres` 與 operator 的角色。2026-10-13 之前 bootstrap 的 Cluster 要補一次，步驟在 [docs/runbooks/migrations.md](../../docs/runbooks/migrations.md)。
+- **服務的帳密**：服務以 `TRUSTIOT__DATABASE__USERNAME`（`<服務>_app`）、`TRUSTIOT__DATABASE__PASSWORD`（Secret `<release>-<服務>-password` 的同名 key）登入，只給該服務，這兩個名稱保留給 chart。密碼由 migration Job 產生並寫進這個 Secret，沒有人經手（docs/architecture/secrets.md 的「migration Job 產生的密碼」）；Job 只送 SCRAM-SHA-256 的 verifier，明文密碼不進 SQL 與 log。
+- **Job 的網路**：Job 的 pod 在 `<release>-postgres` NetworkPolicy 的來源裡，與在 `mesh.calls` 列出 `postgres` 的服務相同。
+- **用戶端憑證**：DatabaseRole 的 `clientCertificate` 不用；改用憑證時，要在 Job 與 service-kit 兩邊一起做，另開 issue。
+- **AGE 的權限**：extension 由 operator 以 superuser 建立，owner 沒有 `ag_catalog` 的 USAGE、`ag_catalog.ag_graph` 的 INSERT 與 `ag_catalog.ag_label` 的 SELECT（2026-10-12 在實驗機查得三項都是 false），所以 owner、Job 與服務角色都不能自己 `create_graph`。目前沒有服務用 AGE；誰建立圖、要由 superuser 給哪些權限，在 Laysi/trustiot-v2#176（每租戶的 AGE 角色）決定，它會接在 tools/migrate 的每租戶角色 hook 上。
+- **AGE 的時機**：`helm install --wait` 只等 Cluster 健康，Database 的 `age` extension 再晚約 20 秒才建立（實驗機），用到 AGE 的 migration 要先等它出現（`SELECT 1 FROM pg_extension WHERE extname = 'age'`）。

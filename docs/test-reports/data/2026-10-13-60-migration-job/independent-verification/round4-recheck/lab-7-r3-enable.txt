@@ -1,0 +1,20 @@
+HELM upgrade  exit=0 after 10 s 
+JOBLOG trustiot-migrate-65f0410e "set the password of identity_app": 1
+JOBLOG trustiot-migrate-65f0410e "let role identity_app log in": 1
+JOBLOG trustiot-migrate-65f0410e "let ClickHouse account": 1
+JOBLOG trustiot-migrate-65f0410e "set the password of ClickHouse account": 1
+ORDER password before LOGIN: true
+ORDER ClickHouse password before HOST ANY: true
+ROLES identity_app:LOGIN:trustiot-migrate:login-role identity_owner:NOLOGIN:- trustiot_owner:LOGIN:-
+CH exit=0 trustiot_collector	1 
+LOGIN identity_app with the Secret's password: exit=0 out=1 err=
+SECRET trustiot-identity-password keys=[identity_app(len 64)] generation=4 bound managers=[helm/Apply kubectl-create/Update+data trustiot-migrate/Update+data]
+SECRET trustiot-otel-collector-password keys=[trustiot_collector(len 64)] generation=4 bound managers=[helm/Apply trustiot-migrate/Update+data]
+COMPARE enabled vs disabled: identity_app:same trustiot_collector:same
+JOBS trustiot-migrate-65f0410e(ok=1,failed=0,active=0)
+POD trustiot-clickhouse-0 Running clickhouse:ready=true,restarts=0,running
+POD trustiot-identity-5bcc8df47c-pgspt Running identity:ready=true,restarts=0,running
+POD trustiot-ingress-istio-7847ff9f6c-kmbsw Running istio-proxy:ready=true,restarts=0,running
+POD trustiot-migrate-65f0410e-rtmc9 Succeeded migrate:ready=false,restarts=0,terminated:Completed
+POD trustiot-otel-collector-78498d87b4-cm7fr Running otel-collector:ready=true,restarts=0,running
+POD trustiot-postgres-1 Running postgres:ready=true,restarts=0,running

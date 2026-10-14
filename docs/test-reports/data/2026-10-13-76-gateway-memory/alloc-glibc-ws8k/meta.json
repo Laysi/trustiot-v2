@@ -1,0 +1,36 @@
+{
+ "spec": {
+  "id": "alloc-glibc-ws8k",
+  "wsBuffer": 8192,
+  "devices": 250,
+  "outage": {
+   "atSecs": 40,
+   "forSecs": 150
+  },
+  "durationSecs": 260,
+  "bufMemBytes": 16777216
+ },
+ "exit": "exit=0",
+ "started": "2026-10-13T04:42:28.296Z",
+ "events": [
+  {
+   "t": "2026-10-13T04:43:10.492Z",
+   "what": "relay stopped"
+  },
+  {
+   "t": "2026-10-13T04:45:40.494Z",
+   "what": "relay started"
+  }
+ ],
+ "cloud": {
+  "t": 1791866823,
+  "batches": 468,
+  "records": 1300000,
+  "bytes": 118633900,
+  "dups": 0,
+  "gaps": 0,
+  "bad": 0
+ },
+ "before": "--- meminfo\nMemTotal:        1888912 kB\nMemFree:         1492188 kB\nMemAvailable:    1716520 kB\nBuffers:           66352 kB\nCached:           205916 kB\nSwapCached:            0 kB\nActive:           201596 kB\nInactive:          96072 kB\nActive(anon):      35780 kB\nInactive(anon):        0 kB\nActive(file):     165816 kB\nInactive(file):    96072 kB\nUnevictable:           0 kB\nMlocked:               0 kB\nSwapTotal:       1888252 kB\nSwapFree:        1888252 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:                20 kB\nWriteback:             0 kB\nAnonPages:         25644 kB\nMapped:            40972 kB\nShmem:             10424 kB\nKReclaimable:      23080 kB\nSlab:              48484 kB\nSReclaimable:      23080 kB\nSUnreclaim:        25404 kB\nKernelStack:        2488 kB\nPageTables:         2148 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     2832708 kB\nCommitted_AS:      97644 kB\nVmallocTotal:   261087232 kB\nVmallocUsed:       20928 kB\nVmallocChunk:          0 kB\nPercpu:              720 kB\nCmaTotal:         524288 kB\nCmaFree:          513164 kB\nBalloon:               0 kB\n--- zram\n    4096       64    20480        0    20480        0        0        0        0\n--- loadavg\n0.07 0.37 0.27 1/153 9780\n--- date\n2026-10-13T04:42:28Z\n",
+ "after": "--- meminfo\nMemTotal:        1888912 kB\nMemFree:         1495336 kB\nMemAvailable:    1720288 kB\nBuffers:           67000 kB\nCached:           207604 kB\nSwapCached:            0 kB\nActive:           203256 kB\nInactive:          96780 kB\nActive(anon):      37440 kB\nInactive(anon):        0 kB\nActive(file):     165816 kB\nInactive(file):    96780 kB\nUnevictable:           0 kB\nMlocked:               0 kB\nSwapTotal:       1888252 kB\nSwapFree:        1888252 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:                40 kB\nWriteback:             0 kB\nAnonPages:         25396 kB\nMapped:            39888 kB\nShmem:             12040 kB\nKReclaimable:      22904 kB\nSlab:              48436 kB\nSReclaimable:      22904 kB\nSUnreclaim:        25532 kB\nKernelStack:        2524 kB\nPageTables:         2056 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:     2832708 kB\nCommitted_AS:      99256 kB\nVmallocTotal:   261087232 kB\nVmallocUsed:       20960 kB\nVmallocChunk:          0 kB\nPercpu:              720 kB\nCmaTotal:         524288 kB\nCmaFree:          513164 kB\nBalloon:               0 kB\n--- zram\n    4096       64    20480        0    20480        0        0        0        0\n--- loadavg\n0.00 0.14 0.19 1/155 10175\n--- date\n2026-10-13T04:47:05Z\n"
+}

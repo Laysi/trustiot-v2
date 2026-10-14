@@ -16,10 +16,11 @@
 # should depend on paths gets its rule in scripts/ci/changes.ts and an output of `changes`.
 #
 # Checks that later issues add to this workflow:
-# - Integration tests (Laysi/trustiot-v2#60): service containers for Postgres with AGE,
-#   ClickHouse and Mosquitto, every migration on a fresh database, the cross-tenant negative
-#   tests (Laysi/trustiot-v2#56), and `cargo sqlx prepare --check` against that database.
-# - The static check that rejects SQL built from strings (Laysi/trustiot-v2#53).
+# - Integration tests still missing (every migration on a fresh database already runs in
+#   `cargo test`, in tools/migrate's tests with throwaway containers that fail under CI instead
+#   of skipping): Mosquitto for the MQTT service tests (Laysi/trustiot-v2#91), the AGE roles'
+#   cross-tenant tests (Laysi/trustiot-v2#176), and `cargo sqlx prepare --workspace --check`
+#   (Laysi/trustiot-v2#383; no crate enables sqlx's macros feature yet).
 # - Frontend (Laysi/trustiot-v2#123): Bun install, type check, lint, unit tests, build, and
 #   regenerating the API client with a diff check.
 name: ci

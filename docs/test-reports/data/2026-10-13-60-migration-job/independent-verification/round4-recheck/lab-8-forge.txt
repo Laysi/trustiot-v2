@@ -1,0 +1,6 @@
+FORGE as identity_app: COMMENT ON ROLE identity_app IS 'trustiot-migrate:login-role': exit=1 out= err=ERROR:  permission denied
+FORGE as identity_app: COMMENT ON ROLE identity_owner IS 'trustiot-migrate:login-role': exit=1 out= err=ERROR:  permission denied
+FORGE as identity_app: COMMENT ON ROLE trustiot_owner IS 'trustiot-migrate:login-role': exit=1 out= err=ERROR:  permission denied
+FORGE as identity_app: ALTER ROLE identity_app NOLOGIN: exit=1 out= err=ERROR:  permission denied to alter role
+FORGE as identity_app: ALTER ROLE identity_owner NOLOGIN: exit=1 out= err=ERROR:  permission denied to alter role
+ROLES identity_app:LOGIN:trustiot-migrate:login-role identity_owner:NOLOGIN:- trustiot_owner:LOGIN:-

@@ -71,8 +71,3 @@ observability:
     environment: test
     dsnSecret:
       name: trustiot-sentry
-  # The collector's ClickHouse account password (the migration Job creates the account with it).
-  collector:
-    clickhouse:
-      passwordSecret:
-        name: trustiot-otel-collector-clickhouse

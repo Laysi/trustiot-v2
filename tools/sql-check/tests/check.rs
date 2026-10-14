@@ -168,25 +168,26 @@ fn listed_paths_exist() {
     }
 }
 
-/// The workspace check sees the allowed file, and finds its tenant SQL only because it is
-/// allowed: the same source elsewhere is a finding.
+/// The workspace check sees each allowed file, and finds its session SQL only because it is
+/// allowed: the same source elsewhere is a finding. So every entry is still needed.
 #[test]
-fn the_tenant_module_is_the_only_exception() {
+fn the_allowed_files_are_the_only_exceptions() {
     let root = workspace_root();
-    let allowed = sql_check::SESSION_SETTING_ALLOWED[0];
-    let source = fs::read_to_string(root.join(allowed)).expect("read the tenant module");
-    let dir = root.join(allowed);
-    let elsewhere = check_source(
-        Path::new("crates/other/src/lib.rs"),
-        dir.parent(),
-        &source,
-        false,
-    )
-    .unwrap_or_else(|error| panic!("{error}"));
-    assert!(
-        elsewhere
-            .iter()
-            .any(|finding| finding.rule == Rule::SessionSetting),
-        "{elsewhere:?}"
-    );
+    for allowed in sql_check::SESSION_SETTING_ALLOWED {
+        let source = fs::read_to_string(root.join(allowed)).expect("read the allowed file");
+        let dir = root.join(allowed);
+        let elsewhere = check_source(
+            Path::new("crates/other/src/lib.rs"),
+            dir.parent(),
+            &source,
+            false,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            elsewhere
+                .iter()
+                .any(|finding| finding.rule == Rule::SessionSetting),
+            "{allowed}: {elsewhere:?}"
+        );
+    }
 }

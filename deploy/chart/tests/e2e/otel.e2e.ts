@@ -41,7 +41,9 @@ const PREFIX = RELEASE.includes("trustiot") ? RELEASE : `${RELEASE}-trustiot`;
 const RUN = crypto.randomUUID().replaceAll("-", "").slice(0, 8);
 // Names of their own, so the test never replaces a Secret or object it did not create.
 const ADMIN_SECRET = `trustiot-e2e-ch-admin-${RUN}`;
-const COLLECTOR_SECRET = `trustiot-e2e-collector-${RUN}`;
+// The chart declares the collector's password Secret empty for the migration Job to fill; this
+// test turns the Job off, so it fills the Secret itself.
+const COLLECTOR_SECRET = `${PREFIX}-otel-collector-password`;
 const SIEM = `trustiot-e2e-siem-${RUN}`;
 const COLLECTOR_USER = `trustiot_collector_e2e_${RUN}`;
 const COLLECTOR_IMAGE = (() => {
@@ -262,7 +264,7 @@ function imageValues(): string[] {
 }
 
 const work = mkdtempSync(join(tmpdir(), "trustiot-otel-e2e-"));
-const created = { secrets: false, siem: false, release: false };
+const created = { secrets: false, siem: false, release: false, collectorSecret: false };
 const report: Record<string, unknown> = { run: RUN, namespace: NAMESPACE, release: RELEASE, collectorImage: COLLECTOR_IMAGE };
 const traceId = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
 let collectorUrl = "";
@@ -292,12 +294,17 @@ beforeAll(async () => {
   if (!status.stderr.toString().includes("not found")) {
     throw new Error(`helm status ${RELEASE} failed:\n${status.stderr.toString()}`);
   }
+  // The chart keeps the collector's password Secret on uninstall (helm.sh/resource-policy keep);
+  // one left by an earlier run would be adopted with its old password, so refuse it.
+  const leftover = Bun.spawnSync({ cmd: [...kubectlArgs(), "get", "secret", COLLECTOR_SECRET], stdout: "ignore", stderr: "pipe" });
+  if (leftover.exitCode === 0) {
+    throw new Error(`${NAMESPACE} already has Secret ${COLLECTOR_SECRET} from an earlier run; delete it first`);
+  }
   // Fresh passwords, written to files in a private temp dir so they never appear in argv.
-  const collectorPassword = hex(24);
+  const collectorPassword = hex(32);
   siemToken = hex(24);
   created.secrets = true;
   kubectl("create", "secret", "generic", ADMIN_SECRET, `--from-file=password=${secretFile("admin", hex(24))}`);
-  kubectl("create", "secret", "generic", COLLECTOR_SECRET, `--from-file=password=${secretFile("collector", collectorPassword)}`);
   kubectl(
     "create",
     "secret",
@@ -319,13 +326,14 @@ beforeAll(async () => {
     "--set",
     `clickhouse.bundled.adminSecret.name=${ADMIN_SECRET}`,
     "--set",
-    `observability.collector.clickhouse.passwordSecret.name=${COLLECTOR_SECRET}`,
-    "--set",
     `observability.collector.clickhouse.user=${COLLECTOR_USER}`,
     ...imageValues(),
   ];
   // Step 1: ClickHouse only, so the schema and the collector's account exist before anything
-  // writes (the migration Job, Laysi/trustiot-v2#60, will do this part on install).
+  // writes. In a real install the migration Job (Laysi/trustiot-v2#60) does this part, but
+  // values-otel-e2e.yaml sets migrate.enabled to false: this test's Postgres is a name only, and
+  // the Job needs a real one (it takes its lock there), so the test applies the ClickHouse files
+  // and creates the account itself.
   helm(
     "install",
     RELEASE,
@@ -352,7 +360,10 @@ beforeAll(async () => {
     `CREATE USER IF NOT EXISTS ${COLLECTOR_USER} IDENTIFIED WITH sha256_password BY '${collectorPassword}';\n` +
       `GRANT trustiot_otel_collector TO ${COLLECTOR_USER};\n`,
   );
-  // Step 2: the collector, forwarding logs and traces to the SIEM, and the example service.
+  // Step 2: the collector, forwarding logs and traces to the SIEM, and the example service. No
+  // --wait: the collector cannot start until its Secret has the password, which the test writes
+  // once Helm has declared the Secret (the migration Job's part in a real install).
+  created.collectorSecret = true;
   helm(
     "upgrade",
     RELEASE,
@@ -370,11 +381,19 @@ beforeAll(async () => {
     `observability.collector.forward.authHeader.valueSecret.name=${SIEM}`,
     "--set",
     "observability.collector.forward.authHeader.valueSecret.key=header",
-    "--rollback-on-failure",
-    "--wait",
-    "--timeout",
-    "8m",
   );
+  await waitFor(`Secret ${COLLECTOR_SECRET}`, () =>
+    Bun.spawnSync({ cmd: [...kubectlArgs(), "get", "secret", COLLECTOR_SECRET], stdout: "ignore", stderr: "ignore" }).exitCode === 0
+      ? true
+      : undefined,
+  );
+  const patch = secretFile("collector-patch.json", JSON.stringify({ data: { [COLLECTOR_USER]: Buffer.from(collectorPassword).toString("base64") } }));
+  kubectl("patch", "secret", COLLECTOR_SECRET, "--type", "merge", "--patch-file", patch);
+  // Start the collector now instead of after the kubelet's next retry of the missing key.
+  kubectl("delete", "pod", "--selector", `app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=otel-collector`, "--wait=false");
+  for (const deployment of [`${PREFIX}-otel-collector`, `${PREFIX}-assets`]) {
+    kubectl("rollout", "status", `deployment/${deployment}`, "--timeout=300s");
+  }
   kubectl("rollout", "status", `deployment/${SIEM}`, "--timeout=180s");
   collectorUrl = await portForward(`${PREFIX}-otel-collector`, 4318);
 }, 900_000);
@@ -393,7 +412,9 @@ afterAll(() => {
     // The StatefulSet keeps its volume on uninstall (persistentVolumeClaimRetentionPolicy).
     [created.release, () => kubectl("delete", "pvc", `data-${PREFIX}-clickhouse-0`, "--ignore-not-found", "--wait=true")],
     [created.siem, () => kubectl("delete", "deployment,service,configmap,networkpolicy", SIEM, "--ignore-not-found", "--wait=true")],
-    [created.secrets, () => kubectl("delete", "secret", ADMIN_SECRET, COLLECTOR_SECRET, SIEM, "--ignore-not-found")],
+    [created.secrets, () => kubectl("delete", "secret", ADMIN_SECRET, SIEM, "--ignore-not-found")],
+    // Kept by Helm on uninstall.
+    [created.collectorSecret, () => kubectl("delete", "secret", COLLECTOR_SECRET, "--ignore-not-found")],
   ];
   for (const [done, cleanup] of steps) {
     if (!done) continue;

@@ -125,7 +125,9 @@ Who may call each enabled service and in-cluster component. Callers come from tw
 - the ingress gateway, for every service it routes to (public paths and ingress.routes) and for
   the identity service, which it calls for the cookie check (ext_authz);
 - the telemetry pipeline, fixed in the chart: every enabled service sends OTLP to the
-  OpenTelemetry collector, and the collector writes to the bundled ClickHouse (decision 22).
+  OpenTelemetry collector, and the collector writes to the bundled ClickHouse (decision 22);
+- the migration Job, fixed in the chart too: it reaches the bundled ClickHouse while
+  migrate.enabled is true (tools/migrate).
 Every other connection is refused. Callers must be keys under services and callees keys under
 services, components ("trustiot.mesh.components") or direct callees ("trustiot.mesh.directCallees",
 which get no entry here); other names fail the render.
@@ -192,6 +194,10 @@ fromYaml.
 {{- end -}}
 {{- else if and (eq $name "clickhouse") (get $components "otel-collector") -}}
 {{- $callers = append $callers "otel-collector" -}}
+{{- end -}}
+{{- if and (eq $name "clickhouse") $v.migrate.enabled -}}
+{{- /* The migration Job applies the DDL and creates the accounts (tools/migrate). */ -}}
+{{- $callers = append $callers "migrate" -}}
 {{- end -}}
 {{- $services = append $services (dict "name" $name "callers" $callers "ingress" (has $name $ingressCallees)) -}}
 {{- end -}}

@@ -2,7 +2,10 @@
 import { describe, expect, test } from "bun:test";
 import { join, relative } from "node:path";
 
+import { spawnSync } from "node:child_process";
+
 import { envLines, serviceLoginVariable } from "../lib/commands.ts";
+import { ingressRoutes } from "../lib/identity.ts";
 import { generateCredentials } from "../lib/secrets.ts";
 import { caCertificatePath, stateDir, type State } from "../lib/state.ts";
 
@@ -66,6 +69,46 @@ describe("env", () => {
     for (const key of ["PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "TRUSTIOT_DEV_POSTGRES_URL", "CLICKHOUSE_URL", "MQTT_PORT"]) {
       expect(env[key], key).toBeDefined();
     }
+  });
+});
+
+describe("env for the identity service", () => {
+  const caFile = "/state/trustiot-v2/dev/t/tls/ca.crt";
+  const keys = '{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"dev-0123456789ab","x":"AAAA"}]}';
+  const identity = { signingKeyFile: "/state/trustiot-v2/dev/t/identity/signing-key.pem", keys, routes: ingressRoutes() };
+  const withIdentity = (): State => {
+    const current = state();
+    current.credentials.services.identity = { user: "identity_app", password: "generated-by-the-job" };
+    return current;
+  };
+
+  test("prints the public keys, the key file's path and the routes, and the identity_app login", () => {
+    const text = envLines(withIdentity(), caFile, identity);
+    const env = parse(text);
+    expect(env.TRUSTIOT_INTERNAL_IDENTITY_KEYS).toBe(`'${keys}'`);
+    expect(env.TRUSTIOT_IDENTITY_SIGNING_KEY_FILE).toBe(identity.signingKeyFile);
+    expect(env.TRUSTIOT_INGRESS_ROUTES).toBe(`'${identity.routes}'`);
+    expect(env.TRUSTIOT_DEV_IDENTITY_DATABASE_USERNAME).toBe("identity_app");
+    expect(env.TRUSTIOT_DEV_IDENTITY_DATABASE_PASSWORD).toBe("generated-by-the-job");
+    expect(text).not.toContain("PRIVATE KEY");
+  });
+
+  test("a shell that evals the output gets the JSON values back unchanged", () => {
+    const script =
+      'set -a; eval "$1"; set +a; printf "%s\\n%s\\n%s" "$TRUSTIOT_INTERNAL_IDENTITY_KEYS" "$TRUSTIOT_INGRESS_ROUTES" "$TRUSTIOT_DEV_IDENTITY_DATABASE_PASSWORD"';
+    const result = spawnSync("sh", ["-c", script, "sh", envLines(withIdentity(), caFile, identity)], { encoding: "utf8" });
+    expect(result.status).toBe(0);
+    const lines = result.stdout.split("\n");
+    expect(lines).toEqual([keys, identity.routes, "generated-by-the-job"]);
+    expect(JSON.parse(lines[1]!)[0].host).toBe("localhost");
+  });
+
+  test("prints none of it before the instance has a key, and the rest is unchanged", () => {
+    const text = envLines(state(), caFile);
+    for (const name of ["TRUSTIOT_INTERNAL_IDENTITY_KEYS", "TRUSTIOT_IDENTITY_SIGNING_KEY_FILE", "TRUSTIOT_INGRESS_ROUTES", "IDENTITY"]) {
+      expect(text, name).not.toContain(name);
+    }
+    expect(parse(text).TRUSTIOT_POSTGRES_HOST).toBe("127.0.0.1");
   });
 });
 

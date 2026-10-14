@@ -1,0 +1,5 @@
+# The migration Job (tools/migrate): the chart's migration Job runs it as `migrate run`, and every
+# service pod's init container runs it as `migrate wait-for-job`. Not a service. Packed with
+# deploy/images/rust-binary.Containerfile.
+[rust]
+package = "migrate"

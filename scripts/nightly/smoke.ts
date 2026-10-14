@@ -1,10 +1,11 @@
 // Deploys the Helm chart with one values file into a k3d cluster and checks that it works:
 // every workload of the release is ready (the kubelet's HTTP probes answer), every CloudNativePG
 // Cluster is healthy, each ingress gateway's NetworkPolicy admits exactly the ports its Istio pods
-// use, every Service that exposes a probe routes to a ready pod, and an uninstall leaves nothing
-// behind but the objects the chart keeps on purpose (the database), which are then deleted. Components
-// the chart gains later are covered without
-// changes here, because the checks read the release's own manifests (manifests.ts).
+// use, every Service that exposes a probe routes to a ready pod, the migration Job generated the
+// passwords into the Secrets the chart declares, and an uninstall leaves nothing behind but the
+// objects the chart keeps on purpose (the database and the password Secrets), which are then
+// deleted. Components the chart gains later are covered without changes here, because the checks
+// read the release's own manifests (manifests.ts).
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,9 +18,13 @@ import {
   gatewaysOf,
   healthEndpointsOf,
   keptObjectsOf,
+  migrationJobsOf,
+  migrationOrderProblems,
   missingSecrets,
   missingTlsSecrets,
   parseManifests,
+  passwordSecretProblems,
+  passwordSecretsOf,
   podProblems,
   postgresClusterProblems,
   postgresClustersOf,
@@ -185,6 +190,37 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         }
         return workloads.map((w) => `${w.kind}/${w.name}`).join(", ");
       })) &&
+      (await check("the migration Job completed before any service started", async () => {
+        // Laysi/trustiot-v2#60: every service pod waits in an init container until the Job is
+        // complete, so no service runs on a schema older than its own.
+        const jobs = migrationJobsOf(parseManifests(manifest));
+        if (jobs.length !== 1) throw new Error(`the release should have one migration Job, found ${jobs.length}: ${jobs.join(", ")}`);
+        const job = await kubectl(["get", "--namespace", namespace, `job/${jobs[0]}`, "--output", "json"]);
+        const pods = await kubectl(["get", "pods", "--namespace", namespace, "--output", "json"]);
+        const parsed = JSON.parse(job.stdout) as { status?: { completionTime?: string } };
+        const problems = migrationOrderProblems(parsed, JSON.parse(pods.stdout) as { items?: unknown[] });
+        if (problems.length > 0) throw new Error(problems.join("; "));
+        return `job/${jobs[0]} completed at ${parsed.status?.completionTime}; every service container started after it`;
+      })) &&
+      (await check("the migration Job generated every password into its Secret", async () => {
+        // Laysi/trustiot-v2#60: the chart declares the password Secrets empty and the Job fills
+        // them on the first install. The Secret's JSON holds the passwords: it is read quietly
+        // and only key names reach the log and the report.
+        const secrets = passwordSecretsOf(parseManifests(manifest));
+        const problems: string[] = [];
+        for (const [name, keys] of secrets) {
+          const got = await run(ctx.log, [ctx.kubectl, "get", "secret", name, "--namespace", namespace, "--output", "json"], {
+            ...kube,
+            timeoutMs: 60_000,
+            quiet: true,
+          });
+          problems.push(...passwordSecretProblems(name, keys, JSON.parse(got.stdout)));
+        }
+        if (problems.length > 0) throw new Error(problems.join("; "));
+        return secrets.size === 0
+          ? "the release has no password Secret"
+          : [...secrets].map(([name, keys]) => `${name}: ${keys.join(", ")}`).join("; ");
+      })) &&
       (await check("every CloudNativePG Cluster is healthy", async () => {
         // The bundled Postgres (Laysi/trustiot-v2#58): the operator creates its pods after helm
         // has returned, and bootstrapping the database takes a while on a loaded runner.
@@ -259,15 +295,16 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         }
         return routed.join(", ");
       })) &&
-      (await check("helm uninstall leaves no object of the release but the kept database", async () => {
+      (await check("helm uninstall leaves no object of the release but the kept database and password Secrets", async () => {
         await helm(["uninstall", RELEASE, "--namespace", namespace, "--wait", "--timeout", "3m"], 4 * 60_000);
         const left = await exec(
           [ctx.kubectl, "get", "-f", "-", "--namespace", namespace, "--ignore-not-found", "--output", "name"],
           { ...kube, stdin: manifest, timeoutMs: 60_000 },
         );
         if (left.code !== 0) throw new Error(`kubectl get failed: ${tail(left.stderr.trim(), 400)}`);
-        // The chart keeps the database on uninstall (helm.sh/resource-policy: keep); everything
-        // else must be gone, and the kept objects must all still be there.
+        // The chart keeps the database and the password Secrets on uninstall
+        // (helm.sh/resource-policy: keep); everything else must be gone, and the kept objects
+        // must all still be there.
         const kept = keptObjectsOf(parseManifests(manifest));
         const remaining = left.stdout.trim().split("\n").filter((line) => line !== "");
         const unexpected = remaining.filter((name) => !kept.includes(name));

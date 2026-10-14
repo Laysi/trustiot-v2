@@ -13,7 +13,7 @@
 | MS6 商業化與企業地端 | 自助註冊（A5）；方案的具體數字、價格、金流與訂閱狀態（B3；權益模型在 MS2）；MCP（J9）；OIDC、SAML；離線安裝包；租戶匯出與匯入；其餘閘道器進階安全（D6：Pi secure boot、唯讀根目錄、復原金鑰託管、雙人核准、出廠映像），與整機 A/B 更新一起設計 | 依第一個簽約客戶的需求訂 |
 
 - **關鍵路徑是 MS1**：自建 CA、TPM 與端到端確認風險最高，AI、警報與畫面也都要用它送上來的資料。MS0 先把窄表與資料格式定下來，MS3 就能用 lab 錄下的資料與 MS1 同時進行。
-- **剩下的可行性測試各擋一個里程碑**：Istio ambient 在 k3s 與 Cloudflare Tunnel（含 MQTT 的 WebSocket 轉接）已於 2026-10-10 完成，TPM mTLS 與憑證換發已於 2026-10-12 完成；閘道器的記憶體用量（評估採購規格），以及 Pi 上的雙層 TLS（目前沒有可測的機器），都在 MS1 開始前完成；OTA 自動回滾，以及 Apache AGE 的租戶隔離與 LLM 寫 Cypher 的成功率，都在 MS4 前完成；RAG 題庫在 MS5 前完成。警報「觸發次數異常多」的門檻在 MS4 前決定。
+- **剩下的可行性測試各擋一個里程碑**：Istio ambient 在 k3s 與 Cloudflare Tunnel（含 MQTT 的 WebSocket 轉接）已於 2026-10-10 完成，TPM mTLS 與憑證換發已於 2026-10-12 完成，Pi 上的雙層 TLS 與閘道器的記憶體用量（評估採購規格）已於 2026-10-13 完成；OTA 自動回滾，以及 Apache AGE 的租戶隔離與 LLM 寫 Cypher 的成功率，都在 MS4 前完成；RAG 題庫在 MS5 前完成。警報「觸發次數異常多」的門檻在 MS4 前決定。
 - **分工**：MS0 的契約（資料格式、schema、API 規格、測試框架）一次定好；之後 MS2 的 CRUD 與 SPA 依規格與自動測試驗收，不需要逐項人工審查；MS1 的邊緣與 MS3 的 agent 是最難的兩塊。
 - **SaaS 上線併入 MS4**（2026-10-10 決定）：SaaS 對外與現場閘道器正式接上是同一件事，所以標示「SaaS 上線前完成」的工作（從零重建計時演練、外部監控）都是 MS4 的完成條件；決策 3 的型號定義匯出與舊 stage 下線也在 MS4。
 - **舊系統**：不再投入，不修補也不止血；MS3 達成後新系統即具備舊系統的功能。
@@ -21,14 +21,14 @@
 
 ## 第一批可行性測試
 
-這十四項驗證後的結果會決定後續實作細節，已完成九項，其餘五項排在對應的里程碑之前（見上方里程碑表下的說明）。
+這十四項驗證後的結果會決定後續實作細節，已完成十一項，其餘三項排在對應的里程碑之前（見上方里程碑表下的說明）。
 
 - [x] MQTT broker 選型（首選 Mosquitto）：驗證 mTLS、憑證撤銷清單、依身分限制可用的 topic，以及能否在 443 提供服務。
 - [x] Istio ambient 在 k3s 上：設 global.platform=k3s 後 CNI 與 ztunnel 正常運作；入口 gateway 以 ext\_authz 把 cookie 交給身分服務並回傳內部身分；AuthorizationPolicy 依 ServiceAccount 擋下未允許的服務呼叫；istiod、ztunnel 與入口 gateway 的記憶體用量。結果見[可行性測試結果（2026-10-10）](../feasibility/2026-10-10-edge-poc.md)。
 - [x] Cloudflare Tunnel：主機上的 cloudflared 把所有產品流量交給入口 gateway 的 ClusterIP（不開主機埠），入口只接受本機來源，cloudflared 在 systemd 沙箱設定下正常運作；閘道器的 mTLS 包在 WebSocket 內，經 tunnel、入口 gateway 與 MQTT 轉接服務連到 broker，客戶端憑證、CRL 與 dynsec 照常運作；WebSocket 閒置多久會被切斷（MQTT keepalive 要設多短）；Cloudflare 維護時斷線後自動重連，並靠離線緩衝補送；HTTP 串流在 125 秒逾時下靠心跳維持。結果見[可行性測試結果（2026-10-10）](../feasibility/2026-10-10-edge-poc.md)；Pi 上的雙層 TLS 拆成下一項。
-- [ ] 雙層 TLS 在 Pi 上的 CPU 用量與延遲（從 Cloudflare Tunnel 一項拆出）：目前沒有可測的機器，等 lab Pi 到位後與 TPM mTLS 一起測。
+- [x] 雙層 TLS 在 Pi 上的 CPU 用量與延遲（從 Cloudflare Tunnel 一項拆出）：WebSocket 內包 mTLS 在 lab 的 Pi 4 上，以 SaaS 與地端兩條路徑、方案的採樣頻率實測，CPU 與延遲都遠在可接受範圍內；兩層 TLS 都把 ChaCha20-Poly1305 排第一並開 session resumption。結果見[可行性測試結果（2026-10-13）](../feasibility/2026-10-13-double-tls-pi.md)。
 - [x] 閘道器 Rust 程式用 TPM 金鑰做 mTLS：先試 rustls 外部簽章，不行就改走 tpm2-pkcs11；並驗證用 TPM 金鑰簽伺服器挑戰以換發憑證，以及資料分割區的 LUKS 由 TPM 自動解鎖。2026-10-12 在 lab Pi 通過，採用 rustls 外部簽章，結果見[可行性測試結果（2026-10-12）](../feasibility/2026-10-12-tpm-poc.md)。
-- [ ] 閘道器（trustiot-gw）的記憶體用量：在 lab 的 Pi 上量 OS 基線，加上 Rust 閘道器程式（WebSocket 內的 mTLS、MQTT、離線緩衝、Modbus 輪詢）在不同設備數與緩衝量下的尖峰，用來評估閘道器採購的記憶體規格。
+- [x] 閘道器（trustiot-gw）的記憶體用量：在 lab 的 Pi 上量 OS 基線，加上 Rust 閘道器程式（WebSocket 內的 mTLS、MQTT、離線緩衝、Modbus 輪詢）在不同設備數與緩衝量下的尖峰，用來評估閘道器採購的記憶體規格。結果見[可行性測試結果（2026-10-13）](../feasibility/2026-10-13-gateway-memory.md)：OS 基線約 160 MiB，程式尖峰約 9 MiB 加緩衝上限；建議 G1 的記憶體上限預設 16 MiB、上限 64 MiB，採購最低 1 GB、建議 2 GB（2026-10-14 使用者同意）。
 - [x] 薄的 OpenAI 相容 client 搭配 vLLM、Ollama：工具呼叫、用量、推理欄位、串流取消、區分 429 與逾時，以及地端模型做 SQL 分析的品質。
 - [x] 警報腳本 Rhai 與 WASM 比較：AI 寫對的比例、沙箱限制（規則改為只在雲端執行，不需在 Pi 上測）。
 - [ ] 自建 OTA 在 lab 的 Pi 上驗證自動回滾。
@@ -38,4 +38,4 @@
 - [ ] Apache AGE：每租戶一個 graph 配專屬登入角色的隔離（逐項測[現場脈絡與知識圖](../architecture/field-context.md)護欄第 5 條的權限路徑，攻擊查詢由 Opus 5.5 產生）、LLM 在 AGE 上寫 Cypher 的成功率、含 AGE 的 Postgres 映像。
 - [x] 單節點資源實測：整套 k3s 堆疊在目標主機上的記憶體、CPU 與磁碟用量，訂出 SaaS 與地端的最低規格。
 
-2026-10-09 已在 Mac mini M1 實驗機測完第一批 8 項的雲端側，結果見 [可行性測試結果](../feasibility/2026-10-09-cloud-poc.md)。TPM 與 OTA 依指示只測雲端側而未測，TPM 於 2026-10-12 在 lab Pi 補測，結果見[可行性測試結果（2026-10-12）](../feasibility/2026-10-12-tpm-poc.md)；RAG 的 embedding 與 reranker 已決定改用 API，向量處理已在 knowva 專案驗證。Istio ambient、Cloudflare Tunnel、Apache AGE 與 RAG 題庫是後加的項目；2026-10-10 測完 Istio ambient 與 Cloudflare Tunnel，結果見[可行性測試結果（2026-10-10）](../feasibility/2026-10-10-edge-poc.md)（Pi 上的雙層 TLS 目前沒有可測的機器，改排在 MS1 開始前）；Apache AGE 與 RAG 題庫尚待驗證。
+2026-10-09 已在 Mac mini M1 實驗機測完第一批 8 項的雲端側，結果見 [可行性測試結果](../feasibility/2026-10-09-cloud-poc.md)。TPM 與 OTA 依指示只測雲端側而未測，TPM 於 2026-10-12 在 lab Pi 補測，結果見[可行性測試結果（2026-10-12）](../feasibility/2026-10-12-tpm-poc.md)；RAG 的 embedding 與 reranker 已決定改用 API，向量處理已在 knowva 專案驗證。Istio ambient、Cloudflare Tunnel、Apache AGE 與 RAG 題庫是後加的項目；2026-10-10 測完 Istio ambient 與 Cloudflare Tunnel，結果見[可行性測試結果（2026-10-10）](../feasibility/2026-10-10-edge-poc.md)；2026-10-13 在 lab 的 Pi 上測完雙層 TLS 與閘道器的記憶體用量，結果分別見[雙層 TLS 的可行性測試結果](../feasibility/2026-10-13-double-tls-pi.md)與[閘道器記憶體用量的可行性測試結果](../feasibility/2026-10-13-gateway-memory.md)；Apache AGE 與 RAG 題庫尚待驗證。

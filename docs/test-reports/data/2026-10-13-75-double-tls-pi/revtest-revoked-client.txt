@@ -1,0 +1,4 @@
+
+thread 'main' (123551) panicked at src/bin/gw.rs:255:51:
+connack: Custom { kind: InvalidData, error: AlertReceived(CertificateRevoked) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

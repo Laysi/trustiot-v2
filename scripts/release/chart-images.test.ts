@@ -34,6 +34,7 @@ const HELM_TEST_MS = 180_000;
 const digest = (char: string): string => `sha256:${char.repeat(64)}`;
 const IDENTITY = { name: "identity", kind: "service" as const };
 const POSTGRES = { name: "postgres", kind: "postgres" as const };
+const MIGRATE = { name: "migrate", kind: "migrate" as const };
 
 /** The pins a release of the repository's images would write, with made-up digests. */
 function repositoryPins(registry = REGISTRY): ChartPin[] {
@@ -55,8 +56,9 @@ afterAll(() => {
 });
 
 describe("chartImage", () => {
-  test("maps the Postgres image and service keys, skips images the chart does not deploy", () => {
+  test("maps the Postgres and migration Job images and service keys, skips images the chart does not deploy", () => {
     expect(chartImage("postgres", VALUES)).toEqual(POSTGRES);
+    expect(chartImage("migrate", VALUES)).toEqual(MIGRATE);
     expect(chartImage("identity", VALUES)).toEqual(IDENTITY);
     expect(chartImage("release-selftest", VALUES)).toBeUndefined();
     expect(() => chartImage("factory-tool", VALUES)).toThrow(/neither deployed by the chart/);
@@ -67,6 +69,7 @@ describe("chartImage", () => {
     const deployed = names.filter((name) => chartImage(name, VALUES) !== undefined);
     expect(deployed).toContain("identity");
     expect(deployed).toContain("postgres");
+    expect(deployed).toContain("migrate");
     for (const name of NOT_DEPLOYED_BY_CHART) {
       expect(names).toContain(name);
     }

@@ -390,7 +390,7 @@ fn tenant_db(platform: &Platform, username: String, password: String) -> Result<
         database: platform.postgres_database.clone(),
         ssl_mode: platform.postgres_sslmode,
         ca_file: platform.postgres_ca_file.clone(),
-        username, // 服務角色的帳密，由 Laysi/trustiot-v2#58、Laysi/trustiot-v2#60 決定怎麼交給服務
+        username, // 服務角色的帳密：chart 以 TRUSTIOT__DATABASE__USERNAME/PASSWORD 交給服務（tools/migrate 設定密碼）
         password,
     };
     Ok(TenantDb::connect_lazy(config.connect_options(), PgPoolOptions::new().max_connections(10))?)

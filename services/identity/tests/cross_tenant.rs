@@ -23,6 +23,9 @@ const DATABASE: &str = "identity";
 const CREATE_DATABASE: &str = "CREATE DATABASE identity OWNER identity_owner";
 const DATABASE_TEMPLATE: &str = include_str!("../../../crates/service-kit/sql/database.sql");
 const MIGRATION: &str = include_str!("../migrations/postgres/0001_identity.sql");
+/// The migration Job creates the service's schema, owned by the owner role, before it runs the
+/// migrations (tools/migrate); the tests do the same as the owner.
+const SCHEMA: &str = "CREATE SCHEMA identity";
 
 /// One membership: `$1` tenant, `$2` the row id, kept as the member's user id (a new user, so
 /// the foreign key holds), `$3` the canary, which this table has no text column for.
@@ -43,7 +46,7 @@ async fn tenants_are_isolated() {
         .await
         .expect("create the database");
     let mut owner = postgres.connect("identity_owner", DATABASE).await;
-    for sql in [DATABASE_TEMPLATE, MIGRATION] {
+    for sql in [DATABASE_TEMPLATE, SCHEMA, MIGRATION] {
         sqlx::raw_sql(sql)
             .execute(&mut owner)
             .await

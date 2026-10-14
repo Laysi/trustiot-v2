@@ -1,0 +1,24 @@
+14554 kB NetworkManager pid=622
+6807 kB systemd pid=1
+5584 kB systemd-journal pid=287
+4792 kB systemd pid=4327
+4293 kB systemd-udevd pid=338
+3807 kB sshd-session pid=4604
+3672 kB wpa_supplicant pid=624
+2844 kB sshd pid=798
+2585 kB sudo pid=4614
+2559 kB sshd-session pid=4613
+2417 kB systemd-logind pid=584
+2036 kB systemd-timesyn pid=330
+2001 kB (sd-pam) pid=4329
+1655 kB dbus-daemon pid=579
+983 kB dbus-daemon pid=4355
+979 kB mpris-proxy pid=4347
+588 kB agetty pid=795
+479 kB cron pid=578
+326 kB sort pid=4618
+276 kB head pid=4619
+198 kB sh pid=4616
+196 kB sh pid=4617
+
+total_pss_kB: 63570

@@ -1,0 +1,40 @@
+PROBE r3: annotation from values: REFUSED (a template that declares a Secret (or a templated kind) cann)
+PROBE r3: annotation with randAlphaNum: REFUSED (template function randAlphaNum makes or reads secret materia)
+PROBE r3: annotation with lookup: REFUSED (template function lookup makes or reads secret material at r)
+PROBE r3: label with randAlphaNum: REFUSED (template function randAlphaNum makes or reads secret materia)
+PROBE r3: data after a comment action: REFUSED (a template that declares a Secret (or a templated kind) cann)
+PROBE r3: data after an if action: REFUSED (a template that declares a Secret (or a templated kind) cann)
+PROBE r3: stringData after a variable action: REFUSED (template function randAlphaNum makes or reads secret materia)
+PROBE r3: data after else: REFUSED (a template that declares a Secret (or a templated kind) cann)
+PROBE allowed name line used as an annotation: PASSES
+PROBE allowed labels include placed at column 0 (renders at 4): PASSES
+PROBE data as a quoted key at the Secret's column: REFUSED (a template that declares a Secret (or a templated kind) cann)
+PROBE data via a complex key: REFUSED (a template that declares a Secret (or a templated kind) cann)
+PROBE data via a merge key: REFUSED (a template that declares a Secret (or a templated kind) cann)
+PROBE data in a block scalar annotation (harmless text): PASSES
+PROBE stringData indented by a flow mapping on metadata: REFUSED (a template that declares a Secret (or a templated kind) cann)
+PROBE kind with a YAML tag: PASSES
+PROBE kind with an anchor: PASSES
+PROBE kind with a space before the colon: PASSES
+PROBE kind as a quoted key: PASSES
+PROBE kind on the next line: PASSES
+PROBE kind as a block scalar: PASSES
+PROBE flow-style Secret: PASSES
+PROBE JSON Secret in a template: PASSES
+PROBE kind line printed by an action: PASSES
+PROBE whole Secret from toYaml of a dict: PASSES
+PROBE whole Secret from values through toYaml: PASSES
+PROBE whole Secret from values through tpl: PASSES
+PROBE randAlphaNum in a pipeline: REFUSED (template function randAlphaNum makes or reads secret materia)
+PROBE lookup in parentheses: REFUSED (template function lookup makes or reads secret material at r)
+PROBE lookup after a trim marker and newline: REFUSED (template function lookup makes or reads secret material at r)
+PROBE buildCustomCert (no generation): PASSES
+PROBE .Files.Get of a chart file: PASSES
+PROBE sha256sum of .Release (deterministic): PASSES
+PROBE randInt: REFUSED (template function randInt makes or reads secret material at )
+PROBE uuidv4: REFUSED (template function uuidv4 makes or reads secret material at r)
+PROBE now | unixEpoch (time, not secret): PASSES
+PROBE .tpl helper declaring a Secret: REFUSED
+PROBE .tpl helper building a Secret with dict: PASSES
+ 1 pass
+ 0 fail
