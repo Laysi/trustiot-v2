@@ -22,11 +22,15 @@ use testkit::product::{ProductPostgres, product_postgres};
 const APP: &str = "app.saas.trustiot.test";
 const KID: &str = "2026-10-a";
 const PATH: &str = "/api/identity/v1/tenants";
+/// A route of the assets service, for a token addressed to it.
+const ASSETS_PATH: &str = "/api/assets/v1/tenant";
 
 const INSERT_USER: &str = "INSERT INTO identity.users (id, platform_admin) VALUES ($1::uuid, $2)";
 const INSERT_SESSION: &str = "INSERT INTO identity.sessions
     (id, token_hash, user_id, active_tenant_id, expires_at)
-VALUES (gen_random_uuid(), $1, $2::uuid, NULL, now() + interval '1 hour')";
+VALUES (gen_random_uuid(), $1, $2::uuid, $3::uuid, now() + interval '1 hour')";
+const INSERT_MEMBERSHIP: &str = "INSERT INTO identity.memberships (tenant_id, user_id, tenant_role)
+VALUES ($1::uuid, $2::uuid, $3)";
 const TENANT: &str = "SELECT name FROM identity.tenants WHERE tenant_id = $1::uuid";
 const TENANT_COUNT: &str = "SELECT count(*) FROM identity.tenants";
 /// The tenant's event, and whether it was written by the transaction that inserted the row: the
@@ -42,6 +46,16 @@ const GRANT_EVENTS: &str = "GRANT INSERT ON identity.outbox_event TO identity_ap
 
 /// A user and an active session of theirs, made by the test tooling; the cookie header value.
 async fn session(admin: &mut PgConnection, platform_admin: bool) -> String {
+    member_session(admin, platform_admin, None).await
+}
+
+/// Like [`session`], and when `member` names a tenant and a role, the user has that role there
+/// and the session acts in that tenant.
+async fn member_session(
+    admin: &mut PgConnection,
+    platform_admin: bool,
+    member: Option<(&str, &str)>,
+) -> String {
     let user = contract::UserId::generate().to_string();
     sqlx::query(INSERT_USER)
         .bind(&user)
@@ -49,10 +63,20 @@ async fn session(admin: &mut PgConnection, platform_admin: bool) -> String {
         .execute(&mut *admin)
         .await
         .expect("insert the user");
+    if let Some((tenant, role)) = member {
+        sqlx::query(INSERT_MEMBERSHIP)
+            .bind(tenant)
+            .bind(&user)
+            .bind(role)
+            .execute(&mut *admin)
+            .await
+            .expect("insert the membership");
+    }
     let secret = new_secret();
     sqlx::query(INSERT_SESSION)
         .bind(secret.hash().as_bytes().as_slice())
         .bind(&user)
+        .bind(member.map(|(tenant, _)| tenant))
         .execute(&mut *admin)
         .await
         .expect("insert the session");
@@ -62,7 +86,13 @@ async fn session(admin: &mut PgConnection, platform_admin: bool) -> String {
 /// The internal identity token the ingress gateway would forward with a request to `PATH`: the
 /// service's own ext_authz check signs it for `identity`.
 fn token(service: &Service, cookie: &str) -> String {
-    let check = format!("/internal/ext-authz{PATH}");
+    token_for(service, cookie, PATH)
+}
+
+/// The token the ingress gateway would forward with a request to `path`, signed for the service
+/// that the route of `path` names.
+fn token_for(service: &Service, cookie: &str, path: &str) -> String {
+    let check = format!("/internal/ext-authz{path}");
     let response = request(
         service.address,
         "POST",
@@ -75,11 +105,23 @@ fn token(service: &Service, cookie: &str) -> String {
 }
 
 fn create(service: &Service, token: Option<&str>, body: &Value) -> support::Response {
-    let mut headers = vec![("Host", APP), ("Content-Type", "application/json")];
+    create_as(service, token, Some("application/json"), &body.to_string())
+}
+
+/// `POST PATH` with `content_type` (none when `None`) and `body`.
+fn create_as(
+    service: &Service,
+    token: Option<&str>,
+    content_type: Option<&str>,
+    body: &str,
+) -> support::Response {
+    let mut headers = vec![("Host", APP)];
+    if let Some(content_type) = content_type {
+        headers.push(("Content-Type", content_type));
+    }
     if let Some(token) = token {
         headers.push(("x-internal-identity", token));
     }
-    let body = body.to_string();
     request_with_body(service.address, "POST", PATH, &headers, body.as_bytes())
         .expect("call the tenant API")
 }
@@ -98,6 +140,7 @@ fn start(product: &ProductPostgres) -> Service {
     std::fs::write(&key_file, key.pem()).expect("write the signing key");
     let routes = json!([
         {"host": APP, "path": "/api/identity", "match": "PathPrefix", "service": "identity"},
+        {"host": APP, "path": "/api/assets", "match": "PathPrefix", "service": "assets"},
     ]);
     let mut env: Vec<(String, String)> = vec![
         (
@@ -202,9 +245,39 @@ async fn platform_administrators_create_tenants_with_their_event() {
     let response = create(&service, Some(&user_token), &json!({"name": "Plant C"}));
     assert_eq!(response.status, 403, "{}", response.body);
     assert_eq!(response.json()["code"], "permission_denied");
+    // An administrator of a tenant is not a platform administrator.
+    let tenant_admin = member_session(&mut admin, false, Some((id.as_str(), "admin"))).await;
+    let tenant_admin_token = token(&service, &tenant_admin);
+    let response = create(
+        &service,
+        Some(&tenant_admin_token),
+        &json!({"name": "Plant C"}),
+    );
+    assert_eq!(response.status, 403, "{}", response.body);
+    assert_eq!(response.json()["code"], "permission_denied");
     let response = create(&service, None, &json!({"name": "Plant C"}));
     assert_eq!(response.status, 401, "{}", response.body);
     assert_eq!(response.json()["code"], "unauthenticated");
+    // A platform administrator's token addressed to another service.
+    let platform_cookie = session(&mut admin, true).await;
+    let for_assets = token_for(&service, &platform_cookie, ASSETS_PATH);
+    let response = create(&service, Some(&for_assets), &json!({"name": "Plant C"}));
+    assert_eq!(response.status, 401, "{}", response.body);
+    assert_eq!(response.json()["code"], "unauthenticated");
+    // Only a JSON content type: a page of another origin can make the browser send the cookie
+    // with the other types (no CORS preflight), so they must not create a tenant.
+    let json_body = json!({"name": "Plant C"}).to_string();
+    for content_type in [
+        None,
+        Some("text/plain"),
+        Some("text/plain; charset=utf-8"),
+        Some("application/x-www-form-urlencoded"),
+        Some("multipart/form-data; boundary=x"),
+    ] {
+        let response = create_as(&service, Some(&admin_token), content_type, &json_body);
+        assert_eq!(response.status, 400, "{content_type:?}: {}", response.body);
+        assert_eq!(response.json()["code"], "invalid_request");
+    }
     for body in [json!("Plant C"), json!({"name": 7}), json!({})] {
         let response = create(&service, Some(&admin_token), &body);
         assert_eq!(response.status, 400, "{body}: {}", response.body);
@@ -227,7 +300,18 @@ async fn platform_administrators_create_tenants_with_their_event() {
     }
     assert_eq!(tenant_count(&mut admin).await, before);
 
-    // 4. The log names who created which tenant, never its name.
+    // 4. The JSON content type may carry parameters.
+    let response = create_as(
+        &service,
+        Some(&admin_token),
+        Some("application/json; charset=utf-8"),
+        &json_body,
+    );
+    assert_eq!(response.status, 201, "{}", response.body);
+    assert_eq!(response.json()["name"], "Plant C");
+    assert_eq!(tenant_count(&mut admin).await, before + 1);
+
+    // 5. The log names who created which tenant, never its name.
     let output = service.stop();
     assert!(output.contains("created a tenant"), "{output}");
     assert!(output.contains(&id), "the log names the tenant ID");

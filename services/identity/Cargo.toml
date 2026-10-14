@@ -35,6 +35,9 @@ sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "t
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
 tracing.workspace = true
+# Tenant names: the Unicode general category of each character (control, format and separator
+# characters are refused). Already in the build through sqlx's SCRAM (stringprep).
+unicode-properties = { workspace = true, features = ["general-category"] }
 # The client API's OpenAPI document (tools/openapi merges it into api/openapi.json).
 utoipa = { workspace = true, features = ["chrono", "uuid"] }
 # Wipes the private key file's text after parsing.

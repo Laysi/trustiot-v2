@@ -58,13 +58,15 @@ token 只給請求要去的服務。chart 把 `ingress.routes` 換成實際主�
 | 請求 | 回應 |
 | --- | --- |
 | 沒有有效的內部身分 token | 401 `unauthenticated` |
-| 不是平台管理者 | 403 `permission_denied` |
+| 不是平台管理者（租戶的 `admin` 也不是） | 403 `permission_denied` |
+| `Content-Type` 不是 `application/json`（可帶 `; charset=utf-8` 之類的參數），或沒有 `Content-Type` | 400 `invalid_request` |
 | body 不是帶字串 `name` 的 JSON 物件 | 400 `invalid_request` |
-| `name` 去掉前後空白後是空的、超過 100 個字元，或含控制字元 | 422 `validation_failed`，欄位 `/name`，訊息 key `tenant.name_invalid`，`{"max": 100}` |
+| `name` 去掉前後空白後是空的、超過 100 個字元，或含 Unicode 一般類別 Cc（控制字元）、Cf（格式字元：零寬字元、雙向文字的覆寫與隔離、BOM）、Zl、Zp（行與段落分隔符）的字元 | 422 `validation_failed`，欄位 `/name`，訊息 key `tenant.name_invalid`，`{"max": 100}` |
 | 資料庫出錯或拒絕交易 | 503 `unavailable`，什麼都沒有建立 |
 | 建立了 | 201，`{"tenant_id", "name", "created_at"}` |
 
-- 呼叫路徑和其他 API 一樣經過入口：cookie 由這個服務自己的 ext_authz 換成內部身分 token，路由 `/api/identity` 的受眾是 `identity`；平台管理者不必屬於任何租戶，所以 token 沒有 `tenant` 也可以建立。
+- 呼叫路徑和其他 API 一樣經過入口：cookie 由這個服務自己的 ext_authz 換成內部身分 token，路由 `/api/identity` 的受眾是 `identity`；平台管理者不必屬於任何租戶，所以 token 沒有 `tenant` 也可以建立。給其他服務的 token（受眾不是 `identity`）回 401。
+- **以 cookie 認證的寫入一律要求 JSON 的 `Content-Type`**（防 CSRF）：入口把 cookie 換成呼叫者的身分，而別的 origin 的網頁也能讓瀏覽器帶著 cookie 送出 POST，但沒有 CORS preflight 時只能用表單（`application/x-www-form-urlencoded`、`multipart/form-data`）或 `text/plain`。要求 `application/json` 會讓跨 origin 的請求必須先經 preflight，而入口與服務都沒有 CORS 設定、不允許任何 preflight，所以這種網頁無法用管理者的 cookie 建立租戶。日後若加 CORS，不可對外部 origin 允許帶 cookie 的請求。之後每個以 cookie 認證的寫入 API 都照這個規則；Laysi/trustiot-v2#103 的登入、登出與其他 session 寫入也必須遵守（或改用同等的防護），並在 cookie 上設 `SameSite`。
 - 新租戶的 ID 由服務產生（UUIDv7），租戶的列與 `identity.tenant_created`（`crates/contract` 的 `events::identity::TenantCreated`，aggregate `tenant`/租戶 ID，事件帶租戶）在**同一個新租戶的 RLS 交易**裡寫入（`outbox::publish`），一起 commit 或一起放棄：有租戶就一定有事件，沒有租戶就沒有事件（`tests/tenants.rs` 撤銷寫 outbox 的權限後證明 503 且沒有留下列）。其他服務從這個事件建立自己的租戶資料，第一個是[資產服務](../assets/README.md)。
 - 成功時記一行 INFO `created a tenant`，帶 `user_id` 與 `tenant_id`；租戶名稱可能是公司名，不寫日誌，事件也不帶名稱（要名稱的服務以後經 API 取得）。
 
@@ -209,6 +211,6 @@ CARGO_BUILD_JOBS=2 cargo test -p identity
 | `tests/ext_authz.rs` | 真的服務與 Postgres：有效 session 拿到一個通過 service-kit 驗證的 token，偽造的同名標頭不會出現在回應；401 的各種情況（含過期、撤銷、使用者刪除）；改角色與移除成員在下一個請求生效；服務角色不能寫 session、RLS 擋住其他租戶的成員資料；私鑰、session secret 與 token 不出現在日誌與回應；健康埠只有 `/healthz`、`/readyz`；資料庫連不上時回 503；開新連線比檢查期限慢時，就緒後的檢查不失敗、斷線後自動恢復；金鑰與設定不能用時拒絕啟動 |
 | `tests/adversarial.rs` | 驗證者另寫的攻擊測試（真的服務與 Postgres）：cookie 解析的各種變形、以資料庫時鐘判斷到期與撤銷、資料庫被鎖、連線被殺、帳密錯誤時回 503 而不放行、成員資料的租戶隔離、各種日誌等級都不含密鑰、金鑰載入、健康埠、跨重啟的金鑰輪替 |
 | `tests/token_claims.rs` | 驗證者另寫：竄改、改簽、改受眾、改時間的 token 都過不了 service-kit 的驗證器，輪替期間舊 token 在效期內仍有效（不需要資料庫） |
-| `src/tenants.rs` | 租戶名稱的規則（去空白、長度以字元計、控制字元） |
-| `tests/tenants.rs` | 真的服務與 migration Job 套用的產品 schema：平台管理者的 session 經這個服務的 ext_authz 換成 token 後建立租戶得到 201，列與 `identity.tenant_created` 在同一個交易（同一個 `xmin`）；撤銷寫 outbox 的權限時回 503 且沒有留下列；不是平台管理者 403、沒有 token 401、壞的 body 400、壞的名稱 422；日誌不含租戶名稱 |
+| `src/tenants.rs` | 租戶名稱的規則（去空白、長度以字元計、控制字元、格式字元與行／段落分隔符）；只接受 JSON 的 `Content-Type`（可帶參數，表單、`text/plain`、相近的型別與兩個 `Content-Type` 都拒絕） |
+| `tests/tenants.rs` | 真的服務與 migration Job 套用的產品 schema：平台管理者的 session 經這個服務的 ext_authz 換成 token 後建立租戶得到 201，列與 `identity.tenant_created` 在同一個交易（同一個 `xmin`）；撤銷寫 outbox 的權限時回 503 且沒有留下列；不是平台管理者 403（租戶的 `admin` 也是）、沒有 token 401、平台管理者給資產服務的 token 401、沒有 `Content-Type` 或是表單與 `text/plain` 400、壞的 body 400、壞的名稱 422，都不建立租戶；`application/json; charset=utf-8` 201；日誌不含租戶名稱 |
 | `tests/cross_tenant.rs` | 產品 schema（`testkit::product`）上，服務角色讀不到也改不了其他租戶的 `memberships`、`tenants`（每個租戶一列）與 `outbox_event`（讀、無租戶讀、更新、搬移、插入五種探測），服務角色碰得到的每個關聯都已宣告：`users`、`sessions` 不是租戶資料、`outbox_aggregate` 是 outbox 的記錄而豁免；建立租戶的 API 不讀租戶資料而豁免 |

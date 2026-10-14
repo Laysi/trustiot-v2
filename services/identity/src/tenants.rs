@@ -8,10 +8,17 @@
 //! | --- | --- |
 //! | No valid internal identity token | 401 `unauthenticated` |
 //! | A user who is not a platform administrator (A2) | 403 `permission_denied` |
+//! | A `Content-Type` other than `application/json` (parameters such as `charset` allowed) | 400 `invalid_request` |
 //! | A body that is not a JSON object with a string `name` | 400 `invalid_request` |
-//! | A `name` that is empty after trimming, longer than [`MAX_NAME_CHARS`] characters, or holds a control character | 422 `validation_failed`, field `/name`, key `tenant.name_invalid`, `{"max": 100}` |
+//! | A `name` that is empty after trimming, longer than [`MAX_NAME_CHARS`] characters, or holds a [refused character](TenantName::parse) | 422 `validation_failed`, field `/name`, key `tenant.name_invalid`, `{"max": 100}` |
 //! | The database failed or refused the transaction | 503 `unavailable`; nothing was created |
 //! | Created | 201 with [`Tenant`] |
+//!
+//! The JSON content type is required because the ingress turns the session cookie into the
+//! caller's identity: a page of another origin can make the browser send a POST with the cookie,
+//! but only with a form or `text/plain` type unless a CORS preflight allows more, and neither
+//! the ingress nor any service answers one. So such a page cannot create a tenant with an
+//! administrator's cookie.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,8 +26,8 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{FromRef, State};
-use axum::http::StatusCode;
-use axum::http::header::CACHE_CONTROL;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use chrono::{DateTime, Utc};
@@ -32,6 +39,8 @@ use service_kit::identity::{IdentityVerifier, ServiceIdentity, UserIdentity};
 use service_kit::postgres::InsecureConnection;
 use service_kit::tenant::{BackgroundTenantDb, TenantDb, TenantDbError};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use unicode_properties::GeneralCategory;
+use unicode_properties::general_category::UnicodeGeneralCategory;
 use utoipa::ToSchema;
 
 /// The route, as the ingress gateway forwards it (no prefix is stripped).
@@ -62,7 +71,8 @@ RETURNING created_at";
 /// The body of `POST /api/identity/v1/tenants`. Unknown fields are ignored.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateTenant {
-    /// What people call the tenant: 1 to 100 characters after trimming, no control characters.
+    /// What people call the tenant: 1 to 100 characters after trimming, without control or
+    /// format characters or line and paragraph separators.
     pub name: String,
 }
 
@@ -77,18 +87,22 @@ pub struct Tenant {
     pub created_at: DateTime<Utc>,
 }
 
-/// A tenant name that passed the rules: trimmed, 1 to [`MAX_NAME_CHARS`] characters, no
-/// control characters.
+/// A tenant name that passed the rules: trimmed, 1 to [`MAX_NAME_CHARS`] characters, none of
+/// them refused (see [`TenantName::parse`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TenantName(String);
 
 impl TenantName {
-    /// Checks a requested name; `None` when it breaks a rule.
+    /// Checks a requested name; `None` when it breaks a rule. Refused are the Unicode general
+    /// categories Cc (control: line breaks, escape), Cf (format: zero-width characters,
+    /// bidirectional overrides and isolates, the byte order mark) and Zl, Zp (line and paragraph
+    /// separators): they make a name look different from what it holds, or break the line it is
+    /// shown on.
     #[must_use]
     pub fn parse(requested: &str) -> Option<Self> {
         let name = requested.trim();
         let chars = name.chars().count();
-        let valid = (1..=MAX_NAME_CHARS).contains(&chars) && !name.chars().any(char::is_control);
+        let valid = (1..=MAX_NAME_CHARS).contains(&chars) && !name.chars().any(refused);
         valid.then(|| Self(name.to_owned()))
     }
 
@@ -97,6 +111,30 @@ impl TenantName {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+/// Whether a tenant name may not hold `c` (see [`TenantName::parse`]).
+fn refused(c: char) -> bool {
+    matches!(
+        c.general_category(),
+        GeneralCategory::Control
+            | GeneralCategory::Format
+            | GeneralCategory::LineSeparator
+            | GeneralCategory::ParagraphSeparator
+    )
+}
+
+/// Whether the request has exactly one `Content-Type`, `application/json` with or without
+/// parameters (`; charset=utf-8`); the type is compared without regard to ASCII case.
+fn is_json(headers: &HeaderMap) -> bool {
+    let mut values = headers.get_all(CONTENT_TYPE).iter();
+    let (Some(value), None) = (values.next(), values.next()) else {
+        return false;
+    };
+    value.to_str().is_ok_and(|value| {
+        let essence = value.split(';').next().unwrap_or_default();
+        essence.trim().eq_ignore_ascii_case("application/json")
+    })
 }
 
 /// Why a tenant was not created.
@@ -248,16 +286,17 @@ pub fn routes(verifier: IdentityVerifier, store: TenantStore) -> Router {
     request_body = CreateTenant,
     responses(
         (status = 201, description = "The tenant was created, and `identity.tenant_created` written in the same transaction.", body = Tenant),
-        (status = 400, description = "The body is not a JSON object with a string `name` (`invalid_request`).", body = ErrorBody),
+        (status = 400, description = "The `Content-Type` is not `application/json`, or the body is not a JSON object with a string `name` (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "No valid session (`unauthenticated`).", body = ErrorBody),
         (status = 403, description = "The user is not a platform administrator (`permission_denied`).", body = ErrorBody),
-        (status = 422, description = "The name is empty, longer than 100 characters, or holds a control character (`validation_failed`, field `/name`, `tenant.name_invalid`).", body = ErrorBody),
+        (status = 422, description = "The name is empty, longer than 100 characters, or holds a control or format character or a line or paragraph separator (`validation_failed`, field `/name`, `tenant.name_invalid`).", body = ErrorBody),
         (status = 503, description = "The database failed; nothing was created (`unavailable`).", body = ErrorBody),
     )
 )]
 async fn create_tenant(
     State(state): State<TenantRoutes>,
     user: UserIdentity,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     if !user.is_platform_admin() {
@@ -267,7 +306,10 @@ async fn create_tenant(
         );
         return error(ErrorBody::new(ErrorCode::PermissionDenied));
     }
-    // Parsed by hand so a malformed body answers the M1 format, not axum's plain text.
+    // Checked and parsed by hand so a refusal answers the M1 format, not axum's plain text.
+    if !is_json(&headers) {
+        return error(ErrorBody::new(ErrorCode::InvalidRequest));
+    }
     let Ok(request) = serde_json::from_slice::<CreateTenant>(&body) else {
         return error(ErrorBody::new(ErrorCode::InvalidRequest));
     };
@@ -320,8 +362,93 @@ mod tests {
         assert!(TenantName::parse("   ").is_none());
         assert!(TenantName::parse("a\u{0}b").is_none());
         assert!(TenantName::parse("line\nbreak").is_none());
+        // Format characters (Cf) and the line and paragraph separators (Zl, Zp).
+        let format_and_separators = [
+            '\u{00AD}',
+            '\u{061C}',
+            '\u{200B}',
+            '\u{200C}',
+            '\u{200D}',
+            '\u{200E}',
+            '\u{200F}',
+            '\u{2028}',
+            '\u{2029}',
+            '\u{202A}',
+            '\u{202B}',
+            '\u{202C}',
+            '\u{202D}',
+            '\u{202E}',
+            '\u{2060}',
+            '\u{2066}',
+            '\u{2067}',
+            '\u{2068}',
+            '\u{2069}',
+            '\u{FEFF}',
+            '\u{E0001}',
+        ];
+        for c in format_and_separators {
+            assert!(TenantName::parse(&format!("Plant{c}A")).is_none(), "{c:?}");
+            // The separators are white space, which trimming removes from the ends.
+            if !c.is_whitespace() {
+                assert!(
+                    TenantName::parse(&format!("{c}Plant A")).is_none(),
+                    "{c:?} first"
+                );
+            }
+        }
+        // Letters of any script, marks, symbols and inner spaces stay allowed.
+        for name in [
+            "Plant A",
+            "台北廠",
+            "Café",
+            "e\u{0301}",
+            "Plant\u{00A0}A",
+            "Plant & Co.",
+        ] {
+            assert!(TenantName::parse(name).is_some(), "{name:?}");
+        }
         // Characters, not bytes: 100 three-byte characters fit, 101 do not.
         assert!(TenantName::parse(&"廠".repeat(MAX_NAME_CHARS)).is_some());
         assert!(TenantName::parse(&"廠".repeat(MAX_NAME_CHARS + 1)).is_none());
+    }
+
+    fn content_type(values: &[&str]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for value in values {
+            headers.append(CONTENT_TYPE, value.parse().expect("a header value"));
+        }
+        headers
+    }
+
+    #[test]
+    fn only_a_json_content_type_is_accepted() {
+        for accepted in [
+            "application/json",
+            "application/json; charset=utf-8",
+            "Application/JSON;charset=UTF-8",
+            " application/json ; charset=utf-8",
+        ] {
+            assert!(is_json(&content_type(&[accepted])), "{accepted:?}");
+        }
+        // The three types a cross-site form or fetch may send without a CORS preflight, and
+        // near misses.
+        for rejected in [
+            "text/plain",
+            "text/plain; charset=utf-8",
+            "application/x-www-form-urlencoded",
+            "multipart/form-data; boundary=x",
+            "application/jsonp",
+            "application/json-seq",
+            "application/merge-patch+json",
+            "text/json",
+            "",
+        ] {
+            assert!(!is_json(&content_type(&[rejected])), "{rejected:?}");
+        }
+        assert!(!is_json(&content_type(&[])), "no Content-Type");
+        assert!(
+            !is_json(&content_type(&["application/json", "text/plain"])),
+            "two Content-Type headers"
+        );
     }
 }

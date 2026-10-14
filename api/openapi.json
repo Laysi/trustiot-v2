@@ -24,7 +24,7 @@
         "description": "The body of `POST /api/identity/v1/tenants`. Unknown fields are ignored.",
         "properties": {
           "name": {
-            "description": "What people call the tenant: 1 to 100 characters after trimming, no control characters.",
+            "description": "What people call the tenant: 1 to 100 characters after trimming, without control or\nformat characters or line and paragraph separators.",
             "type": "string"
           }
         },
@@ -241,7 +241,7 @@
                 }
               }
             },
-            "description": "The body is not a JSON object with a string `name` (`invalid_request`)."
+            "description": "The `Content-Type` is not `application/json`, or the body is not a JSON object with a string `name` (`invalid_request`)."
           },
           "401": {
             "content": {
@@ -271,7 +271,7 @@
                 }
               }
             },
-            "description": "The name is empty, longer than 100 characters, or holds a control character (`validation_failed`, field `/name`, `tenant.name_invalid`)."
+            "description": "The name is empty, longer than 100 characters, or holds a control or format character or a line or paragraph separator (`validation_failed`, field `/name`, `tenant.name_invalid`)."
           },
           "503": {
             "content": {
