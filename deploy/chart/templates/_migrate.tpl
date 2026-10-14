@@ -12,6 +12,38 @@ not exist yet, and a post-install hook would deadlock with `helm install --wait`
 services that wait for the Job.
 */}}
 
+{{/*
+A whole number from values as exact decimal digits: a values file gives YAML integers to the
+template as float64, which toString renders as "1e+06" from 1000000 on (a --set value stays a
+string). dict "value" <number or string> "key" <values path, for the error>.
+*/}}
+{{- define "trustiot.decimal" -}}
+{{- $value := .value -}}
+{{- if kindIs "string" $value -}}
+{{- $value -}}
+{{- else if or (kindIs "float64" $value) (kindIs "int" $value) (kindIs "int64" $value) -}}
+{{- if ne (float64 (int64 $value)) (float64 $value) -}}
+{{- fail (printf "%s: %v is not a whole number" .key $value) -}}
+{{- end -}}
+{{- printf "%d" (int64 $value) -}}
+{{- else -}}
+{{- fail (printf "%s: a number or a string of digits, not a %s" .key (kindOf $value)) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+migrate.passwordGeneration as the Job reads it: 1 to 9 decimal digits (tools/migrate compares
+generations as numbers). Fails the render otherwise, so a value the Job would refuse never reaches
+it.
+*/}}
+{{- define "trustiot.migrate.passwordGeneration" -}}
+{{- $text := include "trustiot.decimal" (dict "value" .Values.migrate.passwordGeneration "key" "migrate.passwordGeneration") -}}
+{{- if not (regexMatch "^[0-9]{1,9}$" $text) -}}
+{{- fail (printf "migrate.passwordGeneration: %q must render as 1 to 9 decimal digits" $text) -}}
+{{- end -}}
+{{- $text -}}
+{{- end -}}
+
 {{/* Whether this release runs the migration Job. */}}
 {{- define "trustiot.migrate.enabled" -}}
 {{- if .Values.migrate.enabled -}}true{{- end -}}
@@ -177,7 +209,7 @@ passwords. */ -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__NAMESPACE" "valueFrom" (dict "fieldRef" (dict "fieldPath" "metadata.namespace"))) -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__TOKEN_FILE" "value" (printf "%s/token" $dir)) -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__CA_FILE" "value" (printf "%s/ca.crt" $dir)) -}}
-{{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__GENERATION" "value" ($v.migrate.passwordGeneration | toString)) -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__GENERATION" "value" (include "trustiot.migrate.passwordGeneration" .)) -}}
 {{- $postgres := list -}}
 {{- range $secrets -}}
 {{- if eq .kind "postgres" -}}
@@ -226,7 +258,7 @@ template:
     annotations:
       {{- /* The platform settings say where the databases are; a change runs the Job again. */}}
       checksum/platform-config: {{ include (print .Template.BasePath "/platform-config.yaml") . | sha256sum }}
-      trustiot.io/migrate-revision: {{ $m.revision | toString | quote }}
+      trustiot.io/migrate-revision: {{ include "trustiot.decimal" (dict "value" $m.revision "key" "migrate.revision") | quote }}
       {{- /* The image of every service that uses Postgres: a new service image (a digest-only
       hotfix too) runs the Job again, and the service waits for that run instead of starting on
       the old Job's result. The tag rule in "trustiot.migrate.check" keeps the tags equal; a new

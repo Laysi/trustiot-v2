@@ -2,7 +2,7 @@
 // Run from the repository root: bun test deploy/chart
 // Needs helm and kubeconform from .prototools; kubeconform downloads schemas on first use.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { COMMAND_TIMEOUT_MS, SLOW_TEST_MS, throwIfTimedOut, useProcessTestTimeouts } from "./timing.ts";
@@ -1721,6 +1721,50 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     expect(
       helmTemplate(SHAPES.saas, [...withIdentity, "--set", "services.identity.image.tag=9.9.9", "--set", "migrate.enabled=false"]).code,
     ).toBe(0);
+  });
+
+  test("passwordGeneration and revision from a values file render as exact decimals, and a value the Job would refuse fails the render", () => {
+    // A values file gives YAML integers to the template as float64, which toString renders as
+    // "1e+06" from 1000000 on; the Job refuses that (Laysi/trustiot-v2#60 round 5, N1).
+    const dir = mkdtempSync(join(tmpdir(), "trustiot-chart-generation-"));
+    try {
+      const file = (name: string, yaml: string) => {
+        const path = join(dir, name);
+        writeFileSync(path, yaml);
+        return path;
+      };
+      const rendered = (yaml: string) => {
+        const job = jobOf(render([...SHAPES.saas, file("values.yaml", yaml)], withIdentity));
+        const env = (job.spec as { template: { spec: PodSpec } }).template.spec.containers[0]?.env ?? [];
+        const annotations = (job.spec as { template: { metadata: { annotations: Record<string, string> } } }).template.metadata.annotations;
+        return {
+          generation: env.find((e) => e.name === "TRUSTIOT__PASSWORDS__GENERATION")?.value,
+          revision: annotations["trustiot.io/migrate-revision"],
+        };
+      };
+      for (const [yaml, generation, revision] of [
+        ["migrate:\n  passwordGeneration: 20261014\n  revision: 20261014\n", "20261014", "20261014"],
+        ["migrate:\n  passwordGeneration: 1000000\n  revision: 1000000\n", "1000000", "1000000"],
+        ["migrate:\n  passwordGeneration: 999999999\n", "999999999", "1"],
+        ['migrate:\n  passwordGeneration: "20261014"\n  revision: "r-2"\n', "20261014", "r-2"],
+        ["migrate:\n  passwordGeneration: 0\n", "0", "1"],
+      ] as const) {
+        expect({ yaml, ...rendered(yaml) }).toEqual({ yaml, generation, revision });
+      }
+      // --set gives a string, which renders as it is.
+      expect(envValue(jobEnv(render(SHAPES.saas, [...withIdentity, "--set", "migrate.passwordGeneration=1000000"])), "TRUSTIOT__PASSWORDS__GENERATION")?.value).toBe(
+        "1000000",
+      );
+      // Ten digits: the schema refuses the string, the template refuses the number it would
+      // otherwise pass on.
+      for (const yaml of ["migrate:\n  passwordGeneration: 1000000000\n", 'migrate:\n  passwordGeneration: "1000000000"\n']) {
+        const result = helmTemplate([...SHAPES.saas, file("bad.yaml", yaml)], withIdentity);
+        expect(result.code, yaml).not.toBe(0);
+        expect(result.stderr, yaml).toContain("passwordGeneration");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("the longest release name keeps the Job's name within 63 characters", () => {
