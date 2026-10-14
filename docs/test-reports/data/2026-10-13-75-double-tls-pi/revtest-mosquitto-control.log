@@ -1,0 +1,86 @@
+1791795803: The 'per_listener_settings' option is now deprecated and will be removed in version 3.0. Please see the documentation for how to achieve the same effect.
+1791795803: Info: running mosquitto as user: mosquitto.
+1791795803: mosquitto version 2.1.2 starting
+1791795803: Config loaded from /srv/mosquitto.conf.
+1791795803: Bridge support available.
+1791795803: Persistence support available.
+1791795803: TLS support available.
+1791795803: TLS-PSK support available.
+1791795803: Websockets support available.
+1791795803: Opening ipv4 listen socket on port 18754.
+1791795803: mosquitto version 2.1.2 running
+1791795811: New connection from 127.0.0.1:49232 on port 18754.
+1791795811: New client connected from 127.0.0.1:49232 as gw-rev (p4, c1, k60, u'gw-rev').
+1791795811: No will message specified.
+1791795811: Client gw-rev negotiated TLSv1.3 cipher TLS_CHACHA20_POLY1305_SHA256
+1791795811: Sending CONNACK to gw-rev (0, 0)
+1791795811: Received DISCONNECT from gw-rev
+1791795811: Client gw-rev [127.0.0.1:49232] disconnected.
+1791795815: Reloading config.
+1791795815: The 'per_listener_settings' option is now deprecated and will be removed in version 3.0. Please see the documentation for how to achieve the same effect.
+1791795826: New connection from 127.0.0.1:32958 on port 18754.
+1791795826: OpenSSL Error while trying to get the error[0]: error:0A000086:SSL routines::certificate verify failed
+1791795826: Client 127.0.0.1 [127.0.0.1:32958] disconnected: Protocol error.
+1791795840: mosquitto version 2.1.2 terminating
+1791795840: The 'per_listener_settings' option is now deprecated and will be removed in version 3.0. Please see the documentation for how to achieve the same effect.
+1791795840: mosquitto version 2.1.2 starting
+1791795840: Config loaded from /srv/mosquitto.conf.
+1791795840: Bridge support available.
+1791795840: Persistence support available.
+1791795840: TLS support available.
+1791795840: TLS-PSK support available.
+1791795840: Websockets support available.
+1791795840: Info: running mosquitto as user: mosquitto.
+1791795840: Opening ipv4 listen socket on port 18754.
+1791795840: mosquitto version 2.1.2 running
+1791795841: New connection from 127.0.0.1:36492 on port 18754.
+1791795841: New client connected from 127.0.0.1:36492 as gw-rev (p4, c1, k60, u'gw-rev').
+1791795841: No will message specified.
+1791795841: Client gw-rev negotiated TLSv1.3 cipher TLS_CHACHA20_POLY1305_SHA256
+1791795841: Sending CONNACK to gw-rev (0, 0)
+1791795841: Received DISCONNECT from gw-rev
+1791795841: Client gw-rev [127.0.0.1:36492] disconnected.
+1791795845: Reloading config.
+1791795845: The 'per_listener_settings' option is now deprecated and will be removed in version 3.0. Please see the documentation for how to achieve the same effect.
+1791795856: New connection from 127.0.0.1:41140 on port 18754.
+1791795856: New client connected from 127.0.0.1:41140 as gw-rev (p4, c1, k60, u'gw-rev').
+1791795856: No will message specified.
+1791795856: Client gw-rev negotiated TLSv1.3 cipher TLS_CHACHA20_POLY1305_SHA256
+1791795856: Sending CONNACK to gw-rev (0, 0)
+1791795856: Received DISCONNECT from gw-rev
+1791795856: Client gw-rev [127.0.0.1:41140] disconnected.
+1791795878: New connection from 127.0.0.1:53254 on port 18754.
+1791795878: New client connected from 127.0.0.1:53254 as gw-rev (p4, c1, k60, u'gw-rev').
+1791795878: No will message specified.
+1791795878: Client gw-rev negotiated TLSv1.3 cipher TLS_CHACHA20_POLY1305_SHA256
+1791795878: Sending CONNACK to gw-rev (0, 0)
+1791795878: Received DISCONNECT from gw-rev
+1791795878: Client gw-rev [127.0.0.1:53254] disconnected.
+1791795893: New connection from 127.0.0.1:60178 on port 18754.
+1791795893: New client connected from 127.0.0.1:60178 as gw-rev (p4, c1, k60, u'gw-rev').
+1791795893: No will message specified.
+1791795893: Client gw-rev negotiated TLSv1.3 cipher TLS_CHACHA20_POLY1305_SHA256
+1791795893: Sending CONNACK to gw-rev (0, 0)
+1791795893: Received DISCONNECT from gw-rev
+1791795893: Client gw-rev [127.0.0.1:60178] disconnected.
+1791795908: New connection from 127.0.0.1:37034 on port 18754.
+1791795908: New client connected from 127.0.0.1:37034 as gw-rev (p4, c1, k60, u'gw-rev').
+1791795908: No will message specified.
+1791795908: Client gw-rev negotiated TLSv1.3 cipher TLS_CHACHA20_POLY1305_SHA256
+1791795908: Sending CONNACK to gw-rev (0, 0)
+1791795908: Received DISCONNECT from gw-rev
+1791795908: Client gw-rev [127.0.0.1:37034] disconnected.
+1791795908: New connection from 127.0.0.1:37040 on port 18754.
+1791795908: New client connected from 127.0.0.1:37040 as gw-rev (p4, c1, k60, u'gw-rev').
+1791795908: No will message specified.
+1791795908: Client gw-rev negotiated TLSv1.3 cipher TLS_CHACHA20_POLY1305_SHA256
+1791795908: Sending CONNACK to gw-rev (0, 0)
+1791795908: Received DISCONNECT from gw-rev
+1791795908: Client gw-rev [127.0.0.1:37040] disconnected.
+1791795909: New connection from 127.0.0.1:37052 on port 18754.
+1791795909: New client connected from 127.0.0.1:37052 as gw-rev (p4, c1, k60, u'gw-rev').
+1791795909: No will message specified.
+1791795909: Client gw-rev negotiated TLSv1.3 cipher TLS_CHACHA20_POLY1305_SHA256
+1791795909: Sending CONNACK to gw-rev (0, 0)
+1791795909: Received DISCONNECT from gw-rev
+1791795909: Client gw-rev [127.0.0.1:37052] disconnected.
