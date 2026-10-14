@@ -28,11 +28,11 @@ export const POSTGRES_IMAGE = "postgres";
 /** The migration Job's image (deploy/images/migrate, Laysi/trustiot-v2#60); the chart runs it as migrate.image. */
 export const MIGRATE_IMAGE = "migrate";
 /**
- * Images a release publishes that the chart does not deploy. Every other image must be a key
- * under the chart's `services`, the Postgres image or the migration Job's image, so a new image
- * is never left unpinned.
+ * Images a release publishes that the chart does not deploy; none at the moment. Every other
+ * image must be a key under the chart's `services`, the Postgres image or the migration Job's
+ * image, so a new image is never left unpinned.
  */
-export const NOT_DEPLOYED_BY_CHART: ReadonlySet<string> = new Set(["release-selftest"]);
+export const NOT_DEPLOYED_BY_CHART: ReadonlySet<string> = new Set<string>();
 /** The deployment shape files shipped in the chart; each is layered over values.yaml. */
 export const SHAPE_VALUES_FILES = ["values-saas.yaml", "values-onprem.yaml"] as const;
 
@@ -52,8 +52,11 @@ const OWN_IMAGE_PATHS: Readonly<Record<"postgres" | "migrate", readonly string[]
   migrate: ["migrate", "image"],
 };
 
-/** How the chart deploys the release image `name`; undefined when it does not deploy it. */
-export function chartImage(name: string, values: Values): ChartImage | undefined {
+/**
+ * How the chart deploys the release image `name`; undefined when it does not deploy it.
+ * `notDeployed` is NOT_DEPLOYED_BY_CHART; tests pass their own set.
+ */
+export function chartImage(name: string, values: Values, notDeployed: ReadonlySet<string> = NOT_DEPLOYED_BY_CHART): ChartImage | undefined {
   if (name === POSTGRES_IMAGE) {
     return { name, kind: "postgres" };
   }
@@ -63,7 +66,7 @@ export function chartImage(name: string, values: Values): ChartImage | undefined
   if (isMap(values.services) && Object.hasOwn(values.services, name)) {
     return { name, kind: "service" };
   }
-  if (NOT_DEPLOYED_BY_CHART.has(name)) {
+  if (notDeployed.has(name)) {
     return undefined;
   }
   throw new ReleaseError(
@@ -170,8 +173,13 @@ export interface ChartPin {
   digest: string;
 }
 
-/** The pins for the published images that the chart deploys. */
-export function chartPins(planned: readonly PlannedImage[], published: readonly PublishedArtifact[], values: Values): ChartPin[] {
+/** The pins for the published images that the chart deploys; `notDeployed` as for chartImage. */
+export function chartPins(
+  planned: readonly PlannedImage[],
+  published: readonly PublishedArtifact[],
+  values: Values,
+  notDeployed: ReadonlySet<string> = NOT_DEPLOYED_BY_CHART,
+): ChartPin[] {
   const pins: ChartPin[] = [];
   for (const artifact of published) {
     const plannedImage = planned.find((candidate) => candidate.name === artifact.name);
@@ -181,7 +189,7 @@ export function chartPins(planned: readonly PlannedImage[], published: readonly 
     if (!isDigest(artifact.digest)) {
       throw new ReleaseError(`published image ${artifact.name} has no sha256 digest`);
     }
-    const image = chartImage(artifact.name, values);
+    const image = chartImage(artifact.name, values, notDeployed);
     if (image !== undefined) {
       pins.push({ image, repository: plannedImage.repository, digest: artifact.digest });
     }

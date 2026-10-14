@@ -50,7 +50,7 @@ describe("rustCrossCompileCommand", () => {
     zig: "/proto/zig/0.16.0/zig",
     cargoZigbuild: "/proto/cargo-zigbuild/0.23.4/cargo-zigbuild",
     cargoAuditable: "/proto/cargo-auditable/0.7.6/cargo-auditable",
-    packages: ["identity", "release-selftest"],
+    packages: ["identity", "migrate"],
     root: "/work/trustiot-v2",
     cargoHome: "/home/u/.cargo",
     path: "/usr/bin:/bin",
@@ -60,7 +60,7 @@ describe("rustCrossCompileCommand", () => {
     const { cmd, env } = rustCrossCompileCommand(base);
     expect(cmd).toEqual([
       base.cargo, "auditable", "zigbuild", "--locked", "--release", "--target", RUST_TARGET, "--bins",
-      "--package", "identity", "--package", "release-selftest",
+      "--package", "identity", "--package", "migrate",
     ]);
     expect(RUST_TARGET).toBe("aarch64-unknown-linux-musl");
     expect(env.PATH).toBe("/proto/cargo-auditable/0.7.6:/proto/cargo-zigbuild/0.23.4:/usr/bin:/bin");
