@@ -27,7 +27,7 @@ Pi 4 的 Cortex-A72 沒有 AES 指令，ChaCha20-Poly1305 比 AES-GCM 快約 4 �
 
 ## 測試方法
 
-依[部署與可搬移性](../architecture/deployment.md)的路徑，在本機重現兩種部署的終止點。Pi 端在 lab Pi（`trustiot-lab`）上執行，伺服器端在工作站的 podman 上執行。不建立 Cloudflare 資源。
+依[部署與可搬移性](../architecture/deployment.md)的路徑，在本機重現兩種部署的終止點。Pi 端在 lab 的 Pi 上執行，伺服器端在工作站的 podman 上執行。不建立 Cloudflare 資源。
 
 Pi 這邊的成本只取決於三件事：協商出的套件、key exchange、記錄大小與握手方式，和由誰終止 TLS 無關。所以兩條路徑都在本機模擬終止點，網路那一段沿用 2026-10-10 的雲端實測。
 

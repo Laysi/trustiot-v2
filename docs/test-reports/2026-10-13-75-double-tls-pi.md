@@ -3,11 +3,11 @@
 對應 issue：Laysi/trustiot-v2#75。
 
 - 結論與設計影響寫在[可行性測試結果（2026-10-13）](../feasibility/2026-10-13-double-tls-pi.md)。
-- 原始資料在 [data/2026-10-13-75-double-tls-pi/](data/2026-10-13-75-double-tls-pi/)。工作站的位址在資料裡已換成 `<workstation>`。
+- 原始資料在 [data/2026-10-13-75-double-tls-pi/](data/2026-10-13-75-double-tls-pi/)。工作站的位址在資料裡已換成 `<workstation>`，指令裡的 `$PI_HOST` 是 Pi 的 ssh 主機。
 
 ## 環境
 
-| 項目 | 閘道器端（lab Pi，`trustiot-lab`） | 伺服器端（工作站） |
+| 項目 | 閘道器端（lab 的 Pi） | 伺服器端（工作站） |
 | --- | --- | --- |
 | 硬體 | Raspberry Pi 4 Model B Rev 1.4。CPU：Cortex-A72（CPU part 0xd08），4 核，600–1800 MHz，`ondemand` 調速。`Features: fp asimd evtstrm crc32 cpuid`，沒有 AES 與 PMULL。記憶體 2 GB（1844 MiB） | x86\_64 8 核（有 AES-NI） |
 | OS | Raspberry Pi OS Lite arm64（Debian 13 Trixie），kernel 6.18.50+rpt-rpi-v8，glibc 2.41，OpenSSL 3.5.7（`openssl speed` 用） | Fedora 44，kernel 7.2.8，podman 5.8.7（rootless，`--network host`），Bun 1.4.2 |
@@ -80,8 +80,10 @@ cargo build --release --manifest-path ~/poc-gw/75/Cargo.toml
 (cd ~/poc-gw/75 && ./target/release/pki)
 CARGO_ZIGBUILD_ZIG_PATH=~/.proto/tools/zig/0.16.0/zig ~/.proto/tools/cargo-zigbuild/0.23.4/cargo-zigbuild \
   zigbuild --release --manifest-path ~/poc-gw/75/Cargo.toml --target aarch64-unknown-linux-gnu.2.36 --bin gw --bin aeadbench
-scp target/aarch64-unknown-linux-gnu/release/{gw,aeadbench} trustiot-lab:poc-75/
-scp pki/{outer-roots.pem,inner-ca.pem,gw.pem,gw.key} trustiot-lab:poc-75/pki/
+# 複製到 Pi：PI_HOST 是 Pi 的 ssh 主機，沒有設定時停在這一行
+: "${PI_HOST:?set PI_HOST to the ssh host of the lab Pi}"
+scp target/aarch64-unknown-linux-gnu/release/{gw,aeadbench} "$PI_HOST:poc-75/"
+scp pki/{outer-roots.pem,inner-ca.pem,gw.pem,gw.key} "$PI_HOST:poc-75/pki/"
 
 # 工作站：伺服器端（srv/ 內是 mosquitto.conf、envoy.yaml 與伺服器憑證）
 podman run -d --name poc75-mosquitto --network host -v ~/poc-gw/75/srv:/srv:ro,Z \
