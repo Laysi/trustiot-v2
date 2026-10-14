@@ -79,7 +79,7 @@ Postgres 若開著 `log_statement = 'all'`（或 `log_min_duration_statement` �
 
 ## 停用服務之後留下的 Secret
 
-在 values 關掉一個服務（或把它的 `mesh.calls` 拿掉 `postgres`）之後，下一次 Job 把它的登入角色改成 `NOLOGIN`，日誌有 `revoked the login of role <服務>_app: no Secret is bound to it`；服務從 tools/migrate 的服務清單移除或改名時是 `... no service in tools/migrate's registry has it`。關掉 collector 或改它的帳號名稱時，舊的 ClickHouse 帳號改成 `HOST NONE`，日誌有 `revoked the login of ClickHouse account <帳號>: the collector no longer uses it`。角色與帳號不刪除（可能擁有物件；重新啟用時 Job 先設 Secret 的密碼再恢復登入）。只有 Job 標記過、migration 角色有 ADMIN OPTION 的角色會被改，superuser、客戶的帳號、其他實例的角色不會。`NOLOGIN` 不中斷已經開著的連線；被關掉的服務的 pod 隨升級刪除，懷疑還有連線時以 superuser 執行 `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '<角色>'`。
+在 values 關掉一個服務（或把它的 `mesh.calls` 拿掉 `postgres`）之後，下一次 Job 把它的登入角色改成 `NOLOGIN`，日誌有 `revoked the login of role <服務>_app: no Secret is bound to it`；服務從 tools/migrate 的服務清單移除或改名時是 `... no service in tools/migrate's registry has it`。關掉 collector 或改它的帳號名稱時，舊的 ClickHouse 帳號改成 `HOST NONE`，日誌有 `revoked the login of ClickHouse account <帳號>: the collector no longer uses it`。角色與帳號不刪除（可能擁有物件；重新啟用時 Job 先設 Secret 的密碼再恢復登入）。只有 Job 標記過、migration 角色有 ADMIN OPTION 的角色會被改，superuser、客戶的帳號、其他實例的角色不會。ClickHouse 沒有可以標記帳號的地方，所以 Job 把拿到 `trustiot_otel_collector` 角色、但不是目前 collector 帳號的帳號都當成它的：外部 ClickHouse 上不要把這個角色給自己的帳號，給了的帳號會被改成 `HOST NONE`（以管理帳號 `ALTER USER <帳號> HOST ANY` 並 `REVOKE trustiot_otel_collector FROM <帳號>` 復原）。Job 執行時用的 migration 帳號本身不會被改。`NOLOGIN` 不中斷已經開著的連線；被關掉的服務的 pod 隨升級刪除，懷疑還有連線時以 superuser 執行 `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '<角色>'`。
 
 它的密碼 Secret `<release>-<服務>-password` 因為 `keep` 留在 namespace 裡，chart 與 Job 的 Role 都不再列它。裡面的密碼已經登不進去，可以刪除：
 

@@ -71,8 +71,13 @@ const PROBE: &str = "SELECT 1 FORMAT TSV";
 /// per grant, with the grantee in `user_name` (or `role_name` for a role) and the granted role in
 /// `granted_role_name`, as `USER_ROLES` reads it; tests/clickhouse.rs (step 6d) runs this against
 /// the pinned ClickHouse 26.8 image.
+/// Never the account the Job runs as (`currentUser()`), whatever it was granted: locking it would
+/// stop every later run. ClickHouse has no marker for accounts a client created, so any other
+/// account granted the collector role counts as the Job's (docs/runbooks/migrations.md: do not
+/// grant it to your own accounts).
 const COLLECTOR_ACCOUNTS: &str = "SELECT DISTINCT user_name FROM system.role_grants
-WHERE granted_role_name = {role:String} AND user_name IS NOT NULL ORDER BY user_name FORMAT TSV";
+WHERE granted_role_name = {role:String} AND user_name IS NOT NULL AND user_name != currentUser()
+ORDER BY user_name FORMAT TSV";
 /// How many host rules let the account log in; `HOST NONE` leaves none.
 const USER_HOSTS: &str = "SELECT length(host_ip) + length(host_names) + length(host_names_regexp)
   + length(host_names_like) FROM system.users WHERE name = {user:String} FORMAT TSV";
