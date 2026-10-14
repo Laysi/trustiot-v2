@@ -5,7 +5,13 @@
 // and ConfigMaps are never read into it, and a free-text field is cut to one short line. Container
 // logs are not collected either: an application can log a credential, and a log line cannot be
 // told apart from one that is safe to publish. What the evidence can still hold is text that
-// Kubernetes controllers and the kubelet write (conditions, event messages, waiting reasons).
+// Kubernetes controllers and the kubelet write (conditions, event messages, waiting reasons), and
+// two kinds of text in them are removed too: a URL's user info and query string (a registry or
+// webhook URL can carry a token), and the output of a failed probe (a command probe's event
+// message is what the command printed).
+//
+// The nightly diagnostics (scripts/nightly/diagnostics.ts, Laysi/trustiot-v2#410) build on the
+// same formatting and the same rules.
 //
 // The formatting is pure (JSON in, text out) so that it is tested without a cluster
 // (install-evidence.test.ts). `collectInstallEvidence` only runs kubectl and feeds it.
@@ -20,21 +26,39 @@ export const MAX_FIELD_CHARS = 300;
 /** The events kept: the newest ones, because the cause of a failed install is the last few. */
 export const MAX_EVENTS = 80;
 
-const isObject = (value: unknown): value is Json => typeof value === "object" && value !== null && !Array.isArray(value);
-const asObject = (value: unknown): Json => (isObject(value) ? value : {});
-const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+export const isObject = (value: unknown): value is Json => typeof value === "object" && value !== null && !Array.isArray(value);
+export const asObject = (value: unknown): Json => (isObject(value) ? value : {});
+export const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 
-function text(value: unknown): string {
+export function text(value: unknown): string {
   return typeof value === "string" ? value : typeof value === "number" || typeof value === "boolean" ? String(value) : "";
 }
 
-/** One line, at most `MAX_FIELD_CHARS` characters. */
-export function oneLine(value: unknown): string {
-  const flat = text(value).replace(/\s+/g, " ").trim();
-  return flat.length <= MAX_FIELD_CHARS ? flat : `${flat.slice(0, MAX_FIELD_CHARS)}... (${flat.length - MAX_FIELD_CHARS} characters cut)`;
+/**
+ * What a URL in a free-text field may carry besides where it points: `user:password@` before the
+ * host and a query string (`?token=...`) after the path.
+ */
+export function withoutUrlSecrets(value: string): string {
+  return value
+    .replace(/([a-z][a-z0-9+.-]*:\/\/[^\s?#"']*)\?[^\s"']*/gi, "$1?(query removed)")
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/"']*@/gi, "$1(user info removed)@");
 }
 
-function field(object: Json, ...path: string[]): unknown {
+/** The end of a long field that is kept: a chain of errors (an image pull) ends in the real cause. */
+export const KEPT_TAIL_CHARS = 100;
+
+/**
+ * One line, at most `MAX_FIELD_CHARS` characters of text, without what `withoutUrlSecrets`
+ * removes. A longer text keeps its start and its last `KEPT_TAIL_CHARS` characters.
+ */
+export function oneLine(value: unknown): string {
+  const flat = withoutUrlSecrets(text(value)).replace(/\s+/g, " ").trim();
+  if (flat.length <= MAX_FIELD_CHARS) return flat;
+  const head = MAX_FIELD_CHARS - KEPT_TAIL_CHARS;
+  return `${flat.slice(0, head)}... (${flat.length - MAX_FIELD_CHARS} characters cut) ...${flat.slice(-KEPT_TAIL_CHARS)}`;
+}
+
+export function field(object: Json, ...path: string[]): unknown {
   let current: unknown = object;
   for (const key of path) {
     if (!isObject(current)) return undefined;
@@ -43,16 +67,16 @@ function field(object: Json, ...path: string[]): unknown {
   return current;
 }
 
-function nameOf(object: Json): string {
+export function nameOf(object: Json): string {
   return oneLine(field(object, "metadata", "name")) || "(no name)";
 }
 
-function itemsOf(list: unknown): Json[] {
+export function itemsOf(list: unknown): Json[] {
   return asArray(asObject(list).items).filter(isObject);
 }
 
 /** `Type=status(reason: message)` for each condition, in the order the API reports them. */
-function conditionsOf(status: Json): string {
+export function conditionsOf(status: Json): string {
   return asArray(status.conditions)
     .filter(isObject)
     .map((condition) => {
@@ -62,11 +86,11 @@ function conditionsOf(status: Json): string {
     .join("; ");
 }
 
-function count(status: Json, key: string): string {
+export function count(status: Json, key: string): string {
   return text(status[key]) || "0";
 }
 
-function ownerOf(object: Json): string {
+export function ownerOf(object: Json): string {
   const owner = asArray(field(object, "metadata", "ownerReferences")).filter(isObject)[0];
   return owner === undefined ? "" : ` owner=${oneLine(owner.kind)}/${oneLine(owner.name)}`;
 }
@@ -100,6 +124,42 @@ export function formatReplicaSets(list: unknown): string[] {
       .filter((part) => part !== "")
       .join(" ");
   });
+}
+
+/**
+ * The reasons a probe gives for failing that Go's HTTP client and the kubelet write, as the text
+ * to show for each. The text shown is always one of these (or the three digits of a status code),
+ * never part of the event message: a command probe's message is what the command printed, and a
+ * pattern that passed the message through could be matched by a command that prints
+ * `context deadline exceeded <value>` or `Get "http://host/<value>": EOF`.
+ */
+const REQUEST = String.raw`(?:(?:Get|Head) "[^"]*": )?`;
+const PROBE_ERRORS: readonly (readonly [RegExp, string])[] = [
+  [new RegExp(String.raw`^${REQUEST}dial tcp \S+: connect: connection refused$`), "dial tcp: connection refused"],
+  [new RegExp(String.raw`^${REQUEST}dial tcp \S+: connect: no route to host$`), "dial tcp: no route to host"],
+  [new RegExp(String.raw`^${REQUEST}dial tcp \S+: connect: network is unreachable$`), "dial tcp: network is unreachable"],
+  [new RegExp(String.raw`^${REQUEST}(?:read|write) tcp \S+->\S+: (?:read|write): connection reset by peer$`), "connection reset by peer"],
+  [new RegExp(String.raw`^${REQUEST}context deadline exceeded(?: \(Client\.Timeout exceeded while awaiting headers\))?$`), "context deadline exceeded"],
+  [new RegExp(String.raw`^${REQUEST}EOF$`), "EOF"],
+];
+
+/**
+ * A failed probe's event message with the probe's output only when it is a reason the kubelet or
+ * the network stack wrote (`HTTP probe failed with statuscode: 503`, `connection refused`), shown in
+ * a fixed wording. Anything else, a command probe's output above all, is cut to the part the
+ * kubelet wrote: `Readiness probe failed: (probe output not shown)`. The caller passes the message
+ * of an `Unhealthy` event, which is always a probe's.
+ */
+export function probeMessage(message: string): string {
+  const match = /^((?:Readiness|Liveness|Startup) probe (?:failed|errored and resulted in unknown state)): ([\s\S]*)$/.exec(message);
+  // Not the kubelet's wording, so not known to be free of an application's text.
+  if (match === null) return "(probe message not shown)";
+  const [, head = "", rawOutput = ""] = match;
+  const output = rawOutput.trim();
+  const status = /^HTTP probe failed with statuscode: (\d{3})$/.exec(output)?.[1];
+  if (status !== undefined) return `${head}: HTTP probe failed with statuscode: ${status}`;
+  const known = PROBE_ERRORS.find(([pattern]) => pattern.test(output));
+  return known === undefined ? `${head}: (probe output not shown)` : `${head}: ${known[1]}`;
 }
 
 /** `name: running`, `name: waiting (ImagePullBackOff: ...)` or `name: terminated (exit 1, Error)`. */
@@ -146,7 +206,7 @@ export function formatEvents(list: unknown): string[] {
     const times = Number(text(event.count)) > 1 ? ` x${text(event.count)}` : "";
     return {
       when,
-      line: `${when || "(no time)"} ${oneLine(event.type) || "Normal"} ${oneLine(event.reason)} ${oneLine(field(event, "involvedObject", "kind"))}/${oneLine(field(event, "involvedObject", "name"))}${times}: ${oneLine(event.message)}`,
+      line: `${when || "(no time)"} ${oneLine(event.type) || "Normal"} ${oneLine(event.reason)} ${oneLine(field(event, "involvedObject", "kind"))}/${oneLine(field(event, "involvedObject", "name"))}${times}: ${oneLine(event.reason === "Unhealthy" ? probeMessage(text(event.message)) : event.message)}`,
     };
   });
   // Timestamps are RFC 3339 in UTC, so their text sorts like the time.

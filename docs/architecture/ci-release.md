@@ -435,7 +435,7 @@ repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（
     - 沒有解決的：同一個 nightly 的主要部署（`helm upgrade --install --wait --wait-for-jobs`）也走 watcher，可能有同樣的競態；它失敗時 diagnostics 已經收集 namespace，目前沒有出現，不在這次的範圍。
 14. 服務間授權 e2e 測試（`deploy/chart/tests/e2e/mesh.e2e.ts`，Laysi/trustiot-v2#63；2026-10-15 起每晚執行，Laysi/trustiot-v2#77）：只在 SaaS 型態、入口 e2e 之後，在 `nightly-e2e-mesh` 命名空間跑一次。測試本身安裝 `values-saas.yaml`，兩種型態的服務政策相同；它只經入口走例外路徑，不需要 ext_authz provider。五個服務與三個測試 pod 都用入口 e2e 已經建好匯入的身分服務替身映像，不多建映像。這是 MS0 完成條件「未經 AuthorizationPolicy 允許的服務呼叫被拒絕」的 nightly 證據（[MS0 完成條件與測試](../roadmap/ms0-acceptance.md)）。安裝失敗的證據與入口 e2e 相同，放在該型態 diagnostics 的「mesh e2e: the release did not install」一節（`e2e-install-failure-mesh-saas.txt`）。
 
-每份 values 任何一項失敗就停止該份並收集診斷（物件、事件、`describe`、pod 日誌；不含 Secret 內容，輸出可能含 Secret 的指令不寫進日誌）。
+每份 values 任何一項失敗就停止該份並收集診斷：哪個元件沒有就緒、為什麼（只取狀態欄位與事件，不含 Pod spec 與容器 log；內容與理由見「失敗時怎麼辦」的「診斷收什麼」）。輸出可能含 Secret 或 Pod spec 的指令（`get secret`、`get pods --output json` 等）不寫進日誌。
 
 檢查 4 到 12 全部從 release 自己的 manifest 推導（`scripts/nightly/manifests.ts`；第 11 項的入口埠、app 主機、資料庫名稱與 Cluster 也是），不寫死元件；之後加入的元件（broker 等）會自動被納入 workload 就緒與探針檢查，CloudNativePG 的 Cluster 也是從 manifest 找出來的。元件需要的前置（例如 operator）由加入該元件的 issue 在 `scripts/nightly/platform.ts` 補上；各里程碑完成條件的測試也由各自的 issue 加進來。
 
@@ -485,7 +485,45 @@ NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
 
 ### 失敗時怎麼辦
 
-先看 issue 內文的報告：它列出哪份 values 的哪一項失敗與診斷。要重現就到 Actions 頁手動執行 nightly（選 `simulate_failure` 只用來驗證通知，不用來除錯）。常見原因：Docker Hub 對匿名拉取的流量限制（`traefik/whoami`、k3s 映像與 e2e 替身的基底映像都在 Docker Hub，建立叢集與建置映像已重試）、替身或 Postgres 映像沒有進到節點（log 的 `identity double image`、`Postgres image` 段會寫出哪個節點缺映像，匯入已重試）、Cluster 沒有變健康（診斷含 CloudNativePG 的物件、`describe` 與 operator 的 log）、入口 e2e 或服務間授權 e2e 的 chart 裝不起來（診斷最後一段「ingress e2e: the release did not install」或「mesh e2e: …」有它 namespace 的事件與 Deployment、ReplicaSet、Pod 的狀態，因為這個 namespace 在診斷收集前已刪除；Laysi/trustiot-v2#399）、chart 的改動讓某份 values 裝不起來或讓入口的行為改變、Istio、Gateway API、k3s 或 k3d 版本更新。GitHub 在公開 repo 60 天沒有活動時會停掉排程 workflow（[Events that trigger workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)；2026-10-12 起本 repo 是公開的，這條規則開始適用，Laysi/trustiot-v2#345），這個 repo 有活動所以不會發生，但若看到排程停了，到 Actions 頁重新啟用。
+先看 issue 內文的報告：它列出哪份 values 的哪一項失敗與診斷。要重現就到 Actions 頁手動執行 nightly（選 `simulate_failure` 只用來驗證通知，不用來除錯）。常見原因：Docker Hub 對匿名拉取的流量限制（`traefik/whoami`、k3s 映像與 e2e 替身的基底映像都在 Docker Hub，建立叢集與建置映像已重試）、替身或 Postgres 映像沒有進到節點（log 的 `identity double image`、`Postgres image` 段會寫出哪個節點缺映像，匯入已重試）、Cluster 沒有變健康（診斷的「CloudNativePG Clusters」一節有 phase、原因、就緒的實例數與 conditions，operator 的 Pod 狀態與 Warning 事件在「其他命名空間」一節）、入口 e2e 或服務間授權 e2e 的 chart 裝不起來（診斷最後一段「ingress e2e: the release did not install」或「mesh e2e: …」有它 namespace 的事件與 Deployment、ReplicaSet、Pod 的狀態，因為這個 namespace 在診斷收集前已刪除；Laysi/trustiot-v2#399）、chart 的改動讓某份 values 裝不起來或讓入口的行為改變、Istio、Gateway API、k3s 或 k3d 版本更新。GitHub 在公開 repo 60 天沒有活動時會停掉排程 workflow（[Events that trigger workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)；2026-10-12 起本 repo 是公開的，這條規則開始適用，Laysi/trustiot-v2#345），這個 repo 有活動所以不會發生，但若看到排程停了，到 Actions 頁重新啟用。
+
+#### 診斷收什麼
+
+2026-10-15（Laysi/trustiot-v2#410）起，診斷（`scripts/nightly/diagnostics.ts`）沿用安裝失敗證據的白名單做法（`deploy/chart/tests/e2e/install-evidence.ts`，Laysi/trustiot-v2#399）。報告出現在 job summary、artifact 與 `nightly-failure` issue，repo 是公開的（見 [祕密](secrets.md) 的「公開 repo 的資訊規則」），而 Pod spec 的環境變數值與容器 log 無法與「可公開的行」區分：應用程式與元件可以把任何東西寫進 log 與終止訊息，包括憑證。
+
+**收的**，都只用 `kubectl get`（JSON，或物件清單的 `--output name`）與 `helm list`，取白名單的欄位：
+
+| 區段 | 欄位 |
+| --- | --- |
+| 物件名稱 | Pod、Service、ConfigMap、Secret、ServiceAccount、PVC 的名稱；Secret 與 ConfigMap 只有名稱，讀得出「引用的 Secret 不存在」，讀不出內容 |
+| Node | conditions（`MemoryPressure`、`DiskPressure` 解釋被驅逐的 pod） |
+| Deployment、ReplicaSet、StatefulSet、DaemonSet、Job | 期望與就緒的副本數、世代、conditions、Job 的 active／succeeded／failed |
+| Pod | phase、conditions、每個容器（含 init 容器）的狀態：running、waiting 的 reason 與 message（`ImagePullBackOff`、`CrashLoopBackOff`、`CreateContainerConfigError`）、terminated 的 exit code 與 reason（`OOMKilled`）、`ready`、重啟次數、上一次終止的 exit code 與 reason |
+| CloudNativePG Cluster | phase、phaseReason、instances、readyInstances、主節點名稱、各實例狀態、conditions；不含 spec 與憑證欄位 |
+| Gateway | Gateway 與每個 listener 的 conditions、attachedRoutes |
+| PVC | phase |
+| 其他命名空間（Istio、CloudNativePG operator、k3s） | 那些命名空間的 Pod 狀態，同上；以及 Warning 事件 |
+| 事件 | 本命名空間的事件，最新的 80 筆，由舊到新：type、reason、物件、次數、message |
+| `helm list` | release 的名稱、版本、狀態 |
+
+**不收的與理由：**
+
+- **容器 log**（含 CloudNativePG operator 的 log）：應用程式與元件的 log 可以含任何內容，log 裡的憑證與可公開的行無法區分。選項只有「不收」或「只收不含內容的摘要」，這裡兩者併用：log 完全不收，摘要由 Pod 狀態提供（重啟次數、上一次終止的 exit code 與 reason、`OOMKilled`、waiting 的 reason），這些是 kubelet 寫的欄位，不是應用程式寫的字串。
+- **`kubectl describe`**：它印出容器環境變數的字面值、annotation 與卷宣告，等於 Pod spec。
+- **Pod、Deployment 等的 spec**：環境變數的值不論是否敏感都不印。`get all --output wide` 也不用，它帶映像、selector 與節點位址，改為只列名稱。
+- **容器的終止訊息**（`terminated.message`，來自 `terminationMessagePath` 或 log 尾端）：應用程式寫的，同 log。只留 exit code 與 reason。
+- **Secret 與 ConfigMap 的內容**，以及 CloudNativePG Cluster 的 spec 與憑證欄位。
+
+**事件的 message 還可能帶什麼**（逐一檢查過的結論）：
+
+- kubelet 與控制器自己寫的句子（`Back-off restarting failed container`、`0/1 nodes are available: 1 Insufficient memory`、`secret "x" not found`）：名稱與數字，保留。
+- 探針失敗：`HTTP probe failed with statuscode: 503` 是 kubelet 寫的，保留；指令探針（exec）的 message 是指令印出的內容，保留就等於收了應用程式的輸出。所以探針失敗的原因不是照抄，而是整句比對 kubelet 與網路層（Go 的 `dial tcp ...: connection refused`、`context deadline exceeded`、`EOF`）的句型後，以固定的措辭顯示（狀態碼只取三位數字）；比對不上的，包括指令探針的輸出與在這些句型前後多出來的字，只留 `Readiness probe failed: (probe output not shown)`，不是 kubelet 的句式的整句不顯示。不用「前綴符合就整句保留」，因為指令可以印出 `context deadline exceeded <任何值>`。
+- 映像拉取失敗的 message 帶映像名稱與 registry 的回應，其中可能有帶 token 的 URL：URL 的使用者資訊與查詢字串（`?token=...`）一律移除，其餘保留。
+- 每個自由文字欄位壓成一行、最多 300 字元（超過的留開頭 200 與結尾 100：映像拉取的錯誤是一長串，最後一段才是原因，例如 `no such host`），所以多行的 message 不能偽造出新的一節；報告把診斷放在程式碼區塊裡，內容裡的三個反引號會被換掉，不能跳出區塊。
+
+`scripts/nightly/diagnostics.test.ts` 以模擬的 kubectl 輸出證明這些：Pod、Cluster、事件裡植入的環境變數值、annotation、終止訊息、Secret 資料、探針輸出、URL 裡的 token 都不出現在診斷、Markdown 報告與 issue 內文；診斷只執行 `kubectl get`；nightly 的程式碼不含 `logs` 與 `describe` 指令；`kubectl get --output json` 的輸出（含 Pod spec）不寫進 run.log（artifact）。範例輸出見 [測試報告](../test-reports/2026-10-15-410-nightly-diagnostics.md)。
+
+安裝失敗的證據（入口與服務間授權 e2e）是同一套規則，由 `install-evidence.ts` 產生；兩邊共用格式化與探針、URL 的處理。
 
 ### 成本
 
