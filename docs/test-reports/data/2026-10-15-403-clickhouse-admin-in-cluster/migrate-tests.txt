@@ -1,8 +1,8 @@
 The tools/migrate tests of Laysi/trustiot-v2#403 by name (build host, CI=1, so the
 container-backed tests ran against throwaway ClickHouse containers instead of skipping),
 2026-10-15 01:03 Asia/Taipei, before the final wording of two error hints and a clippy fix in a
-unit test. checks.txt has the whole workspace passing at 8c8d7b6, whose Rust code is the
-branch's final Rust code (the later commits change only TypeScript tests and docs).
+unit test. checks.txt has the whole workspace passing on the final branch (run 4), with
+these tests among them.
   cargo test --locked -p migrate --test clickhouse_admin --test passwords --test clickhouse --lib
 (in order: the lib unit tests, clickhouse.rs, clickhouse_admin.rs, passwords.rs)
 

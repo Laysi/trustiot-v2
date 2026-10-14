@@ -4,8 +4,8 @@ Laysi/trustiot-v2#403：叢集內 ClickHouse（`clickhouse.mode: bundled`）的 
 
 ## 環境
 
-- **程式碼**：分支 `feat/403-clickhouse-admin-in-cluster`，lab 測試時的 HEAD 是 `a91f0e5`（main `37863e0` 之上三個 commit）。
-- **建置主機**（經檢查佇列）：workspace 的 fmt、clippy、測試、`cargo deny`、`bun test scripts`、typecheck、`bun test deploy/flux`、`bun test deploy/chart`、兩個 CI 腳本，以及 lab 映像用的 aarch64 執行檔：`cargo zigbuild --locked --release --target aarch64-unknown-linux-musl -p migrate --bin migrate`（zig 0.16.0、cargo-zigbuild 由 proto 提供），SHA-256 `b5ecfef0b06248378651de7993a02c9bd31dba71eca422bf56b6d28961158d1a`。
+- **程式碼**：分支 `feat/403-clickhouse-admin-in-cluster`，lab 測試時是 main `37863e0` 之上的前三個 commit（之後 rebase 到 main `38503b2`，commit id 已改變；程式碼除了 main 帶進的 rustls 0.23.46 之外相同）。
+- **建置主機**（經檢查佇列）：workspace 的 fmt、clippy、測試、`cargo deny`、`bun test scripts`、typecheck、`bun test deploy/flux`、`bun test deploy/chart`、兩個 CI 腳本，以及 lab 映像用的 aarch64 執行檔：`cargo zigbuild --locked --release --target aarch64-unknown-linux-musl -p migrate --bin migrate`（zig 0.16.0、cargo-zigbuild 由 proto 提供），SHA-256 `b5ecfef0b06248378651de7993a02c9bd31dba71eca422bf56b6d28961158d1a`（rebase 前；rebase 後的同一個建置只差 rustls 的修補版本）。
 - **映像**：本機以 podman 用 `deploy/images/rust-binary.Containerfile`（`@BIN@` 換成 `migrate`）打包 `localhost/trustiot-e2e/migrate:403`（linux/arm64，image ID `b91004aaee9a…`），存成 OCI 封存檔，在節點上以 `sudo k3s ctr -n k8s.io images import` 匯入。ClickHouse 映像是 `values.yaml` 釘選的 digest，節點上已有。
 - **lab 的 Mac mini M1**：aarch64、Fedora Linux Asahi Remix 44、k3s v1.36.5+k3s1、Istio 1.30.5 ambient。沒有 CloudNativePG，這次也不需要（ClickHouse 單獨安裝，migration Job 關閉）。取得 lab 鎖後建立 namespace `e2e-403`（Pod Security `restricted`）與執行身分：ServiceAccount `e2e-403-runner` 綁定內建的 `admin`，另加 Gateway、HTTPRoute 與 AuthorizationPolicy 的 Role（[lab-runner-rbac.yaml](data/2026-10-15-403-clickhouse-admin-in-cluster/lab-runner-rbac.yaml)）。kubeconfig 只放在本機暫存目錄，API server 經會自動重連的 SSH 轉送，測完刪除。
 - **時間**：lab e2e 2026-10-15 01:38:37 到 01:40:19（Asia/Taipei），全新安裝檢查 01:40:51 到 01:41:10。
@@ -47,7 +47,7 @@ bun test --timeout 900000 ./deploy/chart/tests/e2e/clickhouse-admin.e2e.ts
 
 ### 建置主機
 
-[checks.txt](data/2026-10-15-403-clickhouse-admin-in-cluster/checks.txt)：fmt、兩種 clippy、workspace 測試（含 tools/migrate 的容器測試：Job 只用 init container 寫入的密碼、被拒時重讀、逾時訊息、首次安裝等待填入）、service-kit 無預設 feature 的測試、`bun test scripts`（843 通過、2 略過，略過的兩項需要 arm64 主機或 podman e2e，與這次無關）、`bun test deploy/flux`（19 通過）、`bun test deploy/chart`（378 通過）、`check-secret-handling.ts`、`check-workflows.ts` 都通過。typecheck 第一次有兩個型別錯誤，`a91f0e5` 修正後通過；在 `a91f0e5`（最後的程式碼，Rust 部分與第一次相同）再跑一次 typecheck、`bun test scripts`、`deploy/flux`、`deploy/chart` 與兩個 CI 腳本，全部通過。`cargo deny` 的 advisories 失敗於 RUSTSEC-2026-0346（rustls 0.23.45），main 一樣有，這個分支沒有改 `Cargo.lock`。
+[checks.txt](data/2026-10-15-403-clickhouse-admin-in-cluster/checks.txt)：fmt、兩種 clippy、workspace 測試（含 tools/migrate 的容器測試：Job 只用 init container 寫入的密碼、被拒時重讀、逾時訊息、首次安裝等待填入）、service-kit 無預設 feature 的測試、`bun test scripts`（843 通過、2 略過，略過的兩項需要 arm64 主機或 podman e2e，與這次無關）、`bun test deploy/flux`（19 通過）、`bun test deploy/chart`（378 通過）、`check-secret-handling.ts`、`check-workflows.ts` 都通過。typecheck 第一次有兩個型別錯誤，第三個 commit 修正後通過。`cargo deny` 當時的 advisories 失敗於 RUSTSEC-2026-0346（rustls 0.23.45），main 當時也一樣，這個分支沒有改 `Cargo.lock`。rebase 到 main `38503b2`（rustls 0.23.46）之後整組重跑一次（checks.txt 的 run 4），`cargo deny` 在內全部通過；`bun test scripts` 852 通過、4 略過、0 失敗。
 
 ## 結論
 
