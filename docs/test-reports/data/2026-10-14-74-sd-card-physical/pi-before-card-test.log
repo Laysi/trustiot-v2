@@ -1,0 +1,36 @@
+== 2026-10-14T06:58Z sudo bash luks-check.sh (TPM only, no passphrase)
+RESULT token-only unlock test (no passphrase): 1.393 s
+RESULT token-only unlock test (no passphrase): 1.389 s
+RESULT token-only unlock test (no passphrase): 1.386 s
+RESULT tpm2_load of the sealed blob on this TPM: OK
+== sudo bash luks-boot.sh: /etc/crypttab
+poc74data /var/lib/trustiot-poc74/data.luks none luks,tpm2-device=auto,tpm2-measure-pcr=yes,headless=true,nofail
+== /etc/fstab diff
+3a4
+> /dev/mapper/poc74data /mnt/poc74data ext4 defaults,nofail,x-systemd.device-timeout=60s 0 2
+== systemctl start systemd-cryptsetup@poc74data.service mnt-poc74data.mount; systemctl is-active
+active
+active
+== /mnt/poc74data/marker.txt (second line appended before the reboot)
+Laysi/trustiot-v2#74 marker written 2026-10-14T06:58:20Z
+Laysi/trustiot-v2#74 before the physical SD-card test 2026-10-14T06:58:40Z
+== systemctl reboot at 2026-10-14T06:58:52Z; after the reboot: systemctl is-active
+active
+active
+== /mnt/poc74data/marker.txt
+Laysi/trustiot-v2#74 marker written 2026-10-14T06:58:20Z
+Laysi/trustiot-v2#74 before the physical SD-card test 2026-10-14T06:58:40Z
+== systemd-analyze blame
+1.863s systemd-cryptsetup@poc74data.service
+  53ms mnt-poc74data.mount
+== journalctl -b -u systemd-cryptsetup@poc74data.service -o short-monotonic
+[    6.408594] trustiot-lab systemd[1]: Starting systemd-cryptsetup@poc74data.service - Cryptography Setup for poc74data...
+[    6.634857] trustiot-lab systemd-cryptsetup[550]: Set cipher aes, mode xts-plain64, key size 512 bits for device /var/lib/trustiot-poc74/data.luks.
+[    6.635090] trustiot-lab systemd-cryptsetup[550]: Automatically discovered security TPM2 token unlocks volume.
+[    8.272054] trustiot-lab systemd[1]: Finished systemd-cryptsetup@poc74data.service - Cryptography Setup for poc74data.
+== container fingerprint: cryptsetup luksUUID; token export --token-id 0 | sha256sum; luksDump --dump-json-metadata | sha256sum
+bf5a105c-5f2e-4199-ae0e-9e6106c3afa6
+6a12d50f9e2072d7cae54df00806401f013e4d01bd2f3c110c471ee1ab239ce5  -
+9fe72952b4f0b304f4e448d382909db6b09ceac2d534eeba9fb5457482a8efd0  -
+== blkid of the root partition (the workstation finds the card by this PARTUUID)
+/dev/mmcblk0p2: LABEL="rootfs" UUID="02f61d5e-92cb-4f9c-a781-099d97795020" BLOCK_SIZE="4096" TYPE="ext4" PARTUUID="0ff2576b-02"
