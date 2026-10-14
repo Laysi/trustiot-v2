@@ -1,0 +1,72 @@
+bun test v1.4.2 (744846f84)
+
+scripts/tests/e2e.test.ts:
+385 |           // architecture.
+386 |           for (const ref of refs) expect(await platformOf(ref), `${ref} before up`).toBe(foreign);
+387 | 
+388 |           const up = await dev(env, "up");
+389 |           // The end of the output names the failure; the start is cargo's progress.
+390 |           expect(up.code, `up failed:\n${(up.stdout + up.stderr).slice(-2000)}`).toBe(0);
+                                                                                       ^
+error: up failed:
+identity signing key: generated (mode 0600, state directory)
+starting postgres, clickhouse and mosquitto
+ok   postgres: published port: 127.0.0.1:37877
+ok   postgres: published port refuses a connection without TLS: refused
+ok   postgres: published port demands a password over TLS: authentication request 10 (10 = SCRAM)
+ok   postgres: certificate of another CA refused: refused (UNABLE_TO_VERIFY_LEAF_SIGNATURE)
+ok   postgres: certificate for another host name refused: refused (ERR_TLS_CERT_ALTNAME_INVALID)
+ok   postgres: login over TLS and Apache AGE: age 1.8.0, tls true
+ok   postgres: wrong password refused: refused
+ok   clickhouse: published port: http://127.0.0.1:46151/ping
+ok   clickhouse: login: SELECT 1 -> 1
+ok   clickhouse: anonymous access refused: refused (401)
+ok   mqtt: login: CONNACK 0
+ok   mqtt: anonymous access refused: CONNACK 5
+ok   mqtt: wrong password refused: CONNACK 5
+building migrate (migrate) with cargo
+running the migration Job (tools/migrate)
+migration Job finished: 23 change(s); identity_app can log in
+building service-kit (example-service) with cargo
+starting example-service
+FAIL example-service: GET /healthz (container port 8080): Unable to connect. Is the computer able to access the url?
+FAIL example-service: GET /readyz (container port 8080): Unable to connect. Is the computer able to access the url?
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.31s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.19s
+error: 2 check(s) failed. The containers are left running for inspection: podman logs trustiot-dev-e2e-rifls3-<component>; run the down command to remove them
+
+
+Expected: 0
+Received: 1
+
+      at <anonymous> (<worktree>/scripts/tests/e2e.test.ts:390:82)
+(fail) the dev environment with podman > up uses images of this machine's platform although the store holds the service base for another one [156585.24ms]
+385 |           // architecture.
+386 |           for (const ref of refs) expect(await platformOf(ref), `${ref} before up`).toBe(foreign);
+387 | 
+388 |           const up = await dev(env, "up");
+389 |           // The end of the output names the failure; the start is cargo's progress.
+390 |           expect(up.code, `up failed:\n${(up.stdout + up.stderr).slice(-2000)}`).toBe(0);
+                                                                                       ^
+error: up failed:
+identity signing key: generated (mode 0600, state directory)
+starting postgres, clickhouse and mosquitto
+error: podman run root failed (exit 1): WARNING: image platform (linux/arm64/v8) does not match the expected platform (linux/amd64)
+{
+  "msg": "exec container process `/bin/sh`: Exec format error",
+  "level": "error",
+  "time": "2026-10-14T16:51:43.137850Z"
+}
+
+
+Expected: 0
+Received: 1
+
+      at <anonymous> (<worktree>/scripts/tests/e2e.test.ts:390:82)
+(fail) the dev environment with podman > up uses images of this machine's platform although the store holds Mosquitto for another one [8543.34ms]
+
+ 0 pass
+ 1 filtered out
+ 2 fail
+ 4 expect() calls
+Ran 2 tests across 1 file. [165.17s]

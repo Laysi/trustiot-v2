@@ -56,9 +56,9 @@ import {
 import { discoverSeeds } from "./seed.ts";
 import {
   containerfile,
-  imageLabelArgs,
   platformEnv,
   resolveServicePorts,
+  serviceBuildOptions,
   SERVICES,
   type ServiceDef,
 } from "./services.ts";
@@ -86,6 +86,8 @@ import {
   MOSQUITTO_CONFIG,
   mosquittoAcl,
   namesFor,
+  nativePlatform,
+  platformMismatchMessage,
   POSTGRES_HBA,
   postgresCommand,
   SERVICE_CA_DIR,
@@ -177,6 +179,8 @@ async function writeVolumeFile(
       "run",
       "--rm",
       "--interactive",
+      "--platform",
+      nativePlatform(),
       "--user",
       "root",
       "--entrypoint",
@@ -541,20 +545,19 @@ async function startService(ctx: Context, state: State, service: ServiceDef): Pr
   const binary = await cargoBuild(ctx, service.cargo);
   const buildDir = mkdtempSync(join(ctx.dir, `build-${service.name}-`));
   const image = ctx.names.image(service.name);
+  const platform = nativePlatform();
   const forget = registerCleanup(() => rmSync(buildDir, { recursive: true, force: true }));
   try {
     copyFileSync(binary, join(buildDir, service.cargo.bin));
     writeFileSync(join(buildDir, "Containerfile"), containerfile(IMAGES.serviceBase, service));
     await podmanOk(
-      containerBuildArgs(buildDir, [
-        "--quiet",
-        ...imageLabelArgs(ctx.names),
-        "--tag",
-        image,
-        "--file",
-        join(buildDir, "Containerfile"),
-      ]),
+      containerBuildArgs(buildDir, serviceBuildOptions(ctx.names, image, join(buildDir, "Containerfile"), platform)),
     );
+    // --platform already makes podman take the right base; this stays as a guard so that a
+    // podman that does not honour it fails here with the cause, not later as a container
+    // that cannot start.
+    const built = (await podmanOk(["image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", image])).trim();
+    if (built !== platform) throw new Error(platformMismatchMessage(image, built, platform));
   } finally {
     rmSync(buildDir, { recursive: true, force: true });
     forget();
