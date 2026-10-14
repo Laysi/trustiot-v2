@@ -112,6 +112,44 @@ describe("the stand-in Secret API", () => {
     expect(bad.status).toBe(400);
   });
 
+  test("a patch that is partly invalid changes nothing, as the API server's all-or-nothing update", async () => {
+    // A Secret with something in every part the patch can touch.
+    const seeded = (await get()).body;
+    const filled = await patch({
+      metadata: { resourceVersion: seeded.metadata.resourceVersion, annotations: { a: "1" }, labels: { l: "1" } },
+      data: { k: encode("v") },
+    });
+    expect(filled.status).toBe(200);
+    const before = (await get()).body;
+
+    const invalid: unknown[] = [
+      // A valid annotation with an invalid data value, and with a data value that is not a string.
+      { metadata: { annotations: { b: "2" } }, data: { k2: "not base64!" } },
+      { metadata: { annotations: { b: "2" } }, data: { k2: 7 } },
+      // A valid data key with an invalid label, and with an invalid annotation.
+      { data: { k2: encode("w") }, metadata: { labels: { m: 1 } } },
+      { data: { k2: encode("w") }, metadata: { annotations: { m: {} } } },
+      // Valid changes before an ownerReferences or finalizers value the Job never sends.
+      { metadata: { labels: { m: "2" }, ownerReferences: [{}] }, data: { k2: encode("w") } },
+      { metadata: { annotations: { a: null }, finalizers: ["x"] }, data: { k: null } },
+      // A resourceVersion that is not a string.
+      { metadata: { resourceVersion: 1, annotations: { b: "2" } } },
+      // A stale resourceVersion with otherwise valid changes: 409, not applied.
+    ];
+    for (const body of invalid) {
+      expect((await patch(body)).status, JSON.stringify(body)).toBe(400);
+    }
+    const stale = await patch({ metadata: { resourceVersion: "0", annotations: { b: "2" } }, data: { k2: encode("w") } });
+    expect(stale.status).toBe(409);
+
+    const after = (await get()).body;
+    expect(after.metadata.annotations).toEqual(before.metadata.annotations);
+    expect(after.metadata.labels).toEqual(before.metadata.labels);
+    expect(after.data).toEqual(before.data);
+    expect(after.metadata.resourceVersion).toBe(before.metadata.resourceVersion);
+    expect(after).toEqual(before);
+  });
+
   test("stops answering after stop()", async () => {
     const { url } = api;
     api.stop();

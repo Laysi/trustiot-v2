@@ -64,39 +64,75 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Applies a patch to `secret`; returns the HTTP status that refuses it, or undefined. */
-function apply(secret: StoredSecret, patch: unknown): number | undefined {
+/** A validated merge patch: what to change, decided before anything is touched. */
+interface Plan {
+  resourceVersion?: string;
+  annotations: [string, string | null][];
+  labels: [string, string | null][];
+  clearOwnerReferences: boolean;
+  clearFinalizers: boolean;
+  data: [string, Buffer | null][];
+}
+
+/** The status that refuses a malformed patch (400), or the validated plan. Reads nothing stored. */
+function validate(patch: unknown): number | Plan {
   if (!isObject(patch) || Object.keys(patch).some((key) => key !== "metadata" && key !== "data")) return 400;
   const metadata = patch.metadata ?? {};
   if (!isObject(metadata) || Object.keys(metadata).some((key) => !METADATA_FIELDS.includes(key))) return 400;
-  if ("resourceVersion" in metadata && metadata.resourceVersion !== String(secret.resourceVersion)) return 409;
-  for (const [field, map] of [
-    ["annotations", secret.annotations],
-    ["labels", secret.labels],
-  ] as const) {
+  const plan: Plan = { annotations: [], labels: [], clearOwnerReferences: false, clearFinalizers: false, data: [] };
+  if ("resourceVersion" in metadata) {
+    if (typeof metadata.resourceVersion !== "string") return 400;
+    plan.resourceVersion = metadata.resourceVersion;
+  }
+  for (const field of ["annotations", "labels"] as const) {
     const changes = metadata[field];
     if (changes === undefined) continue;
     if (!isObject(changes)) return 400;
     for (const [key, value] of Object.entries(changes)) {
-      if (value === null) map.delete(key);
-      else if (typeof value === "string") map.set(key, value);
-      else return 400;
+      if (value !== null && typeof value !== "string") return 400;
+      plan[field].push([key, value]);
     }
   }
   // The Job only ever clears these two.
-  if (metadata.ownerReferences === null) secret.ownerReferences = [];
+  if (metadata.ownerReferences === null) plan.clearOwnerReferences = true;
   else if (metadata.ownerReferences !== undefined) return 400;
-  if (metadata.finalizers === null) secret.finalizers = [];
+  if (metadata.finalizers === null) plan.clearFinalizers = true;
   else if (metadata.finalizers !== undefined) return 400;
   const data = patch.data;
   if (data !== undefined) {
     if (!isObject(data)) return 400;
     for (const [key, value] of Object.entries(data)) {
-      if (value === null) secret.data.delete(key);
+      if (value === null) plan.data.push([key, null]);
       else if (typeof value === "string" && /^[A-Za-z0-9+/]*={0,2}$/.test(value)) {
-        secret.data.set(key, Buffer.from(value, "base64"));
+        plan.data.push([key, Buffer.from(value, "base64")]);
       } else return 400;
     }
+  }
+  return plan;
+}
+
+/**
+ * Applies a merge patch to `secret` as the API server does: all or nothing. The whole patch is
+ * validated first (400), then the resourceVersion precondition is checked (409); only a patch
+ * that passes both changes the Secret. Returns the HTTP status that refuses it, or undefined.
+ */
+function apply(secret: StoredSecret, patch: unknown): number | undefined {
+  const plan = validate(patch);
+  if (typeof plan === "number") return plan;
+  if (plan.resourceVersion !== undefined && plan.resourceVersion !== String(secret.resourceVersion)) return 409;
+  for (const [key, value] of plan.annotations) {
+    if (value === null) secret.annotations.delete(key);
+    else secret.annotations.set(key, value);
+  }
+  for (const [key, value] of plan.labels) {
+    if (value === null) secret.labels.delete(key);
+    else secret.labels.set(key, value);
+  }
+  if (plan.clearOwnerReferences) secret.ownerReferences = [];
+  if (plan.clearFinalizers) secret.finalizers = [];
+  for (const [key, value] of plan.data) {
+    if (value === null) secret.data.delete(key);
+    else secret.data.set(key, value);
   }
   return undefined;
 }
