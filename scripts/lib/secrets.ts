@@ -68,6 +68,27 @@ export function serviceRoleSql(role: string, password: string): string {
 }
 
 /**
+ * SQL that creates the migration role of tools/migrate if it is missing, sets its password and
+ * makes it the owner of the database, which is the shape the Job demands (README of tools/migrate,
+ * "一次執行做什麼" step 2): owns the database, has CREATEROLE, and is not a superuser, does not
+ * bypass row-level security and owns no other database. The chart's CloudNativePG bootstrap gives
+ * the bundled Postgres the same `trustiot_owner`. Idempotent, because the data volume outlives
+ * `down`; the password is new for every `up` and only that run (and the Job it starts) knows it.
+ */
+export function migrationRoleSql(role: string, password: string, database: string): string {
+  if (!/^[a-z][a-z0-9_]{0,62}$/.test(role)) {
+    throw new Error(`invalid database role name: ${role}`);
+  }
+  const attributes = "LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB CREATEROLE NOREPLICATION";
+  return (
+    `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = ${sqlLiteral(role)}) ` +
+    `THEN CREATE ROLE ${sqlIdentifier(role)} ${attributes}; END IF; END $$;\n` +
+    `ALTER ROLE ${sqlIdentifier(role)} WITH ${attributes} PASSWORD ${sqlLiteral(password)};\n` +
+    `ALTER DATABASE ${sqlIdentifier(database)} OWNER TO ${sqlIdentifier(role)};\n`
+  );
+}
+
+/**
  * The entry for a Mosquitto password file in the `sha512-pbkdf2` format
  * (`user:$7$<iterations>$<salt>$<hash>`, standard base64). Computed here so the password never
  * appears on a command line; `mosquitto_passwd` only accepts it as an argument.
@@ -99,13 +120,27 @@ export function sqlIdentifier(value: string): string {
  * `KEY=value` lines for `podman --env-file` and shells. Values are restricted to a character set
  * that needs no quoting, so the output means the same to podman, to `export` and to dotenv
  * readers.
+ *
+ * `options.quoted` names the keys whose value is JSON (a JWK Set, a route table): that text has
+ * quotes and braces, so it is written in single quotes, which a shell `eval` and dotenv readers
+ * understand but `podman --env-file` would keep literally. Only a value without a single quote,
+ * newline or NUL byte can be quoted this way.
  */
-export function dotenv(entries: Record<string, string | number>): string {
+export function dotenv(
+  entries: Record<string, string | number>,
+  options: { quoted?: readonly string[] } = {},
+): string {
   const lines = Object.entries(entries).map(([key, value]) => {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
       throw new Error(`invalid environment variable name: ${key}`);
     }
     const text = String(value);
+    if (options.quoted?.includes(key)) {
+      if (/['\n\r\0]/.test(text)) {
+        throw new Error(`the value of ${key} contains characters that cannot be single-quoted`);
+      }
+      return `${key}='${text}'`;
+    }
     if (!/^[A-Za-z0-9_@:/.,+=-]*$/.test(text)) {
       throw new Error(`the value of ${key} contains characters that need quoting`);
     }

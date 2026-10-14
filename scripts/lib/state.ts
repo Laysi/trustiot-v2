@@ -7,6 +7,7 @@ import {
   existsSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -121,6 +122,17 @@ export function loadState(dir: string): State | undefined {
 
 export function removeState(dir: string): void {
   rmSync(dir, { recursive: true, force: true });
+}
+
+/**
+ * Removes everything in the state directory except the entries named in `keep` (what `down`
+ * leaves behind: the identity signing key and the dev session cookie, whose data outlives it).
+ */
+export function removeStateExcept(dir: string, keep: readonly string[]): void {
+  if (!existsSync(dir)) return;
+  for (const entry of readdirSync(dir)) {
+    if (!keep.includes(entry)) rmSync(join(dir, entry), { recursive: true, force: true });
+  }
 }
 
 /** Runs `action` with a private file holding `content`, and removes the file afterwards. */
