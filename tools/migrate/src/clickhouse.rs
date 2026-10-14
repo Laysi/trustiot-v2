@@ -74,9 +74,12 @@ const PROBE: &str = "SELECT 1 FORMAT TSV";
 /// Never the account the Job runs as (`currentUser()`), whatever it was granted: locking it would
 /// stop every later run. ClickHouse has no marker for accounts a client created, so any other
 /// account granted the collector role counts as the Job's (docs/runbooks/migrations.md: do not
-/// grant it to your own accounts).
+/// grant it to your own accounts). Never an account defined in the server's configuration
+/// (`users_xml` storage, which the Job never creates): `ALTER USER` cannot change one, so the run
+/// would stop on it every time.
 const COLLECTOR_ACCOUNTS: &str = "SELECT DISTINCT user_name FROM system.role_grants
 WHERE granted_role_name = {role:String} AND user_name IS NOT NULL AND user_name != currentUser()
+  AND user_name IN (SELECT name FROM system.users WHERE storage != 'users_xml')
 ORDER BY user_name FORMAT TSV";
 /// How many host rules let the account log in; `HOST NONE` leaves none.
 const USER_HOSTS: &str = "SELECT length(host_ip) + length(host_names) + length(host_names_regexp)
