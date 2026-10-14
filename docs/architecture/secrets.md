@@ -111,7 +111,7 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
 | 叢集內元件自己產生的 Secret | 叢集內資料庫的帳號、CA 與伺服器私鑰；migration Job 建立的帳號的密碼 | 例如 CloudNativePG 為叢集內 Postgres 產生的 CA、伺服器憑證與 owner 帳號（Laysi/trustiot-v2#58），以及 migration Job 產生的服務角色與 collector 密碼（chart 宣告空的 Secret，Job 填入，見「migration Job 產生的密碼」）。值只存在叢集內，不進 git，也不經過人；chart 把這些 Secret 整個列為服務的自訂 `env` 不能讀的對象，服務只拿到 CA 憑證（掛載時只選 `ca.crt`）或自己的密碼 |
 | 主機上只有 root 能讀的檔案，以 systemd `LoadCredential` 交給服務 | SaaS 主機上的 cloudflared | 不在叢集內，k3s 故障時仍能運作（Laysi/trustiot-v2#64） |
 | GitHub Actions secret，經 step 的 `env` 或 `with` | 發佈流程用的少數金鑰 | ci.yml 不用任何 secret；fork 來的 PR 拿不到 secret（見 [CI 與發佈](ci-release.md)） |
-| 開發者本機的狀態目錄（0700 目錄、0600 檔案） | 本機開發環境 | 每次 `up` 產生，`down` 刪除（[scripts/README.md](../../scripts/README.md)） |
+| 開發者本機的狀態目錄（0700 目錄、0600 檔案） | 本機開發環境 | 帳密與憑證每次 `up` 產生，`down` 刪除；身分服務的開發簽章私鑰與開發 session 的 cookie 沿用，`down` 保留、`purge` 刪除（[scripts/README.md](../../scripts/README.md)） |
 
 SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由 Flux 解密後套用；地端由客戶以自己的方式建立 Secret（`kubectl create secret --from-file`、自己的祕密管理工具或 External Secrets Operator），chart 只認 Secret 名稱與 key。
 
@@ -182,4 +182,5 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 | 使用者 session | 伺服器只存 cookie 值的雜湊 | 沒有簽章密鑰（規則 8）；登出、停權在下一個請求生效（決策 13） | Laysi/trustiot-v2#103 |
 | 一次性 token 與驗證碼 | 只存雜湊 | 見上方「一次性 token 與驗證碼」 | Laysi/trustiot-v2#103、Laysi/trustiot-v2#105 |
 | 租戶設定的祕密：Webhook 簽章密鑰、企業 OIDC 的 client secret | Postgres，屬於租戶資料 | 建立後 API 不再回傳明文、不進日誌；靜態加密方式由實作 issue 決定並加進本清冊 | Laysi/trustiot-v2#169、Laysi/trustiot-v2#43 |
-| 本機開發帳密 | 開發者的 `$XDG_STATE_HOME/trustiot-v2/dev/<實例>/state.json`（0600） | 每次 `up` 產生、`down` 刪除，不在 repo 內 | Laysi/trustiot-v2#71 |
+| 本機開發帳密 | 開發者的 `$XDG_STATE_HOME/trustiot-v2/dev/<實例>/state.json`（0600）；含 migration Job 產生的 `identity_app` 密碼（經本機的 Secret API 替身，只在 `up` 執行 Job 時存在於記憶體） | 每次 `up` 產生、`down` 刪除，不在 repo 內 | Laysi/trustiot-v2#71、Laysi/trustiot-v2#336 |
+| 本機開發用的身分服務簽章私鑰（Ed25519）與開發 session 的 cookie | 開發者的 `$XDG_STATE_HOME/trustiot-v2/dev/<實例>/identity/`（目錄 0700、檔案 0600）；公鑰由私鑰推得，經 `env` 印出，不另存 | `up` 沒有就產生、有就沿用；`down` 保留（session 在保留的資料磁碟區），`purge` 刪除；`env`、`status` 與日誌不含私鑰內容；只在本機，不是任何叢集的金鑰 | Laysi/trustiot-v2#336 |

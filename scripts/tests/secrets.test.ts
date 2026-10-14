@@ -112,6 +112,23 @@ describe("dotenv", () => {
   });
 });
 
+describe("dotenv with quoted JSON values", () => {
+  test("single-quotes only the named keys, so a shell eval and a dotenv reader get the JSON back", () => {
+    const json = '{"keys":[{"kty":"OKP","kid":"a-b_c","x":"abc"}]}';
+    const text = dotenv({ A: "x", KEYS: json }, { quoted: ["KEYS"] });
+    expect(text).toBe(`A=x\nKEYS='${json}'\n`);
+  });
+
+  test("refuses a quoted value that a single quote cannot hold", () => {
+    expect(() => dotenv({ A: "it's" }, { quoted: ["A"] })).toThrow(/cannot be single-quoted/);
+    expect(() => dotenv({ A: "a\nb" }, { quoted: ["A"] })).toThrow(/cannot be single-quoted/);
+  });
+
+  test("still refuses unquoted JSON, which podman's env file would read literally", () => {
+    expect(() => dotenv({ A: '{"a":1}' })).toThrow();
+  });
+});
+
 describe("SQL quoting", () => {
   test("doubles quotes", () => {
     expect(sqlLiteral("it's")).toBe("'it''s'");

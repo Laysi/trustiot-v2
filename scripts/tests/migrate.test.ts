@@ -1,0 +1,106 @@
+// How `up` runs the migration Job (lib/migrate.ts): its settings, what it may inherit, and what
+// is printed when it fails.
+import { describe, expect, test } from "bun:test";
+
+import {
+  IDENTITY_LOGIN_STORE,
+  jobEnvironment,
+  MIGRATION_ROLE,
+  passwordBindings,
+  reportedChanges,
+  scrub,
+  type MigrationRun,
+} from "../lib/migrate.ts";
+import { migrationRoleSql } from "../lib/secrets.ts";
+
+const run: MigrationRun = {
+  binary: "/repo/target/debug/migrate",
+  postgres: { port: 15432, database: "trustiot", caFile: "/state/tls/ca.crt" },
+  login: { user: MIGRATION_ROLE, password: "migration-login-value" },
+  stateDir: "/state",
+  roles: ["identity_app"],
+};
+
+describe("the Job's environment", () => {
+  const env = jobEnvironment(run, { url: "http://127.0.0.1:4321" }, "/state/kube-token.abc", {
+    PATH: "/bin",
+    HOME: "/home/dev",
+    TRUSTIOT__POSTGRES__USERNAME: "someone-else",
+    TRUSTIOT_CONFIG_FILE: "/elsewhere.toml",
+    CARGO_BUILD_JOBS: "2",
+  });
+
+  test("names the local Postgres as the chart's platform settings do, with verify-full", () => {
+    expect(env.TRUSTIOT_POSTGRES_HOST).toBe("127.0.0.1");
+    expect(env.TRUSTIOT_POSTGRES_PORT).toBe("15432");
+    expect(env.TRUSTIOT_POSTGRES_DATABASE).toBe("trustiot");
+    expect(env.TRUSTIOT_POSTGRES_SSLMODE).toBe("verify-full");
+    expect(env.TRUSTIOT_POSTGRES_CA_FILE).toBe("/state/tls/ca.crt");
+  });
+
+  test("logs in as the migration role and reaches the passwords through the stand-in API", () => {
+    expect(env.TRUSTIOT__POSTGRES__USERNAME).toBe("trustiot_owner");
+    expect(env.TRUSTIOT__POSTGRES__PASSWORD).toBe("migration-login-value");
+    expect(env.TRUSTIOT__PASSWORDS__API_URL).toBe("http://127.0.0.1:4321");
+    expect(env.TRUSTIOT__PASSWORDS__TOKEN_FILE).toBe("/state/kube-token.abc");
+    expect(env.TRUSTIOT__PASSWORDS__POSTGRES).toBe(`identity_app=${IDENTITY_LOGIN_STORE}`);
+    expect(env.TRUSTIOT__PASSWORDS__GENERATION).toBe("1");
+  });
+
+  test("inherits only what a process needs, not the caller's TRUSTIOT settings", () => {
+    expect(env.PATH).toBe("/bin");
+    expect(env.HOME).toBe("/home/dev");
+    expect(Object.values(env)).not.toContain("someone-else");
+    expect(env.TRUSTIOT_CONFIG_FILE).toBeUndefined();
+    expect(env.CARGO_BUILD_JOBS).toBeUndefined();
+  });
+});
+
+describe("password bindings", () => {
+  test("pair each login role with the Secret that holds its password", () => {
+    expect(passwordBindings(["identity_app"])).toBe("identity_app=dev-identity-password");
+    expect(passwordBindings(["a_app", "b_app"])).toBe("a_app=dev-identity-password,b_app=dev-identity-password");
+  });
+});
+
+describe("what is printed when the Job fails", () => {
+  test("every secret is removed from the text", () => {
+    const text = "login failed for password long-secret-value and token another-secret-value; short x";
+    expect(scrub(text, ["long-secret-value", "another-secret-value", "x"])).toBe(
+      "login failed for password <redacted> and token <redacted>; short x",
+    );
+  });
+
+  test("reads the number of changes from the final log line", () => {
+    const log = [
+      '{"message":"created role identity_owner"}',
+      '{"fields":{"message":"migration run finished","changes":14}}',
+      "not json",
+    ].join("\n");
+    expect(reportedChanges(log)).toBe(14);
+    expect(reportedChanges('{"message":"migration run finished","changes":3}')).toBe(3);
+    expect(reportedChanges("nothing here")).toBeUndefined();
+  });
+});
+
+describe("the migration role", () => {
+  const sql = migrationRoleSql("trustiot_owner", "p'w", "trustiot");
+
+  test("is a login role that is neither a superuser nor bypasses row-level security, and can create roles", () => {
+    expect(sql).toContain('CREATE ROLE "trustiot_owner" LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB CREATEROLE NOREPLICATION');
+    expect(sql).toContain('ALTER ROLE "trustiot_owner" WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB CREATEROLE NOREPLICATION');
+    expect(sql).toContain("PASSWORD 'p''w'");
+  });
+
+  test("owns the database, which is what the Job checks", () => {
+    expect(sql).toContain('ALTER DATABASE "trustiot" OWNER TO "trustiot_owner"');
+  });
+
+  test("can run again, and refuses a name that is not a plain identifier", () => {
+    expect(sql).toContain("IF NOT EXISTS (SELECT FROM pg_roles");
+    // A dollar-quoted block, as serviceRoleSql writes it.
+    expect(sql).toStartWith("DO $$ BEGIN IF NOT EXISTS");
+    expect(sql).toContain("END IF; END $$;\n");
+    expect(() => migrationRoleSql('x"; DROP', "p", "trustiot")).toThrow(/invalid database role name/);
+  });
+});
