@@ -45,13 +45,15 @@ Job 遇到這種部署會停止，不改任何角色：migration 角色擁有超
 2. 確認：新 Job 的日誌對每個 Secret 有 `generated the password of <角色或帳號> in Secret <名稱> (password generation <新值>)`，接著有 `set the password of <角色>`（collector 是 `set the password of ClickHouse account <帳號>`）；`kubectl -n <namespace> rollout status deploy/<release>-<服務>` 與 collector 的 rollout 完成，服務健康。
 3. 舊密碼在 Job 設定新密碼的那一刻失效。Postgres 已建立的連線不受影響，直到服務的舊 pod 被換掉；舊 pod 在這段時間開新連線會失敗（readiness 讓它退出負載平衡）。舊的 collector 寫 ClickHouse 會失敗並重試（每批最多 5 分鐘），新的 collector 就緒後恢復。Postgres 一個角色只有一個密碼，這段時間無法省掉；需要時在低流量時段輪替。懷疑外洩時，再以 superuser 中止舊連線：`kubectl -n <namespace> exec -i <cluster>-1 -c postgres -- psql -d trustiot -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '<角色>'"`。
 
+**輪替到一半 Job 失敗時**：Job 先把新密碼寫進 Secret，再 `ALTER ROLE`（collector 是 `ALTER USER`）。在這兩步之間失敗（例如資料庫斷線、Job 被中止），Secret 已是新密碼、角色還是舊密碼：已經在跑的 pod 不受影響，但這段時間重啟或新起的 pod 以 Secret 的新密碼登不進去（服務停在未就緒、collector 寫入重試），直到 Job 重試成功把角色設成 Secret 的值。這個順序是刻意的：反過來先改角色、再寫 Secret 時，失敗會留下一個沒有任何 Secret 記得密碼的角色；現在的順序任何時候 Secret 都有一個角色會接受（或下一次 Job 會設定）的密碼。處理：看 Job 的日誌、修好停止的原因，讓 Job 依 `migrate.backoffLimit` 重試（重試用完時刪掉失敗的 Job，下一次升級或調和重建它）。不要手動把 Secret 改回舊值。
+
 同一個值再跑一次（例如改 `migrate.revision`）不會再換密碼：annotation 已經記著這一代。代以數字比較、只往上走：`helm rollback`（或 Flux 的 HelmRelease 升級失敗後以 `strategy: rollback` 回復）渲染出較小的值時，Job 保留現有的密碼，記的代不變，日誌沒有 `generated the password`；之後再升級回較大的值也不換，因為 Secret 記的已經是它。要真的換，就調到比 Secret 記的更大的值（`kubectl -n <namespace> get secret <release>-identity-password -o jsonpath='{.metadata.annotations.trustiot\.io/password-generation}'`）。
 
 Job 只信任它自己填過的 Secret 物件：寫入時在 annotation `trustiot.io/password-secret-uid` 記下 Secret 的 uid。Secret 被刪掉後重建（包括有人自己建一個同名、帶 Helm ownership metadata 的 Secret 讓 `helm install` 接手）或從備份還原時 uid 變了，下一次 Job 把每個 key 都重新產生並設定，日誌寫 `(the Secret is not the one the Job filled)`；服務隨新的 Job 名稱滾動更新。
 
 ## 密碼 Secret 的資料遺失
 
-有人刪了密碼 Secret 的 key 或整個 Secret，或以 `helm upgrade --force-replace` 換掉了它（換掉時不帶資料）：已在執行的 pod 不受影響（環境變數在啟動時讀好），但之後重啟的 pod 讀不到 key 會停在 `CreateContainerConfigError`。處理：
+有人刪了密碼 Secret 的 key 或整個 Secret，或以 `helm upgrade --force-replace` 換掉了它（換掉時不帶資料，見下方「不要用 `helm upgrade --force-replace`」）：已在執行的 pod 不受影響（環境變數在啟動時讀好），但之後重啟的 pod 讀不到 key 會停在 `CreateContainerConfigError`。處理：
 
 1. 把 `migrate.revision` 改成新的值再升級（SaaS 經 PR，地端 `helm upgrade`）。Helm 升級時重建被刪掉的 Secret（空的），Job 重跑時為缺的 key 產生新密碼並設定角色，日誌有 `generated the password of <角色> in Secret <名稱> (it had none)`。
 2. 服務與 collector 隨新的 Job 名稱滾動更新，以新密碼連線。
@@ -62,6 +64,29 @@ Job 不能建立 Secret（它的 Role 沒有 `create`）：Secret 不存在時�
 
 Postgres 若開著 `log_statement = 'all'`（或 `log_min_duration_statement` 記下每一句），伺服器的日誌會記下 Job 設定密碼的那一句，裡面是 SCRAM-SHA-256 的 verifier（伺服器本來就存的值，不是密碼；2026-10-13 的驗證確認日誌裡沒有明文密碼）。verifier 仍可用來離線猜密碼，所以 Postgres 的伺服器日誌要當成敏感資料保管。這個設定只有 superuser 能改，migration 角色關不掉它；需要時請資料庫管理者調整。
 
+### 不要用 `helm upgrade --force-replace`
+
+`--force-replace` 以刪除再建立取代更新。對這個 chart 它會（2026-10-13 在 lab 叢集上確認）：
+
+1. 把兩種密碼 Secret 換成 chart 渲染的空 Secret：`data` 與 Job 記的 annotation（代與 uid）都不見了，雖然它們帶 `helm.sh/resource-policy: keep`。
+2. 接著取代同名的 migration Job 時失敗（`spec.selector ... field is immutable`），升級以 FAILED 結束，Job 不會再跑。
+
+所以操作者看到的是「升級失敗」，但密碼已經沒了：之後任何重啟的服務或 collector pod 都會停在 `CreateContainerConfigError`。看到這種失敗要立刻做上一段的處理（改 `migrate.revision` 再一般地升級，不帶 `--force-replace`），Job 會產生新密碼並設定。這個 chart 沒有需要 `--force-replace` 的情況；升級卡住時看 Job 與服務的日誌，不要用它。
+
+### 升級失敗與 `--cleanup-on-fail`
+
+`helm upgrade --cleanup-on-fail`（Flux 的 HelmRelease 設了 `upgrade.cleanupOnFail: true`，見 `deploy/flux/clusters/saas/trustiot/helm-release.yaml`）在升級失敗時刪掉這次升級新建立的物件，包括這次才宣告的密碼 Secret（例如同一次升級新開的服務），`helm.sh/resource-policy: keep` 擋不住（2026-10-13 在 lab 叢集上確認）。Job 可能已經以它設定了角色的密碼。不需要手動處理：下一次成功的升級重建空的 Secret，Job 為它產生新密碼並設定（日誌有 `(it had none)`），叢集自己恢復。Flux 失敗後的 rollback（`strategy: rollback`）渲染出較舊的 `migrate.passwordGeneration` 時也不換密碼（上方「輪替服務角色與 collector 的密碼」）。
+
+## 停用服務之後留下的 Secret
+
+在 values 關掉一個服務（或把它的 `mesh.calls` 拿掉 `postgres`）之後，下一次 Job 把它的登入角色改成 `NOLOGIN`，日誌有 `revoked the login of role <服務>_app: no Secret is bound to it`；服務從 tools/migrate 的服務清單移除或改名時是 `... no service in tools/migrate's registry has it`。關掉 collector 或改它的帳號名稱時，舊的 ClickHouse 帳號改成 `HOST NONE`，日誌有 `revoked the login of ClickHouse account <帳號>: the collector no longer uses it`。角色與帳號不刪除（可能擁有物件；重新啟用時 Job 先設 Secret 的密碼再恢復登入）。只有 Job 標記過、migration 角色有 ADMIN OPTION 的角色會被改，superuser、客戶的帳號、其他實例的角色不會。`NOLOGIN` 不中斷已經開著的連線；被關掉的服務的 pod 隨升級刪除，懷疑還有連線時以 superuser 執行 `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '<角色>'`。
+
+它的密碼 Secret `<release>-<服務>-password` 因為 `keep` 留在 namespace 裡，chart 與 Job 的 Role 都不再列它。裡面的密碼已經登不進去，可以刪除：
+
+1. 確認服務真的關了：`helm -n <namespace> get manifest <release> | grep '<release>-<服務>-password'` 沒有輸出，且 Job 的日誌有上面的 `revoked the login of role <服務>_app`（或角色是 `NOLOGIN`：`... psql -d trustiot -tAc "SELECT rolcanlogin FROM pg_roles WHERE rolname = '<服務>_app'"` 印出 `f`）。
+2. 刪除：`kubectl -n <namespace> delete secret <release>-<服務>-password`。
+
+`helm uninstall` 之後不再重裝時也一樣，每個 `trustiot.io/filled-by=migrate` 的 Secret 都可以刪：`kubectl -n <namespace> get secret -l trustiot.io/filled-by=migrate`（例如升級失敗、再 uninstall 之後留下的、只有那次升級才宣告的 Secret）。之後重新啟用或重裝時 chart 重新宣告空的 Secret，Job 產生新密碼。
 
 ## Job 停止時
 
