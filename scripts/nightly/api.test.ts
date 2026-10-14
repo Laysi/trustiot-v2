@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { ConnectionError } from "../../deploy/chart/tests/e2e/raw-client.ts";
+import { COMMAND_TIMEOUT_MS, SLOW_TEST_MS, throwIfTimedOut } from "../../deploy/chart/tests/timing.ts";
 import type { RawRequest, RawResponse } from "../../deploy/chart/tests/e2e/raw-client.ts";
 import {
   adminSessionSql,
@@ -256,6 +257,8 @@ describe("the API check's routes", () => {
 
 describe("the API check's values on each deployment shape", () => {
   for (const shape of discoverShapes(CHART_DIR)) {
+    // Two commands (resolving the pinned helm, one render), each with its own limit: the test's
+    // limit covers both on a loaded machine (CLAUDE.md, "Test time limits").
     test(`values-${shape.name}.yaml with them renders identity and assets behind the smoke namespace's provider`, async () => {
       const helm = await pinnedTool("helm", REPO_ROOT);
       const dir = mkdtempSync(join(tmpdir(), "nightly-api-values-"));
@@ -264,12 +267,11 @@ describe("the API check's values on each deployment shape", () => {
         const file = join(dir, "values-api.yaml");
         const values = apiValues(shape.name, { kid: "nightly-1", x: "jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8" }, routesOfValues(CHART_DIR, shape.valuesFiles));
         writeFileSync(file, Bun.YAML.stringify(values, null, 2));
-        const rendered = Bun.spawnSync({
-          cmd: [helm, "template", "trustiot", CHART_DIR, "--namespace", `nightly-${shape.name}`, ...valuesArgs(CHART_DIR, shape), "-f", file],
-          stdout: "pipe",
-          stderr: "pipe",
-        });
+        const cmd = [helm, "template", "trustiot", CHART_DIR, "--namespace", `nightly-${shape.name}`, ...valuesArgs(CHART_DIR, shape), "-f", file];
+        const rendered = Bun.spawnSync({ cmd, stdout: "pipe", stderr: "pipe", timeout: COMMAND_TIMEOUT_MS });
+        throwIfTimedOut(cmd, rendered);
         expect(rendered.stderr.toString()).toBe("");
+        expect(rendered.exitCode, "helm template exit code").toBe(0);
         objects = parseManifests(rendered.stdout.toString());
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -295,6 +297,6 @@ describe("the API check's values on each deployment shape", () => {
       const listener = ingressListenerOf(objects);
       expect(listener).toEqual(shape.name === "saas" ? { gateway: listener.gateway, port: 80, tls: false } : { gateway: listener.gateway, port: 443, tls: true });
       expect(missingTlsSecrets(objects).length).toBe(listener.tls ? 1 : 0);
-    });
+    }, SLOW_TEST_MS);
   }
 });
