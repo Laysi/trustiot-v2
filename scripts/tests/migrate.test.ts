@@ -3,14 +3,15 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  IDENTITY_LOGIN_STORE,
   jobEnvironment,
   MIGRATION_ROLE,
   passwordBindings,
   reportedChanges,
   scrub,
+  secretNames,
   type MigrationRun,
 } from "../lib/migrate.ts";
+import { productLogins } from "../lib/product-logins.ts";
 import { migrationRoleSql } from "../lib/secrets.ts";
 
 const run: MigrationRun = {
@@ -18,7 +19,7 @@ const run: MigrationRun = {
   postgres: { port: 15432, database: "trustiot", caFile: "/state/tls/ca.crt" },
   login: { user: MIGRATION_ROLE, password: "migration-login-value" },
   stateDir: "/state",
-  roles: ["identity_app"],
+  logins: [{ role: "identity_app", secret: "dev-identity-password" }],
 };
 
 describe("the Job's environment", () => {
@@ -43,7 +44,7 @@ describe("the Job's environment", () => {
     expect(env.TRUSTIOT__POSTGRES__PASSWORD).toBe("migration-login-value");
     expect(env.TRUSTIOT__PASSWORDS__API_URL).toBe("http://127.0.0.1:4321");
     expect(env.TRUSTIOT__PASSWORDS__TOKEN_FILE).toBe("/state/kube-token.abc");
-    expect(env.TRUSTIOT__PASSWORDS__POSTGRES).toBe(`identity_app=${IDENTITY_LOGIN_STORE}`);
+    expect(env.TRUSTIOT__PASSWORDS__POSTGRES).toBe("identity_app=dev-identity-password");
     expect(env.TRUSTIOT__PASSWORDS__GENERATION).toBe("1");
   });
 
@@ -58,8 +59,28 @@ describe("the Job's environment", () => {
 
 describe("password bindings", () => {
   test("pair each login role with the Secret that holds its password", () => {
-    expect(passwordBindings(["identity_app"])).toBe("identity_app=dev-identity-password");
-    expect(passwordBindings(["a_app", "b_app"])).toBe("a_app=dev-identity-password,b_app=dev-identity-password");
+    expect(passwordBindings([{ role: "identity_app", secret: "dev-identity-password" }])).toBe(
+      "identity_app=dev-identity-password",
+    );
+    expect(
+      passwordBindings([
+        { role: "a_app", secret: "dev-a-password" },
+        { role: "b_app", secret: "dev-b-password" },
+      ]),
+    ).toBe("a_app=dev-a-password,b_app=dev-b-password");
+  });
+
+  test("bind every login role of the product, with one Secret per service as the chart declares", () => {
+    const logins = productLogins();
+    const text = passwordBindings(logins);
+    expect(text).toBe(
+      "identity_app=dev-identity-password,assets_app=dev-assets-password,assets_platform=dev-assets-password",
+    );
+    // The Job refuses a binding whose Secret the API does not declare, and the same Secret holds
+    // a service's two passwords: declared once.
+    expect(secretNames(logins)).toEqual(["dev-identity-password", "dev-assets-password"]);
+    const env = jobEnvironment({ ...run, logins }, { url: "http://127.0.0.1:4321" }, "/state/kube-token.abc", {});
+    expect(env.TRUSTIOT__PASSWORDS__POSTGRES).toBe(text);
   });
 });
 

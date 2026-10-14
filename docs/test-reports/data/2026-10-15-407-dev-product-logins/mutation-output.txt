@@ -1,0 +1,6 @@
+error: 
+tools/migrate/src/registry.rs has the service `telemetry-query` (login role telemetry_query_app), but PRODUCT_SERVICES in scripts/lib/product-logins.ts does not list it, so `bun scripts/dev.ts up` would leave the role NOLOGIN. Add "telemetry-query" to PRODUCT_SERVICES in scripts/lib/product-logins.ts.
+deploy/chart/templates/_migrate.tpl binds identity_platform (trustiot.migrate.platformLogins), but PLATFORM_LOGIN_SERVICES in scripts/lib/product-logins.ts does not list `identity`, so the local environment would leave it NOLOGIN. Add "identity" to PLATFORM_LOGIN_SERVICES in scripts/lib/product-logins.ts.
+(fail) the local login roles against the product > bind every login role the chart binds, and no other [0.97ms]
+ 9 pass
+ 1 fail
