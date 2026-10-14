@@ -1,0 +1,29 @@
+Round-4 lab e2e: binaries and images (2026-10-14)
+
+Source: feat/60-migration-job at 33dd56851ad5dcfecc9814ce71734962154a44a2 (the worktree was clean and at that
+commit when the build host copy was made; c433820, made later the same day, changes only the migrate
+integration tests under tools/migrate/tests, so the binaries are the product code of both).
+
+Build (build host, through the check queue, label 60e2e; zig 0.16.0 and cargo-zigbuild 0.23.4 from proto):
+  cargo zigbuild --locked --release --target aarch64-unknown-linux-musl -p service-kit --bin example-service -p migrate --bin migrate
+  Finished `release` profile in 44.42 s (2026-10-14T05:21:50Z to 05:22:35Z)
+
+Binaries (aarch64-unknown-linux-musl), SHA-256:
+  example-service  6301920 bytes  e7d3cb23b3c3df36f5671992218f8eba37cd131ee2acf8c59db0dc41bbd9387d
+  migrate          5861072 bytes  4d73fbe2c8d673787988f4df366cbc488e9ed5a0abde91cf2829a722640abbe2
+  (example-service is byte-identical to the 332ed66 build; migrate changed with the round-4 code)
+
+Images, packed with podman on the workstation (linux/arm64, tag 60), imported with
+`sudo k3s ctr -n k8s.io images import` after removing the old refs (OCI manifest digest on the node):
+  localhost/trustiot-e2e/example-service:60  sha256:d092547e29ea956c06faab885993dc3e99a38ff900c87c70d6643a8960e23a67
+      podman image ID 36d9310eb267ef916a8efcb87626071d6ccadd4caa60932a2d9735f618f38b32
+      deploy/chart/tests/e2e/example-service/Containerfile (distroless cc-debian13)
+  localhost/trustiot-e2e/migrate:60          sha256:d23b43f5718534ce1c0ed9df07e7a873e624cd5291abd256d613bb422c97274f
+      podman image ID bafbc355d2c8de80a2890a4f68075834940908b832ff05ae40910121e585af6d
+      deploy/images/rust-binary.Containerfile with @BIN@ replaced by migrate
+  localhost/trustiot-e2e/postgres:60         sha256:a69113bc9ed44cc810941248f3a0874371df11b5cd252c417ac793d26e83157b
+      the published ghcr.io/laysi/trustiot-v2/postgres image of v0.0.0-rc.6, pulled anonymously on 2026-10-13 and
+      tagged; deploy/images/postgres has no change since the commit that release was built from (608f5c5)
+
+Cluster: k3s v1.36.5+k3s1, Istio 1.30.5 ambient, CloudNativePG 1.30.1 (installed on 2026-10-13 with the user's
+authorization; not touched by this run), namespace e2e-60 with Pod Security restricted.

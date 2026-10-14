@@ -144,7 +144,7 @@ migrate 的整合測試涵蓋的情境：
 | R5（低）Flux 的 rollback remediation 渲染較舊的 `passwordGeneration`，字串比較讓每次 rollback 與再升級都輪替一次 | 修正。代以數字比較（1 到 9 位數字，與 chart 的 schema 一致），只往上走：要求的代較小時保留現有的密碼與記的代。在較小的代之下補填遺失的 key 時，記的是較大的那一代，所以之後升級回來也不會再輪替。`--cleanup-on-fail` 會刪掉那次升級新建的密碼 Secret（即使有 `keep`），下一次成功的 Job 會重新產生，這點寫進 runbook | `tests/passwords.rs` 的 `a_rollback_keeps_the_passwords_and_so_does_the_re_upgrade`，單元測試 `generations_only_go_up`、`generations_are_decimal_digits`；e2e 新增「rollback 到較舊的代不換密碼，之後升級回來也不換」 |
 | R6（低）nightly 映像快取的 key 少了輸入；不完整或損壞的 tarball 讓 nightly 失敗 | 修正。key 加上 `.dockerignore`、`nightly.yml`、`.github/actions/setup-proto`，以及 workspace 成員 `edge/`、`factory/`，測試檢查每個成員目錄都在輸入裡；`.dockerignore` 也加進 nightly 的 PR 路徑。tarball 無法載入、沒有預期的 tag 或平台不對時，改為寫一行說明並發出 GitHub warning，以 proto 安裝命中時略過的建置工具，再從原始碼建置 | `scripts/nightly/image-cache.test.ts` 與 `service-image.test.ts` 的新案例 |
 | `helm upgrade --force-replace`（lab 確認） | runbook 寫明不要用，以及原因：它清空兩種密碼 Secret 的資料與 annotation，接著取代同名 Job 時失敗（`spec.selector … immutable`），升級停在 FAILED，Job 不會再跑。看到這種失敗要立刻改 `migrate.revision` 再一般地升級 | 文件 |
-| e2e 測試本身的錯誤，由 2026-10-13 在 332ed66 上的 lab 先行執行發現：兩種 shape 都是 10 通過、1 失敗 | 修正。`postgres.e2e.ts` 讀密碼 Secret 的 `managedFields` 時沒有加 `--show-managed-fields`；`kubectl get -o json` 預設不輸出這個欄位，所以 `dataManagers` 是空的。以 `--show-managed-fields` 讀同一個 Secret 時，寫 `data` 的只有 `trustiot-migrate`，`helm` 只有 `f:metadata` 與 `f:type`。現在以 `--show-managed-fields` 讀取。其他 e2e 檔與 `scripts/nightly/smoke.ts` 都沒有依賴 `managedFields` 的讀取，Flux 的 lab e2e 只是把它刪掉再比對 | 修正後的結果由下一次 lab e2e 補上 |
+| e2e 測試本身的錯誤，由 2026-10-13 在 332ed66 上的 lab 先行執行發現：兩種 shape 都是 10 通過、1 失敗 | 修正。`postgres.e2e.ts` 讀密碼 Secret 的 `managedFields` 時沒有加 `--show-managed-fields`；`kubectl get -o json` 預設不輸出這個欄位，所以 `dataManagers` 是空的。以 `--show-managed-fields` 讀同一個 Secret 時，寫 `data` 的只有 `trustiot-migrate`，`helm` 只有 `f:metadata` 與 `f:type`。現在以 `--show-managed-fields` 讀取。其他 e2e 檔與 `scripts/nightly/smoke.ts` 都沒有依賴 `managedFields` 的讀取，Flux 的 lab e2e 只是把它刪掉再比對 | 修正後的結果見「第四輪 lab e2e」：兩種 shape 都是 12 通過 |
 
 ### 指令與結果
 
@@ -170,3 +170,44 @@ pre-commit 的審查在這一輪擋下三次：
 - `proto install` 一次只裝一個工具，退回建置時改為逐一安裝，測試涵蓋。
 - 重新啟用 collector 帳號時，原本先恢復 `HOST ANY` 再檢查密碼，改為先設 Secret 的密碼。
 - 審查認為 `system.role_grants` 沒有 `granted_role_name` 與 `user_name` 欄位。這兩個欄位存在：`USER_ROLES` 也讀它們，`tests/clickhouse.rs` 第 6d 步對釘選的 ClickHouse 26.8 跑過這個查詢。所以只補上說明欄位的註解。
+
+### 第四輪 lab e2e
+
+2026-10-14（台北時間）在 lab 的 Mac mini M1 上，以 `deploy/chart/tests/e2e/postgres.e2e.ts` 對第四輪的程式碼各跑一次 `saas` 與 `onprem`：兩種 shape 都是 12 個測試全部通過、82 個斷言，0 失敗。
+
+- **受測程式碼**：`feat/60-migration-job` 的 `33dd568`（工作樹乾淨，建置主機的副本取自這個狀態）。之後的 `c433820` 只改 `tools/migrate/tests` 的整合測試，不改產品程式碼與 chart，所以這次的映像與它的產品程式碼相同。
+- **環境**：k3s v1.36.5+k3s1、Istio 1.30.5 ambient、CloudNativePG 1.30.1（2026-10-13 經使用者授權暫時安裝，這次沒有動它）、namespace `e2e-60`（Pod Security `restricted`）。執行身分是該 namespace 的 ServiceAccount `e2e-60-runner`：綁定內建的 `admin`，另加一個 Role 給 `postgresql.cnpg.io` 的 clusters、imagecatalogs、databases、databaseroles，`gateway.networking.k8s.io` 的 gateways、httproutes 與 `security.istio.io` 的 authorizationpolicies（[round4-lab-e2e-runner-rbac.yaml](data/2026-10-13-60-migration-job/round4-lab-e2e-runner-rbac.yaml)）。kubeconfig 只放在本機暫存目錄，API server 經 SSH 轉送，測完刪除。
+- **二進位與映像**：在建置主機以檢查佇列執行 `cargo zigbuild --locked --release --target aarch64-unknown-linux-musl -p service-kit --bin example-service -p migrate --bin migrate`（zig 0.16.0、cargo-zigbuild 0.23.4，由 `.prototools` 鎖定；44.4 秒）。SHA-256：example-service `e7d3cb23…387d`（與 332ed66 的建置相同）、migrate `4d73fbe2…bbe2`。映像在本機以 podman 打包成 arm64，匯入節點的 k3s containerd：
+
+  | 映像 | digest |
+  | --- | --- |
+  | `localhost/trustiot-e2e/example-service:60` | `sha256:d092547e29ea956c06faab885993dc3e99a38ff900c87c70d6643a8960e23a67` |
+  | `localhost/trustiot-e2e/migrate:60` | `sha256:d23b43f5718534ce1c0ed9df07e7a873e624cd5291abd256d613bb422c97274f` |
+  | `localhost/trustiot-e2e/postgres:60`（發佈的 `v0.0.0-rc.6` 映像，匿名拉取後加 tag；`deploy/images/postgres` 自該版的來源 commit 之後沒有變更） | `sha256:a69113bc9ed44cc810941248f3a0874371df11b5cd252c417ac793d26e83157b` |
+
+  完整的二進位 SHA-256 與映像 ID 在 [round4-lab-e2e-binaries-and-images.txt](data/2026-10-13-60-migration-job/round4-lab-e2e-binaries-and-images.txt)，建置指令在 [round4-lab-e2e-build.sh](data/2026-10-13-60-migration-job/round4-lab-e2e-build.sh)。
+- **指令**（在工作樹根目錄，兩種 shape 各一次，一次一個）：[round4-lab-e2e-run-shape.sh](data/2026-10-13-60-migration-job/round4-lab-e2e-run-shape.sh) 以 `E2E_NAMESPACE=e2e-60 E2E_SHAPE=<shape> E2E_POSTGRES_IMAGE=localhost/trustiot-e2e/postgres:60 E2E_SERVICE_IMAGE=localhost/trustiot-e2e/example-service:60 E2E_MIGRATE_IMAGE=localhost/trustiot-e2e/migrate:60 E2E_IMAGE_PULL_POLICY=Never E2E_REPORT_DIR=<目錄> bun test --timeout 900000 --reporter=junit ./deploy/chart/tests/e2e/postgres.e2e.ts` 執行（資料目錄裡的兩個腳本比實際執行的多兩處：建置命令明寫 `pipefail`，其實 rcheck 本來就以 `pipefail` 執行；`run-shape.sh` 結尾以測試的結束碼離開，實際執行時結束碼只記在輸出檔最後一行的 `rc=`）。
+- **時間**：saas 05:44:24Z 到 05:47:20Z（整個檔案 175.7 秒），onprem 05:47:33Z 到 05:50:28Z（175.1 秒）。
+
+| 檢查 | saas | onprem |
+| --- | --- | --- |
+| Cluster 健康、一個 instance、在 mesh 外、符合 restricted | 通過，0.36 秒 | 通過，0.35 秒 |
+| 伺服器 TLS、AGE、內建 locale、沒有 superuser 密碼、owner 沒有 superuser | 通過，1.89 秒 | 通過，1.85 秒 |
+| AGE 的 `cypher()` | 通過，0.73 秒 | 通過，0.72 秒 |
+| 沒有 TLS 的 TCP 連線被拒 | 通過，0.36 秒 | 通過，0.38 秒 |
+| Job 把密碼產生進 chart 宣告的空 Secret：只有該有的 key、世代 `1`、`keep`、寫 `data` 的只有 `trustiot-migrate`、兩個 Secret 都是 `bound: true`（uid 綁定） | 通過，0.79 秒 | 通過，0.79 秒 |
+| 服務以 Job 建立的角色與 verify-full 連線 | 通過，0.64 秒 | 通過，0.62 秒 |
+| 另一個 CA、不在憑證裡的主機名稱、沒有放行的 label 都被拒 | 通過，5.24 秒 | 通過，5.18 秒 |
+| 同樣 values 的 `helm upgrade` 與 `helm rollback` 後密碼 `unchanged` | 通過，54.8 秒 | 通過，54.6 秒 |
+| `migrate.passwordGeneration=2`：`changed`、新的 Job、服務與 collector 再次 Ready | 通過，11.4 秒 | 通過，11.5 秒 |
+| 新增：rollback 到世代 1 後密碼 `unchanged`，升級回世代 2 後也 `unchanged` | 通過，20.9 秒 | 通過，20.5 秒 |
+| 刪掉 key 後以 `migrate.revision=2` 重跑：`changed`，服務 Ready | 通過，11.0 秒 | 通過，11.4 秒 |
+| `helm uninstall` 後 Cluster、ImageCatalog、PVC 與兩個密碼 Secret 保留 | 通過，3.2 秒 | 通過，3.1 秒 |
+
+第一次安裝：`helm install --wait` 返回 saas 33.3 秒、onprem 29.8 秒，Cluster 在返回時已健康，整組 Ready 約 46 秒。輸出裡的密碼比較只有 `unchanged` 與 `changed`（[saas](data/2026-10-13-60-migration-job/round4-lab-e2e-saas-output.txt)、[onprem](data/2026-10-13-60-migration-job/round4-lab-e2e-onprem-output.txt)），伺服器設定、角色、Secret 的形狀（名稱、key、世代、`bound`、寫入者）與拒絕訊息在 [saas](data/2026-10-13-60-migration-job/round4-lab-e2e-saas.json) 與 [onprem](data/2026-10-13-60-migration-job/round4-lab-e2e-onprem.json)，JUnit 在同目錄的 `round4-lab-e2e-*.junit.xml`。這些檔案沒有密碼值、密碼的雜湊或 Secret 的 `data`。
+
+**環境問題**：saas 的第一次執行（約 05:30Z）在第 9 個測試時失敗，原因是這台工作站到 lab 的 SSH 轉送（API server 的連線）中斷，`helm` 與 `kubectl` 回 `TLS handshake timeout`、`connection refused`，之後的測試與清理跟著失敗（8 通過、5 失敗，節錄在 [round4-lab-e2e-attempt1-saas-tunnel-lost.txt](data/2026-10-13-60-migration-job/round4-lab-e2e-attempt1-saas-tunnel-lost.txt)），沒有產品的錯誤。改用會自動重連的轉送後，刪除 namespace 重建，重跑 saas 與 onprem 都通過。
+
+**2026-10-13 在 332ed66 的先行執行**：兩種 shape 各 10 通過、1 失敗；失敗的是測試本身的錯誤（讀 Secret 時沒有 `--show-managed-fields`，已在 `064a325` 修正）。那次的原始檔隨工作站的 /tmp 清除而遺失，上面的結果是修正後在 `33dd568` 重跑的。
+
+**清理**：兩次執行之後刪除 namespace `e2e-60`；`kubectl get clusters.postgresql.cnpg.io -A` 沒有任何 Cluster、沒有屬於這次執行的 PV。三個 `:60` 映像留在節點上給獨立驗證重用；CloudNativePG 與 lab 鎖由協調者處理。建置主機上的副本、本機的暫存檔與 kubeconfig 已刪除。
