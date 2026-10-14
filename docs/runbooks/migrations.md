@@ -66,9 +66,9 @@ Postgres 若開著 `log_statement = 'all'`（或 `log_min_duration_statement` �
 
 ### 不要用 `helm upgrade --force-replace`
 
-`--force-replace` 以刪除再建立取代更新。對這個 chart 它會（2026-10-13 在 lab 叢集上確認）：
+`--force-replace` 不以 patch 更新，而是以 chart 渲染的內容整個取代每個物件（API 的 PUT replace）。對這個 chart 它會（2026-10-13 在 lab 叢集上確認，2026-10-14 的獨立驗證更正了機制）：
 
-1. 把兩種密碼 Secret 換成 chart 渲染的空 Secret：`data` 與 Job 記的 annotation（代與 uid）都不見了，雖然它們帶 `helm.sh/resource-policy: keep`。
+1. 把兩種密碼 Secret 取代成 chart 渲染的樣子：物件還是同一個（uid 不變），但 `data` 與 Job 記的 annotation（代與 uid）都被清空，雖然它們帶 `helm.sh/resource-policy: keep`。
 2. 接著取代同名的 migration Job 時失敗（`spec.selector ... field is immutable`），升級以 FAILED 結束，Job 不會再跑。
 
 所以操作者看到的是「升級失敗」，但密碼已經沒了：之後任何重啟的服務或 collector pod 都會停在 `CreateContainerConfigError`。看到這種失敗要立刻做上一段的處理（改 `migrate.revision` 再一般地升級，不帶 `--force-replace`），Job 會產生新密碼並設定。這個 chart 沒有需要 `--force-replace` 的情況；升級卡住時看 Job 與服務的日誌，不要用它。
