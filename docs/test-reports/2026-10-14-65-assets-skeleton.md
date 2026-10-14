@@ -8,6 +8,7 @@
 - **Rust 測試**：建置主機（x86_64 Linux，Docker），經檢查佇列執行，`CI=1`，所以需要容器的測試沒有容器時會失敗而不是略過。Postgres 是 testkit 的 TLS Postgres（PostgreSQL 18），產品 schema 由 migration Job 本身套用（`testkit::product`）。Rust 1.99.0、zig 0.16.0、cargo-zigbuild 0.23.4，皆由 `.prototools` 鎖定。
 - **chart 與腳本測試**：建置主機與開發用工作站（x86_64 Linux），bun 1.4.2、helm 4.3.0，由 `.prototools` 鎖定。
 - **沒有 Kubernetes**：本 repo 規定工作站不跑 Kubernetes。經入口的 k3d 驗證由 nightly 的 smoke 執行（`scripts/nightly/api.ts`），要等 PR 帶 `smoke` label 時跑，見「結論」。
+- **k3d（nightly smoke）**：GitHub Actions 的 `ubuntu-24.04-arm`。k3d 5.9.0 與 helm 4.3.0 由 `.prototools` 鎖定，叢集映像是以 digest 鎖定的 `rancher/k3s:v1.36.5-k3s1`。受測的是 PR Laysi/trustiot-v2#411 的 head `88d0c21`（已合併 main `871bfee`），nightly run 38545261461 的 `smoke` job，2026-10-14T09:50:41Z 到 10:01:49Z。
 
 ## 指令
 
@@ -76,8 +77,21 @@ PR Laysi/trustiot-v2#411 的獨立審查與第一次 smoke 之後的修正，在
 
 合併 main 後，Laysi/trustiot-v2#408 新的 chart 測試（所有選用元件都打開時，只會渲染 migration Job 的空密碼 Secret）與更嚴格的 `check-secret-handling.ts` 都接受資產服務的密碼 Secret（同一個 Secret 有 `assets_app` 與 `assets_platform` 兩個 key）。
 
+### nightly smoke（k3d）
+
+nightly run 38545261461 在 `88d0c21` 上通過，兩份 values 都部署成功（[nightly-smoke.txt](data/2026-10-14-65-assets-skeleton/nightly-smoke.txt)，是 run 報告去掉 diagnostics 的部分）。同一個 head 的 ci.yml run 38545261424 全部 job 通過。
+
+| 檢查 | `values-onprem.yaml` | `values-saas.yaml` |
+| --- | --- | --- |
+| 經入口建立租戶並從資產服務讀回 | 平台管理者 `POST /api/identity/v1/tenants` 201；新租戶成員 `GET /api/assets/v1/tenant` 2 秒後 200，回的是同一個租戶；沒有 cookie 401 `unauthenticated`；沒有租戶的管理者 403 `permission_denied` | 同左，200 在 1 秒後 |
+| migration Job 先完成，服務才啟動 | 通過 | 通過 |
+| Job 產生的密碼 | `trustiot-assets-password` 有 `assets_app`、`assets_platform`；`trustiot-identity-password` 有 `identity_app` | 同左 |
+| 入口 e2e（`deploy/chart/tests/e2e`） | 61 通過、0 失敗 | 61 通過、0 失敗 |
+
+PR 的第一次 smoke（run 38539245931，head `e15b09a`）在入口 e2e 失敗：overlay 的替身讀不到密碼 Secret，安裝逾時。`69af6cd` 修正後，上面這次整個通過。
+
 ## 結論
 
 1. **建立租戶後資產服務最終出現對應的列，事件重播不產生重複（測試）**：通過，`services/assets/tests/tenant_created.rs`（上述）。
-2. **經入口帶有效 cookie 呼叫資產服務 API 得到該租戶範圍的資料；沒有 cookie 回 401（k3d 測試）**：**待測**。測試寫在 nightly smoke 的 API 檢查（`scripts/nightly/api.ts`），單元測試在 `scripts/nightly/api.test.ts`。PR 第一次 smoke（GitHub Actions run 38539245931，head `e15b09a`）時，兩種型態的 API 檢查都通過：建立租戶 201、資產服務約 2 秒後回 200、沒有 cookie 401、沒有租戶的管理者 403；但同一個 job 的入口 e2e 因 overlay 問題逾時（已修，見上節），所以整個 smoke 還沒有通過。這個結果是 coordinator 讀 run 記錄後轉述的，本報告沒有附 run 的原始輸出。修正後的 smoke 通過時，補上 run 編號與輸出再勾選。服務層級的同一件事（token 的租戶、沒有 token 401）已由 Rust 測試證明。
+2. **經入口帶有效 cookie 呼叫資產服務 API 得到該租戶範圍的資料；沒有 cookie 回 401（k3d 測試）**：通過。nightly smoke 的 API 檢查（`scripts/nightly/api.ts`）在 run 38545261461 的兩份 values 都通過：新租戶成員的 cookie 經入口拿到該租戶的資料，沒有 cookie 回 401（見「nightly smoke（k3d）」）。單元測試在 `scripts/nightly/api.test.ts`；服務層級的同一件事（token 的租戶、沒有 token 401）也由 Rust 測試證明。
 3. **資產與身分服務的跨租戶負向測試接上 testkit 並通過**：通過（上表）。
