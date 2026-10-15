@@ -829,11 +829,64 @@ export function sbomAssetName(imageName: string, version: string): string {
   return `${imageName}-${version}.spdx.json`;
 }
 
+/** The container tools that packed the images (pack.ts), as build.json records them. */
+export interface ReleaseBuilder {
+  podman: string;
+  buildah: string;
+  packages: Record<string, string>;
+}
+
+/** The packages whose versions build.json records when dpkg knows them. */
+export const BUILDER_PACKAGES = ["podman", "buildah", "skopeo", "crun", "golang-github-containers-image", "golang-github-containers-storage"];
+
+/** A version as podman, buildah and dpkg print them; nothing else reaches the release page. */
+const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+~:-]{0,79}$/;
+
+/** `dpkg-query -W -f '${Package} ${Version}\n' <packages>` output → package → version. */
+export function parseDpkgVersions(output: string): Record<string, string> {
+  const packages: Record<string, string> = {};
+  for (const line of output.split("\n")) {
+    const [name = "", version = "", ...rest] = line.trim().split(/\s+/);
+    if (rest.length === 0 && BUILDER_PACKAGES.includes(name) && VERSION.test(version)) {
+      packages[name] = version;
+    }
+  }
+  return packages;
+}
+
+/**
+ * Reads build.json's `builder`: the podman that packed the images, which the runner image
+ * provides and this repository does not pin; another version can pack the same binaries into
+ * another digest. The build job runs third-party build code, so publish checks what it hands
+ * over before it reaches the release page: versions only.
+ */
+export function parseBuilder(value: unknown): ReleaseBuilder {
+  const fail = (): never => {
+    throw new ReleaseError("build.json has no valid builder (podman and buildah versions, packages)");
+  };
+  if (!isMap(value) || !isMap(value.packages)) {
+    return fail();
+  }
+  const { podman, buildah } = value;
+  if (typeof podman !== "string" || !VERSION.test(podman) || typeof buildah !== "string" || !VERSION.test(buildah)) {
+    return fail();
+  }
+  const packages: Record<string, string> = {};
+  for (const [name, version] of Object.entries(value.packages)) {
+    if (!BUILDER_PACKAGES.includes(name) || typeof version !== "string" || !VERSION.test(version)) {
+      return fail();
+    }
+    packages[name] = version;
+  }
+  return { podman, buildah, packages };
+}
+
 /** The release page: the notes, then what was published and how to verify it (zh-TW). */
 export function renderReleaseBody(
   notes: string,
   plan: ReleasePlan,
   published: Omit<PublishedRelease, "releaseUrl">,
+  builder: ReleaseBuilder,
 ): string {
   const identity = signingIdentity(plan.repository, plan.tag);
   const rows = published.images.map(
@@ -856,6 +909,14 @@ export function renderReleaseBody(
     ...rows,
     "",
     "每個映像的 SBOM（SPDX JSON）附在本頁的 assets，也以簽章過的 attestation 存在 registry。",
+    "",
+    `映像以 podman \`${builder.podman}\`（buildah \`${builder.buildah}\`）打包${
+      Object.keys(builder.packages).length === 0
+        ? ""
+        : `，套件版本：${Object.entries(builder.packages)
+            .map(([name, version]) => `\`${name} ${version}\``)
+            .join("、")}`
+    }。不同版本的 podman 可能把同一個執行檔打包成不同的 digest，要重現映像 digest 時用同一版本。`,
     "",
     "## 驗證",
     "",

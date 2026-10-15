@@ -1,6 +1,6 @@
 /**
  * Release stage 2, the `build` job of .github/workflows/release.yml: builds every planned image
- * for linux/arm64, with an SPDX SBOM each. Nothing is pushed.
+ * for linux/arm64, with an SPDX SBOM each (packing: pack.ts). Nothing is pushed.
  *
  *   bun scripts/release/build.ts --plan <plan.json> --out <dir>
  *
@@ -14,34 +14,32 @@
  * emulator: a RUN may only execute in a `FROM --platform=$BUILDPLATFORM` stage, which plan
  * checks (containerfile.ts's targetStageRunProblems).
  *
+ * A Rust image's digest does not depend on whether podman runs as root or rootless
+ * (Laysi/trustiot-v2#384; pack.ts says how).
+ *
  * This job runs third-party build code (Cargo build scripts and proc macros), so it has no
  * secrets and a read-only token, and its output is only data:
  *   <out>/images/<name>.oci.tar     the image as an OCI archive, pushed byte for byte by publish
  *   <out>/images/<name>.spdx.json   its SBOM from syft
- *   <out>/build.json                digest and size of each image, for the log
+ *   <out>/build.json                digest and size of each image, for the log, and the podman
+ *                                   and buildah versions that packed them, for the release page
  */
 
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { containerBuildArgs } from "../lib/build-context.ts";
-import { log, parseOptions, protoTool, rawManifest, requireCheckout, run, runStage, systemTool, tryRun } from "./exec.ts";
+import { log, parseOptions, protoTool, requireCheckout, run, runStage, systemTool } from "./exec.ts";
 import {
   type CargoPackage,
-  IMAGE_PLATFORM,
-  type PlannedImage,
-  RUST_CONTAINERFILE,
   RUST_TARGET,
   type ReleasePlan,
   ReleaseError,
   aarch64ElfProblem,
-  imagePlatformProblems,
   parsePlan,
-  renderRustContainerfile,
   resolveBinary,
   rustSpec,
-  summarizeSpdx,
 } from "./lib.ts";
+import { packImages } from "./pack.ts";
 import { rustCrossCompileCommand, staticElfProblem, toolchainChannel } from "./rust-build.ts";
 
 const ROOT = resolve(import.meta.dir, "..", "..");
@@ -119,114 +117,6 @@ async function buildRustBinaries(plan: ReleasePlan): Promise<Map<string, string>
   return binaries;
 }
 
-interface BuiltImage {
-  name: string;
-  digest: string;
-  size: number;
-  archive: string;
-  sbom: string;
-  sbomPackages: number;
-}
-
-async function buildImage(
-  plan: ReleasePlan,
-  image: PlannedImage,
-  binary: string | undefined,
-  outDir: string,
-  workDir: string,
-): Promise<BuiltImage> {
-  const podman = systemTool("podman");
-  const skopeo = systemTool("skopeo");
-  const syft = await protoTool("syft");
-  const localTag = `localhost/trustiot-release/${image.name}:${plan.version}`;
-
-  let context: string;
-  let containerfile: string;
-  if (image.kind === "rust") {
-    if (binary === undefined) {
-      throw new ReleaseError(`no binary was built for ${image.name}`);
-    }
-    // The build context holds only the binary and the rendered Containerfile.
-    context = join(workDir, image.name);
-    mkdirSync(context, { recursive: true });
-    const bin = binary.split("/").at(-1) ?? "";
-    copyFileSync(binary, join(context, bin));
-    chmodSync(join(context, bin), 0o755);
-    containerfile = join(context, "Containerfile");
-    writeFileSync(containerfile, renderRustContainerfile(readFileSync(join(ROOT, RUST_CONTAINERFILE), "utf8"), bin));
-  } else {
-    context = join(ROOT, image.context ?? "");
-    containerfile = join(context, "Containerfile");
-  }
-
-  const labels: Record<string, string> = {
-    "org.opencontainers.image.source": `https://github.com/${plan.repository}`,
-    "org.opencontainers.image.revision": plan.commit,
-    "org.opencontainers.image.version": plan.version,
-    "org.opencontainers.image.title": image.name,
-  };
-  log("build", `building ${image.ref} for ${IMAGE_PLATFORM}`);
-  // containerBuildArgs checks the context and the Containerfile for key and credential files
-  // first, and allows only known options (docs/architecture/secrets.md).
-  await run(
-    [
-      podman,
-      ...containerBuildArgs(context, [
-        "--platform",
-        IMAGE_PLATFORM,
-        // Fixed timestamps (the commit time) make a rebuild of the same commit byte-identical.
-        "--timestamp",
-        String(plan.sourceDateEpoch),
-        "--pull=missing",
-        "--format",
-        "oci",
-        ...Object.entries(labels).flatMap(([key, value]) => ["--label", `${key}=${value}`]),
-        "--file",
-        containerfile,
-        "--tag",
-        localTag,
-      ]),
-    ],
-    { stream: true },
-  );
-
-  const imagesDir = join(outDir, "images");
-  mkdirSync(imagesDir, { recursive: true });
-  const archive = join(imagesDir, `${image.name}.oci.tar`);
-  rmSync(archive, { force: true });
-  await run([podman, "push", "--format", "oci", "--compression-format", "gzip", localTag, `oci-archive:${archive}`]);
-  await tryRun([podman, "image", "rm", localTag]);
-
-  const { manifest, digest } = await rawManifest(skopeo, `oci-archive:${archive}`);
-  const config = JSON.parse((await run([skopeo, "inspect", "--config", "--raw", `oci-archive:${archive}`])).stdout);
-  const problems = imagePlatformProblems(manifest, config);
-  if (problems.length > 0) {
-    throw new ReleaseError(`${image.name}: ${problems.join("; ")}`);
-  }
-
-  const sbom = join(imagesDir, `${image.name}.spdx.json`);
-  await run(
-    [syft, "scan", `oci-archive:${archive}`, "--output", `spdx-json=${sbom}`, "--source-name", image.repository, "--source-version", plan.version],
-    {
-      env: {
-        SYFT_CHECK_FOR_APP_UPDATE: "false",
-        // Packages, their dependencies and the files they were found in. Every file a package
-        // owns (about a thousand for tzdata alone) would make each SBOM attestation hundreds
-        // of kilobytes without naming one more package.
-        SYFT_FILE_METADATA_SELECTION: "none",
-        SYFT_RELATIONSHIPS_PACKAGE_FILE_OWNERSHIP: "false",
-      },
-    },
-  );
-  const summary = summarizeSpdx(JSON.parse(readFileSync(sbom, "utf8")));
-  // A Rust image's SBOM must list its crates, which only cargo-auditable data provides.
-  if (image.kind === "rust" && !summary.packages.some((pkg) => pkg.startsWith(`${image.package}@`))) {
-    throw new ReleaseError(`${image.name}: the SBOM does not list the Rust package ${image.package}; was the binary built with cargo-auditable?`);
-  }
-  log("build", `${image.ref} → ${digest}, SBOM ${summary.spdxVersion} with ${summary.packages.length} packages`);
-  return { name: image.name, digest, size: statSync(archive).size, archive, sbom, sbomPackages: summary.packages.length };
-}
-
 await runStage("build", async () => {
   const options = parseOptions(Bun.argv.slice(2), { plan: {}, out: {} });
   const plan = parsePlan(readFileSync(options.plan ?? "", "utf8"));
@@ -234,17 +124,5 @@ await runStage("build", async () => {
   const outDir = resolve(options.out ?? "");
   mkdirSync(outDir, { recursive: true });
   const binaries = await buildRustBinaries(plan);
-  const workDir = mkdtempSync(join(tmpdir(), "trustiot-release-"));
-  try {
-    const built: BuiltImage[] = [];
-    for (const image of plan.images) {
-      built.push(await buildImage(plan, image, binaries.get(image.name), outDir, workDir));
-    }
-    writeFileSync(
-      join(outDir, "build.json"),
-      `${JSON.stringify({ tag: plan.tag, commit: plan.commit, images: built.map(({ archive, sbom, ...rest }) => ({ ...rest, archive: archive.slice(outDir.length + 1), sbom: sbom.slice(outDir.length + 1) })) }, null, 2)}\n`,
-    );
-  } finally {
-    rmSync(workDir, { recursive: true, force: true });
-  }
+  await packImages(plan, binaries, outDir);
 });

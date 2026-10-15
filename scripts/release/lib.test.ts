@@ -557,7 +557,8 @@ describe("published release", () => {
 
   test("the release body lists digests and the exact verification commands", () => {
     const plan = samplePlan();
-    const body = renderReleaseBody("### 新功能\n\n- **x**：y\n", plan, published);
+    const builder = { podman: "4.9.3", buildah: "1.33.7", packages: { podman: "4.9.3+ds1-1ubuntu0.2", buildah: "1.33.7+ds1-1ubuntu0.24.04.3" } };
+    const body = renderReleaseBody("### 新功能\n\n- **x**：y\n", plan, published, builder);
     expect(body.startsWith("### 新功能")).toBe(true);
     expect(body).toContain(`\`${DIGEST_A}\``);
     expect(body).toContain(`\`${DIGEST_B}\``);
@@ -566,6 +567,8 @@ describe("published release", () => {
     expect(body).toContain(`--certificate-oidc-issuer ${GITHUB_OIDC_ISSUER}`);
     expect(body).toContain("cosign verify-attestation --type spdxjson");
     expect(body).toContain(plan.commit);
+    expect(body).toContain("映像以 podman `4.9.3`（buildah `1.33.7`）打包，套件版本：`podman 4.9.3+ds1-1ubuntu0.2`、`buildah 1.33.7+ds1-1ubuntu0.24.04.3`。");
+    expect(renderReleaseBody("notes", plan, published, { ...builder, packages: {} })).toContain("映像以 podman `4.9.3`（buildah `1.33.7`）打包。");
     expect(sbomAssetName("identity", "1.2.0-rc.1")).toBe("identity-1.2.0-rc.1.spdx.json");
   });
 });
