@@ -1,6 +1,6 @@
 # migration Job
 
-migration Job（[tools/migrate](../../tools/migrate/README.md)，Laysi/trustiot-v2#60）的維運步驟：補給既有 Cluster 的權限、輪替服務的資料庫密碼、Job 失敗時怎麼處理。Job 做什麼、何時執行，見 [deploy/chart/README.md](../../deploy/chart/README.md) 的「migration Job」。
+migration Job（[tools/migrate](../../tools/migrate/README.md)，Laysi/trustiot-v2#60）的維運步驟：補給既有 Cluster 的權限、收回服務角色在叢集其他資料庫的權限、輪替服務的資料庫密碼、Job 失敗時怎麼處理。Job 做什麼、何時執行，見 [deploy/chart/README.md](../../deploy/chart/README.md) 的「migration Job」。
 
 下文的 `<namespace>` 是 TrustIoT 的 namespace，`<release>` 是 Helm release 名稱，`<cluster>` 是叢集內 Postgres 的 Cluster 名稱（通常是 `<release>-postgres`）。SaaS 在主機上以 `sudo k3s kubectl` 執行；地端由客戶的維運人員執行。
 
@@ -25,6 +25,58 @@ kubectl -n <namespace> exec -i <cluster>-1 -c postgres -- psql -d trustiot -tAc 
 第二個指令印出 `t|f|f` 即完成。Job 失敗之後才補的，Job 會依 `migrate.backoffLimit` 重試；重試已用完時，刪掉失敗的 Job 讓下一次 `helm upgrade`（SaaS 是下一次 Flux 調和）重建它：`kubectl -n <namespace> delete job <release>-migrate-<hash>`。
 
 外部 Postgres（`postgres.mode: external`）由客戶的資料庫管理者建立 migration 角色：擁有資料庫、有 CREATEROLE，不是 superuser、沒有 BYPASSRLS（PostgreSQL 16 以上），不擁有其他資料庫，帳密放在 `postgres.external.migrationSecret` 指向的 Secret。
+
+## `postgres` 與 `template1`：收回 PUBLIC 的 CONNECT 與 TEMPORARY
+
+Postgres 在 initdb 之後讓 `PUBLIC` 能連 `postgres` 與 `template1`，並能在 `postgres` 建立暫存表與暫存函式（`template1` 只給 `PUBLIC` CONNECT；PostgreSQL 15 起 `PUBLIC` 在兩者的 `public` schema 都不能建立物件，2026-10-15 在 PostgreSQL 18.6 上確認）。所以 Job 建立的服務角色也能連過去、在 `postgres` 佔用暫存空間，在 `template1` 開著的 session 還會讓 `CREATE DATABASE` 失敗（`source database "template1" is being accessed by other users`）。服務不需要這兩個資料庫，要收回 `PUBLIC` 的 `CONNECT` 與 `TEMPORARY`（Laysi/trustiot-v2#400）。migration 角色不擁有它們，Job 收不回來：
+
+- Job 每次執行都檢查服務的登入角色能連哪些其他資料庫（`datallowconn` 的資料庫），每個資料庫記一行 WARN，例如 `database postgres: service roles assets_app, assets_platform, identity_app, identity_platform may connect to it and create temporary tables there; revoke CONNECT and TEMPORARY on it from PUBLIC as a superuser`。這是警告，Job 照常完成。
+- 收回之後，服務角色連這兩個資料庫時被拒（`permission denied for database "postgres"`、`User does not have CONNECT privilege`）；服務自己的資料庫不受影響：新資料庫不複製 `template1` 的權限。
+
+### 叢集內 Postgres：Laysi/trustiot-v2#400 之前 bootstrap 的 Cluster
+
+之後 bootstrap 的 Cluster 由 chart 的 `bootstrap.initdb.postInitSQL` 做好，不用處理（[deploy/chart/README.md](../../deploy/chart/README.md) 的「叢集內的 Postgres」）。bootstrap 只執行一次，所以之前建立的 Cluster 要以 superuser 經 primary pod 內的 local socket 執行一次同一個檔案。檔案在 chart 裡：repo 的 `deploy/chart/files/postgres/system-databases.sql`，或打包的 chart 解開後的 `trustiot/files/postgres/system-databases.sql`。它是冪等的，再執行一次不會改變任何東西，不需要重啟，也不中斷複寫：`streaming_replica` 與 `cnpg_metrics_exporter` 在同一個檔案裡先依名稱拿到 `postgres` 的 `CONNECT`。
+
+1. 找出 primary：`kubectl -n <namespace> get cluster <cluster> -o jsonpath='{.status.currentPrimary}'`，下面寫成 `<primary>`。
+2. 在 repo 根目錄（或解開的 chart 旁）執行檔案：
+
+   ```sh
+   kubectl -n <namespace> exec -i <primary> -c postgres -- psql -d postgres -v ON_ERROR_STOP=1 < deploy/chart/files/postgres/system-databases.sql
+   ```
+
+   輸出 `DO`、`GRANT`、`REVOKE`、`REVOKE`。
+3. 確認：
+
+   ```sh
+   kubectl -n <namespace> exec -i <primary> -c postgres -- psql -d postgres -tAc "SELECT datname, datacl FROM pg_database WHERE datname IN ('postgres', 'template1') ORDER BY 1"
+   ```
+
+   印出下面兩行即完成；Cluster 有 Pooler 時 `postgres` 多一個 `cnpg_pooler_pgbouncer=c/postgres`（operator 建立這個角色時自己給的），也是正常的：
+
+   ```text
+   postgres|{postgres=CTc/postgres,streaming_replica=c/postgres,cnpg_metrics_exporter=c/postgres}
+   template1|{postgres=CTc/postgres}
+   ```
+
+4. 收回不會中斷已經開著的連線。看有沒有 TrustIoT 的角色連在這兩個資料庫：`... psql -d postgres -tAc "SELECT usename, datname, count(*) FROM pg_stat_activity WHERE datname IN ('postgres', 'template1') GROUP BY 1, 2"`。服務角色（`<服務>_app`、`<服務>_platform`）或 `trustiot_owner` 出現時，先查它為什麼連過去（服務不會這樣做），再以 `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('postgres', 'template1') AND usename = '<角色>'` 中止。`postgres`、`streaming_replica`、`cnpg_metrics_exporter` 是 operator 自己的連線，不要中止。
+5. 下一次 Job 執行時日誌沒有 `may connect to it` 的警告。
+
+### 外部 Postgres
+
+由客戶的資料庫管理者以 superuser（託管服務以擁有這兩個資料庫的管理帳號）執行。不要執行 chart 的檔案：它另外建立 CloudNativePG 的角色，外部 Postgres 用不到。
+
+1. 先找出需要連 `postgres` 或 `template1` 的其他角色，依名稱給它們 `CONNECT`，例如監控代理、備份工具、連線池的驗證帳號，以及 `pg_rewind` 用的複寫帳號（它連 `postgres`）：`GRANT CONNECT ON DATABASE postgres TO <角色>;`。superuser 不受影響。
+2. 收回：
+
+   ```sql
+   REVOKE CONNECT, TEMPORARY ON DATABASE postgres FROM PUBLIC;
+   REVOKE CONNECT, TEMPORARY ON DATABASE template1 FROM PUBLIC;
+   ```
+
+   叢集還有其他 `datallowconn` 的資料庫、而 TrustIoT 的角色不該連過去時，對它們做同樣的收回（一個 Postgres 叢集只放一個 TrustIoT 資料庫，見下一節）。
+3. 確認：`SELECT datname, datacl FROM pg_database ORDER BY 1` 裡，這兩個資料庫的 `datacl` 不再有以 `=` 開頭（`PUBLIC`）的項目；並照上一節第 4 步處理已經開著的連線。下一次 Job 執行時日誌沒有 `may connect to it` 的警告。
+
+客戶自己的應用需要 `PUBLIC` 連得上某個資料庫時，那是管理者的決定：Job 只警告、不停止，每次執行都會記下這個例外。
 
 ## 一個 Postgres 叢集只放一個 TrustIoT 資料庫
 

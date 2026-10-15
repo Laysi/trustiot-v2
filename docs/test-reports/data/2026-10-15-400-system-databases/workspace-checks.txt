@@ -1,0 +1,87 @@
+# Final check run of Laysi/trustiot-v2#400 on the build host through the check queue, CI=1,
+# tree of commit bfb0156 plus the test report. Commands: section 2 of
+# docs/test-reports/2026-10-15-400-system-databases.md. Output is filtered to failures and
+# summaries; each NAME=N line is that step's exit code.
+rcheck: queued on the build host at 12:49:45 as 400-e0599587; running now: 404-a3251eba since 12:48:43
+FMT=0
+CLIPPY=0
+CLIPPY_SK=0
+test the_split_matches_the_chart_tests_rule ... ok
+test service_roles_cannot_use_the_other_databases ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.96s
+TEST_SYSDB=0
+test an_event_committed_late_is_delivered_not_skipped ... ok
+TEST=0
+TEST_SK=0
+
+7 packages installed [33.00ms]
+scripts/flux/lib.test.ts:
+
+scripts/tests/migrate.test.ts:
+
+scripts/tests/protocol.test.ts:
+
+scripts/tests/secrets.test.ts:
+
+scripts/tests/env.test.ts:
+
+scripts/tests/tls.test.ts:
+
+scripts/tests/secret-api.test.ts:
+
+scripts/tests/state.test.ts:
+
+scripts/tests/stack.test.ts:
+
+scripts/tests/policy.test.ts:
+
+scripts/tests/e2e.test.ts:
+(skip) the dev environment with podman > up uses images of this machine's platform although the store holds the service base for another one
+(skip) the dev environment with podman > up uses images of this machine's platform although the store holds Mosquitto for another one
+(skip) the dev environment with podman > starts, passes every check, seeds, rotates credentials, stops and purges without leftovers
+
+scripts/tests/product-logins.test.ts:
+
+scripts/tests/identity.test.ts:
+
+4 tests skipped:
+(skip) aarch64ElfProblem > accepts the aarch64 binary running this test
+(skip) the dev environment with podman > up uses images of this machine's platform although the store holds the service base for another one
+(skip) the dev environment with podman > up uses images of this machine's platform although the store holds Mosquitto for another one
+(skip) the dev environment with podman > starts, passes every check, seeds, rotates credentials, stops and purges without leftovers
+
+ 873 pass
+ 4 skip
+ 0 fail
+ 3185 expect() calls
+Ran 877 tests across 36 files. [2.46s]
+SCRIPTS=0
+$ tsc --noEmit --project tsconfig.json
+TYPECHECK=0
+bun test v1.4.2 (744846f84)
+
+deploy/chart/tests/ingress-authz.test.ts:
+
+deploy/chart/tests/chart.test.ts:
+
+deploy/chart/tests/e2e/install-evidence.test.ts:
+
+deploy/chart/tests/e2e/install.test.ts:
+
+deploy/chart/tests/e2e/ports.test.ts:
+
+deploy/chart/tests/e2e/tunnel-recovery.test.ts:
+
+deploy/chart/tests/e2e/raw-client.test.ts:
+
+ 382 pass
+ 0 fail
+ 4255 expect() calls
+Ran 382 tests across 7 files. [33.74s]
+CHART=0
+secret handling: 409 file(s) checked, 6 container build file(s), no violations
+SECRETS=0
+rcheck: removed 0 dangling test volumes
+rcheck: removed 0 dangling podman test volumes
+rcheck: exit 0 at 12:58:14 (build host, 400-e0599587)
+rc=0
