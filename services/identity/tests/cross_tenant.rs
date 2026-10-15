@@ -39,6 +39,11 @@ const SEED_AGGREGATE: &str = "INSERT INTO identity.outbox_aggregate
     (aggregate_type, aggregate_id, tenant_id, last_seq, last_tx)
 SELECT 'testkit', $3, $1::uuid, 1, 1 WHERE $2::uuid IS NOT NULL";
 
+/// Why the migration records are exempt (Laysi/trustiot-v2#402).
+const MIGRATION_RECORDS: &str = "the migration Job's record of the files applied in this schema \
+     (crates/service-kit/sql/migration-records.sql): file names and SHA-256 hashes, no tenant \
+     data; the service role only reads it, for its readiness check";
+
 #[tokio::test(flavor = "multi_thread")]
 async fn tenants_are_isolated() {
     let Some(product) = product_postgres(&["identity_app"]).await else {
@@ -70,7 +75,8 @@ async fn tenants_are_isolated() {
         "a session belongs to a user and is found by its cookie hash before any tenant is known; \
          the tenant role is always read from memberships under row-level security \
          (services/identity/README.md)",
-    );
+    )
+    .exempt("identity.trustiot_migrate_applied", MIGRATION_RECORDS);
 
     let issuer = TestIssuer::new();
     Suite::new(ServiceName::Identity, &issuer, store)

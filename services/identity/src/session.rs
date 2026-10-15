@@ -333,6 +333,14 @@ impl PgSessionStore {
         })
     }
 
+    /// The service role's pool, for queries outside a tenant: the migrations readiness check
+    /// (`service_kit::migrations::MigrationCheck`), which reads the schema's migration records
+    /// until they are complete and then never again.
+    #[must_use]
+    pub fn pool(&self) -> &sqlx::PgPool {
+        self.db.pool()
+    }
+
     /// Keeps [`WARM_CONNECTIONS`] open until the service stops, for
     /// [`service_kit::Context::spawn`]: every [`KEEP_WARM_INTERVAL`] a round
     /// ([`PgSessionStore::warm_up`], at most [`WORK_LIMIT`]) confirms that many different

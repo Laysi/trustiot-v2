@@ -11,6 +11,7 @@
 | `telemetry` | JSON 日誌、trace id、OTLP 匯出（日誌、trace、指標）、敏感欄位遮蔽 |
 | `job_lock` | 排程工作同一時間只在一個副本執行 |
 | `postgres` | Postgres 連線一律 `verify-full`；新連線先檢查角色與 RLS 設定，不安全就拒用 |
+| `migrations` | 服務映像預期的 migration 清單，與資料庫的紀錄比對的 readiness 檢查 |
 | `identity` | 驗證內部身分 token、取得請求的使用者身分（`contract` feature） |
 | `tenant` | 以 RLS 限定單一租戶的交易，租戶取自已驗證的身分；平台角色的跨租戶交易（`contract` feature） |
 
@@ -118,11 +119,21 @@ kit 的設定與預設值（環境變數以 `TRUSTIOT` 前綴為例）：
 
 - `GET /healthz`：行程能處理 HTTP 就回 200 `{"status":"ok"}`。不檢查依賴，依賴故障時才不會讓每個 pod 都被重啟。
 - `GET /readyz`：啟動完成、尚未收到 SIGTERM、且每個檢查都通過時回 200 `{"status":"ready"}`；否則回 503，`status` 是 `starting`、`draining` 或 `unavailable`。
-- `Health::add_check(name, check)` 註冊依賴檢查，例如資料庫 ping。每個檢查最多 800 ms，結果快取 1 秒，同時進來的 probe 共用同一輪檢查；檢查開始失敗與恢復時各記一行日誌，錯誤文字不能含祕密。
+- `Health::add_check(name, check)` 註冊依賴檢查，例如資料庫 ping。用 Postgres 的服務另外註冊 `migrations` 檢查（下方「migration 檢查」）。每個檢查最多 800 ms，結果快取 1 秒，同時進來的 probe 共用同一輪檢查；檢查開始失敗與恢復時各記一行日誌，錯誤文字不能含祕密。
 - 兩個端點不記存取日誌、不受 handler 逾時限制，回應帶 `Cache-Control: no-store`。兩個埠共用同一份狀態，同一時間回同樣的結果。
 - 健康埠（`http.health_listen_addr`，預設 8081）只提供這兩個端點：其他路徑一律 404（例如 `/v1/...`、`/internal/...`、`/healthz/`），這兩個路徑的其他 method 回 405。kubelet 的探針連這個埠：Istio ambient 下它來自 169.254.7.127、不經 ztunnel，從節點發出的其他連線（例如其他 namespace 的 `hostNetwork` pod）也一樣，ztunnel 不驗身分也不套用 AuthorizationPolicy。chart 的 NetworkPolicy 因此只對探針連的埠放行這個位址；探針改連健康埠後，節點上的行程碰不到服務的 API，包括只靠 AuthorizationPolicy 限定呼叫端的 `/internal/`（Laysi/trustiot-v2#286，[chart README](../../deploy/chart/README.md)「節點來源」）。
 - API 埠保留這兩個端點，理由：入口 gateway 的公開路徑 `/healthz`（外部監控，`ingress.publicPaths.healthCheck`）經 mesh 轉給身分服務的 API 埠；本機開發環境（`scripts/dev.ts`）與 chart 以外的執行方式只開 API 埠也能檢查健康。這兩個端點不帶資料，mesh 內連得到 API 埠的呼叫端本來就經 AuthorizationPolicy 授權，所以保留不會多開放什麼；節點來源連不到 API 埠，是由探針只連健康埠來保證，不是靠 API 埠拿掉端點。
 - 收尾時兩個埠的 readiness 一致：收到 SIGTERM 立刻都回 503（`draining`），`/healthz` 照常回 200。drain delay 結束後 API 埠停止接受連線；健康埠繼續回應（readiness 503、liveness 200）直到行程結束，kubelet 看到的是正在收尾的 pod，而不是被拒的連線。送出遙測資料之前健康埠關閉：readiness 一律回 503、停止接受連線並關閉閒置的連線，進行中的探針照常拿到回應（收到訊號後 readiness 不執行檢查，立即回應）。健康埠意外停止時，API 埠也跟著停止，服務以 exit code 1 結束。
+
+## migration 檢查（`migrations`）
+
+用 Postgres 的服務在資料庫套用了它的映像預期的每個 migration 之前不 ready（Laysi/trustiot-v2#402；設計、不採用的做法與相容規則見[部署與可搬移性](../../docs/architecture/deployment.md)的「服務自己確認 migration 已套用」）。
+
+- 服務在 `src/schema.rs` 宣告 `pub const SCHEMA: migrations::Schema`：服務名稱（chart 的服務 key）、是不是 outbox producer、`migrations/postgres/` 的每個檔案（`Migration { name, sql: include_str!(...) }`，依檔名順序）。migration Job 以 `#[path]` 編譯同一個檔案，所以兩邊是同一份清單（[tools/migrate README](../../tools/migrate/README.md) 的「新增服務的 migration」）；檔案只能用 `service_kit`。
+- 啟動時以服務角色的 pool 註冊：`MigrationCheck::new(&schema::SCHEMA, db.pool().clone()).register(context.health())`（`TenantDb::pool`；身分服務用 `PgSessionStore::pool`）。
+- 檢查讀服務自己 schema 的 `trustiot_migrate_applied`（Job 寫的紀錄，服務角色只能 `SELECT`；查詢不帶 schema，靠 Job 給服務角色設定的 `search_path`），與 `Schema::expected()`（服務的檔案，producer 再加 `<服務>.outbox` 的兩個範本，SHA-256 由編進來的內容算出）比對：任何預期的檔案沒有紀錄、或紀錄的 SHA-256 不同，readiness 失敗；資料庫多出映像不認得的紀錄（映像被回退）不影響。紀錄表不存在或讀不到（`42P01`、`42501`）時，每個檔案都算缺少；連不上資料庫時回報連線錯誤，不算缺少。
+- 失敗時記一行 ERROR（欄位 `missing`、`changed`、`no_records`，寫出每個檔案與要執行這一版的 migration Job），同樣的失敗只記一次；`/readyz` 只回 `unavailable`。全部都在時記一行 INFO（欄位 `newer` 列出資料庫較新的紀錄），之後的檢查不再查詢資料庫：Job 只會新增紀錄。
+- 沒有自己 schema 的程式不註冊（例如 `example-service`）。
 
 ## 收尾（SIGTERM）
 
@@ -513,7 +524,7 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 
 | 指令 | 內容 | 需要 |
 | --- | --- | --- |
-| `cargo test -p service-kit --lib` | 單元測試：設定與平台設定、遮蔽、日誌格式、health、kit 的錯誤回應、lock key；內部身分的每一項檢查、公鑰設定與輪替（`--lib identity` 只跑這部分） | 無 |
+| `cargo test -p service-kit --lib` | 單元測試：設定與平台設定、遮蔽、日誌格式、health、kit 的錯誤回應、lock key；migration 清單的比對（缺少、hash 不同、資料庫較新）、日誌內容與只記一次、通過後不再查詢（`--lib migrations` 只跑這部分）；內部身分的每一項檢查、公鑰設定與輪替（`--lib identity` 只跑這部分） | 無 |
 | `cargo test -p service-kit --doc` | 文件範例，含證明背景工作拿不到使用者身分的 compile-fail 測試 | 無 |
 | `cargo test -p service-kit --test identity` | 範例服務的 `/v1/whoami`：偽造簽章、過期、受眾不符、缺標頭都回 401 `unauthenticated`，輪替期間新舊 `kid` 都通過，無法使用的公鑰設定讓服務拒絕啟動；token 與公鑰不進日誌 | 無 |
 | `cargo test -p service-kit --test lifecycle` | 範例服務的啟動、health（健康埠只有 `/healthz`、`/readyz`，其他路徑 404）、SIGTERM 與 SIGINT 收尾（兩個埠的 readiness 一致）、設定錯誤與埠被占用，用真的行程、訊號與 HTTP | 無 |

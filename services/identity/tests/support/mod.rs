@@ -649,3 +649,43 @@ fn forward(client: TcpStream, server: TcpStream) {
     let _ = client_write.shutdown(std::net::Shutdown::Both);
     let _ = upstream.join();
 }
+
+/// Creates the function that runs service-kit's migration records template for schema
+/// `identity` (`example_schema`) and the service role `identity_app` (`example_app`). The
+/// template is a bound parameter and the names are fixed, so no SQL is built in Rust.
+const RECORDS_FUNCTION: &str = "CREATE FUNCTION pg_temp.identity_migration_records(template text)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+    EXECUTE replace(replace(template, 'example_schema', 'identity'), 'example_app', 'identity_app');
+END
+$$";
+const RUN_RECORDS_FUNCTION: &str = "SELECT pg_temp.identity_migration_records($1)";
+const RECORD: &str = "INSERT INTO identity.trustiot_migrate_applied (component, name, sha256)
+VALUES ($1, $2, $3)";
+
+/// Stands in for the migration Job's records in a database these tests set up by hand: creates
+/// `identity.trustiot_migrate_applied` from service-kit's template and records every file the
+/// identity image expects (`identity::schema::SCHEMA`), so the service's `migrations` readiness
+/// check passes. These tests apply only `0001_identity.sql`, which is all the ext_authz check
+/// needs; the readiness check itself runs against the real Job in tests/migrations.rs. Run it as
+/// the schema's owner.
+pub async fn record_release_migrations(owner: &mut sqlx::PgConnection) {
+    sqlx::raw_sql(RECORDS_FUNCTION)
+        .execute(&mut *owner)
+        .await
+        .expect("create the records helper");
+    sqlx::query(RUN_RECORDS_FUNCTION)
+        .bind(service_kit::migrations::RECORDS_TEMPLATE)
+        .execute(&mut *owner)
+        .await
+        .expect("create the migration records");
+    for record in identity::schema::SCHEMA.expected() {
+        sqlx::query(RECORD)
+            .bind(&record.component)
+            .bind(&record.name)
+            .bind(&record.sha256)
+            .execute(&mut *owner)
+            .await
+            .unwrap_or_else(|error| panic!("record {record}: {error}"));
+    }
+}

@@ -99,8 +99,9 @@ FROM obx_producer.outbox_aggregate ORDER BY 1";
 const VISIBLE_AGGREGATES: &str = "SELECT count(*) FROM obx_producer.outbox_aggregate";
 /// Turns the producer schema back into what the Job left before outbox-aggregate.sql existed
 /// (Laysi/trustiot-v2#413): `outbox_aggregate` without the tenant column, its policies, or
-/// row-level security, and the file not recorded. The grants stay, as the Job's
-/// `PRODUCER_GRANTS` gave them then.
+/// row-level security, and the file not recorded, neither in the Job's records nor in the
+/// schema's copy (Laysi/trustiot-v2#402). The grants stay, as the Job's `PRODUCER_GRANTS` gave
+/// them then.
 const BEFORE_THE_AGGREGATE_TEMPLATE: &str = "
 DROP POLICY tenant_isolation ON obx_producer.outbox_aggregate;
 DROP POLICY platform_aggregates ON obx_producer.outbox_aggregate;
@@ -108,6 +109,8 @@ DROP POLICY platform_aggregates_only ON obx_producer.outbox_aggregate;
 ALTER TABLE obx_producer.outbox_aggregate DISABLE ROW LEVEL SECURITY;
 ALTER TABLE obx_producer.outbox_aggregate DROP COLUMN tenant_id;
 DELETE FROM trustiot_migrate.applied
+WHERE component = 'obx-producer.outbox' AND name = 'outbox-aggregate.sql';
+DELETE FROM obx_producer.trustiot_migrate_applied
 WHERE component = 'obx-producer.outbox' AND name = 'outbox-aggregate.sql';
 ";
 /// What a producer on that version wrote: events of tenant A's and tenant B's aggregates and a

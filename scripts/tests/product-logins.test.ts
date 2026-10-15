@@ -118,7 +118,30 @@ export function drift(
   return messages;
 }
 
-const registrySource = readFileSync(join(REPO, REGISTRY_PATH), "utf8");
+/**
+ * The registry takes each service's name and producer flag from the service's own `src/schema.rs`
+ * (`<name>_schema::SCHEMA.service`, Laysi/trustiot-v2#402). Replace those references with the
+ * literals of the file the `#[path]` attribute names, so the parser below keeps reading literals
+ * and a reference it cannot resolve fails instead of being skipped.
+ */
+export function resolveSchemaRefs(source: string, read: (path: string) => string): string {
+  const files = new Map<string, string>();
+  for (const match of source.matchAll(/#\[path = "([^"]+)"\]\s*mod\s+(\w+);/g)) {
+    files.set(match[2]!, read(match[1]!));
+  }
+  const resolved = source.replace(/\b(\w+)::SCHEMA\.(service|outbox_producer)\b/g, (_, mod: string, field: string) => {
+    const schema = files.get(mod);
+    if (schema === undefined) throw new Error(`${REGISTRY_PATH} refers to ${mod}::SCHEMA without a #[path] module; update ${import.meta.file}`);
+    const value = field === "service" ? /\bservice:\s*("[^"]+")/.exec(schema)?.[1] : /\boutbox_producer:\s*(true|false)/.exec(schema)?.[1];
+    if (value === undefined) throw new Error(`${mod}'s schema.rs has no literal ${field}; update ${import.meta.file}`);
+    return value;
+  });
+  return resolved;
+}
+
+const registrySource = resolveSchemaRefs(readFileSync(join(REPO, REGISTRY_PATH), "utf8"), (path) =>
+  readFileSync(join(REPO, "tools/migrate/src", path), "utf8"),
+);
 const chartSource = readFileSync(join(REPO, CHART_PATH), "utf8");
 
 describe("the local login roles against the product", () => {

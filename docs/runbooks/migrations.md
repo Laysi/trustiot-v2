@@ -151,6 +151,25 @@ migration 檔案本身失敗（SQL 錯誤）時，那一個檔案的交易整個
 - 升級或 `helm rollback` 換掉了 Job，而這個 pod 屬於另一個 release revision：讓升級完成（新 pod 會取代它），或以 `helm rollback` 回到有這個 Job 的 revision。
 - 要刻意讓 Job 再跑一次（例如資料庫從備份還原、改接另一個資料庫之後，角色與密碼要補回）：改 `migrate.revision`，所有服務會改等新的 Job。
 
+## 服務因為 migration 不 ready
+
+每個用 Postgres 的服務確認資料庫已套用它的映像預期的每個 migration 檔案，缺少或內容不同時 `/readyz` 回 503（Laysi/trustiot-v2#402，[部署與可搬移性](../architecture/deployment.md)的「服務自己確認 migration 已套用」）。服務的日誌有這一行 ERROR：
+
+```text
+the database lacks migrations this image expects, so the service stays unready; run the migration Job of this release (tools/migrate, docs/runbooks/migrations.md)
+```
+
+欄位 `missing` 是缺少的檔案、`changed` 是資料庫套用了別的版本的檔案（附映像與資料庫的 SHA-256），都寫成 `<component>/<檔名>`，例如 `identity/0002_tenants.sql`、`identity.outbox/outbox-aggregate.sql`；`no_records` 為 `true` 表示服務讀不到紀錄表 `<schema>.trustiot_migrate_applied`（這一版之前的 Job 沒有建立它）。處理：
+
+1. 確認服務的映像與 migration Job 是同一個版本（`kubectl -n <namespace> get deploy,job -o wide` 的 image tag；chart 要求兩者相同）。只以 digest 修補某個服務、或手動改過 Deployment 時，改回與 Job 相同的版本，或以 `helm upgrade` 讓這一版的 Job 跑一次。
+2. `migrate.enabled=false`（由外部流程套用 migration）時，外部流程要以這一版的 `migrate` 執行一次，否則服務一直不 ready。
+3. Job 跑完後服務自己轉為 ready，不必重啟。
+4. `changed` 不是空的：同名檔案在資料庫裡是另一個版本，不是少跑 Job。已套用的檔案不能改（見上方「Job 停止時」的 `changed after it was applied`），開 issue 查是哪個映像帶著改過的檔案；不要手動改 `trustiot_migrate.applied` 或服務的紀錄表，Job 下一次執行會把紀錄表改回與 `trustiot_migrate.applied` 相同。
+
+資料庫比映像新（`helm rollback` 或只回退某個服務的映像之後）時服務照常 ready：migration 只能往前相容，舊的程式要能在新的 schema 上執行。
+
+服務通過這項檢查之後，在行程存活期間不再檢查。資料庫從較舊的備份還原（還原點早於某些 migration）之後，先讓 Job 再跑一次（上一節：改 `migrate.revision`），再重新啟動用 Postgres 的服務（`kubectl -n <namespace> rollout restart deploy`），讓它們重新確認。
+
 ## 兩個 Job 同時執行
 
 Job 以 Postgres 的 advisory lock 互斥，第二個等第一個結束（最多 `migrate.wait.lock`），之後發現沒有事要做就結束。不需要手動處理；`helm rollback` 與升級重疊時也一樣。
