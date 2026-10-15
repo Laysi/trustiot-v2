@@ -8,7 +8,7 @@
 | --- | --- |
 | `isolation` | 跨租戶負向測試：`Suite`、`Store`、`Report`、端點探測（`isolation::api`） |
 | `isolation::postgres` | Postgres 的 store：`PgStore`、`pg_table!`、`pg_view!` |
-| `identity` | `TestIssuer`：以測試行程產生的 Ed25519 金鑰簽內部身分 token，`jwks()` 就是服務的 `TRUSTIOT_INTERNAL_IDENTITY_KEYS` |
+| `identity` | `TestIssuer`：以測試行程產生的 Ed25519 金鑰簽內部身分 token；`write_jwks(path)` 寫出公鑰檔，服務的 `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` 指向它（與 chart 掛進 pod 的 ConfigMap 同格式） |
 | `postgres` | `tls_postgres(init)`：帶 TLS 的拋棄式 Postgres（service-kit 只接受 `verify-full`），同一個測試執行檔共用一個容器 |
 | `product` | `product_postgres(logins)`：在 `tls_postgres` 上以 migration Job 本身（`migrate::run` 與 `PRODUCT`）套用整個產品的 schema，與部署得到的一樣（Laysi/trustiot-v2#65）；見[產品 schema](#產品-schema) |
 | `container` | podman 或 docker 的容器，drop 時刪除；`unavailable(what)`：本機缺容器執行環境時略過測試，設了 `CI` 時改為失敗 |
@@ -23,7 +23,7 @@
    ```
 
 2. 建 `tests/cross_tenant.rs`。資料庫照服務正式的方式準備：以 migration 角色跑完全部 migration（含 service-kit 的 [`sql/database.sql`](../service-kit/sql/database.sql)），服務角色、平台角色照 [service-kit 的角色範本](../service-kit/README.md#角色與-policy-範本)。服務已登記在 `tools/migrate` 的 `PRODUCT` 時，直接用 `product_postgres`（見[產品 schema](#產品-schema)），outbox 的表與其他服務的 schema 也一起有了，例子是 `services/identity/tests/cross_tenant.rs` 與 `services/assets/tests/cross_tenant.rs`。
-3. 啟動服務：用 `TestIssuer::jwks()` 當 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`，資料庫連線用服務角色、`verify-full` 與 `TlsPostgres::ca_pem`（以子行程啟動時把它寫成 `TRUSTIOT_POSTGRES_CA_FILE` 指向的檔案）。可以在測試行程裡以 `axum::serve` 跑服務的 router，或像 service-kit 的範例服務那樣啟動子行程。
+3. 啟動服務：以 `TestIssuer::write_jwks(path)` 寫出公鑰檔，`TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` 指向它，資料庫連線用服務角色、`verify-full` 與 `TlsPostgres::ca_pem`（以子行程啟動時把它寫成 `TRUSTIOT_POSTGRES_CA_FILE` 指向的檔案）。可以在測試行程裡以 `axum::serve` 跑服務的 router，或像 service-kit 的範例服務那樣啟動子行程。
 4. 宣告每張表、每個端點，跑 suite：
 
 ```rust
@@ -41,7 +41,7 @@ async fn tenants_are_isolated() {
     let Some(postgres) = tls_postgres(ROLES).await else { return }; // 沒有容器：本機略過，CI 失敗
     // ……建資料庫、以 assets_owner 跑 migration……
     let issuer = TestIssuer::new();
-    let base_url = start_assets(&postgres, &issuer.jwks()).await; // 服務自己的啟動函式
+    let base_url = start_assets(&postgres, &issuer).await; // 服務自己的啟動函式，以 issuer.write_jwks 寫公鑰檔
 
     let store = PgStore::new(
         postgres.options("assets_owner", "assets"), // seeder：不受 RLS 限制的 migration 角色

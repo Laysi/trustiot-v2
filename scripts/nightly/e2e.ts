@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { EVIDENCE_FILE_PATTERN } from "../../deploy/chart/tests/e2e/install.ts";
 import { exec, type RunLog } from "./exec.ts";
 import { e2eNamespaceOf, IDENTITY_DOUBLE_IMAGE, providerNameOf } from "./platform.ts";
+import { MIGRATE_IMAGE_NAME, serviceImageRef } from "./service-image.ts";
 
 export interface E2eContext {
   repoRoot: string;
@@ -129,6 +130,9 @@ export async function runClusterE2e(ctx: E2eContext, suite: E2eSuite, shape: str
           ...spec.env(shape),
           E2E_NAMESPACE: namespace,
           E2E_IDENTITY_IMAGE: IDENTITY_DOUBLE_IMAGE,
+          // The identity pod's init container generates the internal identity keys with the
+          // migration image the smoke loaded into the nodes (Laysi/trustiot-v2#404).
+          E2E_MIGRATE_IMAGE: serviceImageRef(MIGRATE_IMAGE_NAME),
           // The image was loaded into the nodes; there is no registry to pull it from.
           E2E_IMAGE_PULL_POLICY: "Never",
           E2E_REPORT_DIR: reportDir,

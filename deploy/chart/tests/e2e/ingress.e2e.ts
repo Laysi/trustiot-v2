@@ -21,6 +21,7 @@ import {
   IDENTITY_IMAGE,
   KEEP,
   KUBECTL,
+  MIGRATE_IMAGE,
   NAMESPACE,
   OBJECT_PREFIX,
   RELEASE,
@@ -28,6 +29,7 @@ import {
   freePort,
   imageValues,
   installRelease,
+  migrateImageValues,
   kubectl,
   run,
   uninstallRelease,
@@ -166,7 +168,12 @@ beforeAll(async () => {
     SHAPE === "saas"
       ? ["values-saas.yaml", "tests/values/saas-instance.yaml"]
       : ["values-onprem.yaml", "tests/values/onprem-instance.yaml"];
-  const extra: string[] = ["--set", `ingress.authzProvider=${PROVIDER}`, ...imageValues("identity", IDENTITY_IMAGE)];
+  const extra: string[] = [
+    "--set",
+    `ingress.authzProvider=${PROVIDER}`,
+    ...imageValues("identity", IDENTITY_IMAGE),
+    ...migrateImageValues(MIGRATE_IMAGE),
+  ];
   if (SHAPE === "onprem") {
     // Throwaway self-signed certificate for the three hosts; the key never leaves the temp dir.
     const key = join(work, "tls.key");

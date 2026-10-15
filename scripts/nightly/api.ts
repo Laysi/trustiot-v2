@@ -8,10 +8,13 @@
 // administrator, who has no tenant, gets 403 from the assets service.
 //
 // Then the edges of the MS0 completion criteria (Laysi/trustiot-v2#77), with the real services:
-// a forged identity header, signed with the deployment's own key so the assets service accepts it
-// when it reaches it directly (checked through a port-forward that bypasses the ingress), never
-// gets through the ingress: without a cookie the gateway answers 401, and with the
-// administrator's cookie the assets service sees only the administrator's token (403). A Host
+// a stolen identity header, a genuine token the identity service signed for the tenant's member
+// (taken from its ext_authz answer through a port-forward that bypasses the ingress), which the
+// assets service accepts when it reaches it directly (checked through another such port-forward),
+// never gets through the ingress: without a cookie the gateway answers 401, and with the
+// administrator's cookie the assets service sees only the administrator's token (403). The
+// signing keys are generated in the cluster (Laysi/trustiot-v2#404) and never leave it: the check
+// reads no private key, it replays what an attacker who stole a token would hold. A Host
 // with a port, and spellings of the path that the mesh normalizes, still reach the assets service
 // with a token addressed to it (200 with the tenant), so the identity service resolves the
 // audience from the Host and path the gateway hands it, not from what the client wrote.
@@ -22,9 +25,7 @@
 // session secret reaches the database and the SQL; the secret itself lives in this process and is
 // never logged. The cluster and its sessions are thrown away after the run.
 import type { Subprocess } from "bun";
-import { createPrivateKey, sign as signWithKey } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { ConnectionError, sendRaw } from "../../deploy/chart/tests/e2e/raw-client.ts";
@@ -44,10 +45,8 @@ export const SESSION_COOKIE = "__Host-trustiot-session";
 export const TENANTS_PATH = "/api/identity/v1/tenants";
 /** The assets service's tenant API (services/assets/src/tenants.rs, TENANT_PATH). */
 export const ASSETS_TENANT_PATH = "/api/assets/v1/tenant";
-/** The Secret with the identity service's private key, which the smoke creates in its namespace. */
-export const SIGNING_KEY_STORE = "trustiot-nightly-identity-signing-key";
-/** The key ID of that key in internalIdentity.publicKeys. */
-export const SIGNING_KEY_ID = "nightly-1";
+/** Where the identity service answers the ingress's cookie check (services/identity/README.md). */
+export const EXT_AUTHZ_PREFIX = "/internal/ext-authz";
 
 /** How long the ingress may take to route the cookie check, and the assets service to consume the event. */
 export const ROUTE_LIMIT_MS = 180_000;
@@ -55,21 +54,6 @@ export const EVENT_LIMIT_MS = 180_000;
 const POLL_MS = 2_000;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-/** The DER prefix of an Ed25519 SubjectPublicKeyInfo (RFC 8410); the 32-byte key follows it. */
-const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
-
-/**
- * The `x` of internalIdentity.publicKeys (base64url of the raw 32-byte key, no padding) from the
- * DER public key that `openssl pkey -pubout -outform DER` prints for an Ed25519 key.
- */
-export function ed25519PublicKeyX(der: Uint8Array): string {
-  const bytes = Buffer.from(der);
-  if (bytes.length !== ED25519_SPKI_PREFIX.length + 32 || !bytes.subarray(0, ED25519_SPKI_PREFIX.length).equals(ED25519_SPKI_PREFIX)) {
-    throw new Error(`not an Ed25519 public key in DER (${bytes.length} bytes)`);
-  }
-  return bytes.subarray(ED25519_SPKI_PREFIX.length).toString("base64url");
-}
 
 /** One entry of the chart's ingress.routes. */
 export interface IngressRoute {
@@ -106,10 +90,11 @@ export function routesOfValues(chartDir: string, valuesFiles: string[]): Ingress
 /**
  * The values the smoke adds for the check (after tests/values/smoke.yaml): the identity and assets
  * services from the images the nightly built, the cookie routes to their APIs after the routes the
- * shape's values already set (`routes`, from routesOfValues; helm would otherwise drop them), the
- * smoke namespace's ext_authz provider (platform.ts), and the signing key the smoke generated.
+ * shape's values already set (`routes`, from routesOfValues; helm would otherwise drop them), and
+ * the smoke namespace's ext_authz provider (platform.ts). No key: the identity pod's init
+ * container generates it in the cluster (Laysi/trustiot-v2#404).
  */
-export function apiValues(shape: string, publicKey: { kid: string; x: string }, routes: readonly IngressRoute[]): Record<string, unknown> {
+export function apiValues(shape: string, routes: readonly IngressRoute[]): Record<string, unknown> {
   const image = (name: string) => {
     const { digest: _digest, ...values } = serviceImageValues(name);
     return values;
@@ -129,81 +114,38 @@ export function apiValues(shape: string, publicKey: { kid: string; x: string }, 
       authzProvider: smokeProviderNameOf(shape),
       routes: [...routes, ...API_ROUTES],
     },
-    internalIdentity: {
-      publicKeys: [publicKey],
-      signingKeySecret: { name: SIGNING_KEY_STORE },
-    },
   };
-}
-
-/** Signs with the identity service's key, so the check can forge a header the services accept. */
-export interface TokenSigner {
-  kid: string;
-  sign(data: Uint8Array): Uint8Array;
-}
-
-/**
- * Generates the identity service's Ed25519 signing key into SIGNING_KEY_STORE in `namespace` and
- * returns its public key for internalIdentity.publicKeys, and a signer for the forged identity
- * header of the check. The private key exists only in a private temporary directory while the
- * commands need it, in the Secret, and in this process as a key object; nothing logs it.
- */
-export async function createSigningKey(
-  log: RunLog,
-  kube: { kubectl: string; kubeconfig: string },
-  namespace: string,
-  commands: { run: typeof run } = { run },
-): Promise<{ publicKey: { kid: string; x: string }; signer: TokenSigner }> {
-  const dir = mkdtempSync(join(tmpdir(), "nightly-signing-key-"));
-  try {
-    const key = join(dir, "signing-key.pem");
-    const der = join(dir, "public.der");
-    await commands.run(log, ["openssl", "genpkey", "-algorithm", "ed25519", "-out", key], { timeoutMs: 30_000 });
-    await commands.run(log, ["openssl", "pkey", "-in", key, "-pubout", "-outform", "DER", "-out", der], { timeoutMs: 30_000 });
-    const x = ed25519PublicKeyX(new Uint8Array(await Bun.file(der).arrayBuffer()));
-    const privateKey = createPrivateKey(await Bun.file(key).text());
-    await commands.run(
-      log,
-      [kube.kubectl, "create", "secret", "generic", SIGNING_KEY_STORE, "--namespace", namespace, `--from-file=signing-key.pem=${key}`],
-      { env: { KUBECONFIG: kube.kubeconfig }, timeoutMs: 60_000, quiet: true },
-    );
-    return {
-      publicKey: { kid: SIGNING_KEY_ID, x },
-      signer: { kid: SIGNING_KEY_ID, sign: (data) => new Uint8Array(signWithKey(null, data, privateKey)) },
-    };
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-/** The protected header of an internal identity token (services/identity/src/issuer.rs), in its field order. */
-export function identityTokenHeader(kid: string): string {
-  return JSON.stringify({ alg: "EdDSA", typ: "internal-identity+jwt", kid });
-}
-
-/**
- * An internal identity token that the client writes itself: a viewer of `tenantId`, addressed to
- * the assets service, valid for a minute from `nowSecs`, in the format and with the key the
- * identity service signs with (services/identity/src/issuer.rs, contract::InternalClaims). The
- * assets service accepts it when it reaches it; only the ingress may keep it away.
- */
-export function forgeIdentityToken(signer: TokenSigner, userId: string, tenantId: string, nowSecs: number): string {
-  const claims = {
-    iss: "identity",
-    sub: uuid(userId),
-    aud: "assets",
-    iat: nowSecs,
-    exp: nowSecs + 60,
-    tenant: { id: uuid(tenantId), role: "viewer" },
-    platform_admin: false,
-  };
-  const encode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
-  const signed = `${encode(identityTokenHeader(signer.kid))}.${encode(JSON.stringify(claims))}`;
-  return `${signed}.${Buffer.from(signer.sign(Buffer.from(signed, "ascii"))).toString("base64url")}`;
 }
 
 /** The identity header of decision 27, which only the ingress may set (services read it, crates/service-kit). */
 export const IDENTITY_HEADER = "x-internal-identity";
+
+/**
+ * A genuine internal identity token of `session`'s user for the assets service: what the identity
+ * service hands the ingress for the member's GET of the tenant, asked for at its ext_authz endpoint
+ * past the ingress (`sendToIdentity`). It stands for a token an attacker stole: signed with the
+ * deployment's own key, valid for a minute. Throws, without the token, unless the answer is 200
+ * with exactly one identity header.
+ */
+export async function stealIdentityToken(
+  sendToIdentity: (request: RawRequest) => Promise<RawResponse>,
+  appHost: string,
+  session: TestSession,
+): Promise<string> {
+  const answer = await sendToIdentity({
+    target: `${EXT_AUTHZ_PREFIX}${ASSETS_TENANT_PATH}`,
+    hostHeader: appHost,
+    headers: [["cookie", `${SESSION_COOKIE}=${session.cookie}`]],
+  });
+  const tokens = answer.headers[IDENTITY_HEADER] ?? [];
+  if (answer.status !== 200 || tokens.length !== 1 || tokens[0]!.split(".").length !== 3) {
+    throw new Error(
+      `the identity service's ext_authz check for the member answered ${answer.status} with ${tokens.length} identity header(s); ` +
+        "expected 200 with one token, or the stolen-header checks below prove nothing",
+    );
+  }
+  return tokens[0]!;
+}
 
 /** A session the check makes: the cookie value it sends, and the hash the identity service looks up. */
 export interface TestSession {
@@ -411,14 +353,14 @@ export const NORMALIZED_TENANT_PATHS = [
   "/api/identity/../assets/v1/tenant",
 ] as const;
 
-/** What checkIngressEdges needs besides the gateway: the assets service without the ingress, and the forger. */
+/** What checkIngressEdges needs besides the gateway: the assets service without the ingress, and a stolen token. */
 export interface EdgeCheckDeps {
   /** Sends one request to the ingress gateway. */
   send: (request: RawRequest) => Promise<RawResponse>;
   /** Sends one request straight to the assets service, past the ingress and the mesh's policies. */
   sendToAssets: (request: RawRequest) => Promise<RawResponse>;
-  /** A fresh forged token of a viewer of `tenantId` for the assets service (forgeIdentityToken). */
-  forge: (tenantId: string) => string;
+  /** A fresh genuine token of the tenant's member for the assets service (stealIdentityToken). */
+  steal: () => Promise<string>;
   log: (line: string) => void;
 }
 
@@ -430,7 +372,7 @@ export interface EdgeCheckDeps {
 export async function checkIngressEdges(deps: EdgeCheckDeps, appHost: string, listenerPort: number, made: TenantApiResult): Promise<string> {
   const { tenantId, admin, member } = made;
   const cookie = (session: TestSession): [string, string] => ["cookie", `${SESSION_COOKIE}=${session.cookie}`];
-  const forged = (): [string, string] => [IDENTITY_HEADER, deps.forge(tenantId)];
+  const stolen = async (): Promise<[string, string]> => [IDENTITY_HEADER, await deps.steal()];
   const servesTenant = (response: RawResponse): boolean => {
     if (response.status !== 200) return false;
     try {
@@ -440,27 +382,27 @@ export async function checkIngressEdges(deps: EdgeCheckDeps, appHost: string, li
     }
   };
 
-  // 1. The forged header is one the assets service accepts: sent past the ingress, it serves the tenant.
-  const direct = await deps.sendToAssets({ target: ASSETS_TENANT_PATH, hostHeader: appHost, headers: [forged()] });
+  // 1. The stolen header is one the assets service accepts: sent past the ingress, it serves the tenant.
+  const direct = await deps.sendToAssets({ target: ASSETS_TENANT_PATH, hostHeader: appHost, headers: [await stolen()] });
   if (!servesTenant(direct)) {
     throw new Error(
-      `the assets service, called past the ingress with the forged identity header, answered ${summary(direct)}; ` +
-        "it must accept it (200 with the tenant), or the forged-header checks below prove nothing",
+      `the assets service, called past the ingress with the stolen identity header, answered ${summary(direct)}; ` +
+        "it must accept it (200 with the tenant), or the stolen-header checks below prove nothing",
     );
   }
-  deps.log("the assets service accepts the forged identity header when it reaches it");
+  deps.log("the assets service accepts the stolen identity header when it reaches it");
 
   // 2. Through the ingress without a cookie: the gateway refuses it before any service.
-  const anonymous = await deps.send({ target: ASSETS_TENANT_PATH, hostHeader: appHost, headers: [forged()] });
+  const anonymous = await deps.send({ target: ASSETS_TENANT_PATH, hostHeader: appHost, headers: [await stolen()] });
   if (anonymous.status !== 401 || errorCode(anonymous.body) !== "unauthenticated") {
-    throw new Error(`a forged identity header without a cookie answered ${summary(anonymous)} through the ingress, expected 401 unauthenticated`);
+    throw new Error(`a stolen identity header without a cookie answered ${summary(anonymous)} through the ingress, expected 401 unauthenticated`);
   }
 
   // 3. With the administrator's cookie: the assets service sees the administrator's token only.
-  const replaced = await deps.send({ target: ASSETS_TENANT_PATH, hostHeader: appHost, headers: [cookie(admin), forged()] });
+  const replaced = await deps.send({ target: ASSETS_TENANT_PATH, hostHeader: appHost, headers: [cookie(admin), await stolen()] });
   if (replaced.status !== 403 || errorCode(replaced.body) !== "permission_denied") {
     throw new Error(
-      `the administrator's cookie with a forged identity header answered ${summary(replaced)} through the ingress, ` +
+      `the administrator's cookie with a stolen identity header answered ${summary(replaced)} through the ingress, ` +
         "expected 403 permission_denied (the administrator's own token, without a tenant)",
     );
   }
@@ -479,7 +421,7 @@ export async function checkIngressEdges(deps: EdgeCheckDeps, appHost: string, li
   }
 
   return (
-    "a forged identity header that the assets service accepts directly: 401 unauthenticated through the ingress without a cookie, " +
+    "a stolen identity header (the member's genuine token) that the assets service accepts directly: 401 unauthenticated through the ingress without a cookie, " +
     "403 permission_denied with the administrator's cookie; " +
     `the member's cookie with Host ${hosts.map((host) => host.slice(appHost.length)).join(" and ")}: 200 with the tenant; ` +
     `on ${NORMALIZED_TENANT_PATHS.length} path spellings the mesh normalizes: 200 with the tenant`
@@ -504,7 +446,6 @@ export async function runApiCheck(
   objects: K8sObject[],
   ca: string | undefined,
   name: string,
-  signer: TokenSigner,
 ): Promise<string> {
   const env = { KUBECONFIG: ctx.kubeconfig };
   const settings = platformSettingsOf(objects);
@@ -519,6 +460,7 @@ export async function runApiCheck(
   const listener = ingressListenerOf(objects);
   if (listener.tls && ca === undefined) throw new Error(`Gateway ${listener.gateway} listens with TLS, but the smoke made no certificate for it`);
   const assets = servicePortOf(objects, "assets", "http");
+  const identity = servicePortOf(objects, "identity", "http");
 
   // SQL on stdin; the output (row counts only) and the SQL stay out of the log.
   const psql = async (sql: string) => {
@@ -533,15 +475,19 @@ export async function runApiCheck(
   // The assets service without the ingress: kubectl port-forward enters its pod, so the request
   // passes neither the gateway nor the mesh's policies, only the service's own token check.
   const direct = new PortForward(ctx, namespace, `service/${assets.service}`, assets.port, undefined);
+  // The identity service without the ingress, for a genuine token to steal: its ext_authz endpoint
+  // is under /internal, which the ingress never routes.
+  const authz = new PortForward(ctx, namespace, `service/${identity.service}`, identity.port, undefined);
   try {
     await gateway.open();
     const made = await checkTenantApi({ psql, send: (request) => gateway.send(request), log: (line) => ctx.log.line(line) }, appHost, name);
     await direct.open();
+    await authz.open();
     const edges = await checkIngressEdges(
       {
         send: (request) => gateway.send(request),
         sendToAssets: (request) => direct.send(request),
-        forge: (tenantId) => forgeIdentityToken(signer, crypto.randomUUID(), tenantId, Math.floor(Date.now() / 1000)),
+        steal: () => stealIdentityToken((request) => authz.send(request), appHost, made.member),
         log: (line) => ctx.log.line(line),
       },
       appHost,
@@ -552,6 +498,7 @@ export async function runApiCheck(
   } finally {
     gateway.close();
     direct.close();
+    authz.close();
   }
 }
 

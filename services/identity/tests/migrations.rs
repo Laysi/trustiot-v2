@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use identity::schema::SCHEMA;
 use serde_json::{Value, json};
 use sqlx::{Connection, PgConnection};
-use support::{Service, TestKey, jwks, request, scratch_dir};
+use support::{KeyFiles, Service, TestKey, request};
 use testkit::postgres::TEST_PASSWORD;
 use testkit::product::{DATABASE, ProductPostgres, product_postgres};
 
@@ -60,26 +60,16 @@ const DELETE_OWN: &str = "DELETE FROM trustiot_migrate_applied";
 const INSUFFICIENT_PRIVILEGE: &str = "42501";
 
 fn start(product: &ProductPostgres) -> Service {
-    let dir = scratch_dir("migrations");
-    let key = TestKey::new(40);
-    let key_file = dir.join("signing-key.pem");
-    std::fs::write(&key_file, key.pem()).expect("write the signing key");
+    let files = KeyFiles::new("migrations", &TestKey::new(40), KID);
     let routes = json!([
         {"host": APP, "path": "/api/identity", "match": "PathPrefix", "service": "identity"},
     ]);
-    let mut env: Vec<(String, String)> = vec![
-        (
-            "TRUSTIOT_INTERNAL_IDENTITY_KEYS".into(),
-            jwks(&[(&key, KID)]),
-        ),
-        (
-            "TRUSTIOT_IDENTITY_SIGNING_KEY_FILE".into(),
-            key_file.display().to_string(),
-        ),
+    let mut env = files.env();
+    env.extend([
         ("TRUSTIOT_INGRESS_ROUTES".into(), routes.to_string()),
         ("TRUSTIOT__DATABASE__USERNAME".into(), "identity_app".into()),
         ("TRUSTIOT__DATABASE__PASSWORD".into(), TEST_PASSWORD.into()),
-    ];
+    ]);
     env.extend(
         product
             .platform_env()

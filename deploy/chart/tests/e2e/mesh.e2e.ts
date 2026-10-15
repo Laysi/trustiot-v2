@@ -34,6 +34,7 @@ import {
   GATEWAY,
   IDENTITY_IMAGE,
   KEEP,
+  MIGRATE_IMAGE,
   NAMESPACE,
   OBJECT_PREFIX,
   PULL_POLICY,
@@ -43,6 +44,7 @@ import {
   helm,
   imageValues,
   installRelease,
+  migrateImageValues,
   kubectl,
   kubectlArgs,
   run,
@@ -323,7 +325,7 @@ function testPod(name: string, dataplaneMode: "ambient" | "none", impersonate?: 
 beforeAll(async () => {
   installRelease(
     ["values-saas.yaml", "tests/values/saas-instance.yaml", "tests/e2e/values-e2e.yaml", "tests/e2e/values-mesh-e2e.yaml"],
-    SERVICES.flatMap((service) => imageValues(service, IDENTITY_IMAGE)),
+    [...SERVICES.flatMap((service) => imageValues(service, IDENTITY_IMAGE)), ...migrateImageValues(MIGRATE_IMAGE)],
   );
   releaseCreated = true;
   const parsed: unknown = Bun.YAML.parse(helm("get", "manifest", RELEASE));

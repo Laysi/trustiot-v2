@@ -207,13 +207,33 @@
       }
     },
     "internalIdentity": {
-      "description": "Internal identity tokens (decision 27): the public keys every service verifies them with, and the identity service's private key.",
+      "description": "Internal identity tokens (decision 27): the identity service's Ed25519 keys are generated in the cluster by its init container (docs/architecture/secrets.md); these settings only ask for a rotation or a revocation, and move over a key a person made before Laysi/trustiot-v2#404.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["publicKeys", "signingKeySecret"],
+      "required": ["keyGeneration", "revokeBeforeGeneration", "keyPropagationSeconds", "publicKeys", "signingKeySecret"],
       "properties": {
+        "keyGeneration": {
+          "description": "Increase it to rotate the signing key; at least 1 and at least revokeBeforeGeneration. Only goes up.",
+          "oneOf": [
+            { "type": "string", "pattern": "^[0-9]{1,9}$" },
+            { "type": "integer", "minimum": 1, "maximum": 999999999 }
+          ]
+        },
+        "revokeBeforeGeneration": {
+          "description": "Keys of a lower generation are removed at once (a leaked key); 0 revokes nothing.",
+          "oneOf": [
+            { "type": "string", "pattern": "^[0-9]{1,9}$" },
+            { "type": "integer", "minimum": 0, "maximum": 999999999 }
+          ]
+        },
+        "keyPropagationSeconds": {
+          "description": "How long a new public key is published before its key signs: more than every pod needs to see a ConfigMap change.",
+          "type": "integer",
+          "minimum": 120,
+          "maximum": 86400
+        },
         "publicKeys": {
-          "description": "Ed25519 public keys as {kid, x}; rendered as the JWK Set TRUSTIOT_INTERNAL_IDENTITY_KEYS. Only these two members, so a private key (d) cannot be listed.",
+          "description": "Before Laysi/trustiot-v2#404 only, with signingKeySecret: the Ed25519 public keys as {kid, x}, where the init container finds the key id of the key it imports. Only these two members, so a private key (d) cannot be listed.",
           "type": "array",
           "maxItems": 8,
           "items": {
@@ -234,7 +254,10 @@
             }
           }
         },
-        "signingKeySecret": { "$ref": "#/definitions/secretKeyRef" }
+        "signingKeySecret": {
+          "description": "Before Laysi/trustiot-v2#404 only: the Secret a person made with the identity service's PKCS#8 private key, mounted into its init container only, which imports the key once.",
+          "$ref": "#/definitions/secretKeyRef"
+        }
       }
     },
     "migrate": {

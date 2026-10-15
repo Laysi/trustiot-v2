@@ -74,19 +74,25 @@ describe("env", () => {
 
 describe("env for the identity service", () => {
   const caFile = "/state/trustiot-v2/dev/t/tls/ca.crt";
-  const keys = '{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"dev-0123456789ab","x":"AAAA"}]}';
-  const identity = { signingKeyFile: "/state/trustiot-v2/dev/t/identity/signing-key.pem", keys, routes: ingressRoutes() };
+  const identity = {
+    signingKeysFile: "/state/trustiot-v2/dev/t/identity/signing-keys.json",
+    publicKeysFile: "/state/trustiot-v2/dev/t/identity/jwks.json",
+    routes: ingressRoutes(),
+  };
   const withIdentity = (): State => {
     const current = state();
     current.credentials.services.identity = { user: "identity_app", password: "generated-by-the-job" };
     return current;
   };
 
-  test("prints the public keys, the key file's path and the routes, and the identity_app login", () => {
+  test("prints the paths of the public keys file and the signing keys file, the routes, and the identity_app login", () => {
     const text = envLines(withIdentity(), caFile, identity);
     const env = parse(text);
-    expect(env.TRUSTIOT_INTERNAL_IDENTITY_KEYS).toBe(`'${keys}'`);
-    expect(env.TRUSTIOT_IDENTITY_SIGNING_KEY_FILE).toBe(identity.signingKeyFile);
+    // Paths, never keys: the services reread the files, as they reread a mounted ConfigMap.
+    expect(env.TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE).toBe(identity.publicKeysFile);
+    expect(env.TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE).toBe(identity.signingKeysFile);
+    expect(env.TRUSTIOT_INTERNAL_IDENTITY_KEYS).toBeUndefined();
+    expect(env.TRUSTIOT_IDENTITY_SIGNING_KEY_FILE).toBeUndefined();
     expect(env.TRUSTIOT_INGRESS_ROUTES).toBe(`'${identity.routes}'`);
     expect(env.TRUSTIOT_DEV_IDENTITY_DATABASE_USERNAME).toBe("identity_app");
     expect(env.TRUSTIOT_DEV_IDENTITY_DATABASE_PASSWORD).toBe("generated-by-the-job");
@@ -104,17 +110,17 @@ describe("env for the identity service", () => {
 
   test("a shell that evals the output gets the JSON values back unchanged", () => {
     const script =
-      'set -a; eval "$1"; set +a; printf "%s\\n%s\\n%s" "$TRUSTIOT_INTERNAL_IDENTITY_KEYS" "$TRUSTIOT_INGRESS_ROUTES" "$TRUSTIOT_DEV_IDENTITY_DATABASE_PASSWORD"';
+      'set -a; eval "$1"; set +a; printf "%s\\n%s\\n%s" "$TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE" "$TRUSTIOT_INGRESS_ROUTES" "$TRUSTIOT_DEV_IDENTITY_DATABASE_PASSWORD"';
     const result = spawnSync("sh", ["-c", script, "sh", envLines(withIdentity(), caFile, identity)], { encoding: "utf8" });
     expect(result.status).toBe(0);
     const lines = result.stdout.split("\n");
-    expect(lines).toEqual([keys, identity.routes, "generated-by-the-job"]);
+    expect(lines).toEqual([identity.publicKeysFile, identity.routes, "generated-by-the-job"]);
     expect(JSON.parse(lines[1]!)[0].host).toBe("localhost");
   });
 
   test("prints none of it before the instance has a key, and the rest is unchanged", () => {
     const text = envLines(state(), caFile);
-    for (const name of ["TRUSTIOT_INTERNAL_IDENTITY_KEYS", "TRUSTIOT_IDENTITY_SIGNING_KEY_FILE", "TRUSTIOT_INGRESS_ROUTES", "IDENTITY"]) {
+    for (const name of ["TRUSTIOT_INTERNAL_IDENTITY_KEYS", "TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE", "TRUSTIOT_INGRESS_ROUTES", "IDENTITY"]) {
       expect(text, name).not.toContain(name);
     }
     expect(parse(text).TRUSTIOT_POSTGRES_HOST).toBe("127.0.0.1");

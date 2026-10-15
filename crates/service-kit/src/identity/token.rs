@@ -17,7 +17,10 @@ use contract::{InternalClaims, InternalToken, ServiceName};
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::Deserialize;
 
-use super::{ALGORITHM, IdentityError, IdentityKeys, LEEWAY_SECS, MAX_LIFETIME_SECS, TOKEN_TYPE};
+use super::{
+    ALGORITHM, IdentityError, IdentityKeys, LEEWAY_SECS, MAX_KEY_ID_LEN, MAX_LIFETIME_SECS,
+    TOKEN_TYPE,
+};
 
 /// The protected header. Any other parameter (`crit`, `jku`, `jwk`, `x5u`, `b64`, ...) and any
 /// duplicate parameter fail deserialization, so the token cannot ask for anything this verifier
@@ -126,6 +129,18 @@ fn check_claims(
         return Err(IdentityError::NotYetValid);
     }
     Ok(())
+}
+
+/// The key id a token's header names, for the log line of an `unknown_key` rejection: only when
+/// the header is the one this verifier accepts and the key id could be one (1 to
+/// [`MAX_KEY_ID_LEN`] visible ASCII characters), so the log never carries other text from the
+/// request.
+pub(super) fn header_kid(token: &str) -> Option<String> {
+    let header_segment = token.split('.').next()?;
+    let header: Header = serde_json::from_slice(&decode(header_segment).ok()?).ok()?;
+    let usable = (1..=MAX_KEY_ID_LEN).contains(&header.kid.len())
+        && header.kid.bytes().all(|byte| byte.is_ascii_graphic());
+    usable.then_some(header.kid)
 }
 
 /// Strict base64url without padding: padding, the standard alphabet, and non-zero trailing bits

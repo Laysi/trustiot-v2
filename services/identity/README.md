@@ -118,26 +118,16 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 
 ## 簽章金鑰
 
-- 私鑰是 PKCS#8 PEM 檔（`openssl genpkey -algorithm ed25519 -out signing-key.pem`），放在 Kubernetes Secret，chart 的 `internalIdentity.signingKeySecret` 以唯讀 volume 只掛進身分服務，路徑以 `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` 傳入。私鑰不放進 values、映像或 repo。
-- 公鑰由 chart 的 `internalIdentity.publicKeys` 組成 JWK Set，放進平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`，每個服務以它驗證（見 [chart README](../../deploy/chart/README.md) 的「內部身分」）。
-- `kid` 不另外設定：啟動時用私鑰對 `TRUSTIOT_INTERNAL_IDENTITY_KEYS` 的每個 `kid` 簽一個測試 token，再以 service-kit 的驗證器驗證，驗得過的那個就是自己的 `kid`。沒有任何一個驗得過（公鑰沒部署），或有兩個以上（同一把公鑰列了兩次），服務就拒絕啟動，所以身分服務不會簽出服務不接受的 token。啟動時以 INFO 記下使用的 `kid`。
-- 私鑰只在啟動時讀一次，檔案超過 16 KiB、不是 Ed25519 PKCS#8 PEM 都拒絕啟動；錯誤訊息與 `Debug` 輸出不含檔案內容，讀進來的文字用後清零。
+金鑰在叢集內產生、公開與輪替，沒有人建立、看到或複製它（Laysi/trustiot-v2#404；設計、比較過的做法與每個失敗情況在 [docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「內部身分簽章金鑰」，操作在[密鑰 runbook](../../docs/runbooks/secrets.md)）。
 
-產生公鑰的 `x`（`publicKeys[].x`，32 bytes 公鑰的 base64url）：
-
-```sh
-openssl pkey -in signing-key.pem -pubout -outform DER | tail -c 32 | basenc --base64url | tr -d '='
-```
+- **誰產生**：身分服務 pod 的 init container `signing-keys`（migration 映像的 `migrate identity-signing-keys`，`tools/migrate/src/signing_keys.rs`，格式與排程規則在 `crates/identity-keys`）。它在每次身分服務的 pod 啟動時執行，以身分服務 ServiceAccount 的 projected token 讀寫 Secret `<release>-identity-signing-keys`（私鑰）與 ConfigMap `<release>-internal-identity-keys`（公鑰的 JWK Set，每個服務都掛）。這個服務自己的容器沒有 token，chart 強制 `automountServiceAccountToken: false`。
+- **怎麼讀**：chart 把 Secret 以唯讀 volume 掛進這個服務（`/etc/trustiot/identity-signing-keys/signing-keys.json`，0440），路徑以 `TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE` 傳入；公鑰檔與其他服務相同，路徑是 `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`。兩個檔案都在啟動時讀，之後每 5 秒重讀（`src/issuer.rs` 的 `Issuer::watch`），所以輪替不必重啟這個服務；kubelet 更新掛載的檔案之前，它照舊用手上的金鑰。檔案不見或不能用時保留上一組可用的金鑰，記 WARN（只寫原因）；讀進來的文字用後清零，錯誤訊息與 `Debug` 輸出只有 kid。
+- **用哪一把簽**：每個 token 簽章當下，從簽章金鑰檔裡選 `signs_from` 已到、代不小於 `TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION`、而且 kid 與公鑰完全相同地列在這個服務自己看到的公鑰檔裡的金鑰中，`signs_from` 最晚的那一把（`crates/identity-keys` 的 `SigningKeys::signing_key`）。每個副本以同樣的規則讀同樣的資料，所以同時換金鑰；換的時候記一行 INFO（`signing internal identity tokens`，寫出 kid）。一把都沒有時不就緒（readiness 檢查 `signing_key`），ext_authz 檢查回 503，不會簽出服務不接受的 token。
+- **兩邊不一致時**：簽章金鑰與公鑰檔的 kid 或公鑰不同，持續超過 `TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS`（chart 的 `internalIdentity.keyPropagationSeconds`，預設 600）時記 ERROR，寫出差在哪幾個 kid 與處理方式（`kubectl rollout restart deployment/<release>-identity` 讓 init container 依 Secret 重寫 ConfigMap）；恢復一致時記 INFO。
 
 ### 金鑰輪替
 
-步驟與理由在 [`crates/service-kit` 的「公鑰與輪替」](../../crates/service-kit/README.md)；對身分服務來說是：
-
-1. **加新公鑰**：產生新的金鑰對，把新公鑰以新的 `kid`（例如 `2027-04-a`）加進 `internalIdentity.publicKeys`（新舊並存）並部署，等每個服務都滾動完成。
-2. **換簽章私鑰**：把 Secret 的內容換成新私鑰，然後 `kubectl rollout restart deployment/<release>-identity`（Secret 改變不會自動重啟 pod）。新的 pod 自己找出新 `kid`；步驟 1 沒做完就換，新 pod 拒絕啟動，舊 pod 繼續服務。
-3. **移除舊公鑰**：身分服務滾動完成後至少等 305 秒（驗證端接受的最長效期 300 秒加 5 秒時鐘誤差），再從 `publicKeys` 移除舊公鑰並部署，最後刪除舊私鑰。
-
-私鑰外洩時三步同時做，不等舊 token 過期。SaaS（SOPS、每步一個 PR、以 `trustiot.io/secret-rotated` annotation 重啟）與地端的實際操作見 [密鑰 runbook](../../docs/runbooks/secrets.md) 的「內部身分簽章金鑰」。
+調大 chart 的 `internalIdentity.keyGeneration` 再升級：身分服務滾動重啟，init container 加一把新金鑰並先公開公鑰，`keyPropagationSeconds` 之後這個服務的每個副本同時改用新金鑰簽章，舊金鑰在它簽的 token 全部過期之後的下一次啟動時移除。私鑰外洩時調 `internalIdentity.revokeBeforeGeneration`：代比它小的金鑰立即移除，新金鑰立即開始簽章，這個服務也從環境變數拿到它，不再用被撤銷的金鑰簽章。其他服務不重啟，它們每 5 秒重讀公鑰檔（[`crates/service-kit` 的「公鑰與輪替」](../../crates/service-kit/README.md)）。步驟與確認方式在[密鑰 runbook](../../docs/runbooks/secrets.md) 的「內部身分簽章金鑰」。
 
 ## 設定
 
@@ -145,21 +135,23 @@ openssl pkey -in signing-key.pem -pubout -outform DER | tail -c 32 | basenc --ba
 
 | 變數 | 說明 |
 | --- | --- |
-| `TRUSTIOT_INTERNAL_IDENTITY_KEYS` | 平台設定：每個服務共用的公鑰 JWK Set；簽章私鑰的公鑰必須在裡面 |
-| `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` | 只給身分服務：掛載的私鑰路徑 |
+| `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` | 平台設定：每個服務共用的公鑰檔（JWK Set）；只有列在這裡的金鑰會被拿來簽章 |
+| `TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE` | 只給身分服務：掛載的簽章金鑰檔路徑 |
+| `TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION` | 只給身分服務：代比它小的金鑰不簽章，預設 0（chart 的 `internalIdentity.revokeBeforeGeneration`） |
+| `TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS` | 只給身分服務：簽章金鑰與公鑰檔不一致多久之後記 ERROR，120–86400，預設 600（chart 的 `internalIdentity.keyPropagationSeconds`） |
 | `TRUSTIOT_INGRESS_ROUTES` | 只給身分服務：cookie 路由，決定受眾 |
 | `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE`、`_CA_FILE` | 平台設定：Postgres 位置；只接受 `verify-full`，`_CA_FILE` 必填，是唯一信任的根憑證 |
 | `TRUSTIOT__DATABASE__USERNAME`、`TRUSTIOT__DATABASE__PASSWORD` | 服務角色 `identity_app` 的帳密：chart 以 `identity_app` 設定帳號，密碼來自 Secret `<release>-identity-password` 的 `identity_app` key；migration Job 產生這個密碼並以它設定角色 |
 | `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | 每個副本的連線數上限，3–100（至少放得下常駐的 3 條），預設 10 |
 
-啟動後由保溫工作在背景開連線；readiness（健康埠與 API 埠的 `/readyz`）在常駐的 3 條連線開好之後才通過（見[連線池](#連線池)），資料庫連不上時 ext_authz 回 503、readiness 回 503。健康埠（預設 8081）只有 `/healthz` 與 `/readyz`，ext_authz 端點只在 API 埠（8080）。設定、金鑰或路由不能用時以 exit code 1 結束，不開始服務。
+啟動後由保溫工作在背景開連線；readiness（健康埠與 API 埠的 `/readyz`）在常駐的 3 條連線開好、而且有一把可以簽章的金鑰之後才通過（見[連線池](#連線池)與[簽章金鑰](#簽章金鑰)），資料庫連不上或沒有可以簽章的金鑰時 ext_authz 回 503、readiness 回 503。健康埠（預設 8081）只有 `/healthz` 與 `/readyz`，ext_authz 端點只在 API 埠（8080）。設定或路由不能用時以 exit code 1 結束，不開始服務；金鑰檔還沒有內容或不能用時照常啟動，只是不就緒。
 
 ## 映像
 
 `deploy/images/identity/image.toml` 宣告這個服務的映像（2026-10-11，Laysi/trustiot-v2#308）：release.yml 把 `identity` 交叉編譯成 `aarch64-unknown-linux-musl` 的靜態執行檔，放進共用的 `deploy/images/rust-binary.Containerfile`（distroless static、UID 65532、`ENTRYPOINT` 是 `/usr/local/bin/identity`），發佈為 `ghcr.io/laysi/trustiot-v2/identity:<版本>`，只有 linux/arm64（[deploy/images/README.md](../../deploy/images/README.md)）。
 
-- 映像裡沒有 shell、私鑰與設定：私鑰由 chart 掛載，其餘都是環境變數（見上方[設定](#設定)）。
-- 啟動不需要資料庫：設定、金鑰與路由可用時就開始服務，健康埠的 `/healthz` 回 200，`/readyz` 等連線池開好才回 200。2026-10-11 在 arm64（lab Mac M1 的 podman）以發佈流程建出的映像、當場產生的金鑰與連不到的資料庫驗證過：`/healthz` 200、`/readyz` 503、沒有 cookie 的 ext_authz 檢查 401（[測試報告](../../docs/test-reports/2026-10-11-308-identity-image.md)）。
+- 映像裡沒有 shell、私鑰與設定：金鑰由 chart 掛載（身分服務 pod 的 init container 以 migration 映像產生），其餘都是環境變數（見上方[設定](#設定)）。
+- 啟動不需要資料庫：設定與路由可用時就開始服務，健康埠的 `/healthz` 回 200，`/readyz` 等連線池開好、有可以簽章的金鑰才回 200（2026-10-11 的驗證時，金鑰還是啟動時讀一次的 PEM 檔）。2026-10-11 在 arm64（lab Mac M1 的 podman）以發佈流程建出的映像、當場產生的金鑰與連不到的資料庫驗證過：`/healthz` 200、`/readyz` 503、沒有 cookie 的 ext_authz 檢查 401（[測試報告](../../docs/test-reports/2026-10-11-308-identity-image.md)）。
 - nightly 的 k3d 以 `scripts/nightly/service-image.ts` 的 `loadServiceImage(platform, "identity")` 建出同樣的映像並匯入節點（輸入沒變時從快取載入）；smoke 以它部署身分服務，當作入口的 ext_authz，並經入口建立租戶（Laysi/trustiot-v2#65，`scripts/nightly/api.ts`）。
 
 本機試建：`bun scripts/release/plan.ts --tag v0.0.0-rc.1 --dry-run --output plan.json`，再 `bun scripts/release/build.ts --plan plan.json --out <目錄>`（需要 podman、skopeo 與 `proto install` 裝好的工具，見 [scripts/README.md](../../scripts/README.md)）。
@@ -168,9 +160,9 @@ openssl pkey -in signing-key.pem -pubout -outform DER | tail -c 32 | basenc --ba
 
 本機開發環境（`bun scripts/dev.ts`，[scripts/README.md](../../scripts/README.md) 的「身分服務」）備好了身分服務要的東西（Laysi/trustiot-v2#336）：
 
-- `up`：以 migration Job（`tools/migrate`，不改程式）建立 `identity_owner`、`identity_app` 與 `identity` schema 並套用 `migrations/postgres/`（Job 套用整個產品，`identity_platform` 與資產服務的角色也會建立，沒綁密碼的維持 `NOLOGIN`）；產生 Ed25519 簽章私鑰（`<狀態目錄>/identity/signing-key.pem`，0600，沿用已有的）。
+- `up`：以 migration Job（`tools/migrate`，不改程式）建立 `identity_owner`、`identity_app` 與 `identity` schema 並套用 `migrations/postgres/`（Job 套用整個產品，`identity_platform` 與資產服務的角色也會建立，沒綁密碼的維持 `NOLOGIN`）；產生 Ed25519 簽章私鑰（`<狀態目錄>/identity/signing-key.pem`，0600，沿用已有的），再從它寫出叢集裡 init container 寫的同樣兩個檔案：簽章金鑰檔 `signing-keys.json` 與公鑰檔 `jwks.json`（都是 0600，每次 `up` 重寫）。
 - `seed`：建立開發使用者、`admin` 成員資格與一筆 session（寫法照下一節），印出 cookie。
-- `env`：印出 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`（公鑰）、`TRUSTIOT_IDENTITY_SIGNING_KEY_FILE`（路徑）、`TRUSTIOT_INGRESS_ROUTES`（`localhost` 的每個路徑給 `assets`）與 `TRUSTIOT_DEV_IDENTITY_DATABASE_{USERNAME,PASSWORD}`。
+- `env`：印出 `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`、`TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE`（兩個路徑，不是金鑰）、`TRUSTIOT_INGRESS_ROUTES`（`localhost` 的每個路徑給 `assets`）與 `TRUSTIOT_DEV_IDENTITY_DATABASE_{USERNAME,PASSWORD}`。
 
 ```sh
 bun scripts/dev.ts up && bun scripts/dev.ts seed

@@ -7,7 +7,7 @@
 //! | Active session, routed request | 200 with exactly one `x-internal-identity`: a token this service just signed for the route's service | Replaces any client copy of the header with this one and forwards the request |
 //! | No, repeated, malformed, unknown, expired or revoked session cookie | 401 `unauthenticated` | Returns this response to the client |
 //! | Active session, but no cookie route matches the host and path | 403 `permission_denied` | Returns this response to the client |
-//! | The session store failed, was busy, or did not answer within [`CHECK_DEADLINE`] | 503 `unavailable` | Treats a 5xx as an error and answers its own 503 (`statusOnError`) |
+//! | The session store failed, was busy, or did not answer within [`CHECK_DEADLINE`]; or no signing key may sign now ([`crate::issuer::IssueError::NoSigningKey`]) | 503 `unavailable` | Treats a 5xx as an error and answers its own 503 (`statusOnError`) |
 //!
 //! A 200 is only ever built from a freshly signed token ([`Decision::Allow`] cannot exist
 //! without one), because the gateway forwards the client's own `x-internal-identity` when an

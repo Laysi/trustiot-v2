@@ -1,12 +1,14 @@
 //! Internal identity tokens for tests: a stand-in for the identity service (decision 27).
 //!
 //! A [`TestIssuer`] has an Ed25519 key made for the test process, so nothing outside the test
-//! ever trusts it, and no key material is stored in the repository. Give the service under test
-//! [`TestIssuer::jwks`] as `TRUSTIOT_INTERNAL_IDENTITY_KEYS`, then sign a token per request with
-//! [`TestIssuer::token`]. The tokens follow the format service-kit verifies (see its README,
+//! ever trusts it, and no key material is stored in the repository. Write [`TestIssuer::jwks`] to
+//! a file ([`TestIssuer::write_jwks`]) and give the service under test its path as
+//! `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`, as the chart's ConfigMap volume does, then sign a
+//! token per request with [`TestIssuer::token`]. The tokens follow the format service-kit verifies (see its README,
 //! "token 格式"); signing real tokens is the identity service's job (Laysi/trustiot-v2#61).
 
 use std::fmt;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
@@ -38,11 +40,22 @@ impl TestIssuer {
         }
     }
 
-    /// The public key as a JWK Set, the value of `TRUSTIOT_INTERNAL_IDENTITY_KEYS`.
+    /// The public key as a JWK Set, the content of the file `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`
+    /// names.
     #[must_use]
     pub fn jwks(&self) -> String {
         let x = URL_SAFE_NO_PAD.encode(self.key.verifying_key().as_bytes());
         json!({"keys": [{"kty": "OKP", "crv": "Ed25519", "kid": self.kid, "x": x}]}).to_string()
+    }
+
+    /// Writes [`TestIssuer::jwks`] to `path`, the file to name in
+    /// `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`.
+    ///
+    /// # Errors
+    ///
+    /// When the file cannot be written.
+    pub fn write_jwks(&self, path: &Path) -> std::io::Result<()> {
+        std::fs::write(path, self.jwks())
     }
 
     /// The public key, parsed as a service parses its configuration.

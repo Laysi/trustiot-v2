@@ -18,7 +18,7 @@ mod support;
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -30,7 +30,10 @@ use serde_json::json;
 use service_kit::identity::{IdentityKeys, IdentityVerifier};
 use sqlx::{Connection, PgConnection};
 use support::postgres::{SERVER_HOST, TEST_PASSWORD, TlsPostgres, tls_postgres};
-use support::{Service, TestKey, cookie, jwks, new_secret, request, run_to_exit, scratch_dir};
+use support::{
+    KeyFiles, Service, TestKey, cookie, jwks, kid_of, new_secret, request, scratch_dir,
+    signing_keys,
+};
 
 const ROLES: &str = "
 CREATE ROLE identity_owner LOGIN PASSWORD 'service-kit-test';
@@ -64,7 +67,7 @@ struct Fixture {
     postgres: Arc<TlsPostgres>,
     database: &'static str,
     key: TestKey,
-    key_file: PathBuf,
+    files: KeyFiles,
     ca_file: PathBuf,
 }
 
@@ -82,15 +85,14 @@ impl Fixture {
             .expect("create the database");
         let dir = scratch_dir(database);
         let key = TestKey::new(71);
-        let key_file = dir.join("signing-key.pem");
-        std::fs::write(&key_file, key.pem()).expect("write the signing key");
+        let files = KeyFiles::new(database, &key, KID);
         let ca_file = dir.join("ca.crt");
         std::fs::write(&ca_file, &postgres.ca_pem).expect("write the CA");
         let fixture = Self {
             postgres,
             database,
             key,
-            key_file,
+            files,
             ca_file,
         };
         let mut owner = fixture.connect("identity_owner").await;
@@ -119,12 +121,8 @@ impl Fixture {
             {"host": APP, "path": "/", "match": "PathPrefix", "service": "assets"},
             {"host": APP, "path": "/api/certs", "match": "PathPrefix", "service": "certs"},
         ]);
-        let mut env: Env = vec![
-            ("TRUSTIOT_INTERNAL_IDENTITY_KEYS".into(), self.keys()),
-            (
-                "TRUSTIOT_IDENTITY_SIGNING_KEY_FILE".into(),
-                self.key_file.display().to_string(),
-            ),
+        let mut env: Env = self.files.env();
+        env.extend([
             ("TRUSTIOT_INGRESS_ROUTES".into(), routes.to_string()),
             ("TRUSTIOT_POSTGRES_HOST".into(), SERVER_HOST.into()),
             (
@@ -139,7 +137,7 @@ impl Fixture {
             ),
             ("TRUSTIOT__DATABASE__USERNAME".into(), "identity_app".into()),
             ("TRUSTIOT__DATABASE__PASSWORD".into(), TEST_PASSWORD.into()),
-        ];
+        ]);
         for (name, value) in extra {
             env.retain(|(existing, _)| existing != name);
             env.push(((*name).to_owned(), (*value).to_owned()));
@@ -1257,7 +1255,9 @@ async fn nothing_secret_is_logged_at_any_level() {
         all_logs.push_str(&format!("=== filter {filter}: {} bytes ===\n", logs.len()));
 
         let mut never = fixture.key.secret_spellings();
-        never.push(fixture.key.pem());
+        never.push(
+            std::fs::read_to_string(&fixture.files.signing_keys).expect("the signing keys file"),
+        );
         never.push(secret.to_cookie_value());
         never.push(revoked.to_cookie_value());
         never.extend(hash_spellings.iter().cloned());
@@ -1385,27 +1385,43 @@ async fn the_health_port_serves_only_the_health_routes() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Key loading and rotation
+// Key files
 // ---------------------------------------------------------------------------------------------
 
-fn refuses_to_start(fixture: &Fixture, name: &str, key_file: &Path, keys: Option<&str>) {
-    let keys = keys.map_or_else(|| fixture.keys(), str::to_owned);
-    let key_path = key_file.display().to_string();
-    let env = fixture.env(&[
-        ("TRUSTIOT_IDENTITY_SIGNING_KEY_FILE", &key_path),
-        ("TRUSTIOT_INTERNAL_IDENTITY_KEYS", &keys),
-    ]);
+/// Starts the service with these key files and settings and checks that it serves nothing
+/// signed: not ready, every check of an active session 503 without an identity, and no form of
+/// the private key in its output.
+fn stays_unready(fixture: &Fixture, name: &str, extra: &[(&str, &str)], session: &str) {
+    let env = fixture.env(extra);
     let env: Vec<(&str, &str)> = env.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
-    let (status, output) = run_to_exit(&env);
-    assert_eq!(status.code(), Some(1), "{name}: {output}");
-    assert!(!output.contains("listening"), "{name}: {output}");
+    let service = Service::start(&env);
+    service.wait_readiness(503, Duration::from_secs(30));
+    // Give the database check time to pass, so only the keys keep it unready.
+    assert!(
+        service
+            .stdout
+            .wait_for_message("the database connections are open", Duration::from_secs(60))
+            .is_some(),
+        "{name}: the database connections never opened\n{}",
+        service.stdout.text()
+    );
+    service.wait_readiness(503, Duration::from_secs(5));
+    for _ in 0..3 {
+        let response = check(&service, "/", Some(session));
+        assert_eq!(response.status, 503, "{name}: {}", response.raw());
+        assert!(
+            response.header_values("x-internal-identity").is_empty(),
+            "{name}"
+        );
+    }
+    let output = service.stop();
     for secret in fixture.key.secret_spellings() {
         assert!(!output.contains(&secret), "{name} leaks the key: {output}");
     }
 }
 
 #[tokio::test]
-async fn the_service_refuses_to_start_without_a_usable_matching_signing_key() {
+async fn the_service_signs_nothing_without_a_usable_published_signing_key() {
     let Some(fixture) = Fixture::new(
         "CREATE DATABASE verify_keys OWNER identity_owner",
         "verify_keys",
@@ -1414,154 +1430,151 @@ async fn the_service_refuses_to_start_without_a_usable_matching_signing_key() {
     else {
         return;
     };
+    fixture.add_user(USER, false).await;
+    fixture.add_membership(TENANT_A, USER, "viewer").await;
+    let secret = fixture
+        .add_session(USER, Some(TENANT_A), SESSION_SECS, false)
+        .await;
+    let session = cookie(&secret);
     let dir = scratch_dir("verify-keyfiles");
     let write = |name: &str, content: &[u8]| {
         let path = dir.join(name);
         std::fs::write(&path, content).expect("write");
-        path
+        path.display().to_string()
     };
-    let good_pem = fixture.key.pem();
+    let good = signing_keys(&[(&fixture.key, KID, 1, 0)]);
+    let published = fixture.keys();
     let other = TestKey::new(72);
+    let signing = support::SIGNING_KEYS_FILE;
+    let public = support::PUBLIC_KEYS_FILE;
 
-    refuses_to_start(&fixture, "missing file", &dir.join("missing.pem"), None);
-    refuses_to_start(&fixture, "a directory", &dir, None);
-    refuses_to_start(&fixture, "empty file", &write("empty.pem", b""), None);
-    refuses_to_start(
-        &fixture,
-        "whitespace only",
-        &write("ws.pem", b" \n\n"),
-        None,
-    );
-    refuses_to_start(
-        &fixture,
-        "only the BEGIN line",
-        &write(
-            "begin.pem",
-            format!("-----{} PRIVATE KEY-----\n", "BEGIN").as_bytes(),
+    // The signing keys file: missing, not a file, empty, not a key set, the PEM of the old
+    // format, cut short, or a key whose public part is not its own.
+    let cases: Vec<(&str, String)> = vec![
+        (
+            "missing signing keys",
+            dir.join("missing.json").display().to_string(),
         ),
-        None,
-    );
-    refuses_to_start(
-        &fixture,
-        "truncated key",
-        &write("truncated.pem", &good_pem.as_bytes()[..good_pem.len() / 2]),
-        None,
-    );
-    refuses_to_start(
-        &fixture,
-        "key with a flipped body byte",
-        &write(
-            "flipped.pem",
-            good_pem
-                .replacen('M', "N", 1)
-                .replacen("MC4", "MC5", 1)
+        ("a directory", dir.display().to_string()),
+        ("empty file", write("empty.json", b"")),
+        ("whitespace only", write("ws.json", b" \n\n")),
+        ("no keys", write("none.json", br#"{"keys":[]}"#)),
+        (
+            "a PEM private key",
+            write("key.pem", fixture.key.pem().as_bytes()),
+        ),
+        (
+            "truncated",
+            write("truncated.json", &good.as_bytes()[..good.len() / 2]),
+        ),
+        (
+            "another key's public part",
+            write(
+                "mismatch.json",
+                good.replace(
+                    fixture.key.jwk(KID)["x"].as_str().expect("x"),
+                    other.jwk(KID)["x"].as_str().expect("x"),
+                )
                 .as_bytes(),
+            ),
         ),
-        None,
-    );
-    // A public key in the key file: the service must not "run" with only a public key.
-    let public = {
-        let x = fixture.key.jwk(KID)["x"].as_str().expect("x").to_owned();
-        let raw = URL_SAFE_NO_PAD.decode(x).expect("x");
-        // SubjectPublicKeyInfo for Ed25519: 12-byte prefix then the 32-byte key.
-        let mut der = vec![
-            0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
-        ];
-        der.extend_from_slice(&raw);
-        let body = base64::engine::general_purpose::STANDARD.encode(der);
-        format!("-----BEGIN PUBLIC KEY-----\n{body}\n-----END PUBLIC KEY-----\n")
-    };
-    refuses_to_start(
-        &fixture,
-        "public key only",
-        &write("public.pem", public.as_bytes()),
-        None,
-    );
-    // A private key of another algorithm (ECDSA P-256 PKCS#8).
-    let ec = rcgen::KeyPair::generate().expect("ec key").serialize_pem();
-    refuses_to_start(
-        &fixture,
-        "ECDSA PKCS#8",
-        &write("ec.pem", ec.as_bytes()),
-        None,
-    );
-    // A different Ed25519 key whose public key was never deployed.
-    refuses_to_start(
-        &fixture,
-        "undeployed key",
-        &write("other.pem", other.pem().as_bytes()),
-        None,
-    );
-    // The right private key but the deployed set holds only another key.
-    let only_other = jwks(&[(&other, KID)]);
-    refuses_to_start(
-        &fixture,
-        "deployed set lacks the key",
-        &fixture.key_file,
-        Some(&only_other),
-    );
-    refuses_to_start(
-        &fixture,
-        "empty key set",
-        &fixture.key_file,
-        Some(r#"{"keys":[]}"#),
-    );
-    refuses_to_start(
-        &fixture,
-        "key set is not JSON",
-        &fixture.key_file,
-        Some("not json"),
-    );
-    refuses_to_start(
-        &fixture,
-        "key set is empty text",
-        &fixture.key_file,
-        Some(""),
-    );
-    // A key file readable by nobody (as a real Secret mount could be misconfigured).
+    ];
+    for (name, path) in &cases {
+        stays_unready(&fixture, name, &[(signing, path)], &session);
+    }
+    // A key file readable by nobody (as a misconfigured Secret mount could be).
     {
         use std::os::unix::fs::PermissionsExt;
-        let locked = write("locked.pem", good_pem.as_bytes());
+        let locked = write("locked.json", good.as_bytes());
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
             .expect("chmod 000");
         if std::fs::File::open(&locked).is_err() {
-            refuses_to_start(&fixture, "unreadable file (mode 000)", &locked, None);
+            stays_unready(
+                &fixture,
+                "unreadable file (mode 000)",
+                &[(signing, &locked)],
+                &session,
+            );
         }
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o600)).expect("restore");
     }
-    // Two PEM blocks (the second is not looked at) or trailing text: record what happens; the
-    // service must either refuse or sign with the first key, and in both cases tokens still
-    // verify, which the next check proves by starting it.
-    let _ = write("two.pem", format!("{good_pem}{}", other.pem()).as_bytes());
+    // A usable key the service may not sign with: not published, revoked, or not due yet.
+    let not_published = write("public-other.json", jwks(&[(&other, KID)]).as_bytes());
+    stays_unready(
+        &fixture,
+        "the public keys lack the signing key",
+        &[(public, &not_published)],
+        &session,
+    );
+    stays_unready(
+        &fixture,
+        "every key revoked",
+        &[("TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION", "2")],
+        &session,
+    );
+    let later = write(
+        "later.json",
+        signing_keys(&[(&fixture.key, KID, 1, i64::MAX / 2)]).as_bytes(),
+    );
+    stays_unready(
+        &fixture,
+        "the only key signs later",
+        &[(signing, &later)],
+        &session,
+    );
+    // The public keys file: missing, empty set, not JSON, or holding a private key.
+    let private_jwk = json!({"keys": [{
+        "kty": "OKP", "crv": "Ed25519", "kid": KID,
+        "x": fixture.key.jwk(KID)["x"], "d": fixture.key.secret_spellings()[1]
+    }]})
+    .to_string();
+    for (name, text) in [
+        ("empty public key set", r#"{"keys":[]}"#.to_owned()),
+        ("public keys not JSON", "not json".to_owned()),
+        ("a private key in the public keys", private_jwk),
+    ] {
+        let path = write(&format!("public-{}.json", name.len()), text.as_bytes());
+        stays_unready(&fixture, name, &[(public, &path)], &session);
+    }
+    stays_unready(
+        &fixture,
+        "missing public keys",
+        &[(
+            public,
+            &dir.join("missing-public.json").display().to_string(),
+        )],
+        &session,
+    );
 
-    // The good key starts, with any file mode: the check is by content, not by permissions.
+    // The good files start and sign, with any file mode: the check is by content.
     {
         use std::os::unix::fs::PermissionsExt;
-        let open = write("open.pem", good_pem.as_bytes());
+        let open = write("open.json", good.as_bytes());
         std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o644)).expect("chmod");
-        let env = fixture.env(&[(
-            "TRUSTIOT_IDENTITY_SIGNING_KEY_FILE",
-            &open.display().to_string(),
-        )]);
-        let env: Vec<(&str, &str)> = env.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
-        let service = Service::start(&env);
-        service.wait_ready(Duration::from_secs(30));
+        let service = fixture.service_with(&[
+            (signing, &open),
+            (public, &write("p.json", published.as_bytes())),
+        ]);
+        let tokens = warm(&service, &session);
+        assert_eq!(kid_of(tokens.last().expect("a token")), KID);
         drop(service);
     }
-    // The signing key setting can be given only by the deployment, never by a service setting
-    // or the key inline.
+    // The key files can be named only by the deployment, never by a service setting, and the
+    // settings of the format before Laysi/trustiot-v2#404 do nothing.
     for (name, value) in [
         (
-            "TRUSTIOT__PLATFORM__IDENTITY_SIGNING_KEY_FILE",
+            "TRUSTIOT__PLATFORM__IDENTITY_SIGNING_KEYS_FILE",
             "/etc/passwd",
         ),
         ("TRUSTIOT__IDENTITY__SIGNING_KEY", "x"),
         ("TRUSTIOT_IDENTITY_SIGNING_KEY", "x"),
+        ("TRUSTIOT_IDENTITY_SIGNING_KEY_FILE", "/etc/passwd"),
+        ("TRUSTIOT_INTERNAL_IDENTITY_KEYS", "x"),
     ] {
         let env = fixture.env(&[(name, value)]);
         let env: Vec<(&str, &str)> = env.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
         let (status, output) = run_to_exit_or_serve(&env);
-        // Either it refuses (unknown setting), or the legitimate key still signs. Never `x`.
+        // Either it refuses (a setting it does not take), or the legitimate key still signs.
         assert!(!output.contains("/etc/passwd"), "{name}: {output}");
         let _ = status;
     }
@@ -1582,8 +1595,11 @@ fn run_to_exit_or_serve(env: &[(&str, &str)]) -> (Option<i32>, String) {
     )
 }
 
+/// Two replicas reading the same files switch to a new key by the schedule alone, without a
+/// restart: no token issued before the new key's `signs_from` names it, and both replicas name
+/// it once they have read the file. The key id each logs is the one its tokens carry.
 #[tokio::test]
-async fn rotation_across_restarts_keeps_old_tokens_valid_and_new_ones_under_the_new_kid() {
+async fn replicas_switch_keys_by_the_schedule_without_a_restart() {
     let Some(fixture) = Fixture::new(
         "CREATE DATABASE verify_rotation OWNER identity_owner",
         "verify_rotation",
@@ -1597,90 +1613,66 @@ async fn rotation_across_restarts_keeps_old_tokens_valid_and_new_ones_under_the_
     let secret = fixture
         .add_session(USER, Some(TENANT_A), SESSION_SECS, false)
         .await;
-    let session_cookie = cookie(&secret);
-    let old_key = TestKey::new(81);
+    let session = cookie(&secret);
     let new_key = TestKey::new(82);
-    let both = jwks(&[(&old_key, "2026-10-a"), (&new_key, "2027-04-a")]);
-    let dir = scratch_dir("verify-rotation");
+    let replicas = [fixture.service(), fixture.service()];
+    for replica in &replicas {
+        let tokens = warm(replica, &session);
+        assert_eq!(kid_of(tokens.last().expect("a token")), KID);
+    }
 
-    let issue_with = |fixture: &Fixture, key: &TestKey, keys: &str| -> String {
-        let file = dir.join(format!(
-            "key-{}.pem",
-            &key.jwk("x")["x"].as_str().unwrap_or("")[..8]
-        ));
-        std::fs::write(&file, key.pem()).expect("write");
-        let path = file.display().to_string();
-        let env = fixture.env(&[
-            ("TRUSTIOT_IDENTITY_SIGNING_KEY_FILE", &path),
-            ("TRUSTIOT_INTERNAL_IDENTITY_KEYS", keys),
-        ]);
-        let env: Vec<(&str, &str)> = env.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
-        let service = Service::start(&env);
-        service.wait_ready(Duration::from_secs(30));
-        let tokens = warm(&service, &session_cookie);
-        let logs_kid = service
-            .stdout
-            .wait_for_message("signing internal identity tokens", Duration::from_secs(5))
-            .map(|line| line["fields"]["kid"].as_str().unwrap_or("").to_owned());
-        let token = tokens.last().expect("a token").clone();
-        let header: serde_json::Value = serde_json::from_slice(
-            &URL_SAFE_NO_PAD
-                .decode(token.split('.').next().expect("header"))
-                .expect("b64"),
-        )
-        .expect("json");
-        assert_eq!(
-            header["kid"].as_str(),
-            logs_kid.as_deref(),
-            "log kid = token kid"
+    // The init container's three steps: both public keys, then the new key signs from a short
+    // while ahead.
+    fixture
+        .files
+        .set_public_keys(&jwks(&[(&fixture.key, KID), (&new_key, "2027-04-a")]));
+    let signs_from = identity::issuer::unix_now() + 15;
+    fixture.files.set_signing_keys(&signing_keys(&[
+        (&fixture.key, KID, 1, 0),
+        (&new_key, "2027-04-a", 2, signs_from),
+    ]));
+
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut switched = [false, false];
+    while switched != [true, true] {
+        assert!(
+            Instant::now() < deadline,
+            "the replicas did not switch: {switched:?}"
         );
-        token
-    };
-
-    // Step 1 and old state: both public keys deployed, the old key signs.
-    let old_token = issue_with(&fixture, &old_key, &both);
-    // Step 2: swap the private key (restart): the new pod finds the new kid itself.
-    let new_token = issue_with(&fixture, &new_key, &both);
-    // Step 2 done before step 1 (only the old public key deployed): refuses to start.
-    let only_old = jwks(&[(&old_key, "2026-10-a")]);
-    let early_key = dir.join("key-early.pem");
-    std::fs::write(&early_key, new_key.pem()).expect("write");
-    refuses_to_start(
-        &fixture,
-        "step 2 before step 1",
-        &early_key,
-        Some(&only_old),
-    );
-
-    let header_of = |token: &str| -> serde_json::Value {
-        serde_json::from_slice(
-            &URL_SAFE_NO_PAD
-                .decode(token.split('.').next().expect("header"))
-                .expect("b64"),
-        )
-        .expect("json")
-    };
-    assert_eq!(header_of(&old_token)["kid"], "2026-10-a");
-    assert_eq!(header_of(&new_token)["kid"], "2027-04-a");
-    let verifier = IdentityVerifier::new(
-        ServiceName::Assets,
-        IdentityKeys::from_jwks(&both).expect("keys"),
-    );
-    assert!(
-        verifier.verify(&old_token).is_ok(),
-        "the old token is valid until it expires"
-    );
-    assert!(verifier.verify(&new_token).is_ok());
-    // Step 3: the old public key leaves; old tokens stop, new ones continue.
-    let only_new = IdentityVerifier::new(
-        ServiceName::Assets,
-        IdentityKeys::from_jwks(&jwks(&[(&new_key, "2027-04-a")])).expect("keys"),
-    );
-    assert!(only_new.verify(&old_token).is_err());
-    assert!(only_new.verify(&new_token).is_ok());
-    // Running the service with only the new key after the removal still works.
-    let after = issue_with(&fixture, &new_key, &jwks(&[(&new_key, "2027-04-a")]));
-    assert!(only_new.verify(&after).is_ok());
+        for (index, replica) in replicas.iter().enumerate() {
+            let response = check(replica, "/", Some(&session));
+            assert_eq!(response.status, 200, "{}", response.raw());
+            let token = response.header_values("x-internal-identity")[0].to_owned();
+            let payload: serde_json::Value = serde_json::from_slice(
+                &URL_SAFE_NO_PAD
+                    .decode(token.split('.').nth(1).expect("payload"))
+                    .expect("base64url"),
+            )
+            .expect("JSON");
+            let iat = payload["iat"].as_i64().expect("iat");
+            let kid = kid_of(&token);
+            if iat < signs_from {
+                assert_eq!(kid, KID, "replica {index} signed with the new key early");
+            }
+            if kid == "2027-04-a" {
+                switched[index] = true;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    for replica in replicas {
+        let logged = replica
+            .stdout
+            .wait_for_json(Duration::from_secs(30), |line| {
+                line["message"] == "signing internal identity tokens"
+                    && line["fields"]["kid"] == "2027-04-a"
+            });
+        assert!(logged.is_some(), "the switch is logged with the key id");
+        let output = replica.stop();
+        for secret in new_key.secret_spellings() {
+            assert!(!output.contains(&secret), "the new key reached the logs");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

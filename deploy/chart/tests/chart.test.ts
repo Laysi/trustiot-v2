@@ -202,9 +202,20 @@ function adminPasswordSecretNames(manifests: Manifest[]): string[] {
     .map((c) => c.env?.find((e) => e.name === "TRUSTIOT__ADMIN__SECRET")?.value ?? "(no TRUSTIOT__ADMIN__SECRET)");
 }
 
+/**
+ * The identity service's signing keys Secret, while the service is enabled: the Secret its init
+ * container `signing-keys` fills (Laysi/trustiot-v2#404).
+ */
+function signingKeysSecretNames(manifests: Manifest[]): string[] {
+  return manifests
+    .filter((m) => m.kind === "Deployment" && m.metadata.labels?.["app.kubernetes.io/component"] === "identity")
+    .flatMap((m) => ((podSpec(m).initContainers ?? []) as Container[]).filter((c) => c.name === "signing-keys"))
+    .map((c) => c.env?.find((e) => e.name === "TRUSTIOT__KEYS__SECRET")?.value ?? "(no TRUSTIOT__KEYS__SECRET)");
+}
+
 /** Every Secret a render must declare empty for tools/migrate to fill. */
 function passwordSecretNames(manifests: Manifest[]): string[] {
-  return [...jobPasswordSecretNames(manifests), ...adminPasswordSecretNames(manifests)].sort();
+  return [...jobPasswordSecretNames(manifests), ...adminPasswordSecretNames(manifests), ...signingKeysSecretNames(manifests)].sort();
 }
 
 function readYaml(relativePath: string): YamlMap {
@@ -512,76 +523,277 @@ describe("secrets reach only the services that need them", () => {
   });
 });
 
-describe("internal identity (decision 27, Laysi/trustiot-v2#61)", () => {
+describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated in the cluster, Laysi/trustiot-v2#404)", () => {
   const e2e = [...SHAPES.saas, E2E_VALUES];
-  const signingKey = ["--set", "internalIdentity.signingKeySecret.name=trustiot-identity-signing"];
+  const SIGNING_KEYS = `${RELEASE}-identity-signing-keys`;
+  const PUBLIC_KEYS = `${RELEASE}-internal-identity-keys`;
+  const LEGACY_X = "jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8";
+  const legacy = [
+    "--set",
+    "internalIdentity.signingKeySecret.name=trustiot-identity-signing",
+    "--set-json",
+    `internalIdentity.publicKeys=[{"kid":"2026-10-a","x":"${LEGACY_X}"}]`,
+  ];
+  type Rule = { apiGroups?: string[]; resources?: string[]; resourceNames?: string[]; verbs?: string[] };
   const env = (manifests: Manifest[], service: string) =>
     podSpec(find(manifests, "Deployment", `${RELEASE}-${service}`)).containers[0]?.env ?? [];
   const envValue = (manifests: Manifest[], service: string, name: string) =>
     env(manifests, service).find((e) => e.name === name)?.value;
+  const initsOf = (pod: PodSpec) => (pod.initContainers ?? []) as Container[];
+  // Every pod template the chart renders: Deployments, StatefulSets, Jobs and CloudNativePG's
+  // Cluster has none.
+  const podsOf = (manifests: Manifest[]) =>
+    manifests
+      .filter((m) => ["Deployment", "StatefulSet", "Job", "DaemonSet"].includes(m.kind))
+      .map((m) => ({ name: `${m.kind}/${m.metadata.name}`, pod: podSpec(m) }));
 
-  test("every service gets the public keys as a JWK Set in the platform settings; none leaves it unset", () => {
-    const config = platformConfig(render(SHAPES.saas));
-    expect(JSON.parse(config.TRUSTIOT_INTERNAL_IDENTITY_KEYS ?? "null")).toEqual({
-      keys: [{ kty: "OKP", crv: "Ed25519", kid: "2026-10-a", x: "jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8" }],
-    });
-    // A rotation lists two keys.
-    const rotating = platformConfig(
-      render(SHAPES.saas, [
-        "--set-json",
-        'internalIdentity.publicKeys=[{"kid":"2026-10-a","x":"jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8"},{"kid":"2027-04-a","x":"WTbPFr1BQmbmKbme_XhWAvSUaOZ5_XCgpUlsUp0IGMw"}]',
-      ]),
-    );
-    const keys = JSON.parse(rotating.TRUSTIOT_INTERNAL_IDENTITY_KEYS ?? "null") as { keys: { kid: string }[] };
-    expect(keys.keys.map((key) => key.kid)).toEqual(["2026-10-a", "2027-04-a"]);
-    expect(platformConfig(render(SHAPES.onprem)).TRUSTIOT_INTERNAL_IDENTITY_KEYS).toBeUndefined();
+  test("every service reads the public keys from the ConfigMap it mounts whole, never from a value", () => {
+    for (const shape of SHAPE_NAMES) {
+      for (const args of [["--set", "services.identity.enabled=true"], enableAllServices]) {
+        const manifests = render([...SHAPES[shape], SMOKE], args);
+        const config = platformConfig(manifests);
+        expect(config.TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE).toBe("/etc/trustiot/internal-identity/jwks.json");
+        // The JWK Set itself is never a platform setting any more: a value in the ConfigMap
+        // would need a restart of every service to change.
+        expect(config.TRUSTIOT_INTERNAL_IDENTITY_KEYS).toBeUndefined();
+        // Declared without data: Helm never owns what the init container writes.
+        const configMap = find(manifests, "ConfigMap", PUBLIC_KEYS);
+        expect(Object.keys(configMap).sort()).toEqual(["apiVersion", "kind", "metadata"]);
+        expect(configMap.metadata.annotations?.["helm.sh/resource-policy"]).toBe("keep");
+        const services = manifests.filter(isServiceDeployment);
+        expect(services.length).toBeGreaterThan(0);
+        for (const deployment of services) {
+          const pod = podSpec(deployment);
+          expect(pod.volumes, deployment.metadata.name).toContainEqual({
+            name: "internal-identity-keys",
+            configMap: { name: PUBLIC_KEYS, optional: true },
+          });
+          // The whole ConfigMap: a subPath mount never sees an update.
+          expect(pod.containers[0]?.volumeMounts, deployment.metadata.name).toContainEqual({
+            name: "internal-identity-keys",
+            mountPath: "/etc/trustiot/internal-identity",
+            readOnly: true,
+          });
+          expect(JSON.stringify(pod.containers[0]?.volumeMounts)).not.toContain("subPath");
+        }
+      }
+    }
   });
 
-  test("the signing key is mounted read-only into the identity service only", () => {
-    const manifests = render([...SHAPES.saas, SMOKE], [...enableAllServices, ...signingKey]);
-    const identity = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`));
-    // Mode 0440: root and the pod's fsGroup read the file, no other user in the container can.
-    expect(identity.volumes).toContainEqual({
-      name: "identity-signing-key",
-      secret: {
-        secretName: "trustiot-identity-signing",
-        defaultMode: 0o440,
-        items: [{ key: "signing-key.pem", path: "signing-key.pem" }],
-      },
-    });
-    expect(identity.securityContext?.fsGroup).toBe(65532);
-    expect(identity.containers[0]?.volumeMounts).toContainEqual({
-      name: "identity-signing-key",
-      mountPath: "/etc/trustiot/identity-signing-key",
-      readOnly: true,
-    });
-    expect(envValue(manifests, "identity", "TRUSTIOT_IDENTITY_SIGNING_KEY_FILE")).toBe(
-      "/etc/trustiot/identity-signing-key/signing-key.pem",
-    );
-    for (const deployment of manifests.filter((m) => m.kind === "Deployment" && m.metadata.name !== `${RELEASE}-identity`)) {
-      const pod = podSpec(deployment);
-      const text = JSON.stringify(pod);
-      expect(text).not.toContain("trustiot-identity-signing");
-      expect(text).not.toContain("TRUSTIOT_IDENTITY_SIGNING_KEY_FILE");
-      expect(pod.securityContext?.fsGroup).toBeUndefined();
+  test("without the identity service nothing publishes keys, so no service is told where they are", () => {
+    // A service that verifies internal identity then refuses to start for want of the setting,
+    // as it did without internalIdentity.publicKeys before Laysi/trustiot-v2#404, instead of
+    // waiting unready for keys that never come; the example service in the e2e overlays runs
+    // without its identity routes.
+    for (const shape of SHAPE_NAMES) {
+      for (const files of [[...SHAPES[shape], SMOKE], [...SHAPES[shape], "tests/e2e/values-otel-e2e.yaml"]]) {
+        const manifests = render(files, ["--set", "services.assets.enabled=true"]);
+        expect(platformConfig(manifests).TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE).toBeUndefined();
+        expect(manifests.filter((m) => m.metadata.name === PUBLIC_KEYS)).toEqual([]);
+        expect(JSON.stringify(manifests)).not.toContain("internal-identity-keys");
+        expect(manifests.filter(isServiceDeployment).length).toBeGreaterThan(0);
+      }
+    }
+    // The values are checked all the same (the render failures below run without the service).
+  });
+
+  test("only the identity service mounts its signing keys, read-only and mode 0440, in a container without a token", () => {
+    const everything = [...enableAllServices, "--set", "observability.collector.enabled=true"];
+    for (const shape of SHAPE_NAMES) {
+      const manifests = render([...SHAPES[shape], SMOKE], everything);
+      const identity = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`));
+      // Mode 0440: root and the pod's fsGroup read the file, no other user in the container can.
+      // Optional: the Secret has no key before the init container's first run.
+      expect(identity.volumes).toContainEqual({
+        name: "identity-signing-keys",
+        secret: {
+          secretName: SIGNING_KEYS,
+          defaultMode: 0o440,
+          optional: true,
+          items: [{ key: "signing-keys.json", path: "signing-keys.json" }],
+        },
+      });
+      expect(identity.securityContext?.fsGroup).toBe(65532);
+      expect(identity.containers[0]?.volumeMounts).toContainEqual({
+        name: "identity-signing-keys",
+        mountPath: "/etc/trustiot/identity-signing-keys",
+        readOnly: true,
+      });
+      expect(envValue(manifests, "identity", "TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE")).toBe(
+        "/etc/trustiot/identity-signing-keys/signing-keys.json",
+      );
+      expect(envValue(manifests, "identity", "TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION")).toBe("0");
+      expect(envValue(manifests, "identity", "TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS")).toBe("600");
+      // No token in the pod's containers: only the init containers mount the projected one.
+      expect(identity.automountServiceAccountToken).toBe(false);
+      for (const container of identity.containers) {
+        expect(JSON.stringify(container.volumeMounts ?? [])).not.toContain("migrate-kube-api");
+      }
+      // No other pod template names the Secret, in a volume, an env or a projection.
+      for (const { name, pod } of podsOf(manifests)) {
+        if (name === `Deployment/${RELEASE}-identity`) continue;
+        const text = JSON.stringify(pod);
+        expect(text, name).not.toContain(SIGNING_KEYS);
+        expect(text, name).not.toContain("TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE");
+        expect(pod.securityContext?.fsGroup, name).not.toBe(65532);
+      }
+      // Nothing of the private key reaches a ConfigMap.
+      for (const configMap of manifests.filter((m) => m.kind === "ConfigMap")) {
+        expect(JSON.stringify(configMap)).not.toContain(SIGNING_KEYS);
+      }
     }
     // OpenShift: the SCC assigns the fsGroup; the file mode stays.
     const openshift = render(
       [...SHAPES.saas, SMOKE],
-      [...enableAllServices, ...signingKey, "--set", "services.identity.podSecurityContext.fsGroup=null"],
+      [...enableAllServices, "--set", "services.identity.podSecurityContext.fsGroup=null"],
     );
     const sccAssigned = podSpec(find(openshift, "Deployment", `${RELEASE}-identity`));
     expect(sccAssigned.securityContext?.fsGroup).toBeUndefined();
     expect(sccAssigned.securityContext?.runAsNonRoot).toBe(true);
     expect(JSON.stringify(sccAssigned.volumes)).toContain('"defaultMode":288');
-    // Nothing of the private key reaches a ConfigMap.
-    for (const configMap of manifests.filter((m) => m.kind === "ConfigMap")) {
-      expect(JSON.stringify(configMap)).not.toContain("trustiot-identity-signing");
-    }
-    // Without a Secret, nothing is mounted and the service refuses to start on its own.
-    const unset = render([...SHAPES.saas, SMOKE], enableAllServices);
-    expect(JSON.stringify(podSpec(find(unset, "Deployment", `${RELEASE}-identity`)))).not.toContain("signing");
+    // With the identity service off: no Secret, no Role, and no pod mentions the keys.
+    const off = render([...SHAPES.saas, SMOKE], ["--set", "services.assets.enabled=true"]);
+    expect(off.filter((m) => m.metadata.name === SIGNING_KEYS)).toEqual([]);
+    expect(JSON.stringify(off)).not.toContain(SIGNING_KEYS);
   });
+
+  test("the identity pod's init container generates and publishes the keys with a token only it mounts, and the Role names exactly the Secret and the ConfigMap", () => {
+    for (const migrate of ["true", "false"]) {
+      const manifests = render(SHAPES.saas, ["--set", "services.identity.enabled=true", "--set", `migrate.enabled=${migrate}`]);
+      const pod = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`));
+      // First, before the wait for the migration Job: it needs no database.
+      const init = initsOf(pod)[0] as Container & { args: string[] };
+      expect(init.name).toBe("signing-keys");
+      expect(init.image).toBe(`ghcr.io/laysi/trustiot-v2/migrate:${chart.appVersion}`);
+      expect(init.args).toEqual(["identity-signing-keys"]);
+      expect(init.env).toEqual([
+        { name: "TRUSTIOT__KEYS__API_URL", value: "https://kubernetes.default.svc" },
+        { name: "TRUSTIOT__KEYS__NAMESPACE", valueFrom: { fieldRef: { fieldPath: "metadata.namespace" } } },
+        { name: "TRUSTIOT__KEYS__TOKEN_FILE", value: "/var/run/secrets/trustiot/kube/token" },
+        { name: "TRUSTIOT__KEYS__CA_FILE", value: "/var/run/secrets/trustiot/kube/ca.crt" },
+        { name: "TRUSTIOT__KEYS__SECRET", value: SIGNING_KEYS },
+        { name: "TRUSTIOT__KEYS__CONFIG_MAP", value: PUBLIC_KEYS },
+        { name: "TRUSTIOT__KEYS__GENERATION", value: "1" },
+        { name: "TRUSTIOT__KEYS__REVOKE_BEFORE_GENERATION", value: "0" },
+        { name: "TRUSTIOT__KEYS__PROPAGATION_SECONDS", value: "600" },
+      ]);
+      expect(init.securityContext).toEqual(pod.containers[0]?.securityContext);
+      expect(init.volumeMounts).toEqual([{ name: "migrate-kube-api", mountPath: "/var/run/secrets/trustiot/kube", readOnly: true }]);
+      expect(pod.volumes).toContainEqual({
+        name: "migrate-kube-api",
+        projected: {
+          defaultMode: 0o444,
+          sources: [
+            { serviceAccountToken: { path: "token", expirationSeconds: 3600 } },
+            { configMap: { name: "kube-root-ca.crt", items: [{ key: "ca.crt", path: "ca.crt" }] } },
+          ],
+        },
+      });
+      const role = find(manifests, "Role", SIGNING_KEYS) as Manifest & { rules: Rule[] };
+      expect(role.rules).toEqual([
+        { apiGroups: [""], resources: ["secrets"], resourceNames: [SIGNING_KEYS], verbs: ["get", "patch"] },
+        { apiGroups: [""], resources: ["configmaps"], resourceNames: [PUBLIC_KEYS], verbs: ["get", "patch"] },
+      ]);
+      const binding = find(manifests, "RoleBinding", SIGNING_KEYS) as Manifest & { roleRef: unknown; subjects: unknown[] };
+      expect(binding.roleRef).toEqual({ apiGroup: "rbac.authorization.k8s.io", kind: "Role", name: SIGNING_KEYS });
+      expect(binding.subjects).toEqual([{ kind: "ServiceAccount", name: `${RELEASE}-identity`, namespace: NAMESPACE }]);
+      // The ServiceAccount itself mounts no token anywhere by default.
+      expect((find(manifests, "ServiceAccount", `${RELEASE}-identity`) as Manifest & { automountServiceAccountToken: boolean }).automountServiceAccountToken).toBe(false);
+    }
+  });
+
+  test("a rotation or a revocation restarts the identity service only, which gets the revocation before its files do", () => {
+    const base = ["--set", "services.identity.enabled=true", "--set", "services.assets.enabled=true"];
+    const before = render(SHAPES.saas, base);
+    const rotated = render(SHAPES.saas, [...base, "--set", "internalIdentity.keyGeneration=2"]);
+    const revoked = render(SHAPES.saas, [...base, "--set", "internalIdentity.keyGeneration=3", "--set", "internalIdentity.revokeBeforeGeneration=3"]);
+    const slower = render(SHAPES.saas, [...base, "--set", "internalIdentity.keyPropagationSeconds=900"]);
+    const template = (manifests: Manifest[], service: string) =>
+      JSON.stringify((find(manifests, "Deployment", `${RELEASE}-${service}`).spec as { template: unknown }).template);
+    for (const changed of [rotated, revoked, slower]) {
+      expect(template(changed, "identity")).not.toBe(template(before, "identity"));
+      // The other services keep their pods: they reread the public keys file.
+      expect(template(changed, "assets")).toBe(template(before, "assets"));
+      expect(platformConfig(changed)).toEqual(platformConfig(before));
+    }
+    const generation = (manifests: Manifest[], name: string) =>
+      initsOf(podSpec(find(manifests, "Deployment", `${RELEASE}-identity`)))[0]?.env?.find((e) => e.name === name)?.value;
+    expect(generation(rotated, "TRUSTIOT__KEYS__GENERATION")).toBe("2");
+    expect(generation(revoked, "TRUSTIOT__KEYS__GENERATION")).toBe("3");
+    expect(generation(revoked, "TRUSTIOT__KEYS__REVOKE_BEFORE_GENERATION")).toBe("3");
+    expect(envValue(revoked, "identity", "TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION")).toBe("3");
+    expect(generation(slower, "TRUSTIOT__KEYS__PROPAGATION_SECONDS")).toBe("900");
+    expect(envValue(slower, "identity", "TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS")).toBe("900");
+    // Exact decimal digits, as tools/migrate compares them.
+    const big = render(SHAPES.saas, [...base, "--set", "internalIdentity.keyGeneration=1000000"]);
+    expect(generation(big, "TRUSTIOT__KEYS__GENERATION")).toBe("1000000");
+  });
+
+  test("a signing key a person made before Laysi/trustiot-v2#404 reaches the init container only, which imports it", () => {
+    const manifests = render([...SHAPES.saas, SMOKE], [...enableAllServices, ...legacy]);
+    const pod = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`));
+    const init = initsOf(pod)[0] as Container;
+    expect(init.env?.slice(-2)).toEqual([
+      { name: "TRUSTIOT__KEYS__LEGACY_KEY_FILE", value: "/etc/trustiot/legacy-identity-signing-key/signing-key.pem" },
+      {
+        name: "TRUSTIOT__KEYS__LEGACY_PUBLIC_KEYS",
+        value: JSON.stringify({ keys: [{ crv: "Ed25519", kid: "2026-10-a", kty: "OKP", x: LEGACY_X }] }),
+      },
+    ]);
+    expect(init.volumeMounts).toContainEqual({ name: "legacy-identity-signing-key", mountPath: "/etc/trustiot/legacy-identity-signing-key", readOnly: true });
+    expect(pod.volumes).toContainEqual({
+      name: "legacy-identity-signing-key",
+      secret: { secretName: "trustiot-identity-signing", defaultMode: 0o440, items: [{ key: "signing-key.pem", path: "signing-key.pem" }] },
+    });
+    // Neither the service's own container nor any other pod mounts it.
+    expect(JSON.stringify(pod.containers)).not.toContain("legacy-identity-signing-key");
+    for (const { name, pod: other } of podsOf(manifests)) {
+      if (name === `Deployment/${RELEASE}-identity`) continue;
+      expect(JSON.stringify(other), name).not.toContain("trustiot-identity-signing");
+    }
+    // Still the generated Secret and the ConfigMap: the import fills them.
+    expect(envValue(manifests, "identity", "TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE")).toBe("/etc/trustiot/identity-signing-keys/signing-keys.json");
+    expect(platformConfig(manifests).TRUSTIOT_INTERNAL_IDENTITY_KEYS).toBeUndefined();
+    // Without it, the init container has no import settings.
+    const fresh = render(SHAPES.saas, ["--set", "services.identity.enabled=true"]);
+    expect(JSON.stringify(podSpec(find(fresh, "Deployment", `${RELEASE}-identity`)))).not.toContain("LEGACY");
+  });
+
+  test("no Role but the identity service's may write a ConfigMap or name its signing keys", () => {
+    // Every optional component on, as "with every optional component on" below does.
+    const switchesOf = (node: unknown, path: string[] = []): string[] =>
+      isMap(node)
+        ? Object.entries(node).flatMap(([key, value]) =>
+            key === "enabled" && typeof value === "boolean" ? [[...path, key].join(".")] : switchesOf(value, [...path, key]),
+          )
+        : [];
+    const switches = switchesOf(defaults).flatMap((path) => ["--set", `${path}=true`]);
+    for (const shape of SHAPE_NAMES) {
+      const manifests = render([...SHAPES[shape], SMOKE], [
+          ...switches,
+          ...legacy,
+          ...["--set", "observability.sentry.dsnSecret.name=s", "--set", "observability.sentry.environment=t"],
+          ...["--set", "observability.collector.forward.endpoint=https://siem.trustiot.test:4318"],
+        ]);
+      const roles = manifests.filter((m) => m.kind === "Role" || m.kind === "ClusterRole") as (Manifest & { rules: Rule[] })[];
+      expect(roles.map((m) => m.metadata.name)).toContain(SIGNING_KEYS);
+      for (const role of roles) {
+        for (const rule of role.rules) {
+          const core = (rule.apiGroups ?? []).some((g) => g === "" || g === "*");
+          const resources = rule.resources ?? [];
+          const writes = (rule.verbs ?? []).some((verb) => verb !== "get" && verb !== "list" && verb !== "watch");
+          if (role.metadata.name === SIGNING_KEYS) continue;
+          expect({ role: role.metadata.name, writesConfigMaps: core && writes && resources.some((r) => r === "configmaps" || r === "*") }).toEqual({
+            role: role.metadata.name,
+            writesConfigMaps: false,
+          });
+          expect(JSON.stringify(rule), role.metadata.name).not.toContain(SIGNING_KEYS);
+        }
+      }
+      const bindings = manifests.filter((m) => m.kind === "RoleBinding" && (m as Manifest & { roleRef: { name: string } }).roleRef.name === SIGNING_KEYS);
+      expect(bindings.map((m) => (m as Manifest & { subjects: unknown[] }).subjects)).toEqual([[{ kind: "ServiceAccount", name: `${RELEASE}-identity`, namespace: NAMESPACE }]]);
+    }
+  }, SLOW_TEST_MS);
 
   test("the identity service alone gets the cookie routes, with host names, to address its tokens", () => {
     const manifests = render(e2e, [
@@ -873,6 +1085,7 @@ describe("values reference Secrets by name only and hold no secret material", ()
       ...["--set", "objectStorage.credentialsSecret.name=trustiot-object-storage", "--set", "smtp.credentialsSecret.name=trustiot-smtp"],
       ...["chat", "embedding", "rerank"].flatMap((use) => ["--set", `ai.${use}.apiKeySecret.name=trustiot-ai-${use}`]),
       ...["--set", "internalIdentity.signingKeySecret.name=trustiot-identity-signing"],
+      ...["--set-json", 'internalIdentity.publicKeys=[{"kid":"2026-10-a","x":"jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8"}]'],
       ...["--set", "observability.sentry.environment=test", "--set", "observability.sentry.dsnSecret.name=trustiot-sentry"],
       ...["--set", "observability.collector.forward.endpoint=https://siem.trustiot.test:4318"],
       ...["--set", "observability.collector.forward.authHeader.name=Authorization"],
@@ -960,7 +1173,8 @@ describe("exposure and hardening", () => {
   test("ConfigMaps never carry secret-looking keys", () => {
     for (const manifests of renders) {
       for (const configMap of manifests.filter((m) => m.kind === "ConfigMap")) {
-        for (const key of Object.keys(configMap.data as YamlMap)) {
+        // The public keys ConfigMap renders without data (the identity pod's init container fills it).
+        for (const key of Object.keys((configMap.data ?? {}) as YamlMap)) {
           expect(key).not.toMatch(/SECRET|PASSW|PASSPHRASE|PWD|TOKEN|API_?KEY|(^|_)KEY$|DSN|PRIVATE|CREDENTIAL/i);
         }
       }
@@ -1574,10 +1788,12 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
         [`${RELEASE}-clickhouse`, `${RELEASE}-identity`, `${RELEASE}-otel-collector`].sort(),
       );
       expect(e2e.filter((m) => m.kind === "Job").map((m) => m.metadata.labels?.["app.kubernetes.io/component"])).toEqual(["migrate"]);
-      // And ClickHouse's init container generates its admin password (Laysi/trustiot-v2#403).
+      // And ClickHouse's init container generates its admin password (Laysi/trustiot-v2#403), the
+      // identity pod's its signing keys (Laysi/trustiot-v2#404).
       expect(passwordSecretNames(e2e)).toEqual([
         `${RELEASE}-clickhouse-admin-password`,
         `${RELEASE}-identity-password`,
+        `${RELEASE}-identity-signing-keys`,
         `${RELEASE}-otel-collector-password`,
       ]);
       const from = (policyRules(e2e).ingress[0]?.from ?? []) as { podSelector?: { matchLabels: Record<string, string> } }[];
@@ -1660,6 +1876,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
   const IDENTITY_SECRET = `${RELEASE}-identity-password`;
   const COLLECTOR_SECRET = `${RELEASE}-otel-collector-password`;
   const ADMIN_SECRET = `${RELEASE}-clickhouse-admin-password`;
+  const SIGNING_KEYS_SECRET = `${RELEASE}-identity-signing-keys`;
   const jobsOf = (manifests: Manifest[]) => manifests.filter((m) => m.kind === "Job");
   const jobOf = (manifests: Manifest[]) => {
     const jobs = jobsOf(manifests);
@@ -1778,14 +1995,15 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
 
   test("the password Secrets: one per consumer, without data, kept by Helm, labelled as filled by tools/migrate", () => {
     const secrets = manifests.filter((m) => m.kind === "Secret");
-    expect(secrets.map((m) => m.metadata.name)).toEqual([IDENTITY_SECRET, COLLECTOR_SECRET, ADMIN_SECRET]);
+    expect(secrets.map((m) => m.metadata.name)).toEqual([IDENTITY_SECRET, COLLECTOR_SECRET, ADMIN_SECRET, SIGNING_KEYS_SECRET]);
     // Exactly this shape, every key and value: scripts/ci/check-secret-handling.ts lets the
     // template through only because nothing in it is a value (Laysi/trustiot-v2#60 round 4, R1).
     // In particular the chart never renders the annotations tools/migrate writes (the generation
-    // and the Secret's uid). The last one is the bundled ClickHouse's admin password, which its
-    // pod's init container fills (Laysi/trustiot-v2#403).
-    const components = ["identity", "otel-collector", "clickhouse"];
-    const names = [IDENTITY_SECRET, COLLECTOR_SECRET, ADMIN_SECRET];
+    // and the Secret's uid). The last two are the bundled ClickHouse's admin password, which its
+    // pod's init container fills (Laysi/trustiot-v2#403), and the identity service's signing
+    // keys, which the identity pod's init container fills (Laysi/trustiot-v2#404).
+    const components = ["identity", "otel-collector", "clickhouse", "identity"];
+    const names = [IDENTITY_SECRET, COLLECTOR_SECRET, ADMIN_SECRET, SIGNING_KEYS_SECRET];
     for (const [i, secret] of secrets.entries()) {
       const component = components[i] ?? "";
       expect(secret).toEqual({
@@ -1812,6 +2030,20 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
       });
     }
     // Each consumer's own component, so a node's kubelet reads only the passwords of its pods.
+    // The public keys ConfigMap has the same metadata, without type or data.
+    expect(find(manifests, "ConfigMap", `${RELEASE}-internal-identity-keys`)).toEqual({
+      apiVersion: "v1",
+      kind: "ConfigMap",
+      metadata: {
+        name: `${RELEASE}-internal-identity-keys`,
+        labels: (secrets[3] as Manifest).metadata.labels,
+        annotations: {
+          "helm.sh/resource-policy": "keep",
+          "trustiot.io/description":
+            "Public keys of the internal identity service, published in the cluster by tools/migrate; nobody sets them (docs/architecture/secrets.md).",
+        },
+      },
+    });
     expect(secrets.map((m) => m.metadata.labels?.["app.kubernetes.io/component"])).toEqual(components);
     // Declared with the Job turned off too: whatever replaces the Job fills them, and the
     // consumers read them the same way. ClickHouse's init container fills its own regardless.
@@ -1853,7 +2085,8 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     ];
     let checked = 0;
     for (const rendered of configurations) {
-      for (const secret of rendered.filter((m) => m.kind === "Secret" && m.metadata.labels?.["trustiot.io/filled-by"] === "migrate")) {
+      // The public keys ConfigMap too: the identity pod's init container binds it the same way.
+      for (const secret of rendered.filter((m) => (m.kind === "Secret" || m.kind === "ConfigMap") && m.metadata.labels?.["trustiot.io/filled-by"] === "migrate")) {
         for (const key of Object.keys(secret.metadata.labels ?? {})) expect(labels, `${secret.metadata.name} label ${key}`).toContain(key);
         for (const key of Object.keys(secret.metadata.annotations ?? {})) {
           expect(annotations, `${secret.metadata.name} annotation ${key}`).toContain(key);
@@ -1879,10 +2112,11 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
       const binding = find(rendered, "RoleBinding", `${RELEASE}-migrate`) as Manifest & { roleRef: unknown; subjects: unknown[] };
       expect(binding.roleRef).toEqual({ apiGroup: "rbac.authorization.k8s.io", kind: "Role", name: `${RELEASE}-migrate` });
       expect(binding.subjects).toEqual([{ kind: "ServiceAccount", name: `${RELEASE}-migrate`, namespace: NAMESPACE }]);
-      // Every Role of the chart: only the Job's and ClickHouse's (which names only the admin
-      // Secret, "bundled ClickHouse" above) may name secrets (or a wildcard), and no Role
+      // Every Role of the chart: only the Job's, ClickHouse's (which names only the admin
+      // Secret, "bundled ClickHouse" above) and the identity service's (which names only its
+      // signing keys, "internal identity" above) may name secrets (or a wildcard), and no Role
       // anywhere may create, list, watch, update or delete them.
-      const allowed = [`${RELEASE}-migrate`, `${RELEASE}-clickhouse`];
+      const allowed = [`${RELEASE}-migrate`, `${RELEASE}-clickhouse`, `${RELEASE}-identity-signing-keys`];
       for (const other of rendered.filter((m) => m.kind === "Role" || m.kind === "ClusterRole")) {
         const rules = (other as Manifest & { rules: { apiGroups?: string[]; resources?: string[]; verbs?: string[] }[] }).rules;
         const touches = rules.some((rule) => (rule.resources ?? []).some((r) => r === "secrets" || r === "*") && (rule.apiGroups ?? []).some((g) => g === "" || g === "*"));
@@ -1998,9 +2232,12 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     );
     // One Secret per consumer, however many keys it holds, and the Job's Role names each once.
     // (ClickHouse's admin Secret is the init container's, and the Job's Role only reads it.)
-    const secrets = both.filter((m) => m.kind === "Secret" && m.metadata.name !== ADMIN_SECRET).map((m) => m.metadata.name);
+    // (So is the identity service's signing keys Secret, which the Job never touches.)
+    const secrets = both
+      .filter((m) => m.kind === "Secret" && m.metadata.name !== ADMIN_SECRET && m.metadata.name !== SIGNING_KEYS_SECRET)
+      .map((m) => m.metadata.name);
     expect(secrets).toEqual([ASSETS_SECRET, IDENTITY_SECRET, COLLECTOR_SECRET]);
-    expect(passwordSecretNames(both)).toEqual([...secrets, ADMIN_SECRET].sort());
+    expect(passwordSecretNames(both)).toEqual([...secrets, ADMIN_SECRET, SIGNING_KEYS_SECRET].sort());
     const role = find(both, "Role", `${RELEASE}-migrate`) as Manifest & { rules: { resourceNames: string[] }[] };
     expect(role.rules[0]?.resourceNames).toEqual(secrets);
     const assets = podSpec(find(both, "Deployment", `${RELEASE}-assets`)).containers[0] as Container;
@@ -2044,9 +2281,12 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     for (const deployment of deployments) {
       const pod = podSpec(deployment);
       expect(pod.automountServiceAccountToken).toBe(false);
+      // The identity pod first fills its signing keys ("internal identity" above), which needs no
+      // database.
       const inits = initContainers(deployment);
-      expect(inits.map((c) => c.name)).toEqual(["wait-for-migrations"]);
-      const init = inits[0] as Container & { args: string[] };
+      const identity = deployment.metadata.name === `${RELEASE}-identity`;
+      expect(inits.map((c) => c.name)).toEqual(identity ? ["signing-keys", "wait-for-migrations"] : ["wait-for-migrations"]);
+      const init = inits.at(-1) as Container & { args: string[] };
       expect(init.image).toBe(`ghcr.io/laysi/trustiot-v2/migrate:${chart.appVersion}`);
       expect(init.args).toEqual(["wait-for-job"]);
       expect(init.env).toEqual([
@@ -2238,7 +2478,11 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     const off = render(SHAPES.saas, [...withIdentity, "--set", "migrate.enabled=false"]);
     expect(jobsOf(off)).toEqual([]);
     expect(off.filter((m) => m.metadata.name.includes("-migrate"))).toEqual([]);
-    for (const deployment of off.filter(isServiceDeployment)) expect(podSpec(deployment).initContainers).toBeUndefined();
+    // The identity pod still fills its signing keys, which needs no Job.
+    for (const deployment of off.filter(isServiceDeployment)) {
+      const names = ((podSpec(deployment).initContainers ?? []) as Container[]).map((c) => c.name);
+      expect(names).toEqual(deployment.metadata.name === `${RELEASE}-identity` ? ["signing-keys"] : []);
+    }
     expect(JSON.stringify(find(off, "NetworkPolicy", `${RELEASE}-postgres`))).not.toContain('"migrate"');
   });
 
@@ -3759,21 +4003,77 @@ describe("values validation rejects unsafe or incomplete settings", () => {
       "an internal identity key id listed twice",
       saas,
       [
+        "--set",
+        "services.identity.enabled=true",
+        "--set",
+        "internalIdentity.signingKeySecret.name=trustiot-identity-signing",
         "--set-json",
         'internalIdentity.publicKeys=[{"kid":"k","x":"jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8"},{"kid":"k","x":"jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8"}]',
       ],
       /internalIdentity\.publicKeys\[1\]: key id "k" is listed twice/,
     ],
     [
-      "env that reads the internal identity signing key",
+      "env that reads a signing key a person made before Laysi/trustiot-v2#404",
       saas,
       [
         "--set",
         "internalIdentity.signingKeySecret.name=trustiot-identity-signing",
         "--set-json",
+        'internalIdentity.publicKeys=[{"kid":"k","x":"jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8"}]',
+        "--set-json",
         'services.smoke-echo.env=[{"name":"SIGNING_KEY","valueFrom":{"secretKeyRef":{"name":"trustiot-identity-signing","key":"signing-key.pem"}}}]',
       ],
       /services\.smoke-echo: env reads the dependency credential trustiot-identity-signing\/signing-key\.pem/,
+    ],
+    [
+      "env that reads the generated internal identity signing keys",
+      saas,
+      [
+        "--set",
+        "services.identity.enabled=true",
+        "--set-json",
+        'services.smoke-echo.env=[{"name":"SIGNING_KEYS","valueFrom":{"secretKeyRef":{"name":"trustiot-identity-signing-keys","key":"signing-keys.json"}}}]',
+      ],
+      /services\.smoke-echo: env reads Secret trustiot-identity-signing-keys, whose keys reach services only through the chart/,
+    ],
+    [
+      "env that reads the generated internal identity signing keys while the identity service is off",
+      saas,
+      [
+        "--set-json",
+        'services.smoke-echo.env=[{"name":"SIGNING_KEYS","valueFrom":{"secretKeyRef":{"name":"trustiot-identity-signing-keys","key":"signing-keys.json"}}}]',
+      ],
+      /services\.smoke-echo: env reads Secret trustiot-identity-signing-keys/,
+    ],
+    ["an internal identity key generation of 0", saas, ["--set-string", "internalIdentity.keyGeneration=0"], /internalIdentity\.keyGeneration must be at least 1/],
+    ["an internal identity key generation of 0 as a number", saas, ["--set", "internalIdentity.keyGeneration=0"], /keyGeneration/],
+    [
+      "an internal identity key generation below the revocation",
+      saas,
+      ["--set", "internalIdentity.keyGeneration=2", "--set", "internalIdentity.revokeBeforeGeneration=3"],
+      /internalIdentity\.keyGeneration \(2\) must not be below internalIdentity\.revokeBeforeGeneration \(3\)/,
+    ],
+    ["an internal identity key generation that is not a number", saas, ["--set", "internalIdentity.keyGeneration=v2"], /keyGeneration/],
+    ["a negative revocation generation", saas, ["--set", "internalIdentity.revokeBeforeGeneration=-1"], /revokeBeforeGeneration/],
+    ["a key propagation time below two minutes", saas, ["--set", "internalIdentity.keyPropagationSeconds=60"], /keyPropagationSeconds/],
+    ["a key propagation time above a day", saas, ["--set", "internalIdentity.keyPropagationSeconds=86401"], /keyPropagationSeconds/],
+    [
+      "a token in the identity service's container",
+      saas,
+      ["--set", "services.identity.enabled=true", "--set", "services.identity.automountServiceAccountToken=true"],
+      /services\.identity\.automountServiceAccountToken must be false/,
+    ],
+    [
+      "public keys of a person's signing key without its Secret",
+      saas,
+      ["--set-json", 'internalIdentity.publicKeys=[{"kid":"k","x":"jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8"}]'],
+      /internalIdentity\.publicKeys is only for moving over a signing key a person made/,
+    ],
+    [
+      "a person's signing key without its public key",
+      saas,
+      ["--set", "internalIdentity.signingKeySecret.name=trustiot-identity-signing"],
+      /internalIdentity\.signingKeySecret needs internalIdentity\.publicKeys/,
     ],
     [
       "cookie route to ai-gateway",
@@ -4075,6 +4375,34 @@ describe("the templates keep the secret and env boundaries without schema valida
       "a service named after the bundled Postgres",
       ["--set", "services.postgres.enabled=true"],
       /services\.postgres: the name belongs to an in-cluster component/,
+    ],
+    // The internal identity keys (Laysi/trustiot-v2#404): a generation the init container would
+    // refuse, one below the revocation, and a token in the container that holds the private keys.
+    [
+      "an internal identity key generation the init container would refuse",
+      ["--set-string", "internalIdentity.keyGeneration=v2"],
+      /internalIdentity\.keyGeneration: "v2" must render as 1 to 9 decimal digits/,
+    ],
+    [
+      "an internal identity key generation below the revocation",
+      ["--set", "internalIdentity.keyGeneration=1", "--set", "internalIdentity.revokeBeforeGeneration=2"],
+      /internalIdentity\.keyGeneration \(1\) must not be below internalIdentity\.revokeBeforeGeneration \(2\)/,
+    ],
+    ["a key propagation time below two minutes", ["--set", "internalIdentity.keyPropagationSeconds=5"], /keyPropagationSeconds must be between 120 and 86400/],
+    [
+      "a token in the identity service's container",
+      ["--set", "services.identity.enabled=true", "--set", "services.identity.automountServiceAccountToken=true"],
+      /services\.identity\.automountServiceAccountToken must be false/,
+    ],
+    [
+      "a token in every service's container",
+      ["--set", "services.identity.enabled=true", "--set", "serviceDefaults.automountServiceAccountToken=true"],
+      /services\.identity\.automountServiceAccountToken must be false/,
+    ],
+    [
+      "env that reads the generated internal identity signing keys",
+      ["--set-json", 'services.smoke-echo.env=[{"name":"KEYS","valueFrom":{"secretKeyRef":{"name":"trustiot-identity-signing-keys","key":"signing-keys.json"}}}]'],
+      /services\.smoke-echo: env reads Secret trustiot-identity-signing-keys/,
     ],
     [
       "a ClickHouse admin password generation the init container would refuse",
@@ -4395,6 +4723,15 @@ describe("e2e overlays", () => {
       migrate: true,
       filledByTest: [],
     })),
+    ...SHAPE_NAMES.flatMap((shape) =>
+      [[], ["--set", "internalIdentity.keyGeneration=3", "--set", "internalIdentity.revokeBeforeGeneration=3"]].map((extra) => ({
+        name: `identity-keys.e2e.ts, ${shape}, ${extra.length === 0 ? "install" : "revocation"}`,
+        files: [...SHAPES[shape], "tests/e2e/values-identity-keys-e2e.yaml"],
+        args: extra,
+        migrate: true,
+        filledByTest: [],
+      })),
+    ),
   ];
 
   function workloadPodSpec(m: Manifest): PodSpec | undefined {
@@ -4422,7 +4759,10 @@ describe("e2e overlays", () => {
         for (const from of (container.envFrom ?? []) as { secretRef?: { name?: string } }[]) read(from.secretRef?.name);
       }
       for (const volume of pod.volumes ?? []) {
-        read((volume.secret as { secretName?: string } | undefined)?.secretName);
+        // An optional Secret volume never holds a pod back: the identity service mounts its
+        // signing keys so, and its own init container fills them (Laysi/trustiot-v2#404).
+        const secret = volume.secret as { secretName?: string; optional?: boolean } | undefined;
+        if (secret?.optional !== true) read(secret?.secretName);
         const projected = volume.projected as { sources?: { secret?: { name?: string } }[] } | undefined;
         for (const source of projected?.sources ?? []) read(source.secret?.name);
       }

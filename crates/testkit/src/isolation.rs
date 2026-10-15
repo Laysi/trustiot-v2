@@ -348,7 +348,7 @@ enum ApiDeclaration {
 /// use testkit::isolation::postgres::PgStore;
 /// use testkit::pg_table;
 ///
-/// let issuer = TestIssuer::new(); // its jwks() configures the service under test
+/// let issuer = TestIssuer::new(); // write_jwks() writes the keys file of the service under test
 /// let store = PgStore::new(owner, app)
 ///     .table(pg_table!(
 ///         "devices",

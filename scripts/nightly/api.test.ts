@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { createPublicKey, generateKeyPairSync, sign as signWith, verify } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,24 +13,19 @@ import {
   ASSETS_TENANT_PATH,
   checkIngressEdges,
   checkTenantApi,
-  createSigningKey,
-  ed25519PublicKeyX,
   errorCode,
-  forgeIdentityToken,
+  EXT_AUTHZ_PREFIX,
   IDENTITY_HEADER,
-  identityTokenHeader,
   memberSessionSql,
   newSession,
   NORMALIZED_TENANT_PATHS,
   routesOfValues,
   SESSION_COOKIE,
-  SIGNING_KEY_ID,
-  SIGNING_KEY_STORE,
+  stealIdentityToken,
   TENANTS_PATH,
 } from "./api.ts";
-import type { EdgeCheckDeps, TenantApiResult, TokenSigner } from "./api.ts";
-import { pinnedTool, RunLog } from "./exec.ts";
-import type { run } from "./exec.ts";
+import type { EdgeCheckDeps, TenantApiResult } from "./api.ts";
+import { pinnedTool } from "./exec.ts";
 import { ingressHostsOf, ingressListenerOf, missingSecrets, missingTlsSecrets, parseManifests, platformSettingsOf } from "./manifests.ts";
 import type { K8sObject } from "./manifests.ts";
 import { discoverShapes, valuesArgs } from "./smoke.ts";
@@ -40,22 +34,6 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
 const CHART_DIR = join(REPO_ROOT, "deploy", "chart");
 const APP = "app.saas.trustiot.test";
 const TENANT = "0b6f3a52-3c1e-4c39-9d36-2f4f7f6a8e10";
-
-describe("the identity service's signing key", () => {
-  test("x is the raw public key of the DER that openssl prints, as internalIdentity.publicKeys takes it", () => {
-    const { publicKey } = generateKeyPairSync("ed25519");
-    const der = publicKey.export({ format: "der", type: "spki" });
-    const jwk = publicKey.export({ format: "jwk" });
-    expect(ed25519PublicKeyX(new Uint8Array(der))).toBe(jwk.x!);
-    expect(ed25519PublicKeyX(new Uint8Array(der))).toMatch(/^[A-Za-z0-9_-]{43}$/);
-  });
-
-  test("anything but an Ed25519 public key is refused", () => {
-    const { publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
-    expect(() => ed25519PublicKeyX(new Uint8Array(publicKey.export({ format: "der", type: "spki" })))).toThrow("not an Ed25519 public key");
-    expect(() => ed25519PublicKeyX(new Uint8Array(44))).toThrow("not an Ed25519 public key");
-  });
-});
 
 describe("the check's sessions", () => {
   test("the cookie carries 256 random bits; the database gets only their SHA-256", () => {
@@ -241,14 +219,15 @@ describe("checkTenantApi", () => {
 });
 
 describe("the API check's routes", () => {
-  const key = { kid: "nightly-1", x: "x" };
   const existing = { host: "gateway", path: "/certs", match: "PathPrefix", service: "certs" };
 
   test("come after the routes the shape's values set, which helm would otherwise drop", () => {
-    const values = apiValues("saas", key, [existing]) as { ingress: { routes: unknown[]; authzProvider: string } };
+    const values = apiValues("saas", [existing]) as { ingress: { routes: unknown[]; authzProvider: string } };
     expect(values.ingress.routes).toEqual([existing, ...API_ROUTES]);
     expect(values.ingress.authzProvider).toBe("trustiot-smoke-saas");
-    expect(() => apiValues("saas", key, [{ ...existing, host: "app", path: "/api/assets" }])).toThrow("already route app /api/assets to certs");
+    expect(() => apiValues("saas", [{ ...existing, host: "app", path: "/api/assets" }])).toThrow("already route app /api/assets to certs");
+    // No key and no key setting: the identity pod's init container generates it (Laysi/trustiot-v2#404).
+    expect(values).not.toHaveProperty("internalIdentity");
   });
 
   test("routesOfValues takes the list from the last values file that sets it", () => {
@@ -278,7 +257,7 @@ describe("the API check's values on each deployment shape", () => {
       let objects: K8sObject[];
       try {
         const file = join(dir, "values-api.yaml");
-        const values = apiValues(shape.name, { kid: "nightly-1", x: "jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8" }, routesOfValues(CHART_DIR, shape.valuesFiles));
+        const values = apiValues(shape.name, routesOfValues(CHART_DIR, shape.valuesFiles));
         writeFileSync(file, Bun.YAML.stringify(values, null, 2));
         const cmd = [helm, "template", "trustiot", CHART_DIR, "--namespace", `nightly-${shape.name}`, ...valuesArgs(CHART_DIR, shape), "-f", file];
         const rendered = Bun.spawnSync({ cmd, stdout: "pipe", stderr: "pipe", timeout: COMMAND_TIMEOUT_MS });
@@ -302,8 +281,11 @@ describe("the API check's values on each deployment shape", () => {
       for (const path of ["/api/identity", "/api/assets"]) {
         expect(routes.some((r) => r.includes(`"value":"${path}"`) && r.includes(settings.TRUSTIOT_APP_HOST!)), path).toBe(true);
       }
-      // The smoke creates the signing key Secret itself, before the dummy Secrets.
-      expect([...missingSecrets(objects).keys()]).toContain(SIGNING_KEY_STORE);
+      // Nothing makes a key for the identity service: the chart declares the Secret its init
+      // container fills, so no dummy is made for it, and nothing names another one.
+      expect(named("Secret", "trustiot-identity-signing-keys")).toBeDefined();
+      expect([...missingSecrets(objects).keys()].filter((name) => name.includes("signing"))).toEqual([]);
+      expect(JSON.stringify(objects)).not.toContain("signing-key.pem");
       // What the check reads from the release.
       expect(settings.TRUSTIOT_POSTGRES_DATABASE).toBeTruthy();
       expect(ingressHostsOf(objects)).toHaveLength(3);
@@ -315,89 +297,47 @@ describe("the API check's values on each deployment shape", () => {
 });
 
 // ---------------------------------------------------------------------------------------------
-// Laysi/trustiot-v2#77: the forged identity header, Host ports and normalized paths.
+// Laysi/trustiot-v2#77: the stolen identity header, Host ports and normalized paths.
 
-/** A signer over a throwaway key, and the key that verifies it. */
-function testSigner(): { signer: TokenSigner; verifies: (token: string) => boolean } {
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  const signer: TokenSigner = { kid: SIGNING_KEY_ID, sign: (data) => new Uint8Array(signWith(null, data, privateKey)) };
-  const verifies = (token: string) => {
-    const [header, payload, signature] = token.split(".");
-    return verify(null, Buffer.from(`${header}.${payload}`), publicKey, Buffer.from(signature!, "base64url"));
-  };
-  return { signer, verifies };
-}
+describe("the stolen identity header", () => {
+  const session = newSession();
+  // Made up, and built at run time like every credential-shaped value in scripts/.
+  const token = ["eyJh", "eyJz", "c2ln"].join(".");
 
-const decode = (part: string): unknown => JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
-
-describe("the forged identity header", () => {
-  test("is a token in the identity service's format, signed with the given key", () => {
-    const { signer, verifies } = testSigner();
-    const user = crypto.randomUUID();
-    const token = forgeIdentityToken(signer, user, TENANT, 1_760_000_000);
-    const parts = token.split(".");
-    expect(parts).toHaveLength(3);
-    for (const part of parts) expect(part).toMatch(/^[A-Za-z0-9_-]+$/);
-    // The header byte for byte, in the issuer's field order.
-    expect(Buffer.from(parts[0]!, "base64url").toString("utf8")).toBe(`{"alg":"EdDSA","typ":"internal-identity+jwt","kid":"${SIGNING_KEY_ID}"}`);
-    expect(decode(parts[1]!)).toEqual({
-      iss: "identity",
-      sub: user,
-      aud: "assets",
-      iat: 1_760_000_000,
-      exp: 1_760_000_060,
-      tenant: { id: TENANT, role: "viewer" },
-      platform_admin: false,
-    });
-    expect(verifies(token)).toBe(true);
-    expect(verifies(`${parts[0]}.${parts[1]}x.${parts[2]}`)).toBe(false);
+  test("is the one token the identity service's ext_authz check hands out for the member's GET of the tenant", async () => {
+    const asked: RawRequest[] = [];
+    const stolen = await stealIdentityToken(
+      async (request) => {
+        asked.push(request);
+        return { status: 200, headers: { [IDENTITY_HEADER]: [token] }, body: "", ms: 1 };
+      },
+      APP,
+      session,
+    );
+    expect(stolen).toBe(token);
+    expect(asked).toEqual([
+      { target: `${EXT_AUTHZ_PREFIX}${ASSETS_TENANT_PATH}`, hostHeader: APP, headers: [["cookie", `${SESSION_COOKIE}=${session.cookie}`]] },
+    ]);
   });
 
-  test("follows the verifier's constants and the claims of contract::InternalClaims", () => {
-    // A renamed claim or constant fails here first, before a night shows the header was refused.
-    const kit = readFileSync(join(REPO_ROOT, "crates", "service-kit", "src", "identity.rs"), "utf8");
-    const header = JSON.parse(identityTokenHeader("k")) as { alg: string; typ: string };
-    expect(kit).toContain(`pub const ALGORITHM: &str = "${header.alg}";`);
-    expect(kit).toContain(`pub const TOKEN_TYPE: &str = "${header.typ}";`);
-    const contract = readFileSync(join(REPO_ROOT, "crates", "contract", "src", "identity.rs"), "utf8");
-    const fields = (struct: string) => {
-      const body = new RegExp(`pub struct ${struct} \\{([\\s\\S]*?)\\n\\}`).exec(contract)?.[1];
-      if (body === undefined) throw new Error(`no struct ${struct}`);
-      return [...body.matchAll(/^\s+pub (\w+):/gm)].map((match) => match[1] ?? "").sort();
-    };
-    const claims = decode(forgeIdentityToken(testSigner().signer, crypto.randomUUID(), TENANT, 1).split(".")[1]!) as Record<string, unknown>;
-    expect(Object.keys(claims).sort()).toEqual(fields("InternalClaims"));
-    expect(Object.keys(claims.tenant as object).sort()).toEqual(fields("TenantGrant"));
-    expect(contract).toContain('#[serde(rename_all = "snake_case")]\npub enum TenantRole');
-    // The issuer's lifetime, which the verifiers accept.
-    expect(readFileSync(join(REPO_ROOT, "services", "identity", "src", "issuer.rs"), "utf8")).toContain("pub const TOKEN_LIFETIME_SECS: i64 = 60;");
+  test("anything but 200 with one token fails without printing what came back", async () => {
+    const answers: RawResponse[] = [
+      { status: 401, headers: {}, body: "", ms: 1 },
+      { status: 200, headers: {}, body: "", ms: 1 },
+      { status: 200, headers: { [IDENTITY_HEADER]: [token, token] }, body: "", ms: 1 },
+      { status: 200, headers: { [IDENTITY_HEADER]: ["not-a-token"] }, body: "", ms: 1 },
+    ];
+    for (const answer of answers) {
+      const failed = stealIdentityToken(async () => answer, APP, session);
+      await expect(failed).rejects.toThrow("the stolen-header checks below prove nothing");
+      await failed.catch((error: Error) => expect(error.message).not.toContain(token));
+    }
   });
 
-  test("names only UUIDs", () => {
-    const { signer } = testSigner();
-    expect(() => forgeIdentityToken(signer, "admin", TENANT, 1)).toThrow("not a UUID");
-    expect(() => forgeIdentityToken(signer, crypto.randomUUID(), "x", 1)).toThrow("not a UUID");
-  });
-
-  test("createSigningKey keeps a signer that the published public key verifies", async () => {
-    // openssl and kubectl replaced: the key pair comes from node:crypto, the Secret goes nowhere.
-    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-    const commands: string[][] = [];
-    const fake = (async (_log: RunLog, cmd: string[]) => {
-      commands.push(cmd);
-      const out = cmd[cmd.indexOf("-out") + 1];
-      if (cmd[1] === "genpkey") writeFileSync(out!, privateKey.export({ format: "pem", type: "pkcs8" }));
-      if (cmd[1] === "pkey") writeFileSync(out!, publicKey.export({ format: "der", type: "spki" }));
-      return { code: 0, stdout: "", stderr: "", timedOut: false };
-    }) as unknown as typeof run;
-    const key = await createSigningKey(new RunLog(), { kubectl: "kubectl", kubeconfig: "kubeconfig" }, "nightly-saas", { run: fake });
-    // What goes into the values (internalIdentity.publicKeys) is the public key alone.
-    expect(key.publicKey).toEqual({ kid: SIGNING_KEY_ID, x: publicKey.export({ format: "jwk" }).x! });
-    const token = forgeIdentityToken(key.signer, crypto.randomUUID(), TENANT, 1);
-    const [header, payload, signature] = token.split(".");
-    const jwk = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: key.publicKey.x }, format: "jwk" });
-    expect(verify(null, Buffer.from(`${header}.${payload}`), jwk, Buffer.from(signature!, "base64url"))).toBe(true);
-    expect(commands.at(-1)).toEqual(expect.arrayContaining(["create", "secret", "generic", SIGNING_KEY_STORE, "--namespace", "nightly-saas"]));
+  test("the ext_authz prefix is the identity service's", () => {
+    // A renamed prefix fails here first, before a night shows the check was refused.
+    const authz = readFileSync(join(REPO_ROOT, "services", "identity", "src", "ext_authz.rs"), "utf8");
+    expect(authz).toContain(`"${EXT_AUTHZ_PREFIX}`);
   });
 });
 
@@ -413,7 +353,7 @@ describe("checkIngressEdges", () => {
   function edges(result: TenantApiResult, override: Partial<Record<"direct" | "anonymous" | "admin" | "member", (request: RawRequest) => RawResponse>> = {}) {
     const sent: { to: "gateway" | "assets"; request: RawRequest }[] = [];
     const header = (request: RawRequest, name: string) => request.headers?.find(([key]) => key === name)?.[1];
-    const forged: string[] = [];
+    const stolen: string[] = [];
     const deps: EdgeCheckDeps = {
       sendToAssets: async (request) => {
         sent.push({ to: "assets", request });
@@ -427,17 +367,17 @@ describe("checkIngressEdges", () => {
         if (cookie.endsWith(result.member.cookie)) return (override.member ?? (() => served))(request);
         throw new Error(`unknown cookie ${cookie}`);
       },
-      forge: (tenantId) => {
-        const token = `forged-${forged.length}-${tenantId}`;
-        forged.push(token);
+      steal: async () => {
+        const token = `stolen-${stolen.length}`;
+        stolen.push(token);
         return token;
       },
       log: () => {},
     };
-    return { deps, sent, forged, header };
+    return { deps, sent, stolen, header };
   }
 
-  test("a forged header that the assets service accepts never gets through; Host ports and normalized paths reach the tenant", async () => {
+  test("a stolen header that the assets service accepts never gets through; Host ports and normalized paths reach the tenant", async () => {
     const result = made();
     const run = edges(result);
     const detail = await checkIngressEdges(run.deps, APP, LISTENER_PORT, result);
@@ -445,15 +385,15 @@ describe("checkIngressEdges", () => {
     expect(detail).toContain("403 permission_denied with the administrator's cookie");
     expect(detail).toContain("Host :80 and :8443: 200 with the tenant");
     expect(detail).toContain(`on ${NORMALIZED_TENANT_PATHS.length} path spellings`);
-    // First the positive control past the ingress, then the two forged requests through it.
+    // First the positive control past the ingress, then the two stolen requests through it.
     expect(run.sent[0]?.to).toBe("assets");
-    expect(run.header(run.sent[0]!.request, IDENTITY_HEADER)).toBe(run.forged[0]);
+    expect(run.header(run.sent[0]!.request, IDENTITY_HEADER)).toBe(run.stolen[0]);
     expect(run.sent.filter((s) => s.to === "assets")).toHaveLength(1);
-    const forgedThroughGateway = run.sent.filter((s) => s.to === "gateway" && run.header(s.request, IDENTITY_HEADER) !== undefined);
-    expect(forgedThroughGateway.map((s) => run.header(s.request, "cookie"))).toEqual([undefined, `${SESSION_COOKIE}=${result.admin.cookie}`]);
+    const stolenThroughGateway = run.sent.filter((s) => s.to === "gateway" && run.header(s.request, IDENTITY_HEADER) !== undefined);
+    expect(stolenThroughGateway.map((s) => run.header(s.request, "cookie"))).toEqual([undefined, `${SESSION_COOKIE}=${result.admin.cookie}`]);
     // A fresh token for every request: none outlives its minute.
-    expect(new Set(run.forged).size).toBe(3);
-    // The member's requests: two Hosts with a port, then every path spelling, never with a forged header.
+    expect(new Set(run.stolen).size).toBe(3);
+    // The member's requests: two Hosts with a port, then every path spelling, never with a stolen header.
     const member = run.sent.filter((s) => run.header(s.request, "cookie") === `${SESSION_COOKIE}=${result.member.cookie}`);
     expect(member.map((s) => [s.request.hostHeader, s.request.target])).toEqual([
       [`${APP}:80`, ASSETS_TENANT_PATH],
@@ -463,22 +403,22 @@ describe("checkIngressEdges", () => {
     for (const s of member) expect(run.header(s.request, IDENTITY_HEADER)).toBeUndefined();
   });
 
-  test("a forged header the assets service refuses proves nothing, so the check fails", async () => {
+  test("a stolen header the assets service refuses proves nothing, so the check fails", async () => {
     const result = made();
     await expect(checkIngressEdges(edges(result, { direct: () => problem(401, "unauthenticated") }).deps, APP, LISTENER_PORT, result)).rejects.toThrow(
-      "the forged-header checks below prove nothing",
+      "the stolen-header checks below prove nothing",
     );
   });
 
-  test("a forged header that reaches the assets service through the ingress fails the check", async () => {
+  test("a stolen header that reaches the assets service through the ingress fails the check", async () => {
     const result = made();
     await expect(checkIngressEdges(edges(result, { anonymous: () => served }).deps, APP, LISTENER_PORT, result)).rejects.toThrow(
-      "a forged identity header without a cookie answered 200",
+      "a stolen identity header without a cookie answered 200",
     );
-    // With the administrator's cookie: the service saw the forged tenant (200), or both headers (401).
+    // With the administrator's cookie: the service saw the stolen tenant (200), or both headers (401).
     for (const answer of [served, problem(401, "unauthenticated")]) {
       await expect(checkIngressEdges(edges(result, { admin: () => answer }).deps, APP, LISTENER_PORT, result)).rejects.toThrow(
-        `the administrator's cookie with a forged identity header answered ${answer.status}`,
+        `the administrator's cookie with a stolen identity header answered ${answer.status}`,
       );
     }
   });

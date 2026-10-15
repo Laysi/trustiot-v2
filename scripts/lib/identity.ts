@@ -5,7 +5,11 @@
 //
 // The key and the session cookie live in `<state directory>/identity/` (directory 0700, files
 // 0600), never in the repository. `down` keeps that directory, because the sessions in the
-// Postgres data volume outlive `down` too; `purge` removes it with the volume.
+// Postgres data volume outlive `down` too; `purge` removes it with the volume. From the key,
+// `up` writes the two files a cluster's identity pod gets from its init container
+// (Laysi/trustiot-v2#404): the signing keys file the identity service reads
+// (`TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE`) and the public keys file every service reads
+// (`TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`).
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -15,6 +19,8 @@ import { ensurePrivateDir, writePrivateFile } from "./state.ts";
 /** The entry of the state directory that holds the key and the cookie; `down` keeps it. */
 export const IDENTITY_DIR = "identity";
 const SIGNING_KEY_FILE = "signing-key.pem";
+const SIGNING_KEYS_FILE = "signing-keys.json";
+const PUBLIC_KEYS_FILE = "jwks.json";
 const COOKIE_FILE = "dev-session-cookie";
 
 /** The service role the Job creates for the identity service (`<schema>_app`). */
@@ -46,6 +52,16 @@ export function identityDir(stateDir: string): string {
 
 export function signingKeyPath(stateDir: string): string {
   return join(identityDir(stateDir), SIGNING_KEY_FILE);
+}
+
+/** The signing keys file (crates/identity-keys), written from the key by `up`. */
+export function signingKeysPath(stateDir: string): string {
+  return join(identityDir(stateDir), SIGNING_KEYS_FILE);
+}
+
+/** The public keys file, a JWK Set, written from the key by `up`. */
+export function publicKeysPath(stateDir: string): string {
+  return join(identityDir(stateDir), PUBLIC_KEYS_FILE);
 }
 
 export function cookiePath(stateDir: string): string {
@@ -81,30 +97,49 @@ function loadSigningKey(path: string) {
 /**
  * Makes sure the instance has a signing key and returns its path. An existing key is kept (and
  * validated), so the tokens of a running identity service stay valid across `up`; a new one is a
- * PKCS#8 PEM, the format `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` takes, written with mode 0600.
+ * PKCS#8 PEM, written with mode 0600. Then writes the signing keys file and the public keys file
+ * from it (mode 0600 each, replaced atomically), so a running service rereads the same content.
  */
 export function ensureSigningKey(stateDir: string): { path: string; created: boolean } {
   const path = signingKeyPath(stateDir);
+  let created = false;
   if (existsSync(path)) {
     loadSigningKey(path);
-    return { path, created: false };
+  } else {
+    ensurePrivateDir(identityDir(stateDir));
+    const { privateKey } = generateKeyPairSync("ed25519");
+    writePrivateFile(path, privateKey.export({ type: "pkcs8", format: "pem" }) as string);
+    created = true;
   }
-  ensurePrivateDir(identityDir(stateDir));
-  const { privateKey } = generateKeyPairSync("ed25519");
-  writePrivateFile(path, privateKey.export({ type: "pkcs8", format: "pem" }) as string);
-  return { path, created: true };
+  writePrivateFile(signingKeysPath(stateDir), signingKeys(stateDir));
+  writePrivateFile(publicKeysPath(stateDir), publicKeys(stateDir));
+  return { path, created };
+}
+
+/** The key id of the instance's key: derived from the public key, so a new key never reuses one. */
+function keyId(x: string): string {
+  return `dev-${createHash("sha256").update(x).digest("hex").slice(0, 12)}`;
 }
 
 /**
- * The JWK Set of the signing key's public key, as `TRUSTIOT_INTERNAL_IDENTITY_KEYS` takes it
- * (crates/service-kit/README.md, 「公鑰與輪替」). The `kid` is derived from the public key, so a
- * new key never reuses an old `kid`. Derived from the key file on every call; nothing else holds
- * the public key.
+ * The signing keys file of the instance's key, in the format the identity pod's init container
+ * writes (crates/identity-keys): one key of generation 1, published and signing from the start.
+ */
+function signingKeys(stateDir: string): string {
+  const jwk = loadSigningKey(signingKeyPath(stateDir)).export({ format: "jwk" });
+  const key = { kid: keyId(jwk.x ?? ""), generation: 1, x: jwk.x, d: jwk.d, published_at: 0, signs_from: 0 };
+  return JSON.stringify({ keys: [key] });
+}
+
+/**
+ * The JWK Set of the signing key's public key, the content of the file
+ * `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` names (crates/service-kit/README.md, 「公鑰與輪替」). The
+ * `kid` is derived from the public key, so a new key never reuses an old `kid`. Derived from the
+ * key file on every call.
  */
 export function publicKeys(stateDir: string): string {
   const jwk = createPublicKey(loadSigningKey(signingKeyPath(stateDir))).export({ format: "jwk" });
-  const kid = `dev-${createHash("sha256").update(jwk.x ?? "").digest("hex").slice(0, 12)}`;
-  return JSON.stringify({ keys: [{ kty: "OKP", crv: "Ed25519", kid, x: jwk.x }] });
+  return JSON.stringify({ keys: [{ kty: "OKP", crv: "Ed25519", kid: keyId(jwk.x ?? ""), x: jwk.x }] });
 }
 
 /**
@@ -118,17 +153,18 @@ export function ingressRoutes(): string {
   return JSON.stringify([{ host: INGRESS_HOST, path: "/", match: "PathPrefix", service: "assets" }]);
 }
 
-/** What the identity part of `env` prints; `undefined` when the instance has no key yet. */
+/** What the identity part of `env` prints (paths, never a key); `undefined` before `up` wrote the files. */
 export interface IdentityEnv {
-  signingKeyFile: string;
-  keys: string;
+  signingKeysFile: string;
+  publicKeysFile: string;
   routes: string;
 }
 
 export function identityEnv(stateDir: string): IdentityEnv | undefined {
-  const path = signingKeyPath(stateDir);
-  if (!existsSync(path)) return undefined;
-  return { signingKeyFile: path, keys: publicKeys(stateDir), routes: ingressRoutes() };
+  const signingKeysFile = signingKeysPath(stateDir);
+  const publicKeysFile = publicKeysPath(stateDir);
+  if (!existsSync(signingKeysFile) || !existsSync(publicKeysFile)) return undefined;
+  return { signingKeysFile, publicKeysFile, routes: ingressRoutes() };
 }
 
 // --- the development session ----------------------------------------------------------------
@@ -196,7 +232,8 @@ export function cookieHeader(cookie: string): string {
 
 /**
  * What `status` reports about the signing key: present, owner-only, and an Ed25519 PKCS#8 key
- * with a usable public half. Never includes key material.
+ * with a usable public half, and the signing keys and public keys files written from it. Never
+ * includes key material.
  */
 export function signingKeyCheck(stateDir: string): { ok: boolean; detail: string } {
   const path = signingKeyPath(stateDir);
@@ -207,7 +244,17 @@ export function signingKeyCheck(stateDir: string): { ok: boolean; detail: string
     if (mode !== 0o600) return { ok: false, detail: `mode is ${mode.toString(8)}, expected 600` };
     if ((dirMode & WIDER_THAN_OWNER) !== 0) return { ok: false, detail: `directory mode is ${dirMode.toString(8)}` };
     const keys = JSON.parse(publicKeys(stateDir)) as { keys: { kid: string }[] };
-    return { ok: true, detail: `Ed25519, mode 600, kid ${keys.keys[0]?.kid}` };
+    for (const [file, expected] of [
+      [signingKeysPath(stateDir), signingKeys(stateDir)],
+      [publicKeysPath(stateDir), publicKeys(stateDir)],
+    ] as const) {
+      if (!existsSync(file) || readFileSync(file, "utf8") !== expected) {
+        return { ok: false, detail: `${file} is missing or not written from the key; run up` };
+      }
+      const fileMode = statSync(file).mode & 0o777;
+      if (fileMode !== 0o600) return { ok: false, detail: `${file}: mode is ${fileMode.toString(8)}, expected 600` };
+    }
+    return { ok: true, detail: `Ed25519, mode 600, kid ${keys.keys[0]?.kid}, key files written` };
   } catch (error) {
     return { ok: false, detail: error instanceof Error ? error.message : String(error) };
   }

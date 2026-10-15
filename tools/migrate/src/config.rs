@@ -527,6 +527,145 @@ impl Validate for ClickHouseAdminConfig {
     }
 }
 
+/// Settings of `migrate identity-signing-keys`, the identity service's init container that keeps
+/// the internal identity signing keys and their public keys (src/signing_keys.rs).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SigningKeysConfig {
+    pub keys: KeySettings,
+}
+
+/// Shortest `keys.propagation_seconds`: the chart's schema minimum for
+/// `internalIdentity.keyPropagationSeconds`.
+pub const MIN_PROPAGATION_SECONDS: u64 = 120;
+
+/// Longest `keys.propagation_seconds`: a day.
+pub const MAX_PROPAGATION_SECONDS: u64 = 86_400;
+
+/// `keys.*`: the Secret and the ConfigMap, how to reach them, and what the chart asks for.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeySettings {
+    /// `TRUSTIOT__KEYS__API_URL`: the API server, `https://` (the chart sets
+    /// `https://kubernetes.default.svc`). `http://` is accepted for 127.0.0.1 only, for tests.
+    pub api_url: String,
+    /// `TRUSTIOT__KEYS__NAMESPACE`: the release namespace.
+    pub namespace: String,
+    /// `TRUSTIOT__KEYS__TOKEN_FILE`: the projected token of the identity service's
+    /// ServiceAccount, which only the init container mounts; read on every request.
+    pub token_file: PathBuf,
+    /// `TRUSTIOT__KEYS__CA_FILE`: the cluster CA (`kube-root-ca.crt`), the only trust anchor.
+    pub ca_file: PathBuf,
+    /// `TRUSTIOT__KEYS__SECRET`: the Secret the chart declares empty for the key set.
+    pub secret: String,
+    /// `TRUSTIOT__KEYS__CONFIG_MAP`: the ConfigMap the chart declares empty for the public keys.
+    pub config_map: String,
+    /// `TRUSTIOT__KEYS__GENERATION`: the chart's `internalIdentity.keyGeneration`; a higher one
+    /// than every key in the Secret adds a key (a rotation).
+    pub generation: String,
+    /// `TRUSTIOT__KEYS__REVOKE_BEFORE_GENERATION`: the chart's
+    /// `internalIdentity.revokeBeforeGeneration`; keys of a lower generation are removed at once.
+    #[serde(default = "no_revocation")]
+    pub revoke_before_generation: String,
+    /// `TRUSTIOT__KEYS__PROPAGATION_SECONDS`: the chart's
+    /// `internalIdentity.keyPropagationSeconds`, how long a new key waits after its public key is
+    /// published before it signs.
+    pub propagation_seconds: u64,
+    /// `TRUSTIOT__KEYS__LEGACY_KEY_FILE`: while the chart still names a signing key a person made
+    /// before Laysi/trustiot-v2#404 (`internalIdentity.signingKeySecret`), that key's PKCS#8 PEM
+    /// file, mounted into the init container only.
+    #[serde(default)]
+    pub legacy_key_file: Option<PathBuf>,
+    /// `TRUSTIOT__KEYS__LEGACY_PUBLIC_KEYS`: with the file, the chart's
+    /// `internalIdentity.publicKeys` as a JWK Set, where the key's key id is found.
+    #[serde(default)]
+    pub legacy_public_keys: Option<String>,
+    /// `TRUSTIOT__KEYS__WAIT`: how long it retries an API server that does not answer. Default
+    /// 10 minutes.
+    #[serde(
+        default = "default_wait",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub wait: Duration,
+}
+
+fn no_revocation() -> String {
+    "0".to_owned()
+}
+
+impl Validate for SigningKeysConfig {
+    fn validate(&self) -> Result<(), Invalid> {
+        let keys = &self.keys;
+        check_api_url("keys.api_url", &keys.api_url)?;
+        if !is_dns_label(&keys.namespace) {
+            return Err(Invalid::new(
+                "keys.namespace",
+                "must be a Kubernetes namespace name (DNS label)",
+            ));
+        }
+        for (key, name) in [
+            ("keys.secret", &keys.secret),
+            ("keys.config_map", &keys.config_map),
+        ] {
+            if !is_object_name(name) {
+                return Err(Invalid::new(
+                    key,
+                    "must be a Kubernetes object name (lower-case letters, digits, - and .)",
+                ));
+            }
+        }
+        let generation = crate::passwords::parse_generation(&keys.generation)
+            .filter(|generation| *generation >= 1)
+            .ok_or_else(|| {
+                Invalid::new(
+                    "keys.generation",
+                    "must be 1 to 9 decimal digits, at least 1 (generations are compared as \
+                     numbers and only go up)",
+                )
+            })?;
+        let revoke_before = crate::passwords::parse_generation(&keys.revoke_before_generation)
+            .ok_or_else(|| {
+                Invalid::new(
+                    "keys.revoke_before_generation",
+                    "must be 1 to 9 decimal digits",
+                )
+            })?;
+        if generation < revoke_before {
+            return Err(Invalid::new(
+                "keys.generation",
+                "must not be below keys.revoke_before_generation, or no key could sign",
+            ));
+        }
+        if !(MIN_PROPAGATION_SECONDS..=MAX_PROPAGATION_SECONDS).contains(&keys.propagation_seconds)
+        {
+            return Err(Invalid::new(
+                "keys.propagation_seconds",
+                format!(
+                    "must be between {MIN_PROPAGATION_SECONDS} and {MAX_PROPAGATION_SECONDS} \
+                     seconds"
+                ),
+            ));
+        }
+        match (&keys.legacy_key_file, &keys.legacy_public_keys) {
+            (None, None) => {}
+            (Some(file), Some(_)) if file.is_absolute() && file.file_name().is_some() => {}
+            (Some(_), Some(_)) => {
+                return Err(Invalid::new(
+                    "keys.legacy_key_file",
+                    "must be an absolute path to a file",
+                ));
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(Invalid::new(
+                    "keys.legacy_public_keys",
+                    "keys.legacy_key_file and keys.legacy_public_keys go together",
+                ));
+            }
+        }
+        check_wait("keys.wait", keys.wait)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -709,6 +848,81 @@ mod tests {
         for (key, change) in broken {
             let mut config = admin_config();
             change(&mut config.admin);
+            assert_eq!(
+                config
+                    .validate()
+                    .err()
+                    .map(|invalid| invalid.key)
+                    .as_deref(),
+                Some(key)
+            );
+        }
+    }
+
+    fn keys_config() -> SigningKeysConfig {
+        SigningKeysConfig {
+            keys: KeySettings {
+                api_url: "https://kubernetes.default.svc".to_owned(),
+                namespace: "trustiot".to_owned(),
+                token_file: PathBuf::from("/token"),
+                ca_file: PathBuf::from("/ca.crt"),
+                secret: "trustiot-identity-signing-keys".to_owned(),
+                config_map: "trustiot-internal-identity-keys".to_owned(),
+                generation: "1".to_owned(),
+                revoke_before_generation: "0".to_owned(),
+                propagation_seconds: 600,
+                legacy_key_file: None,
+                legacy_public_keys: None,
+                wait: DEFAULT_WAIT,
+            },
+        }
+    }
+
+    type KeysBreakage = (&'static str, fn(&mut KeySettings));
+
+    #[test]
+    fn signing_keys_settings() {
+        assert!(keys_config().validate().is_ok());
+        let mut legacy = keys_config();
+        legacy.keys.legacy_key_file = Some(PathBuf::from("/etc/trustiot/legacy-key/key.pem"));
+        legacy.keys.legacy_public_keys = Some(r#"{"keys":[]}"#.to_owned());
+        assert!(legacy.validate().is_ok());
+        let mut revoking = keys_config();
+        revoking.keys.generation = "3".to_owned();
+        revoking.keys.revoke_before_generation = "3".to_owned();
+        assert!(revoking.validate().is_ok());
+
+        let broken: [KeysBreakage; 13] = [
+            ("keys.api_url", |k| {
+                k.api_url = "http://kubernetes.default.svc".to_owned();
+            }),
+            ("keys.namespace", |k| k.namespace = "Trust_IoT".to_owned()),
+            ("keys.secret", |k| k.secret = "a/b".to_owned()),
+            ("keys.config_map", |k| k.config_map = String::new()),
+            ("keys.generation", |k| k.generation = "0".to_owned()),
+            ("keys.generation", |k| k.generation = "v2".to_owned()),
+            ("keys.generation", |k| {
+                k.revoke_before_generation = "2".to_owned();
+            }),
+            ("keys.revoke_before_generation", |k| {
+                k.revoke_before_generation = String::new();
+            }),
+            ("keys.propagation_seconds", |k| k.propagation_seconds = 119),
+            ("keys.propagation_seconds", |k| {
+                k.propagation_seconds = 86_401
+            }),
+            ("keys.legacy_key_file", |k| {
+                k.legacy_key_file = Some(PathBuf::from("relative.pem"));
+                k.legacy_public_keys = Some(String::new());
+            }),
+            ("keys.legacy_public_keys", |k| {
+                k.legacy_key_file = Some(PathBuf::from("/key.pem"));
+            }),
+            ("keys.wait", |k| k.wait = Duration::ZERO),
+        ];
+        for (key, change) in broken {
+            let mut config = keys_config();
+            change(&mut config.keys);
             assert_eq!(
                 config
                     .validate()

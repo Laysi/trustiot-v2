@@ -13,9 +13,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use sqlx::PgConnection;
-use support::{
-    Service, TestKey, cookie, jwks, new_secret, request, request_with_body, scratch_dir,
-};
+use support::{KeyFiles, Service, TestKey, cookie, new_secret, request, request_with_body};
 use testkit::postgres::TEST_PASSWORD;
 use testkit::product::{ProductPostgres, product_postgres};
 
@@ -134,27 +132,18 @@ async fn tenant_count(admin: &mut PgConnection) -> i64 {
 }
 
 fn start(product: &ProductPostgres) -> Service {
-    let dir = scratch_dir("tenants");
     let key = TestKey::new(65);
-    let key_file = dir.join("signing-key.pem");
-    std::fs::write(&key_file, key.pem()).expect("write the signing key");
+    let files = KeyFiles::new("tenants", &key, KID);
     let routes = json!([
         {"host": APP, "path": "/api/identity", "match": "PathPrefix", "service": "identity"},
         {"host": APP, "path": "/api/assets", "match": "PathPrefix", "service": "assets"},
     ]);
-    let mut env: Vec<(String, String)> = vec![
-        (
-            "TRUSTIOT_INTERNAL_IDENTITY_KEYS".into(),
-            jwks(&[(&key, KID)]),
-        ),
-        (
-            "TRUSTIOT_IDENTITY_SIGNING_KEY_FILE".into(),
-            key_file.display().to_string(),
-        ),
+    let mut env = files.env();
+    env.extend([
         ("TRUSTIOT_INGRESS_ROUTES".into(), routes.to_string()),
         ("TRUSTIOT__DATABASE__USERNAME".into(), "identity_app".into()),
         ("TRUSTIOT__DATABASE__PASSWORD".into(), TEST_PASSWORD.into()),
-    ];
+    ]);
     env.extend(
         product
             .platform_env()

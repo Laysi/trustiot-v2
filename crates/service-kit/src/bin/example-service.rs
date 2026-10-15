@@ -2,8 +2,10 @@
 //! It is not a product service and is never deployed to production.
 //!
 //! Configuration: `TRUSTIOT__GREETING` (required) plus the kit's settings. With the default
-//! `contract` feature, also the platform setting `TRUSTIOT_INTERNAL_IDENTITY_KEYS` (optional
-//! here only; see `Platform`), and a tenant database when `TRUSTIOT__DATABASE__USERNAME` and
+//! `contract` feature, also the platform setting `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` (the
+//! identity service's public keys; optional here only, see `Platform`: when it is set, the
+//! example is not ready until the file holds a usable JWK Set, and follows changes to it), and a
+//! tenant database when `TRUSTIOT__DATABASE__USERNAME` and
 //! `TRUSTIOT__DATABASE__PASSWORD` are set: the platform settings
 //! `TRUSTIOT_POSTGRES_{HOST,PORT,DATABASE,SSLMODE,CA_FILE}` then say where, and the service
 //! refuses to start unless `TRUSTIOT_POSTGRES_SSLMODE` is `verify-full` and
@@ -16,9 +18,9 @@
 //! - `GET /v1/slow?ms=N` answers after N milliseconds (at most 10 000), to exercise draining and
 //!   the handler timeout.
 //! - `GET /v1/panic` panics, to exercise the kit's panic handling.
-//! - `GET /v1/whoami` (`contract` feature, when the identity keys are set) returns the user of the
+//! - `GET /v1/whoami` (`contract` feature, when the keys file is set) returns the user of the
 //!   request's internal identity token, which must be addressed to `assets`; otherwise 401.
-//! - `GET /v1/items` (`contract` feature, when the identity keys and the database are set) lists
+//! - `GET /v1/items` (`contract` feature, when the keys file and the database are set) lists
 //!   the names in `example_items` (crates/service-kit/sql/tenant-table.sql) in a tenant
 //!   transaction for the token's tenant. The query has no tenant condition: row-level security
 //!   returns only that tenant's rows. A token without a tenant answers 403 `permission_denied`.
@@ -60,10 +62,10 @@ struct Config {
 #[cfg(feature = "contract")]
 #[derive(Debug, Default, Deserialize)]
 struct Platform {
-    /// The identity service's public keys (`TRUSTIOT_INTERNAL_IDENTITY_KEYS`). Optional only so
-    /// the kit's other tests can run the example without keys; a product service declares it
-    /// without `Option`, so it refuses to start without keys.
-    internal_identity_keys: Option<service_kit::identity::IdentityKeys>,
+    /// The identity service's public keys file (`TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`). Optional
+    /// only so the kit's other tests can run the example without keys; a product service
+    /// declares it without `Option`, so it refuses to start without it.
+    internal_identity_keys_file: Option<std::path::PathBuf>,
     /// `TRUSTIOT_POSTGRES_*`: read only when `database` is set. A product service declares
     /// them without `Option` and `postgres_sslmode` as `service_kit::postgres::SslMode`, so any
     /// other `sslmode` stops it at startup. The example keeps them optional and checks the
@@ -206,8 +208,11 @@ async fn start(context: Context<Config>) -> Result<Router, BoxError> {
             }
             None => None,
         };
-        match &config.platform.internal_identity_keys {
-            Some(keys) => router.merge(identity::routes(keys.clone(), database)),
+        match &config.platform.internal_identity_keys_file {
+            Some(path) => {
+                let keys = service_kit::identity::PublishedKeys::watch(&context, path).await;
+                router.merge(identity::routes(keys, database))
+            }
             None => router,
         }
     };
@@ -222,7 +227,7 @@ mod identity {
     use axum::routing::get;
     use axum::{Json, Router};
     use contract::{ErrorBody, ErrorCode, ServiceName};
-    use service_kit::identity::{IdentityKeys, IdentityVerifier, UserIdentity};
+    use service_kit::identity::{IdentityVerifier, PublishedKeys, UserIdentity};
     use service_kit::tenant::{TenantDb, TenantDbError};
 
     #[derive(Clone)]
@@ -239,7 +244,7 @@ mod identity {
 
     /// The example stands in for a product service, so it accepts tokens addressed to `assets`.
     /// A product service names itself here.
-    pub(crate) fn routes(keys: IdentityKeys, database: Option<TenantDb>) -> Router {
+    pub(crate) fn routes(keys: PublishedKeys, database: Option<TenantDb>) -> Router {
         let verifier = IdentityVerifier::new(ServiceName::Assets, keys);
         let whoami = Router::new()
             .route("/v1/whoami", get(whoami))

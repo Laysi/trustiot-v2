@@ -19,9 +19,14 @@ data:
   TRUSTIOT_GATEWAY_HOST: {{ $v.hosts.gateway | quote }}
   TRUSTIOT_OTA_HOST: {{ $v.hosts.ota | quote }}
   TRUSTIOT_CLIENT_IP_SOURCE: {{ include "trustiot.clientIpSource" . | quote }}
-  {{- /* Public keys only: the schema allows no private member (decision 27). */}}
-  {{- with include "trustiot.internalIdentity.jwks" . }}
-  TRUSTIOT_INTERNAL_IDENTITY_KEYS: {{ . | quote }}
+  {{- /* The identity service's public keys (decision 27): the JWK Set in the ConfigMap every
+  service mounts (templates/internal-identity.yaml), which services reread without a restart.
+  Only while the identity service is enabled, since nothing else publishes keys: without it a
+  service that verifies internal identity refuses to start, as it did without publicKeys before
+  Laysi/trustiot-v2#404, rather than waiting unready for keys that never come. */}}
+  {{- $keys := include "trustiot.identity.keys" . | fromYaml }}
+  {{- if include "trustiot.identity.enabled" . }}
+  TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE: {{ printf "%s/%s" (include "trustiot.identity.publicKeysDir" .) $keys.configMapKey | quote }}
   {{- end }}
   {{- /* Where Postgres is; its CA file reaches only the services that use it ("trustiot.caMounts"). */}}
   TRUSTIOT_POSTGRES_HOST: {{ include "trustiot.postgres.host" . | quote }}

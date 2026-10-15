@@ -52,6 +52,7 @@ on:
       - deploy/images/rust-binary.Containerfile
       - scripts/**
       - crates/contract/**
+      - crates/identity-keys/**
       - crates/outbox/**
       - crates/service-kit/**
       - crates/testkit/**

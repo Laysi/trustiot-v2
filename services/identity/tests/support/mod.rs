@@ -95,10 +95,100 @@ impl TestKey {
     }
 }
 
-/// A JWK Set of these keys, as `TRUSTIOT_INTERNAL_IDENTITY_KEYS` holds it.
+/// A JWK Set of these keys, as the public keys file (`TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`, the
+/// ConfigMap the init container fills) holds it.
 pub fn jwks(keys: &[(&TestKey, &str)]) -> String {
     let keys: Vec<_> = keys.iter().map(|(key, kid)| key.jwk(kid)).collect();
     json!({ "keys": keys }).to_string()
+}
+
+/// A signing keys file (`TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE`, the Secret the init container
+/// fills) with these (key, kid, generation, signs_from) entries, each published at 0.
+pub fn signing_keys(keys: &[(&TestKey, &str, u64, i64)]) -> String {
+    let keys: Vec<_> = keys
+        .iter()
+        .map(|(key, kid, generation, signs_from)| {
+            json!({
+                "kid": kid, "generation": generation, "x": key.jwk(kid)["x"],
+                "d": URL_SAFE_NO_PAD.encode(key.0.to_bytes()),
+                "published_at": 0, "signs_from": signs_from
+            })
+        })
+        .collect();
+    json!({ "keys": keys }).to_string()
+}
+
+/// The platform setting with the signing keys file.
+pub const SIGNING_KEYS_FILE: &str = "TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE";
+/// The platform setting with the public keys file.
+pub const PUBLIC_KEYS_FILE: &str = "TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE";
+
+/// The two key files the chart mounts into the identity pod, in a directory of their own.
+pub struct KeyFiles {
+    pub signing_keys: PathBuf,
+    pub public_keys: PathBuf,
+}
+
+impl KeyFiles {
+    /// `key` signing from the start (generation 1) and published under `kid`.
+    pub fn new(name: &str, key: &TestKey, kid: &str) -> Self {
+        Self::with(
+            name,
+            &signing_keys(&[(key, kid, 1, 0)]),
+            &jwks(&[(key, kid)]),
+        )
+    }
+
+    /// Files with this content.
+    pub fn with(name: &str, signing: &str, public: &str) -> Self {
+        let dir = scratch_dir(name);
+        let files = Self {
+            signing_keys: dir.join("signing-keys.json"),
+            public_keys: dir.join("jwks.json"),
+        };
+        files.set_signing_keys(signing);
+        files.set_public_keys(public);
+        files
+    }
+
+    /// Replaces the signing keys file as the kubelet updates a Secret volume: a new file renamed
+    /// over it, so the service reads the old text or the new.
+    pub fn set_signing_keys(&self, text: &str) {
+        replace(&self.signing_keys, text);
+    }
+
+    /// Replaces the public keys file the same way.
+    pub fn set_public_keys(&self, text: &str) {
+        replace(&self.public_keys, text);
+    }
+
+    /// The two settings that point the service at these files.
+    pub fn env(&self) -> Vec<(String, String)> {
+        vec![
+            (
+                SIGNING_KEYS_FILE.to_owned(),
+                self.signing_keys.display().to_string(),
+            ),
+            (
+                PUBLIC_KEYS_FILE.to_owned(),
+                self.public_keys.display().to_string(),
+            ),
+        ]
+    }
+}
+
+fn replace(path: &Path, text: &str) {
+    let next = path.with_extension("next");
+    std::fs::write(&next, text).expect("write the next key file");
+    std::fs::rename(&next, path).expect("replace the key file");
+}
+
+/// The key id in a token's header.
+pub fn kid_of(token: &str) -> String {
+    let header = token.split('.').next().expect("a header segment");
+    let header: serde_json::Value =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(header).expect("base64url")).expect("JSON");
+    header["kid"].as_str().expect("a kid").to_owned()
 }
 
 /// A new session secret from the operating system's CSPRNG, as the login flow will create them.
@@ -197,6 +287,15 @@ impl Output {
 
     /// Waits for the JSON line whose `message` is `message`.
     pub fn wait_for_message(&self, message: &str, timeout: Duration) -> Option<serde_json::Value> {
+        self.wait_for_json(timeout, |value| value["message"] == message)
+    }
+
+    /// Waits for a JSON line that `matches`.
+    pub fn wait_for_json(
+        &self,
+        timeout: Duration,
+        matches: impl Fn(&serde_json::Value) -> bool,
+    ) -> Option<serde_json::Value> {
         let deadline = Instant::now() + timeout;
         let (lines, changed) = &*self.lines;
         let mut guard = lines.lock().expect("output lock");
@@ -204,7 +303,7 @@ impl Output {
             if let Some(found) = guard
                 .iter()
                 .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-                .find(|value| value["message"] == message)
+                .find(|value| matches(value))
             {
                 return Some(found);
             }

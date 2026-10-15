@@ -1,0 +1,78 @@
+# Internal identity keys e2e overlay (identity-keys.e2e.ts, Laysi/trustiot-v2#404). Use after a
+# deployment shape and its instance overlay:
+#   -f values-saas.yaml -f tests/values/saas-instance.yaml -f tests/e2e/values-identity-keys-e2e.yaml
+# The test adds the images and the key generations of each step. Nothing here makes a key: the
+# identity pod's init container generates them in the cluster.
+
+# The migration Job runs as in a real install: the identity service needs its role, its password
+# and its migrations.
+
+ingress:
+  # The test never goes through the ingress gateway; keep it small and off the node's ports.
+  replicas: 1
+  direct:
+    serviceType: ClusterIP
+  # The cookie routes the identity service addresses its tokens by (TRUSTIOT_INGRESS_ROUTES): the
+  # test asks its ext_authz endpoint for a token for the assets route, which the example service
+  # verifies.
+  routes:
+    - host: app
+      path: /api/identity
+      match: PathPrefix
+      service: identity
+    - host: app
+      path: /api/assets
+      match: PathPrefix
+      service: assets
+
+postgres:
+  mode: bundled
+  bundled:
+    storage:
+      size: 1Gi
+
+# The chart always deploys ClickHouse in bundled mode; small enough for the lab cluster.
+clickhouse:
+  mode: bundled
+  bundled:
+    storage:
+      size: 2Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 1536Mi
+
+observability:
+  sentry:
+    # No Sentry Secret in the test namespace.
+    enabled: false
+  collector:
+    enabled: false
+
+# values.yaml lists postgres for assets, which the example service plays here without a database.
+mesh:
+  calls:
+    assets: []
+
+internalIdentity:
+  # The schema's minimum, so a rotation's overlap fits in the test.
+  keyPropagationSeconds: 120
+
+services:
+  # The identity service built from the commit: it signs with the generated keys.
+  identity:
+    enabled: true
+  # crates/service-kit's example-service in the place of assets: GET /v1/whoami verifies an internal
+  # identity token addressed to assets with the public keys file it rereads.
+  assets:
+    enabled: true
+    env:
+      - name: TRUSTIOT__GREETING
+        value: hello from the identity keys e2e
+    podSecurityContext:
+      # The distroless nonroot base declares its user by name; give the kubelet the number.
+      runAsUser: 65532
+      runAsGroup: 65532

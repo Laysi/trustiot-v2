@@ -77,6 +77,10 @@ const PASSWORD_SECRETS = [SERVICE_SECRET, COLLECTOR_SECRET];
 // empty Secret the chart declares and the Job reads (Laysi/trustiot-v2#403).
 const ADMIN_SECRET = `${PREFIX}-clickhouse-admin-password`;
 const ADMIN_ACCOUNT = "trustiot_admin";
+// The internal identity keys, which the identity pod's init container generates (it runs in front
+// of the example service too) and the chart keeps on uninstall (Laysi/trustiot-v2#404).
+const IDENTITY_KEYS_SECRET = `${PREFIX}-identity-signing-keys`;
+const IDENTITY_KEYS_CONFIG_MAP = `${PREFIX}-internal-identity-keys`;
 // Names of their own, so the test never replaces a Secret or object it did not create.
 const PROBE = `trustiot-e2e-probe-${RUN}`;
 // deploy/images/postgres/Containerfile: `ARG AGE_VERSION=<version>`.
@@ -296,7 +300,8 @@ beforeAll(async () => {
     kubectl("get", `cluster.postgresql.cnpg.io/${CLUSTER}`, `imagecatalog.postgresql.cnpg.io/${CLUSTER}`, "--ignore-not-found", "--output", "name"),
     kubectl("get", "pvc", "--selector", `cnpg.io/cluster=${CLUSTER}`, "--output", "name"),
     kubectl("get", "pvc", `data-${PREFIX}-clickhouse-0`, "--ignore-not-found", "--output", "name"),
-    kubectl("get", "secret", ...PASSWORD_SECRETS, ADMIN_SECRET, "--ignore-not-found", "--output", "name"),
+    kubectl("get", "secret", ...PASSWORD_SECRETS, ADMIN_SECRET, IDENTITY_KEYS_SECRET, "--ignore-not-found", "--output", "name"),
+    kubectl("get", "configmap", IDENTITY_KEYS_CONFIG_MAP, "--ignore-not-found", "--output", "name"),
   ]
     .join("\n")
     .split("\n")
@@ -340,7 +345,8 @@ afterAll(() => {
     [created.probePolicy, () => kubectl("delete", "networkpolicy", PROBE, "--ignore-not-found")],
     [created.release, () => helm("uninstall", RELEASE, "--wait", "--timeout", "3m")],
     // Kept on uninstall (helm.sh/resource-policy: keep), like the Cluster below.
-    [created.passwordSecrets, () => kubectl("delete", "secret", ...PASSWORD_SECRETS, ADMIN_SECRET, "--ignore-not-found")],
+    [created.passwordSecrets, () => kubectl("delete", "secret", ...PASSWORD_SECRETS, ADMIN_SECRET, IDENTITY_KEYS_SECRET, "--ignore-not-found")],
+    [created.passwordSecrets, () => kubectl("delete", "configmap", IDENTITY_KEYS_CONFIG_MAP, "--ignore-not-found")],
     // The ClickHouse StatefulSet keeps its volume on uninstall (persistentVolumeClaimRetentionPolicy).
     [created.clickhouse, () => kubectl("delete", "pvc", `data-${PREFIX}-clickhouse-0`, "--ignore-not-found", "--wait=true", "--timeout=180s")],
     // Kept on uninstall (helm.sh/resource-policy: keep): deleting the Cluster deletes its volume.

@@ -147,7 +147,9 @@ Role names each once. Returns a YAML list; use with fromYamlArray.
 Every Secret the chart declares empty for tools/migrate to fill, once each: {name, component}. The
 migration Job's password Secrets ("trustiot.migrate.passwordSecretObjects"), then the bundled
 ClickHouse's admin password Secret while the chart generates that password
-("trustiot.clickhouse.adminPassword"), which the ClickHouse pod's init container fills.
+("trustiot.clickhouse.adminPassword"), which the ClickHouse pod's init container fills, then the
+identity service's signing keys Secret while the identity service is enabled
+("trustiot.identity.keys"), which the identity pod's init container fills.
 templates/passwords.yaml declares one per entry. Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.filledSecretObjects" -}}
@@ -155,6 +157,10 @@ templates/passwords.yaml declares one per entry. Returns a YAML list; use with f
 {{- $admin := include "trustiot.clickhouse.adminPassword" . | fromYaml -}}
 {{- if $admin.generated -}}
 {{- $objects = append $objects (dict "name" $admin.name "component" "clickhouse") -}}
+{{- end -}}
+{{- if include "trustiot.identity.enabled" . -}}
+{{- $keys := include "trustiot.identity.keys" . | fromYaml -}}
+{{- $objects = append $objects (dict "name" $keys.secret "component" "identity") -}}
 {{- end -}}
 {{- toYaml $objects -}}
 {{- end -}}

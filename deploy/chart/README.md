@@ -74,7 +74,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | OpenTelemetry collector 與 OTLP 轉送 | `observability.collector.enabled` | 完成（預設開）：收服務的 OTLP、遮蔽後把日誌與 trace 寫進 ClickHouse 的 `trustiot_logs`，可轉送到 SIEM（見「OpenTelemetry collector」）。帳號由 migration Job 以 SQL 建立；指標先收下丟棄 | Laysi/trustiot-v2#183（指標存放與 Grafana）、Laysi/trustiot-v2#63（服務間授權要放行 collector） |
 | Grafana | — | 尚未加入 | Laysi/trustiot-v2#183 |
 | Sentry | `observability.sentry.*` | 開關、環境名稱與 DSN 已接到每個服務 | Laysi/trustiot-v2#184 |
-| 內部身分（公鑰、簽章私鑰） | `internalIdentity.*` | 完成：公鑰以 JWK Set 放進平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`；簽章私鑰的 Secret 只掛進身分服務；身分服務另外拿到需要 cookie 的路由（`TRUSTIOT_INGRESS_ROUTES`），決定 token 的受眾 | Laysi/trustiot-v2#61；SaaS 的值放進 `deploy/flux/` 由 Laysi/trustiot-v2#70 做 |
+| 內部身分（公鑰、簽章私鑰） | `internalIdentity.*` | 完成：金鑰對由身分服務 pod 的 init container 在叢集內產生，私鑰在只有身分服務掛載的 Secret，公鑰在每個服務都掛載的 ConfigMap，服務不重啟就換上新公鑰；輪替與撤銷只改一個數字；身分服務另外拿到需要 cookie 的路由（`TRUSTIOT_INGRESS_ROUTES`），決定 token 的受眾 | Laysi/trustiot-v2#61、Laysi/trustiot-v2#404 |
 | 密鑰 | 各個 `*Secret` 欄位、`services.<name>.credentials` | values 只存 Secret 名稱與 key；Sentry DSN 給每個服務，其他依賴的帳密只給列出它的服務；外部 ClickHouse 的 CA 掛進每個服務，Postgres 的 CA 只掛進在 `mesh.calls` 列出 `postgres` 的服務；chart 不渲染任何密鑰值（測試檢查），它宣告的 Secret 只有 migration Job 填入的空 Secret；叢集內 Postgres 的 Secret 由 CloudNativePG 產生，服務的自訂 `env` 讀不到；每個服務的資料庫密碼與 collector 的 ClickHouse 密碼由 migration Job 產生，各放在自己的 Secret（`<release>-<服務>-password`、`<release>-otel-collector-password`），只給該服務或 collector，migration 帳號只給 migration Job | SaaS 的 Secret 以 SOPS 加密放在 `deploy/flux/`（Laysi/trustiot-v2#70）；地端由客戶建立。規則與清冊見 docs/architecture/secrets.md |
 
 ## 服務
@@ -256,13 +256,13 @@ mesh:
 | `services.<name>.credentials` | 只給這個服務的依賴帳密，可列 `qdrant-read`、`qdrant-write`、`object-storage`、`smtp`、`ai`，變數見「密鑰的環境變數」；不能放在 `serviceDefaults`，避免每個服務都拿到。`ai` 只能給 `ai-gateway`（決策 28）；`qdrant-read` 與 `qdrant-write` 只能給 `knowledge`，因為 Qdrant 查詢的租戶條件由知識庫服務加上（docs/architecture/rag.md） |
 | `services.<name>.resources` | 逐欄覆寫資源設定 |
 | `services.<name>.podSecurityContext` | 逐欄覆寫；限制同 `serviceDefaults` |
-| `services.<name>.podSecurityContext.fsGroup` | 只有 `identity` 有預設值 `65532`：簽章私鑰檔的權限是 0440、屬於 root 與這個群組，服務以群組身分讀它，容器裡其他使用者讀不到（見「內部身分」）。OpenShift 設成 `null`，由 restricted-v2 SCC 從 namespace 的範圍指派；其他平台拿掉它，身分服務會讀不到私鑰而拒絕啟動 |
+| `services.<name>.podSecurityContext.fsGroup` | 只有 `identity` 有預設值 `65532`：簽章金鑰檔的權限是 0440、屬於 root 與這個群組，服務以群組身分讀它，容器裡其他使用者讀不到（見「內部身分」）。OpenShift 設成 `null`，由 restricted-v2 SCC 從 namespace 的範圍指派；其他平台拿掉它，身分服務會讀不到金鑰而一直不就緒 |
 | `services.<name>.securityContext` | 逐欄覆寫；限制同 `serviceDefaults` |
 | `services.<name>.probes` | 每個 probe 整個取代；liveness 與 readiness 不能是空的 |
 | `services.<name>.preStopSleepSeconds` | 覆寫 preStop 等待秒數 |
 | `services.<name>.drainSeconds` | 覆寫收尾秒數，例如持有長連線的服務 |
 | `services.<name>.tmpSizeLimit` | 覆寫 `/tmp` 大小上限 |
-| `services.<name>.automountServiceAccountToken` | 需要呼叫 Kubernetes API 的服務才設 `true` |
+| `services.<name>.automountServiceAccountToken` | 需要呼叫 Kubernetes API 的服務才設 `true`；`identity` 不能設（渲染失敗，見「內部身分」） |
 | `services.<name>.nodeSelector` | 逐個 key 合併 |
 | `services.<name>.tolerations` | 整個取代 |
 | `services.<name>.affinity` | 逐個 key 合併 |
@@ -292,15 +292,27 @@ mesh:
 
 ### 內部身分
 
-決策 27 的內部身分 token：身分服務為每個通過 cookie 驗證的請求簽一個 60 秒的 token，每個服務以這裡的公鑰驗證。格式、驗證規則與輪替在 `crates/service-kit/README.md` 的「內部身分」與 `services/identity/README.md`。
+決策 27 的內部身分 token：身分服務為每個通過 cookie 驗證的請求簽一個 60 秒的 token，每個服務以身分服務的公鑰驗證。金鑰對在叢集內產生，沒有人建立、看到、複製或輪替它（Laysi/trustiot-v2#404；設計與每個失敗情況在 [docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「內部身分簽章金鑰」，操作在 [docs/runbooks/secrets.md](../../docs/runbooks/secrets.md)）。token 的格式與驗證規則在 `crates/service-kit/README.md` 的「內部身分」。
+
+- **私鑰**：chart 在身分服務啟用時宣告空的 Secret `<release>-identity-signing-keys`（`templates/passwords.yaml`，和 migration Job 的密碼 Secret 同樣沒有 `data`、`helm.sh/resource-policy: keep`、`trustiot.io/filled-by: migrate`）。身分服務 pod 的 init container `signing-keys`（migration 映像的 `migrate identity-signing-keys`，在 `wait-for-migrations` 之前）以身分服務 ServiceAccount 的 projected token 產生金鑰並寫入；Role `<release>-identity-signing-keys` 只有這個 Secret 與下面的 ConfigMap 的 `get`、`patch`。身分服務的主容器沒有 token（`services.identity.automountServiceAccountToken` 是 `true` 時渲染失敗），只以唯讀 volume 讀 `/etc/trustiot/identity-signing-keys/signing-keys.json`（0440，root 與 pod 的 `fsGroup`），路徑以 `TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE` 告訴它。其他 pod 都不掛它，任何服務的自訂 `env` 都不能讀它。
+- **公鑰**：chart 在身分服務啟用時宣告空的 ConfigMap `<release>-internal-identity-keys`（同樣的標籤與 `keep`），init container 依 Secret 寫入 JWK Set `jwks.json`。每個服務掛整個 ConfigMap 在 `/etc/trustiot/internal-identity/`（`optional: true`，不用 `subPath`），平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` 指向它；ConfigMap 改變後 kubelet 更新檔案，服務每 5 秒重讀，不必重啟。還沒有公鑰時服務照常啟動但不就緒。
+- **全新安裝**：pod 建立時掛上的是 init container 寫入之前的空 Secret 與 ConfigMap，kubelet 同步 pod 時才換成新的內容。身分服務與每個服務都等 migration Job 完成才啟動，通常一啟動就讀到；沒有讀到的等 kubelet 下一次更新（正常不超過一個同步週期）才就緒，`helm install --wait` 的逾時要留這段時間。2026-10-15 lab 的 k3s 實測：金鑰公開後 25 到 31 秒身分服務與資產服務都就緒（[測試報告](../../docs/test-reports/2026-10-15-404-identity-keys-in-cluster.md)）。
+- **身分服務沒有啟用**：沒有人產生金鑰，所以 chart 不宣告 Secret、ConfigMap 與 Role，服務不掛公鑰，也拿不到 `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`：驗證內部身分的服務拒絕啟動（與 Laysi/trustiot-v2#404 之前沒有 `publicKeys` 時相同），不會一直等不到金鑰。
 
 | 欄位 | 預設值 | 說明 |
 | --- | --- | --- |
-| `internalIdentity.publicKeys` | `[]` | 身分服務的 Ed25519 公鑰，每把 `{kid, x}`：`kid` 是 1–64 個可見 ASCII 字元、不能重複，`x` 是 32 bytes 公鑰的 base64url（不補 `=`，43 個字元），最多 8 把。chart 組成 JWK Set 放進平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`；schema 只允許這兩個欄位，所以私鑰（`d`）放不進 values 與 ConfigMap。空的時候不設定，服務會拒絕啟動。輪替期間同時列新舊兩把 |
-| `internalIdentity.signingKeySecret.name` | `""` | 放身分服務簽章私鑰的既有 Secret；身分服務啟用時必填（沒有它身分服務拒絕啟動）。私鑰是 PKCS#8 PEM（`openssl genpkey -algorithm ed25519`），以唯讀 volume 只掛進身分服務的 `/etc/trustiot/identity-signing-key/signing-key.pem`，檔案權限 0440（`defaultMode`），只有 root 與 pod 的 `fsGroup`（`services.identity.podSecurityContext.fsGroup`）可讀，路徑以 `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` 告訴它；任何服務的自訂 `env` 都不能讀這個 Secret 的這個 key。私鑰對應的公鑰必須在 `publicKeys` 裡，身分服務以它找出自己的 `kid`，找不到就拒絕啟動 |
+| `internalIdentity.keyGeneration` | `"1"` | 要求的金鑰代，1 到 9 位數字。調大就輪替：身分服務滾動重啟（其他服務不重啟），第一個新 pod 的 init container 加一把新金鑰、先公開公鑰，`keyPropagationSeconds` 之後才用它簽章；舊金鑰在它簽的 token 都過期之後的下一次身分服務啟動時移除。只往上走：rollback 到較小的值不會再換一次 |
+| `internalIdentity.revokeBeforeGeneration` | `"0"` | 私鑰外洩時設成新的一代（`keyGeneration` 調到不小於它，否則渲染失敗）再升級：代比它小的金鑰立即從 Secret 與 ConfigMap 移除，新金鑰立即開始簽章；身分服務也從環境變數拿到這個值，不用被撤銷的金鑰簽章。之後留著不改。每個服務換上新公鑰之前仍接受外洩的金鑰，逐一確認的步驟在 runbook |
+| `internalIdentity.keyPropagationSeconds` | `600` | 新公鑰公開之後多久才開始用新私鑰簽章，120 到 86400 秒。要比每個 pod 看到 ConfigMap 改變的時間長（kubelet 的同步週期加快取，預設約 1 分鐘）；調大了 kubelet `syncFrequency` 的叢集要跟著加大。身分服務的金鑰與公開的公鑰不一致超過它時記 ERROR |
+| `internalIdentity.publicKeys` | `[]` | 只給 Laysi/trustiot-v2#404 之前的安裝搬移用，和 `signingKeySecret` 一起設：人建立的私鑰的公鑰，每把 `{kid, x}`（`kid` 1–64 個可見 ASCII 字元、不能重複，`x` 是 32 bytes 公鑰的 base64url，最多 8 把；schema 只允許這兩個欄位，所以私鑰放不進 values）。init container 在這裡找出匯入的金鑰的 `kid`。只設其中一個時渲染失敗 |
+| `internalIdentity.signingKeySecret.name` | `""` | 只給搬移用：人建立、放 PKCS#8 PEM 私鑰的既有 Secret。只以唯讀 volume 掛進身分服務的 init container，它在 Secret `<release>-identity-signing-keys` 還沒有金鑰時以原本的 `kid`、代 0 匯入一次；設定期間不產生新金鑰。新安裝留空 |
 | `internalIdentity.signingKeySecret.key` | `signing-key.pem` | |
 
-身分服務只在啟動時讀私鑰，Kubernetes 不會因 Secret 改變而重啟 pod：換私鑰後要滾動重啟身分服務（`kubectl rollout restart`，或改 `services.identity.podAnnotations`），步驟見 `services/identity/README.md` 的「金鑰輪替」。
+從人建立的私鑰搬過來（Laysi/trustiot-v2#404 之前的安裝），每一步都不中斷服務：
+
+1. 升級到這個 chart，`signingKeySecret` 與 `publicKeys` 先不動：init container 匯入那把私鑰，新舊版的 pod 都用它；服務改從 ConfigMap 讀公鑰。`publicKeys` 裡其他的公鑰不帶過來，舊做法的輪替要在搬移之前做完。
+2. 滾動完成後，從 values 移除 `signingKeySecret` 與 `publicKeys` 再升級：`keyGeneration`（至少 1）大於匯入的代 0，init container 產生新金鑰並照輪替換掉匯入的那一把。
+3. ConfigMap 不再有匯入的 `kid` 之後，刪掉人建立的 Secret。
 
 ### migration Job
 
@@ -457,7 +469,7 @@ Job 做的事，依序：
 - `bundled`：Cluster 在 bootstrap 時以 superuser 執行 `files/postgres/system-databases.sql`（見「叢集內的 Postgres」）。
 - `external`：由資料庫管理者以 superuser 執行同樣的收回，步驟在 [docs/runbooks/migrations.md](../../docs/runbooks/migrations.md) 的「`postgres` 與 `template1`：收回 PUBLIC 的 CONNECT 與 TEMPORARY」。沒有收回時，Job 每次執行都對每個還讓服務角色連得上的資料庫記一行警告，例如 `database postgres: service roles assets_app, … may connect to it and create temporary tables there; …`，但照常完成：客戶自己的應用也許需要 `PUBLIC` 連得上某個資料庫，這是管理者的決定。
 
-**權限**：Job 的 pod 與 ServiceAccount 都是 `automountServiceAccountToken: false`；有密碼 Secret 要填時，只有 Job 的容器掛一個 1 小時效期的 projected token 與叢集的 CA，Role `<release>-migrate` 只讓它 `get` 與 `patch` 這些 Secret（以 `resourceNames` 列名），叢集內 ClickHouse 的管理帳號 Secret 則只能 `get`：沒有 `create`（無法以名稱限制，而且能替 namespace 裡任何 ServiceAccount 建 token Secret）、`list`、`watch`，也碰不到別的 Secret。另一個碰 Secret 的 Role 是 `<release>-clickhouse`：只讓 ClickHouse 的 ServiceAccount `get` 與 `patch` 它的管理帳號 Secret；chart 的其他 Role 都不碰 Secret（測試檢查）。服務與 collector 的 pod 仍然 `automountServiceAccountToken: false`；只有 init container 掛同樣的 projected token 與 CA（`kube-root-ca.crt`），Role `<release>-migrate-status` 只讓服務與 collector 的 ServiceAccount `get` 這一個 Job，沒有任何新的 Secret 權限。chart 的 NetworkPolicy 都只限制連入，init container 可以連到 API server。Job 的 pod 在 ambient mesh 內，叢集內的 ClickHouse 以它的 ServiceAccount 放行它；`<release>-postgres` 的 NetworkPolicy 也放行它；沒有任何東西能連進 Job 的 pod。
+**權限**：Job 的 pod 與 ServiceAccount 都是 `automountServiceAccountToken: false`；有密碼 Secret 要填時，只有 Job 的容器掛一個 1 小時效期的 projected token 與叢集的 CA，Role `<release>-migrate` 只讓它 `get` 與 `patch` 這些 Secret（以 `resourceNames` 列名），叢集內 ClickHouse 的管理帳號 Secret 則只能 `get`：沒有 `create`（無法以名稱限制，而且能替 namespace 裡任何 ServiceAccount 建 token Secret）、`list`、`watch`，也碰不到別的 Secret。另外兩個碰 Secret 的 Role 是 `<release>-clickhouse`：只讓 ClickHouse 的 ServiceAccount `get` 與 `patch` 它的管理帳號 Secret，以及 `<release>-identity-signing-keys`：只讓身分服務的 ServiceAccount `get` 與 `patch` 它的簽章金鑰 Secret 與公鑰 ConfigMap（見「內部身分」）；chart 的其他 Role 都不碰 Secret，也不能寫 ConfigMap（測試檢查）。服務與 collector 的 pod 仍然 `automountServiceAccountToken: false`；只有 init container 掛同樣的 projected token 與 CA（`kube-root-ca.crt`），Role `<release>-migrate-status` 只讓服務與 collector 的 ServiceAccount `get` 這一個 Job，沒有任何新的 Secret 權限。chart 的 NetworkPolicy 都只限制連入，init container 可以連到 API server。Job 的 pod 在 ambient mesh 內，叢集內的 ClickHouse 以它的 ServiceAccount 放行它；`<release>-postgres` 的 NetworkPolicy 也放行它；沒有任何東西能連進 Job 的 pod。
 
 **服務的資料庫帳號**：在 `mesh.calls` 列出 `postgres` 的服務，chart 給它 `TRUSTIOT__DATABASE__USERNAME=<服務>_app` 與從自己的 Secret `<release>-<服務>-password` 同名 key 讀的 `TRUSTIOT__DATABASE__PASSWORD`。outbox 的消費端還要以平台角色讀 producer 的事件（決策 29，`crates/outbox`），列在 `templates/_migrate.tpl` 的 `trustiot.migrate.platformLogins`（目前只有 `assets`，Laysi/trustiot-v2#65）：同一個 Secret 多一個 `<服務>_platform` key，服務多拿到 `TRUSTIOT__DATABASE__PLATFORM_USERNAME=<服務>_platform` 與 `TRUSTIOT__DATABASE__PLATFORM_PASSWORD`。其他服務的平台角色（例如 producer 的 `identity_platform`）沒有綁密碼，Job 讓它維持 `NOLOGIN`。這四個名稱保留給 chart，自訂 `env` 不能設定。Job 開始前先確認這些角色都在 tools/migrate 的服務清單裡，否則什麼都不改就停止；清單與 `PRODUCT` 的一致由 `tools/migrate/tests/registry.rs` 檢查。
 
@@ -579,7 +591,7 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 服務照下列約定實作，就能直接用通用樣板部署（docs/architecture/deployment.md 的服務設計規則）：
 
 - **設定**：ConfigMap `<release>-platform` 以 `envFrom` 交給每個服務，另外每個服務有 `OTEL_SERVICE_NAME=<服務名稱>`，collector 開啟時還有 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT`（service-kit 的 OTLP 匯出位址，見「OpenTelemetry collector」）。`TRUSTIOT_` 後接英數字、`SENTRY_` 與 `OTEL_` 開頭的變數只由 chart 設定，`env` 不能覆寫，服務讀到的平台設定一定是 values 決定的值。沒有設定的項目不會出現，服務可以分辨「沒設定」與「空字串」。平台設定變更時 pod 會自動滾動更新。
-- **密鑰**：不放進 ConfigMap，以 `valueFrom.secretKeyRef` 從 values 指定的 Secret 取用。Sentry 開啟時每個服務有 `SENTRY_DSN`；其他依賴的帳密只給在 `services.<name>.credentials` 列出它的服務（見後面「密鑰的環境變數」），Secret 名稱空白的項目不注入。資料庫的 CA 憑證以唯讀方式掛在 `/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`：外部 ClickHouse 的掛進每個服務；Postgres 的（`external` 是 `postgres.external.caSecret`，`bundled` 是 CloudNativePG 產生的 CA 裡的 `ca.crt`）只掛進在 `mesh.calls` 列出 `postgres` 的服務。內部身分的簽章私鑰只掛進身分服務（見「內部身分」）。服務自己的資料庫帳號（每個服務一個角色，決策 4）由 migration 的 issue 加入（Laysi/trustiot-v2#60）。
+- **密鑰**：不放進 ConfigMap，以 `valueFrom.secretKeyRef` 從 values 指定的 Secret 取用。Sentry 開啟時每個服務有 `SENTRY_DSN`；其他依賴的帳密只給在 `services.<name>.credentials` 列出它的服務（見後面「密鑰的環境變數」），Secret 名稱空白的項目不注入。資料庫的 CA 憑證以唯讀方式掛在 `/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`：外部 ClickHouse 的掛進每個服務；Postgres 的（`external` 是 `postgres.external.caSecret`，`bundled` 是 CloudNativePG 產生的 CA 裡的 `ca.crt`）只掛進在 `mesh.calls` 列出 `postgres` 的服務。內部身分的簽章私鑰只掛進身分服務，公鑰的 ConfigMap 掛進每個服務（見「內部身分」）。服務自己的資料庫帳號（每個服務一個角色，決策 4）由 migration 的 issue 加入（Laysi/trustiot-v2#60）。
 - **埠與探針**：API 監聽 8080（埠名 `http`）；健康埠 8081（埠名 `health`）只提供 `GET /healthz`（startup 與 liveness）與 `GET /readyz`（readiness），其他路徑回 404。探針連健康埠，節點上的行程因此碰不到 API（「節點來源」）。service-kit 預設就是這樣（`http.listen_addr`、`http.health_listen_addr`），`crates/service-kit/tests/chart_contract.rs` 對照 `values.yaml` 檢查。
 - **SIGTERM**：pod 刪除時先等 `preStopSleepSeconds`（預設 5 秒），再送 SIGTERM；服務收到後 readiness 立即回失敗、處理完進行中的請求、主動關閉長連線，在 `drainSeconds`（預設 30 秒）內結束，之後才會被 SIGKILL。服務是容器內的 PID 1，要自己處理 SIGTERM。
 - **執行環境**：根目錄唯讀，只有 `/tmp` 可寫；以非 root 執行，映像的 `USER` 要是數字 UID，並能以 OpenShift 指派的任意 UID 執行；沒有 ServiceAccount token；只排到 arm64 節點。
@@ -591,7 +603,7 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 | `TRUSTIOT_DEPLOYMENT_MODE` | `global.deploymentMode` | 一律 |
 | `TRUSTIOT_APP_HOST`、`TRUSTIOT_GATEWAY_HOST`、`TRUSTIOT_OTA_HOST` | `hosts.*` | 一律 |
 | `TRUSTIOT_CLIENT_IP_SOURCE` | 由 `ingress.exposure` 推導：`cf-connecting-ip` 或 `x-forwarded-for-rightmost` | 一律 |
-| `TRUSTIOT_INTERNAL_IDENTITY_KEYS` | `internalIdentity.publicKeys` 組成的 JWK Set（JSON） | 有公鑰時 |
+| `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` | 掛載的公鑰 ConfigMap 裡的 JWK Set `/etc/trustiot/internal-identity/jwks.json` | 身分服務啟用時 |
 | `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE` | `external`：`postgres.external.*`；`bundled`：`<release>-postgres-rw.<namespace>.svc`、`5432`、`trustiot`、`verify-full` | 一律 |
 | `TRUSTIOT_CLICKHOUSE_URL` | `external`：`clickhouse.external.url`；`bundled`：`http://<release>-clickhouse.<namespace>.svc:8123`（叢集內明文 HTTP，pod 之間由 Istio ambient 的 ztunnel 加上 mTLS） | 一律 |
 | `TRUSTIOT_QDRANT_URL` | `qdrant.external.url` | `qdrant.mode` 為 `external` |
@@ -619,7 +631,9 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 | 變數 | 來源 | 何時出現 |
 | --- | --- | --- |
 | `TRUSTIOT_INGRESS_ROUTES` | `ingress.routes` 換成實際主機名稱的 JSON 陣列 `[{host, path, match, service}]`，決定 token 的受眾 | 一律（沒有路由時是 `[]`） |
-| `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` | 掛載的簽章私鑰路徑 `/etc/trustiot/identity-signing-key/signing-key.pem` | `internalIdentity.signingKeySecret.name` 有值時 |
+| `TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE` | 掛載的簽章金鑰檔 `/etc/trustiot/identity-signing-keys/signing-keys.json` | 一律 |
+| `TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION` | `internalIdentity.revokeBeforeGeneration`：不用代比它小的金鑰簽章 | 一律 |
+| `TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS` | `internalIdentity.keyPropagationSeconds`：金鑰與公開的公鑰不一致多久之後記 ERROR | 一律 |
 
 ## 擴充 chart
 

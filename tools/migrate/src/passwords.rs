@@ -35,6 +35,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::config::{Binding, PasswordSettings};
 use crate::secret::Password;
@@ -82,7 +83,7 @@ const RETRY_EVERY: Duration = Duration::from_secs(2);
 const REPORT_EVERY: Duration = Duration::from_secs(30);
 
 /// Patches refused because the Secret changed in between; after this many the run fails.
-const MAX_CONFLICTS: usize = 5;
+pub(crate) const MAX_CONFLICTS: usize = 5;
 
 /// The passwords of one run: what each role and account must log in with.
 #[derive(Debug, Default)]
@@ -141,40 +142,49 @@ pub fn parse_generation(text: &str) -> Option<u64> {
     }
 }
 
-/// What a Secret holds, as far as the run reads it. No `Debug`: `data` holds passwords.
+/// What a Secret or a ConfigMap holds, as far as tools/migrate reads it. No `Debug`: a
+/// Secret's `data` holds passwords and keys, which are wiped from memory when it drops.
 #[derive(Deserialize)]
-struct Secret {
+pub(crate) struct Secret {
     #[serde(default)]
-    metadata: Metadata,
-    /// Values in base64, as the API returns them.
+    pub(crate) metadata: Metadata,
+    /// A Secret's values in base64, as the API returns them; a ConfigMap's as text.
     #[serde(default)]
-    data: BTreeMap<String, String>,
+    pub(crate) data: BTreeMap<String, String>,
+}
+
+impl Drop for Secret {
+    fn drop(&mut self) {
+        for value in self.data.values_mut() {
+            value.zeroize();
+        }
+    }
 }
 
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Metadata {
+pub(crate) struct Metadata {
     #[serde(default)]
-    resource_version: String,
+    pub(crate) resource_version: String,
     #[serde(default)]
-    uid: String,
+    pub(crate) uid: String,
     #[serde(default)]
-    annotations: BTreeMap<String, String>,
+    pub(crate) annotations: BTreeMap<String, String>,
     #[serde(default)]
-    labels: BTreeMap<String, String>,
+    pub(crate) labels: BTreeMap<String, String>,
     #[serde(default)]
     owner_references: Vec<Value>,
     #[serde(default)]
     finalizers: Vec<String>,
-    /// Set while the Secret is being deleted.
+    /// Set while the object is being deleted.
     #[serde(default)]
-    deletion_timestamp: Option<String>,
+    pub(crate) deletion_timestamp: Option<String>,
 }
 
 /// What the patch that binds a Secret removes: metadata neither the chart nor the Job sets. Names
 /// only, which the report gives; never a value.
 #[derive(Debug, Default, PartialEq, Eq)]
-struct Foreign {
+pub(crate) struct Foreign {
     annotations: Vec<String>,
     labels: Vec<String>,
     owner_references: bool,
@@ -182,7 +192,7 @@ struct Foreign {
 }
 
 impl Foreign {
-    fn of(metadata: &Metadata) -> Self {
+    pub(crate) fn of(metadata: &Metadata) -> Self {
         let outside = |keys: &BTreeMap<String, String>, kept: &[&str]| {
             keys.keys()
                 .filter(|key| !kept.contains(&key.as_str()))
@@ -197,11 +207,11 @@ impl Foreign {
         }
     }
 
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         *self == Self::default()
     }
 
-    fn describe(&self) -> String {
+    pub(crate) fn describe(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
         parts.extend(
             self.annotations
@@ -220,7 +230,7 @@ impl Foreign {
 }
 
 /// Whether the Secret is the object tools/migrate filled: it records its own uid.
-fn is_bound(metadata: &Metadata) -> bool {
+pub(crate) fn is_bound(metadata: &Metadata) -> bool {
     !metadata.uid.is_empty() && metadata.annotations.get(UID_ANNOTATION) == Some(&metadata.uid)
 }
 
@@ -297,15 +307,26 @@ fn patch_body(
             )
         })
         .collect();
-    let mut annotations: Map<String, Value> = foreign
-        .annotations
-        .iter()
-        .map(|key| (key.clone(), Value::Null))
-        .collect();
+    let mut annotations = Map::new();
     annotations.insert(
         GENERATION_ANNOTATION.to_owned(),
         Value::String(generation.to_string()),
     );
+    let metadata = binding_metadata(resource_version, uid, annotations, foreign);
+    json!({ "metadata": metadata, "data": data }).to_string()
+}
+
+/// The `metadata` of a merge patch that writes a Secret tools/migrate fills: valid only at
+/// `resource_version`, records `uid` (binding it) and `annotations`, and removes `foreign`.
+pub(crate) fn binding_metadata(
+    resource_version: &str,
+    uid: &str,
+    mut annotations: Map<String, Value>,
+    foreign: &Foreign,
+) -> Map<String, Value> {
+    for key in &foreign.annotations {
+        annotations.insert(key.clone(), Value::Null);
+    }
     annotations.insert(UID_ANNOTATION.to_owned(), Value::String(uid.to_owned()));
     let mut metadata = Map::new();
     metadata.insert(
@@ -327,17 +348,54 @@ fn patch_body(
     if foreign.finalizers {
         metadata.insert("finalizers".to_owned(), Value::Null);
     }
-    json!({ "metadata": metadata, "data": data }).to_string()
+    metadata
 }
 
 /// What a request to the API came to.
-enum Answer {
+pub(crate) enum Answer {
     Secret(Secret),
-    /// HTTP 409: the Secret changed since it was read.
+    /// HTTP 409: the object changed since it was read.
     Conflict,
 }
 
-/// How to reach the Secrets of the release namespace.
+/// The kind of object an [`Api`] reads and patches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kind {
+    Secret,
+    ConfigMap,
+}
+
+impl Kind {
+    fn collection(self) -> &'static str {
+        match self {
+            Self::Secret => "secrets",
+            Self::ConfigMap => "configmaps",
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Secret => "Secret",
+            Self::ConfigMap => "ConfigMap",
+        }
+    }
+
+    /// The error about the object `name` of this kind.
+    fn error(self, name: &str, problem: String) -> Error {
+        match self {
+            Self::Secret => Error::Secret {
+                secret: name.to_owned(),
+                problem,
+            },
+            Self::ConfigMap => Error::ConfigMap {
+                config_map: name.to_owned(),
+                problem,
+            },
+        }
+    }
+}
+
+/// How to reach the Secrets (and ConfigMaps) of the release namespace.
 #[derive(Clone, Copy)]
 pub(crate) struct Access<'a> {
     pub api_url: &'a str,
@@ -374,17 +432,29 @@ const JOB_FILLS: Hints = Hints {
               fills",
 };
 
-/// The Secrets endpoint of the release namespace.
+/// The Secrets (or ConfigMaps) endpoint of the release namespace.
 pub(crate) struct Api {
     client: http::Client,
     base: String,
+    kind: Kind,
     token_file: PathBuf,
     wait: Duration,
     hints: Hints,
 }
 
 impl Api {
+    /// The Secrets of the namespace.
     pub(crate) fn new(access: Access<'_>, wait: Duration, hints: Hints) -> Result<Self, Error> {
+        Self::of(Kind::Secret, access, wait, hints)
+    }
+
+    /// The objects of `kind` in the namespace.
+    pub(crate) fn of(
+        kind: Kind,
+        access: Access<'_>,
+        wait: Duration,
+        hints: Hints,
+    ) -> Result<Self, Error> {
         let client = if access.api_url.starts_with("https://") {
             http::trusting(access.ca_file).map_err(|error| Error::Kube(error.to_string()))?
         } else {
@@ -393,25 +463,25 @@ impl Api {
         Ok(Self {
             client,
             base: format!(
-                "{}/api/v1/namespaces/{}/secrets",
+                "{}/api/v1/namespaces/{}/{}",
                 access.api_url.trim_end_matches('/'),
-                access.namespace
+                access.namespace,
+                kind.collection()
             ),
+            kind,
             token_file: access.token_file.to_path_buf(),
             wait,
             hints,
         })
     }
 
-    /// `GET` or, with a body, `PATCH` the Secret `name`. An API that does not answer, answers
+    /// `GET` or, with a body, `PATCH` the object `name`. An API that does not answer, answers
     /// 429 or a 5xx is asked again until the wait runs out; every other answer is final.
-    async fn request(&self, name: &str, patch: Option<&str>) -> Result<Answer, Error> {
+    pub(crate) async fn request(&self, name: &str, patch: Option<&str>) -> Result<Answer, Error> {
         let url = format!("{}/{name}", self.base);
         let verb = if patch.is_some() { "patch" } else { "get" };
-        let failed = |problem: String| Error::Secret {
-            secret: name.to_owned(),
-            problem,
-        };
+        let kind = self.kind;
+        let failed = |problem: String| kind.error(name, problem);
         let started = Instant::now();
         let mut reported = None::<Instant>;
         loop {
@@ -441,10 +511,15 @@ impl Api {
                 Err(error) => format!("the API did not answer: {error}"),
                 Ok(response) => match response.status.as_u16() {
                     200 => {
-                        return serde_json::from_str::<Secret>(&response.body)
+                        // A Secret's answer holds its data: wiped once parsed.
+                        let body = Zeroizing::new(response.body);
+                        return serde_json::from_str::<Secret>(&body)
                             .map(Answer::Secret)
                             .map_err(|_| {
-                                failed("the API answered something that is not a Secret".to_owned())
+                                failed(format!(
+                                    "the API answered something that is not a {}",
+                                    kind.name()
+                                ))
                             });
                     }
                     409 if patch.is_some() => return Ok(Answer::Conflict),
@@ -468,7 +543,12 @@ impl Api {
                 return Err(failed(format!("gave up after {:?}: {retry}", self.wait)));
             }
             if reported.is_none_or(|at| at.elapsed() >= REPORT_EVERY) {
-                tracing::warn!(secret = name, state = %retry, "cannot {verb} the Secret yet; retrying");
+                tracing::warn!(
+                    kind = kind.name(),
+                    name,
+                    state = %retry,
+                    "cannot {verb} the object yet; retrying"
+                );
                 reported = Some(Instant::now());
             }
             tokio::time::sleep(RETRY_EVERY).await;

@@ -21,7 +21,8 @@ use service_kit::identity::{IdentityError, IdentityKeys, IdentityVerifier, UserI
 use sqlx::{Connection, PgConnection};
 use support::postgres::{SERVER_HOST, TEST_PASSWORD, TlsPostgres, tls_postgres};
 use support::{
-    Service, SlowProxy, TestKey, cookie, jwks, new_secret, request, run_to_exit, scratch_dir,
+    KeyFiles, Service, SlowProxy, TestKey, cookie, jwks, kid_of, new_secret, request, run_to_exit,
+    scratch_dir, signing_keys,
 };
 
 /// The roles of decision 29 for this service, created once per Postgres, with the service role's
@@ -70,13 +71,13 @@ const INSUFFICIENT_PRIVILEGE: &str = "42501";
 /// Twelve hours, the session lifetime of checklist A1.
 const SESSION_SECS: f64 = 12.0 * 3600.0;
 
-/// One test's database with the migration applied, the signing key and CA files, and a
+/// One test's database with the migration applied, the key files and the CA file, and a
 /// running service.
 struct Fixture {
     postgres: Arc<TlsPostgres>,
     database: &'static str,
     key: TestKey,
-    key_file: PathBuf,
+    files: KeyFiles,
     ca_file: PathBuf,
 }
 
@@ -94,15 +95,14 @@ impl Fixture {
             .expect("create the database");
         let dir = scratch_dir(database);
         let key = TestKey::new(61);
-        let key_file = dir.join("signing-key.pem");
-        std::fs::write(&key_file, key.pem()).expect("write the signing key");
+        let files = KeyFiles::new(database, &key, KID);
         let ca_file = dir.join("ca.crt");
         std::fs::write(&ca_file, &postgres.ca_pem).expect("write the CA");
         let fixture = Self {
             postgres,
             database,
             key,
-            key_file,
+            files,
             ca_file,
         };
         let mut owner = fixture.connect("identity_owner").await;
@@ -138,12 +138,8 @@ impl Fixture {
             {"host": APP, "path": "/", "match": "PathPrefix", "service": "assets"},
             {"host": APP, "path": "/api/certs", "match": "PathPrefix", "service": "certs"},
         ]);
-        vec![
-            ("TRUSTIOT_INTERNAL_IDENTITY_KEYS".into(), self.keys()),
-            (
-                "TRUSTIOT_IDENTITY_SIGNING_KEY_FILE".into(),
-                self.key_file.display().to_string(),
-            ),
+        let mut env = self.files.env();
+        env.extend([
             ("TRUSTIOT_INGRESS_ROUTES".into(), routes.to_string()),
             ("TRUSTIOT_POSTGRES_HOST".into(), SERVER_HOST.into()),
             (
@@ -158,7 +154,8 @@ impl Fixture {
             ),
             ("TRUSTIOT__DATABASE__USERNAME".into(), "identity_app".into()),
             ("TRUSTIOT__DATABASE__PASSWORD".into(), TEST_PASSWORD.into()),
-        ]
+        ]);
+        env
     }
 
     /// Starts the service and waits until it is ready, which needs a session that passed
@@ -605,15 +602,13 @@ async fn secrets_never_reach_logs_or_responses() {
 #[tokio::test]
 async fn an_unreachable_database_fails_closed() {
     let key = TestKey::new(62);
-    let dir = scratch_dir("unreachable");
-    let key_file = dir.join("signing-key.pem");
-    std::fs::write(&key_file, key.pem()).expect("write the key");
+    let files = KeyFiles::new("unreachable", &key, KID);
     // A port that refuses connections.
     let port = TcpListener::bind("127.0.0.1:0")
         .and_then(|listener| listener.local_addr())
         .expect("free port")
         .port();
-    let env = base_env(&jwks(&[(&key, KID)]), &key_file, port);
+    let env = base_env(&files, port);
     let env: Vec<(&str, &str)> = env.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
     let service = Service::start(&env);
     let started = Instant::now();
@@ -827,13 +822,9 @@ async fn a_keep_warm_round_replaces_every_dropped_connection() {
 }
 
 /// Settings for a service whose database is at `127.0.0.1:<port>`.
-fn base_env(keys: &str, key_file: &std::path::Path, port: u16) -> Env {
-    vec![
-        ("TRUSTIOT_INTERNAL_IDENTITY_KEYS".into(), keys.into()),
-        (
-            "TRUSTIOT_IDENTITY_SIGNING_KEY_FILE".into(),
-            key_file.display().to_string(),
-        ),
+fn base_env(files: &KeyFiles, port: u16) -> Env {
+    let mut env = files.env();
+    env.extend([
         (
             "TRUSTIOT_INGRESS_ROUTES".into(),
             json!([{"host": APP, "path": "/", "match": "PathPrefix", "service": "assets"}])
@@ -846,7 +837,8 @@ fn base_env(keys: &str, key_file: &std::path::Path, port: u16) -> Env {
         // Read when a connection is made, never at startup; nothing listens at `port` anyway.
         (
             "TRUSTIOT_POSTGRES_CA_FILE".into(),
-            key_file
+            files
+                .signing_keys
                 .with_file_name("postgres-ca.crt")
                 .display()
                 .to_string(),
@@ -856,86 +848,38 @@ fn base_env(keys: &str, key_file: &std::path::Path, port: u16) -> Env {
             "TRUSTIOT__DATABASE__PASSWORD".into(),
             "do-not-log-this-password".into(),
         ),
-    ]
+    ]);
+    env
 }
 
-/// The service refuses to start, before serving anything, with a key it cannot use or settings
-/// that would let something else decide the key, the routes or the database security; the
-/// output names the problem and never the key.
+/// The service refuses to start, before serving anything, with settings that would let
+/// something else decide the keys, the routes or the database security; the output names the
+/// problem and never a secret. Key files that are missing or unusable do not stop it
+/// (`tests/adversarial.rs`, "Key files"): it starts unready, as on a fresh install.
 #[test]
-fn unusable_keys_and_settings_stop_startup() {
+fn unusable_settings_stop_startup() {
     let key = TestKey::new(63);
-    let other = TestKey::new(64);
-    let dir = scratch_dir("startup");
-    let key_file = dir.join("signing-key.pem");
-    std::fs::write(&key_file, key.pem()).expect("write the key");
-    let not_a_key = dir.join("not-a-key.pem");
-    std::fs::write(
-        &not_a_key,
-        "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n",
-    )
-    .expect("write");
-    let large = dir.join("large.pem");
-    std::fs::write(&large, "A".repeat(20_000)).expect("write");
-    let good_keys = jwks(&[(&key, KID)]);
-    let private_jwk = json!({"keys": [{
-        "kty": "OKP", "crv": "Ed25519", "kid": KID,
-        "x": key.jwk(KID)["x"], "d": key.secret_spellings()[1]
-    }]})
-    .to_string();
-    let rotated_too_early = jwks(&[(&other, "2027-04-a")]);
-    let ambiguous = jwks(&[(&key, "a"), (&key, "b")]);
-
+    let files = KeyFiles::new("startup", &key, KID);
     let cases: Vec<(&str, Env, &str)> = vec![
         (
-            "public key not deployed",
-            base_env(&rotated_too_early, &key_file, 1),
-            "is not in TRUSTIOT_INTERNAL_IDENTITY_KEYS",
-        ),
-        (
-            "public key under two key ids",
-            base_env(&ambiguous, &key_file, 1),
-            "more than one key id",
-        ),
-        (
-            "missing key file",
-            base_env(&good_keys, &dir.join("missing.pem"), 1),
-            "cannot be read",
-        ),
-        (
-            "not a key",
-            base_env(&good_keys, &not_a_key, 1),
-            "not an Ed25519 private key",
-        ),
-        (
-            "too large",
-            base_env(&good_keys, &large, 1),
-            "too large",
-        ),
-        (
-            "private key in the public key setting",
-            base_env(&private_jwk, &key_file, 1),
-            "private key",
-        ),
-        (
             "insecure database connection",
-            with(base_env(&good_keys, &key_file, 1), "TRUSTIOT_POSTGRES_SSLMODE", "require"),
+            with(base_env(&files, 1), "TRUSTIOT_POSTGRES_SSLMODE", "require"),
             "TRUSTIOT_POSTGRES_SSLMODE",
         ),
         (
             "no routes",
-            without(base_env(&good_keys, &key_file, 1), "TRUSTIOT_INGRESS_ROUTES"),
+            without(base_env(&files, 1), "TRUSTIOT_INGRESS_ROUTES"),
             "TRUSTIOT_INGRESS_ROUTES",
         ),
         (
             "no CA for the database server",
-            without(base_env(&good_keys, &key_file, 1), "TRUSTIOT_POSTGRES_CA_FILE"),
+            without(base_env(&files, 1), "TRUSTIOT_POSTGRES_CA_FILE"),
             "TRUSTIOT_POSTGRES_CA_FILE",
         ),
         (
             "a route the service cannot issue for",
             with(
-                base_env(&good_keys, &key_file, 1),
+                base_env(&files, 1),
                 "TRUSTIOT_INGRESS_ROUTES",
                 &json!([{"host": APP, "path": "/", "match": "PathPrefix", "service": "ai-gateway"}])
                     .to_string(),
@@ -943,13 +887,50 @@ fn unusable_keys_and_settings_stop_startup() {
             "TRUSTIOT_INGRESS_ROUTES",
         ),
         (
-            "key file overridden by a service setting",
+            "no signing keys file setting",
+            without(base_env(&files, 1), support::SIGNING_KEYS_FILE),
+            support::SIGNING_KEYS_FILE,
+        ),
+        (
+            "no public keys file setting",
+            without(base_env(&files, 1), support::PUBLIC_KEYS_FILE),
+            support::PUBLIC_KEYS_FILE,
+        ),
+        (
+            "signing keys file overridden by a service setting",
             with(
-                base_env(&good_keys, &key_file, 1),
-                "TRUSTIOT__PLATFORM__IDENTITY_SIGNING_KEY_FILE",
-                &not_a_key.display().to_string(),
+                base_env(&files, 1),
+                "TRUSTIOT__PLATFORM__IDENTITY_SIGNING_KEYS_FILE",
+                &files.public_keys.display().to_string(),
             ),
-            "TRUSTIOT__PLATFORM__IDENTITY_SIGNING_KEY_FILE",
+            "TRUSTIOT__PLATFORM__IDENTITY_SIGNING_KEYS_FILE",
+        ),
+        (
+            "public keys file overridden by a service setting",
+            with(
+                base_env(&files, 1),
+                "TRUSTIOT__PLATFORM__INTERNAL_IDENTITY_KEYS_FILE",
+                &files.public_keys.display().to_string(),
+            ),
+            "TRUSTIOT__PLATFORM__INTERNAL_IDENTITY_KEYS_FILE",
+        ),
+        (
+            "a propagation time below the chart's minimum",
+            with(
+                base_env(&files, 1),
+                "TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS",
+                "60",
+            ),
+            "platform.identity_key_propagation_seconds",
+        ),
+        (
+            "a revocation above the highest generation",
+            with(
+                base_env(&files, 1),
+                "TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION",
+                "1000000000",
+            ),
+            "platform.identity_revoke_before_generation",
         ),
     ];
     let mut secrets = key.secret_spellings();
@@ -966,6 +947,216 @@ fn unusable_keys_and_settings_stop_startup() {
                 "{name} leaks a secret: {output}"
             );
         }
+    }
+}
+
+/// How long a test waits for the service to act on changed key files: many reload intervals
+/// (5 s) on a loaded machine.
+const RELOAD_BOUND: Duration = Duration::from_secs(90);
+
+/// Checks until a token for `audience` names `kid`; returns it.
+fn wait_for_kid(service: &Service, cookie: &str, path: &str, kid: &str) -> String {
+    let deadline = Instant::now() + RELOAD_BOUND;
+    loop {
+        let response = check(service, path, Some(cookie));
+        assert_eq!(response.status, 200, "{}", response.raw());
+        let token = response.header_values("x-internal-identity")[0].to_owned();
+        if kid_of(&token) == kid {
+            return token;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the service did not sign with {kid} within {RELOAD_BOUND:?}\n{}",
+            service.stdout.text()
+        );
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// Acceptance (Laysi/trustiot-v2#404): a key rotation as the init container performs it
+/// (`crates/identity-keys`, the same code), against a running service and without a restart.
+/// While both public keys are published, a token from either key verifies in every service
+/// (each audience the routes name, with the public keys file as that service reads it); the
+/// service switches to the new key at its `signs_from`; once the old key is retired, its tokens
+/// stop verifying and new ones still do.
+#[tokio::test]
+async fn a_key_rotation_needs_no_restart_and_tokens_verify_throughout() {
+    use identity_keys::{Request, SigningKey, SigningKeys};
+
+    let Some(fixture) =
+        Fixture::new("CREATE DATABASE rotation OWNER identity_owner", "rotation").await
+    else {
+        return;
+    };
+    fixture.add_user(USER, false).await;
+    fixture.add_membership(TENANT_A, USER, "viewer").await;
+    let secret = fixture
+        .add_session(USER, Some(TENANT_A), SESSION_SECS, false)
+        .await;
+    let session = cookie(&secret);
+
+    // Generation 1, as a fresh install's init container leaves it.
+    let now = identity::issuer::unix_now();
+    let request = |generation| Request {
+        generation,
+        revoke_before: 0,
+        legacy: None,
+    };
+    let mut first = SigningKeys::default()
+        .plan(&request(1), now, SigningKey::generate)
+        .expect("plan")
+        .keys;
+    first.publish(now, 600);
+    let old_kid = first.keys()[0].kid().to_owned();
+    fixture.files.set_signing_keys(&first.to_json());
+    fixture.files.set_public_keys(&first.jwks());
+    let service = fixture.service();
+    let services = [
+        ("/", ServiceName::Assets),
+        ("/api/certs/x", ServiceName::Certs),
+    ];
+    let old_tokens: Vec<String> = services
+        .iter()
+        .map(|(path, _)| wait_for_kid(&service, &session, path, &old_kid))
+        .collect();
+
+    // Generation 2: step 1, the new key into the Secret, unpublished: nothing changes.
+    let bumped = identity::issuer::unix_now();
+    let mut second = first
+        .clone()
+        .plan(&request(2), bumped, SigningKey::generate)
+        .expect("plan")
+        .keys;
+    let new_kid = second.keys()[1].kid().to_owned();
+    fixture.files.set_signing_keys(&second.to_json());
+    // Step 2: both public keys to every service.
+    fixture.files.set_public_keys(&second.jwks());
+    let both = second.jwks();
+    // Step 3: the new key signs a short while from now (the chart waits
+    // internalIdentity.keyPropagationSeconds; here a few reload intervals).
+    let wait = 15;
+    second.publish(identity::issuer::unix_now(), wait);
+    let signs_from = second.keys()[1].signs_from().expect("published");
+    fixture.files.set_signing_keys(&second.to_json());
+
+    // Until signs_from the service keeps the old key; tokens of both verify everywhere.
+    let early = check(&service, "/", Some(&session));
+    let early_token = early.header_values("x-internal-identity")[0].to_owned();
+    if identity::issuer::unix_now() < signs_from {
+        assert_eq!(kid_of(&early_token), old_kid, "signed before signs_from");
+    }
+    let new_tokens: Vec<String> = services
+        .iter()
+        .map(|(path, _)| wait_for_kid(&service, &session, path, &new_kid))
+        .collect();
+    assert!(
+        identity::issuer::unix_now() >= signs_from,
+        "the new key signed before its signs_from"
+    );
+    for ((_, audience), (old, new)) in services.iter().zip(old_tokens.iter().zip(&new_tokens)) {
+        let every_service = IdentityVerifier::new(
+            *audience,
+            IdentityKeys::from_jwks(&both).expect("the published keys"),
+        );
+        assert!(every_service.verify(old).is_ok(), "{audience}: old token");
+        assert!(every_service.verify(new).is_ok(), "{audience}: new token");
+        println!(
+            "{audience}: old ({old_kid}) and new ({new_kid}) tokens verify during the overlap"
+        );
+    }
+
+    // Retirement: the init container's run after the overlap leaves only the new key.
+    let retire_at = second.retire_at(signs_from).expect("a signing key");
+    let retired = second
+        .clone()
+        .plan(&request(2), retire_at, SigningKey::generate)
+        .expect("plan")
+        .keys;
+    assert_eq!(
+        retired.key_ids().collect::<Vec<_>>(),
+        [new_kid.as_str()],
+        "the old key retires"
+    );
+    fixture.files.set_public_keys(&retired.jwks());
+    fixture.files.set_signing_keys(&retired.to_json());
+    let after_retirement = IdentityVerifier::new(
+        ServiceName::Assets,
+        IdentityKeys::from_jwks(&retired.jwks()).expect("the published keys"),
+    );
+    assert_eq!(
+        after_retirement.verify(&old_tokens[0]).err(),
+        Some(IdentityError::UnknownKey)
+    );
+    let latest = wait_for_kid(&service, &session, "/", &new_kid);
+    assert!(after_retirement.verify(&latest).is_ok());
+    assert!(
+        service
+            .stdout
+            .wait_for_message("signing internal identity tokens", Duration::from_secs(1))
+            .is_some()
+    );
+    let logs = service.stop();
+    for key in [&first, &second] {
+        for stored in
+            serde_json::from_str::<serde_json::Value>(&key.to_json()).expect("JSON")["keys"]
+                .as_array()
+                .expect("keys")
+        {
+            let d = stored["d"].as_str().expect("d");
+            assert!(!logs.contains(d), "a private key reached the logs");
+        }
+    }
+}
+
+/// Revocation, the identity service's side: with `TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION`
+/// above every key it reads, it signs nothing (unready, 503) instead of using a revoked key,
+/// until a key of a high enough generation arrives.
+#[tokio::test]
+async fn a_revoked_generation_never_signs() {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE revocation OWNER identity_owner",
+        "revocation",
+    )
+    .await
+    else {
+        return;
+    };
+    fixture.add_user(USER, false).await;
+    fixture.add_membership(TENANT_A, USER, "viewer").await;
+    let secret = fixture
+        .add_session(USER, Some(TENANT_A), SESSION_SECS, false)
+        .await;
+    let session = cookie(&secret);
+    let env = with(
+        fixture.env(),
+        "TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION",
+        "2",
+    );
+    let env: Vec<(&str, &str)> = env.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+    let service = Service::start(&env);
+    service.wait_readiness(503, READINESS_BOUND);
+    let refused = check(&service, "/", Some(&session));
+    assert_eq!(refused.status, 503, "{}", refused.raw());
+    assert!(refused.header_values("x-internal-identity").is_empty());
+
+    let replacement = TestKey::new(65);
+    fixture
+        .files
+        .set_signing_keys(&signing_keys(&[(&replacement, "2026-10-b", 2, 0)]));
+    fixture
+        .files
+        .set_public_keys(&jwks(&[(&replacement, "2026-10-b")]));
+    service.wait_readiness(200, RELOAD_BOUND);
+    let token = wait_for_kid(&service, &session, "/", "2026-10-b");
+    let published = IdentityKeys::from_jwks(&jwks(&[(&replacement, "2026-10-b")])).expect("keys");
+    assert!(
+        IdentityVerifier::new(ServiceName::Assets, published)
+            .verify(&token)
+            .is_ok()
+    );
+    let logs = service.stop();
+    for secret in fixture.key.secret_spellings() {
+        assert!(!logs.contains(&secret), "the revoked key reached the logs");
     }
 }
 

@@ -393,6 +393,25 @@ pub fn runtime_output(runtime: &str, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
+/// The platform setting with the identity service's public keys file.
+pub const KEYS_FILE_VARIABLE: &str = "TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE";
+
+/// Writes `jwks` to a file of its own, as the chart's ConfigMap volume holds it, and returns its
+/// path, the value of [`KEYS_FILE_VARIABLE`].
+pub fn keys_file(jwks: &str) -> String {
+    let path = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(unique_name("jwks.json"));
+    std::fs::write(&path, jwks).expect("write the keys file");
+    path.to_str().expect("a UTF-8 path").to_owned()
+}
+
+/// Replaces the keys file at `path` as the kubelet updates a ConfigMap volume: a new file renamed
+/// over it, so the service reads the old text or the new, never half of one.
+pub fn replace_keys_file(path: &str, jwks: &str) {
+    let next = format!("{path}.next");
+    std::fs::write(&next, jwks).expect("write the next keys file");
+    std::fs::rename(&next, path).expect("replace the keys file");
+}
+
 /// A unique name for a container or image created by this test process.
 pub fn unique_name(kind: &str) -> String {
     static NEXT: AtomicU32 = AtomicU32::new(0);

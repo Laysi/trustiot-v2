@@ -21,7 +21,7 @@ use std::time::Duration;
 use axum::Router;
 use contract::ServiceName;
 use outbox::{Consumer, ConsumerConfig};
-use service_kit::identity::{IdentityVerifier, ServiceIdentity};
+use service_kit::identity::{IdentityVerifier, PublishedKeys, ServiceIdentity};
 use service_kit::migrations::MigrationCheck;
 use service_kit::tenant::{PlatformDb, TenantDb};
 use service_kit::{BoxError, Context};
@@ -54,8 +54,9 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 
 /// The service's startup for `service_kit::run`: opens the service role's and the platform
 /// role's pools lazily (with the session check of `crates/service-kit`), starts the consumer of
-/// `identity.tenant_created`, and serves the API. Readiness passes while both roles can open a
-/// checked session, once the database has every migration file this release expects
+/// `identity.tenant_created`, follows the identity service's public keys file, and serves the
+/// API. Readiness passes while both roles can open a checked session, the service has a usable set
+/// of public keys, and the database has every migration file this release expects
 /// ([`schema::SCHEMA`]).
 ///
 /// # Errors
@@ -101,9 +102,11 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         let _ = consumer.run(stop).await;
     });
 
-    let verifier = IdentityVerifier::new(
-        ServiceName::Assets,
-        config.platform.internal_identity_keys.clone(),
-    );
+    let keys = PublishedKeys::watch(
+        &context,
+        config.platform.internal_identity_keys_file.clone(),
+    )
+    .await;
+    let verifier = IdentityVerifier::new(ServiceName::Assets, keys);
     Ok(tenants::routes(verifier, db))
 }
