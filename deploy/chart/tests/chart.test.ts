@@ -1378,6 +1378,18 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
       expect(initdb.postInitTemplateSQL).toBeUndefined();
     }
     expect(statements.length).toBeGreaterThan(0);
+    for (const shape of SHAPE_NAMES) {
+      const initdb = clusterSpec(render(SHAPES[shape])).bootstrap.initdb as Record<string, unknown>;
+      for (const key of ["postInitSQL", "postInitApplicationSQL", "postInitTemplateSQL"]) {
+        // CloudNativePG passes these to its initdb Job as container arguments, where Kubernetes
+        // turns $$ into $ and expands $(NAME): a `DO $$ ... $$` body reached PostgreSQL as
+        // `DO $ ... $` on the lab and failed the bootstrap. Dollar quotes need a named tag.
+        for (const statement of (initdb[key] as string[] | undefined) ?? []) {
+          expect(statement).not.toContain("$$");
+          expect(statement).not.toContain("$(");
+        }
+      }
+    }
     for (const statement of statements) {
       expect(statement).toEndWith(";");
       expect(statement).not.toMatch(/^--/m);

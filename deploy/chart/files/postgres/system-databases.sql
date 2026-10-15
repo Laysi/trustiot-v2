@@ -12,7 +12,10 @@
 -- bootstrapped before it. Every statement is idempotent.
 --
 -- Format, which both tests read the same way: statements are separated by a blank line, a line
--- that starts with `--` is a comment, and each statement ends with `;`.
+-- that starts with `--` is a comment, and each statement ends with `;`. No statement contains
+-- `$$` or `$(`: CloudNativePG hands postInitSQL to its initdb Job as container arguments, where
+-- Kubernetes turns `$$` into `$` and expands `$(NAME)`, so a dollar-quoted body uses a named tag
+-- such as `$do$`.
 
 -- CloudNativePG's own roles that connect to `postgres` without being superusers
 -- (deploy/cloudnative-pg/README.md): streaming_replica for pg_rewind, for the replicas' checks of
@@ -20,7 +23,7 @@
 -- monitoring queries. The operator creates both when an instance first starts, after this file
 -- has run, so they are created here as the operator would create them (it accepts roles that
 -- already exist) and can be granted CONNECT by name. The operator's pooler role grants itself.
-DO $$
+DO $do$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'streaming_replica') THEN
         CREATE ROLE streaming_replica LOGIN REPLICATION;
@@ -30,7 +33,7 @@ BEGIN
         CREATE ROLE cnpg_metrics_exporter LOGIN PASSWORD NULL;
     END IF;
 END
-$$;
+$do$;
 
 GRANT CONNECT ON DATABASE postgres TO streaming_replica, cnpg_metrics_exporter;
 

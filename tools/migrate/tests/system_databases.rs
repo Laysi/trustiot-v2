@@ -313,12 +313,12 @@ fn the_split_matches_the_chart_tests_rule() {
     // Blank lines (also with spaces or tabs) separate statements, `--` lines are comments, and a
     // block of comments only is no statement.
     let text: &'static str =
-        "-- header\n\nSELECT 1;\n \t\n-- note\nDO $$\nBEGIN\n    -- inner\nEND\n$$;\n\n-- only\n";
+        "-- header\n\nSELECT 1;\n \t\n-- note\nDO $do$\nBEGIN\n    -- inner\nEND\n$do$;\n\n-- only\n";
     let split = statements(text);
     assert_eq!(split.len(), 2, "{split:?}");
     assert_eq!(without_comments(split[0]), "SELECT 1;");
     assert_eq!(
         without_comments(split[1]),
-        "DO $$\nBEGIN\n    -- inner\nEND\n$$;"
+        "DO $do$\nBEGIN\n    -- inner\nEND\n$do$;"
     );
 }
