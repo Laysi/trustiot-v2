@@ -589,7 +589,9 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
               (caught: unknown) => (caught instanceof Error ? caught.message : String(caught)),
             );
             expect(error, `${login.role} must not connect to ${system}`).toBeDefined();
-            expect(error, `${login.role} refusal on ${system}`).toMatch(/permission denied|CONNECT|not allowed/i);
+            // Postgres's own refusal for the missing CONNECT privilege (SQLSTATE 42501); a
+            // connection problem ("Failed to connect", "connection refused") must not pass.
+            expect(error, `${login.role} refusal on ${system}`).toContain(`permission denied for database "${system}"`);
           }
         }
         // The roles that no Secret is bound to cannot log in, whatever the password.
