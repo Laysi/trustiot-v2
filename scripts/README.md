@@ -273,6 +273,8 @@ podman stop release-registry
 
 主機是 x86_64 或 arm64 都能跑，指令相同，不需要模擬器。release.yml 在 arm64 runner 上建置（Laysi/trustiot-v2#310），所以要重現某次發佈的服務映像 digest，要在 arm64 上跑：x86 上交叉編譯出的服務執行檔功能相同、位元不同（chart 相同），原因與 x86 上以 qemu-user 模擬 arm64 容器重現的做法見 [CI 與發佈](../docs/architecture/ci-release.md) 的「交叉編譯與可重現建置」與其測試報告。
 
+podman 以一般使用者（rootless）或 root 執行都可以，Rust 服務映像的 digest 相同（Laysi/trustiot-v2#384）：`build.ts` 把 Rust 映像建在自己的 podman store（vfs driver，放在系統暫存目錄下的工作目錄，`CONTAINERS_STORAGE_CONF` 指向它，`podman info` 確認 podman 用的就是它），結束時刪除，不動使用者原本的 store；自帶 Containerfile 的映像（`postgres`）仍用使用者的 store。中途被中斷而留下 `/tmp/trustiot-release-*/store` 時，rootless 的檔案屬於 user namespace 的 subordinate ID，要以 `podman unshare rm -rf <目錄>` 刪除。`build.json` 記錄打包用的 podman、buildah 版本（有 dpkg 時也記錄套件版本），發佈時寫進 GitHub Release；podman 版本不同時，同一個執行檔可能打包出不同的 digest。
+
 本機模式打包的 chart 除了寫入映像 digest，也把 `serviceDefaults.image.registry` 與 `postgres.bundled.image.repository` 改成本機的 registry，chart 指向的就是剛推送的映像；正式發佈不改 registry，chart 裡的 repository 與推送的位置不同時 publish 停止。檢查打包出的 chart：`helm pull oci://127.0.0.1:5068/laysi/trustiot-v2/charts/trustiot --version 0.0.0-rc.1 --plain-http`，再以 `helm show values` 看 digest。
 
 `--dry-run` 以目前的 HEAD 規劃，tag 不必存在，也不檢查正式版是否在 main 上、main 的 ci 是否通過（後者以 `GITHUB_TOKEN` 讀 GitHub API）。只要建置映像，前兩步就夠了。同一個版本再跑一次 publish 會得到相同的 digest，不會重複推送；內容不同時 publish 會拒絕覆蓋。

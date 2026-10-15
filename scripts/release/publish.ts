@@ -29,11 +29,14 @@ import {
   type PlannedImage,
   type PublishedArtifact,
   type PublishedRelease,
+  type ReleaseBuilder,
   type ReleasePlan,
   ReleaseError,
+  errorMessage,
   helmPushDigest,
   imagePlatformProblems,
   isMap,
+  parseBuilder,
   parsePlan,
   renderReleaseBody,
   sbomAssetName,
@@ -69,6 +72,21 @@ function buildArtifacts(image: PlannedImage, artifacts: string): { archive: stri
     }
   }
   return { archive, sbomFile };
+}
+
+/** The podman and buildah that the build job packed the images with (build.json's builder). */
+function buildBuilder(artifacts: string): ReleaseBuilder {
+  const file = join(artifacts, "build.json");
+  if (!existsSync(file)) {
+    throw new ReleaseError(`the build artifacts have no ${file}`);
+  }
+  let doc: unknown;
+  try {
+    doc = JSON.parse(readFileSync(file, "utf8"));
+  } catch (error) {
+    throw new ReleaseError(`${file} is not JSON: ${errorMessage(error)}`);
+  }
+  return parseBuilder(isMap(doc) ? doc.builder : undefined);
 }
 
 function pinOptions(plan: ReleasePlan, access: RegistryAccess): PinOptions {
@@ -255,6 +273,7 @@ await runStage("publish", async () => {
   try {
     // Before anything is pushed: the chart must take this build's digests, so a chart that
     // cannot be pinned stops the release while nothing is published yet.
+    const builder = buildBuilder(resolve(options.artifacts ?? ""));
     const built: PublishedArtifact[] = [];
     for (const image of plan.images) {
       const { digest } = await rawManifest(tools.skopeo, `oci-archive:${buildArtifacts(image, resolve(options.artifacts ?? "")).archive}`);
@@ -267,7 +286,7 @@ await runStage("publish", async () => {
     }
     const chart = await publishChart(plan, access, tools, workDir, images);
     const published = { images: images.map(({ sbomFile: _, ...image }) => image), chart };
-    const body = renderReleaseBody(notes, plan, published);
+    const body = renderReleaseBody(notes, plan, published, builder);
     let releaseUrl: string;
     if (access.localKey === undefined) {
       releaseUrl = await githubRelease(plan, body, images.map((image) => ({ asset: image.sbomAsset, file: image.sbomFile })), workDir);
