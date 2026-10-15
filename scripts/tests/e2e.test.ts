@@ -510,6 +510,11 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
         // role is NOLOGIN without a bound Secret).
         expect(first.stdout).toContain("running the migration Job (tools/migrate)");
         expect(first.stdout).toContain("migration Job finished");
+        // The Job found nothing to warn about: PUBLIC has no access to `postgres` and `template1`
+        // (Laysi/trustiot-v2#427), so its warning about them is not printed.
+        expect(first.stdout).toMatch(/migration Job finished: \d+ change\(s\), 0 warning\(s\);/);
+        expect(first.stdout).not.toContain("the migration Job reported");
+        expect(first.stdout).not.toContain("may connect to it");
         const logins = productLogins();
         expect(logins.map((login) => login.role)).toEqual(["identity_app", "assets_app", "assets_platform"]);
         for (const login of logins) {
@@ -563,6 +568,31 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
           expect(printedLogin.user, login.role).toBe(login.role);
           expect(printedLogin.password, login.role).toBe(firstState.credentials.services[login.stateKey].password);
           expect(await loginAs(postgresPort, database, caFile, printedLogin), login.role).toBe(login.role);
+        }
+        // PUBLIC's CONNECT and TEMPORARY on the cluster's other databases are revoked, as in the
+        // bundled Cluster: the privilege is gone, and a service role with its real password is
+        // refused (not merely unable to reach the port) while it still logs in to its own database.
+        expect(
+          await psql(
+            instance,
+            "SELECT datname || ':' || has_database_privilege('identity_app', datname, 'CONNECT') || ':' || has_database_privilege('identity_app', datname, 'TEMPORARY') FROM pg_database WHERE datname IN ('postgres', 'template1', 'trustiot') ORDER BY 1",
+          ),
+        ).toEqual(["postgres:false:false", "template1:false:false", "trustiot:true:false"]);
+        for (const login of logins) {
+          const printedLogin = {
+            user: settings[serviceLoginVariable(login.stateKey, "USERNAME")]!,
+            password: settings[serviceLoginVariable(login.stateKey, "PASSWORD")]!,
+          };
+          for (const system of ["postgres", "template1"]) {
+            const error = await loginAs(postgresPort, system, caFile, printedLogin).then(
+              () => undefined,
+              (caught: unknown) => (caught instanceof Error ? caught.message : String(caught)),
+            );
+            expect(error, `${login.role} must not connect to ${system}`).toBeDefined();
+            // Postgres's own refusal for the missing CONNECT privilege (SQLSTATE 42501); a
+            // connection problem ("Failed to connect", "connection refused") must not pass.
+            expect(error, `${login.role} refusal on ${system}`).toContain(`permission denied for database "${system}"`);
+          }
         }
         // The roles that no Secret is bound to cannot log in, whatever the password.
         for (const role of ["identity_platform", "identity_owner", "assets_owner"]) {

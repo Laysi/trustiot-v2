@@ -7,7 +7,9 @@ import {
   MIGRATION_ROLE,
   passwordBindings,
   reportedChanges,
+  reportedWarnings,
   scrub,
+  warningLines,
   secretNames,
   type MigrationRun,
 } from "../lib/migrate.ts";
@@ -101,6 +103,38 @@ describe("what is printed when the Job fails", () => {
     expect(reportedChanges(log)).toBe(14);
     expect(reportedChanges('{"message":"migration run finished","changes":3}')).toBe(3);
     expect(reportedChanges("nothing here")).toBeUndefined();
+  });
+});
+
+describe("the warnings the Job reports", () => {
+  test("reads the count from the final log line", () => {
+    const log = [
+      '{"fields":{"message":"another database admits the service roles","warning":"database postgres: may connect"}}',
+      '{"fields":{"message":"migration run finished","changes":14,"warnings":2}}',
+    ].join("\n");
+    expect(reportedWarnings(log)).toBe(2);
+    expect(reportedWarnings('{"message":"migration run finished","changes":3,"warnings":0}')).toBe(0);
+  });
+
+  test("is undefined without a count and for a line in the old format", () => {
+    expect(reportedWarnings('{"fields":{"message":"migration run finished","changes":3}}')).toBeUndefined();
+    expect(reportedWarnings('{"fields":{"message":"migration run finished","warnings":"2"}}')).toBeUndefined();
+    expect(reportedWarnings("migration run finished warnings=2")).toBeUndefined();
+    expect(reportedWarnings("")).toBeUndefined();
+  });
+
+  test("collects the text of each warning line and ignores the rest", () => {
+    const log = [
+      '{"fields":{"message":"another database admits the service roles","warning":"database postgres: roles a may connect"}}',
+      'not json "warning"',
+      '{"fields":{"message":"created role identity_owner"}}',
+      '{"warning":"database template1: roles a may connect"}',
+    ].join("\n");
+    expect(warningLines(log)).toEqual([
+      "database postgres: roles a may connect",
+      "database template1: roles a may connect",
+    ]);
+    expect(warningLines("")).toEqual([]);
   });
 });
 

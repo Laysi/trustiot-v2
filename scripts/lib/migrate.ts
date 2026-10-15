@@ -51,6 +51,10 @@ export interface MigrationResult {
   passwords: Record<string, string>;
   /** Number of changes the Job reports, when its log says. */
   changes: number | undefined;
+  /** Number of warnings the Job reports; undefined when its log has no count (an older Job). */
+  warnings: number | undefined;
+  /** The Job's warning lines, secrets removed; what the count counts. */
+  warningLines: string[];
 }
 
 /** The environment of the Job. Not inherited from the caller: a stray `TRUSTIOT_*` would change it. */
@@ -92,19 +96,45 @@ export function scrub(text: string, secrets: readonly string[]): string {
   return out;
 }
 
-/** How many changes the Job's final log line reports. */
-export function reportedChanges(log: string): number | undefined {
+/** A number the Job's final log line reports under `name`, or undefined when it has none. */
+function reportedCount(log: string, name: "changes" | "warnings"): number | undefined {
   for (const line of log.split("\n").reverse()) {
     if (!line.startsWith("{") || !line.includes("migration run finished")) continue;
     try {
-      const parsed = JSON.parse(line) as { changes?: unknown; fields?: { changes?: unknown } };
-      const changes = parsed.fields?.changes ?? parsed.changes;
-      if (typeof changes === "number") return changes;
+      const parsed = JSON.parse(line) as Record<string, unknown> & { fields?: Record<string, unknown> };
+      const count = parsed.fields?.[name] ?? parsed[name];
+      if (typeof count === "number") return count;
     } catch {
       // not JSON: keep looking
     }
   }
   return undefined;
+}
+
+/** How many changes the Job's final log line reports. */
+export function reportedChanges(log: string): number | undefined {
+  return reportedCount(log, "changes");
+}
+
+/** How many warnings the Job's final log line reports (Laysi/trustiot-v2#400); undefined in the old format. */
+export function reportedWarnings(log: string): number | undefined {
+  return reportedCount(log, "warnings");
+}
+
+/** The text of each warning the Job logged (the `warning` field of its log lines), in order. */
+export function warningLines(log: string): string[] {
+  const out: string[] = [];
+  for (const line of log.split("\n")) {
+    if (!line.startsWith("{") || !line.includes('"warning"')) continue;
+    try {
+      const parsed = JSON.parse(line) as { fields?: { warning?: unknown }; warning?: unknown };
+      const warning = parsed.fields?.warning ?? parsed.warning;
+      if (typeof warning === "string") out.push(warning);
+    } catch {
+      // not JSON: not a warning line
+    }
+  }
+  return out;
 }
 
 export async function runMigrationJob(run: MigrationRun): Promise<MigrationResult> {
@@ -140,7 +170,13 @@ export async function runMigrationJob(run: MigrationRun): Promise<MigrationResul
           throw new Error(`the migration Job finished but left no password for ${role}`);
         }
       }
-      return { passwords, changes: reportedChanges(stdout) };
+      const output = `${stdout}\n${stderr}`;
+      return {
+        passwords,
+        changes: reportedChanges(output),
+        warnings: reportedWarnings(output),
+        warningLines: warningLines(output).map((line) => scrub(line, hidden)),
+      };
     });
   } finally {
     api.stop();
