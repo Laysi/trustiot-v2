@@ -7,6 +7,7 @@
 | `migrate run`（或不帶參數） | 一次 migration（chart 的 Job）。結束碼 0 完成、1 失敗、2 設定或參數不能用 |
 | `migrate wait-for-job` | 服務 pod 的 init container：經 Kubernetes API 等設定裡的 Job 完成；Job 失敗時以 1 結束 |
 | `migrate clickhouse-admin-password` | 叢集內 ClickHouse pod 的 init container（Laysi/trustiot-v2#403）：在 chart 宣告的空 Secret 產生 bootstrap 管理帳號的密碼（規則同下方的密碼 Secret，代是 `clickhouse.bundled.adminPasswordGeneration`），再寫成 ClickHouse 映像讀的檔案（[`src/clickhouse_admin.rs`](src/clickhouse_admin.rs)） |
+| `migrate identity-signing-keys` | 身分服務 pod 的 init container（Laysi/trustiot-v2#404）：在 chart 宣告的空 Secret 產生、輪替與撤銷內部身分簽章金鑰，並把公鑰寫進 ConfigMap（規則在 `crates/identity-keys`，綁定 uid 與帶 `resourceVersion` 的 patch 與密碼 Secret 相同；代是 `internalIdentity.keyGeneration`，設定是 `TRUSTIOT__KEYS__*`）。日誌只有 kid、代與時間（[`src/signing_keys.rs`](src/signing_keys.rs)） |
 | `cargo test -p migrate` | 單元測試與整合測試（下方「測試」） |
 
 映像是 `deploy/images/migrate`（`image.toml`），與服務一樣由 release 流程建置與簽章。
@@ -106,6 +107,7 @@ Job 自己的設定：
 | `tests/clickhouse.rs` | ClickHouse DDL 套用一次、改過的檔案被拒；collector 帳號以 Job 產生的密碼建立、寫入，新的密碼世代輪替，多了權限、設定或角色不是預設角色時停止；collector 角色多了權限或角色時停止；collector 關閉或帳號改名時舊帳號不能再登入（`HOST NONE`），再開啟時恢復 |
 | `tests/passwords.rs` | 密碼 Secret 對假的 API：第一次填入每個缺的 key（256 位元十六進位，各不相同），第二次只讀不寫；新的世代換掉每個受管的 key、不動其他 key、只換一次；較小的世代（rollback）不換、之後升級回來也不換；不是 Job 填過的 Secret 物件（uid 不同，含帶著同代 annotation 與自選密碼的）每個 key 都重新產生，別人只改 annotation 時也一樣，綁定時拿掉白名單以外的 annotation、標籤、ownerReferences 與 finalizers（報告只寫 key），已綁定的不再動；遺失或不能用的 key 單獨重新產生；Secret 不存在時停止並寫出處理方式；讀寫之間被改過時重讀，一直被改時停止而不覆蓋；拒絕的 token 與 403、API 暫時 503 的重試與上限；報告、錯誤與 `Debug` 都不含密碼或它的 base64；沒有綁定時不發請求（不需要容器） |
 | `tests/clickhouse_admin.rs` | `clickhouse-admin-password` 對假的 API：第一次填入並寫出 0400 的檔案、第二次只讀不寫，留下的暫存檔不影響；新的代輪替一次，rollback 不換；別人建立的 Secret（uid 不同）不採用；Secret 不存在或被拒時停止並寫出處理方式。對拋棄式 ClickHouse：Job 只用 init container 寫入的密碼，被拒時重讀 Secret，等到上限時的訊息寫出 Secret 名稱；未綁定的 Secret 裡的值不使用；全新安裝時 Job 等 Secret 填好才連線 |
+| `tests/signing_keys.rs` | `identity-signing-keys` 對假的 API（Secret 與 ConfigMap，以假的時鐘）：全新安裝一把立即簽章；輪替先寫 Secret、再公開、最後記下時間，舊金鑰在它的 token 都過期後才移除；撤銷立即換掉每一把較舊的；中途停掉由下一次完成；同時執行只產生一把；較舊的一次執行不會撤下較新的公開；不是它填過的 Secret（uid 不同）不採用；不能用的內容換掉；人建立的私鑰匯入後被換掉；物件不存在或被拒時停止並寫出處理方式；不超過 8 把；日誌與 API 回應以外的地方沒有私鑰 |
 | `tests/wait_for_job.rs` | `wait-for-job` 對一個假的 API server：等到完成、失敗與拒絕的 token、不信任其他 CA；Job 不存在時繼續等，訊息寫出 Job 名稱、原因與處理方式 |
 | `tests/service_records.rs` | 每個服務 schema 裡的 migration 紀錄（Laysi/trustiot-v2#402），以測試用的服務清單與 service-kit 的 `MigrationCheck`（服務角色、帶連線檢查的 pool）：紀錄與 `trustiot_migrate.applied` 相同、表屬於 owner 而只有服務角色能讀；預期下一版檔案的映像不 ready 並寫出缺的檔案，下一版的 Job 跑完後同一個檢查通過，上一版的映像在較新的資料庫上照常通過；失敗的檔案兩份紀錄都不留；第二次執行沒有變更；這一版之前的資料庫（沒有紀錄表）讀不到紀錄而不 ready，下一次執行建立並補齊、再下一次沒有變更；手動改過的紀錄被改回；服務角色不能改自己的紀錄、讀不到 `trustiot_migrate.applied`，其他服務的服務角色與能進這個 schema 的消費端平台角色都讀不到；每個角色仍通過 service-kit 的連線檢查 |
 | `tests/registry.rs` | `PRODUCT` 列出每個檔案、檔案符合規則（大小寫與空白的變化也擋得到）、不一致的清單被拒絕；chart 綁定密碼的登入角色（`_migrate.tpl` 的兩條 Postgres 綁定與 `trustiot.migrate.platformLogins`）與 `PRODUCT` 的角色一致（不需要資料庫） |

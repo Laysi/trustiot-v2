@@ -1048,6 +1048,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "identity-keys"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "idna"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1193,12 +1207,14 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "ed25519-dalek",
  "getrandom 0.4.3",
  "hmac",
  "http",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "identity-keys",
  "outbox",
  "percent-encoding",
  "rcgen",
@@ -1214,6 +1230,7 @@ dependencies = [
  "tokio-rustls",
  "tracing",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

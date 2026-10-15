@@ -1,8 +1,9 @@
-//! A fake Kubernetes API that keeps Secrets of one namespace in memory and answers the two
-//! requests the migration Job makes: `GET` and JSON merge `PATCH` of one Secret, with
-//! `resourceVersion` preconditions (HTTP 409) as the API server applies them. Plain HTTP on
-//! 127.0.0.1, which the Job's settings accept for tests only. It records every request line,
-//! content type and whether the token matched, never a body.
+//! A fake Kubernetes API that keeps Secrets and ConfigMaps of one namespace in memory and answers
+//! the two requests tools/migrate makes: `GET` and JSON merge `PATCH` of one object, with
+//! `resourceVersion` preconditions (HTTP 409) as the API server applies them. A Secret's `data`
+//! travels in base64, a ConfigMap's as text. Plain HTTP on 127.0.0.1, which the settings accept
+//! for tests only. It records every request line, content type and whether the token matched,
+//! never a body.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -11,7 +12,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use migrate::config::{AdminSettings, PasswordSettings};
+use migrate::config::{AdminSettings, KeySettings, PasswordSettings};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -20,7 +21,7 @@ use super::{random_hex, scratch_dir};
 
 pub const NAMESPACE: &str = "release-ns";
 
-/// One Secret as the fake keeps it.
+/// One Secret or ConfigMap as the fake keeps it.
 #[derive(Clone, Default)]
 pub struct Stored {
     pub data: BTreeMap<String, Vec<u8>>,
@@ -44,9 +45,16 @@ pub struct Seen {
     pub authorized: bool,
 }
 
+/// Another writer acting just before a request is answered.
+type Act = Box<dyn FnOnce(&mut State) + Send>;
+
 #[derive(Default)]
 struct State {
     secrets: BTreeMap<String, Stored>,
+    config_maps: BTreeMap<String, Stored>,
+    /// Called with the state before the next request whose line starts with the text is
+    /// answered, once.
+    before: Option<(String, Act)>,
     seen: Vec<Seen>,
     next_version: u64,
     /// Before each of the next patches, another writer changes the Secret.
@@ -63,6 +71,20 @@ impl State {
         self.next_version += 1;
         self.next_version
     }
+
+    fn objects(&mut self, kind: Kind) -> &mut BTreeMap<String, Stored> {
+        match kind {
+            Kind::Secret => &mut self.secrets,
+            Kind::ConfigMap => &mut self.config_maps,
+        }
+    }
+}
+
+/// The two kinds of object the fake keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    Secret,
+    ConfigMap,
 }
 
 /// The fake API; it stops with the test's runtime.
@@ -161,6 +183,73 @@ impl FakeSecrets {
         self.state().secrets.remove(name);
     }
 
+    /// Declares an empty ConfigMap, as the chart renders it.
+    pub fn declare_config_map(&self, name: &str) {
+        let mut state = self.state();
+        let version = state.bump();
+        state.config_maps.insert(
+            name.to_owned(),
+            Stored {
+                resource_version: version,
+                uid: format!("00000000-0000-4000-8000-{version:012}"),
+                ..Stored::default()
+            },
+        );
+    }
+
+    /// The ConfigMap, if it exists.
+    pub fn config_map(&self, name: &str) -> Option<Stored> {
+        self.state().config_maps.get(name).cloned()
+    }
+
+    /// A ConfigMap's value as text.
+    pub fn config_map_value(&self, name: &str, key: &str) -> Option<String> {
+        self.config_map(name)?
+            .data
+            .get(key)
+            .map(|bytes| String::from_utf8(bytes.clone()).expect("UTF-8"))
+    }
+
+    /// Another writer changes the ConfigMap.
+    pub fn edit_config_map(&self, name: &str, change: impl FnOnce(&mut Stored)) {
+        let mut state = self.state();
+        let version = state.bump();
+        let config_map = state
+            .config_maps
+            .get_mut(name)
+            .expect("a declared ConfigMap");
+        change(config_map);
+        config_map.resource_version = version;
+    }
+
+    /// Deletes the ConfigMap.
+    pub fn delete_config_map(&self, name: &str) {
+        self.state().config_maps.remove(name);
+    }
+
+    /// Before the next request whose line starts with `line` (for example `GET
+    /// /api/v1/namespaces/release-ns/configmaps/`) is answered, `act` changes the Secrets and the
+    /// ConfigMaps, as another writer acting at that moment would; every object then gets a new
+    /// `resourceVersion`. Runs once.
+    pub fn before_next(
+        &self,
+        line: &str,
+        act: impl FnOnce(&mut BTreeMap<String, Stored>, &mut BTreeMap<String, Stored>) + Send + 'static,
+    ) {
+        let act: Act = Box::new(move |state: &mut State| {
+            act(&mut state.secrets, &mut state.config_maps);
+            let version = state.bump();
+            for stored in state
+                .secrets
+                .values_mut()
+                .chain(state.config_maps.values_mut())
+            {
+                stored.resource_version = version;
+            }
+        });
+        self.state().before = Some((line.to_owned(), act));
+    }
+
     /// Another writer sets (`Some`) or removes (`None`) a key.
     pub fn write(&self, name: &str, key: &str, value: Option<&[u8]>) {
         let mut state = self.state();
@@ -234,6 +323,28 @@ impl FakeSecrets {
         }
     }
 
+    /// Settings of the identity service's init container for this fake: it keeps the key set in
+    /// `secret` and the public keys in `config_map`, for `generation`.
+    pub fn key_settings(&self, secret: &str, config_map: &str, generation: &str) -> KeySettings {
+        let dir = scratch_dir("kube-token");
+        let token_file = dir.join("token");
+        std::fs::write(&token_file, format!("{}\n", self.token)).expect("write the token");
+        KeySettings {
+            api_url: self.url.clone(),
+            namespace: NAMESPACE.to_owned(),
+            token_file,
+            ca_file: dir.join("unused-ca.crt"),
+            secret: secret.to_owned(),
+            config_map: config_map.to_owned(),
+            generation: generation.to_owned(),
+            revoke_before_generation: "0".to_owned(),
+            propagation_seconds: 600,
+            legacy_key_file: None,
+            legacy_public_keys: None,
+            wait: Duration::from_secs(120),
+        }
+    }
+
     /// Settings of the bundled ClickHouse's init container for this fake: it fills `account` in
     /// `secret` for `generation` and writes the password to `password_file`.
     pub fn admin_settings(
@@ -287,22 +398,33 @@ impl FakeSecrets {
         if let Some(code) = state.refuse_with {
             return status(code, "Refused");
         }
+        if state
+            .before
+            .as_ref()
+            .is_some_and(|(prefix, _)| line.starts_with(prefix.as_str()))
+            && let Some((_, act)) = state.before.take()
+        {
+            act(&mut state);
+        }
         let mut parts = line.split(' ');
         let (method, target) = (
             parts.next().unwrap_or_default(),
             parts.next().unwrap_or_default(),
         );
         let (path, query) = target.split_once('?').unwrap_or((target, ""));
-        let prefix = format!("/api/v1/namespaces/{NAMESPACE}/secrets/");
-        let Some(name) = path
-            .strip_prefix(&prefix)
-            .filter(|name| !name.contains('/'))
+        let route = |kind: Kind, collection: &str| {
+            path.strip_prefix(&format!("/api/v1/namespaces/{NAMESPACE}/{collection}/"))
+                .filter(|name| !name.contains('/'))
+                .map(|name| (kind, name))
+        };
+        let Some((kind, name)) =
+            route(Kind::Secret, "secrets").or_else(|| route(Kind::ConfigMap, "configmaps"))
         else {
             return status(404, "NotFound");
         };
         match method {
-            "GET" if query.is_empty() => match state.secrets.get(name) {
-                Some(secret) => (200, render(name, secret)),
+            "GET" if query.is_empty() => match state.objects(kind).get(name) {
+                Some(secret) => (200, render(kind, name, secret)),
                 None => status(404, "NotFound"),
             },
             "PATCH" => {
@@ -315,7 +437,7 @@ impl FakeSecrets {
                 if state.interfering_writes > 0 {
                     state.interfering_writes -= 1;
                     let version = state.bump();
-                    if let Some(secret) = state.secrets.get_mut(name) {
+                    if let Some(secret) = state.objects(kind).get_mut(name) {
                         secret.resource_version = version;
                     }
                 }
@@ -324,10 +446,10 @@ impl FakeSecrets {
                 };
                 let version = state.bump();
                 let rewrite_to = state.rewrite_to.clone();
-                let Some(secret) = state.secrets.get_mut(name) else {
+                let Some(secret) = state.objects(kind).get_mut(name) else {
                     return status(404, "NotFound");
                 };
-                match apply(secret, &patch) {
+                match apply(kind, secret, &patch) {
                     Ok(()) => {
                         if let Some(value) = rewrite_to {
                             for key in patch
@@ -340,7 +462,7 @@ impl FakeSecrets {
                             }
                         }
                         secret.resource_version = version;
-                        (200, render(name, secret))
+                        (200, render(kind, name, secret))
                     }
                     Err(code) => status(code, "Refused"),
                 }
@@ -354,7 +476,7 @@ impl FakeSecrets {
 /// `metadata.labels`, `metadata.ownerReferences`, `metadata.finalizers` (each only set to null)
 /// and `data`; any other field is refused (400), and a stale `resourceVersion` is a conflict
 /// (409).
-fn apply(secret: &mut Stored, patch: &Value) -> Result<(), u16> {
+fn apply(kind: Kind, secret: &mut Stored, patch: &Value) -> Result<(), u16> {
     let patch = patch.as_object().ok_or(400_u16)?;
     if patch.keys().any(|key| key != "metadata" && key != "data") {
         return Err(400);
@@ -417,7 +539,10 @@ fn apply(secret: &mut Stored, patch: &Value) -> Result<(), u16> {
                     secret.data.remove(key);
                 }
                 Value::String(text) => {
-                    let bytes = STANDARD.decode(text).map_err(|_| 400_u16)?;
+                    let bytes = match kind {
+                        Kind::Secret => STANDARD.decode(text).map_err(|_| 400_u16)?,
+                        Kind::ConfigMap => text.clone().into_bytes(),
+                    };
                     secret.data.insert(key.clone(), bytes);
                 }
                 _ => return Err(400),
@@ -427,12 +552,35 @@ fn apply(secret: &mut Stored, patch: &Value) -> Result<(), u16> {
     Ok(())
 }
 
-fn render(name: &str, secret: &Stored) -> String {
+fn render(kind: Kind, name: &str, secret: &Stored) -> String {
     let data: Map<String, Value> = secret
         .data
         .iter()
-        .map(|(key, value)| (key.clone(), Value::String(STANDARD.encode(value))))
+        .map(|(key, value)| {
+            let value = match kind {
+                Kind::Secret => STANDARD.encode(value),
+                Kind::ConfigMap => String::from_utf8(value.clone()).expect("UTF-8"),
+            };
+            (key.clone(), Value::String(value))
+        })
         .collect();
+    if kind == Kind::ConfigMap {
+        return json!({
+            "kind": "ConfigMap",
+            "apiVersion": "v1",
+            "metadata": {
+                "name": name,
+                "namespace": NAMESPACE,
+                "resourceVersion": secret.resource_version.to_string(),
+                "uid": secret.uid,
+                "annotations": secret.annotations,
+                "labels": secret.labels,
+                "deletionTimestamp": secret.deletion_timestamp,
+            },
+            "data": data,
+        })
+        .to_string();
+    }
     json!({
         "kind": "Secret",
         "apiVersion": "v1",

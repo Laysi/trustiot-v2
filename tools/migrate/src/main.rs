@@ -1,7 +1,9 @@
 //! `migrate [run]`: one migration run (the chart's Job). `migrate wait-for-job`: the init
 //! container that holds a service's pod until the run has completed. `migrate
 //! clickhouse-admin-password`: the bundled ClickHouse's init container, which puts the bootstrap
-//! admin password in place before the server starts. Settings come from the
+//! admin password in place before the server starts. `migrate identity-signing-keys`: the
+//! identity service's init container, which keeps the internal identity signing keys and their
+//! public keys (Laysi/trustiot-v2#404). Settings come from the
 //! environment (crates/service-kit, "設定"); logs are JSON lines on stdout. Exit codes: 0 done,
 //! 1 failed, 2 unusable settings or arguments.
 
@@ -9,7 +11,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use migrate::Report;
-use migrate::config::{ClickHouseAdminConfig, RunConfig, WaitForJobConfig};
+use migrate::config::{ClickHouseAdminConfig, RunConfig, SigningKeysConfig, WaitForJobConfig};
 use migrate::registry::PRODUCT;
 use serde::de::DeserializeOwned;
 use service_kit::ServiceInfo;
@@ -96,6 +98,23 @@ async fn clickhouse_admin_password() -> ExitCode {
     code
 }
 
+async fn identity_signing_keys() -> ExitCode {
+    let (settings, telemetry) = match load::<SigningKeysConfig>() {
+        Ok(loaded) => loaded,
+        Err(code) => return code,
+    };
+    let mut report = Report::default();
+    let code = match migrate::signing_keys::converge(&settings.app.keys, &mut report).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!(error = %error, "the internal identity signing keys are not in place");
+            ExitCode::FAILURE
+        }
+    };
+    telemetry.shutdown(TELEMETRY_FLUSH).await;
+    code
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let command = std::env::args().nth(1);
@@ -103,11 +122,12 @@ async fn main() -> ExitCode {
         None | Some("run") => run().await,
         Some("wait-for-job") => wait_for_job().await,
         Some("clickhouse-admin-password") => clickhouse_admin_password().await,
+        Some("identity-signing-keys") => identity_signing_keys().await,
         Some(_) => {
             telemetry::init_fallback(&INFO);
             tracing::error!(
-                "unknown command; use `migrate run`, `migrate wait-for-job` or `migrate \
-                 clickhouse-admin-password`"
+                "unknown command; use `migrate run`, `migrate wait-for-job`, `migrate \
+                 clickhouse-admin-password` or `migrate identity-signing-keys`"
             );
             ExitCode::from(2)
         }

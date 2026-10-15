@@ -19,6 +19,9 @@ doc = false
 base64.workspace = true
 getrandom.workspace = true
 hmac.workspace = true
+# The internal identity signing keys the identity pod's init container keeps
+# (`migrate identity-signing-keys`, src/signing_keys.rs).
+identity-keys = { path = "../../crates/identity-keys" }
 # The outbox tables' DDL (crates/outbox/src/schema.rs), applied in producers' and consumers'
 # schemas.
 outbox = { path = "../../crates/outbox" }
@@ -46,8 +49,12 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "macros", "net", "rt-multi-thread", "time"] }
 tracing.workspace = true
 uuid.workspace = true
+# Wipes key material read from a file or the Secret.
+zeroize.workspace = true
 
 [dev-dependencies]
+# A person's PKCS#8 PEM key (from before Laysi/trustiot-v2#404) for the import tests.
+ed25519-dalek = { workspace = true, features = ["pem", "pkcs8"] }
 # The TLS Postgres the integration tests start (shared with crates/service-kit's tests).
 rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
 # The fake Kubernetes API of the wait-for-job tests serves HTTPS (tokio-rustls, a normal

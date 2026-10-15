@@ -10,6 +10,9 @@
 //! - [`clickhouse_admin::generate`]: the bundled ClickHouse's init container, which generates
 //!   its bootstrap admin password into the Secret the chart declares before the server starts;
 //!   the run reads it from there.
+//! - [`signing_keys::converge`]: the identity service's init container, which keeps the internal
+//!   identity signing keys in the Secret the chart declares and their public keys in the
+//!   ConfigMap every service reads (Laysi/trustiot-v2#404).
 //!
 //! Every step is idempotent: a second run on the same databases changes nothing, which
 //! [`Report::changes`] states and the tests check against the catalogs.
@@ -24,6 +27,7 @@ pub mod passwords;
 pub mod postgres;
 pub mod registry;
 pub mod secret;
+pub mod signing_keys;
 
 use std::time::Duration;
 
@@ -74,6 +78,10 @@ pub enum Error {
     ClickHouse(String),
     #[error("Secret {secret}: {problem}")]
     Secret { secret: String, problem: String },
+    #[error("ConfigMap {config_map}: {problem}")]
+    ConfigMap { config_map: String, problem: String },
+    #[error("internal identity signing keys: {0}")]
+    SigningKeys(String),
     #[error("Kubernetes API: {0}")]
     Kube(String),
 }
