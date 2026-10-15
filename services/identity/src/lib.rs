@@ -13,6 +13,8 @@
 //! - [`audience`]: which service a request goes to, from the chart's cookie routes.
 //! - [`ext_authz`]: the check endpoint.
 //! - [`tenants`]: creating tenants, and the event that announces them.
+//! - [`schema`]: the migration files this release expects, which readiness checks
+//!   (Laysi/trustiot-v2#402) and the migration Job applies.
 //! - [`config`]: the settings.
 //!
 //! See `README.md` in this crate for the contract with the ingress gateway, the schema, key
@@ -22,12 +24,14 @@ pub mod audience;
 pub mod config;
 pub mod ext_authz;
 pub mod issuer;
+pub mod schema;
 pub mod session;
 pub mod tenants;
 
 use axum::Router;
 use contract::ServiceName;
 use service_kit::identity::IdentityVerifier;
+use service_kit::migrations::MigrationCheck;
 use service_kit::{BoxError, Context};
 use utoipa::OpenApi;
 
@@ -55,7 +59,8 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// The service's startup for `service_kit::run`: loads and checks the signing key against the
 /// deployed public keys, starts keeping the Postgres connections open (with the session check of
 /// `crates/service-kit`), and serves the ext_authz check and the tenant API. Readiness passes
-/// once the connections are open (`PgSessionStore::keep_warm`).
+/// once the connections are open (`PgSessionStore::keep_warm`) and the database has every
+/// migration file this release expects ([`schema::SCHEMA`]).
 ///
 /// # Errors
 ///
@@ -82,6 +87,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         let store = ping.clone();
         async move { store.ping().await }
     });
+    MigrationCheck::new(&schema::SCHEMA, store.pool().clone()).register(context.health());
     let tenants = TenantStore::connect_lazy(config.postgres().connect_options())?;
     // Requests to the service's own API come through the ingress gateway like any other, with a
     // token the ext_authz check signed for `identity`.

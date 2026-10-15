@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use service_kit::migrations::{RECORDS_TABLE, RECORDS_TEMPLATE, outbox_component};
 use service_kit::postgres::require_verify_full;
 use sqlx::postgres::PgConnectOptions;
 use sqlx::{Connection, Executor, PgConnection, Row};
@@ -64,6 +65,12 @@ const APPLIED: &str =
     "SELECT sha256 FROM trustiot_migrate.applied WHERE component = $1 AND name = $2";
 const RECORD: &str =
     "INSERT INTO trustiot_migrate.applied (component, name, sha256) VALUES ($1, $2, $3)";
+/// A service's records in the Job's table: its own files and its outbox templates.
+const SERVICE_RECORDS: &str = "SELECT component, name, sha256 FROM trustiot_migrate.applied
+    WHERE component = $1 OR component = $2";
+/// The copy in the service's schema (crates/service-kit/sql/migration-records.sql), read as the
+/// owner role with `search_path` set to the schema, so the name resolves to that schema's table.
+const SCHEMA_RECORDS: &str = "SELECT component, name, sha256 FROM trustiot_migrate_applied";
 
 /// A role's attributes, what the migration role may do with it, and its memberships.
 const ROLE_STATE: &str = "
@@ -182,6 +189,14 @@ const GRANT_READERS: &str = "GRANT USAGE ON SCHEMA example_schema TO example_rol
 GRANT SELECT ON example_schema.outbox_event TO example_roles";
 const REVOKE_READERS: &str = "REVOKE SELECT ON example_schema.outbox_event FROM example_roles;
 REVOKE USAGE ON SCHEMA example_schema FROM example_roles";
+/// One record in the service's copy (crates/service-kit/sql/migration-records.sql), written as
+/// its owner role. An upsert, so the copy ends up with the hash of trustiot_migrate.applied.
+const COPY_RECORD: &str = "INSERT INTO example_schema.trustiot_migrate_applied
+    (component, name, sha256) VALUES (example_component, example_name, example_sha256)
+    ON CONFLICT (component, name) DO UPDATE SET sha256 = EXCLUDED.sha256";
+/// A record in the copy that trustiot_migrate.applied does not have.
+const DROP_RECORD: &str = "DELETE FROM example_schema.trustiot_migrate_applied
+    WHERE component = example_component AND name = example_name";
 
 /// What a role is for, which decides what the run accepts of it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -354,6 +369,41 @@ async fn template(
         .map(|_| ())
 }
 
+/// Where a tracked file runs.
+#[derive(Clone, Copy)]
+enum Target<'a> {
+    /// As the migration role, outside any service's schema (the Job's own files and
+    /// database.sql).
+    Database,
+    /// As a service's owner role with `search_path` set to its schema. The file is recorded in
+    /// the schema's copy of the records too, which the service's readiness check reads
+    /// (Laysi/trustiot-v2#402).
+    Service { owner: &'a str, schema: &'a str },
+}
+
+/// Writes one record into `schema`'s copy as `owner` ([`COPY_RECORD`]).
+async fn copy_record(
+    conn: &mut PgConnection,
+    owner: &str,
+    schema: &str,
+    component: &str,
+    name: &str,
+    sha256: &str,
+) -> Result<(), sqlx::Error> {
+    template(
+        conn,
+        Some(owner),
+        COPY_RECORD,
+        json!({
+            "example_schema": [schema],
+            "example_component": component,
+            "example_name": name,
+            "example_sha256": sha256,
+        }),
+    )
+    .await
+}
+
 /// How a tracked file runs.
 enum Apply {
     /// Its text, as is (several statements, simple query protocol).
@@ -481,10 +531,10 @@ impl Session {
                 "create the bookkeeping schema trustiot_migrate",
             ))?;
         for migration in OWN_MIGRATIONS {
-            self.apply_once("migrate", migration, None, None, Apply::File, report)
+            self.apply_once("migrate", migration, Target::Database, Apply::File, report)
                 .await?;
         }
-        self.apply_once("database", &DATABASE, None, None, Apply::File, report)
+        self.apply_once("database", &DATABASE, Target::Database, Apply::File, report)
             .await?;
         for service in registry.services {
             self.ensure_service(config, passwords, service, report)
@@ -501,8 +551,10 @@ impl Session {
                 self.apply_once(
                     service.name,
                     migration,
-                    Some(&owner),
-                    Some(&schema),
+                    Target::Service {
+                        owner: &owner,
+                        schema: &schema,
+                    },
                     Apply::File,
                     report,
                 )
@@ -563,16 +615,20 @@ impl Session {
         }
     }
 
-    /// Applies `migration` once, recorded under `component`, in one transaction.
+    /// Applies `migration` once, recorded under `component`, in one transaction. A file in a
+    /// service's schema is recorded in the schema's copy too, in the same transaction.
     async fn apply_once(
         &mut self,
         component: &str,
         migration: &Migration,
-        run_as: Option<&str>,
-        search_path: Option<&str>,
+        target: Target<'_>,
         apply: Apply,
         report: &mut Report,
     ) -> Result<(), Error> {
+        let (run_as, search_path) = match target {
+            Target::Database => (None, None),
+            Target::Service { owner, schema } => (Some(owner), Some(schema)),
+        };
         let label = format!("{component}/{}", migration.name);
         let sha256 = sha256_hex(migration.sql);
         let recorded: Option<String> = sqlx::query_scalar(APPLIED)
@@ -670,6 +726,11 @@ impl Session {
             .execute(&mut *tx)
             .await
             .map_err(Error::postgres(context.clone()))?;
+        if let Target::Service { owner, schema } = target {
+            copy_record(&mut tx, owner, schema, component, migration.name, &sha256)
+                .await
+                .map_err(Error::postgres(context.clone()))?;
+        }
         tx.commit().await.map_err(Error::postgres(context))?;
         report.change(format!("applied {label}"));
         Ok(())
@@ -925,6 +986,7 @@ impl Session {
                 });
             }
         }
+        self.ensure_records(service, report).await?;
         let wanted = format!("search_path={schema}");
         for (role, _) in &login_states {
             let (create, temporary): (bool, bool) = sqlx::query_as(LOGIN_EXTRAS)
@@ -962,6 +1024,114 @@ impl Session {
                 report,
             )
             .await?;
+        }
+        Ok(())
+    }
+
+    /// The schema's copy of its migration records (crates/service-kit/sql/migration-records.sql,
+    /// Laysi/trustiot-v2#402): the table, readable by the service role only, then the copy made
+    /// equal to the service's rows of trustiot_migrate.applied in one transaction. Every file
+    /// applied later writes both in its own transaction (`apply_once`), so this only changes
+    /// something the first time a database from before the table meets the Job, or when someone
+    /// changed the copy by hand.
+    async fn ensure_records(
+        &mut self,
+        service: &Service,
+        report: &mut Report,
+    ) -> Result<(), Error> {
+        let (schema, owner) = (service.schema(), service.owner_role());
+        let existed = self.table_exists(&schema, RECORDS_TABLE).await?;
+        template(
+            &mut self.conn,
+            Some(&owner),
+            RECORDS_TEMPLATE,
+            json!({ "example_schema": [schema], "example_app": [service.app_role()] }),
+        )
+        .await
+        .map_err(Error::postgres(format!(
+            "create the migration records of {schema}"
+        )))?;
+        if !existed {
+            report.change(format!(
+                "created the migration records {schema}.{RECORDS_TABLE}"
+            ));
+        }
+        let context = format!(
+            "copy the migration records of {} into {schema}",
+            service.name
+        );
+        let mut tx = self
+            .conn
+            .begin()
+            .await
+            .map_err(Error::postgres(context.clone()))?;
+        let applied: Vec<(String, String, String)> = sqlx::query_as(SERVICE_RECORDS)
+            .bind(service.name)
+            .bind(outbox_component(service.name))
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(Error::postgres(context.clone()))?;
+        sqlx::query(SET_SEARCH_PATH)
+            .bind(&schema)
+            .execute(&mut *tx)
+            .await
+            .map_err(Error::postgres(context.clone()))?;
+        sqlx::query(SET_ROLE)
+            .bind(&owner)
+            .execute(&mut *tx)
+            .await
+            .map_err(Error::postgres(context.clone()))?;
+        let copied: Vec<(String, String, String)> = sqlx::query_as(SCHEMA_RECORDS)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(Error::postgres(context.clone()))?;
+        sqlx::query(RESET_ROLE)
+            .execute(&mut *tx)
+            .await
+            .map_err(Error::postgres(context.clone()))?;
+        let mut copies = 0_usize;
+        for (component, name, sha256) in &applied {
+            if !copied
+                .iter()
+                .any(|(c, n, h)| c == component && n == name && h == sha256)
+            {
+                copy_record(&mut tx, &owner, &schema, component, name, sha256)
+                    .await
+                    .map_err(Error::postgres(context.clone()))?;
+                copies += 1;
+            }
+        }
+        let mut dropped = Vec::new();
+        for (component, name, _) in &copied {
+            if !applied.iter().any(|(c, n, _)| c == component && n == name) {
+                template(
+                    &mut tx,
+                    Some(&owner),
+                    DROP_RECORD,
+                    json!({
+                        "example_schema": [schema],
+                        "example_component": component,
+                        "example_name": name,
+                    }),
+                )
+                .await
+                .map_err(Error::postgres(context.clone()))?;
+                dropped.push(format!("{component}/{name}"));
+            }
+        }
+        tx.commit().await.map_err(Error::postgres(context))?;
+        if copies > 0 {
+            report.change(format!(
+                "copied {copies} migration records of {} into {schema}.{RECORDS_TABLE}",
+                service.name
+            ));
+        }
+        if !dropped.is_empty() {
+            report.change(format!(
+                "removed records that trustiot_migrate.applied does not have from \
+                 {schema}.{RECORDS_TABLE}: {}",
+                dropped.join(", ")
+            ));
         }
         Ok(())
     }
@@ -1217,12 +1387,15 @@ impl Session {
                 "example_platform": [platform],
                 "example_reader": readers,
             });
-            let component = format!("{}.outbox", service.name);
+            let component = outbox_component(service.name);
+            let target = Target::Service {
+                owner: &owner,
+                schema: &schema,
+            };
             self.apply_once(
                 &component,
                 &OUTBOX_EVENT_TEMPLATE,
-                Some(&owner),
-                Some(&schema),
+                target,
                 Apply::Template(replacements),
                 report,
             )
@@ -1234,8 +1407,7 @@ impl Session {
             self.apply_once(
                 &component,
                 &OUTBOX_AGGREGATE_TEMPLATE,
-                Some(&owner),
-                Some(&schema),
+                target,
                 Apply::Template(json!({
                     "example_app": [service.app_role()],
                     "example_platform": [platform],

@@ -1,0 +1,51 @@
+rcheck: queued on the build host at 03:01:31 as 402-6ac99627; running now: 400-e0599587 since 03:00:34
+    Checking openapi v0.1.0 (<host copy>/src/tools/openapi)
+    Checking testkit v0.1.0 (<host copy>/src/crates/testkit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.61s
+    Checking service-kit v0.1.0 (<host copy>/src/crates/service-kit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.22s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.00s
+     13 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+     23 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      4 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      2 test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      3 test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      3 test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      1 test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      1 test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      1 test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      3 test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      9 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      2 test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      1 test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      7 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      1 test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      1 test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      1 test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      5 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      6 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      7 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      2 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      1 test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      4 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      1 test result: ok. 95 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      3 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      3 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      1 test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      4 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      2 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      2 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      2 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      1 test result: ok. 68 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; 
+     Running `<host copy>/target/debug/openapi --check`
+api/openapi.json is up to date
+rcheck: removed 0 dangling test volumes
+rcheck: exit 0 at 03:11:25 (build host, 402-6ac99627)
+
+[exited with code 0]

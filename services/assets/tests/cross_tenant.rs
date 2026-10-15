@@ -52,6 +52,13 @@ async fn tenants_are_isolated() {
         "assets.outbox_version",
         "the versions notification-mode consumers stored per aggregate (crates/outbox), no \
          tenant data; unused by this service so far",
+    )
+    .exempt(
+        "assets.trustiot_migrate_applied",
+        "the migration Job's record of the files applied in this schema \
+         (crates/service-kit/sql/migration-records.sql): file names and SHA-256 hashes, no \
+         tenant data; the service role only reads it, for its readiness check \
+         (Laysi/trustiot-v2#402)",
     );
 
     Suite::new(ServiceName::Assets, &issuer, store)

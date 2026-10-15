@@ -38,6 +38,9 @@ opentelemetry-otlp = { workspace = true, features = ["http-proto", "internal-log
 opentelemetry_sdk = { workspace = true, features = ["internal-logs", "logs", "metrics", "trace"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+# The SHA-256 of each migration file a service expects (`migrations`), compared with the hash the
+# migration Job recorded.
+sha2.workspace = true
 # TLS with rustls and ring: connections always verify the server (`postgres`, checklist M3). The
 # root Cargo.toml replaces webpki-roots with an empty list, so the configured CA is the only trust
 # anchor (Laysi/trustiot-v2#272); a feature that loads the system store instead is refused by
