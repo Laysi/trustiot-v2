@@ -6,11 +6,11 @@
 #
 # Cost: one job on one hosted arm64 runner, one k3d cluster reused for both values files. A pull
 # request that touches the chart or this workflow is deployed for real before it merges, but only
-# once it carries the `smoke` label (Laysi/trustiot-v2#309): the coordinator adds it before
-# merging, and from then on every push re-runs the test. Without the label a pull request event
-# starts the workflow but skips every job, which costs no minutes. Those runs report through the
-# check status, the job summary and the uploaded artifact: a pull request run gets no write token
-# for comments, because it runs the workflow file of the pull request itself.
+# once it carries the `smoke` label (Laysi/trustiot-v2#309): the person who merges the pull
+# request adds it before merging, and from then on every push re-runs the test. Without the label a
+# pull request event starts the workflow but skips every job, which costs no minutes. Those runs
+# report through the check status, the job summary and the uploaded artifact: a pull request run
+# gets no write token for comments, because it runs the workflow file of the pull request itself.
 #
 # A scheduled run does nothing when it would test what the last nightly run on main passed
 # (Laysi/trustiot-v2#433): the decide job compares the tree of this commit with the tree of the

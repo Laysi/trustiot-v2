@@ -171,6 +171,10 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
 - 測試報告與 CI log：貼指令輸出前先看過。叢集與主機的輸出（`kubectl get nodes -o wide`、`ip addr`、systemd 與 cloudflared 的 log）常帶節點位址與主機名稱，要先遮蔽或刪掉那幾欄。
 - 腳本與 workflow 不把環境變數、設定檔或指令列整份印進 log（規則 4 已要求遮蔽祕密，主機名稱與位址同樣不印）。
 - 推送前檢查 diff 與 PR 描述；gitleaks 只認祕密的形狀，擋不住主機名稱、位址、客戶名稱與個人資料，這些靠人。
+- 每次推送分支之前（第一次與之後每一次），以 gitleaks 掃兩處，兩處都必須沒有發現（gitleaks 的版本鎖在 `.prototools`）：
+  - 分支的 commit 範圍：`gitleaks git --redact --log-opts="origin/main..HEAD" .`。
+  - 推送後會留下的 tree：`git archive HEAD | tar -x -C <目錄>`，再 `gitleaks dir --redact <目錄>`（`<目錄>` 放在 repo 之外，用完刪除）。
+  - 理由：CI 會掃 PR 的每個 commit，事後的修正 commit 清不掉前面 commit 的發現，所以第一次推送前就要掃乾淨；main 上的 squash commit 是新的 SHA，tree 裡還留著的值會在它上面再報一次，`.gitleaksignore` 指不到這個還不存在的 SHA。
 
 **寫進去了怎麼辦：**
 
