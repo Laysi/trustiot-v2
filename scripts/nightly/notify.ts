@@ -6,6 +6,9 @@
 // - schedule and workflow_dispatch, passed: when such an issue is open, comments that the run
 //   recovered and closes it.
 //
+// A night that the `decide` job skipped (main unchanged since the last passed run,
+// Laysi/trustiot-v2#433) reports nothing: the issue is neither opened, commented on nor closed.
+//
 // This script runs only for scheduled and manual runs, which GitHub always starts from the
 // default branch, so the code that holds the write token is reviewed code. Pull requests get
 // their report comment from the unprivileged-code job `pr-comment` of nightly.yml instead.
@@ -24,9 +27,17 @@ const COMMENT_LIMIT = 60_000;
 
 export type Action = "failure" | "recovery" | "nothing";
 
-/** What a run's event and result call for. Anything but `success` counts as a failure. */
+/**
+ * What a run's event and result call for. A `skipped` result means the `decide` job found main
+ * unchanged since the last passed run and nothing was deployed (Laysi/trustiot-v2#433): there is
+ * nothing to report, and the failure issue stays as it is. Any other result but `success` counts as a
+ * failure.
+ */
 export function decide(eventName: string, result: string): Action {
-  if (eventName === "schedule" || eventName === "workflow_dispatch") return result === "success" ? "recovery" : "failure";
+  if (eventName === "schedule" || eventName === "workflow_dispatch") {
+    if (result === "skipped") return "nothing";
+    return result === "success" ? "recovery" : "failure";
+  }
   return "nothing";
 }
 
@@ -183,6 +194,10 @@ export async function notify(github: GitHub, env: NodeJS.ProcessEnv, now = new D
   const eventName = env.GITHUB_EVENT_NAME ?? "";
   const result = env.NIGHTLY_RESULT ?? "";
   const runId = env.GITHUB_RUN_ID ?? "";
+  const action = decide(eventName, result);
+  // Nothing to report (pull requests, or a night the decide job skipped): no request at all, so the
+  // failure issue is neither opened, nor commented on, nor closed.
+  if (action === "nothing") return "nothing to report";
   const info: RunInfo = {
     runUrl: `${env.GITHUB_SERVER_URL ?? "https://github.com"}/${env.GITHUB_REPOSITORY}/actions/runs/${runId}`,
     sha: env.GITHUB_SHA ?? "",
@@ -191,7 +206,6 @@ export async function notify(github: GitHub, env: NodeJS.ProcessEnv, now = new D
     failedSteps: result === "success" ? [] : await failedStepsOf(github, runId, env.NIGHTLY_JOB_NAME ?? "smoke"),
   };
   const { report, markdown } = loadReport(env.NIGHTLY_REPORT_DIR ?? "nightly-report");
-  const action = decide(eventName, result);
 
   if (action === "failure") {
     await ensureLabel(github);
