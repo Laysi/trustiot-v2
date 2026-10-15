@@ -167,7 +167,15 @@ describe("nightly.yml", () => {
   const schedule: YamlMap = { event_name: "schedule", ref: "refs/heads/main", run_id: 7, event: {} };
   const dispatch: YamlMap = { event_name: "workflow_dispatch", ref: "refs/heads/main", run_id: 8, event: {} };
 
-  const smokeRuns = (github: YamlMap) => jobRuns(jobs.smoke?.if, { github });
+  /** What the `decide` job leaves for the others: `deploy` is 'true' or 'false', or empty when the job did not run or failed. */
+  type DecideState = { result: "success" | "skipped" | "failure" | "cancelled"; deploy?: string };
+  const needsOf = (decide: DecideState) => ({
+    decide: { result: decide.result, outputs: decide.deploy === undefined ? {} : { deploy: decide.deploy } },
+  });
+  /** Not a scheduled run: `decide` is skipped and leaves no output. */
+  const NOT_ASKED: DecideState = { result: "skipped" };
+  const smokeRuns = (github: YamlMap, decide: DecideState = NOT_ASKED, status: Status = "success") =>
+    jobRuns(jobs.smoke?.if, { github, needs: needsOf(decide) }, status);
   const group = (github: YamlMap) => evaluate(expressionOf(concurrency.group), { github }).coerceString();
   const cancels = (github: YamlMap) => truthy(evaluate(expressionOf(concurrency["cancel-in-progress"]), { github }));
 
@@ -226,7 +234,87 @@ describe("nightly.yml", () => {
 
   test("notify never runs for a pull request", () => {
     const github = { ...pullRequest("synchronize", ["smoke"]), ref_name: "42/merge", event: { repository: { default_branch: "main" } } };
-    expect(jobRuns(jobs.notify?.if, { github, needs: { smoke: { result: "success" } } })).toBe(false);
+    expect(jobRuns(jobs.notify?.if, { github, needs: { ...needsOf(NOT_ASKED), smoke: { result: "success" } } })).toBe(false);
+  });
+
+  describe("skipping a night when main is unchanged (Laysi/trustiot-v2#433)", () => {
+    const decideJob = jobs.decide as YamlMap;
+    const asked = (deploy: string | undefined, result: DecideState["result"] = "success"): DecideState => ({
+      result,
+      ...(deploy === undefined ? {} : { deploy }),
+    });
+    const dispatchRef = { ...dispatch, ref_name: "main", event: { repository: { default_branch: "main" } } };
+    const scheduleRef = { ...schedule, ref_name: "main", event: { repository: { default_branch: "main" } } };
+    const notifyRuns = (github: YamlMap, decide: DecideState, smoke: "success" | "failure" | "cancelled" | "skipped") =>
+      jobRuns(jobs.notify?.if, { github, needs: { ...needsOf(decide), smoke: { result: smoke } } }, smoke === "success" ? "success" : "failure");
+
+    test("the decide job runs for scheduled runs only, so a pull request never runs its code and a manual run starts no runner for it", () => {
+      const runs = (github: YamlMap) => jobRuns(decideJob.if, { github });
+      expect(runs(schedule)).toBe(true);
+      expect(runs(dispatch)).toBe(false);
+      expect(runs(pullRequest("synchronize", ["smoke"]))).toBe(false);
+      expect(runs(pullRequest("labeled", ["smoke"], "smoke"))).toBe(false);
+      expect(decideJob.needs).toBeUndefined();
+    });
+
+    test("the decide job reads runs and commits and writes nothing", () => {
+      expect(decideJob.permissions).toEqual({ contents: "read", actions: "read" });
+      expect(decideJob["runs-on"]).toBe("ubuntu-24.04-arm");
+      const steps = decideJob.steps as YamlMap[];
+      const unchanged = steps.find((step) => step.id === "unchanged");
+      expect(unchanged?.run).toBe("bun scripts/nightly/unchanged.ts");
+      expect(unchanged?.env).toEqual({ GITHUB_TOKEN: "${{ github.token }}" });
+      expect(decideJob.outputs).toEqual({ deploy: "${{ steps.unchanged.outputs.deploy }}" });
+      // Nothing but the checkout of the default branch and bun runs before the script.
+      expect(steps.map((step) => String(step.uses ?? step.run))).toEqual([
+        expect.stringMatching(/^actions\/checkout@[0-9a-f]{40}$/),
+        "./.github/actions/setup-proto",
+        "bun scripts/nightly/unchanged.ts",
+      ]);
+    });
+
+    test("smoke waits for decide", () => {
+      expect(jobs.smoke?.needs).toBe("decide");
+      expect(jobs.notify?.needs).toEqual(["decide", "smoke"]);
+    });
+
+    test("a scheduled run whose decide said 'false' deploys nothing", () => {
+      expect(smokeRuns(schedule, asked("false"))).toBe(false);
+    });
+
+    test("a scheduled run deploys when decide said 'true', gave no answer or failed", () => {
+      expect(smokeRuns(schedule, asked("true"))).toBe(true);
+      expect(smokeRuns(schedule, asked(undefined))).toBe(true);
+      expect(smokeRuns(schedule, asked("", "failure"))).toBe(true);
+      expect(smokeRuns(schedule, asked(undefined, "failure"))).toBe(true);
+    });
+
+    test("a manual run always deploys: decide is skipped for it and leaves no output", () => {
+      expect(smokeRuns(dispatch)).toBe(true);
+      expect(smokeRuns({ ...dispatch, ref: "refs/heads/feature" })).toBe(true);
+    });
+
+    test("a cancelled workflow starts no deployment", () => {
+      expect(smokeRuns(schedule, asked("true", "cancelled"), "cancelled")).toBe(false);
+    });
+
+    test("the pull request gate is unchanged: the smoke label decides, decide is never asked", () => {
+      expect(smokeRuns(pullRequest("synchronize", []))).toBe(false);
+      expect(smokeRuns(pullRequest("synchronize", ["smoke"]))).toBe(true);
+      expect(smokeRuns(pullRequest("labeled", ["review:ai"], "review:ai"))).toBe(false);
+    });
+
+    test("notify does not run on a skipped night, so the failure issue is neither opened nor closed", () => {
+      expect(notifyRuns(scheduleRef, asked("false"), "skipped")).toBe(false);
+    });
+
+    test("notify runs after a deployed night, passed or failed, and after a manual run", () => {
+      for (const smoke of ["success", "failure", "cancelled"] as const) {
+        expect(notifyRuns(scheduleRef, asked("true"), smoke)).toBe(true);
+        expect(notifyRuns(scheduleRef, asked(undefined, "failure"), smoke)).toBe(true);
+        expect(notifyRuns(dispatchRef, NOT_ASKED, smoke)).toBe(true);
+      }
+    });
   });
 
   describe("the cache of the Rust images (Laysi/trustiot-v2#60, Laysi/trustiot-v2#65)", () => {

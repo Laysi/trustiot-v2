@@ -12,14 +12,23 @@
 # report through the check status, the job summary and the uploaded artifact: a pull request run
 # gets no write token for comments, because it runs the workflow file of the pull request itself.
 #
+# A scheduled run does nothing when it would test what the last nightly run on main passed
+# (Laysi/trustiot-v2#433): the decide job compares the tree of this commit with the tree of the
+# newest completed scheduled or manual run, and only a passed run with the same tree skips the
+# deployment. Failed, cancelled or missing runs and API errors deploy; manual runs always do. Policy:
+# docs/architecture/ci-release.md, section nightly.yml.
+#
 # Jobs and what each may do (every job lists its own `permissions`):
+# - decide  contents: read; actions: read. Scheduled runs only (the default branch's reviewed copy of
+#           the script, never code of a pull request): reads the earlier runs and commits, writes
+#           nothing, and hands one boolean, `deploy`, to the other jobs.
 # - smoke   contents: read. Runs the chart and the stand-in service images on a throwaway
 #           cluster; it has no write access and no secret, and hands over only the report. Its
 #           Rust images are rebuilt only when an input changed; scheduled and manual runs on main
 #           save them to the Actions cache, pull requests only restore (see the cache steps).
-# - notify  issues: write; actions: read. Scheduled and manual runs only: opens or updates the
-#           failure issue, or closes it when a night passes again, with the workflow's own
-#           GITHUB_TOKEN. No external service, no extra secret.
+# - notify  issues: write; actions: read. Scheduled and manual runs that deployed only: opens or
+#           updates the failure issue, or closes it when a night passes again, with the workflow's own
+#           GITHUB_TOKEN. A night that decide skipped neither opens nor closes it. No external service, no extra secret.
 name: nightly
 
 on:
@@ -88,15 +97,49 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Only a scheduled run asks (scripts/nightly/unchanged.ts); a manual run and a pull request skip
+  # this job, so they start no runner for it and run no pull request code here. Its output is
+  # exactly 'false' only when the deployment is to be skipped: a skipped, failed or silent job
+  # leaves it empty and the deployment runs.
+  decide:
+    name: decide
+    if: ${{ github.event_name == 'schedule' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # The earlier nightly runs (list workflow runs) and, with contents, the trees of two commits.
+      actions: read
+    outputs:
+      deploy: ${{ steps.unchanged.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-proto
+        with:
+          tools: bun
+      - id: unchanged
+        name: Compare main with the last passed nightly
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun scripts/nightly/unchanged.ts
+
   smoke:
     name: smoke
-    # Scheduled and manual runs always; a pull request only with the `smoke` label, and for a
-    # `labeled` event only when the label added is `smoke` (GitHub compares strings ignoring case).
+    needs: decide
+    # Scheduled runs unless decide found main unchanged since the last passed run; manual runs
+    # always (decide did not run, so its output is empty); a pull request only with the `smoke`
+    # label, and for a `labeled` event only when the label added is `smoke` (GitHub compares
+    # strings ignoring case). `!cancelled()` because a skipped `decide` would otherwise skip this
+    # job too.
     if: >-
       ${{
-        github.event_name != 'pull_request'
-        || (contains(github.event.pull_request.labels.*.name, 'smoke')
-          && (github.event.action != 'labeled' || github.event.label.name == 'smoke'))
+        !cancelled()
+        && needs.decide.outputs.deploy != 'false'
+        && (github.event_name != 'pull_request'
+          || (contains(github.event.pull_request.labels.*.name, 'smoke')
+            && (github.event.action != 'labeled' || github.event.label.name == 'smoke')))
       }}
     # arm64, like every node we ship (decision 5): the chart's default nodeSelector is
     # kubernetes.io/arch: arm64, and the nightly must test that shape, not an amd64 override.
@@ -202,9 +245,17 @@ jobs:
   # still runs the smoke job but notifies nobody; pull requests never run this job.
   notify:
     name: notify
-    needs: smoke
-    # Also when the smoke job failed or timed out.
-    if: ${{ always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch)) }}
+    needs: [decide, smoke]
+    # Also when the smoke job failed or timed out, but not on a night decide skipped: that night
+    # neither opens nor closes the failure issue (the `skipped` result of smoke is handled in
+    # notify.ts as well).
+    if: >-
+      ${{
+        always()
+        && needs.decide.outputs.deploy != 'false'
+        && (github.event_name == 'schedule'
+          || (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch))
+      }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 5
     permissions:

@@ -4,7 +4,7 @@ GitHub Actions，三個 workflow：
 
 1. `ci.yml`：每個 PR（不論目標分支，整合分支也一樣）與推到 main 都跑，release.yml 開的 deploy PR 則由 release.yml 以 `workflow_dispatch` 觸發（見下方「SaaS 以 GitOps 部署」），全綠才能合併（目前由流程把關，見下方「必要檢查與強制方式」）。Rust 跑 fmt、clippy、測試與 sqlx 離線檢查，並以 cargo-deny 檢查授權與漏洞公告（地端產品不能混入 BSL 等不能轉售的授權）；整合測試在 `cargo test` 裡以拋棄式容器執行，找不到容器執行環境時失敗而不是略過：migration Job 在帶 TLS 的全新 Postgres 上跑完全部 migration、在 ClickHouse 套用全部 DDL，各服務的跨租戶負向測試（Postgres 的 RLS、ClickHouse 的租戶隔離）也在這裡跑；還沒加入的（Mosquitto、AGE 角色的跨租戶測試、sqlx 的 prepare 檢查）見下方「ci.yml 的 job」的第二張表；閘道器程式交叉編譯成 aarch64，agent 用 testkit 的假 Modbus 端點跑故障注入測試；前端跑 Bun 安裝、型別檢查、lint、單元測試與建置；重新產生 `api/openapi.json` 與前端 client，有差異就失敗；helm lint，兩份 values 各自 helm template 後以 kubeconform 驗證（`bun test deploy/chart` 一次跑完，也檢查 chart 自己的安全規則，見 `deploy/chart/README.md`）；SaaS 主機安裝程式的型別檢查、測試與建置（`deploy/host`）；gitleaks 掃描祕密。各項由哪個 job 負責、哪些還沒加入，見下方「ci.yml 的 job」。Codex 審查設為 PR 的必要檢查，是伺服器端的關卡；本機 pre-commit 只是提早攔下。2026-10-11 起（Laysi/trustiot-v2#309）每個 job 都在 arm64 runner 上執行，`rust`、`cargo-deny`、`helm`、`host` 依變更的路徑決定是否執行，見下方「依變更路徑決定 job」。
 2. `release.yml`：打 tag 時跑。容器映像只出 arm64：Rust 先交叉編譯再放進映像，推到 GHCR，以 cosign 簽章並附 SBOM；SaaS 主機與展示機（Mac M1）都要是 arm64，地端客戶若用 x86 主機，到時再加 amd64。Helm chart 打包推到 GHCR。閘道器 agent 與 updater 的 aarch64 執行檔附建置來源證明，由 CI 以 OTA 簽章金鑰簽章：金鑰存在受保護的 GitHub environment，只有 main 上的 tag 能用，每次簽章都要人工核准。另外產出離線安裝包（MS6）；release notes 沿用 `Laysi/release-notes-action`。
-3. `nightly.yml`：每晚用 k3d 部署整套 chart（兩份 values 各一次），裝好 Istio ambient 與 CloudNativePG operator 後跑冒煙測試、入口 e2e 測試與服務間授權 e2e 測試，失敗時開 issue 通知；PR 只在帶 `smoke` label 時才部署；依賴更新交給 Renovate。做什麼、怎麼通知與失敗時怎麼辦見下方「nightly.yml」與「Renovate」。
+3. `nightly.yml`：每晚用 k3d 部署整套 chart（兩份 values 各一次），裝好 Istio ambient 與 CloudNativePG operator 後跑冒煙測試、入口 e2e 測試與服務間授權 e2e 測試，失敗時開 issue 通知；排程的執行在 main 的樹與上一次通過的執行相同時不部署；PR 只在帶 `smoke` label 時才部署；依賴更新交給 Renovate。做什麼、怎麼通知與失敗時怎麼辦見下方「nightly.yml」與「Renovate」。
 
 SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定放在 `deploy/flux/`；發版就是合併一個改 chart 版本號的 PR（由 release 流程自動開）。GitHub 不持有任何部署憑證，主機也不必對外開放，叢集只存一把唯讀的 GHCR 拉取 token；Flux 控制器的記憶體算進主機規格（MS3 重測）。地端不裝 Flux，由客戶以 Helm 安裝或用離線安裝包。
 
@@ -365,6 +365,27 @@ repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（
 
 每晚 18:17 UTC（台北 02:17）執行，也可在 main 上手動執行（`workflow_dispatch`，選項 `simulate_failure` 會讓每份 values 在安裝後故意失敗，用來驗證通知）。動到 `deploy/chart/`、`deploy/istio/`、`deploy/cloudnative-pg/`、`deploy/images/postgres/`、`tools/migrate/`、`services/*/migrations/`（migration Job 與它套用的 SQL，Laysi/trustiot-v2#60）、smoke 部署的身分與資產服務（`services/identity/`、`services/assets/`，Laysi/trustiot-v2#65）、這些 Rust 映像的其他輸入（`deploy/images/` 的 `migrate/`、`identity/`、`assets/`，`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`deploy/images/rust-binary.Containerfile`、`.dockerignore`、整個 `scripts/`，以及它們經 path 相依用到的 `crates/contract/`、`crates/identity-keys/`、`crates/outbox/`、`crates/service-kit/`、`crates/testkit/`、`crates/webpki-roots-empty/`；`scripts/nightly/image-cache.test.ts` 檢查這份清單完整）、`.prototools`、`.proto/plugins/`、`setup-proto` 或 `nightly.yml` 本身的 PR，帶有 `smoke` label 時也會跑，chart 的改動在合併前就先真的部署一次；這些 PR 的執行不寫任何留言（PR 的 workflow 檔由 PR 自己決定，不給它寫入權限），結果看 check 狀態、job summary 與 `nightly-report` artifact。
 
+### main 沒有變更時，排程不部署
+
+2026-10-15 決定（Laysi/trustiot-v2#433，Laysi/trustiot-v2#1 待決定事項第 14 項，使用者同意）：nightly 的輸入都以版本與 digest 釘選，main 沒有變更時再部署一次，結果與上一次相同；依賴更新經 Renovate 的 PR 進 main，進 main 之後的那一晚就會部署。所以排程執行先問 `decide` job（`scripts/nightly/unchanged.ts`），它只在排程事件執行，輸出一個布林值 `deploy` 給 `smoke` 與 `notify`：
+
+- 比對對象：main 上**最近一次完成**的排程或手動 nightly 執行（不是最近一次成功的）。事件只算 `schedule` 與 `workflow_dispatch`、分支必須是 `main`，所以 PR 的執行（包含 fork 的 PR 剛好叫 `main` 分支）不算。
+- 比的是**樹**，不是 commit SHA：以 API 讀兩個 commit 的 `tree.sha`（`GET /git/commits/<sha>`），不需要 checkout 歷史。只改 commit 訊息、或改了又改回去的 commit，樹相同，照樣略過。
+- 略過的條件：那次執行**通過**（`conclusion` 為 `success`），而且樹與這次相同。此時 `smoke` 與 `notify` 都不執行，沒有叢集；workflow run 的結論是成功，job summary 寫一行：比對的執行（連結、事件、時間、commit）與樹。
+- 照常部署的情況：
+  - 最近一次完成的執行失敗、逾時、被取消或其他非成功的結論：所以失敗的隔天，即使 main 沒變也會重跑一次，失敗通知的 issue 照舊運作（重跑通過就關閉它）；
+  - 找不到任何完成的執行；
+  - API 讀取失敗、回應格式不認得、沒有 token，或 `decide` job 本身失敗：預設是部署，輸出只有剛好是 `false` 時才略過；
+  - 手動執行（`workflow_dispatch`）：一律部署，`decide` job 不執行（不佔 runner，也不讀 API）。
+- `simulate_failure` 的手動執行：API 的 run 物件沒有輸入參數可以辨識它，所以不特別處理，把它當作一次失敗的執行：它的結論本來就是失敗，也會開失敗通知的 issue，下一晚因此重跑，通過後關閉那張 issue。代價是模擬之後多跑一晚。
+- 略過的那一晚算一次成功的執行，下一晚與它比較：略過只發生在樹與一次通過的部署相同時，所以連續略過沒有「從沒部署過的樹被當成通過」的問題。
+- 代價（使用者接受）：GitHub runner 映像或上游 registry（Docker Hub、Istio、CloudNativePG 的 release）的變化，要等 main 下一次變更才測得到。沒有加定期強制執行；要加的話另開 issue 決定（例如每週一次強制部署）。
+- 權限：`decide` 的 `permissions` 是 `contents: read`、`actions: read`，只讀取；它只在排程事件執行，執行的是 main 上審過的程式，PR 的程式碼不會在這個 job 跑。`notify` 在被略過的那一晚不執行（`needs.decide.outputs.deploy != 'false'`），`scripts/nightly/notify.ts` 對 `skipped` 的結果也不做任何請求，所以失敗通知的 issue 不會被開、留言或關閉。
+- 條件寫在 `nightly.yml` 的 `decide.if`、`smoke.if` 與 `notify.if`；`scripts/ci/workflow-conditions.test.ts` 以 GitHub 的 expression 引擎驗證上列情境，`scripts/nightly/unchanged.test.ts` 驗證判斷邏輯與 API 請求（只有 GET）。
+- 唯讀查看判斷（不寫任何東西，只發 GET）：`GITHUB_TOKEN=<token> GITHUB_REPOSITORY=<owner>/<name> bun scripts/nightly/unchanged.ts --dry-run`，以 main 目前的 commit、當作一次排程事件，印出決定與依據（比對的執行、兩棵樹、最近幾次執行）；`--event` 與 `--sha` 可以改事件與 commit。
+
+連續略過對 Rust 映像快取的影響：快取只由 main 上的排程與手動執行寫入，也只有部署的執行會讀它；Actions cache 7 天沒有被讀取就會被刪除（見「映像依內容重用」的「淘汰」）。所以 main 超過 7 天沒有變更時（每晚都略過，沒有人讀快取），項目會被淘汰，之後 main 的下一次變更，其那一晚的部署要重建 Rust 映像一次（冷建置約 2 分鐘，見「成本」），並存回快取，又回到命中。main 有變更但 Rust 的輸入沒變的晚上，key 不變，只要項目還在就命中。帶 `smoke` label 的 PR 部署也會讀 main 的項目，同樣刷新 7 天的期限，但不寫入。
+
 ### PR 的部署要加 `smoke` label
 
 2026-10-11 決定（Laysi/trustiot-v2#309）：每次部署約 7 個 arm64 計費分鐘（當時是私有庫），原本動到上列路徑的 PR 每次推送都部署一次。現在：
@@ -454,7 +475,7 @@ repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（
 - 還原：`actions/cache/restore` 只用完全相同的 key，不設 `restore-keys`（前綴相符的舊映像就是別的原始碼）。命中時 `run.ts` 以 `docker load` 載入 tarball，確認映像是 `linux/arm64`，再匯入叢集並逐節點確認（tarball 不完整或損壞而 `docker load` 失敗、載入後沒有預期的 tag、或平台不對時，不使用它：`run.ts` 寫一行說明並發出 GitHub warning，寫出要刪掉哪個快取項目，因為壞掉的項目在輸入改變之前一直沿用同一個 key；接著以 proto 安裝那個 setup-proto 步驟略過的 zig、cargo-zigbuild、cargo-auditable，從原始碼建置，nightly 照常繼續）；不裝 zig、cargo-zigbuild、cargo-auditable（那個 setup-proto 步驟以 `cache-hit` 略過），也不跑 rustup 與 cargo。沒命中時照舊從原始碼建置。
 - 儲存：只有 main 上的排程與手動執行（`NIGHTLY_SAVES_CACHE`）在沒命中、建置完成後以 `docker save` 寫出每個映像的 tarball（`<名稱>.tar`），由 `actions/cache/save` 把整個目錄存成那個 key；每個映像的 tarball 都在（`image-cache.ts complete`）才存，所以命中的項目一定有每個映像，中途失敗的執行不存，下一次再建；actions/cache 本身以 zstd 壓縮。shape 失敗時照樣儲存，因為映像只由原始碼決定。PR 的執行只還原、不儲存，與 ci.yml 的 Rust 快取同一條規則。條件由 `scripts/ci/workflow-conditions.test.ts` 以 GitHub 的 expression 引擎驗證。
 - PR 為什麼汙染不了：GitHub 的快取有範圍。一次執行只能讀自己的 ref 與預設分支（main）建立的項目，寫入一律記在自己的 ref 下；PR 的執行寫入的是 `refs/pull/<N>/merge`，只有同一個 PR 之後的執行讀得到，main 與其他 PR 都讀不到（[Dependency caching reference](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching) 的 cache 存取限制）。所以就算 PR 改了 `nightly.yml` 自己存一個假映像，影響的也只有它自己的 smoke；main 讀到的項目只會來自 main 上的執行，也就是審查過的程式碼。key 由內容決定，同一個 key 下 main 的映像就是從同樣的輸入建出來的。
-- 淘汰：7 天沒被讀取的項目會被清掉，nightly 每晚讀一次，所以 key 不變時一直有效；映像的 tarball 是 distroless static 加一個靜態執行檔，大小未量測，預期只佔 10 GB 額度的一小部分。
+- 淘汰：7 天沒被讀取的項目會被清掉。排程的 nightly 每晚讀一次，所以 key 不變時一直有效；自 2026-10-15（Laysi/trustiot-v2#433）起 main 沒有變更的晚上不部署、也不讀快取，main 超過 7 天沒變更時項目會被清掉，下一次變更後的第一次部署重建一次（見上方「main 沒有變更時，排程不部署」）；映像的 tarball 是 distroless static 加一個靜態執行檔，大小未量測，預期只佔 10 GB 額度的一小部分。
 
 成本（量測）：PR Laysi/trustiot-v2#379 的 smoke（run 38330343474，2026-10-13，公開 repo 的 `ubuntu-24.04-arm`）冷建置 `migrate` 用了 1 分 37 秒，整個 smoke job 9.5 分鐘，沒有建置時是 7.5 分鐘；先前的 run 38306699376 從「migration Job image」到開始第一份 values 是 1 分 54 秒（含 rustup 與匯入）。所以 `timeout-minutes` 從 75 改回 48：原本的 45 加上一次冷建置約 2 分鐘，再留 1 分鐘的餘裕（第二個 setup-proto 步驟）。2026-10-14（Laysi/trustiot-v2#65）改成 55：多了 `identity` 與 `assets` 的冷建置（沿用第一個建置編好的相依，未量測），每份 values 多了兩個服務的 rollout 與 API 檢查（入口就緒與事件送達各最多等 180 秒，通常幾秒），待第一次 PR smoke 量測後再調整。命中時只多出載入與匯入，比建置短（實際秒數待第一次命中的排程執行量測）。`crates/`、`services/`、`tools/` 有變動的那一晚會冷建置一次，之後到下一次變動為止都命中。三個映像共用一個快取項目：任何一個的輸入變了，三個一起重建（實際上 Rust 的變動本來就同時是三個的輸入）。
 
@@ -478,7 +499,7 @@ NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
 
 ### 通知
 
-通知只用 workflow 自己的 `GITHUB_TOKEN`，沒有外部服務與額外 secret。`notify` job 只在排程執行與 main 上的手動執行跑（執行的是 main 上審過的程式），權限是 `issues: write` 與 `actions: read`：
+通知只用 workflow 自己的 `GITHUB_TOKEN`，沒有外部服務與額外 secret。`notify` job 只在排程執行與 main 上的手動執行跑（執行的是 main 上審過的程式），而且該晚真的部署了才跑：被「main 沒有變更」略過的那一晚不執行，不開、不留言、也不關失敗通知的 issue。權限是 `issues: write` 與 `actions: read`：
 
 - smoke job 失敗、逾時或被取消：開一張標籤為 `nightly-failure`、`area:ci`、`priority:P1`、類型 Bug 的 issue；已經有開著的就在上面留言，所以連續失敗一週是一張 issue 加幾則留言。內文是報告與診斷；沒有報告時（例如叢集建不起來）寫明哪個步驟失敗。
 - 隔天通過：留言並關閉那張 issue。
@@ -528,7 +549,7 @@ NIGHTLY_OUT=/tmp/nightly-out bun scripts/nightly/run.ts
 
 ### 成本
 
-2026-10-12 起 repo 公開，標準 runner 不計費（Laysi/trustiot-v2#345），這一節的分鐘數只是耗時。一次執行一個 job（加上約 1 分鐘的 `notify`），兩份 values 共用一個叢集。實測的分鐘數見 `docs/test-reports/2026-10-10-69-nightly-workflow.md`。兩個 job 都在 arm64 runner 上（`notify` 自 2026-10-11 起，Laysi/trustiot-v2#309）。PR 只在帶 `smoke` label 時部署，見上方「PR 的部署要加 `smoke` label」。
+2026-10-12 起 repo 公開，標準 runner 不計費（Laysi/trustiot-v2#345），這一節的分鐘數只是耗時。一次執行一個 job（加上約 1 分鐘的 `notify`），兩份 values 共用一個叢集。2026-10-15 起（Laysi/trustiot-v2#433）排程的執行在 main 的樹與上一次通過的執行相同時不部署：只剩約 1 分鐘的 `decide` job（裝 bun、讀兩次 API，未量測），沒有 `smoke` 與 `notify`；main 常常有變更時省下的不多，main 靜止的週末或假期則整段省下。實測的分鐘數見 `docs/test-reports/2026-10-10-69-nightly-workflow.md`。兩個 job 都在 arm64 runner 上（`notify` 自 2026-10-11 起，Laysi/trustiot-v2#309）。PR 只在帶 `smoke` label 時部署，見上方「PR 的部署要加 `smoke` label」。
 
 ## Renovate
 
