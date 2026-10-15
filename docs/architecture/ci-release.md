@@ -60,7 +60,7 @@ Laysi/trustiot-v2#70 建立了 `.sops.yaml`（規則：`deploy/flux/clusters/saa
 
 | job（檢查名稱） | 內容 |
 | --- | --- |
-| `changes` | `bun scripts/ci/changes.ts`：比較這次要測的 commit 與一個已測過的 commit，輸出 `rust`、`cargo-deny`、`helm`、`host`、`postgres-image` 各自是否執行（`true` 或 `false`），並在 job summary 列出理由、比較的 commit 與變更的檔案。推到 main 時另以 `actions: read` 讀 main 上近期的 ci 結果；PR 執行的是 PR 自己的腳本，不給它 token。規則見下方「依變更路徑決定 job」 |
+| `changes` | `bun scripts/ci/changes.ts`：比較這次要測的 commit 與一個已測過的 commit，輸出 `rust`、`cargo-deny`、`helm`、`host`、`postgres-image` 各自是否執行（`true` 或 `false`），並在 job summary 列出理由、比較的 commit 與變更的檔案。推到 main 時另以唯讀權限（`actions`、`contents`、`pull-requests`、`issues` 的 read）讀 main 上近期的 ci 結果，以及合併來源 PR 的 head、執行與 job 結論（2026-10-15 起，Laysi/trustiot-v2#431）；PR 執行的是 PR 自己的腳本，不給它 token。規則見下方「依變更路徑決定 job」 |
 | `rust` | `cargo fmt --all --check`；`cargo clippy --workspace --all-targets --locked -- -D warnings`；`cargo test --workspace --locked`（含 `tools/repo-check` 的 repo 規則、`tools/sql-check` 擋下以字串組成的 SQL（`the_workspace_has_no_string_built_sql`，Laysi/trustiot-v2#53）、`crates/service-kit` 以 `cargo tree` 檢查關閉 `contract` feature 時不依賴 contract，以及之後各 crate 的測試，例如 agent 以 testkit 假 Modbus 端點跑的故障注入測試）。`--workspace` 只建置預設 feature，所以 service-kit 關閉預設 feature 另跑一次 clippy 與測試（`--package service-kit --no-default-features`）。service-kit 的容器測試（以 PID 1 執行的範例服務、advisory lock 用的 Postgres）、testkit 跨租戶負向測試框架的自我測試（帶 TLS 的 Postgres），以及 `tools/migrate` 的測試（帶 TLS 的 Postgres 上在全新資料庫跑完全部 migration、兩次同時執行、outbox 與每租戶角色、一個 Postgres 叢集一個資料庫、migration 檔案離開交易或角色；拋棄式 ClickHouse 上的 DDL 與 collector 帳號）用 runner 上的 podman 或 docker 起容器；GitHub 設定 `CI=true`，找不到可用的容器執行環境時這些測試失敗而不是略過，所以測試步驟通過就表示它們真的跑過。全程設 `SQLX_OFFLINE=true`：sqlx 的查詢巨集只讀進版控的 `.sqlx/`，查詢資料沒更新就編譯失敗。接著執行 `cargo run --locked --package openapi` 重新產生 `api/openapi.json`（`tools/openapi`，各服務由程式碼產生的 OpenAPI 規格加上 M1 錯誤 schema 合併而成），有任何差異就印出差異並失敗，所以改了 API 型別卻沒重新產生規格的 PR 過不了；同一項比對也在 `cargo test --workspace` 裡（`tools/openapi/tests/openapi.rs`）。最後把 `crates/protocol` 與 `edge/` 下的每個成員以 `aarch64-unknown-linux-gnu` 建置；還沒有這些 crate 時只留下說明，protocol crate（Laysi/trustiot-v2#50）併入後自動涵蓋。runner 是 arm64 時主機本身就是這個 target，直接原生建置（沿用前面步驟的編譯快取）；在 x64 主機上才交叉編譯，函式庫建置不需要交叉連結器，第一個閘道器執行檔加入時一併加上。前一項失敗時後面幾項照跑，一次回報全部結果 |
 | `cargo-deny` | `cargo deny --locked check`，規則在根目錄的 `deny.toml`：授權白名單（見下方「授權白名單」）；RustSec 的漏洞、unmaintained 與 unsound 公告一律失敗，要忽略某則公告必須在 `deny.toml` 寫明理由與到期日；Cargo.lock 裡有 yanked 版本就失敗；相依只能來自 crates.io |
 | `helm` | `bun test deploy/chart`：`helm lint --strict`；`values-saas.yaml` 與 `values-onprem.yaml` 各自 helm template 後以 `kubeconform -strict` 驗證（Kubernetes schema 由 kubeconform 下載）；再加上 chart 自己的規則與 README 欄位檢查，見 `deploy/chart/README.md`；入口 e2e 的通道復原邏輯（`deploy/chart/tests/e2e/tunnel-recovery.ts`）有不需要叢集的單元測試，也在這一步跑。接著 `bun test deploy/flux`（Laysi/trustiot-v2#70）：SaaS 的 GitOps 樹以 `kubectl kustomize` 建置、以 kubeconform 對釘選版本的 Flux CRD 驗證，Flux 的 manifest 與釘選的 flux CLI 輸出相同，chart 來源的驗簽設定、實例 values 對 chart schema、`.sops.yaml`，見 `deploy/flux/README.md` 的「檢查」 |
@@ -90,14 +90,46 @@ Laysi/trustiot-v2#70 建立了 `.sops.yaml`（規則：`deploy/flux/clusters/saa
 
 - PR：GitHub checkout 的 merge commit 對它的第一個 parent（合併當下 base 分支的最新 commit），所以列出的正是合併後會改變的檔案；base 分支之後的變動不算進來。
 - 推到 main：推送的 commit 對「main 上最近一個 ci 通過的 commit」。沿著 first-parent 往回找（最多 50 個），每個 commit 看它最新一次 ci.yml 的 push 執行：還在跑、失敗、被取消或沒有執行（一次推多個 commit 時中間的 commit）的都跳過，它們的變動因此也算進這次的比較。所以 main 上「略過」一定代表「與一個整次 ci 都通過的 commit 相比，這個 job 讀的檔案沒變」；連續合併時上一個 commit 的 ci 還在跑也不必全部重跑；紅燈的 main 在修好以前一直是紅燈（造成紅燈的變動會一直在比較範圍內）。決策 30 的「每個 main commit 都有 CI 結果」仍然成立：略過的 job 狀態是 skipped，整次執行的結論仍是 success，release 的 plan job 照常以它判斷（見「發佈核准」）。讀不到執行紀錄（`changes` 以 `actions: read` 呼叫 GitHub API）或 50 個內都沒有通過的 commit 時，全部 job 都執行。
+- 推到 main，而且推送的樹就是合併來源 PR 的 ci 已測過的樹：那次 PR 執行中實際執行且通過的 job 在 main 上略過，其他 job 照上一點比較（2026-10-15 起，見下方「推到 main：同一棵樹已在 PR 上通過」）。
 - 其他事件、git 比較失敗：全部 job 都執行。
 - 比較時加 `--no-renames`，搬移檔案時新舊兩個路徑都算，從 `crates/` 搬出去的檔案也會讓 `rust` 執行。
+
+**推到 main：同一棵樹已在 PR 上通過**（2026-10-15 決定，Laysi/trustiot-v2#431；`scripts/ci/tested-tree.ts`）
+
+起因：2026-10-15 使用者同意 Laysi/trustiot-v2#1 待決定事項第 8 項。合併前 PR 的 ci 已在含當下 main 的 merge commit 上跑過（合併的人先把 main 併進 PR 分支），squash 之後 main 的樹與它相同，照上面的規則仍會重跑 PR 動到的 job（例如 `rust`）。repo 預計轉回私有，之後 Actions 分鐘數要計費（組織共用 Free 方案每月 2,000 分鐘），這條讓一般的合併少跑一半的 ci 分鐘。2026-10-15 檢查 main 上最近 40 次合併，34 次的 main parent 在 PR 最後的 head 裡、樹也相同，符合下列條件 4、5；其餘 6 次合併前沒有把 main 併進 PR 分支（見 [測試報告](../test-reports/2026-10-15-431-skip-main-rerun.md)）。
+
+推送的 commit C 符合下列全部條件時，合併來源 PR 在最後一個 head 的 ci 執行中**實際執行且通過**的 job 在 main 上略過，原因寫「passed in run <執行 id> of pull request #<N> on the same tree」；job summary 的「Same tree as the merged pull request」一節寫出 PR 編號、執行 id、比對的樹與每個 job 的依據。其他 job 照上面的規則與最近一個 ci 通過的 main commit 比較（找不到時執行）。
+
+1. C 只有一個 parent P（squash 合併），而且 P 有自己的 ci.yml push 執行，也就是 main 一次只從 P 前進到 C。一次推多個 commit 時，中間的 commit 沒有自己的執行，這條不用。
+2. GitHub 的「List pull requests associated with a commit」（文件：對預設分支上的 commit，「Lists the merged pull request that introduced the commit to the repository」）列出的 PR 中，恰好一個已合併、`merge_commit_sha` 等於 C（文件：「If merged via a squash, merge_commit_sha represents the SHA of the squashed commit on the base branch」），而且 base 是本 repo 的 `main`。取它合併時的 head H。
+3. 這個 PR 的 issue events 沒有 `base_ref_changed`、`automatic_base_change_succeeded`、`automatic_base_change_failed`（base 從來沒改過）。
+4. P 是 H 的祖先（compare API 回答的 merge base 是 P）。
+5. C 的樹（main 這次執行以 git 算）等於 H 的樹（git commits API），而且這棵樹的 ci.yml 的 `pull_request` 觸發沒有任何篩選（`types`、`branches`、`paths` 等），所以 PR 的每個 `opened`、`synchronize`、`reopened` 都會執行它。
+6. ci.yml 以 H 為 head 的 `pull_request` 執行至少一個，而且每一個都已完成、結論是 success（等待核准的 `action_required`、被取消、失敗、還在跑都不算）。
+7. 每個 job 分開判斷：在每一個這樣的執行裡（各取最新一次 attempt 的 job），該名稱的 job 恰好一個，而且結論是 success。PR 依路徑略過（skipped）、失敗、被取消或不存在的 job，在 main 上照原規則。
+
+任何一項不成立、任何一次 API 讀取失敗或結果超過一頁，這條就不用，job summary 寫出原因，全部 job 照原規則。PR 上的執行不受影響。
+
+**為什麼 PR 作者無法讓 main 略過 job**：
+
+- 只看兩種資料：GitHub API 的中繼資料（commit 對應的 PR、PR 的 head 與 base 變更紀錄、執行的事件、head SHA、狀態與結論、job 的名稱與結論、commit 的樹、merge base），以及 main 這次執行自己的 git 計算。PR 執行跑的是 PR 自己的 ci.yml 與 `scripts/ci/`，它產生的任何東西（artifact、job summary、check 的文字、log、output）都不讀；`changes.test.ts` 檢查決策程式只呼叫上列端點、不碰 artifact、log 與 check run。
+- PR 執行實際測的是 `refs/pull/N/merge`。GitHub 文件（「Events that trigger workflows」的 `pull_request`）：`GITHUB_SHA` 是「Last merge commit on the `GITHUB_REF` branch」，`GITHUB_REF` 是「PR merge branch `refs/pull/PULL_REQUEST_NUMBER/merge`」。API 沒有欄位寫出這個 merge commit 或它的 base：workflow run 只有 `head_sha`（PR 的 head）；`pull_requests[].base.sha` 文件沒有說明是哪個 commit，PR 合併後也不再列出。所以不讀它，改用推導：C 只有一個 parent，main 只往前移，所以 C 之前 main 的每一個 tip 都是 P 或 P 的祖先；條件 4 讓它們都是 H 的祖先。GitHub 為 H 建 merge commit 時，不論當時 main 停在哪裡，都是把 H 的一個祖先併進 H，三方合併的結果就是 H 的樹，與合併演算法無關，也不會有衝突（文件：「Workflows will not run on `pull_request` activity if the pull request has a merge conflict」）；加上條件 5 確認 ci.yml 的 `pull_request` 觸發沒有篩選，PR 每次以 H 為 head 的 `opened`、`synchronize`、`reopened` 都會產生執行（還在等待核准的 fork PR 執行不是 success，條件 6 不接受；commit 訊息帶 `[skip ci]` 時沒有任何執行，條件 6 也不成立）。條件 5 再確認 C 的樹就是 H 的樹：那些執行測的正是 main 現在的樹，連 ci.yml 與腳本都相同。
+- 重跑舊的執行：文件（「Re-running workflows and jobs」）說重跑沿用原本事件的 `GITHUB_SHA` 與 `GITHUB_REF`，所以重跑 H 的執行測的仍是樹為 H 的 merge commit；舊 head 的執行（含重跑）不算，只看合併時的 head。
+- PR 之後有新的 head：只認合併時的 `head.sha`；合併後 PR 已關閉，不會再有 `pull_request` 執行。
+- GitHub 合併時用不同的演算法：不重算合併，直接比對 C 的樹與 H 的樹。
+- 改 base：`pull_request` 預設只由 `opened`、`synchronize`、`reopened` 觸發（文件：「By default, a workflow only runs when a `pull_request` event's activity type is `opened`, `synchronize`, or `reopened`」），改 base 不會重跑，之前的執行可能測的是併進別的分支的結果，所以 base 改過就不用這條（條件 3）。
+- 別的 PR 用同一個 head：PR 合併後，API 無法得知一個執行屬於哪個 PR，所以以 H 為 head 的所有 `pull_request` 執行都必須成功、job 也都必須通過。這個 PR 自己以 H 為 head 的執行一定在其中（上兩點），它失敗時不會略過；別的 PR 的執行只會讓略過更少。
+- 只認實際執行且通過的 job：PR 依路徑略過的 job，PR 只和它的 base 比較過，可能沒有涵蓋 main 上還沒修好的紅燈；這種 job 在 main 上照原規則與最近一個 ci 通過的 commit 比較，所以紅燈的 main 在修好以前仍是紅燈。
+- 同一個 job 在 PR 與 push 上必須做同一件事：`scripts/ci/workflow-conditions.test.ts` 檢查依路徑的 job 不引用與事件有關的 context 或環境變數（`github.event*`、`github.ref*`、`github.head_ref`、`github.base_ref`、`github.sha` 與對應的 `GITHUB_*`），唯一例外是 Rust 編譯快取只在 main 儲存；也檢查這些 job 執行的程式（`crates/`、`services/`、`tools/`、`edge/`、`factory/`、`deploy/`、`scripts/lib/`、`scripts/flux/`、`.github/actions/`）不讀它們；並檢查 job 的 `name` 等於 id 且不重複，因為是以名稱在 PR 的執行裡找 job。
+- 前提（與既有規則相同）：有寫入權限的人可信。main 被 force push、或有人刪除這個 PR 的執行時，上面的推導不成立；有寫入權限的人本來就能直接推 main。
+
+**唯讀查詢**：以真實資料看某個 main commit 會得到的判斷與依據，不寫任何東西：先 `git fetch origin main`，再 `GITHUB_TOKEN=<可讀本 repo 的 token> bun scripts/ci/changes.ts --explain <commit>`（`GITHUB_REPOSITORY` 預設 `Laysi/trustiot-v2`）。
 
 **規則**（寧可多跑，不可漏跑）：
 
 | job | 何時執行 |
 | --- | --- |
-| 全部 | `.github/workflows/ci.yml`、`.github/actions/` 下的任何檔案、`scripts/ci/changes.ts` 本身與它直接或間接 import 的 repo 內檔案（目前是 `scripts/release/lib.ts`，推到 main 時由它挑出比較的基準 commit）、`.prototools`、`.proto/` 下的任何檔案（`rust`、`cargo-deny`、`bun`、`helm`、`kubeconform` 的版本都從這裡來）有變動 |
+| 全部 | `.github/workflows/ci.yml`、`.github/actions/` 下的任何檔案、`scripts/ci/changes.ts` 本身與它直接或間接 import 的 repo 內檔案（目前是 `scripts/release/lib.ts`，推到 main 時由它挑出比較的基準 commit；以及 `scripts/ci/tested-tree.ts`，判斷哪些 job 已在 PR 上以同一棵樹通過）、`.prototools`、`.proto/` 下的任何檔案（`rust`、`cargo-deny`、`bun`、`helm`、`kubeconform` 的版本都從這裡來）有變動 |
 | `rust` | 預設執行，只有在每個變動的檔案都屬於下列「`rust` 不讀的路徑」時才略過：`docs/`、`deploy/`（`deploy/chart/values.yaml` 除外，`crates/service-kit/tests/chart_contract.rs` 讀它）、`scripts/`、`frontend/`、`.github/`（上一列的 ci.yml 與本地 action 除外）、`.githooks/`，以及根目錄的 `README.md`、`renovate.json5`、`.gitleaksignore`、`.dockerignore`、`deny.toml`。不論在哪個目錄，`.rs`、`.sql` 與任何大小寫的 `AGENTS.md` 都會讓它執行（`tools/sql-check` 掃描整個 repo 的 Rust 檔與它們 include 的 SQL，`tools/repo-check` 不允許任何 AGENTS.md）。沒有列出的路徑（`crates/`、`services/`、`edge/`、`factory/`、`tools/`、`api/`、`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`clippy.toml`、`.cargo/`、`CLAUDE.md`、`.gitignore`、`datasets/`、`evals/`，以及之後新增的任何目錄）一律執行 |
 | `cargo-deny` | 任何 `Cargo.toml`、`Cargo.lock`、`deny.toml`、`rust-toolchain.toml`、`.cargo/` 下的檔案有變動 |
 | `helm` | `deploy/chart/`、`deploy/istio/`、`services/ingest/migrations/clickhouse/`、`deploy/flux/`、`scripts/flux/` 下的檔案，或 chart 測試讀的 `scripts/lib/stack.ts`、`scripts/ci/check-secret-handling.ts`（Laysi/trustiot-v2#398 的渲染檢查）、`services/ingest/tests/common/mod.rs`、`crates/service-kit/src/telemetry/redact.rs`、`docs/architecture/deployment.md`，或 `bun test deploy/flux` 讀的 `.sops.yaml`、`scripts/release/flux.ts` 有變動（`deploy/flux/` 與後兩者來自 Laysi/trustiot-v2#70） |
@@ -113,9 +145,13 @@ Laysi/trustiot-v2#70 建立了 `.sops.yaml`（規則：`deploy/flux/clusters/saa
 
 **已知的取捨**：`cargo-deny` 的 RustSec 公告是隨時間增加的，略過時新公告要等下一次 Cargo 相關的變動才會被發現；Renovate 的 `vulnerabilityAlerts` 會為有公告的相依開 PR（前提是組織已裝好 Renovate，見下方「Renovate」）。是否加每日的 `cargo deny check advisories` 另案評估。
 
+2026-10-15 起（Laysi/trustiot-v2#431）：Rust 編譯快取只在 main 儲存（PR 只讀取），main 因「同一棵樹已在 PR 上通過」略過 `rust` 時快取不會更新。相依改變後，PR 還原到的是較舊的快取，新的相依要在每個 PR 上重新編譯，直到 main 再跑一次 `rust`（例如下一個沒有符合條件的合併）。是否另外定期在 main 更新快取，另案評估。
+
 ### 必要檢查與強制方式
 
 必要檢查清單（ci.yml 的 job 名稱）：`changes`、`rust`、`cargo-deny`、`helm`、`host`、`postgres-image`、`gitleaks`、`workflow-policy`。依路徑略過的 job 狀態是 skipped，GitHub 把它當作通過（job 層的 `if` 略過時會回報狀態；workflow 層的 `paths` 篩選則根本不會建立 check，必要檢查會一直等待，所以 ci.yml 不用 workflow 層的 `paths`）。
+
+2026-10-15 起（Laysi/trustiot-v2#431）main 上的 skipped 有兩種來源：這個 job 讀的檔案自最近一個 ci 通過的 main commit 以來沒有變，或同一棵樹已在合併來源 PR 的 ci 執行中跑過並通過這個 job（見上方「推到 main：同一棵樹已在 PR 上通過」）。PR 上的 skipped 仍只來自路徑規則，合併前的檢查方式不變。
 
 2026-10-10 確認：本 repo 是私有庫，組織在 GitHub Free 方案，分支保護與 ruleset 都不能用（API 回 HTTP 403「Upgrade to GitHub Pro」），GitHub 不會擋下沒通過檢查的合併。方案升級前由流程把關：合併任何 PR 之前，確認上列檢查在該 PR 最新的 commit 上全部通過或略過（略過只能來自 `changes` 的判斷）。方案升級後，在 main 的 ruleset 把上列檢查設為必要檢查。
 
@@ -310,6 +346,8 @@ publish job 在 `release` environment 執行，原本的設計是在 environment
 - 簽章身分綁定 release.yml 與 tag，消費端只接受這個身分。
 - 執行第三方程式碼的 build job 沒有寫入權限，也拿不到任何 secret。
 - 每次發佈都留下 commit status `release` 與 GitHub Release，可以稽核。
+
+2026-10-15 更新（Laysi/trustiot-v2#431，Laysi/trustiot-v2#1 待決定事項第 8 項）：「main 的 ci 成功」的意思擴大了。ci.yml 的每個依路徑的 job 在這次執行中只會是三者之一：在 main 上執行並通過；讀的檔案自最近一個 ci 通過的 main commit 以來沒有變而略過；或這棵樹（逐位元相同，以 tree SHA 比對）已在合併來源 PR 最後一個 head 的每一次 ci 執行中實際執行並通過這個 job 而略過（見「依變更路徑決定 job」的「推到 main：同一棵樹已在 PR 上通過」）。略過的 job 是 skipped，整次執行的結論仍是 success。plan job 的檢查**不改**（仍要求該 commit 在 main 上最新一次 ci push 執行成功）：第三種略過的依據是 GitHub 的中繼資料與 main 這次執行自己的 git 計算，不讀 PR 執行產生的任何輸出，而且略過的 job 測過的就是要發佈的同一棵樹，連 ci.yml 也相同；PR 依路徑略過的 job 在 main 上仍照原規則判斷，紅燈的 main 仍是紅燈。所以「main 的 ci 通過」現在可能代表「這棵樹已在 PR 上以同樣的 job 通過」，可稽核性不變：main 的 ci 執行的 job summary 寫出 PR 編號、執行 id 與比對的樹。
 
 這些措施擋不住有寫入權限的人（或以其憑證操作的 agent）把 main 上 ci 已通過的 commit 打成正式版發佈。workflow 照樣宣告 environment：升級到可為私有 repo 設定必要審查者的方案（目前是 GitHub Enterprise），或 repo 改為公開時，重新檢視本決定，並在 repo 設定的 `release` environment 加上必要審查者（開啟 prevent self-review，推 tag 的人不能自己核准）與 tag 規則 `v*`，不必改 workflow。只升級到 Team 或 Pro 時，可以先加上 tag 規則。
 

@@ -14,18 +14,32 @@ import {
   affectsRust,
   changedFiles,
   decide,
-  type ListRuns,
+  explain,
+  githubReads,
+  ISSUE_EVENT_PAGES,
   main,
   mainAncestors,
   mainRunsUrl,
   newestGreen,
   outputLines,
   PATH_JOBS,
+  type PathJob,
   plan,
   pullRequestRange,
   runEverything,
   summary,
 } from "./changes.ts";
+import {
+  type GitHubReads,
+  parseCommitTree,
+  parseIssueEventTypes,
+  parseJobs,
+  parseMergeBase,
+  parsePullRequests,
+  type PullRequest,
+  pullRequestTriggerProblem,
+  type WorkflowJob,
+} from "./tested-tree.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 
@@ -253,6 +267,7 @@ describe("path rules", () => {
       ".github/workflows/ci.yml",
       ".github/actions/setup-proto/action.yml",
       "scripts/ci/changes.ts",
+      "scripts/ci/tested-tree.ts",
       "scripts/release/lib.ts",
       ".prototools",
       ".proto/plugins/bun.toml",
@@ -625,13 +640,45 @@ function run(commit: string, overrides: Partial<WorkflowRun> = {}): WorkflowRun 
   };
 }
 
-/** ListRuns answering with fixed runs. */
-const runsOf =
-  (...runs: WorkflowRun[]): ListRuns =>
-  async () =>
-    runs;
+/**
+ * GitHub reads answering from fixed data: the main runs given, no pull request for any commit,
+ * and the overrides. Merge bases and trees come from the test repository's git, as GitHub's would.
+ */
+function fakeGitHub(root: string, overrides: Partial<GitHubReads> = {}, mainRuns: WorkflowRun[] = []): GitHubReads & { calls: string[] } {
+  const calls: string[] = [];
+  const log =
+    <A extends unknown[], R>(name: string, fn: (...args: A) => Promise<R>) =>
+    (...args: A) => {
+      calls.push(`${name}(${args.join(", ")})`);
+      return fn(...args);
+    };
+  const reads: GitHubReads = {
+    mainRuns: async () => mainRuns,
+    pullsOfCommit: async () => [],
+    issueEventTypes: async () => [],
+    mergeBase: async (base, head) => git(root, "merge-base", base, head),
+    treeOf: async (commit) => git(root, "rev-parse", `${commit}^{tree}`),
+    pullRequestRuns: async () => [],
+    jobsOf: async () => [],
+    ...overrides,
+  };
+  return {
+    calls,
+    mainRuns: log("mainRuns", reads.mainRuns),
+    pullsOfCommit: log("pullsOfCommit", reads.pullsOfCommit),
+    issueEventTypes: log("issueEventTypes", reads.issueEventTypes),
+    mergeBase: log("mergeBase", reads.mergeBase),
+    treeOf: log("treeOf", reads.treeOf),
+    pullRequestRuns: log("pullRequestRuns", reads.pullRequestRuns),
+    jobsOf: log("jobsOf", reads.jobsOf),
+  };
+}
 
-const PUSH = { GITHUB_EVENT_NAME: "push" };
+/** GitHub reads with fixed main runs and no pull requests (the path rules alone decide). */
+const runsOf = (...runs: WorkflowRun[]): GitHubReads => fakeGitHub(scratch, {}, runs);
+
+const REPOSITORY = "Laysi/trustiot-v2";
+const PUSH = { GITHUB_EVENT_NAME: "push", GITHUB_REPOSITORY: REPOSITORY };
 
 function jobsRunning(result: { decision: ReturnType<typeof decide> }): string[] {
   return PATH_JOBS.filter((job) => result.decision[job].run);
@@ -742,9 +789,11 @@ describe("commits compared", () => {
   test("a push runs everything when the runs cannot be read", async () => {
     const { root } = repository();
     commit(root, { "docs/b.md": "b\n" }, "docs");
-    const failing: ListRuns = async () => {
-      throw new Error("listing the ci runs on main failed with HTTP 403");
-    };
+    const failing = fakeGitHub(root, {
+      mainRuns: async () => {
+        throw new Error("listing the ci runs on main failed with HTTP 403");
+      },
+    });
     const result = await plan(root, PUSH, failing);
     expect(result.everything).toBe("the ci runs on main cannot be read: listing the ci runs on main failed with HTTP 403");
     expect(jobsRunning(result)).toEqual([...PATH_JOBS]);
@@ -777,6 +826,450 @@ describe("commits compared", () => {
   test("newestGreen stops at the first green commit", () => {
     expect(newestGreen(["a", "b", "c"], [run("b"), run("c")])).toEqual({ commit: "b", passedOver: ["a (no ci run)"] });
     expect(newestGreen([], [])).toEqual({ problem: "none of the last 0 main commit(s) has a successful ci run" });
+  });
+});
+
+// Laysi/trustiot-v2#431: a push to main skips a job that ran and passed in the merged pull
+// request's runs, when those runs provably tested the pushed tree (scripts/ci/tested-tree.ts).
+describe("same tree as the merged pull request", () => {
+  const PR_RUN = 100;
+  const CI_YML = ".github/workflows/ci.yml";
+
+  /**
+   * main: `base` (ci green), then `parent` (a Cargo.lock change whose ci failed). Pull request #7
+   * branches from `base`, changes a Rust file and the chart, and (unless `updateBranch` is false)
+   * merges main, so its last head `head` contains `parent`. GitHub then squash-merges it into
+   * `merged`, whose only parent is `parent`; HEAD is `merged`, as in the push run.
+   */
+  function squashMerged({ updateBranch = true } = {}) {
+    const { root } = repository();
+    const base = commit(root, { [CI_YML]: "on:\n  pull_request:\n  push:\n    branches: [main]\n" }, "ci");
+    git(root, "checkout", "--quiet", "-b", "feature");
+    commit(root, { "crates/x/src/lib.rs": "// pr\n", "deploy/chart/x.yaml": "x\n" }, "pr");
+    git(root, "checkout", "--quiet", "main");
+    const parent = commit(root, { "Cargo.lock": "# lock\n" }, "lock on main");
+    if (updateBranch) {
+      git(root, "checkout", "--quiet", "feature");
+      git(root, "merge", "--quiet", "--no-ff", "--no-edit", "main");
+      git(root, "checkout", "--quiet", "main");
+    }
+    const head = git(root, "rev-parse", "feature");
+    git(root, "merge", "--quiet", "--squash", "feature");
+    git(root, "commit", "--quiet", "--message", "pr (#7)");
+    const merged = git(root, "rev-parse", "HEAD");
+    return { root, base, parent, head, merged };
+  }
+
+  type Scenario = ReturnType<typeof squashMerged>;
+
+  function pullRequest(scenario: Scenario, overrides: Partial<PullRequest> = {}): PullRequest {
+    return {
+      number: 7,
+      mergedAt: "2026-10-15T00:00:00Z",
+      mergeCommitSha: scenario.merged,
+      headSha: scenario.head,
+      baseRef: "main",
+      baseRepository: REPOSITORY,
+      ...overrides,
+    };
+  }
+
+  function prRun(scenario: Scenario, overrides: Partial<WorkflowRun> = {}): WorkflowRun {
+    return run(scenario.head, {
+      id: PR_RUN,
+      event: "pull_request",
+      headBranch: "feature",
+      url: `https://github.com/${REPOSITORY}/actions/runs/${PR_RUN}`,
+      ...overrides,
+    });
+  }
+
+  /** The jobs of a ci run: the path-dependent ones as given (default success), the others passed. */
+  function jobs(conclusions: Partial<Record<PathJob, string>> = {}): WorkflowJob[] {
+    return [
+      { name: "changes", status: "completed", conclusion: "success" },
+      ...PATH_JOBS.map((job) => ({ name: job, status: "completed", conclusion: conclusions[job] ?? "success" })),
+      { name: "gitleaks", status: "completed", conclusion: "success" },
+      { name: "workflow-policy", status: "completed", conclusion: "success" },
+    ];
+  }
+
+  /** What the pull request's own run did: its path rules ran rust and helm only. */
+  const PR_JOBS = jobs({ "cargo-deny": "skipped", host: "skipped", "postgres-image": "skipped" });
+
+  /** GitHub as it answers for a merged pull request whose run tested the pushed tree. */
+  function github(scenario: Scenario, overrides: Partial<GitHubReads> = {}) {
+    return fakeGitHub(
+      scenario.root,
+      {
+        pullsOfCommit: async (commit) => (commit === scenario.merged ? [pullRequest(scenario)] : []),
+        pullRequestRuns: async (head) => (head === scenario.head ? [prRun(scenario)] : []),
+        jobsOf: async (id) => (id === PR_RUN ? PR_JOBS : []),
+        ...overrides,
+      },
+      [run(scenario.base, { id: 1 }), run(scenario.parent, { id: 2, conclusion: "failure" })],
+    );
+  }
+
+  /** Asserts that the tested-tree check did not apply, for `reason`, and the path rules decided alone. */
+  function pathRulesOnly(result: Awaited<ReturnType<typeof plan>>, reason: string): void {
+    expect(result.tested).toEqual({ applies: false, reason: expect.stringContaining(reason) });
+    // base -> merged changes Cargo.lock (from the red parent), a Rust file and the chart.
+    expect(jobsRunning(result)).toEqual(["rust", "cargo-deny", "helm"]);
+    expect(summary(result)).toContain(`Not used: ${result.tested?.applies === false ? result.tested.reason : ""}.`);
+  }
+
+  test("a job that ran and passed on the same tree is skipped; a job the pull request skipped keeps the path rules", async () => {
+    const scenario = squashMerged();
+    const gh = github(scenario);
+    const result = await plan(scenario.root, PUSH, gh);
+
+    const tree = git(scenario.root, "rev-parse", `${scenario.merged}^{tree}`);
+    expect(tree).toBe(git(scenario.root, "rev-parse", `${scenario.head}^{tree}`));
+    expect(result.tested).toEqual({
+      applies: true,
+      pullRequest: 7,
+      head: scenario.head,
+      parent: scenario.parent,
+      tree,
+      runs: [{ id: PR_RUN, url: `https://github.com/${REPOSITORY}/actions/runs/${PR_RUN}` }],
+      passed: ["rust", "helm"],
+      notPassed: { "cargo-deny": `skipped in run ${PR_RUN}`, host: `skipped in run ${PR_RUN}`, "postgres-image": `skipped in run ${PR_RUN}` },
+    });
+    expect(result.decision.rust).toEqual({ run: false, reason: `passed in run ${PR_RUN} of pull request #7 on the same tree` });
+    expect(result.decision.helm.run).toBe(false);
+    // The pull request's path rules skipped cargo-deny (it changed no Cargo file), but main's red
+    // parent changed Cargo.lock: on main it is compared with the newest green commit and runs, so
+    // a red main stays red.
+    expect(result.decision["cargo-deny"]).toEqual({ run: true, reason: "`Cargo.lock` changed" });
+    expect(jobsRunning(result)).toEqual(["cargo-deny"]);
+    expect(result.base).toStartWith(scenario.base);
+
+    const text = summary(result);
+    expect(text).toContain("| `rust` | skipped | passed in run 100 of pull request #7 on the same tree |");
+    expect(text).toContain("### Same tree as the merged pull request");
+    expect(text).toContain(`The pushed tree \`${tree}\` is the tree of \`${scenario.head}\`, the last head of pull request #7`);
+    expect(text).toContain(`[${PR_RUN}](https://github.com/${REPOSITORY}/actions/runs/${PR_RUN})`);
+    expect(text).toContain("| `cargo-deny` | skipped in run 100: path rules decide |");
+    expect(text).toContain("| `helm` | ran and passed: skipped here |");
+    // Only metadata is read: the pull request, its events, the merge base, the head's tree, the
+    // runs of the head and their jobs.
+    expect(gh.calls).toEqual([
+      "mainRuns()",
+      `pullsOfCommit(${scenario.merged})`,
+      "issueEventTypes(7)",
+      `mergeBase(${scenario.parent}, ${scenario.head})`,
+      `treeOf(${scenario.head})`,
+      `pullRequestRuns(${scenario.head})`,
+      `jobsOf(${PR_RUN})`,
+    ]);
+  });
+
+  test("with no green main commit, the jobs that passed on the same tree are still skipped and the rest run", async () => {
+    const scenario = squashMerged();
+    const mainRuns = [run(scenario.base, { id: 1, conclusion: "failure" }), run(scenario.parent, { id: 2, conclusion: "failure" })];
+    const result = await plan(scenario.root, PUSH, github(scenario, { mainRuns: async () => mainRuns }));
+    expect(result.everything).toContain("has a successful ci run");
+    expect(jobsRunning(result)).toEqual(["cargo-deny", "host", "postgres-image"]);
+  });
+
+  test("the trees differ", async () => {
+    const scenario = squashMerged();
+    // The merge commit holds one more file than the pull request's head.
+    write(scenario.root, { "docs/extra.md": "x\n" });
+    git(scenario.root, "add", "--all");
+    git(scenario.root, "commit", "--quiet", "--amend", "--no-edit");
+    const merged = git(scenario.root, "rev-parse", "HEAD");
+    const result = await plan(scenario.root, PUSH, github({ ...scenario, merged }));
+    pathRulesOnly(result, "differs from the tree");
+  });
+
+  test.each([
+    ["has no run at all", [] as Partial<WorkflowRun>[], "no pull_request run of ci.yml has the head"],
+    ["failed", [{ conclusion: "failure" }], `run ${PR_RUN} of the head`],
+    ["waits for approval", [{ conclusion: "action_required" }], "is action_required, not success"],
+    ["was cancelled", [{ conclusion: "cancelled" }], "is cancelled, not success"],
+    ["is still running", [{ status: "in_progress", conclusion: "" }], "is in_progress, not success"],
+    ["passed once but another run of it failed", [{}, { id: PR_RUN + 1, conclusion: "failure" }], `run ${PR_RUN + 1} of the head`],
+  ])("the pull request's last head %s", async (_, overrides, reason) => {
+    const scenario = squashMerged();
+    const runs = overrides.map((override) => prRun(scenario, override));
+    pathRulesOnly(await plan(scenario.root, PUSH, github(scenario, { pullRequestRuns: async () => runs })), reason);
+  });
+
+  test("only pull_request runs of ci.yml for that head count", async () => {
+    const scenario = squashMerged();
+    const others = [
+      prRun(scenario, { path: ".github/workflows/nightly.yml" }),
+      prRun(scenario, { event: "workflow_dispatch" }),
+      prRun(scenario, { headSha: scenario.parent }),
+    ];
+    pathRulesOnly(await plan(scenario.root, PUSH, github(scenario, { pullRequestRuns: async () => others })), "no pull_request run of ci.yml");
+  });
+
+  test("an older head of the pull request does not count", async () => {
+    const scenario = squashMerged();
+    // GitHub answers runs only for the head asked for; the head asked for is the last one.
+    const gh = github(scenario, { pullRequestRuns: async (head) => (head === scenario.base ? [prRun(scenario)] : []) });
+    pathRulesOnly(await plan(scenario.root, PUSH, gh), "no pull_request run of ci.yml has the head");
+    expect(gh.calls).toContain(`pullRequestRuns(${scenario.head})`);
+  });
+
+  test("the base the pull request's run tested cannot be confirmed: the head lacks main's tip", async () => {
+    const scenario = squashMerged({ updateBranch: false });
+    pathRulesOnly(await plan(scenario.root, PUSH, github(scenario)), "does not contain the pushed commit's parent");
+  });
+
+  test.each(["base_ref_changed", "automatic_base_change_succeeded", "automatic_base_change_failed"])(
+    "the base the pull request's run tested cannot be confirmed: its base branch changed (%s)",
+    async (event) => {
+      const scenario = squashMerged();
+      const gh = github(scenario, { issueEventTypes: async () => ["labeled", event, "merged", "closed"] });
+      pathRulesOnly(await plan(scenario.root, PUSH, gh), `was changed (${event})`);
+    },
+  );
+
+  test("several commits pushed at once: the parent never had a push run of its own", async () => {
+    const scenario = squashMerged();
+    const gh = github(scenario, { mainRuns: async () => [run(scenario.base)] });
+    const result = await plan(scenario.root, PUSH, gh);
+    expect(result.tested).toEqual({ applies: false, reason: expect.stringContaining("has no push run of ci.yml on main") });
+    expect(jobsRunning(result)).toEqual(["rust", "cargo-deny", "helm"]);
+    expect(gh.calls).toEqual(["mainRuns()"]);
+  });
+
+  test.each([
+    ["has no pull_request trigger", "on:\n  push:\n    branches: [main]\n"],
+    ["filters its pull_request trigger", "on:\n  pull_request:\n    types: [opened]\n  push:\n"],
+    ["filters its pull_request trigger", "on:\n  pull_request:\n    paths: [crates/**]\n"],
+    ["cannot be parsed", "on: [\n"],
+  ])("the pushed ci.yml %s", async (reason, workflow) => {
+    const scenario = squashMerged();
+    // The pull request's last head and the merge both carry this ci.yml, so the trees stay equal.
+    git(scenario.root, "checkout", "--quiet", "feature");
+    const head = commit(scenario.root, { [CI_YML]: workflow }, "trigger");
+    git(scenario.root, "checkout", "--quiet", "main");
+    git(scenario.root, "merge", "--quiet", "--squash", "feature");
+    git(scenario.root, "commit", "--quiet", "--amend", "--no-edit");
+    const merged = git(scenario.root, "rev-parse", "HEAD");
+    const result = await plan(scenario.root, PUSH, github({ ...scenario, head, merged }));
+    expect(result.tested).toEqual({ applies: false, reason: expect.stringContaining(`the pushed ${CI_YML} ${reason}`) });
+  });
+
+  test("an unfiltered pull_request trigger, in any YAML spelling, counts", () => {
+    expect(pullRequestTriggerProblem("on:\n  pull_request:\n  push:\n")).toBeUndefined();
+    expect(pullRequestTriggerProblem("on:\n  pull_request: {}\n")).toBeUndefined();
+    expect(pullRequestTriggerProblem("on: [pull_request, push]\n")).toBeUndefined();
+    expect(pullRequestTriggerProblem("on: pull_request\n")).toBeUndefined();
+    expect(pullRequestTriggerProblem("on: [push]\n")).toBe("has no pull_request trigger");
+    expect(pullRequestTriggerProblem("on: pull_request_target\n")).toBe("has no pull_request trigger");
+    expect(pullRequestTriggerProblem("name: x\n")).toBe("has no pull_request trigger");
+    expect(pullRequestTriggerProblem("on:\n  pull_request:\n    branches: [main]\n")).toBe("filters its pull_request trigger");
+  });
+
+  test("a merge commit (two parents) is not compared", async () => {
+    const scenario = squashMerged();
+    git(scenario.root, "reset", "--quiet", "--hard", scenario.parent);
+    git(scenario.root, "merge", "--quiet", "--no-ff", "--no-edit", "feature");
+    const merged = git(scenario.root, "rev-parse", "HEAD");
+    pathRulesOnly(await plan(scenario.root, PUSH, github({ ...scenario, merged })), "the pushed commit has 2 parents");
+  });
+
+  test.each([
+    ["no pull request", () => [] as PullRequest[], "0 merged pull requests"],
+    ["a pull request that is not merged", (s: Scenario) => [pullRequest(s, { mergedAt: null })], "0 merged pull requests"],
+    ["a pull request merged as another commit", (s: Scenario) => [pullRequest(s, { mergeCommitSha: s.parent })], "0 merged pull requests"],
+    ["two merged pull requests", (s: Scenario) => [pullRequest(s), pullRequest(s, { number: 8 })], "2 merged pull requests"],
+    ["a pull request into another branch", (s: Scenario) => [pullRequest(s, { baseRef: "integration" })], "not Laysi/trustiot-v2:main"],
+    ["a pull request into another repository", (s: Scenario) => [pullRequest(s, { baseRepository: "someone/fork" })], "not Laysi/trustiot-v2:main"],
+    ["a pull request without a head", (s: Scenario) => [pullRequest(s, { headSha: "" })], "has no valid head commit"],
+  ])("GitHub lists %s for the pushed commit", async (_, pulls, reason) => {
+    const scenario = squashMerged();
+    pathRulesOnly(await plan(scenario.root, PUSH, github(scenario, { pullsOfCommit: async () => pulls(scenario) })), reason);
+  });
+
+  test.each([
+    ["the pull request", "pullsOfCommit"],
+    ["the pull request's events", "issueEventTypes"],
+    ["the merge base", "mergeBase"],
+    ["the head's tree", "treeOf"],
+    ["the head's runs", "pullRequestRuns"],
+    ["the jobs of a run", "jobsOf"],
+  ] as const)("reading %s fails", async (_, method) => {
+    const scenario = squashMerged();
+    const failing = async () => {
+      throw new Error(`GET ${method} failed with HTTP 502`);
+    };
+    const result = await plan(scenario.root, PUSH, github(scenario, { [method]: failing }));
+    pathRulesOnly(result, `the pull request's runs cannot be checked: GET ${method} failed with HTTP 502`);
+  });
+
+  test.each([
+    ["skipped", "skipped in run 100"],
+    ["failure", "failure in run 100"],
+    ["cancelled", "cancelled in run 100"],
+  ])("a job that concluded %s in the pull request's run keeps the path rules", async (conclusion, reason) => {
+    const scenario = squashMerged();
+    const result = await plan(scenario.root, PUSH, github(scenario, { jobsOf: async () => jobs({ rust: conclusion }) }));
+    expect(result.tested?.applies).toBe(true);
+    expect(result.tested?.applies === true && result.tested.notPassed.rust).toBe(reason);
+    // Compared with the newest green commit, `base`: the red parent's Cargo.lock comes first.
+    expect(result.decision.rust).toEqual({ run: true, reason: "`Cargo.lock` changed" });
+  });
+
+  test("a job must have passed in every run of the head, exactly once each", async () => {
+    const scenario = squashMerged();
+    const second = PR_RUN + 1;
+    const runs = [prRun(scenario), prRun(scenario, { id: second })];
+    const jobsOf = async (id: number) =>
+      id === PR_RUN
+        ? jobs()
+        : [...jobs({ helm: "skipped" }).filter((job) => job.name !== "host"), { name: "postgres-image", status: "completed", conclusion: "success" }];
+    const result = await plan(scenario.root, PUSH, github(scenario, { pullRequestRuns: async () => runs, jobsOf }));
+    expect(result.tested).toMatchObject({
+      applies: true,
+      runs: [{ id: PR_RUN }, { id: second }],
+      passed: ["rust", "cargo-deny"],
+      notPassed: {
+        helm: `skipped in run ${second}`,
+        host: `no job of that name in run ${second}`,
+        "postgres-image": `2 jobs of that name in run ${second}`,
+      },
+    });
+    expect(result.decision.rust.reason).toBe(`passed in run ${PR_RUN}, ${second} of pull request #7 on the same tree`);
+  });
+
+  test("--explain decides for a commit that is not checked out, from the same reads", async () => {
+    const scenario = squashMerged();
+    git(scenario.root, "checkout", "--quiet", "--detach", scenario.base);
+    const result = await explain(scenario.root, scenario.merged.slice(0, 12), {}, github(scenario));
+    expect(result.tested?.applies).toBe(true);
+    expect(jobsRunning(result)).toEqual(["cargo-deny"]);
+    const unknown = await explain(scenario.root, "0".repeat(40), {}, github(scenario));
+    expect(unknown.everything).toContain("the changed files cannot be determined");
+    expect(jobsRunning(unknown)).toEqual([...PATH_JOBS]);
+  });
+
+  test("--explain takes exactly one commit SHA", async () => {
+    for (const args of [["--explain"], ["--explain", "--output=x"], ["--explain", "HEAD"], ["--other", "abc1234"]]) {
+      expect(await main({}, args)).toBe(2);
+    }
+  });
+});
+
+// The decision reads only metadata: never an artifact, a log, a job summary, a check run's text
+// or an output of a pull request run, which that run's own (unreviewed) code produced.
+describe("what the decision reads from GitHub", () => {
+  const responses: Record<string, unknown> = {};
+  const requested: { url: string; authorization: string | null }[] = [];
+  const realFetch = globalThis.fetch;
+
+  function stubFetch(answer: (url: URL) => { status?: number; body: unknown }): void {
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      requested.push({ url: url.href, authorization: new Headers(init?.headers).get("authorization") });
+      const { status = 200, body } = answer(url);
+      return new Response(JSON.stringify(body), { status });
+    }) as unknown as typeof fetch;
+  }
+
+  afterAll(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const env = { GITHUB_TOKEN: crypto.randomUUID(), GITHUB_REPOSITORY: REPOSITORY, GITHUB_API_URL: "https://api.example.test/" };
+  const A = "a".repeat(40);
+  const B = "b".repeat(40);
+  const T = "c".repeat(40);
+
+  test("every request is a read of a metadata endpoint, with the token", async () => {
+    requested.length = 0;
+    responses.events = Array.from({ length: 100 }, () => ({ event: "labeled" }));
+    stubFetch((url) => {
+      const path = url.pathname.replace("/repos/Laysi/trustiot-v2/", "");
+      if (path === `commits/${A}/pulls`) {
+        return { body: [{ number: 7, merged_at: "2026-10-15T00:00:00Z", merge_commit_sha: A, head: { sha: B }, base: { ref: "main", repo: { full_name: REPOSITORY } } }] };
+      }
+      if (path === "issues/7/events") {
+        return { body: url.searchParams.get("page") === "1" ? responses.events : [{ event: "base_ref_changed" }] };
+      }
+      if (path === `compare/${A}...${B}`) return { body: { merge_base_commit: { sha: A } } };
+      if (path === `git/commits/${B}`) return { body: { sha: B, tree: { sha: T } } };
+      if (path === "actions/workflows/ci.yml/runs") {
+        return { body: { total_count: 1, workflow_runs: [{ id: 5, path: ".github/workflows/ci.yml", head_sha: B, head_branch: "x", event: "pull_request", status: "completed", conclusion: "success" }] } };
+      }
+      if (path === "actions/runs/5/jobs") return { body: { total_count: 1, jobs: [{ name: "rust", status: "completed", conclusion: "success" }] } };
+      return { status: 404, body: { message: "Not Found" } };
+    });
+    const gh = githubReads(env);
+    expect(await gh.pullsOfCommit(A)).toEqual([{ number: 7, mergedAt: "2026-10-15T00:00:00Z", mergeCommitSha: A, headSha: B, baseRef: "main", baseRepository: REPOSITORY }]);
+    expect(await gh.issueEventTypes(7)).toEqual([...Array.from({ length: 100 }, () => "labeled"), "base_ref_changed"]);
+    expect(await gh.mergeBase(A, B)).toBe(A);
+    expect(await gh.treeOf(B)).toBe(T);
+    expect((await gh.pullRequestRuns(B)).map((r) => r.id)).toEqual([5]);
+    expect(await gh.jobsOf(5)).toEqual([{ name: "rust", status: "completed", conclusion: "success" }]);
+    expect(requested.map(({ url }) => url)).toEqual([
+      `https://api.example.test/repos/Laysi/trustiot-v2/commits/${A}/pulls?per_page=100`,
+      "https://api.example.test/repos/Laysi/trustiot-v2/issues/7/events?per_page=100&page=1",
+      "https://api.example.test/repos/Laysi/trustiot-v2/issues/7/events?per_page=100&page=2",
+      `https://api.example.test/repos/Laysi/trustiot-v2/compare/${A}...${B}?per_page=1`,
+      `https://api.example.test/repos/Laysi/trustiot-v2/git/commits/${B}`,
+      `https://api.example.test/repos/Laysi/trustiot-v2/actions/workflows/ci.yml/runs?event=pull_request&head_sha=${B}&per_page=100`,
+      "https://api.example.test/repos/Laysi/trustiot-v2/actions/runs/5/jobs?filter=latest&per_page=100",
+    ]);
+    expect(requested.every(({ authorization }) => authorization === `Bearer ${env.GITHUB_TOKEN}`)).toBe(true);
+    await expect(gh.jobsOf(6)).rejects.toThrow("GET actions/runs/6/jobs failed with HTTP 404");
+  });
+
+  test("an answer that does not fit, or does not parse, is an error, never a partial answer", async () => {
+    stubFetch((url) => {
+      if (url.pathname.endsWith("/events")) return { body: Array.from({ length: 100 }, () => ({ event: "labeled" })) };
+      if (url.pathname.endsWith("/runs")) return { body: { total_count: 101, workflow_runs: [] } };
+      return { body: {} };
+    });
+    const gh = githubReads(env);
+    await expect(gh.issueEventTypes(7)).rejects.toThrow(`has more than ${ISSUE_EVENT_PAGES * 100} events`);
+    await expect(gh.pullRequestRuns(B)).rejects.toThrow("do not fit in one page");
+    await expect(gh.pullsOfCommit(A)).rejects.toThrow("did not answer with a list of pull requests");
+    await expect(gh.treeOf(B)).rejects.toThrow("came back without its tree");
+    await expect(gh.mergeBase(A, B)).rejects.toThrow("has no merge base commit");
+    await expect(gh.treeOf("HEAD")).rejects.toThrow("is not a full commit SHA");
+    await expect(githubReads({ ...env, GITHUB_TOKEN: "" }).treeOf(B)).rejects.toThrow("GITHUB_TOKEN is not set");
+  });
+
+  test("the parsers reject answers without the fields the decision needs", () => {
+    expect(() => parsePullRequests([{ number: 1 }])).toThrow("lacks number, head, base or base.repo");
+    expect(parsePullRequests([{ number: 1, merged_at: null, head: {}, base: { repo: {} } }])).toEqual([
+      { number: 1, mergedAt: null, mergeCommitSha: "", headSha: "", baseRef: "", baseRepository: "" },
+    ]);
+    expect(() => parseJobs({ total_count: 2, jobs: [{ name: "rust" }] })).toThrow("more than one page");
+    expect(() => parseJobs({ jobs: [{}] })).toThrow("lacks a name");
+    expect(parseJobs({ jobs: [{ name: "rust", status: "queued", conclusion: null }] })).toEqual([{ name: "rust", status: "queued", conclusion: "" }]);
+    expect(() => parseIssueEventTypes([{}])).toThrow("lacks its type");
+    expect(() => parseMergeBase({ merge_base_commit: { sha: "abc" } })).toThrow("has no merge base commit");
+    expect(() => parseCommitTree({ sha: A, tree: { sha: T } }, B)).toThrow("came back without its tree");
+  });
+
+  test("the decision code calls the API only through githubReads, at the endpoints above", () => {
+    const sources = [...DECISION_CODE].map((path) => ({ path, source: readFileSync(join(ROOT, path), "utf8") }));
+    const fetching = sources.filter(({ source }) => /\bfetch\(/.test(source)).map(({ path }) => path);
+    expect(fetching).toEqual(["scripts/ci/changes.ts"]);
+    const changes = sources.find(({ path }) => path === "scripts/ci/changes.ts")?.source ?? "";
+    expect(changes.match(/\bfetch\(/g)?.length).toBe(1);
+    const paths = [...changes.matchAll(/\bget\(\s*`([^`]+)`/g)].map((match) => match[1]).toSorted();
+    expect(paths).toEqual([
+      "actions/runs/${runId}/jobs",
+      "actions/workflows/${workflow}/runs",
+      "commits/${sha(commit)}/pulls",
+      "compare/${sha(base)}...${sha(head)}",
+      "git/commits/${sha(commit)}",
+      "issues/${number}/events",
+    ]);
+    // Outside comments, which explain what is not read.
+    for (const { path, source } of sources) {
+      const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+      expect(`${path}: ${code.match(/artifacts|\/logs\b|check-runs|check_runs|check-suites|annotations/g) ?? []}`).toBe(`${path}: `);
+    }
   });
 });
 

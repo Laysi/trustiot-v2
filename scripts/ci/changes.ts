@@ -13,6 +13,10 @@
  *   therefore always means "the files it reads are unchanged since a commit where all of ci
  *   passed", and a red main stays red until it is fixed (decision 30). When no green commit is
  *   found among the last MAIN_HISTORY_LIMIT, or the runs cannot be read, every job runs.
+ *   Before that, a push also asks whether its tree is exactly the tree that the merged pull
+ *   request's ci runs tested (tested-tree.ts, Laysi/trustiot-v2#431): a job that ran and passed in
+ *   every one of those runs is skipped; every other job follows the path rules above. Only
+ *   GitHub API metadata and git decide this, never anything a pull request run produced.
  * - any other event or a git failure: every job runs.
  *
  * Path rules: `rust` is the safe direction. It runs unless every changed file is in a short
@@ -22,15 +26,32 @@
  * DECISION_CODE), ci.yml, the local actions or the tool pins run every job. `gitleaks` and `workflow-policy` do not depend on this script and always run.
  *
  * Usage (in the `changes` job): bun scripts/ci/changes.ts
- * Reads GITHUB_EVENT_NAME, GITHUB_REPOSITORY, GITHUB_API_URL, GITHUB_TOKEN (actions: read, for
- * push events) and the git history (fetch-depth 0); writes GITHUB_OUTPUT and GITHUB_STEP_SUMMARY.
+ * Reads GITHUB_EVENT_NAME, GITHUB_REPOSITORY, GITHUB_API_URL, GITHUB_TOKEN (for push events:
+ * actions, contents, issues and pull-requests read) and the git history (fetch-depth 0); writes
+ * GITHUB_OUTPUT and GITHUB_STEP_SUMMARY.
  * Exit status: always 0 once the outputs are written; problems turn into "run everything".
+ *
+ * Read-only explanation of the decision for a main commit, with real API data (writes nothing):
+ *   GITHUB_TOKEN=<token with read access> bun scripts/ci/changes.ts --explain <commit on main>
+ * The commit and its history must be in the local clone (`git fetch origin main` first);
+ * GITHUB_REPOSITORY defaults to Laysi/trustiot-v2. Exit status 2 on a usage error.
  */
 
 import { appendFileSync } from "node:fs";
 import { posix, resolve } from "node:path";
 
 import { CI_WORKFLOW_PATH, newestMainCiRun, parseWorkflowRuns, type WorkflowRun } from "../release/lib.ts";
+import {
+  type GitHubReads,
+  isMap,
+  parseCommitTree,
+  parseIssueEventTypes,
+  parseJobs,
+  parseMergeBase,
+  parsePullRequests,
+  type TestedTree,
+  testedTree,
+} from "./tested-tree.ts";
 
 /** The ci.yml jobs whose run depends on the changed paths, by job id. */
 export const PATH_JOBS = ["rust", "cargo-deny", "helm", "host", "postgres-image"] as const;
@@ -46,10 +67,15 @@ export type Decision = Record<PathJob, JobDecision>;
 /**
  * This script and every repository file it imports, directly or through another import: a
  * change to any of them can change the decision, so it runs every job and the new code is
- * tested. `../release/lib.ts` picks the green main commit a push is compared with.
+ * tested. `../release/lib.ts` picks the green main commit a push is compared with, and
+ * `./tested-tree.ts` decides which jobs already passed on the pushed tree.
  * changes.test.ts follows the imports and fails when one is missing here.
  */
-export const DECISION_CODE: ReadonlySet<string> = new Set(["scripts/ci/changes.ts", "scripts/release/lib.ts"]);
+export const DECISION_CODE: ReadonlySet<string> = new Set([
+  "scripts/ci/changes.ts",
+  "scripts/ci/tested-tree.ts",
+  "scripts/release/lib.ts",
+]);
 
 /**
  * Files every path-dependent job depends on: the workflow, its local actions, this script and
@@ -283,9 +309,9 @@ export function pullRequestRange(root: string): Range {
   return { base: parents[0] as string, head };
 }
 
-/** The commits main pointed to before HEAD, newest first: HEAD's first-parent ancestors. */
-export function mainAncestors(root: string, limit = MAIN_HISTORY_LIMIT): string[] {
-  const parents = git(root, ["rev-list", "--parents", "-n", "1", "HEAD"]).trim().split(" ").slice(1);
+/** The commits main pointed to before `head`, newest first: its first-parent ancestors. */
+export function mainAncestors(root: string, limit = MAIN_HISTORY_LIMIT, head = "HEAD"): string[] {
+  const parents = git(root, ["rev-list", "--parents", "-n", "1", head]).trim().split(" ").slice(1);
   if (parents.length === 0) {
     return [];
   }
@@ -293,9 +319,6 @@ export function mainAncestors(root: string, limit = MAIN_HISTORY_LIMIT): string[
     .split("\n")
     .filter((commit) => commit !== "");
 }
-
-/** Lists the recent push runs of ci.yml on main; injected so that tests need no network. */
-export type ListRuns = () => Promise<WorkflowRun[]>;
 
 /** One main commit the search passed over, and why. */
 function notGreen(commit: string, runs: readonly WorkflowRun[]): string {
@@ -345,14 +368,36 @@ export function mainRunsUrl(apiUrl: string, repository: string): string {
   return `${apiUrl.replace(/\/+$/, "")}/repos/${repository}/actions/workflows/${workflow}/runs?${query}`;
 }
 
-/** The GitHub API call behind `ListRuns`. */
-export function githubListRuns(env: Record<string, string | undefined>): ListRuns {
-  return async () => {
+/** The repository the API calls name; the explanation defaults to this one. */
+export const DEFAULT_REPOSITORY = "Laysi/trustiot-v2";
+
+/** One page of results; every list the decision reads must fit in it, or the answer is unknown. */
+const PAGE = 100;
+/** How many pages of a pull request's events are read before the answer counts as unknown. */
+export const ISSUE_EVENT_PAGES = 10;
+
+/**
+ * The GitHub REST calls behind the decision, with GITHUB_TOKEN. Every call reads; every failure
+ * throws, which the callers turn into running the jobs.
+ */
+export function githubReads(env: Record<string, string | undefined>): GitHubReads {
+  const apiUrl = (env.GITHUB_API_URL || "https://api.github.com").replace(/\/+$/, "");
+  const repository = env.GITHUB_REPOSITORY ?? "";
+  const workflow = posix.basename(CI_WORKFLOW_PATH);
+  const sha = (commit: string) => {
+    if (!COMMIT_SHA.test(commit)) {
+      throw new Error(`"${commit}" is not a full commit SHA`);
+    }
+    return commit;
+  };
+
+  /** GET `url`; `what` names the request in the error. */
+  async function request(url: string, what: string): Promise<unknown> {
     const token = env.GITHUB_TOKEN;
     if (!token) {
       throw new Error("GITHUB_TOKEN is not set");
     }
-    const response = await fetch(mainRunsUrl(env.GITHUB_API_URL || "https://api.github.com", env.GITHUB_REPOSITORY ?? ""), {
+    const response = await fetch(url, {
       headers: {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${token}`,
@@ -361,9 +406,44 @@ export function githubListRuns(env: Record<string, string | undefined>): ListRun
       signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) {
-      throw new Error(`listing the ci runs on main failed with HTTP ${response.status}`);
+      throw new Error(`${what} failed with HTTP ${response.status}`);
     }
-    return parseWorkflowRuns(await response.json());
+    return response.json();
+  }
+
+  async function get(path: string, query: Record<string, string> = {}): Promise<unknown> {
+    if (!REPOSITORY.test(repository)) {
+      throw new Error(`"${repository}" is not an owner/name repository`);
+    }
+    const search = new URLSearchParams(query).toString();
+    return request(`${apiUrl}/repos/${repository}/${path}${search === "" ? "" : `?${search}`}`, `GET ${path}`);
+  }
+
+  return {
+    mainRuns: async () => parseWorkflowRuns(await request(mainRunsUrl(apiUrl, repository), "listing the ci runs on main")),
+    pullsOfCommit: async (commit) => parsePullRequests(await get(`commits/${sha(commit)}/pulls`, { per_page: String(PAGE) })),
+    async issueEventTypes(number) {
+      const types: string[] = [];
+      for (let page = 1; page <= ISSUE_EVENT_PAGES; page++) {
+        const events = parseIssueEventTypes(await get(`issues/${number}/events`, { per_page: String(PAGE), page: String(page) }));
+        types.push(...events);
+        if (events.length < PAGE) {
+          return types;
+        }
+      }
+      throw new Error(`pull request #${number} has more than ${ISSUE_EVENT_PAGES * PAGE} events`);
+    },
+    mergeBase: async (base, head) => parseMergeBase(await get(`compare/${sha(base)}...${sha(head)}`, { per_page: "1" })),
+    treeOf: async (commit) => parseCommitTree(await get(`git/commits/${sha(commit)}`), commit),
+    async pullRequestRuns(head) {
+      const body = await get(`actions/workflows/${workflow}/runs`, { event: "pull_request", head_sha: sha(head), per_page: String(PAGE) });
+      const runs = parseWorkflowRuns(body);
+      if (!isMap(body) || typeof body.total_count !== "number" || body.total_count > runs.length) {
+        throw new Error(`the runs of ci.yml for ${head} do not fit in one page`);
+      }
+      return runs;
+    },
+    jobsOf: async (runId) => parseJobs(await get(`actions/runs/${runId}/jobs`, { filter: "latest", per_page: String(PAGE) })),
   };
 }
 
@@ -374,50 +454,72 @@ export interface Plan {
   files: string[];
   /** The commit the files were compared with, and how it was chosen. */
   base?: string;
-  /** Set when every job runs without comparing paths. */
+  /** Set when the path rules run every job without comparing paths. */
   everything?: string;
+  /** For a push: which jobs passed on the same tree in the merged pull request's runs. */
+  tested?: TestedTree<PathJob>;
+}
+
+/** The decision for a push of `head` to main; `head` must be checked out or fetched. */
+async function planPush(root: string, head: string, repository: string, github: GitHubReads): Promise<Plan> {
+  const commit = git(root, ["rev-parse", "--verify", `${head}^{commit}`]).trim();
+  const ancestors = mainAncestors(root, MAIN_HISTORY_LIMIT, commit);
+  if (ancestors.length === 0) {
+    return { decision: runEverything("the pushed commit has no parent"), files: [], everything: "the pushed commit has no parent" };
+  }
+  let runs: WorkflowRun[];
+  try {
+    runs = await github.mainRuns();
+  } catch (error) {
+    const reason = `the ci runs on main cannot be read: ${error instanceof Error ? error.message : String(error)}`;
+    return { decision: runEverything(reason), files: [], everything: reason };
+  }
+  const tested = await testedTree(root, commit, repository, PATH_JOBS, runs, github);
+
+  // The path rules, compared with the newest green main commit.
+  let byPath: Plan;
+  const green = newestGreen(ancestors, runs);
+  if ("problem" in green) {
+    byPath = { decision: runEverything(green.problem), files: [], everything: green.problem };
+  } else {
+    const how =
+      "the newest main commit whose ci passed" + (green.passedOver.length > 0 ? `; passed over ${green.passedOver.join(", ")}` : "");
+    const files = changedFiles(root, green.commit, commit);
+    byPath = { decision: decide(files), files, base: `${green.commit} (${how})` };
+  }
+
+  if (!tested.applies) {
+    return { ...byPath, tested };
+  }
+  const runIds = tested.runs.map((run) => run.id).join(", ");
+  const decision = Object.fromEntries(
+    PATH_JOBS.map((job): [PathJob, JobDecision] =>
+      tested.passed.includes(job)
+        ? [job, { run: false, reason: `passed in run ${runIds} of pull request #${tested.pullRequest} on the same tree` }]
+        : [job, byPath.decision[job]],
+    ),
+  ) as Decision;
+  return { ...byPath, decision, tested };
 }
 
 /** Decides for the current workflow run; never throws, every problem runs everything. */
-export async function plan(root: string, env: Record<string, string | undefined>, listRuns: ListRuns): Promise<Plan> {
+export async function plan(root: string, env: Record<string, string | undefined>, github: GitHubReads): Promise<Plan> {
   const everything = (reason: string): Plan => ({ decision: runEverything(reason), files: [], everything: reason });
   const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
   try {
     const eventName = env.GITHUB_EVENT_NAME ?? "";
-    const head = git(root, ["rev-parse", "HEAD"]).trim();
-    let base: string;
-    let how: string;
-    if (eventName === "pull_request") {
-      const range = pullRequestRange(root);
-      if ("everything" in range) {
-        return everything(range.everything);
-      }
-      base = range.base;
-      how = "the tip of the base branch (first parent of the merge commit)";
-    } else if (eventName === "push") {
-      const ancestors = mainAncestors(root);
-      if (ancestors.length === 0) {
-        return everything("the pushed commit has no parent");
-      }
-      let runs: WorkflowRun[];
-      try {
-        runs = await listRuns();
-      } catch (error) {
-        return everything(`the ci runs on main cannot be read: ${message(error)}`);
-      }
-      const green = newestGreen(ancestors, runs);
-      if ("problem" in green) {
-        return everything(green.problem);
-      }
-      base = green.commit;
-      how =
-        "the newest main commit whose ci passed" +
-        (green.passedOver.length > 0 ? `; passed over ${green.passedOver.join(", ")}` : "");
-    } else {
+    if (eventName === "push") {
+      return await planPush(root, "HEAD", env.GITHUB_REPOSITORY ?? "", github);
+    }
+    if (eventName !== "pull_request") {
       return everything(`the \`${eventName || "unknown"}\` event is not compared by path`);
     }
-    const files = changedFiles(root, base, head);
-    return { decision: decide(files), files, base: `${base} (${how})` };
+    const range = pullRequestRange(root);
+    if ("everything" in range) {
+      return everything(range.everything);
+    }
+    const files = changedFiles(root, range.base, range.head);
+    return { decision: decide(files), files, base: `${range.base} (the tip of the base branch (first parent of the merge commit))` };
   } catch (error) {
     return everything(`the changed files cannot be determined: ${message(error)}`);
   }
@@ -430,14 +532,41 @@ export function outputLines(decision: Decision): string {
 
 const SUMMARY_FILE_LIMIT = 200;
 
-/** The job summary: what runs and why, then the changed files. */
+const cell = (value: string) => value.replaceAll("|", "\\|");
+
+/** The evidence of the tested-tree check, as Markdown lines. */
+function testedTreeLines(tested: TestedTree<PathJob>): string[] {
+  const lines = ["### Same tree as the merged pull request", ""];
+  if (!tested.applies) {
+    lines.push(`Not used: ${tested.reason}.`);
+    return lines;
+  }
+  const runs = tested.runs.map((run) => (run.url === "" ? `${run.id}` : `[${run.id}](${run.url})`)).join(", ");
+  lines.push(
+    `The pushed tree \`${tested.tree}\` is the tree of \`${tested.head}\`, the last head of pull request #${tested.pullRequest}, ` +
+      `which contains the pushed commit's parent \`${tested.parent}\`; so every ci run of that head tested this tree. ` +
+      `Run(s) of that head: ${runs}, all successful.`,
+    "",
+    "| job | in those runs |",
+    "| --- | --- |",
+  );
+  for (const job of PATH_JOBS) {
+    lines.push(`| \`${job}\` | ${tested.passed.includes(job) ? "ran and passed: skipped here" : cell(`${tested.notPassed[job] ?? "?"}: path rules decide`)} |`);
+  }
+  return lines;
+}
+
+/** The job summary: what runs and why, the tested-tree evidence, then the changed files. */
 export function summary(result: Plan): string {
   const lines = ["## Path-dependent jobs", "", "| job | runs | why |", "| --- | --- | --- |"];
   for (const job of PATH_JOBS) {
     const { run, reason } = result.decision[job];
-    lines.push(`| \`${job}\` | ${run ? "yes" : "skipped"} | ${reason.replaceAll("|", "\\|")} |`);
+    lines.push(`| \`${job}\` | ${run ? "yes" : "skipped"} | ${cell(reason)} |`);
   }
   lines.push("", "`gitleaks` and `workflow-policy` always run.", "");
+  if (result.tested !== undefined) {
+    lines.push(...testedTreeLines(result.tested), "");
+  }
   if (result.everything === undefined) {
     lines.push(`Compared with ${result.base ?? "?"}.`, "", `### Changed files (${result.files.length})`, "");
     for (const file of result.files.slice(0, SUMMARY_FILE_LIMIT)) {
@@ -446,23 +575,62 @@ export function summary(result: Plan): string {
     if (result.files.length > SUMMARY_FILE_LIMIT) {
       lines.push(`- ... and ${result.files.length - SUMMARY_FILE_LIMIT} more`);
     }
+  } else {
+    lines.push(`Path rules not compared: ${result.everything}.`);
   }
   return `${lines.join("\n")}\n`;
 }
 
-export async function main(env: Record<string, string | undefined>): Promise<number> {
-  const root = resolve(import.meta.dir, "..", "..");
-  const result = await plan(root, env, githubListRuns(env));
+/** Prints the decision to the log. */
+function report(result: Plan): void {
   if (result.everything !== undefined) {
-    // A notice, not a warning: every job running is always a safe answer.
-    console.log(`::notice title=changes::Every job runs: ${result.everything.replaceAll("\n", " ")}`);
+    // A notice, not a warning: running every job is always a safe answer.
+    console.log(`::notice title=changes::Path rules not compared, they run every job: ${result.everything.replaceAll("\n", " ")}`);
   }
   if (result.base !== undefined) {
     console.log(`compared with ${result.base}: ${result.files.length} changed file(s)`);
   }
+  if (result.tested !== undefined) {
+    console.log(
+      result.tested.applies
+        ? `same tree as pull request #${result.tested.pullRequest} (head ${result.tested.head}, tree ${result.tested.tree}, ` +
+            `run(s) ${result.tested.runs.map((run) => run.id).join(", ")}); passed there: ${result.tested.passed.join(", ") || "none"}`
+        : `same-tree check not used: ${result.tested.reason}`,
+    );
+  }
   for (const job of PATH_JOBS) {
     console.log(`${job}: ${result.decision[job].run ? "runs" : "skipped"} (${result.decision[job].reason})`);
   }
+}
+
+/** `--explain <commit>`: the decision a push of that commit to main gets, from real data. */
+export async function explain(root: string, commit: string, env: Record<string, string | undefined>, github: GitHubReads): Promise<Plan> {
+  const repository = env.GITHUB_REPOSITORY || DEFAULT_REPOSITORY;
+  try {
+    return await planPush(root, commit, repository, github);
+  } catch (error) {
+    const reason = `the changed files cannot be determined: ${error instanceof Error ? error.message : String(error)}`;
+    return { decision: runEverything(reason), files: [], everything: reason };
+  }
+}
+
+export async function main(env: Record<string, string | undefined>, args: readonly string[] = []): Promise<number> {
+  const root = resolve(import.meta.dir, "..", "..");
+  if (args.length > 0) {
+    if (args.length !== 2 || args[0] !== "--explain" || !/^[0-9a-f]{7,40}$/.test(args[1] ?? "")) {
+      console.error("usage: bun scripts/ci/changes.ts [--explain <commit on main>]");
+      return 2;
+    }
+    const repository = env.GITHUB_REPOSITORY || DEFAULT_REPOSITORY;
+    const result = await explain(root, args[1] as string, env, githubReads({ ...env, GITHUB_REPOSITORY: repository }));
+    console.log(`decision for a push of ${args[1]} to ${repository}:main (read-only; nothing is written)`);
+    report(result);
+    console.log("");
+    console.log(summary(result));
+    return 0;
+  }
+  const result = await plan(root, env, githubReads(env));
+  report(result);
   if (env.GITHUB_OUTPUT) {
     appendFileSync(env.GITHUB_OUTPUT, outputLines(result.decision));
   }
@@ -473,5 +641,5 @@ export async function main(env: Record<string, string | undefined>): Promise<num
 }
 
 if (import.meta.main) {
-  process.exit(await main(process.env));
+  process.exit(await main(process.env, Bun.argv.slice(2)));
 }
