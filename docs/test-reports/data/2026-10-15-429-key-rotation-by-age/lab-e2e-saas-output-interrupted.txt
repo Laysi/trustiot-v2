@@ -1,0 +1,84 @@
+bun test v1.4.2 (744846f84)
+
+deploy/chart/tests/e2e/key-rotation.e2e.ts:
+automatic rotation: {"first":{"kid":"oBilzdJKOV9nHm2aeLm-yau1nJdDoEKCFXEApBP1dDw","generation":1,"publishedAt":1792049384},"second":{"kid":"UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc","generation":1,"publishedAt":1792050300,"signsFrom":1792050420},"rotatingJob":"trustiot-identity-key-rotation-29867505","rotatingJobChanges":["generated signing key UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc (generation 1) to replace key oBilzdJKOV9nHm2aeLm-yau1nJdDoEKCFXEApBP1dDw, published 2026-10-15T07:29:44Z, which reached internalIdentity.maxKeyAgeSeconds in Secret trustiot-identity-signing-keys","published the public keys oBilzdJKOV9nHm2aeLm-yau1nJdDoEKCFXEApBP1dDw, UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc in ConfigMap trustiot-internal-identity-keys","published signing key UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc; it signs from 1792050420 (Unix time) in Secret trustiot-identity-signing-keys"],"publishedAfterDueSeconds":16,"assetsLoadedAfterPublishedSeconds":16,"identityPublicKeysLoadedAfterPublishedSeconds":26,"identitySwitchedAfterSignsFromSeconds":1,"oldTokenTakenBeforeSignsFromSeconds":18.8,"oldTokenVerifiedAfterSignsFromSeconds":3.4,"oldTokenAfterSwitch":200,"newToken":{"kid":"UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc","status":200},"probes":{"count":329,"failed":0,"firstAt":1792049435160,"lastAt":1792050453580,"kidsInOrder":["oBilzdJKOV9nHm2aeLm-yau1nJdDoEKCFXEApBP1dDw","UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc"],"failures":[]},"restarts":{"before":{"identity":0,"assets":0},"after":{"identity":0,"assets":0}}}
+retirement: {"job":"trustiot-identity-key-rotation-29867515","retiredAfterRetireAtSeconds":58.8,"assetsDroppedAfterRetireAtSeconds":66,"token":{"kid":"UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc","status":200,"userMatches":true}}
+manual rotation: {"keys":[{"kid":"UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc","generation":1,"published_at":1792050300,"signs_from":1792050420},{"kid":"DUFswTQunMzrKUFFyzjrMgpeXnhyEj-rb_zUxV9i9ow","generation":2,"published_at":1792050921,"signs_from":1792051041}],"upgradeToPublishedSeconds":4.2,"token":{"kid":"DUFswTQunMzrKUFFyzjrMgpeXnhyEj-rb_zUxV9i9ow","status":200,"userMatches":true}}
+revocation: {"revoked":["UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc","DUFswTQunMzrKUFFyzjrMgpeXnhyEj-rb_zUxV9i9ow"],"kid":"b1HZoLrssBjB-5M8HbDfpcd_bDnShi68zYBNExbuFUc","upgradeToPublishedSeconds":5.7,"assetsDroppedAfterPublishedSeconds":14,"token":{"kid":"b1HZoLrssBjB-5M8HbDfpcd_bDnShi68zYBNExbuFUc","status":200,"userMatches":true}}
+Timeout, server <lab host> not responding.
+120 |   });
+121 |   return { code: proc.exitCode ?? -1, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+122 | }
+123 | function run(cmd: string[], stdin?: string): string {
+124 |   const result = exec(cmd, stdin);
+125 |   if (result.code !== 0) throw new Error(`${cmd.slice(0, 6).join(" ")} failed (${result.code}):\n${result.stderr}`);
+                                         ^
+error: ~/.proto/tools/kubectl/1.36.5/kubectl --namespace e2e-429 get secret trustiot-identity-signing-keys failed (1):
+The connection to the server 127.0.0.1:16443 was refused - did you specify the right host or port?
+
+      at run (<worktree>/deploy/chart/tests/e2e/key-rotation.e2e.ts:125:36)
+      at json (<worktree>/deploy/chart/tests/e2e/key-rotation.e2e.ts:132:51)
+      at signingKeys (<worktree>/deploy/chart/tests/e2e/key-rotation.e2e.ts:215:18)
+      at <anonymous> (<worktree>/deploy/chart/tests/e2e/key-rotation.e2e.ts:799:12)
+(fail) rotation of the internal identity key by age (saas shape) > maxKeyAgeSeconds 0 removes the CronJob, and a key past the age is not rotated, not even by a restart [972600.62ms]
+120 |   });
+121 |   return { code: proc.exitCode ?? -1, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+122 | }
+123 | function run(cmd: string[], stdin?: string): string {
+124 |   const result = exec(cmd, stdin);
+125 |   if (result.code !== 0) throw new Error(`${cmd.slice(0, 6).join(" ")} failed (${result.code}):\n${result.stderr}`);
+                                                                                                                        ^
+error: ~/.proto/tools/kubectl/1.36.5/kubectl --namespace e2e-429 get configmap trustiot-internal-identity-keys failed (1):
+The connection to the server 127.0.0.1:16443 was refused - did you specify the right host or port?
+
+      at run (<worktree>/deploy/chart/tests/e2e/key-rotation.e2e.ts:125:115)
+      at <anonymous> (<worktree>/deploy/chart/tests/e2e/key-rotation.e2e.ts:814:18)
+(fail) rotation of the internal identity key by age (saas shape) > no private key is in a log, the ConfigMap or an event [24.21ms]
+484 |       cleanup();
+485 |     } catch (error) {
+486 |       errors.push(String(error));
+487 |     }
+488 |   }
+489 |   if (errors.length) throw new Error(`cleanup failed:\n${errors.join("\n")}`);
+                                                                                  ^
+error: cleanup failed:
+Error: ~/.proto/tools/helm/4.3.0/helm --namespace e2e-429 uninstall trustiot --wait failed (1):
+Error: kubernetes cluster unreachable: Get "https://127.0.0.1:16443/version": dial tcp 127.0.0.1:16443: connect: connection refused
+
+Error: ~/.proto/tools/kubectl/1.36.5/kubectl --namespace e2e-429 delete secret trustiot-identity-password failed (1):
+The connection to the server 127.0.0.1:16443 was refused - did you specify the right host or port?
+The connection to the server 127.0.0.1:16443 was refused - did you specify the right host or port?
+The connection to the server 127.0.0.1:16443 was refused - did you specify the right host or port?
+
+Error: ~/.proto/tools/kubectl/1.36.5/kubectl --namespace e2e-429 delete configmap trustiot-internal-identity-keys failed (1):
+The connection to the server 127.0.0.1:16443 was refused - did you specify the right host or port?
+
+Error: ~/.proto/tools/kubectl/1.36.5/kubectl --namespace e2e-429 delete pvc data-trustiot-clickhouse-0 failed (1):
+The connection to the server 127.0.0.1:16443 was refused - did you specify the right host or port?
+
+Error: ~/.proto/tools/kubectl/1.36.5/kubectl --namespace e2e-429 delete cluster.postgresql.cnpg.io/trustiot-postgres --ignore-not-found failed (1):
+E1015 16:14:02.224457  770177 memcache.go:265] "Unhandled Error" err="couldn't get current server API group list: Get \"https://127.0.0.1:16443/api?timeout=32s\": dial tcp 127.0.0.1:16443: connect: connection refused"
+E1015 16:14:02.224629  770177 memcache.go:265] "Unhandled Error" err="couldn't get current server API group list: Get \"https://127.0.0.1:16443/api?timeout=32s\": dial tcp 127.0.0.1:16443: connect: connection refused"
+E1015 16:14:02.225901  770177 memcache.go:265] "Unhandled Error" err="couldn't get current server API group list: Get \"https://127.0.0.1:16443/api?timeout=32s\": dial tcp 127.0.0.1:16443: connect: connection refused"
+E1015 16:14:02.226042  770177 memcache.go:265] "Unhandled Error" err="couldn't get current server API group list: Get \"https://127.0.0.1:16443/api?timeout=32s\": dial tcp 127.0.0.1:16443: connect: connection refused"
+E1015 16:14:02.227225  770177 memcache.go:265] "Unhandled Error" err="couldn't get current server API group list: Get \"https://127.0.0.1:16443/api?timeout=32s\": dial tcp 127.0.0.1:16443: connect: connection refused"
+The connection to the server 127.0.0.1:16443 was refused - did you specify the right host or port?
+
+Error: ~/.proto/tools/kubectl/1.36.5/kubectl --namespace e2e-429 delete imagecatalog.postgresql.cnpg.io/trustiot-postgres --ignore-not-found failed (1):
+E1015 16:14:02.249300  770187 memcache.go:265] "Unhandled Error" err="couldn't get current server API group list: Get \"https://127.0.0.1:16443/api?timeout=32s\": dial tcp 127.0.0.1:16443: connect: connection refused"
+E1015 16:14:02.249458  770187 memcache.go:265] "Unhandled Error" err="couldn't get current server API group list: Get \"https://127.0.0.1:16443/api?timeout=32s\": dial tcp 127.0.0.1:16443: connect: connection refused"
+E1015 16:14:02.250718  770187 memcache.go:265] "Unhandled Error" err="couldn't get current server API group list: Get \"https://127.0.0.1:16443/api?timeout=32s\": dial tcp 127.0.0.1:16443: connect: connection refused"
+E1015 16:14:02.250844  770187 memcache.go:265] "Unhandled Error" err="couldn't get current server API group list: Get \"https://127.0.0.1:16443/api?timeout=32s\": dial tcp 127.0.0.1:16443: connect: connection refused"
+E1015 16:14:02.252381  770187 memcache.go:265] "Unhandled Error" err="couldn't get current server API group list: Get \"https://127.0.0.1:16443/api?timeout=32s\": dial tcp 127.0.0.1:16443: connect: connection refused"
+The connection to the server 127.0.0.1:16443 was refused - did you specify the right host or port?
+
+Error: ~/.proto/tools/kubectl/1.36.5/kubectl --namespace e2e-429 delete pvc --selector failed (1):
+The connection to the server 127.0.0.1:16443 was refused - did you specify the right host or port?
+
+      at <anonymous> (<worktree>/deploy/chart/tests/e2e/key-rotation.e2e.ts:489:77)
+(fail) (unnamed) [196.30ms]
+
+ 5 pass
+ 3 fail
+ 51 expect() calls
+Ran 8 tests across 1 file. [2662.53s]

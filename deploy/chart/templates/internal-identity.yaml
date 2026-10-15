@@ -10,12 +10,21 @@ publishes keys.
   helm.sh/resource-policy keep leaves it in place after an uninstall, like the Secret;
 - a Role that lets the identity service's ServiceAccount get and patch exactly that Secret and that
   ConfigMap: no create (which cannot be limited by name), no list, watch or delete. Only the init
-  containers of the identity pod mount that ServiceAccount's token. Whoever can patch either object
+  containers of the identity pod and the rotation CronJob below mount that ServiceAccount's token. Whoever can patch either object
   can make every service accept a key of their own, so no other Role of the chart may write
-  ConfigMaps or touch the Secret (chart tests).
+  ConfigMaps or touch the Secret (chart tests);
+- the CronJob that rotates the signing key by age (Laysi/trustiot-v2#429), while
+  internalIdentity.maxKeyAgeSeconds is not 0 and no person's key is being moved over: it runs
+  `migrate identity-signing-keys` with the maximum key age, as the identity service's
+  ServiceAccount and with the same projected token as the init container, so it needs no Role or
+  binding of its own, and it mounts no Secret. Nobody may connect to its pod (an
+  AuthorizationPolicy without rules and a NetworkPolicy without ingress), like the migration Job.
 The values are checked whether or not the identity service is enabled.
 */ -}}
 {{- $keys := include "trustiot.identity.keys" . | fromYaml }}
+{{- if hasKey .Values.services "identity-key-rotation" }}
+{{- fail "services.identity-key-rotation: the name belongs to the CronJob that rotates the internal identity signing key" }}
+{{- end }}
 {{- if include "trustiot.identity.enabled" . }}
 {{- $ctx := dict "root" . "name" "identity" }}
 apiVersion: v1
@@ -70,4 +79,104 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "trustiot.componentName" $ctx }}
     namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- if $keys.rotation }}
+{{- $rotation := dict "root" . "name" "identity-key-rotation" }}
+{{- /* At most 52 characters, not 63: the CronJob controller appends 11 to name each Job. */}}
+{{- $suffix := printf "-%s" $rotation.name }}
+{{- $name := printf "%s%s" (include "trustiot.fullname" . | trunc (int (sub 52 (len $suffix))) | trimSuffix "-") $suffix }}
+{{- $config := include "trustiot.serviceConfig" (dict "root" . "name" "identity" "values" (get .Values.services "identity")) | fromYaml }}
+---
+# Rotates the internal identity signing key once it reached internalIdentity.maxKeyAgeSeconds, on
+# the schedule of a manual rotation, and retires old keys on time (docs/architecture/secrets.md,
+# 「依金鑰年齡自動輪替」). Forbid: one run at a time; a missed run starts within an hour, and the
+# deadline keeps the controller from giving up after 100 missed schedules. Failed Jobs stay for the
+# operator (kubectl get jobs); the identity service logs an ERROR when a key is two days past its
+# rotation.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "trustiot.componentLabels" $rotation | nindent 4 }}
+spec:
+  schedule: {{ $keys.rotationSchedule | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        {{- include "trustiot.componentLabels" $rotation | nindent 8 }}
+    spec:
+      parallelism: 1
+      completions: 1
+      podReplacementPolicy: Failed
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels:
+            {{- $labels := include "trustiot.componentLabels" $rotation | fromYaml }}
+            {{- /* Ambient, like the identity pod whose init container does the same work. */}}
+            {{- $_ := set $labels "istio.io/dataplane-mode" "ambient" }}
+            {{- toYaml $labels | nindent 12 }}
+        spec:
+          {{- /* The identity service's ServiceAccount: its Role above is all the run needs. */}}
+          serviceAccountName: {{ include "trustiot.componentName" (dict "root" . "name" "identity") }}
+          automountServiceAccountToken: false
+          enableServiceLinks: false
+          restartPolicy: Never
+          {{- /* The defaults, like the migration Job's: the identity pod's fsGroup only lets its
+          service read the mounted Secret, which this pod does not mount. */}}
+          securityContext:
+            {{- toYaml .Values.serviceDefaults.podSecurityContext | nindent 12 }}
+          {{- with .Values.global.imagePullSecrets }}
+          imagePullSecrets:
+            {{- range . }}
+            - name: {{ . }}
+            {{- end }}
+          {{- end }}
+          {{- with $config.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $config.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - {{ include "trustiot.identity.keysContainer" (dict "root" . "config" $config "name" "key-rotation" "rotation" true) | indent 14 | trim }}
+          volumes:
+            - {{ include "trustiot.migrate.kubeApiVolume" . | indent 14 | trim }}
+---
+# Nothing connects to the rotation pod: no caller in the mesh (an ALLOW policy without rules
+# refuses every connection) and no port in the NetworkPolicy.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "trustiot.componentLabels" $rotation | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "trustiot.selectorLabels" $rotation | nindent 6 }}
+  action: ALLOW
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "trustiot.componentLabels" $rotation | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "trustiot.selectorLabels" $rotation | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress: []
 {{- end }}

@@ -50,6 +50,11 @@ pub struct Platform {
     /// may differ before the service logs an error. Default 600.
     #[serde(default = "default_propagation_seconds")]
     pub identity_key_propagation_seconds: u64,
+    /// `TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS`: the chart's `internalIdentity.maxKeyAgeSeconds`
+    /// (Laysi/trustiot-v2#429); the service logs an error when its signing key is two days past
+    /// its rotation by age. Default 0: rotation by age is off and nothing is checked.
+    #[serde(default)]
+    pub identity_max_key_age_seconds: u64,
     /// `TRUSTIOT_INGRESS_ROUTES`: the ingress gateway's cookie routes, for the audience.
     pub ingress_routes: IngressRoutes,
     /// `TRUSTIOT_POSTGRES_HOST`.
@@ -131,6 +136,17 @@ impl Validate for Config {
                 format!(
                     "must be between {MIN_KEY_PROPAGATION_SECONDS} and \
                      {MAX_KEY_PROPAGATION_SECONDS} seconds"
+                ),
+            ));
+        }
+        if !i64::try_from(self.platform.identity_max_key_age_seconds)
+            .is_ok_and(|age| age <= identity_keys::MAX_KEY_AGE_SECS)
+        {
+            return Err(Invalid::new(
+                "platform.identity_max_key_age_seconds",
+                format!(
+                    "must be at most {} seconds (365 days); 0 turns the check off",
+                    identity_keys::MAX_KEY_AGE_SECS
                 ),
             ));
         }

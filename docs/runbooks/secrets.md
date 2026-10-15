@@ -9,7 +9,7 @@
 - **外洩或疑似外洩**：立即，依「外洩處理」。
 - **能讀到它的人離開**：維運人員離職或不再負責時，輪替他能讀到的每一項（SOPS 檔案的所有值、他保管的離線備份）。只把他從 SOPS 的收件者移除不夠：他之前解密過的值仍然有效。
 - **到期**：有到期日的 token（GHCR 拉取 token）在到期前 14 天輪替；憑證依 CA 的換發流程（Laysi/trustiot-v2#78）。
-- **定期**：其餘長期金鑰（第三方 API key、內部身分簽章金鑰、SOPS 叢集私鑰）每年至少輪替一次，順便確認本 runbook 仍然可用；每年檢查一次清冊是否與實際一致。內部身分簽章金鑰在叢集內產生，輪替只是調大一個數字（下方「內部身分簽章金鑰」），沒有自動的定期輪替。
+- **定期**：其餘長期金鑰（第三方 API key、內部身分簽章金鑰、SOPS 叢集私鑰）每年至少輪替一次，順便確認本 runbook 仍然可用；每年檢查一次清冊是否與實際一致。內部身分簽章金鑰由叢集依金鑰年齡自動輪替（預設 90 天，Laysi/trustiot-v2#429），不必排進人的定期輪替；每年檢查時確認輪替的 CronJob 最近有成功執行（下方「內部身分簽章金鑰」的「看現況」）。
 
 每次輪替在對應的 issue 或維運紀錄留下：日期、哪一項、誰做的、舊值何時撤銷。不寫任何值。
 
@@ -97,7 +97,8 @@ GHCR 只接受 classic personal access token，所以以專用機器帳號建立
 
 身分服務簽內部身分 token 的 Ed25519 金鑰在叢集內產生、公開與輪替，沒有人建立、看到或複製它（Laysi/trustiot-v2#404；設計、每個失敗情況與為什麼這樣做見 [docs/architecture/secrets.md](../architecture/secrets.md) 的「內部身分簽章金鑰」，欄位見 [deploy/chart/README.md](../../deploy/chart/README.md) 的「內部身分」）：
 
-- 身分服務 pod 的 init container `signing-keys` 在每次身分服務的 pod 啟動時執行，把私鑰放在 Secret `<release>-identity-signing-keys`，公鑰的 JWK Set 放在 ConfigMap `<release>-internal-identity-keys`。只有身分服務的 ServiceAccount 能讀寫這兩個物件，token 只掛進 init container。
+- 身分服務 pod 的 init container `signing-keys` 在每次身分服務的 pod 啟動時執行，把私鑰放在 Secret `<release>-identity-signing-keys`，公鑰的 JWK Set 放在 ConfigMap `<release>-internal-identity-keys`。只有身分服務的 ServiceAccount 能讀寫這兩個物件，token 只掛進 init container 與下面的 CronJob。
+- CronJob `<release>-identity-key-rotation`（Laysi/trustiot-v2#429）依 `internalIdentity.keyRotationSchedule`（預設每天 03:17 UTC）以同一個 ServiceAccount 執行同一個指令：金鑰公開超過 `internalIdentity.maxKeyAgeSeconds`（預設 90 天）時自動輪替，也移除 token 都已過期的舊金鑰。`maxKeyAgeSeconds` 是 0 時沒有這個 CronJob。
 - 每個服務掛這個 ConfigMap，每 5 秒重讀，換公鑰不重啟；身分服務也每 5 秒重讀掛載的 Secret。
 - 下面的 `<namespace>` 與 `<release>` 在 SaaS 是 `trustiot`，指令在主機上以 `sudo k3s kubectl` 執行。值只有 kid（公鑰的 thumbprint）與代，不是祕密；不要讀 Secret 的 `data`。
 
@@ -105,24 +106,33 @@ GHCR 只接受 classic personal access token，所以以專用機器帳號建立
 
 - 公開的公鑰：`kubectl -n <namespace> get configmap <release>-internal-identity-keys -o jsonpath='{.data.jwks\.json}'`，每把的 `kid`。
 - init container 最近一次做了什麼：`kubectl -n <namespace> logs deploy/<release>-identity -c signing-keys`，最後一行 `the internal identity signing keys are in place` 列出每把的 kid、正在簽章的 kid（`signing`）與最早可以移除舊金鑰的時間（`retire_at`，Unix 時間）。
+- 輪替的 CronJob：`kubectl -n <namespace> get cronjob <release>-identity-key-rotation`（`LAST SCHEDULE`、`LAST SUCCESSFUL`）與 `kubectl -n <namespace> get jobs -l app.kubernetes.io/component=identity-key-rotation`（保留最近一個成功、三個失敗的 Job）。最近一次做了什麼：`kubectl -n <namespace> logs job/<job>`，最後一行同樣是 `the internal identity signing keys are in place`，多寫下一次到期的時間（`rotation_due_at`，Unix 時間）；輪替那次另有 `generated signing key <kid> (generation <代>) to replace key <kid>, published <時間>, which reached internalIdentity.maxKeyAgeSeconds`。
 - 身分服務正在用哪一把簽：`kubectl -n <namespace> logs deploy/<release>-identity -c identity | grep 'signing internal identity tokens'`，最後一行的 `kid`。
 - 某個服務的 pod 用哪幾把驗證：`kubectl -n <namespace> logs <pod> | grep 'verifying internal identity tokens with these public keys'`，最後一行的 `keys`。
 
-**定期輪替**：
+**自動輪替**（`maxKeyAgeSeconds` 不是 0，預設）：不必做任何事。金鑰公開超過 `maxKeyAgeSeconds` 之後的第一次 CronJob 執行加一把同一代的新金鑰，照下面手動輪替第 2 到 4 步的同一套排程換掉舊的（先公開、`keyPropagationSeconds` 後才簽章、token 過期後移除），不重啟任何 pod。代不變，所以手動輪替與撤銷照常以 values 的 `keyGeneration` 加一。
+
+**手動輪替**（想立刻換，或關掉了自動輪替）：
 
 1. 把 values 的 `internalIdentity.keyGeneration` 加一（SaaS 改 `deploy/flux/clusters/saas/trustiot/values-instance.yaml`，地端改安裝實例的覆寫檔），升級。只有身分服務滾動重啟；第一個新 pod 的 init container 產生新金鑰，先公開公鑰，記下新金鑰在 `internalIdentity.keyPropagationSeconds`（預設 600 秒）之後才開始簽章。
 2. 確認 init container 的日誌有 `generated signing key <kid> (generation <新的代>)` 與 `published the public keys …`，ConfigMap 同時列出新舊兩把。
 3. `keyPropagationSeconds` 之後，身分服務每個副本的日誌有 `signing internal identity tokens` 與新的 kid。服務不必做任何事：它們已經在重讀檔案時換上了新舊兩把。
-4. 舊金鑰在它簽的 token 全部過期之後（新金鑰開始簽章再過 `keyPropagationSeconds` 加 305 秒）的下一次身分服務啟動時移除，通常是下一次發版。想當場移除時，過了 init container 日誌寫的 `retire_at` 之後執行 `kubectl -n <namespace> rollout restart deployment/<release>-identity`；不移除也不影響安全，舊私鑰沒有外洩。
+4. 舊金鑰在它簽的 token 全部過期之後（新金鑰開始簽章再過 `keyPropagationSeconds` 加 305 秒）的下一次身分服務啟動或輪替 CronJob 的下一次執行（預設一天內）時移除。想當場移除時，過了 init container 日誌寫的 `retire_at` 之後執行 `kubectl -n <namespace> rollout restart deployment/<release>-identity`；不移除也不影響安全，舊私鑰沒有外洩。
 
-代只往上走：`helm rollback` 或 Flux 升級失敗後的 rollback 渲染出較小的值時，init container 不產生、也不換金鑰（身分服務因為 pod template 改變而重啟一次），之後再升級回來也不換。
+代只往上走：`helm rollback` 或 Flux 升級失敗後的 rollback 渲染出較小的值時，init container 不產生、也不換金鑰（身分服務因為 pod template 改變而重啟一次），之後再升級回來也不換；自動輪替照樣以 Secret 裡最高的代加金鑰。
+
+**自動輪替失敗或沒在跑**：失敗不影響服務，現有的金鑰繼續簽章。
+
+- Job 失敗（`kubectl get jobs` 的 `STATUS` 是 `Failed`）：`kubectl -n <namespace> logs job/<job>` 的 ERROR `the internal identity signing keys are not in place` 寫出原因，處理方式與 init container 相同（例如 Secret 被刪見下方「Secret 遺失」）。修好之後等下一次排程，或立刻執行一次：`kubectl -n <namespace> create job <release>-identity-key-rotation-manual --from=cronjob/<release>-identity-key-rotation`，完成後刪掉這個 Job。
+- CronJob 沒在跑（被 `suspend`、映像拉不到、控制器停擺）時沒有 Job 失敗。身分服務在正在簽章的金鑰公開超過 `maxKeyAgeSeconds + keyPropagationSeconds + 2 天` 時記一次 ERROR `the internal identity signing key is older than internalIdentity.maxKeyAgeSeconds allows …`（日誌管線會送進 SIEM）；看 `kubectl -n <namespace> describe cronjob <release>-identity-key-rotation` 的事件與 `.spec.suspend`。
+- 要關掉自動輪替：`internalIdentity.maxKeyAgeSeconds: 0` 再升級（CronJob 被移除，身分服務滾動重啟一次，不換金鑰），之後改回手動輪替。
 
 **私鑰外洩（撤銷）**：
 
 1. 把 `internalIdentity.revokeBeforeGeneration` 設成新的一代，`keyGeneration` 調到不小於它（例如目前是 3：兩者都設成 4；chart 檢查 `keyGeneration` 不小於 `revokeBeforeGeneration`），升級。init container 從 Secret 與 ConfigMap 移除代比它小的每一把，新金鑰立即開始簽章；新的身分服務 pod 從環境變數拿到這個值，不會用被撤銷的金鑰簽章，在 kubelet 把新金鑰交給它之前不就緒。
 2. 等身分服務滾動完成：`kubectl -n <namespace> rollout status deployment/<release>-identity`。這時每個身分服務的副本都只用新金鑰簽章。
 3. 逐一確認每個驗證內部身分的服務 pod（`kubectl -n <namespace> get pods`，身分服務與每個 TrustIoT 服務）都換上了新的公鑰：上面「看現況」的最後一行 `keys` 不再有被撤銷的 kid。kubelet 正常在 1 到 2 分鐘內更新每個 pod 的檔案（2026-10-15 lab 的 k3s 實測 3.9 到 84.4 秒，[測試報告](../test-reports/2026-10-15-404-identity-keys-in-cluster.md)），但沒有保證的上限。超過幾分鐘還沒換的 pod 直接刪掉（`kubectl -n <namespace> delete pod <pod>`），或 `kubectl -n <namespace> rollout restart deployment/<release>-<服務>`，再對取代它的 pod 做同樣的檢查。每個 pod 都換過之前，外洩的金鑰簽的 token 仍可能被還沒換的 pod 接受。
-4. `revokeBeforeGeneration` 之後留著不改，也不會再撤銷什麼（之後的代都不比它小）。依「外洩處理」找出私鑰怎麼外洩：能讀它的只有身分服務的 ServiceAccount、排了身分服務 pod 的節點，以及 namespace 裡能讀 Secret 的主體。
+4. `revokeBeforeGeneration` 之後留著不改，也不會再撤銷什麼（之後的代都不比它小）。依「外洩處理」找出私鑰怎麼外洩：能讀它的只有身分服務的 ServiceAccount、排了身分服務 pod 或輪替 CronJob 的 pod 的節點，以及 namespace 裡能讀 Secret 的主體。自動輪替產生的金鑰與它同一代，撤銷照樣移除它們。
 
 撤銷期間已更新與還沒更新的 pod 認的金鑰不同，一部分請求會被拒絕（401），換取外洩的金鑰盡快失效。
 

@@ -7,9 +7,9 @@
 | `ingress.e2e.ts` | 入口 gateway：cookie 驗證、例外路徑、標頭、路徑繞過、身分服務停機 | Laysi/trustiot-v2#62 |
 | `mesh.e2e.ts` | 服務間授權：清單內的呼叫放行、清單外的被拒，AuthorizationPolicy 與 NetworkPolicy 各自生效，預設拒絕下健康檢查通過 | Laysi/trustiot-v2#63 |
 
-`otel.e2e.ts`（日誌管線，Laysi/trustiot-v2#73）、`postgres.e2e.ts`（叢集內的 Postgres，Laysi/trustiot-v2#58）、`postgres-replication.e2e.ts`（叢集內 Postgres 的複寫、備份與還原，Laysi/trustiot-v2#400）、`clickhouse-admin.e2e.ts`（叢集內 ClickHouse 的管理帳號密碼，Laysi/trustiot-v2#403）與 `identity-keys.e2e.ts`（內部身分簽章金鑰，Laysi/trustiot-v2#404）不經入口 gateway，有自己的環境變數，不用 `cluster.ts`，見最後五節。
+`otel.e2e.ts`（日誌管線，Laysi/trustiot-v2#73）、`postgres.e2e.ts`（叢集內的 Postgres，Laysi/trustiot-v2#58）、`postgres-replication.e2e.ts`（叢集內 Postgres 的複寫、備份與還原，Laysi/trustiot-v2#400）、`clickhouse-admin.e2e.ts`（叢集內 ClickHouse 的管理帳號密碼，Laysi/trustiot-v2#403）、`identity-keys.e2e.ts`（內部身分簽章金鑰，Laysi/trustiot-v2#404）與 `key-rotation.e2e.ts`（依金鑰年齡自動輪替，Laysi/trustiot-v2#429）不經入口 gateway，有自己的環境變數，不用 `cluster.ts`，見最後六節。
 
-身分服務（或它的替身）啟用時，chart 在它的 pod 加上 init container `signing-keys`，以 migrate 映像在叢集內產生內部身分簽章金鑰（Laysi/trustiot-v2#404），所以每個啟用 `identity` 的測試都要 migrate 映像（`E2E_MIGRATE_IMAGE`，建法見「叢集內的 Postgres」）。它填的 Secret `<release>-identity-signing-keys` 與 ConfigMap `<release>-internal-identity-keys` 在 uninstall 時保留（`helm.sh/resource-policy: keep`）；`cluster.ts` 與 `postgres.e2e.ts` 移除這次執行建立的那兩個物件，安裝前已經存在的不動。
+身分服務（或它的替身）啟用時，chart 在它的 pod 加上 init container `signing-keys`，以 migrate 映像在叢集內產生內部身分簽章金鑰（Laysi/trustiot-v2#404），所以每個啟用 `identity` 的測試都要 migrate 映像（`E2E_MIGRATE_IMAGE`，建法見「叢集內的 Postgres」）。它填的 Secret `<release>-identity-signing-keys` 與 ConfigMap `<release>-internal-identity-keys` 在 uninstall 時保留（`helm.sh/resource-policy: keep`）；`cluster.ts` 與 `postgres.e2e.ts` 移除這次執行建立的那兩個物件，安裝前已經存在的不動。chart 同時渲染依金鑰年齡輪替的 CronJob（Laysi/trustiot-v2#429，同一個 migrate 映像，預設每天 03:17 UTC、金鑰 90 天才到期），測試期間不會換金鑰。
 
 ## 入口 gateway（`ingress.e2e.ts`）
 
@@ -108,7 +108,7 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/ingress.e2e.ts
 
 1. 兩層都在：清單內的呼叫與入口放行，清單外的與 imposter 全部被拒；所有 pod 就緒、沒有重啟（預設拒絕下 kubelet 的健康檢查照常通過）。
 2. 刪掉服務的 AuthorizationPolicy（入口的 cookie 驗證與 `/internal` 拒絕保留）：imposter 通過（確認 AuthorizationPolicy 已失效），清單外的呼叫仍全部被 NetworkPolicy 拒絕，清單內的與入口照常放行。
-3. 再刪掉 release 的所有 NetworkPolicy：outsider 連得到入口 pod，清單外的呼叫全部成功，證明前後階段被拒是政策造成的，不是呼叫本身有問題。
+3. 再刪掉 release 的所有 NetworkPolicy（依金鑰年齡輪替的 CronJob 的 NetworkPolicy 與 AuthorizationPolicy 除外：沒有人呼叫它的 pod，四個階段都不動這兩個，安裝後只確認它們在）：outsider 連得到入口 pod，清單外的呼叫全部成功，證明前後階段被拒是政策造成的，不是呼叫本身有問題。
 4. 以 `helm get manifest` 的內容重建 AuthorizationPolicy、NetworkPolicy 仍刪除：清單外的呼叫與 imposter 全部被 AuthorizationPolicy 拒絕，清單內的與入口照常放行。
 5. 重建 NetworkPolicy，回到安裝時的狀態：再檢查一次呼叫與 pod 健康狀態。
 
@@ -360,7 +360,7 @@ bun test --timeout 900000 ./deploy/chart/tests/e2e/clickhouse-admin.e2e.ts
 
 ## 內部身分簽章金鑰（`identity-keys.e2e.ts`）
 
-`identity-keys.e2e.ts` 驗證內部身分簽章金鑰在叢集內產生、公開、輪替與撤銷（Laysi/trustiot-v2#404，設計在 [docs/architecture/secrets.md](../../../../docs/architecture/secrets.md) 的「內部身分簽章金鑰」）。以 `E2E_SHAPE` 的型態加 `values-identity-keys-e2e.yaml` 一次安裝叢集內的 Postgres、ClickHouse、migration Job、從這個 commit 建出的身分服務，以及在 assets 位置的 `crates/service-kit` example service（`GET /v1/whoami` 驗證給 assets 的內部身分 token，不用資料庫）；沒有任何東西事先建立金鑰，`internalIdentity.keyPropagationSeconds` 是 schema 的下限 120 秒。依序檢查：
+`identity-keys.e2e.ts` 驗證內部身分簽章金鑰在叢集內產生、公開、輪替與撤銷（Laysi/trustiot-v2#404，設計在 [docs/architecture/secrets.md](../../../../docs/architecture/secrets.md) 的「內部身分簽章金鑰」）。以 `E2E_SHAPE` 的型態加 `values-identity-keys-e2e.yaml` 一次安裝叢集內的 Postgres、ClickHouse、migration Job、從這個 commit 建出的身分服務，以及在 assets 位置的 `crates/service-kit` example service（`GET /v1/whoami` 驗證給 assets 的內部身分 token，不用資料庫）；沒有任何東西事先建立金鑰，`internalIdentity.keyPropagationSeconds` 是 schema 的下限 120 秒。`internalIdentity.maxKeyAgeSeconds` 設成 0，不渲染依金鑰年齡輪替的 CronJob（它由下一節的 `key-rotation.e2e.ts` 測）：這個測試檢查的是 init container，而每天 03:17 UTC 的排程如果剛好落在「移除舊金鑰」的等待與重啟之間，會在重啟之前就移除舊金鑰。依序檢查：
 
 - **全新安裝**：身分服務 pod 的 init container 產生一把代 1 的金鑰，Secret `<release>-identity-signing-keys` 只有 `signing-keys.json`、綁定自己的 uid、帶 `keep` 與 `trustiot.io/filled-by: migrate`；ConfigMap `<release>-internal-identity-keys` 只有 `jwks.json`，列出同一個 kid（RFC 7638 thumbprint），每把只有公開的成員；第一把立即簽章（`signs_from` 等於 `published_at`）。以 `kubectl exec` 在 primary 建立一個平台管理者與它的 session（同 nightly 的 API 檢查），經 `kubectl port-forward` 向身分服務的 ext_authz 要一個給 assets 路由的 token，example service 接受它（200，使用者相符）。記錄每個 pod 在金鑰公開之後多久啟動、載入金鑰（日誌）與就緒。
 - **權限**：namespace 的每個 ServiceAccount 以 `kubectl auth can-i --as` 問 Secret 與 ConfigMap 的 `get`、`patch`、`update`、`delete`，以及兩種物件的 `create`、`list`、`watch`：只有身分服務的 ServiceAccount 對這兩個物件的 `get` 與 `patch` 是 yes。
@@ -405,3 +405,31 @@ bun test --timeout 3600000 ./deploy/chart/tests/e2e/identity-keys.e2e.ts
 | `E2E_RELEASE` | `trustiot` | helm release 名稱 |
 | `E2E_REPORT_DIR` | 空 | 設定時把每一步的 kid、代、時間與 token 的結果（沒有任何金鑰或 token）寫成 `identity-keys-e2e-<shape>.json` |
 | `E2E_KEEP` | 空 | `1` 時測完不移除任何東西，方便查看 |
+
+## 依金鑰年齡自動輪替（`key-rotation.e2e.ts`）
+
+`key-rotation.e2e.ts` 驗證依金鑰年齡自動輪替（Laysi/trustiot-v2#429，設計在 [docs/architecture/secrets.md](../../../../docs/architecture/secrets.md) 的「依金鑰年齡自動輪替」）。安裝與 `identity-keys.e2e.ts` 相同（同一份 `values-identity-keys-e2e.yaml`、同樣四個映像），另外設 `internalIdentity.maxKeyAgeSeconds=900`（比 chart 允許的下限 545 秒多 355 秒，讓 CronJob 移除舊金鑰、example service 換上新的一組都在新金鑰到期之前完成，之後的手動輪替不會碰上進行中的自動輪替）與 `keyRotationSchedule="* * * * *"`（每分鐘一次）。依序檢查：
+
+- **CronJob 的形狀與權限**：CronJob 以身分服務的 ServiceAccount 執行，不掛 Secret、不從 Secret 讀環境變數；namespace 的每個 ServiceAccount 以 `kubectl auth can-i --as` 問 Secret 與 ConfigMap 的 `get`、`patch`、`update`、`delete` 與兩種物件的 `create`、`list`、`watch`，仍然只有身分服務的 ServiceAccount 的 `get`、`patch` 是 yes。金鑰公開之後的第一次執行不改任何東西，日誌的 `rotation_due_at` 是 `published_at + 900`。
+- **自動輪替**：測試持續（每 2 秒）向身分服務要 token、交給 example service 驗證，經兩個一直連著同一個 pod 的 port-forward。金鑰滿 900 秒之後的一次執行加一把同一代（代 1）的新金鑰，`signs_from` 比 `published_at` 晚 120 秒，ConfigMap 列出兩把，那次執行的日誌寫出 `to replace key <舊 kid>`；在 `signs_from` 前 20 秒取得的舊 kid token，在身分服務改用新金鑰之後仍被接受；新 token 是新 kid、被接受；兩個 pod 都沒有重啟；持續的請求沒有一次失敗，kid 只從舊的換到新的一次。
+- **CronJob 移除舊金鑰**：在新金鑰的 `signs_from + 120 + 305` 秒之後，CronJob 的一次執行（不是重啟）從 Secret 與 ConfigMap 移除舊金鑰，example service 不重啟就換成只有新的一把。
+- **自動輪替開著時的手動輪替**（`keyGeneration=2`）：產生一把代 2 的金鑰，`signs_from` 晚 120 秒，之後的 token 是它的 kid、被接受（升級的 init container 與 CronJob 可能同時執行，兩種先後都只會多出一把代 2）。
+- **自動輪替開著時的撤銷**（`keyGeneration=3`、`revokeBeforeGeneration=3`）：自動產生的代 1 金鑰與代 2 都被移除，只剩代 3、立即簽章；example service 換上新的一組，token 被接受。
+- **`maxKeyAgeSeconds: 0`**：升級後 CronJob 不存在，身分服務的 `TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS` 是 0；等到金鑰超過 900 秒再多 90 秒，金鑰沒有換；再重啟身分服務（init container 不依年齡輪替），仍然沒有換。
+- **沒有私鑰外流**：每一把私鑰都不在 ConfigMap、事件、身分服務（含 init container）與 example service 的日誌，以及測試期間讀到的每一次 CronJob 執行的日誌；每一次執行都成功。
+
+開始前同名的 release 或保留的物件已存在時直接失敗；結束時移除 release 與這些物件（同 `identity-keys.e2e.ts`）。整個測試約 55 分鐘，大多在等金鑰到期與舊金鑰的移除時間。只讀的 kubectl 指令在連不上 API server 時每 5 秒重試、最多 5 分鐘（經 SSH 轉送連 lab 時網路可能中斷一陣子），改變叢集的指令不重試。前置條件與 `identity-keys.e2e.ts` 相同（上一節）。
+
+執行（在 repo 根目錄）：
+
+```sh
+E2E_NAMESPACE=e2e-429 \
+E2E_POSTGRES_IMAGE=localhost/trustiot-e2e/postgres:429 \
+E2E_IDENTITY_IMAGE=localhost/trustiot-e2e/identity:429 \
+E2E_SERVICE_IMAGE=localhost/trustiot-e2e/example-service:429 \
+E2E_MIGRATE_IMAGE=localhost/trustiot-e2e/migrate:429 \
+E2E_IMAGE_PULL_POLICY=Never \
+bun test --timeout 3600000 ./deploy/chart/tests/e2e/key-rotation.e2e.ts
+```
+
+環境變數與 `identity-keys.e2e.ts` 相同（上一節的表），只有 `E2E_REPORT_DIR` 寫出的檔名是 `key-rotation-e2e-<shape>.json`（kid、代、時間、每次 CronJob 執行的變更與 token 的結果，沒有任何金鑰或 token）。

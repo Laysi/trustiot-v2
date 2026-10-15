@@ -9,10 +9,14 @@ import {
   accessQuestions,
   BOUND_UID_ANNOTATION,
   identityKeyObjectsOf,
+  jobOutcome,
   PUBLIC_KEYS_KEY,
   publishedAt,
   publishedKeysOf,
   readerPods,
+  ROTATION_COMPONENT,
+  ROTATION_JOB_SUFFIX,
+  rotationCronJobOf,
   SECRET_SUMMARY_TEMPLATE,
   secretSummaryProblems,
   SIGNING_KEYS_KEY,
@@ -178,5 +182,66 @@ describe("how long the services took to become ready", () => {
         readyAt: Date.parse("2026-10-15T10:01:30Z"),
       },
     ]);
+  });
+});
+
+describe("the rotation CronJob (Laysi/trustiot-v2#429)", () => {
+  for (const shape of discoverShapes(CHART_DIR)) {
+    test(`values-${shape.name}.yaml: the CronJob runs as the identity service's account and mounts no Secret`, async () => {
+      const helm = await pinnedTool("helm", REPO_ROOT);
+      const render = (...extra: string[]) => {
+        const cmd = [helm, "template", "trustiot", CHART_DIR, "--namespace", `nightly-${shape.name}`, ...valuesArgs(CHART_DIR, shape), "--set", "services.identity.enabled=true", ...extra];
+        const rendered = Bun.spawnSync({ cmd, stdout: "pipe", stderr: "pipe", timeout: COMMAND_TIMEOUT_MS });
+        throwIfTimedOut(cmd, rendered);
+        expect(rendered.exitCode, rendered.stderr.toString()).toBe(0);
+        return parseManifests(rendered.stdout.toString());
+      };
+      const objects = render();
+      expect(rotationCronJobOf(objects, identityKeyObjectsOf(objects))).toEqual({
+        cronJob: { name: `${RELEASE}-${ROTATION_COMPONENT}`, serviceAccount: OBJECTS.serviceAccount },
+        problems: [],
+      });
+      // The Job the smoke creates fits the 63 characters of a name.
+      expect(`${RELEASE}-${ROTATION_COMPONENT}${ROTATION_JOB_SUFFIX}`.length).toBeLessThanOrEqual(63);
+      const off = render("--set", "internalIdentity.maxKeyAgeSeconds=0");
+      expect(rotationCronJobOf(off, identityKeyObjectsOf(off))).toEqual({ problems: [] });
+    }, SLOW_TEST_MS);
+  }
+
+  const cronJob = (pod: Record<string, unknown>) => ({
+    kind: "CronJob",
+    metadata: { name: "trustiot-identity-key-rotation", labels: { "app.kubernetes.io/component": ROTATION_COMPONENT } },
+    spec: { jobTemplate: { spec: { template: { spec: pod } } } },
+  });
+  const good = {
+    serviceAccountName: OBJECTS.serviceAccount,
+    automountServiceAccountToken: false,
+    containers: [{ name: "key-rotation" }],
+    volumes: [{ name: "migrate-kube-api", projected: { sources: [{ serviceAccountToken: { path: "token" } }] } }],
+  };
+
+  test("a CronJob that strays from the design is reported", () => {
+    expect(rotationCronJobOf([cronJob(good)], OBJECTS).problems).toEqual([]);
+    const cases: [Record<string, unknown>, string][] = [
+      [{ ...good, serviceAccountName: "trustiot-assets" }, "runs as trustiot-assets"],
+      [{ ...good, serviceAccountName: undefined }, "runs as the default ServiceAccount"],
+      [{ ...good, automountServiceAccountToken: true }, "mounts the default token"],
+      [{ ...good, containers: [{ name: "a" }, { name: "b" }] }, "more than its one container"],
+      [{ ...good, volumes: [{ name: "keys", secret: { secretName: OBJECTS.secret } }] }, "mounts a Secret"],
+      [{ ...good, containers: [{ name: "a", env: [{ name: "K", valueFrom: { secretKeyRef: { name: "x", key: "y" } } }] }] }, "reads a Secret"],
+    ];
+    for (const [pod, problem] of cases) {
+      expect(rotationCronJobOf([cronJob(pod)], OBJECTS).problems.join("; ")).toContain(problem);
+    }
+  });
+
+  test("a Job's outcome", () => {
+    expect(jobOutcome({ status: { active: 1 } })).toBeUndefined();
+    expect(jobOutcome({ status: { succeeded: 1 } })).toEqual({ done: "succeeded", reason: "" });
+    expect(
+      jobOutcome({
+        status: { failed: 3, conditions: [{ type: "Failed", status: "True", reason: "BackoffLimitExceeded", message: "Job has reached the specified backoff limit" }] },
+      }),
+    ).toEqual({ done: "failed", reason: "BackoffLimitExceeded: Job has reached the specified backoff limit" });
   });
 });

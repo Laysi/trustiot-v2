@@ -13,6 +13,9 @@
 //! - A Secret someone else created or restored is not trusted, and its foreign metadata goes.
 //! - A person's key (before Laysi/trustiot-v2#404) is imported under its key id.
 //! - Missing objects and refused access stop the run with the way out.
+//! - The rotation CronJob (Laysi/trustiot-v2#429, `max_key_age_seconds`) adds a key once the
+//!   newest has reached the maximum age and rotates it in on the same schedule, and races with an
+//!   init container that asks for a new generation the way two init containers do.
 //!
 //! No report, error or `Debug` output holds a private key.
 
@@ -391,6 +394,7 @@ async fn a_secret_not_filled_by_the_init_container_is_not_trusted() {
             generation: 9,
             revoke_before: 0,
             legacy: None,
+            max_key_age: None,
         };
         let mut keys = SigningKeys::default()
             .plan(&request, T0, |generation| {
@@ -598,4 +602,194 @@ async fn the_set_never_grows_past_eight_keys() {
     assert_eq!(keys.keys().len(), 2);
     assert_eq!(keys.keys()[1].generation(), 9);
     assert_eq!(published(&fake), kids(&keys));
+}
+
+/// The maximum key age of the rotation CronJob's runs in these tests: 30 days.
+const MAX_AGE: i64 = 30 * 86_400;
+
+/// The rotation CronJob's settings: the init container's plus the maximum key age.
+fn cron_settings(fake: &FakeSecrets, generation: &str) -> KeySettings {
+    let mut settings = settings(fake, generation);
+    settings.max_key_age_seconds = u64::try_from(MAX_AGE).expect("positive");
+    settings
+}
+
+/// Acceptance (Laysi/trustiot-v2#429): the CronJob replaces a key that reached the maximum age on
+/// the schedule of a manual rotation, writes nothing before, and retires the old key on time.
+#[tokio::test]
+async fn the_cronjob_rotates_a_key_that_reached_the_maximum_age() {
+    let fake = fake().await;
+    converge(&settings(&fake, "1"), T0).await;
+    let old = kids(&stored_keys(&fake)).remove(0);
+
+    // Not due yet: nothing written.
+    let due = T0 + MAX_AGE;
+    let before = patches(&fake);
+    let report = converge(&cron_settings(&fake, "1"), due - 1).await;
+    assert!(report.changes.is_empty(), "{:?}", report.changes);
+    assert_eq!(patches(&fake), before);
+    // The init container's run (no maximum age) never rotates by age.
+    let report = converge(&settings(&fake, "1"), due + 86_400).await;
+    assert!(report.changes.is_empty(), "{:?}", report.changes);
+
+    // Due: a new key of the same generation, published first, signing after the propagation.
+    let report = converge(&cron_settings(&fake, "1"), due).await;
+    let keys = stored_keys(&fake);
+    assert_eq!(keys.keys().len(), 2);
+    let new = keys.keys()[1].kid().to_owned();
+    assert_eq!(keys.keys()[1].generation(), 1);
+    assert_eq!(keys.keys()[1].published_at(), Some(due));
+    assert_eq!(keys.keys()[1].signs_from(), Some(due + PROPAGATION));
+    assert_eq!(published(&fake), [old.clone(), new.clone()]);
+    assert_eq!(signer(&keys, due + PROPAGATION - 1), Some(old.clone()));
+    assert_eq!(signer(&keys, due + PROPAGATION), Some(new.clone()));
+    assert_eq!(
+        report.changes.first().map(String::as_str),
+        Some(
+            format!(
+                "generated signing key {new} (generation 1) to replace key {old}, published \
+                 2026-10-10T00:00:00Z, which reached internalIdentity.maxKeyAgeSeconds in Secret \
+                 {SECRET}"
+            )
+            .as_str()
+        )
+    );
+    assert_no_private_key(&fake, &texts(&report));
+
+    // The next runs before the old key's tokens have expired change nothing; the first after
+    // retires it.
+    let retire_at = due + 2 * PROPAGATION + TOKEN_EXPIRY_SECS;
+    let report = converge(&cron_settings(&fake, "1"), retire_at - 1).await;
+    assert!(report.changes.is_empty(), "{:?}", report.changes);
+    let report = converge(&cron_settings(&fake, "1"), retire_at).await;
+    assert_eq!(kids(&stored_keys(&fake)), std::slice::from_ref(&new));
+    assert_eq!(published(&fake), std::slice::from_ref(&new));
+    assert!(
+        report
+            .changes
+            .iter()
+            .any(|change| change.starts_with(&format!("retired signing key {old}"))),
+        "{:?}",
+        report.changes
+    );
+}
+
+/// Acceptance (Laysi/trustiot-v2#429): a manual bump and a revocation still work after automatic
+/// rotations, from the CronJob's runs as from the init container's.
+#[tokio::test]
+async fn manual_rotation_and_revocation_work_with_rotation_by_age_on() {
+    let fake = fake().await;
+    converge(&settings(&fake, "1"), T0).await;
+    let due = T0 + MAX_AGE;
+    converge(&cron_settings(&fake, "1"), due).await;
+    let automatic = kids(&stored_keys(&fake));
+    assert_eq!(automatic.len(), 2);
+
+    // A manual bump to generation 2, run by the CronJob before the identity pod restarts.
+    let bump = due + PROPAGATION + 10;
+    converge(&cron_settings(&fake, "2"), bump).await;
+    let keys = stored_keys(&fake);
+    assert_eq!(keys.keys().len(), 3);
+    assert_eq!(keys.keys()[2].generation(), 2);
+    assert_eq!(keys.keys()[2].signs_from(), Some(bump + PROPAGATION));
+
+    // A revocation of generation 1 removes both keys of generation 1, the automatic one too.
+    let mut revoking = cron_settings(&fake, "3");
+    revoking.revoke_before_generation = "2".to_owned();
+    let revoke = bump + 30;
+    let report = converge(&revoking, revoke).await;
+    let keys = stored_keys(&fake);
+    assert!(keys.keys().iter().all(|key| key.generation() >= 2));
+    for kid in &automatic {
+        assert!(!kids(&keys).contains(kid), "{kid} survived the revocation");
+        assert!(
+            report
+                .changes
+                .iter()
+                .any(|change| change.starts_with(&format!("revoked signing key {kid}"))),
+            "{:?}",
+            report.changes
+        );
+    }
+    // The waiting key of generation 2 never signed and makes way for generation 3, which signs
+    // at once, as after any revocation.
+    assert_eq!(keys.keys().len(), 1);
+    assert_eq!(keys.keys()[0].generation(), 3);
+    assert_eq!(published(&fake), kids(&keys));
+    assert_eq!(signer(&keys, revoke), Some(keys.keys()[0].kid().to_owned()));
+}
+
+/// The CronJob writes its new key into the Secret; before it publishes it, an init container that
+/// asks for generation 2 (a manual bump) replaces that key, which never signed, with its own. The
+/// CronJob finds the Secret changed, reads it again, sees a rotation under way and adds nothing:
+/// it never publishes its own key, and the init container's key stays.
+#[tokio::test]
+async fn the_cronjob_and_an_init_container_with_a_new_generation_at_once() {
+    let fake = fake().await;
+    converge(&settings(&fake, "1"), T0).await;
+    let (secret_one, config_map_one) = (fake.get(SECRET), fake.config_map(CONFIG_MAP));
+    let first = kids(&stored_keys(&fake));
+    let due = T0 + MAX_AGE;
+
+    // What the init container leaves: the CronJob's step 1 (here stopped by a missing ConfigMap),
+    // then the init container's whole run.
+    fake.delete_config_map(CONFIG_MAP);
+    run_at(&cron_settings(&fake, "1"), due)
+        .await
+        .expect_err("no ConfigMap");
+    let waiting = stored_keys(&fake);
+    assert_eq!(waiting.keys().len(), 2);
+    assert!(waiting.has_unpublished());
+    fake.declare_config_map(CONFIG_MAP);
+    fake.edit_config_map(CONFIG_MAP, |config_map| {
+        *config_map = config_map_one.clone().expect("the ConfigMap");
+    });
+    converge(&settings(&fake, "2"), due + 5).await;
+    let (secret_two, config_map_two) = (fake.get(SECRET), fake.config_map(CONFIG_MAP));
+    let bumped = stored_keys(&fake);
+    assert_eq!(kids(&bumped)[0], first[0]);
+    assert_eq!(bumped.keys().len(), 2);
+    assert_eq!(bumped.keys()[1].generation(), 2);
+    assert!(!kids(&bumped).contains(&waiting.keys()[1].kid().to_owned()));
+
+    // Back to before both; the init container acts between the CronJob's write of the Secret and
+    // its read of the ConfigMap.
+    fake.edit(SECRET, |secret| *secret = secret_one.expect("the Secret"));
+    fake.edit_config_map(CONFIG_MAP, |config_map| {
+        *config_map = config_map_one.expect("the ConfigMap");
+    });
+    fake.before_next(
+        &format!(
+            "GET /api/v1/namespaces/{}/configmaps/",
+            support::secrets::NAMESPACE
+        ),
+        move |secrets, config_maps| {
+            secrets.insert(SECRET.to_owned(), secret_two.expect("the Secret"));
+            config_maps.insert(
+                CONFIG_MAP.to_owned(),
+                config_map_two.expect("the ConfigMap"),
+            );
+        },
+    );
+    let report = converge(&cron_settings(&fake, "1"), due).await;
+    let keys = stored_keys(&fake);
+    assert!(keys.same_as(&bumped), "{keys:?}");
+    assert_eq!(published(&fake), kids(&bumped));
+    // It did generate a key before the init container acted, then let it go unpublished.
+    assert!(
+        report
+            .changes
+            .iter()
+            .any(|change| change.contains("to replace key")),
+        "{:?}",
+        report.changes
+    );
+    assert!(
+        !report
+            .changes
+            .iter()
+            .any(|change| change.starts_with("published signing key")),
+        "{:?}",
+        report.changes
+    );
 }

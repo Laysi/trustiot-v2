@@ -489,6 +489,29 @@ describe("pods", () => {
     expect(problems).toContain("slow: a container is not ready");
     expect(restartsOf(list).get("crash")).toBe(4);
   });
+
+  test("a run of the rotation CronJob in progress is fine, a failed or broken one is not", () => {
+    const run = (name: string, status: Record<string, unknown>) => ({
+      metadata: { name, labels: { "app.kubernetes.io/component": "identity-key-rotation" } },
+      status,
+    });
+    const list = {
+      items: [
+        run("starting", { phase: "Pending", containerStatuses: [{ name: "key-rotation", ready: false, state: { waiting: { reason: "ContainerCreating" } } }] }),
+        run("running", { phase: "Running", containerStatuses: [{ name: "key-rotation", ready: false, restartCount: 0 }] }),
+        run("done", { phase: "Succeeded" }),
+        run("failed", { phase: "Failed" }),
+        run("pull", { phase: "Pending", containerStatuses: [{ name: "key-rotation", ready: false, state: { waiting: { reason: "ImagePullBackOff" } } }] }),
+        // The same phase in a service's pod is still a problem.
+        pod("service", { phase: "Pending" }),
+      ],
+    };
+    expect(podProblems(list).map((p) => `${p.pod}: ${p.problem}`)).toEqual([
+      "failed: phase Failed",
+      "pull: key-rotation is waiting: ImagePullBackOff",
+      "service: phase Pending",
+    ]);
+  });
 });
 
 describe("the chart as deployed by the nightly", () => {

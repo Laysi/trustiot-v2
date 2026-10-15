@@ -45,7 +45,7 @@
 chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md](../../deploy/chart/README.md)：
 
 - values 只以名稱引用 Secret，values 沒有明文密鑰。
-- chart 不渲染任何密鑰值。它可以宣告空的 Secret，由叢集內的元件填入；目前只有 tools/migrate 的程式：migration Job（下方「migration Job 產生的密碼」）、叢集內 ClickHouse 的 init container（下方「叢集內 ClickHouse 管理帳號的密碼」）與身分服務的 init container（下方「內部身分簽章金鑰」）。除了兩種 shape 的渲染，chart 也以每個可選元件都開啟的設定渲染：`values.yaml` 每個布林的 `enabled` 都設為 `true`，`values.schema.json` 每個 `mode` 的每個值各渲染一次，兩種 shape 涵蓋 `global.deploymentMode` 與 `ingress.exposure`；開關從 values 與 schema 讀出，新增的元件自動涵蓋（2026-10-14 起，Laysi/trustiot-v2#398）。渲染結果交給 `check-secret-handling.ts` 的同一條規則（每個 kind 都寫成 `kind: <Kind>`，Secret 只能是 tools/migrate 填的空 Secret），`scripts/ci/check-secret-handling.ts` 變動時也會觸發這個測試。測試檢查渲染出的每個 Secret 都沒有 `data`、`stringData`，都是 Job、ClickHouse 或身分服務的 init container 填入的那幾個，metadata 逐欄等於預期（名稱、chart 的標準標籤加 `trustiot.io/filled-by: migrate`、annotation 只有 `helm.sh/resource-policy: keep` 與說明；chart 不渲染 tools/migrate 自己寫的 annotation）；Job 的 Role 對 `secrets` 只有它填的那幾個的 `get`、`patch` 與 ClickHouse 管理帳號 Secret 的 `get`，ClickHouse 的 Role 只有它自己那一個的 `get`、`patch`，身分服務的 Role 只有簽章金鑰的 Secret 與公鑰 ConfigMap 的 `get`、`patch`，都以 `resourceNames` 限定；chart 的其他 Role 都不碰 `secrets`，也不能寫 `configmaps`。
+- chart 不渲染任何密鑰值。它可以宣告空的 Secret，由叢集內的元件填入；目前只有 tools/migrate 的程式：migration Job（下方「migration Job 產生的密碼」）、叢集內 ClickHouse 的 init container（下方「叢集內 ClickHouse 管理帳號的密碼」）與身分服務的 init container 及金鑰輪替的 CronJob（下方「內部身分簽章金鑰」）。除了兩種 shape 的渲染，chart 也以每個可選元件都開啟的設定渲染：`values.yaml` 每個布林的 `enabled` 都設為 `true`，`values.schema.json` 每個 `mode` 的每個值各渲染一次，兩種 shape 涵蓋 `global.deploymentMode` 與 `ingress.exposure`；開關從 values 與 schema 讀出，新增的元件自動涵蓋（2026-10-14 起，Laysi/trustiot-v2#398）。渲染結果交給 `check-secret-handling.ts` 的同一條規則（每個 kind 都寫成 `kind: <Kind>`，Secret 只能是 tools/migrate 填的空 Secret），`scripts/ci/check-secret-handling.ts` 變動時也會觸發這個測試。測試檢查渲染出的每個 Secret 都沒有 `data`、`stringData`，都是 Job、ClickHouse 或身分服務的 init container 填入的那幾個，metadata 逐欄等於預期（名稱、chart 的標準標籤加 `trustiot.io/filled-by: migrate`、annotation 只有 `helm.sh/resource-policy: keep` 與說明；chart 不渲染 tools/migrate 自己寫的 annotation）；Job 的 Role 對 `secrets` 只有它填的那幾個的 `get`、`patch` 與 ClickHouse 管理帳號 Secret 的 `get`，ClickHouse 的 Role 只有它自己那一個的 `get`、`patch`，身分服務的 Role 只有簽章金鑰的 Secret 與公鑰 ConfigMap 的 `get`、`patch`，都以 `resourceNames` 限定；chart 的其他 Role 都不碰 `secrets`，也不能寫 `configmaps`。
 
 ### migration Job 產生的密碼
 
@@ -74,16 +74,16 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
 
 ### 內部身分簽章金鑰
 
-身分服務簽內部身分 token 的 Ed25519 金鑰對（決策 27）在叢集內產生，沒有人建立、看到、複製或輪替它；公鑰自動交給每個服務，服務不重啟就換上新的公鑰（2026-10-15 設計，Laysi/trustiot-v2#404；取代人以 `openssl genpkey` 建立私鑰、SaaS 以 SOPS 保存、把公鑰手寫進 `internalIdentity.publicKeys` 的做法）。
+身分服務簽內部身分 token 的 Ed25519 金鑰對（決策 27）在叢集內產生，沒有人建立、看到、複製或輪替它；公鑰自動交給每個服務，服務不重啟就換上新的公鑰（2026-10-15 設計，Laysi/trustiot-v2#404；取代人以 `openssl genpkey` 建立私鑰、SaaS 以 SOPS 保存、把公鑰手寫進 `internalIdentity.publicKeys` 的做法）。正在簽章的金鑰超過 `internalIdentity.maxKeyAgeSeconds`（預設 90 天）時，叢集自動輪替它（2026-10-15 設計，Laysi/trustiot-v2#429，下方「依金鑰年齡自動輪替」）。
 
 - **放在哪裡**：
   - 私鑰：chart 宣告的空 Secret `<release>-identity-signing-keys`（`templates/passwords.yaml`，metadata 與上兩節的 Secret 相同：`trustiot.io/filled-by: migrate`、`helm.sh/resource-policy: keep`）。key `signing-keys.json` 是一份 JSON，列出目前的每一把金鑰：kid、代、Ed25519 私鑰、公開的時間 `published_at` 與開始簽章的時間 `signs_from`（還沒公開的金鑰沒有這兩個時間）。kid 是公鑰的 RFC 7638 thumbprint（SHA-256，base64url，43 個字元）；從人建立的私鑰匯入的金鑰保留原本的 kid（下方「從人建立的私鑰搬過來」）。
   - 公鑰：chart 宣告的空 ConfigMap `<release>-internal-identity-keys`（`templates/internal-identity.yaml`，同樣的標籤與 `keep`）。key `jwks.json` 是 RFC 7517 的 JWK Set，只有公開的成員（`kty`、`crv`、`kid`、`x`、`alg`、`use`）。它一律由 Secret 推出：Secret 裡有哪幾把金鑰，ConfigMap 就列哪幾把的公鑰，不多也不少。
   - 兩者的 `data` 都不屬於 Helm（渲染結果沒有 `data`），升級與 rollback 都不動它們；uninstall 後留下，重新安裝時沿用。
-- **誰產生、誰讀得到**：身分服務 pod 的 init container `signing-keys`（migration 映像的 `migrate identity-signing-keys`，在 `wait-for-migrations` 之前執行，因為它不需要資料庫）以身分服務 ServiceAccount 的 1 小時 projected token 讀寫這兩個物件。
+- **誰產生、誰讀得到**：身分服務 pod 的 init container `signing-keys`（migration 映像的 `migrate identity-signing-keys`，在 `wait-for-migrations` 之前執行，因為它不需要資料庫）以身分服務 ServiceAccount 的 1 小時 projected token 讀寫這兩個物件。依金鑰年齡輪替的 CronJob `<release>-identity-key-rotation`（Laysi/trustiot-v2#429）以同一個 ServiceAccount 執行同一個指令，不另外授權（下方「依金鑰年齡自動輪替」）。
   - Role `<release>-identity-signing-keys` 只讓身分服務的 ServiceAccount 對這一個 Secret 與這一個 ConfigMap `get`、`patch`（`resourceNames`）；沒有 `create`（無法以名稱限制）、`list`、`watch`、`delete`。
   - 身分服務的主容器沒有 token：`automountServiceAccountToken: false`，chart 對身分服務強制，設成 `true` 就渲染失敗。它只以唯讀 volume 讀這個 Secret（`/etc/trustiot/identity-signing-keys/signing-keys.json`，0440，只有 root 與 pod 的 fsGroup 讀得到，與現行相同）。
-  - 其他 pod 都不掛這個 Secret，自訂 `env` 也不能讀它（它在 `trustiot.dependencySecretNames`），chart 的其他 Role 都不碰它。所以讀得到私鑰的只有身分服務的 ServiceAccount，以及排了身分服務 pod 的節點的 kubelet（node authorizer 讓 kubelet 讀它的 pod 用到的 Secret，與現行相同）。chart 測試證明這點：以每個可選元件都開啟的設定渲染，檢查每個 Role、ClusterRole、RoleBinding 與每個 pod spec；nightly 另以 `kubectl auth can-i` 對 namespace 裡的每個 ServiceAccount 確認。私鑰不出現在 values、渲染結果、日誌、事件與測試報告。
+  - 其他 pod 都不掛這個 Secret（輪替的 CronJob 也不掛，它經 API 讀寫），自訂 `env` 也不能讀它（它在 `trustiot.dependencySecretNames`），chart 的其他 Role 都不碰它。所以讀得到私鑰的只有身分服務的 ServiceAccount，以及排了身分服務 pod 的節點的 kubelet（node authorizer 讓 kubelet 讀它的 pod 用到的 Secret，與現行相同）；輪替的 CronJob 執行期間，排了它的節點的 kubelet 也持有身分服務 ServiceAccount 的 token（下方「依金鑰年齡自動輪替」）。chart 測試證明這點：以每個可選元件都開啟的設定渲染，檢查每個 Role、ClusterRole、RoleBinding 與每個 pod spec；nightly 另以 `kubectl auth can-i` 對 namespace 裡的每個 ServiceAccount 確認。私鑰不出現在 values、渲染結果、日誌、事件與測試報告。
   - 能 patch 這個 ConfigMap，就能讓每個服務接受自選的公鑰，等於能偽造任何人的內部身分，所以它和 patch 那個 Secret 一樣只給身分服務的 ServiceAccount。namespace 裡其他能 patch ConfigMap 或 Secret 的 Role 或 ClusterRole，都要當成能偽造內部身分來審查。
 
   比較過的做法：
@@ -93,7 +93,7 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
   | 身分服務 pod 的 init container（採用） | 身分服務的 ServiceAccount，token 只掛進 init container | 私鑰只有身分服務的 ServiceAccount 碰得到。處理外來 cookie 與請求的主容器沒有 token：它被攻破時攻擊者拿得到當下的私鑰（任何做法都一樣），但不能把自選的金鑰寫進 Secret 或 ConfigMap、在輪替之後留下來。規則與程式和叢集內 ClickHouse 管理帳號的密碼相同（`tools/migrate/src/passwords.rs` 的綁定 uid、帶 `resourceVersion` 的 patch）。身分服務的 pod 本來就每次發版都重啟（`wait-for-migrations`）、只有 arm64 映像，沒有新的取捨。代價是它只在身分服務的 pod 啟動時執行，所以舊金鑰要等下一次身分服務啟動才移除 |
   | migration Job | Job 的 ServiceAccount | Job 能讀寫 Secret 就讀得到私鑰（patch 的回應也帶 `data`），違反「只有身分服務讀得到」；Job 還以 owner 角色執行 SQL、讀 ClickHouse 管理帳號的密碼，是又一個能拿到私鑰的工作負載 |
   | 身分服務的主容器 | 身分服務的 ServiceAccount，token 掛進主容器 | 主容器被攻破時，攻擊者拿到能 patch 這兩個物件的 token，可以把自己的公鑰寫進 ConfigMap，換金鑰也趕不走；也違反規則 5「服務沒有 ServiceAccount token」 |
-  | 另一個常駐的控制器或 CronJob | 它自己的 ServiceAccount，或借用身分服務的 | 又一個持有私鑰的工作負載。它的用處只有讓舊金鑰準時移除；簽章的切換已經以時間寫進資料（下方「輪替」），不需要它 |
+  | 另一個常駐的控制器或 CronJob | 它自己的 ServiceAccount，或借用身分服務的 | 又一個持有私鑰的工作負載。Laysi/trustiot-v2#404 時它的用處只有讓舊金鑰準時移除；簽章的切換已經以時間寫進資料（下方「輪替」），不需要它。Laysi/trustiot-v2#429 為了依年齡輪替加上一個借用身分服務 ServiceAccount 的 CronJob，取捨見下方「依金鑰年齡自動輪替」；產生第一把金鑰與人發起的輪替仍由 init container 做 |
 
 - **公鑰怎麼交給服務**：每個服務的 pod 以唯讀 volume 掛這個 ConfigMap（`/etc/trustiot/internal-identity/`，掛整個 ConfigMap、不用 `subPath`，`optional: true`），平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` 指向其中的 `jwks.json`，取代放 JWK Set 本身的 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`。ConfigMap 改變後，kubelet 在下一次定期同步 pod 時更新掛載的檔案，整個目錄以 symlink 原子替換，讀到的不是舊的一份就是新的一份（`subPath` 掛載不會更新，所以不用）。service-kit 每 5 秒重讀這個檔案，內容是合法的 JWK Set 就整組換上，記一行 INFO 與 kid，所以服務拿到新公鑰不必重啟。
   - 還沒有任何公鑰時（全新安裝，init container 還沒填入，或 kubelet 還沒更新檔案）：服務照常啟動，但 `/readyz` 回 503、不接流量，拿到第一組才就緒。
@@ -111,9 +111,37 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
     - 移除舊金鑰：那個 pod 多接受舊金鑰一段時間；舊金鑰沒有外洩，不影響安全。
     - 撤銷：那個 pod 在檔案更新之前仍接受外洩的金鑰，這是唯一影響安全的情況，所以撤銷的步驟由人逐一確認每個 pod（下方「私鑰外洩」）。
   - **私鑰比公鑰先到**：第 1 步把私鑰寫進 Secret 比第 2 步公開公鑰早，所以正常情況下到 `signs_from` 時，每個身分服務的副本也都已經拿到新私鑰。還沒拿到的副本繼續用舊的一把，舊的一把那時還公開著；它的 Secret 更新慢到超過下面移除舊金鑰的時間，它簽的 token 才會被已更新的服務拒絕（401，只影響可用性）。
-  - **舊公鑰保留到它簽的 token 全部過期之後**：新金鑰開始簽章後，舊金鑰簽的 token 最晚在 `signs_from` 之後 305 秒失效。305 秒是驗證端接受的最長效期 300 秒加 5 秒時鐘誤差（`crates/service-kit` 的 `MAX_LIFETIME_SECS`、`LEEWAY_SECS`），不靠身分服務實際簽的 60 秒，所以身分服務的效期改了（上限 300 秒）也成立。init container 在 `signs_from + keyPropagationSeconds + 305 秒` 之後的第一次執行（下一次發版，或任何身分服務的 pod 啟動）從 Secret 與 ConfigMap 移除比新金鑰舊的每一把；多等一個 `keyPropagationSeconds`，是給 Secret 更新得慢的副本換金鑰的餘裕。舊公鑰因此常常留得比必要的久，這不影響安全：舊私鑰沒有外洩，也只有身分服務讀得到。
+  - **舊公鑰保留到它簽的 token 全部過期之後**：新金鑰開始簽章後，舊金鑰簽的 token 最晚在 `signs_from` 之後 305 秒失效。305 秒是驗證端接受的最長效期 300 秒加 5 秒時鐘誤差（`crates/service-kit` 的 `MAX_LIFETIME_SECS`、`LEEWAY_SECS`），不靠身分服務實際簽的 60 秒，所以身分服務的效期改了（上限 300 秒）也成立。init container 在 `signs_from + keyPropagationSeconds + 305 秒` 之後的第一次執行（下一次發版，或任何身分服務的 pod 啟動；開了自動輪替時，也包括 CronJob 的下一次執行，預設一天內）從 Secret 與 ConfigMap 移除比新金鑰舊的每一把；多等一個 `keyPropagationSeconds`，是給 Secret 更新得慢的副本換金鑰的餘裕。舊公鑰因此常常留得比必要的久，這不影響安全：舊私鑰沒有外洩，也只有身分服務讀得到。
   - 新金鑰還在等 `signs_from` 時又調大一代：那一把沒簽過任何 token，直接換成新的一把，重新計時。Secret 最多 8 把（service-kit 接受的上限），超過時 init container 失敗並寫出最早可以移除的時間。
   - 全新安裝，或沒有任何還能用的金鑰時（下面的資料遺失與撤銷），新金鑰立即開始簽章（`signs_from = published_at`），因為沒有舊金鑰可以撐過等待。全新安裝時，pod 建立時掛上的是 init container 填入之前的空內容，kubelet 同步這個 pod 時才換成新的內容；身分服務的 init container 在 `wait-for-migrations` 之前執行，主容器與服務都等 migration Job 完成才啟動，所以通常一啟動就讀到，沒有的話等 kubelet 下一次更新（正常不超過一個同步週期）才就緒。2026-10-15 lab 的 k3s 實測（兩種 shape）：公開之後 23 到 27 秒（等 migration Job）主容器啟動，身分服務 1 秒內開始簽章、25 到 28 秒就緒；資產服務 27.4 到 29.9 秒載入公鑰（on-prem 那次在啟動後 5.9 秒才讀到）、28 到 31 秒就緒。
+- **依金鑰年齡自動輪替**（2026-10-15 設計，Laysi/trustiot-v2#429）：正在簽章的金鑰公開超過 `internalIdentity.maxKeyAgeSeconds`（預設 7776000 秒，即 90 天；0 關閉）時，叢集自動加一把新金鑰，照上面「輪替」的同一套排程換掉它：先公開，`keyPropagationSeconds` 之後才簽章，舊金鑰在它簽的 token 全部過期後移除。沒有人要記得去換（內部祕密不靠人處理），外洩而沒被發現的金鑰可被利用的時間也有了上限。
+  - **觸發：CronJob**。chart 的 CronJob `<release>-identity-key-rotation` 依 `internalIdentity.keyRotationSchedule`（預設每天一次 `17 3 * * *`，時區 `Etc/UTC`）執行 migration 映像的 `migrate identity-signing-keys`：與 init container 同一個指令、同一份程式，「誰在何時簽章、何時移除」都由 `crates/identity-keys` 決定，只多一個設定 `TRUSTIOT__KEYS__MAX_KEY_AGE_SECONDS`。它以身分服務的 ServiceAccount 執行，token 以與 init container 相同的 1 小時 projected volume 掛進它唯一的容器，所以不新增任何 ServiceAccount、Role 或 RoleBinding；它不掛 Secret，經 API 讀寫。比較過的觸發方式：
+
+    | 觸發 | 取捨 |
+    | --- | --- |
+    | CronJob（採用） | 不依賴 pod 重啟：地端好幾個月不升級、身分服務也沒重啟，照樣輪替。舊金鑰也在過期後的下一次執行就移除，不必等身分服務重啟。代價是又一個在記憶體裡拿到私鑰的 pod（Laysi/trustiot-v2#404 不採用 CronJob 的理由）：它與 init container 同一個 ServiceAccount、映像與程式，執行完就結束（通常幾秒），沒有人能連進它（下面「網路」），所以拿得到私鑰的主體沒有變多。變多的是節點：排了這個 pod 的節點的 kubelet 在 pod 執行期間持有身分服務 ServiceAccount 的 token（1 小時），與排了身分服務 pod 的節點相同 |
+    | 身分服務 pod 的 init container 在啟動時檢查年齡 | 不多一個工作負載，但只在 pod 啟動時執行：地端長期不升級、身分服務也沒重啟時金鑰永遠不換，年齡沒有上限，達不到目的 |
+    | 身分服務的主容器自己輪替 | 主容器要有能 patch Secret 與 ConfigMap 的 token，違反上面「主容器沒有 token」的理由：被攻破時能把自選的金鑰寫進去 |
+
+  - **何時到期**：年齡從最新一把的 `published_at` 起算。每一把都已經開始簽章（沒有還沒公開或還在等 `signs_from` 的金鑰，也就是沒有進行中的輪替），而且最新一把的 `published_at + maxKeyAgeSeconds` 已到時「到期」，那次執行加一把新金鑰；沒到期時只做移除與撤銷。所以一把金鑰最多簽 `maxKeyAgeSeconds` 加一個排程間隔（預設一天）再加執行的時間。
+  - **範圍**：`maxKeyAgeSeconds` 是 0，或介於 `2 × keyPropagationSeconds + 305` 秒與 31536000 秒（365 天）之間（chart 渲染時與 `migrate` 讀設定時都檢查）。下限保證到期時上一把舊金鑰的移除時間（新金鑰的 `published_at + 2 × keyPropagationSeconds + 305`，上方「舊公鑰保留到……」）已經過了，同一次執行就移除它，所以 Secret 平常兩把、移除前最多三把，碰不到 8 把的上限。要更久就設 0，改由人調大 `keyGeneration`。
+  - **代**：自動輪替的新金鑰沿用 Secret 裡最高的代，不另外加一，所以代仍然只由 values 決定：
+    - values 的 `keyGeneration` 是下限：不會產生比它小的代；`helm rollback` 渲染出較小的值時，自動輪替照樣以 Secret 裡最高的代加金鑰，代不往回走。
+    - 人調大 `keyGeneration` 一定大於 Secret 裡的每一把，照上面「輪替」產生新的一代，與自動輪替做過幾次無關。
+    - 撤銷 `revokeBeforeGeneration = N + 1` 一次移除第 N 代以前的每一把，包括自動輪替產生的。
+
+    如果自動輪替把代加一，人看不到目前的代（只有身分服務的 ServiceAccount 讀得到 Secret，ConfigMap 不記代），手動輪替要先查出目前的代，依 values 算出的 `revokeBeforeGeneration` 也會漏掉自動產生的金鑰，撤銷無聲地失效，所以不採用。
+  - **同時執行**：CronJob 與 init container（身分服務升級或重啟）同時執行，或兩次 CronJob 同時執行時，與兩個 init container 同時執行相同（上方「失敗情況」）：每一步都是帶 `resourceVersion` 的 patch，只有一個成功，另一個收到 409，重讀後重新決定。例如 CronJob 剛加了一把還沒公開的金鑰時，人調大 `keyGeneration` 的升級啟動了 init container：init container 把那把（沒簽過任何 token）換成新的一代，CronJob 重讀後看到進行中的輪替，不再加金鑰，只把公開補完。CronJob 以 `concurrencyPolicy: Forbid` 避免自己重疊，`startingDeadlineSeconds: 3600` 讓控制器停機很久之後不會因為錯過超過 100 次而停止排程。uid 綁定照舊：不是 init container 或 CronJob 填過的 Secret 一律不信任。
+  - **人改 values 時**：`keyGeneration`、`revokeBeforeGeneration` 與 `keyPropagationSeconds` 同時交給 CronJob 與 init container，所以 CronJob 在身分服務重啟之前執行，也做同一件事。改 `maxKeyAgeSeconds` 不換金鑰，但身分服務會滾動重啟一次（下面的逾期檢查用這個值）；改小到已經到期時，下一次執行就輪替。改排程只改 CronJob。
+  - **不渲染 CronJob 的情況**：`maxKeyAgeSeconds` 是 0、身分服務沒有啟用，或還在從人建立的私鑰搬過來（設了 `signingKeySecret`，那段期間不能換金鑰，下方「從人建立的私鑰搬過來」，第 2 步之後才開始依年齡輪替）。
+  - **網路**：pod 以 `istio.io/dataplane-mode: ambient` 加入 mesh，與身分服務的 pod 相同，連 API server 的方式也與 init container 相同（API server 在 mesh 之外，ztunnel 直接放行；chart 的 NetworkPolicy 只管 ingress）。沒有人能連進它：沒有規則的 AuthorizationPolicy、`ingress: []` 的 NetworkPolicy，加上 namespace 的 default deny。它的 pod 沒有身分服務的 selector 標籤，所以只認身分服務 pod 的 NetworkPolicy（例如 Postgres 的）也不讓它連。
+  - **維運人員看得到什麼**：
+    - 每次執行在 Job 的日誌記一行 `the internal identity signing keys are in place`，寫出每把的 kid、正在簽章的 kid、最早可以移除舊金鑰的時間（`retire_at`）與下一次到期的時間（`rotation_due_at`）。輪替時多一行 `generated signing key <kid> (generation <代>) to replace key <kid>, published <RFC 3339 時間>, which reached internalIdentity.maxKeyAgeSeconds`，接著是公開與排程的變更。只有 kid、代與時間，沒有金鑰。
+    - 失敗時程式以 1 結束，ERROR 寫出原因（與 init container 相同的訊息，例如 Secret 不見、API 拒絕）；Job 重試兩次仍失敗就是 Failed，CronJob 保留最近三個失敗的 Job（`kubectl get jobs`）與事件。失敗不影響服務：現有的金鑰繼續簽章，下一次排程再試。
+    - CronJob 根本沒在跑時（被 suspend、映像拉不到、控制器停擺）沒有 Job 會失敗，所以身分服務自己檢查：正在簽章的金鑰的 `published_at` 已超過 `maxKeyAgeSeconds + keyPropagationSeconds + 2 天` 時記一次 ERROR（`the internal identity signing key is older than internalIdentity.maxKeyAgeSeconds allows …`），換了金鑰之後才會再記。2 天容許每天一次的排程失敗一次。排程必須每天至少一次：schema 只接受 `@daily`、`@midnight`、`@hourly` 與日、月、星期三欄都是 `*` 的 cron，否則金鑰會比 `maxKeyAgeSeconds` 多用好幾週，這行 ERROR 也會誤報。這行日誌與其他日誌一樣經日誌管線送進 SIEM。
+    - nightly 在全新安裝上以 `kubectl create job --from=cronjob/…` 執行 CronJob 一次，確認它以身分服務的 ServiceAccount 執行、不掛 Secret、成功結束，而且沒有換金鑰（還沒到期），所以 chart、權限或網路規則的退化在合併前就看得到（[CI 與發佈](ci-release.md) 的 nightly）。
+  - **驗證**（2026-10-15，[測試報告](../test-reports/2026-10-15-429-key-rotation-by-age.md)）：`crates/identity-keys` 測到期的邊界、代的下限、撤銷涵蓋自動金鑰、進行中的輪替不到期與最短年齡的連續輪替；`tools/migrate/tests/signing_keys.rs` 對假的 Secret API 測 CronJob 的輪替與移除、自動輪替開著時的手動輪替與撤銷，以及 CronJob 與 init container 同時執行；chart 測試證明 CronJob 不新增權限、不掛 Secret、沒有人能連進它，schema 拒絕比每天一次稀疏的排程。lab 的 k3s（`deploy/chart/tests/e2e/key-rotation.e2e.ts`，`maxKeyAgeSeconds` 900、每分鐘執行）：到期後 3 秒新金鑰公開，持續請求 327 次 0 次失敗，切換前取得的舊 token 在切換後仍被接受，沒有 pod 重啟；CronJob 在 `retire_at` 之後 57.3 秒移除舊金鑰；手動輪替與撤銷照常；`maxKeyAgeSeconds: 0` 時金鑰超過上限、身分服務重啟也沒有換。
+  - **不做的事**：不加隨機延遲、不錯開多個安裝（各自的 Secret，彼此不相干）；不另做 metric 或告警（chart 還沒有 Prometheus，ERROR 日誌與 Job 失敗是現有的訊號）；init container 不依年齡輪替（只有一個觸發，推理較單純；它照舊做第一把金鑰、手動輪替、撤銷與移除）；不涵蓋外部 IdP 與使用者登入的金鑰。
 - **私鑰外洩（撤銷）**：把 `internalIdentity.revokeBeforeGeneration` 設成一個新的代，`keyGeneration` 調到不小於它（chart 檢查），升級。init container 從 Secret 與 ConfigMap 移除代比它小的每一把；因為沒有還能用的金鑰了，新金鑰立即開始簽章。
   - 撤銷不是瞬間生效：每個 pod 在 kubelet 更新它掛的檔案（加上 5 秒的重讀）之後才拒絕外洩的金鑰，正常情況下 2 分鐘內，但沒有保證的上限（上方「輪替」）。這段時間外洩的金鑰簽的 token 仍可能被還沒更新的 pod 接受，已更新與還沒更新的 pod 認的金鑰不同，一部分請求會被拒絕（401）。現行做法（每個服務滾動重啟）同樣要等每個 pod 換掉，期間舊 pod 一樣接受外洩的金鑰。
   - 身分服務那一側：chart 把 `revokeBeforeGeneration` 也交給身分服務（pod 的環境變數，升級時新的 pod 一啟動就有），它不用代比這個值小的金鑰簽章，所以新的副本即使掛的檔案還是撤銷之前的內容，也不會用外洩的金鑰簽；還沒有新金鑰時不就緒。升級前的舊副本在滾動中被換掉，`kubectl rollout status deployment/<release>-identity` 完成就表示每個副本都換過。
@@ -143,8 +171,7 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
 - **不做的事**：
   - 不由身分服務提供 JWKS 端點、服務不在執行時向身分服務抓公鑰：決策 27 的理由不變（不多一個執行期依賴與信任來源，身分服務停機或被冒充都換不了公鑰，地端離線一樣運作）。
   - 輪替時不自動逐一確認每個 pod 都載入了新公鑰：那需要每個 pod 回報，例如服務的主容器要有 API 權限寫自己的狀態，或身分服務要能列出並逐一呼叫每個 pod（服務的健康埠只對節點開放）。以實測的時間加餘裕取代；超過時只影響可用性（上方「輪替」），撤銷這個唯一影響安全的情況由人逐一確認。
-  - 不自動定期輪替：與服務密碼、ClickHouse 管理帳號一樣以調大代觸發，人只改一個數字、不經手金鑰。要自動輪替（例如金鑰超過一定天數，就在下一次身分服務啟動時換），只是在同一個判斷多一個條件，需要時另開 issue。
-  - 舊金鑰不在時間一到就移除，而是等下一次身分服務啟動：準時移除需要一個常駐、持有 API 權限的元件，而留得久的舊公鑰不影響安全。
+  - 舊金鑰不在時間一到就移除，而是等下一次身分服務啟動或輪替 CronJob 的下一次執行（預設一天內；`maxKeyAgeSeconds` 是 0 時沒有 CronJob）：準時移除需要一個常駐、持有 API 權限的元件，而留得久的舊公鑰不影響安全。Laysi/trustiot-v2#404 時連自動定期輪替都不做，Laysi/trustiot-v2#429 加上（上方「依金鑰年齡自動輪替」）。
   - 不提供外部覆寫（客戶自己的 KMS、HSM 或自選的金鑰）：理由與服務密碼相同，客戶有需求時另開 issue。
   - 防不了 namespace 的管理者：能 patch 這個 Secret 或 ConfigMap 的主體本來就能偽造內部身分，與現行相同。
   - 外部 IdP 與使用者登入的金鑰：不在 Laysi/trustiot-v2#404 的範圍。

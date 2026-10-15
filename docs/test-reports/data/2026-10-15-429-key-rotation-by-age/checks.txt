@@ -1,0 +1,39 @@
+# Laysi/trustiot-v2#429: checks on the build host (through the check queue, CI=1), 2026-10-15 17:18 to 17:27 Asia/Taipei,
+# on the working tree of the test report (commit 4f8c4ac plus the e2e retry, the docs and the report).
+== cargo fmt --all --check
+ok
+== cargo clippy --locked --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.79s
+== cargo clippy --locked -p service-kit --no-default-features --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
+== cargo test --locked --workspace (CI=1)
+passed 758, failed 0, ignored 0
+== cargo test --locked -p service-kit --no-default-features
+passed 136, failed 0
+== cargo run -p openapi -- --check
+api/openapi.json is up to date
+== cargo deny --locked check
+
+advisories ok, bans ok, licenses ok, sources ok
+== bun run --cwd scripts typecheck
+$ tsc --noEmit --project tsconfig.json
+== bun test scripts
+ 897 pass
+ 4 skip
+ 0 fail
+Ran 901 tests across 38 files. [2.96s]
+== bun test deploy/chart
+ 425 pass
+ 0 fail
+Ran 425 tests across 7 files. [39.78s]
+== bun test deploy/flux
+ 19 pass
+ 0 fail
+Ran 19 tests across 1 file. [1012.00ms]
+== bun scripts/ci/check-secret-handling.ts
+secret handling: 419 file(s) checked, 6 container build file(s), no violations
+== bun scripts/ci/check-workflows.ts
+workflow policy: 4 file(s) checked, no violations
+rcheck: removed 0 dangling test volumes
+rcheck: removed 0 dangling podman test volumes
+rcheck: exit 0 at 17:27:33 (build host, 429-498346fb)

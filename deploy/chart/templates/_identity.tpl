@@ -5,7 +5,8 @@ Laysi/trustiot-v2#404, docs/architecture/secrets.md, 「內部身分簽章金鑰
 
 {{/*
 The identity service's keys, as YAML {secret, secretKey, configMap, configMapKey, generation,
-revokeBefore, propagationSeconds, legacy}; use with fromYaml.
+revokeBefore, propagationSeconds, legacy, maxKeyAgeSeconds, rotation, rotationSchedule}; use with
+fromYaml.
 - secret: the Secret templates/passwords.yaml declares empty while the identity service is enabled
   ("trustiot.filledSecretObjects"), which the identity pod's init container fills with the private
   keys (secretKey, a JSON document) and only the identity service mounts;
@@ -15,7 +16,12 @@ revokeBefore, propagationSeconds, legacy}; use with fromYaml.
   decimal digits; the render fails when the generation is below the revocation, since no key
   could sign then;
 - legacy: true while internalIdentity.signingKeySecret names a key a person made before
-  Laysi/trustiot-v2#404, which the init container imports.
+  Laysi/trustiot-v2#404, which the init container imports;
+- maxKeyAgeSeconds, rotation, rotationSchedule: internalIdentity.maxKeyAgeSeconds as decimal
+  digits (0, or at least twice keyPropagationSeconds plus 305, so the key before is always retired
+  by the next rotation, docs/architecture/secrets.md), whether the CronJob that rotates by key age
+  runs (Laysi/trustiot-v2#429: the identity service is enabled, maxKeyAgeSeconds is not 0 and no
+  person's key is being moved over, which nothing may rotate), and its cron schedule.
 */}}
 {{- define "trustiot.identity.keys" -}}
 {{- $v := .Values.internalIdentity -}}
@@ -43,7 +49,15 @@ revokeBefore, propagationSeconds, legacy}; use with fromYaml.
 {{- if and $v.publicKeys (not $v.signingKeySecret.name) -}}
 {{- fail "internalIdentity.publicKeys is only for moving over a signing key a person made before Laysi/trustiot-v2#404, together with internalIdentity.signingKeySecret; the public keys are published in the cluster now, so remove it (README.md, 「內部身分」)" -}}
 {{- end -}}
+{{- $maxAge := int64 $v.maxKeyAgeSeconds -}}
+{{- $shortest := add (mul 2 $propagation) 305 -}}
+{{- if and (gt $maxAge 0) (lt $maxAge (int64 $shortest)) -}}
+{{- fail (printf "internalIdentity.maxKeyAgeSeconds (%d) must be 0 or at least %d: twice internalIdentity.keyPropagationSeconds plus 305 s, the time until a rotated key's predecessor may be removed, so each rotation by age finds the key before it ready to go (docs/architecture/secrets.md)" $maxAge $shortest) -}}
+{{- end -}}
 {{- $keys := dict "generation" $generation "revokeBefore" $revoke "propagationSeconds" (printf "%d" $propagation) -}}
+{{- $_ := set $keys "maxKeyAgeSeconds" (printf "%d" $maxAge) -}}
+{{- $_ := set $keys "rotationSchedule" $v.keyRotationSchedule -}}
+{{- $_ := set $keys "rotation" (and (gt $maxAge 0) (empty $v.signingKeySecret.name) (not (empty (include "trustiot.identity.enabled" .)))) -}}
 {{- $_ := set $keys "secret" (include "trustiot.componentName" (dict "root" . "name" "identity-signing-keys")) -}}
 {{- $_ := set $keys "secretKey" "signing-keys.json" -}}
 {{- $_ := set $keys "configMap" (include "trustiot.componentName" (dict "root" . "name" "internal-identity-keys")) -}}
@@ -106,7 +120,9 @@ so custom env cannot replace them):
 - TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION: it never signs with a key of a lower generation,
   even before the kubelet updates the file after a revocation;
 - TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS: how long its keys and the published public keys may
-  disagree before it logs an ERROR.
+  disagree before it logs an ERROR;
+- TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS: internalIdentity.maxKeyAgeSeconds while the rotation
+  CronJob runs, else 0: it logs an ERROR when its signing key is two days past its rotation.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.identity.env" -}}
@@ -120,6 +136,7 @@ Returns a YAML list; use with fromYamlArray.
 {{- $env = append $env (dict "name" "TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE" "value" (printf "%s/%s" (include "trustiot.identity.signingKeysDir" .) $keys.secretKey)) -}}
 {{- $env = append $env (dict "name" "TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION" "value" $keys.revokeBefore) -}}
 {{- $env = append $env (dict "name" "TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS" "value" $keys.propagationSeconds) -}}
+{{- $env = append $env (dict "name" "TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS" "value" (ternary $keys.maxKeyAgeSeconds "0" $keys.rotation)) -}}
 {{- toYaml $env -}}
 {{- end -}}
 
@@ -139,10 +156,24 @@ that Secret, which no other container does, and imports the key once.
 Argument: dict "root" $ "config" <the identity service's effective settings>.
 */}}
 {{- define "trustiot.identity.initContainer" -}}
+{{- include "trustiot.identity.keysContainer" (dict "root" .root "config" .config "name" "signing-keys" "rotation" false) -}}
+{{- end -}}
+
+{{/*
+The container that runs `migrate identity-signing-keys`: the identity pod's init container
+("trustiot.identity.initContainer"), or, with "rotation" true, the one container of the CronJob
+that rotates by key age (templates/internal-identity.yaml), which also gets
+TRUSTIOT__KEYS__MAX_KEY_AGE_SECONDS and never the Secret of a person's key (the CronJob is not
+rendered while one is moved over). Both use the identity service's ServiceAccount token from the
+volume "trustiot.migrate.kubeApiVolume" and the identity service's securityContext.
+Argument: dict "root" $ "config" <the identity service's effective settings> "name" <container
+name> "rotation" <bool>.
+*/}}
+{{- define "trustiot.identity.keysContainer" -}}
 {{- $root := .root -}}
 {{- $keys := include "trustiot.identity.keys" $root | fromYaml -}}
 {{- $dir := include "trustiot.migrate.kubeDir" $root -}}
-name: signing-keys
+name: {{ .name }}
 image: {{ include "trustiot.migrate.image" $root }}
 imagePullPolicy: {{ $root.Values.migrate.image.pullPolicy }}
 args:
@@ -168,7 +199,10 @@ env:
     value: {{ $keys.revokeBefore | quote }}
   - name: TRUSTIOT__KEYS__PROPAGATION_SECONDS
     value: {{ $keys.propagationSeconds | quote }}
-  {{- if $keys.legacy }}
+  {{- if .rotation }}
+  - name: TRUSTIOT__KEYS__MAX_KEY_AGE_SECONDS
+    value: {{ $keys.maxKeyAgeSeconds | quote }}
+  {{- else if $keys.legacy }}
   - name: TRUSTIOT__KEYS__LEGACY_KEY_FILE
     value: {{ printf "%s/signing-key.pem" (include "trustiot.identity.legacyKeyDir" $root) }}
   - name: TRUSTIOT__KEYS__LEGACY_PUBLIC_KEYS
@@ -182,7 +216,7 @@ volumeMounts:
   - name: migrate-kube-api
     mountPath: {{ $dir }}
     readOnly: true
-  {{- if $keys.legacy }}
+  {{- if and $keys.legacy (not .rotation) }}
   - name: legacy-identity-signing-key
     mountPath: {{ include "trustiot.identity.legacyKeyDir" $root }}
     readOnly: true

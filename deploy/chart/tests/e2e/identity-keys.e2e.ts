@@ -169,6 +169,11 @@ const base = [
   ...imageValues("services.identity.image", IDENTITY_IMAGE, "E2E_IDENTITY_IMAGE"),
   ...imageValues("services.assets.image", SERVICE_IMAGE, "E2E_SERVICE_IMAGE"),
   ...imageValues("migrate.image", MIGRATE_IMAGE, "E2E_MIGRATE_IMAGE"),
+  // No rotation CronJob (Laysi/trustiot-v2#429; key-rotation.e2e.ts tests it): this test checks
+  // what the init container does, and a scheduled run (daily at 03:17 UTC) between step 5's wait
+  // and its restart would retire the old key before the start that step 5 checks.
+  "--set",
+  "internalIdentity.maxKeyAgeSeconds=0",
 ];
 // The app host the routes of the overlay name (the instance values' hosts.app).
 const APP_HOST = (Bun.YAML.parse(readFileSync(join(CHART_DIR, `tests/values/${SHAPE}-instance.yaml`), "utf8")) as { hosts: { app: string } }).hosts.app;

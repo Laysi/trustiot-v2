@@ -4,16 +4,20 @@
 //! - the chart declares the Secret `<release>-identity-signing-keys` and the ConfigMap
 //!   `<release>-internal-identity-keys` without any data;
 //! - [`converge`], run as `migrate identity-signing-keys` by the identity pod's init container
-//!   with the identity ServiceAccount's token, keeps the key set
+//!   and by the CronJob that rotates by key age (Laysi/trustiot-v2#429, with
+//!   `TRUSTIOT__KEYS__MAX_KEY_AGE_SECONDS`), both with the identity ServiceAccount's token, keeps
+//!   the key set
 //!   ([`identity_keys::SigningKeys`]) in the Secret and its public JWK Set in the ConfigMap, in
 //!   three steps that each are one patch carrying the object's `resourceVersion`:
 //!   1. the Secret gets what [`identity_keys::SigningKeys::plan`] decides (a first key, a key
-//!      for a new generation, revoked and retired keys gone), new keys without times;
+//!      for a new generation or for a key that reached its maximum age, revoked and retired keys
+//!      gone), new keys without times;
 //!   2. the ConfigMap gets the public key of every key in the Secret;
 //!   3. only then the Secret gives each new key its `published_at` (now) and `signs_from`.
 //!
-//!   A run that stops after any step is finished by the next; two runs at once meet a 409 and
-//!   the loser reads again and finds the work done. The ConfigMap is written only while the
+//!   A run that stops after any step is finished by the next; two runs at once (two init
+//!   containers, or an init container and the CronJob) meet a 409 and the loser reads again and
+//!   decides anew on what it finds. The ConfigMap is written only while the
 //!   Secret is still the version it was derived from, so a run that read an older Secret cannot
 //!   take a newer key out of it.
 //! - the Secret's data is trusted only while it records the Secret's own uid (the rules of
@@ -21,7 +25,7 @@
 //!   the run starts a new set whose key signs at once.
 //!
 //! Only the identity ServiceAccount may `get` and `patch` these two objects (the chart's Role
-//! names them), and only the init container mounts its token. Nothing here logs a private key
+//! names them), and only the init container and the rotation CronJob mount its token. Nothing here logs a private key
 //! or the Secret's data: reports and errors name key ids, generations and times. The key set,
 //! the patches that carry it and the Secret as read are wiped from memory when dropped; what the
 //! HTTP client and TLS keep in their own buffers is not, which the init container bounds by
@@ -111,11 +115,18 @@ pub async fn converge_at(
     let propagation = i64::try_from(settings.propagation_seconds).map_err(|_| {
         Error::SigningKeys("TRUSTIOT__KEYS__PROPAGATION_SECONDS: too large".to_owned())
     })?;
+    let max_key_age = match settings.max_key_age_seconds {
+        0 => None,
+        seconds => Some(i64::try_from(seconds).map_err(|_| {
+            Error::SigningKeys("TRUSTIOT__KEYS__MAX_KEY_AGE_SECONDS: too large".to_owned())
+        })?),
+    };
     let legacy = legacy_key(settings)?;
     let request = Request {
         generation,
         revoke_before,
         legacy: legacy.as_ref(),
+        max_key_age,
     };
     let access = Access {
         api_url: &settings.api_url,
@@ -205,12 +216,15 @@ pub async fn converge_at(
         let signing = keys
             .signing_key(now, revoke_before, |_| true)
             .map(|key| key.kid().to_owned());
+        // Key ids and Unix times only, never a key; rotation_due_at only in the CronJob's runs.
+        let rotation_due_at = max_key_age.and_then(|age| keys.rotation_due_at(now, age));
         tracing::info!(
             secret = %settings.secret,
             config_map = %settings.config_map,
             keys = ?keys.key_ids().collect::<Vec<_>>(),
             signing = signing.as_deref().unwrap_or("none yet"),
             retire_at = keys.retire_at(now),
+            rotation_due_at,
             "the internal identity signing keys are in place"
         );
         return Ok(());
@@ -519,6 +533,7 @@ mod tests {
                     generation: 1,
                     revoke_before: 0,
                     legacy: None,
+                    max_key_age: None,
                 },
                 100,
                 |generation| Ok(SigningKey::from_seed(&[9; 32], generation)),

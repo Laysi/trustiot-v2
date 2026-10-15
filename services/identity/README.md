@@ -120,10 +120,11 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 
 金鑰在叢集內產生、公開與輪替，沒有人建立、看到或複製它（Laysi/trustiot-v2#404；設計、比較過的做法與每個失敗情況在 [docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「內部身分簽章金鑰」，操作在[密鑰 runbook](../../docs/runbooks/secrets.md)）。
 
-- **誰產生**：身分服務 pod 的 init container `signing-keys`（migration 映像的 `migrate identity-signing-keys`，`tools/migrate/src/signing_keys.rs`，格式與排程規則在 `crates/identity-keys`）。它在每次身分服務的 pod 啟動時執行，以身分服務 ServiceAccount 的 projected token 讀寫 Secret `<release>-identity-signing-keys`（私鑰）與 ConfigMap `<release>-internal-identity-keys`（公鑰的 JWK Set，每個服務都掛）。這個服務自己的容器沒有 token，chart 強制 `automountServiceAccountToken: false`。
+- **誰產生**：身分服務 pod 的 init container `signing-keys`（migration 映像的 `migrate identity-signing-keys`，`tools/migrate/src/signing_keys.rs`，格式與排程規則在 `crates/identity-keys`）。它在每次身分服務的 pod 啟動時執行（依金鑰年齡輪替的 CronJob `<release>-identity-key-rotation` 也定期執行同一個指令，Laysi/trustiot-v2#429），以身分服務 ServiceAccount 的 projected token 讀寫 Secret `<release>-identity-signing-keys`（私鑰）與 ConfigMap `<release>-internal-identity-keys`（公鑰的 JWK Set，每個服務都掛）。這個服務自己的容器沒有 token，chart 強制 `automountServiceAccountToken: false`。
 - **怎麼讀**：chart 把 Secret 以唯讀 volume 掛進這個服務（`/etc/trustiot/identity-signing-keys/signing-keys.json`，0440），路徑以 `TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE` 傳入；公鑰檔與其他服務相同，路徑是 `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`。兩個檔案都在啟動時讀，之後每 5 秒重讀（`src/issuer.rs` 的 `Issuer::watch`），所以輪替不必重啟這個服務；kubelet 更新掛載的檔案之前，它照舊用手上的金鑰。檔案不見或不能用時保留上一組可用的金鑰，記 WARN（只寫原因）；讀進來的文字用後清零，錯誤訊息與 `Debug` 輸出只有 kid。
 - **用哪一把簽**：每個 token 簽章當下，從簽章金鑰檔裡選 `signs_from` 已到、代不小於 `TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION`、而且 kid 與公鑰完全相同地列在這個服務自己看到的公鑰檔裡的金鑰中，`signs_from` 最晚的那一把（`crates/identity-keys` 的 `SigningKeys::signing_key`）。每個副本以同樣的規則讀同樣的資料，所以同時換金鑰；換的時候記一行 INFO（`signing internal identity tokens`，寫出 kid）。一把都沒有時不就緒（readiness 檢查 `signing_key`），ext_authz 檢查回 503，不會簽出服務不接受的 token。
 - **兩邊不一致時**：簽章金鑰與公鑰檔的 kid 或公鑰不同，持續超過 `TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS`（chart 的 `internalIdentity.keyPropagationSeconds`，預設 600）時記 ERROR，寫出差在哪幾個 kid 與處理方式（`kubectl rollout restart deployment/<release>-identity` 讓 init container 依 Secret 重寫 ConfigMap）；恢復一致時記 INFO。
+- **輪替逾期時**：`TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS`（chart 的 `internalIdentity.maxKeyAgeSeconds`，輪替 CronJob 不渲染時是 0）不是 0，而正在簽章的金鑰的 `published_at` 已超過它加 `TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS` 再加 2 天時，記一次 ERROR（`the internal identity signing key is older than internalIdentity.maxKeyAgeSeconds allows …`，寫出 kid 與公開時間）：輪替的 CronJob 沒在跑或一直失敗。換了金鑰之後才會再記（Laysi/trustiot-v2#429）。
 
 ### 金鑰輪替
 
@@ -139,6 +140,7 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 | `TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE` | 只給身分服務：掛載的簽章金鑰檔路徑 |
 | `TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION` | 只給身分服務：代比它小的金鑰不簽章，預設 0（chart 的 `internalIdentity.revokeBeforeGeneration`） |
 | `TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS` | 只給身分服務：簽章金鑰與公鑰檔不一致多久之後記 ERROR，120–86400，預設 600（chart 的 `internalIdentity.keyPropagationSeconds`） |
+| `TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS` | 只給身分服務：輪替 CronJob 的金鑰年齡上限，0 到 31536000，預設 0（不檢查）；正在簽章的金鑰超過它加 propagation 再加 2 天時記 ERROR（chart 的 `internalIdentity.maxKeyAgeSeconds`，CronJob 不渲染時是 0） |
 | `TRUSTIOT_INGRESS_ROUTES` | 只給身分服務：cookie 路由，決定受眾 |
 | `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE`、`_CA_FILE` | 平台設定：Postgres 位置；只接受 `verify-full`，`_CA_FILE` 必填，是唯一信任的根憑證 |
 | `TRUSTIOT__DATABASE__USERNAME`、`TRUSTIOT__DATABASE__PASSWORD` | 服務角色 `identity_app` 的帳密：chart 以 `identity_app` 設定帳號，密碼來自 Secret `<release>-identity-password` 的 `identity_app` key；migration Job 產生這個密碼並以它設定角色 |
