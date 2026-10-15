@@ -207,10 +207,10 @@
       }
     },
     "internalIdentity": {
-      "description": "Internal identity tokens (decision 27): the identity service's Ed25519 keys are generated in the cluster by its init container (docs/architecture/secrets.md); these settings only ask for a rotation or a revocation, and move over a key a person made before Laysi/trustiot-v2#404.",
+      "description": "Internal identity tokens (decision 27): the identity service's Ed25519 keys are generated in the cluster by its init container and rotated by age by a CronJob (docs/architecture/secrets.md); these settings ask for a rotation or a revocation, set the maximum key age, and move over a key a person made before Laysi/trustiot-v2#404.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["keyGeneration", "revokeBeforeGeneration", "keyPropagationSeconds", "publicKeys", "signingKeySecret"],
+      "required": ["keyGeneration", "revokeBeforeGeneration", "keyPropagationSeconds", "maxKeyAgeSeconds", "keyRotationSchedule", "publicKeys", "signingKeySecret"],
       "properties": {
         "keyGeneration": {
           "description": "Increase it to rotate the signing key; at least 1 and at least revokeBeforeGeneration. Only goes up.",
@@ -231,6 +231,17 @@
           "type": "integer",
           "minimum": 120,
           "maximum": 86400
+        },
+        "maxKeyAgeSeconds": {
+          "description": "Rotation by key age (Laysi/trustiot-v2#429): once the signing key was published this many seconds ago, the CronJob <release>-identity-key-rotation rotates it like a manual rotation. 0 turns it off; otherwise at least 2 * keyPropagationSeconds + 305 (checked when the chart renders) and at most 365 days.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 31536000
+        },
+        "keyRotationSchedule": {
+          "description": "When the rotation CronJob checks the key's age, in Etc/UTC (no TZ= prefix): @daily, @midnight, @hourly, or five cron fields whose day of month, month and day of week are *, so it runs every day. The identity service logs an ERROR when its key is two days past its rotation, and the key may only outlive maxKeyAgeSeconds by the time to the next run.",
+          "type": "string",
+          "pattern": "^(@(daily|midnight|hourly)|[0-9*/,-]+ [0-9*/,-]+ \\* \\* \\*)$"
         },
         "publicKeys": {
           "description": "Before Laysi/trustiot-v2#404 only, with signingKeySecret: the Ed25519 public keys as {kid, x}, where the init container finds the key id of the key it imports. Only these two members, so a private key (d) cannot be listed.",

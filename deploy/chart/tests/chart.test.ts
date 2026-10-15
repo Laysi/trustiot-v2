@@ -540,12 +540,15 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
   const envValue = (manifests: Manifest[], service: string, name: string) =>
     env(manifests, service).find((e) => e.name === name)?.value;
   const initsOf = (pod: PodSpec) => (pod.initContainers ?? []) as Container[];
-  // Every pod template the chart renders: Deployments, StatefulSets, Jobs and CloudNativePG's
-  // Cluster has none.
+  const ROTATION = `${RELEASE}-identity-key-rotation`;
+  const cronPod = (cronJob: Manifest) =>
+    (cronJob.spec as { jobTemplate: { spec: { template: { spec: PodSpec } } } }).jobTemplate.spec.template.spec;
+  // Every pod template the chart renders: Deployments, StatefulSets, Jobs, the rotation CronJob;
+  // CloudNativePG's Cluster has none.
   const podsOf = (manifests: Manifest[]) =>
     manifests
-      .filter((m) => ["Deployment", "StatefulSet", "Job", "DaemonSet"].includes(m.kind))
-      .map((m) => ({ name: `${m.kind}/${m.metadata.name}`, pod: podSpec(m) }));
+      .filter((m) => ["Deployment", "StatefulSet", "Job", "DaemonSet", "CronJob"].includes(m.kind))
+      .map((m) => ({ name: `${m.kind}/${m.metadata.name}`, pod: m.kind === "CronJob" ? cronPod(m) : podSpec(m) }));
 
   test("every service reads the public keys from the ConfigMap it mounts whole, never from a value", () => {
     for (const shape of SHAPE_NAMES) {
@@ -629,9 +632,17 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
       for (const container of identity.containers) {
         expect(JSON.stringify(container.volumeMounts ?? [])).not.toContain("migrate-kube-api");
       }
-      // No other pod template names the Secret, in a volume, an env or a projection.
+      // No other pod template names the Secret, in a volume, an env or a projection. The
+      // rotation CronJob names it only to reach it through the API (the test below).
+      expect(podsOf(manifests).map(({ name }) => name)).toContain(`CronJob/${ROTATION}`);
       for (const { name, pod } of podsOf(manifests)) {
         if (name === `Deployment/${RELEASE}-identity`) continue;
+        if (name === `CronJob/${ROTATION}`) {
+          expect(JSON.stringify(pod.volumes)).not.toContain(SIGNING_KEYS);
+          expect(JSON.stringify(pod)).not.toContain("secretKeyRef");
+          expect(pod.securityContext?.fsGroup, name).not.toBe(65532);
+          continue;
+        }
         const text = JSON.stringify(pod);
         expect(text, name).not.toContain(SIGNING_KEYS);
         expect(text, name).not.toContain("TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE");
@@ -729,7 +740,108 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
     expect(generation(big, "TRUSTIOT__KEYS__GENERATION")).toBe("1000000");
   });
 
+  // Laysi/trustiot-v2#429: the CronJob that rotates the signing key by age.
+  test("the rotation CronJob runs the init container's command as the identity ServiceAccount, with no Role, binding or Secret mount of its own", () => {
+    const everything = [...enableAllServices, "--set", "observability.collector.enabled=true"];
+    const rbac = (manifests: Manifest[]) =>
+      manifests
+        .filter((m) => ["ServiceAccount", "Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding"].includes(m.kind))
+        .map((m) => JSON.stringify(m))
+        .sort();
+    const selector = { "app.kubernetes.io/name": "trustiot", "app.kubernetes.io/instance": RELEASE, "app.kubernetes.io/component": "identity-key-rotation" };
+    for (const shape of SHAPE_NAMES) {
+      const manifests = render([...SHAPES[shape], SMOKE], everything);
+      const cronJob = find(manifests, "CronJob", ROTATION) as Manifest & {
+        spec: {
+          schedule: string;
+          timeZone: string;
+          concurrencyPolicy: string;
+          startingDeadlineSeconds: number;
+          jobTemplate: { spec: { template: { metadata: { labels: Record<string, string> } } } };
+        };
+      };
+      expect(cronJob.spec.schedule).toBe("17 3 * * *");
+      expect(cronJob.spec.timeZone).toBe("Etc/UTC");
+      expect(cronJob.spec.concurrencyPolicy).toBe("Forbid");
+      // Fewer than 100 missed runs fit in the deadline even at a run a minute, so the controller
+      // never stops scheduling it.
+      expect(cronJob.spec.startingDeadlineSeconds).toBe(3600);
+      expect(cronJob.spec.jobTemplate.spec.template.metadata.labels["istio.io/dataplane-mode"]).toBe("ambient");
+      const pod = cronPod(cronJob);
+      expect(pod.serviceAccountName).toBe(`${RELEASE}-identity`);
+      expect(pod.automountServiceAccountToken).toBe(false);
+      expect(pod.initContainers).toBeUndefined();
+      expect(pod.containers.map((c) => c.name)).toEqual(["key-rotation"]);
+      const container = pod.containers[0] as Container & { args: string[] };
+      const identity = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`));
+      const init = initsOf(identity)[0] as Container & { args: string[] };
+      // The init container's command and settings plus the maximum key age, and its token volume.
+      expect(container.image).toBe(init.image);
+      expect(container.args).toEqual(["identity-signing-keys"]);
+      expect(container.env).toEqual([...(init.env ?? []), { name: "TRUSTIOT__KEYS__MAX_KEY_AGE_SECONDS", value: "7776000" }]);
+      expect(container.securityContext).toEqual(init.securityContext);
+      expect(container.volumeMounts).toEqual(init.volumeMounts);
+      expect(pod.volumes).toEqual(identity.volumes?.filter((v) => v.name === "migrate-kube-api"));
+      // Nobody connects to it.
+      const authorization = find(manifests, "AuthorizationPolicy", ROTATION) as Manifest & { spec: Record<string, unknown> };
+      expect(authorization.spec).toEqual({ selector: { matchLabels: selector }, action: "ALLOW" });
+      const network = find(manifests, "NetworkPolicy", ROTATION) as Manifest & { spec: Record<string, unknown> };
+      expect(network.spec).toEqual({ podSelector: { matchLabels: selector }, policyTypes: ["Ingress"], ingress: [] });
+      // The identity service checks for an overdue rotation with the same maximum age.
+      expect(envValue(manifests, "identity", "TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS")).toBe("7776000");
+
+      // Acceptance: no permission beyond the identity ServiceAccount's. Every ServiceAccount, Role
+      // and binding renders exactly as without rotation by age, so no subject gains access.
+      const off = render([...SHAPES[shape], SMOKE], [...everything, "--set", "internalIdentity.maxKeyAgeSeconds=0"]);
+      expect(rbac(manifests)).toEqual(rbac(off));
+      // Acceptance: maxKeyAgeSeconds 0 renders no CronJob, and the identity service checks nothing.
+      expect(off.filter((m) => m.kind === "CronJob")).toEqual([]);
+      expect(JSON.stringify(off)).not.toContain("identity-key-rotation");
+      expect(envValue(off, "identity", "TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS")).toBe("0");
+    }
+    // Nothing rotates while a person's key is moved over, or without the identity service.
+    const moving = render([...SHAPES.saas, SMOKE], [...everything, ...legacy]);
+    expect(moving.filter((m) => m.kind === "CronJob")).toEqual([]);
+    expect(envValue(moving, "identity", "TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS")).toBe("0");
+    const without = render([...SHAPES.saas, SMOKE], ["--set", "services.assets.enabled=true"]);
+    expect(without.filter((m) => m.kind === "CronJob")).toEqual([]);
+  }, SLOW_TEST_MS);
+
+  test("the maximum key age and the schedule change the CronJob and the identity service's check only", () => {
+    const base = ["--set", "services.identity.enabled=true", "--set", "services.assets.enabled=true"];
+    const before = render(SHAPES.saas, base);
+    const often = render(SHAPES.saas, [...base, "--set", "internalIdentity.keyRotationSchedule=*/5 * * * *"]);
+    const shorter = render(SHAPES.saas, [...base, "--set", "internalIdentity.keyPropagationSeconds=120", "--set", "internalIdentity.maxKeyAgeSeconds=545"]);
+    const template = (manifests: Manifest[], service: string) =>
+      JSON.stringify((find(manifests, "Deployment", `${RELEASE}-${service}`).spec as { template: unknown }).template);
+    expect((find(often, "CronJob", ROTATION).spec as { schedule: string }).schedule).toBe("*/5 * * * *");
+    // A new schedule restarts nothing.
+    expect(template(often, "identity")).toBe(template(before, "identity"));
+    expect(template(often, "assets")).toBe(template(before, "assets"));
+    // The shortest age for a propagation time: twice it plus 305 s.
+    const env = cronPod(find(shorter, "CronJob", ROTATION)).containers[0]?.env ?? [];
+    expect(env.find((e) => e.name === "TRUSTIOT__KEYS__MAX_KEY_AGE_SECONDS")?.value).toBe("545");
+    expect(env.find((e) => e.name === "TRUSTIOT__KEYS__PROPAGATION_SECONDS")?.value).toBe("120");
+    expect(envValue(shorter, "identity", "TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS")).toBe("545");
+    expect(template(shorter, "assets")).toBe(template(before, "assets"));
+    for (const schedule of ["@daily", "@midnight", "@hourly", "0 */6 * * *", "5,35 1-3 * * *"]) {
+      expect(helmTemplate(SHAPES.saas, [...base, "--set-json", `internalIdentity.keyRotationSchedule=${JSON.stringify(schedule)}`]).code, schedule).toBe(0);
+    }
+    // The CronJob's name leaves the Job controller its 11 characters, even for the longest release
+    // name (Helm caps it at 53); its policies carry the same name.
+    for (const release of ["r", `trustiot-${"x".repeat(44)}`]) {
+      const long = render(SHAPES.saas, base, release);
+      const cronJobs = long.filter((m) => m.kind === "CronJob");
+      expect(cronJobs).toHaveLength(1);
+      const name = cronJobs[0]?.metadata.name ?? "";
+      expect(name.length, release).toBeLessThanOrEqual(52);
+      expect(name).toEndWith("-identity-key-rotation");
+      expect(long.filter((m) => m.metadata.name === name).map((m) => m.kind).sort()).toEqual(["AuthorizationPolicy", "CronJob", "NetworkPolicy"]);
+    }
+  }, SLOW_TEST_MS);
+
   test("a signing key a person made before Laysi/trustiot-v2#404 reaches the init container only, which imports it", () => {
+
     const manifests = render([...SHAPES.saas, SMOKE], [...enableAllServices, ...legacy]);
     const pod = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`));
     const init = initsOf(pod)[0] as Container;
@@ -3233,8 +3345,10 @@ describe("service-to-service authorization (decision 27)", () => {
     find(manifests, "AuthorizationPolicy", `${RELEASE}-${service}`).spec as MeshPolicy;
   const networkPolicy = (manifests: Manifest[], name: string) =>
     find(manifests, "NetworkPolicy", `${RELEASE}-${name}`).spec as NetworkPolicySpec;
-  const podLabels = (deployment: Manifest) =>
-    (deployment.spec as { template: { metadata: { labels: Record<string, string> } } }).template.metadata.labels;
+  const podLabels = (workload: Manifest) =>
+    workload.kind === "CronJob"
+      ? (workload.spec as { jobTemplate: { spec: { template: { metadata: { labels: Record<string, string> } } } } }).jobTemplate.spec.template.metadata.labels
+      : (workload.spec as { template: { metadata: { labels: Record<string, string> } } }).template.metadata.labels;
   const selects = (selector: Record<string, string>, labels: Record<string, string>) =>
     Object.entries(selector).every(([key, value]) => labels[key] === value);
   const serviceOf = (objectName: string) => objectName.slice(`${RELEASE}-`.length);
@@ -3289,7 +3403,10 @@ describe("service-to-service authorization (decision 27)", () => {
       alerts: [sa("assets")],
       knowledge: [],
     };
-    const policies = manifests.filter((m) => m.kind === "AuthorizationPolicy" && !m.metadata.name.startsWith(`${RELEASE}-ingress-`));
+    // The rotation CronJob's policy admits nobody (the internal identity tests check it).
+    const policies = manifests.filter(
+      (m) => m.kind === "AuthorizationPolicy" && !m.metadata.name.startsWith(`${RELEASE}-ingress-`) && m.metadata.name !== `${RELEASE}-identity-key-rotation`,
+    );
     expect(policies.map((m) => m.metadata.name).sort()).toEqual(Object.keys(expected).map((s) => `${RELEASE}-${s}`).sort());
     for (const [service, principals] of Object.entries(expected)) {
       const policy = meshPolicy(manifests, service);
@@ -4057,6 +4174,24 @@ describe("values validation rejects unsafe or incomplete settings", () => {
     ["a negative revocation generation", saas, ["--set", "internalIdentity.revokeBeforeGeneration=-1"], /revokeBeforeGeneration/],
     ["a key propagation time below two minutes", saas, ["--set", "internalIdentity.keyPropagationSeconds=60"], /keyPropagationSeconds/],
     ["a key propagation time above a day", saas, ["--set", "internalIdentity.keyPropagationSeconds=86401"], /keyPropagationSeconds/],
+    ["a negative maximum key age", saas, ["--set", "internalIdentity.maxKeyAgeSeconds=-1"], /maxKeyAgeSeconds/],
+    ["a maximum key age above 365 days", saas, ["--set", "internalIdentity.maxKeyAgeSeconds=31536001"], /maxKeyAgeSeconds/],
+    ["a maximum key age as a duration", saas, ["--set-string", "internalIdentity.maxKeyAgeSeconds=90d"], /maxKeyAgeSeconds/],
+    [
+      "a maximum key age too short for the old key to retire before the next rotation",
+      saas,
+      ["--set", "internalIdentity.maxKeyAgeSeconds=1504"],
+      /internalIdentity\.maxKeyAgeSeconds \(1504\) must be 0 or at least 1505/,
+    ],
+    ["a rotation schedule with a time zone", saas, ["--set-string", "internalIdentity.keyRotationSchedule=TZ=Asia/Taipei 0 3 * * *"], /keyRotationSchedule/],
+    ["a rotation schedule of four fields", saas, ["--set-string", "internalIdentity.keyRotationSchedule=0 3 * *"], /keyRotationSchedule/],
+    ["an empty rotation schedule", saas, ["--set-string", "internalIdentity.keyRotationSchedule="], /keyRotationSchedule/],
+    // Sparser than daily: the key would outlive maxKeyAgeSeconds by up to the gap between runs.
+    ["a weekly rotation schedule", saas, ["--set-string", "internalIdentity.keyRotationSchedule=@weekly"], /keyRotationSchedule/],
+    ["a monthly rotation schedule", saas, ["--set-string", "internalIdentity.keyRotationSchedule=@monthly"], /keyRotationSchedule/],
+    ["a rotation schedule on some days of the month", saas, ["--set-string", "internalIdentity.keyRotationSchedule=0 0 1\\,15 * *"], /keyRotationSchedule/],
+    ["a rotation schedule in one month", saas, ["--set-string", "internalIdentity.keyRotationSchedule=0 3 * 1 *"], /keyRotationSchedule/],
+    ["a rotation schedule on weekdays", saas, ["--set-string", "internalIdentity.keyRotationSchedule=30 2 * * MON-FRI"], /keyRotationSchedule/],
     [
       "a token in the identity service's container",
       saas,
@@ -4389,6 +4524,16 @@ describe("the templates keep the secret and env boundaries without schema valida
       /internalIdentity\.keyGeneration \(1\) must not be below internalIdentity\.revokeBeforeGeneration \(2\)/,
     ],
     ["a key propagation time below two minutes", ["--set", "internalIdentity.keyPropagationSeconds=5"], /keyPropagationSeconds must be between 120 and 86400/],
+    [
+      "a maximum key age too short for the old key to retire before the next rotation",
+      ["--set", "internalIdentity.keyPropagationSeconds=120", "--set", "internalIdentity.maxKeyAgeSeconds=544"],
+      /internalIdentity\.maxKeyAgeSeconds \(544\) must be 0 or at least 545/,
+    ],
+    [
+      "a service named after the rotation CronJob",
+      ["--set", "services.identity-key-rotation.enabled=true"],
+      /services\.identity-key-rotation: the name belongs to the CronJob/,
+    ],
     [
       "a token in the identity service's container",
       ["--set", "services.identity.enabled=true", "--set", "services.identity.automountServiceAccountToken=true"],

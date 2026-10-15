@@ -11,7 +11,9 @@
 // Nothing creates a key for the identity service: its init container generates the internal
 // identity keys in the cluster, and the smoke checks that they are there, that only the identity
 // service's account may change them, and how long the services took to pick them up on this fresh
-// install (identity-keys.ts, Laysi/trustiot-v2#404).
+// install (identity-keys.ts, Laysi/trustiot-v2#404), then runs the CronJob that rotates the key by
+// age once and checks that it succeeds and leaves the key, which is not due, as it is
+// (Laysi/trustiot-v2#429).
 // After the ingress e2e test, the SaaS shape also runs the service-to-service authorization e2e
 // test (mesh.e2e.ts, e2e.ts). Components the chart gains later are covered without
 // changes here, because the checks read the release's own manifests (manifests.ts).
@@ -23,7 +25,7 @@ import { apiValues, routesOfValues, runApiCheck } from "./api.ts";
 import { gatherDiagnostics } from "./diagnostics.ts";
 import { E2E_SUITES, installEvidenceSection, runClusterE2e, suitesOf } from "./e2e.ts";
 import { exec, retry, run, RunLog, waitUntilGone } from "./exec.ts";
-import { checkIdentityKeys } from "./identity-keys.ts";
+import { checkIdentityKeys, checkKeyRotationRun } from "./identity-keys.ts";
 import {
   gatewayPortProblems,
   gatewayPorts,
@@ -297,6 +299,9 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
       })) &&
       (await check("the internal identity keys were generated in the cluster, only the identity service's account may change them, and every service picked them up (Laysi/trustiot-v2#404)", () =>
         checkIdentityKeys({ kubectl: ctx.kubectl, kubeconfig: ctx.kubeconfig, log: ctx.log }, namespace, RELEASE, parseManifests(manifest)),
+      )) &&
+      (await check("the CronJob that rotates the internal identity key by age runs as the identity service's account and leaves a key that is not due as it is (Laysi/trustiot-v2#429)", () =>
+        checkKeyRotationRun({ kubectl: ctx.kubectl, kubeconfig: ctx.kubeconfig, log: ctx.log }, namespace, parseManifests(manifest)),
       )) &&
       (await check("each Gateway's NetworkPolicy admits exactly the ports its Istio pods use", async () => {
         // The chart derives the ingress gateway's NetworkPolicy ports from its Gateway and Istio's

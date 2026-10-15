@@ -932,6 +932,15 @@ fn unusable_settings_stop_startup() {
             ),
             "platform.identity_revoke_before_generation",
         ),
+        (
+            "a maximum key age above 365 days",
+            with(
+                base_env(&files, 1),
+                "TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS",
+                "31536001",
+            ),
+            "platform.identity_max_key_age_seconds",
+        ),
     ];
     let mut secrets = key.secret_spellings();
     secrets.push("do-not-log-this-password".to_owned());
@@ -1001,6 +1010,7 @@ async fn a_key_rotation_needs_no_restart_and_tokens_verify_throughout() {
         generation,
         revoke_before: 0,
         legacy: None,
+        max_key_age: None,
     };
     let mut first = SigningKeys::default()
         .plan(&request(1), now, SigningKey::generate)

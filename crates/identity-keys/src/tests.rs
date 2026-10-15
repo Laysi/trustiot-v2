@@ -31,6 +31,7 @@ fn request(generation: u64, revoke_before: u64) -> Request<'static> {
         generation,
         revoke_before,
         legacy: None,
+        max_key_age: None,
     }
 }
 
@@ -510,6 +511,7 @@ fn the_move_from_a_person_made_key_takes_three_steps() {
         generation: 1,
         revoke_before: 0,
         legacy: Some(&legacy),
+        max_key_age: None,
     };
 
     // Step 1: the empty set gets the person's key, which signs at once.
@@ -576,6 +578,7 @@ fn revocation_works_while_a_person_made_key_is_configured() {
             generation: 1,
             revoke_before: 0,
             legacy: Some(&legacy),
+            max_key_age: None,
         },
         NOW,
         1,
@@ -586,6 +589,7 @@ fn revocation_works_while_a_person_made_key_is_configured() {
             generation: 1,
             revoke_before: 1,
             legacy: Some(&legacy),
+            max_key_age: None,
         },
         NOW + 60,
         2,
@@ -640,4 +644,290 @@ fn changes_name_key_ids_and_times_only() {
         line,
         "published signing key k; it signs from 42 (Unix time)"
     );
+}
+
+// Rotation by key age (Laysi/trustiot-v2#429).
+
+const MAX_AGE: i64 = 30 * 86_400;
+
+/// A run of the rotation CronJob: the values' generations and a maximum key age.
+fn aging(generation: u64, revoke_before: u64) -> Request<'static> {
+    Request {
+        max_key_age: Some(MAX_AGE),
+        ..request(generation, revoke_before)
+    }
+}
+
+/// Acceptance (Laysi/trustiot-v2#429): a key that reached the maximum age is replaced on the same
+/// schedule as a manual rotation: published first, signing after the propagation time, the old
+/// key retired once every token it signed has expired.
+#[test]
+fn a_key_is_rotated_once_it_reaches_the_maximum_age() {
+    let (keys, _) = run(SigningKeys::default(), &aging(1, 0), NOW, 1);
+    let old = key(1, 1).kid().to_owned();
+    assert_eq!(keys.rotation_due_at(NOW, MAX_AGE), Some(NOW + MAX_AGE));
+
+    // A second before it is due: nothing.
+    let due = NOW + MAX_AGE;
+    let (same, changes) = run(keys.clone(), &aging(1, 0), due - 1, 9);
+    assert!(changes.is_empty(), "{changes:?}");
+    assert!(same.same_as(&keys));
+
+    // Due: a new key of the same generation, published now, signing after the propagation time.
+    let (keys, changes) = run(keys, &aging(1, 0), due, 2);
+    let new = key(2, 1).kid().to_owned();
+    assert_eq!(
+        changes,
+        [
+            Change::Rotated {
+                kid: new.clone(),
+                generation: 1,
+                replaces: old.clone(),
+                published_at: NOW,
+            },
+            Change::Published {
+                kid: new.clone(),
+                signs_from: due + PROPAGATION
+            },
+        ]
+    );
+    assert_eq!(kids(&keys), [old.clone(), new.clone()]);
+    assert_eq!(keys.keys()[1].generation(), 1);
+    assert_eq!(signer(&keys, due).as_deref(), Some(old.as_str()));
+    assert_eq!(
+        signer(&keys, due + PROPAGATION - 1).as_deref(),
+        Some(old.as_str())
+    );
+    assert_eq!(
+        signer(&keys, due + PROPAGATION).as_deref(),
+        Some(new.as_str())
+    );
+
+    // While the rotation is under way nothing more is due.
+    assert_eq!(keys.rotation_due_at(due + 10, MAX_AGE), None);
+    let (same, changes) = run(keys.clone(), &aging(1, 0), due + PROPAGATION - 1, 9);
+    assert!(changes.is_empty(), "{changes:?}");
+    assert!(same.same_as(&keys));
+
+    // The old key retires when it would after a manual rotation, and the next rotation is due
+    // the maximum age after the new key's publication.
+    let retire_at = due + 2 * PROPAGATION + TOKEN_EXPIRY_SECS;
+    let (kept, changes) = run(keys.clone(), &aging(1, 0), retire_at - 1, 9);
+    assert!(changes.is_empty(), "{changes:?}");
+    assert_eq!(kids(&kept), [old.clone(), new.clone()]);
+    let (keys, changes) = run(keys, &aging(1, 0), retire_at, 9);
+    assert_eq!(changes, [Change::Retired { kid: old }]);
+    assert_eq!(kids(&keys), std::slice::from_ref(&new));
+    assert_eq!(
+        keys.rotation_due_at(retire_at, MAX_AGE),
+        Some(due + MAX_AGE)
+    );
+}
+
+/// Acceptance (Laysi/trustiot-v2#429): `maxKeyAgeSeconds: 0` (no maximum age in the request)
+/// never rotates by age, however old the key; neither does the init container's run.
+#[test]
+fn without_a_maximum_age_nothing_rotates_by_age() {
+    let (keys, _) = run(SigningKeys::default(), &request(1, 0), NOW, 1);
+    let (same, changes) = run(keys.clone(), &request(1, 0), NOW + 10 * MAX_KEY_AGE_SECS, 9);
+    assert!(changes.is_empty(), "{changes:?}");
+    assert!(same.same_as(&keys));
+}
+
+/// The values' generation is a floor: a rollback to a lower one still rotates within the set's
+/// generation, and a manual bump while automatic keys exist starts a new generation as usual.
+#[test]
+fn rotation_by_age_keeps_the_generation_and_the_values_stay_a_floor() {
+    let (keys, _) = run(SigningKeys::default(), &aging(3, 0), NOW, 1);
+    let due = NOW + MAX_AGE;
+    let (keys, changes) = run(keys, &aging(1, 0), due, 2);
+    let automatic = key(2, 3).kid().to_owned();
+    assert_eq!(
+        changes.first(),
+        Some(&Change::Rotated {
+            kid: automatic.clone(),
+            generation: 3,
+            replaces: key(1, 3).kid().to_owned(),
+            published_at: NOW,
+        })
+    );
+    assert_eq!(keys.keys()[1].generation(), 3);
+
+    // Acceptance: a manual rotation works while automatic rotation is on.
+    let bump = due + PROPAGATION + 10;
+    assert_eq!(signer(&keys, bump).as_deref(), Some(automatic.as_str()));
+    let (keys, changes) = run(keys, &aging(4, 0), bump, 3);
+    let manual = key(3, 4).kid().to_owned();
+    assert_eq!(
+        changes,
+        [
+            Change::Generated {
+                kid: manual.clone(),
+                generation: 4
+            },
+            Change::Published {
+                kid: manual.clone(),
+                signs_from: bump + PROPAGATION
+            },
+        ]
+    );
+    assert_eq!(
+        signer(&keys, bump + PROPAGATION).as_deref(),
+        Some(manual.as_str())
+    );
+
+    // A manual bump while an automatic key still waits replaces the waiting key, which never
+    // signed, exactly as for a manual key that waits.
+    let (keys, _) = run(SigningKeys::default(), &aging(1, 0), NOW, 1);
+    let (keys, _) = run(keys, &aging(1, 0), due, 2);
+    let (keys, changes) = run(keys, &aging(2, 0), due + 60, 3);
+    assert_eq!(
+        changes.first(),
+        Some(&Change::Dropped {
+            kid: key(2, 1).kid().to_owned()
+        })
+    );
+    assert_eq!(kids(&keys), [key(1, 1).kid(), key(3, 2).kid()]);
+}
+
+/// Acceptance (Laysi/trustiot-v2#429): a revocation works while automatic rotation is on, and
+/// removes the automatic keys of the revoked generations with the rest.
+#[test]
+fn revocation_removes_the_automatic_keys_of_older_generations() {
+    let (keys, _) = run(SigningKeys::default(), &aging(1, 0), NOW, 1);
+    let due = NOW + MAX_AGE;
+    let (keys, _) = run(keys, &aging(1, 0), due, 2);
+    let revoke = due + PROPAGATION + 10;
+    let (keys, changes) = run(keys, &aging(2, 2), revoke, 3);
+    let new = key(3, 2).kid().to_owned();
+    assert_eq!(
+        changes,
+        [
+            Change::Revoked {
+                kid: key(1, 1).kid().to_owned(),
+                generation: 1
+            },
+            Change::Revoked {
+                kid: key(2, 1).kid().to_owned(),
+                generation: 1
+            },
+            Change::Generated {
+                kid: new.clone(),
+                generation: 2
+            },
+            Change::Published {
+                kid: new.clone(),
+                signs_from: revoke
+            },
+        ]
+    );
+    assert_eq!(kids(&keys), std::slice::from_ref(&new));
+    assert_eq!(
+        keys.rotation_due_at(revoke, MAX_AGE),
+        Some(revoke + MAX_AGE)
+    );
+}
+
+#[test]
+fn nothing_is_due_while_a_rotation_is_under_way_or_a_person_made_key_is_configured() {
+    assert_eq!(SigningKeys::default().rotation_due_at(NOW, MAX_AGE), None);
+    let (one, _) = run(SigningKeys::default(), &request(1, 0), NOW, 1);
+
+    // A manual rotation waiting for its signs_from: nothing is due, even at a tiny maximum age.
+    let (waiting, _) = run(one.clone(), &request(2, 0), NOW + 100, 2);
+    let tiny = Request {
+        max_key_age: Some(1),
+        ..request(2, 0)
+    };
+    assert_eq!(waiting.rotation_due_at(NOW + 101, 1), None);
+    let (same, changes) = run(waiting.clone(), &tiny, NOW + 100 + PROPAGATION - 1, 9);
+    assert!(changes.is_empty(), "{changes:?}");
+    assert!(same.same_as(&waiting));
+    // Once it signs, its own publication counts.
+    assert_eq!(
+        waiting.rotation_due_at(NOW + 100 + PROPAGATION, 1),
+        Some(NOW + 101)
+    );
+
+    // A key written but not yet published (a run stopped halfway): nothing is due.
+    let Plan { keys: halfway, .. } = one.plan(&request(2, 0), NOW + 50, seeds(2)).expect("plan");
+    assert_eq!(halfway.rotation_due_at(NOW + 10 * MAX_AGE, 1), None);
+
+    // While a person's key is configured nothing is added, however old it is.
+    let legacy = SigningKey::import(&legacy_pem(7), &legacy_public_keys(&[(7, "2026-10-a")]))
+        .expect("importable");
+    let moving = Request {
+        generation: 1,
+        revoke_before: 0,
+        legacy: Some(&legacy),
+        max_key_age: Some(MAX_AGE),
+    };
+    let (keys, _) = run(SigningKeys::default(), &moving, NOW, 1);
+    let (same, changes) = run(keys.clone(), &moving, NOW + 10 * MAX_AGE, 2);
+    assert!(changes.is_empty(), "{changes:?}");
+    assert!(same.same_as(&keys));
+}
+
+/// At the shortest maximum age the chart allows and a run every minute, rotation after rotation:
+/// the set never holds more than two keys after a run, a key always signs, and none signs much
+/// longer than the maximum age.
+#[test]
+fn rotations_at_the_shortest_age_keep_two_keys_and_always_a_signer() {
+    let max_age = min_max_key_age(PROPAGATION);
+    assert_eq!(max_age, 2 * PROPAGATION + TOKEN_EXPIRY_SECS);
+    let every = 60;
+    let ask = Request {
+        max_key_age: Some(max_age),
+        ..request(1, 0)
+    };
+    let (mut keys, _) = run(SigningKeys::default(), &ask, NOW, 1);
+    let mut seed = 2_u8;
+    let mut rotations = 0;
+    let mut now = NOW;
+    while now < NOW + 20 * max_age {
+        now += every;
+        let changes;
+        (keys, changes) = run(keys, &ask, now, seed);
+        if changes
+            .iter()
+            .any(|change| matches!(change, Change::Rotated { .. }))
+        {
+            rotations += 1;
+            seed = seed.wrapping_add(1);
+        }
+        assert!(keys.keys().len() <= 2, "at {now}: {keys:?}");
+        let signing = keys
+            .signing_key(now, 0, |_| true)
+            .expect("a key always signs");
+        let age = now - signing.published_at().expect("published");
+        assert!(age < max_age + every + PROPAGATION, "at {now}: {age} s");
+    }
+    assert!(rotations >= 15, "{rotations} rotations");
+}
+
+#[test]
+fn a_rotation_is_overdue_two_days_after_it_should_have_happened() {
+    let (keys, _) = run(SigningKeys::default(), &request(1, 0), NOW, 1);
+    assert_eq!(
+        keys.keys()[0].rotation_overdue_at(MAX_AGE, PROPAGATION),
+        Some(NOW + MAX_AGE + PROPAGATION + ROTATION_OVERDUE_SECS)
+    );
+    assert_eq!(key(1, 1).rotation_overdue_at(MAX_AGE, PROPAGATION), None);
+}
+
+#[test]
+fn a_rotation_by_age_is_reported_with_key_ids_and_dates_only() {
+    let line = Change::Rotated {
+        kid: "new".to_owned(),
+        generation: 3,
+        replaces: "old".to_owned(),
+        published_at: NOW,
+    }
+    .to_string();
+    assert_eq!(
+        line,
+        "generated signing key new (generation 3) to replace key old, published \
+         2026-10-10T00:00:00Z, which reached internalIdentity.maxKeyAgeSeconds"
+    );
+    assert_eq!(rfc3339(-1), "-1 (Unix time)");
 }

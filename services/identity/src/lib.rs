@@ -78,6 +78,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
         signing_keys_file: platform.identity_signing_keys_file.clone(),
         revoke_before: platform.identity_revoke_before_generation,
         propagation_seconds: platform.identity_key_propagation_seconds,
+        max_key_age_seconds: platform.identity_max_key_age_seconds,
     };
     let issuer = Issuer::watch(&context, &settings, published.clone()).await;
     tracing::info!(

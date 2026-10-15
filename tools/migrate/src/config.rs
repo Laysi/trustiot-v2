@@ -571,6 +571,14 @@ pub struct KeySettings {
     /// `internalIdentity.keyPropagationSeconds`, how long a new key waits after its public key is
     /// published before it signs.
     pub propagation_seconds: u64,
+    /// `TRUSTIOT__KEYS__MAX_KEY_AGE_SECONDS`: the chart's `internalIdentity.maxKeyAgeSeconds`,
+    /// set only by the rotation CronJob (Laysi/trustiot-v2#429): once the newest signing key was
+    /// published this long ago, the run adds a key of the same generation and rotates it out on
+    /// the schedule of a manual rotation. 0 (the default, and the init container's) rotates
+    /// nothing by age; otherwise from `identity_keys::min_max_key_age(propagation_seconds)` to
+    /// `identity_keys::MAX_KEY_AGE_SECS`.
+    #[serde(default)]
+    pub max_key_age_seconds: u64,
     /// `TRUSTIOT__KEYS__LEGACY_KEY_FILE`: while the chart still names a signing key a person made
     /// before Laysi/trustiot-v2#404 (`internalIdentity.signingKeySecret`), that key's PKCS#8 PEM
     /// file, mounted into the init container only.
@@ -645,6 +653,33 @@ impl Validate for SigningKeysConfig {
                      seconds"
                 ),
             ));
+        }
+        if keys.max_key_age_seconds != 0 {
+            // Both fit in i64: the propagation time was checked above.
+            let shortest = identity_keys::min_max_key_age(
+                i64::try_from(keys.propagation_seconds).unwrap_or(i64::MAX),
+            );
+            let longest = identity_keys::MAX_KEY_AGE_SECS;
+            if !i64::try_from(keys.max_key_age_seconds)
+                .is_ok_and(|age| (shortest..=longest).contains(&age))
+            {
+                return Err(Invalid::new(
+                    "keys.max_key_age_seconds",
+                    format!(
+                        "must be 0 (no rotation by age) or between {shortest} (twice \
+                         keys.propagation_seconds plus {} s, so the key before is always \
+                         retired by the next rotation) and {longest} seconds",
+                        identity_keys::TOKEN_EXPIRY_SECS
+                    ),
+                ));
+            }
+            if keys.legacy_key_file.is_some() {
+                return Err(Invalid::new(
+                    "keys.max_key_age_seconds",
+                    "must be 0 while a person's key is moved over (keys.legacy_key_file): \
+                     nothing rotates until the move's second step",
+                ));
+            }
         }
         match (&keys.legacy_key_file, &keys.legacy_public_keys) {
             (None, None) => {}
@@ -871,6 +906,7 @@ mod tests {
                 generation: "1".to_owned(),
                 revoke_before_generation: "0".to_owned(),
                 propagation_seconds: 600,
+                max_key_age_seconds: 0,
                 legacy_key_file: None,
                 legacy_public_keys: None,
                 wait: DEFAULT_WAIT,
@@ -891,8 +927,15 @@ mod tests {
         revoking.keys.generation = "3".to_owned();
         revoking.keys.revoke_before_generation = "3".to_owned();
         assert!(revoking.validate().is_ok());
+        // Rotation by age (Laysi/trustiot-v2#429): from twice the propagation time plus the
+        // tokens' expiry up to 365 days.
+        for age in [1505, 7_776_000, 31_536_000] {
+            let mut aging = keys_config();
+            aging.keys.max_key_age_seconds = age;
+            assert!(aging.validate().is_ok(), "{age}");
+        }
 
-        let broken: [KeysBreakage; 13] = [
+        let broken: [KeysBreakage; 16] = [
             ("keys.api_url", |k| {
                 k.api_url = "http://kubernetes.default.svc".to_owned();
             }),
@@ -910,6 +953,15 @@ mod tests {
             ("keys.propagation_seconds", |k| k.propagation_seconds = 119),
             ("keys.propagation_seconds", |k| {
                 k.propagation_seconds = 86_401
+            }),
+            ("keys.max_key_age_seconds", |k| k.max_key_age_seconds = 1504),
+            ("keys.max_key_age_seconds", |k| {
+                k.max_key_age_seconds = 31_536_001;
+            }),
+            ("keys.max_key_age_seconds", |k| {
+                k.max_key_age_seconds = 7_776_000;
+                k.legacy_key_file = Some(PathBuf::from("/key.pem"));
+                k.legacy_public_keys = Some(String::new());
             }),
             ("keys.legacy_key_file", |k| {
                 k.legacy_key_file = Some(PathBuf::from("relative.pem"));

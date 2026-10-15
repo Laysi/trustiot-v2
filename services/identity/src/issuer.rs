@@ -64,6 +64,10 @@ pub struct IssuerSettings {
     /// How long the signing keys and the published public keys may differ before it is an
     /// error (`TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS`).
     pub propagation_seconds: u64,
+    /// The maximum key age of the rotation CronJob (`TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS`,
+    /// Laysi/trustiot-v2#429): a signing key older than that by more than the propagation time
+    /// and [`identity_keys::ROTATION_OVERDUE_SECS`] is an error. 0: rotation by age is off.
+    pub max_key_age_seconds: u64,
 }
 
 /// Signs tokens with the key the schedule selects now. Cheap to clone; clones share the keys.
@@ -134,6 +138,11 @@ impl Issuer {
             .map(use_key)
     }
 
+    /// The key that signs at `now`, as its key id and `published_at`, if any key may sign.
+    fn signing_published(&self, now: i64) -> Option<(String, Option<i64>)> {
+        self.with_signing_key(now, |key| (key.kid().to_owned(), key.published_at()))
+    }
+
     /// The key ids of the signing keys file with their public keys, if one has been read.
     fn public_keys(&self) -> Option<Vec<(String, ed25519_dalek::VerifyingKey)>> {
         self.shared
@@ -192,7 +201,9 @@ impl Issuer {
     /// which key signs whenever that changes, and at ERROR when the signing keys and the
     /// `published` public keys have differed for longer than `propagation_seconds` (the init
     /// container writes both, so a lasting difference means one was changed by hand or the
-    /// kubelet stopped updating this pod's files). Adds the readiness check [`READINESS_CHECK`].
+    /// kubelet stopped updating this pod's files), and once when the signing key is overdue for
+    /// its rotation by age (`max_key_age_seconds`). Adds the readiness check
+    /// [`READINESS_CHECK`].
     pub async fn watch<T>(
         context: &Context<T>,
         settings: &IssuerSettings,
@@ -201,7 +212,11 @@ impl Issuer {
         let issuer = Self::new(published.clone(), settings.revoke_before);
         let mut file = KeysFile::new(settings.signing_keys_file.clone());
         let propagation = i64::try_from(settings.propagation_seconds).unwrap_or(i64::MAX);
-        let mut monitor = Monitor::new(propagation);
+        let max_key_age = match settings.max_key_age_seconds {
+            0 => None,
+            seconds => Some(i64::try_from(seconds).unwrap_or(i64::MAX)),
+        };
+        let mut monitor = Monitor::new(propagation).with_max_key_age(max_key_age);
         file.reload(&issuer).await;
         monitor.observe(unix_now(), &issuer, &published);
         let ready = issuer.clone();
@@ -341,10 +356,15 @@ fn read(path: &Path) -> Result<Zeroizing<String>, String> {
     Ok(text)
 }
 
-/// What the watch loop reports: which key signs, and whether the signing keys and the published
-/// public keys have differed for too long.
+/// What the watch loop reports: which key signs, whether the signing keys and the published
+/// public keys have differed for too long, and whether the signing key is overdue for its
+/// rotation by age.
 struct Monitor {
     propagation: i64,
+    /// The rotation CronJob's maximum key age; `None` while rotation by age is off.
+    max_key_age: Option<i64>,
+    /// The key id last reported as overdue, so each key is reported once.
+    overdue: Option<String>,
     /// The key id last reported as signing (`Some(None)`: reported that none may sign).
     signing: Option<Option<String>>,
     /// Since when the two sets have differed (Unix time).
@@ -357,10 +377,47 @@ impl Monitor {
     fn new(propagation: i64) -> Self {
         Self {
             propagation,
+            max_key_age: None,
+            overdue: None,
             signing: None,
             differ_since: None,
             reported: false,
         }
+    }
+
+    fn with_max_key_age(mut self, max_key_age: Option<i64>) -> Self {
+        self.max_key_age = max_key_age;
+        self
+    }
+
+    /// Logs an ERROR, once per key, when the key that signs at `now` should have been replaced
+    /// by the rotation CronJob two days ago or more: the CronJob does not run (suspended, its
+    /// image cannot be pulled, the controller is down) or keeps failing. Key id and times only.
+    fn observe_age(&mut self, now: i64, issuer: &Issuer) {
+        let Some(max_key_age) = self.max_key_age else {
+            return;
+        };
+        let Some((kid, Some(published_at))) = issuer.signing_published(now) else {
+            return;
+        };
+        let overdue_at = published_at
+            .saturating_add(max_key_age)
+            .saturating_add(self.propagation)
+            .saturating_add(identity_keys::ROTATION_OVERDUE_SECS);
+        if now < overdue_at || self.overdue.as_deref() == Some(kid.as_str()) {
+            return;
+        }
+        tracing::error!(
+            kid = %kid,
+            published_at = %identity_keys::rfc3339(published_at),
+            max_key_age_seconds = max_key_age,
+            "the internal identity signing key is older than internalIdentity.maxKeyAgeSeconds \
+             allows, two days past its rotation: the rotation CronJob \
+             <release>-identity-key-rotation does not run or keeps failing. kubectl get \
+             cronjob,jobs shows its last runs and kubectl logs job/<job> why \
+             (docs/runbooks/secrets.md)"
+        );
+        self.overdue = Some(kid);
     }
 
     fn observe(&mut self, now: i64, issuer: &Issuer, published: &PublishedKeys) {
@@ -376,6 +433,7 @@ impl Monitor {
             }
             self.signing = Some(signing);
         }
+        self.observe_age(now, issuer);
         let Some(secret) = issuer.public_keys() else {
             return;
         };
@@ -791,5 +849,31 @@ mod tests {
         monitor.observe(1602, &issuer, &published);
         assert_eq!((monitor.differ_since, monitor.reported), (None, false));
         assert_eq!(monitor.signing, Some(Some("b".to_owned())));
+    }
+
+    /// Laysi/trustiot-v2#429: a signing key two days past its rotation by age is reported once;
+    /// without a maximum age, never.
+    #[test]
+    fn a_signing_key_overdue_for_its_rotation_is_reported_once() {
+        let published = PublishedKeys::from(keys(&[(1, "a"), (2, "b")]));
+        // Both published at 0; "a" signs from 0, "b" from 200000, after "a" is overdue.
+        let issuer = Issuer::with_keys(
+            signing_keys(&[(1, "a", 0), (2, "b", 200_000)]),
+            published.clone(),
+            0,
+        );
+        let overdue_at = 1000 + 600 + identity_keys::ROTATION_OVERDUE_SECS;
+        let mut off = Monitor::new(600);
+        off.observe(overdue_at, &issuer, &published);
+        assert_eq!(off.overdue, None);
+
+        let mut monitor = Monitor::new(600).with_max_key_age(Some(1000));
+        monitor.observe(overdue_at - 1, &issuer, &published);
+        assert_eq!(monitor.overdue, None, "not yet overdue");
+        monitor.observe(overdue_at, &issuer, &published);
+        assert_eq!(monitor.overdue.as_deref(), Some("a"));
+        // The next key is reported on its own once it is overdue too.
+        monitor.observe(200_000, &issuer, &published);
+        assert_eq!(monitor.overdue.as_deref(), Some("b"));
     }
 }

@@ -243,8 +243,10 @@ mesh:
 internalIdentity:
   # Increase it to rotate the signing key: the identity service restarts, its init container adds
   # a new key, publishes its public key at once and lets it sign keyPropagationSeconds later; the
-  # old key leaves at the first identity pod start after its last token expired. Only goes up: a
-  # rollback to a lower number changes nothing (docs/runbooks/secrets.md).
+  # old key leaves at the first identity pod start (or run of the rotation CronJob below) after its
+  # last token expired. Rotation by age keeps this generation, so this stays the number to raise
+  # for a manual rotation and to revoke below. Only goes up: a rollback to a lower number changes
+  # nothing (docs/runbooks/secrets.md).
   keyGeneration: "1"
   # Set it to a new generation (and keyGeneration to at least it) when a private key leaked: keys
   # of a lower generation are removed at once and a new key signs right away. Leave it afterwards.
@@ -253,6 +255,17 @@ internalIdentity:
   # the ConfigMap change (the kubelet's sync period plus its cache, about a minute by default).
   # Raise it on a cluster with a longer kubelet syncFrequency. 120 to 86400.
   keyPropagationSeconds: 600
+  # Automatic rotation by key age (Laysi/trustiot-v2#429): once the signing key was published this
+  # many seconds ago, the CronJob <release>-identity-key-rotation adds a new key and rotates it in
+  # like a manual rotation (published first, signing keyPropagationSeconds later, the old key
+  # removed once its last token expired), with no restart. 0 turns it off. Otherwise at least
+  # 2 * keyPropagationSeconds + 305 and at most 31536000 (365 days). Default: 90 days.
+  maxKeyAgeSeconds: 7776000
+  # When the CronJob checks the key's age, in Etc/UTC: @daily, @midnight, @hourly, or a cron
+  # schedule whose day of month, month and day of week are *, so it runs every day (the schema
+  # rejects anything sparser: a key would outlive maxKeyAgeSeconds by weeks, and the identity
+  # service logs an ERROR when its key is two days past its rotation).
+  keyRotationSchedule: "17 3 * * *"
   # Installations from before Laysi/trustiot-v2#404 only, while they move over (README.md,
   # 「內部身分」): the Secret a person made with the identity service's PKCS#8 private key, and
   # its public key {kid, x}. The init container imports that key once, under its key id, so the

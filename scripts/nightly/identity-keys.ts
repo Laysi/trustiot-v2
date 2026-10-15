@@ -250,3 +250,95 @@ export async function checkIdentityKeys(ctx: IdentityKeysContext, namespace: str
     `fresh install: ${delays.join("; ")}`
   );
 }
+
+// ---------------------------------------------------------------------------------------------
+// The CronJob that rotates the signing key by age (Laysi/trustiot-v2#429; docs/architecture/
+// secrets.md, 「依金鑰年齡自動輪替」). The smoke runs it once on the fresh install: on a key minutes
+// old it is not due, so a run that succeeds and leaves the published keys as they were proves its
+// pod starts, reaches the API through the mesh and the NetworkPolicies, and may get and patch the
+// two objects as the identity service's ServiceAccount. The rotation itself is tested on the lab
+// (deploy/chart/tests/e2e/key-rotation.e2e.ts), not here: it takes several minutes.
+
+/** The component label of the rotation CronJob (deploy/chart/templates/internal-identity.yaml). */
+export const ROTATION_COMPONENT = "identity-key-rotation";
+/** The name of the Job the smoke creates from it: the CronJob's name (at most 52) plus this. */
+export const ROTATION_JOB_SUFFIX = "-smoke";
+
+export interface RotationCronJob {
+  name: string;
+  serviceAccount: string;
+}
+
+/**
+ * The release's rotation CronJob, if it renders one (internalIdentity.maxKeyAgeSeconds is not 0),
+ * and why its pod is not the one the design describes: the identity service's ServiceAccount with
+ * a projected token only, one container, no Secret mounted or read.
+ */
+export function rotationCronJobOf(objects: K8sObject[], keys: IdentityKeyObjects): { cronJob?: RotationCronJob; problems: string[] } {
+  const found = objects.filter((o) => o.kind === "CronJob" && o.metadata?.labels?.["app.kubernetes.io/component"] === ROTATION_COMPONENT);
+  if (found.length === 0) return { problems: [] };
+  if (found.length > 1) return { problems: [`the release has ${found.length} rotation CronJobs`] };
+  const cronJob = found[0]!;
+  const name = cronJob.metadata?.name ?? "";
+  const pod = asMap(asMap(asMap(asMap(asMap(cronJob.spec).jobTemplate).spec).template).spec);
+  const problems: string[] = [];
+  const serviceAccount = asString(pod.serviceAccountName) ?? "";
+  if (serviceAccount !== keys.serviceAccount) problems.push(`${name}: runs as ${serviceAccount || "the default ServiceAccount"}, not ${keys.serviceAccount}`);
+  if (pod.automountServiceAccountToken !== false) problems.push(`${name}: mounts the default token`);
+  if (asArray(pod.containers).length !== 1 || asArray(pod.initContainers).length > 0) problems.push(`${name}: has more than its one container`);
+  const volumes = JSON.stringify(pod.volumes ?? []);
+  if (volumes.includes('"secret"') || volumes.includes(keys.secret)) problems.push(`${name}: mounts a Secret`);
+  if (JSON.stringify(pod).includes("secretKeyRef")) problems.push(`${name}: reads a Secret into its environment`);
+  return { cronJob: { name, serviceAccount }, problems };
+}
+
+/** Whether a Job (`kubectl get job -o json`) has succeeded or failed, with the reason; undefined while it runs. */
+export function jobOutcome(job: unknown): { done: "succeeded" | "failed"; reason: string } | undefined {
+  const status = asMap(asMap(job).status);
+  if (typeof status.succeeded === "number" && status.succeeded > 0) return { done: "succeeded", reason: "" };
+  const failed = asArray(status.conditions)
+    .filter(isMap)
+    .find((condition) => condition.type === "Failed" && condition.status === "True");
+  if (failed !== undefined) return { done: "failed", reason: `${asString(failed.reason) ?? ""}: ${asString(failed.message) ?? ""}` };
+  return undefined;
+}
+
+/** How long the smoke waits for the run: an image pull and a start on a loaded runner. */
+export const ROTATION_RUN_TIMEOUT_MS = 300_000;
+
+/** Runs the rotation CronJob once and checks it succeeded without changing the keys; returns the report line. */
+export async function checkKeyRotationRun(ctx: IdentityKeysContext, namespace: string, objects: K8sObject[]): Promise<string> {
+  const env = { KUBECONFIG: ctx.kubeconfig };
+  const kubectl = (args: string[], quiet = true) => run(ctx.log, [ctx.kubectl, "--namespace", namespace, ...args], { env, timeoutMs: 60_000, quiet });
+  const keys = identityKeyObjectsOf(objects);
+  const { cronJob, problems } = rotationCronJobOf(objects, keys);
+  if (problems.length > 0) throw new Error(problems.join("; "));
+  if (cronJob === undefined) return "the release renders no rotation CronJob (internalIdentity.maxKeyAgeSeconds is 0)";
+  const publishedNow = async () => publishedKeysOf(keys.configMap, JSON.parse((await kubectl(["get", "configmap", keys.configMap, "--output", "json"])).stdout));
+  const before = await publishedNow();
+  const job = `${cronJob.name}${ROTATION_JOB_SUFFIX}`;
+  await kubectl(["create", "job", job, `--from=cronjob/${cronJob.name}`], false);
+  const started = Date.now();
+  try {
+    let outcome: ReturnType<typeof jobOutcome>;
+    while (outcome === undefined) {
+      if (Date.now() - started > ROTATION_RUN_TIMEOUT_MS) {
+        throw new Error(`Job ${job} from ${cronJob.name} did not finish within ${ROTATION_RUN_TIMEOUT_MS / 1000} s`);
+      }
+      await Bun.sleep(2_000);
+      outcome = jobOutcome(JSON.parse((await kubectl(["get", "job", job, "--output", "json"])).stdout));
+    }
+    if (outcome.done === "failed") throw new Error(`Job ${job} from ${cronJob.name} failed (${outcome.reason}); kubectl logs job/${job} says why`);
+    const took = seconds(Date.now() - started);
+    const after = await publishedNow();
+    const summary = await kubectl(["get", "secret", keys.secret, "--output", `go-template=${SECRET_SUMMARY_TEMPLATE}`]);
+    const changed = [...after.problems, ...secretSummaryProblems(keys.secret, summary.stdout)];
+    if (JSON.stringify(after.kids) !== JSON.stringify(before.kids)) {
+      changed.push(`the published keys changed from [${before.kids.join(", ")}] to [${after.kids.join(", ")}], though a key minutes old is not due`);
+    }
+    if (changed.length > 0) throw new Error(changed.join("; "));
+    return `${cronJob.name} ran once as ${cronJob.serviceAccount} (Job ${job}) and succeeded within ${took}; the key was not due, so the ${after.kids.length} published key(s) stayed`;
+  } finally {
+    await kubectl(["delete", "job", job, "--ignore-not-found", "--wait=true", "--timeout=120s"]);
+  }
+}

@@ -10,15 +10,19 @@
 //! - [`SigningKeys::jwks`]: the public JWK Set derived from the set, which the init container
 //!   writes to the ConfigMap `<release>-internal-identity-keys` as [`JWKS_FILE`] and every service
 //!   verifies tokens with.
-//! - [`SigningKeys::plan`] and [`SigningKeys::publish`]: what the init container does to the set
-//!   on each run: import a person's key (the move from before Laysi/trustiot-v2#404), revoke,
-//!   add a key for a new generation, retire keys whose tokens have expired.
+//! - [`SigningKeys::plan`] and [`SigningKeys::publish`]: what the init container, and the
+//!   CronJob that rotates by key age (Laysi/trustiot-v2#429), do to the set on each run: import a
+//!   person's key (the move from before Laysi/trustiot-v2#404), revoke, add a key for a new
+//!   generation, add a key when the newest has reached its maximum age, retire keys whose tokens
+//!   have expired.
 //! - [`SigningKeys::signing_key`]: which key the identity service signs with at a given time.
 //!
 //! The rules in short: a new key is written to the Secret first, then published in the JWK Set,
 //! then given `published_at` (that moment) and `signs_from` (`published_at` plus the propagation
 //! time, or `published_at` itself when no other key can sign). Keys older than the newest signing
-//! key go once its `signs_from` is `propagation + TOKEN_EXPIRY_SECS` in the past. Nothing here
+//! key go once its `signs_from` is `propagation + TOKEN_EXPIRY_SECS` in the past. A rotation by
+//! age adds a key of the highest generation already in the set, so generations stay what the
+//! chart's values make them. Nothing here
 //! formats key material: `Debug`, errors and [`Change`] carry key ids and times only.
 
 use std::fmt;
@@ -56,6 +60,25 @@ pub const TOKEN_EXPIRY_SECS: i64 = 305;
 
 /// Largest key set document read, in bytes; eight keys take about 2 KiB.
 pub const MAX_DOCUMENT_BYTES: usize = 64 * 1024;
+
+/// Longest maximum key age of a rotation by age, in seconds: 365 days (the chart's schema maximum
+/// of `internalIdentity.maxKeyAgeSeconds`).
+pub const MAX_KEY_AGE_SECS: i64 = 365 * 86_400;
+
+/// How long after its key was due a rotation by age may still be missing before the identity
+/// service reports it as overdue: two days, so a daily schedule may fail once.
+pub const ROTATION_OVERDUE_SECS: i64 = 2 * 86_400;
+
+/// Shortest maximum key age for a propagation time: twice the propagation time plus
+/// [`TOKEN_EXPIRY_SECS`], the time from a key's publication until the keys it replaced may
+/// retire ([`SigningKeys::retire_at`]). So a rotation by age always finds the key before the
+/// last one ready to retire, and the set holds two keys between rotations, never more than three.
+#[must_use]
+pub fn min_max_key_age(propagation: i64) -> i64 {
+    propagation
+        .saturating_mul(2)
+        .saturating_add(TOKEN_EXPIRY_SECS)
+}
 
 /// The generation of a key imported from a Secret a person made (before Laysi/trustiot-v2#404):
 /// below every generation the chart requests, so removing the person's Secret from the values
@@ -189,6 +212,19 @@ impl SigningKey {
     #[must_use]
     pub fn signer(&self) -> &ed25519_dalek::SigningKey {
         &self.key
+    }
+
+    /// When an automatic rotation of this key, while it signs, counts as overdue: its
+    /// `published_at` plus `max_age` (when it was due), `propagation` (until its successor
+    /// signs) and [`ROTATION_OVERDUE_SECS`]. `None` while it is not published.
+    #[must_use]
+    pub fn rotation_overdue_at(&self, max_age: i64, propagation: i64) -> Option<i64> {
+        self.published_at.map(|published| {
+            published
+                .saturating_add(max_age)
+                .saturating_add(propagation)
+                .saturating_add(ROTATION_OVERDUE_SECS)
+        })
     }
 
     fn same_key(&self, other: &Self) -> bool {
@@ -424,17 +460,35 @@ impl SigningKeys {
     /// time) plus [`TOKEN_EXPIRY_SECS`].
     #[must_use]
     pub fn retire_at(&self, now: i64) -> Option<i64> {
-        let newest = self
-            .keys
-            .iter()
-            .filter(|key| key.signs_at(now))
-            .max_by_key(|key| (key.signs_from, key.generation))?;
+        let newest = self.newest_signing(now)?;
         let (published_at, signs_from) = (newest.published_at?, newest.signs_from?);
         Some(
             signs_from
                 .saturating_add(signs_from.saturating_sub(published_at))
                 .saturating_add(TOKEN_EXPIRY_SECS),
         )
+    }
+
+    /// The newest key that signs at `now`: the latest `signs_from`, then the highest generation.
+    fn newest_signing(&self, now: i64) -> Option<&SigningKey> {
+        self.keys
+            .iter()
+            .filter(|key| key.signs_at(now))
+            .max_by_key(|key| (key.signs_from, key.generation))
+    }
+
+    /// When the set is due for a rotation by key age with `max_age` seconds
+    /// (Laysi/trustiot-v2#429): the `published_at` of the newest key that signs at `now` plus
+    /// `max_age`. `None` while no rotation can start: the set is empty, or a key waits to be
+    /// published or to sign (a rotation is under way).
+    #[must_use]
+    pub fn rotation_due_at(&self, now: i64, max_age: i64) -> Option<i64> {
+        if self.keys.is_empty() || !self.keys.iter().all(|key| key.signs_at(now)) {
+            return None;
+        }
+        self.newest_signing(now)?
+            .published_at
+            .map(|published| published.saturating_add(max_age))
     }
 
     /// What one run of the init container makes of the set at `now`, in this order:
@@ -446,7 +500,13 @@ impl SigningKeys {
     /// 3. **Add**: an empty set, or (without a person's key configured) a set whose highest
     ///    generation is below `request.generation`, gets a new key from `generate`. Keys that
     ///    have not started signing yet go first: they never signed a token.
-    /// 4. **Retire**: without a person's key configured, keys older than the newest signing key
+    /// 4. **Rotate by age**: with `request.max_key_age` set, nothing added in step 3 and no
+    ///    person's key configured, a set due at `now` ([`SigningKeys::rotation_due_at`]) gets
+    ///    a new key of the highest generation it holds. The values' generation stays a floor that
+    ///    automatic rotation never goes below nor above, so a higher `request.generation` still
+    ///    adds a key and `request.revoke_before` still removes the automatic keys of every
+    ///    generation below it.
+    /// 5. **Retire**: without a person's key configured, keys older than the newest signing key
     ///    go once [`SigningKeys::retire_at`] has come.
     ///
     /// While a person's key is configured nothing is added or retired except as revocation
@@ -511,16 +571,33 @@ impl SigningKeys {
                 generation: key.generation,
             });
             self.keys.push(key);
+        } else if !legacy_configured
+            && let Some(max_age) = request.max_key_age
+            && self
+                .rotation_due_at(now, max_age)
+                .is_some_and(|due| now >= due)
+            && let Some(aged) = self.newest_signing(now)
+            && let Some(published_at) = aged.published_at
+        {
+            let replaces = aged.kid.clone();
+            // Not below the values' generation; without a person's key and with nothing added
+            // above, the set's highest generation is never below it anyway.
+            let generation = highest
+                .unwrap_or(request.generation)
+                .max(request.generation);
+            let key = generate(generation)?;
+            changes.push(Change::Rotated {
+                kid: key.kid.clone(),
+                generation,
+                replaces,
+                published_at,
+            });
+            self.keys.push(key);
         }
         if !legacy_configured
             && let Some(retire_at) = self.retire_at(now)
             && now >= retire_at
-            && let Some(newest) = self
-                .keys
-                .iter()
-                .filter(|key| key.signs_at(now))
-                .max_by_key(|key| (key.signs_from, key.generation))
-                .and_then(SigningKey::signs_from)
+            && let Some(newest) = self.newest_signing(now).and_then(SigningKey::signs_from)
         {
             self.keys.retain(|key| {
                 let keep = key.signs_from.is_none_or(|from| from >= newest);
@@ -628,13 +705,16 @@ fn from_stored(stored: Stored) -> Result<SigningKey, KeyProblem> {
 }
 
 /// What a run asks for: the chart's `internalIdentity.keyGeneration` and
-/// `internalIdentity.revokeBeforeGeneration`, and the key a person made before
-/// Laysi/trustiot-v2#404 while the chart still names it (`internalIdentity.signingKeySecret`).
+/// `internalIdentity.revokeBeforeGeneration`, the key a person made before
+/// Laysi/trustiot-v2#404 while the chart still names it (`internalIdentity.signingKeySecret`),
+/// and the maximum key age in seconds of a rotation by age (`internalIdentity.maxKeyAgeSeconds`,
+/// set only in the runs of the rotation CronJob; `None` rotates nothing by age).
 #[derive(Clone, Copy, Debug)]
 pub struct Request<'a> {
     pub generation: u64,
     pub revoke_before: u64,
     pub legacy: Option<&'a SigningKey>,
+    pub max_key_age: Option<i64>,
 }
 
 /// The set a run arrived at, and what changed on the way.
@@ -655,6 +735,14 @@ pub enum Change {
     Dropped { kid: String },
     /// A new key was made for `generation`.
     Generated { kid: String, generation: u64 },
+    /// A new key of `generation` was made because key `replaces`, published at
+    /// `published_at`, reached the maximum key age.
+    Rotated {
+        kid: String,
+        generation: u64,
+        replaces: String,
+        published_at: i64,
+    },
     /// An older key went after its tokens had expired.
     Retired { kid: String },
     /// A key was published and signs from `signs_from`.
@@ -680,6 +768,17 @@ impl fmt::Display for Change {
             Self::Generated { kid, generation } => {
                 write!(f, "generated signing key {kid} (generation {generation})")
             }
+            Self::Rotated {
+                kid,
+                generation,
+                replaces,
+                published_at,
+            } => write!(
+                f,
+                "generated signing key {kid} (generation {generation}) to replace key \
+                 {replaces}, published {}, which reached internalIdentity.maxKeyAgeSeconds",
+                rfc3339(*published_at)
+            ),
             Self::Retired { kid } => write!(
                 f,
                 "retired signing key {kid}: every token it signed has expired"
@@ -690,6 +789,21 @@ impl fmt::Display for Change {
             ),
         }
     }
+}
+
+/// A Unix time as RFC 3339 in UTC to the second, for operators; the number itself when it is
+/// before the epoch (never, for the times a key set holds).
+#[must_use]
+pub fn rfc3339(unix: i64) -> String {
+    u64::try_from(unix).map_or_else(
+        |_| format!("{unix} (Unix time)"),
+        |seconds| {
+            humantime::format_rfc3339_seconds(
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
+            )
+            .to_string()
+        },
+    )
 }
 
 /// Why a document is not a key set. Never quotes the document.

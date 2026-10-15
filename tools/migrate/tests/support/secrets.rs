@@ -339,6 +339,7 @@ impl FakeSecrets {
             generation: generation.to_owned(),
             revoke_before_generation: "0".to_owned(),
             propagation_seconds: 600,
+            max_key_age_seconds: 0,
             legacy_key_file: None,
             legacy_public_keys: None,
             wait: Duration::from_secs(120),
