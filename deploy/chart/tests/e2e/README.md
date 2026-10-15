@@ -418,7 +418,7 @@ bun test --timeout 3600000 ./deploy/chart/tests/e2e/identity-keys.e2e.ts
 - **`maxKeyAgeSeconds: 0`**：升級後 CronJob 不存在，身分服務的 `TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS` 是 0；等到金鑰超過 900 秒再多 90 秒，金鑰沒有換；再重啟身分服務（init container 不依年齡輪替），仍然沒有換。
 - **沒有私鑰外流**：每一把私鑰都不在 ConfigMap、事件、身分服務（含 init container）與 example service 的日誌，以及測試期間讀到的每一次 CronJob 執行的日誌；每一次執行都成功。
 
-開始前同名的 release 或保留的物件已存在時直接失敗；結束時移除 release 與這些物件（同 `identity-keys.e2e.ts`）。整個測試約 55 分鐘，大多在等金鑰到期與舊金鑰的移除時間。前置條件與 `identity-keys.e2e.ts` 相同（上一節）。
+開始前同名的 release 或保留的物件已存在時直接失敗；結束時移除 release 與這些物件（同 `identity-keys.e2e.ts`）。整個測試約 55 分鐘，大多在等金鑰到期與舊金鑰的移除時間。只讀的 kubectl 指令在連不上 API server 時每 5 秒重試、最多 5 分鐘（經 SSH 轉送連 lab 時網路可能中斷一陣子），改變叢集的指令不重試。前置條件與 `identity-keys.e2e.ts` 相同（上一節）。
 
 執行（在 repo 根目錄）：
 

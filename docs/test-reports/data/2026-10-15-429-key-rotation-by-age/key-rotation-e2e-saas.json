@@ -1,0 +1,203 @@
+{
+  "run": "6ede2c55",
+  "shape": "saas",
+  "namespace": "e2e-429",
+  "release": "trustiot",
+  "propagationSeconds": 120,
+  "maxKeyAgeSeconds": 900,
+  "schedule": "* * * * *",
+  "install": {
+    "helmSeconds": 30.9
+  },
+  "access": {
+    "serviceAccounts": [
+      "default",
+      "trustiot-assets",
+      "trustiot-clickhouse",
+      "trustiot-identity",
+      "trustiot-ingress-istio",
+      "trustiot-migrate",
+      "trustiot-postgres"
+    ],
+    "questions": 14,
+    "allowed": [
+      "trustiot-identity get configmaps/trustiot-internal-identity-keys",
+      "trustiot-identity get secrets/trustiot-identity-signing-keys",
+      "trustiot-identity patch configmaps/trustiot-internal-identity-keys",
+      "trustiot-identity patch secrets/trustiot-identity-signing-keys"
+    ]
+  },
+  "notDue": {
+    "job": "trustiot-identity-key-rotation-29867543",
+    "rotationDueAt": 1792053477,
+    "publishedAt": 1792052577
+  },
+  "automaticRotation": {
+    "first": {
+      "kid": "zKYP2V3PXR2aZAvPC-q6uxC9s8TkJOSp94W0d1H4MoA",
+      "generation": 1,
+      "publishedAt": 1792052577
+    },
+    "second": {
+      "kid": "QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo",
+      "generation": 1,
+      "publishedAt": 1792053480,
+      "signsFrom": 1792053600
+    },
+    "rotatingJob": "trustiot-identity-key-rotation-29867558",
+    "rotatingJobChanges": [
+      "generated signing key QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo (generation 1) to replace key zKYP2V3PXR2aZAvPC-q6uxC9s8TkJOSp94W0d1H4MoA, published 2026-10-15T08:22:57Z, which reached internalIdentity.maxKeyAgeSeconds in Secret trustiot-identity-signing-keys",
+      "published the public keys zKYP2V3PXR2aZAvPC-q6uxC9s8TkJOSp94W0d1H4MoA, QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo in ConfigMap trustiot-internal-identity-keys",
+      "published signing key QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo; it signs from 1792053600 (Unix time) in Secret trustiot-identity-signing-keys"
+    ],
+    "publishedAfterDueSeconds": 3,
+    "assetsLoadedAfterPublishedSeconds": 31.9,
+    "identityPublicKeysLoadedAfterPublishedSeconds": 11.9,
+    "identitySwitchedAfterSignsFromSeconds": 1.9,
+    "oldTokenTakenBeforeSignsFromSeconds": 18.9,
+    "oldTokenVerifiedAfterSignsFromSeconds": 3.2,
+    "oldTokenAfterSwitch": 200,
+    "newToken": {
+      "kid": "QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo",
+      "status": 200
+    },
+    "probes": {
+      "count": 327,
+      "failed": 0,
+      "firstAt": 1792052622328,
+      "lastAt": 1792053632673,
+      "kidsInOrder": [
+        "zKYP2V3PXR2aZAvPC-q6uxC9s8TkJOSp94W0d1H4MoA",
+        "QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo"
+      ],
+      "failures": []
+    },
+    "restarts": {
+      "before": {
+        "identity": 0,
+        "assets": 0
+      },
+      "after": {
+        "identity": 0,
+        "assets": 0
+      }
+    }
+  },
+  "retirement": {
+    "job": "trustiot-identity-key-rotation-29867568",
+    "retiredAfterRetireAtSeconds": 57.3,
+    "assetsDroppedAfterRetireAtSeconds": 81.9,
+    "token": {
+      "kid": "QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo",
+      "status": 200,
+      "userMatches": true
+    }
+  },
+  "manualRotation": {
+    "keys": [
+      {
+        "kid": "QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo",
+        "generation": 1,
+        "published_at": 1792053480,
+        "signs_from": 1792053600
+      },
+      {
+        "kid": "qhxZqwYLwkhoKKKYzO-DJprc5nYTEh4f2sYOdApenqM",
+        "generation": 2,
+        "published_at": 1792054117,
+        "signs_from": 1792054237
+      }
+    ],
+    "upgradeToPublishedSeconds": 3.4,
+    "token": {
+      "kid": "qhxZqwYLwkhoKKKYzO-DJprc5nYTEh4f2sYOdApenqM",
+      "status": 200,
+      "userMatches": true
+    }
+  },
+  "revocation": {
+    "revoked": [
+      "QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo",
+      "qhxZqwYLwkhoKKKYzO-DJprc5nYTEh4f2sYOdApenqM"
+    ],
+    "kid": "gVzSmEAWiqPnZygU7vnqQz6Ybdh7UohmYpcII7Gfgic",
+    "upgradeToPublishedSeconds": 2.8,
+    "assetsDroppedAfterPublishedSeconds": 35.9,
+    "token": {
+      "kid": "gVzSmEAWiqPnZygU7vnqQz6Ybdh7UohmYpcII7Gfgic",
+      "status": 200,
+      "userMatches": true
+    }
+  },
+  "disabled": {
+    "waitedSeconds": 943.1,
+    "looks": 32,
+    "keyAgeSeconds": 997.1,
+    "keys": [
+      "gVzSmEAWiqPnZygU7vnqQz6Ybdh7UohmYpcII7Gfgic"
+    ],
+    "token": {
+      "kid": "gVzSmEAWiqPnZygU7vnqQz6Ybdh7UohmYpcII7Gfgic",
+      "status": 200,
+      "userMatches": true
+    }
+  },
+  "rotationRuns": [
+    {
+      "job": "trustiot-identity-key-rotation-29867543",
+      "startedAt": 1792052580000,
+      "finishedAt": 1792052583000,
+      "succeeded": true,
+      "serviceAccount": "trustiot-identity",
+      "changes": [],
+      "keys": "[\"zKYP2V3PXR2aZAvPC-q6uxC9s8TkJOSp94W0d1H4MoA\"]",
+      "signing": "zKYP2V3PXR2aZAvPC-q6uxC9s8TkJOSp94W0d1H4MoA",
+      "retireAt": 1792052882,
+      "rotationDueAt": 1792053477
+    },
+    {
+      "job": "trustiot-identity-key-rotation-29867558",
+      "startedAt": 1792053480000,
+      "finishedAt": 1792053483000,
+      "succeeded": true,
+      "serviceAccount": "trustiot-identity",
+      "changes": [
+        "generated signing key QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo (generation 1) to replace key zKYP2V3PXR2aZAvPC-q6uxC9s8TkJOSp94W0d1H4MoA, published 2026-10-15T08:22:57Z, which reached internalIdentity.maxKeyAgeSeconds in Secret trustiot-identity-signing-keys",
+        "published the public keys zKYP2V3PXR2aZAvPC-q6uxC9s8TkJOSp94W0d1H4MoA, QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo in ConfigMap trustiot-internal-identity-keys",
+        "published signing key QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo; it signs from 1792053600 (Unix time) in Secret trustiot-identity-signing-keys"
+      ],
+      "keys": "[\"zKYP2V3PXR2aZAvPC-q6uxC9s8TkJOSp94W0d1H4MoA\", \"QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo\"]",
+      "signing": "zKYP2V3PXR2aZAvPC-q6uxC9s8TkJOSp94W0d1H4MoA",
+      "retireAt": 1792052882
+    },
+    {
+      "job": "trustiot-identity-key-rotation-29867567",
+      "startedAt": 1792054020000,
+      "finishedAt": 1792054023000,
+      "succeeded": true,
+      "serviceAccount": "trustiot-identity",
+      "changes": [],
+      "keys": "[\"zKYP2V3PXR2aZAvPC-q6uxC9s8TkJOSp94W0d1H4MoA\", \"QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo\"]",
+      "signing": "QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo",
+      "retireAt": 1792054025,
+      "rotationDueAt": 1792054380
+    },
+    {
+      "job": "trustiot-identity-key-rotation-29867568",
+      "startedAt": 1792054080000,
+      "finishedAt": 1792054083000,
+      "succeeded": true,
+      "serviceAccount": "trustiot-identity",
+      "changes": [
+        "retired signing key zKYP2V3PXR2aZAvPC-q6uxC9s8TkJOSp94W0d1H4MoA: every token it signed has expired in Secret trustiot-identity-signing-keys",
+        "published the public keys QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo in ConfigMap trustiot-internal-identity-keys"
+      ],
+      "keys": "[\"QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo\"]",
+      "signing": "QblrifpB1rul9f8fsnBAXr5nGTvr_5lULRKSNqbIZlo",
+      "retireAt": 1792054025,
+      "rotationDueAt": 1792054380
+    }
+  ],
+  "logsChecked": 9,
+  "privateKeysFound": []
+}

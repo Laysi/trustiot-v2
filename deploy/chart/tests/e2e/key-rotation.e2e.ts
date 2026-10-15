@@ -126,7 +126,25 @@ function run(cmd: string[], stdin?: string): string {
   return result.stdout;
 }
 const kubectlArgs = () => [KUBECTL, ...(CONTEXT ? ["--context", CONTEXT] : []), "--namespace", NAMESPACE];
-const kubectl = (...args: string[]) => run([...kubectlArgs(), ...args]);
+// A command that only reads is tried again while the API server cannot be reached, for up to five
+// minutes: the run takes most of an hour, and a lab reached through a forwarded port can drop the
+// connection for a while (seen on 2026-10-15). A command that changes the cluster is never repeated.
+const UNREACHABLE = /connection refused|was refused|connection reset|TLS handshake timeout|i\/o timeout|unable to connect|cluster unreachable/i;
+const READ_RETRY_MS = 300_000;
+function read(args: string[]): string {
+  const deadline = Date.now() + READ_RETRY_MS;
+  for (;;) {
+    const result = exec([...kubectlArgs(), ...args]);
+    if (result.code === 0) return result.stdout;
+    if (!UNREACHABLE.test(result.stderr) || Date.now() > deadline) {
+      throw new Error(`kubectl ${args.slice(0, 4).join(" ")} failed (${result.code}):\n${result.stderr}`);
+    }
+    console.log(`the API server cannot be reached; kubectl ${args.slice(0, 2).join(" ")} again in 5 s`);
+    Bun.sleepSync(5_000);
+  }
+}
+const readOnly = (args: string[]) => args[0] === "get" || args[0] === "logs" || (args[0] === "rollout" && args[1] === "status");
+const kubectl = (...args: string[]) => (readOnly(args) ? read(args) : run([...kubectlArgs(), ...args]));
 const kubectlIn = (stdin: string, ...args: string[]) => run([...kubectlArgs(), ...args], stdin);
 const helm = (...args: string[]) => run([HELM, ...(CONTEXT ? ["--kube-context", CONTEXT] : []), "--namespace", NAMESPACE, ...args]);
 const json = <T>(...args: string[]) => JSON.parse(kubectl(...args, "--output", "json")) as T;
@@ -794,8 +812,15 @@ describe(`rotation of the internal identity key by age (${SHAPE} shape)`, () => 
     const key = before[0] as StoredKey;
     // Past the age and past a run that would have rotated it.
     const pastDue = ((key.published_at ?? 0) + MAX_AGE_S + 90) * 1000;
-    const waited = Math.max(pastDue - Date.now(), 0);
-    await Bun.sleep(waited);
+    // Looked at every 30 s on the way, so a change shows when it happened.
+    const waitStarted = Date.now();
+    let looks = 0;
+    while (Date.now() < pastDue) {
+      expect(signingKeys().keys).toEqual(before);
+      looks += 1;
+      await Bun.sleep(Math.min(30_000, Math.max(pastDue - Date.now(), 0)));
+    }
+    const waited = Date.now() - waitStarted;
     expect(signingKeys().keys).toEqual(before);
     // The init container does not rotate by age either.
     kubectl("rollout", "restart", `deployment/${IDENTITY}`);
@@ -803,7 +828,7 @@ describe(`rotation of the internal identity key by age (${SHAPE} shape)`, () => 
     expect(signingKeys().keys).toEqual(before);
     expect(publicKids()).toEqual([key.kid]);
     const trip = await roundTrip(session);
-    report.disabled = { waitedSeconds: seconds(waited), keyAgeSeconds: seconds(Date.now() - (key.published_at ?? 0) * 1000), keys: before.map((k) => k.kid), token: trip };
+    report.disabled = { waitedSeconds: seconds(waited), looks, keyAgeSeconds: seconds(Date.now() - (key.published_at ?? 0) * 1000), keys: before.map((k) => k.kid), token: trip };
     console.log(`disabled: ${JSON.stringify(report.disabled)}`);
     expect(trip).toEqual({ kid: key.kid, status: 200, userMatches: true });
   }, 1_800_000);

@@ -1,0 +1,132 @@
+{
+  "run": "3d407e08",
+  "shape": "saas",
+  "namespace": "e2e-429",
+  "release": "trustiot",
+  "propagationSeconds": 120,
+  "maxKeyAgeSeconds": 900,
+  "schedule": "* * * * *",
+  "install": {
+    "helmSeconds": 38.8
+  },
+  "access": {
+    "serviceAccounts": [
+      "default",
+      "trustiot-assets",
+      "trustiot-clickhouse",
+      "trustiot-identity",
+      "trustiot-ingress-istio",
+      "trustiot-migrate",
+      "trustiot-postgres"
+    ],
+    "questions": 14,
+    "allowed": [
+      "trustiot-identity get configmaps/trustiot-internal-identity-keys",
+      "trustiot-identity get secrets/trustiot-identity-signing-keys",
+      "trustiot-identity patch configmaps/trustiot-internal-identity-keys",
+      "trustiot-identity patch secrets/trustiot-identity-signing-keys"
+    ]
+  },
+  "notDue": {
+    "job": "trustiot-identity-key-rotation-29867490",
+    "rotationDueAt": 1792050284,
+    "publishedAt": 1792049384
+  },
+  "automaticRotation": {
+    "first": {
+      "kid": "oBilzdJKOV9nHm2aeLm-yau1nJdDoEKCFXEApBP1dDw",
+      "generation": 1,
+      "publishedAt": 1792049384
+    },
+    "second": {
+      "kid": "UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc",
+      "generation": 1,
+      "publishedAt": 1792050300,
+      "signsFrom": 1792050420
+    },
+    "rotatingJob": "trustiot-identity-key-rotation-29867505",
+    "rotatingJobChanges": [
+      "generated signing key UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc (generation 1) to replace key oBilzdJKOV9nHm2aeLm-yau1nJdDoEKCFXEApBP1dDw, published 2026-10-15T07:29:44Z, which reached internalIdentity.maxKeyAgeSeconds in Secret trustiot-identity-signing-keys",
+      "published the public keys oBilzdJKOV9nHm2aeLm-yau1nJdDoEKCFXEApBP1dDw, UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc in ConfigMap trustiot-internal-identity-keys",
+      "published signing key UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc; it signs from 1792050420 (Unix time) in Secret trustiot-identity-signing-keys"
+    ],
+    "publishedAfterDueSeconds": 16,
+    "assetsLoadedAfterPublishedSeconds": 16,
+    "identityPublicKeysLoadedAfterPublishedSeconds": 26,
+    "identitySwitchedAfterSignsFromSeconds": 1,
+    "oldTokenTakenBeforeSignsFromSeconds": 18.8,
+    "oldTokenVerifiedAfterSignsFromSeconds": 3.4,
+    "oldTokenAfterSwitch": 200,
+    "newToken": {
+      "kid": "UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc",
+      "status": 200
+    },
+    "probes": {
+      "count": 329,
+      "failed": 0,
+      "firstAt": 1792049435160,
+      "lastAt": 1792050453580,
+      "kidsInOrder": [
+        "oBilzdJKOV9nHm2aeLm-yau1nJdDoEKCFXEApBP1dDw",
+        "UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc"
+      ],
+      "failures": []
+    },
+    "restarts": {
+      "before": {
+        "identity": 0,
+        "assets": 0
+      },
+      "after": {
+        "identity": 0,
+        "assets": 0
+      }
+    }
+  },
+  "retirement": {
+    "job": "trustiot-identity-key-rotation-29867515",
+    "retiredAfterRetireAtSeconds": 58.8,
+    "assetsDroppedAfterRetireAtSeconds": 66,
+    "token": {
+      "kid": "UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc",
+      "status": 200,
+      "userMatches": true
+    }
+  },
+  "manualRotation": {
+    "keys": [
+      {
+        "kid": "UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc",
+        "generation": 1,
+        "published_at": 1792050300,
+        "signs_from": 1792050420
+      },
+      {
+        "kid": "DUFswTQunMzrKUFFyzjrMgpeXnhyEj-rb_zUxV9i9ow",
+        "generation": 2,
+        "published_at": 1792050921,
+        "signs_from": 1792051041
+      }
+    ],
+    "upgradeToPublishedSeconds": 4.2,
+    "token": {
+      "kid": "DUFswTQunMzrKUFFyzjrMgpeXnhyEj-rb_zUxV9i9ow",
+      "status": 200,
+      "userMatches": true
+    }
+  },
+  "revocation": {
+    "revoked": [
+      "UbacscARecVZdvbZj5gFcpF5k7GuvlVzY64fpR4fFhc",
+      "DUFswTQunMzrKUFFyzjrMgpeXnhyEj-rb_zUxV9i9ow"
+    ],
+    "kid": "b1HZoLrssBjB-5M8HbDfpcd_bDnShi68zYBNExbuFUc",
+    "upgradeToPublishedSeconds": 5.7,
+    "assetsDroppedAfterPublishedSeconds": 14,
+    "token": {
+      "kid": "b1HZoLrssBjB-5M8HbDfpcd_bDnShi68zYBNExbuFUc",
+      "status": 200,
+      "userMatches": true
+    }
+  }
+}
