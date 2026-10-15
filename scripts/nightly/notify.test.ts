@@ -107,6 +107,11 @@ describe("decide", () => {
     expect(decide("pull_request", "failure")).toBe("nothing");
     expect(decide("push", "failure")).toBe("nothing");
   });
+
+  test("a skipped smoke job (the decide job found main unchanged) calls for nothing", () => {
+    expect(decide("schedule", "skipped")).toBe("nothing");
+    expect(decide("workflow_dispatch", "skipped")).toBe("nothing");
+  });
 });
 
 describe("texts", () => {
@@ -217,6 +222,13 @@ describe("notify", () => {
     await notify(github, env({ GITHUB_EVENT_NAME: "workflow_dispatch", NIGHTLY_RESULT: "failure", NIGHTLY_REPORT_DIR: join(dir, "absent") }));
     const create = github.calls.find((c) => c.method === "POST" && c.path === "/issues");
     expect((create?.body as { body: string }).body).toContain("Run the smoke test");
+  });
+
+  test("a skipped night makes no request: the failure issue is neither opened, commented on nor closed", async () => {
+    writeReport(report());
+    const github = new FakeGitHub(() => ({ status: 200, data: [{ number: 5 }] }));
+    expect(await notify(github, env({ GITHUB_EVENT_NAME: "schedule", NIGHTLY_RESULT: "skipped" }))).toBe("nothing to report");
+    expect(github.calls).toEqual([]);
   });
 
   test("a passing night closes an open failure issue and does nothing otherwise", async () => {
