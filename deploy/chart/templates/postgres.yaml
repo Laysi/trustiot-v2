@@ -8,7 +8,8 @@ its CRDs are a platform component installed once per cluster (deploy/cloudnative
 - No superuser credentials exist: superuser access is off, so the postgres role logs in only over
   the pod's local socket, where the operator works. The database owner is a role with CREATEROLE
   but without SUPERUSER or BYPASSRLS, whose password only the migration Job (Laysi/trustiot-v2#60)
-  uses; the Job creates the services' own roles.
+  uses; the Job creates the services' own roles. None of them may connect to the cluster's
+  `postgres` and template1 databases (postInitSQL, Laysi/trustiot-v2#400).
 - The pods stay outside the ambient mesh: TLS already protects every connection, and the
   operator, which runs outside the mesh, must reach each instance. The NetworkPolicy below admits
   only the services that list postgres in mesh.calls, the migration Job, the operator and the
@@ -77,6 +78,30 @@ spec:
       # change with the operating system's C library, so an image update cannot corrupt indexes.
       localeProvider: builtin
       builtinLocale: C.UTF-8
+      # As the superuser on `postgres`, before the database above exists: PUBLIC loses CONNECT
+      # and TEMPORARY on `postgres` and template1, and only CloudNativePG's own roles that need
+      # `postgres` get CONNECT back by name (Laysi/trustiot-v2#400). The privileges live in the
+      # catalog, so replicas and Clusters restored from a backup keep them. These are the
+      # statements of files/postgres/system-databases.sql, one per item; the chart test fails
+      # when the two differ (templates never read chart files, scripts/ci/check-secret-handling.ts),
+      # tools/migrate/tests/system_databases.rs runs the file, and a Cluster bootstrapped before
+      # this runs it once (docs/runbooks/migrations.md).
+      postInitSQL:
+        - |-
+          DO $$
+          BEGIN
+              IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'streaming_replica') THEN
+                  CREATE ROLE streaming_replica LOGIN REPLICATION;
+                  COMMENT ON ROLE streaming_replica IS 'Special user for streaming replication created by CloudNativePG';
+              END IF;
+              IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'cnpg_metrics_exporter') THEN
+                  CREATE ROLE cnpg_metrics_exporter LOGIN PASSWORD NULL;
+              END IF;
+          END
+          $$;
+        - GRANT CONNECT ON DATABASE postgres TO streaming_replica, cnpg_metrics_exporter;
+        - REVOKE CONNECT, TEMPORARY ON DATABASE postgres FROM PUBLIC;
+        - REVOKE CONNECT, TEMPORARY ON DATABASE template1 FROM PUBLIC;
       # The migration Job logs in as the owner and creates each service's roles (tools/migrate,
       # Laysi/trustiot-v2#60), so the owner gets CREATEROLE, as a superuser, once at bootstrap.
       # Since PostgreSQL 16 CREATEROLE cannot make a superuser, a BYPASSRLS or REPLICATION role,

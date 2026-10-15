@@ -1,4 +1,4 @@
-# 叢集測試（入口 gateway、服務間授權、日誌管線、叢集內的 Postgres、ClickHouse 管理帳號密碼）
+# 叢集測試（入口 gateway、服務間授權、日誌管線、叢集內的 Postgres、Postgres 的複寫與備份、ClickHouse 管理帳號密碼）
 
 兩個測試共用 `cluster.ts`（環境變數、`.prototools` 鎖定的 helm 與 kubectl、不碰既有安裝的 `helm install`）：
 
@@ -7,7 +7,7 @@
 | `ingress.e2e.ts` | 入口 gateway：cookie 驗證、例外路徑、標頭、路徑繞過、身分服務停機 | Laysi/trustiot-v2#62 |
 | `mesh.e2e.ts` | 服務間授權：清單內的呼叫放行、清單外的被拒，AuthorizationPolicy 與 NetworkPolicy 各自生效，預設拒絕下健康檢查通過 | Laysi/trustiot-v2#63 |
 
-`otel.e2e.ts`（日誌管線，Laysi/trustiot-v2#73）、`postgres.e2e.ts`（叢集內的 Postgres，Laysi/trustiot-v2#58）與 `clickhouse-admin.e2e.ts`（叢集內 ClickHouse 的管理帳號密碼，Laysi/trustiot-v2#403）不經入口 gateway，有自己的環境變數，不用 `cluster.ts`，見最後三節。
+`otel.e2e.ts`（日誌管線，Laysi/trustiot-v2#73）、`postgres.e2e.ts`（叢集內的 Postgres，Laysi/trustiot-v2#58）、`postgres-replication.e2e.ts`（叢集內 Postgres 的複寫、備份與還原，Laysi/trustiot-v2#400）與 `clickhouse-admin.e2e.ts`（叢集內 ClickHouse 的管理帳號密碼，Laysi/trustiot-v2#403）不經入口 gateway，有自己的環境變數，不用 `cluster.ts`，見最後四節。
 
 ## 入口 gateway（`ingress.e2e.ts`）
 
@@ -213,6 +213,7 @@ bun test --timeout 900000 ./deploy/chart/tests/e2e/otel.e2e.ts
 - 伺服器：`ssl` 開啟、`shared_preload_libraries` 含 `age`、PostgreSQL 18、`max_connections` 與 `shared_buffers` 是 values 的值；`trustiot` 資料庫的 AGE 版本等於 `deploy/images/postgres/Containerfile` 的 `AGE_VERSION`，locale 是內建的 `C.UTF-8`，owner 是 `trustiot_owner`；`postgres` 沒有密碼、`<cluster>-superuser` Secret 不存在；owner 與服務的角色都不是 superuser，也沒有 CREATEDB、BYPASSRLS；服務的角色沒有 CREATEROLE，owner 有（bootstrap 的 `postInitApplicationSQL`，migration Job 以它建立服務的角色，Laysi/trustiot-v2#60）。
 - cypher() 在這個資料庫建立、查詢並刪除一張圖。
 - 從 pod 內以 TCP、`sslmode=disable` 連線被伺服器的 pg_hba 拒絕（`no encryption`）。
+- 叢集的其他資料庫（Laysi/trustiot-v2#400）：`postgres` 與 `template1` 的 ACL 只剩 superuser，`postgres` 另外只有 `streaming_replica` 與 `cnpg_metrics_exporter` 的 `CONNECT`；superuser 與 `pg_` 開頭的角色以外，每個角色（owner、Job 建立的角色、operator 的角色）在兩個資料庫都沒有 `CONNECT` 與 `TEMPORARY`，只有 operator 的兩個角色有 `postgres` 的 `CONNECT`。`identity_app` 以 Job 產生的密碼（經 stdin 送進 primary pod，不在指令列上）從 pod 內以 TLS 連這兩個資料庫被拒（`permission denied for database`、`User does not have CONNECT privilege.`），連 `trustiot` 成功；Job 的日誌沒有 `may connect to it` 的警告。
 - ClickHouse 的 init container 把管理帳號密碼產生進 `<release>-clickhouse-admin-password`（key 是帳號名稱、annotation `trustiot.io/password-generation` 是 `1`、`keep`，值是 64 個十六進位字元），Job 經 API 讀到它並以它連上 ClickHouse。
 - Job 把密碼產生進 chart 宣告的空 Secret（`<release>-identity-password`、`<release>-otel-collector-password`）：每個 Secret 只有該有的 key、annotation `trustiot.io/password-generation` 是 `1`、帶 `helm.sh/resource-policy: keep`，`data` 只由 field manager `trustiot-migrate` 寫入；值是 64 個十六進位字元；Job 的日誌寫出產生了哪個角色的密碼，不含任何值。collector Ready。
 - example-service 以 Job 建立的角色 `identity_app`、chart 掛載的 CA 與 `<cluster>-rw.<namespace>.svc` 連線：pod Ready 代表 readiness 的 Postgres 檢查以 verify-full 成功，伺服器端看得到這個角色的 TLS 連線。
@@ -271,6 +272,48 @@ bun test --timeout 900000 ./deploy/chart/tests/e2e/postgres.e2e.ts
 | `E2E_KUBECONTEXT` | 目前的 context | kubeconfig 裡的 context |
 | `E2E_RELEASE` | `trustiot` | helm release 名稱；release、或同名的 Cluster、ImageCatalog、PVC 與密碼 Secret（之前 uninstall 保留下來的）已經存在時直接失敗，不碰它們 |
 | `E2E_REPORT_DIR` | 空 | 設定時把伺服器設定、角色、密碼 Secret 的形狀（名稱、key、世代，沒有值）、拒絕訊息、`unchanged`/`changed` 與保留的物件寫成 `postgres-e2e-<shape>.json` |
+| `E2E_KEEP` | 空 | `1` 時測完不移除任何東西，方便查看 |
+
+## 叢集內 Postgres 的複寫、備份與還原（`postgres-replication.e2e.ts`）
+
+`postgres-replication.e2e.ts` 驗證收回 `postgres` 與 `template1` 的 `PUBLIC` 權限之後（Laysi/trustiot-v2#400，`files/postgres/system-databases.sql`），CloudNativePG 自己的連線照常運作。它以地端型態 `helm template --show-only templates/postgres.yaml` 渲染 chart 的 ImageCatalog、Cluster 與 NetworkPolicy，**改過 Cluster 再套用**：`instances: 2`、以 Barman Cloud plugin 當 WAL archiver（`spec.plugins`）、較小的資源（requests `50m`／`192Mi`、limit `512Mi`）與 1Gi 的磁碟區；其他欄位（bootstrap 與 `postInitSQL`、pg_hba、image catalog、不開 superuser）都是 chart 的，報告的 `clusterChanges` 列出改了什麼、沒改什麼。chart 本身維持 `instances: 1`、沒有備份設定（備份是 Laysi/trustiot-v2#134）。chart 的 NetworkPolicy 只放行服務與 migration Job，所以測試另外加一個只讓這個 Cluster 的 instance 互連 5432 的 NetworkPolicy。不裝其他元件，也不跑 migration Job（Job 在 `postgres.e2e.ts` 驗證）。依序檢查：
+
+- 新 bootstrap 的 Cluster：`postgres` 與 `template1` 的 ACL 只剩 superuser 與 operator 的兩個角色；superuser 與 `pg_` 開頭的角色以外，每個角色（owner、以 owner 的 CREATEROLE 照 Job 的方式建立的 `e2e_app`、operator 的角色）在兩個資料庫都沒有 `CONNECT` 與 `TEMPORARY`，只有 `streaming_replica` 與 `cnpg_metrics_exporter` 有 `postgres` 的 `CONNECT`；`trustiot` 仍讓 `PUBLIC` 連線；operator 接手 `postInitSQL` 先建好的兩個角色後，屬性與它自己建立的相同（`cnpg_metrics_exporter` 是 `pg_monitor` 的成員）。
+- 複寫：primary 的 `pg_stat_replication` 有 `streaming_replica` 的 `streaming`，replica 的 `pg_stat_wal_receiver` 是 `streaming`，primary 寫入的列出現在 replica。
+- switchover：把 Cluster 的 `status.targetPrimary` 設成 replica（`kubectl cnpg promote` 與 CloudNativePG 自己的 e2e 測試的做法）；新 primary 生效、Cluster 回到兩個 instance 健康，前 primary 以 replica 身分從新 primary 串流，新 primary 寫入的列出現在它上面。前 primary 的日誌有 `Starting up pg_rewind`，以及 `Done!` 或 `no rewind required`（`pg_rewind` 以 `streaming_replica` 連新 primary 的 `postgres`），沒有權限錯誤；報告的 `switchover.rewind` 列出這些日誌。
+- 備份：Cluster 的 `ContinuousArchiving` 條件是 `True`，`method: plugin` 的 Backup 達到 `completed`。
+- 還原：新的 Cluster `<release>-postgres-restored`（一個 instance）經 plugin 從這份備份 bootstrap（`bootstrap.recovery` 與 `externalClusters[].plugin`），有原本的資料，兩個資料庫的 ACL 與角色權限和原 Cluster 相同，instance manager 的 metrics 沒有錯誤；檢查完就刪掉它，把記憶體還給節點。
+- instance manager：最後每個 instance 都 Ready，metrics（經 API server 對 pod 9187 的 proxy）的 `cnpg_collector_up` 是 1、`cnpg_collector_last_collection_error` 是 0，每個 instance 的日誌沒有 `permission denied for database`、`CONNECT privilege` 或 `permission denied to create temporary`。
+
+物件儲存是同一個 namespace 裡的 RustFS（`docker.io/rustfs/rustfs:1.0.0-glibc@sha256:bffcab0c9d647aab0055d1c69d340b202d0909966b385932d4ead1aeb7602858`，可用 `E2E_STORE_IMAGE` 換掉）。選它的理由：Barman Cloud plugin v0.15.1 自己的 e2e 測試就是對這個映像與 digest 跑的（plugin repo 的 `test/e2e/internal/objectstore/s3.go`），barman-cloud 的 S3 用戶端與它的相容性有上游驗證；它持續維護、Apache-2.0、有 arm64 映像。MinIO 社群版自 2025 年起不再發佈映像，Garage 與 versitygw 不在 plugin 的測試範圍內。資料放在 emptyDir，隨 pod 刪除。存取金鑰是這個行程產生的隨機值，只寫進測試建立的 Secret，不印出、不寫進報告。決策 20 的產品物件儲存不用 RustFS，這裡只是測試用的伺服器。
+
+開始前同名的 Cluster、ImageCatalog、chart 的 NetworkPolicy `<release>-postgres` 或 Cluster 的 PVC 已經存在時直接失敗，不碰它們。結束時刪除還原的 Cluster、Backup、Cluster、ImageCatalog、chart 的 NetworkPolicy、PVC、測試的 NetworkPolicy、ObjectStore 與物件儲存。
+
+前置條件：
+
+1. 平台元件（叢集層級，由平台維運安裝，不由測試安裝）：CloudNativePG 1.30.1（`deploy/cloudnative-pg/README.md`）、cert-manager v1.21.2（plugin 的 manifest 需要它的 Issuer 與 Certificate），以及 Barman Cloud plugin v0.15.1（官方 release 的 `manifest.yaml`：Deployment `barman-cloud` 在 `cnpg-system`、CRD `objectstores.barmancloud.cnpg.io`，映像 `ghcr.io/cloudnative-pg/plugin-barman-cloud:v0.15.1`）。我們的 Postgres 映像以 CloudNativePG 的 `minimal` 映像為基底，沒有 barman-cloud，所以備份與還原一律經 plugin 的 sidecar。lab 安裝時的版本與 manifest 的 SHA-256 記在測試報告。
+2. namespace 已建立，設 Pod Security `restricted`。測試的身分要能在這個 namespace 管理 Cluster、ImageCatalog、Backup（`postgresql.cnpg.io`）、ObjectStore（`barmancloud.cnpg.io`）、Deployment、Service、Secret、NetworkPolicy 與 PVC，能 patch Cluster 的 `status`（switchover），能 `exec` 進 pod、讀 pod 的 log，並能經 API server 的 proxy 讀 pod 的 9187（`pods/proxy`）。
+3. Postgres 映像（建法見「叢集內的 Postgres」）要在叢集拉得到；RustFS 的映像由節點自己拉（`IfNotPresent`）。
+4. 本機有 `proto install` 裝好的 helm 與 kubectl。
+
+執行（在 repo 根目錄）：
+
+```sh
+E2E_NAMESPACE=e2e-400 \
+E2E_POSTGRES_IMAGE=localhost/trustiot-e2e/postgres:400 \
+E2E_IMAGE_PULL_POLICY=Never \
+bun test --timeout 2400000 ./deploy/chart/tests/e2e/postgres-replication.e2e.ts
+```
+
+| 變數 | 預設 | 說明 |
+| --- | --- | --- |
+| `E2E_NAMESPACE` | 必填 | 測試用的 namespace，必須已存在 |
+| `E2E_POSTGRES_IMAGE` | 必填 | 含 AGE 的 Postgres 映像，`repository:tag` 或加上 `@sha256:…` |
+| `E2E_STORE_IMAGE` | 上面的 RustFS | S3 相容伺服器的映像，要接受 RustFS 的環境變數 |
+| `E2E_IMAGE_PULL_POLICY` | `IfNotPresent` | Postgres 映像用這個值；匯入節點的映像用 `Never` |
+| `E2E_KUBECONTEXT` | 目前的 context | kubeconfig 裡的 context |
+| `E2E_RELEASE` | `trustiot` | 渲染 chart 的 release 名稱，決定 Cluster 的名稱 |
+| `E2E_REPORT_DIR` | 空 | 設定時把每一步的結果（ACL、權限、複寫狀態、`pg_rewind` 的日誌、Backup 的狀態、還原後的資料與權限、metrics、時間線；沒有任何金鑰）寫成 `postgres-replication-e2e.json` |
 | `E2E_KEEP` | 空 | `1` 時測完不移除任何東西，方便查看 |
 
 ## 叢集內 ClickHouse 的管理帳號密碼（`clickhouse-admin.e2e.ts`）
