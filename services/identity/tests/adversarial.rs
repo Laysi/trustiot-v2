@@ -35,6 +35,7 @@ use support::{Service, TestKey, cookie, jwks, new_secret, request, run_to_exit, 
 const ROLES: &str = "
 CREATE ROLE identity_owner LOGIN PASSWORD 'service-kit-test';
 CREATE ROLE identity_app LOGIN PASSWORD 'service-kit-test';
+ALTER ROLE identity_app SET search_path = identity;
 ";
 const MIGRATION: &str = include_str!("../migrations/postgres/0001_identity.sql");
 /// The migration Job creates the service's schema, owned by the owner role, before it runs the
@@ -99,6 +100,7 @@ impl Fixture {
                 .await
                 .expect("apply the schema");
         }
+        support::record_release_migrations(&mut owner).await;
         Some(fixture)
     }
 

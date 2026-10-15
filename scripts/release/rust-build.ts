@@ -106,7 +106,7 @@ export function rustCrossCompileCommand(build: RustCrossCompile): { cmd: string[
     CARGO_ENCODED_RUSTFLAGS: [`--remap-path-prefix=${build.cargoHome}=/cargo`, `--remap-path-prefix=${build.root}=/build`].join("\x1f"),
   };
   if (build.version !== undefined) {
-    // Readable by crates with option_env!, for example tools/release-selftest.
+    // For a crate that stamps the release version with option_env! (none does at the moment).
     env.TRUSTIOT_RELEASE_VERSION = build.version;
   }
   if (build.sourceDateEpoch !== undefined) {

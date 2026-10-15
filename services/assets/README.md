@@ -28,7 +28,7 @@
 
 ## 資料庫
 
-schema `assets`，DDL 在 `migrations/postgres/`，由 migration Job（登記在 `tools/migrate/src/registry.rs` 的 `PRODUCT`：有平台角色、消費 `identity` 的事件）以 migration 角色依檔名順序套用；執行期程式碼不建表、不改表。
+schema `assets`，DDL 在 `migrations/postgres/`，由 migration Job（登記在 `tools/migrate/src/registry.rs` 的 `PRODUCT`：有平台角色、消費 `identity` 的事件）以 migration 角色依檔名順序套用；執行期程式碼不建表、不改表。檔案清單在 `src/schema.rs`，Job 與服務的 readiness 編譯同一份：資料庫缺少這一版預期的檔案（或套用了別的版本）時 `/readyz` 回 503，日誌寫出檔案（Laysi/trustiot-v2#402，[service-kit 的 migration 檢查](../../crates/service-kit/README.md#migration-檢查migrations)）。
 
 | 角色 | 權限 |
 | --- | --- |
@@ -40,8 +40,9 @@ schema `assets`，DDL 在 `migrations/postgres/`，由 migration Job（登記在
 | --- | --- | --- |
 | `tenants` | `tenant_id`（主鍵）、`created_at` | 照 `crates/service-kit/sql/tenant-table.sql` 的 `tenant_isolation` |
 | `outbox_subscription`、`outbox_inbox`、`outbox_dead_letter`、`outbox_version` | 消費端的記錄（由 Job 建立，見 [crates/outbox](../../crates/outbox/README.md)） | 無：不是租戶資料 |
+| `trustiot_migrate_applied` | migration Job 在這個 schema 套用過的檔案（component、檔名、SHA-256），由 Job 寫入；`assets_app` 只能 `SELECT`，給 readiness 的 migration 檢查用，`assets_platform` 讀不到 | 無：不是租戶資料 |
 
-兩個連線池：服務角色的 `TenantDb`（API 與消費端每個事件的交易，`BackgroundTenantDb` 只交給消費端），以及平台角色的 `PlatformDb`（消費端以唯讀交易讀事件，2 條連線，`EVENT_READER_CONNECTIONS`）。readiness 要兩個角色都開得出通過 service-kit session 檢查的連線。
+兩個連線池：服務角色的 `TenantDb`（API 與消費端每個事件的交易，`BackgroundTenantDb` 只交給消費端），以及平台角色的 `PlatformDb`（消費端以唯讀交易讀事件，2 條連線，`EVENT_READER_CONNECTIONS`）。readiness 要兩個角色都開得出通過 service-kit session 檢查的連線，而且資料庫有這一版預期的每個 migration 檔案。
 
 ## 設定
 
@@ -69,9 +70,10 @@ schema `assets`，DDL 在 `migrations/postgres/`，由 migration Job（登記在
 CARGO_BUILD_JOBS=2 cargo test -p assets
 ```
 
-兩個整合測試都需要 podman 或 docker：以 `testkit::product` 起一個帶 TLS 的暫時 Postgres，由 migration Job 的程式套用整個產品的 schema，再以 `assets_app`、`assets_platform` 啟動真的 binary。沒有容器時略過，設了 `CI` 時改為失敗。
+整合測試都需要 podman 或 docker：以 `testkit::product` 起一個帶 TLS 的暫時 Postgres，由 migration Job 的程式套用整個產品的 schema，再以 `assets_app`、`assets_platform` 啟動真的 binary。沒有容器時略過，設了 `CI` 時改為失敗。
 
 | 測試 | 驗證 |
 | --- | --- |
 | `tests/tenant_created.rs` | 以身分服務自己的 `TenantStore` 建立租戶：資產服務最後有那一列，API 只回 token 租戶的資料；重播整個事件記錄、同一個事件再送一次，都不多一列、`created_at` 不變，日誌依序記 `created` 為 true、false、false，沒有 dead letter；沒有 token、錯的受眾 401，沒有租戶 403，還沒處理的租戶 404 |
-| `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試：服務角色讀不到也改不了其他租戶的 `tenants`，API 不把一個租戶的資料給另一個租戶；消費端自己的表不是租戶資料而豁免 |
+| `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試：服務角色讀不到也改不了其他租戶的 `tenants`，API 不把一個租戶的資料給另一個租戶；消費端自己的表與 migration 紀錄不是租戶資料而豁免 |
+| `tests/migrations.rs` | Laysi/trustiot-v2#402：Job 寫的紀錄就是 `src/schema.rs` 預期的清單，服務 ready 並記 INFO；以 superuser 拿掉 `0001_assets.sql` 的紀錄時，新的行程 503，ERROR 日誌的 `missing` 寫出它，已經通過的行程維持 ready；紀錄回來後同一個行程轉為 ready；SHA-256 不同時 503，`changed` 寫出它；資料庫多一個較新版本的紀錄（映像被回退）時照常 ready，INFO 的 `newer` 寫出它；`assets_app` 只讀得到自己的紀錄、不能改，讀不到 `identity` 的紀錄與 `trustiot_migrate.applied`；`assets_platform`（能進 `identity` schema 讀事件）讀不到任何一個服務的紀錄；`identity_app` 讀不到 `assets` 的紀錄 |

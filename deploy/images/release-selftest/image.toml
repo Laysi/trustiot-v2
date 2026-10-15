@@ -1,5 +1,0 @@
-# Pipeline self-test (tools/release-selftest): published on every release so that the
-# release pipeline is proven end to end before any service image exists. Not a service;
-# nothing deploys it.
-[rust]
-package = "release-selftest"

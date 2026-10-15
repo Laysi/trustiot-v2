@@ -6,11 +6,14 @@
 //! row here, and one tenant-scoped example API that needs an internal identity token.
 //!
 //! - [`tenants`]: the consumer and the API.
+//! - [`schema`]: the migration files this release expects, which readiness checks
+//!   (Laysi/trustiot-v2#402) and the migration Job applies.
 //! - [`config`]: the settings.
 //!
 //! See `README.md` in this crate for the schema, the event, the API and the tests.
 
 pub mod config;
+pub mod schema;
 pub mod tenants;
 
 use std::time::Duration;
@@ -19,6 +22,7 @@ use axum::Router;
 use contract::ServiceName;
 use outbox::{Consumer, ConsumerConfig};
 use service_kit::identity::{IdentityVerifier, ServiceIdentity};
+use service_kit::migrations::MigrationCheck;
 use service_kit::tenant::{PlatformDb, TenantDb};
 use service_kit::{BoxError, Context};
 use sqlx::postgres::PgPoolOptions;
@@ -51,7 +55,8 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// The service's startup for `service_kit::run`: opens the service role's and the platform
 /// role's pools lazily (with the session check of `crates/service-kit`), starts the consumer of
 /// `identity.tenant_created`, and serves the API. Readiness passes while both roles can open a
-/// checked session.
+/// checked session, once the database has every migration file this release expects
+/// ([`schema::SCHEMA`]).
 ///
 /// # Errors
 ///
@@ -81,6 +86,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
             events.ping().await
         }
     });
+    MigrationCheck::new(&schema::SCHEMA, db.pool().clone()).register(context.health());
 
     let consumer = Consumer::new(
         &events,
