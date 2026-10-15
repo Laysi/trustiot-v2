@@ -370,7 +370,7 @@ repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（
 2026-10-11 決定（Laysi/trustiot-v2#309）：每次部署約 7 個 arm64 計費分鐘（當時是私有庫），原本動到上列路徑的 PR 每次推送都部署一次。現在：
 
 - PR 沒有 `smoke` label 時不部署：事件照樣觸發 workflow，但 `smoke` job 被略過（`smoke` check 顯示 skipped），不佔 runner（2026-10-11 當時也是不計費的理由）。
-- 協調者在決定合併前替 PR 加上 `smoke` label，加上的當下（`labeled` 事件）部署一次；之後每次推送都重新部署，同一個 PR 較新的推送會取消還在跑的部署。部署通過才合併，與以前相同。
+- 合併 PR 的人在決定合併前替 PR 加上 `smoke` label，加上的當下（`labeled` 事件）部署一次；之後每次推送都重新部署，同一個 PR 較新的推送會取消還在跑的部署。部署通過才合併，與以前相同。
 - 為 PR 加上其他 label 不會部署，也不會取消進行中的部署：這類事件有自己的 concurrency group（`nightly-no-smoke-<run_id>`）。
 - label 名稱比對不分大小寫，與 GitHub 的字串比較相同。
 - 排程與手動執行不受影響。
@@ -387,7 +387,7 @@ repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（
 
 | 選項 | 內容 | 取捨 |
 | --- | --- | --- |
-| A. 維持現況（建議） | 只有帶 `smoke` label 的 PR 部署 | 不必改任何東西；PR 要等到協調者加 label 才有部署結果；理由 2 與 3 的保護繼續有效 |
+| A. 維持現況（建議） | 只有帶 `smoke` label 的 PR 部署 | 不必改任何東西；PR 要等到合併 PR 的人加 label 才有部署結果；理由 2 與 3 的保護繼續有效 |
 | B. 同 repo 分支的 PR 自動部署，fork 的 PR 仍要 label | 條件加上 head repo 等於 base repo | chart 的改動每次推送都得到回饋，不必手動加 label；每個推送多約 7 分鐘的 runner 時間與一次 Docker Hub 拉取；要改 workflow、測試與文件 |
 | C. 取消閘門 | 動到上列路徑的 PR 一律部署 | 最簡單；理由 1 到 3 全部回來，fork PR 只靠核准設定把關，不建議在公開 repo 這樣做 |
 
