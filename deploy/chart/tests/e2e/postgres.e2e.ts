@@ -16,7 +16,11 @@
 //      generated (Laysi/trustiot-v2#403);
 //   5. the same pod is refused with another CA, with a host name the certificate does not list, and
 //      without the labels the Postgres NetworkPolicy admits;
-//   6. `helm upgrade` with the same values and `helm rollback` keep the generated passwords; a new
+//   6. no role but the superuser and CloudNativePG's own may connect to the cluster's `postgres`
+//      and `template1` databases or create temporary tables there, the service role is refused
+//      there and still connects to its own database, and the Job warns about no other database
+//      (Laysi/trustiot-v2#400);
+//   7. `helm upgrade` with the same values and `helm rollback` keep the generated passwords; a new
 //      migrate.passwordGeneration replaces them and the service and the collector become ready
 //      again with the new ones; a lost key is regenerated when the Job runs again
 //      (migrate.revision). Passwords are compared by digest inside this script; it prints and
@@ -524,6 +528,73 @@ describe(`bundled Postgres (${SHAPE} shape)`, () => {
     report.plaintext = result.stderr.trim();
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("no encryption");
+  });
+
+  test("only the superuser and CloudNativePG's own roles may use the postgres and template1 databases (Laysi/trustiot-v2#400)", () => {
+    // The bootstrap's postInitSQL (files/postgres/system-databases.sql) revoked PUBLIC's CONNECT
+    // and TEMPORARY on both, and gave CONNECT on `postgres` back by name to the two roles of the
+    // operator that need it.
+    const acls = psql("SELECT datname, datacl FROM pg_database WHERE datname IN ('postgres', 'template1') ORDER BY 1;", "postgres");
+    report.systemDatabaseAcls = acls.split("\n");
+    expect(acls.split("\n")).toEqual([
+      "postgres|{postgres=CTc/postgres,streaming_replica=c/postgres,cnpg_metrics_exporter=c/postgres}",
+      "template1|{postgres=CTc/postgres}",
+    ]);
+    // Every role that is not the superuser or a predefined pg_ role: the owner, the roles the
+    // Job created (identity_app among them) and CloudNativePG's.
+    const rows = psql(
+      `SELECT r.rolname, d.datname, has_database_privilege(r.oid, d.oid, 'CONNECT'), has_database_privilege(r.oid, d.oid, 'TEMPORARY')
+       FROM pg_roles r CROSS JOIN pg_database d
+       WHERE NOT r.rolsuper AND r.rolname !~ '^pg_' AND d.datname IN ('postgres', 'template1') ORDER BY 1, 2;`,
+      "postgres",
+    )
+      .split("\n")
+      .map((line) => line.split("|"));
+    report.systemDatabasePrivileges = rows.map(([role, database, connect, temporary]) => ({ role, database, connect, temporary }));
+    const roles = [...new Set(rows.map(([role]) => role))];
+    expect(roles).toContain(OWNER);
+    expect(roles).toContain(ROLE);
+    expect(roles).toContain("streaming_replica");
+    expect(roles).toContain("cnpg_metrics_exporter");
+    for (const [role, database, connect, temporary] of rows) {
+      const operatorNeedsIt = database === "postgres" && (role === "streaming_replica" || role === "cnpg_metrics_exporter");
+      expect(`${role} on ${database}: ${connect} ${temporary}`).toBe(`${role} on ${database}: ${operatorNeedsIt ? "t" : "f"} f`);
+    }
+    // The service role itself, with the password the Job generated, over TCP with TLS from inside
+    // the primary pod (the password goes on stdin, never into a command line): refused on both,
+    // accepted on its own database.
+    const password = Buffer.from(secret(SERVICE_SECRET).data?.[ROLE] ?? "", "base64").toString();
+    expect(password).toMatch(/^[0-9a-f]{64}$/);
+    const asService = (database: string) =>
+      exec(
+        [
+          ...kubectlArgs(),
+          "exec",
+          "-i",
+          primary(),
+          "-c",
+          "postgres",
+          "--",
+          "bash",
+          "-c",
+          `IFS= read -r PGPASSWORD && export PGPASSWORD && exec psql --no-psqlrc --tuples-only --no-align "host=127.0.0.1 port=5432 sslmode=require user=${ROLE} dbname=${database}" --command "SELECT current_database()"`,
+        ],
+        `${password}\n`,
+      );
+    const refusals: Record<string, string> = {};
+    for (const database of ["postgres", "template1"]) {
+      const result = asService(database);
+      refusals[database] = result.stderr.trim().split("\n").at(-2) ?? result.stderr.trim();
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain(`permission denied for database "${database}"`);
+      expect(result.stderr).toContain("User does not have CONNECT privilege.");
+    }
+    const own = asService(DATABASE);
+    expect(own.stderr).toBe("");
+    expect(own.stdout.trim()).toBe(DATABASE);
+    report.systemDatabaseRefusals = refusals;
+    // The Job found no other database that admits the service roles (tools/migrate's warning).
+    expect(kubectl("logs", `job/${jobName()}`)).not.toContain("may connect to it");
   });
 
   test("the migration Job generated the passwords into the empty Secrets the chart declares, and nothing else holds them", () => {

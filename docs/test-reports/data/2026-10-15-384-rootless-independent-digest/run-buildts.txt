@@ -1,0 +1,344 @@
+rcheck: queued on the build host at 12:22:50 as 384-f3838d7d; running now: 400-e0599587 since 12:21:13
+bun install: exit 0
+$ tsc --noEmit --project tsconfig.json
+typecheck: exit 0
+(skip) the dev environment with podman > up uses images of this machine's platform although the store holds Mosquitto for another one
+(skip) the dev environment with podman > starts, passes every check, seeds, rotates credentials, stops and purges without leftovers
+
+ 879 pass
+ 4 skip
+ 0 fail
+ 3219 expect() calls
+Ran 883 tests across 37 files. [2.43s]
+bun test scripts: exit 0
+workflow policy: 4 file(s) checked, no violations
+check-workflows: exit 0
+secret handling: 406 file(s) checked, 6 container build file(s), no violations
+check-secret-handling: exit 0
+
+=== versions ===
+Linux 6.18.54.1-microsoft-standard-WSL2 x86_64
+PRETTY_NAME="Ubuntu 26.04.1 LTS"
+podman version 5.7.0
+podman version 5.7.0
+skopeo version 1.21.0-dev
+  buildah 1.42.1+ds1-2build1
+  containers-storage 1.61.0+ds1-6
+  crun 1.21-1ubuntu3
+  golang-github-containers-image 5.38.0+ds2-2
+  podman 5.7.0+ds2-3build1
+  skopeo 1.21.0~pre1-2build1
+bun 1.4.2
+--- versions: exit 0
+
+=== plan ===
+[release:plan] helm lint --strict passed with values-saas.yaml
+[release:plan] helm lint --strict passed with values-onprem.yaml
+[release:plan] v0.0.0-rc.1 → version 0.0.0-rc.1 (prerelease), commit 41484e4112a4bb47968b908bba82454a7c086b03
+[release:plan] image 127.0.0.1:5068/laysi/trustiot-v2/assets:0.0.0-rc.1 (Rust package assets)
+[release:plan] image 127.0.0.1:5068/laysi/trustiot-v2/identity:0.0.0-rc.1 (Rust package identity)
+[release:plan] image 127.0.0.1:5068/laysi/trustiot-v2/migrate:0.0.0-rc.1 (Rust package migrate)
+[release:plan] image 127.0.0.1:5068/laysi/trustiot-v2/postgres:0.0.0-rc.1 (deploy/images/postgres)
+[release:plan] chart 127.0.0.1:5068/laysi/trustiot-v2/charts/trustiot:0.0.0-rc.1
+[release:plan] first release: the notes list every commit
+--- plan: exit 0
+
+=== plan of the Rust images ===
+{"commit":"41484e4112a4bb47968b908bba82454a7c086b03","sourceDateEpoch":1792038547,"version":"0.0.0-rc.1","images":["assets","identity","migrate"]}
+--- plan of the Rust images: exit 0
+
+=== build.ts, rootless podman ===
+info: syncing channel updates for 1.99.0-x86_64-unknown-linux-gnu
+
+  1.99.0-x86_64-unknown-linux-gnu unchanged - rustc 1.99.0 (b940084d7 2026-09-28)
+
+info: component rust-std for target aarch64-unknown-linux-musl is up to date
+[release:build] cross-compiling assets, identity, migrate for aarch64-unknown-linux-musl
+warning: linker stderr: ignoring deprecated linker optimization setting '1'
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `migrate` (bin "migrate") generated 1 warning
+warning: `identity` (bin "identity") generated 1 warning (1 duplicate)
+warning: `assets` (bin "assets") generated 1 warning (1 duplicate)
+    Finished `release` profile [optimized] target(s) in 0.19s
+[release:build] packing with podman 5.7.0, buildah 1.42.1; packages: buildah 1.42.1+ds1-2build1, crun 1.21-1ubuntu3, golang-github-containers-image 5.38.0+ds2-2, podman 5.7.0+ds2-3build1, skopeo 1.21.0~pre1-2build1
+[release:build] building 127.0.0.1:5068/laysi/trustiot-v2/assets:0.0.0-rc.1 for linux/arm64
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+Trying to pull gcr.io/distroless/static-debian13@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3...
+Getting image source signatures
+Copying blob sha256:2780920e5dbfbe103d03a583ed75345306e572ec5a48cb10361f046767d9f29a
+Copying blob sha256:c172f21841dff4c8cf45cde46589c1c2616cefe7e819965e92e6d3475c428aa0
+Copying blob sha256:401d177fd1e8a1e0d7a48139788d026e9a2e919ccb122bedd110ac7cf351f53e
+Copying blob sha256:f6069939f718601b38d25ec5ed5631ed047e4da24acec2e252f8f29d251be718
+Copying blob sha256:218cf840d0d95a86231eb9d33d26ac8a520a4299c6096cb70a0c2fb2a87c9e0a
+Copying blob sha256:d6b1b89eccacc15c2420b2776d72c1dae334a00805ed9af54bf2f71e4d536f28
+Copying blob sha256:7c12895b777bcaa8ccae0605b4de635b68fc32d60fa08f421dc3818bf55ee212
+Copying blob sha256:3214acf345c0cc6bbdb56b698a41ccdefc624a09d6beb0d38b5de0b2303ecaf4
+Copying blob sha256:52630fc75a18675c530ed9eba5f55eca09b03e91bd5bc15307918bbc1a7e7296
+Copying blob sha256:dd64bf2dd177757451a98fcdc999a339c35dee5d9872d8f4dc69c8f3c4dd0112
+Copying blob sha256:b839dfae01f66e15c6a8b63520557ed315bdfe036342fa7a0c537259f10d7a9a
+Copying blob sha256:ebddc55facdc6b1f7e0f30816a5fc7cc62f38abdf76c0a8b0a0ce52085754795
+Copying blob sha256:6ed1ef0cb1159b9c93a24ceb88b987c6b3a8adff7160940c7c5e6bfc001f1766
+Copying config sha256:bcff74c94c33712c3758af70114dfb388180cf43e789031b9a6d4195195bf97e
+Writing manifest to image destination
+STEP 2/5: COPY --chmod=0555 assets /usr/local/bin/assets
+--> 2f015b4ec5f7
+STEP 3/5: USER 65532:65532
+--> 2d1e79a68481
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/assets"]
+--> c3d8721a1ef9
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="41484e4112a4bb47968b908bba82454a7c086b03" "org.opencontainers.image.version"="0.0.0-rc.1" "org.opencontainers.image.title"="assets"
+COMMIT localhost/trustiot-release/assets:0.0.0-rc.1
+--> 2ee9906129d4
+Successfully tagged localhost/trustiot-release/assets:0.0.0-rc.1
+2ee9906129d4076e4c2d294c624cd8968794fc0012bce39829192ac44272138e
+[release:build] 127.0.0.1:5068/laysi/trustiot-v2/assets:0.0.0-rc.1 → sha256:47752a72a116a46f02d6c314114dc66e08908c1cbced07035dd979f37fe68646, SBOM SPDX-2.3 with 214 packages
+[release:build] building 127.0.0.1:5068/laysi/trustiot-v2/identity:0.0.0-rc.1 for linux/arm64
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+STEP 2/5: COPY --chmod=0555 identity /usr/local/bin/identity
+--> b0854d4b43da
+STEP 3/5: USER 65532:65532
+--> 22bd267fbf92
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/identity"]
+--> 58a549093fa3
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="41484e4112a4bb47968b908bba82454a7c086b03" "org.opencontainers.image.version"="0.0.0-rc.1" "org.opencontainers.image.title"="identity"
+COMMIT localhost/trustiot-release/identity:0.0.0-rc.1
+--> 91aff6b39386
+Successfully tagged localhost/trustiot-release/identity:0.0.0-rc.1
+91aff6b393862025736452ef83a311bf3259d2df1fc75802b9c838359cfecfc7
+[release:build] 127.0.0.1:5068/laysi/trustiot-v2/identity:0.0.0-rc.1 → sha256:b2fe2e3e75178622e6b1d39db798c8513919ef68f64cb6d52ed21dcc918be8a0, SBOM SPDX-2.3 with 214 packages
+[release:build] building 127.0.0.1:5068/laysi/trustiot-v2/migrate:0.0.0-rc.1 for linux/arm64
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+STEP 2/5: COPY --chmod=0555 migrate /usr/local/bin/migrate
+--> 96c2c342afd3
+STEP 3/5: USER 65532:65532
+--> e7f0ad4541f0
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/migrate"]
+--> 381f07fc182c
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="41484e4112a4bb47968b908bba82454a7c086b03" "org.opencontainers.image.version"="0.0.0-rc.1" "org.opencontainers.image.title"="migrate"
+COMMIT localhost/trustiot-release/migrate:0.0.0-rc.1
+--> ce4e9082f896
+Successfully tagged localhost/trustiot-release/migrate:0.0.0-rc.1
+ce4e9082f8962b65008d705752b8e2f1ff721ac2c1145c6fd15aa2dfed260594
+[release:build] 127.0.0.1:5068/laysi/trustiot-v2/migrate:0.0.0-rc.1 → sha256:3aa42299bb64960f916d1ef98d54138bf943c15dbf4a82f59b8f4fd5ad7fd1db, SBOM SPDX-2.3 with 215 packages
+--- build.ts, rootless podman: exit 0
+
+=== build.ts, podman as root ===
+info: syncing channel updates for 1.99.0-x86_64-unknown-linux-gnu
+
+  1.99.0-x86_64-unknown-linux-gnu unchanged - rustc 1.99.0 (b940084d7 2026-09-28)
+
+info: component rust-std for target aarch64-unknown-linux-musl is up to date
+[release:build] cross-compiling assets, identity, migrate for aarch64-unknown-linux-musl
+warning: linker stderr: ignoring deprecated linker optimization setting '1'
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `assets` (bin "assets") generated 1 warning
+warning: `migrate` (bin "migrate") generated 1 warning (1 duplicate)
+warning: `identity` (bin "identity") generated 1 warning (1 duplicate)
+    Finished `release` profile [optimized] target(s) in 0.08s
+[release:build] packing with podman 5.7.0, buildah 1.42.1; packages: buildah 1.42.1+ds1-2build1, crun 1.21-1ubuntu3, golang-github-containers-image 5.38.0+ds2-2, podman 5.7.0+ds2-3build1, skopeo 1.21.0~pre1-2build1
+[release:build] building 127.0.0.1:5068/laysi/trustiot-v2/assets:0.0.0-rc.1 for linux/arm64
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+Trying to pull gcr.io/distroless/static-debian13@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3...
+Getting image source signatures
+Copying blob sha256:2780920e5dbfbe103d03a583ed75345306e572ec5a48cb10361f046767d9f29a
+Copying blob sha256:c172f21841dff4c8cf45cde46589c1c2616cefe7e819965e92e6d3475c428aa0
+Copying blob sha256:401d177fd1e8a1e0d7a48139788d026e9a2e919ccb122bedd110ac7cf351f53e
+Copying blob sha256:f6069939f718601b38d25ec5ed5631ed047e4da24acec2e252f8f29d251be718
+Copying blob sha256:218cf840d0d95a86231eb9d33d26ac8a520a4299c6096cb70a0c2fb2a87c9e0a
+Copying blob sha256:d6b1b89eccacc15c2420b2776d72c1dae334a00805ed9af54bf2f71e4d536f28
+Copying blob sha256:7c12895b777bcaa8ccae0605b4de635b68fc32d60fa08f421dc3818bf55ee212
+Copying blob sha256:3214acf345c0cc6bbdb56b698a41ccdefc624a09d6beb0d38b5de0b2303ecaf4
+Copying blob sha256:52630fc75a18675c530ed9eba5f55eca09b03e91bd5bc15307918bbc1a7e7296
+Copying blob sha256:dd64bf2dd177757451a98fcdc999a339c35dee5d9872d8f4dc69c8f3c4dd0112
+Copying blob sha256:b839dfae01f66e15c6a8b63520557ed315bdfe036342fa7a0c537259f10d7a9a
+Copying blob sha256:ebddc55facdc6b1f7e0f30816a5fc7cc62f38abdf76c0a8b0a0ce52085754795
+Copying blob sha256:6ed1ef0cb1159b9c93a24ceb88b987c6b3a8adff7160940c7c5e6bfc001f1766
+Copying config sha256:bcff74c94c33712c3758af70114dfb388180cf43e789031b9a6d4195195bf97e
+Writing manifest to image destination
+STEP 2/5: COPY --chmod=0555 assets /usr/local/bin/assets
+--> 2f015b4ec5f7
+STEP 3/5: USER 65532:65532
+--> 2d1e79a68481
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/assets"]
+--> c3d8721a1ef9
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="41484e4112a4bb47968b908bba82454a7c086b03" "org.opencontainers.image.version"="0.0.0-rc.1" "org.opencontainers.image.title"="assets"
+COMMIT localhost/trustiot-release/assets:0.0.0-rc.1
+--> 2ee9906129d4
+Successfully tagged localhost/trustiot-release/assets:0.0.0-rc.1
+2ee9906129d4076e4c2d294c624cd8968794fc0012bce39829192ac44272138e
+[release:build] 127.0.0.1:5068/laysi/trustiot-v2/assets:0.0.0-rc.1 → sha256:47752a72a116a46f02d6c314114dc66e08908c1cbced07035dd979f37fe68646, SBOM SPDX-2.3 with 214 packages
+[release:build] building 127.0.0.1:5068/laysi/trustiot-v2/identity:0.0.0-rc.1 for linux/arm64
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+STEP 2/5: COPY --chmod=0555 identity /usr/local/bin/identity
+--> b0854d4b43da
+STEP 3/5: USER 65532:65532
+--> 22bd267fbf92
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/identity"]
+--> 58a549093fa3
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="41484e4112a4bb47968b908bba82454a7c086b03" "org.opencontainers.image.version"="0.0.0-rc.1" "org.opencontainers.image.title"="identity"
+COMMIT localhost/trustiot-release/identity:0.0.0-rc.1
+--> 91aff6b39386
+Successfully tagged localhost/trustiot-release/identity:0.0.0-rc.1
+91aff6b393862025736452ef83a311bf3259d2df1fc75802b9c838359cfecfc7
+[release:build] 127.0.0.1:5068/laysi/trustiot-v2/identity:0.0.0-rc.1 → sha256:b2fe2e3e75178622e6b1d39db798c8513919ef68f64cb6d52ed21dcc918be8a0, SBOM SPDX-2.3 with 214 packages
+[release:build] building 127.0.0.1:5068/laysi/trustiot-v2/migrate:0.0.0-rc.1 for linux/arm64
+STEP 1/5: FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+STEP 2/5: COPY --chmod=0555 migrate /usr/local/bin/migrate
+--> 96c2c342afd3
+STEP 3/5: USER 65532:65532
+--> e7f0ad4541f0
+STEP 4/5: ENTRYPOINT ["/usr/local/bin/migrate"]
+--> 381f07fc182c
+STEP 5/5: LABEL "org.opencontainers.image.source"="https://github.com/Laysi/trustiot-v2" "org.opencontainers.image.revision"="41484e4112a4bb47968b908bba82454a7c086b03" "org.opencontainers.image.version"="0.0.0-rc.1" "org.opencontainers.image.title"="migrate"
+COMMIT localhost/trustiot-release/migrate:0.0.0-rc.1
+--> ce4e9082f896
+Successfully tagged localhost/trustiot-release/migrate:0.0.0-rc.1
+ce4e9082f8962b65008d705752b8e2f1ff721ac2c1145c6fd15aa2dfed260594
+[release:build] 127.0.0.1:5068/laysi/trustiot-v2/migrate:0.0.0-rc.1 → sha256:3aa42299bb64960f916d1ef98d54138bf943c15dbf4a82f59b8f4fd5ad7fd1db, SBOM SPDX-2.3 with 215 packages
+crates Cargo compiled as root: 0
+root-owned files created in the user's directories during the root run: 0
+left after chown: 0
+--- build.ts, podman as root: exit 0
+
+=== build.json, rootless ===
+{
+  "tag": "v0.0.0-rc.1",
+  "commit": "41484e4112a4bb47968b908bba82454a7c086b03",
+  "builder": {
+    "podman": "5.7.0",
+    "buildah": "1.42.1",
+    "packages": {
+      "buildah": "1.42.1+ds1-2build1",
+      "crun": "1.21-1ubuntu3",
+      "golang-github-containers-image": "5.38.0+ds2-2",
+      "podman": "5.7.0+ds2-3build1",
+      "skopeo": "1.21.0~pre1-2build1"
+    }
+  },
+  "images": [
+    {
+      "name": "assets",
+      "digest": "sha256:47752a72a116a46f02d6c314114dc66e08908c1cbced07035dd979f37fe68646",
+      "size": 4399616,
+      "sbomPackages": 214,
+      "archive": "images/assets.oci.tar",
+      "sbom": "images/assets.spdx.json"
+    },
+    {
+      "name": "identity",
+      "digest": "sha256:b2fe2e3e75178622e6b1d39db798c8513919ef68f64cb6d52ed21dcc918be8a0",
+      "size": 4515328,
+      "sbomPackages": 214,
+      "archive": "images/identity.oci.tar",
+      "sbom": "images/identity.spdx.json"
+    },
+    {
+      "name": "migrate",
+      "digest": "sha256:3aa42299bb64960f916d1ef98d54138bf943c15dbf4a82f59b8f4fd5ad7fd1db",
+      "size": 3955712,
+      "sbomPackages": 215,
+      "archive": "images/migrate.oci.tar",
+      "sbom": "images/migrate.spdx.json"
+    }
+  ]
+}
+--- build.json, rootless: exit 0
+
+=== build.json, root ===
+{
+  "tag": "v0.0.0-rc.1",
+  "commit": "41484e4112a4bb47968b908bba82454a7c086b03",
+  "builder": {
+    "podman": "5.7.0",
+    "buildah": "1.42.1",
+    "packages": {
+      "buildah": "1.42.1+ds1-2build1",
+      "crun": "1.21-1ubuntu3",
+      "golang-github-containers-image": "5.38.0+ds2-2",
+      "podman": "5.7.0+ds2-3build1",
+      "skopeo": "1.21.0~pre1-2build1"
+    }
+  },
+  "images": [
+    {
+      "name": "assets",
+      "digest": "sha256:47752a72a116a46f02d6c314114dc66e08908c1cbced07035dd979f37fe68646",
+      "size": 4399616,
+      "sbomPackages": 214,
+      "archive": "images/assets.oci.tar",
+      "sbom": "images/assets.spdx.json"
+    },
+    {
+      "name": "identity",
+      "digest": "sha256:b2fe2e3e75178622e6b1d39db798c8513919ef68f64cb6d52ed21dcc918be8a0",
+      "size": 4515328,
+      "sbomPackages": 214,
+      "archive": "images/identity.oci.tar",
+      "sbom": "images/identity.spdx.json"
+    },
+    {
+      "name": "migrate",
+      "digest": "sha256:3aa42299bb64960f916d1ef98d54138bf943c15dbf4a82f59b8f4fd5ad7fd1db",
+      "size": 3955712,
+      "sbomPackages": 215,
+      "archive": "images/migrate.oci.tar",
+      "sbom": "images/migrate.spdx.json"
+    }
+  ]
+}
+--- build.json, root: exit 0
+
+=== compare ===
+root-assets
+  image sha256:47752a72a116a46f02d6c314114dc66e08908c1cbced07035dd979f37fe68646
+  config sha256:2ee9906129d4076e4c2d294c624cd8968794fc0012bce39829192ac44272138e, COPY diff_id sha256:0b529f0089bfdfbd5ef9fa92a4eb3d520fd69579b703955100f68e3e2e12d718
+  COPY file:d168ef732f04540febbeef34df8fdc170076d7d869a45c80b454797b4c2db924; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+root-identity
+  image sha256:b2fe2e3e75178622e6b1d39db798c8513919ef68f64cb6d52ed21dcc918be8a0
+  config sha256:91aff6b393862025736452ef83a311bf3259d2df1fc75802b9c838359cfecfc7, COPY diff_id sha256:14d3d8aff6900359ac005dad796c17254b4d6d550117650519e0cd166cde021d
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+root-migrate
+  image sha256:3aa42299bb64960f916d1ef98d54138bf943c15dbf4a82f59b8f4fd5ad7fd1db
+  config sha256:ce4e9082f8962b65008d705752b8e2f1ff721ac2c1145c6fd15aa2dfed260594, COPY diff_id sha256:55c336ae3e262f55a79d628bf9f9d04c28f9a7e41488005575e78add88fcad83
+  COPY file:9b1af998dfd32d096736bcdb051b78f30c719f3d7abd28d6ba6372f110a5067a; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+rootless-assets
+  image sha256:47752a72a116a46f02d6c314114dc66e08908c1cbced07035dd979f37fe68646
+  config sha256:2ee9906129d4076e4c2d294c624cd8968794fc0012bce39829192ac44272138e, COPY diff_id sha256:0b529f0089bfdfbd5ef9fa92a4eb3d520fd69579b703955100f68e3e2e12d718
+  COPY file:d168ef732f04540febbeef34df8fdc170076d7d869a45c80b454797b4c2db924; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+rootless-identity
+  image sha256:b2fe2e3e75178622e6b1d39db798c8513919ef68f64cb6d52ed21dcc918be8a0
+  config sha256:91aff6b393862025736452ef83a311bf3259d2df1fc75802b9c838359cfecfc7, COPY diff_id sha256:14d3d8aff6900359ac005dad796c17254b4d6d550117650519e0cd166cde021d
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+rootless-migrate
+  image sha256:3aa42299bb64960f916d1ef98d54138bf943c15dbf4a82f59b8f4fd5ad7fd1db
+  config sha256:ce4e9082f8962b65008d705752b8e2f1ff721ac2c1145c6fd15aa2dfed260594, COPY diff_id sha256:55c336ae3e262f55a79d628bf9f9d04c28f9a7e41488005575e78add88fcad83
+  COPY file:9b1af998dfd32d096736bcdb051b78f30c719f3d7abd28d6ba6372f110a5067a; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+SAME  root-assets / rootless-assets: sha256:47752a72a116a46f02d6c314114dc66e08908c1cbced07035dd979f37fe68646 / sha256:47752a72a116a46f02d6c314114dc66e08908c1cbced07035dd979f37fe68646
+SAME  root-identity / rootless-identity: sha256:b2fe2e3e75178622e6b1d39db798c8513919ef68f64cb6d52ed21dcc918be8a0 / sha256:b2fe2e3e75178622e6b1d39db798c8513919ef68f64cb6d52ed21dcc918be8a0
+SAME  root-migrate / rootless-migrate: sha256:3aa42299bb64960f916d1ef98d54138bf943c15dbf4a82f59b8f4fd5ad7fd1db / sha256:3aa42299bb64960f916d1ef98d54138bf943c15dbf4a82f59b8f4fd5ad7fd1db
+--- compare: exit 0
+
+=== binaries ===
+88e66e1c668d42f6cc64a16744d7ca8dd83d6a763504855890e53480a2b186ac  assets
+192a7aef7d5c928460be2bc9b12d59e6295b3af1b1c860215d3ca2c6b03d9786  identity
+e55443c74a45e56d13026d10978df94956d4528b3c1ee9f824be363c920a3c27  migrate
+--- binaries: exit 0
+
+=== remove the stores ===
+--- remove the stores: exit 0
+
+ALL STEPS PASSED
+rcheck: removed 0 dangling test volumes
+rcheck: removed 0 dangling podman test volumes
+rcheck: exit 0 at 12:30:30 (build host, 384-f3838d7d)
+rcheck exit 0

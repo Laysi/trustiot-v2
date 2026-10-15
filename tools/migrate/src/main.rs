@@ -52,6 +52,7 @@ async fn run() -> ExitCode {
             tracing::info!(
                 changes = report.changes.len(),
                 roles_without_password = ?report.roles_without_password,
+                warnings = report.warnings.len(),
                 "migration run finished"
             );
             ExitCode::SUCCESS

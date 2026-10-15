@@ -112,6 +112,17 @@ WHERE r.rolcanlogin AND NOT r.rolsuper
               WHERE m.roleid = r.oid AND me.rolname = current_user AND m.admin_option)
 ORDER BY 1";
 
+/// Every other database a service's login role may connect to, and whether it may create
+/// temporary tables there (Laysi/trustiot-v2#400). Databases that take no connections
+/// (`datallowconn`, template0) are left out.
+const OTHER_DATABASES: &str = "
+SELECT d.datname::text, r.rolname::text, has_database_privilege(r.oid, d.oid, 'TEMPORARY')
+FROM pg_database d CROSS JOIN pg_roles r
+WHERE d.datallowconn AND d.datname <> current_database()
+  AND r.rolname = ANY ($1::text[])
+  AND has_database_privilege(r.oid, d.oid, 'CONNECT')
+ORDER BY 1, 2";
+
 /// What a login role may do beyond its grants: create in its own schema, or create temporary
 /// tables (database.sql revoked TEMPORARY from PUBLIC once; the database owner can grant it back).
 const LOGIN_EXTRAS: &str = "
@@ -530,6 +541,7 @@ impl Session {
                 .await?;
         }
         self.retire_login_roles(registry, report).await?;
+        self.warn_other_databases(registry, report).await?;
         for service in registry.services {
             self.ensure_outbox(registry, service, report).await?;
         }
@@ -1206,6 +1218,56 @@ impl Session {
             report.change(format!(
                 "revoked the login of role {role}: no service in tools/migrate's registry has it"
             ));
+        }
+        Ok(())
+    }
+
+    /// Warns, without stopping, about every other database of the cluster that a service's login
+    /// role may connect to (Laysi/trustiot-v2#400). The migration role does not own those
+    /// databases and cannot revoke anything there: the bundled Cluster revokes CONNECT and
+    /// TEMPORARY from PUBLIC at bootstrap, and on an external Postgres it is the database
+    /// administrator's step (docs/runbooks/migrations.md). A database the customer's own
+    /// application needs PUBLIC to reach is a valid choice, so this never stops the run.
+    async fn warn_other_databases(
+        &mut self,
+        registry: &Registry,
+        report: &mut Report,
+    ) -> Result<(), Error> {
+        let roles: Vec<String> = registry
+            .services
+            .iter()
+            .flat_map(Service::login_roles)
+            .collect();
+        let rows: Vec<(String, String, bool)> = sqlx::query_as(OTHER_DATABASES)
+            .bind(&roles)
+            .fetch_all(&mut self.conn)
+            .await
+            .map_err(Error::postgres(
+                "list the other databases the service roles may connect to",
+            ))?;
+        let mut databases: Vec<(String, Vec<String>, bool)> = Vec::new();
+        for (database, role, temporary) in rows {
+            match databases.last_mut() {
+                Some((name, roles, any_temporary)) if *name == database => {
+                    roles.push(role);
+                    *any_temporary |= temporary;
+                }
+                _ => databases.push((database, vec![role], temporary)),
+            }
+        }
+        for (database, roles, temporary) in databases {
+            let what = if temporary {
+                "connect to it and create temporary tables there"
+            } else {
+                "connect to it"
+            };
+            let warning = format!(
+                "database {database}: service roles {} may {what}; revoke CONNECT and TEMPORARY \
+                 on it from PUBLIC as a superuser (docs/runbooks/migrations.md)",
+                roles.join(", ")
+            );
+            tracing::warn!(warning = %warning, "another database admits the service roles");
+            report.warnings.push(warning);
         }
         Ok(())
     }

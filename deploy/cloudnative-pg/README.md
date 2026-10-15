@@ -61,3 +61,29 @@ chart 只透過 operator 建立資料庫、owner 與 AGE extension。每個服�
 - **用戶端憑證**：DatabaseRole 的 `clientCertificate` 不用；改用憑證時，要在 Job 與 service-kit 兩邊一起做，另開 issue。
 - **AGE 的權限**：extension 由 operator 以 superuser 建立，owner 沒有 `ag_catalog` 的 USAGE、`ag_catalog.ag_graph` 的 INSERT 與 `ag_catalog.ag_label` 的 SELECT（2026-10-12 在實驗機查得三項都是 false），所以 owner、Job 與服務角色都不能自己 `create_graph`。目前沒有服務用 AGE；誰建立圖、要由 superuser 給哪些權限，在 Laysi/trustiot-v2#176（每租戶的 AGE 角色）決定，它會接在 tools/migrate 的每租戶角色 hook 上。
 - **AGE 的時機**：`helm install --wait` 只等 Cluster 健康，Database 的 `age` extension 再晚約 20 秒才建立（實驗機），用到 AGE 的 migration 要先等它出現（`SELECT 1 FROM pg_extension WHERE extname = 'age'`）。
+
+## 其他資料庫的權限
+
+chart 的 Cluster 在 bootstrap 時收回 `PUBLIC` 在 `postgres` 與 `template1` 的 `CONNECT` 與 `TEMPORARY`（`bootstrap.initdb.postInitSQL`，Laysi/trustiot-v2#400，做法見 [chart 的「叢集內的 Postgres」](../chart/README.md#叢集內的-postgres)）。superuser 不受資料庫權限限制，其他角色要連這兩個資料庫就得依名稱拿到 `CONNECT`。2026-10-15 依 CloudNativePG 1.30.1 與 Barman Cloud plugin v0.15.1 的原始碼逐一查過 operator 自己的連線（路徑相對於各自 repo 的根目錄；lab 的實測見測試報告）：
+
+| 連線 | 角色與方式 | 資料庫 | 需要 | 來源 |
+| --- | --- | --- | --- | --- |
+| instance manager：狀態與探針、bootstrap 的 `postInitSQL`／`postInitTemplateSQL`／`postInitApplicationSQL`、`streaming_replica` 與 `cnpg_metrics_exporter` 的建立、extension 的調和 | `postgres`（superuser），pod 內 local socket 的 peer 驗證 | `postgres`、`template1`（只有 `postInitTemplateSQL`）、各資料庫 | 不需要（superuser） | `pkg/management/postgres/instance.go` 的 `ConnectionPool`、`GetSuperUserDB`、`GetTemplateDB`；`pkg/management/postgres/initdb.go` 的 `ConfigureNewInstance`；`internal/cmd/manager/instance/run/lifecycle/run.go` 的 `configureInstancePermissions` |
+| Database、DatabaseRole 與 Cluster 的 `managed.roles` 的調和 | `postgres`（superuser），local socket | `postgres`、目標資料庫 | 不需要 | `internal/management/controller/database_controller.go`、`databaserole_controller.go`、`roles/runnable.go` |
+| 實體複寫：replica 的 walreceiver、加入時的 `pg_basebackup` | `streaming_replica`，TLS 用戶端憑證（pg_hba `hostssl replication streaming_replica all cert`） | 不連資料庫（`replication`） | 不需要：實體複寫連線不檢查資料庫權限 | `pkg/management/postgres/conninfo.go`、`pkg/postgres/configuration.go` |
+| replica 對 primary 的一般連線：`pg_rewind --source-server`（前 primary 重新加入）、等待新 primary 可連線、replica 檢查 WAL 歸檔、replica 的 replication slot 同步 | `streaming_replica`，TLS 用戶端憑證（pg_hba `hostssl postgres streaming_replica all cert`），`dbname=postgres` | `postgres` | `CONNECT`：依名稱給（`pg_rewind` 要的函式權限由 operator 自己給） | `pkg/management/postgres/instance.go` 的 `GetPrimaryConnInfo`、`Rewind`、`WaitForPrimaryAvailable`；`pkg/management/postgres/wal.go`；`internal/management/controller/slots/runner/runner.go` |
+| 監控查詢（`cnpg-default-monitoring` 與自訂查詢） | `cnpg_metrics_exporter`（pg_monitor 的成員，不是 superuser），local socket 的 peer 驗證 | 預設 `postgres`；`target_databases: '*'` 展開成 `datallowconn AND NOT datistemplate` 的資料庫，不含 `template1` | `postgres` 的 `CONNECT`：依名稱給；`trustiot` 維持 `PUBLIC` 的 `CONNECT` | `pkg/management/postgres/instance.go` 的 `metricsConnectionPool`、`pkg/management/postgres/metrics/collector.go`；文件 `docs/src/monitoring.md` 的「Every database in `target_databases` must allow `cnpg_metrics_exporter` to `CONNECT`」 |
+| 備份（`Backup` 的 `method: plugin`） | plugin 的 sidecar 執行 `barman-cloud-backup --user postgres`，經 `PGHOST` 的 local socket，superuser | `postgres` | 不需要 | barman-cloud v0.6.0 的 `pkg/backup/backup.go`；plugin 的 `internal/cnpgi/instance/backup.go` |
+| WAL 歸檔與還原（`restore_command`、從備份 bootstrap） | plugin 的 sidecar 或還原 Job，只讀寫物件儲存與 WAL 檔 | 不連資料庫 | 不需要 | plugin 的 `internal/cnpgi/instance/`、`internal/cmd/restore/` |
+| Pooler（chart 沒有用） | `cnpg_pooler_pgbouncer`，TLS 用戶端憑證；`auth_query` 在 `postgres` 執行 | `postgres` | `CONNECT`：operator 第一次為 Pooler 建立這個角色時自己 `GRANT CONNECT ON DATABASE postgres` 給它，依名稱，所以收回 `PUBLIC` 不影響；用戶端經 Pooler 連的是 `trustiot` | `internal/management/controller/instance_controller.go` 的 `reconcilePgbouncerAuthUser`、`api/v1/pooler_types.go` 的 `PoolerAuthDBName` |
+
+operator 在 instance 第一次啟動時才建立 `streaming_replica` 與 `cnpg_metrics_exporter`，比 `postInitSQL` 晚。所以 chart 的檔案先以 operator 的方式建立它們（`CREATE ROLE streaming_replica LOGIN REPLICATION` 與 operator 的註解、`CREATE ROLE cnpg_metrics_exporter LOGIN PASSWORD NULL`），再給 `CONNECT`；operator 遇到已存在的角色只補屬性與權限（`pg_monitor` 的成員關係、`pg_rewind` 的函式權限）。升級 operator 時，release notes 若提到新的、會連 `postgres` 的角色，要把它加進 `deploy/chart/files/postgres/system-databases.sql`，並在 lab 重跑 `deploy/chart/tests/e2e/postgres-replication.e2e.ts`。
+
+為什麼收回資料庫權限，而不是加一條拒絕這兩個資料庫的 pg_hba 規則：
+
+- 權限記在 catalog 裡，隨資料走：replica、從備份還原的 Cluster 都帶著它。pg_hba 是 Cluster spec 的設定，還原或搬到沒有這條規則的 Cluster 就沒了。
+- pg_hba 只決定能不能連線，表達不了 `TEMPORARY`。權限則是 `has_database_privilege` 查得到的狀態，Job 的警告、chart 的測試與 lab 的測試都以它檢查。
+- 外部 Postgres 沒有 chart 管的 pg_hba，只能收回權限；bundled 與 external 用同一種做法，runbook 的步驟也一樣。
+- pg_hba 的規則依資料庫與角色名稱比對，要排在 CloudNativePG 的固定規則之後才不會擋到 `streaming_replica` 與 Pooler；擋住 TCP 的一般角色也擋到之後任何依名稱需要 `postgres` 的角色，而權限可以依名稱給。
+
+代價是 `postInitSQL` 只在 bootstrap 執行一次，之前建立的 Cluster 要照 [docs/runbooks/migrations.md](../../docs/runbooks/migrations.md) 補一次；operator 的兩個角色也要先建好，才能依名稱給權限（上一段）。

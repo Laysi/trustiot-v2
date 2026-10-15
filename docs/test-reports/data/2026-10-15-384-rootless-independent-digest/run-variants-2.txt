@@ -1,0 +1,253 @@
+rcheck: queued on the build host at 12:18:07 as 384-f3838d7d; running now: nothing
+
+=== versions ===
+Linux 6.18.54.1-microsoft-standard-WSL2 x86_64
+PRETTY_NAME="Ubuntu 26.04.1 LTS"
+podman version 5.7.0
+podman version 5.7.0
+skopeo version 1.21.0-dev
+  buildah 1.42.1+ds1-2build1
+  containers-storage 1.61.0+ds1-6
+  crun 1.21-1ubuntu3
+  golang-github-containers-image 5.38.0+ds2-2
+  podman 5.7.0+ds2-3build1
+  skopeo 1.21.0~pre1-2build1
+bun 1.4.2
+--- versions: exit 0
+plan: commit 8629c4a46f4aa3a2df812fedc4741345b7430f2e, epoch 1792037212, version 0.0.0-rc.1; identity 192a7aef7d5c9284
+
+=== build host podman ===
+packed host-rootless-1-overlay-layers (overlay, Containerfile plain, context owner self)
+packed host-rootless-2-overlay-nolayers (overlay, Containerfile plain, context owner self, --layers=false)
+packed host-rootless-3-vfs-layers (vfs, Containerfile plain, context owner self)
+packed host-rootless-4-vfs-nolayers (vfs, Containerfile plain, context owner self, --layers=false)
+packed host-rootless-5-vfs-nolayers-other (vfs, Containerfile plain, context owner other, --layers=false)
+packed host-rootless-6-vfs-nolayers-chown-other (vfs, Containerfile chown, context owner other, --layers=false)
+packed host-root-1-overlay-layers (overlay, Containerfile plain, context owner self)
+packed host-root-2-overlay-nolayers (overlay, Containerfile plain, context owner self, --layers=false)
+packed host-root-3-vfs-layers (vfs, Containerfile plain, context owner self)
+packed host-root-4-vfs-nolayers (vfs, Containerfile plain, context owner self, --layers=false)
+packed host-root-5-vfs-nolayers-other (vfs, Containerfile plain, context owner other, --layers=false)
+packed host-root-6-vfs-nolayers-chown-other (vfs, Containerfile chown, context owner other, --layers=false)
+--- build host podman: exit 0
+
+=== runner's podman in ubuntu:24.04 ===
+Trying to pull docker.io/library/ubuntu@sha256:f610ab94648195aa356059f5b41d6085c9d4d903c072430cdd1af7bdb646106b...
+Getting image source signatures
+Copying blob sha256:a60ef8ec184edb5ed91f5983f00261359fb2fe20f603e8d488b9477d32fcad70
+Copying config sha256:69f919497cada9a8611f3de61df902d9f94bf20f84552ef5bd93125c38608ef9
+Writing manifest to image destination
+debconf: delaying package configuration, since apt-utils is not installed
+Ubuntu packages in the container:
+  buildah 1.33.7+ds1-1ubuntu0.24.04.3
+  crun 1.14.1-1
+  golang-github-containers-common 0.57.4+ds1-2ubuntu0.2
+  golang-github-containers-image 5.29.2-2
+  podman 4.9.3+ds1-1ubuntu0.2
+  skopeo 1.13.3+ds1-2ubuntu0.24.04.3
+packed c493-rootless-1-overlay-layers (overlay, Containerfile plain, context owner self)
+packed c493-rootless-2-overlay-nolayers (overlay, Containerfile plain, context owner self, --layers=false)
+packed c493-rootless-3-vfs-layers (vfs, Containerfile plain, context owner self)
+packed c493-rootless-4-vfs-nolayers (vfs, Containerfile plain, context owner self, --layers=false)
+packed c493-rootless-5-vfs-nolayers-other (vfs, Containerfile plain, context owner other, --layers=false)
+packed c493-rootless-6-vfs-nolayers-chown-other (vfs, Containerfile chown, context owner other, --layers=false)
+packed c493-root-1-overlay-layers (overlay, Containerfile plain, context owner self)
+packed c493-root-2-overlay-nolayers (overlay, Containerfile plain, context owner self, --layers=false)
+packed c493-root-3-vfs-layers (vfs, Containerfile plain, context owner self)
+packed c493-root-4-vfs-nolayers (vfs, Containerfile plain, context owner self, --layers=false)
+packed c493-root-5-vfs-nolayers-other (vfs, Containerfile plain, context owner other, --layers=false)
+packed c493-root-6-vfs-nolayers-chown-other (vfs, Containerfile chown, context owner other, --layers=false)
+--- runner's podman in ubuntu:24.04: exit 0
+
+=== compare ===
+c493-root-1-overlay-layers
+  image sha256:e38b39d739c22d614bd49b6ef266c3036b78e5fc91822db6ad993817ed48f73c
+  config sha256:da51f6dafbef04f95335c6ddd1f92b930ab67f5483c6bbca4ccefbf63a7120ff, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:a3e7d9ebb089ebe87874621764c6599f41e09f4112c870b881e906e12d89ec91; FROM comments: FROM a85c1b2ecdb9, FROM 9948699d8f19, FROM e54e15272189; io.buildah.version 1.33.7
+  xattrs in the COPY layer: (none)
+c493-root-2-overlay-nolayers
+  image sha256:15a6ee9bc9d05c8de8881d5ede9bcb9721ce560f316a6b0bf91077f45e1b3202
+  config sha256:875d93ed708b4c3aa01b3d89c9d612f8c1260e7dcb1a83e68fb418973aaa8feb, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:a3e7d9ebb089ebe87874621764c6599f41e09f4112c870b881e906e12d89ec91; FROM comments: (none); io.buildah.version 1.33.7
+  xattrs in the COPY layer: (none)
+c493-root-3-vfs-layers
+  image sha256:e38b39d739c22d614bd49b6ef266c3036b78e5fc91822db6ad993817ed48f73c
+  config sha256:da51f6dafbef04f95335c6ddd1f92b930ab67f5483c6bbca4ccefbf63a7120ff, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:a3e7d9ebb089ebe87874621764c6599f41e09f4112c870b881e906e12d89ec91; FROM comments: FROM a85c1b2ecdb9, FROM 9948699d8f19, FROM e54e15272189; io.buildah.version 1.33.7
+  xattrs in the COPY layer: (none)
+c493-root-4-vfs-nolayers
+  image sha256:15a6ee9bc9d05c8de8881d5ede9bcb9721ce560f316a6b0bf91077f45e1b3202
+  config sha256:875d93ed708b4c3aa01b3d89c9d612f8c1260e7dcb1a83e68fb418973aaa8feb, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:a3e7d9ebb089ebe87874621764c6599f41e09f4112c870b881e906e12d89ec91; FROM comments: (none); io.buildah.version 1.33.7
+  xattrs in the COPY layer: (none)
+c493-root-5-vfs-nolayers-other
+  image sha256:c814a692321d817176f43f17116a4ed92fc68e9ef4004a629f6c528078f36a1e
+  config sha256:7ecd1a3726f3a8799428dc148d77b7cd7e8e0e0b355641540ebc86b2be2896c2, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version 1.33.7
+  xattrs in the COPY layer: (none)
+c493-root-6-vfs-nolayers-chown-other
+  image sha256:c814a692321d817176f43f17116a4ed92fc68e9ef4004a629f6c528078f36a1e
+  config sha256:7ecd1a3726f3a8799428dc148d77b7cd7e8e0e0b355641540ebc86b2be2896c2, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version 1.33.7
+  xattrs in the COPY layer: (none)
+c493-rootless-1-overlay-layers
+  image sha256:045b8bd01fc7b7dc3ff90c168f1878e33e1d9fb1e192c587cd98cc38054e1ea7
+  config sha256:7c746e23d290202e1cec42928340e7319077e237b028069621141a16d8151a11, COPY diff_id sha256:8472e1b4a2cc7861c5f03d2b38b07a4e43fb158abefb5c045f57840c7911db35
+  COPY file:a3e7d9ebb089ebe87874621764c6599f41e09f4112c870b881e906e12d89ec91; FROM comments: FROM 1f380e605039, FROM 82eab136fb25, FROM 134300cc6a7e; io.buildah.version 1.33.7
+  xattrs in the COPY layer: usr/: 37 SCHILY.xattr.user.overlay.origin=
+c493-rootless-2-overlay-nolayers
+  image sha256:34350649c73866456fd1ffafce8b50a78c27ba4e2d41ba2c130721c199658764
+  config sha256:710c83e195dc96adfa0ef30c563cf037597f65e963a12b8379bf18408c494392, COPY diff_id sha256:8472e1b4a2cc7861c5f03d2b38b07a4e43fb158abefb5c045f57840c7911db35
+  COPY file:a3e7d9ebb089ebe87874621764c6599f41e09f4112c870b881e906e12d89ec91; FROM comments: (none); io.buildah.version 1.33.7
+  xattrs in the COPY layer: usr/: 37 SCHILY.xattr.user.overlay.origin=
+c493-rootless-3-vfs-layers
+  image sha256:e38b39d739c22d614bd49b6ef266c3036b78e5fc91822db6ad993817ed48f73c
+  config sha256:da51f6dafbef04f95335c6ddd1f92b930ab67f5483c6bbca4ccefbf63a7120ff, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:a3e7d9ebb089ebe87874621764c6599f41e09f4112c870b881e906e12d89ec91; FROM comments: FROM a85c1b2ecdb9, FROM 9948699d8f19, FROM e54e15272189; io.buildah.version 1.33.7
+  xattrs in the COPY layer: (none)
+c493-rootless-4-vfs-nolayers
+  image sha256:15a6ee9bc9d05c8de8881d5ede9bcb9721ce560f316a6b0bf91077f45e1b3202
+  config sha256:875d93ed708b4c3aa01b3d89c9d612f8c1260e7dcb1a83e68fb418973aaa8feb, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:a3e7d9ebb089ebe87874621764c6599f41e09f4112c870b881e906e12d89ec91; FROM comments: (none); io.buildah.version 1.33.7
+  xattrs in the COPY layer: (none)
+c493-rootless-5-vfs-nolayers-other
+  image sha256:c814a692321d817176f43f17116a4ed92fc68e9ef4004a629f6c528078f36a1e
+  config sha256:7ecd1a3726f3a8799428dc148d77b7cd7e8e0e0b355641540ebc86b2be2896c2, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version 1.33.7
+  xattrs in the COPY layer: (none)
+c493-rootless-6-vfs-nolayers-chown-other
+  image sha256:c814a692321d817176f43f17116a4ed92fc68e9ef4004a629f6c528078f36a1e
+  config sha256:7ecd1a3726f3a8799428dc148d77b7cd7e8e0e0b355641540ebc86b2be2896c2, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version 1.33.7
+  xattrs in the COPY layer: (none)
+host-root-1-overlay-layers
+  image sha256:3a1217a906a1e0a8f09901298b8fad2171e8ed67d1111096eaf02f1392ea5e66
+  config sha256:f63f3537268f248d5eaf617cff18e8e61d27599afd9d216b2afd9de6064446fc, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+host-root-2-overlay-nolayers
+  image sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959
+  config sha256:d6e2f901ad893f068f2627d03b856885891fbb69c661843f8f98737f940ab5e9, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+host-root-3-vfs-layers
+  image sha256:3a1217a906a1e0a8f09901298b8fad2171e8ed67d1111096eaf02f1392ea5e66
+  config sha256:f63f3537268f248d5eaf617cff18e8e61d27599afd9d216b2afd9de6064446fc, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+host-root-4-vfs-nolayers
+  image sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959
+  config sha256:d6e2f901ad893f068f2627d03b856885891fbb69c661843f8f98737f940ab5e9, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+host-root-5-vfs-nolayers-other
+  image sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959
+  config sha256:d6e2f901ad893f068f2627d03b856885891fbb69c661843f8f98737f940ab5e9, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+host-root-6-vfs-nolayers-chown-other
+  image sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959
+  config sha256:d6e2f901ad893f068f2627d03b856885891fbb69c661843f8f98737f940ab5e9, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+host-rootless-1-overlay-layers
+  image sha256:3a1217a906a1e0a8f09901298b8fad2171e8ed67d1111096eaf02f1392ea5e66
+  config sha256:f63f3537268f248d5eaf617cff18e8e61d27599afd9d216b2afd9de6064446fc, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+host-rootless-2-overlay-nolayers
+  image sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959
+  config sha256:d6e2f901ad893f068f2627d03b856885891fbb69c661843f8f98737f940ab5e9, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+host-rootless-3-vfs-layers
+  image sha256:3a1217a906a1e0a8f09901298b8fad2171e8ed67d1111096eaf02f1392ea5e66
+  config sha256:f63f3537268f248d5eaf617cff18e8e61d27599afd9d216b2afd9de6064446fc, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+host-rootless-4-vfs-nolayers
+  image sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959
+  config sha256:d6e2f901ad893f068f2627d03b856885891fbb69c661843f8f98737f940ab5e9, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+host-rootless-5-vfs-nolayers-other
+  image sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959
+  config sha256:d6e2f901ad893f068f2627d03b856885891fbb69c661843f8f98737f940ab5e9, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+host-rootless-6-vfs-nolayers-chown-other
+  image sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959
+  config sha256:d6e2f901ad893f068f2627d03b856885891fbb69c661843f8f98737f940ab5e9, COPY diff_id sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e
+  COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e; FROM comments: (none); io.buildah.version (none)
+  xattrs in the COPY layer: (none)
+DIFF  host-root-1-overlay-layers / host-root-2-overlay-nolayers: sha256:3a1217a906a1e0a8f09901298b8fad2171e8ed67d1111096eaf02f1392ea5e66 / sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959
+  config /history/13/empty_layer: null | true
+  config /history/16/empty_layer: true | null
+DIFF  host-rootless-1-overlay-layers / c493-rootless-1-overlay-layers: sha256:3a1217a906a1e0a8f09901298b8fad2171e8ed67d1111096eaf02f1392ea5e66 / sha256:045b8bd01fc7b7dc3ff90c168f1878e33e1d9fb1e192c587cd98cc38054e1ea7
+  layer 2: sha256:65d7c714ac25af2cfeab681a79f82c23514d1aa85fb70c2368c4417814f1a8a4 | sha256:ebde8b03072095143d724619e4c7ef2fd5c99e080045cfcdb4f2da2731a85d07
+  layer 3: sha256:b35f5ceb380816fca529f56b5f411f9ab9029949753be6042e517f72cba961fa | sha256:575c4940d50e1baa1ef86ecbd9cda270f5d55511761b79330ba20259497c78ab
+  layer 4: sha256:87f7855f95203a0c96dc5ab2833c849c6b50bea79b98901e898c9917a95ec839 | sha256:97ae0a42274e126686192f377a2b4a112583630eadde1920a761ed910cdbde34
+  layer 12: sha256:1f905b4f1ca5de0d72fffb6b8f350ed1a9d992c7c72a43468d6074837c534289 | sha256:f6e0128d9fe84ab5788f9484d4c8d2be45a936953b1020c9d56806277379e9da
+  layer 13: sha256:200726500dde18b1ed232c0542c02ba50c66a5eacc74e847f8a703421ed55413 | sha256:c15da4766a7d3a22a9a4a3b4ccd2e5afb85f5cf6e5ccdb90684a4a49b0afc754
+  config /config/Labels/io.buildah.version: null | "1.33.7"
+  config /history/13/created_by: "/bin/sh -c #(nop) COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e in /usr/local/bin/identity     |force-mtime=1792037212 " | "/bin/sh -c #(nop) COPY file:a3e7d9ebb089ebe87874621764c6599f41e09f4112c870b881e906e12d89ec91 in /usr/local/bin/identity "
+  config /history/14/comment: null | "FROM 1f380e605039"
+  config /history/14/created_by: "/bin/sh -c #(nop) USER 65532:65532|force-mtime=1792037212" | "/bin/sh -c #(nop) USER 65532:65532"
+  config /history/15/comment: null | "FROM 82eab136fb25"
+  config /history/15/created_by: "/bin/sh -c #(nop) ENTRYPOINT [\"/usr/local/bin/identity\"]|force-mtime=1792037212" | "/bin/sh -c #(nop) ENTRYPOINT [\"/usr/local/bin/identity\"]"
+  config /history/16/comment: null | "FROM 134300cc6a7e"
+  config /history/16/created_by: "/bin/sh -c #(nop) LABEL \"org.opencontainers.image.source\"=\"https://github.com/Laysi/trustiot-v2\" \"org.opencontainers.image.revision\"=\"8629c4a46f4aa3a2df812fedc4741345b7430f2e\" \"org.opencontainers.image.version\"=\"0.0.0-rc.1\" \"org.opencontainers.image.title\"=\"identity\"|force-mtime=1792037212" | "/bin/sh -c #(nop) LABEL \"org.opencontainers.image.source\"=\"https://github.com/Laysi/trustiot-v2\" \"org.opencontainers.image.revision\"=\"8629c4a46f4aa3a2df812fedc4741345b7430f2e\" \"org.opencontainers.image.version\"=\"0.0.0-rc.1\" \"org.opencontainers.image.title\"=\"identity\""
+  config /rootfs/diff_ids/13: "sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e" | "sha256:8472e1b4a2cc7861c5f03d2b38b07a4e43fb158abefb5c045f57840c7911db35"
+DIFF  host-rootless-3-vfs-layers / c493-rootless-3-vfs-layers: sha256:3a1217a906a1e0a8f09901298b8fad2171e8ed67d1111096eaf02f1392ea5e66 / sha256:e38b39d739c22d614bd49b6ef266c3036b78e5fc91822db6ad993817ed48f73c
+  layer 2: sha256:65d7c714ac25af2cfeab681a79f82c23514d1aa85fb70c2368c4417814f1a8a4 | sha256:ebde8b03072095143d724619e4c7ef2fd5c99e080045cfcdb4f2da2731a85d07
+  layer 3: sha256:b35f5ceb380816fca529f56b5f411f9ab9029949753be6042e517f72cba961fa | sha256:575c4940d50e1baa1ef86ecbd9cda270f5d55511761b79330ba20259497c78ab
+  layer 4: sha256:87f7855f95203a0c96dc5ab2833c849c6b50bea79b98901e898c9917a95ec839 | sha256:97ae0a42274e126686192f377a2b4a112583630eadde1920a761ed910cdbde34
+  layer 12: sha256:1f905b4f1ca5de0d72fffb6b8f350ed1a9d992c7c72a43468d6074837c534289 | sha256:f6e0128d9fe84ab5788f9484d4c8d2be45a936953b1020c9d56806277379e9da
+  layer 13: sha256:200726500dde18b1ed232c0542c02ba50c66a5eacc74e847f8a703421ed55413 | sha256:a872d84d806a9a9c97cb80f02e0037674e2efced80449029f1a0abc91c031c99
+  config /config/Labels/io.buildah.version: null | "1.33.7"
+  config /history/13/created_by: "/bin/sh -c #(nop) COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e in /usr/local/bin/identity     |force-mtime=1792037212 " | "/bin/sh -c #(nop) COPY file:a3e7d9ebb089ebe87874621764c6599f41e09f4112c870b881e906e12d89ec91 in /usr/local/bin/identity "
+  config /history/14/comment: null | "FROM a85c1b2ecdb9"
+  config /history/14/created_by: "/bin/sh -c #(nop) USER 65532:65532|force-mtime=1792037212" | "/bin/sh -c #(nop) USER 65532:65532"
+  config /history/15/comment: null | "FROM 9948699d8f19"
+  config /history/15/created_by: "/bin/sh -c #(nop) ENTRYPOINT [\"/usr/local/bin/identity\"]|force-mtime=1792037212" | "/bin/sh -c #(nop) ENTRYPOINT [\"/usr/local/bin/identity\"]"
+  config /history/16/comment: null | "FROM e54e15272189"
+  config /history/16/created_by: "/bin/sh -c #(nop) LABEL \"org.opencontainers.image.source\"=\"https://github.com/Laysi/trustiot-v2\" \"org.opencontainers.image.revision\"=\"8629c4a46f4aa3a2df812fedc4741345b7430f2e\" \"org.opencontainers.image.version\"=\"0.0.0-rc.1\" \"org.opencontainers.image.title\"=\"identity\"|force-mtime=1792037212" | "/bin/sh -c #(nop) LABEL \"org.opencontainers.image.source\"=\"https://github.com/Laysi/trustiot-v2\" \"org.opencontainers.image.revision\"=\"8629c4a46f4aa3a2df812fedc4741345b7430f2e\" \"org.opencontainers.image.version\"=\"0.0.0-rc.1\" \"org.opencontainers.image.title\"=\"identity\""
+DIFF  host-rootless-4-vfs-nolayers / c493-rootless-4-vfs-nolayers: sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959 / sha256:15a6ee9bc9d05c8de8881d5ede9bcb9721ce560f316a6b0bf91077f45e1b3202
+  layer 2: sha256:65d7c714ac25af2cfeab681a79f82c23514d1aa85fb70c2368c4417814f1a8a4 | sha256:ebde8b03072095143d724619e4c7ef2fd5c99e080045cfcdb4f2da2731a85d07
+  layer 3: sha256:b35f5ceb380816fca529f56b5f411f9ab9029949753be6042e517f72cba961fa | sha256:575c4940d50e1baa1ef86ecbd9cda270f5d55511761b79330ba20259497c78ab
+  layer 4: sha256:87f7855f95203a0c96dc5ab2833c849c6b50bea79b98901e898c9917a95ec839 | sha256:97ae0a42274e126686192f377a2b4a112583630eadde1920a761ed910cdbde34
+  layer 12: sha256:1f905b4f1ca5de0d72fffb6b8f350ed1a9d992c7c72a43468d6074837c534289 | sha256:f6e0128d9fe84ab5788f9484d4c8d2be45a936953b1020c9d56806277379e9da
+  layer 13: sha256:200726500dde18b1ed232c0542c02ba50c66a5eacc74e847f8a703421ed55413 | sha256:a872d84d806a9a9c97cb80f02e0037674e2efced80449029f1a0abc91c031c99
+  config /config/Labels/io.buildah.version: null | "1.33.7"
+  config /history/13/comment: "FROM gcr.io/distroless/static-debian13@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3" | null
+  config /history/13/created_by: "/bin/sh -c #(nop) COPY file:14a9634f642c53dc4ad9219f9b8ed35c889c33d5d781b3ff15652b16e1aeeb6e in /usr/local/bin/identity     |force-mtime=1792037212 " | "/bin/sh -c #(nop) COPY file:a3e7d9ebb089ebe87874621764c6599f41e09f4112c870b881e906e12d89ec91 in /usr/local/bin/identity "
+  config /history/14/created_by: "/bin/sh -c #(nop) USER 65532:65532|force-mtime=1792037212" | "/bin/sh -c #(nop) USER 65532:65532"
+  config /history/15/created_by: "/bin/sh -c #(nop) ENTRYPOINT [\"/usr/local/bin/identity\"]|force-mtime=1792037212" | "/bin/sh -c #(nop) ENTRYPOINT [\"/usr/local/bin/identity\"]"
+  config /history/16/comment: null | "FROM gcr.io/distroless/static-debian13@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
+  config /history/16/created_by: "/bin/sh -c #(nop) LABEL \"org.opencontainers.image.source\"=\"https://github.com/Laysi/trustiot-v2\" \"org.opencontainers.image.revision\"=\"8629c4a46f4aa3a2df812fedc4741345b7430f2e\" \"org.opencontainers.image.version\"=\"0.0.0-rc.1\" \"org.opencontainers.image.title\"=\"identity\"|force-mtime=1792037212" | "/bin/sh -c #(nop) LABEL \"org.opencontainers.image.source\"=\"https://github.com/Laysi/trustiot-v2\" \"org.opencontainers.image.revision\"=\"8629c4a46f4aa3a2df812fedc4741345b7430f2e\" \"org.opencontainers.image.version\"=\"0.0.0-rc.1\" \"org.opencontainers.image.title\"=\"identity\""
+DIFF  c493-root-1-overlay-layers / c493-rootless-1-overlay-layers: sha256:e38b39d739c22d614bd49b6ef266c3036b78e5fc91822db6ad993817ed48f73c / sha256:045b8bd01fc7b7dc3ff90c168f1878e33e1d9fb1e192c587cd98cc38054e1ea7
+  layer 13: sha256:a872d84d806a9a9c97cb80f02e0037674e2efced80449029f1a0abc91c031c99 | sha256:c15da4766a7d3a22a9a4a3b4ccd2e5afb85f5cf6e5ccdb90684a4a49b0afc754
+  config /history/14/comment: "FROM a85c1b2ecdb9" | "FROM 1f380e605039"
+  config /history/15/comment: "FROM 9948699d8f19" | "FROM 82eab136fb25"
+  config /history/16/comment: "FROM e54e15272189" | "FROM 134300cc6a7e"
+  config /rootfs/diff_ids/13: "sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e" | "sha256:8472e1b4a2cc7861c5f03d2b38b07a4e43fb158abefb5c045f57840c7911db35"
+DIFF  c493-root-2-overlay-nolayers / c493-rootless-2-overlay-nolayers: sha256:15a6ee9bc9d05c8de8881d5ede9bcb9721ce560f316a6b0bf91077f45e1b3202 / sha256:34350649c73866456fd1ffafce8b50a78c27ba4e2d41ba2c130721c199658764
+  layer 13: sha256:a872d84d806a9a9c97cb80f02e0037674e2efced80449029f1a0abc91c031c99 | sha256:c15da4766a7d3a22a9a4a3b4ccd2e5afb85f5cf6e5ccdb90684a4a49b0afc754
+  config /rootfs/diff_ids/13: "sha256:fc577a2d0d1a60b99e723d2f3c5b2a8a6558f57512de1e9682563260a64b497e" | "sha256:8472e1b4a2cc7861c5f03d2b38b07a4e43fb158abefb5c045f57840c7911db35"
+SAME  c493-root-3-vfs-layers / c493-rootless-3-vfs-layers: sha256:e38b39d739c22d614bd49b6ef266c3036b78e5fc91822db6ad993817ed48f73c / sha256:e38b39d739c22d614bd49b6ef266c3036b78e5fc91822db6ad993817ed48f73c
+SAME  c493-root-4-vfs-nolayers / c493-rootless-4-vfs-nolayers: sha256:15a6ee9bc9d05c8de8881d5ede9bcb9721ce560f316a6b0bf91077f45e1b3202 / sha256:15a6ee9bc9d05c8de8881d5ede9bcb9721ce560f316a6b0bf91077f45e1b3202
+SAME  c493-root-5-vfs-nolayers-other / c493-rootless-5-vfs-nolayers-other: sha256:c814a692321d817176f43f17116a4ed92fc68e9ef4004a629f6c528078f36a1e / sha256:c814a692321d817176f43f17116a4ed92fc68e9ef4004a629f6c528078f36a1e
+SAME  c493-root-6-vfs-nolayers-chown-other / c493-rootless-6-vfs-nolayers-chown-other: sha256:c814a692321d817176f43f17116a4ed92fc68e9ef4004a629f6c528078f36a1e / sha256:c814a692321d817176f43f17116a4ed92fc68e9ef4004a629f6c528078f36a1e
+SAME  host-root-1-overlay-layers / host-rootless-1-overlay-layers: sha256:3a1217a906a1e0a8f09901298b8fad2171e8ed67d1111096eaf02f1392ea5e66 / sha256:3a1217a906a1e0a8f09901298b8fad2171e8ed67d1111096eaf02f1392ea5e66
+SAME  host-root-2-overlay-nolayers / host-rootless-2-overlay-nolayers: sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959 / sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959
+SAME  host-root-3-vfs-layers / host-rootless-3-vfs-layers: sha256:3a1217a906a1e0a8f09901298b8fad2171e8ed67d1111096eaf02f1392ea5e66 / sha256:3a1217a906a1e0a8f09901298b8fad2171e8ed67d1111096eaf02f1392ea5e66
+SAME  host-root-4-vfs-nolayers / host-rootless-4-vfs-nolayers: sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959 / sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959
+SAME  host-root-5-vfs-nolayers-other / host-rootless-5-vfs-nolayers-other: sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959 / sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959
+SAME  host-root-6-vfs-nolayers-chown-other / host-rootless-6-vfs-nolayers-chown-other: sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959 / sha256:aad7a855df6c40dcb3e0f7e83791407a39ae6c54902a6ce88d81ca1c3340b959
+--- compare: exit 0
+
+ALL STEPS PASSED
+rcheck: removed 0 dangling test volumes
+rcheck: removed 0 dangling podman test volumes
+rcheck: exit 0 at 12:21:16 (build host, 384-f3838d7d)
+rcheck exit 0

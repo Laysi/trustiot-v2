@@ -102,6 +102,10 @@ pub struct Report {
     /// Login roles of the registry that no Secret is bound to in `passwords.postgres` (their
     /// service is not part of this deployment): the run leaves them NOLOGIN.
     pub roles_without_password: Vec<String>,
+    /// Problems the run found but does not stop for, one line each, also logged as warnings:
+    /// another database of the cluster that the service roles may connect to
+    /// (Laysi/trustiot-v2#400).
+    pub warnings: Vec<String>,
 }
 
 impl Report {

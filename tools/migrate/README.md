@@ -28,6 +28,7 @@
    - outbox（`crates/outbox`）：依 `Outbox` 的設定建立 producer 或 consumer 的表，producer 的 `crates/service-kit/sql/outbox-event.sql` 與 `outbox-aggregate.sql`（`outbox_aggregate` 的租戶欄位、RLS 與權限，Laysi/trustiot-v2#413）各套用一次，consumer 的平台角色加進 producer 的讀者。`outbox-aggregate.sql` 是 2026-10-15 新增的檔案：之前已跑過 Job 的資料庫在下一次執行時套用它一次，既有的聚合拿到它最後一筆事件的租戶（見 [crates/outbox README 的聚合的租戶隔離](../../crates/outbox/README.md#聚合的租戶隔離laysitrustiot-v24132026-10-15)）；已套用的檔案都沒改。
    - 以 `<schema>_owner` 依序套用 `migrations/postgres/` 的每個檔案，一個檔案一個交易，`search_path` 是該 schema；已套用的檔案若內容改了就停止。檔案執行完後比對交易 ID、`current_user` 與 `role` 設定，與執行前不同（檔案結束了交易或切換了角色）就停止，不記錄這個檔案（下方「檔案的規則」）。
    - 所有服務之後：帶 Job 標記、migration 角色有 ADMIN OPTION、還能登入、但服務清單裡已經沒有任何服務用它的角色（服務從清單移除或改名）一律 `NOLOGIN`。挑選依標記與 ADMIN OPTION，不依名稱，所以 CloudNativePG 的 superuser、客戶自己的帳號、另一個實例的角色都不會被碰。
+   - 接著檢查叢集的其他資料庫（`datallowconn`、不是這個資料庫）：服務清單裡的登入角色（不論能不能登入）有 `CONNECT` 時，每個資料庫記一行警告（日誌的 WARN，結果的 `warnings`），寫出資料庫、角色（依名稱排序）與能不能建立暫存表，不停止（Laysi/trustiot-v2#400）。migration 角色不擁有那些資料庫，收不回權限；`bundled` 的 Cluster 在 bootstrap 時已收回 `postgres` 與 `template1` 的，外部 Postgres 由資料庫管理者收回（runbook 的「`postgres` 與 `template1`：收回 PUBLIC 的 CONNECT 與 TEMPORARY」）。只警告，因為客戶的應用也許需要 `PUBLIC` 連得上某個資料庫，這是管理者的決定。
 5. 每租戶角色的 hook（`TenantRoleHook`）：以服務的 owner 角色讀租戶表，每個租戶的角色不存在就以 NOLOGIN NOINHERIT 建立，再執行 hook 的範本。角色是叢集層級的物件，不在資料庫備份裡，所以還原的資料庫在下一次執行時取回它們。目前沒有 hook，AGE 的每租戶角色在 Laysi/trustiot-v2#176 接上。
 6. ClickHouse（有設定 `TRUSTIOT_CLICKHOUSE_URL` 與 `TRUSTIOT__CLICKHOUSE__*` 時）：以有 access management 的帳號（叢集內 ClickHouse 時密碼經 Kubernetes API 從它的 init container 填的 Secret 讀取：Secret 還沒填好時等待，ClickHouse 拒絕時重讀再試，只採用 init container 填過的物件裡的值）依序套用 `services/ingest/migrations/clickhouse/`，記在 ClickHouse 的 `trustiot_migrate.applied`；collector 的帳號（`TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR`，密碼也來自它的 Secret）不存在就建立，只有預設角色 `trustiot_otel_collector`；存在但多了角色、權限或設定（含 settings profile）就停止，不自動刪除（`DROP USER` 是管理者的決定）；collector 關閉或帳號改名之後，其他拿到 `trustiot_otel_collector` 角色的帳號（只有 Job 的 `CREATE USER ... DEFAULT ROLE` 會給；Job 自己執行時用的帳號 `currentUser()` 與設定檔定義的帳號除外）改成 `HOST NONE`，不能再登入但不刪除，collector 再開啟時先設 Secret 的密碼、再恢復成 `HOST ANY`；`trustiot_otel_collector` 角色本身多了 `0006_logs.sql` 以外的權限或角色時也停止；密碼登不進去才重設。`https` 的 ClickHouse 只信任 `TRUSTIOT_CLICKHOUSE_CA_FILE`，不用系統的根憑證。
 
@@ -90,7 +91,7 @@ Job 自己的設定：
 
 - 一個 Postgres 叢集只放一個 TrustIoT 資料庫（上方第 2 步）。要讓多個實例共用叢集，角色名稱得帶實例的前綴，目前沒有做。
 - 服務角色能改自己的密碼與自己的角色設定（Postgres 允許每個角色這樣做）。設定在下一次執行時被發現並停止 Job；密碼要等 Job 再跑才會設回 Secret 的值，在那之前同一個服務的其他 pod 登不進去（runbook 的「密碼 Secret 的資料遺失」最後一段）。
-- 服務角色能連 `postgres` 等其他資料庫，並在那裡建立暫存表：`database.sql` 只收回 TrustIoT 資料庫的 TEMPORARY，其他資料庫的權限由資料庫管理者（`bundled` 是 CloudNativePG）決定。
+- 叢集的其他資料庫（`postgres`、`template1` 與客戶自己的）的權限不歸 Job 管：Job 不擁有它們，只在服務角色連得上時警告（上方第 4 步）。`bundled` 由 chart 在 Cluster bootstrap 時收回 `postgres` 與 `template1` 的；Laysi/trustiot-v2#400 之前 bootstrap 的 Cluster 與外部 Postgres 要照 runbook 收回一次，在那之前服務角色能連過去並在 `postgres` 建立暫存表。
 - 檔案之間的隔離靠 code review（上方「檔案的規則」最後一段）。
 
 ## 測試
@@ -100,6 +101,7 @@ Job 自己的設定：
 | 檔案 | 驗證 |
 | --- | --- |
 | `tests/fresh_database.rs` | 全新資料庫跑完全部 migration，服務角色的密碼由 Job 產生進空的 Secret（只有一次 `GET` 與一次 `PATCH`）；pg_roles 與 pg_tables 符合決策 29；第二次執行不改 catalog；新的密碼世代換掉密碼、舊的登不進去，再跑一次不改 catalog；key 被刪掉時重新產生，別人寫進的值成為角色的密碼；綁定的角色不在服務清單時什麼都不改（Secret 也沒碰）；拒絕 superuser、沒有 CREATEROLE 的角色、改過的檔案、被改過的服務角色（BYPASSRLS、成員關係、服務角色自己設定的資料庫專屬 `search_path`、角色層級的其他設定、schema 的 CREATE、還給 PUBLIC 的 TEMPORARY），修好後再跑沒有變更 |
+| `tests/system_databases.rs` | 叢集的其他資料庫（Laysi/trustiot-v2#400）：收回之前，PostgreSQL 18 讓 Job 建立的服務角色連得上 `postgres` 與 `template1`、能在 `postgres` 建立暫存表（`template1` 不能），兩者的 `public` 都不能建立物件；Job 對兩個資料庫各記一行警告、寫出每個登入角色，照常完成。以 superuser 依 chart 的切法逐句執行 `deploy/chart/files/postgres/system-databases.sql` 兩次（冪等）：兩個資料庫的 ACL 只剩 superuser，`postgres` 另外只有 `streaming_replica` 與 `cnpg_metrics_exporter` 的 `CONNECT`，兩個角色的屬性與 operator 建立的相同；之後從 `template1` 建立的資料庫仍讓服務角色連線。Job 再跑一次沒有警告也沒有變更；每個登入角色與 migration 角色在兩個資料庫都沒有 `CONNECT`、`TEMPORARY`，服務角色連線被拒（42501），TrustIoT 的資料庫照常可用。另有一個不需要資料庫的測試確認切法與 chart 相同（空白行分隔、`--` 開頭的行是註解） |
 | `tests/one_instance_per_cluster.rs` | 同一個 migration 角色擁有第二個資料庫時停止；第二個 migration 角色以 ADMIN OPTION 拿到第一個實例的角色時也停止；兩種情況第一個實例的 catalog 都沒變，服務仍以原密碼登入，被拒絕的執行沒有讀寫 Secret |
 | `tests/file_escapes.rs` | 檔案留下 `SET LOCAL ROLE NONE`、切到別的服務的 owner 角色、`SET SESSION ROLE` 時停止，交易回滾、不記錄，再試一次不改 catalog；`END` 停止且不記錄，之前的部分已提交，下一次執行在它上面失敗；`COMMIT AND CHAIN` 後再取回角色也停止 |
 | `tests/concurrent_runs.rs` | 鎖被持有時執行會等，到上限就放棄且什麼都沒改；同時開始的兩次執行都成功，只有一次套用變更 |
