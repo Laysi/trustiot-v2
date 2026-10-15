@@ -40,15 +40,20 @@
 import { appendFileSync } from "node:fs";
 import { posix, resolve } from "node:path";
 
-import { CI_WORKFLOW_PATH, newestMainCiRun, parseWorkflowRuns, type WorkflowRun } from "../release/lib.ts";
+import { CI_WORKFLOW_PATH, newestMainCiRun, type WorkflowRun } from "../release/lib.ts";
 import {
   type GitHubReads,
-  isMap,
+  MAIN_BRANCH,
   parseCommitTree,
+  parseForcePushTimes,
+  parseGitHubCreated,
   parseIssueEventTypes,
   parseJobs,
   parseMergeBase,
+  parsePullNumbers,
   parsePullRequests,
+  parseRuns,
+  type Run,
   type TestedTree,
   testedTree,
 } from "./tested-tree.ts";
@@ -56,6 +61,14 @@ import {
 /** The ci.yml jobs whose run depends on the changed paths, by job id. */
 export const PATH_JOBS = ["rust", "cargo-deny", "helm", "host", "postgres-image"] as const;
 export type PathJob = (typeof PATH_JOBS)[number];
+
+/**
+ * Jobs whose result on the same tree changes with time, so a pass in the pull request says
+ * nothing about main later: cargo-deny reads the RustSec advisory database when it runs (on
+ * 2026-10-14, PR Laysi/trustiot-v2#411 passed it and main failed it hours later on new rustls
+ * advisories). They never take the same-tree skip; the path rules decide them on main.
+ */
+export const TIME_DEPENDENT_JOBS: ReadonlySet<PathJob> = new Set(["cargo-deny"]);
 
 export interface JobDecision {
   run: boolean;
@@ -419,9 +432,18 @@ export function githubReads(env: Record<string, string | undefined>): GitHubRead
     return request(`${apiUrl}/repos/${repository}/${path}${search === "" ? "" : `?${search}`}`, `GET ${path}`);
   }
 
+  const commitOf = async (commit: string) => get(`git/commits/${sha(commit)}`);
+
   return {
-    mainRuns: async () => parseWorkflowRuns(await request(mainRunsUrl(apiUrl, repository), "listing the ci runs on main")),
+    mainRuns: async () => parseRuns(await request(mainRunsUrl(apiUrl, repository), "listing the ci runs on main"), false),
     pullsOfCommit: async (commit) => parsePullRequests(await get(`commits/${sha(commit)}/pulls`, { per_page: String(PAGE) })),
+    async pullsWithHead(owner, ref) {
+      const numbers = parsePullNumbers(await get("pulls", { state: "all", head: `${owner}:${ref}`, per_page: String(PAGE) }));
+      if (numbers.length >= PAGE) {
+        throw new Error(`the pull requests with the head ${owner}:${ref} do not fit in one page`);
+      }
+      return numbers;
+    },
     async issueEventTypes(number) {
       const types: string[] = [];
       for (let page = 1; page <= ISSUE_EVENT_PAGES; page++) {
@@ -434,16 +456,17 @@ export function githubReads(env: Record<string, string | undefined>): GitHubRead
       throw new Error(`pull request #${number} has more than ${ISSUE_EVENT_PAGES * PAGE} events`);
     },
     mergeBase: async (base, head) => parseMergeBase(await get(`compare/${sha(base)}...${sha(head)}`, { per_page: "1" })),
-    treeOf: async (commit) => parseCommitTree(await get(`git/commits/${sha(commit)}`), commit),
-    async pullRequestRuns(head) {
-      const body = await get(`actions/workflows/${workflow}/runs`, { event: "pull_request", head_sha: sha(head), per_page: String(PAGE) });
-      const runs = parseWorkflowRuns(body);
-      if (!isMap(body) || typeof body.total_count !== "number" || body.total_count > runs.length) {
-        throw new Error(`the runs of ci.yml for ${head} do not fit in one page`);
-      }
-      return runs;
-    },
-    jobsOf: async (runId) => parseJobs(await get(`actions/runs/${runId}/jobs`, { filter: "latest", per_page: String(PAGE) })),
+    treeOf: async (commit) => parseCommitTree(await commitOf(commit), commit),
+    createdByGitHub: async (commit) => parseGitHubCreated(await commitOf(commit), commit),
+    pullRequestRuns: async (head) =>
+      parseRuns(await get(`actions/workflows/${workflow}/runs`, { event: "pull_request", head_sha: sha(head), per_page: String(PAGE) }), true),
+    // Every attempt: a job re-run until it passed must not count as passed.
+    jobsOf: async (runId) => parseJobs(await get(`actions/runs/${runId}/jobs`, { filter: "all", per_page: String(PAGE) })),
+    // Newest first, so one page holds the newest force push if there is any.
+    forcePushesToMain: async () =>
+      parseForcePushTimes(
+        await get("activity", { ref: `refs/heads/${MAIN_BRANCH}`, activity_type: "force_push", direction: "desc", per_page: String(PAGE) }),
+      ),
   };
 }
 
@@ -467,7 +490,7 @@ async function planPush(root: string, head: string, repository: string, github: 
   if (ancestors.length === 0) {
     return { decision: runEverything("the pushed commit has no parent"), files: [], everything: "the pushed commit has no parent" };
   }
-  let runs: WorkflowRun[];
+  let runs: Run[];
   try {
     runs = await github.mainRuns();
   } catch (error) {
@@ -498,6 +521,10 @@ async function planPush(root: string, head: string, repository: string, github: 
     PATH_JOBS.map((job): [PathJob, JobDecision] => {
       if (!tested.passed.includes(job)) {
         return [job, byPath.decision[job]];
+      }
+      if (TIME_DEPENDENT_JOBS.has(job)) {
+        const { run, reason } = byPath.decision[job];
+        return [job, { run, reason: `${reason} (it ${passedThere}, but its result changes with time, so the path rules decide)` }];
       }
       if (job === "rust" && cacheKey !== undefined) {
         return [job, { run: true, reason: `${passedThere}, but \`${cacheKey}\` changes the Rust build cache key, so main runs it to save the cache` }];
@@ -575,7 +602,7 @@ function testedTreeLines(tested: TestedTree<PathJob>, decision: Decision): strin
   lines.push(
     `The pushed tree \`${tested.tree}\` is the tree of \`${tested.head}\`, the last head of pull request #${tested.pullRequest}, ` +
       `which contains the pushed commit's parent \`${tested.parent}\`; so every ci run of that head tested this tree. ` +
-      `Run(s) of that head: ${runs}, all successful.`,
+      `Run(s) of that head: ${runs}, all successful. Since ${tested.forwardSince}, main was not force-pushed and held only commits in the pushed commit's history.`,
     "",
     "| job | in those runs |",
     "| --- | --- |",
@@ -583,7 +610,9 @@ function testedTreeLines(tested: TestedTree<PathJob>, decision: Decision): strin
   for (const job of PATH_JOBS) {
     const there = !tested.passed.includes(job)
       ? `${tested.notPassed[job] ?? "?"}: path rules decide`
-      : decision[job].run
+      : TIME_DEPENDENT_JOBS.has(job)
+        ? "ran and passed, but its result changes with time: path rules decide"
+        : decision[job].run
         ? "ran and passed, but runs here (see why above)"
         : "ran and passed: skipped here";
     lines.push(`| \`${job}\` | ${cell(there)} |`);

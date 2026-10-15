@@ -59,8 +59,10 @@ jobs:
     # Read-only. On a push to main, changes.ts reads (Laysi/trustiot-v2#431):
     # - actions: which recent main commits ci passed on, to compare with the newest of them; and
     #   the runs of the merged pull request's last head and their jobs' conclusions;
-    # - contents: that head's tree and its merge base with the pushed commit's parent;
-    # - pull-requests: the pull request a main commit was merged from;
+    # - contents: that head's tree, its merge base with the pushed commit's parent, whether GitHub
+    #   created and signed that parent and when, and the force pushes to main (repository activity);
+    # - pull-requests: the pull request a main commit was merged from, and the pull requests with
+    #   its head branch;
     # - issues and pull-requests: whether that pull request's base branch ever changed (GitHub
     #   lists the issue events endpoint under both).
     # If any of it cannot be read, the jobs run (scripts/ci/changes.ts).

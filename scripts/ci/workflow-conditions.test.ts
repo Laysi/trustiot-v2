@@ -153,9 +153,42 @@ describe("ci.yml", () => {
     expect(names.toSorted()).toEqual([...new Set(names)].toSorted());
   });
 
-  /** References to what differs between a pull request run and a push run of the same tree. */
+  /**
+   * References to what differs between a pull request run and a push run of the same tree: the
+   * event, the ref, the commit, the workflow ref and the actor, as contexts (also by index and
+   * through toJSON(github)) or as environment variables. A job can still read them in ways no
+   * pattern finds (a computed variable name), and it can look at HEAD's parents or history, which
+   * differ (a pull request run tests a two-parent merge commit): path-dependent jobs must not do
+   * either, which review has to catch.
+   */
   const EVENT_DEPENDENT =
-    /github\.(?:event|event_name|ref|ref_name|ref_type|head_ref|base_ref|sha)\b|GITHUB_(?:EVENT_NAME|EVENT_PATH|REF|REF_NAME|REF_TYPE|HEAD_REF|BASE_REF|SHA)\b/g;
+    /github\s*\[|toJSON\(\s*github\s*\)|github\.(?:event\w*|ref\w*|head_ref|base_ref|sha|workflow_ref|workflow_sha|actor\w*|triggering_actor)\b|GITHUB_(?:EVENT_NAME|EVENT_PATH|REF\w*|HEAD_REF|BASE_REF|SHA|WORKFLOW_REF|WORKFLOW_SHA|ACTOR\w*|TRIGGERING_ACTOR)\b/g;
+
+  test("the event pattern finds every spelling it is meant to", () => {
+    const spellings = [
+      "${{ github.event_name }}",
+      "${{ github['event_name'] }}",
+      "${{ github.event_path }}",
+      "${{ github.event.pull_request.number }}",
+      "${{ toJSON(github) }}",
+      "${{ github.ref_name }}",
+      "${{ github.head_ref }}",
+      "${{ github.sha }}",
+      "${{ github.workflow_ref }}",
+      "${{ github.actor }}",
+      "${{ github.triggering_actor }}",
+      "$GITHUB_EVENT_NAME",
+      "$GITHUB_REF",
+      "process.env.GITHUB_SHA",
+      "$GITHUB_WORKFLOW_REF",
+      "$GITHUB_ACTOR",
+      "$GITHUB_TRIGGERING_ACTOR",
+    ];
+    expect(spellings.filter((spelling) => spelling.match(EVENT_DEPENDENT) === null)).toEqual([]);
+    for (const harmless of ["${{ github.workspace }}", "${{ github.token }}", "$GITHUB_OUTPUT", "$GITHUB_REPOSITORY", "${{ github.run_id }}"]) {
+      expect(harmless.match(EVENT_DEPENDENT)).toBeNull();
+    }
+  });
   /** The one allowed difference: only main saves the Rust build cache, which a run never fails on. */
   const RUST_CACHE_SAVE_IF = "${{ github.ref == 'refs/heads/main' }}";
 
@@ -171,13 +204,13 @@ describe("ci.yml", () => {
   // changes.ts lets `rust` run on main whenever a merge changes the cache key (affectsRustCacheKey),
   // assuming rust-cache's default key. An input that changes the key (key, shared-key, prefix-key,
   // workspaces, env-vars, add-job-id-key, add-rust-environment-hash-key, ...) needs that rule
-  // revisited first, and so does a new rust-cache version: check "Cache Details" in its README
-  // and that it still skips saving an unchanged key, then update the pin here.
+  // revisited first. The version is not pinned here: the rule only affects CI cost, so a rust-cache
+  // upgrade must not fail CI; whoever upgrades it re-checks "Cache Details" in its README and that
+  // it still skips saving an unchanged key (docs/architecture/ci-release.md).
   test("the Rust cache step keeps the default key that changes.ts assumes", () => {
     const steps = (jobs.rust?.steps ?? []) as YamlMap[];
     const caches = steps.filter((step) => String(step.uses).startsWith("Swatinem/rust-cache@"));
     expect(caches.length).toBe(1);
-    expect(String(caches[0]?.uses)).toBe("Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6");
     expect(Object.keys((caches[0]?.with ?? {}) as YamlMap).toSorted()).toEqual(["cache-bin", "save-if"]);
   });
 
@@ -192,13 +225,31 @@ describe("ci.yml", () => {
   test("the code the path-dependent jobs run does not read the event either", () => {
     const listed = Bun.spawnSync(["git", "ls-files", "-z"], { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
     expect(listed.exitCode).toBe(0);
+    // What the jobs build, run or import: the Rust workspace, deploy/ (chart, flux, host installer
+    // with its package.json scripts, images), the scripts the chart, flux and image tests import
+    // (scripts/ci/changes.test.ts checks those imports against the path rules), and the local
+    // actions.
     const prefixes = [".github/actions/", "crates/", "services/", "tools/", "edge/", "factory/", "deploy/", "scripts/lib/", "scripts/flux/"];
-    const code = /\.(?:rs|ts|sh|ya?ml|toml|tpl|sql)$/;
-    const offending = listed.stdout
+    const files = new Set(["scripts/release/exec.ts", "scripts/release/flux.ts", "scripts/release/lib.ts", "scripts/ci/check-secret-handling.ts"]);
+    const code = /\.(?:rs|ts|js|mjs|cjs|json|sh|ya?ml|toml|tpl|sql)$|(?:^|\/)(?:Containerfile|Dockerfile)[^/]*$/;
+    const scanned = listed.stdout
       .toString()
       .split("\0")
-      .filter((path) => prefixes.some((prefix) => path.startsWith(prefix)) && code.test(path))
-      .filter((path) => readFileSync(join(ROOT, path), "utf8").match(EVENT_DEPENDENT) !== null);
+      .filter((path) => (files.has(path) || prefixes.some((prefix) => path.startsWith(prefix))) && code.test(path));
+    for (const expected of ["deploy/host/package.json", "deploy/images/postgres/Containerfile", ...files]) {
+      expect(scanned).toContain(expected);
+    }
+    // check-secret-handling.ts names `github.sha` in a message as a value it accepts in build
+    // arguments; it never reads the event.
+    const allowed: Record<string, string[]> = { "scripts/ci/check-secret-handling.ts": ["github.sha"] };
+    const offending = scanned
+      .map((path) => {
+        const source = readFileSync(join(ROOT, path), "utf8");
+        // Comments explain; only code counts (JavaScript and TypeScript comments).
+        const code = /\.[cm]?[jt]s$/.test(path) ? source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "") : source;
+        return { path, found: [...(code.match(EVENT_DEPENDENT) ?? [])] };
+      })
+      .filter(({ path, found }) => found.some((match) => !(allowed[path] ?? []).includes(match)));
     expect(offending).toEqual([]);
   });
 
