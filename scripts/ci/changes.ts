@@ -491,15 +491,45 @@ async function planPush(root: string, head: string, repository: string, github: 
   if (!tested.applies) {
     return { ...byPath, tested };
   }
-  const runIds = tested.runs.map((run) => run.id).join(", ");
+  const passedThere = `passed in run ${tested.runs.map((run) => run.id).join(", ")} of pull request #${tested.pullRequest} on the same tree`;
+  // Only main saves the Rust build cache, and only when its key changed: keep `rust` for that.
+  const cacheKey = changedFiles(root, tested.parent, commit).find(affectsRustCacheKey);
   const decision = Object.fromEntries(
-    PATH_JOBS.map((job): [PathJob, JobDecision] =>
-      tested.passed.includes(job)
-        ? [job, { run: false, reason: `passed in run ${runIds} of pull request #${tested.pullRequest} on the same tree` }]
-        : [job, byPath.decision[job]],
-    ),
+    PATH_JOBS.map((job): [PathJob, JobDecision] => {
+      if (!tested.passed.includes(job)) {
+        return [job, byPath.decision[job]];
+      }
+      if (job === "rust" && cacheKey !== undefined) {
+        return [job, { run: true, reason: `${passedThere}, but \`${cacheKey}\` changes the Rust build cache key, so main runs it to save the cache` }];
+      }
+      return [job, { run: false, reason: passedThere }];
+    }),
   ) as Decision;
   return { ...byPath, decision, tested };
+}
+
+/**
+ * Files that change the key of the Rust build cache (Swatinem/rust-cache v2.9.2, README "Cache
+ * Details"): every Cargo.lock and Cargo.toml, the root toolchain file and Cargo configuration, and
+ * the job's id and environment (ci.yml, and the local actions, which can set compiler variables).
+ * ci.yml saves that cache only on main (`save-if`), and rust-cache saves only when the key
+ * changed ("Cache up-to-date." otherwise). So when a merge changes none of these, skipping `rust`
+ * on main loses no cache; when it changes one, `rust` runs on main to save the new cache.
+ * The key also holds rustc's version and hash: rustup installs what rust-toolchain.toml names, an
+ * exact version, so they change only with that file. workflow-conditions.test.ts fails when the
+ * rust-cache step gets an input that changes the key, or when the toolchain channel floats.
+ */
+export function affectsRustCacheKey(path: string): boolean {
+  const name = posix.basename(path);
+  return (
+    name === "Cargo.lock" ||
+    name === "Cargo.toml" ||
+    path === "rust-toolchain" ||
+    path === "rust-toolchain.toml" ||
+    path.startsWith(".cargo/") ||
+    path === CI_WORKFLOW_PATH ||
+    path.startsWith(".github/actions/")
+  );
 }
 
 /** Decides for the current workflow run; never throws, every problem runs everything. */
@@ -535,7 +565,7 @@ const SUMMARY_FILE_LIMIT = 200;
 const cell = (value: string) => value.replaceAll("|", "\\|");
 
 /** The evidence of the tested-tree check, as Markdown lines. */
-function testedTreeLines(tested: TestedTree<PathJob>): string[] {
+function testedTreeLines(tested: TestedTree<PathJob>, decision: Decision): string[] {
   const lines = ["### Same tree as the merged pull request", ""];
   if (!tested.applies) {
     lines.push(`Not used: ${tested.reason}.`);
@@ -551,7 +581,12 @@ function testedTreeLines(tested: TestedTree<PathJob>): string[] {
     "| --- | --- |",
   );
   for (const job of PATH_JOBS) {
-    lines.push(`| \`${job}\` | ${tested.passed.includes(job) ? "ran and passed: skipped here" : cell(`${tested.notPassed[job] ?? "?"}: path rules decide`)} |`);
+    const there = !tested.passed.includes(job)
+      ? `${tested.notPassed[job] ?? "?"}: path rules decide`
+      : decision[job].run
+        ? "ran and passed, but runs here (see why above)"
+        : "ran and passed: skipped here";
+    lines.push(`| \`${job}\` | ${cell(there)} |`);
   }
   return lines;
 }
@@ -565,7 +600,7 @@ export function summary(result: Plan): string {
   }
   lines.push("", "`gitleaks` and `workflow-policy` always run.", "");
   if (result.tested !== undefined) {
-    lines.push(...testedTreeLines(result.tested), "");
+    lines.push(...testedTreeLines(result.tested, result.decision), "");
   }
   if (result.everything === undefined) {
     lines.push(`Compared with ${result.base ?? "?"}.`, "", `### Changed files (${result.files.length})`, "");
@@ -581,17 +616,21 @@ export function summary(result: Plan): string {
   return `${lines.join("\n")}\n`;
 }
 
-/** Prints the decision to the log. */
-function report(result: Plan): void {
+/**
+ * Prints the decision to the log. In Actions, the reason the path rules were not compared is a
+ * notice annotation; `--explain` prints it as a plain line.
+ */
+export function report(result: Plan, actions = true, log: (line: string) => void = console.log): void {
   if (result.everything !== undefined) {
     // A notice, not a warning: running every job is always a safe answer.
-    console.log(`::notice title=changes::Path rules not compared, they run every job: ${result.everything.replaceAll("\n", " ")}`);
+    const line = `Path rules not compared, they run every job: ${result.everything.replaceAll("\n", " ")}`;
+    log(actions ? `::notice title=changes::${line}` : line);
   }
   if (result.base !== undefined) {
-    console.log(`compared with ${result.base}: ${result.files.length} changed file(s)`);
+    log(`compared with ${result.base}: ${result.files.length} changed file(s)`);
   }
   if (result.tested !== undefined) {
-    console.log(
+    log(
       result.tested.applies
         ? `same tree as pull request #${result.tested.pullRequest} (head ${result.tested.head}, tree ${result.tested.tree}, ` +
             `run(s) ${result.tested.runs.map((run) => run.id).join(", ")}); passed there: ${result.tested.passed.join(", ") || "none"}`
@@ -599,7 +638,7 @@ function report(result: Plan): void {
     );
   }
   for (const job of PATH_JOBS) {
-    console.log(`${job}: ${result.decision[job].run ? "runs" : "skipped"} (${result.decision[job].reason})`);
+    log(`${job}: ${result.decision[job].run ? "runs" : "skipped"} (${result.decision[job].reason})`);
   }
 }
 
@@ -624,7 +663,7 @@ export async function main(env: Record<string, string | undefined>, args: readon
     const repository = env.GITHUB_REPOSITORY || DEFAULT_REPOSITORY;
     const result = await explain(root, args[1] as string, env, githubReads({ ...env, GITHUB_REPOSITORY: repository }));
     console.log(`decision for a push of ${args[1]} to ${repository}:main (read-only; nothing is written)`);
-    report(result);
+    report(result, false);
     console.log("");
     console.log(summary(result));
     return 0;

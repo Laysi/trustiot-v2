@@ -13,3 +13,8 @@ if (runs.length === 0) { -> exit 1, 3 failing
 if (trigger !== undefined) { -> exit 1, 4 failing
 if (pr.baseRef !== MAIN_BRANCH || pr.baseRepository.toLowerCase() !== repository.toLowerCase()) { -> exit 1, 2 failing
 if (!COMMIT_SHA.test(pr.headSha)) { -> exit 1, 1 failing
+# Mutations of scripts/ci/changes.ts (the Rust cache-key rule and the --explain notice), same method:
+"if (job === \"rust\" && cacheKey !== undefined) {" -> exit 1, 8 failing
+"path === CI_WORKFLOW_PATH ||" (removed) -> exit 1, 2 failing
+"path.startsWith(\".github/actions/\")" (made false) -> exit 1, 2 failing
+"log(actions ? `::notice title=changes::${line}` : line);" (always the notice) -> exit 1, 1 failing

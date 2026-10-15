@@ -39,10 +39,11 @@ bun scripts/ci/changes.ts --explain 8534a607c9a6
 
 ## 結果
 
-- 建置主機上全部檢查通過（分支併入 main `51fb7f8` 之後）：typecheck 無錯誤；`bun test scripts` 1002 pass、4 skip、0 fail（1006 個測試、40 個檔案）；workflow policy 4 個檔案無違規；actionlint 3 個 workflow 無錯誤；secret handling 419 個檔案無違規。
+- 建置主機上全部檢查通過（分支併入 main `51fb7f8` 之後）：typecheck 無錯誤；`bun test scripts` 1018 pass、4 skip、0 fail（1022 個測試、40 個檔案；含 Rust 編譯快取 key 的規則）；workflow policy 4 個檔案無違規；actionlint 3 個 workflow 無錯誤；secret handling 419 個檔案無違規。
 - `scripts/ci/changes.test.ts` 的「same tree as the merged pull request」與「what the decision reads from GitHub」兩組測試涵蓋：同一棵樹時 PR 中通過的 job 略過、PR 依路徑略過的 job 照原規則（紅燈的 main 仍執行）、找不到綠燈 main commit 時仍只略過已通過的 job；以及每個照原規則執行的情境：樹不同；PR 最後的 head 沒有執行、失敗、等待核准、被取消、還在跑、其中一次執行失敗；只算 ci.yml 以該 head 的 `pull_request` 執行，舊 head 不算；head 不含 main 的 parent、base 改過（三種事件）；parent 沒有自己的 push 執行（一次推多個 commit）、merge commit 有兩個 parent；沒有 PR、PR 未合併、合併成別的 commit、兩個 PR、base 不是本 repo 的 main、head 不合法；ci.yml 沒有或篩選 `pull_request` 觸發；六種 API 讀取失敗；job 在 PR 執行中 skipped、failure、cancelled、不存在或重複；`--explain` 的用法。另檢查決策程式只呼叫 6 個中繼資料端點與 main 的執行清單，不碰 artifact、log、check run。
 - `scripts/ci/workflow-conditions.test.ts` 新增：`changes` job 的權限、ci.yml 的 `pull_request` 觸發沒有篩選、依路徑的 job 的 `name` 等於 id 且不重複、這些 job 與它們執行的程式不引用與事件有關的 context 或環境變數（Rust 快取的 `save-if` 除外）。
-- Mutation 檢查：把 `scripts/ci/tested-tree.ts` 的 12 個條件逐一改成永遠不成立，每一個都讓測試失敗（[mutations.txt](data/2026-10-15-431-skip-main-rerun/mutations.txt)）。
+- Rust 編譯快取：合併改到任何 `Cargo.lock`、`Cargo.toml`、根目錄的 `rust-toolchain(.toml)`、根目錄 `.cargo/`、`ci.yml` 或 `.github/actions/` 時，`rust` 在 main 執行以存快取，其他已通過的 job 仍略過；巢狀的 `.cargo/`、toolchain 檔與其他 workflow 不算；`workflow-conditions.test.ts` 檢查 rust-cache 的版本與 `with`（只有 `cache-bin`、`save-if`）。`--explain` 印一般的行，不印 `::notice` 前綴。
+- Mutation 檢查：把 `scripts/ci/tested-tree.ts` 的 12 個條件，以及 `changes.ts` 的快取 key 規則（3 處）與 `--explain` 的輸出逐一改壞，每一個都讓測試失敗（[mutations.txt](data/2026-10-15-431-skip-main-rerun/mutations.txt)）。
 - main 上最近 40 次合併（到 `51fb7f8`）中有 34 次符合「main 的 parent 在 PR 最後的 head 裡」與「樹相同」，包括 PR Laysi/trustiot-v2#430 合併成的 `f1c6b93`；其餘 6 次（例如 PR Laysi/trustiot-v2#421 合併成的 `8534a607c9a6`）合併前沒有把 main 併進 PR 分支，這條規則不會用上（[recent-merges.txt](data/2026-10-15-431-skip-main-rerun/recent-merges.txt)）。
 
 ## 結論

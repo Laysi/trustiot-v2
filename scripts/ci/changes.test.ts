@@ -12,6 +12,7 @@ import {
   affectsHost,
   affectsPostgresImage,
   affectsRust,
+  affectsRustCacheKey,
   changedFiles,
   decide,
   explain,
@@ -26,6 +27,7 @@ import {
   type PathJob,
   plan,
   pullRequestRange,
+  report,
   runEverything,
   summary,
 } from "./changes.ts";
@@ -841,7 +843,7 @@ describe("same tree as the merged pull request", () => {
    * merges main, so its last head `head` contains `parent`. GitHub then squash-merges it into
    * `merged`, whose only parent is `parent`; HEAD is `merged`, as in the push run.
    */
-  function squashMerged({ updateBranch = true } = {}) {
+  function squashMerged({ updateBranch = true, prFiles = {} as Record<string, string> } = {}) {
     const { root } = repository();
     const base = commit(root, { [CI_YML]: "on:\n  pull_request:\n  push:\n    branches: [main]\n" }, "ci");
     git(root, "checkout", "--quiet", "-b", "feature");
@@ -851,6 +853,10 @@ describe("same tree as the merged pull request", () => {
     if (updateBranch) {
       git(root, "checkout", "--quiet", "feature");
       git(root, "merge", "--quiet", "--no-ff", "--no-edit", "main");
+      // `prFiles` land after the update, so they may change what main changed.
+      if (Object.keys(prFiles).length > 0) {
+        commit(root, prFiles, "more of the pull request");
+      }
       git(root, "checkout", "--quiet", "main");
     }
     const head = git(root, "rev-parse", "feature");
@@ -963,6 +969,55 @@ describe("same tree as the merged pull request", () => {
       `pullRequestRuns(${scenario.head})`,
       `jobsOf(${PR_RUN})`,
     ]);
+  });
+
+  // Only main saves the Rust build cache, and only when its key changed (Swatinem/rust-cache).
+  test.each([
+    ["a crate's Cargo.toml", "crates/x/Cargo.toml", "[package]\n"],
+    ["the root Cargo.toml", "Cargo.toml", "[workspace]\n"],
+    ["Cargo.lock", "Cargo.lock", "# lock changed by the pull request\n"],
+    ["rust-toolchain.toml", "rust-toolchain.toml", "[toolchain]\n"],
+    ["rust-toolchain", "rust-toolchain", "stable\n"],
+    ["the Cargo configuration", ".cargo/config.toml", "[build]\n"],
+    ["ci.yml (the job's id and environment)", CI_YML, "on:\n  pull_request:\n  push:\n    branches: [main]\nenv:\n  RUSTFLAGS: -Dwarnings\n"],
+    ["a local action", ".github/actions/setup-proto/action.yml", "name: setup\n"],
+  ])("rust runs on main to save the cache when the merge changes %s", async (_, path, content) => {
+    const scenario = squashMerged({ prFiles: { [path]: content } });
+    const result = await plan(scenario.root, PUSH, github(scenario));
+    expect(result.tested).toMatchObject({ applies: true, passed: ["rust", "helm"] });
+    expect(result.decision.rust).toEqual({
+      run: true,
+      reason: `passed in run ${PR_RUN} of pull request #7 on the same tree, but \`${path}\` changes the Rust build cache key, so main runs it to save the cache`,
+    });
+    // Every other job that passed is still skipped.
+    expect(result.decision.helm).toEqual({ run: false, reason: `passed in run ${PR_RUN} of pull request #7 on the same tree` });
+    expect(summary(result)).toContain("| `rust` | ran and passed, but runs here (see why above) |");
+  });
+
+  test.each([
+    ["a nested Cargo configuration", "crates/x/.cargo/config.toml"],
+    ["a nested toolchain file", "crates/x/rust-toolchain.toml"],
+    ["another workflow", ".github/workflows/nightly.yml"],
+  ])("%s does not change the cache key: rust is still skipped", async (_, path) => {
+    const scenario = squashMerged({ prFiles: { [path]: "x\n" } });
+    const result = await plan(scenario.root, PUSH, github(scenario));
+    expect(result.decision.rust).toEqual({ run: false, reason: `passed in run ${PR_RUN} of pull request #7 on the same tree` });
+  });
+
+  test("only what the merge itself changes counts, not what main changed before it", async () => {
+    // The red parent changed Cargo.lock; the merge (parent -> merged) does not.
+    const scenario = squashMerged();
+    expect(changedFiles(scenario.root, scenario.parent, scenario.merged)).not.toContain("Cargo.lock");
+    expect((await plan(scenario.root, PUSH, github(scenario))).decision.rust.run).toBe(false);
+  });
+
+  test("the Rust cache key inputs", () => {
+    for (const path of ["Cargo.lock", "Cargo.toml", "services/a/Cargo.toml", "crates/b/Cargo.lock", "rust-toolchain", "rust-toolchain.toml", ".cargo/config.toml", ".cargo/x", CI_YML, ".github/actions/setup-proto/action.yml"]) {
+      expect(`${path}: ${affectsRustCacheKey(path)}`).toBe(`${path}: true`);
+    }
+    for (const path of ["crates/x/src/lib.rs", "crates/x/.cargo/config.toml", "crates/x/rust-toolchain.toml", ".github/workflows/nightly.yml", "docs/Cargo.toml.md", "clippy.toml"]) {
+      expect(`${path}: ${affectsRustCacheKey(path)}`).toBe(`${path}: false`);
+    }
   });
 
   test("with no green main commit, the jobs that passed on the same tree are still skipped and the rest run", async () => {
@@ -1148,6 +1203,18 @@ describe("same tree as the merged pull request", () => {
     const unknown = await explain(scenario.root, "0".repeat(40), {}, github(scenario));
     expect(unknown.everything).toContain("the changed files cannot be determined");
     expect(jobsRunning(unknown)).toEqual([...PATH_JOBS]);
+  });
+
+  test("--explain prints a plain line where Actions gets a notice annotation", () => {
+    const result = { decision: runEverything("why"), files: [], everything: "why" };
+    const lines = (actions: boolean) => {
+      const printed: string[] = [];
+      report(result, actions, (line) => printed.push(line));
+      return printed;
+    };
+    expect(lines(true)[0]).toBe("::notice title=changes::Path rules not compared, they run every job: why");
+    expect(lines(false)[0]).toBe("Path rules not compared, they run every job: why");
+    expect(lines(false).some((line) => line.includes("::"))).toBe(false);
   });
 
   test("--explain takes exactly one commit SHA", async () => {

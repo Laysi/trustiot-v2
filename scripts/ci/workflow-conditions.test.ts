@@ -168,6 +168,27 @@ describe("ci.yml", () => {
     expect((rustCache?.with as YamlMap)["save-if"]).toBe(RUST_CACHE_SAVE_IF);
   });
 
+  // changes.ts lets `rust` run on main whenever a merge changes the cache key (affectsRustCacheKey),
+  // assuming rust-cache's default key. An input that changes the key (key, shared-key, prefix-key,
+  // workspaces, env-vars, add-job-id-key, add-rust-environment-hash-key, ...) needs that rule
+  // revisited first, and so does a new rust-cache version: check "Cache Details" in its README
+  // and that it still skips saving an unchanged key, then update the pin here.
+  test("the Rust cache step keeps the default key that changes.ts assumes", () => {
+    const steps = (jobs.rust?.steps ?? []) as YamlMap[];
+    const caches = steps.filter((step) => String(step.uses).startsWith("Swatinem/rust-cache@"));
+    expect(caches.length).toBe(1);
+    expect(String(caches[0]?.uses)).toBe("Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6");
+    expect(Object.keys((caches[0]?.with ?? {}) as YamlMap).toSorted()).toEqual(["cache-bin", "save-if"]);
+  });
+
+  // The key also holds rustc's version and hash. rustup installs the toolchain rust-toolchain.toml
+  // names, so they change only with that file (a key input) while its channel is an exact version;
+  // a floating channel such as `stable` would change the key with no file changing.
+  test("the Rust toolchain is an exact version, so rustc changes only with rust-toolchain.toml", () => {
+    const toolchain = Bun.TOML.parse(readFileSync(join(ROOT, "rust-toolchain.toml"), "utf8")) as { toolchain?: { channel?: unknown } };
+    expect(String(toolchain.toolchain?.channel)).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
   test("the code the path-dependent jobs run does not read the event either", () => {
     const listed = Bun.spawnSync(["git", "ls-files", "-z"], { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
     expect(listed.exitCode).toBe(0);

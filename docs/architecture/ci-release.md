@@ -108,6 +108,8 @@ Laysi/trustiot-v2#70 建立了 `.sops.yaml`（規則：`deploy/flux/clusters/saa
 6. ci.yml 以 H 為 head 的 `pull_request` 執行至少一個，而且每一個都已完成、結論是 success（等待核准的 `action_required`、被取消、失敗、還在跑都不算）。
 7. 每個 job 分開判斷：在每一個這樣的執行裡（各取最新一次 attempt 的 job），該名稱的 job 恰好一個，而且結論是 success。PR 依路徑略過（skipped）、失敗、被取消或不存在的 job，在 main 上照原規則。
 
+例外：合併改到 Rust 編譯快取的 key 時（例如 `Cargo.lock`），`rust` 照樣在 main 執行，才能存新的快取（見下方「已知的取捨」的「Rust 編譯快取」）。
+
 任何一項不成立、任何一次 API 讀取失敗或結果超過一頁，這條就不用，job summary 寫出原因，全部 job 照原規則。PR 上的執行不受影響。
 
 **為什麼 PR 作者無法讓 main 略過 job**：
@@ -145,7 +147,7 @@ Laysi/trustiot-v2#70 建立了 `.sops.yaml`（規則：`deploy/flux/clusters/saa
 
 **已知的取捨**：`cargo-deny` 的 RustSec 公告是隨時間增加的，略過時新公告要等下一次 Cargo 相關的變動才會被發現；Renovate 的 `vulnerabilityAlerts` 會為有公告的相依開 PR（前提是組織已裝好 Renovate，見下方「Renovate」）。是否加每日的 `cargo deny check advisories` 另案評估。
 
-2026-10-15 起（Laysi/trustiot-v2#431）：Rust 編譯快取只在 main 儲存（PR 只讀取），main 因「同一棵樹已在 PR 上通過」略過 `rust` 時快取不會更新。相依改變後，PR 還原到的是較舊的快取，新的相依要在每個 PR 上重新編譯，直到 main 再跑一次 `rust`（例如下一個沒有符合條件的合併）。是否另外定期在 main 更新快取，另案評估。
+**Rust 編譯快取**（2026-10-15，Laysi/trustiot-v2#431）：快取只在 main 儲存（`save-if`），PR 只讀取，所以「同一棵樹已在 PR 上通過」不能讓 main 少存一份該存的快取。`Swatinem/rust-cache` v2.9.2（ci.yml 釘的 `6323deb`）的快取 key 由 job id、rustc 的版本、host 與 hash、編譯器相關的環境變數（例如 `RUSTFLAGS`）、repo 內每一個 `Cargo.lock` 與 `Cargo.toml` 的 hash、根目錄的 `rust-toolchain` 或 `rust-toolchain.toml`，以及根目錄的 `.cargo/config.toml` 組成（該版本 README 的「Cache Details」）；還原到的 key 與要存的 key 相同時，它的 `src/save.ts` 只回報「Cache up-to-date.」而不儲存。所以 main 上的 `rust` 只有在這些輸入改變時才會存新的快取。規則：合併本身（推送的 commit 對它唯一的 parent，`--no-renames`）改到任何目錄的 `Cargo.lock` 或 `Cargo.toml`、根目錄的 `rust-toolchain` 或 `rust-toolchain.toml`、根目錄 `.cargo/` 下的檔案、`.github/workflows/ci.yml`（job id 與 job 的環境）或 `.github/actions/` 下的檔案（本地 action 可以設編譯器的環境變數）時，`rust` 不套用同一棵樹的略過，在 main 上執行並存快取，原因寫「passed in run … of pull request #N on the same tree, but `<檔案>` changes the Rust build cache key, so main runs it to save the cache」；其他 job 不受影響（`scripts/ci/changes.ts` 的 `affectsRustCacheKey`）。這些輸入都沒改時，略過 `rust` 不會少存任何快取。key 裡的 rustc 版本與 hash 不會在檔案沒變時改變：rustup 依 `rust-toolchain.toml` 安裝工具鏈，它的 `channel` 是確切的版本（`cargo test -p repo-check` 只接受 `MAJOR.MINOR.PATCH`，`workflow-conditions.test.ts` 也檢查），所以 rustc 只隨這個檔案（key 的輸入之一）改變；若改成 `stable` 這種浮動的 channel，rustc 會在沒有檔案改變時更新，這條規則就不成立。`scripts/ci/workflow-conditions.test.ts` 也檢查 rust-cache 步驟仍釘在這個版本、`with` 只有 `cache-bin` 與 `save-if`：加上 `key`、`shared-key`、`prefix-key`、`workspaces`、`env-vars`、`add-*-key` 或換版本時測試失敗，要先重新檢查這條規則。剩下的情況：快取被 GitHub 淘汰（7 天沒有被存取，或超過 repo 的 10 GB 上限）時，main 要到下一次 key 改變、或下一個不符合同一棵樹條件的合併，才會再存一份；PR 還原快取也算存取，所以有 PR 在跑時不會因 7 天未存取而被淘汰。
 
 ### 必要檢查與強制方式
 
