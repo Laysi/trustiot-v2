@@ -293,7 +293,7 @@ bun test --timeout 900000 ./deploy/chart/tests/e2e/postgres.e2e.ts
 
 1. 平台元件（叢集層級，由平台維運安裝，不由測試安裝）：CloudNativePG 1.30.1（`deploy/cloudnative-pg/README.md`）、cert-manager v1.21.2（plugin 的 manifest 需要它的 Issuer 與 Certificate），以及 Barman Cloud plugin v0.15.1（官方 release 的 `manifest.yaml`：Deployment `barman-cloud` 在 `cnpg-system`、CRD `objectstores.barmancloud.cnpg.io`，映像 `ghcr.io/cloudnative-pg/plugin-barman-cloud:v0.15.1`）。我們的 Postgres 映像以 CloudNativePG 的 `minimal` 映像為基底，沒有 barman-cloud，所以備份與還原一律經 plugin 的 sidecar。lab 安裝時的版本與 manifest 的 SHA-256 記在測試報告。
 2. namespace 已建立，設 Pod Security `restricted`。測試的身分要能在這個 namespace 管理 Cluster、ImageCatalog、Backup（`postgresql.cnpg.io`）、ObjectStore（`barmancloud.cnpg.io`）、Deployment、Service、Secret、NetworkPolicy 與 PVC，能 patch Cluster 的 `status`（switchover），能 `exec` 進 pod、讀 pod 的 log，並能經 API server 的 proxy 讀 pod 的 9187（`pods/proxy`）。
-3. Postgres 映像（建法見「叢集內的 Postgres」）要在叢集拉得到；RustFS 的映像由節點自己拉（`IfNotPresent`）。
+3. Postgres 映像（建法見「叢集內的 Postgres」）要在叢集拉得到，或以 `latest` 以外的 tag 匯入節點。Cluster 的 `imagePullPolicy` 也套用在 CloudNativePG 加進每個 instance 的容器（operator 的 bootstrap-controller、plugin 的 sidecar `ghcr.io/cloudnative-pg/plugin-barman-cloud-sidecar:v0.15.1`），所以這個測試固定用 `IfNotPresent`，不讀 `E2E_IMAGE_PULL_POLICY`；sidecar 與 RustFS 的映像由節點自己拉。
 4. 本機有 `proto install` 裝好的 helm 與 kubectl。
 
 執行（在 repo 根目錄）：
@@ -301,7 +301,6 @@ bun test --timeout 900000 ./deploy/chart/tests/e2e/postgres.e2e.ts
 ```sh
 E2E_NAMESPACE=e2e-400 \
 E2E_POSTGRES_IMAGE=localhost/trustiot-e2e/postgres:400 \
-E2E_IMAGE_PULL_POLICY=Never \
 bun test --timeout 2400000 ./deploy/chart/tests/e2e/postgres-replication.e2e.ts
 ```
 
@@ -310,7 +309,6 @@ bun test --timeout 2400000 ./deploy/chart/tests/e2e/postgres-replication.e2e.ts
 | `E2E_NAMESPACE` | 必填 | 測試用的 namespace，必須已存在 |
 | `E2E_POSTGRES_IMAGE` | 必填 | 含 AGE 的 Postgres 映像，`repository:tag` 或加上 `@sha256:…` |
 | `E2E_STORE_IMAGE` | 上面的 RustFS | S3 相容伺服器的映像，要接受 RustFS 的環境變數 |
-| `E2E_IMAGE_PULL_POLICY` | `IfNotPresent` | Postgres 映像用這個值；匯入節點的映像用 `Never` |
 | `E2E_KUBECONTEXT` | 目前的 context | kubeconfig 裡的 context |
 | `E2E_RELEASE` | `trustiot` | 渲染 chart 的 release 名稱，決定 Cluster 的名稱 |
 | `E2E_REPORT_DIR` | 空 | 設定時把每一步的結果（ACL、權限、複寫狀態、`pg_rewind` 的日誌、Backup 的狀態、還原後的資料與權限、metrics、時間線；沒有任何金鑰）寫成 `postgres-replication-e2e.json` |

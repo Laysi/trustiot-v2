@@ -58,7 +58,11 @@ const STORE_IMAGE =
   process.env.E2E_STORE_IMAGE ?? "docker.io/rustfs/rustfs:1.0.0-glibc@sha256:bffcab0c9d647aab0055d1c69d340b202d0909966b385932d4ead1aeb7602858";
 const CONTEXT = process.env.E2E_KUBECONTEXT;
 const RELEASE = process.env.E2E_RELEASE ?? "trustiot";
-const PULL_POLICY = process.env.E2E_IMAGE_PULL_POLICY ?? "IfNotPresent";
+// A Cluster's imagePullPolicy also applies to the containers CloudNativePG adds to each instance:
+// the operator's bootstrap-controller and the Barman Cloud plugin's sidecar, which a node pulls from
+// ghcr.io. So it is always IfNotPresent; an image imported into the node under a tag other than
+// `latest` is then used without a pull.
+const PULL_POLICY = "IfNotPresent";
 const REPORT_DIR = process.env.E2E_REPORT_DIR;
 const KEEP = process.env.E2E_KEEP === "1";
 
