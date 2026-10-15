@@ -257,10 +257,17 @@ function expectHealthyPods(phase: string) {
 
 type Manifest = { apiVersion: string; kind: string; metadata: { name: string; labels?: Record<string, string>; annotations?: Record<string, string> } };
 let manifests: Manifest[] = [];
-const networkPolicies = () => manifests.filter((m) => m.kind === "NetworkPolicy");
+// The CronJob that rotates the internal identity signing key by age (Laysi/trustiot-v2#429)
+// renders with the identity service and has a NetworkPolicy without ingress and an
+// AuthorizationPolicy without rules of its own. Nothing calls its pod, so the phases leave both
+// in place and they count toward neither layer below; beforeAll checks that they are there.
+const ROTATION_COMPONENT = "identity-key-rotation";
+const isRotation = (m: Manifest) => m.metadata.labels?.["app.kubernetes.io/component"] === ROTATION_COMPONENT;
+const rotationPolicies = () => manifests.filter((m) => isRotation(m) && (m.kind === "NetworkPolicy" || m.kind === "AuthorizationPolicy"));
+const networkPolicies = () => manifests.filter((m) => m.kind === "NetworkPolicy" && !isRotation(m));
 // The service policies only; the ingress gateway's cookie check and /internal denial stay.
 const servicePolicies = () =>
-  manifests.filter((m) => m.kind === "AuthorizationPolicy" && !m.metadata.name.startsWith(`${OBJECT_PREFIX}-ingress-`));
+  manifests.filter((m) => m.kind === "AuthorizationPolicy" && !m.metadata.name.startsWith(`${OBJECT_PREFIX}-ingress-`) && !isRotation(m));
 
 const RESOURCES: Record<string, string> = {
   NetworkPolicy: "networkpolicies.networking.k8s.io",
@@ -334,6 +341,13 @@ beforeAll(async () => {
   );
   expect(networkPolicies().length).toBe(SERVICES.length + 2);
   expect(servicePolicies().length).toBe(SERVICES.length);
+  // The identity service is enabled and internalIdentity.maxKeyAgeSeconds keeps its default, so
+  // the rotation CronJob and its two policies render, all under the CronJob's name.
+  const rotation = manifests.filter((m) => m.kind === "CronJob" && isRotation(m)).map((m) => m.metadata.name);
+  expect(rotation).toHaveLength(1);
+  expect(rotationPolicies().map((m) => `${m.kind}/${m.metadata.name}`).sort()).toEqual(
+    [`AuthorizationPolicy/${rotation[0]}`, `NetworkPolicy/${rotation[0]}`],
+  );
   kubectl("wait", `gateway/${GATEWAY}`, "--for=condition=Programmed", "--timeout=180s");
   kubectl("rollout", "status", `deployment/${GATEWAY}-istio`, "--timeout=180s");
   testPod(OUTSIDER_POD, "none");

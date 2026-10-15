@@ -108,7 +108,7 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/ingress.e2e.ts
 
 1. 兩層都在：清單內的呼叫與入口放行，清單外的與 imposter 全部被拒；所有 pod 就緒、沒有重啟（預設拒絕下 kubelet 的健康檢查照常通過）。
 2. 刪掉服務的 AuthorizationPolicy（入口的 cookie 驗證與 `/internal` 拒絕保留）：imposter 通過（確認 AuthorizationPolicy 已失效），清單外的呼叫仍全部被 NetworkPolicy 拒絕，清單內的與入口照常放行。
-3. 再刪掉 release 的所有 NetworkPolicy：outsider 連得到入口 pod，清單外的呼叫全部成功，證明前後階段被拒是政策造成的，不是呼叫本身有問題。
+3. 再刪掉 release 的所有 NetworkPolicy（依金鑰年齡輪替的 CronJob 的 NetworkPolicy 與 AuthorizationPolicy 除外：沒有人呼叫它的 pod，四個階段都不動這兩個，安裝後只確認它們在）：outsider 連得到入口 pod，清單外的呼叫全部成功，證明前後階段被拒是政策造成的，不是呼叫本身有問題。
 4. 以 `helm get manifest` 的內容重建 AuthorizationPolicy、NetworkPolicy 仍刪除：清單外的呼叫與 imposter 全部被 AuthorizationPolicy 拒絕，清單內的與入口照常放行。
 5. 重建 NetworkPolicy，回到安裝時的狀態：再檢查一次呼叫與 pod 健康狀態。
 
@@ -360,7 +360,7 @@ bun test --timeout 900000 ./deploy/chart/tests/e2e/clickhouse-admin.e2e.ts
 
 ## 內部身分簽章金鑰（`identity-keys.e2e.ts`）
 
-`identity-keys.e2e.ts` 驗證內部身分簽章金鑰在叢集內產生、公開、輪替與撤銷（Laysi/trustiot-v2#404，設計在 [docs/architecture/secrets.md](../../../../docs/architecture/secrets.md) 的「內部身分簽章金鑰」）。以 `E2E_SHAPE` 的型態加 `values-identity-keys-e2e.yaml` 一次安裝叢集內的 Postgres、ClickHouse、migration Job、從這個 commit 建出的身分服務，以及在 assets 位置的 `crates/service-kit` example service（`GET /v1/whoami` 驗證給 assets 的內部身分 token，不用資料庫）；沒有任何東西事先建立金鑰，`internalIdentity.keyPropagationSeconds` 是 schema 的下限 120 秒。依序檢查：
+`identity-keys.e2e.ts` 驗證內部身分簽章金鑰在叢集內產生、公開、輪替與撤銷（Laysi/trustiot-v2#404，設計在 [docs/architecture/secrets.md](../../../../docs/architecture/secrets.md) 的「內部身分簽章金鑰」）。以 `E2E_SHAPE` 的型態加 `values-identity-keys-e2e.yaml` 一次安裝叢集內的 Postgres、ClickHouse、migration Job、從這個 commit 建出的身分服務，以及在 assets 位置的 `crates/service-kit` example service（`GET /v1/whoami` 驗證給 assets 的內部身分 token，不用資料庫）；沒有任何東西事先建立金鑰，`internalIdentity.keyPropagationSeconds` 是 schema 的下限 120 秒。`internalIdentity.maxKeyAgeSeconds` 設成 0，不渲染依金鑰年齡輪替的 CronJob（它由下一節的 `key-rotation.e2e.ts` 測）：這個測試檢查的是 init container，而每天 03:17 UTC 的排程如果剛好落在「移除舊金鑰」的等待與重啟之間，會在重啟之前就移除舊金鑰。依序檢查：
 
 - **全新安裝**：身分服務 pod 的 init container 產生一把代 1 的金鑰，Secret `<release>-identity-signing-keys` 只有 `signing-keys.json`、綁定自己的 uid、帶 `keep` 與 `trustiot.io/filled-by: migrate`；ConfigMap `<release>-internal-identity-keys` 只有 `jwks.json`，列出同一個 kid（RFC 7638 thumbprint），每把只有公開的成員；第一把立即簽章（`signs_from` 等於 `published_at`）。以 `kubectl exec` 在 primary 建立一個平台管理者與它的 session（同 nightly 的 API 檢查），經 `kubectl port-forward` 向身分服務的 ext_authz 要一個給 assets 路由的 token，example service 接受它（200，使用者相符）。記錄每個 pod 在金鑰公開之後多久啟動、載入金鑰（日誌）與就緒。
 - **權限**：namespace 的每個 ServiceAccount 以 `kubectl auth can-i --as` 問 Secret 與 ConfigMap 的 `get`、`patch`、`update`、`delete`，以及兩種物件的 `create`、`list`、`watch`：只有身分服務的 ServiceAccount 對這兩個物件的 `get` 與 `patch` 是 yes。

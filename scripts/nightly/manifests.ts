@@ -312,14 +312,25 @@ export interface PodProblem {
   problem: string;
 }
 
-/** Pods (from `kubectl get pods -o json`) that are neither running and ready nor completed. */
+/**
+ * Components whose pods are short runs of a CronJob (deploy/chart/templates/internal-identity.yaml,
+ * Laysi/trustiot-v2#429): the schedule can start one while the smoke looks at the pods, so a pod
+ * of theirs that is still starting or running is a run in progress, not a problem. A failed run, or
+ * one that cannot pull or start its container, still is.
+ */
+export const SCHEDULED_RUN_COMPONENTS: ReadonlySet<string> = new Set(["identity-key-rotation"]);
+
+/** Pods (from `kubectl get pods -o json`) that are neither running and ready nor completed, nor a scheduled run in progress. */
 export function podProblems(podList: { items?: unknown[] }): PodProblem[] {
   const problems: PodProblem[] = [];
   for (const raw of asArray(podList.items).filter(isMap)) {
-    const pod = asString(asMap(raw.metadata).name) ?? "(unnamed)";
+    const metadata = asMap(raw.metadata);
+    const pod = asString(metadata.name) ?? "(unnamed)";
     const status = asMap(raw.status);
     const phase = asString(status.phase);
     if (phase === "Succeeded") continue;
+    const component = asString(asMap(metadata.labels)["app.kubernetes.io/component"]);
+    const scheduledRun = component !== undefined && SCHEDULED_RUN_COMPONENTS.has(component) && (phase === "Pending" || phase === "Running");
     const statuses = [...asArray(status.initContainerStatuses), ...asArray(status.containerStatuses)].filter(isMap);
     for (const container of statuses) {
       const reason = asString(asMap(asMap(container.state).waiting).reason);
@@ -327,6 +338,7 @@ export function podProblems(podList: { items?: unknown[] }): PodProblem[] {
         problems.push({ pod, problem: `${asString(container.name)} is waiting: ${reason}` });
       }
     }
+    if (scheduledRun) continue;
     if (phase !== "Running") {
       problems.push({ pod, problem: `phase ${phase ?? "unknown"}` });
     } else if (!asArray(status.containerStatuses).filter(isMap).every((c) => c.ready === true)) {
