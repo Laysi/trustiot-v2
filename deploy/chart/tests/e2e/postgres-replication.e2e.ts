@@ -22,9 +22,10 @@
 // the report: `instances: 2`, the plugin as WAL archiver (`spec.plugins`), smaller resources and
 // volume. Everything else of the Cluster (bootstrap, postInitSQL, pg_hba, image catalog, no
 // superuser access) is the chart's. It applies only the chart's Postgres objects (ImageCatalog,
-// Cluster, NetworkPolicy), plus a NetworkPolicy of its own that lets the instances reach each
-// other on 5432: the chart's admits only the services and the migration Job, since it has one
-// instance.
+// Cluster, NetworkPolicy), plus a NetworkPolicy of its own that lets the Cluster's pods reach its
+// instances on 5432: the instances each other, and the Job that clones a new replica from the
+// primary (its pods carry cnpg.io/cluster but not cnpg.io/podRole=instance). The chart's admits
+// only the services and the migration Job, since it has one instance.
 //
 // The S3-compatible store is RustFS in this namespace, the image and version that the Barman
 // Cloud plugin v0.15.1 runs its own end-to-end tests against (test/e2e/internal/objectstore/s3.go
@@ -217,9 +218,24 @@ function messages(lines: string[]): string[] {
     }
   });
 }
-// The metrics exporter of an instance, through the API server's proxy to the pod.
+// The metrics exporter of an instance (plain HTTP on 9187), read from inside its postgres
+// container with bash's /dev/tcp: the image has no HTTP client, and the chart's NetworkPolicy
+// admits nothing on 9187, so the API server's proxy to the pod cannot reach it.
 function metrics(pod: string): string {
-  return run([KUBECTL, ...(CONTEXT ? ["--context", CONTEXT] : []), "get", "--raw", `/api/v1/namespaces/${NAMESPACE}/pods/${pod}:9187/proxy/metrics`]);
+  const response = run([
+    ...kubectlArgs(),
+    "exec",
+    pod,
+    "-c",
+    "postgres",
+    "--",
+    "bash",
+    "-c",
+    'exec 3<>/dev/tcp/127.0.0.1/9187 && printf "GET /metrics HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n" >&3 && cat <&3',
+  ]);
+  const [head = "", ...body] = response.split(/\r?\n\r?\n/);
+  if (!/^HTTP\/1\.[01] 200 /.test(head)) throw new Error(`metrics of ${pod}: ${head.split("\n")[0]}`);
+  return body.join("\n\n");
 }
 function metric(text: string, name: string): string | undefined {
   return text
@@ -394,7 +410,8 @@ beforeAll(async () => {
     spec: {
       podSelector: { matchLabels: { "cnpg.io/cluster": CLUSTER, "cnpg.io/podRole": "instance" } },
       policyTypes: ["Ingress"],
-      ingress: [{ from: [{ podSelector: { matchLabels: { "cnpg.io/cluster": CLUSTER, "cnpg.io/podRole": "instance" } } }], ports: [{ port: 5432, protocol: "TCP" }] }],
+      // Every pod of the Cluster: the instances and the join Job of a new replica.
+      ingress: [{ from: [{ podSelector: { matchLabels: { "cnpg.io/cluster": CLUSTER } } }], ports: [{ port: 5432, protocol: "TCP" }] }],
     },
   });
   created.cluster = true;

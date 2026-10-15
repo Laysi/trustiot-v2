@@ -312,8 +312,7 @@ async fn service_roles_cannot_use_the_other_databases() {
 fn the_split_matches_the_chart_tests_rule() {
     // Blank lines (also with spaces or tabs) separate statements, `--` lines are comments, and a
     // block of comments only is no statement.
-    let text: &'static str =
-        "-- header\n\nSELECT 1;\n \t\n-- note\nDO $do$\nBEGIN\n    -- inner\nEND\n$do$;\n\n-- only\n";
+    let text: &'static str = "-- header\n\nSELECT 1;\n \t\n-- note\nDO $do$\nBEGIN\n    -- inner\nEND\n$do$;\n\n-- only\n";
     let split = statements(text);
     assert_eq!(split.len(), 2, "{split:?}");
     assert_eq!(without_comments(split[0]), "SELECT 1;");
