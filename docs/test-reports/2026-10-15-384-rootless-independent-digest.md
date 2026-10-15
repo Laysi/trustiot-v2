@@ -108,31 +108,49 @@ run-buildts.txt。同一份 snapshot（rcheck 的快照 commit `41484e41…`，`
   - 偵測到 root 就拒絕或警告：有乾淨的修法，不必退而求其次。
 - 文件：`docs/architecture/ci-release.md` 的「交叉編譯與可重現建置」不再要求以 rootless 打包，改寫新規則與 podman 版本的影響；「發佈內容」加上 podman 與 buildah 版本；`scripts/README.md` 的本機發佈流程加一段。
 
-## arm64 runner 上的 rc（驗收條件 2）
+## arm64 runner 上的 rc（驗收條件 2）：`v0.0.0-rc.7`
 
-**待測**：要等 coordinator 在本分支打下一個 rc tag，由 release.yml 在 arm64 runner 上以 rootless podman 4.9.3 發佈之後才能比對。比對指令（digest 取自 `gh release view <tag> --repo Laysi/trustiot-v2`）：
+coordinator 把 `v0.0.0-rc.7`（signed annotated tag）打在本分支的 `c802548`（commit 時間 1792039099）。release.yml run 38682761955 在 arm64 runner 上以 rootless podman 打包發佈。GitHub Release 新增的那一行記錄了打包用的工具：podman 4.9.3、buildah 1.33.7，套件 `buildah 1.33.7+ds1-1ubuntu0.24.04.3`、`crun 1.14.1-1`、`golang-github-containers-image 5.29.2-2`、`podman 4.9.3+ds1-1ubuntu0.2`、`skopeo 1.13.3+ds1-2ubuntu0.24.04.3`。
+
+該 run 的 plan、build、publish 都成功。verify 前面的檢查都通過（簽章、SBOM attestation、chart 以 digest 固定映像），只有最後一項「匿名無法拉取（套件必須是私有的）」對 `assets`、`identity`、`migrate`、`postgres` 失敗：repo 公開期間 GHCR 的套件也是公開的。與本次改動無關，使用者指示在 repo 改回私有之前忽略。
+
+比對指令，digest 取自 `gh release view v0.0.0-rc.7 --repo Laysi/trustiot-v2`：
 
 ```sh
-rcheck.sh 384 "bash $D/eval.sh rc <tag> identity=<digest> assets=<digest> migrate=<digest>"
+rcheck.sh 384 "bash $D/eval.sh rc v0.0.0-rc.7 \
+  identity=sha256:9b0f89e55aa79fc2916c7ca98f1c5a5e457e56ff77b2c40bab7348121c36e12a \
+  assets=sha256:c2568a62b20fb4890887cecca9fb4eca474494bfba8a19f72963db0e850132eb \
+  migrate=sha256:9de39f3b66a90fe5f2716f647cfd6c9efa71f18b292087355e8d1a4966659083"
 ```
 
-`eval.sh rc` 依序做下列事情：
+`eval.sh rc` 依序做下列事情，完整輸出見 [run-rc7.txt](data/2026-10-15-384-rootless-independent-digest/run-rc7.txt)：
 
-1. 匿名 clone 該 tag。
-2. 在 build host 既有的 qemu-user binfmt 下起 arm64 的 `ubuntu:24.04` 容器，照 release.yml 的 plan 與 build 步驟跑 `plan.ts --tag` 與 `build.ts`（`rc-inner.sh`）。容器內是 podman 4.9.3 以 root 執行；qemu-user 下 rootless podman 無法啟動，見 Laysi/trustiot-v2#372。
-3. 把那裡建出的 arm64 執行檔以該 tag 的 `pack.ts`（`pack-binaries.ts`）在 build host 上 rootless 與 root 各打包一次（podman 5.7.0）。
+1. 匿名 clone 該 tag，確認它指向 `c802548`。
+2. 在 build host 既有的 qemu-user binfmt 下起 arm64 的 `ubuntu:24.04` 容器（`sha256:08571ca1…`），照 release.yml 的 plan 與 build 步驟跑 `plan.ts --tag` 與 `build.ts`（`rc-inner.sh`）。容器內是 podman 4.9.3，以 root 執行；qemu-user 下 rootless podman 無法啟動，見 Laysi/trustiot-v2#372。這一步約 31 分鐘。
+3. 把容器裡建出的 arm64 執行檔，以該 tag 的 `pack.ts`（`pack-binaries.ts`）在 build host 上 rootless 與 root 各打包一次（podman 5.7.0）。
 4. 每個 digest 都與發佈的比較。
 
-預期如下：
+容器內 rustup 印出的 `$HOME differs from euid-obtained home directory` 是容器以 root 執行、`HOME` 設成 runner 的 `/home/runner` 造成的，與 Laysi/trustiot-v2#372 相同，不影響結果。容器內建出的執行檔：
 
-- arm64 容器內（4.9.3、root）的三個 digest 都與 rc 相同：同版本 podman 以 root 打包，得到 runner 以 rootless 打包的結果；
-- build host（5.7.0）的 rootless 與 root 彼此相同，但與 rc 不同，原因見第 3 節。
+- `identity` `e0fd8c51…`
+- `assets` `bc6f85ed…`
+- `migrate` `56da5288…`
+
+| 映像 | rc.7 發佈（runner，podman 4.9.3，rootless） | arm64 容器（podman 4.9.3，root） | build host（podman 5.7.0，rootless 與 root） |
+| --- | --- | --- | --- |
+| `identity` | `sha256:9b0f89e5…` | `sha256:9b0f89e5…`，**相同** | 兩者都是 `sha256:a3147fce…`，與發佈的不同 |
+| `assets` | `sha256:c2568a62…` | `sha256:c2568a62…`，**相同** | 兩者都是 `sha256:c343757c…`，與發佈的不同 |
+| `migrate` | `sha256:9de39f3b…` | `sha256:9de39f3b…`，**相同** | 兩者都是 `sha256:47e9ac01…`，與發佈的不同 |
+
+- **同一版本的 podman，root 與 rootless 打包出同一個 digest**：runner 以 rootless 發佈的三個映像，在另一台機器的 arm64 容器裡從乾淨 clone 重建、以 root 執行 `build.ts`，得到完全相同的 digest。修正前，root 與 rootless 的 digest 不同（Laysi/trustiot-v2#372）。
+- **build host 的 podman 5.7.0**：rootless 與 root 彼此相同，但與發佈的不同。執行檔與 arm64 容器裡的相同，所以這是 podman 版本造成的差異，原因見第 3 節。要重現發佈的 digest，打包要用 GitHub Release 記錄的 podman 版本。
+- 「digests against v0.0.0-rc.7」這一步因為 5.7.0 那兩列的 DIFF 而以 1 結束，這是預期的結果。
 
 ## 結論
 
 | 驗收條件 | 結果 |
 | --- | --- |
-| 同一個 commit 以 root 與 rootless 各執行一次 `build.ts`，`identity` 與 `migrate` 的 digest 相同，指令與 digest 記錄在本報告 | **通過**：第 4 節（build host，podman 5.7.0）。runner 的 podman 4.9.3 下同樣的打包設定（vfs）root 與 rootless 相同，見第 2 節變體 3；以 4.9.3 執行 `build.ts` 本身，在 rc 的比對（arm64 容器內 root）與 runner（rootless）各一次 |
-| 改動後的第一個 rc 在 arm64 runner 上發佈的 digest，與本機以新規則打包的相同，或差異有明確原因 | **待測**：等 rc，見上一節 |
+| 同一個 commit 以 root 與 rootless 各執行一次 `build.ts`，`identity` 與 `migrate` 的 digest 相同，指令與 digest 記錄在本報告 | **通過**：第 4 節（build host，podman 5.7.0）。runner 的 podman 4.9.3 下同樣的打包設定（vfs）root 與 rootless 相同，見第 2 節變體 3；以 4.9.3 執行 `build.ts` 本身：rc.7 在 runner 上 rootless、在 arm64 容器內 root，digest 相同（上一節） |
+| 改動後的第一個 rc 在 arm64 runner 上發佈的 digest，與本機以新規則打包的相同，或差異有明確原因 | **通過**：`v0.0.0-rc.7` 的三個服務映像，與同一個 commit、同一組釘選工具、同版本 podman（4.9.3）在本機 arm64 容器以 root 打包的 digest 完全相同。build host 的 podman 5.7.0 打包出不同的 digest，原因是 podman 版本（第 3 節）|
 | `bun test scripts/release` 通過，並涵蓋新選項或檢查 | **通過**：`scripts/release/pack.test.ts`（store 的設定、`podman info` 的檢查）、`parseBuilder`、`parseDpkgVersions`（`lib.ts`，測試在 `pack.test.ts`），release body 的版本行（`lib.test.ts`）；`bun test scripts` 879 通過 |
 | `ci-release.md` 不再把「以 rootless podman 打包」列為重現的條件 | **通過**：見「改動」 |
