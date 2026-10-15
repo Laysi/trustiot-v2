@@ -1,0 +1,252 @@
+{
+  "run": "b1ccc119",
+  "namespace": "e2e-400",
+  "cluster": "trustiot-postgres",
+  "restored": "trustiot-postgres-restored",
+  "storeImage": "docker.io/rustfs/rustfs:1.0.0-glibc@sha256:bffcab0c9d647aab0055d1c69d340b202d0909966b385932d4ead1aeb7602858",
+  "clusterChanges": {
+    "instances": 2,
+    "resources": {
+      "requests": {
+        "cpu": "50m",
+        "memory": "192Mi"
+      },
+      "limits": {
+        "memory": "512Mi"
+      }
+    },
+    "storage": {
+      "size": "1Gi"
+    },
+    "plugins": [
+      {
+        "name": "barman-cloud.cloudnative-pg.io",
+        "isWALArchiver": true,
+        "parameters": {
+          "barmanObjectName": "trustiot-e2e-store-b1ccc119"
+        }
+      }
+    ],
+    "unchanged": [
+      "affinity",
+      "bootstrap",
+      "description",
+      "enablePDB",
+      "enableSuperuserAccess",
+      "imageCatalogRef",
+      "imagePullPolicy",
+      "inheritedMetadata",
+      "postgresql"
+    ]
+  },
+  "bootstrap": {
+    "database": "trustiot",
+    "owner": "trustiot_owner",
+    "encoding": "UTF8",
+    "localeProvider": "builtin",
+    "builtinLocale": "C.UTF-8",
+    "postInitSQL": [
+      "DO $do$\nBEGIN\n    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'streaming_replica') THEN\n        CREATE ROLE streaming_replica LOGIN REPLICATION;\n        COMMENT ON ROLE streaming_replica IS 'Special user for streaming replication created by CloudNativePG';\n    END IF;\n    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'cnpg_metrics_exporter') THEN\n        CREATE ROLE cnpg_metrics_exporter LOGIN PASSWORD NULL;\n    END IF;\nEND\n$do$;",
+      "GRANT CONNECT ON DATABASE postgres TO streaming_replica, cnpg_metrics_exporter;",
+      "REVOKE CONNECT, TEMPORARY ON DATABASE postgres FROM PUBLIC;",
+      "REVOKE CONNECT, TEMPORARY ON DATABASE template1 FROM PUBLIC;"
+    ],
+    "postInitApplicationSQL": [
+      "ALTER ROLE trustiot_owner CREATEROLE"
+    ]
+  },
+  "instances": [
+    "trustiot-postgres-1",
+    "trustiot-postgres-2"
+  ],
+  "firstPrimary": "trustiot-postgres-1",
+  "acls": [
+    "postgres|{postgres=CTc/postgres,streaming_replica=c/postgres,cnpg_metrics_exporter=c/postgres}",
+    "template1|{postgres=CTc/postgres}"
+  ],
+  "privileges": [
+    "cnpg_metrics_exporter postgres t f",
+    "cnpg_metrics_exporter template1 f f",
+    "e2e_app postgres f f",
+    "e2e_app template1 f f",
+    "streaming_replica postgres t f",
+    "streaming_replica template1 f f",
+    "trustiot_owner postgres f f",
+    "trustiot_owner template1 f f"
+  ],
+  "operatorRoles": [
+    "cnpg_metrics_exporter login=t replication=f inherit=t pg_monitor=t",
+    "streaming_replica login=t replication=t inherit=t pg_monitor=f"
+  ],
+  "replication": {
+    "primary": "trustiot-postgres-1",
+    "replica": "trustiot-postgres-2",
+    "senders": [
+      "streaming_replica trustiot-postgres-2 streaming"
+    ],
+    "receiver": "streaming"
+  },
+  "switchover": {
+    "from": "trustiot-postgres-1",
+    "to": "trustiot-postgres-2",
+    "receiver": "streaming",
+    "rewind": [
+      "instance-manager: Extracting pg_controldata information",
+      "instance-manager: Starting up pg_rewind",
+      "pg_rewind: pg_rewind: connected to server",
+      "pg_rewind: pg_rewind: servers diverged at WAL location 0/50000A0 on timeline 1",
+      "pg_rewind: pg_rewind: no rewind required"
+    ]
+  },
+  "backup": {
+    "phase": "completed",
+    "method": "plugin",
+    "backupId": "20261015T043918",
+    "beginWal": "000000020000000000000005",
+    "endWal": "000000020000000000000005",
+    "continuousArchiving": {
+      "lastTransitionTime": "2026-10-15T04:38:51Z",
+      "message": "Continuous archiving is working",
+      "reason": "ContinuousArchivingSuccess",
+      "status": "True",
+      "type": "ContinuousArchiving"
+    }
+  },
+  "restore": {
+    "rows": [
+      "bootstrapped",
+      "replicated",
+      "switched over",
+      "before backup",
+      "after backup"
+    ],
+    "acls": [
+      "postgres|{postgres=CTc/postgres,streaming_replica=c/postgres,cnpg_metrics_exporter=c/postgres}",
+      "template1|{postgres=CTc/postgres}"
+    ],
+    "privileges": [
+      "cnpg_metrics_exporter postgres t f",
+      "cnpg_metrics_exporter template1 f f",
+      "e2e_app postgres f f",
+      "e2e_app template1 f f",
+      "streaming_replica postgres t f",
+      "streaming_replica template1 f f",
+      "trustiot_owner postgres f f",
+      "trustiot_owner template1 f f"
+    ]
+  },
+  "restoreMetrics": {
+    "up": "1",
+    "lastCollectionError": "0"
+  },
+  "instanceManager": {
+    "trustiot-postgres-1": {
+      "up": "1",
+      "lastCollectionError": "0",
+      "collectionErrors": [],
+      "databases": [
+        "postgres",
+        "template1",
+        "trustiot"
+      ],
+      "refused": [],
+      "restarts": [
+        "postgres=1"
+      ]
+    },
+    "trustiot-postgres-2": {
+      "up": "1",
+      "lastCollectionError": "0",
+      "collectionErrors": [],
+      "databases": [
+        "postgres",
+        "template1",
+        "trustiot"
+      ],
+      "refused": [],
+      "restarts": [
+        "postgres=0"
+      ]
+    }
+  },
+  "finalStatus": {
+    "phase": "Cluster in healthy state",
+    "currentPrimary": "trustiot-postgres-2",
+    "conditions": [
+      {
+        "lastTransitionTime": "2026-10-15T04:38:02Z",
+        "message": "Cluster has been bootstrapped",
+        "reason": "BootstrapCompleted",
+        "status": "True",
+        "type": "Initialized"
+      },
+      {
+        "lastTransitionTime": "2026-10-15T04:38:15Z",
+        "message": "A single, unique system ID was found across reporting instances.",
+        "reason": "Unique",
+        "status": "True",
+        "type": "ConsistentSystemID"
+      },
+      {
+        "lastTransitionTime": "2026-10-15T04:38:43Z",
+        "message": "Cluster is Ready",
+        "reason": "ClusterIsReady",
+        "status": "True",
+        "type": "Ready"
+      },
+      {
+        "lastTransitionTime": "2026-10-15T04:38:51Z",
+        "message": "Continuous archiving is working",
+        "reason": "ContinuousArchivingSuccess",
+        "status": "True",
+        "type": "ContinuousArchiving"
+      },
+      {
+        "lastTransitionTime": "2026-10-15T04:39:21Z",
+        "message": "Backup was successful",
+        "reason": "LastBackupSucceeded",
+        "status": "True",
+        "type": "LastBackupSucceeded"
+      }
+    ]
+  },
+  "systemDatabasesSqlSha256": "af78b5066cba6786174bdf27aa161430b3edee99b7ce330f73272e544373b66d",
+  "timeline": [
+    {
+      "step": "applied",
+      "at": "2026-10-15T04:38:01.476Z"
+    },
+    {
+      "step": "healthy",
+      "at": "2026-10-15T04:38:43.551Z"
+    },
+    {
+      "step": "switchover requested",
+      "at": "2026-10-15T04:38:46.387Z"
+    },
+    {
+      "step": "switchover done",
+      "at": "2026-10-15T04:39:13.156Z"
+    },
+    {
+      "step": "backup requested",
+      "at": "2026-10-15T04:39:16.702Z"
+    },
+    {
+      "step": "backup completed",
+      "at": "2026-10-15T04:39:25.888Z"
+    },
+    {
+      "step": "restore requested",
+      "at": "2026-10-15T04:39:31.022Z"
+    },
+    {
+      "step": "restored",
+      "at": "2026-10-15T04:40:26.019Z"
+    },
+    {
+      "step": "restored Cluster deleted",
+      "at": "2026-10-15T04:40:31.578Z"
+    }
+  ]
+}

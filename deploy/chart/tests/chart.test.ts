@@ -145,6 +145,17 @@ function render(files: readonly string[], args: string[] = [], release = RELEASE
   return parseManifests(result.stdout);
 }
 
+// files/postgres/system-databases.sql split into statements: they are separated by a blank line,
+// and lines that start with `--` are comments. tools/migrate/tests/system_databases.rs splits it
+// the same way and runs each statement; the Cluster's postInitSQL must hold exactly these.
+const SYSTEM_DATABASE_SQL = join(CHART_DIR, "files/postgres/system-databases.sql");
+function systemDatabaseStatements(text: string): string[] {
+  return text
+    .split(/\n[ \t]*\n/)
+    .map((block) => block.replace(/^--.*$/gm, "").trim())
+    .filter((statement) => statement !== "");
+}
+
 function find(manifests: Manifest[], kind: string, name: string): Manifest {
   const found = manifests.find((m) => m.kind === kind && m.metadata.name === name);
   if (!found) throw new Error(`${kind}/${name} not rendered`);
@@ -1335,8 +1346,9 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
     // No superuser password and no <cluster>-superuser Secret.
     expect(spec.enableSuperuserAccess).toBe(false);
     expect(spec.superuserSecret).toBeUndefined();
-    // initdb takes the owner's password from a Secret CloudNativePG generates; the one statement
-    // the chart adds as superuser gives the owner CREATEROLE, which the migration Job needs to
+    // initdb takes the owner's password from a Secret CloudNativePG generates. The chart adds two
+    // things that run as superuser: the system-database statements (next test,
+    // Laysi/trustiot-v2#400), and CREATEROLE for the owner, which the migration Job needs to
     // create the service roles (Laysi/trustiot-v2#60). Nothing else runs as superuser.
     expect(spec.bootstrap.initdb).toEqual({
       database: "trustiot",
@@ -1344,6 +1356,7 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
       encoding: "UTF8",
       localeProvider: "builtin",
       builtinLocale: "C.UTF-8",
+      postInitSQL: systemDatabaseStatements(readFileSync(SYSTEM_DATABASE_SQL, "utf8")),
       postInitApplicationSQL: ["ALTER ROLE trustiot_owner CREATEROLE"],
     });
     expect(spec.managed).toBeUndefined();
@@ -1351,6 +1364,41 @@ describe("bundled Postgres (CloudNativePG, Laysi/trustiot-v2#58)", () => {
       expect(find(manifests, kind, cluster).metadata.annotations?.["helm.sh/resource-policy"]).toBe("keep");
     }
     expect(spec.storage).toEqual({ size: "20Gi" });
+  });
+
+  test("the bootstrap keeps TrustIoT's roles out of the postgres and template1 databases with the statements of the one SQL file", () => {
+    // One set of statements (Laysi/trustiot-v2#400): templates/postgres.yaml carries them, since
+    // templates never read chart files (scripts/ci/check-secret-handling.ts), and this fails when
+    // they differ from the file that tools/migrate/tests/system_databases.rs and the runbook run.
+    const statements = systemDatabaseStatements(readFileSync(SYSTEM_DATABASE_SQL, "utf8"));
+    for (const shape of SHAPE_NAMES) {
+      const initdb = clusterSpec(render(SHAPES[shape])).bootstrap.initdb as { postInitSQL?: string[]; postInitTemplateSQL?: string[] };
+      expect(initdb.postInitSQL).toEqual(statements);
+      // Database privileges live in the shared catalog, so nothing has to run inside template1.
+      expect(initdb.postInitTemplateSQL).toBeUndefined();
+    }
+    expect(statements.length).toBeGreaterThan(0);
+    for (const shape of SHAPE_NAMES) {
+      const initdb = clusterSpec(render(SHAPES[shape])).bootstrap.initdb as Record<string, unknown>;
+      for (const key of ["postInitSQL", "postInitApplicationSQL", "postInitTemplateSQL"]) {
+        // CloudNativePG passes these to its initdb Job as container arguments, where Kubernetes
+        // turns $$ into $ and expands $(NAME): a `DO $$ ... $$` body reached PostgreSQL as
+        // `DO $ ... $` on the lab and failed the bootstrap. Dollar quotes need a named tag.
+        for (const statement of (initdb[key] as string[] | undefined) ?? []) {
+          expect(statement).not.toContain("$$");
+          expect(statement).not.toContain("$(");
+        }
+      }
+    }
+    for (const statement of statements) {
+      expect(statement).toEndWith(";");
+      expect(statement).not.toMatch(/^--/m);
+    }
+    const plain = statements.map((s) => s.replace(/\s+/g, " "));
+    expect(plain).toContain("REVOKE CONNECT, TEMPORARY ON DATABASE postgres FROM PUBLIC;");
+    expect(plain).toContain("REVOKE CONNECT, TEMPORARY ON DATABASE template1 FROM PUBLIC;");
+    // Only CloudNativePG's own roles that connect to `postgres` get CONNECT back, by name.
+    expect(plain.filter((s) => s.startsWith("GRANT"))).toEqual(["GRANT CONNECT ON DATABASE postgres TO streaming_replica, cnpg_metrics_exporter;"]);
   });
 
   test("the server refuses connections without TLS, and only sizing parameters come from values", () => {
