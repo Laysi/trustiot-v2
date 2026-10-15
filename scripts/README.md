@@ -81,6 +81,8 @@ service-kit 連 Postgres 一律用 `sslmode=verify-full`（Laysi/trustiot-v2#53�
 
 `example-service` 的角色與密碼仍由 `up` 自己建立（`lib/secrets.ts` 的 `serviceRoleSql`）：它不在 Job 的服務清單（`PRODUCT`）裡。Job 與 `up` 的角色互不干擾，Job 只動它自己標記過的登入角色。
 
+`up` 也以 superuser 收回 PUBLIC 對 `postgres` 與 `template1` 的 `CONNECT, TEMPORARY`，與 bundled Cluster 相同（Laysi/trustiot-v2#427）：語句取自 chart 的 `deploy/chart/files/postgres/system-databases.sql` 裡的兩句 `REVOKE`（只有一份來源；該檔另建的 CloudNativePG 角色 `streaming_replica` 與 `cnpg_metrics_exporter` 在這裡沒有 operator、也沒有密碼可登入，所以不建立）。語句冪等，每次 `up` 都執行，所以舊的開發環境再 `up` 一次就補上，不必 `purge`。Job 對其他資料庫的警告（`warnings`）會在 `up` 的輸出以 `WARNING:` 列出，沒有警告時 `migration Job finished` 那一行顯示 `0 warning(s)`。端對端測試斷言服務角色連不上這兩個資料庫、Job 沒有警告。
+
 #### 哪些角色綁密碼
 
 登入角色只在綁了 Secret 時能登入，Job 把沒有綁定的設成 NOLOGIN（`tools/migrate/src/lib.rs` 的 `Report::roles_without_password`）。本機綁的角色與 chart 相同（`deploy/chart/templates/_migrate.tpl` 的 `trustiot.migrate.passwordSecrets`）：

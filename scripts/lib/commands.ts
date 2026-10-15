@@ -32,6 +32,7 @@ import {
   type CheckResult,
 } from "./health.ts";
 import { MIGRATION_ROLE, runMigrationJob } from "./migrate.ts";
+import { SYSTEM_DATABASES_SQL, systemDatabaseRevokes } from "./system-databases.ts";
 import { productLogins } from "./product-logins.ts";
 import { publishRetained, readRetained } from "./mqtt.ts";
 import {
@@ -433,6 +434,9 @@ async function preparePostgres(ctx: Context, state: State, migrationPassword: st
         // The per-database setup that service-kit's session check requires (no TEMPORARY for
         // PUBLIC), then one plain login role per service that has a database.
         readFileSync(join(ctx.repoRoot, DATABASE_SETUP), "utf8") +
+        // PUBLIC keeps no access to `postgres` and `template1`, as in the bundled Cluster. The
+        // statements are idempotent, so every `up` runs them, an older environment included.
+        systemDatabaseRevokes(readFileSync(join(ctx.repoRoot, SYSTEM_DATABASES_SQL), "utf8")) +
         SERVICES.flatMap((service) => {
           const login = state.credentials.services[service.name];
           return login ? [serviceRoleSql(login.user, login.password)] : [];
@@ -471,9 +475,16 @@ async function migrateDatabase(ctx: Context, state: State, migrationPassword: st
   }
   saveState(ctx.dir, state);
   log(
-    `migration Job finished${result.changes === undefined ? "" : `: ${result.changes} change(s)`}; ` +
+    `migration Job finished${result.changes === undefined ? "" : `: ${result.changes} change(s)`}` +
+      `${result.warnings === undefined ? "" : `, ${result.warnings} warning(s)`}; ` +
       `${logins.map((login) => login.role).join(", ")} can log in`,
   );
+  // The Job logs a warning for what it finds but does not stop for; this output hides its log, so
+  // a developer would never see them otherwise. They name databases and roles, no secret.
+  if ((result.warnings ?? 0) > 0 || result.warningLines.length > 0) {
+    log(`WARNING: the migration Job reported ${result.warnings ?? result.warningLines.length} warning(s):`);
+    for (const line of result.warningLines) log(`  ${line}`);
+  }
 }
 
 function assertAllOk(ctx: Context, results: CheckResult[]): void {
