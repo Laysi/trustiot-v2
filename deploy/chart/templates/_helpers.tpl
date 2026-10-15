@@ -242,7 +242,8 @@ only ClickHouse and the migration Job may use it. The generated one is in
 {{- end -}}
 {{- end -}}
 {{- end -}}
-{{- /* The internal identity signing key: mounted into the identity service only. */ -}}
+{{- /* A signing key a person made before Laysi/trustiot-v2#404: mounted into the identity pod's
+init container only. */ -}}
 {{- with .Values.internalIdentity.signingKeySecret -}}
 {{- if .name -}}
 {{- $refs = append $refs (printf "%s/%s" .name .key) -}}
@@ -263,8 +264,9 @@ Secrets whose keys reach services only through the chart, so no custom env may r
 key: CloudNativePG's Secrets of the bundled Postgres (the CA's private key, the server key, the
 database owner's password), the password Secrets the migration Job fills (each service's database
 password and the collector's ClickHouse password; the chart hands each consumer only its own), the
-bundled ClickHouse's generated admin password Secret, and the migration accounts of an external
-Postgres and ClickHouse (only the migration Job uses those).
+bundled ClickHouse's generated admin password Secret, the internal identity signing keys Secret
+(only the identity service mounts it), and the migration accounts of an external Postgres and
+ClickHouse (only the migration Job uses those).
 Returns a YAML list of names; use with fromYamlArray.
 */}}
 {{- define "trustiot.dependencySecretNames" -}}
@@ -278,6 +280,8 @@ migration Job (through the API) may use it. */ -}}
 {{- if $admin.generated -}}
 {{- $names = append $names $admin.name -}}
 {{- end -}}
+{{- /* The identity service's signing keys, whether or not the service is enabled. */ -}}
+{{- $names = append $names (include "trustiot.identity.keys" . | fromYaml).secret -}}
 {{- if eq .Values.postgres.mode "external" -}}
 {{- with .Values.postgres.external.migrationSecret.name -}}
 {{- $names = append $names . -}}

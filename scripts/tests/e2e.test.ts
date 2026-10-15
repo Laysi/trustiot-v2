@@ -459,6 +459,8 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
       const stateFile = join(instanceDir, "state.json");
       const caFile = join(instanceDir, "tls", "ca.crt");
       const signingKeyFile = join(instanceDir, "identity", "signing-key.pem");
+      const signingKeysFile = join(instanceDir, "identity", "signing-keys.json");
+      const publicKeysFile = join(instanceDir, "identity", "jwks.json");
       // Built first, so the build directory exists before the tree is compared at the end.
       const identityBinary = await buildIdentity();
       const treeBefore = await gitStatus();
@@ -496,6 +498,13 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
         const firstKey = readFileSync(signingKeyFile, "utf8");
         const signingKeyBody = firstKey.split("\n")[1]!;
         expect(signingKeyBody.length).toBeGreaterThan(20);
+        // The two files written from it, as a cluster's identity pod gets them (Laysi/trustiot-v2#404):
+        // the private key in the signing keys file (its d), owner-only too.
+        expect(statSync(signingKeysFile).mode & 0o777).toBe(0o600);
+        expect(statSync(publicKeysFile).mode & 0o777).toBe(0o600);
+        const privateSeed = (JSON.parse(readFileSync(signingKeysFile, "utf8")) as { keys: { d: string }[] }).keys[0]!.d;
+        expect(privateSeed).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(readFileSync(publicKeysFile, "utf8")).not.toContain(privateSeed);
         // The migration Job ran, with the same code as in a cluster, and left every login role the
         // chart binds (lib/product-logins.ts) able to log in with the password it generated (a
         // role is NOLOGIN without a bound Secret).
@@ -532,10 +541,13 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
         expect(settings.TRUSTIOT_POSTGRES_CA_FILE).toBe(caFile);
         expect(settings.PGSSLMODE).toBe("verify-full");
         expect(settings.PGSSLROOTCERT).toBe(caFile);
-        // The identity service's settings: the public keys for every service, the key's path (not
-        // the key), the routes, and the identity_app login the Job generated.
-        expect(settings.TRUSTIOT_IDENTITY_SIGNING_KEY_FILE).toBe(signingKeyFile);
-        expect(JSON.parse(settings.TRUSTIOT_INTERNAL_IDENTITY_KEYS!).keys).toHaveLength(1);
+        // The identity service's settings: the public keys file for every service, the signing
+        // keys file's path (not a key), the routes, and the identity_app login the Job generated.
+        expect(settings.TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE).toBe(signingKeysFile);
+        expect(settings.TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE).toBe(publicKeysFile);
+        expect(settings.TRUSTIOT_INTERNAL_IDENTITY_KEYS).toBeUndefined();
+        const publicKeys = readFileSync(publicKeysFile, "utf8");
+        expect(JSON.parse(publicKeys).keys).toHaveLength(1);
         expect(JSON.parse(settings.TRUSTIOT_INGRESS_ROUTES!)[0].host).toBe("localhost");
         expect(settings.TRUSTIOT_DEV_IDENTITY_DATABASE_USERNAME).toBe("identity_app");
         expect(settings.TRUSTIOT_DEV_IDENTITY_DATABASE_PASSWORD).toBe(firstState.credentials.services.identity.password);
@@ -591,12 +603,12 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
         const identity = await startIdentity(identityBinary, settings);
         let identityLog: string;
         try {
-          await checkExtAuthz(identity.apiPort, cookie, settings.TRUSTIOT_INTERNAL_IDENTITY_KEYS!);
+          await checkExtAuthz(identity.apiPort, cookie, publicKeys);
         } finally {
           identityLog = await identity.stop();
         }
         // Neither key material nor a password reaches the identity service's log.
-        for (const secret of [signingKeyBody, ...logins.map((login) => firstState.credentials.services[login.stateKey].password), cookie.slice(cookie.indexOf("=") + 1)]) {
+        for (const secret of [signingKeyBody, privateSeed, ...logins.map((login) => firstState.credentials.services[login.stateKey].password), cookie.slice(cookie.indexOf("=") + 1)]) {
           expect(identityLog).not.toContain(secret);
         }
 
@@ -683,6 +695,7 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
         // password; the session in the kept data still works with the same cookie.
         expect(second.stdout).toContain("identity signing key: kept");
         expect(readFileSync(signingKeyFile, "utf8")).toBe(firstKey);
+        expect(readFileSync(publicKeysFile, "utf8")).toBe(publicKeys);
         // Every login role got a new password from the second Job run, and only the new one logs in.
         for (const login of logins) {
           const before = firstState.credentials.services[login.stateKey];
@@ -696,10 +709,10 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
         expect(seededCookie(reseeded.stdout)).toBe(cookie);
         expect(reseeded.stdout).toContain("kept the identity dev session");
         const secondSettings = parseEnv((await dev(env, "env")).stdout);
-        expect(secondSettings.TRUSTIOT_INTERNAL_IDENTITY_KEYS).toBe(settings.TRUSTIOT_INTERNAL_IDENTITY_KEYS);
+        expect(secondSettings.TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE).toBe(settings.TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE);
         const again = await startIdentity(identityBinary, secondSettings);
         try {
-          await checkExtAuthz(again.apiPort, cookie, secondSettings.TRUSTIOT_INTERNAL_IDENTITY_KEYS!);
+          await checkExtAuthz(again.apiPort, cookie, readFileSync(publicKeysFile, "utf8"));
         } finally {
           await again.stop();
         }
@@ -710,6 +723,7 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
         // sessions with the data volume.
         expect(existsSync(caFile)).toBe(false);
         expect(existsSync(signingKeyFile)).toBe(false);
+        expect(existsSync(signingKeysFile)).toBe(false);
         expect(existsSync(join(instanceDir, "identity"))).toBe(false);
         expect(existsSync(join(instanceDir, "tls"))).toBe(false);
         expect(existsSync(instanceDir)).toBe(false);

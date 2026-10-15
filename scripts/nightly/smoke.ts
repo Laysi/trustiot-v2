@@ -6,8 +6,12 @@
 // commit answer through the ingress with a session cookie (api.ts, Laysi/trustiot-v2#65), and an
 // uninstall leaves nothing behind but the objects the chart keeps on purpose (the database and the
 // password Secrets), which are then deleted. The same request through the ingress also proves the
-// MS0 edges with the real services (api.ts, Laysi/trustiot-v2#77): a forged identity header never
+// MS0 edges with the real services (api.ts, Laysi/trustiot-v2#77): a stolen identity header never
 // gets through, and a Host with a port or a path the mesh normalizes reaches the right service.
+// Nothing creates a key for the identity service: its init container generates the internal
+// identity keys in the cluster, and the smoke checks that they are there, that only the identity
+// service's account may change them, and how long the services took to pick them up on this fresh
+// install (identity-keys.ts, Laysi/trustiot-v2#404).
 // After the ingress e2e test, the SaaS shape also runs the service-to-service authorization e2e
 // test (mesh.e2e.ts, e2e.ts). Components the chart gains later are covered without
 // changes here, because the checks read the release's own manifests (manifests.ts).
@@ -15,11 +19,11 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
-import { apiValues, createSigningKey, routesOfValues, runApiCheck, SIGNING_KEY_STORE } from "./api.ts";
-import type { TokenSigner } from "./api.ts";
+import { apiValues, routesOfValues, runApiCheck } from "./api.ts";
 import { gatherDiagnostics } from "./diagnostics.ts";
 import { E2E_SUITES, installEvidenceSection, runClusterE2e, suitesOf } from "./e2e.ts";
 import { exec, retry, run, RunLog, waitUntilGone } from "./exec.ts";
+import { checkIdentityKeys } from "./identity-keys.ts";
 import {
   gatewayPortProblems,
   gatewayPorts,
@@ -157,8 +161,6 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
   const values = valuesArgs(ctx.chartDir, shape);
   // The certificate the smoke made for an HTTPS listener, which the API check trusts.
   let ingressCa: string | undefined;
-  // Signs the API check's forged identity header with the identity service's key.
-  let signer: TokenSigner | undefined;
   try {
     passed =
       (await check("namespace with the restricted Pod Security level", async () => {
@@ -167,27 +169,23 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         await kubectl(["label", "namespace", namespace, ...labels, "pod-security.kubernetes.io/enforce-version=latest"]);
         return "enforce, warn and audit are restricted";
       })) &&
-      (await check("the identity service's signing key and the values of the API check", async () => {
+      (await check("the values of the API check", async () => {
         // Laysi/trustiot-v2#65: the release runs the identity and assets services built from this
-        // commit, behind the smoke namespace's ext_authz provider (platform.ts), and the identity
-        // service signs with a key generated here for this run only.
-        const key = await createSigningKey(ctx.log, ctx, namespace);
-        const publicKey = key.publicKey;
-        signer = key.signer;
+        // commit, behind the smoke namespace's ext_authz provider (platform.ts). No key is made
+        // here: the identity pod's init container generates it (Laysi/trustiot-v2#404).
         const file = join(ctx.outDir, `values-api-${shape.name}.yaml`);
         const routes = routesOfValues(ctx.chartDir, shape.valuesFiles);
-        writeFileSync(file, Bun.YAML.stringify(apiValues(shape.name, publicKey, routes), null, 2));
+        writeFileSync(file, Bun.YAML.stringify(apiValues(shape.name, routes), null, 2));
         values.push("-f", file);
-        return `Secret ${SIGNING_KEY_STORE} (key ${publicKey.kid}); ${basename(file)}: identity and assets, provider ${smokeProviderNameOf(shape.name)}`;
+        return `${basename(file)}: identity and assets, provider ${smokeProviderNameOf(shape.name)}`;
       })) &&
       (await check("dummy Secrets for the references the chart makes", async () => {
         // Secrets reach a cluster from outside the chart (Laysi/trustiot-v2#72); the smoke test
-        // checks the wiring, so every Secret the rendered pods read gets a dummy value, except
-        // the signing key made above.
+        // checks the wiring, so every Secret the rendered pods read gets a dummy value. The
+        // Secrets the chart declares for the cluster to fill are not among them.
         const rendered = await helm(["template", RELEASE, ctx.chartDir, "--namespace", namespace, ...values], 120_000, true);
         const objects = parseManifests(rendered.stdout);
         const missing = missingSecrets(objects);
-        missing.delete(SIGNING_KEY_STORE);
         for (const [name, keys] of missing) {
           const literals = [...keys].map((key) => `--from-literal=${key}=nightly-dummy-value`);
           await kubectl(["create", "secret", "generic", name, "--namespace", namespace, ...literals]);
@@ -297,6 +295,9 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
           ? `${count} pods running or completed`
           : `${count} pods running or completed; restarts: ${[...restarts].map(([pod, n]) => `${pod}=${n}`).join(", ")}`;
       })) &&
+      (await check("the internal identity keys were generated in the cluster, only the identity service's account may change them, and every service picked them up (Laysi/trustiot-v2#404)", () =>
+        checkIdentityKeys({ kubectl: ctx.kubectl, kubeconfig: ctx.kubeconfig, log: ctx.log }, namespace, RELEASE, parseManifests(manifest)),
+      )) &&
       (await check("each Gateway's NetworkPolicy admits exactly the ports its Istio pods use", async () => {
         // The chart derives the ingress gateway's NetworkPolicy ports from its Gateway and Istio's
         // status port; this compares them with the Deployment and Service the installed Istio made.
@@ -338,11 +339,8 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         return routed.join(", ");
       })) &&
       (await check(
-        "through the ingress, a new tenant reaches the assets service, a forged identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77)",
-        () => {
-          if (signer === undefined) throw new Error("no signing key was made for this shape");
-          return runApiCheck(ctx, namespace, parseManifests(manifest), ingressCa, `nightly smoke ${shape.name}`, signer);
-        },
+        "through the ingress, a new tenant reaches the assets service, a stolen identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77)",
+        () => runApiCheck(ctx, namespace, parseManifests(manifest), ingressCa, `nightly smoke ${shape.name}`),
       )) &&
       (await check("helm uninstall leaves no object of the release but the kept database and password Secrets", async () => {
         await helm(["uninstall", RELEASE, "--namespace", namespace, "--wait", "--timeout", "3m"], 4 * 60_000);

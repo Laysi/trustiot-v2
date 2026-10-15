@@ -1,5 +1,5 @@
-// The identity service's local setup: the signing key, the public keys, the routes and the dev
-// session (scripts/lib/identity.ts).
+// The identity service's local setup: the signing key, the signing keys and public keys files
+// written from it, the routes and the dev session (scripts/lib/identity.ts).
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -20,9 +20,11 @@ import {
   liveSessionSql,
   newCookie,
   publicKeys,
+  publicKeysPath,
   readCookie,
   signingKeyCheck,
   signingKeyPath,
+  signingKeysPath,
   writeCookie,
 } from "../lib/identity.ts";
 
@@ -105,9 +107,50 @@ describe("the signing key", () => {
     expect(() => ensureSigningKey(dir)).toThrow(/not an Ed25519 key/);
   });
 
-  test("leaves nothing else behind in the directory", () => {
+  test("leaves nothing but the key and the two files written from it in the directory", () => {
     ensureSigningKey(dir);
-    expect(readdirSync(identityDir(dir))).toEqual(["signing-key.pem"]);
+    expect(readdirSync(identityDir(dir)).sort()).toEqual(["jwks.json", "signing-key.pem", "signing-keys.json"]);
+  });
+});
+
+describe("the key files a cluster's identity pod gets from its init container", () => {
+  test("the signing keys file holds the key in the format of crates/identity-keys: generation 1, signing from the start", () => {
+    ensureSigningKey(dir);
+    const file = signingKeysPath(dir);
+    expect(mode(file)).toBe(0o600);
+    const set = JSON.parse(readFileSync(file, "utf8")) as { keys: Record<string, unknown>[] };
+    expect(set.keys).toHaveLength(1);
+    const [key] = set.keys;
+    const jwk = createPrivateKey(readFileSync(signingKeyPath(dir), "utf8")).export({ format: "jwk" });
+    const published = JSON.parse(publicKeys(dir)).keys[0];
+    expect(key).toEqual({ kid: published.kid, generation: 1, x: jwk.x, d: jwk.d, published_at: 0, signs_from: 0 });
+  });
+
+  test("the public keys file is the JWK Set of the same key, without the private part", () => {
+    ensureSigningKey(dir);
+    expect(mode(publicKeysPath(dir))).toBe(0o600);
+    expect(readFileSync(publicKeysPath(dir), "utf8")).toBe(publicKeys(dir));
+    expect(readFileSync(publicKeysPath(dir), "utf8")).not.toContain('"d"');
+  });
+
+  test("both are written again by every run from the kept key, so a damaged file is repaired", () => {
+    ensureSigningKey(dir);
+    const signing = readFileSync(signingKeysPath(dir), "utf8");
+    writeFileSync(signingKeysPath(dir), "damaged");
+    writeFileSync(publicKeysPath(dir), "damaged");
+    expect(signingKeyCheck(dir).ok).toBe(false);
+    ensureSigningKey(dir);
+    expect(readFileSync(signingKeysPath(dir), "utf8")).toBe(signing);
+    expect(readFileSync(publicKeysPath(dir), "utf8")).toBe(publicKeys(dir));
+    expect(signingKeyCheck(dir).ok).toBe(true);
+  });
+
+  test("the format is the one the identity service reads (crates/identity-keys)", () => {
+    // A renamed member fails here first, before the identity service refuses the dev file.
+    const keys = readFileSync(join(import.meta.dir, "..", "..", "crates", "identity-keys", "src", "lib.rs"), "utf8");
+    for (const member of ["kid", "generation", "x", "d", "published_at", "signs_from"]) {
+      expect(keys, member).toMatch(new RegExp(`\\b${member}: `));
+    }
   });
 });
 
@@ -160,12 +203,14 @@ describe("the ingress routes", () => {
 });
 
 describe("identityEnv", () => {
-  test("is absent without a key and carries a path, never the key, with one", () => {
+  test("is absent before up wrote the files and carries their paths, never a key, after", () => {
     expect(identityEnv(dir)).toBeUndefined();
     ensureSigningKey(dir);
     const env = identityEnv(dir)!;
-    expect(env.signingKeyFile).toBe(signingKeyPath(dir));
+    expect(env.signingKeysFile).toBe(signingKeysPath(dir));
+    expect(env.publicKeysFile).toBe(publicKeysPath(dir));
     const text = JSON.stringify(env);
+    expect(text).not.toContain(JSON.parse(readFileSync(signingKeysPath(dir), "utf8")).keys[0].d);
     expect(text).not.toContain("PRIVATE KEY");
     expect(text).not.toContain(readFileSync(signingKeyPath(dir), "utf8").split("\n")[1]!);
   });
@@ -230,7 +275,7 @@ describe("signingKeyCheck", () => {
     ensureSigningKey(dir);
     const check = signingKeyCheck(dir);
     expect(check.ok).toBe(true);
-    expect(check.detail).toMatch(/Ed25519, mode 600, kid dev-/);
+    expect(check.detail).toMatch(/Ed25519, mode 600, kid dev-[0-9a-f]{12}, key files written/);
   });
 
   test("fails without a key, with a wide mode, and with a damaged file", () => {
@@ -243,5 +288,23 @@ describe("signingKeyCheck", () => {
     const check = signingKeyCheck(dir);
     expect(check.ok).toBe(false);
     expect(check.detail).not.toContain("damaged");
+  });
+
+  test("fails when a key file is missing, wide or not written from the key", () => {
+    ensureSigningKey(dir);
+    rmSync(publicKeysPath(dir));
+    expect(signingKeyCheck(dir)).toMatchObject({ ok: false });
+    ensureSigningKey(dir);
+    chmodSync(signingKeysPath(dir), 0o644);
+    expect(signingKeyCheck(dir).detail).toContain("mode is 644");
+    chmodSync(signingKeysPath(dir), 0o600);
+    const other = mkdtempSync(join(tmpdir(), "trustiot-identity-other-"));
+    try {
+      ensureSigningKey(other);
+      writeFileSync(publicKeysPath(dir), readFileSync(publicKeysPath(other), "utf8"));
+      expect(signingKeyCheck(dir).detail).toContain("not written from the key");
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
   });
 });

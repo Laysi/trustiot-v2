@@ -78,7 +78,7 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
 
 - **放在哪裡**：
   - 私鑰：chart 宣告的空 Secret `<release>-identity-signing-keys`（`templates/passwords.yaml`，metadata 與上兩節的 Secret 相同：`trustiot.io/filled-by: migrate`、`helm.sh/resource-policy: keep`）。key `signing-keys.json` 是一份 JSON，列出目前的每一把金鑰：kid、代、Ed25519 私鑰、公開的時間 `published_at` 與開始簽章的時間 `signs_from`（還沒公開的金鑰沒有這兩個時間）。kid 是公鑰的 RFC 7638 thumbprint（SHA-256，base64url，43 個字元）；從人建立的私鑰匯入的金鑰保留原本的 kid（下方「從人建立的私鑰搬過來」）。
-  - 公鑰：chart 宣告的空 ConfigMap `<release>-internal-identity-keys`（同樣的標籤與 `keep`）。key `jwks.json` 是 RFC 7517 的 JWK Set，只有公開的成員（`kty`、`crv`、`kid`、`x`、`alg`、`use`）。它一律由 Secret 推出：Secret 裡有哪幾把金鑰，ConfigMap 就列哪幾把的公鑰，不多也不少。
+  - 公鑰：chart 宣告的空 ConfigMap `<release>-internal-identity-keys`（`templates/internal-identity.yaml`，同樣的標籤與 `keep`）。key `jwks.json` 是 RFC 7517 的 JWK Set，只有公開的成員（`kty`、`crv`、`kid`、`x`、`alg`、`use`）。它一律由 Secret 推出：Secret 裡有哪幾把金鑰，ConfigMap 就列哪幾把的公鑰，不多也不少。
   - 兩者的 `data` 都不屬於 Helm（渲染結果沒有 `data`），升級與 rollback 都不動它們；uninstall 後留下，重新安裝時沿用。
 - **誰產生、誰讀得到**：身分服務 pod 的 init container `signing-keys`（migration 映像的 `migrate identity-signing-keys`，在 `wait-for-migrations` 之前執行，因為它不需要資料庫）以身分服務 ServiceAccount 的 1 小時 projected token 讀寫這兩個物件。
   - Role `<release>-identity-signing-keys` 只讓身分服務的 ServiceAccount 對這一個 Secret 與這一個 ConfigMap `get`、`patch`（`resourceNames`）；沒有 `create`（無法以名稱限制）、`list`、`watch`、`delete`。
@@ -99,21 +99,21 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
   - 還沒有任何公鑰時（全新安裝，init container 還沒填入，或 kubelet 還沒更新檔案）：服務照常啟動，但 `/readyz` 回 503、不接流量，拿到第一組才就緒。
   - 檔案不見、空的或不是合法的 JWK Set 時（ConfigMap 被刪或被改壞）：保留上一組可用的公鑰繼續驗證，記 WARN（只寫原因，不寫內容）；啟動時就沒有可用的一組則不就緒。
   - 身分服務停機時：沒有影響。服務只讀自己掛載的檔案，不在執行時向身分服務抓取（決策 27），已經發出去的 token 照樣驗證。
-- **輪替**：調大 `internalIdentity.keyGeneration`。值進到身分服務 pod 的 annotation，所以升級時身分服務滾動重啟（其他服務不重啟），第一個新 pod 的 init container 依序：
+- **輪替**：調大 `internalIdentity.keyGeneration`。值進到身分服務 pod 的 init container 的環境變數（`TRUSTIOT__KEYS__GENERATION`），pod template 因此改變，所以升級時身分服務滾動重啟（其他服務不重啟，chart 測試檢查它們的 pod template 與平台設定不變），第一個新 pod 的 init container 依序：
   1. 以作業系統的 CSPRNG 產生新的私鑰，加進 Secret（帶 `resourceVersion` 的 merge patch）；這時它還沒有公開時間，誰都不會用它簽章。
   2. 把 ConfigMap 的 `jwks.json` 改成 Secret 裡每一把的公鑰，新舊並存。
   3. 第 2 步成功之後再 patch Secret，記下新金鑰的 `published_at`（這一刻）與 `signs_from = published_at + internalIdentity.keyPropagationSeconds`。
 
   之後不必再有人或程式介入：
   - **簽章**：身分服務的每個副本每 5 秒重讀掛載的 Secret 與 ConfigMap，以同一條規則選簽章的金鑰：`signs_from` 已到、代不小於 `revokeBeforeGeneration`（下方「私鑰外洩」）、自己持有私鑰、而且在自己看到的 `jwks.json` 裡，這幾把之中 `signs_from` 最晚的一把。所以多個副本在同一時間用同一把（各節點的時鐘差在 5 秒內，交界的幾秒兩把都還有效），早就在跑的副本也會換，不必重啟。一把都沒有時不就緒，cookie 檢查回 503（fail closed）。
-  - **「每個服務都拿到了」以實測的時間加餘裕判斷，不是保證**：Kubernetes 文件寫的延遲是同步週期（kubelet 的 `syncFrequency`，預設 1 分鐘）加上快取的延遲（預設的 Watch 策略是 watch 本身的延遲），再加上服務每 5 秒重讀，正常情況下 2 分鐘內每個 pod 都看到新的一組。這不是 Kubernetes 保證的上限：例如節點與 API server 的 watch 卡住時，那個節點的 pod 可以更久都是舊的檔案。`keyPropagationSeconds` 預設 600 秒，比正常情況多約 5 倍的餘裕；schema 的下限是 120 秒，調大了 `syncFrequency` 的叢集要跟著加大它。這段時間在 lab 的 k3s 與 nightly 的 k3d 實測（init container 寫入 ConfigMap 到每個 pod 記下新 kid 的時間），結果寫進測試報告。不採用自動逐一確認每個 pod（見「不做的事」），所以設計的安全性不依賴這個時間：某個 pod 超過它還沒更新時的後果，依情況是：
+  - **「每個服務都拿到了」以實測的時間加餘裕判斷，不是保證**：Kubernetes 文件寫的延遲是同步週期（kubelet 的 `syncFrequency`，預設 1 分鐘）加上快取的延遲（預設的 Watch 策略是 watch 本身的延遲），再加上服務每 5 秒重讀，正常情況下 2 分鐘內每個 pod 都看到新的一組。這不是 Kubernetes 保證的上限：例如節點與 API server 的 watch 卡住時，那個節點的 pod 可以更久都是舊的檔案。`keyPropagationSeconds` 預設 600 秒，比正常情況多約 5 倍的餘裕；schema 的下限是 120 秒，調大了 `syncFrequency` 的叢集要跟著加大它。2026-10-15 在 lab 的 k3s 以兩種 shape 實測（[測試報告](../test-reports/2026-10-15-404-identity-keys-in-cluster.md)）：已經在跑的服務 pod 在 init container 寫入 ConfigMap 之後 3.9 到 84.4 秒換上新的一組（輪替 55.4 與 59.9 秒、撤銷 84.4 與 78.9 秒；kubelet 的定期同步會隨機延後，所以可能超過 1 分鐘），新啟動的 pod 一啟動就讀到；nightly 的 k3d 量的是全新安裝（下方「全新安裝」）。不採用自動逐一確認每個 pod（見「不做的事」），所以設計的安全性不依賴這個時間：某個 pod 超過它還沒更新時的後果，依情況是：
     - 輪替：那個 pod 拒絕新金鑰簽的 token（401，`reason` 是 `unknown_key`，WARN 寫出 kid），直到它的檔案更新；它不會接受不該接受的 token（fail closed），影響只有可用性，而且只在那個 pod。
     - 移除舊金鑰：那個 pod 多接受舊金鑰一段時間；舊金鑰沒有外洩，不影響安全。
     - 撤銷：那個 pod 在檔案更新之前仍接受外洩的金鑰，這是唯一影響安全的情況，所以撤銷的步驟由人逐一確認每個 pod（下方「私鑰外洩」）。
   - **私鑰比公鑰先到**：第 1 步把私鑰寫進 Secret 比第 2 步公開公鑰早，所以正常情況下到 `signs_from` 時，每個身分服務的副本也都已經拿到新私鑰。還沒拿到的副本繼續用舊的一把，舊的一把那時還公開著；它的 Secret 更新慢到超過下面移除舊金鑰的時間，它簽的 token 才會被已更新的服務拒絕（401，只影響可用性）。
   - **舊公鑰保留到它簽的 token 全部過期之後**：新金鑰開始簽章後，舊金鑰簽的 token 最晚在 `signs_from` 之後 305 秒失效。305 秒是驗證端接受的最長效期 300 秒加 5 秒時鐘誤差（`crates/service-kit` 的 `MAX_LIFETIME_SECS`、`LEEWAY_SECS`），不靠身分服務實際簽的 60 秒，所以身分服務的效期改了（上限 300 秒）也成立。init container 在 `signs_from + keyPropagationSeconds + 305 秒` 之後的第一次執行（下一次發版，或任何身分服務的 pod 啟動）從 Secret 與 ConfigMap 移除比新金鑰舊的每一把；多等一個 `keyPropagationSeconds`，是給 Secret 更新得慢的副本換金鑰的餘裕。舊公鑰因此常常留得比必要的久，這不影響安全：舊私鑰沒有外洩，也只有身分服務讀得到。
   - 新金鑰還在等 `signs_from` 時又調大一代：那一把沒簽過任何 token，直接換成新的一把，重新計時。Secret 最多 8 把（service-kit 接受的上限），超過時 init container 失敗並寫出最早可以移除的時間。
-  - 全新安裝，或沒有任何還能用的金鑰時（下面的資料遺失與撤銷），新金鑰立即開始簽章（`signs_from = published_at`），因為沒有舊金鑰可以撐過等待。全新安裝時，身分服務的主容器掛的檔案是 init container 填入之前的內容，要等 kubelet 下一次更新（正常約一個同步週期）才就緒，服務也一樣。
+  - 全新安裝，或沒有任何還能用的金鑰時（下面的資料遺失與撤銷），新金鑰立即開始簽章（`signs_from = published_at`），因為沒有舊金鑰可以撐過等待。全新安裝時，pod 建立時掛上的是 init container 填入之前的空內容，kubelet 同步這個 pod 時才換成新的內容；身分服務的 init container 在 `wait-for-migrations` 之前執行，主容器與服務都等 migration Job 完成才啟動，所以通常一啟動就讀到，沒有的話等 kubelet 下一次更新（正常不超過一個同步週期）才就緒。2026-10-15 lab 的 k3s 實測（兩種 shape）：公開之後 23 到 27 秒（等 migration Job）主容器啟動，身分服務 1 秒內開始簽章、25 到 28 秒就緒；資產服務 27.4 到 29.9 秒載入公鑰（on-prem 那次在啟動後 5.9 秒才讀到）、28 到 31 秒就緒。
 - **私鑰外洩（撤銷）**：把 `internalIdentity.revokeBeforeGeneration` 設成一個新的代，`keyGeneration` 調到不小於它（chart 檢查），升級。init container 從 Secret 與 ConfigMap 移除代比它小的每一把；因為沒有還能用的金鑰了，新金鑰立即開始簽章。
   - 撤銷不是瞬間生效：每個 pod 在 kubelet 更新它掛的檔案（加上 5 秒的重讀）之後才拒絕外洩的金鑰，正常情況下 2 分鐘內，但沒有保證的上限（上方「輪替」）。這段時間外洩的金鑰簽的 token 仍可能被還沒更新的 pod 接受，已更新與還沒更新的 pod 認的金鑰不同，一部分請求會被拒絕（401）。現行做法（每個服務滾動重啟）同樣要等每個 pod 換掉，期間舊 pod 一樣接受外洩的金鑰。
   - 身分服務那一側：chart 把 `revokeBeforeGeneration` 也交給身分服務（pod 的環境變數，升級時新的 pod 一啟動就有），它不用代比這個值小的金鑰簽章，所以新的副本即使掛的檔案還是撤銷之前的內容，也不會用外洩的金鑰簽；還沒有新金鑰時不就緒。升級前的舊副本在滾動中被換掉，`kubectl rollout status deployment/<release>-identity` 完成就表示每個副本都換過。
@@ -127,13 +127,19 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
   - **Secret 被刪**：已經在跑的身分服務保留記憶體裡最後一組可用的金鑰繼續簽章（檔案不見時不換）。之後新 pod 的 init container 讀不到 Secret，失敗並寫出處理方式，新 pod 停在 `Init`，舊 pod 繼續服務。處理：調大 `keyGeneration` 再升級，Helm 重建空的 Secret，init container 把它當成資料遺失，產生新金鑰並立即開始簽章，ConfigMap 只剩新公鑰。私鑰沒了就不能再簽舊 kid 的 token，所以這個情況沒有重疊期：kubelet 更新各 pod 的檔案之前，一部分請求被拒絕（401）。
   - **ConfigMap 被手改或刪掉**：服務遇到刪掉、改壞的內容時保留上一組；改成另一組合法的公鑰時換上它（例如移除了正在用的一把，服務就拒絕身分服務簽的 token）。身分服務比對自己的 Secret 與看到的 `jwks.json`，不一致持續超過 `keyPropagationSeconds`（chart 也把它交給身分服務）時記 ERROR；正在用的金鑰從它看到的 `jwks.json` 消失時，它不再用那把簽章，沒有別把就不就緒。處理：`kubectl rollout restart deployment/<release>-identity`，init container 依 Secret 重寫 ConfigMap（被刪的話先升級，讓 Helm 重建空的 ConfigMap）。
   - **chart 的 rollback**：見上方「只往上走」。rollback 到 Laysi/trustiot-v2#404 之前的 chart，只在下面搬移的第 1 步之後、第 2 步之前可以（那時新舊版的 pod 都用同一把匯入的金鑰）；第 2 步之後新舊版的 pod 用不同的金鑰，滾動期間有請求被拒絕，而且舊版的 chart 又需要人建立的 Secret。
-  - **身分服務沒有啟用**：沒有人產生金鑰，其他服務一直不就緒。chart 只在身分服務啟用時宣告 Secret、Role 與 init container；ConfigMap 一律宣告，每個服務的 pod 才掛得上。
+  - **身分服務沒有啟用**：沒有人產生金鑰，所以 chart 只在身分服務啟用時宣告 Secret、ConfigMap、Role 與 init container，也只在那時給服務掛 ConfigMap 與平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`。身分服務沒有啟用時，驗證內部身分的服務因為缺這個設定拒絕啟動（與 Laysi/trustiot-v2#404 之前沒有 `publicKeys` 時相同），不會一直等不到金鑰；不驗證內部身分的元件（例如日誌管線 e2e 的 example service）照常執行。
 - **從人建立的私鑰搬過來**（Laysi/trustiot-v2#404 之前的安裝：`internalIdentity.signingKeySecret.name` 指向人建立的 Secret，`publicKeys` 是手寫的；SaaS 的這個 Secret 以 SOPS 放在 `deploy/flux/`）。一次升級直接換成新金鑰的話，滾動期間舊版的服務只認舊公鑰、新版的服務只認新公鑰，請求會被拒絕，所以分三步，每一步都不中斷：
   1. 升級到新版 chart，`signingKeySecret` 與 `publicKeys` 先不動。init container 讀入人建立的私鑰（那個 Secret 只掛進 init container），在 `publicKeys` 找出它的 kid（找不到或有兩個時失敗，與現行身分服務的啟動檢查相同），以原本的 kid、代 0 匯入空的 Secret，立即開始簽章。滾動期間新舊版的 pod 都用這一把；新版的服務改從 ConfigMap 讀公鑰，裡面就是這一把。設了 `signingKeySecret` 的期間，init container 只在 Secret 還沒有金鑰時匯入，不產生新金鑰、不移除金鑰（撤銷除外），所以滾動完成之前不會換金鑰。`publicKeys` 裡其他的公鑰不帶過來，所以舊做法的輪替要在搬移之前做完。
   2. 滾動完成後，下一次升級從 values 移除 `signingKeySecret` 與 `publicKeys`（SaaS 改 `values-instance.yaml`）。`keyGeneration`（至少 1）大於匯入的代 0，init container 產生新金鑰，照上面的輪替換掉匯入的那一把。
   3. 匯入的金鑰移除之後（ConfigMap 不再有它的 kid），刪掉人建立的 Secret：地端 `kubectl delete secret`；SaaS 刪掉 `deploy/flux/` 裡的 SOPS 檔與 kustomization 的引用。
   - SaaS 目前沒有這個 Secret（`deploy/flux` 的 values 沒有設定內部身分，服務也還沒啟用），所以 SaaS 不必搬，values 也不必為金鑰加任何欄位。本機開發環境（`scripts/dev.ts`）改為在狀態目錄寫出同樣格式的兩個檔案，既有的開發私鑰沿用。
-- **驗證**：chart 測試（只有身分服務的 ServiceAccount 能讀寫這個 Secret 與 ConfigMap，只有身分服務的 pod 掛 Secret，每個服務都掛 ConfigMap，身分服務的 `automountServiceAccountToken` 是 `true` 或 `keyGeneration` 小於 `revokeBeforeGeneration` 時渲染失敗）；tools/migrate 的單元與容器測試（以假時鐘測排程、中途停掉、同時執行、uid 不符、匯入）；service-kit 與身分服務的重讀測試；自動化的輪替測試（重疊期間舊 token 在每個服務都驗證得過，新金鑰開始簽章後新 token 在每個服務都驗證得過）；lab 的 k3s 實測輪替並量測上面的時間上限；nightly 的全新安裝不事先建立任何金鑰。
+- **驗證**（2026-10-15，Laysi/trustiot-v2#404，[測試報告](../test-reports/2026-10-15-404-identity-keys-in-cluster.md)）：
+  - chart 測試（`deploy/chart/tests/chart.test.ts`）：以每個可選元件都開啟的設定渲染，只有身分服務的 ServiceAccount 能 get、patch 這個 Secret 與 ConfigMap，只有身分服務的 pod 掛 Secret，每個服務都掛 ConfigMap；身分服務沒有啟用時三者都不宣告；身分服務的 `automountServiceAccountToken` 是 `true` 或 `keyGeneration` 小於 `revokeBeforeGeneration` 時渲染失敗；輪替只改身分服務的 pod template。
+  - `tools/migrate/tests/signing_keys.rs`：init container 對假的 API 與假的時鐘，測排程、中途停掉、同時執行、uid 不符、匯入、撤銷與上限。
+  - `crates/service-kit`：`a_rotation_reaches_a_running_service_through_its_keys_file` 等測試證明服務不重啟就換上新的一組、壞掉的檔案保留上一組。
+  - 身分服務：`services/identity/tests/ext_authz.rs` 的 `a_key_rotation_needs_no_restart_and_tokens_verify_throughout` 以 init container 的同一份程式碼改檔案，對執行中、不重啟的身分服務走完整個輪替（重疊期間兩把金鑰的 token 在每個服務都驗證得過，`signs_from` 起改用新金鑰，舊金鑰移除後它的 token 不再被接受）與 `a_revoked_generation_never_signs`；`services/identity/tests/adversarial.rs` 的 `replicas_switch_keys_by_the_schedule_without_a_restart`（兩個副本照排程一起換）與 `the_service_signs_nothing_without_a_usable_published_signing_key`。
+  - lab 的 k3s（`deploy/chart/tests/e2e/identity-keys.e2e.ts`，兩種 shape）：全新安裝、權限（namespace 每個 ServiceAccount 以 `kubectl auth can-i` 問）、輪替（重疊期間舊 token 與之後的新 token 都被資產服務接受）、rollback、舊金鑰移除、撤銷、私鑰不出現在日誌與其他物件、uninstall 保留 Secret 與 ConfigMap，並量測上面的時間。
+  - nightly smoke：不事先建立任何金鑰，檢查 Secret 與 ConfigMap 的形狀與權限，記下全新安裝的就緒時間（`docs/architecture/ci-release.md` 的 nightly 第 8 步）。偽造身分標頭的檢查不自己簽 token，改從身分服務的 ext_authz 拿一個真的 token（第 11 步之 5），所以 nightly 不需要讀私鑰，「只有身分服務的 ServiceAccount 讀得到私鑰」沒有為測試開例外。
 - **不做的事**：
   - 不由身分服務提供 JWKS 端點、服務不在執行時向身分服務抓公鑰：決策 27 的理由不變（不多一個執行期依賴與信任來源，身分服務停機或被冒充都換不了公鑰，地端離線一樣運作）。
   - 輪替時不自動逐一確認每個 pod 都載入了新公鑰：那需要每個 pod 回報，例如服務的主容器要有 API 權限寫自己的狀態，或身分服務要能列出並逐一呼叫每個 pod（服務的健康埠只對節點開放）。以實測的時間加餘裕取代；超過時只影響可用性（上方「輪替」），撤銷這個唯一影響安全的情況由人逐一確認。

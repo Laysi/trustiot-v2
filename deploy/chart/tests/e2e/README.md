@@ -1,4 +1,4 @@
-# 叢集測試（入口 gateway、服務間授權、日誌管線、叢集內的 Postgres、ClickHouse 管理帳號密碼）
+# 叢集測試（入口 gateway、服務間授權、日誌管線、叢集內的 Postgres、ClickHouse 管理帳號密碼、內部身分簽章金鑰）
 
 兩個測試共用 `cluster.ts`（環境變數、`.prototools` 鎖定的 helm 與 kubectl、不碰既有安裝的 `helm install`）：
 
@@ -7,7 +7,9 @@
 | `ingress.e2e.ts` | 入口 gateway：cookie 驗證、例外路徑、標頭、路徑繞過、身分服務停機 | Laysi/trustiot-v2#62 |
 | `mesh.e2e.ts` | 服務間授權：清單內的呼叫放行、清單外的被拒，AuthorizationPolicy 與 NetworkPolicy 各自生效，預設拒絕下健康檢查通過 | Laysi/trustiot-v2#63 |
 
-`otel.e2e.ts`（日誌管線，Laysi/trustiot-v2#73）、`postgres.e2e.ts`（叢集內的 Postgres，Laysi/trustiot-v2#58）與 `clickhouse-admin.e2e.ts`（叢集內 ClickHouse 的管理帳號密碼，Laysi/trustiot-v2#403）不經入口 gateway，有自己的環境變數，不用 `cluster.ts`，見最後三節。
+`otel.e2e.ts`（日誌管線，Laysi/trustiot-v2#73）、`postgres.e2e.ts`（叢集內的 Postgres，Laysi/trustiot-v2#58）、`clickhouse-admin.e2e.ts`（叢集內 ClickHouse 的管理帳號密碼，Laysi/trustiot-v2#403）與 `identity-keys.e2e.ts`（內部身分簽章金鑰，Laysi/trustiot-v2#404）不經入口 gateway，有自己的環境變數，不用 `cluster.ts`，見最後四節。
+
+身分服務（或它的替身）啟用時，chart 在它的 pod 加上 init container `signing-keys`，以 migrate 映像在叢集內產生內部身分簽章金鑰（Laysi/trustiot-v2#404），所以每個啟用 `identity` 的測試都要 migrate 映像（`E2E_MIGRATE_IMAGE`，建法見「叢集內的 Postgres」）。它填的 Secret `<release>-identity-signing-keys` 與 ConfigMap `<release>-internal-identity-keys` 在 uninstall 時保留（`helm.sh/resource-policy: keep`）；`cluster.ts` 與 `postgres.e2e.ts` 移除這次執行建立的那兩個物件，安裝前已經存在的不動。
 
 ## 入口 gateway（`ingress.e2e.ts`）
 
@@ -47,7 +49,7 @@ nightly workflow（Laysi/trustiot-v2#69）每晚在 k3d 叢集上以兩種型態
 1. 叢集已依 `deploy/istio/README.md` 裝好 Istio ambient 與 Gateway API CRD。
 2. istiod 有一個 ext_authz provider 指向測試 namespace 的身分服務替身 `trustiot-identity.<namespace>.svc.cluster.local:8080`，設定與 `deploy/istio/istiod-values.yaml` 相同（`pathPrefix: /internal/ext-authz`、`failOpen: false`、`timeout: 0.5s`、`statusOnError: "503"`），mesh 的 `pathNormalization` 也與該檔相同。k3s 以 `HelmChartConfig istiod` 疊加時，清單會整份取代，所以叢集原有的 provider 要原樣重複寫入；範例見 [lab-istiod-helmchartconfig.yaml](../../../../docs/test-reports/data/2026-10-11-255-path-normalization/lab-istiod-helmchartconfig.yaml)。這是整個叢集共用的設定：先備份 `istio-system` 的 ConfigMap `istio`，測完刪掉 `HelmChartConfig`，再確認 `mesh` 與備份逐位元組相同。
 3. 測試用的 namespace 已建立，建議設 Pod Security `restricted`。測試的身分要能在這個 namespace 管理 chart 的物件，包含 `gateway.networking.k8s.io` 的 Gateway、HTTPRoute 與 `security.istio.io` 的 AuthorizationPolicy（內建的 `admin` ClusterRole 不含這兩個 API group）。
-4. 身分服務替身的映像（arm64 或叢集節點的架構）要在叢集拉得到。例如在節點上建好再匯入 containerd：
+4. 身分服務替身的映像（arm64 或叢集節點的架構）與 migrate 映像要在叢集拉得到。例如在節點上建好再匯入 containerd：
 
    ```sh
    cd deploy/chart/tests/e2e/identity-double
@@ -67,6 +69,7 @@ nightly workflow（Laysi/trustiot-v2#69）每晚在 k3d 叢集上以兩種型態
 ```sh
 E2E_NAMESPACE=e2e-62 \
 E2E_IDENTITY_IMAGE=localhost/trustiot-e2e/identity-double:62@sha256:<digest> \
+E2E_MIGRATE_IMAGE=localhost/trustiot-e2e/migrate:62 \
 E2E_IMAGE_PULL_POLICY=Never \
 E2E_AUTHZ_PROVIDER=<provider 名稱> \
 bun test --timeout 600000 ./deploy/chart/tests/e2e/ingress.e2e.ts
@@ -76,6 +79,7 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/ingress.e2e.ts
 | --- | --- | --- |
 | `E2E_NAMESPACE` | 必填 | 測試用的 namespace，必須已存在 |
 | `E2E_IDENTITY_IMAGE` | 必填 | 身分服務替身的映像，`repository:tag` 或加上 `@sha256:…` |
+| `E2E_MIGRATE_IMAGE` | 必填 | migrate 映像：替身 pod 的 init container 以它產生內部身分簽章金鑰 |
 | `E2E_IMAGE_PULL_POLICY` | `IfNotPresent` | 匯入節點的映像用 `Never` |
 | `E2E_AUTHZ_PROVIDER` | `trustiot-identity` | istiod 裡指向替身的 provider 名稱 |
 | `E2E_AUTHZ_TIMEOUT_MS` | `500` | 該 provider 的 `timeout`，用來檢查 503 在逾時內回來 |
@@ -121,11 +125,12 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/ingress.e2e.ts
 ```sh
 E2E_NAMESPACE=e2e-63 \
 E2E_IDENTITY_IMAGE=localhost/trustiot-e2e/identity-double:63@sha256:<digest> \
+E2E_MIGRATE_IMAGE=localhost/trustiot-e2e/migrate:63 \
 E2E_IMAGE_PULL_POLICY=Never \
 bun test --timeout 600000 ./deploy/chart/tests/e2e/mesh.e2e.ts
 ```
 
-變數同入口測試的 `E2E_NAMESPACE`、`E2E_IDENTITY_IMAGE`、`E2E_IMAGE_PULL_POLICY`、`E2E_KUBECONTEXT`、`E2E_RELEASE`、`E2E_KEEP`，另有：
+變數同入口測試的 `E2E_NAMESPACE`、`E2E_IDENTITY_IMAGE`、`E2E_MIGRATE_IMAGE`、`E2E_IMAGE_PULL_POLICY`、`E2E_KUBECONTEXT`、`E2E_RELEASE`、`E2E_KEEP`，另有：
 
 | 變數 | 預設 | 說明 |
 | --- | --- | --- |
@@ -222,6 +227,8 @@ bun test --timeout 900000 ./deploy/chart/tests/e2e/otel.e2e.ts
 - 刪掉 Secret 裡的 key 後以 `migrate.revision=2` 重跑 Job：key 重新產生，服務以新密碼 Ready。
 - `helm uninstall` 後 Cluster、ImageCatalog、PVC 與兩個密碼 Secret 都還在，資料也在；Database 物件隨 release 刪除，資料庫保留。
 
+扮演 identity 的 example service 的 pod 也有 init container `signing-keys`（Laysi/trustiot-v2#404），它產生的內部身分金鑰 Secret 與公鑰 ConfigMap 和密碼 Secret 一樣：開始前已經存在就停止，結束時刪除。
+
 密碼的比較只在測試的行程裡做（`data` 的 SHA-256），輸出與報告只有 `unchanged` 或 `changed`，不印任何值或 digest。
 
 測試不建立任何 Secret：ClickHouse 的管理帳號密碼由它的 init container 產生（Laysi/trustiot-v2#403），服務與 collector 的密碼全由 Job 產生。測試查資料庫的 SQL 經 stdin 送進 primary，以 `postgres` 角色走 pod 內的 local socket 執行，沒有任何密碼。開始前，同名的 Cluster、ImageCatalog、它們的 PVC、ClickHouse 的 PVC 或三個密碼 Secret 已經存在（之前 uninstall 保留下來的）時直接失敗，不碰它們。結束時刪除測試的 pod、NetworkPolicy、release，再明確刪除保留下來的密碼 Secret、ClickHouse 的 PVC、Cluster、ImageCatalog 與 PVC。
@@ -308,4 +315,52 @@ bun test --timeout 900000 ./deploy/chart/tests/e2e/clickhouse-admin.e2e.ts
 | `E2E_KUBECONTEXT` | 目前的 context | kubeconfig 裡的 context |
 | `E2E_RELEASE` | `trustiot` | helm release 名稱 |
 | `E2E_REPORT_DIR` | 空 | 設定時把每一步的結果（沒有任何值或 digest）寫成 `clickhouse-admin-e2e.json` |
+| `E2E_KEEP` | 空 | `1` 時測完不移除任何東西，方便查看 |
+
+## 內部身分簽章金鑰（`identity-keys.e2e.ts`）
+
+`identity-keys.e2e.ts` 驗證內部身分簽章金鑰在叢集內產生、公開、輪替與撤銷（Laysi/trustiot-v2#404，設計在 [docs/architecture/secrets.md](../../../../docs/architecture/secrets.md) 的「內部身分簽章金鑰」）。以 `E2E_SHAPE` 的型態加 `values-identity-keys-e2e.yaml` 一次安裝叢集內的 Postgres、ClickHouse、migration Job、從這個 commit 建出的身分服務，以及在 assets 位置的 `crates/service-kit` example service（`GET /v1/whoami` 驗證給 assets 的內部身分 token，不用資料庫）；沒有任何東西事先建立金鑰，`internalIdentity.keyPropagationSeconds` 是 schema 的下限 120 秒。依序檢查：
+
+- **全新安裝**：身分服務 pod 的 init container 產生一把代 1 的金鑰，Secret `<release>-identity-signing-keys` 只有 `signing-keys.json`、綁定自己的 uid、帶 `keep` 與 `trustiot.io/filled-by: migrate`；ConfigMap `<release>-internal-identity-keys` 只有 `jwks.json`，列出同一個 kid（RFC 7638 thumbprint），每把只有公開的成員；第一把立即簽章（`signs_from` 等於 `published_at`）。以 `kubectl exec` 在 primary 建立一個平台管理者與它的 session（同 nightly 的 API 檢查），經 `kubectl port-forward` 向身分服務的 ext_authz 要一個給 assets 路由的 token，example service 接受它（200，使用者相符）。記錄每個 pod 在金鑰公開之後多久啟動、載入金鑰（日誌）與就緒。
+- **權限**：namespace 的每個 ServiceAccount 以 `kubectl auth can-i --as` 問 Secret 與 ConfigMap 的 `get`、`patch`、`update`、`delete`，以及兩種物件的 `create`、`list`、`watch`：只有身分服務的 ServiceAccount 對這兩個物件的 `get` 與 `patch` 是 yes。
+- **輪替**（`keyGeneration=2`）：Secret 有代 1 與代 2 兩把，代 2 的 `signs_from` 比 `published_at` 晚 120 秒，ConfigMap 列出兩把；`signs_from` 之前身分服務仍以舊金鑰簽、example service 接受；example service 的 pod 沒有重啟，從日誌量出它與身分服務多久之後載入兩把公鑰、身分服務多久之後載入兩把私鑰；身分服務在 `signs_from` 之後改用新金鑰，新 token 被接受。
+- **rollback**：`helm rollback` 到第 1 版（`keyGeneration=1`）與再升級回 2，Secret 與 ConfigMap 都不變，token 仍是代 2 的 kid。
+- **移除舊金鑰**：等到代 2 的 `signs_from` 之後再過 120 + 305 秒，`kubectl rollout restart` 身分服務：只剩代 2，example service 從日誌看得到它換成只有代 2 的一組。
+- **撤銷**（`keyGeneration=3`、`revokeBeforeGeneration=3`）：只剩代 3，立即簽章；記錄新的身分服務 pod 多久之後就緒、example service 多久之後換掉被撤銷的公鑰，代 3 的 token 被接受。
+- **沒有私鑰外流**：測試讀 Secret 只為了知道每把的代與時間，並確認每一把私鑰都不在 ConfigMap、事件、身分服務（含 init container）與 example service 的日誌裡；比較只有是或否，私鑰不印、不寫進報告。
+- **uninstall**：Secret 與 ConfigMap 保留，Secret 仍是代 3 那一把。
+
+開始前同名的 release、Cluster、ImageCatalog、PVC、ClickHouse 的 PVC、保留的 Secret 或 ConfigMap 已存在時直接失敗；結束時移除 release 與這些物件。整個測試約 20 分鐘，大多在等新金鑰的 `signs_from` 與舊金鑰的移除時間。
+
+前置條件：
+
+1. 叢集已依 `deploy/cloudnative-pg/README.md` 裝好 CloudNativePG operator，並有 Istio ambient 與 Gateway API CRD（chart 一定會產生入口的 Gateway；測試不經入口）。
+2. namespace 已建立，設 Pod Security `restricted`。測試的身分要能在這個 namespace 管理 chart 的物件（同「叢集內的 Postgres」），讀 pod 的 log 與 Secret、`exec` 進 pod、`port-forward`，並能以 `--as` 模擬這個 namespace 的 ServiceAccount。
+3. Postgres、身分服務、example service 與 migrate 的映像要在叢集拉得到，建法見「叢集內的 Postgres」與「日誌管線」；身分服務的映像以 `deploy/images/rust-binary.Containerfile`（`@BIN@` 換成 `identity`）建出。身分服務與 migrate 的映像 tag 要相同（身分服務用 Postgres）。
+4. 本機有 `proto install` 裝好的 helm 與 kubectl。
+
+執行（在 repo 根目錄）：
+
+```sh
+E2E_NAMESPACE=e2e-404 \
+E2E_POSTGRES_IMAGE=localhost/trustiot-e2e/postgres:404 \
+E2E_IDENTITY_IMAGE=localhost/trustiot-e2e/identity:404 \
+E2E_SERVICE_IMAGE=localhost/trustiot-e2e/example-service:404 \
+E2E_MIGRATE_IMAGE=localhost/trustiot-e2e/migrate:404 \
+E2E_IMAGE_PULL_POLICY=Never \
+bun test --timeout 3600000 ./deploy/chart/tests/e2e/identity-keys.e2e.ts
+```
+
+| 變數 | 預設 | 說明 |
+| --- | --- | --- |
+| `E2E_NAMESPACE` | 必填 | 測試用的 namespace，必須已存在 |
+| `E2E_POSTGRES_IMAGE` | 必填 | 含 AGE 的 Postgres 映像 |
+| `E2E_IDENTITY_IMAGE` | 必填 | 身分服務的映像，tag 要與 `E2E_MIGRATE_IMAGE` 相同 |
+| `E2E_SERVICE_IMAGE` | 必填 | example service 的映像，在 assets 的位置驗證 token |
+| `E2E_MIGRATE_IMAGE` | 必填 | migrate 映像：migration Job 與身分服務 pod 的 init container |
+| `E2E_SHAPE` | `saas` | `saas` 或 `onprem`，決定前兩個 values 檔 |
+| `E2E_IMAGE_PULL_POLICY` | `IfNotPresent` | 四個映像都用這個值；匯入節點的映像用 `Never` |
+| `E2E_KUBECONTEXT` | 目前的 context | kubeconfig 裡的 context |
+| `E2E_RELEASE` | `trustiot` | helm release 名稱 |
+| `E2E_REPORT_DIR` | 空 | 設定時把每一步的 kid、代、時間與 token 的結果（沒有任何金鑰或 token）寫成 `identity-keys-e2e-<shape>.json` |
 | `E2E_KEEP` | 空 | `1` 時測完不移除任何東西，方便查看 |

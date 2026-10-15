@@ -126,17 +126,18 @@ service-kit 連 Postgres 一律用 `sslmode=verify-full`（Laysi/trustiot-v2#53�
 
 #### `up` 做的事
 
-身分服務的前提有一步在 `up` 做；Job 與它的角色見上一節。
+身分服務的前提有兩步在 `up` 做；Job 與它的角色見上一節。
 
-1. 產生 Ed25519 簽章私鑰（`node:crypto`，PKCS#8 PEM），存在 `$XDG_STATE_HOME/trustiot-v2/dev/<實例>/identity/signing-key.pem`（目錄 0700、檔案 0600，與 Postgres 的 CA 同一個狀態目錄）。已經有金鑰就沿用並檢查：不是 Ed25519 PKCS#8 PEM、或其他使用者讀得到的檔案，`up` 拒絕並說明怎麼處理，錯誤訊息不引用檔案內容。沿用是為了讓正在跑的身分服務簽出的 token 不因 `up` 失效，也讓 `TRUSTIOT_INTERNAL_IDENTITY_KEYS` 不變。
+1. 產生 Ed25519 簽章私鑰（`node:crypto`，PKCS#8 PEM），存在 `$XDG_STATE_HOME/trustiot-v2/dev/<實例>/identity/signing-key.pem`（目錄 0700、檔案 0600，與 Postgres 的 CA 同一個狀態目錄）。已經有金鑰就沿用並檢查：不是 Ed25519 PKCS#8 PEM、或其他使用者讀得到的檔案，`up` 拒絕並說明怎麼處理，錯誤訊息不引用檔案內容。沿用是為了讓正在跑的身分服務簽出的 token 不因 `up` 失效，也讓公鑰的 `kid` 不變。
+2. 從這把私鑰寫出叢集裡身分服務 pod 的 init container 寫的同樣兩個檔案（Laysi/trustiot-v2#404，格式在 `crates/identity-keys`），同一個目錄、都是 0600，每次 `up` 重寫（壞掉的檔案因此會修好）：簽章金鑰檔 `signing-keys.json`（這一把，代 1，`published_at` 與 `signs_from` 是 0，立即簽章）與公鑰檔 `jwks.json`（同一把的 JWK Set，只有公鑰）。服務每 5 秒重讀這兩個檔案，與叢集裡重讀掛載的 Secret 與 ConfigMap 相同。
 #### `env` 印出的變數怎麼依服務區分
 
 `env` 一次印出全部，服務各讀自己要的（服務忽略不認得的平台設定，kit 的規則）；含 JSON 的值以單引號包起來，`eval` 與 dotenv 讀得懂，`podman --env-file` 不會用到它們：
 
 | 變數 | 誰讀 | 內容 |
 | --- | --- | --- |
-| `TRUSTIOT_INTERNAL_IDENTITY_KEYS` | 所有以 service-kit 驗證內部身分的服務，也包含身分服務自己 | JWK Set（只有公鑰；`kid` 是 `dev-` 加公鑰雜湊的前 12 個字元，換金鑰就換 `kid`）；身分服務在簽章私鑰的公鑰不在這裡時拒絕啟動 |
-| `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` | 只有身分服務 | 私鑰檔的**路徑**，不是內容 |
+| `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` | 所有以 service-kit 驗證內部身分的服務，也包含身分服務自己 | 公鑰檔 `jwks.json` 的**路徑**（JWK Set，只有公鑰；`kid` 是 `dev-` 加公鑰雜湊的前 12 個字元，換金鑰就換 `kid`）；身分服務只用列在這裡的金鑰簽章 |
+| `TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE` | 只有身分服務 | 簽章金鑰檔 `signing-keys.json` 的**路徑**，不是內容 |
 | `TRUSTIOT_INGRESS_ROUTES` | 只有身分服務 | 本機的 cookie 路由：`localhost` 的每個路徑（`PathPrefix /`）給 `assets`（kit 的範例服務 `GET /v1/whoami` 接受的受眾）；沒有入口 gateway，所以呼叫 ext_authz 的人自己帶 `Host: localhost` |
 | `TRUSTIOT_DEV_IDENTITY_DATABASE_USERNAME`、`..._PASSWORD` | 只有身分服務 | `identity_app` 與 Job 產生的密碼，見上一節「`env` 印出的服務登入」 |
 | `TRUSTIOT_POSTGRES_*` | 所有服務 | 與原本相同（`verify-full`、開發 CA 的路徑） |
@@ -151,7 +152,7 @@ TRUSTIOT__DATABASE__PASSWORD="$TRUSTIOT_DEV_IDENTITY_DATABASE_PASSWORD" \
   cargo run -p identity
 ```
 
-預設監聽 8080（API）與 8081（健康埠），`TRUSTIOT__HTTP__LISTEN_ADDR` 與 `TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR` 可改；`/readyz` 回 200 代表它以 `identity_app` 與 `verify-full` 連上了資料庫、金鑰與路由可用。帳密經由行程的環境變數交給服務，不在 `cargo` 的參數裡。
+預設監聽 8080（API）與 8081（健康埠），`TRUSTIOT__HTTP__LISTEN_ADDR` 與 `TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR` 可改；`/readyz` 回 200 代表它以 `identity_app` 與 `verify-full` 連上了資料庫、有可以簽章的金鑰、路由可用。帳密經由行程的環境變數交給服務，不在 `cargo` 的參數裡。
 
 #### 開發 session 與試 ext_authz
 
@@ -167,11 +168,11 @@ curl -i -H 'Host: localhost' -H 'Cookie: __Host-trustiot-session=<seed 印出的
   http://127.0.0.1:8080/internal/ext-authz/api/anything     # 200，帶一個 x-internal-identity
 ```
 
-換成無效的 cookie 回 401；主機名稱不是 `localhost` 回 403（路由表對不到）。回應的 token 以 `env` 印出的公鑰驗證（端對端測試做的就是這件事）。session 在資料磁碟區裡，所以 `down` 之後再 `up` 與 `seed`，同一個 cookie 還能用；`purge` 連資料磁碟區與 cookie 檔一起刪除。
+換成無效的 cookie 回 401；主機名稱不是 `localhost` 回 403（路由表對不到）。回應的 token 以 `env` 印出的公鑰檔驗證（端對端測試做的就是這件事）。session 在資料磁碟區裡，所以 `down` 之後再 `up` 與 `seed`，同一個 cookie 還能用；`purge` 連資料磁碟區與 cookie 檔一起刪除。
 
 #### 私鑰在哪裡、誰看得到
 
-私鑰只存在 `<實例>/identity/signing-key.pem`，不在 repo、不進容器、不出現在 `env`、`status` 與任何日誌（`env` 只印路徑；`status` 檢查金鑰檔存在、權限 0600、解得開、公鑰推得出來，只印 `kid`；端對端測試掃描每個指令的輸出與身分服務的日誌，確認不含私鑰內容與資料庫密碼）。`down` 保留它（資料磁碟區裡的 session 沒有因此失效，簽出的 token 也不必換 `kid`）；`purge` 刪除整個 `identity/`。
+私鑰只存在 `<實例>/identity/signing-key.pem` 與從它寫出的 `signing-keys.json`（兩者都是 0600），不在 repo、不進容器、不出現在 `env`、`status` 與任何日誌（`env` 只印路徑；`status` 檢查金鑰檔存在、權限 0600、解得開、公鑰推得出來，兩個寫出的檔案存在、權限 0600、由這把金鑰寫出，只印 `kid`；端對端測試掃描每個指令的輸出與身分服務的日誌，確認不含私鑰內容與資料庫密碼）。`down` 保留它（資料磁碟區裡的 session 沒有因此失效，簽出的 token 也不必換 `kid`）；`purge` 刪除整個 `identity/`。
 
 ### 健康與安全檢查
 

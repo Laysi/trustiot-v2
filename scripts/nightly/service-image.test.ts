@@ -64,7 +64,7 @@ describe("service image names", () => {
 
   test("the service images the nightly builds are the ones the API check's values deploy", () => {
     // Laysi/trustiot-v2#65: the smoke enables identity and assets and calls them through the ingress (api.ts).
-    const values = apiValues("saas", { kid: "k", x: "x" }, []) as { services: Record<string, { enabled?: boolean; image?: Record<string, string> }> };
+    const values = apiValues("saas", []) as { services: Record<string, { enabled?: boolean; image?: Record<string, string> }> };
     const services = NIGHTLY_IMAGES.filter((image) => image !== MIGRATE_IMAGE_NAME);
     expect(Object.keys(values.services).sort()).toEqual([...services].sort());
     for (const name of services) {

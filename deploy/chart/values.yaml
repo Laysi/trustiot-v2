@@ -173,7 +173,7 @@ serviceDefaults:
 services:
   identity:
     enabled: false
-    # The signing key file is mode 0440, owned by root and the pod's fsGroup, so the service reads
+    # The signing keys file is mode 0440, owned by root and the pod's fsGroup, so the service reads
     # it through this group and no other user in the container can (README.md, "內部身分"). On
     # OpenShift set fsGroup to null: the restricted-v2 SCC assigns one from the namespace range.
     podSecurityContext:
@@ -235,16 +235,30 @@ mesh:
 
 # Internal identity (decision 27): for every request that passes the cookie check, the identity
 # service signs a short-lived token for the backend, and every service verifies it with the
-# public keys below. Rotation adds the new public key first, then swaps the private key, then
-# removes the old public key (services/identity/README.md).
+# identity service's public keys. The Ed25519 key pair is generated in the cluster: the identity
+# pod's init container keeps the private keys in the Secret <release>-identity-signing-keys, which
+# only the identity service reads, and their public keys in the ConfigMap
+# <release>-internal-identity-keys, which every service mounts and rereads without a restart.
+# Nobody creates, sees, copies or rotates a key (docs/architecture/secrets.md, 「內部身分簽章金鑰」).
 internalIdentity:
-  # The identity service's Ed25519 public keys: {kid, x}, where x is the 32-byte public key in
-  # base64url without padding. Not secret; every service gets them as the platform setting
-  # TRUSTIOT_INTERNAL_IDENTITY_KEYS. Services refuse to start without them.
+  # Increase it to rotate the signing key: the identity service restarts, its init container adds
+  # a new key, publishes its public key at once and lets it sign keyPropagationSeconds later; the
+  # old key leaves at the first identity pod start after its last token expired. Only goes up: a
+  # rollback to a lower number changes nothing (docs/runbooks/secrets.md).
+  keyGeneration: "1"
+  # Set it to a new generation (and keyGeneration to at least it) when a private key leaked: keys
+  # of a lower generation are removed at once and a new key signs right away. Leave it afterwards.
+  revokeBeforeGeneration: "0"
+  # How long a new public key is published before its key signs: the time every pod needs to see
+  # the ConfigMap change (the kubelet's sync period plus its cache, about a minute by default).
+  # Raise it on a cluster with a longer kubelet syncFrequency. 120 to 86400.
+  keyPropagationSeconds: 600
+  # Installations from before Laysi/trustiot-v2#404 only, while they move over (README.md,
+  # 「內部身分」): the Secret a person made with the identity service's PKCS#8 private key, and
+  # its public key {kid, x}. The init container imports that key once, under its key id, so the
+  # rolling upgrade keeps one key; the next upgrade without both settings rotates it away. Leave
+  # them empty on a new installation.
   publicKeys: []
-  # Existing Secret with the identity service's private key in PKCS#8 PEM
-  # (`openssl genpkey -algorithm ed25519`), mounted as a read-only file into the identity service
-  # only. Its public key must be in publicKeys, or the identity service refuses to start.
   signingKeySecret:
     name: ""
     key: signing-key.pem

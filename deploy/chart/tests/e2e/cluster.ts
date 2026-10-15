@@ -18,6 +18,9 @@ export function required(name: string): string {
 
 export const NAMESPACE = required("E2E_NAMESPACE");
 export const IDENTITY_IMAGE = required("E2E_IDENTITY_IMAGE");
+// The migration image: the identity pod's init container generates the internal identity keys
+// with it (Laysi/trustiot-v2#404), even in front of the identity double.
+export const MIGRATE_IMAGE = required("E2E_MIGRATE_IMAGE");
 export const CONTEXT = process.env.E2E_KUBECONTEXT;
 export const RELEASE = process.env.E2E_RELEASE ?? "trustiot";
 export const PULL_POLICY = process.env.E2E_IMAGE_PULL_POLICY ?? "IfNotPresent";
@@ -27,6 +30,10 @@ export const KEEP = process.env.E2E_KEEP === "1";
 // Object name prefix of the release (trustiot.fullname in templates/_helpers.tpl).
 export const OBJECT_PREFIX = RELEASE.includes("trustiot") ? RELEASE : `${RELEASE}-trustiot`;
 export const GATEWAY = `${OBJECT_PREFIX}-ingress`;
+// The internal identity keys the identity pod's init container fills (Laysi/trustiot-v2#404): kept
+// on uninstall (helm.sh/resource-policy: keep), so a run removes the ones it created.
+const IDENTITY_KEY_OBJECTS = [`secret/${OBJECT_PREFIX}-identity-signing-keys`, `configmap/${OBJECT_PREFIX}-internal-identity-keys`];
+let identityKeysBefore: string[] | undefined;
 
 function pinnedTool(tool: string): string {
   const result = Bun.spawnSync({ cmd: ["proto", "bin", tool, "--reporter", "text"], cwd: REPO_ROOT });
@@ -100,10 +107,28 @@ export function imageValues(service: string, image: string): string[] {
   ];
 }
 
+// Values of the migration image (the identity pod's init container), from an image reference.
+export function migrateImageValues(image: string): string[] {
+  const match = /^(?<repository>[^@]+?)(?::(?<tag>[\w][\w.-]*))?(?:@(?<digest>sha256:[a-f0-9]{64}))?$/.exec(image);
+  if (!match?.groups?.repository) throw new Error(`not an image reference: ${image}`);
+  const { repository, tag, digest } = match.groups;
+  return [
+    "--set-string",
+    `migrate.image.repository=${repository}`,
+    "--set-string",
+    `migrate.image.tag=${tag ?? "latest"}`,
+    "--set-string",
+    `migrate.image.digest=${digest ?? ""}`,
+    "--set-string",
+    `migrate.image.pullPolicy=${PULL_POLICY}`,
+  ];
+}
+
 // Installs the release and waits for it (install.ts has the rules and the reasons). Never touches an
 // existing installation, and a failed install keeps its evidence and removes itself, so the caller
 // counts the release as its own (and uninstalls it) only once this returns.
 export function installRelease(valuesFiles: string[], extra: string[]): void {
+  identityKeysBefore = existing(IDENTITY_KEY_OBJECTS);
   runInstall({
     release: RELEASE,
     namespace: NAMESPACE,
@@ -119,4 +144,16 @@ export function installRelease(valuesFiles: string[], extra: string[]): void {
 
 export function uninstallRelease(): void {
   helm("uninstall", RELEASE, "--wait", "--timeout", "3m");
+  const before = identityKeysBefore;
+  if (before === undefined) return;
+  const made = IDENTITY_KEY_OBJECTS.filter((object) => !before.includes(object));
+  if (made.length > 0) kubectl("delete", ...made, "--ignore-not-found");
+}
+
+// Which of `objects` (kind/name) exist in the namespace.
+function existing(objects: string[]): string[] {
+  return kubectl("get", ...objects, "--ignore-not-found", "--output", "name")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
 }

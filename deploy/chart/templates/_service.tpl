@@ -72,7 +72,7 @@ spec:
 {{/*
 Container env: the chart's variables first (OTEL_SERVICE_NAME, the collector endpoint, SENTRY_DSN,
 the Postgres CA file, login role and password for a service that uses Postgres, the credentials
-the service lists and, for identity, its routes and signing key file), then serviceDefaults.env
+the service lists and, for identity, its routes and signing key settings), then serviceDefaults.env
 and services.<name>.env.
 Custom env cannot take over what the chart controls:
 - names starting with TRUSTIOT_ plus a letter or digit, SENTRY_ or OTEL_ are reserved, so the
@@ -201,10 +201,14 @@ outbox consumer reads its producers' events with. */ -}}
 {{- $env := include "trustiot.service.env" . | fromYamlArray -}}
 {{- $caMounts := include "trustiot.caMounts" (dict "root" .root "name" .name) | fromYamlArray -}}
 {{- $migrate := include "trustiot.migrate.enabled" .root -}}
-{{- /* The internal identity signing key reaches the identity service only (decision 27). */ -}}
-{{- $signingKey := dict -}}
-{{- if and (eq .name "identity") .root.Values.internalIdentity.signingKeySecret.name -}}
-{{- $signingKey = .root.Values.internalIdentity.signingKeySecret -}}
+{{- /* The internal identity keys (decision 27, _identity.tpl): while the identity service is
+enabled, every service mounts the public keys ConfigMap; only the identity service mounts the
+signing keys Secret, which its init container fills with a token that only init containers mount. */ -}}
+{{- $keys := include "trustiot.identity.keys" .root | fromYaml -}}
+{{- $identity := eq .name "identity" -}}
+{{- $publicKeys := include "trustiot.identity.enabled" .root -}}
+{{- if and $identity $config.automountServiceAccountToken -}}
+{{- fail "services.identity.automountServiceAccountToken must be false: the service reads and signs with the internal identity private key, and a token in its container could write a key of its own into the Secret and the public keys ConfigMap (docs/architecture/secrets.md, 「內部身分簽章金鑰」)" -}}
 {{- end -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -263,10 +267,16 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if $migrate }}
-      {{- /* Holds the pod until the migration Job is complete (_migrate.tpl). */}}
+      {{- if or $identity $migrate }}
       initContainers:
+        {{- if $identity }}
+        {{- /* Generates, publishes and rotates the signing keys (_identity.tpl); needs no database. */}}
+        - {{ include "trustiot.identity.initContainer" (dict "root" .root "config" $config) | indent 10 | trim }}
+        {{- end }}
+        {{- if $migrate }}
+        {{- /* Holds the pod until the migration Job is complete (_migrate.tpl). */}}
         - {{ include "trustiot.migrate.initContainer" (dict "root" .root "config" $config) | indent 10 | trim }}
+        {{- end }}
       {{- end }}
       containers:
         - name: {{ .name }}
@@ -309,16 +319,21 @@ spec:
               mountPath: {{ .dir }}
               readOnly: true
             {{- end }}
-            {{- if $signingKey }}
-            - name: identity-signing-key
-              mountPath: {{ include "trustiot.identity.signingKeyDir" .root }}
+            {{- if $publicKeys }}
+            - name: internal-identity-keys
+              mountPath: {{ include "trustiot.identity.publicKeysDir" .root }}
+              readOnly: true
+            {{- end }}
+            {{- if $identity }}
+            - name: identity-signing-keys
+              mountPath: {{ include "trustiot.identity.signingKeysDir" .root }}
               readOnly: true
             {{- end }}
       volumes:
         - name: tmp
           emptyDir:
             sizeLimit: {{ $config.tmpSizeLimit }}
-        {{- if $migrate }}
+        {{- if or $identity $migrate }}
         - {{ include "trustiot.migrate.kubeApiVolume" .root | indent 10 | trim }}
         {{- end }}
         {{- range $caMounts }}
@@ -329,14 +344,35 @@ spec:
               - key: {{ .key }}
                 path: ca.crt
         {{- end }}
-        {{- if $signingKey }}
-        - name: identity-signing-key
+        {{- /* The whole ConfigMap, never subPath, so the kubelet replaces the file when the init
+        container publishes new keys; optional, so a pod starts (unready) before it has any. */}}
+        {{- if $publicKeys }}
+        - name: internal-identity-keys
+          configMap:
+            name: {{ $keys.configMap }}
+            optional: true
+        {{- end }}
+        {{- if $identity }}
+        - name: identity-signing-keys
           secret:
-            secretName: {{ $signingKey.name }}
+            secretName: {{ $keys.secret }}
             {{- /* 0440: root and the pod's fsGroup (services.identity.podSecurityContext) only. */}}
             defaultMode: 288
+            {{- /* Optional: the Secret has no key before the init container's first run, and the
+            kubelet adds the file at its next sync. */}}
+            optional: true
             items:
-              - key: {{ $signingKey.key }}
-                path: {{ include "trustiot.identity.signingKeyFile" .root }}
+              - key: {{ $keys.secretKey }}
+                path: {{ $keys.secretKey }}
+        {{- if $keys.legacy }}
+        {{- /* A key a person made before Laysi/trustiot-v2#404: only the init container mounts it. */}}
+        - name: legacy-identity-signing-key
+          secret:
+            secretName: {{ .root.Values.internalIdentity.signingKeySecret.name }}
+            defaultMode: 288
+            items:
+              - key: {{ .root.Values.internalIdentity.signingKeySecret.key }}
+                path: signing-key.pem
+        {{- end }}
         {{- end }}
 {{- end -}}

@@ -267,7 +267,7 @@ export async function up(ctx: Context = context()): Promise<void> {
     // The identity signing key is kept across runs (down keeps it); a bad one stops here, before
     // anything is started.
     const signingKey = ensureSigningKey(ctx.dir);
-    log(`identity signing key: ${signingKey.created ? "generated" : "kept"} (mode 0600, state directory)`);
+    log(`identity signing key: ${signingKey.created ? "generated" : "kept"}; signing keys and public keys files written (mode 0600, state directory)`);
 
     // A new CA and server certificate for this run. Only the CA certificate (public) is kept in
     // the state directory; the server key goes straight into the Postgres config volume below,
@@ -652,9 +652,10 @@ export function serviceLoginVariable(service: string, field: "USERNAME" | "PASSW
  * product's service roles and bound platform roles (lib/product-logins.ts; the platform role of
  * `assets` is `TRUSTIOT_DEV_ASSETS_PLATFORM_DATABASE_*`) and `example-service`'s.
  *
- * With `identity` (the instance has a signing key), the lines for the identity service follow:
- * `TRUSTIOT_INTERNAL_IDENTITY_KEYS` is a platform setting every service verifies tokens with;
- * `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` (a path, never the key) and `TRUSTIOT_INGRESS_ROUTES` are
+ * With `identity` (`up` wrote the key files), the lines for the identity service follow:
+ * `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` is a platform setting every service verifies tokens with
+ * (the public keys file, which a cluster mounts from a ConfigMap);
+ * `TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE` (a path, never a key) and `TRUSTIOT_INGRESS_ROUTES` are
  * for the identity service only; its database login is `TRUSTIOT_DEV_IDENTITY_DATABASE_*` like
  * every other service's. The JSON values are single-quoted.
  */
@@ -668,12 +669,12 @@ export function envLines(state: State, caFile: string, identity?: IdentityEnv): 
   }
   const identityLines: Record<string, string> = identity
     ? {
-        TRUSTIOT_INTERNAL_IDENTITY_KEYS: identity.keys,
-        TRUSTIOT_IDENTITY_SIGNING_KEY_FILE: identity.signingKeyFile,
+        TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE: identity.publicKeysFile,
+        TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE: identity.signingKeysFile,
         TRUSTIOT_INGRESS_ROUTES: identity.routes,
       }
     : {};
-  const quoted = ["TRUSTIOT_INTERNAL_IDENTITY_KEYS", "TRUSTIOT_INGRESS_ROUTES"];
+  const quoted = ["TRUSTIOT_INGRESS_ROUTES"];
   return dotenv({
     PGHOST: BIND_ADDRESS,
     PGPORT: ports.postgres,
