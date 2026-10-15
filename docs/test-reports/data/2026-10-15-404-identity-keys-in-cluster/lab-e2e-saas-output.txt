@@ -1,0 +1,13 @@
+bun test v1.4.2 (744846f84)
+
+deploy/chart/tests/e2e/identity-keys.e2e.ts:
+fresh install: {"kid":"51QTca3SBWGPxKeJcVHhxiBHAXKtqPnKPk9lv9RsNZ0","generation":1,"initFinishedAfterPublishedSeconds":0,"identity":{"containerStartedAfterPublishedSeconds":27,"signingKeysLoadedAfterPublishedSeconds":27.4,"publicKeysLoadedAfterPublishedSeconds":27.4,"signingAfterPublishedSeconds":27.4,"readyAfterPublishedSeconds":28},"assets":{"containerStartedAfterPublishedSeconds":27,"publicKeysLoadedAfterPublishedSeconds":27.4,"readyAfterPublishedSeconds":28,"readyAfterContainerStartedSeconds":1}}
+rotation: {"kids":{"1":"51QTca3SBWGPxKeJcVHhxiBHAXKtqPnKPk9lv9RsNZ0","2":"CdFhM6bTVQT9xoBUZ1r5_H7pr6mLfWZnERYJUm_UlnY"},"upgradeToPublishedSeconds":3.1,"initFinishedAfterPublishedSeconds":0,"assetsLoadedAfterPublishedSeconds":55.4,"identityPublicKeysLoadedAfterPublishedSeconds":2.6,"identitySigningKeysLoadedAfterPublishedSeconds":2.6,"switchedAfterSignsFromSeconds":2.6,"lateToken":{"kid":"CdFhM6bTVQT9xoBUZ1r5_H7pr6mLfWZnERYJUm_UlnY","status":200,"userMatches":true}}
+retirement: {"assetsDroppedAfterInitSeconds":9.4,"token":{"kid":"CdFhM6bTVQT9xoBUZ1r5_H7pr6mLfWZnERYJUm_UlnY","status":200,"userMatches":true}}
+revocation: {"kid":"EYBC3Vtkqtkm-kauQfZJPgWqMTeLlhn9IkZeKAsamZo","upgradeToPublishedSeconds":2.8,"identityReadyAfterPublishedSeconds":2,"identitySigningAfterPublishedSeconds":1.8,"assetsDroppedAfterPublishedSeconds":84.4,"token":{"kid":"EYBC3Vtkqtkm-kauQfZJPgWqMTeLlhn9IkZeKAsamZo","status":200,"userMatches":true}}
+
+ 8 pass
+ 0 fail
+ 37 expect() calls
+Ran 8 tests across 1 file. [725.67s]
+exit 0

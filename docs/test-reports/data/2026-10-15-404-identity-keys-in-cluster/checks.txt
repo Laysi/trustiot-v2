@@ -1,0 +1,254 @@
+Checks on the build host for Laysi/trustiot-v2#404 (2026-10-15), through the check queue
+(rcheck.sh, a copy of the worktree with CI=1). Each step prints its summary lines and rc; a step
+that fails prints the end of its log.
+
+Run 1, 13:39 to 13:54 (Asia/Taipei), on the worktree as it was at 13:05: every change except the
+fixes the pre-commit review asked for afterwards (run 2 covers those) and the later documentation.
+  fmt                cargo fmt --all --check
+  clippy             cargo clippy --workspace --all-targets -- -D warnings
+  test               cargo test --workspace (CI=1: the container-backed tests run, never skip)
+  clippy-nodefault   cargo clippy -p service-kit --no-default-features --all-targets -- -D warnings
+  test-nodefault     cargo test -p service-kit --no-default-features
+  openapi            cargo run -p openapi -- --check
+  deny               cargo deny --locked check
+  scripts            bun test scripts
+  typecheck          bun run --cwd scripts typecheck
+  chart              bun test deploy/chart
+  flux               bun test deploy/flux
+  secret-handling    bun scripts/ci/check-secret-handling.ts
+  workflows          bun scripts/ci/check-workflows.ts
+  actionlint         bun scripts/ci/lint-workflows.ts
+  gitleaks           gitleaks dir --redact .
+The one failure (chart) is kubeconform killed after 60 s while it fetched schemas over the
+network; run 2 runs bun test deploy/chart again and it passes (408 of 408).
+
+Run 2, 13:54 to 14:00, on the final code: the identity-keys, migrate, identity and service-kit
+tests after the review fixes (private keys wiped on every path; a run takes a ConfigMap that
+shows its keys as done only while the Secret is unchanged), the chart tests, and a mutation
+check: with the Secret check removed (return Ok(true)), the new test
+a_published_view_counts_only_while_the_secret_is_unchanged fails, then the file is restored.
+
+===== Run 1 =====
+rcheck: queued on the build host at 13:05:27 as 404-a3251eba; running now: 384-f3838d7d since 12:58:10
+rcheck: the connection dropped while the job was being started, but the job is queued or running; waiting for it
+== fmt
+rc=0
+== clippy
+rc=0
+== test
+      4 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      4 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      3 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      2 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test runtime_sources_are_the_rust_files_under_services_src ... ok
+      1 test result: ok. 98 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.22s
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+      1 test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+      1 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.15s
+      1 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.95s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.87s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.34s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.21s
+      1 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.01s
+      1 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.30s
+      1 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+      1 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s
+      1 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.32s
+      1 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+      1 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+      1 test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+rc=0
+== clippy-nodefault
+rc=0
+== test-nodefault
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.37s
+      1 test result: ok. 68 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.93s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.39s
+      1 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.69s
+      1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.79s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.05s
+      1 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.24s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.44s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.26s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+rc=0
+== openapi
+      1 api/openapi.json is up to date
+rc=0
+== deny
+      1 warning[duplicate]: found 3 duplicate entries for crate 'getrandom'
+      1 warning[duplicate]: found 2 duplicate entries for crate 'tower-http'
+      1 warning[duplicate]: found 2 duplicate entries for crate 'syn'
+      1 warning[duplicate]: found 2 duplicate entries for crate 'sha2'
+      1 warning[duplicate]: found 2 duplicate entries for crate 'rand_core'
+      1 warning[duplicate]: found 2 duplicate entries for crate 'rand'
+      1 warning[duplicate]: found 2 duplicate entries for crate 'hashbrown'
+      1 warning[duplicate]: found 2 duplicate entries for crate 'digest'
+      1 warning[duplicate]: found 2 duplicate entries for crate 'crypto-common'
+      1 warning[duplicate]: found 2 duplicate entries for crate 'cpufeatures'
+      1 warning[duplicate]: found 2 duplicate entries for crate 'block-buffer'
+      1 warning[duplicate]: found 2 duplicate entries for crate 'base64'
+      1 advisories ok, bans ok, licenses ok, sources ok
+rc=0
+== scripts
+      1 Ran 892 tests across 37 files. [2.61s]
+      1 (pass) the cache key of a nightly Rust image > differs between images and covers each image's own directory [0.28ms]
+      1 (pass) repository scan and command line > labels violations with the file relative to the root [0.17ms]
+      1 (pass) gitObjectHashes > refuses inputs that differ from HEAD, so the key never describes other sources [5.03ms]
+      1 (pass) checkBuildFile > sources with .. are read as the path the builder copies [0.25ms]
+      1 (pass) checkBuildFile > rejects COPY and ADD sources that use a variable [0.15ms]
+      1 (pass) checkBuildFile > quoted shell-form sources are read as one word [0.34ms]
+      1  888 pass
+      1  4 skip
+      1  0 fail
+rc=0
+== typecheck
+rc=0
+== chart
+      1 error: `~/.proto/tools/kubeconform/0.8.0/kubeconform -strict -summary -kubernetes-version 1.30.0 -cache /tmp/trustiot-kubeconform-cache -schema-location default -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json -` did not finish within 60 s and was killed: kubeconform fetches schemas over the network into its cache, and a download can stall; or the machine was so busy that it never ran (check `uptime`)
+      1 Ran 408 tests across 7 files. [97.61s]
+      1  407 pass
+      1  1 fail
+rc=1
+(pass) free text > a long message keeps its start and its end, where a chain of errors names the cause [0.03ms]
+(pass) free text > a URL's user info and query string are removed (Laysi/trustiot-v2#410) [0.04ms]
+(pass) free text > a failed probe's output is shown only when the kubelet or the network wrote it [0.20ms]
+(pass) free text > a multi-line message cannot inject a line into the evidence [0.05ms]
+(pass) free text > only the newest events are kept, and the cut is said [0.35ms]
+(pass) free text > tolerates objects without status [0.07ms]
+(pass) collectInstallEvidence > runs only `kubectl get` of events, Deployments, ReplicaSets and Pods: no logs, Secrets or ConfigMaps [0.33ms]
+(pass) collectInstallEvidence > a kubectl that fails does not stop the collection [0.14ms]
+(pass) collectInstallEvidence > output that is not JSON is reported in its section [0.11ms]
+
+deploy/chart/tests/e2e/install.test.ts:
+(pass) the wait > is helm's legacy strategy, bounded at 5 minutes, and never a rollback [0.04ms]
+(pass) evidenceFile > stays inside the report directory whatever the release name [0.09ms]
+(pass) runInstall > returns once the install worked, without evidence or cleanup [0.07ms]
+(pass) runInstall > never installs over an existing release [0.04ms]
+(pass) runInstall > a failed install saves the evidence in the report directory, then removes its own release [0.26ms]
+(pass) runInstall > without a report directory the evidence is in the error [0.10ms]
+(pass) runInstall > a release name that is taken is rethrown and nothing is collected or removed [0.04ms]
+(pass) runInstall > a chart that never rendered has no release to remove [0.03ms]
+(pass) runInstall > a failed removal is reported next to the install failure, which stays first [0.06ms]
+(pass) runInstall > a failure of the evidence collection or the file does not hide the install failure [0.12ms]
+
+deploy/chart/tests/e2e/ports.test.ts:
+(pass) nothing accepts connections on a port right after freePort() returns it [2.12ms]
+(pass) the returned port can be bound at once [0.16ms]
+
+deploy/chart/tests/e2e/tunnel-recovery.test.ts:
+(pass) tunnel dies while a request is in flight > the request fails before the process has exited, the way kubectl behaves (fault injection) [23.28ms]
+(pass) tunnel dies while a request is in flight > reopens the tunnel and sends the request once more [350.03ms]
+(pass) tunnel dies while a request is in flight > a tunnel that exited long before the request is reopened without waiting [45.92ms]
+(pass) tunnel dies while a request is in flight > a healthy tunnel needs no recovery [24.12ms]
+(pass) tunnel dies while a request is in flight > retries at most once: a second connection failure is thrown [147.23ms]
+(pass) tunnel dies while a request is in flight > a connection failure while the tunnel stays up is thrown, not retried [224.82ms]
+(pass) tunnel dies while a request is in flight > a connection failure without any tunnel is thrown, not retried [29.33ms]
+(pass) tunnel dies while a request is in flight > a failing reopen is thrown [24.24ms]
+(pass) failures that are not connection failures are never retried > a status the test does not expect is returned and fails the test's assertion [23.60ms]
+(pass) failures that are not connection failures are never retried > status 500 is a result, not a reason to reopen [24.42ms]
+(pass) failures that are not connection failures are never retried > status 502 is a result, not a reason to reopen [24.34ms]
+(pass) failures that are not connection failures are never retried > status 503 is a result, not a reason to reopen [22.78ms]
+(pass) failures that are not connection failures are never retried > status 504 is a result, not a reason to reopen [23.16ms]
+(pass) failures that are not connection failures are never retried > a request that was answered in part is not resent, even though the tunnel is dead [2030.86ms]
+(pass) failures that are not connection failures are never retried > an error that is not a ConnectionError is rethrown even though the tunnel is dead [24.82ms]
+
+deploy/chart/tests/e2e/raw-client.test.ts:
+(pass) sendRaw > sends the request target unchanged and parses status, headers and a content-length body [0.87ms]
+(pass) sendRaw > sends a body after the head, with its length in bytes [1.19ms]
+(pass) sendRaw > decodes a chunked body [0.66ms]
+(pass) sendRaw > a connection closed before any response is a ConnectionError [0.56ms]
+(pass) sendRaw > a response cut inside the head is a ConnectionError [0.33ms]
+(pass) sendRaw > a failure after the response head arrived is not a ConnectionError, so it is never retried [2001.06ms]
+(pass) sendRaw > a refused connection is a ConnectionError [0.84ms]
+(pass) sendRaw > a response that never comes is a ConnectionError after the timeout [201.63ms]
+
+1 tests failed:
+(fail) saas shape > rendered manifests pass kubeconform -strict for Kubernetes 1.30.0 [61599.00ms]
+
+ 407 pass
+ 1 fail
+ 4672 expect() calls
+Ran 408 tests across 7 files. [97.61s]
+== flux
+      1 Ran 19 tests across 1 file. [1454.00ms]
+      1  19 pass
+      1  0 fail
+rc=0
+== secret-handling
+      1 secret handling: 409 file(s) checked, 6 container build file(s), no violations
+rc=0
+== workflows
+      1 workflow policy: 4 file(s) checked, no violations
+rc=0
+== actionlint
+rc=0
+== gitleaks
+rc=0
+rcheck: removed 0 dangling test volumes
+rcheck: removed 0 dangling podman test volumes
+rcheck: exit 0 at 13:54:09 (build host, 404-a3251eba)
+
+[exited with code 0]
+
+===== Run 2 =====
+rcheck: queued on the build host at 13:54:39 as 404-a3251eba; running now: nothing
+== fmt
+rc=0
+== clippy
+rc=0
+== test-keys
+      2 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 98 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.38s
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+      1 test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.95s
+      1 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.82s
+      1 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s
+      1 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.46s
+      1 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+      1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 51.74s
+      1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.61s
+      1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.82s
+      1 test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+      1 test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.89s
+      1 test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.18s
+      1 test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.05s
+      1 test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+      1 test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.04s
+rc=0
+== chart
+      1 Ran 408 tests across 7 files. [36.95s]
+      1  408 pass
+      1  0 fail
+rc=0
+== mutation: a ConfigMap that already shows the keys is taken as done without the Secret check
+1
+mutated rc=101 (must not be 0)
+test a_published_view_counts_only_while_the_secret_is_unchanged ... FAILED
+test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+?? step.log
+restored
+rcheck: removed 0 dangling test volumes
+rcheck: removed 0 dangling podman test volumes
+rcheck: exit 0 at 14:00:43 (build host, 404-a3251eba)
+
+[exited with code 0]

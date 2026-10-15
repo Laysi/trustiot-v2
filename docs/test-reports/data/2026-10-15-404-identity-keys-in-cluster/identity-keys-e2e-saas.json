@@ -1,0 +1,117 @@
+{
+  "run": "13a0c4c4",
+  "shape": "saas",
+  "namespace": "e2e-404",
+  "release": "trustiot",
+  "propagationSeconds": 120,
+  "install": {
+    "helmSeconds": 32.7
+  },
+  "freshInstall": {
+    "kid": "51QTca3SBWGPxKeJcVHhxiBHAXKtqPnKPk9lv9RsNZ0",
+    "generation": 1,
+    "initFinishedAfterPublishedSeconds": 0,
+    "identity": {
+      "containerStartedAfterPublishedSeconds": 27,
+      "signingKeysLoadedAfterPublishedSeconds": 27.4,
+      "publicKeysLoadedAfterPublishedSeconds": 27.4,
+      "signingAfterPublishedSeconds": 27.4,
+      "readyAfterPublishedSeconds": 28
+    },
+    "assets": {
+      "containerStartedAfterPublishedSeconds": 27,
+      "publicKeysLoadedAfterPublishedSeconds": 27.4,
+      "readyAfterPublishedSeconds": 28,
+      "readyAfterContainerStartedSeconds": 1
+    }
+  },
+  "freshInstallToken": {
+    "kid": "51QTca3SBWGPxKeJcVHhxiBHAXKtqPnKPk9lv9RsNZ0",
+    "status": 200,
+    "userMatches": true
+  },
+  "access": {
+    "serviceAccounts": [
+      "default",
+      "trustiot-assets",
+      "trustiot-clickhouse",
+      "trustiot-identity",
+      "trustiot-ingress-istio",
+      "trustiot-migrate",
+      "trustiot-postgres"
+    ],
+    "questions": 14,
+    "allowed": [
+      "trustiot-identity get configmaps/trustiot-internal-identity-keys",
+      "trustiot-identity get secrets/trustiot-identity-signing-keys",
+      "trustiot-identity patch configmaps/trustiot-internal-identity-keys",
+      "trustiot-identity patch secrets/trustiot-identity-signing-keys"
+    ]
+  },
+  "rotationEarlyToken": {
+    "kid": "51QTca3SBWGPxKeJcVHhxiBHAXKtqPnKPk9lv9RsNZ0",
+    "status": 200,
+    "userMatches": true,
+    "secondsBeforeSignsFrom": 110.7
+  },
+  "rotation": {
+    "kids": {
+      "1": "51QTca3SBWGPxKeJcVHhxiBHAXKtqPnKPk9lv9RsNZ0",
+      "2": "CdFhM6bTVQT9xoBUZ1r5_H7pr6mLfWZnERYJUm_UlnY"
+    },
+    "upgradeToPublishedSeconds": 3.1,
+    "initFinishedAfterPublishedSeconds": 0,
+    "assetsLoadedAfterPublishedSeconds": 55.4,
+    "identityPublicKeysLoadedAfterPublishedSeconds": 2.6,
+    "identitySigningKeysLoadedAfterPublishedSeconds": 2.6,
+    "switchedAfterSignsFromSeconds": 2.6,
+    "lateToken": {
+      "kid": "CdFhM6bTVQT9xoBUZ1r5_H7pr6mLfWZnERYJUm_UlnY",
+      "status": 200,
+      "userMatches": true
+    }
+  },
+  "rollback": {
+    "keysUnchangedAfterRollback": true,
+    "keysUnchangedAfterUpgradeBack": true,
+    "rollbackToken": {
+      "kid": "CdFhM6bTVQT9xoBUZ1r5_H7pr6mLfWZnERYJUm_UlnY",
+      "status": 200,
+      "userMatches": true
+    }
+  },
+  "retirementWaitSeconds": 406.5,
+  "retirement": {
+    "assetsDroppedAfterInitSeconds": 9.4,
+    "token": {
+      "kid": "CdFhM6bTVQT9xoBUZ1r5_H7pr6mLfWZnERYJUm_UlnY",
+      "status": 200,
+      "userMatches": true
+    }
+  },
+  "revocation": {
+    "kid": "EYBC3Vtkqtkm-kauQfZJPgWqMTeLlhn9IkZeKAsamZo",
+    "upgradeToPublishedSeconds": 2.8,
+    "identityReadyAfterPublishedSeconds": 2,
+    "identitySigningAfterPublishedSeconds": 1.8,
+    "assetsDroppedAfterPublishedSeconds": 84.4,
+    "token": {
+      "kid": "EYBC3Vtkqtkm-kauQfZJPgWqMTeLlhn9IkZeKAsamZo",
+      "status": 200,
+      "userMatches": true
+    }
+  },
+  "privateKeysFound": [],
+  "initLog": [
+    "{\"timestamp\":\"2026-10-15T05:02:25.417671Z\",\"level\":\"INFO\",\"service\":\"migrate\",\"target\":\"opentelemetry\",\"message\":\"Global tracer provider is set. Traces can now be created using global::tracer() or global::tracer_with_scope().\",\"fields\":{\"name\":\"TracerProvider.GlobalSet\"}}",
+    "{\"timestamp\":\"2026-10-15T05:02:25.542178Z\",\"level\":\"INFO\",\"service\":\"migrate\",\"target\":\"migrate\",\"message\":\"migration change\",\"fields\":{\"change\":\"revoked signing key CdFhM6bTVQT9xoBUZ1r5_H7pr6mLfWZnERYJUm_UlnY (generation 2, below internalIdentity.revokeBeforeGeneration) in Secret trustiot-identity-signing-keys\"}}",
+    "{\"timestamp\":\"2026-10-15T05:02:25.542217Z\",\"level\":\"INFO\",\"service\":\"migrate\",\"target\":\"migrate\",\"message\":\"migration change\",\"fields\":{\"change\":\"generated signing key EYBC3Vtkqtkm-kauQfZJPgWqMTeLlhn9IkZeKAsamZo (generation 3) in Secret trustiot-identity-signing-keys\"}}",
+    "{\"timestamp\":\"2026-10-15T05:02:25.609201Z\",\"level\":\"INFO\",\"service\":\"migrate\",\"target\":\"migrate\",\"message\":\"migration change\",\"fields\":{\"change\":\"published the public keys EYBC3Vtkqtkm-kauQfZJPgWqMTeLlhn9IkZeKAsamZo in ConfigMap trustiot-internal-identity-keys\"}}",
+    "{\"timestamp\":\"2026-10-15T05:02:25.617788Z\",\"level\":\"INFO\",\"service\":\"migrate\",\"target\":\"migrate\",\"message\":\"migration change\",\"fields\":{\"change\":\"published signing key EYBC3Vtkqtkm-kauQfZJPgWqMTeLlhn9IkZeKAsamZo; it signs from 1792040545 (Unix time) in Secret trustiot-identity-signing-keys\"}}",
+    "{\"timestamp\":\"2026-10-15T05:02:25.617826Z\",\"level\":\"INFO\",\"service\":\"migrate\",\"target\":\"migrate::signing_keys\",\"message\":\"the internal identity signing keys are in place\",\"fields\":{\"secret\":\"[REDACTED]\",\"config_map\":\"trustiot-internal-identity-keys\",\"keys\":\"[\\\"EYBC3Vtkqtkm-kauQfZJPgWqMTeLlhn9IkZeKAsamZo\\\"]\",\"signing\":\"EYBC3Vtkqtkm-kauQfZJPgWqMTeLlhn9IkZeKAsamZo\",\"retire_at\":1792040850}}"
+  ],
+  "keptAfterUninstall": [
+    "configmap/trustiot-internal-identity-keys",
+    "secret/trustiot-identity-signing-keys"
+  ]
+}
