@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 use service_kit::config::{Invalid, Validate};
-use service_kit::identity::IdentityKeys;
 use service_kit::postgres::{PostgresConfig, SslMode};
 
 /// Fewest connections of the service role's pool: one for the event consumer's delivery, one
@@ -29,9 +28,10 @@ pub struct Config {
 /// platform setting.
 #[derive(Debug, Deserialize)]
 pub struct Platform {
-    /// `TRUSTIOT_INTERNAL_IDENTITY_KEYS`: the public keys internal identity tokens are verified
-    /// with.
-    pub internal_identity_keys: IdentityKeys,
+    /// `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`: the file with the public keys internal identity
+    /// tokens are verified with (the chart's ConfigMap volume), read again while the service
+    /// runs.
+    pub internal_identity_keys_file: PathBuf,
     /// `TRUSTIOT_POSTGRES_HOST`.
     pub postgres_host: String,
     /// `TRUSTIOT_POSTGRES_PORT`.

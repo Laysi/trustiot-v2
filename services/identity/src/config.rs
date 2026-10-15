@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 use service_kit::config::{Invalid, Validate};
-use service_kit::identity::IdentityKeys;
 use service_kit::postgres::{PostgresConfig, SslMode};
 
 use crate::audience::IngressRoutes;
@@ -13,6 +12,13 @@ use crate::session::WARM_CONNECTIONS;
 
 /// Most database connections one replica may open.
 pub const MAX_DATABASE_CONNECTIONS: u32 = 100;
+
+/// Shortest `TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS`, the schema minimum of the chart's
+/// `internalIdentity.keyPropagationSeconds`.
+pub const MIN_KEY_PROPAGATION_SECONDS: u64 = 120;
+
+/// Longest `TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS`: a day.
+pub const MAX_KEY_PROPAGATION_SECONDS: u64 = 86_400;
 
 /// The service's settings: the platform settings the chart sets and the database role.
 #[derive(Debug, Deserialize)]
@@ -28,11 +34,22 @@ pub struct Config {
 /// platform setting.
 #[derive(Debug, Deserialize)]
 pub struct Platform {
-    /// `TRUSTIOT_INTERNAL_IDENTITY_KEYS`: the public keys every service verifies tokens with. The
-    /// signing key's public key must be one of them.
-    pub internal_identity_keys: IdentityKeys,
-    /// `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE`: the PKCS#8 PEM private key, mounted from a Secret.
-    pub identity_signing_key_file: PathBuf,
+    /// `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`: the public keys every service verifies tokens
+    /// with (the ConfigMap `<release>-internal-identity-keys`). Only a key listed there signs.
+    pub internal_identity_keys_file: PathBuf,
+    /// `TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE`: the signing keys, mounted from the Secret
+    /// `<release>-identity-signing-keys` that the init container fills.
+    pub identity_signing_keys_file: PathBuf,
+    /// `TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION`: the chart's
+    /// `internalIdentity.revokeBeforeGeneration`; keys of a lower generation never sign. Default
+    /// 0.
+    #[serde(default)]
+    pub identity_revoke_before_generation: u64,
+    /// `TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS`: the chart's
+    /// `internalIdentity.keyPropagationSeconds`; how long the signing keys and the public keys
+    /// may differ before the service logs an error. Default 600.
+    #[serde(default = "default_propagation_seconds")]
+    pub identity_key_propagation_seconds: u64,
     /// `TRUSTIOT_INGRESS_ROUTES`: the ingress gateway's cookie routes, for the audience.
     pub ingress_routes: IngressRoutes,
     /// `TRUSTIOT_POSTGRES_HOST`.
@@ -68,6 +85,10 @@ const fn default_max_connections() -> u32 {
     10
 }
 
+const fn default_propagation_seconds() -> u64 {
+    600
+}
+
 /// Never prints the password.
 impl fmt::Debug for Database {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -96,6 +117,23 @@ impl Config {
 
 impl Validate for Config {
     fn validate(&self) -> Result<(), Invalid> {
+        if self.platform.identity_revoke_before_generation > identity_keys::MAX_GENERATION {
+            return Err(Invalid::new(
+                "platform.identity_revoke_before_generation",
+                format!("must be at most {}", identity_keys::MAX_GENERATION),
+            ));
+        }
+        if !(MIN_KEY_PROPAGATION_SECONDS..=MAX_KEY_PROPAGATION_SECONDS)
+            .contains(&self.platform.identity_key_propagation_seconds)
+        {
+            return Err(Invalid::new(
+                "platform.identity_key_propagation_seconds",
+                format!(
+                    "must be between {MIN_KEY_PROPAGATION_SECONDS} and \
+                     {MAX_KEY_PROPAGATION_SECONDS} seconds"
+                ),
+            ));
+        }
         if !(WARM_CONNECTIONS..=MAX_DATABASE_CONNECTIONS).contains(&self.database.max_connections) {
             return Err(Invalid::new(
                 "database.max_connections",

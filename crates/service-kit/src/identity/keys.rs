@@ -1,5 +1,5 @@
 //! The identity service's public keys: a JWK Set (RFC 7517) of Ed25519 keys (RFC 8037), parsed
-//! and checked once at startup.
+//! and checked whole each time the published set changes ([`super::PublishedKeys`]).
 
 use std::fmt;
 use std::str::FromStr;
@@ -9,24 +9,26 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use contract::json::JsonError;
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, VerifyingKey};
-use serde::de::{self, IgnoredAny, Visitor};
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
+use serde::de::IgnoredAny;
 
 use super::ALGORITHM;
 
-/// Most keys a set may hold. Rotation needs two at a time (README.md, "公鑰與輪替"); the cap
-/// keeps a misconfigured set from growing without bound.
+/// Most keys a set may hold. A rotation needs two or three at a time (README.md, "公鑰與輪替");
+/// the cap keeps a broken set from growing without bound. `crates/identity-keys` holds the
+/// identity service's own set to the same cap.
 pub const MAX_KEYS: usize = 8;
 
 /// Longest key id accepted, in bytes.
 pub const MAX_KEY_ID_LEN: usize = 64;
 
 /// The identity service's public keys, by key id (`kid`). Built from a JWK Set whose every key is
-/// an Ed25519 public key; anything else in the set stops the service at startup, so a service
-/// never runs with a key it cannot use or with a private key in its configuration.
+/// an Ed25519 public key; a set with anything else is refused whole, so a service never verifies
+/// with a key it cannot use or with a private key in its keys file.
 ///
-/// The set is usually the platform setting [`KEYS_SETTING`](super::KEYS_SETTING); as a field of
-/// a configuration type it deserializes from the JWK Set's JSON text. Cloning is cheap.
+/// A service gets the set from the file the platform setting
+/// [`KEYS_FILE_SETTING`](super::KEYS_FILE_SETTING) names, through
+/// [`PublishedKeys::watch`](super::PublishedKeys::watch). Cloning is cheap.
 #[derive(Clone)]
 pub struct IdentityKeys {
     keys: Arc<[(String, VerifyingKey)]>,
@@ -100,28 +102,6 @@ impl FromStr for IdentityKeys {
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         Self::from_jwks(text)
-    }
-}
-
-impl<'de> Deserialize<'de> for IdentityKeys {
-    /// From the JWK Set's JSON text, so it can be a configuration value (an environment
-    /// variable or a string in the configuration file).
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct JwksText;
-
-        impl Visitor<'_> for JwksText {
-            type Value = IdentityKeys;
-
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("a JWK Set of Ed25519 public keys as JSON text")
-            }
-
-            fn visit_str<E: de::Error>(self, text: &str) -> Result<IdentityKeys, E> {
-                IdentityKeys::from_jwks(text).map_err(E::custom)
-            }
-        }
-
-        deserializer.deserialize_str(JwksText)
     }
 }
 

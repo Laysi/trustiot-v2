@@ -1,8 +1,9 @@
 //! Internal identity verification end to end, from a real `example-service` process: the keys
-//! come from the platform setting `TRUSTIOT_INTERNAL_IDENTITY_KEYS`, requests carry tokens in
-//! `x-internal-identity`, and `/v1/whoami` uses the `UserIdentity` extractor. Rejected requests
-//! answer 401 with the M1 body `unauthenticated`, and neither the token nor the key set reaches
-//! the logs.
+//! come from the file the platform setting `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` names, which the
+//! service reads again while it runs; requests carry tokens in `x-internal-identity`, and
+//! `/v1/whoami` uses the `UserIdentity` extractor. Rejected requests answer 401 with the M1 body
+//! `unauthenticated` (503 `unavailable` before the service has keys), and neither the token nor
+//! the key set reaches the logs.
 //!
 //! The signing keys are throwaway test keys derived in code from a one-byte seed; signing real
 //! tokens is the identity service's job (Laysi/trustiot-v2#61).
@@ -18,9 +19,8 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{Value, json};
-use support::{Response, Service, request, spawn_example, wait_exit};
+use support::{Response, Service, request};
 
-const KEYS_VARIABLE: &str = "TRUSTIOT_INTERNAL_IDENTITY_KEYS";
 const USER: &str = "01928f6e-7a3c-7d4e-8f00-0123456789ab";
 const TENANT: &str = "01928f6e-7a3c-7d4e-8f00-00000000000a";
 
@@ -123,7 +123,8 @@ fn assert_unauthenticated(response: &Response, case: &str) {
 fn only_requests_with_a_valid_token_reach_the_handler() {
     let key = TestKey::new(11);
     let keys = jwks(&[(&key, "2026-10-a")]);
-    let mut service = Service::start(&[(KEYS_VARIABLE, &keys)]);
+    let keys_file = support::keys_file(&keys);
+    let mut service = Service::start(&[(support::KEYS_FILE_VARIABLE, &keys_file)]);
     let now = unix_now();
 
     let valid = key.sign("2026-10-a", &claims(now, "assets"));
@@ -218,75 +219,166 @@ fn only_requests_with_a_valid_token_reach_the_handler() {
     }
 }
 
-/// Acceptance: while keys rotate, tokens signed under the new key id verify alongside tokens
-/// under the old one.
-#[test]
-fn tokens_under_either_key_verify_during_a_rotation() {
-    let old = TestKey::new(21);
-    let new = TestKey::new(22);
-    let keys = jwks(&[(&old, "2026-10-a"), (&new, "2026-11-a")]);
-    let service = Service::start(&[(KEYS_VARIABLE, &keys)]);
-    let now = unix_now();
-    for (kid, key) in [("2026-10-a", &old), ("2026-11-a", &new)] {
-        let token = key.sign(kid, &claims(now, "assets"));
-        let response = whoami(service.address, &[("x-internal-identity", &token)]);
-        assert_eq!(response.status, 200, "{kid}: {response:?}");
-        println!("kid {kid} with both keys configured: {}", response.status);
-    }
-    // A key id outside the set is rejected, whatever key signed it.
-    let unknown = new.sign("2026-12-a", &claims(now, "assets"));
-    let response = whoami(service.address, &[("x-internal-identity", &unknown)]);
-    assert_unauthenticated(&response, "unknown key id");
-    println!(
-        "kid 2026-12-a (not configured): {} {}",
-        response.status, response.body
-    );
+/// How long the tests wait for the service to read a changed keys file: many reload intervals
+/// (5 s) on a loaded machine.
+const RELOAD_WAIT: Duration = Duration::from_secs(60);
+
+/// Waits until the service has loaded a set with exactly `kids`, as its INFO line says.
+fn wait_for_loaded(service: &Service, kids: &[&str]) {
+    let expected = format!("{kids:?}");
+    service
+        .stdout
+        .wait_for_json(RELOAD_WAIT, |line| {
+            line["message"]
+                == "verifying internal identity tokens with these public keys of the identity service"
+                && line["level"] == "INFO"
+                && line["fields"]["keys"] == expected.as_str()
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "the service did not log loading the keys {expected} within {RELOAD_WAIT:?}\n{}",
+                service.stdout.text()
+            )
+        });
 }
 
-/// A key set the service cannot use stops it before it serves traffic, and the error names the
-/// variable without its value.
+/// Waits until `/readyz` on the health port answers `status`.
+fn wait_for_readiness(service: &Service, status: u16) {
+    let deadline = Instant::now() + RELOAD_WAIT;
+    loop {
+        let answered = support::get(service.health_address, "/readyz")
+            .map(|response| response.status)
+            .ok();
+        if answered == Some(status) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "/readyz did not answer {status} within {RELOAD_WAIT:?} (last: {answered:?})"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// Acceptance (Laysi/trustiot-v2#404): a rotation reaches a running service through its keys
+/// file, without a restart. Before the new public key arrives a token under it is refused with
+/// `unknown_key` (the WARN line names the key id); while both are published either verifies;
+/// once the old key is gone its tokens are refused.
 #[test]
-fn an_unusable_key_set_stops_startup() {
+fn a_rotation_reaches_a_running_service_through_its_keys_file() {
+    let old = TestKey::new(21);
+    let new = TestKey::new(22);
+    let file = support::keys_file(&jwks(&[(&old, "2026-10-a")]));
+    let service = Service::start(&[(support::KEYS_FILE_VARIABLE, &file)]);
+    wait_for_loaded(&service, &["2026-10-a"]);
+    let now = unix_now();
+    let old_token = old.sign("2026-10-a", &claims(now, "assets"));
+    let new_token = new.sign("2026-11-a", &claims(now, "assets"));
+    let status = |token: &str| whoami(service.address, &[("x-internal-identity", token)]).status;
+
+    assert_eq!(status(&old_token), 200);
+    assert_unauthenticated(
+        &whoami(service.address, &[("x-internal-identity", &new_token)]),
+        "a key not published yet",
+    );
+    let lines = wait_for_rejections(&service, "unknown_key", 1).expect("unknown_key is logged");
+    assert_eq!(lines[0]["fields"]["kid"], "2026-11-a", "{lines:?}");
+    println!("before the new key: old 200, new 401 unknown_key (kid logged)");
+
+    support::replace_keys_file(&file, &jwks(&[(&old, "2026-10-a"), (&new, "2026-11-a")]));
+    wait_for_loaded(&service, &["2026-10-a", "2026-11-a"]);
+    assert_eq!(status(&old_token), 200, "an old token during the overlap");
+    assert_eq!(status(&new_token), 200, "a new token during the overlap");
+    println!("both keys published: old 200, new 200, no restart");
+
+    support::replace_keys_file(&file, &jwks(&[(&new, "2026-11-a")]));
+    wait_for_loaded(&service, &["2026-11-a"]);
+    assert_eq!(status(&new_token), 200);
+    assert_eq!(status(&old_token), 401, "the retired key");
+    println!("old key retired: old 401, new 200");
+}
+
+/// A keys file that is missing (a fresh install), empty or unusable keeps the service unready,
+/// with a WARN line that says why without the file's content; a usable file later makes it
+/// ready. Once it has keys, a broken file keeps the last usable set.
+#[test]
+fn a_missing_or_unusable_keys_file_keeps_the_service_unready() {
     let key = TestKey::new(31);
     let mut with_private_part = key.jwk("2026-10-a");
     with_private_part["d"] = json!("presence-is-enough");
-    for (case, keys) in [
+    for (case, text) in [
+        ("missing", None),
+        ("empty", Some(String::new())),
         (
             "private key",
-            json!({ "keys": [with_private_part] }).to_string(),
+            Some(json!({ "keys": [with_private_part.clone()] }).to_string()),
         ),
-        ("not JSON", "not-a-jwk-set".to_owned()),
-        ("no keys", json!({ "keys": [] }).to_string()),
+        ("not JSON", Some("not-a-jwk-set".to_owned())),
+        ("no keys", Some(json!({ "keys": [] }).to_string())),
     ] {
-        let (mut child, stdout, _stderr) = spawn_example(&[(KEYS_VARIABLE, &keys)]);
-        let status = wait_exit(&mut child, Duration::from_secs(10))
-            .unwrap_or_else(|| panic!("{case}: the service exits"));
-        assert_eq!(status.code(), Some(1), "{case}");
-        let error = stdout
+        let file = support::keys_file("");
+        match &text {
+            Some(text) => support::replace_keys_file(&file, text),
+            None => std::fs::remove_file(&file).expect("remove the keys file"),
+        }
+        let mut service = Service::start(&[(support::KEYS_FILE_VARIABLE, &file)]);
+        let warning = service
+            .stdout
             .wait_for_message(
-                "invalid configuration; not starting",
-                Duration::from_secs(2),
+                "no usable public keys of the identity service yet; not ready",
+                RELOAD_WAIT,
             )
-            .unwrap_or_else(|| panic!("{case}: the error is logged"));
-        let text = error["fields"]["error"].as_str().expect("error text");
-        assert!(
-            text.contains("platform.internal_identity_keys"),
-            "{case}: {text}"
+            .unwrap_or_else(|| panic!("{case}: the problem is logged"));
+        assert_eq!(warning["level"], "WARN", "{case}");
+        wait_for_readiness(&service, 503);
+        let token = key.sign("2026-10-a", &claims(unix_now(), "assets"));
+        let response = whoami(service.address, &[("x-internal-identity", &token)]);
+        assert_eq!(response.status, 503, "{case}: {response:?}");
+        assert_eq!(
+            response.json(),
+            json!({"code": "unavailable", "message_key": "error.unavailable"}),
+            "{case}"
         );
-        assert!(text.contains(KEYS_VARIABLE), "{case}: {text}");
-        // The process has exited; read its whole output before checking what is absent from it.
+
+        support::replace_keys_file(&file, &jwks(&[(&key, "2026-10-a")]));
+        wait_for_loaded(&service, &["2026-10-a"]);
+        wait_for_readiness(&service, 200);
+        let token = key.sign("2026-10-a", &claims(unix_now(), "assets"));
+        assert_eq!(
+            whoami(service.address, &[("x-internal-identity", &token)]).status,
+            200,
+            "{case}"
+        );
+
+        // Broken again: the last usable set stays, and readiness with it.
+        support::replace_keys_file(&file, "not-a-jwk-set");
+        service
+            .stdout
+            .wait_for_message(
+                "the identity service's public keys file is not usable; keeping the last usable keys",
+                RELOAD_WAIT,
+            )
+            .unwrap_or_else(|| panic!("{case}: keeping the last set is logged"));
+        wait_for_readiness(&service, 200);
+        assert_eq!(
+            whoami(service.address, &[("x-internal-identity", &token)]).status,
+            200,
+            "{case}"
+        );
+
+        service.signal("TERM");
+        service
+            .wait_exit(Duration::from_secs(10))
+            .unwrap_or_else(|| panic!("{case}: the service exits"));
+        let logs = service.stdout.text();
         assert!(
-            stdout.wait_closed(support::OUTPUT_DRAIN_TIMEOUT),
-            "{case}: the output was not read to its end"
+            !logs.contains("presence-is-enough"),
+            "{case}: the file is logged"
         );
         assert!(
-            !stdout.text().contains(&keys),
-            "{case}: the value is logged"
+            !logs.contains("not-a-jwk-set"),
+            "{case}: the file is logged"
         );
-        assert!(
-            !stdout.text().contains("presence-is-enough"),
-            "{case}: part of the value is logged"
-        );
-        println!("{case}: {status}; error: {text}");
+        println!("{case}: unready (503), ready once a usable file arrived, kept it when broken");
     }
 }

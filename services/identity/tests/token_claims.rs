@@ -5,11 +5,10 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use contract::{ServiceName, TenantGrant, TenantRole};
-use ed25519_dalek::pkcs8::EncodePrivateKey;
-use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use ed25519_dalek::{Signer, SigningKey};
 use identity::issuer::{Issuer, TOKEN_LIFETIME_SECS, unix_now};
 use identity::session::SessionGrant;
+use identity_keys::SigningKeys;
 use serde_json::{Value, json};
 use service_kit::identity::{IdentityError, IdentityKeys, IdentityVerifier};
 
@@ -31,9 +30,22 @@ fn keys(entries: &[(u8, &str)]) -> IdentityKeys {
     IdentityKeys::from_jwks(&json!({ "keys": keys }).to_string()).expect("valid key set")
 }
 
+/// An issuer whose signing keys file holds only the key of `seed`, under the key id `entries`
+/// publishes it with, signing from the start; `entries` are the published public keys.
 fn issuer(seed: u8, entries: &[(u8, &str)]) -> Issuer {
-    let pem = key(seed).to_pkcs8_pem(LineEnding::LF).expect("pem");
-    Issuer::from_pkcs8_pem(&pem, &keys(entries)).expect("usable key")
+    let kid = entries
+        .iter()
+        .find(|(candidate, _)| *candidate == seed)
+        .map(|(_, kid)| *kid)
+        .expect("the key is published");
+    let document = json!({"keys": [{
+        "kid": kid, "generation": 1,
+        "x": URL_SAFE_NO_PAD.encode(key(seed).verifying_key().as_bytes()),
+        "d": URL_SAFE_NO_PAD.encode(key(seed).to_bytes()),
+        "published_at": 0, "signs_from": 0
+    }]});
+    let signing = SigningKeys::parse(&document.to_string()).expect("valid signing keys");
+    Issuer::with_keys(signing, keys(entries).into(), 0)
 }
 
 fn grant() -> SessionGrant {
@@ -384,35 +396,36 @@ fn expiry_issued_at_and_skew_boundaries() {
     assert_eq!(verify(&forge(&header("k1"), &payload, &key(1))), Ok(()));
 }
 
-/// The runbook's rotation (docs/runbooks/secrets.md, "內部身分簽章金鑰"): with both public keys
-/// deployed, a pod signing with the new key and the old pods' tokens are both accepted; the old
-/// public key can leave only after the old tokens have expired.
+/// The rotation (docs/architecture/secrets.md, 「內部身分簽章金鑰」): with both public keys
+/// published, tokens of the old and the new key are both accepted; the old public key can leave
+/// only after the old tokens have expired.
 #[test]
 fn rotation_keeps_old_tokens_valid_until_they_expire() {
     let both = keys(&[(1, "2026-10-a"), (2, "2027-04-a")]);
     let old_issuer = issuer(1, &[(1, "2026-10-a"), (2, "2027-04-a")]);
     let new_issuer = issuer(2, &[(1, "2026-10-a"), (2, "2027-04-a")]);
-    assert_eq!(old_issuer.kid(), "2026-10-a");
-    assert_eq!(new_issuer.kid(), "2027-04-a");
     let now = unix_now();
+    assert_eq!(old_issuer.signing_kid(now).as_deref(), Some("2026-10-a"));
+    assert_eq!(new_issuer.signing_kid(now).as_deref(), Some("2027-04-a"));
     let old = old_issuer
         .issue(&grant(), ServiceName::Assets, now)
         .expect("old token");
     let new = new_issuer
         .issue(&grant(), ServiceName::Assets, now)
         .expect("new token");
-    // Step 2 done: every service holds both keys, and accepts both tokens.
+    // Both public keys published: every service accepts both tokens.
     let verifier = IdentityVerifier::new(ServiceName::Assets, both);
     assert!(verifier.verify(old.expose()).is_ok());
     assert!(verifier.verify(new.expose()).is_ok());
-    // Services not yet rolled out with the new key (step 1 incomplete) refuse the new token.
+    // A service that has not read the new public key yet refuses the new token, which is why
+    // the new key waits internalIdentity.keyPropagationSeconds before it signs.
     let only_old = IdentityVerifier::new(ServiceName::Assets, keys(&[(1, "2026-10-a")]));
     assert_eq!(
         only_old.verify(new.expose()).err(),
         Some(IdentityError::UnknownKey)
     );
-    // Step 3 done too early (old token still within its lifetime): the old token is refused,
-    // the runbook therefore waits 305 s.
+    // The old key retired too early (old token still within its lifetime): the old token is
+    // refused, which is why retiring waits 305 s past the switch (crates/identity-keys).
     let only_new = IdentityVerifier::new(ServiceName::Assets, keys(&[(2, "2027-04-a")]));
     assert_eq!(
         only_new.verify(old.expose()).err(),

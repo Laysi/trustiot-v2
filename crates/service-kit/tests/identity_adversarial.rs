@@ -2050,7 +2050,8 @@ fn raw_status(address: SocketAddr, header_lines: &[String]) -> Option<u16> {
 fn http_layer_accepts_only_one_well_formed_header() {
     let key = signing_key(41);
     let keys = jwks_text(&[jwk(&key, "2026-10-a")]);
-    let service = Service::start(&[("TRUSTIOT_INTERNAL_IDENTITY_KEYS", &keys)]);
+    let keys_file = support::keys_file(&keys);
+    let service = Service::start(&[(support::KEYS_FILE_VARIABLE, &keys_file)]);
     let address = service.address;
     let header = r#"{"alg":"EdDSA","typ":"internal-identity+jwt","kid":"2026-10-a"}"#;
     let token = sign_raw(&key, header, claims_text(now()));

@@ -134,16 +134,16 @@ fn trace_id_bytes() -> Vec<u8> {
 #[test]
 fn nothing_a_request_carries_reaches_logs_or_otlp_on_any_path() {
     let collector = Collector::start();
+    let keys_file = support::keys_file(
+        r#"{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"k1","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}]}"#,
+    );
     let mut service = Service::start(&[
         ("TRUSTIOT__TELEMETRY__LOG_FILTER", "trace"),
         ("TRUSTIOT__TELEMETRY__OTLP_ENDPOINT", &collector.url()),
         // A short handler timeout so /v1/slow takes the 504 path.
         ("TRUSTIOT__HTTP__REQUEST_TIMEOUT", "300ms"),
         // Identity keys set, so /v1/whoami exists and rejects the garbage token below.
-        (
-            "TRUSTIOT_INTERNAL_IDENTITY_KEYS",
-            r#"{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"k1","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}]}"#,
-        ),
+        (support::KEYS_FILE_VARIABLE, &keys_file),
     ]);
     let address = service.address;
     let headers = [

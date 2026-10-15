@@ -9,7 +9,8 @@
 //! event.
 //!
 //! - [`session`]: the cookie, its hash, and the Postgres session store.
-//! - [`issuer`]: the signing key and the token format `crates/service-kit` verifies.
+//! - [`issuer`]: the signing keys the cluster generates, which one signs when, and the token
+//!   format `crates/service-kit` verifies.
 //! - [`audience`]: which service a request goes to, from the chart's cookie routes.
 //! - [`ext_authz`]: the check endpoint.
 //! - [`tenants`]: creating tenants, and the event that announces them.
@@ -30,14 +31,14 @@ pub mod tenants;
 
 use axum::Router;
 use contract::ServiceName;
-use service_kit::identity::IdentityVerifier;
+use service_kit::identity::{IdentityVerifier, PublishedKeys};
 use service_kit::migrations::MigrationCheck;
 use service_kit::{BoxError, Context};
 use utoipa::OpenApi;
 
 use crate::config::Config;
 use crate::ext_authz::ExtAuthz;
-use crate::issuer::Issuer;
+use crate::issuer::{Issuer, IssuerSettings};
 use crate::session::{PgSessionStore, SessionStore};
 use crate::tenants::TenantStore;
 
@@ -56,26 +57,33 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
     ApiDoc::openapi()
 }
 
-/// The service's startup for `service_kit::run`: loads and checks the signing key against the
-/// deployed public keys, starts keeping the Postgres connections open (with the session check of
-/// `crates/service-kit`), and serves the ext_authz check and the tenant API. Readiness passes
-/// once the connections are open (`PgSessionStore::keep_warm`) and the database has every
-/// migration file this release expects ([`schema::SCHEMA`]).
+/// The service's startup for `service_kit::run`: starts following the public keys file and the
+/// signing keys file ([`Issuer::watch`]), starts keeping the Postgres connections open (with the
+/// session check of `crates/service-kit`), and serves the ext_authz check and the tenant API.
+/// Readiness passes once the connections are open (`PgSessionStore::keep_warm`), the public keys
+/// have arrived, a key may sign, and the database has every migration file this release expects
+/// ([`schema::SCHEMA`]).
 ///
 /// # Errors
 ///
-/// When the signing key cannot be used (see [`Issuer::load`]) or the database settings would
-/// not verify the server. Nothing is served then: the service exits with code 1.
+/// When the database settings would not verify the server. Nothing is served then: the service
+/// exits with code 1. Missing or unusable key files do not stop it: it starts unready and becomes
+/// ready when they arrive, as on a fresh install.
 pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     let config = context.config();
     let platform = &config.platform;
-    let keys = platform.internal_identity_keys.clone();
-    let path = platform.identity_signing_key_file.clone();
-    let issuer = tokio::task::spawn_blocking(move || Issuer::load(&path, &keys)).await??;
+    let published =
+        PublishedKeys::watch(&context, platform.internal_identity_keys_file.clone()).await;
+    let settings = IssuerSettings {
+        signing_keys_file: platform.identity_signing_keys_file.clone(),
+        revoke_before: platform.identity_revoke_before_generation,
+        propagation_seconds: platform.identity_key_propagation_seconds,
+    };
+    let issuer = Issuer::watch(&context, &settings, published.clone()).await;
     tracing::info!(
-        kid = issuer.kid(),
         routes = platform.ingress_routes.len(),
-        "signing internal identity tokens"
+        revoke_before = settings.revoke_before,
+        "serving the ext_authz check"
     );
     let store = PgSessionStore::connect_lazy(
         config.postgres().connect_options(),
@@ -91,10 +99,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     let tenants = TenantStore::connect_lazy(config.postgres().connect_options())?;
     // Requests to the service's own API come through the ingress gateway like any other, with a
     // token the ext_authz check signed for `identity`.
-    let verifier = IdentityVerifier::new(
-        ServiceName::Identity,
-        platform.internal_identity_keys.clone(),
-    );
+    let verifier = IdentityVerifier::new(ServiceName::Identity, published);
     let ext_authz = ExtAuthz::new(store, issuer, platform.ingress_routes.clone());
     Ok(ext_authz::routes(ext_authz).merge(tenants::routes(verifier, tenants)))
 }

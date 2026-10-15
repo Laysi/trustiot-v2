@@ -3,45 +3,48 @@
 //! `{"alg":"EdDSA","typ":"internal-identity+jwt","kid":"<key id>"}` and whose payload is
 //! [`InternalClaims`] as JSON, signed with Ed25519.
 //!
-//! The private key is a PKCS#8 PEM file (`openssl genpkey -algorithm ed25519`) mounted from a
-//! Kubernetes Secret into this service only. Its key id is not configured separately: at startup
-//! the issuer signs a probe token under every key id of the deployment's public keys
-//! (`TRUSTIOT_INTERNAL_IDENTITY_KEYS`) and verifies it with service-kit's verifier, exactly as a
-//! service would. The one key id that verifies is the one it signs with; when none does, the
-//! public key was never deployed and the service refuses to start, so it can never issue tokens
-//! that the services reject. Rotation is therefore "deploy the new public key, then swap the
-//! Secret" (services/identity/README.md).
+//! The keys are generated in the cluster (Laysi/trustiot-v2#404; docs/architecture/secrets.md,
+//! 「內部身分簽章金鑰」): the identity pod's init container keeps them in the Secret
+//! `<release>-identity-signing-keys`, which the chart mounts into this service only
+//! (`TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE`), and their public keys in the ConfigMap every service
+//! mounts (`TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`). [`Issuer::watch`] reads both again every
+//! [`RELOAD_INTERVAL`] and signs each token with the key [`SigningKeys::signing_key`] selects at
+//! that moment: one whose `signs_from` has come, whose generation is not revoked
+//! (`TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION`), and whose key id is in the public keys this
+//! service itself reads, so it never signs with a key the services may not have. Every replica
+//! applies the same rule to the same data, so they switch keys at the same time without a
+//! restart. Without such a key the service is not ready and the ext_authz check answers 503.
 
 use std::fmt;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, PoisonError, RwLock};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use contract::{InternalClaims, InternalToken, ServiceName, UserId};
-use ed25519_dalek::pkcs8::DecodePrivateKey;
+use contract::{InternalClaims, InternalToken, ServiceName};
 use ed25519_dalek::{Signer, SigningKey};
+use identity_keys::{MAX_DOCUMENT_BYTES, SigningKeys};
 use serde::Serialize;
-use service_kit::identity::{ALGORITHM, IdentityKeys, IdentityVerifier, TOKEN_TYPE};
+use service_kit::Context;
+use service_kit::identity::{ALGORITHM, PublishedKeys, RELOAD_INTERVAL, TOKEN_TYPE};
 use zeroize::Zeroizing;
 
 use crate::session::SessionGrant;
 
 /// Lifetime of every token, in seconds: `exp - iat`. Short, because a token is a bearer
 /// credential for its audience until it expires (plus the verifiers' 5 s of clock skew), and
-/// because rotation waits for the longest lifetime the verifiers accept (300 s). Matches the
-/// 2026-10-10 PoC.
+/// because a retired key's tokens must have expired before its public key goes (that wait uses
+/// the longest lifetime the verifiers accept, 300 s, so it holds for any value up to it). Matches
+/// the 2026-10-10 PoC.
 pub const TOKEN_LIFETIME_SECS: i64 = 60;
 
-/// The platform setting with the path of the signing key file: `platform.identity_signing_key_file`,
-/// set by the chart as `TRUSTIOT_IDENTITY_SIGNING_KEY_FILE` on the identity service only.
-pub const KEY_FILE_SETTING: &str = "TRUSTIOT_IDENTITY_SIGNING_KEY_FILE";
+/// The platform setting with the path of the signing keys file: `platform.identity_signing_keys_file`,
+/// set by the chart as `TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE` on the identity service only.
+pub const SIGNING_KEYS_FILE_SETTING: &str = "TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE";
 
-/// Largest key file read. A PKCS#8 PEM Ed25519 key is about 120 bytes.
-const MAX_KEY_FILE_BYTES: u64 = 16 * 1024;
-
-/// The subject of the startup probe token; never issued to anyone.
-const PROBE_SUBJECT: &str = "00000000-0000-0000-0000-000000000000";
+/// The readiness check [`Issuer::watch`] adds: it fails while no key may sign.
+pub const READINESS_CHECK: &str = "signing_key";
 
 /// The protected header, serialized in this field order.
 #[derive(Serialize)]
@@ -51,73 +54,115 @@ struct Header<'a> {
     kid: &'a str,
 }
 
-/// Signs tokens with the identity service's private key under the key id the deployment
-/// publishes for it.
+/// What [`Issuer::watch`] needs besides the public keys.
+#[derive(Clone, Debug)]
+pub struct IssuerSettings {
+    /// The signing keys file (`TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE`).
+    pub signing_keys_file: PathBuf,
+    /// Keys of a lower generation never sign (`TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION`).
+    pub revoke_before: u64,
+    /// How long the signing keys and the published public keys may differ before it is an
+    /// error (`TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS`).
+    pub propagation_seconds: u64,
+}
+
+/// Signs tokens with the key the schedule selects now. Cheap to clone; clones share the keys.
+#[derive(Clone)]
 pub struct Issuer {
-    key: SigningKey,
-    kid: String,
+    shared: Arc<Shared>,
+}
+
+struct Shared {
+    /// The last usable signing keys file; `None` until one has been read.
+    keys: RwLock<Option<SigningKeys>>,
+    /// The public keys this service reads, as every other service does.
+    published: PublishedKeys,
+    revoke_before: u64,
 }
 
 impl Issuer {
-    /// Reads the PKCS#8 PEM key at `path` and finds its key id in `keys` (see the module
-    /// documentation).
-    ///
-    /// # Errors
-    ///
-    /// When the file cannot be read, is not an Ed25519 private key in PKCS#8 PEM, or its public
-    /// key is not exactly one entry of `keys`. Errors never contain the file's content.
-    pub fn load(path: &Path, keys: &IdentityKeys) -> Result<Self, KeyError> {
-        let file = std::fs::File::open(path).map_err(|error| KeyError::Unreadable(error.kind()))?;
-        let size = file
-            .metadata()
-            .map_err(|error| KeyError::Unreadable(error.kind()))?
-            .len();
-        if size > MAX_KEY_FILE_BYTES {
-            return Err(KeyError::TooLarge);
-        }
-        let mut text = Zeroizing::new(String::new());
-        file.take(MAX_KEY_FILE_BYTES + 1)
-            .read_to_string(&mut text)
-            .map_err(|_| KeyError::NotPkcs8Ed25519)?;
-        Self::from_pkcs8_pem(&text, keys)
-    }
-
-    /// Like [`Issuer::load`], from the PEM text.
-    ///
-    /// # Errors
-    ///
-    /// As [`Issuer::load`], except reading the file.
-    pub fn from_pkcs8_pem(pem: &str, keys: &IdentityKeys) -> Result<Self, KeyError> {
-        let key = SigningKey::from_pkcs8_pem(pem).map_err(|_| KeyError::NotPkcs8Ed25519)?;
-        let verifier = IdentityVerifier::new(ServiceName::Identity, keys.clone());
-        let probe = ProbeClaims::at(unix_now());
-        let mut matching = Vec::new();
-        for kid in keys.key_ids() {
-            let token = sign(&key, kid, &probe.0).map_err(|_| KeyError::NotPkcs8Ed25519)?;
-            if verifier.verify(&token).is_ok() {
-                matching.push(kid.to_owned());
-            }
-        }
-        match <[String; 1]>::try_from(matching) {
-            Ok([kid]) => Ok(Self { key, kid }),
-            Err(matching) if matching.is_empty() => Err(KeyError::NotDeployed),
-            Err(matching) => Err(KeyError::AmbiguousKeyIds(matching)),
-        }
-    }
-
-    /// The key id every token names.
+    /// An issuer without signing keys yet: it signs nothing until [`Issuer::replace`].
     #[must_use]
-    pub fn kid(&self) -> &str {
-        &self.kid
+    pub fn new(published: PublishedKeys, revoke_before: u64) -> Self {
+        Self {
+            shared: Arc::new(Shared {
+                keys: RwLock::new(None),
+                published,
+                revoke_before,
+            }),
+        }
+    }
+
+    /// An issuer with `keys`, for tests and tools that sign with known keys.
+    #[must_use]
+    pub fn with_keys(keys: SigningKeys, published: PublishedKeys, revoke_before: u64) -> Self {
+        let issuer = Self::new(published, revoke_before);
+        issuer.replace(keys);
+        issuer
+    }
+
+    /// Uses `keys` from now on.
+    pub fn replace(&self, keys: SigningKeys) {
+        *self
+            .shared
+            .keys
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(keys);
+    }
+
+    /// The key id tokens issued at `now` would name, if any key may sign then.
+    #[must_use]
+    pub fn signing_kid(&self, now: i64) -> Option<String> {
+        self.with_signing_key(now, |key| key.kid().to_owned())
+    }
+
+    fn with_signing_key<R>(
+        &self,
+        now: i64,
+        use_key: impl FnOnce(&identity_keys::SigningKey) -> R,
+    ) -> Option<R> {
+        let keys = self
+            .shared
+            .keys
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        let published = &self.shared.published;
+        keys.as_ref()?
+            .signing_key(now, self.shared.revoke_before, |key| {
+                published.publishes(key.kid(), &key.verifying_key())
+            })
+            .map(use_key)
+    }
+
+    /// The key ids of the signing keys file with their public keys, if one has been read.
+    fn public_keys(&self) -> Option<Vec<(String, ed25519_dalek::VerifyingKey)>> {
+        self.shared
+            .keys
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(|keys| {
+                keys.keys()
+                    .iter()
+                    .map(|key| (key.kid().to_owned(), key.verifying_key()))
+                    .collect()
+            })
+    }
+
+    /// The key ids of the signing keys file, if one has been read: what logs may show of it.
+    fn key_ids(&self) -> Option<Vec<String>> {
+        self.public_keys()
+            .map(|keys| keys.into_iter().map(|(kid, _)| kid).collect())
     }
 
     /// A token for `grant`, addressed to `audience`, issued at `now` (seconds since the Unix
-    /// epoch) and valid for [`TOKEN_LIFETIME_SECS`].
+    /// epoch) and valid for [`TOKEN_LIFETIME_SECS`], signed with the key that may sign at `now`.
     ///
     /// # Errors
     ///
-    /// Only if the claims cannot be serialized or the result is not a valid header value, which
-    /// the types rule out; callers answer 503.
+    /// [`IssueError::NoSigningKey`] when no key may sign at `now`; otherwise only if the claims
+    /// cannot be serialized or the result is not a valid header value, which the types rule out.
+    /// Callers answer 503.
     pub fn issue(
         &self,
         grant: &SessionGrant,
@@ -129,21 +174,247 @@ impl Issuer {
             sub: grant.user,
             aud: audience,
             iat: now,
-            exp: now.checked_add(TOKEN_LIFETIME_SECS).ok_or(IssueError)?,
+            exp: now
+                .checked_add(TOKEN_LIFETIME_SECS)
+                .ok_or(IssueError::Build)?,
             tenant: grant.tenant,
             platform_admin: grant.platform_admin,
         };
-        let token = sign(&self.key, &self.kid, &claims)?;
-        InternalToken::new(token).map_err(|_| IssueError)
+        let token = self
+            .with_signing_key(now, |key| sign(key.signer(), key.kid(), &claims))
+            .ok_or(IssueError::NoSigningKey)??;
+        InternalToken::new(token).map_err(|_| IssueError::Build)
+    }
+
+    /// The issuer of a running service: reads the signing keys file now and then every
+    /// [`RELOAD_INTERVAL`] until the service stops, keeping the last usable keys when the file
+    /// is missing or unusable (a WARN line says why, never what the file holds). Logs at INFO
+    /// which key signs whenever that changes, and at ERROR when the signing keys and the
+    /// `published` public keys have differed for longer than `propagation_seconds` (the init
+    /// container writes both, so a lasting difference means one was changed by hand or the
+    /// kubelet stopped updating this pod's files). Adds the readiness check [`READINESS_CHECK`].
+    pub async fn watch<T>(
+        context: &Context<T>,
+        settings: &IssuerSettings,
+        published: PublishedKeys,
+    ) -> Self {
+        let issuer = Self::new(published.clone(), settings.revoke_before);
+        let mut file = KeysFile::new(settings.signing_keys_file.clone());
+        let propagation = i64::try_from(settings.propagation_seconds).unwrap_or(i64::MAX);
+        let mut monitor = Monitor::new(propagation);
+        file.reload(&issuer).await;
+        monitor.observe(unix_now(), &issuer, &published);
+        let ready = issuer.clone();
+        context.health().add_check(READINESS_CHECK, move || {
+            let signing = ready.signing_kid(unix_now()).is_some();
+            async move {
+                if signing {
+                    Ok(())
+                } else {
+                    Err("no signing key may sign now")
+                }
+            }
+        });
+        let shutdown = context.shutdown().clone();
+        let watched = issuer.clone();
+        context.spawn(async move {
+            let mut every = tokio::time::interval(RELOAD_INTERVAL);
+            every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            every.tick().await;
+            loop {
+                tokio::select! {
+                    () = shutdown.stopping() => return,
+                    _ = every.tick() => {
+                        file.reload(&watched).await;
+                        monitor.observe(unix_now(), &watched, &published);
+                    }
+                }
+            }
+        });
+        issuer
     }
 }
 
 impl fmt::Debug for Issuer {
-    /// Only the key id: the private key never reaches a log.
+    /// Only the key ids: the private keys never reach a log.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Issuer")
-            .field("kid", &self.kid)
+            .field("key_ids", &self.key_ids())
+            .field("revoke_before", &self.shared.revoke_before)
             .finish_non_exhaustive()
+    }
+}
+
+/// The signing keys file and what was last read from it.
+struct KeysFile {
+    path: PathBuf,
+    /// The text of the keys in use, to skip parsing an unchanged file. Wiped when dropped.
+    loaded: Option<Zeroizing<String>>,
+    /// The problem last logged, to log each one once.
+    problem: Option<String>,
+}
+
+impl KeysFile {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            loaded: None,
+            problem: None,
+        }
+    }
+
+    async fn reload(&mut self, issuer: &Issuer) {
+        let path = self.path.clone();
+        let read = tokio::task::spawn_blocking(move || read(&path))
+            .await
+            .unwrap_or_else(|_| Err("reading it failed".to_owned()));
+        let text = match read {
+            Ok(text) => text,
+            Err(problem) => return self.unusable(problem, issuer),
+        };
+        if self
+            .loaded
+            .as_ref()
+            .is_some_and(|loaded| loaded.as_str() == text.as_str())
+        {
+            return;
+        }
+        match SigningKeys::parse(&text) {
+            Ok(keys) if keys.is_empty() => {
+                self.unusable("the file holds no keys".to_owned(), issuer);
+            }
+            Ok(keys) => {
+                tracing::info!(
+                    file = %self.path.display(),
+                    keys = ?keys.key_ids().collect::<Vec<_>>(),
+                    "loaded the internal identity signing keys"
+                );
+                issuer.replace(keys);
+                self.loaded = Some(text);
+                self.problem = None;
+            }
+            Err(error) => self.unusable(format!("not a usable key set: {error}"), issuer),
+        }
+    }
+
+    fn unusable(&mut self, problem: String, issuer: &Issuer) {
+        self.loaded = None;
+        if self.problem.as_ref() == Some(&problem) {
+            return;
+        }
+        match issuer.key_ids() {
+            Some(kept) => tracing::warn!(
+                file = %self.path.display(),
+                problem = %problem,
+                kept = ?kept,
+                "the signing keys file is not usable; keeping the last usable keys"
+            ),
+            None => tracing::warn!(
+                file = %self.path.display(),
+                problem = %problem,
+                "no usable signing keys yet; not ready"
+            ),
+        }
+        self.problem = Some(problem);
+    }
+}
+
+/// The file's text: at most [`MAX_DOCUMENT_BYTES`], UTF-8, wiped when dropped. Errors say why,
+/// never what it holds.
+fn read(path: &Path) -> Result<Zeroizing<String>, String> {
+    let file = std::fs::File::open(path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => "the file does not exist (yet)".to_owned(),
+        kind => format!("cannot open the file ({kind})"),
+    })?;
+    let limit = u64::try_from(MAX_DOCUMENT_BYTES).unwrap_or(u64::MAX);
+    // Room for the largest file up front, so the buffer never moves while it grows and leaves an
+    // unwiped copy of the keys behind.
+    let mut text = Zeroizing::new(String::with_capacity(MAX_DOCUMENT_BYTES + 1));
+    file.take(limit.saturating_add(1))
+        .read_to_string(&mut text)
+        .map_err(|_| "the file is not UTF-8 text".to_owned())?;
+    if text.len() > MAX_DOCUMENT_BYTES {
+        return Err(format!(
+            "the file is larger than {MAX_DOCUMENT_BYTES} bytes"
+        ));
+    }
+    Ok(text)
+}
+
+/// What the watch loop reports: which key signs, and whether the signing keys and the published
+/// public keys have differed for too long.
+struct Monitor {
+    propagation: i64,
+    /// The key id last reported as signing (`Some(None)`: reported that none may sign).
+    signing: Option<Option<String>>,
+    /// Since when the two sets have differed (Unix time).
+    differ_since: Option<i64>,
+    /// Whether the difference was reported as an error.
+    reported: bool,
+}
+
+impl Monitor {
+    fn new(propagation: i64) -> Self {
+        Self {
+            propagation,
+            signing: None,
+            differ_since: None,
+            reported: false,
+        }
+    }
+
+    fn observe(&mut self, now: i64, issuer: &Issuer, published: &PublishedKeys) {
+        let signing = issuer.signing_kid(now);
+        if self.signing.as_ref() != Some(&signing) {
+            match &signing {
+                Some(kid) => tracing::info!(kid, "signing internal identity tokens"),
+                None => tracing::warn!(
+                    revoke_before = issuer.shared.revoke_before,
+                    "no signing key may sign now (none loaded, none scheduled to sign yet, all \
+                     revoked, or none in the published public keys); not ready"
+                ),
+            }
+            self.signing = Some(signing);
+        }
+        let Some(secret) = issuer.public_keys() else {
+            return;
+        };
+        let public: Vec<String> = published
+            .current()
+            .map(|keys| keys.key_ids().map(str::to_owned).collect())
+            .unwrap_or_default();
+        // A key id published with another public key counts as unpublished.
+        let unpublished: Vec<&String> = secret
+            .iter()
+            .filter(|(kid, key)| !published.publishes(kid, key))
+            .map(|(kid, _)| kid)
+            .collect();
+        let unknown: Vec<&String> = public
+            .iter()
+            .filter(|kid| !secret.iter().any(|(own, _)| own == *kid))
+            .collect();
+        if unpublished.is_empty() && unknown.is_empty() {
+            if self.reported {
+                tracing::info!("the published public keys match the signing keys again");
+            }
+            self.differ_since = None;
+            self.reported = false;
+            return;
+        }
+        let since = *self.differ_since.get_or_insert(now);
+        if !self.reported && now.saturating_sub(since) > self.propagation {
+            tracing::error!(
+                unpublished = ?unpublished,
+                unknown = ?unknown,
+                seconds = now.saturating_sub(since),
+                "the public keys every service reads have differed from the signing keys for \
+                 longer than internalIdentity.keyPropagationSeconds; services reject tokens of an \
+                 unpublished key and accept an unknown one. kubectl rollout restart \
+                 deployment/<release>-identity rewrites the ConfigMap from the Secret \
+                 (docs/runbooks/secrets.md)"
+            );
+            self.reported = true;
+        }
     }
 }
 
@@ -155,8 +426,8 @@ fn sign(key: &SigningKey, kid: &str, claims: &InternalClaims) -> Result<String, 
         typ: TOKEN_TYPE,
         kid,
     };
-    let header = serde_json::to_vec(&header).map_err(|_| IssueError)?;
-    let payload = serde_json::to_vec(claims).map_err(|_| IssueError)?;
+    let header = serde_json::to_vec(&header).map_err(|_| IssueError::Build)?;
+    let payload = serde_json::to_vec(claims).map_err(|_| IssueError::Build)?;
     let signed = format!(
         "{}.{}",
         URL_SAFE_NO_PAD.encode(header),
@@ -167,26 +438,6 @@ fn sign(key: &SigningKey, kid: &str, claims: &InternalClaims) -> Result<String, 
         "{signed}.{}",
         URL_SAFE_NO_PAD.encode(signature.to_bytes())
     ))
-}
-
-/// Claims of the startup probe: addressed to the identity service itself, for a user that does
-/// not exist.
-struct ProbeClaims(InternalClaims);
-
-impl ProbeClaims {
-    fn at(now: i64) -> Self {
-        Self(InternalClaims {
-            iss: ServiceName::Identity,
-            sub: PROBE_SUBJECT
-                .parse::<UserId>()
-                .unwrap_or_else(|_| UserId::from_uuid(Default::default())),
-            aud: ServiceName::Identity,
-            iat: now,
-            exp: now.saturating_add(TOKEN_LIFETIME_SECS),
-            tenant: None,
-            platform_admin: false,
-        })
-    }
 }
 
 /// Seconds since the Unix epoch. A clock before the epoch reads as 0, so tokens come out expired
@@ -200,41 +451,17 @@ pub fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
-/// Why the signing key cannot be used. Messages never quote the key file.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum KeyError {
-    /// The file could not be opened or its size read.
-    #[error("{KEY_FILE_SETTING}: the signing key file cannot be read ({0})")]
-    Unreadable(std::io::ErrorKind),
-    /// The file is larger than a key file can be.
-    #[error("{KEY_FILE_SETTING}: the signing key file is too large to be a key")]
-    TooLarge,
-    /// The file is not an Ed25519 private key in PKCS#8 PEM.
-    #[error(
-        "{KEY_FILE_SETTING}: the signing key file is not an Ed25519 private key in PKCS#8 PEM \
-         (`openssl genpkey -algorithm ed25519`)"
-    )]
-    NotPkcs8Ed25519,
-    /// No key id of the deployment's public keys verifies tokens signed with this key.
-    #[error(
-        "{KEY_FILE_SETTING}: the signing key's public key is not in \
-         TRUSTIOT_INTERNAL_IDENTITY_KEYS, so services would reject every token; deploy the public \
-         key to every service first (key rotation step 1)"
-    )]
-    NotDeployed,
-    /// More than one key id holds this key's public key.
-    #[error(
-        "{KEY_FILE_SETTING}: the signing key's public key is listed under more than one key id in \
-         TRUSTIOT_INTERNAL_IDENTITY_KEYS ({})",
-        .0.join(", ")
-    )]
-    AmbiguousKeyIds(Vec<String>),
-}
-
-/// A token could not be built; the types make this unreachable in practice.
+/// Why no token was signed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("could not build an internal identity token")]
-pub struct IssueError;
+pub enum IssueError {
+    /// No key may sign now: none loaded, none whose `signs_from` has come, every one revoked, or
+    /// none in the published public keys. The service is not ready meanwhile.
+    #[error("no signing key may sign now")]
+    NoSigningKey,
+    /// A token could not be built; the types make this unreachable in practice.
+    #[error("could not build an internal identity token")]
+    Build,
+}
 
 #[cfg(test)]
 pub(crate) mod test_keys {
@@ -242,8 +469,7 @@ pub(crate) mod test_keys {
     //! them, and no key material is stored in the repository.
 
     use ed25519_dalek::SigningKey;
-    use ed25519_dalek::pkcs8::EncodePrivateKey;
-    use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
+    use identity_keys::SigningKeys;
     use serde_json::json;
     use service_kit::identity::IdentityKeys;
 
@@ -251,14 +477,6 @@ pub(crate) mod test_keys {
 
     pub(crate) fn signing_key(seed: u8) -> SigningKey {
         SigningKey::from_bytes(&[seed; 32])
-    }
-
-    /// The key as `openssl genpkey -algorithm ed25519` writes it.
-    pub(crate) fn pem(seed: u8) -> String {
-        signing_key(seed)
-            .to_pkcs8_pem(LineEnding::LF)
-            .expect("PKCS#8 PEM")
-            .to_string()
     }
 
     /// The public JWK `x` member.
@@ -275,8 +493,30 @@ pub(crate) mod test_keys {
         IdentityKeys::from_jwks(&json!({ "keys": keys }).to_string()).expect("valid key set")
     }
 
+    /// Signing keys with these (seed, kid, signs_from) entries, each of generation 1 and
+    /// published at 0.
+    pub(crate) fn signing_keys(entries: &[(u8, &str, i64)]) -> SigningKeys {
+        let keys: Vec<_> = entries
+            .iter()
+            .map(|(seed, kid, signs_from)| {
+                json!({
+                    "kid": kid, "generation": 1, "x": x(*seed),
+                    "d": URL_SAFE_NO_PAD.encode([*seed; 32]),
+                    "published_at": 0, "signs_from": signs_from
+                })
+            })
+            .collect();
+        SigningKeys::parse(&json!({ "keys": keys }).to_string()).expect("valid signing keys")
+    }
+
+    /// An issuer that signs with the key of `seed` under the key id `entries` gives it, with
+    /// `entries` as the published public keys.
     pub(crate) fn issuer(seed: u8, entries: &[(u8, &str)]) -> Issuer {
-        Issuer::from_pkcs8_pem(&pem(seed), &keys(entries)).expect("usable key")
+        let kid = entries
+            .iter()
+            .find(|(candidate, _)| *candidate == seed)
+            .map_or("unpublished", |(_, kid)| kid);
+        Issuer::with_keys(signing_keys(&[(seed, kid, 0)]), keys(entries).into(), 0)
     }
 }
 
@@ -284,9 +524,9 @@ pub(crate) mod test_keys {
 mod tests {
     use contract::{TenantGrant, TenantRole};
     use serde_json::{Value, json};
-    use service_kit::identity::IdentityError;
+    use service_kit::identity::{IdentityError, IdentityVerifier};
 
-    use super::test_keys::{issuer, keys, pem, signing_key};
+    use super::test_keys::{issuer, keys, signing_key, signing_keys};
     use super::*;
 
     const USER: &str = "01928f6e-7a3c-7d4e-8f00-0123456789ab";
@@ -306,6 +546,10 @@ mod tests {
     fn segment(token: &str, index: usize) -> Value {
         let part = token.split('.').nth(index).expect("segment");
         serde_json::from_slice(&URL_SAFE_NO_PAD.decode(part).expect("base64url")).expect("JSON")
+    }
+
+    fn kid_of(token: &InternalToken) -> Value {
+        segment(token.expose(), 0)["kid"].clone()
     }
 
     #[test]
@@ -383,66 +627,56 @@ mod tests {
         );
     }
 
+    /// Acceptance (Laysi/trustiot-v2#404): the key switches at its `signs_from`, by the clock
+    /// alone, in every replica that reads the same files.
     #[test]
-    fn the_key_id_is_the_one_whose_public_key_matches() {
-        // During rotation both keys are deployed; each private key finds its own key id.
-        let entries = [(1, "2026-10-a"), (2, "2027-04-a")];
-        assert_eq!(issuer(1, &entries).kid(), "2026-10-a");
-        assert_eq!(issuer(2, &entries).kid(), "2027-04-a");
-        assert_eq!(issuer(2, &[(2, "only")]).kid(), "only");
-    }
-
-    #[test]
-    fn a_key_the_services_do_not_have_is_refused() {
-        // Rotation step 2 before step 1: the new private key's public key is not deployed.
-        assert_eq!(
-            Issuer::from_pkcs8_pem(&pem(2), &keys(&[(1, "2026-10-a")])).err(),
-            Some(KeyError::NotDeployed)
+    fn the_signing_key_switches_at_its_scheduled_time() {
+        let published = PublishedKeys::from(keys(&[(1, "old"), (2, "new")]));
+        let issuer = Issuer::with_keys(
+            signing_keys(&[(1, "old", 0), (2, "new", 1000)]),
+            published.clone(),
+            0,
         );
-        assert_eq!(
-            Issuer::from_pkcs8_pem(&pem(1), &keys(&[(1, "a"), (2, "b"), (1, "c")])).err(),
-            Some(KeyError::AmbiguousKeyIds(vec![
-                "a".to_owned(),
-                "c".to_owned()
-            ]))
-        );
-    }
+        let at = |now| {
+            issuer
+                .issue(&grant(), ServiceName::Assets, now)
+                .map(|token| kid_of(&token))
+        };
+        assert_eq!(at(999), Ok(json!("old")));
+        assert_eq!(at(1000), Ok(json!("new")));
+        assert_eq!(issuer.signing_kid(1000).as_deref(), Some("new"));
 
-    /// An X25519 private key in PKCS#8 PEM: same OID family as Ed25519 (1.3.101.110), different
-    /// algorithm. Built at run time so no private key block sits in the source.
-    fn x25519_pem() -> String {
-        let mut der = vec![
-            0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x6e, 0x04, 0x22,
-            0x04, 0x20,
-        ];
-        der.extend([7_u8; 32]);
-        let label = "PRIVATE KEY";
-        format!(
-            "-----BEGIN {label}-----\n{}\n-----END {label}-----\n",
-            base64::engine::general_purpose::STANDARD.encode(der)
-        )
+        // A replica whose public keys file has not got the new key yet keeps the old key.
+        published.replace(keys(&[(1, "old")]));
+        assert_eq!(at(1000), Ok(json!("old")));
+        // One whose public keys lack every signing key signs nothing.
+        published.replace(keys(&[(3, "other")]));
+        assert_eq!(at(1000), Err(IssueError::NoSigningKey));
     }
 
     #[test]
-    fn only_an_ed25519_pkcs8_pem_is_a_signing_key() {
-        let keys = keys(&[(1, "k")]);
-        let der_base64 = pem(1)
-            .lines()
-            .filter(|line| !line.starts_with("-----"))
-            .collect::<String>();
-        for bad in [
-            String::new(),
-            "not a key".to_owned(),
-            der_base64,
-            pem(1).replace("PRIVATE KEY", "PUBLIC KEY"),
-            x25519_pem(),
-        ] {
-            assert_eq!(
-                Issuer::from_pkcs8_pem(&bad, &keys).err(),
-                Some(KeyError::NotPkcs8Ed25519),
-                "{bad}"
-            );
-        }
+    fn revoked_generations_and_missing_keys_never_sign() {
+        let published = PublishedKeys::from(keys(&[(1, "k")]));
+        let revoked = Issuer::with_keys(signing_keys(&[(1, "k", 0)]), published.clone(), 2);
+        assert_eq!(
+            revoked
+                .issue(&grant(), ServiceName::Assets, unix_now())
+                .err(),
+            Some(IssueError::NoSigningKey)
+        );
+        let empty = Issuer::new(published, 0);
+        assert_eq!(empty.signing_kid(unix_now()), None);
+        assert_eq!(
+            empty.issue(&grant(), ServiceName::Assets, unix_now()).err(),
+            Some(IssueError::NoSigningKey)
+        );
+        // A key scheduled for later does not sign before then.
+        let later = Issuer::with_keys(
+            signing_keys(&[(1, "k", i64::MAX)]),
+            PublishedKeys::from(keys(&[(1, "k")])),
+            0,
+        );
+        assert_eq!(later.signing_kid(unix_now()), None);
     }
 
     /// Acceptance (Laysi/trustiot-v2#61): the private key never appears in error messages or
@@ -450,35 +684,112 @@ mod tests {
     #[test]
     fn errors_and_debug_output_never_show_the_private_key() {
         let seed = [1_u8; 32];
-        let pem_text = pem(1);
-        let body: String = pem_text
-            .lines()
-            .filter(|line| !line.starts_with("-----"))
-            .collect();
         let secrets = [
-            body.clone(),
             URL_SAFE_NO_PAD.encode(seed),
             base64::engine::general_purpose::STANDARD.encode(seed),
             seed.iter().map(|b| format!("{b:02x}")).collect::<String>(),
         ];
-        let mut outputs = vec![format!("{:?}", issuer(1, &[(1, "k")]))];
-        for keys in [keys(&[(2, "k")]), keys(&[(1, "a"), (1, "b")])] {
-            let error = Issuer::from_pkcs8_pem(&pem_text, &keys).expect_err("refused");
-            outputs.push(error.to_string());
-            outputs.push(format!("{error:?}"));
-        }
-        let broken = pem_text.replace(body.get(..10).expect("PEM body"), "AAAAAAAAAA");
-        let error = Issuer::from_pkcs8_pem(&broken, &keys(&[(1, "k")])).expect_err("refused");
-        outputs.push(error.to_string());
+        let outputs = [
+            format!("{:?}", issuer(1, &[(1, "k")])),
+            IssueError::NoSigningKey.to_string(),
+            format!("{:?}", IssueError::Build),
+        ];
         for output in outputs {
             for secret in &secrets {
                 assert!(!output.contains(secret.as_str()), "{output}");
             }
         }
+        assert!(format!("{:?}", issuer(1, &[(1, "k")])).contains("\"k\""));
         assert_eq!(
             signing_key(1).to_bytes(),
             seed,
             "the secrets above are this key"
         );
+    }
+
+    /// A directory of its own under the system's temporary directory, removed when dropped.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "identity-{name}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("a scratch directory");
+            Self(dir)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn publish(path: &Path, text: &str) {
+        let next = path.with_extension("next");
+        std::fs::write(&next, text).expect("write");
+        std::fs::rename(&next, path).expect("rename");
+    }
+
+    #[tokio::test]
+    async fn the_last_usable_signing_keys_stay_until_usable_ones_replace_them() {
+        let scratch = Scratch::new("signing-keys");
+        let path = scratch.0.join("signing-keys.json");
+        let issuer = Issuer::new(PublishedKeys::from(keys(&[(1, "a"), (2, "b")])), 0);
+        let mut file = KeysFile::new(path.clone());
+        let now = unix_now();
+
+        // Not there yet (a fresh install before the kubelet updates the volume).
+        file.reload(&issuer).await;
+        assert_eq!(issuer.signing_kid(now), None);
+        publish(&path, r#"{"keys":[]}"#);
+        file.reload(&issuer).await;
+        assert_eq!(issuer.signing_kid(now), None);
+
+        publish(&path, &signing_keys(&[(1, "a", 0)]).to_json());
+        file.reload(&issuer).await;
+        assert_eq!(issuer.signing_kid(now).as_deref(), Some("a"));
+
+        // Broken, emptied or gone: the last usable keys stay.
+        let pem_line = format!("-----{} PRIVATE KEY-----", "BEGIN");
+        for broken in ["", "not JSON", r#"{"keys":[]}"#, pem_line.as_str()] {
+            publish(&path, broken);
+            file.reload(&issuer).await;
+            assert_eq!(issuer.signing_kid(now).as_deref(), Some("a"), "{broken}");
+        }
+        std::fs::remove_file(&path).expect("remove");
+        file.reload(&issuer).await;
+        assert_eq!(issuer.signing_kid(now).as_deref(), Some("a"));
+
+        // A rotation arrives without a restart.
+        publish(&path, &signing_keys(&[(1, "a", 0), (2, "b", 1)]).to_json());
+        file.reload(&issuer).await;
+        assert_eq!(issuer.signing_kid(now).as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn a_lasting_difference_between_the_two_files_is_reported_once() {
+        let published = PublishedKeys::from(keys(&[(1, "a")]));
+        let issuer = Issuer::with_keys(
+            signing_keys(&[(1, "a", 0), (2, "b", 0)]),
+            published.clone(),
+            0,
+        );
+        let mut monitor = Monitor::new(600);
+        monitor.observe(1000, &issuer, &published);
+        assert_eq!(monitor.differ_since, Some(1000));
+        assert!(!monitor.reported);
+        monitor.observe(1600, &issuer, &published);
+        assert!(!monitor.reported, "within the propagation time");
+        monitor.observe(1601, &issuer, &published);
+        assert!(monitor.reported);
+        published.replace(keys(&[(1, "a"), (2, "b")]));
+        monitor.observe(1602, &issuer, &published);
+        assert_eq!((monitor.differ_since, monitor.reported), (None, false));
+        assert_eq!(monitor.signing, Some(Some("b".to_owned())));
     }
 }

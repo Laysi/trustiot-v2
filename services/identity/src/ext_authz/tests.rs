@@ -455,6 +455,35 @@ async fn a_failing_store_gets_503_without_an_identity() {
     );
 }
 
+/// Without a key that may sign (none loaded yet, or every one revoked) an active session gets
+/// 503 and no identity: the check fails closed, as it does when the store fails.
+#[tokio::test]
+async fn no_signing_key_gets_503_without_an_identity() {
+    let store = Arc::new(MemoryStore::new(Behaviour::Answer));
+    let secret = SessionSecret::from_bytes([42; 32]);
+    store.add(&secret, grant());
+    let published = service_kit::identity::PublishedKeys::from(keys(&[(1, KID)]));
+    let router = routes(ExtAuthz::new(
+        Arc::clone(&store),
+        Issuer::new(published, 0),
+        routes_table(),
+    ));
+    let cookie = format!("{SESSION_COOKIE}={}", secret.to_cookie_value());
+    let request = Request::builder()
+        .uri("/internal/ext-authz/")
+        .header("host", APP)
+        .header("cookie", &cookie)
+        .body(Body::empty())
+        .expect("request");
+    let response = router.oneshot(request).await.expect("infallible");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(identity_headers(&response).is_empty());
+    assert_eq!(
+        body_json(response).await,
+        json!({"code": "unavailable", "message_key": "error.unavailable"})
+    );
+}
+
 /// The gateway gives up after 0.5 s; the check answers 503 before that.
 #[tokio::test]
 async fn a_hanging_store_gets_503_within_the_deadline() {

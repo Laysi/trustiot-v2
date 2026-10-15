@@ -50,7 +50,7 @@ schema `assets`，DDL 在 `migrations/postgres/`，由 migration Job（登記在
 
 | 變數 | 說明 |
 | --- | --- |
-| `TRUSTIOT_INTERNAL_IDENTITY_KEYS` | 平台設定：驗證內部身分 token 的公鑰 |
+| `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` | 平台設定：驗證內部身分 token 的公鑰檔（chart 掛進每個 pod 的 ConfigMap `<release>-internal-identity-keys` 的 `jwks.json`）；每 5 秒重讀，換公鑰不必重啟，還沒有可用的公鑰時不就緒（service-kit README「公鑰與輪替」） |
 | `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE`、`_CA_FILE` | 平台設定：Postgres 位置；只接受 `verify-full`，`_CA_FILE` 必填 |
 | `TRUSTIOT__DATABASE__USERNAME`、`TRUSTIOT__DATABASE__PASSWORD` | 服務角色 `assets_app` 的帳密：密碼來自 Secret `<release>-assets-password` 的 `assets_app` key |
 | `TRUSTIOT__DATABASE__PLATFORM_USERNAME`、`TRUSTIOT__DATABASE__PLATFORM_PASSWORD` | 平台角色 `assets_platform` 的帳密：密碼來自同一個 Secret 的 `assets_platform` key。chart 只對 outbox 消費端綁平台角色的密碼（`_migrate.tpl` 的 `trustiot.migrate.platformLogins`），migration Job 產生這兩個密碼並設定角色 |

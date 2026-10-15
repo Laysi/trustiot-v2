@@ -3148,11 +3148,11 @@ async fn the_example_service_serves_each_user_only_their_tenant() {
         .join(support::unique_name("other-ca.crt"));
     std::fs::write(&other_ca_file, TestCa::new("unrelated CA").pem).expect("write the CA file");
     let identity = Identity::new();
-    let jwks = identity.jwks();
+    let keys_file = support::keys_file(&identity.jwks());
     let port = fixture.postgres.address.port().to_string();
     let env = |ca_file: &std::path::Path| {
         vec![
-            ("TRUSTIOT_INTERNAL_IDENTITY_KEYS".to_owned(), jwks.clone()),
+            (support::KEYS_FILE_VARIABLE.to_owned(), keys_file.clone()),
             (
                 "TRUSTIOT__DATABASE__USERNAME".to_owned(),
                 "example_app".to_owned(),

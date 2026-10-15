@@ -240,7 +240,9 @@ use axum::routing::get;
 use axum::Router;
 use contract::ServiceName;
 use serde::Deserialize;
-use service_kit::identity::{IdentityKeys, IdentityVerifier, UserIdentity};
+use service_kit::identity::{IdentityVerifier, PublishedKeys, UserIdentity};
+use service_kit::Context;
+use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -250,7 +252,7 @@ struct Config {
 
 #[derive(Debug, Deserialize)]
 struct Platform {
-    internal_identity_keys: IdentityKeys, // TRUSTIOT_INTERNAL_IDENTITY_KEYS，必填
+    internal_identity_keys_file: PathBuf, // TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE，必填
 }
 
 #[derive(Clone)]
@@ -270,16 +272,17 @@ async fn list_devices(user: UserIdentity) -> String {
     format!("{:?}", user.tenant_id())
 }
 
-fn routes(config: &Config) -> Router {
-    let identity =
-        IdentityVerifier::new(ServiceName::Assets, config.platform.internal_identity_keys.clone());
+async fn routes(context: &Context<Config>, config: &Config) -> Router {
+    // Reads the public keys file now and every 5 s; not ready until it holds a usable set.
+    let keys = PublishedKeys::watch(context, config.platform.internal_identity_keys_file.clone()).await;
+    let identity = IdentityVerifier::new(ServiceName::Assets, keys);
     Router::new()
         .route("/v1/devices", get(list_devices))
         .with_state(AppState { identity })
 }
 ```
 
-- `IdentityVerifier::new(受眾, 公鑰)`：受眾是服務自己的 `ServiceName`，寫在程式裡，不從設定讀。
+- `IdentityVerifier::new(受眾, 公鑰)`：受眾是服務自己的 `ServiceName`，寫在程式裡，不從設定讀。公鑰是 `PublishedKeys::watch` 讀到並持續更新的那一組（下方「公鑰與輪替」）；測試可以直接給一組 `IdentityKeys`。
 - handler 加上 `UserIdentity` 參數就要求這個請求帶有效的 token；沒通過的請求不會進 handler，直接回 401。`UserIdentity` 提供 `user_id()`、`tenant()`、`tenant_id()`、`is_platform_admin()` 與完整的 `claims()`。
 - router 的 state 必須能以 `FromRef` 取出 `IdentityVerifier`，忘了放 verifier 的 handler 無法編譯。
 - 需要 token 但不經 axum 的地方用 `IdentityVerifier::verify_headers(&HeaderMap)` 或 `verify(&str)`。
@@ -337,29 +340,25 @@ JWS compact serialization（RFC 7515），payload 是 contract 的 `InternalClai
 
 ### 公鑰與輪替
 
-決定（2026-10-10，Laysi/trustiot-v2#52）：公鑰由部署以設定交給每個服務，不由身分服務在執行時發布。
+決定（2026-10-10，Laysi/trustiot-v2#52）：公鑰由部署交給每個服務，不由身分服務在執行時發布。2026-10-15 起金鑰對在叢集內產生與輪替，公鑰以檔案交給服務，服務不重啟就換上新的（Laysi/trustiot-v2#404，設計與每個失敗情況在 [docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「內部身分簽章金鑰」）。
 
-- 身分服務的公鑰寫成 JWK Set（RFC 7517），放在平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`，服務設定裡是 `platform.internal_identity_keys`。範例：`{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"2026-10-a","x":"<32 bytes 的 base64url>"}]}`。
-- 每把公鑰的 `kty` 必須是 `OKP`、`crv` 必須是 `Ed25519`、`kid` 是 1 到 64 個可見 ASCII 字元且不重複；`alg`、`use`、`key_ops` 可以省略，有寫就必須是 `EdDSA`、`sig`、含 `verify` 的清單；一組最多 8 把。含私鑰（`d`）、小階點、格式不對的公鑰，服務都拒絕啟動，錯誤訊息只寫第幾把與原因，不寫值。
-- 平台設定只由部署決定（`TRUSTIOT__PLATFORM__*` 會被拒絕，chart 的 `services.<name>.env` 也不能設 `TRUSTIOT_` 後接英數字的名稱），所以單一服務的設定無法換掉公鑰。
-- 公鑰不是祕密，放在 chart 的平台設定 ConfigMap；私鑰只在身分服務的 Secret。chart 的欄位是 `internalIdentity.publicKeys`（組成 JWK Set 寫進 ConfigMap）與 `internalIdentity.signingKeySecret`（只掛進身分服務），見 [chart README](../../deploy/chart/README.md) 的「內部身分」。
-- 本機開發：直接設 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`，或寫在設定檔的 `[platform]` 表，值是 JWK Set 的 JSON 字串。
+- 公鑰是一個 JWK Set（RFC 7517）檔案，路徑在平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`，服務設定裡是 `platform.internal_identity_keys_file`。chart 把身分服務 pod 的 init container 寫出的 ConfigMap `<release>-internal-identity-keys` 整個掛在每個 pod 的 `/etc/trustiot/internal-identity/`，檔案是其中的 `jwks.json`；身分服務沒有啟用時 chart 不給這個設定，驗證內部身分的服務拒絕啟動。範例：`{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"<RFC 7638 thumbprint>","x":"<32 bytes 的 base64url>","alg":"EdDSA","use":"sig"}]}`。
+- `PublishedKeys::watch(&context, 路徑)` 啟動時讀這個檔案，之後每 5 秒（`RELOAD_INTERVAL`）重讀：
+  - 內容是可用的 JWK Set 就整組換上（驗證中的請求看到的不是舊的一組就是新的一組），記一行 INFO，寫出載入的 kid：`verifying internal identity tokens with these public keys of the identity service`。撤銷金鑰時，runbook 以這一行確認每個 pod 都換過。
+  - 檔案不見、空的、超過 64 KiB 或不是可用的 JWK Set 時保留上一組，第一次遇到時記 WARN（只寫原因，不寫內容）。
+  - 它加上 readiness 檢查 `internal_identity_keys`：拿到第一組可用的公鑰之前服務不就緒，`IdentityVerifier` 對每個 token 回 503 `unavailable`（日誌的 `reason` 是 `no_keys`）。
+- ConfigMap 改變後，kubelet 在下一次同步 pod 時以 symlink 原子替換掛載的目錄（正常約 1 分鐘，沒有保證的上限；`subPath` 掛載不會更新，chart 不用），服務在之後 5 秒內換上新公鑰。
+- 每把公鑰的 `kty` 必須是 `OKP`、`crv` 必須是 `Ed25519`、`kid` 是 1 到 64 個可見 ASCII 字元且不重複；`alg`、`use`、`key_ops` 可以省略，有寫就必須是 `EdDSA`、`sig`、含 `verify` 的清單；一組最多 8 把。含私鑰（`d`）、小階點、格式不對的公鑰讓整組不能用，訊息只寫第幾把與原因，不寫值。
+- 平台設定只由部署決定（`TRUSTIOT__PLATFORM__*` 會被拒絕，chart 的 `services.<name>.env` 也不能設 `TRUSTIOT_` 後接英數字的名稱），所以單一服務的設定換不掉公鑰檔的路徑。能改這個 ConfigMap 的主體就能讓服務接受自選的公鑰，所以 chart 只讓身分服務的 ServiceAccount 改它。
+- 本機開發：`bun scripts/dev.ts env` 印出 `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`，指向 `up` 在狀態目錄寫出的 `jwks.json`（[scripts/README.md](../../scripts/README.md) 的「身分服務」）；測試以 `crates/testkit` 的 `TestIssuer::write_jwks` 寫出。
 
 為什麼不由身分服務發布（例如服務在執行時抓 JWKS 端點）：
 
 1. 驗證不多一個執行期依賴：身分服務停機時，已經發出去的 token 照樣能驗證，服務啟動也不必等身分服務。
-2. 不多一個信任來源：公鑰只來自部署設定，冒充身分服務或改寫抓取回應都換不了公鑰；也沒有「看到不認得的 `kid` 就重抓」可以被濫用來放大流量。
+2. 不多一個信任來源：公鑰只來自部署掛進 pod 的檔案，冒充身分服務或改寫抓取回應都換不了公鑰；也沒有「看到不認得的 `kid` 就重抓」可以被濫用來放大流量。
 3. 地端與離線環境一樣運作，沒有快取與重試的狀態要處理。
 
-代價是換公鑰要滾動重啟所有服務。平台設定變更時 chart 本來就會滾動更新 pod，服務也一起發版（決策 4），而輪替一年只有幾次，所以可以接受。
-
-輪替步驟（新舊兩把 key 以 `kid` 區分，例如 `2026-10-a` 換成 `2027-04-a`）：
-
-1. **加新公鑰**：產生新的金鑰對，把新公鑰加進 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`（新舊兩把並存）並部署。確認每個服務都已滾動完成（每個 Deployment 的 `kubectl rollout status` 都完成），身分服務仍用舊私鑰簽章。
-2. **換簽章私鑰**：把身分服務的簽章私鑰換成新的（Secret；`kid` 由身分服務啟動時從公鑰找出，見[身分服務的金鑰輪替](../../services/identity/README.md#金鑰輪替)），身分服務滾動完成後只簽新 `kid`。步驟 1 沒有全部完成就換，還沒拿到新公鑰的服務會以 `unknown_key` 拒絕新 token。
-3. **移除舊公鑰**：身分服務滾動完成後至少等 `300 + 5` 秒（效期上限加時鐘誤差），舊 token 全部過期，再從 `TRUSTIOT_INTERNAL_IDENTITY_KEYS` 移除舊公鑰並部署，最後刪除舊私鑰。
-
-私鑰外洩時：立即同時做步驟 1 到 3，不等舊 token 過期。滾動期間部分請求會被拒絕（401），換取外洩的金鑰馬上失效。
+輪替與撤銷不需要服務做任何事：身分服務 pod 的 init container 依 `internalIdentity.keyGeneration` 與 `revokeBeforeGeneration` 先公開新公鑰，`keyPropagationSeconds` 之後身分服務才用新私鑰簽章，舊公鑰在它簽的 token 全部過期（效期上限 300 秒加 5 秒時鐘誤差）之後才移除。服務在重疊期間同時接受新舊兩把。操作步驟在 [docs/runbooks/secrets.md](../../docs/runbooks/secrets.md)。
 
 ### 背景工作沒有使用者身分
 

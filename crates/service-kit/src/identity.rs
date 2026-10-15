@@ -5,15 +5,18 @@
 //! gateway, and every service checks it itself before trusting it: signature, issuer, audience,
 //! and lifetime. A service trusts nothing else about the caller.
 //!
-//! - [`IdentityKeys`]: the identity service's public keys, a JWK Set that every service gets
-//!   from the platform setting [`KEYS_SETTING`] (`TRUSTIOT_INTERNAL_IDENTITY_KEYS`).
+//! - [`IdentityKeys`]: the identity service's public keys, a JWK Set.
+//! - [`PublishedKeys`]: the set a service verifies with right now, read from the file the
+//!   platform setting [`KEYS_FILE_SETTING`] (`TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`) names and
+//!   read again every [`RELOAD_INTERVAL`], so a key rotation needs no restart. A service is not
+//!   ready until it has a usable set.
 //! - [`IdentityVerifier`]: checks tokens addressed to one service.
 //! - [`UserIdentity`]: the axum extractor for the user a request acts for. Only a verified token
 //!   produces one, so work that does not run inside a request cannot act as a user.
 //! - [`ServiceIdentity`]: the service acting on its own behalf, for background work and event
 //!   consumers.
 //! - [`IdentityError`]: why a token was rejected; as a response, 401 with the M1 body
-//!   `unauthenticated`.
+//!   `unauthenticated` (503 `unavailable` while the service has no keys yet).
 //!
 //! # Token format
 //!
@@ -53,6 +56,7 @@
 //! ```
 
 mod keys;
+mod published;
 #[cfg(test)]
 mod test_keys;
 mod token;
@@ -69,6 +73,7 @@ use contract::{
 };
 
 pub use self::keys::{IdentityKeys, InvalidKeys, KeyProblem, MAX_KEY_ID_LEN, MAX_KEYS};
+pub use self::published::{PublishedKeys, READINESS_CHECK, RELOAD_INTERVAL};
 
 /// The only JWS `alg` accepted: EdDSA (RFC 8037), with Ed25519 keys only.
 pub const ALGORITHM: &str = "EdDSA";
@@ -87,26 +92,31 @@ pub const LEEWAY_SECS: i64 = 5;
 /// worth and how long key rotation must wait.
 pub const MAX_LIFETIME_SECS: i64 = 300;
 
-/// The platform setting with the identity service's public keys: `platform.internal_identity_keys`
-/// in a service's configuration, set by the deployment as `TRUSTIOT_INTERNAL_IDENTITY_KEYS`.
-/// Platform settings cannot be overridden per service, so no service can be pointed at other
-/// keys.
-pub const KEYS_SETTING: &str = "internal_identity_keys";
+/// The platform setting with the path of the identity service's public keys file:
+/// `platform.internal_identity_keys_file` in a service's configuration, set by the deployment as
+/// `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` (the chart mounts the ConfigMap
+/// `<release>-internal-identity-keys` and points it at `jwks.json` there). Platform settings
+/// cannot be overridden per service, so no service can be pointed at other keys. A service
+/// declares it as a `PathBuf` and passes it to [`PublishedKeys::watch`].
+pub const KEYS_FILE_SETTING: &str = "internal_identity_keys_file";
 
 /// Verifies internal identity tokens addressed to one service. Build it once at startup and put
-/// it in the router's state; cloning is cheap.
+/// it in the router's state; cloning is cheap, and clones follow the same [`PublishedKeys`].
 #[derive(Clone, Debug)]
 pub struct IdentityVerifier {
     audience: ServiceName,
-    keys: IdentityKeys,
+    keys: PublishedKeys,
 }
 
 impl IdentityVerifier {
     /// A verifier that accepts tokens addressed to `audience`, the service itself, signed with
-    /// one of `keys`.
+    /// one of `keys`: the [`PublishedKeys`] a service watches, or a fixed [`IdentityKeys`].
     #[must_use]
-    pub fn new(audience: ServiceName, keys: IdentityKeys) -> Self {
-        Self { audience, keys }
+    pub fn new(audience: ServiceName, keys: impl Into<PublishedKeys>) -> Self {
+        Self {
+            audience,
+            keys: keys.into(),
+        }
     }
 
     /// The service tokens must be addressed to.
@@ -157,8 +167,20 @@ impl IdentityVerifier {
     }
 
     fn verify_at(&self, token: &str, now: i64) -> Result<UserIdentity, IdentityError> {
-        token::verify(token, &self.keys, self.audience, now).map(|claims| UserIdentity { claims })
+        let keys = self.keys.current().ok_or(IdentityError::NoKeys)?;
+        token::verify(token, &keys, self.audience, now).map(|claims| UserIdentity { claims })
     }
+}
+
+/// The key id the request's token names, when its header is well formed; for logging an
+/// `unknown_key` rejection, which during a key rotation means this pod has not loaded the new
+/// public key yet.
+fn token_kid(headers: &HeaderMap) -> Option<String> {
+    let value = headers.get(INTERNAL_IDENTITY_HEADER)?.to_str().ok()?;
+    if value.len() > InternalToken::MAX_LEN {
+        return None;
+    }
+    token::header_kid(value)
 }
 
 /// For an optional member that, when present, must hold a `T`: use with
@@ -265,15 +287,22 @@ where
     type Rejection = IdentityError;
 
     /// Verifies the request's token with the state's [`IdentityVerifier`]. A rejection is logged
-    /// at WARN with its `reason` (never the token) and answers 401 `unauthenticated`.
+    /// at WARN with its `reason` (never the token; for `unknown_key`, the key id the token
+    /// names) and answers 401 `unauthenticated`, or 503 `unavailable` before the service has
+    /// keys.
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         IdentityVerifier::from_ref(state)
             .verify_headers(&parts.headers)
-            .inspect_err(|error| {
-                tracing::warn!(
+            .inspect_err(|error| match error {
+                IdentityError::UnknownKey => tracing::warn!(
+                    reason = error.reason(),
+                    kid = token_kid(&parts.headers).as_deref().unwrap_or(""),
+                    "rejected the request's internal identity"
+                ),
+                _ => tracing::warn!(
                     reason = error.reason(),
                     "rejected the request's internal identity"
-                );
+                ),
             })
     }
 }
@@ -316,9 +345,10 @@ impl ServiceIdentity {
     }
 }
 
-/// Why a request's internal identity was rejected. Every reason answers the same response, 401
-/// with the M1 body `unauthenticated`, so a caller learns nothing about which check failed;
-/// [`IdentityError::reason`] tells the logs.
+/// Why a request's internal identity was rejected. Every reason about the token answers the same
+/// response, 401 with the M1 body `unauthenticated`, so a caller learns nothing about which check
+/// failed; [`IdentityError::reason`] tells the logs. [`IdentityError::NoKeys`] is about the
+/// service, not the token, and answers 503 `unavailable`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum IdentityError {
@@ -368,6 +398,10 @@ pub enum IdentityError {
     /// `iat` or `nbf` is later than now plus the leeway.
     #[error("the internal identity token is not valid yet")]
     NotYetValid,
+    /// The service has no usable public keys of the identity service yet (its keys file has not
+    /// arrived), so it cannot verify any token. The service is not ready meanwhile.
+    #[error("no public keys of the identity service to verify the token with yet")]
+    NoKeys,
 }
 
 impl IdentityError {
@@ -390,18 +424,24 @@ impl IdentityError {
             Self::InvalidLifetime => "invalid_lifetime",
             Self::Expired => "expired",
             Self::NotYetValid => "not_yet_valid",
+            Self::NoKeys => "no_keys",
         }
     }
 
-    /// The M1 body every rejection answers: `unauthenticated`, with no detail.
+    /// The M1 body a rejection answers: `unauthenticated`, with no detail; `unavailable` for
+    /// [`IdentityError::NoKeys`].
     #[must_use]
     pub fn to_error_body(self) -> ErrorBody {
-        ErrorBody::new(ErrorCode::Unauthenticated)
+        match self {
+            Self::NoKeys => ErrorBody::new(ErrorCode::Unavailable),
+            _ => ErrorBody::new(ErrorCode::Unauthenticated),
+        }
     }
 }
 
 impl IntoResponse for IdentityError {
-    /// 401 with the M1 body `{"code":"unauthenticated","message_key":"error.unauthenticated"}`.
+    /// 401 with the M1 body `{"code":"unauthenticated","message_key":"error.unauthenticated"}`;
+    /// 503 `unavailable` for [`IdentityError::NoKeys`].
     fn into_response(self) -> Response {
         let body = self.to_error_body();
         (body.http_status(), axum::Json(body)).into_response()
@@ -565,6 +605,63 @@ mod tests {
         );
     }
 
+    /// Before its keys file has arrived a service verifies nothing: every token, valid or not,
+    /// is refused with 503 `unavailable`; the same verifier accepts tokens once the keys come.
+    #[tokio::test]
+    async fn without_keys_nothing_verifies_until_they_arrive() {
+        let signer = TestKey::new(1);
+        let published = PublishedKeys::empty();
+        let verifier = IdentityVerifier::new(ServiceName::Assets, published.clone());
+        let token = signer.sign("k1", &claims_at(NOW));
+        assert_eq!(
+            verifier.verify_at(&token, NOW).err(),
+            Some(IdentityError::NoKeys)
+        );
+        let response = IdentityError::NoKeys.into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("body");
+        let body: serde_json::Value = serde_json::from_slice(&body).expect("JSON body");
+        assert_eq!(
+            body,
+            json!({"code": "unavailable", "message_key": "error.unavailable"})
+        );
+
+        published.replace(keys(&[(&signer, "k1")]));
+        assert!(verifier.verify_at(&token, NOW).is_ok());
+        assert!(published.contains("k1"));
+        assert!(!published.contains("k2"));
+
+        // A rotation swaps the whole set under the running verifier.
+        let next = TestKey::new(2);
+        published.replace(keys(&[(&next, "k2")]));
+        assert_eq!(
+            verifier.verify_at(&token, NOW).err(),
+            Some(IdentityError::UnknownKey)
+        );
+        assert!(
+            verifier
+                .verify_at(&next.sign("k2", &claims_at(NOW)), NOW)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn the_logged_key_id_comes_only_from_a_well_formed_header() {
+        let signer = TestKey::new(1);
+        let token = signer.sign("2026-11-a", &claims_at(NOW));
+        assert_eq!(token_kid(&headers(&[&token])).as_deref(), Some("2026-11-a"));
+        for bad in [
+            "not-a-token".to_owned(),
+            signer.sign("two words", &claims_at(NOW)),
+            signer.sign(&"k".repeat(65), &claims_at(NOW)),
+        ] {
+            assert_eq!(token_kid(&headers(&[&bad])), None, "{bad}");
+        }
+        assert_eq!(token_kid(&HeaderMap::new()), None);
+    }
+
     #[tokio::test]
     async fn every_rejection_answers_401_unauthenticated() {
         for error in [
@@ -605,6 +702,9 @@ mod tests {
             IdentityError::InvalidLifetime,
             IdentityError::Expired,
             IdentityError::NotYetValid,
+            // reasons_are_distinct only: not a rejection of the token but 503 `unavailable`
+            // (without_keys_nothing_verifies_until_they_arrive); its reason is distinct too.
+            IdentityError::NoKeys,
         ];
         let mut reasons: Vec<&str> = all.iter().map(|error| error.reason()).collect();
         reasons.sort_unstable();
@@ -612,7 +712,7 @@ mod tests {
         assert_eq!(reasons.len(), all.len());
     }
 
-    /// A product service's configuration: the keys are a required platform setting.
+    /// A product service's configuration: the keys file is a required platform setting.
     #[derive(Debug, serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct ServiceConfig {
@@ -621,7 +721,7 @@ mod tests {
 
     #[derive(Debug, serde::Deserialize)]
     struct Platform {
-        internal_identity_keys: IdentityKeys,
+        internal_identity_keys_file: std::path::PathBuf,
     }
 
     impl crate::config::Validate for ServiceConfig {}
@@ -634,60 +734,42 @@ mod tests {
     }
 
     #[test]
-    fn keys_come_from_the_platform_setting_only() {
-        let signer = TestKey::new(1);
-        let jwks = json!({"keys": [signer.jwk("2026-10-a")]}).to_string();
-        let config = load(&[("TRUSTIOT_INTERNAL_IDENTITY_KEYS", &jwks)]).expect("valid keys");
+    fn the_keys_file_comes_from_the_platform_setting_only() {
+        let path = "/etc/trustiot/internal-identity/jwks.json";
+        let config =
+            load(&[("TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE", path)]).expect("a keys file setting");
         assert_eq!(
-            config
-                .platform
-                .internal_identity_keys
-                .key_ids()
-                .collect::<Vec<_>>(),
-            ["2026-10-a"]
+            config.platform.internal_identity_keys_file,
+            std::path::PathBuf::from(path)
         );
         assert_eq!(
-            crate::config::env_var_for("TRUSTIOT", &format!("platform.{KEYS_SETTING}")),
-            "TRUSTIOT_INTERNAL_IDENTITY_KEYS"
+            crate::config::env_var_for("TRUSTIOT", &format!("platform.{KEYS_FILE_SETTING}")),
+            "TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE"
         );
 
-        // Required: a service without keys does not start.
-        let error = load(&[]).expect_err("keys are required");
+        // Required: a service without it does not start.
+        let error = load(&[]).expect_err("the keys file is required");
         assert!(
             error
                 .to_string()
-                .contains("TRUSTIOT_INTERNAL_IDENTITY_KEYS"),
+                .contains("TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE"),
             "{error}"
         );
 
-        // A service's own variables cannot replace the deployment's keys.
+        // A service's own variables cannot point it at other keys.
         let error = load(&[
-            ("TRUSTIOT_INTERNAL_IDENTITY_KEYS", &jwks),
-            ("TRUSTIOT__PLATFORM__INTERNAL_IDENTITY_KEYS", &jwks),
+            ("TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE", path),
+            (
+                "TRUSTIOT__PLATFORM__INTERNAL_IDENTITY_KEYS_FILE",
+                "/tmp/mine.json",
+            ),
         ])
         .expect_err("platform settings come only from the deployment");
         assert!(
             error
                 .to_string()
-                .contains("TRUSTIOT__PLATFORM__INTERNAL_IDENTITY_KEYS"),
+                .contains("TRUSTIOT__PLATFORM__INTERNAL_IDENTITY_KEYS_FILE"),
             "{error}"
         );
-
-        // An unusable set stops startup; the error names the setting, not the value.
-        let private = json!({"keys": [{
-            "kty": "OKP", "crv": "Ed25519", "kid": "2026-10-a",
-            "x": signer.x(), "d": "presence-is-enough"
-        }]})
-        .to_string();
-        let error = load(&[("TRUSTIOT_INTERNAL_IDENTITY_KEYS", &private)])
-            .expect_err("a private key is refused");
-        let message = error.to_string();
-        assert!(
-            message.contains("platform.internal_identity_keys"),
-            "{message}"
-        );
-        assert!(message.contains("private key"), "{message}");
-        assert!(!message.contains("presence-is-enough"), "{message}");
-        assert!(!message.contains(&signer.x()), "{message}");
     }
 }

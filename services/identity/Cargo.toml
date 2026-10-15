@@ -20,9 +20,11 @@ base64.workspace = true
 # `created_at` of a tenant, read from Postgres and returned in the API.
 chrono = { workspace = true, features = ["serde"] }
 contract = { path = "../../crates/contract" }
-# Signs internal identity tokens with Ed25519 and reads the signing key from a PKCS#8 PEM file
-# (the format `openssl genpkey -algorithm ed25519` writes). `zeroize` wipes the key on drop.
-ed25519-dalek = { workspace = true, features = ["fast", "pem", "pkcs8", "zeroize"] }
+# Signs internal identity tokens with Ed25519. `zeroize` wipes the key on drop.
+ed25519-dalek = { workspace = true, features = ["fast", "zeroize"] }
+# The signing keys the identity pod's init container generates (Laysi/trustiot-v2#404): their
+# file format and which key signs when.
+identity-keys = { path = "../../crates/identity-keys" }
 # Writes `identity.tenant_created` in the transaction that creates the tenant.
 outbox = { path = "../../crates/outbox" }
 serde = { workspace = true, features = ["derive"] }
@@ -40,10 +42,13 @@ tracing.workspace = true
 unicode-properties = { workspace = true, features = ["general-category"] }
 # The client API's OpenAPI document (tools/openapi merges it into api/openapi.json).
 utoipa = { workspace = true, features = ["chrono", "uuid"] }
-# Wipes the private key file's text after parsing.
+# Wipes the signing keys file's text after parsing.
 zeroize.workspace = true
 
 [dev-dependencies]
+# The PKCS#8 PEM form of a test key, to show the service refuses a key file of the format before
+# Laysi/trustiot-v2#404 and never logs any form of the key.
+ed25519-dalek = { workspace = true, features = ["pem", "pkcs8"] }
 # Session secrets for test sessions; production code never creates sessions in MS0.
 getrandom.workspace = true
 # The TLS Postgres the integration tests start (shared with crates/service-kit's tests).

@@ -27,6 +27,20 @@ pub const START_LIMIT: Duration = Duration::from_secs(60);
 /// second when idle; the bound is for a loaded host.
 pub const EVENT_LIMIT: Duration = Duration::from_secs(60);
 
+/// Writes `jwks` to a file of its own under Cargo's temporary directory for these tests and
+/// returns its path.
+fn keys_file(jwks: &str) -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let name = format!(
+        "assets-jwks-{}-{}.json",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let path = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    std::fs::write(&path, jwks).expect("write the keys file");
+    path
+}
+
 /// The lines a child process printed, shared with the thread that reads them.
 #[derive(Clone, Default)]
 pub struct Output(Arc<Mutex<Vec<String>>>);
@@ -71,8 +85,9 @@ pub struct Service {
 
 impl Service {
     /// Starts the service on free local ports against `product`, trusting the internal identity
-    /// keys `jwks`, with the roles the chart gives it, and waits until it is ready. The
-    /// environment is otherwise empty, so the developer's own variables cannot leak in.
+    /// keys `jwks` (written to a keys file, as the chart's ConfigMap volume holds them), with the
+    /// roles the chart gives it, and waits until it is ready. The environment is otherwise empty,
+    /// so the developer's own variables cannot leak in.
     pub async fn start(product: &ProductPostgres, jwks: &str) -> Self {
         let service = Self::spawn(product, jwks).await;
         service.wait_ready().await;
@@ -81,6 +96,7 @@ impl Service {
 
     /// Like [`Service::start`], but returns once the service listens, ready or not.
     pub async fn spawn(product: &ProductPostgres, jwks: &str) -> Self {
+        let keys_file = keys_file(jwks);
         let mut command = Command::new(ASSETS);
         command
             .env_clear()
@@ -88,7 +104,7 @@ impl Service {
             .env("TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR", "127.0.0.1:0")
             .env("TRUSTIOT__SHUTDOWN__DRAIN_DELAY", "100ms")
             .env("TRUSTIOT__SHUTDOWN__DRAIN_TIMEOUT", "5s")
-            .env("TRUSTIOT_INTERNAL_IDENTITY_KEYS", jwks)
+            .env("TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE", &keys_file)
             .env("TRUSTIOT__DATABASE__USERNAME", "assets_app")
             .env("TRUSTIOT__DATABASE__PASSWORD", TEST_PASSWORD)
             .env("TRUSTIOT__DATABASE__PLATFORM_USERNAME", "assets_platform")
