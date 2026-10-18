@@ -106,7 +106,7 @@ Claude Opus 5.5 的 thinking 綁定產生它的對話：system prompt、工具�
 1. 一次 Decisions 請求問兩題：predicate「這則訊息不需要查資料、讀文件或執行動作就能完整回答」（回傳機率），以及 score「需要多少推理」（low、medium、high，對應主 agent 的 effort）。輸入是最新的訊息、最近幾輪的文字與附圖的縮圖；Decisions 只收 base64 圖片，不收音訊與影片，影音只送檔案類型與長度。
 2. 只有機率超過門檻才交給 worker，門檻用 MS3 題庫校準；其他的、不確定的，以及分流失敗（逾時、錯誤、beta 期間的介面變更）一律交給主 agent。
 3. worker 只回答簡單訊息，沒有查詢工具，只有 `escalate(reason)`：覺得超出能力時，把對話交給主 agent。主 agent 接手同一個對話，worker 的回答以一般訊息附加在歷史後面。
-4. 分流要與「全部交給主 agent、用低 effort」比較（MS3 題庫）。依 2026-10-18 的單價估算，分流每題只省約 $0.01–0.02，主要的好處是簡單問題回得快；比不過就拿掉分流。Decisions API 仍在 public beta（2026-10-06 推出），沒有 SLA。
+4. 分流要與「全部交給主 agent、用低 effort」比較（MS3 題庫，Laysi/trustiot-v2#444）。依 2026-10-18 的單價估算，分流每題只省約 $0.01–0.02，主要的好處是簡單問題回得快；比不過就拿掉分流。Decisions API 仍在 public beta（2026-10-06 推出），沒有 SLA。
 
 ## 安全
 
@@ -123,7 +123,7 @@ Claude Opus 5.5 的 thinking 綁定產生它的對話：system prompt、工具�
 
 | 題庫 | 比較什麼 | issue |
 | --- | --- | --- |
-| MS3 分析題庫 | 主 agent 用 Opus 5.5 或 Sonnet 5.5、有沒有分流、effort；指標是答對率、連續 3 次都答對的比例、每個答對任務的成本、延遲（p50、p95）與工具呼叫數 | Laysi/trustiot-v2#223、Laysi/trustiot-v2#161 |
+| MS3 分析題庫 | 主 agent 用 Opus 5.5 或 Sonnet 5.5、有沒有分流、effort；指標是答對率、連續 3 次都答對的比例、每個答對任務的成本、延遲（p50、p95）與工具呼叫數 | Laysi/trustiot-v2#223、Laysi/trustiot-v2#444、Laysi/trustiot-v2#161 |
 | RAG 題庫 | 重排（Decisions 逐頁打分與每批候選數、Haiku 5.5 一次排序）、嵌入維度 | Laysi/trustiot-v2#192 |
 | 影音題庫 | 20–30 支影片或錄音，配上有標準答案的事實題；比較 Gemini 3.8 Flash 與 Gemini 4 Argon、解析度、取樣率、切段長度與每題成本 | Laysi/trustiot-v2#441 |
 | 注入題庫 | 不執行、不外洩、不越權 | Laysi/trustiot-v2#445 |
