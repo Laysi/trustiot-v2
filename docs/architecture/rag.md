@@ -61,5 +61,5 @@ SaaS 用 Qdrant Cloud 的前提（列為驗收條件）：
 3. 回答：主 agent 用影音工具先找片段，再讓 Gemini 只看指定的時間段回答具體問題（可以指定取樣率與解析度），回傳固定格式：答案、證據的時間段與觀察、不確定的地方。回答引用時間段，使用者在畫面上點了就播放原始片段。對整支影片連續追問時用顯式快取：Gemini 3.8 Flash 支援，Gemini 4 Argon 不支援。
 4. 模型：預設 Gemini 3.8 Flash（官方 LVBench 87.8%）；困難的問題可以升到 Gemini 4 Argon（91.7%）。兩者的分工、解析度與取樣率由影音題庫決定。
 5. 影片每秒約 100 token（低解析度）到 300 token（高解析度），官方文件的數字不一致，以 `count_tokens` 與回報的用量為準。
-6. 傳給 Vertex AI 的方式：Vertex AI 能直接內嵌的檔案大小有限，片段在服務內切好再送；需要整支影片時暫存到 Google Cloud Storage 並設自動刪除，細節在實作的 issue 決定。
+6. 傳給 Vertex AI 的方式：Vertex AI 能直接內嵌的檔案大小有限，片段在服務內切好再送；需要整支影片時暫存到 Google Cloud Storage 並設自動刪除，細節在 Laysi/trustiot-v2#440 決定。
 7. 安全：影音是不可信內容，Gemini 這一段沒有工具，只回傳固定格式的欄位（[AI 助理與 AI 閘道](ai-assistant.md)的「安全」）。

@@ -51,8 +51,8 @@ flowchart TB
 2. **角色、備援與逾時**：platform admin 隨時可以更換角色的模型（J8），換成同一協定的模型不必改程式，換協定要呼叫端支援。每個角色設一串備援模型，429、過載或逾時時改用下一個（例如 main 從 Opus 5.5 換成 Sonnet 5.5）；快取依模型分開，換模型後從零開始。供應商的拒答（例如 Anthropic 的 `stop_reason: refusal`）照常記帳，交回呼叫端，由它回通用訊息（J2）。
 3. **帳本**（決策 28）：以 llm\_call\_id 去重，依供應商回報的分類記錄用量：一般輸入、快取寫入（5 分鐘與 1 小時分開）、快取讀取、輸出（含 thinking），以及 Gemini 各模態的輸入（文字、圖片、影片、音訊）。單價表依這些類別定價，另外記 Gemini 顯式快取的儲存費（token 數乘以時數）；Decisions 只收輸入費；Embedding 2 依模態計價（文字 token、圖片張數、音訊秒數、影片格數）。供應商沒回報用量時（含串流中途中斷，J8），輸入與已產生的輸出（含 thinking）分別在本地估算並標記，絕不記 0：輸入用 `count_tokens` 或本地 tokenizer 計算，輸出依已收到的內容計算；thinking 只回傳摘要或不回傳時看不到實際長度，這筆估算標為下限。Claude 的 token 數以供應商回報或 `count_tokens` 為準，本地 tokenizer 會偏差。
 4. **額度**：預扣與結算照決策 28；agent 迴圈裡的每一次模型呼叫各自預扣、各自結算。
-5. **憑證**（[密鑰與權限](secrets.md)）：Anthropic 與 OpenAI 用 API key；Vertex AI 優先用 Workload Identity Federation，不放長期金鑰（密鑰規則 8），不可行時才用服務帳號金鑰，在接入 Vertex AI 的 issue 決定。都只給 `ai-gateway`。
-6. **資料處理者**：Anthropic（主 agent、worker）、Google Vertex AI（影音、嵌入）、OpenAI（分流、重排）都會收到租戶資料，隱私與資料處理說明要列出（[風險與待定事項](../roadmap/risks.md)）。Gemini 走 Vertex AI，不走 Gemini API：Gemini API 付費層的濫用監控會保留資料 55 天、不保證零資料保留、不能指定處理區域；Vertex AI 可以申請零資料保留並選 us 或 eu 區域，處理區域在接入時決定。Decisions API 的零資料保留與資料駐留（美國、EEA 與瑞士）要符合資格才有，接入時申請。
+5. **憑證**（[密鑰與權限](secrets.md)）：Anthropic 與 OpenAI 用 API key；Vertex AI 優先用 Workload Identity Federation，不放長期金鑰（密鑰規則 8），不可行時才用服務帳號金鑰，在接入 Vertex AI 的 issue（Laysi/trustiot-v2#440）決定。都只給 `ai-gateway`。
+6. **資料處理者**：Anthropic（主 agent、worker）、Google Vertex AI（影音、嵌入）、OpenAI（分流、重排）都會收到租戶資料，隱私與資料處理說明要列出（[風險與待定事項](../roadmap/risks.md)）。Gemini 走 Vertex AI，不走 Gemini API：Gemini API 付費層的濫用監控會保留資料 55 天、不保證零資料保留、不能指定處理區域；Vertex AI 可以申請零資料保留並選 us 或 eu 區域，處理區域在接入時決定（Laysi/trustiot-v2#440）。Decisions API 的零資料保留與資料駐留（美國、EEA 與瑞士）要符合資格才有，接入時申請。
 
 ## 主 agent
 
@@ -125,8 +125,8 @@ Claude Opus 5.5 的 thinking 綁定產生它的對話：system prompt、工具�
 | --- | --- | --- |
 | MS3 分析題庫 | 主 agent 用 Opus 5.5 或 Sonnet 5.5、有沒有分流、effort；指標是答對率、連續 3 次都答對的比例、每個答對任務的成本、延遲（p50、p95）與工具呼叫數 | Laysi/trustiot-v2#223、Laysi/trustiot-v2#161 |
 | RAG 題庫 | 重排（Decisions 逐頁打分與每批候選數、Haiku 5.5 一次排序）、嵌入維度 | Laysi/trustiot-v2#192 |
-| 影音題庫 | 20–30 支影片或錄音，配上有標準答案的事實題；比較 Gemini 3.8 Flash 與 Gemini 4 Argon、解析度、取樣率、切段長度與每題成本 | ISSUE_MEDIA_BANK |
-| 注入題庫 | 不執行、不外洩、不越權 | ISSUE_INJECTION_BANK |
+| 影音題庫 | 20–30 支影片或錄音，配上有標準答案的事實題；比較 Gemini 3.8 Flash 與 Gemini 4 Argon、解析度、取樣率、切段長度與每題成本 | Laysi/trustiot-v2#441 |
+| 注入題庫 | 不執行、不外洩、不越權 | Laysi/trustiot-v2#445 |
 
 ## 成本估算（2026-10-18，依官方單價推算）
 
