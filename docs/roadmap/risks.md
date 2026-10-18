@@ -7,6 +7,7 @@
 - **Istio 的維運成本**：約每 3 個月一版要跟著升級，服務之間多一層流量，除錯較複雜；升級步驟寫進 runbook 並自動化。客戶自有的 k8s 或 OpenShift 要先確認能跑 ambient（OpenShift 要設 global.platform=openshift，ztunnel 與 istio-cni 裝在 kube-system）。
 - **Cloudflare 依賴**：SaaS 的網頁、API 與閘道器連線都經 Cloudflare Tunnel。Cloudflare 故障時網頁無法使用，閘道器的資料留在離線緩衝，恢復後補送；備案是改用直接對外的 values（入口 gateway 直接開 443），閘道器只改 DNS，不換連線方式。瀏覽器流量在 Cloudflare 邊緣解密，要列入第三方資料處理說明；閘道器的 MQTT 在內層 mTLS 內，Cloudflare 看不到內容。依現行服務條款，CDN 限制的是傳送影片或比例過高的圖片、音訊與大型檔案，遙測是小訊息，不在這個範圍；Cloudflare 若有異議，改成入口直接對外或加跳板，閘道器同樣只改 DNS。
 - **大型企業地端的額外要求**：完全斷網安裝、高可用、版本升級、資安稽核、AD 整合、地端 GPU。等第一個客戶簽約再做，現在只確保架構不擋路。
+- **地端延後**（2026-10-18）：SaaS 全部完成前不做地端專用的工作（清單在 Laysi/trustiot-v2#446），地端可能在沒人注意時壞掉，新程式也可能不知不覺依賴 SaaS 才有的東西。靠可搬移的四條規則、chart 對 values-onprem 的測試、nightly 以兩份 values 部署的冒煙測試與 CloudNativePG onprem 形態的 e2e 守住；恢復地端時先以 values-onprem 完整部署一次。
 - **尚未查證**：實際 AWS 帳單。aws-mcp 需要重新登入才能查，去 AWS 化的節省幅度因此只是估算。
 - **主機規格（閒置已實測、峰值待測）**：k3s、ClickHouse（時序加日誌）、Qdrant（4096 維向量）、Apache AGE（在 Postgres 內）、Grafana 同在一台單節點，實測整套閒置約 2.7 GB，暫定 8 GB（不含地端 LLM；這是拆成微服務前、也還沒有 Istio ambient 時量的閒置值，MS3 完成時以代表性負載重測峰值）；向量量大時另計，100 萬個 4096 維 chunk 經 int8 約 4 GB。
 - **圖的租戶隔離**：每租戶一個 graph 配專屬角色，由資料庫強制；租戶數超過數百時「每租戶一個 schema」會撐不住，要重新評估（見[現場脈絡與知識圖](../architecture/field-context.md)）。

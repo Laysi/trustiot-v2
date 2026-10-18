@@ -4,7 +4,7 @@
 
 | # | 領域 | 決定 | 理由與備註 |
 | --- | --- | --- | --- |
-| 1 | 整體方向 | 完全去 AWS。SaaS 是我們自營的多租戶部署，地端是單租戶部署，兩者同一套程式 | 可提供大型企業純地端部署；只維護一套，避免沒人在用的那套慢慢壞掉 |
+| 1 | 整體方向 | 完全去 AWS。SaaS 是我們自營的多租戶部署，地端是單租戶部署，兩者同一套程式。2026-10-18 補充：地端專用的工作排在 SaaS 全部完成之後（清單在 Laysi/trustiot-v2#446），既有的地端檢查與可搬移規則照常保留，見[里程碑](../roadmap/milestones.md) | 可提供大型企業純地端部署；只維護一套，避免沒人在用的那套慢慢壞掉，所以延後期間既有的地端檢查不停 |
 | 2 | 前端 | Vite + React SPA，經 API 閘道與 API 走同一網域；移除 Next.js 與 BFF | 頁面全在登入後，不需要 SSR；登入改由 Rust 發 HttpOnly cookie；推翻 [#176](https://github.com/Laysi/trustiot/issues/176) 保留 BFF 的前提 |
 | 3 | 舊資料 | 全部丟棄，只把型號定義匯出成初始資料 | 沒有營收、只有 stage；型號的暫存器表是領域知識 |
 | 4 | 雲端運算 | 粗粒度微服務，全部放在同一個 repo 的 Cargo workspace：共用 contract crate，介面改了就編譯失敗；每個服務有自己的 Postgres schema 與資料庫角色，不跨服務 JOIN；跨服務的寫入一律走事件：與業務資料在同一筆交易寫進 outbox，消費端冪等、可重播，接受最終一致；事件由消費端以自己的資料庫角色輪詢產生端 schema 的 `outbox_event` 投遞（只授權這張表的讀取），不另設訊息佇列；跨服務的讀取可以同步呼叫內部 API，帶著使用者身分；同步呼叫用 HTTP/JSON，型別與有型別的 client 都在 contract crate，每次呼叫都設逾時，錯誤沿用 M1 的代碼，不用 gRPC；不做跨服務的同步寫入；初期所有服務一起發版。切分見[部署與可搬移性](deployment.md) | agent 一次只需讀寫一個服務、跑它自己的測試，執行時改壞只影響那個服務；架構上可以單獨部署與回滾，初期為求簡單一起發版，需要時再分開；邊界沿著必須在同一筆交易內成立的規則切，避免分散式交易。不用 gRPC：全部是 Rust，共用 contract crate 已經做到介面改了就編譯失敗，全系統只有一套規格（Rust 型別與 OpenAPI）；Istio ambient 的 ztunnel 只做 L4，gRPC 把所有呼叫放在同一條長連線，服務水平擴充後新副本分不到流量，要另配 waypoint 或自己做負載平衡；Cloudflare Tunnel 的公開網域也不支援原生 gRPC。傳輸層藏在 contract crate 的 client 後面，日後出現非 Rust 的服務或大量串流時，可以逐條換成 gRPC。2026-10-09 取代原本的單一服務。事件投遞 2026-10-10 定案（Laysi/trustiot-v2#54）：輪詢只靠 Postgres，當機與斷線都不掉事件，重播只是移動位置，延遲上限是輪詢間隔（預設 1 秒）；不用 LISTEN/NOTIFY（通知不持久，且 commit 時取全域鎖），也不由產生端轉送；順序、不漏讀的做法與限制見 [crates/outbox](../../crates/outbox/README.md) |

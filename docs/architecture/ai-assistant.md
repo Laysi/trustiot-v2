@@ -144,7 +144,7 @@ Claude Opus 5.5 的 thinking 綁定產生它的對話：system prompt、工具�
 
 ## 地端（SaaS 全部完成後處理）
 
-地端排在 SaaS 全部完成之後（2026-10-18）。屆時要處理：
+地端排在 SaaS 全部完成之後（2026-10-18，全專案的清單在 Laysi/trustiot-v2#446）。屆時要處理：
 
 1. agent 迴圈加上 OpenAI 相容的實作，接客戶的 vLLM 或 Ollama（決策 16）。對模型的呼叫從一開始就集中在一個介面後面，不讓 Anthropic 的格式散到工具與對話的程式裡。
 2. 沒有 Decisions API：分流關閉，或改用客戶模型的結構化輸出；重排用 Qwen3-VL-Reranker（開放權重，vLLM 可以跑）。
