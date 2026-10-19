@@ -11,6 +11,7 @@ import { Evaluator, Lexer, Parser, data } from "@actions/expressions";
 import { truthy } from "@actions/expressions/result";
 
 import { PATH_JOBS } from "./changes.ts";
+import { pullRequestTriggerProblem } from "./tested-tree.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 
@@ -78,7 +79,8 @@ describe("ci.yml", () => {
     const changes = jobs.changes as YamlMap;
     expect(changes.needs).toBeUndefined();
     expect(changes.if).toBeUndefined();
-    expect(changes.permissions).toEqual({ contents: "read", actions: "read" });
+    // Read-only scopes for the API reads of changes.ts and tested-tree.ts.
+    expect(changes.permissions).toEqual({ contents: "read", actions: "read", "pull-requests": "read", issues: "read" });
     const steps = changes.steps as YamlMap[];
     const checkout = steps.find((step) => String(step.uses).startsWith("actions/checkout@"));
     expect((checkout?.with as YamlMap)["fetch-depth"]).toBe(0);
@@ -134,6 +136,121 @@ describe("ci.yml", () => {
     test("does not run when the workflow was cancelled", () => {
       expect(answer("true", "cancelled")).toBe(false);
     });
+  });
+
+  // A push to main skips a path-dependent job that passed in the merged pull request's run on the
+  // same tree (scripts/ci/tested-tree.ts, Laysi/trustiot-v2#431). That is only sound while the job
+  // does the same on a pull request as on a push, and while it can be found by name in the run.
+  test("every pull request event runs ci.yml: its pull_request trigger has no filter", () => {
+    expect(pullRequestTriggerProblem(readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8"))).toBeUndefined();
+  });
+
+  test("each path-dependent job is named after its id, and no other job shares the name", () => {
+    for (const job of PATH_JOBS) {
+      expect(`${job}: ${String(jobs[job]?.name)}`).toBe(`${job}: ${job}`);
+    }
+    const names = Object.entries(jobs).map(([id, job]) => String(job.name ?? id));
+    expect(names.toSorted()).toEqual([...new Set(names)].toSorted());
+  });
+
+  /**
+   * References to what differs between a pull request run and a push run of the same tree: the
+   * event, the ref, the commit, the workflow ref and the actor, as contexts (also by index and
+   * through toJSON(github)) or as environment variables. A job can still read them in ways no
+   * pattern finds (a computed variable name), and it can look at HEAD's parents or history, which
+   * differ (a pull request run tests a two-parent merge commit): path-dependent jobs must not do
+   * either, which review has to catch.
+   */
+  const EVENT_DEPENDENT =
+    /github\s*\[|toJSON\(\s*github\s*\)|github\.(?:event\w*|ref\w*|head_ref|base_ref|sha|workflow_ref|workflow_sha|actor\w*|triggering_actor)\b|GITHUB_(?:EVENT_NAME|EVENT_PATH|REF\w*|HEAD_REF|BASE_REF|SHA|WORKFLOW_REF|WORKFLOW_SHA|ACTOR\w*|TRIGGERING_ACTOR)\b/g;
+
+  test("the event pattern finds every spelling it is meant to", () => {
+    const spellings = [
+      "${{ github.event_name }}",
+      "${{ github['event_name'] }}",
+      "${{ github.event_path }}",
+      "${{ github.event.pull_request.number }}",
+      "${{ toJSON(github) }}",
+      "${{ github.ref_name }}",
+      "${{ github.head_ref }}",
+      "${{ github.sha }}",
+      "${{ github.workflow_ref }}",
+      "${{ github.actor }}",
+      "${{ github.triggering_actor }}",
+      "$GITHUB_EVENT_NAME",
+      "$GITHUB_REF",
+      "process.env.GITHUB_SHA",
+      "$GITHUB_WORKFLOW_REF",
+      "$GITHUB_ACTOR",
+      "$GITHUB_TRIGGERING_ACTOR",
+    ];
+    expect(spellings.filter((spelling) => spelling.match(EVENT_DEPENDENT) === null)).toEqual([]);
+    for (const harmless of ["${{ github.workspace }}", "${{ github.token }}", "$GITHUB_OUTPUT", "$GITHUB_REPOSITORY", "${{ github.run_id }}"]) {
+      expect(harmless.match(EVENT_DEPENDENT)).toBeNull();
+    }
+  });
+  /** The one allowed difference: only main saves the Rust build cache, which a run never fails on. */
+  const RUST_CACHE_SAVE_IF = "${{ github.ref == 'refs/heads/main' }}";
+
+  test("the path-dependent jobs do not depend on the event, apart from saving the Rust cache", () => {
+    for (const job of PATH_JOBS) {
+      const definition = JSON.stringify(jobs[job]).replaceAll(JSON.stringify(RUST_CACHE_SAVE_IF), '""');
+      expect(`${job}: ${definition.match(EVENT_DEPENDENT) ?? []}`).toBe(`${job}: `);
+    }
+    const rustCache = ((jobs.rust?.steps ?? []) as YamlMap[]).find((step) => String(step.uses).startsWith("Swatinem/rust-cache@"));
+    expect((rustCache?.with as YamlMap)["save-if"]).toBe(RUST_CACHE_SAVE_IF);
+  });
+
+  // changes.ts lets `rust` run on main whenever a merge changes the cache key (affectsRustCacheKey),
+  // assuming rust-cache's default key. An input that changes the key (key, shared-key, prefix-key,
+  // workspaces, env-vars, add-job-id-key, add-rust-environment-hash-key, ...) needs that rule
+  // revisited first. The version is not pinned here: the rule only affects CI cost, so a rust-cache
+  // upgrade must not fail CI; whoever upgrades it re-checks "Cache Details" in its README and that
+  // it still skips saving an unchanged key (docs/architecture/ci-release.md).
+  test("the Rust cache step keeps the default key that changes.ts assumes", () => {
+    const steps = (jobs.rust?.steps ?? []) as YamlMap[];
+    const caches = steps.filter((step) => String(step.uses).startsWith("Swatinem/rust-cache@"));
+    expect(caches.length).toBe(1);
+    expect(Object.keys((caches[0]?.with ?? {}) as YamlMap).toSorted()).toEqual(["cache-bin", "save-if"]);
+  });
+
+  // The key also holds rustc's version and hash. rustup installs the toolchain rust-toolchain.toml
+  // names, so they change only with that file (a key input) while its channel is an exact version;
+  // a floating channel such as `stable` would change the key with no file changing.
+  test("the Rust toolchain is an exact version, so rustc changes only with rust-toolchain.toml", () => {
+    const toolchain = Bun.TOML.parse(readFileSync(join(ROOT, "rust-toolchain.toml"), "utf8")) as { toolchain?: { channel?: unknown } };
+    expect(String(toolchain.toolchain?.channel)).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  test("the code the path-dependent jobs run does not read the event either", () => {
+    const listed = Bun.spawnSync(["git", "ls-files", "-z"], { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
+    expect(listed.exitCode).toBe(0);
+    // What the jobs build, run or import: the Rust workspace, deploy/ (chart, flux, host installer
+    // with its package.json scripts, images), the scripts the chart, flux and image tests import
+    // (scripts/ci/changes.test.ts checks those imports against the path rules), and the local
+    // actions.
+    const prefixes = [".github/actions/", "crates/", "services/", "tools/", "edge/", "factory/", "deploy/", "scripts/lib/", "scripts/flux/"];
+    const files = new Set(["scripts/release/exec.ts", "scripts/release/flux.ts", "scripts/release/lib.ts", "scripts/ci/check-secret-handling.ts"]);
+    const code = /\.(?:rs|ts|js|mjs|cjs|json|sh|ya?ml|toml|tpl|sql)$|(?:^|\/)(?:Containerfile|Dockerfile)[^/]*$/;
+    const scanned = listed.stdout
+      .toString()
+      .split("\0")
+      .filter((path) => (files.has(path) || prefixes.some((prefix) => path.startsWith(prefix))) && code.test(path));
+    for (const expected of ["deploy/host/package.json", "deploy/images/postgres/Containerfile", ...files]) {
+      expect(scanned).toContain(expected);
+    }
+    // check-secret-handling.ts names `github.sha` in a message as a value it accepts in build
+    // arguments; it never reads the event.
+    const allowed: Record<string, string[]> = { "scripts/ci/check-secret-handling.ts": ["github.sha"] };
+    const offending = scanned
+      .map((path) => {
+        const source = readFileSync(join(ROOT, path), "utf8");
+        // Comments explain; only code counts (JavaScript and TypeScript comments).
+        const code = /\.[cm]?[jt]s$/.test(path) ? source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "") : source;
+        return { path, found: [...(code.match(EVENT_DEPENDENT) ?? [])] };
+      })
+      .filter(({ path, found }) => found.some((match) => !(allowed[path] ?? []).includes(match)));
+    expect(offending).toEqual([]);
   });
 
   test("a pull request's new push still cancels its running CI; main runs never cancel", () => {

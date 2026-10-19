@@ -1,0 +1,45 @@
+# The last 40 first-parent commits on main (origin/main 51fb7f8, 2026-10-15), all squash merges.
+# For each: does the pull request's last head (refs/pull/<N>/head, fetched from origin) contain
+# main's parent commit (P-in-H), and does the main commit have that head's tree (tree-eq)?
+# Both true: the same-tree rule of Laysi/trustiot-v2#431 can apply, if the head's runs and jobs
+# also passed. 34 of 40 qualify; in the other 6 the branch was not updated with main before merging.
+51fb7f8e98ba PR435 parents=1 P-in-H=true tree-eq=true
+f1c6b93e97a6 PR430 parents=1 P-in-H=true tree-eq=true
+385cf22be6ad PR428 parents=1 P-in-H=true tree-eq=true
+6701c7958448 PR425 parents=1 P-in-H=true tree-eq=true
+e944c0baa9a6 PR426 parents=1 P-in-H=true tree-eq=true
+c5ce531f6e0e PR424 parents=1 P-in-H=true tree-eq=true
+75c9949c30bd PR423 parents=1 P-in-H=true tree-eq=true
+495a54b83414 PR422 parents=1 P-in-H=true tree-eq=true
+86b52f7dfff7 PR416 parents=1 P-in-H=true tree-eq=true
+8534a607c9a6 PR421 parents=1 P-in-H=false tree-eq=false
+38503b22d5e0 PR420 parents=1 P-in-H=false tree-eq=false
+66f90ccb961f PR419 parents=1 P-in-H=true tree-eq=true
+37863e0ab316 PR418 parents=1 P-in-H=true tree-eq=true
+24bbd5e6a80f PR415 parents=1 P-in-H=true tree-eq=true
+8e29d03e7446 PR411 parents=1 P-in-H=true tree-eq=true
+0a6d7223c42b PR414 parents=1 P-in-H=true tree-eq=true
+871bfee783c2 PR408 parents=1 P-in-H=true tree-eq=true
+f842e3b3bb97 PR409 parents=1 P-in-H=true tree-eq=true
+65d222fa6bd9 PR395 parents=1 P-in-H=true tree-eq=true
+71769da6ff01 PR405 parents=1 P-in-H=true tree-eq=true
+65936885cd76 PR397 parents=1 P-in-H=true tree-eq=true
+264dbfa1fd6a PR396 parents=1 P-in-H=false tree-eq=false
+4c8078efc529 PR379 parents=1 P-in-H=true tree-eq=true
+55a21cddbe05 PR394 parents=1 P-in-H=true tree-eq=true
+659788c48590 PR392 parents=1 P-in-H=true tree-eq=true
+016127951c0c PR391 parents=1 P-in-H=true tree-eq=true
+e6caf8eff8a1 PR393 parents=1 P-in-H=true tree-eq=true
+45f29d7b18f5 PR390 parents=1 P-in-H=true tree-eq=true
+f2ff4a858146 PR388 parents=1 P-in-H=true tree-eq=true
+4d23efaab851 PR387 parents=1 P-in-H=true tree-eq=true
+e2320314935b PR386 parents=1 P-in-H=true tree-eq=true
+444ee4839916 PR385 parents=1 P-in-H=true tree-eq=true
+9beb8f7ada41 PR382 parents=1 P-in-H=true tree-eq=true
+e2e476bcefb7 PR380 parents=1 P-in-H=false tree-eq=false
+4edbe05690ca PR378 parents=1 P-in-H=true tree-eq=true
+041f76c34d1b PR377 parents=1 P-in-H=false tree-eq=false
+608f5c5c1e58 PR376 parents=1 P-in-H=true tree-eq=true
+5fbe8eab8828 PR373 parents=1 P-in-H=false tree-eq=false
+f457c229063e PR370 parents=1 P-in-H=true tree-eq=true
+28862e12333c PR371 parents=1 P-in-H=true tree-eq=true

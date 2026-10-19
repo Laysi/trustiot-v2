@@ -1,0 +1,60 @@
+decision for a push of e944c0baa9a6 to Laysi/trustiot-v2:main (read-only; nothing is written)
+compared with c5ce531f6e0eef88adf0cb61474eed5e972590c6 (the newest main commit whose ci passed): 22 changed file(s)
+same tree as pull request #426 (head 3ff9995ab2d4addba20462b3c792dad88c12ac64, tree 34edf17f1a84ebf33c1879778ef608011f2bf8a1, run(s) 38688292842); passed there: rust, helm
+rust: skipped (passed in run 38688292842 of pull request #426 on the same tree)
+cargo-deny: skipped (none of the 22 changed file(s) affects it)
+helm: skipped (passed in run 38688292842 of pull request #426 on the same tree)
+host: skipped (none of the 22 changed file(s) affects it)
+postgres-image: skipped (none of the 22 changed file(s) affects it)
+
+## Path-dependent jobs
+
+| job | runs | why |
+| --- | --- | --- |
+| `rust` | skipped | passed in run 38688292842 of pull request #426 on the same tree |
+| `cargo-deny` | skipped | none of the 22 changed file(s) affects it |
+| `helm` | skipped | passed in run 38688292842 of pull request #426 on the same tree |
+| `host` | skipped | none of the 22 changed file(s) affects it |
+| `postgres-image` | skipped | none of the 22 changed file(s) affects it |
+
+`gitleaks` and `workflow-policy` always run.
+
+### Same tree as the merged pull request
+
+The pushed tree `34edf17f1a84ebf33c1879778ef608011f2bf8a1` is the tree of `3ff9995ab2d4addba20462b3c792dad88c12ac64`, the last head of pull request #426, which contains the pushed commit's parent `c5ce531f6e0eef88adf0cb61474eed5e972590c6`; so every ci run of that head tested this tree. Run(s) of that head: [38688292842](https://github.com/Laysi/trustiot-v2/actions/runs/38688292842), all successful. Since 2026-10-15T02:59:49.000Z, main was not force-pushed and held only commits in the pushed commit's history.
+
+| job | in those runs |
+| --- | --- |
+| `rust` | ran and passed: skipped here |
+| `cargo-deny` | skipped in run 38688292842: path rules decide |
+| `helm` | ran and passed: skipped here |
+| `host` | skipped in run 38688292842: path rules decide |
+| `postgres-image` | skipped in run 38688292842: path rules decide |
+
+Compared with c5ce531f6e0eef88adf0cb61474eed5e972590c6 (the newest main commit whose ci passed).
+
+### Changed files (22)
+
+- `deploy/chart/README.md`
+- `deploy/chart/files/postgres/system-databases.sql`
+- `deploy/chart/templates/postgres.yaml`
+- `deploy/chart/tests/chart.test.ts`
+- `deploy/chart/tests/e2e/README.md`
+- `deploy/chart/tests/e2e/postgres-replication.e2e.ts`
+- `deploy/chart/tests/e2e/postgres.e2e.ts`
+- `deploy/cloudnative-pg/README.md`
+- `docs/README.md`
+- `docs/architecture/deployment.md`
+- `docs/runbooks/migrations.md`
+- `docs/test-reports/2026-10-15-400-system-databases.md`
+- `docs/test-reports/data/2026-10-15-400-system-databases/lab-runs.txt`
+- `docs/test-reports/data/2026-10-15-400-system-databases/postgres-e2e-onprem.json`
+- `docs/test-reports/data/2026-10-15-400-system-databases/postgres-e2e-saas.json`
+- `docs/test-reports/data/2026-10-15-400-system-databases/postgres-replication-e2e.json`
+- `docs/test-reports/data/2026-10-15-400-system-databases/workspace-checks.txt`
+- `tools/migrate/README.md`
+- `tools/migrate/src/lib.rs`
+- `tools/migrate/src/main.rs`
+- `tools/migrate/src/postgres.rs`
+- `tools/migrate/tests/system_databases.rs`
+

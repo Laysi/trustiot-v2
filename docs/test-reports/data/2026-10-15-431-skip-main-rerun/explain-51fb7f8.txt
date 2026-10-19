@@ -1,0 +1,46 @@
+decision for a push of 51fb7f8 to Laysi/trustiot-v2:main (read-only; nothing is written)
+compared with f1c6b93e97a67c5c9d4fa2e76a642b4e4b51f5b1 (the newest main commit whose ci passed): 8 changed file(s)
+same tree as pull request #435 (head 10c7762f522225c8c497d4b78014117e458777f3, tree 871dfcd8b37fd92adb62ffd83da2cba61a324c03, run(s) 38707591081); passed there: rust
+rust: skipped (passed in run 38707591081 of pull request #435 on the same tree)
+cargo-deny: skipped (none of the 8 changed file(s) affects it)
+helm: skipped (none of the 8 changed file(s) affects it)
+host: skipped (none of the 8 changed file(s) affects it)
+postgres-image: skipped (none of the 8 changed file(s) affects it)
+
+## Path-dependent jobs
+
+| job | runs | why |
+| --- | --- | --- |
+| `rust` | skipped | passed in run 38707591081 of pull request #435 on the same tree |
+| `cargo-deny` | skipped | none of the 8 changed file(s) affects it |
+| `helm` | skipped | none of the 8 changed file(s) affects it |
+| `host` | skipped | none of the 8 changed file(s) affects it |
+| `postgres-image` | skipped | none of the 8 changed file(s) affects it |
+
+`gitleaks` and `workflow-policy` always run.
+
+### Same tree as the merged pull request
+
+The pushed tree `871dfcd8b37fd92adb62ffd83da2cba61a324c03` is the tree of `10c7762f522225c8c497d4b78014117e458777f3`, the last head of pull request #435, which contains the pushed commit's parent `f1c6b93e97a67c5c9d4fa2e76a642b4e4b51f5b1`; so every ci run of that head tested this tree. Run(s) of that head: [38707591081](https://github.com/Laysi/trustiot-v2/actions/runs/38707591081), all successful. Since 2026-10-15T06:05:05.000Z, main was not force-pushed and held only commits in the pushed commit's history.
+
+| job | in those runs |
+| --- | --- |
+| `rust` | ran and passed: skipped here |
+| `cargo-deny` | skipped in run 38707591081: path rules decide |
+| `helm` | skipped in run 38707591081: path rules decide |
+| `host` | skipped in run 38707591081: path rules decide |
+| `postgres-image` | skipped in run 38707591081: path rules decide |
+
+Compared with f1c6b93e97a67c5c9d4fa2e76a642b4e4b51f5b1 (the newest main commit whose ci passed).
+
+### Changed files (8)
+
+- `.github/workflows/nightly.yml`
+- `CLAUDE.md`
+- `docs/architecture/ci-release.md`
+- `scripts/ci/workflow-conditions.test.ts`
+- `scripts/nightly/notify.test.ts`
+- `scripts/nightly/notify.ts`
+- `scripts/nightly/unchanged.test.ts`
+- `scripts/nightly/unchanged.ts`
+

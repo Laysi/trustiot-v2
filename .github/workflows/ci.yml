@@ -14,6 +14,10 @@
 # skipped, which counts as passed. Each of them runs unless `changes` answered exactly 'false', so a failed or
 # missing answer runs everything. `gitleaks` and `workflow-policy` always run. A new job that
 # should depend on paths gets its rule in scripts/ci/changes.ts and an output of `changes`.
+# On a push to main, a job that already ran and passed in the merged pull request's runs on the
+# identical tree is skipped too (scripts/ci/tested-tree.ts). So these jobs must behave the same on
+# a pull request and on a push, and their `name` must equal their id: changes.ts finds them by
+# name in the pull request's run (scripts/ci/workflow-conditions.test.ts checks both).
 #
 # Checks that later issues add to this workflow:
 # - Integration tests still missing (every migration on a fresh database already runs in
@@ -52,11 +56,21 @@ jobs:
     name: changes
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 5
+    # Read-only. On a push to main, changes.ts reads (Laysi/trustiot-v2#431):
+    # - actions: which recent main commits ci passed on, to compare with the newest of them; and
+    #   the runs of the merged pull request's last head and their jobs' conclusions;
+    # - contents: that head's tree, its merge base with the pushed commit's parent, whether GitHub
+    #   created and signed that parent and when, and the force pushes to main (repository activity);
+    # - pull-requests: the pull request a main commit was merged from, and the pull requests with
+    #   its head branch;
+    # - issues and pull-requests: whether that pull request's base branch ever changed (GitHub
+    #   lists the issue events endpoint under both).
+    # If any of it cannot be read, the jobs run (scripts/ci/changes.ts).
     permissions:
       contents: read
-      # On a push to main: which recent main commits ci passed on, to compare with the newest of
-      # them. If that cannot be read, every job runs (scripts/ci/changes.ts).
       actions: read
+      pull-requests: read
+      issues: read
     outputs:
       rust: ${{ steps.decide.outputs.rust }}
       cargo-deny: ${{ steps.decide.outputs.cargo-deny }}
@@ -75,7 +89,7 @@ jobs:
       - id: decide
         name: Decide which jobs the changed paths need
         env:
-          # Only a push reads the runs; a pull request runs its own copy of the script, so it
+          # Only a push reads the API; a pull request runs its own copy of the script, so it
           # gets no token at all.
           GITHUB_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
         run: bun scripts/ci/changes.ts

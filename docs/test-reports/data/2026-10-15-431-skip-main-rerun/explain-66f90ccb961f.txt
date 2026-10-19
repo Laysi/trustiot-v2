@@ -1,0 +1,141 @@
+decision for a push of 66f90ccb961f to Laysi/trustiot-v2:main (read-only; nothing is written)
+compared with 0a6d7223c42bc579077ed98242532b7ad0a32a3e (the newest main commit whose ci passed; passed over 37863e0ab316 (failure), 24bbd5e6a80f (failure), 8e29d03e7446 (failure)): 103 changed file(s)
+same tree as pull request #419 (head 777e269b8a521f4f93a3efa2f3798e99cc8a1a6b, tree deb054d65dab5065f87c9329be254a3310777a0a, run(s) 38604957413); passed there: rust, cargo-deny
+rust: runs (passed in run 38604957413 of pull request #419 on the same tree, but `Cargo.lock` changes the Rust build cache key, so main runs it to save the cache)
+cargo-deny: runs (`Cargo.lock` changed (it passed in run 38604957413 of pull request #419 on the same tree, but its result changes with time, so the path rules decide))
+helm: runs (`deploy/chart/README.md` changed)
+host: skipped (none of the 103 changed file(s) affects it)
+postgres-image: skipped (none of the 103 changed file(s) affects it)
+
+## Path-dependent jobs
+
+| job | runs | why |
+| --- | --- | --- |
+| `rust` | yes | passed in run 38604957413 of pull request #419 on the same tree, but `Cargo.lock` changes the Rust build cache key, so main runs it to save the cache |
+| `cargo-deny` | yes | `Cargo.lock` changed (it passed in run 38604957413 of pull request #419 on the same tree, but its result changes with time, so the path rules decide) |
+| `helm` | yes | `deploy/chart/README.md` changed |
+| `host` | skipped | none of the 103 changed file(s) affects it |
+| `postgres-image` | skipped | none of the 103 changed file(s) affects it |
+
+`gitleaks` and `workflow-policy` always run.
+
+### Same tree as the merged pull request
+
+The pushed tree `deb054d65dab5065f87c9329be254a3310777a0a` is the tree of `777e269b8a521f4f93a3efa2f3798e99cc8a1a6b`, the last head of pull request #419, which contains the pushed commit's parent `37863e0ab3167e9472c87b8d1efc65a8c13e3aa4`; so every ci run of that head tested this tree. Run(s) of that head: [38604957413](https://github.com/Laysi/trustiot-v2/actions/runs/38604957413), all successful. Since 2026-10-14T16:06:54.000Z, main was not force-pushed and held only commits in the pushed commit's history.
+
+| job | in those runs |
+| --- | --- |
+| `rust` | ran and passed, but runs here (see why above) |
+| `cargo-deny` | ran and passed, but its result changes with time: path rules decide |
+| `helm` | skipped in run 38604957413: path rules decide |
+| `host` | skipped in run 38604957413: path rules decide |
+| `postgres-image` | skipped in run 38604957413: path rules decide |
+
+Compared with 0a6d7223c42bc579077ed98242532b7ad0a32a3e (the newest main commit whose ci passed; passed over 37863e0ab316 (failure), 24bbd5e6a80f (failure), 8e29d03e7446 (failure)).
+
+### Changed files (103)
+
+- `.github/workflows/nightly.yml`
+- `Cargo.lock`
+- `Cargo.toml`
+- `api/openapi.json`
+- `crates/contract/README.md`
+- `crates/contract/src/events.rs`
+- `crates/contract/src/events/identity.rs`
+- `crates/contract/src/lib.rs`
+- `crates/contract/tests/events.rs`
+- `crates/contract/tests/fixtures/events/identity.tenant_created/v1.json`
+- `crates/service-kit/README.md`
+- `crates/testkit/Cargo.toml`
+- `crates/testkit/README.md`
+- `crates/testkit/src/isolation/postgres.rs`
+- `crates/testkit/src/lib.rs`
+- `crates/testkit/src/product.rs`
+- `crates/testkit/tests/postgres_isolation.rs`
+- `deploy/chart/README.md`
+- `deploy/chart/templates/_migrate.tpl`
+- `deploy/chart/templates/_service.tpl`
+- `deploy/chart/templates/migrate.yaml`
+- `deploy/chart/templates/passwords.yaml`
+- `deploy/chart/tests/chart.test.ts`
+- `deploy/chart/tests/e2e/README.md`
+- `deploy/chart/tests/e2e/identity-double/server.ts`
+- `deploy/chart/tests/e2e/ingress.e2e.ts`
+- `deploy/chart/tests/e2e/raw-client.test.ts`
+- `deploy/chart/tests/e2e/raw-client.ts`
+- `deploy/chart/tests/e2e/values-e2e.yaml`
+- `deploy/chart/tests/e2e/values-otel-e2e.yaml`
+- `deploy/chart/tests/ingress-authz.test.ts`
+- `deploy/chart/tests/ingress-authz.ts`
+- `deploy/chart/values.yaml`
+- `deploy/images/README.md`
+- `deploy/images/assets/image.toml`
+- `deploy/istio/README.md`
+- `docs/README.md`
+- `docs/architecture/ci-release.md`
+- `docs/architecture/secrets.md`
+- `docs/roadmap/milestones.md`
+- `docs/roadmap/ms0-acceptance.md`
+- `docs/test-reports/2026-10-14-65-assets-skeleton.md`
+- `docs/test-reports/2026-10-15-407-dev-product-logins.md`
+- `docs/test-reports/2026-10-15-77-ms0-acceptance.md`
+- `docs/test-reports/data/2026-10-14-65-assets-skeleton/assets-tenant-created-and-cross-tenant.txt`
+- `docs/test-reports/data/2026-10-14-65-assets-skeleton/e2e-overlays-before-and-after.txt`
+- `docs/test-reports/data/2026-10-14-65-assets-skeleton/identity-tenants-and-cross-tenant.txt`
+- `docs/test-reports/data/2026-10-14-65-assets-skeleton/nightly-smoke.txt`
+- `docs/test-reports/data/2026-10-14-65-assets-skeleton/testkit-one-per-tenant.txt`
+- `docs/test-reports/data/2026-10-14-65-assets-skeleton/workspace-checks.txt`
+- `docs/test-reports/data/2026-10-15-407-dev-product-logins/e2e-output.txt`
+- `docs/test-reports/data/2026-10-15-407-dev-product-logins/mutation-output.txt`
+- `docs/test-reports/data/2026-10-15-407-dev-product-logins/rcheck-output.txt`
+- `docs/test-reports/data/2026-10-15-77-ms0-acceptance/checks.txt`
+- `docs/test-reports/data/2026-10-15-77-ms0-acceptance/nightly-smoke.txt`
+- `docs/test-reports/data/2026-10-15-77-ms0-acceptance/route-list-mutation.txt`
+- `scripts/README.md`
+- `scripts/ci/workflow-conditions.test.ts`
+- `scripts/lib/commands.ts`
+- `scripts/lib/migrate.ts`
+- `scripts/lib/product-logins.ts`
+- `scripts/nightly/api.test.ts`
+- `scripts/nightly/api.ts`
+- `scripts/nightly/e2e.test.ts`
+- `scripts/nightly/e2e.ts`
+- `scripts/nightly/image-cache.test.ts`
+- `scripts/nightly/image-cache.ts`
+- `scripts/nightly/manifests.ts`
+- `scripts/nightly/platform.test.ts`
+- `scripts/nightly/platform.ts`
+- `scripts/nightly/run.ts`
+- `scripts/nightly/service-image.test.ts`
+- `scripts/nightly/smoke.ts`
+- `scripts/tests/e2e.test.ts`
+- `scripts/tests/env.test.ts`
+- `scripts/tests/migrate.test.ts`
+- `scripts/tests/product-logins.test.ts`
+- `services/assets/Cargo.toml`
+- `services/assets/README.md`
+- `services/assets/migrations/postgres/0001_assets.sql`
+- `services/assets/src/config.rs`
+- `services/assets/src/lib.rs`
+- `services/assets/src/main.rs`
+- `services/assets/src/tenants.rs`
+- `services/assets/tests/cross_tenant.rs`
+- `services/assets/tests/support/mod.rs`
+- `services/assets/tests/tenant_created.rs`
+- `services/identity/Cargo.toml`
+- `services/identity/README.md`
+- `services/identity/migrations/postgres/0002_tenants.sql`
+- `services/identity/src/lib.rs`
+- `services/identity/src/tenants.rs`
+- `services/identity/tests/cross_tenant.rs`
+- `services/identity/tests/support/mod.rs`
+- `services/identity/tests/tenants.rs`
+- `tools/migrate/README.md`
+- `tools/migrate/src/postgres.rs`
+- `tools/migrate/src/registry.rs`
+- `tools/migrate/tests/file_escapes.rs`
+- `tools/migrate/tests/fresh_database.rs`
+- `tools/migrate/tests/registry.rs`
+- `tools/openapi/Cargo.toml`
+- `tools/openapi/src/lib.rs`
+
