@@ -13,14 +13,15 @@ TrustIoT 將以 Rust 從零重建，不沿用舊架構。本目錄是重建的�
 
 | 文件 | 內容 |
 | --- | --- |
-| [架構決策總表](architecture/decisions.md) | 30 項已定案的架構決策與理由 |
+| [架構決策總表](architecture/decisions.md) | 32 項已定案的架構決策與理由 |
 | [部署與可搬移性](architecture/deployment.md) | 系統架構、服務切分、流量路徑、可搬移規則 |
 | [專案目錄](architecture/repository-layout.md) | repo 的目錄結構與各目錄職責 |
 | [CI 與發佈](architecture/ci-release.md) | GitHub Actions 三個 workflow 與 GitOps 部署 |
 | [密鑰與權限](architecture/secrets.md) | 密鑰的規則、注入方式與清冊；一次性 token 的規則（M3）；公開 repo 的資訊規則 |
 | [密鑰輪替 runbook](runbooks/secrets.md) | 每項密鑰的輪替步驟與外洩處理 |
 | [migration Job runbook](runbooks/migrations.md) | 既有叢集補 owner 的 CREATEROLE、收回 `postgres` 與 `template1` 的 PUBLIC 權限（叢集內與外部 Postgres）、一個 Postgres 叢集一個 TrustIoT 資料庫、服務資料庫密碼的輪替、Job 停止或服務等不到 Job 時的處理 |
-| [知識與文件庫（RAG）](architecture/rag.md) | 多模態設備文件庫的檢索流程與去 AWS 化調整 |
+| [AI 助理與 AI 閘道](architecture/ai-assistant.md) | 主 agent 加工具、分流、模型角色、AI 閘道的原生協定轉送與帳本、安全與題庫 |
+| [知識與文件庫（RAG）](architecture/rag.md) | 文件與影音的檢索流程與去 AWS 化調整 |
 | [現場脈絡與知識圖（Apache AGE）](architecture/field-context.md) | 機台、生產紀錄、AI 記憶與 Cypher 護欄 |
 | [觀測：日誌、看板、錯誤追蹤](architecture/observability.md) | 日誌、Grafana、外部監控、Sentry |
 | [AI 警報規則](architecture/alert-rules.md) | AI 自動撰寫並啟用的警報規則與安全護欄 |

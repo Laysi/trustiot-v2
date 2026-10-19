@@ -1,11 +1,11 @@
 # 知識與文件庫（RAG）
 
-RAG 照 [#28](https://github.com/Laysi/trustiot/issues/28)、[#124](https://github.com/Laysi/trustiot/issues/124)、[#44](https://github.com/Laysi/trustiot/issues/44)、[#34](https://github.com/Laysi/trustiot/issues/34) 的既定作法重建：視覺原生的多模態設備文件庫，位在回答層級第 1.5 層。檢索作法全部保留，只有綁在 AWS 的部分要隨去 AWS 化調整。
+RAG 照 [#28](https://github.com/Laysi/trustiot/issues/28)、[#124](https://github.com/Laysi/trustiot/issues/124)、[#44](https://github.com/Laysi/trustiot/issues/44)、[#34](https://github.com/Laysi/trustiot/issues/34) 的既定作法重建：視覺原生的多模態設備文件庫，位在回答層級第 1.5 層。檢索作法全部保留，只有綁在 AWS 的部分要隨去 AWS 化調整。2026-10-18 起，檢索結果交給主 agent 閱讀（決策 31，[AI 助理與 AI 閘道](ai-assistant.md)），並加入影片與聲音（見最後的「影音」一節）；地端的部分排在 SaaS 全部完成之後。
 
 照原案保留：
 
 1. PDF 固定逐頁轉圖，必要時加重疊裁切；頁面圖是閱讀與引用的單位，不做 OCR 或切塊。SaaS 另加 LLM 預處理，但它產生的文字只用來找頁面（見下一段）。
-2. `Qwen3-VL-Embedding-8B` 改為 SaaS 用 Gemini Embedding 2、地端用 EmbeddingGemma 2（見下一段）；`Qwen3-VL-Reranker-8B` 以「問題加候選頁面圖」重排序，留作地端的備案（SaaS 改用快速 LLM 重排，見下一段）；最後由可看圖的模型閱讀頁面並回答。這些模型都透過 API 呼叫：SaaS 用雲端 API，地端接客戶自己的端點，我們不自備 GPU。
+2. `Qwen3-VL-Embedding-8B` 改為 SaaS 用 Gemini Embedding 2、地端用 EmbeddingGemma 2（見下一段）；`Qwen3-VL-Reranker-8B` 以「問題加候選頁面圖」重排序，留作地端的備案（SaaS 改用可替換的重排，見下一段）；最後由主 agent（可看圖）閱讀頁面並回答。這些模型都透過 API 呼叫：SaaS 用雲端 API，地端接客戶自己的端點，我們不自備 GPU。
 3. 引用必附文件名與頁碼，裁切時附座標。
 4. Postgres 是文件、版本、處理狀態與稽核的唯一來源；向量庫只存向量與最小引用資訊，可由 Postgres 加原始檔重建。
 5. 單一共用 collection，以 tenant\_id 分區；每筆向量帶租戶、型號、文件、版本，點 ID 由文件、版本、頁碼、裁切座標穩定導出。租戶條件由知識庫服務的存取層依內部身分加上，查詢或寫入沒帶租戶條件一律拒絕；跨租戶負向測試列入 CI。
@@ -20,12 +20,16 @@ RAG 照 [#28](https://github.com/Laysi/trustiot/issues/28)、[#124](https://gith
 
 1. LLM 預處理：每頁以高解析度送看圖 LLM，產出轉錄、頁面描述、中英關鍵詞與故障碼；記下模型與版本，換模型時重跑。
 2. 多路索引：同一筆點位存三種索引——頁面圖加描述的向量、轉錄文字的向量、故障碼與型號的關鍵字索引（Qdrant 的 named vector 與 sparse vector）。
-3. 嵌入模型：SaaS 用 Gemini Embedding 2，維度 768 或 1536 由題庫決定；地端用 EmbeddingGemma 2（開放權重、Apache 2.0，CPU 就能跑）。通用基準上 Gemini 明顯較強（技術報告 MMTEB 約 69.9，EmbeddingGemma 2 官方為 61.36）。兩邊向量空間不同，租戶在 SaaS 與地端之間搬遷時重新產生向量，匯出檔不帶向量。
+3. 嵌入模型：SaaS 用 Gemini Embedding 2，經 AI 閘道呼叫 Vertex AI（決策 15），維度 768 或 1536 由題庫決定；地端用 EmbeddingGemma 2（開放權重、Apache 2.0，CPU 就能跑）。通用基準上 Gemini 明顯較強（技術報告 MMTEB 約 69.9，EmbeddingGemma 2 官方為 61.36）。兩邊向量空間不同，租戶在 SaaS 與地端之間搬遷時重新產生向量，匯出檔不帶向量。Embedding 2 的限制（2026-10-18 查證）：
+   - 不支援 `task_type`，改在內容前加固定的文字前綴（查詢用 `task: search result | query: …`，文件用 `title: none | text: …`）；建索引與查詢的寫法必須一致，寫在程式的常數裡，換寫法等於換向量空間，要重新產生向量。
+   - 每次請求的文字、圖片、影片、音訊、PDF 共用 8,192 token 上限，超過會被靜默截斷，所以送出前先檢查大小；放在同一個請求內容裡的多個部分會合成一個向量，每一頁或每一個片段要各自成為一筆輸入。
 4. 召回：三路各取前幾十名，合併去重，不做 RRF 融合；knowva 實測 RRF 會把只有向量找得到的頁面擠出候選。
-5. 重排：把合併後的候選（轉錄與描述文字加頁面 ID）一次送給快速模型，例如 Claude Haiku 5.5 或 GPT-6 Luna，用結構化輸出回傳排序後的 ID。回傳不存在的 ID 就丟棄，呼叫失敗時退回向量分數的順序。走一般的聊天 API，模型由設定指定，不另接專用的 rerank API。
-6. 閱讀與引用：前幾名的頁面圖交給看圖模型閱讀並回答；LLM 產生的文字不顯示、不當答案來源，引用仍是文件名、頁碼與座標。
-7. 地端：預處理與 LLM 重排接客戶自己的模型；模型不夠強時關掉預處理、改用 VL reranker，流程照常。
-8. 驗證：用自己的手冊建 60–100 題的題庫，涵蓋故障碼表、掃描頁、小字、中文問英文手冊；量測正確頁面進入候選與排第一的比例、答案正確率、延遲與每次查詢成本。題庫用來選模型、決定各路取幾名，也當回歸測試。
+5. 重排可以替換（2026-10-18，決策 26），由 RAG 題庫決定用哪一種；回傳不存在的 ID 一律丟棄，呼叫失敗時退回向量分數的順序：
+   - OpenAI Decisions API 逐頁打分：每個候選一題 predicate（「這一頁能回答問題嗎」），附轉錄、描述與低解析度頁面圖（只收 base64），依機率排序，機率太低的直接剔除。一次請求最多 200 題、128 張圖，但第三方有案例在一次 40 個候選時品質不合格，所以分批送，每批幾個由題庫決定。只收輸入費（每百萬 token $0.10）；仍是 public beta。
+   - Claude Haiku 5.5 一次排序：把合併後的候選（轉錄與描述文字加頁面 ID）一次送出，用結構化輸出回傳排序後的 ID（原本的作法）。
+6. 閱讀與引用：文件檢索工具把前幾名的頁面圖回傳給主 agent，由它閱讀並回答（決策 31）；LLM 產生的文字不顯示、不當答案來源，引用仍是文件名、頁碼與座標。影音的對應規則見「影音」一節。
+7. 地端（排在 SaaS 全部完成之後）：預處理與 LLM 重排接客戶自己的模型；模型不夠強時關掉預處理、改用 VL reranker，流程照常。
+8. 驗證：用自己的手冊建 60–100 題的題庫，涵蓋故障碼表、掃描頁、小字、中文問英文手冊；量測正確頁面進入候選與排第一的比例、答案正確率、延遲與每次查詢成本。題庫用來選模型與重排方式、決定各路取幾名與重排的每批候選數，也當回歸測試。
 
 與去 AWS 化衝突、需要調整的部分：
 
@@ -33,7 +37,7 @@ RAG 照 [#28](https://github.com/Laysi/trustiot/issues/28)、[#124](https://gith
 | --- | --- | --- |
 | 向量庫用 Qdrant Managed Cloud，經 AWS Marketplace 付款 | 依賴 AWS，地端無法使用；向量存放在第三方 | 已定：SaaS 用 Qdrant Cloud（Free 起步，不足時升 Standard），地端在 k3s 自架 |
 | 原始 PDF 與頁面圖存 S3，依前綴限制 IAM | 依賴 AWS | 已定：S3 相容的託管物件儲存 |
-| Embedding 與 rerank 走 IONOS，經 Cloudflare AI Gateway | Cloudflare AI Gateway 已由自建 AI 閘道取代（決策 28）；地端不能把頁面圖送出去 | 已定：embedding 與重排都經 AI 閘道呼叫並記入用量；SaaS 用 Gemini Embedding 2 加快速 LLM 重排，地端接客戶端點（見上一段） |
+| Embedding 與 rerank 走 IONOS，經 Cloudflare AI Gateway | Cloudflare AI Gateway 已由自建 AI 閘道取代（決策 28）；地端不能把頁面圖送出去 | 已定：embedding 與重排都經 AI 閘道呼叫並記入用量；SaaS 用 Gemini Embedding 2（Vertex AI）加可替換的重排，地端接客戶端點（見上一段） |
 | Database API key 分權、IP 白名單、Secrets Manager | Secrets Manager 依賴 AWS；地端改為叢集內部存取 | SaaS：檢索用唯讀 key、背景處理用寫入 key，金鑰放 k8s Secret（細分權限的 key 需 v1.11 以上，Free 是否支援待確認）；地端：只在叢集內可達，讀寫仍分帳號 |
 
 SaaS 的向量存放在 Qdrant 雲端，原案「向量存放在第三方」的信任例外保留；向量庫只存向量與最小引用資訊，原始檔與頁面圖仍在物件儲存。地端自架則沒有這個例外。
@@ -45,3 +49,17 @@ SaaS 用 Qdrant Cloud 的前提（列為驗收條件）：
 3. 只用兩邊都支援的功能：同一版本線的 Qdrant API，不用 Cloud 專屬的推論服務。
 4. 自架 Qdrant 的路徑放進 CI 持續測試。
 5. Cluster 選離 SaaS 主機最近的區域，避免檢索延遲。
+
+## 影音（MS5，2026-10-18 決定）
+
+影片與聲音（使用者附件與知識庫）在 SaaS 由 Gemini 處理，經 AI 閘道呼叫 Vertex AI（決策 15、32）；Claude 不收影音。原則與頁面圖相同：預先產生的文字只用來找片段，答案必須來自實際看過該片段的模型，而且附上時間段，可以回頭查證。地端排在 SaaS 全部完成之後。
+
+1. 上傳與播放：一律走物件儲存的預簽網址，不經 Cloudflare Tunnel（Cloudflare 的服務條款限制經 CDN 傳送影片與大型檔案，見[風險與待定事項](../roadmap/risks.md)）。單檔長度上限、是否列入進階 AI 權益，在 MS5 前決定。
+2. 建索引（knowledge 的背景工作佇列，與文件同一套租約、重試與回收）：
+   - 結構化逐字稿：Gemini 3.8 Flash 產生說話者、時間戳、畫面上的文字、事件與不確定的地方，存在 Postgres，記下模型與版本，換模型時重跑；只用來找片段，不當答案來源。
+   - 每個片段三種向量加關鍵字索引：畫面、音訊、逐字稿文字，每筆帶媒體 ID 與起訖時間，沿用文件的 collection、tenant\_id 分區與 alias 切換。Embedding 2 每次請求最多影片 120 秒（只取 32 格，要每秒一格就切到 32 秒以內）、音訊 180 秒；Gemini API 的 Embedding 2 不處理影片裡的音訊，音訊另外嵌入，或用 Vertex AI 的音軌抽取（含音訊時影片上限 80 秒）。片段長度與重疊由影音題庫決定。
+3. 回答：主 agent 用影音工具先找片段，再讓 Gemini 只看指定的時間段回答具體問題（可以指定取樣率與解析度），回傳固定格式：答案、證據的時間段與觀察、不確定的地方。回答引用時間段，使用者在畫面上點了就播放原始片段。對整支影片連續追問時用顯式快取：Gemini 3.8 Flash 支援，Gemini 4 Argon 不支援。
+4. 模型：預設 Gemini 3.8 Flash（官方 LVBench 87.8%）；困難的問題可以升到 Gemini 4 Argon（91.7%）。兩者的分工、解析度與取樣率由影音題庫決定。
+5. 影片每秒約 100 token（低解析度）到 300 token（高解析度），官方文件的數字不一致，以 `count_tokens` 與回報的用量為準。
+6. 傳給 Vertex AI 的方式：Vertex AI 能直接內嵌的檔案大小有限，片段在服務內切好再送；需要整支影片時暫存到 Google Cloud Storage 並設自動刪除，細節在 Laysi/trustiot-v2#440 決定。
+7. 安全：影音是不可信內容，Gemini 這一段沒有工具，只回傳固定格式的欄位（[AI 助理與 AI 閘道](ai-assistant.md)的「安全」）。
