@@ -32,8 +32,8 @@
 
   劇本由 Laysi/trustiot-v2#459 寫成在展示環境執行的自動測試，和里程碑一樣不靠人工驗收。
 - **展示環境**（Laysi/trustiot-v2#457）：lab 的 Mac M1 展示機（[CI 與發佈](../architecture/ci-release.md)），以 Flux 部署；與 lab 的 e2e 共用叢集，各用自己的命名空間。
-- **展示用閘道器**（Laysi/trustiot-v2#458）：另備一台專用的 TrustIoT 閘道器（含 TPM），不和 lab 的閘道器共用，展示環境才能不間斷地累積資料；以產線工作站工具登錄、以 API 綁定，和出貨的閘道器走同一條路。
-- **資料面先通**：AI 要回答「上週」的問題，展示環境得先累積一兩週的真實資料，所以資料一進展示環境就不中斷。
+- **展示用閘道器**（Laysi/trustiot-v2#458）：2026-10-19 決定用 lab 的閘道器（含 TPM），重灌 Raspberry Pi OS，上面的舊系統（v1）直接棄用，不保留也不遷移；以產線工作站工具登錄、以 API 綁定，和出貨的閘道器走同一條路。重灌不會重置 TPM：模組原有的 SRK 與 2026-10-12 可行性測試留下的金鑰都還在，沿用或清除依產線工作站工具（Laysi/trustiot-v2#80）的決定。
+- **資料面先通**：AI 要回答「上週」的問題，展示環境得先累積一兩週的真實資料，所以資料一進展示環境就不中斷。lab 的閘道器兼作展示用閘道器，會中斷資料的 lab 測試（重刷映像、OTA 回滾、斷電、換上測試版的 agent，例如 Laysi/trustiot-v2#95、Laysi/trustiot-v2#162 與 Laysi/trustiot-v2#102 的實機驗證）要避開累積期與展示，否則圖表留下缺口。agent 開始輪詢 lab 的 RS485 轉換器後，其他程式不再連同一台轉換器（[現場硬限制](../requirements/field-constraints.md)：轉換器會把設備的回應送給所有 TCP 連線）；Laysi/trustiot-v2#98 若要在那之後再錄，改從展示環境匯出資料。
 
 切片內的 issue 分四條泳道並行（→ 表示相依）：
 
@@ -47,7 +47,7 @@
 
 - **拆分**：Laysi/trustiot-v2#119、Laysi/trustiot-v2#128、Laysi/trustiot-v2#142 只留切片需要的部分，其餘移到 Laysi/trustiot-v2#453（健康歷史、首頁卡片、依方案的可查期間）、Laysi/trustiot-v2#454（即時點、健康狀態、CSV 匯出）、Laysi/trustiot-v2#455（異常區段、斷訊、停機、月增率、年增率與碳排），留在原里程碑。不拆的話，telemetry-query 要等方案權益（Laysi/trustiot-v2#111）與健康資料（Laysi/trustiot-v2#118）兩條長鏈。Laysi/trustiot-v2#453 完成前，可查期間固定用[方案與權益](../product/plans.md)最嚴的例子值（原始資料 7 天、彙總資料 3 個月）。
 - **關鍵路徑**：最長的相依鏈在 AI 泳道，Laysi/trustiot-v2#138 到 Laysi/trustiot-v2#149 共 6 張；Laysi/trustiot-v2#146、Laysi/trustiot-v2#147 先合併 API 規格，Laysi/trustiot-v2#149 就能照規格並行。風險最高的在資料面：雲端從 Laysi/trustiot-v2#78 到 Laysi/trustiot-v2#93 共 5 張，再加上硬體、TPM 與 lab 存取的變數。
-- **提前決定的事**：Laysi/trustiot-v2#103 登入要寄驗證碼，SMTP 供應商原本在 Laysi/trustiot-v2#169（MS4）才選，改在 Laysi/trustiot-v2#457 決定。
+- **提前決定的事**：Laysi/trustiot-v2#103 登入要寄驗證碼，SMTP 供應商原本在 Laysi/trustiot-v2#169（MS4）才選，2026-10-19 決定暫用 Resend（帳號與金鑰權限見[密鑰與權限](../architecture/secrets.md)「外部服務」）。服務只經 SMTP 寄信（chart 的 `smtp.*`），不呼叫 Resend 的 API，換供應商只改 values 與 Secret；Laysi/trustiot-v2#169 開工時再確認是否續用。
 - **待確認**：Laysi/trustiot-v2#78 訂出閘道器憑證的有效期後，若短於展示期，把憑證換發（Laysi/trustiot-v2#81、Laysi/trustiot-v2#83）加入切片。
 
 延後的項目與展示環境的補償：
