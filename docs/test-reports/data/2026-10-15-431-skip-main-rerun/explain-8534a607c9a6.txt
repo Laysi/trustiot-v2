@@ -1,0 +1,41 @@
+decision for a push of 8534a607c9a6 to Laysi/trustiot-v2:main (read-only; nothing is written)
+compared with 38503b22d5e01db4f27ffa6058af8ff80ae95d77 (the newest main commit whose ci passed): 11 changed file(s)
+same-tree check not used: the head df3f0bcb9180 of pull request #421 does not contain the pushed commit's parent 38503b22d5e0, so the base its runs tested cannot be confirmed
+rust: skipped (none of the 11 changed file(s) affects it)
+cargo-deny: skipped (none of the 11 changed file(s) affects it)
+helm: runs (`deploy/chart/tests/e2e/install-evidence.test.ts` changed)
+host: skipped (none of the 11 changed file(s) affects it)
+postgres-image: skipped (none of the 11 changed file(s) affects it)
+
+## Path-dependent jobs
+
+| job | runs | why |
+| --- | --- | --- |
+| `rust` | skipped | none of the 11 changed file(s) affects it |
+| `cargo-deny` | skipped | none of the 11 changed file(s) affects it |
+| `helm` | yes | `deploy/chart/tests/e2e/install-evidence.test.ts` changed |
+| `host` | skipped | none of the 11 changed file(s) affects it |
+| `postgres-image` | skipped | none of the 11 changed file(s) affects it |
+
+`gitleaks` and `workflow-policy` always run.
+
+### Same tree as the merged pull request
+
+Not used: the head df3f0bcb9180 of pull request #421 does not contain the pushed commit's parent 38503b22d5e0, so the base its runs tested cannot be confirmed.
+
+Compared with 38503b22d5e01db4f27ffa6058af8ff80ae95d77 (the newest main commit whose ci passed).
+
+### Changed files (11)
+
+- `deploy/chart/tests/e2e/install-evidence.test.ts`
+- `deploy/chart/tests/e2e/install-evidence.ts`
+- `docs/architecture/ci-release.md`
+- `docs/test-reports/2026-10-15-410-nightly-diagnostics.md`
+- `docs/test-reports/data/2026-10-15-410-nightly-diagnostics/lab-diagnostics.txt`
+- `docs/test-reports/data/2026-10-15-410-nightly-diagnostics/lab-kubectl-calls.txt`
+- `docs/test-reports/data/2026-10-15-410-nightly-diagnostics/lab-pods.yaml`
+- `scripts/nightly/diagnostics.test.ts`
+- `scripts/nightly/diagnostics.ts`
+- `scripts/nightly/report.ts`
+- `scripts/nightly/smoke.ts`
+

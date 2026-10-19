@@ -1,0 +1,45 @@
+decision for a push of f1c6b93 to Laysi/trustiot-v2:main (read-only; nothing is written)
+compared with 385cf22be6addf65de665c5fb54fa939452d1110 (the newest main commit whose ci passed): 7 changed file(s)
+same tree as pull request #430 (head 952bc0f8d7ff9cdd00d5d1b7bddc8553e2c0104c, tree 242129974e7a921ad76129f6b090ceb29333be48, run(s) 38696309905); passed there: none
+rust: skipped (none of the 7 changed file(s) affects it)
+cargo-deny: skipped (none of the 7 changed file(s) affects it)
+helm: skipped (none of the 7 changed file(s) affects it)
+host: skipped (none of the 7 changed file(s) affects it)
+postgres-image: skipped (none of the 7 changed file(s) affects it)
+
+## Path-dependent jobs
+
+| job | runs | why |
+| --- | --- | --- |
+| `rust` | skipped | none of the 7 changed file(s) affects it |
+| `cargo-deny` | skipped | none of the 7 changed file(s) affects it |
+| `helm` | skipped | none of the 7 changed file(s) affects it |
+| `host` | skipped | none of the 7 changed file(s) affects it |
+| `postgres-image` | skipped | none of the 7 changed file(s) affects it |
+
+`gitleaks` and `workflow-policy` always run.
+
+### Same tree as the merged pull request
+
+The pushed tree `242129974e7a921ad76129f6b090ceb29333be48` is the tree of `952bc0f8d7ff9cdd00d5d1b7bddc8553e2c0104c`, the last head of pull request #430, which contains the pushed commit's parent `385cf22be6addf65de665c5fb54fa939452d1110`; so every ci run of that head tested this tree. Run(s) of that head: [38696309905](https://github.com/Laysi/trustiot-v2/actions/runs/38696309905), all successful. Since 2026-10-15T05:44:56.000Z, main was not force-pushed and held only commits in the pushed commit's history.
+
+| job | in those runs |
+| --- | --- |
+| `rust` | skipped in run 38696309905: path rules decide |
+| `cargo-deny` | skipped in run 38696309905: path rules decide |
+| `helm` | skipped in run 38696309905: path rules decide |
+| `host` | skipped in run 38696309905: path rules decide |
+| `postgres-image` | skipped in run 38696309905: path rules decide |
+
+Compared with 385cf22be6addf65de665c5fb54fa939452d1110 (the newest main commit whose ci passed).
+
+### Changed files (7)
+
+- `scripts/README.md`
+- `scripts/lib/commands.ts`
+- `scripts/lib/migrate.ts`
+- `scripts/lib/system-databases.ts`
+- `scripts/tests/e2e.test.ts`
+- `scripts/tests/migrate.test.ts`
+- `scripts/tests/system-databases.test.ts`
+

@@ -27,14 +27,14 @@ git merge-base --is-ancestor "<C>^" FETCH_HEAD && echo "P in H"
 test "$(git rev-parse "<C>^{tree}")" = "$(git rev-parse "FETCH_HEAD^{tree}")" && echo "same tree"
 ```
 
-以真實 API 資料唯讀查詢一個 main commit 的判斷（不寫任何東西）：
+以真實 API 資料唯讀查詢 main commit 的判斷（不寫任何東西；只有 GET），每個 commit 的輸出存成 data 目錄的 `explain-<commit>.txt`：
 
 ```sh
 git fetch origin main
 : "${GITHUB_TOKEN:?set GITHUB_TOKEN to a token that can read Laysi/trustiot-v2}"
-bun scripts/ci/changes.ts --explain f1c6b93
-# A merge whose pull request head lacks main's parent: the same-tree rule must not apply.
-bun scripts/ci/changes.ts --explain 8534a607c9a6
+for c in f1c6b93 8534a607c9a6 51fb7f8 66f90ccb961f 385cf22be6ad e944c0baa9a6 86b52f7dfff7 6701c79; do
+  bun scripts/ci/changes.ts --explain "$c" > "docs/test-reports/data/2026-10-15-431-skip-main-rerun/explain-$c.txt"
+done
 ```
 
 ## 結果
@@ -62,6 +62,23 @@ bun scripts/ci/changes.ts --explain 8534a607c9a6
 
 另外：rust-cache 的版本不再在測試裡釘住（這條規則只影響 CI 成本，Renovate 升級不該讓 CI 失敗；升級時重新確認它的 README）。驗證者也指出，`f1c6b93` 一個 commit 不足以驗證新規則（那次 PR 執行沒有實際執行任何依路徑的 job）；所以真實資料改以多個 commit 查詢，包括改到 Rust 編譯快取 key 的合併（`66f90ccb961f`、`385cf22be6ad`）與 PR 中 `rust` 通過的合併（`51fb7f8`、`e944c0baa9a6`、`86b52f7dfff7`）。
 
+第二輪複查（對修正後的 `9195b0c`）在完成前停止，沒有結果；修正改由協調者逐項審查程式與文件，並以下節的真實資料確認判斷。
+
+## 真實資料
+
+2026-10-19 以這個分支的判斷程式（與 `9195b0c` 相同；之後只併入 main 的文件、移動一行註解）唯讀查詢 8 個 main commit，結果與 2026-10-15 在 `9195b0c` 上查詢的相同。輸出含完整的 job summary。
+
+| main commit | 來源 | 同一棵樹的檢查 | 判斷 | 輸出 |
+| --- | --- | --- | --- | --- |
+| `51fb7f8` | PR Laysi/trustiot-v2#435 | 適用；PR 執行 38707591081 的 `rust` 通過 | `rust` 略過；其他 job 照路徑規則略過 | [輸出](data/2026-10-15-431-skip-main-rerun/explain-51fb7f8.txt) |
+| `e944c0baa9a6` | PR Laysi/trustiot-v2#426 | 適用；`rust`、`helm` 通過 | `rust`、`helm` 略過 | [輸出](data/2026-10-15-431-skip-main-rerun/explain-e944c0baa9a6.txt) |
+| `86b52f7dfff7` | PR Laysi/trustiot-v2#416 | 適用；`rust`、`helm` 通過 | `rust`、`helm` 略過 | [輸出](data/2026-10-15-431-skip-main-rerun/explain-86b52f7dfff7.txt) |
+| `6701c79` | PR Laysi/trustiot-v2#425 | 適用；五個 job 都通過 | `rust`、`helm`、`host`、`postgres-image` 略過；`cargo-deny` 的結果隨時間改變，照路徑規則執行（`scripts/release/lib.ts` 有變動） | [輸出](data/2026-10-15-431-skip-main-rerun/explain-6701c79.txt) |
+| `385cf22be6ad` | PR Laysi/trustiot-v2#428 | 適用；`rust`、`cargo-deny`、`helm` 通過 | `helm` 略過；`rust` 因 `Cargo.lock` 改變 Rust 編譯快取的 key 而執行（main 存新的快取）；`cargo-deny` 照路徑規則執行 | [輸出](data/2026-10-15-431-skip-main-rerun/explain-385cf22be6ad.txt) |
+| `66f90ccb961f` | PR Laysi/trustiot-v2#419 | 適用；`rust`、`cargo-deny` 通過 | `rust` 為了存快取執行；`cargo-deny` 照路徑規則執行；`helm` 照路徑規則執行（當時 main 有三個紅燈的 commit，比較基準往前推，範圍內有 `deploy/chart/README.md`） | [輸出](data/2026-10-15-431-skip-main-rerun/explain-66f90ccb961f.txt) |
+| `f1c6b93` | PR Laysi/trustiot-v2#430 | 適用，但那次 PR 執行的五個 job 都依路徑略過 | 照路徑規則，五個都略過（新規則沒有作用） | [輸出](data/2026-10-15-431-skip-main-rerun/explain-f1c6b93.txt) |
+| `8534a607c9a6` | PR Laysi/trustiot-v2#421 | 不適用：PR 最後的 head 不含 main 的 parent | 照路徑規則：`helm` 執行，其他略過 | [輸出](data/2026-10-15-431-skip-main-rerun/explain-8534a607c9a6.txt) |
+
 ## 結論
 
 | 驗收條件 | 結果 |
@@ -69,5 +86,5 @@ bun scripts/ci/changes.ts --explain 8534a607c9a6
 | main 的樹等於 PR 已通過的 merge 樹時，PR 實際執行且通過的 job 在 main 上略過，job summary 寫出依據；有測試 | 通過（單元測試） |
 | 每個照現有規則執行的情境都有測試（樹不同、head 沒通過、base 無法確認、一次推多個 commit、PR 略過的 job、API 讀取失敗） | 通過（單元測試，見上） |
 | 判斷不使用 PR 執行產生的任何輸出；文件寫明理由 | 通過：程式只讀中繼資料（測試檢查呼叫的端點），理由寫在 ci-release.md |
-| 以 `f1c6b93`（PR Laysi/trustiot-v2#430）用真實 API 資料唯讀執行判斷，結果是略過 | 待測：以 token 呼叫 API 不在實作的權限內，由協調者以上方的 `--explain` 指令執行並補上結果（`8534a607c9a6` 應回答不適用）；git 部分（parent 在 head 裡、樹相同）已確認 |
+| 以 main 上已有的合併用真實 API 資料唯讀執行判斷，結果是略過並說明依據 | 通過：8 個 main commit（見「真實資料」）；`51fb7f8`、`e944c0baa9a6`、`86b52f7dfff7`、`6701c79` 的 PR 已通過的 job 在 main 上略過，依據寫在輸出的 job summary；`f1c6b93` 沒有可略過的 job，`8534a607c9a6` 照預期不適用 |
 | 決策 30 與 ci-release.md 已更新 | 通過 |

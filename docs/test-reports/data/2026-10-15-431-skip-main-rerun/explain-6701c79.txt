@@ -1,0 +1,58 @@
+decision for a push of 6701c79 to Laysi/trustiot-v2:main (read-only; nothing is written)
+compared with e944c0baa9a61c4c50303de5d86a79457bdceefc (the newest main commit whose ci passed): 20 changed file(s)
+same tree as pull request #425 (head 93418e628c58e1f0ad61e3b41e7932b471c3e0cb, tree 965ba0b4df7ec1458112908a608287c9cbd230a3, run(s) 38689743109); passed there: rust, cargo-deny, helm, host, postgres-image
+rust: skipped (passed in run 38689743109 of pull request #425 on the same tree)
+cargo-deny: runs (`scripts/release/lib.ts` changed (it passed in run 38689743109 of pull request #425 on the same tree, but its result changes with time, so the path rules decide))
+helm: skipped (passed in run 38689743109 of pull request #425 on the same tree)
+host: skipped (passed in run 38689743109 of pull request #425 on the same tree)
+postgres-image: skipped (passed in run 38689743109 of pull request #425 on the same tree)
+
+## Path-dependent jobs
+
+| job | runs | why |
+| --- | --- | --- |
+| `rust` | skipped | passed in run 38689743109 of pull request #425 on the same tree |
+| `cargo-deny` | yes | `scripts/release/lib.ts` changed (it passed in run 38689743109 of pull request #425 on the same tree, but its result changes with time, so the path rules decide) |
+| `helm` | skipped | passed in run 38689743109 of pull request #425 on the same tree |
+| `host` | skipped | passed in run 38689743109 of pull request #425 on the same tree |
+| `postgres-image` | skipped | passed in run 38689743109 of pull request #425 on the same tree |
+
+`gitleaks` and `workflow-policy` always run.
+
+### Same tree as the merged pull request
+
+The pushed tree `965ba0b4df7ec1458112908a608287c9cbd230a3` is the tree of `93418e628c58e1f0ad61e3b41e7932b471c3e0cb`, the last head of pull request #425, which contains the pushed commit's parent `e944c0baa9a61c4c50303de5d86a79457bdceefc`; so every ci run of that head tested this tree. Run(s) of that head: [38689743109](https://github.com/Laysi/trustiot-v2/actions/runs/38689743109), all successful. Since 2026-10-15T04:57:14.000Z, main was not force-pushed and held only commits in the pushed commit's history.
+
+| job | in those runs |
+| --- | --- |
+| `rust` | ran and passed: skipped here |
+| `cargo-deny` | ran and passed, but its result changes with time: path rules decide |
+| `helm` | ran and passed: skipped here |
+| `host` | ran and passed: skipped here |
+| `postgres-image` | ran and passed: skipped here |
+
+Compared with e944c0baa9a61c4c50303de5d86a79457bdceefc (the newest main commit whose ci passed).
+
+### Changed files (20)
+
+- `docs/architecture/ci-release.md`
+- `docs/test-reports/2026-10-15-384-rootless-independent-digest.md`
+- `docs/test-reports/data/2026-10-15-384-rootless-independent-digest/analyze.ts`
+- `docs/test-reports/data/2026-10-15-384-rootless-independent-digest/eval.sh`
+- `docs/test-reports/data/2026-10-15-384-rootless-independent-digest/pack-binaries.ts`
+- `docs/test-reports/data/2026-10-15-384-rootless-independent-digest/pack-one.sh`
+- `docs/test-reports/data/2026-10-15-384-rootless-independent-digest/pack-variants.sh`
+- `docs/test-reports/data/2026-10-15-384-rootless-independent-digest/rc-inner.sh`
+- `docs/test-reports/data/2026-10-15-384-rootless-independent-digest/run-buildts.txt`
+- `docs/test-reports/data/2026-10-15-384-rootless-independent-digest/run-rc7.txt`
+- `docs/test-reports/data/2026-10-15-384-rootless-independent-digest/run-variants-1.txt`
+- `docs/test-reports/data/2026-10-15-384-rootless-independent-digest/run-variants-2.txt`
+- `docs/test-reports/data/2026-10-15-384-rootless-independent-digest/variants-container.sh`
+- `scripts/README.md`
+- `scripts/release/build.ts`
+- `scripts/release/lib.test.ts`
+- `scripts/release/lib.ts`
+- `scripts/release/pack.test.ts`
+- `scripts/release/pack.ts`
+- `scripts/release/publish.ts`
+
