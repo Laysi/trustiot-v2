@@ -506,7 +506,6 @@ export function parseMergeBase(body: unknown): string {
   return mergeBase;
 }
 
-/** The tree in the answer of GET /repos/{repo}/git/commits/{commit}, checked to be that commit's. */
 /** The committer email of the commits GitHub itself creates (squash merges, web edits). */
 export const GITHUB_COMMITTER_EMAIL = "noreply@github.com";
 
@@ -528,6 +527,7 @@ export function parseGitHubCreated(body: unknown, commit: string): string | null
   return date;
 }
 
+/** The tree in the answer of GET /repos/{repo}/git/commits/{commit}, checked to be that commit's. */
 export function parseCommitTree(body: unknown, commit: string): string {
   const tree = isMap(body) && isMap(body.tree) ? text(body.tree.sha) : "";
   if (!isMap(body) || body.sha !== commit || !COMMIT_SHA.test(tree)) {
