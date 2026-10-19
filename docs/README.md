@@ -30,7 +30,7 @@ TrustIoT 將以 Rust 從零重建，不沿用舊架構。本目錄是重建的�
 | [舊系統功能盤點](requirements/legacy-inventory.md) | 舊系統每一項功能與現況 |
 | [不帶進新系統的東西](requirements/dropped.md) | 重建時捨棄的功能與元件 |
 | [現場硬限制](requirements/field-constraints.md) | 現場的物理事實，新系統一樣會撞到 |
-| [里程碑](roadmap/milestones.md) | MS0–MS6 的內容與完成條件、可行性測試進度 |
+| [里程碑](roadmap/milestones.md) | MS0–MS6 的內容與完成條件、展示切片、可行性測試進度 |
 | [MS0 完成條件與測試](roadmap/ms0-acceptance.md) | MS0 每個完成條件由哪些自動測試證明、在 CI、nightly 或 lab 執行 |
 | [風險與待定事項](roadmap/risks.md) | 重建期間的風險與尚未決定的事 |
 | [可行性測試結果](feasibility/2026-10-09-cloud-poc.md) | 2026-10-09 第一批雲端 PoC 的實測結果 |
