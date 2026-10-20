@@ -19,7 +19,7 @@ import {
   unpackChart,
 } from "./chart-images.ts";
 import { protoTool, run, systemTool } from "./exec.ts";
-import { APP_DIR, SHAPE_VALUES_FILE, parseShapeValues } from "./flux.ts";
+import { CLUSTERS, appDir, parseShapeValues, shapeValuesFile } from "./flux.ts";
 import { CHART_DIR, REGISTRY, discoverImages, isMap, planImage, sha256Digest } from "./lib.ts";
 
 const ROOT = resolve(import.meta.dir, "..", "..");
@@ -235,14 +235,16 @@ describe("chartPinProblems", () => {
     }
   });
 
-  test("no shipped shape file and no file of the SaaS GitOps tree overrides an image of the release", () => {
+  test("no shipped shape file and no values file of a GitOps tree overrides an image of the release", () => {
+    const overlay = (file: string) => ({ file, values: parseValues(readFileSync(join(ROOT, file), "utf8"), file) });
     const overlays = [
       ...SHAPE_VALUES_FILES.map((file) => ({ file: `deploy/chart/${file}`, values: parseValues(readFileSync(join(CHART, file), "utf8"), file) })),
-      {
-        file: SHAPE_VALUES_FILE,
-        values: parseValues(parseShapeValues(readFileSync(join(ROOT, SHAPE_VALUES_FILE), "utf8")).source, SHAPE_VALUES_FILE),
-      },
-      { file: `${APP_DIR}/values-instance.yaml`, values: parseValues(readFileSync(join(ROOT, APP_DIR, "values-instance.yaml"), "utf8"), "values-instance.yaml") },
+      ...CLUSTERS.map((cluster) => ({
+        file: shapeValuesFile(cluster),
+        values: parseValues(parseShapeValues(readFileSync(join(ROOT, shapeValuesFile(cluster)), "utf8")).source, shapeValuesFile(cluster)),
+      })),
+      overlay(`${appDir("saas")}/values-instance.yaml`),
+      overlay(`${appDir("demo")}/values-demo.yaml`),
     ];
     expect(chartPinProblems(pinned, overlays, pins, VERSION)).toEqual([]);
   });

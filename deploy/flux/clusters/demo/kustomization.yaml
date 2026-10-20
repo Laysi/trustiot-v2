@@ -1,0 +1,8 @@
+# The demo environment (Laysi/trustiot-v2#457): everything Flux applies from main on the demo
+# cluster, the lab Mac mini M1 that runs the demo slice next to the lab's e2e tests
+# (deploy/flux/README.md, 「展示叢集」).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - flux-system
+  - trustiot

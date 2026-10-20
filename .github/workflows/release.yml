@@ -20,8 +20,9 @@
 #            the GitHub Release. Runs no build code.
 # - verify   contents: read, packages: read. Checks the published release as a consumer would.
 # - deploy-pr actions, contents, pull-requests: write. Proposes deploying the release on the
-#            SaaS cluster: a PR against main that changes the chart version in deploy/flux/,
-#            and a ci.yml run on it (a PR opened with GITHUB_TOKEN starts no workflow by itself).
+#            clusters that run an older one (SaaS, demo): a PR against main that changes their
+#            chart version in deploy/flux/, and a ci.yml run on it (a PR opened with
+#            GITHUB_TOKEN starts no workflow by itself).
 #            While the repository does not let Actions open PRs, it only pushes the branch and
 #            succeeds with a warning and the compare link in the job summary.
 # - report   contents: write, statuses: write. Posts the `release` commit status on the tagged

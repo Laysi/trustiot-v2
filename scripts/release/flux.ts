@@ -1,25 +1,61 @@
 /**
- * The SaaS deployment in deploy/flux/ as release.yml sees it (Laysi/trustiot-v2#70): the files
+ * The clusters in deploy/flux/ as release.yml sees them (Laysi/trustiot-v2#70, #457): the files
  * the deploy-pr job rewrites for each release, rendered and parsed here so that the job, the
  * tests and a hand review agree on their exact content.
  *
- * - CHART_SOURCE_FILE is the OCIRepository that Flux pulls the chart from. It pins the chart by
- *   tag and digest and only accepts a keyless cosign signature by release.yml at that exact
- *   tag (decision 30). It is always exactly `renderChartSource(...)` of its own version, so a
- *   hand edit that drops or widens the verification fails `bun test deploy/flux`.
- * - SHAPE_VALUES_FILE is deploy/chart/values-saas.yaml as of the deployed release, so the
+ * Each cluster under deploy/flux/clusters/ has its own copy of the two files, so each one runs the
+ * version that its own files name:
+ * - chartSourceFile(cluster) is the OCIRepository that Flux pulls the chart from. It pins the
+ *   chart by tag and digest and only accepts a keyless cosign signature by release.yml at that
+ *   exact tag (decision 30). It is always exactly `renderChartSource(...)` of its own version, so
+ *   a hand edit that drops or widens the verification fails `bun test deploy/flux`.
+ * - shapeValuesFile(cluster) is deploy/chart/values-saas.yaml as of the deployed release, so the
  *   deployment shape always matches the chart version it is applied to.
  */
 
 import { GITHUB_OIDC_ISSUER, ReleaseError, compareReleaseTags, isDigest, isMap, parseReleaseTag, signingIdentity } from "./lib.ts";
 
 export const FLUX_DIR = "deploy/flux";
-export const CLUSTER_DIR = `${FLUX_DIR}/clusters/saas`;
-export const APP_DIR = `${CLUSTER_DIR}/trustiot`;
-/** The OCIRepository of the chart; rewritten by the deploy PR. */
-export const CHART_SOURCE_FILE = `${APP_DIR}/chart.yaml`;
-/** deploy/chart/values-saas.yaml copied from the deployed release; rewritten by the deploy PR. */
-export const SHAPE_VALUES_FILE = `${APP_DIR}/values-saas.yaml`;
+
+/**
+ * The clusters that Flux deploys from this repository: the SaaS cluster (MS4) and the demo
+ * environment on the lab Mac mini M1 (Laysi/trustiot-v2#457, deploy/flux/README.md 「展示叢集」).
+ */
+export const CLUSTERS = ["saas", "demo"] as const;
+export type ClusterName = (typeof CLUSTERS)[number];
+
+/**
+ * The clusters that release.yml's deploy PR moves to a new release, each one only while it runs
+ * an older version (deploy.ts). Every one of them must exist on main: deploy-pr reads their
+ * chart sources there and stops when one is missing.
+ */
+export const DEPLOY_CLUSTERS: readonly ClusterName[] = CLUSTERS;
+
+/** The directory Flux applies on a cluster (its GitRepository sync path). */
+export function clusterDir(cluster: ClusterName): string {
+  return `${FLUX_DIR}/clusters/${cluster}`;
+}
+
+/** The TrustIoT release of a cluster: namespace, chart source, HelmRelease, values, SOPS Secrets. */
+export function appDir(cluster: ClusterName): string {
+  return `${clusterDir(cluster)}/trustiot`;
+}
+
+/** A cluster's OCIRepository of the chart; rewritten for a release by the deploy PR or scripts/flux/pin-chart.ts. */
+export function chartSourceFile(cluster: ClusterName): string {
+  return `${appDir(cluster)}/chart.yaml`;
+}
+
+/** A cluster's copy of deploy/chart/values-saas.yaml from its deployed release; rewritten with chartSourceFile. */
+export function shapeValuesFile(cluster: ClusterName): string {
+  return `${appDir(cluster)}/values-saas.yaml`;
+}
+
+/** The SaaS cluster's paths, which the Flux lab e2e test and the GHCR pull Secret script default to. */
+export const CLUSTER_DIR = clusterDir("saas");
+export const APP_DIR = appDir("saas");
+export const CHART_SOURCE_FILE = chartSourceFile("saas");
+export const SHAPE_VALUES_FILE = shapeValuesFile("saas");
 /** Where the shape values come from, in the release's own checkout. */
 export const CHART_SHAPE_VALUES = "deploy/chart/values-saas.yaml";
 /** Namespace and Helm release name of the SaaS install (deploy/istio and the runbooks use them). */
@@ -94,13 +130,14 @@ export function renderChartSource(source: ChartSource): string {
 /**
  * Reads the chart source back. It must be exactly what renderChartSource writes for the
  * repository and chart it names, so a hand-edited file is an error, not a silent change.
+ * `file` only names the file in the errors.
  */
-export function parseChartSource(text: string, repository: string, chartRepository: string): ChartSource {
+export function parseChartSource(text: string, repository: string, chartRepository: string, file = CHART_SOURCE_FILE): ChartSource {
   let doc: unknown;
   try {
     doc = Bun.YAML.parse(text);
   } catch (error) {
-    throw new ReleaseError(`${CHART_SOURCE_FILE} is not YAML: ${error instanceof Error ? error.message : String(error)}`);
+    throw new ReleaseError(`${file} is not YAML: ${error instanceof Error ? error.message : String(error)}`);
   }
   const ref = isMap(doc) && isMap(doc.spec) && isMap(doc.spec.ref) ? doc.spec.ref : {};
   const version = typeof ref.tag === "string" ? ref.tag : "";
@@ -109,11 +146,11 @@ export function parseChartSource(text: string, repository: string, chartReposito
   try {
     expected = renderChartSource({ version, digest, repository, chartRepository });
   } catch (error) {
-    throw new ReleaseError(`${CHART_SOURCE_FILE}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new ReleaseError(`${file}: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (text !== expected) {
     throw new ReleaseError(
-      `${CHART_SOURCE_FILE} is not what scripts/release/flux.ts renders for ${version}: it was edited by hand. ` +
+      `${file} is not what scripts/release/flux.ts renders for ${version}: it was edited by hand. ` +
         "Revert the edit, or roll back by reverting the deploy PR",
     );
   }
@@ -129,11 +166,11 @@ export function renderShapeValues(version: string, source: string): string {
   return `# Copied by release.yml from deploy/chart/values-saas.yaml at ${tag}. Do not edit; see deploy/flux/README.md.\n${source}`;
 }
 
-/** The release a shape values copy came from, and the copied text. */
-export function parseShapeValues(text: string): { version: string; source: string } {
+/** The release a shape values copy came from, and the copied text. `file` only names the file in errors. */
+export function parseShapeValues(text: string, file = SHAPE_VALUES_FILE): { version: string; source: string } {
   const match = SHAPE_HEADER.exec(text);
   if (match?.[1] === undefined) {
-    throw new ReleaseError(`${SHAPE_VALUES_FILE} has no "Copied by release.yml" header`);
+    throw new ReleaseError(`${file} has no "Copied by release.yml" header`);
   }
   return { version: parseReleaseTag(match[1]).version, source: text.slice(match[0].length) };
 }
