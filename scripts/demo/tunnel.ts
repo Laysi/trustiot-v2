@@ -1495,7 +1495,7 @@ export async function startRun(box: Box, log: Log, dryRun: boolean, staged: Stag
     }
     log.note(`starting installer run ${id} returned exit ${started.exitCode}, but its unit or files are there: following it`);
   }
-  log.note(`installer run ${id} started on the demo machine as ${RUN_UNIT_PREFIX}${id}.service (log ${STATE_DIR}/${id}.log, root only); it can be silent for minutes while it reads firewalld`);
+  log.note(`installer run ${id} started on the demo machine as ${RUN_UNIT_PREFIX}${id}.service (log ${STATE_DIR}/${id}.log, root only); it prints nothing while it reads firewalld zone by zone, which is normal`);
   return id;
 }
 
