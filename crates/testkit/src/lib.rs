@@ -11,11 +11,17 @@
 //!   (`tools/migrate`) itself.
 //! - [`container`]: podman or docker containers removed on drop, and the rule that a missing
 //!   container runtime skips a test locally but fails it in CI.
+//! - [`modbus`]: a fake Modbus TCP and RTU-over-TCP endpoint with unit identifiers and fault
+//!   injection (rebuild checklist M7), for the gateway's acquisition tests.
+//! - [`clock`]: time control for tests on real sockets: a paused tokio clock that moves only
+//!   when the test advances it, and waits bounded by wall-clock time.
 //!
 //! How a service hooks in is in the crate's README.
 
+pub mod clock;
 pub mod container;
 pub mod identity;
 pub mod isolation;
+pub mod modbus;
 pub mod postgres;
 pub mod product;

@@ -261,6 +261,7 @@ describe("every copy of a pin is updated by the same pull request", () => {
   const WRITTEN_BY_TOOLS: Record<string, string> = {
     "deploy/flux/clusters/saas/flux-system/kustomization.yaml": "Flux controller images, rewritten by scripts/flux/components.ts with the flux pin",
     "deploy/flux/clusters/saas/trustiot/chart.yaml": "the chart release.yml published, written by scripts/release/flux.ts",
+    "deploy/flux/clusters/demo/trustiot/chart.yaml": "the chart release.yml published, written by scripts/release/flux.ts",
   };
 
   interface Pin {

@@ -1,0 +1,7 @@
+{
+  "unit": "LoadState=loaded\nActiveState=active\nMainPID=3439036\nNRestarts=0",
+  "ops": "ActiveState=active\nMainPID=1005\nNRestarts=0",
+  "cloudflared": "cloudflared-2026.10.2-1.aarch64\nb7e55b4d9702c2ab5f8348f780bb1db044527fc555367714c78e0595750a4665  /usr/bin/cloudflared",
+  "links": "symbolic link\n/usr/bin/cloudflared\nregular empty file",
+  "firewalld": "36d9a58579e2e60e35e08f4c38051b4f336332e75a7af7ed554aae065417672b  /etc/firewalld/zones/trusted.xml\ntrusted (active)\n  target: ACCEPT\n  ingress-priority: 0\n  egress-priority: 0\n  icmp-block-inversion: no\n  interfaces: \n  sources: 10.42.0.0/16\n  services: \n  ports: \n  protocols: \n  forward: yes\n  masquerade: no\n  forward-ports: \n  source-ports: \n  icmp-blocks: \n  rich rules: \n\trule family=\"ipv4\" source address=\"10.42.0.0/16\" port port=\"22\" protocol=\"tcp\" reject\ntrusted\n  target: ACCEPT\n  ingress-priority: 0\n  egress-priority: 0\n  icmp-block-inversion: no\n  interfaces: \n  sources: 10.42.0.0/16\n  services: \n  ports: \n  protocols: \n  forward: yes\n  masquerade: no\n  forward-ports: \n  source-ports: \n  icmp-blocks: \n  rich rules: \n\trule family=\"ipv4\" source address=\"10.42.0.0/16\" port port=\"22\" protocol=\"tcp\" reject"
+}

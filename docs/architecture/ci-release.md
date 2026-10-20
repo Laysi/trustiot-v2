@@ -11,8 +11,8 @@ SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定�
 2026-10-11 實作（Laysi/trustiot-v2#70，操作與建立叢集的步驟見 [deploy/flux/README.md](../../deploy/flux/README.md)）：
 
 - Flux 只裝 source、kustomize、helm 三個控制器（`.prototools` 釘 Flux 2.9.6，控制器映像以 cosign 驗過 fluxcd 官方簽章的 digest 釘選）。叢集以一把唯讀的 deploy key 經 SSH 每分鐘讀一次 main，只取 `deploy/flux/`；叢集沒有能寫 GitHub 的憑證，GitHub 也沒有叢集的憑證。
-- chart 以 OCIRepository 拉取，tag 與 digest 都寫在 `deploy/flux/clusters/saas/trustiot/chart.yaml`（digest 優先），只接受 release.yml 在**該版本的 tag** 上的 keyless 簽章（issuer 與 subject 都是完全比對，比下方「簽章與驗證」的 `v.*` 更窄）。這個檔案由 `scripts/release/flux.ts` 產生，`bun test deploy/flux` 要求它與產生的內容逐字相同，所以驗簽不會被手改拿掉或放寬。
-- 發版：release.yml 的 `deploy-pr` job 在 verify 通過後，以 GitHub API 在 main 上做一個 commit（改 `chart.yaml` 與部署中的 `values-saas.yaml` 副本），推到 `deploy/trustiot-<版本>` 並開 PR；候選版開成 draft，版本不比 main 上的新時不開。合併後 Flux 在 1 分鐘內開始升級，Helm 升級失敗時自動 rollback；revert 該 PR 即回到前一版。2026-10-11 在實驗機以一次性的 git 伺服器、registry 與簽章金鑰實測（[測試報告](../test-reports/2026-10-11-70-flux-gitops.md)）。
+- chart 以 OCIRepository 拉取，tag 與 digest 都寫在每個叢集的 `deploy/flux/clusters/<叢集>/trustiot/chart.yaml`（digest 優先），只接受 release.yml 在**該版本的 tag** 上的 keyless 簽章（issuer 與 subject 都是完全比對，比下方「簽章與驗證」的 `v.*` 更窄）。這個檔案由 `scripts/release/flux.ts` 產生，`bun test deploy/flux` 要求它與產生的內容逐字相同，所以驗簽不會被手改拿掉或放寬。
+- 發版：release.yml 的 `deploy-pr` job 在 verify 通過後，以 GitHub API 在 main 上做一個 commit（部署中的版本比新版舊的每個叢集各改 `chart.yaml` 與部署中的 `values-saas.yaml` 副本：SaaS 叢集，以及 2026-10-20 起的展示叢集，Laysi/trustiot-v2#457），推到 `deploy/trustiot-<版本>` 並開 PR；候選版開成 draft，新版不比任何一個叢集部署中的版本新時不開；只移動其中一個叢集時以 `scripts/flux/pin-chart.ts` 自己開 PR。合併後 Flux 在 1 分鐘內開始升級，Helm 升級失敗時自動 rollback；revert 該 PR 即回到前一版。2026-10-11 在實驗機以一次性的 git 伺服器、registry 與簽章金鑰實測（[測試報告](../test-reports/2026-10-11-70-flux-gitops.md)）。
 - deploy PR 上的 CI：以 `GITHUB_TOKEN` 開的 PR 不觸發 workflow，`workflow_dispatch` 是唯一的例外，所以 `deploy-pr` job 以 `actions: write` 在該分支執行 ci.yml（ci.yml 因此加了 `workflow_dispatch` 觸發），結果掛在分支的 head commit，PR 看得到；dispatch 失敗時由人關閉再重開 PR。沒有改用 GitHub App 或 PAT 開 PR：那要在 GitHub 存一把能寫 repo 的長期憑證。
 - repo 設定「Allow GitHub Actions to create and approve pull requests」打開時，`deploy-pr` 自己開 PR；維持下方「GitHub 的 Actions 設定」目前的 `false` 時，它推好分支後仍然成功，在 job summary 寫出 compare 連結與 PR 的標題、內文，並在 run 上留一則 warning annotation，由人開 PR（人開的 PR 由 `pull_request` 事件跑 ci）。其他錯誤仍讓 job 失敗。打開與否由人決定（見該節）。
 
@@ -23,9 +23,10 @@ SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定�
 做法：
 
 - 每個 Secret 寫成一般的 Kubernetes Secret YAML，放在 `deploy/flux/`，檔名以 `.sops.yaml` 結尾。只加密 `data` 與 `stringData` 的值（`encrypted_regex: ^(data|stringData)$`），Secret 名稱與 key 保持明文，PR 看得出改了哪個 Secret 的哪個 key，看不到值。
-- repo 根目錄的 `.sops.yaml` 列出收件者：SaaS 叢集的 age 公鑰，加上每位負責維運的人的 age 公鑰。
+- repo 根目錄的 `.sops.yaml` 每個叢集一條規則，列出收件者：該叢集的 age 公鑰，加上每位負責維運的人的 age 公鑰；一個叢集的金鑰解不開另一個叢集的檔案（展示叢集見 [deploy/flux/README.md](../../deploy/flux/README.md)「展示叢集」）。
 - Flux 的 Kustomization 設 `decryption.provider: sops`，引用 `flux-system` namespace 的 Secret `sops-age`（叢集的 age 私鑰），在記憶體中解密後套用。CI 不解密，GitHub 上只有密文。
 - CI 的 `check-secret-handling.ts` 擋下 repo 內任何沒有加密的 Secret（見下方 `workflow-policy`）。
+- CI 只看得出值有沒有加密，看不到值：改到 SOPS 檔的值的 PR，由持有維運人員私鑰的人以 `sops -d` 解開審查，PR 內文寫明改了哪些 key（2026-10-20，Laysi/trustiot-v2#464）。被 HelmRelease 當成 values 讀的加密 Secret，每個 key 只以 `targetPath` 與 `literal: true` 寫進一個列出的值，不整份當成 values 合併，所以看不到的內容改不到映像或其他設定（展示叢集的私有 values，[deploy/flux/README.md](../../deploy/flux/README.md)「展示叢集」）。
 
 理由：
 

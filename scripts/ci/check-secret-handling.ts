@@ -38,7 +38,11 @@
  * 5. Kubernetes Secret manifests in the repository are SOPS-encrypted: every value under
  *    `data` and `stringData` has the shape SOPS writes (AES256_GCM with a 32-byte IV and a
  *    16-byte tag), and the `sops` block has a version, a modification time, an encrypted MAC
- *    and age recipients with their wrapped data keys. Kustomize `secretGenerator` is not
+ *    and age recipients with their wrapped data keys. Every SOPS-encrypted document is one Secret
+ *    whose `sops` block encrypts exactly data and stringData (`encrypted_regex` is
+ *    `^(data|stringData)$`, no other scope option), with no `ENC[` value anywhere else, and
+ *    metadata of only a name, a namespace and the label `reconcile.fluxcd.io/watch: Enabled`
+ *    (sopsDocumentProblems). Kustomize `secretGenerator` is not
  *    used: its literals, files and env files are plain text this check cannot verify. Templates
  *    (every file under a chart's `templates/` but NOTES.txt, read per chart, and other `.yaml`
  *    and `.tpl` files with `{{ }}`) may not declare a Secret or a templated kind, except an empty
@@ -1357,6 +1361,85 @@ export function sopsMetadataValid(sops: unknown): boolean {
   );
 }
 
+/** What every SOPS file in this repository encrypts (.sops.yaml): the values of a Secret, nothing else. */
+export const SOPS_ENCRYPTED_REGEX = "^(data|stringData)$";
+/**
+ * sops options that change which values are encrypted or what the MAC covers. A file sets its own
+ * scope in its `sops` block, whatever .sops.yaml says, so none of them may appear there.
+ */
+const SOPS_SCOPE_OPTIONS = [
+  "unencrypted_regex",
+  "encrypted_suffix",
+  "unencrypted_suffix",
+  "encrypted_comment_regex",
+  "unencrypted_comment_regex",
+  "mac_only_encrypted",
+] as const;
+/** The one label a SOPS Secret may carry: Flux upgrades a HelmRelease that reads it as soon as it changes. */
+export const FLUX_WATCH_LABEL: Readonly<Record<string, string>> = { "reconcile.fluxcd.io/watch": "Enabled" };
+const SOPS_SECRET_KEYS: ReadonlySet<string> = new Set(["apiVersion", "kind", "metadata", "type", "data", "stringData", "sops"]);
+const SOPS_METADATA_KEYS: ReadonlySet<string> = new Set(["name", "namespace", "labels"]);
+
+/** The paths of string values that hold `ENC[`, below `value`. */
+function encryptedPaths(value: unknown, path: string): string[] {
+  if (isMap(value)) {
+    return Object.entries(value).flatMap(([key, child]) => encryptedPaths(child, `${path}.${key}`));
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((child, index) => encryptedPaths(child, `${path}[${index}]`));
+  }
+  return typeof value === "string" && value.includes("ENC[") ? [path] : [];
+}
+
+/**
+ * Why a SOPS-encrypted document (one with a top-level `sops` block) breaks what every SOPS file in
+ * the repository keeps to; empty when it keeps to it. A reviewer sees everything but the values, so
+ * nothing else may be hidden or carry meaning the reviewer cannot read:
+ * - it is one Kubernetes Secret (apiVersion v1) with no top-level key but apiVersion, kind,
+ *   metadata, type, data, stringData and sops;
+ * - its `sops` block encrypts exactly data and stringData: `encrypted_regex` is
+ *   `^(data|stringData)$` and no other option that changes the scope is set;
+ * - no value outside data and stringData (and the sops block itself) holds `ENC[`: not a label, an
+ *   annotation or the type;
+ * - its metadata is a name, a namespace and at most the label `reconcile.fluxcd.io/watch: Enabled`:
+ *   no other label, no annotation, owner reference or finalizer, so the Secret cannot claim to
+ *   belong to a Helm release or to another object.
+ * Messages name keys, never values.
+ */
+export function sopsDocumentProblems(doc: Record<string, unknown>): string[] {
+  const problems: string[] = [];
+  if (doc.apiVersion !== "v1" || doc.kind !== "Secret") {
+    problems.push("a SOPS-encrypted file holds one Kubernetes Secret (apiVersion v1, kind Secret) and nothing else");
+  }
+  for (const key of Object.keys(doc).filter((k) => !SOPS_SECRET_KEYS.has(k))) {
+    problems.push(`the top-level key ${key} is not allowed; a SOPS Secret has only apiVersion, kind, metadata, type, data, stringData and sops`);
+  }
+  const sops = isMap(doc.sops) ? doc.sops : {};
+  if (sops.encrypted_regex !== SOPS_ENCRYPTED_REGEX) {
+    problems.push(`sops.encrypted_regex must be exactly ${SOPS_ENCRYPTED_REGEX}, as .sops.yaml sets it, so that only the values are hidden from review`);
+  }
+  for (const option of SOPS_SCOPE_OPTIONS.filter((o) => Object.hasOwn(sops, o))) {
+    problems.push(`sops.${option} is set; it changes what sops encrypts or what its MAC covers`);
+  }
+  for (const [key, value] of Object.entries(doc).filter(([k]) => k !== "data" && k !== "stringData" && k !== "sops")) {
+    for (const path of encryptedPaths(value, key)) {
+      problems.push(`${path} holds an encrypted value; only data and stringData may be encrypted`);
+    }
+  }
+  const metadata = isMap(doc.metadata) ? doc.metadata : {};
+  for (const key of Object.keys(metadata).filter((k) => !SOPS_METADATA_KEYS.has(k))) {
+    problems.push(`metadata.${key} is not allowed on a SOPS Secret; its metadata is a name, a namespace and at most the label reconcile.fluxcd.io/watch: Enabled`);
+  }
+  if (metadata.labels !== undefined) {
+    const labels = isMap(metadata.labels) ? metadata.labels : {};
+    const allowed = isMap(metadata.labels) && Object.entries(labels).every(([key, value]) => Object.hasOwn(FLUX_WATCH_LABEL, key) && FLUX_WATCH_LABEL[key] === value);
+    if (!allowed) {
+      problems.push("metadata.labels may hold only reconcile.fluxcd.io/watch: Enabled");
+    }
+  }
+  return problems;
+}
+
 function leafStrings(value: unknown): unknown[] {
   if (isMap(value)) {
     return Object.values(value).flatMap(leafStrings);
@@ -2197,6 +2280,13 @@ export function checkSecretManifests(file: string, source: string): Violation[] 
           line: lineAt(source, /kind["']?\s*:\s*["']?Secret\b/.exec(source)?.index ?? 0),
           message: `Secret ${name} is not SOPS-encrypted; encrypt it with sops (docs/architecture/secrets.md) or create it outside the repository`,
         });
+      }
+    }
+    // Every SOPS-encrypted document, whatever its kind: what is encrypted and what the metadata says.
+    if (doc.sops !== undefined) {
+      const line = lineAt(source, /^\s*["']?sops["']?\s*:/m.exec(source)?.index ?? 0);
+      for (const problem of sopsDocumentProblems(doc)) {
+        violations.push({ file, line, message: `SOPS file: ${problem} (docs/architecture/secrets.md)` });
       }
     }
     // Its literals, files and env files are plain text this check cannot verify.

@@ -1,0 +1,7 @@
+{
+  "unit": "LoadState=not-found\nActiveState=inactive\nMainPID=0\nNRestarts=0",
+  "ops": "ActiveState=active\nMainPID=1005\nNRestarts=0",
+  "cloudflared": "cloudflared-2026.10.0-1.aarch64\ne6422b9d4f72d3194bc5a38676f13667c06666523217b842a877d72a80b5ac08  /usr/bin/cloudflared\n@commandline",
+  "links": "symbolic link\n/usr/bin/cloudflared\nregular empty file",
+  "firewalld": "f9218697dbad564e6d11a5cd40538e546e20ebd1fcf2328fde164cec20cbc649  /etc/firewalld/zones/trusted.xml\ntrusted (active)\n  target: ACCEPT\n  ingress-priority: 0\n  egress-priority: 0\n  icmp-block-inversion: no\n  interfaces: \n  sources: 10.42.0.0/16 10.43.0.0/16\n  services: \n  ports: \n  protocols: \n  forward: yes\n  masquerade: no\n  forward-ports: \n  source-ports: \n  icmp-blocks: \n  rich rules: \ntrusted\n  target: ACCEPT\n  ingress-priority: 0\n  egress-priority: 0\n  icmp-block-inversion: no\n  interfaces: \n  sources: 10.42.0.0/16 10.43.0.0/16\n  services: \n  ports: \n  protocols: \n  forward: yes\n  masquerade: no\n  forward-ports: \n  source-ports: \n  icmp-blocks: \n  rich rules:"
+}

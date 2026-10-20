@@ -1,6 +1,6 @@
 # testkit
 
-服務測試用的共用工具。主角是跨租戶負向測試框架：每個服務在 `tests/` 用它證明租戶 A 讀不到、也改不了租戶 B 的資料（[決策 29](../../docs/architecture/decisions.md)「跨租戶負向測試列入每個服務的 CI」）。另外提供測試用的內部身分 token、帶 TLS 的拋棄式 Postgres 與容器工具。
+服務測試用的共用工具。主角是跨租戶負向測試框架：每個服務在 `tests/` 用它證明租戶 A 讀不到、也改不了租戶 B 的資料（[決策 29](../../docs/architecture/decisions.md)「跨租戶負向測試列入每個服務的 CI」）。另外提供測試用的內部身分 token、帶 TLS 的拋棄式 Postgres 與容器工具，以及閘道器採集測試用的假 Modbus 端點與故障注入（M7，見[假 Modbus 端點](#假-modbus-端點)）。
 
 只能當 `[dev-dependencies]` 使用：`tools/repo-check` 擋下其他用法，因為 `tools/sql-check` 把本 crate 當測試程式檢查（它把巨集組好的靜態 SQL 以變數交給 sqlx）。
 
@@ -12,6 +12,8 @@
 | `postgres` | `tls_postgres(init)`：帶 TLS 的拋棄式 Postgres（service-kit 只接受 `verify-full`），同一個測試執行檔共用一個容器 |
 | `product` | `product_postgres(logins)`：在 `tls_postgres` 上以 migration Job 本身（`migrate::run` 與 `PRODUCT`）套用整個產品的 schema，與部署得到的一樣（Laysi/trustiot-v2#65）；見[產品 schema](#產品-schema) |
 | `container` | podman 或 docker 的容器，drop 時刪除；`unavailable(what)`：本機缺容器執行環境時略過測試，設了 `CI` 時改為失敗 |
+| `modbus` | `FakeModbus`：測試行程內的假 Modbus TCP 與 RTU-over-TCP 端點，支援站號、故障注入（`Fault`）與請求紀錄；見[假 Modbus 端點](#假-modbus-端點) |
+| `clock` | 真實 socket 上的時間控制：`manual()` 讓暫停的 tokio 時鐘只在測試 `advance` 時前進；`bounded(what, future)` 以牆上時間限制等待；見[時間控制](#時間控制) |
 
 ## 新服務怎麼接上
 
@@ -159,11 +161,114 @@ async fn tenants_are_isolated() {
 - `tls_postgres(init)`：image 與 service-kit 的測試相同（以 digest 鎖定），記憶體上限 512 MB；`init` 是以 superuser 在 `postgres` 資料庫執行一次的靜態 SQL（例如建立角色，密碼用 `TEST_PASSWORD`）。每個測試用自己的資料庫。容器經 `postgres::start`（與 service-kit、outbox、identity 的測試是同一個檔案，`crates/service-kit/tests/support/start.rs`）啟動：等待有上限（具名常數與量測依據見 [`docs/test-reports/2026-10-12-364-job-lock-postgres-start.md`](../../docs/test-reports/2026-10-12-364-job-lock-postgres-start.md)）、發佈的連接埠失效時換容器、失敗訊息寫明在等什麼並附容器狀態與日誌最後 20 行（不含環境變數）。`start_tls_postgres_within(limits, runtime, kind, published_port_dead)` 是 `tls_postgres` 的啟動部分，`tests/postgres_start.rs` 用它測這些行為。
 - `Container`、`container_runtime()`、`unavailable(what)`：自己起其他容器時用。
 
+## 假 Modbus 端點
+
+M7 棄用了模擬器與測試資料產生器，自動測試改在測試行程內起最小的 Modbus 端點做故障注入（[rebuild-checklist](../../docs/requirements/rebuild-checklist.md) M7 列）。`FakeModbus::start(transport)` 在 127.0.0.1 的臨時連接埠起一個端點，測試把被測程式指向 `address()`；端點 drop 時停掉所有工作、關掉所有 socket（包括半開的）。它不是模擬器：數值由測試設定，不會自己變化。現場的硬限制（[field-constraints](../../docs/requirements/field-constraints.md)）裡設備連著卻不回應、轉換器把回應送給所有連線，都能用它在 CI 重現；閘道器回報的讀取失敗類型（`crates/protocol` 的 `FailureKind`：connect、timeout、exception、unit_mismatch）也都做得出來。
+
+### 用法
+
+完整可執行的例子是 [`tests/modbus_example.rs`](tests/modbus_example.rs)：以別人寫的 Modbus client（`tokio-modbus`）讀一台 RS485 轉換器後面的兩台設備，再逐一觸發每種故障。節錄：
+
+```rust
+use std::time::Duration;
+
+use testkit::clock;
+use testkit::modbus::{Close, FakeModbus, Fault, Transport};
+use tokio::time::{advance, timeout};
+
+#[tokio::test(start_paused = true)]
+async fn the_reader_survives_a_converter() {
+    let _clock = clock::manual(); // 時鐘只在 advance 時前進
+    let endpoint = FakeModbus::start(Transport::RtuOverTcp).await;
+    endpoint.set_holding_registers(1, 0, &[2301, 2299]); // 站號 1
+    endpoint.set_holding_registers(2, 0, &[500, 501]); // 站號 2，同一台轉換器
+
+    let mut meter = client(&endpoint, 1).await; // 被測程式的 client，連 endpoint.address()
+
+    // 不回應：client 等到逾時，連線照常可用
+    endpoint.inject(Fault::no_response().once());
+    let read = timeout(Duration::from_secs(3), meter.read_holding_registers(0, 2));
+    let (read, ()) = tokio::join!(read, async {
+        endpoint.wait_for_requests(1).await; // 請求到了才推進時鐘
+        advance(Duration::from_secs(3)).await;
+    });
+    assert!(read.is_err());
+
+    // 其他故障同樣先 inject 再讀：
+    endpoint.inject(Fault::exception(0x04).once());
+    endpoint.inject(Fault::disconnect(Close::Rst).once());
+    // ……
+
+    // 被測程式只讀：沒有任何功能碼大於 4 的請求
+    assert!(endpoint.requests().iter().all(|request| (1..=4).contains(&request.function)));
+}
+```
+
+`tests/modbus_endpoint.rs` 以 raw socket 逐位元組檢查回應，每種故障各有一個測試（`fault_*`）。
+
+### 傳輸方式與站號
+
+| | `Transport::ModbusTcp` | `Transport::RtuOverTcp` |
+| --- | --- | --- |
+| 代表 | 自己會講 TCP 的設備 | RS485 轉換器與它匯流排上的設備 |
+| 框架 | MBAP，依長度欄切出請求；回應帶請求的交易 ID | RTU 加 CRC（低位元組在前）；TCP 不保留框架邊界，請求可能分段到達或與下一個黏在一起，所以依規格中各功能碼的請求格式決定長度（例如 1–6 是 8 bytes，15、16 是 9 加 byte count）；沒有固定格式的請求（自訂功能碼、Diagnostics 的 Return Query Data、MEI 14 以外的 43）切在第一個 CRC 正確的位置 |
+| 處理順序 | 每條連線各自依序處理，一個等待中的請求只擋住同一條連線後面的請求 | 所有連線的請求依到達順序上同一條匯流排，等待中的請求擋住全部 |
+| 沒有的站號 | 例外碼 0B（gateway target device failed to respond） | 不回應，就像匯流排上沒有那台設備 |
+| 壞框架 | 協定 ID 不是 0 或長度不在 2–254 的 MBAP 標頭：關閉連線 | CRC 錯誤：記錄、不回應、不套用故障 |
+
+一個端點可以有多個站號，各有自己的 coil、discrete input、holding register、input register：`set_coils`、`set_discrete_inputs`、`set_holding_registers`、`set_input_registers(unit, start, values)` 設值並建立該站號，`add_unit(unit)` 建立沒有值的站號。只服務功能碼 1–4，閘道器對現場設備唯讀；其他功能碼回例外碼 01，讀到沒設過的位址回 02，數量是 0 或超過 125 個暫存器、2000 個位元時回 03（先檢查數量再檢查位址，與規格相同）。
+
+### 故障
+
+`endpoint.inject(fault)` 注入，`clear_faults()` 全部移除。請求到達時，端點挑第一個符合條件、還有次數的故障，記在該請求的紀錄裡（`Request::fault`）；沒有符合的就正常回答。
+
+| 故障 | 端點的行為 | client 看到的 | 閘道器的失敗類型 |
+| --- | --- | --- | --- |
+| `Fault::delay(d)` | 收到後經過 `d`（tokio 時鐘）才正常回答；後面的請求等它 | 逾時比 `d` 短時逾時，回應之後才到 | timeout |
+| `Fault::hold()` | 測試呼叫 `release(index)` 才正常回答，不需要時鐘；先 release 再到達也可以 | 同上，由測試決定何時回 | timeout |
+| `Fault::no_response()` | 讀進並記錄請求，永遠不回答；連線照常，後面的請求照答，TCP keepalive 偵測不到（Laysi/trustiot#159、#164）；RTU 的匯流排立刻空出來 | 逾時 | timeout |
+| `Fault::unit_mismatch(u)` | 照常回答，但回應的站號是 `u`（RTU 的 CRC 照算）；本來就不回答的請求（RTU 沒有的站號）仍不回答 | 收到別台設備的回應 | unit_mismatch |
+| `Fault::exception(code)` | 回例外碼 `code`，不管表裡有沒有值 | 例外回應 | exception |
+| `Fault::disconnect(Close::Fin)` | 不回答，送 FIN；之後收到的請求照記錄、不回答，等 client 關閉自己那一端 | 讀到串流結尾 | 重連後回到正常 |
+| `Fault::disconnect(Close::Rst)` | 不回答，以 `SO_LINGER` 0 關閉，送 RST | connection reset | 重連後回到正常 |
+| `Fault::half_open()` | 忘了這條連線：不再讀寫，不送 FIN 也不送 RST，socket 留到端點 drop；新連線正常 | 寫入與 keepalive 都成功，只有回應逾時察覺得到 | timeout |
+| `Fault::broadcast()` | 照常回答，回應送給所有開著的連線，就像把匯流排上的每個框架複製給所有 TCP client 的轉換器（Laysi/trustiot#183） | 另一個在等自己站號的 client 先收到別台的回應；Modbus TCP 上是別人的交易 ID | unit_mismatch |
+
+條件與次數可以疊加，全部成立才算符合：`.unit(u)`、`.function(fc)`、`.address(a)`（讀取範圍包含 `a`，合併讀取也算）、`.connection(ConnectionId(n))`（第 n 條被接受的連線，從 0 起算，可以在 client 連線前指定）、`.nth(i)`（請求紀錄的第 i 筆，從 0 起算）；`.once()`、`.times(n)` 限制次數，預設每次都套用。`.delayed(d)`、`.held()`、`.to_all_connections()` 可以加在任何故障上，例如 `Fault::broadcast().held().unit(1)` 先暫停站號 1 的回應，放行時再廣播，讓另一個 client 的請求先排上匯流排。
+
+### 觀察
+
+- `requests()`：請求紀錄，每筆有 `index`、`connection`、`unit`、`function`、`range`（讀取的起始位址與數量）、`transaction_id`（Modbus TCP）、`raw`、`checksum_ok` 與套用的 `fault`。證明被測程式沒送出功能碼 5 以上，就檢查這裡。
+- `connections()`：每條被接受的連線與狀態：`Open`、`FinSent`、`Forgotten`（半開）、`Closed`。
+- `wait_for_requests(n)`、`wait_for_connections(n)`、`wait_for_connection(id, state)`：等到條件成立。client 的 connect 在端點接受連線之前就回傳，所以要廣播給所有連線時，先 `wait_for_connections`。等待以牆上時間計，上限是 `clock::WAIT_LIMIT`（60 秒），逾時的失敗訊息寫出在等什麼。
+
+不要用固定的等待時間判斷「沒有回應」：用順序證明，例如在同一條連線再送一個請求，先收到的是它的回應，就表示前一個沒被回答（`fault_no_response_leaves_the_connection_healthy`）。
+
+### 時間控制
+
+會碰到逾時的測試，用 `#[tokio::test(start_paused = true)]` 加上 `let _clock = testkit::clock::manual();`：時鐘只在測試呼叫 `tokio::time::advance` 時前進，被測程式的逾時與端點的延遲都依到期時間的先後觸發，與機器的負載無關。
+
+只用 `start_paused` 不夠：runtime 沒事做時 tokio 會把暫停的時鐘直接推到下一個計時器，而資料還在 socket 裡時 runtime 也算沒事做，於是 client 的逾時提早觸發。2026-10-19 實測：延遲 1 秒、逾時 3 秒的讀取做 2000 次，只用 `start_paused` 有 501 次誤判逾時，未加負載或負載平均 22 都一樣；加上 `clock::manual()` 為 0 次（[測試報告](../../docs/test-reports/2026-10-19-97-fake-modbus-endpoint.md)）。
+
+- `manual()` 依靠 tokio 文件寫明的行為：有 `spawn_blocking` 的工作在跑時，暫停的時鐘不自動前進（`tokio::time::pause` 的「Preventing auto-advance」）。只在 current-thread runtime 有效，`start_paused` 本來就只能用在它上；守衛存在時佔用一條 blocking 執行緒。
+- 先等請求到達（`wait_for_requests`），再 `advance`；被測程式的逾時要在 `advance` 之前建立（`tokio::time::timeout` 在建立時就算好到期時間）。以 `tokio::join!` 讓讀取與推進時鐘同時進行，見上面的節錄與 `fault_delay_answers_once_the_clock_reaches_the_delay`。
+- 不想碰時鐘時用 `Fault::hold()` 與 `release(index)`。
+- `clock::bounded(what, future)` 以看門狗執行緒計牆上時間，暫停的時鐘下也有效；testkit 的等待都經過它。
+
+### 限制
+
+- 只服務讀取，見[傳輸方式與站號](#傳輸方式與站號)。
+- RTU-over-TCP 沒有線速與字元間隔，一個請求在匯流排上一次處理完；要模擬線速就用 `Fault::delay`。
+- 沒有字元間隔，框架的邊界只能從內容判斷：沒有固定格式的請求如果 CRC 錯誤，端點要在這條連線上收滿 RTU 的上限 256 bytes 才會把它切成一個 CRC 錯誤的框架，在那之前同一條連線後面的請求都切不出來（其他連線不受影響）。有固定格式的請求（包括功能碼 1–4）CRC 錯誤時照常依長度切開。
+- Modbus TCP 的連線各自處理，沒有模擬 TCP 閘道器背後的序列匯流排；轉換器的行為用 `RtuOverTcp` 測。
+- 半開連線的 socket 一直留到端點 drop；client 持續寫入會填滿 kernel 的接收緩衝，之後 client 的寫入會卡住而不是失敗，與現場相同。
+
 ## 執行
 
 ```sh
 cargo test -p testkit                       # 單元測試與容器測試（需要 podman 或 docker）
 cargo test -p testkit -- --nocapture        # 加上每個探測的報告
+cargo test -p testkit --test modbus_endpoint --test modbus_example   # 只跑假 Modbus 端點（不需要容器）
 ```
 
 沒有 podman 或 docker 時容器測試在本機略過；設了 `CI` 時改為失敗，CI 綠燈就代表真的跑過。

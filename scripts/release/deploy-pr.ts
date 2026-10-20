@@ -1,7 +1,8 @@
 /**
  * Release stage 5, the `deploy-pr` job of .github/workflows/release.yml: after verify passed,
- * proposes deploying the release on the SaaS cluster as a pull request against main that
- * changes the chart version in deploy/flux/ (deploy.ts; deploy/flux/README.md).
+ * proposes deploying the release on every cluster that runs an older version (the SaaS and the
+ * demo cluster) as a pull request against main that changes their chart version in deploy/flux/
+ * (deploy.ts; deploy/flux/README.md).
  *
  *   bun scripts/release/deploy-pr.ts --plan <plan.json> --published <published.json>
  *
