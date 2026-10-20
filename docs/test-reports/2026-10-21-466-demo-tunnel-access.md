@@ -93,7 +93,7 @@ OK cloudflared 2026.10.2-1 from cloudflared-stable
 | 安裝程式自己寫的檔案 | 照預期：`/etc/credstore` 700 與其中的檔案 600，unit、`.repo` 檔、套件簽章金鑰、firewalld 的 zone 檔、標記檔 644 |
 | `rpmdb.sqlite` 與 dnf5 的交易紀錄 | 644 |
 
-原因：執行腳本開頭的 `umask 077` 一路傳給安裝程式和它呼叫的 dnf，dnf 依 umask 建立狀態檔與快取。SaaS 主機上安裝程式由 sudo 執行；sudo 的預設 umask 是 022，但 sudo 會把它和呼叫者的 umask 合併（sudoers 設了 `umask_override` 時除外），所以從 umask 較嚴（例如 027、077）的 shell 執行時，較嚴的 umask 一樣會傳給安裝程式與 dnf，同樣的問題也會在 SaaS 主機上發生；deploy/host/README.md 因此要求從 `umask` 印出 `0022` 的 shell 執行。影響是一般使用者的 dnf 讀不到系統狀態（上一節的 `from_repo` 就是如此），套件與服務本身不受影響。
+原因：執行腳本開頭的 `umask 077` 一路傳給安裝程式和它呼叫的 dnf，dnf 依 umask 建立狀態檔與快取。SaaS 主機上安裝程式由 sudo 執行；sudo 的預設 umask 是 022，但 sudo 會把它和呼叫者的 umask 合併（sudoers 設了 `umask_override` 時除外），所以從 umask 較嚴（例如 027、077）的 shell 執行時，較嚴的 umask 一樣會傳給安裝程式與 dnf，同樣的問題也會在 SaaS 主機上發生；deploy/host/README.md 因此要求從 `umask` 印出 `0022` 的 shell 執行，安裝程式端的修正在 Laysi/trustiot-v2#476。影響是一般使用者的 dnf 讀不到系統狀態（上一節的 `from_repo` 就是如此），套件與服務本身不受影響。
 
 完整性檢查（2026-10-21，協調者在展示機上以唯讀指令執行）：
 

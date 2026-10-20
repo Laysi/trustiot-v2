@@ -88,7 +88,7 @@ bun run --cwd deploy/host build      # deploy/host/dist/ 下的兩個執行檔�
 
    也可以直接用管線：`<輸出 token 的指令> | sudo ./trustiot-host-install-x86_64 --token-stdin`。輸出中 `+` 開頭的是做了的變更，`!` 是警告；最後三行是驗收檢查。想先看會改什麼時加 `--dry-run`；第一次執行時 `--dry-run` 也要給 token，因為所有拒絕條件（包括 token 格式）都在規劃前檢查。
 
-   從 `umask` 印出 `0022` 的 shell 執行 sudo：sudo 把呼叫者的 umask 與自己的預設值 0022 合併，較嚴的 umask（例如 027、077）會傳給安裝程式呼叫的 dnf，使 dnf 的狀態檔與快取只有 root 能讀（Laysi/trustiot-v2#466）。
+   從 `umask` 印出 `0022` 的 shell 執行 sudo：sudo 把呼叫者的 umask 與自己的預設值 0022 合併，較嚴的 umask（例如 027、077）會傳給安裝程式呼叫的 dnf，使 dnf 的狀態檔與快取只有 root 能讀（Laysi/trustiot-v2#466；讓安裝程式自己處理這件事的修正在 Laysi/trustiot-v2#476）。
 
    安裝程式逐一檢查 firewalld 的每個 zone 與 policy（約二十個，runtime 與 permanent 各一次），`firewall-cmd` 每次呼叫在小主機上要 0.5 到 10 秒。2026-10-11 在 2 vCPU、3 GB 的 VM 上，乾淨主機的完整安裝約 18 分鐘（其中 k3s 與 k3s-selinux 約 10 分鐘），沒有變更的重跑約 6 到 9 分鐘；輸出停在同一行數分鐘是正常的。
 
