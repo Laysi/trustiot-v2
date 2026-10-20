@@ -239,11 +239,12 @@ const BOX_PATHS: RunnerPaths = { state: STATE_DIR, run: RUN_DIR, root: "" };
  * The runner's own files are made under umask 077; only the installer runs under 022, sudo's
  * default umask. sudo combines that default with the caller's umask (unless sudoers sets
  * umask_override), so on a SaaS host a stricter caller umask reaches the installer and its dnf
- * too (deploy/host/README.md says to run it from a 0022 shell). Under 077 its dnf left dnf5's state files and the repository's
- * cache root-only (0600/0700) on the demo machine, so no other user could query dnf
- * (Laysi/trustiot-v2#466, 2026-10-21). deploy/host/src/system.ts never relies on the caller's
- * umask: writeFile opens with O_EXCL and the final mode and then chmods, and makeDirectory
- * mkdirs with the mode and then chmods, so 022 widens none of the installer's secrets.
+ * too (deploy/host/README.md says to run it from a 0022 shell). Under 077 its dnf left dnf5's
+ * state files and the repository's cache root-only (0600/0700) on the demo machine, so no other
+ * user could query dnf (Laysi/trustiot-v2#466, 2026-10-21). deploy/host/src/system.ts never
+ * relies on the caller's umask: writeFile opens with O_EXCL and the final mode and then chmods,
+ * and makeDirectory mkdirs with the mode and then chmods, so 022 widens none of the installer's
+ * secrets.
  *
  * `post <id> <restore link 0|1> <restore marker 0|1>` (ExecStopPost, after the run ended in any
  * way: exit, failure, a stop or a kill) puts back the link and the marker the plan said to keep,
