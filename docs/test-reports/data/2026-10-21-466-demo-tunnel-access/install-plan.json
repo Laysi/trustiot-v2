@@ -1,0 +1,61 @@
+{
+  "unit": "cloudflared-demo",
+  "tunnelId": "<the token's tunnel, equal to --tunnel-id; kept in the private log>",
+  "head": "ae054995577f48af2d5788fd3a1f2d3bfa124471",
+  "installer": "dbd2d24a40c39524d68ec24826dc64b234503608c12c725c42451b0364b1a893",
+  "runner": "671367d122c162213277da44b9dce741f236e72e10f6c4ca1a19cb36885cb26d",
+  "ciphertext": "a7eae6496a30f78f9f57748c0c67e4bdf3bb39a99c42551a33b900bfe824797b",
+  "args": [
+    "--skip-k3s",
+    "--unit",
+    "cloudflared-demo",
+    "--metrics-port",
+    "20250",
+    "--token-stdin",
+    "--reinstall-cloudflared"
+  ],
+  "changes": [
+    "firewalld (runtime): in the trusted zone, rule family=\"ipv4\" source address=\"10.42.0.0/16\" port port=\"22\" protocol=\"tcp\" reject",
+    "firewalld (runtime): remove the service network 10.43.0.0/16 from the trusted zone (it is never a source)",
+    "firewalld (permanent): in the trusted zone, rule family=\"ipv4\" source address=\"10.42.0.0/16\" port port=\"22\" protocol=\"tcp\" reject",
+    "firewalld (permanent): remove the service network 10.43.0.0/16 from the trusted zone (it is never a source)",
+    "write /etc/pki/rpm-gpg/RPM-GPG-KEY-cloudflare-packaging: Cloudflare's package signing key",
+    "write /etc/yum.repos.d/cloudflared.repo: cloudflared repository (https://pkg.cloudflare.com/cloudflared/rpm)",
+    "replace the installed cloudflared with Cloudflare's signed package from the pinned repository (--reinstall-cloudflared)",
+    "write /etc/credstore/cloudflared-demo.tunnel-token: tunnel token (root only)",
+    "write /etc/credstore/cloudflared-demo.cloudflared.yml: cloudflared config (root only)",
+    "write /etc/systemd/system/cloudflared-demo.service: cloudflared unit (sandboxed, token through LoadCredential)",
+    "reload systemd's unit files",
+    "enable cloudflared-demo.service at boot",
+    "start cloudflared-demo.service and wait for its first tunnel connection"
+  ],
+  "allowedExtra": [],
+  "cloudflared": {
+    "swap": true,
+    "installed": "2026.10.0-1",
+    "fromRepo": "@commandline",
+    "candidate": "2026.10.2-1",
+    "link": {
+      "type": "symlink",
+      "target": "/usr/bin/cloudflared"
+    },
+    "marker": "file",
+    "restoreLink": true,
+    "restoreMarker": true
+  },
+  "updateUnits": [
+    {
+      "name": "cloudflared-update.timer",
+      "load": "not-found",
+      "unitFile": "",
+      "active": "inactive"
+    },
+    {
+      "name": "cloudflared-update.service",
+      "load": "not-found",
+      "unitFile": "",
+      "active": "inactive"
+    }
+  ],
+  "metricsPort": 20250
+}

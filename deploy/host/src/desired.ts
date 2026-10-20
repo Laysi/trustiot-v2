@@ -99,19 +99,60 @@ export function credentialPath(unit: string): string {
   return `${CREDSTORE}/${unit}.tunnel-token`;
 }
 
+/** The unit's own cloudflared config, handed to it like the token (LoadCredential). */
+export function configPath(unit: string): string {
+  return `${CREDSTORE}/${unit}.cloudflared.yml`;
+}
+
+/** Ports cloudflared picks for its metrics server by itself when none is set. */
+export const DEFAULT_METRICS_PORTS = [20241, 20242, 20243, 20244, 20245];
+
+/**
+ * Why a metrics port cannot be used, or null. cloudflared's default ports are refused: a connector
+ * without --metrics-port on the same host takes the first free one of them, so a fixed port there
+ * can be taken before this unit starts, or take the other connector's.
+ */
+export function metricsPortProblem(port: number): string | null {
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) return "use 1024 to 65535";
+  if (DEFAULT_METRICS_PORTS.includes(port)) {
+    return `${DEFAULT_METRICS_PORTS[0]}-${DEFAULT_METRICS_PORTS.at(-1)} are cloudflared's default metrics ports, which another connector on the host may take; use a port outside them`;
+  }
+  return null;
+}
+
+export function checkMetricsPort(port: number): void {
+  const problem = metricsPortProblem(port);
+  if (problem !== null) throw new Error(`invalid metrics port ${port}: ${problem}`);
+}
+
+/**
+ * The unit's cloudflared config. With --config, cloudflared reads only this file and never looks
+ * for one in /etc/cloudflared or /usr/local/etc/cloudflared, where another connector on the same
+ * host may keep its settings. The tunnel's routes stay in Cloudflare. Without a metrics port,
+ * cloudflared picks the first free one of 20241 to 20245 on loopback, as before.
+ */
+export function renderConfig(unit: string, metricsPort: number | null): string {
+  checkUnitName(unit);
+  if (metricsPort !== null) checkMetricsPort(metricsPort);
+  return `${MARKER}
+# cloudflared settings of ${unit}.service; routes are set in Cloudflare (remotely managed tunnel).
+no-autoupdate: true
+${metricsPort === null ? "" : `metrics: 127.0.0.1:${metricsPort}\n`}`;
+}
+
 /**
  * The cloudflared unit. The tunnel is remotely managed: its routes (the ingress gateway's
  * ClusterIP for product hostnames, ssh://localhost:22 for ops SSH behind Cloudflare Access) are
  * set in Cloudflare, and the token is the only local secret. systemd reads the root-only token
- * file and hands it to the service in a private credentials directory (%d); the service itself
- * runs as a throwaway user that can read nothing else.
+ * and config files and hands them to the service in a private credentials directory (%d); the
+ * service itself runs as a throwaway user that can read nothing else.
  */
 export function renderUnit(unit: string): string {
   checkUnitName(unit);
   return `${MARKER}
 # Changes are overwritten on the next run of the installer; see deploy/host/README.md.
 [Unit]
-Description=Cloudflare Tunnel for TrustIoT (product traffic and ops SSH)
+Description=Cloudflare Tunnel connector for TrustIoT (${unit})
 Documentation=https://github.com/Laysi/trustiot-v2/blob/main/deploy/host/README.md
 After=network-online.target
 Wants=network-online.target
@@ -121,8 +162,9 @@ StartLimitIntervalSec=0
 [Service]
 # cloudflared reports readiness once its first connection to Cloudflare is registered.
 Type=notify
-ExecStart=${CLOUDFLARED_BINARY} --no-autoupdate tunnel run --token-file %d/tunnel-token
+ExecStart=${CLOUDFLARED_BINARY} --no-autoupdate tunnel --config %d/cloudflared-config run --token-file %d/tunnel-token
 LoadCredential=tunnel-token:${credentialPath(unit)}
+LoadCredential=cloudflared-config:${configPath(unit)}
 Restart=always
 RestartSec=5s
 # cloudflared waits 30 seconds for open requests before it exits on SIGTERM.

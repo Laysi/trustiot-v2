@@ -1,6 +1,6 @@
 // Command line of trustiot-host-install. The tunnel token is accepted only from stdin or a
 // file: an argument would show up in the process list and the shell history.
-import { DEFAULT_UNIT } from "./desired.ts";
+import { DEFAULT_METRICS_PORTS, DEFAULT_UNIT, metricsPortProblem } from "./desired.ts";
 import type { InstallOptions } from "./install.ts";
 
 export const USAGE = `Usage: trustiot-host-install [options]
@@ -14,6 +14,9 @@ Options:
   --token-file PATH    read the Cloudflare Tunnel token from a file
                        (without either, the token already on the host is kept)
   --unit NAME          systemd unit name for cloudflared (default: ${DEFAULT_UNIT})
+  --metrics-port PORT  serve cloudflared's metrics on 127.0.0.1:PORT (default: the first free
+                       one of ${DEFAULT_METRICS_PORTS[0]}-${DEFAULT_METRICS_PORTS.at(-1)}); set it, outside that range,
+                       when another connector runs on the host
   --skip-k3s           leave k3s exactly as it is
   --reconfigure-k3s    replace a different /etc/rancher/k3s/config.yaml (kept as a backup)
                        and restart k3s
@@ -39,7 +42,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = {
     help: false,
     tokenSource: { kind: "none" },
-    options: { unit: DEFAULT_UNIT, skipK3s: false, reconfigureK3s: false, reinstallCloudflared: false, dryRun: false },
+    options: { unit: DEFAULT_UNIT, metricsPort: null, skipK3s: false, reconfigureK3s: false, reinstallCloudflared: false, dryRun: false },
   };
   const setToken = (source: TokenSource) => {
     if (parsed.tokenSource.kind !== "none") throw new UsageError("give the token only once (--token-stdin or --token-file)");
@@ -69,6 +72,15 @@ export function parseArgs(argv: string[]): ParsedArgs {
       case "--unit":
         parsed.options.unit = value().replace(/\.service$/, "");
         break;
+      case "--metrics-port": {
+        const text = value();
+        const port = /^\d+$/.test(text) ? Number(text) : Number.NaN;
+        if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new UsageError(`--metrics-port must be a port from 1024 to 65535`);
+        const problem = metricsPortProblem(port);
+        if (problem !== null) throw new UsageError(`--metrics-port ${port}: ${problem}`);
+        parsed.options.metricsPort = port;
+        break;
+      }
       case "--skip-k3s":
         parsed.options.skipK3s = true;
         break;

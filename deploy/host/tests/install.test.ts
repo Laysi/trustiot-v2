@@ -11,7 +11,9 @@ import {
   K3S_CONFIG,
   K3S_CONFIG_PATH,
   MARKER,
+  configPath,
   credentialPath,
+  renderConfig,
   renderUnit,
   unitPath,
 } from "../src/desired.ts";
@@ -39,6 +41,7 @@ function makeToken(tunnelId: string, secret: string): string {
 function options(overrides: Partial<InstallOptions> = {}): InstallOptions {
   return {
     unit: "cloudflared",
+    metricsPort: null,
     token: new TextEncoder().encode(`${TOKEN}\n`),
     skipK3s: false,
     reconfigureK3s: false,
@@ -84,6 +87,8 @@ describe("clean host", () => {
     expect(host.directories.get(CREDSTORE)?.mode).toBe(0o700);
     expect(host.text(credentialPath("cloudflared"))).toBe(TOKEN);
     expect(host.files.get(credentialPath("cloudflared"))?.mode).toBe(0o600);
+    expect(host.text(configPath("cloudflared"))).toBe(renderConfig("cloudflared", null));
+    expect(host.files.get(configPath("cloudflared"))?.mode).toBe(0o600);
 
     for (const zone of [host.runtime, host.permanent]) {
       expect([...(zone.get("trusted")?.sources ?? [])]).toEqual(["10.42.0.0/16"]);
@@ -148,6 +153,17 @@ describe("the tunnel token", () => {
     expect(host.files.get(credentialPath("cloudflared"))?.mode).toBe(0o600);
     expect(host.commands).toContainEqual(["systemctl", "restart", "cloudflared.service"]);
     expect(result.changes).toHaveLength(2);
+  });
+
+  test("a new metrics port rewrites only the config and restarts cloudflared", async () => {
+    const host = await installedHost();
+    const result = await run(host, options({ token: null, metricsPort: 20250 }));
+    expect(host.text(configPath("cloudflared"))).toContain("metrics: 127.0.0.1:20250");
+    expect(result.changes).toEqual([
+      `replace ${configPath("cloudflared")}: cloudflared config (root only)`,
+      "restart cloudflared.service (open requests get up to 30 seconds to finish, then about 4 seconds without a connection)",
+    ]);
+    expect(host.commands).toContainEqual(["systemctl", "restart", "cloudflared.service"]);
   });
 
   test("a malformed token is refused before anything changes", async () => {

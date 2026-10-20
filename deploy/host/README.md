@@ -23,8 +23,8 @@ SaaS 跑在一台單節點 k3s 主機上，主機沒有公網 IP、不開任何�
 | firewalld | 沒裝就以 dnf 安裝；沒在執行時先以 `firewall-offline-cmd` 改好永久設定、檢查通過才啟動，所以不會以不安全的設定跑起來；把 k3s 的 Pod 網段 `10.42.0.0/16` 加進 trusted zone（k3s 需要：pod 連 API server 與 kubelet、轉送流量；Service 網段 `10.43.0.0/16` 不會是封包來源，信任它只會放行偽造的封包，所以不加，舊設定加過的會移除。2026-10-09 的可行性測試兩個都加），但先在 trusted zone 加一條 rich rule 拒絕 pod 連主機的 SSH（22/tcp），維運 SSH 只能經 tunnel 與 Access；從 trusted 以外的每個 zone（不只作用中的）移除 `http`、`https`、`http3` 服務與 `80/tcp`、`443/tcp`、`443/udp`（policy 也一樣）；其他會開 80 或 443 的設定（涵蓋它們的埠範圍如 `1-1024/tcp`、含 80 或 443 的自訂服務、接受它們的 rich rule、port forward、target 為 ACCEPT 的 zone（綁了網卡或來源，或是預設 zone；沒有綁定的如 Fedora 內建的 `nm-shared` 不算）或進入主機的 policy、direct rule）不自動改，停下請人處理。已在執行時 runtime 與 permanent 分開設定，不需要 reload。trusted zone 會接受所有流量，所以它是預設 zone（runtime 或 `firewalld.conf`）、掛了網卡，或信任 k3s 網段以外的來源時，安裝程式停下 |
 | k3s | 寫 `/etc/rancher/k3s/config.yaml`（0600）：關閉 Traefik 與 servicelb；以官方安裝程式安裝 k3s `v1.36.5+k3s1`。安裝程式從該版本的 git tag 下載，先比對釘選的 SHA-256 才執行；它會下載 k3s 執行檔並以 release 的 sha256sum 驗證，並從 rpm.rancher.io 安裝 k3s-selinux 政策。等 node Ready |
 | cloudflared 套件 | 寫入 Cloudflare 的套件簽章金鑰（指紋 `CC94B39C77AE7342A68B89628A682D308D4E5E73`，隨安裝程式一起釘選，不在安裝時下載）與官方套件庫 `/etc/yum.repos.d/cloudflared.repo`（`gpgcheck=1`：每個套件都以釘選的金鑰驗簽。套件庫的 metadata 不驗簽，因為 Cloudflare 用一把已不再公布的舊金鑰 `254B391D8CACCBF8` 簽 `repomd.xml`，開 `repo_gpgcheck` 時 dnf 會拒絕整個套件庫，2026-10-11 在實驗機實測），以 dnf 只從這個套件庫（`--repo=cloudflared-stable`）安裝 cloudflared；之後以 `dnf upgrade --repo=cloudflared-stable` 更新。已裝好的 cloudflared 必須來自這個套件庫且有 Cloudflare 金鑰的簽章（`dnf repoquery` 的 `from_repo` 與 `rpm` 的簽章 Key ID `8a682d308d4e5e73`），否則停下：拿到 token 的執行檔一定要是釘選來源的；安裝程式不替換它，因為主機上可能有別的服務正在用它。主機上有其他定義 Cloudflare 套件庫的檔案（包括依 Cloudflare 官方說明下載、安裝時才抓金鑰的 `cloudflared.repo`）時停下，請先刪除，確保只信任釘選的金鑰 |
-| tunnel token | 從 `--token-stdin` 或 `--token-file` 讀入，檢查格式（只印 tunnel ID，不印 token），存成 `/etc/credstore/<unit>.tunnel-token`（root、0600；目錄 0700）。沒給 token 時沿用主機上已有的 |
-| cloudflared 服務 | 寫 `/etc/systemd/system/<unit>.service`（預設 `cloudflared`），啟用並啟動；unit 或 token 有變才重啟 |
+| tunnel token | 從 `--token-stdin` 或 `--token-file` 讀入，檢查格式（只印 tunnel ID，不印 token），存成 `/etc/credstore/<unit>.tunnel-token`（root、0600；目錄 0700）。沒給 token 時沿用主機上已有的。同一目錄另寫 unit 自己的 cloudflared 設定 `/etc/credstore/<unit>.cloudflared.yml`（root、0600）：`no-autoupdate`，給了 `--metrics-port` 時再加 `metrics: 127.0.0.1:<port>` |
+| cloudflared 服務 | 寫 `/etc/systemd/system/<unit>.service`（預設 `cloudflared`），啟用並啟動；unit、token 或設定有變才重啟 |
 | 驗收檢查 | 服務是 active；`systemd-analyze security <unit>` 不高於 2.0；`ss -tlnp` 與 `ss -ulnp` 沒有任何 80、443 在監聽；沒有 pod 以 hostPort 發布 80、443（那是 NAT 規則，`ss` 看不到）。任何一項不符就以非零結束 |
 
 安裝程式**不做**的事：Istio（[deploy/istio](../istio/README.md)）、CloudNativePG operator（[deploy/cloudnative-pg](../cloudnative-pg/README.md)）、TrustIoT chart（[deploy/chart](../chart/README.md)；SaaS 由 Flux 部署，見 [deploy/flux](../flux/README.md)）、Cloudflare 上的 tunnel、路由與 Access 設定（見下方「安裝」）、k3s 升級。
@@ -39,6 +39,7 @@ unit 的內容在 `src/desired.ts` 的 `renderUnit`，重點：
 | `CapabilityBoundingSet=`（空）、`AmbientCapabilities=`（空）、`NoNewPrivileges=yes` | 沒有任何 capability，也不能經 setuid 取得 |
 | `ProtectSystem=strict`、`ProtectHome=yes`、`PrivateTmp=yes`、`PrivateDevices=yes` | 整個檔案系統唯讀，看不到家目錄、其他程式的暫存檔與裝置 |
 | `LoadCredential=tunnel-token:/etc/credstore/<unit>.tunnel-token` | systemd 以 root 讀 token，放進只有這個服務看得到的 credentials 目錄（`%d`），cloudflared 以 `--token-file %d/tunnel-token` 讀；token 不在指令列、環境變數或 unit 檔裡 |
+| `LoadCredential=cloudflared-config:/etc/credstore/<unit>.cloudflared.yml`、`--config %d/cloudflared-config` | cloudflared 只讀這個 unit 自己的設定，不去找 `/etc/cloudflared` 或 `/usr/local/etc/cloudflared`，同一台主機上別的 connector 的設定影響不到它。設定裡的 metrics 埠只聽 loopback；沒指定時 cloudflared 自己從 20241 到 20245 挑第一個沒被占用的，同一台主機有兩個 connector 時以 `--metrics-port` 給固定的埠，`/ready` 才不會讀到另一個的 |
 | `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK`、`SystemCallFilter=@system-service` 並排除 `@privileged @resources` | 只有網路服務需要的 socket 與系統呼叫 |
 | `--no-autoupdate` | 不自己更新，版本由 dnf 管理 |
 | `Restart=always`、`RestartSec=5s`、`StartLimitIntervalSec=0` | 網路長時間中斷後仍持續重試 |
@@ -87,6 +88,8 @@ bun run --cwd deploy/host build      # deploy/host/dist/ 下的兩個執行檔�
 
    也可以直接用管線：`<輸出 token 的指令> | sudo ./trustiot-host-install-x86_64 --token-stdin`。輸出中 `+` 開頭的是做了的變更，`!` 是警告；最後三行是驗收檢查。想先看會改什麼時加 `--dry-run`；第一次執行時 `--dry-run` 也要給 token，因為所有拒絕條件（包括 token 格式）都在規劃前檢查。
 
+   從 `umask` 印出 `0022` 的 shell 執行 sudo：sudo 把呼叫者的 umask 與自己的預設值 0022 合併，較嚴的 umask（例如 027、077）會傳給安裝程式呼叫的 dnf，使 dnf 的狀態檔與快取只有 root 能讀（Laysi/trustiot-v2#466；讓安裝程式自己處理這件事的修正在 Laysi/trustiot-v2#476）。
+
    安裝程式逐一檢查 firewalld 的每個 zone 與 policy（約二十個，runtime 與 permanent 各一次），`firewall-cmd` 每次呼叫在小主機上要 0.5 到 10 秒。2026-10-11 在 2 vCPU、3 GB 的 VM 上，乾淨主機的完整安裝約 18 分鐘（其中 k3s 與 k3s-selinux 約 10 分鐘），沒有變更的重跑約 6 到 9 分鐘；輸出停在同一行數分鐘是正常的。
 
 5. **裝 Istio、CloudNativePG 與 chart。** 依 [deploy/istio/README.md](../istio/README.md) 安裝 Istio ambient，依 [deploy/cloudnative-pg/README.md](../cloudnative-pg/README.md) 安裝 CloudNativePG operator（chart 的 Postgres 需要它，沒有它時 chart 因為不認得 `postgresql.cnpg.io/v1` 而裝不起來），再依 [deploy/flux/README.md](../flux/README.md) 的「建立叢集」裝 Flux，由 Flux 部署 chart（SaaS 型態、`ingress.exposure: tunnel`；release `trustiot`，namespace `trustiot`）。入口的 NetworkPolicy 只放行 `ingress.tunnel.allowedSources`（預設 `10.42.0.1/32`，k3s 主機經 cni0 連 pod 的位址）連 80 與 15021；安裝程式只接受 k3s 預設的 Pod 網段 `10.42.0.0/16`，單節點時 cni0 就是 `10.42.0.1`，所以預設值不用改，cloudflared 的路由也只用 80（[deploy/chart/README.md](../chart/README.md)）。入口 gateway 的 Service 由 Istio 建立，名稱是 `<release>-ingress-istio`：
@@ -128,6 +131,8 @@ bun run --cwd deploy/host build      # deploy/host/dist/ 下的兩個執行檔�
   2. 從另一個工作階段確認經 Access 的 SSH 與產品主機名稱都正常。
   3. `sudo systemctl disable --now cloudflared`，刪除舊的 unit 與它的 token 檔，`sudo systemctl daemon-reload`。
   4. 之後都以 `--unit cloudflared-trustiot` 執行安裝程式（或再以預設名稱重裝一次，確認後停掉 `cloudflared-trustiot`）。
+- 同一台主機要再接一條 tunnel 時（例如展示機：原有的維運 tunnel 之外另有展示環境的 tunnel），以另一個 `--unit` 名稱、另一條 tunnel 的 token 與 20241 到 20245 以外的 `--metrics-port` 安裝（這個範圍是 cloudflared 自己挑的預設埠，安裝程式拒絕），兩個 unit 共用 `/usr/bin/cloudflared` 與同一份 firewalld 設定，各自有自己的 token 檔與設定檔。展示機的 connector 由 `scripts/demo/tunnel.ts` 包裝這個安裝程式（token 經 RSA-OAEP 交付、安裝程式在主機上的 systemd 暫時 unit 裡執行），步驟見[展示環境 runbook](../../docs/runbooks/demo-environment.md)。
+- 2026-10-20 起 unit 以 `--config` 讀自己的設定檔（Laysi/trustiot-v2#466）。在這之前裝好的主機，下次執行安裝程式時會寫入設定檔、改寫 unit、`daemon-reload` 並重啟 cloudflared（中斷與「更新 cloudflared」相同），請在維護時段跑；之後再跑不會有變更。
 
 ## 更新 cloudflared
 

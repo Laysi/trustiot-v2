@@ -10,7 +10,9 @@ import {
   CLOUDFLARE_KEY_FINGERPRINT,
   MAX_EXPOSURE,
   checkUnitName,
+  configPath,
   credentialPath,
+  renderConfig,
   renderUnit,
 } from "../src/desired.ts";
 import { TokenError, parseTunnelToken } from "../src/token.ts";
@@ -46,8 +48,36 @@ describe("cloudflared unit", () => {
   test("gets the token through LoadCredential, never on its command line", () => {
     expect(directives).toContain(`LoadCredential=tunnel-token:${credentialPath("cloudflared")}`);
     const execStart = directives.find((line) => line.startsWith("ExecStart="));
-    expect(execStart).toBe("ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token-file %d/tunnel-token");
+    expect(execStart).toBe("ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel --config %d/cloudflared-config run --token-file %d/tunnel-token");
     expect(unit).not.toMatch(/--token(?!-file)|TUNNEL_TOKEN=/);
+  });
+
+  test("reads only its own config, handed over like the token, never another connector's", () => {
+    expect(directives).toContain(`LoadCredential=cloudflared-config:${configPath("cloudflared")}`);
+    expect(configPath("cloudflared-demo")).toBe("/etc/credstore/cloudflared-demo.cloudflared.yml");
+    expect(unit).not.toMatch(/\/etc\/cloudflared|\/usr\/local\/etc\/cloudflared/);
+    expect(directives.find((line) => line.startsWith("Description="))).toBe("Description=Cloudflare Tunnel connector for TrustIoT (cloudflared)");
+  });
+
+  test("the config sets a loopback metrics port only when one is given", () => {
+    const plain = renderConfig("cloudflared", null);
+    expect(plain.split("\n").filter((line) => line !== "" && !line.startsWith("#"))).toEqual(["no-autoupdate: true"]);
+    expect(renderConfig("cloudflared-demo", 20250)).toContain("\nmetrics: 127.0.0.1:20250\n");
+    expect(() => renderConfig("cloudflared", 80)).toThrow(/invalid metrics port/);
+    expect(() => renderConfig("cloudflared", 70000)).toThrow(/invalid metrics port/);
+  });
+
+  test("a metrics port is never one of cloudflared's default ports, in the config or on the command line", () => {
+    // Every default port, written out rather than read from DEFAULT_METRICS_PORTS, so a shorter
+    // list in the code fails here.
+    for (const port of [20241, 20242, 20243, 20244, 20245]) {
+      expect(() => renderConfig("cloudflared-demo", port)).toThrow(/invalid metrics port .*20241-20245 are cloudflared's default metrics ports/);
+      expect(() => parseArgs(["--metrics-port", String(port)])).toThrow(new RegExp(`--metrics-port ${port}: 20241-20245 are cloudflared's default metrics ports`));
+    }
+    for (const port of [20240, 20246]) {
+      expect(renderConfig("cloudflared-demo", port)).toContain(`\nmetrics: 127.0.0.1:${port}\n`);
+      expect(parseArgs(["--metrics-port", String(port)]).options.metricsPort).toBe(port);
+    }
   });
 
   test("outlasts cloudflared's 30-second grace period when stopping", () => {
@@ -156,14 +186,15 @@ describe("command line", () => {
     expect(parseArgs([])).toEqual({
       help: false,
       tokenSource: { kind: "none" },
-      options: { unit: "cloudflared", skipK3s: false, reconfigureK3s: false, reinstallCloudflared: false, dryRun: false },
+      options: { unit: "cloudflared", metricsPort: null, skipK3s: false, reconfigureK3s: false, reinstallCloudflared: false, dryRun: false },
     });
   });
 
   test("all options", () => {
-    const parsed = parseArgs(["--token-file=/root/token", "--unit", "cloudflared-e2e-64.service", "--skip-k3s", "--dry-run"]);
+    const parsed = parseArgs(["--token-file=/root/token", "--unit", "cloudflared-e2e-64.service", "--metrics-port", "20250", "--skip-k3s", "--dry-run"]);
     expect(parsed.tokenSource).toEqual({ kind: "file", path: "/root/token" });
-    expect(parsed.options).toEqual({ unit: "cloudflared-e2e-64", skipK3s: true, reconfigureK3s: false, reinstallCloudflared: false, dryRun: true });
+    expect(parsed.options).toEqual({ unit: "cloudflared-e2e-64", metricsPort: 20250, skipK3s: true, reconfigureK3s: false, reinstallCloudflared: false, dryRun: true });
+    for (const bad of ["80", "70000", "2025a", "-1"]) expect(() => parseArgs(["--metrics-port", bad])).toThrow(/--metrics-port must be a port/);
     expect(parseArgs(["--token-stdin", "--reconfigure-k3s"]).tokenSource).toEqual({ kind: "stdin" });
   });
 
@@ -179,7 +210,7 @@ describe("command line", () => {
   });
 
   test("the usage text lists every option", () => {
-    for (const flag of ["--token-stdin", "--token-file", "--unit", "--skip-k3s", "--reconfigure-k3s", "--reinstall-cloudflared", "--dry-run"]) {
+    for (const flag of ["--token-stdin", "--token-file", "--unit", "--skip-k3s", "--reconfigure-k3s", "--reinstall-cloudflared", "--metrics-port", "--dry-run"]) {
       expect(USAGE).toContain(flag);
     }
   });

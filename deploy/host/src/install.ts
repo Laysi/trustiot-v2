@@ -31,7 +31,9 @@ import {
   MARKER,
   MAX_EXPOSURE,
   checkUnitName,
+  configPath,
   credentialPath,
+  renderConfig,
   renderUnit,
   unitPath,
 } from "./desired.ts";
@@ -41,6 +43,8 @@ import { parseTunnelToken } from "./token.ts";
 export interface InstallOptions {
   /** systemd unit name of cloudflared, without `.service`. */
   unit: string;
+  /** Loopback port of cloudflared's metrics server; null lets cloudflared pick one of 20241-20245. */
+  metricsPort: number | null;
   /** A new tunnel token (from stdin or a file); null keeps the token already on the host. */
   token: Uint8Array | null;
   /** Leave k3s alone, for hosts where it is managed separately. */
@@ -79,6 +83,7 @@ interface Context {
   options: InstallOptions;
   log: Logger;
   credentialChanged: boolean;
+  configChanged: boolean;
   unitChanged: boolean;
   k3sInstallerSha256: string;
 }
@@ -115,6 +120,7 @@ export async function install(
     options,
     log,
     credentialChanged: false,
+    configChanged: false,
     unitChanged: false,
     k3sInstallerSha256: pins.k3sInstallerSha256 ?? K3S_INSTALLER_SHA256,
   };
@@ -174,7 +180,7 @@ async function preflight(ctx: Context): Promise<Action[]> {
   }
   if (k3sInstalled && k3sRunning) await checkK3sNetworks(sys);
   await checkKeyFile(sys);
-  const managed = [CLOUDFLARE_KEY_PATH, CLOUDFLARED_REPO_PATH, unitPath(ctx.options.unit), credentialPath(ctx.options.unit)];
+  const managed = [CLOUDFLARE_KEY_PATH, CLOUDFLARED_REPO_PATH, unitPath(ctx.options.unit), credentialPath(ctx.options.unit), configPath(ctx.options.unit)];
   if (!ctx.options.skipK3s) managed.push(K3S_CONFIG_PATH);
   for (const path of managed) {
     const info = await sys.stat(path);
@@ -693,6 +699,10 @@ async function tunnelCredential(ctx: Context): Promise<Action[]> {
   const credential = await managedFile(sys, path, token.value, 0o600, "tunnel token (root only)");
   ctx.credentialChanged = credential.contentChanged;
   actions.push(...credential.actions);
+  // The unit's own config (--config), so cloudflared never reads another connector's settings.
+  const config = await managedFile(sys, configPath(options.unit), renderConfig(options.unit, options.metricsPort), 0o600, "cloudflared config (root only)");
+  ctx.configChanged = config.contentChanged;
+  actions.push(...config.actions);
   return actions;
 }
 
@@ -769,7 +779,7 @@ async function cloudflaredUnit(ctx: Context): Promise<Action[]> {
       description: `start ${unit}.service and wait for its first tunnel connection`,
       apply: () => startUnit(sys, ["start", `${unit}.service`], unit),
     });
-  } else if (ctx.unitChanged || ctx.credentialChanged) {
+  } else if (ctx.unitChanged || ctx.credentialChanged || ctx.configChanged) {
     actions.push({
       description: `restart ${unit}.service (open requests get up to 30 seconds to finish, then about 4 seconds without a connection)`,
       apply: () => startUnit(sys, ["restart", `${unit}.service`], unit),
