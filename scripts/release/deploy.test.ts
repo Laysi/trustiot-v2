@@ -248,6 +248,20 @@ describe("proposeDeploy", () => {
     expect(one.calls.filter((c) => c.method === "POST")).toEqual([]);
   });
 
+  test("a kept branch that moved one cluster, while main still runs the release on the other, gets the PR that says so", async () => {
+    // The branch was made when demo already ran 1.1.0, so it moved saas only, and main agrees now.
+    const { api, calls } = fakeGitHub({ deployedOn: { saas: "1.0.0", demo: "1.1.0" }, branchExists: true, branch: { moves: ["saas"] } });
+    expect(await proposeDeploy(api, input("1.1.0"))).toMatchObject({ kind: "proposed", created: true, branchCreated: false, ciDispatched: true });
+    const pull = calls.find((c) => c.method === "POST" && c.path === `/repos/${REPOSITORY}/pulls`);
+    expect(pull?.body).toMatchObject({
+      head: "deploy/trustiot-1.1.0",
+      body: renderPullRequestBody(input("1.1.0"), [{ cluster: "saas", version: "1.0.0" }], [{ cluster: "demo", version: "1.1.0" }]),
+    });
+    // Both files of saas were read on the branch, and nothing of demo.
+    const read = calls.filter((c) => c.path.includes(`?ref=${BRANCH}`)).map((c) => c.path.replace(`/repos/${REPOSITORY}/contents/`, "").replace(`?ref=${BRANCH}`, ""));
+    expect(read.sort()).toEqual([chartSourceFile("saas"), shapeValuesFile("saas")].sort());
+  });
+
   test("a kept branch with another file, a chart source of another release, or other shape values stops the job", async () => {
     const extra = fakeGitHub({ deployed: "1.0.0", branchExists: true, branch: { extraFiles: ["deploy/flux/clusters/saas/trustiot/values-instance.yaml"] } });
     await expect(proposeDeploy(extra.api, input("1.1.0"))).rejects.toThrow("changes saas, demo and deploy/flux/clusters/saas/trustiot/values-instance.yaml");
