@@ -6,14 +6,19 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { ROOT } from "./lib.ts";
 
-/** The files this rule covers: the runbook and everything under scripts/demo. */
+/**
+ * The files this rule covers: the runbook, everything under scripts/demo, and the other documents
+ * the demo environment's tunnel changes (Laysi/trustiot-v2#466).
+ */
+export const DEMO_DOCS = ["docs/runbooks/demo-environment.md", "deploy/host/README.md", "docs/README.md", "docs/architecture/secrets.md", "docs/runbooks/secrets.md"];
+
 export function publicFiles(root: string = ROOT): string[] {
   const walk = (dir: string): string[] =>
     readdirSync(dir).flatMap((name) => {
       const path = join(dir, name);
       return statSync(path).isDirectory() ? walk(path) : [path];
     });
-  return [join(root, "docs/runbooks/demo-environment.md"), ...walk(join(root, "scripts/demo"))];
+  return [...DEMO_DOCS.map((doc) => join(root, doc)), ...walk(join(root, "scripts/demo"))];
 }
 
 /**
@@ -29,6 +34,14 @@ export const ALLOWED_NAMES: Record<string, string> = {
   "github.com": "links to this repository",
   "k8s.io": "Kubernetes API group names (rbac.authorization.k8s.io and others)",
   "cattle.io": "the API group of k3s's HelmChart (helm.cattle.io)",
+  "kubernetes.io": "Kubernetes label and annotation prefixes (app.kubernetes.io/...)",
+  "istio.io": "Istio's API groups and label prefixes",
+  "fluxcd.io": "Flux's annotation prefixes (reconcile.fluxcd.io/...)",
+  "cnpg.io": "CloudNativePG's API group (postgresql.cnpg.io)",
+  "trustiot.io": "the chart's own label and annotation prefix (trustiot.io/filled-by and others)",
+  "rpm.rancher.io": "the k3s RPM repository, pinned in deploy/host",
+  "ghcr.io": "the GitHub container registry",
+  "hosts.app": "the chart values key hosts.app (deploy/chart/values.yaml), not a host name",
 };
 
 /**
