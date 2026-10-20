@@ -7,6 +7,7 @@
  *   bun scripts/demo/tunnel.ts handoff-key --ssh-host <host>
  *   bun scripts/demo/tunnel.ts install --ssh-host <host> --ciphertext <file> --tunnel-id <uuid> [--allow-change "<line>"]... [--apply --confirm <code>]
  *   bun scripts/demo/tunnel.ts status --ssh-host <host>
+ *   bun scripts/demo/tunnel.ts route-origin --ssh-host <host>
  *   bun scripts/demo/tunnel.ts check --ssh-host <host> [--stage 2]
  *   bun scripts/demo/tunnel.ts remove --ssh-host <host> [--apply --confirm <code>]
  *
@@ -46,16 +47,20 @@
  * masked in everything it prints or saves.
  *
  * The stage-2 routes go to the ingress Service's fixed ClusterIP (ingress.tunnel.clusterIP,
- * Laysi/trustiot-v2#478). status prints, and check --stage 2 requires before any probe, that three
- * addresses agree (Laysi/trustiot-v2#483): values-demo.yaml's at this checkout's commit, the
- * deployed ingress-options ConfigMap's service overlay, and the one Service Istio generated for the
- * Gateway. Where they differ, a route set from the values may point at an address no Service holds,
- * which any Service created later could take. Both only read the cluster (kubectl get).
+ * Laysi/trustiot-v2#478). route-origin is the gate before the routes are switched, and check
+ * --stage 2 runs the same gate before any probe (Laysi/trustiot-v2#483): three addresses must agree
+ * (values-demo.yaml's at this checkout's commit, the deployed ingress-options ConfigMap's service
+ * overlay, and the one Service Istio generated for the Gateway) and lie in the static band of the
+ * cluster's Service range. Otherwise a route may point at an address no Service holds, which any
+ * Service created later could take. route-origin exits 0 only when the gate passes, and its last
+ * line names the origin for the routes; status prints the same comparison as a report only. All
+ * three only read the cluster (kubectl get), and their reasons never quote ssh, kubectl or git.
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { ipv4ToNumber, serviceCidrsOf, staticBandOf } from "../nightly/ingress-address.ts";
 import { parseOptions, tryRun, type RunResult } from "../release/exec.ts";
 import { ReleaseError } from "../release/lib.ts";
 import {
@@ -939,7 +944,8 @@ function hostFromEnv(name: string): string {
   return value;
 }
 
-// --- The ingress address (status, check --stage 2) -------------------------------------------------
+
+// --- The ingress address (route-origin, check --stage 2, status) -----------------------------------
 
 /**
  * The demo overlay that pins the ingress Service's ClusterIP (ingress.tunnel.clusterIP,
@@ -955,6 +961,13 @@ export const DEMO_VALUES = "deploy/flux/clusters/demo/trustiot/values-demo.yaml"
  */
 export const INGRESS_GATEWAY = `${DEMO_NAMESPACE}-ingress`;
 export const INGRESS_OPTIONS = `${DEMO_NAMESPACE}-ingress-options`;
+/** The Gateway's gatewayClassName in deploy/chart/templates/ingress.yaml. */
+export const GATEWAY_CLASS = "istio";
+/**
+ * Istio names what it generates for a Gateway `<gateway>-<gatewayClassName>`
+ * (deploy/chart/templates/_ingress.tpl; scripts/nightly/api.ts port-forwards to `<gateway>-istio`).
+ */
+export const INGRESS_SERVICE = `${INGRESS_GATEWAY}-${GATEWAY_CLASS}`;
 /**
  * The label Istio puts on the Service it generates for a Gateway: the selector the nightly smoke
  * uses for the same check (scripts/nightly/smoke.ts, scripts/nightly/ingress-address.ts).
@@ -962,12 +975,23 @@ export const INGRESS_OPTIONS = `${DEMO_NAMESPACE}-ingress-options`;
 export const GATEWAY_NAME_LABEL = "gateway.networking.k8s.io/gateway-name";
 /** The tunnel listener's port (trustiot.ingress.listenerPort in deploy/chart/templates/_ingress.tpl). */
 export const INGRESS_PORT = 80;
+/** The ServiceCIDR object of the cluster's default Service range (read for its static band). */
+export const SERVICE_CIDR = "kubernetes";
 /** The chart's IPv4 form for the address (trustiot.ingress.ipv4Pattern): a dotted quad without leading zeros. */
 const IPV4 = /^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$/;
 const FIXED_ADDRESS_DOC = "deploy/chart/README.md 「固定的入口 ClusterIP」";
 
-/** One of the three addresses, or why there is none. */
+/**
+ * One of the three addresses, or why there is none. A reason never quotes ssh, kubectl, git or a
+ * parser: their messages can name the demo machine, its network or a home directory, and the
+ * comparison's output goes into test reports. It names the command and its exit status instead;
+ * values the script validated (an IPv4 address, a commit hash, a CIDR) and object names in the
+ * demo namespace may appear.
+ */
 export type AddressRead = { address: string } | { missing: string };
+
+/** The static band of the cluster's IPv4 Service range, or why it could not be read. */
+export type BandRead = { cidr: string; first: string; last: string } | { missing: string };
 
 export interface IngressAddresses {
   /** The checkout's commit whose values-demo.yaml was read; "" when it could not be read. */
@@ -978,17 +1002,22 @@ export interface IngressAddresses {
   overlay: AddressRead;
   /** spec.clusterIP of the one Service Istio generated for the ingress Gateway. */
   service: AddressRead;
+  /** The static band the address must be in. */
+  band: BandRead;
 }
+
+/** Reads values-demo.yaml at the checkout's commit; valuesAddress(ROOT), or a test's own. */
+export type ValuesReader = () => Promise<{ commit: string; values: AddressRead }>;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
-/** An address as the chart accepts it; anything else (a number, a CIDR, "None") is a reason. */
+/** An address as the chart accepts it; anything else (a number, a CIDR, "None") is a reason that does not quote it. */
 function addressOf(raw: unknown, what: string, unset: string): AddressRead {
   if (raw === undefined || raw === null || raw === "") return { missing: unset };
-  if (typeof raw !== "string") return { missing: `${what} is ${JSON.stringify(raw)}, not a string` };
-  if (!IPV4.test(raw)) return { missing: `${what} is ${JSON.stringify(raw)}, not one IPv4 address` };
+  if (typeof raw !== "string") return { missing: `${what} is not a string` };
+  if (!IPV4.test(raw)) return { missing: `${what} is not one IPv4 address (a dotted quad without leading zeros)` };
   return { address: raw };
 }
 
@@ -997,11 +1026,22 @@ export function valuesClusterIp(text: string): AddressRead {
   let values: unknown;
   try {
     values = Bun.YAML.parse(text);
-  } catch (error) {
-    return { missing: `${DEMO_VALUES} is not valid YAML: ${error instanceof Error ? error.message : String(error)}` };
+  } catch {
+    return { missing: `${DEMO_VALUES} is not valid YAML` };
   }
   const raw = asRecord(asRecord(asRecord(values).ingress).tunnel).clusterIP;
   return addressOf(raw, `ingress.tunnel.clusterIP in ${DEMO_VALUES}`, `${DEMO_VALUES} does not set ingress.tunnel.clusterIP (Laysi/trustiot-v2#480 sets it)`);
+}
+
+/** A git command for valuesAddress: its result, or a fixed reason (never git's own words). */
+async function gitRead(root: string, args: string[], shown: string): Promise<RunResult | { failed: string }> {
+  let result: RunResult;
+  try {
+    result = await tryRun(["git", "-C", root, ...args]);
+  } catch {
+    return { failed: `${shown} could not run` };
+  }
+  return result.exitCode === 0 ? result : { failed: `${shown} failed (exit ${result.exitCode})` };
 }
 
 /**
@@ -1009,14 +1049,15 @@ export function valuesClusterIp(text: string): AddressRead {
  * address, so what is compared is the reviewed commit, not the file on this disk. Never throws.
  */
 export async function valuesAddress(root: string): Promise<{ commit: string; values: AddressRead }> {
-  const head = await tryRun(["git", "-C", root, "rev-parse", "HEAD"]);
+  const head = await gitRead(root, ["rev-parse", "HEAD"], "git rev-parse HEAD");
+  if ("failed" in head) return { commit: "", values: { missing: `could not read the checkout's commit: ${head.failed}` } };
   const commit = head.stdout.trim();
-  if (head.exitCode !== 0 || !/^[0-9a-f]{40}$/.test(commit)) return { commit: "", values: { missing: `could not read the checkout's commit: ${lastLines(head.stderr, 1)}` } };
-  const status = await tryRun(["git", "-C", root, "status", "--porcelain", "--", DEMO_VALUES]);
-  if (status.exitCode !== 0) return { commit, values: { missing: `git status failed: ${lastLines(status.stderr, 1)}` } };
+  if (!/^[0-9a-f]{40}$/.test(commit)) return { commit: "", values: { missing: "could not read the checkout's commit: git rev-parse HEAD printed no commit hash" } };
+  const status = await gitRead(root, ["status", "--porcelain", "--", DEMO_VALUES], `git status --porcelain -- ${DEMO_VALUES}`);
+  if ("failed" in status) return { commit, values: { missing: status.failed } };
   if (status.stdout.trim() !== "") return { commit, values: { missing: `${DEMO_VALUES} has uncommitted changes; run from a clean checkout of the reviewed commit` } };
-  const shown = await tryRun(["git", "-C", root, "show", `HEAD:${DEMO_VALUES}`]);
-  if (shown.exitCode !== 0) return { commit, values: { missing: `${DEMO_VALUES} is not in commit ${commit}: ${lastLines(shown.stderr, 1)}` } };
+  const shown = await gitRead(root, ["show", `HEAD:${DEMO_VALUES}`], `git show HEAD:${DEMO_VALUES}`);
+  if ("failed" in shown) return { commit, values: { missing: `${shown.failed}: the file is not in commit ${commit}, or git could not read it` } };
   return { commit, values: valuesClusterIp(shown.stdout) };
 }
 
@@ -1028,8 +1069,8 @@ export function overlayClusterIp(configMap: Record<string, unknown> | undefined)
   let overlay: unknown;
   try {
     overlay = Bun.YAML.parse(service);
-  } catch (error) {
-    return { missing: `the service overlay of ConfigMap ${INGRESS_OPTIONS} is not valid YAML: ${error instanceof Error ? error.message : String(error)}` };
+  } catch {
+    return { missing: `the service overlay of ConfigMap ${INGRESS_OPTIONS} is not valid YAML` };
   }
   return addressOf(
     asRecord(asRecord(overlay).spec).clusterIP,
@@ -1040,8 +1081,10 @@ export function overlayClusterIp(configMap: Record<string, unknown> | undefined)
 
 /**
  * The ClusterIP of the Service Istio generated for the ingress Gateway, from `kubectl get services
- * --selector <GATEWAY_NAME_LABEL>=<gateway> -o json`: there must be exactly one, as in the nightly
- * smoke (generatedClusterIpProblems), and its clusterIP must also be the first of its clusterIPs.
+ * --selector <GATEWAY_NAME_LABEL>=<gateway> -o json`. There must be exactly one, as in the nightly
+ * smoke (generatedClusterIpProblems), and it must be the one Istio made for this Gateway: Istio's
+ * name for it, owned by the Gateway, of type ClusterIP (the chart's tunnel overlay) with the
+ * listener's port, and its clusterIP an IPv4 address that is also the first of its clusterIPs.
  */
 export function serviceClusterIp(list: Record<string, unknown> | undefined): AddressRead {
   const items = Array.isArray(list?.items) ? list.items.map(asRecord) : [];
@@ -1056,33 +1099,90 @@ export function serviceClusterIp(list: Record<string, unknown> | undefined): Add
     };
   }
   const service = items[0] ?? {};
-  const name = String(asRecord(service.metadata).name);
+  const metadata = asRecord(service.metadata);
+  const name = String(metadata.name);
   const spec = asRecord(service.spec);
-  const clusterIps = Array.isArray(spec.clusterIPs) ? spec.clusterIPs : [];
+  const problems: string[] = [];
+  if (name !== INGRESS_SERVICE) problems.push(`the Service with the label ${selector} is ${name}, not ${INGRESS_SERVICE}, the name Istio gives the Service of Gateway ${INGRESS_GATEWAY}`);
+  const owners = Array.isArray(metadata.ownerReferences) ? metadata.ownerReferences.map(asRecord) : [];
+  const ownedByGateway = owners.some((owner) => owner.kind === "Gateway" && owner.name === INGRESS_GATEWAY && typeof owner.apiVersion === "string" && owner.apiVersion.startsWith("gateway.networking.k8s.io/"));
+  if (!ownedByGateway) problems.push(`Service ${name} is not owned by Gateway ${INGRESS_GATEWAY} (no ownerReference of kind Gateway in gateway.networking.k8s.io): Istio did not make it`);
+  if (spec.type !== "ClusterIP") problems.push(`Service ${name} is not of type ClusterIP, which the chart's tunnel overlay sets`);
+  const ports = Array.isArray(spec.ports) ? spec.ports.map(asRecord) : [];
+  if (!ports.some((port) => port.port === INGRESS_PORT)) problems.push(`Service ${name} has no port ${INGRESS_PORT}, the tunnel listener's`);
   const read = addressOf(spec.clusterIP, `the ClusterIP of Service ${name}`, `Service ${name} has no ClusterIP`);
-  if ("address" in read && clusterIps[0] !== read.address) {
-    return { missing: `Service ${name} has ClusterIP ${read.address} but clusterIPs ${JSON.stringify(clusterIps)}` };
-  }
-  return read;
+  if ("missing" in read) problems.push(read.missing);
+  else if (!Array.isArray(spec.clusterIPs) || spec.clusterIPs[0] !== read.address) problems.push(`the clusterIPs of Service ${name} do not start with its ClusterIP ${read.address}`);
+  return problems.length > 0 ? { missing: problems.join("; ") } : read;
 }
 
-/** A kubectl read for the comparison: a failed read is a missing address with kubectl's reason, never a throw. */
-async function readCluster(read: () => Promise<Record<string, unknown> | undefined>, parse: (value: Record<string, unknown> | undefined) => AddressRead): Promise<AddressRead> {
+/**
+ * The static band of the cluster's Service range, from `kubectl get servicecidr kubernetes -o json`
+ * (undefined: not found), as the nightly smoke computes it (staticBandOf). Without exactly one
+ * valid IPv4 range there is no band, and the gate fails closed.
+ */
+export function serviceRangeBand(serviceCidr: Record<string, unknown> | undefined): BandRead {
+  if (serviceCidr === undefined) return { missing: `ServiceCIDR ${SERVICE_CIDR} is not in the cluster` };
+  const ipv4 = serviceCidrsOf(serviceCidr).filter((cidr) => cidr.includes("."));
+  if (ipv4.length !== 1) return { missing: `ServiceCIDR ${SERVICE_CIDR} lists ${ipv4.length} IPv4 ranges, expected exactly one` };
+  const cidr = ipv4[0] ?? "";
+  let band: { first: string; last: string } | undefined;
   try {
-    return parse(await read());
-  } catch (error) {
-    return { missing: `could not read the cluster: ${error instanceof Error ? error.message : String(error)}` };
+    band = staticBandOf(cidr);
+  } catch {
+    return { missing: `ServiceCIDR ${SERVICE_CIDR}'s IPv4 range is not a valid CIDR` };
   }
+  if (band === undefined) return { missing: `the Service range ${cidr} is too small to have a static band` };
+  return { cidr, ...band };
 }
 
-/** The three addresses, read only: the checkout's values, the ConfigMap's overlay and the Service (kubectl get). */
-export async function readIngressAddresses(box: Box, values: () => Promise<{ commit: string; values: AddressRead }>): Promise<IngressAddresses> {
-  const checkout = await values();
+/** A kubectl get for the comparison: the object, NotFound, or a fixed reason (never kubectl's or ssh's own words). */
+type KubectlRead = { found: Record<string, unknown> } | { notFound: true } | { failed: string };
+
+async function kubectlRead(box: Box, args: readonly string[]): Promise<KubectlRead> {
+  const shown = `sudo k3s kubectl ${args.join(" ")}`;
+  let result: RunResult;
+  try {
+    result = await box.tryKubectl([...args, "-o", "json"]);
+  } catch {
+    return { failed: `${shown} could not run; run it on the demo machine to see why` };
+  }
+  if (result.exitCode !== 0) {
+    if (/\(NotFound\)/.test(result.stderr)) return { notFound: true };
+    return { failed: `${shown} failed (exit ${result.exitCode}${result.exitCode === 255 ? ", ssh" : ""}); run it on the demo machine to see why` };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    return { failed: `${shown} printed no JSON` };
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { failed: `${shown} printed no JSON object` };
+  return { found: parsed as Record<string, unknown> };
+}
+
+async function readCluster<T>(box: Box, args: readonly string[], parse: (value: Record<string, unknown> | undefined) => T): Promise<T | { missing: string }> {
+  const read = await kubectlRead(box, args);
+  return "failed" in read ? { missing: read.failed } : parse("found" in read ? read.found : undefined);
+}
+
+/**
+ * The three addresses and the static band, read only (git on this checkout, kubectl get on the
+ * demo machine). Never throws: a read that fails, also one that could not run, is a reason.
+ */
+export async function readIngressAddresses(box: Box, values: ValuesReader): Promise<IngressAddresses> {
+  let checkout: { commit: string; values: AddressRead };
+  try {
+    checkout = await values();
+  } catch {
+    checkout = { commit: "", values: { missing: `${DEMO_VALUES} at the checkout's commit could not be read (git could not run)` } };
+  }
   return {
     commit: checkout.commit,
     values: checkout.values,
-    overlay: await readCluster(() => box.getJson(["-n", DEMO_NAMESPACE, "get", "configmap", INGRESS_OPTIONS]), overlayClusterIp),
-    service: await readCluster(() => box.getJson(["-n", DEMO_NAMESPACE, "get", "services", "--selector", `${GATEWAY_NAME_LABEL}=${INGRESS_GATEWAY}`]), serviceClusterIp),
+    overlay: await readCluster(box, ["-n", DEMO_NAMESPACE, "get", "configmap", INGRESS_OPTIONS], overlayClusterIp),
+    service: await readCluster(box, ["-n", DEMO_NAMESPACE, "get", "services", "--selector", `${GATEWAY_NAME_LABEL}=${INGRESS_GATEWAY}`], serviceClusterIp),
+    band: await readCluster(box, ["get", "servicecidr", SERVICE_CIDR], serviceRangeBand),
   };
 }
 
@@ -1091,22 +1191,24 @@ export function ingressOrigin(address: string): string {
   return `http://${address}:${INGRESS_PORT}`;
 }
 
-/** The comparison: the stage-2 origin when the three addresses agree, otherwise each problem. */
+/** The comparison: the stage-2 origin when the gate passes, otherwise each problem. */
 export type AddressComparison = { origin: string } | { problems: string[] };
 
 /**
- * What stops the stage-2 routes from going to the ingress: a missing address, or addresses that
- * differ. The likely cause of each difference (deploy/chart/README.md 「固定的入口 ClusterIP」):
- * values against the overlay, the deployed release is not this commit; the overlay against the
- * Service, the Service was created before the address was set or an address change is half done,
- * and Istio no longer updates the Service while they differ.
+ * What stops the stage-2 routes from going to the ingress: a missing address or band, addresses
+ * that differ, or an address outside the static band. The likely cause of each difference
+ * (deploy/chart/README.md 「固定的入口 ClusterIP」): values against the overlay, the deployed release
+ * is not this commit; the overlay against the Service, the Service was created before the address
+ * was set or an address change is half done, and Istio no longer updates the Service while they
+ * differ. Outside the band, any Service created while the ingress Service is gone may take it.
  */
 export function compareAddresses(addresses: IngressAddresses): AddressComparison {
-  const { values, overlay, service } = addresses;
+  const { values, overlay, service, band } = addresses;
   const problems: string[] = [];
   if ("missing" in values) problems.push(`no values address: ${values.missing}`);
   if ("missing" in overlay) problems.push(`no ConfigMap overlay address: ${overlay.missing}`);
   if ("missing" in service) problems.push(`no Service address: ${service.missing}`);
+  if ("missing" in band) problems.push(`no static band of the Service range: ${band.missing}`);
   if (!("address" in values) || !("address" in overlay) || !("address" in service)) return { problems };
   if (values.address !== overlay.address) {
     problems.push(
@@ -1118,10 +1220,18 @@ export function compareAddresses(addresses: IngressAddresses): AddressComparison
       `ConfigMap ${INGRESS_OPTIONS} asks for ${overlay.address}, but the ingress Service has ${service.address}: the Service was created before the address was set, or an address change is half done; Istio no longer updates this Service while they differ`,
     );
   }
+  if (problems.length === 0 && "cidr" in band) {
+    const value = ipv4ToNumber(service.address);
+    if (value < ipv4ToNumber(band.first) || value > ipv4ToNumber(band.last)) {
+      problems.push(
+        `${service.address} is outside the static band ${band.first}-${band.last} of the Service range ${band.cidr}: a Service created while the ingress Service is gone could take it; pin an address in the band (${FIXED_ADDRESS_DOC}, 位址怎麼選)`,
+      );
+    }
+  }
   return problems.length > 0 ? { problems } : { origin: ingressOrigin(service.address) };
 }
 
-/** status's lines: the three addresses and the comparison, OK with the stage-2 origin or FAIL with the problems. */
+/** The comparison's lines: the three addresses, the band, and OK or FAIL with the problems. */
 export function addressReport(addresses: IngressAddresses): string[] {
   const text = (read: AddressRead) => ("address" in read ? read.address : `none (${read.missing})`);
   const compared = compareAddresses(addresses);
@@ -1129,25 +1239,59 @@ export function addressReport(addresses: IngressAddresses): string[] {
     `ingress address in ${DEMO_VALUES}${addresses.commit === "" ? "" : ` at ${addresses.commit.slice(0, 12)}`} (ingress.tunnel.clusterIP): ${text(addresses.values)}`,
     `ingress address in ConfigMap ${INGRESS_OPTIONS} (service overlay): ${text(addresses.overlay)}`,
     `ingress address of the Service with ${GATEWAY_NAME_LABEL}=${INGRESS_GATEWAY}: ${text(addresses.service)}`,
+    `static band of the cluster's Service range (ServiceCIDR ${SERVICE_CIDR}): ${"cidr" in addresses.band ? `${addresses.band.first}-${addresses.band.last} of ${addresses.band.cidr}` : `none (${addresses.band.missing})`}`,
     "origin" in compared
-      ? `OK the three ingress addresses agree; the stage-2 routes' origin is ${compared.origin}`
+      ? "OK the three ingress addresses agree and are in the static band"
       : `FAIL the ingress addresses do not allow the stage-2 routes: ${compared.problems.join("; ")}; see ${FIXED_ADDRESS_DOC}`,
   ];
 }
 
-/**
- * check --stage 2's gate, before any probe: the stage-2 origin when all three addresses agree,
- * otherwise an error with each problem. A route to an address no Service holds would publish
- * whatever Service takes it later on the two paths that bypass Access (Laysi/trustiot-v2#483).
- */
+/** The gate's refusal, the same for route-origin and check --stage 2. */
+function gateError(problems: readonly string[]): ReleaseError {
+  return new ReleaseError(
+    `the stage-2 routes must not go to the ingress, nothing was probed: ${problems.join("; ")}. Do not switch the routes, and set back to http_status:418 any that go to the ingress; follow ${FIXED_ADDRESS_DOC} (deploy the reviewed values first, and change an address only as its 「改位址」 steps say)`,
+  );
+}
+
+/** The stage-2 origin when the gate passes, otherwise the gate's refusal. */
 export function requireIngressAddress(addresses: IngressAddresses): string {
   const compared = compareAddresses(addresses);
-  if ("problems" in compared) {
-    throw new ReleaseError(
-      `the stage-2 routes must not go to the ingress, nothing was probed: ${compared.problems.join("; ")}. Do not switch the routes; follow ${FIXED_ADDRESS_DOC} (deploy the reviewed values first, and change an address only as its 「改位址」 steps say)`,
-    );
-  }
+  if ("problems" in compared) throw gateError(compared.problems);
   return compared.origin;
+}
+
+/**
+ * The gate before the stage-2 routes, the one code path of route-origin and check --stage 2: reads
+ * the addresses (never throws), prints the comparison, and on a refusal saves `record` with the
+ * addresses and the problems (and `refused`, check's `probed: false`) before throwing. A route to an
+ * address no Service holds would publish whatever Service takes it later on the two paths that
+ * bypass Access (Laysi/trustiot-v2#483).
+ */
+export async function ingressGate(box: Box, log: Log, values: ValuesReader, record: string, refused: Record<string, unknown>): Promise<{ addresses: IngressAddresses; origin: string }> {
+  const addresses = await readIngressAddresses(box, values);
+  for (const line of addressReport(addresses)) log.note(line);
+  const compared = compareAddresses(addresses);
+  if ("problems" in compared) {
+    log.save(record, { at: new Date().toISOString(), ...refused, addresses, problems: compared.problems });
+    throw gateError(compared.problems);
+  }
+  return { addresses, origin: compared.origin };
+}
+
+/** The line that names the stage-2 origin: route-origin's last line, and check's. */
+export function originLine(origin: string): string {
+  return `the stage-2 routes' origin: ${origin}`;
+}
+
+/**
+ * route-origin: the gate on its own, read only and without the lab lock, run right before the
+ * routes are switched. It exits 0 only when the gate passes; its last line then names the origin
+ * the routes get, taken from its output, never typed from values-demo.yaml.
+ */
+export async function routeOrigin(box: Box, log: Log, values: ValuesReader = () => valuesAddress(ROOT)): Promise<string> {
+  const { addresses, origin } = await ingressGate(box, log, values, "route-origin", {});
+  log.save("route-origin", { at: new Date().toISOString(), addresses, origin });
+  return originLine(origin);
 }
 
 // --- The trusted zone (install's backup, remove's restore) ---------------------------------------
@@ -1876,8 +2020,15 @@ async function status(box: Box, log: Log): Promise<void> {
   log.note(`installer runs still there: ${runs.length === 0 ? "none" : runs.join(", ")}`);
   log.note(`demo machine: ${(await read(`sudo sh -c ${shq(auditScript())}`)).replaceAll("\n", "; ")}`);
   log.note(`this workstation: files in ${shownPath(log.dir)} with a tunnel token's prefix: ${filesWith(log.dir, TOKEN_PREFIX).length}`);
-  // FAIL lines here, like the others, do not stop status; check --stage 2 stops on them.
-  for (const line of addressReport(await readIngressAddresses(box, () => valuesAddress(ROOT)))) log.note(line);
+  for (const line of await statusAddressLines(box, () => valuesAddress(ROOT))) log.note(line);
+}
+
+/** status's lines on the ingress address: only a report, like its other FAIL lines; route-origin is the gate. */
+export async function statusAddressLines(box: Box, values: ValuesReader): Promise<string[]> {
+  return [
+    ...addressReport(await readIngressAddresses(box, values)),
+    "(status only reports the ingress addresses; before switching the routes run route-origin, and take the origin from its output)",
+  ];
 }
 
 /** What check reaches besides the demo machine; tests pass their own. */
@@ -1885,15 +2036,15 @@ export interface CheckDeps {
   /** Runs a probe's curl on this workstation. */
   workstation: (args: string[]) => Promise<RunResult>;
   /** values-demo.yaml's address at the checkout's commit (valuesAddress(ROOT)). */
-  values: () => Promise<{ commit: string; values: AddressRead }>;
+  values: ValuesReader;
 }
 
 const CHECK_DEPS: CheckDeps = { workstation: (args) => tryRun(args), values: () => valuesAddress(ROOT) };
 
 /**
- * The probes, from this workstation and the demo machine. Stage 2 first compares the three ingress
- * addresses and stops before any probe unless they agree (requireIngressAddress); stage 1 does not,
- * its routes are still the connector's own 418.
+ * The probes, from this workstation and the demo machine. Stage 2 first runs route-origin's gate
+ * (ingressGate) and stops before any probe unless it passes, saving `probed: false`; stage 1 does
+ * not, its routes are still the connector's own 418.
  */
 export async function check(box: Box, log: Log, raw: Record<string, string>, deps: CheckDeps = CHECK_DEPS): Promise<void> {
   const hosts = { app: hostFromEnv("DEMO_APP_HOST"), gateway: hostFromEnv("DEMO_GATEWAY_HOST"), ota: hostFromEnv("DEMO_OTA_HOST") };
@@ -1901,15 +2052,8 @@ export async function check(box: Box, log: Log, raw: Record<string, string>, dep
   if (stage === undefined) throw new ReleaseError("--stage is 1 (routes answer 418) or 2 (routes go to the demo ingress)");
   let ingress: { addresses: IngressAddresses; origin: string } | undefined;
   if (stage === 2) {
-    const addresses = await readIngressAddresses(box, deps.values);
-    for (const line of addressReport(addresses)) log.note(line);
-    try {
-      ingress = { addresses, origin: requireIngressAddress(addresses) };
-    } catch (error) {
-      log.save("check", { at: new Date().toISOString(), stage, addresses, probed: false });
-      throw error;
-    }
-    log.note(`the stage-2 routes' origin: ${ingress.origin} (set the routes to it when switching them, Laysi/trustiot-v2#469)`);
+    ingress = await ingressGate(box, log, deps.values, "check", { stage, probed: false });
+    log.note(`${originLine(ingress.origin)} (the routes that go to the ingress must use exactly this)`);
   }
   const { results, failed } = await runProbes(
     { workstation: deps.workstation, demoMachine: (args) => box.sh(args.map(shq).join(" ")), note: (line) => log.note(line) },
@@ -1988,6 +2132,8 @@ const SUBCOMMANDS = {
   "handoff-key": { spec: HOST_ONLY, run: (box: Box, log: Log) => handoffKey(box, log) },
   install: { spec: { ...COMMON_SPEC, ciphertext: { default: "" }, "tunnel-id": { default: "" } }, run: install },
   status: { spec: HOST_ONLY, run: (box: Box, log: Log) => status(box, log) },
+  // Read only, no lab lock; its result is the run's last line (see below).
+  "route-origin": { spec: HOST_ONLY, run: (box: Box, log: Log) => routeOrigin(box, log) },
   check: { spec: { ...HOST_ONLY, stage: { default: "1" } }, run: (box: Box, log: Log, raw: Record<string, string>) => check(box, log, raw) },
   remove: { spec: COMMON_SPEC, run: (box: Box, log: Log, raw: Record<string, string>) => remove(box, log, raw) },
 } as const;
@@ -2007,14 +2153,16 @@ if (import.meta.main) {
       log = new Log(`tunnel-${name}`, options.logDir);
       const current = log;
       const box = new Box(options.sshHost, current);
-      await withOpsTunnel(
+      const result: unknown = await withOpsTunnel(
         () => opsTunnel(box),
         current,
         async () => {
           const ops = await opsTunnel(box);
-          await sub.run(box, current, raw, ops, allowed);
+          return sub.run(box, current, raw, ops, allowed);
         },
       );
+      // route-origin's origin line comes last, after the ops tunnel's line.
+      if (typeof result === "string") current.note(result);
     },
   );
 }
