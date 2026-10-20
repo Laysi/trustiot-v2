@@ -146,6 +146,7 @@ bun scripts/demo/tunnel.ts remove --ssh-host "$DEMO_SSH_HOST" --apply --confirm 
 - **加人或移除**：Zero Trust → Access → Groups → 展示環境的 group → 編輯 Include 的 email；或 `PUT /accounts/<帳號>/access/groups/<group>`，body 帶完整的 `name` 與 `include`（PUT 會取代整份名單，先 `GET` 再改）。改完以 `GET` 確認。
 - **立刻撤銷**：移除的人在 session 到期（application 的 session duration，24 小時）前仍能使用。要立刻撤銷時，在 Zero Trust → Users 撤銷他的 session，或 `POST /accounts/<帳號>/access/apps/<application>/revoke_tokens` 撤銷這個 application 所有人的 session（所有人要重新登入）。
 - **確認**：沒有受邀的 Google 帳號登入時，Access 顯示沒有權限的頁面，不會到 app。
+- **新的公開路徑**：展示切片沒有 OTA（OTA 的派送在 [MS4](../roadmap/milestones.md)），所以 ota 主機名稱目前整個在 Access 後面。chart 為閘道器或 OTA client 加上不需要 cookie 的公開路徑時，三樣一起加：該路徑的 Bypass application、錨定該路徑的 tunnel 規則（不要求 JWT，排在同一主機名稱設 `originRequest.access` 的規則之前），以及對該路徑關閉 Browser Integrity Check 的 configuration rule；並更新 `scripts/demo/tunnel.ts` 的 `BYPASS_PATHS`。
 
 ## 拿掉 Access
 
