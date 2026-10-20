@@ -81,7 +81,7 @@ OK cloudflared 2026.10.2-1 from cloudflared-stable
 
 這次 `status` 的其他各行與 17:46 UTC 那次相同：`127.0.0.1:20250/ready` 4 條連線、`NRestarts=0`，token 與設定檔 `root:root 600`、目錄 `/etc/credstore` `root:root 700`，`/run/trustiot-demo` 是空的，沒有留下的安裝程式執行，token 的稽核三項都是 0（journal、展示機的兩個目錄、工作站的日誌目錄），維運 tunnel 仍是同一個行程。
 
-### 安裝留下的 dnf 權限（已修正；展示機上待恢復）
+### 安裝留下的 dnf 權限
 
 2026-10-21 在展示機上以唯讀指令查到：
 
@@ -105,9 +105,18 @@ OK cloudflared 2026.10.2-1 from cloudflared-stable
 
 修正：commit `12db555`（`fix(scripts): run the demo installer under umask 022, not the runner's 077`）只讓安裝程式在 umask 022 下執行；執行腳本自己的 `.log`、`.exit`、`.post` 仍以 077 建立（0600），複本仍以 `install -m` 設為 0600 與 0700。022 不會放寬任何 secret：deploy/host 的 `writeFile` 以 `O_EXCL` 和最終權限建立檔案後再 `chmod`，`makeDirectory` 以指定權限 `mkdir` 後再 `chmod`，都不依賴呼叫者的 umask。單元測試以替身安裝程式確認它看到的 umask 是 `0022`、它建立的檔案是 644，執行腳本的 `.log`、`.exit`、`.post` 是 600，複本是 700 與 600；拿掉 022，或把 022 放到腳本開頭，測試都會失敗。
 
-展示機上已經變成 600 與 700 的權限由人以一次性的指令改回（[runbook](../runbooks/demo-environment.md)「2026-10-21 安裝留下的 dnf 權限」）：那六個檔改成 0644，libdnf5 與 PackageKit 的 `cloudflared-stable-<hash>` 目錄以 `chmod -R u=rwX,go=rX` 改回。
+展示機上已經變成 600 與 700 的權限由人以一次性的指令改回（[runbook](../runbooks/demo-environment.md)「2026-10-21 安裝留下的 dnf 權限」）：那六個檔改成 0644，libdnf5 與 PackageKit 的 `cloudflared-stable-<hash>` 目錄以 `chmod -R u=rwX,go=rX` 改回。分兩次做，結果如下：
 
-> **待補**：協調者在恢復之後讀到的權限（六個檔與快取目錄）補在這裡。
+| 位置 | 改回前 | 改回後 |
+| --- | --- | --- |
+| 六個 TOML（2026-10-20 18:56:09 UTC（UTC+8 的 2026-10-21 02:56:09），檔案的狀態變更時間） | `root:root 600` | `root:root 644` |
+| `/var/cache/libdnf5/cloudflared-stable-<hash>`（同一次） | 這個目錄與 `repodata`、`solv`、`packages` 700；`repodata/repomd.xml`、`repodata/<sha256>-primary.xml.zst` 600；`solv/cloudflared-stable.solv` 644 | 目錄都是 755，其中每個檔案都是 644 |
+| `/var/cache/PackageKit/44/metadata/cloudflared-stable-<hash>`（2026-10-20 19:01:12 UTC（UTC+8 的 2026-10-21 03:01:12）） | 這個目錄與 `repodata`、`solv` 755；`repodata/repomd.xml`、`repodata/<sha256>-primary.xml.zst` 600；`solv/cloudflared-stable.solv` 644 | 兩個 repodata 檔改成 644，其他不變 |
+
+改回之後（2026-10-20 19:01 UTC（UTC+8 的 2026-10-21 03:01））：
+
+- 不用 root 的 `dnf -q repoquery --installed --disablerepo='*' --qf '%{from_repo}\n' cloudflared` 印出 `cloudflared-stable`（第一次改回後與第二次改回後都是）。
+- 重跑完整性檢查的兩個 `find`：時段 17:15–17:50 UTC、同樣排除的那一個，只列出預期的項目（`/etc/credstore` 700 與其中的 token、設定檔 600，`/var/lib/trustiot-demo` 與其中的檔案，`cloudflared-demo` 的 PrivateTmp 目錄）。dnf 的檔案不再出現：它們現在其他使用者讀得到，而且 `chmod` 把它們的狀態變更時間移出了這個時段。套件管理路徑那一個（不限時間，同樣的路徑，含 `/var/cache/PackageKit`）沒有找到任何讀不到的項目。
 
 ### 連線狀態（驗收 1）
 
