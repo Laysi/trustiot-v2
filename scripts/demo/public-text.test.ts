@@ -10,7 +10,17 @@ import { ROOT } from "./lib.ts";
  * The files this rule covers: the runbook, everything under scripts/demo, and the other documents
  * the demo environment's tunnel changes (Laysi/trustiot-v2#466).
  */
-export const DEMO_DOCS = ["docs/runbooks/demo-environment.md", "deploy/host/README.md", "docs/README.md", "docs/architecture/secrets.md", "docs/runbooks/secrets.md"];
+export const DEMO_DOCS = [
+  "docs/runbooks/demo-environment.md",
+  "deploy/host/README.md",
+  "docs/README.md",
+  "docs/architecture/secrets.md",
+  "docs/runbooks/secrets.md",
+  "docs/test-reports/2026-10-21-466-demo-tunnel-access.md",
+];
+
+/** Directories whose every file the rule covers: the scripts and the test report's raw data. */
+export const DEMO_DIRS = ["scripts/demo", "docs/test-reports/data/2026-10-21-466-demo-tunnel-access"];
 
 export function publicFiles(root: string = ROOT): string[] {
   const walk = (dir: string): string[] =>
@@ -18,7 +28,7 @@ export function publicFiles(root: string = ROOT): string[] {
       const path = join(dir, name);
       return statSync(path).isDirectory() ? walk(path) : [path];
     });
-  return [...DEMO_DOCS.map((doc) => join(root, doc)), ...walk(join(root, "scripts/demo"))];
+  return [...DEMO_DOCS.map((doc) => join(root, doc)), ...DEMO_DIRS.flatMap((dir) => walk(join(root, dir)))];
 }
 
 /**
@@ -66,6 +76,17 @@ describe("public text of the demo environment", () => {
         .split("\n")
         .flatMap((line, index) => privateNames(line).map((name) => `${relative(ROOT, file)}:${index + 1}: ${name}`)),
     );
+    expect(found).toEqual([]);
+  });
+
+  test("the test report and its data hold no object ID and no cf-ray", () => {
+    const report = [DEMO_DOCS.find((doc) => doc.startsWith("docs/test-reports/"))!, ...DEMO_DIRS.filter((dir) => dir.startsWith("docs/test-reports/"))];
+    const files = publicFiles().filter((file) => report.some((path) => relative(ROOT, file).startsWith(path)));
+    expect(files.length).toBeGreaterThan(1);
+    // Tunnel, application and policy IDs are UUIDs; account and zone IDs are 32 hex digits; a
+    // cf-ray is 16 hex digits and the code of the Cloudflare location that served it.
+    const ids = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|\b[0-9a-f]{32}\b|\b[0-9a-f]{16}-[A-Z]{3}\b/gi;
+    const found = files.flatMap((file) => [...readFileSync(file, "utf8").matchAll(ids)].map((m) => `${relative(ROOT, file)}: ${m[0]}`));
     expect(found).toEqual([]);
   });
 
