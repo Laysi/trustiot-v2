@@ -1,6 +1,6 @@
 [package]
 name = "testkit"
-description = "Test support for TrustIoT v2: the cross-tenant negative test suite (decision 29), test identity tokens, and throwaway containers. A dev-dependency only."
+description = "Test support for TrustIoT v2: the cross-tenant negative test suite (decision 29), test identity tokens, throwaway containers, and a fake Modbus endpoint with fault injection (M7). A dev-dependency only."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -26,14 +26,19 @@ reqwest.workspace = true
 serde_json.workspace = true
 service-kit = { path = "../service-kit" }
 sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki", "uuid"] }
-tokio = { workspace = true, features = ["sync", "time"] }
+# Also the fake Modbus endpoint (`modbus`) and the clock helpers (`clock`).
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 # The self-test's example service.
 axum = { workspace = true, features = ["http1", "json", "tokio"] }
 serde = { workspace = true, features = ["derive"] }
-tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
+# `test-util`: the fake Modbus tests pause the clock (`start_paused`).
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "test-util"] }
+# A Modbus client written by others: the fake endpoint's tests check its hand-written framing
+# against it.
+tokio-modbus = { workspace = true, features = ["rtu", "tcp"] }
 
 [lints]
 workspace = true
