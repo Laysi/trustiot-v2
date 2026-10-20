@@ -107,10 +107,22 @@ export function configPath(unit: string): string {
 /** Ports cloudflared picks for its metrics server by itself when none is set. */
 export const DEFAULT_METRICS_PORTS = [20241, 20242, 20243, 20244, 20245];
 
-export function checkMetricsPort(port: number): void {
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
-    throw new Error(`invalid metrics port ${port}: use 1024 to 65535`);
+/**
+ * Why a metrics port cannot be used, or null. cloudflared's default ports are refused: a connector
+ * without --metrics-port on the same host takes the first free one of them, so a fixed port there
+ * can be taken before this unit starts, or take the other connector's.
+ */
+export function metricsPortProblem(port: number): string | null {
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) return "use 1024 to 65535";
+  if (DEFAULT_METRICS_PORTS.includes(port)) {
+    return `${DEFAULT_METRICS_PORTS[0]}-${DEFAULT_METRICS_PORTS.at(-1)} are cloudflared's default metrics ports, which another connector on the host may take; use a port outside them`;
   }
+  return null;
+}
+
+export function checkMetricsPort(port: number): void {
+  const problem = metricsPortProblem(port);
+  if (problem !== null) throw new Error(`invalid metrics port ${port}: ${problem}`);
 }
 
 /**

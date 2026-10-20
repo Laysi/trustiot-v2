@@ -67,6 +67,17 @@ describe("cloudflared unit", () => {
     expect(() => renderConfig("cloudflared", 70000)).toThrow(/invalid metrics port/);
   });
 
+  test("a metrics port is never one of cloudflared's default ports, in the config or on the command line", () => {
+    for (const port of [20241, 20245]) {
+      expect(() => renderConfig("cloudflared-demo", port)).toThrow(/invalid metrics port .*20241-20245 are cloudflared's default metrics ports/);
+      expect(() => parseArgs(["--metrics-port", String(port)])).toThrow(new RegExp(`--metrics-port ${port}: 20241-20245 are cloudflared's default metrics ports`));
+    }
+    for (const port of [20240, 20246]) {
+      expect(renderConfig("cloudflared-demo", port)).toContain(`\nmetrics: 127.0.0.1:${port}\n`);
+      expect(parseArgs(["--metrics-port", String(port)]).options.metricsPort).toBe(port);
+    }
+  });
+
   test("outlasts cloudflared's 30-second grace period when stopping", () => {
     expect(directives).toContain("TimeoutStopSec=60s");
   });

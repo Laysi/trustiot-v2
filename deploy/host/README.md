@@ -129,7 +129,7 @@ bun run --cwd deploy/host build      # deploy/host/dist/ 下的兩個執行檔�
   2. 從另一個工作階段確認經 Access 的 SSH 與產品主機名稱都正常。
   3. `sudo systemctl disable --now cloudflared`，刪除舊的 unit 與它的 token 檔，`sudo systemctl daemon-reload`。
   4. 之後都以 `--unit cloudflared-trustiot` 執行安裝程式（或再以預設名稱重裝一次，確認後停掉 `cloudflared-trustiot`）。
-- 同一台主機要再接一條 tunnel 時（例如展示機：原有的維運 tunnel 之外另有展示環境的 tunnel），以另一個 `--unit` 名稱、另一條 tunnel 的 token 與 20241 到 20245 以外的 `--metrics-port` 安裝，兩個 unit 共用 `/usr/bin/cloudflared` 與同一份 firewalld 設定，各自有自己的 token 檔與設定檔。展示機的 connector 由 `scripts/demo/tunnel.ts` 包裝這個安裝程式（token 經 RSA-OAEP 交付、安裝程式在主機上的 systemd 暫時 unit 裡執行），步驟見[展示環境 runbook](../../docs/runbooks/demo-environment.md)。
+- 同一台主機要再接一條 tunnel 時（例如展示機：原有的維運 tunnel 之外另有展示環境的 tunnel），以另一個 `--unit` 名稱、另一條 tunnel 的 token 與 20241 到 20245 以外的 `--metrics-port` 安裝（這個範圍是 cloudflared 自己挑的預設埠，安裝程式拒絕），兩個 unit 共用 `/usr/bin/cloudflared` 與同一份 firewalld 設定，各自有自己的 token 檔與設定檔。展示機的 connector 由 `scripts/demo/tunnel.ts` 包裝這個安裝程式（token 經 RSA-OAEP 交付、安裝程式在主機上的 systemd 暫時 unit 裡執行），步驟見[展示環境 runbook](../../docs/runbooks/demo-environment.md)。
 - 2026-10-20 起 unit 以 `--config` 讀自己的設定檔（Laysi/trustiot-v2#466）。在這之前裝好的主機，下次執行安裝程式時會寫入設定檔、改寫 unit、`daemon-reload` 並重啟 cloudflared（中斷與「更新 cloudflared」相同），請在維護時段跑；之後再跑不會有變更。
 
 ## 更新 cloudflared
