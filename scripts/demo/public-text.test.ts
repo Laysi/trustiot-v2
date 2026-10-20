@@ -61,8 +61,11 @@ export const ALLOWED_NAMES: Record<string, string> = {
  */
 const NAME = /(?<![\w.-])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:ai|app|biz|cloud|co|com|dev|info|io|me|net|one|org|site|tech|tw|xyz))(?![\w(-])/gi;
 
+/** An escape in source code (`\t`, `\n`, `\r`) separates words; its letter is not part of a name. */
+const ESCAPE = /\\[nrt]/g;
+
 export function privateNames(text: string): string[] {
-  return [...text.matchAll(NAME)].map((m) => m[1] ?? "")
+  return [...text.replace(ESCAPE, " ").matchAll(NAME)].map((m) => m[1] ?? "")
     .filter((name) => {
       const lower = name.toLowerCase();
       return !Object.keys(ALLOWED_NAMES).some((allowed) => lower === allowed || lower.endsWith(`.${allowed}`));
@@ -121,5 +124,8 @@ describe("public text of the demo environment", () => {
     expect(privateNames("gw.example.com app.test x.invalid team-x.cloudflareaccess.com <id>.cfargotunnel.com https://pkg.cloudflare.com/cloudflared/rpm")).toEqual([]);
     // Code is not a host name: properties and calls.
     expect(privateNames("crypto.subtle.encrypt(x); HOSTS[\"app\"]; plan.cloudflared.candidate; Bun.file(p)")).toEqual([]);
+    // An escape in source code separates the name after it, which is still checked.
+    expect(privateNames(String.raw`"v1\tSecret\t\tkubernetes.io/service-account-token\n"`)).toEqual([]);
+    expect(privateNames(String.raw`"a\thost-c.${zone}\n", "\nhost-d.${zone}\r"`)).toEqual([`host-c.${zone}`, `host-d.${zone}`]);
   });
 });
