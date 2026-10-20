@@ -63,10 +63,10 @@ flowchart TB
 | 資產 | `services/assets` | 型號、設備、閘道器、綁定與解綁、閘道器數量配額 | 綁定時「閘道器數量不超過方案上限」要在同一筆交易內檢查 |
 | 憑證與佈建 | `services/certs` | CA 簽章、出廠登錄、佈建、換發、撤銷 | 私鑰隔離，攻擊面最小 |
 | 資料接收 | `services/ingest` | MQTT 到 ClickHouse、端到端確認 | 不能被其他服務拖垮 |
-| 時序查詢 | `services/telemetry-query` | 讀 ClickHouse：設備圖表與即時圖表的歷史段（I3）、首頁卡片（L3）、健康歷史（H1）、AI 語意層工具（J3）；以每租戶唯讀帳號與查詢上限執行（決策 14） | 重查詢不能拖垮資料接收（I1） |
+| 時序查詢 | `services/telemetry-query` | 讀 ClickHouse：設備圖表與即時圖表的歷史段（I3）、首頁卡片（L3）、健康歷史（H1）、AI 語意層工具與唯讀 SQL（J3）、儀表板資料集（決策 33）；以每租戶唯讀帳號與查詢上限執行（決策 14） | 重查詢不能拖垮資料接收（I1） |
 | 閘道器營運 | `services/gateway-ops` | 設定下發、在線狀態、即時圖表轉送、OTA 分批推送 | 負責跟閘道器的長連線與狀態 |
 | MQTT 轉接 | `services/mqtt-bridge` | 把閘道器經入口 gateway 送來的 WebSocket 拆回 TCP 交給 broker，SaaS 前面多一段 Cloudflare Tunnel；來源 IP 依設定讀可信的標頭：SaaS 讀 CF-Connecting-IP，地端取入口 gateway 附加的 X-Forwarded-For 最右段（決策 6、27）；每 50 秒送 WebSocket ping，讀寫緩衝區 8 KiB，收到 SIGTERM 時送 WebSocket close | 只轉送加密的位元組，看不到 mTLS 內容 |
-| AI 助理 | `services/assistant` | 對話、分流、主 agent 與工具（決策 31，見[AI 助理與 AI 閘道](ai-assistant.md)） | 最吃記憶體，改動最頻繁 |
+| AI 助理 | `services/assistant` | 對話、分流、主 agent 與工具、儀表板（決策 31、33，見[AI 助理與 AI 閘道](ai-assistant.md)） | 最吃記憶體，改動最頻繁 |
 | AI 閘道 | `services/ai-gateway` | 供應商憑證、照原生協定轉送與串流、逾時與備援、模型角色、用量帳本、租戶 AI 額度（決策 15、28） | 額度要在一處原子檢查 |
 | 警報與通知 | `services/alerts` | 規則、回測、通知中心、Email、Webhook | 背景排程，可以單獨擴充 |
 | 現場脈絡 | `services/field-context` | 機台、機台關係、料號、生產區間、知識圖 | 見[現場脈絡與知識圖](field-context.md) |
