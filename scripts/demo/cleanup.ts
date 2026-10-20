@@ -9,8 +9,10 @@
  * - namespace `poc` of the edge PoC (its probes included);
  * - the edge PoC's Gateway `edge` in `istio-ingress` and its objects, and that namespace when
  *   nothing else is in it;
- * - ClusterRoleBindings whose subjects are all in those namespaces (the demo reuses `trustiot`, and
- *   a ServiceAccount of the same name there would inherit their rights).
+ * - ClusterRoleBindings, and RoleBindings in other namespaces, whose subjects are all in those
+ *   namespaces (the demo reuses `trustiot`, and a ServiceAccount of the same name there would
+ *   inherit their rights). A subject is in a namespace as a ServiceAccount there, as the User
+ *   `system:serviceaccount:<ns>:<name>` or as the Group `system:serviceaccounts:<ns>`.
  *
  * The istiod ext_authz provider that points at the PoC is replaced by platform.ts, after this.
  * Nothing on the demo machine's file system is touched. Usage (scripts/README.md, 「展示機」):
@@ -108,7 +110,8 @@ export interface Subject {
 
 /** Cluster-scoped objects that point into namespaces (only what the plan needs). */
 export interface ClusterRefs {
-  bindings: { name: string; uid: string; roleRef: string; subjects: Subject[]; managed: boolean }[];
+  /** ClusterRoleBindings, and RoleBindings with their `namespace`. */
+  bindings: { namespace?: string; name: string; uid: string; resourceVersion: string; roleRef: string; subjects: Subject[]; managed: boolean }[];
   /** Webhook configurations, APIServices and CRD conversion webhooks, with the namespaces of the services they call. */
   callers: { kind: string; name: string; namespaces: string[] }[];
 }
@@ -118,8 +121,11 @@ export interface CleanupPlan {
   deleteNamespaces: { name: string; uid: string; objects: string[]; volumeClaims: string[] }[];
   /** Objects that go from a namespace that stays. */
   deleteObjects: { namespace: string; uid: string; objects: string[] }[];
-  /** ClusterRoleBindings (with their uid) whose subjects are all in namespaces that go or are gone; their ClusterRoles stay. */
-  deleteBindings: { name: string; uid: string; roleRef: string; subjects: string[] }[];
+  /**
+   * ClusterRoleBindings, and RoleBindings in namespaces that stay (with `namespace`), whose subjects
+   * are all in namespaces that go or are gone, with their uid; the roles they bind stay.
+   */
+  deleteBindings: { namespace?: string; name: string; uid: string; roleRef: string; subjects: string[] }[];
   keep: string[];
   /** What needs a person: the run stops before anything changes. */
   refused: string[];
@@ -141,9 +147,10 @@ function fingerprintRefs(namespace: string): string[] {
  * none of them managed; otherwise only the edge PoC's own objects go, and refused when Helm or Flux
  * manages one of them.
  * Cluster-scoped references into the namespaces that go (or that are already gone, after an
- * interrupted run): a ClusterRoleBinding whose subjects are all there goes, one with other subjects
- * too or managed by Helm or Flux is refused, and a webhook, APIService or CRD conversion that calls
- * a service there is refused.
+ * interrupted run): a ClusterRoleBinding, or a RoleBinding in a namespace that stays, whose subjects
+ * are all there goes, one with other subjects too or managed by Helm or Flux is refused, and a
+ * webhook, APIService or CRD conversion that calls a service there (by service or by URL) is
+ * refused. A RoleBinding inside a namespace that goes goes with it.
  */
 export function planCleanup(namespaces: readonly NamespaceFacts[], edge: NamespaceFacts, refs: ClusterRefs = { bindings: [], callers: [] }): CleanupPlan {
   const plan: CleanupPlan = { deleteNamespaces: [], deleteObjects: [], deleteBindings: [], keep: [], refused: [] };
@@ -193,24 +200,64 @@ export function planCleanup(namespaces: readonly NamespaceFacts[], edge: Namespa
 
   const doomed = new Set([...plan.deleteNamespaces.map((ns) => ns.name), ...gone]);
   for (const binding of refs.bindings) {
-    const inside = binding.subjects.filter((s) => s.namespace !== undefined && doomed.has(s.namespace));
+    if (binding.namespace !== undefined && doomed.has(binding.namespace)) continue;
+    const inside = binding.subjects.filter((s) => doomed.has(subjectNamespace(s, binding.namespace) ?? ""));
     if (inside.length === 0) continue;
     const subjects = binding.subjects.map(subjectRef).sort();
     if (binding.managed) {
-      plan.refused.push(`ClusterRoleBinding ${binding.name}: Helm or Flux manages it, and its subjects ${subjects.join(", ")} are in namespaces that go`);
+      plan.refused.push(`${bindingLabel(binding)}: Helm or Flux manages it, and its subjects ${subjects.join(", ")} are in namespaces that go`);
     } else if (inside.length !== binding.subjects.length) {
-      plan.refused.push(`ClusterRoleBinding ${binding.name}: subjects both in namespaces that go and elsewhere (${subjects.join(", ")}); decide by hand`);
+      plan.refused.push(`${bindingLabel(binding)}: subjects both in namespaces that go and elsewhere (${subjects.join(", ")}); decide by hand`);
     } else {
-      plan.deleteBindings.push({ name: binding.name, uid: binding.uid, roleRef: binding.roleRef, subjects });
-      plan.keep.push(`${binding.roleRef} stays (only its binding ${binding.name} goes)`);
+      plan.deleteBindings.push({ ...(binding.namespace === undefined ? {} : { namespace: binding.namespace }), name: binding.name, uid: binding.uid, roleRef: binding.roleRef, subjects });
+      plan.keep.push(`${binding.roleRef} stays (only its binding ${bindingLabel(binding)} goes)`);
     }
   }
-  plan.deleteBindings.sort((a, b) => a.name.localeCompare(b.name));
+  plan.deleteBindings.sort((a, b) => bindingLabel(a).localeCompare(bindingLabel(b)));
   for (const caller of refs.callers) {
     const into = caller.namespaces.filter((ns) => doomed.has(ns));
     if (into.length > 0) plan.refused.push(`${caller.kind} ${caller.name} calls a service in namespace ${[...new Set(into)].join(", ")}, which goes; decide by hand`);
   }
   return plan;
+}
+
+/**
+ * The namespace whose ServiceAccounts a binding subject stands for, if any: a ServiceAccount (one
+ * without a namespace in a RoleBinding is in the binding's), the User
+ * `system:serviceaccount:<ns>:<name>`, or the Group `system:serviceaccounts:<ns>` (every
+ * ServiceAccount there, including ones made later).
+ */
+export function subjectNamespace(subject: Subject, bindingNamespace?: string): string | undefined {
+  if (subject.kind === "ServiceAccount") return subject.namespace ?? bindingNamespace;
+  if (subject.kind === "User") return /^system:serviceaccount:([^:]+):[^:]+$/.exec(subject.name)?.[1];
+  if (subject.kind === "Group") return /^system:serviceaccounts:([^:]+)$/.exec(subject.name)?.[1];
+  return undefined;
+}
+
+/** `ClusterRoleBinding <name>` or `RoleBinding <namespace>/<name>`. */
+export function bindingLabel(binding: { namespace?: string; name: string }): string {
+  return binding.namespace === undefined ? `ClusterRoleBinding ${binding.name}` : `RoleBinding ${binding.namespace}/${binding.name}`;
+}
+
+/**
+ * The namespace of the in-cluster service a webhook URL calls: `<service>.<namespace>.svc` or
+ * `<service>.<namespace>.svc.cluster.local` as its host. Undefined for any other URL.
+ */
+export function serviceUrlNamespace(url: string): string | undefined {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return undefined;
+  }
+  return /^[a-z0-9]([-a-z0-9]*[a-z0-9])?\.([a-z0-9]([-a-z0-9]*[a-z0-9])?)\.svc(\.cluster\.local)?$/.exec(host)?.[2];
+}
+
+/** The namespaces a webhook client config calls into, by service or by URL. */
+function clientConfigNamespaces(config: { service?: { namespace?: string } | null; url?: string } | undefined): string[] {
+  const byService = config?.service?.namespace;
+  const byUrl = config?.url === undefined ? undefined : serviceUrlNamespace(config.url);
+  return [...(byService ? [byService] : []), ...(byUrl ? [byUrl] : [])];
 }
 
 function topLevel(ns: NamespaceFacts): string[] {
@@ -311,8 +358,11 @@ export interface CleanupOps {
   lock(): Promise<() => Promise<void>>;
   snapshot(): Promise<{ cluster: Record<string, KindState>; workloads: string[] }>;
   deleteObject(namespace: string, ref: string): Promise<void>;
-  /** Deletes a ClusterRoleBinding only while it has this uid (a Kubernetes delete precondition). */
-  deleteBinding(name: string, uid: string): Promise<void>;
+  /**
+   * Deletes a ClusterRoleBinding, or with `namespace` a RoleBinding, only while it has this uid and
+   * resourceVersion (Kubernetes delete preconditions): any edit since it was read stops the delete.
+   */
+  deleteBinding(name: string, uid: string, resourceVersion: string, namespace?: string): Promise<void>;
   /** Deletes a namespace only while it has this uid (a Kubernetes delete precondition), and waits until it is gone. */
   deleteNamespace(name: string, uid: string): Promise<void>;
   /** Persistent volumes still bound to one of these `<namespace>/<claim>`. */
@@ -383,19 +433,20 @@ async function applyPlan(ops: CleanupOps, log: Log, plan: CleanupPlan): Promise<
   for (const binding of plan.deleteBindings) {
     // Read it again right before it goes: a subject added elsewhere, another role or a Helm or Flux
     // label since the plan stops the run.
-    const now = (await ops.clusterRefs()).bindings.find((b) => b.name === binding.name);
+    const now = (await ops.clusterRefs()).bindings.find((b) => b.name === binding.name && b.namespace === binding.namespace);
     if (now === undefined) {
-      log.note(`ClusterRoleBinding ${binding.name} is already gone`);
+      log.note(`${bindingLabel(binding)} is already gone`);
       continue;
     }
     if (now.uid !== binding.uid || now.managed || now.roleRef !== binding.roleRef || stableJson(now.subjects.map(subjectRef).sort()) !== stableJson(binding.subjects)) {
       throw new ReleaseError(
-        `ClusterRoleBinding ${binding.name} changed since the plan was made (now uid ${now.uid}, ${now.roleRef}, subjects ${now.subjects.map(subjectRef).join(", ")}${now.managed ? ", managed by Helm or Flux" : ""}); stopped before deleting it`,
+        `${bindingLabel(binding)} changed since the plan was made (now uid ${now.uid}, ${now.roleRef}, subjects ${now.subjects.map(subjectRef).join(", ")}${now.managed ? ", managed by Helm or Flux" : ""}); stopped before deleting it`,
       );
     }
-    // The uid goes with the delete as a precondition: one made again since this read stays.
-    await ops.deleteBinding(binding.name, binding.uid);
-    log.note(`deleted ClusterRoleBinding ${binding.name} (${binding.subjects.join(", ")}); ${binding.roleRef} stays`);
+    // The uid and the resourceVersion of this read go with the delete as preconditions: one made
+    // again or edited since this read stays.
+    await ops.deleteBinding(binding.name, binding.uid, now.resourceVersion, binding.namespace);
+    log.note(`deleted ${bindingLabel(binding)} (${binding.subjects.join(", ")}); ${binding.roleRef} stays`);
   }
   for (const item of plan.deleteObjects) {
     // The namespace stays and holds other things by design: it must still be the same namespace,
@@ -418,9 +469,13 @@ async function applyPlan(ops: CleanupOps, log: Log, plan: CleanupPlan): Promise<
     // The planned bindings are gone by now, so any binding with a subject here, or anything that
     // calls into it, came after the plan: deleting the namespace would leave rights for a
     // ServiceAccount of the same name the demo makes later.
+    // RoleBindings inside a namespace that goes go with it.
     const refs = await ops.clusterRefs();
+    const goes = new Set(plan.deleteNamespaces.map((n) => n.name));
     const into = [
-      ...refs.bindings.filter((b) => b.subjects.some((s) => s.namespace === ns.name)).map((b) => `ClusterRoleBinding ${b.name}`),
+      ...refs.bindings
+        .filter((b) => (b.namespace === undefined || !goes.has(b.namespace)) && b.subjects.some((s) => subjectNamespace(s, b.namespace) === ns.name))
+        .map(bindingLabel),
       ...refs.callers.filter((c) => c.namespaces.includes(ns.name)).map((c) => `${c.kind} ${c.name}`),
     ];
     if (into.length > 0) throw new ReleaseError(`${into.join(", ")} now point${into.length === 1 ? "s" : ""} into namespace ${ns.name}, not in the plan; stopped before deleting it`);
@@ -472,10 +527,16 @@ export interface Clock {
 
 const UID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-/** The body of a DELETE that the API server carries out only while the object has this uid. */
-export function deleteOptions(uid: string): string {
+/**
+ * The body of a DELETE that the API server carries out only while the object has this uid and,
+ * when given, this resourceVersion (which every write to the object changes).
+ */
+export function deleteOptions(uid: string, resourceVersion?: string): string {
   if (!UID.test(uid)) throw new ReleaseError(`not a Kubernetes uid: ${JSON.stringify(uid)}; nothing deleted`);
-  return JSON.stringify({ kind: "DeleteOptions", apiVersion: "v1", preconditions: { uid }, propagationPolicy: "Background" });
+  if (resourceVersion !== undefined && !/^[0-9A-Za-z._-]+$/.test(resourceVersion)) {
+    throw new ReleaseError(`not a Kubernetes resourceVersion: ${JSON.stringify(resourceVersion)}; nothing deleted`);
+  }
+  return JSON.stringify({ kind: "DeleteOptions", apiVersion: "v1", preconditions: { uid, ...(resourceVersion === undefined ? {} : { resourceVersion }) }, propagationPolicy: "Background" });
 }
 
 /** An object name as one URL path segment. */
@@ -496,8 +557,8 @@ function pathSegment(name: string): string {
  * Checked on 2026-10-20 with the kubectl pinned in .prototools (1.36.5), the same version k3s
  * ships on the demo machine: it sent `DELETE <uri>` with this body to a stand-in endpoint.
  */
-function deleteWithUid(box: Box, path: string, uid: string): Promise<RunResult> {
-  return box.tryKubectl(["delete", "--raw", path, "-f", "-"], deleteOptions(uid));
+function deleteWithUid(box: Box, path: string, uid: string, resourceVersion?: string): Promise<RunResult> {
+  return box.tryKubectl(["delete", "--raw", path, "-f", "-"], deleteOptions(uid, resourceVersion));
 }
 
 const SYSTEM_CLOCK: Clock = { now: () => Date.now(), sleep: (ms) => Bun.sleep(ms) };
@@ -518,12 +579,14 @@ export function boxOps(box: Box, options: CommonOptions, clock: Clock = SYSTEM_C
       return { name, exists: true, ...(metadata.uid === undefined ? {} : { uid: metadata.uid }), managed: metadataManaged(metadata), objects: parseInventory(text) };
     },
     async clusterRefs() {
-      const bindings = (await box.items(["get", "clusterrolebindings.rbac.authorization.k8s.io"])).map((item) => {
-        const metadata = item.metadata as { name: string; uid?: string; labels?: Record<string, string>; annotations?: Record<string, string> };
+      const bindingOf = (item: Record<string, unknown>): ClusterRefs["bindings"][number] => {
+        const metadata = item.metadata as { namespace?: string; name: string; uid?: string; resourceVersion?: string; labels?: Record<string, string>; annotations?: Record<string, string> };
         const roleRef = item.roleRef as { kind?: string; name?: string } | undefined;
         return {
+          ...(metadata.namespace ? { namespace: metadata.namespace } : {}),
           name: metadata.name,
           uid: metadata.uid ?? "",
+          resourceVersion: metadata.resourceVersion ?? "",
           roleRef: `${roleRef?.kind ?? "ClusterRole"} ${roleRef?.name ?? "?"}`,
           subjects: ((item.subjects as { kind?: string; namespace?: string; name?: string }[] | undefined) ?? []).map((s) => ({
             kind: s.kind ?? "?",
@@ -532,15 +595,19 @@ export function boxOps(box: Box, options: CommonOptions, clock: Clock = SYSTEM_C
           })),
           managed: metadataManaged(metadata),
         };
-      });
+      };
+      const bindings = [
+        ...(await box.items(["get", "clusterrolebindings.rbac.authorization.k8s.io"])),
+        ...(await box.items(["get", "rolebindings.rbac.authorization.k8s.io", "-A"])),
+      ].map(bindingOf);
       const callers: ClusterRefs["callers"] = [];
       for (const [resource, kind] of [
         ["validatingwebhookconfigurations.admissionregistration.k8s.io", "ValidatingWebhookConfiguration"],
         ["mutatingwebhookconfigurations.admissionregistration.k8s.io", "MutatingWebhookConfiguration"],
       ] as const) {
         for (const item of await box.items(["get", resource])) {
-          const webhooks = (item.webhooks as { clientConfig?: { service?: { namespace?: string } } }[] | undefined) ?? [];
-          callers.push({ kind, name: String((item.metadata as { name: string }).name), namespaces: webhooks.flatMap((w) => (w.clientConfig?.service?.namespace ? [w.clientConfig.service.namespace] : [])) });
+          const webhooks = (item.webhooks as { clientConfig?: { service?: { namespace?: string }; url?: string } }[] | undefined) ?? [];
+          callers.push({ kind, name: String((item.metadata as { name: string }).name), namespaces: webhooks.flatMap((w) => clientConfigNamespaces(w.clientConfig)) });
         }
       }
       for (const item of await box.items(["get", "apiservices.apiregistration.k8s.io"])) {
@@ -552,11 +619,17 @@ export function boxOps(box: Box, options: CommonOptions, clock: Clock = SYSTEM_C
         "get",
         "customresourcedefinitions.apiextensions.k8s.io",
         "-o",
-        'jsonpath={range .items[*]}{.metadata.name}{"\\t"}{.spec.conversion.webhook.clientConfig.service.namespace}{"\\n"}{end}',
+        'jsonpath={range .items[*]}{.metadata.name}{"\\t"}{.spec.conversion.webhook.clientConfig.service.namespace}{"\\t"}{.spec.conversion.webhook.clientConfig.url}{"\\n"}{end}',
       ]);
       for (const line of crds.split("\n")) {
-        const [name, namespace] = line.split("\t");
-        if (name) callers.push({ kind: "CustomResourceDefinition (conversion webhook)", name, namespaces: namespace ? [namespace] : [] });
+        const [name, namespace, url] = line.split("\t");
+        if (name) {
+          callers.push({
+            kind: "CustomResourceDefinition (conversion webhook)",
+            name,
+            namespaces: clientConfigNamespaces({ ...(namespace ? { service: { namespace } } : {}), ...(url ? { url } : {}) }),
+          });
+        }
       }
       return { bindings, callers: callers.filter((c) => c.namespaces.length > 0) };
     },
@@ -570,15 +643,19 @@ export function boxOps(box: Box, options: CommonOptions, clock: Clock = SYSTEM_C
     async deleteObject(namespace, ref) {
       await box.kubectl(["-n", namespace, "delete", ref, "--ignore-not-found", "--wait", "--timeout=180s"]);
     },
-    async deleteBinding(name, uid) {
-      const result = await deleteWithUid(box, `/apis/rbac.authorization.k8s.io/v1/clusterrolebindings/${pathSegment(name)}`, uid);
+    async deleteBinding(name, uid, resourceVersion, namespace) {
+      if (namespace !== undefined && !/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(namespace)) throw new ReleaseError(`not a namespace name: ${JSON.stringify(namespace)}`);
+      const resource = namespace === undefined ? "clusterrolebindings" : `namespaces/${namespace}/rolebindings`;
+      const result = await deleteWithUid(box, `/apis/rbac.authorization.k8s.io/v1/${resource}/${pathSegment(name)}`, uid, resourceVersion);
       if (result.exitCode === 0) return;
       // Gone is fine: a delete repeated after ssh dropped the first one finds nothing.
-      const now = await box.getJson(["get", "clusterrolebindings.rbac.authorization.k8s.io", name]);
+      const now = await box.getJson(
+        namespace === undefined ? ["get", "clusterrolebindings.rbac.authorization.k8s.io", name] : ["-n", namespace, "get", "rolebindings.rbac.authorization.k8s.io", name],
+      );
       if (now === undefined) return;
       const nowUid = (now.metadata as { uid?: string } | undefined)?.uid ?? "?";
       throw new ReleaseError(
-        `deleting ClusterRoleBinding ${name} with uid ${uid} failed (exit ${result.exitCode}): ${lastLines(result.stderr || result.stdout)}; it is still there${nowUid === uid ? "" : ` with uid ${nowUid}, made again since the plan, and stays`}`,
+        `deleting ${bindingLabel({ ...(namespace === undefined ? {} : { namespace }), name })} with uid ${uid} failed (exit ${result.exitCode}): ${lastLines(result.stderr || result.stdout)}; it is still there${nowUid === uid ? "" : ` with uid ${nowUid}, made again since the plan, and stays`}`,
       );
     },
     async deleteNamespace(name, uid) {

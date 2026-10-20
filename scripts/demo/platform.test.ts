@@ -576,6 +576,20 @@ describe("platform.ts", () => {
       expect(istioOnly.commands.filter((c) => c.includes("get gateways.gateway.networking.k8s.io"))).toEqual([]);
     });
 
+    test("a refused patch says nothing changed and to run the dry run again; a failed read-back says how to check", async () => {
+      const read = { metadata: { resourceVersion: "4711" }, spec: { valuesContent: "old: 1\n" } };
+      const opsWith = (patch: RunResult, get: RunResult) =>
+        boxOps(new Box("demo-box", log, { run: async (cmd: string[]) => (cmd.at(-1)!.includes(" patch ") ? patch : get), sleep: async () => {} }), options());
+      const refused = opsWith({ stdout: "", stderr: "The request is invalid: testing value /metadata/resourceVersion failed", exitCode: 1 }, { stdout: "", stderr: "unexpected", exitCode: 1 });
+      await expect(refused.swapIstiodValues(read, "new: 2\n")).rejects.toThrow(
+        /testing value \/metadata\/resourceVersion failed; a JSON patch is all or nothing, so nothing changed .*Run the dry run again before --apply: if its plan changed it prints a new confirmation code, if not the same code works/,
+      );
+      const unknown = opsWith({ stdout: "", stderr: "Connection reset by peer", exitCode: 255 }, { stdout: "", stderr: "Unable to connect to the server", exitCode: 1 });
+      await expect(unknown.swapIstiodValues(read, "new: 2\n")).rejects.toThrow(
+        `the patch may or may not have been applied. Before anything else, check it read-only: ssh <host> "sudo k3s kubectl -n kube-system get helmcharts.helm.cattle.io istiod -o jsonpath='{.metadata.annotations.trustiot\\.io/demo-platform-values-sha256}'" prints ${sha256("new: 2\n")} when it was applied`,
+      );
+    });
+
     test("a patch whose ssh connection drops is never sent again; reading the HelmChart back tells whether it went through", async () => {
       const read = { metadata: { resourceVersion: "4711" }, spec: { valuesContent: "old: 1\n" } };
       const dropped = (holds: string, annotation: string | undefined) => {

@@ -49,7 +49,7 @@ import { join } from "node:path";
 import { CNPG_CRDS, CNPG_DEPLOYMENT, CNPG_NAMESPACE } from "../nightly/platform.ts";
 import { type VersionPins, readPins } from "../nightly/run.ts";
 import { parseOptions } from "../release/exec.ts";
-import { ReleaseError } from "../release/lib.ts";
+import { ReleaseError, errorMessage } from "../release/lib.ts";
 import {
   Box,
   COMMON_SPEC,
@@ -720,11 +720,26 @@ export function boxOps(box: Box, options: CommonOptions, clock: Clock = SYSTEM_C
       const result = await box.sh(command.map(shq).join(" "), { retry: false });
       if (result.exitCode === 0) return;
       if (result.exitCode !== 255) {
-        throw new ReleaseError(`kubectl patch helmcharts.helm.cattle.io istiod failed (exit ${result.exitCode}), nothing changed: ${lastLines(result.stderr || result.stdout)}`);
+        // A JSON patch is all or nothing: a failed `test` (the resourceVersion or the values changed
+        // since the read) or any other refusal changed nothing.
+        throw new ReleaseError(
+          `kubectl patch helmcharts.helm.cattle.io istiod failed (exit ${result.exitCode}): ${lastLines(result.stderr || result.stdout)}; ` +
+            "a JSON patch is all or nothing, so nothing changed (a failed test op means HelmChart istiod changed since it was read). " +
+            "Run the dry run again before --apply: if its plan changed it prints a new confirmation code, if not the same code works",
+        );
       }
       // ssh dropped the connection: the patch may or may not have reached the API server. What
       // HelmChart istiod holds now tells which.
-      const now = await box.getJson(["-n", "kube-system", "get", "helmcharts.helm.cattle.io", "istiod"]);
+      let now: Record<string, unknown> | undefined;
+      try {
+        now = await box.getJson(["-n", "kube-system", "get", "helmcharts.helm.cattle.io", "istiod"]);
+      } catch (error) {
+        throw new ReleaseError(
+          `ssh dropped the connection during the patch, and reading HelmChart istiod back failed too (${errorMessage(error)}): the patch may or may not have been applied. ` +
+            `Before anything else, check it read-only: ssh <host> "sudo k3s kubectl -n kube-system get helmcharts.helm.cattle.io istiod -o jsonpath='{.metadata.annotations.trustiot\\.io/demo-platform-values-sha256}'" ` +
+            `prints ${sha256(next)} when it was applied`,
+        );
+      }
       const content = (now?.spec as { valuesContent?: string } | undefined)?.valuesContent;
       const applied = (now?.metadata as { annotations?: Record<string, string> } | undefined)?.annotations?.[APPLIED_ANNOTATION];
       if (content === next && applied === sha256(next)) {

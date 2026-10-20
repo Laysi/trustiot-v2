@@ -15,6 +15,7 @@ import {
   type ObjectFact,
   boxOps,
   deleteOptions,
+  serviceUrlNamespace,
   inventoryResources,
   parseInventory,
   planCleanup,
@@ -28,7 +29,7 @@ const defaults = ["configmap/kube-root-ca.crt", "configmap/istio-ca-root-cert", 
 const noRefs = (): ClusterRefs => ({ bindings: [], callers: [] });
 /** A ClusterRoleBinding for a ServiceAccount in trustiot alone. */
 const otelRead = (): ClusterRefs => ({
-  bindings: [{ name: "otel-read", uid: "uid-otel-read", roleRef: "ClusterRole view", subjects: [{ kind: "ServiceAccount", namespace: "trustiot", name: "otel-collector" }], managed: false }],
+  bindings: [{ name: "otel-read", uid: "uid-otel-read", resourceVersion: "1", roleRef: "ClusterRole view", subjects: [{ kind: "ServiceAccount", namespace: "trustiot", name: "otel-collector" }], managed: false }],
   callers: [],
 });
 
@@ -167,11 +168,14 @@ class FakeCluster implements CleanupOps {
     this.afterDeleteObject?.();
     this.afterDeleteObject = undefined;
   }
-  async deleteBinding(name: string, uid: string) {
-    const binding = this.refs.bindings.find((b) => b.name === name);
+  async deleteBinding(name: string, uid: string, resourceVersion: string, namespace?: string) {
+    const binding = this.refs.bindings.find((b) => b.name === name && b.namespace === namespace);
     if (binding !== undefined && binding.uid !== uid) throw new Error(`Precondition failed: UID in precondition: ${uid}, UID in object meta: ${binding.uid}`);
-    this.calls.push(`delete clusterrolebinding ${name}`);
-    this.refs.bindings = this.refs.bindings.filter((b) => b.name !== name);
+    if (binding !== undefined && binding.resourceVersion !== resourceVersion) {
+      throw new Error(`Precondition failed: ResourceVersion in precondition: ${resourceVersion}, ResourceVersion in object meta: ${binding.resourceVersion}`);
+    }
+    this.calls.push(namespace === undefined ? `delete clusterrolebinding ${name}` : `delete rolebinding ${namespace}/${name}`);
+    this.refs.bindings = this.refs.bindings.filter((b) => b.name !== name || b.namespace !== namespace);
   }
   async deleteNamespace(name: string, uid: string) {
     if (this.deleteNamespaceError !== undefined) throw this.deleteNamespaceError;
@@ -333,13 +337,13 @@ describe("cleanup.ts", () => {
   });
 
   describe("cluster-scoped references", () => {
-    const binding = (name: string, subjects: { kind: string; namespace?: string; name: string }[], managed = false) => ({ name, uid: `uid-${name}`, roleRef: "ClusterRole view", subjects, managed });
+    const binding = (name: string, subjects: { kind: string; namespace?: string; name: string }[], managed = false) => ({ name, uid: `uid-${name}`, resourceVersion: "1", roleRef: "ClusterRole view", subjects, managed });
 
     test("a ClusterRoleBinding whose subjects are all in namespaces that go is listed and goes; its ClusterRole stays", () => {
       const refs = { bindings: [binding("otel-read", [{ kind: "ServiceAccount", namespace: "trustiot", name: "otel-collector" }]), binding("other", [{ kind: "ServiceAccount", namespace: "kube-system", name: "x" }])], callers: [] };
       const p = plan(refs);
       expect(p.deleteBindings).toEqual([{ name: "otel-read", uid: "uid-otel-read", roleRef: "ClusterRole view", subjects: ["ServiceAccount:trustiot/otel-collector"] }]);
-      expect(p.keep).toContain("ClusterRole view stays (only its binding otel-read goes)");
+      expect(p.keep).toContain("ClusterRole view stays (only its binding ClusterRoleBinding otel-read goes)");
       expect(confirmCode(p)).not.toBe(confirmCode(plan()));
     });
 
@@ -348,6 +352,58 @@ describe("cleanup.ts", () => {
       expect(mixed.refused).toEqual([expect.stringMatching(/ClusterRoleBinding mixed: subjects both in namespaces that go and elsewhere/)]);
       const managed = plan({ bindings: [binding("helm", [{ kind: "ServiceAccount", namespace: "poc", name: "probe-a" }], true)], callers: [] });
       expect(managed.refused).toEqual([expect.stringMatching(/ClusterRoleBinding helm: Helm or Flux manages it/)]);
+    });
+
+    test("a ClusterRoleBinding to the Group system:serviceaccounts:poc goes like one to a ServiceAccount there", () => {
+      const p = plan({
+        bindings: [binding("poc-sas", [{ kind: "Group", name: "system:serviceaccounts:poc" }]), binding("all-sas", [{ kind: "Group", name: "system:serviceaccounts" }])],
+        callers: [],
+      });
+      expect(p.deleteBindings).toEqual([{ name: "poc-sas", uid: "uid-poc-sas", roleRef: "ClusterRole view", subjects: ["Group:system:serviceaccounts:poc"] }]);
+      const mixed = plan({ bindings: [binding("mixed", [{ kind: "Group", name: "system:serviceaccounts:poc" }, { kind: "Group", name: "system:authenticated" }])], callers: [] });
+      expect(mixed.refused).toEqual([expect.stringMatching(/^ClusterRoleBinding mixed: subjects both in namespaces that go and elsewhere/)]);
+    });
+
+    test("a ClusterRoleBinding to the User system:serviceaccount:trustiot:default goes like one to that ServiceAccount", () => {
+      const p = plan({
+        bindings: [binding("as-user", [{ kind: "User", name: "system:serviceaccount:trustiot:default" }]), binding("alice", [{ kind: "User", name: "alice" }])],
+        callers: [],
+      });
+      expect(p.deleteBindings.map((b) => [b.name, b.subjects])).toEqual([["as-user", ["User:system:serviceaccount:trustiot:default"]]]);
+    });
+
+    test("a RoleBinding in kube-system for ServiceAccount trustiot/x is listed and goes; one inside a namespace that goes goes with it", () => {
+      const p = plan({
+        bindings: [
+          { ...binding("x-read", [{ kind: "ServiceAccount", namespace: "trustiot", name: "x" }]), namespace: "kube-system", roleRef: "Role kube-system/reader" },
+          { ...binding("inner", [{ kind: "ServiceAccount", namespace: "trustiot", name: "x" }]), namespace: "poc" },
+          { ...binding("own", [{ kind: "ServiceAccount", name: "x" }]), namespace: "kube-system" },
+        ],
+        callers: [],
+      });
+      expect(p.deleteBindings).toEqual([{ namespace: "kube-system", name: "x-read", uid: "uid-x-read", roleRef: "Role kube-system/reader", subjects: ["ServiceAccount:trustiot/x"] }]);
+      expect(p.keep).toContain("Role kube-system/reader stays (only its binding RoleBinding kube-system/x-read goes)");
+      expect(p.refused).toEqual([]);
+    });
+
+    test("a RoleBinding with subjects in a namespace that goes and elsewhere, or managed, is refused", () => {
+      const mixed = plan({
+        bindings: [{ ...binding("mixed", [{ kind: "ServiceAccount", namespace: "poc", name: "probe-a" }, { kind: "ServiceAccount", namespace: "kube-system", name: "y" }]), namespace: "kube-system" }],
+        callers: [],
+      });
+      expect(mixed.refused).toEqual([expect.stringMatching(/^RoleBinding kube-system\/mixed: subjects both in namespaces that go and elsewhere/)]);
+      expect(mixed.deleteBindings).toEqual([]);
+      const managed = plan({ bindings: [{ ...binding("helm", [{ kind: "User", name: "system:serviceaccount:poc:probe-a" }], true), namespace: "monitoring" }], callers: [] });
+      expect(managed.refused).toEqual([expect.stringMatching(/^RoleBinding monitoring\/helm: Helm or Flux manages it/)]);
+    });
+
+    test("a webhook whose URL calls a service in poc is refused", () => {
+      expect(serviceUrlNamespace("https://guard.poc.svc:443/validate")).toBe("poc");
+      expect(serviceUrlNamespace("https://guard.poc.svc.cluster.local/validate")).toBe("poc");
+      expect(serviceUrlNamespace("https://GUARD.POC.SVC./x")).toBe("poc");
+      expect(serviceUrlNamespace("https://guard.poc.svc.example.com/x")).toBeUndefined();
+      expect(serviceUrlNamespace("https://example.com/x")).toBeUndefined();
+      expect(serviceUrlNamespace("not a url")).toBeUndefined();
     });
 
     test("a webhook, APIService or CRD conversion that calls into a namespace that goes is refused", () => {
@@ -528,7 +584,7 @@ describe("cleanup.ts", () => {
       const cluster = new FakeCluster(pocCluster());
       cluster.afterDeleteNamespace = (name) => {
         if (name === "istio-ingress") {
-          cluster.refs.bindings.push({ name: "late", uid: "uid-late", roleRef: "ClusterRole admin", subjects: [{ kind: "ServiceAccount", namespace: "trustiot", name: "default" }], managed: false });
+          cluster.refs.bindings.push({ name: "late", uid: "uid-late", resourceVersion: "1", roleRef: "ClusterRole admin", subjects: [{ kind: "ServiceAccount", namespace: "trustiot", name: "default" }], managed: false });
         }
       };
       await expect(applyAll(cluster)).rejects.toThrow("ClusterRoleBinding late now points into namespace trustiot, not in the plan; stopped before deleting it");
@@ -559,6 +615,41 @@ describe("cleanup.ts", () => {
         if (xdg === undefined) delete process.env.XDG_STATE_HOME;
         else process.env.XDG_STATE_HOME = xdg;
       }
+    });
+
+    test("a RoleBinding in a namespace that stays is read again and deleted with its namespace and uid, before any namespace", async () => {
+      const cluster = new FakeCluster(pocCluster());
+      cluster.refs = { bindings: [{ namespace: "kube-system", name: "x-read", uid: "uid-x-read", resourceVersion: "1", roleRef: "Role kube-system/reader", subjects: [{ kind: "ServiceAccount", namespace: "trustiot", name: "x" }], managed: false }], callers: [] };
+      await applyAll(cluster);
+      expect(cluster.changes).toEqual(["lock", `delete istio-ingress ${EDGE_GATEWAY}`, "delete rolebinding kube-system/x-read", "delete namespace istio-ingress", "delete namespace trustiot", "delete namespace poc"]);
+    });
+
+    test("a binding edited between the read right before its delete and the delete stays: the delete carries that read's resourceVersion", async () => {
+      const cluster = new FakeCluster(pocCluster());
+      cluster.refs = { bindings: [{ namespace: "kube-system", name: "x-read", uid: "uid-x-read", resourceVersion: "1", roleRef: "Role kube-system/reader", subjects: [{ kind: "ServiceAccount", namespace: "trustiot", name: "x" }], managed: false }], callers: [] };
+      cluster.afterDeleteObject = () => {
+        // The next clusterRefs is the read right before the binding goes; an edit lands after it.
+        cluster.afterClusterRefs = () => {
+          const binding = cluster.refs.bindings[0]!;
+          binding.subjects.push({ kind: "ServiceAccount", namespace: "monitoring", name: "agent" });
+          binding.resourceVersion = "2";
+        };
+      };
+      await expect(applyAll(cluster)).rejects.toThrow("Precondition failed: ResourceVersion in precondition: 1, ResourceVersion in object meta: 2");
+      expect(cluster.refs.bindings.map((b) => b.name)).toEqual(["x-read"]);
+      expect(cluster.changes.filter((c) => c.startsWith("delete namespace"))).toEqual([]);
+      expect(cluster.calls.at(-1)).toBe("unlock");
+    });
+
+    test("a RoleBinding for the Group system:serviceaccounts:trustiot made after the plan stops the run before trustiot goes", async () => {
+      const cluster = new FakeCluster(pocCluster());
+      cluster.afterDeleteNamespace = (name) => {
+        if (name === "istio-ingress") {
+          cluster.refs.bindings.push({ namespace: "kube-system", name: "late", uid: "uid-late", resourceVersion: "1", roleRef: "Role kube-system/admin", subjects: [{ kind: "Group", name: "system:serviceaccounts:trustiot" }], managed: false });
+        }
+      };
+      await expect(applyAll(cluster)).rejects.toThrow("RoleBinding kube-system/late now points into namespace trustiot, not in the plan; stopped before deleting it");
+      expect(cluster.changes).not.toContain("delete namespace trustiot");
     });
 
     test("a refused namespace or reference stops the whole run, dry run included, before anything changes", async () => {
@@ -716,13 +807,41 @@ describe("cleanup.ts", () => {
       );
     });
 
+    test("cluster references include RoleBindings in every namespace and webhooks that call a service by URL", async () => {
+      const list = (items: unknown[]) => ({ stdout: JSON.stringify({ items }), stderr: "", exitCode: 0 });
+      const { box } = fakeBox((c) => {
+        if (c.includes("get clusterrolebindings.rbac.authorization.k8s.io -o json")) return list([]);
+        if (c.includes("get rolebindings.rbac.authorization.k8s.io -A -o json")) {
+          return list([{ metadata: { namespace: "kube-system", name: "x-read", uid: PLANNED, resourceVersion: "4711" }, roleRef: { kind: "Role", name: "reader" }, subjects: [{ kind: "ServiceAccount", namespace: "trustiot", name: "x" }] }]);
+        }
+        if (c.includes("get validatingwebhookconfigurations")) return list([{ metadata: { name: "poc-guard" }, webhooks: [{ clientConfig: { url: "https://guard.poc.svc:443/validate" } }] }]);
+        if (c.includes("get mutatingwebhookconfigurations") || c.includes("get apiservices")) return list([]);
+        if (c.includes("customresourcedefinitions")) return { stdout: "widgets.example.com\t\thttps://convert.trustiot.svc.cluster.local/convert\n", stderr: "", exitCode: 0 };
+        return undefined;
+      });
+      const refs = await boxOps(box, options()).clusterRefs();
+      expect(refs.bindings).toEqual([{ namespace: "kube-system", name: "x-read", uid: PLANNED, resourceVersion: "4711", roleRef: "Role reader", subjects: [{ kind: "ServiceAccount", namespace: "trustiot", name: "x" }], managed: false }]);
+      expect(refs.callers).toEqual([
+        { kind: "ValidatingWebhookConfiguration", name: "poc-guard", namespaces: ["poc"] },
+        { kind: "CustomResourceDefinition (conversion webhook)", name: "widgets.example.com", namespaces: ["trustiot"] },
+      ]);
+    });
+
+    test("a RoleBinding is deleted in its namespace with its uid as a precondition", async () => {
+      const { box, commands, stdins } = fakeBox((c) => (c.includes("delete --raw") ? { stdout: "", stderr: "", exitCode: 0 } : undefined));
+      await boxOps(box, options()).deleteBinding("x-read", PLANNED, "4711", "kube-system");
+      expect(commands).toEqual(["sudo k3s kubectl delete --raw /apis/rbac.authorization.k8s.io/v1/namespaces/kube-system/rolebindings/x-read -f -"]);
+      expect(JSON.parse(stdins[0]!)).toMatchObject({ preconditions: { uid: PLANNED, resourceVersion: "4711" } });
+      await expect(boxOps(box, options()).deleteBinding("x-read", PLANNED, "4711", "../x")).rejects.toThrow(/not a namespace name/);
+    });
+
     test("a ClusterRoleBinding is deleted with its uid as a precondition, and one made again stays", async () => {
       const { box, commands, stdins } = fakeBox((c) => (c.includes("delete --raw") ? { stdout: "", stderr: "", exitCode: 0 } : undefined));
-      await boxOps(box, options()).deleteBinding("system:otel-read", PLANNED);
+      await boxOps(box, options()).deleteBinding("system:otel-read", PLANNED, "4711");
       expect(commands).toEqual(["sudo k3s kubectl delete --raw /apis/rbac.authorization.k8s.io/v1/clusterrolebindings/system%3Aotel-read -f -"]);
-      expect(JSON.parse(stdins[0]!)).toEqual({ kind: "DeleteOptions", apiVersion: "v1", preconditions: { uid: PLANNED }, propagationPolicy: "Background" });
+      expect(JSON.parse(stdins[0]!)).toEqual({ kind: "DeleteOptions", apiVersion: "v1", preconditions: { uid: PLANNED, resourceVersion: "4711" }, propagationPolicy: "Background" });
       const remade = fakeBox((c) => (c.includes("get clusterrolebindings") ? object({ name: "otel-read", uid: OTHER }) : c.includes("delete --raw") ? conflict("Precondition failed") : undefined));
-      await expect(boxOps(remade.box, options()).deleteBinding("otel-read", PLANNED)).rejects.toThrow(`with uid ${OTHER}, made again since the plan, and stays`);
+      await expect(boxOps(remade.box, options()).deleteBinding("otel-read", PLANNED, "4711")).rejects.toThrow(`with uid ${OTHER}, made again since the plan, and stays`);
       const goneAlready = fakeBox((c) =>
         c.includes("get clusterrolebindings")
           ? { stdout: "", stderr: 'Error from server (NotFound): clusterrolebindings.rbac.authorization.k8s.io "otel-read" not found', exitCode: 1 }
@@ -730,7 +849,7 @@ describe("cleanup.ts", () => {
             ? notFound
             : undefined,
       );
-      await boxOps(goneAlready.box, options()).deleteBinding("otel-read", PLANNED);
+      await boxOps(goneAlready.box, options()).deleteBinding("otel-read", PLANNED, "4711");
     });
 
     test("a delete without a valid uid or name sends nothing", async () => {
@@ -738,9 +857,10 @@ describe("cleanup.ts", () => {
       expect(() => deleteOptions("uid-poc")).toThrow(/not a Kubernetes uid/);
       const { box, commands } = fakeBox(() => undefined);
       await expect(boxOps(box, options()).deleteNamespace("poc", "")).rejects.toThrow(/not a Kubernetes uid/);
-      await expect(boxOps(box, options()).deleteBinding("otel-read", "")).rejects.toThrow(/not a Kubernetes uid/);
+      await expect(boxOps(box, options()).deleteBinding("otel-read", "", "4711")).rejects.toThrow(/not a Kubernetes uid/);
+      await expect(boxOps(box, options()).deleteBinding("otel-read", PLANNED, "")).rejects.toThrow(/not a Kubernetes resourceVersion/);
       await expect(boxOps(box, options()).deleteNamespace("../x", PLANNED)).rejects.toThrow(/not a namespace name/);
-      await expect(boxOps(box, options()).deleteBinding("..", PLANNED)).rejects.toThrow(/not an object name/);
+      await expect(boxOps(box, options()).deleteBinding("..", PLANNED, "4711")).rejects.toThrow(/not an object name/);
       expect(commands).toEqual([]);
     });
   });
