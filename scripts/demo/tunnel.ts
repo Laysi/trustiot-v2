@@ -44,6 +44,13 @@
  * bypass paths, which must reach the tunnel; and a path below a bypass path, which the connector
  * must refuse. The host names come from DEMO_APP_HOST, DEMO_GATEWAY_HOST and DEMO_OTA_HOST and are
  * masked in everything it prints or saves.
+ *
+ * The stage-2 routes go to the ingress Service's fixed ClusterIP (ingress.tunnel.clusterIP,
+ * Laysi/trustiot-v2#478). status prints, and check --stage 2 requires before any probe, that three
+ * addresses agree (Laysi/trustiot-v2#483): values-demo.yaml's at this checkout's commit, the
+ * deployed ingress-options ConfigMap's service overlay, and the one Service Istio generated for the
+ * Gateway. Where they differ, a route set from the values may point at an address no Service holds,
+ * which any Service created later could take. Both only read the cluster (kubectl get).
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -932,6 +939,217 @@ function hostFromEnv(name: string): string {
   return value;
 }
 
+// --- The ingress address (status, check --stage 2) -------------------------------------------------
+
+/**
+ * The demo overlay that pins the ingress Service's ClusterIP (ingress.tunnel.clusterIP,
+ * Laysi/trustiot-v2#478 and #480), relative to the repository root.
+ */
+export const DEMO_VALUES = "deploy/flux/clusters/demo/trustiot/values-demo.yaml";
+/**
+ * The chart's names for the demo release (DEMO_NAMESPACE is also the release name, see
+ * deploy/flux/clusters/demo/trustiot/helm-release.yaml). trustiot.fullname is the release name when
+ * it contains the chart's name (deploy/chart/templates/_helpers.tpl); the Gateway is
+ * `<fullname>-ingress` (trustiot.ingress.gatewayName) and its options ConfigMap
+ * `<fullname>-ingress-options` (deploy/chart/templates/ingress.yaml).
+ */
+export const INGRESS_GATEWAY = `${DEMO_NAMESPACE}-ingress`;
+export const INGRESS_OPTIONS = `${DEMO_NAMESPACE}-ingress-options`;
+/**
+ * The label Istio puts on the Service it generates for a Gateway: the selector the nightly smoke
+ * uses for the same check (scripts/nightly/smoke.ts, scripts/nightly/ingress-address.ts).
+ */
+export const GATEWAY_NAME_LABEL = "gateway.networking.k8s.io/gateway-name";
+/** The tunnel listener's port (trustiot.ingress.listenerPort in deploy/chart/templates/_ingress.tpl). */
+export const INGRESS_PORT = 80;
+/** The chart's IPv4 form for the address (trustiot.ingress.ipv4Pattern): a dotted quad without leading zeros. */
+const IPV4 = /^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$/;
+const FIXED_ADDRESS_DOC = "deploy/chart/README.md 「固定的入口 ClusterIP」";
+
+/** One of the three addresses, or why there is none. */
+export type AddressRead = { address: string } | { missing: string };
+
+export interface IngressAddresses {
+  /** The checkout's commit whose values-demo.yaml was read; "" when it could not be read. */
+  commit: string;
+  /** values-demo.yaml's ingress.tunnel.clusterIP at that commit. */
+  values: AddressRead;
+  /** The clusterIP of the `service` overlay in the chart's ingress-options ConfigMap in the cluster. */
+  overlay: AddressRead;
+  /** spec.clusterIP of the one Service Istio generated for the ingress Gateway. */
+  service: AddressRead;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+/** An address as the chart accepts it; anything else (a number, a CIDR, "None") is a reason. */
+function addressOf(raw: unknown, what: string, unset: string): AddressRead {
+  if (raw === undefined || raw === null || raw === "") return { missing: unset };
+  if (typeof raw !== "string") return { missing: `${what} is ${JSON.stringify(raw)}, not a string` };
+  if (!IPV4.test(raw)) return { missing: `${what} is ${JSON.stringify(raw)}, not one IPv4 address` };
+  return { address: raw };
+}
+
+/** ingress.tunnel.clusterIP in the text of values-demo.yaml. */
+export function valuesClusterIp(text: string): AddressRead {
+  let values: unknown;
+  try {
+    values = Bun.YAML.parse(text);
+  } catch (error) {
+    return { missing: `${DEMO_VALUES} is not valid YAML: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  const raw = asRecord(asRecord(asRecord(values).ingress).tunnel).clusterIP;
+  return addressOf(raw, `ingress.tunnel.clusterIP in ${DEMO_VALUES}`, `${DEMO_VALUES} does not set ingress.tunnel.clusterIP (Laysi/trustiot-v2#480 sets it)`);
+}
+
+/**
+ * values-demo.yaml as the checkout's commit has it: an uncommitted change to the file is no
+ * address, so what is compared is the reviewed commit, not the file on this disk. Never throws.
+ */
+export async function valuesAddress(root: string): Promise<{ commit: string; values: AddressRead }> {
+  const head = await tryRun(["git", "-C", root, "rev-parse", "HEAD"]);
+  const commit = head.stdout.trim();
+  if (head.exitCode !== 0 || !/^[0-9a-f]{40}$/.test(commit)) return { commit: "", values: { missing: `could not read the checkout's commit: ${lastLines(head.stderr, 1)}` } };
+  const status = await tryRun(["git", "-C", root, "status", "--porcelain", "--", DEMO_VALUES]);
+  if (status.exitCode !== 0) return { commit, values: { missing: `git status failed: ${lastLines(status.stderr, 1)}` } };
+  if (status.stdout.trim() !== "") return { commit, values: { missing: `${DEMO_VALUES} has uncommitted changes; run from a clean checkout of the reviewed commit` } };
+  const shown = await tryRun(["git", "-C", root, "show", `HEAD:${DEMO_VALUES}`]);
+  if (shown.exitCode !== 0) return { commit, values: { missing: `${DEMO_VALUES} is not in commit ${commit}: ${lastLines(shown.stderr, 1)}` } };
+  return { commit, values: valuesClusterIp(shown.stdout) };
+}
+
+/** The clusterIP of the `service` overlay, from `kubectl get configmap <release>-ingress-options -o json` (undefined: not found). */
+export function overlayClusterIp(configMap: Record<string, unknown> | undefined): AddressRead {
+  if (configMap === undefined) return { missing: `ConfigMap ${INGRESS_OPTIONS} is not in namespace ${DEMO_NAMESPACE}: the demo release is not deployed` };
+  const service = asRecord(configMap.data).service;
+  if (typeof service !== "string") return { missing: `ConfigMap ${INGRESS_OPTIONS} has no service overlay` };
+  let overlay: unknown;
+  try {
+    overlay = Bun.YAML.parse(service);
+  } catch (error) {
+    return { missing: `the service overlay of ConfigMap ${INGRESS_OPTIONS} is not valid YAML: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  return addressOf(
+    asRecord(asRecord(overlay).spec).clusterIP,
+    `the clusterIP of ConfigMap ${INGRESS_OPTIONS}'s service overlay`,
+    `ConfigMap ${INGRESS_OPTIONS}'s service overlay has no clusterIP: the deployed release does not set ingress.tunnel.clusterIP (Flux has not applied the values yet, or the chart is older than Laysi/trustiot-v2#478)`,
+  );
+}
+
+/**
+ * The ClusterIP of the Service Istio generated for the ingress Gateway, from `kubectl get services
+ * --selector <GATEWAY_NAME_LABEL>=<gateway> -o json`: there must be exactly one, as in the nightly
+ * smoke (generatedClusterIpProblems), and its clusterIP must also be the first of its clusterIPs.
+ */
+export function serviceClusterIp(list: Record<string, unknown> | undefined): AddressRead {
+  const items = Array.isArray(list?.items) ? list.items.map(asRecord) : [];
+  const selector = `${GATEWAY_NAME_LABEL}=${INGRESS_GATEWAY}`;
+  if (items.length !== 1) {
+    const names = items.map((item) => String(asRecord(item.metadata).name));
+    return {
+      missing:
+        items.length === 0
+          ? `no Service in namespace ${DEMO_NAMESPACE} has the label ${selector}: Istio has not generated the ingress Service (the release is not deployed, or its Gateway is not programmed)`
+          : `${items.length} Services in namespace ${DEMO_NAMESPACE} have the label ${selector} (${names.join(", ")}), expected exactly one: find out where the others came from before routing to any of them`,
+    };
+  }
+  const service = items[0] ?? {};
+  const name = String(asRecord(service.metadata).name);
+  const spec = asRecord(service.spec);
+  const clusterIps = Array.isArray(spec.clusterIPs) ? spec.clusterIPs : [];
+  const read = addressOf(spec.clusterIP, `the ClusterIP of Service ${name}`, `Service ${name} has no ClusterIP`);
+  if ("address" in read && clusterIps[0] !== read.address) {
+    return { missing: `Service ${name} has ClusterIP ${read.address} but clusterIPs ${JSON.stringify(clusterIps)}` };
+  }
+  return read;
+}
+
+/** A kubectl read for the comparison: a failed read is a missing address with kubectl's reason, never a throw. */
+async function readCluster(read: () => Promise<Record<string, unknown> | undefined>, parse: (value: Record<string, unknown> | undefined) => AddressRead): Promise<AddressRead> {
+  try {
+    return parse(await read());
+  } catch (error) {
+    return { missing: `could not read the cluster: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
+/** The three addresses, read only: the checkout's values, the ConfigMap's overlay and the Service (kubectl get). */
+export async function readIngressAddresses(box: Box, values: () => Promise<{ commit: string; values: AddressRead }>): Promise<IngressAddresses> {
+  const checkout = await values();
+  return {
+    commit: checkout.commit,
+    values: checkout.values,
+    overlay: await readCluster(() => box.getJson(["-n", DEMO_NAMESPACE, "get", "configmap", INGRESS_OPTIONS]), overlayClusterIp),
+    service: await readCluster(() => box.getJson(["-n", DEMO_NAMESPACE, "get", "services", "--selector", `${GATEWAY_NAME_LABEL}=${INGRESS_GATEWAY}`]), serviceClusterIp),
+  };
+}
+
+/** The tunnel routes' origin in stage 2. */
+export function ingressOrigin(address: string): string {
+  return `http://${address}:${INGRESS_PORT}`;
+}
+
+/** The comparison: the stage-2 origin when the three addresses agree, otherwise each problem. */
+export type AddressComparison = { origin: string } | { problems: string[] };
+
+/**
+ * What stops the stage-2 routes from going to the ingress: a missing address, or addresses that
+ * differ. The likely cause of each difference (deploy/chart/README.md 「固定的入口 ClusterIP」):
+ * values against the overlay, the deployed release is not this commit; the overlay against the
+ * Service, the Service was created before the address was set or an address change is half done,
+ * and Istio no longer updates the Service while they differ.
+ */
+export function compareAddresses(addresses: IngressAddresses): AddressComparison {
+  const { values, overlay, service } = addresses;
+  const problems: string[] = [];
+  if ("missing" in values) problems.push(`no values address: ${values.missing}`);
+  if ("missing" in overlay) problems.push(`no ConfigMap overlay address: ${overlay.missing}`);
+  if ("missing" in service) problems.push(`no Service address: ${service.missing}`);
+  if (!("address" in values) || !("address" in overlay) || !("address" in service)) return { problems };
+  if (values.address !== overlay.address) {
+    problems.push(
+      `${DEMO_VALUES} at ${addresses.commit.slice(0, 12)} pins ${values.address}, but the deployed ConfigMap ${INGRESS_OPTIONS} has ${overlay.address}: the release in the cluster is not from this commit (Flux has not applied it yet, or this checkout is not the deployed commit)`,
+    );
+  }
+  if (overlay.address !== service.address) {
+    problems.push(
+      `ConfigMap ${INGRESS_OPTIONS} asks for ${overlay.address}, but the ingress Service has ${service.address}: the Service was created before the address was set, or an address change is half done; Istio no longer updates this Service while they differ`,
+    );
+  }
+  return problems.length > 0 ? { problems } : { origin: ingressOrigin(service.address) };
+}
+
+/** status's lines: the three addresses and the comparison, OK with the stage-2 origin or FAIL with the problems. */
+export function addressReport(addresses: IngressAddresses): string[] {
+  const text = (read: AddressRead) => ("address" in read ? read.address : `none (${read.missing})`);
+  const compared = compareAddresses(addresses);
+  return [
+    `ingress address in ${DEMO_VALUES}${addresses.commit === "" ? "" : ` at ${addresses.commit.slice(0, 12)}`} (ingress.tunnel.clusterIP): ${text(addresses.values)}`,
+    `ingress address in ConfigMap ${INGRESS_OPTIONS} (service overlay): ${text(addresses.overlay)}`,
+    `ingress address of the Service with ${GATEWAY_NAME_LABEL}=${INGRESS_GATEWAY}: ${text(addresses.service)}`,
+    "origin" in compared
+      ? `OK the three ingress addresses agree; the stage-2 routes' origin is ${compared.origin}`
+      : `FAIL the ingress addresses do not allow the stage-2 routes: ${compared.problems.join("; ")}; see ${FIXED_ADDRESS_DOC}`,
+  ];
+}
+
+/**
+ * check --stage 2's gate, before any probe: the stage-2 origin when all three addresses agree,
+ * otherwise an error with each problem. A route to an address no Service holds would publish
+ * whatever Service takes it later on the two paths that bypass Access (Laysi/trustiot-v2#483).
+ */
+export function requireIngressAddress(addresses: IngressAddresses): string {
+  const compared = compareAddresses(addresses);
+  if ("problems" in compared) {
+    throw new ReleaseError(
+      `the stage-2 routes must not go to the ingress, nothing was probed: ${compared.problems.join("; ")}. Do not switch the routes; follow ${FIXED_ADDRESS_DOC} (deploy the reviewed values first, and change an address only as its 「改位址」 steps say)`,
+    );
+  }
+  return compared.origin;
+}
+
 // --- The trusted zone (install's backup, remove's restore) ---------------------------------------
 
 /**
@@ -1658,20 +1876,47 @@ async function status(box: Box, log: Log): Promise<void> {
   log.note(`installer runs still there: ${runs.length === 0 ? "none" : runs.join(", ")}`);
   log.note(`demo machine: ${(await read(`sudo sh -c ${shq(auditScript())}`)).replaceAll("\n", "; ")}`);
   log.note(`this workstation: files in ${shownPath(log.dir)} with a tunnel token's prefix: ${filesWith(log.dir, TOKEN_PREFIX).length}`);
-  const ingress = await box.tryKubectl(["-n", DEMO_NAMESPACE, "get", "service", "trustiot-ingress-istio", "-o", "jsonpath={.spec.clusterIP}"]);
-  log.note(`the demo ingress Service: ${ingress.exitCode === 0 && ingress.stdout.trim() !== "" ? `http://${ingress.stdout.trim()}:80 (the tunnel routes' origin once the demo is deployed)` : "not there yet"}`);
+  // FAIL lines here, like the others, do not stop status; check --stage 2 stops on them.
+  for (const line of addressReport(await readIngressAddresses(box, () => valuesAddress(ROOT)))) log.note(line);
 }
 
-async function check(box: Box, log: Log, raw: Record<string, string>): Promise<void> {
+/** What check reaches besides the demo machine; tests pass their own. */
+export interface CheckDeps {
+  /** Runs a probe's curl on this workstation. */
+  workstation: (args: string[]) => Promise<RunResult>;
+  /** values-demo.yaml's address at the checkout's commit (valuesAddress(ROOT)). */
+  values: () => Promise<{ commit: string; values: AddressRead }>;
+}
+
+const CHECK_DEPS: CheckDeps = { workstation: (args) => tryRun(args), values: () => valuesAddress(ROOT) };
+
+/**
+ * The probes, from this workstation and the demo machine. Stage 2 first compares the three ingress
+ * addresses and stops before any probe unless they agree (requireIngressAddress); stage 1 does not,
+ * its routes are still the connector's own 418.
+ */
+export async function check(box: Box, log: Log, raw: Record<string, string>, deps: CheckDeps = CHECK_DEPS): Promise<void> {
   const hosts = { app: hostFromEnv("DEMO_APP_HOST"), gateway: hostFromEnv("DEMO_GATEWAY_HOST"), ota: hostFromEnv("DEMO_OTA_HOST") };
   const stage = raw.stage === "2" ? 2 : raw.stage === "1" || raw.stage === undefined ? 1 : undefined;
   if (stage === undefined) throw new ReleaseError("--stage is 1 (routes answer 418) or 2 (routes go to the demo ingress)");
+  let ingress: { addresses: IngressAddresses; origin: string } | undefined;
+  if (stage === 2) {
+    const addresses = await readIngressAddresses(box, deps.values);
+    for (const line of addressReport(addresses)) log.note(line);
+    try {
+      ingress = { addresses, origin: requireIngressAddress(addresses) };
+    } catch (error) {
+      log.save("check", { at: new Date().toISOString(), stage, addresses, probed: false });
+      throw error;
+    }
+    log.note(`the stage-2 routes' origin: ${ingress.origin} (set the routes to it when switching them, Laysi/trustiot-v2#469)`);
+  }
   const { results, failed } = await runProbes(
-    { workstation: (args) => tryRun(args), demoMachine: (args) => box.sh(args.map(shq).join(" ")), note: (line) => log.note(line) },
+    { workstation: deps.workstation, demoMachine: (args) => box.sh(args.map(shq).join(" ")), note: (line) => log.note(line) },
     hosts,
     stage,
   );
-  log.save("check", { at: new Date().toISOString(), stage, results });
+  log.save("check", { at: new Date().toISOString(), stage, ...(ingress === undefined ? {} : { addresses: ingress.addresses, origin: ingress.origin }), results });
   if (failed > 0) {
     throw new ReleaseError(
       `${failed} probe(s) did not get the expected answer. challenge or block on the gateway or ota host name: Cloudflare's bot protection stopped a non-browser client (Bot Fight Mode cannot be skipped per host on the Free plan; turning it off for the zone is the user's decision; the record keeps cf-ray). access on a bypass path: a bypass application is missing or does not match; an app path that is not access: Access does not cover that host name. refused on a bypass path, or a path below it that is not refused: the tunnel's path rules are wrong. tunnel-down: no connector is up. In stage 1 the WebSocket upgrade to /mqtt fails with Cloudflare's 502 even when it reached the connector (the route answers 418, not 101): compare the connector's counters before and after it as docs/runbooks/demo-environment.md says (Laysi/trustiot-v2#473 automates this).`,
