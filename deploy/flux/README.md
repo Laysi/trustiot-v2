@@ -28,7 +28,7 @@ GHCR 映像 ──(同一個拉取 token)──> kubelet
 | `clusters/saas/trustiot/values-instance.yaml` | SaaS 安裝實例的覆寫值：主機名稱、外部端點、Secret 名稱、叢集內資料庫的磁碟區大小 | 人 |
 | `clusters/saas/trustiot/helm-release.yaml`、`namespace.yaml` | HelmRelease 與 namespace（Pod Security `restricted`） | 人 |
 | `clusters/<叢集>/trustiot/*.sops.yaml` | 以 SOPS 加密的 Secret，例如 `ghcr-pull.sops.yaml`；建立後要列進同目錄的 `kustomization.yaml` | 人（`scripts/flux/ghcr-pull-secret.ts`、`scripts/flux/sops-secret.ts`、展示叢集的私有 values 用 `scripts/flux/demo-values.ts`、`sops edit`） |
-| `clusters/demo/` | 展示叢集：`flux-system` 引用 SaaS 的 Flux、只改同步路徑；`trustiot/` 是與 SaaS 相同的 HelmRelease、自己的 `chart.yaml` 與 `values-saas.yaml`，加上 `values-demo.yaml`（見下方「展示叢集」） | 人；`chart.yaml` 與 `values-saas.yaml` 由 `scripts/flux/pin-chart.ts` 寫 |
+| `clusters/demo/` | 展示叢集：`flux-system` 引用 SaaS 的 Flux、只改同步路徑；`trustiot/` 是與 SaaS 相同的 HelmRelease、自己的 `chart.yaml` 與 `values-saas.yaml`，加上 `values-demo.yaml`（見下方「展示叢集」） | 人；`chart.yaml` 與 `values-saas.yaml` 同 SaaS（deploy PR），或 `scripts/flux/pin-chart.ts` |
 | `scripts/flux/pin-chart.ts` | 把一個叢集的 `chart.yaml` 與 `values-saas.yaml` 寫成某一版，與 deploy PR 寫的逐字相同 | |
 | `github-known-hosts` | GitHub 公布的 SSH 主機金鑰，給 GitRepository 的 Secret 用 | 人（GitHub 換金鑰時） |
 | `tests/flux.test.ts` | `bun test deploy/flux`，見下方「檢查」 | |
@@ -37,11 +37,11 @@ GHCR 映像 ──(同一個拉取 token)──> kubelet
 ## 發版與回滾
 
 1. 推 `v*` tag，release.yml 發佈並驗證映像與 chart（[CI 與發佈](../../docs/architecture/ci-release.md) 的「release.yml」）。
-2. verify 通過後，`deploy-pr` job（`scripts/release/deploy-pr.ts`）以 GitHub API 在 main 上做一個 commit，推到分支 `deploy/trustiot-<版本>`，改 SaaS 叢集的兩個檔：`chart.yaml` 換成新版本與 publish 推送的 chart digest，`values-saas.yaml` 換成該 tag 的 `deploy/chart/values-saas.yaml`；接著開 PR。候選版（`-rc.N`）開成 draft，內文提醒它不一定在 main 上。版本不比 main 上部署中的新時（例如舊版線的修補版）不開 PR。重跑時已有的分支與 PR（包含已關閉的）不重開。
+2. verify 通過後，`deploy-pr` job（`scripts/release/deploy-pr.ts`）以 GitHub API 在 main 上做一個 commit，推到分支 `deploy/trustiot-<版本>`。commit 只動部署中的版本比新版舊的叢集（`scripts/release/flux.ts` 的 `DEPLOY_CLUSTERS`：`saas` 與 `demo`），每個叢集改兩個檔：`chart.yaml` 換成新版本與 publish 推送的 chart digest，`values-saas.yaml` 換成該 tag 的 `deploy/chart/values-saas.yaml`；接著開 PR，內文以表格列出每個叢集從哪一版換到哪一版，以及不變的叢集。候選版（`-rc.N`）開成 draft，內文提醒它不一定在 main 上。新版不比任何一個叢集部署中的版本新時（例如舊版線的修補版）不開 PR。main 上缺少某個叢集的 `chart.yaml`，或它被手改過時，`deploy-pr` 停下，不會略過那個叢集。重跑時已有的分支與 PR（包含已關閉的）不重開。分支在、PR 不在時，PR 內文依 main 現在的版本寫，所以分支改的檔案要剛好是 main 現在該移動的那幾個叢集的兩個檔，內容也要與這次會寫的逐字相同（`chart.yaml` 是這一版與這個 digest，`values-saas.yaml` 是這一版的 `deploy/chart/values-saas.yaml`）；不是的話（例如之後有人以 `pin-chart.ts` 移動了其中一個叢集）`deploy-pr` 停下，刪掉分支再重跑即可。
 3. 審查後合併。Flux 在 1 分鐘內（GitRepository 的 `interval`）取得新的 commit，套用後 helm-controller 立刻升級；整個 Helm 升級的上限是 HelmRelease 的 `timeout`（10 分鐘），要等所有 workload 與 Job 完成。升級失敗時自動 rollback 到上一個成功的版本再重試，最多 3 次。
-4. 回到前一版：revert deploy PR 並合併，Flux 以同樣的方式把舊版本裝回去。
+4. 回到前一版：revert deploy PR 並合併，Flux 以同樣的方式把舊版本裝回去；PR 動了幾個叢集，revert 就把那幾個叢集一起換回去。
 
-deploy PR 還不會移動展示叢集。要移動它，或只移動其中一個叢集時（例如只把一個叢集換回較舊的版本），不用 deploy PR，自己開 PR：
+只想移動其中一個叢集時（例如展示環境先換版，或只把一個叢集換回較舊的版本），不用 deploy PR，自己開 PR：
 
 ```sh
 git fetch origin --tags
@@ -221,7 +221,7 @@ bun scripts/flux/components.ts    # 重寫 gotk-components.yaml 與控制器映�
 | 項目 | 展示叢集 | 理由與取捨 |
 | --- | --- | --- |
 | Flux | `clusters/demo/flux-system` 以 kustomize 引用 `clusters/saas/flux-system`，只以 patch 把根 Kustomization 的 `path` 換成 `./deploy/flux/clusters/demo`（patch 用 `replace`，SaaS 那邊的路徑不見時建置失敗，不會讓展示叢集套用 SaaS 的樹） | 升級 Flux 只改一處，兩個叢集一起跟上；代價是兩個叢集不能停在不同版的 Flux |
-| chart 版本 | 自己的 `chart.yaml` 與 `values-saas.yaml`，以 `pin-chart.ts` 開 PR 換版 | 換版與 SaaS 一樣是「合併即部署、revert 即回滾」，簽章驗證也相同 |
+| chart 版本 | 自己的 `chart.yaml` 與 `values-saas.yaml`；deploy PR 把它與 SaaS 一起移到新版，只動它時用 `pin-chart.ts` | 換版與 SaaS 一樣是「合併即部署、revert 即回滾」，簽章驗證也相同；代價是一個 deploy PR 可能同時動兩個叢集 |
 | values | HelmRelease 依序讀 `values-saas.yaml`、`values-demo.yaml`，最後是 SOPS 加密的 Secret `trustiot-demo-values` 的四個 key，各自以 `targetPath` 與 `literal: true` 寫進一個值：`app-host` → `hosts.app`、`gateway-host` → `hosts.gateway`、`ota-host` → `hosts.ota`、`smtp-from` → `smtp.from` | 主機名稱與寄件人不公開（[密鑰與權限](../../docs/architecture/secrets.md)「公開 repo 的資訊規則」），只在加密的 Secret 裡。加密的內容在 PR 裡看不到，所以它只能設這四個值：整份 values 的寫法能改任何設定（映像、ingress、環境變數），沒有 `literal` 時 Flux 以 Helm 的 `--set` 語法讀值，逗號就能接上另一個 `路徑=值`。Secret 帶 `reconcile.fluxcd.io/watch: Enabled`，改了就升級 |
 | 服務 | `values-demo.yaml` 的 `services` 逐一打開切片的服務（目前 `identity`、`assets`） | 只開部署中那一版 chart 有映像的服務；切片的 issue 進了 release 後，在這裡打開 |
 | 外部端點 | Qdrant 的網址在 `.invalid`（RFC 6761，不會解析）；Sentry 關閉 | 切片不用知識庫，SaaS 型態的 schema 又要求外部網址；沒有展示用的 Sentry 專案，錯誤留在 ClickHouse 的日誌 |
@@ -321,7 +321,7 @@ lab e2e：`tests/e2e/lab.e2e.ts` 在展示環境的 Flux 存在時拒絕執行�
 - `values-demo.yaml` 不含主機名稱、寄件人與 IP：每個像主機名稱的字（值、URL 與註解都算）都在 `.invalid` 或 `.test` 之下、是列出的公開服務（`smtp.resend.com`）、檔名，或 chart values 的路徑；沒有 `@`。
 - `.sops.yaml` 每個叢集一條規則，規則不會比對到別的叢集的檔案；每個收件者一行並註明角色；每條規則是空的，或剛好是自己叢集的金鑰加上每一把維運人員的金鑰；`github-known-hosts` 與 GitHub 公布的指紋相同。
 
-release 流程的部分在 `bun test scripts/release`（`flux.test.ts`、`deploy.test.ts`：PR 的內容、版本比較、重跑、被手改的 `chart.yaml`、GitHub 拒絕開 PR 時的訊息）；`scripts/flux/lib.test.ts` 檢查 Secret 的產生、輸入值的檢查、私有 values 的 key、收件者的角色與 `pin-chart.ts`；`scripts/flux/sops.test.ts` 檢查寫檔前對 sops 輸出的檢查與 stdin 必須是管線。
+release 流程的部分在 `bun test scripts/release`（`flux.test.ts`、`deploy.test.ts`：PR 的內容、每個叢集的版本比較、只移動較舊的叢集、重跑（分支已經存在時，它改的檔案或內容與這次該寫的不同就停下）、缺少或被手改的 `chart.yaml`、GitHub 拒絕開 PR 時的訊息）；`scripts/flux/lib.test.ts` 檢查 Secret 的產生、輸入值的檢查、私有 values 的 key、收件者的角色與 `pin-chart.ts`；`scripts/flux/sops.test.ts` 檢查寫檔前對 sops 輸出的檢查與 stdin 必須是管線。
 
 ## lab 測試
 
