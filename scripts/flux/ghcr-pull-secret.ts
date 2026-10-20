@@ -4,9 +4,10 @@
  * that Flux uses to pull the chart and the kubelet uses to pull the images.
  *
  *   <command that prints the token> | bun scripts/flux/ghcr-pull-secret.ts --username <account>
- *     [--cluster saas|demo] [--out <path>] [--registry ghcr.io] [--namespace trustiot]
+ *     [--cluster saas|demo] [--registry ghcr.io]
  *
- * --out defaults to deploy/flux/clusters/<cluster>/trustiot/ghcr-pull.sops.yaml (cluster saas).
+ * It writes deploy/flux/clusters/<cluster>/trustiot/ghcr-pull.sops.yaml (cluster saas by default),
+ * Secret ghcr-pull in namespace trustiot, the one place SOPS_SECRETS (lib.ts) allows for it.
  * The token is read from stdin only, never from an argument (docs/architecture/secrets.md,
  * rule 3), and the plain Secret only exists in memory and on sops's stdin; the file written is
  * the encrypted one, for the recipients in .sops.yaml.
@@ -15,7 +16,7 @@
 import { join } from "node:path";
 import { parseOptions, runStage } from "../release/exec.ts";
 import { APP_NAMESPACE, GHCR_PULL_NAME, appDir } from "../release/flux.ts";
-import { parseCluster, renderPullSecret } from "./lib.ts";
+import { parseCluster, renderPullSecret, requireSopsSecret } from "./lib.ts";
 import { kustomizationReminder, readPiped, writeEncrypted } from "./sops.ts";
 
 if (import.meta.main) {
@@ -23,17 +24,16 @@ if (import.meta.main) {
     const options = parseOptions(Bun.argv.slice(2), {
       username: {},
       cluster: { default: "saas" },
-      out: { default: "" },
       registry: { default: "ghcr.io" },
-      namespace: { default: APP_NAMESPACE },
     });
     const cluster = parseCluster(options.cluster);
+    requireSopsSecret(cluster, GHCR_PULL_NAME, "kubernetes.io/dockerconfigjson");
     const token = (await readPiped("the token")).trim();
-    const plain = renderPullSecret(options.namespace ?? "", options.registry ?? "", options.username ?? "", token);
+    const plain = renderPullSecret(APP_NAMESPACE, options.registry ?? "", options.username ?? "", token);
     const file = `${GHCR_PULL_NAME}.sops.yaml`;
-    const written = await writeEncrypted(plain, options.out || join(appDir(cluster), file));
+    const written = await writeEncrypted(plain, join(appDir(cluster), file));
     console.log(`wrote ${written} (encrypted for the recipients in .sops.yaml)`);
-    const reminder = options.out ? undefined : kustomizationReminder(appDir(cluster), file);
+    const reminder = kustomizationReminder(appDir(cluster), file);
     if (reminder !== undefined) console.log(reminder);
   });
 }

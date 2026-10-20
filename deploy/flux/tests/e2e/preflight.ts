@@ -1,7 +1,7 @@
 // The decisions lab.e2e.ts makes before and after it changes the cluster, as code that
 // `bun test deploy/flux` covers without a cluster (preflight.test.ts): whether the cluster already
-// has Flux, whether the lab lock is this run's, and whether the namespace flux-system, and with it
-// Flux's cluster-wide objects, belongs to this run.
+// has Flux, whether the lab lock is this run's, whether the test namespace and flux-system (and
+// with it Flux's cluster-wide objects) belong to this run, and what teardown deletes.
 
 /** What the cluster already has of Flux. */
 export interface ExistingFlux {
@@ -54,10 +54,10 @@ export function lockProblem(owner: string | undefined, issue: string): string | 
   return undefined;
 }
 
-// --- Owning flux-system -------------------------------------------------------------------------
+// --- Owning a namespace ------------------------------------------------------------------------
 
-/** The label that marks namespace flux-system as created by one run of this test. */
-export const RUN_LABEL = "e2e.trustiot.io/flux-run";
+/** The label that marks a namespace (the test namespace, flux-system) as created by one run of this test. */
+export const RUN_LABEL = "e2e.trustiot.io/run";
 
 /** A new run ID: a label value, unguessable, so that only this run can match it. */
 export function newRunId(): string {
@@ -74,38 +74,52 @@ export interface CreateResult {
 }
 
 /**
- * Whether this run owns namespace flux-system after trying to create it: when the create
- * succeeded, or when its result is unknown (an error other than AlreadyExists, such as a dropped
- * connection) and the namespace carries this run's label. AlreadyExists means someone else's.
+ * Whether this run owns a namespace after trying to create it: when the create succeeded, or when
+ * its result is unknown (an error other than AlreadyExists, such as a dropped connection) and the
+ * namespace carries this run's label. AlreadyExists means someone else's.
  */
-export function ownsFluxNamespace(result: CreateResult): boolean {
+export function ownsNamespace(result: CreateResult): boolean {
   if (result.createExitCode === 0) return true;
   if (/\bAlreadyExists\b|already exists/.test(result.createOutput)) return false;
   return result.labelOnCluster === result.runId;
 }
 
-/** What FluxNamespace needs of the cluster. */
+/** What RunNamespace needs of the cluster. */
 export interface NamespaceApi {
   /** `kubectl create -f -` with the manifest, exactly one attempt (no retry). */
   create(manifest: string): Promise<{ exitCode: number; output: string }>;
-  /** RUN_LABEL of namespace flux-system; undefined when absent or unreadable. */
-  runLabel(): Promise<string | undefined>;
+  /** RUN_LABEL of namespace `name`; undefined when the namespace or the label is absent or unreadable. */
+  runLabel(name: string): Promise<string | undefined>;
 }
 
 /**
- * The namespace flux-system of one run. `claim` creates it with the run label and decides
- * ownership from the outcome (ownsFluxNamespace); only an owned namespace lets the run install
- * Flux. `mayTearDown` reads the label again before teardown: Flux's sync objects, its manifests
- * (CRDs, ClusterRoles, ClusterRoleBindings) and the namespace are deleted only while the label
+ * Why a namespace this run created no longer counts as its own (undefined while it does): its
+ * RUN_LABEL must still be this run's ID. `cleanup` says what a person removes by hand, because
+ * teardown then leaves everything in it alone.
+ */
+export function runLabelProblem(name: string, labelOnCluster: string | undefined, runId: string, cleanup: string): string | undefined {
+  if (labelOnCluster === runId) return undefined;
+  const found = labelOnCluster === undefined ? "the label is gone (or the namespace)" : "the label holds another run's ID";
+  return `namespace ${name} no longer carries ${RUN_LABEL}=${runId} (${found}), so teardown will not delete it or anything that depends on it; ${cleanup}`;
+}
+
+/**
+ * A namespace of one run. `claim` creates it with the run label and decides ownership from the
+ * outcome (ownsNamespace); only an owned namespace is used. `mayTearDown` reads the label again
+ * before teardown, and `requireStillOurs` right after something else may have applied the
+ * namespace (Flux's own manifests): what depends on the namespace is deleted only while the label
  * still holds this run's ID.
  */
-export class FluxNamespace {
+export class RunNamespace {
   owned = false;
 
-  constructor(readonly runId: string) {}
+  constructor(
+    readonly name: string,
+    readonly runId: string,
+  ) {}
 
   manifest(): string {
-    return ["apiVersion: v1", "kind: Namespace", "metadata:", "  name: flux-system", "  labels:", `    ${RUN_LABEL}: ${this.runId}`, ""].join("\n");
+    return ["apiVersion: v1", "kind: Namespace", "metadata:", `  name: ${this.name}`, "  labels:", `    ${RUN_LABEL}: ${this.runId}`, ""].join("\n");
   }
 
   async claim(api: NamespaceApi): Promise<void> {
@@ -115,18 +129,77 @@ export class FluxNamespace {
     } catch (error) {
       created = { exitCode: -1, output: String(error) };
     }
-    const labelOnCluster = created.exitCode === 0 ? this.runId : await api.runLabel().catch(() => undefined);
-    this.owned = ownsFluxNamespace({ createExitCode: created.exitCode, createOutput: created.output, labelOnCluster, runId: this.runId });
+    const labelOnCluster = created.exitCode === 0 ? this.runId : await api.runLabel(this.name).catch(() => undefined);
+    this.owned = ownsNamespace({ createExitCode: created.exitCode, createOutput: created.output, labelOnCluster, runId: this.runId });
     if (!this.owned) {
       throw new Error(
-        `namespace flux-system is not this run's (create exited ${created.exitCode}: ${created.output.trim().split("\n").at(-1) ?? ""}); ` +
-          "nothing of Flux is installed or removed",
+        `namespace ${this.name} is not this run's (create exited ${created.exitCode}: ${created.output.trim().split("\n").at(-1) ?? ""}); ` +
+          "nothing is installed in it or removed from it",
       );
     }
   }
 
+  /** Stops the run when the namespace lost this run's label; `cleanup` is what a person then removes. */
+  async requireStillOurs(api: NamespaceApi, cleanup: string): Promise<void> {
+    const problem = runLabelProblem(this.name, await api.runLabel(this.name).catch(() => undefined), this.runId, cleanup);
+    if (problem !== undefined) throw new Error(problem);
+  }
+
   async mayTearDown(api: NamespaceApi): Promise<boolean> {
     if (!this.owned) return false;
-    return (await api.runLabel().catch(() => undefined)) === this.runId;
+    return (await api.runLabel(this.name).catch(() => undefined)) === this.runId;
   }
+}
+
+// --- Teardown -----------------------------------------------------------------------------------
+
+/** One deletion of teardown: kubectl arguments, and whether Flux's manifests go on its stdin. */
+export interface TeardownStep {
+  what: string;
+  args: string[];
+  /** `kubectl delete -f -` reads the Flux manifests that the run applied. */
+  fluxManifests?: true;
+}
+
+export interface Ownership {
+  /** flux-system still carries this run's label (RunNamespace.mayTearDown): Flux is this run's. */
+  fluxOurs: boolean;
+  /** The test namespace still carries this run's label. */
+  testOurs: boolean;
+  /** The test namespace. */
+  testNamespace: string;
+  /** Whether the run rendered Flux's manifests (it got as far as installing Flux). */
+  fluxManifests: boolean;
+}
+
+/**
+ * The deletions of teardown, in the order Flux needs: stop syncing, uninstall the release while
+ * helm-controller runs, delete the custom resources while their controllers remove the finalizers,
+ * then Flux (its CRDs, ClusterRoles and ClusterRoleBindings) and the namespaces. Only what this run
+ * still owns: nothing of Flux, its CRDs or flux-system unless flux-system carries this run's label,
+ * and not the test namespace unless it does. lab.e2e.ts runs exactly this list.
+ */
+export function teardownSteps(own: Ownership): TeardownStep[] {
+  const ns = own.testNamespace;
+  const steps: TeardownStep[] = [];
+  if (own.fluxOurs) {
+    steps.push({ what: "suspend the sync, no pruning", args: ["-n", "flux-system", "patch", "kustomization", "flux-system", "--type=merge", "-p", '{"spec":{"suspend":true,"prune":false}}'] });
+  }
+  if (own.fluxOurs && own.testOurs) {
+    steps.push({ what: "uninstall the release", args: ["-n", ns, "delete", "helmrelease", "--all", "--wait", "--timeout=180s"] });
+    steps.push({ what: "delete the sources", args: ["-n", ns, "delete", "ocirepository", "--all", "--wait", "--timeout=120s"] });
+  }
+  if (own.fluxOurs) {
+    steps.push({ what: "delete the sync", args: ["-n", "flux-system", "delete", "kustomization,gitrepository", "--all", "--wait", "--timeout=120s"] });
+  }
+  if (own.fluxOurs && own.fluxManifests) {
+    steps.push({ what: "delete Flux", args: ["delete", "--ignore-not-found", "--wait", "--timeout=300s", "-f", "-"], fluxManifests: true });
+  }
+  if (own.testOurs) {
+    steps.push({ what: `delete namespace ${ns}`, args: ["delete", "namespace", ns, "--ignore-not-found", "--wait", "--timeout=300s"] });
+  }
+  if (own.fluxOurs) {
+    steps.push({ what: "delete namespace flux-system", args: ["delete", "namespace", "flux-system", "--ignore-not-found", "--wait", "--timeout=300s"] });
+  }
+  return steps;
 }

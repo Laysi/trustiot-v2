@@ -17,6 +17,8 @@ import {
   renderFluxSystemKustomization,
   renderOpaqueSecret,
   renderPullSecret,
+  requireSopsSecret,
+  SOPS_SECRETS,
   sopsRecipientProblems,
   sopsRuleTexts,
 } from "./lib.ts";
@@ -104,7 +106,7 @@ describe("Opaque Secret", () => {
       value: `${fakeKey}\n`,
       format: "token",
       plain: { username: "resend" },
-      labels: { "reconcile.fluxcd.io/watch": "Enabled" },
+      watch: true,
     });
     expect(Bun.YAML.parse(text)).toEqual({
       apiVersion: "v1",
@@ -156,7 +158,7 @@ describe("Opaque Secret", () => {
     }
   });
 
-  test("rejects names, keys and labels that are not valid, and a key that is both secret and plain", () => {
+  test("rejects names and keys that are not valid, and a key that is both secret and plain", () => {
     const base = { namespace: "trustiot", name: "trustiot-smtp", key: "password", value: fakeKey, format: "token" as const };
     for (const name of ["Bad_Name", "foo..bar", ".foo", "foo.", "-foo", `${"a".repeat(64)}.x`, `${"a.".repeat(126)}ab`]) {
       expect(() => renderOpaqueSecret({ ...base, name })).toThrow(/must be a Kubernetes name and the namespace a DNS label/);
@@ -170,7 +172,41 @@ describe("Opaque Secret", () => {
     expect(() => renderOpaqueSecret({ ...base, key: "pass word" })).toThrow(/not a valid key/);
     expect(() => renderOpaqueSecret({ ...base, plain: { password: "x" } })).toThrow(/both the secret value and a plain one/);
     expect(() => renderOpaqueSecret({ ...base, plain: { username: "a\nb" } })).toThrow(/one line/);
-    expect(() => renderOpaqueSecret({ ...base, labels: { "bad key!": "x" } })).toThrow(/not a valid label/);
+  });
+
+  test("carries no label unless asked, and then only Flux's watch label", () => {
+    const base = { namespace: "trustiot", name: "trustiot-smtp", key: "password", value: fakeKey, format: "token" as const };
+    expect((Bun.YAML.parse(renderOpaqueSecret(base)) as { metadata: unknown }).metadata).toEqual({ name: "trustiot-smtp", namespace: "trustiot" });
+    expect((Bun.YAML.parse(renderOpaqueSecret({ ...base, watch: true })) as { metadata: unknown }).metadata).toEqual({
+      name: "trustiot-smtp",
+      namespace: "trustiot",
+      labels: { "reconcile.fluxcd.io/watch": "Enabled" },
+    });
+  });
+});
+
+describe("the SOPS Secrets a cluster may hold", () => {
+  test("each cluster lists its own Secrets with their types, and the pull Secret is a dockerconfigjson", () => {
+    expect(SOPS_SECRETS).toEqual({
+      saas: { "ghcr-pull": "kubernetes.io/dockerconfigjson", "trustiot-qdrant": "Opaque", "trustiot-sentry": "Opaque" },
+      demo: { "ghcr-pull": "kubernetes.io/dockerconfigjson", "trustiot-smtp": "Opaque", "trustiot-anthropic": "Opaque", [DEMO_VALUES_NAME]: "Opaque" },
+    });
+    for (const [cluster, secrets] of Object.entries(SOPS_SECRETS) as [keyof typeof SOPS_SECRETS, Record<string, string>][]) {
+      for (const [name, type] of Object.entries(secrets)) expect(() => requireSopsSecret(cluster, name, type)).not.toThrow();
+    }
+  });
+
+  test("refuses a Secret the chart generates in the cluster, another cluster's Secret and the wrong type", () => {
+    // The chart's own: generated in the cluster and never set by anyone (deploy/chart, _identity.tpl).
+    for (const cluster of ["saas", "demo"] as const) {
+      expect(() => requireSopsSecret(cluster, "trustiot-identity-signing-keys", "Opaque")).toThrow(`cluster ${cluster} holds no SOPS Secret trustiot-identity-signing-keys`);
+      expect(() => requireSopsSecret(cluster, "trustiot-identity-password", "Opaque")).toThrow(/holds no SOPS Secret/);
+      expect(() => requireSopsSecret(cluster, "constructor", "Opaque")).toThrow(/holds no SOPS Secret/);
+    }
+    expect(() => requireSopsSecret("saas", "trustiot-smtp", "Opaque")).toThrow("cluster saas holds no SOPS Secret trustiot-smtp");
+    expect(() => requireSopsSecret("demo", "trustiot-qdrant", "Opaque")).toThrow("cluster demo holds no SOPS Secret trustiot-qdrant");
+    expect(() => requireSopsSecret("demo", "ghcr-pull", "Opaque")).toThrow("the SOPS Secret ghcr-pull of cluster demo has type kubernetes.io/dockerconfigjson, not Opaque");
+    expect(() => requireSopsSecret("saas", "trustiot-sentry", "kubernetes.io/dockerconfigjson")).toThrow(/has type Opaque/);
   });
 });
 

@@ -13,7 +13,9 @@
  *   text, spaces and `<>@` included (lib.ts, checkedTextValue).
  * - --set adds one key whose value is not secret, such as a user name (it is encrypted too).
  * - --watch labels the Secret so that Flux upgrades the HelmRelease as soon as it changes (for a
- *   Secret that the HelmRelease reads values from).
+ *   Secret that the HelmRelease reads values from); no other label or annotation is possible.
+ * - The name must be an Opaque Secret that SOPS_SECRETS (lib.ts) lists for the cluster; any other
+ *   name is refused before anything is read.
  *
  * The demo's private values have their own script, demo-values.ts, which writes exactly the keys
  * the HelmRelease reads.
@@ -27,7 +29,7 @@ import { join } from "node:path";
 import { parseOptions, runStage } from "../release/exec.ts";
 import { ReleaseError } from "../release/lib.ts";
 import { APP_NAMESPACE, appDir } from "../release/flux.ts";
-import { DEMO_VALUES_NAME, type ValueFormat, parseCluster, renderOpaqueSecret } from "./lib.ts";
+import { DEMO_VALUES_NAME, type ValueFormat, parseCluster, renderOpaqueSecret, requireSopsSecret } from "./lib.ts";
 import { kustomizationReminder, readPiped, writeEncrypted } from "./sops.ts";
 
 /** `key=value` of --set; the value is not secret. */
@@ -67,6 +69,7 @@ if (import.meta.main) {
     });
     const cluster = parseCluster(options.cluster);
     const name = checkName(options.name ?? "");
+    requireSopsSecret(cluster, name, "Opaque");
     const plain = renderOpaqueSecret({
       namespace: APP_NAMESPACE,
       name,
@@ -74,7 +77,7 @@ if (import.meta.main) {
       value: await readPiped("the value"),
       format: parseFormat(options.format),
       plain: parsePlain(options.set),
-      labels: options.watch === "true" ? { "reconcile.fluxcd.io/watch": "Enabled" } : {},
+      watch: options.watch === "true",
     });
     const file = `${name}.sops.yaml`;
     const written = await writeEncrypted(plain, join(appDir(cluster), file));
