@@ -471,11 +471,53 @@ export function linkFacts(statType: string, readlink: string): LinkFacts {
   return { type: "other", target: "" };
 }
 
+/**
+ * Where dnf says the installed cloudflared came from: its from_repo (a repository ID, or
+ * @commandline for a downloaded RPM), or why it could not be read. An empty answer is a failed
+ * read, never a value.
+ */
+export type FromRepo = { repo: string } | { unreadable: string };
+
+/**
+ * Reads from_repo as root. dnf5 keeps it in /usr/lib/sysimage/libdnf5/packages.toml; on the demo
+ * machine a dnf transaction left that file 0600 root:root, and dnf5 5.4.6 run without root then
+ * prints only "Loading system state TOML file ... failed" on stderr, nothing on stdout, and exits 0
+ * (2026-10-21). --disablerepo='*': an installed package needs no repository metadata, so the read
+ * downloads nothing. stderr is kept for the reason of a failed read.
+ */
+export const FROM_REPO_COMMAND = "sudo dnf -q repoquery --installed --disablerepo='*' --qf '%{from_repo}\\n' cloudflared";
+
+/** FROM_REPO_COMMAND's answer: one repository ID on the last line of stdout and exit 0, or why not. */
+export function fromRepoResult(result: RunResult): FromRepo {
+  const repo = result.stdout.trim().split("\n").at(-1)?.trim() ?? "";
+  if (result.exitCode === 0 && /^\S+$/.test(repo)) return { repo };
+  const said = redactSecrets(mask(lastLines(result.stderr, 1), {})).trim();
+  const what = result.exitCode !== 0 ? "failed" : repo === "" ? "printed no repository" : "printed more than a repository ID";
+  return { unreadable: `dnf ${what} (exit ${result.exitCode})${said === "" ? "" : `: ${said}`}` };
+}
+
+/** A from_repo as the plan prints it: the repository, or that it could not be read and why. */
+export function fromRepoText(fromRepo: FromRepo): string {
+  return "repo" in fromRepo ? fromRepo.repo : `an unknown source (dnf's from_repo could not be read: ${fromRepo.unreadable})`;
+}
+
+/**
+ * status's and install's line on the installed package: OK only when dnf says it came from the
+ * pinned repository; a source that could not be read or is another one is a FAIL, like the other
+ * FAIL lines of status (printed, and the command still exits 0: status reports, it does not stop).
+ */
+export function sourceLine(installed: string, fromRepo: FromRepo): string {
+  if (installed === "") return `FAIL cloudflared is not installed`;
+  if (!("repo" in fromRepo)) return `FAIL cloudflared ${installed}: could not read where it came from: ${fromRepo.unreadable}`;
+  if (fromRepo.repo !== PINNED_REPO_ID) return `FAIL cloudflared ${installed} from ${fromRepo.repo}, not Cloudflare's repository ${PINNED_REPO_ID}`;
+  return `OK cloudflared ${installed} from ${fromRepo.repo}`;
+}
+
 export interface CloudflaredFacts {
   /** `rpm -q` version-release, or "" when the package is not installed. */
   installed: string;
-  /** dnf's from_repo of the installed package. */
-  fromRepo: string;
+  /** Where dnf says the installed package came from (from_repo), or why that could not be read. */
+  fromRepo: FromRepo;
   /** The newest version-release in Cloudflare's repository for this architecture; read only for a swap. */
   candidate: string;
   link: LinkFacts;
@@ -486,7 +528,7 @@ export interface CloudflaredFacts {
 export interface CloudflaredPlan {
   swap: boolean;
   installed: string;
-  fromRepo: string;
+  fromRepo: FromRepo;
   candidate: string;
   link: LinkFacts;
   marker: CloudflaredFacts["marker"];
@@ -529,10 +571,10 @@ export function cloudflaredPlan(facts: CloudflaredFacts, swap: boolean): Cloudfl
 /** The lines that tell the person what happens to the shared cloudflared binary. */
 export function describeCloudflared(plan: CloudflaredPlan, ops: { pid: string }): string[] {
   if (!plan.swap) {
-    return [`cloudflared: ${plan.installed} from ${plan.fromRepo || "an unknown source"} stays as it is (the installer does not replace it)`];
+    return [`cloudflared: ${plan.installed} from ${fromRepoText(plan.fromRepo)} stays as it is (the installer does not replace it)`];
   }
   const lines = [
-    `cloudflared: the installer replaces ${CLOUDFLARED_BINARY} ${plan.installed} (from ${plan.fromRepo || "an unknown source"}) with ${plan.candidate} from Cloudflare's signed repository (${PINNED_REPO_ID})`,
+    `cloudflared: the installer replaces ${CLOUDFLARED_BINARY} ${plan.installed} (from ${fromRepoText(plan.fromRepo)}) with ${plan.candidate} from Cloudflare's signed repository (${PINNED_REPO_ID})`,
     plan.candidate === plan.installed ? "cloudflared: same version, now Cloudflare's signed package" : `cloudflared: this is a version change, ${plan.installed} -> ${plan.candidate}`,
     `cloudflared: the ops tunnel ${OPS_TUNNEL_UNIT} runs the same ${CLOUDFLARED_BINARY}; its running process (PID ${ops.pid}) keeps the binary it started with and runs ${plan.candidate} from its next restart (reboot); this script never restarts it`,
   ];
@@ -1332,7 +1374,7 @@ async function hostRecord(box: Box): Promise<Record<string, string>> {
     unit: await read(`systemctl show ${DEMO_TUNNEL_UNIT}.service -p LoadState -p ActiveState -p MainPID -p NRestarts`),
     // Never ExecStart: a unit may carry its tunnel token on the command line.
     ops: await read(`systemctl show ${OPS_TUNNEL_UNIT} -p ActiveState -p MainPID -p NRestarts`),
-    cloudflared: await read(`LC_ALL=C rpm -q cloudflared; sha256sum ${CLOUDFLARED_BINARY}; dnf -q repoquery --installed --qf '%{from_repo}\\n' cloudflared 2>/dev/null`),
+    cloudflared: await read(`LC_ALL=C rpm -q cloudflared; sha256sum ${CLOUDFLARED_BINARY}; ${FROM_REPO_COMMAND} 2>&1`),
     links: await read(`${fileTypeCommand(LOCAL_LINK)}; readlink ${LOCAL_LINK}; ${fileTypeCommand(PACKAGE_MARKER)}`),
     firewalld: await read(`sudo sh -c ${shq(firewalldRecordScript())}`),
   };
@@ -1360,7 +1402,7 @@ export async function readCloudflaredFacts(box: Box, swap: boolean): Promise<Clo
     : "";
   return {
     installed: await read(INSTALLED_VERSION_COMMAND),
-    fromRepo: (await read("dnf -q repoquery --installed --qf '%{from_repo}\\n' cloudflared 2>/dev/null")).split("\n").at(-1) ?? "",
+    fromRepo: fromRepoResult(await box.sh(FROM_REPO_COMMAND)),
     candidate: candidate.split("\n").at(-1) ?? "",
     ...(await readLinkFacts(box)),
   };
@@ -1455,7 +1497,7 @@ export async function makePlan(box: Box, log: Log, inputs: InstallInputs, ops: {
   const updateUnits = await readUpdateUnits(box);
   requireNoUpdateTimer(updateUnits);
   // Checked before anything is staged; the plan checks the link again after the dry run.
-  cloudflaredPlan({ installed: "x", fromRepo: "", candidate: "", ...(await readLinkFacts(box)) }, false);
+  cloudflaredPlan({ installed: "x", fromRepo: { unreadable: "not read for this check" }, candidate: "", ...(await readLinkFacts(box)) }, false);
   const demoPid = /^MainPID=(\d+)$/m.exec(await box.mustSh(`systemctl show ${DEMO_TUNNEL_UNIT}.service -p MainPID`, "reading the demo unit"))?.[1] ?? "0";
   const holder = metricsPortHolder(await box.mustSh(`sudo ss -Htlnp 'sport = :${DEMO_METRICS_PORT}'`, "reading the metrics port"), demoPid);
   if (holder !== "") throw new ReleaseError(`127.0.0.1:${DEMO_METRICS_PORT}, the demo connector's metrics port, is taken: ${holder}`);
@@ -1572,7 +1614,7 @@ async function install(box: Box, log: Log, raw: Record<string, string>, ops: { p
   });
   log.note(`run ${outcome.id}: ${Object.entries(outcome.post).map(([k, v]) => `${k}=${v}`).join(" ")}`);
   const after = await readCloudflaredFacts(box, false);
-  log.note(`cloudflared now: ${after.installed} from ${after.fromRepo}; ${linkReport(after.link, after.marker, await readUpdateUnits(box)).join("; ")}`);
+  log.note(`cloudflared now: ${sourceLine(after.installed, after.fromRepo)}; ${linkReport(after.link, after.marker, await readUpdateUnits(box)).join("; ")}`);
 }
 
 async function status(box: Box, log: Log): Promise<void> {
@@ -1586,7 +1628,7 @@ async function status(box: Box, log: Log): Promise<void> {
   const opsExe = opsPid === "0" ? "" : await read(`sudo readlink /proc/${opsPid}/exe`);
   log.note(`ops tunnel: ${ops.replaceAll("\n", " ")} exe=${opsExe}${opsExe.endsWith("(deleted)") ? " (runs a replaced binary until its next restart)" : ""}`);
   const facts = await readCloudflaredFacts(box, false);
-  log.note(`cloudflared: ${facts.installed || "not installed"} from ${facts.fromRepo || "unknown"}`);
+  log.note(sourceLine(facts.installed, facts.fromRepo));
   for (const line of linkReport(facts.link, facts.marker, await readUpdateUnits(box))) log.note(line);
   log.note(`token and config files: ${(await read(`sudo stat -c '%U:%G %a %n' /etc/credstore ${CREDENTIAL} ${CONFIG} 2>&1`)).replaceAll("\n", "; ")}`);
   for (const dir of [RUN_DIR, STATE_DIR]) log.note(`${dir}: ${(await read(`sudo sh -c 'ls -A ${dir} 2>/dev/null | tr "\\n" " "' || true`)) || "(absent or empty)"}`);

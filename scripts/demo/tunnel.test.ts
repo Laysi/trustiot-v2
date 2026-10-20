@@ -13,6 +13,7 @@ import {
   LOCK_STATE_COMMAND,
   DEMO_METRICS_PORT,
   DEMO_TUNNEL_UNIT,
+  FROM_REPO_COMMAND,
   INSTALLED_VERSION_COMMAND,
   ISSUE,
   LOCAL_LINK,
@@ -45,6 +46,7 @@ import {
   dryRunLockCheck,
   fileTypeCommand,
   filesWith,
+  fromRepoResult,
   firewallCmd,
   firewalldRecordScript,
   installerArgs,
@@ -76,6 +78,7 @@ import {
   runProbes,
   runnerScript,
   runningInstallUnits,
+  sourceLine,
   spkiFingerprint,
   stage,
   splitAllowChanges,
@@ -689,7 +692,7 @@ describe("tunnel.ts: the plan", () => {
    * The demo machine as makePlan sees it: the update units, the link and the marker, the metrics
    * port, staging, the run's unit and its files. Returns the commands it was sent.
    */
-  function planHost(options: { output?: string; timer?: boolean; link?: string; portHolder?: string; candidate?: string } = {}) {
+  function planHost(options: { output?: string; timer?: boolean; link?: string; portHolder?: string; candidate?: string; fromRepo?: RunResult } = {}) {
     const commands: string[] = [];
     let stored: string | Uint8Array = "";
     let id = "";
@@ -725,7 +728,7 @@ describe("tunnel.ts: the plan", () => {
       if (command.includes(`${id}.exit`)) return ok("0\n");
       if (command.startsWith("d=$(mktemp -d")) return ok(`${options.candidate ?? "2026.10.1-1"}\n`);
       if (command === INSTALLED_VERSION_COMMAND) return ok("2026.10.0-1\n");
-      if (command.startsWith("dnf -q repoquery --installed")) return ok("@commandline\n");
+      if (command === FROM_REPO_COMMAND) return options.fromRepo ?? ok("@commandline\n");
       throw new Error(`unexpected command ${command}`);
     });
     return { box, commands };
@@ -745,7 +748,7 @@ describe("tunnel.ts: the plan", () => {
       args: installerArgs(false),
       allowedExtra: [],
       metricsPort: DEMO_METRICS_PORT,
-      cloudflared: { swap: true, installed: "2026.10.0-1", fromRepo: "@commandline", candidate: "2026.10.1-1", restoreLink: true, restoreMarker: true },
+      cloudflared: { swap: true, installed: "2026.10.0-1", fromRepo: { repo: "@commandline" }, candidate: "2026.10.1-1", restoreLink: true, restoreMarker: true },
     });
     expect(plan.changes).toEqual(installerChanges(dryRunOutput()));
     expect(plan.updateUnits.map((u) => u.load)).toEqual(["not-found", "not-found"]);
@@ -787,6 +790,57 @@ describe("tunnel.ts: the plan", () => {
     expect(commands.some((c) => c.includes("--repofrompath"))).toBe(false);
     expect((await readCloudflaredFacts(box, true)).candidate).toBe("2026.10.1-1");
   });
+
+  // dnf5 5.4.6 on the demo machine, 2026-10-21, without root after a transaction left
+  // packages.toml 0600: nothing on stdout, this on stderr, exit 0.
+  const TOML_FAILURE = "Loading system state TOML file /usr/lib/sysimage/libdnf5/packages.toml failed (see dnf5-system-state(7)): toml::parse: error opening file /usr/lib/sysimage/libdnf5/packages.toml\n";
+
+  test("from_repo is read as root without repository metadata, and the shell passes dnf its arguments unchanged", () => {
+    expect(FROM_REPO_COMMAND).toStartWith("sudo dnf -q repoquery --installed --disablerepo='*' ");
+    expect(FROM_REPO_COMMAND).not.toContain("2>");
+    const bin = mkdtempSync(join(tmpdir(), "from-repo-"));
+    try {
+      // sudo and dnf stand-ins: each argument dnf gets, on its own line.
+      writeFileSync(join(bin, "sudo"), '#!/bin/sh\nexec "$@"\n', { mode: 0o755 });
+      writeFileSync(join(bin, "dnf"), '#!/bin/sh\nfor a in "$@"; do printf "[%s]\\n" "$a"; done\n', { mode: 0o755 });
+      // A file named like the glob in the cwd: the quoted --disablerepo='*' must stay a literal *.
+      writeFileSync(join(bin, "--disablerepo=x"), "");
+      const run = Bun.spawnSync(["sh", "-c", FROM_REPO_COMMAND], { cwd: bin, env: { PATH: `${bin}:/usr/bin:/bin` } });
+      expect(run.stdout.toString()).toBe(["-q", "repoquery", "--installed", "--disablerepo=*", "--qf", "%{from_repo}\\n", "cloudflared"].map((a) => `[${a}]\n`).join(""));
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  test("an empty from_repo is a failed read with dnf's reason, never a value", () => {
+    expect(fromRepoResult(ok("cloudflared-stable\n"))).toEqual({ repo: "cloudflared-stable" });
+    expect(fromRepoResult(ok("@commandline\n"))).toEqual({ repo: "@commandline" });
+    const empty = fromRepoResult({ stdout: "", stderr: TOML_FAILURE, exitCode: 0 });
+    expect(empty).toEqual({ unreadable: `dnf printed no repository (exit 0): ${TOML_FAILURE.trim()}` });
+    expect(fromRepoResult({ stdout: "\n", stderr: "", exitCode: 0 })).toEqual({ unreadable: "dnf printed no repository (exit 0)" });
+    expect(fromRepoResult({ stdout: "", stderr: "sudo: a password is required\n", exitCode: 1 })).toEqual({ unreadable: "dnf failed (exit 1): sudo: a password is required" });
+    expect(fromRepoResult({ stdout: "cloudflared-stable\n", stderr: "", exitCode: 1 })).toEqual({ unreadable: "dnf failed (exit 1)" });
+    expect(fromRepoResult(ok("No matches found for cloudflared\n"))).toMatchObject({ unreadable: expect.stringContaining("printed more than a repository ID") });
+    // Only dnf's last stderr line, redacted and without a home directory.
+    const noisy = fromRepoResult({ stdout: "", stderr: `first\nerror reading /home/someone/x eyJhIjoi${"A".repeat(40)}\n`, exitCode: 0 });
+    expect("unreadable" in noisy && noisy.unreadable).toBe("dnf printed no repository (exit 0): error reading ~/x <redacted>");
+  });
+
+  test("install's after-report, status and the plan say loudly when from_repo could not be read", async () => {
+    const unread = fromRepoResult({ stdout: "", stderr: TOML_FAILURE, exitCode: 0 });
+    expect(sourceLine("2026.10.2-1", { repo: "cloudflared-stable" })).toBe("OK cloudflared 2026.10.2-1 from cloudflared-stable");
+    expect(sourceLine("2026.10.2-1", unread)).toBe(`FAIL cloudflared 2026.10.2-1: could not read where it came from: dnf printed no repository (exit 0): ${TOML_FAILURE.trim()}`);
+    expect(sourceLine("2026.10.0-1", { repo: "@commandline" })).toBe("FAIL cloudflared 2026.10.0-1 from @commandline, not Cloudflare's repository cloudflared-stable");
+    expect(sourceLine("", { repo: "cloudflared-stable" })).toStartWith("FAIL cloudflared is not installed");
+    // readCloudflaredFacts, which all three use, keeps the failure.
+    const { box, commands } = planHost({ fromRepo: { stdout: "", stderr: TOML_FAILURE, exitCode: 0 } });
+    expect((await readCloudflaredFacts(box, false)).fromRepo).toEqual(unread);
+    expect(commands).toContain(FROM_REPO_COMMAND);
+    // The plan's before facts: the dry run prints the failure where the source would be.
+    const plan = await makePlan(box, log, inputs, { pid: "1005" }, env);
+    expect(plan.cloudflared.fromRepo).toEqual(unread);
+    expect(describeCloudflared(plan.cloudflared, { pid: "1005" })[0]).toContain("(from an unknown source (dnf's from_repo could not be read: dnf printed no repository (exit 0): Loading system state TOML file");
+  });
 });
 
 describe("tunnel.ts: the shared cloudflared binary", () => {
@@ -816,11 +870,11 @@ describe("tunnel.ts: the shared cloudflared binary", () => {
     }
   });
 
-  const facts: CloudflaredFacts = { installed: "2026.10.0-1", fromRepo: "@commandline", candidate: "2026.10.1-1", link: { type: "symlink", target: "/usr/bin/cloudflared" }, marker: "file" };
+  const facts: CloudflaredFacts = { installed: "2026.10.0-1", fromRepo: { repo: "@commandline" }, candidate: "2026.10.1-1", link: { type: "symlink", target: "/usr/bin/cloudflared" }, marker: "file" };
 
   test("a package from elsewhere is swapped for the repository's version, said explicitly", () => {
     const plan = cloudflaredPlan(facts, true);
-    expect(plan).toMatchObject({ swap: true, installed: "2026.10.0-1", fromRepo: "@commandline", candidate: "2026.10.1-1", restoreLink: true, restoreMarker: true });
+    expect(plan).toMatchObject({ swap: true, installed: "2026.10.0-1", fromRepo: { repo: "@commandline" }, candidate: "2026.10.1-1", restoreLink: true, restoreMarker: true });
     const lines = describeCloudflared(plan, { pid: "1005" }).join("\n");
     expect(lines).toContain("replaces /usr/bin/cloudflared 2026.10.0-1 (from @commandline) with 2026.10.1-1");
     expect(lines).toContain("a version change, 2026.10.0-1 -> 2026.10.1-1");
@@ -833,7 +887,7 @@ describe("tunnel.ts: the shared cloudflared binary", () => {
   });
 
   test("without a swap nothing is put back, whatever the repository offers", () => {
-    const plan = cloudflaredPlan({ ...facts, fromRepo: "cloudflared-stable", candidate: "" }, false);
+    const plan = cloudflaredPlan({ ...facts, fromRepo: { repo: "cloudflared-stable" }, candidate: "" }, false);
     expect(plan).toMatchObject({ swap: false, candidate: "2026.10.0-1", restoreLink: false, restoreMarker: false });
     expect(describeCloudflared(plan, { pid: "1" })).toEqual(["cloudflared: 2026.10.0-1 from cloudflared-stable stays as it is (the installer does not replace it)"]);
   });
