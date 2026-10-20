@@ -294,7 +294,7 @@ export function renderDemoValuesSecret(text: string): string {
 // --- Which SOPS Secrets a cluster may hold ------------------------------------------------------
 
 /** The Secret types the SOPS files use. */
-export type SopsSecretType = "Opaque" | "kubernetes.io/dockerconfigjson";
+export type SopsFileType = "Opaque" | "kubernetes.io/dockerconfigjson";
 
 /**
  * The SOPS-encrypted Secrets each cluster may hold, `deploy/flux/clusters/<cluster>/trustiot/<name>.sops.yaml`
@@ -305,7 +305,7 @@ export type SopsSecretType = "Opaque" | "kubernetes.io/dockerconfigjson";
  * in the same PR. `bun test deploy/flux` checks every SOPS file against this list, and the scripts
  * that write SOPS files refuse any other name or type.
  */
-export const SOPS_SECRETS: Readonly<Record<ClusterName, Readonly<Record<string, SopsSecretType>>>> = {
+export const SOPS_SECRETS: Readonly<Record<ClusterName, Readonly<Record<string, SopsFileType>>>> = {
   saas: {
     [GHCR_PULL_NAME]: "kubernetes.io/dockerconfigjson",
     "trustiot-qdrant": "Opaque",
