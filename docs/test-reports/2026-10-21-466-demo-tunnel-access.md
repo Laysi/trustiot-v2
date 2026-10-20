@@ -88,15 +88,24 @@ OK cloudflared 2026.10.2-1 from cloudflared-stable
 | 位置 | 權限 |
 | --- | --- |
 | `/usr/lib/sysimage/libdnf5/` 的 `environments.toml`、`groups.toml`、`modules.toml`、`nevras.toml`、`packages.toml`、`system.toml`（dnf5 的系統狀態） | `root:root 600`，修改時間都是 2026-10-20 17:41:47 UTC，也就是安裝的 dnf 交易 |
-| `/var/cache/libdnf5/cloudflared-stable-<hash>/`（Cloudflare 套件庫的快取） | 目錄 700，repodata 的檔案 600；同一處其他套件庫的快取是 755 與 644 |
+| `/var/cache/libdnf5/cloudflared-stable-<hash>/`（Cloudflare 套件庫的 dnf 快取） | 這個目錄與其中的 `repodata`、`solv`、`packages` 是 700，`repomd.xml` 與 primary 檔是 600；同一處其他套件庫的快取是 755 與 644 |
+| `/var/cache/PackageKit/44/metadata/cloudflared-stable-<hash>/repodata/` 的 `repomd.xml` 與 `<sha256>-primary.xml.zst`（PackageKit 的 metadata 快取，dnf 把剛下載的 metadata 複製到這裡） | `root:root 600`，修改時間 17:41:47 與 17:41:50 UTC，在安裝的 dnf 交易內；這個目錄、`repodata/`、`solv/` 是 755，`solv/cloudflared-stable.solv` 是 644，`/var/cache/PackageKit/44/metadata/` 下其他套件庫的目錄都是 755 |
 | 安裝程式自己寫的檔案 | 照預期：`/etc/credstore` 700 與其中的檔案 600，unit、`.repo` 檔、套件簽章金鑰、firewalld 的 zone 檔、標記檔 644 |
 | `rpmdb.sqlite` 與 dnf5 的交易紀錄 | 644 |
 
 原因：執行腳本開頭的 `umask 077` 一路傳給安裝程式和它呼叫的 dnf，dnf 依 umask 建立狀態檔與快取。SaaS 主機上安裝程式由 sudo 執行；sudo 的預設 umask 是 022，但 sudo 會把它和呼叫者的 umask 合併（sudoers 設了 `umask_override` 時除外），所以從 umask 較嚴（例如 027、077）的 shell 執行時，較嚴的 umask 一樣會傳給安裝程式與 dnf，同樣的問題也會在 SaaS 主機上發生；deploy/host/README.md 因此要求從 `umask` 印出 `0022` 的 shell 執行。影響是一般使用者的 dnf 讀不到系統狀態（上一節的 `from_repo` 就是如此），套件與服務本身不受影響。
 
+完整性檢查（2026-10-21，協調者在展示機上以唯讀指令執行）：
+
+- 以 `sudo find` 搜尋 `/etc`、`/usr`、`/var`、`/opt`（`-xdev`），找修改時間或狀態變更時間在 2026-10-20 17:15:00–17:50:00 UTC（兩次 dry run 與安裝的時段）、而其他使用者讀不到的檔案與目錄。排除 k3s 與 journald 寫入的 `/var/lib/rancher`、`/var/log/pods`、`/var/log/containers`、`/var/lib/kubelet`、`/var/log/journal`、`/var/lib/containerd`、`/var/lib/cni`：它們不是執行腳本的子程序寫的。
+- 找到的只有以下兩類：
+  - 預期的：`/etc/credstore` 700 與其中的 token、設定檔 600；`/var/lib/trustiot-demo` 700，其中三次執行的 `.log`、`.exit`、`.post` 600，放置好的執行腳本與安裝程式 700，firewalld 備份目錄 700 與其中的 `runtime.txt`、`permanent.txt`、`complete` 600；`cloudflared-demo.service` 的 systemd PrivateTmp 目錄 `/var/tmp/systemd-private-<id>-cloudflared-demo.service-<id>` 700（systemd 本來就這樣建立）。
+  - dnf 的：上表的六個 TOML、libdnf5 的 `cloudflared-stable-<hash>` 快取，以及 PackageKit 的兩個檔。
+- 另以 `sudo find` 不限時間搜尋套件管理的路徑 `/usr/lib/sysimage`、`/var/cache/libdnf5`、`/var/lib/dnf`、`/etc/yum.repos.d`、`/etc/pki/rpm-gpg`、`/usr/local`、`/etc/dnf`、`/var/cache/PackageKit`，除了上表的項目，沒有其他讀不到的檔案或目錄。
+
 修正：commit `12db555`（`fix(scripts): run the demo installer under umask 022, not the runner's 077`）只讓安裝程式在 umask 022 下執行；執行腳本自己的 `.log`、`.exit`、`.post` 仍以 077 建立（0600），複本仍以 `install -m` 設為 0600 與 0700。022 不會放寬任何 secret：deploy/host 的 `writeFile` 以 `O_EXCL` 和最終權限建立檔案後再 `chmod`，`makeDirectory` 以指定權限 `mkdir` 後再 `chmod`，都不依賴呼叫者的 umask。單元測試以替身安裝程式確認它看到的 umask 是 `0022`、它建立的檔案是 644，執行腳本的 `.log`、`.exit`、`.post` 是 600，複本是 700 與 600；拿掉 022，或把 022 放到腳本開頭，測試都會失敗。
 
-展示機上已經變成 600 與 700 的權限由人以一次性的指令改回（[runbook](../runbooks/demo-environment.md)「2026-10-21 安裝留下的 dnf 權限」）：那六個檔改成 0644，快取目錄以 `chmod -R u=rwX,go=rX` 改回。
+展示機上已經變成 600 與 700 的權限由人以一次性的指令改回（[runbook](../runbooks/demo-environment.md)「2026-10-21 安裝留下的 dnf 權限」）：那六個檔改成 0644，libdnf5 與 PackageKit 的 `cloudflared-stable-<hash>` 目錄以 `chmod -R u=rwX,go=rX` 改回。
 
 > **待補**：協調者在恢復之後讀到的權限（六個檔與快取目錄）補在這裡。
 

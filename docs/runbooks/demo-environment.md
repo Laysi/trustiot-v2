@@ -78,20 +78,24 @@ bun scripts/demo/tunnel.ts handoff-key --ssh-host "$DEMO_SSH_HOST"
 2026-10-21（UTC+8；dnf 交易在 2026-10-20 17:41:47 UTC）的安裝時，執行腳本的 `umask 077` 傳給了安裝程式呼叫的 dnf。之後展示機上：
 
 - `/usr/lib/sysimage/libdnf5/` 的 `environments.toml`、`groups.toml`、`modules.toml`、`nevras.toml`、`packages.toml`、`system.toml` 是 `root:root 600`（應為 644）；一般使用者的 dnf 讀不到系統狀態，`dnf repoquery` 只在 stderr 報錯、結束碼 0。
-- Cloudflare 套件庫的快取 `/var/cache/libdnf5/cloudflared-stable-<hash>/` 是 700，其中 repodata 的檔案是 600（其他套件庫的快取是 755 與 644）。
+- Cloudflare 套件庫的 dnf 快取 `/var/cache/libdnf5/cloudflared-stable-<hash>/`：這個目錄與其中的 `repodata`、`solv`、`packages` 是 700，`repomd.xml` 與 primary 檔是 600（其他套件庫的快取是 755 與 644）。
+- PackageKit 的 metadata 快取 `/var/cache/PackageKit/<releasever>/metadata/cloudflared-stable-<hash>/repodata/` 的 `repomd.xml` 與 `<sha256>-primary.xml.zst` 是 `root:root 600`（dnf 把剛下載的 metadata 複製到這裡；同一處的目錄是 755，其他檔案是 644）。
 
-安裝程式自己寫的檔案（`/etc/credstore` 700 與 600，unit、`.repo` 檔、套件簽章金鑰、firewalld 的 zone 檔、標記檔 644）、`rpmdb.sqlite` 與 dnf5 的交易紀錄（644）都不受影響。修正是 commit `12db555`（`fix(scripts): run the demo installer under umask 022, not the runner's 077`，Laysi/trustiot-v2#466）：之後的執行只讓安裝程式在 umask 022 下跑。已經改變的權限要由人在展示機上改回一次（`<hash>` 以 `ls -d /var/cache/libdnf5/cloudflared-stable-*` 查到的為準）：
+安裝程式自己寫的檔案（`/etc/credstore` 700 與 600，unit、`.repo` 檔、套件簽章金鑰、firewalld 的 zone 檔、標記檔 644）、`rpmdb.sqlite` 與 dnf5 的交易紀錄（644）都不受影響。修正是 commit `12db555`（`fix(scripts): run the demo installer under umask 022, not the runner's 077`，Laysi/trustiot-v2#466）：之後的執行只讓安裝程式在 umask 022 下跑。已經改變的權限要由人改回一次。以下在工作站上執行，經 ssh 在展示機上先印出改回前的權限，把六個檔改成 0644、兩個 `cloudflared-stable-<hash>` 目錄以 `chmod -R u=rwX,go=rX` 改回，再印出改回後的權限，最後不用 root 讀一次 `from_repo`（要印出 `cloudflared-stable`）：
 
 ```sh
-# 展示機上，改回之前與之後各讀一次
-stat -c '%a %U:%G %n' /usr/lib/sysimage/libdnf5/*.toml
-sudo find /var/cache/libdnf5/cloudflared-stable-<hash> -printf '%m %u:%g %p\n'
-sudo chmod 0644 /usr/lib/sysimage/libdnf5/environments.toml /usr/lib/sysimage/libdnf5/groups.toml \
-  /usr/lib/sysimage/libdnf5/modules.toml /usr/lib/sysimage/libdnf5/nevras.toml \
-  /usr/lib/sysimage/libdnf5/packages.toml /usr/lib/sysimage/libdnf5/system.toml
-sudo chmod -R u=rwX,go=rX /var/cache/libdnf5/cloudflared-stable-<hash>
-# 不用 root 也要印出 cloudflared-stable
-dnf -q repoquery --installed --disablerepo='*' --qf '%{from_repo}\n' cloudflared
+ssh "$DEMO_SSH_HOST" 'set -e; f=/usr/lib/sysimage/libdnf5; set -- /var/cache/libdnf5/cloudflared-stable-* /var/cache/PackageKit/*/metadata/cloudflared-stable-*; echo before:; stat -c "%a %U:%G %n" $f/*.toml; sudo -n find "$@" -printf "%m %u:%g %p\n"; sudo -n chmod 0644 $f/environments.toml $f/groups.toml $f/modules.toml $f/nevras.toml $f/packages.toml $f/system.toml; sudo -n chmod -R u=rwX,go=rX "$@"; echo after:; stat -c "%a %U:%G %n" $f/*.toml; sudo -n find "$@" -printf "%m %u:%g %p\n"; dnf -q repoquery --installed --disablerepo="*" --qf "%{from_repo}\n" cloudflared'
+```
+
+`set --` 讓每個符合的快取目錄各自成為一個參數（PackageKit 可能有好幾個 `<releasever>`）；有一個樣式沒有符合時，`find` 拿到的是樣式本身而失敗，`set -e` 就在改任何權限之前停下。
+
+要確認沒有漏掉的檔案時，以唯讀的 `find` 找某段時間內變更、而其他使用者讀不到的檔案與目錄（排除 k3s 與 journald 寫入的路徑，它們不是執行腳本的子程序寫的），以及套件管理路徑下所有讀不到的項目。2026-10-21 的結果記在 [測試報告](../test-reports/2026-10-21-466-demo-tunnel-access.md)「安裝留下的 dnf 權限」：
+
+```sh
+# 唯讀：<開始>、<結束> 是要查的時段，寫成 "YYYY-MM-DD HH:MM:SS UTC"（2026-10-21 查的是兩次 dry run 與安裝的 2026-10-20 17:15:00–17:50:00 UTC）
+ssh "$DEMO_SSH_HOST" 'sudo -n find /etc /usr /var /opt -xdev \( -path /var/lib/rancher -o -path /var/log/pods -o -path /var/log/containers -o -path /var/lib/kubelet -o -path /var/log/journal -o -path /var/lib/containerd -o -path /var/lib/cni \) -prune -o \( \( -newermt "<開始>" ! -newermt "<結束>" \) -o \( -newerct "<開始>" ! -newerct "<結束>" \) \) ! -perm -o=r -printf "%m %u:%g %p\n"'
+# 唯讀：套件管理的路徑，不限時間
+ssh "$DEMO_SSH_HOST" 'sudo -n find /usr/lib/sysimage /var/cache/libdnf5 /var/lib/dnf /etc/yum.repos.d /etc/pki/rpm-gpg /usr/local /etc/dnf /var/cache/PackageKit ! -perm -o=r -printf "%m %u:%g %p\n"'
 ```
 
 ## cloudflared 的更新與退回
