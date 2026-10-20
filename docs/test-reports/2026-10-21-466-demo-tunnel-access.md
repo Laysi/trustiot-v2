@@ -14,7 +14,7 @@ Laysi/trustiot-v2#466（父 issue Laysi/trustiot-v2#457）：展示機自己的 
 | 維運 tunnel | `cloudflared.service`，MainPID 1005，自 2026-10-10（展示機的時區）起執行 |
 | Cloudflare | 依私有的 Cloudflare 變更清單由協調者套用：一個 self-hosted Access application 涵蓋三個主機名稱（受邀名單的 group，require Google 登入方式，binding cookie）；gateway 主機名稱的 `/mqtt` 與 `/certs/renew` 各一個 Bypass application；tunnel 路由第 1 段（略過路徑的錨定規則回 `http_status:418` 且不要求 JWT，其餘回 `http_status:418` 並設 `originRequest.access`，catch-all 404）；configuration rule 對 gateway 主機名稱的兩條略過路徑關閉 Browser Integrity Check。zone 為 Free 方案，Bot Fight Mode 沒有改（2026-10-20 的決定） |
 | 工作站 | curl 8.21.0（OpenSSL 4.0.3），Bun 依 `.prototools` |
-| 程式碼 | 安裝、`status` 與 `check` 從 `feat/466-demo-tunnel-2` 的 `ae05499` 乾淨 checkout 執行（計畫記下 commit）；之後的修正（`status` 讀 cloudflared 來源的錯誤）在同一分支 |
+| 程式碼 | 安裝、`status` 與 `check` 從 `feat/466-demo-tunnel-2` 的 `ae05499` 乾淨 checkout 執行（計畫記下 commit）；之後的修正（`status` 讀 cloudflared 來源的錯誤、執行腳本的 umask）在同一分支 |
 
 ## 指令
 
@@ -69,13 +69,36 @@ Cloudflare 端，唯讀，由協調者執行：
 
 ### cloudflared 的來源讀不到（已修正）
 
-`status`（17:46 UTC）印出 `cloudflared: 2026.10.2-1 from unknown`。2026-10-21 在展示機上查到：dnf5 5.4.6 把套件的 `from_repo` 存在 `/usr/lib/sysimage/libdnf5/packages.toml`，安裝的 dnf 交易（17:41:47 UTC）之後這個檔是 root:root 0600（目錄 0755）。一般使用者的 `dnf -q repoquery --installed --qf '%{from_repo}\n' cloudflared` 只在 stderr 寫 `Loading system state TOML file … failed`，stdout 是空的，結束碼 0；腳本把 stderr 丟掉，空字串被當成值。同一個查詢以 root 加上 `--disablerepo='*'` 印出 `cloudflared-stable`。這個檔為什麼變成 0600 尚未確認。
+`status`（17:46 UTC）印出 `cloudflared: 2026.10.2-1 from unknown`。2026-10-21 在展示機上查到：dnf5 5.4.6 把套件的 `from_repo` 存在 `/usr/lib/sysimage/libdnf5/packages.toml`，安裝的 dnf 交易（17:41:47 UTC）之後這個檔是 root:root 0600（目錄 0755）。一般使用者的 `dnf -q repoquery --installed --qf '%{from_repo}\n' cloudflared` 只在 stderr 寫 `Loading system state TOML file … failed`，stdout 是空的，結束碼 0；腳本把 stderr 丟掉，空字串被當成值。同一個查詢以 root 加上 `--disablerepo='*'` 印出 `cloudflared-stable`。這個檔為什麼變成 0600，見下一節。
 
 修正後腳本以 root 讀 `from_repo`（`--disablerepo='*'`：已安裝的套件不需要套件庫的 metadata），保留 dnf 的 stderr；空的或不像套件庫 ID 的回答、dnf 失敗，都是讀取失敗，附上 dnf 最後一行 stderr，不再當成值。`status` 與安裝最後的報告行改為一行 `OK cloudflared <版本> from cloudflared-stable`；來自別處或讀不到時是 `FAIL`，附上原因（`status` 照樣以 0 結束，和它其他的 `FAIL` 行一樣）。dry run 的計畫在來源的位置寫出讀取失敗與原因。單元測試涵蓋 root 的指令列（含 shell 傳給 dnf 的參數）、空的輸出、dnf 失敗、正常的輸出，以及三處使用者。
 
-修正後在展示機上跑 `status` 的那一行：
+修正後以 `0906740` 的程式碼在 2026-10-20 18:24:32 UTC 跑 `status`，來源那一行是：
 
-> **待補**：協調者以本分支修正後的程式碼執行 `status`，把遮蔽後的 cloudflared 來源那一行補在這裡。
+```text
+OK cloudflared 2026.10.2-1 from cloudflared-stable
+```
+
+這次 `status` 的其他各行與 17:46 UTC 那次相同：`127.0.0.1:20250/ready` 4 條連線、`NRestarts=0`，token 與設定檔 `root:root 600`、目錄 `/etc/credstore` `root:root 700`，`/run/trustiot-demo` 是空的，沒有留下的安裝程式執行，token 的稽核三項都是 0（journal、展示機的兩個目錄、工作站的日誌目錄），維運 tunnel 仍是同一個行程。
+
+### 安裝留下的 dnf 權限（已修正；展示機上待恢復）
+
+2026-10-21 在展示機上以唯讀指令查到：
+
+| 位置 | 權限 |
+| --- | --- |
+| `/usr/lib/sysimage/libdnf5/` 的 `environments.toml`、`groups.toml`、`modules.toml`、`nevras.toml`、`packages.toml`、`system.toml`（dnf5 的系統狀態） | `root:root 600`，修改時間都是 2026-10-20 17:41:47 UTC，也就是安裝的 dnf 交易 |
+| `/var/cache/libdnf5/cloudflared-stable-<hash>/`（Cloudflare 套件庫的快取） | 目錄 700，repodata 的檔案 600；同一處其他套件庫的快取是 755 與 644 |
+| 安裝程式自己寫的檔案 | 照預期：`/etc/credstore` 700 與其中的檔案 600，unit、`.repo` 檔、套件簽章金鑰、firewalld 的 zone 檔、標記檔 644 |
+| `rpmdb.sqlite` 與 dnf5 的交易紀錄 | 644 |
+
+原因：執行腳本開頭的 `umask 077` 一路傳給安裝程式和它呼叫的 dnf，dnf 依 umask 建立狀態檔與快取。在 SaaS 主機上安裝程式由 sudo 執行，umask 是 022，不會這樣。影響是一般使用者的 dnf 讀不到系統狀態（上一節的 `from_repo` 就是如此），套件與服務本身不受影響。
+
+修正：commit `12db555`（`fix(scripts): run the demo installer under umask 022, not the runner's 077`）只讓安裝程式在 umask 022 下執行；執行腳本自己的 `.log`、`.exit`、`.post` 仍以 077 建立（0600），複本仍以 `install -m` 設為 0600 與 0700。022 不會放寬任何 secret：deploy/host 的 `writeFile` 以 `O_EXCL` 和最終權限建立檔案後再 `chmod`，`makeDirectory` 以指定權限 `mkdir` 後再 `chmod`，都不依賴呼叫者的 umask。單元測試以替身安裝程式確認它看到的 umask 是 `0022`、它建立的檔案是 644，執行腳本的 `.log`、`.exit`、`.post` 是 600，複本是 700 與 600；拿掉 022，或把 022 放到腳本開頭，測試都會失敗。
+
+展示機上已經變成 600 與 700 的權限由人以一次性的指令改回（[runbook](../runbooks/demo-environment.md)「2026-10-21 安裝留下的 dnf 權限」）：那六個檔改成 0644，快取目錄以 `chmod -R u=rwX,go=rX` 改回。
+
+> **待補**：協調者在恢復之後讀到的權限（六個檔與快取目錄）補在這裡。
 
 ### 連線狀態（驗收 1）
 

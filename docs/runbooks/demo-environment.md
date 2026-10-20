@@ -53,7 +53,7 @@ bun scripts/demo/tunnel.ts handoff-key --ssh-host "$DEMO_SSH_HOST"
 
    lab 鎖（展示機的 `~/e2e.lock`）被別的工作持有，或鎖的目錄在但讀不到擁有者（別的工作正在取得鎖，或取得到一半就停了）時停下；dry run 不取得鎖。它先檢查：沒有 `cloudflared-update.timer` 或 `.service`、`/usr/local/bin/cloudflared` 不存在或是指向 `/usr/bin/cloudflared` 的連結（一般檔案或指向別處就停下）、`127.0.0.1:20250` 沒被別的程式佔用、沒有其他安裝程式的執行還在。接著把安裝程式與它的執行腳本放進 `/var/lib/trustiot-demo/`、密文放進 `/run/trustiot-demo/`（都是 root 0700），三者的 sha256 寫進計畫；每次執行先把它們複製成這次執行自己的檔案（以執行 ID 命名），核對複本與計畫相同後只用複本，與計畫不同（例如另一次執行在這期間放了別的密文）就什麼都不跑。
 
-   安裝程式在展示機的 systemd 暫時 unit `trustiot-demo-install-<執行 ID>` 裡執行（`systemd-run --collect`），不靠工作站或 ssh 連線；token 在展示機上解密後直接進安裝程式的 stdin，不出現在指令列、檔案或輸出。輸出寫到 `/var/lib/trustiot-demo/<執行 ID>.log`，結束狀態寫到 `<執行 ID>.exit`，unit 的 `ExecStopPost` 最後寫 `<執行 ID>.post`；`tunnel.ts` 每 10 秒讀一次並印出新的行。安裝程式要逐一讀 firewalld 的 zone 與 policy，一次 dry run 約數分鐘，期間沒有新輸出是正常的。
+   安裝程式在展示機的 systemd 暫時 unit `trustiot-demo-install-<執行 ID>` 裡執行（`systemd-run --collect`），不靠工作站或 ssh 連線；token 在展示機上解密後直接進安裝程式的 stdin，不出現在指令列、檔案或輸出。輸出寫到 `/var/lib/trustiot-demo/<執行 ID>.log`，結束狀態寫到 `<執行 ID>.exit`，unit 的 `ExecStopPost` 最後寫 `<執行 ID>.post`。執行腳本自己的這些檔案以 umask 077 建立（0600）；只有安裝程式在 umask 022 下執行，和 SaaS 主機上 sudo 給它的相同，所以它呼叫的 dnf 建立的狀態檔與快取是一般的 644 與 755，而 token 等 secret 的權限由安裝程式自己明確設定，不依賴 umask；`tunnel.ts` 每 10 秒讀一次並印出新的行。安裝程式要逐一讀 firewalld 的 zone 與 policy，一次 dry run 約數分鐘，期間沒有新輸出是正常的。
 
    最後印出計畫並以確認碼涵蓋：commit、token 所屬的 tunnel（安裝程式從 token 讀到的 ID 必須等於 `--tunnel-id`，否則停下）、安裝程式的每一項變更、cloudflared 套件的版本變化（目前版本與來源、換成的版本、維運 tunnel 何時改用新版）、要補回的連結與標記、`cloudflared-update` 的狀態。安裝程式的變更只能是允許清單上的項目：trusted zone 的兩項變更（runtime 與 permanent）、Cloudflare 的套件庫與金鑰、換掉 cloudflared 套件、`cloudflared-demo` 的 token、設定檔與 unit、`daemon-reload`、啟用、啟動與重啟 `cloudflared-demo`。其他任何變更都會停下；確認過的例外以 `--allow-change "<計畫印出的那一行>"` 逐行指名（可重複），也算進確認碼。
 5. **安裝**：同一個指令加 `--apply --confirm <確認碼>`。它取得 lab 鎖（自己已持有時加 `--lock-held`，鎖的擁有者必須正是 Laysi/trustiot-v2#466），在鎖內重新放置檔案、再跑一次 dry run，計畫與確認碼不符就停下；接著在第一次安裝前把 trusted zone 存到 `/var/lib/trustiot-demo/firewalld/`（`trusted.xml`，沒有這個檔時記下它不存在；以及 `firewall-cmd --info-zone=trusted` 的 runtime 與 permanent 輸出；已有完整備份時不覆寫，所以之後的輪替不會蓋掉安裝前的狀態），記錄主機狀態、安裝、再記錄一次。成功後刪掉 `/run/trustiot-demo/` 的交付私鑰與密文；失敗時兩者留著，修好後可以重跑。最後印出 `run <執行 ID>: service_result=… exit_code=… exit_status=… link=… marker=…`（`ExecStopPost` 的結果）、`cloudflared now: <來源那一行>; <連結、標記與 cloudflared-update 的狀態>`（來源那一行與 `status` 相同，見下一步），以及維運 tunnel 是否仍是同一個行程（`cloudflared.service kept running (same process)`）；`cloudflared-demo.service` 自己的狀態不在這裡，由下一步的 `status` 讀。
@@ -63,7 +63,7 @@ bun scripts/demo/tunnel.ts handoff-key --ssh-host "$DEMO_SSH_HOST"
    bun scripts/demo/tunnel.ts status --ssh-host "$DEMO_SSH_HOST"
    ```
 
-   印出 `cloudflared-demo.service` 的狀態與它對 Cloudflare 的連線數（`127.0.0.1:20250/ready`）、維運 tunnel 的狀態與它正在跑的執行檔（換過套件後顯示 `(deleted)`，表示下次重啟才用新版）、cloudflared 的版本與來源（一行：dnf 的 `from_repo` 是 `cloudflared-stable` 時 `OK cloudflared <版本> from cloudflared-stable`；來自別處，或讀不到時 `FAIL`，讀不到時附上 dnf 最後一行的錯誤。`from_repo` 以 root 讀：dnf5 把它存在 `/usr/lib/sysimage/libdnf5/packages.toml`，安裝之後這個檔在展示機上是 root 0600，一般使用者的 `dnf repoquery` 讀不到也不報錯）、連結與標記和 `cloudflared-update` 的狀態（標記不在而 timer 啟用時 `FAIL`，連結或標記不在時 `WARN`）、token 與設定檔的擁有者與權限、`/run/trustiot-demo/` 與 `/var/lib/trustiot-demo/` 剩下的檔案、還在的安裝程式執行、token 或其中的 secret 是否出現在整個 journal（含指令列等所有欄位）或那兩個目錄（只回傳次數；由 root 在展示機上把兩者寫進 `/run` 下 0600 的 pattern 檔，只以 `grep -f` 讀，不進指令列）、工作站日誌目錄裡含 tunnel token 開頭（`eyJhIjoi`）的檔案數，以及展示環境入口 Service 的 ClusterIP。`FAIL` 與 `WARN` 只標出問題，`status` 照樣以 0 結束，所以每一行都要讀過。Cloudflare 端以 `GET /accounts/<帳號>/cfd_tunnel/<tunnel>` 確認 `status` 為 `healthy`。
+   印出 `cloudflared-demo.service` 的狀態與它對 Cloudflare 的連線數（`127.0.0.1:20250/ready`）、維運 tunnel 的狀態與它正在跑的執行檔（換過套件後顯示 `(deleted)`，表示下次重啟才用新版）、cloudflared 的版本與來源（一行：dnf 的 `from_repo` 是 `cloudflared-stable` 時 `OK cloudflared <版本> from cloudflared-stable`；來自別處，或讀不到時 `FAIL`，讀不到時附上 dnf 最後一行的錯誤。`from_repo` 以 root 讀：dnf5 把它存在 `/usr/lib/sysimage/libdnf5/packages.toml`，這個檔是 root 0600 時（2026-10-21 的安裝留下的，見「2026-10-21 安裝留下的 dnf 權限」），一般使用者的 `dnf repoquery` 讀不到也不報錯）、連結與標記和 `cloudflared-update` 的狀態（標記不在而 timer 啟用時 `FAIL`，連結或標記不在時 `WARN`）、token 與設定檔的擁有者與權限、`/run/trustiot-demo/` 與 `/var/lib/trustiot-demo/` 剩下的檔案、還在的安裝程式執行、token 或其中的 secret 是否出現在整個 journal（含指令列等所有欄位）或那兩個目錄（只回傳次數；由 root 在展示機上把兩者寫進 `/run` 下 0600 的 pattern 檔，只以 `grep -f` 讀，不進指令列）、工作站日誌目錄裡含 tunnel token 開頭（`eyJhIjoi`）的檔案數，以及展示環境入口 Service 的 ClusterIP。`FAIL` 與 `WARN` 只標出問題，`status` 照樣以 0 結束，所以每一行都要讀過。Cloudflare 端以 `GET /accounts/<帳號>/cfd_tunnel/<tunnel>` 確認 `status` 為 `healthy`。
 
 ### 中斷之後
 
@@ -72,6 +72,27 @@ bun scripts/demo/tunnel.ts handoff-key --ssh-host "$DEMO_SSH_HOST"
 1. 在展示機上 `systemctl status trustiot-demo-install-<執行 ID>`：還在跑就等；查不到表示已結束。`sudo tail /var/lib/trustiot-demo/<執行 ID>.log` 看進度，`sudo cat /var/lib/trustiot-demo/<執行 ID>.post` 看結果（`link=`、`marker=` 是補回的結果，`conflict` 或 `failed` 時照「cloudflared 的更新與退回」手動補回）。
 2. 非停不可時 `sudo systemctl stop trustiot-demo-install-<執行 ID>`：這會中斷正在跑的 dnf 或 firewall-cmd，`ExecStopPost` 仍會補回連結與標記。之後跑 `status` 看主機狀態，必要時再跑一次 dry run。
 3. 確認 unit 已結束、`cat ~/e2e.lock/owner` 是這次執行寫的那一行（`Laysi/trustiot-v2#466 <時間> demo tunnel-install`）之後，才以 `rm -rf ~/e2e.lock` 釋放鎖。
+
+### 2026-10-21 安裝留下的 dnf 權限
+
+2026-10-21（UTC+8；dnf 交易在 2026-10-20 17:41:47 UTC）的安裝時，執行腳本的 `umask 077` 傳給了安裝程式呼叫的 dnf。之後展示機上：
+
+- `/usr/lib/sysimage/libdnf5/` 的 `environments.toml`、`groups.toml`、`modules.toml`、`nevras.toml`、`packages.toml`、`system.toml` 是 `root:root 600`（應為 644）；一般使用者的 dnf 讀不到系統狀態，`dnf repoquery` 只在 stderr 報錯、結束碼 0。
+- Cloudflare 套件庫的快取 `/var/cache/libdnf5/cloudflared-stable-<hash>/` 是 700，其中 repodata 的檔案是 600（其他套件庫的快取是 755 與 644）。
+
+安裝程式自己寫的檔案（`/etc/credstore` 700 與 600，unit、`.repo` 檔、套件簽章金鑰、firewalld 的 zone 檔、標記檔 644）、`rpmdb.sqlite` 與 dnf5 的交易紀錄（644）都不受影響。修正是 commit `12db555`（`fix(scripts): run the demo installer under umask 022, not the runner's 077`，Laysi/trustiot-v2#466）：之後的執行只讓安裝程式在 umask 022 下跑。已經改變的權限要由人在展示機上改回一次（`<hash>` 以 `ls -d /var/cache/libdnf5/cloudflared-stable-*` 查到的為準）：
+
+```sh
+# 展示機上，改回之前與之後各讀一次
+stat -c '%a %U:%G %n' /usr/lib/sysimage/libdnf5/*.toml
+sudo find /var/cache/libdnf5/cloudflared-stable-<hash> -printf '%m %u:%g %p\n'
+sudo chmod 0644 /usr/lib/sysimage/libdnf5/environments.toml /usr/lib/sysimage/libdnf5/groups.toml \
+  /usr/lib/sysimage/libdnf5/modules.toml /usr/lib/sysimage/libdnf5/nevras.toml \
+  /usr/lib/sysimage/libdnf5/packages.toml /usr/lib/sysimage/libdnf5/system.toml
+sudo chmod -R u=rwX,go=rX /var/cache/libdnf5/cloudflared-stable-<hash>
+# 不用 root 也要印出 cloudflared-stable
+dnf -q repoquery --installed --disablerepo='*' --qf '%{from_repo}\n' cloudflared
+```
 
 ## cloudflared 的更新與退回
 
