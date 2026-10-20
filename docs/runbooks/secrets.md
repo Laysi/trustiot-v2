@@ -153,6 +153,8 @@ SaaS 目前沒有人建立的這個 Secret（`deploy/flux` 的 values 沒有設�
 
 在 `deploy/host/README.md`（Laysi/trustiot-v2#64）。原則：token 檔案只有 root 能讀，以 systemd `LoadCredential` 交給 cloudflared；換 token 後重啟 cloudflared，確認網站與維運 SSH 都恢復，再於 Cloudflare 撤銷舊 token。維運 SSH 也經這條 tunnel，所以先確認有其他進入主機的方式（例如實體主控台）再操作。
 
+展示環境的 tunnel token（展示機的 `cloudflared-demo.service`，Laysi/trustiot-v2#466）在[展示環境 runbook](demo-environment.md)「輪替 tunnel token」：新 token 以 RSA-OAEP 交付給展示機，再以 `scripts/demo/tunnel.ts install` 換上。展示機的維運 SSH 走另一條 tunnel，不受影響。
+
 ### CA 私鑰
 
 Laysi/trustiot-v2#78 補上確切指令。原則：
