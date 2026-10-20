@@ -35,7 +35,7 @@ token 由同一個人在 Cloudflare 的 API 執行環境裡取得並加密（見
 
 ## 安裝 connector
 
-在有 repo 的工作站上執行，`tunnel.ts` 經 ssh 操作展示機。工作目錄必須是審查過的 commit 的乾淨 checkout：`scripts/demo` 或 `deploy/host` 有未 commit 的變更時，計畫直接停下；計畫記下 commit，確認碼也涵蓋它。日誌與記錄放在 `$XDG_STATE_HOME/trustiot-v2/demo/`（0700，檔案 0600）或 `--log-dir`。
+在有 repo 的工作站上執行，`tunnel.ts` 經 ssh 操作展示機。工作目錄必須是審查過的 commit 的乾淨 checkout：`scripts/demo` 或 `deploy/host` 有未 commit 的變更時，計畫直接停下；計畫記下 commit，確認碼也涵蓋它。日誌與記錄放在 `$XDG_STATE_HOME/trustiot-v2/demo/`（0700，檔案 0600）或 `--log-dir`；指令失敗時最後印出 `ERROR <原因>` 與 `log: <日誌路徑>`，成功時不印日誌路徑。
 
 ```sh
 : "${DEMO_SSH_HOST:?set DEMO_SSH_HOST to the ssh host of the demo machine}"
@@ -56,14 +56,14 @@ bun scripts/demo/tunnel.ts handoff-key --ssh-host "$DEMO_SSH_HOST"
    安裝程式在展示機的 systemd 暫時 unit `trustiot-demo-install-<執行 ID>` 裡執行（`systemd-run --collect`），不靠工作站或 ssh 連線；token 在展示機上解密後直接進安裝程式的 stdin，不出現在指令列、檔案或輸出。輸出寫到 `/var/lib/trustiot-demo/<執行 ID>.log`，結束狀態寫到 `<執行 ID>.exit`，unit 的 `ExecStopPost` 最後寫 `<執行 ID>.post`；`tunnel.ts` 每 10 秒讀一次並印出新的行。安裝程式要逐一讀 firewalld 的 zone 與 policy，一次 dry run 約數分鐘，期間沒有新輸出是正常的。
 
    最後印出計畫並以確認碼涵蓋：commit、token 所屬的 tunnel（安裝程式從 token 讀到的 ID 必須等於 `--tunnel-id`，否則停下）、安裝程式的每一項變更、cloudflared 套件的版本變化（目前版本與來源、換成的版本、維運 tunnel 何時改用新版）、要補回的連結與標記、`cloudflared-update` 的狀態。安裝程式的變更只能是允許清單上的項目：trusted zone 的兩項變更（runtime 與 permanent）、Cloudflare 的套件庫與金鑰、換掉 cloudflared 套件、`cloudflared-demo` 的 token、設定檔與 unit、`daemon-reload`、啟用、啟動與重啟 `cloudflared-demo`。其他任何變更都會停下；確認過的例外以 `--allow-change "<計畫印出的那一行>"` 逐行指名（可重複），也算進確認碼。
-5. **安裝**：同一個指令加 `--apply --confirm <確認碼>`。它取得 lab 鎖（自己已持有時加 `--lock-held`，鎖的擁有者必須正是 Laysi/trustiot-v2#466），在鎖內重新放置檔案、再跑一次 dry run，計畫與確認碼不符就停下；接著在第一次安裝前把 trusted zone 存到 `/var/lib/trustiot-demo/firewalld/`（`trusted.xml`，沒有這個檔時記下它不存在；以及 `firewall-cmd --info-zone=trusted` 的 runtime 與 permanent 輸出；已有完整備份時不覆寫，所以之後的輪替不會蓋掉安裝前的狀態），記錄主機狀態、安裝、再記錄一次。成功後刪掉 `/run/trustiot-demo/` 的交付私鑰與密文；失敗時兩者留著，修好後可以重跑。最後確認維運 tunnel 仍是同一個行程。
+5. **安裝**：同一個指令加 `--apply --confirm <確認碼>`。它取得 lab 鎖（自己已持有時加 `--lock-held`，鎖的擁有者必須正是 Laysi/trustiot-v2#466），在鎖內重新放置檔案、再跑一次 dry run，計畫與確認碼不符就停下；接著在第一次安裝前把 trusted zone 存到 `/var/lib/trustiot-demo/firewalld/`（`trusted.xml`，沒有這個檔時記下它不存在；以及 `firewall-cmd --info-zone=trusted` 的 runtime 與 permanent 輸出；已有完整備份時不覆寫，所以之後的輪替不會蓋掉安裝前的狀態），記錄主機狀態、安裝、再記錄一次。成功後刪掉 `/run/trustiot-demo/` 的交付私鑰與密文；失敗時兩者留著，修好後可以重跑。最後印出 `run <執行 ID>: service_result=… exit_code=… exit_status=… link=… marker=…`（`ExecStopPost` 的結果）、`cloudflared now: <來源那一行>; <連結、標記與 cloudflared-update 的狀態>`（來源那一行與 `status` 相同，見下一步），以及維運 tunnel 是否仍是同一個行程（`cloudflared.service kept running (same process)`）；`cloudflared-demo.service` 自己的狀態不在這裡，由下一步的 `status` 讀。
 6. **確認**：
 
    ```sh
    bun scripts/demo/tunnel.ts status --ssh-host "$DEMO_SSH_HOST"
    ```
 
-   印出 `cloudflared-demo.service` 的狀態與它對 Cloudflare 的連線數（`127.0.0.1:20250/ready`）、維運 tunnel 的狀態與它正在跑的執行檔（換過套件後顯示 `(deleted)`，表示下次重啟才用新版）、cloudflared 的版本與來源、連結與標記和 `cloudflared-update` 的狀態（標記不在而 timer 啟用時 `FAIL`，連結或標記不在時 `WARN`）、token 與設定檔的擁有者與權限、`/run/trustiot-demo/` 與 `/var/lib/trustiot-demo/` 剩下的檔案、還在的安裝程式執行、token 或其中的 secret 是否出現在整個 journal（含指令列等所有欄位）或那兩個目錄（只回傳次數；由 root 在展示機上把兩者寫進 `/run` 下 0600 的 pattern 檔，只以 `grep -f` 讀，不進指令列）、工作站日誌目錄裡含 tunnel token 開頭（`eyJhIjoi`）的檔案數，以及展示環境入口 Service 的 ClusterIP。Cloudflare 端以 `GET /accounts/<帳號>/cfd_tunnel/<tunnel>` 確認 `status` 為 `healthy`。
+   印出 `cloudflared-demo.service` 的狀態與它對 Cloudflare 的連線數（`127.0.0.1:20250/ready`）、維運 tunnel 的狀態與它正在跑的執行檔（換過套件後顯示 `(deleted)`，表示下次重啟才用新版）、cloudflared 的版本與來源（一行：dnf 的 `from_repo` 是 `cloudflared-stable` 時 `OK cloudflared <版本> from cloudflared-stable`；來自別處，或讀不到時 `FAIL`，讀不到時附上 dnf 最後一行的錯誤。`from_repo` 以 root 讀：dnf5 把它存在 `/usr/lib/sysimage/libdnf5/packages.toml`，安裝之後這個檔在展示機上是 root 0600，一般使用者的 `dnf repoquery` 讀不到也不報錯）、連結與標記和 `cloudflared-update` 的狀態（標記不在而 timer 啟用時 `FAIL`，連結或標記不在時 `WARN`）、token 與設定檔的擁有者與權限、`/run/trustiot-demo/` 與 `/var/lib/trustiot-demo/` 剩下的檔案、還在的安裝程式執行、token 或其中的 secret 是否出現在整個 journal（含指令列等所有欄位）或那兩個目錄（只回傳次數；由 root 在展示機上把兩者寫進 `/run` 下 0600 的 pattern 檔，只以 `grep -f` 讀，不進指令列）、工作站日誌目錄裡含 tunnel token 開頭（`eyJhIjoi`）的檔案數，以及展示環境入口 Service 的 ClusterIP。`FAIL` 與 `WARN` 只標出問題，`status` 照樣以 0 結束，所以每一行都要讀過。Cloudflare 端以 `GET /accounts/<帳號>/cfd_tunnel/<tunnel>` 確認 `status` 為 `healthy`。
 
 ### 中斷之後
 
@@ -104,7 +104,7 @@ bun scripts/demo/tunnel.ts check --ssh-host "$DEMO_SSH_HOST" --stage 2    # 路�
 | 請求 | 預期 |
 | --- | --- |
 | app 主機名稱 `/`，瀏覽器的 User-Agent，沒有 Access 的 session | `access`：302 到 `<team>.cloudflareaccess.com` 的登入頁 |
-| gateway 主機名稱 `/mqtt`，WebSocket 升級，和閘道器的 client 一樣不帶 User-Agent 與 Accept，`Sec-WebSocket-Protocol: mqtt` | 到達 tunnel：第 1 段是 `origin`（418 或 101）；第 2 段是入口的任何回應，只要不是 `access`、`challenge`、`block`、`refused` 或 `tunnel-down` |
+| gateway 主機名稱 `/mqtt`，WebSocket 升級，和閘道器的 client 一樣不帶 User-Agent 與 Accept，`Sec-WebSocket-Protocol: mqtt` | 到達 tunnel：第 1 段是 `origin`（418 或 101）；第 2 段是入口的任何回應，只要不是 `access`、`challenge`、`block`、`refused` 或 `tunnel-down`。第 1 段目前一律 `FAIL`（`unexpected`，502），見下方「第 1 段的 WebSocket 升級」 |
 | gateway 主機名稱 `/certs/renew`，POST，不帶 User-Agent | 同上 |
 | gateway 與 ota 主機名稱的 `/auth/login`、`/healthz`（app 的路徑），不帶 User-Agent | `access`：Access 擋下，不會到 app（紀錄狀態碼與 `cf-ray`） |
 | gateway 與 ota 主機名稱的 `/`，不帶 User-Agent | `access` |
@@ -120,7 +120,20 @@ bun scripts/demo/tunnel.ts check --ssh-host "$DEMO_SSH_HOST" --stage 2    # 路�
 | `challenge` | 回應帶 `cf-mitigated: challenge`，或是 challenge 頁 | Cloudflare 要求瀏覽器驗證；閘道器過不了。在 gateway 或 ota 主機名稱出現時，多半是 Bot Fight Mode：記下時間、來源與 `cf-ray`（紀錄裡有），由使用者決定是否關閉整個 zone 的 Bot Fight Mode |
 | `block` | 403 加上 Cloudflare 的錯誤碼頁（例如 1010 瀏覽器特徵、1020 規則） | 被規則或 Browser Integrity Check 擋下；檢查 configuration rule 是否涵蓋該主機名稱（紀錄裡有 `cf-ray`） |
 | `tunnel-down` | 530 或錯誤碼 1033 | 沒有 connector 在線 |
-| `unexpected` | 其他（例如 502：路由的 origin 連不上） | 看日誌與路由設定 |
+| `unexpected` | 其他（例如 502：路由的 origin 連不上；WebSocket 升級的 502 見下方） | 看日誌與路由設定 |
+
+**第 1 段的 WebSocket 升級**：第 1 段的 `check` 中，gateway `/mqtt` 的 WebSocket 升級從兩處都是 `FAIL`：`unexpected`，502，`server: cloudflare`，148 bytes 的 HTML。原因是路由以 418 回應升級而不是 101：client 收到 Cloudflare 的 502 頁，而 Cloudflare 的 HTTP 請求分析與 connector 的計數都記錄 origin 回了 418（2026-10-21 實測；Cloudflare 的文件沒有描述這個行為）。所以這一項失敗不代表請求沒有到 connector，但 `check` 自己分不出來。人工確認請求到了 connector：在展示機上讀兩個計數，從工作站單獨送一次同樣的升級，再讀一次；`cloudflared_tunnel_total_requests` 與 `cloudflared_tunnel_response_by_code{status_code="418"}` 各多 1，就是這個請求到了 connector、由路由回了 418。期間有別的請求（例如已登入的瀏覽器）時差值會更大，那就重做。
+
+```sh
+# 展示機上（前後各一次）：只取兩個計數；metrics 的其他內容含 Cloudflare 的機房名稱，不貼進紀錄或報告
+curl -s --max-time 5 http://127.0.0.1:20250/metrics | grep -E '^cloudflared_tunnel_(total_requests|response_by_code\{status_code="418"\}) '
+# 工作站上：和 check 相同的升級請求
+curl -sS -i --http1.1 --max-time 15 -H 'User-Agent:' -H 'Accept:' -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' -H "Sec-WebSocket-Key: $(head -c 16 /dev/urandom | base64)" -H 'Sec-WebSocket-Protocol: mqtt' \
+  "https://$DEMO_GATEWAY_HOST/mqtt" | head -n 1
+```
+
+讓 `check` 自動讀這兩個計數並據以判斷是 Laysi/trustiot-v2#473。在那之前第 2 段把這個 502 當成入口的回應而通過（它不是 `access`、`challenge`、`block`、`refused` 或 `tunnel-down`），沒有計數佐證。也因為這一項，第 1 段的 `check` 一律以非零結束，其餘各項要逐行看是否 `PASS`。
 
 `check` 只印出與保存狀態碼、body 的位元組數（不含 body）、`server`、`cf-mitigated`、`content-type`、去掉 query 的 `location`、錯誤頁的標記與 `cf-ray`；主機名稱、Access 的 team 網域與 curl 錯誤訊息裡的家目錄都換成佔位符，可以直接放進測試報告。任何一項不符預期就以非零結束。curl 的 TLS 特徵和閘道器的 rustls 不同，所以展示用閘道器（Laysi/trustiot-v2#458）第一次連線後，再以 Cloudflare 的 Security Events（`firewallEventsAdaptive`，篩 gateway 主機名稱）確認沒有被 challenge 或擋下的紀錄。
 
