@@ -56,8 +56,12 @@ export function numberToIpv4(value: number): string {
  * The static band of an IPv4 Service range, or undefined when the range has none: Kubernetes keeps
  * the first min(max(16, size / 16), 256) addresses after the network address for Services that ask
  * for one, and hands out dynamic addresses from the rest first; a range of 16 addresses or fewer
- * has no band (https://kubernetes.io/docs/concepts/services-networking/cluster-ip-allocation/;
- * calculateRangeOffset in pkg/registry/core/service/ipallocator/bitmap.go, Kubernetes v1.36.5).
+ * has no band (https://kubernetes.io/docs/concepts/services-networking/cluster-ip-allocation/).
+ * In the Kubernetes v1.36.5 source the band size is calculateRangeOffset in
+ * pkg/registry/core/service/ipallocator/bitmap.go. Clusters with the ServiceCIDR API (stable and
+ * locked on since Kubernetes 1.33, so k3s 1.36) allocate through the IPAddress-based allocator:
+ * the MetaAllocator in cidrallocator.go creates one per ServiceCIDR with NewIPAllocator in
+ * ipallocator.go, which calls the same calculateRangeOffset, so both allocators keep the same band.
  * For 10.43.0.0/16 that is 10.43.0.1 through 10.43.1.0.
  */
 export function staticBandOf(cidr: string): { first: string; last: string } | undefined {
