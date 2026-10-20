@@ -114,6 +114,8 @@ bun scripts/flux/age.ts age -d -i <私鑰檔> <檔案>  # age 本身
   `--format token`（預設）收一個字，例如 API key；`--format text` 收一行文字（可以有空白與 `<>@`；結尾的一個換行會去掉，其他的換行、控制字元與空值都拒絕）。`--set` 加一個不是祕密的 key（例如帳號，同樣加密）。`--watch` 給 Secret 加上 `reconcile.fluxcd.io/watch: Enabled`，HelmRelease 從它讀 values 時，值一改就升級。錯誤訊息不引用輸入的值。展示叢集的私有 values 用自己的 `demo-values.ts`（下方「展示叢集」）。
 - 寫檔之前先檢查 sops 的輸出確實加密了（與 CI 同一套檢查：每個值都是 SOPS 的密文、`sops` 區塊是 sops 為 age 寫的樣子、metadata 與 key 和明文的 Secret 相同），不是的話什麼都不寫。
 - 只加密 `data` 與 `stringData` 的值；CI 的 `check-secret-handling.ts` 擋下任何沒加密的 Secret。它只看得出值有沒有加密，看不到值本身。
+- 每個 SOPS 檔的 `sops` 區塊自己決定加密範圍，所以 CI 也檢查：`encrypted_regex` 剛好是 `^(data|stringData)$`、沒有其他改變範圍的選項、`data` 與 `stringData` 以外沒有加密的值；`metadata` 只有 `name`、`namespace` 與 `reconcile.fluxcd.io/watch: Enabled`，沒有其他 label、annotation、ownerReferences 或 finalizers。審查的人因此看得到值以外的一切，Secret 也不能帶 Helm 的歸屬標記被 release 收編（[密鑰與權限](../../docs/architecture/secrets.md) 的規則表）。
+- 每個叢集能有哪些 SOPS Secret 列在 `scripts/flux/lib.ts` 的 `SOPS_SECRETS`（名稱與 type）：SaaS 是 `ghcr-pull`（`kubernetes.io/dockerconfigjson`）、`trustiot-qdrant`、`trustiot-sentry`；展示叢集是 `ghcr-pull`、`trustiot-smtp`、`trustiot-anthropic`、`trustiot-demo-values`（其餘都是 `Opaque`）。chart 在叢集內產生的 Secret（例如 `trustiot-identity-signing-keys` 與各服務的密碼）不在清單上，不能從 git 來：Helm 會收編同名的 Secret 並保留它的 `data`。產生 Secret 的腳本拒絕清單外的名稱、type 與路徑，`bun test deploy/flux` 檢查目錄裡的每個 SOPS 檔；新增 Secret 時在同一個 PR 更新清單、本 README 與清冊。
 - 輪替與收件者異動的步驟在 [密鑰輪替 runbook](../../docs/runbooks/secrets.md)。
 
 ### GHCR 拉取 token
@@ -316,6 +318,7 @@ lab e2e：`tests/e2e/lab.e2e.ts` 在展示環境的 Flux 存在時拒絕執行�
 - `gotk-components.yaml` 與釘選版本的 `flux install --export` 相同，控制器映像都以 digest 釘選。
 - `chart.yaml` 是 `renderChartSource` 的輸出：digest、拉取 token、只接受這個 tag 的 release.yml 簽章；沒有其他可以略過驗簽的來源（HelmRepository、Bucket）。
 - `values-saas.yaml` 來自部署中的版本；HelmRelease 依序讀兩份 values；目錄裡的每個 SOPS 檔都有套用。
+- 每個 SOPS 檔都是該叢集 `SOPS_SECRETS` 裡的 Secret，type 相符，在 namespace `trustiot`，檔名是 `<名稱>.sops.yaml`，並符合上方「祕密」的 SOPS 規則；以假的 sops 輸出確認：chart 保留的名稱（`trustiot-identity-signing-keys`）、type 不對的 `ghcr-pull`、加密範圍加上 annotation、加密的 label 與 Helm 的歸屬 annotation 都被擋下。
 - `values-instance.yaml` 留空的只有上表的欄位，填上測試值後 HEAD 的 chart 接受它，服務的 pod 以 `ghcr-pull` 拉映像。
 - 展示叢集：HelmRelease 與 SaaS 的相同，只多了私有 values：每個讀 Secret 的項目都有 `targetPath`（四個值之一）、對應的 key 與 `literal: true`，沒有整份 values 的項目；產生器與 commit 的 Secret 剛好有那四個 key。以測試用的私有 values（`.test` 網域，寄件人含空白、`<…@…>` 與逗號）渲染時，值原樣出現在 ConfigMap，整份輸出與用 values 檔給同樣的值相同；同樣的值改用 `--set` 語法時，逗號後面會改到映像的 registry（證明 `literal` 擋下了什麼）。少了私有 values 時 chart 拒絕。
 - `values-demo.yaml` 不含主機名稱、寄件人與 IP：每個像主機名稱的字（值、URL 與註解都算）都在 `.invalid` 或 `.test` 之下、是列出的公開服務（`smtp.resend.com`）、檔名，或 chart values 的路徑；沒有 `@`。

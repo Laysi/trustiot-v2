@@ -3,41 +3,12 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderOpaqueSecret, renderPullSecret } from "./lib.ts";
+import { SOPS_SCOPE_LINE, fakeSops } from "./sops-fixture.ts";
 import { type Encrypt, encryptedProblem, readPiped, writeEncrypted } from "./sops.ts";
 
-// Bytes that do not read as text, standing in for ciphertext (deterministic), in the shape SOPS
-// writes: a 32-byte IV, a 16-byte tag, an age recipient and its wrapped data key. The same shape
-// as the fixture in scripts/ci/check-secret-handling.test.ts.
-const opaque = (length: number, seed: number) => Buffer.from(Array.from({ length }, (_, i) => ((seed + i * 151) % 256) | 0x80)).toString("base64");
-const enc = (seed: number) => `ENC[AES256_GCM,data:${opaque(12, seed)},iv:${opaque(32, 1)},tag:${opaque(16, 2)},type:str]`;
-const unpadded = (length: number, seed: number) => opaque(length, seed).replace(/=+$/, "");
-const ageFile = () => {
-  const header = Buffer.from(`age-encryption.org/v1\n-> X25519 ${unpadded(32, 3)}\n${unpadded(32, 4)}\n--- ${unpadded(32, 5)}\n`);
-  const lines = Buffer.concat([header, Buffer.from(opaque(48, 6), "base64")]).toString("base64").match(/.{1,64}/g) ?? [];
-  return ["-----BEGIN AGE ENCRYPTED FILE-----", ...lines, "-----END AGE ENCRYPTED FILE-----"].map((line) => `        ${line}`).join("\n");
-};
-const SOPS_BLOCK = [
-  "sops:",
-  "  age:",
-  `    - recipient: age1${"qpzry9x8gf2tvdw0s3jn54khce6mua7l".repeat(2).slice(0, 58)}`,
-  "      enc: |",
-  ageFile(),
-  '  lastmodified: "2026-10-20T00:00:00Z"',
-  `  mac: ${enc(9)}`,
-  "  encrypted_regex: ^(data|stringData)$",
-  '  version: "3.13.3"',
-  "",
-].join("\n");
-
-/** What sops writes for `plain`: the same document, every data or stringData value encrypted, and the sops block. */
-function fakeSops(plain: string): string {
-  let seed = 10;
-  const lines = plain.split("\n").map((line) => {
-    const value = /^( {2}"?[^"\s:]+"?): .+$/.exec(line);
-    return value !== null && !line.startsWith("  name:") && !line.startsWith("  namespace:") && !line.startsWith("  labels:") ? `${value[1]}: ${enc(seed++)}` : line;
-  });
-  return `${lines.join("\n").replace(/\n$/, "")}\n${SOPS_BLOCK}`;
-}
+/** Where the demo cluster's SMTP Secret goes, a Secret SOPS_SECRETS lists for it. */
+const DIR = "deploy/flux/clusters/demo/trustiot";
+const SMTP = `${DIR}/trustiot-smtp.sops.yaml`;
 
 // Made up at run time, so a test can tell whether an error or a file holds it.
 const secretValue = `s${crypto.randomUUID().replaceAll("-", "")}`;
@@ -51,7 +22,7 @@ afterEach(() => {
 
 function repository(): string {
   root = mkdtempSync(join(tmpdir(), "trustiot-sops-"));
-  mkdirSync(join(root, "deploy", "flux"), { recursive: true });
+  mkdirSync(join(root, DIR), { recursive: true });
   return root;
 }
 
@@ -73,6 +44,9 @@ describe("encryptedProblem", () => {
       [encrypted.replace(/^( {2}"username"): .*$/m, ""), /stringData keys differ/],
       [`${encrypted}---\n${encrypted}`, /not one YAML mapping/],
       ["{", /not YAML/],
+      // sops encrypts what the file's own sops block says: a wider scope or a scope option hides more.
+      [encrypted.replace(SOPS_SCOPE_LINE, "  encrypted_regex: ^(data|stringData|annotations)$\n"), /sops\.encrypted_regex must be exactly/],
+      [encrypted.replace(SOPS_SCOPE_LINE, `${SOPS_SCOPE_LINE}  unencrypted_suffix: _unencrypted\n`), /sops\.unencrypted_suffix is set/],
     ];
     for (const [output, message] of cases) {
       const problem = encryptedProblem(plainSecret, output);
@@ -90,26 +64,52 @@ describe("writeEncrypted", () => {
       calls.push(path);
       return fakeSops(plain);
     };
-    expect(await writeEncrypted(plainSecret, "deploy/flux/trustiot-smtp.sops.yaml", { root: dir, encrypt })).toBe("deploy/flux/trustiot-smtp.sops.yaml");
-    expect(calls).toEqual(["deploy/flux/trustiot-smtp.sops.yaml"]);
-    expect(readFileSync(join(dir, "deploy/flux/trustiot-smtp.sops.yaml"), "utf8")).toBe(fakeSops(plainSecret));
-    expect(readdirSync(join(dir, "deploy/flux"))).toEqual(["trustiot-smtp.sops.yaml"]);
+    expect(await writeEncrypted(plainSecret, SMTP, { root: dir, encrypt })).toBe(SMTP);
+    expect(calls).toEqual([SMTP]);
+    expect(readFileSync(join(dir, SMTP), "utf8")).toBe(fakeSops(plainSecret));
+    expect(readdirSync(join(dir, DIR))).toEqual(["trustiot-smtp.sops.yaml"]);
   });
 
   test("refuses output that is not encrypted, writes nothing, and keeps a file that was there", async () => {
     const dir = repository();
     const plainOut: Encrypt = async (plain) => plain;
-    const error = writeEncrypted(plainSecret, "deploy/flux/trustiot-smtp.sops.yaml", { root: dir, encrypt: plainOut });
+    const error = writeEncrypted(plainSecret, SMTP, { root: dir, encrypt: plainOut });
     await expect(error).rejects.toThrow(/is not an encrypted Secret .*; nothing was written/);
     await error.catch((e: unknown) => expect(String(e)).not.toContain(secretValue));
-    expect(readdirSync(join(dir, "deploy/flux"))).toEqual([]);
+    expect(readdirSync(join(dir, DIR))).toEqual([]);
 
-    await writeEncrypted(plainSecret, "deploy/flux/trustiot-smtp.sops.yaml", { root: dir, encrypt: async (plain) => fakeSops(plain) });
-    const before = readFileSync(join(dir, "deploy/flux/trustiot-smtp.sops.yaml"), "utf8");
+    await writeEncrypted(plainSecret, SMTP, { root: dir, encrypt: async (plain) => fakeSops(plain) });
+    const before = readFileSync(join(dir, SMTP), "utf8");
     const halfEncrypted: Encrypt = async (plain) => fakeSops(plain).replace(/^( {2}"password"): .*$/m, `$1: ${secretValue}`);
-    await expect(writeEncrypted(plainSecret, "deploy/flux/trustiot-smtp.sops.yaml", { root: dir, encrypt: halfEncrypted })).rejects.toThrow(/not SOPS-encrypted/);
-    expect(readFileSync(join(dir, "deploy/flux/trustiot-smtp.sops.yaml"), "utf8")).toBe(before);
-    expect(readdirSync(join(dir, "deploy/flux"))).toEqual(["trustiot-smtp.sops.yaml"]);
+    await expect(writeEncrypted(plainSecret, SMTP, { root: dir, encrypt: halfEncrypted })).rejects.toThrow(/not SOPS-encrypted/);
+    expect(readFileSync(join(dir, SMTP), "utf8")).toBe(before);
+    expect(readdirSync(join(dir, DIR))).toEqual(["trustiot-smtp.sops.yaml"]);
+  });
+
+  test("refuses a Secret the cluster may not hold, of another type or name, or in another place, before running sops", async () => {
+    const dir = repository();
+    mkdirSync(join(dir, "deploy/flux/clusters/saas/trustiot"), { recursive: true });
+    let ran = false;
+    const encrypt: Encrypt = async (plain) => {
+      ran = true;
+      return fakeSops(plain);
+    };
+    const opaque = (name: string, namespace = "trustiot") => renderOpaqueSecret({ namespace, name, key: "password", value: secretValue, format: "token" });
+    const cases: [string, string, RegExp][] = [
+      // The chart generates this one in the cluster; from git, Helm would adopt it and keep its data.
+      [opaque("trustiot-identity-signing-keys"), `${DIR}/trustiot-identity-signing-keys.sops.yaml`, /cluster demo holds no SOPS Secret trustiot-identity-signing-keys/],
+      [opaque("trustiot-smtp"), "deploy/flux/clusters/saas/trustiot/trustiot-smtp.sops.yaml", /cluster saas holds no SOPS Secret trustiot-smtp/],
+      [opaque("ghcr-pull"), `${DIR}/ghcr-pull.sops.yaml`, /ghcr-pull of cluster demo has type kubernetes\.io\/dockerconfigjson, not Opaque/],
+      [opaque("trustiot-smtp", "default"), SMTP, /must be in namespace trustiot/],
+      [opaque("trustiot-smtp"), `${DIR}/smtp.sops.yaml`, /written only to deploy\/flux\/clusters\/<cluster>\/trustiot\/<its name>\.sops\.yaml/],
+    ];
+    for (const [plain, path, message] of cases) {
+      await expect(writeEncrypted(plain, path, { root: dir, encrypt })).rejects.toThrow(message);
+    }
+    expect(ran).toBe(false);
+    expect(readdirSync(join(dir, DIR))).toEqual([]);
+    // The pull Secret, of its own type, is written.
+    expect(await writeEncrypted(renderPullSecret("trustiot", "ghcr.io", "trustiot-bot", secretValue), `${DIR}/ghcr-pull.sops.yaml`, { root: dir, encrypt })).toBe(`${DIR}/ghcr-pull.sops.yaml`);
   });
 
   test("refuses a path outside the repository or in a directory that does not exist, before running sops", async () => {

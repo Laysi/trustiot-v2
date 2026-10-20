@@ -4,8 +4,9 @@
  * scripts/flux/lib.test.ts can check it.
  */
 
+import { FLUX_WATCH_LABEL, sopsDocumentProblems, sopsMetadataValid, sopsValueValid } from "../ci/check-secret-handling.ts";
 import { APP_NAMESPACE, CLUSTER_DIR, CLUSTERS, type ClusterName, GHCR_PULL_NAME, appDir } from "../release/flux.ts";
-import { ReleaseError, isDigest } from "../release/lib.ts";
+import { ReleaseError, isDigest, isMap } from "../release/lib.ts";
 
 /** The value of a `--cluster` option: one of the clusters in deploy/flux/clusters. */
 export function parseCluster(value: string | undefined): ClusterName {
@@ -100,11 +101,8 @@ const DNS_LABEL = /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/;
 export function isK8sName(name: string): boolean {
   return name.length <= 253 && name.split(".").every((label) => DNS_LABEL.test(label));
 }
-/** A Secret key or a label name without prefix. */
+/** A Secret key. */
 const SECRET_KEY = /^[-._a-zA-Z0-9]{1,253}$/;
-/** A label key, with an optional DNS prefix, and a label value. */
-const LABEL_KEY = /^([a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?\/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/;
-const LABEL_VALUE = /^([A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$/;
 
 export interface OpaqueSecret {
   namespace: string;
@@ -115,7 +113,11 @@ export interface OpaqueSecret {
   format: ValueFormat;
   /** Keys whose values are not secret, such as a user name. */
   plain?: Record<string, string>;
-  labels?: Record<string, string>;
+  /**
+   * Whether the Secret carries the label that makes Flux upgrade a HelmRelease that reads it, the
+   * only label a SOPS Secret may have (check-secret-handling.ts, sopsDocumentProblems).
+   */
+  watch?: boolean;
 }
 
 /**
@@ -175,11 +177,11 @@ export function renderOpaqueSecret(secret: OpaqueSecret): string {
       throw new ReleaseError(`the plain value of ${key} must be one line of printable ASCII`);
     }
   }
-  checkSecretNames(secret.namespace, secret.name, [secret.key, ...Object.keys(plain)], secret.labels ?? {});
-  return renderSecretData(secret.namespace, secret.name, { ...plain, [secret.key]: checkedSecretValue(secret.value, secret.format) }, secret.labels ?? {});
+  checkSecretNames(secret.namespace, secret.name, [secret.key, ...Object.keys(plain)]);
+  return renderSecretData(secret.namespace, secret.name, { ...plain, [secret.key]: checkedSecretValue(secret.value, secret.format) }, secret.watch === true);
 }
 
-function checkSecretNames(namespace: string, name: string, keys: readonly string[], labels: Record<string, string>): void {
+function checkSecretNames(namespace: string, name: string, keys: readonly string[]): void {
   if (!isK8sName(name) || !DNS_LABEL.test(namespace)) {
     throw new ReleaseError("the Secret name must be a Kubernetes name and the namespace a DNS label");
   }
@@ -188,15 +190,10 @@ function checkSecretNames(namespace: string, name: string, keys: readonly string
       throw new ReleaseError(`the Secret key ${JSON.stringify(key)} is not a valid key`);
     }
   }
-  for (const [key, value] of Object.entries(labels)) {
-    if (!LABEL_KEY.test(key) || !LABEL_VALUE.test(value)) {
-      throw new ReleaseError(`the label ${key}=${value} is not a valid label`);
-    }
-  }
 }
 
 /** The Secret's YAML; `data` holds values that are already checked, as they go into stringData. */
-function renderSecretData(namespace: string, name: string, data: Record<string, string>, labels: Record<string, string>): string {
+function renderSecretData(namespace: string, name: string, data: Record<string, string>, watch: boolean): string {
   const entries = Object.entries(data).sort(([a], [b]) => a.localeCompare(b));
   return [
     "apiVersion: v1",
@@ -204,7 +201,7 @@ function renderSecretData(namespace: string, name: string, data: Record<string, 
     "metadata:",
     `  name: ${name}`,
     `  namespace: ${namespace}`,
-    ...(Object.keys(labels).length > 0 ? ["  labels:", ...Object.entries(labels).map(([k, v]) => `    ${k}: ${JSON.stringify(v)}`)] : []),
+    ...(watch ? ["  labels:", ...Object.entries(FLUX_WATCH_LABEL).map(([k, v]) => `    ${k}: ${JSON.stringify(v)}`)] : []),
     "type: Opaque",
     "stringData:",
     ...entries.map(([key, v]) => `  ${JSON.stringify(key)}: ${JSON.stringify(v)}`),
@@ -290,9 +287,80 @@ export function parseDemoValues(text: string): Record<string, string> {
  */
 export function renderDemoValuesSecret(text: string): string {
   const values = parseDemoValues(text);
-  const labels = { "reconcile.fluxcd.io/watch": "Enabled" };
-  checkSecretNames(APP_NAMESPACE, DEMO_VALUES_NAME, Object.keys(values), labels);
-  return renderSecretData(APP_NAMESPACE, DEMO_VALUES_NAME, values, labels);
+  checkSecretNames(APP_NAMESPACE, DEMO_VALUES_NAME, Object.keys(values));
+  return renderSecretData(APP_NAMESPACE, DEMO_VALUES_NAME, values, true);
+}
+
+// --- Which SOPS Secrets a cluster may hold ------------------------------------------------------
+
+/** The Secret types the SOPS files use. */
+export type SopsSecretType = "Opaque" | "kubernetes.io/dockerconfigjson";
+
+/**
+ * The SOPS-encrypted Secrets each cluster may hold, `deploy/flux/clusters/<cluster>/trustiot/<name>.sops.yaml`
+ * in namespace trustiot, with their type (deploy/flux/README.md; docs/architecture/secrets.md, the
+ * inventory). Nothing else: a name the chart reserves for a Secret it generates in the cluster
+ * (`trustiot-identity-signing-keys`, the password Secrets) must never come from git, where Helm
+ * would adopt it and keep its data. A new Secret is added here, in the README and in the inventory
+ * in the same PR. `bun test deploy/flux` checks every SOPS file against this list, and the scripts
+ * that write SOPS files refuse any other name or type.
+ */
+export const SOPS_SECRETS: Readonly<Record<ClusterName, Readonly<Record<string, SopsSecretType>>>> = {
+  saas: {
+    [GHCR_PULL_NAME]: "kubernetes.io/dockerconfigjson",
+    "trustiot-qdrant": "Opaque",
+    "trustiot-sentry": "Opaque",
+  },
+  demo: {
+    [GHCR_PULL_NAME]: "kubernetes.io/dockerconfigjson",
+    "trustiot-smtp": "Opaque",
+    "trustiot-anthropic": "Opaque",
+    [DEMO_VALUES_NAME]: "Opaque",
+  },
+};
+
+/** Stops unless `cluster` may hold a SOPS Secret `name` of `type` (SOPS_SECRETS). */
+export function requireSopsSecret(cluster: ClusterName, name: string, type: string): void {
+  const allowed = SOPS_SECRETS[cluster];
+  if (!Object.hasOwn(allowed, name)) {
+    throw new ReleaseError(
+      `cluster ${cluster} holds no SOPS Secret ${name}; it may hold ${Object.keys(allowed).join(", ")} (SOPS_SECRETS in scripts/flux/lib.ts)`,
+    );
+  }
+  if (allowed[name] !== type) {
+    throw new ReleaseError(`the SOPS Secret ${name} of cluster ${cluster} has type ${allowed[name]}, not ${type}`);
+  }
+}
+
+/**
+ * Why a file in the release directory of `cluster` is not a SOPS Secret it may hold; empty when it
+ * is: one document, SOPS-encrypted (check-secret-handling.ts: the values, the sops block, and
+ * sopsDocumentProblems), a Secret of SOPS_SECRETS with its type, in namespace trustiot, in the file
+ * `<name>.sops.yaml`. Messages never quote values.
+ */
+export function sopsFileProblems(cluster: ClusterName, file: string, text: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = Bun.YAML.parse(text);
+  } catch {
+    return [`${file} is not YAML`];
+  }
+  if (!isMap(parsed)) return [`${file} is not one YAML mapping`];
+  const problems = sopsDocumentProblems(parsed).map((problem) => `${file}: ${problem}`);
+  const values = [parsed.data, parsed.stringData].flatMap((block) => (isMap(block) ? Object.values(block) : block === undefined ? [] : [block]));
+  if (!sopsMetadataValid(parsed.sops) || values.length === 0 || !values.every(sopsValueValid)) {
+    problems.push(`${file} is not a SOPS-encrypted Secret with values`);
+  }
+  const metadata = isMap(parsed.metadata) ? parsed.metadata : {};
+  const name = typeof metadata.name === "string" ? metadata.name : "";
+  try {
+    requireSopsSecret(cluster, name, typeof parsed.type === "string" ? parsed.type : "(none)");
+  } catch (error) {
+    problems.push(`${file}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (metadata.namespace !== APP_NAMESPACE) problems.push(`${file}: the Secret is not in namespace ${APP_NAMESPACE}`);
+  if (file !== `${name}.sops.yaml`) problems.push(`${file} is not named after its Secret (<name>.sops.yaml)`);
+  return problems;
 }
 
 // --- Who can decrypt (.sops.yaml) ---------------------------------------------------------------

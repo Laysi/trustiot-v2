@@ -1031,6 +1031,34 @@ ${wrappedKey}
     expect(checkSecretManifests("x.yaml", "apiVersion: v1\nkind: Secret\nmetadata:\n  name: empty\n")).toEqual([]);
   });
 
+  test("a SOPS file encrypts only data and stringData, and its metadata names no owner (Laysi/trustiot-v2#464)", () => {
+    const file = "deploy/flux/clusters/demo/trustiot/trustiot-smtp.sops.yaml";
+    const scope = "  encrypted_regex: ^(data|stringData)$\n";
+    // The Flux watch label and a namespace are the metadata a SOPS Secret may have.
+    const watched = encrypted.replace("  name: trustiot-smtp\n", "  name: trustiot-smtp\n  namespace: trustiot\n  labels:\n    reconcile.fluxcd.io/watch: Enabled\n");
+    expect(checkSecretManifests(file, watched)).toEqual([]);
+    const refused: [string, string, RegExp][] = [
+      // A wider scope hides the annotations (or labels, or type) from the reviewer.
+      ["a wider encrypted_regex", encrypted.replace(scope, "  encrypted_regex: ^(data|stringData|annotations)$\n"), /sops\.encrypted_regex must be exactly/],
+      ["no encrypted_regex", encrypted.replace(scope, ""), /sops\.encrypted_regex must be exactly/],
+      ...["unencrypted_regex: ^kind$", "encrypted_suffix: _secret", "unencrypted_suffix: _unencrypted", "encrypted_comment_regex: sops", "unencrypted_comment_regex: plain", "mac_only_encrypted: true"].map(
+        (option): [string, string, RegExp] => [option, encrypted.replace(scope, `${scope}  ${option}\n`), new RegExp(`sops\\.${option.split(":")[0]} is set`)],
+      ),
+      ["an encrypted label", encrypted.replace("  name: trustiot-smtp\n", `  name: trustiot-smtp\n  labels:\n    owner: ${enc(opaque(12, 20))}\n`), /metadata\.labels\.owner holds an encrypted value/],
+      ["an encrypted type", encrypted.replace("stringData:\n", `type: ${enc(opaque(12, 21))}\nstringData:\n`), /type holds an encrypted value/],
+      ["a Helm ownership annotation", encrypted.replace("  name: trustiot-smtp\n", "  name: trustiot-smtp\n  annotations:\n    meta.helm.sh/release-name: trustiot\n"), /metadata\.annotations is not allowed/],
+      ["a Helm ownership label", encrypted.replace("  name: trustiot-smtp\n", "  name: trustiot-smtp\n  labels:\n    app.kubernetes.io/managed-by: Helm\n"), /metadata\.labels may hold only reconcile\.fluxcd\.io\/watch: Enabled/],
+      ["an owner reference", encrypted.replace("  name: trustiot-smtp\n", "  name: trustiot-smtp\n  ownerReferences:\n    - {apiVersion: v1, kind: ConfigMap, name: x, uid: u}\n"), /metadata\.ownerReferences is not allowed/],
+      ["a finalizer", encrypted.replace("  name: trustiot-smtp\n", "  name: trustiot-smtp\n  finalizers:\n    - example.test/keep\n"), /metadata\.finalizers is not allowed/],
+      ["another top-level key", encrypted.replace("stringData:\n", "immutable: true\nstringData:\n"), /top-level key immutable is not allowed/],
+      ["another kind", encrypted.replace("kind: Secret", "kind: ConfigMap"), /holds one Kubernetes Secret/],
+    ];
+    for (const [what, source, message] of refused) {
+      const found = messages(checkSecretManifests(file, source));
+      expect({ what, found: found.some((m) => message.test(m) && m.startsWith(`${file}:`)) }).toEqual({ what, found: true });
+    }
+  });
+
   test("a value or sops block that only looks encrypted does not pass", () => {
     const password = /password: ENC\[[^\n]*/;
     for (const forged of [

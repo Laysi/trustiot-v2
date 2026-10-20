@@ -6,9 +6,11 @@
 
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { sopsMetadataValid, sopsValueValid } from "../ci/check-secret-handling.ts";
+import { sopsDocumentProblems, sopsMetadataValid, sopsValueValid } from "../ci/check-secret-handling.ts";
 import { protoTool, run } from "../release/exec.ts";
+import { APP_NAMESPACE, CLUSTERS, type ClusterName, appDir } from "../release/flux.ts";
 import { ReleaseError, isMap } from "../release/lib.ts";
+import { requireSopsSecret, sopsFileProblems } from "./lib.ts";
 
 const ROOT = resolve(import.meta.dir, "..", "..");
 
@@ -25,8 +27,9 @@ export const sopsEncrypt: Encrypt = async (plain, path) => {
 /**
  * Why sops's output is not the encrypted form of `plain` (undefined when it is): one document with
  * the same apiVersion, kind, type and metadata, the same keys under the same data block, every value
- * a SOPS-encrypted value and a `sops` block as SOPS writes it for age (the same checks as
- * scripts/ci/check-secret-handling.ts), and nothing else. Never quotes a value.
+ * a SOPS-encrypted value and a `sops` block as SOPS writes it for age, encrypting exactly data and
+ * stringData (the same checks as scripts/ci/check-secret-handling.ts, sopsDocumentProblems), and
+ * nothing else. Never quotes a value.
  */
 export function encryptedProblem(plain: string, encrypted: string): string | undefined {
   let parsed: unknown;
@@ -53,7 +56,28 @@ export function encryptedProblem(plain: string, encrypted: string): string | und
   const clear = Object.keys(values).filter((key) => !sopsValueValid(values[key]));
   if (clear.length > 0) return `the ${block} values of ${clear.join(", ")} are not SOPS-encrypted`;
   if (!sopsMetadataValid(parsed.sops)) return "its sops block is not what sops writes for age recipients";
+  const rules = sopsDocumentProblems(parsed);
+  if (rules.length > 0) return rules.join("; ");
   return undefined;
+}
+
+/**
+ * The cluster and file name a SOPS Secret is written to: only
+ * `deploy/flux/clusters/<cluster>/trustiot/<name>.sops.yaml` of a Secret that SOPS_SECRETS lists for
+ * that cluster, with its type, in namespace trustiot (lib.ts, requireSopsSecret).
+ */
+export function sopsTarget(path: string, plain: string): { cluster: ClusterName; file: string } {
+  const secret = Bun.YAML.parse(plain) as { metadata?: { name?: unknown; namespace?: unknown }; type?: unknown };
+  const name = typeof secret.metadata?.name === "string" ? secret.metadata.name : "";
+  const cluster = CLUSTERS.find((c) => path === `${appDir(c)}/${name}.sops.yaml`);
+  if (cluster === undefined) {
+    throw new ReleaseError(`a SOPS Secret is written only to deploy/flux/clusters/<cluster>/trustiot/<its name>.sops.yaml, not to ${path}`);
+  }
+  requireSopsSecret(cluster, name, typeof secret.type === "string" ? secret.type : "(none)");
+  if (secret.metadata?.namespace !== APP_NAMESPACE) {
+    throw new ReleaseError(`the SOPS Secret ${name} must be in namespace ${APP_NAMESPACE}`);
+  }
+  return { cluster, file: `${name}.sops.yaml` };
 }
 
 export interface WriteOptions {
@@ -75,9 +99,10 @@ export async function writeEncrypted(plain: string, out: string, options: WriteO
   if (path.startsWith("..") || !existsSync(dirname(target))) {
     throw new ReleaseError(`${out} is not in an existing directory of this repository`);
   }
+  const { cluster, file } = sopsTarget(path, plain);
   const encrypted = await (options.encrypt ?? sopsEncrypt)(plain, path);
-  const problem = encryptedProblem(plain, encrypted);
-  if (problem !== undefined) {
+  const problem = encryptedProblem(plain, encrypted) ?? sopsFileProblems(cluster, file, encrypted).join("; ");
+  if (problem !== "") {
     throw new ReleaseError(`sops's output for ${path} is not an encrypted Secret (${problem}); nothing was written`);
   }
   const temporary = join(dirname(target), `.${basename(target)}.tmp-${process.pid}`);

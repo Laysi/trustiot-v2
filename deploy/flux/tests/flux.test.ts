@@ -29,11 +29,16 @@ import {
   DEMO_VALUES_NAME,
   FLUX_COMPONENTS,
   FLUX_SYSTEM_DIR,
+  SOPS_SECRETS,
   controllerImages,
   renderDemoValuesSecret,
+  renderOpaqueSecret,
+  renderPullSecret,
+  sopsFileProblems,
   sopsRecipientProblems,
   sopsRuleTexts,
 } from "../../../scripts/flux/lib.ts";
+import { SOPS_SCOPE_LINE, enc, fakeSops } from "../../../scripts/flux/sops-fixture.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const REPOSITORY = "Laysi/trustiot-v2";
@@ -268,6 +273,56 @@ describe.each([...CLUSTERS])("the %s tree", (cluster) => {
       expect(file).toBe(`${secret.metadata.name}.sops.yaml`);
       const used = ((secret.sops as { age?: { recipient: string }[] } | undefined)?.age ?? []).map((r) => r.recipient).sort();
       expect(used).toEqual(recipients);
+    }
+  });
+
+  test("every SOPS file is a Secret this cluster may hold, of its type, and keeps the SOPS rules", () => {
+    // SOPS_SECRETS (scripts/flux/lib.ts) and sopsDocumentProblems (scripts/ci/check-secret-handling.ts).
+    for (const file of sopsFiles(cluster)) {
+      expect({ file, problems: sopsFileProblems(cluster, file, read(`${appDir(cluster)}/${file}`)) }).toEqual({ file, problems: [] });
+    }
+  });
+});
+
+describe("what a SOPS file may be (Laysi/trustiot-v2#464)", () => {
+  // A SOPS file in the shape sops writes for a Secret the scripts render; nothing here is a secret.
+  const opaque = (name: string) => fakeSops(renderOpaqueSecret({ namespace: APP_NAMESPACE, name, key: "value", value: "fixture-value", format: "token" }));
+  const pull = () => fakeSops(renderPullSecret(APP_NAMESPACE, "ghcr.io", "trustiot-bot", "fixture-token"));
+  const fileOf = (name: string) => (name === GHCR_PULL_NAME ? pull() : opaque(name));
+  const metadataLine = `  namespace: ${APP_NAMESPACE}\n`;
+
+  test("every Secret SOPS_SECRETS lists passes as sops writes it", () => {
+    for (const cluster of CLUSTERS) {
+      for (const name of Object.keys(SOPS_SECRETS[cluster])) {
+        expect({ cluster, name, problems: sopsFileProblems(cluster, `${name}.sops.yaml`, fileOf(name)) }).toEqual({ cluster, name, problems: [] });
+      }
+    }
+  });
+
+  test("refuses a name the chart reserves, the wrong type, a wider sops scope, an encrypted label and a Helm owner", () => {
+    const cases: [string, ClusterName, string, string, RegExp][] = [
+      // The chart generates this Secret in the cluster and nobody sets it (deploy/chart, _identity.tpl):
+      // from git, Helm would adopt it and keep its data, and internal identity tokens could be forged.
+      ["the identity signing keys on saas", "saas", "trustiot-identity-signing-keys.sops.yaml", opaque("trustiot-identity-signing-keys"), /cluster saas holds no SOPS Secret trustiot-identity-signing-keys/],
+      ["the identity signing keys on demo", "demo", "trustiot-identity-signing-keys.sops.yaml", opaque("trustiot-identity-signing-keys"), /cluster demo holds no SOPS Secret trustiot-identity-signing-keys/],
+      ["ghcr-pull as Opaque", "demo", "ghcr-pull.sops.yaml", opaque(GHCR_PULL_NAME), /ghcr-pull of cluster demo has type kubernetes\.io\/dockerconfigjson, not Opaque/],
+      ["a sops scope with annotations", "demo", "trustiot-smtp.sops.yaml", opaque("trustiot-smtp").replace(SOPS_SCOPE_LINE, "  encrypted_regex: ^(data|stringData|annotations)$\n"), /sops\.encrypted_regex must be exactly/],
+      ["an encrypted label", "demo", "trustiot-smtp.sops.yaml", opaque("trustiot-smtp").replace(metadataLine, `${metadataLine}  labels:\n    owner: ${enc(77)}\n`), /metadata\.labels\.owner holds an encrypted value/],
+      [
+        "a Helm ownership annotation",
+        "demo",
+        "trustiot-smtp.sops.yaml",
+        opaque("trustiot-smtp").replace(metadataLine, `${metadataLine}  annotations:\n    meta.helm.sh/release-name: trustiot\n    meta.helm.sh/release-namespace: trustiot\n`),
+        /metadata\.annotations is not allowed on a SOPS Secret/,
+      ],
+      ["another cluster's Secret", "saas", "trustiot-smtp.sops.yaml", opaque("trustiot-smtp"), /cluster saas holds no SOPS Secret trustiot-smtp/],
+      ["another namespace", "demo", "trustiot-smtp.sops.yaml", opaque("trustiot-smtp").replace(metadataLine, "  namespace: default\n"), /not in namespace trustiot/],
+      ["a file not named after its Secret", "demo", "smtp.sops.yaml", opaque("trustiot-smtp"), /smtp\.sops\.yaml is not named after its Secret/],
+      ["values in clear text", "demo", "trustiot-smtp.sops.yaml", renderOpaqueSecret({ namespace: APP_NAMESPACE, name: "trustiot-smtp", key: "value", value: "fixture-value", format: "token" }), /not a SOPS-encrypted Secret/],
+    ];
+    for (const [what, cluster, file, source, message] of cases) {
+      const problems = sopsFileProblems(cluster, file, source);
+      expect({ what, refused: problems.some((p) => message.test(p)) }).toEqual({ what, refused: true });
     }
   });
 });

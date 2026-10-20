@@ -24,7 +24,7 @@ import { join } from "node:path";
 import { runStage } from "../release/exec.ts";
 import { appDir } from "../release/flux.ts";
 import { ReleaseError } from "../release/lib.ts";
-import { DEMO_VALUES_NAME, renderDemoValuesSecret } from "./lib.ts";
+import { DEMO_VALUES_NAME, renderDemoValuesSecret, requireSopsSecret } from "./lib.ts";
 import { kustomizationReminder, readPiped, writeEncrypted } from "./sops.ts";
 
 if (import.meta.main) {
@@ -32,6 +32,7 @@ if (import.meta.main) {
     if (Bun.argv.length > 2) {
       throw new ReleaseError("demo-values.ts takes no arguments: the values come from stdin");
     }
+    requireSopsSecret("demo", DEMO_VALUES_NAME, "Opaque");
     const plain = renderDemoValuesSecret(await readPiped("the four <key>=<value> lines"));
     const file = `${DEMO_VALUES_NAME}.sops.yaml`;
     const written = await writeEncrypted(plain, join(appDir("demo"), file));
