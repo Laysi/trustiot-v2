@@ -28,4 +28,6 @@ creation_rules:
   # cluster's key, generated on the demo machine, and the operators' keys.
   - path_regex: (^|/)deploy/flux/clusters/demo/[^/]+(/[^/]+)*\.sops\.yaml$
     encrypted_regex: ^(data|stringData)$
-    age: []
+    age:
+      - age17tmfvm966vuuu82a5jn6zw6uhcjaqhstxl5xajlcw7e0a7gfy4ws84hytc # cluster: demo
+      - age1nsq9mcnwfhg2vra3hjw6tp9dfhy8lq2366hjr2l96fcq07yvq46q8nnrsk # operator
