@@ -1,6 +1,7 @@
 # The TrustIoT release of the demo environment. chart.yaml and values-saas.yaml are rewritten by
-# scripts/flux/pin-chart.ts in a PR; values-demo.yaml and the SOPS-encrypted Secrets are edited
-# by hand (deploy/flux/README.md, 「展示叢集」).
+# the deploy PR that release.yml opens for every release (or by scripts/flux/pin-chart.ts);
+# values-demo.yaml and the SOPS-encrypted Secrets are edited by hand
+# (deploy/flux/README.md, 「展示叢集」).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:

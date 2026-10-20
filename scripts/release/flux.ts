@@ -24,6 +24,13 @@ export const FLUX_DIR = "deploy/flux";
 export const CLUSTERS = ["saas", "demo"] as const;
 export type ClusterName = (typeof CLUSTERS)[number];
 
+/**
+ * The clusters that release.yml's deploy PR moves to a new release, each one only while it runs
+ * an older version (deploy.ts). Every one of them must exist on main: deploy-pr reads their
+ * chart sources there and stops when one is missing.
+ */
+export const DEPLOY_CLUSTERS: readonly ClusterName[] = CLUSTERS;
+
 /** The directory Flux applies on a cluster (its GitRepository sync path). */
 export function clusterDir(cluster: ClusterName): string {
   return `${FLUX_DIR}/clusters/${cluster}`;
