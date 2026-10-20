@@ -1,0 +1,29 @@
+# The TrustIoT chart that Flux deploys. release.yml rewrites this file in its deploy PR for every
+# release (scripts/release/flux.ts, renderChartSource); deploy a version by merging that PR and
+# roll back by reverting it. Do not edit by hand: `bun test deploy/flux` fails unless the file is
+# exactly what renderChartSource writes for its version, so the signature check cannot be
+# dropped or widened by accident.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: trustiot
+  namespace: trustiot
+spec:
+  interval: 10m
+  url: oci://ghcr.io/laysi/trustiot-v2/charts/trustiot
+  ref:
+    tag: 0.0.0-rc.7
+    # Takes precedence over the tag: the exact chart that release.yml pushed and signed.
+    digest: sha256:d212ccf0120ef41037d2fc2de5465e6df0f48bcb040c6b9511dd7b00be70fa73
+  layerSelector:
+    mediaType: application/vnd.cncf.helm.chart.content.v1.tar+gzip
+    operation: copy
+  # The read-only GHCR pull token (SOPS-encrypted in this directory, deploy/flux/README.md).
+  secretRef:
+    name: ghcr-pull
+  # Keyless cosign signature by release.yml at this tag (decision 30).
+  verify:
+    provider: cosign
+    matchOIDCIdentity:
+      - issuer: '^https://token\.actions\.githubusercontent\.com$'
+        subject: '^https://github\.com/Laysi/trustiot-v2/\.github/workflows/release\.yml@refs/tags/v0\.0\.0-rc\.7$'

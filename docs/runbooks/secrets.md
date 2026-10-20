@@ -205,6 +205,8 @@ Laysi/trustiot-v2#164 補上。原則：閘道器的 updater 內建公鑰，所�
 
 ### SOPS 叢集私鑰
 
+以下是 SaaS 叢集。展示叢集的私鑰在展示機上產生、沒有離線備份，換新的步驟見 [deploy/flux/README.md](../../deploy/flux/README.md)「展示叢集的 age 金鑰」。
+
 1. 在可信的機器上 `age-keygen -o <新檔案>`，記下輸出的公鑰。
 2. 在 `.sops.yaml` 的收件者加入新公鑰（舊的先保留），對 `deploy/flux/` 下每個 SOPS 檔案執行 `sops updatekeys -y <檔案>`，開 PR 合併。
 3. 在主機上更新叢集的 Secret，私鑰從檔案經 stdin 傳入：

@@ -1,0 +1,70 @@
+# The TrustIoT release of the demo environment (Laysi/trustiot-v2#457). The same release as on the
+# SaaS cluster (../../saas/trustiot/helm-release.yaml): the chart comes from the OCIRepository in
+# chart.yaml (pinned by digest, keyless signature verified); values are layered as
+# deploy/chart/values.yaml describes: the chart's defaults, the SaaS shape (values-saas.yaml,
+# copied from the deployed release), the demo overlay (values-demo.yaml) and, last, the private
+# values (the three host names and the mail sender) from the SOPS-encrypted Secret
+# trustiot-demo-values, each into its own chart value.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: trustiot
+  namespace: trustiot
+spec:
+  # Drift check and retry interval; a new chart or new values start an upgrade right away.
+  interval: 10m
+  releaseName: trustiot
+  chartRef:
+    kind: OCIRepository
+    name: trustiot
+  # Upper bound for one install or upgrade, including waiting for every workload and Job.
+  timeout: 10m
+  maxHistory: 10
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    # A failed upgrade rolls back to the last release that worked, then retries.
+    cleanupOnFail: true
+    remediation:
+      retries: 3
+      remediateLastFailure: true
+      strategy: rollback
+  valuesFrom:
+    - kind: ConfigMap
+      name: trustiot-values
+      valuesKey: values-saas.yaml
+    - kind: ConfigMap
+      name: trustiot-values
+      valuesKey: values-demo.yaml
+    # The private values, one key per chart value (scripts/flux/lib.ts, DEMO_PRIVATE_VALUES). Nobody
+    # sees the encrypted file in clear text in a PR, so it must not be able to set anything else:
+    # each key goes to its own targetPath, and `literal: true` takes the value verbatim. Without
+    # it, Flux would parse the value with Helm's --set syntax, where a comma starts another
+    # path=value pair. `literal` is a field of HelmRelease v2's valuesFrom in the pinned Flux
+    # (../../saas/flux-system/gotk-components.yaml, CRD helmreleases.helm.toolkit.fluxcd.io, v2,
+    # spec.valuesFrom[].literal; `bun test deploy/flux` validates this file against it with
+    # kubeconform -strict, which refuses unknown fields). helm-controller v1.6.5 implements it
+    # with ReplacePathLiteralValue in github.com/fluxcd/pkg/chartutil v1.27.2
+    # (https://github.com/fluxcd/pkg/blob/chartutil/v1.27.2/chartutil/values.go). Not optional:
+    # without the host names the chart's schema refuses the values and nothing is installed.
+    - kind: Secret
+      name: trustiot-demo-values
+      valuesKey: app-host
+      targetPath: hosts.app
+      literal: true
+    - kind: Secret
+      name: trustiot-demo-values
+      valuesKey: gateway-host
+      targetPath: hosts.gateway
+      literal: true
+    - kind: Secret
+      name: trustiot-demo-values
+      valuesKey: ota-host
+      targetPath: hosts.ota
+      literal: true
+    - kind: Secret
+      name: trustiot-demo-values
+      valuesKey: smtp-from
+      targetPath: smtp.from
+      literal: true

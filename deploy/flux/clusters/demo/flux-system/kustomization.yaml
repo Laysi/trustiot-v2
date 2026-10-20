@@ -1,0 +1,20 @@
+# Flux on the demo cluster: the SaaS cluster's Flux (controllers, image pins written by
+# scripts/flux/components.ts, and the sync of main over SSH with SOPS decryption), so one Flux
+# upgrade moves both clusters. Only the directory the root Kustomization applies differs. The
+# bootstrap applies this directory once (deploy/flux/README.md, 「展示叢集」); after that Flux
+# manages itself from here. `bun test deploy/flux` checks the result.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../saas/flux-system
+patches:
+  # "replace" fails the build when the path is missing, so a change to the SaaS sync cannot leave
+  # the demo cluster applying the SaaS tree.
+  - target:
+      group: kustomize.toolkit.fluxcd.io
+      kind: Kustomization
+      name: flux-system
+    patch: |-
+      - op: replace
+        path: /spec/path
+        value: ./deploy/flux/clusters/demo
