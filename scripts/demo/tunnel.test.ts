@@ -269,7 +269,7 @@ describe("tunnel.ts: the runner on the demo machine", () => {
     expect(script).toContain(`rundir=${RUN_DIR}`);
     expect(script).toContain(`install -m 0600 "$rundir/token.enc.b64" "$ct" && install -m 0700 "$state/trustiot-host-install" "$installer"`);
     expect(script).toContain(`-inkey "$rundir/handoff.pem"`);
-    expect(script).toContain(`| "$installer" "$@"`);
+    expect(script).toContain(`| (umask 022 && exec "$installer" "$@")`);
     expect(script).toContain('> "$state/$run.log" 2>&1');
     expect(script).toContain("umask 077");
     expect(() => runnerScript({ state: "relative/dir", run: RUN_DIR, root: "" })).toThrow(/invalid directory/);
@@ -323,6 +323,30 @@ describe("tunnel.ts: the runner on the demo machine", () => {
     // Generating an RSA-4096 key takes seconds, and much longer on a loaded runner; this bounds
     // only the wait for a hung openssl, nothing the test measures.
   }, 180_000);
+
+  test("the installer runs under sudo's umask 022 while the runner's own files stay 0600 and its copies keep their modes", () => {
+    // Under the runner's 077 the installer's dnf left dnf5's state files 0600 on the demo machine
+    // (2026-10-21). A stand-in openssl passes the ciphertext through, so the pipeline succeeds.
+    const p = setUp();
+    const bin = join(dir, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, "openssl"), "#!/bin/sh\nexec cat\n", { mode: 0o755 });
+    const made = join(dir, "made-by-installer");
+    const installer = '#!/bin/sh\necho "umask $(umask)"\necho "installer copy $(stat -c %a "$0")"\necho "ciphertext copy $(stat -c %a "$1")"\ncat > /dev/null\n: > "$2"\n';
+    writeFileSync(join(p.state, "trustiot-host-install"), installer, { mode: 0o700 });
+    writeFileSync(join(p.run, "token.enc.b64"), "AAAA\n");
+    const id = "apply-umask";
+    const result = runner(p, ["run", id, sha(installer), sha("AAAA\n"), join(p.run, `${id}.ciphertext`), made], { PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}` });
+    const mode = (path: string) => statSync(path).mode & 0o777;
+    expect(readFileSync(join(p.state, `${id}.log`), "utf8")).toBe("umask 0022\ninstaller copy 700\nciphertext copy 600\n");
+    expect(result.exitCode).toBe(0);
+    // What the installer creates without a mode of its own gets 0644, as dnf's files must.
+    expect(mode(made)).toBe(0o644);
+    expect(mode(join(p.state, `${id}.log`))).toBe(0o600);
+    expect(mode(join(p.state, `${id}.exit`))).toBe(0o600);
+    expect(runner(p, ["post", id, "0", "0"]).exitCode).toBe(0);
+    expect(mode(join(p.state, `${id}.post`))).toBe(0o600);
+  });
 
   test("after an installer that deleted the link and the marker and failed, ExecStopPost puts both back as they were", () => {
     const p = setUp();

@@ -236,6 +236,13 @@ const BOX_PATHS: RunnerPaths = { state: STATE_DIR, run: RUN_DIR, root: "" };
  * the token straight into the installer's stdin, and writes the installer's output to <id>.log and
  * its exit status to <id>.exit. The token is never an argument, a file or output.
  *
+ * The runner's own files are made under umask 077; only the installer runs under 022, the umask
+ * sudo gives it on a SaaS host. Under 077 its dnf left dnf5's state files and the repository's
+ * cache root-only (0600/0700) on the demo machine, so no other user could query dnf
+ * (Laysi/trustiot-v2#466, 2026-10-21). deploy/host/src/system.ts never relies on the caller's
+ * umask: writeFile opens with O_EXCL and the final mode and then chmods, and makeDirectory
+ * mkdirs with the mode and then chmods, so 022 widens none of the installer's secrets.
+ *
  * `post <id> <restore link 0|1> <restore marker 0|1>` (ExecStopPost, after the run ended in any
  * way: exit, failure, a stop or a kill) puts back the link and the marker the plan said to keep,
  * deletes the run's copies and writes what it found to <id>.post, the run's last file.
@@ -283,9 +290,10 @@ run)
       echo "$rundir/token.enc.b64 is not the one in the confirmed plan; nothing ran"
       exit 3
     fi
+    # 022 as sudo gives a SaaS host; safe: the installer sets each secret's mode itself (O_EXCL+chmod, mkdir+chmod).
     base64 -d "$ct" \\
       | openssl pkeyutl -decrypt -inkey "$rundir/handoff.pem" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256 \\
-      | "$installer" "$@"
+      | (umask 022 && exec "$installer" "$@")
   ) < /dev/null > "$state/$run.log" 2>&1
   rc=$?
   rm -f "$ct" "$installer"
@@ -480,7 +488,8 @@ export type FromRepo = { repo: string } | { unreadable: string };
 
 /**
  * Reads from_repo as root. dnf5 keeps it in /usr/lib/sysimage/libdnf5/packages.toml; on the demo
- * machine a dnf transaction left that file 0600 root:root, and dnf5 5.4.6 run without root then
+ * machine a dnf transaction under the runner's old umask 077 left that file 0600 root:root (see
+ * runnerScript; the modes there are put back by hand), and dnf5 5.4.6 run without root then
  * prints only "Loading system state TOML file ... failed" on stderr, nothing on stdout, and exits 0
  * (2026-10-21). --disablerepo='*': an installed package needs no repository metadata, so the read
  * downloads nothing. stderr is kept for the reason of a failed read.
