@@ -28,6 +28,8 @@ helm install ztunnel istio/ztunnel -n istio-system --version 1.30.5 -f deploy/is
 
 k3s 也可以把同樣的 values 放進 k3s 的 `HelmChart` 資源（`valuesContent`），由 k3s 內建的 helm-controller 安裝，實驗機就是這樣裝的（`~/stack/platform/istio.yaml`）。之後要改 istiod 的設定時，用同名的 `HelmChartConfig` 疊在上面，不必改原檔；刪掉 `HelmChartConfig` 就回到原本的設定（範例見 [docs/test-reports/data/2026-10-10-62-ingress-e2e/lab-istiod-helmchartconfig.yaml](../../docs/test-reports/data/2026-10-10-62-ingress-e2e/lab-istiod-helmchartconfig.yaml)）。
 
+實驗機同時是展示機（展示環境 Laysi/trustiot-v2#457）。它的 istiod values 由 `scripts/demo/platform.ts`（Laysi/trustiot-v2#465）直接寫進 HelmChart `kube-system/istiod`，內容就是 `values-k3s.yaml` 加 `istiod-values.yaml`：provider `trustiot-identity` 指向展示環境的身分服務，mesh 開啟路徑正規化。上面的 `~/stack/platform/istio.yaml` 還是 2026-10-10 PoC 的 values，不要再以 `kubectl apply` 套用，否則 istiod 會換回 PoC 的 provider。實驗機上的 `HelmChartConfig istiod` 只給測試暫時加入自己的 provider，規則見 [deploy/chart/tests/e2e/README.md](../chart/tests/e2e/README.md) 入口測試的前置條件 2；做法與理由見 [scripts/README.md](../../scripts/README.md) 的「展示機」。
+
 ## 路徑正規化
 
 `istiod-values.yaml` 設 `meshConfig.pathNormalization.normalization: DECODE_AND_MERGE_SLASHES`。mesh 裡每個 Envoy（入口 gateway、waypoint）在路由與 AuthorizationPolicy 比對之前，先把路徑的 `%2F`、`%5C`（大小寫不拘）解碼成 `/`、`\`，依 RFC 3986 處理 `.` 與 `..`，再把連續的 `/` 合併成一個，之後轉給後端的也是正規化後的路徑。所以 Envoy 比對的路徑與後端看到的路徑相同。ext_authz 送給身分服務的也是正規化後的路徑：2026-10-15 由 Laysi/trustiot-v2#77 以入口 e2e 的替身觀察，並由 nightly 以真的身分服務確認（`/api/identity/../assets/v1/tenant` 拿到給資產服務的 token）。

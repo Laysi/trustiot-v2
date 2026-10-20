@@ -48,6 +48,13 @@ nightly workflow（Laysi/trustiot-v2#69）每晚在 k3d 叢集上以兩種型態
 
 1. 叢集已依 `deploy/istio/README.md` 裝好 Istio ambient 與 Gateway API CRD。
 2. istiod 有一個 ext_authz provider 指向測試 namespace 的身分服務替身 `trustiot-identity.<namespace>.svc.cluster.local:8080`，設定與 `deploy/istio/istiod-values.yaml` 相同（`pathPrefix: /internal/ext-authz`、`failOpen: false`、`timeout: 0.5s`、`statusOnError: "503"`），mesh 的 `pathNormalization` 也與該檔相同。k3s 以 `HelmChartConfig istiod` 疊加時，清單會整份取代，所以叢集原有的 provider 要原樣重複寫入；範例見 [lab-istiod-helmchartconfig.yaml](../../../../docs/test-reports/data/2026-10-11-255-path-normalization/lab-istiod-helmchartconfig.yaml)。這是整個叢集共用的設定：先備份 `istio-system` 的 ConfigMap `istio`，測完刪掉 `HelmChartConfig`，再確認 `mesh` 與備份逐位元組相同。
+
+   lab 的 Mac mini M1 同時跑展示環境（Laysi/trustiot-v2#457）。它的 HelmChart `kube-system/istiod` 本身已經有 `deploy/istio/istiod-values.yaml` 的 provider `trustiot-identity`，指向展示環境的身分服務 `trustiot-identity.trustiot.svc.cluster.local`，mesh 也已經開啟路徑正規化（由 `scripts/demo/platform.ts` 寫入，見 [scripts/README.md](../../../../scripts/README.md) 的「展示機」）。所以在 lab 跑入口測試時：
+
+   - provider 名稱不能用預設的 `trustiot-identity`，改用這次測試自己的名稱（例如 `trustiot-e2e-<issue>`），`E2E_AUTHZ_PROVIDER` 設成同一個名稱。用同名的 provider 時，HelmChartConfig 裡那份會取代展示環境的，展示環境的入口在測試期間就把 cookie 檢查交給測試的替身。
+   - `HelmChartConfig istiod` 的 `extensionProviders` 會整份取代 HelmChart 的清單，所以要把 `trustiot-identity` 從 `deploy/istio/istiod-values.yaml` 原樣複製進去，再加上測試自己的 provider；上面的範例重複的是當時 PoC 的 `identity`，現在要重複的是 `trustiot-identity`。漏掉時展示環境的入口在測試期間對需要 cookie 的請求一律回 403（不會放行）。`pathNormalization` 是 map，Helm 會與 HelmChart 的值合併，不必重寫。
+   - 加 HelmChartConfig 之前先取得 lab lock（[deploy/flux/README.md](../../../flux/README.md) 的「lab 測試」），測完刪掉並比對 `mesh` 之後才釋放。HelmChartConfig 存在時 `scripts/demo/platform.ts --apply` 會拒絕執行。
+   - 測試的 namespace 用 `e2e-<issue>`，不能用展示環境的 `trustiot`。
 3. 測試用的 namespace 已建立，建議設 Pod Security `restricted`。測試的身分要能在這個 namespace 管理 chart 的物件，包含 `gateway.networking.k8s.io` 的 Gateway、HTTPRoute 與 `security.istio.io` 的 AuthorizationPolicy（內建的 `admin` ClusterRole 不含這兩個 API group）。
 4. 身分服務替身的映像（arm64 或叢集節點的架構）與 migrate 映像要在叢集拉得到。例如在節點上建好再匯入 containerd：
 

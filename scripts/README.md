@@ -239,6 +239,76 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 
 `nightly/` 是 nightly workflow（`.github/workflows/nightly.yml`）的程式：`run.ts` 起 k3d 叢集、對兩份 values 各部署一次並做冒煙測試（`smoke.ts`、`manifests.ts`），輸出 `report.json`、`report.md` 與 `run.log`；`notify.ts` 依結果開、更新或關閉 `nightly-failure` issue。只在 CI 執行（需要 docker、k3d、kubectl、helm），做什麼與失敗怎麼辦見 [CI 與發佈](../docs/architecture/ci-release.md)。`service-image.ts` 以發佈的方式建出 Rust 服務的映像（`deploy/images/<名稱>/image.toml`）並匯入 k3d 節點，`run.ts` 以它取得 `image-cache.ts` 的 `NIGHTLY_IMAGES`（migration Job、身分服務與資產服務的映像）；`image-cache.ts` 算出映像輸入的快取 key，輸入沒變時 nightly 從 Actions 快取載入映像而不建置（見 [deploy/images/README.md](../deploy/images/README.md) 與 CI 與發佈的「服務映像」）。`api.ts` 是 smoke 經入口呼叫身分與資產服務 API 的檢查（Laysi/trustiot-v2#65）。`bun test scripts/nightly` 不需要叢集；`renovate.test.ts` 檢查 `renovate.json5` 的釘選規則與 `.prototools` 的 `# renovate:` 註解。
 
+## 展示機（`demo/`）
+
+展示環境（Laysi/trustiot-v2#457）跑在 lab 的 Mac mini M1（展示機）的 k3s，namespace `trustiot`。`demo/` 的腳本在有這個 repo 的工作站執行，經 ssh 在展示機上以 `sudo k3s kubectl` 操作，只用 Bun 內建的 API；共用的部分在 `demo/lib.ts`。展示機的 ssh 主機以 `--ssh-host` 或環境變數 `DEMO_SSH_HOST` 指定。
+
+會改動叢集或刪除資料的腳本都遵守同一套規則：
+
+- 不加 `--apply` 時只讀：印出計畫與確認碼（計畫的 SHA-256 前 12 位）。`--apply --confirm <確認碼>` 才執行，確認碼對不上就停。
+- `--apply` 先取得 lab lock（展示機的 `~/e2e.lock`，與 [deploy/flux/README.md](../deploy/flux/README.md) 的「lab 測試」共用），在 lock 內重新規劃，與確認過的計畫不同就停，結束時只釋放自己的 lock。已經自己持有 lock 時加 `--lock-held`（lock 的擁有者要以 `Laysi/trustiot-v2#457` 開頭）。
+- 紀錄寫在 `$XDG_STATE_HOME/trustiot-v2/demo/`（未設定時 `~/.local/state/trustiot-v2/demo/`；目錄 0700、檔案 0600），或 `--log-dir` 指定的目錄：log、計畫、變更前後的狀態（叢集層級物件的名稱與 SHA-256、每個 namespace 的 workload 與 Service 的 uid）。
+- 維運用的 tunnel（展示機的 `cloudflared.service`，ssh 經過它）只讀狀態（`ActiveState`、`MainPID`）：不是 active 時不動手，結束時確認還是同一個行程，從不改它。
+- 可以重複執行：先看現況，已經是目標狀態就什麼都不做。
+
+### 清除 PoC 與平台對齊的順序
+
+```sh
+: "${DEMO_SSH_HOST:?set DEMO_SSH_HOST to the ssh host of the demo machine}"
+bun scripts/demo/cleanup.ts --ssh-host "$DEMO_SSH_HOST"     # 計畫與確認碼，只讀
+bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST"    # 檢查、計畫與確認碼，只讀
+bun scripts/demo/cleanup.ts --ssh-host "$DEMO_SSH_HOST" --apply --confirm <cleanup 的確認碼>
+bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST" --apply --confirm <platform 的確認碼>
+bun scripts/demo/cleanup.ts --ssh-host "$DEMO_SSH_HOST"     # 確認：nothing to remove
+bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST"    # 確認：nothing to change
+```
+
+先 cleanup 再 platform：PoC 的 AuthorizationPolicy 還在引用舊的 provider 時，platform 的 `--apply` 會拒絕。platform 的確認碼只涵蓋 istiod values 的變更（改前與改後），所以 cleanup 之前的 dry run 印出的確認碼，在 cleanup 之後照樣能用。
+
+### `demo/cleanup.ts`：清除可行性測試的殘留
+
+2026-10-20 決定刪除 2026-10-09、10 可行性測試留在展示機上的 PoC（Laysi/trustiot-v2#465；結果已記在 [docs/feasibility](../docs/feasibility/)）：
+
+| 刪除 | 條件 |
+| --- | --- |
+| namespace `trustiot`：雲端 PoC 的 app、clickhouse、grafana、mosquitto、otel-collector、postgres、qdrant，以及它們的 local-path volume 與資料 | PoC 的 7 個 workload 都在，而且沒有 Helm 或 Flux 管理的物件 |
+| namespace `poc`：閘道器端 PoC 的 bridge、consumer、identity、mosquitto-poc 與 probe-a、probe-b、probe-c | PoC 的 4 個 workload 都在，而且沒有 Helm 或 Flux 管理的物件 |
+| namespace `istio-ingress` 裡 PoC 的 Gateway `edge` 與它的 AuthorizationPolicy、NetworkPolicy、ConfigMap | namespace 只有這些與預設物件時整個刪除；還有其他東西時只刪這幾個，namespace 保留 |
+
+- 計畫列出每個會刪除的物件；被其他物件擁有的（Pod、ReplicaSet、Gateway 產生的 Deployment 與 Service 等）跟著擁有者刪除，不另外列；叢集自己產生的 Endpoints 與 Event 也不列。盤點以 jsonpath 只讀名稱、擁有者、Secret 的型別與標籤，不讀 Secret 的內容。
+- 只剩一部分 PoC、PoC 旁邊有 Helm 或 Flux 管理的物件，或 `istio-ingress` 裡與 PoC 同名的物件由 Helm 或 Flux 管理時，整個執行停下，什麼都不刪，由人判斷。沒有任何 PoC workload 的 namespace（例如之後展示環境的 `trustiot`）不動。
+- `--apply` 的順序：先刪 Gateway `edge`，在刪任何 namespace 之前（它的 CUSTOM policy 呼叫 `poc` 裡 PoC 的身分服務；Istio 再移除它為 Gateway 產生的物件），再逐一刪 namespace，`istio-ingress` 先（每個最多等 600 秒），等 PoC 的 PersistentVolume 被 local-path 刪除（reclaim policy `Delete`，最多 300 秒），重新盤點確認計畫已經是空的，最後比對其他 namespace 的 workload 與 Service 沒有變化。
+- 叢集層級的影響：刪除 namespace 與 PersistentVolume。istiod 裡指向 PoC 的 provider 由下一步的 platform.ts 換掉。展示機的檔案系統（PoC 的程式與紀錄）不動。
+
+### `demo/platform.ts`：平台元件與 repo 的釘選對齊
+
+比對的版本是 nightly 安裝的版本：`.github/workflows/nightly.yml` 的 `ISTIO_VERSION`、`GATEWAY_API_VERSION`、`CNPG_VERSION`（`bun test scripts/nightly` 確保它們與 [deploy/istio/README.md](../deploy/istio/README.md)、[deploy/cloudnative-pg/README.md](../deploy/cloudnative-pg/README.md) 一致）。
+
+| 元件 | 檢查 | 不一致時 |
+| --- | --- | --- |
+| Istio 的四個 HelmChart（`kube-system`） | 版本、沒有 Failed；values 與 `deploy/istio` 相同（istio-base 沒有 values 或用 `values-k3s.yaml` 都算，兩者渲染結果相同，2026-10-20 以 1.30.5 確認）；istiod、ztunnel、istio-cni 執行中的映像版本 | istiod 的 values 由 `--apply` 改；其他列為差異 |
+| istiod 的 mesh config（ConfigMap `istio-system/istio`） | extension providers 與路徑正規化確實是 values 的內容 | 列為差異 |
+| Gateway API 的 Gateway 與 HTTPRoute CRD、GatewayClass `istio` | standard channel、版本、GatewayClass 已 Accepted | 列為差異 |
+| CloudNativePG operator | 映像版本、Available、chart 用到的 CRD、`cnpg-system` 的 Pod Security `restricted` | 列為差異 |
+
+列為差異的，腳本不會修改，由人依該元件的 README 處理；腳本不安裝也不升級叢集層級的元件。
+
+唯一會改的是 HelmChart `kube-system/istiod` 的 `spec.valuesContent`：改成 `values-k3s.yaml` 加 `istiod-values.yaml`（依 Helm 的合併方式），把 PoC 的 provider `identity`（指向 `identity.poc`）換成 `trustiot-identity`（指向 `trustiot-identity.trustiot`，展示環境的身分服務），並開啟 mesh 的 `DECODE_AND_MERGE_SLASHES`。這是 mesh 層級的設定，同一個叢集的每個 gateway 與 waypoint 都套用（deploy/istio/README.md 的「路徑正規化」）。k3s 的 helm-controller 以 Job `kube-system/helm-install-istiod` 升級 istiod；腳本等到 ConfigMap `istio` 顯示新的 providers 與路徑正規化（最多 600 秒），再等 istiod 的 rollout 完成。
+
+`--apply` 在以下情況拒絕，什麼都不改：
+
+- istiod 的 HelmChart 不在釘選的版本或已經 Failed；
+- 有 HelmChartConfig 疊在 Istio 的 chart 上（lab 的 e2e 測試正在用，見 [deploy/chart/tests/e2e/README.md](../deploy/chart/tests/e2e/README.md) 入口測試的前置條件 2）；
+- 有 CUSTOM 的 AuthorizationPolicy 引用新 values 裡沒有的 provider（PoC 的 `istio-ingress/edge-cookie-auth`：先跑 cleanup.ts）。
+
+為什麼直接改 HelmChart，而不是疊一個 HelmChartConfig：lab 的 e2e 測試以 `HelmChartConfig istiod` 加入自己的 provider，測完刪掉；展示環境的 provider 如果放在 HelmChartConfig 裡，會跟著被刪。代價是展示機上當初以 `kubectl apply` 套用的檔案仍是 PoC 的 values，再套用一次就會把 provider 換回去，所以不要再套用它（deploy/istio/README.md 的「安裝（k3s）」）。
+
+回復：`--apply` 修改前把 HelmChart 存成紀錄目錄裡的 `platform-<時間>-helmchart-istiod-before.json` 並印出路徑。`bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST" --rollback <那個檔>` 印出目前與要放回的 values 及回復的確認碼（涵蓋這兩者），加上 `--apply --confirm <確認碼>` 把當時的 values 放回去：同樣取得 lab lock，在 lock 內確認 istiod 的 values 沒有再變；有 HelmChartConfig 疊在 Istio 上，或有 CUSTOM 的 AuthorizationPolicy 在用要拿掉的 provider（例如展示環境的入口）時拒絕；放回之前再存一份當時的 HelmChart，等到 mesh config 顯示回復的 providers。
+
+### 測試
+
+`bun test scripts/demo`，也包含在 `bun test scripts` 裡。不需要叢集或 ssh：以記憶體裡的假叢集驗證盤點、確認之前不刪除也不改、在 lock 內發現計畫變了就停、重複執行時什麼都不做，以及 platform.ts 擋下變更的條件；istiod 的 values 以 repo 裡的 `deploy/istio` 檔案驗證。
+
 ## release/：發佈流程
 
 `.github/workflows/release.yml` 的每個 job 各執行一支腳本，彼此以 JSON 交接（型別在 `release/lib.ts`）。流程、權限與驗證方式見 [CI 與發佈](../docs/architecture/ci-release.md) 的「release.yml」。
