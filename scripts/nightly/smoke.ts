@@ -13,7 +13,10 @@
 // service's account may change them, and how long the services took to pick them up on this fresh
 // install (identity-keys.ts, Laysi/trustiot-v2#404), then runs the CronJob that rotates the key by
 // age once and checks that it succeeds and leaves the key, which is not due, as it is
-// (Laysi/trustiot-v2#429).
+// (Laysi/trustiot-v2#429). A shape that exposes the ingress through the tunnel pins the ingress
+// gateway Service's ClusterIP to an address in the static band of the cluster's Service range,
+// and the smoke checks that the Service Istio generated has it (ingress-address.ts,
+// Laysi/trustiot-v2#478).
 // After the ingress e2e test, the SaaS shape also runs the service-to-service authorization e2e
 // test (mesh.e2e.ts, e2e.ts). Components the chart gains later are covered without
 // changes here, because the checks read the release's own manifests (manifests.ts).
@@ -26,6 +29,16 @@ import { gatherDiagnostics } from "./diagnostics.ts";
 import { E2E_SUITES, installEvidenceSection, runClusterE2e, suitesOf } from "./e2e.ts";
 import { exec, retry, run, RunLog, waitUntilGone } from "./exec.ts";
 import { checkIdentityKeys, checkKeyRotationRun } from "./identity-keys.ts";
+import {
+  CLUSTER_IP_FIELD,
+  clusterIpValues,
+  exposureOfValues,
+  generatedClusterIpProblems,
+  holdersOf,
+  serviceCidrsOf,
+  smokeClusterIpOf,
+  staticBandProblems,
+} from "./ingress-address.ts";
 import {
   gatewayPortProblems,
   gatewayPorts,
@@ -163,6 +176,9 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
   const values = valuesArgs(ctx.chartDir, shape);
   // The certificate the smoke made for an HTTPS listener, which the API check trusts.
   let ingressCa: string | undefined;
+  // The ClusterIP the release pins for the tunnel ingress (ingress-address.ts); undefined for a
+  // shape whose ingress faces the network directly.
+  let fixedClusterIp: string | undefined;
   try {
     passed =
       (await check("namespace with the restricted Pod Security level", async () => {
@@ -180,6 +196,25 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         writeFileSync(file, Bun.YAML.stringify(apiValues(shape.name, routes), null, 2));
         values.push("-f", file);
         return `${basename(file)}: identity and assets, provider ${smokeProviderNameOf(shape.name)}`;
+      })) &&
+      (await check("the tunnel ingress gets a fixed ClusterIP from the static band of the cluster's Service range (Laysi/trustiot-v2#478)", async () => {
+        // cloudflared forwards to the ingress Service's ClusterIP, so the chart pins it
+        // (ingress.tunnel.clusterIP). The address must be free: a Service that holds it would
+        // keep Istio from creating the gateway's Service, and the Gateway would never be programmed.
+        const exposure = exposureOfValues(ctx.chartDir, shape.valuesFiles);
+        fixedClusterIp = smokeClusterIpOf(shape.name, exposure);
+        if (fixedClusterIp === undefined) return `exposure ${exposure}: the chart takes no fixed ClusterIP`;
+        const range = await kubectlJson(["get", "servicecidr", "kubernetes", "--output", "json"]);
+        const cidrs = serviceCidrsOf(JSON.parse(range.stdout));
+        const problems = staticBandProblems(fixedClusterIp, cidrs);
+        const services = await kubectlJson(["get", "services", "--all-namespaces", "--output", "json"]);
+        const holders = holdersOf(fixedClusterIp, JSON.parse(services.stdout));
+        if (holders.length > 0) problems.push(`${fixedClusterIp} is already the ClusterIP of ${holders.join(", ")}`);
+        if (problems.length > 0) throw new Error(problems.join("; "));
+        const file = join(ctx.outDir, `values-ingress-address-${shape.name}.yaml`);
+        writeFileSync(file, Bun.YAML.stringify(clusterIpValues(fixedClusterIp), null, 2));
+        values.push("-f", file);
+        return `${basename(file)}: ${CLUSTER_IP_FIELD} ${fixedClusterIp}, unused and in the static band of ${cidrs.join(", ")}`;
       })) &&
       (await check("dummy Secrets for the references the chart makes", async () => {
         // Secrets reach a cluster from outside the chart (Laysi/trustiot-v2#72); the smoke test
@@ -285,6 +320,19 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
           await kubectl(["wait", "--namespace", namespace, "--for=condition=Programmed", `gateway.gateway.networking.k8s.io/${gateway}`, "--timeout=180s"], 200_000);
         }
         return gateways.length === 0 ? "the release has no Gateway" : gateways.join(", ");
+      })) &&
+      (await check("the tunnel ingress Service that Istio generated has the fixed ClusterIP (Laysi/trustiot-v2#478)", async () => {
+        if (fixedClusterIp === undefined) return "this shape pins no ClusterIP";
+        const gateways = gatewaysOf(parseManifests(manifest));
+        if (gateways.length !== 1) throw new Error(`the release should have one Gateway, found ${gateways.length}`);
+        const gateway = gateways[0]!;
+        const services = await kubectlJson([
+          "get", "services", "--namespace", namespace,
+          "--selector", `gateway.networking.k8s.io/gateway-name=${gateway}`, "--output", "json",
+        ]);
+        const problems = generatedClusterIpProblems(gateway, JSON.parse(services.stdout), fixedClusterIp);
+        if (problems.length > 0) throw new Error(problems.join("; "));
+        return `the Service of Gateway ${gateway} has ClusterIP ${fixedClusterIp}`;
       })) &&
       (await check("no pod is broken, not ready or crash-looping", async () => {
         const pods = await kubectlJson(["get", "pods", "--namespace", namespace, "--output", "json"]);

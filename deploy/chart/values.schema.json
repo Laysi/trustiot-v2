@@ -90,6 +90,10 @@
               "minItems": 1,
               "uniqueItems": true,
               "items": { "$ref": "#/definitions/hostCidr" }
+            },
+            "clusterIP": {
+              "description": "Fixed ClusterIP of the ingress gateway Service in tunnel mode: empty, or one IPv4 address from the static band of the cluster's Service range. The templates refuse it with direct exposure.",
+              "$ref": "#/definitions/optionalIpv4Address"
             }
           }
         },
@@ -819,6 +823,11 @@
       "description": "IPv4 CIDR with a prefix of at least /8.",
       "type": "string",
       "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12][0-9]|[89])$"
+    },
+    "optionalIpv4Address": {
+      "description": "Empty or one IPv4 address: four decimal octets without leading zeros, so no CIDR, no 'None' and no IPv6 (the pattern of trustiot.ingress.ipv4Pattern).",
+      "type": "string",
+      "pattern": "^$|^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$"
     },
     "exactPath": {
       "description": "One exact lower-case path: segments start with a letter or digit, so no '.', '..', '//', trailing '/', '%', ';' or wildcards; never under /internal (decision 27).",

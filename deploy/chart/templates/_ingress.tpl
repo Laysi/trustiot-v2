@@ -53,6 +53,44 @@ Returns a YAML list of NetworkPolicyPort.
 {{- end -}}
 
 {{/*
+Plain IPv4 address shared with values.schema.json (optionalIpv4Address): four decimal octets without
+leading zeros, so no CIDR, no "None" (headless) and no IPv6.
+*/}}
+{{- define "trustiot.ingress.ipv4Pattern" -}}
+^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$
+{{- end -}}
+
+{{/*
+The fixed ClusterIP of the ingress gateway Service behind the tunnel (ingress.tunnel.clusterIP,
+Laysi/trustiot-v2#478), or "" when it is not set. cloudflared on the host forwards to this
+address, so a recreated Service keeps it. Checked here, not only in values.schema.json, because
+the value goes into the strategic-merge patch Istio applies to the Service it generates: with or
+without schema validation, only a plain IPv4 address reaches it, and only when exposure is
+tunnel (a direct Service would silently ignore it otherwise).
+*/}}
+{{- define "trustiot.ingress.tunnelClusterIP" -}}
+{{- $tunnel := .Values.ingress.tunnel | default dict -}}
+{{- $address := "" -}}
+{{- if hasKey $tunnel "clusterIP" -}}
+{{- $raw := index $tunnel "clusterIP" -}}
+{{- /* Not `default`: it would take false or 0 for unset and silently drop the pin. */ -}}
+{{- if not (or (kindIs "invalid" $raw) (kindIs "string" $raw)) -}}
+{{- fail (printf "ingress.tunnel.clusterIP: must be a string holding one IPv4 address or empty, got %s %v" (kindOf $raw) $raw) -}}
+{{- end -}}
+{{- $address = $raw | default "" -}}
+{{- end -}}
+{{- if $address -}}
+{{- if ne .Values.ingress.exposure "tunnel" -}}
+{{- fail (printf "ingress.tunnel.clusterIP: set only with ingress.exposure tunnel, where cloudflared forwards to the ingress Service's ClusterIP; exposure %q never uses it" (.Values.ingress.exposure | toString)) -}}
+{{- end -}}
+{{- if not (regexMatch (include "trustiot.ingress.ipv4Pattern" .) $address) -}}
+{{- fail (printf "ingress.tunnel.clusterIP: %q must be one IPv4 address in dotted-quad form without leading zeros (no CIDR, no \"None\", no IPv6), from the static band of the cluster's Service range" $address) -}}
+{{- end -}}
+{{- end -}}
+{{- $address -}}
+{{- end -}}
+
+{{/*
 Exact-path form shared with values.schema.json: segments start with a letter or digit, so no dot
 segments, empty segments, trailing slash, percent-encoding, ';' or wildcards.
 */}}

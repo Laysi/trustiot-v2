@@ -12,6 +12,8 @@ options ConfigMap below.
 {{- $listenerPort := include "trustiot.ingress.listenerPort" . -}}
 {{- $options := include "trustiot.componentName" (dict "root" . "name" "ingress-options") -}}
 {{- $plan := include "trustiot.ingress.plan" . | fromYaml -}}
+{{- /* Checked on every render, so a value set with direct exposure is refused, not ignored. */ -}}
+{{- $clusterIP := include "trustiot.ingress.tunnelClusterIP" . -}}
 {{- $labels := include "trustiot.componentLabels" (dict "root" . "name" "ingress") -}}
 apiVersion: v1
 kind: ConfigMap
@@ -38,6 +40,10 @@ data:
       {{- if eq $v.ingress.exposure "tunnel" }}
       # Reached only by cloudflared on the host; nothing listens on the host or the network.
       type: ClusterIP
+      {{- if $clusterIP }}
+      # Fixed, so a recreated Service keeps the address cloudflared forwards to (ingress.tunnel.clusterIP).
+      clusterIP: {{ $clusterIP }}
+      {{- end }}
       {{- else }}
       type: {{ $v.ingress.direct.serviceType }}
       {{- end }}
