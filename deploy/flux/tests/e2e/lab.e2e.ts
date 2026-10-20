@@ -25,7 +25,10 @@
  *
  * Installing Flux is a cluster-wide change (CRDs, ClusterRoles, the flux-system namespace). The
  * script records the cluster-scoped objects before it starts, removes everything it created, and
- * compares (written to E2E_OUT/cluster-state.json).
+ * compares (written to E2E_OUT/cluster-state.json). It refuses to start, and checks again right
+ * before installing Flux, unless the lab lock ~/e2e.lock names the issue of E2E_NAMESPACE and the
+ * cluster has no Flux (no flux-system, no Flux CRDs). It removes Flux only while flux-system still
+ * carries the label of this run (preflight.ts).
  *
  *   E2E_SSH_HOST=trustiot-mac-m1 E2E_NAMESPACE=e2e-70 E2E_OUT=<dir> bun deploy/flux/tests/e2e/lab.e2e.ts
  *
@@ -40,15 +43,20 @@ import { protoTool, run, tryRun } from "../../../../scripts/release/exec.ts";
 import { APP_DIR, CHART_SOURCE_FILE, CLUSTER_DIR, SHAPE_VALUES_FILE, renderChartSource, renderShapeValues } from "../../../../scripts/release/flux.ts";
 import { ageTool } from "../../../../scripts/flux/age.ts";
 import { renderPullSecret } from "../../../../scripts/flux/lib.ts";
+import { FluxNamespace, type NamespaceApi, RUN_LABEL, existingFluxProblem, fluxCrdNames, issueOfNamespace, lockProblem, newRunId } from "./preflight.ts";
 
 const ROOT = resolve(import.meta.dir, "..", "..", "..", "..");
 const HOST = process.env.E2E_SSH_HOST ?? "";
 const NS = process.env.E2E_NAMESPACE ?? "";
 const OUT = resolve(process.env.E2E_OUT ?? "");
-if (HOST === "" || !/^e2e-[0-9]+$/.test(NS) || process.env.E2E_OUT === undefined) {
+if (HOST === "" || !/^e2e-[1-9][0-9]*$/.test(NS) || process.env.E2E_OUT === undefined) {
   console.error("set E2E_SSH_HOST, E2E_NAMESPACE (e2e-<issue>) and E2E_OUT");
   process.exit(2);
 }
+/** The issue this run belongs to; the lab lock must name it (preflight.ts, lockProblem). */
+const ISSUE = issueOfNamespace(NS);
+/** Labels namespace flux-system, so that teardown removes Flux only when this run created it. */
+const RUN_ID = newRunId();
 
 // Throwaway servers, pinned by digest (multi-arch indexes; the lab is arm64).
 const REGISTRY_IMAGE = "docker.io/library/registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8";
@@ -503,11 +511,28 @@ let fluxManifests = "";
 let before: Awaited<ReturnType<typeof clusterState>> | undefined;
 let protectedBefore: string[] = [];
 let failure: unknown;
-// Namespaces this run created. Teardown touches only these, so a namespace that already existed
-// (another Flux install, a leftover run) is never patched or deleted. Each flag is set just before
-// the create: the preflight proved the namespace absent and the lab lock keeps other runs out, so
-// a create whose reply is lost (dropped ssh) is still cleaned up.
-const created = { test: false, flux: false };
+// The test namespace, if this run created it. Teardown touches only that, so a namespace that
+// already existed (a leftover run) is never patched or deleted. The flag is set just before the
+// create: the preflight proved the namespace absent and the lab lock keeps other runs out, so a
+// create whose reply is lost (dropped ssh) is still cleaned up.
+const created = { test: false };
+// flux-system and, with it, Flux's cluster-wide objects (CRDs, ClusterRoles, ClusterRoleBindings):
+// this run's only when it created the namespace with RUN_ID, and torn down only while the label
+// still says so (preflight.ts, FluxNamespace). A Flux someone installed meanwhile, such as the demo
+// environment's, is never deleted.
+const fluxNamespace = new FluxNamespace(RUN_ID);
+const fluxNamespaceApi: NamespaceApi = {
+  // One attempt only: a retry after a lost answer would report AlreadyExists for our own create.
+  create: async (manifest) => {
+    const result = await tryRun(["ssh", HOST, "sudo k3s kubectl create -f -"], { stdin: manifest });
+    return { exitCode: result.exitCode, output: `${result.stdout}${result.stderr}` };
+  },
+  runLabel: async () => {
+    const result = await sshKubectl(["get", "namespace", "flux-system", "-o", `jsonpath={.metadata.labels.${RUN_LABEL.replaceAll(".", "\\.")}}`]);
+    const label = result.stdout.trim();
+    return result.exitCode === 0 && label !== "" ? label : undefined;
+  },
+};
 
 /** Whether a namespace exists; anything other than found or NotFound is an error. */
 async function namespaceExists(name: string): Promise<boolean> {
@@ -517,14 +542,33 @@ async function namespaceExists(name: string): Promise<boolean> {
   throw new Error(`cannot tell whether namespace ${name} exists: ${result.out.trim().split("\n").at(-1)}`);
 }
 
+/** Stops the run unless the lab lock is held for this run's issue (preflight.ts, lockProblem). */
+async function requireLabLock(): Promise<void> {
+  const owner = await tryRun(["ssh", HOST, "cat ~/e2e.lock/owner"]);
+  const problem = lockProblem(owner.exitCode === 0 ? owner.stdout : undefined, ISSUE);
+  if (problem !== undefined) throw new Error(problem);
+}
+
+/**
+ * Stops the run when the cluster has Flux. Teardown deletes Flux and its CRDs, so a cluster that
+ * already runs Flux (on the lab: the demo environment, deploy/flux/README.md 「展示叢集」) is not
+ * ours to test on (preflight.ts).
+ */
+async function requireNoFlux(): Promise<void> {
+  const fluxProblem = existingFluxProblem({
+    fluxSystemNamespace: await namespaceExists("flux-system"),
+    fluxCrds: fluxCrdNames(await kubectl(["get", "crd", "-o", "name"])),
+  });
+  if (fluxProblem !== undefined) throw new Error(fluxProblem);
+}
+
 try {
+  await requireLabLock();
+  note(`the lab lock is held for ${ISSUE}`);
   const versions = await kubectl(["version", "-o", "json"]);
   note(`cluster ${(JSON.parse(versions) as { serverVersion: { gitVersion: string } }).serverVersion.gitVersion}`);
-  if (await namespaceExists("flux-system")) throw new Error("flux-system already exists; refusing to touch it");
+  await requireNoFlux();
   if (await namespaceExists(NS)) throw new Error(`${NS} already exists; refusing to touch it`);
-  // Teardown deletes the Flux CRDs, so a cluster that already has any of them is not ours to test on.
-  const fluxCrds = (await kubectl(["get", "crd", "-o", "name"])).split("\n").filter((name) => name.endsWith(".toolkit.fluxcd.io"));
-  if (fluxCrds.length > 0) throw new Error(`Flux CRDs already exist (${fluxCrds.join(", ")}); refusing to touch them`);
   before = await clusterState();
   protectedBefore = await protectedState();
   note(`recorded ${Object.values(before).reduce((n, kind) => n + kind.names.length, 0)} cluster-scoped objects and ${protectedBefore.length} workloads elsewhere`);
@@ -598,8 +642,12 @@ try {
   note(`pushed the e2e repository at ${first}`);
 
   // Bootstrap as deploy/flux/README.md does: namespace, the two Secrets, then Flux from the tree.
-  created.flux = true;
-  await kubectl(["create", "namespace", "flux-system"]);
+  // Minutes have passed since the first checks (servers, charts, signing): check the lock and the
+  // absence of Flux again right before installing, then create flux-system as this run's.
+  await requireLabLock();
+  await requireNoFlux();
+  await fluxNamespace.claim(fluxNamespaceApi);
+  note(`created namespace flux-system with ${RUN_LABEL}=${RUN_ID}`);
   await kubectl(
     ["apply", "-f", "-"],
     [
@@ -680,22 +728,29 @@ try {
   // Teardown in the order Flux needs: stop syncing, uninstall the release while helm-controller
   // runs, delete the custom resources while their controllers remove the finalizers, then Flux.
   note("teardown");
+  // Flux is removed only while flux-system still carries this run's label: the label is read again
+  // here, so a Flux that replaced ours (or a namespace someone relabelled) is left alone.
+  const fluxOurs = await fluxNamespace.mayTearDown(fluxNamespaceApi);
+  if (fluxNamespace.owned && !fluxOurs) {
+    note(`ERROR flux-system no longer carries ${RUN_LABEL}=${RUN_ID}: Flux, its CRDs and the namespace are left in place for a person to check`);
+    check("teardown removed only this run's Flux", false, "flux-system is not this run's any more; nothing of Flux was deleted");
+  }
   const steps: [string, boolean, string[]][] = [
-    ["suspend the sync, no pruning", created.flux, ["-n", "flux-system", "patch", "kustomization", "flux-system", "--type=merge", "-p", '{"spec":{"suspend":true,"prune":false}}']],
-    ["uninstall the release", created.test && created.flux, ["-n", NS, "delete", "helmrelease", "--all", "--wait", "--timeout=180s"]],
-    ["delete the sources", created.test && created.flux, ["-n", NS, "delete", "ocirepository", "--all", "--wait", "--timeout=120s"]],
-    ["delete the sync", created.flux, ["-n", "flux-system", "delete", "kustomization,gitrepository", "--all", "--wait", "--timeout=120s"]],
+    ["suspend the sync, no pruning", fluxOurs, ["-n", "flux-system", "patch", "kustomization", "flux-system", "--type=merge", "-p", '{"spec":{"suspend":true,"prune":false}}']],
+    ["uninstall the release", created.test && fluxOurs, ["-n", NS, "delete", "helmrelease", "--all", "--wait", "--timeout=180s"]],
+    ["delete the sources", created.test && fluxOurs, ["-n", NS, "delete", "ocirepository", "--all", "--wait", "--timeout=120s"]],
+    ["delete the sync", fluxOurs, ["-n", "flux-system", "delete", "kustomization,gitrepository", "--all", "--wait", "--timeout=120s"]],
   ];
   for (const [what, ours, args] of steps) {
     if (!ours) continue;
     const result = await tryKubectl(args);
     note(`${what}: ${result.code === 0 ? "done" : `exit ${result.code} ${result.out.trim().split("\n").at(-1)}`}`);
   }
-  if (created.flux && fluxManifests !== "") {
+  if (fluxOurs && fluxManifests !== "") {
     const removed = await sshKubectl(["delete", "--ignore-not-found", "--wait", "--timeout=300s", "-f", "-"], fluxManifests);
     note(`delete Flux: exit ${removed.exitCode}`);
   }
-  for (const namespace of [...(created.test ? [NS] : []), ...(created.flux ? ["flux-system"] : [])]) {
+  for (const namespace of [...(created.test ? [NS] : []), ...(fluxOurs ? ["flux-system"] : [])]) {
     const result = await tryKubectl(["delete", "namespace", namespace, "--ignore-not-found", "--wait", "--timeout=300s"]);
     note(`delete namespace ${namespace}: exit ${result.code}`);
   }
