@@ -13,7 +13,7 @@ Laysi/trustiot-v2#466（父 issue Laysi/trustiot-v2#457）：展示機自己的 
 | cloudflared | 安裝前 2026.10.0-1，dnf 的來源 `@commandline`（下載的 RPM）；安裝後 2026.10.2-1，來自 Cloudflare 的套件庫 `cloudflared-stable`（安裝程式以 root 檢查來源與簽章後才寫入 token） |
 | 維運 tunnel | `cloudflared.service`，MainPID 1005，自 2026-10-10（展示機的時區）起執行 |
 | Cloudflare | 依私有的 Cloudflare 變更清單由協調者套用：一個 self-hosted Access application 涵蓋三個主機名稱（受邀名單的 group，require Google 登入方式，binding cookie）；gateway 主機名稱的 `/mqtt` 與 `/certs/renew` 各一個 Bypass application；tunnel 路由第 1 段（略過路徑的錨定規則回 `http_status:418` 且不要求 JWT，其餘回 `http_status:418` 並設 `originRequest.access`，catch-all 404）；configuration rule 對 gateway 主機名稱的兩條略過路徑關閉 Browser Integrity Check。zone 為 Free 方案，Bot Fight Mode 沒有改（2026-10-20 的決定） |
-| 工作站 | curl 8.21.0（OpenSSL 4.0.3），Bun 依 `.prototools` |
+| 工作站 | curl（以 OpenSSL 建置；TLS 特徵和閘道器的 rustls 不同，見「限制」），Bun 依 `.prototools` |
 | 程式碼 | 安裝、`status` 與 `check` 從 `feat/466-demo-tunnel-2` 的 `ae05499` 乾淨 checkout 執行（計畫記下 commit）；之後的修正（`status` 讀 cloudflared 來源的錯誤、執行腳本的 umask）在同一分支 |
 
 ## 指令
