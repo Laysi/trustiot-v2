@@ -22,7 +22,15 @@
  * straight into an awk filter that keeps only the reply codes, the command verbs and the TLS
  * version and cipher, so the container log (and anything this script prints or saves) never
  * holds the recipient, the sender, the credentials or the provider's message ID. The pod is
- * deleted at the end, whatever happened, and an earlier run's leftover pod first.
+ * deleted at the end, whatever happened, and an earlier run's leftover pod first. Once the lab lock
+ * is held, SIGINT, SIGTERM and SIGHUP delete the pod (if it was created) and release the lock
+ * before the script exits with 128 + the signal's number; a second signal exits at once. Only
+ * SIGKILL, a second signal or a lost ssh connection leave them behind: the kubelet stops the pod at
+ * activeDeadlineSeconds and the next run deletes it as a leftover, and the lock is removed by hand
+ * as lib.ts's LOCK_HELP says. --apply also needs the checkout's commit to be on origin/main.
+ *
+ * Unlike lib.ts's rule for the scripts here, it records no cluster state before and after: it only
+ * creates one short-lived pod of its own and deletes it, and it changes nothing else.
  *
  * headers reads the raw headers of the received message and prints SPF, DKIM and DMARC results,
  * whether the DKIM and SPF domains align with the From domain, and the TLS of each Received hop,
@@ -34,7 +42,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { Writable } from "node:stream";
 import { parseOptions, tryRun } from "../release/exec.ts";
-import { ReleaseError } from "../release/lib.ts";
+import { ReleaseError, errorMessage } from "../release/lib.ts";
 import { Box, COMMON_SPEC, DEMO_NAMESPACE, Log, ROOT, checkConfirmation, commonOptions, lastLines, main, opsTunnel, shq, stableJson, takeLock, withOpsTunnel } from "./lib.ts";
 import { LOCK_STATE_COMMAND, parseLockState, type Clock } from "./tunnel.ts";
 
@@ -63,8 +71,13 @@ export const POD_LABELS: Readonly<Record<string, string>> = {
 };
 const POD_SELECTOR = "app.kubernetes.io/name=trustiot-test-mail";
 export const CONTAINER = "mail";
-/** Files whose state the plan binds: this script, the demo cluster's values and the chart's defaults. */
-export const CODE_PATHS = ["scripts/demo", "deploy/flux/clusters/demo/trustiot", "deploy/chart/values.yaml"];
+/**
+ * Files whose state the plan binds: this script and the modules it imports (scripts/demo and
+ * scripts/release), the demo cluster's values and the chart's defaults.
+ */
+export const CODE_PATHS = ["scripts/demo", "scripts/release", "deploy/flux/clusters/demo/trustiot", "deploy/chart/values.yaml"];
+/** The branch whose history the commit must be in for --apply (the local remote-tracking ref). */
+export const MAIN_REF = "origin/main";
 const CHART_VALUES = "deploy/chart/values.yaml";
 const SAAS_VALUES = "deploy/flux/clusters/demo/trustiot/values-saas.yaml";
 const DEMO_VALUES = "deploy/flux/clusters/demo/trustiot/values-demo.yaml";
@@ -174,9 +187,14 @@ function parseYaml(text: string, file: string): unknown {
   }
 }
 
+/** Whether the commit is in origin/main's history: yes, no, or unknown (no such ref, git failed). */
+export type OnMain = "yes" | "no" | "unknown";
+
 export interface Checkout {
   /** The commit; empty in tests that pass files directly. */
   head: string;
+  /** Whether `head` is in MAIN_REF (the local ref, as of the last fetch). */
+  onMain: OnMain;
   smtp: SmtpSettings;
   sender: SenderSource;
   /** The overlay layers as committed, compared with what the cluster has. */
@@ -184,16 +202,17 @@ export interface Checkout {
 }
 
 /** Reads the settings from a checkout's files (`read` gives a file's text by repository path). */
-export function checkoutSettings(read: (path: string) => string, head: string): Checkout {
+export function checkoutSettings(read: (path: string) => string, head: string, onMain: OnMain = "unknown"): Checkout {
   const chart = smtpLayer(parseYaml(read(CHART_VALUES), CHART_VALUES), CHART_VALUES);
   const saas = smtpLayer(parseYaml(read(SAAS_VALUES), SAAS_VALUES), SAAS_VALUES);
   const demo = smtpLayer(parseYaml(read(DEMO_VALUES), DEMO_VALUES), DEMO_VALUES);
-  return { head, smtp: smtpSettings([chart, saas, demo]), sender: senderSource(parseYaml(read(HELM_RELEASE), HELM_RELEASE)), layers: { saas, demo } };
+  return { head, onMain, smtp: smtpSettings([chart, saas, demo]), sender: senderSource(parseYaml(read(HELM_RELEASE), HELM_RELEASE)), layers: { saas, demo } };
 }
 
 /**
  * The commit of this checkout and its settings. Anything uncommitted in CODE_PATHS stops the plan:
- * the confirm code then names the reviewed commit, not the files on this disk.
+ * the confirm code then names the reviewed commit, not the files on this disk. Whether the commit
+ * is on origin/main is read from the local ref, without fetching.
  */
 export async function readCheckout(root: string = ROOT): Promise<Checkout> {
   const head = await tryRun(["git", "-C", root, "rev-parse", "HEAD"]);
@@ -203,7 +222,20 @@ export async function readCheckout(root: string = ROOT): Promise<Checkout> {
   if (status.stdout.trim() !== "") {
     throw new ReleaseError(`${CODE_PATHS.join(", ")} have uncommitted changes; run from a clean checkout of the reviewed commit:\n${lastLines(status.stdout, 10)}`);
   }
-  return checkoutSettings((path) => readFileSync(join(root, path), "utf8"), head.stdout.trim());
+  // Exit 0: an ancestor (or the same commit); 1: not; anything else: no such ref or another error.
+  const ancestor = await tryRun(["git", "-C", root, "merge-base", "--is-ancestor", "HEAD", MAIN_REF]);
+  const onMain: OnMain = ancestor.exitCode === 0 ? "yes" : ancestor.exitCode === 1 ? "no" : "unknown";
+  return checkoutSettings((path) => readFileSync(join(root, path), "utf8"), head.stdout.trim(), onMain);
+}
+
+/** --apply sends only from a commit that is on origin/main (reviewed and merged). */
+export function requireOnMain(plan: Pick<SendPlan, "head" | "onMain">): void {
+  if (plan.onMain === "yes") return;
+  throw new ReleaseError(
+    plan.onMain === "no"
+      ? `commit ${plan.head} is not on ${MAIN_REF}: send only from a merged commit. Run git fetch origin main first if it was merged since the last fetch`
+      : `could not tell whether commit ${plan.head} is on ${MAIN_REF} (no such ref here?): run git fetch origin main first`,
+  );
 }
 
 // --- The recipient ---------------------------------------------------------------------------------
@@ -440,6 +472,8 @@ export interface MailOutcome {
   tls: string | undefined;
   certificateVerified: boolean;
   exit: number | undefined;
+  /** The container's exit code from the pod's terminated state. */
+  podExit: number | undefined;
   curlError: number | undefined;
   refused: string | undefined;
   accepted: boolean;
@@ -462,9 +496,10 @@ export const CURL_ERRORS: Readonly<Record<number, string>> = {
  * Pairs each reply with the command it answers (the first with the greeting; the reply after the
  * 354 to DATA is the message's). The mail counts as accepted only when curl ended with 0, TLS was
  * in use with a verified certificate, the login got 235, MAIL FROM and RCPT TO got 250 or 251,
- * DATA 354 and the message 250.
+ * DATA 354 and the message 250, and the container itself ended with 0 (`podExit`, from the pod's
+ * terminated state; the TESTMAIL EXIT line alone is the script's own report).
  */
-export function mailOutcome(lines: readonly string[], security: Security): MailOutcome {
+export function mailOutcome(lines: readonly string[], security: Security, podExit: number | undefined): MailOutcome {
   const stages: Stage[] = [];
   let pending: string | undefined = "greeting";
   let tls: string | undefined;
@@ -491,6 +526,7 @@ export function mailOutcome(lines: readonly string[], security: Security): MailO
   const authenticated = stages.some((stage) => (stage.step.startsWith("AUTH ") || stage.step === "AUTH (continued)") && /^235\b/.test(stage.reply));
   const accepted =
     exit === 0 &&
+    podExit === 0 &&
     tls !== undefined &&
     certificateVerified &&
     (security === "tls" || replied("STARTTLS", /^220\b/)) &&
@@ -499,7 +535,7 @@ export function mailOutcome(lines: readonly string[], security: Security): MailO
     replied("RCPT TO", /^25[01]\b/) &&
     replied("DATA", /^354\b/) &&
     replied("message", /^250\b/);
-  return { stages, tls, certificateVerified, exit, curlError, refused, accepted };
+  return { stages, tls, certificateVerified, exit, podExit, curlError, refused, accepted };
 }
 
 // --- The plan --------------------------------------------------------------------------------------
@@ -513,6 +549,7 @@ export interface NetworkPolicyFact {
 
 export interface SendPlan {
   head: string;
+  onMain: OnMain;
   namespace: string;
   image: string;
   smtp: SmtpSettings;
@@ -613,6 +650,7 @@ export async function makePlan(box: Box, log: Log, env: PlanEnv): Promise<SendPl
   const template = podManifest({ name: `${POD_PREFIX}<run>`, run: "<run>", smtp: checkout.smtp, sender: checkout.sender });
   const plan: SendPlan = {
     head: checkout.head,
+    onMain: checkout.onMain,
     namespace: DEMO_NAMESPACE,
     image: IMAGE,
     smtp: checkout.smtp,
@@ -633,6 +671,9 @@ export async function makePlan(box: Box, log: Log, env: PlanEnv): Promise<SendPl
 export function describePlan(plan: SendPlan, log: Log): void {
   const { smtp, sender } = plan;
   log.note(`plan: commit ${plan.head}; one pod ${POD_PREFIX}<run> in namespace ${plan.namespace} (Pod Security ${plan.podSecurityEnforce}), image ${plan.image}`);
+  log.note(
+    `  the commit is on ${MAIN_REF} (local ref): ${plan.onMain}${plan.onMain === "yes" ? "" : `; --apply refuses until it is (git fetch origin main first${plan.onMain === "no" ? ", and send only from a merged commit" : ""})`}`,
+  );
   log.note(`  SMTP ${smtp.host}:${smtp.port} with ${smtp.security === "starttls" ? "STARTTLS (smtp:// and --ssl-reqd)" : "implicit TLS (smtps://)"}; login from Secret ${smtp.credentialsSecret.name} keys ${smtp.credentialsSecret.usernameKey} and ${smtp.credentialsSecret.passwordKey}; sender from Secret ${sender.name} key ${sender.key}`);
   log.note("  the recipient comes from stdin when --apply runs, reaches the pod only on its stdin, and is never printed or saved");
   const egress = plan.networkPolicies.filter((policy) => policy.types.includes("Egress"));
@@ -651,6 +692,96 @@ export function describePlan(plan: SendPlan, log: Log): void {
       : "  Istio ambient: no ztunnel DaemonSet found, so the ambient label has no effect; the connection goes out directly, as a service's would",
   );
   log.note(plan.leftovers.length === 0 ? "  no leftover test pod" : `  leftover test pods, deleted before the run: ${plan.leftovers.join(", ")}`);
+}
+
+// --- Interrupts ------------------------------------------------------------------------------------
+
+/** The signals that clean up before exiting, with their numbers (exit status 128 + number). */
+export const SIGNAL_NUMBERS = { SIGHUP: 1, SIGINT: 2, SIGTERM: 15 } as const;
+export type SignalName = keyof typeof SIGNAL_NUMBERS;
+
+/** Where signals come from and how the process ends; the real one is `process`. */
+export interface SignalSource {
+  on(signal: SignalName, handler: () => void): void;
+  off(signal: SignalName, handler: () => void): void;
+  exit(code: number): void;
+}
+
+const PROCESS_SIGNALS: SignalSource = {
+  on: (signal, handler) => void process.on(signal, handler),
+  off: (signal, handler) => void process.off(signal, handler),
+  exit: (code) => process.exit(code),
+};
+
+/** Runs `step` at most once; every later call gets the same promise. */
+function once(step: () => Promise<void>): () => Promise<void> {
+  let running: Promise<void> | undefined;
+  return () => (running ??= step());
+}
+
+/**
+ * Cleanup on SIGINT, SIGTERM and SIGHUP while the lab lock is held. The first signal runs the
+ * guarded steps, the last guarded first (the pod before the lock), then exits with 128 + the
+ * signal's number; a second signal exits at once. The normal path runs the same steps through the
+ * functions guard() returns, so each step runs once, whichever path gets there first; after a
+ * signal, check() stops the normal path from starting anything new.
+ */
+export class Interrupts {
+  private readonly steps: (() => Promise<void>)[] = [];
+  private readonly handlers = new Map<SignalName, () => void>();
+  private signal: SignalName | undefined;
+  private cleanup: Promise<void> | undefined;
+
+  constructor(
+    private readonly log: Log,
+    private readonly source: SignalSource = PROCESS_SIGNALS,
+  ) {
+    for (const signal of Object.keys(SIGNAL_NUMBERS) as SignalName[]) {
+      const handler = () => this.received(signal);
+      this.handlers.set(signal, handler);
+      source.on(signal, handler);
+    }
+  }
+
+  /** Registers a cleanup step and returns it, wrapped to run once. */
+  guard(step: () => Promise<void>): () => Promise<void> {
+    const wrapped = once(step);
+    this.steps.push(wrapped);
+    return wrapped;
+  }
+
+  /** Throws once a signal came: the normal path starts nothing new while the cleanup runs. */
+  check(): void {
+    if (this.signal !== undefined) throw new ReleaseError(`interrupted by ${this.signal}`);
+  }
+
+  /** The normal path's end: after a signal, waits for its cleanup and exit; otherwise removes the handlers. */
+  async finish(): Promise<void> {
+    if (this.cleanup !== undefined) await this.cleanup;
+    for (const [signal, handler] of this.handlers) this.source.off(signal, handler);
+    this.handlers.clear();
+  }
+
+  private received(signal: SignalName): void {
+    const code = 128 + SIGNAL_NUMBERS[signal];
+    if (this.signal !== undefined) {
+      this.log.note(`${signal} again: exiting at once (the pod stops at its activeDeadlineSeconds and the next run deletes it; remove the lab lock by hand if it is still this run's)`);
+      this.source.exit(code);
+      return;
+    }
+    this.signal = signal;
+    this.log.note(`${signal}: deleting the test pod (if it was created) and releasing the lab lock before exiting; a second signal exits at once`);
+    this.cleanup = (async () => {
+      for (const step of [...this.steps].reverse()) {
+        try {
+          await step();
+        } catch (error) {
+          this.log.note(`WARNING: a cleanup step failed: ${errorMessage(error)}`);
+        }
+      }
+      this.source.exit(code);
+    })();
+  }
 }
 
 // --- The run ---------------------------------------------------------------------------------------
@@ -679,22 +810,53 @@ async function readPod(box: Box, name: string): Promise<PodState | undefined> {
   return podState(await box.getJson(["-n", DEMO_NAMESPACE, "get", "pod", name]));
 }
 
+/** Deletes the test pod and checks that it is gone; never throws, says how to delete it by hand. */
+async function deletePod(box: Box, log: Log, name: string): Promise<void> {
+  const removed = await box.tryKubectl(["-n", DEMO_NAMESPACE, "delete", "pod", name, "--ignore-not-found", "--wait=true", "--timeout=60s"]);
+  const gone = (await box.tryKubectl(["-n", DEMO_NAMESPACE, "get", "pod", name, "--ignore-not-found", "-o", "name"])).stdout.trim() === "";
+  if (removed.exitCode === 0 && gone) log.note(`deleted pod ${name}`);
+  else log.note(`WARNING: pod ${name} may still be there; delete it with: sudo k3s kubectl -n ${DEMO_NAMESPACE} delete pod ${name} (it holds no recipient; its log holds only the filtered lines)`);
+}
+
 /**
  * Creates the pod, gives it the recipient over attach, waits for it to end and reads its (already
- * filtered) log; deletes the pod in every case. Returns the filtered output.
+ * filtered) log; deletes the pod in every case, also on a signal (`interrupts`, registered before
+ * the pod is created, so a create that a signal cuts short is covered too). Returns the filtered
+ * output and the container's exit code.
  */
-export async function sendTestMail(box: Box, log: Log, plan: SendPlan, recipient: string, run: string, clock: Clock = REAL_CLOCK): Promise<{ lines: string[]; dropped: number; exitCode: number | undefined }> {
+export async function sendTestMail(
+  box: Box,
+  log: Log,
+  plan: SendPlan,
+  recipient: string,
+  run: string,
+  clock: Clock = REAL_CLOCK,
+  interrupts?: Interrupts,
+): Promise<{ lines: string[]; dropped: number; exitCode: number | undefined }> {
   const name = `${POD_PREFIX}${run}`;
+  const check = () => interrupts?.check();
   for (const leftover of plan.leftovers) {
+    check();
     await box.kubectl(["-n", DEMO_NAMESPACE, "delete", "pod", leftover, "--ignore-not-found", "--wait=true", "--timeout=60s"]);
     log.note(`deleted the leftover test pod ${leftover}`);
   }
   const manifest = podManifest({ name, run, smtp: plan.smtp, sender: plan.sender });
+  check();
+  // A signal can come while the create is on its way: the cleanup waits for it to settle (created
+  // or not) before it deletes, so it never deletes before the pod exists and leaves it behind.
+  let creating: Promise<unknown> | undefined;
+  const cleanup = async () => {
+    await creating?.catch(() => {});
+    await deletePod(box, log, name);
+  };
+  const removePod = interrupts?.guard(cleanup) ?? once(cleanup);
   try {
-    await box.kubectl(["create", "-f", "-"], JSON.stringify(manifest));
+    creating = box.kubectl(["create", "-f", "-"], JSON.stringify(manifest));
+    await creating;
     log.note(`created pod ${name}; waiting for it to run (the first run pulls the image)`);
     const runningBy = clock.now() + RUNNING_WAIT_MS;
     for (;;) {
+      check();
       const state = await readPod(box, name);
       if (state?.phase === "Running") break;
       if (state?.terminated !== undefined || state?.phase === "Failed" || state?.phase === "Succeeded") {
@@ -705,11 +867,13 @@ export async function sendTestMail(box: Box, log: Log, plan: SendPlan, recipient
       await clock.sleep(POLL_MS);
     }
     // The recipient only ever goes into this attach's stdin. No retry: the pod reads stdin once.
+    check();
     const attach = await box.sh(["sudo", "k3s", "kubectl", "-n", DEMO_NAMESPACE, "attach", "-i", "-c", CONTAINER, name].map(shq).join(" "), { stdin: `${recipient}\n`, retry: false });
     if (attach.exitCode !== 0) log.note(`kubectl attach ended with exit ${attach.exitCode}; reading the pod's log`);
     const doneBy = clock.now() + DONE_WAIT_MS;
     let state = await readPod(box, name);
     while (state?.terminated === undefined) {
+      check();
       if (clock.now() > doneBy) throw new ReleaseError(`pod ${name} did not end within ${DONE_WAIT_MS / 60_000} minutes of the attach`);
       await clock.sleep(POLL_MS);
       state = await readPod(box, name);
@@ -717,23 +881,21 @@ export async function sendTestMail(box: Box, log: Log, plan: SendPlan, recipient
     const logs = await box.kubectl(["-n", DEMO_NAMESPACE, "logs", name, "-c", CONTAINER]);
     return { ...filterOutput(logs), exitCode: state.terminated.exitCode };
   } finally {
-    const removed = await box.tryKubectl(["-n", DEMO_NAMESPACE, "delete", "pod", name, "--ignore-not-found", "--wait=true", "--timeout=60s"]);
-    const gone = (await box.tryKubectl(["-n", DEMO_NAMESPACE, "get", "pod", name, "--ignore-not-found", "-o", "name"])).stdout.trim() === "";
-    if (removed.exitCode === 0 && gone) log.note(`deleted pod ${name}`);
-    else log.note(`WARNING: pod ${name} may still be there; delete it with: sudo k3s kubectl -n ${DEMO_NAMESPACE} delete pod ${name} (it holds no recipient; its log holds only the filtered lines)`);
+    await removePod();
   }
 }
 
 /** Prints the outcome; throws unless the mail was accepted. */
 export function report(log: Log, result: { lines: string[]; dropped: number; exitCode: number | undefined }, security: Security): MailOutcome {
-  const outcome = mailOutcome(result.lines, security);
+  const outcome = mailOutcome(result.lines, security, result.exitCode);
   log.note("SMTP session (reply codes only; addresses, domains, message IDs and credentials are not in the pod's output):");
   for (const stage of outcome.stages) log.note(`  ${stage.step}: ${stage.reply}`);
   log.note(`  TLS: ${outcome.tls ?? "none seen"}${outcome.certificateVerified ? ", certificate verified" : ""}`);
   if (result.dropped > 0) log.note(`  (${result.dropped} other line(s) of the pod's log were dropped unread)`);
   if (outcome.refused !== undefined) log.note(`  the pod refused to send: ${outcome.refused}`);
   if (outcome.curlError !== undefined) log.note(`  curl error ${outcome.curlError}: ${CURL_ERRORS[outcome.curlError] ?? "see curl's EXIT CODES"}`);
-  log.save("result", { at: new Date().toISOString(), security, ...outcome, podExitCode: result.exitCode, droppedLines: result.dropped });
+  if (outcome.exit !== outcome.podExit) log.note(`  the container ended with ${outcome.podExit ?? "an unknown code"}, the script in it reported ${outcome.exit ?? "nothing"}`);
+  log.save("result", { at: new Date().toISOString(), security, ...outcome, droppedLines: result.dropped });
   if (!outcome.accepted) throw new ReleaseError("the relay did not accept the test mail (see the stages above)");
   log.note("accepted: the relay took the message (250 after DATA). Read the received message's headers with: bun scripts/demo/test-mail.ts headers < <file>");
   return outcome;
@@ -892,11 +1054,43 @@ export function receivedTls(value: string): { protocol: string | undefined; vers
   return { protocol, version: keep(match?.[1]), cipher: keep(match?.[2]) };
 }
 
+/** A DKIM selector as printed: short plain ones as they are (Resend's is `resend`), others hidden. */
+const SELECTOR = /^[a-z0-9]{1,32}$/;
+export function shownSelector(selector: string | undefined): string | undefined {
+  if (selector === undefined) return undefined;
+  // A selector can carry a domain (Microsoft 365 writes selector1-<domain with dashes>).
+  return SELECTOR.test(selector) ? selector : "<selector>";
+}
+
+/** What one Authentication-Results value says, for the verdict. */
+interface AuthVerdict {
+  /** spf=pass for a MAIL FROM domain related to From (relaxed alignment, approximated). */
+  spfAligned: boolean;
+  /** A dkim=pass whose d= aligns with From. */
+  dkimAligned: boolean;
+  /** The dmarc results the receiver wrote; none when it does not evaluate DMARC. */
+  dmarc: string[];
+}
+
+/** PASS needs aligned SPF and DKIM passes, and dmarc=pass whenever the receiver reports DMARC. */
+export function verdictOf(verdict: AuthVerdict | undefined): { pass: boolean; missing: string[] } {
+  if (verdict === undefined) return { pass: false, missing: ["an Authentication-Results header"] };
+  const missing: string[] = [];
+  if (!verdict.spfAligned) missing.push("spf=pass for a MAIL FROM domain aligned with From");
+  if (!verdict.dkimAligned) missing.push("dkim=pass with d= aligned with From");
+  if (verdict.dmarc.length > 0 && !verdict.dmarc.every((result) => result === "pass")) missing.push("dmarc=pass");
+  return { pass: missing.length === 0, missing };
+}
+
 /**
  * The redacted summary of a received message's headers. Prints results, the alignment of each
  * DKIM and SPF domain with From, placeholders for domains and the receiver, and the TLS of each
- * Received hop; never an address, a domain, an IP address or an ID. pass is true when the first
- * (topmost) Authentication-Results says spf=pass and has a dkim=pass whose domain aligns with From.
+ * Received hop; never an address, a domain, an IP address or an ID. pass is judged on the first
+ * (topmost) Authentication-Results, the receiver's own: spf=pass whose smtp.mailfrom domain is
+ * related to From (same, subdomain, parent or the same organizational domain), a dkim=pass whose
+ * d= aligns with From, and dmarc=pass when the receiver reports a dmarc result (without one, SPF
+ * and DKIM decide, and a line says so). The organizational domain is approximated by the last two
+ * labels (relation()); the receiver's dmarc result is the authority.
  */
 export function headerSummary(raw: string): { lines: string[]; pass: boolean } {
   const headers = parseHeaders(raw);
@@ -910,37 +1104,41 @@ export function headerSummary(raw: string): { lines: string[]; pass: boolean } {
   };
   const lines: string[] = [];
   lines.push(`From domain: ${from === undefined ? "not found" : "<from-domain>"}`);
-  /** Lists one Authentication-Results value; returns whether it has spf=pass and an aligned dkim=pass. */
-  const describe = (label: string, value: string): boolean => {
+  const related = (domain: string | undefined) => domain !== undefined && from !== undefined && relation(domain, from) !== "other";
+  /** Lists one Authentication-Results value and returns what it says for the verdict. */
+  const describe = (label: string, value: string): AuthVerdict => {
     const { authserv, results } = parseAuthResults(value);
     lines.push(`${label} by ${receiver(authserv)}:`);
-    let spfPass = false;
-    let dkimAligned = false;
+    const verdict: AuthVerdict = { spfAligned: false, dkimAligned: false, dmarc: [] };
     for (const r of results) {
       const result = TOKEN.test(r.result) ? r.result : "?";
       if (r.method === "spf") {
-        const domain = domainOf(r.props["smtp.mailfrom"] ?? r.props["smtp.helo"] ?? "");
-        lines.push(`  spf=${result} (MAIL FROM domain ${names.name(domain)}: ${names.alignment(domain)})`);
-        spfPass ||= result === "pass";
+        const mailFrom = domainOf(r.props["smtp.mailfrom"] ?? "");
+        const domain = mailFrom ?? domainOf(r.props["smtp.helo"] ?? "");
+        lines.push(`  spf=${result} (${mailFrom !== undefined ? "MAIL FROM" : "HELO"} domain ${names.name(domain)})`);
+        lines.push(`  SPF alignment with From: ${mailFrom !== undefined ? names.alignment(mailFrom) : "not aligned (no smtp.mailfrom)"}`);
+        verdict.spfAligned ||= result === "pass" && related(mailFrom);
       } else if (r.method === "dkim") {
         const domain = domainOf(r.props["header.d"] ?? r.props["header.i"] ?? "");
-        const selector = r.props["header.s"];
-        lines.push(`  dkim=${result} (d=${names.name(domain)}${selector !== undefined && TOKEN.test(selector) ? `, s=${selector}` : ""}: ${names.alignment(domain)})`);
-        dkimAligned ||= result === "pass" && domain !== undefined && from !== undefined && relation(domain, from) !== "other";
+        const selector = shownSelector(r.props["header.s"]);
+        lines.push(`  dkim=${result} (d=${names.name(domain)}${selector !== undefined ? `, s=${selector}` : ""}: ${names.alignment(domain)})`);
+        verdict.dkimAligned ||= result === "pass" && related(domain);
       } else if (r.method === "dmarc") {
         const domain = domainOf(r.props["header.from"] ?? "");
         lines.push(`  dmarc=${result} (header.from ${names.name(domain)}${r.policy !== undefined ? `, ${r.policy}` : ""})`);
+        verdict.dmarc.push(result);
       } else if (/^[a-z-]{1,20}$/.test(r.method)) {
         lines.push(`  ${r.method}=${result}`);
       }
     }
-    return spfPass && dkimAligned;
+    if (verdict.dmarc.length === 0) lines.push("  dmarc: no result from this receiver; judged by SPF and DKIM alone");
+    return verdict;
   };
   const results = headers.filter((h) => h.name === "authentication-results");
   if (results.length === 0) lines.push("Authentication-Results: none");
   // The topmost one is the receiver's own; the ones below it came with the message.
   const verdicts = results.map((h, index) => describe(`Authentication-Results ${index + 1} (from the top)`, h.value));
-  const pass = verdicts[0] ?? false;
+  const { pass, missing } = verdictOf(verdicts[0]);
   for (const h of headers.filter((h) => h.name === "arc-authentication-results")) {
     describe(`ARC-Authentication-Results i=${/^\s*i=(\d+)/.exec(h.value)?.[1] ?? "?"}`, h.value);
   }
@@ -952,14 +1150,20 @@ export function headerSummary(raw: string): { lines: string[]; pass: boolean } {
     const tags = Object.fromEntries(h.value.split(";").map((t) => t.trim().split("=", 2).map((s) => s.trim())).filter((kv) => kv.length === 2)) as Record<string, string>;
     const domain = domainOf(tags.d ?? "");
     const algorithm = tags.a !== undefined && TOKEN.test(tags.a) ? tags.a : "?";
-    lines.push(`DKIM-Signature ${index + 1}: d=${names.name(domain)}, a=${algorithm}${tags.s !== undefined && TOKEN.test(tags.s) ? `, s=${tags.s}` : ""}`);
+    const selector = shownSelector(tags.s);
+    lines.push(`DKIM-Signature ${index + 1}: d=${names.name(domain)}, a=${algorithm}${selector !== undefined ? `, s=${selector}` : ""}`);
   });
   headers.filter((h) => h.name === "received").forEach((h, index) => {
     const tls = receivedTls(h.value);
     if (tls.protocol === undefined && tls.version === undefined) return;
     lines.push(`Received ${index + 1} (from the top): with ${tls.protocol ?? "?"}${tls.version !== undefined ? `, ${tls.version} ${tls.cipher ?? "?"}` : ""}`);
   });
-  lines.push(`verdict: ${pass ? "PASS" : "FAIL"} (the first Authentication-Results ${pass ? "has" : "does not have"} spf=pass and a dkim=pass aligned with From)`);
+  const dmarcReported = (verdicts[0]?.dmarc.length ?? 0) > 0;
+  lines.push(
+    pass
+      ? `verdict: PASS (the first Authentication-Results has spf=pass and dkim=pass, both aligned with From${dmarcReported ? ", and dmarc=pass" : "; the receiver reports no dmarc result"})`
+      : `verdict: FAIL (the first Authentication-Results lacks: ${missing.join("; ")})`,
+  );
   return { lines, pass };
 }
 
@@ -975,9 +1179,11 @@ export const RECIPIENT_PROMPT = "Recipient address for the test mail (not echoed
  */
 export async function readRecipient(): Promise<string> {
   if (!process.stdin.isTTY) return checkedRecipient(await Bun.stdin.text());
-  process.stderr.write(RECIPIENT_PROMPT);
   const discard = new Writable({ write: (_chunk, _encoding, done) => done() });
   const lines = createInterface({ input: process.stdin, output: discard, terminal: true });
+  // Only now, with the terminal in raw mode: what is typed after the prompt is never echoed, and
+  // Ctrl-C reaches readline instead of killing the process.
+  process.stderr.write(RECIPIENT_PROMPT);
   try {
     const line = await new Promise<string>((resolve, reject) => {
       lines.once("line", resolve);
@@ -1003,15 +1209,31 @@ async function send(box: Box, log: Log, raw: Record<string, string>): Promise<vo
     return;
   }
   checkConfirmation(log, plan, options, command);
+  requireOnMain(plan);
   const recipient = await readRecipient();
   const release = await takeLock(box, ISSUE, "test-mail", options.lockHeld);
-  try {
+  await whileLocked(log, release, async (interrupts) => {
     const again = await makePlan(box, log, env);
     checkConfirmation(log, again, options, command);
-    const result = await sendTestMail(box, log, again, recipient, runId());
+    requireOnMain(again);
+    const result = await sendTestMail(box, log, again, recipient, runId(), REAL_CLOCK, interrupts);
     report(log, result, again.smtp.security);
+  });
+}
+
+/**
+ * Runs `body` while the lab lock is held, with the signal handlers on: a signal deletes the pod
+ * (sendTestMail registers it) and then releases the lock, and the process exits with 128 + the
+ * signal's number. Without a signal the lock is released when `body` ends, however it ends.
+ */
+export async function whileLocked(log: Log, release: () => Promise<void>, body: (interrupts: Interrupts) => Promise<void>, source: SignalSource = PROCESS_SIGNALS): Promise<void> {
+  const interrupts = new Interrupts(log, source);
+  const releaseLock = interrupts.guard(release);
+  try {
+    await body(interrupts);
   } finally {
-    await release();
+    await releaseLock();
+    await interrupts.finish();
   }
 }
 

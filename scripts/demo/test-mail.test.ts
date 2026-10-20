@@ -26,6 +26,7 @@ import {
   parseAuthResults,
   podManifest,
   readCheckout,
+  requireOnMain,
   receivedTls,
   relation,
   report,
@@ -34,8 +35,13 @@ import {
   sendTestMail,
   senderSource,
   smtpSettings,
+  Interrupts,
+  whileLocked,
+  shownSelector,
   type Checkout,
   type SendPlan,
+  type SignalName,
+  type SignalSource,
   type SmtpSettings,
 } from "./test-mail.ts";
 
@@ -57,8 +63,17 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 const ok = (stdout = ""): RunResult => ({ stdout, stderr: "", exitCode: 0 });
 const notFound = (what: string): RunResult => ({ stdout: "", stderr: `Error from server (NotFound): ${what} not found`, exitCode: 1 });
-const fakeBox = (handler: (command: string, stdin?: string) => RunResult) =>
+const fakeBox = (handler: (command: string, stdin?: string) => RunResult | Promise<RunResult>) =>
   new Box("demo-box", log, { run: async (cmd, stdin) => handler(cmd.at(-1) ?? "", typeof stdin === "string" ? stdin : stdin === undefined ? undefined : new TextDecoder().decode(stdin)), sleep: async () => {} });
+/** Waits for something the fakes do, with a generous bound that names what was awaited. */
+const CONDITION_WAIT_MS = 30_000;
+async function waitForCondition(done: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + CONDITION_WAIT_MS;
+  while (!done()) {
+    if (Date.now() > deadline) throw new Error(`timed out after ${CONDITION_WAIT_MS} ms waiting for ${what}`);
+    await Bun.sleep(5);
+  }
+}
 const logText = () =>
   readdirSync(join(dir, "log"))
     .map((name) => readFileSync(join(dir, "log", name), "utf8"))
@@ -106,11 +121,12 @@ describe("test-mail.ts: the checkout's settings", () => {
 
   test("a checkout with uncommitted changes in the plan's paths is refused", async () => {
     const repo = join(dir, "repo");
-    for (const path of ["scripts/demo", "deploy/flux/clusters/demo/trustiot", "deploy/chart"]) mkdirSync(join(repo, path), { recursive: true });
+    for (const path of ["scripts/demo", "scripts/release", "deploy/flux/clusters/demo/trustiot", "deploy/chart"]) mkdirSync(join(repo, path), { recursive: true });
     for (const file of ["deploy/chart/values.yaml", "deploy/flux/clusters/demo/trustiot/values-saas.yaml", "deploy/flux/clusters/demo/trustiot/values-demo.yaml", "deploy/flux/clusters/demo/trustiot/helm-release.yaml"]) {
       writeFileSync(join(repo, file), readFileSync(join(ROOT, file), "utf8"));
     }
     writeFileSync(join(repo, "scripts/demo/x.ts"), "// x\n");
+    writeFileSync(join(repo, "scripts/release/x.ts"), "// x\n");
     const git = (...args: string[]) => tryRun(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args]);
     await git("init", "-q");
     await git("add", ".");
@@ -124,6 +140,23 @@ describe("test-mail.ts: the checkout's settings", () => {
       await git("checkout", "-q", "--", ".");
       await git("clean", "-qfd");
     }
+    expect(CODE_PATHS).toContain("scripts/release");
+
+    // Whether the commit is on origin/main, from the local ref: unknown without it, then yes, then
+    // no for a commit made after it.
+    expect(clean.onMain).toBe("unknown");
+    expect((await git("update-ref", "refs/remotes/origin/main", "HEAD")).exitCode).toBe(0);
+    expect((await readCheckout(repo)).onMain).toBe("yes");
+    writeFileSync(join(repo, "scripts/demo/x.ts"), "// y\n");
+    expect((await git("commit", "-q", "-am", "y")).exitCode).toBe(0);
+    expect((await readCheckout(repo)).onMain).toBe("no");
+  });
+
+  test("--apply needs the commit on origin/main and says to fetch first", () => {
+    const head = "b".repeat(40);
+    expect(() => requireOnMain({ head, onMain: "yes" })).not.toThrow();
+    expect(() => requireOnMain({ head, onMain: "no" })).toThrow(/not on origin\/main.*git fetch origin main first/);
+    expect(() => requireOnMain({ head, onMain: "unknown" })).toThrow(/git fetch origin main first/);
   });
 });
 
@@ -146,10 +179,17 @@ describe("test-mail.ts: the recipient", () => {
 
   // A child process on a pseudo-terminal: the prompt path of readRecipient, as an operator runs it.
   const TERMINAL_WAIT_MS = 60_000;
-  async function waitFor(done: () => boolean, what: string): Promise<void> {
+  /** Waits for `done`; stops early when the child has ended, and says what the terminal showed. */
+  async function waitFor(done: () => boolean, what: string, ended: () => boolean, shown: () => string): Promise<void> {
     const deadline = Date.now() + TERMINAL_WAIT_MS;
     while (!done()) {
-      if (Date.now() > deadline) throw new Error(`timed out after ${TERMINAL_WAIT_MS} ms waiting for ${what}`);
+      if (ended()) {
+        // Its last output may still be on the way from the terminal.
+        await Bun.sleep(200);
+        if (done()) return;
+        throw new Error(`the child ended before ${what}; the terminal showed: ${JSON.stringify(shown())}`);
+      }
+      if (Date.now() > deadline) throw new Error(`timed out after ${TERMINAL_WAIT_MS} ms waiting for ${what}; the terminal showed: ${JSON.stringify(shown())}`);
       await Bun.sleep(50);
     }
   }
@@ -161,10 +201,12 @@ describe("test-mail.ts: the recipient", () => {
       `try { process.stdout.write("RESULT " + (await readRecipient()) + "\\n"); } catch (error) { process.stdout.write("ERROR " + String(error) + "\\n"); }`,
     ].join("\n");
     const proc = Bun.spawn([process.execPath, "--eval", child], { terminal: { data: (_terminal, data) => void (shown += decoder.decode(data, { stream: true })) } });
+    let ended = false;
+    void proc.exited.then(() => (ended = true));
     try {
-      await waitFor(() => shown.includes(RECIPIENT_PROMPT.trim()), "the recipient prompt on the terminal");
+      await waitFor(() => shown.includes(RECIPIENT_PROMPT.trim()), "the recipient prompt on the terminal", () => ended, () => shown);
       proc.terminal!.write(keys);
-      await waitFor(() => /(RESULT|ERROR) [^\n]*\n/.test(shown), "the child's result line");
+      await waitFor(() => /(RESULT|ERROR) [^\n]*\n/.test(shown), "the child's result line", () => ended, () => shown);
       await proc.exited;
       return shown;
     } finally {
@@ -321,8 +363,9 @@ describe("test-mail.ts: the pod's output", () => {
   });
 
   test("accepted only with verified TLS, a login, the envelope, DATA and the final 250", () => {
-    const accepted = mailOutcome([...EXPECTED_LINES, "TESTMAIL EXIT 0"], "starttls");
+    const accepted = mailOutcome([...EXPECTED_LINES, "TESTMAIL EXIT 0"], "starttls", 0);
     expect(accepted.accepted).toBe(true);
+    expect(accepted.podExit).toBe(0);
     expect(accepted.stages).toEqual([
       { step: "greeting", reply: "220" },
       { step: "EHLO", reply: "250" },
@@ -334,12 +377,22 @@ describe("test-mail.ts: the pod's output", () => {
       { step: "DATA", reply: "354" },
       { step: "message", reply: "250 2.0.0" },
     ]);
-    const without = (drop: string) => mailOutcome([...EXPECTED_LINES.filter((line) => line !== drop), "TESTMAIL EXIT 0"], "starttls").accepted;
+    const without = (drop: string) => mailOutcome([...EXPECTED_LINES.filter((line) => line !== drop), "TESTMAIL EXIT 0"], "starttls", 0).accepted;
     for (const line of ["TESTMAIL TLS certificate-verified", "TESTMAIL TLS TLSv1.3 TLS_AES_256_GCM_SHA384", "TESTMAIL S 235 2.7.0", "TESTMAIL C STARTTLS", "TESTMAIL S 354"]) expect(without(line)).toBe(false);
-    expect(mailOutcome(EXPECTED_LINES, "starttls").accepted).toBe(false);
-    expect(mailOutcome([...EXPECTED_LINES.slice(0, -1), "TESTMAIL S 554 5.7.1", "TESTMAIL EXIT 0"], "starttls").accepted).toBe(false);
+    expect(mailOutcome(EXPECTED_LINES, "starttls", 0).accepted).toBe(false);
+    expect(mailOutcome([...EXPECTED_LINES.slice(0, -1), "TESTMAIL S 554 5.7.1", "TESTMAIL EXIT 0"], "starttls", 0).accepted).toBe(false);
     // Implicit TLS has no STARTTLS step.
-    expect(mailOutcome([...EXPECTED_LINES.filter((l) => !l.includes("STARTTLS") && l !== "TESTMAIL S 220 2.0.0"), "TESTMAIL EXIT 0"], "tls").accepted).toBe(true);
+    expect(mailOutcome([...EXPECTED_LINES.filter((l) => !l.includes("STARTTLS") && l !== "TESTMAIL S 220 2.0.0"), "TESTMAIL EXIT 0"], "tls", 0).accepted).toBe(true);
+  });
+
+  test("accepted only when the container itself ended with 0, not on the script's EXIT line alone", () => {
+    const lines = [...EXPECTED_LINES, "TESTMAIL EXIT 0"];
+    for (const podExit of [1, 137, undefined]) {
+      const outcome = mailOutcome(lines, "starttls", podExit);
+      expect({ accepted: outcome.accepted, exit: outcome.exit, podExit: outcome.podExit }).toEqual({ accepted: false, exit: 0, podExit });
+    }
+    expect(() => report(log, { lines, dropped: 0, exitCode: 137 }, "starttls")).toThrow(/did not accept/);
+    expect(logText()).toContain("the container ended with 137, the script in it reported 0");
   });
 
   test("report prints the stages and fails when the relay refused", () => {
@@ -354,6 +407,7 @@ describe("test-mail.ts: the pod's output", () => {
 
 const CHECKOUT: Checkout = {
   head: "a".repeat(40),
+  onMain: "yes",
   smtp: SMTP,
   sender: SENDER,
   layers: { saas: {}, demo: { host: "smtp.example.com", port: 587, security: "starttls", credentialsSecret: { name: "trustiot-smtp" } } },
@@ -424,6 +478,8 @@ describe("test-mail.ts: the plan", () => {
     for (const read of secretReads) expect(read).toContain(`go-template=${SECRET_KEYS_TEMPLATE}`);
     expect(commands.every((c) => !/\b(create|apply|delete|patch|edit|label|annotate|scale|run|exec)\b/.test(c.replace(/^sudo k3s kubectl /, "")))).toBe(true);
     expect(logText()).toContain("no NetworkPolicy restricts egress");
+    expect(logText()).toContain("the commit is on origin/main (local ref): yes");
+    expect(plan.onMain).toBe("yes");
   });
 
   test("the same cluster and checkout give the same plan; a change in what shapes the pod gives another", async () => {
@@ -467,14 +523,18 @@ describe("test-mail.ts: the run", () => {
   }
 
   /** The cluster during a run: pod states in order, then the log. */
-  function runBox(states: Record<string, unknown>[], logs: string, fail: Partial<Record<"create" | "attach", RunResult>> = {}): { box: Box; seen: Seen } {
+  function runBox(states: Record<string, unknown>[], logs: string, fail: Partial<Record<"create" | "attach", RunResult>> = {}, createSettles?: Promise<void>): { box: Box; seen: Seen } {
     const seen: Seen = { commands: [], stdins: [] };
     let polls = 0;
     let deleted = false;
     const box = fakeBox((command, stdin) => {
       seen.commands.push(command);
       if (stdin !== undefined) seen.stdins.push({ command, stdin });
-      if (command.includes(" create -f -")) return fail.create ?? ok("pod created");
+      if (command.includes(" create -f -")) {
+        const result = fail.create ?? ok("pod created");
+        // A create still on its way: it settles when the test says so, and marks that moment.
+        return createSettles === undefined ? result : createSettles.then(() => (seen.commands.push("(create settled)"), result));
+      }
       if (command.includes(" attach -i ")) return fail.attach ?? ok("");
       if (command.includes(" logs ")) return ok(logs);
       if (command.includes(" delete pod ")) {
@@ -540,6 +600,167 @@ describe("test-mail.ts: the run", () => {
       expect(seen.stdins.filter((s) => s.stdin.includes(RECIPIENT)).length).toBeLessThanOrEqual(1);
     }
   });
+
+  /** A signal source the test fires by hand; exits are recorded in `order`, not taken. */
+  function fakeSignals(order: string[]) {
+    const handlers = new Map<SignalName, (() => void)[]>();
+    const source: SignalSource = {
+      on: (signal, handler) => void handlers.set(signal, [...(handlers.get(signal) ?? []), handler]),
+      off: (signal, handler) => void handlers.set(signal, (handlers.get(signal) ?? []).filter((h) => h !== handler)),
+      exit: (code) => void order.push(`exit ${code}`),
+    };
+    const emit = (signal: SignalName) => {
+      for (const handler of handlers.get(signal) ?? []) handler();
+    };
+    const listening = () => [...handlers.values()].reduce((sum, list) => sum + list.length, 0);
+    return { source, emit, listening };
+  }
+
+  test("a signal runs the cleanup steps once, the last registered first, then exits with 128 + its number", async () => {
+    for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]] as const) {
+      const order: string[] = [];
+      const signals = fakeSignals(order);
+      const interrupts = new Interrupts(log, signals.source);
+      expect(signals.listening()).toBe(3);
+      const lock = interrupts.guard(async () => void order.push("lock"));
+      const pod = interrupts.guard(async () => void order.push("pod"));
+      expect(() => interrupts.check()).not.toThrow();
+      signals.emit(signal);
+      expect(() => interrupts.check()).toThrow(`interrupted by ${signal}`);
+      // The normal path reaching the same steps does not run them again.
+      await pod();
+      await lock();
+      await interrupts.finish();
+      expect(order).toEqual(["pod", "lock", `exit ${code}`]);
+      expect(signals.listening()).toBe(0);
+    }
+  });
+
+  test("a second signal exits at once, while the first one's cleanup is still running", async () => {
+    const order: string[] = [];
+    const signals = fakeSignals(order);
+    const interrupts = new Interrupts(log, signals.source);
+    let finishPod = () => {};
+    interrupts.guard(async () => void order.push("lock"));
+    interrupts.guard(() => new Promise<void>((resolve) => (finishPod = () => (order.push("pod"), resolve()))));
+    signals.emit("SIGTERM");
+    signals.emit("SIGINT");
+    expect(order).toEqual(["exit 130"]);
+    expect(logText()).toContain("SIGINT again: exiting at once");
+    finishPod();
+    await interrupts.finish();
+    expect(order).toEqual(["exit 130", "pod", "lock", "exit 143"]);
+  });
+
+  test("without a signal the handlers come off and the lock is released once, also when the run fails", async () => {
+    const order: string[] = [];
+    const signals = fakeSignals(order);
+    await expect(
+      whileLocked(
+        log,
+        async () => void order.push("release"),
+        async () => {
+          throw new Error("the relay refused");
+        },
+        signals.source,
+      ),
+    ).rejects.toThrow("the relay refused");
+    expect(order).toEqual(["release"]);
+    expect(signals.listening()).toBe(0);
+  });
+
+  test("SIGINT during the run deletes the pod, then releases the lock, then exits with 130", async () => {
+    const order: string[] = [];
+    const signals = fakeSignals(order);
+    const { box, seen } = runBox([pending], "");
+    const deletes = () => seen.commands.filter((c) => c.includes(` delete pod ${POD_PREFIX}r `)).length;
+    let sleeps = 0;
+    // The signal comes while the script waits for the pod to run.
+    const interruptingClock = { now: () => 0, sleep: async () => void (++sleeps === 1 && signals.emit("SIGINT")) };
+    const thePlan = await plan();
+    await expect(
+      whileLocked(log, async () => void order.push(`release after ${deletes()} pod delete(s)`), (interrupts) => sendTestMail(box, log, thePlan, RECIPIENT, "r", interruptingClock, interrupts).then(() => {}), signals.source),
+    ).rejects.toThrow("interrupted by SIGINT");
+    expect(order).toEqual(["release after 1 pod delete(s)", "exit 130"]);
+    expect(deletes()).toBe(1);
+    expect(seen.commands.filter((c) => c.includes(" attach -i ")).length).toBe(0);
+    expect(logText()).toContain(`deleted pod ${POD_PREFIX}r`);
+    expect(signals.listening()).toBe(0);
+  });
+
+  test("with the real process: SIGTERM runs the cleanup and the exit status is 143", async () => {
+    const child = [
+      `import { Interrupts } from ${JSON.stringify(join(import.meta.dir, "test-mail.ts"))};`,
+      `import { Log } from ${JSON.stringify(join(import.meta.dir, "lib.ts"))};`,
+      `const interrupts = new Interrupts(new Log("signal", ${JSON.stringify(join(dir, "signal-log"))}));`,
+      `interrupts.guard(async () => void process.stdout.write("CLEANED\\n"));`,
+      `setInterval(() => {}, 1000);`,
+      `process.stdout.write("READY\\n");`,
+    ].join("\n");
+    const proc = Bun.spawn([process.execPath, "--eval", child], { stdout: "pipe", stderr: "pipe" });
+    let out = "";
+    const reader = proc.stdout.getReader();
+    const decoder = new TextDecoder();
+    // Bounded by the process itself: it ends when its stdout ends, at the latest when it is killed.
+    while (!out.includes("READY\n")) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      out += decoder.decode(value, { stream: true });
+    }
+    expect(out).toContain("READY\n");
+    proc.kill("SIGTERM");
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      out += decoder.decode(value, { stream: true });
+    }
+    expect(await proc.exited).toBe(143);
+    expect(out).toContain("CLEANED\n");
+  });
+
+  test("a signal during the create: the cleanup waits for the create to settle, then deletes the pod", async () => {
+    const order: string[] = [];
+    const signals = fakeSignals(order);
+    let settle = () => {};
+    const createSettles = new Promise<void>((resolve) => (settle = resolve));
+    const { box, seen } = runBox([pending], "", {}, createSettles);
+    const thePlan = await plan();
+    const run = whileLocked(log, async () => void order.push("release"), (interrupts) => sendTestMail(box, log, thePlan, RECIPIENT, "r", clock(), interrupts).then(() => {}), signals.source);
+    // Let the run reach the create, which now hangs, then signal.
+    await waitForCondition(() => seen.commands.some((c) => c.includes(" create -f -")), "the create to start");
+    signals.emit("SIGTERM");
+    // The cleanup is under way but must not delete yet: the create has not settled.
+    await Bun.sleep(0);
+    expect(seen.commands.some((c) => c.includes(" delete pod "))).toBe(false);
+    settle();
+    await expect(run).rejects.toThrow("interrupted by SIGTERM");
+    const settledAt = seen.commands.indexOf("(create settled)");
+    const deleteAt = seen.commands.findIndex((c) => c.includes(` delete pod ${POD_PREFIX}r `));
+    expect(settledAt).toBeGreaterThanOrEqual(0);
+    expect(deleteAt).toBeGreaterThan(settledAt);
+    expect(seen.commands.filter((c) => c.includes(" delete pod ")).length).toBe(1);
+    expect(order).toEqual(["release", "exit 143"]);
+  });
+
+  test("a signal before the pod is created only releases the lock, and no pod is created", async () => {
+    const order: string[] = [];
+    const signals = fakeSignals(order);
+    const { box, seen } = runBox([running, done(0)], "");
+    const thePlan = await plan();
+    await expect(
+      whileLocked(
+        log,
+        async () => void order.push("release"),
+        async (interrupts) => {
+          signals.emit("SIGHUP");
+          await sendTestMail(box, log, thePlan, RECIPIENT, "r", clock(), interrupts);
+        },
+        signals.source,
+      ),
+    ).rejects.toThrow("interrupted by SIGHUP");
+    expect(order).toEqual(["release", "exit 129"]);
+    expect(seen.commands.filter((c) => c.includes(" create -f -")).length).toBe(0);
+  });
 });
 
 // --- Received headers -----------------------------------------------------------------------------
@@ -584,18 +805,20 @@ describe("test-mail.ts: the received headers", () => {
       "Authentication-Results 1 (from the top) by <receiver-1>:",
       "  dkim=pass (d=<from-domain>, s=resend: aligned (strict and relaxed))",
       "  dkim=pass (d=<other-domain-1>, s=key1: not aligned)",
-      "  spf=pass (MAIL FROM domain <subdomain of from-domain>: aligned (relaxed only))",
+      "  spf=pass (MAIL FROM domain <subdomain of from-domain>)",
+      "  SPF alignment with From: aligned (relaxed only)",
       "  dmarc=pass (header.from <from-domain>, p=NONE sp=NONE dis=NONE)",
       "ARC-Authentication-Results i=1 by <receiver-1>:",
       "  dkim=pass (d=<from-domain>, s=resend: aligned (strict and relaxed))",
-      "  spf=pass (MAIL FROM domain <subdomain of from-domain>: aligned (relaxed only))",
+      "  spf=pass (MAIL FROM domain <subdomain of from-domain>)",
+      "  SPF alignment with From: aligned (relaxed only)",
       "  dmarc=pass (header.from <from-domain>, p=NONE sp=NONE dis=NONE)",
       "Received-SPF 1: pass",
       "DKIM-Signature 1: d=<from-domain>, a=rsa-sha256, s=resend",
       "DKIM-Signature 2: d=<other-domain-1>, a=rsa-sha256, s=key1",
       "Received 1 (from the top): with SMTP",
       "Received 2 (from the top): with ESMTPS, TLS1_3 TLS_AES_128_GCM_SHA256",
-      "verdict: PASS (the first Authentication-Results has spf=pass and a dkim=pass aligned with From)",
+      "verdict: PASS (the first Authentication-Results has spf=pass and dkim=pass, both aligned with From, and dmarc=pass)",
     ]);
     const text = lines.join("\n");
     for (const value of HEADER_PRIVATE) expect(text).not.toContain(value);
@@ -607,6 +830,48 @@ describe("test-mail.ts: the received headers", () => {
     const softfail = GMAIL.replace(/(Authentication-Results: mx\.inbox\.example\.com;[\s\S]*?)spf=pass/, "$1spf=softfail");
     expect(headerSummary(softfail).pass).toBe(false);
     expect(headerSummary("From: a@mail.example.com\r\n\r\nbody").lines).toContain("Authentication-Results: none");
+  });
+
+  /** GMAIL with `from` replaced by `to` in the topmost Authentication-Results only. */
+  const inTopResults = (from: string | RegExp, to: string) => GMAIL.replace(/Authentication-Results: mx\.inbox\.example\.com;[\s\S]*?header\.from=mail\.example\.com/, (block) => block.replace(from, to));
+
+  test("fails on spf=pass for a domain unrelated to From", () => {
+    const unrelated = inTopResults("smtp.mailfrom=bounces+1@send.mail.example.com", "smtp.mailfrom=bounces+1@relay-provider.test");
+    const { lines, pass } = headerSummary(unrelated);
+    expect(pass).toBe(false);
+    expect(lines).toContain("  spf=pass (MAIL FROM domain <other-domain-1>)");
+    expect(lines).toContain("  SPF alignment with From: not aligned");
+    expect(lines.at(-1)).toBe("verdict: FAIL (the first Authentication-Results lacks: spf=pass for a MAIL FROM domain aligned with From)");
+  });
+
+  test("fails on dmarc=fail even when SPF and DKIM pass aligned", () => {
+    const { lines, pass } = headerSummary(inTopResults("dmarc=pass", "dmarc=fail"));
+    expect(pass).toBe(false);
+    expect(lines.at(-1)).toBe("verdict: FAIL (the first Authentication-Results lacks: dmarc=pass)");
+  });
+
+  test("without a dmarc result from the receiver, SPF and DKIM decide, and a line says so", () => {
+    const noDmarc = inTopResults(/;\s*dmarc=pass \(p=NONE sp=NONE dis=NONE\) header\.from=mail\.example\.com$/, "");
+    expect(noDmarc).not.toBe(GMAIL);
+    const { lines, pass } = headerSummary(noDmarc);
+    expect(pass).toBe(true);
+    const top = lines.slice(lines.indexOf("Authentication-Results 1 (from the top) by <receiver-1>:"), lines.findIndex((l) => l.startsWith("ARC-")));
+    expect(top).toContain("  dmarc: no result from this receiver; judged by SPF and DKIM alone");
+    expect(lines.at(-1)).toBe("verdict: PASS (the first Authentication-Results has spf=pass and dkim=pass, both aligned with From; the receiver reports no dmarc result)");
+    // Still FAIL when, without DMARC, the aligned signature fails.
+    expect(headerSummary(noDmarc.replace(/(Authentication-Results: mx\.inbox\.example\.com;\s*)dkim=pass/, "$1dkim=fail")).pass).toBe(false);
+  });
+
+  test("prints a DKIM selector only when it is short and plain", () => {
+    expect(shownSelector("resend")).toBe("resend");
+    expect(shownSelector("s2048")).toBe("s2048");
+    expect(shownSelector(undefined)).toBeUndefined();
+    for (const hidden of ["selector1-example-com", "Selector1", "a".repeat(33), "x.y"]) expect(shownSelector(hidden)).toBe("<selector>");
+    const m365 = GMAIL.replaceAll("header.s=resend", "header.s=selector1-example-com").replace("s=resend; d=mail.example.com", "s=selector1-example-com; d=mail.example.com");
+    const text = headerSummary(m365).lines.join("\n");
+    expect(text).toContain("  dkim=pass (d=<from-domain>, s=<selector>: aligned (strict and relaxed))");
+    expect(text).toContain("DKIM-Signature 1: d=<from-domain>, a=rsa-sha256, s=<selector>");
+    expect(text).not.toContain("example-com");
   });
 
   test("reads Microsoft's form and Postfix's TLS note", () => {

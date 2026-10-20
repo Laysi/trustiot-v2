@@ -6,13 +6,19 @@
 //   TRUSTIOT_DEMO_MAIL_E2E=1 bun test scripts/demo/test-mail.container.test.ts
 //
 // The container runs as the pod does: the image's UID and GID, every capability dropped, no new
-// privileges, a read-only root file system, the credentials and the sender as env variables (passed
-// by name, so their values are not podman arguments either) and the recipient on stdin. It has
-// its own network namespace; pasta forwards only the relay's port on the container's IPv4 loopback
-// to the relay on the host's IPv4 loopback (no host networking, nothing published; IPv4 only, so
-// curl's try of ::1 is refused at once instead of being forwarded to a host address nothing serves). It trusts the relay's
-// throwaway CA through CURL_CA_BUNDLE, the only difference from the pod, which uses the image's own
-// CA bundle.
+// privileges, a read-only root file system with no writable tmpfs on /tmp, /var/tmp or /run
+// (--read-only-tmpfs=false, as readOnlyRootFilesystem gives none), the credentials and the sender
+// as env variables (passed by name, so their values are not podman arguments either) and the
+// recipient on stdin. Each container has its own name and is removed with its volumes in every
+// case, a killed podman run included.
+//
+// Where it differs from the pod: podman runs it instead of the kubelet (podman's default seccomp
+// profile rather than RuntimeDefault, no Pod Security admission); it trusts the relay's throwaway
+// CA through CURL_CA_BUNDLE instead of the image's own CA bundle; and its network is its own
+// namespace in which pasta forwards only the relay's port on the IPv4 loopback to the relay on the
+// host's IPv4 loopback (no host networking, nothing published; IPv4 only, so curl's try of ::1 is
+// refused at once instead of being forwarded to a host address nothing serves), not the pod
+// network and ztunnel.
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -176,19 +182,28 @@ const smtp = (port: number, security: Security): SmtpSettings => ({
 async function runPod(settings: SmtpSettings, stdin: string, env: Record<string, string> = {}): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const [entrypoint, ...args] = podCommand(settings, "20261021t000000-abcd");
   const values = { TESTMAIL_SMTP_USERNAME: USERNAME, TESTMAIL_SMTP_PASSWORD: PASSWORD, TESTMAIL_FROM: SENDER, CURL_CA_BUNDLE: "/ca/ca.pem", ...env };
+  const name = `trustiot-test-mail-${randomUUID()}`;
   const proc = Bun.spawn(
     [
-      "podman", "run", "--rm", "-i", "--network", `pasta:-4,-T,${settings.port}`, "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+      "podman", "run", "--rm", "--name", name, "-i", "--network", `pasta:-4,-T,${settings.port}`,
+      "--read-only", "--read-only-tmpfs=false", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
       "--user", `${IMAGE_UID}:${IMAGE_GID}`, "-v", `${dir}:/ca:ro,Z`,
-      ...Object.keys(values).flatMap((name) => ["-e", name]),
+      ...Object.keys(values).flatMap((key) => ["-e", key]),
       "--entrypoint", entrypoint!, IMAGE, ...args,
     ],
     { stdin: new Blob([stdin]), stdout: "pipe", stderr: "pipe", env: { ...process.env, ...values } },
   );
   const timer = setTimeout(() => proc.kill(), PODMAN_RUN_MS);
-  const [stdout, stderr, exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-  clearTimeout(timer);
-  return { stdout, stderr, exitCode };
+  try {
+    const [stdout, stderr, exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    return { stdout, stderr, exitCode };
+  } finally {
+    clearTimeout(timer);
+    // --rm has usually removed it already; this covers a killed podman run. Never leave volumes.
+    const removed = Bun.spawn(["podman", "rm", "--force", "--volumes", "--time", "0", name], { stdout: "pipe", stderr: "pipe" });
+    const [removeErr, removeExit] = await Promise.all([new Response(removed.stderr).text(), removed.exited]);
+    if (removeExit !== 0 && !/no such container/i.test(removeErr)) throw new Error(`podman rm --force --volumes ${name} failed: ${removeErr.trim()}`);
+  }
 }
 
 /** Nothing private in the output: no address, domain, credential or queue ID. */
@@ -207,7 +222,7 @@ describe.skipIf(!ENABLED)("the test pod's script in the pinned image", () => {
       try {
         const out = await runPod(smtp(relay.port, security), `${RECIPIENT}\n`);
         expectClean(out.stdout);
-        const outcome = mailOutcome(filterOutput(out.stdout).lines, security);
+        const outcome = mailOutcome(filterOutput(out.stdout).lines, security, out.exitCode);
         expect({ accepted: outcome.accepted, exit: out.exitCode, stderr: out.stderr }).toEqual({ accepted: true, exit: 0, stderr: "" });
         expect(outcome.tls).toMatch(/^TLSv1\.[23] [A-Z0-9_-]+$/);
         expect(outcome.stages.map((s) => s.step)).toEqual([
@@ -242,7 +257,7 @@ describe.skipIf(!ENABLED)("the test pod's script in the pinned image", () => {
       const out = await runPod(smtp(relay.port, "starttls"), `${RECIPIENT}\n`, { TESTMAIL_SMTP_PASSWORD: "not-the-password" });
       expectClean(out.stdout);
       expect(out.stdout).not.toContain("not-the-password");
-      const outcome = mailOutcome(filterOutput(out.stdout).lines, "starttls");
+      const outcome = mailOutcome(filterOutput(out.stdout).lines, "starttls", out.exitCode);
       expect({ accepted: outcome.accepted, curlError: outcome.curlError, exit: out.exitCode }).toEqual({ accepted: false, curlError: 67, exit: 67 });
       expect(relay.sessions[0]!.commands.some((c) => c.startsWith("MAIL"))).toBe(false);
     } finally {
@@ -256,7 +271,7 @@ describe.skipIf(!ENABLED)("the test pod's script in the pinned image", () => {
     try {
       const out = await runPod(smtp(relay.port, "starttls"), `${RECIPIENT}\n`);
       expectClean(out.stdout);
-      const outcome = mailOutcome(filterOutput(out.stdout).lines, "starttls");
+      const outcome = mailOutcome(filterOutput(out.stdout).lines, "starttls", out.exitCode);
       expect({ accepted: outcome.accepted, curlError: outcome.curlError }).toEqual({ accepted: false, curlError: 64 });
       expect(relay.sessions[0]!.auth).toEqual([]);
       expect(relay.sessions[0]!.commands.some((c) => /^(AUTH|MAIL)/.test(c))).toBe(false);
