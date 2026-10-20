@@ -52,6 +52,9 @@ export const ALLOWED_NAMES: Record<string, string> = {
   "rpm.rancher.io": "the k3s RPM repository, pinned in deploy/host",
   "ghcr.io": "the GitHub container registry",
   "hosts.app": "the chart values key hosts.app (deploy/chart/values.yaml), not a host name",
+  "quay.io": "the registry of curl's official image, pinned by digest in test-mail.ts",
+  "resend.com": "Resend's SMTP host in values-demo.yaml (smtp.resend.com) and links to its documentation",
+  "platform.claude.com": "links to Anthropic's Console documentation",
 };
 
 /**

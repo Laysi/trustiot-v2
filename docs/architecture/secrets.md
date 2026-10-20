@@ -238,7 +238,7 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 
 ## 密鑰清冊
 
-「SaaS」欄是我們自營 SaaS 的保管位置，「地端」欄是客戶安裝時的位置。「SOPS」指 `deploy/flux/` 內以 SOPS 加密、由 Flux 解密的 Secret（ci-release.md）。展示環境（`deploy/flux/clusters/demo`，Laysi/trustiot-v2#457）用自己的一套：叢集的 age 私鑰與 deploy key 在展示機上產生、不離開展示機（age 私鑰不做離線備份），GHCR 拉取 token、SMTP 帳密與 Anthropic 金鑰（展示專用工作區，設用量上限）各自一份，與 SaaS 分開輪替，見 [deploy/flux/README.md](../../deploy/flux/README.md)「展示叢集」；展示機自己的 Cloudflare Tunnel token 也只屬於展示環境，見下方「主機、映像與發佈」表中的「展示環境的 Cloudflare Tunnel token」一列。輪替步驟見 [runbook](../runbooks/secrets.md) 的對應小節。還沒實作的元件，保管與注入方式是本清冊定下的規則，實作 issue 照做並補上 runbook 的指令。
+「SaaS」欄是我們自營 SaaS 的保管位置，「地端」欄是客戶安裝時的位置。「SOPS」指 `deploy/flux/` 內以 SOPS 加密、由 Flux 解密的 Secret（ci-release.md）。展示環境（`deploy/flux/clusters/demo`，Laysi/trustiot-v2#457）用自己的一套：叢集的 age 私鑰與 deploy key 在展示機上產生、不離開展示機（age 私鑰不做離線備份），GHCR 拉取 token、SMTP 帳密與 Anthropic 金鑰（展示專用工作區，設用量上限）各自一份，與 SaaS 分開輪替，見 [deploy/flux/README.md](../../deploy/flux/README.md)「展示叢集」，SMTP 帳密與 Anthropic 金鑰的建立、輪替與測試信見 [展示環境 runbook](../runbooks/demo-environment.md)「外寄郵件與 Anthropic 金鑰」；展示機自己的 Cloudflare Tunnel token 也只屬於展示環境，見下方「主機、映像與發佈」表中的「展示環境的 Cloudflare Tunnel token」一列。輪替步驟見 [runbook](../runbooks/secrets.md) 的對應小節。還沒實作的元件，保管與注入方式是本清冊定下的規則，實作 issue 照做並補上 runbook 的指令。
 
 ### 平台信任根與簽章金鑰
 
@@ -272,11 +272,11 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 
 | 密鑰 | 用途與使用者 | SaaS | 地端 | 注入方式 | 實作 issue |
 | --- | --- | --- | --- | --- | --- |
-| AI 供應商憑證：Anthropic 與 OpenAI 的 API key；Vertex AI 優先用 Workload Identity Federation（不放長期金鑰，規則 8），不可行時才用服務帳號金鑰 | AI 閘道呼叫供應商（決策 15、26、28、32） | SOPS | 客戶端點需要時，客戶建立的 Secret（地端排在 SaaS 完成後） | 環境變數，只給 `ai-gateway`（chart 強制）；Vertex AI 的憑證形式在接入的 issue 決定 | Laysi/trustiot-v2#139、Laysi/trustiot-v2#440 |
+| AI 供應商憑證：Anthropic 與 OpenAI 的 API key；Vertex AI 優先用 Workload Identity Federation（不放長期金鑰，規則 8），不可行時才用服務帳號金鑰 | AI 閘道呼叫供應商（決策 15、26、28、32） | SOPS | 客戶端點需要時，客戶建立的 Secret（地端排在 SaaS 完成後） | 環境變數，只給 `ai-gateway`（chart 強制）；Vertex AI 的憑證形式在接入的 issue 決定 | Laysi/trustiot-v2#139、Laysi/trustiot-v2#440、Laysi/trustiot-v2#468 |
 | Qdrant 唯讀與寫入 API key | knowledge 檢索與背景處理（決策 19） | SOPS（Qdrant Cloud 主控台發的兩把 key） | `bundled`：部署時在叢集內產生 | 環境變數，只給 `knowledge`（chart 強制） | Laysi/trustiot-v2#194 |
 | 物件儲存存取金鑰 | PDF、頁面圖、附件（決策 20） | SOPS | 客戶建立的 Secret | 環境變數，只給列出 `object-storage` 的服務 | Laysi/trustiot-v2#133 |
 | 備份用的物件儲存金鑰 | Postgres 的 WAL 與完整備份、ClickHouse 備份（M8） | SOPS；與服務用的金鑰分開、只能寫備份 bucket | 客戶建立的 Secret | 只給備份元件 | Laysi/trustiot-v2#134、Laysi/trustiot-v2#135 |
-| SMTP 帳密 | 登入驗證碼（Laysi/trustiot-v2#103）、通知與報表寄信（決策 18） | SOPS；2026-10-19 起暫用 Resend：帳號固定是 `resend`，密碼是 Resend 的 API key，權限只能寄信（`sending_access`）並限定寄件網域。Resend 主控台看得到寄出的信件內容（含驗證碼），主控台成員只限維運人員 | 客戶的 relay 需要驗證時，客戶建立的 Secret | 環境變數，只給列出 `smtp` 的服務 | Laysi/trustiot-v2#103、Laysi/trustiot-v2#169、Laysi/trustiot-v2#457 |
+| SMTP 帳密 | 登入驗證碼（Laysi/trustiot-v2#103）、通知與報表寄信（決策 18） | SOPS；2026-10-19 起暫用 Resend：帳號固定是 `resend`，密碼是 Resend 的 API key，權限只能寄信（`sending_access`）並限定寄件網域。Resend 主控台看得到寄出的信件內容（含驗證碼），主控台成員只限維運人員 | 客戶的 relay 需要驗證時，客戶建立的 Secret | 環境變數，只給列出 `smtp` 的服務 | Laysi/trustiot-v2#103、Laysi/trustiot-v2#169、Laysi/trustiot-v2#457、Laysi/trustiot-v2#468 |
 | Sentry DSN | 錯誤回報（決策 24） | SOPS | 預設關閉；客戶開啟時由客戶建立 | 環境變數 `SENTRY_DSN`，每個服務 | Laysi/trustiot-v2#184 |
 | SIEM 轉送的認證標頭與 CA（`observability.collector.forward.authHeader.valueSecret`、`observability.collector.forward.caSecret`） | collector 把遮蔽後的日誌以 OTLP 轉送到客戶的 SIEM（決策 22） | 預設不轉送 | 客戶開啟轉送時由客戶建立 | 標頭值是環境變數 `FORWARD_AUTH_HEADER`（`secretKeyRef`），CA 以唯讀 volume 掛成 `/etc/trustiot/forward-ca/ca.crt`，都只給 collector | Laysi/trustiot-v2#73 |
 

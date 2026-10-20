@@ -290,4 +290,4 @@ podman 以一般使用者（rootless）或 root 執行都可以，Rust 服務映
 - 型別檢查（`scripts/` 下全部的 `.ts`，加上 `deploy/chart/tests/` 下全部的 `.ts`，後者含要有叢集才能跑的入口 e2e）：`bun run --cwd scripts typecheck`
 - 測試：`bun run --cwd scripts test`，與上方的 `bun test scripts` 跑同一批測試檔；單一測試：`bun run --cwd scripts test -t "<test-name-filter>"`
 
-CI 的 `workflow-policy` job 每次都跑型別檢查與全部測試。本地開發環境的端對端測試（`TRUSTIOT_DEV_E2E=1`）要以 podman 起整套環境並編譯服務，不在 CI 執行。
+CI 的 `workflow-policy` job 每次都跑型別檢查與全部測試。本地開發環境的端對端測試（`TRUSTIOT_DEV_E2E=1`）要以 podman 起整套環境並編譯服務，不在 CI 執行。展示環境測試信的 pod 腳本另有 podman 測試（`TRUSTIOT_DEMO_MAIL_E2E=1 bun test scripts/demo/test-mail.container.test.ts`，以釘選的 curl 映像對著假的 SMTP relay 寄信），也不在 CI 執行，見 [展示環境 runbook](../docs/runbooks/demo-environment.md)「寄測試信」。
