@@ -246,10 +246,18 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 會改動叢集或刪除資料的腳本都遵守同一套規則：
 
 - 不加 `--apply` 時只讀：印出計畫與確認碼（計畫的 SHA-256 前 12 位）。`--apply --confirm <確認碼>` 才執行，確認碼對不上就停。
-- `--apply` 先取得 lab lock（展示機的 `~/e2e.lock`，與 [deploy/flux/README.md](../deploy/flux/README.md) 的「lab 測試」共用），在 lock 內重新規劃，與確認過的計畫不同就停，結束時只釋放自己的 lock。已經自己持有 lock 時加 `--lock-held`（lock 的擁有者要以 `Laysi/trustiot-v2#457` 開頭）。
-- 紀錄寫在 `$XDG_STATE_HOME/trustiot-v2/demo/`（未設定時 `~/.local/state/trustiot-v2/demo/`；目錄 0700、檔案 0600），或 `--log-dir` 指定的目錄：log、計畫、變更前後的狀態（叢集層級物件的名稱與 SHA-256、每個 namespace 的 workload 與 Service 的 uid）。
-- 維運用的 tunnel（展示機的 `cloudflared.service`，ssh 經過它）只讀狀態（`ActiveState`、`MainPID`）：不是 active 時不動手，結束時確認還是同一個行程，從不改它。
+- `--apply` 先取得 lab lock（展示機的 `~/e2e.lock`，與 [deploy/flux/README.md](../deploy/flux/README.md) 的「lab 測試」共用），在 lock 內重新規劃，與確認過的計畫不同就停，結束時只釋放自己的 lock。lock 的擁有者寫成 `<issue> <UTC 時間> demo <步驟>`，`<issue>` 是該腳本自己的 issue（本節兩支腳本是 `Laysi/trustiot-v2#465`）。已經自己持有 lock 時加 `--lock-held`：擁有者要以 `<issue>` 加一個空白開頭，其他 issue 的 lock（包括 #457 其他子 issue 的）一律不算。
+- 紀錄寫在 `$XDG_STATE_HOME/trustiot-v2/demo/`（未設定時 `~/.local/state/trustiot-v2/demo/`），或 `--log-dir` 指定的目錄：log、計畫、變更前後的狀態（叢集層級物件的名稱與 SHA-256、每個 ClusterRoleBinding 的 subjects、每個 namespace 的 workload 與 Service 的 uid）。腳本自己建立的目錄是 0700、檔案 0600；已經存在的目錄不改權限，其他使用者能讀或進入的目錄（例如 `--log-dir .`）直接拒絕。
+- 維運用的 tunnel（展示機的 `cloudflared.service`，ssh 經過它）只讀狀態（`ActiveState`、`MainPID`、`NRestarts`、`ExecMainStartTimestamp`）：不是 active 時不動手；結束時（包括失敗結束）確認還是同一個行程、沒有重啟過；從不改它。
 - 可以重複執行：先看現況，已經是目標狀態就什麼都不做。
+
+### 中斷之後
+
+Ctrl-C、終端機關閉（SIGHUP）或筆電休眠時，腳本來不及釋放 lab lock，也可能有一個 kubectl 還在展示機上執行。lock 留著時，下一次 `--apply` 會停在「the lab lock is held by: ...」。釋放 ssh 送不到時，腳本會印出 `WARNING: releasing the lab lock failed (ssh)` 與自己的擁有者行，不會說成「別人的 lock」。處理方式：
+
+1. 在展示機上讀 `~/e2e.lock/owner`，確認是這次中斷的執行寫的（issue、時間與步驟都對得上）；不是的話不要動，那是別人的。
+2. 確認沒有這次執行留下的 kubectl 還在跑（`ps -ef | grep 'k3s kubectl'`）；有的話等它結束。
+3. 兩者都確認後才 `rm -rf ~/e2e.lock`，然後先跑一次不加 `--apply` 的 dry run 看現況，再決定要不要重跑。腳本都可以重跑：已經刪掉或已經改好的部分不會再動。
 
 ### 清除 PoC 與平台對齊的順序
 
@@ -263,7 +271,7 @@ bun scripts/demo/cleanup.ts --ssh-host "$DEMO_SSH_HOST"     # 確認：nothing t
 bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST"    # 確認：nothing to change
 ```
 
-先 cleanup 再 platform：PoC 的 AuthorizationPolicy 還在引用舊的 provider 時，platform 的 `--apply` 會拒絕。platform 的確認碼只涵蓋 istiod values 的變更（改前與改後），所以 cleanup 之前的 dry run 印出的確認碼，在 cleanup 之後照樣能用。
+先 cleanup 再 platform：PoC 的 AuthorizationPolicy 還在引用舊的 provider 時，platform 的 `--apply` 會拒絕。platform 的確認碼涵蓋 istiod values 的變更（改前與改後的完整文字的 SHA-256）與叢集裡的 Gateway 清單。cleanup 刪掉 PoC 的 Gateway `edge` 之後清單會變，所以 platform 的確認碼要在 cleanup 之後的 dry run 取得。
 
 ### `demo/cleanup.ts`：清除可行性測試的殘留
 
@@ -273,12 +281,14 @@ bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST"    # 確認：nothing t
 | --- | --- |
 | namespace `trustiot`：雲端 PoC 的 app、clickhouse、grafana、mosquitto、otel-collector、postgres、qdrant，以及它們的 local-path volume 與資料 | PoC 的 7 個 workload 都在，而且沒有 Helm 或 Flux 管理的物件 |
 | namespace `poc`：閘道器端 PoC 的 bridge、consumer、identity、mosquitto-poc 與 probe-a、probe-b、probe-c | PoC 的 4 個 workload 都在，而且沒有 Helm 或 Flux 管理的物件 |
-| namespace `istio-ingress` 裡 PoC 的 Gateway `edge` 與它的 AuthorizationPolicy、NetworkPolicy、ConfigMap | namespace 只有這些與預設物件時整個刪除；還有其他東西時只刪這幾個，namespace 保留 |
+| namespace `istio-ingress` 裡 PoC 的 Gateway `edge` 與它的 AuthorizationPolicy、NetworkPolicy、ConfigMap | namespace 只有這些與預設物件、而且都沒有被 Helm 或 Flux 管理時整個刪除；還有其他東西時只刪這幾個，namespace 保留 |
+| subjects 全部在上面這些 namespace 的 ClusterRoleBinding | 沒有被 Helm 或 Flux 管理；它綁的 ClusterRole 保留，只列在計畫裡 |
 
-- 計畫列出每個會刪除的物件；被其他物件擁有的（Pod、ReplicaSet、Gateway 產生的 Deployment 與 Service 等）跟著擁有者刪除，不另外列；叢集自己產生的 Endpoints 與 Event 也不列。盤點以 jsonpath 只讀名稱、擁有者、Secret 的型別與標籤，不讀 Secret 的內容。
-- 只剩一部分 PoC、PoC 旁邊有 Helm 或 Flux 管理的物件，或 `istio-ingress` 裡與 PoC 同名的物件由 Helm 或 Flux 管理時，整個執行停下，什麼都不刪，由人判斷。沒有任何 PoC workload 的 namespace（例如之後展示環境的 `trustiot`）不動。
-- `--apply` 的順序：先刪 Gateway `edge`，在刪任何 namespace 之前（它的 CUSTOM policy 呼叫 `poc` 裡 PoC 的身分服務；Istio 再移除它為 Gateway 產生的物件），再逐一刪 namespace，`istio-ingress` 先（每個最多等 600 秒），等 PoC 的 PersistentVolume 被 local-path 刪除（reclaim policy `Delete`，最多 300 秒），重新盤點確認計畫已經是空的，最後比對其他 namespace 的 workload 與 Service 沒有變化。
-- 叢集層級的影響：刪除 namespace 與 PersistentVolume。istiod 裡指向 PoC 的 provider 由下一步的 platform.ts 換掉。展示機的檔案系統（PoC 的程式與紀錄）不動。
+- 計畫列出每個會刪除的物件，以及每個 namespace 與 ClusterRoleBinding 的 uid；被其他物件擁有的（Pod、ReplicaSet、Gateway 產生的 Deployment 與 Service 等）跟著擁有者刪除，不另外列；叢集自己產生的 Endpoints 與 Event 也不列。盤點以 jsonpath 只讀名稱、擁有者、Secret 的型別、標籤與 Helm 的 release 註記，不讀 Secret 的內容。「Helm 或 Flux 管理」指 `app.kubernetes.io/managed-by: Helm` 標籤、`meta.helm.sh/release-name` 註記、Helm 的 release Secret、Flux 的標籤，或任何 `*.toolkit.fluxcd.io` group 的物件。
+- 以下情況整個執行停下，什麼都不刪，由人判斷：只剩一部分 PoC；PoC 旁邊有 Helm 或 Flux 管理的物件；`istio-ingress` 裡與 PoC 同名的物件由 Helm 或 Flux 管理；ClusterRoleBinding 的 subjects 一部分在要刪的 namespace、一部分在別處，或它由 Helm 或 Flux 管理；webhook 設定、APIService 或 CRD 的 conversion webhook 呼叫要刪的 namespace 裡的服務。沒有任何 PoC workload 的 namespace（例如之後展示環境的 `trustiot`）不動。
+- `--apply` 的順序：先刪 Gateway `edge`，在刪任何 namespace 之前（它的 CUSTOM policy 呼叫 `poc` 裡 PoC 的身分服務；Istio 再移除它為 Gateway 產生的物件）；再刪 ClusterRoleBinding（中斷時不會留下綁在展示環境會沿用的 namespace 名稱上的權限；每個刪除前重新讀一次，uid、subjects、綁的角色或 Helm／Flux 的管理與計畫不同就停）；`istio-ingress` 保留時，刪它裡面 PoC 的其他物件前也重新確認 namespace 的 uid 沒變、namespace 與這些物件沒有被 Helm 或 Flux 接手；再逐一刪 namespace，`istio-ingress` 先。每個 namespace 刪除前都重新盤點一次：uid 變了、出現計畫裡沒有的物件，或有了 Helm 或 Flux 管理的物件，就停在那裡、不刪它（前面的刪除可能要好幾分鐘）；同時重新讀叢集層級的參照，計畫之後才出現、subjects 在這個 namespace 的 ClusterRoleBinding，或呼叫進這個 namespace 的 webhook 等，也讓它停下（否則展示環境之後在同名 namespace 建立的同名 ServiceAccount 會繼承那些權限）。namespace 與 ClusterRoleBinding 的刪除都帶著計畫裡的 uid 作為 Kubernetes 的刪除前提（`kubectl delete --raw` 以 stdin 送出 `DeleteOptions` 的 `preconditions.uid`）：最後一次確認與刪除之間同名重建的物件，API server 會拒絕刪除，腳本停下，新的那個保留。刪 namespace 不以 `--wait` 等，而是以短指令輪詢到它消失（每個最多 600 秒），因為 ssh 會切斷超過約 3 分鐘沒有輸出的指令。接著等 PoC 的 PersistentVolume 被 local-path 刪除（reclaim policy `Delete`，最多 300 秒），重新盤點確認計畫已經是空的，最後比對其他 namespace 的 workload 與 Service 沒有變化。lock 內重新規劃時，可列出的資源種類也重新讀一次。
+- 之前中斷過、namespace 已經不在時，指向這些 namespace 的 ClusterRoleBinding 仍會列入計畫。
+- 叢集層級的影響：刪除 namespace、PersistentVolume 與上述 ClusterRoleBinding。istiod 裡指向 PoC 的 provider 由下一步的 platform.ts 換掉。展示機的檔案系統（PoC 的程式與紀錄）不動。
 
 ### `demo/platform.ts`：平台元件與 repo 的釘選對齊
 
@@ -286,28 +296,36 @@ bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST"    # 確認：nothing t
 
 | 元件 | 檢查 | 不一致時 |
 | --- | --- | --- |
-| Istio 的四個 HelmChart（`kube-system`） | 版本、沒有 Failed；values 與 `deploy/istio` 相同（istio-base 沒有 values 或用 `values-k3s.yaml` 都算，兩者渲染結果相同，2026-10-20 以 1.30.5 確認）；istiod、ztunnel、istio-cni 執行中的映像版本 | istiod 的 values 由 `--apply` 改；其他列為差異 |
+| Istio 的四個 HelmChart（`kube-system`） | 版本、沒有 Failed；values 與 `deploy/istio` 相同（istio-base 沒有 values 或用 `values-k3s.yaml` 都算，兩者渲染結果相同，2026-10-20 以 1.30.5 確認）；沒有 `spec.set`、`spec.valuesSecrets`；istiod、ztunnel、istio-cni 執行中的映像版本 | istiod 的 values 由 `--apply` 改；其他列為差異 |
 | istiod 的 mesh config（ConfigMap `istio-system/istio`） | extension providers 與路徑正規化確實是 values 的內容 | 列為差異 |
+| 叢集裡所有 Gateway：Gateway API 的 Gateway（包括 waypoint，以 class 標示）與 Istio 自己的 `networking.istio.io` Gateway（標示為 `=networking.istio.io`）；只在各自的 CRD 存在時讀取 | 列進計畫與確認碼：mesh 層級的變更套用到它們 | 只列出 |
 | Gateway API 的 Gateway 與 HTTPRoute CRD、GatewayClass `istio` | standard channel、版本、GatewayClass 已 Accepted | 列為差異 |
 | CloudNativePG operator | 映像版本、Available、chart 用到的 CRD、`cnpg-system` 的 Pod Security `restricted` | 列為差異 |
 
 列為差異的，腳本不會修改，由人依該元件的 README 處理；腳本不安裝也不升級叢集層級的元件。
 
-唯一會改的是 HelmChart `kube-system/istiod` 的 `spec.valuesContent`：改成 `values-k3s.yaml` 加 `istiod-values.yaml`（依 Helm 的合併方式），把 PoC 的 provider `identity`（指向 `identity.poc`）換成 `trustiot-identity`（指向 `trustiot-identity.trustiot`，展示環境的身分服務），並開啟 mesh 的 `DECODE_AND_MERGE_SLASHES`。這是 mesh 層級的設定，同一個叢集的每個 gateway 與 waypoint 都套用（deploy/istio/README.md 的「路徑正規化」）。k3s 的 helm-controller 以 Job `kube-system/helm-install-istiod` 升級 istiod；腳本等到 ConfigMap `istio` 顯示新的 providers 與路徑正規化（最多 600 秒），再等 istiod 的 rollout 完成。
+唯一會改的是 HelmChart `kube-system/istiod` 的 `spec.valuesContent`：改成 `values-k3s.yaml` 加 `istiod-values.yaml`（依 Helm 的合併方式），把 PoC 的 provider `identity`（指向 `identity.poc`）換成 `trustiot-identity`（指向 `trustiot-identity.trustiot`，展示環境的身分服務），並開啟 mesh 的 `DECODE_AND_MERGE_SLASHES`。這是 mesh 層級的設定，同一個叢集的每個 gateway 與 waypoint 都套用（deploy/istio/README.md 的「路徑正規化」）。
+
+修改是 compare-and-swap：在 lock 內讀一次 HelmChart，這份就是備份，也是 JSON patch `test` 比對的值；`test` 確認 `metadata.resourceVersion` 仍是讀到的那個、`spec.valuesContent` 仍是確認過的那段文字，`replace` 換成新的值，並把寫入內容的 SHA-256 記在註記 `trustiot.io/demo-platform-values-sha256`（原本沒有任何註記時整個註記欄位一起加上）。讀取與修改之間 HelmChart 有任何變動（values、別人加的註記）時，API server 拒絕整個 patch，什麼都不改。這個 patch 不在 ssh 斷線時重送（成功之後重送會因 resourceVersion 不符而失敗，誤報為失敗）；斷線時讀回 HelmChart，已經是新的 values 與註記就當作成功，否則停下，要求先以不帶 `--apply` 的執行確認現況。k3s 的 helm-controller 以 Job `kube-system/helm-install-istiod` 升級 istiod；腳本等到 ConfigMap `istio` 顯示新的 providers 與路徑正規化（最多 600 秒），再等 istiod 的 rollout 完成。
 
 `--apply` 在以下情況拒絕，什麼都不改：
 
 - istiod 的 HelmChart 不在釘選的版本或已經 Failed；
-- 有 HelmChartConfig 疊在 Istio 的 chart 上（lab 的 e2e 測試正在用，見 [deploy/chart/tests/e2e/README.md](../deploy/chart/tests/e2e/README.md) 入口測試的前置條件 2）；
+- 還有別的東西也在設定 istiod 的 values：`spec.set`、`spec.valuesSecrets`、k3s AddOn 的註記 `objectset.rio.cattle.io/*`（k3s 重啟時會從 manifests 目錄重新套用），或疊在 Istio chart 上的 HelmChartConfig（lab 的 e2e 測試正在用，見 [deploy/chart/tests/e2e/README.md](../deploy/chart/tests/e2e/README.md) 入口測試的前置條件 2）；
 - 有 CUSTOM 的 AuthorizationPolicy 引用新 values 裡沒有的 provider（PoC 的 `istio-ingress/edge-cookie-auth`：先跑 cleanup.ts）。
 
 為什麼直接改 HelmChart，而不是疊一個 HelmChartConfig：lab 的 e2e 測試以 `HelmChartConfig istiod` 加入自己的 provider，測完刪掉；展示環境的 provider 如果放在 HelmChartConfig 裡，會跟著被刪。代價是展示機上當初以 `kubectl apply` 套用的檔案仍是 PoC 的 values，再套用一次就會把 provider 換回去，所以不要再套用它（deploy/istio/README.md 的「安裝（k3s）」）。
 
-回復：`--apply` 修改前把 HelmChart 存成紀錄目錄裡的 `platform-<時間>-helmchart-istiod-before.json` 並印出路徑。`bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST" --rollback <那個檔>` 印出目前與要放回的 values 及回復的確認碼（涵蓋這兩者），加上 `--apply --confirm <確認碼>` 把當時的 values 放回去：同樣取得 lab lock，在 lock 內確認 istiod 的 values 沒有再變；有 HelmChartConfig 疊在 Istio 上，或有 CUSTOM 的 AuthorizationPolicy 在用要拿掉的 provider（例如展示環境的入口）時拒絕；放回之前再存一份當時的 HelmChart，等到 mesh config 顯示回復的 providers。
+回復：`--apply` 修改前把 HelmChart 存成紀錄目錄裡的 `platform-<時間>-helmchart-istiod-before.json` 並印出路徑。`bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST" --rollback <那個檔>` 印出目前與要放回的 values 及回復的確認碼（涵蓋兩段文字的 SHA-256 與 Gateway 清單），加上 `--apply --confirm <確認碼>` 把存下的 `valuesContent` 逐位元組放回去，同樣以 compare-and-swap 寫入，等到 mesh config 顯示回復的 providers。以下情況拒絕：
+
+- istiod 目前的 values 不是這支腳本上次寫入的（註記裡的 SHA-256 對不上）：回復會蓋掉之後的修改；
+- 上面列出的「還有別的東西也在設定 istiod 的 values」；
+- 有 CUSTOM 的 AuthorizationPolicy 在用要拿掉的 provider（例如展示環境的入口）；
+- 回復會改變或拿掉路徑正規化，而叢集裡有 Gateway 或 waypoint：`//internal/...` 與 `/%2finternal/...` 會重新繞過 chart 的 `/internal*` DENY（Laysi/trustiot-v2#255）。
 
 ### 測試
 
-`bun test scripts/demo`，也包含在 `bun test scripts` 裡。不需要叢集或 ssh：以記憶體裡的假叢集驗證盤點、確認之前不刪除也不改、在 lock 內發現計畫變了就停、重複執行時什麼都不做，以及 platform.ts 擋下變更的條件；istiod 的 values 以 repo 裡的 `deploy/istio` 檔案驗證。
+`bun test scripts/demo`，也包含在 `bun test scripts` 裡。不需要叢集或 ssh：以記憶體裡的假叢集與假的 ssh 驗證 lab lock 的擁有者比對、mkdir 不重試與只釋放自己的 lock、參數的引號、盤點、確認之前不刪除也不改、lock 內與每個 namespace 刪除前發現變化就停、刪除帶 uid 前提、ClusterRoleBinding 與 webhook 的處理、compare-and-swap、回復的條件與逐位元組還原、逾時、失敗時仍釋放 lock、重複執行時什麼都不做；istiod 的 values 以 repo 裡的 `deploy/istio` 檔案驗證。
 
 ## release/：發佈流程
 

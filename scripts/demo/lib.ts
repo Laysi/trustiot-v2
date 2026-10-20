@@ -6,26 +6,28 @@
  *
  * Every script that changes the cluster or the host:
  * - takes the lab lock (~/e2e.lock on the demo machine; docs/runbooks/demo-environment.md,
- *   「與 lab e2e 共用叢集」), or checks that the caller holds it for this issue (--lock-held);
+ *   「與 lab e2e 共用叢集」) for its own issue, or checks that the caller holds it for that issue
+ *   (--lock-held);
  * - without --apply only reads and prints what it would do, with a confirmation code; --apply
  *   needs that code (--confirm), recomputes the plan and stops when the plan changed meanwhile;
  * - records the state before and after (with sha256 where it matters) and writes a log, under
  *   $XDG_STATE_HOME/trustiot-v2/demo/ (0700) or --log-dir;
  * - checks that the ops tunnel (the host's own cloudflared.service, which serves ssh to the demo
- *   machine) kept running with the same process, and never touches it;
+ *   machine) kept running with the same process, also when the run fails, and never touches it;
  * - is safe to run again: each step looks at the current state first.
  *
  * Nothing here prints a secret value, a private host name or an address: logs name objects only.
+ * (ssh's own error lines, which lastLines() passes on, can name the host: filter them before a log
+ * goes anywhere public.)
  */
 
-import { appendFileSync, chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { tryRun, type RunResult } from "../release/exec.ts";
 import { ReleaseError, errorMessage } from "../release/lib.ts";
 
 export const ROOT = resolve(import.meta.dir, "..", "..");
-export const ISSUE = "Laysi/trustiot-v2#457";
 /** The namespace and Helm release of the demo environment (the SaaS default, deploy/istio). */
 export const DEMO_NAMESPACE = "trustiot";
 /** The lab lock on the demo machine, shared with every lab e2e test (CLAUDE.md). */
@@ -50,7 +52,10 @@ export const POC_FINGERPRINTS: Record<string, { deployments: string[]; statefuls
   poc: { deployments: ["bridge", "consumer", "identity", "mosquitto-poc"], statefulsets: [] },
 };
 
-/** Quotes one argument for the remote POSIX shell. */
+/**
+ * Quotes one argument for the remote shell. The demo machine's login shell is POSIX (bash on
+ * Fedora); a non-POSIX login shell such as fish would need other quoting.
+ */
 export function shq(arg: string): string {
   return /^[A-Za-z0-9_./:=@%+,-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`;
 }
@@ -71,7 +76,11 @@ export function sha256(text: string): string {
   return new Bun.CryptoHasher("sha256").update(text).digest("hex");
 }
 
-/** A log file of one run, 0600 in a 0700 directory; lines also go to the console. */
+/**
+ * A log file of one run, 0600 in a 0700 directory; lines also go to the console. A directory this
+ * creates is made 0700; an existing one is never chmod-ed, and one that other users can read or
+ * enter is refused (so `--log-dir .` cannot change the repository's permissions).
+ */
 export class Log {
   readonly dir: string;
   readonly file: string;
@@ -79,8 +88,16 @@ export class Log {
   constructor(step: string, dir?: string) {
     const base = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
     this.dir = resolve(dir ?? join(base, "trustiot-v2", "demo"));
-    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
-    chmodSync(this.dir, 0o700);
+    if (existsSync(this.dir)) {
+      const stat = statSync(this.dir);
+      if (!stat.isDirectory()) throw new ReleaseError(`log directory ${this.dir} is not a directory`);
+      if ((stat.mode & 0o077) !== 0) {
+        throw new ReleaseError(`log directory ${this.dir} is open to other users (mode ${(stat.mode & 0o777).toString(8)}); use a private (0700) directory`);
+      }
+    } else {
+      mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+      chmodSync(this.dir, 0o700);
+    }
     const stamp = new Date().toISOString().replaceAll(":", "").replace(/\.\d+Z$/, "Z");
     this.file = join(this.dir, `${step}-${stamp}.log`);
     writeFileSync(this.file, "", { mode: 0o600 });
@@ -110,25 +127,40 @@ export interface ShOptions {
   retry?: boolean;
 }
 
+/** Runs one local command (ssh) and returns its result whatever its exit status. */
+export type SshRunner = (cmd: string[], stdin?: string | Uint8Array) => Promise<RunResult>;
+
+/** How a Box reaches the machine; tests replace both. */
+export interface BoxIo {
+  run?: SshRunner;
+  sleep?: (ms: number) => Promise<void>;
+}
+
 /** The demo machine over ssh. */
 export class Box {
+  private readonly run: SshRunner;
+  private readonly pause: (ms: number) => Promise<void>;
+
   constructor(
     readonly host: string,
     readonly log: Log,
+    io: BoxIo = {},
   ) {
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(host)) {
       throw new ReleaseError("--ssh-host must be an ssh host name or alias");
     }
+    this.run = io.run ?? sshRun;
+    this.pause = io.sleep ?? ((ms) => Bun.sleep(ms));
   }
 
   /** Runs a shell command line on the box; returns the result whatever its exit status. */
   async sh(command: string, options: ShOptions = {}): Promise<RunResult> {
     const retry = options.retry ?? true;
     for (let attempt = 1; ; attempt += 1) {
-      const result = await sshRun(["ssh", "-o", "BatchMode=yes", this.host, command], options.stdin);
+      const result = await this.run(["ssh", "-o", "BatchMode=yes", this.host, command], options.stdin);
       if (result.exitCode !== 255 || !retry || attempt === 4) return result;
       this.log.note(`ssh dropped the connection (attempt ${attempt}); retrying`);
-      await Bun.sleep(3_000 * attempt);
+      await this.pause(3_000 * attempt);
     }
   }
 
@@ -141,7 +173,7 @@ export class Box {
     return result.stdout;
   }
 
-  /** `sudo k3s kubectl` on the box. */
+  /** `sudo k3s kubectl` on the box; every argument is quoted for the remote shell. */
   async tryKubectl(args: readonly string[], stdin?: string): Promise<RunResult> {
     return this.sh(["sudo", "k3s", "kubectl", ...args].map(shq).join(" "), stdin === undefined ? {} : { stdin });
   }
@@ -184,35 +216,73 @@ export function lastLines(text: string, count = 5): string {
 
 // --- The lab lock ------------------------------------------------------------------------------
 
-/** The owner line this run writes into the lock. */
-export function lockOwner(step: string): string {
-  return `${ISSUE} demo ${step} ${new Date().toISOString().replace(/\.\d+Z$/, "Z")}`;
+/** An issue reference that may own the lab lock: `Laysi/trustiot-v2#<number>`. */
+function requireIssue(issue: string): void {
+  if (!/^Laysi\/trustiot-v2#\d+$/.test(issue)) throw new ReleaseError(`not an issue reference: ${JSON.stringify(issue)}`);
 }
 
 /**
- * Takes the lab lock for a step and returns a release function, or, with `held`, checks that the
- * lock is already held for this issue (by the person or agent running the step) and returns a
- * no-op. Another holder stops the run before anything changes.
+ * The owner line a run writes into the lock: `<issue> <UTC time> demo <step>`, the format of
+ * deploy/flux/README.md (「lab 測試」) with the step after the time.
  */
-export async function takeLock(box: Box, step: string, held: boolean): Promise<() => Promise<void>> {
+export function lockOwner(issue: string, step: string, now: Date = new Date()): string {
+  requireIssue(issue);
+  return `${issue} ${now.toISOString().replace(/\.\d+Z$/, "Z")} demo ${step}`;
+}
+
+/** Whether an owner line belongs to this issue: the exact issue, then a space. */
+export function ownsLock(owner: string, issue: string): boolean {
+  requireIssue(issue);
+  return owner.startsWith(`${issue} `);
+}
+
+const LOCK_HELP = `on the demo machine, read ~/${LOCK_DIR}/owner and check that no kubectl of the interrupted run is still running (ps -ef | grep kubectl); only then, and only when the owner line is that run's, remove the lock with: rm -rf ~/${LOCK_DIR}`;
+
+/**
+ * Takes the lab lock for a step of `issue` and returns a release function, or, with `held`, checks
+ * that the lock is already held for this issue (by the person or agent running the step) and
+ * returns a no-op. Another holder stops the run before anything changes. The mkdir runs once (no
+ * retry); when ssh drops during it, the owner line is read back to learn whether the lock is ours.
+ * The release removes the lock only while the owner line is still this run's, and it never throws:
+ * a failed release is logged with what to check and how to remove the lock by hand.
+ */
+export async function takeLock(box: Box, issue: string, step: string, held: boolean): Promise<() => Promise<void>> {
+  requireIssue(issue);
+  const readOwner = async (): Promise<string | undefined> => {
+    const read = await box.sh(`cat ~/${LOCK_DIR}/owner 2>/dev/null || true`);
+    return read.exitCode === 0 ? read.stdout.trim() : undefined;
+  };
   if (held) {
-    const owner = (await box.sh(`cat ~/${LOCK_DIR}/owner 2>/dev/null`)).stdout.trim();
-    if (!owner.startsWith(ISSUE)) {
-      throw new ReleaseError(`--lock-held, but the lab lock is ${owner === "" ? "free" : `held by: ${owner}`}`);
+    const owner = await readOwner();
+    if (owner === undefined) throw new ReleaseError("could not read the lab lock (ssh failed); nothing changed");
+    if (!ownsLock(owner, issue)) {
+      throw new ReleaseError(`--lock-held, but the lab lock is ${owner === "" ? "free or has no owner line" : `held by: ${owner}`}; it must be held for ${issue}`);
     }
-    box.log.note(`the lab lock is held for ${ISSUE}: ${owner}`);
+    box.log.note(`the lab lock is held for ${issue}: ${owner}`);
     return async () => {};
   }
-  const owner = lockOwner(step);
-  const taken = await box.sh(`mkdir ~/${LOCK_DIR} 2>/dev/null && printf '%s\\n' ${shq(owner)} > ~/${LOCK_DIR}/owner && echo ACQUIRED || cat ~/${LOCK_DIR}/owner`, { retry: false });
-  if (taken.stdout.trim() !== "ACQUIRED") {
-    throw new ReleaseError(`the lab lock is held by: ${taken.stdout.trim() || "(unknown)"}; wait for it, or pass --lock-held if you hold it for ${ISSUE}`);
+  const owner = lockOwner(issue, step);
+  const taken = await box.sh(`mkdir ~/${LOCK_DIR} 2>/dev/null && printf '%s\\n' ${shq(owner)} > ~/${LOCK_DIR}/owner && echo ACQUIRED || { printf 'HELD '; cat ~/${LOCK_DIR}/owner 2>/dev/null; }`, {
+    retry: false,
+  });
+  if (taken.exitCode === 255) {
+    const now = await readOwner();
+    if (now !== owner) {
+      throw new ReleaseError(`ssh dropped while taking the lab lock; it now reads: ${now === undefined ? "(unreadable)" : now || "(no owner line)"}. If that is "${owner}", this run took it: ${LOCK_HELP}`);
+    }
+  } else if (taken.stdout.trim() !== "ACQUIRED") {
+    const holder = taken.stdout.trim().replace(/^HELD\s*/, "");
+    throw new ReleaseError(`the lab lock is held by: ${holder || "(no owner line)"}; wait for it, or pass --lock-held if you hold it for ${issue}`);
   }
   box.log.note(`took the lab lock: ${owner}`);
   return async () => {
-    // Only our own lock: the owner line must still be the one this run wrote.
-    const released = await box.sh(`[ "$(cat ~/${LOCK_DIR}/owner 2>/dev/null)" = ${shq(owner)} ] && rm -rf ~/${LOCK_DIR} && echo RELEASED`);
-    box.log.note(released.stdout.trim() === "RELEASED" ? "released the lab lock" : "the lab lock was not ours any more; left it as it is");
+    const released = await box.sh(
+      `if [ "$(cat ~/${LOCK_DIR}/owner 2>/dev/null)" = ${shq(owner)} ]; then rm -rf ~/${LOCK_DIR} && echo RELEASED; else printf 'NOT_OURS '; cat ~/${LOCK_DIR}/owner 2>/dev/null; fi`,
+    );
+    const out = released.stdout.trim();
+    if (released.exitCode === 0 && out === "RELEASED") box.log.note("released the lab lock");
+    else if (released.exitCode === 0 && out.startsWith("NOT_OURS")) box.log.note(`the lab lock is no longer this run's (owner: ${out.replace(/^NOT_OURS\s*/, "") || "none"}); left it as it is`);
+    else box.log.note(`WARNING: releasing the lab lock failed (${released.exitCode === 255 ? "ssh" : `exit ${released.exitCode}`}); this run's owner line is "${owner}": ${LOCK_HELP}`);
   };
 }
 
@@ -234,6 +304,13 @@ export const CLUSTER_KINDS = [
 export interface KindState {
   names: string[];
   sha256: string;
+  /** ClusterRoleBindings only: each binding's subjects, `<Kind>:<namespace>/<name>` (`<Kind>:<name>` without a namespace). */
+  subjects?: Record<string, string[]>;
+}
+
+/** A subject of a (Cluster)RoleBinding as `<Kind>:<namespace>/<name>`, or `<Kind>:<name>` without a namespace. */
+export function subjectRef(subject: { kind?: string; namespace?: string; name?: string }): string {
+  return `${subject.kind ?? "?"}:${subject.namespace ? `${subject.namespace}/` : ""}${subject.name ?? "?"}`;
 }
 
 /**
@@ -255,6 +332,11 @@ export async function clusterState(box: Box): Promise<Record<string, KindState>>
       })
       .sort((a, b) => String(a.metadata.name).localeCompare(String(b.metadata.name)));
     state[kind] = { names: items.map((item) => String(item.metadata.name)), sha256: sha256(JSON.stringify(items)) };
+    if (kind === "clusterrolebindings.rbac.authorization.k8s.io") {
+      state[kind].subjects = Object.fromEntries(
+        items.map((item) => [String(item.metadata.name), ((item as { subjects?: { kind?: string; namespace?: string; name?: string }[] }).subjects ?? []).map(subjectRef)]),
+      );
+    }
   }
   return state;
 }
@@ -286,16 +368,21 @@ export function stateDiff(before: Record<string, KindState>, after: Record<strin
   return diff;
 }
 
+// --- The ops tunnel ----------------------------------------------------------------------------
+
 export interface OpsTunnel {
   active: string;
   pid: string;
+  /** systemd's restart counter and the main process's start time: a restart between two reads changes them even if the PID comes back. */
+  restarts: string;
+  started: string;
 }
 
 /** The ops tunnel's state, read only (systemctl show). */
 export async function opsTunnel(box: Box): Promise<OpsTunnel> {
-  const out = await box.mustSh(`systemctl show ${OPS_TUNNEL_UNIT} -p ActiveState -p MainPID`, "reading the ops tunnel's state");
+  const out = await box.mustSh(`systemctl show ${OPS_TUNNEL_UNIT} -p ActiveState -p MainPID -p NRestarts -p ExecMainStartTimestamp`, "reading the ops tunnel's state");
   const field = (name: string) => new RegExp(`^${name}=(.*)$`, "m").exec(out)?.[1]?.trim() ?? "";
-  return { active: field("ActiveState"), pid: field("MainPID") };
+  return { active: field("ActiveState"), pid: field("MainPID"), restarts: field("NRestarts"), started: field("ExecMainStartTimestamp") };
 }
 
 /** Stops the run when the ops tunnel is not active; it serves ssh to the demo machine. */
@@ -307,9 +394,30 @@ export function requireOpsTunnel(tunnel: OpsTunnel): void {
 
 /** A message for the end of a run: whether the ops tunnel kept its process. */
 export function opsTunnelUnchanged(before: OpsTunnel, after: OpsTunnel): string {
-  return before.pid === after.pid && after.active === "active"
+  const same = before.pid === after.pid && before.restarts === after.restarts && before.started === after.started && after.active === "active";
+  return same
     ? `${OPS_TUNNEL_UNIT} kept running (same process)`
-    : `WARNING: ${OPS_TUNNEL_UNIT} changed (${before.active}/${before.pid} -> ${after.active}/${after.pid}); this run never touches it, check the host`;
+    : `WARNING: ${OPS_TUNNEL_UNIT} changed (${before.active}/${before.pid}/restarts ${before.restarts}/${before.started} -> ${after.active}/${after.pid}/restarts ${after.restarts}/${after.started}); this run never touches it, check the host`;
+}
+
+/**
+ * Runs `body` between two reads of the ops tunnel: refuses to start unless it is active, and logs
+ * whether it kept its process when the body ends, also when the body fails.
+ */
+export async function withOpsTunnel<T>(read: () => Promise<OpsTunnel>, log: Log, body: () => Promise<T>): Promise<T> {
+  const before = await read();
+  requireOpsTunnel(before);
+  try {
+    return await body();
+  } finally {
+    let message: string;
+    try {
+      message = opsTunnelUnchanged(before, await read());
+    } catch (error) {
+      message = `WARNING: could not read ${OPS_TUNNEL_UNIT} after the run: ${errorMessage(error)}`;
+    }
+    log.note(message);
+  }
 }
 
 // --- Command line --------------------------------------------------------------------------------
