@@ -767,6 +767,16 @@ export const STAGE1_STATUS = 418;
  * size (summary), which shows the stage-2 rule holds for the cloudflared that runs. Mistaking one
  * for the other only fails a probe, never passes one that should fail: an app-only path must
  * be `access`, which neither is.
+ *
+ * The WebSocket upgrade to /mqtt fails in stage 1 (`unexpected`). When the origin answers an upgrade
+ * with anything but 101, the client gets a Cloudflare 502 page (`server: cloudflare`, 148 bytes of
+ * HTML) while Cloudflare's HTTP request analytics and the connector's counters record the origin's
+ * 418 (observed 2026-10-21; Cloudflare's documentation does not describe it). Whether the request
+ * reached the connector is read by hand from cloudflared_tunnel_total_requests and
+ * cloudflared_tunnel_response_by_code{status_code="418"} on 127.0.0.1:20250/metrics before and
+ * after the probe (docs/runbooks/demo-environment.md); Laysi/trustiot-v2#473 makes check do that.
+ * Until then stage 2 accepts that 502 without the counters, like any answer that is not Cloudflare
+ * or the connector stopping the request (probePasses).
  */
 export function classify(response: ProbeResponse, stage: 1 | 2): Outcome {
   const { status, headers, body } = response;
@@ -1652,7 +1662,7 @@ async function check(box: Box, log: Log, raw: Record<string, string>): Promise<v
   log.save("check", { at: new Date().toISOString(), stage, results });
   if (failed > 0) {
     throw new ReleaseError(
-      `${failed} probe(s) did not get the expected answer. challenge or block on the gateway or ota host name: Cloudflare's bot protection stopped a non-browser client (Bot Fight Mode cannot be skipped per host on the Free plan; turning it off for the zone is the user's decision; the record keeps cf-ray). access on a bypass path: a bypass application is missing or does not match; an app path that is not access: Access does not cover that host name. refused on a bypass path, or a path below it that is not refused: the tunnel's path rules are wrong. tunnel-down: no connector is up.`,
+      `${failed} probe(s) did not get the expected answer. challenge or block on the gateway or ota host name: Cloudflare's bot protection stopped a non-browser client (Bot Fight Mode cannot be skipped per host on the Free plan; turning it off for the zone is the user's decision; the record keeps cf-ray). access on a bypass path: a bypass application is missing or does not match; an app path that is not access: Access does not cover that host name. refused on a bypass path, or a path below it that is not refused: the tunnel's path rules are wrong. tunnel-down: no connector is up. In stage 1 the WebSocket upgrade to /mqtt fails with Cloudflare's 502 even when it reached the connector (the route answers 418, not 101): compare the connector's counters before and after it as docs/runbooks/demo-environment.md says (Laysi/trustiot-v2#473 automates this).`,
     );
   }
 }
