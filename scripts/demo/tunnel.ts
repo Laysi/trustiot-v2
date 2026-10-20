@@ -871,6 +871,48 @@ function hostFromEnv(name: string): string {
 // --- The trusted zone (install's backup, remove's restore) ---------------------------------------
 
 /**
+ * firewall-cmd's options that read the configuration as a whole (the `options_config` group of
+ * firewall-cmd 2.x: every --info-*, --get-zones, --get-services, --get-icmptypes, --get-policies,
+ * --get-ipsets, --get-helpers, --get-zone-of-*, --list-all-zones, --list-all-policies).
+ * firewall-cmd refuses each of them next to --zone: it exits 2 with "Wrong usage of --get-zones |
+ * --get-services | --get-icmptypes | --get-policies." (--info-zone=<zone> names the zone itself).
+ */
+const FIREWALL_CONFIG_OPTION = /^--(info-[a-z]+=.+|get-(zones|services|icmptypes|policies|ipsets|helpers)|get-zone-of-(interface|source)=.+|list-all-(zones|policies))$/;
+/** The firewall-cmd arguments these scripts use. */
+const FIREWALL_ARGUMENT = /^(-q|--permanent|--zone=trusted|--info-zone=trusted|--(query|add|remove)-(rich-rule|source)=.+)$/;
+/** Options that act on one zone: without --zone they act on the default zone, never what is meant here. */
+const FIREWALL_ZONE_ACTION = /^--(query|add|remove)-/;
+
+/**
+ * A firewall-cmd command line for the scripts that run on the demo machine, with each argument
+ * shell-quoted. Every firewall-cmd call these scripts make is built here, so firewall-cmd's usage
+ * rules are checked when the script is built, on this workstation, not first on the demo machine:
+ * only the arguments above, exactly one action, no --zone next to a configuration-wide option
+ * (FIREWALL_CONFIG_OPTION), and an explicit --zone=trusted for an action on a zone.
+ */
+export function firewallCmd(...args: string[]): string {
+  for (const arg of args) if (!FIREWALL_ARGUMENT.test(arg)) throw new ReleaseError(`firewall-cmd argument these scripts do not use: ${arg}`);
+  const zone = args.includes("--zone=trusted");
+  const config = args.filter((arg) => FIREWALL_CONFIG_OPTION.test(arg));
+  const actions = args.filter((arg) => FIREWALL_ZONE_ACTION.test(arg));
+  if (zone && config.length > 0) throw new ReleaseError(`firewall-cmd refuses --zone next to ${config.join(" ")} (it exits 2: "Wrong usage of --get-zones | ...")`);
+  if (actions.length > 0 && !zone) throw new ReleaseError(`firewall-cmd ${actions.join(" ")} needs --zone=trusted, or it acts on the default zone`);
+  if (actions.length + config.length !== 1) throw new ReleaseError(`firewall-cmd takes exactly one action here, not: ${args.join(" ")}`);
+  return ["firewall-cmd", ...args.map((arg) => (/^[\w=./:-]+$/.test(arg) ? arg : shq(arg)))].join(" ");
+}
+
+/** firewalld's runtime and permanent view of the trusted zone. */
+export const TRUSTED_ZONE_VIEWS = {
+  runtime: firewallCmd("--info-zone=trusted"),
+  permanent: firewallCmd("--permanent", "--info-zone=trusted"),
+} as const;
+
+/** The root script that records firewalld's state for the host records before and after an install. */
+export function firewalldRecordScript(): string {
+  return `sha256sum /etc/firewalld/zones/*.xml /etc/firewalld/policies/*.xml 2>/dev/null; ${TRUSTED_ZONE_VIEWS.runtime}; ${TRUSTED_ZONE_VIEWS.permanent}`;
+}
+
+/**
  * `firewall-cmd [--permanent] --info-zone=trusted`, as sorted values per field (rich rules and
  * forward ports as written). A field line is indented by exactly two spaces (`  sources: a b`);
  * fields that list one entry per line (rich rules, forward ports) put each entry on its own line
@@ -885,7 +927,7 @@ export function parseZoneInfo(text: string): Record<string, string[]> {
     const trimmed = line.trim();
     if (trimmed === "") continue;
     if (/^\S/.test(line)) {
-      if (fields.zone !== undefined) throw new ReleaseError(`firewall-cmd --info-zone printed a second zone: ${trimmed}`);
+      if (fields.zone !== undefined) throw new ReleaseError(`the trusted zone view (firewall-cmd's --info-zone) printed a second zone: ${trimmed}`);
       fields.zone = [trimmed.replace(/\s*\(.*\)$/, "")];
       continue;
     }
@@ -893,17 +935,17 @@ export function parseZoneInfo(text: string): Record<string, string[]> {
     if (field !== null) {
       current = field[1] ?? "";
       const values = (field[2] ?? "").split(/\s+/).filter(Boolean);
-      if (current === "rich rules" && values.length > 0) throw new ReleaseError(`cannot read this line of firewall-cmd --info-zone: ${trimmed}`);
+      if (current === "rich rules" && values.length > 0) throw new ReleaseError(`cannot read this line of the trusted zone view (firewall-cmd's --info-zone): ${trimmed}`);
       fields[current] = values;
       continue;
     }
     if (current === "" || (current === "rich rules" && !/^rule(\s|$)/.test(trimmed))) {
-      throw new ReleaseError(`cannot read this line of firewall-cmd --info-zone: ${trimmed}`);
+      throw new ReleaseError(`cannot read this line of the trusted zone view (firewall-cmd's --info-zone): ${trimmed}`);
     }
     fields[current]?.push(trimmed);
   }
   for (const required of ["zone", "sources", "rich rules"]) {
-    if (fields[required] === undefined) throw new ReleaseError(`firewall-cmd --info-zone printed no ${required === "zone" ? "zone name" : `"${required}:" line`}`);
+    if (fields[required] === undefined) throw new ReleaseError(`the trusted zone view (firewall-cmd's --info-zone) printed no ${required === "zone" ? "zone name" : `"${required}:" line`}`);
   }
   for (const key of Object.keys(fields)) fields[key]?.sort();
   return fields;
@@ -975,8 +1017,8 @@ export function zoneBackupScript(dir: string = ZONE_BACKUP, zoneFile: string = T
     'install -d -m 0700 "$d"',
     `rm -f "$d/trusted.xml" "$d/trusted.xml.absent"`,
     `if [ -e "$z" ]; then cp -p "$z" "$d/trusted.xml"; else : > "$d/trusted.xml.absent"; fi`,
-    'firewall-cmd --zone=trusted --info-zone=trusted > "$d/runtime.txt"',
-    'firewall-cmd --permanent --info-zone=trusted > "$d/permanent.txt"',
+    `${TRUSTED_ZONE_VIEWS.runtime} > "$d/runtime.txt"`,
+    `${TRUSTED_ZONE_VIEWS.permanent} > "$d/permanent.txt"`,
     ': > "$d/complete"',
     "echo saved",
   ].join("\n");
@@ -989,23 +1031,23 @@ export function zoneBackupScript(dir: string = ZONE_BACKUP, zoneFile: string = T
  */
 export function restoreTrustedZoneScript(plan: ZoneRestore): string {
   const scopes = [
-    { flag: "", label: "runtime", ...plan.runtime },
-    { flag: " --permanent", label: "permanent", ...plan.permanent },
+    { flags: ["--zone=trusted"], label: "runtime", ...plan.runtime },
+    { flags: ["--zone=trusted", "--permanent"], label: "permanent", ...plan.permanent },
   ];
   const lines = [
     "set -eu",
     // firewall-cmd --query-*: 0 yes, 1 no, anything else an error.
-    `q() { rc=0; firewall-cmd "$@" > /dev/null 2>&1 || rc=$?; case $rc in 0) echo present ;; 1) echo absent ;; *) echo "firewall-cmd $* failed (exit $rc)" >&2; return 1 ;; esac; }`,
+    `q() { rc=0; "$@" > /dev/null 2>&1 || rc=$?; case $rc in 0) echo present ;; 1) echo absent ;; *) echo "$* failed (exit $rc)" >&2; return 1 ;; esac; }`,
   ];
-  for (const { flag, revert } of scopes) {
-    if (revert.removeRule) lines.push(`firewall-cmd -q --zone=trusted${flag} --remove-rich-rule=${shq(POD_SSH_RULE)}`);
-    if (revert.addServiceNetwork) lines.push(`firewall-cmd -q --zone=trusted${flag} --add-source=${SERVICE_NETWORK}`);
+  for (const { flags, revert } of scopes) {
+    if (revert.removeRule) lines.push(firewallCmd("-q", ...flags, `--remove-rich-rule=${POD_SSH_RULE}`));
+    if (revert.addServiceNetwork) lines.push(firewallCmd("-q", ...flags, `--add-source=${SERVICE_NETWORK}`));
   }
-  for (const { flag, label, want } of scopes) {
+  for (const { flags, label, want } of scopes) {
     const rule = want.rule ? "present" : "absent";
     const net = want.serviceNetwork ? "present" : "absent";
-    lines.push(`rule=$(q --zone=trusted${flag} --query-rich-rule=${shq(POD_SSH_RULE)})`);
-    lines.push(`net=$(q --zone=trusted${flag} --query-source=${SERVICE_NETWORK})`);
+    lines.push(`rule=$(q ${firewallCmd(...flags, `--query-rich-rule=${POD_SSH_RULE}`)})`);
+    lines.push(`net=$(q ${firewallCmd(...flags, `--query-source=${SERVICE_NETWORK}`)})`);
     lines.push(
       `if [ "$rule" != ${rule} ] || [ "$net" != ${net} ]; then echo "the trusted zone (${label}) is not as in the backup: pod-SSH rule $rule (want ${rule}), ${SERVICE_NETWORK} $net (want ${net})" >&2; exit 1; fi`,
     );
@@ -1268,6 +1310,21 @@ export async function applyInstall(steps: ApplySteps): Promise<RunOutcome> {
 
 // --- Demo machine ---------------------------------------------------------------------------------
 
+/**
+ * A path's file type as `stat -c %F` names it ("symbolic link", "regular file", ...), or "absent".
+ * stat names types in the session's language (an ssh session may carry the workstation's), and
+ * linkFacts compares the English names, so it runs with LC_ALL=C.
+ */
+export function fileTypeCommand(path: string): string {
+  return `LC_ALL=C stat -c '%F' ${path} 2>/dev/null || echo absent`;
+}
+
+/**
+ * The installed cloudflared's version-release, or nothing. `rpm -q` prints "package ... is not
+ * installed" on stdout, in the session's language, so the exit status of `rpm -q --quiet` decides.
+ */
+export const INSTALLED_VERSION_COMMAND = "if rpm -q --quiet cloudflared; then rpm -q --qf '%{version}-%{release}\\n' cloudflared; fi";
+
 /** What the installer may change, recorded before and after (names, versions and sha256 only). */
 async function hostRecord(box: Box): Promise<Record<string, string>> {
   const read = async (command: string) => (await box.sh(command)).stdout.trim();
@@ -1275,15 +1332,15 @@ async function hostRecord(box: Box): Promise<Record<string, string>> {
     unit: await read(`systemctl show ${DEMO_TUNNEL_UNIT}.service -p LoadState -p ActiveState -p MainPID -p NRestarts`),
     // Never ExecStart: a unit may carry its tunnel token on the command line.
     ops: await read(`systemctl show ${OPS_TUNNEL_UNIT} -p ActiveState -p MainPID -p NRestarts`),
-    cloudflared: await read(`rpm -q cloudflared; sha256sum ${CLOUDFLARED_BINARY}; dnf -q repoquery --installed --qf '%{from_repo}\\n' cloudflared 2>/dev/null`),
-    links: await read(`stat -c '%F' ${LOCAL_LINK} 2>/dev/null || echo absent; readlink ${LOCAL_LINK}; stat -c '%F' ${PACKAGE_MARKER} 2>/dev/null || echo absent`),
-    firewalld: await read("sudo sh -c 'sha256sum /etc/firewalld/zones/*.xml /etc/firewalld/policies/*.xml 2>/dev/null; firewall-cmd --info-zone=trusted; firewall-cmd --permanent --info-zone=trusted'"),
+    cloudflared: await read(`LC_ALL=C rpm -q cloudflared; sha256sum ${CLOUDFLARED_BINARY}; dnf -q repoquery --installed --qf '%{from_repo}\\n' cloudflared 2>/dev/null`),
+    links: await read(`${fileTypeCommand(LOCAL_LINK)}; readlink ${LOCAL_LINK}; ${fileTypeCommand(PACKAGE_MARKER)}`),
+    firewalld: await read(`sudo sh -c ${shq(firewalldRecordScript())}`),
   };
 }
 
 async function readLinkFacts(box: Box): Promise<{ link: LinkFacts; marker: CloudflaredFacts["marker"] }> {
   const read = async (command: string) => (await box.sh(command)).stdout.trim();
-  const link = linkFacts(await read(`stat -c '%F' ${LOCAL_LINK} 2>/dev/null || echo absent`), await read(`readlink ${LOCAL_LINK} || true`));
+  const link = linkFacts(await read(fileTypeCommand(LOCAL_LINK)), await read(`readlink ${LOCAL_LINK} || true`));
   const markerType = await read(`if [ -L ${PACKAGE_MARKER} ]; then echo other; elif [ -f ${PACKAGE_MARKER} ]; then echo file; elif [ -e ${PACKAGE_MARKER} ]; then echo other; else echo absent; fi`);
   return { link, marker: markerType === "file" ? "file" : markerType === "absent" ? "absent" : "other" };
 }
@@ -1302,7 +1359,7 @@ export async function readCloudflaredFacts(box: Box, swap: boolean): Promise<Clo
       )
     : "";
   return {
-    installed: await read("rpm -q --qf '%{version}-%{release}\\n' cloudflared 2>/dev/null | grep -v 'not installed' || true"),
+    installed: await read(INSTALLED_VERSION_COMMAND),
     fromRepo: (await read("dnf -q repoquery --installed --qf '%{from_repo}\\n' cloudflared 2>/dev/null")).split("\n").at(-1) ?? "",
     candidate: candidate.split("\n").at(-1) ?? "",
     ...(await readLinkFacts(box)),
@@ -1570,8 +1627,8 @@ async function readZoneBackup(box: Box): Promise<ZoneBackup | null> {
 
 async function readZoneNow(box: Box): Promise<{ runtime: string; permanent: string }> {
   return {
-    runtime: await box.mustSh("sudo firewall-cmd --info-zone=trusted", "reading the trusted zone"),
-    permanent: await box.mustSh("sudo firewall-cmd --permanent --info-zone=trusted", "reading the trusted zone"),
+    runtime: await box.mustSh(`sudo ${TRUSTED_ZONE_VIEWS.runtime}`, "reading the trusted zone"),
+    permanent: await box.mustSh(`sudo ${TRUSTED_ZONE_VIEWS.permanent}`, "reading the trusted zone"),
   };
 }
 

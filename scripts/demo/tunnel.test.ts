@@ -13,6 +13,7 @@ import {
   LOCK_STATE_COMMAND,
   DEMO_METRICS_PORT,
   DEMO_TUNNEL_UNIT,
+  INSTALLED_VERSION_COMMAND,
   ISSUE,
   LOCAL_LINK,
   PACKAGE_MARKER,
@@ -25,6 +26,7 @@ import {
   SWAP_CHANGE,
   StillRunningError,
   TOKEN_PREFIX,
+  TRUSTED_ZONE_VIEWS,
   ZONE_BACKUP,
   allowedChanges,
   applyInstall,
@@ -41,7 +43,10 @@ import {
   expandHome,
   checkLockForDryRun,
   dryRunLockCheck,
+  fileTypeCommand,
   filesWith,
+  firewallCmd,
+  firewalldRecordScript,
   installerArgs,
   installerChanges,
   installerWarnings,
@@ -95,6 +100,46 @@ const HOSTS = { app: "app.example.com", gateway: "gw.example.com", ota: "ota.exa
 const TUNNEL = "5d0c3f2e-8a41-4b7e-9c26-1f3a7e90b4d8";
 const ok = (stdout = ""): RunResult => ({ stdout, stderr: "", exitCode: 0 });
 const sha = (data: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(data).digest("hex");
+
+/** firewall-cmd's message for --zone next to a configuration-wide option (firewall-cmd 2.5.2). */
+const FIREWALL_WRONG_USAGE = "Wrong usage of --get-zones | --get-services | --get-icmptypes | --get-policies.";
+
+/**
+ * Writes a stand-in firewall-cmd into `bin` that refuses what the real one refuses, checked against
+ * firewall-cmd 2.5.2 on 2026-10-20 (its `options_config` check, and a read-only
+ * `firewall-cmd --zone=trusted --info-zone=trusted`, which exits 2): --zone next to an --info-*,
+ * --get-zones-style or --list-all-* option exits 2 with firewall-cmd's message, and an argument
+ * outside the ones these scripts may use exits 2 like firewall-cmd's argument parser. An action on
+ * a zone without --zone acts on the default zone in the real one; the stand-in exits 99 for it.
+ * Then `behaviour` (a shell `case "$*" in ... esac`) answers. Every call is appended to $FAKE_CALLS
+ * when it is set.
+ */
+function strictFirewallCmd(bin: string, behaviour: string): void {
+  writeFileSync(
+    join(bin, "firewall-cmd"),
+    `#!/bin/sh
+[ -n "\${FAKE_CALLS:-}" ] && echo "$*" >> "$FAKE_CALLS"
+zone= config= action=
+for a in "$@"; do
+  case "$a" in
+    --zone=*) zone=1 ;;
+    --info-*=* | --get-zones | --get-services | --get-icmptypes | --get-policies | --get-ipsets | --get-helpers | --get-zone-of-*=* | --list-all-zones | --list-all-policies) config=1 ;;
+    --query-rich-rule=* | --query-source=* | --add-rich-rule=* | --remove-rich-rule=* | --add-source=* | --remove-source=*) action=1 ;;
+    -q | --permanent) ;;
+    *) echo "firewall-cmd: error: unrecognized arguments: $a" >&2; exit 2 ;;
+  esac
+done
+if [ -n "$zone" ] && [ -n "$config" ]; then
+  echo "usage: 'firewall-cmd --help' for usage information or see firewall-cmd(1) man page" >&2
+  echo "${FIREWALL_WRONG_USAGE}" >&2
+  exit 2
+fi
+if [ -n "$action" ] && [ -z "$zone" ]; then echo "stand-in: an action without --zone acts on the default zone" >&2; exit 99; fi
+${behaviour}
+`,
+    { mode: 0o755 },
+  );
+}
 
 /** The installer's dry run on the demo machine as of 2026-10-20: the 2026-10-11 lab run with the demo unit and its config. */
 function dryRunOutput(tunnel: string = TUNNEL, extra: string[] = []): string {
@@ -158,6 +203,18 @@ describe("tunnel.ts: inputs", () => {
     expect(splitAllowChanges(["--ssh-host", "h", "--allow-change", line, "--allow-change", "x y", "--apply"])).toEqual({ rest: ["--ssh-host", "h", "--apply"], allowed: [line, "x y"] });
     expect(() => splitAllowChanges(["--allow-change"])).toThrow(/needs the exact change line/);
     expect(() => splitAllowChanges(["--allow-change", "--apply"])).toThrow(/needs the exact change line/);
+  });
+
+  test("the installer's own command-line parser accepts the arguments install passes", async () => {
+    // deploy/host/src/cli.ts, the parser the installer binary runs; a path variable keeps the
+    // scripts' type check out of deploy/host's sources.
+    const cli = join(ROOT, "deploy/host/src/cli.ts");
+    const { parseArgs } = (await import(cli)) as { parseArgs: (argv: string[]) => { tokenSource: { kind: string }; options: Record<string, unknown> } };
+    for (const dryRun of [false, true]) {
+      const parsed = parseArgs(installerArgs(dryRun));
+      expect(parsed.tokenSource).toEqual({ kind: "stdin" });
+      expect(parsed.options).toEqual({ unit: DEMO_TUNNEL_UNIT, metricsPort: DEMO_METRICS_PORT, skipK3s: true, reconfigureK3s: false, reinstallCloudflared: true, dryRun });
+    }
   });
 
   test("the demo connector is its own unit with its own metrics port, never the ops tunnel's", () => {
@@ -645,7 +702,7 @@ describe("tunnel.ts: the plan", () => {
             : "Id=cloudflared-update.timer\nLoadState=not-found\nUnitFileState=\nActiveState=inactive\n\nId=cloudflared-update.service\nLoadState=not-found\nUnitFileState=\nActiveState=inactive\n",
         );
       }
-      if (command.startsWith(`stat -c '%F' ${LOCAL_LINK}`)) return ok(`${options.link ?? "symbolic link"}\n`);
+      if (command === fileTypeCommand(LOCAL_LINK)) return ok(`${options.link ?? "symbolic link"}\n`);
       if (command.startsWith(`readlink ${LOCAL_LINK}`)) return ok("/usr/bin/cloudflared\n");
       if (command.startsWith(`if [ -L ${PACKAGE_MARKER}`)) return ok("file\n");
       if (command.startsWith(`systemctl show ${DEMO_TUNNEL_UNIT}.service -p MainPID`)) return ok("MainPID=0\n");
@@ -667,7 +724,7 @@ describe("tunnel.ts: the plan", () => {
       if (command.includes(`${id}.log`)) return ok(options.output ?? dryRunOutput());
       if (command.includes(`${id}.exit`)) return ok("0\n");
       if (command.startsWith("d=$(mktemp -d")) return ok(`${options.candidate ?? "2026.10.1-1"}\n`);
-      if (command.startsWith("rpm -q")) return ok("2026.10.0-1\n");
+      if (command === INSTALLED_VERSION_COMMAND) return ok("2026.10.0-1\n");
       if (command.startsWith("dnf -q repoquery --installed")) return ok("@commandline\n");
       throw new Error(`unexpected command ${command}`);
     });
@@ -733,6 +790,32 @@ describe("tunnel.ts: the plan", () => {
 });
 
 describe("tunnel.ts: the shared cloudflared binary", () => {
+  test("the link type and the installed version read the same in any session language", () => {
+    // Stand-ins that answer like coreutils' stat and rpm do (checked 2026-10-20 with LANG=zh_TW.UTF-8):
+    // stat -c %F names the type in the session's language; rpm -q prints "not installed" on stdout,
+    // translated, and exits 1; rpm -q --quiet prints nothing.
+    const bin = mkdtempSync(join(tmpdir(), "locale-"));
+    try {
+      writeFileSync(
+        join(bin, "stat"),
+        `#!/bin/sh\nloc=\${LC_ALL:-\${LC_MESSAGES:-\${LANG:-C}}}\ncase "$loc" in C | C.* | POSIX) echo "symbolic link" ;; *) echo "符號連結" ;; esac\n`,
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        join(bin, "rpm"),
+        `#!/bin/sh\nif [ "$FAKE_INSTALLED" = 1 ]; then case "$*" in *--quiet*) exit 0 ;; *) echo 2026.10.0-1; exit 0 ;; esac; fi\ncase "$*" in *--quiet*) exit 1 ;; esac\necho "軟體包 cloudflared 尚未安裝"\nexit 1\n`,
+        { mode: 0o755 },
+      );
+      const sh = (command: string, installed = "1") =>
+        Bun.spawnSync(["sh", "-c", command], { env: { PATH: `${bin}:/usr/bin:/bin`, LANG: "zh_TW.UTF-8", FAKE_INSTALLED: installed } }).stdout.toString().trim();
+      expect(linkFacts(sh(fileTypeCommand(LOCAL_LINK)), "/usr/bin/cloudflared\n")).toEqual({ type: "symlink", target: "/usr/bin/cloudflared" });
+      expect(sh(INSTALLED_VERSION_COMMAND)).toBe("2026.10.0-1");
+      expect(sh(INSTALLED_VERSION_COMMAND, "0")).toBe("");
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
   const facts: CloudflaredFacts = { installed: "2026.10.0-1", fromRepo: "@commandline", candidate: "2026.10.1-1", link: { type: "symlink", target: "/usr/bin/cloudflared" }, marker: "file" };
 
   test("a package from elsewhere is swapped for the repository's version, said explicitly", () => {
@@ -1205,7 +1288,7 @@ describe("tunnel.ts: remove and the trusted zone", () => {
     expect(ZONE_BACKUP.startsWith("/etc/firewalld")).toBe(false);
     const bin = join(dir, "bin");
     mkdirSync(bin);
-    writeFileSync(join(bin, "firewall-cmd"), `#!/bin/sh\ncase "$*" in *--permanent*) echo permanent-view ;; *) echo runtime-view ;; esac\n`, { mode: 0o755 });
+    strictFirewallCmd(bin, `case "$*" in *--permanent*) echo permanent-view ;; *) echo runtime-view ;; esac`);
     const run = (root: string, zoneFile: string) => Bun.spawnSync(["sh", "-c", zoneBackupScript(root, zoneFile)], { env: { PATH: `${bin}:/usr/bin:/bin` } });
     // The zone file exists: copied.
     const zoneFile = join(dir, "trusted.xml");
@@ -1228,6 +1311,41 @@ describe("tunnel.ts: remove and the trusted zone", () => {
     expect(existsSync(join(without, "trusted.xml.absent"))).toBe(true);
     expect(existsSync(join(without, "trusted.xml"))).toBe(false);
     expect(existsSync(join(without, "complete"))).toBe(true);
+  });
+
+  test("every firewall-cmd line the scripts build passes firewall-cmd's usage rules", () => {
+    const bin = join(dir, "strict-bin");
+    mkdirSync(bin);
+    strictFirewallCmd(bin, `case "$*" in *--permanent*) echo permanent-view ;; *) echo runtime-view ;; esac`);
+    const sh = (script: string) => Bun.spawnSync(["sh", "-c", script], { env: { PATH: `${bin}:/usr/bin:/bin` } });
+    // The stand-in refuses the combined form exactly as firewall-cmd 2.5.2 does.
+    const combined = sh("firewall-cmd --zone=trusted --info-zone=trusted");
+    expect(combined.exitCode).toBe(2);
+    expect(combined.stderr.toString()).toContain(FIREWALL_WRONG_USAGE);
+    // remove's two views, and the host records' script (its sha256sum finds no zone files here).
+    for (const [script, out] of [
+      [TRUSTED_ZONE_VIEWS.runtime, "runtime-view\n"],
+      [TRUSTED_ZONE_VIEWS.permanent, "permanent-view\n"],
+    ] as const) {
+      const run = sh(`set -e; ${script}`);
+      expect({ script, exit: run.exitCode, stderr: run.stderr.toString() }).toEqual({ script, exit: 0, stderr: "" });
+      expect(run.stdout.toString()).toBe(out);
+    }
+    const record = sh(firewalldRecordScript());
+    expect({ exit: record.exitCode, stderr: record.stderr.toString(), stdout: record.stdout.toString() }).toEqual({ exit: 0, stderr: "", stdout: "runtime-view\npermanent-view\n" });
+    // The builder refuses what firewall-cmd refuses, and what would act on another zone.
+    expect(() => firewallCmd("--zone=trusted", "--info-zone=trusted")).toThrow(/refuses --zone next to --info-zone=trusted/);
+    expect(() => firewallCmd("--add-source=10.43.0.0/16")).toThrow(/needs --zone=trusted/);
+    expect(() => firewallCmd("--zone=public", "--add-source=10.43.0.0/16")).toThrow(/do not use: --zone=public/);
+    expect(() => firewallCmd("--zone=trusted", "--add-source=10.43.0.0/16", "--query-source=10.43.0.0/16")).toThrow(/exactly one action/);
+    expect(() => firewallCmd("--reload")).toThrow(/do not use: --reload/);
+    expect(firewallCmd("-q", "--zone=trusted", `--remove-rich-rule=${POD_SSH_RULE}`)).toBe(`firewall-cmd -q --zone=trusted '--remove-rich-rule=${POD_SSH_RULE}'`);
+    // No firewall-cmd call in tunnel.ts bypasses the builder.
+    const code = readFileSync(join(import.meta.dir, "tunnel.ts"), "utf8")
+      .split("\n")
+      .filter((line) => !/^\s*(\*|\/\/|\/\*)/.test(line));
+    expect(code.filter((line) => /firewall-cmd\s+-/.test(line))).toEqual([]);
+    expect(code.filter((line) => line.includes('"firewall-cmd"'))).toHaveLength(1);
   });
 
   /** Runs removeScript with stand-ins for systemctl and rm that only record their calls. */
@@ -1292,20 +1410,16 @@ exit 0`),
     mkdirSync(bin);
     const calls = join(bin, "calls");
     writeFileSync(calls, "");
-    writeFileSync(
-      join(bin, "firewall-cmd"),
-      `#!/bin/sh
-echo "$*" >> "${calls}"
-case "$*" in
+    strictFirewallCmd(
+      bin,
+      `case "$*" in
   *--permanent*--query-rich-rule*) exit "\${FAKE_PERM_RULE:-$FAKE_RULE}" ;;
   *--query-rich-rule*) exit "$FAKE_RULE" ;;
   *--query-source*) exit "$FAKE_NET" ;;
   *) exit "$FAKE_CHANGE" ;;
-esac
-`,
-      { mode: 0o755 },
+esac`,
     );
-    const run = Bun.spawnSync(["sh", "-c", restoreTrustedZoneScript(plan)], { env: { PATH: `${bin}:/usr/bin:/bin`, FAKE_CHANGE: "0", ...fake } });
+    const run = Bun.spawnSync(["sh", "-c", restoreTrustedZoneScript(plan)], { env: { PATH: `${bin}:/usr/bin:/bin`, FAKE_CHANGE: "0", FAKE_CALLS: calls, ...fake } });
     return { exitCode: run.exitCode, calls: readFileSync(calls, "utf8").trim().split("\n"), stderr: run.stderr.toString() };
   }
 
