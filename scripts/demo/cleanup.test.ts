@@ -543,6 +543,24 @@ describe("cleanup.ts", () => {
       expect(webhook.changes).not.toContain("delete namespace poc");
     });
 
+    test("the records directory is printed with the home directory as ~", async () => {
+      const home = process.env.HOME;
+      const xdg = process.env.XDG_STATE_HOME;
+      process.env.HOME = dir;
+      delete process.env.XDG_STATE_HOME;
+      try {
+        log = new Log("test");
+        await applyAll(new FakeCluster(pocCluster()));
+        const printed = await Bun.file(log.file).text();
+        expect(printed).toContain("done; records in ~/.local/state/trustiot-v2/demo\n");
+        expect(printed).not.toContain(dir);
+      } finally {
+        process.env.HOME = home;
+        if (xdg === undefined) delete process.env.XDG_STATE_HOME;
+        else process.env.XDG_STATE_HOME = xdg;
+      }
+    });
+
     test("a refused namespace or reference stops the whole run, dry run included, before anything changes", async () => {
       const facts = pocCluster();
       facts.get("trustiot")!.objects.push(top("deployment.apps/trustiot-identity", true));

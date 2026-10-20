@@ -15,6 +15,7 @@ import {
   lockOwner,
   opsTunnelUnchanged,
   ownsLock,
+  shownPath,
   shq,
   stableJson,
   stateDiff,
@@ -245,6 +246,23 @@ describe("lib", () => {
       mkdirSync(closed, { mode: 0o700 });
       chmodSync(closed, 0o700);
       expect(new Log("x", closed).dir).toBe(closed);
+    });
+
+    test("local paths under the home directory are shown as ~, in the Log's errors too; other paths as they are", () => {
+      const home = process.env.HOME;
+      process.env.HOME = dir;
+      try {
+        expect(shownPath(join(dir, ".local", "state", "x.log"))).toBe("~/.local/state/x.log");
+        expect(shownPath(dir)).toBe("~");
+        expect(shownPath(`${dir}-other/x`)).toBe(`${dir}-other/x`);
+        expect(shownPath("/srv/demo/x.log")).toBe("/srv/demo/x.log");
+        const open = join(dir, "open");
+        mkdirSync(open);
+        chmodSync(open, 0o755);
+        expect(() => new Log("x", open)).toThrow("log directory ~/open is open to other users (mode 755)");
+      } finally {
+        process.env.HOME = home;
+      }
     });
 
     test("the cluster state keeps each ClusterRoleBinding's subjects", async () => {

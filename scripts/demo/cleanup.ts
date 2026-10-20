@@ -47,6 +47,7 @@ import {
   lastLines,
   main,
   opsTunnel,
+  shownPath,
   stableJson,
   stateDiff,
   subjectRef,
@@ -358,7 +359,7 @@ export async function runCleanup(ops: CleanupOps, log: Log, options: CommonOptio
       } finally {
         await release();
       }
-      log.note(`done; records in ${log.dir}`);
+      log.note(`done; records in ${shownPath(log.dir)}`);
       return plan;
     },
   );

@@ -316,7 +316,7 @@ bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST"    # 確認：nothing t
 
 為什麼直接改 HelmChart，而不是疊一個 HelmChartConfig：lab 的 e2e 測試以 `HelmChartConfig istiod` 加入自己的 provider，測完刪掉；展示環境的 provider 如果放在 HelmChartConfig 裡，會跟著被刪。代價是展示機上當初以 `kubectl apply` 套用的檔案仍是 PoC 的 values，再套用一次就會把 provider 換回去，所以不要再套用它（deploy/istio/README.md 的「安裝（k3s）」）。
 
-回復：`--apply` 修改前把 HelmChart 存成紀錄目錄裡的 `platform-<時間>-helmchart-istiod-before.json` 並印出路徑。`bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST" --rollback <那個檔>` 印出目前與要放回的 values 及回復的確認碼（涵蓋兩段文字的 SHA-256 與 Gateway 清單），加上 `--apply --confirm <確認碼>` 把存下的 `valuesContent` 逐位元組放回去，同樣以 compare-and-swap 寫入，等到 mesh config 顯示回復的 providers。以下情況拒絕：
+回復：`--apply` 修改前把 HelmChart 存成紀錄目錄裡的 `platform-<時間>-helmchart-istiod-before.json` 並印出路徑（家目錄底下的路徑一律印成 `~/...`，`--rollback` 也接受這個寫法，加引號的 `'~/...'` 也可以）。`bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST" --rollback <那個檔>` 印出目前與要放回的 values 及回復的確認碼（涵蓋兩段文字的 SHA-256 與 Gateway 清單），加上 `--apply --confirm <確認碼>` 把存下的 `valuesContent` 逐位元組放回去，同樣以 compare-and-swap 寫入，等到 mesh config 顯示回復的 providers。以下情況拒絕：
 
 - istiod 目前的 values 不是這支腳本上次寫入的（註記裡的 SHA-256 對不上）：回復會蓋掉之後的修改；
 - 上面列出的「還有別的東西也在設定 istiod 的 values」；

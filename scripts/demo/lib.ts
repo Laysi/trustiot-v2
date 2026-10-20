@@ -60,6 +60,19 @@ export function shq(arg: string): string {
   return /^[A-Za-z0-9_./:=@%+,-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`;
 }
 
+/**
+ * A local path as the scripts print it: under the home directory as `~/...`, anything else as it
+ * is. What the scripts print ends up in test reports and PR text, which must not carry a user name
+ * or a home directory. The home directory is $HOME, as os.homedir() reads it (Bun caches
+ * os.homedir() for the process, so $HOME is read here directly).
+ */
+export function shownPath(path: string): string {
+  const home = (process.env.HOME || homedir()).replace(/\/+$/, "");
+  if (home === "") return path;
+  if (path === home) return "~";
+  return path.startsWith(`${home}/`) ? `~/${path.slice(home.length + 1)}` : path;
+}
+
 /** A short code that names one plan exactly: --apply needs it, so what runs is what was shown. */
 export function confirmCode(plan: unknown): string {
   return new Bun.CryptoHasher("sha256").update(stableJson(plan)).digest("hex").slice(0, 12);
@@ -86,13 +99,13 @@ export class Log {
   readonly file: string;
 
   constructor(step: string, dir?: string) {
-    const base = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
+    const base = process.env.XDG_STATE_HOME || join(process.env.HOME || homedir(), ".local", "state");
     this.dir = resolve(dir ?? join(base, "trustiot-v2", "demo"));
     if (existsSync(this.dir)) {
       const stat = statSync(this.dir);
-      if (!stat.isDirectory()) throw new ReleaseError(`log directory ${this.dir} is not a directory`);
+      if (!stat.isDirectory()) throw new ReleaseError(`log directory ${shownPath(this.dir)} is not a directory`);
       if ((stat.mode & 0o077) !== 0) {
-        throw new ReleaseError(`log directory ${this.dir} is open to other users (mode ${(stat.mode & 0o777).toString(8)}); use a private (0700) directory`);
+        throw new ReleaseError(`log directory ${shownPath(this.dir)} is open to other users (mode ${(stat.mode & 0o777).toString(8)}); use a private (0700) directory`);
       }
     } else {
       mkdirSync(this.dir, { recursive: true, mode: 0o700 });
@@ -479,7 +492,7 @@ export async function main(log: () => Log | undefined, body: () => Promise<void>
     const current = log();
     if (current !== undefined) current.note(`ERROR ${message}`);
     else console.error(message);
-    if (current !== undefined) console.error(`log: ${current.file}`);
+    if (current !== undefined) console.error(`log: ${shownPath(current.file)}`);
     process.exit(1);
   }
 }

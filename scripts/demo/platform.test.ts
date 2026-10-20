@@ -449,6 +449,34 @@ describe("platform.ts", () => {
       expect((await Bun.file(log.file).text()).trimEnd().split("\n").at(-1)).toContain("cloudflared.service kept running (same process)");
     });
 
+    test("the printed paths show the home directory as ~, and --rollback takes that form, quoted ~/ included", async () => {
+      const home = process.env.HOME;
+      const xdg = process.env.XDG_STATE_HOME;
+      process.env.HOME = dir;
+      delete process.env.XDG_STATE_HOME;
+      try {
+        log = new Log("test");
+        expect(log.dir).toBe(join(dir, ".local", "state", "trustiot-v2", "demo"));
+        const original = "global:\n  tag: 1.30\n";
+        const cluster = new FakeCluster(withIstiod(afterCleanup(), original));
+        const saved = await applyAll(cluster);
+        expect(saved).toStartWith("~/.local/state/trustiot-v2/demo/test-");
+        expect(await Bun.file(log.file).text()).toContain("done; records in ~/.local/state/trustiot-v2/demo\n");
+
+        // The printed form, and the same file copied to <HOME>/x.json and given as '~/x.json'.
+        expect((await runRollback(cluster, log, options(), saved)).setValues[0]).toMatchObject({ toSha256: sha256(original) });
+        writeFileSync(join(dir, "x.json"), readFileSync(join(dir, saved.slice(2))));
+        expect((await runRollback(cluster, log, options(), "~/x.json")).setValues[0]).toMatchObject({ toSha256: sha256(original) });
+        const printed = await Bun.file(log.file).text();
+        expect(printed).toContain("--rollback '~/x.json' --apply --confirm");
+        expect(printed).not.toContain(dir);
+      } finally {
+        process.env.HOME = home;
+        if (xdg === undefined) delete process.env.XDG_STATE_HOME;
+        else process.env.XDG_STATE_HOME = xdg;
+      }
+    });
+
     test("--rollback puts the saved valuesContent back byte for byte", async () => {
       const original = "global:\n  tag: 1.30\n";
       const cluster = new FakeCluster(withIstiod(afterCleanup(), original));

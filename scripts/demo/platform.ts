@@ -44,6 +44,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { CNPG_CRDS, CNPG_DEPLOYMENT, CNPG_NAMESPACE } from "../nightly/platform.ts";
 import { type VersionPins, readPins } from "../nightly/run.ts";
@@ -65,6 +66,7 @@ import {
   main,
   opsTunnel,
   sha256,
+  shownPath,
   shq,
   stableJson,
   stateDiff,
@@ -426,7 +428,7 @@ async function swapAndWait(ops: PlatformOps, log: Log, change: ValuesChange, nex
     throw new ReleaseError("HelmChart istiod's valuesContent is not the one the plan was confirmed against; nothing changed, run again without --apply");
   }
   const backup = log.save(backupName, chart);
-  log.note(`saved the HelmChart as it was: ${backup} (roll back with --rollback <that file>)`);
+  log.note(`saved the HelmChart as it was: ${shownPath(backup)} (roll back with --rollback <that file>)`);
   await ops.swapIstiodValues(chart, next);
   log.note("patched HelmChart kube-system/istiod; waiting for k3s's helm-controller to upgrade istiod");
   const values = parseValuesContent(next);
@@ -510,17 +512,25 @@ export async function runPlatform(ops: PlatformOps, log: Log, options: CommonOpt
       } finally {
         await release();
       }
-      log.note(`done; records in ${log.dir}`);
+      log.note(`done; records in ${shownPath(log.dir)}`);
       return plan;
     },
   );
 }
 
+/**
+ * The --rollback file as given: a leading `~/` is the home directory, so the path the run printed
+ * (shownPath) works as it is, quoted or not.
+ */
+function expandHome(path: string): string {
+  return path.startsWith("~/") ? join(process.env.HOME || homedir(), path.slice(2)) : path;
+}
+
 /** --rollback: istiod's valuesContent back, byte for byte, to a HelmChart that --apply saved. */
 export async function runRollback(ops: PlatformOps, log: Log, options: CommonOptions, saved: string): Promise<RollbackPlan> {
-  const backup = JSON.parse(readFileSync(saved, "utf8")) as { kind?: string; metadata?: { name?: string; namespace?: string }; spec?: { valuesContent?: unknown } };
+  const backup = JSON.parse(readFileSync(expandHome(saved), "utf8")) as { kind?: string; metadata?: { name?: string; namespace?: string }; spec?: { valuesContent?: unknown } };
   if (backup.kind !== "HelmChart" || backup.metadata?.name !== "istiod" || backup.metadata.namespace !== "kube-system" || typeof backup.spec?.valuesContent !== "string") {
-    throw new ReleaseError(`${saved} is not a saved HelmChart kube-system/istiod with a valuesContent`);
+    throw new ReleaseError(`${shownPath(expandHome(saved))} is not a saved HelmChart kube-system/istiod with a valuesContent`);
   }
   const content = backup.spec.valuesContent;
   return withOpsTunnel(
@@ -539,7 +549,7 @@ export async function runRollback(ops: PlatformOps, log: Log, options: CommonOpt
         log.note(`rollback: HelmChart istiod values\n  from: ${stableJson(change.from)}\n  to:   ${stableJson(change.to)} (the saved text, sha256 ${change.toSha256})`);
       }
       if (options.apply && plan.blockers.length > 0) throw new ReleaseError(`${plan.blockers.length} blockers above; nothing changed`);
-      if (!checkConfirmation(log, { rollback: changeOf(plan) }, options, `bun scripts/demo/platform.ts --ssh-host <host> --rollback ${shq(saved)}`)) return plan;
+      if (!checkConfirmation(log, { rollback: changeOf(plan) }, options, `bun scripts/demo/platform.ts --ssh-host <host> --rollback ${shq(shownPath(expandHome(saved)))}`)) return plan;
       const release = await ops.lock("platform-rollback");
       try {
         const again = planRollback(await ops.facts(), content);
