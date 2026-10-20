@@ -3047,6 +3047,43 @@ describe("ingress gateway (decision 27)", () => {
     }
   });
 
+  // ingress.tunnel.clusterIP (Laysi/trustiot-v2#478): Istio applies the service overlay to the
+  // Service it generates, so the address cloudflared forwards to survives a recreated Service.
+  const serviceOverlay = (manifests: Manifest[]) =>
+    (find(manifests, "ConfigMap", `${GATEWAY}-options`).data as Record<string, string>).service ?? "";
+  // The overlay text before the field existed: unset, the chart renders exactly this.
+  const TUNNEL_OVERLAY = "spec:\n  # Reached only by cloudflared on the host; nothing listens on the host or the network.\n  type: ClusterIP\n";
+  const DIRECT_OVERLAY = "spec:\n  type: LoadBalancer\n";
+
+  test("tunnel: ingress.tunnel.clusterIP pins the Service's ClusterIP in the service overlay", () => {
+    const overlay = serviceOverlay(render(SHAPES.saas, ["--set", "ingress.tunnel.clusterIP=10.43.0.240"]));
+    expect(Bun.YAML.parse(overlay)).toEqual({ spec: { type: "ClusterIP", clusterIP: "10.43.0.240" } });
+    expect(overlay).toBe(
+      `${TUNNEL_OVERLAY}  # Fixed, so a recreated Service keeps the address cloudflared forwards to (ingress.tunnel.clusterIP).\n  clusterIP: 10.43.0.240\n`,
+    );
+  });
+
+  test.each(SHAPE_NAMES)("%s: without ingress.tunnel.clusterIP the service overlay is the text it was before the field", (shape) => {
+    expect(serviceOverlay(render(SHAPES[shape]))).toBe(shape === "saas" ? TUNNEL_OVERLAY : DIRECT_OVERLAY);
+  });
+
+  // Every overlay the chart tests and the nightly install, rendered with the field left out and
+  // with it set to "" (its default in values.yaml): the whole output is byte for byte the same.
+  test.each(
+    SHAPE_NAMES.flatMap((shape) =>
+      [[], [SMOKE], [E2E_VALUES], [E2E_VALUES, "tests/e2e/values-mesh-e2e.yaml"]].map((extra) => [`${shape}${extra.map((f) => ` + ${f}`).join("")}`, [...SHAPES[shape], ...extra]] as const),
+    ),
+  )("%s: an empty ingress.tunnel.clusterIP renders byte for byte what an absent one does", (_name, files) => {
+    const absent = helmTemplate(files, ["--set", "ingress.tunnel.clusterIP=null"]);
+    const empty = helmTemplate(files, ["--set-string", "ingress.tunnel.clusterIP="]);
+    const plain = helmTemplate(files);
+    expect(absent.code).toBe(0);
+    expect(empty.code).toBe(0);
+    expect(empty.stdout).toBe(absent.stdout);
+    expect(plain.stdout).toBe(absent.stdout);
+    expect(absent.stdout).not.toContain("clusterIP:");
+  }, SLOW_TEST_MS);
+
   test("a single replica gets no PodDisruptionBudget", () => {
     const options = find(render(SHAPES.saas, ["--set", "ingress.replicas=1"]), "ConfigMap", `${GATEWAY}-options`).data as Record<string, string>;
     expect(options.podDisruptionBudget).toBeUndefined();
@@ -3746,6 +3783,19 @@ describe("service-to-service authorization (decision 27)", () => {
   });
 });
 
+// Values of ingress.tunnel.clusterIP that are not one plain IPv4 address (Laysi/trustiot-v2#478):
+// Kubernetes would refuse each, or take "None" for a headless Service.
+const INVALID_CLUSTER_IPS: [string, string][] = [
+  ["a CIDR", "10.43.0.240/32"],
+  ["written with leading zeros", "10.43.0.024"],
+  ["the headless value None", "None"],
+  ["an IPv6 address", "fd00:10:43::f0"],
+  ["an octet above 255", "10.43.0.256"],
+  ["three octets", "10.43.240"],
+  ["padded with a space", "10.43.0.240 "],
+  ["a host name", "ingress.trustiot.test"],
+];
+
 describe("values validation rejects unsafe or incomplete settings", () => {
   const saas = [...SHAPES.saas, SMOKE];
   const onprem = [...SHAPES.onprem, SMOKE];
@@ -4253,6 +4303,20 @@ describe("values validation rejects unsafe or incomplete settings", () => {
     ],
     ["whole network behind the tunnel", saas, ["--set-json", 'ingress.tunnel.allowedSources=["0.0.0.0/0"]'], /allowedSources/],
     ["no source behind the tunnel", saas, ["--set-json", "ingress.tunnel.allowedSources=[]"], /allowedSources/],
+    // ingress.tunnel.clusterIP (Laysi/trustiot-v2#478): one plain IPv4 address, tunnel only.
+    ...INVALID_CLUSTER_IPS.map(([name, value]): [string, readonly string[], string[], RegExp] => [
+      `a fixed ingress ClusterIP that is ${name}`,
+      saas,
+      ["--set-string", `ingress.tunnel.clusterIP=${value}`],
+      /at '\/ingress\/tunnel\/clusterIP': .* does not match pattern/,
+    ]),
+    ["a fixed ingress ClusterIP that is false", saas, ["--set", "ingress.tunnel.clusterIP=false"], /at '\/ingress\/tunnel\/clusterIP': got boolean, want string/],
+    [
+      "a fixed ingress ClusterIP with direct exposure",
+      onprem,
+      ["--set", "ingress.tunnel.clusterIP=10.43.0.240"],
+      /ingress\.tunnel\.clusterIP: set only with ingress\.exposure tunnel, where cloudflared forwards to the ingress Service's ClusterIP; exposure "direct" never uses it/,
+    ],
     ["direct exposure without a TLS certificate", onprem, ["--set", "ingress.direct.tlsSecret="], /\/ingress\/direct\/tlsSecret/],
     ["no ingress replica", saas, ["--set", "ingress.replicas=0"], /\/ingress\/replicas/],
     ["no ext_authz provider", saas, ["--set", "ingress.authzProvider="], /\/ingress\/authzProvider/],
@@ -4415,6 +4479,29 @@ describe("the templates keep the secret and env boundaries without schema valida
       "unknown credential",
       ["--set-json", 'services.smoke-echo.credentials=["postgres"]'],
       /services\.smoke-echo: unknown credential "postgres"/,
+    ],
+    ...INVALID_CLUSTER_IPS.map(([name, value]): [string, string[], RegExp] => [
+      `a fixed ingress ClusterIP that is ${name}`,
+      ["--set-string", `ingress.tunnel.clusterIP=${value}`],
+      new RegExp(`ingress\\.tunnel\\.clusterIP: "${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}" must be one IPv4 address in dotted-quad form without leading zeros`),
+    ]),
+    // Not a string: refused, never taken for unset (false and 0 would be with Sprig's `default`).
+    ...([["a number", "7", "int64 7"], ["zero", "0", "int64 0"], ["false", "false", "bool false"], ["a list", "{10.43.0.240}", "slice \\[10\\.43\\.0\\.240\\]"]] as const).map(
+      ([name, value, got]): [string, string[], RegExp] => [
+        `a fixed ingress ClusterIP that is ${name}`,
+        ["--set", `ingress.tunnel.clusterIP=${value}`],
+        new RegExp(`ingress\\.tunnel\\.clusterIP: must be a string holding one IPv4 address or empty, got ${got}`),
+      ],
+    ),
+    [
+      "a fixed ingress ClusterIP with direct exposure",
+      ["--set", "ingress.exposure=direct", "--set", "ingress.direct.tlsSecret=trustiot-ingress-tls", "--set", "ingress.tunnel.clusterIP=10.43.0.240"],
+      /ingress\.tunnel\.clusterIP: set only with ingress\.exposure tunnel, where cloudflared forwards to the ingress Service's ClusterIP; exposure "direct" never uses it/,
+    ],
+    [
+      "a fixed ingress ClusterIP with no exposure",
+      ["--set", "ingress.exposure=", "--set", "ingress.tunnel.clusterIP=10.43.0.240"],
+      /ingress\.tunnel\.clusterIP: set only with ingress\.exposure tunnel.*exposure "" never uses it/,
     ],
     [
       "wildcard public path",

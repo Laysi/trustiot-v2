@@ -54,6 +54,19 @@ ingress:
     # first address of the node's pod CIDR (10.42.0.1 on a single-node default install).
     allowedSources:
       - 10.42.0.1/32
+    # Fixed ClusterIP of the ingress gateway Service when exposure is tunnel (empty: Kubernetes
+    # picks one). cloudflared forwards to this address, so set it wherever a tunnel route points
+    # at the Service: a recreated Service then comes back with the same address instead of a new
+    # one, and the old address cannot pass to another Service that the tunnel would then publish.
+    # Pick an unused address in the static band of the cluster's Service range, the first
+    # min(max(16, size / 16), 256) addresses (10.43.0.1-10.43.1.0 on k3s's default 10.43.0.0/16;
+    # kubernetes and kube-dns hold 10.43.0.1 and 10.43.0.10). Kubernetes hands out dynamic
+    # addresses from the rest of the range first and from the static band only when the rest is
+    # used up, so no other Service takes it in practice; an address outside the band can go to any
+    # Service created before ours. One IPv4 address; set only with exposure tunnel. ClusterIP is
+    # immutable: changing it means deleting the Istio-generated Service so Istio recreates it
+    # (README.md, "入口 gateway").
+    clusterIP: ""
   direct:
     # Service type of the ingress gateway when exposure is direct; it listens on 443.
     # LoadBalancer uses k3s ServiceLB or the customer's load balancer.
