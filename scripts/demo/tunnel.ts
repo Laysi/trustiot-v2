@@ -236,8 +236,10 @@ const BOX_PATHS: RunnerPaths = { state: STATE_DIR, run: RUN_DIR, root: "" };
  * the token straight into the installer's stdin, and writes the installer's output to <id>.log and
  * its exit status to <id>.exit. The token is never an argument, a file or output.
  *
- * The runner's own files are made under umask 077; only the installer runs under 022, the umask
- * sudo gives it on a SaaS host. Under 077 its dnf left dnf5's state files and the repository's
+ * The runner's own files are made under umask 077; only the installer runs under 022, sudo's
+ * default umask. sudo combines that default with the caller's umask (unless sudoers sets
+ * umask_override), so on a SaaS host a stricter caller umask reaches the installer and its dnf
+ * too (deploy/host/README.md says to run it from a 0022 shell). Under 077 its dnf left dnf5's state files and the repository's
  * cache root-only (0600/0700) on the demo machine, so no other user could query dnf
  * (Laysi/trustiot-v2#466, 2026-10-21). deploy/host/src/system.ts never relies on the caller's
  * umask: writeFile opens with O_EXCL and the final mode and then chmods, and makeDirectory
@@ -290,7 +292,7 @@ run)
       echo "$rundir/token.enc.b64 is not the one in the confirmed plan; nothing ran"
       exit 3
     fi
-    # 022 as sudo gives a SaaS host; safe: the installer sets each secret's mode itself (O_EXCL+chmod, mkdir+chmod).
+    # 022, sudo's default umask; safe: the installer sets each secret's mode itself (O_EXCL+chmod, mkdir+chmod).
     base64 -d "$ct" \\
       | openssl pkeyutl -decrypt -inkey "$rundir/handoff.pem" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256 \\
       | (umask 022 && exec "$installer" "$@")

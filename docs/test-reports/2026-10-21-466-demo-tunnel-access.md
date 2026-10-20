@@ -92,7 +92,7 @@ OK cloudflared 2026.10.2-1 from cloudflared-stable
 | 安裝程式自己寫的檔案 | 照預期：`/etc/credstore` 700 與其中的檔案 600，unit、`.repo` 檔、套件簽章金鑰、firewalld 的 zone 檔、標記檔 644 |
 | `rpmdb.sqlite` 與 dnf5 的交易紀錄 | 644 |
 
-原因：執行腳本開頭的 `umask 077` 一路傳給安裝程式和它呼叫的 dnf，dnf 依 umask 建立狀態檔與快取。在 SaaS 主機上安裝程式由 sudo 執行，umask 是 022，不會這樣。影響是一般使用者的 dnf 讀不到系統狀態（上一節的 `from_repo` 就是如此），套件與服務本身不受影響。
+原因：執行腳本開頭的 `umask 077` 一路傳給安裝程式和它呼叫的 dnf，dnf 依 umask 建立狀態檔與快取。SaaS 主機上安裝程式由 sudo 執行；sudo 的預設 umask 是 022，但 sudo 會把它和呼叫者的 umask 合併（sudoers 設了 `umask_override` 時除外），所以從 umask 較嚴（例如 027、077）的 shell 執行時，較嚴的 umask 一樣會傳給安裝程式與 dnf，同樣的問題也會在 SaaS 主機上發生；deploy/host/README.md 因此要求從 `umask` 印出 `0022` 的 shell 執行。影響是一般使用者的 dnf 讀不到系統狀態（上一節的 `from_repo` 就是如此），套件與服務本身不受影響。
 
 修正：commit `12db555`（`fix(scripts): run the demo installer under umask 022, not the runner's 077`）只讓安裝程式在 umask 022 下執行；執行腳本自己的 `.log`、`.exit`、`.post` 仍以 077 建立（0600），複本仍以 `install -m` 設為 0600 與 0700。022 不會放寬任何 secret：deploy/host 的 `writeFile` 以 `O_EXCL` 和最終權限建立檔案後再 `chmod`，`makeDirectory` 以指定權限 `mkdir` 後再 `chmod`，都不依賴呼叫者的 umask。單元測試以替身安裝程式確認它看到的 umask 是 `0022`、它建立的檔案是 644，執行腳本的 `.log`、`.exit`、`.post` 是 600，複本是 700 與 600；拿掉 022，或把 022 放到腳本開頭，測試都會失敗。
 
