@@ -68,7 +68,9 @@ describe("cloudflared unit", () => {
   });
 
   test("a metrics port is never one of cloudflared's default ports, in the config or on the command line", () => {
-    for (const port of [20241, 20245]) {
+    // Every default port, written out rather than read from DEFAULT_METRICS_PORTS, so a shorter
+    // list in the code fails here.
+    for (const port of [20241, 20242, 20243, 20244, 20245]) {
       expect(() => renderConfig("cloudflared-demo", port)).toThrow(/invalid metrics port .*20241-20245 are cloudflared's default metrics ports/);
       expect(() => parseArgs(["--metrics-port", String(port)])).toThrow(new RegExp(`--metrics-port ${port}: 20241-20245 are cloudflared's default metrics ports`));
     }
