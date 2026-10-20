@@ -238,7 +238,7 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 
 ## 密鑰清冊
 
-「SaaS」欄是我們自營 SaaS 的保管位置，「地端」欄是客戶安裝時的位置。「SOPS」指 `deploy/flux/` 內以 SOPS 加密、由 Flux 解密的 Secret（ci-release.md）。輪替步驟見 [runbook](../runbooks/secrets.md) 的對應小節。還沒實作的元件，保管與注入方式是本清冊定下的規則，實作 issue 照做並補上 runbook 的指令。
+「SaaS」欄是我們自營 SaaS 的保管位置，「地端」欄是客戶安裝時的位置。「SOPS」指 `deploy/flux/` 內以 SOPS 加密、由 Flux 解密的 Secret（ci-release.md）。展示環境（`deploy/flux/clusters/demo`，Laysi/trustiot-v2#457）用自己的一套：叢集的 age 私鑰與 deploy key 在展示機上產生、不離開展示機（age 私鑰不做離線備份），GHCR 拉取 token、SMTP 帳密與 Anthropic 金鑰（展示專用工作區，設用量上限）各自一份，與 SaaS 分開輪替，見 [deploy/flux/README.md](../../deploy/flux/README.md)「展示叢集」。輪替步驟見 [runbook](../runbooks/secrets.md) 的對應小節。還沒實作的元件，保管與注入方式是本清冊定下的規則，實作 issue 照做並補上 runbook 的指令。
 
 ### 平台信任根與簽章金鑰
 

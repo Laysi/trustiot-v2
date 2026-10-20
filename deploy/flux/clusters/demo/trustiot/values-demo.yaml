@@ -1,0 +1,61 @@
+# Demo overlay (deploy/chart/values.yaml, layer 3): what the demo environment changes from the
+# SaaS shape (values-saas.yaml, copied from the deployed release). Laysi/trustiot-v2#457;
+# deploy/flux/README.md, 「展示叢集」, says how to change it.
+#
+# The host names and the mail sender are not here: they are private (docs/architecture/secrets.md,
+# 「公開 repo 的資訊規則」) and reach the chart from the SOPS-encrypted Secret trustiot-demo-values
+# (trustiot-demo-values.sops.yaml), one key per value, which the HelmRelease reads last. Never put
+# secret values here either: they go into SOPS-encrypted Secrets in this directory. Every host
+# name in this file is under .invalid or .test, or a public service that `bun test deploy/flux`
+# lists; the test refuses any other.
+
+global:
+  # The read-only GHCR pull token (ghcr-pull.sops.yaml); the same Secret lets Flux pull the chart.
+  imagePullSecrets:
+    - ghcr-pull
+
+# The slice's services are switched on here, one by one, as their issues land in a release
+# (deploy/flux/README.md, 「展示叢集」). A service is on only while the deployed chart
+# has its image.
+services:
+  identity:
+    enabled: true
+  assets:
+    enabled: true
+
+postgres:
+  bundled:
+    # One gateway with a few meters; the demo keeps no backups (Laysi/trustiot-v2#457 accepts
+    # losing its data). local-path does not enforce the size; the disk has room to grow.
+    storage:
+      size: 10Gi
+
+clickhouse:
+  bundled:
+    storage:
+      size: 20Gi
+
+qdrant:
+  # The SaaS shape uses Qdrant Cloud, which the demo slice does not need: only the knowledge
+  # service uses Qdrant, and it stays off. The schema wants a URL in external mode, so this one is
+  # under .invalid (RFC 6761), which never resolves: a service that tried to use it would fail at
+  # once instead of reaching anything. Set a real URL and credentialsSecret with the knowledge
+  # service.
+  external:
+    url: https://qdrant.invalid:6333
+
+# Resend's SMTP relay (docs/architecture/secrets.md, 外部服務, SMTP 帳密). The sender
+# (smtp.from) is in the private values; the Secret trustiot-smtp holds username "resend" and the
+# API key that may only send, from the sending domain only.
+smtp:
+  host: smtp.resend.com
+  # STARTTLS on 587; if 587 is blocked, 2587 with starttls, or 465 with tls.
+  port: 587
+  security: starttls
+  credentialsSecret:
+    name: trustiot-smtp
+
+observability:
+  sentry:
+    # No Sentry project for the demo: errors stay in the logs in ClickHouse.
+    enabled: false

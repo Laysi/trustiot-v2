@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
+  APP_DIR,
+  CHART_SOURCE_FILE,
+  CLUSTER_DIR,
+  CLUSTERS,
+  SHAPE_VALUES_FILE,
+  appDir,
+  chartSourceFile,
+  clusterDir,
   deployBranch,
   exactPattern,
   isNewerRelease,
@@ -7,6 +15,7 @@ import {
   parseShapeValues,
   renderChartSource,
   renderShapeValues,
+  shapeValuesFile,
 } from "./flux.ts";
 import { REGISTRY, signingIdentity } from "./lib.ts";
 
@@ -50,6 +59,27 @@ describe("chart source", () => {
     expect(() => parseChartSource(text.replace(DIGEST, "sha256:short"), REPOSITORY, CHART)).toThrow(/not a sha256 digest/);
     expect(() => parseChartSource(text.replace("tag: 1.2.0", "tag: latest"), REPOSITORY, CHART)).toThrow(/not a release tag/);
     expect(() => parseChartSource("{", REPOSITORY, CHART)).toThrow();
+  });
+
+  test("errors name the file of the cluster that was read", () => {
+    const text = renderChartSource(source).replace("provider: cosign", "provider: notation");
+    expect(() => parseChartSource(text, REPOSITORY, CHART, chartSourceFile("demo"))).toThrow(
+      "deploy/flux/clusters/demo/trustiot/chart.yaml is not what scripts/release/flux.ts renders",
+    );
+    expect(() => parseShapeValues("global: {}\n", shapeValuesFile("demo"))).toThrow(
+      'deploy/flux/clusters/demo/trustiot/values-saas.yaml has no "Copied by release.yml" header',
+    );
+  });
+
+  test("each cluster has its own directory under deploy/flux/clusters, and the SaaS paths keep their names", () => {
+    expect(CLUSTERS.map((cluster) => chartSourceFile(cluster))).toEqual([
+      "deploy/flux/clusters/saas/trustiot/chart.yaml",
+      "deploy/flux/clusters/demo/trustiot/chart.yaml",
+    ]);
+    expect(CHART_SOURCE_FILE).toBe(chartSourceFile("saas"));
+    expect(SHAPE_VALUES_FILE).toBe(shapeValuesFile("saas"));
+    expect(APP_DIR).toBe(appDir("saas"));
+    expect(CLUSTER_DIR).toBe(clusterDir("saas"));
   });
 
   test("refuses versions that are not release versions", () => {
