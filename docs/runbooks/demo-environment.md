@@ -33,7 +33,7 @@
   讀回的設定不符，或 `check --stage 2` 失敗（關卡不通過或探測失敗）時，把指向入口的路由改回 `http_status:418`，查清楚再重來。
 
   第 1 段的 `check` 不跑這個關卡，那時路由還是 connector 自己的 418。`status` 也印出同樣的比對（`OK` 或 `FAIL`），但它只是報告：照樣以 0 結束，也不印 origin，不能取代 `route-origin`。關卡不通過時不切換路由，已切換的先改回 `http_status:418`，再依原因處理：
-  - values 沒有位址：values 還沒設定（Laysi/trustiot-v2#480），或工作站的 checkout 不是審查過的 commit。
+  - values 沒有位址：工作站的 checkout 早於設定位址的 Laysi/trustiot-v2#480，或不是審查過的 commit。
   - ConfigMap 沒有位址，或與 values 不同：叢集部署的不是這個 commit（Flux 還沒套用新的 values，或工作站的 checkout 不是部署的那個 commit）。等 Flux 套用，或改用部署的 commit 的 checkout，再比對一次。
   - ConfigMap 與 Service 不同：Service 在設定位址之前就建立了，或改位址只做到一半。這時 Istio 不再更新這個 Service，Gateway 的狀態也看不出來（`deploy/chart/README.md` 的「固定的入口 ClusterIP」），照該節「改位址」的第 3 到 5 步重建 Service。
   - 沒有 Service、不只一個，或那個 Service 不是 Istio 為 Gateway 產生的（名稱、ownerReference、類型或埠不對）：入口還沒部署好（Gateway 不是 `Programmed`），或有別的 Service 帶著同一個 label。查清楚之前，路由不指向任何一個。

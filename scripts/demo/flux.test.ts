@@ -146,21 +146,13 @@ afterEach(() => {
 
 // --- A copy of the repository files the script reads ---------------------------------------------
 
-const FILES = [
-  KNOWN_HOSTS_FILE,
-  ".sops.yaml",
-  `${DEMO}/chart.yaml`,
-  `${DEMO}/helm-release.yaml`,
-  `${DEMO}/kustomization.yaml`,
-  `${DEMO}/values-demo.yaml`,
-  `${DEMO}/values-saas.yaml`,
-  `${DEMO}/trustiot-demo-values.sops.yaml`,
-];
+/** What readRepo reads outside the demo directory; mainAsIs copies the demo directory whole, SOPS files included. */
+const FILES = [KNOWN_HOSTS_FILE, ".sops.yaml"];
 
-/** main as it is (2026-10-21): no ghcr-pull.sops.yaml, the placeholder chart, no ingress ClusterIP. */
+/** main as it is: since Laysi/trustiot-v2#480 the chart, the ingress ClusterIP and ghcr-pull.sops.yaml are in place. */
 function mainAsIs(): string {
   const root = tempDir("demo-flux-repo-");
-  for (const file of FILES) {
+  for (const file of [...FILES, ...readdirSync(join(ROOT, DEMO)).map((name) => `${DEMO}/${name}`)]) {
     mkdirSync(dirname(join(root, file)), { recursive: true });
     copyFileSync(join(ROOT, file), join(root, file));
   }
@@ -198,9 +190,21 @@ function setClusterIp(root: string, value: string): void {
   appendFileSync(join(root, DEMO, "values-demo.yaml"), `\ningress:\n  tunnel:\n    clusterIP: ${value}\n`);
 }
 
-/** main as the install needs it: a chart after the minimum, the ClusterIP pinned, the pull Secret on main. */
-function mainReady(version = "0.0.0-rc.9"): string {
+/** main before Laysi/trustiot-v2#480: the placeholder chart, no ingress ClusterIP, no ghcr-pull.sops.yaml. */
+function mainUnready(): string {
   const root = mainAsIs();
+  pinChart(root, "0.0.0-rc.7");
+  const values = join(root, DEMO, "values-demo.yaml");
+  writeFileSync(values, readFileSync(values, "utf8").replace(/^ingress:\n(?: .*\n)*\n?/m, ""));
+  rmSync(join(root, DEMO, "ghcr-pull.sops.yaml"));
+  const kustomization = join(root, DEMO, "kustomization.yaml");
+  writeFileSync(kustomization, readFileSync(kustomization, "utf8").replace("  - ghcr-pull.sops.yaml\n", ""));
+  return root;
+}
+
+/** main as the install needs it: a chart after the minimum, the ClusterIP pinned, the pull Secret on main. */
+function mainReady(version = "0.0.0-rc.10"): string {
+  const root = mainUnready();
   pinChart(root, version);
   setClusterIp(root, CLUSTER_IP);
   addPullSecret(root);
@@ -241,10 +245,10 @@ describe("redact", () => {
       "kubernetes.default.svc",
       "stat deploy/flux/clusters/demo/trustiot/kustomization.yaml",
       "trustiot-demo-values.sops.yaml",
-      "trustiot-0.0.0-rc.9.tgz",
+      "trustiot-0.0.0-rc.10.tgz",
       "deployment.apps/source-controller, job.batch/trustiot-migrate, configmap/kube-root-ca.crt",
       "keys identity, identity.pub, known_hosts; age.agekey",
-      "Helm install succeeded for release trustiot/trustiot.v1 with chart trustiot@0.0.0-rc.9+bbbbbbbbbbbb",
+      "Helm install succeeded for release trustiot/trustiot.v1 with chart trustiot@0.0.0-rc.10+bbbbbbbbbbbb",
       `main@sha1:${CLEAN.head}, ${DIGEST}, at 2026-10-21T13:07:10.226Z, k3s v1.36.5+k3s1`,
     ].join("\n");
     expect(redact(kept)).toBe(kept);
@@ -617,8 +621,14 @@ describe("requiredSecrets", () => {
 });
 
 describe("readRepo", () => {
-  test("main as it is today: the placeholder chart, no ClusterIP and no pull Secret are refused", async () => {
+  test("main as it is today is ready for the install", async () => {
     const repo = await readRepo(mainAsIs(), CLEAN, build);
+    expect([...repo.code, ...repo.flux, ...repo.deploy]).toEqual([]);
+    expect(Object.keys(repo.secrets)).toContain("ghcr-pull");
+  });
+
+  test("main before Laysi/trustiot-v2#480: the placeholder chart, no ClusterIP and no pull Secret are refused", async () => {
+    const repo = await readRepo(mainUnready(), CLEAN, build);
     expect(repo.code).toEqual([]);
     expect(repo.flux).toEqual([]);
     expect(repo.deploy).toHaveLength(3);
@@ -633,15 +643,16 @@ describe("readRepo", () => {
   test("main ready for the install has no problems", async () => {
     const repo = await readRepo(mainReady(), CLEAN, build);
     expect([...repo.code, ...repo.flux, ...repo.deploy]).toEqual([]);
-    expect(repo.chart).toEqual({ version: "0.0.0-rc.9", digest: DIGEST });
+    expect(repo.chart).toEqual({ version: "0.0.0-rc.10", digest: DIGEST });
     expect(repo.clusterIp).toBe(CLUSTER_IP);
     expect(Object.keys(repo.secrets).sort()).toEqual(["ghcr-pull", "trustiot-demo-values"]);
     expect(repo.manifests?.objects).toHaveLength(27);
   });
 
-  test("(a) orders release candidates by number: rc.10 is after rc.8, rc.7 is before", async () => {
-    expect((await readRepo(mainReady("0.0.0-rc.10"), CLEAN, build)).deploy).toEqual([]);
+  test("(a) orders release candidates by number: rc.9 is before rc.10, rc.11 is after", async () => {
+    expect((await readRepo(mainReady("0.0.0-rc.11"), CLEAN, build)).deploy).toEqual([]);
     expect((await readRepo(mainReady(DEMO_MIN_CHART_VERSION), CLEAN, build)).deploy).toEqual([]);
+    expect((await readRepo(mainReady("0.0.0-rc.9"), CLEAN, build)).deploy[0]).toContain("pins chart 0.0.0-rc.9, older than");
     expect((await readRepo(mainReady("0.0.0-rc.7"), CLEAN, build)).deploy[0]).toContain("pins chart 0.0.0-rc.7, older than");
     expect((await readRepo(mainReady("0.0.1"), CLEAN, build)).deploy).toEqual([]);
   });
@@ -655,8 +666,8 @@ describe("readRepo", () => {
 
   test("the ClusterIP must be a valid IPv4 address", async () => {
     for (const bad of ["10.43.0.256", "auto", '""']) {
-      const root = mainAsIs();
-      pinChart(root, "0.0.0-rc.9");
+      const root = mainUnready();
+      pinChart(root, "0.0.0-rc.10");
       addPullSecret(root);
       setClusterIp(root, bad);
       const deploy = (await readRepo(root, CLEAN, build)).deploy;
@@ -666,8 +677,8 @@ describe("readRepo", () => {
   });
 
   test("(e) a needed SOPS file that kustomization.yaml does not list, or that is not encrypted, is refused", async () => {
-    const unlisted = mainAsIs();
-    pinChart(unlisted, "0.0.0-rc.9");
+    const unlisted = mainUnready();
+    pinChart(unlisted, "0.0.0-rc.10");
     setClusterIp(unlisted, CLUSTER_IP);
     addPullSecret(unlisted, false);
     expect((await readRepo(unlisted, CLEAN, build)).deploy).toEqual([`${DEMO}/kustomization.yaml does not list ghcr-pull.sops.yaml, so Flux does not apply Secret ghcr-pull (the OCIRepository pulls the chart with it)`]);
@@ -835,17 +846,17 @@ describe("readiness", () => {
   });
 
   const at = (status: Record<string, unknown>) => ({ ...object("True"), status: { ...object("True").status, ...status } });
-  const wanted = wantedRevisions(CLEAN.head, { version: "0.0.0-rc.9", digest: DIGEST });
+  const wanted = wantedRevisions(CLEAN.head, { version: "0.0.0-rc.10", digest: DIGEST });
 
   test("wantedRevisions names main's commit, the chart's digest and the version helm-controller records", () => {
-    expect(wanted).toEqual({ git: `main@sha1:${CLEAN.head}`, chartDigest: DIGEST, release: `0.0.0-rc.9+${"b".repeat(12)}` });
+    expect(wanted).toEqual({ git: `main@sha1:${CLEAN.head}`, chartDigest: DIGEST, release: `0.0.0-rc.10+${"b".repeat(12)}` });
   });
 
   test("revisionOf reads each kind's revision, the chart digest from either form, and only a deployed release", () => {
     expect(revisionOf("git", at({ artifact: { revision: wanted.git } }))).toBe(wanted.git);
     expect(revisionOf("kustomization", at({ lastAppliedRevision: wanted.git }))).toBe(wanted.git);
     expect(revisionOf("chart", at({ artifact: { revision: DIGEST } }))).toBe(DIGEST);
-    expect(revisionOf("chart", at({ artifact: { revision: `0.0.0-rc.9@${DIGEST}` } }))).toBe(DIGEST);
+    expect(revisionOf("chart", at({ artifact: { revision: `0.0.0-rc.10@${DIGEST}` } }))).toBe(DIGEST);
     expect(revisionOf("release", at({ history: [{ chartVersion: wanted.release, status: "deployed" }] }))).toBe(wanted.release);
     expect(revisionOf("release", at({ history: [{ chartVersion: wanted.release, status: "failed" }, { chartVersion: "0.0.0-rc.8+c", status: "superseded" }] }))).toBe("");
     for (const kind of ["git", "kustomization", "chart", "release"] as const) expect(revisionOf(kind, undefined)).toBe("");
@@ -1047,8 +1058,8 @@ describe("planInstall", () => {
   };
 
   test("(a), (e) and the ClusterIP: main's problems are refusals", async () => {
-    const asIs = await readRepo(mainAsIs(), CLEAN, build);
-    const refusals = planInstall(asIs, readyCluster(asIs), { kind: "free" }, okAge).refusals;
+    const unready = await readRepo(mainUnready(), CLEAN, build);
+    const refusals = planInstall(unready, readyCluster(unready), { kind: "free" }, okAge).refusals;
     expect(refusals).toHaveLength(3);
     expect(refusals.join("\n")).toContain("older than");
     expect(refusals.join("\n")).toContain("ghcr-pull.sops.yaml is not on main");
@@ -1564,7 +1575,7 @@ class FakeFlux implements FluxOps {
   /** Polls a deleted object stays (helm-controller uninstalling). */
   deletePolls = 2;
   /** What Flux reports for the chart once it caught up: its digest, the deployed chart. */
-  revisions = { chart: DIGEST, release: `0.0.0-rc.9+${"b".repeat(12)}` };
+  revisions = { chart: DIGEST, release: `0.0.0-rc.10+${"b".repeat(12)}` };
   /** Polls an object stays Ready=True at an older revision (after its pollsUntilReady), by resource name. */
   pollsAtOldRevision: Record<string, number> = {};
   /** HelmRelease polls after a reconcile request that still show the request unhandled. */
@@ -1854,10 +1865,10 @@ describe("runs", () => {
       expect(turned.calls).toEqual(["sops-age check", "sops-age check", "lock install", "release"]);
     });
 
-    test("main as it is today is refused", async () => {
-      const asIs = mainAsIs();
+    test("main before Laysi/trustiot-v2#480 is refused", async () => {
+      const unready = mainUnready();
       const fake = new FakeFlux(readyCluster(repo), okAge());
-      await expect(runInstall(fake, log, OPTIONS, { repo: () => readRepo(asIs, CLEAN, build) })).rejects.toThrow("3 refusals above");
+      await expect(runInstall(fake, log, OPTIONS, { repo: () => readRepo(unready, CLEAN, build) })).rejects.toThrow("3 refusals above");
     });
 
     test("--apply needs the code of the plan", async () => {
@@ -1877,14 +1888,14 @@ describe("runs", () => {
       expect(fake.bootstrap).toEqual(pinnedBootstrap(repo.manifests!, HEAD));
       expect(fake.gitRef).toEqual({ branch: "main" });
       const text = logText();
-      expect(text).toContain("HelmRelease trustiot/trustiot at 0.0.0-rc.9+bbbbbbbbbbbb: Ready=False Progressing: working");
-      expect(text).toContain("HelmRelease trustiot/trustiot at 0.0.0-rc.9+bbbbbbbbbbbb: Ready=True Succeeded: ok");
+      expect(text).toContain("HelmRelease trustiot/trustiot at 0.0.0-rc.10+bbbbbbbbbbbb: Ready=False Progressing: working");
+      expect(text).toContain("HelmRelease trustiot/trustiot at 0.0.0-rc.10+bbbbbbbbbbbb: Ready=True Succeeded: ok");
       expect(text).toContain(`requested a reconcile of HelmRelease trustiot/trustiot (${RECONCILE_ANNOTATION}=1970-01-01T00:00:`);
       expect(text).toContain(`removed the pin of GitRepository flux-system/flux-system to ${HEAD}: Flux follows main again`);
       expect(text).toContain(`GitRepository flux-system/flux-system following main: Ready=True Succeeded: ok; at main@sha1:${HEAD}`);
       expect(text).not.toContain("main moved on");
       expect(text).toContain("pulled:   the same");
-      expect(text).toContain(`deployed: the same (0.0.0-rc.9+${"b".repeat(12)} (deployed))`);
+      expect(text).toContain(`deployed: the same (0.0.0-rc.10+${"b".repeat(12)} (deployed))`);
       expect(text).toContain("trustiot-identity-abc Running");
       expect(fake.time).toBe(4 * POLL_MS);
     });
@@ -1987,7 +1998,7 @@ describe("runs", () => {
       expect(logText()).not.toContain("remove the pin");
       await runInstall(fake, log, { ...OPTIONS, apply: true, confirm: codeOf() }, inputs);
       expect(fake.calls).toEqual(["sops-age check", "sops-age check", "lock install", "sops-age check", `request reconcile ${HELM_RELEASE} trustiot/trustiot`, "release"]);
-      expect(logText()).toContain("HelmRelease trustiot/trustiot at 0.0.0-rc.9+bbbbbbbbbbbb: Ready=True");
+      expect(logText()).toContain("HelmRelease trustiot/trustiot at 0.0.0-rc.10+bbbbbbbbbbbb: Ready=True");
     });
 
     test("(L2) a suspended root Kustomization, GitRepository or HelmRelease is refused", async () => {
@@ -2114,7 +2125,7 @@ describe("runs", () => {
       expect(text).toContain(`GitRepository flux-system/flux-system at main@sha1:${HEAD}: Ready=True Succeeded: ok (generation 1 not observed yet)`);
       expect(text).toContain(`Kustomization flux-system/flux-system at main@sha1:${HEAD}: Ready=True Succeeded: ok; at main@sha1:${OLD}`);
       expect(text).toContain(`OCIRepository trustiot/trustiot at ${DIGEST}: Ready=True Succeeded: ok; at sha256:${"d".repeat(64)}, waiting for ${DIGEST}`);
-      expect(text).toContain(`HelmRelease trustiot/trustiot at 0.0.0-rc.9+bbbbbbbbbbbb: Ready=True Succeeded: ok; at 0.0.0-rc.8+cccccccccccc, waiting for 0.0.0-rc.9+bbbbbbbbbbbb`);
+      expect(text).toContain(`HelmRelease trustiot/trustiot at 0.0.0-rc.10+bbbbbbbbbbbb: Ready=True Succeeded: ok; at 0.0.0-rc.8+cccccccccccc, waiting for 0.0.0-rc.10+bbbbbbbbbbbb`);
       expect(fake.time).toBe(5 * POLL_MS);
     });
 
@@ -2122,9 +2133,9 @@ describe("runs", () => {
       const stuck = new FakeFlux(readyCluster(repo), okAge());
       await expect(
         dryRunThenApply(stuck, () => {
-          stuck.revisions.release = `0.0.0-rc.9+${"f".repeat(12)}`;
+          stuck.revisions.release = `0.0.0-rc.10+${"f".repeat(12)}`;
         }),
-      ).rejects.toThrow(`timed out after ${WAITS.release / 60_000} min waiting for HelmRelease trustiot/trustiot at 0.0.0-rc.9+bbbbbbbbbbbb`);
+      ).rejects.toThrow(`timed out after ${WAITS.release / 60_000} min waiting for HelmRelease trustiot/trustiot at 0.0.0-rc.10+bbbbbbbbbbbb`);
       expect(stuck.calls.at(-1)).toBe("release");
     });
 
@@ -2151,7 +2162,7 @@ describe("runs", () => {
         dryRunThenApply(fake, () => {
           fake.stalled.add(HELM_RELEASE);
         }),
-      ).rejects.toThrow("gave up waiting for HelmRelease trustiot/trustiot at 0.0.0-rc.9+bbbbbbbbbbbb: Stalled RetriesExceeded: install failed");
+      ).rejects.toThrow("gave up waiting for HelmRelease trustiot/trustiot at 0.0.0-rc.10+bbbbbbbbbbbb: Stalled RetriesExceeded: install failed");
       expect(fake.time).toBe(0);
     });
 
