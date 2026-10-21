@@ -226,17 +226,25 @@ describe("ci.yml", () => {
     const listed = Bun.spawnSync(["git", "ls-files", "-z"], { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
     expect(listed.exitCode).toBe(0);
     // What the jobs build, run or import: the Rust workspace, deploy/ (chart, flux, host installer
-    // with its package.json scripts, images), the scripts the chart, flux and image tests import
+    // with its package.json scripts, images), the single-page app (frontend/, with its package.json
+    // scripts and vite.config.ts), the scripts the chart, flux and image tests import
     // (scripts/ci/changes.test.ts checks those imports against the path rules), and the local
     // actions.
-    const prefixes = [".github/actions/", "crates/", "services/", "tools/", "edge/", "factory/", "deploy/", "scripts/lib/", "scripts/flux/"];
+    const prefixes = [".github/actions/", "crates/", "services/", "tools/", "edge/", "factory/", "deploy/", "frontend/", "scripts/lib/", "scripts/flux/"];
     const files = new Set(["scripts/release/exec.ts", "scripts/release/flux.ts", "scripts/release/lib.ts", "scripts/ci/check-secret-handling.ts"]);
-    const code = /\.(?:rs|ts|js|mjs|cjs|json|sh|ya?ml|toml|tpl|sql)$|(?:^|\/)(?:Containerfile|Dockerfile)[^/]*$/;
+    const code = /\.(?:rs|tsx?|js|mjs|cjs|json|sh|ya?ml|toml|tpl|sql)$|(?:^|\/)(?:Containerfile|Dockerfile)[^/]*$/;
     const scanned = listed.stdout
       .toString()
       .split("\0")
       .filter((path) => (files.has(path) || prefixes.some((prefix) => path.startsWith(prefix))) && code.test(path));
-    for (const expected of ["deploy/host/package.json", "deploy/images/postgres/Containerfile", ...files]) {
+    for (const expected of [
+      "deploy/host/package.json",
+      "deploy/images/postgres/Containerfile",
+      "frontend/package.json",
+      "frontend/vite.config.ts",
+      "frontend/src/main.tsx",
+      ...files,
+    ]) {
       expect(scanned).toContain(expected);
     }
     // check-secret-handling.ts names `github.sha` in a message as a value it accepts in build
@@ -246,7 +254,7 @@ describe("ci.yml", () => {
       .map((path) => {
         const source = readFileSync(join(ROOT, path), "utf8");
         // Comments explain; only code counts (JavaScript and TypeScript comments).
-        const code = /\.[cm]?[jt]s$/.test(path) ? source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "") : source;
+        const code = /\.[cm]?[jt]sx?$/.test(path) ? source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "") : source;
         return { path, found: [...(code.match(EVENT_DEPENDENT) ?? [])] };
       })
       .filter(({ path, found }) => found.some((match) => !(allowed[path] ?? []).includes(match)));
