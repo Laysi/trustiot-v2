@@ -264,6 +264,8 @@ describe("discoverImages", () => {
     expect(images).toContainEqual({ kind: "rust", name: "migrate", package: "migrate" });
     // Laysi/trustiot-v2#308: the identity service ships as the chart's `identity` service.
     expect(images).toContainEqual({ kind: "rust", name: "identity", package: "identity" });
+    // Laysi/trustiot-v2#123: the web service ships with the SPA's build output.
+    expect(images).toContainEqual({ kind: "rust", name: "web", package: "web", staticSite: "frontend" });
   });
 });
 

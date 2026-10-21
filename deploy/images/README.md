@@ -11,6 +11,7 @@ release.yml 發佈的容器映像。每個子目錄是一個映像，目錄名�
 | `assets` | 資產服務（`services/assets`），chart 的 `services.assets`；2026-10-14 加入（Laysi/trustiot-v2#65），nightly 從原始碼建置它並經入口呼叫它的 API |
 | `identity` | 身分服務（`services/identity`），chart 的 `services.identity`；2026-10-11 加入（Laysi/trustiot-v2#308），arm64 啟動驗證見[測試報告](../../docs/test-reports/2026-10-11-308-identity-image.md)；nightly 從 Laysi/trustiot-v2#65 起從原始碼建置並部署它 |
 | `migrate` | migration Job（`tools/migrate`），chart 的 `migrate.image`；Job 執行 `migrate run`，每個服務 pod 的 init container 執行 `migrate wait-for-job`，叢集內 ClickHouse 的 init container 執行 `migrate clickhouse-admin-password`（Laysi/trustiot-v2#403），身分服務 pod 的 init container 執行 `migrate identity-signing-keys`（Laysi/trustiot-v2#404）。2026-10-13 加入（Laysi/trustiot-v2#60），nightly 從原始碼建置它 |
+| `web` | web 服務（`services/web`）加上 SPA（`frontend/`）的建置結果，chart 的 `services.web`；2026-10-21 加入（Laysi/trustiot-v2#123），見下方「帶靜態網站的 Rust 服務」 |
 
 發佈的 chart 以 digest 固定它部署的映像：`postgres`、`migrate`，以及名稱是 chart `services` 的 key 的映像（`scripts/release/chart-images.ts`，見 [chart README](../chart/README.md)「映像的 digest」）。chart 不部署的映像要列在該檔的 `NOT_DEPLOYED_BY_CHART`，否則發佈停止，`bun test scripts` 也會失敗。
 

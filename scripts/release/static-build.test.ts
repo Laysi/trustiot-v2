@@ -58,6 +58,13 @@ describe("the rules of services/web", () => {
     expect(bytes).toBe(MAX_SITE_BYTES);
   });
 
+  test("are the extensions that frontend's check:dist allows", async () => {
+    // C1 of Laysi/trustiot-v2#123: the build output check and the service agree on file types.
+    const checkDist = join(ROOT, "frontend/scripts/check-dist.ts");
+    const { ALLOWED_EXTENSIONS } = (await import(checkDist)) as { ALLOWED_EXTENSIONS: ReadonlySet<string> };
+    expect([...ALLOWED_EXTENSIONS].toSorted()).toEqual([...SITE_EXTENSIONS].toSorted());
+  });
+
   test("accept the fixture site that services/web's tests serve", () => {
     expect(staticSiteProblems(join(ROOT, "services/web/tests/fixtures/site"))).toEqual([]);
   });
