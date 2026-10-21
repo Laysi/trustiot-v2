@@ -18,7 +18,8 @@ pub const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; 
                        frame-ancestors 'none'; object-src 'none'";
 
 /// Trusted Types, reported only (the browser's console) until the first real pages have been
-/// checked in a browser; then it moves into [`CSP`].
+/// checked in a browser, the AI reply's Markdown rendering among them (frontend/README.md,
+/// 「CSP 的限制」); then it moves into [`CSP`].
 pub const CSP_REPORT_ONLY: &str = "require-trusted-types-for 'script'; trusted-types 'none'";
 
 /// Not `no-referrer`: with it browsers send `Origin: null` on every request that is not GET or

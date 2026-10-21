@@ -28,7 +28,7 @@ HEAD 的標頭與 GET 相同（包括 `Content-Length`），沒有 body。ETag �
 | 標頭 | 值 | 理由 |
 | --- | --- | --- |
 | `Content-Security-Policy` | `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'` | 只執行、載入與連線到自己的檔案：沒有 inline 的腳本或樣式、沒有 `eval`、沒有 `data:`（`frontend/tools/check-dist.ts` 讓建置結果不含這些）；API 與事件串流在同一個主機（決策 2），`connect-src 'self'` 就夠 |
-| `Content-Security-Policy-Report-Only` | `require-trusted-types-for 'script'; trusted-types 'none'` | Trusted Types 先只回報（瀏覽器主控台），第一批真正的頁面在瀏覽器檢查過後移進上一列 |
+| `Content-Security-Policy-Report-Only` | `require-trusted-types-for 'script'; trusted-types 'none'` | Trusted Types 先只回報（瀏覽器主控台），第一批真正的頁面在瀏覽器檢查過後移進上一列；檢查要包含 AI 回覆的 Markdown 渲染（見 `frontend/README.md` 的「CSP 的限制」） |
 | `X-Content-Type-Options` | `nosniff` | 瀏覽器只照 `Content-Type` 解讀 |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` | 跨站時只送 origin。不用 `no-referrer`：在它之下瀏覽器對 GET、HEAD 以外的請求送 `Origin: null`，SPA 自己的 POST 也是，身分服務的跨站檢查會拒絕（[secrets.md](../../docs/architecture/secrets.md)「不放網址」） |
 | `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=(), usb=()` | SPA 不用這些瀏覽器功能 |
