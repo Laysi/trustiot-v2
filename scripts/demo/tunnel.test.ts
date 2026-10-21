@@ -1165,8 +1165,9 @@ describe("tunnel.ts: check", () => {
       ["app", "/auth/login"],
       ["app", "/healthz"],
     ]);
-    // The table has these four keys and no other: an ota entry would need a bypass here.
-    expect([...table.matchAll(/\(dict "key" "(\w+)" "host" "(\w+)"/g)].map((m) => `${m[1]} ${m[2]}`)).toEqual(["login app", "healthCheck app", "certRenewal gateway", "mqtt gateway"]);
+    // The table has these four keys, plus the SPA's static files on app (services.web), which
+    // Access stops like every app path, and no other: an ota entry would need a bypass here.
+    expect([...table.matchAll(/\(dict "key" "(\w+)" "host" "(\w+)"/g)].map((m) => `${m[1]} ${m[2]}`)).toEqual(["login app", "healthCheck app", "certRenewal gateway", "mqtt gateway", "spa app"]);
   });
 
   test("check records the outcomes per stage, and prints no host name, team domain or home directory, also from curl's errors", async () => {

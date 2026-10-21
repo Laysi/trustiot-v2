@@ -17,6 +17,10 @@
 //   rather than guessed.
 // - Paths are those the gateway compares after the mesh's path normalization
 //   (deploy/istio/README.md), so the requests here are already normalized.
+// - A request a DENY policy refuses (/internal) never reaches a route, whatever the check says.
+// - A checked request on a route the identity service has no cookie route for gets no token:
+//   the identity service refuses it (403, services/identity/src/audience.rs, which matches the
+//   cookie routes the way routeFor does), so it never reaches that route's backend.
 
 export interface RouteRule {
   hostname: string;
@@ -47,11 +51,12 @@ export interface Request {
   path: string;
 }
 
-/** A public path that decision 27 lists: no cookie on this host and path. */
-export interface Exception {
-  hostname: string;
-  path: string;
-}
+/**
+ * An exception that decision 27 lists: no cookie on this host and exact path, or (the SPA's
+ * static files) on every path of the host outside the given prefixes, each prefix itself and
+ * every path below it.
+ */
+export type Exception = { hostname: string; path: string } | { hostname: string; outside: string[] };
 
 /** Istio's string match: exact, `*`, prefix `abc*` or suffix `*abc`. */
 export function istioMatches(pattern: string, value: string, ignoreCase = false): boolean {
@@ -109,9 +114,22 @@ export function routeFor(routes: RouteRule[], request: Request): RouteRule | und
     .sort((a, b) => b.path.length - a.path.length)[0];
 }
 
-/** The requests that reach each route: its own path, one below a prefix, and every exception path. */
+/**
+ * The requests that reach each route: its own path, one below a prefix, and every exception path;
+ * for an exception outside prefixes, paths on both sides of each prefix's boundary.
+ */
 export function sampleRequests(routes: RouteRule[], exceptions: Exception[], ports: number[]): Request[] {
-  const paths = new Set<string>(exceptions.map((exception) => exception.path));
+  const paths = new Set<string>();
+  for (const exception of exceptions) {
+    if ("path" in exception) {
+      paths.add(exception.path);
+      continue;
+    }
+    for (const path of ["/", "/x", "/static/app.js", "/internal", "/internal/x"]) paths.add(path);
+    for (const prefix of exception.outside) {
+      for (const path of [prefix, `${prefix}/`, `${prefix}/x`, `${prefix}x`, `${prefix.toUpperCase()}/x`]) paths.add(path);
+    }
+  }
   for (const route of routes) {
     paths.add(route.path);
     if (route.match === "PathPrefix") paths.add(route.path === "/" ? "/x" : `${route.path}/x`);
@@ -126,29 +144,52 @@ export function sampleRequests(routes: RouteRule[], exceptions: Exception[], por
   return requests;
 }
 
+/** The exception a request falls under: one with its exact path, or one outside prefixes. */
+function exceptionFor(exceptions: Exception[], request: Request): Exception | undefined {
+  const onHost = exceptions.filter((exception) => exception.hostname.toLowerCase() === hostnameOf(request.host));
+  return (
+    onHost.find((exception) => "path" in exception && exception.path === request.path) ??
+    onHost.find((exception) => "outside" in exception && !exception.outside.some((prefix) => prefixMatches(prefix, request.path)))
+  );
+}
+
 /**
  * Every way the routes and the cookie check disagree with decision 27, as messages; empty when
  * every request a route serves is checked except exactly the listed exceptions, which are not.
+ * An exception outside prefixes holds only on a PathPrefix public route (the SPA's): an exact
+ * public route it covers is still a public route nobody listed. denyRules are the rules of the
+ * gateway's DENY policies.
  */
-export function routeListProblems(routes: RouteRule[], checkRules: PolicyRule[], exceptions: Exception[], ports: number[]): string[] {
+export function routeListProblems(
+  routes: RouteRule[],
+  checkRules: PolicyRule[],
+  exceptions: Exception[],
+  ports: number[],
+  denyRules: PolicyRule[] = [],
+): string[] {
   const problems: string[] = [];
-  const isException = (request: Request) =>
-    exceptions.some((exception) => exception.hostname.toLowerCase() === hostnameOf(request.host) && exception.path === request.path);
+  const cookieRoutes = routes.filter((route) => !route.public);
   for (const request of sampleRequests(routes, exceptions, ports)) {
+    if (policyApplies(denyRules, request)) continue;
     const route = routeFor(routes, request);
     const checked = policyApplies(checkRules, request);
+    const exception = exceptionFor(exceptions, request);
     const where = `${request.host}${request.path}`;
     if (route === undefined) {
       // The gateway answers 404 without a backend; an exception must have its route, though.
-      if (isException(request)) problems.push(`${where}: a listed exception has no route`);
+      if (exception !== undefined) problems.push(`${where}: a listed exception has no route`);
       continue;
     }
     if (route.public) {
-      if (!isException(request)) problems.push(`${where}: served by the public route ${route.hostname}${route.path}, which is not a listed exception`);
-      else if (checked) problems.push(`${where}: a listed exception, but the cookie check applies to it`);
+      const listed = exception !== undefined && ("path" in exception || route.match === "PathPrefix");
+      if (!listed) {
+        // Checked, and no cookie route for the identity service to sign a token for: refused.
+        if (checked && routeFor(cookieRoutes, request) === undefined) continue;
+        problems.push(`${where}: served by the public route ${route.hostname}${route.path}, which is not a listed exception`);
+      } else if (checked) problems.push(`${where}: a listed exception, but the cookie check applies to it`);
     } else if (!checked) {
       problems.push(`${where}: reaches ${route.backend} through ${route.hostname}${route.path} without the cookie check`);
-    } else if (isException(request)) {
+    } else if (exception !== undefined) {
       problems.push(`${where}: a listed exception, but it is routed to the cookie route ${route.hostname}${route.path}`);
     }
   }
