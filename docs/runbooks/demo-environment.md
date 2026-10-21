@@ -23,11 +23,14 @@
   bun scripts/demo/tunnel.ts route-origin --ssh-host "$DEMO_SSH_HOST"
   ```
 
-  它比對三個位址：工作站 checkout 的 commit 裡 `values-demo.yaml` 的 `ingress.tunnel.clusterIP`（這個檔有未 commit 的變更時不算數）、叢集裡 ConfigMap `trustiot-ingress-options` 的 `service` overlay 的 `clusterIP`，以及 Istio 為 Gateway `trustiot-ingress` 產生的 Service 的 `spec.clusterIP`。這個 Service 以 label `gateway.networking.k8s.io/gateway-name=trustiot-ingress` 找，與 nightly 的 smoke 相同，必須恰好一個，而且確實是 Istio 為這個 Gateway 產生的：名稱是 `trustiot-ingress-istio`、ownerReference 是 Gateway `trustiot-ingress`、類型是 `ClusterIP`、有 80 埠，`clusterIPs` 的第一個就是它的 IPv4 ClusterIP。三者相同之外，位址還必須在叢集 Service 網段的靜態區段內（讀 `kubectl get servicecidr kubernetes`，必須恰好一個 IPv4 網段；讀不到也算不通過）。全部通過時以 0 結束，最後一行印出 `the stage-2 routes' origin: http://<位址>:80`；否則印出 `FAIL` 與原因，不印 origin，以非零結束。原因只寫哪個指令失敗與它的結束碼，不轉貼 ssh、kubectl 或 git 的輸出，所以輸出與記錄（`route-origin` 的 JSON）可以直接放進測試報告；要看錯誤細節，在展示機上自己執行訊息裡的那個指令。切換的步驟：
+  它比對三個位址：工作站 checkout 的 commit 裡 `values-demo.yaml` 的 `ingress.tunnel.clusterIP`（這個檔有未 commit 的變更時不算數）、叢集裡 ConfigMap `trustiot-ingress-options` 的 `service` overlay 的 `clusterIP`，以及 Istio 為 Gateway `trustiot-ingress` 產生的 Service 的 `spec.clusterIP`。這個 Service 以 label `gateway.networking.k8s.io/gateway-name=trustiot-ingress` 找，與 nightly 的 smoke 相同，必須恰好一個，而且確實是 Istio 為這個 Gateway 產生的：名稱是 `trustiot-ingress-istio`、ownerReference 是 Gateway `trustiot-ingress`、類型是 `ClusterIP`、有 80 埠，`clusterIPs` 的第一個就是它的 IPv4 ClusterIP。三者相同之外，位址還必須在叢集 Service 網段的靜態區段內（讀 `kubectl get servicecidr kubernetes`，必須恰好一個 IPv4 網段；讀不到也算不通過）。全部通過時以 0 結束，最後一行印出 `the stage-2 routes' origin: http://<位址>:80`；否則印出 `FAIL` 與原因，不印 origin，以非零結束。原因只寫哪個指令失敗與它的結束碼，不轉貼 ssh、kubectl 或 git 的輸出，所以比對的那幾行與 `route-origin` 的 JSON 紀錄可以直接放進測試報告；要看錯誤細節，在展示機上自己執行訊息裡的那個指令。其他的 `ERROR` 與 `WARNING` 行（例如讀維運 tunnel 的狀態時 ssh 失敗）可能帶 ssh 自己的錯誤訊息，其中有展示機的位址或 ssh 的主機別名，貼出之前先檢查並遮掉。切換的步驟：
 
   1. 在審查過的 commit 的乾淨 checkout，緊接在切換之前執行 `route-origin`。
   2. 只有它以 0 結束才切換。指向入口的每一條路由，origin 都照它最後一行印出的值設定；不要從 values-demo.yaml 或 `status` 抄。
-  3. 以 Cloudflare API 切換之後，馬上執行 `check --stage 2`，中間不做其他步驟。`check --stage 2` 在送出任何請求之前會再跑一次同一個關卡（同一段程式），不通過時不探測就以非零結束，紀錄寫 `probed: false`。它失敗時（關卡不通過或探測失敗），把指向入口的路由改回 `http_status:418`，查清楚再重來。
+  3. 以 Cloudflare API 切換之後，馬上讀回 tunnel 的設定，確認每一條指向入口的路由，`service` 都與 `route-origin` 最後一行印出的 origin 逐字相同（Laysi/trustiot-v2#469）。`check --stage 2` 不讀路由設定；第 2 段裡，兩條略過 Access 的路徑得到 Cloudflare 的 502（connector 連不上 origin）也算通過（WebSocket 的佐證在 Laysi/trustiot-v2#473），所以它不能證明路由用的是這個 origin。
+  4. 接著馬上執行 `check --stage 2`，中間不做其他步驟。`check --stage 2` 在送出任何請求之前會再跑一次同一個關卡（同一段程式），不通過時不探測就以非零結束，紀錄寫 `probed: false`。
+
+  讀回的設定不符，或 `check --stage 2` 失敗（關卡不通過或探測失敗）時，把指向入口的路由改回 `http_status:418`，查清楚再重來。
 
   第 1 段的 `check` 不跑這個關卡，那時路由還是 connector 自己的 418。`status` 也印出同樣的比對（`OK` 或 `FAIL`），但它只是報告：照樣以 0 結束，也不印 origin，不能取代 `route-origin`。關卡不通過時不切換路由，已切換的先改回 `http_status:418`，再依原因處理：
   - values 沒有位址：values 還沒設定（Laysi/trustiot-v2#480），或工作站的 checkout 不是審查過的 commit。
@@ -46,7 +49,7 @@
 
 1. remotely-managed tunnel `trustiot-demo`（`config_src: cloudflare`）。建立後只記下 `id`、`name`、`config_src` 與 `status`。
 2. Access group（受邀名單）、引用它的 reusable policy（include 這個 group，require Google 的登入方式）、涵蓋三個主機名稱的 self-hosted application（只允許 Google 登入、session 24 小時、binding cookie），以及 gateway 主機名稱 `/certs/renew` 與 `/mqtt` 的 Bypass application。
-3. tunnel 的路由（先回 418；入口部署後，照「架構」的「路由」的步驟，改成 `route-origin` 通過時印出的 origin，也就是展示叢集 values 固定的入口 ClusterIP，切換後馬上執行 `check --stage 2`）：兩條略過路徑的錨定規則在前、不要求 JWT，其餘每條都設 `originRequest.access`（team 名稱與三個主機名稱那個 application 的 AUD），最後 catch-all 回 404。
+3. tunnel 的路由（先回 418；入口部署後，照「架構」的「路由」的步驟，改成 `route-origin` 通過時印出的 origin，也就是展示叢集 values 固定的入口 ClusterIP；切換後讀回路由設定，再馬上執行 `check --stage 2`）：兩條略過路徑的錨定規則在前、不要求 JWT，其餘每條都設 `originRequest.access`（team 名稱與三個主機名稱那個 application 的 AUD），最後 catch-all 回 404。
 4. gateway 主機名稱的 configuration rule（Browser Integrity Check 關閉）。
 5. 三筆 proxied CNAME 指向 `<tunnel ID>.cfargotunnel.com`。DNS 紀錄一定在 Access application 之後建立，主機名稱不會有一段沒有保護的時間。
 
@@ -143,7 +146,7 @@ bun scripts/demo/tunnel.ts check --ssh-host "$DEMO_SSH_HOST"              # 路�
 bun scripts/demo/tunnel.ts check --ssh-host "$DEMO_SSH_HOST" --stage 2    # 路由已到入口之後
 ```
 
-第 2 段在送出任何請求之前先跑 `route-origin` 的關卡（「架構」的「路由」），不通過就不探測並以非零結束。切換路由之後馬上執行第 2 段；它失敗時，把指向入口的路由改回 `http_status:418`。
+第 2 段在送出任何請求之前先跑 `route-origin` 的關卡（「架構」的「路由」），不通過就不探測並以非零結束。切換路由、讀回路由設定之後，馬上執行第 2 段；它失敗時，把指向入口的路由改回 `http_status:418`。第 2 段不讀路由設定，不能證明路由用的是 `route-origin` 印出的 origin，這要靠讀回的設定確認。
 
 同一組請求從工作站與展示機（lab 的網路，展示用閘道器也在這裡）各送一次，以 curl 的 HTTP/1.1：
 

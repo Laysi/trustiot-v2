@@ -147,7 +147,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
   2. 改 values 的 `ingress.tunnel.clusterIP` 並部署（GitOps 的叢集開 PR 合併）。這時 Service 仍是舊位址，入口照常運作；istiod 開始記錄 apply 失敗（依原始碼推論，尚未實測：Laysi/trustiot-v2#479）。
   3. 把 tunnel 指向入口的每一條路由改成不到任何 Service 的回應（展示環境是第 1 段的 `http_status:418`，見 `docs/runbooks/demo-environment.md` 的「路由」）。從這一步到第 5 步把路由改到新位址之間，入口斷線。
   4. 確認 ConfigMap `<release>-ingress-options` 的 `service` 已是新位址，然後刪掉 Istio 產生的 Service：`kubectl -n <namespace> delete service <release>-ingress-istio`。Istio 監看它產生的 Service，刪除後立刻依 Gateway 與新的 overlay 重建（依原始碼推論，尚未實測：Laysi/trustiot-v2#479）。
-  5. 確認 `kubectl -n <namespace> get service <release>-ingress-istio -o jsonpath='{.spec.clusterIP}'` 是新位址、Gateway 為 `Programmed` 之後，才把路由改到新位址，再經 tunnel 實際連一次。展示叢集改用 `scripts/demo/tunnel.ts` 的 `route-origin`：它以 0 結束才切換，路由照它印出的 origin 設定，切換後馬上執行 `check --stage 2`（`docs/runbooks/demo-environment.md` 的「路由」）。
+  5. 確認 `kubectl -n <namespace> get service <release>-ingress-istio -o jsonpath='{.spec.clusterIP}'` 是新位址、Gateway 為 `Programmed` 之後，才把路由改到新位址，再經 tunnel 實際連一次。展示叢集改用 `scripts/demo/tunnel.ts` 的 `route-origin`：它以 0 結束才切換，路由照它印出的 origin 設定，切換後讀回路由設定確認，再馬上執行 `check --stage 2`（`docs/runbooks/demo-environment.md` 的「路由」）。
 - 驗證：chart 測試（有設時 overlay 帶這個位址；沒設時與加入這個值之前逐位元組相同；各種無效的值與 `direct` 時設了都被拒絕，有沒有 schema 驗證都一樣）；nightly 的 smoke 部署在 `tunnel` 型態設 `10.43.0.240`，先確認它在 k3d 叢集 Service 網段的靜態區段內、沒有被占用，部署後確認 Istio 產生的 Service 的 `spec.clusterIP` 就是它（`scripts/nightly/ingress-address.ts`）。2026-10-21 的紀錄見 `docs/test-reports/2026-10-21-478-ingress-fixed-cluster-ip.md`。
 
 例外路徑（`ingress.publicPaths`）的規則：
