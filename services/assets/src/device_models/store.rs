@@ -72,14 +72,17 @@ WHERE model_id = $1::uuid
 RETURNING revision, created_at, updated_at";
 
 /// A model and, by the foreign key's cascade, its points. A device that uses the model makes it
-/// fail with SQLSTATE 23503. `$1`: the model ID.
+/// fail: with SQLSTATE 23001 when the referencing key is `ON DELETE RESTRICT` (what devices use),
+/// with 23503 when it is `NO ACTION`. `$1`: the model ID.
 const DELETE_MODEL: &str = "DELETE FROM assets.device_models WHERE model_id = $1::uuid
 RETURNING name, revision";
 
 /// SQLSTATE `unique_violation`.
 const UNIQUE_VIOLATION: &str = "23505";
-/// SQLSTATE `foreign_key_violation`.
+/// SQLSTATE `foreign_key_violation`: a `NO ACTION` foreign key refused the delete.
 const FOREIGN_KEY_VIOLATION: &str = "23503";
+/// SQLSTATE `restrict_violation`: an `ON DELETE RESTRICT` foreign key refused the delete.
+const RESTRICT_VIOLATION: &str = "23001";
 /// The constraint that keeps names unique per tenant.
 const NAME_UNIQUE: &str = "device_models_name_unique";
 
@@ -406,7 +409,9 @@ pub async fn delete(
         .fetch_optional(&mut *tx)
         .await
         .map_err(|error| match violation(&error) {
-            Some((code, _)) if code == FOREIGN_KEY_VIOLATION => StoreError::InUse,
+            Some((code, _)) if code == FOREIGN_KEY_VIOLATION || code == RESTRICT_VIOLATION => {
+                StoreError::InUse
+            }
             _ => StoreError::from(error),
         })?;
     let Some(row) = row else {

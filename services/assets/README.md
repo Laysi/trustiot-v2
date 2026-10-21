@@ -44,7 +44,7 @@
 
 其他錯誤（M1）：沒有有效的內部身分 token 401；沒有租戶或角色不夠 403；`model_id` 不是 UUID 或不是呼叫者租戶的型號 404；寫入的 `Content-Type` 不是 `application/json` 400（跨來源的頁面無法不經 CORS preflight 送出這個型別，所以不能借使用者的 cookie 改型號）；body 超過 2 MiB 400 `body_too_large`；body 不是 JSON 物件 400 `body_invalid`；刪除仍有設備使用的型號 409 `in_use`；租戶的 `identity.tenant_created` 還沒處理 503 `tenant_not_ready`；資料庫出錯 503。每個回應都帶 `cache-control: no-store`。每次成功的寫入記一行 INFO（`created a device model`、`updated a device model`、`deleted a device model`），只帶 `user_id`、`tenant_id`、`model_id`、`revision`，不記名稱、鍵與說明。
 
-**仍被使用的型號不能刪**：`device_model_points` 以外，參照型號的表（設備，Laysi/trustiot-v2#100）必須以 `FOREIGN KEY (tenant_id, model_id) REFERENCES assets.device_models (tenant_id, model_id) ON DELETE RESTRICT` 參照，刪除時資料庫回 SQLSTATE 23503，API 回 409 `in_use`。設備表出現前，`tests/device_models.rs` 以一張同樣參照的替身表驗證這條路。
+**仍被使用的型號不能刪**：`device_model_points` 以外，參照型號的表（設備，Laysi/trustiot-v2#100）必須以 `FOREIGN KEY (tenant_id, model_id) REFERENCES assets.device_models (tenant_id, model_id) ON DELETE RESTRICT` 參照，刪除時資料庫回 SQLSTATE 23001（`restrict_violation`；`NO ACTION` 的外鍵回 23503，兩者都對應），API 回 409 `in_use`。設備表出現前，`tests/device_models.rs` 以一張同樣參照的替身表驗證這條路。
 
 **事件**（`contract::events::assets`，aggregate `device_model`、ID 是型號 ID，在變更的同一個租戶交易裡寫入 `assets.outbox_event`）：
 

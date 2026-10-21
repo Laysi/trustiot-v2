@@ -169,6 +169,7 @@
           "address": {
             "description": "The 0-based protocol address of the first coil or register (40001 in a device manual is\naddress 0). A point's registers end at 65535 at most and do not overlap another point's\nof the same function code.",
             "format": "int32",
+            "maximum": 65535,
             "minimum": 0,
             "type": "integer"
           },

@@ -336,7 +336,18 @@ pub fn routes(verifier: IdentityVerifier, db: TenantDb) -> Router {
             get(get_model).put(update_model).delete(delete_model),
         )
         .route(EXPORT_PATH, get(export_model))
+        .route_layer(axum::middleware::map_response(no_store))
         .with_state(Routes { verifier, db })
+}
+
+/// Marks every response of these routes as not to be stored, including the ones the handlers
+/// never build: a 401 that the [`UserIdentity`] extractor answers carries no `cache-control`
+/// of its own.
+async fn no_store(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 /// The tenant's device models.
