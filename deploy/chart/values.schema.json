@@ -199,7 +199,7 @@
       "properties": {
         "trustDomain": { "$ref": "#/definitions/dnsName" },
         "calls": {
-          "description": "Who may call whom: <caller>: [<callee>, ...], both keys under services.",
+          "description": "Who may call whom: <caller>: [<callee>, ...], both keys under services. A call between two services (other than ai-gateway) may also carry the user of the request, through the identity service's token exchange.",
           "type": "object",
           "propertyNames": { "pattern": "^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$" },
           "additionalProperties": {

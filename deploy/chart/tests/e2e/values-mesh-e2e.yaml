@@ -5,8 +5,12 @@
 # one test image with a runtime (Bun) that can make calls from inside a service's pod.
 #
 # The call graph under test:
-#   assets -> certs        listed: allowed
-#   everything else        not listed: refused, for example certs -> assets, assets -> alerts
+#   assets -> certs        listed: allowed, also on behalf of users, so the chart lets assets
+#                          reach the identity service's token exchange port (token-exchange)
+#                          too, and no other port of it
+#                          (TRUSTIOT_ON_BEHALF_CALLS {"assets":["certs"]}, Laysi/trustiot-v2#106)
+#   everything else        not listed: refused, for example certs -> assets, assets -> alerts,
+#                          mqtt-bridge -> identity and certs -> identity
 # The ingress gateway reaches identity (public paths, ext_authz), assets (catch-all route),
 # certs and mqtt-bridge (public paths); nothing routes to alerts.
 

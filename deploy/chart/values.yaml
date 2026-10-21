@@ -186,6 +186,20 @@ serviceDefaults:
 services:
   identity:
     enabled: false
+    # The API (http: the ext_authz check, the tenant API) and the token exchange on a port of its
+    # own (token-exchange, the service's exchange.listen_addr; Laysi/trustiot-v2#106). The mesh
+    # lets the ingress gateway and the services that list identity in mesh.calls reach the API port
+    # only, and the services that call on behalf of users the token-exchange port only
+    # (README.md, "呼叫矩陣"). The numbers are the service's defaults; keep both ports when
+    # overriding the list: the render fails without token-exchange while mesh.calls has calls on
+    # behalf of users.
+    ports:
+      - name: http
+        containerPort: 8080
+        appProtocol: http
+      - name: token-exchange
+        containerPort: 8082
+        appProtocol: http
     # The signing keys file is mode 0440, owned by root and the pod's fsGroup, so the service reads
     # it through this group and no other user in the container can (README.md, "內部身分"). On
     # OpenShift set fsGroup to null: the restricted-v2 SCC assigns one from the namespace range.
@@ -230,6 +244,12 @@ mesh:
   # the telemetry calls itself: every service to the collector, the collector to ClickHouse.
   # `postgres` (bundled or external) is how a service declares that it uses Postgres: only those
   # services get the server's CA file and, bundled, reach the Postgres pods (README.md).
+  # A call from one service to another (ai-gateway aside) is also a call on behalf of users: the
+  # identity service exchanges the request's token for one addressed to the callee along these
+  # calls only, one hop (a token it exchanged is never exchanged again), and every such caller
+  # may reach the identity service's token-exchange port, and no other port of it (README.md,
+  # "呼叫矩陣"). Listing identity as a callee grants its API port instead, ext_authz check
+  # included, so list it only for a service that calls the identity service's own API.
   calls:
     # The identity service keeps its sessions, users and tenants in Postgres
     # (services/identity/README.md).

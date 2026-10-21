@@ -118,12 +118,83 @@ deployed". Returns YAML {<name>: true}; use with fromYaml.
 {{- end -}}
 
 {{/*
-Who may call each enabled service and in-cluster component. Callers come from two places only:
+Calls on behalf of users (decision 27, Laysi/trustiot-v2#106): the calls in mesh.calls from one
+enabled service to another, leaving out ai-gateway on either side, which verifies no internal
+identity and holds no user's token (decision 28). A service serving a user's request calls
+another one only with a token the identity service exchanged for it, and the identity service
+exchanges only along this list (TRUSTIOT_ON_BEHALF_CALLS, "trustiot.identity.env"), so the plan
+also lets every caller here reach the identity service's token exchange port, and nothing else
+of the identity service ("trustiot.mesh.identityPorts", templates/token-exchange.yaml). Calls to in-cluster components, Postgres
+and ai-gateway are authorized by the mesh alone.
+Returns YAML {calls: {<caller>: [<callee>, ...]}}, callees sorted, callers without a callee left
+out; use with fromYaml.
+*/}}
+{{- define "trustiot.mesh.onBehalfCalls" -}}
+{{- $v := .Values -}}
+{{- $calls := dict -}}
+{{- range $caller, $callees := $v.mesh.calls | default dict -}}
+{{- $entry := get $v.services $caller -}}
+{{- if and $entry $entry.enabled (ne $caller "ai-gateway") (kindIs "slice" $callees) -}}
+{{- $list := list -}}
+{{- range $callees -}}
+{{- $callee := toString . -}}
+{{- $target := get $v.services $callee -}}
+{{- if and $target $target.enabled (ne $callee "ai-gateway") -}}
+{{- $list = append $list $callee -}}
+{{- end -}}
+{{- end -}}
+{{- if $list -}}
+{{- $_ := set $calls $caller ($list | uniq | sortAlpha) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- dict "calls" $calls | toYaml -}}
+{{- end -}}
+
+{{/*
+The identity service's ports as its AuthorizationPolicy splits them (Laysi/trustiot-v2#106): the
+token exchange's port, the container port named token-exchange (the service's
+exchange.listen_addr, where it serves POST /internal/token-exchange and nothing else), and its API
+ports, every other port in ports (the health port is never one). The ingress gateway and the
+services that list identity in mesh.calls reach the API ports only (the identity service's
+policy, templates/mesh.yaml); the services that call on behalf of users
+("trustiot.mesh.onBehalfCalls") reach the exchange port only (its own Service and policies,
+templates/token-exchange.yaml), so they never reach the ext_authz check on the API port, which
+turns any session cookie into a token for any service.
+Fails when no API port is left: a rule with an empty port list would match every port.
+Argument: the root context. Returns YAML {api: [<number>, ...], exchange: <number, 0 when there
+is no such port>}; use with fromYaml.
+*/}}
+{{- define "trustiot.mesh.identityPorts" -}}
+{{- $config := include "trustiot.serviceConfig" (dict "root" . "name" "identity" "values" .Values.services.identity) | fromYaml -}}
+{{- $api := list -}}
+{{- $exchange := 0 -}}
+{{- range $config.ports -}}
+{{- if eq .name "token-exchange" -}}
+{{- $exchange = int .containerPort -}}
+{{- else -}}
+{{- $api = append $api (int .containerPort) -}}
+{{- end -}}
+{{- end -}}
+{{- if not $api -}}
+{{- fail "services.identity.ports: the API port (http) is missing; token-exchange serves the token exchange only" -}}
+{{- end -}}
+{{- dict "api" $api "exchange" $exchange | toYaml -}}
+{{- end -}}
+
+{{/*
+Who may call each enabled service and in-cluster component. Callers come from these places only:
 - mesh.calls, the list of calls (<caller service>: [<callee service or component>, ...]); a
   call whose caller or callee is disabled is skipped, so the list can name services before
   they ship;
+- the token exchange: every caller in "trustiot.mesh.onBehalfCalls" may call the identity
+  service's token exchange port, and only that port ("trustiot.mesh.identityPorts"), to exchange
+  the request's token for one addressed to the callee (the identity service too, when it calls
+  another service: it holds the signing keys anyway, so reaching itself grants it nothing). These
+  callers are the identity entry's exchangeCallers, not its callers: templates/token-exchange.yaml
+  renders their Service and policies;
 - the ingress gateway, for every service it routes to (public paths and ingress.routes) and for
-  the identity service, which it calls for the cookie check (ext_authz);
+  the identity service, which it calls for the cookie check (ext_authz) on its API port;
 - the telemetry pipeline, fixed in the chart: every enabled service sends OTLP to the
   OpenTelemetry collector, and the collector writes to the bundled ClickHouse (decision 22);
 - the migration Job, fixed in the chart too: it reaches the bundled ClickHouse while
@@ -132,7 +203,9 @@ Every other connection is refused. Callers must be keys under services and calle
 services, components ("trustiot.mesh.components") or direct callees ("trustiot.mesh.directCallees",
 which get no entry here); other names fail the render.
 Returns YAML {services: [{name, callers: [service or component keys], ingress: bool}]}; use with
-fromYaml.
+fromYaml. The identity service's entry also has apiPorts (the ports its callers and the ingress
+gateway reach), exchangeCallers (the callers on behalf of users, sorted) and exchangePort (the
+only port they reach); the render fails when there are such callers but no token-exchange port.
 */}}
 {{- define "trustiot.mesh.plan" -}}
 {{- $v := .Values -}}
@@ -177,6 +250,7 @@ fromYaml.
 {{- $enabled = append $enabled $name -}}
 {{- end -}}
 {{- end -}}
+{{- $onBehalf := (include "trustiot.mesh.onBehalfCalls" . | fromYaml).calls -}}
 {{- $services := list -}}
 {{- range $name := $enabled -}}
 {{- $callers := list -}}
@@ -184,6 +258,19 @@ fromYaml.
 {{- if and (get $v.services $caller).enabled (has $name $callees) -}}
 {{- $callers = append $callers $caller -}}
 {{- end -}}
+{{- end -}}
+{{- $planned := dict "name" $name -}}
+{{- if eq $name "identity" -}}
+{{- /* Callers on behalf of users exchange the request's token on the token exchange's own port
+(Laysi/trustiot-v2#106); everyone else reaches the API ports only. */ -}}
+{{- $ports := include "trustiot.mesh.identityPorts" $ | fromYaml -}}
+{{- $exchangeCallers := keys $onBehalf | sortAlpha -}}
+{{- if and $exchangeCallers (not $ports.exchange) -}}
+{{- fail (printf "services.identity.ports: the token exchange needs the port named token-exchange (the service's exchange.listen_addr, default 8082), because %s call other services on behalf of users (mesh.calls)" (join ", " $exchangeCallers)) -}}
+{{- end -}}
+{{- $_ := set $planned "apiPorts" $ports.api -}}
+{{- $_ := set $planned "exchangeCallers" $exchangeCallers -}}
+{{- $_ := set $planned "exchangePort" $ports.exchange -}}
 {{- end -}}
 {{- if eq $name "otel-collector" -}}
 {{- /* Every service exports its logs, traces and metrics to the collector. */ -}}
@@ -199,7 +286,9 @@ fromYaml.
 {{- /* The migration Job applies the DDL and creates the accounts (tools/migrate). */ -}}
 {{- $callers = append $callers "migrate" -}}
 {{- end -}}
-{{- $services = append $services (dict "name" $name "callers" $callers "ingress" (has $name $ingressCallees)) -}}
+{{- $_ := set $planned "callers" $callers -}}
+{{- $_ := set $planned "ingress" (has $name $ingressCallees) -}}
+{{- $services = append $services $planned -}}
 {{- end -}}
 {{- dict "services" $services | toYaml -}}
 {{- end -}}

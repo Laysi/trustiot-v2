@@ -15,12 +15,18 @@
 // default 8081, the chart's healthPort) that answers GET /healthz and GET /readyz with 200 and
 // everything else with 404. The chart's probes use that port.
 //
+// Like the identity service, it serves the token exchange on a port of its own (EXCHANGE_PORT,
+// default 8082, the chart's port token-exchange; Laysi/trustiot-v2#106). It exchanges nothing:
+// every request there gets the same 200 JSON echo, so mesh.e2e.ts sees whether the mesh let the
+// call through and whether the caller's token arrived.
+//
 // The echo lists every request header (repeated headers joined by ", "), so a test can see
 // whether an x-internal-identity header reached this backend. Never deploy this outside a test
 // namespace: any "valid-" session is accepted.
 
 const PORT = Number(process.env.PORT ?? "8080");
 const HEALTH_PORT = Number(process.env.HEALTH_PORT ?? "8081");
+const EXCHANGE_PORT = Number(process.env.EXCHANGE_PORT ?? "8082");
 const CHECK_PREFIX = "/internal/ext-authz";
 const SLOW_MS = 3000;
 
@@ -60,6 +66,16 @@ function isProbe(req: Request, url: URL): boolean {
   return req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz");
 }
 
+function echo(req: Request, url: URL): Response {
+  return json(200, {
+    service: "identity-double",
+    method: req.method,
+    path: url.pathname,
+    query: url.search,
+    headers: Object.fromEntries(req.headers.entries()),
+  });
+}
+
 const health = Bun.serve({
   port: HEALTH_PORT,
   hostname: "0.0.0.0",
@@ -77,13 +93,15 @@ const server = Bun.serve({
       return check(req, url);
     }
     if (isProbe(req, url)) return new Response("ok");
-    return json(200, {
-      service: "identity-double",
-      method: req.method,
-      path: url.pathname,
-      query: url.search,
-      headers: Object.fromEntries(req.headers.entries()),
-    });
+    return echo(req, url);
+  },
+});
+
+const exchange = Bun.serve({
+  port: EXCHANGE_PORT,
+  hostname: "0.0.0.0",
+  fetch(req) {
+    return echo(req, new URL(req.url));
   },
 });
 
@@ -91,9 +109,12 @@ const server = Bun.serve({
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.on(signal, () => {
     server.stop(true);
+    exchange.stop(true);
     health.stop(true);
     process.exit(0);
   });
 }
 
-console.log(`identity double listening on ${server.hostname}:${server.port}, health on port ${health.port}`);
+console.log(
+  `identity double listening on ${server.hostname}:${server.port}, token exchange on port ${exchange.port}, health on port ${health.port}`,
+);

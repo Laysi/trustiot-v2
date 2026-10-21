@@ -6,7 +6,7 @@
 // service's labels but not its ServiceAccount (imposter), which only the AuthorizationPolicy
 // can tell apart.
 //
-//   1. both layers: the listed call and the ingress gateway's calls pass, every other call fails,
+//   1. both layers: the listed calls and the ingress gateway's calls pass, every other call fails,
 //      and every pod's health checks pass under default deny;
 //   2. AuthorizationPolicies removed: the NetworkPolicies alone refuse every unlisted call (the
 //      imposter now gets through, which shows the AuthorizationPolicies are gone);
@@ -14,6 +14,23 @@
 //   4. AuthorizationPolicies back, NetworkPolicies still removed: the AuthorizationPolicies alone
 //      refuse every unlisted call;
 //   5. both back: the installed state again.
+//
+// Calls on behalf of users (Laysi/trustiot-v2#106): every call from a pod carries a user's
+// internal identity token, signed with the release's own key and checked against the published
+// keys every service reads, so the refusals above hold even for a caller that holds a genuine
+// user's token. A token addressed to the callee goes with a direct call; the caller's own token
+// goes to the identity service's token exchange, on the exchange's own port (token-exchange) and
+// Service (<release>-identity-exchange), which the chart lets every service that calls another one
+// on behalf of users reach (assets here), and no other service (mqtt-bridge, certs). Such a
+// service reaches the exchange's port only, never the identity service's API port with its
+// ext_authz check: the AuthorizationPolicies split the ports, so that call fails while they are
+// in place and passes without them (the NetworkPolicies admit assets's pods to the identity
+// pod's HBONE port for the exchange). The services run the identity double, which
+// verifies no token, so every refusal here is the mesh's (L4): the services' and the token
+// exchange's own checks (the call list, one hop only) are tested in Rust
+// (services/identity/tests/ext_authz.rs and services/identity/src/exchange/tests.rs); this test
+// shows what the mesh lets through, that the token arrives with the listed call, and that the
+// identity service got the call list.
 //
 // The NetworkPolicy-only phase comes before any unlisted call has ever succeeded: a
 // NetworkPolicy does not cut connections that are already open, and ztunnel keeps HBONE
@@ -51,6 +68,8 @@ import {
   uninstallRelease,
   waitFor,
 } from "./cluster";
+import { type PublishedKeySet, type SigningKeysDocument, TokenSigner, type UserClaims, verifyToken } from "./internal-token.ts";
+import { type CallResult, callScript, parseCallOutput } from "./mesh-call.ts";
 import { sendRaw } from "./raw-client.ts";
 import { withTunnelRecovery } from "./tunnel-recovery.ts";
 
@@ -66,12 +85,46 @@ const SERVICES = ["identity", "assets", "certs", "mqtt-bridge", "alerts"] as con
 type Service = (typeof SERVICES)[number];
 const SUFFIX = crypto.randomUUID().slice(0, 8);
 const TEST_POD_LABEL = "trustiot-mesh-e2e";
+// The identity double echoes every other path with the request's headers (identity-double/server.ts).
+const ECHO_PATH = "/v1/mesh-e2e";
+// The identity service's token exchange (contract::api::identity::ExchangeToken), served on the
+// identity service's port token-exchange (values.yaml), apart from its API port, through a
+// Service of its own (templates/token-exchange.yaml).
+const EXCHANGE_PATH = "/internal/token-exchange";
+const EXCHANGE_SERVICE = "identity-exchange";
+const API_PORT = 8080;
+const EXCHANGE_PORT = 8082;
+// The call list the chart hands the identity service for values-mesh-e2e.yaml.
+const ON_BEHALF_CALLS = { assets: ["certs"] };
 
 // ---------------------------------------------------------------------------------------------
-// Calls from inside a pod: `kubectl exec` runs Bun in the caller's container, so the connection
-// leaves from the caller's network namespace with the caller's mesh identity.
+// Users' tokens (internal-token.ts). The signing key stays in this process; tokens reach the
+// calling pod on stdin and are never printed or recorded.
 
-type CallResult = { outcome: "response" | "error" | "timeout"; status?: number; code?: string; message?: string; ms: number };
+const USER: UserClaims = { sub: crypto.randomUUID(), tenant: { id: crypto.randomUUID(), role: "viewer" }, platform_admin: false };
+let signer: TokenSigner | undefined;
+let publishedKeys: PublishedKeySet | undefined;
+
+function loadSigner() {
+  const secret = JSON.parse(kubectl("get", "secret", `${OBJECT_PREFIX}-identity-signing-keys`, "--output", "json")) as { data?: Record<string, string> };
+  const document = JSON.parse(Buffer.from(secret.data?.["signing-keys.json"] ?? "", "base64").toString() || "{}") as SigningKeysDocument;
+  const configMap = JSON.parse(kubectl("get", "configmap", `${OBJECT_PREFIX}-internal-identity-keys`, "--output", "json")) as { data?: Record<string, string> };
+  publishedKeys = JSON.parse(configMap.data?.["jwks.json"] ?? "{}") as PublishedKeySet;
+  signer = TokenSigner.from({ keys: document.keys ?? [] }, { keys: publishedKeys.keys ?? [] });
+}
+
+function userToken(audience: string): string {
+  if (!signer || !publishedKeys) throw new Error("no signing key loaded");
+  const token = signer.token(USER, audience);
+  // The services accept it: it verifies against the key set they mount.
+  verifyToken(token, publishedKeys);
+  return token;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Calls from inside a pod: `kubectl exec` runs Bun in the caller's container (mesh-call.ts), so
+// the connection leaves from the caller's network namespace with the caller's mesh identity.
+
 type Caller = { name: string; target: string[] };
 
 const serviceCaller = (service: Service): Caller => ({
@@ -86,61 +139,74 @@ const outsider = testPodCaller("outsider (not in the mesh)", OUTSIDER_POD);
 const stranger = testPodCaller("stranger (in the mesh, ServiceAccount default)", STRANGER_POD);
 const imposter = testPodCaller("imposter (assets labels, ServiceAccount default)", IMPOSTER_POD);
 
-function callScript(url: string, host?: string): string {
-  return `const started = performance.now();
-const ms = () => Math.round(performance.now() - started);
-try {
-  const response = await fetch(${JSON.stringify(url)}, {
-    headers: ${JSON.stringify(host ? { host } : {})},
-    signal: AbortSignal.timeout(${CALL_TIMEOUT_MS}),
-  });
-  await response.text();
-  console.log(JSON.stringify({ outcome: "response", status: response.status, ms: ms() }));
-} catch (error) {
-  const timeout = error?.name === "TimeoutError" || error?.name === "AbortError";
-  console.log(JSON.stringify({ outcome: timeout ? "timeout" : "error", code: error?.code, message: String(error?.message ?? error), ms: ms() }));
-}`;
-}
+type CallOptions = { host?: string; token?: string; body?: unknown };
 
-function call(caller: Caller, url: string, host?: string): CallResult {
-  const output = run(kubectlArgs("exec", ...caller.target, "--", "bun", "-e", callScript(url, host)));
-  const line = output
-    .trim()
-    .split("\n")
-    .reverse()
-    .find((l) => l.startsWith("{") && l.includes('"outcome"'));
-  if (!line) throw new Error(`no result from ${caller.name} calling ${url}:\n${output}`);
-  return JSON.parse(line) as CallResult;
+function call(caller: Caller, url: string, options: CallOptions = {}): CallResult {
+  const withToken = options.token !== undefined;
+  const script = callScript(url, { host: options.host, withToken, body: options.body, timeoutMs: CALL_TIMEOUT_MS });
+  // The token goes on stdin (`-i`), so it is in no command line, process listing or error
+  // message; the script prints only whether the callee received it.
+  const output = run(kubectlArgs("exec", ...(withToken ? ["-i"] : []), ...caller.target, "--", "bun", "-e", script), false, options.token);
+  const result = parseCallOutput(output);
+  if (!result) throw new Error(`no result from ${caller.name} calling ${url}:\n${output}`);
+  return result;
 }
 
 const passed = (result: CallResult) => result.outcome === "response" && result.status === 200;
 
 // The chart's own pods; the imposter test pod shares their selector labels but not this one.
 const CHART_PODS = `app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/part-of=trustiot`;
-const serviceUrl = (service: Service) => `http://${OBJECT_PREFIX}-${service}:8080/healthz`;
+const serviceUrl = (service: Service, path = ECHO_PATH, port = API_PORT) => `http://${OBJECT_PREFIX}-${service}:${port}${path}`;
 function podIp(selector: string): string {
   const ip = kubectl("get", "pods", "-l", selector, "-o", "jsonpath={.items[0].status.podIP}").trim();
   if (!ip) throw new Error(`no pod IP for ${selector}`);
   return ip;
 }
 const servicePodUrl = (service: Service) =>
-  `http://${podIp(`${CHART_PODS},app.kubernetes.io/component=${service}`)}:8080/healthz`;
+  `http://${podIp(`${CHART_PODS},app.kubernetes.io/component=${service}`)}:${API_PORT}${ECHO_PATH}`;
 
-type Case = { name: string; caller: Caller; url: () => string; host?: string };
-// The one listed call (mesh.calls in values-mesh-e2e.yaml).
-const LISTED: Case = { name: "assets -> certs (listed)", caller: serviceCaller("assets"), url: () => serviceUrl("certs") };
-// Calls nobody listed. Each fails while either layer is in place.
-const UNLISTED: Case[] = [
-  { name: "certs -> assets (the listed call reversed)", caller: serviceCaller("certs"), url: () => serviceUrl("assets") },
-  { name: "assets -> alerts (alerts has no caller)", caller: serviceCaller("assets"), url: () => serviceUrl("alerts") },
-  { name: "mqtt-bridge -> identity (only the gateway may call it)", caller: serviceCaller("mqtt-bridge"), url: () => serviceUrl("identity") },
-  { name: "stranger -> certs (mesh identity that is not a service)", caller: stranger, url: () => serviceUrl("certs") },
-  { name: "outsider -> certs Service (no mesh identity)", caller: outsider, url: () => serviceUrl("certs") },
-  { name: "outsider -> certs pod IP, application port", caller: outsider, url: () => servicePodUrl("certs") },
+// `token`: the audience of the user's token the call carries: the callee for a direct call, the
+// caller itself for the token exchange. `body`: a JSON body (POST).
+type Case = { name: string; caller: Caller; url: () => string; host?: string; token?: Service; body?: unknown };
+// A direct call with a user's token addressed to the callee.
+const direct = (name: string, caller: Caller, callee: Service, url = () => serviceUrl(callee)): Case => ({ name, caller, url, token: callee });
+// A service asks the identity service for a token addressed to `audience`, presenting its own.
+const exchange = (name: string, caller: Service, audience: Service): Case => ({
+  name,
+  caller: serviceCaller(caller),
+  url: () => `http://${OBJECT_PREFIX}-${EXCHANGE_SERVICE}:${EXCHANGE_PORT}${EXCHANGE_PATH}`,
+  token: caller,
+  body: { audience },
+});
+// The listed calls: mesh.calls in values-mesh-e2e.yaml, and the token exchange the chart adds for
+// the calls on behalf of users among them.
+const LISTED: Case[] = [
+  direct("assets -> certs with a user's token for certs (listed)", serviceCaller("assets"), "certs"),
+  exchange("assets -> identity token exchange for certs (assets calls certs on behalf of users)", "assets", "certs"),
 ];
+// Calls nobody listed, each with a user's token the callee would accept. Each fails while either
+// layer is in place.
+const UNLISTED: Case[] = [
+  direct("certs -> assets with a user's token for assets (the listed call reversed)", serviceCaller("certs"), "assets"),
+  direct("assets -> alerts with a user's token for alerts (alerts has no caller)", serviceCaller("assets"), "alerts"),
+  exchange("mqtt-bridge -> identity token exchange (mqtt-bridge calls no service on behalf of users)", "mqtt-bridge", "assets"),
+  exchange("certs -> identity token exchange (certs is only called on behalf of users)", "certs", "assets"),
+  direct("stranger -> certs with a user's token for certs (mesh identity that is not a service)", stranger, "certs"),
+  direct("outsider -> certs Service with a user's token for certs (no mesh identity)", outsider, "certs"),
+  direct("outsider -> certs pod IP, application port, with a user's token for certs", outsider, "certs", () => servicePodUrl("certs")),
+];
+// A caller on behalf of users at the identity service's API port, where the ext_authz check is:
+// only the AuthorizationPolicies refuse it, since the NetworkPolicies cannot see ports inside
+// HBONE and admit assets's pods for the token exchange (Laysi/trustiot-v2#106, M2 of the
+// security review).
+const API_PORT_OF_IDENTITY: Case = direct(
+  "assets -> identity API port with a user's token for identity (assets may reach the token exchange only)",
+  serviceCaller("assets"),
+  "identity",
+);
 // A pod with the listed caller's labels but another ServiceAccount: the NetworkPolicy admits it
 // (it selects pods by label), the AuthorizationPolicy does not (it checks the mTLS identity).
-const IMPOSTER: Case = { name: "imposter -> certs (assets labels, not its ServiceAccount)", caller: imposter, url: () => serviceUrl("certs") };
+const IMPOSTER: Case = direct("imposter -> certs with a user's token for certs (assets labels, not its ServiceAccount)", imposter, "certs");
 // The port the gateway pod listens on for the Service's port 80 (the probe below bypasses the
 // Service, so it needs the targetPort).
 function gatewayListenerPort(): number {
@@ -161,13 +227,22 @@ const NETWORK_POLICY_PROBE: Case = {
 const results: Record<string, unknown>[] = [];
 function check(phase: string, testCase: Case): CallResult {
   const url = testCase.url();
-  const result = call(testCase.caller, url, testCase.host);
-  results.push({ phase, call: testCase.name, url, ...result });
+  // A fresh token per call: the identity service's lifetime is 60 seconds.
+  const token = testCase.token === undefined ? undefined : userToken(testCase.token);
+  const result = call(testCase.caller, url, { host: testCase.host, token, body: testCase.body });
+  results.push({ phase, call: testCase.name, url, ...(testCase.token ? { tokenFor: testCase.token } : {}), ...result });
   return result;
 }
 // Polls until the call has the expected result, for policy changes that are still propagating.
 async function settle(phase: string, testCase: Case, pass: boolean): Promise<void> {
   await waitFor(`${testCase.name} to ${pass ? "pass" : "fail"} (${phase})`, () => passed(check(`${phase} (settling)`, testCase)) === pass, SETTLE_MS);
+}
+// The listed calls pass, and the callee received the user's token.
+function expectListed(phase: string) {
+  for (const testCase of LISTED) {
+    const result = check(phase, testCase);
+    expect({ call: testCase.name, passed: passed(result), tokenEchoed: result.tokenEchoed }).toEqual({ call: testCase.name, passed: true, tokenEchoed: true });
+  }
 }
 function expectUnlisted(phase: string, pass: boolean) {
   for (const testCase of UNLISTED) {
@@ -339,8 +414,15 @@ beforeAll(async () => {
   manifests = (Array.isArray(parsed) ? parsed : [parsed]).filter(
     (m): m is Manifest => typeof m === "object" && m !== null && "kind" in m,
   );
-  expect(networkPolicies().length).toBe(SERVICES.length + 2);
-  expect(servicePolicies().length).toBe(SERVICES.length);
+  // One per service, the default deny, the ingress gateway's, and the token exchange's.
+  expect(networkPolicies().length).toBe(SERVICES.length + 3);
+  // One per service and the token exchange's.
+  expect(servicePolicies().length).toBe(SERVICES.length + 1);
+  expect(manifests.filter((m) => m.metadata.name === `${OBJECT_PREFIX}-${EXCHANGE_SERVICE}`).map((m) => m.kind).sort()).toEqual([
+    "AuthorizationPolicy",
+    "NetworkPolicy",
+    "Service",
+  ]);
   // The identity service is enabled and internalIdentity.maxKeyAgeSeconds keeps its default, so
   // the rotation CronJob and its two policies render, all under the CronJob's name.
   const rotation = manifests.filter((m) => m.kind === "CronJob" && isRotation(m)).map((m) => m.metadata.name);
@@ -348,6 +430,16 @@ beforeAll(async () => {
   expect(rotationPolicies().map((m) => `${m.kind}/${m.metadata.name}`).sort()).toEqual(
     [`AuthorizationPolicy/${rotation[0]}`, `NetworkPolicy/${rotation[0]}`],
   );
+  // The identity service exchanges tokens along the calls on behalf of users that mesh.calls
+  // lists (Laysi/trustiot-v2#106).
+  const identity = manifests.find((m) => m.kind === "Deployment" && m.metadata.name === `${OBJECT_PREFIX}-identity`) as
+    | (Manifest & { spec: { template: { spec: { containers: { env?: { name: string; value?: string }[] }[] } } } })
+    | undefined;
+  const onBehalf = identity?.spec.template.spec.containers[0]?.env?.find((e) => e.name === "TRUSTIOT_ON_BEHALF_CALLS")?.value;
+  expect(JSON.parse(onBehalf ?? "null")).toEqual(ON_BEHALF_CALLS);
+  // The init container filled the signing keys before the identity pod started.
+  loadSigner();
+  results.push({ phase: "setup", signingKey: signer?.kid, onBehalfCalls: ON_BEHALF_CALLS });
   kubectl("wait", `gateway/${GATEWAY}`, "--for=condition=Programmed", "--timeout=180s");
   kubectl("rollout", "status", `deployment/${GATEWAY}-istio`, "--timeout=180s");
   testPod(OUTSIDER_POD, "none");
@@ -396,14 +488,16 @@ afterAll(() => {
 // The phases run in order; each one starts from the state the previous one left.
 
 describe("service-to-service authorization (decision 27)", () => {
-  test("1. both layers: the listed call and the gateway pass, unlisted calls fail, health checks pass under default deny", async () => {
+  test("1. both layers: the listed calls and the gateway pass, unlisted calls fail, health checks pass under default deny", async () => {
     const phase = "both layers";
     expectHealthyPods(phase);
-    await settle(phase, LISTED, true);
+    for (const testCase of LISTED) await settle(phase, testCase, true);
+    expectListed(phase);
     expect(passed(check(phase, NETWORK_POLICY_PROBE))).toBe(false);
     await expectGatewayReachesBackends(phase);
     expectUnlisted(phase, false);
     expect(passed(check(phase, IMPOSTER))).toBe(false);
+    expect(passed(check(phase, API_PORT_OF_IDENTITY))).toBe(false);
   }, 600_000);
 
   test("2. AuthorizationPolicies removed: the NetworkPolicies alone refuse every unlisted call", async () => {
@@ -412,9 +506,11 @@ describe("service-to-service authorization (decision 27)", () => {
     // The NetworkPolicy admits the imposter by its labels, so once it gets through, the
     // AuthorizationPolicies are no longer enforced.
     await settle(phase, IMPOSTER, true);
+    // Only the AuthorizationPolicies kept assets off the identity service's API port.
+    await settle(phase, API_PORT_OF_IDENTITY, true);
     expectUnlisted(phase, false);
     expect(passed(check(phase, NETWORK_POLICY_PROBE))).toBe(false);
-    expect(passed(check(phase, LISTED))).toBe(true);
+    expectListed(phase);
     await expectGatewayReachesBackends(phase);
   }, 600_000);
 
@@ -424,17 +520,18 @@ describe("service-to-service authorization (decision 27)", () => {
     await settle(phase, NETWORK_POLICY_PROBE, true);
     for (const testCase of UNLISTED) await settle(phase, testCase, true);
     expectUnlisted(phase, true);
-    expect(passed(check(phase, LISTED))).toBe(true);
+    expectListed(phase);
   }, 600_000);
 
   test("4. AuthorizationPolicies back, NetworkPolicies still removed: the AuthorizationPolicies alone refuse every unlisted call", async () => {
     const phase = "AuthorizationPolicy only";
     restore(servicePolicies());
-    for (const testCase of [...UNLISTED, IMPOSTER]) await settle(phase, testCase, false);
+    for (const testCase of [...UNLISTED, IMPOSTER, API_PORT_OF_IDENTITY]) await settle(phase, testCase, false);
     expectUnlisted(phase, false);
     expect(passed(check(phase, IMPOSTER))).toBe(false);
+    expect(passed(check(phase, API_PORT_OF_IDENTITY))).toBe(false);
     expect(passed(check(phase, NETWORK_POLICY_PROBE))).toBe(true);
-    expect(passed(check(phase, LISTED))).toBe(true);
+    expectListed(phase);
     await expectGatewayReachesBackends(phase);
   }, 600_000);
 
@@ -444,7 +541,8 @@ describe("service-to-service authorization (decision 27)", () => {
     await settle(phase, NETWORK_POLICY_PROBE, false);
     expectUnlisted(phase, false);
     expect(passed(check(phase, IMPOSTER))).toBe(false);
-    expect(passed(check(phase, LISTED))).toBe(true);
+    expect(passed(check(phase, API_PORT_OF_IDENTITY))).toBe(false);
+    expectListed(phase);
     await expectGatewayReachesBackends(phase);
     expectHealthyPods(phase);
   }, 600_000);
