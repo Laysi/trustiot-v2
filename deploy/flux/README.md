@@ -302,13 +302,104 @@ age-keygen 的輸出不是終端機時，私鑰寫到管線、`Public key: …` 
 - **打開切片的服務**：服務的 issue 進了某一版 chart、展示叢集也部署了那一版之後，在 `values-demo.yaml` 的 `services` 加上 `<服務>: {enabled: true}`；它用到的 Secret 以 SOPS 檔一起加進來並列進 `kustomization.yaml`；開 PR 合併。`bun test deploy/flux` 以 HEAD 的 chart 渲染展示叢集的 values，打開的服務若少了 chart 要求的設定，測試會失敗。打開前確認展示機的記憶體還放得下。
 - **換版**：同 SaaS（上方「發版與回滾」），或以 `pin-chart.ts` 只換展示叢集。
 
-在展示機裝 Flux 之前：
+### 在展示機安裝 Flux
 
-- `chart.yaml` 至少要是 `0.0.0-rc.8`。更早的 chart 沒有 Laysi/trustiot-v2#404（內部身分簽章金鑰在叢集內產生；舊版要人建立金鑰）與 Laysi/trustiot-v2#400（建立 Postgres 時收回 `postgres` 與 `template1` 的 PUBLIC 權限，只在 Cluster 建立時發生）。目前釘的 `0.0.0-rc.7` 只是佔位：展示機還沒有 Flux，它不部署任何東西。
-- `ghcr-pull`、`trustiot-smtp`、`trustiot-demo-values` 三個 SOPS 檔要在 main 上：HelmRelease 的私有 values 不是 optional，少了主機名稱時 chart 的 schema 拒絕整份 values，什麼都不裝。
-- 其餘同上方「建立叢集」，差別是叢集的 age 金鑰（上方「展示叢集的 age 金鑰」）與 deploy key 都在展示機上產生（deploy key 加到 GitHub 時同樣不勾 Allow write access）。在展示機安裝 Flux 的步驟由 Laysi/trustiot-v2#467 補上。
+`scripts/demo/flux.ts`（Laysi/trustiot-v2#484）在有 repo 的工作站執行，經 ssh 在展示機上產生 deploy key、安裝 Flux、看狀態與移除 Flux。它遵守 [scripts/README.md](../../scripts/README.md)「展示機（`demo/`）」的共同規則：不加 `--apply` 時只讀，印出檢查結果、計畫與確認碼；`--apply --confirm <確認碼>` 才動手，先取得 lab 鎖（擁有者 `Laysi/trustiot-v2#467 <UTC 時間> demo <步驟>`，Laysi/trustiot-v2#467 是在展示機安裝 Flux 的 issue；自己已經持有 #467 的鎖時加 `--lock-held`），在鎖內重新檢查與規劃，與確認過的計畫不同就停；維運用的 tunnel（`cloudflared.service`）只讀狀態、從不改它。紀錄寫在 `$XDG_STATE_HOME/trustiot-v2/demo/`（或 `--log-dir`）。
 
-lab e2e：`tests/e2e/lab.e2e.ts` 在展示環境的 Flux 存在時拒絕執行，也只移除自己建立的 Flux（下方「lab 測試」）。要跑它，先移除展示環境的 release 與 Flux（`flux-system` 連同兩把金鑰；資料可以保留），測完重新安裝，金鑰重新產生並更新 `.sops.yaml` 與 deploy key。期間展示環境中斷，閘道器的資料會留下缺口，所以只在必要時（例如驗證 Flux 的升級）這樣做。
+#### 順序
+
+第一次部署前，main 上要有這些，`install` 逐項檢查，少一項就拒絕、什麼都不改：
+
+1. **chart**：發一版含 Laysi/trustiot-v2#478 的 chart。那一版加上 `ingress.tunnel.clusterIP`，在 tunnel 模式下固定 Istio 產生的入口 Service 的 ClusterIP。tag 由使用者核准後才打。
+2. **pin PR**：一個 PR 同時做三件事：`bun scripts/flux/pin-chart.ts --cluster demo --version <版本> --digest <chart digest>` 把展示叢集移到那一版；`values-demo.yaml` 設 `ingress.tunnel.clusterIP`（叢集 Service 網段靜態區段裡沒有使用的位址，選法見 [deploy/chart/README.md](../chart/README.md)「固定的入口 ClusterIP」，Laysi/trustiot-v2#478）；`scripts/demo/lib.ts` 的 `DEMO_MIN_CHART_VERSION` 改成那一版。ClusterIP 在 Service 建立後就不能改，Laysi/trustiot-v2#469 的 tunnel 路由指向這個位址，所以第一次部署就要帶著它；`0.0.0-rc.8` 沒有這個值，chart 的 schema 會拒絕不認得的 key，所以第一次部署不用 rc.8。目前釘的 `0.0.0-rc.7` 只是佔位：展示機還沒有 Flux，它不部署任何東西。
+3. **GHCR 拉取 token**：`ghcr-pull.sops.yaml`（上表），列進 `clusters/demo/trustiot/kustomization.yaml`，開 PR 合併。
+4. **私有 values**：`trustiot-demo-values.sops.yaml` 已經在 main 上（上表）。HelmRelease 讀它不是 optional，少了主機名稱時 chart 的 schema 拒絕整份 values，什麼都不裝。`trustiot-smtp` 與 `trustiot-anthropic` 不是第一次部署的前提：`values-demo.yaml` 打開的服務要求 `smtp` 或 `ai` 憑證時（例如 Laysi/trustiot-v2#468 的寄信），對應的 Secret 才要在 main 上，`install` 依打開的服務檢查。
+5. **叢集的 age 金鑰**：上方「展示叢集的 age 金鑰」（2026-10-20 完成）。
+
+chart 的最低版本是 `scripts/demo/lib.ts` 的 `DEMO_MIN_CHART_VERSION`，prerelease 依數字比較（`rc.10` 在 `rc.8` 之後）。更早的 chart 沒有 Laysi/trustiot-v2#404（內部身分簽章金鑰在叢集內產生；舊版要人建立金鑰）與 Laysi/trustiot-v2#400（建立 Postgres 時收回 `postgres` 與 `template1` 的 PUBLIC 權限，只在 Cluster 建立時發生）。
+
+#### 步驟
+
+工作目錄必須是 main 的乾淨 checkout：腳本先 `git fetch origin main`，`origin` 不是 GitHub 上的 `Laysi/trustiot-v2`、HEAD 不等於 `origin/main`，或 `deploy/flux`、`scripts`、`.sops.yaml`、`.prototools`、`.proto/plugins/` 有未 commit 的變更時拒絕；標了 assume-unchanged 或 skip-worktree 的檔案（`git status` 看不到它們的變更，`git ls-files -v` 以小寫字母或 `S` 標示）也拒絕。Flux 的 manifest 從這個 checkout 以 `kubectl kustomize deploy/flux/clusters/demo/flux-system` 建出（需要 `proto install kubectl`），只能有 Flux 的物件，剛好一個 GitRepository（`spec.ref` 剛好是 `{branch: main}`）與一個 Kustomization（根，同步 `./deploy/flux/clusters/demo`）；從 main 讀到、之後寫進 YAML 與指令的 Secret 名稱都要是 Kubernetes 的物件名稱（DNS-1123）。檢查 `sops-age` 用的 age-keygen 同上方「祕密」，以 `.prototools` 的 Go 建置成 linux/arm64（需要 `proto install go`）。
+
+`DEMO_SSH_HOST` 要與 lab e2e 以同一個使用者登入展示機：lab 鎖在登入使用者的家目錄（`~/e2e.lock`），換一個使用者就看不到另一邊的鎖。
+
+```sh
+: "${DEMO_SSH_HOST:?set DEMO_SSH_HOST to the ssh host of the demo machine}"
+git switch main && git pull --ff-only
+bun scripts/demo/flux.ts deploy-key --ssh-host "$DEMO_SSH_HOST"                              # 計畫與確認碼，只讀
+bun scripts/demo/flux.ts deploy-key --ssh-host "$DEMO_SSH_HOST" --apply --confirm <確認碼>     # 印出公鑰與指紋
+# GitHub：Laysi/trustiot-v2 → Settings → Deploy keys → Add deploy key，貼上印出的公鑰，不勾 Allow write access；
+# 加好後確認 GitHub 列出的 SHA256 指紋與腳本印出的相同
+# 有 repo 管理權限的人以 GitHub API 確認這把 key 唯讀（GET /repos/Laysi/trustiot-v2/keys 裡它的 read_only 是 true）；
+# 確認之前不跑 install --apply
+bun scripts/demo/flux.ts install --ssh-host "$DEMO_SSH_HOST"                                 # 檢查、計畫與確認碼，只讀
+bun scripts/demo/flux.ts install --ssh-host "$DEMO_SSH_HOST" --apply --confirm <確認碼>
+bun scripts/demo/flux.ts status --ssh-host "$DEMO_SSH_HOST"                                  # 隨時可看，只讀，不取鎖
+```
+
+- **`deploy-key`**：在展示機上以 root 產生 ed25519 金鑰（`/run/trustiot-demo-flux` 底下只有 root 能讀的暫存目錄，結束時 shred），寫成 `flux-system` 的 Secret `flux-system`（`identity`、`identity.pub`、`known_hosts`；`known_hosts` 是本目錄的 `github-known-hosts`，送到展示機後核對雜湊），帶 label `trustiot.io/demo-flux=deploy-key`。私鑰只經過 root 的暫存檔與 kubectl 的 stdin，不出現在指令列或輸出；工作站只讀回 `identity.pub` 與 `known_hosts`。三個值先確認都不是空的才建立 Secret，建立後在展示機上讀回、與產生的檔案逐位元組比對；建立之後任何一步失敗，腳本刪掉剛建立的 Secret，不留下不完整的 deploy key。Secret 已經是它建立的就不重建，只再印一次公鑰與指紋；有空的值時（建立途中被強制終止）拒絕並寫明刪掉重來的指令；同名的 Secret 不是它建立的就拒絕。
+- **deploy key 必須唯讀**：Flux 只需要讀 main，可以寫入的 key 從展示機外洩時就能直接推到 repo。key 在 GitHub 上的權限要有 repo 管理權限的 token 才讀得到，腳本在工作站上不檢查；由有管理權限的人在 `install --apply` 之前以 GitHub API 確認（上面的步驟），`install --apply` 等這個確認之後才跑。
+- **root 腳本**（`deploy-key`、`sops-age` 的檢查、Flux 的套用與刪除）：開始時以 `flock` 鎖住展示機的 `/run/trustiot-demo-flux/.lock`，另一個 root 腳本還在跑時立刻停下，所以兩次執行（例如兩個 `--lock-held`）不會互相清掉對方的暫存目錄；接著以 shred 清掉之前被強制終止的執行留下的暫存目錄（印出 `STALE`），再建立自己的。
+- **`install` 的檢查**：上面「順序」的每一項；lab 鎖空著或屬於 #467（以 `Laysi/trustiot-v2#467 ` 連同空白比對，`#4670` 不算）；`flux-system` 是上方 age 金鑰步驟留下的樣子（沒有其他 label 與 annotation，只有 `sops-age`、Kubernetes 的預設物件與 `deploy-key` 的 Secret），或是這支腳本之前裝的（label `trustiot.io/demo-flux=installed`），其他的一律拒絕，例如 lab e2e 的（label `e2e.trustiot.io/run`）；沒有不屬於這次安裝的 Flux CRD、ClusterRole 或 ClusterRoleBinding；`sops-age` 只有 `age.agekey`，在展示機上以 root 執行 `age-keygen -y` 從它算出的公鑰剛好是 `.sops.yaml` demo 規則的 `# cluster: demo` 收件者（私鑰只經過管線，不印出；age-keygen 只暫存在 root 的暫存目錄，結束時刪除）。這項檢查以 root 讀私鑰，所以只在 lab 鎖空著或屬於 #467、`flux-system` 是上述兩種樣子之一時才做，dry run 也一樣；`--apply` 在鎖內以重新讀到的鎖與 namespace 再判斷一次才做。deploy key 的 Secret 由 `deploy-key` 建立、三個 key 都在而且都不是空的、`known_hosts` 與 main 的相同；PoC 已清除（`scripts/demo/cleanup.ts`）；namespace `trustiot` 不存在或屬於 Flux；平台的 CRD（Istio、Gateway API、CloudNativePG）都在；根 Kustomization、GitRepository 與 HelmRelease `trustiot/trustiot` 都沒有暫停，根 Kustomization 的 `prune` 是 true（中斷的 `remove` 留下的樣子，見下方「中斷之後」）；GitRepository `flux-system` 跟著 main，或是之前中斷的 `install` 留下的 pin（`{branch: main, commit: <commit>}`），其他的 `spec.ref`，以及根 Kustomization 在而 GitRepository 不在，都拒絕。
+
+  `ingress.tunnel.clusterIP` 釘的位址要在叢集唯一的 IPv4 Service 網段（ServiceCIDR `kubernetes`，讀不到就拒絕）的靜態區段裡，不是網路位址或廣播位址，也沒有其他 Service 佔用（之前裝過的 release `trustiot/trustiot` 自己的 Service 除外）。靜態區段是網段開頭的 `min(max(16, 網段大小 / 16), 256)` 個位址（k3s 預設的 `10.43.0.0/16` 是 `10.43.0.1` 到 `10.43.1.0`），計算用 nightly 的 smoke 部署也用的 `scripts/nightly/ingress-address.ts`，與 Laysi/trustiot-v2#483 切換 tunnel 路由前的檢查是同一條規則。動態區段的位址可能在第一次部署之前被別的 Service 拿走，那時 API server 拒絕建立 ingress Service，第一次部署失敗；理由見 [deploy/chart/README.md](../chart/README.md)「固定的入口 ClusterIP」。
+- **`install --apply`**：
+  1. 給 `flux-system` 加 label `trustiot.io/demo-flux=installed`（field manager `trustiot-demo-flux`，帶讀到的 `resourceVersion`，期間有人改過 namespace 就失敗）。之後的執行、`remove` 與人都靠它認出這次安裝。kustomize-controller 套用 Flux 自己的 Namespace 時只接管 kubectl 與它自己寫的欄位，這個 label 留著；腳本在第一次套用後與 Flux 第一次 reconcile 後各確認一次，不見了就停。
+  2. 同上方「建立叢集」第 6 步，但第一次同步釘在檢查過的 commit：manifest 經 stdin 送到展示機，核對 SHA-256 後存在 root 的暫存目錄。送去的版本只改兩處：GitRepository `flux-system` 的 `spec.ref` 加上 `commit: <計畫讀到的 origin/main>`，根 Kustomization `flux-system` 拿出來最後才建立（計畫印出改過的文字的 SHA-256，確認碼涵蓋它）。server-side apply，等 8 個 CRD established，再套用一次；再以 field manager `trustiot-demo-flux` 套用只含這個 pin 的 GitRepository，最後才建立根 Kustomization。
+     - 為什麼要釘：檢查是對 lock 內 fetch 到的 `origin/main` 做的。GitRepository 若只寫 `branch: main`，source-controller 第一次 clone 之前 main 可能已經前進到沒有被檢查過的 commit，kustomize-controller（綁 `cluster-admin`）就會套用它，包括只在第一次部署發生、事後改不了的部分（CloudNativePG 只在建立 Cluster 時收回 PUBLIC 權限、建立後不能改的入口 ClusterIP）。`commit` 與 `branch` 都有時，source-controller v1.9.6 只 clone 這個 commit（以 `github.com/fluxcd/pkg/git` v0.52.0 的 gogit client；commit 不在 main 上就失敗），revision 仍寫成 `main@sha1:<commit>`。根 Kustomization 在 pin 之後才建立，所以 kustomize-controller 第一次套用的一定是這個 commit，沒有空檔。
+     - 為什麼另外以 `trustiot-demo-flux` 套用 pin：根 Kustomization 套用 main 的 `gotk-sync.yaml`（沒有 `commit`）時，kustomize-controller v1.9.6 會清掉 kubectl 與它自己寫過的欄位，其他 field manager 一起擁有的欄位留著；所以 pin 一直留到腳本自己拿掉。
+  3. 依序等三個控制器、GitRepository `flux-system`（等不到時提示 GitHub 上要有那把 deploy key）、Kustomization `flux-system`、OCIRepository 與 HelmRelease `trustiot/trustiot`。每個 Flux 物件都要在目前的 generation `Ready=True`，而且停在計畫的 revision：GitRepository 的 artifact 與 Kustomization 的 `lastAppliedRevision` 是 `main@sha1:<計畫讀到的 origin/main>`，OCIRepository 的 artifact 是 `chart.yaml` 釘的 digest，HelmRelease 最新一筆 history 是 `deployed` 的 `<版本>+<digest 前 12 位>`。只看 `Ready=True` 不夠：中斷過的 run 或較舊的 main 留下的物件，在控制器追上之前一直是舊 revision 的 `Ready=True`。pin 還在的期間，每次輪詢也讀 GitRepository：`spec.ref` 不再是 `{branch: main, commit: <這次的 commit>}`，或目前 generation 的 artifact 是別的 commit 時，立刻停下（不等逾時），訊息寫明現在的 `spec.ref` 或 revision，之後什麼都不改。
+  4. Kustomization 套用了這個 commit 之後，在 HelmRelease 設 annotation `reconcile.fluxcd.io/requestedAt`（同 `flux reconcile`，field manager `trustiot-demo-flux`），等 helm-controller 把它記進 `status.lastHandledReconcileAt`、release 也在上述 chart `Ready=True` 才算完成。chart 版本相同時看不出 values：跟著 main 改的 `values-demo.yaml` 或 SOPS 加密的 Secret 只經 watch 通知 helm-controller，這次要求的 reconcile 一定讀到這個 commit 的 values。
+  5. 第一次部署在這個 commit 與釘選的 chart 確認之後，拿掉 pin，讓 Flux 再跟著 main：以 JSON patch（`test` 確認 `spec.ref.commit` 還是這個 commit，再 `remove`，field manager `trustiot-demo-flux`）拿掉，不靠 kustomize-controller 清欄位；ssh 斷線或 patch 失敗時讀回 GitRepository，已經是 `{branch: main}` 就當作完成。pin 在這之前已經不在（第 4 步確認之後才不見的）時不送 patch，印出它已經不在。接著等 GitRepository 跟著 main：`spec.ref` 剛好是 `{branch: main}`、目前 generation `Ready=True`、artifact 是 `main@sha1:<某個 commit>`。main 在安裝期間前進了，這時 Flux 會套用新的 main，腳本印出 `main moved on since this run checked <commit>: Flux now follows main at <revision>, which this run did not check`，新的部署以 `status` 看；它已經不是這次 `install` 檢查過的內容。
+
+     第 3 到 5 步每 10 秒以短指令讀一次（ssh 會切斷約 3 分鐘沒有輸出的指令），各有上限：控制器、GitRepository（兩次）、Kustomization 各 10 分鐘，OCIRepository 15 分鐘，HelmRelease 50 分鐘（每次 10 分鐘、remediation 重試 3 次）；`Stalled` 時立刻停，逾時的訊息寫明在等什麼 revision 與最後的狀態。pin 讓第一次部署不受 main 前進影響；`flux-system` 已經跟著 main（之前的 `install` 已經完成）時，等的時候 main 又前進了，GitRepository 會停在新的 commit 而逾時：`git fetch` 之後從新的 main 再跑一次（先 dry run）。
+  6. 再確認根 Kustomization、GitRepository 與 HelmRelease 都沒有暫停、根 Kustomization 的 `prune` 是 true，否則以錯誤結束（Flux 不再跟著 main 時不說成完成）；印出與 `status` 相同的內容，以及叢集層級物件的前後差異。
+- **成功的樣子**：最後印出三個 Deployment `1/1 available`；GitRepository、Kustomization、OCIRepository、HelmRelease 都是 `Ready=True`，GitRepository 與 Kustomization 的 revision 是 `main@sha1:<main 的 commit>`，OCIRepository 的是 `sha256:<digest>`；`main's deploy/flux/clusters/demo/trustiot/chart.yaml: <版本>@sha256:<digest>` 之下 `pulled: the same` 與 `deployed: the same (<版本>+<digest 前 12 位> (deployed))`；namespace `trustiot` 的 pod；最後一行 `done; records in <紀錄目錄>`。拿掉 pin 之後還有一行 `GitRepository flux-system/flux-system following main: Ready=True ...; at main@sha1:<commit>`。失敗時最後印出 `ERROR <原因>` 與 `log: <日誌路徑>`。
+- **遮蔽**：`flux.ts` 印出或存下的一切（訊息、錯誤、最後的 `ERROR` 行、計畫與紀錄檔，連 JSON 的 key 也算）都先經過 `redact()`：ssh、kubectl 與 kustomize 的錯誤可能帶著區網位址、ssh 的主機別名、存取用的主機名稱與工作站的路徑。規則是 fail-closed，先全部換掉再放回允許的：
+  - 凡是看起來像主機名稱的字（以點分隔、最後一段是字母；前面是 `*`、`.`、`-` 或空的 label 都算）換成 `<host>`，只放回完全相同的公開名稱（`flux.ts` 的 `SHOWN_NAMES`）、叢集內的 DNS 名稱（`<name>.<namespace>.svc` 或 `.pod`，可以再接 `.cluster.local`）、Kubernetes 與 Flux、Istio、CloudNativePG 的 API group（`<resource>.<group>` 也算）、副檔名不是頂級網域的檔名；`trustiot.io` 與 `k8s.io` 結尾的名稱只在 label 或 annotation 的 key 的 `/` 前面保留（`trustiot.io/demo-flux`、`app.kubernetes.io/name`），其他的子網域一樣換掉。
+  - k3s 的 pod 與 Service 網段（`10.42.`、`10.43.`）與 loopback 以外的 IPv4、loopback 以外的 IPv6 換成 `<address>`，後面接 `.` 或前面接 `.` 的位址也算。
+  - 私鑰、JWT、token 與 API key（`gh[pousr]_`、`github_pat_`、`re_`、`sk-`、`AKIA` 開頭的）、HTTP 的 `Bearer` 與 `Basic` 值、`password=`、`token=` 這類設定的值、URL 裡的帳號密碼（`git@` 除外）、長的 base64，以及 20 字元以上大小寫字母與數字混雜的字串換成 `<redacted>`；email 在放回允許的名稱之前就換成 `<email>`（`someone@github.com` 也是，clone 用的 `git@github.com` 除外）。腳本要印的東西保留：`sha256:<hex>` digest、40 位 commit 與 `main@sha1:<commit>`、ssh 公鑰與它的 `SHA256:` 指紋、age 收件者。
+  - 工作站的路徑：repo 的根目錄寫成 `<repo>`，家目錄（`$HOME`、其他 `/home/<名稱>`、`/Users/<名稱>`、`/root`）寫成 `~`。ssh 自己的錯誤裡的 ssh 主機寫成 `<ssh-host>`。
+- **中斷之後**：Flux 在叢集裡跑，工作站中斷不影響它。lab 鎖留著時依 scripts/README.md「中斷之後」處理。ssh 在 root 腳本執行中斷線（exit 255）時，`sudo bash -c` 在展示機上可能還在跑，所以腳本不釋放 lab 鎖，印出 `the lab lock stays held for Laysi/trustiot-v2#467` 與要檢查的事：在展示機上 `sudo flock --nonblock /run/trustiot-demo-flux/.lock true` 成功時已經沒有這支腳本的 root 腳本在跑。之後再跑一次 `install` 的 dry run，計畫依叢集的樣子決定：
+  - 根 Kustomization 還不存在：從套用重來（server-side apply 可以重複），pin 也一起重來。
+  - 根 Kustomization 已經存在、GitRepository 還釘在這次檢查的 commit（上次在等第一次部署時中斷）：不再套用（Flux 已經管理自己，再以 kubectl 套用會和它搶欄位），以 `trustiot-demo-flux` 再套用一次 pin，等第一次部署，再拿掉 pin。
+  - GitRepository 釘在較舊的 commit（中斷之後 main 前進了）：這次檢查的是新的 main，計畫先以 JSON patch（`test` 舊的 commit，`replace` 成新的）把 pin 移到新的 commit，之後同上；根 Kustomization 還不存在時移完再套用。舊的 commit 是之前的執行檢查過的，移動之前 Flux 只會套用它。
+  - GitRepository 已經跟著 main（之前的 `install` 已經完成）：只等待與回報。
+  - 根 Kustomization 暫停或 `prune: false`，或 GitRepository、HelmRelease 暫停：`install` 拒絕，不自動恢復。這是中斷的 `remove` 留下的樣子（或有人以 `flux suspend` 暫停了它們）。要繼續移除就再跑 `remove`（先 dry run），它從暫停的根 Kustomization 接著做完。要恢復 Flux，只在 GitRepository 與根 Kustomization 都還在時，持有 lab 鎖，把暫停的那幾個改回來，再跑 `install` 的 dry run 確認：
+
+  ```sh
+  sudo k3s kubectl -n flux-system patch kustomizations.kustomize.toolkit.fluxcd.io flux-system --type=merge -p '{"spec":{"suspend":false,"prune":true}}'
+  sudo k3s kubectl -n flux-system patch gitrepositories.source.toolkit.fluxcd.io flux-system --type=merge -p '{"spec":{"suspend":false}}'
+  sudo k3s kubectl -n trustiot patch helmreleases.helm.toolkit.fluxcd.io trustiot --type=merge -p '{"spec":{"suspend":false}}'
+  ```
+
+  `remove` 已經刪掉 HelmRelease 時，恢復的根 Kustomization 從 main 重新建立它，Helm 接管留下的 Postgres 與磁碟區（同下方「移除後再裝」，尚未在叢集上驗證）。`deploy-key` 只有一個 `kubectl create`，中斷後重跑會看到已經建立的 Secret 並再印一次公鑰；被強制終止而留下有空值的 Secret 時拒絕，並寫明刪掉重來的指令。所以這裡不用 systemd 的暫時 unit：每一步都是短的、可以重跑的指令，不像 connector 的安裝程式要長時間不中斷地跑（[展示環境 runbook](../../docs/runbooks/demo-environment.md)「安裝 connector」）。
+
+`install` 改動的叢集層級物件：Flux 的 8 個 CRD（`*.toolkit.fluxcd.io` 的 buckets、externalartifacts、gitrepositories、helmcharts、helmrepositories、ocirepositories、helmreleases、kustomizations）、ClusterRole `crd-controller-flux-system`、`flux-edit-flux-system`、`flux-view-flux-system`、ClusterRoleBinding `crd-controller-flux-system` 與 `cluster-reconciler-flux-system`；後者把 kustomize-controller 與 helm-controller 綁到 `cluster-admin`，所以合併進 main 的 `clusters/demo` 能改展示機 k3s 上的任何東西，包括 lab e2e 共用的部分（SaaS 叢集也是如此）。namespace `flux-system` 加上 label，裡面多了三個控制器與它們的 ServiceAccount、Service、NetworkPolicy、ResourceQuota。之後 Flux 從 main 建立 namespace `trustiot` 與 release。
+
+deploy key 換新：先在展示機上刪除 Secret `flux-system/flux-system`（持有 lab 鎖），再跑 `deploy-key`、在 GitHub 加新的公鑰、刪舊的。期間 Flux 讀不到 main、不套用新的變更，正在跑的服務不受影響。
+
+#### 移除
+
+```sh
+bun scripts/demo/flux.ts remove --ssh-host "$DEMO_SSH_HOST"                                  # 計畫與確認碼，只讀
+bun scripts/demo/flux.ts remove --ssh-host "$DEMO_SSH_HOST" --apply --confirm <確認碼>
+```
+
+只移除這支腳本裝的 Flux（`flux-system` 帶 `trustiot.io/demo-flux=installed`）。以下情況拒絕，什麼都不刪：`flux-system` 是別人的；`flux-system` 裡有安裝以外的物件（安裝只有 Kubernetes 的預設物件、`sops-age`、`deploy-key` 的 Secret、main 的 Flux manifest 裡的物件與控制器的 leader election Lease；被其他物件擁有的 Pod、ReplicaSet 等不算），刪除 namespace 會連帶刪掉它們，Flux 刪除之前還會再檢查一次；叢集裡有不是根 Kustomization `flux-system` 從 main 套用的 Flux 物件（依 kustomize-controller 的 label `kustomize.toolkit.fluxcd.io/name` 與 `namespace` 判斷；根的 GitRepository 與 Kustomization 本身除外），例如有人手動建立的 HelmRelease，否則它會被刪除、它的 Helm release 被解除安裝，刪除 Flux 的 CRD 也會連帶刪掉它；有 Flux 物件的 kind 不在 main 的 manifest 裡；有 main 的 manifest 沒有定義的 Flux CRD 或帶 `app.kubernetes.io/part-of=flux` 的 ClusterRole、ClusterRoleBinding（第 4 步只刪 main 定義的，會停在一半），Flux 刪除之前同樣再檢查一次；HelmRelease 處於暫停。順序依釘選版本的 Flux 的行為（kustomize-controller v1.9.6、helm-controller v1.6.5 的刪除流程）：
+
+1. 把根 Kustomization `flux-system` 改成 `suspend: true`、`prune: false`。沒有暫停、`prune: true` 的 Kustomization 被刪除時，kustomize-controller 會刪掉它套用過的一切，包括 namespace `trustiot` 與裡面的資料；暫停時只拿掉 finalizer，不刪任何東西。暫停之後重新列出 Flux 物件，與計畫的不同時（暫停生效之前，Flux 從新的 main 建立或刪除了物件）停下、什麼都不刪，根 Kustomization 維持暫停：再跑一次 `remove`（先 dry run），或依上方「中斷之後」恢復 Flux。之前中斷的 `remove` 留下暫停的根 Kustomization 時，`remove` 照樣接著做完。
+2. 刪除 HelmRelease `trustiot/trustiot`，等它消失（最多 20 分鐘）：沒有暫停的 HelmRelease 被刪除時，helm-controller 解除安裝 Helm release。暫停的 HelmRelease 被刪除時 release 會留著、沒有人管理，所以腳本先拒絕。
+3. 刪除其他 Flux 物件（OCIRepository），再刪 GitRepository 與 Kustomization `flux-system`，各自等它們消失。
+4. 以 `kubectl delete -f` 刪除 main 的 Flux manifest 的全部 27 個物件：CRD、ClusterRole、ClusterRoleBinding、控制器，以及 namespace `flux-system`，連同 `sops-age` 與 deploy key 的 Secret；等到它們都消失。
+5. 印出 namespace `trustiot` 留下的 PersistentVolumeClaim、Secret 與 Postgres Cluster。
+
+留下的資料：namespace `trustiot` 本身（Kustomization 已經不 prune）；帶 `helm.sh/resource-policy: keep` 的 CloudNativePG Cluster 與 ImageCatalog，Postgres 由 operator 繼續執行，連同它的磁碟區；ClickHouse 的 PersistentVolumeClaim（StatefulSet 的 `whenDeleted: Retain`）；migration Job 與 init container 寫入的密碼 Secret、內部身分簽章金鑰的 Secret 與公鑰 ConfigMap（都帶 `helm.sh/resource-policy: keep`）；Flux 從 git 解密套用的 Secret（`ghcr-pull`、`trustiot-demo-values`），不再需要時以 `sudo k3s kubectl -n trustiot delete secret <名稱>` 刪除。服務的 Deployment 與 Service 隨 release 移除，展示環境中斷。
+
+移除後再裝：兩把金鑰已經跟著 `flux-system` 刪掉，所以照上方「展示叢集的 age 金鑰」產生新的 age 金鑰、開 PR 換掉 `.sops.yaml` 的 demo 收件者並 `sops updatekeys -y` 每個 demo 的 SOPS 檔；在 GitHub 刪除舊的 deploy key，以 `deploy-key` 產生新的；再 `install`。namespace `trustiot` 留著時 `install` 的計畫會註明：Helm 依物件上的 release 標註接管留下來的 Postgres、Secret 與磁碟區，這一點還沒在叢集上驗證過（上方「日常操作」）。
+
+lab e2e：`tests/e2e/lab.e2e.ts` 在叢集已經有 Flux（namespace `flux-system` 或 Flux 的 CRD）時拒絕執行，也只移除自己建立的 Flux（下方「lab 測試」）；反過來，`flux.ts` 的子指令都不碰帶 lab e2e label（`e2e.trustiot.io/run`）的 `flux-system`。要跑 lab e2e，先以 `remove` 移除展示環境的 Flux，測完照上一段重新安裝。期間展示環境中斷，閘道器的資料會留下缺口，所以只在必要時（例如驗證 Flux 的升級）這樣做。
 
 ## 檢查
 
@@ -325,11 +416,11 @@ lab e2e：`tests/e2e/lab.e2e.ts` 在展示環境的 Flux 存在時拒絕執行�
 - `values-demo.yaml` 不含主機名稱、寄件人與 IP：每個像主機名稱的字（值、URL 與註解都算）都在 `.invalid` 或 `.test` 之下、是列出的公開服務（`smtp.resend.com`）、檔名，或 chart values 的路徑；沒有 `@`。
 - `.sops.yaml` 每個叢集一條規則，規則不會比對到別的叢集的檔案；每個收件者一行並註明角色；每條規則是空的，或剛好是自己叢集的金鑰加上每一把維運人員的金鑰；`github-known-hosts` 與 GitHub 公布的指紋相同。
 
-release 流程的部分在 `bun test scripts/release`（`flux.test.ts`、`deploy.test.ts`：PR 的內容、每個叢集的版本比較、只移動較舊的叢集、重跑（分支已經存在時，它改的檔案或內容與這次該寫的不同就停下）、缺少或被手改的 `chart.yaml`、GitHub 拒絕開 PR 時的訊息）；`scripts/flux/lib.test.ts` 檢查 Secret 的產生、輸入值的檢查、私有 values 的 key、收件者的角色與 `pin-chart.ts`；`scripts/flux/sops.test.ts` 檢查寫檔前對 sops 輸出的檢查與 stdin 必須是管線。
+release 流程的部分在 `bun test scripts/release`（`flux.test.ts`、`deploy.test.ts`：PR 的內容、每個叢集的版本比較、只移動較舊的叢集、重跑（分支已經存在時，它改的檔案或內容與這次該寫的不同就停下）、缺少或被手改的 `chart.yaml`、GitHub 拒絕開 PR 時的訊息）；`scripts/flux/lib.test.ts` 檢查 Secret 的產生、輸入值的檢查、私有 values 的 key、收件者的角色與 `pin-chart.ts`；`scripts/flux/sops.test.ts` 檢查寫檔前對 sops 輸出的檢查與 stdin 必須是管線。展示機的安裝腳本 `scripts/demo/flux.ts` 在 `bun test scripts/demo`（`flux.test.ts`）：上方「在展示機安裝 Flux」的每個拒絕條件、計畫與確認、第一次同步釘在檢查過的 commit（安裝期間 main 前進、釘住時 GitRepository 回報別的 commit 或 pin 被改掉、中斷後重跑與移動 pin、拿掉 pin 後跟著 main）、暫停的 Flux 物件、移除的順序與暫停後的重新比對、ssh 斷線時保留 lab 鎖、遮蔽規則（ssh、kubectl 與 kustomize 的錯誤帶著的位址、主機名稱與路徑不出現在輸出、錯誤與紀錄檔），以及以 bash 對假的 `k3s` 執行送到展示機的 root 腳本：不把私鑰印出來、空的值不建立 Secret、失敗時刪掉不完整的 Secret、清掉殘留的暫存目錄、另一個 root 腳本在跑時停下。
 
 ## lab 測試
 
-`tests/e2e/lab.e2e.ts` 在實驗機（k3s，唯一的 Kubernetes 環境）以 README 的方式裝 Flux，驗證整條路。它在整個叢集裝上再移除 Flux，所以叢集已經有 Flux（namespace `flux-system` 或 Flux 的 CRD）時拒絕執行；實驗機也是展示機，展示環境的 Flux 在時要先移除它才能跑（見上方「展示叢集」）。它開始時與裝 Flux 之前各檢查一次：lab 鎖 `~/e2e.lock/owner` 是一行 `Laysi/trustiot-v2#<issue> <UTC 時間>`，issue 與 `E2E_NAMESPACE`（`e2e-<issue>`）相同（連同後面的空白比對，`#4570` 不會被當成 `#457`），叢集上沒有 Flux。測試 namespace 與 `flux-system` 都以這次執行的 ID 為 label（`e2e.trustiot.io/run`）建立，建立時已經存在就停下，什麼都不裝。`gotk-components.yaml` 也宣告 `flux-system`，Flux 也會套用自己的那棵樹，所以以 server-side apply 套用 Flux 的 manifest 之後立刻、Flux 第一次 reconcile 之後再一次重新讀 `flux-system` 的 label，不是這次的 ID 就停下，並說明要手動移除什麼（Flux 的 manifest 存在 `E2E_OUT`）。結束時重新讀兩個 label，只刪仍屬於這次執行的東西，刪什麼、照什麼順序由 `tests/e2e/preflight.ts` 的 `teardownSteps` 決定（有單元測試）：`flux-system` 不是這次的就不刪 Flux 的物件、manifest（CRD、ClusterRole、ClusterRoleBinding）與 namespace，測試 namespace 不是這次的就不刪它，兩種情形都讓測試失敗。驗證內容：合併 deploy commit 後在間隔內部署、revert 後回到前一版、別的金鑰簽的 chart 不會被安裝、SOPS 加密的拉取 Secret 被解密並用來拉 chart。測完移除 Flux 與測試 namespace，並比對叢集層級的物件與其他 namespace 的 workload 與測試前相同。
+`tests/e2e/lab.e2e.ts` 在實驗機（k3s，唯一的 Kubernetes 環境）以 README 的方式裝 Flux，驗證整條路。它在整個叢集裝上再移除 Flux，所以叢集已經有 Flux（namespace `flux-system` 或 Flux 的 CRD）時拒絕執行；實驗機也是展示機，展示環境的 Flux 在時要先以 `scripts/demo/flux.ts remove` 移除它才能跑（見上方「在展示機安裝 Flux」）。它開始時與裝 Flux 之前各檢查一次：lab 鎖 `~/e2e.lock/owner` 是一行 `Laysi/trustiot-v2#<issue> <UTC 時間>`，issue 與 `E2E_NAMESPACE`（`e2e-<issue>`）相同（連同後面的空白比對，`#4570` 不會被當成 `#457`），叢集上沒有 Flux。測試 namespace 與 `flux-system` 都以這次執行的 ID 為 label（`e2e.trustiot.io/run`）建立，建立時已經存在就停下，什麼都不裝。`gotk-components.yaml` 也宣告 `flux-system`，Flux 也會套用自己的那棵樹，所以以 server-side apply 套用 Flux 的 manifest 之後立刻、Flux 第一次 reconcile 之後再一次重新讀 `flux-system` 的 label，不是這次的 ID 就停下，並說明要手動移除什麼（Flux 的 manifest 存在 `E2E_OUT`）。結束時重新讀兩個 label，只刪仍屬於這次執行的東西，刪什麼、照什麼順序由 `tests/e2e/preflight.ts` 的 `teardownSteps` 決定（有單元測試）：`flux-system` 不是這次的就不刪 Flux 的物件、manifest（CRD、ClusterRole、ClusterRoleBinding）與 namespace，測試 namespace 不是這次的就不刪它，兩種情形都讓測試失敗。驗證內容：合併 deploy commit 後在間隔內部署、revert 後回到前一版、別的金鑰簽的 chart 不會被安裝、SOPS 加密的拉取 Secret 被解密並用來拉 chart。測完移除 Flux 與測試 namespace，並比對叢集層級的物件與其他 namespace 的 workload 與測試前相同。
 
 ```sh
 ssh trustiot-mac-m1 'mkdir ~/e2e.lock && echo "Laysi/trustiot-v2#70 $(date -u +%FT%TZ)" > ~/e2e.lock/owner'
