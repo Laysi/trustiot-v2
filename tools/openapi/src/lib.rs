@@ -67,6 +67,9 @@ pub const SERVICES_WITHOUT_API: &[&str] = &[
     // health endpoints (docs/architecture/deployment.md). Until Laysi/trustiot-v2#91 builds the
     // service, the crate only holds the ClickHouse schema.
     "ingest",
+    // Serves the SPA's static files (frontend/) on the app host; no API besides the health
+    // endpoints (Laysi/trustiot-v2#123, services/web/README.md).
+    "web",
 ];
 
 fn shared_schemas() -> OpenApi {
