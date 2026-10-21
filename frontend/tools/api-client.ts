@@ -17,7 +17,7 @@ export const SPEC_PATH = fileURLToPath(new URL("../../api/openapi.json", import.
 export const OUTPUT_PATH = fileURLToPath(new URL("../src/api/schema.gen.ts", import.meta.url));
 
 const HEADER =
-  "// Generated from api/openapi.json by frontend/scripts/api-client.ts. Do not edit by hand:\n" +
+  "// Generated from api/openapi.json by frontend/tools/api-client.ts. Do not edit by hand:\n" +
   "// run `bun run --cwd frontend api:generate` after `cargo run -p openapi`.\n\n";
 
 /** The file's content for `spec` (a parsed OpenAPI document). */
@@ -31,7 +31,7 @@ async function main(args: readonly string[]): Promise<number> {
   const check = args.includes("--check");
   const unknown = args.filter((arg) => arg !== "--check");
   if (unknown.length > 0) {
-    console.error(`unknown argument(s): ${unknown.join(" ")}\nusage: bun scripts/api-client.ts [--check]`);
+    console.error(`unknown argument(s): ${unknown.join(" ")}\nusage: bun tools/api-client.ts [--check]`);
     return 2;
   }
   const expected = await render(JSON.parse(readFileSync(SPEC_PATH, "utf8")));

@@ -6,7 +6,7 @@ import { defineConfig } from "vite";
  * index.html and the files of public/ at the root, everything Vite emits under /static/ with
  * hash-only names. Absolute URLs (base "/") let a deep link such as /devices/42 load the same
  * assets as /. Nothing is inlined: no data: URIs and no inline script or style, so the CSP can
- * stay at 'self' (scripts/check-dist.ts fails the build otherwise).
+ * stay at 'self' (tools/check-dist.ts fails the build otherwise).
  */
 export default defineConfig(({ command }) => ({
   base: "/",

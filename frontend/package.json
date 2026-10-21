@@ -9,9 +9,9 @@
     "lint": "biome ci .",
     "format": "biome check --write .",
     "test": "bun test",
-    "api:generate": "bun scripts/api-client.ts",
-    "api:check": "bun scripts/api-client.ts --check",
-    "check:dist": "bun scripts/check-dist.ts"
+    "api:generate": "bun tools/api-client.ts",
+    "api:check": "bun tools/api-client.ts --check",
+    "check:dist": "bun tools/check-dist.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "5.104.5",

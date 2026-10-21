@@ -27,7 +27,7 @@ Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後�
 | `bun run --cwd frontend dev` | 開發伺服器（熱更新）；後端見下方「開發伺服器」 |
 | `bun run --cwd frontend api:generate` | 由 `api/openapi.json` 重新產生 `src/api/schema.gen.ts` |
 | `bun run --cwd frontend api:check` | 進版控的 `schema.gen.ts` 與規格產生的結果不同就失敗 |
-| `bun run --cwd frontend typecheck` | `tsc --noEmit`，含 `src/`、`scripts/` 與 `vite.config.ts` |
+| `bun run --cwd frontend typecheck` | `tsc --noEmit`，含 `src/`、`tools/` 與 `vite.config.ts` |
 | `bun run --cwd frontend lint` | `biome ci .`；`bun run --cwd frontend format` 修正格式與 import 順序 |
 | `bun run --cwd frontend test` | 全部單元測試；單一測試：`bun run --cwd frontend test -t "<測試名稱的一部分>"` |
 | `bun run --cwd frontend build` | 建置到 `frontend/dist/`（不進版控） |
@@ -35,9 +35,11 @@ Vite + React 的單頁應用程式（SPA，決策 2），頁面全在登入後�
 
 CI 的 `frontend` job 依序跑 install、`api:check`、`typecheck`、`lint`、`test`、`build`、`check:dist`（`docs/architecture/ci-release.md` 的「ci.yml 的 job」）。
 
+產生 API client 與檢查建置結果的 Bun 腳本放在 `tools/`，不叫 `scripts/`：在 repo 根目錄執行的 `bun test scripts` 以路徑子字串篩選測試檔，目錄叫 `scripts/` 會連前端的測試一起跑，而那時前端的相依不一定已安裝。
+
 ## 建置結果的約定（與 `services/web`）
 
-`services/web` 原樣提供 `dist/`，所以版面是兩邊的約定，`scripts/check-dist.ts` 檢查：
+`services/web` 原樣提供 `dist/`，所以版面是兩邊的約定，`tools/check-dist.ts` 檢查：
 
 - 根目錄只有 `index.html` 與 `public/` 的檔案（`robots.txt`、`favicon.svg`）。
 - 其餘都在 `static/` 下，檔名只有內容的 hash（`static/<hash>.js`、`static/<hash>.css`），原始碼的模組名稱與路徑不會出現在映像裡；內容改變時檔名一定改變，所以這些檔案可以長期快取。

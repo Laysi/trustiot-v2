@@ -1,4 +1,4 @@
-// Generated from api/openapi.json by frontend/scripts/api-client.ts. Do not edit by hand:
+// Generated from api/openapi.json by frontend/tools/api-client.ts. Do not edit by hand:
 // run `bun run --cwd frontend api:generate` after `cargo run -p openapi`.
 
 export interface paths {
