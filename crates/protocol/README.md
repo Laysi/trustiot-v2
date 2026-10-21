@@ -176,7 +176,7 @@ Mosquitto 以 `use_identity_as_username` 把憑證 CN 當成 username，dynsec �
 | `models[].points[]` | 資料點：`key`、`function_code`（1–4，只讀）、`address`（0 起算的協定位址）、`data_type`（`bool`、`u16`、`i16`、`u32`、`i32`、`u64`、`i64`、`f32`、`f64`、`string`）、`byte_order`（`abcd` 預設省略、`badc`、`cdab`、`dcba`）、`length`（只有 `string`，1–125 個暫存器）、`scale`、`offset` |
 | `devices[]` | 設備：`id`、`model`、`transport`（`modbus_tcp` 或 `rtu_over_tcp`）、`host`（IP 或 DNS 名稱）、`port`、`unit_id`（RTU 為 1–247）、`poll_interval_ms`（100 ms–1 天）；最多 `MAX_DEVICES`（1000）台 |
 
-`DesiredConfig::validate` 集中了所有結構規則：型號與資料點鍵不重複、位址不重疊（四種功能碼各自的位址空間）、功能碼 1、2 只能是 `bool`、字串需要長度、不能超過位址 65535、scale 與 offset 必須是有限值且 scale 不為 0、同一個 host 與 port 不能混用兩種傳輸方式、設備引用的型號必須存在。資產服務（每次寫入）、設定產生器（發布前）與閘道器（套用前）執行同一套規則；`encode` 拒絕送出無效的設定。
+`DesiredConfig::validate` 集中了所有結構規則：型號與資料點鍵不重複、位址不重疊（四種功能碼各自的位址空間）、功能碼 1、2 只能是 `bool`、字串需要長度、不能超過位址 65535、scale 與 offset 必須是有限值且 scale 不為 0、同一個 host 與 port 不能混用兩種傳輸方式、設備引用的型號必須存在。資產服務（每次寫入）、設定產生器（發布前）與閘道器（套用前）執行同一套規則；`encode` 拒絕送出無效的設定。`config::validate_model_points`（與呼叫它的 `DeviceModel::validate`）對單一型號的資料點執行其中的資料點規則，issue 的路徑從型號起算（例如 `points[2].address`）：資產服務每次寫入型號都用它（Laysi/trustiot-v2#99），存下的型號因此一定通過設定的檢查。
 
 `MAX_DEVICES` 是協定能承載的上限：心跳要帶每台設備的統計且不能拆包，1000 台在最壞情況下仍放得進 1 MiB（`tests/limits.rs`）。每台閘道器實際的設備技術上限（清單 B2）由 Laysi/trustiot-v2#116 訂定，不得超過這個值。
 

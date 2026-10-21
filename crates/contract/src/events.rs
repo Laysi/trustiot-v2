@@ -3,4 +3,5 @@
 //! `README.md`; every event here has fixtures under `tests/fixtures/events/<TYPE>/` that
 //! `tests/events.rs` decodes.
 
+pub mod assets;
 pub mod identity;

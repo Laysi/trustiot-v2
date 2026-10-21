@@ -1,0 +1,13 @@
+{
+  "id": "01928f6e-7a3c-7d4e-8f00-000000000303",
+  "type": "assets.device_model_deleted",
+  "version": 1,
+  "tenant_id": "01928f6e-7a3c-7d4e-8f00-00000000000b",
+  "occurred_at": "2026-10-21T08:10:00.789Z",
+  "producer": "assets",
+  "payload": {
+    "model_id": "01928f6e-7a3c-7d4e-8f00-000000000a01",
+    "name": "power-meter",
+    "revision": 2
+  }
+}

@@ -117,6 +117,26 @@ pub struct DataPoint {
     pub offset: Option<f64>,
 }
 
+impl DeviceModel {
+    /// Checks the model's data points with [`validate_model_points`].
+    pub fn validate(&self) -> Result<(), Invalid> {
+        validate_model_points(&self.points)
+    }
+}
+
+/// Checks the data points of one device model with the rules [`DesiredConfig`] applies to each
+/// of its models: unique keys, read function codes with matching types, string lengths,
+/// addresses within 65535 that do not overlap within one function code's address space, and
+/// finite, non-zero scaling of numeric points only. The assets service runs it on every write of
+/// a model (rebuild checklist C1), so a stored model always passes the configuration's checks.
+///
+/// Issue paths start at the model, for example `points[2].address`.
+pub fn validate_model_points(points: &[DataPoint]) -> Result<(), Invalid> {
+    let mut issues = Issues::default();
+    validate_points(points, "", &mut issues);
+    issues.finish()
+}
+
 /// A Modbus read function. Encoded as its number.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "u8", into = "u8")]
@@ -490,13 +510,22 @@ fn validate_models(models: &[DeviceModel], issues: &mut Issues) {
     }
 }
 
+/// `points[3]` under `path`, or at the root when `path` is empty.
+fn point_path(path: &str, index: usize) -> String {
+    if path.is_empty() {
+        format!("points[{index}]")
+    } else {
+        format!("{path}.points[{index}]")
+    }
+}
+
 fn validate_points(points: &[DataPoint], path: &str, issues: &mut Issues) {
     let mut keys = HashMap::new();
     // (function code, first address, last address, point index) of every point that spans a
     // valid range, for the overlap check.
     let mut ranges = Vec::with_capacity(points.len());
     for (index, point) in points.iter().enumerate() {
-        let at = format!("{path}.points[{index}]");
+        let at = point_path(path, index);
         if let Some(first) = keys.insert(&point.key, index) {
             issues.push(
                 IssueCode::Duplicate,
@@ -530,11 +559,12 @@ fn validate_points(points: &[DataPoint], path: &str, issues: &mut Issues) {
             Some((code, end, other)) if code == function_code && first <= end => {
                 issues.push(
                     IssueCode::OverlappingPoints,
-                    format!("{path}.points[{index}].address"),
+                    format!("{}.address", point_path(path, index)),
                     format!(
-                        "{} {} overlaps {path}.points[{other}]",
+                        "{} {} overlaps {}",
                         function_label(function_code),
-                        first
+                        first,
+                        point_path(path, other)
                     ),
                 );
                 if last > end {
