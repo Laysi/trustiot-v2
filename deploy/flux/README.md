@@ -225,7 +225,7 @@ bun scripts/flux/components.ts    # 重寫 gotk-components.yaml 與控制器映�
 | Flux | `clusters/demo/flux-system` 以 kustomize 引用 `clusters/saas/flux-system`，只以 patch 把根 Kustomization 的 `path` 換成 `./deploy/flux/clusters/demo`（patch 用 `replace`，SaaS 那邊的路徑不見時建置失敗，不會讓展示叢集套用 SaaS 的樹） | 升級 Flux 只改一處，兩個叢集一起跟上；代價是兩個叢集不能停在不同版的 Flux |
 | chart 版本 | 自己的 `chart.yaml` 與 `values-saas.yaml`；deploy PR 把它與 SaaS 一起移到新版，只動它時用 `pin-chart.ts` | 換版與 SaaS 一樣是「合併即部署、revert 即回滾」，簽章驗證也相同；代價是一個 deploy PR 可能同時動兩個叢集 |
 | values | HelmRelease 依序讀 `values-saas.yaml`、`values-demo.yaml`，最後是 SOPS 加密的 Secret `trustiot-demo-values` 的四個 key，各自以 `targetPath` 與 `literal: true` 寫進一個值：`app-host` → `hosts.app`、`gateway-host` → `hosts.gateway`、`ota-host` → `hosts.ota`、`smtp-from` → `smtp.from` | 主機名稱與寄件人不公開（[密鑰與權限](../../docs/architecture/secrets.md)「公開 repo 的資訊規則」），只在加密的 Secret 裡。加密的內容在 PR 裡看不到，所以它只能設這四個值：整份 values 的寫法能改任何設定（映像、ingress、環境變數），沒有 `literal` 時 Flux 以 Helm 的 `--set` 語法讀值，逗號就能接上另一個 `路徑=值`。Secret 帶 `reconcile.fluxcd.io/watch: Enabled`，改了就升級 |
-| 入口的 ClusterIP | 固定：`values-demo.yaml` 以 `ingress.tunnel.clusterIP` 設一個展示機 Service 網段（`10.43.0.0/16`）靜態區段裡沒被使用的位址，tunnel 的路由指向這個位址（Laysi/trustiot-v2#478）。目前還沒設：這個值要與換到含它的 chart 版本在同一個 PR 加進 `values-demo.yaml`，而且在展示環境第一次部署（Laysi/trustiot-v2#467）之前；較舊的 chart 不認得這個欄位，schema 拒絕整份 values，HelmRelease 就失敗 | 入口 Service 重建後拿回同一個位址，路由不失效，舊位址也不會被別的 Service 拿走而經 tunnel 公開；ClusterIP 建立後不能改，所以要在 Service 第一次建立前設好。選法與改位址的步驟見 [chart 的 README](../chart/README.md)「固定的入口 ClusterIP」 |
+| 入口的 ClusterIP | 固定：`values-demo.yaml` 以 `ingress.tunnel.clusterIP` 設一個展示機 Service 網段（`10.43.0.0/16`）靜態區段裡沒被使用的位址，tunnel 的路由指向這個位址（Laysi/trustiot-v2#478）。設為 `10.43.0.80`（Laysi/trustiot-v2#480），與換到含這個欄位的 chart 版本在同一個 PR，而且在展示環境第一次部署（Laysi/trustiot-v2#467）之前；較舊的 chart 不認得這個欄位，schema 拒絕整份 values，HelmRelease 就失敗 | 入口 Service 重建後拿回同一個位址，路由不失效，舊位址也不會被別的 Service 拿走而經 tunnel 公開；ClusterIP 建立後不能改，所以要在 Service 第一次建立前設好。選法與改位址的步驟見 [chart 的 README](../chart/README.md)「固定的入口 ClusterIP」 |
 | 服務 | `values-demo.yaml` 的 `services` 逐一打開切片的服務（目前 `identity`、`assets`） | 只開部署中那一版 chart 有映像的服務；切片的 issue 進了 release 後，在這裡打開 |
 | 外部端點 | Qdrant 的網址在 `.invalid`（RFC 6761，不會解析）；Sentry 關閉 | 切片不用知識庫，SaaS 型態的 schema 又要求外部網址；沒有展示用的 Sentry 專案，錯誤留在 ClickHouse 的日誌 |
 | 備份與磁碟 | 沒有備份；Postgres 10Gi、ClickHouse 20Gi | 里程碑「展示切片」接受展示資料遺失；一台閘道器加幾具電表的量 |
@@ -304,7 +304,7 @@ age-keygen 的輸出不是終端機時，私鑰寫到管線、`Public key: …` 
 
 在展示機裝 Flux 之前：
 
-- `chart.yaml` 至少要是 `0.0.0-rc.8`。更早的 chart 沒有 Laysi/trustiot-v2#404（內部身分簽章金鑰在叢集內產生；舊版要人建立金鑰）與 Laysi/trustiot-v2#400（建立 Postgres 時收回 `postgres` 與 `template1` 的 PUBLIC 權限，只在 Cluster 建立時發生）。目前釘的 `0.0.0-rc.7` 只是佔位：展示機還沒有 Flux，它不部署任何東西。
+- `chart.yaml` 至少要是 `0.0.0-rc.10`（`scripts/demo/lib.ts` 的 `DEMO_MIN_CHART_VERSION`）。更早的 chart 沒有 Laysi/trustiot-v2#404（內部身分簽章金鑰在叢集內產生；舊版要人建立金鑰）、Laysi/trustiot-v2#400（建立 Postgres 時收回 `postgres` 與 `template1` 的 PUBLIC 權限，只在 Cluster 建立時發生）或 Laysi/trustiot-v2#478（入口 Service 的固定 ClusterIP，只在 Service 建立時套用）；`0.0.0-rc.9` 有這三項，但沒有 Laysi/trustiot-v2#487（rustls-webpki 的 RUSTSEC-2026-0382 修正）。目前釘的是 `0.0.0-rc.10`（Laysi/trustiot-v2#480）。
 - `ghcr-pull`、`trustiot-smtp`、`trustiot-demo-values` 三個 SOPS 檔要在 main 上：HelmRelease 的私有 values 不是 optional，少了主機名稱時 chart 的 schema 拒絕整份 values，什麼都不裝。
 - 其餘同上方「建立叢集」，差別是叢集的 age 金鑰（上方「展示叢集的 age 金鑰」）與 deploy key 都在展示機上產生（deploy key 加到 GitHub 時同樣不勾 Allow write access）。在展示機安裝 Flux 的步驟由 Laysi/trustiot-v2#467 補上。
 
