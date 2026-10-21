@@ -479,7 +479,7 @@ impl<C: Connection + Disconnect + Send> Connection for Observed<'_, C> {
         // under way past its own timeout unless something without a timeout holds it up.
         let mut exchange = timeout_at(deadline, self.connection.read(unit, read, timeout))
             .await
-            .unwrap_or_else(|_| Exchange {
+            .unwrap_or(Exchange {
                 result: Err(ReadError::Timeout),
                 unit_mismatches: 0,
             });
