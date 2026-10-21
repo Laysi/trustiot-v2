@@ -9,7 +9,7 @@ use axum::http::header::{
 };
 
 /// Only the site's own files run, load and connect: no inline script or style, no `eval`, no
-/// `data:` URIs (frontend/scripts/check-dist.ts keeps the build free of them), no framing, no
+/// `data:` URIs (frontend/tools/check-dist.ts keeps the build free of them), no framing, no
 /// plugins, and forms post only to the same origin. `connect-src 'self'` covers the API and its
 /// event streams, which are on the same host (decision 2).
 pub const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; \

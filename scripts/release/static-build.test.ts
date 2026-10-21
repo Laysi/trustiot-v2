@@ -60,7 +60,7 @@ describe("the rules of services/web", () => {
 
   test("are the extensions that frontend's check:dist allows", async () => {
     // C1 of Laysi/trustiot-v2#123: the build output check and the service agree on file types.
-    const checkDist = join(ROOT, "frontend/scripts/check-dist.ts");
+    const checkDist = join(ROOT, "frontend/tools/check-dist.ts");
     const { ALLOWED_EXTENSIONS } = (await import(checkDist)) as { ALLOWED_EXTENSIONS: ReadonlySet<string> };
     expect([...ALLOWED_EXTENSIONS].toSorted()).toEqual([...SITE_EXTENSIONS].toSorted());
   });

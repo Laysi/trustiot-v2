@@ -24,7 +24,7 @@ pub const STATIC_DIR: &str = "/static";
 pub const MAX_SITE_BYTES: u64 = 32 * 1024 * 1024;
 
 /// The file extensions the site may hold and their `Content-Type`. The same list as the build
-/// output check (frontend/scripts/check-dist.ts) and the release build's check
+/// output check (frontend/tools/check-dist.ts) and the release build's check
 /// (scripts/release/static-build.ts, whose tests compare them); a file with any other
 /// extension, or none, stops the service at startup.
 pub const CONTENT_TYPES: &[(&str, &str)] = &[

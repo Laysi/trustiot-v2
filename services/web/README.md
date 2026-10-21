@@ -27,7 +27,7 @@ HEAD 的標頭與 GET 相同（包括 `Content-Length`），沒有 body。ETag �
 
 | 標頭 | 值 | 理由 |
 | --- | --- | --- |
-| `Content-Security-Policy` | `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'` | 只執行、載入與連線到自己的檔案：沒有 inline 的腳本或樣式、沒有 `eval`、沒有 `data:`（`frontend/scripts/check-dist.ts` 讓建置結果不含這些）；API 與事件串流在同一個主機（決策 2），`connect-src 'self'` 就夠 |
+| `Content-Security-Policy` | `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'` | 只執行、載入與連線到自己的檔案：沒有 inline 的腳本或樣式、沒有 `eval`、沒有 `data:`（`frontend/tools/check-dist.ts` 讓建置結果不含這些）；API 與事件串流在同一個主機（決策 2），`connect-src 'self'` 就夠 |
 | `Content-Security-Policy-Report-Only` | `require-trusted-types-for 'script'; trusted-types 'none'` | Trusted Types 先只回報（瀏覽器主控台），第一批真正的頁面在瀏覽器檢查過後移進上一列 |
 | `X-Content-Type-Options` | `nosniff` | 瀏覽器只照 `Content-Type` 解讀 |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` | 跨站時只送 origin。不用 `no-referrer`：在它之下瀏覽器對 GET、HEAD 以外的請求送 `Origin: null`，SPA 自己的 POST 也是，身分服務的跨站檢查會拒絕（[secrets.md](../../docs/architecture/secrets.md)「不放網址」） |
@@ -52,7 +52,7 @@ HEAD 的標頭與 GET 相同（包括 `Content-Length`），沒有 body。ETag �
 - 根目錄要有 `index.html`。
 - 只能有一般檔案與目錄，不能有符號連結或其他特殊檔案。
 - 每個檔名與目錄名只用 ASCII 英數字與 `_`、`-`、`.`，`.` 不能開頭（沒有隱藏檔，也沒有需要百分比編碼的名字，所以請求的 path 就是檔名）。
-- 副檔名只能是下表的其中一個（與 `frontend/scripts/check-dist.ts` 及發佈流程的 `scripts/release/static-build.ts` 相同，`bun test scripts/release` 比對）：
+- 副檔名只能是下表的其中一個（與 `frontend/tools/check-dist.ts` 及發佈流程的 `scripts/release/static-build.ts` 相同，`bun test scripts/release` 比對）：
 
   | 副檔名 | `Content-Type` |
   | --- | --- |
