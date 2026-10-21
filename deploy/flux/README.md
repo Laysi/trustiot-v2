@@ -120,18 +120,27 @@ bun scripts/flux/age.ts age -d -i <私鑰檔> <檔案>  # age 本身
 
 ### GHCR 拉取 token
 
-Flux 拉 chart（`chart.yaml` 的 `secretRef`）與 kubelet 拉映像（`values-instance.yaml` 的 `global.imagePullSecrets`）共用 namespace `trustiot` 的 Secret `ghcr-pull`（`kubernetes.io/dockerconfigjson`）。GHCR 只接受 classic personal access token：
+Flux 拉 chart（`chart.yaml` 的 `secretRef`）與 kubelet 拉映像（`values-instance.yaml` 的 `global.imagePullSecrets`）共用 namespace `trustiot` 的 Secret `ghcr-pull`（`kubernetes.io/dockerconfigjson`）。
 
-1. 以專用的機器帳號（不是任何人的帳號）建立 classic token，只勾 `read:packages`，設定到期日（最長一年），在團隊行事曆記下到期前 14 天的提醒。機器帳號要能讀 `Laysi/trustiot-v2` 的套件，而且只給這些套件的讀取權限：classic token 的 `read:packages` 能讀帳號看得到的每一個套件，不限於這個 repo。
-2. 產生加密的 Secret。token 只經 stdin 傳入，明文只在記憶體與 sops 的 stdin 裡：
+GHCR 在 Actions 之外只接受 classic personal access token（[Working with the Container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-to-the-container-registry)：「GitHub Packages only supports authentication using a personal access token (classic)」），GitHub App 的 installation token 不在支援之列。GitHub 組織以人頭計費，所以 2026-10-21 決定不另建機器帳號：這把 token 只給展示叢集用，由一位現有的組織成員建立。正式的 SaaS 叢集改用有唯讀機器帳號的 registry（Laysi/trustiot-v2#502），在那之前 SaaS 叢集不放個人的 token。
+
+1. 由一位組織成員建立 classic token，只勾 `read:packages`，到期日一年，在團隊行事曆記下到期前 14 天的提醒。`read:packages` 讀得到這位成員看得到的每一個 private 套件，不限於這個 repo，所以挑看得到的 repo 最少的成員；token 外洩時，這些套件都視為外洩（[密鑰輪替 runbook](../../docs/runbooks/secrets.md)「外洩處理」）。
+2. 確認 token 只有 `read:packages` 一個 scope。token 只經 stdin 傳入，不放在指令列；GitHub API 回應標頭的 `X-OAuth-Scopes` 列出 token 的 scope：
 
    ```sh
-   <輸出 token 的指令> | bun scripts/flux/ghcr-pull-secret.ts --username <機器帳號> [--cluster demo]
+   <輸出 token 的指令> | sed 's/^/header = "Authorization: token /; s/$/"/' | curl -sI -K - https://api.github.com/ | grep -i '^x-oauth-scopes:'
    ```
 
-   寫出 `deploy/flux/clusters/<叢集>/trustiot/ghcr-pull.sops.yaml`（`--cluster` 預設 `saas`；以 `.sops.yaml` 中該叢集的收件者加密）。展示叢集用自己的 token，與 SaaS 的分開輪替。
-3. 把 `ghcr-pull.sops.yaml` 加進同目錄 `kustomization.yaml` 的 `resources`，開 PR 合併。
-4. 確認：`sudo k3s kubectl -n trustiot get ocirepository trustiot`（READY 為 True），以及 runbook 的 kubelet 拉取檢查。
+   輸出應該只有 `read:packages`。多出任何 scope（例如 `repo`）就到 GitHub 的 token 設定取消勾選，再檢查一次；沒有任何輸出代表 token 沒有送出或無效（例如剪貼簿已被別的內容覆蓋）。
+3. 產生加密的 Secret。token 只經 stdin 傳入，明文只在記憶體與 sops 的 stdin 裡：
+
+   ```sh
+   <輸出 token 的指令> | bun scripts/flux/ghcr-pull-secret.ts --username <GitHub 帳號> --cluster demo
+   ```
+
+   寫出 `deploy/flux/clusters/demo/trustiot/ghcr-pull.sops.yaml`（以 `.sops.yaml` 中展示叢集的收件者加密）。`--cluster` 預設是 `saas`，但 SaaS 叢集的拉取憑證等 Laysi/trustiot-v2#502。
+4. 把 `ghcr-pull.sops.yaml` 加進同目錄 `kustomization.yaml` 的 `resources`，開 PR 合併。
+5. 確認：`sudo k3s kubectl -n trustiot get ocirepository trustiot`（READY 為 True），以及 runbook 的 kubelet 拉取檢查。
 
 ## 上線前要填的值
 
@@ -171,7 +180,7 @@ values 引用的 Secret（`trustiot-qdrant`、`trustiot-sentry`，以及之後�
    ```
 
    `known_hosts` 用本目錄的 `github-known-hosts`（測試核對過 GitHub 公布的指紋）。
-4. **GHCR 拉取 token** 與其他 SOPS Secret：見上方「GHCR 拉取 token」，以及清冊中標為 SOPS 的每一項；開 PR 合併。
+4. **拉取憑證** 與其他 SOPS Secret：SaaS 叢集拉 chart 與映像的唯讀帳號等 Laysi/trustiot-v2#502，不用個人的 GHCR token（見上方「GHCR 拉取 token」）；清冊中標為 SOPS 的每一項；開 PR 合併。
 5. **實例的值**：填好「上線前要填的值」，開 PR 合併。
 6. **裝 Flux**：從工作站把 Flux 本身送上主機。第一次套用時 CRD 還沒生效，GitRepository 與 Kustomization 會被拒絕，等 CRD 生效後再套用一次：
 
@@ -234,7 +243,7 @@ SOPS 加密的 Secret（建立後列進 `clusters/demo/trustiot/kustomization.ya
 
 | 檔案 | Secret 與 key | 內容與產生方式 |
 | --- | --- | --- |
-| `ghcr-pull.sops.yaml` | `ghcr-pull`，`.dockerconfigjson` | 展示環境自己的 GHCR 拉取 token：`<輸出 token 的指令> \| bun scripts/flux/ghcr-pull-secret.ts --cluster demo --username <機器帳號>` |
+| `ghcr-pull.sops.yaml` | `ghcr-pull`，`.dockerconfigjson` | 展示環境自己的 GHCR 拉取 token，一位組織成員的 classic token，只有 `read:packages`（上方「GHCR 拉取 token」）：`<輸出 token 的指令> \| bun scripts/flux/ghcr-pull-secret.ts --cluster demo --username <GitHub 帳號>` |
 | `trustiot-smtp.sops.yaml` | `trustiot-smtp`，`username`、`password` | Resend 的 API key，權限只能寄信並限定寄件網域（[密鑰與權限](../../docs/architecture/secrets.md)「外部服務」）：`<輸出 API key 的指令> \| bun scripts/flux/sops-secret.ts --cluster demo --name trustiot-smtp --key password --set username=resend` |
 | `trustiot-anthropic.sops.yaml` | `trustiot-anthropic`，`api-key` | 展示專用的 Anthropic 工作區（設每月用量上限）的 API key；AI 閘道（Laysi/trustiot-v2#139）加入前沒有服務使用：`... \| bun scripts/flux/sops-secret.ts --cluster demo --name trustiot-anthropic --key api-key` |
 | `trustiot-demo-values.sops.yaml` | `trustiot-demo-values`，`app-host`、`gateway-host`、`ota-host`、`smtp-from` | 三個主機名稱與寄件人（例如 `TrustIoT Demo <no-reply@寄件網域>`）；不是密鑰，只是不公開。stdin 每行一個 `<key>=<值>`：`<輸出四行的指令> \| bun scripts/flux/demo-values.ts`。剛好這四個 key，每個值一行，主機名稱要是小寫的 DNS 名稱；錯誤訊息不引用值 |
