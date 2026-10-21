@@ -1,6 +1,6 @@
 //! Writing events in the caller's transaction.
 
-use contract::{EncodeError, Event, EventEnvelope, EventId, TenantId};
+use contract::{Actor, EncodeError, Event, EventEnvelope, EventId, TenantId};
 use sqlx::{PgConnection, Postgres, Transaction};
 
 use crate::aggregate::Aggregate;
@@ -57,6 +57,25 @@ pub async fn publish<E: Event>(
     tenant: Option<TenantId>,
 ) -> Result<Published, PublishError> {
     let envelope = EventEnvelope::new(event, tenant)?;
+    write(tx, aggregate, &envelope).await
+}
+
+/// Like [`publish`], naming who made the change: the envelope's `actor`, which the event log
+/// keeps as the operation log's "who" (Laysi/trustiot-v2#130). Use it for every change a person
+/// makes through the API (`Actor::User` with the request's user) and for a service's own work
+/// (`Actor::Service`).
+///
+/// # Errors
+///
+/// [`PublishError`]; after a database error the transaction is aborted.
+pub async fn publish_as<E: Event>(
+    tx: &mut Transaction<'_, Postgres>,
+    aggregate: &Aggregate,
+    event: &E,
+    tenant: Option<TenantId>,
+    actor: Actor,
+) -> Result<Published, PublishError> {
+    let envelope = EventEnvelope::new(event, tenant)?.with_actor(actor);
     write(tx, aggregate, &envelope).await
 }
 

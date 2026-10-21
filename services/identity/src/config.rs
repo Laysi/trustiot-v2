@@ -71,7 +71,9 @@ pub struct Platform {
 }
 
 /// `database.*`: the service role (`identity_app`), which owns nothing and reads the sessions
-/// under row-level security.
+/// under row-level security, and the platform role (`identity_platform`), which reads every
+/// producer's events across tenants for the event log and serves the back office's view of the
+/// log (decisions 29 and 34; [`crate::event_log`]).
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Database {
@@ -79,9 +81,18 @@ pub struct Database {
     pub username: String,
     /// `TRUSTIOT__DATABASE__PASSWORD`, from a Secret.
     pub password: String,
-    /// `TRUSTIOT__DATABASE__MAX_CONNECTIONS`: most connections per replica, from
-    /// [`WARM_CONNECTIONS`] (the ones always kept open) to [`MAX_DATABASE_CONNECTIONS`].
-    /// Default 10.
+    /// `TRUSTIOT__DATABASE__PLATFORM_USERNAME`. The chart always sets it with the password;
+    /// without both, the event log is off ([`Config::platform_role`]).
+    #[serde(default)]
+    pub platform_username: Option<String>,
+    /// `TRUSTIOT__DATABASE__PLATFORM_PASSWORD`, from a Secret.
+    #[serde(default)]
+    pub platform_password: Option<String>,
+    /// `TRUSTIOT__DATABASE__MAX_CONNECTIONS`: most connections of the session store's pool per
+    /// replica, from [`WARM_CONNECTIONS`] (the ones always kept open) to
+    /// [`MAX_DATABASE_CONNECTIONS`]. Default 10. The tenant API and the event log have small
+    /// pools of their own besides ([`crate::tenants::POOL_CONNECTIONS`],
+    /// [`crate::event_log::SERVICE_CONNECTIONS`], [`crate::event_log::platform_connections`]).
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
 }
@@ -99,6 +110,7 @@ impl fmt::Debug for Database {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Database")
             .field("username", &self.username)
+            .field("platform_username", &self.platform_username)
             .field("max_connections", &self.max_connections)
             .finish_non_exhaustive()
     }
@@ -116,6 +128,23 @@ impl Config {
             ca_file: self.platform.postgres_ca_file.clone(),
             username: self.database.username.clone(),
             password: self.database.password.clone(),
+        }
+    }
+
+    /// Where and how the platform role connects; `None` without its credentials, and then the
+    /// event log is off: nothing is recorded (the producers' outboxes keep the events, and the
+    /// log catches up once it runs) and its API answers 503. Every deployment of the chart sets
+    /// them; tests of the ext_authz check alone leave them out.
+    #[must_use]
+    pub fn platform_role(&self) -> Option<PostgresConfig> {
+        let database = &self.database;
+        match (&database.platform_username, &database.platform_password) {
+            (Some(username), Some(password)) => Some(PostgresConfig {
+                username: username.clone(),
+                password: password.clone(),
+                ..self.postgres()
+            }),
+            _ => None,
         }
     }
 }
@@ -156,11 +185,48 @@ impl Validate for Config {
                 format!("must be between {WARM_CONNECTIONS} and {MAX_DATABASE_CONNECTIONS}"),
             ));
         }
-        if self.database.username.trim().is_empty() {
+        let database = &self.database;
+        if database.username.trim().is_empty() {
             return Err(Invalid::new("database.username", "must not be blank"));
         }
-        if self.database.password.is_empty() {
+        if database.password.is_empty() {
             return Err(Invalid::new("database.password", "must not be empty"));
+        }
+        match (&database.platform_username, &database.platform_password) {
+            (None, None) => {}
+            (Some(_), None) => {
+                return Err(Invalid::new(
+                    "database.platform_password",
+                    "must be set with database.platform_username",
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(Invalid::new(
+                    "database.platform_username",
+                    "must be set with database.platform_password",
+                ));
+            }
+            (Some(username), Some(password)) => {
+                if username.trim().is_empty() {
+                    return Err(Invalid::new(
+                        "database.platform_username",
+                        "must not be blank",
+                    ));
+                }
+                if *username == database.username {
+                    return Err(Invalid::new(
+                        "database.platform_username",
+                        "must be another role than database.username: only the platform role \
+                         may read across tenants",
+                    ));
+                }
+                if password.is_empty() {
+                    return Err(Invalid::new(
+                        "database.platform_password",
+                        "must not be empty",
+                    ));
+                }
+            }
         }
         Ok(())
     }

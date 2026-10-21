@@ -17,10 +17,10 @@ export const PRODUCT_SERVICES: readonly string[] = ["identity", "assets"];
 /**
  * The services whose platform role logs in, as the chart binds them
  * ("trustiot.migrate.platformLogins"): the outbox consumers, which read their producers' events
- * as the platform role. A platform role not listed here stays NOLOGIN on purpose (identity's,
- * which only the outbox policy needs).
+ * as the platform role (identity among them since it keeps the event log, Laysi/trustiot-v2#130).
+ * A platform role not listed here stays NOLOGIN on purpose.
  */
-export const PLATFORM_LOGIN_SERVICES: readonly string[] = ["assets"];
+export const PLATFORM_LOGIN_SERVICES: readonly string[] = ["assets", "identity"];
 
 export interface ProductLogin {
   /** The service's chart key, for example `telemetry-query`. */

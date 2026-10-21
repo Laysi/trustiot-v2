@@ -5,7 +5,7 @@ mod support;
 
 use std::time::Duration;
 
-use contract::EventEnvelope;
+use contract::{Actor, EventEnvelope, ServiceName};
 use outbox::{Aggregate, ConsumerConfig, PublishError};
 use support::{Counted, Recorder, database, drain};
 
@@ -193,4 +193,92 @@ async fn an_envelope_is_written_once() {
         .await
         .expect("stored tenant");
     assert_eq!(stored, Some(*tenant.as_uuid()));
+}
+
+/// `publish_as` (Laysi/trustiot-v2#130) stores who made the change in the envelope, where the
+/// event log reads it; `publish` stores none.
+#[tokio::test]
+async fn publish_as_names_the_actor() {
+    let Some(database) = database().await else {
+        return;
+    };
+    let setup = database.setup().await;
+    let widget = Aggregate::new("widget", "w-actor").expect("aggregate");
+    let user = contract::UserId::generate();
+    let service = Actor::Service {
+        service: ServiceName::Assets,
+    };
+
+    let mut tx = setup.producer.begin().await.expect("begin");
+    let by_user = outbox::publish_as(
+        &mut tx,
+        &widget,
+        &Counted { n: 1 },
+        None,
+        Actor::User { user_id: user },
+    )
+    .await
+    .expect("publish as a user");
+    let by_service = outbox::publish_as(&mut tx, &widget, &Counted { n: 2 }, None, service)
+        .await
+        .expect("publish as a service");
+    let by_nobody = outbox::publish(&mut tx, &widget, &Counted { n: 3 }, None)
+        .await
+        .expect("publish");
+    tx.commit().await.expect("commit");
+    assert_eq!(
+        [
+            by_user.aggregate_seq,
+            by_service.aggregate_seq,
+            by_nobody.aggregate_seq
+        ],
+        [1, 2, 3]
+    );
+
+    for (published, expected) in [
+        (by_user, Some(Actor::User { user_id: user })),
+        (by_service, Some(service)),
+        (by_nobody, None),
+    ] {
+        let text: String =
+            sqlx::query_scalar("SELECT envelope::text FROM outbox_event WHERE event_id = $1")
+                .bind(published.event_id.as_uuid())
+                .fetch_one(&setup.producer)
+                .await
+                .expect("stored event");
+        let envelope: EventEnvelope = serde_json::from_str(&text).expect("an envelope");
+        assert_eq!(envelope.actor, expected, "{text}");
+    }
+
+    // `Actor::Unrecognized` is decode only: publishing it fails before anything is written,
+    // and the transaction stays usable.
+    let mut tx = setup.producer.begin().await.expect("begin");
+    let refused = outbox::publish_as(
+        &mut tx,
+        &widget,
+        &Counted { n: 4 },
+        None,
+        Actor::Unrecognized,
+    )
+    .await;
+    assert!(
+        matches!(refused, Err(PublishError::Serialize)),
+        "{refused:?}"
+    );
+    let after = outbox::publish(&mut tx, &widget, &Counted { n: 5 }, None)
+        .await
+        .expect("the transaction is still usable");
+    tx.commit().await.expect("commit");
+    assert_eq!(
+        after.aggregate_seq, 4,
+        "the refused event took no sequence number"
+    );
+    let stored: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox_event WHERE aggregate_type = 'widget' \
+         AND aggregate_id = 'w-actor'",
+    )
+    .fetch_one(&setup.producer)
+    .await
+    .expect("count");
+    assert_eq!(stored, 4, "only the four published events are stored");
 }

@@ -1141,7 +1141,7 @@ impl Session {
     /// password first, so it never logs in with an older one; unbound (the service was turned
     /// off), it loses LOGIN and keeps everything else. Only taking a login away is a warning: a
     /// role that already could not log in and stays so (a platform role the chart leaves unbound,
-    /// such as `identity_platform`, or a service that stays off) is logged at INFO on every run.
+    /// or a service that stays off) is logged at INFO on every run.
     async fn ensure_login(
         &mut self,
         config: &RunConfig,

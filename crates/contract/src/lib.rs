@@ -34,7 +34,7 @@ mod naming;
 
 pub use client::{CallError, CallErrorKind, ClientConfigError, Endpoint, InternalClient, Method};
 pub use error::{ErrorBody, ErrorCode, FieldError, MessageKey};
-pub use event::{DecodeError, EncodeError, Event, EventEnvelope};
+pub use event::{Actor, DecodeError, EncodeError, Event, EventEnvelope};
 pub use id::{EventId, TenantId, UserId};
 pub use identity::{
     INTERNAL_IDENTITY_HEADER, InternalClaims, InternalToken, TenantGrant, TenantRole,

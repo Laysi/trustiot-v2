@@ -11,7 +11,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::id::{EventId, TenantId};
+use crate::id::{EventId, TenantId, UserId};
 use crate::json::JsonError;
 use crate::naming::is_dotted_name;
 use crate::service::ServiceName;
@@ -137,6 +137,53 @@ pub struct EventEnvelope {
     pub producer: ServiceName,
     /// The event itself, always a JSON object.
     pub payload: Value,
+    /// Who made the change, when the producer says (Laysi/trustiot-v2#130): the event log keeps
+    /// it as the operation log's "who". Absent in envelopes written before the field existed
+    /// and for changes nobody in particular made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<Actor>,
+}
+
+/// Who made the change an event describes; the operation log's "who" (checklist K2,
+/// Laysi/trustiot-v2#130).
+///
+/// On the wire it is an object tagged by `kind`: `{"kind": "user", "user_id": "…"}` or
+/// `{"kind": "service", "service": "assets"}`. A kind this build does not know decodes as
+/// [`Actor::Unrecognized`] instead of failing, so a consumer built before a new kind was added
+/// still decodes the envelope; only add kinds, never rename one.
+///
+/// ```
+/// use contract::{Actor, UserId};
+///
+/// let actor: Actor = serde_json::from_value(serde_json::json!({"kind": "robot"}))?;
+/// assert_eq!(actor, Actor::Unrecognized);
+/// assert!(serde_json::to_value(actor).is_err(), "Unrecognized is decode only");
+/// let user = UserId::generate();
+/// assert_eq!(
+///     serde_json::to_value(Actor::User { user_id: user })?,
+///     serde_json::json!({"kind": "user", "user_id": user.to_string()})
+/// );
+/// # Ok::<(), serde_json::Error>(())
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Actor {
+    /// A person, through the API: the subject of the request's internal identity token. A
+    /// platform administrator acting in the back office is one too.
+    User {
+        /// The user.
+        user_id: UserId,
+    },
+    /// A service's own work with no person behind it: a scheduled job or an event consumer.
+    Service {
+        /// The service.
+        service: ServiceName,
+    },
+    /// A kind this build does not know, written by a newer producer. Decode only: serializing
+    /// it fails, so an envelope that carries it can never be written to an outbox (where the
+    /// event log would retry it forever, waiting for an upgrade that never comes).
+    #[serde(other, skip_serializing)]
+    Unrecognized,
 }
 
 impl EventEnvelope {
@@ -171,7 +218,15 @@ impl EventEnvelope {
             occurred_at: Utc::now().trunc_subsecs(3),
             producer: E::PRODUCER,
             payload,
+            actor: None,
         })
+    }
+
+    /// The same envelope with `actor` as the one who made the change.
+    #[must_use]
+    pub fn with_actor(mut self, actor: Actor) -> Self {
+        self.actor = Some(actor);
+        self
     }
 
     /// Whether the envelope holds an `E`, judged by its type name alone.

@@ -2056,7 +2056,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
       { name: "TRUSTIOT__PASSWORDS__GENERATION", value: "1" },
       { name: "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR", value: `trustiot_collector=${COLLECTOR_SECRET}` },
       // Only identity uses Postgres here (certs does not).
-      { name: "TRUSTIOT__PASSWORDS__POSTGRES", value: `identity_app=${IDENTITY_SECRET}` },
+      { name: "TRUSTIOT__PASSWORDS__POSTGRES", value: `identity_app=${IDENTITY_SECRET},identity_platform=${IDENTITY_SECRET}` },
     ]);
     expect(envValue(env, "TRUSTIOT__WAIT__DATABASES")?.value).toBe("10m");
     expect(envValue(env, "TRUSTIOT__WAIT__LOCK")?.value).toBe("10m");
@@ -2298,6 +2298,9 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     expect(identity.env?.filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__"))).toEqual([
       { name: "TRUSTIOT__DATABASE__USERNAME", value: "identity_app" },
       { name: "TRUSTIOT__DATABASE__PASSWORD", valueFrom: { secretKeyRef: { name: IDENTITY_SECRET, key: "identity_app" } } },
+      // identity keeps the event log, which reads events as its platform role (Laysi/trustiot-v2#130).
+      { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "identity_platform" },
+      { name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD", valueFrom: { secretKeyRef: { name: IDENTITY_SECRET, key: "identity_platform" } } },
     ]);
     const certs = JSON.stringify(find(manifests, "Deployment", `${RELEASE}-certs`));
     expect(certs).not.toContain("TRUSTIOT__DATABASE__");
@@ -2333,14 +2336,14 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     }
   });
 
-  test("a service whose platform role logs in (assets) gets both passwords from its one Secret, and the Job fills both keys", () => {
+  test("a service whose platform role logs in (assets, identity) gets both passwords from its one Secret, and the Job fills both keys", () => {
     // Laysi/trustiot-v2#65: an outbox consumer reads its producers' events as its platform role,
     // so the chart binds <schema>_platform too ("trustiot.migrate.platformLogins"), in the same
     // Secret; tools/migrate/tests/registry.rs keeps that list in line with the registry.
     const ASSETS_SECRET = `${RELEASE}-assets-password`;
     const both = render(SHAPES.saas, [...withIdentity, "--set", "services.assets.enabled=true"]);
     expect(envValue(jobEnv(both), "TRUSTIOT__PASSWORDS__POSTGRES")?.value).toBe(
-      `assets_app=${ASSETS_SECRET},assets_platform=${ASSETS_SECRET},identity_app=${IDENTITY_SECRET}`,
+      `assets_app=${ASSETS_SECRET},assets_platform=${ASSETS_SECRET},identity_app=${IDENTITY_SECRET},identity_platform=${IDENTITY_SECRET}`,
     );
     // One Secret per consumer, however many keys it holds, and the Job's Role names each once.
     // (ClickHouse's admin Secret is the init container's, and the Job's Role only reads it.)
@@ -2359,9 +2362,12 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
       { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "assets_platform" },
       { name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD", valueFrom: { secretKeyRef: { name: ASSETS_SECRET, key: "assets_platform" } } },
     ]);
-    // identity's platform role exists for platform-wide events but logs in with nothing.
+    // identity's platform role logs in too, with its own Secret (Laysi/trustiot-v2#130).
     const identity = podSpec(find(both, "Deployment", `${RELEASE}-identity`)).containers[0] as Container;
-    expect(JSON.stringify(identity.env)).not.toContain("PLATFORM_");
+    expect(identity.env?.filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__PLATFORM_"))).toEqual([
+      { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "identity_platform" },
+      { name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD", valueFrom: { secretKeyRef: { name: IDENTITY_SECRET, key: "identity_platform" } } },
+    ]);
     expect(JSON.stringify(identity)).not.toContain(ASSETS_SECRET);
     // The service's platform login is the chart's too, and no other service may read its Secret.
     for (const name of ["TRUSTIOT__DATABASE__PLATFORM_USERNAME", "TRUSTIOT__DATABASE__PLATFORM_PASSWORD"]) {

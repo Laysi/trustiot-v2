@@ -126,8 +126,9 @@ async fn a_fresh_database_gets_every_migration_once() {
             report.changes
         );
     }
-    // Only identity_app is bound here: identity's platform role has no Secret in the chart
-    // either, and the assets service is not part of this deployment, so its roles stay NOLOGIN.
+    // Only identity_app is bound here: this deployment gives identity's platform role no Secret
+    // (the chart binds one for the event log's consumer, Laysi/trustiot-v2#130), and the assets
+    // service is not part of it, so those roles stay NOLOGIN.
     assert_eq!(
         report.roles_without_password,
         ["identity_platform", "assets_app", "assets_platform"]
@@ -182,9 +183,11 @@ async fn a_fresh_database_gets_every_migration_once() {
         .await
         .expect("count tables");
     assert_eq!(
-        tables, 7,
-        "users, memberships, sessions, tenants, the outbox's outbox_aggregate and outbox_event, \
-         and the migration records trustiot_migrate_applied"
+        tables, 13,
+        "users, memberships, sessions, tenants, event_log and platform_event_log, the outbox's \
+         outbox_aggregate and outbox_event, its consumer tables outbox_subscription, outbox_inbox, \
+         outbox_dead_letter and outbox_version (the event log consumes identity's own events, \
+         Laysi/trustiot-v2#130), and the migration records trustiot_migrate_applied"
     );
     for (query, what) in [
         (

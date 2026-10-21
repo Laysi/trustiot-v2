@@ -88,7 +88,7 @@ service-kit 連 Postgres 一律用 `sslmode=verify-full`（Laysi/trustiot-v2#53�
 登入角色只在綁了 Secret 時能登入，Job 把沒有綁定的設成 NOLOGIN（`tools/migrate/src/lib.rs` 的 `Report::roles_without_password`）。本機綁的角色與 chart 相同（`deploy/chart/templates/_migrate.tpl` 的 `trustiot.migrate.passwordSecrets`）：
 
 - `PRODUCT` 每個服務的 `<schema>_app`；
-- chart 的 `trustiot.migrate.platformLogins` 列出的服務的 `<schema>_platform`（outbox 的消費端以它讀 producer 的事件，Laysi/trustiot-v2#65；目前是 `assets`）。其他平台角色（`identity_platform`）沒有程式以它連線，chart 不綁，本機也不綁，維持 NOLOGIN；`<schema>_owner` 只供 Job 與 `seed` 以 `SET ROLE` 使用，永遠不能登入。
+- chart 的 `trustiot.migrate.platformLogins` 列出的服務的 `<schema>_platform`（outbox 的消費端以它讀 producer 的事件，Laysi/trustiot-v2#65；目前是 `assets`，以及保存事件紀錄的 `identity`，Laysi/trustiot-v2#130）。不在清單裡的平台角色沒有程式以它連線，chart 不綁，本機也不綁，維持 NOLOGIN；`<schema>_owner` 只供 Job 與 `seed` 以 `SET ROLE` 使用，永遠不能登入。
 
 清單在 `lib/product-logins.ts`（`PRODUCT_SERVICES`、`PLATFORM_LOGIN_SERVICES`），`up` 與 `env` 都由它得出角色、Secret 與 state 的鍵：每個服務一個 Secret `dev-<服務>-password`（與 chart 的 `<release>-<服務>-password` 一樣，一個 Secret 放兩個 key），state 檔的鍵是服務名稱（平台角色是 `<服務>-platform`）。`tests/product-logins.test.ts` 讀 `registry.rs` 與 `_migrate.tpl`，在 `PRODUCT` 多一個服務、或 chart 多綁一個平台角色而這份清單沒跟上時失敗，訊息說明要改 `lib/product-logins.ts` 的哪一個清單。
 
@@ -117,6 +117,7 @@ service-kit 連 Postgres 一律用 `sslmode=verify-full`（Laysi/trustiot-v2#53�
 | 變數 | 角色 |
 | --- | --- |
 | `TRUSTIOT_DEV_IDENTITY_DATABASE_USERNAME`、`..._PASSWORD` | `identity_app` |
+| `TRUSTIOT_DEV_IDENTITY_PLATFORM_DATABASE_USERNAME`、`..._PASSWORD` | `identity_platform` |
 | `TRUSTIOT_DEV_ASSETS_DATABASE_USERNAME`、`..._PASSWORD` | `assets_app` |
 | `TRUSTIOT_DEV_ASSETS_PLATFORM_DATABASE_USERNAME`、`..._PASSWORD` | `assets_platform` |
 
@@ -142,6 +143,7 @@ service-kit 連 Postgres 一律用 `sslmode=verify-full`（Laysi/trustiot-v2#53�
 | `TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE` | 只有身分服務 | 簽章金鑰檔 `signing-keys.json` 的**路徑**，不是內容 |
 | `TRUSTIOT_INGRESS_ROUTES` | 只有身分服務 | 本機的 cookie 路由：`localhost` 的每個路徑（`PathPrefix /`）給 `assets`（kit 的範例服務 `GET /v1/whoami` 接受的受眾）；沒有入口 gateway，所以呼叫 ext_authz 的人自己帶 `Host: localhost` |
 | `TRUSTIOT_DEV_IDENTITY_DATABASE_USERNAME`、`..._PASSWORD` | 只有身分服務 | `identity_app` 與 Job 產生的密碼，見上一節「`env` 印出的服務登入」 |
+| `TRUSTIOT_DEV_IDENTITY_PLATFORM_DATABASE_USERNAME`、`..._PASSWORD` | 只有身分服務 | `identity_platform` 與 Job 產生的密碼：事件紀錄以平台角色讀事件（Laysi/trustiot-v2#130）；沒有它時服務照常啟動，只是事件紀錄關閉 |
 | `TRUSTIOT_POSTGRES_*` | 所有服務 | 與原本相同（`verify-full`、開發 CA 的路徑） |
 
 #### 在主機上啟動身分服務
@@ -151,6 +153,8 @@ bun scripts/dev.ts up && bun scripts/dev.ts seed
 set -a; eval "$(bun scripts/dev.ts env)"; set +a
 TRUSTIOT__DATABASE__USERNAME="$TRUSTIOT_DEV_IDENTITY_DATABASE_USERNAME" \
 TRUSTIOT__DATABASE__PASSWORD="$TRUSTIOT_DEV_IDENTITY_DATABASE_PASSWORD" \
+TRUSTIOT__DATABASE__PLATFORM_USERNAME="$TRUSTIOT_DEV_IDENTITY_PLATFORM_DATABASE_USERNAME" \
+TRUSTIOT__DATABASE__PLATFORM_PASSWORD="$TRUSTIOT_DEV_IDENTITY_PLATFORM_DATABASE_PASSWORD" \
   cargo run -p identity
 ```
 

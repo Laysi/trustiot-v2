@@ -66,12 +66,9 @@ fn chart_helper(chart: &str, name: &str) -> String {
 /// The services whose platform role the registry creates but the chart leaves unbound on
 /// purpose, so the role stays NOLOGIN, each with the reason. Add a service here only with a
 /// reason; once code connects as the role, move the service to the chart's
-/// "trustiot.migrate.platformLogins" instead.
-const UNBOUND_PLATFORM_ROLES: &[(&str, &str)] = &[(
-    "identity",
-    "outbox producer only: the outbox policies need the role for platform-wide events, and no \
-     platform-wide reader connects as it yet",
-)];
+/// "trustiot.migrate.platformLogins" instead. Empty since Laysi/trustiot-v2#130: identity's
+/// platform role, the last one here, now reads the events its event log records.
+const UNBOUND_PLATFORM_ROLES: &[(&str, &str)] = &[];
 
 /// A login role logs in only while a Secret is bound to it. The chart binds `<schema>_app` for
 /// every service that uses Postgres, and `<schema>_platform` only for the services listed in

@@ -13,7 +13,7 @@ TrustIoT 將以 Rust 從零重建，不沿用舊架構。本目錄是重建的�
 
 | 文件 | 內容 |
 | --- | --- |
-| [架構決策總表](architecture/decisions.md) | 32 項已定案的架構決策與理由 |
+| [架構決策總表](architecture/decisions.md) | 34 項已定案的架構決策與理由 |
 | [部署與可搬移性](architecture/deployment.md) | 系統架構、服務切分、流量路徑、可搬移規則 |
 | [專案目錄](architecture/repository-layout.md) | repo 的目錄結構與各目錄職責 |
 | [CI 與發佈](architecture/ci-release.md) | GitHub Actions 三個 workflow 與 GitOps 部署 |

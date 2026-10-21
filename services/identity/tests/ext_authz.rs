@@ -914,6 +914,39 @@ fn unusable_settings_stop_startup() {
             ),
             "TRUSTIOT__PLATFORM__INTERNAL_IDENTITY_KEYS_FILE",
         ),
+        // The event log's platform role (Laysi/trustiot-v2#130): both credentials or neither,
+        // and never the service role.
+        (
+            "a platform role without its password",
+            with(
+                base_env(&files, 1),
+                "TRUSTIOT__DATABASE__PLATFORM_USERNAME",
+                "identity_platform",
+            ),
+            "database.platform_password",
+        ),
+        (
+            "a platform password without its role",
+            with(
+                base_env(&files, 1),
+                "TRUSTIOT__DATABASE__PLATFORM_PASSWORD",
+                "do-not-log-this-password",
+            ),
+            "database.platform_username",
+        ),
+        (
+            "the service role as the platform role",
+            with(
+                with(
+                    base_env(&files, 1),
+                    "TRUSTIOT__DATABASE__PLATFORM_USERNAME",
+                    "identity_app",
+                ),
+                "TRUSTIOT__DATABASE__PLATFORM_PASSWORD",
+                "do-not-log-this-password",
+            ),
+            "database.platform_username",
+        ),
         (
             "a propagation time below the chart's minimum",
             with(
