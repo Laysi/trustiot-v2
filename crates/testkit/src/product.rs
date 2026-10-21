@@ -132,7 +132,9 @@ pub async fn product_postgres(logins: &[&str]) -> Option<Arc<ProductPostgres>> {
             product
         }
     };
-    drop(shared);
+    // The lock stays held while the roles get LOGIN: concurrent tests in one binary would
+    // otherwise run ALTER ROLE on the same role at once, which Postgres refuses with "tuple
+    // concurrently updated".
     let mut admin = product.superuser().await;
     sqlx::raw_sql(LOGIN_FUNCTION)
         .execute(&mut admin)
@@ -146,6 +148,7 @@ pub async fn product_postgres(logins: &[&str]) -> Option<Arc<ProductPostgres>> {
             .unwrap_or_else(|error| panic!("let {role} log in: {error}"));
     }
     admin.close().await.expect("close");
+    drop(shared);
     Some(product)
 }
 
