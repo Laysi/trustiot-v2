@@ -1,0 +1,26 @@
+# Laysi/trustiot-v2#106, 2026-10-22: chart and script checks after the security review fixes (M1, M2)
+# Run on the workstation from the repository root; the build host did not answer, so no cargo build ran.
+
+$ bun test deploy/chart/tests/chart.test.ts
+ 410 pass
+ 0 fail
+ 4829 expect() calls
+Ran 410 tests across 1 file. [100.93s]
+
+$ bun test deploy/chart/tests/e2e deploy/chart/tests/ingress-authz.test.ts
+ 74 pass
+ 0 fail
+ 264 expect() calls
+Ran 74 tests across 8 files. [5.80s]
+
+$ bun run --cwd scripts typecheck
+exit code 0
+
+$ bun test scripts/nightly
+ 270 pass
+ 0 fail
+ 1276 expect() calls
+Ran 270 tests across 13 files. [3.51s]
+
+$ cargo fmt --all --check
+exit code 0
