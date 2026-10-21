@@ -1,4 +1,4 @@
-//! Reading a device's data points over Modbus (rebuild checklist F1, F5).
+//! Reading a device's data points over Modbus (rebuild checklist F1, F2, F5).
 //!
 //! A [`DeviceReader`] is built once per device from the desired configuration: it plans the
 //! reads of the device model's points ([`plan`]: same function, at most [`plan::MAX_GAP`]
@@ -11,13 +11,19 @@
 //! [`protocol::config::FunctionCode`], which has no other values ([`pdu::Read`]). The gateway
 //! never writes to a device.
 //!
-//! [`tcp::TcpConnection`] is the Modbus TCP [`Connection`]. A response counts only when its
-//! unit and transaction match the request; others are discarded and the request keeps waiting,
-//! so a late answer is never taken for the next request's.
+//! [`tcp::TcpConnection`] is the [`Connection`] for both transports: MBAP frames for Modbus TCP,
+//! RTU frames with a CRC over TCP for an RS485 converter. A response counts only when it comes
+//! from the unit asked and answers this request (its transaction over MBAP; its function code
+//! and byte count over RTU, which has no transaction); others are discarded and the request
+//! keeps waiting. [`endpoint::Endpoints`] gives every device at the same endpoint one
+//! [`endpoint::SharedConnection`], which their polls use one request at a time.
 
 pub mod decode;
+pub mod endpoint;
+mod mbap;
 pub mod pdu;
 pub mod plan;
+mod rtu;
 pub mod tcp;
 
 use std::future::Future;
@@ -65,18 +71,26 @@ pub enum ReadError {
     /// No connection could be opened; the request was not sent.
     Connect(String),
     /// No matching response arrived in time. The connection stays open: a late response is
-    /// discarded when it arrives.
+    /// discarded when it arrives, except over RTU when the request that waits then has the
+    /// same unit, function code and count (RTU has no transaction identifier to tell them
+    /// apart).
     Timeout,
     /// The device answered with this Modbus exception code.
     Exception(u8),
-    /// The matching response does not fit the request.
+    /// The matching response does not fit the request. Over RTU, which has no transaction
+    /// identifier, a frame of the unit that does not fit cannot be told from a late answer to
+    /// an earlier request, so it is skipped and the request keeps waiting; when no answer comes
+    /// by the deadline, the request ends with this instead of [`Self::Timeout`], and so does one
+    /// that received only bytes that form no RTU frame (the detail lists possible causes, such
+    /// as serial settings that differ between the converter and the device, or noise on the bus).
     Malformed(String),
     /// The connection failed while the request was under way: the device closed or reset it,
     /// or sending failed. It is closed, and the next request opens a new one.
     ConnectionLost(String),
     /// The device sent bytes that are not Modbus TCP, such as a header with another protocol
     /// identifier: for example an RS485 converter that speaks RTU over TCP but is configured as
-    /// Modbus TCP. The connection is closed, and the next request opens a new one.
+    /// Modbus TCP. The connection is closed, and the next request opens a new one. Over RTU,
+    /// bytes that form no frame are skipped instead.
     Protocol(String),
 }
 
@@ -94,8 +108,10 @@ impl ReadError {
     /// counts as `connect`, like one that could not be opened: both are the TCP link, while
     /// `timeout` is a device that stays silent on a working link. A malformed response and a
     /// stream that is not Modbus TCP count as `invalid_value`: the link works, but what comes
-    /// back cannot be decoded. A request that saw only other units' answers times out; those
-    /// answers are counted in [`Exchange::unit_mismatches`].
+    /// back cannot be decoded. Over RTU that includes a request that received, by its
+    /// deadline, only frames of its unit that do not fit or bytes that form no frame. A request
+    /// that saw only other units' answers times out; those answers are counted in
+    /// [`Exchange::unit_mismatches`].
     pub fn kind(&self) -> FailureKind {
         match self {
             Self::Connect(_) | Self::ConnectionLost(_) => FailureKind::Connect,
