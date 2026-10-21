@@ -65,4 +65,4 @@ cargo test --locked -p ingest --test disk_watermark -- --nocapture
 | 磁碟水位超過門檻時告警指標觸發（測試） | 通過：85 % 時 warning、95 % 時 critical，釋放後回到 ok |
 | 清單 B3 列與 docs/product/plans.md 對最高方案可查期間的寫法一致 | 通過：兩處都寫 Enterprise 可查到全部保存期限（180 天），其他方案較短 |
 
-待測（進階驗證，另開 issue）：大表改 TTL 時 `MATERIALIZE TTL` 的時間、I/O 與暫時空間；Grafana 實際評估規則並通知（Laysi/trustiot-v2#183）；在叢集內 ClickHouse 的 PVC 上量測水位（本測試用 tmpfs）。
+待測（進階驗證，2026-10-21 延後到 Laysi/trustiot-v2#506）：大表改 TTL 時 `MATERIALIZE TTL` 的時間、I/O 與暫時空間；在叢集內 ClickHouse 的 PVC 上量測水位（本測試用 tmpfs）；runbook 的 TTL 修復步驟；ClickHouse 升版後 Job 仍認得自己寫的 TTL。Grafana 實際評估規則並通知，由 Laysi/trustiot-v2#183 做。

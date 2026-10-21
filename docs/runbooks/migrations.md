@@ -238,4 +238,6 @@ Job 每次執行都把 ClickHouse 的 `trustiot.telemetry` 與 `trustiot.batch_c
   ```
 
   `telemetry` 用 `received_at`、`batch_commits` 用 `committed_at`；不要改用資料本身的時間戳 `ts`，時鐘錯的閘道器會讓資料與高水位提早被清掉。
-- **改天數的代價**：改 TTL 後 ClickHouse 在背景執行 `MATERIALIZE TTL`，重寫每個 part，占用 I/O 與暫時的磁碟空間；縮短時要等它跑完才釋放空間。在 `system.mutations` 看進度（`WHERE database = 'trustiot' AND NOT is_done`）。磁碟已經接近滿時先擴充磁碟，再縮短保存期限。
+- **ClickHouse 升級之後出現上面的訊息**：Job 認得的形式是 `toIntervalDay(<天數>)`，以及 ClickHouse 26.8 存它自己帶參數寫入的 `toIntervalDay(_CAST(<天數>, 'UInt32'))`。新版 ClickHouse 若換了存法，Job 會認不出自己寫的 TTL 而停止，沒有資料被刪。照上面的指令以整數天數重寫一次，再回報 issue 讓 Job 認得新的存法。
+- **改天數的代價**：改 TTL 後 ClickHouse 在背景執行 `MATERIALIZE TTL`，重寫每個 part，占用 I/O 與暫時的磁碟空間；縮短時要等它跑完才釋放空間。在 `system.mutations` 看進度（`WHERE database = 'trustiot' AND NOT is_done`）。
+- **縮短是產品決定**：縮短會永久刪掉超過新天數的資料，不是解決磁碟壓力的手段；磁碟快滿時擴充磁碟（[資料保存期限與磁碟水位](../architecture/data-retention.md)「磁碟水位告警」）。手動改的天數在下一次部署會被 Job 改回設定值。

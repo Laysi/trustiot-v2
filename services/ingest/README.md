@@ -40,7 +40,7 @@ DDL 是 `migrations/clickhouse/` 的 SQL 檔，部署時由 migration Job（Lays
 | `value_float`、`value_int`、`value_bool`、`value_string` | Float64、Int64、Bool、String | 各型別的值；其他欄維持預設值（constraint `value_matches_type`） |
 
 - `ORDER BY (tenant_id, device_id, point, ts)`，`PARTITION BY toYYYYMM(received_at)`。
-- 保存期限：`TTL toDateTime(received_at) + toIntervalDay(<天數>)`，平台預設 180 天（`src/retention.rs`）。時鐘未校正的閘道器送來舊時間戳，也不會讓資料提早過期（[Laysi/trustiot#180](https://github.com/Laysi/trustiot/issues/180)）。`0002_telemetry.sql` 建表時寫的 400 天只是建表的初值：migration Job 每次執行都把 `telemetry` 與 `batch_commits` 的 TTL 改成設定的天數（`TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS`，必須長於閘道器緩衝的最長保存時間 30 天），不另寫 migration 檔。值、限制與理由見[資料保存期限與磁碟水位](../../docs/architecture/data-retention.md)。
+- 保存期限：`TTL toDateTime(received_at) + toIntervalDay(<天數>)`，平台預設 180 天（`src/retention.rs`）。時鐘未校正的閘道器送來舊時間戳，也不會讓資料提早過期（[Laysi/trustiot#180](https://github.com/Laysi/trustiot/issues/180)）。`0002_telemetry.sql` 建表時寫的 400 天只是建表的初值（它開頭註解寫的「改天數要寫新的 migration」是這個做法之前的寫法，已套用的檔案不能改）：migration Job 每次執行都把 `telemetry` 與 `batch_commits` 的 TTL 改成設定的天數（`TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS`，必須長於閘道器緩衝的最長保存時間 30 天），不另寫 migration 檔。值、限制與理由見[資料保存期限與磁碟水位](../../docs/architecture/data-retention.md)。
 - 落盤：`fsync_after_insert = 1`、`fsync_part_directory = 1`，INSERT 成功代表資料已在磁碟上，不只在 page cache（2026-10-09 可行性測試：伺服器預設兩者皆為 0）。
 - 去重：`non_replicated_deduplication_window = 1000`，帶相同 `insert_deduplication_token` 的重送區塊被丟棄；窗口只以區塊數計算，長時間離線的重送靠 `batch_commits` 判斷。
 

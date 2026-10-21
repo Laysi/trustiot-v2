@@ -30,17 +30,21 @@
 - 變更順序讓完成表任何時刻都不短於原始資料：延長時先改完成表、縮短時先改 `telemetry`。中途失敗時下一次執行接著完成。
 - 表的 TTL 不是 Job 管理的形式（例如有人手動加了條件或改了欄位）時，Job 停止並寫出表名，不覆蓋；處理方式在 [migration Job runbook](../runbooks/migrations.md) 的「原始資料的保存期限」。
 - 改 TTL 時 ClickHouse 在背景執行 `MATERIALIZE TTL`，重寫每個 part 的 TTL 資訊並刪掉過期的列，會占用 I/O 與暫時的磁碟空間；縮短保存期限不會立刻釋放空間。大的表改值前先看磁碟水位。
+- 縮短保存期限會永久刪掉超過新天數的資料，是產品決定，不是維運手段：SaaS 的天數是平台承諾（[方案與權益](../product/plans.md)），由產品負責人決定；地端由客戶的管理者決定。不要拿縮短保存期限解決磁碟壓力（見下方「磁碟水位告警」）。
+- Job 管理的 TTL 只經設定改。手動以 `ALTER TABLE ... MODIFY TTL` 改天數（例如為了保全資料而延長），下一次部署時 Job 會改回設定的天數；要保留超過保存期限的資料，先把資料匯出。
+- 目前 Job 不擋縮短：設定沒有給或是空值時就用平台的 180 天，比現在的天數短也照改。地端可以設定之前，Laysi/trustiot-v2#446 要先讓縮短需要明確確認（例如設定要寫出目前的天數），chart 在 values 是空值時失敗、不退回平台值（2026-10-21 安全審查）。
 
 ### 既有部署怎麼轉移
 
-既有部署（展示環境、nightly 都是全新部署，不受影響）升級到這一版時，migration Job 的下一次執行把兩張表的 TTL 從 400 天改成 180 天，並套用 `0007_monitoring.sql`。2026-10-21 時沒有任何部署的資料超過 180 天，所以不會刪到資料；背景的 `MATERIALIZE TTL` 只重寫 TTL 資訊。不需要手動步驟；要回到舊版時，舊版的 Job 不管 TTL，表維持 180 天，要 400 天就以新版設定 `TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS=400` 再跑一次。
+既有部署（展示環境、nightly 都是全新部署，不受影響）升級到這一版時，migration Job 的下一次執行把兩張表的 TTL 從 400 天改成 180 天，並套用 `0007_monitoring.sql`。2026-10-21 時沒有任何部署的資料超過 180 天，所以不會刪到資料；背景的 `MATERIALIZE TTL` 照樣重寫 part（見上一節），只是沒有過期的列要刪。不需要手動步驟；要回到舊版時，舊版的 Job 不管 TTL，表維持 180 天，要 400 天就以新版設定 `TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS=400` 再跑一次。
 
 ## 磁碟水位告警
 
 ClickHouse 的磁碟滿了就停擺：寫入失敗，套用保存期限的 merge 與 mutation 也需要空間重寫 part，連刪資料都做不到。
 
 - 指標：每個本機磁碟的使用比例 `used_ratio = 1 - free_space / total_space`，從 `system.disks` 讀（ClickHouse 查詢時直接讀檔案系統）。規則在 [`services/ingest/alerts/clickhouse_disk_watermark.sql`](../../services/ingest/alerts/clickhouse_disk_watermark.sql)，每個磁碟一列，帶 `severity`。
-- 門檻：0.80 起 `warning`、0.90 起 `critical`；持續 5 分鐘才通知，避免 merge 的暫時 part 造成誤報。80 % 時還有時間擴充磁碟或調整保存期限；90 % 時大的 merge 已經會因空間不足而延後，part 開始累積。
+- 門檻：0.80 起 `warning`、0.90 起 `critical`；持續 5 分鐘才通知，避免 merge 的暫時 part 造成誤報。80 % 時還有時間擴充磁碟；90 % 時大的 merge 已經會因空間不足而延後，part 開始累積。
 - 權限：角色 `trustiot_monitoring`（`0007_monitoring.sql`）只有 `system.disks` 的 `SELECT`，讀不到任何 TrustIoT 資料庫或其他系統表。評估告警的帳號（Grafana）拿到這個角色，由 Laysi/trustiot-v2#183 建立帳號並在 Grafana 設定規則。
 - 測試：`services/ingest/tests/disk_watermark.rs` 把真的 ClickHouse 的資料目錄放在 256 MiB 的 tmpfs，填到 85 % 與 95 %，確認依序觸發 `warning`、`critical`，釋放後回到 `ok`；監控角色讀不到其他東西，沒有角色的帳號讀不到 `system.disks`。
-- 觸發時：先確認是資料量成長還是別的東西（日誌表、系統表、卡住的 mutation）。擴充磁碟（StorageClass 支援 `allowVolumeExpansion` 時改 PVC 大小，外部 ClickHouse 照供應商的方式）；或縮短保存期限（不能短於 31 天，而且要等 `MATERIALIZE TTL` 跑完才釋放空間，它自己也需要空間，所以要在 critical 之前做）。
+- 告警查詢失敗時（ClickHouse 停擺或過載、角色不見、`system.disks` 被拒）規則不回傳任何列。Laysi/trustiot-v2#183 在 Grafana 設定這條規則時，NoData 與 Error 要設成告警，不能是 OK，否則告警正好在它要防的停擺期間沉默。
+- 觸發時：先確認是資料量成長還是別的東西（日誌表、系統表、卡住的 mutation），清掉不需要的部分。例行的處理只有擴充磁碟（StorageClass 支援 `allowVolumeExpansion` 時改 PVC 大小，外部 ClickHouse 照供應商的方式）。不要縮短保存期限來釋放空間：那會永久刪掉每個租戶的原始資料，SaaS 上也違反對方案的承諾（見上方「設定與變更」）；而且 `MATERIALIZE TTL` 自己也需要暫時的空間，接近滿時反而更糟。

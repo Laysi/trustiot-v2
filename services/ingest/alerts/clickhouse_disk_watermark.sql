@@ -11,7 +11,9 @@
 -- Run it as an account with the role trustiot_monitoring (0007_monitoring.sql). Grafana evaluates
 -- it once it is deployed (Laysi/trustiot-v2#183), as a ClickHouse data source query with used_ratio as
 -- the value and disk as the label; services/ingest/tests/disk_watermark.rs fills a real
--- ClickHouse disk and checks each severity.
+-- ClickHouse disk and checks each severity. When the query fails (ClickHouse down or overloaded,
+-- the role missing) it returns no rows, so the evaluator must treat NoData and Error as alerting,
+-- never as OK, or the alert goes quiet during the outage it exists to catch.
 --
 -- One statement, no trailing semicolon, so the file can be sent as it is.
 
