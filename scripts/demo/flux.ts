@@ -16,8 +16,10 @@
  *   key and its fingerprint are printed: a person adds them on GitHub as a read-only deploy key.
  * - install applies `kubectl kustomize deploy/flux/clusters/demo/flux-system` the way
  *   deploy/flux/README.md 「建立叢集」 step 6 does (server-side apply, wait for the CRDs, apply
- *   again), then waits for the controllers, the GitRepository, the Kustomization, the chart's
- *   OCIRepository and the HelmRelease and reports each one.
+ *   again), with the GitRepository pinned to the commit of main that this run checked
+ *   (pinnedBootstrap), then waits for the controllers, the GitRepository, the Kustomization, the
+ *   chart's OCIRepository and the HelmRelease, removes the pin so that Flux follows main again,
+ *   and reports each one.
  * - status only reads.
  * - remove takes Flux and the release away in an order that keeps the workload data (see
  *   runRemove).
@@ -25,17 +27,19 @@
  * Every refusal is collected first and printed together; --apply runs only when there is none.
  * The private halves of the deploy key and of the sops-age key never leave the demo machine:
  * they only pass through pipes, a root-only file that is shredded, and the Kubernetes Secrets.
- * Nothing here reads a Secret with `-o json` or `-o yaml`; Secrets are read by name, type, labels
- * and key names (SECRET_TEMPLATE), and only public values (the deploy key's public half and
- * known_hosts) are read back to the workstation. Text read from the cluster goes through redact()
- * before it is printed or logged.
+ * Nothing here reads a Secret with `-o json` or `-o yaml`; Secrets are read by name, type, labels,
+ * key names and value sizes (SECRET_TEMPLATE), and only public values (the deploy key's public
+ * half and known_hosts) are read back to the workstation. Everything a run prints, logs, saves or
+ * throws goes through FluxLog.clean (redact() and the ssh host hidden).
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { RUN_LABEL } from "../../deploy/flux/tests/e2e/preflight.ts";
 import { ageToolFor } from "../flux/age.ts";
 import { FLUX_COMPONENTS, SOPS_SECRETS, sopsFileProblems, sopsRuleTexts } from "../flux/lib.ts";
+import { ipv4ToNumber, serviceCidrsOf, staticBandOf } from "../nightly/ingress-address.ts";
 import { parseOptions, protoTool, tryRun } from "../release/exec.ts";
 import { appDir, chartSourceFile, clusterDir, parseChartSource } from "../release/flux.ts";
 import { CHART_REGISTRY, ReleaseError, compareReleaseTags, errorMessage, isMap } from "../release/lib.ts";
@@ -52,6 +56,7 @@ import {
   type OpsTunnel,
   POC_FINGERPRINTS,
   ROOT,
+  type SshRunner,
   checkConfirmation,
   clusterState,
   commonOptions,
@@ -62,13 +67,14 @@ import {
   sha256,
   shownPath,
   shq,
+  sshRun,
   stableJson,
   stateDiff,
   takeLock,
   withOpsTunnel,
 } from "./lib.ts";
 import { mergeValues } from "./platform.ts";
-import { LOCK_STATE_COMMAND, type LockState, parseLockState, redactSecrets } from "./tunnel.ts";
+import { LOCK_STATE_COMMAND, type LockState, StillRunningError, parseLockState, redactSecrets } from "./tunnel.ts";
 
 /** The issue whose lab lock this script takes: the install on the demo machine. */
 export const ISSUE = "Laysi/trustiot-v2#467";
@@ -117,9 +123,26 @@ export const REPOSITORY = "Laysi/trustiot-v2";
 const GIT_URL = "ssh://git@github.com/Laysi/trustiot-v2.git";
 const SYNC_PATH = `./${clusterDir("demo")}`;
 const FLUX_SYSTEM = `${clusterDir("demo")}/flux-system`;
-/** What the plan is built from; anything uncommitted there stops it. */
-const CODE_PATHS = ["deploy/flux", "scripts", ".sops.yaml", ".prototools"];
+/**
+ * What the plan is built from, the tools it runs included (.prototools and the schema plugins that
+ * verify their checksums); anything uncommitted there, or hidden from git status, stops it.
+ */
+const CODE_PATHS = ["deploy/flux", "scripts", ".sops.yaml", ".prototools", ".proto/plugins"];
 const ORIGIN_URL = /^(https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)Laysi\/trustiot-v2(\.git)?\/?$/i;
+/**
+ * A Kubernetes object name (DNS-1123 subdomain): names read from main go into YAML and shell text
+ * only after this check. Exactly the API server's rule for a Secret name, no stricter: Kubernetes
+ * validates it with ValidateSecretName = apimachineryvalidation.NameIsDNSSubdomain
+ * (kubernetes/kubernetes pkg/apis/core/validation/validation.go), which is IsDNS1123Subdomain
+ * (kubernetes/apimachinery pkg/util/validation/validation.go): at most 253 characters and the
+ * pattern dns1123LabelFmt("." dns1123LabelFmt)*, with no limit of 63 per label (only
+ * IsDNS1123Label has that). Either way the pattern alone keeps quotes, spaces and newlines out.
+ */
+const DNS_1123 = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$/;
+
+export function isObjectName(name: string): boolean {
+  return name.length <= 253 && DNS_1123.test(name);
+}
 
 const KINDS = {
   crd: "customresourcedefinitions.apiextensions.k8s.io",
@@ -156,31 +179,92 @@ type Values = Record<string, unknown>;
 
 /**
  * Anything shaped like a host name: dotted labels whose last label is letters (every top-level
- * domain is) or punycode. Fail closed: a name is printed only when shownName allows it, so private
- * names such as db.internal or box.lan never are. Where a longer dotted word does not end in
- * letters (sh.helm.release.v1.trustiot.v1), its leading part still matches and is replaced.
+ * domain is) or punycode. Fail closed: every match is replaced unless shownName restores it,
+ * wherever it starts (after `*.`, `--` or a second dot too), so private names such as db.internal
+ * or box.lan never print. Where a longer dotted word does not end in letters
+ * (sh.helm.release.v1.trustiot.v1), its leading part still matches and is replaced.
  */
 const HOST_CORE = String.raw`(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})`;
-const HOST_NAME = new RegExp(String.raw`(?<![\w.-])(${HOST_CORE})(?![\w-])`, "gi");
+const HOST_NAME = new RegExp(String.raw`${HOST_CORE}(?![\w-])`, "gi");
+/**
+ * An e-mail address at any host-shaped domain, shown names included (someone@github.com is a
+ * person's address): replaced before shownName can keep its domain. The clone user of
+ * `git@github.com:Laysi/trustiot-v2` is no person and stays.
+ */
+const EMAIL = new RegExp(String.raw`(?<![\w.%+-])(?!git@)[A-Za-z0-9._%+-]+@${HOST_CORE}(?![\w-])`, "gi");
 const HOST_SHAPE = new RegExp(`^${HOST_CORE}$`, "i");
 /**
- * Public names that status lines carry: API groups, label prefixes, the repository and the
- * registry. Other public names (another registry, the signature issuer) print as <host> too: that
- * costs some detail, and keeps this list within scripts/demo/public-text.test.ts's.
+ * Public names printed exactly as they are: the repository's host and the registry. Other public
+ * names (another registry, the signature issuer) print as <host> too: that costs some detail, and
+ * keeps these lists within scripts/demo/public-text.test.ts's.
  */
-const SHOWN_NAMES = ["github.com", "ghcr.io", "fluxcd.io", "k8s.io", "kubernetes.io", "trustiot.io", "cnpg.io", "istio.io"];
-/** A Service's or a pod's name in the cluster's DNS (<name>.<namespace>.svc): cluster addresses may be shown (CLAUDE.md). */
+const SHOWN_NAMES = new Set(["github.com", "ghcr.io"]);
+/**
+ * Kubernetes API groups that status lines and records carry, shown alone (`networking.k8s.io/v1`)
+ * or after one resource label (`gitrepositories.source.toolkit.fluxcd.io`,
+ * `lease.coordination.k8s.io`). No other name in these zones is shown.
+ */
+const API_GROUPS = new Set([
+  "source.toolkit.fluxcd.io",
+  "kustomize.toolkit.fluxcd.io",
+  "helm.toolkit.fluxcd.io",
+  "notification.toolkit.fluxcd.io",
+  "image.toolkit.fluxcd.io",
+  "apiextensions.k8s.io",
+  "admissionregistration.k8s.io",
+  "apiregistration.k8s.io",
+  "certificates.k8s.io",
+  "coordination.k8s.io",
+  "discovery.k8s.io",
+  "events.k8s.io",
+  "flowcontrol.apiserver.k8s.io",
+  "gateway.networking.k8s.io",
+  "metrics.k8s.io",
+  "networking.k8s.io",
+  "node.k8s.io",
+  "rbac.authorization.k8s.io",
+  "resource.k8s.io",
+  "scheduling.k8s.io",
+  "storage.k8s.io",
+  "postgresql.cnpg.io",
+  "security.istio.io",
+  "networking.istio.io",
+  "telemetry.istio.io",
+  "extensions.istio.io",
+  "helm.cattle.io",
+  "k3s.cattle.io",
+]);
+/** Label and annotation key prefixes, shown only right before the `/` of a key (`trustiot.io/demo-flux`), never as names of their own. */
+const LABEL_PREFIXES = new Set([
+  "trustiot.io",
+  "e2e.trustiot.io",
+  "k8s.io",
+  "kubernetes.io",
+  "app.kubernetes.io",
+  "kubectl.kubernetes.io",
+  "pod-security.kubernetes.io",
+  "fluxcd.io",
+  "reconcile.fluxcd.io",
+  "istio.io",
+  "sidecar.istio.io",
+  "topology.istio.io",
+  "cnpg.io",
+  "helm.sh",
+  "meta.helm.sh",
+]);
+/** A Service's or a pod's name in the cluster's DNS (<name>.<namespace>.svc[.cluster.local]): cluster addresses may be shown (CLAUDE.md). */
 const CLUSTER_DNS = /^[\w-]+\.[\w-]+\.(?:svc|pod)(?:\.cluster\.local)?$/i;
 /**
  * Endings of dotted words that are no host names: file extensions that are no top-level domain (a
- * manifest, a chart archive, a clone URL, a certificate) and the Kubernetes API groups without a
- * dot (deployment.apps, job.batch). The rest of the word must not look like a host name itself,
- * so that db.internal.yaml is still replaced.
+ * manifest, a chart archive, a clone URL, a certificate, a script, a lock, a unit) and the
+ * Kubernetes API groups without a dot (deployment.apps, job.batch). The rest of the word must not
+ * look like a host name itself, so that db.internal.yaml is still replaced.
  */
-const NOT_HOST_ENDING = /\.(?:sops\.yaml|crt|git|json|tgz|yaml|yml|apps|batch|policy|autoscaling)$/i;
-/** Secret keys this script prints (status lists key names). */
-const SHOWN_WORDS = new Set(["identity.pub", "age.agekey"]);
-const IPV4_TEXT = /(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])/g;
+const NOT_HOST_ENDING = /\.(?:sops\.yaml|crt|git|json|tgz|yaml|yml|ts|lock|log|toml|service|apps|batch|policy|autoscaling)$/i;
+/** Dotted words this script prints that are no host names: Secret keys, a file and the fields its messages name. */
+const SHOWN_WORDS = new Set(["identity.pub", "age.agekey", "readme.md", "metadata.name", "spec.ref", "spec.ref.commit", "spec.ref.branch", "spec.suspend", "spec.prune", INGRESS_CLUSTER_IP_PATH.join(".").toLowerCase()]);
+/** IPv4 addresses, also right after a dot (`v1.192.0.2.5`) and before a final one (`at 192.0.2.5.`). */
+const IPV4_TEXT = /(?<!\d)(\d{1,3}(?:\.\d{1,3}){3})(?!\d|\.\d)/g;
 /** Pod and Service networks of k3s and loopback: cluster addresses may be shown (CLAUDE.md). */
 const SHOWN_ADDRESS = /^(10\.42\.|10\.43\.|127\.)/;
 /**
@@ -189,29 +273,92 @@ const SHOWN_ADDRESS = /^(10\.42\.|10\.43\.|127\.)/;
  * of an IPv4-mapped address is already replaced.
  */
 const IPV6_TEXT = /(?<![\w:])((?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?)(?![\w:])/gi;
+/** Public values this script prints as they are: an OpenSSH public key and a SHA256 fingerprint. */
+const PUBLIC_VALUE = /(?:ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521)) AAAA[A-Za-z0-9+/]+={0,3}|SHA256:[A-Za-z0-9+/]{43}(?![A-Za-z0-9+/=])/g;
+/**
+ * Credentials by their shape: GitHub tokens, Resend and OpenAI-style API keys, AWS access key ids,
+ * HTTP authorization values, the user information of a URL (a password, or a token as the user
+ * name; the clone URL's `ssh://git@` stays), and key=value settings of a secret.
+ */
+const CREDENTIALS: readonly (readonly [RegExp, string])[] = [
+  [/\bgh[pousr]_[A-Za-z0-9]{16,}/g, "<redacted>"],
+  [/\bgithub_pat_[A-Za-z0-9_]{16,}/g, "<redacted>"],
+  [/\bre_[A-Za-z0-9_]{16,}/g, "<redacted>"],
+  [/\bsk-[A-Za-z0-9_-]{16,}/g, "<redacted>"],
+  [/\bAKIA[0-9A-Z]{16}\b/g, "<redacted>"],
+  [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 <redacted>"],
+  [/\b([a-z][a-z0-9+.-]*:\/\/)(?!git@)[^\s/@]+@/gi, "$1<redacted>@"],
+  [/\b(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)(["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s"',;&]+)/gi, "$1$2<redacted>"],
+];
+/** A run of base64 or base64url characters long enough to be a key or a password. */
+const LONG_RUN = /(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{20,}={0,2}(?![A-Za-z0-9+/_=-])/g;
+/** Words or lower-case names joined by `/` (`Deployment/trustiot/trustiot-k8s-proxy`, `com/Laysi/trustiot-v2`): a path, not a secret. */
+const NAME_PATH = /^(?:[A-Za-z]+|[a-z0-9][a-z0-9_-]*)(?:\/(?:[A-Za-z]+|[a-z0-9][a-z0-9_-]*))+$/;
 
-function shownName(name: string): boolean {
+/**
+ * Whether a long run looks random: upper case, lower case and digits mixed, and no path of names.
+ * Hex digests and commits (lower case and digits), age recipients, Kubernetes names and condition
+ * reasons (letters only) do not.
+ */
+function looksRandom(run: string): boolean {
+  return /[A-Z]/.test(run) && /[a-z]/.test(run) && /[0-9]/.test(run) && !NAME_PATH.test(run.replace(/=+$/, ""));
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Local paths as they may be printed: this checkout as <repo>, home directories as ~ (local tool errors name them). */
+function hidePaths(text: string): string {
+  const end = String.raw`(?=$|[/\s'"\x60:;,)])`;
+  let out = text;
+  const root = ROOT.replace(/\/+$/, "");
+  if (root.length > 1) out = out.replace(new RegExp(`${escapeRegExp(root)}${end}`, "g"), "<repo>");
+  const home = (process.env.HOME || homedir()).replace(/\/+$/, "");
+  if (home.length > 1) out = out.replace(new RegExp(`${escapeRegExp(home)}${end}`, "g"), "~");
+  return out.replace(/(?<![\w.~-])\/(?:home|Users)\/[^/\s'"`:;,)]+/g, "~").replace(new RegExp(String.raw`(?<![\w.~-])/root${end}`, "g"), "~");
+}
+
+function hideCredentials(text: string): string {
+  let out = text;
+  for (const [pattern, replacement] of CREDENTIALS) out = out.replace(pattern, replacement);
+  return redactSecrets(out.replace(LONG_RUN, (run) => (looksRandom(run) ? "<redacted>" : run)));
+}
+
+function shownName(name: string, next: string): boolean {
   const lower = name.toLowerCase();
-  if (SHOWN_NAMES.some((shown) => lower === shown || lower.endsWith(`.${shown}`))) return true;
-  if (CLUSTER_DNS.test(lower) || SHOWN_WORDS.has(lower)) return true;
+  if (SHOWN_NAMES.has(lower) || API_GROUPS.has(lower) || SHOWN_WORDS.has(lower) || CLUSTER_DNS.test(lower)) return true;
+  const dot = lower.indexOf(".");
+  if (/^[a-z0-9-]+$/.test(lower.slice(0, dot)) && API_GROUPS.has(lower.slice(dot + 1))) return true;
+  if (next === "/" && LABEL_PREFIXES.has(lower)) return true;
   const ending = NOT_HOST_ENDING.exec(lower);
   return ending !== null && !HOST_SHAPE.test(lower.slice(0, ending.index));
 }
 
 /**
- * Text read from the cluster as it may be printed: private keys, tokens and long base64 runs
- * removed (tunnel.ts redactSecrets), host names other than the public ones above and addresses
- * other than cluster addresses replaced. Status messages can quote values, such as a host name
- * from the private values in a failed install.
+ * Text as a run may print, log or save it: local paths shortened; private keys, tokens and other
+ * credentials removed (tunnel.ts redactSecrets for JWTs and very long base64, plus the shapes
+ * above and random-looking runs), except the public key and fingerprint this script prints; host
+ * names other than the public ones above, and e-mail addresses at them, replaced; addresses other
+ * than cluster addresses replaced. Status messages can quote values, such as a host name from the
+ * private values in a failed install, and local tool errors name local paths.
  */
 export function redact(text: string): string {
-  const keys = text
+  const keys = hidePaths(text)
     .replace(/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g, "<redacted private key>")
     .replace(/AGE-SECRET-KEY-1[0-9A-Z]+/gi, "<redacted age key>")
     // A whole JSON Web Token: redactSecrets takes its segments one by one and keeps short ones.
     .replace(/eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*)?/g, "<redacted>");
-  return redactSecrets(keys)
-    .replace(HOST_NAME, (name: string) => (shownName(name) ? name : "<host>"))
+  let out = "";
+  let last = 0;
+  for (const match of keys.matchAll(PUBLIC_VALUE)) {
+    out += hideCredentials(keys.slice(last, match.index)) + match[0];
+    last = match.index + match[0].length;
+  }
+  out += hideCredentials(keys.slice(last));
+  return out
+    .replace(EMAIL, "<email>")
+    .replace(HOST_NAME, (name: string, offset: number, whole: string) => (shownName(name, whole.charAt(offset + name.length)) ? name : "<host>"))
     .replace(IPV4_TEXT, (address: string) => (SHOWN_ADDRESS.test(address) ? address : "<address>"))
     .replace(IPV6_TEXT, (address: string) => (address === "::1" ? address : "<address>"));
 }
@@ -221,6 +368,60 @@ export function names(items: readonly string[]): string {
   return redact(items.join(", "));
 }
 
+/**
+ * The log of a run: lib.ts' Log, with everything it prints and saves passed through redact().
+ * Box, takeLock and withOpsTunnel note through it too, so ssh's and kubectl's own error lines are
+ * cleaned before they reach the console or a file.
+ */
+export class FluxLog extends Log {
+  clean(text: string): string {
+    return redact(text);
+  }
+
+  override note(message: string): void {
+    super.note(this.clean(message));
+  }
+
+  override save(name: string, data: unknown): string {
+    return super.save(name, cleanValue(data, (text) => this.clean(text)));
+  }
+}
+
+function cleanValue(value: unknown, clean: (text: string) => string): unknown {
+  if (typeof value === "string") return clean(value);
+  if (Array.isArray(value)) return value.map((item) => cleanValue(item, clean));
+  if (isMap(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [clean(key), cleanValue(item, clean)]));
+  return value;
+}
+
+/**
+ * Runs a step and rethrows its error with the message cleaned, so that the error lib.ts' main
+ * prints, and any caller sees, holds what the log may hold. A StillRunningError stays one: the lab
+ * lock stays held for it.
+ */
+export async function cleanErrors<T>(log: FluxLog, body: () => Promise<T>): Promise<T> {
+  try {
+    return await body();
+  } catch (error) {
+    const message = log.clean(errorMessage(error));
+    throw error instanceof StillRunningError ? new StillRunningError(message) : new ReleaseError(message);
+  }
+}
+
+/**
+ * An ssh runner whose stderr names the ssh host (as given on the command line) only as <ssh-host>:
+ * ssh's own errors name it ("Could not resolve hostname <alias>"), and an alias is no dotted name
+ * that redact() would catch. Only stderr: stdout carries the lock's owner line and kubectl's
+ * output, which runs compare and parse as they are.
+ */
+export function hidingSshHost(run: SshRunner, host: string): SshRunner {
+  const pattern = new RegExp(String.raw`(?<![A-Za-z0-9_-])${escapeRegExp(host)}(?![A-Za-z0-9_-])`, "gi");
+  return async (cmd, stdin) => {
+    const result = await run(cmd, stdin);
+    return { ...result, stderr: result.stderr.replace(pattern, "<ssh-host>") };
+  };
+}
+
 // --- The checkout --------------------------------------------------------------------------------
 
 export interface CodeFacts {
@@ -228,6 +429,8 @@ export interface CodeFacts {
   originMain: string;
   /** `git status --porcelain` lines under CODE_PATHS. */
   dirty: string[];
+  /** `git ls-files -v` lines under CODE_PATHS of files marked assume-unchanged or skip-worktree: git status does not compare them. */
+  hidden: string[];
   originUrl: string;
   fetchError?: string;
 }
@@ -241,6 +444,11 @@ export function codeProblems(code: CodeFacts): string[] {
     problems.push(`HEAD (${code.head.slice(0, 12) || "unknown"}) is not origin/main (${code.originMain.slice(0, 12) || "unknown"}); run from origin/main, for example after \`git switch --detach origin/main\``);
   }
   if (code.dirty.length > 0) problems.push(`${CODE_PATHS.join(", ")} have uncommitted changes: ${code.dirty.slice(0, 10).join("; ")}`);
+  if (code.hidden.length > 0) {
+    problems.push(
+      `files under ${CODE_PATHS.join(", ")} are marked assume-unchanged or skip-worktree, so git status cannot show whether they differ from main (${code.hidden.slice(0, 10).join("; ")}); clear the marks with \`git update-index --no-assume-unchanged --no-skip-worktree <file>\``,
+    );
+  }
   return problems;
 }
 
@@ -251,12 +459,17 @@ export async function readCode(root: string = ROOT): Promise<CodeFacts> {
   const head = await git("rev-parse", "--verify", "HEAD");
   const originMain = await git("rev-parse", "--verify", "refs/remotes/origin/main");
   const status = await git("status", "--porcelain", "--untracked-files=all", "--", ...CODE_PATHS);
+  // -v tags each tracked file: H when git compares it with the work tree; S (skip-worktree) or a
+  // lower-case tag (assume-unchanged) when it does not, so its changes are missing from status.
+  const listed = await git("ls-files", "-v", "--", ...CODE_PATHS);
   const url = await git("remote", "get-url", "origin");
-  if (status.exitCode !== 0) throw new ReleaseError(`git status failed: ${lastLines(status.stderr)}`);
+  if (status.exitCode !== 0) throw new ReleaseError(`git status failed: ${redact(lastLines(status.stderr))}`);
+  if (listed.exitCode !== 0) throw new ReleaseError(`git ls-files failed: ${redact(lastLines(listed.stderr))}`);
   return {
     head: head.exitCode === 0 ? head.stdout.trim() : "",
     originMain: originMain.exitCode === 0 ? originMain.stdout.trim() : "",
     dirty: status.stdout.split("\n").filter((line) => line.trim() !== ""),
+    hidden: listed.stdout.split("\n").filter((line) => line.trim() !== "" && !line.startsWith("H ")),
     originUrl: url.exitCode === 0 ? url.stdout.trim() : "",
     // git's message names the remote's URL, which may carry a credential: only the exit status.
     ...(fetched.exitCode === 0 ? {} : { fetchError: `exit ${fetched.exitCode}` }),
@@ -284,6 +497,8 @@ export interface FluxManifests {
   /** `clusterrole/<name>` and `clusterrolebinding/<name>`. */
   clusterObjects: string[];
   deployments: string[];
+  /** The GitRepository's apiVersion, for the document that pins it (pinDocument). */
+  gitApiVersion: string;
   /** The Secret the GitRepository reads its deploy key from. */
   deployKeySecret: string;
   /** The Secret the root Kustomization decrypts SOPS files with. */
@@ -336,6 +551,8 @@ export function parseManifests(manifestText: string): { manifests?: FluxManifest
   const deployments: string[] = [];
   const namespaceObjects: string[] = [];
   let namespaces = 0;
+  let gits = 0;
+  let roots = 0;
   let git: Manifest | undefined;
   let root: Manifest | undefined;
   for (const doc of docs) {
@@ -371,23 +588,32 @@ export function parseManifests(manifestText: string): { manifests?: FluxManifest
     }
     if (kind === "ClusterRole" || kind === "ClusterRoleBinding") clusterObjects.push(`${kind.toLowerCase()}/${name}`);
     if (kind === "Deployment") deployments.push(name);
-    if (kind === "GitRepository") git = manifest;
-    if (kind === "Kustomization") root = manifest;
+    if (kind === "GitRepository") {
+      gits += 1;
+      git = manifest;
+    }
+    if (kind === "Kustomization") {
+      roots += 1;
+      root = manifest;
+    }
   }
   if (namespaces !== 1) problems.push(`Flux's manifests declare ${namespaces} Namespaces, not exactly ${FLUX_NAMESPACE}`);
   for (const component of FLUX_COMPONENTS) {
     if (!deployments.includes(component)) problems.push(`Flux's manifests have no Deployment ${component}`);
   }
-  if (objects.filter((o) => o.startsWith("GitRepository/") || o.startsWith("Kustomization/")).length !== 2) {
-    problems.push("Flux's manifests must hold exactly one GitRepository and one Kustomization (the sync)");
-  }
+  if (gits !== 1) problems.push(`Flux's manifests hold ${gits} GitRepositories, not exactly one (the sync's)`);
+  if (roots !== 1) problems.push(`Flux's manifests hold ${roots} Kustomizations, not exactly one (the root)`);
   const deployKeySecret = text(at(git?.spec, ["secretRef", "name"]));
   const sopsSecret = text(at(root?.spec, ["decryption", "secretRef", "name"]));
+  const gitApiVersion = text(git?.apiVersion);
   if (git !== undefined) {
     if (git.metadata?.name !== FLUX_NAMESPACE) problems.push(`the GitRepository is ${text(git.metadata?.name)}, not ${FLUX_NAMESPACE}`);
+    if (!/^source\.toolkit\.fluxcd\.io\/v[0-9a-z]+$/.test(gitApiVersion)) problems.push(`the GitRepository has the apiVersion ${JSON.stringify(gitApiVersion)}, not source.toolkit.fluxcd.io/<version>`);
     if (at(git.spec, ["url"]) !== GIT_URL) problems.push(`the GitRepository does not read ${GIT_URL}`);
-    if (at(git.spec, ["ref", "branch"]) !== "main") problems.push("the GitRepository does not follow main");
+    // install pins spec.ref.commit for the first deploy and removes it afterwards (pinnedBootstrap).
+    if (stableJson(at(git.spec, ["ref"])) !== stableJson({ branch: "main" })) problems.push("the GitRepository's spec.ref is not exactly {branch: main}");
     if (deployKeySecret === "") problems.push("the GitRepository has no secretRef (the deploy key)");
+    else if (!isObjectName(deployKeySecret)) problems.push(`the GitRepository's secretRef ${JSON.stringify(deployKeySecret)} is not a Kubernetes object name`);
   }
   if (root !== undefined) {
     if (root.metadata?.name !== FLUX_NAMESPACE) problems.push(`the Kustomization is ${text(root.metadata?.name)}, not ${FLUX_NAMESPACE}`);
@@ -397,12 +623,120 @@ export function parseManifests(manifestText: string): { manifests?: FluxManifest
       problems.push(`the root Kustomization does not read GitRepository ${FLUX_NAMESPACE}`);
     }
     if (at(root.spec, ["decryption", "provider"]) !== "sops" || sopsSecret === "") problems.push("the root Kustomization does not decrypt SOPS files with a secretRef");
+    else if (!isObjectName(sopsSecret)) problems.push(`the root Kustomization's decryption secretRef ${JSON.stringify(sopsSecret)} is not a Kubernetes object name`);
   }
   if (problems.length > 0) return { problems };
   return {
-    manifests: { text: manifestText, sha256: sha256(manifestText), objects, crds: crds.sort(), crdKinds, clusterObjects: clusterObjects.sort(), deployments: deployments.sort(), deployKeySecret, sopsSecret, namespaceObjects: namespaceObjects.sort() },
+    manifests: {
+      text: manifestText,
+      sha256: sha256(manifestText),
+      objects,
+      crds: crds.sort(),
+      crdKinds,
+      clusterObjects: clusterObjects.sort(),
+      deployments: deployments.sort(),
+      gitApiVersion,
+      deployKeySecret,
+      sopsSecret,
+      namespaceObjects: namespaceObjects.sort(),
+    },
     problems,
   };
+}
+
+/** What install's bootstrap applies (applyScript): Flux's manifests, the GitRepository pinned to the checked commit. */
+export interface Bootstrap {
+  /** Every document but the root Kustomization, the GitRepository's with spec.ref.commit = head. */
+  text: string;
+  sha256: string;
+  /** The root Kustomization's document (JSON), applied last. */
+  root: string;
+  /** The commit of main the GitRepository is pinned to. */
+  head: string;
+  /** The GitRepository's apiVersion (pinDocument). */
+  apiVersion: string;
+}
+
+/**
+ * Flux's manifests with spec.ref.commit of the GitRepository set to `head`, the commit of main
+ * that this run checked. Without it, source-controller's first clone takes whatever main is by
+ * then, and kustomize-controller (cluster-admin) would apply a commit whose checks never ran,
+ * irreversible first-deploy parts included (the Postgres bootstrap, the ingress ClusterIP).
+ * source-controller checks out the commit from the branch and names it `main@sha1:<commit>`
+ * (source-controller v1.9.6 clones with github.com/fluxcd/pkg/git v0.52.0, whose gogit Clone
+ * gives a commit precedence over the branch: cloneCommit in gogit/clone.go), so the waits stay
+ * the same; a commit that is not on main fails the clone.
+ *
+ * The root Kustomization comes apart, so that applyScript creates it only after FIELD_MANAGER
+ * co-owns the pin: kustomize-controller applies main's GitRepository, which has no commit, and
+ * drops the fields of `kubectl` it takes over, but keeps fields another manager owns too. With the
+ * Kustomization created last, nothing of Flux applies anything before the pin is safe. Only the
+ * two documents change form (JSON, which is YAML); every other byte stays, and the result must
+ * parse to the same documents but for the pin.
+ */
+export function pinnedBootstrap(manifests: FluxManifests, head: string): Bootstrap {
+  if (!/^[0-9a-f]{40}$/.test(head)) throw new ReleaseError("the commit to pin is not a full commit hash");
+  const isKind = (kind: string) => (doc: unknown): doc is Record<string, unknown> => isMap(doc) && doc.kind === kind;
+  const isGit = isKind("GitRepository");
+  const isRoot = isKind("Kustomization");
+  let pinned = 0;
+  const roots: Record<string, unknown>[] = [];
+  const parts = manifests.text.split(/^(---[ \t]*)$/m).map((part, index) => {
+    if (index % 2 === 1) return part;
+    let doc: unknown;
+    try {
+      doc = Bun.YAML.parse(part);
+    } catch {
+      return part;
+    }
+    if (isRoot(doc)) {
+      roots.push(doc);
+      return "\n";
+    }
+    if (!isGit(doc)) return part;
+    pinned += 1;
+    const spec = isMap(doc.spec) ? doc.spec : {};
+    const ref = isMap(spec.ref) ? spec.ref : {};
+    return `\n${JSON.stringify({ ...doc, spec: { ...spec, ref: { ...ref, commit: head } } })}\n`;
+  });
+  if (pinned !== 1 || roots.length !== 1) throw new ReleaseError(`found ${pinned} GitRepository and ${roots.length} Kustomization documents in Flux's manifests, not one each`);
+  const text = parts.join("");
+  const root = JSON.stringify(roots[0]);
+  const unpin = (doc: unknown) => {
+    if (!isGit(doc) || !isMap(doc.spec) || !isMap(doc.spec.ref)) return doc;
+    const { commit: _commit, ...ref } = doc.spec.ref;
+    return { ...doc, spec: { ...doc.spec, ref } };
+  };
+  const after = [...parseDocuments(text), ...parseDocuments(root)];
+  const original = parseDocuments(manifests.text);
+  const expected = [...original.filter((doc) => !isRoot(doc)), ...original.filter(isRoot)];
+  if (stableJson(after.map(unpin)) !== stableJson(expected) || stableJson(after.filter(isGit).map((doc) => at(doc, ["spec", "ref", "commit"]))) !== stableJson([head])) {
+    throw new ReleaseError("pinning the GitRepository would change more of Flux's manifests than its spec.ref.commit");
+  }
+  return { text, sha256: sha256(text), root, head, apiVersion: manifests.gitApiVersion };
+}
+
+/** The document that makes FIELD_MANAGER a co-owner of the pin (applyScript, pinGit). */
+export function pinDocument(apiVersion: string, head: string): string {
+  if (!/^source\.toolkit\.fluxcd\.io\/v[0-9a-z]+$/.test(apiVersion) || !/^[0-9a-f]{40}$/.test(head)) throw new ReleaseError("not a GitRepository apiVersion and a full commit hash");
+  return JSON.stringify({ apiVersion, kind: "GitRepository", metadata: { name: FLUX_NAMESPACE, namespace: FLUX_NAMESPACE }, spec: { ref: { commit: head } } });
+}
+
+/** spec.ref of the GitRepository: following main, pinned to a commit of main, or anything else. */
+export type GitRef = { kind: "main" } | { kind: "pinned"; commit: string } | { kind: "other"; ref: string };
+
+export function gitRefOf(object: Record<string, unknown> | undefined): GitRef {
+  const ref = at(object, ["spec", "ref"]);
+  if (isMap(ref) && ref.branch === "main") {
+    const keys = Object.keys(ref).sort().join(",");
+    if (keys === "branch") return { kind: "main" };
+    if (keys === "branch,commit" && typeof ref.commit === "string" && /^[0-9a-f]{40}$/.test(ref.commit)) return { kind: "pinned", commit: ref.commit };
+  }
+  return { kind: "other", ref: redact(JSON.stringify(ref ?? null)).slice(0, 200) };
+}
+
+function describeRef(ref: GitRef): string {
+  return ref.kind === "main" ? "{branch: main}" : ref.kind === "pinned" ? `{branch: main, commit: ${ref.commit}}` : ref.ref;
 }
 
 /** A dotted-quad IPv4 address without leading zeros. */
@@ -549,7 +883,7 @@ export async function readRepo(root: string, code: CodeFacts, build: (root: stri
   if (typeof ip === "string" && isIpv4(ip)) inputs.clusterIp = ip;
   else {
     deploy.push(
-      `${app}/values-demo.yaml does not set ${INGRESS_CLUSTER_IP_PATH.join(".")} to an IPv4 address (${ip === undefined ? "not set" : `it is ${JSON.stringify(ip).slice(0, 40)}`}): ` +
+      `${app}/values-demo.yaml does not set ${INGRESS_CLUSTER_IP_PATH.join(".")} to an IPv4 address (${ip === undefined ? "not set" : `it is ${redact(JSON.stringify(ip)).slice(0, 40)}`}): ` +
         "the ingress Service's ClusterIP cannot change after the first deploy creates it, and the demo tunnel's route (Laysi/trustiot-v2#469) points at that address, " +
         "so the first deploy must already pin it (Laysi/trustiot-v2#478)",
     );
@@ -608,7 +942,8 @@ export async function readRepo(root: string, code: CodeFacts, build: (root: stri
 export async function kustomizeFluxSystem(root: string): Promise<string> {
   const kubectl = await protoTool("kubectl");
   const result = await tryRun([kubectl, "kustomize", join(root, FLUX_SYSTEM)]);
-  if (result.exitCode !== 0) throw new ReleaseError(lastLines(result.stderr));
+  // kustomize names absolute paths of this workstation: redact() shortens them.
+  if (result.exitCode !== 0) throw new ReleaseError(redact(lastLines(result.stderr)));
   return result.stdout;
 }
 
@@ -620,6 +955,8 @@ export interface SecretFacts {
   /** MARKER's value, "" without it. */
   marker: string;
   keys: string[];
+  /** The length of each key's base64 value (never the value): an empty key is 0. */
+  sizes: Record<string, number>;
 }
 
 export interface NamespaceState {
@@ -644,15 +981,19 @@ export interface ClusterFacts {
   fluxCrds: string[];
   /** ClusterRoles and ClusterRoleBindings labeled as Flux's (`app.kubernetes.io/part-of=flux`). */
   fluxClusterObjects: string[];
-  /** Whether the root Kustomization exists: then Flux manages its own objects. */
-  rootKustomization: boolean;
+  /** The root Kustomization flux-system, when it exists: then Flux manages its own objects. */
+  rootKustomization?: { suspended: boolean; prune: boolean };
+  /** The GitRepository flux-system, when it exists. */
+  gitRepository?: { ref: GitRef; suspended: boolean };
+  /** HelmRelease trustiot/trustiot, when it exists. */
+  helmRelease?: { suspended: boolean };
   /** PoC workloads still there (`<namespace>/<kind>/<name>`). */
   poc: string[];
   /** Namespace trustiot, when it exists. */
   appNamespace?: { labels: Record<string, string>; terminating: boolean };
   missingPlatformCrds: string[];
   deployKey?: DeployKeyFacts;
-  /** The cluster's IPv4 Service CIDRs (ServiceCIDR objects, networking.k8s.io/v1); undefined when they could not be read. */
+  /** The ranges of the ServiceCIDR `kubernetes` (networking.k8s.io/v1, the API server's own); undefined when it could not be read. */
   serviceCidrs?: string[];
   /** Every Service with its ClusterIPs. */
   services: ServiceFacts[];
@@ -681,38 +1022,44 @@ export function parseServices(out: string): ServiceFacts[] {
     });
 }
 
-/** The IPv4 CIDRs of `kubectl get servicecidrs -o jsonpath={.items[*].spec.cidrs[*]}`; IPv6 ones are dropped. */
-export function parseServiceCidrs(out: string): string[] {
-  return out
-    .split(/\s+/)
-    .filter((cidr) => /^\d+\.\d+\.\d+\.\d+\/\d+$/.test(cidr) && isIpv4(cidr.split("/")[0] ?? "") && Number(cidr.split("/")[1]) <= 32)
-    .sort();
-}
-
-function ipv4Number(ip: string): number {
-  return ip.split(".").reduce((value, part) => value * 256 + Number(part), 0);
-}
-
-export function ipv4InCidr(ip: string, cidr: string): boolean {
-  const [base = "", bits = "32"] = cidr.split("/");
-  const size = 2 ** (32 - Number(bits));
-  return Math.floor(ipv4Number(ip) / size) === Math.floor(ipv4Number(base) / size);
-}
-
 /**
  * Why the ClusterIP that main pins cannot be the ingress Service's on this cluster; [] when it
- * can. The API server refuses a Service whose ClusterIP is outside its Service CIDRs or held by
- * another Service, so the first install would fail. Which part of the range to pin (the static
- * band) is Laysi/trustiot-v2#478's and the pin PR's choice, not checked here.
+ * can. The address must be in the static band of the cluster's one IPv4 Service range (the
+ * ServiceCIDR `kubernetes`): Kubernetes hands out dynamic addresses from the rest first, so any
+ * Service created before the ingress one could take an address outside the band, and the first
+ * install would fail (deploy/chart/README.md 「固定的入口 ClusterIP」; the same rule as the smoke
+ * deployment's, scripts/nightly/ingress-address.ts). It must not be held by another Service either.
  */
 export function clusterIpProblems(ip: string, cluster: ClusterFacts): string[] {
   const value = `${INGRESS_CLUSTER_IP_PATH.join(".")} ${ip} of values-demo.yaml`;
+  const how = "pin an address of the static band (deploy/chart/README.md 「固定的入口 ClusterIP」, Laysi/trustiot-v2#478)";
   const problems: string[] = [];
-  if (cluster.serviceCidrs === undefined || cluster.serviceCidrs.length === 0) {
-    problems.push(`could not read the cluster's IPv4 Service CIDRs (ServiceCIDR objects, networking.k8s.io/v1), so ${value} cannot be checked against them`);
-  } else if (!cluster.serviceCidrs.some((cidr) => ipv4InCidr(ip, cidr))) {
-    // The cluster's Service network, which may be shown (CLAUDE.md); parseServiceCidrs keeps only CIDRs.
-    problems.push(`${value} is outside the cluster's Service CIDRs (${cluster.serviceCidrs.join(", ")}): the API server would refuse the ingress Service and the first install would fail; pin an address inside them (Laysi/trustiot-v2#478)`);
+  const ipv4 = (cluster.serviceCidrs ?? []).filter((cidr) => cidr.includes("."));
+  if (cluster.serviceCidrs === undefined) {
+    problems.push(`could not read the cluster's Service range (ServiceCIDR kubernetes, networking.k8s.io/v1), so ${value} cannot be checked against its static band`);
+  } else if (ipv4.length !== 1) {
+    problems.push(`expected one IPv4 range in ServiceCIDR kubernetes, found ${JSON.stringify(cluster.serviceCidrs)}, so ${value} cannot be checked against its static band`);
+  } else {
+    const cidr = ipv4[0]!;
+    let band: { first: string; last: string } | undefined;
+    let error = "";
+    try {
+      band = staticBandOf(cidr);
+    } catch (thrown) {
+      error = errorMessage(thrown);
+    }
+    if (error !== "") problems.push(`the cluster's Service range is not an IPv4 CIDR (${error}), so ${value} cannot be checked against its static band`);
+    else if (band === undefined) problems.push(`the cluster's Service range ${cidr} is too small to have a static band, so ${value} cannot be pinned safely`);
+    else {
+      const address = ipv4ToNumber(ip);
+      const network = ipv4ToNumber(band.first) - 1;
+      const broadcast = network + 2 ** (32 - Number(cidr.split("/")[1])) - 1;
+      if (address === network) problems.push(`${value} is the network address of the Service range ${cidr}; ${how}`);
+      else if (address === broadcast) problems.push(`${value} is the broadcast address of the Service range ${cidr}; ${how}`);
+      else if (address < ipv4ToNumber(band.first) || address > ipv4ToNumber(band.last)) {
+        problems.push(`${value} is outside the static band ${band.first}-${band.last} of the Service range ${cidr}: a Service created before the ingress one could take it, and the first install would fail; ${how}`);
+      }
+    }
   }
   for (const service of cluster.services) {
     if (!service.ips.includes(ip)) continue;
@@ -724,13 +1071,13 @@ export function clusterIpProblems(ip: string, cluster: ClusterFacts): string[] {
 }
 
 /**
- * The go-template that lists the Secrets of a namespace: name, type, MARKER and the key names.
- * Never a value: `$v` is bound by range and not printed.
+ * The go-template that lists the Secrets of a namespace: name, type, MARKER, and each key's name
+ * with the length of its base64 value. Never a value: `$v` is bound by range and only measured.
  */
 export const SECRET_TEMPLATE =
-  `{{range .items}}{{.metadata.name}}{{"\\t"}}{{.type}}{{"\\t"}}{{with .metadata.labels}}{{index . "${MARKER}"}}{{end}}{{"\\t"}}{{range $k, $v := .data}}{{$k}},{{end}}{{"\\n"}}{{end}}`;
+  `{{range .items}}{{.metadata.name}}{{"\\t"}}{{.type}}{{"\\t"}}{{with .metadata.labels}}{{index . "${MARKER}"}}{{end}}{{"\\t"}}{{range $k, $v := .data}}{{$k}}:{{len $v}},{{end}}{{"\\n"}}{{end}}`;
 
-/** Parses SECRET_TEMPLATE's output (kubectl prints a missing map entry as `<no value>`). */
+/** Parses SECRET_TEMPLATE's output (kubectl prints a missing map entry as `<no value>`); a size that does not parse is NaN. */
 export function parseSecrets(out: string): SecretFacts[] {
   const clean = (field: string | undefined) => (field === undefined || field === "<no value>" ? "" : field);
   return out
@@ -738,7 +1085,13 @@ export function parseSecrets(out: string): SecretFacts[] {
     .filter((line) => line.trim() !== "")
     .map((line) => {
       const [name, type, marker, keys] = line.split("\t");
-      return { name: clean(name), type: clean(type), marker: clean(marker), keys: clean(keys).split(",").filter((k) => k !== "").sort() };
+      const sizes: Record<string, number> = {};
+      for (const entry of clean(keys).split(",").filter((k) => k !== "")) {
+        const colon = entry.lastIndexOf(":");
+        const key = colon < 0 ? entry : entry.slice(0, colon);
+        sizes[key] = colon < 0 || !/^\d+$/.test(entry.slice(colon + 1)) ? Number.NaN : Number(entry.slice(colon + 1));
+      }
+      return { name: clean(name), type: clean(type), marker: clean(marker), keys: Object.keys(sizes).sort(), sizes };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -829,12 +1182,25 @@ export function sopsAgeProblem(state: SopsAgeState, recipient: string | undefine
   }
 }
 
+/**
+ * Why the deploy key Secret that deploy-key made is incomplete: other keys than DEPLOY_KEY_KEYS, or
+ * one of them empty (a run that stopped while making it). undefined when it is complete.
+ */
+function incompleteDeployKey(found: SecretFacts, secret: string): string | undefined {
+  const again = `delete it (\`sudo k3s kubectl -n ${FLUX_NAMESPACE} delete secret ${secret}\`) and run deploy-key again`;
+  if (stableJson(found.keys) !== stableJson([...DEPLOY_KEY_KEYS].sort())) return `Secret ${FLUX_NAMESPACE}/${secret} has the keys ${names(found.keys)}, not ${DEPLOY_KEY_KEYS.join(", ")}: ${again}`;
+  const empty = DEPLOY_KEY_KEYS.filter((key) => !((found.sizes[key] ?? 0) > 0));
+  if (empty.length > 0) return `Secret ${FLUX_NAMESPACE}/${secret} has an empty ${empty.join(", ")} (a deploy-key run stopped while making it): ${again}`;
+  return undefined;
+}
+
 /** Why the deploy key Secret cannot serve the GitRepository; undefined when it can. */
 export function deployKeyProblem(ns: NamespaceState | undefined, key: DeployKeyFacts | undefined, secret: string, knownHosts: string): string | undefined {
   const found = ns?.secrets.find((s) => s.name === secret);
   if (found === undefined) return `Secret ${FLUX_NAMESPACE}/${secret} (the deploy key) does not exist: run \`bun scripts/demo/flux.ts deploy-key\` first and add its public key on GitHub as a read-only deploy key`;
   if (found.marker !== MARKED_DEPLOY_KEY) return `Secret ${FLUX_NAMESPACE}/${secret} was not made by deploy-key (no ${MARKER}=${MARKED_DEPLOY_KEY}); nothing here replaces it`;
-  if (stableJson(found.keys) !== stableJson([...DEPLOY_KEY_KEYS].sort())) return `Secret ${FLUX_NAMESPACE}/${secret} has the keys ${names(found.keys)}, not ${DEPLOY_KEY_KEYS.join(", ")}`;
+  const incomplete = incompleteDeployKey(found, secret);
+  if (incomplete !== undefined) return incomplete;
   if (key === undefined) return `could not read the public half of Secret ${FLUX_NAMESPACE}/${secret}`;
   if (key.knownHostsSha256 !== sha256(knownHosts)) {
     return `the known_hosts in Secret ${FLUX_NAMESPACE}/${secret} differs from main's ${KNOWN_HOSTS_FILE}: delete the Secret and its key on GitHub, then run deploy-key again`;
@@ -842,20 +1208,86 @@ export function deployKeyProblem(ns: NamespaceState | undefined, key: DeployKeyF
   return undefined;
 }
 
+/**
+ * How install keeps Flux at commits it checked until the first deploy is verified
+ * (pinnedBootstrap). `from` is a commit an earlier run pinned the GitRepository to that is not
+ * this run's head (main moved on since): install pins head, which it checked, before anything
+ * else. `step`:
+ * - apply: the bootstrap apply creates the GitRepository pinned to head;
+ * - finish: an earlier run stopped after it created the root Kustomization, with the GitRepository
+ *   still pinned: install makes sure the pin is FIELD_MANAGER's too, waits for the first deploy at
+ *   head and removes the pin;
+ * - none: Flux follows main already (an install finished before); install only checks.
+ */
+export interface PinPlan {
+  step: "apply" | "finish" | "none";
+  from?: string;
+}
+
 export interface InstallPlan {
   head: string;
   chart?: { version: string; digest: string };
   clusterIp?: string;
   manifestsSha256: string;
+  /** What the bootstrap apply applies (pinnedBootstrap: its text and the root Kustomization), "" when it applies nothing. */
+  bootstrapSha256: string;
   namespace: "age-key" | "ours" | "unknown";
   namespaceUid: string;
   /** Label flux-system with MARKER=installed (the age key step's namespace). */
   mark: boolean;
   /** Apply Flux's manifests: the root Kustomization does not exist yet, so nothing of Flux manages them. */
   apply: boolean;
+  pin: PinPlan;
   deployKeyFingerprint: string;
   notes: string[];
   refusals: string[];
+}
+
+/** Where the README says how to resume Flux by hand, after an interrupted remove among others. */
+const RESUME = "deploy/flux/README.md 「在展示機安裝 Flux」 (中斷之後)";
+
+/**
+ * Why Flux would not follow main or deploy the release even when everything is Ready: the root
+ * Kustomization suspended or without prune (what an interrupted remove leaves), the GitRepository
+ * or the HelmRelease suspended. install refuses to start, and to report done, with any of them.
+ */
+export function suspendedProblems(cluster: ClusterFacts): string[] {
+  const problems: string[] = [];
+  const root = cluster.rootKustomization;
+  if (root !== undefined && (root.suspended || !root.prune)) {
+    const state = [root.suspended ? "spec.suspend: true" : "", root.prune ? "" : "spec.prune: false"].filter((part) => part !== "").join(", ");
+    problems.push(
+      `the root Kustomization ${FLUX_NAMESPACE} has ${state}, as a remove that stopped halfway leaves it, so Flux does not apply main: run remove again (dry run first) to finish it, or resume Flux as ${RESUME} describes`,
+    );
+  }
+  if (cluster.gitRepository?.suspended === true) {
+    problems.push(`GitRepository ${FLUX_NAMESPACE}/${FLUX_NAMESPACE} is suspended, so Flux fetches nothing from main: resume it as ${RESUME} describes`);
+  }
+  if (cluster.helmRelease?.suspended === true) {
+    problems.push(`HelmRelease ${DEMO_NAMESPACE}/${RELEASE_NAME} is suspended, so Flux does not deploy the release: resume it as ${RESUME} describes`);
+  }
+  return problems;
+}
+
+/**
+ * The pin step for this cluster (PinPlan), or why install cannot tell what to do with the
+ * GitRepository. `apply` is whether the root Kustomization is missing.
+ */
+function planPin(cluster: ClusterFacts, head: string, apply: boolean): { pin: PinPlan; refusal?: string } {
+  const git = cluster.gitRepository;
+  const pin: PinPlan = { step: apply ? "apply" : "none" };
+  if (git === undefined) {
+    if (apply) return { pin };
+    return { pin, refusal: `the root Kustomization ${FLUX_NAMESPACE} exists but GitRepository ${FLUX_NAMESPACE}/${FLUX_NAMESPACE} does not: run remove (dry run first), then install again` };
+  }
+  if (git.ref.kind === "other") {
+    return { pin, refusal: `GitRepository ${FLUX_NAMESPACE}/${FLUX_NAMESPACE} has spec.ref ${git.ref.ref}: neither main nor a pin of an earlier install, so this script does not know what Flux applies; look at it by hand` };
+  }
+  if (git.ref.kind === "pinned") {
+    if (!apply) pin.step = "finish";
+    if (git.ref.commit !== head) pin.from = git.ref.commit;
+  }
+  return { pin };
 }
 
 /** Everything install checks, in one plan; it runs only without refusals. */
@@ -890,9 +1322,22 @@ export function planInstall(repo: RepoInputs, cluster: ClusterFacts, lock: LockS
       refusals.push(`namespace ${DEMO_NAMESPACE} exists and is not Flux's: run scripts/demo/cleanup.ts, or remove what is in it, first`);
     } else {
       // Expected once Flux runs; before that, it is what an earlier remove left.
-      if (!cluster.rootKustomization) {
+      if (cluster.rootKustomization === undefined) {
         notes.push(`namespace ${DEMO_NAMESPACE} is left from an earlier install of this script: Helm takes over the objects it kept there (Postgres, its Secrets and the volumes), which is not verified on a cluster yet`);
       }
+    }
+  }
+  refusals.push(...suspendedProblems(cluster));
+  const apply = cluster.rootKustomization === undefined;
+  const { pin, refusal: pinIssue } = planPin(cluster, repo.head, apply);
+  if (pinIssue !== undefined) refusals.push(pinIssue);
+  let bootstrapSha256 = "";
+  if (apply && repo.manifests !== undefined && /^[0-9a-f]{40}$/.test(repo.head)) {
+    try {
+      const bootstrap = pinnedBootstrap(repo.manifests, repo.head);
+      bootstrapSha256 = sha256(`${bootstrap.text}\n---\n${bootstrap.root}`);
+    } catch (error) {
+      refusals.push(errorMessage(error));
     }
   }
   if (repo.clusterIp !== undefined) refusals.push(...clusterIpProblems(repo.clusterIp, cluster));
@@ -910,10 +1355,12 @@ export function planInstall(repo: RepoInputs, cluster: ClusterFacts, lock: LockS
     ...(repo.chart === undefined ? {} : { chart: repo.chart }),
     ...(repo.clusterIp === undefined ? {} : { clusterIp: repo.clusterIp }),
     manifestsSha256: repo.manifests?.sha256 ?? "",
+    bootstrapSha256,
     namespace: verdict.kind === "ours" || verdict.kind === "age-key" ? verdict.kind : "unknown",
     namespaceUid: verdict.kind === "ours" || verdict.kind === "age-key" ? verdict.uid : "",
     mark: verdict.kind === "age-key",
-    apply: !cluster.rootKustomization,
+    apply,
+    pin,
     deployKeyFingerprint: fingerprint,
     notes,
     refusals,
@@ -921,6 +1368,11 @@ export function planInstall(repo: RepoInputs, cluster: ClusterFacts, lock: LockS
 }
 
 /** The part of the plan that the confirmation code names. */
+/**
+ * What --confirm binds and the plan under the lock must equal: every field of the plan but its
+ * refusals, so the pin step and the commit it moves from (`pin`), the bootstrap text with the pin
+ * (`bootstrapSha256`), the label and the apply all change the code when the cluster changed.
+ */
 function installChange(plan: InstallPlan): unknown {
   const { refusals: _refusals, ...change } = plan;
   return change;
@@ -947,7 +1399,9 @@ export function planDeployKey(repo: RepoInputs, cluster: ClusterFacts, lock: Loc
   const found = cluster.namespace?.secrets.find((s) => s.name === secret);
   let existing: DeployKeyPlan["existing"];
   if (found !== undefined) {
+    const incomplete = found.marker === MARKED_DEPLOY_KEY ? incompleteDeployKey(found, secret) : undefined;
     if (found.marker !== MARKED_DEPLOY_KEY) refusals.push(`Secret ${FLUX_NAMESPACE}/${secret} exists and was not made by deploy-key; nothing here replaces it`);
+    else if (incomplete !== undefined) refusals.push(incomplete);
     else if (cluster.deployKey !== undefined) {
       try {
         existing = { publicKey: cluster.deployKey.publicKey.trim(), fingerprint: sshFingerprint(cluster.deployKey.publicKey) };
@@ -996,7 +1450,7 @@ export function parseFluxObjects(out: string): FluxObject[] {
     .filter((line) => line.trim() !== "")
     .map((line) => {
       const [ref = "", owner = ""] = line.trim().split("\t");
-      if (!/^[A-Za-z]+\/[^/\s]+\/[^/\s]+$/.test(ref)) throw new ReleaseError(`unexpected Flux object line: ${redact(line.slice(0, 120))}`);
+      if (!/^[A-Za-z]+\/[^/\s]+\/[^/\s]+$/.test(ref)) throw new ReleaseError(`unexpected Flux object line: ${redact(line).slice(0, 120)}`);
       return { ref, appliedBy: /^[^/\s]+\/[^/\s]+$/.test(owner) ? owner : "" };
     })
     .sort((a, b) => a.ref.localeCompare(b.ref));
@@ -1094,19 +1548,38 @@ function removeChange(plan: RemovePlan): unknown {
 
 // --- Scripts that run as root on the demo machine -------------------------------------------------
 
+/** The file every root script holds with flock(1) while it runs (scriptStart). */
+export const REMOTE_LOCK = `${REMOTE_BASE}/.lock`;
+
+/** Removes a run directory's files with shred(1), then the directory. */
+const SHRED_DIR = (dir: string) => `find "${dir}" -type f -exec shred -u {} + 2>/dev/null || true; rm -rf "${dir}"`;
+
 /**
- * The start of every root script: strict mode, a root-only directory of its own under `base`
- * (removed on exit, also after SIGHUP when ssh drops), and stdin saved into `$d/<file>` and checked
- * against `sha`. Commands are written for bash (Fedora's /bin/bash on the demo machine).
+ * The start of every root script: strict mode; flock on REMOTE_LOCK, so that root scripts of this
+ * file never run side by side (two --lock-held runs, or a run beside one whose ssh dropped; the
+ * lock goes when the script and the commands it started have ended); every run directory a killed
+ * run left behind shredded (only a running script uses one, and none runs); a root-only directory
+ * of its own under `base` (removed on exit, also after SIGHUP when ssh drops); stdin saved into
+ * `$d/<file>` and checked against `sha`. Prints `STALE ...` for each directory it removed.
+ * Commands are written for bash (Fedora's /bin/bash on the demo machine).
  */
 function scriptStart(base: string, prefix: string, file: string, sha: string, cleanup = 'rm -rf "$d"'): string[] {
   if (!/^[0-9a-f]{64}$/.test(sha)) throw new ReleaseError("a staged file needs its sha256");
+  if (!/^\/[A-Za-z0-9/_-]+$/.test(base)) throw new ReleaseError("the root scripts' base directory must be a plain absolute path");
   return [
     "set -eu",
     "set -o pipefail",
     "umask 077",
     `base=${shq(base)}`,
     'mkdir -p -m 0700 "$base"',
+    'chmod 0700 "$base"',
+    'exec 9>"$base/.lock"',
+    'flock -n 9 || { echo "another root script of scripts/demo/flux.ts is running on the demo machine; wait until it ends" >&2; exit 1; }',
+    'for old in "$base"/*.*; do',
+    '  [ -d "$old" ] || continue',
+    `  ${SHRED_DIR("$old")}`,
+    '  echo "STALE removed a run directory that a stopped run left behind"',
+    "done",
     `d=$(mktemp -d "$base/${prefix}.XXXXXXXX")`,
     `cleanup() { ${cleanup}; }`,
     "trap cleanup EXIT",
@@ -1116,6 +1589,10 @@ function scriptStart(base: string, prefix: string, file: string, sha: string, cl
   ];
 }
 
+function requireObjectName(name: string): void {
+  if (!isObjectName(name)) throw new ReleaseError(`${JSON.stringify(name).slice(0, 80)} is not a Kubernetes object name`);
+}
+
 /**
  * Checks the sops-age Secret with age-keygen (stdin): the private key goes from kubectl through
  * base64 -d into `age-keygen -y` by pipes only, and only the public keys it derives are printed.
@@ -1123,8 +1600,9 @@ function scriptStart(base: string, prefix: string, file: string, sha: string, cl
  * `SOPS_AGE <state> [...]`.
  */
 export function ageCheckScript(base: string, toolSha256: string, secret: string): string {
+  requireObjectName(secret);
   const get = `k3s kubectl -n ${FLUX_NAMESPACE} get secret ${shq(secret)}`;
-  const value = `${get} -o 'jsonpath={.data.${SOPS_AGE_KEY.replaceAll(".", "\\.")}}' | base64 -d`;
+  const value =`${get} -o 'jsonpath={.data.${SOPS_AGE_KEY.replaceAll(".", "\\.")}}' | base64 -d`;
   return [
     ...scriptStart(base, "age", "age-keygen", toolSha256),
     'arch=$(uname -m)',
@@ -1169,58 +1647,66 @@ export function parseAgeCheck(stdout: string): SopsAgeState {
 /**
  * Generates the deploy key and stores it (stdin: known_hosts). The private key exists only as a
  * file in the run's root-only directory, which is shredded on exit; it reaches kubectl through
- * bash's builtin printf and a pipe, never through a command line. Directories that a killed run
- * left behind are shredded first (the lab lock keeps two runs apart). kubectl's errors are passed
- * on without lines that look like key material. Prints `DEPLOY_KEY exists`, or `PUBLIC <key>` and
- * `DEPLOY_KEY created`.
+ * bash's builtin printf and a pipe, never through a command line. The three values are read into
+ * variables first (an assignment fails the script under set -e, a command substitution inside
+ * printf's arguments would not) and must not be empty. The Secret is read back and compared with
+ * the files; when anything fails after kubectl created it, the exit trap deletes it again, so no
+ * half-made deploy key stays (deployKeyProblem refuses an empty key too). kubectl's errors are
+ * passed on without lines that look like key material. Prints `DEPLOY_KEY exists`, or
+ * `PUBLIC <key>` and `DEPLOY_KEY created`.
  */
 export function deployKeyScript(base: string, knownHostsSha256: string, secret: string): string {
-  const shred = 'find "$d" -type f -exec shred -u {} + 2>/dev/null || true; rm -rf "$d"';
+  requireObjectName(secret);
   const get = `k3s kubectl -n ${FLUX_NAMESPACE} get secret ${shq(secret)}`;
-  const start = scriptStart(base, "deploy-key", "known_hosts", knownHostsSha256, shred);
+  const undo = `if [ "\${created:-0}" = 1 ] && [ "\${verified:-0}" != 1 ]; then k3s kubectl -n ${FLUX_NAMESPACE} delete secret ${shq(secret)} --ignore-not-found >/dev/null 2>&1 && echo "deleted the incomplete Secret ${FLUX_NAMESPACE}/${secret}" >&2 || echo "could not delete the incomplete Secret ${FLUX_NAMESPACE}/${secret}: delete it by hand" >&2; fi`;
   return [
-    ...start.slice(0, 5),
-    'for old in "$base"/deploy-key.*; do',
-    '  [ -e "$old" ] || continue',
-    '  find "$old" -type f -exec shred -u {} +',
-    '  rm -rf "$old"',
-    '  echo "STALE shredded a directory that a stopped run left behind"',
-    "done",
-    ...start.slice(5),
+    ...scriptStart(base, "deploy-key", "known_hosts", knownHostsSha256, `${undo}; ${SHRED_DIR("$d")}`),
     `if [ -n "$(${get} --ignore-not-found -o name)" ]; then echo "DEPLOY_KEY exists"; exit 0; fi`,
     `ssh-keygen -q -t ed25519 -N '' -C ${DEPLOY_KEY_COMMENT} -f "$d/key" </dev/null >/dev/null`,
+    'identity=$(base64 -w0 "$d/key")',
+    'public=$(base64 -w0 "$d/key.pub")',
+    'hosts=$(base64 -w0 "$d/known_hosts")',
+    '[ -n "$identity" ] && [ -n "$public" ] && [ -n "$hosts" ] || { echo "the deploy key files are empty; nothing was stored" >&2; exit 1; }',
     "{",
     `  printf 'apiVersion: v1\\nkind: Secret\\nmetadata:\\n  name: %s\\n  namespace: %s\\n  labels:\\n    %s: %s\\ntype: Opaque\\ndata:\\n' ${shq(secret)} ${FLUX_NAMESPACE} ${MARKER} ${MARKED_DEPLOY_KEY}`,
-    `  printf '  identity: %s\\n' "$(base64 -w0 "$d/key")"`,
-    `  printf '  identity.pub: %s\\n' "$(base64 -w0 "$d/key.pub")"`,
-    `  printf '  known_hosts: %s\\n' "$(base64 -w0 "$d/known_hosts")"`,
+    `  printf '  identity: %s\\n' "$identity"`,
+    `  printf '  identity.pub: %s\\n' "$public"`,
+    `  printf '  known_hosts: %s\\n' "$hosts"`,
     `} | k3s kubectl create --field-manager=${FIELD_MANAGER} -f - >/dev/null 2>"$d/create.err" || {`,
     `  grep -Ev '[A-Za-z0-9+/=]{40,}|PRIVATE' "$d/create.err" >&2 || true`,
     "  exit 1",
     "}",
-    `want=$(sha256sum "$d/key" | cut -d' ' -f1)`,
-    `got=$(${get} -o 'jsonpath={.data.identity}' | base64 -d | sha256sum | cut -d' ' -f1)`,
-    '[ "$got" = "$want" ] || { echo "the stored identity differs from the generated key" >&2; exit 1; }',
+    "created=1",
+    // Each stored value, decoded, must be the file it came from.
+    `same() { [ "$(${get} -o "jsonpath={.data.$1}" | base64 -d | sha256sum | cut -d' ' -f1)" = "$(sha256sum "$d/$2" | cut -d' ' -f1)" ]; }`,
+    `same identity key && same 'identity\\.pub' key.pub && same known_hosts known_hosts || { echo "the stored Secret differs from the generated files" >&2; exit 1; }`,
+    "verified=1",
     `printf 'PUBLIC %s\\n' "$(cat "$d/key.pub")"`,
     'echo "DEPLOY_KEY created"',
   ].join("\n");
 }
 
 /**
- * Applies Flux's manifests (stdin) as deploy/flux/README.md 「建立叢集」 step 6 does: server-side
- * apply as `kubectl`, so Flux takes every object over; the first apply cannot create the
- * GitRepository and the Kustomization before their CRDs are established, so it waits for the CRDs
- * (120 s, well within ssh's silence limit) and applies again, which must succeed.
+ * Applies Flux's manifests as deploy/flux/README.md 「建立叢集」 step 6 does, with the GitRepository
+ * pinned (pinnedBootstrap; stdin: its text): server-side apply as `kubectl`, so Flux takes every
+ * object over; the first apply cannot create the GitRepository before its CRD is established, so
+ * it waits for the CRDs (120 s, well within ssh's silence limit) and applies again, which must
+ * succeed. Then FIELD_MANAGER applies the pin itself (pinDocument), so that it co-owns
+ * spec.ref.commit and kustomize-controller's apply of main's GitRepository keeps it; only then the
+ * root Kustomization is created, and with it Flux starts applying main's tree.
  */
-export function applyScript(base: string, manifestsSha256: string, crds: readonly string[]): string {
+export function applyScript(base: string, bootstrap: Bootstrap, crds: readonly string[]): string {
   if (crds.length === 0) throw new ReleaseError("no CRDs to wait for");
   return [
-    ...scriptStart(base, "apply", "flux-system.yaml", manifestsSha256),
+    ...scriptStart(base, "apply", "flux-system.yaml", bootstrap.sha256),
     'echo "APPLY first"',
     'k3s kubectl apply --server-side -f "$d/flux-system.yaml" || echo "APPLY first-incomplete (expected before the CRDs exist)"',
     `k3s kubectl wait --for=condition=established --timeout=120s ${crds.map((crd) => shq(`crd/${crd}`)).join(" ")}`,
     'echo "APPLY second"',
     'k3s kubectl apply --server-side -f "$d/flux-system.yaml"',
+    `printf '%s\\n' ${shq(pinDocument(bootstrap.apiVersion, bootstrap.head))} | k3s kubectl apply --server-side --field-manager=${FIELD_MANAGER} -f -`,
+    `echo "APPLY pinned ${bootstrap.head}"`,
+    `printf '%s\\n' ${shq(bootstrap.root)} | k3s kubectl apply --server-side -f -`,
     'echo "APPLY done"',
   ].join("\n");
 }
@@ -1370,6 +1856,45 @@ export function releaseReadiness(object: Record<string, unknown> | undefined, wa
   return { done: false, state: `${ready.state}; reconcile request ${token} not handled yet` };
 }
 
+/**
+ * Why install must stop at once while it keeps the GitRepository pinned to `head`: its spec.ref
+ * changed (by hand, or the pin got lost), or source-controller reports another commit for the
+ * current generation. Either way Flux may apply a commit this run did not check, and waiting out
+ * the bound would only let it. undefined while all is as install left it (an older generation's
+ * artifact, such as an earlier run's pin, is fine until source-controller observes the new one).
+ */
+export function pinProblem(git: Record<string, unknown> | undefined, head: string): string | undefined {
+  if (git === undefined) return undefined;
+  const label = `GitRepository ${FLUX_NAMESPACE}/${FLUX_NAMESPACE}`;
+  const again = "nothing more is changed; look at it and at the Kustomization, then run install again (dry run first)";
+  const ref = gitRefOf(git);
+  if (ref.kind !== "pinned" || ref.commit !== head) {
+    return `${label} is no longer pinned to ${head}, which this run checked (spec.ref is now ${describeRef(ref)}): Flux may apply a commit this run did not check; ${again}`;
+  }
+  const generation = at(git, ["metadata", "generation"]);
+  const revision = revisionOf("git", git);
+  if (generation !== undefined && at(git, ["status", "observedGeneration"]) === generation && revision !== "" && revision !== `main@sha1:${head}`) {
+    return `${label} is pinned to ${head} but reports ${redact(revision)} for its current generation (${fluxReadiness(git).state}); ${again}`;
+  }
+  return undefined;
+}
+
+/**
+ * The GitRepository after install removed the pin: spec.ref exactly {branch: main}, Ready for the
+ * current generation, with an artifact of main (`main@sha1:<commit>`; the commit may be newer than
+ * the checked one, since Flux now follows main). Any other spec.ref ends the wait at once.
+ */
+export function followsMain(git: Record<string, unknown> | undefined): Readiness {
+  if (git === undefined) return { done: false, failed: "it is gone", state: "not there" };
+  const ref = gitRefOf(git);
+  const ready = fluxReadiness(git);
+  if (ref.kind !== "main") return { done: false, failed: `spec.ref is ${describeRef(ref)}, not {branch: main}`, state: ready.state };
+  const revision = revisionOf("git", git);
+  if (!ready.done) return ready;
+  if (!/^main@sha1:[0-9a-f]{40}$/.test(revision)) return { done: false, state: `${ready.state}; at ${redact(revision) || "no revision yet"}, waiting for a commit of main` };
+  return { done: true, state: `${ready.state}; at ${revision}` };
+}
+
 // --- Talking to the cluster --------------------------------------------------------------------------
 
 /** What the runs do on the demo machine; boxOps does it over ssh, the tests with a fake cluster. */
@@ -1381,7 +1906,15 @@ export interface FluxOps {
   sopsAge(secret: string): Promise<SopsAgeState>;
   createDeployKey(secret: string, knownHosts: string): Promise<{ publicKey: string } | "exists">;
   markNamespace(resourceVersion: string): Promise<void>;
-  applyFlux(manifests: FluxManifests): Promise<string>;
+  /** The bootstrap apply (applyScript); returns its output. */
+  applyFlux(manifests: FluxManifests, bootstrap: Bootstrap): Promise<string>;
+  /**
+   * Pins GitRepository flux-system to `head` with FIELD_MANAGER co-owning the pin: when `from` is
+   * given, first moves an earlier run's pin from that commit (a JSON patch that tests it).
+   */
+  pinGit(apiVersion: string, head: string, from?: string): Promise<void>;
+  /** Removes the pin to `head` with a JSON patch that tests it, so that Flux follows main again. */
+  unpinGit(head: string): Promise<void>;
   /** A non-Secret object by its resource name (KINDS), or undefined when it does not exist. */
   object(resource: string, namespace: string, name: string): Promise<Record<string, unknown> | undefined>;
   /** Flux custom objects in every namespace, with the Kustomization that applied each. */
@@ -1438,42 +1971,74 @@ function refused(refusals: readonly string[]): ReleaseError {
   return new ReleaseError(`${refusals.length} refusal${refusals.length === 1 ? "" : "s"} above; nothing changed`);
 }
 
+/**
+ * Runs `body` under the lab lock that `release` gives back: released afterwards, also on an
+ * error, but kept when a root script may still be running on the demo machine (StillRunningError),
+ * as tunnel.ts applyInstall does; the error says what to check.
+ */
+async function underLock<T>(release: () => Promise<void>, log: Log, body: () => Promise<T>): Promise<T> {
+  let keep = false;
+  try {
+    return await body();
+  } catch (error) {
+    if (error instanceof StillRunningError) keep = true;
+    throw error;
+  } finally {
+    if (keep) log.note(`the lab lock stays held for ${ISSUE}: a root script of this run may still be running on the demo machine`);
+    else await release();
+  }
+}
+
+/**
+ * The sops-age check (ageCheckScript) runs as root and reads the age private key, so it runs only
+ * when the lock read just now is free or this issue's, and only in a namespace this script may
+ * use by the same fresh read (tunnel.ts dryRunLockCheck, for the dry run too). Otherwise it is
+ * `not-checked`, and the plan refuses for the lock or the namespace.
+ */
+async function checkSopsAge(ops: FluxOps, repo: RepoInputs, cluster: ClusterFacts, lock: LockState): Promise<SopsAgeState> {
+  if (lockProblem(lock) !== undefined) return { kind: "not-checked" };
+  const sopsSecret = repo.manifests?.sopsSecret ?? "sops-age";
+  const verdict = namespaceVerdict(cluster.namespace, repo.manifests?.deployKeySecret ?? FLUX_NAMESPACE, sopsSecret);
+  if (verdict.kind !== "ours" && verdict.kind !== "age-key") return { kind: "not-checked" };
+  return ops.sopsAge(sopsSecret);
+}
+
 const COMMAND = "bun scripts/demo/flux.ts";
 
 // --- deploy-key ------------------------------------------------------------------------------------
 
-export async function runDeployKey(ops: FluxOps, log: Log, options: CommonOptions, inputs: Inputs): Promise<DeployKeyPlan> {
-  const { repo, cluster, lock } = await readPlanInputs(ops, inputs);
-  const plan = planDeployKey(repo, cluster, lock);
-  log.save("deploy-key-plan", plan);
-  if (plan.existing !== undefined) {
-    log.note(`Secret ${FLUX_NAMESPACE}/${plan.secret} was made by deploy-key already; nothing to do. Its public key, for GitHub (Settings → Deploy keys, read-only):`);
-    log.note(`  ${plan.existing.publicKey}`);
-    log.note(`  fingerprint ${plan.existing.fingerprint}`);
-  }
-  printRefusals(log, plan.refusals);
-  if (plan.refusals.length > 0) throw refused(plan.refusals);
-  if (!plan.create) return plan;
-  log.note(`plan: generate an ed25519 key on the demo machine (root, ${REMOTE_BASE}, shredded afterwards) and store it as Secret ${FLUX_NAMESPACE}/${plan.secret} (keys ${DEPLOY_KEY_KEYS.join(", ")}; known_hosts from ${KNOWN_HOSTS_FILE}; label ${MARKER}=${MARKED_DEPLOY_KEY}); only the public key is printed`);
-  if (!checkConfirmation(log, plan, options, `${COMMAND} deploy-key --ssh-host <host>`)) return plan;
-  const release = await ops.lock("deploy-key");
-  try {
-    const nowRepo = await inputs.repo();
-    const again = planDeployKey(nowRepo, await ops.cluster(nowRepo.manifests), { kind: "free" });
-    if (again.refusals.length > 0) {
-      printRefusals(log, again.refusals);
-      throw refused(again.refusals);
+export async function runDeployKey(ops: FluxOps, log: FluxLog, options: CommonOptions, inputs: Inputs): Promise<DeployKeyPlan> {
+  return cleanErrors(log, async () => {
+    const { repo, cluster, lock } = await readPlanInputs(ops, inputs);
+    const plan = planDeployKey(repo, cluster, lock);
+    log.save("deploy-key-plan", plan);
+    if (plan.existing !== undefined) {
+      log.note(`Secret ${FLUX_NAMESPACE}/${plan.secret} was made by deploy-key already; nothing to do. Its public key, for GitHub (Settings → Deploy keys, read-only):`);
+      log.note(`  ${plan.existing.publicKey}`);
+      log.note(`  fingerprint ${plan.existing.fingerprint}`);
     }
-    if (stableJson(again) !== stableJson(plan)) throw new ReleaseError("the plan changed since it was shown; nothing changed, run again without --apply");
-    const made = await ops.createDeployKey(plan.secret, repo.knownHosts);
-    if (made === "exists") throw new ReleaseError(`Secret ${FLUX_NAMESPACE}/${plan.secret} appeared meanwhile; nothing changed, run again without --apply`);
-    log.note(`created Secret ${FLUX_NAMESPACE}/${plan.secret}. Add this public key on GitHub (${REPOSITORY}: Settings → Deploy keys → Add deploy key; leave "Allow write access" off):`);
-    log.note(`  ${made.publicKey}`);
-    log.note(`  fingerprint ${sshFingerprint(made.publicKey)}`);
-  } finally {
-    await release();
-  }
-  return plan;
+    printRefusals(log, plan.refusals);
+    if (plan.refusals.length > 0) throw refused(plan.refusals);
+    if (!plan.create) return plan;
+    log.note(`plan: generate an ed25519 key on the demo machine (root, ${REMOTE_BASE}, shredded afterwards) and store it as Secret ${FLUX_NAMESPACE}/${plan.secret} (keys ${DEPLOY_KEY_KEYS.join(", ")}; known_hosts from ${KNOWN_HOSTS_FILE}; label ${MARKER}=${MARKED_DEPLOY_KEY}); only the public key is printed`);
+    if (!checkConfirmation(log, plan, options, `${COMMAND} deploy-key --ssh-host <host>`)) return plan;
+    await underLock(await ops.lock("deploy-key"), log, async () => {
+      // Everything read again under the lock, the lock itself too.
+      const now = await readPlanInputs(ops, inputs);
+      const again = planDeployKey(now.repo, now.cluster, now.lock);
+      if (again.refusals.length > 0) {
+        printRefusals(log, again.refusals);
+        throw refused(again.refusals);
+      }
+      if (stableJson(again) !== stableJson(plan)) throw new ReleaseError("the plan changed since it was shown; nothing changed, run again without --apply");
+      const made = await ops.createDeployKey(plan.secret, repo.knownHosts);
+      if (made === "exists") throw new ReleaseError(`Secret ${FLUX_NAMESPACE}/${plan.secret} appeared meanwhile; nothing changed, run again without --apply`);
+      log.note(`created Secret ${FLUX_NAMESPACE}/${plan.secret}. Add this public key on GitHub (${REPOSITORY}: Settings → Deploy keys → Add deploy key; leave "Allow write access" off):`);
+      log.note(`  ${made.publicKey}`);
+      log.note(`  fingerprint ${sshFingerprint(made.publicKey)}`);
+    });
+    return plan;
+  });
 }
 
 // --- install -----------------------------------------------------------------------------------------
@@ -1482,19 +2047,32 @@ function describeInstall(log: Log, plan: InstallPlan, repo: RepoInputs): void {
   const manifests = repo.manifests;
   log.note(`plan, from main ${plan.head.slice(0, 12)}: chart ${plan.chart?.version ?? "?"} (${plan.chart?.digest ?? "?"}), ingress ClusterIP ${plan.clusterIp ?? "?"}, Flux's manifests sha256 ${plan.manifestsSha256.slice(0, 12)}`);
   let step = 1;
+  const git = `GitRepository ${FLUX_NAMESPACE}/${FLUX_NAMESPACE}`;
   if (plan.mark) log.note(`  ${step++}. label namespace ${FLUX_NAMESPACE} ${MARKER}=${MARKED_INSTALL} (field manager ${FIELD_MANAGER}), so later runs, remove and lab e2e can tell this install`);
+  if (plan.pin.from !== undefined) {
+    log.note(`  ${step++}. move the pin of ${git} from ${plan.pin.from} (an earlier run's; main moved on since) to ${plan.head}, which this run checked`);
+  }
   if (plan.apply && manifests !== undefined) {
-    log.note(`  ${step++}. server-side apply ${manifests.objects.length} objects of Flux, wait for its ${manifests.crds.length} CRDs, apply again. Cluster-wide: CRDs ${manifests.crds.join(", ")}; ${manifests.clusterObjects.join(", ")}`);
+    log.note(
+      `  ${step++}. server-side apply ${manifests.objects.length - 1} objects of Flux with ${git} pinned to ${plan.head} (spec.ref.commit; bootstrap sha256 ${plan.bootstrapSha256.slice(0, 12)}), wait for its ${manifests.crds.length} CRDs, apply again; apply the pin as ${FIELD_MANAGER} too, so Flux keeps it; then create the root Kustomization. Cluster-wide: CRDs ${manifests.crds.join(", ")}; ${manifests.clusterObjects.join(", ")}`,
+    );
+  } else if (plan.pin.step === "finish") {
+    log.note(`  ${step++}. nothing to apply: the root Kustomization exists, and an earlier run stopped while ${git} was pinned; keep it pinned to ${plan.head} (as ${FIELD_MANAGER} too)`);
   } else if (!plan.apply) {
-    log.note(`  ${step++}. nothing to apply: the root Kustomization exists, so Flux manages its own objects from main`);
+    log.note(`  ${step++}. nothing to apply: the root Kustomization exists, so Flux manages its own objects and follows main`);
   }
   const wanted = plan.chart === undefined ? undefined : wantedRevisions(plan.head, plan.chart);
+  const pinned = plan.pin.step === "none" ? "" : ", stopping at once if the pin changes or Flux reports another commit";
   log.note(
-    `  ${step++}. wait for the controllers (${manifests?.deployments.join(", ") ?? "?"}); GitRepository and Kustomization ${FLUX_NAMESPACE} at ${wanted?.git ?? "?"} (the deploy key ${plan.deployKeyFingerprint || "?"} must be on GitHub, read-only); OCIRepository ${DEMO_NAMESPACE}/${RELEASE_NAME} at ${wanted?.chartDigest ?? "?"}`,
+    `  ${step++}. wait for the controllers (${manifests?.deployments.join(", ") ?? "?"}); ${git} and Kustomization ${FLUX_NAMESPACE} at ${wanted?.git ?? "?"} (the deploy key ${plan.deployKeyFingerprint || "?"} must be on GitHub, read-only)${pinned}; OCIRepository ${DEMO_NAMESPACE}/${RELEASE_NAME} at ${wanted?.chartDigest ?? "?"}`,
   );
   log.note(
-    `  ${step}. request a reconcile of HelmRelease ${DEMO_NAMESPACE}/${RELEASE_NAME} (annotation ${RECONCILE_ANNOTATION}, field manager ${FIELD_MANAGER}) and wait until it is handled and the release is deployed at chart ${wanted?.release ?? "?"}; report everything`,
+    `  ${step++}. request a reconcile of HelmRelease ${DEMO_NAMESPACE}/${RELEASE_NAME} (annotation ${RECONCILE_ANNOTATION}, field manager ${FIELD_MANAGER}) and wait until it is handled and the release is deployed at chart ${wanted?.release ?? "?"}`,
   );
+  if (plan.pin.step !== "none") {
+    log.note(`  ${step++}. remove the pin (a JSON patch that tests it), so Flux follows main again, and wait until ${git} is Ready at a commit of main`);
+  }
+  log.note(`  ${step}. check that nothing of Flux is suspended; report everything`);
   for (const note of plan.notes) log.note(`NOTE: ${note}`);
 }
 
@@ -1508,70 +2086,99 @@ async function requireMarker(ops: FluxOps, manifests: FluxManifests | undefined,
   }
 }
 
-export async function runInstall(ops: FluxOps, log: Log, options: CommonOptions, inputs: Inputs): Promise<InstallPlan> {
-  const { repo, cluster, lock } = await readPlanInputs(ops, inputs);
-  const sopsSecret = repo.manifests?.sopsSecret ?? "sops-age";
-  const verdict = namespaceVerdict(cluster.namespace, repo.manifests?.deployKeySecret ?? FLUX_NAMESPACE, sopsSecret);
-  // The age check runs as root and reads the key; only in a namespace this script may use.
-  const sopsAge: SopsAgeState = verdict.kind === "ours" || verdict.kind === "age-key" ? await ops.sopsAge(sopsSecret) : { kind: "not-checked" };
-  const plan = planInstall(repo, cluster, lock, sopsAge);
-  log.save("install-plan", plan);
-  describeInstall(log, plan, repo);
-  printRefusals(log, plan.refusals);
-  if (plan.refusals.length > 0) throw refused(plan.refusals);
-  if (!checkConfirmation(log, installChange(plan), options, `${COMMAND} install --ssh-host <host>`)) return plan;
+export async function runInstall(ops: FluxOps, log: FluxLog, options: CommonOptions, inputs: Inputs): Promise<InstallPlan> {
+  return cleanErrors(log, async () => {
+    const { repo, cluster, lock } = await readPlanInputs(ops, inputs);
+    const plan = planInstall(repo, cluster, lock, await checkSopsAge(ops, repo, cluster, lock));
+    log.save("install-plan", plan);
+    describeInstall(log, plan, repo);
+    printRefusals(log, plan.refusals);
+    if (plan.refusals.length > 0) throw refused(plan.refusals);
+    if (!checkConfirmation(log, installChange(plan), options, `${COMMAND} install --ssh-host <host>`)) return plan;
 
-  const release = await ops.lock("install");
-  try {
-    const now = await readPlanInputs(ops, inputs);
-    const again = planInstall(now.repo, now.cluster, { kind: "free" }, await ops.sopsAge(sopsSecret));
-    if (again.refusals.length > 0) {
-      printRefusals(log, again.refusals);
-      throw refused(again.refusals);
-    }
-    if (stableJson(installChange(again)) !== stableJson(installChange(plan))) throw new ReleaseError("the plan changed since it was shown; nothing changed, run again without --apply");
-    const manifests = now.repo.manifests;
-    if (manifests === undefined) throw new ReleaseError("Flux's manifests are missing");
-    const before = await ops.clusterState();
-    log.save("state-before", before);
-    if (plan.mark) {
-      await ops.markNamespace(now.cluster.namespace?.resourceVersion ?? "");
-      log.note(`labeled namespace ${FLUX_NAMESPACE} ${MARKER}=${MARKED_INSTALL}`);
-    }
-    if (plan.apply) {
-      for (const line of (await ops.applyFlux(manifests)).split("\n").filter((l) => l.trim() !== "")) log.note(`  ${redact(line)}`);
-    }
-    await requireMarker(ops, manifests, "after the bootstrap apply");
-    await waitForFlux(ops, log, manifests, plan);
-    await report(ops, log, now.repo);
-    const after = await ops.clusterState();
-    log.save("state", { before, after, diff: stateDiff(before, after) });
-    log.note(`cluster-scoped changes: ${redact(JSON.stringify(stateDiff(before, after)))}`);
-  } finally {
-    await release();
-  }
-  log.note(`done; records in ${shownPath(log.dir)}`);
-  return plan;
+    await underLock(await ops.lock("install"), log, async () => {
+      // Everything read again under the lock, the lock itself too, before any root script runs.
+      const now = await readPlanInputs(ops, inputs);
+      const again = planInstall(now.repo, now.cluster, now.lock, await checkSopsAge(ops, now.repo, now.cluster, now.lock));
+      if (again.refusals.length > 0) {
+        printRefusals(log, again.refusals);
+        throw refused(again.refusals);
+      }
+      if (stableJson(installChange(again)) !== stableJson(installChange(plan))) throw new ReleaseError("the plan changed since it was shown; nothing changed, run again without --apply");
+      const manifests = now.repo.manifests;
+      if (manifests === undefined) throw new ReleaseError("Flux's manifests are missing");
+      const before = await ops.clusterState();
+      log.save("state-before", before);
+      if (plan.mark) {
+        await ops.markNamespace(now.cluster.namespace?.resourceVersion ?? "");
+        log.note(`labeled namespace ${FLUX_NAMESPACE} ${MARKER}=${MARKED_INSTALL}`);
+      }
+      if (plan.pin.from !== undefined || plan.pin.step === "finish") {
+        await ops.pinGit(manifests.gitApiVersion, plan.head, plan.pin.from);
+        log.note(`GitRepository ${FLUX_NAMESPACE}/${FLUX_NAMESPACE} is pinned to ${plan.head}${plan.pin.from === undefined ? "" : ` (was ${plan.pin.from})`}, with ${FIELD_MANAGER} co-owning the pin`);
+      }
+      if (plan.apply) {
+        const bootstrap = pinnedBootstrap(manifests, plan.head);
+        for (const line of (await ops.applyFlux(manifests, bootstrap)).split("\n").filter((l) => l.trim() !== "")) log.note(`  ${line}`);
+      }
+      await requireMarker(ops, manifests, "after the bootstrap apply");
+      await waitForFlux(ops, log, manifests, plan);
+      await report(ops, log, now.repo);
+      // Ready objects at the right revisions are not enough: a suspended one stops following main.
+      const stuck = suspendedProblems(await ops.cluster(manifests));
+      if (stuck.length > 0) throw new ReleaseError(`the install is not done: ${stuck.join("; ")}`);
+      const after = await ops.clusterState();
+      log.save("state", { before, after, diff: stateDiff(before, after) });
+      log.note(`cluster-scoped changes: ${JSON.stringify(stateDiff(before, after))}`);
+    });
+    log.note(`done; records in ${shownPath(log.dir)}`);
+    return plan;
+  });
 }
 
 /**
  * Waits until Flux runs what this run checked: each object Ready for its current generation and at
  * the plan's revision (main's commit, the chart's digest and version), and the HelmRelease
- * reconciled once more after the Kustomization applied that commit.
+ * reconciled once more after the Kustomization applied that commit. While the GitRepository is
+ * pinned (every step but `none`), each poll also reads it and stops at once on a pinProblem. Then
+ * the pin goes, and the GitRepository must be Ready at a commit of main with spec.ref {branch: main}.
  */
 async function waitForFlux(ops: FluxOps, log: Log, manifests: FluxManifests, plan: InstallPlan): Promise<void> {
   if (plan.chart === undefined) throw new ReleaseError("the plan has no chart");
   const wanted = wantedRevisions(plan.head, plan.chart);
-  const moved = `If main moved on GitHub after this run read it, fetch and run install again (dry run first) from the new main`;
+  const pinned = plan.pin.step !== "none";
+  const moved = pinned
+    ? `The GitRepository is pinned to ${plan.head}; if that commit is no longer on main, run install again (dry run first) from the new main`
+    : `If main moved on GitHub after this run read it, fetch and run install again (dry run first) from the new main`;
+  const readGit = () => ops.object(KINDS.gitRepository, FLUX_NAMESPACE, FLUX_NAMESPACE);
+  const checkPin = (git: Record<string, unknown> | undefined) => {
+    const problem = pinned ? pinProblem(git, plan.head) : undefined;
+    if (problem !== undefined) throw new ReleaseError(problem);
+  };
+  const guarded = (read: () => Promise<Readiness>) => async (): Promise<Readiness> => {
+    if (pinned) checkPin(await readGit());
+    return read();
+  };
+  // Every wait while pinned is guarded, the controllers' too: once they run, Flux may apply.
   for (const name of manifests.deployments) {
-    await waitFor(ops, log, `Deployment ${FLUX_NAMESPACE}/${name}`, WAITS.controllers, async () => deploymentReadiness(await ops.object(KINDS.deployment, FLUX_NAMESPACE, name)));
+    await waitFor(
+      ops,
+      log,
+      `Deployment ${FLUX_NAMESPACE}/${name}`,
+      WAITS.controllers,
+      guarded(async () => deploymentReadiness(await ops.object(KINDS.deployment, FLUX_NAMESPACE, name))),
+    );
   }
   await waitFor(
     ops,
     log,
     `GitRepository ${FLUX_NAMESPACE}/${FLUX_NAMESPACE} at ${wanted.git}`,
     WAITS.source,
-    async () => readyAt("git", await ops.object(KINDS.gitRepository, FLUX_NAMESPACE, FLUX_NAMESPACE), wanted.git),
+    async () => {
+      const git = await readGit();
+      checkPin(git);
+      return readyAt("git", git, wanted.git);
+    },
     `Check that GitHub has the deploy key ${plan.deployKeyFingerprint} of Secret ${FLUX_NAMESPACE}/${manifests.deployKeySecret} as a read-only deploy key of ${REPOSITORY}. ${moved}`,
   );
   await waitFor(
@@ -1579,13 +2186,17 @@ async function waitForFlux(ops: FluxOps, log: Log, manifests: FluxManifests, pla
     log,
     `Kustomization ${FLUX_NAMESPACE}/${FLUX_NAMESPACE} at ${wanted.git}`,
     WAITS.kustomization,
-    async () => readyAt("kustomization", await ops.object(KINDS.kustomization, FLUX_NAMESPACE, FLUX_NAMESPACE), wanted.git),
+    guarded(async () => readyAt("kustomization", await ops.object(KINDS.kustomization, FLUX_NAMESPACE, FLUX_NAMESPACE), wanted.git)),
     moved,
   );
   // The Kustomization applied the tree, Flux's own Namespace included: the marker must still be there.
   await requireMarker(ops, manifests, "after Flux applied its own manifests");
-  await waitFor(ops, log, `OCIRepository ${DEMO_NAMESPACE}/${RELEASE_NAME} at ${wanted.chartDigest}`, WAITS.chart, async () =>
-    readyAt("chart", await ops.object(KINDS.ociRepository, DEMO_NAMESPACE, RELEASE_NAME), wanted.chartDigest),
+  await waitFor(
+    ops,
+    log,
+    `OCIRepository ${DEMO_NAMESPACE}/${RELEASE_NAME} at ${wanted.chartDigest}`,
+    WAITS.chart,
+    guarded(async () => readyAt("chart", await ops.object(KINDS.ociRepository, DEMO_NAMESPACE, RELEASE_NAME), wanted.chartDigest)),
   );
   // The chart version alone does not show the values: values-demo.yaml or a SOPS-encrypted Secret
   // that changed with main reach helm-controller only through a watch, so a release that is Ready
@@ -1600,9 +2211,31 @@ async function waitForFlux(ops: FluxOps, log: Log, manifests: FluxManifests, pla
     log,
     `HelmRelease ${DEMO_NAMESPACE}/${RELEASE_NAME} at ${wanted.release}`,
     WAITS.release,
-    async () => releaseReadiness(await ops.object(KINDS.helmRelease, DEMO_NAMESPACE, RELEASE_NAME), wanted.release, token),
+    guarded(async () => releaseReadiness(await ops.object(KINDS.helmRelease, DEMO_NAMESPACE, RELEASE_NAME), wanted.release, token)),
     `Look at \`sudo k3s kubectl -n ${DEMO_NAMESPACE} describe helmrelease ${RELEASE_NAME}\` and the pods of namespace ${DEMO_NAMESPACE}`,
   );
+  if (!pinned) return;
+
+  // The first deploy runs the checked commit and chart: Flux may follow main again. The pin goes
+  // with an explicit JSON patch; a pin that is gone already (spec.ref exactly {branch: main}) went
+  // after that deploy was verified, which is what the patch would do, so it is left as it is.
+  const git = await readGit();
+  if (git !== undefined && gitRefOf(git).kind === "main") {
+    log.note(`the pin of GitRepository ${FLUX_NAMESPACE}/${FLUX_NAMESPACE} to ${plan.head} was gone already after the first deploy was verified: Flux follows main again`);
+  } else {
+    checkPin(git);
+    await ops.unpinGit(plan.head);
+    log.note(`removed the pin of GitRepository ${FLUX_NAMESPACE}/${FLUX_NAMESPACE} to ${plan.head}: Flux follows main again`);
+  }
+  let following = "";
+  await waitFor(ops, log, `GitRepository ${FLUX_NAMESPACE}/${FLUX_NAMESPACE} following main`, WAITS.source, async () => {
+    const now = await readGit();
+    following = revisionOf("git", now);
+    return followsMain(now);
+  });
+  if (following !== wanted.git) {
+    log.note(`main moved on since this run checked ${plan.head}: Flux now follows main at ${redact(following)}, which this run did not check; status shows how it goes`);
+  }
 }
 
 /** What the cluster runs, compared with main: the lines of status. */
@@ -1615,6 +2248,12 @@ async function report(ops: FluxOps, log: Log, repo: RepoInputs | undefined): Pro
   }
   const git = await ops.object(KINDS.gitRepository, FLUX_NAMESPACE, FLUX_NAMESPACE);
   log.note(describeFlux(`GitRepository ${FLUX_NAMESPACE}/${FLUX_NAMESPACE}`, git));
+  const ref = gitRefOf(git);
+  if (git !== undefined && ref.kind !== "main") {
+    log.note(
+      `  spec.ref is ${describeRef(ref)}: ${ref.kind === "pinned" ? "pinned by an install that has not finished; run install again (dry run first) to finish it" : "neither main nor an install's pin"}`,
+    );
+  }
   const revision = text(at(git, ["status", "artifact", "revision"]));
   if (repo !== undefined && revision !== "" && !revision.endsWith(repo.head)) {
     log.note(`  that is not this checkout's origin/main (${repo.head.slice(0, 12)}); Flux follows main on GitHub`);
@@ -1641,7 +2280,11 @@ async function report(ops: FluxOps, log: Log, repo: RepoInputs | undefined): Pro
 // --- status ------------------------------------------------------------------------------------------
 
 /** Reads and prints; changes nothing and takes no lock. Main's files are read from this checkout as it is. */
-export async function runStatus(ops: FluxOps, log: Log, inputs: Inputs): Promise<void> {
+export async function runStatus(ops: FluxOps, log: FluxLog, inputs: Inputs): Promise<void> {
+  return cleanErrors(log, () => status(ops, log, inputs));
+}
+
+async function status(ops: FluxOps, log: FluxLog, inputs: Inputs): Promise<void> {
   const repo = await inputs.repo();
   const cluster = await ops.cluster(repo.manifests);
   const lock = await ops.lockState();
@@ -1666,6 +2309,7 @@ export async function runStatus(ops: FluxOps, log: Log, inputs: Inputs): Promise
   log.note(`Flux cluster roles and bindings: ${cluster.fluxClusterObjects.length === 0 ? "none" : names(cluster.fluxClusterObjects)}`);
   if (cluster.fluxCrds.length > 0) await report(ops, log, repo);
   else log.note(`namespace ${DEMO_NAMESPACE}: ${cluster.appNamespace === undefined ? "absent" : "exists"}`);
+  for (const problem of suspendedProblems(cluster)) log.note(`WARNING: ${problem}`);
   if (repo.code.length > 0) log.note(`(main's files were read from this checkout, which is not a clean origin/main: ${repo.code.join("; ")})`);
 }
 
@@ -1688,16 +2332,20 @@ export async function runStatus(ops: FluxOps, log: Log, inputs: Inputs): Promise
  *    finalizer waits for a controller that is gone.
  * Each wait is a poll of short reads (ssh cuts a silent command after about 3 minutes).
  */
-export async function runRemove(ops: FluxOps, log: Log, options: CommonOptions, inputs: Inputs): Promise<RemovePlan> {
-  const makePlan = async (lock?: LockState) => {
-    const { repo, cluster, lock: read } = await readPlanInputs(ops, inputs);
+export async function runRemove(ops: FluxOps, log: FluxLog, options: CommonOptions, inputs: Inputs): Promise<RemovePlan> {
+  return cleanErrors(log, () => remove(ops, log, options, inputs));
+}
+
+async function remove(ops: FluxOps, log: FluxLog, options: CommonOptions, inputs: Inputs): Promise<RemovePlan> {
+  const makePlan = async () => {
+    const { repo, cluster, lock } = await readPlanInputs(ops, inputs);
     const objects = cluster.fluxCrds.length > 0 ? await ops.fluxObjects(cluster.fluxCrds) : [];
     const suspended: string[] = [];
     for (const { ref } of objects.filter((o) => o.ref.startsWith("HelmRelease/"))) {
       const [, namespace = "", name = ""] = ref.split("/");
       if (at(await ops.object(KINDS.helmRelease, namespace, name), ["spec", "suspend"]) === true) suspended.push(`${namespace}/${name}`);
     }
-    return { repo, plan: planRemove(repo, cluster, lock ?? read, objects, suspended) };
+    return { repo, plan: planRemove(repo, cluster, lock, objects, suspended) };
   };
   const { repo, plan } = await makePlan();
   log.save("remove-plan", plan);
@@ -1712,9 +2360,9 @@ export async function runRemove(ops: FluxOps, log: Log, options: CommonOptions, 
   log.note(`  a later install needs a new age key (a .sops.yaml PR and sops updatekeys) and a new deploy key on GitHub; namespace ${DEMO_NAMESPACE} stays`);
   if (!checkConfirmation(log, removeChange(plan), options, `${COMMAND} remove --ssh-host <host>`)) return plan;
 
-  const release = await ops.lock("remove");
-  try {
-    const now = await makePlan({ kind: "free" });
+  await underLock(await ops.lock("remove"), log, async () => {
+    // Everything read again under the lock, the lock itself too.
+    const now = await makePlan();
     if (now.plan.refusals.length > 0) {
       printRefusals(log, now.plan.refusals);
       throw refused(now.plan.refusals);
@@ -1727,9 +2375,19 @@ export async function runRemove(ops: FluxOps, log: Log, options: CommonOptions, 
     const facts = await ops.cluster(manifests);
     const crds = facts.fluxCrds;
     // Absent after an install that stopped before its second apply, or a remove that stopped later.
-    if (facts.rootKustomization) {
+    if (facts.rootKustomization !== undefined) {
       await ops.suspendRoot();
       log.note(`suspended Kustomization ${FLUX_NAMESPACE} with prune off`);
+    }
+    // Until the suspend, the root Kustomization could still create Flux objects (a new main): only
+    // what the plan named is deleted, so anything else stops remove before it deletes anything.
+    const listed = crds.length === 0 ? [] : (await ops.fluxObjects(crds)).map((o) => o.ref).sort();
+    if (stableJson(listed) !== stableJson(plan.fluxObjects)) {
+      throw new ReleaseError(
+        `the Flux objects changed after the plan was made (now: ${names(listed) || "none"}; planned: ${names(plan.fluxObjects) || "none"}); nothing was deleted. ${
+          facts.rootKustomization === undefined ? "" : "The root Kustomization stays suspended with prune off: "
+        }run remove again (dry run first)${facts.rootKustomization === undefined ? "" : `, or resume Flux as ${RESUME} describes`}`,
+      );
     }
     const gone = (refs: string[]) => async (): Promise<Readiness> => {
       const left = (await ops.fluxObjects(crds)).map((o) => o.ref).filter((ref) => refs.includes(ref));
@@ -1773,10 +2431,8 @@ export async function runRemove(ops: FluxOps, log: Log, options: CommonOptions, 
     log.note(`kept in namespace ${DEMO_NAMESPACE}: ${kept.length === 0 ? "nothing" : names(kept)}`);
     const after = await ops.clusterState();
     log.save("state", { before, after, diff: stateDiff(before, after) });
-    log.note(`cluster-scoped changes: ${redact(JSON.stringify(stateDiff(before, after)))}`);
-  } finally {
-    await release();
-  }
+    log.note(`cluster-scoped changes: ${JSON.stringify(stateDiff(before, after))}`);
+  });
   log.note(`done; records in ${shownPath(log.dir)}`);
   return plan;
 }
@@ -1796,13 +2452,37 @@ function labelsOf(object: Record<string, unknown> | undefined, field: "labels" |
   return isMap(map) ? Object.fromEntries(Object.entries(map).map(([k, v]) => [k, String(v)])) : {};
 }
 
-/** A command that never runs twice (retry: false); errors are redacted. */
-async function once(box: Box, command: string, what: string, stdin?: string | Uint8Array): Promise<string> {
-  const result = await box.sh(command, { retry: false, ...(stdin === undefined ? {} : { stdin }) });
-  if (result.exitCode !== 0) {
-    throw new ReleaseError(`${what} failed (exit ${result.exitCode}${result.exitCode === 255 ? ", ssh dropped; not sent again, run the dry run to see where it stands" : ""}): ${redact(lastLines(result.stderr || result.stdout))}`);
+/** What to check on the demo machine before anything else, when a root script may still be running. */
+export const STILL_RUNNING_HELP =
+  `on the demo machine, \`sudo flock --nonblock ${REMOTE_LOCK} true\` fails while a root script of this file still runs (\`ps -ef | grep '[s]udo bash -c'\` shows it); ` +
+  `once it succeeds, run the dry run to see where things stand, and continue with --lock-held, or release the lab lock with \`rm -rf ~/${LOCK_DIR}\` only when ~/${LOCK_DIR}/owner is this run's line`;
+
+/**
+ * A root script (rootCommand), sent once (retry: false), its output returned. Exit 255 is ssh's:
+ * the connection dropped or never came up, and `sudo bash -c` without a terminal keeps running
+ * when ssh goes, so the script may still be changing the cluster: StillRunningError keeps the lab
+ * lock (underLock). Every other failure is the script's own, with its last lines redacted.
+ */
+async function rootScript(box: Box, script: string, what: string, stdin: string): Promise<string> {
+  const result = await box.sh(rootCommand(script), { retry: false, stdin });
+  if (result.exitCode === 255) {
+    throw new StillRunningError(`${what}: ssh ended with exit 255 and the root script may still be running on the demo machine (${redact(lastLines(result.stderr, 2))}); ${STILL_RUNNING_HELP}`);
   }
+  if (result.exitCode !== 0) throw new ReleaseError(`${what} failed (exit ${result.exitCode}): ${redact(lastLines(result.stderr || result.stdout))}`);
+  for (const line of result.stdout.split("\n").filter((l) => l.startsWith("STALE "))) box.log.note(line.slice("STALE ".length));
   return result.stdout;
+}
+
+/**
+ * A JSON patch of GitRepository flux-system as FIELD_MANAGER, sent once: its `test` makes a second
+ * copy fail, so after an error the object is read back and `landed` tells whether it went through.
+ */
+async function patchGit(box: Box, patch: unknown[], what: string, landed: (ref: GitRef) => boolean): Promise<void> {
+  const result = await box.sh(kubectlLine(["-n", FLUX_NAMESPACE, "patch", KINDS.gitRepository, FLUX_NAMESPACE, "--type=json", `--field-manager=${FIELD_MANAGER}`, "-p", JSON.stringify(patch)]), { retry: false });
+  if (result.exitCode === 0) return;
+  const ref = gitRefOf(await box.getJson(["-n", FLUX_NAMESPACE, "get", KINDS.gitRepository, FLUX_NAMESPACE]));
+  if (landed(ref)) return;
+  throw new ReleaseError(`${what} failed (exit ${result.exitCode}: ${redact(lastLines(result.stderr, 2))}); spec.ref is ${describeRef(ref)}`);
 }
 
 function kubectlLine(args: readonly string[]): string {
@@ -1821,7 +2501,7 @@ export function boxOps(box: Box, options: CommonOptions, ageTool: () => Promise<
     lockState: async () => parseLockState(await box.mustSh(LOCK_STATE_COMMAND, "reading the lab lock")),
     lock: (step) => takeLock(box, ISSUE, step, options.lockHeld),
     async cluster(manifests) {
-      const facts: ClusterFacts = { fluxCrds: [], fluxClusterObjects: [], rootKustomization: false, poc: [], missingPlatformCrds: [], services: [] };
+      const facts: ClusterFacts = { fluxCrds: [], fluxClusterObjects: [], poc: [], missingPlatformCrds: [], services: [] };
       const ns = await box.getJson(["get", "namespace", FLUX_NAMESPACE]);
       if (ns !== undefined) {
         resources ??= inventoryResources(await box.kubectl(["api-resources", "--namespaced", "--verbs=list,delete", "-o", "name"]));
@@ -1855,7 +2535,20 @@ export function boxOps(box: Box, options: CommonOptions, ageTool: () => Promise<
         .map((line) => line.trim().replace(/^(clusterrole|clusterrolebinding)\.rbac\.authorization\.k8s\.io\//, "$1/"))
         .filter((line) => line !== "")
         .sort();
-      if (facts.fluxCrds.includes(KINDS.kustomization)) facts.rootKustomization = (await object(KINDS.kustomization, FLUX_NAMESPACE, FLUX_NAMESPACE)) !== undefined;
+      const suspended = (object: Record<string, unknown>) => at(object, ["spec", "suspend"]) === true;
+      if (facts.fluxCrds.includes(KINDS.kustomization)) {
+        const root = await object(KINDS.kustomization, FLUX_NAMESPACE, FLUX_NAMESPACE);
+        // Pruning only when spec.prune is exactly true: an omitted boolean is false.
+        if (root !== undefined) facts.rootKustomization = { suspended: suspended(root), prune: at(root, ["spec", "prune"]) === true };
+      }
+      if (facts.fluxCrds.includes(KINDS.gitRepository)) {
+        const git = await object(KINDS.gitRepository, FLUX_NAMESPACE, FLUX_NAMESPACE);
+        if (git !== undefined) facts.gitRepository = { ref: gitRefOf(git), suspended: suspended(git) };
+      }
+      if (facts.fluxCrds.includes(KINDS.helmRelease)) {
+        const release = await object(KINDS.helmRelease, DEMO_NAMESPACE, RELEASE_NAME);
+        if (release !== undefined) facts.helmRelease = { suspended: suspended(release) };
+      }
       for (const [namespace, fingerprint] of Object.entries(POC_FINGERPRINTS)) {
         const names = [...fingerprint.deployments.map((d) => `deployment.apps/${d}`), ...fingerprint.statefulsets.map((s) => `statefulset.apps/${s}`)];
         const found = await box.tryKubectl(["-n", namespace, "get", ...names, "--ignore-not-found", "-o", "name"]);
@@ -1863,9 +2556,10 @@ export function boxOps(box: Box, options: CommonOptions, ageTool: () => Promise<
         facts.poc.push(...found.stdout.split("\n").filter((l) => l.trim() !== "").map((l) => `${namespace}/${l.trim()}`));
       }
       facts.services = parseServices(await box.kubectl(["get", "services", "-A", "-o", SERVICES_JSONPATH]));
-      // ServiceCIDR is served from Kubernetes 1.33 (GA); without it, install refuses (clusterIpProblems).
-      const cidrs = await box.tryKubectl(["get", "servicecidrs.networking.k8s.io", "-o", "jsonpath={.items[*].spec.cidrs[*]}"]);
-      if (cidrs.exitCode === 0) facts.serviceCidrs = parseServiceCidrs(cidrs.stdout);
+      // The API server's own ServiceCIDR, served from Kubernetes 1.33 (GA); without it, install
+      // refuses (clusterIpProblems). Ranges added later by other ServiceCIDRs have their own bands.
+      const serviceCidr = await box.getJson(["get", "servicecidrs.networking.k8s.io", "kubernetes"]);
+      if (serviceCidr !== undefined) facts.serviceCidrs = serviceCidrsOf(serviceCidr);
       const app = await box.getJson(["get", "namespace", DEMO_NAMESPACE]);
       if (app !== undefined) facts.appNamespace = { labels: labelsOf(app, "labels"), terminating: at(app, ["metadata", "deletionTimestamp"]) !== undefined };
       return facts;
@@ -1873,13 +2567,19 @@ export function boxOps(box: Box, options: CommonOptions, ageTool: () => Promise<
     async sopsAge(secret) {
       const tool = await ageTool();
       const script = ageCheckScript(REMOTE_BASE, new Bun.CryptoHasher("sha256").update(tool).digest("hex"), secret);
+      // Exit 255 is ssh's, and the root script (it reads the age private key) may still run:
+      // StillRunningError, as for every root script, so that underLock keeps the lab lock. Any
+      // other failure leaves the Secret unreadable, and the plan refuses.
       const result = await box.sh(rootCommand(script), { retry: false, stdin: tool });
+      if (result.exitCode === 255) {
+        throw new StillRunningError(`checking Secret ${FLUX_NAMESPACE}/${secret}: ssh ended with exit 255 and the root script may still be running on the demo machine (${redact(lastLines(result.stderr, 2))}); ${STILL_RUNNING_HELP}`);
+      }
       if (result.exitCode !== 0) return { kind: "unreadable", detail: `exit ${result.exitCode}: ${redact(lastLines(result.stderr || result.stdout, 3))}` };
+      for (const line of result.stdout.split("\n").filter((l) => l.startsWith("STALE "))) box.log.note(line.slice("STALE ".length));
       return parseAgeCheck(result.stdout);
     },
     async createDeployKey(secret, knownHosts) {
-      const out = await once(box, rootCommand(deployKeyScript(REMOTE_BASE, sha256(knownHosts), secret)), "generating the deploy key", knownHosts);
-      for (const line of out.split("\n").filter((l) => l.startsWith("STALE "))) box.log.note(redact(line.slice("STALE ".length)));
+      const out = await rootScript(box, deployKeyScript(REMOTE_BASE, sha256(knownHosts), secret), "generating the deploy key", knownHosts);
       if (out.split("\n").includes("DEPLOY_KEY exists")) return "exists";
       const publicKey = /^PUBLIC (ssh-ed25519 [A-Za-z0-9+/=]+ \S+)$/m.exec(out)?.[1];
       if (publicKey === undefined || !out.split("\n").includes("DEPLOY_KEY created")) throw new ReleaseError("deploy-key's script ended without the public key; run deploy-key again to see the Secret");
@@ -1897,7 +2597,34 @@ export function boxOps(box: Box, options: CommonOptions, ageTool: () => Promise<
       if (labels[MARKER] === MARKED_INSTALL) return;
       throw new ReleaseError(`labeling namespace ${FLUX_NAMESPACE} failed (exit ${result.exitCode}): ${redact(lastLines(result.stderr))}; nothing else changed, run the dry run again`);
     },
-    applyFlux: (manifests) => once(box, rootCommand(applyScript(REMOTE_BASE, manifests.sha256, manifests.crds)), "applying Flux's manifests", manifests.text),
+    async applyFlux(manifests, bootstrap) {
+      const out = await rootScript(box, applyScript(REMOTE_BASE, bootstrap, manifests.crds), "applying Flux's manifests", bootstrap.text);
+      if (!out.split("\n").includes("APPLY done")) throw new ReleaseError("the apply script ended without APPLY done; run the dry run to see where it stands");
+      return out;
+    },
+    async pinGit(apiVersion, head, from) {
+      const document = pinDocument(apiVersion, head);
+      if (from !== undefined && from !== head) {
+        if (!/^[0-9a-f]{40}$/.test(from)) throw new ReleaseError("the commit to move the pin from is not a full commit hash");
+        const patch = [
+          { op: "test", path: "/spec/ref/commit", value: from },
+          { op: "replace", path: "/spec/ref/commit", value: head },
+        ];
+        await patchGit(box, patch, `moving the pin of GitRepository ${FLUX_NAMESPACE} from ${from} to ${head}`, (ref) => ref.kind === "pinned" && ref.commit === head);
+      }
+      // Idempotent: an apply of the same value only makes FIELD_MANAGER a co-owner.
+      await box.kubectl(["apply", "--server-side", `--field-manager=${FIELD_MANAGER}`, "-f", "-"], document);
+      const ref = gitRefOf(await object(KINDS.gitRepository, FLUX_NAMESPACE, FLUX_NAMESPACE));
+      if (ref.kind !== "pinned" || ref.commit !== head) throw new ReleaseError(`GitRepository ${FLUX_NAMESPACE} is not pinned to ${head} after pinning it: spec.ref is ${describeRef(ref)}`);
+    },
+    async unpinGit(head) {
+      if (!/^[0-9a-f]{40}$/.test(head)) throw new ReleaseError("the pinned commit is not a full commit hash");
+      const patch = [
+        { op: "test", path: "/spec/ref/commit", value: head },
+        { op: "remove", path: "/spec/ref/commit" },
+      ];
+      await patchGit(box, patch, `removing the pin of GitRepository ${FLUX_NAMESPACE} to ${head}`, (ref) => ref.kind === "main");
+    },
     object,
     async fluxObjects(crds) {
       if (crds.length === 0) return [];
@@ -1934,7 +2661,7 @@ export function boxOps(box: Box, options: CommonOptions, ageTool: () => Promise<
     async deleteObject(resource, namespace, name) {
       await box.kubectl(["-n", namespace, "delete", resource, name, "--ignore-not-found", "--wait=false"]);
     },
-    deleteFlux: (manifests) => once(box, rootCommand(deleteScript(REMOTE_BASE, manifests.sha256)), "deleting Flux's objects", manifests.text),
+    deleteFlux: (manifests) => rootScript(box, deleteScript(REMOTE_BASE, manifests.sha256), "deleting Flux's objects", manifests.text),
     async kept() {
       if ((await box.getJson(["get", "namespace", DEMO_NAMESPACE])) === undefined) return [];
       const crds = await box.kubectl(["get", KINDS.crd, "-o", "name"]);
@@ -1967,7 +2694,7 @@ const SUBCOMMANDS = {
   remove: COMMON_SPEC,
 } as const;
 
-let log: Log | undefined;
+let log: FluxLog | undefined;
 
 if (import.meta.main) {
   await main(
@@ -1978,19 +2705,23 @@ if (import.meta.main) {
       if (spec === undefined) throw new ReleaseError(`usage: ${COMMAND} <${Object.keys(SUBCOMMANDS).join("|")}> --ssh-host <host> [--apply --confirm <code>] [--lock-held]`);
       const raw = parseOptions(argv, spec);
       const options = commonOptions({ apply: "false", ...raw });
-      log = new Log(`flux-${name}`, options.logDir);
+      log = new FluxLog(`flux-${name}`, options.logDir);
       const current = log;
-      const ops = boxOps(new Box(options.sshHost, current), options, demoAgeKeygen);
+      // Every line a run prints, logs or saves goes through FluxLog (redact()), and ssh's own
+      // errors name the ssh host only as <ssh-host>.
+      const ops = boxOps(new Box(options.sshHost, current, { run: hidingSshHost(sshRun, options.sshHost) }), options, demoAgeKeygen);
       const inputs = checkoutInputs();
-      await withOpsTunnel(
-        () => ops.tunnel(),
-        current,
-        async () => {
-          if (name === "deploy-key") await runDeployKey(ops, current, options, inputs);
-          else if (name === "install") await runInstall(ops, current, options, inputs);
-          else if (name === "remove") await runRemove(ops, current, options, inputs);
-          else await runStatus(ops, current, inputs);
-        },
+      await cleanErrors(current, () =>
+        withOpsTunnel(
+          () => ops.tunnel(),
+          current,
+          async () => {
+            if (name === "deploy-key") await runDeployKey(ops, current, options, inputs);
+            else if (name === "install") await runInstall(ops, current, options, inputs);
+            else if (name === "remove") await runRemove(ops, current, options, inputs);
+            else await runStatus(ops, current, inputs);
+          },
+        ),
       );
     },
   );
