@@ -1,6 +1,6 @@
 # agent
 
-閘道器 agent（[決策 10](../../docs/architecture/decisions.md)）：在現場閘道器上讀取設備、把資料送上雲端的程式。目前只有 Modbus 讀取（`modbus` 模組，[rebuild-checklist](../../docs/requirements/rebuild-checklist.md) F1、F5）；systemd 服務、MQTT 連線、排程與離線緩衝之後建立在它上面。
+閘道器 agent（[決策 10](../../docs/architecture/decisions.md)）：在現場閘道器上讀取設備、把資料送上雲端的程式。目前有 Modbus 讀取（`modbus` 模組，[rebuild-checklist](../../docs/requirements/rebuild-checklist.md) F1、F5）與 TPM 裡的身分金鑰（`tpm` 模組，[決策 12](../../docs/architecture/decisions.md)）；systemd 服務、MQTT 連線、排程與離線緩衝之後建立在它上面。
 
 | 在哪裡 | 內容 | issue |
 | --- | --- | --- |
@@ -9,13 +9,14 @@
 | `src/modbus/pdu.rs` | 功能碼 1–4 的請求與回應 PDU | Laysi/trustiot-v2#87 |
 | `src/modbus/decode.rs` | 型別、位元組順序、scale 與 offset | Laysi/trustiot-v2#87 |
 | `src/modbus/tcp.rs` | Modbus TCP 的 `Connection`（MBAP） | Laysi/trustiot-v2#87 |
+| `src/tpm.rs`、`src/tpm/` | `TpmKey`：TPM 內的身分金鑰（TPM2_ReadPublic、TPM2_Sign）與 rustls 的 `SigningKey` | Laysi/trustiot-v2#86 |
 | 還沒有 | RTU-over-TCP 與同一台轉換器共用連線 | Laysi/trustiot-v2#88 |
 | 還沒有 | 固定節拍、重連退避、TCP keepalive、watchdog | Laysi/trustiot-v2#89 |
 | 還沒有 | 系統時鐘的 `Clock`（時鐘是否已校正、校正來源） | Laysi/trustiot-v2#90 |
 | 還沒有 | 讀取統計（`DeviceStats`）與心跳 | Laysi/trustiot-v2#117 |
 | 還沒有 | 執行檔、systemd unit、MQTT 連線 | Laysi/trustiot-v2#86 |
 
-依賴都要能建置成 aarch64（`aarch64-unknown-linux-gnu`），不需要 C 工具鏈；CI 對 `edge/` 下每個成員做這項建置。
+依賴都要能建置成 aarch64（`aarch64-unknown-linux-gnu`），不需要額外的系統函式庫；CI 對 `edge/` 下每個成員做這項建置。rustls 的 crypto provider `ring` 會以目標的 C 編譯器編譯 C 與組合語言：arm64 主機上原生建置，x86_64 工作站以 cargo-zigbuild（Zig 當 C 編譯器）建置。
 
 ## Modbus 讀取
 
@@ -78,6 +79,18 @@
 - 半開連線（設備不送 FIN 或 RST 就忘了連線）只會表現為逾時；偵測並重連是 Laysi/trustiot-v2#89 的 keepalive 與 watchdog。
 - 主機寫 DNS 名稱時，名稱解析在 blocking 執行緒上進行，連線逾時之後它仍會跑完；現場設備多半以 IP 設定。
 
+## TPM 簽章
+
+閘道器的身分金鑰在 TPM 裡、不能匯出（決策 12）。`TpmKey::open(TpmTransport::Device("/dev/tpmrm0".into()), handle)` 經核心的資源管理器使用持久 handle 上的金鑰（預設 `DEFAULT_KEY_HANDLE` = `0x81000100`），`TpmKey` 實作 rustls 的 `SigningKey`，inner mTLS 的 CertificateVerify 就在 TPM 內簽。
+
+- 不用 tss-esapi 或 libtss2：只送兩個指令，TPM2_ReadPublic 與 TPM2_Sign，依 TPM 2.0 Part 2、3 自己編解碼，沒有 C 函式庫要交叉編譯或隨附。
+- 回應一律當成不可信的輸入：檢查 tag、長度與回應碼，每個長度都不超過剩下的 bytes，結構要剛好結束，回應最多 4096 bytes；格式不符是錯誤，不會 panic。回應碼解成名稱，例如 `TPM_RC_HANDLE (0x0000018b, handle 1)`。
+- `open` 先讀公開區域，金鑰必須是 ECC NIST P-256、scheme 固定為 ECDSA-SHA256，屬性要有 `fixedTPM`、`fixedParent`、`sensitiveDataOrigin`、`userWithAuth`、`sign`，不能有 `restricted`、`decrypt`（2026-10-12 PoC 的範本，產線工具 Laysi/trustiot-v2#80 照這個產生）。接著簽一段固定的測試訊息並以公鑰驗證，簽不出來（例如金鑰設了密碼）就在啟動時失敗，不會等到每次握手才失敗。啟動多一次簽章，閘道器上約 70 ms。
+- 簽章：SHA-256 在軟體算，以空密碼的 password session（`TPM_RS_PW`）與 null hashcheck ticket 送 TPM2_Sign，r、s 轉成 DER。rustls 只會拿到 `ecdsa_secp256r1_sha256`。
+- 憑證要與金鑰相符：`public_key_spki_der()` 是金鑰的 SubjectPublicKeyInfo，rustls 的 `CertifiedKey::keys_match` 經 `SigningKey::public_key` 比對。
+- 一條專用執行緒（`tpm`）擁有裝置，請求經有上限的佇列（8 個）一個一個送，佇列滿了回 `Busy`。rustls 的 `Signer::sign` 是同步呼叫，等待期間佔住呼叫它的執行緒（閘道器上約 70 ms），所以握手不能跑在負責 Modbus 輪詢的執行緒上。等待最多 `RESPONSE_TIMEOUT`（30 秒；核心對這些指令的逾時更短）。執行緒停了（panic）時簽章立即回錯誤，不會卡住；最後一個 `TpmKey` 與 `Signer` 被丟掉時執行緒結束並關閉裝置。
+- `TpmTransport::Channel` 接受其他 `TpmChannel`（測試以 TCP 連 swtpm）；正式環境只用 `Device`。
+
 ## 測試
 
 ```sh
@@ -85,6 +98,9 @@ cargo test -p agent                                     # 全部
 cargo test -p agent --lib                               # 單元測試：規劃、PDU、解碼、輪詢、MBAP 切框
 cargo test -p agent --test modbus_fake_endpoint         # 對 testkit 假端點：型別、合併讀取、每種故障
 cargo test -p agent --test modbus_tcp_framing           # 以 raw socket 驗證哪個回應算數、框架同步
+cargo test -p agent --test tpm_swtpm                    # swtpm 容器：簽章、mTLS 握手、拒絕不能用的金鑰
 ```
 
-整合測試都用 `#[tokio::test(start_paused = true)]` 加 `testkit::clock::manual()`：逾時只在測試推進時鐘時觸發，機器再忙也不會誤判逾時。假端點的用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「假 Modbus 端點」。
+Modbus 的整合測試都用 `#[tokio::test(start_paused = true)]` 加 `testkit::clock::manual()`：逾時只在測試推進時鐘時觸發，機器再忙也不會誤判逾時。假端點的用法見 [`crates/testkit/README.md`](../../crates/testkit/README.md)「假 Modbus 端點」。
+
+`tpm_swtpm` 以 `tests/swtpm/Containerfile`（Debian 的 swtpm 與 tpm2-tools，基底以 multi-arch digest 釘選）建映像，build context 是空目錄；映像留在本機（`localhost/trustiot-agent-swtpm:<Containerfile 的雜湊>`），下次直接沿用，不要時以 `podman rmi` 移除。測試時以 tpm2-tools 佈建金鑰，比對 tpm2-tools 算的 SubjectPublicKeyInfo、以公鑰驗證簽章，並做一次真的 TLS 1.3 mTLS 握手（測試 CA 為 TPM 公鑰簽發用戶端憑證，CertificateVerify 剛好一次 TPM2_Sign，resumption 不簽章）。沒有 podman 或 docker 時略過，設了 `CI` 時失敗。解析與執行緒的行為在單元測試（`cargo test -p agent --lib tpm`）以 swtpm 錄下的回應與假 TPM 測。

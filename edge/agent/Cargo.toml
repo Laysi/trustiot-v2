@@ -1,6 +1,6 @@
 [package]
 name = "agent"
-description = "The TrustIoT gateway agent (decision 10). So far its Modbus reading (rebuild checklist F1, F5): merged reads, a Modbus TCP client for the read function codes 1-4, decoding, and scaling."
+description = "The TrustIoT gateway agent (decision 10). So far its Modbus reading (rebuild checklist F1, F5): merged reads, a Modbus TCP client for the read function codes 1-4, decoding, and scaling; and its TPM identity key as a rustls signing key (decision 12)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,10 +11,21 @@ repository.workspace = true
 # without a C toolchain (ci.yml builds every edge/ member for that target).
 [dependencies]
 protocol = { path = "../../crates/protocol" }
+# SHA-256 of what the TPM signs, and the check of the TPM key's test signature (`tpm`). rustls'
+# own provider, so no second crypto library.
+ring.workspace = true
+# The TPM key is a rustls `SigningKey` (`tpm`).
+rustls = { workspace = true, features = ["ring", "std"] }
+thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "time"] }
 
 [dev-dependencies]
-# The fake Modbus endpoint with fault injection (`testkit::modbus`) and the paused clock.
+# Certificates for the TPM key in the TPM tests, made at test time.
+rcgen = { workspace = true, features = ["crypto", "ring"] }
+# The fake TPM's software key (`ring::signature::EcdsaKeyPair`).
+ring = { workspace = true, features = ["alloc"] }
+# The fake Modbus endpoint with fault injection (`testkit::modbus`), the paused clock, and the
+# swtpm container (`testkit::container`).
 testkit = { path = "../../crates/testkit" }
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 
