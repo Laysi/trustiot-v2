@@ -1,0 +1,131 @@
+/*
+ * Colors come from custom properties; the theme is html[data-theme], which PreferencesProvider
+ * sets. Styles live in stylesheets only: the CSP allows no inline style and no injected <style>.
+ */
+:root {
+  color-scheme: light;
+  --color-bg: #ffffff;
+  --color-surface: #f6f8fa;
+  --color-text: #1f2328;
+  --color-muted: #59636e;
+  --color-border: #d1d9e0;
+  --color-accent: #0969da;
+  --color-danger: #cf222e;
+  --font-sans: system-ui, -apple-system, "Segoe UI", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-bg: #0d1117;
+  --color-surface: #151b23;
+  --color-text: #f0f6fc;
+  --color-muted: #9198a1;
+  --color-border: #3d444d;
+  --color-accent: #4493f8;
+  --color-danger: #f85149;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  line-height: 1.5;
+}
+
+a {
+  color: var(--color-accent);
+}
+
+button,
+select {
+  font: inherit;
+  color: inherit;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 0.25rem 0.5rem;
+}
+
+.layout__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.layout__brand {
+  font-weight: 600;
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.layout__nav {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.layout__nav a[aria-current="page"] {
+  font-weight: 600;
+}
+
+.layout__tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.layout__main {
+  padding: 1.5rem;
+}
+
+.tenant-switcher__label {
+  color: var(--color-muted);
+}
+
+.tenant-switcher__error {
+  margin: 0.25rem 0 0;
+  color: var(--color-danger);
+}
+
+.preferences {
+  position: relative;
+}
+
+.preferences > summary {
+  cursor: pointer;
+}
+
+.preferences__fields {
+  position: absolute;
+  right: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: auto minmax(12rem, 1fr);
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  margin-top: 0.5rem;
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+}
+
+.status-page {
+  max-width: 40rem;
+  margin: 3rem auto;
+}
+
+.status-page__actions {
+  margin-top: 1.5rem;
+}
