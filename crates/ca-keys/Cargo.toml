@@ -1,0 +1,26 @@
+[package]
+name = "ca-keys"
+description = "The issuing CA keys of TrustIoT v2's certs service: the key set the cluster generates, the certificate signing request of each key, and the rules for adding and removing keys."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+# PKCS#8 keys in the document.
+base64.workspace = true
+# ECDSA P-256 key pairs and their certificate signing requests; `zeroize` wipes a key pair's
+# PKCS#8 copy.
+rcgen = { workspace = true, features = ["crypto", "pem", "ring", "zeroize"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+# Key ids: the SHA-256 of the public key.
+sha2.workspace = true
+thiserror.workspace = true
+# Reads the stored requests back and verifies their signatures, to check each belongs to its key.
+x509-parser = { workspace = true, features = ["verify"] }
+zeroize.workspace = true
+
+[lints]
+workspace = true

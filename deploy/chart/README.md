@@ -75,6 +75,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | Grafana | — | 尚未加入 | Laysi/trustiot-v2#183 |
 | Sentry | `observability.sentry.*` | 開關、環境名稱與 DSN 已接到每個服務 | Laysi/trustiot-v2#184 |
 | 內部身分（公鑰、簽章私鑰） | `internalIdentity.*` | 完成：金鑰對由身分服務 pod 的 init container 在叢集內產生，私鑰在只有身分服務掛載的 Secret，公鑰在每個服務都掛載的 ConfigMap，服務不重啟就換上新公鑰；金鑰超過 `maxKeyAgeSeconds`（預設 90 天）由 CronJob 自動輪替，人發起的輪替與撤銷只改一個數字；身分服務另外拿到需要 cookie 的路由（`TRUSTIOT_INGRESS_ROUTES`），決定 token 的受眾 | Laysi/trustiot-v2#61、Laysi/trustiot-v2#404、Laysi/trustiot-v2#429 |
+| 閘道器憑證 CA（簽發 CA 私鑰、CSR、根與簽發 CA 憑證） | `certificateAuthority.*`（隨 `services.certs.enabled`） | 完成：簽發 CA 私鑰由 certs pod 的 init container 在叢集內產生，在只有 certs 掛載的 Secret；CSR 寫進 ConfigMap 給離線根 CA 簽發，簽出的憑證（公開）放在 values，服務不重啟就換上（見「閘道器憑證 CA」） | Laysi/trustiot-v2#78；broker 取用 CRL 在 Laysi/trustiot-v2#84，nightly 與展示環境啟用 certs 另開 issue |
 | 密鑰 | 各個 `*Secret` 欄位、`services.<name>.credentials` | values 只存 Secret 名稱與 key；Sentry DSN 給每個服務，其他依賴的帳密只給列出它的服務；外部 ClickHouse 的 CA 掛進每個服務，Postgres 的 CA 只掛進在 `mesh.calls` 列出 `postgres` 的服務；chart 不渲染任何密鑰值（測試檢查），它宣告的 Secret 只有 migration Job 填入的空 Secret；叢集內 Postgres 的 Secret 由 CloudNativePG 產生，服務的自訂 `env` 讀不到；每個服務的資料庫密碼與 collector 的 ClickHouse 密碼由 migration Job 產生，各放在自己的 Secret（`<release>-<服務>-password`、`<release>-otel-collector-password`），只給該服務或 collector，migration 帳號只給 migration Job | SaaS 的 Secret 以 SOPS 加密放在 `deploy/flux/`（Laysi/trustiot-v2#70）；地端由客戶建立。規則與清冊見 docs/architecture/secrets.md |
 
 ## 服務
@@ -193,7 +194,7 @@ ingress:
 | 欄位 | 預設值 | 說明 |
 | --- | --- | --- |
 | `mesh.trustDomain` | `cluster.local` | mesh 的 SPIFFE trust domain（Istio 的 `meshConfig.trustDomain`）；呼叫端身分寫成 `<trustDomain>/ns/<namespace>/sa/<ServiceAccount>` |
-| `mesh.calls` | `mesh.calls.ingest` 與 `mesh.calls.telemetry-query` 都是 `[clickhouse]`，`mesh.calls.identity` 與 `mesh.calls.assets` 是 `[postgres]` | 誰可以呼叫誰：`<呼叫端>: [<被呼叫端>, ...]`。呼叫端是 `services` 的 key；被呼叫端是 `services` 的 key、叢集內元件 `clickhouse`（`clickhouse.mode: bundled` 時）與 `otel-collector`（collector 開啟時），或 `postgres`（兩種 `postgres.mode` 都可以列，見下方）。遙測的呼叫由 chart 自動加上，不必列：每個啟用的服務 → `otel-collector`，`otel-collector` → `clickhouse`。不認得的名稱讓安裝失敗；服務未啟用或元件沒有部署時略過這條，所以可以先列還沒出映像的服務。預設值是決策 14 與 docs/architecture/deployment.md 寫明的 ClickHouse 用戶端：資料接收寫入、時序查詢以每租戶唯讀帳號讀取；以及使用 Postgres 的身分服務與資產服務（資產服務也以平台角色讀身分服務的事件，Laysi/trustiot-v2#65）。各服務的 issue 加入它要呼叫的內部 API，用 Postgres 的服務加上 `postgres` |
+| `mesh.calls` | `mesh.calls.ingest` 與 `mesh.calls.telemetry-query` 都是 `[clickhouse]`，`mesh.calls.identity`、`mesh.calls.assets` 與 `mesh.calls.certs` 是 `[postgres]` | 誰可以呼叫誰：`<呼叫端>: [<被呼叫端>, ...]`。呼叫端是 `services` 的 key；被呼叫端是 `services` 的 key、叢集內元件 `clickhouse`（`clickhouse.mode: bundled` 時）與 `otel-collector`（collector 開啟時），或 `postgres`（兩種 `postgres.mode` 都可以列，見下方）。遙測的呼叫由 chart 自動加上，不必列：每個啟用的服務 → `otel-collector`，`otel-collector` → `clickhouse`。不認得的名稱讓安裝失敗；服務未啟用或元件沒有部署時略過這條，所以可以先列還沒出映像的服務。預設值是決策 14 與 docs/architecture/deployment.md 寫明的 ClickHouse 用戶端：資料接收寫入、時序查詢以每租戶唯讀帳號讀取；以及使用 Postgres 的身分服務、資產服務（資產服務也以平台角色讀身分服務的事件，Laysi/trustiot-v2#65）與 certs 服務（簽發紀錄與 CRL，Laysi/trustiot-v2#78）。各服務的 issue 加入它要呼叫的內部 API，用 Postgres 的服務加上 `postgres` |
 
 ```yaml
 mesh:
@@ -271,7 +272,7 @@ mesh:
 | `services.<name>.credentials` | 只給這個服務的依賴帳密，可列 `qdrant-read`、`qdrant-write`、`object-storage`、`smtp`、`ai`，變數見「密鑰的環境變數」；不能放在 `serviceDefaults`，避免每個服務都拿到。`ai` 只能給 `ai-gateway`（決策 28）；`qdrant-read` 與 `qdrant-write` 只能給 `knowledge`，因為 Qdrant 查詢的租戶條件由知識庫服務加上（docs/architecture/rag.md） |
 | `services.<name>.resources` | 逐欄覆寫資源設定 |
 | `services.<name>.podSecurityContext` | 逐欄覆寫；限制同 `serviceDefaults` |
-| `services.<name>.podSecurityContext.fsGroup` | 只有 `identity` 有預設值 `65532`：簽章金鑰檔的權限是 0440、屬於 root 與這個群組，服務以群組身分讀它，容器裡其他使用者讀不到（見「內部身分」）。OpenShift 設成 `null`，由 restricted-v2 SCC 從 namespace 的範圍指派；其他平台拿掉它，身分服務會讀不到金鑰而一直不就緒 |
+| `services.<name>.podSecurityContext.fsGroup` | 只有 `identity`（`65532`）與 `certs`（`65533`）有預設值：簽章金鑰檔與簽發 CA 金鑰檔的權限是 0440、屬於 root 與這個群組，服務以群組身分讀它，容器裡其他使用者讀不到（見「內部身分」與「閘道器憑證 CA」）；兩者不同，其他 pod 都不在這兩個群組。OpenShift 設成 `null`，由 restricted-v2 SCC 從 namespace 的範圍指派；其他平台拿掉它，服務會讀不到金鑰而一直不就緒 |
 | `services.<name>.securityContext` | 逐欄覆寫；限制同 `serviceDefaults` |
 | `services.<name>.probes` | 每個 probe 整個取代；liveness 與 readiness 不能是空的 |
 | `services.<name>.preStopSleepSeconds` | 覆寫 preStop 等待秒數 |
@@ -331,6 +332,21 @@ mesh:
 1. 升級到這個 chart，`signingKeySecret` 與 `publicKeys` 先不動：init container 匯入那把私鑰，新舊版的 pod 都用它；服務改從 ConfigMap 讀公鑰。`publicKeys` 裡其他的公鑰不帶過來，舊做法的輪替要在搬移之前做完。
 2. 滾動完成後，從 values 移除 `signingKeySecret` 與 `publicKeys` 再升級：`keyGeneration`（至少 1）大於匯入的代 0，init container 產生新金鑰並照輪替換掉匯入的那一把。
 3. ConfigMap 不再有匯入的 `kid` 之後，刪掉人建立的 Secret。
+
+### 閘道器憑證 CA
+
+決策 6、12 的自建 CA（Laysi/trustiot-v2#78）：離線的根 CA 簽出簽發 CA，certs 服務以簽發 CA 簽閘道器憑證、發 CRL。簽發 CA 的私鑰在叢集內產生，沒有人建立、看到或複製它；根 CA 的私鑰不進叢集。階層、儀式的每一步、輪替與外洩處理在 [services/certs/README.md](../../services/certs/README.md)，設計摘要在 [docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「閘道器憑證 CA」。以下物件只在 `services.certs.enabled` 時渲染；`certificateAuthority.*` 不論開關都會檢查。
+
+- **私鑰**：空的 Secret `<release>-certs-ca-keys`（`templates/passwords.yaml`，與 migration Job 的密碼 Secret 相同的 metadata）。certs pod 的 init container `ca-keys`（migration 映像的 `migrate certs-ca-keys`，在 `wait-for-migrations` 之前）以 certs ServiceAccount 的 projected token 產生金鑰並寫入；Role `<release>-certs-ca-keys` 只有這個 Secret 與下面 CSR 的 ConfigMap 的 `get`、`patch`（`resourceNames`）。certs 的主容器沒有 token（`services.certs.automountServiceAccountToken` 是 `true` 時渲染失敗），只以唯讀 volume 讀 `/etc/trustiot/certs-ca-keys/issuing-ca-keys.json`（0440，root 與 pod 的 `fsGroup`）。其他 pod 都不掛它，任何服務的自訂 `env` 都不能讀它，chart 的其他 Role 不能寫 CSR 的 ConfigMap（chart 測試）。
+- **CSR**：空的 ConfigMap `<release>-certs-ca-requests`（`templates/certs-ca.yaml`，`trustiot.io/filled-by: migrate`、`helm.sh/resource-policy: keep`），init container 寫入每把金鑰的 `issuing-ca-generation-<代>.csr.pem`。維運人員從這裡取出 CSR 帶到離線的根 CA。
+- **憑證**：ConfigMap `<release>-certs-ca-certificates` 的 `root.pem` 與 `issuing.pem`，由下表的兩個欄位印成 PEM。certs 掛整個 ConfigMap 在 `/etc/trustiot/certs-ca/`，每 30 秒重讀，改憑證不重啟 pod。values 不接受換行，所以每張憑證寫成它的 DER 的一行 base64（`sed '/-----/d' cert.pem | tr -d '\n'`）；看起來不是憑證的值（PEM 文字、私鑰的 DER、長度不對）渲染失敗，私鑰因此放不進 values。
+
+| 欄位 | 預設值 | 說明 |
+| --- | --- | --- |
+| `certificateAuthority.keyGeneration` | `"1"` | 要求的簽發 CA 金鑰代，1 到 9 位數字。調大就加一把：certs 滾動重啟（其他服務不重啟），第一個新 pod 的 init container 產生新金鑰與它的 CSR；舊的照常簽章，直到新金鑰的憑證放進 `issuingCertificates`。只往上走：rollback 到較小的值不會再產生 |
+| `certificateAuthority.removeKeysBeforeGeneration` | `"0"` | 代比它小的金鑰在下一次 certs 啟動時移除：不再簽章，它的 CRL 不再發布，broker 因此拒絕它簽的每張憑證。輪替時等舊的一代簽的憑證都過期再設；外洩時與 `keyGeneration` 一起設成新的一代。不能大於 `keyGeneration`（渲染失敗）。0 不移除 |
+| `certificateAuthority.rootCertificate` | `""` | 離線根 CA 的憑證，一行 base64 DER（公開）。還沒設時 certs 照常就緒但不能簽章（指標 `certs.ca.signing` 是 0） |
+| `certificateAuthority.issuingCertificates` | `[]` | 根 CA 簽出的簽發 CA 憑證，每把金鑰一張，各是一行 base64 DER（公開），最多 4 張。對不上 Secret 裡任何金鑰的憑證被略過並記在日誌 |
 
 ### migration Job
 
@@ -609,7 +625,7 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 服務照下列約定實作，就能直接用通用樣板部署（docs/architecture/deployment.md 的服務設計規則）：
 
 - **設定**：ConfigMap `<release>-platform` 以 `envFrom` 交給每個服務，另外每個服務有 `OTEL_SERVICE_NAME=<服務名稱>`，collector 開啟時還有 `TRUSTIOT__TELEMETRY__OTLP_ENDPOINT`（service-kit 的 OTLP 匯出位址，見「OpenTelemetry collector」）。`TRUSTIOT_` 後接英數字、`SENTRY_` 與 `OTEL_` 開頭的變數只由 chart 設定，`env` 不能覆寫，服務讀到的平台設定一定是 values 決定的值。沒有設定的項目不會出現，服務可以分辨「沒設定」與「空字串」。平台設定變更時 pod 會自動滾動更新。
-- **密鑰**：不放進 ConfigMap，以 `valueFrom.secretKeyRef` 從 values 指定的 Secret 取用。Sentry 開啟時每個服務有 `SENTRY_DSN`；其他依賴的帳密只給在 `services.<name>.credentials` 列出它的服務（見後面「密鑰的環境變數」），Secret 名稱空白的項目不注入。資料庫的 CA 憑證以唯讀方式掛在 `/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`：外部 ClickHouse 的掛進每個服務；Postgres 的（`external` 是 `postgres.external.caSecret`，`bundled` 是 CloudNativePG 產生的 CA 裡的 `ca.crt`）只掛進在 `mesh.calls` 列出 `postgres` 的服務。內部身分的簽章私鑰只掛進身分服務，公鑰的 ConfigMap 掛進每個服務（見「內部身分」）。服務自己的資料庫帳號（每個服務一個角色，決策 4）由 migration 的 issue 加入（Laysi/trustiot-v2#60）。
+- **密鑰**：不放進 ConfigMap，以 `valueFrom.secretKeyRef` 從 values 指定的 Secret 取用。Sentry 開啟時每個服務有 `SENTRY_DSN`；其他依賴的帳密只給在 `services.<name>.credentials` 列出它的服務（見後面「密鑰的環境變數」），Secret 名稱空白的項目不注入。資料庫的 CA 憑證以唯讀方式掛在 `/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`：外部 ClickHouse 的掛進每個服務；Postgres 的（`external` 是 `postgres.external.caSecret`，`bundled` 是 CloudNativePG 產生的 CA 裡的 `ca.crt`）只掛進在 `mesh.calls` 列出 `postgres` 的服務。內部身分的簽章私鑰只掛進身分服務，公鑰的 ConfigMap 掛進每個服務（見「內部身分」）；簽發 CA 的私鑰只掛進 certs（見「閘道器憑證 CA」）。服務自己的資料庫帳號（每個服務一個角色，決策 4）由 migration 的 issue 加入（Laysi/trustiot-v2#60）。
 - **埠與探針**：API 監聽 8080（埠名 `http`）；健康埠 8081（埠名 `health`）只提供 `GET /healthz`（startup 與 liveness）與 `GET /readyz`（readiness），其他路徑回 404。探針連健康埠，節點上的行程因此碰不到 API（「節點來源」）。service-kit 預設就是這樣（`http.listen_addr`、`http.health_listen_addr`），`crates/service-kit/tests/chart_contract.rs` 對照 `values.yaml` 檢查。
 - **SIGTERM**：pod 刪除時先等 `preStopSleepSeconds`（預設 5 秒），再送 SIGTERM；服務收到後 readiness 立即回失敗、處理完進行中的請求、主動關閉長連線，在 `drainSeconds`（預設 30 秒）內結束，之後才會被 SIGKILL。服務是容器內的 PID 1，要自己處理 SIGTERM。
 - **執行環境**：根目錄唯讀，只有 `/tmp` 可寫；以非 root 執行，映像的 `USER` 要是數字 UID，並能以 OpenShift 指派的任意 UID 執行；沒有 ServiceAccount token；只排到 arm64 節點。
@@ -654,6 +670,14 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 | `TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS` | `internalIdentity.keyPropagationSeconds`：金鑰與公開的公鑰不一致多久之後記 ERROR | 一律 |
 | `TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS` | 輪替 CronJob 渲染時是 `internalIdentity.maxKeyAgeSeconds`，否則 `0`：正在簽章的金鑰的 `published_at` 超過它加 `keyPropagationSeconds` 再加 2 天時記一次 ERROR（輪替沒在跑或一直失敗） | 一律 |
 
+只給 certs 服務的變數（chart 設定，自訂 `env` 不能用同樣的名稱）：
+
+| 變數 | 來源 | 何時出現 |
+| --- | --- | --- |
+| `TRUSTIOT__CA__KEYS_FILE` | 掛載的簽發 CA 金鑰檔 `/etc/trustiot/certs-ca-keys/issuing-ca-keys.json` | 一律 |
+| `TRUSTIOT__CA__ROOT_CERTIFICATE_FILE` | 掛載的根憑證 `/etc/trustiot/certs-ca/root.pem`（`certificateAuthority.rootCertificate`） | 一律 |
+| `TRUSTIOT__CA__CERTIFICATES_FILE` | 掛載的簽發 CA 憑證 `/etc/trustiot/certs-ca/issuing.pem`（`certificateAuthority.issuingCertificates`） | 一律 |
+
 ## 擴充 chart
 
 - **新增服務**：在 `values.yaml` 的 `services` 加一個 key，並同步 docs/architecture/deployment.md 的服務表（測試比對兩邊）。服務特有的埠、資源、探針與 Secret 寫在該 key 底下。
@@ -665,7 +689,7 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 
 ## OpenShift 與其他 Kubernetes
 
-- Pod 符合 restricted Pod Security Standard，且不固定 UID，可以在 OpenShift 的 restricted-v2 SCC 下執行。例外是固定的群組 ID：身分服務的 `fsGroup`（`services.identity.podSecurityContext.fsGroup`）與叢集內 ClickHouse 的 UID／GID，在 OpenShift 都設成 `null` 交給 SCC 指派。
+- Pod 符合 restricted Pod Security Standard，且不固定 UID，可以在 OpenShift 的 restricted-v2 SCC 下執行。例外是固定的群組 ID：身分服務與 certs 服務的 `fsGroup`（`services.identity.podSecurityContext.fsGroup`、`services.certs.podSecurityContext.fsGroup`）與叢集內 ClickHouse 的 UID／GID，在 OpenShift 都設成 `null` 交給 SCC 指派。
 - 預設只排到 arm64 節點；客戶用 x86 主機時，要先加出 amd64 映像（決策 5）再調整 `serviceDefaults.nodeSelector`（叢集內 Postgres 是 `postgres.bundled.nodeSelector`）。
 - 叢集內的 Postgres 需要 CloudNativePG operator。OpenShift 通常由 OperatorHub 安裝（operator 在 `openshift-operators`），這時把 `postgres.bundled.operator.namespace` 與 `podLabels` 改成它實際的 namespace 與 pod label，NetworkPolicy 才放行它；Postgres pod 的安全設定由 operator 決定。目前沒有 OpenShift 環境可測。
 - chart 需要叢集已裝 Istio ambient 與 Gateway API CRD，並設好 ext_authz provider。k3s 用 `global.platform=k3s`，OpenShift 用 `global.platform=openshift` 或 OpenShift Service Mesh 3，步驟見 `deploy/istio/README.md`。

@@ -20,6 +20,7 @@ trustiot-v2/
 │   ├── protocol/              # 閘道器↔雲端的 MQTT 訊息格式（M4）
 │   ├── service-kit/           # 服務共用骨架：設定、health、SIGTERM、tracing、驗內部身分、SET LOCAL 租戶
 │   ├── identity-keys/         # 內部身分簽章金鑰的格式與輪替規則（叢集內產生，Laysi/trustiot-v2#404）
+│   ├── ca-keys/               # 簽發 CA 金鑰的格式與規則（叢集內產生，離線根 CA 簽發，Laysi/trustiot-v2#78）
 │   ├── outbox/                # 事件框架：同交易寫入、冪等消費、重播
 │   ├── ai-clients/            # 各供應商原生協定的 client：Anthropic Messages、Vertex AI、OpenAI Decisions（決策 15）
 │   ├── testkit/               # 測試用 Modbus 端點與故障注入（M7）、跨租戶負向測試

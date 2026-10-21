@@ -17,6 +17,9 @@ doc = false
 # SCRAM-SHA-256 verifiers for the service roles' passwords, computed here so a plaintext password
 # never appears in an SQL statement.
 base64.workspace = true
+# The certs service's issuing CA keys the certs pod's init container keeps
+# (`migrate certs-ca-keys`, src/ca_keys.rs).
+ca-keys = { path = "../../crates/ca-keys" }
 getrandom.workspace = true
 hmac.workspace = true
 # The internal identity signing keys the identity pod's init container keeps

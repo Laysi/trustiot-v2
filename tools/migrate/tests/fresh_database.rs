@@ -127,10 +127,16 @@ async fn a_fresh_database_gets_every_migration_once() {
         );
     }
     // Only identity_app is bound here: identity's platform role has no Secret in the chart
-    // either, and the assets service is not part of this deployment, so its roles stay NOLOGIN.
+    // either, and the assets and certs services are not part of this deployment, so their roles
+    // stay NOLOGIN.
     assert_eq!(
         report.roles_without_password,
-        ["identity_platform", "assets_app", "assets_platform"]
+        [
+            "identity_platform",
+            "assets_app",
+            "assets_platform",
+            "certs_app"
+        ]
     );
     let first = db.password("identity_app");
     assert_eq!(first.len(), 64, "256 bits as hex digits");

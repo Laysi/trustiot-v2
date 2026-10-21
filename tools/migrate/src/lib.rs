@@ -13,10 +13,14 @@
 //! - [`signing_keys::converge`]: the identity service's init container, which keeps the internal
 //!   identity signing keys in the Secret the chart declares and their public keys in the
 //!   ConfigMap every service reads (Laysi/trustiot-v2#404).
+//! - [`ca_keys::converge`]: the certs service's init container, which keeps the issuing CA keys
+//!   in the Secret the chart declares and their certificate signing requests in a ConfigMap
+//!   (Laysi/trustiot-v2#78).
 //!
 //! Every step is idempotent: a second run on the same databases changes nothing, which
 //! [`Report::changes`] states and the tests check against the catalogs.
 
+pub mod ca_keys;
 pub mod clickhouse;
 pub mod clickhouse_admin;
 pub mod clickhouse_files;
@@ -82,6 +86,8 @@ pub enum Error {
     ConfigMap { config_map: String, problem: String },
     #[error("internal identity signing keys: {0}")]
     SigningKeys(String),
+    #[error("issuing CA keys: {0}")]
+    CaKeys(String),
     #[error("Kubernetes API: {0}")]
     Kube(String),
 }

@@ -282,6 +282,8 @@ migration Job (through the API) may use it. */ -}}
 {{- end -}}
 {{- /* The identity service's signing keys, whether or not the service is enabled. */ -}}
 {{- $names = append $names (include "trustiot.identity.keys" . | fromYaml).secret -}}
+{{- /* The certs service's issuing CA keys, whether or not the service is enabled. */ -}}
+{{- $names = append $names (include "trustiot.certs.ca" . | fromYaml).secret -}}
 {{- if eq .Values.postgres.mode "external" -}}
 {{- with .Values.postgres.external.migrationSecret.name -}}
 {{- $names = append $names . -}}

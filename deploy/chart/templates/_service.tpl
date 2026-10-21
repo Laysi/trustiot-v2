@@ -72,8 +72,8 @@ spec:
 {{/*
 Container env: the chart's variables first (OTEL_SERVICE_NAME, the collector endpoint, SENTRY_DSN,
 the Postgres CA file, login role and password for a service that uses Postgres, the credentials
-the service lists and, for identity, its routes and signing key settings), then serviceDefaults.env
-and services.<name>.env.
+the service lists, for identity, its routes and signing key settings, and for certs, its CA files),
+then serviceDefaults.env and services.<name>.env.
 Custom env cannot take over what the chart controls:
 - names starting with TRUSTIOT_ plus a letter or digit, SENTRY_ or OTEL_ are reserved, so the
   platform settings from the ConfigMap (envFrom loses to env) and the chart's Secrets stay as set;
@@ -163,7 +163,11 @@ outbox consumer reads its producers' events with. */ -}}
 {{- if eq $name "identity" -}}
 {{- $identityEnv = include "trustiot.identity.env" .root | fromYamlArray -}}
 {{- end -}}
-{{- $env = concat $env $dbEnv $credentialEnv $identityEnv ($config.env | default list) -}}
+{{- $certsEnv := list -}}
+{{- if eq $name "certs" -}}
+{{- $certsEnv = include "trustiot.certs.env" .root | fromYamlArray -}}
+{{- end -}}
+{{- $env = concat $env $dbEnv $credentialEnv $identityEnv $certsEnv ($config.env | default list) -}}
 {{- $names := list -}}
 {{- range $env -}}
 {{- $names = append $names .name -}}
@@ -209,6 +213,17 @@ signing keys Secret, which its init container fills with a token that only init 
 {{- $publicKeys := include "trustiot.identity.enabled" .root -}}
 {{- if and $identity $config.automountServiceAccountToken -}}
 {{- fail "services.identity.automountServiceAccountToken must be false: the service reads and signs with the internal identity private key, and a token in its container could write a key of its own into the Secret and the public keys ConfigMap (docs/architecture/secrets.md, 「內部身分簽章金鑰」)" -}}
+{{- end -}}
+{{- /* The gateway certificate authority (_certs.tpl): only the certs service mounts the issuing
+CA keys Secret, which its init container fills with a token that only init containers mount, and
+the CA certificates ConfigMap. */ -}}
+{{- $certs := eq .name "certs" -}}
+{{- $ca := dict -}}
+{{- if $certs -}}
+{{- $ca = include "trustiot.certs.ca" .root | fromYaml -}}
+{{- if $config.automountServiceAccountToken -}}
+{{- fail "services.certs.automountServiceAccountToken must be false: the service signs with the issuing CA private key, and a token in its container could read the keys Secret or write a request of its own into the requests ConfigMap (services/certs/README.md, 「CA 階層與私鑰保管」)" -}}
+{{- end -}}
 {{- end -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -267,11 +282,15 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if or $identity $migrate }}
+      {{- if or $identity $certs $migrate }}
       initContainers:
         {{- if $identity }}
         {{- /* Generates, publishes and rotates the signing keys (_identity.tpl); needs no database. */}}
         - {{ include "trustiot.identity.initContainer" (dict "root" .root "config" $config) | indent 10 | trim }}
+        {{- end }}
+        {{- if $certs }}
+        {{- /* Generates the issuing CA keys and their requests (_certs.tpl); needs no database. */}}
+        - {{ include "trustiot.certs.initContainer" (dict "root" .root "config" $config) | indent 10 | trim }}
         {{- end }}
         {{- if $migrate }}
         {{- /* Holds the pod until the migration Job is complete (_migrate.tpl). */}}
@@ -329,11 +348,19 @@ spec:
               mountPath: {{ include "trustiot.identity.signingKeysDir" .root }}
               readOnly: true
             {{- end }}
+            {{- if $certs }}
+            - name: certs-ca-keys
+              mountPath: {{ include "trustiot.certs.keysDir" .root }}
+              readOnly: true
+            - name: certs-ca-certificates
+              mountPath: {{ include "trustiot.certs.certificatesDir" .root }}
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir:
             sizeLimit: {{ $config.tmpSizeLimit }}
-        {{- if or $identity $migrate }}
+        {{- if or $identity $certs $migrate }}
         - {{ include "trustiot.migrate.kubeApiVolume" .root | indent 10 | trim }}
         {{- end }}
         {{- range $caMounts }}
@@ -374,5 +401,23 @@ spec:
               - key: {{ .root.Values.internalIdentity.signingKeySecret.key }}
                 path: signing-key.pem
         {{- end }}
+        {{- end }}
+        {{- if $certs }}
+        {{- /* The whole ConfigMap and Secret, never subPath, so the kubelet replaces the files when the
+        init container adds a key or an operator sets a certificate; the service reads them again. */}}
+        - name: certs-ca-keys
+          secret:
+            secretName: {{ $ca.secret }}
+            {{- /* 0440: root and the pod's fsGroup (services.certs.podSecurityContext) only. */}}
+            defaultMode: 288
+            {{- /* Optional: the Secret has no key before the init container's first run, and the
+            kubelet adds the file at its next sync. */}}
+            optional: true
+            items:
+              - key: {{ $ca.secretKey }}
+                path: {{ $ca.secretKey }}
+        - name: certs-ca-certificates
+          configMap:
+            name: {{ $ca.certificates }}
         {{- end }}
 {{- end -}}
