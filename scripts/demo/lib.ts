@@ -218,7 +218,8 @@ export class Box {
   }
 }
 
-async function sshRun(cmd: string[], stdin?: string | Uint8Array): Promise<RunResult> {
+/** The SshRunner a Box uses by default: the local ssh, stdin piped in. flux.ts wraps it (hidingSshHost). */
+export async function sshRun(cmd: string[], stdin?: string | Uint8Array): Promise<RunResult> {
   if (stdin === undefined || typeof stdin === "string") {
     return tryRun(cmd, stdin === undefined ? {} : { stdin });
   }
