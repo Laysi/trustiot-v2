@@ -1,9 +1,11 @@
 //! The ingress gateway's cookie check (decision 27): Istio's ext_authz provider
 //! (`deploy/istio/istiod-values.yaml`) calls `<CHECK_PATH_PREFIX><original path>` with the
-//! original method, Host and `Cookie` for every request that needs a session.
+//! original method, Host, `Cookie`, `Origin` and `Sec-Fetch-Site` for every request that needs a
+//! session.
 //!
 //! | Outcome | Response | What the gateway does |
 //! | --- | --- | --- |
+//! | A cross-site request ([`crate::csrf`]), decided before the session is looked up | 403 `permission_denied`, message key `security.cross_site_request` | Returns this response to the client |
 //! | Active session, routed request | 200 with exactly one `x-internal-identity`: a token this service just signed for the route's service | Replaces any client copy of the header with this one and forwards the request |
 //! | No, repeated, malformed, unknown, expired or revoked session cookie | 401 `unauthenticated` | Returns this response to the client |
 //! | Active session, but no cookie route matches the host and path | 403 `permission_denied` | Returns this response to the client |
@@ -12,9 +14,9 @@
 //! A 200 is only ever built from a freshly signed token ([`Decision::Allow`] cannot exist
 //! without one), because the gateway forwards the client's own `x-internal-identity` when an
 //! allow lacks it (docs/feasibility/2026-10-10-edge-poc.md). Nothing in the check request but the
-//! cookie, Host and path is read: an `x-internal-identity` header the client sent, in any
-//! spelling, has no effect. Denials carry no identity header, since the gateway returns them to
-//! the client as they are.
+//! method, the cookie, `Origin`, `Sec-Fetch-Site`, Host and path is read: an
+//! `x-internal-identity` header the client sent, in any spelling, has no effect. Denials carry no
+//! identity header, since the gateway returns them to the client as they are.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,12 +24,13 @@ use std::time::Duration;
 use axum::Router;
 use axum::extract::State;
 use axum::http::header::{CACHE_CONTROL, HOST};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use contract::{ErrorBody, ErrorCode, INTERNAL_IDENTITY_HEADER, InternalToken};
 
 use crate::audience::IngressRoutes;
+use crate::csrf::{CROSS_SITE_REQUEST, cross_site};
 use crate::issuer::Issuer;
 use crate::session::{SessionStore, session_secret};
 
@@ -67,8 +70,12 @@ impl<S: SessionStore> ExtAuthz<S> {
         }
     }
 
-    /// Decides one check request.
-    async fn decide(&self, headers: &HeaderMap, uri: &Uri) -> Decision {
+    /// Decides one check request. A cross-site request is refused first, so it never costs a
+    /// session lookup.
+    async fn decide(&self, method: &Method, headers: &HeaderMap, uri: &Uri) -> Decision {
+        if let Some(header) = cross_site(method, headers) {
+            return Decision::CrossSite(header);
+        }
         let secret = match session_secret(headers) {
             Ok(secret) => secret,
             Err(error) => return Decision::Unauthenticated(error.reason()),
@@ -119,12 +126,18 @@ pub fn routes<S: SessionStore>(ext_authz: ExtAuthz<S>) -> Router {
 
 async fn check<S: SessionStore>(
     State(ext_authz): State<Arc<ExtAuthz<S>>>,
+    method: Method,
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
-    let decision = ext_authz.decide(&headers, &uri).await;
+    let decision = ext_authz.decide(&method, &headers, &uri).await;
     if let Some(reason) = decision.denial_reason() {
-        tracing::info!(reason, "denied the ext_authz check");
+        // The header's name only: Origin is the client's to choose.
+        if let Decision::CrossSite(header) = &decision {
+            tracing::info!(reason, header = *header, "denied the ext_authz check");
+        } else {
+            tracing::info!(reason, "denied the ext_authz check");
+        }
     }
     decision.into_response()
 }
@@ -152,6 +165,8 @@ fn original_path(uri: &Uri) -> &str {
 enum Decision {
     /// The only way to a 200: carries the token the response must hold.
     Allow(InternalToken),
+    /// 403 before the session is looked up: a cross-site request, shown by this header.
+    CrossSite(&'static str),
     /// 401; the reason goes to the log only.
     Unauthenticated(&'static str),
     /// 403: an active session, but no cookie route for the request.
@@ -164,6 +179,7 @@ impl Decision {
     fn denial_reason(&self) -> Option<&'static str> {
         match self {
             Self::Allow(_) | Self::Unavailable => None,
+            Self::CrossSite(_) => Some("cross_site_request"),
             Self::Unauthenticated(reason) => Some(reason),
             Self::NoRoute => Some("no_route"),
         }
@@ -173,10 +189,10 @@ impl Decision {
 impl IntoResponse for Decision {
     fn into_response(self) -> Response {
         let no_store = (CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        let error = |code: ErrorCode| {
-            let body = ErrorBody::new(code);
+        let reply = |body: ErrorBody| {
             (body.http_status(), [no_store.clone()], axum::Json(body)).into_response()
         };
+        let error = |code: ErrorCode| reply(ErrorBody::new(code));
         match self {
             Self::Allow(token) => match HeaderValue::from_str(token.expose()) {
                 Ok(value) => (
@@ -191,6 +207,9 @@ impl IntoResponse for Decision {
                 // without the header.
                 Err(_) => error(ErrorCode::Unavailable),
             },
+            Self::CrossSite(_) => reply(
+                ErrorBody::new(ErrorCode::PermissionDenied).with_message_key(CROSS_SITE_REQUEST),
+            ),
             Self::Unauthenticated(_) => error(ErrorCode::Unauthenticated),
             Self::NoRoute => error(ErrorCode::PermissionDenied),
             Self::Unavailable => error(ErrorCode::Unavailable),
