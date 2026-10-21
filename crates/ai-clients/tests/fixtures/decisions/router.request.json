@@ -1,0 +1,33 @@
+{
+  "model": "gpt-6-luna",
+  "input": [
+    {
+      "role": "user",
+      "content": [
+        { "type": "input_text", "text": "這台冷氣昨天的用電量是多少？" },
+        {
+          "type": "input_image",
+          "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+          "detail": "low"
+        }
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "type": "predicate",
+      "name": "simple",
+      "instructions": "This message can be answered completely without querying data, reading documents, or taking actions."
+    },
+    {
+      "type": "score",
+      "name": "effort",
+      "instructions": "How much reasoning does answering this message need?",
+      "levels": [
+        { "label": "low", "description": "A direct answer or one lookup." },
+        { "label": "medium", "description": "A few lookups and a comparison." },
+        { "label": "high", "description": "Multi-step analysis across sources." }
+      ]
+    }
+  ]
+}
