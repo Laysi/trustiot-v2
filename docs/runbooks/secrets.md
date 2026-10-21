@@ -61,8 +61,8 @@
 GHCR 只接受 classic personal access token。2026-10-21 決定不另建機器帳號：只有展示叢集用這把 token，由一位組織成員建立，只勾 `read:packages`，一年到期（為什麼與外洩範圍見 [deploy/flux/README.md](../../deploy/flux/README.md)「GHCR 拉取 token」）。SaaS 叢集不放個人的 token，拉取憑證等 Laysi/trustiot-v2#502。
 
 1. 由一位組織成員建立新 token（只勾 `read:packages`，到期日一年），在團隊行事曆記下到期前 14 天的提醒；以 README 第 2 步確認 token 只有 `read:packages` 一個 scope。
-2. 重新產生 `deploy/flux/clusters/demo/trustiot/ghcr-pull.sops.yaml`（Secret `ghcr-pull`，namespace `trustiot`），token 只經 stdin：`<輸出 token 的指令> | bun scripts/flux/ghcr-pull-secret.ts --username <GitHub 帳號> --cluster demo`。整份檔案換新，所以不必 `sops edit`；開 PR 合併（「通用步驟：SaaS」的第 4 步）。
-3. 確認 Flux 拉得到：合併後在主機上以 `sudo k3s kubectl -n trustiot annotate --overwrite ocirepository/trustiot reconcile.fluxcd.io/requestedAt="$(date +%s)"` 立刻觸發，再 `sudo k3s kubectl -n trustiot get ocirepository trustiot`，READY 為 True。每次 reconcile 都以這個 Secret 向 GHCR 重新認證，不靠快取。
+2. 重新產生 `deploy/flux/clusters/demo/trustiot/ghcr-pull.sops.yaml`（Secret `ghcr-pull`，namespace `trustiot`），token 只經 stdin：`<輸出 token 的指令> | bun scripts/flux/ghcr-pull-secret.ts --username <GitHub 帳號> --cluster demo`。整份檔案換新，所以不必 `sops edit`；開 PR 合併。這把 token 只在展示叢集，以下第 3、4 步都在展示機上執行（存取方式見[展示環境 runbook](demo-environment.md)），不是 SaaS 主機。
+3. 確認 Flux 拉得到：合併後在展示機上以 `sudo k3s kubectl -n trustiot annotate --overwrite ocirepository/trustiot reconcile.fluxcd.io/requestedAt="$(date +%s)"` 立刻觸發，再 `sudo k3s kubectl -n trustiot get ocirepository trustiot`，READY 為 True。每次 reconcile 都以這個 Secret 向 GHCR 重新認證，不靠快取。
 4. 確認 kubelet 拉得到：節點上已有快取的映像不會重新拉取，所以另起一個 `imagePullPolicy: Always` 的一次性 Pod，強迫 kubelet 以新 token 向 GHCR 認證。把下列內容存成 `ghcr-pull-check.yaml`（填入 Secret 名稱與目前版本的任一個服務映像）：
 
    ```yaml

@@ -124,7 +124,7 @@ Flux 拉 chart（`chart.yaml` 的 `secretRef`）與 kubelet 拉映像（`values-
 
 GHCR 在 Actions 之外只接受 classic personal access token（[Working with the Container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-to-the-container-registry)：「GitHub Packages only supports authentication using a personal access token (classic)」），GitHub App 的 installation token 不在支援之列。GitHub 組織以人頭計費，所以 2026-10-21 決定不另建機器帳號：這把 token 只給展示叢集用，由一位現有的組織成員建立。正式的 SaaS 叢集改用有唯讀機器帳號的 registry（Laysi/trustiot-v2#502），在那之前 SaaS 叢集不放個人的 token。
 
-1. 由一位組織成員建立 classic token，只勾 `read:packages`，到期日一年，在團隊行事曆記下到期前 14 天的提醒。`read:packages` 讀得到這位成員看得到的每一個 private 套件，不限於這個 repo，所以挑看得到的 repo 最少的成員；token 外洩時，這些套件都視為外洩（[密鑰輪替 runbook](../../docs/runbooks/secrets.md)「外洩處理」）。
+1. 由一位組織成員建立 classic token，只勾 `read:packages`，到期日一年。不可使用帶 `repo` 或任何寫入 scope 的 token：它會跟著 SOPS 檔案進叢集，叢集或維運人員的私鑰外洩時，等於這位成員看得到的 repo 都能被讀寫。在團隊行事曆記下到期前 14 天的提醒。`read:packages` 讀得到這位成員看得到的每一個 private 套件，不限於這個 repo，所以挑看得到的 repo 最少的成員；token 外洩時，這些套件都視為外洩（[密鑰輪替 runbook](../../docs/runbooks/secrets.md)「外洩處理」）。
 2. 確認 token 只有 `read:packages` 一個 scope。token 只經 stdin 傳入，不放在指令列；GitHub API 回應標頭的 `X-OAuth-Scopes` 列出 token 的 scope：
 
    ```sh
