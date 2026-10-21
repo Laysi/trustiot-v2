@@ -682,3 +682,48 @@ async fn a_late_answer_of_another_shape_is_not_taken_for_the_next_request() {
     assert_eq!(requests(&endpoint), [(1, 3, 0, 2), (1, 3, 100, 1)]);
     assert_read_only(&endpoint);
 }
+
+/// Pins the limitation documented in the README (section 「限制」): RTU has no transaction
+/// identifier, so a late answer with the same unit, function code and byte count as the request
+/// now waiting is taken as that request's answer. This test shows the risk, not the desired
+/// behaviour: holding 100 reports the value of holding 0. Whoever removes the limitation has to
+/// change this test and the README.
+#[tokio::test(start_paused = true)]
+async fn known_limitation_a_late_answer_of_the_same_shape_is_taken_for_the_next_request() {
+    let _clock = clock::manual();
+    let endpoint = FakeModbus::start(fake::Transport::RtuOverTcp).await;
+    endpoint.set_holding_registers(1, 0, &[100]);
+    endpoint.set_holding_registers(1, 100, &[200]);
+    // The answer to holding 0 comes 1 s after its request timed out, while the request for
+    // holding 100 waits. Both are one register of the same unit, so nothing tells them apart.
+    endpoint.inject(
+        Fault::delay(TIMEOUT + Duration::from_secs(1))
+            .address(0)
+            .once(),
+    );
+    let (device, reader) = one(devices(
+        &endpoint,
+        vec![("meter-1", 1, vec![holding("a", 0), holding("c", 100)])],
+    ));
+    let mut connection = Endpoints::new(DEFAULT_CONNECT_TIMEOUT).connection(&device);
+    let clock = TestClock::new();
+    let (poll, ()) = bounded("a poll and the clock", async {
+        tokio::join!(reader.poll(&mut connection, &clock, TIMEOUT), async {
+            endpoint.wait_for_requests(1).await;
+            advance(TIMEOUT).await;
+            endpoint.wait_for_requests(2).await;
+            advance(Duration::from_secs(1)).await;
+        })
+    })
+    .await;
+    assert_eq!(failures(&poll), timed_out(&["a"]));
+    assert_eq!(
+        values(&poll, "meter-1"),
+        ints(&[("c", 100)]),
+        "the late answer of holding 0 is taken for holding 100 (200 is its real value)"
+    );
+    assert_eq!(poll.requests[1].failure, None);
+    assert_eq!(poll.requests[1].unit_mismatches, 0);
+    assert_eq!(requests(&endpoint), [(1, 3, 0, 1), (1, 3, 100, 1)]);
+    assert_read_only(&endpoint);
+}

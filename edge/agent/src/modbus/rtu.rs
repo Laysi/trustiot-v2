@@ -143,9 +143,9 @@ impl Waiting {
     }
 
     /// Why the request got no answer by its deadline. A frame from the unit that did not fit, or
-    /// bytes that never formed a frame, say more than silence does: a converter whose serial
-    /// settings (baud rate, parity) differ from the devices' produces bytes that never form a
-    /// frame.
+    /// bytes that never formed a frame, say more than silence does. The detail states what
+    /// arrived and lists possible causes without naming one: serial settings (baud rate, parity)
+    /// that differ between the converter and the device, or noise on the bus.
     pub(super) fn timed_out(&self) -> ReadError {
         match (&self.unfit, self.noise) {
             (Some(detail), _) => ReadError::Malformed(format!(
@@ -154,7 +154,7 @@ impl Waiting {
             )),
             (None, 0) => ReadError::Timeout,
             (None, noise) => ReadError::Malformed(format!(
-                "{noise} bytes that form no RTU frame arrived, and no answer; check the converter's serial settings"
+                "{noise} bytes that form no RTU frame arrived, and no answer; possible causes: serial settings (baud rate, parity) that differ between the converter and the device, or noise on the bus"
             )),
         }
     }
@@ -515,7 +515,8 @@ mod tests {
         assert_eq!(buffer, [0x13], "a single byte may still start a frame");
         assert!(
             matches!(&noisy.timed_out(), ReadError::Malformed(detail)
-                if detail.starts_with("3 bytes") && detail.contains("serial settings")),
+                if detail.starts_with("3 bytes that form no RTU frame arrived, and no answer")
+                    && detail.contains("possible causes")),
             "{:?}",
             noisy.timed_out()
         );

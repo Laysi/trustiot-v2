@@ -81,8 +81,8 @@ pub enum ReadError {
     /// identifier, a frame of the unit that does not fit cannot be told from a late answer to
     /// an earlier request, so it is skipped and the request keeps waiting; when no answer comes
     /// by the deadline, the request ends with this instead of [`Self::Timeout`], and so does one
-    /// that received only bytes that form no RTU frame (a converter whose serial settings
-    /// differ from the devices').
+    /// that received only bytes that form no RTU frame (the detail lists possible causes, such
+    /// as serial settings that differ between the converter and the device, or noise on the bus).
     Malformed(String),
     /// The connection failed while the request was under way: the device closed or reset it,
     /// or sending failed. It is closed, and the next request opens a new one.

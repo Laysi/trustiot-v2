@@ -308,7 +308,8 @@ async fn what_arrives_instead_of_an_answer_decides_the_failure() {
     let noise = &results[0].result;
     assert!(
         matches!(noise, Err(ReadError::Malformed(detail))
-            if detail.contains("form no RTU frame") && detail.contains("serial settings")),
+            if detail.contains("form no RTU frame arrived, and no answer")
+                && detail.contains("possible causes")),
         "{noise:?}"
     );
     let unfit = &results[1].result;
