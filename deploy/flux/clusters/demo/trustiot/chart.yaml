@@ -12,9 +12,9 @@ spec:
   interval: 10m
   url: oci://ghcr.io/laysi/trustiot-v2/charts/trustiot
   ref:
-    tag: 0.0.0-rc.7
+    tag: 0.0.0-rc.10
     # Takes precedence over the tag: the exact chart that release.yml pushed and signed.
-    digest: sha256:d212ccf0120ef41037d2fc2de5465e6df0f48bcb040c6b9511dd7b00be70fa73
+    digest: sha256:f18f3fe0cabc24b928168c3d553b73632b7cb23855572689aba1d2aaa8a89e68
   layerSelector:
     mediaType: application/vnd.cncf.helm.chart.content.v1.tar+gzip
     operation: copy
@@ -26,4 +26,4 @@ spec:
     provider: cosign
     matchOIDCIdentity:
       - issuer: '^https://token\.actions\.githubusercontent\.com$'
-        subject: '^https://github\.com/Laysi/trustiot-v2/\.github/workflows/release\.yml@refs/tags/v0\.0\.0-rc\.7$'
+        subject: '^https://github\.com/Laysi/trustiot-v2/\.github/workflows/release\.yml@refs/tags/v0\.0\.0-rc\.10$'

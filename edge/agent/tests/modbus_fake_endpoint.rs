@@ -88,6 +88,7 @@ fn reader(endpoint: &FakeModbus, device: &str, unit: u8, points: Vec<DataPoint>)
 
 fn connection(endpoint: &FakeModbus) -> TcpConnection {
     TcpConnection::new(
+        Transport::ModbusTcp,
         "127.0.0.1",
         endpoint.address().port(),
         DEFAULT_CONNECT_TIMEOUT,
