@@ -234,6 +234,8 @@ Laysi/trustiot-v2#164 補上。原則：閘道器的 updater 內建公鑰，所�
 3. 立刻同步並確認：`sudo k3s kubectl -n flux-system annotate --overwrite gitrepository/flux-system reconcile.fluxcd.io/requestedAt="$(date +%s)"`，再 `sudo k3s kubectl -n flux-system get gitrepository flux-system` 的 READY 為 True。
 4. 在 GitHub 刪除舊的 deploy key。
 
+以上是 SaaS 叢集。展示叢集的 deploy key 由 `scripts/demo/flux.ts deploy-key` 在展示機上產生、不離開展示機，它不取代已經存在的 Secret，換新的步驟見 [deploy/flux/README.md](../../deploy/flux/README.md)「在展示機安裝 Flux」。
+
 外洩時先在 GitHub 刪除該 deploy key（同步會停止，正在跑的服務不受影響），再依上面的步驟換新的。它是唯讀的，外洩的影響是 repo 內容被讀取：依「外洩處理」檢查範圍。
 
 ### 維運人員加入與離開

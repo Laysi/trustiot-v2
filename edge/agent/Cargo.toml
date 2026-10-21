@@ -1,6 +1,6 @@
 [package]
 name = "agent"
-description = "The TrustIoT gateway agent (decision 10). So far its Modbus reading (rebuild checklist F1, F5): merged reads, a Modbus TCP client for the read function codes 1-4, decoding, and scaling."
+description = "The TrustIoT gateway agent (decision 10). So far its Modbus reading (rebuild checklist F1, F2, F5): merged reads, a Modbus TCP and RTU-over-TCP client for the read function codes 1-4 with one shared connection per endpoint, decoding, and scaling."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,7 +11,7 @@ repository.workspace = true
 # without a C toolchain (ci.yml builds every edge/ member for that target).
 [dependencies]
 protocol = { path = "../../crates/protocol" }
-tokio = { workspace = true, features = ["io-util", "net", "time"] }
+tokio = { workspace = true, features = ["io-util", "net", "sync", "time"] }
 
 [dev-dependencies]
 # The fake Modbus endpoint with fault injection (`testkit::modbus`) and the paused clock.
