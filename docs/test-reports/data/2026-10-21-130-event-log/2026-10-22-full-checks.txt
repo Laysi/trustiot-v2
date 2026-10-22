@@ -1,4 +1,4 @@
-# 2026-10-22: the full check round on the build host (CI=1), tree of 0fd4699 plus the fixes committed as 4a939b8
+# 2026-10-22: the full check round on the build host (CI=1), tree of cb92b41 plus the fixes committed as 16eeaed
 # Filtered output: each step's exit code, every cargo 'test result' line, and the bun summaries.
 === fmt
 === fmt EXIT=0
