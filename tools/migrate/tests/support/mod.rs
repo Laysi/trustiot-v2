@@ -48,7 +48,7 @@ pub const MIGRATOR: &str = "trustiot_owner";
 
 /// The ClickHouse image of services/ingest/tests (the chart and the dev environment pin the same
 /// digest; `bun test deploy/chart` checks all of them agree).
-pub const CLICKHOUSE_IMAGE: &str = "docker.io/clickhouse/clickhouse-server:26.8@sha256:110d3d1f8e1ed7e451a6b5d85a16761e948ad43bc2d9ddf10b155964a8b2b40c";
+pub const CLICKHOUSE_IMAGE: &str = "docker.io/clickhouse/clickhouse-server:26.8@sha256:8b28eb09479c36c4533eec7a6268917d04ba3a6fd90e3f4205f70e761b6d7779";
 pub const CLICKHOUSE_ADMIN: &str = "trustiot_admin";
 
 /// Generous bounds for a loaded machine; each names what it waits for when it fails.
