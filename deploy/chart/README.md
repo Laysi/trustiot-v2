@@ -81,7 +81,9 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 
 `services` 的 key 與 docs/architecture/deployment.md 的服務表一致（測試比對），物件名稱是 `<release>-<key>`；release 名稱不含 `trustiot` 時是 `<release>-trustiot-<key>`；超過 63 個字元時縮短前段、保留 `-<key>`，不同服務不會撞名。每個服務產生一個 ServiceAccount、一個 ClusterIP Service 與一個 Deployment。
 
-`identity`、`assets`、`certs`、`ingest`、`telemetry-query`、`gateway-ops`、`mqtt-bridge`、`assistant`、`ai-gateway`、`alerts`、`field-context`、`knowledge`
+`web`、`identity`、`assets`、`certs`、`ingest`、`telemetry-query`、`gateway-ops`、`mqtt-bridge`、`assistant`、`ai-gateway`、`alerts`、`field-context`、`knowledge`
+
+`web` 提供 SPA 的靜態檔（決策 2，Laysi/trustiot-v2#123）：開啟後 `hosts.app` 上 `/api`、`/auth` 以外的路徑都由它回應，不經 cookie 檢查，也拿不到 cookie 與身分標頭；不能有 cookie 路由（見「入口 gateway」的「SPA 的靜態檔」）。
 
 ## values 欄位
 
@@ -117,14 +119,14 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 
 ### 入口 gateway
 
-決策 27 的入口：Istio 實作 Gateway API，每個請求都先以 AuthorizationPolicy 的 CUSTOM 動作把 cookie 交給身分服務（ext_authz），只有例外路徑免驗證。chart 產生下列物件，名稱前綴同服務（`<release>-ingress…`）：
+決策 27 的入口：Istio 實作 Gateway API，每個請求都先以 AuthorizationPolicy 的 CUSTOM 動作把 cookie 交給身分服務（ext_authz），只有例外路徑免驗證；`services.web` 開啟時，`hosts.app` 上 SPA 的靜態檔也免驗證（見下方「SPA 的靜態檔」）。chart 產生下列物件，名稱前綴同服務（`<release>-ingress…`）：
 
 | 物件 | 內容 |
 | --- | --- |
 | Gateway `<release>-ingress` | `gatewayClassName: istio`；`tunnel` 只有 80 的 HTTP listener，`direct` 只有 443 的 HTTPS listener（`tls.mode: Terminate`）；只接受同一個 namespace 的路由。Istio 依它建立 Deployment、Service 與 ServiceAccount `<release>-ingress-istio` |
 | ConfigMap `<release>-ingress-options` | 經 `infrastructure.parametersRef` 交給 Istio：副本數、資源、Pod 的 `seccompProfile: RuntimeDefault`（符合 restricted）、Service 類型（`tunnel` 設了 `ingress.tunnel.clusterIP` 時再加上固定的 ClusterIP）與 PodDisruptionBudget |
-| HTTPRoute `<release>-ingress-app`、`-gateway`、`-ota` | 每個主機一個，只有有規則時才產生。每條規則都把 `x-forwarded-proto` 設為 `https`（cloudflared 到入口是明文 HTTP，後端判斷 Secure cookie 與重導向網址要靠它）；每條規則都移除底線寫法的 `x_internal_identity`、`x-internal_identity`、`x_internal-identity`，例外路徑另外移除 `x-internal-identity` |
-| AuthorizationPolicy `<release>-ingress-cookie-check` | CUSTOM，provider 為 `ingress.authzProvider`。第一條規則檢查例外路徑以外的所有路徑；每個例外路徑再一條規則，在它以外的主機照樣檢查，例外不會漏到別的主機；它自己的主機帶不帶埠號都算（`notHosts` 列 `<主機>` 與 `<主機>:*`）。沒有任何例外路徑時檢查所有請求 |
+| HTTPRoute `<release>-ingress-app`、`-gateway`、`-ota` | 每個主機一個，只有有規則時才產生。每條規則都把 `x-forwarded-proto` 設為 `https`（cloudflared 到入口是明文 HTTP，後端判斷 Secure cookie 與重導向網址要靠它）；每條規則都移除底線寫法的 `x_internal_identity`、`x-internal_identity`、`x_internal-identity`，例外路徑另外移除 `x-internal-identity`，SPA 的靜態檔再移除 `cookie` |
+| AuthorizationPolicy `<release>-ingress-cookie-check` | CUSTOM，provider 為 `ingress.authzProvider`。第一條規則檢查例外路徑以外的所有路徑；每個例外路徑再一條規則，在它以外的主機照樣檢查，例外不會漏到別的主機；它自己的主機帶不帶埠號都算（`notHosts` 列 `<主機>` 與 `<主機>:*`）。沒有任何例外路徑時檢查所有請求。`services.web` 開啟時改成：第一條規則在 `hosts.app` 以外的主機檢查例外路徑以外的所有路徑，第二條在每個主機（包括 `hosts.app`）檢查 `/api`、`/auth`、它們底下的路徑與 `/internal*`（例外路徑除外），其餘同上；不在 `/api`、`/auth` 底下的例外路徑在 `hosts.app` 也不檢查，那裡由靜態檔回應 |
 | AuthorizationPolicy `<release>-ingress-deny-internal` | DENY `/internal*`：服務之間的內部 API 不能從外面進來，即使有 `/` 這種全包的路由。CUSTOM 先執行，所以沒有 cookie 回 401、有 cookie 回 403。`//internal`、`/%2finternal` 這類寫法要靠 mesh 的路徑正規化先整理成 `/internal` 才比對得到，見下方「依賴 mesh 的路徑正規化」 |
 | NetworkPolicy `<release>-ingress` | `tunnel`：只放行 `ingress.tunnel.allowedSources` 連 80（cloudflared）與 15021（kubelet 的探針），叢集內其他 pod 連不到入口；`direct`：只開 443 與 15021。兩種都不開 Envoy 的指標埠（15020、15090），見下方「入口 pod 的埠」 |
 
@@ -157,13 +159,21 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 - 例外路徑沒有 ext_authz 覆寫身分標頭，所以路由移除用戶端帶來的 `x-internal-identity`；需要 cookie 的路徑不能移除，因為路由的標頭規則在 ext_authz 之後執行，會把身分服務給的值一起移除。
 - 例外只在它自己的主機成立，`Host` 帶不帶埠號都一樣（見下方「`Host` 帶埠號」）。
 
+SPA 的靜態檔（`services.web`，Laysi/trustiot-v2#123，決定於 2026-10-21）：SPA 與 API 同源（決策 2），開啟 `services.web` 時 `hosts.app` 多一條 `PathPrefix /` 的公開路由到 `web`，深連結與靜態檔都不需要 cookie。規則：
+
+- 需要 cookie 的前綴固定為 `/api` 與 `/auth`（`templates/_ingress.tpl` 的 `trustiot.ingress.cookiePrefixes`，不開放 values 修改）。`hosts.app` 上前綴本身、它們底下的路徑與 `/internal*` 照樣經 cookie 檢查；其他路徑（包括 `/apix`、`/API/x` 這類大小寫或邊界的變形，Gateway API 與 Istio 都區分大小寫、以路徑段為界）由靜態檔回應。`/api`、`/auth` 底下沒有 cookie 路由的請求會落到靜態檔的路由，但經過 cookie 檢查：身分服務找不到對應的 cookie 路由，回 401 或 403，不會到 `web`。
+- 靜態檔的路由移除 `cookie`、`x-internal-identity` 與它的底線寫法：`web` 拿不到 session cookie，也拿不到身分。
+- `hosts.app` 的 cookie 路由必須是 `/api`、`/auth` 或在它們底下，否則渲染失敗（包括 `/` 這種全包路由）；`web` 不能有 cookie 路由；`hosts.gateway`、`hosts.ota` 與 `hosts.app` 同名時渲染失敗，否則 `hosts.app` 的豁免會蓋到它們的路由。
+- `services.web` 關閉（預設）時，渲染結果與加入這個功能之前逐位元組相同。
+- 跨站請求（CSRF）由身分服務在 cookie 檢查時擋下：入口把 `Origin` 與 `Sec-Fetch-Site` 交給身分服務（`deploy/istio/istiod-values.yaml` 的 `includeRequestHeadersInCheck`），規則見 `services/identity/README.md`。
+
 依賴 mesh 的路徑正規化（Laysi/trustiot-v2#255）：上面的路徑規則與 `/internal*` 的 DENY 都假設 istiod 設了 `meshConfig.pathNormalization.normalization: DECODE_AND_MERGE_SLASHES`（`deploy/istio/istiod-values.yaml`）。沒有它時，帶有效 cookie 的 `//internal/tenants` 或 `/%2finternal/tenants` 比對不到 DENY，會落到全包路由。chart 無法檢查叢集的 mesh 設定，所以每個叢集都要依 `deploy/istio/README.md` 安裝；`tests/e2e/ingress.e2e.ts` 的回歸案例在少了這個設定時會失敗。設定的影響（`%2F` 一律解碼、路徑參數不能夾帶 `/`）見該 README 的「路徑正規化」。
 
 底線寫法的身分標頭（Laysi/trustiot-v2#255，決定於 2026-10-11）：Envoy 預設照轉名稱帶底線的標頭，`x_internal_identity` 對它是另一個標頭；但 CGI／WSGI 風格的伺服器把 `-` 與 `_` 視為相同（都變成 `HTTP_X_INTERNAL_IDENTITY`），偽造值可能被當成內部身分。每條路由（例外路徑與需要 cookie 的路徑）都移除 `x-internal-identity` 的三種底線寫法。不採用「拒絕所有帶底線的標頭」：Istio 沒有對應的設定，要用 EnvoyFilter（Istio 不保證跨版本相容，而且同樣是 mesh 層級），也可能擋掉閘道器或第三方客戶端合法的標頭；需要信任的標頭只有 `x-internal-identity` 一個（決策 27），移除它的變形就夠。服務仍然只讀 `x-internal-identity` 並驗簽（`crates/service-kit`）。
 
 `Host` 帶埠號（Laysi/trustiot-v2#255，決定於 2026-10-11）：入口**接受** `Host` 帶埠號，例如閘道器送 `Host: gw.example.com:443`。Istio 的路由本來就把 `<主機>` 與 `<主機>:<任何埠>` 視為同一個主機，但例外的授權規則原本只列主機名稱，帶埠號時例外不成立，憑證換發與 MQTT 會回 401。現在例外規則同時列 `<主機>` 與 `<主機>:*`，與路由的比對方式一致：例外只在它自己的主機成立，`app` 主機帶埠號照樣要 cookie。閘道器韌體不必為此特別處理 `Host`；WebSocket 函式庫或客戶網路的代理放進埠號（預設的 443 或其他埠）都可以。Cloudflare Tunnel 轉發的 `Host` 沒有埠號，SaaS 原本就不受影響。這也是 Laysi/trustiot-v2#77（真身分服務與閘道器的端到端驗證）要沿用的約定。2026-10-15 由 Laysi/trustiot-v2#77 確認：入口把客戶端的 `Host` 原樣（帶埠號也一樣）交給 cookie 檢查（`tests/e2e/ingress.e2e.ts` 以替身觀察），真的身分服務去掉埠號找路由、資產服務照常回應（nightly 的 API 檢查，`scripts/nightly/api.ts`）。
 
-需要 cookie 的路由（`ingress.routes`）：`host` 是 `app`、`gateway` 或 `ota`；`path` 是 `/` 或與例外路徑同樣格式的路徑，不能在 `/internal` 底下；`match` 是 `PathPrefix` 或 `Exact`；`service` 必須是已啟用的服務，`port` 是它的埠名（預設 `http`）。同一個主機不能有兩條相同路徑，也不能與例外路徑相同。例如資產服務的 API：
+需要 cookie 的路由（`ingress.routes`）：`host` 是 `app`、`gateway` 或 `ota`；`path` 是 `/` 或與例外路徑同樣格式的路徑，不能在 `/internal` 底下；`match` 是 `PathPrefix` 或 `Exact`；`service` 必須是已啟用的服務，`port` 是它的埠名（預設 `http`）。同一個主機不能有兩條相同路徑，也不能與例外路徑相同。`services.web` 開啟時，`hosts.app` 的路由只能是 `/api`、`/auth` 或在它們底下。例如資產服務的 API：
 
 ```yaml
 ingress:
@@ -171,12 +181,13 @@ ingress:
     - {host: app, path: /api/assets, match: PathPrefix, service: assets}
 ```
 
-與身分服務的約定（Laysi/trustiot-v2#61 實作，細節見 `services/identity/README.md`）：入口以 `<pathPrefix><原始路徑>` 呼叫身分服務，`pathPrefix` 是 `/internal/ext-authz`，只帶 `cookie`（另有 Host、方法、路徑與 Authorization）。
+與身分服務的約定（Laysi/trustiot-v2#61 實作，細節見 `services/identity/README.md`）：入口以 `<pathPrefix><原始路徑>` 呼叫身分服務，`pathPrefix` 是 `/internal/ext-authz`，只帶 `cookie`、`origin` 與 `sec-fetch-site`（另有 Host、方法、路徑與 Authorization）。
 
 | 身分服務的回應 | 情況 | 入口 |
 | --- | --- | --- |
 | 200，剛好一個 `x-internal-identity` | session 有效，且原始請求的主機與路徑對得到 `ingress.routes` 的一條路由 | 以這個值覆寫用戶端帶來的同名標頭，轉給後端 |
 | 401 `unauthenticated` | 沒有 session cookie、cookie 重複或格式不對、session 不存在、過期或已撤銷 | 原樣交給用戶端 |
+| 403 `permission_denied`（`message_key` 為 `security.cross_site_request`） | 跨站請求：`Sec-Fetch-Site` 或 `Origin` 顯示請求不是來自同一個來源（Laysi/trustiot-v2#123）；在查 session 之前判斷 | 原樣交給用戶端 |
 | 403 `permission_denied` | session 有效，但身分服務的路由表對不到這個請求（正常情況下不會發生：入口沒有路由的請求不會呼叫身分服務） | 原樣交給用戶端 |
 | 503 `unavailable` | 資料庫失敗，或 0.4 秒內查不完 | 把 5xx 當成錯誤，回自己的 503（`statusOnError`） |
 
@@ -184,7 +195,7 @@ ingress:
 
 服務的 pod 帶 `istio.io/dataplane-mode: ambient` 加入 ambient mesh，入口到服務、服務之間由 ztunnel 加 mTLS；`podLabels` 不能改這個 label。服務之間的授權見下一節。
 
-叢集上的 e2e 測試（cookie、例外路徑、標頭與其底線寫法、`Host` 帶埠號、cookie 檢查拿到的 `Host` 與正規化後的路徑、28 種路徑繞過、`/internal` 的 11 種斜線寫法、身分服務停機）在 `tests/e2e/`，用法見該目錄的 README。路由清單的證明（每條路由上每個會到後端的請求都經過 cookie 檢查，只有決策 27 的例外、只在它自己的主機不經過；身分服務停機時入口因此拒絕其餘一切）在 `tests/chart.test.ts` 的「route list」，以 `tests/ingress-authz.ts` 照 gateway 的語意評估渲染結果（Laysi/trustiot-v2#77，對照見 `docs/roadmap/ms0-acceptance.md`）。
+叢集上的 e2e 測試（cookie、例外路徑、標頭與其底線寫法、`Host` 帶埠號、cookie 檢查拿到的 `Host` 與正規化後的路徑、28 種路徑繞過、`/internal` 的 11 種斜線寫法、身分服務停機）在 `tests/e2e/`，用法見該目錄的 README。路由清單的證明（每條路由上每個會到後端的請求都經過 cookie 檢查，只有決策 27 的例外、只在它自己的主機不經過；身分服務停機時入口因此拒絕其餘一切）在 `tests/chart.test.ts` 的「route list」，以 `tests/ingress-authz.ts` 照 gateway 的語意評估渲染結果（Laysi/trustiot-v2#77，對照見 `docs/roadmap/ms0-acceptance.md`）。`services.web` 開啟的組合也在其中：SPA 的靜態檔是 `hosts.app` 上 cookie 前綴以外的例外，證明另外取樣前綴兩側的邊界（`/api`、`/api/`、`/apix`、`/API/x`），DENY 拒絕的 `/internal` 不算，經過檢查但沒有 cookie 路由的請求視為被身分服務拒絕（身分服務拿到的路由與渲染出的 cookie 路由一致，同一個測試檢查）（Laysi/trustiot-v2#123）。
 
 ### 服務間授權（mesh）
 
@@ -658,7 +669,7 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 
 - **新增服務**：在 `values.yaml` 的 `services` 加一個 key，並同步 docs/architecture/deployment.md 的服務表（測試比對兩邊）。服務特有的埠、資源、探針與 Secret 寫在該 key 底下。
 - **服務之間的呼叫**：服務要呼叫另一個服務的內部 API 時，在服務的 issue 把這條呼叫加進 `values.yaml` 的 `mesh.calls`；沒列的呼叫會被重置。服務間授權的規則集中在 `templates/_mesh.tpl` 的 `trustiot.mesh.plan`，AuthorizationPolicy 與 NetworkPolicy 都由它產生，不要為單一服務另外寫政策。
-- **對外的路由**：服務要經入口對外時，在服務的 issue 把路由加進 `values.yaml` 的 `ingress.routes`（預設需要 cookie）。不要新增例外路徑：決策 27 只允許登入、閘道器憑證換發、MQTT 轉接與健康檢查四種，要加第五種必須先改決策。身分服務以同一份路由決定 token 的受眾（`TRUSTIOT_INGRESS_ROUTES`），所以路由的後端就是收 token 的服務；`ai-gateway` 不驗證內部身分（決策 28），不能有 cookie 路由。入口的規則集中在 `templates/_ingress.tpl` 的 `trustiot.ingress.plan`；可信的來源 IP 沿用 `trustiot.clientIpSource`，不要另外加欄位。
+- **對外的路由**：服務要經入口對外時，在服務的 issue 把路由加進 `values.yaml` 的 `ingress.routes`（預設需要 cookie）。不要新增例外路徑：決策 27 只允許登入、閘道器憑證換發、MQTT 轉接與健康檢查四種，加上 `services.web` 開啟時 `hosts.app` 上 SPA 的靜態檔，要再加必須先改決策。`hosts.app` 的 API 路由放在 `/api` 底下：`services.web` 開啟時其他路徑都是 SPA 的。身分服務以同一份路由決定 token 的受眾（`TRUSTIOT_INGRESS_ROUTES`），所以路由的後端就是收 token 的服務；`ai-gateway` 不驗證內部身分（決策 28），不能有 cookie 路由。入口的規則集中在 `templates/_ingress.tpl` 的 `trustiot.ingress.plan`；可信的來源 IP 沿用 `trustiot.clientIpSource`，不要另外加欄位。
 - **新增叢集內元件**（broker、Postgres、ClickHouse、Qdrant、collector、Grafana）：放在自己的 `templates/<元件>.yaml`，以 `*.mode` 或開關控制；Service 只能是 ClusterIP；namespace 預設拒絕所有連入：元件在 mesh 內時（pod 帶 `istio.io/dataplane-mode: ambient`）把它加進 `templates/_mesh.tpl` 的 `trustiot.mesh.components`、用戶端列進 `mesh.calls`，並定義 `trustiot.<元件>.pod`（container ports 與探針，元件的模板也從它渲染，NetworkPolicy 依它只對節點來源開探針埠），AuthorizationPolicy 與 NetworkPolicy 由 chart 產生；不在 mesh 內時（例如叢集內的 Postgres）自帶 NetworkPolicy，只對實際的用戶端開它的埠，並讓 kubelet 的健康檢查到得了；用戶端以 `mesh.calls` 宣告時，把名稱加進 `templates/_mesh.tpl` 的 `trustiot.mesh.directCallees`；在 `values.schema.json` 加欄位定義、在本文件加欄位說明（測試檢查 `values.yaml` 每個欄位都在本文件），並更新「元件與開關」與平台設定的表。
 - **Secret**：values 只能出現 `{name, key}` 形式的引用（測試掃描兩份 values、`values.yaml` 與 `tests/values/` 的每個欄位：名稱像密鑰的欄位只能是 `*Secret` 底下的 `name`、`key` 或 `*Key`，任何值都不能像私鑰、token 或帶帳密的 URL；並確認渲染結果沒有 Secret、只以名稱與 key 讀 Secret）；schema 的 `additionalProperties: false` 會擋下放明文的新欄位。服務要拿新的依賴帳密時，在 `_helpers.tpl` 的 `trustiot.credentialCatalog` 加一列（變數名稱、Secret、可以拿的服務）、在 schema 的 `credentials` 列舉加上名稱，並更新「密鑰的環境變數」表；自訂 `env` 自動不能讀這個帳密。叢集內元件自己產生的 Secret（例如 CloudNativePG 的 CA、伺服器私鑰與資料庫帳號）整個加進 `trustiot.dependencySecretNames`，自訂 `env` 就讀不到它的任何 key。新的平台變數用 `TRUSTIOT_` 開頭，自動受保留規則保護。
 - **測試**：規則寫進 `tests/chart.test.ts`。`tests/values/` 的兩個安裝實例範例與 `smoke.yaml`（以 traefik/whoami 當替身服務）也供 nightly（Laysi/trustiot-v2#69）在叢集上安裝使用；叢集測試是 `tests/e2e/ingress.e2e.ts`（入口）、`tests/e2e/mesh.e2e.ts`（服務間授權）、`tests/e2e/otel.e2e.ts`（日誌管線）、`tests/e2e/postgres.e2e.ts`（叢集內的 Postgres）、`tests/e2e/postgres-replication.e2e.ts`（收回 `postgres` 與 `template1` 的權限之後，叢集內 Postgres 的複寫、switchover、經 Barman Cloud plugin 的備份與還原）與 `tests/e2e/clickhouse-admin.e2e.ts`（ClickHouse 管理帳號密碼的產生、輪替、rollback 與從人建立的 Secret 搬移），前兩個共用 `tests/e2e/cluster.ts`，nightly 可直接沿用。`bun test` 的 kubeconform 已帶 CRD schema 目錄，Gateway API、Istio 與 CloudNativePG 的資源可以直接驗證。兩個實例範例會部署叢集內的 Postgres 與 ClickHouse（`bundled`）與 collector，在叢集上安裝前要先裝好 CloudNativePG operator（見「叢集內的 Postgres」），ClickHouse 的管理帳號密碼在叢集內產生，不必事先建立 Secret；`smoke.yaml` 改用 nightly 自己建置的 Postgres 映像。入口與日誌管線的叢集測試用 `tests/e2e/values-e2e.yaml`、`values-otel-e2e.yaml` 把 Postgres 改成 `external`（沒有服務列出 `postgres`，所以不需要 CA），不部署 Postgres；入口測試的 ClickHouse 也改成 `external`，並關掉 collector。`tests/` 不會打包進 chart（`.helmignore`）。

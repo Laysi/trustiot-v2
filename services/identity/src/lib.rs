@@ -13,6 +13,7 @@
 //!   format `crates/service-kit` verifies.
 //! - [`audience`]: which service a request goes to, from the chart's cookie routes.
 //! - [`ext_authz`]: the check endpoint.
+//! - [`csrf`]: the check's refusal of cross-site requests, before the session is looked up.
 //! - [`tenants`]: creating tenants, and the event that announces them.
 //! - [`schema`]: the migration files this release expects, which readiness checks
 //!   (Laysi/trustiot-v2#402) and the migration Job applies.
@@ -23,6 +24,7 @@
 
 pub mod audience;
 pub mod config;
+pub mod csrf;
 pub mod ext_authz;
 pub mod issuer;
 pub mod schema;

@@ -99,6 +99,28 @@ segments, empty segments, trailing slash, percent-encoding, ';' or wildcards.
 {{- end -}}
 
 {{/*
+The paths of hosts.app that keep the cookie check while services.web serves the SPA's static
+files there (decision 27): each prefix itself and everything below it. The SPA calls the API
+under /api and the login flow lives under /auth, so they are fixed here rather than in the
+values (Laysi/trustiot-v2#123).
+Returns a YAML list; use with fromYamlArray.
+*/}}
+{{- define "trustiot.ingress.cookiePrefixes" -}}
+{{- list "/api" "/auth" | toYaml -}}
+{{- end -}}
+
+{{/*
+Whether a path is one of the cookie prefixes or below one, at a segment boundary.
+Argument: the path. Returns "true" or "".
+*/}}
+{{- define "trustiot.ingress.underCookiePrefix" -}}
+{{- $path := . -}}
+{{- range include "trustiot.ingress.cookiePrefixes" . | fromYamlArray -}}
+{{- if or (eq $path .) (hasPrefix (printf "%s/" .) $path) -}}true{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Backend of a route: the Service name and port number of an enabled service.
 Argument: dict "root" $ "service" <key under services> "port" <port name> "where" <for errors>.
 Returns YAML {name, port}; use with fromYaml.
@@ -129,7 +151,11 @@ strip, so all the safety rules live here:
   exemption never falls through to another route;
 - cookie routes come from ingress.routes and must point at an enabled service other than
   ai-gateway, which cannot verify the internal identity the cookie check adds;
-- nothing is routed under /internal, and a host never has the same path twice.
+- nothing is routed under /internal, and a host never has the same path twice;
+- while services.web is enabled, the SPA's static files are one more public entry, every path on
+  hosts.app (PathPrefix /, key spa, static true); cookie routes on hosts.app must then be under
+  the cookie prefixes, and hosts.gateway and hosts.ota must be other names, so the exemption
+  never covers one of their routes.
 Returns YAML {public: [...], routes: [...]}; each item has host, hostname, path, match, service
 (the key under services), backend and, for public paths, key. Use with fromYaml.
 */}}
@@ -164,6 +190,17 @@ Returns YAML {public: [...], routes: [...]}; each item has host, hostname, path,
 {{- $public = append $public (dict "key" .key "host" .host "hostname" (get $hostnames .host) "path" $path "match" "Exact" "service" .service "backend" $backend) -}}
 {{- end -}}
 {{- end -}}
+{{- $web := get $v.services "web" -}}
+{{- $static := and $web $web.enabled -}}
+{{- if $static -}}
+{{- range $host := list "gateway" "ota" -}}
+{{- if eq (get $hostnames $host) $v.hosts.app -}}
+{{- fail (printf "hosts.%s: must differ from hosts.app while services.web is enabled, because every path on hosts.app outside %s skips the cookie check" $host (include "trustiot.ingress.cookiePrefixes" $ | fromYamlArray | join " and ")) -}}
+{{- end -}}
+{{- end -}}
+{{- $backend := include "trustiot.ingress.backend" (dict "root" $ "service" "web" "port" "http" "where" "services.web") | fromYaml -}}
+{{- $public = append $public (dict "key" "spa" "host" "app" "hostname" $v.hosts.app "path" "/" "match" "PathPrefix" "service" "web" "backend" $backend "static" true) -}}
+{{- end -}}
 {{- $routes := list -}}
 {{- range $i, $route := $v.ingress.routes -}}
 {{- $where := printf "ingress.routes[%d]" $i -}}
@@ -179,6 +216,9 @@ Returns YAML {public: [...], routes: [...]}; each item has host, hostname, path,
 {{- if hasPrefix "/internal" $route.path -}}
 {{- fail (printf "%s: paths under /internal are never routed (decision 27)" $where) -}}
 {{- end -}}
+{{- if and $static (eq $route.host "app") (not (include "trustiot.ingress.underCookiePrefix" $route.path)) -}}
+{{- fail (printf "%s: while services.web is enabled, every path on hosts.app outside %s is the SPA's static files, so a cookie route there must be one of them or below one" $where (include "trustiot.ingress.cookiePrefixes" $ | fromYamlArray | join " and ")) -}}
+{{- end -}}
 {{- $id := printf "%s %s" $route.host $route.path -}}
 {{- if has $id $seen -}}
 {{- fail (printf "%s: %s is already routed for hosts.%s" $where $route.path $route.host) -}}
@@ -186,6 +226,9 @@ Returns YAML {public: [...], routes: [...]}; each item has host, hostname, path,
 {{- $seen = append $seen $id -}}
 {{- if eq $route.service "ai-gateway" -}}
 {{- fail (printf "%s: ai-gateway takes no internal identity tokens and serves only other services (decision 28), so it gets no cookie route" $where) -}}
+{{- end -}}
+{{- if eq $route.service "web" -}}
+{{- fail (printf "%s: web serves only the SPA's static files, which need neither the session cookie nor an internal identity, so it gets no cookie route" $where) -}}
 {{- end -}}
 {{- $entry := get $v.services $route.service -}}
 {{- if not (and $entry $entry.enabled) -}}
