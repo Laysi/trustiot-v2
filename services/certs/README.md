@@ -22,8 +22,11 @@ Laysi/trustiot-v2#534（2026-10-22）加上：
 離線根 CA（ECDSA P-384，預設 20 年，pathLen 1）
   └─ 簽發 CA，每一代一張（ECDSA P-256，預設 2 年、不超過根，pathLen 0）
        ├─ 閘道器用戶端憑證（ECDSA P-256 的 TPM 金鑰，預設 90 天、不超過簽發 CA）
-       └─ 產線工作站憑證（ECDSA P-256，預設 180 天、不超過簽發 CA；EKU 沒有 clientAuth，見「工作站憑證」）
+       ├─ 產線工作站憑證（ECDSA P-256，預設 180 天、不超過簽發 CA；EKU 沒有 clientAuth，見「工作站憑證」）
+       └─ broker 伺服器憑證（EKU 只有 serverAuth，profile 在 Laysi/trustiot-v2#557，金鑰與輪替在 Laysi/trustiot-v2#535）
 ```
+
+根 CA 在每次儀式另簽一張根 CRL，列出撤銷的簽發 CA，給閘道器驗 broker 的伺服器憑證用（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)；還沒實作）。
 
 - **根 CA**：私鑰只在離線的機器上產生與使用，不進叢集、不進 git（加密的也不放）、不在任何連網主機；以 age 加密給兩位維運人員，存兩份離線媒體，各由一人保管（2026-10-22 決定；與 [docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「根 CA 私鑰」相同）。只在簽發 CA 的儀式與備份檢查時取出。根憑證是公開資料，放在 chart 的 values。
 - **簽發 CA**：私鑰在叢集內產生，沒有人建立、看到、複製或輸入它，做法與內部身分簽章金鑰相同（[docs/architecture/secrets.md](../../docs/architecture/secrets.md) 的「閘道器憑證 CA」）：
@@ -44,7 +47,8 @@ Laysi/trustiot-v2#534（2026-10-22）加上：
 
 已知的限制（後續 issue 見 Laysi/trustiot-v2#78 的實作紀錄）：
 
-- 根 CA 不發 CRL：簽發 CA 外洩時，靠「移除它的金鑰、broker 不再讀到它的 CRL」讓 broker 拒絕它簽的閘道器憑證（見[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)）。閘道器驗 broker 的伺服器憑證時看不到這件事；broker 伺服器憑證怎麼簽、閘道器信任什麼由 Laysi/trustiot-v2#535 決定。
+- 根 CRL 還沒實作：簽發 CA 外洩時，broker 這一側靠「移除它的金鑰、broker 不再讀到它的 CRL」拒絕它簽的閘道器憑證（見[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)）；閘道器這一側要靠根 CRL 才拒絕外洩的簽發 CA 簽的假伺服器憑證（2026-10-23 決定，見[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)）。`certs-ca` 簽根 CRL、certs 提供它、閘道器取用與檢查都還沒做，這之前閘道器端的這個風險只能靠換根解除，而換根也還沒有做法（下一點）。
+- 根 CRL 擋不住一直站在連線路徑上的攻擊者：它可以擋下新的根 CRL，閘道器手上的舊 CRL 不列外洩的簽發 CA。根 CRL 過期也不擋連線（理由見同一節），所以這段期間沒有上限。
 - 根 CA 換新還沒有做法。地端的 CA 階層（誰保管客戶的根 CA）延後：地端專用的工作排在 SaaS 之後（決策 1 的 2026-10-18 補充，Laysi/trustiot-v2#446）；chart 本身兩種型態相同。
 
 ## 發簽發 CA 憑證
@@ -144,6 +148,8 @@ age --decrypt -i <自己的 identity> root-key.age \
 3. 閘道器經換發端點以 TPM 金鑰重新取得憑證（決策 12，Laysi/trustiot-v2#81），不必寄回。產線工作站由平台管理員重新簽發（[工作站憑證](#工作站憑證)的「換發」），外洩的簽發 CA 簽的工作站憑證已經不能鏈到 `ca.pem`。
 4. 依 [docs/runbooks/secrets.md](../../docs/runbooks/secrets.md) 的「外洩處理」調查並開 `security` issue。
 
+根 CRL 實作之後（[閘道器對 broker 伺服器憑證的信任](#閘道器對-broker-伺服器憑證的信任)），第 2 步的儀式同時以根 CA 簽一張新的根 CRL，列出外洩的簽發 CA 憑證：閘道器取到它之後，就拒絕那個簽發 CA 簽的伺服器憑證。broker 伺服器憑證的私鑰外洩、簽發 CA 沒有外洩時也這樣做：照[輪替](#輪替)加一代、簽新的伺服器憑證，並在根 CRL 撤銷簽出舊伺服器憑證的那一代，因為閘道器只看得到根 CRL。broker 不讀根 CRL，所以舊的一代簽的閘道器憑證照常有效，舊金鑰照輪替的時程移除即可。在這之前，閘道器仍然相信外洩的簽發 CA 簽的伺服器憑證，見[已知的限制](#ca-階層與私鑰保管)。
+
 **遺失**：Secret 被刪除、清空，或從備份還原（還原的物件 uid 不同）時，init container 把它當作遺失，以目前的 `keyGeneration` 產生新的一組。服務不能簽章（`certs.ca.signing` 是 0），每次檢查記 WARN 與 `waiting`；舊的憑證因為對不上任何金鑰而被略過，舊的簽發 CA 不再發 CRL。照「發簽發 CA 憑證」簽新的金鑰（CN 要和舊的不同，或先把舊的憑證從清單拿掉），閘道器同樣經換發端點更新憑證。不沿用還原的金鑰（2026-10-22 決定），因為無法確定沒有別人拿過那份副本；代價是還原後到儀式完成、閘道器換發之前，閘道器連不上 broker。
 
 ## 閘道器憑證
@@ -162,6 +168,46 @@ age --decrypt -i <自己的 identity> root-key.age \
 | 沒有的欄位 | SAN、CRL distribution point（broker 從檔案讀 CRL，閘道器 id 就是 MQTT 身分） |
 
 每張簽出的憑證先寫進 `certs.issued_certificates`，寫入成功才交給呼叫端（`issue::record`，在呼叫端的交易裡）；簽發 CA 還沒有 CRL 時不寫入，憑證也不交出。
+
+## 閘道器對 broker 伺服器憑證的信任
+
+2026-10-23 決定（Laysi/trustiot-v2#556）。閘道器的內層 TLS 在 WebSocket 裡直達 broker（決策 6），閘道器 agent（Laysi/trustiot-v2#86）照下表驗證 broker 的伺服器憑證。根 CRL 那一列還沒實作（見[根 CRL](#根-crl)），其他各列在 agent 實作內層 TLS 時就照做。
+
+| 項目 | 設定 |
+| --- | --- |
+| 信任錨 | 只有根 CA 憑證（`certificateAuthority.rootCertificate` 的那一張），出廠登錄時交給閘道器（Laysi/trustiot-v2#79）。不信任系統或 WebPKI 的根、外層 TLS 的信任清單，也不把簽發 CA 當信任錨：換簽發 CA 不動閘道器的設定，與 broker 只信任 `ca.pem` 的理由相同 |
+| 憑證鏈 | broker 在握手送出伺服器憑證，後面接簽出它的簽發 CA 憑證（Secret 的 `tls.crt`，Laysi/trustiot-v2#535），閘道器由此建到根 |
+| 名稱 | SNI 與驗證都用 Laysi/trustiot-v2#557 定的固定名稱（SaaS 與地端相同，不依部署的主機名稱或外層 TLS 連的網址）。名稱驗證不能關 |
+| 用途 | 伺服器憑證要有 EKU serverAuth（webpki 驗伺服器憑證時的要求）。同一個簽發 CA 簽的閘道器憑證只有 clientAuth，工作站憑證只有自訂用途，都不能當伺服器憑證；Laysi/trustiot-v2#557 的 profile 是唯一有 serverAuth 的，之後新增的 profile 不可以有 serverAuth 或沒有 EKU（webpki 對沒有 EKU 的憑證不檢查用途） |
+| 撤銷 | 以根 CRL 檢查鏈上的簽發 CA。伺服器憑證本身的撤銷狀態不檢查：閘道器沒有簽發 CA 的 CRL（它每週重發，列的多半是閘道器憑證）。rustls 的 `WebPkiServerVerifier` 以 `with_crls` 帶入根 CRL；不用 `only_check_end_entity_revocation`（要檢查到簽發 CA 那一層）；要用 `allow_unknown_revocation_status`（伺服器憑證的簽發者沒有 CRL，不允許時每張都被拒）；不用 `enforce_revocation_expiration`（見下方「過期」） |
+| 協定 | TLS 1.3、ChaCha20-Poly1305 排第一、開 session resumption（決策 6）。換上新的根 CRL 時清掉 resumption 的快取，下一次連線完整握手、以新的 CRL 驗證 |
+
+### 簽發 CA 外洩時：比較過的做法
+
+簽發 CA 的私鑰在叢集裡。它外洩時，broker 這一側在[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)的第 1 步就拒絕它簽的閘道器憑證；但閘道器信任根，所以仍然接受它簽的假伺服器憑證。站在內層 TLS 路徑上的攻擊者因此可以假扮 broker：收下這台閘道器的遙測（也能回 `down/telemetry-ack`，閘道器以為送到了而丟掉暫存的資料）、送 `down/config`、`down/live-control`、`down/log-request`。它不能把連線轉給真的 broker（閘道器的私鑰在 TPM，外洩的簽發 CA 簽的閘道器憑證也已被 broker 拒絕），也不能經此更新閘道器的程式（OTA 由另一把金鑰簽章，決策 11）。
+
+| 做法 | 結果 |
+| --- | --- |
+| **採用**：根 CA 在每次儀式簽一張長效的根 CRL，交給閘道器；閘道器以它檢查鏈上的簽發 CA | 外洩後的儀式本來就要簽新的一代（[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)第 2 步），每年的輪替也是一次儀式，所以根 CRL 不多一次儀式，也不讓根上線。閘道器取到新的根 CRL 之後就拒絕外洩的簽發 CA，不必換根、不必一台一台改信任錨。CRL 是根簽的公開資料，經什麼管道送都不怕被竄改。代價：`certs-ca` 要能簽 CRL、要有送到閘道器的管道、agent 要帶 CRL 驗證；擋不住一直站在路徑上、從頭擋下新 CRL 的攻擊者（見下方「剩下的風險」） |
+| 伺服器憑證改由另一個 CA 簽 | 那個 CA 若也在 certs 的 Secret 或 pod 裡，外洩範圍相同，等於沒有隔離。放在別的工作負載（例如 broker 端）只擋得住 certs pod 被入侵，擋不住叢集、etcd 或 namespace 管理者層級的外洩，卻多一套金鑰、儀式、輪替與 CRL（理由同[工作站憑證](#profile-的決定同一個簽發-ca以-eku-區分)不另立 CA）。改成在離線儀式直接簽長效的伺服器憑證也一樣：伺服器憑證的私鑰本身就在叢集的 Secret 裡，它外洩時同樣能假扮 broker，與 Laysi/trustiot-v2#535 的叢集內到期前輪替也衝突。不論哪一種，要讓閘道器不再相信某張憑證還是需要撤銷管道，所以不採用 |
+| 接受風險，外洩時換根 | 換根要更新每台閘道器的信任錨（OTA 或其他管道），離線的閘道器要等到它下次更新；有路徑位置的攻擊者同樣可以擋下更新。換根目前沒有做法（[輪替](#輪替)），又是重大變更，把它當成每次簽發 CA 外洩的處理代價太高。保留給根 CA 私鑰本身外洩的情況（根 CRL 撤銷不了根） |
+| 只靠外層 TLS（攻擊者還要站上內層 TLS 的路徑） | 只拿到私鑰、沒有路徑位置的攻擊者確實做不了事，但外層 TLS 不是我們的安全層：[部署與可搬移性](../../docs/architecture/deployment.md)寫明外層只負責穿過網路，工廠防火牆可以解開 443 並讓客戶把攔截用的 CA 加進外層的信任清單；SaaS 的 Cloudflare、tunnel、入口 gateway 與 mqtt-bridge 都看得到內層的位元組；而簽發 CA 最可能的外洩來源（叢集、certs pod 或它的節點被入侵）本身就給了叢集內的路徑位置。算深度防禦，不當作不需要撤銷的理由 |
+
+### 根 CRL
+
+做法（實作在後續 issue，`certs-ca` 的指令與參數由它決定，這裡定的是規則）：
+
+- **簽發**：每次儀式（第一次發簽發 CA、每年輪替、外洩）在離線的機器上以根 CA 簽一張新的根 CRL。它累積列出撤銷的簽發 CA 憑證，到那張憑證過期才拿掉；CRL 編號只增加；上一張根 CRL 是輸入，工具確認它由同一個根簽章，再加上這次撤銷的項目。正常輪替不撤銷舊的一代（它自然過期）；外洩，或 broker 伺服器憑證的私鑰外洩時，撤銷簽出它的簽發 CA。
+- **效期**：nextUpdate 是簽發後 400 天：儀式至少每年一次（簽發 CA 每年輪替），多一個月的餘裕。certs 服務在根 CRL 剩不到 60 天時告警，提醒該辦儀式。
+- **發佈**：根 CRL 是公開資料，和根憑證一樣放在 values，certs 服務提供給閘道器。閘道器在出廠登錄時拿到當時的一張，之後定期經 HTTPS 取最新的（端點與路徑在後續 issue 依決策 27 的例外路徑規則決定；換發端點是同一類例外）。閘道器只接受由信任錨簽章、編號比手上大的根 CRL，存下來，重開機後沿用。
+- **順序**：撤銷某一代的根 CRL 放進 values 之前，broker 要已換上新一代簽的伺服器憑證（Laysi/trustiot-v2#535 的換新），否則取到新 CRL 的閘道器連不上 broker。儀式可以同時簽出新的簽發 CA 憑證與根 CRL，根 CRL 晚一步放進 values。
+- **過期**：nextUpdate 過了，閘道器仍然以手上的根 CRL 驗證、照常連線，並在狀態回報裡標出根 CRL 已過期。不擋連線，是因為根 CRL 要靠人到離線的機器簽，儀式晚了不該讓整個機隊斷線；改由 certs 的告警與閘道器的狀態回報讓人知道。
+- **還沒有根 CRL 時**（目前，以及後續 issue 完成前出廠的閘道器）：閘道器不檢查撤銷，照常連線；取到第一張之後開始檢查。
+
+剩下的風險：
+
+- 攻擊者若在外洩被發現之前就站上某台閘道器的連線路徑，並一直擋下新的根 CRL，那台閘道器就一直相信外洩的簽發 CA；根 CRL 過期也不擋連線，所以沒有時間上限。這要攻擊者在每一台目標閘道器的路徑上長期存在，比一般的外洩難得多；被擋下時閘道器的狀態回報會一直停在舊的 CRL 編號，可以從這裡察覺。
+- 根 CRL 實作之前，簽發 CA 外洩時閘道器端只能靠換根，而換根還沒有做法。展示環境接受這個風險（展示切片，`docs/roadmap/milestones.md`）。
 
 ## 工作站憑證
 
