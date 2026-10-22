@@ -43,7 +43,7 @@ ALTER ROLE identity_app SET search_path = identity;
 const MIGRATION: &str = include_str!("../migrations/postgres/0001_identity.sql");
 /// The writes on sessions that logging in and extending a session need, and their guard
 /// (Laysi/trustiot-v2#103).
-const LOGIN_MIGRATION: &str = include_str!("../migrations/postgres/0003_login.sql");
+const LOGIN_MIGRATION: &str = include_str!("../migrations/postgres/0004_login.sql");
 /// The migration Job creates the service's schema, owned by the owner role, before it runs the
 /// migrations (tools/migrate); the tests do the same as the owner.
 const SCHEMA: &str = "CREATE SCHEMA identity";

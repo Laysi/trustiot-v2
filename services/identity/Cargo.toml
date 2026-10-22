@@ -14,7 +14,8 @@ test = false
 doc = false
 
 [dependencies]
-axum = { workspace = true, features = ["http1", "json", "tokio"] }
+# `query`: the event log's `from`, `to`, `limit` and `cursor` parameters.
+axum = { workspace = true, features = ["http1", "json", "query", "tokio"] }
 # Strict base64url: token segments and the session cookie have exactly one encoding.
 base64.workspace = true
 # `created_at` of a tenant, read from Postgres and returned in the API; the `Date` of a login
@@ -31,7 +32,8 @@ hmac.workspace = true
 # The signing keys the identity pod's init container generates (Laysi/trustiot-v2#404): their
 # file format and which key signs when.
 identity-keys = { path = "../../crates/identity-keys" }
-# Writes `identity.tenant_created` in the transaction that creates the tenant.
+# Writes `identity.tenant_created` in the transaction that creates the tenant, and consumes every
+# producer's events into the event log (Laysi/trustiot-v2#130).
 outbox = { path = "../../crates/outbox" }
 # The SMTP client that mails login codes (src/mail.rs): always TLS, rustls with ring like the
 # rest of the workspace, trusting the image's CA bundle or the configured CA file only.

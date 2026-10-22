@@ -376,6 +376,34 @@
         ],
         "type": "string"
       },
+      "EventId": {
+        "description": "An event, unique across services; consumers deduplicate deliveries by it.\n\nSerialized as a lowercase hyphenated UUID string.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "EventLogPage": {
+        "description": "One page of the log, newest first.",
+        "properties": {
+          "events": {
+            "description": "The events, newest first (by `occurred_at`, then `event_id`).",
+            "items": {
+              "$ref": "#/components/schemas/LoggedEvent"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass it as `cursor` for the next, older page; `null` on the last page. Opaque.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "type": "object"
+      },
       "FieldError": {
         "description": "A rejected field of the request body.",
         "properties": {
@@ -395,6 +423,140 @@
         "required": [
           "field",
           "message_key"
+        ],
+        "type": "object"
+      },
+      "LoggedActor": {
+        "description": "Who made a logged change.",
+        "oneOf": [
+          {
+            "description": "A person, through the API (a platform administrator too).",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "user"
+                ],
+                "type": "string"
+              },
+              "user_id": {
+                "$ref": "#/components/schemas/UserId",
+                "description": "The user."
+              }
+            },
+            "required": [
+              "user_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A service's own work, such as a scheduled job.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "service"
+                ],
+                "type": "string"
+              },
+              "service": {
+                "description": "The service, for example `assets`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "service",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "LoggedEvent": {
+        "description": "One event in the log.",
+        "properties": {
+          "actor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LoggedActor",
+                "description": "Who made the change; `null` when the producer did not say."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "aggregate_id": {
+            "description": "What changed: the aggregate's ID.",
+            "type": "string"
+          },
+          "aggregate_seq": {
+            "description": "The event's number within its aggregate, from 1.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "aggregate_type": {
+            "description": "What changed: the aggregate's kind, for example `tenant`.",
+            "type": "string"
+          },
+          "event_id": {
+            "$ref": "#/components/schemas/EventId",
+            "description": "The event's ID (UUIDv7)."
+          },
+          "occurred_at": {
+            "description": "When the change happened, by the producer's clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": {},
+            "description": "The event's payload as the producer wrote it, in the version above; a JSON object.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "producer": {
+            "description": "The service that wrote the event, for example `identity`.",
+            "type": "string"
+          },
+          "recorded_at": {
+            "description": "When the event log stored the event, by the database clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "tenant_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The tenant; `null` for a platform-wide event."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "description": "The event type, for example `identity.tenant_created`.",
+            "type": "string"
+          },
+          "version": {
+            "description": "The payload's version.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "event_id",
+          "type",
+          "version",
+          "producer",
+          "occurred_at",
+          "recorded_at",
+          "aggregate_type",
+          "aggregate_id",
+          "aggregate_seq",
+          "payload"
         ],
         "type": "object"
       },
@@ -540,6 +702,11 @@
           "points"
         ],
         "type": "object"
+      },
+      "UserId": {
+        "description": "A user account; one user can be a member of several tenants.\n\nSerialized as a lowercase hyphenated UUID string.",
+        "format": "uuid",
+        "type": "string"
       }
     }
   },
@@ -1165,6 +1332,321 @@
         "summary": "The caller's tenant, once this service has processed its `identity.tenant_created`.",
         "tags": [
           "assets"
+        ]
+      }
+    },
+    "/api/identity/v1/event-log": {
+      "get": {
+        "operationId": "getTenantEventLog",
+        "parameters": [
+          {
+            "description": "Only events that occurred at or after this RFC 3339 time.",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only events that occurred before this RFC 3339 time; after `from`.",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Events per page, 1 to 500; default 100.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor`, for the next, older page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventLogPage"
+                }
+              }
+            },
+            "description": "A page of the tenant's events, newest first."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A malformed parameter, or `from` not before `to` (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The user has no tenant, or is not an administrator of it (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed, or the event log is off (`unavailable`)."
+          }
+        },
+        "summary": "The caller's tenant's operation log. Administrators of the tenant only.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/identity/v1/platform/event-log": {
+      "get": {
+        "operationId": "getPlatformEventLog",
+        "parameters": [
+          {
+            "description": "Only events that occurred at or after this RFC 3339 time.",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only events that occurred before this RFC 3339 time; after `from`.",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Events per page, 1 to 500; default 100.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor`, for the next, older page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventLogPage"
+                }
+              }
+            },
+            "description": "A page of the platform-wide events, newest first."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A malformed parameter, or `from` not before `to` (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The user is not a platform administrator (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed, or the event log is off (`unavailable`)."
+          }
+        },
+        "summary": "The platform-wide operation log, for the back office. Platform administrators only.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/identity/v1/platform/tenants/{tenant_id}/event-log": {
+      "get": {
+        "operationId": "getPlatformTenantEventLog",
+        "parameters": [
+          {
+            "description": "The tenant's ID. An ID no tenant has gives an empty page.",
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only events that occurred at or after this RFC 3339 time.",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only events that occurred before this RFC 3339 time; after `from`.",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Events per page, 1 to 500; default 100.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor`, for the next, older page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventLogPage"
+                }
+              }
+            },
+            "description": "A page of the tenant's events, newest first."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A malformed tenant ID or parameter, or `from` not before `to` (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The user is not a platform administrator (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed, or the event log is off (`unavailable`)."
+          }
+        },
+        "summary": "One tenant's operation log, for the back office. Platform administrators only.",
+        "tags": [
+          "identity"
         ]
       }
     },

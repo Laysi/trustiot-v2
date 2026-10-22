@@ -51,7 +51,7 @@ pub const SESSION_COOKIE_LEN: usize = 43;
 pub const SESSION_IDLE_LIFETIME: Duration = Duration::from_secs(12 * 3600);
 
 /// The longest a session lives, used or not: 7 days from its creation. Then the user logs in
-/// again. `migrations/postgres/0003_login.sql` enforces the same bound; a test compares them.
+/// again. `migrations/postgres/0004_login.sql` enforces the same bound; a test compares them.
 pub const SESSION_ABSOLUTE_LIFETIME: Duration = Duration::from_secs(7 * 24 * 3600);
 
 /// The check extends a session only when that moves its expiry by at least this much, so an
@@ -942,10 +942,10 @@ mod tests {
     #[test]
     fn the_absolute_lifetime_matches_the_migration() {
         assert_eq!(SESSION_ABSOLUTE_LIFETIME.as_secs(), 7 * 24 * 3600);
-        let migration = include_str!("../migrations/postgres/0003_login.sql");
+        let migration = include_str!("../migrations/postgres/0004_login.sql");
         assert!(
             migration.contains("NEW.expires_at > NEW.created_at + interval '7 days'"),
-            "0003_login.sql no longer caps sessions at 7 days"
+            "0004_login.sql no longer caps sessions at 7 days"
         );
         assert!(SESSION_IDLE_LIFETIME < SESSION_ABSOLUTE_LIFETIME);
         assert!(SESSION_EXTEND_STEP < SESSION_IDLE_LIFETIME);

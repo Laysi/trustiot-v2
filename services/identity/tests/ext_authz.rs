@@ -37,7 +37,7 @@ ALTER ROLE identity_app SET search_path = identity;
 const MIGRATION: &str = include_str!("../migrations/postgres/0001_identity.sql");
 /// The writes on sessions that logging in and extending a session need, and their guard
 /// (Laysi/trustiot-v2#103).
-const LOGIN_MIGRATION: &str = include_str!("../migrations/postgres/0003_login.sql");
+const LOGIN_MIGRATION: &str = include_str!("../migrations/postgres/0004_login.sql");
 /// The migration Job creates the service's schema, owned by the owner role, before it runs the
 /// migrations (tools/migrate); the tests do the same as the owner.
 const SCHEMA: &str = "CREATE SCHEMA identity";
@@ -1131,6 +1131,39 @@ fn unusable_settings_stop_startup() {
                 &files.public_keys.display().to_string(),
             ),
             "TRUSTIOT__PLATFORM__INTERNAL_IDENTITY_KEYS_FILE",
+        ),
+        // The event log's platform role (Laysi/trustiot-v2#130): both credentials or neither,
+        // and never the service role.
+        (
+            "a platform role without its password",
+            with(
+                base_env(&files, 1),
+                "TRUSTIOT__DATABASE__PLATFORM_USERNAME",
+                "identity_platform",
+            ),
+            "database.platform_password",
+        ),
+        (
+            "a platform password without its role",
+            with(
+                base_env(&files, 1),
+                "TRUSTIOT__DATABASE__PLATFORM_PASSWORD",
+                "do-not-log-this-password",
+            ),
+            "database.platform_username",
+        ),
+        (
+            "the service role as the platform role",
+            with(
+                with(
+                    base_env(&files, 1),
+                    "TRUSTIOT__DATABASE__PLATFORM_USERNAME",
+                    "identity_app",
+                ),
+                "TRUSTIOT__DATABASE__PLATFORM_PASSWORD",
+                "do-not-log-this-password",
+            ),
+            "database.platform_username",
         ),
         (
             "a propagation time below the chart's minimum",
