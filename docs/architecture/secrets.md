@@ -187,7 +187,7 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
   - certs 的主容器沒有 token（`services.certs.automountServiceAccountToken` 是 `true` 時渲染失敗），只以唯讀 volume 讀 `/etc/trustiot/certs-ca-keys/issuing-ca-keys.json`（0440，root 與 pod 自己的 `fsGroup` 65533）。其他 pod 都不掛它，任何服務的自訂 `env` 都不能讀它（chart 測試）。
   - 一把金鑰要等維運人員以根 CA 簽了它的 CSR、憑證放進 `certificateAuthority.issuingCertificates` 才簽章。能改 CSR 的 ConfigMap 的人可以把它換成自己的金鑰，所以簽發時工具印出金鑰 id，維運人員和 certs 服務日誌裡等待中的金鑰 id 比對一致才採用。
   - 輪替是調大 `certificateAuthority.keyGeneration` 再走一次儀式；舊的一代在它簽的閘道器憑證都過期後以 `removeKeysBeforeGeneration` 移除。外洩時兩個值同時調到新的一代：舊金鑰立即移除，它的 CRL 不再發布，broker 拒絕它簽的每張閘道器憑證，閘道器經換發端點（決策 12）取得新憑證。簽發 CA 私鑰不備份，遺失時以新的一代取代。
-- **不做的事**：根 CA 的 CRL（簽發 CA 外洩時，閘道器驗 broker 伺服器憑證看不到撤銷，Laysi/trustiot-v2#84 決定 broker 憑證與閘道器的信任設定時處理）、根 CA 換新、KMS 或 HSM、地端的 CA 階層（地端延後，決策 1 的 2026-10-18 補充）。
+- **不做的事**：根 CA 的 CRL（簽發 CA 外洩時，閘道器驗 broker 伺服器憑證看不到撤銷，Laysi/trustiot-v2#535 決定 broker 伺服器憑證與閘道器的信任設定時處理）、根 CA 換新、KMS 或 HSM、地端的 CA 階層（地端延後，決策 1 的 2026-10-18 補充）。
 
 ## 公開 repo 的資訊規則
 
@@ -259,7 +259,7 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 | --- | --- | --- | --- | --- | --- |
 | 根 CA 私鑰 | 簽發 CA 憑證的信任根（閘道器、工作站、broker 憑證的源頭，決策 6、12） | 離線保管：不在叢集、不在 git（加密也不放）、不在任何連網主機；以 age 加密存兩份離線媒體，分別由兩位維運人員保管；只在簽發或撤銷簽發 CA 時取出 | 地端的 CA 階層延後（上方「閘道器憑證 CA」） | 不注入任何服務；儀式與備份檢查用 `certs-ca`，私鑰只經 stdin、stdout（services/certs/README.md） | Laysi/trustiot-v2#78 |
 | 簽發 CA 私鑰（ECDSA P-256），Secret `<release>-certs-ca-keys` | certs 服務簽發閘道器與工作站憑證、發 CRL | certs pod 的 init container 在叢集內產生，不進 git、不經過人；CSR 由離線根 CA 簽發（上方「閘道器憑證 CA」，2026-10-21 取代原本的 SOPS） | 同左 | 檔案：只以唯讀 volume 掛進 `certs` 的主容器（`/etc/trustiot/certs-ca-keys/issuing-ca-keys.json`，0440，root 與 pod 的 fsGroup）；init container 經 Kubernetes API 讀寫 | Laysi/trustiot-v2#78 |
-| broker 伺服器憑證私鑰 | Mosquitto 的 TLS 伺服器金鑰（閘道器 mTLS 的內層） | 由簽發 CA 簽發，存在叢集 Secret | 同左 | 檔案，只掛進 broker | Laysi/trustiot-v2#84 |
+| broker 伺服器憑證私鑰 | Mosquitto 的 TLS 伺服器金鑰（閘道器 mTLS 的內層） | 由簽發 CA 簽發，存在叢集 Secret | 同左 | 檔案，只掛進 broker | Laysi/trustiot-v2#84（掛載）、Laysi/trustiot-v2#535（簽發與輪替） |
 | 內部身分簽章私鑰（Ed25519），Secret `<release>-identity-signing-keys` | 身分服務簽內部身分 token（決策 27） | 身分服務 pod 的 init container 在叢集內產生，不進 git、不經過人（上方「內部身分簽章金鑰」） | 同左 | 檔案：只以唯讀 volume 掛進 `identity` 的主容器（`/etc/trustiot/identity-signing-keys/signing-keys.json`，0440，root 與 pod 的 fsGroup）；init container 經 Kubernetes API 讀寫（Role 只有這個 Secret 與公鑰 ConfigMap 的 `get`、`patch`）。對應的公鑰不是祕密：ConfigMap `<release>-internal-identity-keys` 的 `jwks.json` 以唯讀 volume 掛進每個服務（`TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`）。Laysi/trustiot-v2#404 之前是人建立的 Secret（SaaS 以 SOPS 保存），公鑰手寫在 `internalIdentity.publicKeys`，搬移見上方 | Laysi/trustiot-v2#61、Laysi/trustiot-v2#404（[services/identity/README.md](../../services/identity/README.md)；格式與驗證：Laysi/trustiot-v2#52、[crates/service-kit/README.md](../../crates/service-kit/README.md)） |
 | OTA 簽章私鑰 | 簽閘道器 agent 與 updater 的發佈檔（決策 11） | GitHub environment secret，只有 main 上的 tag 能用（ci-release.md）；公鑰內建在 updater | 地端使用同一份發佈檔，不另持有 | 只給 release workflow 的簽章步驟 | Laysi/trustiot-v2#164（注意：release.yml 的 `release` environment 已建立，但私有庫在目前的 GitHub Free 方案設不了必要審查者與 tag 規則（決策 30），environment secret 限制不了「只有 main 上的 tag 能用」，Laysi/trustiot-v2#164 要先解決保管方式。2026-10-12 repo 已公開，Free 方案設得了 environment 的 tag 規則與必要審查者，但尚未設定，限制仍未成立，選項見 [CI 與發佈](ci-release.md) 的「發佈核准」，Laysi/trustiot-v2#345） |
 | SOPS 叢集私鑰（age） | Flux 解密 `deploy/flux/` 的 Secret | 叢集 `flux-system` namespace 的 Secret `sops-age`，由維運人員在建立叢集時直接建立（不經 git）；離線備份與根 CA 私鑰放在一起 | 不適用（地端不裝 Flux） | 只給 Flux kustomize-controller | Laysi/trustiot-v2#70 |
@@ -285,7 +285,7 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 
 | 密鑰 | 用途與使用者 | SaaS | 地端 | 注入方式 | 實作 issue |
 | --- | --- | --- | --- | --- | --- |
-| AI 供應商憑證：Anthropic 與 OpenAI 的 API key；Vertex AI 優先用 Workload Identity Federation（不放長期金鑰，規則 8），不可行時才用服務帳號金鑰 | AI 閘道呼叫供應商（決策 15、26、28、32） | SOPS | 客戶端點需要時，客戶建立的 Secret（地端排在 SaaS 完成後） | 環境變數，只給 `ai-gateway`（chart 強制）；Vertex AI 的憑證形式在接入的 issue 決定 | Laysi/trustiot-v2#139、Laysi/trustiot-v2#440 |
+| AI 供應商憑證：Anthropic 與 OpenAI 的 API key；Vertex AI 優先用 Workload Identity Federation（不放長期金鑰，規則 8），不可行時才用服務帳號金鑰 | AI 閘道呼叫供應商（決策 15、26、28、32） | SOPS | 客戶端點需要時，客戶建立的 Secret（地端排在 SaaS 完成後） | 環境變數，只給 `ai-gateway`（chart 強制）；Vertex AI 的憑證形式在接入的 issue 決定 | Laysi/trustiot-v2#139、Laysi/trustiot-v2#536、Laysi/trustiot-v2#440 |
 | Qdrant 唯讀與寫入 API key | knowledge 檢索與背景處理（決策 19） | SOPS（Qdrant Cloud 主控台發的兩把 key） | `bundled`：部署時在叢集內產生 | 環境變數，只給 `knowledge`（chart 強制） | Laysi/trustiot-v2#194 |
 | 物件儲存存取金鑰 | PDF、頁面圖、附件（決策 20） | SOPS | 客戶建立的 Secret | 環境變數，只給列出 `object-storage` 的服務 | Laysi/trustiot-v2#133 |
 | 備份用的物件儲存金鑰 | Postgres 的 WAL 與完整備份、ClickHouse 備份（M8） | SOPS；與服務用的金鑰分開、只能寫備份 bucket | 客戶建立的 Secret | 只給備份元件 | Laysi/trustiot-v2#134、Laysi/trustiot-v2#135 |
@@ -313,7 +313,7 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 | 密鑰 | 保管 | 說明 | 實作 issue |
 | --- | --- | --- | --- |
 | 閘道器私鑰 | 閘道器的 TPM，不能匯出 | 雲端只存出廠登錄的公鑰（決策 12）；不需要輪替，換 TPM 或主機板視同新設備 | Laysi/trustiot-v2#74、Laysi/trustiot-v2#80、Laysi/trustiot-v2#83 |
-| 產線工作站憑證私鑰 | 工作站本機，能用 TPM 時放在 TPM | 由簽發 CA 簽發的工作站憑證，到期換發；工作站汰換時撤銷 | Laysi/trustiot-v2#79、Laysi/trustiot-v2#80 |
+| 產線工作站憑證私鑰 | 工作站本機，能用 TPM 時放在 TPM | 由簽發 CA 簽發的工作站憑證，到期換發；工作站汰換時撤銷 | Laysi/trustiot-v2#534、Laysi/trustiot-v2#79、Laysi/trustiot-v2#80 |
 | 使用者 session | 伺服器只存 cookie 值的雜湊 | 沒有簽章密鑰（規則 8）；登出、停權在下一個請求生效（決策 13） | Laysi/trustiot-v2#103 |
 | 一次性 token 與驗證碼 | 只存雜湊 | 見上方「一次性 token 與驗證碼」 | Laysi/trustiot-v2#103、Laysi/trustiot-v2#105 |
 | 租戶設定的祕密：Webhook 簽章密鑰、企業 OIDC 的 client secret | Postgres，屬於租戶資料 | 建立後 API 不再回傳明文、不進日誌；靜態加密方式由實作 issue 決定並加進本清冊 | Laysi/trustiot-v2#169、Laysi/trustiot-v2#43 |
