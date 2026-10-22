@@ -1405,6 +1405,7 @@ dependencies = [
  "contract",
  "identity",
  "serde_json",
+ "telemetry-query",
  "thiserror",
  "utoipa",
 ]
@@ -2344,6 +2345,43 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.7",
+]
+
+[[package]]
+name = "telemetry-query"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "contract",
+ "getrandom 0.4.3",
+ "hmac",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "identity",
+ "migrate",
+ "outbox",
+ "percent-encoding",
+ "reqwest",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "service-kit",
+ "sha2 0.11.0",
+ "sqlx",
+ "testkit",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "utoipa",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]

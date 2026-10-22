@@ -479,6 +479,36 @@ impl ClickHouse {
         }
     }
 
+    /// `query` as `user` with `role` enabled for this query only (the HTTP interface's `role`
+    /// parameter, as telemetry-query enables the tenant role).
+    pub async fn query_as_with_role(
+        &self,
+        user: &str,
+        password: &str,
+        role: &str,
+        query: &str,
+    ) -> Result<String, String> {
+        let auth = migrate::http::Auth::Basic {
+            username: user,
+            password,
+        };
+        let response = self
+            .client
+            .post(
+                &format!("{}/", self.url),
+                &[("role", role)],
+                auth,
+                query.to_owned(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        if response.status.is_success() {
+            Ok(response.body)
+        } else {
+            Err(response.body)
+        }
+    }
+
     /// Settings that point a run at this ClickHouse.
     pub fn settings(&self) -> ClickHouseSettings {
         ClickHouseSettings {

@@ -20,6 +20,10 @@ mod identity_schema;
 #[path = "../../../services/assets/src/schema.rs"]
 mod assets_schema;
 
+/// The telemetry-query service's files (compiled into the service as well).
+#[path = "../../../services/telemetry-query/src/schema.rs"]
+mod telemetry_query_schema;
+
 /// The certs service's files (compiled into the service as well).
 #[path = "../../../services/certs/src/schema.rs"]
 mod certs_schema;
@@ -185,6 +189,17 @@ pub const PRODUCT: Registry = Registry {
                 consumes: &["identity", "assets"],
             },
             migrations: assets_schema::SCHEMA.migrations,
+        },
+        // Reads identity's events as its platform role, like assets, to create each new
+        // tenant's ClickHouse account (Laysi/trustiot-v2#119).
+        Service {
+            name: telemetry_query_schema::SCHEMA.service,
+            platform_role: true,
+            outbox: Outbox {
+                producer: telemetry_query_schema::SCHEMA.outbox_producer,
+                consumes: &["identity"],
+            },
+            migrations: telemetry_query_schema::SCHEMA.migrations,
         },
         // The ledger of issued certificates and the CRLs (Laysi/trustiot-v2#78): no tenant data
         // and no events, so no platform role.

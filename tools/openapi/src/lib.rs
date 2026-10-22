@@ -58,6 +58,11 @@ pub const SERVICES: &[Source] = &[
         name: "assets",
         openapi: assets::openapi,
     },
+    // The history API of device charts (Laysi/trustiot-v2#119).
+    Source {
+        name: "telemetry-query",
+        openapi: telemetry_query::openapi,
+    },
 ];
 
 /// Directories under `services/` that have no HTTP API of their own to document (workers, for

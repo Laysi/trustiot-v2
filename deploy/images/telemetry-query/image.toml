@@ -1,0 +1,5 @@
+# The telemetry-query service (services/telemetry-query): each tenant's read-only ClickHouse account,
+# created from identity.tenant_created, and the history API of device charts. Packed with
+# deploy/images/rust-binary.Containerfile.
+[rust]
+package = "telemetry-query"

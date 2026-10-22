@@ -320,6 +320,7 @@ impl FakeSecrets {
             generation: generation.to_owned(),
             postgres: Some(pairs(postgres)),
             clickhouse_collector: collector.map(|pair| pairs(&[pair])),
+            clickhouse_telemetry_query: None,
         }
     }
 

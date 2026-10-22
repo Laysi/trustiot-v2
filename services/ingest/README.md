@@ -15,6 +15,8 @@ DDL 是 `migrations/clickhouse/` 的 SQL 檔，部署時由 migration Job（Lays
 | `0005_tenant_view.sql` | 租戶唯一能讀的 view `trustiot.tenant_telemetry`、它的 DEFINER 帳號與 row policy（Laysi/trustiot-v2#260） |
 | `0006_logs.sql` | OTel collector 寫入的日誌表 `trustiot_logs.otel_logs`、`otel_traces`，與 collector 的角色 `trustiot_otel_collector`（Laysi/trustiot-v2#73） |
 | `0007_monitoring.sql` | 監控角色 `trustiot_monitoring`：只有 `system.disks` 的 `SELECT`，給磁碟水位告警（Laysi/trustiot-v2#92） |
+| `0008_telemetry_query.sql` | telemetry-query 的服務帳號 `trustiot_telemetry_query`：只能建立與修改名稱以 `trustiot_tenant_account_` 開頭的帳號，並把租戶角色 `trustiot_tenant_reader` 給它們（Laysi/trustiot-v2#119；[services/telemetry-query](../telemetry-query/README.md#租戶帳號)） |
+| `0009_telemetry_query_grantees.sql` | 服務帳號 `GRANTEES NONE`：它以 `ADMIN OPTION` 持有租戶角色，只能在 `CREATE USER ... DEFAULT ROLE` 時把角色給新建的帳號，不能把角色授與或收回任何既有的使用者或角色（Laysi/trustiot-v2#119 的安全審查） |
 
 檔案格式（migration Job 與測試都依賴）：
 
