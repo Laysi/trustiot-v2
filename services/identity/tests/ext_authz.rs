@@ -21,8 +21,8 @@ use service_kit::identity::{IdentityError, IdentityKeys, IdentityVerifier, UserI
 use sqlx::{Connection, PgConnection};
 use support::postgres::{SERVER_HOST, TEST_PASSWORD, TlsPostgres, tls_postgres};
 use support::{
-    KeyFiles, Service, SlowProxy, TestKey, cookie, jwks, kid_of, new_secret, request, run_to_exit,
-    scratch_dir, signing_keys,
+    KeyFiles, Service, SlowProxy, TestKey, cookie, jwks, kid_of, new_secret, request,
+    request_with_body, run_to_exit, scratch_dir, signing_keys,
 };
 
 /// The roles of decision 29 for this service, created once per Postgres, with the service role's
@@ -166,7 +166,17 @@ impl Fixture {
     /// Starts the service and waits until it is ready, which needs a session that passed
     /// service-kit's row-level security check.
     fn service(&self) -> Service {
-        let env = self.env();
+        self.service_with(&[])
+    }
+
+    /// [`Fixture::service`] with `extra` settings added.
+    fn service_with(&self, extra: &[(&str, &str)]) -> Service {
+        let mut env = self.env();
+        env.extend(
+            extra
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
+        );
         let env: Vec<(&str, &str)> = env.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
         let service = Service::start(&env);
         service.wait_ready(Duration::from_secs(30));
@@ -351,6 +361,85 @@ async fn an_active_session_gets_one_token_that_the_routed_service_accepts() {
     assert!(response.header_values("x-internal-identity").is_empty());
 }
 
+/// One token exchange request, as service-kit's `OnBehalf` sends it, to the exchange's own port.
+fn exchange(service: &Service, token: Option<&str>, audience: &str) -> support::Response {
+    let mut headers = vec![("Content-Type", "application/json")];
+    if let Some(token) = token {
+        headers.push(("x-internal-identity", token));
+    }
+    request_with_body(
+        service.exchange_address,
+        "POST",
+        "/internal/token-exchange",
+        &headers,
+        json!({ "audience": audience }).to_string().as_bytes(),
+    )
+    .expect("exchange request")
+}
+
+/// Acceptance (on-behalf calls and impersonation, Laysi/trustiot-v2#106), with the real binary:
+/// the token the check signed for assets is exchanged for certs, which the call list lets assets
+/// call, and for nothing else. The exchanged token carries the session's identity, expires no
+/// later than the original, and works at certs only.
+#[tokio::test]
+async fn a_routed_token_is_exchanged_along_the_call_list_only() {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE identity_exchange OWNER identity_owner",
+        "identity_exchange",
+    )
+    .await
+    else {
+        return;
+    };
+    fixture.add_user(USER, false).await;
+    fixture.add_membership(TENANT_A, USER, "viewer").await;
+    let secret = fixture
+        .add_session(USER, Some(TENANT_A), SESSION_SECS, false)
+        .await;
+    let calls = json!({"assets": ["certs"]}).to_string();
+    let service = fixture.service_with(&[("TRUSTIOT_ON_BEHALF_CALLS", &calls)]);
+
+    let response = check(&service, "/api/devices", Some(&cookie(&secret)));
+    let user = verified(&fixture, &response, ServiceName::Assets);
+    let token = response.header_values("x-internal-identity")[0].to_owned();
+
+    let response = exchange(&service, Some(&token), "certs");
+    assert_eq!(response.status, 200, "{}", response.raw());
+    assert_eq!(response.header_values("cache-control"), ["no-store"]);
+    let exchanged = response.json()["token"]
+        .as_str()
+        .expect("a token")
+        .to_owned();
+    let at_certs = fixture
+        .verifier(ServiceName::Certs)
+        .verify(&exchanged)
+        .expect("certs accepts the exchanged token");
+    assert_eq!(at_certs.user_id(), user.user_id());
+    assert_eq!(at_certs.tenant(), user.tenant());
+    assert_eq!(at_certs.tenant().map(|t| t.role), Some(TenantRole::Viewer));
+    assert!(!at_certs.is_platform_admin());
+    assert!(at_certs.claims().exp <= user.claims().exp);
+    for audience in [ServiceName::Assets, ServiceName::Alerts] {
+        assert_eq!(
+            fixture.verifier(audience).verify(&exchanged).err(),
+            Some(IdentityError::WrongAudience),
+            "{audience} refuses a token for certs"
+        );
+    }
+
+    // Refused: assets may not call alerts, and certs, holding the exchanged token, may call
+    // nobody (that an exchanged token is never exchanged again, even along the list, is
+    // src/exchange/tests.rs).
+    for (holder, audience) in [(&token, "alerts"), (&exchanged, "assets")] {
+        let response = exchange(&service, Some(holder), audience);
+        assert_eq!(response.status, 403, "{}", response.raw());
+        assert_eq!(response.json()["code"], json!("permission_denied"));
+        assert!(!response.body.contains("token"), "{}", response.raw());
+    }
+    assert_unauthenticated(&exchange(&service, None, "certs"));
+    assert_unauthenticated(&exchange(&service, Some("forged"), "certs"));
+}
+
 /// Acceptance: missing, malformed, unknown, expired and revoked sessions get 401.
 #[tokio::test]
 async fn invalid_or_expired_sessions_get_401() {
@@ -393,6 +482,67 @@ async fn invalid_or_expired_sessions_get_401() {
     );
     fixture.owner_execute(DELETE_USER, &[USER]).await;
     assert_unauthenticated(&check(&service, "/", Some(&still)));
+}
+
+/// Acceptance (Laysi/trustiot-v2#123): a cross-site write gets 403 `security.cross_site_request`
+/// with a valid session, and so does one with an unknown session (not 401: the session is never
+/// looked up); the SPA's own write goes on.
+#[tokio::test]
+async fn cross_site_writes_get_403_and_same_origin_ones_go_on() {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE identity_csrf OWNER identity_owner",
+        "identity_csrf",
+    )
+    .await
+    else {
+        return;
+    };
+    fixture.add_user(USER, false).await;
+    fixture.add_membership(TENANT_A, USER, "editor").await;
+    let secret = fixture
+        .add_session(USER, Some(TENANT_A), SESSION_SECS, false)
+        .await;
+    let service = fixture.service();
+    let post = |cookie: &str, extra: &[(&str, &str)]| {
+        let mut headers = vec![("Host", APP), ("Cookie", cookie)];
+        headers.extend_from_slice(extra);
+        request(
+            service.address,
+            "POST",
+            "/internal/ext-authz/api/devices",
+            &headers,
+        )
+        .expect("check request")
+    };
+    let valid = cookie(&secret);
+    let origin = format!("https://{APP}");
+    let response = post(
+        &valid,
+        &[("Sec-Fetch-Site", "same-origin"), ("Origin", &origin)],
+    );
+    verified(&fixture, &response, ServiceName::Assets);
+    verified(
+        &fixture,
+        &post(&valid, &[("Origin", &origin)]),
+        ServiceName::Assets,
+    );
+
+    let unknown = cookie(&new_secret());
+    let cross_site: [&[(&str, &str)]; 2] = [
+        &[("Origin", "https://attacker.example.test")],
+        &[("Sec-Fetch-Site", "cross-site")],
+    ];
+    for extra in cross_site {
+        for cookie in [&valid, &unknown] {
+            let response = post(cookie, extra);
+            assert_eq!(response.status, 403, "{extra:?}: {}", response.raw());
+            assert!(response.header_values("x-internal-identity").is_empty());
+            assert_eq!(
+                response.json(),
+                json!({"code": "permission_denied", "message_key": "security.cross_site_request"})
+            );
+        }
+    }
 }
 
 /// Decision 13: role changes and removed memberships apply to the next request of the same
@@ -930,6 +1080,29 @@ fn unusable_settings_stop_startup() {
                     .to_string(),
             ),
             "TRUSTIOT_INGRESS_ROUTES",
+        ),
+        (
+            "an on-behalf call to a service that takes no tokens",
+            with(
+                base_env(&files, 1),
+                "TRUSTIOT_ON_BEHALF_CALLS",
+                &json!({"assistant": ["ai-gateway"]}).to_string(),
+            ),
+            "TRUSTIOT_ON_BEHALF_CALLS",
+        ),
+        (
+            "an on-behalf call list that is not one",
+            with(base_env(&files, 1), "TRUSTIOT_ON_BEHALF_CALLS", "assets=certs"),
+            "TRUSTIOT_ON_BEHALF_CALLS",
+        ),
+        (
+            "on-behalf calls overridden by a service setting",
+            with(
+                base_env(&files, 1),
+                "TRUSTIOT__PLATFORM__ON_BEHALF_CALLS",
+                &json!({"assets": ["certs"]}).to_string(),
+            ),
+            "TRUSTIOT__PLATFORM__ON_BEHALF_CALLS",
         ),
         (
             "no signing keys file setting",

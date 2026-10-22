@@ -125,12 +125,18 @@ async fn readiness_follows_the_migration_records() {
         .await
         .expect("read the Job's records");
     assert_eq!(copy, job);
-    let expected: Vec<(String, String, String)> = SCHEMA
+    // The image lists the files in the order they apply (the outbox's before the service's own,
+    // since assets produces events): compare both lists sorted the same way, by component, name
+    // and hash, without relying on the database's collation.
+    let mut expected: Vec<(String, String, String)> = SCHEMA
         .expected()
         .into_iter()
         .map(|record| (record.component, record.name, record.sha256))
         .collect();
-    assert_eq!(copy, expected, "the Job applied what the image expects");
+    expected.sort();
+    let mut applied = copy;
+    applied.sort();
+    assert_eq!(applied, expected, "the Job applied what the image expects");
 
     // 1. Every file is there: ready, and the check says so.
     let ready = Service::start(&product, &issuer.jwks()).await;

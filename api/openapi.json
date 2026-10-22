@@ -49,6 +49,30 @@
         ],
         "type": "object"
       },
+      "CreateDeviceModel": {
+        "description": "The body of `POST /api/assets/v1/device-models`. Unknown fields are refused.",
+        "properties": {
+          "name": {
+            "description": "The new model's name, unique in the tenant (see [`DeviceModel::name`]).",
+            "maxLength": 40,
+            "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "points": {
+            "description": "The data points, at most 1000, in order; may be empty.",
+            "items": {
+              "$ref": "#/components/schemas/DeviceModelPoint"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "points"
+        ],
+        "type": "object"
+      },
       "CreateTenant": {
         "description": "The body of `POST /api/identity/v1/tenants`. Unknown fields are ignored.",
         "properties": {
@@ -59,6 +83,249 @@
         },
         "required": [
           "name"
+        ],
+        "type": "object"
+      },
+      "DeviceModel": {
+        "description": "A device model.",
+        "properties": {
+          "created_at": {
+            "description": "When the model was created, by the database clock.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "model_id": {
+            "$ref": "#/components/schemas/DeviceModelId",
+            "description": "The model's ID."
+          },
+          "name": {
+            "description": "The name, unique in the tenant, never changed after creation: 1-40 lowercase letters or\ndigits in groups joined by single hyphens, starting with a letter.",
+            "example": "power-meter",
+            "maxLength": 40,
+            "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "points": {
+            "description": "The data points, in order.",
+            "items": {
+              "$ref": "#/components/schemas/DeviceModelPoint"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "description": "1 at creation, one more with every update; send it back with an update to refuse\noverwriting someone else's change.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "updated_at": {
+            "description": "When the model was last changed.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_id",
+          "name",
+          "revision",
+          "created_at",
+          "updated_at",
+          "points"
+        ],
+        "type": "object"
+      },
+      "DeviceModelDocument": {
+        "description": "A device model as a file: what the export downloads and the import uploads. It holds no\nIDs, revisions or times, so it can be imported in another tenant or deployment.",
+        "properties": {
+          "format": {
+            "description": "Always `trustiot.device_model`.",
+            "example": "trustiot.device_model",
+            "type": "string"
+          },
+          "format_version": {
+            "description": "The document's version; this release writes and reads 1.",
+            "format": "int64",
+            "maximum": 1,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "description": "The model's name, under the naming rule of [`DeviceModel::name`].",
+            "maxLength": 40,
+            "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "points": {
+            "description": "The data points, in order.",
+            "items": {
+              "$ref": "#/components/schemas/DeviceModelPoint"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "format",
+          "format_version",
+          "name",
+          "points"
+        ],
+        "type": "object"
+      },
+      "DeviceModelId": {
+        "description": "A device model of a tenant (rebuild checklist C1), made by the assets service; unlike the\nmodel's name, which is unique per tenant only, it is unique across tenants.\n\nSerialized as a lowercase hyphenated UUID string.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "DeviceModelList": {
+        "description": "The tenant's device models, by name.",
+        "properties": {
+          "models": {
+            "description": "Every model of the tenant.",
+            "items": {
+              "$ref": "#/components/schemas/DeviceModelSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "models"
+        ],
+        "type": "object"
+      },
+      "DeviceModelPoint": {
+        "description": "A data point of a device model: how the gateway reads one value, and what the value means.",
+        "properties": {
+          "address": {
+            "description": "The 0-based protocol address of the first coil or register (40001 in a device manual is\naddress 0). A point's registers end at 65535 at most and do not overlap another point's\nof the same function code.",
+            "format": "int32",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "byte_order": {
+            "description": "Where the bytes of the 32-bit value 0xAABBCCDD end up in the registers: `abcd` big-endian (the default), `badc` bytes swapped in each register, `cdab` registers reversed, `dcba` both.",
+            "enum": [
+              "abcd",
+              "badc",
+              "cdab",
+              "dcba"
+            ],
+            "type": "string"
+          },
+          "data_type": {
+            "description": "How the registers decode: `bool` (a bit, or a register that is not 0), `u16`/`i16` (1 register), `u32`/`i32`/`f32` (2), `u64`/`i64`/`f64` (4), `string` (`length` registers of ASCII). Function codes 1 and 2 read `bool` only.",
+            "enum": [
+              "bool",
+              "u16",
+              "i16",
+              "u32",
+              "i32",
+              "u64",
+              "i64",
+              "f32",
+              "f64",
+              "string"
+            ],
+            "type": "string"
+          },
+          "description": {
+            "description": "What the value means, for people and for the AI features: up to 512 characters, without\ncontrol characters other than line feed and tab, format characters, or line and\nparagraph separators. Trimmed; empty means none.",
+            "maxLength": 512,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "function_code": {
+            "description": "The Modbus read function: 1 coils, 2 discrete inputs, 3 holding registers, 4 input\nregisters.",
+            "format": "int32",
+            "maximum": 4,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "key": {
+            "description": "The key telemetry uses, unique within the model: 1-64 ASCII letters, digits, `.`, `_`\nor `-`, starting with a letter or digit.",
+            "example": "voltage",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "length": {
+            "description": "For `string` only, which requires it: the number of registers, 2 characters each.",
+            "format": "int32",
+            "maximum": 125,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "description": "Added after `scale`; finite. Numeric types only.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "scale": {
+            "description": "Multiplier applied to the raw number (rebuild checklist F5); finite and not 0. Numeric\ntypes only.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "function_code",
+          "address",
+          "data_type"
+        ],
+        "type": "object"
+      },
+      "DeviceModelSummary": {
+        "description": "A device model in the tenant's list.",
+        "properties": {
+          "created_at": {
+            "description": "When the model was created.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "model_id": {
+            "$ref": "#/components/schemas/DeviceModelId",
+            "description": "The model's ID."
+          },
+          "name": {
+            "description": "The name.",
+            "type": "string"
+          },
+          "point_count": {
+            "description": "How many data points it has.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "revision": {
+            "description": "The current revision.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "updated_at": {
+            "description": "When the model was last changed.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_id",
+          "name",
+          "revision",
+          "point_count",
+          "created_at",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -242,6 +509,37 @@
         "description": "A tenant: one customer organisation; every tenant-scoped row and event carries it.\n\nSerialized as a lowercase hyphenated UUID string.",
         "format": "uuid",
         "type": "string"
+      },
+      "UpdateDeviceModel": {
+        "description": "The body of `PUT /api/assets/v1/device-models/{model_id}`: the new data points, which replace\nall of the model's. Unknown fields are refused.",
+        "properties": {
+          "name": {
+            "description": "The model's name, if sent, must be its current name: names never change.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "points": {
+            "description": "The data points, at most 1000, in order; may be empty.",
+            "items": {
+              "$ref": "#/components/schemas/DeviceModelPoint"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "revision": {
+            "description": "The revision the client last read (`revision` of the model it read): the update is\nrefused with 409 when the model changed since, so concurrent editors never overwrite each\nother's points unseen. Required.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "points"
+        ],
+        "type": "object"
       }
     }
   },
@@ -251,6 +549,564 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/assets/v1/device-models": {
+      "get": {
+        "operationId": "listDeviceModels",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceModelList"
+                }
+              }
+            },
+            "description": "The caller's tenant's models, by name."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "The tenant's device models.",
+        "tags": [
+          "assets"
+        ]
+      },
+      "post": {
+        "operationId": "createDeviceModel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDeviceModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceModel"
+                }
+              }
+            },
+            "description": "The model was created; `Location` is its URL."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is larger than 2 MiB (`device_model.body_too_large`), or it is not a JSON object (`device_model.body_invalid`) (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant, or a role below editor (`permission_denied`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant has a model of this name (`conflict`, `device_model.name_taken`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A naming or data point rule is broken (`validation_failed`); `field_errors` names each problem with a JSON Pointer and a `device_model.*` key. Nothing was written."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The service does not know the tenant yet (`device_model.tenant_not_ready`), or the database failed (`unavailable`). Nothing was written."
+          }
+        },
+        "summary": "Creates a device model; `assets.device_model_created` is written in the same transaction.",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/api/assets/v1/device-models/import": {
+      "post": {
+        "operationId": "importDeviceModel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceModelDocument"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceModel"
+                }
+              }
+            },
+            "description": "The model was created; `Location` is its URL."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is larger than 2 MiB (`device_model.body_too_large`), or it is not a JSON object (`device_model.body_invalid`) (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant, or a role below editor (`permission_denied`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant has a model of this name (`conflict`, `device_model.name_taken`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The document is not `trustiot.device_model` version 1, or a naming or data point rule is broken (`validation_failed`). Nothing was written."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The service does not know the tenant yet (`device_model.tenant_not_ready`), or the database failed (`unavailable`). Nothing was written."
+          }
+        },
+        "summary": "Creates a device model from an exported document, under the same rules as a create.",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/api/assets/v1/device-models/{model_id}": {
+      "delete": {
+        "operationId": "deleteDeviceModel",
+        "parameters": [
+          {
+            "description": "The model's ID.",
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DeviceModelId"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The model and its data points were deleted."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant, or a role below editor (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such model in the caller's tenant (`not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A device uses the model (`conflict`, `device_model.in_use`). Nothing was deleted."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`). Nothing was deleted."
+          }
+        },
+        "summary": "Deletes a device model that no device uses; `assets.device_model_deleted` is written in the\nsame transaction.",
+        "tags": [
+          "assets"
+        ]
+      },
+      "get": {
+        "operationId": "getDeviceModel",
+        "parameters": [
+          {
+            "description": "The model's ID.",
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DeviceModelId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceModel"
+                }
+              }
+            },
+            "description": "The model."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such model in the caller's tenant (`not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "One device model with its data points.",
+        "tags": [
+          "assets"
+        ]
+      },
+      "put": {
+        "operationId": "updateDeviceModel",
+        "parameters": [
+          {
+            "description": "The model's ID.",
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DeviceModelId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDeviceModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceModel"
+                }
+              }
+            },
+            "description": "The model after the update, at its next revision."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is larger than 2 MiB (`device_model.body_too_large`), or it is not a JSON object (`device_model.body_invalid`) (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant, or a role below editor (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such model in the caller's tenant (`not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The model is no longer at the `revision` sent (`conflict`, `device_model.revision_mismatch`, `details.current`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A data point rule is broken, `revision` is missing (`device_model.field_required`) or not a positive integer, or `name` is not the model's (`device_model.name_immutable`) (`validation_failed`). Nothing was written."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`). Nothing was written."
+          }
+        },
+        "summary": "Replaces the data points of a device model; `assets.device_model_updated` is written in the\nsame transaction.",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/api/assets/v1/device-models/{model_id}/export": {
+      "get": {
+        "operationId": "exportDeviceModel",
+        "parameters": [
+          {
+            "description": "The model's ID.",
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DeviceModelId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceModelDocument"
+                }
+              }
+            },
+            "description": "The model as a document, with `Content-Disposition: attachment` and the model's name as the file name."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant or no role in it (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No such model in the caller's tenant (`not_found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`)."
+          }
+        },
+        "summary": "One device model as a document to download, which the import accepts.",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
     "/api/assets/v1/tenant": {
       "get": {
         "operationId": "getAssetsTenant",

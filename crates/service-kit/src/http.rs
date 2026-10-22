@@ -90,20 +90,26 @@ pub(crate) fn compose(
     config: &HttpConfig,
     halt: CancellationToken,
 ) -> Router {
+    // `merge` keeps the fallback of its argument when neither router set one, so the service's
+    // layered fallback must be the argument.
+    health.merge(layer(app, config.request_timeout, halt))
+}
+
+/// The kit's layers around a service's routes, including their fallback: the handler timeout and
+/// the cut-off at the drain timeout, panic recovery, and request spans and access logs. The API
+/// port gets them through [`compose`], and every other port a service serves through
+/// `Context::serve_port`, so no port of a service answers without them.
+pub(crate) fn layer(app: Router, request_timeout: Duration, halt: CancellationToken) -> Router {
     let limits = Limits {
-        request_timeout: config.request_timeout,
+        request_timeout,
         halt,
     };
-    let app = app
-        .layer(middleware::from_fn_with_state(limits, enforce_limits))
+    app.layer(middleware::from_fn_with_state(limits, enforce_limits))
         .layer(CatchPanicLayer::custom(|_| {
             // The panic hook has already logged the panic with its location.
             KitError::Internal.into_response()
         }))
-        .layer(middleware::from_fn(trace_request));
-    // `merge` keeps the fallback of its argument when neither router set one, so the service's
-    // layered fallback must be the argument.
-    health.merge(app)
+        .layer(middleware::from_fn(trace_request))
 }
 
 /// An error the kit answers by itself, without the service's handler.

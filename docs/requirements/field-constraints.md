@@ -2,7 +2,7 @@
 
 這些是現場的物理事實，與架構無關，新系統一樣會撞到。
 
-- 閘道器沒有硬體時鐘，斷網開機時時間曾慢約 38 分鐘（[#180](https://github.com/Laysi/trustiot/issues/180)）。
+- 閘道器有硬體 RTC（2026-10-22 確認）。舊系統斷網開機時時間曾慢約 38 分鐘（[#180](https://github.com/Laysi/trustiot/issues/180)），不能當成新閘道器的前提。
 - 現場停電通常連網路一起斷，只存在記憶體的資料會遺失（[#162](https://github.com/Laysi/trustiot/issues/162)）。
 - RS485 轉換器會把設備的回應送給所有 TCP 連線（[#183](https://github.com/Laysi/trustiot/issues/183)）。
 - 設備可能一直保持連線卻永遠不回應，keepalive 偵測不到（[#159](https://github.com/Laysi/trustiot/issues/159)、[#164](https://github.com/Laysi/trustiot/issues/164)）。

@@ -42,12 +42,23 @@ struct NotBefore {
     nbf: Option<i64>,
 }
 
+/// The audiences a verification accepts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Audience {
+    /// Only tokens addressed to this service: what every service accepts for its own requests.
+    Only(ServiceName),
+    /// Tokens addressed to any service: only for the identity service's token exchange
+    /// ([`super::ExchangeVerifier`]), which issues a new token from the claims and never acts on
+    /// them.
+    Any,
+}
+
 /// Verifies `token` for `audience` at `now` (seconds since the Unix epoch) and returns its
 /// claims.
 pub(super) fn verify(
     token: &str,
     keys: &IdentityKeys,
-    audience: ServiceName,
+    audience: Audience,
     now: i64,
 ) -> Result<InternalClaims, IdentityError> {
     if token.len() > InternalToken::MAX_LEN {
@@ -106,13 +117,15 @@ fn check_signature(
 fn check_claims(
     claims: &InternalClaims,
     nbf: Option<i64>,
-    audience: ServiceName,
+    audience: Audience,
     now: i64,
 ) -> Result<(), IdentityError> {
     if claims.iss != ServiceName::Identity {
         return Err(IdentityError::WrongIssuer);
     }
-    if claims.aud != audience {
+    if let Audience::Only(audience) = audience
+        && claims.aud != audience
+    {
         return Err(IdentityError::WrongAudience);
     }
     let lifetime = claims.exp.checked_sub(claims.iat);
@@ -161,7 +174,7 @@ mod tests {
     };
 
     fn verify_assets(token: &str, keys: &IdentityKeys) -> Result<InternalClaims, IdentityError> {
-        verify(token, keys, ServiceName::Assets, NOW)
+        verify(token, keys, Audience::Only(ServiceName::Assets), NOW)
     }
 
     #[test]
@@ -216,7 +229,12 @@ mod tests {
         altered["aud"] = json!("certs");
         parts[1] = encode_json(&altered);
         assert_eq!(
-            verify(&parts.join("."), &keys, ServiceName::Certs, NOW),
+            verify(
+                &parts.join("."),
+                &keys,
+                Audience::Only(ServiceName::Certs),
+                NOW
+            ),
             Err(IdentityError::BadSignature)
         );
 
@@ -368,9 +386,9 @@ mod tests {
         let signer = TestKey::new(1);
         let keys = keys(&[(&signer, "k1")]);
         let token = signer.sign("k1", &claims_at(NOW));
-        assert!(verify(&token, &keys, ServiceName::Assets, NOW).is_ok());
+        assert!(verify(&token, &keys, Audience::Only(ServiceName::Assets), NOW).is_ok());
         assert_eq!(
-            verify(&token, &keys, ServiceName::Certs, NOW),
+            verify(&token, &keys, Audience::Only(ServiceName::Certs), NOW),
             Err(IdentityError::WrongAudience)
         );
 
@@ -381,6 +399,58 @@ mod tests {
             verify_assets(&token, &keys),
             Err(IdentityError::WrongIssuer)
         );
+    }
+
+    /// The token exchange's mode skips the audience check and nothing else.
+    #[test]
+    fn any_audience_still_checks_everything_else() {
+        let signer = TestKey::new(1);
+        let keys = keys(&[(&signer, "k1")]);
+        for audience in ServiceName::ALL {
+            let mut claims = claims_at(NOW);
+            claims["aud"] = json!(audience.as_str());
+            let verified = verify(&signer.sign("k1", &claims), &keys, Audience::Any, NOW)
+                .expect("any audience verifies");
+            assert_eq!(verified.aud, audience);
+        }
+
+        let mut wrong_issuer = claims_at(NOW);
+        wrong_issuer["iss"] = json!("assets");
+        let mut too_long = claims_at(NOW);
+        too_long["exp"] = json!(NOW + MAX_LIFETIME_SECS + 1);
+        let mut unknown_audience = claims_at(NOW);
+        unknown_audience["aud"] = json!("ai-gateway");
+        let cases = [
+            (signer.sign("k1", &wrong_issuer), IdentityError::WrongIssuer),
+            (signer.sign("k1", &too_long), IdentityError::InvalidLifetime),
+            (
+                signer.sign("k1", &claims_at(NOW - 3600)),
+                IdentityError::Expired,
+            ),
+            (
+                signer.sign("k1", &claims_at(NOW + 3600)),
+                IdentityError::NotYetValid,
+            ),
+            (
+                signer.sign("k1", &unknown_audience),
+                IdentityError::MalformedClaims,
+            ),
+            (
+                TestKey::new(2).sign("k1", &claims_at(NOW)),
+                IdentityError::BadSignature,
+            ),
+            (
+                signer.sign("k2", &claims_at(NOW)),
+                IdentityError::UnknownKey,
+            ),
+        ];
+        for (token, expected) in cases {
+            assert_eq!(
+                verify(&token, &keys, Audience::Any, NOW),
+                Err(expected),
+                "{expected:?}"
+            );
+        }
     }
 
     #[test]

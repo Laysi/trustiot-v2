@@ -1,0 +1,24 @@
+{
+  "id": "01928f6e-7a3c-7d4e-8f00-000000000302",
+  "type": "assets.device_model_updated",
+  "version": 1,
+  "tenant_id": "01928f6e-7a3c-7d4e-8f00-00000000000b",
+  "occurred_at": "2026-10-21T08:05:00.456Z",
+  "producer": "assets",
+  "payload": {
+    "model_id": "01928f6e-7a3c-7d4e-8f00-000000000a01",
+    "revision": 2,
+    "model": {
+      "name": "power-meter",
+      "points": [
+        {
+          "key": "voltage",
+          "function_code": 3,
+          "address": 0,
+          "data_type": "f32",
+          "byte_order": "dcba"
+        }
+      ]
+    }
+  }
+}

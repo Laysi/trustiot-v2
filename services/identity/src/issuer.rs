@@ -238,9 +238,26 @@ impl Issuer {
                 .ok_or(IssueError::Build)?,
             tenant: grant.tenant,
             platform_admin: grant.platform_admin,
+            // Signed for the ingress gateway's request: nobody acts for the user yet.
+            act: None,
         };
+        self.sign_claims(&claims, now)
+    }
+
+    /// Signs `claims` with the key that may sign at `now`. The caller builds claims the verifiers
+    /// accept: issued by this service at `now`, living at most [`TOKEN_LIFETIME_SECS`]
+    /// ([`Issuer::issue`] for a session, [`crate::exchange`] for a token exchange).
+    ///
+    /// # Errors
+    ///
+    /// As [`Issuer::issue`].
+    pub(crate) fn sign_claims(
+        &self,
+        claims: &InternalClaims,
+        now: i64,
+    ) -> Result<InternalToken, IssueError> {
         let token = self
-            .with_signing_key(now, |key| sign(key.signer(), key.kid(), &claims))
+            .with_signing_key(now, |key| sign(key.signer(), key.kid(), claims))
             .ok_or(IssueError::NoSigningKey)??;
         InternalToken::new(token).map_err(|_| IssueError::Build)
     }

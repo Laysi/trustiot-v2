@@ -2047,10 +2047,10 @@ async fn access_entities_come_from_sql(ch: &ClickHouse) {
         println!("access entities:\n{}", rows.trim());
     }
     let lines: Vec<&str> = rows.lines().collect();
-    // 3 roles (the collector's included), 8 row policies (5 on the tables for the roles, 1 for
-    // the view's definer, 2 on the view), 1 settings profile, 1 quota, 1 user (the view's
-    // definer).
-    assert_eq!(lines.len(), 14, "{rows}");
+    // 4 roles (the collector's and the monitoring role included), 8 row policies (5 on the tables
+    // for the roles, 1 for the view's definer, 2 on the view), 1 settings profile, 1 quota, 1 user
+    // (the view's definer).
+    assert_eq!(lines.len(), 15, "{rows}");
     for line in lines {
         assert!(
             line.ends_with("\tlocal_directory"),

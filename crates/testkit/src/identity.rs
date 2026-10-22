@@ -87,6 +87,7 @@ impl TestIssuer {
             exp: iat + TOKEN_LIFETIME_SECS,
             tenant,
             platform_admin: false,
+            act: None,
         }
     }
 
