@@ -232,7 +232,7 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
 - **產生**：以作業系統的 CSPRNG 產生。連結用的 token 至少 128 位元（建議 256 位元，base64url）。給人輸入的短驗證碼熵低，必須同時有短效期與嘗試次數上限，超過上限就作廢該驗證碼；數值由 Laysi/trustiot-v2#103 決定並寫進文件。
 - **只存雜湊**：資料庫只存 token 的雜湊（SHA-256），不存明文，資料庫外洩也拿不到可用的連結 token。短驗證碼的組合少，外洩的雜湊可以離線窮舉，所以它的安全性靠短效期與嘗試上限，不靠雜湊。
 - **原子消耗**：驗證與消耗在同一個 SQL 陳述式完成，例如 `UPDATE ... SET used_at = now() WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() RETURNING ...` 或 `DELETE ... RETURNING ...`。只有拿到 RETURNING 結果的請求成功；沒有拿到就回錯誤。消耗與它換到的東西（建立 session、加入成員）在同一筆交易，任何一步失敗就整筆回滾並回錯誤，不能回 200。
-- **不放網址**：token 不出現在 path 或 query，伺服器也不接受從 query 讀 token（網址會進瀏覽器歷史、Cloudflare 與入口的存取紀錄、Referer）。API 一律以 POST body 傳送。email 裡的連結需要帶 token 時放在 fragment（`https://<app>/invite#token=...`）：瀏覽器不會把 fragment 送到伺服器，SPA 讀出後立即以 `history.replaceState` 從網址列移除，再以 POST body 送出。SPA 的回應設 `Referrer-Policy: no-referrer` 或 `strict-origin-when-cross-origin`（Laysi/trustiot-v2#123）。
+- **不放網址**：token 不出現在 path 或 query，伺服器也不接受從 query 讀 token（網址會進瀏覽器歷史、Cloudflare 與入口的存取紀錄、Referer）。API 一律以 POST body 傳送。email 裡的連結需要帶 token 時放在 fragment（`https://<app>/invite#token=...`）：瀏覽器不會把 fragment 送到伺服器，SPA 讀出後立即以 `history.replaceState` 從網址列移除，再以 POST body 送出。SPA 的回應設 `Referrer-Policy: strict-origin-when-cross-origin`（`services/web`，Laysi/trustiot-v2#123）：跨站時只送 origin，不送 path 與 query。不用 `no-referrer`，因為瀏覽器在這個政策下發出的 POST 帶 `Origin: null`，身分服務的跨站檢查會把同站的請求也拒絕。
 - **綁定用途**：token 綁定用途與對象（哪個 email、哪個租戶的哪個邀請），用於 A 的 token 不能拿去做 B。
 - **測試**：併發兩個請求消耗同一個 token，只有一個成功（整合測試）；過期、已用、錯誤用途都被拒；token 不出現在任何日誌。
 

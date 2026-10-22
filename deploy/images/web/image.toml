@@ -1,0 +1,9 @@
+# The web service (services/web): serves the SPA's static files on the app host, with deep links
+# and the security headers (Laysi/trustiot-v2#123). Packed with deploy/images/rust-binary.Containerfile.
+[rust]
+package = "web"
+
+# The SPA (frontend/), built with `bun run build` into dist/ and checked with `bun run check:dist`,
+# goes into the image at /srv/www, the service's default root directory.
+[static]
+project = "frontend"

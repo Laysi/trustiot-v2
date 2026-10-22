@@ -33,6 +33,7 @@ import {
   requirePublishedAsPlanned,
   requireRegistry,
   resolveBinary,
+  rustSpec,
   sbomAssetName,
   signingIdentity,
   summarizeSpdx,
@@ -149,6 +150,16 @@ describe("parseImageToml", () => {
     });
   });
 
+  test("reads the optional static project", () => {
+    expect(parseImageToml("web", '[rust]\npackage = "web"\n\n[static]\nproject = "frontend"\n', "f")).toEqual({
+      kind: "rust",
+      name: "web",
+      package: "web",
+      staticSite: "frontend",
+    });
+    expect(parseImageToml("x", '[rust]\npackage = "x"\n[static]\nproject = "apps/site-2"\n', "f").staticSite).toBe("apps/site-2");
+  });
+
   test.each([
     ["not TOML", "[rust", "cannot parse TOML"],
     ["no [rust] table", 'package = "x"\n', "unknown key(s) package"],
@@ -156,6 +167,14 @@ describe("parseImageToml", () => {
     ["a misspelt key", '[rust]\npackage = "x"\nbinary = "x"\n', "unknown key(s) binary"],
     ["a package name with a space", '[rust]\npackage = "a b"\n', "package must be"],
     ["a numeric bin", '[rust]\npackage = "x"\nbin = 1\n', "bin must be"],
+    ["a static key that is not a table", 'static = "frontend"\n\n[rust]\npackage = "x"\n', "[static] must be a table"],
+    ["a static table without project", '[rust]\npackage = "x"\n[static]\n', "[static] project must be"],
+    ["a misspelt static key", '[rust]\npackage = "x"\n[static]\nproject = "a"\ndist = "out"\n', "unknown key(s) dist in [static]"],
+    ["a static project above the root", '[rust]\npackage = "x"\n[static]\nproject = "../frontend"\n', "[static] project must be"],
+    ["an absolute static project", '[rust]\npackage = "x"\n[static]\nproject = "/srv/frontend"\n', "[static] project must be"],
+    ["a static project with a dot segment", '[rust]\npackage = "x"\n[static]\nproject = "a/./b"\n', "[static] project must be"],
+    ["a static project with a trailing slash", '[rust]\npackage = "x"\n[static]\nproject = "frontend/"\n', "[static] project must be"],
+    ["a static table on its own", '[static]\nproject = "frontend"\n', "missing the [rust] table"],
   ])("rejects %s", (_label, source, message) => {
     expect(() => parseImageToml("x", source, "deploy/images/x/image.toml")).toThrow(message);
   });
@@ -189,6 +208,41 @@ describe("discoverImages", () => {
     }
   });
 
+  const STATIC_TOML = '[rust]\npackage = "web"\n[static]\nproject = "site"\n';
+  const SITE_PACKAGE = JSON.stringify({ name: "site", scripts: { build: "vite build", "check:dist": "bun check.ts" } });
+
+  test("lists a Rust image with a static project that the build can install and run", () => {
+    const root = layout({
+      "deploy/images/web/image.toml": STATIC_TOML,
+      "site/package.json": SITE_PACKAGE,
+      "site/bun.lock": "{}\n",
+    });
+    try {
+      expect(discoverImages(root)).toEqual([{ kind: "rust", name: "web", package: "web", staticSite: "site" }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["no project directory", {}, "deploy/images/web/image.toml: the [static] project site has no package.json"],
+    ["no lockfile", { "site/package.json": SITE_PACKAGE }, "has no bun.lock"],
+    ["a package.json that is not JSON", { "site/package.json": "{", "site/bun.lock": "{}\n" }, "is not JSON"],
+    [
+      "no check:dist script",
+      { "site/package.json": JSON.stringify({ scripts: { build: "vite build" } }), "site/bun.lock": "{}\n" },
+      "has no `check:dist` script",
+    ],
+    ["no scripts", { "site/package.json": "{}", "site/bun.lock": "{}\n" }, "has no `build` or `check:dist` script"],
+  ])("rejects a static project with %s", (_label, entries, message) => {
+    const root = layout({ "deploy/images/web/image.toml": STATIC_TOML, ...(entries as Record<string, string>) });
+    try {
+      expect(() => discoverImages(root)).toThrow(message);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test.each([
     ["both files", { "deploy/images/x/image.toml": '[rust]\npackage = "x"\n', "deploy/images/x/Containerfile": "FROM scratch\n" }, "has both"],
     ["neither file", { "deploy/images/x/notes.md": "" }, "add image.toml"],
@@ -210,6 +264,8 @@ describe("discoverImages", () => {
     expect(images).toContainEqual({ kind: "rust", name: "migrate", package: "migrate" });
     // Laysi/trustiot-v2#308: the identity service ships as the chart's `identity` service.
     expect(images).toContainEqual({ kind: "rust", name: "identity", package: "identity" });
+    // Laysi/trustiot-v2#123: the web service ships with the SPA's build output.
+    expect(images).toContainEqual({ kind: "rust", name: "web", package: "web", staticSite: "frontend" });
   });
 });
 
@@ -244,6 +300,25 @@ describe("renderRustContainerfile", () => {
     const from = rendered.split("\n").filter((line) => line.startsWith("FROM "));
     expect(from).toHaveLength(1);
     expect(from[0]).toMatch(/@sha256:[0-9a-f]{64}$/);
+  });
+
+  test("copies a static site to /srv/www only for an image with a [static] project", () => {
+    const template = readFileSync(join(ROOT, RUST_CONTAINERFILE), "utf8");
+    const plain = renderRustContainerfile(template, "identity");
+    const site = renderRustContainerfile(template, "web", { staticSite: true });
+    for (const rendered of [plain, site]) {
+      expect(rendered).not.toContain("@STATIC@");
+    }
+    // Only the placeholder goes: every instruction of the other images stays as it was.
+    expect(plain.split("\n").filter((line) => !line.startsWith("#"))).toEqual(
+      template.split("\n").filter((line) => !line.startsWith("#")).map((line) => line.replaceAll("@BIN@", "identity")),
+    );
+    const lines = site.split("\n");
+    const copy = lines.indexOf("COPY www/ /srv/www/");
+    expect(copy).toBeGreaterThan(lines.indexOf("COPY --chmod=0555 web /usr/local/bin/web"));
+    expect(copy).toBeLessThan(lines.findIndex((line) => line.startsWith("USER ")));
+    expect(() => renderRustContainerfile("FROM scratch\nCOPY @BIN@ /\n", "x", { staticSite: true })).toThrow("no `# @STATIC@` line");
+    expect(renderRustContainerfile("FROM scratch\nCOPY @BIN@ /\n", "x")).toBe("FROM scratch\nCOPY x /\n");
   });
 
   test("rejects a template without the placeholder and a binary name that is not a Cargo name", () => {
@@ -286,6 +361,19 @@ describe("parsePlan", () => {
   test("round-trips a plan", () => {
     const plan = samplePlan();
     expect(parsePlan(JSON.stringify(plan))).toEqual(plan);
+  });
+
+  test("round-trips a Rust image with a static project and rejects a tampered one", () => {
+    const web = planImage({ kind: "rust", name: "web", package: "web", staticSite: "frontend" }, "1.2.0-rc.1");
+    expect(web.staticSite).toBe("frontend");
+    const plan = samplePlan({ images: [web] });
+    expect(parsePlan(JSON.stringify(plan))).toEqual(plan);
+    expect(rustSpec(parsePlan(JSON.stringify(plan)).images[0]!)).toEqual({ kind: "rust", name: "web", package: "web", staticSite: "frontend" });
+    for (const staticSite of ["../frontend", "/srv/www", "", 1]) {
+      const doc = JSON.parse(JSON.stringify(plan));
+      doc.images[0].staticSite = staticSite;
+      expect(() => parsePlan(JSON.stringify(doc)), String(staticSite)).toThrow("invalid static project");
+    }
   });
 
   test.each([

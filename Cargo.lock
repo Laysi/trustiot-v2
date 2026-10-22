@@ -97,14 +97,17 @@ dependencies = [
  "contract",
  "identity",
  "outbox",
+ "protocol",
  "reqwest",
  "serde",
  "serde_json",
  "service-kit",
  "sqlx",
  "testkit",
+ "thiserror",
  "tokio",
  "tracing",
+ "unicode-properties",
  "utoipa",
 ]
 
@@ -378,6 +381,7 @@ dependencies = [
  "http",
  "hyper",
  "percent-encoding",
+ "protocol",
  "reqwest",
  "serde",
  "serde_json",
@@ -2926,6 +2930,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "web"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "service-kit",
+ "sha2 0.11.0",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tracing",
 ]
 
 [[package]]

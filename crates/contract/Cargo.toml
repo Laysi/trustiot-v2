@@ -13,6 +13,8 @@ http.workspace = true
 # Only to recognise "connection closed before the response" in reqwest's error chain.
 hyper = { workspace = true, features = ["client", "http1"] }
 percent-encoding.workspace = true
+# The device model in the assets service's events is the gateway's own format (rebuild checklist M4).
+protocol = { path = "../protocol" }
 # Plain HTTP only: in-mesh calls get mTLS from Istio ambient's ztunnel, so no TLS stack here.
 reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }

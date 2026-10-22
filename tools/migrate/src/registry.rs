@@ -172,13 +172,18 @@ pub const PRODUCT: Registry = Registry {
         },
         // Reads identity's events as its platform role, so the chart binds a password to
         // `assets_platform` as well ("trustiot.migrate.platformLogins" in
-        // deploy/chart/templates/_migrate.tpl).
+        // deploy/chart/templates/_migrate.tpl). Writes `assets.device_model_*`
+        // (Laysi/trustiot-v2#99) with its service role. A producer needs a reader for the outbox
+        // policy, and the gateway configuration that will consume these events
+        // (Laysi/trustiot-v2#93) does not exist yet, so assets reads its own events for now: no
+        // subscription does. When the real consumer is listed here, drop "assets" and the Job
+        // revokes the read (it syncs the readers on every run).
         Service {
             name: assets_schema::SCHEMA.service,
             platform_role: true,
             outbox: Outbox {
                 producer: assets_schema::SCHEMA.outbox_producer,
-                consumes: &["identity"],
+                consumes: &["identity", "assets"],
             },
             migrations: assets_schema::SCHEMA.migrations,
         },

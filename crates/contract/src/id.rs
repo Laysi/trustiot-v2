@@ -84,6 +84,11 @@ uuid_id!(
     /// An event, unique across services; consumers deduplicate deliveries by it.
     EventId
 );
+uuid_id!(
+    /// A device model of a tenant (rebuild checklist C1), made by the assets service; unlike the
+    /// model's name, which is unique per tenant only, it is unique across tenants.
+    DeviceModelId
+);
 
 #[cfg(test)]
 mod tests {
