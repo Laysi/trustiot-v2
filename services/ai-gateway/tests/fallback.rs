@@ -220,23 +220,23 @@ async fn other_errors_come_back_without_trying_the_next_model() {
 #[tokio::test]
 async fn a_refusal_is_the_models_answer_not_a_failure() {
     let refusal = fixture("anthropic/message_refusal.json");
-    let pair = pair(
+    let whole = pair(
         once(json_reply(&refusal, "request-id", "req_refusal")),
         message(),
     )
     .await;
-    let reply = post(&pair.vars.router(), MESSAGES, &[], BODY).await;
+    let reply = post(&whole.vars.router(), MESSAGES, &[], BODY).await;
     assert_eq!(reply.status, StatusCode::OK);
     assert_eq!(reply.text(), refusal);
     assert_eq!(reply.header("ai-gateway-outcome"), Some("refusal"));
-    assert_eq!(pair.backup.request_count(), 0);
+    assert_eq!(whole.backup.request_count(), 0);
 
     let events = fixture("anthropic/stream_refusal.sse");
-    let pair = pair(once(stream_reply(&events)), message()).await;
-    let reply = post(&pair.vars.router(), MESSAGES, &[], STREAM_BODY).await;
+    let streamed = pair(once(stream_reply(&events)), message()).await;
+    let reply = post(&streamed.vars.router(), MESSAGES, &[], STREAM_BODY).await;
     assert_eq!(reply.status, StatusCode::OK);
     assert_eq!(reply.text(), sse_without_comments(&events));
-    assert_eq!(pair.backup.request_count(), 0);
+    assert_eq!(streamed.backup.request_count(), 0);
 }
 
 #[tokio::test]

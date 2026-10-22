@@ -126,8 +126,8 @@ struct Call<'a> {
 
 /// A model's answer.
 enum Success {
-    Message(RawReply<Message>),
-    Decision(RawReply<DecisionResponse>),
+    Message(Box<RawReply<Message>>),
+    Decision(Box<RawReply<DecisionResponse>>),
     /// A stream that has produced its first output (or ended before any).
     Stream(Box<Opened>),
 }
@@ -400,12 +400,12 @@ async fn send(
         Client::Anthropic(client) => client
             .create_message_raw(body, options)
             .await
-            .map(Success::Message)
+            .map(|reply| Success::Message(Box::new(reply)))
             .map_err(Failed::from),
         Client::Decisions(client) => client
             .decide_raw(body)
             .await
-            .map(Success::Decision)
+            .map(|reply| Success::Decision(Box::new(reply)))
             .map_err(Failed::from),
     }
 }

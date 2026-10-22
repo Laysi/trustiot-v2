@@ -5,6 +5,7 @@
 
 #![allow(
     dead_code,
+    unused_imports,
     reason = "each test binary uses a different part of the support module"
 )]
 

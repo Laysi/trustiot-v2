@@ -38,6 +38,18 @@
 - 串流：HTTP 200，`content-type: text/event-stream; charset=utf-8`，帶 `ai-gateway-model` 與 `request-id`。事件照收到的內容轉送（SSE 註解與 `id` 欄位不轉送，見 ai-clients 的「原樣轉送」）。串流在第一個內容區塊事件（`content_block_start` 或 `content_block_delta`）之後才回應標頭，之前收到的事件（`message_start`、`ping`）先暫存；所以第一個輸出之前的失敗還能改用下一個模型，呼叫端不會看到兩個模型的事件。串流的結果（拒答等）在串流自己的 `message_delta` 裡，沒有 `ai-gateway-outcome`。
 - 拒答是模型的回答，不是錯誤：照常回 200，不換模型（ai-assistant.md 「AI 閘道」第 2 點）。
 
+### 範例：一次最小的呼叫
+
+確認一把供應商金鑰能用（例如輪替 Anthropic 金鑰後，[展示環境 runbook](../../docs/runbooks/demo-environment.md)「輪替 Resend 與 Anthropic 金鑰」）就送一次最小的 Messages 呼叫。`<gateway>` 是閘道的位址與連接埠，`main` 換成設定裡用那個供應商的角色；內部 API 只開給 mesh 授權的呼叫端，在叢集裡從哪裡送出由部署（Laysi/trustiot-v2#536）決定。
+
+```sh
+curl -sS -D - -X POST "http://<gateway>/internal/roles/main/v1/messages" \
+  -H 'content-type: application/json' -H 'ai-gateway-tenant: key-check' \
+  -d '{"max_tokens":16,"messages":[{"role":"user","content":"Reply with OK."}]}'
+```
+
+HTTP 200 而且 `ai-gateway-model` 是那個供應商的模型，表示金鑰可用（角色有備援時，看這個標頭才知道是哪個模型回答的）；502 `api_error` 加上 `the provider refused the gateway's credentials` 表示供應商拒絕了金鑰（401 或 403）。
+
 ## 錯誤
 
 錯誤用呼叫端協定自己的錯誤格式，供應商的 SDK 讀得懂：Anthropic `{"type":"error","error":{"type":…,"message":…}}`，OpenAI `{"error":{"message":…,"type":…,"param":null,"code":…}}`。錯誤回應帶 `cache-control: no-store`，訊息不引用請求的內容。
@@ -142,10 +154,10 @@ service-kit 對長連線的建議是在 `Shutdown::stopping` 時結束 SSE，讓
 
 | 檔案 | 內容 |
 | --- | --- |
-| `tests/messages.rs` | 本文除了 `model` 逐位元組相同（thinking 與 signature、快取斷點、對話中的 system 訊息）、缺 `model` 時補上、串流原樣交回、第一個輸出之後的錯誤原樣轉送且不換模型、拒答的串流、各種不能轉送的請求在送出前拒絕 |
+| `tests/messages.rs` | 本文除了 `model` 逐位元組相同（thinking 與 signature、快取斷點、對話中的 system 訊息）、缺 `model` 時補上、串流原樣交回、第一個輸出之後的錯誤原樣轉送且不換模型、拒答的串流、各種不能轉送的請求在送出前拒絕、本文沒在時間預算內送完時回 504 |
 | `tests/fallback.rs` | 429、529、供應商 504、閘道自己的逾時（`TIMEOUT_UNDER_TEST`，15 秒）與並發上限都換下一個模型；串流第一個輸出之前的 `error` 事件與 429 也換；全部失敗時交回最後一個錯誤；400、401、500 與拒答不換；供應商訊息裡的 key 被遮蔽 |
 | `tests/decisions.rs` | 錄製的 Decisions 請求逐位元組轉送、回應原樣交回、拒答、429 與 503 換模型、不合格的請求與未知角色 |
 | `tests/process.rs` | 真正的程式：以測試 CA 與 `SSL_CERT_FILE` 走 TLS、key 從 `key_env` 讀取並送到供應商、trace 等級的日誌與回應裡都沒有 key；沒有 key 或角色的時間上限超過 `http.request_timeout` 時不啟動 |
 | `tests/no_contract.rs` | `cargo tree -p ai-gateway` 沒有 `contract` |
 
-`src/` 裡的單元測試涵蓋設定檢查、本文的換 `model`、錯誤格式與備援條件。
+`src/` 裡的單元測試涵蓋設定檢查、本文的換 `model`、錯誤格式與備援條件，以及 key 的遮蔽：互相重疊的 key、錯誤的 `type` 與 `code`、串流 `error` 事件裡用 JSON 跳脫寫成的 key。
