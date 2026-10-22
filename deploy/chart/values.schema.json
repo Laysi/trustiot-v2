@@ -638,7 +638,9 @@
             "passwordKey": { "$ref": "#/definitions/secretKey" }
           }
         }
-      }
+      },
+      "if": { "required": ["host"], "properties": { "host": { "minLength": 1 } } },
+      "then": { "required": ["from"], "properties": { "from": { "minLength": 1 } } }
     },
     "ai": {
       "type": "object",

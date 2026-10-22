@@ -19,8 +19,9 @@
 // with a token addressed to it (200 with the tenant), so the identity service resolves the
 // audience from the Host and path the gateway hands it, not from what the client wrote.
 //
-// Nothing logs in yet (Laysi/trustiot-v2#103), so the check makes its two sessions the way the
-// service's own tests do: rows in identity.users, identity.memberships and identity.sessions,
+// The k3d cluster has no mail relay for the email login (Laysi/trustiot-v2#103), so the check
+// makes its two sessions the way the service's own tests do: rows in identity.users,
+// identity.memberships and identity.sessions,
 // written as the database superuser over the Postgres pod's local socket. Only the SHA-256 of a
 // session secret reaches the database and the SQL; the secret itself lives in this process and is
 // never logged. The cluster and its sessions are thrown away after the run.

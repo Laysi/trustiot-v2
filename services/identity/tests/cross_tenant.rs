@@ -76,6 +76,11 @@ async fn tenants_are_isolated() {
          the tenant role is always read from memberships under row-level security \
          (services/identity/README.md)",
     )
+    .exempt(
+        "identity.login_codes",
+        "a login code belongs to a user and is checked before any session or tenant exists; it \
+         holds a hash, a count and times, no tenant data (services/identity/README.md, 登入)",
+    )
     .exempt("identity.trustiot_migrate_applied", MIGRATION_RECORDS);
 
     let issuer = TestIssuer::new();
@@ -86,6 +91,22 @@ async fn tenants_are_isolated() {
             "platform administrators only, and it creates a new tenant whose ID the service makes: \
              it takes no tenant from the request and serves no existing tenant's data \
              (tests/tenants.rs covers it)",
+        )
+        .exempt_endpoint(
+            "POST /auth/login",
+            "logging in happens before there is a session or a tenant: it takes an email address \
+             and a code, and the session it creates acts in no tenant the user is not a member of \
+             (tests/login.rs covers it)",
+        )
+        .exempt_endpoint(
+            "DELETE /api/identity/v1/sessions/current",
+            "revokes the caller's own session, found by its cookie and its user: no tenant data \
+             (tests/login.rs covers it)",
+        )
+        .exempt_endpoint(
+            "DELETE /api/identity/v1/sessions",
+            "revokes the caller's own sessions, found by their user: no tenant data \
+             (tests/login.rs covers it)",
         )
         .run(None)
         .await

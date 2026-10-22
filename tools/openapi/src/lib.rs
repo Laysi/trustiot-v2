@@ -48,7 +48,7 @@ pub const SHARED: &[Source] = &[Source {
 /// The services that expose a spec, in no particular order (the output is sorted).
 pub const SERVICES: &[Source] = &[
     // The tenant API (Laysi/trustiot-v2#65); the ext_authz check under /internal is not part of
-    // the client API. Laysi/trustiot-v2#103 adds the login API.
+    // the client API. Login and logout since Laysi/trustiot-v2#103.
     Source {
         name: "identity",
         openapi: identity::openapi,

@@ -16,6 +16,9 @@ pub mod postgres;
 #[path = "../../../../crates/service-kit/tests/support/start.rs"]
 pub mod start;
 
+/// The fake SMTP relay of tests/login.rs.
+pub mod smtp;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
@@ -765,9 +768,9 @@ VALUES ($1, $2, $3)";
 /// Stands in for the migration Job's records in a database these tests set up by hand: creates
 /// `identity.trustiot_migrate_applied` from service-kit's template and records every file the
 /// identity image expects (`identity::schema::SCHEMA`), so the service's `migrations` readiness
-/// check passes. These tests apply only `0001_identity.sql`, which is all the ext_authz check
-/// needs; the readiness check itself runs against the real Job in tests/migrations.rs. Run it as
-/// the schema's owner.
+/// check passes. These tests apply only `0001_identity.sql` and `0003_login.sql`, which is all
+/// the ext_authz check and extending sessions need; the readiness check itself runs against the
+/// real Job in tests/migrations.rs. Run it as the schema's owner.
 pub async fn record_release_migrations(owner: &mut sqlx::PgConnection) {
     sqlx::raw_sql(RECORDS_FUNCTION)
         .execute(&mut *owner)

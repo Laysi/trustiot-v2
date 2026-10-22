@@ -95,6 +95,8 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
   | 身分服務的主容器 | 身分服務的 ServiceAccount，token 掛進主容器 | 主容器被攻破時，攻擊者拿到能 patch 這兩個物件的 token，可以把自己的公鑰寫進 ConfigMap，換金鑰也趕不走；也違反規則 5「服務沒有 ServiceAccount token」 |
   | 另一個常駐的控制器或 CronJob | 它自己的 ServiceAccount，或借用身分服務的 | 又一個持有私鑰的工作負載。Laysi/trustiot-v2#404 時它的用處只有讓舊金鑰準時移除；簽章的切換已經以時間寫進資料（下方「輪替」），不需要它。Laysi/trustiot-v2#429 為了依年齡輪替加上一個借用身分服務 ServiceAccount 的 CronJob，取捨見下方「依金鑰年齡自動輪替」；產生第一把金鑰與人發起的輪替仍由 init container 做 |
 
+- **第二個用途：驗證碼的雜湊金鑰**（2026-10-21，Laysi/trustiot-v2#103）：身分服務以每把簽章私鑰對固定標籤 `trustiot-login-code-key:v1` 做 HMAC-SHA-256，導出 email 登入驗證碼的雜湊金鑰（`services/identity/src/issuer.rs` 的 `Issuer::code_key`），讓只讀得到資料庫的人無法從資料表算出驗證碼（上方「一次性 token 與驗證碼」）。導出的金鑰不能反推私鑰，只在身分服務的記憶體裡。新的驗證碼用這一刻簽章的那把，驗證時試每一把未撤銷的；舊金鑰移除時，用它雜湊、還沒用掉的驗證碼跟著失效，使用者重新寄一封即可，撤銷一代金鑰也一樣。沒有另設一把金鑰：那要多一個叢集內產生、只給身分服務的 Secret，而簽章私鑰已經滿足同樣的條件（叢集內產生、只有身分服務讀得到、不在資料庫）。
+
 - **公鑰怎麼交給服務**：每個服務的 pod 以唯讀 volume 掛這個 ConfigMap（`/etc/trustiot/internal-identity/`，掛整個 ConfigMap、不用 `subPath`，`optional: true`），平台設定 `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` 指向其中的 `jwks.json`，取代放 JWK Set 本身的 `TRUSTIOT_INTERNAL_IDENTITY_KEYS`。ConfigMap 改變後，kubelet 在下一次定期同步 pod 時更新掛載的檔案，整個目錄以 symlink 原子替換，讀到的不是舊的一份就是新的一份（`subPath` 掛載不會更新，所以不用）。service-kit 每 5 秒重讀這個檔案，內容是合法的 JWK Set 就整組換上，記一行 INFO 與 kid，所以服務拿到新公鑰不必重啟。
   - 還沒有任何公鑰時（全新安裝，init container 還沒填入，或 kubelet 還沒更新檔案）：服務照常啟動，但 `/readyz` 回 503、不接流量，拿到第一組才就緒。
   - 檔案不見、空的或不是合法的 JWK Set 時（ConfigMap 被刪或被改壞）：保留上一組可用的公鑰繼續驗證，記 WARN（只寫原因，不寫內容）；啟動時就沒有可用的一組則不就緒。
@@ -216,8 +218,8 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
 
 適用於 email 登入驗證碼（A1，Laysi/trustiot-v2#103）、成員邀請（A3，Laysi/trustiot-v2#105），以及之後任何「只能用一次」的 token（例如換發挑戰，決策 12）。來源是 [#105](https://github.com/Laysi/trustiot/issues/105)：舊系統先讀取、驗證、再清除，兩個併發請求能同時通過；清除失敗仍回 200；token 放在網址的 query。
 
-- **產生**：以作業系統的 CSPRNG 產生。連結用的 token 至少 128 位元（建議 256 位元，base64url）。給人輸入的短驗證碼熵低，必須同時有短效期與嘗試次數上限，超過上限就作廢該驗證碼；數值由 Laysi/trustiot-v2#103 決定並寫進文件。
-- **只存雜湊**：資料庫只存 token 的雜湊（SHA-256），不存明文，資料庫外洩也拿不到可用的連結 token。短驗證碼的組合少，外洩的雜湊可以離線窮舉，所以它的安全性靠短效期與嘗試上限，不靠雜湊。
+- **產生**：以作業系統的 CSPRNG 產生。連結用的 token 至少 128 位元（建議 256 位元，base64url）。給人輸入的短驗證碼熵低，必須同時有短效期與嘗試次數上限，超過上限就作廢該驗證碼。email 登入驗證碼的數值（2026-10-21，Laysi/trustiot-v2#103，細節在 [services/identity/README.md](../../services/identity/README.md)「登入」）：8 位數字、10 分鐘有效、每個驗證碼最多 5 次嘗試（含正確的那次）、發新的就作廢舊的；同一個地址 60 秒內最多寄一封、每小時 5 封、每天 20 封，所以每個地址每天最多 100 次猜測，猜中機率 10⁻⁶。
+- **只存雜湊**：資料庫只存 token 的雜湊（SHA-256），不存明文，資料庫外洩也拿不到可用的連結 token。短驗證碼的組合少，不帶金鑰的雜湊外洩後可以離線窮舉，所以短驗證碼存帶金鑰的雜湊（HMAC-SHA-256），金鑰放在資料庫以外：email 登入驗證碼的金鑰由身分服務的簽章金鑰導出（2026-10-21，Laysi/trustiot-v2#103，細節在 services/identity/README.md「登入」），只讀得到資料庫的人（備份、SQL 注入）無法從資料表算出驗證碼。對線上猜測的防護仍是短效期與嘗試上限。
 - **原子消耗**：驗證與消耗在同一個 SQL 陳述式完成，例如 `UPDATE ... SET used_at = now() WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() RETURNING ...` 或 `DELETE ... RETURNING ...`。只有拿到 RETURNING 結果的請求成功；沒有拿到就回錯誤。消耗與它換到的東西（建立 session、加入成員）在同一筆交易，任何一步失敗就整筆回滾並回錯誤，不能回 200。
 - **不放網址**：token 不出現在 path 或 query，伺服器也不接受從 query 讀 token（網址會進瀏覽器歷史、Cloudflare 與入口的存取紀錄、Referer）。API 一律以 POST body 傳送。email 裡的連結需要帶 token 時放在 fragment（`https://<app>/invite#token=...`）：瀏覽器不會把 fragment 送到伺服器，SPA 讀出後立即以 `history.replaceState` 從網址列移除，再以 POST body 送出。SPA 的回應設 `Referrer-Policy: no-referrer` 或 `strict-origin-when-cross-origin`（Laysi/trustiot-v2#123）。
 - **綁定用途**：token 綁定用途與對象（哪個 email、哪個租戶的哪個邀請），用於 A 的 token 不能拿去做 B。

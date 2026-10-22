@@ -124,7 +124,7 @@ async fn readiness_follows_the_migration_records() {
     let mut admin = product.superuser().await;
 
     // 0. The Job wrote the schema's copy exactly as its own records, and that is the list the
-    //    image expects: the outbox templates of a producer and both files.
+    //    image expects: the outbox templates of a producer and every file.
     let copy: Vec<(String, String, String)> = sqlx::query_as(COPY)
         .fetch_all(&mut admin)
         .await

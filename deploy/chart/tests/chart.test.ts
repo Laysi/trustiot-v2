@@ -439,8 +439,11 @@ describe("secrets reach only the services that need them", () => {
     ]);
     expect(secretRefs(manifests, "identity")).toEqual({
       SENTRY_DSN: "trustiot-sentry/dsn",
-      // Its own database password only, from its own Secret (the migration Job's tests).
+      // Its own database password, from its own Secret (the migration Job's tests).
       TRUSTIOT__DATABASE__PASSWORD: "trustiot-identity-password/identity_app",
+      // The relay account for login codes: values.yaml lists `smtp` for identity.
+      TRUSTIOT_SMTP_USERNAME: "trustiot-smtp/username",
+      TRUSTIOT_SMTP_PASSWORD: "trustiot-smtp/password",
     });
     expect(secretRefs(manifests, "knowledge")).toEqual({
       SENTRY_DSN: "trustiot-sentry/dsn",
@@ -3928,6 +3931,8 @@ describe("values validation rejects unsafe or incomplete settings", () => {
       ["--set-json", 'smtp.from="a@factory.test\\r\\nBcc: x@evil.test"'],
       /\/smtp\/from/,
     ],
+    // The identity service cannot send login codes without a sender (Laysi/trustiot-v2#103).
+    ["SMTP relay without a sender", onprem, ["--set", "smtp.from="], /\/smtp\/from/],
     ["root user allowed", saas, ["--set", "serviceDefaults.podSecurityContext.runAsNonRoot=false"], /runAsNonRoot/],
     [
       "privilege escalation allowed",

@@ -41,6 +41,9 @@ CREATE ROLE identity_app LOGIN PASSWORD 'service-kit-test';
 ALTER ROLE identity_app SET search_path = identity;
 ";
 const MIGRATION: &str = include_str!("../migrations/postgres/0001_identity.sql");
+/// The writes on sessions that logging in and extending a session need, and their guard
+/// (Laysi/trustiot-v2#103).
+const LOGIN_MIGRATION: &str = include_str!("../migrations/postgres/0003_login.sql");
 /// The migration Job creates the service's schema, owned by the owner role, before it runs the
 /// migrations (tools/migrate); the tests do the same as the owner.
 const SCHEMA: &str = "CREATE SCHEMA identity";
@@ -96,7 +99,7 @@ impl Fixture {
             ca_file,
         };
         let mut owner = fixture.connect("identity_owner").await;
-        for sql in [DATABASE_TEMPLATE, SCHEMA, MIGRATION] {
+        for sql in [DATABASE_TEMPLATE, SCHEMA, MIGRATION, LOGIN_MIGRATION] {
             sqlx::raw_sql(sql)
                 .execute(&mut owner)
                 .await
@@ -669,9 +672,17 @@ async fn session_expiry_and_revocation_are_decided_by_the_database_clock() {
         .await;
     warm(&service, &cookie(&warm_secret));
 
-    // Expires in 3 s: allowed now, refused after the second passes the expiry, never allowed
-    // again.
+    // Expires in 3 s at its absolute lifetime (7 days after its creation), so no request
+    // extends it: allowed now, refused after the second passes the expiry, never allowed again.
     let soon = fixture.add_session(USER, Some(TENANT_A), 3.0, false).await;
+    sqlx::query(
+        "UPDATE identity.sessions SET created_at = expires_at - interval '7 days'
+         WHERE token_hash = $1",
+    )
+    .bind(soon.hash().as_bytes().as_slice())
+    .execute(&mut fixture.connect("identity_owner").await)
+    .await
+    .expect("start the session 7 days before its expiry");
     let soon_cookie = cookie(&soon);
     let first = check(&service, "/", Some(&soon_cookie));
     assert_eq!(first.status, 200, "{}", first.raw());
@@ -1095,7 +1106,9 @@ async fn memberships_are_isolated_by_tenant_and_by_user() {
         "DROP POLICY tenant_isolation ON identity.memberships",
         "CREATE POLICY open ON identity.memberships USING (true)",
         "DELETE FROM identity.memberships",
-        "UPDATE identity.sessions SET revoked_at = NULL",
+        "UPDATE identity.sessions SET user_id = '01928f6e-7a3c-7d4e-8f00-0000000000cc'",
+        "DELETE FROM identity.sessions",
+        "ALTER TABLE identity.sessions DISABLE TRIGGER sessions_guard",
         "CREATE FUNCTION identity.f() RETURNS int LANGUAGE sql AS 'SELECT 1'",
     ] {
         let mut app = fixture.connect("identity_app").await;
@@ -1108,17 +1121,18 @@ async fn memberships_are_isolated_by_tenant_and_by_user() {
     let _ = sqlx::raw_sql("GRANT ALL ON identity.sessions TO identity_app")
         .execute(&mut app)
         .await;
-    let insert = sqlx::raw_sql(
-        "INSERT INTO identity.sessions (id, token_hash, user_id, expires_at)
-         VALUES (gen_random_uuid(), sha256('y'), '01928f6e-7a3c-7d4e-8f00-0123456789ab',
-                 now() + interval '1 hour')",
-    )
-    .execute(&mut app)
-    .await;
-    assert!(
-        insert.is_err(),
-        "the service role granted itself INSERT on sessions"
-    );
+    // It may insert sessions since Laysi/trustiot-v2#103, but never delete them or hand one to
+    // another user.
+    for statement in [
+        "DELETE FROM identity.sessions",
+        "UPDATE identity.sessions SET user_id = '01928f6e-7a3c-7d4e-8f00-0000000000cc'",
+    ] {
+        let outcome = sqlx::raw_sql(statement).execute(&mut app).await;
+        assert!(
+            outcome.is_err(),
+            "the service role granted itself what it needs for: {statement}"
+        );
+    }
     // row_security = off must not expose rows to a role that does not own the table.
     let mut app = fixture.connect("identity_app").await;
     sqlx::raw_sql("SET row_security = off")

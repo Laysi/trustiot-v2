@@ -158,7 +158,7 @@ TRUSTIOT__DATABASE__PASSWORD="$TRUSTIOT_DEV_IDENTITY_DATABASE_PASSWORD" \
 
 #### 開發 session 與試 ext_authz
 
-身分服務在 MS0 沒有登入（Laysi/trustiot-v2#103），也沒有寫入 session 的權限。`seed` 比照 [services/identity/README.md](../services/identity/README.md) 「測試工具怎麼建立 session」，以 `identity_owner` 的身分（`SET ROLE`，經容器內的 unix socket，沒有密碼）寫資料：
+本機環境沒有寄驗證碼的 SMTP relay，所以不經 email 登入（Laysi/trustiot-v2#103），服務角色也不能寫使用者與成員資格。`seed` 比照 [services/identity/README.md](../services/identity/README.md) 「測試工具怎麼建立 session」，以 `identity_owner` 的身分（`SET ROLE`，經容器內的 unix socket，沒有密碼）寫資料：
 
 - `services/identity/seed/postgres/001-dev-user.sql`（一般的服務 seed 檔，可重複執行）：開發使用者 `00000000-0000-4000-8000-000000000a01` 與租戶 `00000000-0000-4000-8000-000000000b01` 的 `admin` 成員資格。
 - 一筆 session：cookie 值是 32 bytes 的隨機數（base64url，43 個字元），資料庫只收它的 SHA-256；有效期 7 天。cookie 值存在 `<實例>/identity/dev-session-cookie`（0600，這是唯一的一份：資料庫只有雜湊）。再執行 `seed` 時，檔案裡的 cookie 還對得上一筆至少還有一小時效期、沒撤銷的 session 就沿用、印出同一個值；否則產生新的。

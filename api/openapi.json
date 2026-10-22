@@ -20,6 +20,35 @@
         ],
         "type": "object"
       },
+      "CodeSent": {
+        "description": "The answer to `send_code`, the same whether or not a user has the address.",
+        "properties": {
+          "code_length": {
+            "description": "Digits in the code.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "expires_in_secs": {
+            "description": "How long the code is valid, in seconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resend_after_secs": {
+            "description": "How long to wait before asking for another code, in seconds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code_length",
+          "expires_in_secs",
+          "resend_after_secs"
+        ],
+        "type": "object"
+      },
       "CreateTenant": {
         "description": "The body of `POST /api/identity/v1/tenants`. Unknown fields are ignored.",
         "properties": {
@@ -101,6 +130,80 @@
           "message_key"
         ],
         "type": "object"
+      },
+      "LoggedIn": {
+        "description": "The answer to a valid code; the session cookie is in `Set-Cookie`.",
+        "properties": {
+          "redirect_to": {
+            "description": "The validated `redirect_to`, or `/`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "redirect_to"
+        ],
+        "type": "object"
+      },
+      "LoginRequest": {
+        "description": "The body of `POST /auth/login`: a JSON object that names one of the two steps in `step`. Any other field is refused.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "Step 1: mail a login code to this address.",
+            "properties": {
+              "email": {
+                "description": "The address to log in with.",
+                "type": "string"
+              },
+              "step": {
+                "enum": [
+                  "send_code"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "step",
+              "email"
+            ],
+            "title": "send_code",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Step 2: log in with the code from the email.",
+            "properties": {
+              "code": {
+                "description": "The code, 8 digits.",
+                "type": "string"
+              },
+              "email": {
+                "description": "The address the code was sent to.",
+                "type": "string"
+              },
+              "redirect_to": {
+                "description": "Where to go after logging in: a path on this site such as `/devices?page=2`. Default `/`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "step": {
+                "enum": [
+                  "verify_code"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "step",
+              "email",
+              "code"
+            ],
+            "title": "verify_code",
+            "type": "object"
+          }
+        ]
       },
       "MessageKey": {
         "description": "Key of the translated message the client shows; never the message itself.",
@@ -209,6 +312,74 @@
         ]
       }
     },
+    "/api/identity/v1/sessions": {
+      "delete": {
+        "operationId": "logOutEverywhere",
+        "responses": {
+          "204": {
+            "description": "Every session of the user is revoked; `Set-Cookie` clears the session cookie. The next request of any of them is refused."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed; nothing was revoked (`unavailable`)."
+          }
+        },
+        "summary": "Logs out on every device: revokes every session of the user, this one included.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/api/identity/v1/sessions/current": {
+      "delete": {
+        "operationId": "logOut",
+        "responses": {
+          "204": {
+            "description": "The session is revoked; `Set-Cookie` clears the session cookie. Its next request is refused."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed; nothing was revoked (`unavailable`)."
+          }
+        },
+        "summary": "Logs out: revokes the session of the request's cookie.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
     "/api/identity/v1/tenants": {
       "post": {
         "operationId": "createTenant",
@@ -285,6 +456,87 @@
           }
         },
         "summary": "Creates a tenant. Platform administrators only.",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "operationId": "logIn",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoggedIn"
+                }
+              }
+            },
+            "description": "`verify_code`: the code matched. `Set-Cookie` holds the session cookie `__Host-trustiot-session` (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`)."
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeSent"
+                }
+              }
+            },
+            "description": "`send_code`: if a user has the address, a code is on its way. The same answer whether or not one has."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A query string, a `Content-Type` other than `application/json`, a body over 4096 bytes, or a body that is not one of the two steps; unknown fields such as `password` are refused (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`verify_code`: no usable code for the address, or a wrong code (`unauthenticated`). A code dies after 5 attempts and 10 minutes."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The email is not an address (`/email`, `login.email_invalid`), the code is not 8 digits (`/code`, `login.code_invalid`), or `redirect_to` is not a path on this site (`/redirect_to`, `login.redirect_invalid`) (`validation_failed`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No usable SMTP relay is configured, too many codes are waiting to be sent, the signing keys have not been read, or the database failed; nothing changed (`unavailable`)."
+          }
+        },
+        "summary": "Logs in with an email code, in two steps (see the module documentation).",
         "tags": [
           "identity"
         ]
