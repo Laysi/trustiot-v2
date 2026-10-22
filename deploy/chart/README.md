@@ -719,7 +719,7 @@ chart 不渲染、不建立伺服器憑證或私鑰，它的簽發與輪替在 L
 | 型別 | `kubernetes.io/tls` |
 | `tls.crt` | 伺服器憑證，後面接著中繼 CA（如果有），PEM |
 | `tls.key` | 伺服器憑證的私鑰，PEM |
-| 憑證內容 | EKU serverAuth；SAN 要有 mqtt-bridge 連線時用的名稱，Service 的 `<release>-mqtt-broker.<namespace>.svc`。nightly 簽的那張另外有 `<release>-mqtt-broker`、`<release>-mqtt-broker.<namespace>` 與 `<release>-mqtt-broker.<namespace>.svc.cluster.local`。閘道器信任哪個 CA、驗證哪個名稱由 Laysi/trustiot-v2#535 決定 |
+| 憑證內容 | EKU serverAuth；SAN 要有 mqtt-bridge 連線時用的名稱，Service 的 `<release>-mqtt-broker.<namespace>.svc`。nightly 簽的那張另外有 `<release>-mqtt-broker`、`<release>-mqtt-broker.<namespace>` 與 `<release>-mqtt-broker.<namespace>.svc.cluster.local`。閘道器只信任根 CA、以根 CRL 檢查簽發 CA（[services/certs/README.md](../../services/certs/README.md) 的「閘道器對 broker 伺服器憑證的信任」，Laysi/trustiot-v2#556），驗證的名稱由 Laysi/trustiot-v2#557 決定 |
 
 - 只有 broker 的 pod 掛它：主容器、init container `trust-files` 與 sidecar，唯讀，整個 Secret 掛在 `/etc/trustiot/mqtt-broker-tls/`（0440，root 與 pod 的 `fsGroup`），不用 subPath，kubelet 才會在 Secret 改變時更新檔案。Mosquitto 經 kubelet 的 `..data` symlink 讀檔（Rust 測試以同樣的目錄結構驗證）。chart 測試檢查沒有別的 pod、Role 或自訂 `env` 指到它。
 - Secret 還不存在時 pod 停在 `ContainerCreating`，等它建立後才啟動；`helm install --wait` 因此等不到 broker 就緒。nightly 在安裝 chart 之前，以這次執行自己產生的 CA 簽一張放進去（`scripts/nightly/smoke.ts`）。
