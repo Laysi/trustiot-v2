@@ -61,6 +61,17 @@
   "device_model.description_invalid": "Enter a description of 1 to {max} characters. Apart from line breaks and tabs, control and invisible formatting characters aren't allowed.",
   "device_model.format_unsupported": "This file isn't a device model exported from TrustIoT.",
   "device_model.format_version_unsupported": "This device model file's format version isn't supported.",
+  "workstation_certificate.body_too_large": "The request is too large. The limit is {max_bytes} bytes.",
+  "workstation_certificate.body_invalid": "The request must be a JSON object.",
+  "workstation_certificate.unknown_field": "This field isn't recognized. The certificate authority decides the subject, the extensions and the validity.",
+  "workstation_certificate.field_required": "This field is required.",
+  "workstation_certificate.name_invalid": "Use 1 to {max} ASCII letters, digits, periods, underscores or hyphens, starting with a letter or digit.",
+  "workstation_certificate.request_invalid": "Paste one certificate signing request in PEM format (BEGIN CERTIFICATE REQUEST) of at most {max_bytes} bytes.",
+  "workstation_certificate.request_unsupported": "The certificate signing request must be for an ECDSA P-256 key and signed with SHA-256.",
+  "workstation_certificate.request_signature_invalid": "The certificate signing request's signature doesn't match its key. Create the request again on the workstation.",
+  "workstation_certificate.reason_invalid": "Choose one of the listed revocation reasons.",
+  "workstation_certificate.already_revoked": "This certificate is already revoked.",
+  "workstation_certificate.ca_not_ready": "The certificate authority can't issue certificates yet. Try again in a few minutes.",
 
   "nav.home": "Home",
 

@@ -94,6 +94,7 @@ async fn tenants_are_isolated() {
 | `Suite::openapi(doc)` | 有 HTTP API 的服務 | 服務的 OpenAPI 文件（`serde_json::to_value(openapi())`）；每個 operation 都要宣告或豁免 |
 | `Suite::exempt_endpoint("METHOD /path", "理由")` | 沒有租戶資料的 operation，或另有手寫測試的巢狀路徑 | |
 | `Suite::without_api("理由")` | 沒有 HTTP API 的服務（例如只消費事件） | 兩者都沒呼叫時測試失敗 |
+| `Suite::without_tenant_data("理由")` | 完全沒有租戶資料的服務：每個關聯都 `exempt`、每個 operation 都 `exempt_endpoint`，例如 `services/certs/tests/cross_tenant.rs` | 沒有它時，什麼都沒宣告的 suite 以「nothing is declared」失敗；有它時只跑涵蓋檢查，而一旦宣告了租戶表或要攻擊的端點就失敗，因為說法不再成立 |
 
 ## 怎麼測
 

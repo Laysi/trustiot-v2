@@ -1,7 +1,7 @@
 //! Helpers for the integration tests: a test CA on disk (an offline root made in memory, issuing
 //! CA keys as the init container stores them, issuing CA certificates signed by the root), the
-//! certs binary as a real process on the product's schema (`testkit::product`), its JSON log, and
-//! plain HTTP calls to it.
+//! certs binary as a real process on the product's schema (`testkit::product`) with the public key
+//! of a test identity issuer (`testkit::identity`), its JSON log, and plain HTTP calls to it.
 #![allow(
     dead_code,
     reason = "each test binary includes this module and uses a different subset of it"
@@ -18,8 +18,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ca_keys::{CaKey, CaKeys, Request};
 use certs::ceremony;
+use contract::{Actor, InternalClaims, ServiceName, TenantGrant};
 use rcgen::KeyPair;
 use serde_json::Value;
+use testkit::identity::TestIssuer;
 use testkit::postgres::TEST_PASSWORD;
 use testkit::product::ProductPostgres;
 
@@ -230,14 +232,38 @@ pub struct Service {
     /// Where the API listens, as a base URL.
     pub base_url: String,
     health: SocketAddr,
+    /// The stand-in for the identity service whose public key the service trusts.
+    pub issuer: TestIssuer,
+}
+
+/// What a POST answered.
+#[derive(Debug)]
+pub struct Reply {
+    pub status: u16,
+    pub body: String,
+    /// The `cache-control` header, if any.
+    pub cache_control: Option<String>,
+}
+
+impl Reply {
+    /// The body as JSON.
+    pub fn json(&self) -> Value {
+        serde_json::from_str(&self.body)
+            .unwrap_or_else(|error| panic!("a JSON body ({error}): {}", self.body))
+    }
 }
 
 impl Service {
-    /// Starts the service on free local ports against `product` with the CA files of `ca` and
-    /// `env` (the CRL schedule, telemetry), with the role the chart gives it, and returns once
-    /// it listens, ready or not. The environment is otherwise empty, so the developer's own
-    /// variables cannot leak in.
+    /// Starts the service on free local ports against `product` with the CA files of `ca`, the
+    /// public key of a new [`TestIssuer`], and `env` (the CRL schedule, telemetry), with the role
+    /// the chart gives it, and returns once it listens, ready or not. The environment is
+    /// otherwise empty, so the developer's own variables cannot leak in.
     pub async fn spawn(product: &ProductPostgres, ca: &TestCa, env: &[(&str, &str)]) -> Self {
+        let issuer = TestIssuer::new();
+        let identity_keys = temp_dir("certs-identity").join("jwks.json");
+        issuer
+            .write_jwks(&identity_keys)
+            .expect("write the identity public keys");
         let mut command = Command::new(CERTS);
         command
             .env_clear()
@@ -249,6 +275,10 @@ impl Service {
             .env("TRUSTIOT__DATABASE__PASSWORD", TEST_PASSWORD)
             .envs(product.platform_env())
             .envs(ca.env())
+            .env(
+                "TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE",
+                identity_keys.display().to_string(),
+            )
             .envs(env.iter().copied())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -282,7 +312,68 @@ impl Service {
             health: address("health_address"),
             stdout,
             stderr,
+            issuer,
         }
+    }
+
+    /// A token for this service: a new user, a platform administrator or not, acting in
+    /// `tenant`, exchanged by `actor` (none: the ingress's own request).
+    pub fn token(
+        &self,
+        platform_admin: bool,
+        tenant: Option<TenantGrant>,
+        actor: Option<ServiceName>,
+    ) -> String {
+        let claims = InternalClaims {
+            platform_admin,
+            act: actor.map(|sub| Actor { sub }),
+            ..TestIssuer::claims(ServiceName::Certs, tenant)
+        };
+        self.issuer.token(&claims)
+    }
+
+    /// A platform administrator's token, as the ingress's cookie check mints it.
+    pub fn admin_token(&self) -> String {
+        self.token(true, None, None)
+    }
+
+    /// `POST path` on the API port with `token` in the internal identity header (none: no
+    /// header), `content_type` (none: no header) and `body`.
+    pub async fn post(
+        &self,
+        path: &str,
+        token: Option<&str>,
+        content_type: Option<&str>,
+        body: impl Into<reqwest::Body>,
+    ) -> Reply {
+        let mut request = reqwest::Client::new()
+            .post(format!("{}{path}", self.base_url))
+            .timeout(Duration::from_secs(30))
+            .body(body);
+        if let Some(token) = token {
+            request = request.header(contract::INTERNAL_IDENTITY_HEADER, token);
+        }
+        if let Some(content_type) = content_type {
+            request = request.header("content-type", content_type);
+        }
+        let response = request.send().await.expect("call the certs service");
+        let status = response.status().as_u16();
+        let cache_control = response
+            .headers()
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        Reply {
+            status,
+            body: response.text().await.expect("read the body"),
+            cache_control,
+        }
+    }
+
+    /// `POST path` with a JSON `body` and `token`.
+    pub async fn post_json(&self, path: &str, token: Option<&str>, body: &Value) -> Reply {
+        self.post(path, token, Some("application/json"), body.to_string())
+            .await
     }
 
     /// Like [`Service::spawn`], and waits until it is ready.

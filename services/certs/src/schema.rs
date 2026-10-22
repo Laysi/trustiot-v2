@@ -15,8 +15,14 @@ use service_kit::migrations::{Migration, Schema};
 pub const SCHEMA: Schema = Schema {
     service: "certs",
     outbox_producer: false,
-    migrations: &[Migration {
-        name: "0001_certs.sql",
-        sql: include_str!("../migrations/postgres/0001_certs.sql"),
-    }],
+    migrations: &[
+        Migration {
+            name: "0001_certs.sql",
+            sql: include_str!("../migrations/postgres/0001_certs.sql"),
+        },
+        Migration {
+            name: "0002_workstation_certificates.sql",
+            sql: include_str!("../migrations/postgres/0002_workstation_certificates.sql"),
+        },
+    ],
 };
