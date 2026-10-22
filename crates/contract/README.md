@@ -114,7 +114,9 @@ client 每次失敗都記一筆日誌，欄位有 `peer`、`route`（路由樣�
 | `occurred_at` | 變更發生的時間，UTC，精確到毫秒 |
 | `producer` | 產生事件的服務 `Event::PRODUCER`；與型別的產生端不符時拒絕解碼 |
 | `payload` | 事件本身，一定是 JSON 物件 |
-| `actor` | 選填（2026-10-21，Laysi/trustiot-v2#130）：誰做了這個變更，操作紀錄的「誰」。`{"kind": "user", "user_id"}` 是經 API 操作的人（內部身分 token 的 `sub`，平台管理者也是），`{"kind": "service", "service"}` 是服務自己的工作（排程、事件消費端）；沒有設定時不出現。之後新增的 `kind` 在舊版解碼成 `Actor::Unrecognized`，不會讓整個信封解碼失敗，所以只能新增 `kind`、不能改名；身分服務的事件紀錄遇到不認得的 `kind` 會重試、等它升級，所以新增 `kind` 時先升級身分服務。`Actor::Unrecognized` 只用於解碼，序列化會失敗，所以寫不進 outbox。產生端以 `EventEnvelope::with_actor` 或 `outbox::publish_as` 設定 |
+| `actor` | 選填（2026-10-21，Laysi/trustiot-v2#130）：誰做了這個變更，操作紀錄的「誰」。`{"kind": "user", "user_id"}` 是經 API 操作的人（內部身分 token 的 `sub`，平台管理者也是），`{"kind": "service", "service"}` 是服務自己的工作（排程、事件消費端）；沒有設定時不出現。之後新增的 `kind` 在舊版解碼成 `Actor::Unrecognized`，這版解碼不了的其他 `actor`（不認得的 `service`、格式錯的 `user_id`）也一樣，不會讓整個信封解碼失敗；只能新增 `kind`、不能改名；身分服務的事件紀錄遇到不認得的 `kind` 會重試、等它升級，所以新增 `kind` 時先升級身分服務。`Actor::Unrecognized` 只用於解碼，序列化會失敗，所以寫不進 outbox。`service` 不是產生端自己時，事件紀錄當作沒有 `actor` 記錄（WARN）。產生端以 `EventEnvelope::with_actor` 或 `outbox::publish_as` 設定 |
+
+payload 經身分服務的事件紀錄給租戶的管理員看，並隨租戶的資料一直保存（[決策 34](../../docs/architecture/decisions.md)），所以 payload 一律不放：帳密、密鑰、一次性 token 或能取得存取權的連結（邀請、重設密碼、註冊）；只供內部的商業資料；ID 以外的個資，指一個人只用 `UserId`，不寫姓名、email 或電話。
 
 消費端忽略信封與 payload 裡不認得的欄位，所以兩者都只增加選填欄位。
 

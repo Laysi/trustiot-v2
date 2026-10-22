@@ -306,7 +306,7 @@ ALTER ROLE assets_app SET search_path = assets;      -- 消費端的表在服務
 
 ## 限制與後續
 
-- 保留期限：`outbox_event` 與 `outbox_inbox` 目前只增不刪。2026-10-21 決定（Laysi/trustiot-v2#130，[決策 34](../../docs/architecture/decisions.md)）：長期保存的操作紀錄是身分服務的事件紀錄（`identity.event_log`），不是各服務的 outbox，所以 outbox 只是投遞的緩衝，可以刪。刪除規則：一個事件要等**讀這個產生端的每個訂閱**（各消費端 `outbox_subscription` 中 `source_schema` 是它的列）的位置都超過它，再過一段重播用的保留期，才刪 `outbox_event` 的列；`outbox_inbox` 的列在它的訂閱位置超過它、過了同樣的保留期之後刪。還沒有訂閱的新消費端從頭讀（`StartFrom::Beginning`）時只讀得到保留期內的事件，所以要先建訂閱、再刪。刪除工作（排程、保留期長度、監控）另開 issue 實作，在那之前照舊只增不刪。
+- 保留期限：`outbox_event` 與 `outbox_inbox` 目前只增不刪。2026-10-21 決定（Laysi/trustiot-v2#130，[決策 34](../../docs/architecture/decisions.md)）：長期保存的操作紀錄是身分服務的事件紀錄（`identity.event_log`），不是各服務的 outbox，所以 outbox 只是投遞的緩衝，可以刪。刪除規則：一個事件要等**讀這個產生端的每個訂閱**（各消費端 `outbox_subscription` 中 `source_schema` 是它的列）的位置都超過它，再過一段重播用的保留期，才刪 `outbox_event` 的列；`outbox_inbox` 的列在它的訂閱位置超過它、過了同樣的保留期之後刪。還沒有訂閱的新消費端從頭讀（`StartFrom::Beginning`）時只讀得到保留期內的事件，所以要先建訂閱、再刪。刪除工作（排程、保留期長度、監控）在 Laysi/trustiot-v2#521 實作，在那之前照舊只增不刪。
 - 讀取上限受整個叢集最舊的寫入交易影響，見[順序與不漏讀](#順序與不漏讀)；影響範圍與監控見[長寫入交易與 prepared transaction](#長寫入交易與-prepared-transaction)。
 - 每個事件一筆交易，適合控制面的事件量；大量資料（遙測）不走 outbox（決策 8）。
 

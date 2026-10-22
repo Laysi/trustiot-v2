@@ -281,11 +281,14 @@ fn actors_are_optional_tagged_and_open_to_new_kinds() {
         "a producer cannot write an Unrecognized actor"
     );
 
+    // An actor this build cannot decode never fails the envelope (Laysi/trustiot-v2#130).
     let mut malformed = value;
     malformed["actor"] = json!({"kind": "user"});
-    assert!(
-        serde_json::from_value::<EventEnvelope>(malformed).is_err(),
-        "a known kind without its fields is malformed"
+    assert_eq!(
+        serde_json::from_value::<EventEnvelope>(malformed)
+            .expect("a malformed actor does not fail the envelope")
+            .actor,
+        Some(Actor::Unrecognized)
     );
 }
 

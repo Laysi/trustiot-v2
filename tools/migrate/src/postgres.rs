@@ -187,8 +187,12 @@ const ALTER_READERS: &str =
     "ALTER POLICY consumer_read ON example_schema.outbox_event TO example_roles";
 const GRANT_READERS: &str = "GRANT USAGE ON SCHEMA example_schema TO example_roles;
 GRANT SELECT ON example_schema.outbox_event TO example_roles";
-const REVOKE_READERS: &str = "REVOKE SELECT ON example_schema.outbox_event FROM example_roles;
-REVOKE USAGE ON SCHEMA example_schema FROM example_roles";
+const REVOKE_READERS: &str = "REVOKE SELECT ON example_schema.outbox_event FROM example_roles";
+/// A former reader that is not one of the producer's own login roles also loses the schema.
+/// The producer's own roles keep it: they write the outbox (`PRODUCER_GRANTS`), and a service
+/// whose platform role read its own outbox (the identity service, Laysi/trustiot-v2#130) would
+/// otherwise lose it until the next run.
+const REVOKE_READER_SCHEMA: &str = "REVOKE USAGE ON SCHEMA example_schema FROM example_roles";
 /// One record in the service's copy (crates/service-kit/sql/migration-records.sql), written as
 /// its owner role. An upsert, so the copy ends up with the hash of trustiot_migrate.applied.
 const COPY_RECORD: &str = "INSERT INTO example_schema.trustiot_migrate_applied
@@ -1425,7 +1429,8 @@ impl Session {
             .map_err(Error::postgres(format!(
                 "grant the outbox tables of {schema}"
             )))?;
-            self.sync_readers(&schema, &owner, &readers, report).await?;
+            self.sync_readers(&schema, &owner, &readers, &roles, report)
+                .await?;
         }
         if !service.outbox.consumes.is_empty() {
             if !self.table_exists(&schema, "outbox_subscription").await? {
@@ -1448,11 +1453,13 @@ impl Session {
     }
 
     /// Makes the producer's `consumer_read` policy name exactly the consumers' platform roles.
+    /// `producer_roles` are the producer's own login roles, which keep the schema's USAGE.
     async fn sync_readers(
         &mut self,
         schema: &str,
         owner: &str,
         readers: &[String],
+        producer_roles: &[String],
         report: &mut Report,
     ) -> Result<(), Error> {
         let current: Option<Vec<String>> = sqlx::query_scalar(OUTBOX_READERS)
@@ -1495,6 +1502,22 @@ impl Session {
                 .map_err(Error::postgres(format!(
                     "revoke former outbox readers of {schema}"
                 )))?;
+                let outsiders: Vec<&String> = removed
+                    .iter()
+                    .filter(|role| !producer_roles.contains(role))
+                    .collect();
+                if !outsiders.is_empty() {
+                    template(
+                        &mut self.conn,
+                        Some(owner),
+                        REVOKE_READER_SCHEMA,
+                        json!({ "example_schema": [schema], "example_roles": outsiders }),
+                    )
+                    .await
+                    .map_err(Error::postgres(format!(
+                        "revoke the schema {schema} from former outbox readers"
+                    )))?;
+                }
             }
             report.change(format!(
                 "the outbox readers of {schema} are now {}",

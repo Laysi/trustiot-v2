@@ -140,8 +140,25 @@ pub struct EventEnvelope {
     /// Who made the change, when the producer says (Laysi/trustiot-v2#130): the event log keeps
     /// it as the operation log's "who". Absent in envelopes written before the field existed
     /// and for changes nobody in particular made.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// Decoded leniently: an actor this build cannot decode (a new kind, a service it does not
+    /// know, a malformed user ID) becomes [`Actor::Unrecognized`] and never fails the envelope,
+    /// so consumers that ignore the actor are never affected by it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_actor"
+    )]
     pub actor: Option<Actor>,
+}
+
+/// The envelope's `actor`: absent or `null` is `None`; any other value this build cannot
+/// decode as an [`Actor`] is `Some(Actor::Unrecognized)`.
+fn lenient_actor<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Actor>, D::Error> {
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value.map(|value| serde_json::from_value(value).unwrap_or(Actor::Unrecognized)))
 }
 
 /// Who made the change an event describes; the operation log's "who" (checklist K2,
@@ -150,7 +167,9 @@ pub struct EventEnvelope {
 /// On the wire it is an object tagged by `kind`: `{"kind": "user", "user_id": "…"}` or
 /// `{"kind": "service", "service": "assets"}`. A kind this build does not know decodes as
 /// [`Actor::Unrecognized`] instead of failing, so a consumer built before a new kind was added
-/// still decodes the envelope; only add kinds, never rename one.
+/// still decodes the envelope; only add kinds, never rename one. Inside an envelope, any actor
+/// this build cannot decode (a service it does not know, a malformed user ID) is
+/// `Unrecognized` too ([`EventEnvelope::actor`]).
 ///
 /// ```
 /// use contract::{Actor, UserId};
@@ -175,6 +194,8 @@ pub enum Actor {
         user_id: UserId,
     },
     /// A service's own work with no person behind it: a scheduled job or an event consumer.
+    /// The event log records a service actor only when it names the event's producer itself;
+    /// any other service is recorded as no actor.
     Service {
         /// The service.
         service: ServiceName,

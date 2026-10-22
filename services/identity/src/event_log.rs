@@ -39,7 +39,7 @@ use axum::http::header::CACHE_CONTROL;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use chrono::{DateTime, SecondsFormat, Utc};
-use contract::{Actor, ErrorBody, ErrorCode, EventId, TenantId, TenantRole, UserId};
+use contract::{Actor, ErrorBody, ErrorCode, EventId, ServiceName, TenantId, TenantRole, UserId};
 use outbox::{Delivery, Handler, HandlerError};
 use serde::{Deserialize, Serialize};
 use service_kit::identity::{IdentityVerifier, UserIdentity};
@@ -85,6 +85,15 @@ pub const MAX_PAGE: u32 = 500;
 /// log keeps each event once, but slow).
 pub const SUBSCRIPTION_PREFIX: &str = "identity.event-log.";
 
+/// The longest a statement of an event log read may run (`SET LOCAL statement_timeout` at the
+/// start of every read transaction, never in the recorder's). The reads share their pools with
+/// the recorders, so a pathological scan must not hold a pooled connection for long: past this
+/// bound Postgres cancels it and the request answers 503.
+pub const READ_STATEMENT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Sets [`READ_STATEMENT_TIMEOUT`] for the rest of the transaction, like `SET LOCAL`.
+const SET_READ_STATEMENT_TIMEOUT: &str = "SELECT set_config('statement_timeout', $1, true)";
+
 /// Names the platform role's queries in its INFO log line (`platform database access`).
 const PLATFORM_READ_PURPOSE: &str = "event-log-read";
 
@@ -107,6 +116,12 @@ ON CONFLICT DO NOTHING";
 /// One page of a tenant's events, newest first: `$1` the tenant, `$2`/`$3` the optional time
 /// range, `$4`/`$5` the optional cursor (the last row of the previous page), `$6` the row limit.
 /// Row-level security also limits a tenant transaction to its own tenant.
+///
+/// The cursor bound is always a row comparison with values, never behind an `OR`, so it stays
+/// an index bound under a generic plan (`event_log_by_time`, `(tenant_id, occurred_at,
+/// event_id)` scanned backwards) and a deep page does not walk every newer row. Without a cursor
+/// it is `to` (or infinity) with the largest UUID, which the exclusive `occurred_at < to` then
+/// narrows.
 const SELECT_TENANT_EVENTS: &str = "SELECT event_id::text, tenant_id::text, occurred_at,
     recorded_at, event_type, version, producer, aggregate_type, aggregate_id, aggregate_seq,
     actor_user_id::text, actor_service, payload::text
@@ -114,12 +129,15 @@ FROM identity.event_log
 WHERE tenant_id = $1::uuid
     AND occurred_at >= COALESCE($2::timestamptz, '-infinity')
     AND occurred_at < COALESCE($3::timestamptz, 'infinity')
-    AND ($4::timestamptz IS NULL OR (occurred_at, event_id) < ($4::timestamptz, $5::uuid))
+    AND (occurred_at, event_id) < (
+        COALESCE($4::timestamptz, $3::timestamptz, 'infinity'),
+        COALESCE($5::uuid, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid))
 ORDER BY occurred_at DESC, event_id DESC
 LIMIT $6";
 
 /// [`SELECT_TENANT_EVENTS`] for the platform-wide log, which has no tenant: `$1` is unused but
-/// typed, so both queries bind the same parameters.
+/// typed, so both queries bind the same parameters. Its index is `platform_event_log_by_time`,
+/// `(occurred_at, event_id)`.
 const SELECT_PLATFORM_EVENTS: &str = "SELECT event_id::text, NULL::text, occurred_at,
     recorded_at, event_type, version, producer, aggregate_type, aggregate_id, aggregate_seq,
     actor_user_id::text, actor_service, payload::text
@@ -127,7 +145,9 @@ FROM identity.platform_event_log
 WHERE $1::uuid IS NULL
     AND occurred_at >= COALESCE($2::timestamptz, '-infinity')
     AND occurred_at < COALESCE($3::timestamptz, 'infinity')
-    AND ($4::timestamptz IS NULL OR (occurred_at, event_id) < ($4::timestamptz, $5::uuid))
+    AND (occurred_at, event_id) < (
+        COALESCE($4::timestamptz, $3::timestamptz, 'infinity'),
+        COALESCE($5::uuid, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid))
 ORDER BY occurred_at DESC, event_id DESC
 LIMIT $6";
 
@@ -186,9 +206,15 @@ impl Handler for EventLogRecorder {
                 "the envelope's payload is not a JSON object",
             ));
         }
+        if delivery.aggregate_seq < 1 {
+            return Err(HandlerError::permanent(
+                "the event's aggregate sequence number is out of range",
+            ));
+        }
         let payload = serde_json::to_string(&envelope.payload)
             .map_err(|_| HandlerError::permanent("the envelope's payload cannot be serialized"))?;
-        let (actor_user, actor_service) = actor_columns(envelope.actor)?;
+        let (actor_user, actor_service) =
+            actor_columns(envelope.actor, envelope.producer, envelope.id)?;
         let event_id = envelope.id.to_string();
         let aggregate = &delivery.aggregate;
         let inserted = match delivery.tenant() {
@@ -237,7 +263,13 @@ impl Handler for EventLogRecorder {
     }
 }
 
-/// The actor columns: the user, or the service, or neither (no actor).
+/// The actor columns of event `event_id` from `producer`: the user, or the service, or neither
+/// (no actor).
+///
+/// A service actor names a service's own work, so one that is not `producer` itself is broken
+/// or forged: the event is recorded without an actor (and a WARN names the event, the producer
+/// and the claimed service, never the payload), not dead-lettered, because the row still names
+/// the verified producer and the log must not get a gap.
 ///
 /// # Errors
 ///
@@ -245,12 +277,27 @@ impl Handler for EventLogRecorder {
 /// consumer (`DecodeError::NewerVersion`): a newer producer wrote it, and storing it as "no
 /// actor" would erase who made the change from a record that is kept for good. The
 /// subscription waits (its lag alerts) until this service is upgraded, and then records it.
+type ActorColumns = (Option<String>, Option<&'static str>);
+
 fn actor_columns(
     actor: Option<Actor>,
-) -> Result<(Option<String>, Option<&'static str>), HandlerError> {
+    producer: ServiceName,
+    event_id: EventId,
+) -> Result<ActorColumns, HandlerError> {
     match actor {
         Some(Actor::User { user_id }) => Ok((Some(user_id.to_string()), None)),
-        Some(Actor::Service { service }) => Ok((None, Some(service.as_str()))),
+        Some(Actor::Service { service }) if service == producer => {
+            Ok((None, Some(service.as_str())))
+        }
+        Some(Actor::Service { service }) => {
+            tracing::warn!(
+                %event_id,
+                producer = producer.as_str(),
+                claimed_service = service.as_str(),
+                "an event names another service as its actor; it is recorded without one"
+            );
+            Ok((None, None))
+        }
         None => Ok((None, None)),
         Some(Actor::Unrecognized) => Err(HandlerError::retry(
             "the envelope names an actor kind this build does not know",
@@ -536,12 +583,16 @@ enum Log {
     Platform,
 }
 
-/// Reads one page of `log`.
+/// Reads one page of `log`, the first statements of an event log read transaction.
 async fn page(
     conn: &mut PgConnection,
     log: Log,
     query: &EventLogQuery,
 ) -> Result<EventLogPage, QueryError> {
+    sqlx::query(SET_READ_STATEMENT_TIMEOUT)
+        .bind(format!("{}ms", READ_STATEMENT_TIMEOUT.as_millis()))
+        .execute(&mut *conn)
+        .await?;
     // Each arm names its statement as a constant, so tools/sql-check sees static SQL only.
     let (statement, tenant) = match log {
         Log::Tenant(tenant) => (sqlx::query_as::<_, Row>(SELECT_TENANT_EVENTS), Some(tenant)),
@@ -941,21 +992,27 @@ mod tests {
     #[test]
     fn actors_become_columns() {
         let user = UserId::generate();
+        let (assets, event) = (ServiceName::Assets, EventId::generate());
         assert_eq!(
-            actor_columns(Some(Actor::User { user_id: user })).ok(),
+            actor_columns(Some(Actor::User { user_id: user }), assets, event).ok(),
             Some((Some(user.to_string()), None))
         );
         assert_eq!(
-            actor_columns(Some(Actor::Service {
-                service: contract::ServiceName::Assets
-            }))
+            actor_columns(
+                Some(Actor::Service {
+                    service: ServiceName::Assets
+                }),
+                assets,
+                event
+            )
             .ok(),
             Some((None, Some("assets")))
         );
-        assert_eq!(actor_columns(None).ok(), Some((None, None)));
+        assert_eq!(actor_columns(None, assets, event).ok(), Some((None, None)));
         // A newer producer's actor is never stored as "no actor": the event waits for an
         // upgrade instead of being recorded without it or dead-lettered.
-        let unknown = actor_columns(Some(Actor::Unrecognized)).expect_err("an unknown actor");
+        let unknown =
+            actor_columns(Some(Actor::Unrecognized), assets, event).expect_err("an unknown actor");
         assert_eq!(unknown.kind(), outbox::FailureKind::Retry);
     }
 
