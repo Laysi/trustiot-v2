@@ -1,0 +1,117 @@
+# Laysi/trustiot-v2#534 after review: the ledger trigger (revocation is final), on the build host through the check queue (CI=1, container tests run with rootless podman),
+# 2026-10-23 00:10-00:12 (Asia/Taipei), branch feat/534-workstation-certs: the committed tree of the commit that adds the trigger. Every key and certificate here was made at run time by the test.
+# Steps: cargo fmt --all --check; cargo clippy --workspace --all-targets --locked -- -D warnings; cargo test --locked -p certs --no-fail-fast;
+# cargo test --locked -p certs --test issuance the_ledger_records -- --nocapture; cargo test --locked -p migrate --no-fail-fast; cargo test --locked -p sql-check; cargo run --locked -q -p openapi -- --check
+# r5: Laysi/trustiot-v2#534 ledger trigger, 2026-10-22T16:10:24Z
+=== fmt
+STEP fmt rc=0
+=== clippy
+    Checking testkit v0.1.0 (<host copy>/src/crates/testkit)
+    Checking certs v0.1.0 (<host copy>/src/services/certs)
+    Checking agent v0.1.0 (<host copy>/src/edge/agent)
+    Checking assets v0.1.0 (<host copy>/src/services/assets)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.79s
+STEP clippy rc=0
+=== certs-test
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/certs-491d05fc54dcfbff)
+test config::tests::debug_hides_the_password ... ok
+test config::tests::defaults_are_valid_and_every_bound_is_checked ... ok
+test issue::tests::garbage_is_not_a_request ... ok
+test issue::tests::the_workstation_purpose_is_the_uuid_oid ... ok
+test issue::tests::serials_are_positive_sixteen_octets_and_never_repeat ... ok
+test issue::tests::workstation_names_follow_the_gateway_id_characters ... ok
+test monitor::tests::the_alert_holds_without_a_crl_and_below_the_threshold ... ok
+test workstations::tests::issue_requests_name_each_problem ... ok
+test pem::tests::encodes_in_64_character_lines_and_decodes_back ... ok
+test workstations::tests::many_unknown_fields_are_counted_not_listed ... ok
+test workstations::tests::serials_are_hex_octets ... ok
+test workstations::tests::revoke_requests_take_an_optional_known_reason ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/ceremony.rs (<host copy>/target/debug/deps/ceremony-4c9a0704845afde5)
+test an_issuing_ca_that_outlives_the_root_is_refused ... ok
+test the_offline_ceremony_makes_a_root_and_signs_an_issuing_ca ... ok
+test a_fresh_install_is_ready_and_waits_for_the_ceremony ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.32s
+     Running tests/crl.rs (<host copy>/target/debug/deps/crl-c79bd13be75501b7)
+test a_crl_revokes_what_it_lists_and_lapses_at_next_update ... ok
+test crls_are_renewed_on_schedule_and_alert_before_they_lapse ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.50s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-e8da478d4a0b027a)
+test every_relation_and_operation_the_service_has_is_declared ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.27s
+     Running tests/issuance.rs (<host copy>/target/debug/deps/issuance-d368fc28d69b8d19)
+test a_gateway_certificate_cannot_sign_or_serve ... ok
+test the_ca_decides_everything_but_the_public_key ... ok
+test unusable_requests_are_refused ... ok
+test the_newest_valid_generation_signs ... ok
+test the_ledger_records_what_was_signed_and_the_service_cannot_change_it ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.55s
+     Running tests/key_custody.rs (<host copy>/target/debug/deps/key_custody-9e96272bb2a46aba)
+test the_scan_leaves_out_test_modules_only ... ok
+test only_reviewed_code_turns_a_private_key_into_bytes ... ok
+test no_private_key_leaves_through_logs_endpoints_or_telemetry ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.56s
+     Running tests/workstation.rs (<host copy>/target/debug/deps/workstation-2cfb0ff297794787)
+test a_request_without_proof_of_possession_is_refused ... ok
+test the_ca_decides_the_workstation_profile_and_a_tls_server_refuses_it ... ok
+test only_platform_administrators_issue_and_revoke_and_the_crl_lists_a_revocation ... ok
+test the_broker_accepts_a_gateway_certificate_and_refuses_a_workstation_certificate ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.50s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+STEP certs-test rc=0
+=== certs-ledger
+recording a serial number twice: database: error returned from database: duplicate key value violates unique constraint "issued_certificates_pkey" at line 666
+refused as certs_app: UPDATE certs.issued_certificates SET revoked_at = NULL, revocation_reason = NULL WHERE serial = $1: error returned from database: certificate 6709102e6d8201dfd9a397498ca0464f is revoked: its ledger row cannot change at line 3909
+refused as certs_app: UPDATE certs.issued_certificates SET revocation_reason = 4 WHERE serial = $1: error returned from database: certificate 6709102e6d8201dfd9a397498ca0464f is revoked: its ledger row cannot change at line 3909
+refused as certs_app: UPDATE certs.issued_certificates SET revocation_reason = NULL WHERE serial = $1: error returned from database: certificate 6709102e6d8201dfd9a397498ca0464f is revoked: its ledger row cannot change at line 3909
+refused as certs_app: UPDATE certs.issued_certificates SET revoked_at = revoked_at - interval '1 day' WHERE serial = $1: error returned from database: certificate 6709102e6d8201dfd9a397498ca0464f is revoked: its ledger row cannot change at line 3909
+refused as the superuser: UPDATE certs.issued_certificates SET revoked_at = NULL, revocation_reason = NULL WHERE serial = $1: error returned from database: certificate 6709102e6d8201dfd9a397498ca0464f is revoked: its ledger row cannot change at line 3909
+refused as the superuser: UPDATE certs.issued_certificates SET subject = 'gw-other' WHERE serial = $1: error returned from database: only the revocation of certificate 764d1cc1374edb6c8526fac496bcede6 can change, never what was signed at line 3909
+refused as the superuser: UPDATE certs.issued_certificates SET not_after = not_after + interval '9 years' WHERE serial = $1: error returned from database: only the revocation of certificate 764d1cc1374edb6c8526fac496bcede6 can change, never what was signed at line 3909
+refused as the superuser: UPDATE certs.issued_certificates SET revoked_at = now(), certificate = '\x00' WHERE serial = $1: error returned from database: only the revocation of certificate 764d1cc1374edb6c8526fac496bcede6 can change, never what was signed at line 3909
+test the_ledger_records_what_was_signed_and_the_service_cannot_change_it ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 2.53s
+STEP certs-ledger rc=0
+=== migrate-test
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/migrate-16e37b5accbe7f56)
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running tests/ca_keys.rs (<host copy>/target/debug/deps/ca_keys-3f7dce995501987b)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/clickhouse.rs (<host copy>/target/debug/deps/clickhouse-a24b51bafc1bb68a)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.25s
+     Running tests/clickhouse_admin.rs (<host copy>/target/debug/deps/clickhouse_admin-c849af7b58d8f14e)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.81s
+     Running tests/concurrent_runs.rs (<host copy>/target/debug/deps/concurrent_runs-5250b75ec5a2a6ad)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.80s
+     Running tests/file_escapes.rs (<host copy>/target/debug/deps/file_escapes-154deb956461f7f7)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.98s
+     Running tests/fresh_database.rs (<host copy>/target/debug/deps/fresh_database-6778716d71f098dd)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.24s
+     Running tests/one_instance_per_cluster.rs (<host copy>/target/debug/deps/one_instance_per_cluster-4ddacd111103e7b5)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.35s
+     Running tests/outbox_and_tenant_roles.rs (<host copy>/target/debug/deps/outbox_and_tenant_roles-8cab8917e21e6ca1)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.99s
+     Running tests/passwords.rs (<host copy>/target/debug/deps/passwords-3a8df8a4464da08c)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.08s
+     Running tests/registry.rs (<host copy>/target/debug/deps/registry-71201338c6e41093)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/service_records.rs (<host copy>/target/debug/deps/service_records-68f73c8f0d546533)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.71s
+     Running tests/signing_keys.rs (<host copy>/target/debug/deps/signing_keys-5082051b9982811e)
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+     Running tests/system_databases.rs (<host copy>/target/debug/deps/system_databases-fef2c8a8ae1759b2)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.90s
+     Running tests/wait_for_job.rs (<host copy>/target/debug/deps/wait_for_job-bb412cd888a1c40d)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+STEP migrate-test rc=0
+=== sql-check
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/sql_check-1bc345e149b707e5)
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/check.rs (<host copy>/target/debug/deps/check-600082b3a3b97008)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.76s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+STEP sql-check rc=0
+=== openapi-check
+api/openapi.json is up to date
+STEP openapi-check rc=0

@@ -198,9 +198,11 @@ export function writeCookie(stateDir: string, cookie: string): void {
 }
 
 /**
- * Rows are written as the schema owner, the way services/identity/README.md says a session is
- * made while there is no login (Laysi/trustiot-v2#103): the service role has no write access.
- * `SET ROLE` makes the statements fail when the owner's own privileges would not suffice.
+ * Rows are written as the schema owner, the way services/identity/README.md says test tooling
+ * makes a session: the local environment has no mail relay for the email login
+ * (Laysi/trustiot-v2#103), and the service role may not write users or memberships. A session
+ * lives at most 7 days from its creation (the database refuses longer ones). `SET ROLE` makes
+ * the statements fail when the owner's own privileges would not suffice.
  */
 const AS_OWNER = "SET ROLE identity_owner;\n";
 

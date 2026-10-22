@@ -159,7 +159,21 @@ pub struct PasswordSettings {
     /// the Secret whose key of the same name holds its password. Needs `clickhouse.*`.
     #[serde(default)]
     pub clickhouse_collector: Option<String>,
+    /// `TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY`: `account=secret`: the telemetry-query
+    /// service's ClickHouse account ([`TELEMETRY_QUERY_ACCOUNT`], which
+    /// `0008_telemetry_query.sql` defines without a password) and the Secret whose key of the
+    /// same name holds its password. The run sets that password and lets the account log in;
+    /// without this setting it keeps the account from logging in. Needs `clickhouse.*`.
+    #[serde(default)]
+    pub clickhouse_telemetry_query: Option<String>,
 }
+
+/// The telemetry-query service's ClickHouse account, as `0008_telemetry_query.sql` names it.
+pub const TELEMETRY_QUERY_ACCOUNT: &str = "trustiot_telemetry_query";
+
+/// The names of the tenant accounts telemetry-query creates, which `0008_telemetry_query.sql`
+/// lets its account create and change.
+pub const TENANT_ACCOUNT_PREFIX: &str = "trustiot_tenant_account_";
 
 /// One password the run manages: whose it is and where it is kept.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -192,6 +206,33 @@ impl PasswordSettings {
             return Err(Invalid::new(key, "must be one account=secret pair"));
         }
         Ok(found.pop())
+    }
+
+    /// The telemetry-query service's account and its Secret.
+    ///
+    /// # Errors
+    ///
+    /// When the value is not one `account=secret` pair with valid names, or names another
+    /// account than [`TELEMETRY_QUERY_ACCOUNT`] (the migration file defines that one only).
+    pub fn clickhouse_telemetry_query(&self) -> Result<Option<Binding>, Invalid> {
+        let key = "passwords.clickhouse_telemetry_query";
+        let mut found = bindings(key, self.clickhouse_telemetry_query.as_deref())?;
+        if found.len() > 1 {
+            return Err(Invalid::new(key, "must be one account=secret pair"));
+        }
+        let binding = found.pop();
+        if binding
+            .as_ref()
+            .is_some_and(|binding| binding.owner != TELEMETRY_QUERY_ACCOUNT)
+        {
+            return Err(Invalid::new(
+                key,
+                format!(
+                    "the account must be {TELEMETRY_QUERY_ACCOUNT}, the one 0008_telemetry_query.sql defines"
+                ),
+            ));
+        }
+        Ok(binding)
     }
 }
 
@@ -349,6 +390,36 @@ impl Validate for RunConfig {
                     "passwords.clickhouse_collector",
                     "uses the same key of the same Secret as a Postgres role",
                 ));
+            }
+            // The collector's account must be none telemetry-query manages: not its own account,
+            // and no name telemetry-query may create or change (it could set its password).
+            if let Some(collector) = &collector
+                && (collector.owner == TELEMETRY_QUERY_ACCOUNT
+                    || collector.owner.starts_with(TENANT_ACCOUNT_PREFIX))
+            {
+                return Err(Invalid::new(
+                    "passwords.clickhouse_collector",
+                    format!(
+                        "must not be {TELEMETRY_QUERY_ACCOUNT} or start with \
+                         {TENANT_ACCOUNT_PREFIX}: those accounts belong to telemetry-query"
+                    ),
+                ));
+            }
+            // Its account name is fixed and the collector's cannot be it (above).
+            if let Some(telemetry_query) = passwords.clickhouse_telemetry_query()? {
+                if self.clickhouse.is_none() {
+                    return Err(Invalid::new(
+                        "passwords.clickhouse_telemetry_query",
+                        "needs clickhouse.*, the account that sets the telemetry-query account's \
+                         password",
+                    ));
+                }
+                if postgres.contains(&telemetry_query) {
+                    return Err(Invalid::new(
+                        "passwords.clickhouse_telemetry_query",
+                        "uses the same key of the same Secret as a Postgres role",
+                    ));
+                }
             }
         }
         if let Some(clickhouse) = &self.clickhouse {
@@ -820,6 +891,156 @@ impl Validate for CaKeysConfig {
     }
 }
 
+/// Settings of `migrate mqtt-broker-accounts`, the MQTT broker's init container that fills the
+/// services' broker passwords and writes the dynamic-security file (src/mqtt_accounts.rs;
+/// Laysi/trustiot-v2#84).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MqttAccountsConfig {
+    pub accounts: MqttAccountSettings,
+}
+
+/// `accounts.*` of `migrate mqtt-broker-accounts`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MqttAccountSettings {
+    /// `TRUSTIOT__ACCOUNTS__API_URL`: the API server, `https://` (the chart sets
+    /// `https://kubernetes.default.svc`). `http://` is accepted for 127.0.0.1 only, for tests.
+    pub api_url: String,
+    /// `TRUSTIOT__ACCOUNTS__NAMESPACE`: the release namespace, where the Secret is.
+    pub namespace: String,
+    /// `TRUSTIOT__ACCOUNTS__TOKEN_FILE`: the projected token of the broker's ServiceAccount,
+    /// which only this init container mounts; read on every request.
+    pub token_file: PathBuf,
+    /// `TRUSTIOT__ACCOUNTS__CA_FILE`: the cluster CA (`kube-root-ca.crt`), the only trust anchor.
+    pub ca_file: PathBuf,
+    /// `TRUSTIOT__ACCOUNTS__SECRET`: the Secret the chart declares empty for the passwords, one
+    /// key per service.
+    pub secret: String,
+    /// `TRUSTIOT__ACCOUNTS__SERVICES`: the services that get an account, comma-separated (the
+    /// enabled services whose `mesh.calls` list the broker); may be empty.
+    #[serde(default)]
+    pub services: String,
+    /// `TRUSTIOT__ACCOUNTS__GENERATION`: the chart's `mqttBroker.passwordGeneration`; a higher
+    /// one than the Secret records generates new passwords (a rotation).
+    pub generation: String,
+    /// `TRUSTIOT__ACCOUNTS__DYNSEC_FILE`: the dynamic-security file on the broker's volume.
+    pub dynsec_file: PathBuf,
+    /// `TRUSTIOT__ACCOUNTS__WAIT`: how long it retries an API server that does not answer.
+    /// Default 10 minutes.
+    #[serde(
+        default = "default_wait",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub wait: Duration,
+}
+
+impl Validate for MqttAccountsConfig {
+    fn validate(&self) -> Result<(), Invalid> {
+        let accounts = &self.accounts;
+        check_api_url("accounts.api_url", &accounts.api_url)?;
+        if !is_dns_label(&accounts.namespace) {
+            return Err(Invalid::new(
+                "accounts.namespace",
+                "must be a Kubernetes namespace name (DNS label)",
+            ));
+        }
+        if !is_object_name(&accounts.secret) {
+            return Err(Invalid::new(
+                "accounts.secret",
+                "must be a Kubernetes object name (lower-case letters, digits, - and .)",
+            ));
+        }
+        if let Err(problem) = crate::mqtt_accounts::parse_services(&accounts.services) {
+            return Err(Invalid::new("accounts.services", problem));
+        }
+        if !is_generation(&accounts.generation) {
+            return Err(Invalid::new(
+                "accounts.generation",
+                "must be 1 to 9 decimal digits (generations are compared as numbers and only go up)",
+            ));
+        }
+        if !accounts.dynsec_file.is_absolute() || accounts.dynsec_file.file_name().is_none() {
+            return Err(Invalid::new(
+                "accounts.dynsec_file",
+                "must be an absolute path to a file",
+            ));
+        }
+        check_wait("accounts.wait", accounts.wait)
+    }
+}
+
+/// The trust sidecar's default refresh interval.
+pub const DEFAULT_TRUST_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Settings of `migrate mqtt-broker-trust`, the MQTT broker's init container and sidecar that
+/// keep its trust files and reload it (src/mqtt_trust.rs; Laysi/trustiot-v2#84).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MqttTrustConfig {
+    pub trust: MqttTrustSettings,
+}
+
+/// `trust.*` of `migrate mqtt-broker-trust`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MqttTrustSettings {
+    /// `TRUSTIOT__TRUST__CERTS_URL`: the certs service, `http://<host>:<port>` inside the mesh
+    /// (ztunnel encrypts it); empty when the release has no certs service, and the broker then
+    /// trusts no gateway.
+    #[serde(default)]
+    pub certs_url: String,
+    /// `TRUSTIOT__TRUST__DIR`: where the trust files go, on the broker's volume; the broker reads
+    /// `<dir>/current/ca.pem` and `<dir>/current/crl.pem`.
+    pub dir: PathBuf,
+    /// `TRUSTIOT__TRUST__TLS_DIR`: the mount of the broker's server certificate Secret
+    /// (`tls.crt`, `tls.key`).
+    pub tls_dir: PathBuf,
+    /// `TRUSTIOT__TRUST__INTERVAL`: how often the sidecar fetches the files and checks the
+    /// Secret. Default 30 seconds.
+    #[serde(
+        default = "default_trust_interval",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub interval: Duration,
+}
+
+fn default_trust_interval() -> Duration {
+    DEFAULT_TRUST_INTERVAL
+}
+
+impl Validate for MqttTrustConfig {
+    fn validate(&self) -> Result<(), Invalid> {
+        let trust = &self.trust;
+        let url = &trust.certs_url;
+        if !url.is_empty()
+            && (!url.starts_with("http://")
+                || url.contains('@')
+                || url.contains('?')
+                || url.contains('#')
+                || url.len() <= "http://".len())
+        {
+            return Err(Invalid::new(
+                "trust.certs_url",
+                "must be empty or an http:// URL of the certs service without credentials, query \
+                 or fragment (the mesh encrypts it)",
+            ));
+        }
+        for (key, path) in [("trust.dir", &trust.dir), ("trust.tls_dir", &trust.tls_dir)] {
+            if !path.is_absolute() {
+                return Err(Invalid::new(key, "must be an absolute path"));
+            }
+        }
+        if trust.interval < Duration::from_secs(1) || trust.interval > MAX_WAIT {
+            return Err(Invalid::new(
+                "trust.interval",
+                "must be at least 1 second and at most 1 hour",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -852,6 +1073,7 @@ mod tests {
             generation: "1".to_owned(),
             postgres: Some(postgres.to_owned()),
             clickhouse_collector: Some(collector.to_owned()),
+            clickhouse_telemetry_query: None,
         }
     }
 
@@ -963,6 +1185,64 @@ mod tests {
         // Debug never shows the password.
         let config = run_config(Some("a-secret-value"), None, false);
         assert!(!format!("{config:?}").contains("a-secret-value"));
+    }
+
+    #[test]
+    fn telemetry_query_and_collector_accounts_stay_apart() {
+        let with = |collector: &str, telemetry_query: Option<&str>| {
+            let mut config = run_config(Some("a-password"), None, true);
+            let passwords = config.passwords.as_mut().expect("password settings");
+            passwords.clickhouse_collector = Some(collector.to_owned());
+            passwords.clickhouse_telemetry_query = telemetry_query.map(str::to_owned);
+            config
+        };
+        let key = |config: RunConfig| config.validate().err().map(|invalid| invalid.key);
+        let bound = Some("trustiot_telemetry_query=trustiot-telemetry-query-password");
+        assert_eq!(key(with("trustiot_collector=c", bound)), None);
+        assert_eq!(
+            with("trustiot_collector=c", bound)
+                .passwords
+                .expect("password settings")
+                .clickhouse_telemetry_query()
+                .expect("valid"),
+            Some(Binding {
+                owner: TELEMETRY_QUERY_ACCOUNT.to_owned(),
+                secret: "trustiot-telemetry-query-password".to_owned()
+            })
+        );
+        for bad in [
+            "trustiot_other=trustiot-telemetry-query-password",
+            "trustiot_telemetry_query=a,trustiot_telemetry_query=b",
+            "trustiot_telemetry_query=Not/A-Secret",
+        ] {
+            assert_eq!(
+                key(with("trustiot_collector=c", Some(bad))).as_deref(),
+                Some("passwords.clickhouse_telemetry_query"),
+                "{bad}"
+            );
+        }
+        for collector in ["trustiot_telemetry_query=c", "trustiot_tenant_account_x=c"] {
+            assert_eq!(
+                key(with(collector, None)).as_deref(),
+                Some("passwords.clickhouse_collector"),
+                "{collector}"
+            );
+        }
+        let mut without_clickhouse = with("trustiot_collector=c", bound);
+        without_clickhouse.clickhouse = None;
+        let passwords = without_clickhouse.passwords.as_mut().expect("settings");
+        passwords.clickhouse_collector = None;
+        assert_eq!(
+            key(without_clickhouse).as_deref(),
+            Some("passwords.clickhouse_telemetry_query")
+        );
+        let mut shared = with("trustiot_collector=c", bound);
+        shared.passwords.as_mut().expect("settings").postgres =
+            Some("trustiot_telemetry_query=trustiot-telemetry-query-password".to_owned());
+        assert_eq!(
+            key(shared).as_deref(),
+            Some("passwords.clickhouse_telemetry_query")
+        );
     }
 
     /// The raw data retention (Laysi/trustiot-v2#92): unset is the platform value; a setting that
@@ -1202,6 +1482,110 @@ mod tests {
             &"1".repeat(64),
         ] {
             assert!(!is_generation(bad), "{bad}");
+        }
+    }
+
+    fn mqtt_accounts_config() -> MqttAccountsConfig {
+        MqttAccountsConfig {
+            accounts: MqttAccountSettings {
+                api_url: "https://kubernetes.default.svc".to_owned(),
+                namespace: "trustiot".to_owned(),
+                token_file: PathBuf::from("/token"),
+                ca_file: PathBuf::from("/ca.crt"),
+                secret: "trustiot-mqtt-broker-accounts".to_owned(),
+                services: "ingest,gateway-ops,certs".to_owned(),
+                generation: "1".to_owned(),
+                dynsec_file: PathBuf::from("/mosquitto/data/dynamic-security.json"),
+                wait: DEFAULT_WAIT,
+            },
+        }
+    }
+
+    type MqttAccountsBreakage = (&'static str, fn(&mut MqttAccountSettings));
+
+    #[test]
+    fn mqtt_accounts_settings() {
+        assert!(mqtt_accounts_config().validate().is_ok());
+        let mut none = mqtt_accounts_config();
+        none.accounts.services = String::new();
+        assert!(none.validate().is_ok(), "a release without callers");
+        let broken: [MqttAccountsBreakage; 8] = [
+            ("accounts.api_url", |a| {
+                a.api_url = "http://kubernetes.default.svc".to_owned();
+            }),
+            ("accounts.namespace", |a| {
+                a.namespace = "Trust_IoT".to_owned()
+            }),
+            ("accounts.secret", |a| a.secret = "a/b".to_owned()),
+            ("accounts.services", |a| {
+                a.services = "ingest,assistant".to_owned()
+            }),
+            ("accounts.services", |a| {
+                a.services = "certs,certs".to_owned()
+            }),
+            ("accounts.generation", |a| a.generation = "v2".to_owned()),
+            ("accounts.dynsec_file", |a| {
+                a.dynsec_file = PathBuf::from("dynamic-security.json");
+            }),
+            ("accounts.wait", |a| a.wait = Duration::ZERO),
+        ];
+        for (key, change) in broken {
+            let mut config = mqtt_accounts_config();
+            change(&mut config.accounts);
+            assert_eq!(
+                config
+                    .validate()
+                    .err()
+                    .map(|invalid| invalid.key)
+                    .as_deref(),
+                Some(key)
+            );
+        }
+    }
+
+    fn mqtt_trust_config() -> MqttTrustConfig {
+        MqttTrustConfig {
+            trust: MqttTrustSettings {
+                certs_url: "http://trustiot-certs.trustiot.svc:8080".to_owned(),
+                dir: PathBuf::from("/mosquitto/data/trust"),
+                tls_dir: PathBuf::from("/etc/trustiot/mqtt-broker-tls"),
+                interval: DEFAULT_TRUST_INTERVAL,
+            },
+        }
+    }
+
+    type MqttTrustBreakage = (&'static str, fn(&mut MqttTrustSettings));
+
+    #[test]
+    fn mqtt_trust_settings() {
+        assert!(mqtt_trust_config().validate().is_ok());
+        let mut without_certs = mqtt_trust_config();
+        without_certs.trust.certs_url = String::new();
+        assert!(without_certs.validate().is_ok(), "no certs service");
+        let broken: [MqttTrustBreakage; 7] = [
+            ("trust.certs_url", |t| {
+                t.certs_url = "https://trustiot-certs:8080".to_owned();
+            }),
+            ("trust.certs_url", |t| {
+                t.certs_url = "http://user:pw@trustiot-certs:8080".to_owned();
+            }),
+            ("trust.certs_url", |t| t.certs_url = "http://".to_owned()),
+            ("trust.dir", |t| t.dir = PathBuf::from("trust")),
+            ("trust.tls_dir", |t| t.tls_dir = PathBuf::from("tls")),
+            ("trust.interval", |t| t.interval = Duration::ZERO),
+            ("trust.interval", |t| t.interval = Duration::from_secs(7200)),
+        ];
+        for (key, change) in broken {
+            let mut config = mqtt_trust_config();
+            change(&mut config.trust);
+            assert_eq!(
+                config
+                    .validate()
+                    .err()
+                    .map(|invalid| invalid.key)
+                    .as_deref(),
+                Some(key)
+            );
         }
     }
 }

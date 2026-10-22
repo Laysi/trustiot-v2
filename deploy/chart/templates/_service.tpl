@@ -92,7 +92,9 @@ Custom env cannot take over what the chart controls:
   through the chart;
 - for a service that uses Postgres, TRUSTIOT__DATABASE__USERNAME and TRUSTIOT__DATABASE__PASSWORD
   are the chart's, and so are TRUSTIOT__DATABASE__PLATFORM_USERNAME and
-  TRUSTIOT__DATABASE__PLATFORM_PASSWORD (set for a service whose platform role logs in).
+  TRUSTIOT__DATABASE__PLATFORM_PASSWORD (set for a service whose platform role logs in);
+- for telemetry-query, TRUSTIOT__CLICKHOUSE__USERNAME and TRUSTIOT__CLICKHOUSE__PASSWORD are the
+  chart's: its ClickHouse account and the password the migration Job generates for it.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.service.env" -}}
@@ -114,6 +116,15 @@ outbox consumer reads its producers' events with. */ -}}
 {{- $dbEnv = append $dbEnv (dict "name" "TRUSTIOT__DATABASE__PLATFORM_PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $platform.name "key" $platform.key))) -}}
 {{- end -}}
 {{- end -}}
+{{- $clickhouseEnv := list -}}
+{{- if eq $name "telemetry-query" -}}
+{{- /* Its own ClickHouse account, which creates the tenants' read-only accounts: the migration Job
+generates its password into the service's Secret and sets it
+(services/ingest/migrations/clickhouse/0008_telemetry_query.sql). */ -}}
+{{- $account := include "trustiot.migrate.passwordSecret" (dict "root" .root "component" $name "role" "clickhouse") | fromYaml -}}
+{{- $clickhouseEnv = append $clickhouseEnv (dict "name" "TRUSTIOT__CLICKHOUSE__USERNAME" "value" $account.key) -}}
+{{- $clickhouseEnv = append $clickhouseEnv (dict "name" "TRUSTIOT__CLICKHOUSE__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $account.name "key" $account.key))) -}}
+{{- end -}}
 {{- range $values.serviceDefaults.env -}}
 {{- if get (.valueFrom | default dict) "secretKeyRef" -}}
 {{- fail (printf "serviceDefaults.env: %s must not read a Secret, because every service gets serviceDefaults.env; set it under services.<name>.env" .name) -}}
@@ -130,6 +141,9 @@ outbox consumer reads its producers' events with. */ -}}
 {{- end -}}
 {{- if and $dbEnv (regexMatch "(?i)^TRUSTIOT__DATABASE__(PLATFORM_)?(USERNAME|PASSWORD)$" .name) -}}
 {{- fail (printf "services.%s: env %s is set by the chart: the service's login roles and the passwords the migration Job generates for them" $name .name) -}}
+{{- end -}}
+{{- if and $clickhouseEnv (regexMatch "(?i)^TRUSTIOT__CLICKHOUSE__(USERNAME|PASSWORD)$" .name) -}}
+{{- fail (printf "services.%s: env %s is set by the chart: the service's ClickHouse account and the password the migration Job generates for it" $name .name) -}}
 {{- end -}}
 {{- if regexMatch "(?i)(secret|passw|passphrase|pwd|token|api_?key|(^|_)key$|dsn|private|credential)" .name -}}
 {{- $from := .valueFrom | default dict -}}
@@ -171,7 +185,7 @@ outbox consumer reads its producers' events with. */ -}}
 {{- if eq $name "certs" -}}
 {{- $certsEnv = include "trustiot.certs.env" .root | fromYamlArray -}}
 {{- end -}}
-{{- $env = concat $env $dbEnv $credentialEnv $identityEnv $certsEnv ($config.env | default list) -}}
+{{- $env = concat $env $dbEnv $clickhouseEnv $credentialEnv $identityEnv $certsEnv ($config.env | default list) -}}
 {{- $names := list -}}
 {{- range $env -}}
 {{- $names = append $names .name -}}

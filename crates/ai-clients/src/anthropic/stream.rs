@@ -459,6 +459,8 @@ pub struct MessageStream {
     cancel: CancellationToken,
     state: State,
     request_id: Option<String>,
+    /// The `error` event that ended the stream, as received.
+    error_event: Option<SseEvent>,
 }
 
 impl MessageStream {
@@ -477,6 +479,7 @@ impl MessageStream {
             cancel: CancellationToken::new(),
             state: State::Open,
             request_id: None,
+            error_event: None,
         }
     }
 
@@ -516,6 +519,12 @@ impl MessageStream {
         self.accumulator.message()
     }
 
+    /// The `error` event as received, once [`MessageStream::next`] has returned the
+    /// [`Error::StreamError`] it caused: for a relay that passes it on unchanged.
+    pub fn error_event(&self) -> Option<&SseEvent> {
+        self.error_event.as_ref()
+    }
+
     /// The next event, `Ok(None)` after `message_stop`.
     pub async fn next(&mut self) -> Result<Option<StreamItem>, Error> {
         loop {
@@ -536,7 +545,12 @@ impl MessageStream {
             if let Some(raw) = self.pending.pop_front() {
                 return match self.handle(&raw) {
                     Ok(event) => Ok(Some(StreamItem { raw, event })),
-                    Err(error) => Err(self.fail(error)),
+                    Err(error) => {
+                        if matches!(error, Error::StreamError(_)) {
+                            self.error_event = Some(raw);
+                        }
+                        Err(self.fail(error))
+                    }
                 };
             }
             self.read_more().await?;

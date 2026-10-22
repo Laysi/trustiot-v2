@@ -18,6 +18,7 @@ pub mod postgres;
 #[path = "../../../../crates/service-kit/tests/support/start.rs"]
 pub mod start;
 
+pub mod pki;
 pub mod secrets;
 
 use std::net::SocketAddr;
@@ -142,6 +143,27 @@ pub fn random_hex() -> String {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).expect("operating system randomness");
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Starts `command` with SIGHUP at its default action. A test runner started with SIGHUP ignored
+/// (`nohup`, some CI and remote shells) passes that on through exec, and a shell cannot trap a
+/// signal it was started with ignored.
+#[allow(
+    unsafe_code,
+    reason = "only signal(2) between fork and exec restores the default action"
+)]
+pub fn default_sighup(command: &mut Command) -> &mut Command {
+    use std::os::unix::process::CommandExt as _;
+    // SAFETY: the closure runs in the child between fork and exec and calls only signal(2), which
+    // is async-signal-safe and touches no memory of the parent.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::signal(libc::SIGHUP, libc::SIG_DFL) == libc::SIG_ERR {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        })
+    }
 }
 
 /// A scratch directory for this test process.
@@ -470,6 +492,36 @@ impl ClickHouse {
         let response = self
             .client
             .post(&format!("{}/", self.url), &pairs, auth, query.to_owned())
+            .await
+            .map_err(|error| error.to_string())?;
+        if response.status.is_success() {
+            Ok(response.body)
+        } else {
+            Err(response.body)
+        }
+    }
+
+    /// `query` as `user` with `role` enabled for this query only (the HTTP interface's `role`
+    /// parameter, as telemetry-query enables the tenant role).
+    pub async fn query_as_with_role(
+        &self,
+        user: &str,
+        password: &str,
+        role: &str,
+        query: &str,
+    ) -> Result<String, String> {
+        let auth = migrate::http::Auth::Basic {
+            username: user,
+            password,
+        };
+        let response = self
+            .client
+            .post(
+                &format!("{}/", self.url),
+                &[("role", role)],
+                auth,
+                query.to_owned(),
+            )
             .await
             .map_err(|error| error.to_string())?;
         if response.status.is_success() {

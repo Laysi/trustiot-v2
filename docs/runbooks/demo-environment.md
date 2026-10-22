@@ -1,6 +1,6 @@
 # 展示環境 runbook
 
-展示切片（[里程碑](../roadmap/milestones.md)「展示切片」，epic Laysi/trustiot-v2#456）的展示環境（Laysi/trustiot-v2#457）跑在展示機（lab 的 Mac mini M1，Fedora Asahi Remix、k3s、aarch64）。本文目前寫對外的入口：展示用的 Cloudflare Tunnel、展示機上的 connector 與 app 主機名稱前的 Cloudflare Access（Laysi/trustiot-v2#466）。本文也寫展示環境的部署、打開切片的服務、換 chart 版本、重設展示資料、金鑰輪替，以及與 lab e2e 共用叢集的注意事項（Laysi/trustiot-v2#469）。
+展示切片（[里程碑](../roadmap/milestones.md)「展示切片」，epic Laysi/trustiot-v2#456）的展示環境（Laysi/trustiot-v2#457）跑在展示機（lab 的 Mac mini M1，Fedora Asahi Remix、k3s、aarch64）。本文目前寫對外的入口：展示用的 Cloudflare Tunnel、展示機上的 connector 與 app 主機名稱前的 Cloudflare Access（Laysi/trustiot-v2#466），以及外寄郵件與 Anthropic 金鑰（Laysi/trustiot-v2#468）。本文也寫展示環境的部署、打開切片的服務、換 chart 版本、重設展示資料、金鑰輪替，以及與 lab e2e 共用叢集的注意事項（Laysi/trustiot-v2#469）。
 
 三個主機名稱（app、gateway、ota）都是同一個 zone 的一層子網域（Free 方案的 Universal SSL 只涵蓋一層）。主機名稱與 zone 都不寫進公開的 repo、issue 與 PR（[密鑰與權限](../architecture/secrets.md)「公開 repo 的資訊規則」；`scripts/demo/public-text.test.ts` 檢查本文與 `scripts/demo/` 只出現允許的網域）。文中稱「app 主機名稱」「gateway 主機名稱」「ota 主機名稱」；指令用 `DEMO_APP_HOST`、`DEMO_GATEWAY_HOST`、`DEMO_OTA_HOST`，展示機的 ssh 主機用 `DEMO_SSH_HOST`，由執行的人在自己的終端機設定。
 
@@ -437,3 +437,82 @@ Laysi/trustiot-v2#113（限流）、Laysi/trustiot-v2#107（停權）、Laysi/tr
 2. Access application 改成只涵蓋 gateway 與 ota 主機名稱（不拿掉這兩個：主機名稱對調的風險與 app 的防護無關，見「架構」），刪掉只有 app 主機名稱用到的設定。
 3. 確認 app 主機名稱不再轉到 Access，登入頁由身分服務回應。tunnel、其他路由與 DNS 不變。
 4. 同一批變更把 `scripts/demo/tunnel.ts` 的 `check` 對 app 主機名稱 `/` 的預期從 `access` 改成到達入口，否則 `check --stage 2` 在這一項失敗；gateway 與 ota 主機名稱的預期不變。
+
+## 外寄郵件與 Anthropic 金鑰
+
+展示環境的服務只經 SMTP 寄信（chart 的 `smtp.*`；[里程碑](../roadmap/milestones.md)「展示切片」），2026-10-19 起暫用 Resend 的 relay：`values-demo.yaml` 設 `smtp.resend.com`、587、`starttls`，帳密在 Secret `trustiot-smtp`（`username` 是 `resend`，`password` 是 Resend 的 API key），寄件人（`smtp.from`）在私有 values `trustiot-demo-values` 的 `smtp-from`。AI 閘道（Laysi/trustiot-v2#139）的 Anthropic 金鑰在 Secret `trustiot-anthropic` 的 `api-key`，閘道加入前沒有服務使用。兩個 Secret 都以 SOPS 加密放在 `deploy/flux/clusters/demo/trustiot/`（[deploy/flux/README.md](../../deploy/flux/README.md)「展示叢集」的表），第一次建立後列進同目錄的 `kustomization.yaml`。金鑰只經 stdin 交給 `scripts/flux/sops-secret.ts`，不貼到 issue、PR、聊天或指令列；主控台只顯示一次的金鑰，複製後以輸出剪貼簿的指令直接接上管線，用完清除剪貼簿。
+
+寄件網域是上層網域本身（展示主機名稱所在的 zone）。2026-10-20 原本選了 zone 下專門寄信的子網域（Resend 建議以子網域寄信，寄件信譽與上層網域分開），2026-10-22 決定改以上層網域本身寄信。上層網域也收發公司的郵件：它的 MX、SPF 與 DMARC（`p=reject; adkim=r; aspf=r`）屬於另一個郵件服務，Resend 的紀錄不動它們（下面第 2 步）。寄件網域和展示的主機名稱一樣不寫進公開的 repo、issue 與 PR（[密鑰與權限](../architecture/secrets.md)「公開 repo 的資訊規則」），文中稱「寄件網域」。
+
+### Resend 的寄件網域與金鑰
+
+由有 Resend 權限的維運人員在 Resend 主控台操作；DNS 紀錄照「Cloudflare 上的設定」的做法以 Cloudflare API 建立，變更清單先經使用者同意。
+
+1. **加入網域**：Domains → Add Domain，填寄件網域，區域選 Tokyo（`ap-northeast-1`），離展示的收件者最近。區域之後不能直接改：要刪掉網域、以新區域重新加入並換 DNS 紀錄。不論選哪個區域，帳號的資料（含寄出的信件與紀錄）都存在美國（[Regions](https://resend.com/docs/dashboard/domains/regions)）。
+2. **DNS 紀錄**：照主控台列出的值，名稱都相對於寄件網域（[Cloudflare 的設定方式](https://resend.com/docs/dashboard/domains/cloudflare)）：
+   - `send` 的 MX（主控台列出的退信主機，優先序 10）與 `send` 的 TXT（`v=spf1 include:<主控台列出的網域> ~all`）：Resend 寄信時信封寄件人（MAIL FROM）在 `send.<寄件網域>`，收件端的 SPF 驗的是這個名稱，兩筆都要在。上層網域自己的 MX 與 SPF 不改。
+   - `resend._domainkey` 的 TXT（`p=` 加上公鑰）：DKIM，簽章的 `d=` 是寄件網域本身。
+   - `_dmarc` 不加也不改：上層網域已有 DMARC 紀錄（`p=reject`），由收發公司郵件的一方管理（Resend 的說明見 [DMARC](https://resend.com/docs/dashboard/domains/dmarc)）。DKIM 的 `d=` 與 From 相同，嚴格與寬鬆對齊都成立，所以 Resend 寄出的信在 `p=reject` 下照常通過 DMARC；SPF 的 `send.<寄件網域>` 只在寬鬆對齊下對齊，所以這筆紀錄的 `aspf` 不能改成 `s`。
+   - 主控台另外列出 `rsend` 的 CNAME：那是 Resend Forge（Resend 自己的寄信引擎，只在北維吉尼亞 `us-east-1` 運作）的退信網域，在主控台按 Activate Resend Forge 才會啟用（[Resend Forge](https://resend.com/docs/forge)）。展示環境不加，寄信留在 Tokyo 區域；沒有這筆時主控台的網域狀態是 `partially_failed`，Forge 的說明是驗證完成前網域照常寄信。
+   - 收信用的 MX（`inbound`）不加：展示環境不收信。MX 與 TXT 都是 DNS only。
+
+   DKIM 與 `send` 的 MX、TXT 都顯示 verified 後才寄得出去；手動加的紀錄可能要等到 72 小時。
+3. **金鑰**：API Keys → Create API Key，權限選 Sending access（`sending_access`，只能寄信），Domain 選寄件網域，只能以這個網域寄（[API keys](https://resend.com/docs/dashboard/api-keys/introduction)、[Create API key](https://resend.com/docs/api-reference/api-keys/create-api-key)）。金鑰只顯示這一次，之後看不到也改不了：
+
+   ```sh
+   <輸出 API key 的指令> | bun scripts/flux/sops-secret.ts --cluster demo --name trustiot-smtp --key password --set username=resend
+   ```
+
+   產生 `deploy/flux/clusters/demo/trustiot/trustiot-smtp.sops.yaml`；開 PR（內文只寫改了哪個 Secret 與 key），合併後 Flux 套用。
+4. **主控台成員**：Resend 主控台的 Emails 頁看得到每封寄出的信，含收件地址與內容（[Managing emails](https://resend.com/docs/dashboard/emails/manage-emails)），登入驗證碼（Laysi/trustiot-v2#103）上線後也包括驗證碼。所以主控台的成員只限維運人員；有人不再負責時移除他，並依 [secrets runbook](secrets.md)「何時輪替」輪替金鑰。
+5. **紀錄**：網域每筆紀錄的狀態（DKIM 與 `send` 的 MX、TXT）與區域、金鑰的權限與限定網域記進測試報告，不寫網域名稱與金鑰。
+
+### Anthropic 的工作區與金鑰
+
+由 Anthropic 組織的管理員在 Claude Console 操作（[Workspaces](https://platform.claude.com/docs/en/manage-claude/workspaces)、[Authentication](https://platform.claude.com/docs/en/manage-claude/authentication)）：
+
+1. **工作區**：Settings → Workspaces → Create workspace，建一個展示專用的工作區。只有組織管理員能建立。
+2. **用量上限**：在 Workspaces 頁選這個工作區 → Spend limits，設每月上限與到達門檻時的通知。Default Workspace 不能設上限，所以金鑰不放在 Default Workspace。需要時在 Rate limits 頁選這個工作區另設每分鐘的限制。
+3. **金鑰**：連結一個 service account（Settings → Service accounts 建立，再加入這個工作區），不用個人金鑰：個人金鑰代表那個人，他離開組織或工作區時金鑰就失效。在 API keys 頁 Create key：Linked account 選這個 service account，限定在展示的工作區，設到期日（Anthropic 在到期前寄信給建立的人；到期日建立後不能改）。
+
+   ```sh
+   <輸出 API key 的指令> | bun scripts/flux/sops-secret.ts --cluster demo --name trustiot-anthropic --key api-key
+   ```
+
+   產生 `deploy/flux/clusters/demo/trustiot/trustiot-anthropic.sops.yaml`，PR、合併、Flux 套用，同上。
+4. **紀錄**：每月上限與通知門檻、金鑰連結的是 service account、限定的工作區與到期日記進測試報告，不寫金鑰。
+
+### 輪替 Resend 與 Anthropic 金鑰
+
+依 [secrets runbook](secrets.md)「通用步驟：SaaS 以 SOPS 管理的 Secret」，展示環境的差別如下：
+
+1. 在主控台建立新金鑰（權限、限定的網域或工作區同上），舊的先留著。
+2. 以上面的管線指令重新產生整個 SOPS 檔（不用 `sops edit`），開 PR。服務以環境變數讀金鑰，Secret 換了 pod 不會自己重啟：已有服務使用時（寄信在 Laysi/trustiot-v2#103 之後，Anthropic 在 Laysi/trustiot-v2#139 之後），同一個 PR 在 `values-demo.yaml` 為該服務的 `services.<name>.podAnnotations` 加上或更新 `trustiot.io/secret-rotated: "<YYYY-MM-DD>"`。
+3. 合併、Flux 套用後確認：SMTP 照下方「寄測試信」寄一封（測試 pod 每次都從 Secret 讀，直接驗證新金鑰）；Anthropic 金鑰以 AI 閘道的一次呼叫確認（請求見 [services/ai-gateway/README.md](../../services/ai-gateway/README.md)「範例：一次最小的呼叫」；在叢集裡從哪裡送出，由部署閘道的 Laysi/trustiot-v2#536 補上）。
+4. 在主控台刪掉舊金鑰（Anthropic 的 Disable 可以還原，Delete 不行）。外洩時不保留舊金鑰：先刪掉，再做第 1 步。
+
+### 寄測試信
+
+`scripts/demo/test-mail.ts` 在展示叢集裡以展示環境的 SMTP 設定與 Secret 寄一封信，用來確認收件端的 SPF 與 DKIM 通過。在工作站上執行，經 ssh 操作展示機；工作目錄要是審查過的 commit 的乾淨 checkout（`scripts/demo`、`scripts/release`、`deploy/flux/clusters/demo/trustiot` 或 `deploy/chart/values.yaml` 有未 commit 的變更時停下），`--apply` 還要這個 commit 已在 `origin/main` 裡。
+
+```sh
+bun scripts/demo/test-mail.ts send --ssh-host "$DEMO_SSH_HOST"                              # 只讀：印出計畫與確認碼
+bun scripts/demo/test-mail.ts send --ssh-host "$DEMO_SSH_HOST" --apply --confirm <確認碼>    # 問收件地址，寄出
+```
+
+- **計畫**（只讀）：以 checkout 的 chart 預設值、`values-saas.yaml` 與 `values-demo.yaml` 合出 SMTP 主機、埠與加密方式（只接受 `starttls` 與 `tls`，從不寄明文 SMTP），從 HelmRelease 找出寄件人來自哪個 Secret 的哪個 key。在展示機上確認：namespace `trustiot` 強制 Pod Security `restricted`；叢集的 ConfigMap `trustiot-values` 與 checkout 的 SMTP 設定相同（不同表示 Flux 還沒套用這個 commit）；`trustiot-smtp` 有 `username` 與 `password`，`trustiot-demo-values` 有 `smtp-from`（只讀 key 的名稱，值不經過 ssh）。也印出 commit 是否已在 `origin/main` 裡：以本機的 ref 判斷，不會 fetch；不在或判斷不了時 `--apply` 拒絕，先 `git fetch origin main`，並且只從已合併的 commit 寄。也列出 namespace 裡的 NetworkPolicy（哪些限制 egress、是否選到測試 pod）、AuthorizationPolicy 的數量、ztunnel 是否在跑，以及之前留下的測試 pod。這些都算進確認碼，另外印出 lab 鎖目前的持有者。
+- **收件地址**：`--apply` 時在終端機提示輸入（輸入的字不顯示，不留在畫面與錄下的終端機紀錄；Ctrl-C 取消；不是終端機時從 stdin 讀一行），不放在指令列，所以不進 shell history 與行程列表。只接受一般的地址（`@` 前是英數與 `. _ % + -`）。地址只經 ssh 的 stdin 交給 `kubectl attach`，進到 pod 的 stdin，不在 pod 的定義、Secret、日誌或任何輸出裡。收件信箱用維運人員自己能看原始標頭的信箱，例如 Gmail。
+- **執行**：取得 lab 鎖（Laysi/trustiot-v2#468；自己已持有時加 `--lock-held`。它只在 `trustiot` 裡建一個短暫的 pod，不改叢集層級的東西；取得鎖是 `scripts/demo` 改變叢集時的共同規則，也避免和正在換 Secret 或部署的工作同時進行），重新計畫並比對確認碼，刪掉之前留下的測試 pod，再建立 pod `trustiot-test-mail-<執行 ID>`：curl 的官方映像（以 multi-arch index 的 digest 釘選，含 linux/arm64），非 root、拿掉所有 capability、唯讀的根檔案系統、RuntimeDefault seccomp、沒有 ServiceAccount token；帳密與寄件人是 `secretKeyRef` 的環境變數，curl 以 `--variable` 讀，不出現在任何行程的參數裡。pod 和 chart 的服務一樣帶 `istio.io/dataplane-mode: ambient`，經 ztunnel 出去；chart 的 NetworkPolicy 都只限制 ingress，所以這條連線走的路和服務寄信相同，腳本不改任何 policy。pod 最多存在 10 分鐘（`activeDeadlineSeconds`），結束後不論成敗都刪掉；刪不掉時印出刪除的指令。取得鎖之後收到 SIGINT（Ctrl-C）、SIGTERM 或 SIGHUP 時，先刪掉 pod（已建立的話）、再釋放 lab 鎖，然後以 128 加訊號編號結束（Ctrl-C 是 130）；第二個訊號立刻結束。只有 SIGKILL、第二個訊號與 ssh 連線中斷會留下它們：kubelet 在 `activeDeadlineSeconds` 到時停掉 pod，下次執行時當作之前留下的 pod 刪掉；lab 鎖照腳本印出的說明（`scripts/demo/lib.ts` 的 `LOCK_HELP`）手動移除。它不像 `scripts/demo` 的其他腳本記錄執行前後的叢集狀態：它只建立並刪掉自己的一個短暫 pod，不改其他東西。
+- **輸出**：pod 裡 curl 的對話直接進 awk，只留下每一步的回應碼（與增強狀態碼）、指令名稱、TLS 版本與 cipher、憑證是否驗證通過；回應的文字（含 Resend 的信件 ID）、地址、AUTH 的參數、主機與 IP 都不會離開 pod。工作站再過濾一次，印出 `RCPT TO: 250 2.1.5`、`message: 250 2.0.0` 這樣的各段結果，可以直接放進測試報告。算是寄出要：TLS 憑證驗證通過、登入 235、MAIL FROM 與 RCPT TO 250、DATA 354、信件 250、pod 裡的 curl 與容器本身都以 0 結束；否則以非零結束並印出 curl 的錯誤碼與原因。curl 7（連不上）多半是 587 被擋：照 `values-demo.yaml` 的註解改成 2587（`starttls`）或 465（`tls`），開 PR，Flux 套用後再寄（計畫會比對叢集的設定）。
+
+pod 的腳本可以先在工作站上試：`TRUSTIOT_DEMO_MAIL_E2E=1 bun test scripts/demo/test-mail.container.test.ts` 以 podman 跑同一個映像與腳本（權限設定同 pod），對著假的 SMTP relay 驗證 STARTTLS 與 TLS 的寄送、登入失敗、不提供 STARTTLS 的 relay 與不合格的地址，並確認輸出沒有地址、帳密與信件 ID。
+
+### 讀收件端的標頭
+
+在收件信箱下載原始信件（Gmail：信件的選單 →「顯示原始郵件」→「下載原始郵件」），存成工作站上的檔案：
+
+```sh
+bun scripts/demo/test-mail.ts headers < <原始信件檔>
+```
+
+它只讀標頭，印出：每個 `Authentication-Results`（最上面那個是收件端自己加的）與 `ARC-Authentication-Results` 的 `spf`、`dkim`、`dmarc` 結果；每個 DKIM `d=` 與 SPF 的 MAIL FROM 網域和 From 網域是否對齊（嚴格與寬鬆、只有寬鬆、不對齊）；`Received-SPF`；`DKIM-Signature` 的演算法與 selector（只照印 32 字以內的小寫英數，例如 Resend 的 `resend`；其他的可能含網域，例如 Microsoft 365 的，印成 `<selector>`）；每個 `Received` 記下的協定、TLS 版本與 cipher。網域只印成 `<from-domain>`、`<subdomain of from-domain>`、`<other-domain-1>` 這類佔位符，收件端印成 `<receiver-1>`，不印地址、IP、簽章或信件 ID，可以直接貼進測試報告。判定只看最上面的 `Authentication-Results`：`spf=pass` 且 MAIL FROM 網域和 From 網域有關（相同、子網域、上層或同一個組織網域；SPF 的對齊另印一行），有一個 `d=` 和 From 對齊的 `dkim=pass`，而且收件端有寫 `dmarc` 結果時要是 `dmarc=pass`（Gmail 會寫）。都成立時最後一行是 `verdict: PASS`；否則是 `FAIL`，列出缺了哪一項，並以非零結束。收件端沒寫 `dmarc` 結果時印一行說明，只以 SPF 與 DKIM 判定。除了寄件網域的簽章，信上可能還有 Resend 所用寄信服務的 DKIM 簽章，印成 `<other-domain-N>`，不對齊是正常的；SPF 的網域是 `send.<寄件網域>`，印成 `<subdomain of from-domain>`，只在寬鬆對齊下對齊。對齊以網域的最後兩段近似組織網域，收件端的 `dmarc=` 結果才是準的。看完刪掉原始信件檔：它含收件地址與寄件網域。

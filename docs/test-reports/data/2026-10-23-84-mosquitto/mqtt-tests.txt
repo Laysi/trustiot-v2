@@ -1,0 +1,87 @@
+# Output of the broker tests in the last check round of Laysi/trustiot-v2#84 (see checks.txt), filtered to test names, results and evidence lines.
+== cargo test --locked -p migrate --test mqtt_broker --test mqtt_trust --test mqtt_accounts -- --nocapture
+     Running tests/mqtt_accounts.rs (<host copy>/target/debug/deps/mqtt_accounts-dfdc0d35fd718b32)
+test a_release_without_callers_needs_no_api ... ok
+test an_unreadable_file_or_a_missing_secret_stops_the_start ... ok
+test passwords_go_to_the_secret_and_only_their_hashes_to_the_broker ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+     Running tests/mqtt_broker.rs (<host copy>/target/debug/deps/mqtt_broker-e2e618d65e7b16f0)
+test the_configuration_follows_the_protocol_limits ... ok
+evidence: refused, service:ingest with another password: Client service:ingest:test-1adb85d1267a2aedeb72536ca70bc9ad6fbfd29897ee512625bc8e8377674c3e received CONNACK (135)
+evidence: refused, service:ingest with gateway-ops' password: Client service:ingest:test-1bd4c07fd81da01530a5da583480f70d3815b80d3d9e0576908c2ff52d644115 received CONNACK (135)
+evidence: refused, no username: Client anonymous:test-8cb56df8440f2a517dcf2d9431cc2cb327bb808608447adeac50bf27c9a5ee80 received CONNACK (135)
+evidence: probe: 4 runs, no error, warning or OpenSSL line; e.g. 2026-10-22T17:57:13Z: New client connected from /run/mosquitto/probe.sock:0 as probe:6 (p5, c1, k60).
+evidence: refused, a valid certificate, placeholder CA: OpenSSL Error while trying to get the error[0]: error:0A000418:SSL routines::tlsv1 alert unknown ca
+evidence: refused, a gateway's name without a certificate: Client gw-a:test-63537b727a881a29fc8634c36d14be239b274ae91131a9a8cb95321b36a875c0 received CONNACK (135)
+evidence: refused, a gateway's name with a password: Client gw-a:test-29b1753ec524e3ac253d534292059fc8b19e2f358d3df77cc40ec80d4d2c471c received CONNACK (135)
+evidence: accepted, gw-a after the reload: Client gw-a received CONNACK (0)
+evidence: shared subscription delivered Delivered { topic: "trustiot/v1/gw/gw-a/up/telemetry", retain: false, qos: 1, len: 7 }
+evidence: refused, no client certificate: OpenSSL Error while trying to get the error[0]: error:0A00045C:SSL routines::tlsv13 alert certificate required
+evidence: refused, a certificate of another CA, CN gw-a: OpenSSL Error while trying to get the error[0]: error:0A000418:SSL routines::tlsv1 alert unknown ca
+evidence: 2026-10-22T17:57:13Z: sqlite: Restored 0 base messages (0 failed)
+evidence: 2026-10-22T17:57:13Z: sqlite: Restored 0 retained messages (0 failed)
+evidence: 2026-10-22T17:57:13Z: sqlite: Restored 0 clients (0 failed)
+evidence: 2026-10-22T17:57:13Z: sqlite: Restored 0 subscriptions (0 failed)
+evidence: 2026-10-22T17:57:13Z: sqlite: Restored 0 client messages (0 failed)
+evidence: 2026-10-22T17:57:13Z: sqlite: Restored 0 will messages (0 failed)
+evidence: 2026-10-22T17:57:15Z: sqlite: Restored 2 base messages (0 failed)
+evidence: 2026-10-22T17:57:15Z: sqlite: Restored 1 retained messages (0 failed)
+evidence: 2026-10-22T17:57:15Z: sqlite: Restored 1 clients (0 failed)
+evidence: 2026-10-22T17:57:15Z: sqlite: Restored 1 subscriptions (0 failed)
+evidence: 2026-10-22T17:57:15Z: sqlite: Restored 1 client messages (0 failed)
+evidence: 2026-10-22T17:57:15Z: sqlite: Restored 0 will messages (0 failed)
+evidence: refused, an expired certificate: OpenSSL Error while trying to get the error[0]: error:0A000415:SSL routines::ssl/tls alert certificate expired
+evidence: 11 service connections open at once on 1883 (the probe socket allows 8), and the probe connects
+evidence: refused, a certificate without clientAuth: OpenSSL Error while trying to get the error[0]: error:0A000413:SSL routines::ssl/tls alert unsupported certificate
+evidence: refused, a revoked certificate: OpenSSL Error while trying to get the error[0]: error:0A000414:SSL routines::ssl/tls alert certificate revoked
+evidence: after SIGKILL: retained ["trustiot/v1/gw/gw-a/up/status 1 1 online"], queued ["trustiot/v1/gw/gw-b/down/config 0 1 queued"]
+test retained_messages_and_sessions_survive_sigkill ... ok
+evidence: refused, gw-c after its revocation: OpenSSL Error while trying to get the error[0]: error:0A000414:SSL routines::ssl/tls alert certificate revoked
+evidence: certs listed the broker's clients through dynamic security
+evidence: gw-c's connection from before its revocation still receives after the reload
+evidence: accepted, gw-a after the new CRL: Client gw-a received CONNACK (0)
+evidence: accepted, a client that trusts the new server CA: Client gw-a received CONNACK (0)
+evidence: the file the broker saved after certs' changes passes the init container's checks
+evidence: refused, a client that trusts only the old server CA: OpenSSL Error while trying to get the error[0]: error:0A000086:SSL routines::certificate verify failed
+test gateways_need_a_current_certificate_of_our_ca ... ok
+evidence: a 1056768-byte payload: Client service:gateway-ops:test-c294120b20d4efa199f2e1003435eecd87c2750fdb37f1448beab26d31f34ed6 received CONNACK (0)
+test services_log_in_with_their_accounts_and_reach_only_their_channels ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.69s
+     Running tests/mqtt_trust.rs (<host copy>/target/debug/deps/mqtt_trust-5feb886a05916c11)
+test the_init_container_refuses_a_server_key_of_another_certificate ... ok
+test the_init_container_installs_the_certs_services_files_or_the_placeholder ... ok
+test the_sidecar_waits_for_a_broker_that_handles_sighup ... ok
+test the_sidecar_reloads_the_broker_after_every_change_it_can_load ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.31s
+== cargo test --locked -p migrate --test mqtt_broker --test mqtt_trust --test mqtt_accounts -- --nocapture: exit 0
+== cargo test --locked -p migrate --lib mqtt_
+test config::tests::mqtt_accounts_settings ... ok
+test config::tests::mqtt_trust_settings ... ok
+test mqtt_accounts::tests::every_channel_has_its_cloud_side ... ok
+test mqtt_accounts::tests::files_are_replaced_whole_with_their_mode ... ok
+test mqtt_accounts::tests::service_lists ... ok
+test mqtt_accounts::tests::entries_the_broker_would_skip_or_misread_are_refused ... ok
+test mqtt_accounts::tests::a_fresh_file_denies_by_default_and_holds_the_accounts ... ok
+test mqtt_accounts::tests::service_rules_cover_shared_subscriptions_and_nothing_else ... ok
+test mqtt_accounts::tests::entries_the_broker_reads_as_written_are_kept ... ok
+test mqtt_trust::tests::the_broker_is_found_only_when_it_is_alone_and_ready ... ok
+test mqtt_accounts::tests::files_the_broker_cannot_use_are_left_alone ... ok
+test mqtt_trust::tests::a_crl_without_next_update_is_refused ... ok
+test mqtt_trust::tests::a_complete_pair_passes_and_is_re_encoded ... ok
+test mqtt_trust::tests::the_placeholder_trusts_a_ca_nobody_holds ... ok
+test mqtt_trust::tests::incomplete_or_foreign_pairs_are_refused ... ok
+test mqtt_trust::tests::only_crls_valid_now_are_fetched ... ok
+test mqtt_trust::tests::the_server_certificate_is_read_through_the_secret_links ... ok
+test mqtt_accounts::tests::reconciling_keeps_gateways_and_replaces_what_the_release_manages ... ok
+test mqtt_trust::tests::installing_swaps_the_link_and_leaves_one_directory ... ok
+test mqtt_accounts::tests::pbkdf2_matches_known_vectors ... ok
+test mqtt_trust::tests::sighup_reaches_the_process ... ok
+test mqtt_accounts::tests::encoded_passwords_have_mosquittos_layout ... ok
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.09s
+== cargo test --locked -p migrate --lib mqtt_: exit 0
+== cargo test --locked -p certs --test key_custody
+test the_scan_leaves_out_test_modules_only ... ok
+test only_reviewed_code_turns_a_private_key_into_bytes ... ok
+test no_private_key_leaves_through_logs_endpoints_or_telemetry ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.95s
+== cargo test --locked -p certs --test key_custody: exit 0

@@ -9,9 +9,10 @@ resources:
   - chart.yaml
   - helm-release.yaml
   # SOPS-encrypted Secrets (*.sops.yaml in this directory, deploy/flux/README.md 「展示叢集」).
-  # trustiot-smtp and trustiot-anthropic are listed here once they exist.
   - ghcr-pull.sops.yaml
+  - trustiot-anthropic.sops.yaml
   - trustiot-demo-values.sops.yaml
+  - trustiot-smtp.sops.yaml
 configMapGenerator:
   - name: trustiot-values
     namespace: trustiot

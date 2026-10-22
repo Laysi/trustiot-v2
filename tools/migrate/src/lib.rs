@@ -4,7 +4,8 @@
 //!   the same time; then fills the Secrets that hold the generated passwords ([`passwords`]),
 //!   the Postgres part ([`postgres`]: the Job's bookkeeping, the per-database
 //!   setup, every service's roles, schema, outbox tables and migrations, the per-tenant role
-//!   hooks) and the ClickHouse part ([`clickhouse`]: the DDL and the collector's account).
+//!   hooks) and the ClickHouse part ([`clickhouse`]: the DDL and the accounts of the collector
+//!   and of telemetry-query).
 //! - [`kube::wait_for_job`]: the init container that holds a service's pod until the release's
 //!   migration Job has completed.
 //! - [`clickhouse_admin::generate`]: the bundled ClickHouse's init container, which generates
@@ -16,6 +17,10 @@
 //! - [`ca_keys::converge`]: the certs service's init container, which keeps the issuing CA keys
 //!   in the Secret the chart declares and their certificate signing requests in a ConfigMap
 //!   (Laysi/trustiot-v2#78).
+//! - [`mqtt_accounts::converge`] and [`mqtt_trust`]: the MQTT broker's init containers and
+//!   sidecar, which keep the cloud services' broker accounts, the dynamic-security file, the
+//!   gateway trust files, and reload the broker when they or its server certificate change
+//!   (Laysi/trustiot-v2#84).
 //!
 //! Every step is idempotent: a second run on the same databases changes nothing, which
 //! [`Report::changes`] states and the tests check against the catalogs.
@@ -27,6 +32,8 @@ pub mod clickhouse_files;
 pub mod config;
 pub mod http;
 pub mod kube;
+pub mod mqtt_accounts;
+pub mod mqtt_trust;
 pub mod passwords;
 pub mod postgres;
 pub mod registry;
@@ -92,6 +99,8 @@ pub enum Error {
     SigningKeys(String),
     #[error("issuing CA keys: {0}")]
     CaKeys(String),
+    #[error("MQTT broker: {0}")]
+    MqttBroker(String),
     #[error("Kubernetes API: {0}")]
     Kube(String),
 }
@@ -168,7 +177,13 @@ pub async fn run(config: &RunConfig, registry: &Registry) -> Result<Report, Erro
         let client =
             clickhouse::ClickHouse::connect(config, settings, config.wait.databases).await?;
         client
-            .migrate(registry, retention, passwords.collector(), &mut report)
+            .migrate(
+                registry,
+                retention,
+                passwords.collector(),
+                passwords.telemetry_query(),
+                &mut report,
+            )
             .await?;
     } else {
         tracing::info!("no ClickHouse settings: the ClickHouse part is skipped");

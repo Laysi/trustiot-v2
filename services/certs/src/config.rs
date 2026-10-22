@@ -24,12 +24,18 @@ pub const MIN_GATEWAY_VALIDITY: Duration = Duration::from_secs(3600);
 /// year.
 pub const MAX_GATEWAY_VALIDITY: Duration = Duration::from_secs(398 * 86_400);
 
+/// Shortest workstation certificate validity.
+pub const MIN_WORKSTATION_VALIDITY: Duration = Duration::from_secs(3600);
+
+/// Longest workstation certificate validity: the same ceiling as gateway certificates.
+pub const MAX_WORKSTATION_VALIDITY: Duration = MAX_GATEWAY_VALIDITY;
+
 /// Longest CRL validity: Mosquitto rejects every gateway of an issuing CA once its CRL expires,
 /// so a CRL that lives long only delays revocation news, never helps.
 pub const MAX_CRL_VALIDITY: Duration = Duration::from_secs(31 * 86_400);
 
 /// The service's settings: the platform settings the chart sets, the database role, the CA
-/// files, the gateway certificate profile and the CRL schedule.
+/// files, the gateway and workstation certificate profiles and the CRL schedule.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -42,6 +48,9 @@ pub struct Config {
     /// The gateway client certificate profile.
     #[serde(default)]
     pub gateway: GatewayProfile,
+    /// The workstation certificate profile.
+    #[serde(default)]
+    pub workstation: WorkstationProfile,
     /// When CRLs are regenerated and when their expiry raises the alert.
     #[serde(default)]
     pub crl: CrlSchedule,
@@ -51,6 +60,10 @@ pub struct Config {
 /// platform setting.
 #[derive(Debug, Deserialize)]
 pub struct Platform {
+    /// `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`: the file with the public keys internal identity
+    /// tokens are verified with (the chart's ConfigMap volume), read again while the service
+    /// runs. The workstation certificate API needs it (Laysi/trustiot-v2#534).
+    pub internal_identity_keys_file: PathBuf,
     /// `TRUSTIOT_POSTGRES_HOST`.
     pub postgres_host: String,
     /// `TRUSTIOT_POSTGRES_PORT`.
@@ -141,6 +154,36 @@ impl Default for GatewayProfile {
 
 const fn default_gateway_validity() -> Duration {
     Duration::from_secs(90 * 86_400)
+}
+
+/// `workstation.*`: the profile of production workstation certificates
+/// (Laysi/trustiot-v2#534). Everything else in the profile is fixed: the subject is
+/// `workstation:<name>`, the extended key usage is `issue::WORKSTATION_PURPOSE` only.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkstationProfile {
+    /// `TRUSTIOT__WORKSTATION__VALIDITY`: how long a workstation certificate is valid, from
+    /// [`MIN_WORKSTATION_VALIDITY`] to [`MAX_WORKSTATION_VALIDITY`], never past the issuing CA
+    /// certificate. Default 180 days: a platform administrator renews it by issuing another,
+    /// twice a year, and a key kept in a file instead of a TPM is exposed for at most that long
+    /// (revocation ends it sooner).
+    #[serde(
+        default = "default_workstation_validity",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub validity: Duration,
+}
+
+impl Default for WorkstationProfile {
+    fn default() -> Self {
+        Self {
+            validity: default_workstation_validity(),
+        }
+    }
+}
+
+const fn default_workstation_validity() -> Duration {
+    Duration::from_secs(180 * 86_400)
 }
 
 /// `crl.*`: the CRL schedule. Every `check_interval` the replica that holds the job lock gives
@@ -262,6 +305,14 @@ impl Validate for Config {
                 "must be between 1 hour and 398 days",
             ));
         }
+        if !(MIN_WORKSTATION_VALIDITY..=MAX_WORKSTATION_VALIDITY)
+            .contains(&self.workstation.validity)
+        {
+            return Err(Invalid::new(
+                "workstation.validity",
+                "must be between 1 hour and 398 days",
+            ));
+        }
         self.crl.validate()
     }
 }
@@ -306,6 +357,9 @@ mod tests {
     fn config() -> Config {
         Config {
             platform: Platform {
+                internal_identity_keys_file: PathBuf::from(
+                    "/etc/trustiot/internal-identity/jwks.json",
+                ),
                 postgres_host: "postgres".to_owned(),
                 postgres_port: 5432,
                 postgres_database: "trustiot".to_owned(),
@@ -324,6 +378,7 @@ mod tests {
                 reload_interval: Duration::from_secs(30),
             },
             gateway: GatewayProfile::default(),
+            workstation: WorkstationProfile::default(),
             crl: CrlSchedule::default(),
         }
     }
@@ -343,7 +398,7 @@ mod tests {
         };
         assert!(short.validate().is_ok());
 
-        let broken: [Breakage; 12] = [
+        let broken: [Breakage; 14] = [
             ("database.max_connections", |c| {
                 c.database.max_connections = 1
             }),
@@ -365,6 +420,12 @@ mod tests {
             }),
             ("gateway.validity", |c| {
                 c.gateway.validity = MAX_GATEWAY_VALIDITY + Duration::from_secs(1);
+            }),
+            ("workstation.validity", |c| {
+                c.workstation.validity = Duration::from_secs(60);
+            }),
+            ("workstation.validity", |c| {
+                c.workstation.validity = MAX_WORKSTATION_VALIDITY + Duration::from_secs(1);
             }),
             ("crl.validity", |c| {
                 c.crl.validity = MAX_CRL_VALIDITY + Duration::from_secs(1);

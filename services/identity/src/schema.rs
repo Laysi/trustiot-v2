@@ -1,6 +1,7 @@
 //! The identity service's Postgres schema as this release expects it: its migrations/postgres
-//! files in apply order, and the outbox templates it gets as a producer of
-//! `identity.tenant_created` (Laysi/trustiot-v2#402).
+//! files in apply order, the outbox templates it gets as a producer of
+//! `identity.tenant_created` (Laysi/trustiot-v2#402), and the producers whose events its event
+//! log consumes (Laysi/trustiot-v2#130).
 //!
 //! Two crates compile this file: the service, whose readiness check
 //! ([`service_kit::migrations::MigrationCheck`]) keeps failing until the database has every
@@ -24,5 +25,23 @@ pub const SCHEMA: Schema = Schema {
             name: "0002_tenants.sql",
             sql: include_str!("../migrations/postgres/0002_tenants.sql"),
         },
+        Migration {
+            name: "0003_event_log.sql",
+            sql: include_str!("../migrations/postgres/0003_event_log.sql"),
+        },
+        // Login (Laysi/trustiot-v2#103). It was 0003_login.sql only on its unmerged pull request
+        // branch; main's 0003_event_log.sql merged first, so this file took the next number. No
+        // release or deployed database ever had the old name: only main's files ship.
+        Migration {
+            name: "0004_login.sql",
+            sql: include_str!("../migrations/postgres/0004_login.sql"),
+        },
     ],
 };
+
+/// The outbox producers whose events the event log records (services/identity/README.md,
+/// "事件層與操作紀錄"): the service runs one consumer per producer, and the migration Job makes
+/// its platform role a reader of each one's `outbox_event` (the registry's `Outbox::consumes`).
+/// A producer is added here when it starts writing events, in the same change: `identity`
+/// (tenants, Laysi/trustiot-v2#65) and `assets` (device models, Laysi/trustiot-v2#99).
+pub const CONSUMES: &[&str] = &["identity", "assets"];

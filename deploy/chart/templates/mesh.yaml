@@ -8,7 +8,9 @@ still refuses a call that is not on the list.
    gateway on its API ports only ("trustiot.mesh.identityPorts", to.operation.ports, an L4
    attribute ztunnel enforces): its token exchange port has its own Service and policies, for
    the services that call on behalf of users (templates/token-exchange.yaml,
-   Laysi/trustiot-v2#106).
+   Laysi/trustiot-v2#106). The MQTT broker's policy admits each caller on its own port only
+   (portRules: mqtt-bridge on the gateway port, the services with a broker account on the
+   service port; Laysi/trustiot-v2#84).
 2. NetworkPolicy: everything in the namespace is denied by default; each service and component
    then admits ztunnel's HBONE port from the pods of the same callers, and connections from the
    node (kubelet probes, "trustiot.mesh.hostSource") on its probe ports only, because ztunnel
@@ -56,7 +58,27 @@ spec:
     matchLabels:
       {{- include "trustiot.selectorLabels" $ctx | nindent 6 }}
   action: ALLOW
-  {{- if $principals }}
+  {{- if hasKey $service "portRules" }}
+  {{- if $service.portRules }}
+  rules:
+    {{- range $rule := $service.portRules }}
+    - from:
+        - source:
+            principals:
+              {{- range $rule.callers }}
+              - {{ include "trustiot.mesh.principal" (dict "root" $ "serviceAccount" (include "trustiot.componentName" (dict "root" $ "name" .))) | quote }}
+              {{- end }}
+      to:
+        - operation:
+            ports:
+              {{- range $rule.ports }}
+              - {{ printf "%d" (int .) | quote }}
+              {{- end }}
+    {{- end }}
+  {{- else }}
+  # No caller is listed: an ALLOW policy without rules refuses every connection.
+  {{- end }}
+  {{- else if $principals }}
   rules:
     - from:
         - source:

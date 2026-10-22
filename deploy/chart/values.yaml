@@ -214,6 +214,9 @@ services:
     # OpenShift set fsGroup to null: the restricted-v2 SCC assigns one from the namespace range.
     podSecurityContext:
       fsGroup: 65532
+    # Mails login codes through the relay in `smtp` (services/identity/README.md, "登入").
+    credentials:
+      - smtp
   assets:
     enabled: false
   certs:
@@ -253,8 +256,8 @@ mesh:
   # identities <trustDomain>/ns/<namespace>/sa/<ServiceAccount>.
   trustDomain: cluster.local
   # Who may call whom: <caller>: [<callee>, ...]. Callers are keys under `services`; callees are
-  # keys under `services`, the in-cluster components `clickhouse` (bundled mode) and
-  # `otel-collector`, or `postgres`. Each service's issue adds the internal APIs it calls. Calls
+  # keys under `services`, the in-cluster components `clickhouse` (bundled mode), `otel-collector`
+  # and `mqtt-broker` (mqttBroker.enabled), or `postgres`. Each service's issue adds the internal APIs it calls. Calls
   # involving a disabled service or a component that is not deployed are skipped. The chart adds
   # the telemetry calls itself: every service to the collector, the collector to ClickHouse.
   # `postgres` (bundled or external) is how a service declares that it uses Postgres: only those
@@ -279,11 +282,22 @@ mesh:
     certs:
       - postgres
     # ClickHouse (decision 14): ingest writes telemetry, telemetry-query reads it with per-tenant
-    # read-only accounts (docs/architecture/deployment.md).
+    # read-only accounts (docs/architecture/deployment.md). telemetry-query keeps which tenants
+    # have an account in Postgres and reads the identity service's events from there as its
+    # platform role (services/telemetry-query/README.md). The MQTT broker (Laysi/trustiot-v2#84):
+    # mqtt-bridge carries the gateways' connections to its gateway port; ingest and gateway-ops
+    # log in on its service port with their broker accounts. certs, dynamic security's
+    # administrator, is added with the gateway registration (Laysi/trustiot-v2#82).
     ingest:
       - clickhouse
+      - mqtt-broker
     telemetry-query:
       - clickhouse
+      - postgres
+    gateway-ops:
+      - mqtt-broker
+    mqtt-bridge:
+      - mqtt-broker
 
 # Internal identity (decision 27): for every request that passes the cookie check, the identity
 # service signs a short-lived token for the backend, and every service verifies it with the
@@ -550,6 +564,56 @@ clickhouse:
       name: ""
       usernameKey: username
       passwordKey: password
+
+# MQTT broker (Mosquitto 2.1, decision 6, Laysi/trustiot-v2#84; README.md, "MQTT broker"), inside
+# the cluster only: a ClusterIP Service that no ingress route reaches. Port 8883 takes gateways,
+# TLS with a gateway certificate of the certs service's CA, from mqtt-bridge only; port 1883 takes
+# the cloud services that list mqtt-broker in mesh.calls (ingest, gateway-ops, certs), each with a
+# broker account whose password is generated in the cluster. Off until a deployment turns it on.
+mqttBroker:
+  enabled: false
+  image:
+    # eclipse-mosquitto 2.1 (Alpine), pinned to the multi-arch index digest (arm64 included).
+    # crates/protocol/tests/broker.rs, tools/migrate/tests/mqtt_broker.rs and scripts/lib/stack.ts
+    # use the same tag and digest; the chart tests fail when they differ.
+    repository: docker.io/library/eclipse-mosquitto
+    tag: 2.1.2-alpine
+    digest: sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408
+    pullPolicy: IfNotPresent
+  # The services' broker passwords are generated in the cluster: the broker pod's init container,
+  # which runs the migration image (arm64 only, so the chart adds kubernetes.io/arch: arm64 to
+  # nodeSelector), fills the Secret <release>-mqtt-broker-accounts, which the chart declares
+  # empty, and gives the broker only their hashes. Increase this number to rotate them: the
+  # upgrade restarts the broker, whose init container generates new ones first.
+  passwordGeneration: "1"
+  # How often the broker pod's trust sidecar fetches the CA certificates and CRLs from the certs
+  # service and checks the server certificate Secret; the broker reloads them when they changed.
+  trustInterval: 30s
+  storage:
+    # Sessions, queued and retained messages, the dynamic security file and the trust files.
+    size: 1Gi
+    # Empty: the cluster's default StorageClass.
+    storageClassName: ""
+  # The broker's memory_limit (it refuses new messages above it instead of being killed) is three
+  # quarters of limits.memory, which must therefore be given in Mi or Gi.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: "1"
+      memory: 256Mi
+  # The image's mosquitto user (UID and GID 1883). Every container of the pod runs as this user:
+  # the trust sidecar can signal the broker only as the same user (README.md, "MQTT broker").
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1883
+    runAsGroup: 1883
+    fsGroup: 1883
+    seccompProfile:
+      type: RuntimeDefault
+  nodeSelector: {}
+  tolerations: []
 
 qdrant:
   # bundled: Qdrant deployed in this cluster (on-prem, decision 19).

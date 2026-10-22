@@ -31,4 +31,4 @@ pub use consumer::{
 };
 pub use lag::Lag;
 pub use position::{InvalidPosition, Position};
-pub use producer::{PublishError, Published, aggregate_version, publish, write};
+pub use producer::{PublishError, Published, aggregate_version, publish, publish_as, write};

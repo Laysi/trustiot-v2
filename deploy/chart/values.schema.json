@@ -16,6 +16,7 @@
     "migrate",
     "postgres",
     "clickhouse",
+    "mqttBroker",
     "qdrant",
     "objectStorage",
     "smtp",
@@ -601,6 +602,85 @@
         }
       ]
     },
+    "mqttBroker": {
+      "description": "MQTT broker (Mosquitto, Laysi/trustiot-v2#84), inside the cluster only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "image",
+        "passwordGeneration",
+        "trustInterval",
+        "storage",
+        "resources",
+        "podSecurityContext",
+        "nodeSelector",
+        "tolerations"
+      ],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": {
+          "description": "Pinned by digest.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "tag", "digest", "pullPolicy"],
+          "properties": {
+            "repository": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([a-z0-9.:-]*[a-z0-9])?(/[a-z0-9]([a-z0-9._-]*[a-z0-9])?)*$"
+            },
+            "tag": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$" },
+            "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+            "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "passwordGeneration": {
+          "description": "Increase it to rotate the services' broker passwords: the broker restarts and its init container generates new ones first.",
+          "oneOf": [
+            { "type": "string", "pattern": "^[0-9]{1,9}$" },
+            { "type": "integer", "minimum": 0, "maximum": 999999999 }
+          ]
+        },
+        "trustInterval": {
+          "description": "How often the trust sidecar fetches the CA certificates and CRLs and checks the server certificate.",
+          "$ref": "#/definitions/waitDuration"
+        },
+        "storage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["size", "storageClassName"],
+          "properties": {
+            "size": { "$ref": "#/definitions/quantity" },
+            "storageClassName": { "$ref": "#/definitions/optionalK8sName" }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requests", "limits"],
+          "properties": {
+            "requests": { "$ref": "#/definitions/resourceList" },
+            "limits": {
+              "allOf": [
+                { "$ref": "#/definitions/resourceList" },
+                {
+                  "required": ["memory"],
+                  "properties": { "memory": { "type": "string", "pattern": "^[1-9][0-9]{0,5}(Mi|Gi)$" } }
+                }
+              ]
+            }
+          }
+        },
+        "podSecurityContext": {
+          "allOf": [
+            { "$ref": "#/definitions/podSecurityContext" },
+            { "required": ["runAsNonRoot", "seccompProfile"] }
+          ]
+        },
+        "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
+        "tolerations": { "type": "array", "items": { "type": "object" } }
+      }
+    },
     "qdrant": {
       "type": "object",
       "additionalProperties": false,
@@ -674,7 +754,9 @@
             "passwordKey": { "$ref": "#/definitions/secretKey" }
           }
         }
-      }
+      },
+      "if": { "required": ["host"], "properties": { "host": { "minLength": 1 } } },
+      "then": { "required": ["from"], "properties": { "from": { "minLength": 1 } } }
     },
     "ai": {
       "type": "object",

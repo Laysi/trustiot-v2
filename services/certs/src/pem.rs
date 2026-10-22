@@ -1,5 +1,5 @@
-//! PEM text of public objects (certificates, CRLs): base64 in 64-character lines between the
-//! RFC 7468 labels. Never used for private keys.
+//! PEM text of public objects (certificates, CRLs, certificate signing requests): base64 in
+//! 64-character lines between the RFC 7468 labels. Never used for private keys.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -9,6 +9,9 @@ pub const CERTIFICATE: &str = "CERTIFICATE";
 
 /// The label of a CRL.
 pub const CRL: &str = "X509 CRL";
+
+/// The label of a certificate signing request (PKCS #10).
+pub const CERTIFICATE_REQUEST: &str = "CERTIFICATE REQUEST";
 
 /// `der` as one PEM block labelled `label`, ending in a newline.
 #[must_use]

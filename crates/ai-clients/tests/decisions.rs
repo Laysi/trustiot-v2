@@ -287,7 +287,7 @@ fn client(server: &Server, max_concurrent: usize) -> DecisionsClient {
     DecisionsClient::new(
         endpoint(server.addr, max_concurrent),
         support::test_key(),
-        reqwest::Client::builder(),
+        &ai_clients::Tls::none(),
     )
     .expect("a valid endpoint")
 }
@@ -462,4 +462,47 @@ async fn decisions_over_the_concurrency_limit_are_not_sent() {
     tokio::task::yield_now().await;
     assert_eq!(server.request_count(), 1);
     first.abort();
+}
+
+#[tokio::test]
+async fn raw_decisions_go_out_byte_for_byte_and_are_checked_like_decide() {
+    let response = fixture("decisions/router.response.json");
+    let server = Server::start(vec![vec![Step::Send(http_response(
+        200,
+        &[
+            ("content-type", "application/json"),
+            ("x-request-id", "req_raw"),
+        ],
+        response.as_bytes(),
+    ))]])
+    .await;
+    let client = client(&server, 4);
+    // The fixture as written: its indentation and key order go out unchanged.
+    let body = fixture("decisions/router.request.json");
+    let reply = client
+        .decide_raw(bytes::Bytes::from(body.clone()))
+        .await
+        .unwrap();
+    assert_eq!(server.request(0).body, body.as_bytes());
+    assert_eq!(reply.raw, response.as_bytes());
+    assert_eq!(
+        reply.body,
+        DecisionResponse::parse(response.as_bytes()).unwrap()
+    );
+    assert_eq!(reply.request_id.as_deref(), Some("req_raw"));
+
+    // Invalid requests are refused before anything is sent.
+    let mut no_questions = fixture_json("decisions/router.request.json");
+    no_questions["questions"] = json!([]);
+    for invalid in [
+        serde_json::to_vec(&no_questions).unwrap(),
+        b"not json".to_vec(),
+    ] {
+        let error = client
+            .decide_raw(bytes::Bytes::from(invalid))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::InvalidRequest(_)), "{error:?}");
+    }
+    assert_eq!(server.request_count(), 1);
 }

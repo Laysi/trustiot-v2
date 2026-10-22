@@ -85,6 +85,13 @@ impl<T> Context<T> {
         &self.shutdown
     }
 
+    /// `http.request_timeout`: how long a handler may take to produce its response headers
+    /// before the kit answers 504 instead. A service whose handlers wait on slow upstreams
+    /// checks its own time limits against it at startup.
+    pub fn request_timeout(&self) -> Duration {
+        self.request_timeout
+    }
+
     /// Runs a background task that the service waits for during shutdown. The task must end
     /// soon after [`Shutdown::stopping`] resolves; when `shutdown.drain_timeout` runs out first,
     /// the task is dropped at its next await point.

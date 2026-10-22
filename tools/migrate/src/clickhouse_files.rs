@@ -38,4 +38,16 @@ pub const FILES: &[Migration] = &[
         name: "0007_monitoring.sql",
         sql: include_str!("../../../services/ingest/migrations/clickhouse/0007_monitoring.sql"),
     },
+    Migration {
+        name: "0008_telemetry_query.sql",
+        sql: include_str!(
+            "../../../services/ingest/migrations/clickhouse/0008_telemetry_query.sql"
+        ),
+    },
+    Migration {
+        name: "0009_telemetry_query_grantees.sql",
+        sql: include_str!(
+            "../../../services/ingest/migrations/clickhouse/0009_telemetry_query_grantees.sql"
+        ),
+    },
 ];

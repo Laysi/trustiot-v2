@@ -40,7 +40,7 @@ fn tree(package: &str) -> Vec<String> {
 fn ai_clients_does_not_depend_on_contract() {
     let names = tree("ai-clients");
     assert!(
-        names.iter().any(|name| name == "reqwest"),
+        names.iter().any(|name| name == "hyper"),
         "the tree looks wrong: {names:?}"
     );
     assert!(

@@ -66,7 +66,7 @@ async fn start(context: Context<Config>) -> Result<Router, BoxError> {
 4. 監聽 `http.listen_addr`（API，加上 health 路由與 kit 的 layer）與 `http.health_listen_addr`（只有 health 路由），readiness 開始回 200。任一個位址被占用就 exit code 1，不啟動。
 5. 收到 SIGTERM 後依[收尾](#收尾sigterm)結束，回傳 exit code。
 
-`Context` 提供 `config()`（已驗證的服務設定）、`health()`（註冊 readiness 檢查）、`shutdown()`（收尾狀態）、`spawn(task)`（收尾時會等待的背景工作）與 `serve_port(位址, routes)`：在另一個埠提供一組路由，和 API 埠有同樣的 layer（handler 逾時、panic 處理、請求的 span 與存取日誌）與收尾，給 mesh 要和 API 分開授權的內部 API 用，例如身分服務的 token 交換（Laysi/trustiot-v2#106）。埠被占用時回錯誤，服務不要啟動。
+`Context` 提供 `config()`（已驗證的服務設定）、`health()`（註冊 readiness 檢查）、`shutdown()`（收尾狀態）、`request_timeout()`（`http.request_timeout`，handler 要等慢的上游時，啟動時拿自己的時間上限與它比對，例如 `services/ai-gateway`）、`spawn(task)`（收尾時會等待的背景工作）與 `serve_port(位址, routes)`：在另一個埠提供一組路由，和 API 埠有同樣的 layer（handler 逾時、panic 處理、請求的 span 與存取日誌）與收尾，給 mesh 要和 API 分開授權的內部 API 用，例如身分服務的 token 交換（Laysi/trustiot-v2#106）。埠被占用時回錯誤，服務不要啟動。
 
 ## 設定
 
@@ -452,7 +452,7 @@ async fn device_names(db: &TenantDb, user: &UserIdentity) -> Result<Vec<String>,
 | `TenantDb::begin(&UserIdentity)` | handler | 請求的內部身分 token（已驗證）；token 沒有租戶時回 `TenantDbError::NoTenant`，端點回 403 `permission_denied` |
 | `BackgroundTenantDb::begin(TenantId, purpose)` | 排程工作、事件消費 | 工作本身：事件帶的租戶，或平台角色查詢找出的租戶。以 DEBUG 記下服務、租戶與 `purpose` |
 | `BackgroundTenantDb::begin_without_tenant(purpose)` | 不帶租戶資料的表（例如 outbox 消費端自己的表）、全平台事件的處理 | 不設定租戶：看不到也寫不進任何租戶的列。以 DEBUG 記下服務與 `purpose` |
-| `PlatformDb::begin(PlatformActor, purpose)` | 平台後台、跨租戶的工作 | 不設定租戶；平台角色只看得到表上有 `platform_access` policy 的資料。以 INFO 記一行 `platform database access`（actor、`purpose`），操作本身的紀錄在 Laysi/trustiot-v2#130 |
+| `PlatformDb::begin(PlatformActor, purpose)` | 平台後台、跨租戶的工作 | 不設定租戶；平台角色只看得到表上有 `platform_access` policy 的資料。以 INFO 記一行 `platform database access`（actor、`purpose`）；操作本身由寫入的事件記進身分服務的事件紀錄（`outbox::publish_as` 帶 actor，[services/identity](../../services/identity/README.md) 的「事件層與操作紀錄」，Laysi/trustiot-v2#130） |
 | `PlatformDb::reader(PlatformActor, purpose)` → `PlatformReader::begin()` | 每隔幾秒就要跨租戶讀一次的例行工作，例如 outbox 消費端輪詢事件 | 同 `PlatformDb::begin`，但交易是 `READ ONLY`（資料庫拒絕寫入）。`begin()` 在 `BEGIN READ ONLY` 之後立刻執行 `SELECT 1`：在交易的第一個查詢之前，`SET TRANSACTION READ WRITE` 還能改回讀寫，之後 Postgres 拒絕（Laysi/trustiot-v2#271 驗證的 F-4）。actor 與 `purpose` 在建立 `PlatformReader` 時以 INFO 記一次（`platform database reader`），每筆交易只記 DEBUG，免得每秒一行 INFO |
 
 - 交易的第一個陳述就是 `SELECT set_config('trustiot.tenant_id', $1, true)`：等同 `SET LOCAL`，但值以參數綁定。交易結束（commit、rollback、drop、出錯）設定就消失，連線回到 pool 時不帶租戶。

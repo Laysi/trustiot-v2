@@ -1,0 +1,13 @@
+{
+  "id": "01928f6e-7a3c-7d4e-8f00-000000000202",
+  "type": "identity.tenant_created",
+  "version": 1,
+  "tenant_id": "01928f6e-7a3c-7d4e-8f00-00000000000c",
+  "occurred_at": "2026-10-21T08:00:00.456Z",
+  "producer": "identity",
+  "payload": {},
+  "actor": {
+    "kind": "user",
+    "user_id": "01928f6e-7a3c-7d4e-8f00-0000000000ad"
+  }
+}

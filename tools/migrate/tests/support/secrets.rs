@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use migrate::config::{AdminSettings, KeySettings, PasswordSettings};
+use migrate::config::{AdminSettings, KeySettings, MqttAccountSettings, PasswordSettings};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -320,6 +320,32 @@ impl FakeSecrets {
             generation: generation.to_owned(),
             postgres: Some(pairs(postgres)),
             clickhouse_collector: collector.map(|pair| pairs(&[pair])),
+            clickhouse_telemetry_query: None,
+        }
+    }
+
+    /// Settings of the MQTT broker's accounts init container for this fake: it fills `services`
+    /// in `secret` for `generation` and writes the dynamic-security file `dynsec_file`.
+    pub fn mqtt_accounts_settings(
+        &self,
+        secret: &str,
+        services: &str,
+        generation: &str,
+        dynsec_file: &Path,
+    ) -> MqttAccountSettings {
+        let dir = scratch_dir("kube-token");
+        let token_file = dir.join("token");
+        std::fs::write(&token_file, format!("{}\n", self.token)).expect("write the token");
+        MqttAccountSettings {
+            api_url: self.url.clone(),
+            namespace: NAMESPACE.to_owned(),
+            token_file,
+            ca_file: dir.join("unused-ca.crt"),
+            secret: secret.to_owned(),
+            services: services.to_owned(),
+            generation: generation.to_owned(),
+            dynsec_file: dynsec_file.to_path_buf(),
+            wait: Duration::from_secs(120),
         }
     }
 

@@ -5,12 +5,13 @@
 | 模組 | 內容 |
 | --- | --- |
 | `error` | M1 錯誤格式：`ErrorBody`、`ErrorCode`、`MessageKey`、`FieldError` |
-| `id` | `TenantId`、`UserId`、`EventId`：新 ID 一律 UUIDv7（[可搬移規則 3](../../docs/architecture/deployment.md)） |
+| `id` | `TenantId`、`UserId`、`EventId`、`DeviceModelId`：新 ID 一律 UUIDv7（[可搬移規則 3](../../docs/architecture/deployment.md)） |
 | `event` | `Event` trait 與事件信封 `EventEnvelope` |
-| `events` | 事件本身，每個產生端服務一個子模組；目前有 `events::identity::TenantCreated`（`identity.tenant_created`，Laysi/trustiot-v2#65） |
+| `events` | 事件本身，每個產生端服務一個子模組；目前有 `events::identity::TenantCreated`（`identity.tenant_created`，Laysi/trustiot-v2#65），以及設備型號的 `events::assets::DeviceModelCreated`、`DeviceModelUpdated`、`DeviceModelDeleted`（`assets.device_model_{created,updated,deleted}`，Laysi/trustiot-v2#99；型號本身是 `protocol::config::DeviceModel`，閘道器設定用的同一個格式） |
 | `identity` | 內部身分標頭 `x-internal-identity`、claims `InternalClaims`、遮蔽內容的 `InternalToken` |
 | `client` | 內部 API 的 `Endpoint` 與有型別的 client `InternalClient<S>` |
 | `api` | 內部 API 本身，每個提供 API 的服務一個子模組；目前有 `api::identity::ExchangeToken`（身分服務的 token 交換，Laysi/trustiot-v2#106） |
+| `certs` | certs 服務的用戶端 API：平台管理員簽發與撤銷工作站憑證的請求與回應（`IssueWorkstationCertificate`、`RevokeWorkstationCertificate`、`RevocationReason`、`WorkstationCertificate`，Laysi/trustiot-v2#534）。經入口以 cookie 呼叫，不是內部 API；請求拒絕不認得的欄位，讓送出主體、延伸欄位或效期的用戶端立刻知道這些由 CA 決定。profile 與步驟見 [certs README](../../services/certs/README.md) 的「工作站憑證」 |
 | `service` | `ServiceName` 與型別層級的服務標記（`service::Identity` 等） |
 | `openapi` | `SharedSchemas`：每個服務規格共用的 OpenAPI schema（M1 錯誤格式） |
 | `json` | 不含文件內容的 JSON 錯誤 `JsonError`：serde 的訊息會引用值，日誌不得含個資（M2） |
@@ -129,6 +130,9 @@ client 每次失敗都記一筆日誌，欄位有 `peer`、`route`（路由樣�
 | `occurred_at` | 變更發生的時間，UTC，精確到毫秒 |
 | `producer` | 產生事件的服務 `Event::PRODUCER`；與型別的產生端不符時拒絕解碼 |
 | `payload` | 事件本身，一定是 JSON 物件 |
+| `actor` | 選填（2026-10-21，Laysi/trustiot-v2#130）：誰做了這個變更，操作紀錄的「誰」。`{"kind": "user", "user_id"}` 是經 API 操作的人（內部身分 token 的 `sub`，平台管理者也是），`{"kind": "service", "service"}` 是服務自己的工作（排程、事件消費端）；沒有設定時不出現。之後新增的 `kind` 在舊版解碼成 `Actor::Unrecognized`，這版解碼不了的其他 `actor`（不認得的 `service`、格式錯的 `user_id`）也一樣，不會讓整個信封解碼失敗；只能新增 `kind`、不能改名；身分服務的事件紀錄遇到不認得的 `kind` 會重試、等它升級，所以新增 `kind` 時先升級身分服務。`Actor::Unrecognized` 只用於解碼，序列化會失敗，所以寫不進 outbox。`service` 不是產生端自己時，事件紀錄當作沒有 `actor` 記錄（WARN）。產生端以 `EventEnvelope::with_actor` 或 `outbox::publish_as` 設定 |
+
+payload 經身分服務的事件紀錄給租戶的管理員看，並隨租戶的資料一直保存（[決策 34](../../docs/architecture/decisions.md)），所以 payload 一律不放：帳密、密鑰、一次性 token 或能取得存取權的連結（邀請、重設密碼、註冊）；只供內部的商業資料；ID 以外的個資，指一個人只用 `UserId`，不寫姓名、email 或電話。
 
 消費端忽略信封與 payload 裡不認得的欄位，所以兩者都只增加選填欄位。
 
