@@ -128,3 +128,30 @@ Laysi/trustiot-v2#500 讓入口的 cookie 檢查（ext_authz）在查 session �
 | `cargo run --locked -p openapi` | `api/openapi.json` 的 `POST /auth/login` 多了 403；前端以 `api:generate` 重新產生 `frontend/src/api/schema.gen.ts` |
 
 工作站：`bun run --cwd frontend api:check`、`typecheck`、`lint` 通過，`test` 115 通過、0 失敗；`bun scripts/ci/check-secret-handling.ts` 沒有違規。`security.cross_site_request` 的 en 與 zh-TW 翻譯在 Laysi/trustiot-v2#500 就已存在。
+
+### 完整檢查（2026-10-22）
+
+第一輪完整檢查（`01343213`）有 1 個測試失敗：`tools/sql-check` 的 `the_workspace_has_no_string_built_sql`。新測試在跨站登出的斷言訊息用了 `format!("DELETE {path} …")`，開頭像 SQL，被 `SqlBuiltFromStrings` 規則（決策 29）擋下；這條規則對測試程式不放寬。`b4b2ce9c` 把訊息改成 `logout …`，與旁邊 `send_code`、`verify_code` 的寫法一致，測試的行為不變。
+
+指令（建置主機，`CI=1`，在 `b4b2ce9c` 上一次跑完）：
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked --no-fail-fast
+cargo run --locked -q -p openapi -- --check
+cargo deny --locked check
+```
+
+| 檢查 | 結果 |
+| --- | --- |
+| `cargo test --locked -p sql-check --test check`（修正後先單獨跑） | 6 通過、0 失敗 |
+| `cargo fmt --all --check` | 通過 |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | 通過 |
+| `cargo test --workspace --locked --no-fail-fast` | 139 個測試執行檔，1089 通過、0 失敗、0 忽略 |
+| `cargo run --locked -q -p openapi -- --check` | `api/openapi.json` 與程式一致 |
+| `cargo deny --locked check` | advisories、bans、licenses、sources 都通過 |
+
+工作站（`b4b2ce9c`）：`bun run --cwd frontend api:check`、`typecheck`、`lint` 通過，`test` 115 通過、0 失敗；`bun scripts/ci/check-secret-handling.ts` 沒有違規；`gitleaks git --redact --log-opts="origin/main..HEAD"` 與對 `git archive HEAD` 展開的目錄跑 `gitleaks dir --redact` 都沒有發現。
+
+結論：登入的兩步都在處理常式最前面擋下跨站請求，跨站的登出由 ext_authz 擋下，兩者都不改變任何狀態；同源的登入照常。整個 workspace 的檢查通過。
