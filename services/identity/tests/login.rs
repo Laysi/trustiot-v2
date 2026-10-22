@@ -1329,6 +1329,19 @@ async fn there_is_no_password_login_sign_up_or_fake_login() {
     assert_eq!(
         paths,
         [
+            // The event log (Laysi/trustiot-v2#130): reads only.
+            (
+                "/api/identity/v1/event-log".to_owned(),
+                vec!["get".to_owned()]
+            ),
+            (
+                "/api/identity/v1/platform/event-log".to_owned(),
+                vec!["get".to_owned()]
+            ),
+            (
+                "/api/identity/v1/platform/tenants/{tenant_id}/event-log".to_owned(),
+                vec!["get".to_owned()]
+            ),
             (
                 "/api/identity/v1/sessions".to_owned(),
                 vec!["delete".to_owned()]

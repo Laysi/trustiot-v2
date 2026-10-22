@@ -156,7 +156,7 @@ ext_authz 每個請求都查資料庫，所以被撤銷的 session 下一個請�
 不做假登入（2026-10-21 決定，寫在決策 13）：本機開發以 `bun scripts/dev.ts seed` 建立 session（[測試工具怎麼建立 session](#測試工具怎麼建立-session)），不需要它；它是一旦在正式環境被打開就能任意登入的開關。驗收條件「正式版本不含假登入、本機版本沒開設定時 cookie 也開不了」以「不存在」滿足，由兩個測試證明：
 
 - 編譯期：這個 crate 沒有 Cargo feature（`cargo metadata` 列出的 feature 是空的，所以也沒有 optional dependency 帶來的 feature；`Cargo.toml` 沒有 `[features]`、`optional = true` 與 `build =`），沒有 build script；原始碼去掉空白後，除了單元測試的 `cfg(test)` 以外沒有任何 `cfg`、`cfg_attr`、`cfg!`、`debug_assertions`、`option_env!` 或 `include!`，`env!` 只讀套件版本，所以正式版本與本機版本的登入程式相同（`tests/login.rs` 的 `no_build_switch_can_add_a_fake_login`）。
-- 路由：本機建置的 binary 只有 OpenAPI 列出的四個端點；密碼登入、註冊、假登入常用的路徑與方法都是 404 或 405，`/auth/login` 拒絕其他 `step` 與多餘欄位，帶著各種「開發登入」cookie 也一樣（`there_is_no_password_login_sign_up_or_fake_login`）。
+- 路由：本機建置的 binary 只有 OpenAPI 列出的七個端點（登入、兩種登出、建立租戶與事件紀錄的三個唯讀端點）；密碼登入、註冊、假登入常用的路徑與方法都是 404 或 405，`/auth/login` 拒絕其他 `step` 與多餘欄位，帶著各種「開發登入」cookie 也一樣（`there_is_no_password_login_sign_up_or_fake_login`）。
 
 ### 寄信（SMTP）
 
