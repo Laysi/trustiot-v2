@@ -3449,7 +3449,7 @@ describe("ingress gateway (decision 27)", () => {
 type MeshPolicy = {
   selector: { matchLabels: Record<string, string> };
   action: string;
-  rules?: { from: { source: { principals: string[] } }[] }[];
+  rules?: { from: { source: { principals: string[] } }[]; to?: { operation: { ports: string[] } }[] }[];
 };
 type NetworkPolicyPeer = { podSelector?: { matchLabels: Record<string, string> }; ipBlock?: { cidr: string } };
 type NetworkPolicySpec = {
@@ -3476,6 +3476,10 @@ describe("service-to-service authorization (decision 27)", () => {
   // serviceDefaults.probes), which serves nothing else; their API listens on http.
   const HEALTH_PORT = 8081;
   const API_PORT = 8080;
+  // The identity service's token exchange listens on a port of its own (Laysi/trustiot-v2#106).
+  const EXCHANGE_PORT = 8082;
+  // An identity AuthorizationPolicy rule: these principals, on this port only.
+  const identityRule = (port: number, principals: string[]) => ({ from: [{ source: { principals } }], to: [{ operation: { ports: [String(port)] } }] });
   // Test stand-ins that run traefik/whoami, which listens on http only, so their overlays probe
   // http. The identity double (identity in the e2e overlay) listens on the health port like a
   // TrustIoT service.
@@ -3542,13 +3546,17 @@ describe("service-to-service authorization (decision 27)", () => {
     }
   });
 
-  test("the call list and the ingress routes generate one AuthorizationPolicy per service", () => {
+  test("the call list and the ingress routes generate one AuthorizationPolicy per service, and one for the token exchange", () => {
     const manifests = withCalls();
     const sa = (service: string) => principal(`${RELEASE}-${service}`);
     // Callers from mesh.calls first (sorted), then the ingress gateway where it routes or, for
-    // identity, where it sends the cookie check (ext_authz).
+    // identity, where it sends the cookie check (ext_authz), on its API port only. The services
+    // that call another one on behalf of users reach the identity service through the token
+    // exchange's own policy, on the exchange's port only (Laysi/trustiot-v2#106): assets (certs,
+    // alerts) and identity itself (assets).
     const expected: Record<string, string[]> = {
       identity: [principal(GATEWAY_SA)],
+      "identity-exchange": [sa("assets"), sa("identity")],
       assets: [sa("identity"), principal(GATEWAY_SA)],
       certs: [sa("assets"), principal(GATEWAY_SA)],
       "mqtt-bridge": [principal(GATEWAY_SA)],
@@ -3565,13 +3573,19 @@ describe("service-to-service authorization (decision 27)", () => {
     for (const [service, principals] of Object.entries(expected)) {
       const policy = meshPolicy(manifests, service);
       expect(policy.action).toBe("ALLOW");
-      // The selector picks exactly this service's pods.
+      // The selector picks exactly this service's pods; the token exchange's, the identity
+      // service's.
+      const workload = service === "identity-exchange" ? "identity" : service;
       for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
-        expect(selects(policy.selector.matchLabels, podLabels(deployment))).toBe(serviceOf(deployment.metadata.name) === service);
+        expect(selects(policy.selector.matchLabels, podLabels(deployment))).toBe(serviceOf(deployment.metadata.name) === workload);
       }
       if (principals.length === 0) {
         // An ALLOW policy without rules refuses every connection.
         expect(policy.rules).toBeUndefined();
+      } else if (service === "identity") {
+        expect(policy.rules).toEqual([identityRule(API_PORT, principals)]);
+      } else if (service === "identity-exchange") {
+        expect(policy.rules).toEqual([identityRule(EXCHANGE_PORT, principals)]);
       } else {
         expect(policy.rules).toEqual([{ from: [{ source: { principals } }] }]);
       }
@@ -3616,6 +3630,141 @@ describe("service-to-service authorization (decision 27)", () => {
     expect(manifests.some((m) => m.metadata.name === `${RELEASE}-knowledge`)).toBe(false);
   });
 
+  describe("calls on behalf of users (decision 27, Laysi/trustiot-v2#106)", () => {
+    const envOf = (manifests: Manifest[], workload: string) =>
+      podSpec(find(manifests, "Deployment", `${RELEASE}-${workload}`)).containers[0]?.env ?? [];
+    const onBehalfCalls = (manifests: Manifest[]) => {
+      const value = envOf(manifests, "identity").find((e) => e.name === "TRUSTIOT_ON_BEHALF_CALLS")?.value;
+      if (value === undefined) throw new Error("the identity service has no TRUSTIOT_ON_BEHALF_CALLS");
+      return JSON.parse(value) as Record<string, string[]>;
+    };
+
+    test("the identity service exchanges along mesh.calls between enabled services, and every such caller reaches it", () => {
+      const calls = {
+        // Two services and Postgres: only the services are calls on behalf of users.
+        assets: ["certs", "alerts", "postgres"],
+        // ai-gateway verifies no internal identity (decision 28): the mesh alone authorizes calls
+        // to it, and it holds no user's token to exchange.
+        assistant: ["ai-gateway", "knowledge"],
+        "ai-gateway": ["knowledge"],
+        // In-cluster components are no service APIs.
+        ingest: ["clickhouse"],
+        // Disabled services on either side are skipped, as in the mesh plan.
+        "gateway-ops": ["certs"],
+        certs: ["field-context"],
+      };
+      const enable = ["alerts", "knowledge", "assistant", "ai-gateway", "ingest"].flatMap((s) => ["--set", `services.${s}.enabled=true`]);
+      for (const shape of SHAPE_NAMES) {
+        const manifests = render([...SHAPES[shape], E2E_VALUES], [...enable, "--set-json", `mesh.calls=${JSON.stringify(calls)}`]);
+        expect(onBehalfCalls(manifests)).toEqual({ assets: ["alerts", "certs"], assistant: ["knowledge"] });
+        // Both layers of the token exchange admit exactly these callers, on the exchange's port
+        // only; the identity service's own policies admit the ingress gateway's cookie check, on
+        // the API port only. The NetworkPolicies see HBONE only, so they split the callers, not
+        // the ports.
+        expect(meshPolicy(manifests, "identity-exchange").rules).toEqual([
+          identityRule(EXCHANGE_PORT, [principal(`${RELEASE}-assets`), principal(`${RELEASE}-assistant`)]),
+        ]);
+        expect(meshPolicy(manifests, "identity").rules).toEqual([identityRule(API_PORT, [principal(GATEWAY_SA)])]);
+        const exchangeNetwork = networkPolicy(manifests, "identity-exchange");
+        expect(exchangeNetwork.podSelector.matchLabels).toEqual(networkPolicy(manifests, "identity").podSelector.matchLabels);
+        expect(hboneSources(manifests, exchangeNetwork)).toEqual({ services: ["assets", "assistant"], gateway: false });
+        // HBONE only: the kubelet's probes are the identity service's own NetworkPolicy's.
+        expect(exchangeNetwork.ingress).toHaveLength(1);
+        expect(hboneSources(manifests, networkPolicy(manifests, "identity"))).toEqual({ services: [], gateway: true });
+        // The call list is the identity service's alone: other services and the shared platform
+        // settings never see it.
+        for (const deployment of manifests.filter(isServiceDeployment)) {
+          if (deployment.metadata.name === `${RELEASE}-identity`) continue;
+          expect(envOf(manifests, serviceOf(deployment.metadata.name)).map((e) => e.name)).not.toContain("TRUSTIOT_ON_BEHALF_CALLS");
+        }
+        expect(platformConfig(manifests).TRUSTIOT_ON_BEHALF_CALLS).toBeUndefined();
+      }
+    });
+
+    test("a caller listed in mesh.calls for the identity service itself reaches both ports, each through its own policies", () => {
+      const manifests = render([...SHAPES.saas, E2E_VALUES], ["--set-json", 'mesh.calls={"assets":["identity","certs"]}']);
+      expect(onBehalfCalls(manifests)).toEqual({ assets: ["certs", "identity"] });
+      expect(meshPolicy(manifests, "identity").rules).toEqual([identityRule(API_PORT, [principal(`${RELEASE}-assets`), principal(GATEWAY_SA)])]);
+      expect(meshPolicy(manifests, "identity-exchange").rules).toEqual([identityRule(EXCHANGE_PORT, [principal(`${RELEASE}-assets`)])]);
+      expect(hboneSources(manifests, networkPolicy(manifests, "identity"))).toEqual({ services: ["assets"], gateway: true });
+      expect(hboneSources(manifests, networkPolicy(manifests, "identity-exchange"))).toEqual({ services: ["assets"], gateway: false });
+    });
+
+    // M2 of the 2026-10-21 security review: the cookie check (ext_authz) and the token exchange
+    // never share a grant. Each has its own Service, AuthorizationPolicy and NetworkPolicy.
+    test.each(SHAPE_NAMES)("%s: the token exchange has its own Service, and the identity service's Service leaves its port out", (shape) => {
+      for (const args of [enableAllServices, [...enableAllServices, "--set-json", 'mesh.calls={"assets":["certs"]}']]) {
+        const manifests = render(SHAPES[shape], args);
+        const ports = (name: string) =>
+          (find(manifests, "Service", `${RELEASE}-${name}`).spec as { ports: { name: string; port: number; targetPort: string }[] }).ports.map((p) => [p.name, p.port, p.targetPort]);
+        expect(ports("identity")).toEqual([["http", API_PORT, "http"]]);
+        expect(ports("identity-exchange")).toEqual([["token-exchange", EXCHANGE_PORT, "token-exchange"]]);
+        const exchange = find(manifests, "Service", `${RELEASE}-identity-exchange`);
+        expect((exchange.spec as { selector: Record<string, string> }).selector).toEqual(
+          (find(manifests, "Service", `${RELEASE}-identity`).spec as { selector: Record<string, string> }).selector,
+        );
+        expect((exchange.spec as { type: string }).type).toBe("ClusterIP");
+        // Its own component label, so the identity service still has one Service of its component.
+        expect(exchange.metadata.labels?.["app.kubernetes.io/component"]).toBe("identity-exchange");
+        const container = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`)).containers[0];
+        expect(container?.ports?.find((p) => p.name === "token-exchange")?.containerPort).toBe(EXCHANGE_PORT);
+      }
+    });
+
+    test.each(SHAPE_NAMES)("%s: without calls on behalf of users the token exchange's policies admit nobody", (shape) => {
+      const manifests = render(SHAPES[shape], enableAllServices);
+      expect(meshPolicy(manifests, "identity-exchange").rules).toBeUndefined();
+      expect(networkPolicy(manifests, "identity-exchange").ingress).toEqual([]);
+      // The identity service's own policy keeps the gateway on its API port.
+      expect(meshPolicy(manifests, "identity").rules).toEqual([identityRule(API_PORT, [principal(GATEWAY_SA)])]);
+    });
+
+    test("without the identity service there is no token exchange", () => {
+      const manifests = render(SHAPES.saas, []);
+      expect(manifests.some((m) => m.metadata.name === `${RELEASE}-identity-exchange`)).toBe(false);
+    });
+
+    test.each(SHAPE_NAMES)("%s: the default values list no call on behalf of users", (shape) => {
+      expect(onBehalfCalls(render(SHAPES[shape], enableAllServices))).toEqual({});
+    });
+
+    // README.md, "呼叫矩陣": the callers of every workload with the default values and every
+    // service enabled, so the documented matrix is the rendered one. A change to the default
+    // mesh.calls, public paths or ingress.routes updates the table in the same change.
+    test.each(SHAPE_NAMES)("%s: README.md's call matrix is what the default values render", (shape) => {
+      const readme = readFileSync(join(CHART_DIR, "README.md"), "utf8");
+      const section = readme.split("#### 呼叫矩陣")[1]?.split(/\n#{2,4} /)[0] ?? "";
+      const EVERY_SERVICE = "每個啟用的服務";
+      const NOT_A_SERVICE = "—";
+      const names = (cell: string) =>
+        cell === "（無）" || cell === NOT_A_SERVICE
+          ? []
+          : cell === EVERY_SERVICE
+            ? [...plannedServices]
+            : cell.split("、").map((name) => /^`([a-z-]+)`$/.exec(name)?.[1] ?? `unparsed ${name}`);
+      const rows = section
+        .split("\n")
+        .filter((line) => line.startsWith("| `"))
+        .map((line) => line.split("|").slice(1, -1).map((cell) => cell.trim()));
+      expect(rows.length).toBeGreaterThan(0);
+      const documented = Object.fromEntries(rows.map(([callee = "", callers = "", onBehalf = ""]) => [callee.replaceAll("`", ""), { callers: names(callers).sort(), onBehalf: names(onBehalf).sort(), service: onBehalf !== NOT_A_SERVICE }]));
+
+      const manifests = render(SHAPES[shape], enableAllServices);
+      const exchanges = onBehalfCalls(manifests);
+      const rendered = Object.fromEntries(
+        manifests
+          .filter((m) => m.kind === "AuthorizationPolicy" && (m.spec as MeshPolicy).action === "ALLOW")
+          .map((m) => {
+            const callee = serviceOf(m.metadata.name);
+            const callers = principalsOf(m.spec as MeshPolicy).map((p) => serviceOf(p.split("/sa/")[1] ?? "")).sort();
+            const onBehalf = Object.entries(exchanges).filter(([, callees]) => callees.includes(callee)).map(([caller]) => caller).sort();
+            return [callee, { callers, onBehalf, service: plannedServices.includes(callee) }];
+          }),
+      );
+      expect(documented).toEqual(rendered);
+    });
+  });
+
   test("with the default empty call list only the ingress gateway reaches its backends and the identity service", () => {
     const manifests = render(SHAPES.saas, enableAllServices);
     for (const service of plannedServices) {
@@ -3642,10 +3791,16 @@ describe("service-to-service authorization (decision 27)", () => {
         expect(manifest.metadata.labels?.["istio.io/use-waypoint"]).toBeUndefined();
         if (manifest.kind === "Gateway") expect((manifest.spec as { gatewayClassName: string }).gatewayClassName).toBe("istio");
         if (manifest.kind === "AuthorizationPolicy" && !manifest.metadata.name.startsWith(`${RELEASE}-ingress-`)) {
-          // Workload selector and source principals only: no targetRefs and no L7 conditions.
+          // Workload selector, source principals and, for the identity service's port split,
+          // destination ports only, all L4: no targetRefs and no L7 conditions.
           const spec = manifest.spec as MeshPolicy & { targetRefs?: unknown };
           expect(spec.targetRefs).toBeUndefined();
-          expect(JSON.stringify(spec.rules ?? [])).not.toMatch(/"(to|when)"/);
+          for (const rule of spec.rules ?? []) {
+            expect(JSON.stringify(rule.from)).not.toMatch(/"(to|when)"/);
+            expect(Object.keys(rule).sort()).toEqual(rule.to ? ["from", "to"] : ["from"]);
+            for (const to of rule.to ?? []) expect(Object.keys(to)).toEqual(["operation"]);
+            for (const to of rule.to ?? []) expect(Object.keys(to.operation)).toEqual(["ports"]);
+          }
         }
       }
       for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
@@ -3817,12 +3972,12 @@ describe("service-to-service authorization (decision 27)", () => {
         expect({ label, rules }).toEqual({ label, rules: [hostRule(HEALTH_PORT)] });
         expect({ label, nodePorts }).toEqual({ label, nodePorts: [HEALTH_PORT] });
         const [container] = podSpec(workload).containers;
+        // The identity service also serves its token exchange on a port of its own, which has a
+        // Service of its own (Laysi/trustiot-v2#106).
+        const servedPorts: [string, number][] = service === "identity" ? [["http", API_PORT], ["token-exchange", EXCHANGE_PORT]] : [["http", API_PORT]];
         expect({ label, ports: container?.ports?.map(({ name: port, containerPort }) => ({ name: port, containerPort })) }).toEqual({
           label,
-          ports: [
-            { name: "http", containerPort: API_PORT },
-            { name: "health", containerPort: HEALTH_PORT },
-          ],
+          ports: [...servedPorts.map(([port, containerPort]) => ({ name: port, containerPort })), { name: "health", containerPort: HEALTH_PORT }],
         });
         for (const probe of [container?.startupProbe, container?.livenessProbe, container?.readinessProbe]) {
           expect({ label, port: (probe as Probe | undefined)?.httpGet?.port }).toEqual({ label, port: "health" });
@@ -4738,6 +4893,33 @@ describe("the templates keep the secret and env boundaries without schema valida
       "a service named after the rotation CronJob",
       ["--set", "services.identity-key-rotation.enabled=true"],
       /services\.identity-key-rotation: the name belongs to the CronJob/,
+    ],
+    [
+      "a service named after the token exchange's Service and policies",
+      ["--set", "services.identity-exchange.enabled=true"],
+      /services\.identity-exchange: the name belongs to the identity service's token exchange/,
+    ],
+    [
+      "calls on behalf of users while the identity service has no token-exchange port",
+      [
+        "--set",
+        "services.identity.enabled=true",
+        "--set-json",
+        'services.identity.ports=[{"name":"http","containerPort":8080}]',
+        "--set",
+        "services.assets.enabled=true",
+        "--set",
+        "services.certs.enabled=true",
+        "--set-json",
+        'mesh.calls={"assets":["certs"]}',
+      ],
+      /services\.identity\.ports: the token exchange needs the port named token-exchange .* because assets call other services on behalf of users/,
+    ],
+    [
+      "an identity service with the token-exchange port only",
+      ["--set", "services.identity.enabled=true", "--set-json", 'services.identity.ports=[{"name":"token-exchange","containerPort":8082}]'],
+      // The ingress routes to the API port by name, so their check may fail the render first.
+      /services\.identity\.ports: the API port \(http\) is missing|service "identity" has no port named "http"/,
     ],
     [
       "a token in the identity service's container",

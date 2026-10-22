@@ -59,6 +59,9 @@ spec:
     {{- include "trustiot.selectorLabels" . | nindent 4 }}
   ports:
     {{- range .config.ports }}
+    {{- /* The identity service's token exchange has a Service of its own
+    (templates/token-exchange.yaml, Laysi/trustiot-v2#106). */}}
+    {{- if not (and (eq $.name "identity") (eq .name "token-exchange")) }}
     - name: {{ .name }}
       port: {{ .servicePort | default .containerPort }}
       targetPort: {{ .name }}
@@ -66,6 +69,7 @@ spec:
       {{- with .appProtocol }}
       appProtocol: {{ . }}
       {{- end }}
+    {{- end }}
     {{- end }}
 {{- end -}}
 

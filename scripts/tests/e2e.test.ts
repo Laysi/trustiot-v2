@@ -131,6 +131,7 @@ interface RunningIdentity {
 async function startIdentity(binary: string, settings: Record<string, string>): Promise<RunningIdentity> {
   const apiPort = await freePort();
   const healthPort = await freePort();
+  const exchangePort = await freePort();
   const child = Bun.spawn([binary], {
     env: {
       PATH: process.env.PATH ?? "",
@@ -139,6 +140,9 @@ async function startIdentity(binary: string, settings: Record<string, string>): 
       TRUSTIOT__DATABASE__PASSWORD: settings.TRUSTIOT_DEV_IDENTITY_DATABASE_PASSWORD!,
       TRUSTIOT__HTTP__LISTEN_ADDR: `127.0.0.1:${apiPort}`,
       TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR: `127.0.0.1:${healthPort}`,
+      // The token exchange's own port (Laysi/trustiot-v2#106); its default, 8082 on every
+      // interface, may be taken on the host.
+      TRUSTIOT__EXCHANGE__LISTEN_ADDR: `127.0.0.1:${exchangePort}`,
       TRUSTIOT__SHUTDOWN__DRAIN_DELAY: "100ms",
     },
     stdout: "pipe",

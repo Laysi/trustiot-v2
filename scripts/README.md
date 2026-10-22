@@ -154,7 +154,7 @@ TRUSTIOT__DATABASE__PASSWORD="$TRUSTIOT_DEV_IDENTITY_DATABASE_PASSWORD" \
   cargo run -p identity
 ```
 
-預設監聽 8080（API）與 8081（健康埠），`TRUSTIOT__HTTP__LISTEN_ADDR` 與 `TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR` 可改；`/readyz` 回 200 代表它以 `identity_app` 與 `verify-full` 連上了資料庫、有可以簽章的金鑰、路由可用。帳密經由行程的環境變數交給服務，不在 `cargo` 的參數裡。
+預設監聽 8080（API）、8081（健康埠）與 8082（token exchange，Laysi/trustiot-v2#106），`TRUSTIOT__HTTP__LISTEN_ADDR`、`TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR` 與 `TRUSTIOT__EXCHANGE__LISTEN_ADDR` 可改；`/readyz` 回 200 代表它以 `identity_app` 與 `verify-full` 連上了資料庫、有可以簽章的金鑰、路由可用。帳密經由行程的環境變數交給服務，不在 `cargo` 的參數裡。
 
 #### 開發 session 與試 ext_authz
 

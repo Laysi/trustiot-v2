@@ -75,5 +75,6 @@ CARGO_BUILD_JOBS=2 cargo test -p assets
 | 測試 | 驗證 |
 | --- | --- |
 | `tests/tenant_created.rs` | 以身分服務自己的 `TenantStore` 建立租戶：資產服務最後有那一列，API 只回 token 租戶的資料；重播整個事件記錄、同一個事件再送一次，都不多一列、`created_at` 不變，日誌依序記 `created` 為 true、false、false，沒有 dead letter；沒有 token、錯的受眾 401，沒有租戶 403，還沒處理的租戶 404 |
+| `tests/background_identity.rs` | Laysi/trustiot-v2#106：背景工作不需要使用者的身分。公鑰集合是空的、沒有任何 token 驗得過時，帶著真的使用者 token（受眾 `assets`、新租戶的 viewer）的請求回 503 `unavailable`，readiness 也是 503；消費端照樣以服務自己的身分（`ServiceIdentity`、自己的資料庫角色）處理 `identity.tenant_created`，新租戶在 `assets.tenants` 有一列（日誌 `created` 為 true） |
 | `tests/cross_tenant.rs` | [crates/testkit](../../crates/testkit/README.md) 的跨租戶負向測試：服務角色讀不到也改不了其他租戶的 `tenants`，API 不把一個租戶的資料給另一個租戶；消費端自己的表與 migration 紀錄不是租戶資料而豁免 |
 | `tests/migrations.rs` | Laysi/trustiot-v2#402：Job 寫的紀錄就是 `src/schema.rs` 預期的清單，服務 ready 並記 INFO；以 superuser 拿掉 `0001_assets.sql` 的紀錄時，新的行程 503，ERROR 日誌的 `missing` 寫出它，已經通過的行程維持 ready；紀錄回來後同一個行程轉為 ready；SHA-256 不同時 503，`changed` 寫出它；資料庫多一個較新版本的紀錄（映像被回退）時照常 ready，INFO 的 `newer` 寫出它；`assets_app` 只讀得到自己的紀錄、不能改，讀不到 `identity` 的紀錄與 `trustiot_migrate.applied`；`assets_platform`（能進 `identity` schema 讀事件）讀不到任何一個服務的紀錄；`identity_app` 讀不到 `assets` 的紀錄 |
