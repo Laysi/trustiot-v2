@@ -1258,7 +1258,7 @@ async fn cross_site_login_requests_change_nothing() {
                 &headers,
             )
             .expect("call the ext_authz check");
-            refused(&response, &format!("DELETE {path} {extra:?}"));
+            refused(&response, &format!("logout {path} {extra:?}"));
             assert!(response.header_values("x-internal-identity").is_empty());
         }
     }
