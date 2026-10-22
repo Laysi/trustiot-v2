@@ -60,6 +60,9 @@ pub struct RequestError(String);
 /// The credentials of one request.
 #[derive(Clone, Copy)]
 pub enum Auth<'a> {
+    /// No `Authorization` header: the certs service's public CA and CRL files, which the MQTT
+    /// broker's trust sidecar reads inside the mesh (src/mqtt_trust.rs).
+    None,
     /// `Authorization: Bearer <token>` (a Kubernetes ServiceAccount token).
     Bearer(&'a str),
     /// `Authorization: Basic ...` (a ClickHouse account).
@@ -70,8 +73,9 @@ pub enum Auth<'a> {
 }
 
 impl Auth<'_> {
-    fn header(self) -> Result<HeaderValue, RequestError> {
+    fn header(self) -> Result<Option<HeaderValue>, RequestError> {
         let text = match self {
+            Self::None => return Ok(None),
             Self::Bearer(token) => format!("Bearer {token}"),
             Self::Basic { username, password } => format!(
                 "Basic {}",
@@ -82,7 +86,7 @@ impl Auth<'_> {
             RequestError("the credentials contain characters a header cannot carry".to_owned())
         })?;
         value.set_sensitive(true);
-        Ok(value)
+        Ok(Some(value))
     }
 }
 
@@ -296,8 +300,10 @@ impl Client {
         let mut builder = Request::builder()
             .method(method)
             .uri(target)
-            .header(HOST, authority.as_str())
-            .header(AUTHORIZATION, auth.header()?);
+            .header(HOST, authority.as_str());
+        if let Some(value) = auth.header()? {
+            builder = builder.header(AUTHORIZATION, value);
+        }
         let body = match body {
             Some((content_type, body)) => {
                 builder = builder.header(CONTENT_TYPE, content_type);
@@ -377,8 +383,14 @@ mod tests {
             password: "p",
         }
         .header()
-        .expect("a valid header");
+        .expect("a valid header")
+        .expect("a header for basic credentials");
         assert!(header.is_sensitive());
         assert_eq!(header, "Basic dTpw");
+    }
+
+    #[test]
+    fn public_files_are_fetched_without_credentials() {
+        assert!(Auth::None.header().expect("no header to build").is_none());
     }
 }

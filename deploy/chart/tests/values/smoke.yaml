@@ -68,3 +68,9 @@ services:
       # The image sets no USER; TrustIoT images declare a numeric non-root USER instead.
       runAsUser: 65532
       runAsGroup: 65532
+
+# The MQTT broker (Laysi/trustiot-v2#84) runs only here, never in a deployment shape or under
+# deploy/flux. Its server certificate Secret is not part of the chart: the nightly issues one from a
+# CA it creates for the run (scripts/nightly/smoke.ts) before it installs the chart.
+mqttBroker:
+  enabled: true

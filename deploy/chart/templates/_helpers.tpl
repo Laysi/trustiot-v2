@@ -265,7 +265,8 @@ key: CloudNativePG's Secrets of the bundled Postgres (the CA's private key, the 
 database owner's password), the password Secrets the migration Job fills (each service's database
 password and the collector's ClickHouse password; the chart hands each consumer only its own), the
 bundled ClickHouse's generated admin password Secret, the internal identity signing keys Secret
-(only the identity service mounts it), and the migration accounts of an external Postgres and
+(only the identity service mounts it), the MQTT broker's accounts Secret and server certificate
+Secret (only the broker pod uses them), and the migration accounts of an external Postgres and
 ClickHouse (only the migration Job uses those).
 Returns a YAML list of names; use with fromYamlArray.
 */}}
@@ -284,6 +285,9 @@ migration Job (through the API) may use it. */ -}}
 {{- $names = append $names (include "trustiot.identity.keys" . | fromYaml).secret -}}
 {{- /* The certs service's issuing CA keys, whether or not the service is enabled. */ -}}
 {{- $names = append $names (include "trustiot.certs.ca" . | fromYaml).secret -}}
+{{- /* The MQTT broker's service passwords and server key, whether or not the broker is enabled. */ -}}
+{{- $names = append $names (include "trustiot.mqttBroker.accountsSecret" .) -}}
+{{- $names = append $names (include "trustiot.mqttBroker.tlsSecret" .) -}}
 {{- if eq .Values.postgres.mode "external" -}}
 {{- with .Values.postgres.external.migrationSecret.name -}}
 {{- $names = append $names . -}}

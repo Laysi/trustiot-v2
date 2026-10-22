@@ -96,13 +96,14 @@ spell it (the SPIFFE ID without "spiffe://"). Argument: dict "root" $ "serviceAc
 {{/*
 In-cluster components that services call through the mesh, by name, with whether this
 deployment runs them. They can be callees in mesh.calls, never callers there; the plan adds the
-calls between components itself (the collector writes to ClickHouse). Their pods carry the
+calls between components itself (the collector writes to ClickHouse, the MQTT broker fetches its
+trust files from the certs service). Their pods carry the
 component's selector labels ("trustiot.selectorLabels" with the component name) and the
 ambient label, and the chart generates their policies like a service's.
 Returns YAML {<name>: bool}; use with fromYaml.
 */}}
 {{- define "trustiot.mesh.components" -}}
-{{- dict "clickhouse" (eq .Values.clickhouse.mode "bundled") "otel-collector" .Values.observability.collector.enabled | toYaml -}}
+{{- dict "clickhouse" (eq .Values.clickhouse.mode "bundled") "otel-collector" .Values.observability.collector.enabled "mqtt-broker" .Values.mqttBroker.enabled | toYaml -}}
 {{- end -}}
 
 {{/*
@@ -198,7 +199,12 @@ Who may call each enabled service and in-cluster component. Callers come from th
 - the telemetry pipeline, fixed in the chart: every enabled service sends OTLP to the
   OpenTelemetry collector, and the collector writes to the bundled ClickHouse (decision 22);
 - the migration Job, fixed in the chart too: it reaches the bundled ClickHouse while
-  migrate.enabled is true (tools/migrate).
+  migrate.enabled is true (tools/migrate);
+- the MQTT broker's trust sidecar, fixed in the chart too: it reaches the certs service while
+  both run (templates/mqtt-broker.yaml).
+The MQTT broker admits each of its callers on one port only ("trustiot.mqtt-broker.callers"):
+its entry also has portRules, [{callers, ports}], and mesh.calls may list it as the callee of
+those callers only.
 Every other connection is refused. Callers must be keys under services and callees keys under
 services, components ("trustiot.mesh.components") or direct callees ("trustiot.mesh.directCallees",
 which get no entry here); other names fail the render.
@@ -224,7 +230,11 @@ only port they reach); the render fails when there are such callers but no token
 {{- if not (kindIs "slice" $callees) -}}
 {{- fail (printf "mesh.calls.%s: must be a list of services" $caller) -}}
 {{- end -}}
+{{- $brokerCallers := include "trustiot.mqtt-broker.callers" $ | fromYaml -}}
 {{- range $callees -}}
+{{- if and (eq (toString .) "mqtt-broker") (not (has $caller (concat $brokerCallers.gateway.callers $brokerCallers.service.callers))) -}}
+{{- fail (printf "mesh.calls.%s: the MQTT broker admits only %s on its gateway port and %s on its service port (deploy/chart/README.md, \"MQTT broker\")" $caller (join ", " $brokerCallers.gateway.callers) (join ", " $brokerCallers.service.callers)) -}}
+{{- end -}}
 {{- if not (or (hasKey $v.services (toString .)) (hasKey $components (toString .)) (hasKey $direct (toString .))) -}}
 {{- fail (printf "mesh.calls.%s: unknown callee %q; callees are keys under services or in-cluster components (%s)" $caller (toString .) (concat (keys $components) (keys $direct) | sortAlpha | join ", ")) -}}
 {{- end -}}
@@ -285,6 +295,29 @@ only port they reach); the render fails when there are such callers but no token
 {{- if and (eq $name "clickhouse") $v.migrate.enabled -}}
 {{- /* The migration Job applies the DDL and creates the accounts (tools/migrate). */ -}}
 {{- $callers = append $callers "migrate" -}}
+{{- end -}}
+{{- if and (eq $name "certs") (get $components "mqtt-broker") -}}
+{{- /* The broker's trust sidecar fetches the CA certificates and CRLs. */ -}}
+{{- $callers = append $callers "mqtt-broker" -}}
+{{- end -}}
+{{- if eq $name "mqtt-broker" -}}
+{{- /* Each caller on its own port: mqtt-bridge on the gateway port, the account holders on the
+service port. */ -}}
+{{- $byPort := include "trustiot.mqtt-broker.callers" $ | fromYaml -}}
+{{- $rules := list -}}
+{{- range $kind := list "gateway" "service" -}}
+{{- $entry := get $byPort $kind -}}
+{{- $these := list -}}
+{{- range $callers -}}
+{{- if has . $entry.callers -}}
+{{- $these = append $these . -}}
+{{- end -}}
+{{- end -}}
+{{- if $these -}}
+{{- $rules = append $rules (dict "callers" $these "ports" (list $entry.port)) -}}
+{{- end -}}
+{{- end -}}
+{{- $_ := set $planned "portRules" $rules -}}
 {{- end -}}
 {{- $_ := set $planned "callers" $callers -}}
 {{- $_ := set $planned "ingress" (has $name $ingressCallees) -}}

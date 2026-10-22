@@ -20,6 +20,10 @@
 // After the ingress e2e test, the SaaS shape also runs the service-to-service authorization e2e
 // test (mesh.e2e.ts, e2e.ts). Components the chart gains later are covered without
 // changes here, because the checks read the release's own manifests (manifests.ts).
+// The MQTT broker (Laysi/trustiot-v2#84) mounts a server certificate Secret that the installing
+// environment provides: the smoke issues one from a CA it makes for the run, for the names of the
+// broker's Services, and checks that no Service of the release is reachable from outside the
+// cluster and that no route sends traffic to the broker.
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -40,6 +44,7 @@ import {
   staticBandProblems,
 } from "./ingress-address.ts";
 import {
+  exposureProblems,
   gatewayPortProblems,
   gatewayPorts,
   gatewaysOf,
@@ -50,6 +55,7 @@ import {
   migrationOrderProblems,
   missingSecrets,
   missingTlsSecrets,
+  mqttBrokerServicesOf,
   parseManifests,
   passwordSecretProblems,
   passwordSecretsOf,
@@ -58,6 +64,8 @@ import {
   postgresClustersOf,
   readyEndpointsFor,
   restartsOf,
+  type ServerTlsSecret,
+  serverTlsSecretsOf,
   workloadsOf,
 } from "./manifests.ts";
 import { smokeNamespaceOf, smokeProviderNameOf } from "./platform.ts";
@@ -229,7 +237,9 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         }
         const tls = missingTlsSecrets(objects);
         for (const name of tls) ingressCa = await createTlsSecret(ctx, namespace, name, ingressHostsOf(objects));
-        const created = [...missing.keys(), ...tls];
+        const servers = serverTlsSecretsOf(objects, namespace);
+        for (const secret of servers) await createServerTlsSecret(ctx, namespace, secret);
+        const created = [...missing.keys(), ...tls, ...servers.map((secret) => secret.name)];
         return created.length === 0 ? "none needed" : `${created.length} created: ${created.join(", ")}`;
       })) &&
       (await check("helm install --wait", async () => {
@@ -391,6 +401,15 @@ export async function smokeShape(ctx: SmokeContext, shape: Shape): Promise<Shape
         }
         return routed.join(", ");
       })) &&
+      (await check("no Service of the release is reachable from outside the cluster, and no route sends traffic to the MQTT broker (Laysi/trustiot-v2#84)", async () => {
+        const objects = parseManifests(manifest);
+        const services = await kubectlJson(["get", "services", "--namespace", namespace, "--output", "json"]);
+        const problems = exposureProblems(objects, JSON.parse(services.stdout) as { items?: unknown[] });
+        if (problems.length > 0) throw new Error(problems.join("; "));
+        const count = objects.filter((o) => o.kind === "Service").length;
+        const broker = mqttBrokerServicesOf(objects);
+        return `${count} Services, each ClusterIP without node ports or external addresses; MQTT broker: ${broker.length === 0 ? "not in this release" : `${broker.join(", ")}, named by no route`}`;
+      })) &&
       (await check(
         "through the ingress, a new tenant reaches the assets service, a stolen identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77)",
         () => runApiCheck(ctx, namespace, parseManifests(manifest), ingressCa, `nightly smoke ${shape.name}`),
@@ -475,6 +494,58 @@ async function createTlsSecret(ctx: SmokeContext, namespace: string, name: strin
       { env: { KUBECONFIG: ctx.kubeconfig }, timeoutMs: 60_000 },
     );
     return readFileSync(cert, "utf8");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * A server certificate for the Services of a pod that mounts it (manifests.ts, serverTlsSecretsOf),
+ * issued by a CA made for this run alone, as a kubernetes.io/tls Secret whose tls.crt holds the
+ * certificate and then the CA's, like the chain the cluster will issue (Laysi/trustiot-v2#535).
+ * Both keys live in a private temporary directory only as long as the commands need them, and
+ * are never logged; the CA's key is thrown away, so nothing else can be signed with it.
+ */
+async function createServerTlsSecret(ctx: SmokeContext, namespace: string, secret: ServerTlsSecret): Promise<void> {
+  if (secret.hosts.length === 0) throw new Error(`no Service of the release selects the pods that mount ${secret.name}`);
+  const dir = mkdtempSync(join(tmpdir(), "nightly-server-tls-"));
+  const file = (name: string) => join(dir, name);
+  try {
+    // Every extension spelled out, so nothing depends on the runner's openssl.cnf.
+    const config = [
+      "[req]",
+      "distinguished_name = dn",
+      "prompt = no",
+      "[dn]",
+      "CN = nightly.test",
+      "[ca]",
+      "basicConstraints = critical,CA:TRUE,pathlen:0",
+      "keyUsage = critical,keyCertSign,cRLSign",
+      "subjectKeyIdentifier = hash",
+      "[server]",
+      "basicConstraints = critical,CA:FALSE",
+      "keyUsage = critical,digitalSignature",
+      "extendedKeyUsage = serverAuth",
+      `subjectAltName = ${secret.hosts.map((host) => `DNS:${host}`).join(",")}`,
+      "subjectKeyIdentifier = hash",
+      "authorityKeyIdentifier = keyid",
+    ];
+    writeFileSync(file("openssl.cnf"), `${config.join("\n")}\n`);
+    const key = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-config", file("openssl.cnf")];
+    const openssl = (args: string[]) => run(ctx.log, ["openssl", ...args], { timeoutMs: 30_000 });
+    await openssl(["req", "-x509", ...key, "-extensions", "ca", "-subj", "/CN=nightly server CA", "-days", "1", "-keyout", file("ca.key"), "-out", file("ca.crt")]);
+    await openssl(["req", "-new", ...key, "-subj", `/CN=${secret.hosts[0]}`, "-keyout", file("tls.key"), "-out", file("tls.csr")]);
+    await openssl([
+      "x509", "-req", "-in", file("tls.csr"), "-CA", file("ca.crt"), "-CAkey", file("ca.key"),
+      "-CAcreateserial", "-CAserial", file("ca.srl"), "-days", "1",
+      "-extfile", file("openssl.cnf"), "-extensions", "server", "-out", file("server.crt"),
+    ]);
+    writeFileSync(file("tls.crt"), `${readFileSync(file("server.crt"), "utf8")}${readFileSync(file("ca.crt"), "utf8")}`);
+    await run(
+      ctx.log,
+      [ctx.kubectl, "create", "secret", "tls", secret.name, "--namespace", namespace, `--cert=${file("tls.crt")}`, `--key=${file("tls.key")}`],
+      { env: { KUBECONFIG: ctx.kubeconfig }, timeoutMs: 60_000 },
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

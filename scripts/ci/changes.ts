@@ -131,6 +131,8 @@ const RUST_READ_FILES: ReadonlySet<string> = new Set([
   "deploy/chart/values.yaml",
   // tools/migrate/tests/registry.rs: which login roles the chart binds a Secret to
   "deploy/chart/templates/_migrate.tpl",
+  // tools/migrate/tests/mqtt_broker.rs runs the MQTT broker's configuration (include_str!)
+  "deploy/chart/files/mosquitto/mosquitto.conf",
 ]);
 
 /**
@@ -172,6 +174,8 @@ export function affectsCargoDeny(path: string): boolean {
 
 /** Files outside the chart that `bun test deploy/chart` reads (checked by changes.test.ts). */
 const HELM_READ_FILES: ReadonlySet<string> = new Set([
+  // The MQTT broker's image pin, and the probe and memory limit its configuration test runs.
+  "crates/protocol/tests/broker.rs",
   // The bundled Postgres e2e runs it as the database owner.
   "crates/service-kit/sql/database.sql",
   // The collector's key redaction rules are checked against service-kit's names.
@@ -185,6 +189,7 @@ const HELM_READ_FILES: ReadonlySet<string> = new Set([
   "services/ingest/tests/common/mod.rs",
   // The labels and annotations the Job keeps on the password Secrets it binds.
   "tools/migrate/src/passwords.rs",
+  "tools/migrate/tests/mqtt_broker.rs",
 ]);
 
 /**
