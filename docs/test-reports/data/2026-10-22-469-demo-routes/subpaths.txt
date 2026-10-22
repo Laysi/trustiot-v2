@@ -1,0 +1,8 @@
+== POST /certs/renew/x (gateway, no User-Agent)
+HTTP/2 403 
+== GET /certs/renew/x (gateway, no User-Agent)
+HTTP/2 403 
+== GET /mqtt/x (gateway, no User-Agent)
+HTTP/2 403 
+POST /certs/renew/x status=403 body-bytes=0 content-type=[]
+GET /certs/renew/x status=403 body-bytes=0 content-type=[]
