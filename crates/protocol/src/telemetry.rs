@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::time::Duration;
 
 use serde::de::{self, DeserializeOwned, IgnoredAny, SeqAccess, Visitor};
 use serde::ser::SerializeTuple;
@@ -390,6 +391,19 @@ struct Rejected {
 struct Retry {
     after_ms: u32,
 }
+
+/// The longest a gateway keeps an unacknowledged batch, in days (checklist G1, decided in
+/// Laysi/trustiot-v2#92, reasoning in docs/architecture/data-retention.md). Past it the gateway
+/// drops the batch and counts the dropped readings in its heartbeat.
+///
+/// The cloud's raw data retention must be longer (the migration Job refuses a shorter setting):
+/// a stream's committed high-water mark lives in the batch completion records, which expire with
+/// the raw data, so a batch the cloud committed but whose acknowledgement was lost must come back
+/// before its completion record expires, or it would be written twice.
+pub const BUFFER_MAX_AGE_DAYS: u32 = 30;
+
+/// [`BUFFER_MAX_AGE_DAYS`] as a duration.
+pub const BUFFER_MAX_AGE: Duration = Duration::from_secs(BUFFER_MAX_AGE_DAYS as u64 * 86_400);
 
 /// The smallest batch size limit a [`BatchBuilder`] accepts. Every valid reading fits in an
 /// otherwise empty batch of this size, so with a valid limit [`PushError::TooLarge`] cannot

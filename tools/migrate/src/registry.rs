@@ -20,6 +20,10 @@ mod identity_schema;
 #[path = "../../../services/assets/src/schema.rs"]
 mod assets_schema;
 
+/// The certs service's files (compiled into the service as well).
+#[path = "../../../services/certs/src/schema.rs"]
+mod certs_schema;
+
 /// The outbox tables (crates/outbox) in a service's schema.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Outbox {
@@ -178,6 +182,17 @@ pub const PRODUCT: Registry = Registry {
                 consumes: &["identity", "assets"],
             },
             migrations: assets_schema::SCHEMA.migrations,
+        },
+        // The ledger of issued certificates and the CRLs (Laysi/trustiot-v2#78): no tenant data
+        // and no events, so no platform role.
+        Service {
+            name: certs_schema::SCHEMA.service,
+            platform_role: false,
+            outbox: Outbox {
+                producer: certs_schema::SCHEMA.outbox_producer,
+                consumes: &[],
+            },
+            migrations: certs_schema::SCHEMA.migrations,
         },
     ],
     clickhouse: crate::clickhouse_files::FILES,

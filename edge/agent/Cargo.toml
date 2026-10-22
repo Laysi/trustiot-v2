@@ -1,6 +1,6 @@
 [package]
 name = "agent"
-description = "The TrustIoT gateway agent (decision 10). So far its Modbus reading (rebuild checklist F1, F2, F5): merged reads, a Modbus TCP and RTU-over-TCP client for the read function codes 1-4 with one shared connection per endpoint, decoding, and scaling."
+description = "The TrustIoT gateway agent (decision 10). So far its Modbus reading (rebuild checklist F1, F2, F5): merged reads, a Modbus TCP and RTU-over-TCP client for the read function codes 1-4 with one shared connection per endpoint, decoding, and scaling; and polling each device on a fixed schedule with timeouts, reconnect backoff, TCP keepalive and a watchdog (F4)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,8 @@ repository.workspace = true
 # without a C toolchain (ci.yml builds every edge/ member for that target).
 [dependencies]
 protocol = { path = "../../crates/protocol" }
+# TCP keepalive's idle time, probe interval and probe count (`all` has the last two).
+socket2 = { workspace = true, features = ["all"] }
 tokio = { workspace = true, features = ["io-util", "net", "sync", "time"] }
 
 [dev-dependencies]

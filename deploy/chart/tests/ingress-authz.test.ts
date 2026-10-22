@@ -2,7 +2,7 @@
 // cluster. chart.test.ts applies it to the rendered chart.
 import { describe, expect, test } from "bun:test";
 
-import { hostnameOf, istioMatches, policyApplies, routeFor, routeListProblems } from "./ingress-authz.ts";
+import { hostnameOf, istioMatches, policyApplies, routeFor, routeListProblems, sampleRequests } from "./ingress-authz.ts";
 import type { Exception, PolicyRule, RouteRule } from "./ingress-authz.ts";
 import { useProcessTestTimeouts } from "./timing.ts";
 
@@ -135,5 +135,100 @@ describe("routeListProblems", () => {
   test("a check without rules leaves every route open; one that checks everything closes the exceptions", () => {
     expect(routeListProblems(ROUTES, [], EXCEPTIONS, PORTS).filter((p) => p.includes("without the cookie check")).length).toBeGreaterThan(10);
     expect(routeListProblems(ROUTES, [{}], EXCEPTIONS, PORTS)).toContain(`${APP}/healthz: a listed exception, but the cookie check applies to it`);
+  });
+});
+
+// The shape the chart renders while services.web serves the SPA's static files on hosts.app
+// (Laysi/trustiot-v2#123): hosts.app is checked on the cookie prefixes and /internal only, every
+// other host as before, and a public path outside the prefixes is not checked on hosts.app either.
+const COOKIE_PREFIXES = ["/api", "/auth"];
+const PUBLIC = ["/auth/login", "/healthz", "/mqtt"];
+const SPA_EXCEPTIONS: Exception[] = [...EXCEPTIONS, { hostname: APP, outside: COOKIE_PREFIXES }];
+const SPA_RULES: PolicyRule[] = [
+  { to: [{ operation: { notHosts: [APP, `${APP}:*`], notPaths: PUBLIC } }] },
+  { to: [{ operation: { paths: ["/api", "/api/*", "/auth", "/auth/*", "/internal*"], notPaths: PUBLIC } }] },
+  { to: [{ operation: { paths: ["/auth/login"], notHosts: [APP, `${APP}:*`] } }] },
+  { to: [{ operation: { paths: ["/healthz"], notHosts: [APP, `${APP}:*`] } }] },
+  { to: [{ operation: { paths: ["/mqtt"], notHosts: [APP, `${APP}:*`, GW, `${GW}:*`] } }] },
+];
+const DENY: PolicyRule[] = [{ to: [{ operation: { paths: ["/internal*"] } }] }];
+const SPA_ROUTES: RouteRule[] = [
+  route(APP, "/auth/login", "Exact", "identity", true),
+  route(APP, "/healthz", "Exact", "identity", true),
+  route(GW, "/mqtt", "Exact", "mqtt-bridge", true),
+  route(APP, "/", "PathPrefix", "web", true),
+  route(APP, "/api/assets", "PathPrefix", "assets"),
+  route(APP, "/auth", "PathPrefix", "identity"),
+  route(GW, "/", "PathPrefix", "certs"),
+];
+
+describe("routeListProblems with the SPA's static files", () => {
+  test("the chart's policy checks every routed request except the listed exceptions", () => {
+    expect(routeListProblems(SPA_ROUTES, SPA_RULES, SPA_EXCEPTIONS, PORTS, DENY)).toEqual([]);
+  });
+
+  test("the probes cover both sides of each prefix's boundary, in another case too", () => {
+    const paths = new Set(sampleRequests(SPA_ROUTES, SPA_EXCEPTIONS, PORTS).map((request) => request.path));
+    for (const path of ["/", "/x", "/api", "/api/x", "/apix", "/API/x", "/auth", "/auth/", "/auth/x", "/authx", "/AUTH/x", "/internal"]) {
+      expect(paths.has(path)).toBe(true);
+    }
+    // Gateway API and Istio compare paths with case: /API/x and /apix are the SPA's, /auth/ is not.
+    for (const path of ["/API/x", "/apix", "/authx"]) {
+      expect(routeFor(SPA_ROUTES, { host: APP, path })?.backend).toBe("web");
+      expect(policyApplies(SPA_RULES, { host: APP, path })).toBe(false);
+    }
+    expect(policyApplies(SPA_RULES, { host: APP, path: "/auth/" })).toBe(true);
+  });
+
+  test("a checked request without a cookie route is refused by the identity service, so it is no problem", () => {
+    // /api/x lands on the SPA's route, but it is checked and no cookie route matches it.
+    expect(routeFor(SPA_ROUTES, { host: APP, path: "/api/x" })?.backend).toBe("web");
+    expect(policyApplies(SPA_RULES, { host: APP, path: "/api/x" })).toBe(true);
+    // A public route that hides a cookie route gets a token signed for the cookie route's service.
+    const hiding = [...SPA_ROUTES, route(APP, "/api/assets/open", "Exact", "assets", true)];
+    expect(routeListProblems(hiding, SPA_RULES, SPA_EXCEPTIONS, PORTS, DENY)).toContain(
+      `${APP}/api/assets/open: served by the public route ${APP}/api/assets/open, which is not a listed exception`,
+    );
+  });
+
+  test("a check without the cookie prefixes leaves the API open and gives its paths to the SPA", () => {
+    const open = SPA_RULES.filter((_, i) => i !== 1);
+    const problems = routeListProblems(SPA_ROUTES, open, SPA_EXCEPTIONS, PORTS, DENY);
+    expect(problems).toContain(`${APP}/api/assets: reaches assets through ${APP}/api/assets without the cookie check`);
+    expect(problems).toContain(`${APP}:443/auth/x: reaches identity through ${APP}/auth without the cookie check`);
+    expect(problems).toContain(`${APP}/api/x: served by the public route ${APP}/, which is not a listed exception`);
+    // Bare prefixes only: /api itself is not the SPA's either.
+    const starOnly = SPA_RULES.map((rule) => JSON.parse(JSON.stringify(rule).replace('"/api",', "")) as PolicyRule);
+    expect(routeListProblems(SPA_ROUTES, starOnly, SPA_EXCEPTIONS, PORTS, DENY)).toContain(
+      `${APP}/api: served by the public route ${APP}/, which is not a listed exception`,
+    );
+  });
+
+  test("a cookie route on hosts.app outside the prefixes, or an exemption of another host, is caught", () => {
+    const outside = [...SPA_ROUTES, route(APP, "/settings", "PathPrefix", "assets")];
+    expect(routeListProblems(outside, SPA_RULES, SPA_EXCEPTIONS, PORTS, DENY)).toContain(
+      `${APP}/settings: reaches assets through ${APP}/settings without the cookie check`,
+    );
+    const both = SPA_RULES.map((rule, i) =>
+      i === 0 ? { to: [{ operation: { notHosts: [APP, `${APP}:*`, GW, `${GW}:*`], notPaths: PUBLIC } }] } : rule,
+    );
+    expect(routeListProblems(SPA_ROUTES, both, SPA_EXCEPTIONS, PORTS, DENY)).toContain(`${GW}:8443/x: reaches certs through ${GW}/ without the cookie check`);
+  });
+
+  test("the static files hold only on their own route: an exact public route they cover is still unlisted", () => {
+    const extra = [...SPA_ROUTES, route(APP, "/status", "Exact", "assets", true)];
+    expect(routeListProblems(extra, SPA_RULES, SPA_EXCEPTIONS, PORTS, DENY)).toEqual([
+      `${APP}/status: served by the public route ${APP}/status, which is not a listed exception`,
+      `${APP}:80/status: served by the public route ${APP}/status, which is not a listed exception`,
+      `${APP}:443/status: served by the public route ${APP}/status, which is not a listed exception`,
+      `${APP}:8443/status: served by the public route ${APP}/status, which is not a listed exception`,
+    ]);
+  });
+
+  test("checking the static files, or giving them no route, is caught; only DENY makes /internal no problem", () => {
+    expect(routeListProblems(SPA_ROUTES, [{}], SPA_EXCEPTIONS, PORTS, DENY)).toContain(`${APP}/x: a listed exception, but the cookie check applies to it`);
+    const none = SPA_ROUTES.filter((r) => r.backend !== "web");
+    expect(routeListProblems(none, SPA_RULES, SPA_EXCEPTIONS, PORTS, DENY)).toContain(`${APP}/static/app.js: a listed exception has no route`);
+    expect(routeListProblems(SPA_ROUTES, SPA_RULES, SPA_EXCEPTIONS, PORTS)).toContain(`${APP}/internal: a listed exception, but the cookie check applies to it`);
   });
 });

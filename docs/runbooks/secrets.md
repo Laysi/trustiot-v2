@@ -157,11 +157,11 @@ SaaS 目前沒有人建立的這個 Secret（`deploy/flux` 的 values 沒有設�
 
 ### CA 私鑰
 
-Laysi/trustiot-v2#78 補上確切指令。原則：
+確切指令在 [services/certs/README.md](../../services/certs/README.md)（Laysi/trustiot-v2#78）：「發簽發 CA 憑證」、「輪替」、「根 CA 私鑰的備份」與「簽發 CA 金鑰遺失或外洩」。原則：
 
-- **根 CA 私鑰**：只在簽發或撤銷簽發 CA 時取出，在離線的機器上操作，完成後確認兩份離線備份都還能解密。根 CA 換新是重大變更：所有閘道器的信任設定都要更新，另開 issue 規劃。
-- **簽發 CA 私鑰**：以根 CA 簽一張新的簽發 CA 憑證，新舊兩張同時列在信任清單；certs 服務改用新的簽，舊的簽發 CA 簽過的憑證全部到期或換發後，才移除舊的簽發 CA 並撤銷它。
-- **外洩**：立即撤銷該簽發 CA、發新 CRL，所有它簽過的憑證要求換發（決策 12 的換發端點，閘道器不必寄回）。
+- **根 CA 私鑰**：只在簽發 CA 的儀式與備份檢查時取出，在離線的機器上以 `certs-ca` 操作（私鑰只經 stdin、stdout 與 age），完成後兩位保管人各自以 `certs-ca root check` 確認自己那一份離線備份還能解密、是這張根憑證的私鑰。根 CA 換新是重大變更：所有閘道器的信任設定都要更新，另開 issue 規劃。
+- **簽發 CA 私鑰**：在叢集內產生，人不碰。輪替是調大 `certificateAuthority.keyGeneration`，以根 CA 簽新一代的 CSR，新舊兩張同時列在 `certificateAuthority.issuingCertificates`；最新的一代簽新憑證，舊的一代簽過的憑證全部到期後，以 `removeKeysBeforeGeneration` 移除它。
+- **外洩**：`keyGeneration` 與 `removeKeysBeforeGeneration` 同時調到新的一代：舊金鑰立即移除，它的 CRL 不再發布，broker 拒絕它簽的每張憑證；簽新一代之後閘道器經換發端點取得新憑證（決策 12，不必寄回）。
 
 ### 叢集內 ClickHouse 的管理帳號密碼
 

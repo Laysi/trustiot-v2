@@ -170,6 +170,10 @@ describe("the local login roles against the product", () => {
 });
 
 describe("a change of the product that the local list does not follow", () => {
+  // The local lists of the synthetic product below (identity and assets), apart from the real
+  // lists, so a service added to the real product does not change what these cases test.
+  const LOCAL_SERVICES: readonly string[] = ["identity", "assets"];
+  const LOCAL_PLATFORM: readonly string[] = ["assets"];
   const service = (name: string, platformRole: boolean, consumes: string[] = []) =>
     `        Service {\n            name: "${name}",\n            platform_role: ${platformRole},\n            outbox: Outbox {\n                producer: false,\n                consumes: &[${consumes.map((one) => `"${one}"`).join(", ")}],\n            },\n            migrations: &[],\n        },\n`;
   const registryWith = (...entries: string[]) =>
@@ -181,8 +185,8 @@ describe("a change of the product that the local list does not follow", () => {
     const messages = drift(
       registryWith(service("identity", true), service("assets", true, ["identity"]), service("telemetry-query", false)),
       chartWith("assets"),
-      PRODUCT_SERVICES,
-      PLATFORM_LOGIN_SERVICES,
+      LOCAL_SERVICES,
+      LOCAL_PLATFORM,
     );
     expect(messages).toHaveLength(1);
     expect(messages[0]).toContain("telemetry-query");
@@ -194,8 +198,8 @@ describe("a change of the product that the local list does not follow", () => {
     const messages = drift(
       registryWith(service("identity", true), service("assets", true, ["identity"])),
       chartWith("assets", "identity"),
-      PRODUCT_SERVICES,
-      PLATFORM_LOGIN_SERVICES,
+      LOCAL_SERVICES,
+      LOCAL_PLATFORM,
     );
     expect(messages).toHaveLength(1);
     expect(messages[0]).toContain("identity_platform");
@@ -204,10 +208,10 @@ describe("a change of the product that the local list does not follow", () => {
 
   test("a local role the product does not have fails the other way round", () => {
     const registry = registryWith(service("identity", true), service("assets", true, ["identity"]));
-    expect(drift(registry, chartWith(), PRODUCT_SERVICES, PLATFORM_LOGIN_SERVICES).join("\n")).toContain(
+    expect(drift(registry, chartWith(), LOCAL_SERVICES, LOCAL_PLATFORM).join("\n")).toContain(
       "does not bind assets_platform",
     );
-    expect(drift(registry, chartWith("assets"), [...PRODUCT_SERVICES, "ghost"], PLATFORM_LOGIN_SERVICES).join("\n")).toContain(
+    expect(drift(registry, chartWith("assets"), [...LOCAL_SERVICES, "ghost"], LOCAL_PLATFORM).join("\n")).toContain(
       "which tools/migrate/src/registry.rs does not register",
     );
   });
@@ -217,8 +221,8 @@ describe("a change of the product that the local list does not follow", () => {
       drift(
         registryWith(service("identity", true), service("assets", true, ["identity"]), service("telemetry-query", true, ["identity"])),
         chartWith("assets", "telemetry-query"),
-        [...PRODUCT_SERVICES, "telemetry-query"],
-        [...PLATFORM_LOGIN_SERVICES, "telemetry-query"],
+        [...LOCAL_SERVICES, "telemetry-query"],
+        [...LOCAL_PLATFORM, "telemetry-query"],
       ),
     ).toEqual([]);
   });
@@ -238,6 +242,7 @@ describe("the logins", () => {
       { service: "identity", kind: "app", role: "identity_app", secret: "dev-identity-password", stateKey: "identity" },
       { service: "assets", kind: "app", role: "assets_app", secret: "dev-assets-password", stateKey: "assets" },
       { service: "assets", kind: "platform", role: "assets_platform", secret: "dev-assets-password", stateKey: "assets-platform" },
+      { service: "certs", kind: "app", role: "certs_app", secret: "dev-certs-password", stateKey: "certs" },
     ]);
   });
 

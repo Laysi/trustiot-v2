@@ -1,6 +1,7 @@
 //! The identity service's configuration (services/identity/README.md, "設定").
 
 use std::fmt;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -8,6 +9,7 @@ use service_kit::config::{Invalid, Validate};
 use service_kit::postgres::{PostgresConfig, SslMode};
 
 use crate::audience::IngressRoutes;
+use crate::exchange::OnBehalfCalls;
 use crate::session::WARM_CONNECTIONS;
 
 /// Most database connections one replica may open.
@@ -20,7 +22,8 @@ pub const MIN_KEY_PROPAGATION_SECONDS: u64 = 120;
 /// Longest `TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS`: a day.
 pub const MAX_KEY_PROPAGATION_SECONDS: u64 = 86_400;
 
-/// The service's settings: the platform settings the chart sets and the database role.
+/// The service's settings: the platform settings the chart sets, the database role, and the
+/// token exchange's port.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -28,7 +31,33 @@ pub struct Config {
     pub platform: Platform,
     /// The service role's credentials and pool size.
     pub database: Database,
+    /// Where the token exchange listens.
+    #[serde(default)]
+    pub exchange: ExchangeListen,
 }
+
+/// `exchange.*`: the token exchange's own port (Laysi/trustiot-v2#106). It is not the API port,
+/// so the mesh can let the services that call on behalf of users reach the exchange and nothing
+/// else of this service, and the ingress gateway reach everything but the exchange (the chart's
+/// Service and policies `<release>-identity-exchange` for this port, deploy/chart/README.md).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExchangeListen {
+    /// `TRUSTIOT__EXCHANGE__LISTEN_ADDR`: default `0.0.0.0:8082`, the chart's port
+    /// `token-exchange`. Startup fails when it is taken.
+    pub listen_addr: SocketAddr,
+}
+
+impl Default for ExchangeListen {
+    fn default() -> Self {
+        Self {
+            listen_addr: SocketAddr::from(([0, 0, 0, 0], DEFAULT_EXCHANGE_PORT)),
+        }
+    }
+}
+
+/// The token exchange's default port; the chart names it `token-exchange`.
+pub const DEFAULT_EXCHANGE_PORT: u16 = 8082;
 
 /// The platform settings the service reads. No `deny_unknown_fields`: every service gets every
 /// platform setting.
@@ -57,6 +86,11 @@ pub struct Platform {
     pub identity_max_key_age_seconds: u64,
     /// `TRUSTIOT_INGRESS_ROUTES`: the ingress gateway's cookie routes, for the audience.
     pub ingress_routes: IngressRoutes,
+    /// `TRUSTIOT_ON_BEHALF_CALLS`: which service may call which on behalf of users, from the
+    /// chart's `mesh.calls`; the token exchange follows it (Laysi/trustiot-v2#106). Default
+    /// empty: nothing is exchanged.
+    #[serde(default)]
+    pub on_behalf_calls: OnBehalfCalls,
     /// `TRUSTIOT_POSTGRES_HOST`.
     pub postgres_host: String,
     /// `TRUSTIOT_POSTGRES_PORT`.

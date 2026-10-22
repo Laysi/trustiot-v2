@@ -1,0 +1,25 @@
+{
+  "id": "msg_01QBXZqTbV1uq4fDf6G2tq5M",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "The pump on line B ran 3.2 hours longer than its schedule yesterday."
+    }
+  ],
+  "model": "claude-opus-5-5",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+    "input_tokens": 2048,
+    "cache_read_input_tokens": 1800,
+    "cache_creation_input_tokens": 248,
+    "output_tokens": 503,
+    "cache_creation": {
+      "ephemeral_5m_input_tokens": 148,
+      "ephemeral_1h_input_tokens": 100
+    }
+  }
+}

@@ -31,10 +31,14 @@ meshConfig:
         # 503 instead of the default 403, so the SPA can tell "service unavailable" from
         # "sign in again" (401 from the identity service).
         statusOnError: "503"
-        # Only the cookie goes to the identity service (Host, method, path and Authorization
-        # are always included).
+        # Only the cookie and the two headers of the cross-site request check go to the identity
+        # service (Host, method, path and Authorization are always included). Without Origin and
+        # Sec-Fetch-Site the identity service cannot refuse cross-site requests
+        # (services/identity/README.md, CSRF).
         includeRequestHeadersInCheck:
           - cookie
+          - origin
+          - sec-fetch-site
         # On allow, the identity service's x-internal-identity replaces any client copy, so the
         # identity service must always return it.
         headersToUpstreamOnAllow:

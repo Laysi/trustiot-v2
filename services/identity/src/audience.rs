@@ -155,8 +155,9 @@ fn prefix_matches(prefix: &str, path: &str) -> bool {
 }
 
 /// The host part of a `Host` header, lower-cased, without a port or a trailing dot. `None` for
-/// an IPv6 literal or an empty host, which no route names.
-fn normalize_host(host: &str) -> Option<String> {
+/// an IPv6 literal or an empty host, which no route names. The cross-site request check
+/// ([`crate::csrf`]) compares an `Origin`'s host with the `Host` the same way.
+pub(crate) fn normalize_host(host: &str) -> Option<String> {
     let host = match host.rsplit_once(':') {
         Some((name, port)) if port.bytes().all(|byte| byte.is_ascii_digit()) => name,
         Some(_) => return None,

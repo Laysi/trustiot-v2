@@ -1,0 +1,27 @@
+{
+  "id": "msg_01Lk9ePq8TvWm2YbNc3RgH7D",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "",
+      "signature": "EqMBCkYICxIM..."
+    },
+    {
+      "type": "thinking",
+      "thinking": "This part of the response was interrupted before it finished.",
+      "signature": "Es8CCkYICxIM..."
+    }
+  ],
+  "model": "claude-opus-5-5",
+  "stop_reason": "max_tokens",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+    "input_tokens": 1520,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 4096
+  }
+}

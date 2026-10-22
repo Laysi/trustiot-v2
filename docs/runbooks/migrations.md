@@ -225,3 +225,19 @@ the database lacks migrations this image expects, so the service stays unready; 
 ## 兩個 Job 同時執行
 
 Job 以 Postgres 的 advisory lock 互斥，第二個等第一個結束（最多 `migrate.wait.lock`），之後發現沒有事要做就結束。不需要手動處理；`helm rollback` 與升級重疊時也一樣。
+
+## 原始資料的保存期限
+
+Job 每次執行都把 ClickHouse 的 `trustiot.telemetry` 與 `trustiot.batch_commits` 的 TTL 對齊 `TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS`（不設是 180 天；值與理由見[資料保存期限與磁碟水位](../architecture/data-retention.md)）。
+
+- **設定被拒（結束碼 2）**：訊息寫出 `clickhouse.raw_retention_days` 與閘道器緩衝的最長保存時間 30 天。設定必須是 31 到 3650 的整數；不長於緩衝時，閘道器斷線後重送的批次找不到已過期的完成紀錄，資料會重複。Job 在連任何資料庫之前就停止，什麼都沒改。
+- **「its TTL ... is not one the migration Job manages」**：有人手動改了表的 TTL（多了條件、換了欄位或運算式）。Job 不覆蓋，因為改法可能是刻意的。以管理帳號查目前的設定：`SELECT engine_full FROM system.tables WHERE database = 'trustiot' AND name = '<表名>'`，確認改動的原因後改回 Job 管理的形式，下一次執行就把天數對齊設定：
+
+  ```sql
+  ALTER TABLE trustiot.<表名> MODIFY TTL toDateTime(<received_at 或 committed_at>) + toIntervalDay(<天數>)
+  ```
+
+  `telemetry` 用 `received_at`、`batch_commits` 用 `committed_at`；不要改用資料本身的時間戳 `ts`，時鐘錯的閘道器會讓資料與高水位提早被清掉。
+- **ClickHouse 升級之後出現上面的訊息**：Job 認得的形式是 `toIntervalDay(<天數>)`，以及 ClickHouse 26.8 存它自己帶參數寫入的 `toIntervalDay(_CAST(<天數>, 'UInt32'))`。新版 ClickHouse 若換了存法，Job 會認不出自己寫的 TTL 而停止，沒有資料被刪。照上面的指令以整數天數重寫一次，再回報 issue 讓 Job 認得新的存法。
+- **改天數的代價**：改 TTL 後 ClickHouse 在背景執行 `MATERIALIZE TTL`，重寫每個 part，占用 I/O 與暫時的磁碟空間；縮短時要等它跑完才釋放空間。在 `system.mutations` 看進度（`WHERE database = 'trustiot' AND NOT is_done`）。
+- **縮短是產品決定**：縮短會永久刪掉超過新天數的資料，不是解決磁碟壓力的手段；磁碟快滿時擴充磁碟（[資料保存期限與磁碟水位](../architecture/data-retention.md)「磁碟水位告警」）。手動改的天數在下一次部署會被 Job 改回設定值。
