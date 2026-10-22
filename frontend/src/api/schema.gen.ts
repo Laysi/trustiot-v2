@@ -1183,6 +1183,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description A cross-site request: `Sec-Fetch-Site` other than `same-origin`, or without it an `Origin` that is not this site's (`permission_denied`, message key `security.cross_site_request`). Checked before anything else; nothing changed. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             /** @description The email is not an address (`/email`, `login.email_invalid`), the code is not 8 digits (`/code`, `login.code_invalid`), or `redirect_to` is not a path on this site (`/redirect_to`, `login.redirect_invalid`) (`validation_failed`). */
             422: {
                 headers: {

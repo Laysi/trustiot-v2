@@ -19,7 +19,9 @@
 //! - a role change applies to the same session's next request
 //!   ([`a_role_change_applies_to_the_next_request`]);
 //! - the only routes are the code login, logout and the tenant API
-//!   ([`there_is_no_password_login_sign_up_or_fake_login`]).
+//!   ([`there_is_no_password_login_sign_up_or_fake_login`]);
+//! - another site cannot make the browser ask for a code, try one or log in, and the SPA's own
+//!   requests still log in ([`cross_site_login_requests_change_nothing`]).
 //!
 //! Starts a throwaway Postgres with TLS (podman or docker); skipped without either unless `CI`
 //! is set. The tests share the binary's product database, each with users of its own.
@@ -70,6 +72,8 @@ const THROTTLED: &str = "did not send a login code: the address is at its send l
 const SAME_MOMENT: &str = "did not send a login code: another one was issued at the same moment";
 const SEND_FAILED: &str = "could not send a login code";
 const LOGGED_IN: &str = "logged in with an email code";
+const REFUSED_CODE: &str = "refused a login code";
+const REFUSED_CROSS_SITE: &str = "refused a login request";
 const NO_RELAY: &str =
     "TRUSTIOT_SMTP_HOST is not set (the chart's smtp.host): nobody can get a login code";
 const UNUSABLE_RELAY: &str = "the SMTP settings cannot be used: nobody can get a login code until \
@@ -1118,6 +1122,175 @@ async fn sessions_are_extended_up_to_seven_days() {
         left < 3700.0,
         "the old session gained more than its cap: {left}"
     );
+}
+
+/// A login request another site made the browser send (`Sec-Fetch-Site` other than
+/// `same-origin`, or without it an `Origin` that is not this site's) gets the ingress gateway's
+/// cross-site 403 for both steps, and changes nothing: no code, no email, no attempt, no session,
+/// and the browser's previous session stays. The SPA's own requests, same-origin by
+/// `Sec-Fetch-Site` or by `Origin`, log in as before. Logging out goes through the cookie check,
+/// which refuses a cross-site logout the same way.
+#[tokio::test(flavor = "multi_thread")]
+async fn cross_site_login_requests_change_nothing() {
+    let Some(product) = product_postgres(&["identity_app"]).await else {
+        return;
+    };
+    let mut admin = product.superuser().await;
+    let relay = FakeSmtp::start(Mode::StartTls);
+    let service = start(&product, Some(&relay), &[]);
+    let victim = user(&mut admin, "csrf").await;
+    let same_origin = format!("https://{APP}");
+    let attacker = "https://attacker.example.test";
+    let cross_site: [(&[(&str, &str)], &str); 3] = [
+        (&[("Sec-Fetch-Site", "cross-site")], "sec-fetch-site"),
+        (
+            &[
+                ("Sec-Fetch-Site", "same-site"),
+                ("Origin", same_origin.as_str()),
+            ],
+            "sec-fetch-site",
+        ),
+        (&[("Origin", attacker)], "origin"),
+    ];
+    let post = |body: &Value, extra: &[(&str, &str)], cookie: Option<&str>| {
+        let mut headers = vec![("Host", APP), ("Content-Type", "application/json")];
+        headers.extend_from_slice(extra);
+        if let Some(cookie) = cookie {
+            headers.push(("Cookie", cookie));
+        }
+        request_with_body(
+            service.address,
+            "POST",
+            LOGIN,
+            &headers,
+            body.to_string().as_bytes(),
+        )
+        .expect("call the login endpoint")
+    };
+    let refused = |response: &support::Response, what: &str| {
+        assert_eq!(response.status, 403, "{what}: {}", response.raw());
+        assert_eq!(
+            response.json(),
+            json!({"code": "permission_denied", "message_key": "security.cross_site_request"}),
+            "{what}"
+        );
+        assert_eq!(
+            response.header_values("cache-control"),
+            ["no-store"],
+            "{what}"
+        );
+        assert!(response.header_values("set-cookie").is_empty(), "{what}");
+    };
+    let handled = |stdout: &support::Output| {
+        [SENT, NO_USER, THROTTLED, SAME_MOMENT]
+            .iter()
+            .map(|message| stdout.count_messages(message))
+            .sum::<usize>()
+    };
+
+    // 1. send_code from another site: 403, nothing queued, no code row.
+    let send = json!({"step": "send_code", "email": victim.email});
+    for (extra, header) in cross_site {
+        refused(&post(&send, extra, None), &format!("send_code {extra:?}"));
+        assert!(
+            service
+                .stdout
+                .wait_for_json(LOG_WITHIN, |line| {
+                    line["message"] == REFUSED_CROSS_SITE
+                        && line["fields"]["reason"] == "cross_site_request"
+                        && line["fields"]["header"] == header
+                })
+                .is_some(),
+            "the refusal of {extra:?} is logged with header {header}"
+        );
+    }
+    assert_eq!(count(&mut admin, CODES_OF, &victim.id).await, 0);
+
+    // 2. The SPA's own send_code (same-origin by Sec-Fetch-Site): 202 and one email, the first
+    //    and only request the worker handles.
+    let sent = post(
+        &send,
+        &[("Sec-Fetch-Site", "same-origin"), ("Origin", &same_origin)],
+        None,
+    );
+    assert_eq!(sent.status, 202, "{}", sent.raw());
+    let deliveries = relay.wait_for_deliveries(1, MAIL_WITHIN);
+    let code = code_in(&deliveries[0]);
+    assert!(service.stdout.wait_for_messages(SENT, 1, LOG_WITHIN));
+    assert_eq!(handled(&service.stdout), 1);
+    assert_eq!(count(&mut admin, CODES_OF, &victim.id).await, 1);
+
+    // 3. verify_code from another site with the right code, while the browser holds a session:
+    //    403, no attempt counted, no session created, the old session not revoked.
+    let previous = new_secret();
+    sqlx::query(INSERT_SESSION)
+        .bind(previous.hash().as_bytes().as_slice())
+        .bind(&victim.id)
+        .bind(None::<String>)
+        .bind(60.0)
+        .bind(12.0 * 3600.0)
+        .execute(&mut admin)
+        .await
+        .expect("insert the browser's session");
+    let previous = cookie(&previous);
+    let verify = json!({"step": "verify_code", "email": victim.email, "code": code});
+    for (extra, _) in cross_site {
+        refused(
+            &post(&verify, extra, Some(&previous)),
+            &format!("verify_code {extra:?}"),
+        );
+    }
+    assert_eq!(newest_code(&mut admin, &victim.id).await, (0, false, false));
+    assert_eq!(count(&mut admin, SESSIONS_OF, &victim.id).await, 1);
+    assert_eq!(count(&mut admin, LIVE_SESSIONS_OF, &victim.id).await, 1);
+    assert_eq!(check(&service, &previous, LOGOUT).status, 200);
+
+    // 4. A cross-site logout is refused by the cookie check before it reaches the service, and
+    //    the session stays.
+    for path in [LOGOUT, LOGOUT_EVERYWHERE] {
+        for (extra, _) in cross_site {
+            let mut headers = vec![("Host", APP), ("Cookie", previous.as_str())];
+            headers.extend_from_slice(extra);
+            let response = request(
+                service.address,
+                "DELETE",
+                &format!("/internal/ext-authz{path}"),
+                &headers,
+            )
+            .expect("call the ext_authz check");
+            refused(&response, &format!("DELETE {path} {extra:?}"));
+            assert!(response.header_values("x-internal-identity").is_empty());
+        }
+    }
+    assert_eq!(check(&service, &previous, LOGOUT).status, 200);
+
+    // 5. The SPA's own verify_code (same-origin by Origin, no Sec-Fetch-Site) logs in with the
+    //    code the cross-site requests could not touch, and ends the previous session.
+    let logged_in = post(&verify, &[("Origin", &same_origin)], Some(&previous));
+    assert_eq!(logged_in.status, 200, "{}", logged_in.raw());
+    let session = session_cookie(&logged_in);
+    assert_eq!(newest_code(&mut admin, &victim.id).await, (1, true, false));
+    assert_eq!(check(&service, &session, LOGOUT).status, 200);
+    assert_eq!(check(&service, &previous, LOGOUT).status, 401);
+
+    // 6. Six refusals, each logged once by header name: no address, code, cookie or Origin value
+    //    in the logs, and the code check never ran for them.
+    assert_eq!(service.stdout.count_messages(REFUSED_CROSS_SITE), 6);
+    assert_eq!(service.stdout.count_messages(REFUSED_CODE), 0);
+    assert_eq!(handled(&service.stdout), 1);
+    assert_eq!(relay.deliveries().len(), 1);
+    let logs = service.stop();
+    let previous_secret = previous
+        .strip_prefix(&format!("{SESSION_COOKIE}="))
+        .expect("cookie value");
+    for (what, value) in [
+        ("the address", victim.email.as_str()),
+        ("the session cookie", previous_secret),
+        ("the Origin", attacker),
+    ] {
+        assert!(!logs.contains(value), "{what} is in the logs");
+    }
+    assert!(!contains_number(&logs, &code), "the code is in the logs");
 }
 
 /// The routes that could log someone in without a code do not exist, in this local build, and

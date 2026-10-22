@@ -98,3 +98,33 @@ bun test scripts/ci/changes.test.ts
 驗收條件都是登入與 session 的安全關卡，全部在本次驗收，沒有延後的項目。
 
 已知而且記錄的限制（不屬於本 issue 的驗收條件）：寄送與嘗試次數以地址計算，知道某個地址的人可以用掉它的額度，讓那個使用者最多一天登入不了，但無法冒充他登入。分開寄送與猜測的額度、依來源限流與警示在 Laysi/trustiot-v2#508，是 SaaS 對外開放（Laysi/trustiot-v2#434）的前提；展示環境以 Cloudflare Access 只放行受邀名單補償（docs/roadmap/milestones.md「延後的項目與展示環境的補償」）。
+
+## 跨站的登入請求（2026-10-22）
+
+Laysi/trustiot-v2#500 讓入口的 cookie 檢查（ext_authz）在查 session 之前先擋下跨站請求，但 `POST /auth/login` 是公開路徑，不經 ext_authz。所以登入的處理常式第一件事自己呼叫 `csrf::cross_site`，兩步都一樣，在讀 body、查資料庫、計算嘗試次數與寄送限制、產生或寄出驗證碼之前判斷；跨站請求回 403 `{"code": "permission_denied", "message_key": "security.cross_site_request"}`（與 ext_authz 相同，`Cache-Control: no-store`），以 INFO 記一行 `refused a login request`，只帶 `reason` 與標頭名稱 `header`。
+
+環境：本分支合併 main `941e872` 之後（`593a7a0`、`62d6960`），加上這個檢查；同一台建置主機與檢查佇列，`CI=1`。
+
+整合測試 `services/identity/tests/login.rs` 的 `cross_site_login_requests_change_nothing`（真的服務、產品 schema、測試的 TLS Postgres 與假 SMTP relay）：
+
+| 步驟 | 斷言 |
+| --- | --- |
+| `send_code`，分別帶 `Sec-Fetch-Site: cross-site`、`Sec-Fetch-Site: same-site`（另帶相符的 `Origin`）、沒有 `Sec-Fetch-Site` 但 `Origin` 是別的網站 | 都是 403、上面那個 body、`no-store`、沒有 `Set-Cookie`；每次都記一行 `refused a login request`，`header` 分別是 `sec-fetch-site`、`sec-fetch-site`、`origin`；沒有驗證碼列 |
+| 同源的 `send_code`（`Sec-Fetch-Site: same-origin`） | 202，寄出一封信；worker 只處理了這一個請求 |
+| `verify_code` 帶正確的驗證碼與瀏覽器原本的 session cookie，同樣三種跨站標頭 | 都是 403；驗證碼的嘗試次數仍是 0、沒有被消耗；沒有新 session；原本的 session 仍有效（ext_authz 回 200） |
+| 跨站的登出：對兩個登出路徑以 `DELETE` 呼叫 ext_authz，同樣三種跨站標頭 | 都是 403 `security.cross_site_request`、沒有身分標頭；session 仍有效 |
+| 同源的 `verify_code`（只帶相符的 `Origin`，沒有 `Sec-Fetch-Site`） | 200 與 session cookie；驗證碼嘗試 1 次並被消耗；原本的 session 被撤銷 |
+| 結束時 | 恰好 6 行 `refused a login request`，沒有 `refused a login code`（驗證碼的檢查沒有執行）；worker 只處理一個請求、relay 只收到一封信；日誌裡沒有地址、驗證碼、session cookie 與 `https://attacker.example.test` |
+
+`Host`：登入的路由（chart 的 `ingress.publicPaths.login`，`deploy/chart/templates/ingress.yaml`）以 `hosts.app` 比對主機，只有 `RequestHeaderModifier`（設定 `x-forwarded-proto`、移除 `x-internal-identity`），沒有改寫主機的 `URLRewrite`，所以入口把對外的 `Host` 與 `Origin`、`Sec-Fetch-Site` 原樣轉給身分服務；cloudflared 沒有設定 `httpHostHeader`。本機以 Vite 轉送時 `changeOrigin: false`。
+
+結果（建置主機）：
+
+| 檢查 | 結果 |
+| --- | --- |
+| `cargo clippy -p identity --all-targets --locked -- -D warnings` | 通過 |
+| `cargo test --locked -p identity --test login` | 12 通過、0 失敗（含新的測試） |
+| `cargo test --locked -p identity --lib login` | 9 通過、0 失敗 |
+| `cargo run --locked -p openapi` | `api/openapi.json` 的 `POST /auth/login` 多了 403；前端以 `api:generate` 重新產生 `frontend/src/api/schema.gen.ts` |
+
+工作站：`bun run --cwd frontend api:check`、`typecheck`、`lint` 通過，`test` 115 通過、0 失敗；`bun scripts/ci/check-secret-handling.ts` 沒有違規。`security.cross_site_request` 的 en 與 zh-TW 翻譯在 Laysi/trustiot-v2#500 就已存在。

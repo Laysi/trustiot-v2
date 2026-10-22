@@ -40,7 +40,7 @@ SPA 與 API 同源（決策 2），SPA 自己送的請求一律是同源；別�
 
 - 入口要把 `Origin` 與 `Sec-Fetch-Site` 交給身分服務（`includeRequestHeadersInCheck`）。istiod 還是舊設定時，這兩個標頭不會送來，檢查一律放行而且沒有任何紀錄；升級步驟見 [deploy/istio/README.md](../../deploy/istio/README.md)。
 - 這是第一道防線，[租戶](#租戶)的「以 cookie 認證的寫入一律要求 JSON 的 `Content-Type`」與 cookie 的 `SameSite` 照樣適用。
-- 不需要 cookie 的例外路徑（例如 Laysi/trustiot-v2#103 的登入）不經 ext_authz，這個檢查管不到：那些處理常式要自己呼叫 `csrf::cross_site`。
+- 不需要 cookie 的例外路徑（例如 Laysi/trustiot-v2#103 的登入）不經 ext_authz，這個檢查管不到：那些處理常式要自己呼叫 `csrf::cross_site`。登入已經這樣做（見[登入](#登入)的 CSRF 說明）。
 
 ### token
 
@@ -103,6 +103,7 @@ token 交換在自己的埠（`exchange.listen_addr`，預設 `0.0.0.0:8082`，c
 
 | 請求 | 回應 |
 | --- | --- |
+| 跨站請求（判斷規則與 ext_authz 相同，見[跨站請求](#跨站請求csrf)），在其他所有檢查之前判斷 | 403 `permission_denied`，訊息 key `security.cross_site_request`；什麼都沒有改變 |
 | 有 query string、`Content-Type` 不是 `application/json`、body 超過 4096 bytes，或 body 不是指名這兩步之一的 JSON 物件（多了任何欄位，例如 `password`，或是 JSON 陣列，也算） | 400 `invalid_request` |
 | `email` 不是地址、`code` 不是 8 位數字、`redirect_to` 不是本站的路徑 | 422 `validation_failed`，欄位 `/email`（`login.email_invalid`）、`/code`（`login.code_invalid`）、`/redirect_to`（`login.redirect_invalid`）；不算一次嘗試 |
 | `send_code` | 202 |
@@ -129,7 +130,12 @@ token 交換在自己的埠（`exchange.listen_addr`，預設 `0.0.0.0:8082`，c
 - 瀏覽器原本帶著的 session（如果有）一併撤銷，新的 session 一律用新產生的 cookie 值。
 - 新 session 的目前租戶沿用使用者最近一個有租戶的 session（切換租戶在 Laysi/trustiot-v2#497）；角色仍是每個請求從 `memberships` 讀，已不是成員就不帶租戶。
 
-**CSRF**：登入要求 `Content-Type: application/json`，登出是 `DELETE`：別的 origin 的網頁要送這兩種請求都得先經 CORS preflight，而入口與服務都不允許 preflight（見[租戶](#租戶)的 CSRF 說明），所以別的網站無法替使用者登入或登出；cookie 另設 `SameSite=Lax`。
+**CSRF**：
+
+- 登入是公開路徑，不經 ext_authz，所以處理常式第一件事自己呼叫 `csrf::cross_site`（[跨站請求](#跨站請求csrf)的規則，2026-10-22）：兩步都一樣，在讀 body、查資料庫、計算嘗試次數與寄送限制、產生或寄出驗證碼之前判斷；跨站請求回 403 `permission_denied`，訊息 key `security.cross_site_request`，與 ext_authz 的回應相同，也帶 `Cache-Control: no-store`，以 INFO 記一行 `refused a login request`（`reason` 是 `cross_site_request`，`header` 是 `sec-fetch-site` 或 `origin`），不記地址、驗證碼、cookie 與 `Origin` 的值。沒有這個檢查時，別的網站可以讓瀏覽器替某個地址要驗證碼、用掉它的寄送額度與嘗試次數，或讓瀏覽器登入攻擊者的帳號（login CSRF）。
+- 入口原樣轉送 `Host`、`Origin` 與 `Sec-Fetch-Site`：登入的路由（chart 的 `ingress.publicPaths.login`）以 `hosts.app` 比對主機，只改 `x-forwarded-proto` 與移除 `x-internal-identity`，不改寫 `Host`，所以身分服務拿到的是對外的主機名稱（可能帶 `:443`，比對時與沒寫埠號相同）；cloudflared 也照原樣轉送 `Host`，否則路由本身就對不到。本機以 Vite 轉送時（`changeOrigin: false`）`Host` 是 Vite 的位址，瀏覽器送的是 `Sec-Fetch-Site: same-origin`。
+- 登出的兩個端點經 ext_authz，跨站的登出在那裡就被擋下，不再重複檢查。
+- 此外登入要求 `Content-Type: application/json`，登出是 `DELETE`：別的 origin 的網頁要送這兩種請求都得先經 CORS preflight，而入口與服務都不允許 preflight（見[租戶](#租戶)的 CSRF 說明）；cookie 另設 `SameSite=Lax`。
 
 ### 登出
 
@@ -332,7 +338,7 @@ CARGO_BUILD_JOBS=2 cargo test -p identity
 | `src/session.rs` | cookie 的解析（混在其他 cookie 與多個 `Cookie` 標頭裡、缺少、重複、非標準寫法），`Debug` 不顯示 secret 與雜湊；`Set-Cookie` 與清除 cookie 的屬性；最長期限與 migration 的 trigger 一致 |
 | `src/login.rs` | 地址的正規化、驗證碼的格式與產生（每一位數字都出現、`Debug` 不顯示）、驗證碼雜湊是帶金鑰的 HMAC 並綁定金鑰、用途與地址（與 OpenSSL 算出的值比對）、`redirect_to` 接受與拒絕的寫法、請求的解析（`password` 等多餘欄位、未知的 `step`、重複的鍵都拒絕）、信件只在內文帶驗證碼 |
 | `src/mail.rs` | 地址與寄件者的格式（拒絕換行與非 ASCII 地址）、標頭的編碼、信件的組成與 dot-stuffing、SMTP 回應的解析、錯誤訊息只有步驟與回應碼、`Debug` 不顯示信件 |
-| `tests/login.rs` | 真的服務、產品 schema 與測試起的假 SMTP relay（`tests/support/smtp.rs`，測試 CA 簽的 TLS，地址都在 example.com）：完整流程（202、經 STARTTLS 與 AUTH 寄出、200 與 cookie 屬性、12 小時的 session、通過 ext_authz；資料表裡的不是不帶金鑰的 SHA-256），重放、過期、猜錯 5 次、別的地址的驗證碼、新驗證碼作廢舊的都被拒，4 個同時送出只有一個成功；網址帶驗證碼回 400 且不算嘗試；TRACE 等級的日誌與回應都沒有驗證碼、地址、cookie 與 relay 密碼；`redirect_to` 指到別的網域都 422 且不算嘗試；登出與登出所有裝置後下一個請求 401、別人的 session 不受影響、重新登入撤銷舊 session；角色變更與移除成員在下一個請求生效；寄送限制與不存在的地址（同樣的 202、不寄），同一個地址 8 個同時送出只寄一封；relay 不提供 STARTTLS、STARTTLS 後注入、憑證不是設定的 CA 簽的都不寄並作廢驗證碼；沒有 relay 時 503，設定不完整時照常服務、記 ERROR 且不印出值、`send_code` 回 503；延長期限與 7 天上限；路由測試（只有 OpenAPI 的四個端點，沒有密碼、註冊與假登入，cookie 開不了）；編譯期檢查（沒有 Cargo feature、optional dependency、build script 與依建置設定或建置環境改變的程式） |
+| `tests/login.rs` | 真的服務、產品 schema 與測試起的假 SMTP relay（`tests/support/smtp.rs`，測試 CA 簽的 TLS，地址都在 example.com）：完整流程（202、經 STARTTLS 與 AUTH 寄出、200 與 cookie 屬性、12 小時的 session、通過 ext_authz；資料表裡的不是不帶金鑰的 SHA-256），重放、過期、猜錯 5 次、別的地址的驗證碼、新驗證碼作廢舊的都被拒，4 個同時送出只有一個成功；網址帶驗證碼回 400 且不算嘗試；TRACE 等級的日誌與回應都沒有驗證碼、地址、cookie 與 relay 密碼；`redirect_to` 指到別的網域都 422 且不算嘗試；登出與登出所有裝置後下一個請求 401、別人的 session 不受影響、重新登入撤銷舊 session；角色變更與移除成員在下一個請求生效；寄送限制與不存在的地址（同樣的 202、不寄），同一個地址 8 個同時送出只寄一封；relay 不提供 STARTTLS、STARTTLS 後注入、憑證不是設定的 CA 簽的都不寄並作廢驗證碼；沒有 relay 時 503，設定不完整時照常服務、記 ERROR 且不印出值、`send_code` 回 503；延長期限與 7 天上限；兩步的跨站請求（`Sec-Fetch-Site: cross-site`、`same-site`、沒有 `Sec-Fetch-Site` 時不符的 `Origin`）都回 403 `security.cross_site_request` 且什麼都沒改變（沒有驗證碼列、沒有寄信、不算嘗試、沒有新 session、瀏覽器原本的 session 不被撤銷，日誌只有標頭名稱），跨站的登出被 cookie 檢查擋下，同源的請求（`Sec-Fetch-Site: same-origin` 或相符的 `Origin`）照常登入；路由測試（只有 OpenAPI 的四個端點，沒有密碼、註冊與假登入，cookie 開不了）；編譯期檢查（沒有 Cargo feature、optional dependency、build script 與依建置設定或建置環境改變的程式） |
 | `src/issuer.rs` | token 的標頭與 claims 剛好是約定的格式、只有受眾驗得過、過期後被拒；`kid` 的判斷；公鑰沒部署時拒絕；錯誤與 `Debug` 不含私鑰；驗證碼的金鑰由簽章金鑰導出（換簽章金鑰就換、切換前的仍可驗證、撤銷的代與沒有金鑰時沒有） |
 | `src/audience.rs` | `Exact` 優先與最長 `PathPrefix`、主機比對；不能用的路由設定拒絕啟動且不引用設定值 |
 | `src/csrf.rs` | 跨站請求的判斷：`Sec-Fetch-Site` 的每個值、重複與合併的值，`Origin` 的主機、埠號、scheme 與格式，沒有標頭時放行 |

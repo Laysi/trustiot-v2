@@ -15,6 +15,7 @@
 //!
 //! | Request | Response |
 //! | --- | --- |
+//! | A cross-site request ([`crate::csrf::cross_site`]), decided before anything else: before the body is read, the database is asked, an attempt is counted or a code is queued | 403 `permission_denied`, message key `security.cross_site_request` |
 //! | A query string, a `Content-Type` other than `application/json`, a body over [`MAX_BODY_BYTES`], or a body that is not a JSON object naming one of the two steps (unknown fields such as `password` and JSON arrays included) | 400 `invalid_request` |
 //! | An `email` that is not an address, a `code` that is not [`CODE_DIGITS`] digits, a `redirect_to` that is not a path on this site | 422 `validation_failed`, fields `/email` (`login.email_invalid`), `/code` (`login.code_invalid`), `/redirect_to` (`login.redirect_invalid`) |
 //! | `send_code` | 202 [`CodeSent`] |
@@ -38,6 +39,11 @@
 //!   the session is created in the same transaction. Two requests with the same code: one wins.
 //! - The code travels only in the POST body and in the email. It is never in a URL, a log
 //!   line, or the email's subject.
+//! - The path is public, so the ingress gateway's cookie check, which refuses cross-site
+//!   requests for every other path (services/identity/README.md, "跨站請求（CSRF）"), does not
+//!   see it: the login handler runs the same check first, for both steps. Otherwise another
+//!   site could make a browser spend an address's codes and attempts, or log the browser in to
+//!   an account the attacker controls (login CSRF).
 //! - Neither step tells who has an account: `send_code` answers before anything is looked up,
 //!   and both refusals of `verify_code` take at least [`REFUSAL_FLOOR`].
 //!
@@ -74,6 +80,7 @@ use tokio::task::JoinSet;
 use utoipa::ToSchema;
 use zeroize::Zeroizing;
 
+use crate::csrf::{CROSS_SITE_REQUEST, cross_site};
 use crate::issuer::{CodeKey, Issuer, unix_now};
 use crate::mail::{self, Mailer, Message};
 use crate::session::{
@@ -958,12 +965,26 @@ fn invalid(field: &str, key: MessageKey) -> FieldError {
         (status = 202, description = "`send_code`: if a user has the address, a code is on its way. The same answer whether or not one has.", body = CodeSent),
         (status = 400, description = "A query string, a `Content-Type` other than `application/json`, a body over 4096 bytes, or a body that is not one of the two steps; unknown fields such as `password` are refused (`invalid_request`).", body = ErrorBody),
         (status = 401, description = "`verify_code`: no usable code for the address, or a wrong code (`unauthenticated`). A code dies after 5 attempts and 10 minutes.", body = ErrorBody),
+        (status = 403, description = "A cross-site request: `Sec-Fetch-Site` other than `same-origin`, or without it an `Origin` that is not this site's (`permission_denied`, message key `security.cross_site_request`). Checked before anything else; nothing changed.", body = ErrorBody),
         (status = 422, description = "The email is not an address (`/email`, `login.email_invalid`), the code is not 8 digits (`/code`, `login.code_invalid`), or `redirect_to` is not a path on this site (`/redirect_to`, `login.redirect_invalid`) (`validation_failed`).", body = ErrorBody),
         (status = 503, description = "No usable SMTP relay is configured, too many codes are waiting to be sent, the signing keys have not been read, or the database failed; nothing changed (`unavailable`).", body = ErrorBody),
     )
 )]
 async fn log_in(State(login): State<Arc<Login>>, request: Request) -> Response {
     let (parts, body) = request.into_parts();
+    // First of all, as the ingress gateway's cookie check does for every other path: a request
+    // another site made the browser send changes nothing, not even an attempt or a send limit.
+    if let Some(header) = cross_site(&parts.method, &parts.headers) {
+        // The header's name only: Origin is the client's to choose.
+        tracing::info!(
+            reason = "cross_site_request",
+            header,
+            "refused a login request"
+        );
+        return error(
+            ErrorBody::new(ErrorCode::PermissionDenied).with_message_key(CROSS_SITE_REQUEST),
+        );
+    }
     // The code travels in the body only: a URL ends up in histories and access logs.
     if parts.uri.query().is_some() || !is_json(&parts.headers) {
         return error(ErrorBody::new(ErrorCode::InvalidRequest));
