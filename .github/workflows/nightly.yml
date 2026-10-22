@@ -63,6 +63,7 @@ on:
       - crates/contract/**
       - crates/identity-keys/**
       - crates/outbox/**
+      - crates/protocol/**
       - crates/service-kit/**
       - crates/testkit/**
       - crates/webpki-roots-empty/**
