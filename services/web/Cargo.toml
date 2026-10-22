@@ -1,0 +1,35 @@
+[package]
+name = "web"
+description = "TrustIoT v2 web service: serves the SPA's static files (frontend/) on the app host, index.html for every deep link, with the security headers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "web"
+path = "src/main.rs"
+test = false
+doc = false
+
+[dependencies]
+axum = { workspace = true, features = ["http1", "tokio"] }
+serde = { workspace = true, features = ["derive"] }
+service-kit = { path = "../../crates/service-kit" }
+# Strong ETags: the SHA-256 of each file's bytes.
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing.workspace = true
+
+[dev-dependencies]
+# Requests to the real binary in tests/process.rs.
+reqwest.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread", "time"] }
+# Requests to the router without a socket in tests/serve.rs.
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

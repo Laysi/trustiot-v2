@@ -8,6 +8,8 @@
  * run, with Zig as C compiler and linker (cargo-zigbuild) and the dependency list embedded
  * (cargo-auditable), then each is packed with deploy/images/rust-binary.Containerfile. The
  * Cargo command is rust-build.ts's rustCrossCompileCommand, which the nightly's service images share.
+ * A Rust image whose image.toml has a `[static]` table also gets that Bun project's checked build
+ * output (static-build.ts): the SPA in the web image.
  * release.yml runs this on the arm64 runner and the local flow on any machine, with the same
  * command: the host's own triple is never the musl target. Containerfile images are built from
  * their directory. Builds never run code of the image's platform, so x86 machines need no
@@ -17,8 +19,8 @@
  * A Rust image's digest does not depend on whether podman runs as root or rootless
  * (Laysi/trustiot-v2#384; pack.ts says how).
  *
- * This job runs third-party build code (Cargo build scripts and proc macros), so it has no
- * secrets and a read-only token, and its output is only data:
+ * This job runs third-party build code (Cargo build scripts and proc macros, the static sites'
+ * build tools), so it has no secrets and a read-only token, and its output is only data:
  *   <out>/images/<name>.oci.tar     the image as an OCI archive, pushed byte for byte by publish
  *   <out>/images/<name>.spdx.json   its SBOM from syft
  *   <out>/build.json                digest and size of each image, for the log, and the podman
@@ -41,6 +43,7 @@ import {
 } from "./lib.ts";
 import { packImages } from "./pack.ts";
 import { rustCrossCompileCommand, staticElfProblem, toolchainChannel } from "./rust-build.ts";
+import { buildStaticSites } from "./static-build.ts";
 
 const ROOT = resolve(import.meta.dir, "..", "..");
 
@@ -124,5 +127,6 @@ await runStage("build", async () => {
   const outDir = resolve(options.out ?? "");
   mkdirSync(outDir, { recursive: true });
   const binaries = await buildRustBinaries(plan);
-  await packImages(plan, binaries, outDir);
+  const sites = await buildStaticSites(plan, ROOT);
+  await packImages(plan, binaries, outDir, sites);
 });

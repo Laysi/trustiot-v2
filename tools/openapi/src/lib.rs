@@ -71,6 +71,9 @@ pub const SERVICES_WITHOUT_API: &[&str] = &[
     // the MQTT broker, which are not part of the client API. The renewal endpoint
     // (Laysi/trustiot-v2#81) moves it to SERVICES.
     "certs",
+    // Serves the SPA's static files (frontend/) on the app host; no API besides the health
+    // endpoints (Laysi/trustiot-v2#123, services/web/README.md).
+    "web",
 ];
 
 fn shared_schemas() -> OpenApi {

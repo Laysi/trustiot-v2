@@ -12,6 +12,7 @@ release.yml 發佈的容器映像。每個子目錄是一個映像，目錄名�
 | `certs` | 憑證服務（`services/certs`），chart 的 `services.certs`；只放服務本身的執行檔 `certs`（`bin = "certs"`），離線根 CA 儀式工具 `certs-ca` 不進映像。2026-10-21 加入（Laysi/trustiot-v2#78），nightly 還沒有建置它 |
 | `identity` | 身分服務（`services/identity`），chart 的 `services.identity`；2026-10-11 加入（Laysi/trustiot-v2#308），arm64 啟動驗證見[測試報告](../../docs/test-reports/2026-10-11-308-identity-image.md)；nightly 從 Laysi/trustiot-v2#65 起從原始碼建置並部署它 |
 | `migrate` | migration Job（`tools/migrate`），chart 的 `migrate.image`；Job 執行 `migrate run`，每個服務 pod 的 init container 執行 `migrate wait-for-job`，叢集內 ClickHouse 的 init container 執行 `migrate clickhouse-admin-password`（Laysi/trustiot-v2#403），身分服務 pod 的 init container 執行 `migrate identity-signing-keys`（Laysi/trustiot-v2#404），憑證服務 pod 的 init container 執行 `migrate certs-ca-keys`（Laysi/trustiot-v2#78）。2026-10-13 加入（Laysi/trustiot-v2#60），nightly 從原始碼建置它 |
+| `web` | web 服務（`services/web`）加上 SPA（`frontend/`）的建置結果，chart 的 `services.web`；2026-10-21 加入（Laysi/trustiot-v2#123），見下方「帶靜態網站的 Rust 服務」 |
 
 發佈的 chart 以 digest 固定它部署的映像：`postgres`、`migrate`，以及名稱是 chart `services` 的 key 的映像（`scripts/release/chart-images.ts`，見 [chart README](../chart/README.md)「映像的 digest」）。chart 不部署的映像要列在該檔的 `NOT_DEPLOYED_BY_CHART`，否則發佈停止，`bun test scripts` 也會失敗。
 
@@ -26,6 +27,25 @@ package = "identity"        # Cargo 套件名
 ```
 
 套件的執行檔交叉編譯成 `aarch64-unknown-linux-musl` 的靜態執行檔，再以 [rust-binary.Containerfile](rust-binary.Containerfile) 包成映像：distroless static 基底、UID 65532、`ENTRYPOINT` 就是該執行檔。未知的欄位會讓發佈失敗，不會被忽略。建置會檢查執行檔是 aarch64 的 ELF，而且沒有 program interpreter（動態連結的執行檔需要載入器與 libc，distroless static 沒有，容器會啟動失敗），任一項不符就停止（`scripts/release/lib.ts` 的 `aarch64ElfProblem`、`scripts/release/rust-build.ts` 的 `staticElfProblem`）。
+
+### 帶靜態網站的 Rust 服務
+
+`image.toml` 可以再加 `[static]`，把一個 Bun 專案的建置結果放進映像的 `/srv/www`，給 web 服務（`services/web`）這類提供靜態檔的服務用（2026-10-21，Laysi/trustiot-v2#123）。例如：
+
+```toml
+[rust]
+package = "web"
+
+[static]
+project = "frontend"        # 相對於 repo 根目錄的 Bun 專案
+```
+
+- plan 檢查專案目錄有 `package.json`（含 `build` 與 `check:dist` 兩個 script）與 `bun.lock`，缺一項就停止。
+- build 在 repo 根目錄以 `.prototools` 的 Bun 依序執行 `bun install --cwd <專案> --frozen-lockfile --ignore-scripts`、`bun run --cwd <專案> build`（寫出 `<專案>/dist/`，先刪掉舊的）、`bun run --cwd <專案> check:dist`。專案根目錄有 `.env`、`.env.<任何字>` 檔時不建置：建置工具會把裡面的值寫進網站，開發者本機的檔案不能進發佈的映像。
+- 再以 web 服務啟動時的規則檢查 `dist/`（`scripts/release/static-build.ts` 的 `staticSiteProblems`，與 `services/web/src/site.rs` 相同，`bun test scripts/release` 比對兩邊的副檔名清單與大小上限）：根目錄要有 `index.html`；只能有一般檔案與目錄，不能有符號連結；檔名與目錄名只用英數字與 `_`、`-`、`.`（`.` 不能開頭）；副檔名只能是 `css`、`html`、`ico`、`js`、`png`、`svg`、`txt`、`webmanifest`、`woff2`；總共不超過 32 MiB。不符就停止，不會發佈一個服務自己拒絕啟動的映像。
+- `dist/` 放進 build context 的 `www/`，檔案 0644、目錄 0755、時間都是 commit 時間；[rust-binary.Containerfile](rust-binary.Containerfile) 的 `# @STATIC@` 那一行換成 `COPY www/ /srv/www/`，擁有者是 root。沒有 `[static]` 的映像只是少了那一行註解，內容不變。
+- SBOM 只列出 Rust crate 與基底映像的套件；打包進 SPA 的 npm 套件不在其中，因為 `dist/` 裡沒有套件資料庫。
+- nightly 的 `loadServiceImage` 不建 `[static]` 專案，所以不能用它建帶 `[static]` 的映像（建出的映像沒有網站，web 服務會拒絕啟動）。
 
 ### 在 nightly 的 k3d 使用
 
