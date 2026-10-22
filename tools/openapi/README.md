@@ -34,6 +34,6 @@ CI（`rust` job 的「OpenAPI spec is current」）重新產生後有任何差�
 3. 沒有 HTTP API 的服務（例如純背景工作）改列在 `SERVICES_WITHOUT_API`，這是一項要審查的決定。
 4. `cargo run -p openapi` 並提交 `api/openapi.json`。
 
-`tests/openapi.rs` 的 `every_service_directory_is_registered` 檢查 `services/` 的每個子目錄恰好列在 `SERVICES` 或 `SERVICES_WITHOUT_API` 其中之一，所以新服務不會被漏掉。`services/ai-gateway` 不依賴 `crates/contract`（決策 28），它的規格自己宣告錯誤型別；本工具不是服務，可以依賴它。
+`tests/openapi.rs` 的 `every_service_directory_is_registered` 檢查 `services/` 的每個子目錄恰好列在 `SERVICES` 或 `SERVICES_WITHOUT_API` 其中之一，所以新服務不會被漏掉。`services/ai-gateway` 列在 `SERVICES_WITHOUT_API`：它的內部 API 收發供應商的原生協定（Anthropic Messages、OpenAI Decisions），格式由供應商的 API 文件定義，閘道自己的部分（路徑、標頭、錯誤）寫在它的 README；它也不依賴 `crates/contract`（決策 28），而這裡每份規格共用 contract 的錯誤型別。本工具不是服務，可以依賴 contract。
 
 `crates/service-kit` 的 `example-service` 只用於示範與測試，不是產品服務，不進 `api/openapi.json`。

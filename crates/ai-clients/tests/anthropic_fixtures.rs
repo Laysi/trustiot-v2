@@ -292,6 +292,13 @@ async fn an_overloaded_error_event_mid_stream_ends_the_stream() {
     // The partial message stays readable for estimating usage.
     let partial = stream.message().unwrap();
     assert_eq!(partial.content, vec![ContentBlock::text("Hello")]);
+    // The error event stays readable as received, for a relay to pass on.
+    let raw = stream.error_event().expect("the error event");
+    assert_eq!(raw.event, "error");
+    assert_eq!(
+        raw.data,
+        r#"{"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}"#
+    );
     // A failed stream stays failed.
     assert!(matches!(stream.next().await, Err(Error::Protocol(_))));
 }

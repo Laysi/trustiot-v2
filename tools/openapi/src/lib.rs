@@ -74,6 +74,13 @@ pub const SERVICES_WITHOUT_API: &[&str] = &[
     // Serves the SPA's static files (frontend/) on the app host; no API besides the health
     // endpoints (Laysi/trustiot-v2#123, services/web/README.md).
     "web",
+    // The AI gateway (Laysi/trustiot-v2#139, decision 28): its internal API under /internal takes
+    // the AI providers' own protocols (Anthropic Messages, OpenAI Decisions) and returns their
+    // responses unchanged, so the providers' API references describe it; the gateway's part
+    // (paths, headers, errors) is in services/ai-gateway/README.md. It does not depend on
+    // crates/contract, whose error types every spec here shares, and the client API never
+    // reaches it (decision 27).
+    "ai-gateway",
 ];
 
 fn shared_schemas() -> OpenApi {

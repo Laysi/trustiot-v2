@@ -16,12 +16,21 @@ mod transport;
 mod usage;
 
 pub use error::{ApiError, ApiErrorBody, Error, ErrorClass, TimeoutKind};
-pub use transport::{ApiKey, ByteSource, ChunkFuture, EndpointConfig, Timeouts};
+pub use transport::{ApiKey, ByteSource, ChunkFuture, EndpointConfig, Timeouts, Tls};
 pub use usage::{ReportedUsage, TokenUsage};
 
 /// A response body with the provider's request ID (for logs and support tickets).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reply<T> {
     pub body: T,
+    pub request_id: Option<String>,
+}
+
+/// A response of the `*_raw` methods: the body as received, to return unchanged, with its
+/// parsed form and the provider's request ID.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RawReply<T> {
+    pub body: T,
+    pub raw: bytes::Bytes,
     pub request_id: Option<String>,
 }
