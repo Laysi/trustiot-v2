@@ -250,7 +250,7 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 會改動叢集或刪除資料的腳本都遵守同一套規則：
 
 - 不加 `--apply` 時只讀：印出計畫與確認碼（計畫的 SHA-256 前 12 位）。`--apply --confirm <確認碼>` 才執行，確認碼對不上就停。
-- `--apply` 先取得 lab lock（展示機的 `~/e2e.lock`，與 [deploy/flux/README.md](../deploy/flux/README.md) 的「lab 測試」共用），在 lock 內重新規劃，與確認過的計畫不同就停，結束時只釋放自己的 lock。lock 的擁有者寫成 `<issue> <UTC 時間> demo <步驟>`，`<issue>` 是該腳本自己的 issue（本節兩支腳本是 `Laysi/trustiot-v2#465`）。已經自己持有 lock 時加 `--lock-held`：擁有者要以 `<issue>` 加一個空白開頭，其他 issue 的 lock（包括 #457 其他子 issue 的）一律不算。
+- `--apply` 先取得 lab lock（展示機的 `~/e2e.lock`，與 [deploy/flux/README.md](../deploy/flux/README.md) 的「lab 測試」共用），在 lock 內重新規劃，與確認過的計畫不同就停，結束時只釋放自己的 lock。lock 的擁有者寫成 `<issue> <UTC 時間> demo <步驟>`，`<issue>` 是該腳本自己的 issue（`cleanup.ts` 與 `platform.ts` 是 `Laysi/trustiot-v2#465`，`flux.ts` 是在展示機安裝 Flux 的 `Laysi/trustiot-v2#467`）。已經自己持有 lock 時加 `--lock-held`：擁有者要以 `<issue>` 加一個空白開頭，其他 issue 的 lock（包括 #457 其他子 issue 的）一律不算。
 - 紀錄寫在 `$XDG_STATE_HOME/trustiot-v2/demo/`（未設定時 `~/.local/state/trustiot-v2/demo/`），或 `--log-dir` 指定的目錄：log、計畫、變更前後的狀態（叢集層級物件的名稱與 SHA-256、每個 ClusterRoleBinding 的 subjects、每個 namespace 的 workload 與 Service 的 uid）。腳本自己建立的目錄是 0700、檔案 0600；已經存在的目錄不改權限，其他使用者能讀或進入的目錄（例如 `--log-dir .`）直接拒絕。
 - 維運用的 tunnel（展示機的 `cloudflared.service`，ssh 經過它）只讀狀態（`ActiveState`、`MainPID`、`NRestarts`、`ExecMainStartTimestamp`）：不是 active 時不動手；結束時（包括失敗結束）確認還是同一個行程、沒有重啟過；從不改它。
 - 可以重複執行：先看現況，已經是目標狀態就什麼都不做。
@@ -260,7 +260,7 @@ issue Laysi/trustiot-v2#71 把機制留給實作決定。選擇是 **rootless po
 Ctrl-C、終端機關閉（SIGHUP）或筆電休眠時，腳本來不及釋放 lab lock，也可能有一個 kubectl 還在展示機上執行。lock 留著時，下一次 `--apply` 會停在「the lab lock is held by: ...」。釋放 ssh 送不到時，腳本會印出 `WARNING: releasing the lab lock failed (ssh)` 與自己的擁有者行，不會說成「別人的 lock」。處理方式：
 
 1. 在展示機上讀 `~/e2e.lock/owner`，確認是這次中斷的執行寫的（issue、時間與步驟都對得上）；不是的話不要動，那是別人的。
-2. 確認沒有這次執行留下的 kubectl 還在跑（`ps -ef | grep 'k3s kubectl'`）；有的話等它結束。腳本對單一指令的上限：刪除 namespace 後輪詢最多 600 秒，刪除單一物件的 `--wait` 最多 180 秒，istiod 的 rollout 最多 300 秒（等 mesh config 是另外的 600 秒輪詢）。
+2. 確認沒有這次執行留下的 kubectl 還在跑（`ps -ef | grep 'k3s kubectl'`）；有的話等它結束。腳本對單一指令的上限：刪除 namespace 後輪詢最多 600 秒，刪除單一物件的 `--wait` 最多 180 秒，istiod 的 rollout 最多 300 秒（等 mesh config 是另外的 600 秒輪詢）；`flux.ts` 在展示機上等 Flux 的 CRD 生效最多 120 秒，其餘都是短指令的輪詢。`flux.ts` 的 root 腳本在展示機的 `/run/trustiot-demo-flux/` 底下用自己的暫存目錄（0700），結束時（包括 ssh 斷線送來的 SIGHUP）刪除；root 腳本之間以 `flock` 鎖住 `/run/trustiot-demo-flux/.lock`，`sudo flock --nonblock /run/trustiot-demo-flux/.lock true` 成功表示沒有 root 腳本在跑；行程被強制終止而留下的暫存目錄（包括 deploy key 的），下一個 root 腳本拿到這個鎖之後先以 shred 刪除。ssh 在 root 腳本執行中斷線（exit 255）時，`flux.ts` 自己就不釋放 lab lock，並印出這些檢查。
 3. 兩者都確認後才 `rm -rf ~/e2e.lock`，然後先跑一次不加 `--apply` 的 dry run 看現況，再決定要不要重跑。腳本都可以重跑：已經刪掉或已經改好的部分不會再動。
 
 ### 清除 PoC 與平台對齊的順序
@@ -327,9 +327,19 @@ bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST"    # 確認：nothing t
 - 有 CUSTOM 的 AuthorizationPolicy 在用要拿掉的 provider（例如展示環境的入口）；
 - 回復會改變或拿掉路徑正規化，而叢集裡有 Gateway 或 waypoint：`//internal/...` 與 `/%2finternal/...` 會重新繞過 chart 的 `/internal*` DENY（Laysi/trustiot-v2#255）。
 
+### `demo/flux.ts`：在展示機安裝 Flux
+
+Laysi/trustiot-v2#484（在展示機的安裝是 Laysi/trustiot-v2#467，lab lock 的擁有者也是它）。四個子指令：`deploy-key` 在展示機上產生叢集自己的 deploy key 並印出公鑰與指紋，`install` 安裝 Flux 並等到 Flux 跑的正是它檢查過的 main commit 與 chart（每個 Flux 物件的 revision 都要對上，HelmRelease 還要處理完這次要求的 reconcile，只看 `Ready=True` 會把舊的狀態當成完成），`status` 只讀，`remove` 移除 Flux 而保留 namespace `trustiot` 的資料。順序、檢查、改動的叢集層級物件與移除的細節在 [deploy/flux/README.md](../deploy/flux/README.md)「在展示機安裝 Flux」。
+
+- Flux 的 manifest 與所有前提都從 main 讀：工作目錄要是乾淨、等於 `origin/main`（先 fetch）的 checkout，否則拒絕。main 上缺少前提時（chart 早於 `lib.ts` 的 `DEMO_MIN_CHART_VERSION`、`values-demo.yaml` 沒有把 `ingress.tunnel.clusterIP` 設成 IPv4 位址、release 需要的 SOPS 檔不在），dry run 就列出拒絕的原因。ClusterIP 的值的路徑只在 `flux.ts` 的 `INGRESS_CLUSTER_IP_PATH` 一處。叢集上另外檢查這個位址在叢集唯一的 IPv4 Service 網段的靜態區段裡、不是網路或廣播位址、沒有被其他 Service 佔用（區段的計算在 `nightly/ingress-address.ts`）。
+- 第一次同步釘在檢查過的 commit：送到展示機的 Flux manifest 把 GitRepository 釘在計畫讀到的 `origin/main`，根 Kustomization 最後才建立；第一次部署確認之後才拿掉 pin，讓 Flux 再跟著 main。釘住的期間 GitRepository 的 `spec.ref` 或回報的 commit 一變就立刻停下。中斷後重跑會完成或重做這一步，main 前進了就先檢查新的 main、把 pin 移過去。
+- 印出與存下的一切都先經過 `redact()`：主機名稱、區網位址、token 與工作站的路徑（repo 根目錄寫成 `<repo>`、家目錄寫成 `~`）不出現在輸出、錯誤與紀錄檔；規則見 deploy/flux/README.md「在展示機安裝 Flux」的「遮蔽」。
+- 私鑰不離開展示機：deploy key 在展示機上以 root 產生，`sops-age` 在展示機上以 root 交給 `age-keygen -y` 檢查，兩者都只經過管線、root 的暫存檔（用完 shred 或刪除）與 Kubernetes Secret，不出現在指令列或輸出。工作站從叢集讀 Secret 時只讀名稱、type、key 的名稱與每個值的長度（認出建立途中中斷、有空值的 deploy key）、這支腳本的 label，以及 deploy key 的 `identity.pub` 與 `known_hosts`。
+- 它以 label `trustiot.io/demo-flux` 標記自己的安裝：namespace `flux-system` 加上 `installed`，deploy key 的 Secret 帶 `deploy-key`。之後的執行與 `remove` 靠這個 label 認出自己的安裝，沒有它的 Flux（例如 lab e2e 的）一律不碰。
+
 ### 測試
 
-`bun test scripts/demo`，也包含在 `bun test scripts` 裡。不需要叢集或 ssh：以記憶體裡的假叢集與假的 ssh 驗證 lab lock 的擁有者比對、mkdir 不重試與只釋放自己的 lock、參數的引號、盤點、確認之前不刪除也不改、lock 內與每個 namespace 刪除前發現變化就停、刪除帶 uid 前提、ClusterRoleBinding 與 webhook 的處理、compare-and-swap、回復的條件與逐位元組還原、逾時、失敗時仍釋放 lock、重複執行時什麼都不做；istiod 的 values 以 repo 裡的 `deploy/istio` 檔案驗證。
+`bun test scripts/demo`，也包含在 `bun test scripts` 裡。不需要叢集、ssh 或 kubectl：以記憶體裡的假叢集與假的 ssh 驗證 lab lock 的擁有者比對、mkdir 不重試與只釋放自己的 lock、參數的引號、盤點、確認之前不刪除也不改、lock 內與每個 namespace 刪除前發現變化就停、刪除帶 uid 前提、ClusterRoleBinding 與 webhook 的處理、compare-and-swap、回復的條件與逐位元組還原、逾時、失敗時仍釋放 lock、重複執行時什麼都不做；istiod 的 values 以 repo 裡的 `deploy/istio` 檔案驗證。`flux.test.ts` 另外對 `flux.ts` 的每個拒絕條件、計畫與確認碼、lock 內的重新規劃（root 的 age 檢查只在 lock 允許之後）、第一次同步的 pin（main 在安裝期間前進、釘住時回報別的 commit、中斷後重跑與移動 pin、拿掉 pin）、暫停的 Flux 物件、中斷後的重跑、ssh 斷線時保留 lab lock、`Ready=True` 但停在舊 revision 的物件、等待的逾時與 `Stalled`、移除的順序與暫停後的重新比對、遮蔽規則各有測試，並以 bash 對假的 `k3s` 執行它送到展示機的 root 腳本，確認私鑰不出現在輸出與指令列、空的值不建立 Secret、失敗時刪掉不完整的 Secret、暫存目錄不留下、殘留的被清掉、另一個 root 腳本在跑時停下（需要 bash、git、ssh-keygen、shred、flock 與 GNU base64）；Flux 的 manifest 用 repo 裡的 `gotk-components.yaml` 與 `gotk-sync.yaml`（`bun test deploy/flux` 以 kubectl 建出真正的那份）。
 
 ## release/：發佈流程
 
