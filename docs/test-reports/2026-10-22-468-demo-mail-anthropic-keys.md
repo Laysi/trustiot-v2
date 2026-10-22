@@ -17,7 +17,7 @@
   - 工具：`.prototools` 釘選的 Bun `1.4.2` 與 sops `3.13.3`。
   - Anthropic 的檢查另外用官方 TypeScript SDK `@anthropic-ai/sdk` `1.1.0`，裝在 repo 以外的暫存目錄。
 - **腳本與 SOPS 檔的檢查**：
-  - 在建置主機（x86_64 Linux）上經檢查佇列執行，跑的是 commit `<HEAD>` 的副本（本報告與測試資料以外，之後沒有變更）。
+  - 在建置主機（x86_64 Linux）上經檢查佇列執行，跑的是 commit `7b93db0e` 的副本（本報告與測試資料以外，之後沒有變更）。
   - 設了 `CI=1`，容器測試在沒有 podman 時會失敗，不會略過。
   - gitleaks 在開發者工作站執行。
 
@@ -288,15 +288,23 @@ admin endpoints refused: true
 
 ### 腳本與 SOPS 檔的檢查
 
-在 commit `<HEAD>` 上經檢查佇列執行，結果如下。
+在 commit `7b93db0e` 上經檢查佇列執行，結果如下。
 
 | 指令 | 結束碼 | 結果 |
 | --- | --- | --- |
-<RESULTS>
+| `bun install --cwd scripts --frozen-lockfile` | 0 | 安裝完成 |
+| `bun run --cwd scripts typecheck` | 0 | 沒有型別錯誤 |
+| `bun test scripts/demo` | 0 | 423 pass、5 skip、0 fail（skip 的是需要容器的測試，下一列單獨跑） |
+| `TRUSTIOT_DEMO_MAIL_E2E=1 bun test scripts/demo/test-mail.container.test.ts` | 0 | 5 pass、0 fail |
+| `bun test deploy/flux` | 0 | 73 pass、0 fail |
+| `bun scripts/ci/check-secret-handling.ts` | 0 | 502 個檔案、6 個容器建置檔，no violations |
+| `bun scripts/ci/check-workflows.ts` | 0 | 4 個檔案，no violations |
+| `bun test scripts` | 0 | 1583 pass、9 skip、0 fail |
+| `cargo test --locked -p repo-check` | 0 | 全部通過 |
 
 ### gitleaks
 
-<GITLEAKS>
+在 commit `7b93db0e` 上，`gitleaks git --redact --log-opts="origin/main..HEAD" .` 與 `git archive HEAD` 解開後的 `gitleaks dir --redact` 都回報 no leaks found。加入本段結果的 commit 在推送前又掃了一次，結果相同。
 
 ## 結論
 
