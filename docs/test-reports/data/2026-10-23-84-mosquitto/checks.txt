@@ -1,0 +1,51 @@
+# Last check round of Laysi/trustiot-v2#84 on the build host (CI=1), queued 2026-10-23 01:35, ended 01:58 (Asia/Taipei).
+# It ran on a copy of the clean worktree at commit 16a1e52 plus this report's commit (the queue records the copy as its own snapshot commit).
+# Each step: "== <command>", the summary lines of its output (filtered by the round's script), then "== <command>: exit <code>".
+== git rev-parse --short HEAD
+== git rev-parse --short HEAD: exit 0
+== cargo fmt --all --check
+== cargo fmt --all --check: exit 0
+== cargo clippy --locked --workspace --all-targets -- -D warnings
+== cargo clippy --locked --workspace --all-targets -- -D warnings: exit 0
+== cargo test --locked --workspace --no-fail-fast
+binaries 142 passed 1099 failed 0 ignored 0
+== cargo test --locked --workspace --no-fail-fast: exit 0
+== cargo test --locked -p migrate --test mqtt_broker --test mqtt_trust --test mqtt_accounts -- --nocapture
+== cargo test --locked -p migrate --test mqtt_broker --test mqtt_trust --test mqtt_accounts -- --nocapture: exit 0
+== cargo test --locked -p migrate --lib mqtt_
+== cargo test --locked -p migrate --lib mqtt_: exit 0
+== cargo test --locked -p certs --test key_custody
+== cargo test --locked -p certs --test key_custody: exit 0
+== cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+== cargo deny --locked check: exit 0
+== cargo run --locked -q -p openapi -- --check
+api/openapi.json is up to date
+== cargo run --locked -q -p openapi -- --check: exit 0
+== bun install --cwd scripts --frozen-lockfile
+== bun install --cwd scripts --frozen-lockfile: exit 0
+== bun test scripts
+ 1590 pass
+ 9 skip
+ 0 fail
+Ran 1599 tests across 51 files. [10.49s]
+== bun test scripts: exit 0
+== bun run --cwd scripts typecheck
+== bun run --cwd scripts typecheck: exit 0
+== bun test deploy/chart
+ 520 pass
+ 0 fail
+Ran 520 tests across 9 files. [55.95s]
+== bun test deploy/chart: exit 0
+== bun test deploy/flux
+ 75 pass
+ 0 fail
+Ran 75 tests across 3 files. [2.05s]
+== bun test deploy/flux: exit 0
+== bun scripts/ci/check-secret-handling.ts
+secret handling: 505 file(s) checked, 6 container build file(s), no violations
+== bun scripts/ci/check-secret-handling.ts: exit 0
+== bun scripts/ci/check-workflows.ts
+workflow policy: 4 file(s) checked, no violations
+== bun scripts/ci/check-workflows.ts: exit 0
+== overall: 0
