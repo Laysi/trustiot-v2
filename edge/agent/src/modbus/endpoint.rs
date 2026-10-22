@@ -25,6 +25,7 @@ use tokio::sync::Mutex;
 use super::pdu::Read;
 use super::tcp::TcpConnection;
 use super::{Connection, Exchange};
+use crate::polling::Disconnect;
 
 /// A connection several devices' readers use in turn. A clone is another handle to the same
 /// connection; each device's poll reads through its own handle.
@@ -60,6 +61,15 @@ impl<C: Connection + Send> Connection for SharedConnection<C> {
     /// read. `timeout` starts once the turn has come.
     async fn read(&mut self, unit: u8, read: Read, timeout: Duration) -> Exchange {
         self.connection.lock().await.read(unit, read, timeout).await
+    }
+}
+
+impl<C: Disconnect + Send> Disconnect for SharedConnection<C> {
+    /// Waits for the turn, then closes the shared connection, for every device at the endpoint:
+    /// their next reads open a new one. The turn comes within the read of every device ahead,
+    /// each bounded by its timeouts and its own watchdog.
+    async fn disconnect(&mut self) {
+        self.connection.lock().await.disconnect().await;
     }
 }
 

@@ -1,0 +1,10 @@
+# cargo test --locked -p ingest -- --nocapture, test disk_watermark (build host, 2026-10-21 15:56 Asia/Taipei)
+disk watermark rule, step by step:
+empty: Disk { disk: "default", total_bytes: 268435456, free_bytes: 268161024, used_ratio: 0.001, severity: "ok" }
+filled to 85 %: Disk { disk: "default", total_bytes: 268435456, free_bytes: 40263680, used_ratio: 0.85, severity: "warning" }
+filled to 95 %: Disk { disk: "default", total_bytes: 268435456, free_bytes: 13418496, used_ratio: 0.95, severity: "critical" }
+freed: Disk { disk: "default", total_bytes: 268435456, free_bytes: 268161024, used_ratio: 0.001, severity: "ok" }
+monitoring role grants: SELECT	system	disks	0	0
+test the_disk_watermark_alert_fires_past_each_threshold ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.27s

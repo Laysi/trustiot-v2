@@ -1,0 +1,7 @@
+[install]
+# Exact versions only, like every other Bun project here; Renovate updates the pins.
+exact = true
+
+[test]
+# A DOM for the component tests (happy-dom), registered before any test file loads.
+preload = ["./src/test/setup.ts"]

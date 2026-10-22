@@ -7,8 +7,25 @@ name = "agent"
 version = "0.1.0"
 dependencies = [
  "protocol",
+ "socket2",
  "testkit",
  "tokio",
+]
+
+[[package]]
+name = "ai-clients"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "socket2",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "zeroize",
 ]
 
 [[package]]
@@ -1156,6 +1173,7 @@ dependencies = [
 name = "ingest"
 version = "0.1.0"
 dependencies = [
+ "protocol",
  "reqwest",
  "serde_json",
  "tokio",
@@ -1276,6 +1294,7 @@ dependencies = [
  "identity-keys",
  "outbox",
  "percent-encoding",
+ "protocol",
  "rcgen",
  "rustls",
  "rustls-pki-types",

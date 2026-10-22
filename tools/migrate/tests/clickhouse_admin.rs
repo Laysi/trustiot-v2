@@ -274,6 +274,7 @@ fn job_config(fake: &FakeSecrets, url: &str) -> (RunConfig, ClickHouseSettings) 
         username: CLICKHOUSE_ADMIN.to_owned(),
         password: None,
         password_secret: Some(ADMIN_SECRET.to_owned()),
+        raw_retention_days: None,
     };
     let config = RunConfig {
         platform: Platform {

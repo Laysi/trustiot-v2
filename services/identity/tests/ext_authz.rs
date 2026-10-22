@@ -390,6 +390,67 @@ async fn invalid_or_expired_sessions_get_401() {
     assert_unauthenticated(&check(&service, "/", Some(&still)));
 }
 
+/// Acceptance (Laysi/trustiot-v2#123): a cross-site write gets 403 `security.cross_site_request`
+/// with a valid session, and so does one with an unknown session (not 401: the session is never
+/// looked up); the SPA's own write goes on.
+#[tokio::test]
+async fn cross_site_writes_get_403_and_same_origin_ones_go_on() {
+    let Some(fixture) = Fixture::new(
+        "CREATE DATABASE identity_csrf OWNER identity_owner",
+        "identity_csrf",
+    )
+    .await
+    else {
+        return;
+    };
+    fixture.add_user(USER, false).await;
+    fixture.add_membership(TENANT_A, USER, "editor").await;
+    let secret = fixture
+        .add_session(USER, Some(TENANT_A), SESSION_SECS, false)
+        .await;
+    let service = fixture.service();
+    let post = |cookie: &str, extra: &[(&str, &str)]| {
+        let mut headers = vec![("Host", APP), ("Cookie", cookie)];
+        headers.extend_from_slice(extra);
+        request(
+            service.address,
+            "POST",
+            "/internal/ext-authz/api/devices",
+            &headers,
+        )
+        .expect("check request")
+    };
+    let valid = cookie(&secret);
+    let origin = format!("https://{APP}");
+    let response = post(
+        &valid,
+        &[("Sec-Fetch-Site", "same-origin"), ("Origin", &origin)],
+    );
+    verified(&fixture, &response, ServiceName::Assets);
+    verified(
+        &fixture,
+        &post(&valid, &[("Origin", &origin)]),
+        ServiceName::Assets,
+    );
+
+    let unknown = cookie(&new_secret());
+    let cross_site: [&[(&str, &str)]; 2] = [
+        &[("Origin", "https://attacker.example.test")],
+        &[("Sec-Fetch-Site", "cross-site")],
+    ];
+    for extra in cross_site {
+        for cookie in [&valid, &unknown] {
+            let response = post(cookie, extra);
+            assert_eq!(response.status, 403, "{extra:?}: {}", response.raw());
+            assert!(response.header_values("x-internal-identity").is_empty());
+            assert_eq!(
+                response.json(),
+                json!({"code": "permission_denied", "message_key": "security.cross_site_request"})
+            );
+        }
+    }
+}
+
 /// Decision 13: role changes and removed memberships apply to the next request of the same
 /// session; a session without a tenant gets a token without one.
 #[tokio::test]
