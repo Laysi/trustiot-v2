@@ -35,7 +35,9 @@ fn limits(first_token: Duration, idle: Duration) -> StreamLimits {
     StreamLimits {
         first_token_deadline: Instant::now() + first_token,
         idle,
+        total_deadline: Instant::now() + Duration::from_secs(3600),
         max_event_bytes: 1 << 20,
+        max_total_bytes: 32 << 20,
     }
 }
 
@@ -74,6 +76,8 @@ fn usage(input: u64, write_5m: u64, write_1h: u64, read: u64, output: u64) -> To
         cache_read: read,
         output,
         cache_write_ttl_assumed: false,
+        input_missing: false,
+        output_missing: false,
     }
 }
 

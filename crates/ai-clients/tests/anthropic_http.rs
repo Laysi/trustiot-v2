@@ -10,7 +10,7 @@ use std::time::Duration;
 use ai_clients::anthropic::{
     AnthropicClient, InputMessage, Message, MessagesRequest, RequestOptions,
 };
-use ai_clients::{EndpointConfig, Error, ErrorClass, TimeoutKind};
+use ai_clients::{EndpointConfig, Error, ErrorClass, ReportedUsage, TimeoutKind};
 use support::{Server, Step, endpoint, fixture, fixture_json, http_response, sse_head, sse_prefix};
 
 fn client(config: EndpointConfig) -> AnthropicClient {
@@ -521,7 +521,17 @@ async fn responses_that_break_the_protocol_are_refused() {
     .create_message(&request(), &RequestOptions::default())
     .await
     .unwrap_err();
-    assert!(matches!(error, Error::Protocol(_)), "{error:?}");
+    // A billed HTTP 200 whose usage could not be read.
+    assert!(
+        matches!(
+            error,
+            Error::InvalidResponse {
+                usage: ReportedUsage::Unknown,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
 
     // A body that is not a message.
     let server = Server::start(vec![vec![Step::Send(http_response(
@@ -534,7 +544,16 @@ async fn responses_that_break_the_protocol_are_refused() {
         .create_message(&request(), &RequestOptions::default())
         .await
         .unwrap_err();
-    assert!(matches!(error, Error::Protocol(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            Error::InvalidResponse {
+                usage: ReportedUsage::Unknown,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
 }
 
 #[test]

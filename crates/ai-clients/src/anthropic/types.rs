@@ -480,7 +480,8 @@ pub struct Usage {
 
 impl Usage {
     /// The top-level counts by billing category. With `iterations`, these describe only the
-    /// attempt that produced the returned message; bill from [`Usage::attempts`].
+    /// attempt that produced the returned message; bill from [`Usage::attempts`]. A count the
+    /// provider did not send is 0 and flagged (`TokenUsage::input_missing`, `output_missing`).
     pub fn tokens(&self) -> TokenUsage {
         token_usage(
             self.input_tokens,
@@ -492,7 +493,9 @@ impl Usage {
     }
 
     /// What to bill: one entry per attempt in `iterations` (with its model) when the provider
-    /// sent them, otherwise the top-level counts with no model (the requested one).
+    /// sent them, otherwise the top-level counts with no model (the requested one). An attempt
+    /// whose input or output count is missing is flagged in its [`TokenUsage`]; a message
+    /// without any `usage` gives one attempt with both flagged.
     pub fn attempts(&self) -> Vec<(Option<&str>, TokenUsage)> {
         match &self.iterations {
             Some(iterations) if !iterations.is_empty() => iterations
@@ -553,6 +556,9 @@ fn token_usage(
     if assumed {
         write_5m = write_5m.saturating_add(total_writes - split_sum);
     }
+    // `input_tokens` and `output_tokens` are required in every usage object; without them
+    // (a proxy stripped `usage`) the count is unknown, not zero, and the ledger estimates it.
+    // The cache counts are nullable in the API, so an absent one is 0.
     TokenUsage {
         input: input.unwrap_or(0),
         cache_write_5m: write_5m,
@@ -560,6 +566,8 @@ fn token_usage(
         cache_read: cache_read.unwrap_or(0),
         output: output.unwrap_or(0),
         cache_write_ttl_assumed: assumed,
+        input_missing: input.is_none(),
+        output_missing: output.is_none(),
     }
 }
 

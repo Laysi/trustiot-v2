@@ -17,7 +17,7 @@ mod usage;
 
 pub use error::{ApiError, ApiErrorBody, Error, ErrorClass, TimeoutKind};
 pub use transport::{ApiKey, ByteSource, ChunkFuture, EndpointConfig, Timeouts};
-pub use usage::TokenUsage;
+pub use usage::{ReportedUsage, TokenUsage};
 
 /// A response body with the provider's request ID (for logs and support tickets).
 #[derive(Debug, Clone, PartialEq)]

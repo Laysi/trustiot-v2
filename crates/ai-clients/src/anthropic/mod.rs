@@ -20,10 +20,11 @@ pub use types::{
 };
 
 use crate::Reply;
-use crate::error::{ApiErrorBody, Error, ErrorClass, TimeoutKind};
+use crate::error::{ApiErrorBody, Error, ErrorClass, TimeoutKind, json_error};
 use crate::transport::{
     ApiKey, EndpointConfig, Transport, error_from_response, header_text, read_body,
 };
+use crate::usage::ReportedUsage;
 
 pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 /// The `anthropic-version` header (<https://platform.claude.com/docs/en/api/versioning>).
@@ -129,7 +130,9 @@ impl AnthropicClient {
         Ok(builder)
     }
 
-    /// A non-streaming call. Headers and body must arrive within `timeouts.response`.
+    /// A non-streaming call. Headers and body must arrive within `timeouts.response`. An HTTP
+    /// 200 body over the size limit or not a message is [`Error::InvalidResponse`], with the
+    /// `usage` it carries if that much could be read.
     pub async fn create_message(
         &self,
         request: &MessagesRequest,
@@ -158,10 +161,21 @@ impl AnthropicClient {
             deadline,
             TimeoutKind::Response,
         )
-        .await?;
+        .await
+        .map_err(|error| {
+            error.into_invalid_response(|| ReportedUsage::Unknown, request_id.clone())
+        })?;
         drop(permit);
-        let message = serde_json::from_slice(&body)
-            .map_err(|error| Error::Protocol(format!("message: {error}")))?;
+        let message = match serde_json::from_slice(&body) {
+            Ok(message) => message,
+            Err(error) => {
+                return Err(Error::InvalidResponse {
+                    reason: format!("message: {}", json_error(&error)),
+                    usage: usage_of_unparsed(&body),
+                    request_id,
+                });
+            }
+        };
         Ok(Reply {
             body: message,
             request_id,
@@ -170,7 +184,8 @@ impl AnthropicClient {
 
     /// A streaming call. The response headers and the first model output must arrive within
     /// `timeouts.first_token`; after that, no gap between bytes may exceed
-    /// `timeouts.stream_idle`.
+    /// `timeouts.stream_idle`, and the whole stream must end within `timeouts.stream_total`
+    /// and `max_response_bytes`.
     pub async fn stream_message(
         &self,
         request: &MessagesRequest,
@@ -178,7 +193,8 @@ impl AnthropicClient {
     ) -> Result<MessageStream, Error> {
         let permit = self.transport.acquire().await?;
         let timeouts = &self.transport.config.timeouts;
-        let first_token_deadline = Instant::now() + timeouts.first_token;
+        let sent = Instant::now();
+        let first_token_deadline = sent + timeouts.first_token;
         let builder = self.request(request, true, options)?;
         let response = self
             .transport
@@ -205,8 +221,30 @@ impl AnthropicClient {
         let limits = StreamLimits {
             first_token_deadline,
             idle: timeouts.stream_idle,
+            total_deadline: sent + timeouts.stream_total,
             max_event_bytes: self.transport.config.max_event_bytes,
+            max_total_bytes: self.transport.config.max_response_bytes,
         };
         Ok(MessageStream::from_source(Box::new(response), limits).with_permit(permit, request_id))
+    }
+}
+
+/// The `usage` of a body that does not parse as a [`Message`], read on its own so the ledger
+/// gets the real counts of a billed response.
+fn usage_of_unparsed(body: &[u8]) -> ReportedUsage {
+    #[derive(serde::Deserialize)]
+    struct UsageOnly {
+        #[serde(default)]
+        usage: Option<Usage>,
+    }
+    match serde_json::from_slice::<UsageOnly>(body) {
+        Ok(UsageOnly { usage: Some(usage) }) => ReportedUsage::Attempts(
+            usage
+                .attempts()
+                .into_iter()
+                .map(|(model, tokens)| (model.map(str::to_owned), tokens))
+                .collect(),
+        ),
+        _ => ReportedUsage::Unknown,
     }
 }

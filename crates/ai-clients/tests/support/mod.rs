@@ -29,6 +29,7 @@ pub fn generous_timeouts() -> Timeouts {
         connect: Duration::from_secs(30),
         first_token: Duration::from_secs(120),
         stream_idle: Duration::from_secs(120),
+        stream_total: Duration::from_secs(3600),
         response: Duration::from_secs(120),
     }
 }

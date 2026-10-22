@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::classify_error;
 use super::types::{ContentBlock, Extra, Message, StopDetails, StopReason, Usage};
-use crate::error::{ApiError, ApiErrorBody, Error, TimeoutKind};
+use crate::error::{ApiError, ApiErrorBody, Error, TimeoutKind, json_error};
 use crate::sse::{SseEvent, SseParser};
 use crate::transport::ByteSource;
 
@@ -29,6 +29,20 @@ pub enum Delta {
     Citation(Value),
     /// A delta type added after this crate was written: relayed, not applied.
     Other(Value),
+}
+
+impl Delta {
+    /// The delta type, for error messages (never the delta's content, which is model output).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Text(_) => "text_delta",
+            Self::InputJson(_) => "input_json_delta",
+            Self::Thinking(_) => "thinking_delta",
+            Self::Signature(_) => "signature_delta",
+            Self::Citation(_) => "citations_delta",
+            Self::Other(_) => "unknown",
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for Delta {
@@ -140,12 +154,14 @@ impl StreamEvent {
             error: ApiErrorBody,
         }
         fn decode<T: serde::de::DeserializeOwned>(event: &str, data: Value) -> Result<T, Error> {
-            serde_json::from_value(data)
-                .map_err(|error| Error::Protocol(format!("`{event}` event: {error}")))
+            // `event` is one of the known event types matched below, never upstream text.
+            serde_json::from_value(data).map_err(|error| {
+                Error::Protocol(format!("`{event}` event: {}", json_error(&error)))
+            })
         }
 
         let data: Value = serde_json::from_str(&sse.data).map_err(|error| {
-            Error::Protocol(format!("`{}` event data is not JSON: {error}", sse.event))
+            Error::Protocol(format!("event data is not JSON: {}", json_error(&error)))
         })?;
         let kind = data
             .get("type")
@@ -318,7 +334,8 @@ impl MessageAccumulator {
                     (_, Delta::Other(_)) => {}
                     (block, delta) => {
                         return protocol(format!(
-                            "a {delta:?} delta for a `{}` block",
+                            "a `{}` for a `{}` block",
+                            delta.kind(),
                             block.kind()
                         ));
                     }
@@ -336,7 +353,10 @@ impl MessageAccumulator {
                     // the `input` it started with.
                     if !json.trim().is_empty() {
                         let input: Value = serde_json::from_str(&json).map_err(|error| {
-                            Error::Protocol(format!("tool input of block {index}: {error}"))
+                            Error::Protocol(format!(
+                                "tool input of block {index}: {}",
+                                json_error(&error)
+                            ))
                         })?;
                         match block {
                             ContentBlock::ToolUse(tool) => tool.input = input,
@@ -397,13 +417,19 @@ pub struct StreamItem {
     pub event: StreamEvent,
 }
 
-/// Limits of one stream ([`crate::Timeouts`]).
+/// Limits of one stream ([`crate::Timeouts`], [`crate::EndpointConfig`]).
 #[derive(Debug, Clone)]
 pub struct StreamLimits {
     /// Model output must start before this instant.
     pub first_token_deadline: Instant,
     pub idle: Duration,
+    /// The stream must end (`message_stop`) before this instant, however steadily data
+    /// arrives; then it fails with [`TimeoutKind::StreamTotal`].
+    pub total_deadline: Instant,
     pub max_event_bytes: usize,
+    /// Bytes the whole stream may bring (pings and comments included); more is
+    /// [`Error::Protocol`]. This bounds what the accumulator holds.
+    pub max_total_bytes: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -415,9 +441,11 @@ enum State {
 }
 
 /// A streaming Messages response. Holds the endpoint's concurrency slot until the stream
-/// finishes, fails, is cancelled or dropped. After [`MessageStream::cancel`] (or the token from
-/// [`MessageStream::cancellation_token`] fires), the response is dropped, which closes the
-/// connection, and nothing more is read.
+/// finishes, fails, is cancelled or dropped. [`MessageStream::cancel`] drops the response at
+/// once, which closes the connection and frees the slot; nothing more is read. A token from
+/// [`MessageStream::cancellation_token`] does the same when the owner next polls the stream (at
+/// once if it is waiting in [`MessageStream::next`]) or drops it: until then the connection and
+/// the slot stay held.
 pub struct MessageStream {
     source: Option<Box<dyn ByteSource>>,
     permit: Option<OwnedSemaphorePermit>,
@@ -426,6 +454,8 @@ pub struct MessageStream {
     accumulator: MessageAccumulator,
     limits: StreamLimits,
     output_started: bool,
+    /// Bytes received so far, against `limits.max_total_bytes`.
+    received: usize,
     cancel: CancellationToken,
     state: State,
     request_id: Option<String>,
@@ -443,6 +473,7 @@ impl MessageStream {
             accumulator: MessageAccumulator::new(),
             limits,
             output_started: false,
+            received: 0,
             cancel: CancellationToken::new(),
             state: State::Open,
             request_id: None,
@@ -464,7 +495,9 @@ impl MessageStream {
         self.request_id.as_deref()
     }
 
-    /// A token that cancels this stream from another task.
+    /// A token that cancels this stream from another task. The response is released when the
+    /// owner next polls the stream (at once if it is waiting in [`MessageStream::next`]) or drops
+    /// it, not when the token fires.
     pub fn cancellation_token(&self) -> CancellationToken {
         self.cancel.clone()
     }
@@ -538,16 +571,22 @@ impl MessageStream {
     }
 
     async fn read_more(&mut self) -> Result<(), Error> {
+        // The nearest of the three limits decides how long this read may wait and which
+        // timeout it is. An idle limit too large to add to now is no limit.
         let now = Instant::now();
-        let first_token_left = self
-            .limits
-            .first_token_deadline
-            .saturating_duration_since(now);
-        let (wait, kind) = if !self.output_started && first_token_left <= self.limits.idle {
-            (first_token_left, TimeoutKind::FirstToken)
-        } else {
-            (self.limits.idle, TimeoutKind::StreamIdle)
+        let mut limit = now
+            .checked_add(self.limits.idle)
+            .map(|until| (until, TimeoutKind::StreamIdle));
+        let mut tighten = |until: Instant, kind: TimeoutKind| {
+            if limit.is_none_or(|(current, _)| until <= current) {
+                limit = Some((until, kind));
+            }
         };
+        if !self.output_started {
+            tighten(self.limits.first_token_deadline, TimeoutKind::FirstToken);
+        }
+        tighten(self.limits.total_deadline, TimeoutKind::StreamTotal);
+        let (until, kind) = limit.unwrap_or((self.limits.total_deadline, TimeoutKind::StreamTotal));
         let cancel = self.cancel.clone();
         let Some(source) = self.source.as_mut() else {
             return Err(self.fail(Error::Protocol("the stream has no body".into())));
@@ -555,7 +594,7 @@ impl MessageStream {
         let chunk = tokio::select! {
             biased;
             () = cancel.cancelled() => None,
-            chunk = tokio::time::timeout(wait, source.next_chunk()) => Some(chunk),
+            chunk = tokio::time::timeout_at(until, source.next_chunk()) => Some(chunk),
         };
         let Some(chunk) = chunk else {
             self.close(State::Cancelled);
@@ -567,10 +606,19 @@ impl MessageStream {
             Ok(Ok(None)) => Err(self.fail(Error::Protocol(
                 "the stream ended before `message_stop`".into(),
             ))),
-            Ok(Ok(Some(bytes))) => match self.parser.push(&bytes, &mut self.pending) {
-                Ok(()) => Ok(()),
-                Err(error) => Err(self.fail(error.into())),
-            },
+            Ok(Ok(Some(bytes))) => {
+                self.received = self.received.saturating_add(bytes.len());
+                if self.received > self.limits.max_total_bytes {
+                    let limit = self.limits.max_total_bytes;
+                    return Err(
+                        self.fail(Error::Protocol(format!("the stream exceeds {limit} bytes")))
+                    );
+                }
+                match self.parser.push(&bytes, &mut self.pending) {
+                    Ok(()) => Ok(()),
+                    Err(error) => Err(self.fail(error.into())),
+                }
+            }
         }
     }
 

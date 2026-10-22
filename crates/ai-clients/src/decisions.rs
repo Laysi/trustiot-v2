@@ -15,11 +15,11 @@ use serde_json::{Map, Value};
 use tokio::time::Instant;
 
 use crate::Reply;
-use crate::error::{ApiErrorBody, Error, ErrorClass, TimeoutKind};
+use crate::error::{ApiErrorBody, Error, ErrorClass, TimeoutKind, json_error};
 use crate::transport::{
     ApiKey, EndpointConfig, Transport, error_from_response, header_text, read_body,
 };
-use crate::usage::TokenUsage;
+use crate::usage::{ReportedUsage, TokenUsage};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.openai.com";
 /// The only model the endpoint accepts on 2026-10-21.
@@ -252,6 +252,9 @@ pub struct InputTokensDetails {
 }
 
 impl DecisionUsage {
+    /// The ledger's categories. `input_tokens` is required (a usage object without it does
+    /// not parse), and Decisions bills no output, so nothing is ever flagged missing here; a
+    /// response without `usage` has `DecisionResponse::usage == None`.
     pub fn tokens(&self) -> TokenUsage {
         TokenUsage {
             input: self.input_tokens,
@@ -276,7 +279,7 @@ impl DecisionResponse {
     /// predicate, score and refusal is a protocol error.
     pub fn parse(body: &[u8]) -> Result<Self, Error> {
         serde_json::from_slice(body)
-            .map_err(|error| Error::Protocol(format!("decision response: {error}")))
+            .map_err(|error| Error::Protocol(format!("decision response: {}", json_error(&error))))
     }
 
     /// Checks that the answers fit the questions: one per question, in order, with the
@@ -293,10 +296,10 @@ impl DecisionResponse {
         }
         for (index, (question, answer)) in request.questions.iter().zip(&self.answers).enumerate() {
             let name = question.name();
+            // Error strings never quote the provider's text, only the request's.
             if answer.name() != Some(name) {
                 return mismatch(format!(
-                    "answer {index} is named {:?}, the question {name:?}",
-                    answer.name()
+                    "answer {index} is not named like the question {name:?}"
                 ));
             }
             match (question, answer) {
@@ -379,8 +382,8 @@ fn validate_score(
         };
         if level.label != entry.label {
             return Err(format!(
-                "{name:?} level {index} is labelled {:?}, the question says {:?}",
-                entry.label, level.label
+                "{name:?} level {index} is not labelled {:?} as the question says",
+                level.label
             ));
         }
         if std::mem::replace(&mut seen[index], true) {
@@ -452,7 +455,9 @@ impl DecisionsClient {
     }
 
     /// Asks the questions. The request is validated first, and the answers are checked
-    /// against the questions; headers and body must arrive within `timeouts.response`.
+    /// against the questions; headers and body must arrive within `timeouts.response`. An
+    /// HTTP 200 body over the size limit, that does not parse or whose answers do not fit is
+    /// [`Error::InvalidResponse`], with the usage it carries if that much could be read.
     pub async fn decide(
         &self,
         request: &DecisionRequest,
@@ -490,13 +495,41 @@ impl DecisionsClient {
             deadline,
             TimeoutKind::Response,
         )
-        .await?;
+        .await
+        .map_err(|error| {
+            error.into_invalid_response(|| ReportedUsage::Unknown, request_id.clone())
+        })?;
         drop(permit);
-        let decision = DecisionResponse::parse(&body)?;
-        decision.validate_against(request)?;
+        let decision = DecisionResponse::parse(&body).map_err(|error| {
+            error.into_invalid_response(|| usage_of_unparsed(&body), request_id.clone())
+        })?;
+        if let Err(error) = decision.validate_against(request) {
+            return Err(
+                error.into_invalid_response(|| reported(decision.usage.as_ref()), request_id)
+            );
+        }
         Ok(Reply {
             body: decision,
             request_id,
         })
     }
+}
+
+/// Decisions usage as one attempt at the requested model, or unknown without a `usage`.
+fn reported(usage: Option<&DecisionUsage>) -> ReportedUsage {
+    match usage {
+        Some(usage) => ReportedUsage::Attempts(vec![(None, usage.tokens())]),
+        None => ReportedUsage::Unknown,
+    }
+}
+
+/// The `usage` of a body that does not parse as a [`DecisionResponse`], read on its own.
+fn usage_of_unparsed(body: &[u8]) -> ReportedUsage {
+    #[derive(Deserialize)]
+    struct UsageOnly {
+        #[serde(default)]
+        usage: Option<DecisionUsage>,
+    }
+    serde_json::from_slice::<UsageOnly>(body)
+        .map_or(ReportedUsage::Unknown, |only| reported(only.usage.as_ref()))
 }

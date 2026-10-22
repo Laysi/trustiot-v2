@@ -18,7 +18,9 @@ use zeroize::Zeroizing;
 use crate::error::{ApiError, ApiErrorBody, Error, ErrorClass, TimeoutKind};
 
 /// A provider API key. `Debug` never shows it, it is wiped from memory on drop, and its header
-/// is marked sensitive so HTTP tooling does not log it.
+/// is marked sensitive so HTTP tooling does not log it. Only this stored copy is wiped: the
+/// `HeaderValue` built for each request and the HTTP stack's write buffers hold copies that
+/// are freed without being cleared.
 pub struct ApiKey(Zeroizing<String>);
 
 impl ApiKey {
@@ -56,6 +58,10 @@ pub struct Timeouts {
     pub connect: Duration,
     pub first_token: Duration,
     pub stream_idle: Duration,
+    /// The longest a stream may run, counted from sending the request. Without it, an
+    /// upstream (or a proxy) that keeps sending pings or tiny deltas inside `stream_idle`
+    /// would hold the concurrency slot forever.
+    pub stream_total: Duration,
     pub response: Duration,
 }
 
@@ -65,6 +71,9 @@ impl Default for Timeouts {
             connect: Duration::from_secs(10),
             first_token: Duration::from_secs(60),
             stream_idle: Duration::from_secs(60),
+            // Long enough for a large response with extended thinking: 128k output tokens at
+            // a slow 50 tokens per second take about 43 minutes.
+            stream_total: Duration::from_secs(60 * 60),
             response: Duration::from_secs(300),
         }
     }
@@ -84,7 +93,9 @@ pub struct EndpointConfig {
     /// How long a request waits for a free slot; zero refuses at once.
     pub queue_wait: Duration,
     pub timeouts: Timeouts,
-    /// Size limit of a non-streaming response body and of an error body.
+    /// Size limit of a response body: a non-streaming body, and every byte of a stream
+    /// (events, pings and comments together), which bounds what `MessageStream` accumulates.
+    /// Error bodies are read up to 64 KiB at most.
     pub max_response_bytes: usize,
     /// Size limit of one server-sent event.
     pub max_event_bytes: usize,
@@ -99,7 +110,10 @@ impl EndpointConfig {
             queue_wait: Duration::ZERO,
             timeouts: Timeouts::default(),
             max_response_bytes: 32 << 20,
-            max_event_bytes: 32 << 20,
+            // A real event is a few KiB (a delta, a whole tool call); the largest are server
+            // tool results that arrive whole in `content_block_start` (a fetched document, code
+            // output), which stay well under this. Raise it per endpoint if a tool needs more.
+            max_event_bytes: 4 << 20,
         }
     }
 }
@@ -118,7 +132,10 @@ impl Transport {
     /// Builds the HTTP client from the caller's builder (TLS backend and trust anchors are the
     /// caller's choice), adding the connect timeout, TCP keepalive and no redirects: a redirect
     /// would resend the API key (Anthropic's `x-api-key` is not a header reqwest strips on a
-    /// cross-origin redirect) to wherever the response points.
+    /// cross-origin redirect) to wherever the response points. A plain `http://` (loopback)
+    /// endpoint gets no proxy at all: reqwest applies `HTTP_PROXY`/`ALL_PROXY` without a
+    /// loopback exemption, which would send the request, API key included, in clear text to the
+    /// proxy. `https://` keeps the builder's proxies (an egress proxy tunnels TLS end to end).
     pub(crate) fn new(
         config: EndpointConfig,
         builder: reqwest::ClientBuilder,
@@ -131,6 +148,11 @@ impl Transport {
                 Semaphore::MAX_PERMITS
             )));
         }
+        let builder = if base.starts_with("http://") {
+            builder.no_proxy()
+        } else {
+            builder
+        };
         let http = builder
             .connect_timeout(config.timeouts.connect)
             .tcp_keepalive(Duration::from_secs(30))

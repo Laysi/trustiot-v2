@@ -10,7 +10,7 @@ use ai_clients::decisions::{
     Answer, DecisionInput, DecisionRequest, DecisionResponse, DecisionsClient, InputMessage,
     InputPart, InputRole, Question, ScoreLevel,
 };
-use ai_clients::{Error, ErrorClass, TimeoutKind, TokenUsage};
+use ai_clients::{Error, ErrorClass, ReportedUsage, TimeoutKind, TokenUsage};
 use base64::Engine as _;
 use serde_json::{Value, json};
 use support::{Server, Step, endpoint, fixture, fixture_json, http_response};
@@ -340,7 +340,21 @@ async fn the_client_refuses_answers_that_do_not_fit_and_invalid_requests() {
     let client = client(&server, 4);
     let request = request("decisions/router.request.json");
     let error = client.decide(&request).await.unwrap_err();
-    assert!(matches!(error, Error::Protocol(_)), "{error:?}");
+    // The provider billed the call: its usage comes with the error.
+    let Error::InvalidResponse { usage, .. } = &error else {
+        panic!("expected an invalid response, got {error:?}");
+    };
+    assert_eq!(
+        usage,
+        &ReportedUsage::Attempts(vec![(
+            None,
+            TokenUsage {
+                input: 187,
+                ..TokenUsage::default()
+            }
+        )])
+    );
+    assert_eq!(error.class(), ErrorClass::Other);
     assert_eq!(server.request_count(), 1);
 
     let mut invalid = request.clone();
