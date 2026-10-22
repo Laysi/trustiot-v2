@@ -527,15 +527,28 @@ fn event(row: Row) -> Result<LoggedEvent, QueryError> {
     })
 }
 
-/// Reads one page with `statement` ([`SELECT_TENANT_EVENTS`] or [`SELECT_PLATFORM_EVENTS`]).
+/// Which log a page is read from.
+#[derive(Clone, Copy, Debug)]
+enum Log {
+    /// One tenant's events ([`SELECT_TENANT_EVENTS`]).
+    Tenant(TenantId),
+    /// The platform-wide events ([`SELECT_PLATFORM_EVENTS`]).
+    Platform,
+}
+
+/// Reads one page of `log`.
 async fn page(
     conn: &mut PgConnection,
-    statement: &'static str,
-    tenant: Option<TenantId>,
+    log: Log,
     query: &EventLogQuery,
 ) -> Result<EventLogPage, QueryError> {
+    // Each arm names its statement as a constant, so tools/sql-check sees static SQL only.
+    let (statement, tenant) = match log {
+        Log::Tenant(tenant) => (sqlx::query_as::<_, Row>(SELECT_TENANT_EVENTS), Some(tenant)),
+        Log::Platform => (sqlx::query_as::<_, Row>(SELECT_PLATFORM_EVENTS), None),
+    };
     // One row more than the page tells whether an older page exists.
-    let rows: Vec<Row> = sqlx::query_as(statement)
+    let rows: Vec<Row> = statement
         .bind(tenant.map(|tenant| tenant.to_string()))
         .bind(query.from)
         .bind(query.to)
@@ -595,7 +608,7 @@ impl EventLog {
         }
         let mut tx = self.db.begin(user).await?;
         let tenant = tx.tenant_id();
-        let page = page(&mut tx, SELECT_TENANT_EVENTS, Some(tenant), query).await?;
+        let page = page(&mut tx, Log::Tenant(tenant), query).await?;
         tx.commit().await?;
         Ok(page)
     }
@@ -615,7 +628,7 @@ impl EventLog {
     ) -> Result<EventLogPage, QueryError> {
         let actor = PlatformActor::admin(admin).ok_or(QueryError::NotAllowed)?;
         let mut tx = self.platform.begin(actor, PLATFORM_READ_PURPOSE).await?;
-        let page = page(&mut tx, SELECT_TENANT_EVENTS, Some(tenant), query).await?;
+        let page = page(&mut tx, Log::Tenant(tenant), query).await?;
         tx.commit().await?;
         Ok(page)
     }
@@ -632,7 +645,7 @@ impl EventLog {
     ) -> Result<EventLogPage, QueryError> {
         let actor = PlatformActor::admin(admin).ok_or(QueryError::NotAllowed)?;
         let mut tx = self.platform.begin(actor, PLATFORM_READ_PURPOSE).await?;
-        let page = page(&mut tx, SELECT_PLATFORM_EVENTS, None, query).await?;
+        let page = page(&mut tx, Log::Platform, query).await?;
         tx.commit().await?;
         Ok(page)
     }

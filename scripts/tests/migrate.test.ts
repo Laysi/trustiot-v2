@@ -76,7 +76,7 @@ describe("password bindings", () => {
     const logins = productLogins();
     const text = passwordBindings(logins);
     expect(text).toBe(
-      "identity_app=dev-identity-password,assets_app=dev-assets-password,assets_platform=dev-assets-password",
+      "identity_app=dev-identity-password,identity_platform=dev-identity-password,assets_app=dev-assets-password,assets_platform=dev-assets-password",
     );
     // The Job refuses a binding whose Secret the API does not declare, and the same Secret holds
     // a service's two passwords: declared once.

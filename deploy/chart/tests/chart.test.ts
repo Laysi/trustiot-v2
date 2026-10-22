@@ -439,8 +439,10 @@ describe("secrets reach only the services that need them", () => {
     ]);
     expect(secretRefs(manifests, "identity")).toEqual({
       SENTRY_DSN: "trustiot-sentry/dsn",
-      // Its own database password only, from its own Secret (the migration Job's tests).
+      // Its own database passwords only, from its own Secret (the migration Job's tests): the
+      // service role, and the platform role that reads the event log (Laysi/trustiot-v2#130).
       TRUSTIOT__DATABASE__PASSWORD: "trustiot-identity-password/identity_app",
+      TRUSTIOT__DATABASE__PLATFORM_PASSWORD: "trustiot-identity-password/identity_platform",
     });
     expect(secretRefs(manifests, "knowledge")).toEqual({
       SENTRY_DSN: "trustiot-sentry/dsn",
