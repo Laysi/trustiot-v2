@@ -276,10 +276,11 @@ pub struct CreateDeviceModel {
 pub struct UpdateDeviceModel {
     /// The model's name, if sent, must be its current name: names never change.
     name: Option<String>,
-    /// The revision the client last read, if sent: the update is refused with 409 when the model
-    /// changed since.
+    /// The revision the client last read (`revision` of the model it read): the update is
+    /// refused with 409 when the model changed since, so concurrent editors never overwrite each
+    /// other's points unseen. Required.
     #[schema(minimum = 1)]
-    revision: Option<u64>,
+    revision: u64,
     /// The data points, at most 1000, in order; may be empty.
     #[schema(max_items = 1000)]
     points: Vec<DeviceModelPoint>,
@@ -586,7 +587,7 @@ async fn create_from(
         (status = 403, description = "No tenant, or a role below editor (`permission_denied`).", body = ErrorBody),
         (status = 404, description = "No such model in the caller's tenant (`not_found`).", body = ErrorBody),
         (status = 409, description = "The model is no longer at the `revision` sent (`conflict`, `device_model.revision_mismatch`, `details.current`).", body = ErrorBody),
-        (status = 422, description = "A data point rule is broken, or `name` is not the model's (`device_model.name_immutable`) (`validation_failed`). Nothing was written.", body = ErrorBody),
+        (status = 422, description = "A data point rule is broken, `revision` is missing (`device_model.field_required`) or not a positive integer, or `name` is not the model's (`device_model.name_immutable`) (`validation_failed`). Nothing was written.", body = ErrorBody),
         (status = 503, description = "The database failed (`unavailable`). Nothing was written.", body = ErrorBody),
     )
 )]

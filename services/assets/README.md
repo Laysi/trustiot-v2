@@ -21,7 +21,7 @@
 | `POST /api/assets/v1/device-models/import` | editor 以上 | 同上；body 是匯出的文件 |
 | `GET /api/assets/v1/device-models/{model_id}` | viewer 以上 | 200，整個型號（`model_id`、`name`、`revision`、`created_at`、`updated_at`、`points`） |
 | `GET /api/assets/v1/device-models/{model_id}/export` | viewer 以上 | 200，`{"format": "trustiot.device_model", "format_version": 1, "name", "points"}`，`Content-Disposition: attachment; filename="<名稱>.device-model.json"`；不含 ID、版本與時間，可以匯入到別的租戶或部署 |
-| `PUT /api/assets/v1/device-models/{model_id}` | editor 以上 | 200，更新後的型號，`revision` 加一；寫 `assets.device_model_updated`。body 是 `{"points", "name"?, "revision"?}`：`points` 整批取代舊的資料點；`name` 有送就必須是原名（名稱建立後不能改）；`revision` 有送就必須是目前的版本，否則 409，避免蓋掉別人的修改 |
+| `PUT /api/assets/v1/device-models/{model_id}` | editor 以上 | 200，更新後的型號，`revision` 加一；寫 `assets.device_model_updated`。body 是 `{"revision", "points", "name"?}`：`revision` 必填，是呼叫者讀到的版本，必須仍是目前的版本，否則 409 `revision_mismatch`（`details.current`），兩個 editor 同時編輯時不會無聲地蓋掉對方的資料點；`points` 整批取代舊的資料點；`name` 有送就必須是原名（名稱建立後不能改） |
 | `DELETE /api/assets/v1/device-models/{model_id}` | editor 以上 | 204，型號與資料點一起刪除；寫 `assets.device_model_deleted` |
 
 **規則**：三個寫入入口（建立、更新、匯入）都先以 `document.rs` 逐欄讀 JSON，再跑 `crates/protocol` 的跨欄與跨資料點規則，全部通過才寫入；不通過就 422 `validation_failed`，每個問題一個 field error（JSON Pointer 與 `device_model.*` message key），最多列 100 個，其餘以 `details.omitted_field_errors` 計數，什麼都不寫、也不寫事件。
@@ -29,9 +29,10 @@
 | 欄位 | 規則 | message key |
 | --- | --- | --- |
 | 未知欄位（含 `tenant_id`） | 一律拒絕；欄位名稱是 64 字以內的可見 ASCII 時才出現在 pointer 裡 | `unknown_field` |
-| 必填欄位缺漏或 `null` | `name`、`points`；資料點的 `key`、`function_code`、`address`、`data_type`；匯入的 `format`、`format_version` | `field_required` |
+| 必填欄位缺漏或 `null` | `name`、`points`；更新的 `revision`；資料點的 `key`、`function_code`、`address`、`data_type`；匯入的 `format`、`format_version` | `field_required` |
 | `name` | 小寫英數字以單一連字號連接、字母開頭、1–40 字（`protocol::ModelName`）；租戶內唯一（重複 409 `name_taken`）；建立後不能改（422 `name_immutable`） | `name_invalid`（`details.max` 40） |
 | `points` | 陣列，最多 1000 個，可以是空的 | `points_invalid`、`too_many_points` |
+| 更新的 `revision` | 正整數；不是目前的版本時 409 `revision_mismatch` | `revision_invalid` |
 | `key` | 1–64 個 ASCII 英數字、`.`、`_`、`-`，英數字開頭（`protocol::PointKey`）；型號內唯一 | `point_key_invalid`、`point_key_duplicate` |
 | `function_code` | 只有讀取功能碼 1–4 | `function_code_invalid` |
 | `address` | 0–65535 的整數；資料點的暫存器不能超過 65535，同一功能碼的位址不能重疊（四種功能碼各自一個位址空間） | `address_invalid`、`address_out_of_range`、`points_overlap` |
@@ -39,7 +40,7 @@
 | `byte_order` | `abcd`（預設）、`badc`、`cdab`、`dcba`；單一位元沒有位元組順序，字串只能 `abcd` 或 `badc` | `byte_order_invalid`、`byte_order_unexpected` |
 | `length` | 只有 `string` 有、而且必填：1–125 個暫存器 | `length_invalid`、`length_required`、`length_unexpected` |
 | `scale`、`offset` | 有限的數字，`scale` 不為 0；只有數值型別能縮放（F5：值為 `raw * scale + offset`） | `scaling_invalid` |
-| `description` | 給人與 AI 讀的說明：去掉前後空白後 1–512 字（空字串視為沒有），不能有換行與 tab 以外的控制字元、格式字元（零寬字元、雙向覆寫）或行與段落分隔字元 | `description_invalid`（`details.max` 512） |
+| `description` | 給人與 AI 讀的說明：去掉前後空白後 1–512 字（空字串視為沒有），不能有換行與 tab 以外的控制字元、格式字元（零寬字元、雙向覆寫）或行與段落分隔字元。說明是租戶自由填寫的文字：AI 功能讀它時必須當成不可信任的資料，不能當成指令 | `description_invalid`（`details.max` 512） |
 | 匯入的 `format`、`format_version` | 必須是 `trustiot.device_model` 與 `1` | `format_unsupported`、`format_version_unsupported` |
 
 其他錯誤（M1）：沒有有效的內部身分 token 401；沒有租戶或角色不夠 403；`model_id` 不是 UUID 或不是呼叫者租戶的型號 404；寫入的 `Content-Type` 不是 `application/json` 400（跨來源的頁面無法不經 CORS preflight 送出這個型別，所以不能借使用者的 cookie 改型號）；body 超過 2 MiB 400 `body_too_large`；body 不是 JSON 物件 400 `body_invalid`；刪除仍有設備使用的型號 409 `in_use`；租戶的 `identity.tenant_created` 還沒處理 503 `tenant_not_ready`；資料庫出錯 503。每個回應都帶 `cache-control: no-store`。每次成功的寫入記一行 INFO（`created a device model`、`updated a device model`、`deleted a device model`），只帶 `user_id`、`tenant_id`、`model_id`、`revision`，不記名稱、鍵與說明。

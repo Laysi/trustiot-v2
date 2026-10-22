@@ -184,9 +184,9 @@ pub struct NewModel {
 pub struct Replacement {
     /// The name the client believes the model has, if it sent one; it must be the stored name.
     pub name: Option<String>,
-    /// The revision the client last read, if it sent one; the update is refused when the model
-    /// changed since.
-    pub revision: Option<u64>,
+    /// The revision the client last read; the update is refused when the model changed since,
+    /// so two editors cannot silently overwrite each other's points.
+    pub revision: u64,
     /// The new data points, which replace all the old ones.
     pub points: Vec<Point>,
 }
@@ -244,7 +244,7 @@ pub fn parse_import(body: &[u8]) -> Result<NewModel, ErrorBody> {
     }
 }
 
-/// `PUT /api/assets/v1/device-models/{model_id}`: `{"points", "name"?, "revision"?}`.
+/// `PUT /api/assets/v1/device-models/{model_id}`: `{"revision", "points", "name"?}`.
 ///
 /// # Errors
 ///
@@ -262,25 +262,22 @@ pub fn parse_update(body: &[u8]) -> Result<Replacement, ErrorBody> {
             None
         }
     };
-    let revision = match optional(&map, "revision") {
-        None => None,
-        Some(value) => {
-            let revision = value.as_u64().filter(|revision| *revision >= 1);
-            if revision.is_none() {
-                errors.add(FieldError::new("/revision", REVISION_INVALID));
-            }
-            revision
+    let revision = required(&map, "revision", "", &mut errors).and_then(|value| {
+        let revision = value.as_u64().filter(|revision| *revision >= 1);
+        if revision.is_none() {
+            errors.add(FieldError::new("/revision", REVISION_INVALID));
         }
-    };
+        revision
+    });
     let points = points(&map, &mut errors);
     errors.finish()?;
-    match points {
-        Some(points) => Ok(Replacement {
+    match (revision, points) {
+        (Some(revision), Some(points)) => Ok(Replacement {
             name,
             revision,
             points,
         }),
-        None => Err(Errors::default().into_body()),
+        _ => Err(Errors::default().into_body()),
     }
 }
 
@@ -680,7 +677,7 @@ mod tests {
     }
 
     fn update(points: Value) -> Value {
-        json!({"points": points})
+        json!({"revision": 1, "points": points})
     }
 
     fn bytes(value: &Value) -> Vec<u8> {
@@ -737,7 +734,7 @@ mod tests {
         .unwrap();
         assert_eq!(replacement.points, created.points);
         assert_eq!(replacement.name.as_deref(), Some("power-meter"));
-        assert_eq!(replacement.revision, Some(3));
+        assert_eq!(replacement.revision, 3);
 
         // No points is a valid model; null optional fields are absent ones.
         assert!(
@@ -822,7 +819,9 @@ mod tests {
             [("/name".to_owned(), FIELD_REQUIRED.as_str().to_owned())]
         );
         assert_eq!(
-            field_errors(parse_update(&bytes(&json!({"name": 1, "points": []})))),
+            field_errors(parse_update(&bytes(
+                &json!({"name": 1, "revision": 1, "points": []})
+            ))),
             [("/name".to_owned(), NAME_INVALID.as_str().to_owned())]
         );
     }
@@ -1210,8 +1209,13 @@ mod tests {
                 "{revision}"
             );
         }
+        // Without the revision it read, an editor could overwrite another editor's points unseen.
+        assert_eq!(
+            field_errors(parse_update(&bytes(&json!({"points": []})))),
+            [("/revision".to_owned(), FIELD_REQUIRED.as_str().to_owned())]
+        );
         // The name of an update is only compared with the stored one, so any string passes here.
-        let body = json!({"name": "Not A Valid Name", "points": []});
+        let body = json!({"name": "Not A Valid Name", "revision": 1, "points": []});
         assert_eq!(
             parse_update(&bytes(&body)).unwrap().name.as_deref(),
             Some("Not A Valid Name")

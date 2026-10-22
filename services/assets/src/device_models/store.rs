@@ -354,10 +354,7 @@ pub async fn replace(
     {
         return Err(StoreError::NameImmutable);
     }
-    if replacement
-        .revision
-        .is_some_and(|expected| expected != current)
-    {
+    if replacement.revision != current {
         return Err(StoreError::RevisionMismatch { current });
     }
     sqlx::query(DELETE_POINTS)

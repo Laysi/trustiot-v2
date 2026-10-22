@@ -121,8 +121,9 @@ async fn tenants_are_isolated() {
             "assets.device_models",
         ))
         .endpoint(
+            // Each write probe gets a seeded row of its own, still at revision 1.
             Endpoint::item(Method::PUT, MODEL, "assets.device_models")
-                .body(json!({"points": points})),
+                .body(json!({"revision": 1, "points": points})),
         )
         .endpoint(Endpoint::item(
             Method::DELETE,

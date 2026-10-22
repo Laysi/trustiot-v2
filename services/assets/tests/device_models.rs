@@ -294,7 +294,7 @@ async fn models_are_written_with_their_events_and_round_trip() {
             Method::PUT,
             &model_path,
             Some(&editor),
-            &json!({"name": "energy-meter", "points": power_meter_points()}),
+            &json!({"name": "energy-meter", "revision": 1, "points": power_meter_points()}),
         )
         .await;
     assert_eq!(
@@ -412,7 +412,7 @@ async fn models_are_written_with_their_events_and_round_trip() {
             Method::PUT,
             &copy_path,
             Some(&editor),
-            &json!({"points": []}),
+            &json!({"revision": 1, "points": []}),
         )
         .await;
     assert_refused(&gone, 404, "not_found", None);
@@ -607,7 +607,7 @@ async fn every_write_entry_refuses_every_rule_and_writes_nothing() {
                 Method::PUT,
                 &model_path,
                 Some(&editor),
-                &json!({"points": points}),
+                &json!({"revision": 1, "points": points}),
             )
             .await;
         assert_eq!(field_errors(&update), expected, "update: {points}");
@@ -863,7 +863,11 @@ async fn roles_decide_who_reads_and_who_writes() {
             json!({"name": "by-viewer", "points": []}),
         ),
         (Method::POST, IMPORT.to_owned(), document),
-        (Method::PUT, model_path.clone(), json!({"points": []})),
+        (
+            Method::PUT,
+            model_path.clone(),
+            json!({"revision": 1, "points": []}),
+        ),
     ];
     for (method, path, body) in &writes {
         for token in [&viewer, &no_tenant] {

@@ -426,16 +426,14 @@
             "type": "array"
           },
           "revision": {
-            "description": "The revision the client last read, if sent: the update is refused with 409 when the model\nchanged since.",
+            "description": "The revision the client last read (`revision` of the model it read): the update is\nrefused with 409 when the model changed since, so concurrent editors never overwrite each\nother's points unseen. Required.",
             "format": "int64",
             "minimum": 1,
-            "type": [
-              "integer",
-              "null"
-            ]
+            "type": "integer"
           }
         },
         "required": [
+          "revision",
           "points"
         ],
         "type": "object"
@@ -915,7 +913,7 @@
                 }
               }
             },
-            "description": "A data point rule is broken, or `name` is not the model's (`device_model.name_immutable`) (`validation_failed`). Nothing was written."
+            "description": "A data point rule is broken, `revision` is missing (`device_model.field_required`) or not a positive integer, or `name` is not the model's (`device_model.name_immutable`) (`validation_failed`). Nothing was written."
           },
           "503": {
             "content": {
