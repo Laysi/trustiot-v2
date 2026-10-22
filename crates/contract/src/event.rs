@@ -172,7 +172,9 @@ fn lenient_actor<'de, D: serde::Deserializer<'de>>(
 /// `Unrecognized` too ([`EventEnvelope::actor`]).
 ///
 /// ```
-/// use contract::{Actor, UserId};
+/// // `contract::Actor` is the internal token's `act` claim; this one is in `contract::event`.
+/// use contract::UserId;
+/// use contract::event::Actor;
 ///
 /// let actor: Actor = serde_json::from_value(serde_json::json!({"kind": "robot"}))?;
 /// assert_eq!(actor, Actor::Unrecognized);
