@@ -1,11 +1,14 @@
 //! The assets service (decision 4; docs/architecture/deployment.md): tenants' sites, devices and
 //! data points.
 //!
-//! MS0 skeleton (Laysi/trustiot-v2#65): its own Postgres schema under row-level security, the
-//! consumer of the identity service's `identity.tenant_created`, which gives every new tenant its
-//! row here, and one tenant-scoped example API that needs an internal identity token.
+//! The MS0 skeleton (Laysi/trustiot-v2#65) gave it its own Postgres schema under row-level
+//! security, the consumer of the identity service's `identity.tenant_created`, which gives every
+//! new tenant its row here, and one tenant-scoped example API that needs an internal identity
+//! token; Laysi/trustiot-v2#99 added the tenants' device models.
 //!
 //! - [`tenants`]: the consumer and the API.
+//! - [`device_models`]: the device models' API (Laysi/trustiot-v2#99), which writes
+//!   `assets.device_model_*` events.
 //! - [`schema`]: the migration files this release expects, which readiness checks
 //!   (Laysi/trustiot-v2#402) and the migration Job applies.
 //! - [`config`]: the settings.
@@ -13,6 +16,7 @@
 //! See `README.md` in this crate for the schema, the event, the API and the tests.
 
 pub mod config;
+pub mod device_models;
 pub mod schema;
 pub mod tenants;
 
@@ -41,7 +45,16 @@ pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 /// The client API's OpenAPI document (merged into `api/openapi.json` by `tools/openapi`).
 #[derive(OpenApi)]
 #[openapi(
-    paths(tenants::get_tenant),
+    paths(
+        tenants::get_tenant,
+        device_models::list_models,
+        device_models::create_model,
+        device_models::import_model,
+        device_models::get_model,
+        device_models::export_model,
+        device_models::update_model,
+        device_models::delete_model,
+    ),
     tags((name = "assets", description = "Sites, devices and data points (services/assets)."))
 )]
 struct ApiDoc;
@@ -108,5 +121,5 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     )
     .await;
     let verifier = IdentityVerifier::new(ServiceName::Assets, keys);
-    Ok(tenants::routes(verifier, db))
+    Ok(tenants::routes(verifier.clone(), db.clone()).merge(device_models::routes(verifier, db)))
 }
