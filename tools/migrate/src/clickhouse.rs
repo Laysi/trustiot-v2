@@ -102,15 +102,20 @@ const READER_GRANTS: &str = "SELECT
      AND column IS NULL AND grant_option = 0 AND is_partial_revoke = 0)
 FORMAT TSV";
 /// Who holds the tenant role besides those allowed to: telemetry-query's account WITH ADMIN
-/// OPTION, and accounts named trustiot_tenant_account_* without it. ClickHouse 26.8 does not
-/// limit to whom a holder of ADMIN OPTION grants a role, so telemetry-query's account could
-/// grant it to any user or role (0007_telemetry_query.sql); the run lists every other grantee.
+/// OPTION, and accounts named trustiot_tenant_account_* without it. Anyone who may grant the
+/// role could have given it to anyone (telemetry-query's account only while it has GRANTEES
+/// other than NONE, 0008_telemetry_query_grantees.sql); the run lists every other grantee.
 const READER_GRANTEES: &str = "SELECT if(user_name IS NULL, concat('role ', role_name), user_name)
 FROM system.role_grants
 WHERE granted_role_name = {role:String}
   AND NOT (user_name IS NOT NULL AND user_name = {service:String} AND with_admin_option = 1)
   AND NOT (user_name IS NOT NULL AND startsWith(user_name, {prefix:String}) AND with_admin_option = 0)
 ORDER BY 1 FORMAT TSV";
+/// Whether telemetry-query's account still has `GRANTEES NONE` (0008_telemetry_query_grantees.sql):
+/// otherwise ADMIN OPTION lets the account grant the tenant role to, or revoke it from, any
+/// existing user or role.
+const TELEMETRY_QUERY_GRANTEES_NONE: &str = "SELECT grantees_any = 0 AND empty(grantees_list)
+FROM system.users WHERE name = {user:String} FORMAT TSV";
 /// How many unexpected grantees an error names.
 const GRANTEES_SHOWN: usize = 5;
 /// telemetry-query's direct grants: `0007_telemetry_query.sql` gives it exactly CREATE USER and
@@ -633,8 +638,10 @@ impl ClickHouse {
     /// (the service is deployed) the account logs in with it from any host; when not, it cannot
     /// log in at all (`HOST NONE`), so the password a kept Secret still holds creates no tenant
     /// account. Either way the account, and the tenant role it hands to every tenant account,
-    /// must hold exactly what the DDL gave them; anything else stops the run for an
-    /// administrator, because this account creates every tenant's account.
+    /// must hold exactly what the DDL gave them; anything else revokes the account's login and
+    /// stops the run for an administrator, because this account creates and changes every
+    /// tenant's account. Once an administrator has repaired it, the next run lets it log in
+    /// again.
     async fn ensure_telemetry_query(
         &self,
         password: Option<&Password>,
@@ -655,90 +662,21 @@ impl ClickHouse {
                 ))),
             };
         }
-        let reader = self
-            .query(
-                "read the tenant role's grants",
-                READER_GRANTS,
-                &[("role", TENANT_READER_ROLE)],
-            )
-            .await?;
-        let (extras, required) = reader
-            .trim()
-            .split_once('\t')
-            .unwrap_or((reader.trim(), ""));
-        if required != "1" {
-            return Err(Error::ClickHouse(format!(
-                "the role {TENANT_READER_ROLE} lacks SELECT on trustiot.tenant_telemetry \
-                 (0005_tenant_view.sql gives it); no tenant account can read until an \
-                 administrator grants it again (docs/runbooks/migrations.md)"
-            )));
-        }
-        if extras != "0" {
-            return Err(Error::ClickHouse(format!(
-                "the role {TENANT_READER_ROLE} has grants or roles beyond SELECT on \
-                 trustiot.tenant_telemetry; every tenant account gets this role, so an \
-                 administrator must revoke them (docs/runbooks/migrations.md)"
-            )));
-        }
-        let grantees = self
-            .query(
-                "read who holds the tenant role",
-                READER_GRANTEES,
-                &[
-                    ("role", TENANT_READER_ROLE),
-                    ("service", user),
-                    ("prefix", TENANT_ACCOUNT_PREFIX),
-                ],
-            )
-            .await?;
-        let grantees: Vec<&str> = grantees.lines().filter(|line| !line.is_empty()).collect();
-        if !grantees.is_empty() {
-            let shown = grantees
-                .iter()
-                .take(GRANTEES_SHOWN)
-                .copied()
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(Error::ClickHouse(format!(
-                "the role {TENANT_READER_ROLE} is held by {} grantee(s) besides {user} (with ADMIN \
-                 OPTION) and {TENANT_ACCOUNT_PREFIX}* accounts (without it): {shown}; every \
-                 holder reads the tenant view, so an administrator must revoke it \
-                 (docs/runbooks/migrations.md)",
-                grantees.len()
-            )));
-        }
-        let roles = self
-            .query(
-                "read the telemetry-query account's roles",
-                USER_ROLES,
-                &params,
-            )
-            .await?;
-        let grants = self
-            .query(
-                "read the telemetry-query account's grants",
-                TELEMETRY_QUERY_GRANTS,
-                &params,
-            )
-            .await?;
-        let settings = self
-            .query(
-                "read the telemetry-query account's settings",
-                USER_SETTINGS,
-                &params,
-            )
-            .await?;
-        let roles: Vec<&str> = roles.lines().filter(|line| !line.is_empty()).collect();
-        let grants: Vec<&str> = grants.lines().filter(|line| !line.is_empty()).collect();
-        if roles != TELEMETRY_QUERY_EXPECTED_ROLES
-            || grants != TELEMETRY_QUERY_EXPECTED_GRANTS
-            || settings.trim() != "0"
-        {
-            return Err(Error::ClickHouse(format!(
-                "the ClickHouse account {user} has other roles, grants or settings than \
-                 0007_telemetry_query.sql gives it; an administrator must revoke them \
-                 (docs/runbooks/migrations.md)"
-            )));
+        if let Some(finding) = self.audit_telemetry_query().await? {
+            // Detection alone would leave the account able to act until an administrator reads
+            // the log, and it can create and change every tenant's account.
+            let revoked = self
+                .query(&format!("revoke the login of {user}"), LOGIN_NONE, &params)
+                .await;
+            return Err(Error::ClickHouse(match revoked {
+                Ok(_) => format!(
+                    "{finding}; the run revoked the login of {user} (HOST NONE), and the first \
+                     run after the repair lets it log in again while telemetry-query is deployed"
+                ),
+                Err(error) => {
+                    format!("{finding}; revoking the login of {user} failed as well: {error}")
+                }
+            }));
         }
         let can_log_in = self.can_log_in(user).await?;
         let Some(password) = password else {
@@ -792,6 +730,114 @@ impl ClickHouse {
                 failure.text.trim()
             ))),
         }
+    }
+
+    /// What about telemetry-query's account or the tenant role differs from what the DDL gave
+    /// them, if anything.
+    async fn audit_telemetry_query(&self) -> Result<Option<String>, Error> {
+        let user = TELEMETRY_QUERY_ACCOUNT;
+        let params = [("user", user)];
+        let grantees_none = self
+            .query(
+                "read whom the telemetry-query account may grant to",
+                TELEMETRY_QUERY_GRANTEES_NONE,
+                &params,
+            )
+            .await?;
+        if grantees_none.trim() != "1" {
+            return Ok(Some(format!(
+                "the ClickHouse account {user} may grant the role {TENANT_READER_ROLE} to other \
+                 users or roles (its GRANTEES is not NONE, which 0008_telemetry_query_grantees.sql sets); \
+                 an administrator must set GRANTEES NONE again and check who holds the role \
+                 (docs/runbooks/migrations.md)"
+            )));
+        }
+        let reader = self
+            .query(
+                "read the tenant role's grants",
+                READER_GRANTS,
+                &[("role", TENANT_READER_ROLE)],
+            )
+            .await?;
+        let (extras, required) = reader
+            .trim()
+            .split_once('\t')
+            .unwrap_or((reader.trim(), ""));
+        if required != "1" {
+            return Ok(Some(format!(
+                "the role {TENANT_READER_ROLE} lacks SELECT on trustiot.tenant_telemetry \
+                 (0005_tenant_view.sql gives it); no tenant account can read until an \
+                 administrator grants it again (docs/runbooks/migrations.md)"
+            )));
+        }
+        if extras != "0" {
+            return Ok(Some(format!(
+                "the role {TENANT_READER_ROLE} has grants or roles beyond SELECT on \
+                 trustiot.tenant_telemetry; every tenant account gets this role, so an \
+                 administrator must revoke them (docs/runbooks/migrations.md)"
+            )));
+        }
+        let grantees = self
+            .query(
+                "read who holds the tenant role",
+                READER_GRANTEES,
+                &[
+                    ("role", TENANT_READER_ROLE),
+                    ("service", user),
+                    ("prefix", TENANT_ACCOUNT_PREFIX),
+                ],
+            )
+            .await?;
+        let grantees: Vec<&str> = grantees.lines().filter(|line| !line.is_empty()).collect();
+        if !grantees.is_empty() {
+            let shown = grantees
+                .iter()
+                .take(GRANTEES_SHOWN)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Ok(Some(format!(
+                "the role {TENANT_READER_ROLE} is held by {} grantee(s) besides {user} (with ADMIN \
+                 OPTION) and {TENANT_ACCOUNT_PREFIX}* accounts (without it): {shown}; every \
+                 holder reads the tenant view, so an administrator must revoke it \
+                 (docs/runbooks/migrations.md)",
+                grantees.len()
+            )));
+        }
+        let roles = self
+            .query(
+                "read the telemetry-query account's roles",
+                USER_ROLES,
+                &params,
+            )
+            .await?;
+        let grants = self
+            .query(
+                "read the telemetry-query account's grants",
+                TELEMETRY_QUERY_GRANTS,
+                &params,
+            )
+            .await?;
+        let settings = self
+            .query(
+                "read the telemetry-query account's settings",
+                USER_SETTINGS,
+                &params,
+            )
+            .await?;
+        let roles: Vec<&str> = roles.lines().filter(|line| !line.is_empty()).collect();
+        let grants: Vec<&str> = grants.lines().filter(|line| !line.is_empty()).collect();
+        if roles != TELEMETRY_QUERY_EXPECTED_ROLES
+            || grants != TELEMETRY_QUERY_EXPECTED_GRANTS
+            || settings.trim() != "0"
+        {
+            return Ok(Some(format!(
+                "the ClickHouse account {user} has other roles, grants or settings than \
+                 0007_telemetry_query.sql gives it; an administrator must revoke them \
+                 (docs/runbooks/migrations.md)"
+            )));
+        }
+        Ok(None)
     }
 }
 

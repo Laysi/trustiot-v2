@@ -1,0 +1,23 @@
+-- The telemetry-query service's account may no longer grant or revoke any role (Laysi/trustiot-v2#119,
+-- security review of 2026-10-22). 0007_telemetry_query.sql gives the account the tenant role
+-- trustiot_tenant_reader WITH ADMIN OPTION, so that CREATE USER ... DEFAULT ROLE gives the role to
+-- each tenant account it creates. ADMIN OPTION alone also lets the account grant the role to, or
+-- revoke it from, any existing user or role: granting it to trustiot_ingest makes ingest
+-- read-only and stops every tenant's inserts, and revoking it from a tenant account stops that
+-- tenant's queries.
+--
+-- GRANTEES limits whom this user grants to, not who grants to it: "NONE - This user can grant
+-- privileges to none" (ClickHouse docs, CREATE USER, GRANTEES clause:
+-- https://github.com/ClickHouse/ClickHouse/blob/master/docs/reference/statements/create/user.mdx#grantees-clause).
+-- ClickHouse 26.8 applies it to roles held WITH ADMIN OPTION as well: it refuses every GRANT and
+-- REVOKE of the role by this account ("user ... is not allowed as grantee"), while CREATE USER ...
+-- DEFAULT ROLE trustiot_tenant_reader, which gives the role to an account the statement creates,
+-- still works, and the account cannot change its own GRANTEES (it has no ALTER USER on its own
+-- name). tools/migrate/tests/clickhouse_telemetry_query.rs runs each against 26.8.
+--
+-- The migration Job checks on every run that the account still has GRANTEES NONE, besides what
+-- 0007_telemetry_query.sql describes, and when anything differs it revokes the account's login
+-- (HOST NONE) and stops (tools/migrate/src/clickhouse.rs). The note in 0007 that the account
+-- could grant the role to any user or role holds only for the time between the two files.
+
+ALTER USER trustiot_telemetry_query GRANTEES NONE;

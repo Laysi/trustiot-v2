@@ -156,9 +156,13 @@ pub enum AccountError {
         source: QueryError,
     },
     /// The account exists but is not what the service creates (another tenant, other roles,
-    /// not read-only, or other query limits): someone changed it, and an administrator must drop it (the next
-    /// `ensure` creates it again). Never repaired here, because the service's account cannot
-    /// revoke anything.
+    /// not read-only, or other query limits): someone changed it, and an administrator must drop
+    /// it (the next `ensure` creates it again). Never repaired here: the service's account has
+    /// `GRANTEES NONE` (0008_telemetry_query_grantees.sql), so it can neither grant nor revoke any role,
+    /// the tenant role included, and a changed account needs an administrator's look anyway.
+    /// The service's account can still `ALTER USER` every account under the name prefix,
+    /// including `RENAME` and `ADD IDENTIFIED`; nothing audits that yet
+    /// (Laysi/trustiot-v2#528).
     #[error("the tenant account {user} is not as the service creates it ({what})")]
     Tampered { user: String, what: &'static str },
     /// No randomness for the salt.

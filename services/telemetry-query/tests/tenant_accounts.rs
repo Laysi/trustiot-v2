@@ -174,16 +174,6 @@ const ATTACKS: &[Attack] = &[
         "file()",
         "SELECT * FROM file('/etc/passwd', 'LineAsString')",
     ),
-    // System tables.
-    attack(
-        "system.query_log",
-        "SELECT groupArray(query) FROM system.query_log",
-    ),
-    attack(
-        "system.parts",
-        "SELECT groupArray(name) FROM system.parts WHERE database = 'trustiot'",
-    ),
-    attack("system.users", "SELECT groupArray(name) FROM system.users"),
     // Another tenant through the setting, and the limits through settings.
     attack(
         "SETTINGS clause with another tenant",
@@ -256,6 +246,19 @@ const ATTACKS: &[Attack] = &[
     ),
 ];
 
+/// System tables that would show other tenants' queries, readings or accounts: each must be
+/// refused for want of the privilege (`ACCESS_DENIED`), after `SYSTEM FLUSH LOGS` has created
+/// the log tables, so a missing table cannot pass for a refusal.
+const SYSTEM_TABLES: &[&str] = &[
+    "query_log",
+    "text_log",
+    "processes",
+    "parts",
+    "users",
+    "role_grants",
+    "settings_profile_elements",
+];
+
 /// Heavy queries the settings profile stops (0004_access.sql), with the error each must end in.
 const HEAVY: &[(&str, &str, &str)] = &[
     (
@@ -305,6 +308,24 @@ async fn run_attacks(stack: &Stack, account: &Account) {
             }
         };
         eprintln!("attack {:>40}: {shown}", attack.name);
+    }
+}
+
+#[allow(
+    clippy::print_stderr,
+    reason = "prints each system table's outcome for the test report"
+)]
+async fn run_system_tables(stack: &Stack, account: &Account) {
+    admin_query(stack, "SYSTEM FLUSH LOGS", &[]).await;
+    for table in SYSTEM_TABLES {
+        let sql = format!("SELECT count() FROM system.{table}");
+        let error = stack.clickhouse.query(account, &sql).await.expect_err(&sql);
+        assert_eq!(error.code(), "ACCESS_DENIED", "{sql}: {}", error.body);
+        eprintln!(
+            "attack {:>40}: refused: {}",
+            format!("system.{table}"),
+            error.code()
+        );
     }
 }
 
@@ -422,6 +443,7 @@ async fn each_tenant_account_sees_its_own_readings_only() {
 
     // 3. The attacks, as A's account, then the limits.
     run_attacks(&stack, &account_a).await;
+    run_system_tables(&stack, &account_a).await;
     assert_eq!(
         stack
             .reference(VICTIM_ROWS, &[("victim", VICTIM), ("b", &b_text)])

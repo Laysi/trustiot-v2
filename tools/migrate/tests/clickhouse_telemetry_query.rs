@@ -1,7 +1,8 @@
 //! The telemetry-query service's ClickHouse account (Laysi/trustiot-v2#119): the run gives it
 //! the password it generates into the service's Secret and lets it log in only while the
 //! service is deployed, the account can create and change trustiot_tenant_account_* accounts and
-//! nothing else, and a tampered account, tenant role or tenant role grantee stops the run.
+//! nothing else, and a tampered account, tenant role or tenant role grantee revokes the account's
+//! login and stops the run.
 //!
 //! Its own binary, because the tests of one binary share one Postgres, which holds one TrustIoT
 //! database. Needs podman or docker (a throwaway Postgres for the lock and a throwaway
@@ -73,7 +74,7 @@ async fn refused_to_telemetry_query(clickhouse: &ClickHouse, password: &str, sta
 /// without a password and unable to log in; the run gives it the password the Job generates
 /// into its Secret and lets it log in only while the service is deployed; it can create and
 /// change accounts named trustiot_tenant_account_* and nothing else; rotation sets the new
-/// password; a tampered account or tenant role stops the run.
+/// password; a tampered account or tenant role revokes the account's login and stops the run.
 #[tokio::test(flavor = "multi_thread")]
 async fn telemetry_query_account() {
     let Some(postgres) = tls_postgres(MIGRATOR_INIT).await else {
@@ -208,11 +209,9 @@ async fn telemetry_query_account() {
         .await
         .expect("the new password logs in");
 
-    // 5. A tampered account, a tenant role with more than SELECT on the tenant view, or a tenant
-    //    role held by anyone else than telemetry-query's account (with ADMIN OPTION) and the
-    //    tenant accounts (without it) stops the run and is left as it is; once repaired, the run
-    //    passes again. telemetry-query's account can itself grant the role to anyone once it
-    //    enables it (ClickHouse does not limit the grantee of a role with ADMIN OPTION).
+    // 5. GRANTEES NONE: with the tenant role enabled, the account still gives the role to an
+    //    account it creates (CREATE USER ... DEFAULT ROLE), but cannot grant it to, or revoke it
+    //    from, any existing user or role, and cannot change its own GRANTEES.
     for statement in [
         "CREATE USER migrate_test_grantee IDENTIFIED WITH no_password HOST NONE",
         "CREATE USER trustiot_tenant_account_migrate_grantee IDENTIFIED WITH no_password HOST NONE",
@@ -227,30 +226,67 @@ async fn telemetry_query_account() {
         .await
         .expect("a tenant account holding the tenant role is allowed");
     assert!(report.changes.is_empty(), "{:?}", report.changes);
-    let granted_by_service = clickhouse
+    clickhouse
         .query_as_with_role(
             TELEMETRY_QUERY,
             &second,
             "trustiot_tenant_reader",
-            "GRANT trustiot_tenant_reader TO migrate_test_grantee",
+            "CREATE USER trustiot_tenant_account_migrate_created IDENTIFIED WITH no_password \
+             HOST NONE DEFAULT ROLE trustiot_tenant_reader",
         )
-        .await;
-    assert!(
-        granted_by_service.is_ok(),
-        "ClickHouse lets the holder of ADMIN OPTION grant the role to any user: {granted_by_service:?}"
-    );
-    let error = migrate::run(&telemetry_config(&db, &clickhouse, true), &CLICKHOUSE_ONLY)
         .await
-        .expect_err("a grantee the service made must stop the run");
-    assert!(
-        matches!(&error, Error::ClickHouse(text) if text.contains("1 grantee(s)") && text.contains("migrate_test_grantee")),
-        "{error}"
-    );
+        .expect("the account gives the role to an account it creates");
+    for statement in [
+        "GRANT trustiot_tenant_reader TO migrate_test_grantee",
+        "GRANT trustiot_tenant_reader TO trustiot_ingest",
+        "REVOKE trustiot_tenant_reader FROM trustiot_tenant_account_migrate_grantee",
+        "REVOKE trustiot_tenant_reader FROM trustiot_tenant_account_migrate_created",
+    ] {
+        let error = clickhouse
+            .query_as_with_role(
+                TELEMETRY_QUERY,
+                &second,
+                "trustiot_tenant_reader",
+                statement,
+            )
+            .await
+            .expect_err(statement);
+        assert!(
+            error.contains("is not allowed as grantee"),
+            "{statement}: {error}"
+        );
+    }
+    refused_to_telemetry_query(
+        &clickhouse,
+        &second,
+        "ALTER USER trustiot_telemetry_query GRANTEES ANY",
+    )
+    .await;
     clickhouse
-        .query("REVOKE trustiot_tenant_reader FROM migrate_test_grantee")
+        .query("DROP USER trustiot_tenant_account_migrate_created")
         .await
-        .expect("revoke the role");
+        .expect("clean up the created account");
+
+    // 6. A tampered account, a tenant role with more than SELECT on the tenant view, or a tenant
+    //    role held by anyone else than telemetry-query's account (with ADMIN OPTION) and the
+    //    tenant accounts (without it) revokes the account's login (HOST NONE) and stops the run;
+    //    once repaired, the run lets the account log in again.
     for (break_it, repair, expected) in [
+        (
+            "ALTER USER trustiot_telemetry_query GRANTEES ANY",
+            &["ALTER USER trustiot_telemetry_query GRANTEES NONE"][..],
+            "its GRANTEES is not NONE",
+        ),
+        (
+            "ALTER USER trustiot_telemetry_query GRANTEES migrate_test_grantee",
+            &["ALTER USER trustiot_telemetry_query GRANTEES NONE"][..],
+            "its GRANTEES is not NONE",
+        ),
+        (
+            "GRANT trustiot_tenant_reader TO migrate_test_grantee",
+            &["REVOKE trustiot_tenant_reader FROM migrate_test_grantee"][..],
+            "1 grantee(s)",
+        ),
         (
             "GRANT SELECT ON trustiot.telemetry TO trustiot_telemetry_query",
             &["REVOKE SELECT ON trustiot.telemetry FROM trustiot_telemetry_query"][..],
@@ -316,9 +352,11 @@ async fn telemetry_query_account() {
             .await
             .expect_err(break_it);
         assert!(
-            matches!(&error, Error::ClickHouse(text) if text.contains(expected)),
+            matches!(&error, Error::ClickHouse(text) if text.contains(expected)
+                && text.contains("revoked the login of trustiot_telemetry_query")),
             "{break_it}: {error}"
         );
+        assert_eq!(hosts().await, "0\n", "{break_it}: the login is revoked");
         for statement in repair {
             clickhouse
                 .query(statement)
@@ -328,14 +366,17 @@ async fn telemetry_query_account() {
         let report = migrate::run(&telemetry_config(&db, &clickhouse, true), &CLICKHOUSE_ONLY)
             .await
             .unwrap_or_else(|error| panic!("the run after {repair:?}: {error}"));
-        assert!(
-            report.changes.is_empty(),
-            "{repair:?}: {:?}",
-            report.changes
+        assert_eq!(
+            report.changes,
+            [
+                format!("set the password of ClickHouse account {TELEMETRY_QUERY}"),
+                format!("let ClickHouse account {TELEMETRY_QUERY} log in"),
+            ],
+            "{repair:?}"
         );
     }
 
-    // 6. The service turned off: the account can no longer log in, and stays (HOST NONE);
+    // 7. The service turned off: the account can no longer log in, and stays (HOST NONE);
     //    turned on again, it logs in with the Secret's password.
     let report = migrate::run(&telemetry_config(&db, &clickhouse, false), &CLICKHOUSE_ONLY)
         .await

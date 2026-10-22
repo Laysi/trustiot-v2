@@ -17,14 +17,15 @@
 | 角色 `trustiot_tenant_reader` | `0004_access.sql`、`0005_tenant_view.sql` | 只能 `SELECT` `trustiot.tenant_telemetry`（DEFINER view）；row policy 以帳號的 `SQL_tenant_id` 過濾，讀不到基底表 |
 | settings profile `trustiot_tenant_reader` | `0004_access.sql` | `readonly = 1`、`max_execution_time = 30`、`max_memory_usage = 512 MiB`、`max_threads = 2`、`max_concurrent_queries_for_user = 4`、`max_rows_to_read = 1e9`、`max_result_rows = 1e6`，全部 `CONST` |
 | quota `trustiot_tenant_reader` | `0004_access.sql` | `KEYED BY user_name`：每個租戶帳號每分鐘 120 個查詢、60 個錯誤，每小時 3000 個查詢、1800 秒執行時間、200 億列 |
-| 服務帳號 `trustiot_telemetry_query` | `0007_telemetry_query.sql` | 只能 `CREATE USER`、`ALTER USER` 名稱以 `trustiot_tenant_account_` 開頭的帳號，並以 `ADMIN OPTION` 持有租戶角色（才能把它設成新帳號的 default role）；沒有其他權限、沒有 default role，讀不到任何表 |
+| 服務帳號 `trustiot_telemetry_query` | `0007_telemetry_query.sql`、`0008_telemetry_query_grantees.sql` | 只能 `CREATE USER`、`ALTER USER` 名稱以 `trustiot_tenant_account_` 開頭的帳號，並以 `ADMIN OPTION` 持有租戶角色（才能把它設成新帳號的 default role）；`GRANTEES NONE`，所以不能把租戶角色授與或收回任何既有的使用者或角色；沒有其他權限、沒有 default role，讀不到任何表 |
 
-服務帳號的密碼是內部密鑰，由 migration Job 產生在 Secret `<release>-telemetry-query-password` 的 `trustiot_telemetry_query` key 並設定（`TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY`，[tools/migrate](../../tools/migrate/README.md)）；沒有部署這個服務時，Job 讓這個帳號不能登入。Job 每次執行都檢查這個帳號只有 `0007_telemetry_query.sql` 給的權限，租戶角色只有 `SELECT trustiot.tenant_telemetry`，而且只有這個帳號（有 `ADMIN OPTION`）與租戶帳號（沒有）持有租戶角色，多出任何東西就停止。後者是因為 ClickHouse 26.8 不限制有 `ADMIN OPTION` 的帳號把角色給誰：服務帳號在啟用租戶角色的請求裡，能把它給任何使用者或角色；Job 的檢查在下一次執行時發現這種授權。
+服務帳號的密碼是內部密鑰，由 migration Job 產生在 Secret `<release>-telemetry-query-password` 的 `trustiot_telemetry_query` key 並設定（`TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY`，[tools/migrate](../../tools/migrate/README.md)）；沒有部署這個服務時，Job 讓這個帳號不能登入。Job 每次執行都檢查這個帳號只有 `0007_telemetry_query.sql` 給的權限，租戶角色只有 `SELECT trustiot.tenant_telemetry`，而且只有這個帳號（有 `ADMIN OPTION`）與租戶帳號（沒有）持有租戶角色，這個帳號的 `GRANTEES` 仍是 `NONE`，多出任何東西或 `GRANTEES` 被改就讓服務帳號不能登入（`HOST NONE`）並停止，修好之後的下一次執行再恢復登入。`GRANTEES NONE` 是因為 ClickHouse 26.8 不限制有 `ADMIN OPTION` 的帳號把角色給誰：少了它，服務帳號在啟用租戶角色的請求裡能把角色給任何使用者或角色（例如給 `trustiot_ingest` 會讓 ingest 變成唯讀、每個租戶都寫不進去），也能從租戶帳號收回；有了它，ClickHouse 拒絕這兩種語句，`CREATE USER ... DEFAULT ROLE trustiot_tenant_reader` 仍可用，服務帳號也改不了自己的 `GRANTEES`（`tools/migrate/tests/clickhouse_telemetry_query.rs`）。服務帳號仍能 `ALTER USER` 每個名稱在前綴下的帳號，包括 `RENAME` 與 `ADD IDENTIFIED`；Job 還不稽核租戶帳號本身（Laysi/trustiot-v2#528），懷疑服務帳號外洩時的處理在 [docs/runbooks/migrations.md](../../docs/runbooks/migrations.md)「懷疑時序查詢的服務帳號外洩」。
 
 每個租戶的帳號：
 
 - 名稱 `trustiot_tenant_account_` 加租戶 ID 的 32 個十六進位數字；`HOST ANY`、default role 只有 `trustiot_tenant_reader`、settings profile `trustiot_tenant_reader`、`SQL_tenant_id` 固定為該租戶（`CONST`）。
-- 密碼不儲存，而是推導：以服務帳號的密碼為 key，對租戶 ID 做 HMAC-SHA-256。ClickHouse 只收到加鹽的 SHA-256（`IDENTIFIED WITH sha256_hash ... SALT`），SQL 裡從不出現明文密碼。輪替服務帳號的密碼（`migrate.passwordGeneration`）會改變每個租戶的密碼：該租戶下一個查詢登入失敗時，服務重設它的密碼再查一次（`Accounts::ensure`）。
+- 密碼不儲存，而是推導：以服務帳號的密碼為 key，對租戶 ID 做 HMAC-SHA-256。ClickHouse 只收到加鹽的 SHA-256（`IDENTIFIED WITH sha256_hash ... SALT`），SQL 裡從不出現明文密碼。輪替服務帳號的密碼（`migrate.passwordGeneration`）會改變每個租戶的推導密碼，但 ClickHouse 裡的帳號在該租戶下一個查詢之前仍是舊密碼：那個查詢登入失敗時，服務重設它的密碼再查一次（`Accounts::ensure`）。一直沒有查詢的租戶的帳號保留舊密碼，所以懷疑服務帳號外洩時要刪掉租戶帳號（runbook 同上）。
+- ClickHouse 的 HTTP handler 在 `trace` 等級把請求的 URI 寫進伺服器日誌，建立與重設租戶帳號的請求的 URI 帶著加鹽的 SHA-256 與 salt（查詢參數 `param_hash`、`param_salt`）；`system.query_log` 會遮住它們，伺服器日誌不會。叢集內的 ClickHouse 以 `information` 等級記錄；外部 ClickHouse 不可以用 `trace` 等級。
 - 租戶 ID 是 SQL 文字裡唯一不是查詢參數的值（ClickHouse 26.8 的 `SETTINGS` 值不接受參數），只來自 `TenantId` 的 36 字元文字（十六進位數字與連字號）。
 
 消費端（`TenantCreatedHandler`）：訂閱名稱 `telemetry-query.identity-events`（`SUBSCRIPTION`，改名等於從頭重讀事件），收到 `identity.tenant_created` 時：
@@ -33,7 +34,7 @@
 2. 以租戶帳號登入，確認 `SQL_tenant_id` 是這個租戶、唯一啟用的角色是租戶角色、`readonly = 1`，而且 settings profile 的每個查詢上限都在生效（`accounts.rs` 的 `LIMITS`，單元測試確認它與 `0004_access.sql` 的 profile 相同）；密碼不對時重設密碼再確認一次。
 3. 都對了才在事件的租戶交易裡寫 `telemetry_query.tenant_accounts`（`ON CONFLICT DO NOTHING`）。API 看到這一列才查 ClickHouse，否則回 404。
 
-帳號存在但內容不同（別的租戶、別的角色、不是唯讀、查詢上限被改，例如管理者在帳號上把 `max_execution_time` 設在 profile 之後）表示有人改過它：服務帳號不能 revoke，所以不修，事件進 dead letter，日誌說明要由管理者刪掉這個帳號後重播事件。ClickHouse 連不上或出錯時重試。每處理一個事件記一行 INFO `applied identity.tenant_created`，帶 `tenant_id`、`event_id`、`recorded`、`password_set`；不記密碼與 ClickHouse 的錯誤內文（錯誤內文會引用查詢與參數）。
+帳號存在但內容不同（別的租戶、別的角色、不是唯讀、查詢上限被改，例如管理者在帳號上把 `max_execution_time` 設在 profile 之後）表示有人改過它：服務帳號（`GRANTEES NONE`）不能授與或收回角色，所以不修，事件進 dead letter，日誌說明要由管理者刪掉這個帳號後重播事件。ClickHouse 連不上或出錯時重試。每處理一個事件記一行 INFO `applied identity.tenant_created`，帶 `tenant_id`、`event_id`、`recorded`、`password_set`；不記密碼與 ClickHouse 的錯誤內文（錯誤內文會引用查詢與參數）。
 
 ## API
 
