@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use crate::config::{ClickHouseSettings, RunConfig};
 use crate::passwords::Api;
 use crate::registry::{Migration, Registry};
+use crate::retention::RawRetention;
 use crate::secret::Password;
 use crate::{Error, Report, clickhouse_admin, http, sha256_hex};
 
@@ -85,6 +86,66 @@ ORDER BY user_name FORMAT TSV";
 /// How many host rules let the account log in; `HOST NONE` leaves none.
 const USER_HOSTS: &str = "SELECT length(host_ip) + length(host_names) + length(host_names_regexp)
   + length(host_names_like) FROM system.users WHERE name = {user:String} FORMAT TSV";
+/// A table whose TTL is the raw data retention (Laysi/trustiot-v2#92): the server-time column it
+/// counts from and the statement that sets it.
+struct RetentionTable {
+    table: &'static str,
+    column: &'static str,
+    modify: &'static str,
+}
+
+/// Raw telemetry expires by the server's receive time, never the gateway's timestamp
+/// (Laysi/trustiot#180).
+const TELEMETRY_RETENTION: RetentionTable = RetentionTable {
+    table: "telemetry",
+    column: "received_at",
+    modify: "ALTER TABLE trustiot.telemetry
+MODIFY TTL toDateTime(received_at) + toIntervalDay({days:UInt32})",
+};
+
+/// The completion records (the high-water marks) get the same number of days: `committed_at` is
+/// never earlier than the `received_at` of the batch's rows, so a record outlives its rows.
+const COMMITS_RETENTION: RetentionTable = RetentionTable {
+    table: "batch_commits",
+    column: "committed_at",
+    modify: "ALTER TABLE trustiot.batch_commits
+MODIFY TTL toDateTime(committed_at) + toIntervalDay({days:UInt32})",
+};
+
+const TABLE_ENGINE: &str = "SELECT engine_full FROM system.tables
+WHERE database = 'trustiot' AND name = {table:String} FORMAT JSONEachRow";
+
+/// The days of a TTL the run manages, read from a table's `engine_full`: exactly
+/// `TTL toDateTime(<column>) + toIntervalDay(<days>)`, as the migration files create it, or with
+/// `_CAST(<days>, 'UInt32')` as the days, which is how ClickHouse 26.8 stores the query parameter
+/// of the run's own `MODIFY TTL`.
+///
+/// # Errors
+///
+/// When the table has no TTL or another one (an administrator changed it, for example to move
+/// old parts to another volume): the run does not overwrite what it does not recognise.
+pub fn managed_ttl_days(engine_full: &str, column: &str) -> Result<u32, String> {
+    let (_, after) = engine_full
+        .split_once(" TTL ")
+        .ok_or_else(|| "it has no TTL".to_owned())?;
+    let ttl = after.split_once(" SETTINGS ").map_or(after, |(ttl, _)| ttl);
+    let unrecognised = || format!("its TTL `{ttl}` is not one the migration Job manages");
+    let days = ttl
+        .strip_prefix("toDateTime(")
+        .and_then(|rest| rest.strip_prefix(column))
+        .and_then(|rest| rest.strip_prefix(") + toIntervalDay("))
+        .and_then(|rest| rest.strip_suffix(')'))
+        .ok_or_else(unrecognised)?;
+    let days = days
+        .strip_prefix("_CAST(")
+        .and_then(|rest| rest.strip_suffix(", 'UInt32')"))
+        .unwrap_or(days);
+    if days.is_empty() || !days.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(unrecognised());
+    }
+    days.parse().map_err(|_| unrecognised())
+}
+
 /// Revokes an account's login without dropping it: reversible with `HOST ANY`, which is what
 /// `CREATE USER` gives it.
 const LOGIN_NONE: &str = "ALTER USER {user:Identifier} HOST NONE";
@@ -377,14 +438,17 @@ impl ClickHouse {
         }
     }
 
-    /// The DDL files, then the collector's account.
+    /// The DDL files, the raw data retention (when the registry has ClickHouse files, which
+    /// create the tables it applies to), then the collector's account.
     ///
     /// # Errors
     ///
-    /// The first statement that fails, or a file that changed after it was applied.
+    /// The first statement that fails, a file that changed after it was applied, or a TTL the
+    /// run does not recognise.
     pub async fn migrate(
         &self,
         registry: &Registry,
+        retention: RawRetention,
         collector: Option<&(String, Password)>,
         report: &mut Report,
     ) -> Result<(), Error> {
@@ -398,6 +462,9 @@ impl ClickHouse {
         }
         for migration in registry.clickhouse {
             self.apply(migration, report).await?;
+        }
+        if !registry.clickhouse.is_empty() {
+            self.apply_retention(retention, report).await?;
         }
         if let Some((user, password)) = collector {
             self.ensure_collector(user, password, report).await?;
@@ -484,6 +551,81 @@ impl ClickHouse {
         )
         .await?;
         report.change(format!("applied {label}"));
+        Ok(())
+    }
+
+    /// Sets the TTL of the telemetry and completion tables to `retention`, when it differs.
+    ///
+    /// The completion records must never expire before the rows they describe, also while the
+    /// run changes the two tables one after the other: a longer completion TTL goes first, a
+    /// shorter one last. ClickHouse applies a new TTL to the existing parts with a `MATERIALIZE
+    /// TTL` mutation that runs in the background (`materialize_ttl_after_modify`, on by default):
+    /// without it, parts written under the old TTL would still expire by the old one.
+    async fn apply_retention(
+        &self,
+        retention: RawRetention,
+        report: &mut Report,
+    ) -> Result<(), Error> {
+        let target = retention.days();
+        let commits = self.ttl_days(&COMMITS_RETENTION).await?;
+        let telemetry = self.ttl_days(&TELEMETRY_RETENTION).await?;
+        if commits < target {
+            self.set_ttl(&COMMITS_RETENTION, commits, target, report)
+                .await?;
+        }
+        if telemetry != target {
+            self.set_ttl(&TELEMETRY_RETENTION, telemetry, target, report)
+                .await?;
+        }
+        if commits > target {
+            self.set_ttl(&COMMITS_RETENTION, commits, target, report)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// The retention in days that `table` has now.
+    async fn ttl_days(&self, table: &RetentionTable) -> Result<u32, Error> {
+        let what = format!("read the TTL of trustiot.{}", table.table);
+        let row = self
+            .query(&what, TABLE_ENGINE, &[("table", table.table)])
+            .await?;
+        let engine_full = serde_json::from_str::<serde_json::Value>(row.trim())
+            .ok()
+            .and_then(|row| row["engine_full"].as_str().map(str::to_owned))
+            .ok_or_else(|| {
+                Error::ClickHouse(format!(
+                    "{what}: the table is missing (answer: {})",
+                    cut(&row)
+                ))
+            })?;
+        managed_ttl_days(&engine_full, table.column).map_err(|problem| {
+            Error::ClickHouse(format!(
+                "trustiot.{}: {problem}; an administrator must set it back to \
+                 `TTL toDateTime({}) + toIntervalDay(<days>)` (docs/runbooks/migrations.md)",
+                table.table, table.column
+            ))
+        })
+    }
+
+    async fn set_ttl(
+        &self,
+        table: &RetentionTable,
+        from: u32,
+        to: u32,
+        report: &mut Report,
+    ) -> Result<(), Error> {
+        let days = to.to_string();
+        self.query(
+            &format!("set the TTL of trustiot.{} to {to} days", table.table),
+            table.modify,
+            &[("days", &days)],
+        )
+        .await?;
+        report.change(format!(
+            "set the retention of ClickHouse table trustiot.{} to {to} days (was {from})",
+            table.table
+        ));
         Ok(())
     }
 
@@ -599,6 +741,45 @@ mod tests {
         assert!(split_statements("SELECT 1; SELECT 2;").is_err());
         assert!(split_statements("SELECT 1").is_err());
         assert!(split_statements(";\n").is_err());
+    }
+
+    #[test]
+    fn reads_only_the_ttl_it_manages() {
+        let files = "MergeTree PARTITION BY toYYYYMM(received_at) ORDER BY (tenant_id, device_id, \
+                     point, ts) TTL toDateTime(received_at) + toIntervalDay(400) SETTINGS \
+                     fsync_after_insert = 1, index_granularity = 8192";
+        assert_eq!(managed_ttl_days(files, "received_at"), Ok(400));
+        // As ClickHouse 26.8 stores the run's query parameter.
+        let run = "ReplacingMergeTree PARTITION BY toYYYYMM(committed_at) ORDER BY (stream_id, \
+                   seq) TTL toDateTime(committed_at) + toIntervalDay(_CAST(180, 'UInt32')) \
+                   SETTINGS fsync_after_insert = 1";
+        assert_eq!(managed_ttl_days(run, "committed_at"), Ok(180));
+        assert_eq!(
+            managed_ttl_days(
+                "MergeTree ORDER BY a TTL toDateTime(r) + toIntervalDay(31)",
+                "r"
+            ),
+            Ok(31)
+        );
+        for other in [
+            "MergeTree ORDER BY a SETTINGS index_granularity = 8192",
+            // Another column: the gateway's timestamp must never drive retention.
+            "MergeTree ORDER BY a TTL toDateTime(ts) + toIntervalDay(180) SETTINGS x = 1",
+            "MergeTree ORDER BY a TTL toDateTime(received_at) + toIntervalMonth(6) SETTINGS x = 1",
+            "MergeTree ORDER BY a TTL toDateTime(received_at) + toIntervalDay(180), \
+             toDateTime(received_at) + toIntervalDay(30) TO VOLUME 'cold' SETTINGS x = 1",
+            "MergeTree ORDER BY a TTL toDateTime(received_at) + toIntervalDay(-1) SETTINGS x = 1",
+            "MergeTree ORDER BY a TTL toDateTime(received_at) + toIntervalDay() SETTINGS x = 1",
+            "MergeTree ORDER BY a TTL toDateTime(received_at) + toIntervalDay(_CAST(180, \
+             'UInt64')) SETTINGS x = 1",
+            "MergeTree ORDER BY a TTL toDateTime(received_at) + toIntervalDay(99999999999) \
+             SETTINGS x = 1",
+        ] {
+            assert!(
+                managed_ttl_days(other, "received_at").is_err(),
+                "accepted: {other}"
+            );
+        }
     }
 
     #[test]

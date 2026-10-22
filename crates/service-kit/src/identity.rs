@@ -15,6 +15,10 @@
 //!   produces one, so work that does not run inside a request cannot act as a user.
 //! - [`ServiceIdentity`]: the service acting on its own behalf, for background work and event
 //!   consumers.
+//! - [`OnBehalf`]: calls another service's internal API on behalf of the request's user, with a
+//!   token the identity service exchanges for one addressed to that service
+//!   (Laysi/trustiot-v2#106).
+//! - [`ExchangeVerifier`]: the identity service's check of the token a caller exchanges.
 //! - [`IdentityError`]: why a token was rejected; as a response, 401 with the M1 body
 //!   `unauthenticated` (503 `unavailable` while the service has no keys yet).
 //!
@@ -56,6 +60,7 @@
 //! ```
 
 mod keys;
+mod on_behalf;
 mod published;
 #[cfg(test)]
 mod test_keys;
@@ -73,6 +78,7 @@ use contract::{
 };
 
 pub use self::keys::{IdentityKeys, InvalidKeys, KeyProblem, MAX_KEY_ID_LEN, MAX_KEYS};
+pub use self::on_behalf::{OnBehalf, OnBehalfError};
 pub use self::published::{PublishedKeys, READINESS_CHECK, RELOAD_INTERVAL};
 
 /// The only JWS `alg` accepted: EdDSA (RFC 8037), with Ed25519 keys only.
@@ -138,23 +144,7 @@ impl IdentityVerifier {
     ///
     /// When the header is missing, repeated, or not a valid token for this service now.
     pub fn verify_headers(&self, headers: &HeaderMap) -> Result<UserIdentity, IdentityError> {
-        let mut values = headers.get_all(INTERNAL_IDENTITY_HEADER).into_iter();
-        let value = values.next().ok_or(IdentityError::Missing)?;
-        if values.next().is_some() {
-            return Err(IdentityError::Repeated);
-        }
-        if value.is_empty() {
-            return Err(IdentityError::Missing);
-        }
-        if value.len() > InternalToken::MAX_LEN {
-            return Err(IdentityError::Oversized);
-        }
-        let token = value
-            .to_str()
-            .ok()
-            .and_then(|text| InternalToken::new(text).ok())
-            .ok_or(IdentityError::Malformed)?;
-        self.verify(token.expose())
+        self.verify(header_token(headers)?.expose())
     }
 
     /// Verifies one token against the current time.
@@ -168,7 +158,68 @@ impl IdentityVerifier {
 
     fn verify_at(&self, token: &str, now: i64) -> Result<UserIdentity, IdentityError> {
         let keys = self.keys.current().ok_or(IdentityError::NoKeys)?;
-        token::verify(token, &keys, self.audience, now).map(|claims| UserIdentity { claims })
+        let claims = token::verify(token, &keys, token::Audience::Only(self.audience), now)?;
+        // A token that verified is three base64url segments, so this cannot fail.
+        let token = InternalToken::new(token).map_err(|_| IdentityError::Malformed)?;
+        Ok(UserIdentity { claims, token })
+    }
+}
+
+/// The token in a request's [`INTERNAL_IDENTITY_HEADER`], which must appear exactly once.
+fn header_token(headers: &HeaderMap) -> Result<InternalToken, IdentityError> {
+    let mut values = headers.get_all(INTERNAL_IDENTITY_HEADER).into_iter();
+    let value = values.next().ok_or(IdentityError::Missing)?;
+    if values.next().is_some() {
+        return Err(IdentityError::Repeated);
+    }
+    if value.is_empty() {
+        return Err(IdentityError::Missing);
+    }
+    if value.len() > InternalToken::MAX_LEN {
+        return Err(IdentityError::Oversized);
+    }
+    value
+        .to_str()
+        .ok()
+        .and_then(|text| InternalToken::new(text).ok())
+        .ok_or(IdentityError::Malformed)
+}
+
+/// Verifies the token a service presents to the identity service's token exchange
+/// ([`contract::api::identity::ExchangeToken`]): every check of [`IdentityVerifier`] except the
+/// audience, which may be any service, because the token is the caller's own, addressed to the
+/// caller. Only the identity service uses it, and only to issue a token for another audience from
+/// the claims, along the deployment's call list (Laysi/trustiot-v2#106). A service verifies the
+/// requests it serves with [`IdentityVerifier`], which accepts its own audience only, so a token
+/// addressed to another service can never act there.
+#[derive(Clone, Debug)]
+pub struct ExchangeVerifier {
+    keys: PublishedKeys,
+}
+
+impl ExchangeVerifier {
+    /// A verifier for tokens signed with one of `keys`, addressed to any service.
+    #[must_use]
+    pub fn new(keys: impl Into<PublishedKeys>) -> Self {
+        Self { keys: keys.into() }
+    }
+
+    /// Verifies the token in a request's [`INTERNAL_IDENTITY_HEADER`] at `now` (seconds since the
+    /// Unix epoch; the exchange issues the new token at the same instant) and returns its claims.
+    /// The header must appear exactly once.
+    ///
+    /// # Errors
+    ///
+    /// When the header is missing or repeated, or the token is not valid now for any service; see
+    /// the module documentation.
+    pub fn verify_headers(
+        &self,
+        headers: &HeaderMap,
+        now: i64,
+    ) -> Result<InternalClaims, IdentityError> {
+        let token = header_token(headers)?;
+        let keys = self.keys.current().ok_or(IdentityError::NoKeys)?;
+        token::verify(token.expose(), &keys, token::Audience::Any, now)
     }
 }
 
@@ -244,6 +295,10 @@ fn unix_now() -> i64 {
 #[derive(Debug)]
 pub struct UserIdentity {
     claims: InternalClaims,
+    /// The verified token itself, which only [`OnBehalf`] uses: it exchanges it at the identity
+    /// service for a token addressed to the service it calls. Never passed on as it is: no other
+    /// service accepts it.
+    token: InternalToken,
 }
 
 impl UserIdentity {
@@ -277,6 +332,11 @@ impl UserIdentity {
     pub fn claims(&self) -> &InternalClaims {
         &self.claims
     }
+
+    /// The verified token, for [`OnBehalf`] to exchange.
+    pub(crate) fn token(&self) -> &InternalToken {
+        &self.token
+    }
 }
 
 impl<S> FromRequestParts<S> for UserIdentity
@@ -308,8 +368,12 @@ where
 }
 
 /// A service acting on its own behalf, not for any user: background work, scheduled jobs, and
-/// event consumers. It grants no user's permissions and cannot become a [`UserIdentity`].
-/// How it authorizes calls to other services is Laysi/trustiot-v2#106.
+/// event consumers. It grants no user's permissions and cannot become a [`UserIdentity`], so it
+/// cannot call another service on behalf of a user either ([`OnBehalf`] takes a
+/// [`UserIdentity`]). Such work uses the service's own database roles and events (decisions 4 and
+/// 29): it learns of other services' changes from their events, never by calling their internal
+/// APIs, which serve reads on behalf of users. A call to `ai-gateway`, which verifies no internal
+/// identity (decision 28), is authorized by the mesh alone (Laysi/trustiot-v2#106).
 ///
 /// ```
 /// use contract::ServiceName;
@@ -602,6 +666,65 @@ mod tests {
         assert_eq!(
             verifier.verify_headers(&elsewhere).err(),
             Some(IdentityError::Missing)
+        );
+    }
+
+    /// The verified identity keeps the very token it came from, for the token exchange.
+    #[test]
+    fn a_verified_identity_keeps_its_token() {
+        let signer = TestKey::new(1);
+        let token = signer.sign("k1", &claims_at(NOW));
+        let user = verifier(&[(&signer, "k1")])
+            .verify_at(&token, NOW)
+            .expect("valid token");
+        assert_eq!(user.token().expose(), token);
+        assert!(!format!("{user:?}").contains(&token), "{user:?}");
+    }
+
+    /// The exchange's verifier takes the token from the same single header, accepts it for any
+    /// audience, and otherwise refuses what every service refuses.
+    #[test]
+    fn the_exchange_verifier_accepts_any_audience_and_nothing_else() {
+        let signer = TestKey::new(1);
+        let exchange = ExchangeVerifier::new(keys(&[(&signer, "k1")]));
+        for audience in [
+            ServiceName::Assets,
+            ServiceName::Certs,
+            ServiceName::Identity,
+        ] {
+            let mut claims = claims_at(NOW);
+            claims["aud"] = json!(audience.as_str());
+            let token = signer.sign("k1", &claims);
+            let verified = exchange
+                .verify_headers(&headers(&[&token]), NOW)
+                .expect("any audience");
+            assert_eq!(verified.aud, audience);
+            assert_eq!(verified.sub.to_string(), USER);
+        }
+        let token = signer.sign("k1", &claims_at(NOW));
+        assert_eq!(
+            exchange.verify_headers(&headers(&[&token]), NOW + 3600),
+            Err(IdentityError::Expired)
+        );
+        assert_eq!(
+            exchange.verify_headers(&headers(&[&token, &token]), NOW),
+            Err(IdentityError::Repeated)
+        );
+        assert_eq!(
+            exchange.verify_headers(&HeaderMap::new(), NOW),
+            Err(IdentityError::Missing)
+        );
+        assert_eq!(
+            exchange.verify_headers(
+                &headers(&[&TestKey::new(2).sign("k1", &claims_at(NOW))]),
+                NOW
+            ),
+            Err(IdentityError::BadSignature)
+        );
+        let without_keys = ExchangeVerifier::new(PublishedKeys::empty());
+        assert_eq!(
+            without_keys.verify_headers(&headers(&[&token]), NOW),
+            Err(IdentityError::NoKeys)
         );
     }
 

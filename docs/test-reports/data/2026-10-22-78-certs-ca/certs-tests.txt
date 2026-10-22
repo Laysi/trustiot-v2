@@ -1,0 +1,117 @@
+=== BEGIN cargo test --locked -p certs -- --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (<host copy>/target/debug/deps/certs-dd3cc218308f6567)
+
+running 6 tests
+test config::tests::debug_hides_the_password ... ok
+test config::tests::defaults_are_valid_and_every_bound_is_checked ... ok
+test issue::tests::garbage_is_not_a_request ... ok
+test monitor::tests::the_alert_holds_without_a_crl_and_below_the_threshold ... ok
+test issue::tests::serials_are_positive_sixteen_octets_and_never_repeat ... ok
+test pem::tests::encodes_in_64_character_lines_and_decodes_back ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/ceremony.rs (<host copy>/target/debug/deps/ceremony-e51ae7c4e4bdc42a)
+
+running 3 tests
+outlives the root: issuing CA certificate 1: it is valid after the root expires; sign it again with `certs-ca root sign`, which ends it at the root's notAfter
+test an_issuing_ca_that_outlives_the_root_is_refused ... ok
+root create: certs-ca: wrote the root certificate to <host copy>/target/tmp/ceremony-435409-0/root.pem; the root private key went to stdout
+root sign: certs-ca: wrote the issuing CA certificate to <host copy>/target/tmp/ceremony-435409-0/issuing-ca-generation-1.pem for key 3927f44d13b9bccaffca786b06356afcf127ef8bf34459d7954b30119fe76954; set it only if the certs service reports this key as waiting (services/certs/README.md)
+root check: certs-ca: the root private key belongs to the root certificate in <host copy>/target/tmp/ceremony-435409-0/root.pem (key 48ac3b7467c47856d328f17f92ce9e077e46873e54b340a4af8105e8ffec3bb3)
+root check, another key: certs-ca: the root key does not belong to the root certificate
+root check, a P-256 key: certs-ca: the root key is not an ECDSA P-384 key
+root check, not a key: certs-ca: stdin is not a PKCS#8 PEM private key
+a key that is not the root's: certs-ca: the root key does not belong to the root certificate
+a P-256 key: certs-ca: the root key is not an ECDSA P-384 key
+not a key: certs-ca: stdin is not a PKCS#8 PEM private key
+the root's name: certs-ca: the issuing CA's common name must differ from the root's
+zero days: certs-ca: the validity must be 1 to 10958 days
+an existing output file: certs-ca: cannot create <host copy>/target/tmp/ceremony-435409-0/issuing-ca-generation-1.pem: File exists (os error 17)
+test the_offline_ceremony_makes_a_root_and_signs_an_issuing_ca ... ok
+ready before the ceremony
+waiting key, 2 lines: {"fields":{"waiting":"c9c2f7c1fde936adb075ef11bb4c4103cfdcbce3b341bbd9d99c3af85bd41597 (generation 1, request issuing-ca-generation-1.csr.pem)"},"level":"WARN","message":"no issuing CA certificate is valid now, so the service cannot sign gateway certificates; issuing CA keys wait for a certificate from the offline root (services/certs/README.md, 「發簽發 CA 憑證」)","service":"certs","target":"certs::authority","timestamp":"2026-10-22T04:40:58.875902Z"}
+after the ceremony: {"fields":{"current":"c9c2f7c1fde936adb075ef11bb4c4103cfdcbce3b341bbd9d99c3af85bd41597","ignored":"[]","issuing":"[\"CN=TrustIoT test issuing CA 1 435409 (generation 1, key c9c2f7c1fde936adb075ef11bb4c4103cfdcbce3b341bbd9d99c3af85bd41597, valid until 2027-10-22T04:40:58Z)\"]","root":"CN=TrustIoT test root","waiting":"none"},"level":"INFO","message":"loaded the issuing CA","service":"certs","target":"certs::authority","timestamp":"2026-10-22T04:41:00.889159Z"}
+test a_fresh_install_is_ready_and_waits_for_the_ceremony ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.40s
+
+     Running tests/crl.rs (<host copy>/target/debug/deps/crl-755da1607885bb6a)
+
+running 2 tests
+the revoked certificate: invalid peer certificate: Revoked
+after the CRL's nextUpdate: invalid peer certificate: certificate revocation list expired: verification time 1792644653 (UNIX), but CRL is not valid after 1792644652 (1 seconds ago)
+test a_crl_revokes_what_it_lists_and_lapses_at_next_update ... ok
+first CRL of CA generation 1: number 1
+first CRL of CA generation 2: number 1
+CA generation 1: CRL 1 (thisUpdate 1792643764) replaced by 2 (thisUpdate 1792643772) with 12 s left
+CA generation 2: CRL 1 (thisUpdate 1792643764) replaced by 2 (thisUpdate 1792643772) with 12 s left
+published CRL of CA generation 1: ok
+published CRL of CA generation 2: ok
+the revoked gateway certificate with the published CRLs: invalid peer certificate: Revoked
+alert line: {"fields":{"alert_before_seconds":4,"ca_key_id":"b842cbba20923050dc36169a961a59cf0908e8482ec7691648f5c2f6438a3d3e","crl_remaining_seconds":1,"generation":1},"level":"ERROR","message":"the CRL of an issuing CA expires soon, has expired or is missing; the MQTT broker rejects every gateway of this CA once it lapses (services/certs/README.md, 「CRL 到期告警」)","service":"certs","target":"certs::monitor","timestamp":"2026-10-22T04:41:21.315939Z"}
+alert raised at export point 376, cleared after renewal to CRL number 4
+test crls_are_renewed_on_schedule_and_alert_before_they_lapse ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.63s
+
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-db9b9cbed397f7c5)
+
+running 1 test
+result | subject | probe | outcome
+pass | certs.crls | coverage | exempt table: each issuing CA's current CRL, public data of the PKI; no tenant data
+pass | certs.issued_certificates | coverage | exempt table: the ledger of signed gateway certificates: serial numbers, the issuing CA's key id, the gateway id, validity and the certificate, which are public data of the PKI; no tenant id (a gateway's tenant is the assets service's assignment)
+pass | certs.trustiot_migrate_applied | coverage | exempt table: the migration Job's record of the files applied in this schema (crates/service-kit/sql/migration-records.sql): file names and SHA-256 hashes, no tenant data; the service role only reads it, for its readiness check
+3 probes, 0 failed
+result | subject | probe | outcome
+pass | certs.crls | coverage | exempt table: each issuing CA's current CRL, public data of the PKI; no tenant data
+pass | certs.issued_certificates | coverage | exempt table: the ledger of signed gateway certificates: serial numbers, the issuing CA's key id, the gateway id, validity and the certificate, which are public data of the PKI; no tenant id (a gateway's tenant is the assets service's assignment)
+pass | certs.trustiot_migrate_applied | coverage | exempt table: the migration Job's record of the files applied in this schema (crates/service-kit/sql/migration-records.sql): file names and SHA-256 hashes, no tenant data; the service role only reads it, for its readiness check
+3 probes, 0 failed
+test every_relation_the_service_reaches_is_declared ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.41s
+
+     Running tests/issuance.rs (<host copy>/target/debug/deps/issuance-8da5e5b679eeac66)
+
+running 5 tests
+a leaf under the gateway certificate: invalid peer certificate: Other(OtherError(EndEntityUsedAsCa))
+test a_gateway_certificate_cannot_sign_or_serve ... ok
+test the_ca_decides_everything_but_the_public_key ... ok
+test unusable_requests_are_refused ... ok
+test the_newest_valid_generation_signs ... ok
+recording a serial number twice: error returned from database: duplicate key value violates unique constraint "issued_certificates_pkey" at line 666
+test the_ledger_records_what_was_signed_and_the_service_cannot_change_it ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.46s
+
+     Running tests/key_custody.rs (<host copy>/target/debug/deps/key_custody-fbb9469c8f66bdbb)
+
+running 3 tests
+test the_scan_leaves_out_test_modules_only ... ok
+allowed: crates/ca-keys/src/lib.rs: serialized_der x1: to_json writes the key set for the Secret (tools/migrate)
+allowed: crates/ca-keys/src/lib.rs: to_json x1: the key set's document for the Secret
+allowed: crates/ca-keys/src/lib.rs: StoredPrivateKey x4: the document's private key field, wiped on drop, without Debug
+allowed: crates/ca-keys/src/lib.rs: into_signing_key x1: hands the key to the issuing CA, which only signs with it
+allowed: services/certs/src/authority.rs: into_signing_key x1: the issuing CA takes its key into rcgen's issuer, which only signs with it
+allowed: services/certs/src/bin/certs-ca.rs: serialize_pem x1: the offline ceremony writes the new root key to stdout, into age
+allowed: services/certs/src/bin/certs-ca.rs: from_pem x1: the offline ceremony reads the root key from stdin, from age (root sign, root check)
+allowed: tools/migrate/src/ca_keys.rs: to_json x2: the init container writes the key set into the Secret (and compares it with what it read)
+allowed: tools/migrate/src/signing_keys.rs: to_json x2: the identity service's signing keys (crates/identity-keys) into their own Secret; no CA key
+scanned 28 files, 9239 lines of non-test code
+test only_reviewed_code_turns_a_private_key_into_bytes ... ok
+broken keys file 1: {"fields":{"kept_previous":true,"problem":"the CA files are not usable: the issuing CA keys: key 0: the request is not signed by this key or names another public key"},"level":"ERROR","message":"cannot load the issuing CA","service":"certs","target":"certs::authority","timestamp":"2026-10-22T04:41:32.836219Z"}
+broken keys file 2: {"fields":{"kept_previous":true,"problem":"the CA files are not usable: the issuing CA keys: key 0: the private key is not an ECDSA P-256 PKCS#8 key"},"level":"ERROR","message":"cannot load the issuing CA","service":"certs","target":"certs::authority","timestamp":"2026-10-22T04:41:33.833808Z"}
+searched 69 needles in 265 log lines, 10 responses and 13 OTLP exports: none found
+test no_private_key_leaves_through_logs_endpoints_or_telemetry ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.43s
+
+   Doc-tests certs
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+=== END exit=0 :: cargo test --locked -p certs -- --nocapture

@@ -14,6 +14,16 @@ global:
   imagePullSecrets:
     - ghcr-pull
 
+ingress:
+  tunnel:
+    # The ingress Service's fixed ClusterIP, where the tunnel's stage-2 routes point
+    # (Laysi/trustiot-v2#478, Laysi/trustiot-v2#469): an address in the static band of the demo
+    # machine's Service range, clear of kubernetes and kube-dns, that no Service or IPAddress held
+    # when it was set (Laysi/trustiot-v2#480). ClusterIP is immutable once the Service exists:
+    # change it only as deploy/chart/README.md, 「固定的入口 ClusterIP」, says. It is the only IP
+    # address this file may name (`bun test deploy/flux`).
+    clusterIP: 10.43.0.80
+
 # The slice's services are switched on here, one by one, as their issues land in a release
 # (deploy/flux/README.md, 「展示叢集」). A service is on only while the deployed chart
 # has its image.

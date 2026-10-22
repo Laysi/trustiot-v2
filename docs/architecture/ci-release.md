@@ -47,7 +47,7 @@ SaaS 以 GitOps 部署：叢集內的 Flux 從 GHCR 拉映像與 chart，設定�
 
 1. 決定哪幾位維運人員是收件者，建議至少兩位，避免只有一個人解得開。每位以 `age-keygen` 在自己的裝置產生金鑰對，只交出公鑰。
 2. 建立 SaaS 叢集時，由維運人員產生叢集的 age 金鑰對、直接建立 `sops-age` Secret（不經版控），並把私鑰的離線備份交給兩位保管人。
-3. GHCR 拉取 token 用的專用機器帳號（GHCR 只接受 classic personal access token，見密鑰清冊）。
+3. GHCR 拉取 token 用的帳號（GHCR 只接受 classic personal access token，見密鑰清冊）。2026-10-21 決定不另建機器帳號：展示叢集用一位組織成員的 token，SaaS 叢集改用有唯讀機器帳號的 registry（Laysi/trustiot-v2#502），見下方「GHCR 套件的可見性」。
 
 Laysi/trustiot-v2#70 建立了 `.sops.yaml`（規則：`deploy/flux/clusters/saas/` 下的 `*.sops.yaml`，只加密 `data` 與 `stringData`），收件者還是空的：上列第 1、2 項的公鑰由人提供後填入，在那之前 sops 拒絕加密，不會產生沒有人解得開的檔案。sops 鎖在 `.prototools`（schema 外掛驗 release 的 checksum）。age 的 release 只附 Sigsum 證明、沒有 checksum 檔，proto 的 schema 外掛驗證不了下載，所以改由 `.prototools` 釘選的 Go 從原始碼建置：`bun scripts/flux/age.ts age-keygen ...` 以 `go install filippo.io/age/cmd/...@<版本>` 取得 module，由 Go checksum database 驗證（版本在 `scripts/flux/age.ts` 的 `AGE_VERSION`）。地端不裝 Flux，Secret 由客戶以自己的方式建立，chart 只認 Secret 名稱與 key。
 
@@ -401,6 +401,12 @@ repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（
 
 2026-10-13 更新：`v0.0.0-rc.4` 的 verify 發現 repo 公開後才第一次建立的套件 `identity` 與 `postgres` 可以匿名拉取（Laysi/trustiot-v2#57）；使用者決定 repo 公開期間不處理，轉回私有後再檢查（Laysi/trustiot-v2#1 第 10 項）。為了讓這段期間的發佈仍然做完其他檢查，私有檢查改在 verify 的最後執行（見上方「簽章與驗證」）：套件公開時，候選版的 verify 會先做完每一項其他檢查（簽章、SBOM、chart 與它固定的映像 digest），把結果寫進報告，最後才以私有檢查失敗。所以這段期間 verify 失敗是預期的，要看報告確認失敗的只有私有這一項。
 
+2026-10-21 更新（Laysi/trustiot-v2#480）：
+
+- 以組織的 Packages API 確認：chart（`charts/trustiot`）是私有的；映像 `identity`、`postgres`、`assets`、`migrate` 是公開的。
+- GHCR 在 Actions 之外只接受 classic personal access token（[Working with the Container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-to-the-container-registry)），GitHub App 的 installation token 不在支援之列；GitHub 組織以人頭計費，另建機器帳號要多佔一個席位。所以決定不建機器帳號。
+- 展示叢集用一位組織成員的 classic token，只有 `read:packages`、一年到期（[deploy/flux/README.md](../../deploy/flux/README.md)「GHCR 拉取 token」）。正式的 SaaS 叢集上線前改用有唯讀機器帳號的 registry，套件是否改為公開也在那裡決定（Laysi/trustiot-v2#502）。下表選項 A 的 SaaS 拉取 token 與地端客戶的 token 因此改由 Laysi/trustiot-v2#502 處理：在 GHCR 上，每位地端客戶的 token 都要佔一個組織席位。
+
 是否把套件改為公開，屬於使用者的決定，不在本次文件更新的範圍：
 
 | 選項 | 內容 | 取捨 |
@@ -413,7 +419,7 @@ repo 改為公開，**不會**讓 GHCR 套件變成公開。依 GitHub 文件（
 
 ## nightly.yml
 
-每晚 18:17 UTC（台北 02:17）執行，也可在 main 上手動執行（`workflow_dispatch`，選項 `simulate_failure` 會讓每份 values 在安裝後故意失敗，用來驗證通知）。動到 `deploy/chart/`、`deploy/istio/`、`deploy/cloudnative-pg/`、`deploy/images/postgres/`、`tools/migrate/`、`services/*/migrations/`（migration Job 與它套用的 SQL，Laysi/trustiot-v2#60）、smoke 部署的身分與資產服務（`services/identity/`、`services/assets/`，Laysi/trustiot-v2#65）、這些 Rust 映像的其他輸入（`deploy/images/` 的 `migrate/`、`identity/`、`assets/`，`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`deploy/images/rust-binary.Containerfile`、`.dockerignore`、整個 `scripts/`，以及它們經 path 相依用到的 `crates/contract/`、`crates/identity-keys/`、`crates/outbox/`、`crates/service-kit/`、`crates/testkit/`、`crates/webpki-roots-empty/`；`scripts/nightly/image-cache.test.ts` 檢查這份清單完整）、`.prototools`、`.proto/plugins/`、`setup-proto` 或 `nightly.yml` 本身的 PR，帶有 `smoke` label 時也會跑，chart 的改動在合併前就先真的部署一次；這些 PR 的執行不寫任何留言（PR 的 workflow 檔由 PR 自己決定，不給它寫入權限），結果看 check 狀態、job summary 與 `nightly-report` artifact。
+每晚 18:17 UTC（台北 02:17）執行，也可在 main 上手動執行（`workflow_dispatch`，選項 `simulate_failure` 會讓每份 values 在安裝後故意失敗，用來驗證通知）。動到 `deploy/chart/`、`deploy/istio/`、`deploy/cloudnative-pg/`、`deploy/images/postgres/`、`tools/migrate/`、`services/*/migrations/`（migration Job 與它套用的 SQL，Laysi/trustiot-v2#60）、smoke 部署的身分與資產服務（`services/identity/`、`services/assets/`，Laysi/trustiot-v2#65）、這些 Rust 映像的其他輸入（`deploy/images/` 的 `migrate/`、`identity/`、`assets/`，`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`deploy/images/rust-binary.Containerfile`、`.dockerignore`、整個 `scripts/`，以及它們經 path 相依用到的 `crates/ca-keys/`、`crates/contract/`、`crates/identity-keys/`、`crates/outbox/`、`crates/protocol/`、`crates/service-kit/`、`crates/testkit/`、`crates/webpki-roots-empty/`，與 `tools/migrate` 以 `#[path]` 編進來的 `services/ingest/src/retention.rs`；`scripts/nightly/image-cache.test.ts` 檢查這份清單完整）、`.prototools`、`.proto/plugins/`、`setup-proto` 或 `nightly.yml` 本身的 PR，帶有 `smoke` label 時也會跑，chart 的改動在合併前就先真的部署一次；這些 PR 的執行不寫任何留言（PR 的 workflow 檔由 PR 自己決定，不給它寫入權限），結果看 check 狀態、job summary 與 `nightly-report` artifact。
 
 ### main 沒有變更時，排程不部署
 

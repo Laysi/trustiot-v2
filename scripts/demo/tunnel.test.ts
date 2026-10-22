@@ -4,12 +4,33 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunResult } from "../release/exec.ts";
-import { Box, LOCK_DIR, Log, OPS_TUNNEL_UNIT, ROOT, takeLock } from "./lib.ts";
+import { Box, DEMO_NAMESPACE, LOCK_DIR, Log, OPS_TUNNEL_UNIT, ROOT, shq, takeLock } from "./lib.ts";
 import {
   APP_ONLY_PATHS,
   BYPASS_PATHS,
   CONFIG,
   CREDENTIAL,
+  DEMO_VALUES,
+  GATEWAY_CLASS,
+  GATEWAY_NAME_LABEL,
+  INGRESS_GATEWAY,
+  INGRESS_OPTIONS,
+  INGRESS_SERVICE,
+  addressReport,
+  check,
+  compareAddresses,
+  ingressOrigin,
+  overlayClusterIp,
+  readIngressAddresses,
+  requireIngressAddress,
+  routeOrigin,
+  serviceClusterIp,
+  serviceRangeBand,
+  statusAddressLines,
+  valuesAddress,
+  valuesClusterIp,
+  type AddressRead,
+  type IngressAddresses,
   LOCK_STATE_COMMAND,
   DEMO_METRICS_PORT,
   DEMO_TUNNEL_UNIT,
@@ -1211,6 +1232,565 @@ describe("tunnel.ts: check", () => {
       // /auth/login on the gateway host name and the unreachable ota /healthz fail, from both places.
       expect(failed).toBe(4);
     }
+  });
+});
+
+describe("tunnel.ts: the ingress address (route-origin, check --stage 2, status)", () => {
+  const ADDRESS = "10.43.0.50";
+  const COMMIT = "a".repeat(40);
+  const BAND = { cidr: "10.43.0.0/16", first: "10.43.0.1", last: "10.43.1.0" };
+  /** What ssh, kubectl or git may print about the demo machine and this workstation: none of it may reach the output. */
+  const LEAKS = ["192.0.2.7", "demo-box", "/home/someone/x"];
+  const LEAKY_STDERR = "ssh: connect to host demo-box (192.0.2.7) port 22: Connection refused\nwarning: unable to access '/home/someone/x/.config/git/attributes'";
+  /** The chart's service overlay in tunnel mode (deploy/chart/templates/ingress.yaml), with or without the pinned address. */
+  const overlayText = (address?: string) =>
+    [
+      "spec:",
+      "  # Reached only by cloudflared on the host; nothing listens on the host or the network.",
+      "  type: ClusterIP",
+      ...(address === undefined ? [] : ["  # Fixed, so a recreated Service keeps the address cloudflared forwards to (ingress.tunnel.clusterIP).", `  clusterIP: ${address}`]),
+      "",
+    ].join("\n");
+  const configMap = (address?: string) => ({ kind: "ConfigMap", metadata: { name: INGRESS_OPTIONS }, data: { deployment: "spec: {}\n", service: overlayText(address) } });
+  /** The Service Istio generates for the Gateway, trimmed to the fields the gate reads. */
+  const service = (o: { name?: string; clusterIP?: unknown; clusterIPs?: unknown; type?: string; ports?: unknown[]; owners?: unknown[] } = {}) => {
+    const clusterIP = "clusterIP" in o ? o.clusterIP : ADDRESS;
+    return {
+      metadata: {
+        name: o.name ?? INGRESS_SERVICE,
+        namespace: DEMO_NAMESPACE,
+        labels: { [GATEWAY_NAME_LABEL]: INGRESS_GATEWAY },
+        ownerReferences: o.owners ?? [{ apiVersion: "gateway.networking.k8s.io/v1", kind: "Gateway", name: INGRESS_GATEWAY, uid: "0000", controller: true }],
+      },
+      spec: {
+        type: o.type ?? "ClusterIP",
+        clusterIP,
+        clusterIPs: "clusterIPs" in o ? o.clusterIPs : [clusterIP],
+        ports: o.ports ?? [
+          { name: "status-port", port: 15021, protocol: "TCP" },
+          { name: "http", port: 80, protocol: "TCP" },
+        ],
+      },
+    };
+  };
+  const serviceCidr = (cidrs: unknown[] = [BAND.cidr]) => ({ kind: "ServiceCIDR", metadata: { name: "kubernetes" }, spec: { cidrs } });
+  const addresses = (values: AddressRead, overlay: AddressRead, svc: AddressRead, band: IngressAddresses["band"] = BAND): IngressAddresses => ({ commit: COMMIT, values, overlay, service: svc, band });
+  const at = (address: string): AddressRead => ({ address });
+  const reason = (read: AddressRead | IngressAddresses["band"]) => ("missing" in read ? read.missing : "");
+
+  test("names the release's Gateway, ConfigMap and Service as the chart and Istio do, and uses the nightly smoke's selector", () => {
+    const release = Bun.YAML.parse(readFileSync(join(ROOT, "deploy/flux/clusters/demo/trustiot/helm-release.yaml"), "utf8")) as { metadata: { namespace: string }; spec: { releaseName: string } };
+    const chart = Bun.YAML.parse(readFileSync(join(ROOT, "deploy/chart/Chart.yaml"), "utf8")) as { name: string };
+    expect([release.spec.releaseName, release.metadata.namespace]).toEqual([DEMO_NAMESPACE, DEMO_NAMESPACE]);
+    // trustiot.fullname: a release name that contains the chart's name is the full name.
+    expect(release.spec.releaseName).toContain(chart.name);
+    expect(readFileSync(join(ROOT, "deploy/chart/templates/_ingress.tpl"), "utf8")).toMatch(/define "trustiot.ingress.gatewayName" -}}\n\{\{- \$suffix := "-ingress" -}}/);
+    const ingress = readFileSync(join(ROOT, "deploy/chart/templates/ingress.yaml"), "utf8");
+    expect(ingress).toMatch(/\$options := include "trustiot.componentName" \(dict "root" \. "name" "ingress-options"\)/);
+    expect(ingress).toContain(`gatewayClassName: ${GATEWAY_CLASS}`);
+    expect([INGRESS_GATEWAY, INGRESS_OPTIONS, INGRESS_SERVICE]).toEqual(["trustiot-ingress", "trustiot-ingress-options", "trustiot-ingress-istio"]);
+    // The nightly smoke reaches the same generated Service by name and finds it by the same label.
+    expect(readFileSync(join(ROOT, "scripts/nightly/api.ts"), "utf8")).toContain("`service/${listener.gateway}-istio`");
+    expect(readFileSync(join(ROOT, "scripts/nightly/smoke.ts"), "utf8")).toContain(`"--selector", \`${GATEWAY_NAME_LABEL}=\${gateway}\``);
+    // The chart's tunnel overlay sets the type the gate requires.
+    expect(ingress).toMatch(/eq \$v\.ingress\.exposure "tunnel" }}\n\s+# [^\n]*\n\s+type: ClusterIP/);
+    // The demo overlay reads as a value or as not set, never as a broken file.
+    const current = valuesClusterIp(readFileSync(join(ROOT, DEMO_VALUES), "utf8"));
+    expect("address" in current || current.missing.includes("does not set ingress.tunnel.clusterIP")).toBe(true);
+  });
+
+  test("reads ingress.tunnel.clusterIP from values-demo.yaml: set, not set, or not one IPv4 address, without quoting it", () => {
+    expect(valuesClusterIp(`ingress:\n  tunnel:\n    clusterIP: ${ADDRESS}\n`)).toEqual(at(ADDRESS));
+    expect(valuesClusterIp(`ingress:\n  tunnel:\n    clusterIP: "${ADDRESS}"\n`)).toEqual(at(ADDRESS));
+    for (const text of ["global: {}\n", "ingress:\n  replicas: 1\n", "ingress:\n  tunnel: {}\n", "ingress:\n  tunnel:\n    clusterIP:\n", 'ingress:\n  tunnel:\n    clusterIP: ""\n', ""]) {
+      expect(valuesClusterIp(text)).toEqual({ missing: `${DEMO_VALUES} does not set ingress.tunnel.clusterIP (Laysi/trustiot-v2#480 sets it)` });
+    }
+    for (const value of ["10.43.0.050", "10.43.0.0/24", "None", "fd00::1", "10.43.0", "false", "demo-box"]) {
+      expect(valuesClusterIp(`ingress:\n  tunnel:\n    clusterIP: "${value}"\n`)).toEqual({ missing: `ingress.tunnel.clusterIP in ${DEMO_VALUES} is not one IPv4 address (a dotted quad without leading zeros)` });
+    }
+    expect(valuesClusterIp("ingress:\n  tunnel:\n    clusterIP: 42\n")).toEqual({ missing: `ingress.tunnel.clusterIP in ${DEMO_VALUES} is not a string` });
+    // The parser's message would quote the file; the reason does not.
+    expect(valuesClusterIp("ingress: [\n  /home/someone/x\n")).toEqual({ missing: `${DEMO_VALUES} is not valid YAML` });
+  });
+
+  /** A git repository with values-demo.yaml committed, for valuesAddress. */
+  function valuesRepo(address = ADDRESS) {
+    const repo = join(dir, "repo");
+    const file = join(repo, DEMO_VALUES);
+    mkdirSync(join(file, ".."), { recursive: true });
+    mkdirSync(join(repo, "docs"), { recursive: true });
+    const git = (...args: string[]) => {
+      const run = Bun.spawnSync(["git", "-C", repo, "-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args]);
+      expect(run.exitCode).toBe(0);
+      return run.stdout.toString().trim();
+    };
+    git("init", "-q");
+    writeFileSync(join(repo, "docs/notes.md"), "first\n");
+    git("add", ".");
+    git("commit", "-q", "-m", "without the values");
+    return { repo, file, git, write: () => writeFileSync(file, `ingress:\n  tunnel:\n    clusterIP: ${address}\n`) };
+  }
+
+  test("reads the values of the checkout's commit only: an uncommitted change to the file is no address", async () => {
+    const { repo, file, git, write } = valuesRepo();
+    // Not in the commit (untracked): not reviewed.
+    write();
+    expect((await valuesAddress(repo)).values).toEqual({ missing: `${DEMO_VALUES} has uncommitted changes; run from a clean checkout of the reviewed commit` });
+    git("add", ".");
+    expect(reason((await valuesAddress(repo)).values)).toContain("uncommitted changes");
+    git("commit", "-q", "-m", "reviewed");
+    const head = git("rev-parse", "HEAD");
+    expect(await valuesAddress(repo)).toEqual({ commit: head, values: at(ADDRESS) });
+    // A change elsewhere does not matter; a change to the file does, and the commit's value is never read past it.
+    writeFileSync(join(repo, "docs/notes.md"), "draft\n");
+    expect(await valuesAddress(repo)).toEqual({ commit: head, values: at(ADDRESS) });
+    writeFileSync(file, "ingress:\n  tunnel:\n    clusterIP: 10.43.0.51\n");
+    expect(await valuesAddress(repo)).toEqual({ commit: head, values: { missing: `${DEMO_VALUES} has uncommitted changes; run from a clean checkout of the reviewed commit` } });
+    expect(await valuesAddress(join(dir, "not-a-repo"))).toEqual({ commit: "", values: { missing: "could not read the checkout's commit: git rev-parse HEAD failed (exit 128)" } });
+  });
+
+  describe("git that fails or cannot run", () => {
+    let path: string | undefined;
+    beforeEach(() => {
+      path = process.env.PATH;
+    });
+    afterEach(() => {
+      process.env.PATH = path;
+    });
+    /** A stand-in git on PATH: answers `rev-parse` and `status` like git, and fails the step named by `failing` with LEAKY_STDERR. */
+    const fakeGit = (failing: "rev-parse" | "status" | "show") => {
+      const bin = join(dir, "bin");
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(
+        join(bin, "git"),
+        `#!/bin/sh
+shift 2
+if [ "$1" = ${failing} ]; then printf '%s\\n' ${shq(LEAKY_STDERR)} >&2; exit 128; fi
+case "$1" in
+  rev-parse) echo ${COMMIT} ;;
+  status) ;;
+esac
+`,
+        { mode: 0o755 },
+      );
+      process.env.PATH = `${bin}:${path ?? ""}`;
+    };
+
+    test("a failed git command is named with its exit status, never with what git printed", async () => {
+      fakeGit("rev-parse");
+      expect(await valuesAddress(dir)).toEqual({ commit: "", values: { missing: "could not read the checkout's commit: git rev-parse HEAD failed (exit 128)" } });
+      fakeGit("status");
+      expect(await valuesAddress(dir)).toEqual({ commit: COMMIT, values: { missing: `git status --porcelain -- ${DEMO_VALUES} failed (exit 128)` } });
+      fakeGit("show");
+      expect(await valuesAddress(dir)).toEqual({ commit: COMMIT, values: { missing: `git show HEAD:${DEMO_VALUES} failed (exit 128): the file is not in commit ${COMMIT}, or git could not read it` } });
+    });
+
+    test("git that cannot run at all is a reason, not a throw", async () => {
+      const empty = join(dir, "empty-bin");
+      mkdirSync(empty, { recursive: true });
+      process.env.PATH = empty;
+      expect(await valuesAddress(dir)).toEqual({ commit: "", values: { missing: "could not read the checkout's commit: git rev-parse HEAD could not run" } });
+    });
+  });
+
+  test("reads the clusterIP of the ingress-options ConfigMap's service overlay", () => {
+    expect(overlayClusterIp(configMap(ADDRESS))).toEqual(at(ADDRESS));
+    expect(overlayClusterIp(undefined)).toEqual({ missing: `ConfigMap ${INGRESS_OPTIONS} is not in namespace ${DEMO_NAMESPACE}: the demo release is not deployed` });
+    expect(overlayClusterIp({ data: { deployment: "spec: {}\n" } })).toEqual({ missing: `ConfigMap ${INGRESS_OPTIONS} has no service overlay` });
+    expect(reason(overlayClusterIp(configMap()))).toContain("has no clusterIP: the deployed release does not set ingress.tunnel.clusterIP");
+    expect(reason(overlayClusterIp(configMap("None")))).toEndWith("is not one IPv4 address (a dotted quad without leading zeros)");
+    expect(overlayClusterIp({ data: { service: "spec: [\n  /home/someone/x\n" } })).toEqual({ missing: `the service overlay of ConfigMap ${INGRESS_OPTIONS} is not valid YAML` });
+  });
+
+  describe("the Service Istio generated", () => {
+    test("is exactly one, Istio's, owned by the Gateway, of type ClusterIP with port 80 and one IPv4 ClusterIP", () => {
+      expect(serviceClusterIp({ items: [service()] })).toEqual(at(ADDRESS));
+      // An owner reference of the Gateway API's v1beta1 counts as well.
+      expect(serviceClusterIp({ items: [service({ owners: [{ apiVersion: "gateway.networking.k8s.io/v1beta1", kind: "Gateway", name: INGRESS_GATEWAY }] })] })).toEqual(at(ADDRESS));
+    });
+
+    test("none or two are a reason", () => {
+      expect(reason(serviceClusterIp({ items: [] }))).toContain(`no Service in namespace ${DEMO_NAMESPACE} has the label ${GATEWAY_NAME_LABEL}=${INGRESS_GATEWAY}`);
+      expect(reason(serviceClusterIp(undefined))).toContain("no Service");
+      expect(reason(serviceClusterIp({ items: [service(), service({ name: "left-behind", clusterIP: "10.43.0.51" })] }))).toContain(
+        "2 Services in namespace trustiot have the label gateway.networking.k8s.io/gateway-name=trustiot-ingress (trustiot-ingress-istio, left-behind), expected exactly one",
+      );
+    });
+
+    test("another name is a reason", () => {
+      expect(serviceClusterIp({ items: [service({ name: "lookalike" })] })).toEqual({
+        missing: `the Service with the label ${GATEWAY_NAME_LABEL}=${INGRESS_GATEWAY} is lookalike, not ${INGRESS_SERVICE}, the name Istio gives the Service of Gateway ${INGRESS_GATEWAY}`,
+      });
+    });
+
+    test("no ownerReference of the Gateway is a reason: another kind, another name, another API group, or none", () => {
+      const notOwned = { missing: `Service ${INGRESS_SERVICE} is not owned by Gateway ${INGRESS_GATEWAY} (no ownerReference of kind Gateway in gateway.networking.k8s.io): Istio did not make it` };
+      for (const owners of [
+        [],
+        [{ apiVersion: "gateway.networking.k8s.io/v1", kind: "HTTPRoute", name: INGRESS_GATEWAY }],
+        [{ apiVersion: "gateway.networking.k8s.io/v1", kind: "Gateway", name: "other-ingress" }],
+        [{ apiVersion: "networking.istio.io/v1", kind: "Gateway", name: INGRESS_GATEWAY }],
+        [{ kind: "Gateway", name: INGRESS_GATEWAY }],
+      ]) {
+        expect(serviceClusterIp({ items: [service({ owners })] })).toEqual(notOwned);
+      }
+    });
+
+    test("a type other than ClusterIP is a reason", () => {
+      for (const type of ["LoadBalancer", "NodePort"]) {
+        expect(serviceClusterIp({ items: [service({ type })] })).toEqual({ missing: `Service ${INGRESS_SERVICE} is not of type ClusterIP, which the chart's tunnel overlay sets` });
+      }
+    });
+
+    test("no port 80 is a reason", () => {
+      for (const ports of [[], [{ name: "status-port", port: 15021 }], [{ name: "https", port: 443 }, { name: "http", port: "80" }]]) {
+        expect(serviceClusterIp({ items: [service({ ports })] })).toEqual({ missing: `Service ${INGRESS_SERVICE} has no port 80, the tunnel listener's` });
+      }
+    });
+
+    test("the ClusterIP must be one IPv4 address and the first of clusterIPs: dual stack with IPv4 first passes, IPv6 first does not", () => {
+      expect(serviceClusterIp({ items: [service({ clusterIPs: [ADDRESS, "fd00:10:43::50"] })] })).toEqual(at(ADDRESS));
+      expect(serviceClusterIp({ items: [service({ clusterIP: "fd00:10:43::50", clusterIPs: ["fd00:10:43::50", ADDRESS] })] })).toEqual({
+        missing: `the ClusterIP of Service ${INGRESS_SERVICE} is not one IPv4 address (a dotted quad without leading zeros)`,
+      });
+      expect(serviceClusterIp({ items: [service({ clusterIPs: ["fd00:10:43::50", ADDRESS] })] })).toEqual({ missing: `the clusterIPs of Service ${INGRESS_SERVICE} do not start with its ClusterIP ${ADDRESS}` });
+      expect(serviceClusterIp({ items: [service({ clusterIPs: undefined })] })).toEqual({ missing: `the clusterIPs of Service ${INGRESS_SERVICE} do not start with its ClusterIP ${ADDRESS}` });
+      expect(serviceClusterIp({ items: [service({ clusterIP: "None" })] })).toEqual({ missing: `the ClusterIP of Service ${INGRESS_SERVICE} is not one IPv4 address (a dotted quad without leading zeros)` });
+      expect(serviceClusterIp({ items: [service({ clusterIP: null })] })).toEqual({ missing: `Service ${INGRESS_SERVICE} has no ClusterIP` });
+    });
+
+    test("every mismatch is named", () => {
+      expect(reason(serviceClusterIp({ items: [service({ name: "x", owners: [], type: "NodePort", ports: [] })] })).split("; ")).toHaveLength(4);
+    });
+  });
+
+  test("the static band comes from the cluster's one IPv4 Service range, or there is none", () => {
+    expect(serviceRangeBand(serviceCidr())).toEqual(BAND);
+    // A dual-stack cluster has one IPv4 range too.
+    expect(serviceRangeBand(serviceCidr([BAND.cidr, "fd00:10:43::/112"]))).toEqual(BAND);
+    expect(serviceRangeBand(undefined)).toEqual({ missing: "ServiceCIDR kubernetes is not in the cluster" });
+    expect(serviceRangeBand(serviceCidr([BAND.cidr, "10.44.0.0/16"]))).toEqual({ missing: "ServiceCIDR kubernetes lists 2 IPv4 ranges, expected exactly one" });
+    expect(serviceRangeBand(serviceCidr(["fd00:10:43::/112"]))).toEqual({ missing: "ServiceCIDR kubernetes lists 0 IPv4 ranges, expected exactly one" });
+    expect(serviceRangeBand({ spec: {} })).toEqual({ missing: "ServiceCIDR kubernetes lists 0 IPv4 ranges, expected exactly one" });
+    expect(serviceRangeBand(serviceCidr(["10.43.0.1/16"]))).toEqual({ missing: "ServiceCIDR kubernetes's IPv4 range is not a valid CIDR" });
+    expect(serviceRangeBand(serviceCidr(["10.43.0.0/29"]))).toEqual({ missing: "the Service range 10.43.0.0/29 is too small to have a static band" });
+  });
+
+  test("only three equal addresses in the static band give the stage-2 origin; anything else stops with the likely cause", () => {
+    expect(compareAddresses(addresses(at(ADDRESS), at(ADDRESS), at(ADDRESS)))).toEqual({ origin: `http://${ADDRESS}:80` });
+    expect(requireIngressAddress(addresses(at(ADDRESS), at(ADDRESS), at(ADDRESS)))).toBe(ingressOrigin(ADDRESS));
+    // The band's edges are inside it.
+    for (const edge of [BAND.first, BAND.last]) expect(compareAddresses(addresses(at(edge), at(edge), at(edge)))).toEqual({ origin: `http://${edge}:80` });
+    const stops = (a: IngressAddresses, ...causes: RegExp[]) => {
+      let message = "";
+      try {
+        requireIngressAddress(a);
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toContain("nothing was probed");
+      expect(message).toContain("set back to http_status:418");
+      expect(message).toContain("deploy/chart/README.md 「固定的入口 ClusterIP」");
+      for (const cause of causes) expect(message).toMatch(cause);
+    };
+    stops(addresses({ missing: "values not set" }, at(ADDRESS), at(ADDRESS)), /no values address: values not set/);
+    stops(addresses(at(ADDRESS), { missing: "no overlay address" }, at(ADDRESS)), /no ConfigMap overlay address: no overlay address/);
+    stops(addresses(at(ADDRESS), at(ADDRESS), { missing: "2 Services" }), /no Service address: 2 Services/);
+    stops(addresses({ missing: "a" }, { missing: "b" }, { missing: "c" }, { missing: "d" }), /no values address: a; no ConfigMap overlay address: b; no Service address: c; no static band of the Service range: d/);
+    stops(addresses(at("10.43.0.51"), at(ADDRESS), at(ADDRESS)), /pins 10\.43\.0\.51, but the deployed ConfigMap trustiot-ingress-options has 10\.43\.0\.50: the release in the cluster is not from this commit/);
+    stops(addresses(at(ADDRESS), at(ADDRESS), at("10.43.121.7")), /asks for 10\.43\.0\.50, but the ingress Service has 10\.43\.121\.7: the Service was created before the address was set, or an address change is half done/);
+    // Outside the static band, and without a band at all: fail closed.
+    stops(addresses(at("10.43.2.5"), at("10.43.2.5"), at("10.43.2.5")), /10\.43\.2\.5 is outside the static band 10\.43\.0\.1-10\.43\.1\.0 of the Service range 10\.43\.0\.0\/16/);
+    stops(addresses(at(ADDRESS), at(ADDRESS), at(ADDRESS), { missing: "ServiceCIDR kubernetes is not in the cluster" }), /no static band of the Service range: ServiceCIDR kubernetes is not in the cluster/);
+    // Values and Service equal, the overlay not: both differences are named.
+    const both = compareAddresses(addresses(at(ADDRESS), at("10.43.0.51"), at(ADDRESS)));
+    expect("problems" in both && both.problems.length).toBe(2);
+  });
+
+  test("the report prints the three addresses, the band and the comparison; status adds that it is only a report", async () => {
+    expect(addressReport(addresses(at(ADDRESS), at(ADDRESS), at(ADDRESS)))).toEqual([
+      `ingress address in ${DEMO_VALUES} at ${COMMIT.slice(0, 12)} (ingress.tunnel.clusterIP): ${ADDRESS}`,
+      `ingress address in ConfigMap ${INGRESS_OPTIONS} (service overlay): ${ADDRESS}`,
+      `ingress address of the Service with ${GATEWAY_NAME_LABEL}=${INGRESS_GATEWAY}: ${ADDRESS}`,
+      "static band of the cluster's Service range (ServiceCIDR kubernetes): 10.43.0.1-10.43.1.0 of 10.43.0.0/16",
+      "OK the three ingress addresses agree and are in the static band",
+    ]);
+    const unset = addressReport(addresses({ missing: `${DEMO_VALUES} does not set ingress.tunnel.clusterIP` }, at(ADDRESS), at("10.43.121.7"), { missing: "no band" }));
+    expect(unset[0]).toBe(`ingress address in ${DEMO_VALUES} at ${COMMIT.slice(0, 12)} (ingress.tunnel.clusterIP): none (${DEMO_VALUES} does not set ingress.tunnel.clusterIP)`);
+    expect(unset[2]).toEndWith(": 10.43.121.7");
+    expect(unset[3]).toEndWith(": none (no band)");
+    expect(unset[4]).toStartWith("FAIL the ingress addresses do not allow the stage-2 routes: no values address:");
+    expect(unset[4]).toEndWith("see deploy/chart/README.md 「固定的入口 ClusterIP」");
+    const lines = await statusAddressLines(clusterBox({}).box, async () => ({ commit: COMMIT, values: at(ADDRESS) }));
+    expect(lines.at(-2)).toBe("OK the three ingress addresses agree and are in the static band");
+    expect(lines.at(-1)).toContain("status only reports the ingress addresses; before switching the routes run route-origin");
+    // status never names an origin: the routes take it only from route-origin.
+    expect(lines.join("\n")).not.toContain("http://");
+  });
+
+  type Cluster = {
+    configMap?: Record<string, unknown> | null;
+    services?: Record<string, unknown>[];
+    serviceCidr?: Record<string, unknown> | null;
+    /** Raw answers in place of the above, per read. */
+    answer?: Partial<Record<"configmap" | "services" | "servicecidr", RunResult>>;
+    /** The demo machine's ssh cannot even be started. */
+    spawnFails?: boolean;
+  };
+
+  /**
+   * The demo machine for the gate and stage 2's probes: kubectl get answers from `cluster`
+   * (healthy by default; null is NotFound), and every probe passes in stage 2. Returns the commands.
+   */
+  function clusterBox(cluster: Cluster) {
+    const commands: string[] = [];
+    const notFound = (what: string): RunResult => ({ stdout: "", stderr: `Error from server (NotFound): ${what} not found`, exitCode: 1 });
+    const box = new Box("demo-box", log, {
+      run: async (cmd) => {
+        const command = cmd.at(-1) ?? "";
+        commands.push(command);
+        if (cluster.spawnFails) throw new Error(`spawn ssh ENOENT ${LEAKY_STDERR}`);
+        if (command.startsWith("sudo k3s kubectl ")) {
+          if (command === `sudo k3s kubectl -n ${DEMO_NAMESPACE} get configmap ${INGRESS_OPTIONS} -o json`) {
+            const cm = cluster.configMap === undefined ? configMap(ADDRESS) : cluster.configMap;
+            return cluster.answer?.configmap ?? (cm === null ? notFound(`configmaps "${INGRESS_OPTIONS}"`) : ok(JSON.stringify(cm)));
+          }
+          if (command === `sudo k3s kubectl -n ${DEMO_NAMESPACE} get services --selector ${GATEWAY_NAME_LABEL}=${INGRESS_GATEWAY} -o json`) {
+            return cluster.answer?.services ?? ok(JSON.stringify({ kind: "List", items: cluster.services ?? [service()] }));
+          }
+          if (command === "sudo k3s kubectl get servicecidr kubernetes -o json") {
+            const cidr = cluster.serviceCidr === undefined ? serviceCidr() : cluster.serviceCidr;
+            return cluster.answer?.servicecidr ?? (cidr === null ? notFound('servicecidrs.networking.k8s.io "kubernetes"') : ok(JSON.stringify(cidr)));
+          }
+          throw new Error(`unexpected kubectl ${command}`);
+        }
+        if (command.startsWith("curl ")) return stage2Answer(command.split(" ").at(-1) ?? "");
+        throw new Error(`unexpected command ${command}`);
+      },
+      sleep: async () => {},
+    });
+    return { box, commands };
+  }
+  /** Stage 2 as it should be: Access on the app paths, the ingress on the bypass paths, the connector's refusal below them. */
+  const stage2Answer = (url: string): RunResult => {
+    const path = url.replace(/^https:\/\/[^/]+/, "");
+    if (url.includes(HOSTS.gateway) && path === "/mqtt") return ok("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n");
+    if (url.includes(HOSTS.gateway) && path === "/certs/renew") return ok("HTTP/1.1 400 Bad Request\r\nServer: istio-envoy\r\ncontent-type: text/plain\r\n\r\nbad request");
+    if (url.includes(HOSTS.gateway) && path === "/mqtt/x") return ok("HTTP/1.1 403 Forbidden\r\nServer: cloudflare\r\nContent-Length: 0\r\n\r\n");
+    return ok("HTTP/1.1 302 Found\r\nLocation: https://team-x.cloudflareaccess.com/cdn-cgi/access/login/x?kid=1\r\n\r\n");
+  };
+  const valuesAt = (values: AddressRead = at(ADDRESS)) => async () => ({ commit: COMMIT, values });
+  const GETS = [
+    `sudo k3s kubectl -n ${DEMO_NAMESPACE} get configmap ${INGRESS_OPTIONS} -o json`,
+    `sudo k3s kubectl -n ${DEMO_NAMESPACE} get services --selector ${GATEWAY_NAME_LABEL}=${INGRESS_GATEWAY} -o json`,
+    "sudo k3s kubectl get servicecidr kubernetes -o json",
+  ];
+
+  test("reads the cluster with kubectl get only", async () => {
+    const { box, commands } = clusterBox({});
+    expect(await readIngressAddresses(box, valuesAt())).toEqual(addresses(at(ADDRESS), at(ADDRESS), at(ADDRESS)));
+    expect(commands).toEqual(GETS);
+  });
+
+  test("kubectl that fails, prints no JSON or prints null is a reason naming the command, never what it printed", async () => {
+    const leaky = { stdout: LEAKY_STDERR, stderr: LEAKY_STDERR, exitCode: 1 };
+    const failed = await readIngressAddresses(clusterBox({ answer: { configmap: leaky, services: { ...leaky, exitCode: 255 }, servicecidr: leaky } }).box, valuesAt());
+    expect(reason(failed.overlay)).toBe(`sudo k3s kubectl -n trustiot get configmap ${INGRESS_OPTIONS} failed (exit 1); run it on the demo machine to see why`);
+    expect(reason(failed.service)).toBe(`sudo k3s kubectl -n trustiot get services --selector ${GATEWAY_NAME_LABEL}=${INGRESS_GATEWAY} failed (exit 255, ssh); run it on the demo machine to see why`);
+    expect(reason(failed.band)).toBe("sudo k3s kubectl get servicecidr kubernetes failed (exit 1); run it on the demo machine to see why");
+    const garbled = await readIngressAddresses(clusterBox({ answer: { configmap: ok(`not json ${LEAKY_STDERR}`), services: ok("null"), servicecidr: ok("[]") } }).box, valuesAt());
+    expect(reason(garbled.overlay)).toBe(`sudo k3s kubectl -n trustiot get configmap ${INGRESS_OPTIONS} printed no JSON`);
+    expect(reason(garbled.service)).toEndWith("printed no JSON object");
+    expect(reason(garbled.band)).toBe("sudo k3s kubectl get servicecidr kubernetes printed no JSON object");
+    const unreachable = await readIngressAddresses(clusterBox({ spawnFails: true }).box, valuesAt());
+    expect(reason(unreachable.overlay)).toBe(`sudo k3s kubectl -n trustiot get configmap ${INGRESS_OPTIONS} could not run; run it on the demo machine to see why`);
+    for (const read of [failed, garbled, unreachable]) for (const leak of LEAKS) expect(JSON.stringify(read)).not.toContain(leak);
+  });
+
+  test("a values reader that throws is a reason: the comparison never throws", async () => {
+    const read = await readIngressAddresses(clusterBox({}).box, async () => Promise.reject(new Error(`spawn git ENOENT ${LEAKY_STDERR}`)));
+    expect(read.values).toEqual({ missing: `${DEMO_VALUES} at the checkout's commit could not be read (git could not run)` });
+    expect(read.commit).toBe("");
+  });
+
+  /** Every way the gate refuses, with the cause its error names. */
+  const refusals: [string, Cluster, AddressRead, RegExp][] = [
+    ["values-demo.yaml sets no address", {}, { missing: `${DEMO_VALUES} does not set ingress.tunnel.clusterIP (Laysi/trustiot-v2#480 sets it)` }, /no values address: .*does not set ingress\.tunnel\.clusterIP/],
+    ["the ConfigMap is not there", { configMap: null }, at(ADDRESS), /no ConfigMap overlay address: ConfigMap trustiot-ingress-options is not in namespace trustiot/],
+    ["the overlay has no address", { configMap: configMap() }, at(ADDRESS), /no ConfigMap overlay address: .*has no clusterIP/],
+    ["no Service", { services: [] }, at(ADDRESS), /no Service address: no Service in namespace trustiot has the label/],
+    ["two Services", { services: [service(), service({ name: "other" })] }, at(ADDRESS), /no Service address: 2 Services/],
+    ["the Service is not Istio's", { services: [service({ owners: [] })] }, at(ADDRESS), /is not owned by Gateway trustiot-ingress/],
+    ["the values differ from the overlay", {}, at("10.43.0.51"), /pins 10\.43\.0\.51, but the deployed ConfigMap/],
+    ["the overlay differs from the Service", { services: [service({ clusterIP: "10.43.121.7" })] }, at(ADDRESS), /but the ingress Service has 10\.43\.121\.7/],
+    ["the address is outside the static band", { configMap: configMap("10.43.2.5"), services: [service({ clusterIP: "10.43.2.5" })] }, at("10.43.2.5"), /10\.43\.2\.5 is outside the static band/],
+    ["there is no ServiceCIDR", { serviceCidr: null }, at(ADDRESS), /no static band of the Service range: ServiceCIDR kubernetes is not in the cluster/],
+    ["the ServiceCIDR has two IPv4 ranges", { serviceCidr: serviceCidr([BAND.cidr, "10.44.0.0/16"]) }, at(ADDRESS), /lists 2 IPv4 ranges/],
+    ["the ServiceCIDR cannot be read", { answer: { servicecidr: { stdout: "", stderr: LEAKY_STDERR, exitCode: 1 } } }, at(ADDRESS), /servicecidr kubernetes failed \(exit 1\)/],
+    ["the cluster cannot be read", { answer: { configmap: { stdout: "", stderr: LEAKY_STDERR, exitCode: 255 }, services: { stdout: "", stderr: LEAKY_STDERR, exitCode: 255 }, servicecidr: { stdout: "", stderr: LEAKY_STDERR, exitCode: 255 } } }, at(ADDRESS), /failed \(exit 255, ssh\)/],
+  ];
+  const record = (name: string) => JSON.parse(readFileSync(log.file.replace(/\.log$/, `-${name}.json`), "utf8")) as Record<string, unknown>;
+  const errorOf = async (promise: Promise<unknown>) => {
+    try {
+      await promise;
+    } catch (error) {
+      return (error as Error).message;
+    }
+    throw new Error("expected a refusal");
+  };
+
+  describe("route-origin", () => {
+    test("passes only with the gate: its result names the origin, and its record keeps the addresses and the origin", async () => {
+      const { box, commands } = clusterBox({});
+      expect(await routeOrigin(box, log, valuesAt())).toBe(`the stage-2 routes' origin: http://${ADDRESS}:80`);
+      // Read only: kubectl get, no lab lock, nothing else.
+      expect(commands).toEqual(GETS);
+      expect(record("route-origin")).toMatchObject({ origin: `http://${ADDRESS}:80`, addresses: { values: at(ADDRESS), overlay: at(ADDRESS), service: at(ADDRESS), band: BAND } });
+      expect(readFileSync(log.file, "utf8")).toContain("OK the three ingress addresses agree and are in the static band");
+    });
+
+    for (const [name, cluster, values, cause] of refusals) {
+      test(`refuses, with check --stage 2's error, when ${name}`, async () => {
+        const { box, commands } = clusterBox(cluster);
+        const message = await errorOf(routeOrigin(box, log, valuesAt(values)));
+        expect(message).toMatch(cause);
+        expect(message).toMatch(/nothing was probed.*deploy\/chart\/README\.md 「固定的入口 ClusterIP」/s);
+        // The same error as requireIngressAddress gives for what was read.
+        expect(() => requireIngressAddress(record("route-origin").addresses as IngressAddresses)).toThrow(message);
+        expect(record("route-origin")).toMatchObject({ problems: expect.any(Array) });
+        expect(record("route-origin").origin).toBeUndefined();
+        expect(commands.every((c) => c.startsWith("sudo k3s kubectl ") && c.includes(" get "))).toBe(true);
+        expect(readFileSync(log.file, "utf8")).toContain("FAIL the ingress addresses do not allow the stage-2 routes");
+      });
+    }
+  });
+
+  describe("check", () => {
+    const saved: Record<string, string | undefined> = {};
+    const NAMES = { DEMO_APP_HOST: HOSTS["app"], DEMO_GATEWAY_HOST: HOSTS.gateway, DEMO_OTA_HOST: HOSTS.ota };
+    beforeEach(() => {
+      for (const [name, value] of Object.entries(NAMES)) {
+        saved[name] = process.env[name];
+        process.env[name] = value;
+      }
+    });
+    afterEach(() => {
+      for (const name of Object.keys(NAMES)) {
+        if (saved[name] === undefined) delete process.env[name];
+        else process.env[name] = saved[name];
+      }
+    });
+    const run = (stage: "1" | "2", cluster: Cluster, values: () => Promise<{ commit: string; values: AddressRead }>) => {
+      const { box, commands } = clusterBox(cluster);
+      const workstation: string[][] = [];
+      const valuesRead: string[] = [];
+      const result = check(box, log, { stage }, {
+        workstation: async (args) => {
+          workstation.push(args);
+          return stage2Answer(args.at(-1) ?? "");
+        },
+        values: async () => {
+          valuesRead.push("read");
+          return values();
+        },
+      });
+      return { result, commands, workstation, valuesRead };
+    };
+
+    test("stage 2 with the gate passing probes and prints the origin for the routes", async () => {
+      const { result, commands, workstation } = run("2", {}, valuesAt());
+      await result;
+      expect(workstation.length).toBe(probes().length);
+      expect(commands.filter((c) => c.startsWith("curl ")).length).toBe(probes().length);
+      // The gate comes before the first probe.
+      expect(commands.slice(0, 3)).toEqual(GETS);
+      expect(readFileSync(log.file, "utf8")).toContain(`the stage-2 routes' origin: http://${ADDRESS}:80`);
+      expect(record("check")).toMatchObject({ stage: 2, origin: `http://${ADDRESS}:80`, addresses: { values: at(ADDRESS), overlay: at(ADDRESS), service: at(ADDRESS), band: BAND } });
+    });
+
+    for (const [name, cluster, values, cause] of refusals) {
+      test(`stage 2 stops before any probe, with route-origin's error, when ${name}`, async () => {
+        const { result, commands, workstation } = run("2", cluster, valuesAt(values));
+        const message = await errorOf(result);
+        expect(message).toMatch(cause);
+        expect(message).toMatch(/nothing was probed.*deploy\/chart\/README\.md 「固定的入口 ClusterIP」/s);
+        expect(workstation).toEqual([]);
+        expect(commands.filter((c) => !GETS.includes(c))).toEqual([]);
+        expect(record("check")).toMatchObject({ stage: 2, probed: false, problems: expect.any(Array) });
+        // The one code path: route-origin refuses the same state with the same words.
+        expect(await errorOf(routeOrigin(clusterBox(cluster).box, log, valuesAt(values)))).toBe(message);
+      });
+    }
+
+    test("stage 2 saves probed: false also when reading the values throws", async () => {
+      const { result, workstation } = run("2", {}, async () => Promise.reject(new Error("spawn git ENOENT")));
+      expect(await errorOf(result)).toContain(`no values address: ${DEMO_VALUES} at the checkout's commit could not be read (git could not run)`);
+      expect(workstation).toEqual([]);
+      expect(record("check")).toMatchObject({ stage: 2, probed: false });
+    });
+
+    test("stage 1 compares nothing: its routes are still the connector's 418", async () => {
+      const { result, commands, valuesRead } = run("1", { spawnFails: false, answer: { configmap: { stdout: "", stderr: "", exitCode: 1 } } }, valuesAt({ missing: "not set" }));
+      // The stage-2 answers fail stage 1's probes; what matters is that nothing was compared.
+      expect(await errorOf(result)).toMatch(/probe\(s\) did not get the expected answer/);
+      expect(valuesRead).toEqual([]);
+      expect(commands.some((c) => c.includes("kubectl"))).toBe(false);
+      expect(commands.filter((c) => c.startsWith("curl ")).length).toBe(probes().length);
+    });
+  });
+
+  describe("no ssh, kubectl or git text reaches the output", () => {
+    let path: string | undefined;
+    beforeEach(() => {
+      path = process.env.PATH;
+      process.env.DEMO_APP_HOST = HOSTS["app"];
+      process.env.DEMO_GATEWAY_HOST = HOSTS.gateway;
+      process.env.DEMO_OTA_HOST = HOSTS.ota;
+    });
+    afterEach(() => {
+      process.env.PATH = path;
+      delete process.env.DEMO_APP_HOST;
+      delete process.env.DEMO_GATEWAY_HOST;
+      delete process.env.DEMO_OTA_HOST;
+    });
+    /** git that fails every command with LEAKY_STDERR, and a cluster whose every read fails with it. */
+    const leakyWorld = () => {
+      const bin = join(dir, "bin");
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s\\n' ${shq(LEAKY_STDERR)} >&2\nexit 128\n`, { mode: 0o755 });
+      process.env.PATH = `${bin}:${path ?? ""}`;
+      const leaky = (exitCode: number): RunResult => ({ stdout: LEAKY_STDERR, stderr: LEAKY_STDERR, exitCode });
+      return { cluster: { answer: { configmap: leaky(1), services: leaky(255), servicecidr: ok(`not json: ${LEAKY_STDERR}`) } }, values: () => valuesAddress(dir) };
+    };
+    const noLeak = (text: string) => {
+      for (const leak of LEAKS) expect(text).not.toContain(leak);
+    };
+
+    test("status's lines", async () => {
+      const world = leakyWorld();
+      const lines = await statusAddressLines(clusterBox(world.cluster).box, world.values);
+      expect(lines.join("\n")).toContain("git rev-parse HEAD failed (exit 128)");
+      noLeak(lines.join("\n"));
+    });
+
+    test("route-origin's lines, error and record", async () => {
+      const world = leakyWorld();
+      const message = await errorOf(routeOrigin(clusterBox(world.cluster).box, log, world.values));
+      expect(message).toContain("failed (exit 255, ssh)");
+      noLeak(message);
+      noLeak(readFileSync(log.file, "utf8"));
+      noLeak(JSON.stringify(record("route-origin")));
+    });
+
+    test("check --stage 2's lines, error and record", async () => {
+      const world = leakyWorld();
+      const { box } = clusterBox(world.cluster);
+      const message = await errorOf(check(box, log, { stage: "2" }, { workstation: async () => ok(), values: world.values }));
+      expect(message).toContain("nothing was probed");
+      noLeak(message);
+      noLeak(readFileSync(log.file, "utf8"));
+      noLeak(JSON.stringify(record("check")));
+    });
   });
 });
 

@@ -195,6 +195,20 @@ services:
     enabled: false
   identity:
     enabled: false
+    # The API (http: the ext_authz check, the tenant API) and the token exchange on a port of its
+    # own (token-exchange, the service's exchange.listen_addr; Laysi/trustiot-v2#106). The mesh
+    # lets the ingress gateway and the services that list identity in mesh.calls reach the API port
+    # only, and the services that call on behalf of users the token-exchange port only
+    # (README.md, "呼叫矩陣"). The numbers are the service's defaults; keep both ports when
+    # overriding the list: the render fails without token-exchange while mesh.calls has calls on
+    # behalf of users.
+    ports:
+      - name: http
+        containerPort: 8080
+        appProtocol: http
+      - name: token-exchange
+        containerPort: 8082
+        appProtocol: http
     # The signing keys file is mode 0440, owned by root and the pod's fsGroup, so the service reads
     # it through this group and no other user in the container can (README.md, "內部身分"). On
     # OpenShift set fsGroup to null: the restricted-v2 SCC assigns one from the namespace range.
@@ -204,6 +218,12 @@ services:
     enabled: false
   certs:
     enabled: false
+    # The issuing CA keys file is mode 0440, owned by root and the pod's fsGroup, so the service
+    # reads it through this group and no other user in the container can (README.md, "閘道器憑證
+    # CA"). A group of its own, not identity's: no other pod is in it. On OpenShift set fsGroup to
+    # null, as for identity.
+    podSecurityContext:
+      fsGroup: 65533
   ingest:
     enabled: false
   telemetry-query:
@@ -239,6 +259,12 @@ mesh:
   # the telemetry calls itself: every service to the collector, the collector to ClickHouse.
   # `postgres` (bundled or external) is how a service declares that it uses Postgres: only those
   # services get the server's CA file and, bundled, reach the Postgres pods (README.md).
+  # A call from one service to another (ai-gateway aside) is also a call on behalf of users: the
+  # identity service exchanges the request's token for one addressed to the callee along these
+  # calls only, one hop (a token it exchanged is never exchanged again), and every such caller
+  # may reach the identity service's token-exchange port, and no other port of it (README.md,
+  # "呼叫矩陣"). Listing identity as a callee grants its API port instead, ext_authz check
+  # included, so list it only for a service that calls the identity service's own API.
   calls:
     # The identity service keeps its sessions, users and tenants in Postgres
     # (services/identity/README.md).
@@ -247,6 +273,10 @@ mesh:
     # The assets service keeps its data in Postgres and reads the identity service's events from
     # there as its platform role (services/assets/README.md).
     assets:
+      - postgres
+    # The certs service keeps the ledger of the certificates it signed and its CRLs in Postgres
+    # (services/certs/README.md).
+    certs:
       - postgres
     # ClickHouse (decision 14): ingest writes telemetry, telemetry-query reads it with per-tenant
     # read-only accounts (docs/architecture/deployment.md).
@@ -297,6 +327,32 @@ internalIdentity:
   signingKeySecret:
     name: ""
     key: signing-key.pem
+
+# Gateway certificate authority (decision 12, Laysi/trustiot-v2#78): the certs service signs the
+# gateways' client certificates with an online issuing CA under an offline root
+# (services/certs/README.md, 「CA 階層與私鑰保管」). The issuing CA's ECDSA P-256 key is generated in
+# the cluster: the certs pod's init container keeps it in the Secret <release>-certs-ca-keys, which
+# only the certs service reads, and writes its certificate signing request into the ConfigMap
+# <release>-certs-ca-requests. An operator signs that request with the offline root and sets the
+# certificate below; nobody sees or copies an issuing CA private key. Until an issuing CA
+# certificate for one of its keys is set the service is ready but cannot sign: its gauge
+# certs.ca.signing is 0 and it logs the waiting key at every check.
+certificateAuthority:
+  # Raise it to add an issuing CA key (rotation, or replacing a key that leaked): the certs pods
+  # restart, the first one's init container adds a key of this generation and writes its request;
+  # the older keys keep signing until the new key's certificate is set below. Only goes up: a
+  # rollback to a lower number changes nothing. 1 to 9 digits.
+  keyGeneration: "1"
+  # Keys of a lower generation are removed at the next certs pod start: they no longer sign and
+  # their CRLs are no longer published, so the broker refuses every certificate they signed
+  # (services/certs/README.md, 「簽發 CA 金鑰遺失或外洩」). 0 removes nothing.
+  removeKeysBeforeGeneration: "0"
+  # The offline root CA's certificate: its DER in base64 on one line (public). Empty until the
+  # root ceremony.
+  rootCertificate: ""
+  # The issuing CA certificates the root signed, one per key, each its DER in base64 on one line
+  # (public); at most 4. The service picks up a change without a restart.
+  issuingCertificates: []
 
 # Migration Job (tools/migrate, Laysi/trustiot-v2#60): applies every service's Postgres
 # migrations and the ClickHouse DDL with the migration role, creates the service roles and the

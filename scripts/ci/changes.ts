@@ -189,9 +189,10 @@ const HELM_READ_FILES: ReadonlySet<string> = new Set([
 
 /**
  * What `bun test deploy/flux` reads besides deploy/flux/ and the chart (Laysi/trustiot-v2#70):
- * the SOPS rules and the scripts that its tests load (checked by changes.test.ts).
+ * the SOPS rules and the scripts that its tests load (checked by changes.test.ts), such as the
+ * Service range's static band for the demo overlay's fixed ingress ClusterIP.
  */
-const FLUX_READ_FILES: ReadonlySet<string> = new Set([".sops.yaml", "scripts/release/flux.ts"]);
+const FLUX_READ_FILES: ReadonlySet<string> = new Set([".sops.yaml", "scripts/release/flux.ts", "scripts/nightly/ingress-address.ts"]);
 
 /**
  * ClickHouse migrations: the chart tests check the collector's exporter columns against the log
