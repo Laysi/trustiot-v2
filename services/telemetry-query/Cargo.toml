@@ -1,0 +1,65 @@
+[package]
+name = "telemetry-query"
+description = "TrustIoT v2 telemetry-query service: each tenant's read-only ClickHouse account, created when the tenant is created, and the history API of device charts, within the queryable period."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "telemetry-query"
+path = "src/main.rs"
+test = false
+doc = false
+
+[dependencies]
+axum = { workspace = true, features = ["http1", "json", "query", "tokio"] }
+chrono = { workspace = true, features = ["now", "serde"] }
+contract = { path = "../../crates/contract" }
+# Consumes identity.tenant_created (decision 4).
+outbox = { path = "../../crates/outbox" }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+service-kit = { path = "../../crates/service-kit" }
+# Same TLS stack as service-kit: every connection verifies the server (checklist M3).
+sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "time"] }
+tracing.workspace = true
+# The client API's OpenAPI document (tools/openapi merges it into api/openapi.json).
+utoipa = { workspace = true, features = ["chrono", "uuid"] }
+uuid = { workspace = true, features = ["serde"] }
+# Each tenant account's password, derived from the service's own ClickHouse password (HMAC), and
+# the salted SHA-256 hash ClickHouse stores, so a plaintext password never appears in SQL.
+getrandom.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+# ClickHouse over its HTTP interface: HTTP/1.1 over hyper with rustls and ring, and only the CA the
+# deployment names as trust anchor (no system or public roots). Not reqwest: see src/transport.rs.
+base64.workspace = true
+bytes.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+percent-encoding.workspace = true
+rustls = { workspace = true, features = ["ring", "std", "tls12"] }
+rustls-pki-types = { workspace = true, features = ["std"] }
+tokio-rustls = { workspace = true, features = ["ring"] }
+
+[dev-dependencies]
+# Creates tenants through the identity service's own code, as the producer of the event.
+identity = { path = "../identity" }
+# The migration Job's ClickHouse part (the DDL and this service's account), run as the Job runs it.
+migrate = { path = "../../tools/migrate" }
+reqwest.workspace = true
+# The product's schema (the migration Job), test identity tokens, and the cross-tenant suite.
+testkit = { path = "../../crates/testkit" }
+tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "time"] }
+# Random test passwords and container names (tests/support, services/ingest/tests/common).
+uuid = { workspace = true, features = ["serde", "v4"] }
+
+[lints]
+workspace = true

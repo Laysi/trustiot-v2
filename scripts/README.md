@@ -88,7 +88,7 @@ service-kit 連 Postgres 一律用 `sslmode=verify-full`（Laysi/trustiot-v2#53�
 登入角色只在綁了 Secret 時能登入，Job 把沒有綁定的設成 NOLOGIN（`tools/migrate/src/lib.rs` 的 `Report::roles_without_password`）。本機綁的角色與 chart 相同（`deploy/chart/templates/_migrate.tpl` 的 `trustiot.migrate.passwordSecrets`）：
 
 - `PRODUCT` 每個服務的 `<schema>_app`；
-- chart 的 `trustiot.migrate.platformLogins` 列出的服務的 `<schema>_platform`（outbox 的消費端以它讀 producer 的事件，Laysi/trustiot-v2#65；目前是 `assets`，以及保存事件紀錄的 `identity`，Laysi/trustiot-v2#130）。不在清單裡的平台角色沒有程式以它連線，chart 不綁，本機也不綁，維持 NOLOGIN；`<schema>_owner` 只供 Job 與 `seed` 以 `SET ROLE` 使用，永遠不能登入。
+- chart 的 `trustiot.migrate.platformLogins` 列出的服務的 `<schema>_platform`（outbox 的消費端以它讀 producer 的事件，Laysi/trustiot-v2#65；目前是 `assets`，保存事件紀錄的 `identity`，Laysi/trustiot-v2#130，以及 `telemetry-query`，Laysi/trustiot-v2#119）。不在清單裡的平台角色沒有程式以它連線，chart 不綁，本機也不綁，維持 NOLOGIN；`<schema>_owner` 只供 Job 與 `seed` 以 `SET ROLE` 使用，永遠不能登入。
 
 清單在 `lib/product-logins.ts`（`PRODUCT_SERVICES`、`PLATFORM_LOGIN_SERVICES`），`up` 與 `env` 都由它得出角色、Secret 與 state 的鍵：每個服務一個 Secret `dev-<服務>-password`（與 chart 的 `<release>-<服務>-password` 一樣，一個 Secret 放兩個 key），state 檔的鍵是服務名稱（平台角色是 `<服務>-platform`）。`tests/product-logins.test.ts` 讀 `registry.rs` 與 `_migrate.tpl`，在 `PRODUCT` 多一個服務、或 chart 多綁一個平台角色而這份清單沒跟上時失敗，訊息說明要改 `lib/product-logins.ts` 的哪一個清單。
 

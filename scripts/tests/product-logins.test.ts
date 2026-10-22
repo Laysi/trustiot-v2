@@ -163,7 +163,7 @@ describe("the local login roles against the product", () => {
     // "assets" reads its own outbox only until the gateway configuration's consumer registers
     // (Laysi/trustiot-v2#93), which drops it from this list.
     expect(registry.find((service) => service.name === "assets")).toEqual({ name: "assets", platformRole: true, consumes: ["identity", "assets"] });
-    expect(chartPlatformLogins(chartSource)).toEqual(["assets", "identity"]);
+    expect(chartPlatformLogins(chartSource)).toEqual(["assets", "identity", "telemetry-query"]);
   });
 
   test("every role the local Job binds is a login role the registry creates", () => {
@@ -250,6 +250,20 @@ describe("the logins", () => {
       { service: "identity", kind: "platform", role: "identity_platform", secret: "dev-identity-password", stateKey: "identity-platform" },
       { service: "assets", kind: "app", role: "assets_app", secret: "dev-assets-password", stateKey: "assets" },
       { service: "assets", kind: "platform", role: "assets_platform", secret: "dev-assets-password", stateKey: "assets-platform" },
+      {
+        service: "telemetry-query",
+        kind: "app",
+        role: "telemetry_query_app",
+        secret: "dev-telemetry-query-password",
+        stateKey: "telemetry-query",
+      },
+      {
+        service: "telemetry-query",
+        kind: "platform",
+        role: "telemetry_query_platform",
+        secret: "dev-telemetry-query-password",
+        stateKey: "telemetry-query-platform",
+      },
       { service: "certs", kind: "app", role: "certs_app", secret: "dev-certs-password", stateKey: "certs" },
     ]);
   });

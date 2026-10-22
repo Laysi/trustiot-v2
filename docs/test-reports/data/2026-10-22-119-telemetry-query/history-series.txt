@@ -1,0 +1,6 @@
+series       Asia/Taipei Some("1h"): interval "1h", 49 buckets, 399 readings, equal to the reference
+series      Asia/Kolkata Some("3h"): interval "3h", 17 buckets, 399 readings, equal to the reference
+series       Asia/Taipei Some("1d"): interval "1d", 3 buckets, 399 readings, equal to the reference
+series               UTC Some("1d"): interval "1d", 3 buckets, 399 readings, equal to the reference
+series     Asia/Kolkata Some("15m"): interval "15m", 193 buckets, 399 readings, equal to the reference
+series             Asia/Taipei None: interval "5m", 399 buckets, 399 readings, equal to the reference

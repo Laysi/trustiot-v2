@@ -12,6 +12,7 @@ repository.workspace = true
 assets = { path = "../../services/assets" }
 contract = { path = "../../crates/contract" }
 identity = { path = "../../services/identity" }
+telemetry-query = { path = "../../services/telemetry-query" }
 serde_json.workspace = true
 thiserror.workspace = true
 utoipa.workspace = true
