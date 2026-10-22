@@ -4,7 +4,7 @@
 
 ## 環境
 
-- **受測程式碼**：分支 `feat/119-telemetry-query`。功能 commit `98ce1f1`，合併 main `1bda1d9` 的 commit `e78df61`，安全審查的修正 `1b7f9f6` 與 `a753fec`；本報告的 commit 只改文件與測試資料。
+- **受測程式碼**：分支 `feat/119-telemetry-query`。功能 commit `98ce1f1`，合併 main `1bda1d9` 的 commit `e78df61`，安全審查的修正 `3048106` 與 `038fd10`，合併 main `56b2c08` 的 `e1a0bd7`（前端 API client 與翻譯 `da21a67`、chart 測試 `b36ec11`），合併 main `941e872` 的 `1d4d20a`（翻譯修正 `11da2ba`），以及 migration 改號 `436d2e6`；本報告的 commit 只改文件與測試資料。
 - **執行的地方**：經檢查佇列在建置主機（x86_64 Linux，rootless podman）跑，`CI=1`，所以需要容器的測試在沒有容器時失敗而不是略過。
 - **工具版本**：`.prototools` 與 `rust-toolchain.toml` 釘選的 Rust 1.99.0、Bun、helm、kubeconform、cargo-deny。
 - **測試用的伺服器**：整合測試自己起拋棄式容器。
@@ -37,6 +37,17 @@ bun test scripts
 bun run --cwd scripts typecheck
 bun scripts/ci/check-secret-handling.ts
 bun scripts/ci/check-workflows.ts
+bun test scripts/ci/changes.test.ts
+```
+
+前端（在工作站上跑，CI 的 frontend job 的步驟）：
+
+```sh
+bun install --cwd frontend --frozen-lockfile
+bun run --cwd frontend api:check
+bun run --cwd frontend typecheck
+bun run --cwd frontend lint
+bun run --cwd frontend test
 ```
 
 ## 結果
@@ -95,20 +106,31 @@ bun scripts/ci/check-workflows.ts
 
 ### 完整檢查（最後 head）
 
-在安全審查的修正之後的 `a753fec` 上，建置主機，2026-10-22 15:27 到 15:37（Asia/Taipei），全部通過（合併 main 之後的 `e78df61` 上也曾全部通過，數字相同）：
+在合併 main `941e872` 與 migration 改號之後的 `436d2e6` 上，經檢查佇列在建置主機跑，`CI=1`，2026-10-22 21:51 到 22:03（Asia/Taipei），全部通過；原始輸出在 [data/2026-10-22-119-telemetry-query/final-checks.txt](data/2026-10-22-119-telemetry-query/final-checks.txt)，存檔時拿掉了 ssh 的連線訊息與檢查佇列本身的狀態行（含建置主機的主機名稱與佇列的工作代號），其餘照原樣。之後的 commit 只改本報告與測試資料。
 
-| 指令 | 結果 |
-| --- | --- |
-| `cargo fmt --all --check` | 通過 |
-| `cargo clippy --locked --workspace --all-targets -- -D warnings` | 通過，沒有警告 |
-| `cargo test --locked --workspace --no-fail-fast` | 通過：120 個測試執行檔、893 個測試，0 失敗（`CI=1`，需要容器的測試都有執行） |
-| `cargo run --locked -q -p openapi -- --check` | `api/openapi.json is up to date` |
-| `cargo deny --locked check` | `advisories ok, bans ok, licenses ok, sources ok` |
-| `bun test deploy/chart` | 461 pass、0 fail（含啟用 `services.telemetry-query` 時的渲染、密碼 Secret 只給這個服務、自訂 `env` 不能覆寫或讀它；預設仍是停用） |
-| `bun test scripts` | 1482 pass、4 skip、0 fail |
-| `bun run --cwd scripts typecheck` | 通過 |
-| `bun scripts/ci/check-secret-handling.ts` | 449 個檔案，沒有違規 |
-| `bun scripts/ci/check-workflows.ts` | 4 個檔案，沒有違規 |
+| 指令 | 結束碼 | 結果 |
+| --- | --- | --- |
+| `cargo fmt --all --check` | 0 | 通過 |
+| `cargo clippy --locked --workspace --all-targets -- -D warnings` | 0 | 通過，沒有警告 |
+| `cargo test --locked --workspace --no-fail-fast` | 0 | 144 個 `test result` 行（測試執行檔與 doc-test）、1072 個測試通過，0 失敗、0 略過（`CI=1`，需要容器的測試都有執行） |
+| `cargo run --locked -q -p openapi -- --check` | 0 | `api/openapi.json is up to date` |
+| `cargo deny --locked check` | 0 | `advisories ok, bans ok, licenses ok, sources ok` |
+| `bun test deploy/chart` | 0 | 508 pass、0 fail（含啟用 `services.telemetry-query` 時的渲染、密碼 Secret 只給這個服務、別的服務的自訂 `env` 讀不到它；預設仍是停用） |
+| `bun install --cwd scripts --frozen-lockfile` | 0 | |
+| `bun test scripts` | 0 | 1541 pass、4 skip、0 fail |
+| `bun run --cwd scripts typecheck` | 0 | 通過 |
+
+在工作站上於同一個 head 跑的輕量檢查：
+
+| 指令 | 結束碼 | 結果 |
+| --- | --- | --- |
+| `bun run --cwd frontend api:check`、`typecheck`、`lint` | 0 | 通過 |
+| `bun run --cwd frontend test` | 0 | 115 pass、0 fail（含每個服務可能送出的 message key 都有 zh-TW 與 en 翻譯） |
+| `bun scripts/ci/check-secret-handling.ts` | 0 | 500 個檔案，沒有違規 |
+| `bun scripts/ci/check-workflows.ts` | 0 | 4 個檔案，沒有違規 |
+| `bun test scripts/ci/changes.test.ts` | 0 | 279 pass、0 fail |
+
+先前在 `038fd10` 上（2026-10-22 15:27 到 15:37）的完整檢查也全部通過（120 個測試執行檔、893 個測試；chart 461 pass；scripts 1482 pass、4 skip）。
 
 ## 2026-10-22 安全審查
 
@@ -132,7 +154,7 @@ bun scripts/ci/check-workflows.ts
 
 **為什麼改名是安全的**：
 
-- 兩個檔案只在這個分支新增（功能 commit `98ce1f1` 與安全審查的修正 `1b7f9f6`），從來沒有進入 main：`git show origin/main:services/ingest/migrations/clickhouse/0007_telemetry_query.sql` 回答「磁碟上存在 'services/ingest/migrations/clickhouse/0007_telemetry_query.sql' 路徑，但不存在於 'origin/main'」（git 的 zh-TW 訊息，即 "exists on disk, but not in 'origin/main'"），`0008_telemetry_query_grantees.sql` 也一樣。
+- 兩個檔案只在這個分支新增（功能 commit `98ce1f1` 與安全審查的修正 `3048106`），從來沒有進入 main：`git show origin/main:services/ingest/migrations/clickhouse/0007_telemetry_query.sql` 回答「磁碟上存在 'services/ingest/migrations/clickhouse/0007_telemetry_query.sql' 路徑，但不存在於 'origin/main'」（git 的 zh-TW 訊息，即 "exists on disk, but not in 'origin/main'"），`0008_telemetry_query_grantees.sql` 也一樣。
 - 這個分支沒有推送過（遠端沒有它的分支），所以沒有任何發佈的映像含有這兩個檔案；它們也從來沒有對任何部署中的 ClickHouse 執行過，只在測試自己起的拋棄式容器裡套用。因此沒有任何資料庫的 `trustiot_migrate.applied` 記著舊檔名。
 - 內容沒變：`0008_telemetry_query.sql` 與原來的 `0007_telemetry_query.sql` 完全相同（git 判定 100% 相同的改名）；`0009_telemetry_query_grantees.sql` 只改了註解裡前一個檔案的名字（`0007` 改成 `0008`），SQL 陳述式不變。
 
