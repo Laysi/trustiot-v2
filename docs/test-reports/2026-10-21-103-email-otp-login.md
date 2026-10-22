@@ -163,3 +163,11 @@ PR Laysi/trustiot-v2#525 在 `89b827bb` 的 nightly smoke 失敗：ingress e2e �
 修正：SMTP 帳密的 `secretKeyRef` 改成 `optional: true`（只有它），chart 在 `smtp.credentialsSecret.name` 有值時另給平台設定 `TRUSTIOT_SMTP_AUTH_REQUIRED: "true"`；身分服務在它是 `true` 卻沒有帳密時照常啟動、記 ERROR、`send_code` 回 503，不會不帶帳號寄信。chart 測試新增：每個叢集測試的安裝都不需要實例 overlay 指定的依賴 Secret（把 `optional` 拿掉時，ingress saas、mesh、postgres saas 與 identity-keys saas 兩種，共 5 個安裝失敗，都是 `Deployment/trustiot-identity reads trustiot-smtp`）；只有 SMTP 的引用是 optional。`tests/login.rs` 的 `a_missing_or_incomplete_relay_is_reported` 加上兩個帳密都沒有的情況，假 relay 的設定都帶 `TRUSTIOT_SMTP_AUTH_REQUIRED=true`。
 
 結果（建置主機，`CI=1`）：`cargo fmt --all --check`、`cargo clippy -p identity --all-targets --locked -- -D warnings` 通過；`cargo test --locked -p identity --no-fail-fast` 9 個測試執行檔 122 通過、0 失敗；`cargo test --locked -p sql-check --test check` 6 通過；`bun test deploy/chart` 522 通過、0 失敗；`bun test deploy/flux` 73 通過；`bun test scripts` 1541 通過、0 失敗；`bun run --cwd scripts typecheck` 通過。
+
+### 併入 main 之後（2026-10-23）
+
+`e23397e6` 把 main 的 `e91b9e28`（事件紀錄 Laysi/trustiot-v2#130、展示環境的 SMTP Secret）併進本分支。登入的 migration 改名為 `0004_login.sql`：編號 3 已由 main 的 `0003_event_log.sql` 使用，舊名字只在這個未合併的分支上出現過。兩個 migration 碰的表互不重疊。`api/openapi.json` 與前端的 API client 依程式重新產生。
+
+結果（建置主機，`CI=1`，在 `e23397e6` 上一次跑完）：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo run --locked -q -p openapi -- --check`、`cargo deny --locked check` 通過；`cargo test --workspace --locked --no-fail-fast` 1098 通過、1 失敗；`bun test deploy/chart` 522 通過、`bun test deploy/flux` 73 通過、`bun test scripts` 1583 通過（9 個略過）、都沒有失敗；`bun run --cwd scripts typecheck` 通過。唯一的失敗是 `there_is_no_password_login_sign_up_or_fake_login`：它比對 OpenAPI 列出的全部路徑，還沒有 main 帶來的三條唯讀事件紀錄路徑。`13b013a2` 把它們補進預期清單之後，`cargo clippy --locked -p identity --all-targets -- -D warnings` 通過，`cargo test --locked -p identity --no-fail-fast` 128 通過、0 失敗。
+
+工作站（`13b013a2`）：`bun run --cwd frontend api:check`、`typecheck`、`lint` 通過，`test` 115 通過、0 失敗；`bun scripts/ci/check-secret-handling.ts` 沒有違規；`bun test scripts/ci/changes.test.ts` 279 通過、0 失敗；`gitleaks git --redact --log-opts="origin/main..HEAD"` 與對 `git archive HEAD` 展開的目錄跑 `gitleaks dir --redact` 都沒有發現。
