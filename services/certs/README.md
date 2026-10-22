@@ -251,7 +251,7 @@ curl -sS --fail-with-body -X POST "https://<app 主機>/api/certs/v1/workstation
   --data '{"reason": "key_compromise"}'
 ```
 
-`reason` 可省略（CRL 不寫原因），或是 `unspecified`、`key_compromise`、`affiliation_changed`、`superseded`、`cessation_of_operation`、`privilege_withdrawn`。200 回傳撤銷後的紀錄（`revoked_at`、`revocation_reason`）；序號不是工作站憑證（包括閘道器憑證的序號）時 404，已經撤銷時 409（`workstation_certificate.already_revoked`）。簽發紀錄立即標記，登錄 API 依它立即拒絕；簽發 CA 的下一張排程 CRL 列出它：CRL 剩不到 `crl.renew_before` 時重發，預設設定下最多約 2 天加一輪 `crl.check_interval`。撤銷後立即重發 CRL 是 Laysi/trustiot-v2#82。
+`reason` 可省略（CRL 不寫原因），或是 `unspecified`、`key_compromise`、`affiliation_changed`、`superseded`、`cessation_of_operation`、`privilege_withdrawn`。200 回傳撤銷後的紀錄（`revoked_at`、`revocation_reason`）；序號不是工作站憑證（包括閘道器憑證的序號）時 404，已經撤銷時 409（`workstation_certificate.already_revoked`）。撤銷不能收回，原因也不能再改（見「資料庫」）：撤銷錯了，就為工作站簽一張新的。簽發紀錄立即標記，登錄 API 依它立即拒絕；簽發 CA 的下一張排程 CRL 列出它：CRL 剩不到 `crl.renew_before` 時重發，預設設定下最多約 2 天加一輪 `crl.check_interval`。撤銷後立即重發 CRL 是 Laysi/trustiot-v2#82。
 
 **換發**：到期前由平台管理員再簽一張（最好在工作站上產生新的金鑰與 CSR），名稱相同；工作站換用新憑證之後，以 `superseded` 撤銷舊的。舊的在撤銷或到期前仍然有效。還沒有列出工作站憑證的 API，序號要從簽發的回應記下來。
 
@@ -323,6 +323,8 @@ schema `certs`，DDL 在 `migrations/postgres/`，由 migration Job（登記在 
 | `certs_owner`（migration 角色） | 擁有 schema 與所有表 |
 | `certs_app`（服務角色） | `issued_certificates` 的 `SELECT`、`INSERT`，以及只限 `revoked_at`、`revocation_reason` 兩欄的 `UPDATE`（`0002_workstation_certificates.sql`，Laysi/trustiot-v2#534；閘道器的撤銷 Laysi/trustiot-v2#82 沿用），改不了簽出的內容、也不能刪除；`crls` 的 `SELECT`、`INSERT`、`UPDATE` |
 
+撤銷是最終的，對所有角色都一樣，包括擁有者與 superuser：`0002_workstation_certificates.sql` 的 trigger `issued_certificates_guard` 在每次 `UPDATE` 前檢查兩件事。一是撤銷過的列不能再改：不能收回撤銷、改撤銷時間或原因，否則有問題或被入侵的服務能讓憑證從下一張 CRL 消失。二是 `UPDATE` 只能改撤銷的兩欄：欄位權限已經這樣限制服務角色，trigger 再擋下擁有者與 superuser；它比對撤銷兩欄以外的整列，所以之後新增的欄位也不能改，除非新的 migration 另外處理。違反時錯誤是 SQLSTATE 42501（`insufficient_privilege`），訊息寫明序號。服務撤銷時只更新 `revoked_at IS NULL` 的列，不會碰到 trigger；trigger 只有擁有者能停用（`ALTER TABLE`），只有 superuser 能略過（`session_replication_role`）。
+
 | 表 | 內容 | RLS |
 | --- | --- | --- |
 | `issued_certificates` | 每張簽出的憑證：序號（主鍵）、簽發 CA 的金鑰 id、profile（`gateway` 或 `workstation`）、CN、效期、簽發時間、DER，撤銷時間與原因 | 無：不是租戶資料。閘道器憑證屬於閘道器，閘道器屬於哪個租戶是登錄（Laysi/trustiot-v2#79）與資產服務的紀錄；產線工作站屬於平台，不屬於租戶；之後在這裡存租戶 id 時要改成租戶表 |
@@ -347,7 +349,7 @@ CARGO_BUILD_JOBS=2 cargo test -p certs
 
 | 測試 | 驗證 |
 | --- | --- |
-| `tests/issuance.rs` | 驗收條件 1：要求別的 CN、SAN、serverAuth、codeSigning、各種 keyUsage 與 CA 的 CSR，簽出的都是 CA 決定的 profile，並能在根之下驗證為 TLS 用戶端憑證、不能當伺服器憑證或簽其他憑證；別的曲線或演算法、驗不過的簽章、改過的主體、過大或多餘的位元組都拒絕；代最大的有效簽發 CA 簽章；簽發 CA 還沒有 CRL 時簽發紀錄寫不進去，有了才寫入且內容正確；`certs_app` 只能改撤銷的兩欄，改不了簽出的內容、也刪不掉（容器） |
+| `tests/issuance.rs` | 驗收條件 1：要求別的 CN、SAN、serverAuth、codeSigning、各種 keyUsage 與 CA 的 CSR，簽出的都是 CA 決定的 profile，並能在根之下驗證為 TLS 用戶端憑證、不能當伺服器憑證或簽其他憑證；別的曲線或演算法、驗不過的簽章、改過的主體、過大或多餘的位元組都拒絕；代最大的有效簽發 CA 簽章；簽發 CA 還沒有 CRL 時簽發紀錄寫不進去，有了才寫入且內容正確；`certs_app` 只能改撤銷的兩欄，改不了簽出的內容、也刪不掉；撤銷之後 `certs_app` 與 superuser 都不能收回、改撤銷時間或原因，superuser 也改不了簽出的內容，被 trigger 以 42501 拒絕、列不變（容器） |
 | `tests/crl.rs` | 驗收條件 2：CRL 的內容，以及 TLS 伺服器依它拒絕撤銷的憑證、CRL 過期後拒絕全部；新 CRL 的 nextUpdate 減 thisUpdate 是 `crl.validity` 加往前的 5 分鐘；真的服務依排程為每個簽發 CA 重發 CRL 並由 `crl.pem` 發布；以 superuser 拿住工作鎖、把 nextUpdate 調近時 `certs.crl.expiring` 經 OTLP 變成 1 並記 ERROR，放開後工作重發、指標回到 0（容器） |
 | `tests/key_custody.rs` | 驗收條件 3：程式檢查，只有列出並說明理由的位置能把私鑰變成位元組或文字；執行時，日誌開到 `trace`、開 OTLP、有等待中的金鑰、重讀與兩種壞掉的金鑰檔，日誌、端點（含簽發工作站憑證的回應）與遙測都不含私鑰的任何片段（PKCS#8 涵蓋私鑰純量的任 24 個 base64 字元，其餘部分是演算法與公鑰，簽發 CA 憑證本來就公開；私鑰純量的十六進位、base64 與十進位位元組）（容器） |
 | `tests/ceremony.rs` | 真的 `certs-ca`：`root create` 的私鑰只到 stdout、`root sign` 只從 stdin 讀、簽出的簽發 CA 服務接受並印出金鑰 id、`root check` 認得自己的私鑰；別的私鑰、P-256 私鑰、根的名稱、0 天、已存在的輸出檔都拒絕，且不印出私鑰；真的服務在儀式前就緒、`certs.ca.signing` 是 0、每次檢查記 WARN 與等待中的金鑰 id，掛上憑證後不重啟就變成 1 並發出第一張 CRL（容器） |
