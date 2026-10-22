@@ -179,8 +179,8 @@ describe("a change of the product that the local list does not follow", () => {
     const messages = drift(
       registryWith(service("identity", true), service("assets", true, ["identity"]), service("telemetry-query", false)),
       chartWith("assets"),
-      PRODUCT_SERVICES,
-      PLATFORM_LOGIN_SERVICES,
+      ["identity", "assets"],
+      ["assets"],
     );
     expect(messages).toHaveLength(1);
     expect(messages[0]).toContain("telemetry-query");
@@ -192,8 +192,8 @@ describe("a change of the product that the local list does not follow", () => {
     const messages = drift(
       registryWith(service("identity", true), service("assets", true, ["identity"])),
       chartWith("assets", "identity"),
-      PRODUCT_SERVICES,
-      PLATFORM_LOGIN_SERVICES,
+      ["identity", "assets"],
+      ["assets"],
     );
     expect(messages).toHaveLength(1);
     expect(messages[0]).toContain("identity_platform");
@@ -202,10 +202,10 @@ describe("a change of the product that the local list does not follow", () => {
 
   test("a local role the product does not have fails the other way round", () => {
     const registry = registryWith(service("identity", true), service("assets", true, ["identity"]));
-    expect(drift(registry, chartWith(), PRODUCT_SERVICES, PLATFORM_LOGIN_SERVICES).join("\n")).toContain(
+    expect(drift(registry, chartWith(), ["identity", "assets"], ["assets"]).join("\n")).toContain(
       "does not bind assets_platform",
     );
-    expect(drift(registry, chartWith("assets"), [...PRODUCT_SERVICES, "ghost"], PLATFORM_LOGIN_SERVICES).join("\n")).toContain(
+    expect(drift(registry, chartWith("assets"), ["identity", "assets", "ghost"], ["assets"]).join("\n")).toContain(
       "which tools/migrate/src/registry.rs does not register",
     );
   });
@@ -215,8 +215,8 @@ describe("a change of the product that the local list does not follow", () => {
       drift(
         registryWith(service("identity", true), service("assets", true, ["identity"]), service("telemetry-query", true, ["identity"])),
         chartWith("assets", "telemetry-query"),
-        [...PRODUCT_SERVICES, "telemetry-query"],
-        [...PLATFORM_LOGIN_SERVICES, "telemetry-query"],
+        PRODUCT_SERVICES,
+        PLATFORM_LOGIN_SERVICES,
       ),
     ).toEqual([]);
   });
@@ -236,6 +236,20 @@ describe("the logins", () => {
       { service: "identity", kind: "app", role: "identity_app", secret: "dev-identity-password", stateKey: "identity" },
       { service: "assets", kind: "app", role: "assets_app", secret: "dev-assets-password", stateKey: "assets" },
       { service: "assets", kind: "platform", role: "assets_platform", secret: "dev-assets-password", stateKey: "assets-platform" },
+      {
+        service: "telemetry-query",
+        kind: "app",
+        role: "telemetry_query_app",
+        secret: "dev-telemetry-query-password",
+        stateKey: "telemetry-query",
+      },
+      {
+        service: "telemetry-query",
+        kind: "platform",
+        role: "telemetry_query_platform",
+        secret: "dev-telemetry-query-password",
+        stateKey: "telemetry-query-platform",
+      },
     ]);
   });
 

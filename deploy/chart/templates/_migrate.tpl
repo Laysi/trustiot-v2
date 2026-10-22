@@ -89,7 +89,7 @@ against the registry: every consumer is in it, and nothing without a platform ro
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.migrate.platformLogins" -}}
-{{- list "assets" | toYaml -}}
+{{- list "assets" "telemetry-query" | toYaml -}}
 {{- end -}}
 
 {{/*
@@ -99,14 +99,19 @@ one per consumer, so a node's kubelet can read only the passwords of the pods sc
   its login role's password under the key "<service>_app" (role "app"), and, for a service in
   "trustiot.migrate.platformLogins", its platform role's password under "<service>_platform" (role
   "platform") in the same Secret;
+- the telemetry-query service, when enabled: its ClickHouse account's password under the key
+  "trustiot_telemetry_query" (role "clickhouse") in the same "<release>-telemetry-query-password"
+  (services/telemetry-query/README.md; the account is defined by
+  services/ingest/migrations/clickhouse/0007_telemetry_query.sql);
 - the OpenTelemetry collector, when enabled: "<release>-otel-collector-password", with its
   ClickHouse account's password under the key named after the account.
 templates/passwords.yaml declares them without data; the migration Job generates each password and
 writes it in (tools/migrate/src/passwords.rs). They are declared whether or not migrate.enabled is
 true: with the Job turned off, whatever replaces it fills them (only the cluster tests do that).
 Returns a YAML list of {name, key, database (postgres or clickhouse), component, role (app or
-platform, postgres only)}, one per key, so a Secret with two keys appears twice; use with
-fromYamlArray, and "trustiot.migrate.passwordSecretObjects" for the Secrets themselves.
+platform for postgres, clickhouse for a service's ClickHouse account)}, one per key, so a Secret
+with two keys appears twice; use with fromYamlArray, and "trustiot.migrate.passwordSecretObjects"
+for the Secrets themselves.
 */}}
 {{- define "trustiot.migrate.passwordSecrets" -}}
 {{- $secrets := list -}}
@@ -116,6 +121,11 @@ fromYamlArray, and "trustiot.migrate.passwordSecretObjects" for the Secrets them
 {{- $secrets = append $secrets (dict "name" $name "key" (include "trustiot.migrate.appRole" .) "database" "postgres" "component" . "role" "app") -}}
 {{- if has . $platformLogins -}}
 {{- $secrets = append $secrets (dict "name" $name "key" (include "trustiot.migrate.platformRole" .) "database" "postgres" "component" . "role" "platform") -}}
+{{- end -}}
+{{- end -}}
+{{- with get .Values.services "telemetry-query" -}}
+{{- if .enabled -}}
+{{- $secrets = append $secrets (dict "name" (include "trustiot.componentName" (dict "root" $ "name" "telemetry-query-password")) "key" "trustiot_telemetry_query" "database" "clickhouse" "component" "telemetry-query" "role" "clickhouse") -}}
 {{- end -}}
 {{- end -}}
 {{- with .Values.observability.collector -}}
@@ -313,6 +323,8 @@ passwords. */ -}}
 {{- range $secrets -}}
 {{- if eq .database "postgres" -}}
 {{- $postgres = append $postgres (printf "%s=%s" .key .name) -}}
+{{- else if eq .component "telemetry-query" -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY" "value" (printf "%s=%s" .key .name)) -}}
 {{- else -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR" "value" (printf "%s=%s" .key .name)) -}}
 {{- end -}}

@@ -4,7 +4,8 @@
 //!   the same time; then fills the Secrets that hold the generated passwords ([`passwords`]),
 //!   the Postgres part ([`postgres`]: the Job's bookkeeping, the per-database
 //!   setup, every service's roles, schema, outbox tables and migrations, the per-tenant role
-//!   hooks) and the ClickHouse part ([`clickhouse`]: the DDL and the collector's account).
+//!   hooks) and the ClickHouse part ([`clickhouse`]: the DDL and the accounts of the collector
+//!   and of telemetry-query).
 //! - [`kube::wait_for_job`]: the init container that holds a service's pod until the release's
 //!   migration Job has completed.
 //! - [`clickhouse_admin::generate`]: the bundled ClickHouse's init container, which generates
@@ -150,7 +151,12 @@ pub async fn run(config: &RunConfig, registry: &Registry) -> Result<Report, Erro
         let client =
             clickhouse::ClickHouse::connect(config, settings, config.wait.databases).await?;
         client
-            .migrate(registry, passwords.collector(), &mut report)
+            .migrate(
+                registry,
+                passwords.collector(),
+                passwords.telemetry_query(),
+                &mut report,
+            )
             .await?;
     } else {
         tracing::info!("no ClickHouse settings: the ClickHouse part is skipped");

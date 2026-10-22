@@ -75,7 +75,7 @@ proto 的 shim 偶爾會把自己的訊息寫進 stdout（例如另一個 proto 
 | Grafana | — | 尚未加入 | Laysi/trustiot-v2#183 |
 | Sentry | `observability.sentry.*` | 開關、環境名稱與 DSN 已接到每個服務 | Laysi/trustiot-v2#184 |
 | 內部身分（公鑰、簽章私鑰） | `internalIdentity.*` | 完成：金鑰對由身分服務 pod 的 init container 在叢集內產生，私鑰在只有身分服務掛載的 Secret，公鑰在每個服務都掛載的 ConfigMap，服務不重啟就換上新公鑰；金鑰超過 `maxKeyAgeSeconds`（預設 90 天）由 CronJob 自動輪替，人發起的輪替與撤銷只改一個數字；身分服務另外拿到需要 cookie 的路由（`TRUSTIOT_INGRESS_ROUTES`），決定 token 的受眾 | Laysi/trustiot-v2#61、Laysi/trustiot-v2#404、Laysi/trustiot-v2#429 |
-| 密鑰 | 各個 `*Secret` 欄位、`services.<name>.credentials` | values 只存 Secret 名稱與 key；Sentry DSN 給每個服務，其他依賴的帳密只給列出它的服務；外部 ClickHouse 的 CA 掛進每個服務，Postgres 的 CA 只掛進在 `mesh.calls` 列出 `postgres` 的服務；chart 不渲染任何密鑰值（測試檢查），它宣告的 Secret 只有 migration Job 填入的空 Secret；叢集內 Postgres 的 Secret 由 CloudNativePG 產生，服務的自訂 `env` 讀不到；每個服務的資料庫密碼與 collector 的 ClickHouse 密碼由 migration Job 產生，各放在自己的 Secret（`<release>-<服務>-password`、`<release>-otel-collector-password`），只給該服務或 collector，migration 帳號只給 migration Job | SaaS 的 Secret 以 SOPS 加密放在 `deploy/flux/`（Laysi/trustiot-v2#70）；地端由客戶建立。規則與清冊見 docs/architecture/secrets.md |
+| 密鑰 | 各個 `*Secret` 欄位、`services.<name>.credentials` | values 只存 Secret 名稱與 key；Sentry DSN 給每個服務，其他依賴的帳密只給列出它的服務；外部 ClickHouse 的 CA 掛進每個服務，Postgres 的 CA 只掛進在 `mesh.calls` 列出 `postgres` 的服務；chart 不渲染任何密鑰值（測試檢查），它宣告的 Secret 只有 migration Job 填入的空 Secret；叢集內 Postgres 的 Secret 由 CloudNativePG 產生，服務的自訂 `env` 讀不到；每個服務的資料庫密碼、telemetry-query 的 ClickHouse 服務帳號密碼與 collector 的 ClickHouse 密碼由 migration Job 產生，各放在自己的 Secret（`<release>-<服務>-password`，telemetry-query 的 ClickHouse 密碼在它的同一個 Secret；`<release>-otel-collector-password`），只給該服務或 collector，migration 帳號只給 migration Job | SaaS 的 Secret 以 SOPS 加密放在 `deploy/flux/`（Laysi/trustiot-v2#70）；地端由客戶建立。規則與清冊見 docs/architecture/secrets.md |
 
 ## 服務
 
@@ -193,7 +193,7 @@ ingress:
 | 欄位 | 預設值 | 說明 |
 | --- | --- | --- |
 | `mesh.trustDomain` | `cluster.local` | mesh 的 SPIFFE trust domain（Istio 的 `meshConfig.trustDomain`）；呼叫端身分寫成 `<trustDomain>/ns/<namespace>/sa/<ServiceAccount>` |
-| `mesh.calls` | `mesh.calls.ingest` 與 `mesh.calls.telemetry-query` 都是 `[clickhouse]`，`mesh.calls.identity` 與 `mesh.calls.assets` 是 `[postgres]` | 誰可以呼叫誰：`<呼叫端>: [<被呼叫端>, ...]`。呼叫端是 `services` 的 key；被呼叫端是 `services` 的 key、叢集內元件 `clickhouse`（`clickhouse.mode: bundled` 時）與 `otel-collector`（collector 開啟時），或 `postgres`（兩種 `postgres.mode` 都可以列，見下方）。遙測的呼叫由 chart 自動加上，不必列：每個啟用的服務 → `otel-collector`，`otel-collector` → `clickhouse`。不認得的名稱讓安裝失敗；服務未啟用或元件沒有部署時略過這條，所以可以先列還沒出映像的服務。預設值是決策 14 與 docs/architecture/deployment.md 寫明的 ClickHouse 用戶端：資料接收寫入、時序查詢以每租戶唯讀帳號讀取；以及使用 Postgres 的身分服務與資產服務（資產服務也以平台角色讀身分服務的事件，Laysi/trustiot-v2#65）。各服務的 issue 加入它要呼叫的內部 API，用 Postgres 的服務加上 `postgres` |
+| `mesh.calls` | `mesh.calls.ingest` 是 `[clickhouse]`，`mesh.calls.telemetry-query` 是 `[clickhouse, postgres]`，`mesh.calls.identity` 與 `mesh.calls.assets` 是 `[postgres]` | 誰可以呼叫誰：`<呼叫端>: [<被呼叫端>, ...]`。呼叫端是 `services` 的 key；被呼叫端是 `services` 的 key、叢集內元件 `clickhouse`（`clickhouse.mode: bundled` 時）與 `otel-collector`（collector 開啟時），或 `postgres`（兩種 `postgres.mode` 都可以列，見下方）。遙測的呼叫由 chart 自動加上，不必列：每個啟用的服務 → `otel-collector`，`otel-collector` → `clickhouse`。不認得的名稱讓安裝失敗；服務未啟用或元件沒有部署時略過這條，所以可以先列還沒出映像的服務。預設值是決策 14 與 docs/architecture/deployment.md 寫明的 ClickHouse 用戶端：資料接收寫入、時序查詢以每租戶唯讀帳號讀取；以及使用 Postgres 的身分服務、資產服務與時序查詢（資產服務與時序查詢也以平台角色讀身分服務的事件，Laysi/trustiot-v2#65、Laysi/trustiot-v2#119）。各服務的 issue 加入它要呼叫的內部 API，用 Postgres 的服務加上 `postgres` |
 
 ```yaml
 mesh:

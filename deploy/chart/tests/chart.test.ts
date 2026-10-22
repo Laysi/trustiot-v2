@@ -2241,6 +2241,48 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     expect(passwordSecretNames(everything)).toContain(`${RELEASE}-telemetry-query-password`);
   });
 
+  test("telemetry-query's ClickHouse account: the Job generates its password into the service's Secret, and only the service reads it", () => {
+    const secret = `${RELEASE}-telemetry-query-password`;
+    // Disabled (the default): no binding, so the Job keeps the account from logging in.
+    expect(jobEnv(manifests).map((e) => e.name)).not.toContain("TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY");
+    for (const shape of SHAPE_NAMES) {
+      const rendered = render(SHAPES[shape], [...withIdentity, "--set", "services.telemetry-query.enabled=true"]);
+      const env = jobEnv(rendered);
+      expect(env.find((e) => e.name === "TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY"), shape).toEqual({
+        name: "TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY",
+        value: `trustiot_telemetry_query=${secret}`,
+      });
+      expect(env.find((e) => e.name === "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR")?.value, shape).not.toContain(secret);
+      expect(env.find((e) => e.name === "TRUSTIOT__PASSWORDS__POSTGRES")?.value, shape).toContain(
+        `telemetry_query_app=${secret},telemetry_query_platform=${secret}`,
+      );
+      const tq = podSpec(find(rendered, "Deployment", `${RELEASE}-telemetry-query`)).containers[0] as Container;
+      expect(tq.env?.filter((e) => e.name.startsWith("TRUSTIOT__CLICKHOUSE__")), shape).toEqual([
+        { name: "TRUSTIOT__CLICKHOUSE__USERNAME", value: "trustiot_telemetry_query" },
+        { name: "TRUSTIOT__CLICKHOUSE__PASSWORD", valueFrom: { secretKeyRef: { name: secret, key: "trustiot_telemetry_query" } } },
+      ]);
+      // No other workload reads the account's password.
+      for (const other of rendered.filter((m) => m.kind === "Deployment" && m.metadata.name !== `${RELEASE}-telemetry-query`)) {
+        expect(JSON.stringify(other), other.metadata.name).not.toContain("trustiot_telemetry_query");
+      }
+    }
+    // Custom env cannot replace the account or read the Secret from another service.
+    for (const name of ["TRUSTIOT__CLICKHOUSE__USERNAME", "TRUSTIOT__CLICKHOUSE__PASSWORD"]) {
+      const result = helmTemplate(SHAPES.saas, [
+        ...withIdentity, "--set", "services.telemetry-query.enabled=true",
+        "--set-json", `services.telemetry-query.env=[{"name":"${name}","valueFrom":{"secretKeyRef":{"name":"elsewhere","key":"k"}}}]`,
+      ]);
+      expect(result.code, name).not.toBe(0);
+      expect(result.stderr, name).toContain(`env ${name} is set by the chart`);
+    }
+    const stolen = helmTemplate(SHAPES.saas, [
+      ...withIdentity, "--set", "services.telemetry-query.enabled=true",
+      "--set-json", `services.certs.env=[{"name":"STOLEN","valueFrom":{"secretKeyRef":{"name":"${secret}","key":"trustiot_telemetry_query"}}}]`,
+    ]);
+    expect(stolen.code).not.toBe(0);
+    expect(stolen.stderr).toContain(`env reads Secret ${secret}`);
+  });
+
   test("external Postgres and ClickHouse: the Job uses their migration Secrets and CAs, which no service reads", () => {
     const external = render(SHAPES.onprem, [
       ...withIdentity,
@@ -2302,14 +2344,20 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     const certs = JSON.stringify(find(manifests, "Deployment", `${RELEASE}-certs`));
     expect(certs).not.toContain("TRUSTIOT__DATABASE__");
     expect(certs).not.toContain(IDENTITY_SECRET);
-    // A service name with "-" makes a role with "_".
-    const telemetry = render(SHAPES.saas, ["--set", "services.telemetry-query.enabled=true", "--set-json", 'mesh.calls.telemetry-query=["postgres"]']);
+    // A service name with "-" makes a role with "_"; telemetry-query's platform role logs in too
+    // (it consumes the identity service's events).
+    const telemetry = render(SHAPES.saas, ["--set", "services.telemetry-query.enabled=true"]);
     const tq = podSpec(find(telemetry, "Deployment", `${RELEASE}-telemetry-query`)).containers[0] as Container;
     expect(tq.env?.filter((e) => e.name.startsWith("TRUSTIOT__DATABASE__"))).toEqual([
       { name: "TRUSTIOT__DATABASE__USERNAME", value: "telemetry_query_app" },
       {
         name: "TRUSTIOT__DATABASE__PASSWORD",
         valueFrom: { secretKeyRef: { name: `${RELEASE}-telemetry-query-password`, key: "telemetry_query_app" } },
+      },
+      { name: "TRUSTIOT__DATABASE__PLATFORM_USERNAME", value: "telemetry_query_platform" },
+      {
+        name: "TRUSTIOT__DATABASE__PLATFORM_PASSWORD",
+        valueFrom: { secretKeyRef: { name: `${RELEASE}-telemetry-query-password`, key: "telemetry_query_platform" } },
       },
     ]);
     // Custom env cannot read another consumer's password Secret, in any key, nor replace the

@@ -135,7 +135,21 @@ pub struct PasswordSettings {
     /// the Secret whose key of the same name holds its password. Needs `clickhouse.*`.
     #[serde(default)]
     pub clickhouse_collector: Option<String>,
+    /// `TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY`: `account=secret`: the telemetry-query
+    /// service's ClickHouse account ([`TELEMETRY_QUERY_ACCOUNT`], which
+    /// `0007_telemetry_query.sql` defines without a password) and the Secret whose key of the
+    /// same name holds its password. The run sets that password and lets the account log in;
+    /// without this setting it keeps the account from logging in. Needs `clickhouse.*`.
+    #[serde(default)]
+    pub clickhouse_telemetry_query: Option<String>,
 }
+
+/// The telemetry-query service's ClickHouse account, as `0007_telemetry_query.sql` names it.
+pub const TELEMETRY_QUERY_ACCOUNT: &str = "trustiot_telemetry_query";
+
+/// The names of the tenant accounts telemetry-query creates, which `0007_telemetry_query.sql`
+/// lets its account create and change.
+pub const TENANT_ACCOUNT_PREFIX: &str = "trustiot_tenant_account_";
 
 /// One password the run manages: whose it is and where it is kept.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,6 +182,33 @@ impl PasswordSettings {
             return Err(Invalid::new(key, "must be one account=secret pair"));
         }
         Ok(found.pop())
+    }
+
+    /// The telemetry-query service's account and its Secret.
+    ///
+    /// # Errors
+    ///
+    /// When the value is not one `account=secret` pair with valid names, or names another
+    /// account than [`TELEMETRY_QUERY_ACCOUNT`] (the migration file defines that one only).
+    pub fn clickhouse_telemetry_query(&self) -> Result<Option<Binding>, Invalid> {
+        let key = "passwords.clickhouse_telemetry_query";
+        let mut found = bindings(key, self.clickhouse_telemetry_query.as_deref())?;
+        if found.len() > 1 {
+            return Err(Invalid::new(key, "must be one account=secret pair"));
+        }
+        let binding = found.pop();
+        if binding
+            .as_ref()
+            .is_some_and(|binding| binding.owner != TELEMETRY_QUERY_ACCOUNT)
+        {
+            return Err(Invalid::new(
+                key,
+                format!(
+                    "the account must be {TELEMETRY_QUERY_ACCOUNT}, the one 0007_telemetry_query.sql defines"
+                ),
+            ));
+        }
+        Ok(binding)
     }
 }
 
@@ -325,6 +366,36 @@ impl Validate for RunConfig {
                     "passwords.clickhouse_collector",
                     "uses the same key of the same Secret as a Postgres role",
                 ));
+            }
+            // The collector's account must be none telemetry-query manages: not its own account,
+            // and no name telemetry-query may create or change (it could set its password).
+            if let Some(collector) = &collector
+                && (collector.owner == TELEMETRY_QUERY_ACCOUNT
+                    || collector.owner.starts_with(TENANT_ACCOUNT_PREFIX))
+            {
+                return Err(Invalid::new(
+                    "passwords.clickhouse_collector",
+                    format!(
+                        "must not be {TELEMETRY_QUERY_ACCOUNT} or start with \
+                         {TENANT_ACCOUNT_PREFIX}: those accounts belong to telemetry-query"
+                    ),
+                ));
+            }
+            // Its account name is fixed and the collector's cannot be it (above).
+            if let Some(telemetry_query) = passwords.clickhouse_telemetry_query()? {
+                if self.clickhouse.is_none() {
+                    return Err(Invalid::new(
+                        "passwords.clickhouse_telemetry_query",
+                        "needs clickhouse.*, the account that sets the telemetry-query account's \
+                         password",
+                    ));
+                }
+                if postgres.contains(&telemetry_query) {
+                    return Err(Invalid::new(
+                        "passwords.clickhouse_telemetry_query",
+                        "uses the same key of the same Secret as a Postgres role",
+                    ));
+                }
             }
         }
         if let Some(clickhouse) = &self.clickhouse {
@@ -733,6 +804,7 @@ mod tests {
             generation: "1".to_owned(),
             postgres: Some(postgres.to_owned()),
             clickhouse_collector: Some(collector.to_owned()),
+            clickhouse_telemetry_query: None,
         }
     }
 
@@ -843,6 +915,64 @@ mod tests {
         // Debug never shows the password.
         let config = run_config(Some("a-secret-value"), None, false);
         assert!(!format!("{config:?}").contains("a-secret-value"));
+    }
+
+    #[test]
+    fn telemetry_query_and_collector_accounts_stay_apart() {
+        let with = |collector: &str, telemetry_query: Option<&str>| {
+            let mut config = run_config(Some("a-password"), None, true);
+            let passwords = config.passwords.as_mut().expect("password settings");
+            passwords.clickhouse_collector = Some(collector.to_owned());
+            passwords.clickhouse_telemetry_query = telemetry_query.map(str::to_owned);
+            config
+        };
+        let key = |config: RunConfig| config.validate().err().map(|invalid| invalid.key);
+        let bound = Some("trustiot_telemetry_query=trustiot-telemetry-query-password");
+        assert_eq!(key(with("trustiot_collector=c", bound)), None);
+        assert_eq!(
+            with("trustiot_collector=c", bound)
+                .passwords
+                .expect("password settings")
+                .clickhouse_telemetry_query()
+                .expect("valid"),
+            Some(Binding {
+                owner: TELEMETRY_QUERY_ACCOUNT.to_owned(),
+                secret: "trustiot-telemetry-query-password".to_owned()
+            })
+        );
+        for bad in [
+            "trustiot_other=trustiot-telemetry-query-password",
+            "trustiot_telemetry_query=a,trustiot_telemetry_query=b",
+            "trustiot_telemetry_query=Not/A-Secret",
+        ] {
+            assert_eq!(
+                key(with("trustiot_collector=c", Some(bad))).as_deref(),
+                Some("passwords.clickhouse_telemetry_query"),
+                "{bad}"
+            );
+        }
+        for collector in ["trustiot_telemetry_query=c", "trustiot_tenant_account_x=c"] {
+            assert_eq!(
+                key(with(collector, None)).as_deref(),
+                Some("passwords.clickhouse_collector"),
+                "{collector}"
+            );
+        }
+        let mut without_clickhouse = with("trustiot_collector=c", bound);
+        without_clickhouse.clickhouse = None;
+        let passwords = without_clickhouse.passwords.as_mut().expect("settings");
+        passwords.clickhouse_collector = None;
+        assert_eq!(
+            key(without_clickhouse).as_deref(),
+            Some("passwords.clickhouse_telemetry_query")
+        );
+        let mut shared = with("trustiot_collector=c", bound);
+        shared.passwords.as_mut().expect("settings").postgres =
+            Some("trustiot_telemetry_query=trustiot-telemetry-query-password".to_owned());
+        assert_eq!(
+            key(shared).as_deref(),
+            Some("passwords.clickhouse_telemetry_query")
+        );
     }
 
     fn admin_config() -> ClickHouseAdminConfig {

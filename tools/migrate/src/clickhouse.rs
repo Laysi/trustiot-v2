@@ -1,5 +1,6 @@
 //! The ClickHouse part of a run: the DDL of `services/ingest/migrations/clickhouse/` and the
-//! OpenTelemetry collector's account, over the HTTP interface with the access-management account.
+//! accounts of the OpenTelemetry collector and of telemetry-query, over the HTTP interface with
+//! the access-management account.
 //!
 //! Every statement of those files is idempotent (services/ingest/README.md, "檔案格式"), but a
 //! later `ALTER TABLE ... MODIFY TTL` would start a mutation on every run, so the run also
@@ -15,7 +16,9 @@
 
 use std::time::{Duration, Instant};
 
-use crate::config::{ClickHouseSettings, RunConfig};
+use crate::config::{
+    ClickHouseSettings, RunConfig, TELEMETRY_QUERY_ACCOUNT, TENANT_ACCOUNT_PREFIX,
+};
 use crate::passwords::Api;
 use crate::registry::{Migration, Registry};
 use crate::secret::Password;
@@ -24,6 +27,9 @@ use crate::{Error, Report, clickhouse_admin, http, sha256_hex};
 /// The role `0006_logs.sql` creates for the collector: INSERT and SHOW COLUMNS on the two log
 /// tables, nothing else.
 pub const COLLECTOR_ROLE: &str = "trustiot_otel_collector";
+
+/// The tenant role of decision 14 (`0004_access.sql`): SELECT on the tenant view, nothing else.
+pub const TENANT_READER_ROLE: &str = "trustiot_tenant_reader";
 
 const RETRY_EVERY: Duration = Duration::from_secs(2);
 const REPORT_EVERY: Duration = Duration::from_secs(30);
@@ -82,6 +88,42 @@ const COLLECTOR_ACCOUNTS: &str = "SELECT DISTINCT user_name FROM system.role_gra
 WHERE granted_role_name = {role:String} AND user_name IS NOT NULL AND user_name != currentUser()
   AND user_name IN (SELECT name FROM system.users WHERE storage != 'users_xml')
 ORDER BY user_name FORMAT TSV";
+/// The tenant role's grants beyond SELECT on the tenant view plus roles granted to it, which must
+/// be 0, and its SELECT on the tenant view, which must be 1. telemetry-query grants this role to
+/// every tenant account it creates, so anything added to the role would reach every tenant
+/// (services/ingest/README.md, "租戶隔離"), and without the SELECT no tenant can read.
+const READER_GRANTS: &str = "SELECT
+  (SELECT count() FROM system.grants WHERE role_name = {role:String} AND NOT (
+     database = 'trustiot' AND table = 'tenant_telemetry' AND access_type = 'SELECT'
+     AND column IS NULL AND grant_option = 0 AND is_partial_revoke = 0))
+  + (SELECT count() FROM system.role_grants WHERE role_name = {role:String}),
+  (SELECT count() FROM system.grants WHERE role_name = {role:String}
+     AND database = 'trustiot' AND table = 'tenant_telemetry' AND access_type = 'SELECT'
+     AND column IS NULL AND grant_option = 0 AND is_partial_revoke = 0)
+FORMAT TSV";
+/// Who holds the tenant role besides those allowed to: telemetry-query's account WITH ADMIN
+/// OPTION, and accounts named trustiot_tenant_account_* without it. ClickHouse 26.8 does not
+/// limit to whom a holder of ADMIN OPTION grants a role, so telemetry-query's account could
+/// grant it to any user or role (0007_telemetry_query.sql); the run lists every other grantee.
+const READER_GRANTEES: &str = "SELECT if(user_name IS NULL, concat('role ', role_name), user_name)
+FROM system.role_grants
+WHERE granted_role_name = {role:String}
+  AND NOT (user_name IS NOT NULL AND user_name = {service:String} AND with_admin_option = 1)
+  AND NOT (user_name IS NOT NULL AND startsWith(user_name, {prefix:String}) AND with_admin_option = 0)
+ORDER BY 1 FORMAT TSV";
+/// How many unexpected grantees an error names.
+const GRANTEES_SHOWN: usize = 5;
+/// telemetry-query's direct grants: `0007_telemetry_query.sql` gives it exactly CREATE USER and
+/// ALTER USER on the tenant accounts' name prefix, without GRANT OPTION.
+const TELEMETRY_QUERY_GRANTS: &str = "SELECT access_type, access_object, is_wildcard,
+  grant_option, is_partial_revoke
+FROM system.grants WHERE user_name = {user:String} ORDER BY toString(access_type) FORMAT TSV";
+const TELEMETRY_QUERY_EXPECTED_GRANTS: [&str; 2] = [
+    "ALTER USER\ttrustiot_tenant_account_\t1\t0\t0",
+    "CREATE USER\ttrustiot_tenant_account_\t1\t0\t0",
+];
+/// telemetry-query's roles: the tenant role with ADMIN OPTION, not as a default role.
+const TELEMETRY_QUERY_EXPECTED_ROLES: [&str; 1] = ["trustiot_tenant_reader\t0\t1"];
 /// How many host rules let the account log in; `HOST NONE` leaves none.
 const USER_HOSTS: &str = "SELECT length(host_ip) + length(host_names) + length(host_names_regexp)
   + length(host_names_like) FROM system.users WHERE name = {user:String} FORMAT TSV";
@@ -377,15 +419,17 @@ impl ClickHouse {
         }
     }
 
-    /// The DDL files, then the collector's account.
+    /// The DDL files, then the accounts of the collector and of telemetry-query.
     ///
     /// # Errors
     ///
-    /// The first statement that fails, or a file that changed after it was applied.
+    /// The first statement that fails, a file that changed after it was applied, or an account
+    /// that holds more than the Job gives it.
     pub async fn migrate(
         &self,
         registry: &Registry,
         collector: Option<&(String, Password)>,
+        telemetry_query: Option<&Password>,
         report: &mut Report,
     ) -> Result<(), Error> {
         for statement in BOOTSTRAP {
@@ -403,7 +447,8 @@ impl ClickHouse {
             self.ensure_collector(user, password, report).await?;
         }
         self.retire_collectors(collector.map(|(user, _)| user.as_str()), report)
-            .await
+            .await?;
+        self.ensure_telemetry_query(telemetry_query, report).await
     }
 
     /// Whether `user` may log in from any host at all.
@@ -574,6 +619,171 @@ impl ClickHouse {
             Err(failure) if failure.is_authentication() => {
                 self.query("set the collector account's password", SET_PASSWORD, &auth)
                     .await?;
+                report.change(format!("set the password of ClickHouse account {user}"));
+                Ok(())
+            }
+            Err(failure) => Err(Error::ClickHouse(format!(
+                "log in as {user} to check its password: {}",
+                failure.text.trim()
+            ))),
+        }
+    }
+
+    /// telemetry-query's account (`0007_telemetry_query.sql`): when the run manages its password
+    /// (the service is deployed) the account logs in with it from any host; when not, it cannot
+    /// log in at all (`HOST NONE`), so the password a kept Secret still holds creates no tenant
+    /// account. Either way the account, and the tenant role it hands to every tenant account,
+    /// must hold exactly what the DDL gave them; anything else stops the run for an
+    /// administrator, because this account creates every tenant's account.
+    async fn ensure_telemetry_query(
+        &self,
+        password: Option<&Password>,
+        report: &mut Report,
+    ) -> Result<(), Error> {
+        let user = TELEMETRY_QUERY_ACCOUNT;
+        let params = [("user", user)];
+        let exists = self
+            .query("look for the telemetry-query account", USER_EXISTS, &params)
+            .await?;
+        if exists.trim() == "0" {
+            // Only a registry without 0007_telemetry_query.sql gets here.
+            return match password {
+                None => Ok(()),
+                Some(_) => Err(Error::ClickHouse(format!(
+                    "the ClickHouse account {user} does not exist after the DDL files; \
+                     0007_telemetry_query.sql creates it"
+                ))),
+            };
+        }
+        let reader = self
+            .query(
+                "read the tenant role's grants",
+                READER_GRANTS,
+                &[("role", TENANT_READER_ROLE)],
+            )
+            .await?;
+        let (extras, required) = reader
+            .trim()
+            .split_once('\t')
+            .unwrap_or((reader.trim(), ""));
+        if required != "1" {
+            return Err(Error::ClickHouse(format!(
+                "the role {TENANT_READER_ROLE} lacks SELECT on trustiot.tenant_telemetry \
+                 (0005_tenant_view.sql gives it); no tenant account can read until an \
+                 administrator grants it again (docs/runbooks/migrations.md)"
+            )));
+        }
+        if extras != "0" {
+            return Err(Error::ClickHouse(format!(
+                "the role {TENANT_READER_ROLE} has grants or roles beyond SELECT on \
+                 trustiot.tenant_telemetry; every tenant account gets this role, so an \
+                 administrator must revoke them (docs/runbooks/migrations.md)"
+            )));
+        }
+        let grantees = self
+            .query(
+                "read who holds the tenant role",
+                READER_GRANTEES,
+                &[
+                    ("role", TENANT_READER_ROLE),
+                    ("service", user),
+                    ("prefix", TENANT_ACCOUNT_PREFIX),
+                ],
+            )
+            .await?;
+        let grantees: Vec<&str> = grantees.lines().filter(|line| !line.is_empty()).collect();
+        if !grantees.is_empty() {
+            let shown = grantees
+                .iter()
+                .take(GRANTEES_SHOWN)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(Error::ClickHouse(format!(
+                "the role {TENANT_READER_ROLE} is held by {} grantee(s) besides {user} (with ADMIN \
+                 OPTION) and {TENANT_ACCOUNT_PREFIX}* accounts (without it): {shown}; every \
+                 holder reads the tenant view, so an administrator must revoke it \
+                 (docs/runbooks/migrations.md)",
+                grantees.len()
+            )));
+        }
+        let roles = self
+            .query(
+                "read the telemetry-query account's roles",
+                USER_ROLES,
+                &params,
+            )
+            .await?;
+        let grants = self
+            .query(
+                "read the telemetry-query account's grants",
+                TELEMETRY_QUERY_GRANTS,
+                &params,
+            )
+            .await?;
+        let settings = self
+            .query(
+                "read the telemetry-query account's settings",
+                USER_SETTINGS,
+                &params,
+            )
+            .await?;
+        let roles: Vec<&str> = roles.lines().filter(|line| !line.is_empty()).collect();
+        let grants: Vec<&str> = grants.lines().filter(|line| !line.is_empty()).collect();
+        if roles != TELEMETRY_QUERY_EXPECTED_ROLES
+            || grants != TELEMETRY_QUERY_EXPECTED_GRANTS
+            || settings.trim() != "0"
+        {
+            return Err(Error::ClickHouse(format!(
+                "the ClickHouse account {user} has other roles, grants or settings than \
+                 0007_telemetry_query.sql gives it; an administrator must revoke them \
+                 (docs/runbooks/migrations.md)"
+            )));
+        }
+        let can_log_in = self.can_log_in(user).await?;
+        let Some(password) = password else {
+            if can_log_in {
+                self.query(&format!("revoke the login of {user}"), LOGIN_NONE, &params)
+                    .await?;
+                report.change(format!(
+                    "revoked the login of ClickHouse account {user}: telemetry-query is not \
+                     deployed"
+                ));
+            }
+            return Ok(());
+        };
+        let (hash, salt) = password
+            .clickhouse_sha256()
+            .map_err(|error| Error::Random(error.to_string()))?;
+        let auth = [
+            ("user", user),
+            ("hash", hash.as_str()),
+            ("salt", salt.as_str()),
+        ];
+        if !can_log_in {
+            // Created by the DDL without a password, or its login revoked by a run without the
+            // service: the Secret's password first, so it never logs in with another one.
+            self.query(
+                "set the telemetry-query account's password",
+                SET_PASSWORD,
+                &auth,
+            )
+            .await?;
+            report.change(format!("set the password of ClickHouse account {user}"));
+            self.query(&format!("let {user} log in"), LOGIN_ANY, &params)
+                .await?;
+            report.change(format!("let ClickHouse account {user} log in"));
+            return Ok(());
+        }
+        match self.send(user, password.expose(), PROBE, &[]).await {
+            Ok(_) => Ok(()),
+            Err(failure) if failure.is_authentication() => {
+                self.query(
+                    "set the telemetry-query account's password",
+                    SET_PASSWORD,
+                    &auth,
+                )
+                .await?;
                 report.change(format!("set the password of ClickHouse account {user}"));
                 Ok(())
             }

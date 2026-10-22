@@ -34,4 +34,10 @@ pub const FILES: &[Migration] = &[
         name: "0006_logs.sql",
         sql: include_str!("../../../services/ingest/migrations/clickhouse/0006_logs.sql"),
     },
+    Migration {
+        name: "0007_telemetry_query.sql",
+        sql: include_str!(
+            "../../../services/ingest/migrations/clickhouse/0007_telemetry_query.sql"
+        ),
+    },
 ];

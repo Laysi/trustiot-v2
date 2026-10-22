@@ -240,11 +240,14 @@ mesh:
     assets:
       - postgres
     # ClickHouse (decision 14): ingest writes telemetry, telemetry-query reads it with per-tenant
-    # read-only accounts (docs/architecture/deployment.md).
+    # read-only accounts (docs/architecture/deployment.md). telemetry-query keeps which tenants
+    # have an account in Postgres and reads the identity service's events from there as its
+    # platform role (services/telemetry-query/README.md).
     ingest:
       - clickhouse
     telemetry-query:
       - clickhouse
+      - postgres
 
 # Internal identity (decision 27): for every request that passes the cookie check, the identity
 # service signs a short-lived token for the backend, and every service verifies it with the
