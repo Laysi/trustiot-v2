@@ -1,0 +1,68 @@
+# 2026-10-22: the issue's tests by name and the checks after merging main 1bda1d9, build host (CI=1), tree of 550d35a
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-aa7eb5ff509297cc)
+test tenants_are_isolated ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.62s
+     Running tests/event_log.rs (<host copy>/target/debug/deps/event_log-1ce36eeb2a22f26e)
+test the_event_log_records_each_operation_once_and_serves_it_by_tenant_and_time ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.27s
+     Running tests/ext_authz.rs (<host copy>/target/debug/deps/ext_authz-967f543144614c06)
+test unusable_settings_stop_startup ... ok
+test an_unreachable_database_fails_closed ... ok
+test the_service_role_cannot_create_or_change_sessions ... ok
+test an_active_session_gets_one_token_that_the_routed_service_accepts ... ok
+test secrets_never_reach_logs_or_responses ... ok
+test invalid_or_expired_sessions_get_401 ... ok
+test role_changes_apply_to_the_next_request ... ok
+test a_keep_warm_round_replaces_every_dropped_connection ... ok
+test a_revoked_generation_never_signs ... ok
+test a_slow_database_connect_never_fails_a_check_after_ready ... ok
+test a_key_rotation_needs_no_restart_and_tokens_verify_throughout ... ok
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.53s
+     Running tests/tenants.rs (<host copy>/target/debug/deps/tenants-85c0d9625d4ccace)
+test platform_administrators_create_tenants_with_their_event ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.92s
+=== identity-integration EXIT=0
+test event_log::tests::actors_become_columns ... ok
+test event_log::tests::subscriptions_are_named_after_the_producer ... ok
+test event_log::tests::cursors_round_trip_with_microseconds ... ok
+test event_log::tests::parameters_are_checked ... ok
+test event_log::tests::the_spec_documents_the_page_limits_the_handlers_accept ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 37 filtered out; finished in 0.00s
+=== identity-lib-event_log EXIT=0
+test publish_as_names_the_actor ... ok
+test an_envelope_is_written_once ... ok
+test events_are_numbered_per_aggregate ... ok
+test a_rolled_back_transaction_leaves_no_event ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.41s
+=== outbox-producer EXIT=0
+test a_newer_version_waits_for_the_consumer_upgrade ... ok
+test fields_added_later_are_ignored_by_older_consumers ... ok
+test new_envelopes_carry_type_version_tenant_time_and_producer ... ok
+test actors_are_optional_tagged_and_open_to_new_kinds ... ok
+test platform_wide_events_have_no_tenant ... ok
+test tenant_created_decodes_every_version ... ok
+test mismatched_envelopes_are_rejected_for_good ... ok
+test positional_array_payloads_are_rejected ... ok
+test payloads_must_be_json_objects ... ok
+test envelopes_round_trip_in_the_documented_shape ... ok
+test old_versions_decode_with_the_current_consumer ... ok
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== contract-events EXIT=0
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.41s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+=== sql-check EXIT=0
+api/openapi.json is up to date
+=== openapi EXIT=0
+=== scripts-install EXIT=0
+ 1482 pass
+ 0 fail
+Ran 1486 tests across 48 files. [9.03s]
+=== scripts-test EXIT=0
+$ tsc --noEmit --project tsconfig.json
+=== scripts-typecheck EXIT=0
+ 460 pass
+ 0 fail
+Ran 460 tests across 7 files. [42.84s]
+=== chart EXIT=0
+exit 0 at 12:56:46 (build host)
