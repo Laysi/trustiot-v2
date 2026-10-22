@@ -56,8 +56,14 @@ export const ISSUE = "Laysi/trustiot-v2#468";
  * OpenSSL. The image runs as curl_user, UID 100 and GID 101. Checked on 2026-10-21 with
  * `skopeo inspect --raw` on both registries (same index digest) and the arm64 config
  * (`--override-arch arm64 --override-variant v8 --config`).
+ *
+ * Upstream pushed 8.23.0 again on 2026-10-20 and quay.io then deleted the index this was pinned
+ * to (its manifest answers 404), so on 2026-10-22 it was pinned to the new index: the same digest
+ * on both registries, linux/arm64 v8 listed, User curl_user (UID and GID checked in the image).
+ * A pin on quay.io lasts only while its tag points at it; when a pull fails with "manifest
+ * unknown", pin the tag's current index after the same checks.
  */
-export const IMAGE = "quay.io/curl/curl:8.23.0@sha256:a134550be58ab783810e613ae96fd253c38f7bdd16d9bf9be350700c7a29ac06";
+export const IMAGE = "quay.io/curl/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac";
 export const IMAGE_UID = 100;
 export const IMAGE_GID = 101;
 /** The test pods' name prefix and label; a leftover with both is an earlier run's, deleted first. */
