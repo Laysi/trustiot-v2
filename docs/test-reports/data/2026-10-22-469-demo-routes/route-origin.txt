@@ -1,0 +1,7 @@
+2026-10-22T07:43:26.838Z ingress address in deploy/flux/clusters/demo/trustiot/values-demo.yaml at 249d32e5f858 (ingress.tunnel.clusterIP): 10.43.0.80
+2026-10-22T07:43:26.838Z ingress address in ConfigMap trustiot-ingress-options (service overlay): 10.43.0.80
+2026-10-22T07:43:26.838Z ingress address of the Service with gateway.networking.k8s.io/gateway-name=trustiot-ingress: 10.43.0.80
+2026-10-22T07:43:26.838Z static band of the cluster's Service range (ServiceCIDR kubernetes): 10.43.0.1-10.43.1.0 of 10.43.0.0/16
+2026-10-22T07:43:26.838Z OK the three ingress addresses agree and are in the static band
+2026-10-22T07:43:27.970Z cloudflared.service kept running (same process)
+2026-10-22T07:43:27.970Z the stage-2 routes' origin: http://10.43.0.80:80

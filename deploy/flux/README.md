@@ -309,7 +309,9 @@ age-keygen 的輸出不是終端機時，私鑰寫到管線、`Public key: …` 
 
 - **私有 values**（主機名稱、寄件人）：收件者以自己的私鑰 `SOPS_AGE_KEY_FILE=<私鑰檔> sops edit deploy/flux/clusters/demo/trustiot/trustiot-demo-values.sops.yaml` 改其中一個 key 的值（不加 key；HelmRelease 只讀那四個），或以上表的 `demo-values.ts` 整份重新產生；開 PR，內文寫明改了哪些 key，由另一位維運人員解開審查後合併。Secret 帶 watch label，Flux 套用後 helm-controller 立刻升級。改主機名稱時，Cloudflare 的路由、DNS 與 Access 要一起改。
 - **打開切片的服務**：服務的 issue 進了某一版 chart、展示叢集也部署了那一版之後，在 `values-demo.yaml` 的 `services` 加上 `<服務>: {enabled: true}`；它用到的 Secret 以 SOPS 檔一起加進來並列進 `kustomization.yaml`；開 PR 合併。`bun test deploy/flux` 以 HEAD 的 chart 渲染展示叢集的 values，打開的服務若少了 chart 要求的設定，測試會失敗。打開前確認展示機的記憶體還放得下。
-- **換版**：同 SaaS（上方「發版與回滾」），或以 `pin-chart.ts` 只換展示叢集。
+- **換版**：同 SaaS（上方「發版與回滾」），或以 `pin-chart.ts` 只換展示叢集。合併之前先照[展示環境 runbook](../../docs/runbooks/demo-environment.md)「換 chart 版本」比對新舊版本的 `deploy/istio/istiod-values.yaml`，有改就先對齊 istiod。
+
+打開服務、換版、重設展示資料、金鑰輪替與共用叢集的完整步驟在[展示環境 runbook](../../docs/runbooks/demo-environment.md)。
 
 ### 在展示機安裝 Flux
 
