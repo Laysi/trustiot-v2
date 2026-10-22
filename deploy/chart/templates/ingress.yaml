@@ -2,9 +2,11 @@
 Ingress gateway (decision 27): Istio implements the Kubernetes Gateway API. Every request needs
 the cookie, which an AuthorizationPolicy with the CUSTOM action sends to the identity service
 (ext_authz through the mesh extension provider ingress.authzProvider); only the public paths skip
-it. Requests to public paths lose any x-internal-identity header, every route drops its
-underscore spellings, and nothing under /internal is reachable from outside. Istio creates the gateway Deployment and Service from the Gateway and the
-options ConfigMap below.
+it, and the SPA's static files on hosts.app while services.web is enabled. Requests to public
+paths lose any x-internal-identity header (the static files' requests also lose the Cookie),
+every route drops its underscore spellings, and nothing under /internal is reachable from
+outside. Istio creates the gateway Deployment and Service from the Gateway and the options
+ConfigMap below.
 */ -}}
 {{- $v := .Values -}}
 {{- $gateway := include "trustiot.ingress.gatewayName" . -}}
@@ -12,6 +14,8 @@ options ConfigMap below.
 {{- $listenerPort := include "trustiot.ingress.listenerPort" . -}}
 {{- $options := include "trustiot.componentName" (dict "root" . "name" "ingress-options") -}}
 {{- $plan := include "trustiot.ingress.plan" . | fromYaml -}}
+{{- /* Checked on every render, so a value set with direct exposure is refused, not ignored. */ -}}
+{{- $clusterIP := include "trustiot.ingress.tunnelClusterIP" . -}}
 {{- $labels := include "trustiot.componentLabels" (dict "root" . "name" "ingress") -}}
 apiVersion: v1
 kind: ConfigMap
@@ -38,6 +42,10 @@ data:
       {{- if eq $v.ingress.exposure "tunnel" }}
       # Reached only by cloudflared on the host; nothing listens on the host or the network.
       type: ClusterIP
+      {{- if $clusterIP }}
+      # Fixed, so a recreated Service keeps the address cloudflared forwards to (ingress.tunnel.clusterIP).
+      clusterIP: {{ $clusterIP }}
+      {{- end }}
       {{- else }}
       type: {{ $v.ingress.direct.serviceType }}
       {{- end }}
@@ -130,6 +138,10 @@ spec:
               - name: x-forwarded-proto
                 value: https
             remove:
+              {{- if .item.static }}
+              # The SPA's static files need no session, so the web service never holds one.
+              - cookie
+              {{- end }}
               {{- if .public }}
               # Public path: no ext_authz check overwrites the header, so drop any client copy.
               # A cookie route must keep it: route filters run after ext_authz and would drop
@@ -155,11 +167,24 @@ so an exemption never leaks to a host where that path is routed elsewhere. Istio
 exactly after the mesh's path normalization (deploy/istio/istiod-values.yaml), so encoded or
 case variants are checked too. The host is exempt with or without a port ("<host>:*"), as the
 gateway routes it: a gateway may send "Host: gw.example.com:443" (Laysi/trustiot-v2#255).
+While services.web serves the SPA's static files, hosts.app is checked only on the cookie
+prefixes and /internal, and every other host as without them; a public path outside the cookie
+prefixes is then not checked on hosts.app either, where it reaches the static files.
 */}}
 {{- $exempt := dict }}
+{{- $static := dict }}
 {{- range $plan.public }}
+{{- if .static }}
+{{- $static = . }}
+{{- else }}
 {{- $_ := set $exempt .path (append (get $exempt .path | default list) .hostname) }}
 {{- end }}
+{{- end }}
+{{- $checked := list }}
+{{- range include "trustiot.ingress.cookiePrefixes" . | fromYamlArray }}
+{{- $checked = concat $checked (list . (printf "%s/*" .)) }}
+{{- end }}
+{{- $checked = append $checked "/internal*" }}
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
@@ -175,7 +200,48 @@ spec:
   provider:
     name: {{ $v.ingress.authzProvider }}
   rules:
-    {{- if $exempt }}
+    {{- if $static }}
+    # Every host but hosts.app: every path except the public paths.
+    - to:
+        - operation:
+            notHosts:
+              - {{ $static.hostname | quote }}
+              - {{ printf "%s:*" $static.hostname | quote }}
+            {{- if $exempt }}
+            notPaths:
+              {{- range $path := keys $exempt | sortAlpha }}
+              - {{ $path | quote }}
+              {{- end }}
+            {{- end }}
+    # Every host, hosts.app included: the cookie prefixes and /internal, except the public paths.
+    - to:
+        - operation:
+            paths:
+              {{- range $checked }}
+              - {{ . | quote }}
+              {{- end }}
+            {{- if $exempt }}
+            notPaths:
+              {{- range $path := keys $exempt | sortAlpha }}
+              - {{ $path | quote }}
+              {{- end }}
+            {{- end }}
+    {{- range $path := keys $exempt | sortAlpha }}
+    {{- $hosts := get $exempt $path }}
+    {{- if not (include "trustiot.ingress.underCookiePrefix" $path) }}
+    {{- $hosts = append $hosts $static.hostname }}
+    {{- end }}
+    - to:
+        - operation:
+            paths:
+              - {{ $path | quote }}
+            notHosts:
+              {{- range $hosts | uniq | sortAlpha }}
+              - {{ . | quote }}
+              - {{ printf "%s:*" . | quote }}
+              {{- end }}
+    {{- end }}
+    {{- else if $exempt }}
     - to:
         - operation:
             notPaths:

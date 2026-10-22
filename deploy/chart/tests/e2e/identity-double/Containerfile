@@ -6,5 +6,5 @@ FROM docker.io/oven/bun:1.4.3-distroless@sha256:1aaa515018b0b37d95dbdebd55d1b7f3
 COPY server.ts /app/server.ts
 # Numeric non-root user, as the chart's restricted Pod Security settings require.
 USER 65532:65532
-EXPOSE 8080 8081
+EXPOSE 8080 8081 8082
 ENTRYPOINT ["bun", "run", "/app/server.ts"]

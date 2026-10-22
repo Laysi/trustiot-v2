@@ -1,0 +1,47 @@
+{
+  "source": "nightly-report artifact of https://github.com/Laysi/trustiot-v2/actions/runs/39496862573 (report.json, trimmed to the Laysi/trustiot-v2#478 checks)",
+  "headSha": "e025d069c4969a8e2bfdb19f148e794286c54000",
+  "startedAt": "2026-10-20T21:01:22.016Z",
+  "finishedAt": "2026-10-20T21:14:17.149Z",
+  "ok": true,
+  "k3sImage": "rancher/k3s:v1.36.5-k3s1@sha256:057cfd5a9d51b89f1f0ee139c28d5d5fdd5aa7ddeac2742a0ba90c6dbc0329bb",
+  "valuesIngressAddressSaas": "ingress: \n  tunnel: \n    clusterIP: 10.43.0.240",
+  "shapes": [
+    {
+      "shape": "onprem",
+      "ok": true,
+      "checks": 20,
+      "failed": 0,
+      "clusterIpChecks": [
+        {
+          "name": "the tunnel ingress gets a fixed ClusterIP from the static band of the cluster's Service range (Laysi/trustiot-v2#478)",
+          "ok": true,
+          "detail": "exposure direct: the chart takes no fixed ClusterIP"
+        },
+        {
+          "name": "the tunnel ingress Service that Istio generated has the fixed ClusterIP (Laysi/trustiot-v2#478)",
+          "ok": true,
+          "detail": "this shape pins no ClusterIP"
+        }
+      ]
+    },
+    {
+      "shape": "saas",
+      "ok": true,
+      "checks": 21,
+      "failed": 0,
+      "clusterIpChecks": [
+        {
+          "name": "the tunnel ingress gets a fixed ClusterIP from the static band of the cluster's Service range (Laysi/trustiot-v2#478)",
+          "ok": true,
+          "detail": "values-ingress-address-saas.yaml: ingress.tunnel.clusterIP 10.43.0.240, unused and in the static band of 10.43.0.0/16"
+        },
+        {
+          "name": "the tunnel ingress Service that Istio generated has the fixed ClusterIP (Laysi/trustiot-v2#478)",
+          "ok": true,
+          "detail": "the Service of Gateway trustiot-ingress has ClusterIP 10.43.0.240"
+        }
+      ]
+    }
+  ]
+}

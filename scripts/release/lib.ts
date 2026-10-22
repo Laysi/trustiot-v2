@@ -18,6 +18,17 @@ export const CHART_DIR = "deploy/chart";
 export const IMAGES_DIR = "deploy/images";
 /** The image template shared by every Rust binary; `@BIN@` stands for the binary name. */
 export const RUST_CONTAINERFILE = `${IMAGES_DIR}/rust-binary.Containerfile`;
+/**
+ * Where a Rust image with a `[static]` project holds that project's build output: the default
+ * root directory of the web service (services/web, `root_dir`).
+ */
+export const STATIC_SITE_PATH = "/srv/www";
+/** The directory of the build context that holds the build output, the COPY's source. */
+export const STATIC_CONTEXT_DIR = "www";
+/** The line of RUST_CONTAINERFILE that becomes the COPY of the build output, or goes away. */
+const STATIC_PLACEHOLDER = "# @STATIC@";
+/** The package.json scripts a `[static]` project must have (static-build.ts runs them). */
+export const STATIC_SCRIPTS = ["build", "check:dist"] as const;
 /** Images are statically linked musl binaries for arm64 (decision 5). */
 export const RUST_TARGET = "aarch64-unknown-linux-musl";
 export const IMAGE_PLATFORM = "linux/arm64";
@@ -34,6 +45,8 @@ const IMAGE_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const IMAGE_NAME_MAX = 63;
 /** Cargo package and binary target names. */
 const CARGO_NAME = /^[A-Za-z0-9_-]+$/;
+/** A directory relative to the repository root: lowercase segments, no `.` or `..`. */
+const PROJECT_PATH = /^[a-z0-9][a-z0-9_-]*(?:\/[a-z0-9][a-z0-9_-]*)*$/;
 const RELEASE_TAG =
   /^v(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})(-rc\.[1-9]\d{0,8})?$/;
 const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/;
@@ -134,6 +147,11 @@ export interface RustImage {
   package: string;
   /** The binary target; when absent the package must have exactly one. */
   bin?: string;
+  /**
+   * The Bun project (a directory relative to the repository root) whose build output the image
+   * also holds, at STATIC_SITE_PATH: image.toml's `[static]` table.
+   */
+  staticSite?: string;
 }
 
 /** An image with its own Containerfile; the build context is its directory. */
@@ -166,6 +184,9 @@ export function imageNameProblem(name: string): string | undefined {
  *     [rust]
  *     package = "identity"   # the Cargo package
  *     bin = "identity"       # optional when the package has one binary target
+ *
+ *     [static]               # optional: a Bun project's build output at /srv/www
+ *     project = "frontend"
  */
 export function parseImageToml(name: string, source: string, file: string): RustImage {
   let doc: unknown;
@@ -177,10 +198,10 @@ export function parseImageToml(name: string, source: string, file: string): Rust
   if (!isMap(doc)) {
     throw new ReleaseError(`${file}: expected a TOML table`);
   }
-  const extraTop = Object.keys(doc).filter((key) => key !== "rust");
+  const extraTop = Object.keys(doc).filter((key) => key !== "rust" && key !== "static");
   if (extraTop.length > 0) {
     throw new ReleaseError(
-      `${file}: unknown key(s) ${extraTop.join(", ")}; the file holds one [rust] table`,
+      `${file}: unknown key(s) ${extraTop.join(", ")}; the file holds one [rust] table and an optional [static] table`,
     );
   }
   const rust = doc.rust;
@@ -204,13 +225,62 @@ export function parseImageToml(name: string, source: string, file: string): Rust
     }
     image.bin = rust.bin;
   }
+  if (doc.static !== undefined) {
+    image.staticSite = parseStaticTable(doc.static, file);
+  }
   return image;
+}
+
+/** Reads `[static]`: the project, a directory relative to the repository root. */
+function parseStaticTable(table: unknown, file: string): string {
+  if (!isMap(table)) {
+    throw new ReleaseError(`${file}: [static] must be a table with project = "<directory>"`);
+  }
+  const extra = Object.keys(table).filter((key) => key !== "project");
+  if (extra.length > 0) {
+    throw new ReleaseError(`${file}: unknown key(s) ${extra.join(", ")} in [static]; allowed: project`);
+  }
+  const project = table.project;
+  if (typeof project !== "string" || !PROJECT_PATH.test(project)) {
+    throw new ReleaseError(
+      `${file}: [static] project must be a directory relative to the repository root in lowercase, such as "frontend"`,
+    );
+  }
+  return project;
+}
+
+/**
+ * Returns why `project` cannot be built for a `[static]` table, or undefined: static-build.ts
+ * installs it from its bun.lock and runs the STATIC_SCRIPTS of its package.json.
+ */
+function staticProjectProblem(root: string, project: string): string | undefined {
+  const dir = join(root, project);
+  const manifest = join(dir, "package.json");
+  if (!existsSync(manifest)) {
+    return "has no package.json";
+  }
+  if (!existsSync(join(dir, "bun.lock"))) {
+    return "has no bun.lock, which the build installs from with --frozen-lockfile";
+  }
+  let pkg: unknown;
+  try {
+    pkg = JSON.parse(readFileSync(manifest, "utf8"));
+  } catch (error) {
+    return `its package.json is not JSON: ${errorMessage(error)}`;
+  }
+  const scripts = isMap(pkg) ? pkg.scripts : undefined;
+  const missing = STATIC_SCRIPTS.filter((script) => !isMap(scripts) || typeof scripts[script] !== "string");
+  if (missing.length > 0) {
+    return `its package.json has no ${missing.map((script) => `\`${script}\``).join(" or ")} script`;
+  }
+  return undefined;
 }
 
 /**
  * Lists the images a release publishes: every directory `deploy/images/<name>/` holds either
  * `image.toml` (a Rust binary) or a `Containerfile` (built from that directory). Files directly
- * under deploy/images/, such as the shared rust-binary.Containerfile, are not images.
+ * under deploy/images/, such as the shared rust-binary.Containerfile, are not images. The
+ * `[static]` project of an image.toml must be a Bun project that the build can install and run.
  */
 export function discoverImages(root: string): ImageSpec[] {
   const dir = join(root, IMAGES_DIR);
@@ -239,7 +309,12 @@ export function discoverImages(root: string): ImageSpec[] {
       );
     }
     if (hasToml) {
-      images.push(parseImageToml(name, readFileSync(toml, "utf8"), `${where}/image.toml`));
+      const image = parseImageToml(name, readFileSync(toml, "utf8"), `${where}/image.toml`);
+      const problem = image.staticSite === undefined ? undefined : staticProjectProblem(root, image.staticSite);
+      if (problem !== undefined) {
+        throw new ReleaseError(`${where}/image.toml: the [static] project ${image.staticSite} ${problem}`);
+      }
+      images.push(image);
     } else if (hasContainerfile) {
       const problems = baseImageProblems(readFileSync(containerfile, "utf8"));
       if (problems.length > 0) {
@@ -343,8 +418,12 @@ export function baseImageProblems(containerfile: string): string[] {
   return problems;
 }
 
-/** Writes the binary name into the shared Rust image template. */
-export function renderRustContainerfile(template: string, bin: string): string {
+/**
+ * Writes the binary name into the shared Rust image template. With `staticSite`, the
+ * `# @STATIC@` line becomes the COPY of the build output (the context's STATIC_CONTEXT_DIR) to
+ * STATIC_SITE_PATH; without, the line is removed.
+ */
+export function renderRustContainerfile(template: string, bin: string, options: { staticSite?: boolean } = {}): string {
   if (!CARGO_NAME.test(bin)) {
     throw new ReleaseError(`\`${bin}\` is not a Cargo binary name`);
   }
@@ -355,7 +434,16 @@ export function renderRustContainerfile(template: string, bin: string): string {
   if (problems.length > 0) {
     throw new ReleaseError(`${RUST_CONTAINERFILE}: ${problems.join("; ")}`);
   }
-  return template.replaceAll("@BIN@", bin);
+  const lines = template.split("\n");
+  const isPlaceholder = (line: string) => line.trim() === STATIC_PLACEHOLDER;
+  if (options.staticSite === true && !lines.some(isPlaceholder)) {
+    throw new ReleaseError(`${RUST_CONTAINERFILE} has no \`${STATIC_PLACEHOLDER}\` line for the static site`);
+  }
+  const copy = `COPY ${STATIC_CONTEXT_DIR}/ ${STATIC_SITE_PATH}/`;
+  return lines
+    .flatMap((line) => (isPlaceholder(line) ? (options.staticSite === true ? [copy] : []) : [line]))
+    .join("\n")
+    .replaceAll("@BIN@", bin);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -368,6 +456,8 @@ export interface PlannedImage {
   package?: string;
   /** Rust images: the binary target, when image.toml names one. */
   bin?: string;
+  /** Rust images: the `[static]` project, when image.toml has one. */
+  staticSite?: string;
   /** Containerfile images: the build context. */
   context?: string;
   /** `<REGISTRY>/<name>`, without tag. */
@@ -400,6 +490,7 @@ export function rustSpec(image: PlannedImage): RustImage {
     name: image.name,
     package: image.package,
     ...(image.bin === undefined ? {} : { bin: image.bin }),
+    ...(image.staticSite === undefined ? {} : { staticSite: image.staticSite }),
   };
 }
 
@@ -415,6 +506,9 @@ export function planImage(spec: ImageSpec, version: string, registry = REGISTRY)
     planned.package = spec.package;
     if (spec.bin !== undefined) {
       planned.bin = spec.bin;
+    }
+    if (spec.staticSite !== undefined) {
+      planned.staticSite = spec.staticSite;
     }
   } else {
     planned.context = spec.context;
@@ -475,7 +569,19 @@ export function parsePlan(text: string): ReleasePlan {
       if (!CARGO_NAME.test(pkg) || (bin !== undefined && (typeof bin !== "string" || !CARGO_NAME.test(bin)))) {
         throw new ReleaseError(`planned image \`${name}\` has an invalid package or bin`);
       }
-      return { name, kind, package: pkg, ...(bin === undefined ? {} : { bin }), repository: repositoryRef, ref };
+      const staticSite = value.staticSite;
+      if (staticSite !== undefined && (typeof staticSite !== "string" || !PROJECT_PATH.test(staticSite))) {
+        throw new ReleaseError(`planned image \`${name}\` has an invalid static project`);
+      }
+      return {
+        name,
+        kind,
+        package: pkg,
+        ...(bin === undefined ? {} : { bin }),
+        ...(staticSite === undefined ? {} : { staticSite }),
+        repository: repositoryRef,
+        ref,
+      };
     }
     if (kind === "containerfile") {
       const context = requireString(value, "context");

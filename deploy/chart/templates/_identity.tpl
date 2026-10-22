@@ -116,6 +116,9 @@ so custom env cannot replace them):
 - TRUSTIOT_INGRESS_ROUTES: the ingress gateway's cookie routes as JSON, [{host, path, match,
   service}] with the real host names, so the identity service addresses each token to the service
   the gateway routes the request to;
+- TRUSTIOT_ON_BEHALF_CALLS: which service may call which on behalf of users, as JSON
+  {<caller>: [<callee>, ...]} ("trustiot.mesh.onBehalfCalls"), so the token exchange gives a
+  service tokens only for the services mesh.calls lets it call (Laysi/trustiot-v2#106);
 - TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE: the signing keys file the init container fills;
 - TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION: it never signs with a key of a lower generation,
   even before the kubelet updates the file after a revocation;
@@ -133,6 +136,8 @@ Returns a YAML list; use with fromYamlArray.
 {{- $routes = append $routes (dict "host" .hostname "path" .path "match" .match "service" .service) -}}
 {{- end -}}
 {{- $env := list (dict "name" "TRUSTIOT_INGRESS_ROUTES" "value" ($routes | toJson)) -}}
+{{- $onBehalf := include "trustiot.mesh.onBehalfCalls" . | fromYaml -}}
+{{- $env = append $env (dict "name" "TRUSTIOT_ON_BEHALF_CALLS" "value" ($onBehalf.calls | toJson)) -}}
 {{- $env = append $env (dict "name" "TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE" "value" (printf "%s/%s" (include "trustiot.identity.signingKeysDir" .) $keys.secretKey)) -}}
 {{- $env = append $env (dict "name" "TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION" "value" $keys.revokeBefore) -}}
 {{- $env = append $env (dict "name" "TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS" "value" $keys.propagationSeconds) -}}

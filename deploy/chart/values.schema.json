@@ -12,6 +12,7 @@
     "services",
     "mesh",
     "internalIdentity",
+    "certificateAuthority",
     "migrate",
     "postgres",
     "clickhouse",
@@ -90,6 +91,10 @@
               "minItems": 1,
               "uniqueItems": true,
               "items": { "$ref": "#/definitions/hostCidr" }
+            },
+            "clusterIP": {
+              "description": "Fixed ClusterIP of the ingress gateway Service in tunnel mode: empty, or one IPv4 address from the static band of the cluster's Service range. The templates refuse it with direct exposure.",
+              "$ref": "#/definitions/optionalIpv4Address"
             }
           }
         },
@@ -195,7 +200,7 @@
       "properties": {
         "trustDomain": { "$ref": "#/definitions/dnsName" },
         "calls": {
-          "description": "Who may call whom: <caller>: [<callee>, ...], both keys under services.",
+          "description": "Who may call whom: <caller>: [<callee>, ...], both keys under services. A call between two services (other than ai-gateway) may also carry the user of the request, through the identity service's token exchange.",
           "type": "object",
           "propertyNames": { "pattern": "^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$" },
           "additionalProperties": {
@@ -268,6 +273,41 @@
         "signingKeySecret": {
           "description": "Before Laysi/trustiot-v2#404 only: the Secret a person made with the identity service's PKCS#8 private key, mounted into its init container only, which imports the key once.",
           "$ref": "#/definitions/secretKeyRef"
+        }
+      }
+    },
+    "certificateAuthority": {
+      "description": "Gateway certificate authority (decision 12, Laysi/trustiot-v2#78): the issuing CA keys are generated in the cluster by the certs pod's init container; an operator signs their requests with the offline root (services/certs/README.md). Certificates only, as one-line base64 DER: never a private key.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keyGeneration", "removeKeysBeforeGeneration", "rootCertificate", "issuingCertificates"],
+      "properties": {
+        "keyGeneration": {
+          "description": "Increase it to add an issuing CA key; at least 1 and at least removeKeysBeforeGeneration. Only goes up.",
+          "oneOf": [
+            { "type": "string", "pattern": "^[0-9]{1,9}$" },
+            { "type": "integer", "minimum": 1, "maximum": 999999999 }
+          ]
+        },
+        "removeKeysBeforeGeneration": {
+          "description": "Keys of a lower generation are removed at the next certs pod start (a leaked or retired key); 0 removes nothing.",
+          "oneOf": [
+            { "type": "string", "pattern": "^[0-9]{1,9}$" },
+            { "type": "integer", "minimum": 0, "maximum": 999999999 }
+          ]
+        },
+        "rootCertificate": {
+          "description": "The offline root CA certificate's DER in base64 on one line; empty until the root ceremony.",
+          "oneOf": [
+            { "type": "string", "maxLength": 0 },
+            { "type": "string", "maxLength": 16384, "pattern": "^MII[A-Za-z0-9+/]+={0,2}$" }
+          ]
+        },
+        "issuingCertificates": {
+          "description": "The issuing CA certificates the root signed, each its DER in base64 on one line.",
+          "type": "array",
+          "maxItems": 4,
+          "items": { "type": "string", "maxLength": 16384, "pattern": "^MII[A-Za-z0-9+/]+={0,2}$" }
         }
       }
     },
@@ -819,6 +859,11 @@
       "description": "IPv4 CIDR with a prefix of at least /8.",
       "type": "string",
       "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12][0-9]|[89])$"
+    },
+    "optionalIpv4Address": {
+      "description": "Empty or one IPv4 address: four decimal octets without leading zeros, so no CIDR, no 'None' and no IPv6 (the pattern of trustiot.ingress.ipv4Pattern).",
+      "type": "string",
+      "pattern": "^$|^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$"
     },
     "exactPath": {
       "description": "One exact lower-case path: segments start with a letter or digit, so no '.', '..', '//', trailing '/', '%', ';' or wildcards; never under /internal (decision 27).",

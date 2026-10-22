@@ -1,0 +1,31 @@
+# Excerpt of run.log from the nightly-report artifact of https://github.com/Laysi/trustiot-v2/actions/runs/39496862573
+# (smoke job of pull request Laysi/trustiot-v2#481 at e025d069c4969a8e2bfdb19f148e794286c54000).
+# Each line is <line number in run.log>: <line>; '...' marks the lines left out.
+1261: 2026-10-20T21:06:08.291Z == values-onprem.yaml in namespace nightly-onprem
+...
+1270: 2026-10-20T21:06:08.375Z -- the tunnel ingress gets a fixed ClusterIP from the static band of the cluster's Service range (Laysi/trustiot-v2#478)
+1271: 2026-10-20T21:06:08.376Z    ok: exposure direct: the chart takes no fixed ClusterIP
+...
+1321: 2026-10-20T21:06:44.750Z -- every Gateway is programmed
+1322: 2026-10-20T21:06:44.753Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl wait --namespace nightly-onprem --for=condition=Programmed gateway.gateway.networking.k8s.io/trustiot-ingress --timeout=180s
+1323:     gateway.gateway.networking.k8s.io/trustiot-ingress condition met
+1324: 2026-10-20T21:06:44.906Z    ok: trustiot-ingress
+1325: 2026-10-20T21:06:44.906Z -- the tunnel ingress Service that Istio generated has the fixed ClusterIP (Laysi/trustiot-v2#478)
+1326: 2026-10-20T21:06:44.906Z    ok: this shape pins no ClusterIP
+...
+1491: 2026-10-20T21:08:36.004Z == values-saas.yaml in namespace nightly-saas
+...
+1500: 2026-10-20T21:08:36.094Z -- the tunnel ingress gets a fixed ClusterIP from the static band of the cluster's Service range (Laysi/trustiot-v2#478)
+1501: 2026-10-20T21:08:36.095Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get servicecidr kubernetes --output json
+1502: 2026-10-20T21:08:36.142Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get services --all-namespaces --output json
+1503: 2026-10-20T21:08:36.186Z    ok: values-ingress-address-saas.yaml: ingress.tunnel.clusterIP 10.43.0.240, unused and in the static band of 10.43.0.0/16
+...
+1510: 2026-10-20T21:08:36.346Z $ /home/runner/.proto/tools/helm/4.3.0/helm upgrade --install trustiot /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart --namespace nightly-saas -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/values-saas.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/saas-instance.yaml -f /home/runner/work/trustiot-v2/trustiot-v2/deploy/chart/tests/values/smoke.yaml -f /home/runner/work/_temp/nightly-out/values-api-saas.yaml -f /home/runner/work/_temp/nightly-out/values-ingress-address-saas.yaml --wait --wait-for-jobs --timeout 5m
+...
+1551: 2026-10-20T21:09:07.989Z -- every Gateway is programmed
+1552: 2026-10-20T21:09:07.991Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl wait --namespace nightly-saas --for=condition=Programmed gateway.gateway.networking.k8s.io/trustiot-ingress --timeout=180s
+1553:     gateway.gateway.networking.k8s.io/trustiot-ingress condition met
+1554: 2026-10-20T21:09:08.149Z    ok: trustiot-ingress
+1555: 2026-10-20T21:09:08.149Z -- the tunnel ingress Service that Istio generated has the fixed ClusterIP (Laysi/trustiot-v2#478)
+1556: 2026-10-20T21:09:08.151Z $ /home/runner/.proto/tools/kubectl/1.36.5/kubectl get services --namespace nightly-saas --selector gateway.networking.k8s.io/gateway-name=trustiot-ingress --output json
+1557: 2026-10-20T21:09:08.195Z    ok: the Service of Gateway trustiot-ingress has ClusterIP 10.43.0.240
