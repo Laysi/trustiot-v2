@@ -1,0 +1,6 @@
+# The certs service (services/certs): the online issuing CA under an offline root, gateway client
+# certificates from CSRs and the CRLs. Only its service binary: certs-ca, the offline root
+# ceremony, is never deployed. Packed with deploy/images/rust-binary.Containerfile.
+[rust]
+package = "certs"
+bin = "certs"

@@ -520,7 +520,7 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
         expect(first.stdout).not.toContain("the migration Job reported");
         expect(first.stdout).not.toContain("may connect to it");
         const logins = productLogins();
-        expect(logins.map((login) => login.role)).toEqual(["identity_app", "assets_app", "assets_platform"]);
+        expect(logins.map((login) => login.role)).toEqual(["identity_app", "assets_app", "assets_platform", "certs_app"]);
         for (const login of logins) {
           expect(firstState.credentials.services[login.stateKey].user).toBe(login.role);
           expect(firstState.credentials.services[login.stateKey].password).toMatch(/^[0-9a-f]{64}$/);

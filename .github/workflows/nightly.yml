@@ -60,6 +60,7 @@ on:
       - rust-toolchain.toml
       - deploy/images/rust-binary.Containerfile
       - scripts/**
+      - crates/ca-keys/**
       - crates/contract/**
       - crates/identity-keys/**
       - crates/outbox/**

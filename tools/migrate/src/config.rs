@@ -727,6 +727,99 @@ impl Validate for SigningKeysConfig {
     }
 }
 
+/// Settings of `migrate certs-ca-keys`, the certs service's init container that keeps the
+/// issuing CA keys and their certificate signing requests (src/ca_keys.rs;
+/// Laysi/trustiot-v2#78).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaKeysConfig {
+    pub keys: CaKeySettings,
+}
+
+/// `keys.*` of `migrate certs-ca-keys`: the Secret and the ConfigMap, how to reach them, and
+/// what the chart asks for.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaKeySettings {
+    /// `TRUSTIOT__KEYS__API_URL`: the API server, `https://` (the chart sets
+    /// `https://kubernetes.default.svc`). `http://` is accepted for 127.0.0.1 only, for tests.
+    pub api_url: String,
+    /// `TRUSTIOT__KEYS__NAMESPACE`: the release namespace.
+    pub namespace: String,
+    /// `TRUSTIOT__KEYS__TOKEN_FILE`: the projected token of the certs service's ServiceAccount,
+    /// which only the init container mounts; read on every request.
+    pub token_file: PathBuf,
+    /// `TRUSTIOT__KEYS__CA_FILE`: the cluster CA (`kube-root-ca.crt`), the only trust anchor.
+    pub ca_file: PathBuf,
+    /// `TRUSTIOT__KEYS__SECRET`: the Secret the chart declares empty for the issuing CA keys.
+    pub secret: String,
+    /// `TRUSTIOT__KEYS__CONFIG_MAP`: the ConfigMap the chart declares empty for their
+    /// certificate signing requests.
+    pub config_map: String,
+    /// `TRUSTIOT__KEYS__GENERATION`: the chart's `certificateAuthority.keyGeneration`; a higher
+    /// one than every key in the Secret adds a key (a rotation).
+    pub generation: String,
+    /// `TRUSTIOT__KEYS__REMOVE_BEFORE_GENERATION`: the chart's
+    /// `certificateAuthority.removeKeysBeforeGeneration`; keys of a lower generation are removed.
+    #[serde(default = "no_revocation")]
+    pub remove_before_generation: String,
+    /// `TRUSTIOT__KEYS__WAIT`: how long it retries an API server that does not answer. Default
+    /// 10 minutes.
+    #[serde(
+        default = "default_wait",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub wait: Duration,
+}
+
+impl Validate for CaKeysConfig {
+    fn validate(&self) -> Result<(), Invalid> {
+        let keys = &self.keys;
+        check_api_url("keys.api_url", &keys.api_url)?;
+        if !is_dns_label(&keys.namespace) {
+            return Err(Invalid::new(
+                "keys.namespace",
+                "must be a Kubernetes namespace name (DNS label)",
+            ));
+        }
+        for (key, name) in [
+            ("keys.secret", &keys.secret),
+            ("keys.config_map", &keys.config_map),
+        ] {
+            if !is_object_name(name) {
+                return Err(Invalid::new(
+                    key,
+                    "must be a Kubernetes object name (lower-case letters, digits, - and .)",
+                ));
+            }
+        }
+        let generation = crate::passwords::parse_generation(&keys.generation)
+            .filter(|generation| *generation >= 1)
+            .ok_or_else(|| {
+                Invalid::new(
+                    "keys.generation",
+                    "must be 1 to 9 decimal digits, at least 1 (generations are compared as \
+                     numbers and only go up)",
+                )
+            })?;
+        let remove_before = crate::passwords::parse_generation(&keys.remove_before_generation)
+            .ok_or_else(|| {
+                Invalid::new(
+                    "keys.remove_before_generation",
+                    "must be 1 to 9 decimal digits",
+                )
+            })?;
+        if generation < remove_before {
+            return Err(Invalid::new(
+                "keys.generation",
+                "must not be below keys.remove_before_generation, or the requested key would be \
+                 removed",
+            ));
+        }
+        check_wait("keys.wait", keys.wait)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
