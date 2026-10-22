@@ -4,7 +4,7 @@
 
 ## 環境
 
-- 建置主機（x86_64 Linux，rootless podman），經共用的檢查佇列執行，`CI=1`（需要容器的測試沒有容器時失敗而不略過）。
+- 建置主機（x86_64 Linux），經共用的檢查佇列執行，`CI=1`（需要容器的測試沒有容器時失敗而不略過）。
 - ClickHouse：`docker.io/clickhouse/clickhouse-server:26.8`，digest 與 `deploy/chart/values.yaml` 相同（伺服器回報 26.8.22.13），每個測試起一個拋棄式容器。
 - Postgres：`tools/migrate` 測試自己起的拋棄式容器。
 - 分支 `feat/92-raw-retention`（從 `main` 的 cc185b9 分出）。
