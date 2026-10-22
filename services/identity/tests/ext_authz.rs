@@ -35,6 +35,9 @@ ALTER ROLE identity_app SET search_path = identity;
 ";
 
 const MIGRATION: &str = include_str!("../migrations/postgres/0001_identity.sql");
+/// The writes on sessions that logging in and extending a session need, and their guard
+/// (Laysi/trustiot-v2#103).
+const LOGIN_MIGRATION: &str = include_str!("../migrations/postgres/0004_login.sql");
 /// The migration Job creates the service's schema, owned by the owner role, before it runs the
 /// migrations (tools/migrate); the tests do the same as the owner.
 const SCHEMA: &str = "CREATE SCHEMA identity";
@@ -114,10 +117,12 @@ impl Fixture {
             .execute(&mut owner)
             .await
             .expect("create the schema");
-        sqlx::raw_sql(MIGRATION)
-            .execute(&mut owner)
-            .await
-            .expect("run the migration");
+        for migration in [MIGRATION, LOGIN_MIGRATION] {
+            sqlx::raw_sql(migration)
+                .execute(&mut owner)
+                .await
+                .expect("run the migration");
+        }
         support::record_release_migrations(&mut owner).await;
         Some(fixture)
     }
@@ -608,10 +613,12 @@ async fn role_changes_apply_to_the_next_request() {
     );
 }
 
-/// MS0 has no login: the service role can read sessions but not create, extend or revoke them,
-/// and memberships are invisible without a tenant.
+/// The service role writes sessions only as logging in, logging out and extending a session do
+/// (Laysi/trustiot-v2#103): it creates sessions of at most 7 days, moves their expiry within
+/// that, and revokes them, and nothing else. A revoked session stays revoked; users, roles and
+/// memberships stay read-only; memberships are invisible without a tenant.
 #[tokio::test]
-async fn the_service_role_cannot_create_or_change_sessions() {
+async fn the_service_role_writes_sessions_only_within_the_login_rules() {
     let Some(fixture) = Fixture::new(
         "CREATE DATABASE identity_grants OWNER identity_owner",
         "identity_grants",
@@ -622,15 +629,53 @@ async fn the_service_role_cannot_create_or_change_sessions() {
     };
     fixture.add_user(USER, false).await;
     fixture.add_membership(TENANT_A, USER, "viewer").await;
+    // One active and one revoked session for the statements below to touch.
+    fixture
+        .add_session(USER, Some(TENANT_A), SESSION_SECS, false)
+        .await;
+    fixture
+        .add_session(USER, Some(TENANT_A), SESSION_SECS, true)
+        .await;
     let mut app = fixture.connect("identity_app").await;
+    // What the service does: allowed.
     for statement in [
-        "INSERT INTO identity.sessions (id, token_hash, user_id, expires_at) VALUES (gen_random_uuid(), sha256('x'), '01928f6e-7a3c-7d4e-8f00-0123456789ab', now() + interval '1 hour')",
-        "UPDATE identity.sessions SET expires_at = now() + interval '1 year'",
-        "UPDATE identity.sessions SET revoked_at = NULL",
+        "INSERT INTO identity.sessions (id, token_hash, user_id, expires_at) VALUES (gen_random_uuid(), sha256('x'), '01928f6e-7a3c-7d4e-8f00-0123456789ab', now() + interval '12 hours')",
+        "UPDATE identity.sessions SET expires_at = LEAST(now() + interval '12 hours', created_at + interval '7 days') WHERE revoked_at IS NULL",
+        "UPDATE identity.sessions SET revoked_at = now() WHERE token_hash = sha256('x')",
+    ] {
+        sqlx::raw_sql(statement)
+            .execute(&mut app)
+            .await
+            .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    }
+    for statement in [
+        // Longer than the absolute lifetime, new or extended (the trigger).
+        "INSERT INTO identity.sessions (id, token_hash, user_id, expires_at) VALUES (gen_random_uuid(), sha256('y'), '01928f6e-7a3c-7d4e-8f00-0123456789ab', now() + interval '8 days')",
+        "UPDATE identity.sessions SET expires_at = created_at + interval '7 days 1 second'",
+        // A revoked session coming back, or its revocation moved (the trigger).
+        "UPDATE identity.sessions SET revoked_at = NULL WHERE revoked_at IS NOT NULL",
+        "UPDATE identity.sessions SET revoked_at = now() + interval '1 day' WHERE revoked_at IS NOT NULL",
+        // A creation time of its own choosing, which would move the 7-day cap (no column grant).
+        "INSERT INTO identity.sessions (id, token_hash, user_id, created_at, expires_at) VALUES (gen_random_uuid(), sha256('v'), '01928f6e-7a3c-7d4e-8f00-0123456789ab', now() + interval '30 days', now() + interval '36 days')",
+        "INSERT INTO identity.sessions (id, token_hash, user_id, expires_at, revoked_at) VALUES (gen_random_uuid(), sha256('u'), '01928f6e-7a3c-7d4e-8f00-0123456789ab', now() + interval '1 hour', NULL)",
+        // Columns and tables without a grant.
+        "UPDATE identity.sessions SET user_id = '01928f6e-7a3c-7d4e-8f00-0000000000ad'",
+        "UPDATE identity.sessions SET token_hash = sha256('z')",
+        "UPDATE identity.sessions SET created_at = now()",
+        "UPDATE identity.sessions SET active_tenant_id = '01928f6e-7a3c-7d4e-8f00-00000000000b'",
+        "DELETE FROM identity.sessions",
+        "TRUNCATE identity.sessions",
         "INSERT INTO identity.users (id) VALUES (gen_random_uuid())",
         "UPDATE identity.users SET platform_admin = true",
+        "UPDATE identity.users SET email = 'someone@example.com'",
         "INSERT INTO identity.memberships (tenant_id, user_id, tenant_role) VALUES ('01928f6e-7a3c-7d4e-8f00-00000000000a', '01928f6e-7a3c-7d4e-8f00-0123456789ab', 'admin')",
-        "TRUNCATE identity.sessions",
+        "UPDATE identity.login_codes SET code_hash = sha256('w')",
+        "UPDATE identity.login_codes SET expires_at = now() + interval '1 year'",
+        "UPDATE identity.login_codes SET user_id = '01928f6e-7a3c-7d4e-8f00-0000000000ad'",
+        "TRUNCATE identity.login_codes",
+        // The guard itself.
+        "DROP TRIGGER sessions_guard ON identity.sessions",
+        "ALTER TABLE identity.sessions DISABLE TRIGGER sessions_guard",
         "CREATE TABLE identity.extra (id int)",
     ] {
         let error = sqlx::raw_sql(statement)

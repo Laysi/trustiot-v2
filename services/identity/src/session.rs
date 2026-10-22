@@ -6,6 +6,11 @@
 //! signing key that could be hard-coded or leak (docs/requirements/rebuild-checklist.md A1).
 //! Everything about the session (user, tenant, expiry, revocation, role) is read from the
 //! database on every check, so logout, revocation and role changes apply to the next request.
+//!
+//! Lifetime (services/identity/README.md, "session 的期限"): a session created by logging in
+//! ([`crate::login`]) expires [`SESSION_IDLE_LIFETIME`] after its last use, and never later than
+//! [`SESSION_ABSOLUTE_LIFETIME`] after it was created. The check extends it in the background
+//! ([`PgSessionStore`]), so the browser never renews anything.
 
 use std::fmt;
 use std::future::Future;
@@ -13,8 +18,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use axum::http::HeaderMap;
 use axum::http::header::COOKIE;
+use axum::http::{HeaderMap, HeaderValue};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use contract::{TenantGrant, TenantId, TenantRole, UserId};
@@ -31,7 +36,7 @@ use tokio::task::JoinSet;
 
 /// The session cookie. The `__Host-` prefix makes browsers accept it only when it was set by this
 /// host over HTTPS with `Path=/` and no `Domain`, so a sibling subdomain cannot plant or overwrite
-/// it. The login flow (Laysi/trustiot-v2#103) sets it with `HttpOnly`, `Secure` and `SameSite`.
+/// it. Logging in sets it with `HttpOnly`, `Secure` and `SameSite=Lax` ([`set_cookie`]).
 pub const SESSION_COOKIE: &str = "__Host-trustiot-session";
 
 /// Bytes of randomness in a session secret.
@@ -39,6 +44,23 @@ pub const SESSION_SECRET_BYTES: usize = 32;
 
 /// Length of the cookie value: [`SESSION_SECRET_BYTES`] in base64url without padding.
 pub const SESSION_COOKIE_LEN: usize = 43;
+
+/// How long a session lasts after its last use: 12 hours, the session length of checklist A1.
+/// Logging in sets `expires_at` this far ahead, and the check moves it forward as the session is
+/// used ([`SESSION_EXTEND_STEP`]).
+pub const SESSION_IDLE_LIFETIME: Duration = Duration::from_secs(12 * 3600);
+
+/// The longest a session lives, used or not: 7 days from its creation. Then the user logs in
+/// again. `migrations/postgres/0004_login.sql` enforces the same bound; a test compares them.
+pub const SESSION_ABSOLUTE_LIFETIME: Duration = Duration::from_secs(7 * 24 * 3600);
+
+/// The check extends a session only when that moves its expiry by at least this much, so an
+/// active session costs one write per 10 minutes, not one per request.
+pub const SESSION_EXTEND_STEP: Duration = Duration::from_secs(10 * 60);
+
+/// Extensions that may run at once per replica. Beyond that, or when no connection of the
+/// check's pool is idle, a check skips the extension; the session's next request extends it.
+pub const EXTENSIONS_IN_FLIGHT: usize = 8;
 
 /// How long getting a database connection may take, opening a new one included (TCP, TLS,
 /// SCRAM and service-kit's session check): the pool's acquire timeout. It is far longer than an
@@ -80,11 +102,22 @@ pub const IN_FLIGHT_PER_CONNECTION: u32 = 4;
 pub struct SessionSecret([u8; SESSION_SECRET_BYTES]);
 
 impl SessionSecret {
-    /// Wraps raw secret bytes, for whoever creates sessions (in MS0 only the test tooling; the
-    /// login flow of Laysi/trustiot-v2#103 later). The bytes must come from a CSPRNG.
+    /// Wraps raw secret bytes, for test tooling that creates sessions. The bytes must come from
+    /// a CSPRNG; the service itself uses [`SessionSecret::generate`].
     #[must_use]
     pub const fn from_bytes(bytes: [u8; SESSION_SECRET_BYTES]) -> Self {
         Self(bytes)
+    }
+
+    /// A new secret from the operating system's CSPRNG.
+    ///
+    /// # Errors
+    ///
+    /// When the operating system has no randomness to give.
+    pub fn generate() -> Result<Self, getrandom::Error> {
+        let mut secret = Self([0; SESSION_SECRET_BYTES]);
+        getrandom::fill(&mut secret.0)?;
+        Ok(secret)
     }
 
     /// Reads a cookie value: exactly [`SESSION_COOKIE_LEN`] characters of base64url without
@@ -201,6 +234,43 @@ pub fn session_secret(headers: &HeaderMap) -> Result<SessionSecret, CookieError>
     SessionSecret::parse(value).ok_or(CookieError::Malformed)
 }
 
+/// The attributes of the session cookie. `__Host-` requires `Secure`, `Path=/` and no `Domain`.
+/// `HttpOnly` keeps it from scripts. `SameSite=Lax` leaves it off requests that other sites
+/// start, except a top-level navigation (a link to the app still arrives logged in); every write
+/// that the cookie authenticates needs a CORS preflight on top, which nothing allows
+/// (services/identity/README.md, "與入口的約定").
+const COOKIE_ATTRIBUTES: &str = "Path=/; Secure; HttpOnly; SameSite=Lax";
+
+/// The `Set-Cookie` value that hands a new session to the browser. The browser keeps it for
+/// [`SESSION_ABSOLUTE_LIFETIME`]; whether the session is still active is decided by the server.
+/// Never log it.
+///
+/// # Errors
+///
+/// Never in practice: the value is visible ASCII.
+pub fn set_cookie(
+    secret: &SessionSecret,
+) -> Result<HeaderValue, axum::http::header::InvalidHeaderValue> {
+    let value = zeroize::Zeroizing::new(format!(
+        "{SESSION_COOKIE}={}; Max-Age={}; {COOKIE_ATTRIBUTES}",
+        zeroize::Zeroizing::new(secret.to_cookie_value()).as_str(),
+        SESSION_ABSOLUTE_LIFETIME.as_secs()
+    ));
+    let mut header = HeaderValue::from_str(&value)?;
+    header.set_sensitive(true);
+    Ok(header)
+}
+
+/// The `Set-Cookie` value that removes the session cookie from the browser (logout).
+#[must_use]
+pub fn clear_cookie() -> HeaderValue {
+    HeaderValue::from_static(CLEAR_COOKIE)
+}
+
+/// [`clear_cookie`]: an empty value that expires at once, with the same attributes.
+const CLEAR_COOKIE: &str =
+    "__Host-trustiot-session=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax";
+
 /// What an active session grants: the user, the tenant the user acts in with their role there,
 /// and whether the user is a platform administrator.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -260,11 +330,25 @@ pub trait SessionStore: Send + Sync + 'static {
 
 /// The session and the user, without tenant data: neither table has a `tenant_id`, because a
 /// user and their sessions span tenants (services/identity/README.md). Expiry is decided by the
-/// database clock.
-const ACTIVE_SESSION: &str = "SELECT s.user_id::text, s.active_tenant_id::text, u.platform_admin
+/// database clock. The last column says whether extending the session now would move its expiry
+/// by at least [`SESSION_EXTEND_STEP`]: `$2` is [`SESSION_IDLE_LIFETIME`], `$3`
+/// [`SESSION_ABSOLUTE_LIFETIME`], `$4` [`SESSION_EXTEND_STEP`], all in seconds.
+const ACTIVE_SESSION: &str = "SELECT s.id::text, s.user_id::text, s.active_tenant_id::text,
+    u.platform_admin,
+    LEAST(now() + make_interval(secs => $2), s.created_at + make_interval(secs => $3))
+        >= s.expires_at + make_interval(secs => $4)
 FROM identity.sessions AS s
 JOIN identity.users AS u ON u.id = s.user_id
 WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()";
+
+/// Moves an active session's expiry to [`SESSION_IDLE_LIFETIME`] from now, but never past
+/// [`SESSION_ABSOLUTE_LIFETIME`] after its creation and never backwards. `$1` is the session ID,
+/// `$2` and `$3` the two lifetimes in seconds.
+const EXTEND_SESSION: &str = "UPDATE identity.sessions
+SET expires_at = LEAST(now() + make_interval(secs => $2), created_at + make_interval(secs => $3))
+WHERE id = $1::uuid AND revoked_at IS NULL AND expires_at > now()
+    AND LEAST(now() + make_interval(secs => $2), created_at + make_interval(secs => $3))
+        > expires_at";
 
 /// The user's role in the transaction's tenant. Row-level security already limits the rows to
 /// that tenant; the tenant condition is repeated so the query means the same without it.
@@ -292,11 +376,17 @@ const MEMBERSHIP_PURPOSE: &str = "ext-authz-membership";
 /// - [`PgSessionStore::keep_warm`] keeps [`WARM_CONNECTIONS`] open and confirms all of them every
 ///   round, and readiness passes only while they are open, so the gateway sends checks only to a
 ///   replica that will not have to open a connection for them.
+///
+/// A lookup that finds the session due for extension ([`SESSION_EXTEND_STEP`]) starts the
+/// extension on another task and answers without waiting for it; at most
+/// [`EXTENSIONS_IN_FLIGHT`] run at once, each only on a connection that is idle when the lookup
+/// ends, and one that is skipped or fails is left to the session's next request.
 #[derive(Clone, Debug)]
 pub struct PgSessionStore {
     db: TenantDb,
     memberships: BackgroundTenantDb,
     in_flight: Arc<Semaphore>,
+    extensions: Arc<Semaphore>,
     warm: Arc<AtomicBool>,
 }
 
@@ -329,6 +419,7 @@ impl PgSessionStore {
             db,
             memberships,
             in_flight: Arc::new(Semaphore::new(permits)),
+            extensions: Arc::new(Semaphore::new(EXTENSIONS_IN_FLIGHT)),
             warm: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -427,11 +518,15 @@ impl PgSessionStore {
 
     /// The lookup itself, on the caller's task.
     async fn read(&self, hash: SessionHash) -> Result<Option<SessionGrant>, StoreError> {
-        let row: Option<(String, Option<String>, bool)> = sqlx::query_as(ACTIVE_SESSION)
-            .bind(hash.as_bytes().as_slice())
-            .fetch_optional(self.db.pool())
-            .await?;
-        let Some((user, tenant, platform_admin)) = row else {
+        let row: Option<(String, String, Option<String>, bool, bool)> =
+            sqlx::query_as(ACTIVE_SESSION)
+                .bind(hash.as_bytes().as_slice())
+                .bind(SESSION_IDLE_LIFETIME.as_secs_f64())
+                .bind(SESSION_ABSOLUTE_LIFETIME.as_secs_f64())
+                .bind(SESSION_EXTEND_STEP.as_secs_f64())
+                .fetch_optional(self.db.pool())
+                .await?;
+        let Some((session, user, tenant, platform_admin, due)) = row else {
             return Ok(None);
         };
         let user: UserId = user
@@ -448,11 +543,55 @@ impl PgSessionStore {
             }
             None => None,
         };
+        // After the check's own queries, so the extension never takes a connection they need.
+        if due {
+            self.extend(session);
+        }
         Ok(Some(SessionGrant {
             user,
             tenant,
             platform_admin,
         }))
+    }
+
+    /// Starts extending the session `session` (its ID) on its own task with a connection that
+    /// is idle right now, unless [`EXTENSIONS_IN_FLIGHT`] are already running. Never waits and
+    /// never opens a connection: this pool is sized for the checks and the keep-warm round (see
+    /// [`WARM_CONNECTIONS`]), so with no idle connection the extension is skipped and the
+    /// session's next request tries again. Logs a failure with its SQLSTATE only.
+    fn extend(&self, session: String) {
+        let Ok(permit) = Arc::clone(&self.extensions).try_acquire_owned() else {
+            tracing::debug!("skipped a session extension: too many in flight");
+            return;
+        };
+        let Some(mut connection) = self.db.pool().try_acquire() else {
+            tracing::debug!("skipped a session extension: no idle connection");
+            return;
+        };
+        tokio::spawn(async move {
+            let outcome = tokio::time::timeout(
+                WORK_LIMIT,
+                sqlx::query(EXTEND_SESSION)
+                    .bind(session)
+                    .bind(SESSION_IDLE_LIFETIME.as_secs_f64())
+                    .bind(SESSION_ABSOLUTE_LIFETIME.as_secs_f64())
+                    .execute(&mut *connection),
+            )
+            .await;
+            drop(connection);
+            drop(permit);
+            match outcome {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => tracing::warn!(
+                    error_kind = error_kind(&error),
+                    "could not extend a session; its next request tries again"
+                ),
+                Err(_) => tracing::warn!(
+                    limit_secs = WORK_LIMIT.as_secs(),
+                    "extending a session did not finish in time; its next request tries again"
+                ),
+            }
+        });
     }
 
     /// The user's role in `tenant`, or `None` when they are not a member (any more).
@@ -562,6 +701,17 @@ async fn probe(
             readiness.not_ready(&StoreError::from(error));
             false
         }
+    }
+}
+
+/// A database error for the log: its SQLSTATE or kind, never the message, which may quote data.
+pub(crate) fn error_kind(error: &sqlx::Error) -> String {
+    match error {
+        sqlx::Error::Database(database) => database
+            .code()
+            .map_or_else(|| "database".to_owned(), |code| format!("SQLSTATE {code}")),
+        sqlx::Error::PoolTimedOut => "pool timed out".to_owned(),
+        _ => "database client".to_owned(),
     }
 }
 
@@ -749,6 +899,56 @@ mod tests {
         for bad in ["", "Admin", "owner", "unrecognized"] {
             assert!(parse_role(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_session_cookie_is_set_and_cleared_with_the_same_attributes() {
+        let secret = SessionSecret::from_bytes(SECRET);
+        let set = set_cookie(&secret).expect("a header value");
+        assert!(set.is_sensitive());
+        let set = set.to_str().expect("ascii");
+        assert_eq!(
+            set,
+            format!(
+                "__Host-trustiot-session={}; Max-Age=604800; Path=/; Secure; HttpOnly; \
+                 SameSite=Lax",
+                secret.to_cookie_value()
+            )
+        );
+        let cleared = clear_cookie();
+        let cleared = cleared.to_str().expect("ascii");
+        assert_eq!(
+            cleared,
+            format!("{SESSION_COOKIE}=; Max-Age=0; {COOKIE_ATTRIBUTES}")
+        );
+        // The browser stores what it set and sends it back as the session cookie.
+        let (pair, _) = set.split_once(';').expect("attributes");
+        assert_eq!(
+            session_secret(&cookie_headers(&[pair.as_bytes()])).as_ref(),
+            Ok(&secret)
+        );
+    }
+
+    #[test]
+    fn generated_secrets_differ() {
+        let first = SessionSecret::generate().expect("randomness");
+        let second = SessionSecret::generate().expect("randomness");
+        assert_ne!(first, second);
+        assert_ne!(first, SessionSecret::from_bytes([0; SESSION_SECRET_BYTES]));
+    }
+
+    /// The migration's trigger refuses what the service would never write: the same 7 days as
+    /// [`SESSION_ABSOLUTE_LIFETIME`].
+    #[test]
+    fn the_absolute_lifetime_matches_the_migration() {
+        assert_eq!(SESSION_ABSOLUTE_LIFETIME.as_secs(), 7 * 24 * 3600);
+        let migration = include_str!("../migrations/postgres/0004_login.sql");
+        assert!(
+            migration.contains("NEW.expires_at > NEW.created_at + interval '7 days'"),
+            "0004_login.sql no longer caps sessions at 7 days"
+        );
+        assert!(SESSION_IDLE_LIFETIME < SESSION_ABSOLUTE_LIFETIME);
+        assert!(SESSION_EXTEND_STEP < SESSION_IDLE_LIFETIME);
     }
 
     #[test]

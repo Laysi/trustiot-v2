@@ -214,6 +214,9 @@ services:
     # OpenShift set fsGroup to null: the restricted-v2 SCC assigns one from the namespace range.
     podSecurityContext:
       fsGroup: 65532
+    # Mails login codes through the relay in `smtp` (services/identity/README.md, "登入").
+    credentials:
+      - smtp
   assets:
     enabled: false
   certs:

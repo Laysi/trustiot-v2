@@ -82,7 +82,7 @@ type Manifest = YamlMap & {
 type Container = YamlMap & {
   name: string;
   image: string;
-  env?: { name: string; value?: string; valueFrom?: { secretKeyRef?: { name: string; key: string }; fieldRef?: { fieldPath: string } } }[];
+  env?: { name: string; value?: string; valueFrom?: { secretKeyRef?: { name: string; key: string; optional?: boolean }; fieldRef?: { fieldPath: string } } }[];
   envFrom?: { configMapRef?: { name: string } }[];
   ports?: { name: string; containerPort: number; hostPort?: number }[];
   volumeMounts?: YamlMap[];
@@ -384,6 +384,9 @@ describe("deployment shapes", () => {
     expect(config.TRUSTIOT_CLIENT_IP_SOURCE).toBe("cf-connecting-ip");
     expect(config.TRUSTIOT_QDRANT_URL).toBe("https://qdrant.saas.trustiot.test:6333");
     expect(config.SENTRY_ENVIRONMENT).toBe("test");
+    // smtp.credentialsSecret names a Secret: the relay needs an account, so the identity service
+    // reports a missing one (its reference to the Secret is optional).
+    expect(config.TRUSTIOT_SMTP_AUTH_REQUIRED).toBe("true");
   });
 
   test("on-prem: direct ingress, bundled Qdrant, customer SMTP, Sentry off", () => {
@@ -392,6 +395,8 @@ describe("deployment shapes", () => {
     expect(config.TRUSTIOT_CLIENT_IP_SOURCE).toBe("x-forwarded-for-rightmost");
     expect(config.TRUSTIOT_QDRANT_URL).toBeUndefined();
     expect(config.TRUSTIOT_SMTP_HOST).toBe("smtp.factory.test");
+    // The customer's relay takes mail without an account: no credentials Secret.
+    expect(config.TRUSTIOT_SMTP_AUTH_REQUIRED).toBeUndefined();
     expect(config.SENTRY_ENVIRONMENT).toBeUndefined();
   });
 
@@ -448,7 +453,7 @@ describe("secrets reach only the services that need them", () => {
     return Object.fromEntries(
       env.flatMap((e) => {
         const ref = e.valueFrom?.secretKeyRef;
-        return ref ? [[e.name, `${ref.name}/${ref.key}`]] : [];
+        return ref ? [[e.name, `${ref.name}/${ref.key}${ref.optional === true ? " (optional)" : ""}`]] : [];
       }),
     );
   };
@@ -472,6 +477,11 @@ describe("secrets reach only the services that need them", () => {
       // service role, and the platform role that reads the event log (Laysi/trustiot-v2#130).
       TRUSTIOT__DATABASE__PASSWORD: "trustiot-identity-password/identity_app",
       TRUSTIOT__DATABASE__PLATFORM_PASSWORD: "trustiot-identity-password/identity_platform",
+      // The relay account for login codes: values.yaml lists `smtp` for identity. Optional, so
+      // a missing Secret does not keep the pod, and the ext_authz check, from starting; the
+      // service reports it (TRUSTIOT_SMTP_AUTH_REQUIRED). The only optional reference.
+      TRUSTIOT_SMTP_USERNAME: "trustiot-smtp/username (optional)",
+      TRUSTIOT_SMTP_PASSWORD: "trustiot-smtp/password (optional)",
     });
     expect(secretRefs(manifests, "knowledge")).toEqual({
       SENTRY_DSN: "trustiot-sentry/dsn",
@@ -1365,7 +1375,12 @@ describe("values reference Secrets by name only and hold no secret material", ()
             }
             if (!ref) continue;
             references += 1;
-            expect(Object.keys(ref).sort()).toEqual(["key", "name"]);
+            // By name and key only. The SMTP account's references are also optional, and only
+            // they: a missing Secret must not keep the identity service, and with it the ext_authz
+            // check, from starting (the service reports it, TRUSTIOT_SMTP_AUTH_REQUIRED).
+            const smtp = env.name.startsWith("TRUSTIOT_SMTP_");
+            expect(Object.keys(ref).sort(), env.name).toEqual(smtp ? ["key", "name", "optional"] : ["key", "name"]);
+            if (smtp) expect(ref.optional, env.name).toBe(true);
             expect(names).toContain(ref.name);
           }
         }
@@ -4812,6 +4827,8 @@ describe("values validation rejects unsafe or incomplete settings", () => {
       ["--set-json", 'smtp.from="a@factory.test\\r\\nBcc: x@evil.test"'],
       /\/smtp\/from/,
     ],
+    // The identity service cannot send login codes without a sender (Laysi/trustiot-v2#103).
+    ["SMTP relay without a sender", onprem, ["--set", "smtp.from="], /\/smtp\/from/],
     ["root user allowed", saas, ["--set", "serviceDefaults.podSecurityContext.runAsNonRoot=false"], /runAsNonRoot/],
     [
       "privilege escalation allowed",
@@ -5887,8 +5904,9 @@ describe("e2e overlays", () => {
 
   const isMigrationJob = (m: Manifest) => m.kind === "Job" && m.metadata.labels?.["app.kubernetes.io/component"] === "migrate";
 
-  // "<kind>/<name> reads <Secret>" for every Secret a workload's pods read: environment
-  // variables, envFrom and volumes, projected ones included, in every container.
+  // "<kind>/<name> reads <Secret>" for every Secret a workload's pods need: environment
+  // variables, envFrom and volumes, projected ones included, in every container. An optional
+  // reference is left out: it never holds a pod back.
   function secretReads(manifests: Manifest[]): { read: string; secret: string }[] {
     const reads = new Map<string, string>();
     for (const m of manifests) {
@@ -5898,8 +5916,13 @@ describe("e2e overlays", () => {
         if (secret) reads.set(`${m.kind}/${m.metadata.name} reads ${secret}`, secret);
       };
       for (const container of [...pod.containers, ...((pod.initContainers ?? []) as Container[])]) {
-        for (const env of container.env ?? []) read(env.valueFrom?.secretKeyRef?.name);
-        for (const from of (container.envFrom ?? []) as { secretRef?: { name?: string } }[]) read(from.secretRef?.name);
+        for (const env of container.env ?? []) {
+          const ref = env.valueFrom?.secretKeyRef;
+          if (ref?.optional !== true) read(ref?.name);
+        }
+        for (const from of (container.envFrom ?? []) as { secretRef?: { name?: string; optional?: boolean } }[]) {
+          if (from.secretRef?.optional !== true) read(from.secretRef?.name);
+        }
       }
       for (const volume of pod.volumes ?? []) {
         // An optional Secret volume never holds a pod back: the identity service mounts its
@@ -5931,7 +5954,39 @@ describe("e2e overlays", () => {
       .map(({ read }) => read);
   }
 
+  // The dependency Secrets the instance overlays name (the SMTP relay's account, the Sentry DSN,
+  // object storage, Qdrant, the AI keys): a real cluster gets them from outside the chart
+  // (Laysi/trustiot-v2#72), and no cluster test creates them. A pod that needs one never starts,
+  // and `helm install --wait` runs into its timeout: PR Laysi/trustiot-v2#525's smoke (2026-10-22)
+  // failed so in the ingress e2e, when values.yaml gave identity the smtp credential, which
+  // saas-instance.yaml names trustiot-smtp for, with a required reference.
+  function namedDependencySecrets(files: readonly string[]): Set<string> {
+    const names = new Set<string>();
+    const walk = (node: unknown, key: string): void => {
+      if (Array.isArray(node)) {
+        for (const item of node) walk(item, key);
+        return;
+      }
+      if (!isMap(node)) return;
+      if (key.endsWith("Secret") && typeof node.name === "string" && node.name !== "") names.add(node.name);
+      for (const [child, value] of Object.entries(node)) walk(value, child);
+    };
+    for (const file of files.filter((f) => f.startsWith("tests/values/"))) walk(readYaml(file), "");
+    return names;
+  }
+
+  function dependencyReads(manifests: Manifest[], files: readonly string[]): string[] {
+    const named = namedDependencySecrets(files);
+    return secretReads(manifests)
+      .filter(({ secret }) => named.has(secret))
+      .map(({ read }) => read);
+  }
+
   for (const install of INSTALLS) {
+    test(`${install.name}: no pod needs a dependency Secret that the instance overlay names`, () => {
+      expect(dependencyReads(render(install.files, install.args), install.files)).toEqual([]);
+    });
+
     test(`${install.name}: no pod reads a password Secret that nothing fills`, () => {
       const manifests = render(install.files, install.args);
       expect(manifests.filter(isMigrationJob).length, "migration Jobs").toBe(install.migrate ? 1 : 0);
@@ -5948,5 +6003,19 @@ describe("e2e overlays", () => {
     expect(unfilledReads(manifests, [])).toEqual([`Deployment/${RELEASE}-assets reads ${RELEASE}-assets-password`]);
     // A Secret the test fills itself is no finding.
     expect(unfilledReads(manifests, [`${RELEASE}-assets-password`])).toEqual([]);
+  });
+
+  test("the check catches a required reference to a dependency Secret, and passes identity's optional one to the relay account", () => {
+    const ingress = INSTALLS[0];
+    if (ingress === undefined) throw new Error("no ingress install");
+    expect(namedDependencySecrets(ingress.files)).toContain("trustiot-smtp");
+    expect(namedDependencySecrets(ingress.files)).toContain("trustiot-sentry");
+    // The identity stand-in has the relay account's variables, from an optional reference.
+    const manifests = render(ingress.files, ingress.args);
+    const identity = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`)).containers[0]?.env ?? [];
+    expect(identity.filter((e) => e.valueFrom?.secretKeyRef?.name === "trustiot-smtp").map((e) => e.valueFrom?.secretKeyRef?.optional)).toEqual([true, true]);
+    // Sentry's DSN is a required reference: with Sentry on, every service would wait for it.
+    const sentry = dependencyReads(render(ingress.files, [...ingress.args, "--set", "observability.sentry.enabled=true"]), ingress.files);
+    expect(sentry).toContain(`Deployment/${RELEASE}-identity reads trustiot-sentry`);
   });
 });

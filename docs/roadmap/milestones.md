@@ -54,7 +54,7 @@
 
 | 延後 | 展示環境的補償 |
 | --- | --- |
-| API 閘道限流（Laysi/trustiot-v2#113）、停權（Laysi/trustiot-v2#107）、AI 額度（Laysi/trustiot-v2#140）、分析護欄（Laysi/trustiot-v2#148）、注入題庫（Laysi/trustiot-v2#445） | app 主機名稱前加 Cloudflare Access，只放行受邀名單；Anthropic 金鑰所在的工作區設用量上限；切片內的 AI 工具除了建立與修改儀表板都是唯讀，以使用者的內部身分執行，租戶隔離由資料庫強制；儀表板頁面只在不能連網的沙箱執行（Laysi/trustiot-v2#462 以確定性測試驗證） |
+| API 閘道限流（Laysi/trustiot-v2#113）、登入端點的濫用防護（Laysi/trustiot-v2#508）、停權（Laysi/trustiot-v2#107）、AI 額度（Laysi/trustiot-v2#140）、分析護欄（Laysi/trustiot-v2#148）、注入題庫（Laysi/trustiot-v2#445） | app 主機名稱前加 Cloudflare Access，只放行受邀名單；Anthropic 金鑰所在的工作區設用量上限；切片內的 AI 工具除了建立與修改儀表板都是唯讀，以使用者的內部身分執行，租戶隔離由資料庫強制；儀表板頁面只在不能連網的沙箱執行（Laysi/trustiot-v2#462 以確定性測試驗證） |
 | 閘道器映像強化與防火牆（Laysi/trustiot-v2#95、Laysi/trustiot-v2#96） | 展示用閘道器只留在 lab，不出貨到現場 |
 | 備份與還原（Laysi/trustiot-v2#134、Laysi/trustiot-v2#135、Laysi/trustiot-v2#136） | 不補：接受展示資料遺失的風險 |
 | 自助綁定（Laysi/trustiot-v2#114）、型號與設備、閘道器的管理畫面（Laysi/trustiot-v2#126、Laysi/trustiot-v2#127） | 型號、設備與綁定以 Laysi/trustiot-v2#99、Laysi/trustiot-v2#100、Laysi/trustiot-v2#101 的 API 建立 |

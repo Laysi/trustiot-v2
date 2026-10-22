@@ -127,7 +127,7 @@ fn refused(c: char) -> bool {
 
 /// Whether the request has exactly one `Content-Type`, `application/json` with or without
 /// parameters (`; charset=utf-8`); the type is compared without regard to ASCII case.
-fn is_json(headers: &HeaderMap) -> bool {
+pub(crate) fn is_json(headers: &HeaderMap) -> bool {
     let mut values = headers.get_all(CONTENT_TYPE).iter();
     let (Some(value), None) = (values.next(), values.next()) else {
         return false;
@@ -344,7 +344,8 @@ async fn create_tenant(
     }
 }
 
-fn error(body: ErrorBody) -> Response {
+/// An M1 error answer, never cached.
+pub(crate) fn error(body: ErrorBody) -> Response {
     (
         body.http_status(),
         [(CACHE_CONTROL, "no-store")],

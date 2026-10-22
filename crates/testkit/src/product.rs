@@ -101,8 +101,10 @@ static SHARED: tokio::sync::Mutex<Weak<ProductPostgres>> =
 
 /// The shared Postgres with the product's schema, set up on first use: the migration role
 /// ([`PRODUCT_INIT`]), the database, one run of the migration Job, and LOGIN for `logins`. Later
-/// callers get the same container; `logins` are given LOGIN on every call. Every caller in a test
-/// binary must use this function (not [`tls_postgres`] with another `init`).
+/// callers get the same container; `logins` are given LOGIN on every call, one caller at a time:
+/// concurrent `ALTER ROLE`s of one role fail with "tuple concurrently updated", which the tests
+/// of one binary would otherwise hit when they start together. Every caller in a test binary must
+/// use this function (not [`tls_postgres`] with another `init`).
 ///
 /// `None` when no container runtime is available outside CI (see [`tls_postgres`]).
 ///
@@ -132,9 +134,7 @@ pub async fn product_postgres(logins: &[&str]) -> Option<Arc<ProductPostgres>> {
             product
         }
     };
-    // The lock stays held while the roles get LOGIN: concurrent tests in one binary would
-    // otherwise run ALTER ROLE on the same role at once, which Postgres refuses with "tuple
-    // concurrently updated".
+    // The lock is held until the roles below have LOGIN (see above).
     let mut admin = product.superuser().await;
     sqlx::raw_sql(LOGIN_FUNCTION)
         .execute(&mut admin)
