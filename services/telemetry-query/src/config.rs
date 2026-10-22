@@ -96,7 +96,7 @@ impl fmt::Debug for Database {
 }
 
 /// `clickhouse.*`: the service's own ClickHouse account (`trustiot_telemetry_query`,
-/// services/ingest/migrations/clickhouse/0007_telemetry_query.sql), whose password the migration
+/// services/ingest/migrations/clickhouse/0008_telemetry_query.sql), whose password the migration
 /// Job generates into the service's Secret. It creates the tenant accounts and resets their
 /// passwords; every tenant account's password is derived from it.
 #[derive(Deserialize)]

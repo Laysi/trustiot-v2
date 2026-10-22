@@ -102,7 +102,7 @@ one per consumer, so a node's kubelet can read only the passwords of the pods sc
 - the telemetry-query service, when enabled: its ClickHouse account's password under the key
   "trustiot_telemetry_query" (role "clickhouse") in the same "<release>-telemetry-query-password"
   (services/telemetry-query/README.md; the account is defined by
-  services/ingest/migrations/clickhouse/0007_telemetry_query.sql);
+  services/ingest/migrations/clickhouse/0008_telemetry_query.sql);
 - the OpenTelemetry collector, when enabled: "<release>-otel-collector-password", with its
   ClickHouse account's password under the key named after the account.
 templates/passwords.yaml declares them without data; the migration Job generates each password and

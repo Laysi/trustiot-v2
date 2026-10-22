@@ -8,7 +8,7 @@
 - **執行的地方**：經檢查佇列在建置主機（x86_64 Linux，rootless podman）跑，`CI=1`，所以需要容器的測試在沒有容器時失敗而不是略過。
 - **工具版本**：`.prototools` 與 `rust-toolchain.toml` 釘選的 Rust 1.99.0、Bun、helm、kubeconform、cargo-deny。
 - **測試用的伺服器**：整合測試自己起拋棄式容器。
-  - ClickHouse：`docker.io/clickhouse/clickhouse-server` 26.8，與 chart 相同的映像 digest（`services/ingest/tests/common`），套用 `tools/migrate` 的 `PRODUCT` 所有 ClickHouse migration（含新的 `0007_telemetry_query.sql`、`0008_telemetry_query_grantees.sql`）。
+  - ClickHouse：`docker.io/clickhouse/clickhouse-server` 26.8，與 chart 相同的映像 digest（`services/ingest/tests/common`），套用 `tools/migrate` 的 `PRODUCT` 所有 ClickHouse migration（含新的 `0008_telemetry_query.sql`、`0009_telemetry_query_grantees.sql`）。
   - Postgres：`testkit::product` 起的 TLS Postgres，套用產品 schema（含新的 `telemetry_query` schema）。
   - 租戶由身分服務自己的程式碼建立，telemetry-query 以真正的執行檔啟動，從 `identity.tenant_created` 建立帳號。
 
@@ -57,7 +57,7 @@ bun scripts/ci/check-workflows.ts
 
 服務帳號 `trustiot_telemetry_query` 的權限由 `tools/migrate/tests/clickhouse_telemetry_query.rs` 的 `telemetry_query_account` 驗證，通過：
 
-- `0007_telemetry_query.sql` 建立時不能登入（`HOST NONE`）；服務部署時 migration Job 產生密碼寫進 Secret、設定並讓它登入；第二次執行沒有變更；新的密碼世代讓舊密碼失效；服務關閉時又變回 `HOST NONE`，再開啟時恢復。
+- `0008_telemetry_query.sql` 建立時不能登入（`HOST NONE`）；服務部署時 migration Job 產生密碼寫進 Secret、設定並讓它登入；第二次執行沒有變更；新的密碼世代讓舊密碼失效；服務關閉時又變回 `HOST NONE`，再開啟時恢復。
 - 只能建立與修改 `trustiot_tenant_account_*` 帳號；建立別的名稱（含 `trustiot_tenant_accountx`）、修改 collector、view 的 definer 或自己、刪帳號、grant 別的角色或表、建角色、讀任何表，都被拒。
 - 帳號多了權限、角色、設定或 default role，`GRANTEES` 不再是 `NONE`，或租戶角色多了權限或角色、少了 `SELECT ON trustiot.tenant_telemetry`、有服務帳號與租戶帳號以外的持有者（不相干的使用者、`trustiot_ingest` 角色、拿到 `ADMIN OPTION` 的租戶帳號）時，Job 讓服務帳號不能登入（`HOST NONE`）並停止，訊息說明原因；撤銷後再跑設定密碼、恢復登入。租戶帳號沒有 `ADMIN OPTION` 地持有角色則允許。
 - `GRANTEES NONE`：服務帳號啟用租戶角色後仍能以 `CREATE USER ... DEFAULT ROLE trustiot_tenant_reader` 建立帶角色的帳號；把角色授與不相干的使用者或 `trustiot_ingest`、從租戶帳號（既有的與剛建立的）收回，都被拒（`is not allowed as grantee`）；`ALTER USER trustiot_telemetry_query GRANTEES ANY` 也被拒。
@@ -116,13 +116,27 @@ bun scripts/ci/check-workflows.ts
 
 | 項目 | 處理 |
 | --- | --- |
-| Medium 1：服務帳號以 `ADMIN OPTION` 持有租戶角色，能把它授與或收回任何使用者或角色（審查時把它給了 `trustiot_ingest`，ingest 的帳號因此變成 `readonly = 1`、每個租戶都寫不進去；也能從租戶帳號收回） | 已修。新的 `0008_telemetry_query_grantees.sql` 把服務帳號設成 `GRANTEES NONE`（`0007` 是這個分支新增的檔案，但為了不改已記錄 checksum 的檔案，另開一個檔案）。服務只以 `CREATE USER ... DEFAULT ROLE` 給角色，不以 `GRANT` 給，所以沒有程式路徑受影響。Job 每次執行檢查 `grantees_any = 0` 且 `grantees_list` 是空的；這一項或服務帳號、租戶角色的任何其他檢查不符時，Job 先把服務帳號改成 `HOST NONE` 再停止，修好之後的下一次執行恢復登入。`tools/migrate/tests/clickhouse_telemetry_query.rs` 改成驗證：服務帳號啟用租戶角色後仍能建立帶角色的帳號；把角色授與不相干的使用者或 `trustiot_ingest`、從既有或剛建立的租戶帳號收回都被拒（`is not allowed as grantee`）；改自己的 `GRANTEES` 被拒；每一種竄改都讓 Job 停止且服務帳號不能登入，修好之後恢復 |
+| Medium 1：服務帳號以 `ADMIN OPTION` 持有租戶角色，能把它授與或收回任何使用者或角色（審查時把它給了 `trustiot_ingest`，ingest 的帳號因此變成 `readonly = 1`、每個租戶都寫不進去；也能從租戶帳號收回） | 已修。新的 `0009_telemetry_query_grantees.sql` 把服務帳號設成 `GRANTEES NONE`（`0007` 是這個分支新增的檔案，但為了不改已記錄 checksum 的檔案，另開一個檔案）。服務只以 `CREATE USER ... DEFAULT ROLE` 給角色，不以 `GRANT` 給，所以沒有程式路徑受影響。Job 每次執行檢查 `grantees_any = 0` 且 `grantees_list` 是空的；這一項或服務帳號、租戶角色的任何其他檢查不符時，Job 先把服務帳號改成 `HOST NONE` 再停止，修好之後的下一次執行恢復登入。`tools/migrate/tests/clickhouse_telemetry_query.rs` 改成驗證：服務帳號啟用租戶角色後仍能建立帶角色的帳號；把角色授與不相干的使用者或 `trustiot_ingest`、從既有或剛建立的租戶帳號收回都被拒（`is not allowed as grantee`）；改自己的 `GRANTEES` 被拒；每一種竄改都讓 Job 停止且服務帳號不能登入，修好之後恢復 |
 | Medium 2：只輪替服務帳號的密碼時，租戶帳號在該租戶下一次查詢之前保留舊的推導密碼；關掉服務只鎖服務帳號 | runbook 與註解已修：`docs/runbooks/migrations.md` 不再說租戶密碼跟著改變，並新增「懷疑時序查詢的服務帳號外洩」：輪替、以管理帳號刪掉每個 `trustiot_tenant_account_<32 個十六進位數字>` 帳號（服務在該租戶下一次查詢時以新的推導密碼重建）、在 `system.users` 找出 Job 不認得的帳號。這幾步先在拋棄式 ClickHouse 26.8 容器實測：刪除語句只刪符合名稱的帳號，刪掉之後以舊密碼登入得到 `AUTHENTICATION_FAILED`（服務以這個錯誤判斷要重建），服務帳號以 `CREATE USER IF NOT EXISTS ... DEFAULT ROLE` 重建後帳號有租戶角色、`SQL_tenant_id` 與 `readonly = 1`；被服務帳號改名的帳號出現在不認得的清單裡。`accounts.rs` 的註解改成：服務帳號（`GRANTEES NONE`）不能授與或收回角色，但仍能 `ALTER USER` 前綴下的帳號，包括 `RENAME` 與 `ADD IDENTIFIED`。其餘部分（`system.users` 的稽核、輪替時讓租戶密碼失效、收編既有帳號的檢查）記在 Laysi/trustiot-v2#528 |
 | Low 3：租戶帳號能 `SET DEFAULT ROLE NONE` | 記在 Laysi/trustiot-v2#143 |
 | Low 4：修復路徑沒有退避 | 記在 Laysi/trustiot-v2#528 |
 | Info 5：`system.query_log` 的攻擊是因為表不存在（`UNKNOWN_TABLE`）才被拒 | 已修。測試先以管理帳號 `SYSTEM FLUSH LOGS`，再要求 `system.query_log`、`text_log`、`processes`、`parts`、`users`、`role_grants`、`settings_profile_elements` 都是 `ACCESS_DENIED`，[tenant-accounts.txt](data/2026-10-22-119-telemetry-query/tenant-accounts.txt) 已更新 |
 | Info 6：ClickHouse 的 HTTP handler 在 `trace` 等級把請求 URI（帶加鹽 hash 的參數）寫進伺服器日誌 | 已寫進文件（`services/telemetry-query/README.md`、`docs/architecture/secrets.md`）：外部 ClickHouse 不可以用 `trace` 等級；叢集內的 ClickHouse 是 `information`。在拋棄式容器確認：只有 `trace` 的 `Request URI` 那一行帶參數，`debug` 的 `executeQuery` 與 `system.query_log` 都遮住 hash |
 | Info 7 | 已知悉，不需要變更 |
+
+## 2026-10-22 ClickHouse migration 改號
+
+本分支新增的兩個 ClickHouse migration 從 `0007_telemetry_query.sql`、`0008_telemetry_query_grantees.sql` 改名為 `0008_telemetry_query.sql`、`0009_telemetry_query_grantees.sql`，所有引用一起改。
+
+**為什麼改**：main 在 Laysi/trustiot-v2#507 加入了 `0007_monitoring.sql`。`services/ingest/tests/migrations.rs` 的 `files_are_numbered_in_apply_order` 與 `services/ingest/README.md`（「檔名 `NNNN_小寫底線.sql`，從 `0001` 連號，依檔名順序套用」）要求檔名從 `0001` 連號，不能有兩個 `0007`；合併 main 之後這個測試就是因為 `0007_telemetry_query.sql` 而失敗。連號也讓後來的分支只能排在已套用的檔案之後：`trustiot_migrate.applied` 以檔名記錄，若允許同號，後來的檔案可能排在已套用的檔案前面。
+
+**為什麼改名是安全的**：
+
+- 兩個檔案只在這個分支新增（功能 commit `98ce1f1` 與安全審查的修正 `1b7f9f6`），從來沒有進入 main：`git show origin/main:services/ingest/migrations/clickhouse/0007_telemetry_query.sql` 回答「磁碟上存在 'services/ingest/migrations/clickhouse/0007_telemetry_query.sql' 路徑，但不存在於 'origin/main'」（git 的 zh-TW 訊息，即 "exists on disk, but not in 'origin/main'"），`0008_telemetry_query_grantees.sql` 也一樣。
+- 這個分支沒有推送過（遠端沒有它的分支），所以沒有任何發佈的映像含有這兩個檔案；它們也從來沒有對任何部署中的 ClickHouse 執行過，只在測試自己起的拋棄式容器裡套用。因此沒有任何資料庫的 `trustiot_migrate.applied` 記著舊檔名。
+- 內容沒變：`0008_telemetry_query.sql` 與原來的 `0007_telemetry_query.sql` 完全相同（git 判定 100% 相同的改名）；`0009_telemetry_query_grantees.sql` 只改了註解裡前一個檔案的名字（`0007` 改成 `0008`），SQL 陳述式不變。
+
+上方「環境」與驗收各節提到的檔名已改成新名字；改名之前跑的測試套用的是內容相同、只有檔名不同的檔案。改名之後在最後 head 上重跑的完整檢查記在「完整檢查（最後 head）」。
 
 ## 結論
 

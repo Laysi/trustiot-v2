@@ -70,7 +70,7 @@ async fn refused_to_telemetry_query(clickhouse: &ClickHouse, password: &str, sta
     );
 }
 
-/// telemetry-query's account (Laysi/trustiot-v2#119): created by 0007_telemetry_query.sql
+/// telemetry-query's account (Laysi/trustiot-v2#119): created by 0008_telemetry_query.sql
 /// without a password and unable to log in; the run gives it the password the Job generates
 /// into its Secret and lets it log in only while the service is deployed; it can create and
 /// change accounts named trustiot_tenant_account_* and nothing else; rotation sets the new
@@ -104,7 +104,7 @@ async fn telemetry_query_account() {
     assert!(
         report
             .changes
-            .contains(&"applied clickhouse/0007_telemetry_query.sql".to_owned()),
+            .contains(&"applied clickhouse/0008_telemetry_query.sql".to_owned()),
         "{:?}",
         report.changes
     );

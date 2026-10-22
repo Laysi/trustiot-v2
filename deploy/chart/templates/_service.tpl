@@ -120,7 +120,7 @@ outbox consumer reads its producers' events with. */ -}}
 {{- if eq $name "telemetry-query" -}}
 {{- /* Its own ClickHouse account, which creates the tenants' read-only accounts: the migration Job
 generates its password into the service's Secret and sets it
-(services/ingest/migrations/clickhouse/0007_telemetry_query.sql). */ -}}
+(services/ingest/migrations/clickhouse/0008_telemetry_query.sql). */ -}}
 {{- $account := include "trustiot.migrate.passwordSecret" (dict "root" .root "component" $name "role" "clickhouse") | fromYaml -}}
 {{- $clickhouseEnv = append $clickhouseEnv (dict "name" "TRUSTIOT__CLICKHOUSE__USERNAME" "value" $account.key) -}}
 {{- $clickhouseEnv = append $clickhouseEnv (dict "name" "TRUSTIOT__CLICKHOUSE__PASSWORD" "valueFrom" (dict "secretKeyRef" (dict "name" $account.name "key" $account.key))) -}}

@@ -105,21 +105,21 @@ FORMAT TSV";
 /// Who holds the tenant role besides those allowed to: telemetry-query's account WITH ADMIN
 /// OPTION, and accounts named trustiot_tenant_account_* without it. Anyone who may grant the
 /// role could have given it to anyone (telemetry-query's account only while it has GRANTEES
-/// other than NONE, 0008_telemetry_query_grantees.sql); the run lists every other grantee.
+/// other than NONE, 0009_telemetry_query_grantees.sql); the run lists every other grantee.
 const READER_GRANTEES: &str = "SELECT if(user_name IS NULL, concat('role ', role_name), user_name)
 FROM system.role_grants
 WHERE granted_role_name = {role:String}
   AND NOT (user_name IS NOT NULL AND user_name = {service:String} AND with_admin_option = 1)
   AND NOT (user_name IS NOT NULL AND startsWith(user_name, {prefix:String}) AND with_admin_option = 0)
 ORDER BY 1 FORMAT TSV";
-/// Whether telemetry-query's account still has `GRANTEES NONE` (0008_telemetry_query_grantees.sql):
+/// Whether telemetry-query's account still has `GRANTEES NONE` (0009_telemetry_query_grantees.sql):
 /// otherwise ADMIN OPTION lets the account grant the tenant role to, or revoke it from, any
 /// existing user or role.
 const TELEMETRY_QUERY_GRANTEES_NONE: &str = "SELECT grantees_any = 0 AND empty(grantees_list)
 FROM system.users WHERE name = {user:String} FORMAT TSV";
 /// How many unexpected grantees an error names.
 const GRANTEES_SHOWN: usize = 5;
-/// telemetry-query's direct grants: `0007_telemetry_query.sql` gives it exactly CREATE USER and
+/// telemetry-query's direct grants: `0008_telemetry_query.sql` gives it exactly CREATE USER and
 /// ALTER USER on the tenant accounts' name prefix, without GRANT OPTION.
 const TELEMETRY_QUERY_GRANTS: &str = "SELECT access_type, access_object, is_wildcard,
   grant_option, is_partial_revoke
@@ -776,7 +776,7 @@ impl ClickHouse {
         }
     }
 
-    /// telemetry-query's account (`0007_telemetry_query.sql`): when the run manages its password
+    /// telemetry-query's account (`0008_telemetry_query.sql`): when the run manages its password
     /// (the service is deployed) the account logs in with it from any host; when not, it cannot
     /// log in at all (`HOST NONE`), so the password a kept Secret still holds creates no tenant
     /// account. Either way the account, and the tenant role it hands to every tenant account,
@@ -795,12 +795,12 @@ impl ClickHouse {
             .query("look for the telemetry-query account", USER_EXISTS, &params)
             .await?;
         if exists.trim() == "0" {
-            // Only a registry without 0007_telemetry_query.sql gets here.
+            // Only a registry without 0008_telemetry_query.sql gets here.
             return match password {
                 None => Ok(()),
                 Some(_) => Err(Error::ClickHouse(format!(
                     "the ClickHouse account {user} does not exist after the DDL files; \
-                     0007_telemetry_query.sql creates it"
+                     0008_telemetry_query.sql creates it"
                 ))),
             };
         }
@@ -889,7 +889,7 @@ impl ClickHouse {
         if grantees_none.trim() != "1" {
             return Ok(Some(format!(
                 "the ClickHouse account {user} may grant the role {TENANT_READER_ROLE} to other \
-                 users or roles (its GRANTEES is not NONE, which 0008_telemetry_query_grantees.sql sets); \
+                 users or roles (its GRANTEES is not NONE, which 0009_telemetry_query_grantees.sql sets); \
                  an administrator must set GRANTEES NONE again and check who holds the role \
                  (docs/runbooks/migrations.md)"
             )));
@@ -975,7 +975,7 @@ impl ClickHouse {
         {
             return Ok(Some(format!(
                 "the ClickHouse account {user} has other roles, grants or settings than \
-                 0007_telemetry_query.sql gives it; an administrator must revoke them \
+                 0008_telemetry_query.sql gives it; an administrator must revoke them \
                  (docs/runbooks/migrations.md)"
             )));
         }

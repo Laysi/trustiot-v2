@@ -161,17 +161,17 @@ pub struct PasswordSettings {
     pub clickhouse_collector: Option<String>,
     /// `TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY`: `account=secret`: the telemetry-query
     /// service's ClickHouse account ([`TELEMETRY_QUERY_ACCOUNT`], which
-    /// `0007_telemetry_query.sql` defines without a password) and the Secret whose key of the
+    /// `0008_telemetry_query.sql` defines without a password) and the Secret whose key of the
     /// same name holds its password. The run sets that password and lets the account log in;
     /// without this setting it keeps the account from logging in. Needs `clickhouse.*`.
     #[serde(default)]
     pub clickhouse_telemetry_query: Option<String>,
 }
 
-/// The telemetry-query service's ClickHouse account, as `0007_telemetry_query.sql` names it.
+/// The telemetry-query service's ClickHouse account, as `0008_telemetry_query.sql` names it.
 pub const TELEMETRY_QUERY_ACCOUNT: &str = "trustiot_telemetry_query";
 
-/// The names of the tenant accounts telemetry-query creates, which `0007_telemetry_query.sql`
+/// The names of the tenant accounts telemetry-query creates, which `0008_telemetry_query.sql`
 /// lets its account create and change.
 pub const TENANT_ACCOUNT_PREFIX: &str = "trustiot_tenant_account_";
 
@@ -228,7 +228,7 @@ impl PasswordSettings {
             return Err(Invalid::new(
                 key,
                 format!(
-                    "the account must be {TELEMETRY_QUERY_ACCOUNT}, the one 0007_telemetry_query.sql defines"
+                    "the account must be {TELEMETRY_QUERY_ACCOUNT}, the one 0008_telemetry_query.sql defines"
                 ),
             ));
         }

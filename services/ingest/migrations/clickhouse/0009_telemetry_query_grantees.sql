@@ -1,5 +1,5 @@
 -- The telemetry-query service's account may no longer grant or revoke any role (Laysi/trustiot-v2#119,
--- security review of 2026-10-22). 0007_telemetry_query.sql gives the account the tenant role
+-- security review of 2026-10-22). 0008_telemetry_query.sql gives the account the tenant role
 -- trustiot_tenant_reader WITH ADMIN OPTION, so that CREATE USER ... DEFAULT ROLE gives the role to
 -- each tenant account it creates. ADMIN OPTION alone also lets the account grant the role to, or
 -- revoke it from, any existing user or role: granting it to trustiot_ingest makes ingest
@@ -16,8 +16,8 @@
 -- name). tools/migrate/tests/clickhouse_telemetry_query.rs runs each against 26.8.
 --
 -- The migration Job checks on every run that the account still has GRANTEES NONE, besides what
--- 0007_telemetry_query.sql describes, and when anything differs it revokes the account's login
--- (HOST NONE) and stops (tools/migrate/src/clickhouse.rs). The note in 0007 that the account
+-- 0008_telemetry_query.sql describes, and when anything differs it revokes the account's login
+-- (HOST NONE) and stops (tools/migrate/src/clickhouse.rs). The note in 0008 that the account
 -- could grant the role to any user or role holds only for the time between the two files.
 
 ALTER USER trustiot_telemetry_query GRANTEES NONE;

@@ -17,7 +17,7 @@
 //!   ClickHouse. The API checks the account the same way ([`Accounts::verify`]) before every
 //!   query it runs as it, and refuses to serve one that differs.
 //!
-//! The service's own account (`0007_telemetry_query.sql`) may create and change accounts with
+//! The service's own account (`0008_telemetry_query.sql`) may create and change accounts with
 //! that name prefix and hand out the tenant role, and nothing else.
 
 use std::sync::Arc;
@@ -32,7 +32,7 @@ use zeroize::Zeroizing;
 
 use crate::clickhouse::{ClickHouse, Credentials, QueryError};
 
-/// The prefix of every tenant account's name; `0007_telemetry_query.sql` lets the service's
+/// The prefix of every tenant account's name; `0008_telemetry_query.sql` lets the service's
 /// account create and change exactly the accounts named so.
 pub const ACCOUNT_PREFIX: &str = "trustiot_tenant_account_";
 
@@ -158,7 +158,7 @@ pub enum AccountError {
     /// The account exists but is not what the service creates (another tenant, other roles,
     /// not read-only, or other query limits): someone changed it, and an administrator must drop
     /// it (the next `ensure` creates it again). Never repaired here: the service's account has
-    /// `GRANTEES NONE` (0008_telemetry_query_grantees.sql), so it can neither grant nor revoke any role,
+    /// `GRANTEES NONE` (0009_telemetry_query_grantees.sql), so it can neither grant nor revoke any role,
     /// the tenant role included, and a changed account needs an administrator's look anyway.
     /// The service's account can still `ALTER USER` every account under the name prefix,
     /// including `RENAME` and `ADD IDENTIFIED`; nothing audits that yet
@@ -246,7 +246,7 @@ impl Accounts {
             ("salt", salt.as_str()),
         ];
         // The role parameter enables the tenant role for this statement only, which granting it
-        // through DEFAULT ROLE requires (0007_telemetry_query.sql).
+        // through DEFAULT ROLE requires (0008_telemetry_query.sql).
         self.clickhouse
             .query(
                 self.own(),

@@ -29,7 +29,7 @@ use self::clickhouse::{Account, ClickHouse};
 /// The telemetry-query binary, built by Cargo for these tests.
 pub const TELEMETRY_QUERY: &str = env!("CARGO_BIN_EXE_telemetry-query");
 
-/// The service's ClickHouse account (`0007_telemetry_query.sql`).
+/// The service's ClickHouse account (`0008_telemetry_query.sql`).
 pub const SERVICE_ACCOUNT: &str = "trustiot_telemetry_query";
 
 /// The Postgres roles the tests log in with.
