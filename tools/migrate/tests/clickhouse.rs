@@ -9,8 +9,11 @@
 mod support;
 
 use migrate::Error;
+use migrate::clickhouse::managed_ttl_days;
 use migrate::config::RunConfig;
 use migrate::registry::{Migration, PRODUCT, Registry};
+use migrate::retention::RAW_RETENTION_DAYS;
+use protocol::telemetry::BUFFER_MAX_AGE_DAYS;
 use support::postgres::tls_postgres;
 use support::{ClickHouse, Database, MIGRATOR, MIGRATOR_INIT};
 
@@ -92,6 +95,23 @@ async fn clickhouse_ddl_and_the_collector_account() {
     let report = migrate::run(&config(&db, &clickhouse), &CLICKHOUSE_ONLY)
         .await
         .expect("the first run");
+    let telemetry_first = report
+        .changes
+        .iter()
+        .position(|change| change.contains("table trustiot.telemetry to 180 days"));
+    let commits_after = report
+        .changes
+        .iter()
+        .position(|change| change.contains("table trustiot.batch_commits to 180 days"));
+    assert!(
+        telemetry_first < commits_after,
+        "a shorter retention changes telemetry first: {:?}",
+        report.changes
+    );
+    #[allow(clippy::print_stdout, reason = "test evidence")]
+    {
+        println!("first run on a fresh ClickHouse: {:?}", report.changes);
+    }
     for migration in PRODUCT.clickhouse {
         let expected = format!("applied clickhouse/{}", migration.name);
         assert!(
@@ -103,6 +123,11 @@ async fn clickhouse_ddl_and_the_collector_account() {
     for expected in [
         format!("generated the password of {COLLECTOR} in Secret {COLLECTOR_SECRET} (it had none)"),
         format!("created ClickHouse account {COLLECTOR}"),
+        // The files create both tables with 400 days, as an existing deployment has them; the
+        // same run sets the platform retention (Laysi/trustiot-v2#92), completion records last.
+        "set the retention of ClickHouse table trustiot.telemetry to 180 days (was 400)".to_owned(),
+        "set the retention of ClickHouse table trustiot.batch_commits to 180 days (was 400)"
+            .to_owned(),
     ] {
         assert!(report.changes.contains(&expected), "{:?}", report.changes);
     }
@@ -384,9 +409,254 @@ async fn clickhouse_ddl_and_the_collector_account() {
         ]
     );
 
-    // 7. A ClickHouse file that changed after it was applied stops the run.
+    // 7. The raw data retention (Laysi/trustiot-v2#92).
+    raw_retention(&db, &clickhouse).await;
+
+    // 8. A ClickHouse file that changed after it was applied stops the run.
     let error = migrate::run(&config(&db, &clickhouse), &CHANGED)
         .await
         .expect_err("a changed file must stop the run");
     assert!(matches!(error, Error::Changed { .. }), "{error}");
 }
+
+/// Both tables' engine settings, from which the TTL is read.
+const TABLE_ENGINES: &str = "SELECT name, engine_full FROM system.tables
+WHERE database = 'trustiot' AND name IN ('telemetry', 'batch_commits') FORMAT JSONEachRow";
+
+/// The retention in days of the telemetry and completion tables, as the server reports it.
+async fn ttl_days(clickhouse: &ClickHouse) -> (u32, u32) {
+    let rows = clickhouse
+        .query(TABLE_ENGINES)
+        .await
+        .unwrap_or_else(|error| panic!("read the TTLs: {error}"));
+    let mut telemetry = None;
+    let mut commits = None;
+    for line in rows.lines().filter(|line| !line.is_empty()) {
+        let row: serde_json::Value =
+            serde_json::from_str(line).unwrap_or_else(|error| panic!("{error}: {line}"));
+        let engine_full = row["engine_full"].as_str().expect("a string column");
+        match row["name"].as_str() {
+            Some("telemetry") => telemetry = Some(managed_ttl_days(engine_full, "received_at")),
+            Some("batch_commits") => commits = Some(managed_ttl_days(engine_full, "committed_at")),
+            other => panic!("unexpected table {other:?}"),
+        }
+    }
+    let read = |ttl: Option<Result<u32, String>>, table: &str| {
+        ttl.unwrap_or_else(|| panic!("no table {table}"))
+            .unwrap_or_else(|problem| panic!("{table}: {problem}"))
+    };
+    (read(telemetry, "telemetry"), read(commits, "batch_commits"))
+}
+
+fn with_retention(db: &Database, clickhouse: &ClickHouse, days: Option<u32>) -> RunConfig {
+    let mut config = config(db, clickhouse);
+    config
+        .clickhouse
+        .as_mut()
+        .expect("ClickHouse settings")
+        .raw_retention_days = days;
+    config
+}
+
+/// An account with the ingest role, which reads every row (the bootstrap admin, which writes the
+/// rows, reads none: deny_by_default applies to every account no other policy names). It logs in
+/// without a password: the container is local and thrown away after the test.
+const INGEST_ACCOUNT: &str = "migrate_test_ingest";
+const CREATE_INGEST_ACCOUNT: &str =
+    "CREATE USER migrate_test_ingest IDENTIFIED WITH no_password DEFAULT ROLE trustiot_ingest";
+const DROP_INGEST_ACCOUNT: &str = "DROP USER migrate_test_ingest";
+
+/// Three readings of one tenant: with a timestamp three years old (a gateway whose clock was never
+/// set; a clock can be off by any amount) that arrived now, one received a day before the
+/// retention ends, and one received a day after it ended, however recent its timestamp. The
+/// ingest service stamps `received_at` itself; the test writes it, to have rows that arrived
+/// long ago.
+const INSERT_READINGS: &str = "INSERT INTO trustiot.telemetry (tenant_id, gateway_id, stream_id,
+    batch_seq, device_id, point, ts, received_at, value_type, value_float)
+SELECT {tenant:UUID}, generateUUIDv4(), generateUUIDv4(), 1, generateUUIDv4(), point, ts,
+    received_at, 'float', 1.5
+FROM VALUES('point String, ts DateTime64(3, \\'UTC\\'), received_at DateTime64(3, \\'UTC\\')',
+    ('old_timestamp_received_now', now64(3) - toIntervalDay(1095), now64(3)),
+    ('received_within_retention', now64(3), now64(3) - toIntervalDay({days:UInt32} - 1)),
+    ('received_past_retention', now64(3), now64(3) - toIntervalDay({days:UInt32} + 1)))";
+
+/// Completion records of the same tenant: committed now (seq 1), a day before the retention ends
+/// (seq 2) and a day after it ended (seq 3).
+const INSERT_COMMITS: &str = "INSERT INTO trustiot.batch_commits (tenant_id, gateway_id,
+    stream_id, seq, row_count, committed_at)
+SELECT {tenant:UUID}, generateUUIDv4(), generateUUIDv4(), seq, 1, committed_at
+FROM VALUES('seq UInt64, committed_at DateTime64(3, \\'UTC\\')',
+    (1, now64(3)),
+    (2, now64(3) - toIntervalDay({days:UInt32} - 1)),
+    (3, now64(3) - toIntervalDay({days:UInt32} + 1)))";
+
+/// OPTIMIZE ... FINAL merges every part of the table, and a merge applies its TTL.
+const MERGE_TELEMETRY: &str = "OPTIMIZE TABLE trustiot.telemetry FINAL";
+const MERGE_COMMITS: &str = "OPTIMIZE TABLE trustiot.batch_commits FINAL";
+const KEPT_READINGS: &str = "SELECT point FROM trustiot.telemetry WHERE tenant_id = {tenant:UUID} ORDER BY point FORMAT TSV";
+const KEPT_COMMITS: &str = "SELECT seq FROM trustiot.batch_commits WHERE tenant_id = {tenant:UUID} ORDER BY seq FORMAT TSV";
+
+/// The run sets the platform retention as the TTL of the telemetry and completion tables; rows
+/// expire by the server's receive time, so readings with an old gateway timestamp that just
+/// arrived stay; a changed setting changes both TTLs in an order that never lets completion
+/// records expire before their rows; a setting not longer than the gateway buffer's maximum age
+/// stops the run before it changes anything; a TTL the run does not recognise stops it too.
+async fn raw_retention(db: &Database, clickhouse: &ClickHouse) {
+    let platform = RAW_RETENTION_DAYS;
+    assert_eq!(
+        platform, 180,
+        "the value docs/architecture/data-retention.md names"
+    );
+
+    // a. The first run (step 1) set the platform value on both tables; another run changes
+    //    nothing.
+    assert_eq!(ttl_days(clickhouse).await, (platform, platform));
+    let report = migrate::run(&with_retention(db, clickhouse, None), &CLICKHOUSE_ONLY)
+        .await
+        .expect("a run with the platform retention");
+    assert!(report.changes.is_empty(), "{:?}", report.changes);
+
+    // b. Rows expire by the server's receive time, not the gateway's timestamp
+    //    (Laysi/trustiot#180).
+    clickhouse
+        .query(CREATE_INGEST_ACCOUNT)
+        .await
+        .expect("create the ingest account");
+    // Any tenant but the all-zero one: the throwaway ClickHouse holds no other rows.
+    let days = platform.to_string();
+    let params = [
+        ("tenant", "00000000-0000-4000-8000-000000000092"),
+        ("days", days.as_str()),
+    ];
+    for insert in [INSERT_READINGS, INSERT_COMMITS] {
+        clickhouse
+            .query_with(insert, &params)
+            .await
+            .unwrap_or_else(|error| panic!("{insert}: {error}"));
+    }
+    for merge in [MERGE_TELEMETRY, MERGE_COMMITS] {
+        clickhouse
+            .query(merge)
+            .await
+            .unwrap_or_else(|error| panic!("{merge}: {error}"));
+    }
+    let kept = clickhouse
+        .query_as_with(INGEST_ACCOUNT, "", KEPT_READINGS, &params[..1])
+        .await
+        .expect("read the readings");
+    assert_eq!(
+        kept, "old_timestamp_received_now\nreceived_within_retention\n",
+        "telemetry keeps the rows received within the retention, whatever their timestamp"
+    );
+    let commits = clickhouse
+        .query_as_with(INGEST_ACCOUNT, "", KEPT_COMMITS, &params[..1])
+        .await
+        .expect("read the completion records");
+    assert_eq!(
+        commits, "1\n2\n",
+        "completion records past the retention expire"
+    );
+    #[allow(clippy::print_stdout, reason = "test evidence")]
+    {
+        println!("retention {platform} days; telemetry rows kept after the TTL merge:\n{kept}");
+        println!("completion records kept after the TTL merge (seq):\n{commits}");
+    }
+    clickhouse
+        .query(DROP_INGEST_ACCOUNT)
+        .await
+        .expect("drop the ingest account");
+
+    // c. A longer retention: the completion records first, so they never expire before their
+    //    rows; a shorter one: the telemetry first. A repeated run changes nothing.
+    let mut evidence = Vec::new();
+    let report = migrate::run(&with_retention(db, clickhouse, Some(365)), &CLICKHOUSE_ONLY)
+        .await
+        .expect("a run with a longer retention");
+    evidence.push(format!("365 days: {:?}", report.changes));
+    assert_eq!(
+        report.changes,
+        [
+            "set the retention of ClickHouse table trustiot.batch_commits to 365 days (was 180)",
+            "set the retention of ClickHouse table trustiot.telemetry to 365 days (was 180)",
+        ]
+    );
+    assert_eq!(ttl_days(clickhouse).await, (365, 365));
+    let report = migrate::run(&with_retention(db, clickhouse, None), &CLICKHOUSE_ONLY)
+        .await
+        .expect("back to the platform retention");
+    evidence.push(format!("back to {platform} days: {:?}", report.changes));
+    assert_eq!(
+        report.changes,
+        [
+            "set the retention of ClickHouse table trustiot.telemetry to 180 days (was 365)",
+            "set the retention of ClickHouse table trustiot.batch_commits to 180 days (was 365)",
+        ]
+    );
+    let report = migrate::run(&with_retention(db, clickhouse, None), &CLICKHOUSE_ONLY)
+        .await
+        .expect("a repeated run");
+    assert!(report.changes.is_empty(), "{:?}", report.changes);
+
+    // d. A retention not longer than the gateway buffer's maximum age stops the run before it
+    //    touches Postgres, a Secret or ClickHouse.
+    let before = snapshot(clickhouse).await;
+    for days in [BUFFER_MAX_AGE_DAYS, 7] {
+        let error = migrate::run(
+            &with_retention(db, clickhouse, Some(days)),
+            &CLICKHOUSE_ONLY,
+        )
+        .await
+        .expect_err("a retention shorter than the gateway buffer must be refused");
+        let text = error.to_string();
+        assert!(
+            text.contains("clickhouse.raw_retention_days")
+                && text.contains(&format!(
+                    "gateway buffer's maximum age of {BUFFER_MAX_AGE_DAYS} days"
+                )),
+            "{days}: {text}"
+        );
+        evidence.push(format!("{days} days refused: {text}"));
+    }
+    assert_eq!(
+        snapshot(clickhouse).await,
+        before,
+        "a refused run changed ClickHouse"
+    );
+
+    // e. A TTL someone changed by hand (here to the gateway's timestamp) is not overwritten: the
+    //    run stops and names it; set back, the run goes on.
+    clickhouse
+        .query(TAMPER_TTL)
+        .await
+        .expect("change the TTL by hand");
+    let error = migrate::run(&with_retention(db, clickhouse, None), &CLICKHOUSE_ONLY)
+        .await
+        .expect_err("an unrecognised TTL must stop the run");
+    assert!(
+        matches!(&error, Error::ClickHouse(text)
+            if text.contains("trustiot.telemetry") && text.contains("not one the migration Job manages")),
+        "{error}"
+    );
+    evidence.push(format!("TTL changed by hand: {error}"));
+    clickhouse
+        .query(REPAIR_TTL)
+        .await
+        .expect("set the TTL back");
+    let report = migrate::run(&with_retention(db, clickhouse, None), &CLICKHOUSE_ONLY)
+        .await
+        .expect("the run after the repair");
+    assert_eq!(
+        report.changes,
+        ["set the retention of ClickHouse table trustiot.telemetry to 180 days (was 200)"]
+    );
+    evidence.push(format!("after the repair: {:?}", report.changes));
+    #[allow(clippy::print_stdout, reason = "test evidence")]
+    {
+        println!("retention changes, step by step:\n{}", evidence.join("\n"));
+    }
+}
+
+const TAMPER_TTL: &str =
+    "ALTER TABLE trustiot.telemetry MODIFY TTL toDateTime(ts) + toIntervalDay(180)";
+const REPAIR_TTL: &str =
+    "ALTER TABLE trustiot.telemetry MODIFY TTL toDateTime(received_at) + toIntervalDay(200)";

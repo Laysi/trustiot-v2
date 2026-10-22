@@ -1,0 +1,103 @@
+{{- /*
+Gateway certificate authority (decision 12, Laysi/trustiot-v2#78; services/certs/README.md,
+「CA 階層與私鑰保管」; helpers in _certs.tpl). Only while the certs service is enabled, like the
+issuing CA keys Secret that templates/passwords.yaml declares:
+- the ConfigMap with the issuing CA keys' certificate signing requests, declared without data; the
+  certs pod's init container fills it from the keys Secret, and operators copy a request from it to
+  the offline root ceremony. Helm never owns its data: an upgrade or a rollback renders none, so it
+  keeps what the init container wrote, and helm.sh/resource-policy keep leaves it in place after an
+  uninstall, like the Secret;
+- the ConfigMap with the root certificate and the issuing CA certificates the root signed
+  (certificateAuthority.rootCertificate and issuingCertificates, public), which the certs service
+  mounts whole and reads again when the kubelet updates it, so setting a certificate needs no
+  restart;
+- a Role that lets the certs service's ServiceAccount get and patch exactly that Secret and the
+  requests ConfigMap: no create (which cannot be limited by name), no list, watch or delete. Only
+  the init container of the certs pod mounts that ServiceAccount's token. Whoever can patch the
+  requests ConfigMap could hand the ceremony a request for a key of their own, so no other Role of
+  the chart may write it or touch the Secret (chart tests), and the ceremony prints the key id to
+  compare with the one the service reports as waiting.
+The values are checked whether or not the certs service is enabled.
+*/ -}}
+{{- $ca := include "trustiot.certs.ca" . | fromYaml }}
+{{- if include "trustiot.certs.enabled" . }}
+{{- $ctx := dict "root" . "name" "certs" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $ca.requests }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+    trustiot.io/filled-by: migrate
+  annotations:
+    helm.sh/resource-policy: keep
+    trustiot.io/description: Certificate signing requests of the issuing CA keys, written in the cluster by tools/migrate for the offline root ceremony; nobody sets them (services/certs/README.md).
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $ca.certificates }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+{{- /* PEM: each certificate's base64 (checked: base64 characters only) in lines of 64 between
+the RFC 7468 labels. An empty list leaves the block empty: an empty file. */}}
+data:
+  root.pem: |
+    {{- range $der := $ca.root }}
+    -----BEGIN CERTIFICATE-----
+    {{- range regexFindAll ".{1,64}" $der -1 }}
+    {{- . | nindent 4 }}
+    {{- end }}
+    -----END CERTIFICATE-----
+    {{- end }}
+  issuing.pem: |
+    {{- range $der := $ca.issuing }}
+    -----BEGIN CERTIFICATE-----
+    {{- range regexFindAll ".{1,64}" $der -1 }}
+    {{- . | nindent 4 }}
+    {{- end }}
+    -----END CERTIFICATE-----
+    {{- end }}
+{{- $name := include "trustiot.componentName" (dict "root" . "name" "certs-ca-keys") }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    resourceNames:
+      - {{ $ca.secret }}
+    verbs:
+      - get
+      - patch
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    resourceNames:
+      - {{ $ca.requests }}
+    verbs:
+      - get
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "trustiot.componentName" $ctx }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

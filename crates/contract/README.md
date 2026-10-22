@@ -5,11 +5,12 @@
 | 模組 | 內容 |
 | --- | --- |
 | `error` | M1 錯誤格式：`ErrorBody`、`ErrorCode`、`MessageKey`、`FieldError` |
-| `id` | `TenantId`、`UserId`、`EventId`：新 ID 一律 UUIDv7（[可搬移規則 3](../../docs/architecture/deployment.md)） |
+| `id` | `TenantId`、`UserId`、`EventId`、`DeviceModelId`：新 ID 一律 UUIDv7（[可搬移規則 3](../../docs/architecture/deployment.md)） |
 | `event` | `Event` trait 與事件信封 `EventEnvelope` |
-| `events` | 事件本身，每個產生端服務一個子模組；目前有 `events::identity::TenantCreated`（`identity.tenant_created`，Laysi/trustiot-v2#65） |
+| `events` | 事件本身，每個產生端服務一個子模組；目前有 `events::identity::TenantCreated`（`identity.tenant_created`，Laysi/trustiot-v2#65），以及設備型號的 `events::assets::DeviceModelCreated`、`DeviceModelUpdated`、`DeviceModelDeleted`（`assets.device_model_{created,updated,deleted}`，Laysi/trustiot-v2#99；型號本身是 `protocol::config::DeviceModel`，閘道器設定用的同一個格式） |
 | `identity` | 內部身分標頭 `x-internal-identity`、claims `InternalClaims`、遮蔽內容的 `InternalToken` |
 | `client` | 內部 API 的 `Endpoint` 與有型別的 client `InternalClient<S>` |
+| `api` | 內部 API 本身，每個提供 API 的服務一個子模組；目前有 `api::identity::ExchangeToken`（身分服務的 token 交換，Laysi/trustiot-v2#106） |
 | `service` | `ServiceName` 與型別層級的服務標記（`service::Identity` 等） |
 | `openapi` | `SharedSchemas`：每個服務規格共用的 OpenAPI schema（M1 錯誤格式） |
 | `json` | 不含文件內容的 JSON 錯誤 `JsonError`：serde 的訊息會引用值，日誌不得含個資（M2） |
@@ -70,7 +71,7 @@
 
 新增內部 API：
 
-1. 放在 `src/api/<服務>.rs`（第一個內部 API 出現時建立 `api` 模組），請求與回應型別寫在同一個檔案。
+1. 放在 `src/api/<服務>.rs`，請求與回應型別寫在同一個檔案；服務的第一個內部 API 建立這個檔案，並在 `src/api.rs` 加上 `pub mod`。
 2. `ROUTE` 以 `/internal/` 開頭，各段只用 `a-z`、`0-9`、`-`、`_`，路徑參數寫成 `{name}`（與 axum 0.8 的路徑語法相同）。提供 API 的服務直接用同一個 `ROUTE` 字串註冊路由，兩邊不會分歧。入口 gateway 不轉送 `/internal/`（決策 27）。
 3. `METHOD` 只有 `Get`（只靠路徑，不帶 body）與 `Post`（需要 JSON body 的查詢，例如批次查詢）。`Post` 的 endpoint 必須覆寫 `body()` 回傳 `Some`；`Get` 帶 body 或 `Post` 沒有 body 的呼叫，client 在送出前就以 `invalid_request` 拒絕。
 4. 每個 endpoint 都要有測試：`check_route(ROUTE)` 通過，且 `path_params()` 的數量等於路徑參數的數量。路徑參數由 client 逐段百分比編碼，空字串、`.`、`..` 會被拒絕。
@@ -80,7 +81,21 @@
 
 - `InternalClient::<service::Identity>::new(base_url, timeout)`：逾時是必填參數，必須大於 0 且不超過 60 秒（`MAX_TIMEOUT`），涵蓋連線到讀完 body。`base_url` 只能是 `http://主機[:埠]`，也就是對方的 Kubernetes Service；服務間的 mTLS 由 ztunnel 提供，所以不帶 TLS。啟動時每個對方服務建一個，之後重複使用。
 - client 只用 HTTP/1.1、不讀環境變數的 proxy、不跟隨重導、不自動重試；要重試由呼叫端明確決定。成功回應的 body 上限預設 16 MiB（`with_max_response_bytes` 可改）。
-- `call` 要帶受眾為對方服務的內部身分 token，放在 `x-internal-identity` 標頭；怎麼取得這個 token 由 Laysi/trustiot-v2#106 決定。
+- `call` 要帶受眾為對方服務的內部身分 token，放在 `x-internal-identity` 標頭。自己收到的 token 受眾是自己，不能轉送：代表使用者呼叫時，先以 token 交換（下一節）換一張受眾是對方的 token。服務不自己組這兩步，而是用 `crates/service-kit` 的 `OnBehalf::call`（決策 27，Laysi/trustiot-v2#106）。
+
+### token 交換（`api::identity::ExchangeToken`）
+
+`POST /internal/token-exchange`，在身分服務 token 交換自己的埠（預設 8082，chart 的 Service `<release>-identity-exchange`、埠名 `token-exchange`），本文 `{"audience": "<服務>"}`，`x-internal-identity` 帶呼叫端自己收到的 token。身分服務照驗證端的規則檢查這張 token（只是不限受眾），再確認它是入口 gateway 的請求簽出的（沒有 `act`），而且呼叫端（token 的受眾）可以代表使用者呼叫 `audience`：清單由 chart 從 `mesh.calls` 推得（`TRUSTIOT_ON_BEHALF_CALLS`，見 [chart README](../../deploy/chart/README.md) 的「服務間授權（mesh）」）。只換一跳：換出的 token 帶 `act`，不能再拿來換，多跳的鏈見 Laysi/trustiot-v2#509。這是一個不改變任何狀態的 `Post`：受眾放在本文，不留下記錄。
+
+| 結果 | 狀態 | 本文 |
+| --- | --- | --- |
+| 換到 | 200 | `ExchangedToken` `{"token"}`：同一個使用者、租戶、角色與平台管理員旗標，受眾是 `audience`，`act` 是呼叫端，`iat` 是現在，到期是原 token 的到期與 60 秒後取早者 |
+| 沒有 token、token 無效或過期、1 秒內就到期 | 401 | `unauthenticated` |
+| 呼叫端不能代表使用者呼叫 `audience`，或 token 本身是換來的（帶 `act`） | 403 | `permission_denied` |
+| 本文不是這個請求，或服務名稱不認得（含 `ai-gateway`，它不在 `ServiceName`） | 400 | `invalid_request` |
+| 還沒有公鑰或簽章金鑰 | 503 | `unavailable` |
+
+回應一律 `cache-control: no-store`。`ExchangedToken` 只能反序列化，沒有 `Serialize`，token 照樣是遮蔽內容的 `InternalToken`。經 `OnBehalf` 呼叫時，交換失敗是 `OnBehalfError::Exchange`：回給上游的代碼只有 `timeout`、`unavailable` 照傳，其他（含 403 與 401）一律 `internal`，因為那是部署的呼叫清單或本服務的問題，不是使用者的錯，同時記一筆 ERROR（呼叫端、受眾、身分服務回的代碼）。
 
 每種失敗都是 `CallError`，`code()` 給出要回給上游的 M1 代碼，`to_error_body()` 給出整個 body：
 
@@ -146,6 +161,7 @@ payload 經身分服務的事件紀錄給租戶的管理員看，並隨租戶的
 | `iat`、`exp` | 簽發與到期時間，Unix 秒；token 是短效的，效期由身分服務決定 |
 | `tenant` | 使用者目前所在的租戶 `{"id", "role"}`；還沒選或沒有加入任何租戶時是 `null`，需要租戶的端點拒絕這種 token |
 | `platform_admin` | 是否為平台管理員（A2），與租戶角色無關；缺少時視為 `false` |
+| `act` | 選填，只有 token 交換換出的 token 有：`{"sub": "<服務>"}`，替使用者呼叫 `aud` 的服務（RFC 8693 的 actor，`Actor`）。入口 gateway 的請求簽出的 token 沒有它；身分服務不再換帶 `act` 的 token（Laysi/trustiot-v2#106） |
 
 - claim 的名稱沿用 JWT（RFC 7519），claims 可以直接當 JWT payload。
 - 驗證端忽略不認得的 claim，所以新 claim 只能是選填。

@@ -13,6 +13,7 @@
 //!   carries it.
 //! - [`client`]: the typed HTTP/JSON client for synchronous internal API calls: a timeout is
 //!   mandatory and every failure maps to an M1 code.
+//! - [`api`]: the internal APIs themselves, one module per serving service.
 //! - [`service`]: the names of the services that take part in these contracts.
 //! - [`openapi`]: the schemas shared by every service spec merged into `api/openapi.json`.
 //!
@@ -20,6 +21,7 @@
 //! here. The rules for adding API types, events and error codes are in this crate's
 //! `README.md`.
 
+pub mod api;
 pub mod client;
 pub mod error;
 pub mod event;
@@ -34,9 +36,11 @@ mod naming;
 
 pub use client::{CallError, CallErrorKind, ClientConfigError, Endpoint, InternalClient, Method};
 pub use error::{ErrorBody, ErrorCode, FieldError, MessageKey};
-pub use event::{Actor, DecodeError, EncodeError, Event, EventEnvelope};
-pub use id::{EventId, TenantId, UserId};
+// `contract::Actor` is the internal token's `act` claim (identity); the event envelope's
+// actor, who made a change, stays `contract::event::Actor`.
+pub use event::{DecodeError, EncodeError, Event, EventEnvelope};
+pub use id::{DeviceModelId, EventId, TenantId, UserId};
 pub use identity::{
-    INTERNAL_IDENTITY_HEADER, InternalClaims, InternalToken, TenantGrant, TenantRole,
+    Actor, INTERNAL_IDENTITY_HEADER, InternalClaims, InternalToken, TenantGrant, TenantRole,
 };
 pub use service::{Service, ServiceName};

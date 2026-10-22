@@ -1,0 +1,46 @@
+{
+  "id": "01928f6e-7a3c-7d4e-8f00-000000000301",
+  "type": "assets.device_model_created",
+  "version": 1,
+  "tenant_id": "01928f6e-7a3c-7d4e-8f00-00000000000b",
+  "occurred_at": "2026-10-21T08:00:00.123Z",
+  "producer": "assets",
+  "payload": {
+    "model_id": "01928f6e-7a3c-7d4e-8f00-000000000a01",
+    "revision": 1,
+    "model": {
+      "name": "power-meter",
+      "points": [
+        {
+          "key": "voltage",
+          "function_code": 3,
+          "address": 0,
+          "data_type": "u16",
+          "scale": 0.1
+        },
+        {
+          "key": "energy",
+          "function_code": 4,
+          "address": 0,
+          "data_type": "u32",
+          "byte_order": "cdab",
+          "scale": 0.01,
+          "offset": -40
+        },
+        {
+          "key": "serial",
+          "function_code": 3,
+          "address": 10,
+          "data_type": "string",
+          "length": 8
+        },
+        {
+          "key": "running",
+          "function_code": 1,
+          "address": 0,
+          "data_type": "bool"
+        }
+      ]
+    }
+  }
+}

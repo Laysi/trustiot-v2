@@ -5,3 +5,8 @@
 //! `migrations/clickhouse/`: the migration Job (Laysi/trustiot-v2#60) applies it at deploy time,
 //! and runtime code never creates or alters tables (decision 14; `tools/repo-check` rejects DDL
 //! in `services/*/src`). See `README.md` for the tables, the row policy mechanism and the tests.
+//!
+//! [`retention`] holds the platform's raw data retention, which the migration Job applies as the
+//! tables' TTL (rebuild checklist I2, Laysi/trustiot-v2#92).
+
+pub mod retention;

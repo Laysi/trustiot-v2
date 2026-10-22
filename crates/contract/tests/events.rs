@@ -12,11 +12,14 @@ use std::fs;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Timelike, Utc};
-use contract::event::parse_payload;
+use contract::event::{Actor, parse_payload};
+use contract::events::assets::{DeviceModelCreated, DeviceModelDeleted, DeviceModelUpdated};
 use contract::events::identity::TenantCreated;
 use contract::{
-    Actor, DecodeError, EncodeError, Event, EventEnvelope, ServiceName, TenantId, UserId,
+    DecodeError, DeviceModelId, EncodeError, Event, EventEnvelope, ServiceName, TenantId, UserId,
 };
+use protocol::ModelName;
+use protocol::config::{ByteOrder, DataType};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Version;
@@ -165,6 +168,63 @@ fn tenant_created_decodes_every_version() {
     assert_eq!(envelope.producer, ServiceName::Identity);
     assert_eq!(envelope.payload, json!({}));
     assert_eq!(envelope.tenant_id, Some(tenant));
+}
+
+/// The device model events (Laysi/trustiot-v2#99) carry a model the gateway's configuration
+/// accepts, in the gateway's own format, and the assets service produces them.
+#[test]
+fn device_model_events_decode_every_version() {
+    let model_id: DeviceModelId = "01928f6e-7a3c-7d4e-8f00-000000000a01"
+        .parse()
+        .expect("model id");
+
+    let created = decode_fixtures::<DeviceModelCreated>();
+    assert_eq!(created.len(), 1);
+    let created = &created[0].1;
+    assert_eq!(created.model_id, model_id);
+    assert_eq!(created.revision, 1);
+    assert_eq!(created.model.name.as_str(), "power-meter");
+    assert_eq!(created.model.points.len(), 4);
+    assert_eq!(created.model.points[1].byte_order, ByteOrder::Cdab);
+    assert_eq!(created.model.points[1].offset, Some(-40.0));
+    assert_eq!(created.model.points[2].data_type, DataType::String);
+    assert_eq!(created.model.points[2].length, Some(8));
+    created.model.validate().expect("a valid model");
+
+    let updated = decode_fixtures::<DeviceModelUpdated>();
+    assert_eq!(updated.len(), 1);
+    assert_eq!(updated[0].1.model_id, model_id);
+    assert_eq!(updated[0].1.revision, 2);
+    updated[0].1.model.validate().expect("a valid model");
+
+    let deleted = decode_fixtures::<DeviceModelDeleted>();
+    assert_eq!(deleted.len(), 1);
+    assert_eq!(
+        deleted[0].1,
+        DeviceModelDeleted {
+            model_id,
+            name: ModelName::new("power-meter").expect("name"),
+            revision: 2,
+        }
+    );
+
+    let envelope = EventEnvelope::new(&deleted[0].1, Some(tenant())).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Assets);
+    assert_eq!(envelope.event_type, "assets.device_model_deleted");
+    assert_eq!(
+        envelope.payload,
+        json!({
+            "model_id": "01928f6e-7a3c-7d4e-8f00-000000000a01",
+            "name": "power-meter",
+            "revision": 2,
+        })
+    );
+    let envelope = EventEnvelope::new(created, Some(tenant())).expect("encode");
+    assert_eq!(envelope.producer, ServiceName::Assets);
+    assert_eq!(
+        envelope.decode::<DeviceModelCreated>().expect("round trip"),
+        *created
+    );
 }
 
 #[test]

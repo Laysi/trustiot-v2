@@ -1,0 +1,36 @@
+: Composed from https://platform.claude.com/docs/en/build-with-claude/thinking ("Progress updates between tool calls": a response that stops
+: on max_tokens can end in a thinking block reading "This part of the response was interrupted before it finished.") and the
+: "omitted" streaming sequence. Streams message_max_tokens_thinking_only.json.
+event: message_start
+data: {"type":"message_start","message":{"id":"msg_01Lk9ePq8TvWm2YbNc3RgH7D","type":"message","role":"assistant","model":"claude-opus-5-5","content":[],"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":1520,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"EqMBCkYICxIM..."}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"thinking","thinking":"","signature":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"thinking_delta","thinking":"This part of the response was interrupted before it finished."}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"signature_delta","signature":"Es8CCkYICxIM..."}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"max_tokens","stop_sequence":null,"stop_details":null},"usage":{"output_tokens":4096}}
+
+event: message_stop
+data: {"type":"message_stop"}
+

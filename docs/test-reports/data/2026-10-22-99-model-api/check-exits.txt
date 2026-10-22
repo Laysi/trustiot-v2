@@ -1,0 +1,7 @@
+== fmt exit 0
+== clippy exit 0
+== test exit 0
+== openapi-check exit 0
+== deny exit 0
+== aarch64 exit 0
+== cross_tenant exit 0

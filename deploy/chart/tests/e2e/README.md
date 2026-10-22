@@ -5,7 +5,7 @@
 | 測試 | 驗證 | issue |
 | --- | --- | --- |
 | `ingress.e2e.ts` | 入口 gateway：cookie 驗證、例外路徑、標頭、路徑繞過、身分服務停機 | Laysi/trustiot-v2#62 |
-| `mesh.e2e.ts` | 服務間授權：清單內的呼叫放行、清單外的被拒，AuthorizationPolicy 與 NetworkPolicy 各自生效，預設拒絕下健康檢查通過 | Laysi/trustiot-v2#63 |
+| `mesh.e2e.ts` | 服務間授權：清單內的呼叫放行、清單外的被拒（帶著使用者的 token 也一樣），AuthorizationPolicy 與 NetworkPolicy 各自生效，預設拒絕下健康檢查通過；代表使用者呼叫的服務連得到身分服務的 token 交換 | Laysi/trustiot-v2#63、Laysi/trustiot-v2#106 |
 
 `otel.e2e.ts`（日誌管線，Laysi/trustiot-v2#73）、`postgres.e2e.ts`（叢集內的 Postgres，Laysi/trustiot-v2#58）、`postgres-replication.e2e.ts`（叢集內 Postgres 的複寫、備份與還原，Laysi/trustiot-v2#400）、`clickhouse-admin.e2e.ts`（叢集內 ClickHouse 的管理帳號密碼，Laysi/trustiot-v2#403）、`identity-keys.e2e.ts`（內部身分簽章金鑰，Laysi/trustiot-v2#404）與 `key-rotation.e2e.ts`（依金鑰年齡自動輪替，Laysi/trustiot-v2#429）不經入口 gateway，有自己的環境變數，不用 `cluster.ts`，見最後六節。
 
@@ -47,7 +47,7 @@ nightly workflow（Laysi/trustiot-v2#69）每晚在 k3d 叢集上以兩種型態
 ### 前置條件
 
 1. 叢集已依 `deploy/istio/README.md` 裝好 Istio ambient 與 Gateway API CRD。
-2. istiod 有一個 ext_authz provider 指向測試 namespace 的身分服務替身 `trustiot-identity.<namespace>.svc.cluster.local:8080`，設定與 `deploy/istio/istiod-values.yaml` 相同（`pathPrefix: /internal/ext-authz`、`failOpen: false`、`timeout: 0.5s`、`statusOnError: "503"`），mesh 的 `pathNormalization` 也與該檔相同。k3s 以 `HelmChartConfig istiod` 疊加時，清單會整份取代，所以叢集原有的 provider 要原樣重複寫入；範例見 [lab-istiod-helmchartconfig.yaml](../../../../docs/test-reports/data/2026-10-11-255-path-normalization/lab-istiod-helmchartconfig.yaml)。這是整個叢集共用的設定：先備份 `istio-system` 的 ConfigMap `istio`，測完刪掉 `HelmChartConfig`，再確認 `mesh` 與備份逐位元組相同。
+2. istiod 有一個 ext_authz provider 指向測試 namespace 的身分服務替身 `trustiot-identity.<namespace>.svc.cluster.local:8080`，設定與 `deploy/istio/istiod-values.yaml` 相同（`pathPrefix: /internal/ext-authz`、`failOpen: false`、`timeout: 0.5s`、`statusOnError: "503"`、`includeRequestHeadersInCheck: [cookie, origin, sec-fetch-site]`），mesh 的 `pathNormalization` 也與該檔相同。k3s 以 `HelmChartConfig istiod` 疊加時，清單會整份取代，所以叢集原有的 provider 要原樣重複寫入；範例見 [lab-istiod-helmchartconfig.yaml](../../../../docs/test-reports/data/2026-10-11-255-path-normalization/lab-istiod-helmchartconfig.yaml)。這是整個叢集共用的設定：先備份 `istio-system` 的 ConfigMap `istio`，測完刪掉 `HelmChartConfig`，再確認 `mesh` 與備份逐位元組相同。
 
    lab 的 Mac mini M1 同時跑展示環境（Laysi/trustiot-v2#457）。它的 HelmChart `kube-system/istiod` 本身已經有 `deploy/istio/istiod-values.yaml` 的 provider `trustiot-identity`，指向展示環境的身分服務 `trustiot-identity.trustiot.svc.cluster.local`，mesh 也已經開啟路徑正規化（由 `scripts/demo/platform.ts` 寫入，見 [scripts/README.md](../../../../scripts/README.md) 的「展示機」）。所以在 lab 跑入口測試時：
 
@@ -105,11 +105,15 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/ingress.e2e.ts
 
 | 呼叫 | 預期 |
 | --- | --- |
-| assets → certs | 清單內（`values-mesh-e2e.yaml` 的 `mesh.calls`），放行 |
+| assets → certs | 清單內（`values-mesh-e2e.yaml` 的 `mesh.calls`），放行，certs 收到呼叫帶的使用者 token |
+| assets → identity 的 token 交換（Service `<release>-identity-exchange` 的 `token-exchange` 埠 8082，`POST /internal/token-exchange`） | assets 代表使用者呼叫 certs，chart 因此讓它連得到身分服務的 `token-exchange` 埠（Laysi/trustiot-v2#106），放行，身分服務收到 assets 自己的 token。身分服務替身也在 8082 回應，所以第 3 階段（兩層都拿掉）清單外的 token 交換也會通過 |
+| assets → identity 的 API 埠（8080，ext_authz 所在的埠） | 只有 AuthorizationPolicy 擋：assets 只能到 `token-exchange`，NetworkPolicy 看不到 HBONE 裡的埠，為了 token 交換放行 assets 的 pod。第 1、4、5 階段被拒，第 2 階段（只剩 NetworkPolicy）通過 |
 | 入口 gateway → identity、certs、mqtt-bridge（例外路徑，經 `kubectl port-forward` 進入口 pod） | 放行 |
-| certs → assets、assets → alerts、mqtt-bridge → identity、stranger → certs、outsider → certs 的 Service 與 pod IP | 清單外，任一層在就被拒 |
+| certs → assets、assets → alerts、mqtt-bridge 與 certs → identity 的 token 交換、stranger → certs、outsider → certs 的 Service 與 pod IP | 清單外，任一層在就被拒，即使帶著被呼叫端會接受的使用者 token |
 | imposter → certs | NetworkPolicy 依 label 放行它，只有 AuthorizationPolicy 擋得住；用來確認 AuthorizationPolicy 是否生效 |
 | outsider → 入口 gateway 的 pod | 只有入口的 NetworkPolicy 擋；用來確認 NetworkPolicy 是否生效 |
+
+代表使用者的呼叫（Laysi/trustiot-v2#106）：從 pod 發出的每個呼叫都帶一張使用者的內部身分 token（`x-internal-identity`），直接呼叫時受眾是被呼叫端，向身分服務換 token 時是呼叫端自己。token 由測試以這次安裝的簽章金鑰簽出（init container 填入的 Secret `<release>-identity-signing-keys`，`internal-token.ts`），用前先以服務掛載的公鑰 ConfigMap 驗過，所以是服務會接受的 token。私鑰只在測試的行程裡，token 經 `kubectl exec -i` 的 stdin 交給 pod，不出現在指令列、輸出或結果檔；呼叫的腳本（`mesh-call.ts`）只回報被呼叫端是否收到它。服務都是身分服務替身、不驗證 token，所以這裡看到的拒絕都是 mesh 在 L4 做的，驗證的是 mesh 放行什麼、token 隨清單內的呼叫到達，以及身分服務拿到的呼叫清單（安裝後檢查 `TRUSTIOT_ON_BEHALF_CALLS` 是 `{"assets":["certs"]}`）；token 交換與服務自己的檢查（受眾、過期、清單外的組合、換來的 token 不能再換）由 `services/identity` 的 Rust 測試涵蓋。身分服務的授權依埠分開：身分服務自己的 AuthorizationPolicy 只讓入口 gateway 到 `http`，token 交換自己的 AuthorizationPolicy（`<release>-identity-exchange`）只讓 assets 到 `token-exchange`；上表「assets → identity 的 API 埠」在叢集裡驗證這件事，chart 測試另外比對渲染結果。`mesh-call.ts` 與 `internal-token.ts` 有不需要叢集的單元測試，隨 `bun test deploy/chart` 執行。
 
 測試依序執行五個階段，每個階段從前一個階段留下的狀態開始：
 
@@ -125,7 +129,7 @@ bun test --timeout 600000 ./deploy/chart/tests/e2e/ingress.e2e.ts
 
 ### 前置條件與執行
 
-前置條件同入口測試的 1、3、4、5 項：需要 Istio ambient 與 Gateway API CRD、已建立的 namespace（建議 `restricted`）、叢集拉得到的身分服務替身映像；不需要 ext_authz provider，入口只走例外路徑。測試的身分還要能在 namespace 裡建立 pod、`pods/exec` 與 `pods/portforward`，並刪除與建立 NetworkPolicy 和 AuthorizationPolicy。身分服務替身的映像同時用在五個服務與三個測試 pod，因為它是唯一有執行環境（Bun）、能從 pod 內發出呼叫的測試映像。
+前置條件同入口測試的 1、3、4、5 項：需要 Istio ambient 與 Gateway API CRD、已建立的 namespace（建議 `restricted`）、叢集拉得到的身分服務替身映像；不需要 ext_authz provider，入口只走例外路徑。測試的身分還要能在 namespace 裡建立 pod、`pods/exec` 與 `pods/portforward`，讀取簽章金鑰的 Secret 與公鑰的 ConfigMap，並刪除與建立 NetworkPolicy 和 AuthorizationPolicy。身分服務替身的映像同時用在五個服務與三個測試 pod，因為它是唯一有執行環境（Bun）、能從 pod 內發出呼叫的測試映像。
 
 在 repo 根目錄：
 

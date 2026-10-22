@@ -1,6 +1,7 @@
 //! Writing events in the caller's transaction.
 
-use contract::{Actor, EncodeError, Event, EventEnvelope, EventId, TenantId};
+use contract::event::Actor;
+use contract::{EncodeError, Event, EventEnvelope, EventId, TenantId};
 use sqlx::{PgConnection, Postgres, Transaction};
 
 use crate::aggregate::Aggregate;

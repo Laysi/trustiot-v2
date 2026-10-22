@@ -20,6 +20,10 @@ mod identity_schema;
 #[path = "../../../services/assets/src/schema.rs"]
 mod assets_schema;
 
+/// The certs service's files (compiled into the service as well).
+#[path = "../../../services/certs/src/schema.rs"]
+mod certs_schema;
+
 /// The outbox tables (crates/outbox) in a service's schema.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Outbox {
@@ -166,15 +170,31 @@ pub const PRODUCT: Registry = Registry {
         },
         // Reads identity's events as its platform role, so the chart binds a password to
         // `assets_platform` as well ("trustiot.migrate.platformLogins" in
-        // deploy/chart/templates/_migrate.tpl).
+        // deploy/chart/templates/_migrate.tpl). Writes `assets.device_model_*`
+        // (Laysi/trustiot-v2#99) with its service role. A producer needs a reader for the outbox
+        // policy, and the gateway configuration that will consume these events
+        // (Laysi/trustiot-v2#93) does not exist yet, so assets reads its own events for now: no
+        // subscription does. When the real consumer is listed here, drop "assets" and the Job
+        // revokes the read (it syncs the readers on every run).
         Service {
             name: assets_schema::SCHEMA.service,
             platform_role: true,
             outbox: Outbox {
                 producer: assets_schema::SCHEMA.outbox_producer,
-                consumes: &["identity"],
+                consumes: &["identity", "assets"],
             },
             migrations: assets_schema::SCHEMA.migrations,
+        },
+        // The ledger of issued certificates and the CRLs (Laysi/trustiot-v2#78): no tenant data
+        // and no events, so no platform role.
+        Service {
+            name: certs_schema::SCHEMA.service,
+            platform_role: false,
+            outbox: Outbox {
+                producer: certs_schema::SCHEMA.outbox_producer,
+                consumes: &[],
+            },
+            migrations: certs_schema::SCHEMA.migrations,
         },
     ],
     clickhouse: crate::clickhouse_files::FILES,

@@ -1,0 +1,46 @@
+Laysi/trustiot-v2#78, 2026-10-22: the final check run on feat/78-certs-ca at 5799c33
+(commit 66acc0d merged with main 1bda1d9), through the check queue on the build host
+(x86_64 Linux, CI=1, so container-backed tests fail instead of skipping).
+
+Command (one check-queue job; each step's exit code is printed after it):
+
+  cargo fmt --all --check
+  cargo clippy --workspace --all-targets --locked -- -D warnings
+  cargo test --workspace --locked --no-fail-fast
+  cargo run --locked -q -p openapi -- --check
+  cargo deny --locked check
+  cargo test --locked -p certs -- --nocapture
+  bun test deploy/chart
+  bun install --cwd scripts --frozen-lockfile && bun test scripts && bun run --cwd scripts typecheck
+
+Result (queued 12:32:43, finished 12:42:33 Asia/Taipei):
+
+=== END exit=0 :: cargo fmt --all --check
+=== END exit=0 :: cargo clippy --workspace --all-targets --locked -- -D warnings
+=== END exit=0 :: cargo test --workspace --locked --no-fail-fast
+=== END exit=0 :: cargo run --locked -q -p openapi -- --check
+=== END exit=0 :: cargo deny --locked check
+=== END exit=0 :: cargo test --locked -p certs -- --nocapture
+=== END exit=0 :: bun test deploy/chart
+=== END exit=0 :: bun install --cwd scripts --frozen-lockfile && bun test scripts && bun run --cwd scripts typecheck
+
+Totals:
+
+  cargo test --workspace: 910 passed, 0 failed, 0 ignored, in 124 test binaries
+  cargo run -p openapi -- --check: api/openapi.json is up to date
+  cargo deny: advisories ok, bans ok, licenses ok, sources ok
+  cargo test -p certs: 20 passed (6 unit, ceremony 3, crl 2, cross_tenant 1, issuance 5,
+    key_custody 3), output in certs-tests.txt
+  bun test deploy/chart: 467 pass, 0 fail
+  bun test scripts: 1482 pass, 4 skip (the three podman end-to-end tests of scripts/tests/e2e.test.ts,
+    which need TRUSTIOT_DEV_E2E=1, and one test that runs only on an aarch64 host), 0 fail;
+    typecheck (tsc --noEmit) passed
+
+On the workstation, on the same head:
+
+  bun scripts/ci/check-workflows.ts       workflow policy: 4 file(s) checked, no violations
+  bun scripts/ci/check-secret-handling.ts secret handling: 449 file(s) checked, 6 container build file(s), no violations
+  bun scripts/ci/lint-workflows.ts        actionlint: 3 workflow file(s), no errors
+  bun test scripts/ci/changes.test.ts     255 pass, 0 fail
+  bun test scripts/nightly                270 pass, 0 fail
+  bun test deploy/flux                    73 pass, 0 fail

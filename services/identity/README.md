@@ -6,16 +6,18 @@
 
 - 有自己的 schema、角色與 RLS，session 存在伺服器端。
 - 有 ext_authz 端點與內部身分簽發。
+- 有 token 交換：服務代表使用者呼叫另一個服務時，拿自己收到的 token 換一張受眾是對方的 token（見 [token 交換](#token-交換代表使用者呼叫)，Laysi/trustiot-v2#106，2026-10-21）。
 - **沒有登入**：服務本身無法建立 session，資料庫角色也沒有 session 的寫入權限；MS0 只有測試工具建立 session（見[測試工具怎麼建立 session](#測試工具怎麼建立-session)），不做假登入。登入、登出與 session 寫入在 Laysi/trustiot-v2#103。
 - 一個對外的 HTTP API：平台管理者建立租戶，同一個交易寫出 `identity.tenant_created` 事件（見[租戶](#租戶)，Laysi/trustiot-v2#65，2026-10-14）；規格在 `api/openapi.json`（`tools/openapi`）。
 - 映像見下方[映像](#映像)；chart 的 `services.identity.enabled` 預設仍是 `false`。nightly 的 smoke 從 Laysi/trustiot-v2#65 起啟用它與資產服務，經入口建立租戶；其餘啟用工作在 Laysi/trustiot-v2#77。
 
 ## 與入口的約定（ext_authz）
 
-Istio 的 ext_authz provider（`deploy/istio/istiod-values.yaml`）對每個需要 cookie 的請求，以原始的方法、Host 與 `Cookie` 呼叫 `/internal/ext-authz<原始路徑>`。`/internal` 不會被入口路由，用戶端到不了這個端點。服務只讀 `Cookie`、`Host` 與路徑；請求帶的其他標頭（包含任何寫法的 `x-internal-identity`）都不影響結果。
+Istio 的 ext_authz provider（`deploy/istio/istiod-values.yaml`）對每個需要 cookie 的請求，以原始的方法、Host、`Cookie`、`Origin` 與 `Sec-Fetch-Site` 呼叫 `/internal/ext-authz<原始路徑>`。`/internal` 不會被入口路由，用戶端到不了這個端點。服務只讀方法、`Cookie`、`Origin`、`Sec-Fetch-Site`、`Host` 與路徑；請求帶的其他標頭（包含任何寫法的 `x-internal-identity`）都不影響結果。
 
 | 回應 | 情況 | 入口 |
 | --- | --- | --- |
+| 403 `permission_denied`，訊息 key `security.cross_site_request` | 跨站請求（見下方[跨站請求](#跨站請求csrf)），在讀 cookie、查 session 之前判斷，所以沒有 session 時也是這個回應 | 原樣交給用戶端 |
 | 200，剛好一個 `x-internal-identity`，`cache-control: no-store` | session 有效，原始請求的主機與路徑對得到一條 cookie 路由 | 以這個值覆寫用戶端帶來的同名標頭，轉給後端 |
 | 401 `unauthenticated` | 沒有 session cookie、有兩個以上、格式不對；session 不存在、過期、已撤銷或使用者已刪除 | 原樣交給用戶端 |
 | 403 `permission_denied` | session 有效，但路由表對不到這個請求 | 原樣交給用戶端 |
@@ -23,8 +25,22 @@ Istio 的 ext_authz provider（`deploy/istio/istiod-values.yaml`）對每個需�
 
 - 200 只能由剛簽好的 token 組成（程式裡的 `Decision::Allow` 沒有 token 就建不出來）。原因：ext_authz 回 200 卻沒帶 `x-internal-identity` 時，入口會把用戶端自己帶的同名標頭轉給後端（[2026-10-10 PoC](../../docs/feasibility/2026-10-10-edge-poc.md)）。
 - 拒絕的回應一律不帶身分標頭，body 是 `contract::ErrorBody`，也帶 `cache-control: no-store`。
-- 401 與 403 以 INFO 記一行 `denied the ext_authz check`，`reason` 是 `no_session_cookie`、`repeated_session_cookie`、`malformed_session_cookie`、`no_active_session` 或 `no_route`；日誌不寫 cookie、session 雜湊或 token。
+- 401 與 403 以 INFO 記一行 `denied the ext_authz check`，`reason` 是 `cross_site_request`（另帶 `header`：判斷依據是 `sec-fetch-site` 還是 `origin`）、`no_session_cookie`、`repeated_session_cookie`、`malformed_session_cookie`、`no_active_session` 或 `no_route`；日誌不寫 cookie、session 雜湊、token 或 `Origin` 的值。
 - 每個檢查最多等 0.4 秒（`CHECK_DEADLINE`），比入口的 0.5 秒短，所以入口一定拿得到服務自己的回答；到了就回 503（fail closed）。查詢本身在背景跑完，開到一半的資料庫連線留給下一個檢查（見[連線池](#連線池)）。
+
+### 跨站請求（CSRF）
+
+SPA 與 API 同源（決策 2），SPA 自己送的請求一律是同源；別的網站可以讓瀏覽器帶著 session cookie 送請求，所以 cookie 檢查在查 session 之前先擋下跨站請求（`src/csrf.rs`，Laysi/trustiot-v2#123，2026-10-21）：
+
+| 請求帶的標頭 | 放行的條件 |
+| --- | --- |
+| `Sec-Fetch-Site`（目前的瀏覽器都會帶） | 剛好一個值，是 `same-origin`；GET 與 HEAD 另外接受 `none`（使用者自己輸入網址或開書籤）。`same-site`（同一個網站的其他主機，例如閘道器的主機名稱）也算跨站 |
+| 沒有 `Sec-Fetch-Site`、有 `Origin`，方法不是 GET 或 HEAD | 剛好一個值，等於 `https://` 加上 `Host` 的主機與埠號（沒寫埠號時是 443）；`http://` 只接受 `localhost` 與 `127.0.0.1`（本機開發，預設埠 80）。`Origin: null`、帶路徑或帳號、埠號不合法的值都算跨站 |
+| 兩個都沒有 | 一律放行：不是瀏覽器，或太舊的瀏覽器 |
+
+- 入口要把 `Origin` 與 `Sec-Fetch-Site` 交給身分服務（`includeRequestHeadersInCheck`）。istiod 還是舊設定時，這兩個標頭不會送來，檢查一律放行而且沒有任何紀錄；升級步驟見 [deploy/istio/README.md](../../deploy/istio/README.md)。
+- 這是第一道防線，[租戶](#租戶)的「以 cookie 認證的寫入一律要求 JSON 的 `Content-Type`」與 cookie 的 `SameSite` 照樣適用。
+- 不需要 cookie 的例外路徑（例如 Laysi/trustiot-v2#103 的登入）不經 ext_authz，這個檢查管不到：那些處理常式要自己呼叫 `csrf::cross_site`。
 
 ### token
 
@@ -44,6 +60,28 @@ token 只給請求要去的服務。chart 把 `ingress.routes` 換成實際主�
 - 先找 `Exact`，再找最長、以路徑段為界的 `PathPrefix`（`/api` 對得到 `/api` 與 `/api/x`，對不到 `/apix`）；`/` 對得到所有路徑。
 - 對不到就回 403。路由表與入口不一致時只會多拒絕，不會放寬權限，因為 token 只有它的受眾接受。
 - `ai-gateway` 不驗證內部身分（決策 28），chart 不允許它有 cookie 路由，設定裡出現它，服務拒絕啟動。
+
+## token 交換（代表使用者呼叫）
+
+決策 27（2026-10-21，Laysi/trustiot-v2#106）：服務收到的 token 只對自己有效，要以同一個使用者呼叫另一個服務時，向這裡換一張受眾是對方的 token。契約是 `contract::api::identity::ExchangeToken`，呼叫端用 `crates/service-kit` 的 `OnBehalf`；回應表在 [contract README](../../crates/contract/README.md) 的「token 交換」。程式在 `src/exchange.rs`。
+
+token 交換在自己的埠（`exchange.listen_addr`，預設 `0.0.0.0:8082`，chart 的埠名 `token-exchange`），API 埠沒有這個路徑。chart 給這個埠自己的 Service、AuthorizationPolicy 與 NetworkPolicy（`<release>-identity-exchange`，呼叫端連 `http://<release>-identity-exchange:8082`）：mesh 讓代表使用者呼叫的服務只連得到這個埠，入口 gateway 只連得到 API 埠，所以它們碰不到 API 埠上的 ext_authz 檢查（[chart README](../../deploy/chart/README.md) 的「服務間授權（mesh）」）。這個埠由 `crates/service-kit` 的 `Context::serve_port` 提供，handler 逾時、panic 處理、請求日誌與收尾都和 API 埠相同。
+
+`POST /internal/token-exchange`，`x-internal-identity` 帶呼叫端自己收到的 token，本文 `{"audience": "<服務>"}`（最多 1 KiB）。依序：
+
+1. 以 `ExchangeVerifier` 驗證 token：與每個服務的驗證端相同（簽章、`kid`、`typ`、發行者、效期與時間），只是受眾可以是任何服務。沒有公鑰 503，其他失敗 401。先驗 token 再讀本文，沒有有效 token 的請求看不出本文對不對。
+2. 本文不是這個請求、服務名稱不認得（`ai-gateway` 不在 `ServiceName`）400。
+3. token 帶 `act`，也就是本身是換來的：403 `permission_denied`。只換一跳。
+4. 「token 的受眾 → `audience`」不在呼叫清單上 403 `permission_denied`。ztunnel 不把呼叫端的身分交給應用程式，所以呼叫端以 token 的受眾認定。以某個服務為受眾的 token 不只那個服務拿得到，清單上可以呼叫它的服務也換得到一張，所以清單只套用在入口 gateway 的請求簽出、沒有 `act` 的 token 上：A 可以呼叫 B、B 可以呼叫 C 時，A 拿換來的 B token 換不到 C 的（第 3 步）。代價是 B 以換來的 token 被呼叫時，不能再代表同一個使用者呼叫 C；多跳的鏈要先能驗證呼叫端的工作負載，記在 Laysi/trustiot-v2#509。
+5. 簽一張新 token：`sub`、`tenant`、`platform_admin` 與原 token 相同，`aud` 是 `audience`，`act` 是 `{"sub": "<原 token 的受眾>"}`（RFC 8693 的 actor），`iat` 是現在，`exp` 是原 token 的 `exp` 與現在加 60 秒取早者；剩不到 1 秒時不簽，回 401。沒有可以簽章的金鑰 503。
+
+成功回 200 `{"token": "<token>"}`，所有回應都帶 `cache-control: no-store`。換 token 不查資料庫。日誌：換到記 DEBUG（呼叫端與受眾）；401、503 記 WARN，欄位是原因（驗證端的 `reason`、`expires_too_soon`、`no_keys`、`no_signing_key`）；403 記 WARN，`reason` 是 `already_exchanged`（帶呼叫端、`act` 的服務與受眾）或 `not_listed`（帶呼叫端與受眾，通常是 `mesh.calls` 少了這條呼叫）；400 記 INFO。token、使用者與本文都不進日誌。
+
+還沒處理、記在 Laysi/trustiot-v2#509 的：多跳呼叫要的呼叫端工作負載驗證；入口 gateway 把 session cookie 轉給身分服務以外的後端；`ExchangeVerifier` 是 `crates/service-kit` 的公開型別；token 交換沒有並行上限，每次呼叫都換一張新的 token、不重用；金鑰撤銷還在傳播時，不拒絕以已撤銷世代的金鑰簽的 token（`TRUSTIOT_IDENTITY_REVOKE_BEFORE_GENERATION` 只管簽章）。
+
+呼叫清單是 `TRUSTIOT_ON_BEHALF_CALLS`（JSON `{"<呼叫端>": ["<被呼叫端>", ...]}`），chart 從 `mesh.calls` 推得：兩個啟用的服務之間的呼叫，`ai-gateway` 兩個方向都不在（[chart README](../../deploy/chart/README.md) 的「服務間授權（mesh）」與「呼叫矩陣」）。沒設時是空的，什麼都不換；不是 JSON、名稱不認得或含 `ai-gateway` 時拒絕啟動，訊息只寫變數名稱與原因，不引用設定值。啟動時 INFO `serving the token exchange` 寫出清單的呼叫數。
+
+背景工作沒有使用者的請求，不換 token（[service-kit README](../../crates/service-kit/README.md) 的「背景工作沒有使用者身分」）。
 
 ## session
 
@@ -178,12 +216,14 @@ schema `identity`，DDL 在 `migrations/postgres/`，由 migration Job（Laysi/t
 | `TRUSTIOT_IDENTITY_KEY_PROPAGATION_SECONDS` | 只給身分服務：簽章金鑰與公鑰檔不一致多久之後記 ERROR，120–86400，預設 600（chart 的 `internalIdentity.keyPropagationSeconds`） |
 | `TRUSTIOT_IDENTITY_MAX_KEY_AGE_SECONDS` | 只給身分服務：輪替 CronJob 的金鑰年齡上限，0 到 31536000，預設 0（不檢查）；正在簽章的金鑰超過它加 propagation 再加 2 天時記 ERROR（chart 的 `internalIdentity.maxKeyAgeSeconds`，CronJob 不渲染時是 0） |
 | `TRUSTIOT_INGRESS_ROUTES` | 只給身分服務：cookie 路由，決定受眾 |
+| `TRUSTIOT_ON_BEHALF_CALLS` | 只給身分服務：token 交換的呼叫清單，JSON `{"<呼叫端>": ["<被呼叫端>", ...]}`，chart 從 `mesh.calls` 推得；沒設時是空的（見 [token 交換](#token-交換代表使用者呼叫)） |
 | `TRUSTIOT_POSTGRES_HOST`、`_PORT`、`_DATABASE`、`_SSLMODE`、`_CA_FILE` | 平台設定：Postgres 位置；只接受 `verify-full`，`_CA_FILE` 必填，是唯一信任的根憑證 |
 | `TRUSTIOT__DATABASE__USERNAME`、`TRUSTIOT__DATABASE__PASSWORD` | 服務角色 `identity_app` 的帳密：chart 以 `identity_app` 設定帳號，密碼來自 Secret `<release>-identity-password` 的 `identity_app` key；migration Job 產生這個密碼並以它設定角色 |
 | `TRUSTIOT__DATABASE__PLATFORM_USERNAME`、`TRUSTIOT__DATABASE__PLATFORM_PASSWORD` | 平台角色 `identity_platform` 的帳密，給事件紀錄：chart 以 `identity_platform` 設定帳號，密碼來自同一個 Secret 的 `identity_platform` key。兩個一起給或都不給；帳號不能是服務角色。都不給時事件紀錄關閉（見[事件層與操作紀錄](#事件層與操作紀錄)） |
 | `TRUSTIOT__DATABASE__MAX_CONNECTIONS` | session 查詢的連線池每個副本的上限，3–100（至少放得下常駐的 3 條），預設 10；建立租戶與事件紀錄另有自己的小連線池 |
+| `TRUSTIOT__EXCHANGE__LISTEN_ADDR` | token 交換的監聽位址，預設 `0.0.0.0:8082`（chart 的埠 `token-exchange`）；埠被占用時不啟動 |
 
-啟動後由保溫工作在背景開連線；readiness（健康埠與 API 埠的 `/readyz`）在常駐的 3 條連線開好、而且有一把可以簽章的金鑰之後才通過（見[連線池](#連線池)與[簽章金鑰](#簽章金鑰)），資料庫連不上或沒有可以簽章的金鑰時 ext_authz 回 503、readiness 回 503。健康埠（預設 8081）只有 `/healthz` 與 `/readyz`，ext_authz 端點只在 API 埠（8080）。設定或路由不能用時以 exit code 1 結束，不開始服務；金鑰檔還沒有內容或不能用時照常啟動，只是不就緒。
+啟動後由保溫工作在背景開連線；readiness（健康埠與 API 埠的 `/readyz`）在常駐的 3 條連線開好、而且有一把可以簽章的金鑰之後才通過（見[連線池](#連線池)與[簽章金鑰](#簽章金鑰)），資料庫連不上或沒有可以簽章的金鑰時 ext_authz 回 503、readiness 回 503。token 交換只在自己的埠（預設 8082）。健康埠（預設 8081）只有 `/healthz` 與 `/readyz`，ext_authz 端點只在 API 埠（8080）。設定或路由不能用時以 exit code 1 結束，不開始服務；金鑰檔還沒有內容或不能用時照常啟動，只是不就緒。
 
 ## 映像
 
@@ -241,8 +281,11 @@ CARGO_BUILD_JOBS=2 cargo test -p identity
 | `src/session.rs` | cookie 的解析（混在其他 cookie 與多個 `Cookie` 標頭裡、缺少、重複、非標準寫法），`Debug` 不顯示 secret 與雜湊 |
 | `src/issuer.rs` | token 的標頭與 claims 剛好是約定的格式、只有受眾驗得過、過期後被拒；`kid` 的判斷；公鑰沒部署時拒絕；錯誤與 `Debug` 不含私鑰 |
 | `src/audience.rs` | `Exact` 優先與最長 `PathPrefix`、主機比對；不能用的路由設定拒絕啟動且不引用設定值 |
-| `src/ext_authz/tests.rs` | 以假的 session store 驗證回應表的每一列、偽造的身分標頭不影響 200、store 失敗或卡住時 0.4 秒內回 503、各種方法與路徑形狀、只服務這個端點 |
-| `tests/ext_authz.rs` | 真的服務與 Postgres：有效 session 拿到一個通過 service-kit 驗證的 token，偽造的同名標頭不會出現在回應；401 的各種情況（含過期、撤銷、使用者刪除）；改角色與移除成員在下一個請求生效；服務角色不能寫 session、RLS 擋住其他租戶的成員資料；私鑰、session secret 與 token 不出現在日誌與回應；健康埠只有 `/healthz`、`/readyz`；資料庫連不上時回 503；開新連線比檢查期限慢時，就緒後的檢查不失敗、斷線後自動恢復；金鑰與設定不能用時拒絕啟動（含只給平台角色帳密的一半、平台角色就是服務角色） |
+| `src/csrf.rs` | 跨站請求的判斷：`Sec-Fetch-Site` 的每個值、重複與合併的值，`Origin` 的主機、埠號、scheme 與格式，沒有標頭時放行 |
+| `src/exchange/tests.rs` | token 交換（Laysi/trustiot-v2#106）：清單上的呼叫端換到同一個使用者、租戶、角色的 token，到期不晚於原 token；重播：受眾不是驗證端的 token 被每個服務拒絕，過期的 token 換不到；只有清單上的組合換得到；換來的 token 帶 `act`，即使清單上有對應的呼叫也不能再換（只換一跳）；缺少、重複、偽造的 token 401，token 先於本文檢查，各種壞本文 400，`GET` 405，沒有公鑰或簽章金鑰 503；清單的解析錯誤不引用設定值；以 `OnBehalf` 端到端呼叫：被呼叫端看到的是同一個使用者 |
+| `src/ext_authz/tests.rs` | 以假的 session store 驗證回應表的每一列、跨站請求在查 session 之前回 403（查詢次數不變）、偽造的身分標頭不影響 200、store 失敗或卡住時 0.4 秒內回 503、各種方法與路徑形狀、只服務這個端點 |
+| `tests/ext_authz.rs` | 真的服務與 Postgres：有效 session 拿到一個通過 service-kit 驗證的 token，偽造的同名標頭不會出現在回應；401 的各種情況（含過期、撤銷、使用者刪除）；跨站的寫入不論 session 有效與否都回 403 `security.cross_site_request`，同源的照常放行；改角色與移除成員在下一個請求生效；服務角色不能寫 session、RLS 擋住其他租戶的成員資料；私鑰、session secret 與 token 不出現在日誌與回應；健康埠只有 `/healthz`、`/readyz`；資料庫連不上時回 503；開新連線比檢查期限慢時，就緒後的檢查不失敗、斷線後自動恢復；金鑰與設定不能用時拒絕啟動（含只給平台角色帳密的一半、平台角色就是服務角色） |
+| `tests/ext_authz.rs` 的 token 交換 | Laysi/trustiot-v2#106，真的服務：以 `TRUSTIOT_ON_BEHALF_CALLS` 啟動，在 token 交換自己的埠把 ext_authz 給 assets 的 token 換成給 certs 的，certs 的驗證端接受、是同一個使用者與租戶、到期不晚於原 token，assets 與 alerts 的驗證端拒絕它；清單外的組合 403、沒有或偽造的 token 401；清單含 `ai-gateway`、不是 JSON、以 `TRUSTIOT__PLATFORM__ON_BEHALF_CALLS` 覆寫時拒絕啟動 |
 | `tests/adversarial.rs` | 驗證者另寫的攻擊測試（真的服務與 Postgres）：cookie 解析的各種變形、以資料庫時鐘判斷到期與撤銷、資料庫被鎖、連線被殺、帳密錯誤時回 503 而不放行、成員資料的租戶隔離、各種日誌等級都不含密鑰、金鑰載入、健康埠、跨重啟的金鑰輪替 |
 | `tests/token_claims.rs` | 驗證者另寫：竄改、改簽、改受眾、改時間的 token 都過不了 service-kit 的驗證器，輪替期間舊 token 在效期內仍有效（不需要資料庫） |
 | `src/tenants.rs` | 租戶名稱的規則（去空白、長度以字元計、控制字元、格式字元與行／段落分隔符）；只接受 JSON 的 `Content-Type`（可帶參數，表單、`text/plain`、相近的型別與兩個 `Content-Type` 都拒絕） |

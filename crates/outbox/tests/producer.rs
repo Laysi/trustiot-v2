@@ -5,7 +5,8 @@ mod support;
 
 use std::time::Duration;
 
-use contract::{Actor, EventEnvelope, ServiceName};
+use contract::event::Actor;
+use contract::{EventEnvelope, ServiceName};
 use outbox::{Aggregate, ConsumerConfig, PublishError};
 use support::{Counted, Recorder, database, drain};
 

@@ -202,7 +202,7 @@ pub struct ClickHouse {
     pub url: String,
     pub admin: Account,
     client: reqwest::Client,
-    _container: Option<Container>,
+    container: Option<Container>,
 }
 
 impl ClickHouse {
@@ -225,7 +225,7 @@ impl ClickHouse {
                 url,
                 admin,
                 client,
-                _container: None,
+                container: None,
             };
             server.wait_ready().await;
             return Some(server);
@@ -234,6 +234,43 @@ impl ClickHouse {
             unavailable("TEST_CLICKHOUSE_URL, podman, or docker");
             return None;
         };
+        Some(Self::start_container(runtime, client, &[]).await)
+    }
+
+    /// A throwaway container whose data directory is a tmpfs of `size` (for example `256m`), so a
+    /// test can fill the server's disk with [`ClickHouse::exec`]. Always a container, whatever
+    /// `TEST_CLICKHOUSE_URL` says: a shared server's disk is not the test's to fill.
+    pub async fn start_with_small_disk(size: &str) -> Option<Self> {
+        let Some(runtime) = container_runtime() else {
+            unavailable("podman or docker");
+            return None;
+        };
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .expect("build the HTTP client");
+        // A tmpfs replaces the image's anonymous volume for the data directory.
+        let tmpfs = format!("/var/lib/clickhouse:rw,size={size}");
+        Some(Self::start_container(runtime, client, &["--tmpfs", &tmpfs]).await)
+    }
+
+    /// Runs a command inside the container, for example `fallocate`; panics when it fails or
+    /// when this server is not a container the test started.
+    pub fn exec(&self, args: &[&str]) -> String {
+        let container = self
+            .container
+            .as_ref()
+            .expect("exec needs a ClickHouse container that the test started");
+        let mut full = vec!["exec", container.name.as_str()];
+        full.extend_from_slice(args);
+        runtime_output(container.runtime, &full)
+    }
+
+    async fn start_container(
+        runtime: &'static str,
+        client: reqwest::Client,
+        extra_args: &[&str],
+    ) -> Self {
         let password = uuid::Uuid::new_v4().simple().to_string();
         let container = Container {
             runtime,
@@ -245,28 +282,27 @@ impl ClickHouse {
         };
         let user_env = format!("CLICKHOUSE_USER={ADMIN_USER}");
         let password_env = format!("CLICKHOUSE_PASSWORD={password}");
-        runtime_output(
-            runtime,
-            &[
-                "run",
-                "--detach",
-                "--name",
-                &container.name,
-                // The test machine is shared; ClickHouse sizes its caches from this limit.
-                "--memory",
-                "1500m",
-                "--env",
-                &user_env,
-                "--env",
-                &password_env,
-                // The bootstrap admin may manage access entities with SQL, as in the chart.
-                "--env",
-                "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
-                "--publish",
-                "127.0.0.1::8123",
-                CLICKHOUSE_IMAGE,
-            ],
-        );
+        let mut args = vec![
+            "run",
+            "--detach",
+            "--name",
+            &container.name,
+            // The test machine is shared; ClickHouse sizes its caches from this limit.
+            "--memory",
+            "1500m",
+            "--env",
+            &user_env,
+            "--env",
+            &password_env,
+            // The bootstrap admin may manage access entities with SQL, as in the chart.
+            "--env",
+            "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
+            "--publish",
+            "127.0.0.1::8123",
+        ];
+        args.extend_from_slice(extra_args);
+        args.push(CLICKHOUSE_IMAGE);
+        runtime_output(runtime, &args);
         let mapping = runtime_output(runtime, &["port", &container.name, "8123/tcp"]);
         let address = mapping
             .lines()
@@ -281,10 +317,10 @@ impl ClickHouse {
                 password,
             },
             client,
-            _container: Some(container),
+            container: Some(container),
         };
         server.wait_ready().await;
-        Some(server)
+        server
     }
 
     async fn wait_ready(&self) {

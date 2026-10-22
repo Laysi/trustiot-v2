@@ -1,0 +1,115 @@
+# Laysi/trustiot-v2#106, 2026-10-22: the nightly smoke deployment of PR Laysi/trustiot-v2#514 (excerpt of the job log)
+# GitHub Actions run 39651067528, attempt 2, job smoke, on a k3d cluster in CI. Tested commit 4e4be07: head e0a55f4 merged into main 1bda1d9.
+# Attempt 1 failed while building the Postgres image (snapshot.debian.org returned 503); only the failed job was rerun.
+# Lines kept: the checked-out commit; for each values file, every check and its result and the ingress e2e summary; every mesh e2e line. Job and step prefixes removed.
+
+2026-10-22T04:46:41.8943161Z HEAD is now at 4e4be07 Merge e0a55f438eb72b0d966b8b7297df4084f60c7008 into 1bda1d98864eb2b3658c87909235613125431e49
+2026-10-22T04:51:58.3057624Z 2026-10-22T04:51:58.304Z == values-onprem.yaml in namespace nightly-onprem
+2026-10-22T04:51:58.3058346Z 2026-10-22T04:51:58.305Z -- namespace with the restricted Pod Security level
+2026-10-22T04:51:58.3860286Z 2026-10-22T04:51:58.384Z    ok: enforce, warn and audit are restricted
+2026-10-22T04:51:58.3861285Z 2026-10-22T04:51:58.384Z -- the values of the API check
+2026-10-22T04:51:58.3864401Z 2026-10-22T04:51:58.386Z    ok: values-api-onprem.yaml: identity and assets, provider trustiot-smoke-onprem
+2026-10-22T04:51:58.3865591Z 2026-10-22T04:51:58.386Z -- the tunnel ingress gets a fixed ClusterIP from the static band of the cluster's Service range (Laysi/trustiot-v2#478)
+2026-10-22T04:51:58.3872598Z 2026-10-22T04:51:58.387Z    ok: exposure direct: the chart takes no fixed ClusterIP
+2026-10-22T04:51:58.3874161Z 2026-10-22T04:51:58.387Z -- dummy Secrets for the references the chart makes
+2026-10-22T04:51:58.5601813Z 2026-10-22T04:51:58.560Z    ok: 1 created: trustiot-ingress-tls
+2026-10-22T04:51:58.5602243Z 2026-10-22T04:51:58.560Z -- helm install --wait
+2026-10-22T04:52:35.0887787Z 2026-10-22T04:52:35.088Z    ok: release trustiot deployed, 63 objects
+2026-10-22T04:52:35.0888381Z 2026-10-22T04:52:35.088Z -- every workload of the release is ready
+2026-10-22T04:52:35.4852661Z 2026-10-22T04:52:35.485Z    ok: Deployment/trustiot-otel-collector, Deployment/trustiot-assets, Deployment/trustiot-identity, Deployment/trustiot-smoke-echo, StatefulSet/trustiot-clickhouse, Job/trustiot-migrate-12e55504
+2026-10-22T04:52:35.4853864Z 2026-10-22T04:52:35.485Z -- the migration Job completed before any service started
+2026-10-22T04:52:35.5853901Z 2026-10-22T04:52:35.585Z    ok: job/trustiot-migrate-12e55504 completed at 2026-10-22T04:52:29Z; every service container started after it
+2026-10-22T04:52:35.5855006Z 2026-10-22T04:52:35.585Z -- every password generated in the cluster is in its Secret
+2026-10-22T04:52:35.7428018Z 2026-10-22T04:52:35.742Z    ok: trustiot-clickhouse-admin-password: trustiot_admin; trustiot-otel-collector-password: trustiot_collector; trustiot-assets-password: assets_app, assets_platform; trustiot-identity-password: identity_app
+2026-10-22T04:52:35.7429645Z 2026-10-22T04:52:35.742Z -- every CloudNativePG Cluster is healthy
+2026-10-22T04:52:35.9778461Z 2026-10-22T04:52:35.977Z    ok: trustiot-postgres: healthy
+2026-10-22T04:52:35.9779005Z 2026-10-22T04:52:35.977Z -- every Gateway is programmed
+2026-10-22T04:52:36.1481063Z 2026-10-22T04:52:36.147Z    ok: trustiot-ingress
+2026-10-22T04:52:36.1482019Z 2026-10-22T04:52:36.147Z -- the tunnel ingress Service that Istio generated has the fixed ClusterIP (Laysi/trustiot-v2#478)
+2026-10-22T04:52:36.1482721Z 2026-10-22T04:52:36.148Z    ok: this shape pins no ClusterIP
+2026-10-22T04:52:36.1483223Z 2026-10-22T04:52:36.148Z -- no pod is broken, not ready or crash-looping
+2026-10-22T04:52:36.2097378Z 2026-10-22T04:52:36.209Z    ok: 9 pods running or completed
+2026-10-22T04:52:36.2098361Z 2026-10-22T04:52:36.209Z -- the internal identity keys were generated in the cluster, only the identity service's account may change them, and every service picked them up (Laysi/trustiot-v2#404)
+2026-10-22T04:52:41.4179326Z 2026-10-22T04:52:41.417Z    ok: Secret trustiot-identity-signing-keys: only signing-keys.json, bound; ConfigMap trustiot-internal-identity-keys: 1 public key(s); of 9 ServiceAccounts only trustiot-identity may get and patch them (126 can-i answers); fresh install: assets ready 2.0 s after its container started, 34.0 s after the keys were published; identity ready 2.0 s after its container started, 32.0 s after the keys were published
+2026-10-22T04:52:41.4181856Z 2026-10-22T04:52:41.417Z -- the CronJob that rotates the internal identity key by age runs as the identity service's account and leaves a key that is not due as it is (Laysi/trustiot-v2#429)
+2026-10-22T04:52:47.7541118Z 2026-10-22T04:52:47.753Z    ok: trustiot-identity-key-rotation ran once as trustiot-identity (Job trustiot-identity-key-rotation-smoke) and succeeded within 6.1 s; the key was not due, so the 1 published key(s) stayed
+2026-10-22T04:52:47.7542553Z 2026-10-22T04:52:47.753Z -- each Gateway's NetworkPolicy admits exactly the ports its Istio pods use
+2026-10-22T04:52:47.8092882Z 2026-10-22T04:52:47.809Z    ok: trustiot-ingress: 443, 15021
+2026-10-22T04:52:47.8094094Z 2026-10-22T04:52:47.809Z -- Services that expose a health endpoint have ready endpoints
+2026-10-22T04:52:47.9326346Z 2026-10-22T04:52:47.932Z    ok: trustiot-smoke-echo:http/healthz, trustiot-smoke-echo:http/readyz, trustiot-clickhouse:http/ping
+2026-10-22T04:52:47.9327470Z 2026-10-22T04:52:47.932Z -- through the ingress, a new tenant reaches the assets service, a stolen identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77)
+2026-10-22T04:52:55.9366644Z 2026-10-22T04:52:55.936Z    ok: POST /api/identity/v1/tenants as a platform administrator: 201, tenant 01a161f4-637c-7569-9bce-3083445fb542; GET /api/assets/v1/tenant as its member: 200 with that tenant after 2 s; without a cookie: 401 unauthenticated; the administrator without a tenant: 403 permission_denied; a stolen identity header (the member's genuine token) that the assets service accepts directly: 401 unauthenticated through the ingress without a cookie, 403 permission_denied with the administrator's cookie; the member's cookie with Host :443 and :8443: 200 with the tenant; on 6 path spellings the mesh normalizes: 200 with the tenant
+2026-10-22T04:52:55.9370075Z 2026-10-22T04:52:55.936Z -- helm uninstall leaves no object of the release but the kept database and password Secrets
+2026-10-22T04:53:15.4095490Z 2026-10-22T04:53:15.409Z    ok: all objects removed; kept on uninstall as intended, then deleted: cluster.postgresql.cnpg.io/trustiot-postgres, secret/trustiot-assets-password, secret/trustiot-identity-password, secret/trustiot-otel-collector-password, secret/trustiot-clickhouse-admin-password, secret/trustiot-identity-signing-keys, configmap/trustiot-internal-identity-keys, imagecatalog.postgresql.cnpg.io/trustiot-postgres; their volumes were gone after 18 s
+2026-10-22T04:53:15.4097943Z 2026-10-22T04:53:15.409Z -- ingress e2e test (deploy/chart/tests/e2e)
+2026-10-22T04:53:15.4105003Z 2026-10-22T04:53:15.410Z $ ingress e2e as onprem in namespace nightly-e2e-onprem
+2026-10-22T04:54:04.3761869Z      69 pass
+2026-10-22T04:54:04.3762026Z      0 fail
+2026-10-22T04:54:04.3762185Z      419 expect() calls
+2026-10-22T04:54:04.3762672Z     Ran 69 tests across 1 file. [48.88s]
+2026-10-22T04:54:14.7009316Z 2026-10-22T04:54:14.700Z    ok: 69 passed, 0 failed
+2026-10-22T04:54:14.7013543Z 2026-10-22T04:54:14.700Z -- delete the namespace
+2026-10-22T04:54:25.4737798Z 2026-10-22T04:54:25.473Z    ok: deleted
+2026-10-22T04:54:25.4738728Z 2026-10-22T04:54:25.473Z == values-saas.yaml in namespace nightly-saas
+2026-10-22T04:54:25.4740147Z 2026-10-22T04:54:25.473Z -- namespace with the restricted Pod Security level
+2026-10-22T04:54:25.5622401Z 2026-10-22T04:54:25.562Z    ok: enforce, warn and audit are restricted
+2026-10-22T04:54:25.5622879Z 2026-10-22T04:54:25.562Z -- the values of the API check
+2026-10-22T04:54:25.5632683Z 2026-10-22T04:54:25.563Z    ok: values-api-saas.yaml: identity and assets, provider trustiot-smoke-saas
+2026-10-22T04:54:25.5633514Z 2026-10-22T04:54:25.563Z -- the tunnel ingress gets a fixed ClusterIP from the static band of the cluster's Service range (Laysi/trustiot-v2#478)
+2026-10-22T04:54:25.6544843Z 2026-10-22T04:54:25.654Z    ok: values-ingress-address-saas.yaml: ingress.tunnel.clusterIP 10.43.0.240, unused and in the static band of 10.43.0.0/16
+2026-10-22T04:54:25.6545655Z 2026-10-22T04:54:25.654Z -- dummy Secrets for the references the chart makes
+2026-10-22T04:54:25.8249000Z 2026-10-22T04:54:25.824Z    ok: 1 created: trustiot-sentry
+2026-10-22T04:54:25.8249504Z 2026-10-22T04:54:25.824Z -- helm install --wait
+2026-10-22T04:54:56.5292210Z 2026-10-22T04:54:56.529Z    ok: release trustiot deployed, 63 objects
+2026-10-22T04:54:56.5292802Z 2026-10-22T04:54:56.529Z -- every workload of the release is ready
+2026-10-22T04:54:56.9317505Z 2026-10-22T04:54:56.931Z    ok: Deployment/trustiot-otel-collector, Deployment/trustiot-assets, Deployment/trustiot-identity, Deployment/trustiot-smoke-echo, StatefulSet/trustiot-clickhouse, Job/trustiot-migrate-5911f32d
+2026-10-22T04:54:56.9318640Z 2026-10-22T04:54:56.931Z -- the migration Job completed before any service started
+2026-10-22T04:54:57.0395860Z 2026-10-22T04:54:57.039Z    ok: job/trustiot-migrate-5911f32d completed at 2026-10-22T04:54:53Z; every service container started after it
+2026-10-22T04:54:57.0397091Z 2026-10-22T04:54:57.039Z -- every password generated in the cluster is in its Secret
+2026-10-22T04:54:57.2006114Z 2026-10-22T04:54:57.200Z    ok: trustiot-clickhouse-admin-password: trustiot_admin; trustiot-otel-collector-password: trustiot_collector; trustiot-assets-password: assets_app, assets_platform; trustiot-identity-password: identity_app
+2026-10-22T04:54:57.2007394Z 2026-10-22T04:54:57.200Z -- every CloudNativePG Cluster is healthy
+2026-10-22T04:54:57.4430326Z 2026-10-22T04:54:57.442Z    ok: trustiot-postgres: healthy
+2026-10-22T04:54:57.4430783Z 2026-10-22T04:54:57.442Z -- every Gateway is programmed
+2026-10-22T04:54:57.6123068Z 2026-10-22T04:54:57.612Z    ok: trustiot-ingress
+2026-10-22T04:54:57.6123627Z 2026-10-22T04:54:57.612Z -- the tunnel ingress Service that Istio generated has the fixed ClusterIP (Laysi/trustiot-v2#478)
+2026-10-22T04:54:57.6550270Z 2026-10-22T04:54:57.654Z    ok: the Service of Gateway trustiot-ingress has ClusterIP 10.43.0.240
+2026-10-22T04:54:57.6550900Z 2026-10-22T04:54:57.654Z -- no pod is broken, not ready or crash-looping
+2026-10-22T04:54:57.7184639Z 2026-10-22T04:54:57.718Z    ok: 9 pods running or completed
+2026-10-22T04:54:57.7185515Z 2026-10-22T04:54:57.718Z -- the internal identity keys were generated in the cluster, only the identity service's account may change them, and every service picked them up (Laysi/trustiot-v2#404)
+2026-10-22T04:55:03.0327227Z 2026-10-22T04:55:03.032Z    ok: Secret trustiot-identity-signing-keys: only signing-keys.json, bound; ConfigMap trustiot-internal-identity-keys: 1 public key(s); of 9 ServiceAccounts only trustiot-identity may get and patch them (126 can-i answers); fresh install: assets ready 1.0 s after its container started, 28.0 s after the keys were published; identity ready 2.0 s after its container started, 28.0 s after the keys were published
+2026-10-22T04:55:03.0329865Z 2026-10-22T04:55:03.032Z -- the CronJob that rotates the internal identity key by age runs as the identity service's account and leaves a key that is not due as it is (Laysi/trustiot-v2#429)
+2026-10-22T04:55:07.3326682Z 2026-10-22T04:55:07.332Z    ok: trustiot-identity-key-rotation ran once as trustiot-identity (Job trustiot-identity-key-rotation-smoke) and succeeded within 4.1 s; the key was not due, so the 1 published key(s) stayed
+2026-10-22T04:55:07.3328052Z 2026-10-22T04:55:07.332Z -- each Gateway's NetworkPolicy admits exactly the ports its Istio pods use
+2026-10-22T04:55:07.3908037Z 2026-10-22T04:55:07.390Z    ok: trustiot-ingress: 80, 15021
+2026-10-22T04:55:07.3908580Z 2026-10-22T04:55:07.390Z -- Services that expose a health endpoint have ready endpoints
+2026-10-22T04:55:07.5157900Z 2026-10-22T04:55:07.515Z    ok: trustiot-smoke-echo:http/healthz, trustiot-smoke-echo:http/readyz, trustiot-clickhouse:http/ping
+2026-10-22T04:55:07.5159028Z 2026-10-22T04:55:07.515Z -- through the ingress, a new tenant reaches the assets service, a stolen identity header never does, and Host ports and normalized paths reach it (Laysi/trustiot-v2#65, #77)
+2026-10-22T04:55:27.5294270Z 2026-10-22T04:55:27.528Z    ok: POST /api/identity/v1/tenants as a platform administrator: 201, tenant 01a161f6-8c93-7699-95eb-303c7f2a52cb; GET /api/assets/v1/tenant as its member: 200 with that tenant after 1 s; without a cookie: 401 unauthenticated; the administrator without a tenant: 403 permission_denied; a stolen identity header (the member's genuine token) that the assets service accepts directly: 401 unauthenticated through the ingress without a cookie, 403 permission_denied with the administrator's cookie; the member's cookie with Host :80 and :8443: 200 with the tenant; on 6 path spellings the mesh normalizes: 200 with the tenant
+2026-10-22T04:55:27.5314870Z 2026-10-22T04:55:27.528Z -- helm uninstall leaves no object of the release but the kept database and password Secrets
+2026-10-22T04:55:46.9349328Z 2026-10-22T04:55:46.934Z    ok: all objects removed; kept on uninstall as intended, then deleted: cluster.postgresql.cnpg.io/trustiot-postgres, secret/trustiot-assets-password, secret/trustiot-identity-password, secret/trustiot-otel-collector-password, secret/trustiot-clickhouse-admin-password, secret/trustiot-identity-signing-keys, configmap/trustiot-internal-identity-keys, imagecatalog.postgresql.cnpg.io/trustiot-postgres; their volumes were gone after 18 s
+2026-10-22T04:55:46.9351287Z 2026-10-22T04:55:46.934Z -- ingress e2e test (deploy/chart/tests/e2e)
+2026-10-22T04:55:46.9351749Z 2026-10-22T04:55:46.934Z $ ingress e2e as saas in namespace nightly-e2e-saas
+2026-10-22T04:59:07.0523165Z      69 pass
+2026-10-22T04:59:07.0523324Z      0 fail
+2026-10-22T04:59:07.0523484Z      419 expect() calls
+2026-10-22T04:59:07.0523687Z     Ran 69 tests across 1 file. [200.02s]
+2026-10-22T04:59:17.4031583Z 2026-10-22T04:59:17.402Z    ok: 69 passed, 0 failed
+2026-10-22T04:59:17.4032993Z 2026-10-22T04:59:17.403Z -- service-to-service authorization e2e test (deploy/chart/tests/e2e/mesh.e2e.ts)
+2026-10-22T04:59:17.4033570Z 2026-10-22T04:59:17.403Z $ mesh e2e as saas in namespace nightly-e2e-mesh
+2026-10-22T04:59:47.6636698Z ##[group]deploy/chart/tests/e2e/mesh.e2e.ts:
+2026-10-22T04:59:47.6637476Z     (pass) service-to-service authorization (decision 27) > 1. both layers: the listed calls and the gateway pass, unlisted calls fail, health checks pass under default deny [4456.94ms]
+2026-10-22T04:59:47.6638595Z     (pass) service-to-service authorization (decision 27) > 2. AuthorizationPolicies removed: the NetworkPolicies alone refuse every unlisted call [5162.85ms]
+2026-10-22T04:59:47.6639772Z     (pass) service-to-service authorization (decision 27) > 3. both removed: the unlisted calls pass, so the layers are what refused them [2227.07ms]
+2026-10-22T04:59:47.6640878Z     (pass) service-to-service authorization (decision 27) > 4. AuthorizationPolicies back, NetworkPolicies still removed: the AuthorizationPolicies alone refuse every unlisted call [6398.60ms]
+2026-10-22T04:59:47.6641934Z     (pass) service-to-service authorization (decision 27) > 5. both layers back: the installed state, and every pod is still healthy [4429.03ms]
+2026-10-22T04:59:47.6642481Z
+2026-10-22T04:59:47.6642846Z ##[endgroup]
+2026-10-22T04:59:47.6643013Z
+2026-10-22T04:59:47.6643162Z      5 pass
+2026-10-22T04:59:47.6643318Z      0 fail
+2026-10-22T04:59:47.6643503Z      82 expect() calls
+2026-10-22T04:59:47.6643702Z     Ran 5 tests across 1 file. [30.16s]
+2026-10-22T04:59:58.0351016Z 2026-10-22T04:59:58.034Z    ok: 5 passed, 0 failed
+2026-10-22T04:59:58.0351484Z 2026-10-22T04:59:58.035Z -- delete the namespace
+2026-10-22T05:00:09.0427645Z 2026-10-22T05:00:09.042Z    ok: deleted
+2026-10-22T05:00:13.5578157Z 2026-10-22T05:00:13.557Z nightly smoke test passed

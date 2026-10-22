@@ -38,7 +38,7 @@ tx.commit().await?;
 ```
 
 - `publish` 只接受交易（`&mut Transaction`），不能在交易外寫事件。交易回滾，事件與它的序號一起消失。
-- 人經 API 做的變更用 `publish_as`，多帶一個 `contract::Actor`：`Actor::User { user_id }`（請求的使用者，`UserIdentity::user_id()`）或服務自己的工作 `Actor::Service { service }`。它寫進信封的 `actor`，身分服務的事件紀錄（操作紀錄，K2）以它記下「誰」（[services/identity](../../services/identity/README.md) 的「事件層與操作紀錄」，Laysi/trustiot-v2#130）。`publish` 不帶 actor。
+- 人經 API 做的變更用 `publish_as`，多帶一個 `contract::event::Actor`：`Actor::User { user_id }`（請求的使用者，`UserIdentity::user_id()`）或服務自己的工作 `Actor::Service { service }`。它寫進信封的 `actor`，身分服務的事件紀錄（操作紀錄，K2）以它記下「誰」（[services/identity](../../services/identity/README.md) 的「事件層與操作紀錄」，Laysi/trustiot-v2#130）。`publish` 不帶 actor。
 - 每個事件屬於一個聚合（`Aggregate`：種類加 ID，例如 `tenant` 加租戶 ID）。同一聚合的事件依寫入順序送達，不同聚合之間不保證順序。寫入時會鎖住該聚合在 `outbox_aggregate` 的列直到交易結束，同一聚合的寫入因此排隊；`REPEATABLE READ` 以上的隔離層級則會以序列化錯誤失敗，由呼叫端重試整筆交易。
 - `Published::aggregate_seq` 是事件在聚合內的序號（1、2、3…），通知模式拿它當版本。
 - 聚合屬於它的事件的租戶，或屬於平台（全平台事件）：第一筆事件決定。之後別的租戶（或平台角色）為它寫事件，資料庫以 SQLSTATE 42501 拒絕，該聚合的序號不變（見[聚合的租戶隔離](#聚合的租戶隔離laysitrustiot-v24132026-10-15)）。所以聚合 ID 要是服務自己產生、全平台唯一的值（例如 UUID），不能是租戶自己選的值（例如租戶輸入的序號）；要用這種值時，在前面加上租戶 ID。

@@ -132,6 +132,7 @@ interface RunningIdentity {
 async function startIdentity(binary: string, settings: Record<string, string>): Promise<RunningIdentity> {
   const apiPort = await freePort();
   const healthPort = await freePort();
+  const exchangePort = await freePort();
   const child = Bun.spawn([binary], {
     env: {
       PATH: process.env.PATH ?? "",
@@ -142,6 +143,9 @@ async function startIdentity(binary: string, settings: Record<string, string>): 
       TRUSTIOT__DATABASE__PLATFORM_PASSWORD: settings.TRUSTIOT_DEV_IDENTITY_PLATFORM_DATABASE_PASSWORD!,
       TRUSTIOT__HTTP__LISTEN_ADDR: `127.0.0.1:${apiPort}`,
       TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR: `127.0.0.1:${healthPort}`,
+      // The token exchange's own port (Laysi/trustiot-v2#106); its default, 8082 on every
+      // interface, may be taken on the host.
+      TRUSTIOT__EXCHANGE__LISTEN_ADDR: `127.0.0.1:${exchangePort}`,
       TRUSTIOT__SHUTDOWN__DRAIN_DELAY: "100ms",
     },
     stdout: "pipe",
@@ -519,7 +523,13 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
         expect(first.stdout).not.toContain("the migration Job reported");
         expect(first.stdout).not.toContain("may connect to it");
         const logins = productLogins();
-        expect(logins.map((login) => login.role)).toEqual(["identity_app", "identity_platform", "assets_app", "assets_platform"]);
+        expect(logins.map((login) => login.role)).toEqual([
+          "identity_app",
+          "identity_platform",
+          "assets_app",
+          "assets_platform",
+          "certs_app",
+        ]);
         for (const login of logins) {
           expect(firstState.credentials.services[login.stateKey].user).toBe(login.role);
           expect(firstState.credentials.services[login.stateKey].password).toMatch(/^[0-9a-f]{64}$/);

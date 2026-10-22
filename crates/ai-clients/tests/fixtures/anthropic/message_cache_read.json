@@ -1,0 +1,26 @@
+{
+  "id": "msg_01Hh3Nq5PrjFAuYxEQ2kGvWZ",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "Yes. All twelve meters on floor 3 reported in the last hour."
+    }
+  ],
+  "model": "claude-opus-5-5",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+    "input_tokens": 50,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 100000,
+    "cache_creation": {
+      "ephemeral_5m_input_tokens": 0,
+      "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 37,
+    "service_tier": "standard"
+  }
+}

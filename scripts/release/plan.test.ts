@@ -235,6 +235,26 @@ describe("makePlan", () => {
     await expect(plan(root, "latest")).rejects.toThrow("is not a release tag");
   });
 
+  test("plans a Rust image with a static project, and refuses one the build cannot install", async () => {
+    // Laysi/trustiot-v2#123: the web image holds the SPA's build output.
+    const { root } = repo();
+    mkdirSync(join(root, "deploy/images/web"), { recursive: true });
+    mkdirSync(join(root, "frontend"), { recursive: true });
+    writeFileSync(join(root, "deploy/images/web/image.toml"), '[rust]\npackage = "web"\n\n[static]\nproject = "frontend"\n');
+    writeFileSync(join(root, "frontend/package.json"), JSON.stringify({ scripts: { build: "vite build", "check:dist": "bun check.ts" } }));
+    await expect(plan(root, "v0.3.0-rc.1", true)).rejects.toThrow("the [static] project frontend has no bun.lock");
+    writeFileSync(join(root, "frontend/bun.lock"), "{}\n");
+    const result = await plan(root, "v0.3.0-rc.1", true);
+    expect(result.images.find((image) => image.name === "web")).toEqual({
+      name: "web",
+      kind: "rust",
+      package: "web",
+      staticSite: "frontend",
+      repository: `${REGISTRY}/web`,
+      ref: `${REGISTRY}/web:0.3.0-rc.1`,
+    });
+  });
+
   test("refuses a Containerfile that runs a program in the image's stage", async () => {
     // Laysi/trustiot-v2#310: on the arm64 runner such a RUN would run, but x86 machines could
     // not build the image without an emulator.

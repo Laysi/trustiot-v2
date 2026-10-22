@@ -11,7 +11,7 @@ mod common;
 use common::{at, data_point, device, model, point, sample};
 use protocol::config::{
     ByteOrder, ConfigReport, DataType, DesiredConfig, Device, FunctionCode, Host, MAX_DEVICES,
-    MAX_REPORT_ISSUES, Transport,
+    MAX_REPORT_ISSUES, Transport, validate_model_points,
 };
 use protocol::health::{Heartbeat, LastFailure, MAX_FAILURE_DETAIL_BYTES, Status};
 use protocol::live::{LiveAction, LiveControl, LiveSamples, LiveSpec, MAX_LIVE_DEVICES};
@@ -207,6 +207,79 @@ fn points_in_different_address_spaces_never_overlap() {
         IssueCode::OverlappingPoints,
         "models[0].points[4].address",
     );
+}
+
+/// `DeviceModel::validate`, which the assets service runs on every write of a model, applies
+/// the configuration's data point rules with paths from the model, and finds exactly what the
+/// configuration check finds for that model.
+#[test]
+fn a_model_alone_is_checked_with_the_configuration_rules() {
+    let config = common::desired_config();
+    for model in &config.models {
+        assert_eq!(model.validate(), Ok(()), "{}", model.name);
+    }
+
+    let mut config = common::desired_config();
+    let mut string = data_point(
+        "label",
+        FunctionCode::ReadHoldingRegisters,
+        40,
+        DataType::String,
+    );
+    string.length = None;
+    let mut scaled = data_point("flag", FunctionCode::ReadCoils, 0, DataType::Bool);
+    scaled.scale = Some(0.1);
+    config.models[0].points = vec![
+        data_point("a", FunctionCode::ReadHoldingRegisters, 0, DataType::U32),
+        data_point("b", FunctionCode::ReadHoldingRegisters, 1, DataType::U16),
+        data_point("a", FunctionCode::ReadInputRegisters, 0, DataType::U16),
+        data_point("c", FunctionCode::ReadCoils, 1, DataType::U16),
+        data_point("d", FunctionCode::ReadInputRegisters, 65_535, DataType::U32),
+        string,
+        scaled,
+    ];
+    let found = config.models[0]
+        .validate()
+        .expect_err("the model is invalid")
+        .into_issues();
+    assert_eq!(
+        validate_model_points(&config.models[0].points)
+            .expect_err("the points are invalid")
+            .into_issues(),
+        found,
+        "the model's check is the check of its points"
+    );
+    for (code, path) in [
+        (IssueCode::OverlappingPoints, "points[1].address"),
+        (IssueCode::Duplicate, "points[2].key"),
+        (IssueCode::FunctionTypeMismatch, "points[3].data_type"),
+        (IssueCode::AddressOutOfRange, "points[4].address"),
+        (IssueCode::MissingLength, "points[5].length"),
+        (IssueCode::InvalidScaling, "points[6].scale"),
+    ] {
+        has(&found, code, path);
+    }
+    // The overlap names the other point from the model too.
+    let overlap = found
+        .iter()
+        .find(|issue| issue.code == IssueCode::OverlappingPoints)
+        .expect("the overlap");
+    assert!(
+        overlap.message.ends_with("overlaps points[0]"),
+        "{overlap:?}"
+    );
+    // The configuration reports the same issues under models[0].
+    let in_config = issues(&config);
+    let prefixed: Vec<String> = found
+        .iter()
+        .map(|issue| format!("{} models[0].{}", issue.code, issue.path))
+        .collect();
+    let configured: Vec<String> = in_config
+        .iter()
+        .filter(|issue| issue.path.starts_with("models[0]."))
+        .map(|issue| format!("{} {}", issue.code, issue.path))
+        .collect();
+    assert_eq!(prefixed, configured);
 }
 
 #[test]
