@@ -1,6 +1,6 @@
 # 展示環境 runbook
 
-展示切片（[里程碑](../roadmap/milestones.md)「展示切片」，epic Laysi/trustiot-v2#456）的展示環境（Laysi/trustiot-v2#457）跑在展示機（lab 的 Mac mini M1，Fedora Asahi Remix、k3s、aarch64）。本文目前寫對外的入口：展示用的 Cloudflare Tunnel、展示機上的 connector 與 app 主機名稱前的 Cloudflare Access（Laysi/trustiot-v2#466），以及外寄郵件與 Anthropic 金鑰（Laysi/trustiot-v2#468）。部署、更新、重設資料與共用叢集的注意事項由 Laysi/trustiot-v2#469 補上。
+展示切片（[里程碑](../roadmap/milestones.md)「展示切片」，epic Laysi/trustiot-v2#456）的展示環境（Laysi/trustiot-v2#457）跑在展示機（lab 的 Mac mini M1，Fedora Asahi Remix、k3s、aarch64）。本文目前寫對外的入口：展示用的 Cloudflare Tunnel、展示機上的 connector 與 app 主機名稱前的 Cloudflare Access（Laysi/trustiot-v2#466），以及外寄郵件與 Anthropic 金鑰（Laysi/trustiot-v2#468）。本文也寫展示環境的部署、打開切片的服務、換 chart 版本、重設展示資料、金鑰輪替，以及與 lab e2e 共用叢集的注意事項（Laysi/trustiot-v2#469）。
 
 三個主機名稱（app、gateway、ota）都是同一個 zone 的一層子網域（Free 方案的 Universal SSL 只涵蓋一層）。主機名稱與 zone 都不寫進公開的 repo、issue 與 PR（[密鑰與權限](../architecture/secrets.md)「公開 repo 的資訊規則」；`scripts/demo/public-text.test.ts` 檢查本文與 `scripts/demo/` 只出現允許的網域）。文中稱「app 主機名稱」「gateway 主機名稱」「ota 主機名稱」；指令用 `DEMO_APP_HOST`、`DEMO_GATEWAY_HOST`、`DEMO_OTA_HOST`，展示機的 ssh 主機用 `DEMO_SSH_HOST`，由執行的人在自己的終端機設定。
 
@@ -42,6 +42,225 @@
   Service 被刪掉重建後仍拿回同一個位址，路由不用改，舊位址也不會被別的 Service 拿走而經 gateway 主機名稱那兩條略過 Access 的路徑（下面「只有閘道器的固定路徑略過 Access」）公開。要換位址時，路由不能指向已釋放的位址：先把指向入口的路由改回 `http_status:418`，再照 `deploy/chart/README.md` 的「固定的入口 ClusterIP」的「改位址」改 values 並重建 Service，等新的 Service 拿到新位址、Gateway 為 `Programmed` 之後，照上面的步驟以 `route-origin` 的輸出把路由改到新位址（README 的步驟裡，改回 418 排在 values 部署之後、刪除 Service 之前，縮短斷線時間）。
 - **三個主機名稱都在 Access 後面**：切片延後了限流、停權、AI 額度、分析護欄與注入題庫，展示期間以 Access 補上（[里程碑](../roadmap/milestones.md)的延後項目表）。chart 依主機名稱掛路由（`deploy/chart/templates/_ingress.tpl`），主機名稱來自 CI 讀不到的 SOPS 加密 values；把 chart values 裡 app 與 gateway 的主機名稱對調的變更在 CI 仍會通過，而 tunnel 把三個主機名稱都送到同一個入口，對調後 app（含登入頁）就會出現在沒有 Access 的主機名稱上。所以 Access 不能只放在 app 主機名稱：一個 self-hosted application 涵蓋三個主機名稱，只允許 Google 登入，policy 只放行一個 Access group（受邀名單），並另以 `require` 要求登入方式是那個 Google identity provider。application 開啟 binding cookie（`enable_binding_cookie`，`CF_Binding`）：session cookie 被複製到別的瀏覽器時不能用。依 Cloudflare 的文件，這個設定不適合非瀏覽器的工具；需要 session 的請求都來自瀏覽器（app 本身的 API 與 WebSocket 都由同一個瀏覽器帶著 cookie 發出），閘道器只用下面略過 Access 的路徑，所以開啟。日後若有 service token 的 client，每個請求都要帶 service token 的標頭，不能依賴 `CF_Authorization` cookie。
 - **只有閘道器的固定路徑略過 Access**：閘道器過不了 Access，靠內層 mTLS（[部署與可搬移性](../architecture/deployment.md)）。略過的路徑正是 chart 不需要 cookie 的 gateway 路徑（`ingress.publicPaths` 的 `certRenewal` 與 `mqtt`，都是完整路徑比對）：gateway 主機名稱的 `/certs/renew` 與 `/mqtt`，各以一個 self-hosted application 加上 Bypass policy。chart 目前沒有給 ota 主機名稱任何不需要 cookie 的路徑，所以 ota 主機名稱整個在 Access 後面；OTA client 的路徑加進 chart 的表時，同時加上它的 Bypass application 與下面的 tunnel 規則，並更新 `scripts/demo/tunnel.ts` 的 `BYPASS_PATHS`（測試核對它與 chart 的表一致）。Cloudflare 的 Access application 帶路徑時也涵蓋它下面的子路徑，同一個請求符合多個 application 時以路徑較具體的為準（[Application paths](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/)），所以 `/mqtt/x` 也會略過 Access；真正把略過限縮成完整路徑的是 tunnel：路由以錨定的路徑規則（`^/mqtt$`、`^/certs/renew$`，cloudflared 以 Go 的 regexp 比對路徑，不含 query string）把這兩個路徑送到入口而不要求 JWT，同一主機名稱的其他路徑與 app、ota 主機名稱一律設 `originRequest.access`：connector 也驗證 Access 的 JWT，沒有 JWT 的請求回 403。Access application 被誤刪或改壞時，這些主機名稱也是回 403 而不是變成公開。略過的路徑都不是 app 的路徑，也不是 app 路徑的前綴。閘道器的 WebSocket client 不送 User-Agent，所以以 configuration rule 對 gateway 主機名稱關掉 Browser Integrity Check。zone 的 Bot Fight Mode 在 Free 方案不能只對單一主機名稱略過；2026-10-20 決定先不動，以下方的 `check` 實測，被 challenge 或擋下時再由使用者決定是否關閉整個 zone 的設定。
+
+## 部署
+
+2026-10-22 的狀態：平台元件已與 repo 對齊（`scripts/demo/platform.ts`，Laysi/trustiot-v2#465）；Flux 已裝在展示叢集（Laysi/trustiot-v2#467，[測試報告](../test-reports/2026-10-22-467-demo-flux-install.md)），HelmRelease 釘在 chart `0.0.0-rc.10`，打開的服務是 `identity` 與 `assets`；tunnel 的路由已照「架構」的「路由」切到入口的固定 ClusterIP（第 2 段，Laysi/trustiot-v2#469）。之後展示環境的內容都由 main 決定：開 PR 改 `deploy/flux/clusters/demo/`，合併後 Flux 套用（GitRepository 每分鐘讀一次 main）。不要在叢集上直接改 Flux 管理的物件，下一次同步會改回去（[deploy/flux/README.md](../../deploy/flux/README.md)「日常操作」）。
+
+會寫入展示機或叢集的步驟，都由有展示機 SSH 權限的維運人員在持有 lab 鎖（展示機的 `~/e2e.lock`）時執行。腳本照 [scripts/README.md](../../scripts/README.md)「展示機（`demo/`）」的規則先印出計畫與確認碼，加上 `--apply --confirm <確認碼>` 才動手；本文寫成手動指令的步驟（重設展示資料、輪替 deploy key 與 age 金鑰）也要先取得 lab 鎖，鎖的擁有者寫成 `Laysi/trustiot-v2#<issue> <UTC 時間> demo <步驟>`，`<issue>` 是這次工作的 issue。
+
+從頭部署時（例如以 `flux.ts remove` 移除之後）的順序：
+
+1. connector 與主機基線：本文「安裝 connector」，路由先維持 `http_status:418`。
+2. 清除 PoC 與對齊平台元件：[scripts/README.md](../../scripts/README.md)「清除 PoC 與平台對齊的順序」。
+3. 叢集的 age 金鑰、pin PR、GHCR 拉取 token 與私有 values：[deploy/flux/README.md](../../deploy/flux/README.md)「展示叢集的 age 金鑰」與「在展示機安裝 Flux」的「順序」；移除後再裝的差異在同一節「移除」的最後兩段。
+4. deploy key 與 Flux：同一節的「步驟」（`flux.ts deploy-key`、`install`）。
+5. 路由切到入口：「架構」的「路由」的切換步驟（`route-origin`、讀回路由設定、`check --stage 2`）。
+
+隨時可以看的狀態（只讀，不取 lab 鎖）：
+
+```sh
+bun scripts/demo/flux.ts status --ssh-host "$DEMO_SSH_HOST"         # Flux 物件的 revision、部署中的 chart、Deployment 與 pod
+bun scripts/demo/tunnel.ts status --ssh-host "$DEMO_SSH_HOST"       # connector、維運 tunnel 與入口位址的比對
+bun scripts/demo/tunnel.ts route-origin --ssh-host "$DEMO_SSH_HOST" # 路由該指向的 origin
+```
+
+## 打開切片的服務
+
+切片的服務做完、進了某一版 chart 之後，照以下順序在展示環境打開它：
+
+1. **chart 有這個服務**：部署中的版本（`deploy/flux/clusters/demo/trustiot/chart.yaml` 的 `ref.tag`）的 git tag 裡，`deploy/chart/values.yaml` 有 `services.<服務>`、`deploy/images/` 有這個服務的目錄（`git show v<版本>:deploy/chart/values.yaml`）。沒有時先照下一節「換 chart 版本」。
+2. **服務自己的前提**：讀服務的 README 與 issue，找出啟用前要做的事（例如 certs 的 CA 儀式，[services/certs/README.md](../../services/certs/README.md)）、它要的 Secret（例如寄信的 `trustiot-smtp`、AI 閘道的 `trustiot-anthropic`，產生方式在 [deploy/flux/README.md](../../deploy/flux/README.md)「展示叢集」的 SOPS 表），以及它新增的不需要 cookie 的公開路徑（照「Access 名單」的「新的公開路徑」，Cloudflare 與 `scripts/demo/tunnel.ts` 一起改）。
+3. **記憶體**：在展示機上 `free -h` 確認放得下，也看「與 lab e2e 共用叢集」的記憶體一項。
+4. **PR**：照 [deploy/flux/README.md](../../deploy/flux/README.md)「日常變更」的「打開切片的服務」改 `values-demo.yaml`，Secret 的 SOPS 檔一起加進來並列進 `kustomization.yaml`。`bun test deploy/flux` 以 HEAD 的 chart 渲染，不是部署中的版本；兩者的 values 欄位不同時，另以部署中的版本 `helm template` 確認。審查後合併。
+5. **確認**：用 Postgres 的服務會改變 migration Job 的 spec，Job 重跑，每個服務跟著滾動重啟一次（[deploy/chart/README.md](../../deploy/chart/README.md)「migration Job」的「Job 何時再跑」），展示環境短暫中斷，所以不要排在展示前。以 `flux.ts status` 確認 HelmRelease 最新一筆是 `deployed`、每個 Deployment available，再跑 `tunnel.ts check --stage 2`，以受邀的帳號在瀏覽器走一次這個服務的功能。
+6. **退回**：revert 這個 PR。服務關掉後下一次 Job 讓它的登入角色 `NOLOGIN`，資料與它的密碼 Secret 留著（deploy/chart/README.md「migration Job」的「產生的密碼」）。
+
+## 換 chart 版本
+
+改 `deploy/flux/clusters/demo/trustiot/chart.yaml` 的 PR 有兩種：release.yml 開的 deploy PR（可能同時移動 SaaS 與展示叢集），以及 `bun scripts/flux/pin-chart.ts --cluster demo --version <版本> --digest <chart digest>` 只換展示叢集的 pin PR（[deploy/flux/README.md](../../deploy/flux/README.md)「發版與回滾」與「日常變更」）。
+
+Laysi/trustiot-v2#500（commit `26b454d`）起，入口的跨站請求檢查要 istiod 依 `deploy/istio/istiod-values.yaml` 的 `includeRequestHeadersInCheck` 把 `origin` 與 `sec-fetch-site` 交給 ext_authz。istiod 沒有對齊時身分服務看不到這兩個標頭，跨站請求一律放行，不報錯也不留紀錄（[deploy/istio/README.md](../../deploy/istio/README.md)「ext_authz provider」）。所以 2026-10-22 決定：每次換版都先比對新舊版本的 istiod values，有改就先對齊 istiod，再合併 pin PR。展示叢集的 `0.0.0-rc.10` 不含 `26b454d`，第一次換到 rc.10 之後的版本一定要做第 2 步。合併任何一種 PR 之前：
+
+1. **比對 istiod 的 values**：`git fetch origin --tags`，比對部署中的版本（`chart.yaml` 的 `ref.tag`）與新版本：
+
+   ```sh
+   git diff v<部署中的版本> v<新版本> -- deploy/istio/istiod-values.yaml
+   ```
+
+   沒有輸出就跳到第 3 步。
+2. **對齊 istiod**：在 main 的乾淨 checkout 先確認 main 的這個檔與新版本的相同（`git diff v<新版本> origin/main -- deploy/istio/istiod-values.yaml` 沒有輸出；不同時停下，在換版的 issue 寫明差異再決定），再照 [scripts/README.md](../../scripts/README.md)「`demo/platform.ts`：平台元件與 repo 的釘選對齊」執行：
+
+   ```sh
+   bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST"                            # 檢查、計畫與確認碼，只讀
+   bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST" --apply --confirm <確認碼>
+   bun scripts/demo/platform.ts --ssh-host "$DEMO_SSH_HOST"                            # 確認：nothing to change
+   ```
+
+   計畫印出 istiod values 改前與改後的文字，確認改後的包含第 1 步看到的變更。lab 的入口 e2e 正疊著 `HelmChartConfig istiod` 時 `--apply` 拒絕，等它測完再做。計畫若還列出其他差異（Istio、Gateway API、CloudNativePG 的版本），照該元件的 README 處理，並先看「與 lab e2e 共用叢集」。最後一次 dry run 沒有差異之前，不合併 pin PR。
+3. **合併並確認**：合併 PR 後，`flux.ts status` 印出 `deployed: the same (<新版本>+<digest 前 12 位> (deployed))`、每個 Deployment available；`tunnel.ts route-origin` 仍然通過（入口的 ClusterIP 由 values 固定，Service 重建後也拿回同一個位址），再跑 `check --stage 2`。
+
+換版時 migration Job 重跑，每個服務與 ClickHouse（init container 用 migration 映像）都重啟一次（[deploy/chart/README.md](../../deploy/chart/README.md)「叢集內的 ClickHouse」），展示環境短暫中斷，不要排在展示前。
+
+退回是 revert 那個 PR。對齊 istiod 本來就排在升級 chart 之前，新的 istiod values 與舊版 chart 會同時存在一段時間，所以 revert 不必同時退回 istiod；確實要退回時用 `platform.ts --rollback`（條件見 scripts/README.md 同一節）。
+
+## 重設展示資料
+
+里程碑「展示切片」接受展示資料遺失（沒有備份），但展示要靠累積一兩週的真實資料（同一節的「資料面先通」），重設會把累積的資料一起清掉。所以只在必要時重設（例如資料被測試弄亂），先在 issue 寫明原因並經使用者同意。
+
+資料在 namespace `trustiot` 的兩個磁碟區（local-path，PV 的 reclaim policy 是 `Delete`，PVC 刪掉時資料目錄一起刪除）。兩個一起重設：只清一個時，留下的那邊可能指向已經不存在的租戶或設備。
+
+| 資料 | 物件 |
+| --- | --- |
+| Postgres：每個服務的資料（帳號、租戶、session，以及之後各服務的資料） | CloudNativePG 的 Cluster `trustiot-postgres` 與它的 PVC（label `cnpg.io/cluster=trustiot-postgres`） |
+| ClickHouse：遙測與日誌 | StatefulSet `trustiot-clickhouse` 的 PVC `data-trustiot-clickhouse-0` |
+
+不刪的東西：
+
+- namespace `trustiot` 本身與其他物件：Flux 的 OCIRepository 與 HelmRelease、Flux 從 git 解密的 Secret（`ghcr-pull`、`trustiot-demo-values` 等）、Helm 的 release 紀錄、入口的 Gateway 與 Istio 為它產生的 Service（tunnel 的路由指向它的固定 ClusterIP）。刪 namespace 會連這些一起刪掉。
+- chart 在叢集內產生、帶 `helm.sh/resource-policy: keep` 的 Secret 與 ConfigMap：服務與 collector 的密碼、ClickHouse 管理帳號的密碼、內部身分簽章金鑰與公鑰（之後啟用 certs 時還有簽發 CA 的金鑰）。它們不是展示資料，新的資料庫照樣用它們：migration Job 以 Secret 裡的密碼建立角色（[deploy/chart/README.md](../../deploy/chart/README.md)「migration Job」的「產生的密碼」）。ImageCatalog `trustiot-postgres` 與 Database `trustiot-postgres-trustiot` 也不另外刪。
+- 其他 namespace（`flux-system`、`istio-system`、`cnpg-system`、`kube-system`、lab e2e 的），以及主機上的 connector 與維運 tunnel。
+
+刪掉資料之後要讓 migration Job 再跑一次：新的 Postgres 與 ClickHouse 是空的，而 Job 名稱沒變時已完成的 Job 不會重跑，服務的 init container 看到它已完成就啟動，服務就在沒有 schema 的資料庫上跑。所以調大 `migrate.revision`：Job 換名重跑，建立角色、schema、ClickHouse 的表與 collector 帳號，服務跟著滾動重啟（deploy/chart/README.md「migration Job」的「Job 何時再跑」）；同一次升級裡 Helm 也重建被刪掉的 Cluster 與 StatefulSet。HelmRelease 沒有開 drift detection，刪掉的物件要等下一次升級才會重建，所以順序是：暫停 Flux、刪資料、合併改 `migrate.revision` 的 PR、恢復 Flux。
+
+這個程序尚未在展示機實測：Helm 升級時重建被刪掉的 Cluster 與 StatefulSet、CloudNativePG 對新的 Cluster 重新套用 Database，都還沒在叢集上驗證。第一次照做時把每一步的輸出記進測試報告。
+
+由有展示機 SSH 權限的維運人員執行，PR 由另一位審查。以下 `kubectl` 都在展示機上以 `sudo k3s kubectl` 執行：
+
+1. **準備 PR**：在 `values-demo.yaml` 加上 `migrate.revision`，或把已有的值加一（目前沒有設，是 chart 預設的 `"1"`，所以第一次是 `"2"`）。CI 通過、審查完，先不合併。
+2. **取得 lab 鎖**：
+
+   ```sh
+   ssh "$DEMO_SSH_HOST" 'mkdir ~/e2e.lock && echo "Laysi/trustiot-v2#<issue> $(date -u +%FT%TZ) demo data-reset" > ~/e2e.lock/owner && echo ACQUIRED || cat ~/e2e.lock/owner'
+   ```
+
+3. **暫停 Flux**，先根 Kustomization、再 HelmRelease（根 Kustomization 沒暫停時，kustomize-controller 下一次套用會清掉以 kubectl 寫的欄位，把 HelmRelease 的 `suspend` 改回 git 的樣子；[deploy/flux/README.md](../../deploy/flux/README.md)「在展示機安裝 Flux」）：
+
+   ```sh
+   kubectl -n flux-system patch kustomizations.kustomize.toolkit.fluxcd.io flux-system --type=merge -p '{"spec":{"suspend":true}}'
+   kubectl -n trustiot patch helmreleases.helm.toolkit.fluxcd.io trustiot --type=merge -p '{"spec":{"suspend":true}}'
+   kubectl -n trustiot get helmreleases.helm.toolkit.fluxcd.io trustiot    # READY 為 True：沒有進行中的升級
+   ```
+
+4. **刪 Postgres**：CloudNativePG 刪 Cluster 時連同 pod、PVC 與它產生的 Secret（`trustiot-postgres-app` 等）一起刪；PVC 在 pod 停止之後才在背景刪掉（deploy/chart/README.md「叢集內的 Postgres」的「刪除」）：
+
+   ```sh
+   kubectl -n trustiot delete clusters.postgresql.cnpg.io trustiot-postgres
+   kubectl -n trustiot get pod,pvc -l cnpg.io/cluster=trustiot-postgres    # 重複到兩者都沒有為止
+   ```
+
+   Postgres 的 pod 已經不在而 PVC 還在、也沒有標示刪除中時（與 chart README 寫的不同），以 `kubectl -n trustiot delete pvc -l cnpg.io/cluster=trustiot-postgres` 明確刪除，記進測試報告。
+
+5. **刪 ClickHouse**：StatefulSet 刪除時保留 PVC（`whenDeleted: Retain`），pod 還在時 PVC 也刪不掉，所以先刪 StatefulSet、等 pod 消失，再刪 PVC：
+
+   ```sh
+   kubectl -n trustiot delete statefulset trustiot-clickhouse
+   kubectl -n trustiot get pod trustiot-clickhouse-0                  # 重複到 NotFound
+   kubectl -n trustiot delete pvc data-trustiot-clickhouse-0
+   kubectl get pv | grep 'trustiot/'                                   # 這兩個 PVC 的 PV 都不在
+   ```
+
+6. **合併 PR，恢復 Flux**，先 HelmRelease（values 還沒變，不升級）、再根 Kustomization，並立刻同步。根 Kustomization 套用新的 `values-demo.yaml` 後，helm-controller 隨即升級：
+
+   ```sh
+   kubectl -n trustiot patch helmreleases.helm.toolkit.fluxcd.io trustiot --type=merge -p '{"spec":{"suspend":false}}'
+   kubectl -n flux-system patch kustomizations.kustomize.toolkit.fluxcd.io flux-system --type=merge -p '{"spec":{"suspend":false}}'
+   kubectl -n flux-system annotate --overwrite gitrepository/flux-system reconcile.fluxcd.io/requestedAt="$(date +%s)"
+   ```
+
+7. **確認**：`flux.ts status` 的根 Kustomization 停在合併的 commit、HelmRelease 與 Kustomization 都沒有暫停、每個 Deployment available；`kubectl -n trustiot get helmreleases.helm.toolkit.fluxcd.io trustiot` 的 READY 為 True，訊息是這次的升級；`kubectl -n trustiot get cluster trustiot-postgres` 的 STATUS 是 `Cluster in healthy state`，`kubectl -n trustiot get database trustiot-postgres-trustiot` 的 APPLIED 是 `true`；`kubectl -n trustiot get jobs` 有完成的 `trustiot-migrate-<新的 hash>`；`kubectl -n trustiot get pvc` 有新的兩個 PVC。最後跑 `tunnel.ts check --stage 2`。升級失敗時看 `describe helmrelease` 與 Job 的日誌（deploy/chart/README.md「migration Job」的「失敗時」）。
+8. **重建帳號與租戶**：repo 沒有展示環境的種子資料（`bun scripts/dev.ts seed` 只給本機的開發環境），使用者、租戶與成員資格照它們第一次建立的方式重建。所有 session 都已失效，受邀的人要重新登入 app（Access 的 session 不受影響）。
+9. **釋放 lab 鎖**，在重建完成之後：
+
+   ```sh
+   ssh "$DEMO_SSH_HOST" 'grep -q "^Laysi/trustiot-v2#<issue> " ~/e2e.lock/owner && rm -rf ~/e2e.lock'
+   ```
+
+第 4 步之後就只能往前做完：資料刪掉之後，只有改 `migrate.revision` 的升級會重建資料庫並重跑 Job。中途停下時展示環境中斷（服務連不上資料庫），但不會再壞下去，從停下的那一步接著做。第 4 步之前放棄時，照第 6 步恢復 Flux（不合併 PR）。
+
+## 金鑰輪替
+
+| 金鑰 | 怎麼輪替 |
+| --- | --- |
+| Resend 與 Anthropic 的 API key | 本文「外寄郵件與 Anthropic 金鑰」的「輪替 Resend 與 Anthropic 金鑰」 |
+| GHCR 拉取 token | 下方「輪替 GHCR 拉取 token」 |
+| Flux 讀 repo 的憑證（deploy key） | 下方「輪替 Flux 的 deploy key」 |
+| 叢集的 age 金鑰 | 下方「輪替叢集的 age 金鑰」 |
+| tunnel token | 本文「輪替 tunnel token」 |
+| chart 在叢集內產生的密碼與金鑰（服務與 collector 的密碼、ClickHouse 管理帳號的密碼、內部身分簽章金鑰） | 與 SaaS 相同，在 `values-demo.yaml` 調大對應的代（`migrate.passwordGeneration`、`clickhouse.bundled.adminPasswordGeneration`、`internalIdentity.keyGeneration`），步驟與影響在[密鑰輪替 runbook](secrets.md) 的各節 |
+
+外洩時先照密鑰輪替 runbook 的「外洩處理」止血。repo 是公開的：SOPS 檔的舊版本永遠留在 git 歷史，用當時的收件者私鑰就解得開，所以 age 金鑰外洩時，以它加密過的每一個值都要輪替。
+
+### 輪替 GHCR 拉取 token
+
+token 一年到期，在到期前 14 天輪替（建立的人在團隊行事曆記下提醒）。步驟照[密鑰輪替 runbook](secrets.md)「GHCR 拉取 token」：以 `ghcr-pull-secret.ts --cluster demo` 重寫 `ghcr-pull.sops.yaml`、開 PR 合併，確認 OCIRepository 與 kubelet 都拉得到之後，才在 GitHub 刪除舊 token。
+
+- 新 token 同樣是一位組織成員的 classic token，只勾 `read:packages`，以 [deploy/flux/README.md](../../deploy/flux/README.md)「GHCR 拉取 token」第 2 步確認只有這個 scope。帶 `repo` 或任何寫入 scope 的 token 絕不放進叢集或 SOPS 檔。換人建立時，挑看得到的 repo 最少的成員。
+- runbook 第 4 步的一次性 Pod 會寫入叢集，期間持有 lab 鎖。
+- 個人的 token 是暫時的做法：正式的 SaaS 叢集上線（MS4）前改用有唯讀機器帳號的 registry（Laysi/trustiot-v2#502，[CI 與發佈](../architecture/ci-release.md)「GHCR 套件的可見性」）。
+
+### 輪替 Flux 的 deploy key
+
+展示叢集的 deploy key 由 `flux.ts deploy-key` 在展示機上產生、不離開展示機；它不取代已經存在的 Secret，所以先刪舊的再產生新的（[deploy/flux/README.md](../../deploy/flux/README.md)「在展示機安裝 Flux」的「deploy key 換新」）。從刪除到 GitHub 加上新的公鑰之間，Flux 讀不到 main、不套用新的變更，正在跑的服務不受影響。`deploy-key` 只接受空著或屬於 Laysi/trustiot-v2#467 的 lab 鎖，所以這次的鎖以 #467 為擁有者。刪掉再產生的做法尚未在展示機實測。
+
+1. 取得 lab 鎖：`ssh "$DEMO_SSH_HOST" 'mkdir ~/e2e.lock && echo "Laysi/trustiot-v2#467 $(date -u +%FT%TZ) demo deploy-key-rotation" > ~/e2e.lock/owner && echo ACQUIRED || cat ~/e2e.lock/owner'`。
+2. 外洩時，先在 GitHub（Laysi/trustiot-v2 → Settings → Deploy keys）刪除舊的 key。
+3. 刪除舊的 Secret：`ssh "$DEMO_SSH_HOST" 'grep -q "^Laysi/trustiot-v2#467 " ~/e2e.lock/owner && sudo k3s kubectl -n flux-system delete secret flux-system'`。
+4. 產生新的：`bun scripts/demo/flux.ts deploy-key --ssh-host "$DEMO_SSH_HOST" --lock-held`，再加 `--apply --confirm <確認碼>`。在 GitHub 加上印出的公鑰（不勾 Allow write access），確認指紋相同；有 repo 管理權限的人以 GitHub API 確認它唯讀（`read_only` 是 `true`）。
+5. 立刻同步並確認：在展示機上 `sudo k3s kubectl -n flux-system annotate --overwrite gitrepository/flux-system reconcile.fluxcd.io/requestedAt="$(date +%s)"`，`flux.ts status` 的 GitRepository 是 `Ready=True`、停在 main 的 commit。
+6. 在 GitHub 刪除舊的 key（第 2 步還沒刪的話），釋放 lab 鎖：`ssh "$DEMO_SSH_HOST" 'grep -q "^Laysi/trustiot-v2#467 " ~/e2e.lock/owner && rm -rf ~/e2e.lock'`。
+
+### 輪替叢集的 age 金鑰
+
+展示叢集的 age 私鑰在展示機上產生，經管線直接寫進 `flux-system` 的 Secret `sops-age`，不落地、不離開展示機，也沒有備份（[deploy/flux/README.md](../../deploy/flux/README.md)「展示叢集的 age 金鑰」）。新的公鑰要等私鑰產生後才知道，所以順序是：在展示機上換掉 Secret 的內容，再開 PR 把 `.sops.yaml` 的 demo 收件者換成新的公鑰。從換掉 Secret 到 PR 合併之間，Flux 解不開 SOPS 檔、不套用新的變更，正在跑的服務不受影響（與遺失時的做法相同）。換掉 Secret 的指令尚未在展示機實測。
+
+1. 照「展示叢集的 age 金鑰」的前三段指令：在工作站建置 linux/arm64 的 age-keygen 並算出雜湊、取得 lab 鎖、把 age-keygen 送到展示機。
+2. 在展示機上比對雜湊，產生新的私鑰並以 `kubectl patch` 換掉現有 Secret `sops-age` 的 `age.agekey`（不建立 namespace，其他欄位不動），再從 Secret 算一次公鑰：
+
+   ```sh
+   ssh "$DEMO_SSH_HOST" 'set -eu
+     set -o pipefail
+     [ -d "${XDG_RUNTIME_DIR:?}" ]
+     grep -q "^Laysi/trustiot-v2#<issue> " ~/e2e.lock/owner || { echo "the lab lock is not held for this issue" >&2; exit 1; }
+     K="$XDG_RUNTIME_DIR/age-keygen"
+     P="$XDG_RUNTIME_DIR/age.pub"
+     cleanup() { rm -f "$K" "$P"; }
+     trap cleanup EXIT
+     echo "<雜湊>  $K" | sha256sum -c --quiet -
+     sudo k3s kubectl -n flux-system get secret sops-age -o name
+     key=$("$K" 2>"$P")
+     case "$key" in *AGE-SECRET-KEY-1*) ;; *) echo "age-keygen printed no key" >&2; exit 1;; esac
+     b64=$(printf "%s\n" "$key" | base64 -w0)
+     unset key
+     printf "{\"data\":{\"age.agekey\":\"%s\"}}" "$b64" | sudo k3s kubectl -n flux-system patch secret sops-age --type=merge --patch-file=/dev/stdin
+     unset b64
+     printed=$(sed -n "s/^Public key: //p" "$P")
+     derived=$(sudo k3s kubectl -n flux-system get secret sops-age -o "jsonpath={.data.age\.agekey}" | base64 -d | "$K" -y)
+     [ -n "$derived" ]
+     [ "$derived" = "$printed" ]
+     echo "Public key: $derived"'
+   ```
+
+   私鑰只在 shell 變數與管線裡：`printf` 是 shell 的內建指令，不出現在行程的指令列；patch 經 stdin 交給 `kubectl patch`，不印出也不寫檔。age-keygen 失敗或沒有印出私鑰時，在換掉 Secret 之前就停下。最後兩個比對失敗時，Secret 可能已經換成壞的，Flux 同樣解不開，修好原因後重跑這一段。之後釋放 lab 鎖（「展示叢集的 age 金鑰」的最後一段指令）。
+3. 開 PR：把 `.sops.yaml` demo 規則裡 `# cluster: demo` 那一行換成印出的公鑰，再由一位維運人員以自己的私鑰對每個 `deploy/flux/clusters/demo/trustiot/*.sops.yaml` 執行 `sops updatekeys -y`；外洩時再對每個檔 `sops rotate -i`，並照上面輪替其中的每一個值。合併。
+4. 確認：在展示機上 `sudo k3s kubectl -n flux-system annotate --overwrite kustomization/flux-system reconcile.fluxcd.io/requestedAt="$(date +%s)"`，`flux.ts status` 的根 Kustomization 是 `Ready=True`、停在合併的 commit。
+
+## 與 lab e2e 共用叢集
+
+展示機的 k3s 也是 lab e2e 唯一的叢集（[deploy/flux/README.md](../../deploy/flux/README.md)「展示叢集」）。
+
+- **同一把 lab 鎖**：lab e2e、展示機的腳本與本文的手動步驟都用展示機的 `~/e2e.lock`，以同一個 ssh 使用者登入（換一個使用者就看不到另一邊的鎖）。沒有持有鎖時，不寫叢集或主機。
+- **叢集層級的元件**：會動到 Istio（istiod 的 values、`HelmChartConfig istiod`、mesh 層級的設定、Istio 的升級）、CloudNativePG（operator 與 CRD）、Gateway API（CRD 與 GatewayClass）或 Flux（CRD 與 `flux-system`）的工作，開始前先確認不影響展示環境，並在 issue 寫明怎麼確認：這些是整個叢集共用的，展示環境的入口、資料庫與部署都在上面。已知的情形：
+  - 入口 e2e 以 `HelmChartConfig istiod` 加自己的 provider：名稱要用測試自己的，`extensionProviders` 要把 `trustiot-identity` 原樣複製進去，否則測試期間展示環境的入口對需要 cookie 的請求一律回 403；測完刪掉並比對 mesh（[deploy/chart/tests/e2e/README.md](../../deploy/chart/tests/e2e/README.md) 入口測試的前置條件 2）。它存在時 `platform.ts --apply` 拒絕執行。
+  - 展示機上 2026-10-10 PoC 的 Istio 檔案不能再以 `kubectl apply` 套用，否則 istiod 換回 PoC 的 provider（[deploy/istio/README.md](../../deploy/istio/README.md)「安裝（k3s）」）。
+  - Flux 的 lab e2e 在叢集有 Flux 時拒絕執行；要跑就得先以 `flux.ts remove` 移除展示環境的 Flux，展示環境在這段期間中斷，所以只在必要時這樣做（deploy/flux/README.md「在展示機安裝 Flux」的「移除」最後一段）。
+  - CloudNativePG 的 operator 與 CRD 的變更也作用在展示環境的 Postgres；Postgres e2e 用自己的 namespace 與 Cluster，不動 operator。
+  - 平台元件與 repo 釘選的版本以 `platform.ts` 的 dry run 比對；不一致時照該元件的 README 處理。
+- **namespace**：測試用 `e2e-<issue>`，不用 `trustiot` 或 `flux-system`，也不刪別人的 namespace。
+- **入口位址**：展示環境的入口固定在 `10.43.0.80`（Service 網段的靜態區段）；測試要指定 ClusterIP 時不用這個位址。
+- **tunnel**：維運 tunnel（`cloudflared.service`，ssh 經過它）與展示用的 connector（`cloudflared-demo.service`）不停也不重啟。
+- **閘道器**：lab 的閘道器兼作展示用閘道器，會中斷資料的 lab 測試要避開資料累積期與展示（[里程碑](../roadmap/milestones.md)「展示切片」的「資料面先通」）。
+- **記憶體**：lab e2e 與展示環境共用展示機的記憶體。跑 e2e 或打開新服務之前，在展示機上以 `free -h` 確認放得下；各 lab e2e 需要多少記憶體由 Laysi/trustiot-v2#493 補上。
 
 ## Cloudflare 上的設定
 
@@ -217,6 +436,7 @@ Laysi/trustiot-v2#113（限流）、Laysi/trustiot-v2#107（停權）、Laysi/tr
 1. tunnel 路由的 app 主機名稱拿掉 `originRequest.access`（先拿掉這一項，Access application 還在，主機名稱仍受保護）。
 2. Access application 改成只涵蓋 gateway 與 ota 主機名稱（不拿掉這兩個：主機名稱對調的風險與 app 的防護無關，見「架構」），刪掉只有 app 主機名稱用到的設定。
 3. 確認 app 主機名稱不再轉到 Access，登入頁由身分服務回應。tunnel、其他路由與 DNS 不變。
+4. 同一批變更把 `scripts/demo/tunnel.ts` 的 `check` 對 app 主機名稱 `/` 的預期從 `access` 改成到達入口，否則 `check --stage 2` 在這一項失敗；gateway 與 ota 主機名稱的預期不變。
 
 ## 外寄郵件與 Anthropic 金鑰
 

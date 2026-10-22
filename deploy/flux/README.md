@@ -326,7 +326,9 @@ age-keygen 的輸出不是終端機時，私鑰寫到管線、`Public key: …` 
         models: [anthropic/claude-sonnet-5-5]
   ```
 
-- **換版**：同 SaaS（上方「發版與回滾」），或以 `pin-chart.ts` 只換展示叢集。
+- **換版**：同 SaaS（上方「發版與回滾」），或以 `pin-chart.ts` 只換展示叢集。合併之前先照[展示環境 runbook](../../docs/runbooks/demo-environment.md)「換 chart 版本」比對新舊版本的 `deploy/istio/istiod-values.yaml`，有改就先對齊 istiod。
+
+打開服務、換版、重設展示資料、金鑰輪替與共用叢集的完整步驟在[展示環境 runbook](../../docs/runbooks/demo-environment.md)。
 
 ### 在展示機安裝 Flux
 
