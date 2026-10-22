@@ -53,6 +53,10 @@
   "device_model.format_unsupported": "This file isn't a device model exported from TrustIoT.",
   "device_model.format_version_unsupported": "This device model file's format version isn't supported.",
 
+  "login.email_invalid": "Enter a valid email address.",
+  "login.code_invalid": "Enter the whole code from the email.",
+  "login.redirect_invalid": "The page to return to after signing in isn't on this site.",
+
   "nav.home": "Home",
 
   "tenant_switcher.label": "Organization",

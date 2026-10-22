@@ -96,6 +96,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/identity/v1/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Logs out on every device: revokes every session of the user, this one included. */
+        delete: operations["logOutEverywhere"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/identity/v1/sessions/current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Logs out: revokes the session of the request's cookie. */
+        delete: operations["logOut"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/identity/v1/tenants": {
         parameters: {
             query?: never;
@@ -107,6 +141,23 @@ export interface paths {
         put?: never;
         /** Creates a tenant. Platform administrators only. */
         post: operations["createTenant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Logs in with an email code, in two steps (see the module documentation). */
+        post: operations["logIn"];
         delete?: never;
         options?: never;
         head?: never;
@@ -126,6 +177,24 @@ export interface components {
             created_at: string;
             /** @description The tenant's ID. */
             tenant_id: components["schemas"]["TenantId"];
+        };
+        /** @description The answer to `send_code`, the same whether or not a user has the address. */
+        CodeSent: {
+            /**
+             * Format: int32
+             * @description Digits in the code.
+             */
+            code_length: number;
+            /**
+             * Format: int64
+             * @description How long the code is valid, in seconds.
+             */
+            expires_in_secs: number;
+            /**
+             * Format: int64
+             * @description How long to wait before asking for another code, in seconds.
+             */
+            resend_after_secs: number;
         };
         /** @description The body of `POST /api/assets/v1/device-models`. Unknown fields are refused. */
         CreateDeviceModel: {
@@ -319,6 +388,27 @@ export interface components {
             field: string;
             /** @description The message the client shows next to the field. */
             message_key: components["schemas"]["MessageKey"];
+        };
+        /** @description The answer to a valid code; the session cookie is in `Set-Cookie`. */
+        LoggedIn: {
+            /** @description The validated `redirect_to`, or `/`. */
+            redirect_to: string;
+        };
+        /** @description The body of `POST /auth/login`: a JSON object that names one of the two steps in `step`. Any other field is refused. */
+        LoginRequest: {
+            /** @description The address to log in with. */
+            email: string;
+            /** @enum {string} */
+            step: "send_code";
+        } | {
+            /** @description The code, 8 digits. */
+            code: string;
+            /** @description The address the code was sent to. */
+            email: string;
+            /** @description Where to go after logging in: a path on this site such as `/devices?page=2`. Default `/`. */
+            redirect_to?: string | null;
+            /** @enum {string} */
+            step: "verify_code";
         };
         /**
          * @description Key of the translated message the client shows; never the message itself.
@@ -903,6 +993,78 @@ export interface operations {
             };
         };
     };
+    logOutEverywhere: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every session of the user is revoked; `Set-Cookie` clears the session cookie. The next request of any of them is refused. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed; nothing was revoked (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    logOut: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session is revoked; `Set-Cookie` clears the session cookie. Its next request is refused. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed; nothing was revoked (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     createTenant: {
         parameters: {
             query?: never;
@@ -962,6 +1124,75 @@ export interface operations {
                 };
             };
             /** @description The database failed; nothing was created (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    logIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description `verify_code`: the code matched. `Set-Cookie` holds the session cookie `__Host-trustiot-session` (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoggedIn"];
+                };
+            };
+            /** @description `send_code`: if a user has the address, a code is on its way. The same answer whether or not one has. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodeSent"];
+                };
+            };
+            /** @description A query string, a `Content-Type` other than `application/json`, a body over 4096 bytes, or a body that is not one of the two steps; unknown fields such as `password` are refused (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `verify_code`: no usable code for the address, or a wrong code (`unauthenticated`). A code dies after 5 attempts and 10 minutes. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The email is not an address (`/email`, `login.email_invalid`), the code is not 8 digits (`/code`, `login.code_invalid`), or `redirect_to` is not a path on this site (`/redirect_to`, `login.redirect_invalid`) (`validation_failed`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No usable SMTP relay is configured, too many codes are waiting to be sent, the signing keys have not been read, or the database failed; nothing changed (`unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;

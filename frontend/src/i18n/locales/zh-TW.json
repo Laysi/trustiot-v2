@@ -53,6 +53,10 @@
   "device_model.format_unsupported": "這個檔案不是 TrustIoT 匯出的設備型號。",
   "device_model.format_version_unsupported": "不支援這個設備型號檔案的格式版本。",
 
+  "login.email_invalid": "請輸入有效的 email 地址。",
+  "login.code_invalid": "請輸入 email 裡完整的驗證碼。",
+  "login.redirect_invalid": "登入後要回到的頁面不在這個網站上。",
+
   "nav.home": "首頁",
 
   "tenant_switcher.label": "組織",
