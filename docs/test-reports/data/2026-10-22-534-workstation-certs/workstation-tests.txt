@@ -1,0 +1,134 @@
+# Laysi/trustiot-v2#534: cargo test --locked -p certs --test workstation --test cross_tenant -- --nocapture --test-threads 1
+# and cargo test --locked -p testkit --test postgres_isolation a_suite_without_tenant_data -- --nocapture,
+# on the build host (CI=1, container tests run with rootless podman), 2026-10-22, branch feat/534-workstation-certs at c4ab26f.
+# Every key, certificate and token here was made at run time by the test; the CA is a throwaway test CA.
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.30s
+     Running tests/cross_tenant.rs (<host copy>/target/debug/deps/cross_tenant-e8da478d4a0b027a)
+
+running 1 test
+test every_relation_and_operation_the_service_has_is_declared ... result | subject | probe | outcome
+pass | certs.crls | coverage | exempt table: each issuing CA's current CRL, public data of the PKI; no tenant data
+pass | certs.issued_certificates | coverage | exempt table: the ledger of signed gateway and workstation certificates: serial numbers, the issuing CA's key id, the gateway id or workstation name, validity, the certificate and its revocation, which are public data of the PKI; no tenant id (a gateway's tenant is the assets service's assignment, workstations belong to the platform)
+pass | certs.trustiot_migrate_applied | coverage | exempt table: the migration Job's record of the files applied in this schema (crates/service-kit/sql/migration-records.sql): file names and SHA-256 hashes, no tenant data; the service role only reads it, for its readiness check
+pass | POST /api/certs/v1/workstation-certificates | coverage | exempt: issues a production workstation certificate: platform administrators only, no tenant data (tests/workstation.rs)
+pass | POST /api/certs/v1/workstation-certificates/{serial}/revoke | coverage | exempt: revokes a production workstation certificate: platform administrators only, no tenant data (tests/workstation.rs)
+pass | suite | declarations | no tenant data, every relation and operation exempt: the CA's ledger and CRLs are public PKI data of gateways and the platform's workstations, with no tenant id
+6 probes, 0 failed
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.91s
+
+     Running tests/workstation.rs (<host copy>/target/debug/deps/workstation-2cfb0ff297794787)
+
+running 4 tests
+test a_request_without_proof_of_possession_is_refused ... ok
+test only_platform_administrators_issue_and_revoke_and_the_crl_lists_a_revocation ... issued: {"serial":"547932ec1b51ce6d73ae5cac5f75716b","workstation":"line-a-ws-01","subject":"workstation:line-a-ws-01","ca_key_id":"27c2c9442d1eac39550eab4a7d9dbfe273749c9332a514e515cacf539a14ecc7","not_before":"2026-10-22T15:45:30Z","not_after":"2027-04-20T15:50:30Z","certificate":"-----BEGIN CERTIFICATE-----\nMIIB0DCCAXWgAwIBAgIQVHky7BtRzm1zrlysX3VxazAKBggqhkjOPQQDAjAsMSow\nKAYDVQQDDCFUcnVzdElvVCB0ZXN0IGlzc3VpbmcgQ0EgMSAyMjkwNzkwHhcNMjYx\nMDIyMTU0NTMwWhcNMjcwNDIwMTU1MDMwWjAjMSEwHwYDVQQDDBh3b3Jrc3RhdGlv\nbjpsaW5lLWEtd3MtMDEwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQpj/W8EFrR\n5v/dz9rH+/wZC47pIe3+mOvX6N3rFjdd7YbOany5Hy/vAc7BwglRfp4bsXvv7KGV\nN6VY3R9v6sI3o4GBMH8wHwYDVR0jBBgwFoAUJ8LJRC0erDlVDqtKfZ2/4nN0nJMw\nDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBStJlM1eY7aCQ/AdXzmwRRNKWzEGDAM\nBgNVHRMBAf8EAjAAMB8GA1UdJQQYMBYGFGmD28fz9pW58rHloI3qx57cj9IFMAoG\nCCqGSM49BAMCA0kAMEYCIQCUOXksLkCrUcxgntFQWc6zSBcvqGxgzlB+PFXBECNi\nAAIhAOBkFA0iUjK1OcXoN/kVhv0VXtDBZk1u2jmh6qC+QNf/\n-----END CERTIFICATE-----\n"}
+issue as no internal identity: 401 {"code":"unauthenticated","message_key":"error.unauthenticated"}
+revoke as no internal identity: 401 {"code":"unauthenticated","message_key":"error.unauthenticated"}
+issue as not a token: 401 {"code":"unauthenticated","message_key":"error.unauthenticated"}
+revoke as not a token: 401 {"code":"unauthenticated","message_key":"error.unauthenticated"}
+issue as signed by another key: 401 {"code":"unauthenticated","message_key":"error.unauthenticated"}
+revoke as signed by another key: 401 {"code":"unauthenticated","message_key":"error.unauthenticated"}
+issue as addressed to another service: 401 {"code":"unauthenticated","message_key":"error.unauthenticated"}
+revoke as addressed to another service: 401 {"code":"unauthenticated","message_key":"error.unauthenticated"}
+issue as expired: 401 {"code":"unauthenticated","message_key":"error.unauthenticated"}
+revoke as expired: 401 {"code":"unauthenticated","message_key":"error.unauthenticated"}
+issue as a tenant administrator: 403 {"code":"permission_denied","message_key":"error.permission_denied"}
+revoke as a tenant administrator: 403 {"code":"permission_denied","message_key":"error.permission_denied"}
+issue as a user without a tenant: 403 {"code":"permission_denied","message_key":"error.permission_denied"}
+revoke as a user without a tenant: 403 {"code":"permission_denied","message_key":"error.permission_denied"}
+issue as a platform administrator's token the assets service exchanged: 403 {"code":"permission_denied","message_key":"error.permission_denied"}
+revoke as a platform administrator's token the assets service exchanged: 403 {"code":"permission_denied","message_key":"error.permission_denied"}
+a CSR whose signature does not verify: 422 {"code":"validation_failed","message_key":"error.validation_failed","field_errors":[{"field":"/certificate_request","message_key":"workstation_certificate.request_signature_invalid"}]}
+a P-384 CSR: 422 {"code":"validation_failed","message_key":"error.validation_failed","field_errors":[{"field":"/certificate_request","message_key":"workstation_certificate.request_unsupported"}]}
+a subject of its own: 422 {"code":"validation_failed","message_key":"error.validation_failed","field_errors":[{"field":"/subject","message_key":"workstation_certificate.unknown_field"}]}
+revoked: {"serial":"547932ec1b51ce6d73ae5cac5f75716b","workstation":"line-a-ws-01","subject":"workstation:line-a-ws-01","ca_key_id":"27c2c9442d1eac39550eab4a7d9dbfe273749c9332a514e515cacf539a14ecc7","not_before":"2026-10-22T15:45:30Z","not_after":"2027-04-20T15:50:30Z","certificate":"-----BEGIN CERTIFICATE-----\nMIIB0DCCAXWgAwIBAgIQVHky7BtRzm1zrlysX3VxazAKBggqhkjOPQQDAjAsMSow\nKAYDVQQDDCFUcnVzdElvVCB0ZXN0IGlzc3VpbmcgQ0EgMSAyMjkwNzkwHhcNMjYx\nMDIyMTU0NTMwWhcNMjcwNDIwMTU1MDMwWjAjMSEwHwYDVQQDDBh3b3Jrc3RhdGlv\nbjpsaW5lLWEtd3MtMDEwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQpj/W8EFrR\n5v/dz9rH+/wZC47pIe3+mOvX6N3rFjdd7YbOany5Hy/vAc7BwglRfp4bsXvv7KGV\nN6VY3R9v6sI3o4GBMH8wHwYDVR0jBBgwFoAUJ8LJRC0erDlVDqtKfZ2/4nN0nJMw\nDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBStJlM1eY7aCQ/AdXzmwRRNKWzEGDAM\nBgNVHRMBAf8EAjAAMB8GA1UdJQQYMBYGFGmD28fz9pW58rHloI3qx57cj9IFMAoG\nCCqGSM49BAMCA0kAMEYCIQCUOXksLkCrUcxgntFQWc6zSBcvqGxgzlB+PFXBECNi\nAAIhAOBkFA0iUjK1OcXoN/kVhv0VXtDBZk1u2jmh6qC+QNf/\n-----END CERTIFICATE-----\n","revoked_at":"2026-10-22T15:50:30.760756Z","revocation_reason":"key_compromise"}
+the published CRL lists 547932ec1b51ce6d73ae5cac5f75716b (keyCompromise)
+ok
+test the_broker_accepts_a_gateway_certificate_and_refuses_a_workstation_certificate ... == gateway-accepted: accepted true
+status exit status: 0
+Client certs-test-gateway-accepted sending CONNECT
+Client certs-test-gateway-accepted received CONNACK (0)
+Client certs-test-gateway-accepted sending PUBLISH (d0, q0, r0, m1, 'certs/test', ... (5 bytes))
+Client certs-test-gateway-accepted sending DISCONNECT
+
+== gateway-revoked: accepted false
+status exit status: 7
+Client certs-test-gateway-revoked sending CONNECT
+OpenSSL Error while trying to get the error[0]: error:0A000414:SSL routines::ssl/tls alert certificate revoked
+Error: The connection was lost
+
+== workstation: accepted false
+status exit status: 7
+Client certs-test-workstation sending CONNECT
+OpenSSL Error while trying to get the error[0]: error:0A000413:SSL routines::ssl/tls alert unsupported certificate
+Error: The connection was lost
+
+== broker log
+1792684254: mosquitto version 2.1.2 starting
+1792684254: Config loaded from /run/trustiot/mosquitto.conf.
+1792684254: Bridge support available.
+1792684254: Persistence support available.
+1792684254: TLS support available.
+1792684254: TLS-PSK support available.
+1792684254: Websockets support available.
+1792684254: Opening ipv4 listen socket on port 8883.
+1792684254: mosquitto version 2.1.2 running
+1792684255: New connection from 127.0.0.1:52990 on port 8883.
+1792684255: New client connected from 127.0.0.1:52990 as certs-test-gateway-accepted (p4, c1, k60, u'gw-534-accepted').
+1792684255: No will message specified.
+1792684255: Client certs-test-gateway-accepted negotiated TLSv1.3 cipher TLS_AES_256_GCM_SHA384
+1792684255: Sending CONNACK to certs-test-gateway-accepted (0, 0)
+1792684255: Received PUBLISH from certs-test-gateway-accepted (d0, q0, r0, m0, 'certs/test', ... (5 bytes))
+1792684255: Received DISCONNECT from certs-test-gateway-accepted
+1792684255: Client certs-test-gateway-accepted [127.0.0.1:52990] disconnected.
+1792684255: New connection from 127.0.0.1:53004 on port 8883.
+1792684255: OpenSSL Error while trying to get the error[0]: error:0A000086:SSL routines::certificate verify failed
+1792684255: Client 127.0.0.1 [127.0.0.1:53004] disconnected: Protocol error.
+1792684255: New connection from 127.0.0.1:53016 on port 8883.
+1792684255: OpenSSL Error while trying to get the error[0]: error:0A000086:SSL routines::certificate verify failed
+1792684255: Client 127.0.0.1 [127.0.0.1:53016] disconnected: Protocol error.
+1792684254: Info: running mosquitto as user: mosquitto.
+
+ok
+test the_ca_decides_the_workstation_profile_and_a_tls_server_refuses_it ... rustls on the workstation certificate: invalid peer certificate: certificate does not allow extended key usage for client authentication, allows 2, 25, 966663265743491589
+ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.89s
+
+STEP certs-evidence rc=0
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.27s
+     Running tests/postgres_isolation.rs (<host copy>/target/debug/deps/postgres_isolation-11d73b6995d64a45)
+
+running 1 test
+result | subject | probe | outcome
+pass | public.example_items | coverage | declared table
+pass | api | coverage | no HTTP API: the database probes only
+pass | example_items | seed | 2 rows per tenant
+FAIL | suite | declarations | declared without tenant data (the service keeps public data only), but tenant tables or endpoints are declared
+pass | postgres | session as tenant A | the kit accepts the service role's session
+pass | example_items | read as tenant A | 2 rows visible, all own, none of tenant B
+pass | example_items | read without a tenant | no row visible
+pass | example_items | update own rows as tenant A | 2 rows reached, none of tenant B
+pass | example_items | move own rows into tenant B | refused (42501)
+pass | example_items | insert into tenant B | refused (42501)
+pass | postgres | session as tenant B | the kit accepts the service role's session
+pass | example_items | read as tenant B | 2 rows visible, all own, none of tenant A
+pass | example_items | update own rows as tenant B | 2 rows reached, none of tenant A
+pass | example_items | move own rows into tenant A | refused (42501)
+pass | example_items | insert into tenant A | refused (42501)
+15 probes, 1 failed
+result | subject | probe | outcome
+pass | public.example_catalogue | coverage | exempt table: a shared catalogue, no tenant data
+pass | GET /v1/catalogue | coverage | exempt: the shared catalogue, no tenant data
+FAIL | suite | declarations | nothing is declared, so nothing was tested
+3 probes, 1 failed
+result | subject | probe | outcome
+pass | public.example_catalogue | coverage | exempt table: a shared catalogue, no tenant data
+pass | GET /v1/catalogue | coverage | exempt: the shared catalogue, no tenant data
+pass | suite | declarations | no tenant data, every relation and operation exempt: the service keeps public data only
+3 probes, 0 failed
+test a_suite_without_tenant_data_passes_only_while_that_holds ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 3.05s
+
