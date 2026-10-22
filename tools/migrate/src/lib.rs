@@ -26,6 +26,10 @@ pub mod kube;
 pub mod passwords;
 pub mod postgres;
 pub mod registry;
+/// The raw data retention, the ingest service's file (compiled into the service as well): the
+/// run sets it as the TTL of the telemetry and completion tables (Laysi/trustiot-v2#92).
+#[path = "../../../services/ingest/src/retention.rs"]
+pub mod retention;
 pub mod secret;
 pub mod signing_keys;
 
@@ -130,6 +134,14 @@ pub fn sha256_hex(text: &str) -> String {
 /// fails. A failed Postgres file leaves nothing behind (one transaction per file); ClickHouse
 /// statements are idempotent, so the next run repeats a half-applied ClickHouse file.
 pub async fn run(config: &RunConfig, registry: &Registry) -> Result<Report, Error> {
+    // The setting was validated when it was loaded; checked again before anything changes, so a
+    // RunConfig built in code cannot skip it (Laysi/trustiot-v2#92).
+    let retention = config
+        .clickhouse
+        .as_ref()
+        .map(config::ClickHouseSettings::raw_retention)
+        .transpose()
+        .map_err(|invalid| Error::ClickHouse(format!("{}: {}", invalid.key, invalid.message)))?;
     postgres::check_registry(registry)?;
     postgres::check_password_bindings(config, registry)?;
     let mut report = Report::default();
@@ -146,11 +158,11 @@ pub async fn run(config: &RunConfig, registry: &Registry) -> Result<Report, Erro
     session
         .migrate(config, registry, &passwords, &mut report)
         .await?;
-    if let Some(settings) = &config.clickhouse {
+    if let (Some(settings), Some(retention)) = (&config.clickhouse, retention) {
         let client =
             clickhouse::ClickHouse::connect(config, settings, config.wait.databases).await?;
         client
-            .migrate(registry, passwords.collector(), &mut report)
+            .migrate(registry, retention, passwords.collector(), &mut report)
             .await?;
     } else {
         tracing::info!("no ClickHouse settings: the ClickHouse part is skipped");

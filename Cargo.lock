@@ -1109,6 +1109,7 @@ dependencies = [
 name = "ingest"
 version = "0.1.0"
 dependencies = [
+ "protocol",
  "reqwest",
  "serde_json",
  "tokio",
@@ -1228,6 +1229,7 @@ dependencies = [
  "identity-keys",
  "outbox",
  "percent-encoding",
+ "protocol",
  "rcgen",
  "rustls",
  "rustls-pki-types",
