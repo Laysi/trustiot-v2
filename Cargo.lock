@@ -7,8 +7,25 @@ name = "agent"
 version = "0.1.0"
 dependencies = [
  "protocol",
+ "socket2",
  "testkit",
  "tokio",
+]
+
+[[package]]
+name = "ai-clients"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "socket2",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "zeroize",
 ]
 
 [[package]]
@@ -246,6 +263,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
+name = "ca-keys"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "rcgen",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror",
+ "x509-parser",
+ "zeroize",
+]
+
+[[package]]
 name = "cbor4ii"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -263,6 +294,39 @@ checksum = "50a649af8a827553c29fb0cb4bd4a6f1a0dd695bd3232b9bc98bd9c8a3ffbb8b"
 dependencies = [
  "find-msvc-tools",
  "shlex",
+]
+
+[[package]]
+name = "certs"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "ca-keys",
+ "chrono",
+ "contract",
+ "getrandom 0.4.3",
+ "humantime",
+ "opentelemetry",
+ "opentelemetry-proto",
+ "prost",
+ "protocol",
+ "rcgen",
+ "reqwest",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "service-kit",
+ "sha2 0.11.0",
+ "sqlx",
+ "testkit",
+ "thiserror",
+ "time",
+ "tokio",
+ "tracing",
+ "x509-parser",
+ "zeroize",
 ]
 
 [[package]]
@@ -1109,6 +1173,7 @@ dependencies = [
 name = "ingest"
 version = "0.1.0"
 dependencies = [
+ "protocol",
  "reqwest",
  "serde_json",
  "tokio",
@@ -1218,6 +1283,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "ca-keys",
  "ed25519-dalek",
  "getrandom 0.4.3",
  "hmac",
@@ -1228,6 +1294,7 @@ dependencies = [
  "identity-keys",
  "outbox",
  "percent-encoding",
+ "protocol",
  "rcgen",
  "rustls",
  "rustls-pki-types",
@@ -1658,6 +1725,7 @@ dependencies = [
  "time",
  "x509-parser",
  "yasna",
+ "zeroize",
 ]
 
 [[package]]

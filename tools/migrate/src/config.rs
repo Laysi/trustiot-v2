@@ -10,6 +10,8 @@ use serde::Deserialize;
 use service_kit::config::{Invalid, Validate};
 use service_kit::postgres::{PostgresConfig, SslMode};
 
+use crate::retention::RawRetention;
+
 /// How long the Job waits by default for each database to accept it and for another run's lock.
 pub const DEFAULT_WAIT: Duration = Duration::from_secs(600);
 
@@ -93,6 +95,27 @@ pub struct ClickHouseSettings {
     /// refuses it (a rotation restarts ClickHouse with a new password).
     #[serde(default)]
     pub password_secret: Option<String>,
+    /// `TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS`: the raw data retention in days, which the run
+    /// sets as the TTL of `trustiot.telemetry` and `trustiot.batch_commits` (src/clickhouse.rs).
+    /// Unset: the platform value (`retention::RAW_RETENTION_DAYS`, 180 days). It must be longer
+    /// than the gateway buffer's maximum age, or the run stops before it changes anything
+    /// (Laysi/trustiot-v2#92, docs/architecture/data-retention.md). The chart does not set it;
+    /// a values key for on-premises deployments comes with Laysi/trustiot-v2#446.
+    #[serde(default)]
+    pub raw_retention_days: Option<u32>,
+}
+
+impl ClickHouseSettings {
+    /// The raw data retention the run applies: the setting, or the platform value.
+    ///
+    /// # Errors
+    ///
+    /// When the setting is not longer than the gateway buffer's maximum age, or implausibly long.
+    pub fn raw_retention(&self) -> Result<RawRetention, Invalid> {
+        self.raw_retention_days
+            .map_or(Ok(RawRetention::PLATFORM), RawRetention::from_days)
+            .map_err(|error| Invalid::new("clickhouse.raw_retention_days", error.to_string()))
+    }
 }
 
 impl fmt::Debug for ClickHouseSettings {
@@ -101,6 +124,7 @@ impl fmt::Debug for ClickHouseSettings {
             .field("username", &self.username)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .field("password_secret", &self.password_secret)
+            .field("raw_retention_days", &self.raw_retention_days)
             .finish()
     }
 }
@@ -414,6 +438,8 @@ impl Validate for RunConfig {
                     "must be a lower-case account name (letters, digits, _)",
                 ));
             }
+            // Checked at start, before the run touches either database.
+            clickhouse.raw_retention()?;
             match (&clickhouse.password, &clickhouse.password_secret) {
                 (Some(_), None) => {}
                 (None, Some(secret)) => {
@@ -772,6 +798,99 @@ impl Validate for SigningKeysConfig {
     }
 }
 
+/// Settings of `migrate certs-ca-keys`, the certs service's init container that keeps the
+/// issuing CA keys and their certificate signing requests (src/ca_keys.rs;
+/// Laysi/trustiot-v2#78).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaKeysConfig {
+    pub keys: CaKeySettings,
+}
+
+/// `keys.*` of `migrate certs-ca-keys`: the Secret and the ConfigMap, how to reach them, and
+/// what the chart asks for.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaKeySettings {
+    /// `TRUSTIOT__KEYS__API_URL`: the API server, `https://` (the chart sets
+    /// `https://kubernetes.default.svc`). `http://` is accepted for 127.0.0.1 only, for tests.
+    pub api_url: String,
+    /// `TRUSTIOT__KEYS__NAMESPACE`: the release namespace.
+    pub namespace: String,
+    /// `TRUSTIOT__KEYS__TOKEN_FILE`: the projected token of the certs service's ServiceAccount,
+    /// which only the init container mounts; read on every request.
+    pub token_file: PathBuf,
+    /// `TRUSTIOT__KEYS__CA_FILE`: the cluster CA (`kube-root-ca.crt`), the only trust anchor.
+    pub ca_file: PathBuf,
+    /// `TRUSTIOT__KEYS__SECRET`: the Secret the chart declares empty for the issuing CA keys.
+    pub secret: String,
+    /// `TRUSTIOT__KEYS__CONFIG_MAP`: the ConfigMap the chart declares empty for their
+    /// certificate signing requests.
+    pub config_map: String,
+    /// `TRUSTIOT__KEYS__GENERATION`: the chart's `certificateAuthority.keyGeneration`; a higher
+    /// one than every key in the Secret adds a key (a rotation).
+    pub generation: String,
+    /// `TRUSTIOT__KEYS__REMOVE_BEFORE_GENERATION`: the chart's
+    /// `certificateAuthority.removeKeysBeforeGeneration`; keys of a lower generation are removed.
+    #[serde(default = "no_revocation")]
+    pub remove_before_generation: String,
+    /// `TRUSTIOT__KEYS__WAIT`: how long it retries an API server that does not answer. Default
+    /// 10 minutes.
+    #[serde(
+        default = "default_wait",
+        deserialize_with = "service_kit::config::duration"
+    )]
+    pub wait: Duration,
+}
+
+impl Validate for CaKeysConfig {
+    fn validate(&self) -> Result<(), Invalid> {
+        let keys = &self.keys;
+        check_api_url("keys.api_url", &keys.api_url)?;
+        if !is_dns_label(&keys.namespace) {
+            return Err(Invalid::new(
+                "keys.namespace",
+                "must be a Kubernetes namespace name (DNS label)",
+            ));
+        }
+        for (key, name) in [
+            ("keys.secret", &keys.secret),
+            ("keys.config_map", &keys.config_map),
+        ] {
+            if !is_object_name(name) {
+                return Err(Invalid::new(
+                    key,
+                    "must be a Kubernetes object name (lower-case letters, digits, - and .)",
+                ));
+            }
+        }
+        let generation = crate::passwords::parse_generation(&keys.generation)
+            .filter(|generation| *generation >= 1)
+            .ok_or_else(|| {
+                Invalid::new(
+                    "keys.generation",
+                    "must be 1 to 9 decimal digits, at least 1 (generations are compared as \
+                     numbers and only go up)",
+                )
+            })?;
+        let remove_before = crate::passwords::parse_generation(&keys.remove_before_generation)
+            .ok_or_else(|| {
+                Invalid::new(
+                    "keys.remove_before_generation",
+                    "must be 1 to 9 decimal digits",
+                )
+            })?;
+        if generation < remove_before {
+            return Err(Invalid::new(
+                "keys.generation",
+                "must not be below keys.remove_before_generation, or the requested key would be \
+                 removed",
+            ));
+        }
+        check_wait("keys.wait", keys.wait)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -874,6 +993,7 @@ mod tests {
                 username: "trustiot_admin".to_owned(),
                 password: password.map(str::to_owned),
                 password_secret: password_secret.map(str::to_owned),
+                raw_retention_days: None,
             }),
             passwords: passwords.then(|| settings("", "")),
             wait: WaitSettings::default(),
@@ -972,6 +1092,86 @@ mod tests {
         assert_eq!(
             key(shared).as_deref(),
             Some("passwords.clickhouse_telemetry_query")
+        );
+    }
+
+    /// The raw data retention (Laysi/trustiot-v2#92): unset is the platform value; a setting that
+    /// is not longer than the gateway buffer's maximum age, or implausibly long, is refused at
+    /// start, as the environment variable the chart would set.
+    #[test]
+    fn the_raw_retention_must_outlast_the_gateway_buffer() {
+        use protocol::telemetry::BUFFER_MAX_AGE_DAYS;
+
+        use crate::retention::{MAX_RAW_RETENTION_DAYS, RAW_RETENTION_DAYS};
+
+        let with = |days: Option<u32>| {
+            let mut config = run_config(Some("a-password"), None, false);
+            if let Some(clickhouse) = config.clickhouse.as_mut() {
+                clickhouse.raw_retention_days = days;
+            }
+            config
+        };
+        let retention = |config: &RunConfig| {
+            config
+                .clickhouse
+                .as_ref()
+                .map(|clickhouse| clickhouse.raw_retention().map(RawRetention::days))
+        };
+        assert_eq!(retention(&with(None)), Some(Ok(RAW_RETENTION_DAYS)));
+        assert_eq!(RAW_RETENTION_DAYS, 180);
+        for days in [BUFFER_MAX_AGE_DAYS + 1, 365, MAX_RAW_RETENTION_DAYS] {
+            let config = with(Some(days));
+            assert!(config.validate().is_ok(), "{days} days");
+            assert_eq!(retention(&config), Some(Ok(days)));
+        }
+        for days in [0, 1, BUFFER_MAX_AGE_DAYS, MAX_RAW_RETENTION_DAYS + 1] {
+            let invalid = with(Some(days)).validate().expect_err("refused");
+            assert_eq!(invalid.key, "clickhouse.raw_retention_days", "{days} days");
+        }
+
+        // As the environment variable, loaded the way main() loads it: a configuration error
+        // (exit code 2) before anything runs, naming the key and the buffer's maximum age.
+        let vars = |days: &str| {
+            [
+                ("TRUSTIOT_POSTGRES_HOST", "postgres"),
+                ("TRUSTIOT_POSTGRES_PORT", "5432"),
+                ("TRUSTIOT_POSTGRES_DATABASE", "trustiot"),
+                ("TRUSTIOT_POSTGRES_SSLMODE", "verify-full"),
+                ("TRUSTIOT_POSTGRES_CA_FILE", "/ca.crt"),
+                ("TRUSTIOT_CLICKHOUSE_URL", "http://clickhouse:8123"),
+                ("TRUSTIOT__POSTGRES__USERNAME", "trustiot_owner"),
+                ("TRUSTIOT__POSTGRES__PASSWORD", "unused"),
+                ("TRUSTIOT__CLICKHOUSE__USERNAME", "trustiot_admin"),
+                ("TRUSTIOT__CLICKHOUSE__PASSWORD", "unused"),
+                ("TRUSTIOT__CLICKHOUSE__RAW_RETENTION_DAYS", days),
+            ]
+            .map(|(name, value)| (name.into(), value.into()))
+        };
+        let loaded = service_kit::config::load_from::<RunConfig, _>("TRUSTIOT", vars("181"))
+            .expect("181 days is accepted");
+        assert_eq!(
+            loaded
+                .app
+                .clickhouse
+                .as_ref()
+                .map(|clickhouse| clickhouse.raw_retention().map(RawRetention::days)),
+            Some(Ok(181))
+        );
+        for days in ["30", "7", "0"] {
+            let error = service_kit::config::load_from::<RunConfig, _>("TRUSTIOT", vars(days))
+                .expect_err("not longer than the gateway buffer");
+            let text = error.to_string();
+            assert!(
+                text.contains("clickhouse.raw_retention_days")
+                    && text.contains(&format!(
+                        "gateway buffer's maximum age of {BUFFER_MAX_AGE_DAYS} days"
+                    )),
+                "{days}: {text}"
+            );
+        }
+        assert!(
+            service_kit::config::load_from::<RunConfig, _>("TRUSTIOT", vars("-1")).is_err(),
+            "a negative retention is refused"
         );
     }
 

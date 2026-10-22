@@ -56,6 +56,8 @@ socket2 = "0.6.5"
 sqlx = { version = "0.9.0", default-features = false }
 syn = { version = "2.0.119", default-features = false }
 thiserror = "2.0.21"
+# rcgen's certificate times (OffsetDateTime).
+time = { version = "0.3.55", default-features = false }
 tokio = "1.53.2"
 tokio-modbus = { version = "0.17.0", default-features = false }
 tokio-rustls = { version = "0.26.4", default-features = false }
@@ -72,6 +74,8 @@ utoipa = "6.0.0"
 uuid = "1.28.0"
 # The empty stand-in below, for tests that check it is the one in use.
 webpki-roots = { path = "crates/webpki-roots-empty" }
+# Parses and verifies CSRs and certificates for the certs service (services/certs).
+x509-parser = { version = "0.18.1", default-features = false }
 zeroize = "1.9.1"
 
 # sqlx trusts webpki-roots (Mozilla's public roots) in addition to the configured Postgres CA, and

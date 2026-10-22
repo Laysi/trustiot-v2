@@ -12,7 +12,7 @@
  * The services of `PRODUCT`, in the registry's order: each has a `<schema>_app` login role.
  * Add a service here in the same change that adds it to `PRODUCT`.
  */
-export const PRODUCT_SERVICES: readonly string[] = ["identity", "assets", "telemetry-query"];
+export const PRODUCT_SERVICES: readonly string[] = ["identity", "assets", "telemetry-query", "certs"];
 
 /**
  * The services whose platform role logs in, as the chart binds them

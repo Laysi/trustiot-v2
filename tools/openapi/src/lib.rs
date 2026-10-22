@@ -72,6 +72,10 @@ pub const SERVICES_WITHOUT_API: &[&str] = &[
     // health endpoints (docs/architecture/deployment.md). Until Laysi/trustiot-v2#91 builds the
     // service, the crate only holds the ClickHouse schema.
     "ingest",
+    // The CA (Laysi/trustiot-v2#78): so far only the CRLs and the CA chain under /internal, for
+    // the MQTT broker, which are not part of the client API. The renewal endpoint
+    // (Laysi/trustiot-v2#81) moves it to SERVICES.
+    "certs",
 ];
 
 fn shared_schemas() -> OpenApi {

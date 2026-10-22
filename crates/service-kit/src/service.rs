@@ -65,6 +65,8 @@ pub struct Context<T> {
     tasks: TaskTracker,
     /// Cancelled when the drain timeout runs out: everything still running is cut off.
     halt: CancellationToken,
+    /// `http.request_timeout`, for the ports [`Context::serve_port`] adds.
+    request_timeout: Duration,
 }
 
 impl<T> Context<T> {
@@ -97,6 +99,41 @@ impl<T> Context<T> {
                 () = halt.cancelled() => {}
             }
         });
+    }
+
+    /// Serves `routes` on a port of their own, `listen_addr`, with the API port's layers: the
+    /// handler timeout (`http.request_timeout`), panic recovery, and request spans and access
+    /// logs. For an internal API the mesh grants apart from the service's API, such as the
+    /// identity service's token exchange (Laysi/trustiot-v2#106). The port stops accepting when
+    /// [`Shutdown::stopping`] resolves, like the API port, and the drain waits for its requests;
+    /// at the drain timeout they answer 504 like the API port's. Returns the bound address (port
+    /// 0 picks a free one).
+    ///
+    /// # Errors
+    ///
+    /// When `listen_addr` cannot be bound; the service should not start then.
+    pub async fn serve_port(
+        &self,
+        listen_addr: SocketAddr,
+        routes: Router,
+    ) -> Result<SocketAddr, BoxError> {
+        let listener = TcpListener::bind(listen_addr)
+            .await
+            .map_err(|error| format!("cannot listen on {listen_addr}: {error}"))?;
+        let address = listener.local_addr()?;
+        let router = http::layer(routes, self.request_timeout, self.halt.clone());
+        let stop = self.shutdown.clone();
+        // Tracked but not cut off at the halt (unlike `spawn`), so requests still in flight then
+        // get their 504 within the grace period, as on the API port.
+        self.tasks.spawn(async move {
+            let served = axum::serve(listener, router)
+                .with_graceful_shutdown(async move { stop.stopping().await })
+                .await;
+            if let Err(error) = served {
+                tracing::error!(address = %address, error = %error, "a port stopped serving");
+            }
+        });
+        Ok(address)
     }
 }
 
@@ -172,6 +209,7 @@ where
         shutdown: shutdown.clone(),
         tasks: tasks.clone(),
         halt: halt.clone(),
+        request_timeout: kit.http.request_timeout,
     };
 
     let routes = tokio::select! {
@@ -354,6 +392,7 @@ mod tests {
             shutdown: Shutdown::new(),
             tasks: tasks.clone(),
             halt: halt.clone(),
+            request_timeout: Duration::from_secs(30),
         };
         let dropped = Arc::new(AtomicBool::new(false));
         let flag = DropFlag(Arc::clone(&dropped));

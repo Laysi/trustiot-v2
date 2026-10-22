@@ -430,19 +430,46 @@ impl ClickHouse {
             .await
     }
 
+    /// Runs `query` as the admin account with ClickHouse query parameters.
+    pub async fn query_with(&self, query: &str, params: &[(&str, &str)]) -> Result<String, String> {
+        self.query_as_with(CLICKHOUSE_ADMIN, &self.admin_password, query, params)
+            .await
+    }
+
     pub async fn query_as(
         &self,
         user: &str,
         password: &str,
         query: &str,
     ) -> Result<String, String> {
+        self.query_as_with(user, password, query, &[]).await
+    }
+
+    /// Runs `query` as `user` with ClickHouse query parameters: `("days", "180")` fills
+    /// `{days:UInt32}`.
+    pub async fn query_as_with(
+        &self,
+        user: &str,
+        password: &str,
+        query: &str,
+        params: &[(&str, &str)],
+    ) -> Result<String, String> {
         let auth = migrate::http::Auth::Basic {
             username: user,
             password,
         };
+        let names: Vec<String> = params
+            .iter()
+            .map(|(name, _)| format!("param_{name}"))
+            .collect();
+        let pairs: Vec<(&str, &str)> = names
+            .iter()
+            .zip(params)
+            .map(|(name, (_, value))| (name.as_str(), *value))
+            .collect();
         let response = self
             .client
-            .post(&format!("{}/", self.url), &[], auth, query.to_owned())
+            .post(&format!("{}/", self.url), &pairs, auth, query.to_owned())
             .await
             .map_err(|error| error.to_string())?;
         if response.status.is_success() {
@@ -488,6 +515,7 @@ impl ClickHouse {
             username: CLICKHOUSE_ADMIN.to_owned(),
             password: Some(self.admin_password.clone()),
             password_secret: None,
+            raw_retention_days: None,
         }
     }
 }

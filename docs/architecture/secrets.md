@@ -45,7 +45,7 @@
 chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md](../../deploy/chart/README.md)：
 
 - values 只以名稱引用 Secret，values 沒有明文密鑰。
-- chart 不渲染任何密鑰值。它可以宣告空的 Secret，由叢集內的元件填入；目前只有 tools/migrate 的程式：migration Job（下方「migration Job 產生的密碼」）、叢集內 ClickHouse 的 init container（下方「叢集內 ClickHouse 管理帳號的密碼」）與身分服務的 init container 及金鑰輪替的 CronJob（下方「內部身分簽章金鑰」）。除了兩種 shape 的渲染，chart 也以每個可選元件都開啟的設定渲染：`values.yaml` 每個布林的 `enabled` 都設為 `true`，`values.schema.json` 每個 `mode` 的每個值各渲染一次，兩種 shape 涵蓋 `global.deploymentMode` 與 `ingress.exposure`；開關從 values 與 schema 讀出，新增的元件自動涵蓋（2026-10-14 起，Laysi/trustiot-v2#398）。渲染結果交給 `check-secret-handling.ts` 的同一條規則（每個 kind 都寫成 `kind: <Kind>`，Secret 只能是 tools/migrate 填的空 Secret），`scripts/ci/check-secret-handling.ts` 變動時也會觸發這個測試。測試檢查渲染出的每個 Secret 都沒有 `data`、`stringData`，都是 Job、ClickHouse 或身分服務的 init container 填入的那幾個，metadata 逐欄等於預期（名稱、chart 的標準標籤加 `trustiot.io/filled-by: migrate`、annotation 只有 `helm.sh/resource-policy: keep` 與說明；chart 不渲染 tools/migrate 自己寫的 annotation）；Job 的 Role 對 `secrets` 只有它填的那幾個的 `get`、`patch` 與 ClickHouse 管理帳號 Secret 的 `get`，ClickHouse 的 Role 只有它自己那一個的 `get`、`patch`，身分服務的 Role 只有簽章金鑰的 Secret 與公鑰 ConfigMap 的 `get`、`patch`，都以 `resourceNames` 限定；chart 的其他 Role 都不碰 `secrets`，也不能寫 `configmaps`。
+- chart 不渲染任何密鑰值。它可以宣告空的 Secret，由叢集內的元件填入；目前只有 tools/migrate 的程式：migration Job（下方「migration Job 產生的密碼」）、叢集內 ClickHouse 的 init container（下方「叢集內 ClickHouse 管理帳號的密碼」）、身分服務的 init container 及金鑰輪替的 CronJob（下方「內部身分簽章金鑰」）與 certs 服務的 init container（下方「閘道器憑證 CA」）。除了兩種 shape 的渲染，chart 也以每個可選元件都開啟的設定渲染：`values.yaml` 每個布林的 `enabled` 都設為 `true`，`values.schema.json` 每個 `mode` 的每個值各渲染一次，兩種 shape 涵蓋 `global.deploymentMode` 與 `ingress.exposure`；開關從 values 與 schema 讀出，新增的元件自動涵蓋（2026-10-14 起，Laysi/trustiot-v2#398）。渲染結果交給 `check-secret-handling.ts` 的同一條規則（每個 kind 都寫成 `kind: <Kind>`，Secret 只能是 tools/migrate 填的空 Secret），`scripts/ci/check-secret-handling.ts` 變動時也會觸發這個測試。測試檢查渲染出的每個 Secret 都沒有 `data`、`stringData`，都是 Job、ClickHouse、身分服務或 certs 服務的 init container 填入的那幾個，metadata 逐欄等於預期（名稱、chart 的標準標籤加 `trustiot.io/filled-by: migrate`、annotation 只有 `helm.sh/resource-policy: keep` 與說明；chart 不渲染 tools/migrate 自己寫的 annotation）；Job 的 Role 對 `secrets` 只有它填的那幾個的 `get`、`patch` 與 ClickHouse 管理帳號 Secret 的 `get`，ClickHouse 的 Role 只有它自己那一個的 `get`、`patch`，身分服務的 Role 只有簽章金鑰的 Secret 與公鑰 ConfigMap 的 `get`、`patch`，certs 服務的 Role 只有簽發 CA 金鑰的 Secret 與 CSR 的 ConfigMap 的 `get`、`patch`，都以 `resourceNames` 限定；chart 的其他 Role 都不碰 `secrets`，也不能寫 `configmaps`。
 
 ### migration Job 產生的密碼
 
@@ -176,6 +176,19 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
   - 防不了 namespace 的管理者：能 patch 這個 Secret 或 ConfigMap 的主體本來就能偽造內部身分，與現行相同。
   - 外部 IdP 與使用者登入的金鑰：不在 Laysi/trustiot-v2#404 的範圍。
 
+### 閘道器憑證 CA
+
+閘道器 mTLS 的自建 CA（決策 6、12）分兩層（2026-10-21 決定，Laysi/trustiot-v2#78；做法、比較過的選項與儀式的每一步在 [services/certs/README.md](../../services/certs/README.md)）：
+
+- **根 CA**（ECDSA P-384）：離線產生與保管，以 age 加密給兩位維運人員、存兩份離線媒體（下方清冊的「根 CA 私鑰」）。只在簽發 CA 的儀式與備份檢查時於離線的機器上取出，由 `certs-ca` 工具從 stdin 讀、只寫到 stdout，不經指令參數也不寫檔。根憑證是公開資料，放在 values 的 `certificateAuthority.rootCertificate`。
+- **簽發 CA**（ECDSA P-256，每一代一把）：在叢集內產生，沒有人建立、看到、複製或輸入它，取代原本「SaaS 以 SOPS、地端由安裝產生或客戶匯入」的寫法。
+  - chart 在 certs 啟用時宣告空的 Secret `<release>-certs-ca-keys`（`templates/passwords.yaml`，與上兩節的 Secret 相同的 metadata）與空的 ConfigMap `<release>-certs-ca-requests`（`templates/certs-ca.yaml`）。certs pod 的 init container `ca-keys`（migration 映像的 `migrate certs-ca-keys`，在 `wait-for-migrations` 之前）以 certs ServiceAccount 的 projected token 產生金鑰寫進 Secret，再把每把金鑰的 CSR 寫進 ConfigMap；Role `<release>-certs-ca-keys` 只有這兩個物件的 `get`、`patch`（`resourceNames`）。
+  - Secret 的資料只在記著自己 uid 時採用（規則同「migration Job 產生的密碼」）：被刪除、清空或從備份還原的 Secret 當作遺失，產生新的一組，不沿用可能有別人拿過的副本。
+  - certs 的主容器沒有 token（`services.certs.automountServiceAccountToken` 是 `true` 時渲染失敗），只以唯讀 volume 讀 `/etc/trustiot/certs-ca-keys/issuing-ca-keys.json`（0440，root 與 pod 自己的 `fsGroup` 65533）。其他 pod 都不掛它，任何服務的自訂 `env` 都不能讀它（chart 測試）。
+  - 一把金鑰要等維運人員以根 CA 簽了它的 CSR、憑證放進 `certificateAuthority.issuingCertificates` 才簽章。能改 CSR 的 ConfigMap 的人可以把它換成自己的金鑰，所以簽發時工具印出金鑰 id，維運人員和 certs 服務日誌裡等待中的金鑰 id 比對一致才採用。
+  - 輪替是調大 `certificateAuthority.keyGeneration` 再走一次儀式；舊的一代在它簽的閘道器憑證都過期後以 `removeKeysBeforeGeneration` 移除。外洩時兩個值同時調到新的一代：舊金鑰立即移除，它的 CRL 不再發布，broker 拒絕它簽的每張閘道器憑證，閘道器經換發端點（決策 12）取得新憑證。簽發 CA 私鑰不備份，遺失時以新的一代取代。
+- **不做的事**：根 CA 的 CRL（簽發 CA 外洩時，閘道器驗 broker 伺服器憑證看不到撤銷，Laysi/trustiot-v2#84 決定 broker 憑證與閘道器的信任設定時處理）、根 CA 換新、KMS 或 HSM、地端的 CA 階層（地端延後，決策 1 的 2026-10-18 補充）。
+
 ## 公開 repo 的資訊規則
 
 2026-10-12 起 Laysi/trustiot-v2 是公開 repo（Laysi/trustiot-v2#345）。以下內容任何人都讀得到，而且刪除後仍可能留在 fork、快取與第三方的存檔：
@@ -228,8 +241,8 @@ chart 的規則由 `bun test deploy/chart` 檢查，見 [deploy/chart/README.md]
 | 方式 | 用在 | 說明 |
 | --- | --- | --- |
 | Kubernetes Secret，以 `valueFrom.secretKeyRef` 成為環境變數 | 短的字串：API key、密碼、DSN | chart 的 `services.<name>.credentials` 與各 `*Secret` 欄位，values 只寫 Secret 名稱與 key；名稱像密鑰的環境變數只能來自 Secret（schema 與 chart 測試） |
-| Kubernetes Secret，以唯讀 volume 掛成檔案 | 私鑰、憑證、多行的金鑰 | 例如資料庫的 CA（`/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`，Postgres 的只掛進使用它的服務）；內部身分簽章私鑰（`/etc/trustiot/identity-signing-keys/signing-keys.json`，只掛進身分服務的主容器）；之後的 CA 私鑰、broker 伺服器金鑰也掛成檔案，只掛進使用它的那個 pod |
-| 叢集內元件自己產生的 Secret | 叢集內資料庫的帳號、CA 與伺服器私鑰；migration Job 建立的帳號的密碼 | 例如 CloudNativePG 為叢集內 Postgres 產生的 CA、伺服器憑證與 owner 帳號（Laysi/trustiot-v2#58），以及 migration Job 產生的服務角色與 collector 密碼（chart 宣告空的 Secret，Job 填入，見「migration Job 產生的密碼」）、叢集內 ClickHouse 的 init container 產生的管理帳號密碼（見「叢集內 ClickHouse 管理帳號的密碼」）、身分服務的 init container 產生的內部身分簽章私鑰（見「內部身分簽章金鑰」）。值只存在叢集內，不進 git，也不經過人；chart 把這些 Secret 整個列為服務的自訂 `env` 不能讀的對象，服務只拿到 CA 憑證（掛載時只選 `ca.crt`）或自己的密碼 |
+| Kubernetes Secret，以唯讀 volume 掛成檔案 | 私鑰、憑證、多行的金鑰 | 例如資料庫的 CA（`/etc/trustiot/<postgres|clickhouse>-ca/ca.crt`，Postgres 的只掛進使用它的服務）；內部身分簽章私鑰（`/etc/trustiot/identity-signing-keys/signing-keys.json`，只掛進身分服務的主容器）；簽發 CA 私鑰（`/etc/trustiot/certs-ca-keys/issuing-ca-keys.json`，只掛進 certs 的主容器）；之後的 broker 伺服器金鑰也掛成檔案，只掛進使用它的那個 pod |
+| 叢集內元件自己產生的 Secret | 叢集內資料庫的帳號、CA 與伺服器私鑰；migration Job 建立的帳號的密碼 | 例如 CloudNativePG 為叢集內 Postgres 產生的 CA、伺服器憑證與 owner 帳號（Laysi/trustiot-v2#58），以及 migration Job 產生的服務角色與 collector 密碼（chart 宣告空的 Secret，Job 填入，見「migration Job 產生的密碼」）、叢集內 ClickHouse 的 init container 產生的管理帳號密碼（見「叢集內 ClickHouse 管理帳號的密碼」）、身分服務的 init container 產生的內部身分簽章私鑰（見「內部身分簽章金鑰」）、certs 服務的 init container 產生的簽發 CA 私鑰（見「閘道器憑證 CA」）。值只存在叢集內，不進 git，也不經過人；chart 把這些 Secret 整個列為服務的自訂 `env` 不能讀的對象，服務只拿到 CA 憑證（掛載時只選 `ca.crt`）或自己的密碼 |
 | 主機上只有 root 能讀的檔案，以 systemd `LoadCredential` 交給服務 | SaaS 主機上的 cloudflared | 不在叢集內，k3s 故障時仍能運作（Laysi/trustiot-v2#64） |
 | GitHub Actions secret，經 step 的 `env` 或 `with` | 發佈流程用的少數金鑰 | ci.yml 不用任何 secret；fork 來的 PR 拿不到 secret（見 [CI 與發佈](ci-release.md)） |
 | 開發者本機的狀態目錄（0700 目錄、0600 檔案） | 本機開發環境 | 帳密與憑證每次 `up` 產生，`down` 刪除；身分服務的開發簽章私鑰與開發 session 的 cookie 沿用，`down` 保留、`purge` 刪除（[scripts/README.md](../../scripts/README.md)） |
@@ -244,8 +257,8 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 
 | 密鑰 | 用途與使用者 | SaaS | 地端 | 注入方式 | 實作 issue |
 | --- | --- | --- | --- | --- | --- |
-| 根 CA 私鑰 | 簽發 CA 憑證的信任根（閘道器、工作站、broker 憑證的源頭，決策 6、12） | 離線保管：不在叢集、不在 git（加密也不放）、不在任何連網主機；以 age 加密存兩份離線媒體，分別由兩位維運人員保管；只在簽發或撤銷簽發 CA 時取出 | 依 Laysi/trustiot-v2#78 定的地端 CA 階層 | 不注入任何服務 | Laysi/trustiot-v2#78 |
-| 簽發 CA 私鑰 | certs 服務簽發閘道器與工作站憑證、發 CRL | SOPS | 客戶叢集的 Secret（Laysi/trustiot-v2#78 決定由安裝產生或客戶匯入） | 檔案，只掛進 `certs` | Laysi/trustiot-v2#78 |
+| 根 CA 私鑰 | 簽發 CA 憑證的信任根（閘道器、工作站、broker 憑證的源頭，決策 6、12） | 離線保管：不在叢集、不在 git（加密也不放）、不在任何連網主機；以 age 加密存兩份離線媒體，分別由兩位維運人員保管；只在簽發或撤銷簽發 CA 時取出 | 地端的 CA 階層延後（上方「閘道器憑證 CA」） | 不注入任何服務；儀式與備份檢查用 `certs-ca`，私鑰只經 stdin、stdout（services/certs/README.md） | Laysi/trustiot-v2#78 |
+| 簽發 CA 私鑰（ECDSA P-256），Secret `<release>-certs-ca-keys` | certs 服務簽發閘道器與工作站憑證、發 CRL | certs pod 的 init container 在叢集內產生，不進 git、不經過人；CSR 由離線根 CA 簽發（上方「閘道器憑證 CA」，2026-10-21 取代原本的 SOPS） | 同左 | 檔案：只以唯讀 volume 掛進 `certs` 的主容器（`/etc/trustiot/certs-ca-keys/issuing-ca-keys.json`，0440，root 與 pod 的 fsGroup）；init container 經 Kubernetes API 讀寫 | Laysi/trustiot-v2#78 |
 | broker 伺服器憑證私鑰 | Mosquitto 的 TLS 伺服器金鑰（閘道器 mTLS 的內層） | 由簽發 CA 簽發，存在叢集 Secret | 同左 | 檔案，只掛進 broker | Laysi/trustiot-v2#84 |
 | 內部身分簽章私鑰（Ed25519），Secret `<release>-identity-signing-keys` | 身分服務簽內部身分 token（決策 27） | 身分服務 pod 的 init container 在叢集內產生，不進 git、不經過人（上方「內部身分簽章金鑰」） | 同左 | 檔案：只以唯讀 volume 掛進 `identity` 的主容器（`/etc/trustiot/identity-signing-keys/signing-keys.json`，0440，root 與 pod 的 fsGroup）；init container 經 Kubernetes API 讀寫（Role 只有這個 Secret 與公鑰 ConfigMap 的 `get`、`patch`）。對應的公鑰不是祕密：ConfigMap `<release>-internal-identity-keys` 的 `jwks.json` 以唯讀 volume 掛進每個服務（`TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE`）。Laysi/trustiot-v2#404 之前是人建立的 Secret（SaaS 以 SOPS 保存），公鑰手寫在 `internalIdentity.publicKeys`，搬移見上方 | Laysi/trustiot-v2#61、Laysi/trustiot-v2#404（[services/identity/README.md](../../services/identity/README.md)；格式與驗證：Laysi/trustiot-v2#52、[crates/service-kit/README.md](../../crates/service-kit/README.md)） |
 | OTA 簽章私鑰 | 簽閘道器 agent 與 updater 的發佈檔（決策 11） | GitHub environment secret，只有 main 上的 tag 能用（ci-release.md）；公鑰內建在 updater | 地端使用同一份發佈檔，不另持有 | 只給 release workflow 的簽章步驟 | Laysi/trustiot-v2#164（注意：release.yml 的 `release` environment 已建立，但私有庫在目前的 GitHub Free 方案設不了必要審查者與 tag 規則（決策 30），environment secret 限制不了「只有 main 上的 tag 能用」，Laysi/trustiot-v2#164 要先解決保管方式。2026-10-12 repo 已公開，Free 方案設得了 environment 的 tag 規則與必要審查者，但尚未設定，限制仍未成立，選項見 [CI 與發佈](ci-release.md) 的「發佈核准」，Laysi/trustiot-v2#345） |

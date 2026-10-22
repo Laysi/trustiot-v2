@@ -17,7 +17,7 @@ services:
     podSecurityContext:
       runAsUser: 65532
       runAsGroup: 65532
-  # Needs the cookie: reached through the catch-all route below.
+  # Needs the cookie: reached through the /api route below.
   assets:
     enabled: true
     image: &whoami
@@ -55,6 +55,17 @@ services:
     podSecurityContext: &nonroot
       runAsUser: 65532
       runAsGroup: 65532
+  # The SPA's static files: every other path on hosts.app, without the cookie check.
+  web:
+    enabled: true
+    image: *whoami
+    env:
+      - name: WHOAMI_PORT_NUMBER
+        value: "8080"
+      - name: WHOAMI_NAME
+        value: spa-static
+    probes: *whoamiProbes
+    podSecurityContext: *nonroot
   # Public paths on hosts.gateway.
   certs:
     enabled: true
@@ -78,11 +89,11 @@ services:
     podSecurityContext: *nonroot
 
 ingress:
-  # A catch-all like the SPA's: every path on hosts.app that is not public needs the cookie,
-  # including /internal (denied) and the public paths of hosts.gateway.
+  # The API: every path under /api on hosts.app needs the cookie, as /auth and /internal (denied)
+  # do; every other path there, the public paths of hosts.gateway included, is the SPA's.
   routes:
     - host: app
-      path: /
+      path: /api
       match: PathPrefix
       service: assets
 
@@ -103,14 +114,15 @@ postgres:
     caSecret:
       name: trustiot-e2e-postgres-ca
 
-# No service calls Postgres: the identity double and the whoami stand-in for assets use no
-# database. Listing postgres would give them the database variables, whose passwords come from
-# a Secret that only the migration Job fills, and the Job is off here, so the pods would never
-# start (chart.test.ts, "e2e overlays").
+# No service calls Postgres: the identity double and the whoami stand-ins use no database.
+# Listing postgres would give them the database variables, whose passwords come from a Secret
+# that only the migration Job fills, and the Job is off here, so the pods would never start
+# (chart.test.ts, "e2e overlays").
 mesh:
   calls:
     identity: []
     assets: []
+    certs: []
 
 observability:
   sentry:
