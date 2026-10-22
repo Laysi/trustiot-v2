@@ -278,7 +278,7 @@ pub fn check_password_bindings(config: &RunConfig, registry: &Registry) -> Resul
 pub fn check_registry(registry: &Registry) -> Result<(), Error> {
     let fail = |problem: String| Err(Error::Registry(problem));
     let mut seen = BTreeSet::new();
-    for (index, service) in registry.services.iter().enumerate() {
+    for service in registry.services {
         let roles = [service.owner_role(), service.app_role()];
         if !is_plain_identifier(&service.schema()) || roles.iter().any(|r| !is_plain_identifier(r))
         {
@@ -306,14 +306,18 @@ pub fn check_registry(registry: &Registry) -> Result<(), Error> {
                 service.name
             ));
         }
+        // Anywhere in the registry: every role exists before any outbox is set up (`migrate`
+        // runs `ensure_service` for all services first), so a producer listed later can still
+        // name this consumer's platform role as a reader. Two services may read each other's
+        // events (identity's event log reads assets, which reads identity).
         for producer in outbox.consumes {
-            let earlier = registry.services[..index]
+            let known = registry
+                .services
                 .iter()
                 .any(|s| s.name == *producer && s.outbox.producer);
-            let itself = *producer == service.name && outbox.producer;
-            if !(earlier || itself) {
+            if !known {
                 return fail(format!(
-                    "{}: consumes {producer}, which is not an outbox producer listed before it",
+                    "{}: consumes {producer}, which is not an outbox producer in the registry",
                     service.name
                 ));
             }

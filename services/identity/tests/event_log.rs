@@ -1,6 +1,7 @@
 //! The event layer and operation log end to end (Laysi/trustiot-v2#130): the real binary on the
 //! product's schema, applied by the migration Job (`testkit::product`). It records every event of
-//! the outbox once, with who made the change, and nothing of a rolled-back change; its roles
+//! the outbox once, with who made the change, and nothing of a rolled-back change, from every
+//! producer it consumes (its own outbox and assets' device model events); its roles
 //! cannot change or remove a recorded event; tenant administrators read their own tenant's log,
 //! platform administrators any tenant's and the platform-wide log, by time and in pages.
 //!
@@ -78,6 +79,24 @@ const INSERT_OUTBOX: &str = "INSERT INTO identity.outbox_event
     (tx_order, event_id, event_type, tenant_id, aggregate_type, aggregate_id, aggregate_seq,
      envelope)
 VALUES (pg_current_xact_id()::text::bigint, $1::uuid, $2, $3::uuid, 'test', $4, 1, $5::jsonb)";
+
+/// The consumer of assets' outbox (device models, Laysi/trustiot-v2#99).
+const ASSETS_SUBSCRIPTION: &str = "identity.event-log.assets";
+/// A device model event written to assets' outbox by hand, as the assets service writes it:
+/// `$1` event ID, `$2` type, `$3` tenant, `$4` the device model ID, `$5` its sequence, `$6` the
+/// envelope.
+const INSERT_ASSETS_OUTBOX: &str = "INSERT INTO assets.outbox_event
+    (tx_order, event_id, event_type, tenant_id, aggregate_type, aggregate_id, aggregate_seq,
+     envelope)
+VALUES (pg_current_xact_id()::text::bigint, $1::uuid, $2, $3::uuid, 'device_model', $4, $5,
+        $6::jsonb)";
+/// A recorded event's producer, type, aggregate and actor, by its ID.
+const LOGGED_ROW: &str =
+    "SELECT tenant_id::text, producer, event_type, aggregate_type, aggregate_id,
+    aggregate_seq, actor_user_id::text
+FROM identity.event_log WHERE event_id = $1::uuid";
+/// One row of `LOGGED_ROW`, in its column order.
+type LoggedAssetsRow = (String, String, String, String, String, i64, Option<String>);
 
 /// A row of the log written directly, at a chosen time: `$1` tenant, `$2` event ID, `$3`
 /// `occurred_at`, `$4` aggregate ID (a canary), `$5` the payload.
@@ -285,6 +304,40 @@ async fn write_outbox(
     id
 }
 
+/// Writes one of assets' device model events to its outbox by hand, in a transaction of its
+/// own, with `user` as the actor; its ID.
+async fn write_device_model_event(
+    admin: &mut PgConnection,
+    event_type: &str,
+    tenant: &str,
+    model: &str,
+    seq: i64,
+    user: &str,
+) -> String {
+    let id = contract::EventId::generate().to_string();
+    let envelope = json!({
+        "id": id,
+        "type": event_type,
+        "version": 1,
+        "tenant_id": tenant,
+        "occurred_at": "2026-10-21T09:00:00.000001Z",
+        "producer": "assets",
+        "payload": {"device_model_id": model, "probe": id},
+        "actor": {"kind": "user", "user_id": user},
+    });
+    sqlx::query(INSERT_ASSETS_OUTBOX)
+        .bind(&id)
+        .bind(event_type)
+        .bind(tenant)
+        .bind(model)
+        .bind(seq)
+        .bind(envelope.to_string())
+        .execute(admin)
+        .await
+        .expect("write a device model event to assets' outbox");
+    id
+}
+
 fn sqlstate(error: &sqlx::Error) -> Option<String> {
     error
         .as_database_error()
@@ -470,6 +523,67 @@ async fn the_event_log_records_each_operation_once_and_serves_it_by_tenant_and_t
     .await;
     assert_eq!(count(&mut admin, LOGGED_BY_ID, &[&platform_event]).await, 0);
 
+    // 5b. Every producer in CONSUMES: assets' device model events (Laysi/trustiot-v2#99) are
+    //     recorded under their tenant, with their producer and actor, and only there.
+    let model = contract::DeviceModelId::generate().to_string();
+    let mut device_model_events = Vec::new();
+    for (seq, event_type) in [
+        "assets.device_model_created",
+        "assets.device_model_updated",
+        "assets.device_model_deleted",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let seq = i64::try_from(seq).expect("a small sequence") + 1;
+        let id = write_device_model_event(
+            &mut admin,
+            event_type,
+            &tenant_a,
+            &model,
+            seq,
+            &platform_user,
+        )
+        .await;
+        device_model_events.push((id, event_type, seq));
+    }
+    for (id, event_type, seq) in &device_model_events {
+        wait_for(
+            &mut admin,
+            "assets' device model event in the log",
+            LOGGED_BY_ID,
+            &[id],
+        )
+        .await;
+        let row: LoggedAssetsRow = sqlx::query_as(LOGGED_ROW)
+            .bind(id)
+            .fetch_one(&mut admin)
+            .await
+            .expect("the recorded device model event");
+        assert_eq!(
+            row,
+            (
+                tenant_a.clone(),
+                "assets".to_owned(),
+                (*event_type).to_owned(),
+                "device_model".to_owned(),
+                model.clone(),
+                *seq,
+                Some(platform_user.clone()),
+            ),
+            "recorded as assets wrote it, under its tenant"
+        );
+        assert_eq!(
+            count(&mut admin, INBOX_HAS, &[ASSETS_SUBSCRIPTION, id]).await,
+            1
+        );
+        assert_eq!(count(&mut admin, PLATFORM_LOGGED_BY_ID, &[id]).await, 0);
+    }
+    let device_model_ids: Vec<String> = device_model_events
+        .iter()
+        .map(|(id, _, _)| id.clone())
+        .collect();
+
     // 6. Append-only: neither of the service's roles may change or remove a recorded event,
     //    and the platform role writes nothing.
     for role in ["identity_app", "identity_platform"] {
@@ -510,15 +624,35 @@ async fn the_event_log_records_each_operation_once_and_serves_it_by_tenant_and_t
     let all = page(&service, &a_admin, LOG);
     let all_ids = ids(&all);
     assert_eq!(all["next_cursor"], Value::Null);
-    // Newest first: the tenant's creation (now), the event recorded before its replay
-    // (2000-02-01), then the seeded days.
-    let mut expected_order = vec![outbox[0].clone(), replayed.clone()];
+    // Newest first: the tenant's creation (now), assets' device model events (2026-10-21,
+    // newest ID first), the event recorded before its replay (2000-02-01), then the seeded days.
+    let mut expected_order = vec![outbox[0].clone()];
+    let mut by_id = device_model_ids.clone();
+    by_id.sort();
+    expected_order.extend(by_id.into_iter().rev());
+    expected_order.push(replayed.clone());
     expected_order.extend(seeded.iter().rev().cloned());
     assert_eq!(all_ids, expected_order, "{all}");
     let created = &all["events"][all_ids
         .iter()
         .position(|id| *id == outbox[0])
         .expect("created")];
+    let device_model = &all["events"][all_ids
+        .iter()
+        .position(|id| *id == device_model_ids[0])
+        .expect("the device model event")];
+    assert_eq!(device_model["type"], "assets.device_model_created");
+    assert_eq!(device_model["producer"], "assets");
+    assert_eq!(device_model["aggregate_type"], "device_model");
+    assert_eq!(device_model["aggregate_id"], model.as_str());
+    assert_eq!(
+        device_model["actor"],
+        json!({"kind": "user", "user_id": platform_user})
+    );
+    assert_eq!(
+        device_model["payload"],
+        json!({"device_model_id": model, "probe": device_model_ids[0]})
+    );
     assert_eq!(created["type"], "identity.tenant_created");
     assert_eq!(created["producer"], "identity");
     assert_eq!(created["tenant_id"], tenant_a.as_str());
@@ -558,14 +692,16 @@ async fn the_event_log_records_each_operation_once_and_serves_it_by_tenant_and_t
         }
         assert!(pages < 10, "the pages never end");
     }
-    assert_eq!(pages, 3);
+    assert_eq!(pages, 4, "ten events, three a page");
     assert_eq!(paged, all_ids);
 
     // Another tenant's administrator sees only their own tenant.
     let other = page(&service, &b_admin, LOG);
     assert_eq!(ids(&other), std::slice::from_ref(&event_b));
     assert!(
-        !other.to_string().contains(&tenant_a) && !other.to_string().contains("canary-a"),
+        !other.to_string().contains(&tenant_a)
+            && !other.to_string().contains("canary-a")
+            && !other.to_string().contains(&model),
         "{other}"
     );
 

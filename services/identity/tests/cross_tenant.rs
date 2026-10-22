@@ -52,12 +52,14 @@ const SEED_AGGREGATE: &str = "INSERT INTO identity.outbox_aggregate
 SELECT 'testkit', $3, $1::uuid, 1, 1 WHERE $2::uuid IS NOT NULL";
 
 /// One recorded event of the tenant (Laysi/trustiot-v2#130): `$2` is the event id, the canary
-/// the aggregate id.
+/// the device model's id. Every producer in `CONSUMES` is recorded in this one table under the
+/// same row-level security; the seeded row is one of assets' device model events, the producer
+/// that is not the service itself (tests/event_log.rs records both producers end to end).
 const SEED_LOGGED_EVENT: &str = "INSERT INTO identity.event_log
     (tenant_id, event_id, occurred_at, event_type, version, producer, aggregate_type,
      aggregate_id, aggregate_seq, payload)
-VALUES ($1::uuid, $2::uuid, now(), 'testkit.canary', 1, 'identity', 'testkit', $3, 1,
-        '{}'::jsonb)";
+VALUES ($1::uuid, $2::uuid, now(), 'assets.device_model_created', 1, 'assets',
+        'device_model', $3, 1, '{}'::jsonb)";
 
 const CONSUMER_TABLE: &str = "the outbox consumer's bookkeeping (crates/outbox): subscription \
      positions and processed or failed event IDs, no tenant data; the event log's consumer reads \
@@ -138,7 +140,7 @@ async fn tenants_are_isolated() {
     // probes check that it neither sees nor changes another tenant's (Laysi/trustiot-v2#413).
     .table(pg_table!("identity.outbox_aggregate", seed = SEED_AGGREGATE))
     // The event log: the service role inserts (the consumer) and reads its tenant's recorded
-    // events, and may never change one (Laysi/trustiot-v2#130).
+    // events, of every producer it consumes, and may never change one (Laysi/trustiot-v2#130).
     .table(pg_table!("identity.event_log", seed = SEED_LOGGED_EVENT))
     .exempt(
         "identity.platform_event_log",

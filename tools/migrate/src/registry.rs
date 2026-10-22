@@ -33,6 +33,7 @@ pub struct Outbox {
     pub producer: bool,
     /// The producers this service reads events from (their names): `outbox::install_consumer`
     /// on every run, and its platform role becomes a reader of each producer's `outbox_event`.
+    /// Each one must be an outbox producer of the registry, before or after this service.
     /// Needs a platform role.
     pub consumes: &'static [&'static str],
 }
@@ -156,9 +157,9 @@ pub const PRODUCT: Registry = Registry {
     services: &[
         // Writes `identity.tenant_created` (Laysi/trustiot-v2#65) with its service role, in the
         // new tenant's transaction, and keeps the event log (Laysi/trustiot-v2#130): it reads the
-        // events of every producer in `CONSUMES` (its own included) as its platform role, so the
-        // chart binds a password to `identity_platform` as well
-        // ("trustiot.migrate.platformLogins" in deploy/chart/templates/_migrate.tpl).
+        // events of every producer in `CONSUMES` (its own and assets', which comes later in this
+        // list) as its platform role, so the chart binds a password to `identity_platform` as
+        // well ("trustiot.migrate.platformLogins" in deploy/chart/templates/_migrate.tpl).
         Service {
             name: identity_schema::SCHEMA.service,
             platform_role: true,

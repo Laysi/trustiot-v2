@@ -35,5 +35,6 @@ pub const SCHEMA: Schema = Schema {
 /// The outbox producers whose events the event log records (services/identity/README.md,
 /// "事件層與操作紀錄"): the service runs one consumer per producer, and the migration Job makes
 /// its platform role a reader of each one's `outbox_event` (the registry's `Outbox::consumes`).
-/// A producer is added here when it starts writing events, in the same change.
-pub const CONSUMES: &[&str] = &["identity"];
+/// A producer is added here when it starts writing events, in the same change: `identity`
+/// (tenants, Laysi/trustiot-v2#65) and `assets` (device models, Laysi/trustiot-v2#99).
+pub const CONSUMES: &[&str] = &["identity", "assets"];

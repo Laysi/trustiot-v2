@@ -353,7 +353,7 @@ fn inconsistent_registries_are_refused() {
             vec![],
         ),
         (
-            "a consumer before its producer",
+            "a consumer of a service that writes no events",
             vec![
                 service(
                     "c",
@@ -363,15 +363,20 @@ fn inconsistent_registries_are_refused() {
                         consumes: &["p"],
                     },
                 ),
-                service(
-                    "p",
-                    true,
-                    Outbox {
-                        producer: true,
-                        consumes: &[],
-                    },
-                ),
+                service("p", true, Outbox::default()),
             ],
+            vec![],
+        ),
+        (
+            "a consumer of a service the registry does not have",
+            vec![service(
+                "c",
+                true,
+                Outbox {
+                    producer: false,
+                    consumes: &["ghost"],
+                },
+            )],
             vec![],
         ),
         (
@@ -408,5 +413,60 @@ fn inconsistent_registries_are_refused() {
             tenant_role_hooks: hooks,
         };
         assert!(check_registry(&registry).is_err(), "{what} must be refused");
+    }
+}
+
+/// A consumer may come before its producer, and two services may read each other's events:
+/// the Job creates every role before it sets up any outbox (identity's event log reads assets,
+/// which is listed after it and reads identity, Laysi/trustiot-v2#130).
+#[test]
+fn a_consumer_may_come_before_its_producer() {
+    const BEFORE: &[Service] = &[
+        Service {
+            name: "c",
+            platform_role: true,
+            outbox: Outbox {
+                producer: false,
+                consumes: &["p"],
+            },
+            migrations: NONE,
+        },
+        Service {
+            name: "p",
+            platform_role: true,
+            outbox: Outbox {
+                producer: true,
+                consumes: &[],
+            },
+            migrations: NONE,
+        },
+    ];
+    const EACH_OTHER: &[Service] = &[
+        Service {
+            name: "a",
+            platform_role: true,
+            outbox: Outbox {
+                producer: true,
+                consumes: &["a", "b"],
+            },
+            migrations: NONE,
+        },
+        Service {
+            name: "b",
+            platform_role: true,
+            outbox: Outbox {
+                producer: true,
+                consumes: &["a"],
+            },
+            migrations: NONE,
+        },
+    ];
+    for (what, services) in [("before", BEFORE), ("each other", EACH_OTHER)] {
+        let registry = Registry {
+            services,
+            clickhouse: NONE,
+            tenant_role_hooks: &[],
+        };
+        check_registry(&registry).unwrap_or_else(|error| panic!("{what}: {error}"));
     }
 }

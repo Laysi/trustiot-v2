@@ -49,6 +49,23 @@ const TEMPORARY_FOR_APP: &str =
     "SELECT has_database_privilege('identity_app', current_database(), 'TEMPORARY')";
 const MIGRATOR_READS_SESSIONS: &str =
     "SELECT has_table_privilege('trustiot_owner', 'identity.sessions', 'SELECT')";
+/// The relations of schema assets the event log's platform role can do anything with
+/// (Laysi/trustiot-v2#130): it must read assets' events and nothing else of that schema.
+const IDENTITY_PLATFORM_IN_ASSETS: &str = "SELECT c.relname::text FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'assets' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+      AND has_table_privilege('identity_platform', c.oid,
+          'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+    ORDER BY 1";
+/// What it may do with assets' events: read them, and no write of any kind.
+const IDENTITY_PLATFORM_ON_ASSETS_EVENTS: &str = "SELECT
+    has_table_privilege('identity_platform', 'assets.outbox_event', 'SELECT'),
+    has_table_privilege('identity_platform', 'assets.outbox_event',
+        'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'),
+    has_schema_privilege('identity_platform', 'assets', 'CREATE')";
+/// The roles the assets outbox's read policy names.
+const ASSETS_EVENT_READERS: &str = "SELECT array_to_string(polroles::regrole[], ',')
+    FROM pg_policy WHERE polrelid = 'assets.outbox_event'::regclass AND polname = 'consumer_read'";
 const SEARCH_PATH: &str = "SELECT current_setting('search_path')";
 const READ_MEMBERSHIPS: &str = "SELECT count(*) FROM memberships";
 const GIVE_BYPASSRLS: &str = "ALTER ROLE identity_app BYPASSRLS";
@@ -223,6 +240,35 @@ async fn a_fresh_database_gets_every_migration_once() {
         !migrator_reads,
         "the migration role does not inherit the owner role's rights"
     );
+
+    // The event log reads assets' events (identity consumes assets, which is listed after it,
+    // Laysi/trustiot-v2#130): identity_platform reads assets.outbox_event, writes nothing there
+    // and has nothing else of schema assets.
+    let reachable: Vec<String> = sqlx::query_scalar(IDENTITY_PLATFORM_IN_ASSETS)
+        .fetch_all(&mut admin)
+        .await
+        .expect("read identity_platform's rights in assets");
+    assert_eq!(
+        reachable,
+        ["outbox_event"],
+        "identity_platform in schema assets"
+    );
+    let rights: (bool, bool, bool) = sqlx::query_as(IDENTITY_PLATFORM_ON_ASSETS_EVENTS)
+        .fetch_one(&mut admin)
+        .await
+        .expect("read identity_platform's rights on assets.outbox_event");
+    assert_eq!(
+        rights,
+        (true, false, false),
+        "identity_platform: SELECT on assets.outbox_event, no write, no CREATE in assets"
+    );
+    let readers: String = sqlx::query_scalar(ASSETS_EVENT_READERS)
+        .fetch_one(&mut admin)
+        .await
+        .expect("read the assets outbox's read policy");
+    let mut readers: Vec<&str> = readers.split(',').collect();
+    readers.sort_unstable();
+    assert_eq!(readers, ["assets_platform", "identity_platform"]);
 
     // 3. The service role passes service-kit's session check and finds its schema first.
     let mut app_conn = db
