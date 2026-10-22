@@ -317,7 +317,7 @@ SaaS 叢集的 Secret 來源是 `deploy/flux/` 內以 SOPS 加密的檔案，由
 | 密鑰 | 保管 | 說明 | 實作 issue |
 | --- | --- | --- | --- |
 | 閘道器私鑰 | 閘道器的 TPM，不能匯出 | 雲端只存出廠登錄的公鑰（決策 12）；不需要輪替，換 TPM 或主機板視同新設備 | Laysi/trustiot-v2#74、Laysi/trustiot-v2#80、Laysi/trustiot-v2#83 |
-| 產線工作站憑證私鑰 | 工作站本機，能用 TPM 時放在 TPM | 由簽發 CA 簽發的工作站憑證，到期換發；工作站汰換時撤銷 | Laysi/trustiot-v2#534、Laysi/trustiot-v2#79、Laysi/trustiot-v2#80 |
+| 產線工作站憑證私鑰 | 工作站本機，能用 TPM 時放在 TPM | 由簽發 CA 簽發的工作站憑證，到期換發；工作站汰換時撤銷。certs 服務只收 CSR，私鑰不經過它；簽發、撤銷與 profile 見 services/certs/README.md 的「工作站憑證」 | Laysi/trustiot-v2#534、Laysi/trustiot-v2#79、Laysi/trustiot-v2#80 |
 | 使用者 session | 伺服器只存 cookie 值的雜湊 | 沒有簽章密鑰（規則 8）；登出、停權在下一個請求生效（決策 13） | Laysi/trustiot-v2#103 |
 | 一次性 token 與驗證碼 | 只存雜湊 | 見上方「一次性 token 與驗證碼」 | Laysi/trustiot-v2#103、Laysi/trustiot-v2#105 |
 | 租戶設定的祕密：Webhook 簽章密鑰、企業 OIDC 的 client secret | Postgres，屬於租戶資料 | 建立後 API 不再回傳明文、不進日誌；靜態加密方式由實作 issue 決定並加進本清冊 | Laysi/trustiot-v2#169、Laysi/trustiot-v2#43 |

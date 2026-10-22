@@ -270,11 +270,25 @@ impl Authority {
         })
     }
 
-    /// The issuing CA that signs new certificates at `now`: of those valid at `now`, the one of
-    /// the highest generation.
+    /// The newest issuing CA at `now`: of those valid at `now`, the one of the highest
+    /// generation. It signs once it has a CRL ([`Authority::signer`]).
     #[must_use]
     pub fn current(&self, now: i64) -> Option<&Arc<IssuingCa>> {
         self.issuing.iter().rev().find(|ca| ca.is_valid_at(now))
+    }
+
+    /// The issuing CA that signs a certificate at `now` when only the CAs for which `has_crl`
+    /// holds (by key id) may sign: of those valid at `now`, the one of the highest generation.
+    /// The broker checks every certificate against its issuer's CRL, so a CA signs nothing
+    /// before its first CRL exists (services/certs/README.md, "發簽發 CA 憑證" step 5); until
+    /// then the previous generation, while valid, keeps signing. `None` when no valid CA has a
+    /// CRL, for example on a fresh install before the CRL job's first round.
+    #[must_use]
+    pub fn signer(&self, now: i64, has_crl: impl Fn(&str) -> bool) -> Option<&Arc<IssuingCa>> {
+        self.issuing
+            .iter()
+            .rev()
+            .find(|ca| ca.is_valid_at(now) && has_crl(ca.key_id()))
     }
 
     /// Every issuing CA with a usable certificate, oldest generation first. Each one's CRL is

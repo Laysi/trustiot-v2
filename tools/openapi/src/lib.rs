@@ -58,6 +58,13 @@ pub const SERVICES: &[Source] = &[
         name: "assets",
         openapi: assets::openapi,
     },
+    // The CA (Laysi/trustiot-v2#78): the platform administrators' workstation certificate API
+    // (Laysi/trustiot-v2#534). Its CRLs and CA chain under /internal, for the MQTT broker, are not
+    // part of the client API.
+    Source {
+        name: "certs",
+        openapi: certs::openapi,
+    },
     // The history API of device charts (Laysi/trustiot-v2#119).
     Source {
         name: "telemetry-query",
@@ -72,13 +79,16 @@ pub const SERVICES_WITHOUT_API: &[&str] = &[
     // health endpoints (docs/architecture/deployment.md). Until Laysi/trustiot-v2#91 builds the
     // service, the crate only holds the ClickHouse schema.
     "ingest",
-    // The CA (Laysi/trustiot-v2#78): so far only the CRLs and the CA chain under /internal, for
-    // the MQTT broker, which are not part of the client API. The renewal endpoint
-    // (Laysi/trustiot-v2#81) moves it to SERVICES.
-    "certs",
     // Serves the SPA's static files (frontend/) on the app host; no API besides the health
     // endpoints (Laysi/trustiot-v2#123, services/web/README.md).
     "web",
+    // The AI gateway (Laysi/trustiot-v2#139, decision 28): its internal API under /internal takes
+    // the AI providers' own protocols (Anthropic Messages, OpenAI Decisions) and returns their
+    // responses unchanged, so the providers' API references describe it; the gateway's part
+    // (paths, headers, errors) is in services/ai-gateway/README.md. It does not depend on
+    // crates/contract, whose error types every spec here shares, and the client API never
+    // reaches it (decision 27).
+    "ai-gateway",
 ];
 
 fn shared_schemas() -> OpenApi {

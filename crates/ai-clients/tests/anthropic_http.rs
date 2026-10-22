@@ -10,12 +10,11 @@ use std::time::Duration;
 use ai_clients::anthropic::{
     AnthropicClient, InputMessage, Message, MessagesRequest, RequestOptions,
 };
-use ai_clients::{EndpointConfig, Error, ErrorClass, ReportedUsage, TimeoutKind};
+use ai_clients::{EndpointConfig, Error, ErrorClass, ReportedUsage, TimeoutKind, Tls};
 use support::{Server, Step, endpoint, fixture, fixture_json, http_response, sse_head, sse_prefix};
 
 fn client(config: EndpointConfig) -> AnthropicClient {
-    AnthropicClient::new(config, support::test_key(), reqwest::Client::builder())
-        .expect("a valid endpoint")
+    AnthropicClient::new(config, support::test_key(), &Tls::none()).expect("a valid endpoint")
 }
 
 fn request() -> MessagesRequest {
@@ -558,16 +557,25 @@ async fn responses_that_break_the_protocol_are_refused() {
 
 #[test]
 fn endpoints_must_be_https_or_loopback_with_a_positive_limit() {
-    let build = |config: EndpointConfig| {
-        AnthropicClient::new(config, support::test_key(), reqwest::Client::builder())
-    };
+    let build =
+        |config: EndpointConfig| AnthropicClient::new(config, support::test_key(), &Tls::none());
+    let ca = support::TestCa::generate();
     assert!(
+        AnthropicClient::new(
+            EndpointConfig::new("anthropic", ai_clients::anthropic::DEFAULT_BASE_URL),
+            support::test_key(),
+            &ca.tls(),
+        )
+        .is_ok()
+    );
+    // An https endpoint without a TLS configuration is refused, not sent in clear text.
+    assert!(matches!(
         build(EndpointConfig::new(
             "anthropic",
             ai_clients::anthropic::DEFAULT_BASE_URL
-        ))
-        .is_ok()
-    );
+        )),
+        Err(Error::InvalidRequest(_))
+    ));
     assert!(matches!(
         build(EndpointConfig::new("plain", "http://api.anthropic.com")),
         Err(Error::InvalidRequest(_))
@@ -578,4 +586,53 @@ fn endpoints_must_be_https_or_loopback_with_a_positive_limit() {
     // The client's Debug shows no key.
     let client = build(EndpointConfig::new("anthropic", "http://127.0.0.1:1")).unwrap();
     assert!(!format!("{client:?}").contains(&support::key_text()));
+}
+
+#[tokio::test]
+async fn raw_requests_go_out_byte_for_byte_and_raw_replies_keep_the_bytes_received() {
+    let server = Server::start(vec![
+        json_reply("anthropic/message_end_turn.json"),
+        full_stream(),
+    ])
+    .await;
+    let client = client(endpoint(server.addr, 4));
+    // Key order, spacing, a number format and an escape that a re-serialization would change.
+    let body = r#"{ "model":"claude-opus-5-5" ,"messages":[{"role":"user","content":"Hello"}],"max_tokens":1024,"temperature":1.50,"metadata":{"z":1,"a":"é"}}"#;
+    let reply = client
+        .create_message_raw(
+            bytes::Bytes::from_static(body.as_bytes()),
+            &RequestOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(server.request(0).body, body.as_bytes());
+    assert_eq!(
+        reply.raw,
+        fixture("anthropic/message_end_turn.json").as_bytes()
+    );
+    let expected: Message =
+        serde_json::from_value(fixture_json("anthropic/message_end_turn.json")).unwrap();
+    assert_eq!(reply.body, expected);
+    assert_eq!(reply.request_id.as_deref(), Some("req_test_json"));
+
+    let streaming = body.replacen("{ ", r#"{ "stream": true, "#, 1);
+    let mut stream = client
+        .stream_message_raw(
+            bytes::Bytes::from(streaming.clone()),
+            &RequestOptions::default(),
+        )
+        .await
+        .unwrap();
+    let mut relayed = Vec::new();
+    while let Some(item) = stream.next().await.unwrap() {
+        relayed.extend_from_slice(&item.raw.to_bytes());
+    }
+    let sent = server.request(1);
+    assert_eq!(sent.body, streaming.as_bytes());
+    assert_eq!(sent.header("accept").as_deref(), Some("text/event-stream"));
+    assert_eq!(
+        String::from_utf8(relayed).unwrap(),
+        support::sse_without_comments(&fixture("anthropic/stream_text.sse")),
+        "the relayed events differ from the events received"
+    );
 }

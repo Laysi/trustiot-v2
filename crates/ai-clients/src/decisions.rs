@@ -8,18 +8,19 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use base64::Engine as _;
-use reqwest::StatusCode;
-use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
+use bytes::Bytes;
+use http::StatusCode;
+use http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tokio::time::Instant;
 
-use crate::Reply;
 use crate::error::{ApiErrorBody, Error, ErrorClass, TimeoutKind, json_error};
 use crate::transport::{
-    ApiKey, EndpointConfig, Transport, error_from_response, header_text, read_body,
+    ApiKey, EndpointConfig, Tls, Transport, error_from_response, header_text, read_body,
 };
 use crate::usage::{ReportedUsage, TokenUsage};
+use crate::{RawReply, Reply};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.openai.com";
 /// The only model the endpoint accepts on 2026-10-21.
@@ -442,14 +443,11 @@ impl std::fmt::Debug for DecisionsClient {
 }
 
 impl DecisionsClient {
-    /// `http` brings the TLS backend and trust anchors (see [`crate::anthropic::AnthropicClient::new`]).
-    pub fn new(
-        config: EndpointConfig,
-        api_key: ApiKey,
-        http: reqwest::ClientBuilder,
-    ) -> Result<Self, Error> {
+    /// `tls` decides which certificates the endpoint may present (see
+    /// [`crate::anthropic::AnthropicClient::new`]).
+    pub fn new(config: EndpointConfig, api_key: ApiKey, tls: &Tls) -> Result<Self, Error> {
         Ok(Self {
-            transport: Arc::new(Transport::new(config, http)?),
+            transport: Arc::new(Transport::new(config, tls)?),
             api_key: Arc::new(api_key),
         })
     }
@@ -465,19 +463,41 @@ impl DecisionsClient {
         request.validate()?;
         let body = serde_json::to_vec(request)
             .map_err(|error| Error::InvalidRequest(format!("request body: {error}")))?;
+        let RawReply {
+            body, request_id, ..
+        } = self.send(Bytes::from(body), request).await?;
+        Ok(Reply { body, request_id })
+    }
+
+    /// [`DecisionsClient::decide`] with a request body the caller already encoded, sent byte
+    /// for byte: for a gateway that forwards a caller's request unchanged. The body is parsed
+    /// as a [`DecisionRequest`] and validated before anything is sent (an invalid one is
+    /// [`Error::InvalidRequest`]), and the answers are checked against it. The reply holds the
+    /// response body as received and parsed.
+    pub async fn decide_raw(&self, body: Bytes) -> Result<RawReply<DecisionResponse>, Error> {
+        let request: DecisionRequest = serde_json::from_slice(&body).map_err(|error| {
+            Error::InvalidRequest(format!("decision request: {}", json_error(&error)))
+        })?;
+        request.validate()?;
+        self.send(body, &request).await
+    }
+
+    async fn send(
+        &self,
+        body: Bytes,
+        request: &DecisionRequest,
+    ) -> Result<RawReply<DecisionResponse>, Error> {
         let permit = self.transport.acquire().await?;
         let deadline = Instant::now() + self.transport.config.timeouts.response;
         let builder = self
             .transport
-            .http
-            .post(self.transport.url(DECISIONS_PATH)?)
+            .post(DECISIONS_PATH)?
             .header(AUTHORIZATION, self.api_key.header_value("Bearer ")?)
             .header(CONTENT_TYPE, "application/json")
-            .header(ACCEPT, "application/json")
-            .body(body);
-        let mut response = self
+            .header(ACCEPT, "application/json");
+        let response = self
             .transport
-            .send(builder, deadline, TimeoutKind::Response)
+            .send(builder, body, deadline, TimeoutKind::Response)
             .await?;
         if !response.status().is_success() {
             return Err(error_from_response(
@@ -488,9 +508,9 @@ impl DecisionsClient {
             )
             .await);
         }
-        let request_id = header_text(&response, REQUEST_ID_HEADER);
+        let request_id = header_text(response.headers(), REQUEST_ID_HEADER);
         let body = read_body(
-            &mut response,
+            &mut response.into_body(),
             self.transport.config.max_response_bytes,
             deadline,
             TimeoutKind::Response,
@@ -508,8 +528,9 @@ impl DecisionsClient {
                 error.into_invalid_response(|| reported(decision.usage.as_ref()), request_id)
             );
         }
-        Ok(Reply {
+        Ok(RawReply {
             body: decision,
+            raw: Bytes::from(body),
             request_id,
         })
     }

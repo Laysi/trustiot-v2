@@ -1,6 +1,6 @@
 [package]
 name = "certs"
-description = "TrustIoT v2 certs service: the online issuing CA under an offline root. Signs gateway client certificates from CSRs with the profile it decides, keeps the ledger of what it signed, and regenerates and publishes each issuing CA's CRL on a schedule."
+description = "TrustIoT v2 certs service: the online issuing CA under an offline root. Signs gateway client certificates and production workstation certificates from CSRs with the profile it decides, keeps the ledger of what it signed and revoked, and regenerates and publishes each issuing CA's CRL on a schedule."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -22,7 +22,7 @@ test = false
 doc = false
 
 [dependencies]
-axum = { workspace = true, features = ["http1", "tokio"] }
+axum = { workspace = true, features = ["http1", "json", "tokio"] }
 # PEM bodies of certificates and CRLs.
 base64.workspace = true
 # The issuing CA keys the pod's init container keeps in a Secret (crates/ca-keys).
@@ -43,6 +43,8 @@ protocol = { path = "../../crates/protocol" }
 rcgen = { workspace = true, features = ["crypto", "pem", "ring", "x509-parser", "zeroize"] }
 rustls-pki-types = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["derive"] }
+# The workstation certificate API reads its JSON bodies field by field, to name each problem.
+serde_json.workspace = true
 service-kit = { path = "../../crates/service-kit" }
 # Fingerprints of the CA files, to reload only what changed.
 sha2.workspace = true
@@ -52,6 +54,8 @@ thiserror.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing.workspace = true
+# The workstation certificate API's OpenAPI document (tools/openapi).
+utoipa.workspace = true
 # Parses and verifies CSRs and the CA certificates.
 x509-parser = { workspace = true, features = ["verify"] }
 # Wipes the key file's text after parsing.
@@ -65,7 +69,6 @@ reqwest.workspace = true
 # A second verifier for what the service signs: rustls's webpki client-certificate check with the
 # CRLs, as a TLS server that authenticates gateways would run it.
 rustls = { workspace = true, features = ["ring", "std"] }
-serde_json.workspace = true
 # The product's schema (the migration Job) and the cross-tenant suite.
 testkit = { path = "../../crates/testkit" }
 tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "time"] }

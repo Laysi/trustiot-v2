@@ -441,6 +441,28 @@
         ],
         "type": "string"
       },
+      "IssueWorkstationCertificate": {
+        "additionalProperties": false,
+        "description": "The body of `POST /api/certs/v1/workstation-certificates`. Unknown fields are refused.",
+        "properties": {
+          "certificate_request": {
+            "description": "A PKCS #10 certificate signing request, PEM (`-----BEGIN CERTIFICATE REQUEST-----`), at\nmost 4096 bytes as DER, signed with ecdsa-with-SHA256 by the workstation's ECDSA P-256\nkey. Only its public key is used, once its signature shows the workstation holds the\nprivate key: the CA decides the subject, the extensions and the validity, and the private\nkey never leaves the workstation.",
+            "type": "string"
+          },
+          "workstation": {
+            "description": "The workstation's name: 1-48 ASCII letters, digits, `.`, `_` or `-`, starting with a\nletter or digit. The certificate's subject is `CN=workstation:<name>`.",
+            "example": "line-a-ws-01",
+            "maxLength": 48,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workstation",
+          "certificate_request"
+        ],
+        "type": "object"
+      },
       "Latest": {
         "description": "The latest value of each data point of a device that has a reading in the raw period.",
         "properties": {
@@ -800,6 +822,36 @@
           }
         ]
       },
+      "RevocationReason": {
+        "description": "A reason a workstation certificate can be revoked for: the RFC 5280 CRLReason codes that\napply to an end entity, without `certificateHold` (a revocation here is final).",
+        "enum": [
+          "unspecified",
+          "key_compromise",
+          "affiliation_changed",
+          "superseded",
+          "cessation_of_operation",
+          "privilege_withdrawn"
+        ],
+        "type": "string"
+      },
+      "RevokeWorkstationCertificate": {
+        "additionalProperties": false,
+        "description": "The body of `POST /api/certs/v1/workstation-certificates/{serial}/revoke`. Unknown fields are\nrefused.",
+        "properties": {
+          "reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RevocationReason",
+                "description": "Why it is revoked. Absent leaves the reason out of the CRL, as RFC 5280 recommends over\n`unspecified`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
       "Series": {
         "description": "A data point's series.",
         "properties": {
@@ -973,6 +1025,73 @@
         "description": "A user account; one user can be a member of several tenants.\n\nSerialized as a lowercase hyphenated UUID string.",
         "format": "uuid",
         "type": "string"
+      },
+      "WorkstationCertificate": {
+        "description": "A workstation certificate as the ledger records it.",
+        "properties": {
+          "ca_key_id": {
+            "description": "The issuing CA that signed it: the SHA-256 of its public key, 64 lower-case hex digits.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "certificate": {
+            "description": "The certificate, PEM. It goes to the workstation, which keeps it with its private key.",
+            "type": "string"
+          },
+          "not_after": {
+            "description": "When it expires; a renewal is another issue request before then.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "not_before": {
+            "description": "When it becomes valid: five minutes before it was signed.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "revocation_reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RevocationReason",
+                "description": "Why it was revoked, when a reason was given."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revoked_at": {
+            "description": "When it was revoked; absent while it is not.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "serial": {
+            "description": "The serial number, lower-case hex (32 digits for the certificates this service signs):\nthe `{serial}` of the revoke request. Keep it; it is how the certificate is revoked.",
+            "example": "4f3a9c1e2b7d6058a1c3e5f708192a3b",
+            "pattern": "^[0-9a-f]{2,40}$",
+            "type": "string"
+          },
+          "subject": {
+            "description": "The certificate's common name: `workstation:<workstation>`.",
+            "type": "string"
+          },
+          "workstation": {
+            "description": "The workstation's name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serial",
+          "workstation",
+          "subject",
+          "ca_key_id",
+          "not_before",
+          "not_after",
+          "certificate"
+        ],
+        "type": "object"
       }
     }
   },
@@ -1598,6 +1717,199 @@
         "summary": "The caller's tenant, once this service has processed its `identity.tenant_created`.",
         "tags": [
           "assets"
+        ]
+      }
+    },
+    "/api/certs/v1/workstation-certificates": {
+      "post": {
+        "operationId": "issueWorkstationCertificate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueWorkstationCertificate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkstationCertificate"
+                }
+              }
+            },
+            "description": "Issued and recorded in the ledger. The subject is `CN=workstation:<workstation>`, the extended key usage the TrustIoT workstation purpose only (never client authentication, so the MQTT broker refuses it), valid for the configured workstation validity (default 180 days). Keep `serial`: it is how the certificate is revoked."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is larger than 16 KiB (`workstation_certificate.body_too_large`), or it is not a JSON object (`workstation_certificate.body_invalid`) (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator (`permission_denied`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An unknown or missing field, a name that breaks its rule (`workstation_certificate.name_invalid`), or a certificate request that is not one PEM CSR (`workstation_certificate.request_invalid`), not for ECDSA P-256 with ecdsa-with-SHA256 (`workstation_certificate.request_unsupported`) or not signed by its own key (`workstation_certificate.request_signature_invalid`) (`validation_failed`). Nothing was issued."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No issuing CA can sign yet (`workstation_certificate.ca_not_ready`), or the database failed (`unavailable`). Nothing was issued."
+          }
+        },
+        "summary": "Issues a workstation certificate for the public key of a CSR. The CA decides everything\nelse; the private key never reaches the service.",
+        "tags": [
+          "certs"
+        ]
+      }
+    },
+    "/api/certs/v1/workstation-certificates/{serial}/revoke": {
+      "post": {
+        "operationId": "revokeWorkstationCertificate",
+        "parameters": [
+          {
+            "description": "The certificate's serial number, hex, as `serial` of the issue response.",
+            "in": "path",
+            "name": "serial",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeWorkstationCertificate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkstationCertificate"
+                }
+              }
+            },
+            "description": "Revoked now; the ledger records the time and the reason, and the issuing CA's next scheduled CRL lists it."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is larger than 16 KiB (`workstation_certificate.body_too_large`), or it is not a JSON object (`workstation_certificate.body_invalid`) (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No workstation certificate has this serial number (`not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "It is already revoked (`conflict`, `workstation_certificate.already_revoked`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An unknown field, or a reason that is not one of the listed ones (`workstation_certificate.reason_invalid`) (`validation_failed`). Nothing was revoked."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`). Nothing was revoked."
+          }
+        },
+        "summary": "Revokes a workstation certificate. Its issuing CA's next scheduled CRL lists it; the\nregistration API (Laysi/trustiot-v2#79) reads the ledger, so it refuses the certificate at\nonce.",
+        "tags": [
+          "certs"
         ]
       }
     },
@@ -2434,6 +2746,10 @@
     {
       "description": "Sites, devices and data points (services/assets).",
       "name": "assets"
+    },
+    {
+      "description": "Workstation certificates from the issuing CA (services/certs).",
+      "name": "certs"
     },
     {
       "description": "Sessions, users and tenants (services/identity).",

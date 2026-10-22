@@ -5,8 +5,9 @@ mod types;
 
 use std::sync::Arc;
 
-use reqwest::StatusCode;
-use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderValue};
+use bytes::Bytes;
+use http::StatusCode;
+use http::header::{ACCEPT, CONTENT_TYPE, HeaderValue};
 use tokio::time::Instant;
 
 pub use stream::{
@@ -19,12 +20,12 @@ pub use types::{
     TextBlock, ThinkingBlock, Tool, ToolResultBlock, ToolUseBlock, Usage, UsageIteration,
 };
 
-use crate::Reply;
 use crate::error::{ApiErrorBody, Error, ErrorClass, TimeoutKind, json_error};
 use crate::transport::{
-    ApiKey, EndpointConfig, Transport, error_from_response, header_text, read_body,
+    ApiKey, EndpointConfig, Tls, Transport, error_from_response, header_text, read_body,
 };
 use crate::usage::ReportedUsage;
+use crate::{RawReply, Reply};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 /// The `anthropic-version` header (<https://platform.claude.com/docs/en/api/versioning>).
@@ -73,25 +74,17 @@ impl std::fmt::Debug for AnthropicClient {
 }
 
 impl AnthropicClient {
-    /// `http` brings the TLS backend and trust anchors; the client adds its own connect
-    /// timeout, keepalive and no-redirect policy. Do not set timeouts on it.
-    pub fn new(
-        config: EndpointConfig,
-        api_key: ApiKey,
-        http: reqwest::ClientBuilder,
-    ) -> Result<Self, Error> {
+    /// `tls` decides which certificates the endpoint may present; the client adds its own
+    /// connect timeout, keepalive and no-redirect policy.
+    pub fn new(config: EndpointConfig, api_key: ApiKey, tls: &Tls) -> Result<Self, Error> {
         Ok(Self {
-            transport: Arc::new(Transport::new(config, http)?),
+            transport: Arc::new(Transport::new(config, tls)?),
             api_key: Arc::new(api_key),
         })
     }
 
-    fn request(
-        &self,
-        request: &MessagesRequest,
-        stream: bool,
-        options: &RequestOptions,
-    ) -> Result<reqwest::RequestBuilder, Error> {
+    /// The request body: `request` with `stream` set by the method, never by the caller.
+    fn encode(request: &MessagesRequest, stream: bool) -> Result<Bytes, Error> {
         let mut body = serde_json::to_value(request)
             .map_err(|error| Error::InvalidRequest(format!("request body: {error}")))?;
         let Some(map) = body.as_object_mut() else {
@@ -104,12 +97,19 @@ impl AnthropicClient {
         } else {
             map.remove("stream");
         }
-        let body = serde_json::to_vec(&body)
-            .map_err(|error| Error::InvalidRequest(format!("request body: {error}")))?;
+        serde_json::to_vec(&body)
+            .map(Bytes::from)
+            .map_err(|error| Error::InvalidRequest(format!("request body: {error}")))
+    }
+
+    fn request(
+        &self,
+        stream: bool,
+        options: &RequestOptions,
+    ) -> Result<http::request::Builder, Error> {
         let mut builder = self
             .transport
-            .http
-            .post(self.transport.url(MESSAGES_PATH)?)
+            .post(MESSAGES_PATH)?
             .header("x-api-key", self.api_key.header_value("")?)
             .header("anthropic-version", API_VERSION)
             .header(CONTENT_TYPE, "application/json")
@@ -120,8 +120,7 @@ impl AnthropicClient {
                 } else {
                     "application/json"
                 },
-            )
-            .body(body);
+            );
         if !options.betas.is_empty() {
             let betas = HeaderValue::from_str(&options.betas.join(","))
                 .map_err(|_| Error::InvalidRequest("invalid anthropic-beta value".into()))?;
@@ -138,12 +137,36 @@ impl AnthropicClient {
         request: &MessagesRequest,
         options: &RequestOptions,
     ) -> Result<Reply<Message>, Error> {
+        let body = Self::encode(request, false)?;
+        let RawReply {
+            body, request_id, ..
+        } = self.create(body, options).await?;
+        Ok(Reply { body, request_id })
+    }
+
+    /// [`AnthropicClient::create_message`] with a request body the caller already encoded,
+    /// sent byte for byte: for a gateway that forwards a caller's request unchanged. The body
+    /// must be a Messages request without `"stream": true` (the caller checks; this method does
+    /// not parse it). The reply holds the response body as received and parsed.
+    pub async fn create_message_raw(
+        &self,
+        body: Bytes,
+        options: &RequestOptions,
+    ) -> Result<RawReply<Message>, Error> {
+        self.create(body, options).await
+    }
+
+    async fn create(
+        &self,
+        body: Bytes,
+        options: &RequestOptions,
+    ) -> Result<RawReply<Message>, Error> {
         let permit = self.transport.acquire().await?;
         let deadline = Instant::now() + self.transport.config.timeouts.response;
-        let builder = self.request(request, false, options)?;
-        let mut response = self
+        let builder = self.request(false, options)?;
+        let response = self
             .transport
-            .send(builder, deadline, TimeoutKind::Response)
+            .send(builder, body, deadline, TimeoutKind::Response)
             .await?;
         if !response.status().is_success() {
             return Err(error_from_response(
@@ -154,9 +177,9 @@ impl AnthropicClient {
             )
             .await);
         }
-        let request_id = header_text(&response, REQUEST_ID_HEADER);
+        let request_id = header_text(response.headers(), REQUEST_ID_HEADER);
         let body = read_body(
-            &mut response,
+            &mut response.into_body(),
             self.transport.config.max_response_bytes,
             deadline,
             TimeoutKind::Response,
@@ -176,8 +199,9 @@ impl AnthropicClient {
                 });
             }
         };
-        Ok(Reply {
+        Ok(RawReply {
             body: message,
+            raw: Bytes::from(body),
             request_id,
         })
     }
@@ -191,14 +215,31 @@ impl AnthropicClient {
         request: &MessagesRequest,
         options: &RequestOptions,
     ) -> Result<MessageStream, Error> {
+        let body = Self::encode(request, true)?;
+        self.stream(body, options).await
+    }
+
+    /// [`AnthropicClient::stream_message`] with a request body the caller already encoded,
+    /// sent byte for byte. The body must be a Messages request with `"stream": true` (the
+    /// caller checks; this method does not parse it). [`StreamItem::raw`] holds each event as
+    /// received.
+    pub async fn stream_message_raw(
+        &self,
+        body: Bytes,
+        options: &RequestOptions,
+    ) -> Result<MessageStream, Error> {
+        self.stream(body, options).await
+    }
+
+    async fn stream(&self, body: Bytes, options: &RequestOptions) -> Result<MessageStream, Error> {
         let permit = self.transport.acquire().await?;
         let timeouts = &self.transport.config.timeouts;
         let sent = Instant::now();
         let first_token_deadline = sent + timeouts.first_token;
-        let builder = self.request(request, true, options)?;
+        let builder = self.request(true, options)?;
         let response = self
             .transport
-            .send(builder, first_token_deadline, TimeoutKind::FirstToken)
+            .send(builder, body, first_token_deadline, TimeoutKind::FirstToken)
             .await?;
         if !response.status().is_success() {
             let deadline = Instant::now() + timeouts.response;
@@ -210,14 +251,14 @@ impl AnthropicClient {
             )
             .await);
         }
-        let is_event_stream = header_text(&response, CONTENT_TYPE.as_str())
+        let is_event_stream = header_text(response.headers(), CONTENT_TYPE.as_str())
             .is_some_and(|value| value.trim_start().starts_with("text/event-stream"));
         if !is_event_stream {
             return Err(Error::Protocol(
                 "a streaming response without content type text/event-stream".into(),
             ));
         }
-        let request_id = header_text(&response, REQUEST_ID_HEADER);
+        let request_id = header_text(response.headers(), REQUEST_ID_HEADER);
         let limits = StreamLimits {
             first_token_deadline,
             idle: timeouts.stream_idle,
@@ -225,7 +266,10 @@ impl AnthropicClient {
             max_event_bytes: self.transport.config.max_event_bytes,
             max_total_bytes: self.transport.config.max_response_bytes,
         };
-        Ok(MessageStream::from_source(Box::new(response), limits).with_permit(permit, request_id))
+        Ok(
+            MessageStream::from_source(Box::new(response.into_body()), limits)
+                .with_permit(permit, request_id),
+        )
     }
 }
 
