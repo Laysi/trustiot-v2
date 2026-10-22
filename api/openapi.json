@@ -397,6 +397,95 @@
         ],
         "type": "object"
       },
+      "Interval": {
+        "description": "How readings are grouped: `raw` (no grouping) or a bucket length.",
+        "enum": [
+          "raw",
+          "1m",
+          "5m",
+          "15m",
+          "1h",
+          "3h",
+          "6h",
+          "12h",
+          "1d"
+        ],
+        "type": "string"
+      },
+      "IssueWorkstationCertificate": {
+        "additionalProperties": false,
+        "description": "The body of `POST /api/certs/v1/workstation-certificates`. Unknown fields are refused.",
+        "properties": {
+          "certificate_request": {
+            "description": "A PKCS #10 certificate signing request, PEM (`-----BEGIN CERTIFICATE REQUEST-----`), at\nmost 4096 bytes as DER, signed with ecdsa-with-SHA256 by the workstation's ECDSA P-256\nkey. Only its public key is used, once its signature shows the workstation holds the\nprivate key: the CA decides the subject, the extensions and the validity, and the private\nkey never leaves the workstation.",
+            "type": "string"
+          },
+          "workstation": {
+            "description": "The workstation's name: 1-48 ASCII letters, digits, `.`, `_` or `-`, starting with a\nletter or digit. The certificate's subject is `CN=workstation:<name>`.",
+            "example": "line-a-ws-01",
+            "maxLength": 48,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workstation",
+          "certificate_request"
+        ],
+        "type": "object"
+      },
+      "Latest": {
+        "description": "The latest value of each data point of a device that has a reading in the raw period.",
+        "properties": {
+          "device_id": {
+            "description": "The device.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "earliest": {
+            "description": "The start of the period searched (the raw period), UTC.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "points": {
+            "description": "One entry per data point, ordered by data point.",
+            "items": {
+              "$ref": "#/components/schemas/LatestPoint"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "device_id",
+          "earliest",
+          "points"
+        ],
+        "type": "object"
+      },
+      "LatestPoint": {
+        "description": "The latest value of one data point.",
+        "properties": {
+          "point": {
+            "description": "The data point.",
+            "type": "string"
+          },
+          "time": {
+            "description": "When the reading was taken, UTC.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/Reading",
+            "description": "The reading."
+          }
+        },
+        "required": [
+          "point",
+          "time",
+          "value"
+        ],
+        "type": "object"
+      },
       "LoggedActor": {
         "description": "Who made a logged change.",
         "oneOf": [
@@ -540,6 +629,235 @@
         "pattern": "^[a-z0-9_]+(\\.[a-z0-9_]+)+$",
         "type": "string"
       },
+      "Reading": {
+        "description": "One reading's value, as its type stored it.",
+        "oneOf": [
+          {
+            "description": "A floating-point reading; `null` for NaN or an infinity.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "float"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "description": "A floating-point reading; `null` for NaN or an infinity.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "An integer reading.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "int"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "description": "An integer reading.",
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "value",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A boolean reading.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "bool"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "description": "A boolean reading.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "value",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A text reading.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "string"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "description": "A text reading.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "value",
+              "type"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RevocationReason": {
+        "description": "A reason a workstation certificate can be revoked for: the RFC 5280 CRLReason codes that\napply to an end entity, without `certificateHold` (a revocation here is final).",
+        "enum": [
+          "unspecified",
+          "key_compromise",
+          "affiliation_changed",
+          "superseded",
+          "cessation_of_operation",
+          "privilege_withdrawn"
+        ],
+        "type": "string"
+      },
+      "RevokeWorkstationCertificate": {
+        "additionalProperties": false,
+        "description": "The body of `POST /api/certs/v1/workstation-certificates/{serial}/revoke`. Unknown fields are\nrefused.",
+        "properties": {
+          "reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RevocationReason",
+                "description": "Why it is revoked. Absent leaves the reason out of the CRL, as RFC 5280 recommends over\n`unspecified`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "Series": {
+        "description": "A data point's series.",
+        "properties": {
+          "device_id": {
+            "description": "The device.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "earliest": {
+            "description": "The start of the queryable period for this interval at the time of the request.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "from": {
+            "description": "The range queried, `from` inclusive and `to` exclusive, UTC; `from` is later than\nrequested when the request started before the queryable period.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "interval": {
+            "$ref": "#/components/schemas/Interval",
+            "description": "The interval used: the requested one, or the automatic choice."
+          },
+          "point": {
+            "description": "The data point.",
+            "type": "string"
+          },
+          "points": {
+            "description": "The buckets with readings, in time order; buckets without readings are left out.",
+            "items": {
+              "$ref": "#/components/schemas/SeriesPoint"
+            },
+            "type": "array"
+          },
+          "to": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "truncated": {
+            "description": "Whether `from` was moved to the start of the queryable period.",
+            "type": "boolean"
+          },
+          "tz": {
+            "description": "The time zone the buckets follow.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id",
+          "point",
+          "tz",
+          "interval",
+          "from",
+          "to",
+          "truncated",
+          "earliest",
+          "points"
+        ],
+        "type": "object"
+      },
+      "SeriesPoint": {
+        "description": "One bucket of a series (for `raw`, one reading).",
+        "properties": {
+          "avg": {
+            "description": "The mean of the numeric values.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "count": {
+            "description": "How many readings the bucket holds.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last": {
+            "$ref": "#/components/schemas/Reading",
+            "description": "The bucket's latest reading."
+          },
+          "max": {
+            "description": "The largest numeric value.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "min": {
+            "description": "The smallest numeric value (a bool counts as 0 or 1); `null` when the bucket holds only\ntext readings.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "time": {
+            "description": "The bucket's start (for `raw`, the reading's time), UTC.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "time",
+          "count",
+          "last"
+        ],
+        "type": "object"
+      },
       "Tenant": {
         "description": "A tenant.",
         "properties": {
@@ -604,6 +922,73 @@
         "description": "A user account; one user can be a member of several tenants.\n\nSerialized as a lowercase hyphenated UUID string.",
         "format": "uuid",
         "type": "string"
+      },
+      "WorkstationCertificate": {
+        "description": "A workstation certificate as the ledger records it.",
+        "properties": {
+          "ca_key_id": {
+            "description": "The issuing CA that signed it: the SHA-256 of its public key, 64 lower-case hex digits.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "certificate": {
+            "description": "The certificate, PEM. It goes to the workstation, which keeps it with its private key.",
+            "type": "string"
+          },
+          "not_after": {
+            "description": "When it expires; a renewal is another issue request before then.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "not_before": {
+            "description": "When it becomes valid: five minutes before it was signed.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "revocation_reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RevocationReason",
+                "description": "Why it was revoked, when a reason was given."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revoked_at": {
+            "description": "When it was revoked; absent while it is not.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "serial": {
+            "description": "The serial number, lower-case hex (32 digits for the certificates this service signs):\nthe `{serial}` of the revoke request. Keep it; it is how the certificate is revoked.",
+            "example": "4f3a9c1e2b7d6058a1c3e5f708192a3b",
+            "pattern": "^[0-9a-f]{2,40}$",
+            "type": "string"
+          },
+          "subject": {
+            "description": "The certificate's common name: `workstation:<workstation>`.",
+            "type": "string"
+          },
+          "workstation": {
+            "description": "The workstation's name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serial",
+          "workstation",
+          "subject",
+          "ca_key_id",
+          "not_before",
+          "not_after",
+          "certificate"
+        ],
+        "type": "object"
       }
     }
   },
@@ -1232,6 +1617,199 @@
         ]
       }
     },
+    "/api/certs/v1/workstation-certificates": {
+      "post": {
+        "operationId": "issueWorkstationCertificate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueWorkstationCertificate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkstationCertificate"
+                }
+              }
+            },
+            "description": "Issued and recorded in the ledger. The subject is `CN=workstation:<workstation>`, the extended key usage the TrustIoT workstation purpose only (never client authentication, so the MQTT broker refuses it), valid for the configured workstation validity (default 180 days). Keep `serial`: it is how the certificate is revoked."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is larger than 16 KiB (`workstation_certificate.body_too_large`), or it is not a JSON object (`workstation_certificate.body_invalid`) (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator (`permission_denied`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An unknown or missing field, a name that breaks its rule (`workstation_certificate.name_invalid`), or a certificate request that is not one PEM CSR (`workstation_certificate.request_invalid`), not for ECDSA P-256 with ecdsa-with-SHA256 (`workstation_certificate.request_unsupported`) or not signed by its own key (`workstation_certificate.request_signature_invalid`) (`validation_failed`). Nothing was issued."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No issuing CA can sign yet (`workstation_certificate.ca_not_ready`), or the database failed (`unavailable`). Nothing was issued."
+          }
+        },
+        "summary": "Issues a workstation certificate for the public key of a CSR. The CA decides everything\nelse; the private key never reaches the service.",
+        "tags": [
+          "certs"
+        ]
+      }
+    },
+    "/api/certs/v1/workstation-certificates/{serial}/revoke": {
+      "post": {
+        "operationId": "revokeWorkstationCertificate",
+        "parameters": [
+          {
+            "description": "The certificate's serial number, hex, as `serial` of the issue response.",
+            "in": "path",
+            "name": "serial",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeWorkstationCertificate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkstationCertificate"
+                }
+              }
+            },
+            "description": "Revoked now; the ledger records the time and the reason, and the issuing CA's next scheduled CRL lists it."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The `Content-Type` is not `application/json`, the body is larger than 16 KiB (`workstation_certificate.body_too_large`), or it is not a JSON object (`workstation_certificate.body_invalid`) (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not a platform administrator (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No workstation certificate has this serial number (`not_found`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "It is already revoked (`conflict`, `workstation_certificate.already_revoked`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "An unknown field, or a reason that is not one of the listed ones (`workstation_certificate.reason_invalid`) (`validation_failed`). Nothing was revoked."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The database failed (`unavailable`). Nothing was revoked."
+          }
+        },
+        "summary": "Revokes a workstation certificate. Its issuing CA's next scheduled CRL lists it; the\nregistration API (Laysi/trustiot-v2#79) reads the ledger, so it refuses the certificate at\nonce.",
+        "tags": [
+          "certs"
+        ]
+      }
+    },
     "/api/identity/v1/event-log": {
       "get": {
         "operationId": "getTenantEventLog",
@@ -1627,6 +2205,279 @@
           "identity"
         ]
       }
+    },
+    "/api/telemetry/v1/devices/{device_id}/latest": {
+      "get": {
+        "operationId": "getTelemetryLatest",
+        "parameters": [
+          {
+            "description": "The device.",
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Latest"
+                }
+              }
+            },
+            "description": "The latest values; empty when the device has no reading in the raw period, or is not the tenant's."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A malformed device ID (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The user has not picked or joined a tenant (`permission_denied`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The device has more data points than one answer holds (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant's query quota or concurrency limit is used up (`rate_limited`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`)."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The query ran into its time limit (`timeout`)."
+          }
+        },
+        "summary": "The latest value of each data point of a device, from the readings of the raw period.",
+        "tags": [
+          "telemetry"
+        ]
+      }
+    },
+    "/api/telemetry/v1/devices/{device_id}/series": {
+      "get": {
+        "operationId": "getTelemetrySeries",
+        "parameters": [
+          {
+            "description": "The device.",
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The data point key (1 to 128 characters).",
+            "in": "query",
+            "name": "point",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The range's start, RFC 3339 (inclusive). Percent-encode a `+` offset, or use `Z`.",
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The range's end, RFC 3339 (exclusive).",
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "An IANA time zone name, for example `Asia/Taipei`: hour and day buckets start at its local hours and midnights.",
+            "in": "query",
+            "name": "tz",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`raw`, `1m`, `5m`, `15m`, `1h`, `3h`, `6h`, `12h` or `1d`; without it, the finest interval that gives at most 1500 buckets.",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Interval"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Series"
+                }
+              }
+            },
+            "description": "The series."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A malformed device ID or query string (`invalid_request`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No valid session (`unauthenticated`)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A parameter breaks a rule (`validation_failed`, detail `parameter`), the series would have too many points (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The tenant's query quota or concurrency limit is used up (`rate_limited`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`)."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "The query ran into its time limit (`timeout`)."
+          }
+        },
+        "summary": "A data point's series over a time range: raw readings, or buckets of an interval that\nfollow the time zone `tz`, within the queryable period.",
+        "tags": [
+          "telemetry"
+        ]
+      }
     }
   },
   "tags": [
@@ -1635,8 +2486,16 @@
       "name": "assets"
     },
     {
+      "description": "Workstation certificates from the issuing CA (services/certs).",
+      "name": "certs"
+    },
+    {
       "description": "Sessions, users and tenants (services/identity).",
       "name": "identity"
+    },
+    {
+      "description": "Device telemetry history (services/telemetry-query).",
+      "name": "telemetry"
     }
   ]
 }

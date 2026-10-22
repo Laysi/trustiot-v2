@@ -1,10 +1,11 @@
-//! The passwords of the service login roles and of the collector's ClickHouse account, and (through
+//! The passwords of the service login roles and of the ClickHouse accounts of the collector and of
+//! telemetry-query, and (through
 //! [`crate::clickhouse_admin`], run by the bundled ClickHouse's init container with the same rules)
 //! of the bundled ClickHouse's bootstrap admin account. Nobody creates, copies or rotates them
 //! (docs/architecture/secrets.md):
 //!
-//! - the chart declares one Secret per consumer (each service that uses Postgres, and the
-//!   collector) without any data, so it never renders a password;
+//! - the chart declares one Secret per consumer (each service that uses Postgres, the collector,
+//!   and telemetry-query for its ClickHouse account) without any data, so it never renders a password;
 //! - this module, run by the Job while it holds the migration lock, reads each Secret, generates
 //!   a 256-bit password for every key it manages that is missing or unusable, and for every key
 //!   when the Secret is not the object the Job filled (its uid differs from the one the Job
@@ -90,6 +91,7 @@ pub(crate) const MAX_CONFLICTS: usize = 5;
 pub struct Passwords {
     postgres: BTreeMap<String, Password>,
     collector: Option<(String, Password)>,
+    telemetry_query: Option<Password>,
 }
 
 impl Passwords {
@@ -103,6 +105,13 @@ impl Passwords {
     #[must_use]
     pub fn collector(&self) -> Option<&(String, Password)> {
         self.collector.as_ref()
+    }
+
+    /// The password of telemetry-query's ClickHouse account
+    /// ([`crate::config::TELEMETRY_QUERY_ACCOUNT`]), when the run manages it.
+    #[must_use]
+    pub fn telemetry_query(&self) -> Option<&Password> {
+        self.telemetry_query.as_ref()
     }
 }
 
@@ -745,8 +754,9 @@ pub async fn converge(
     };
     let postgres = settings.postgres().map_err(invalid)?;
     let collector = settings.clickhouse_collector().map_err(invalid)?;
+    let telemetry_query = settings.clickhouse_telemetry_query().map_err(invalid)?;
     let mut by_secret: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for Binding { owner, secret } in postgres.iter().chain(&collector) {
+    for Binding { owner, secret } in postgres.iter().chain(&collector).chain(&telemetry_query) {
         by_secret.entry(secret).or_default().push(owner);
     }
     if by_secret.is_empty() {
@@ -781,6 +791,9 @@ pub async fn converge(
     }
     if let Some(binding) = &collector {
         passwords.collector = Some((binding.owner.clone(), take(binding)?));
+    }
+    if let Some(binding) = &telemetry_query {
+        passwords.telemetry_query = Some(take(binding)?);
     }
     Ok(passwords)
 }

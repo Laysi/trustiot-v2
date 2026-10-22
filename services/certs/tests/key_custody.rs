@@ -6,8 +6,9 @@
 //!   those calls in the service, the key crate or the migration tool fails the test until it is
 //!   reviewed and listed;
 //! - at run time: the real service, with its log at `trace`, OTLP export on, a key set whose
-//!   newest key still waits for a certificate, a reload, and two broken key files, prints and
-//!   serves nothing that contains any piece of a private key: not the PKCS#8 document (any 24
+//!   newest key still waits for a certificate, a workstation certificate signed through the API
+//!   (Laysi/trustiot-v2#534), a reload, and two broken key files, prints and serves nothing that
+//!   contains any piece of a private key: not the PKCS#8 document (any 24
 //!   characters of its base64 that cover the private scalar; the rest is the algorithm and the
 //!   public key, which the CA certificates publish), not the 32-byte private scalar (hex,
 //!   base64, decimal bytes).
@@ -22,7 +23,9 @@ use std::path::{Path, PathBuf};
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use certs::http::{CHAIN_PATH, CRL_PATH};
-use serde_json::Value;
+use certs::workstations::CERTIFICATES_PATH;
+use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P256_SHA256};
+use serde_json::{Value, json};
 use support::{FakeCollector, Service, TestCa, wait_for};
 use testkit::product::product_postgres;
 
@@ -393,6 +396,27 @@ async fn no_private_key_leaves_through_logs_endpoints_or_telemetry() {
     })
     .await;
     bodies.push(crls);
+    // The issuing CA signs a workstation certificate through the API; neither the reply nor the
+    // log of the signing carries its key.
+    let workstation_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("a key");
+    let request = CertificateParams::default()
+        .serialize_request(&workstation_key)
+        .expect("a CSR");
+    let issued = service
+        .post_json(
+            CERTIFICATES_PATH,
+            Some(&service.admin_token()),
+            &json!({
+                "workstation": "custody-ws-1",
+                "certificate_request": certs::pem::encode(
+                    certs::pem::CERTIFICATE_REQUEST,
+                    request.der()
+                ),
+            }),
+        )
+        .await;
+    assert_eq!(issued.status, 201, "{}", issued.body);
+    bodies.push(issued.body);
     for path in [
         CHAIN_PATH,
         "/",

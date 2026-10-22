@@ -279,7 +279,9 @@ mesh:
     certs:
       - postgres
     # ClickHouse (decision 14): ingest writes telemetry, telemetry-query reads it with per-tenant
-    # read-only accounts (docs/architecture/deployment.md). The MQTT broker (Laysi/trustiot-v2#84):
+    # read-only accounts (docs/architecture/deployment.md). telemetry-query keeps which tenants
+    # have an account in Postgres and reads the identity service's events from there as its
+    # platform role (services/telemetry-query/README.md). The MQTT broker (Laysi/trustiot-v2#84):
     # mqtt-bridge carries the gateways' connections to its gateway port; ingest and gateway-ops
     # log in on its service port with their broker accounts. certs, dynamic security's
     # administrator, is added with the gateway registration (Laysi/trustiot-v2#82).
@@ -288,6 +290,7 @@ mesh:
       - mqtt-broker
     telemetry-query:
       - clickhouse
+      - postgres
     gateway-ops:
       - mqtt-broker
     mqtt-bridge:

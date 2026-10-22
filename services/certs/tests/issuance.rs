@@ -3,8 +3,10 @@
 //! server authentication, code signing, any key usage or a CA certificate gets the gateway
 //! profile the CA decides, and the result verifies as a TLS client certificate under the root.
 //! CSRs the CA cannot use (another curve or algorithm, a signature that does not verify, a
-//! changed subject, oversized or trailing bytes) are refused. The ledger records what was signed
-//! and the service role cannot change it.
+//! changed subject, oversized or trailing bytes) are refused. The ledger records what was signed,
+//! only for an issuing CA that has a CRL (Laysi/trustiot-v2#534), and the service role cannot
+//! change what was signed; it can only mark a revocation. No role, the superuser included, takes
+//! a revocation back or changes it, or changes what was signed (Laysi/trustiot-v2#534).
 //!
 //! The ledger test starts a throwaway Postgres with TLS (podman or docker); skipped without
 //! either unless `CI` is set. The others need nothing.
@@ -15,14 +17,17 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use certs::authority::IssuingCa;
-use certs::issue::{self, CLOCK_SKEW_SECS, IssueError, MAX_REQUEST_BYTES, SERIAL_BYTES};
+use certs::issue::{
+    self, CLOCK_SKEW_SECS, IssueError, IssuedCertificate, MAX_REQUEST_BYTES, RecordError,
+    SERIAL_BYTES,
+};
 use protocol::GatewayId;
 use rcgen::{
     BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, DnType,
     ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256,
     PKCS_ECDSA_P384_SHA384, PKCS_ED25519, SanType,
 };
-use sqlx::Row as _;
+use sqlx::{PgConnection, Row as _};
 use support::{TestCa, now, verify_client};
 use testkit::product::{DATABASE, product_postgres};
 use x509_parser::certificate::X509Certificate;
@@ -91,7 +96,7 @@ fn plain_request(key: &KeyPair) -> Vec<u8> {
     params.serialize_request(key).expect("a CSR").der().to_vec()
 }
 
-fn issue(ca: &IssuingCa, request: &[u8]) -> Result<issue::GatewayCertificate, IssueError> {
+fn issue(ca: &IssuingCa, request: &[u8]) -> Result<IssuedCertificate, IssueError> {
     issue::gateway_certificate(ca, request, &gateway(), VALIDITY, now())
 }
 
@@ -401,6 +406,34 @@ async fn the_ledger_records_what_was_signed_and_the_service_cannot_change_it() {
     let issued = issue(issuing, &forged_request(&key)).expect("signed");
 
     let mut app = product.postgres.connect("certs_app", DATABASE).await;
+
+    // Not before the issuing CA has a CRL: a certificate nobody could check for revocation is
+    // never handed out.
+    let refused = issue::record(&mut app, &issued)
+        .await
+        .expect_err("no CRL for the issuing CA yet");
+    assert!(
+        matches!(&refused, RecordError::NoCrl(id) if id == issuing.key_id()),
+        "{refused}"
+    );
+    let rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM certs.issued_certificates WHERE serial = $1")
+            .bind(&issued.serial)
+            .fetch_one(&mut app)
+            .await
+            .expect("count the ledger");
+    assert_eq!(rows, 0, "nothing recorded without a CRL");
+    let crl = certs::crl::build(issuing, 1, &[], now(), Duration::from_secs(3600)).expect("a CRL");
+    sqlx::query(
+        "INSERT INTO certs.crls (ca_key_id, crl_number, this_update, next_update, crl)
+         VALUES ($1, 1, now(), now() + interval '1 hour', $2)",
+    )
+    .bind(issuing.key_id())
+    .bind(&crl)
+    .execute(&mut app)
+    .await
+    .expect("the first CRL");
+
     issue::record(&mut app, &issued).await.expect("recorded");
     let again = issue::record(&mut app, &issued)
         .await
@@ -424,10 +457,13 @@ async fn the_ledger_records_what_was_signed_and_the_service_cannot_change_it() {
     assert!(row.get::<bool, _>("live"));
     assert_eq!(row.get::<i64, _>("not_after"), issued.not_after);
 
-    // The service role appends; it cannot rewrite or remove what was signed (revocation is
-    // Laysi/trustiot-v2#82).
+    // The service role appends and marks revocations (the column grant of
+    // 0002_workstation_certificates.sql); it cannot rewrite or remove what was signed.
     for statement in [
         "UPDATE certs.issued_certificates SET subject = 'gw-other' WHERE serial = $1",
+        "UPDATE certs.issued_certificates SET not_after = now() + interval '9 years' WHERE serial = $1",
+        "UPDATE certs.issued_certificates SET certificate = '\\x00' WHERE serial = $1",
+        "UPDATE certs.issued_certificates SET profile = 'workstation' WHERE serial = $1",
         "DELETE FROM certs.issued_certificates WHERE serial = $1",
     ] {
         let refused = sqlx::query(statement)
@@ -440,4 +476,121 @@ async fn the_ledger_records_what_was_signed_and_the_service_cannot_change_it() {
             "{statement}: {refused}"
         );
     }
+
+    // Revocation is final for every role (the trigger of 0002_workstation_certificates.sql). The
+    // service role revokes as the API does; revoking again updates nothing and raises nothing,
+    // which is how the API tells an already revoked certificate.
+    let revoke = "UPDATE certs.issued_certificates SET revoked_at = now(), revocation_reason = 1
+                  WHERE serial = $1 AND revoked_at IS NULL";
+    for expected in [1, 0] {
+        let revoked = sqlx::query(revoke)
+            .bind(&issued.serial)
+            .execute(&mut app)
+            .await
+            .expect("the service role revokes a live certificate");
+        assert_eq!(revoked.rows_affected(), expected);
+    }
+    let revoked_row = ledger_row(&mut admin, &issued.serial).await;
+    assert!(
+        revoked_row.contains("\"revocation_reason\": 1"),
+        "{revoked_row}"
+    );
+
+    // Neither the service role nor the superuser takes the revocation back, moves it or changes
+    // its reason: the next CRL would drop the certificate or misstate it.
+    let revoked_refusal = format!("certificate {} is revoked", issue::hex(&issued.serial));
+    for statement in [
+        "UPDATE certs.issued_certificates SET revoked_at = NULL, revocation_reason = NULL
+         WHERE serial = $1",
+        "UPDATE certs.issued_certificates SET revocation_reason = 4 WHERE serial = $1",
+        "UPDATE certs.issued_certificates SET revocation_reason = NULL WHERE serial = $1",
+        "UPDATE certs.issued_certificates SET revoked_at = revoked_at - interval '1 day'
+         WHERE serial = $1",
+    ] {
+        let refusal = guard_refusal(&mut app, statement, &issued.serial, &revoked_refusal).await;
+        println!("refused as certs_app: {refusal}");
+    }
+    let refusal = guard_refusal(
+        &mut admin,
+        "UPDATE certs.issued_certificates SET revoked_at = NULL, revocation_reason = NULL
+         WHERE serial = $1",
+        &issued.serial,
+        &revoked_refusal,
+    )
+    .await;
+    println!("refused as the superuser: {refusal}");
+    assert_eq!(
+        ledger_row(&mut admin, &issued.serial).await,
+        revoked_row,
+        "the revoked row is unchanged"
+    );
+
+    // A role with every privilege, here the superuser, changes nothing of what was signed
+    // either, not even beside a revocation.
+    let live_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("a second gateway key");
+    let live = issue(issuing, &plain_request(&live_key)).expect("signed");
+    issue::record(&mut app, &live).await.expect("recorded");
+    let live_row = ledger_row(&mut admin, &live.serial).await;
+    let signed_refusal = format!(
+        "only the revocation of certificate {} can change",
+        issue::hex(&live.serial)
+    );
+    for statement in [
+        "UPDATE certs.issued_certificates SET subject = 'gw-other' WHERE serial = $1",
+        "UPDATE certs.issued_certificates SET not_after = not_after + interval '9 years'
+         WHERE serial = $1",
+        "UPDATE certs.issued_certificates SET revoked_at = now(), certificate = '\\x00'
+         WHERE serial = $1",
+    ] {
+        let refusal = guard_refusal(&mut admin, statement, &live.serial, &signed_refusal).await;
+        println!("refused as the superuser: {refusal}");
+    }
+    assert_eq!(
+        ledger_row(&mut admin, &live.serial).await,
+        live_row,
+        "the live row is unchanged"
+    );
+}
+
+/// The ledger row of `serial`, every column as JSON text, to compare before and after.
+async fn ledger_row(admin: &mut PgConnection, serial: &[u8]) -> String {
+    sqlx::query_scalar(
+        "SELECT to_jsonb(c)::text FROM certs.issued_certificates c WHERE serial = $1",
+    )
+    .bind(serial)
+    .fetch_one(admin)
+    .await
+    .expect("the ledger row")
+}
+
+/// Runs `statement` for `serial` on `connection`, checks that the ledger's trigger refused it
+/// (SQLSTATE 42501, insufficient_privilege, with a message that contains `reason`) and returns
+/// the statement and the refusal on one line.
+async fn guard_refusal(
+    connection: &mut PgConnection,
+    statement: &'static str,
+    serial: &[u8],
+    reason: &str,
+) -> String {
+    let refused = sqlx::query(statement)
+        .bind(serial)
+        .execute(connection)
+        .await
+        .expect_err(statement);
+    let database = refused
+        .as_database_error()
+        .unwrap_or_else(|| panic!("{statement}: {refused}"));
+    assert_eq!(
+        database.code().as_deref(),
+        Some("42501"),
+        "{statement}: {refused}"
+    );
+    assert!(
+        database.message().contains(reason),
+        "{statement}: {refused}"
+    );
+    format!(
+        "{}: {refused}",
+        statement.split_whitespace().collect::<Vec<_>>().join(" ")
+    )
 }

@@ -1,18 +1,34 @@
-//! What every provider client shares: the endpoint configuration and its validation, the API
-//! key, the concurrency limit, time limits, and bounded body reads.
+//! What every provider client shares: the endpoint configuration and its validation, TLS, the
+//! API key, the concurrency limit, time limits, and bounded body reads.
+//!
+//! HTTP/1.1 over hyper, with rustls and the ring crypto provider for `https://`. Not reqwest: its
+//! TLS features need either aws-lc-rs (C code whose license `deny.toml` does not allow) or a
+//! process-wide default crypto provider, and a reqwest TLS feature enabled here would be unified
+//! into every workspace member that builds a reqwest client, whose clients would then panic
+//! without that provider (the same reason as in `tools/migrate/src/http.rs`).
 
+use std::error::Error as StdError;
 use std::fmt;
 use std::future::Future;
 use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use bytes::Bytes;
-use reqwest::header::HeaderValue;
-use reqwest::{StatusCode, Url};
+use http::header::HeaderValue;
+use http::{HeaderMap, Method, Request, Response, StatusCode, Uri};
+use http_body_util::{BodyExt as _, Full};
+use hyper::body::Incoming;
+use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
+use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::rt::{TokioExecutor, TokioTimer};
+use rustls::pki_types::CertificateDer;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
+use url::Url;
 use zeroize::Zeroizing;
 
 use crate::error::{ApiError, ApiErrorBody, Error, ErrorClass, TimeoutKind};
@@ -121,25 +137,151 @@ impl EndpointConfig {
 /// Error bodies are read up to this many bytes, whatever the response limit.
 const MAX_ERROR_BODY_BYTES: usize = 64 << 10;
 
+/// How long an idle pooled connection is kept for the next request.
+const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+pub(crate) type BoxError = Box<dyn StdError + Send + Sync>;
+
+/// How a client checks the provider's TLS certificate: rustls with the ring crypto provider,
+/// TLS 1.2 and 1.3, and the trust anchors chosen here. Certificate and host name verification
+/// cannot be turned off.
+#[derive(Clone)]
+pub struct Tls(Option<Arc<rustls::ClientConfig>>);
+
+impl Tls {
+    /// No TLS: the client reaches only plain `http://` loopback endpoints (tests, a proxy on the
+    /// same host); building a client for an `https://` endpoint fails.
+    pub fn none() -> Self {
+        Self(None)
+    }
+
+    /// Trusts the system's root certificates as `rustls-native-certs` finds them: the files
+    /// named by `SSL_CERT_FILE` or `SSL_CERT_DIR` when either is set, otherwise the operating
+    /// system's store (on Linux the usual bundle paths, such as
+    /// `/etc/ssl/certs/ca-certificates.crt`). Fails when no certificate can be loaded, so a
+    /// container image without a CA bundle stops at startup instead of at the first request.
+    pub fn system_roots() -> Result<Self, Error> {
+        let loaded = rustls_native_certs::load_native_certs();
+        let mut roots = rustls::RootCertStore::empty();
+        let (added, _unparsable) = roots.add_parsable_certificates(loaded.certs);
+        if added == 0 {
+            return Err(Error::InvalidRequest(format!(
+                "no root certificate could be loaded from the system store ({} errors); set \
+                 SSL_CERT_FILE or install a CA bundle",
+                loaded.errors.len()
+            )));
+        }
+        Self::with_roots(roots)
+    }
+
+    /// Trusts only `certificates` (a test CA, the CA of a private proxy). At least one is
+    /// needed.
+    pub fn roots(
+        certificates: impl IntoIterator<Item = CertificateDer<'static>>,
+    ) -> Result<Self, Error> {
+        let mut roots = rustls::RootCertStore::empty();
+        for certificate in certificates {
+            roots.add(certificate).map_err(|error| {
+                Error::InvalidRequest(format!("a root certificate is unusable: {error}"))
+            })?;
+        }
+        if roots.is_empty() {
+            return Err(Error::InvalidRequest(
+                "a TLS configuration needs at least one root certificate".into(),
+            ));
+        }
+        Self::with_roots(roots)
+    }
+
+    fn with_roots(roots: rustls::RootCertStore) -> Result<Self, Error> {
+        Ok(Self(Some(Arc::new(client_config(roots)?))))
+    }
+}
+
+impl fmt::Debug for Tls {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self.0 {
+            Some(_) => "Tls(verified)",
+            None => "Tls(none)",
+        })
+    }
+}
+
+/// A rustls client configuration with ring as its crypto provider, so nothing depends on a
+/// process-wide default provider.
+fn client_config(roots: rustls::RootCertStore) -> Result<rustls::ClientConfig, Error> {
+    Ok(rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|error| Error::InvalidRequest(format!("TLS configuration: {error}")))?
+    .with_root_certificates(roots)
+    .with_no_client_auth())
+}
+
+/// The connect timeout ran out (TCP and TLS together); the clients turn it into
+/// `Timeout(Connect)`.
+#[derive(Debug)]
+pub(crate) struct ConnectTimedOut;
+
+impl fmt::Display for ConnectTimedOut {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the connection was not established in time")
+    }
+}
+
+impl StdError for ConnectTimedOut {}
+
+/// Bounds establishing a connection, TCP and TLS together, by the endpoint's connect timeout.
+#[derive(Clone)]
+struct ConnectTimeout<C> {
+    inner: C,
+    timeout: Duration,
+}
+
+impl<C> tower::Service<Uri> for ConnectTimeout<C>
+where
+    C: tower::Service<Uri> + Send,
+    C::Future: Send + 'static,
+    C::Error: Into<BoxError>,
+    C::Response: Send + 'static,
+{
+    type Response = C::Response;
+    type Error = BoxError;
+    type Future = Pin<Box<dyn Future<Output = Result<C::Response, BoxError>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), BoxError>> {
+        self.inner.poll_ready(cx).map_err(Into::into)
+    }
+
+    fn call(&mut self, uri: Uri) -> Self::Future {
+        let connecting = self.inner.call(uri);
+        let timeout = self.timeout;
+        Box::pin(async move {
+            match tokio::time::timeout(timeout, connecting).await {
+                Ok(connected) => connected.map_err(Into::into),
+                Err(_) => Err(Box::new(ConnectTimedOut) as BoxError),
+            }
+        })
+    }
+}
+
+type HttpClient = Client<ConnectTimeout<HttpsConnector<HttpConnector>>, Full<Bytes>>;
+
 pub(crate) struct Transport {
-    pub(crate) http: reqwest::Client,
+    http: HttpClient,
     base: String,
     limiter: Arc<Semaphore>,
     pub(crate) config: EndpointConfig,
 }
 
 impl Transport {
-    /// Builds the HTTP client from the caller's builder (TLS backend and trust anchors are the
-    /// caller's choice), adding the connect timeout, TCP keepalive and no redirects: a redirect
-    /// would resend the API key (Anthropic's `x-api-key` is not a header reqwest strips on a
-    /// cross-origin redirect) to wherever the response points. A plain `http://` (loopback)
-    /// endpoint gets no proxy at all: reqwest applies `HTTP_PROXY`/`ALL_PROXY` without a
-    /// loopback exemption, which would send the request, API key included, in clear text to the
-    /// proxy. `https://` keeps the builder's proxies (an egress proxy tunnels TLS end to end).
-    pub(crate) fn new(
-        config: EndpointConfig,
-        builder: reqwest::ClientBuilder,
-    ) -> Result<Self, Error> {
+    /// Builds the HTTP/1.1 client: TLS as `tls` says (an `https://` endpoint needs
+    /// [`Tls::system_roots`] or [`Tls::roots`]), the connect timeout, TCP keepalive, no proxy and
+    /// no redirects. A redirect would resend the API key to wherever the response points, so a
+    /// 3xx comes back as an error. No proxy is used whatever `HTTP_PROXY`, `HTTPS_PROXY` or
+    /// `ALL_PROXY` say.
+    pub(crate) fn new(config: EndpointConfig, tls: &Tls) -> Result<Self, Error> {
         let base = validate_base_url(&config.base_url)?;
         if config.max_concurrent == 0 || config.max_concurrent > Semaphore::MAX_PERMITS {
             return Err(Error::InvalidRequest(format!(
@@ -148,17 +290,40 @@ impl Transport {
                 Semaphore::MAX_PERMITS
             )));
         }
-        let builder = if base.starts_with("http://") {
-            builder.no_proxy()
-        } else {
-            builder
+        let https = base.starts_with("https://");
+        let mut tls_config = match &tls.0 {
+            Some(shared) => rustls::ClientConfig::clone(shared),
+            None if https => {
+                return Err(Error::InvalidRequest(format!(
+                    "endpoint {} is https:// but the client has no TLS configuration",
+                    config.name
+                )));
+            }
+            // A plain loopback endpoint never starts TLS; the connector still needs a
+            // configuration, and this one trusts nothing.
+            None => client_config(rustls::RootCertStore::empty())?,
         };
-        let http = builder
-            .connect_timeout(config.timeouts.connect)
-            .tcp_keepalive(Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(Error::Transport)?;
+        // hyper-rustls sets ALPN for the enabled HTTP versions and refuses a preset list.
+        tls_config.alpn_protocols.clear();
+        let mut tcp = HttpConnector::new();
+        // The TLS layer above decides which schemes are allowed.
+        tcp.enforce_http(false);
+        tcp.set_keepalive(Some(Duration::from_secs(30)));
+        tcp.set_nodelay(true);
+        let schemes = HttpsConnectorBuilder::new().with_tls_config(tls_config);
+        let schemes = if https {
+            schemes.https_only()
+        } else {
+            schemes.https_or_http()
+        };
+        let connector = ConnectTimeout {
+            inner: schemes.enable_http1().wrap_connector(tcp),
+            timeout: config.timeouts.connect,
+        };
+        let http = Client::builder(TokioExecutor::new())
+            .pool_timer(TokioTimer::new())
+            .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+            .build(connector);
         Ok(Self {
             http,
             base,
@@ -167,9 +332,12 @@ impl Transport {
         })
     }
 
-    pub(crate) fn url(&self, path: &str) -> Result<Url, Error> {
-        Url::parse(&format!("{}{path}", self.base))
-            .map_err(|error| Error::InvalidRequest(format!("endpoint URL: {error}")))
+    /// A `POST` to `path` under the endpoint's base URL.
+    pub(crate) fn post(&self, path: &str) -> Result<http::request::Builder, Error> {
+        let uri: Uri = format!("{}{path}", self.base)
+            .parse()
+            .map_err(|error| Error::InvalidRequest(format!("endpoint URL: {error}")))?;
+        Ok(Request::builder().method(Method::POST).uri(uri))
     }
 
     /// Takes a slot of the endpoint's concurrency limit, waiting at most `queue_wait`.
@@ -193,15 +361,19 @@ impl Transport {
         }
     }
 
-    /// Sends the request; the response headers must arrive before `deadline`.
+    /// Sends the request with `body`; the response headers must arrive before `deadline`.
     pub(crate) async fn send(
         &self,
-        request: reqwest::RequestBuilder,
+        request: http::request::Builder,
+        body: Bytes,
         deadline: Instant,
         kind: TimeoutKind,
-    ) -> Result<reqwest::Response, Error> {
-        match tokio::time::timeout_at(deadline, request.send()).await {
-            Ok(result) => result.map_err(Error::from_reqwest),
+    ) -> Result<Response<Incoming>, Error> {
+        let request = request
+            .body(Full::new(body))
+            .map_err(|error| Error::InvalidRequest(format!("request: {error}")))?;
+        match tokio::time::timeout_at(deadline, self.http.request(request)).await {
+            Ok(result) => result.map_err(Error::from_client),
             Err(_) => Err(Error::Timeout(kind)),
         }
     }
@@ -233,7 +405,7 @@ fn validate_base_url(text: &str) -> Result<String, Error> {
     Ok(url.as_str().trim_end_matches('/').to_owned())
 }
 
-/// A source of response body chunks. The clients read `reqwest::Response`; tests and relays
+/// A source of response body chunks. The clients read the HTTP response body; tests and relays
 /// can feed recorded bytes.
 pub trait ByteSource: Send {
     /// The next chunk, or `None` at the end of the body.
@@ -242,9 +414,24 @@ pub trait ByteSource: Send {
 
 pub type ChunkFuture<'a> = Pin<Box<dyn Future<Output = Result<Option<Bytes>, Error>> + Send + 'a>>;
 
-impl ByteSource for reqwest::Response {
+impl ByteSource for Incoming {
     fn next_chunk(&mut self) -> ChunkFuture<'_> {
-        Box::pin(async move { self.chunk().await.map_err(Error::from_reqwest) })
+        Box::pin(async move {
+            loop {
+                match self.frame().await {
+                    None => return Ok(None),
+                    Some(Err(error)) => return Err(Error::Transport(Box::new(error))),
+                    // Trailers and empty frames carry nothing to read.
+                    Some(Ok(frame)) => {
+                        if let Ok(data) = frame.into_data()
+                            && !data.is_empty()
+                        {
+                            return Ok(Some(data));
+                        }
+                    }
+                }
+            }
+        })
     }
 }
 
@@ -274,20 +461,19 @@ pub(crate) async fn read_body(
 }
 
 /// The value of `name`, if it is visible ASCII.
-pub(crate) fn header_text(response: &reqwest::Response, name: &str) -> Option<String> {
-    response
-        .headers()
+pub(crate) fn header_text(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
         .get(name)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
 }
 
 /// `retry-after-ms` (milliseconds) or `retry-after` (whole seconds); an HTTP date is ignored.
-pub(crate) fn retry_after(response: &reqwest::Response) -> Option<Duration> {
-    if let Some(ms) = header_text(response, "retry-after-ms").and_then(|v| v.trim().parse().ok()) {
+pub(crate) fn retry_after(headers: &HeaderMap) -> Option<Duration> {
+    if let Some(ms) = header_text(headers, "retry-after-ms").and_then(|v| v.trim().parse().ok()) {
         return Some(Duration::from_millis(ms));
     }
-    header_text(response, "retry-after")
+    header_text(headers, "retry-after")
         .and_then(|v| v.trim().parse().ok())
         .map(Duration::from_secs)
 }
@@ -295,16 +481,17 @@ pub(crate) fn retry_after(response: &reqwest::Response) -> Option<Duration> {
 /// Turns an error response into [`Error::Api`], reading at most a small body before the
 /// deadline. A body that cannot be read or parsed leaves only the status to classify on.
 pub(crate) async fn error_from_response(
-    mut response: reqwest::Response,
+    response: Response<Incoming>,
     request_id_header: &str,
     deadline: Instant,
     classify: fn(StatusCode, &ApiErrorBody) -> ErrorClass,
 ) -> Error {
     let status = response.status();
-    let request_id = header_text(&response, request_id_header);
-    let retry_after = retry_after(&response);
+    let request_id = header_text(response.headers(), request_id_header);
+    let retry_after = retry_after(response.headers());
+    let mut body = response.into_body();
     let body = read_body(
-        &mut response,
+        &mut body,
         MAX_ERROR_BODY_BYTES,
         deadline,
         TimeoutKind::Response,

@@ -66,7 +66,7 @@ async fn start(context: Context<Config>) -> Result<Router, BoxError> {
 4. 監聽 `http.listen_addr`（API，加上 health 路由與 kit 的 layer）與 `http.health_listen_addr`（只有 health 路由），readiness 開始回 200。任一個位址被占用就 exit code 1，不啟動。
 5. 收到 SIGTERM 後依[收尾](#收尾sigterm)結束，回傳 exit code。
 
-`Context` 提供 `config()`（已驗證的服務設定）、`health()`（註冊 readiness 檢查）、`shutdown()`（收尾狀態）、`spawn(task)`（收尾時會等待的背景工作）與 `serve_port(位址, routes)`：在另一個埠提供一組路由，和 API 埠有同樣的 layer（handler 逾時、panic 處理、請求的 span 與存取日誌）與收尾，給 mesh 要和 API 分開授權的內部 API 用，例如身分服務的 token 交換（Laysi/trustiot-v2#106）。埠被占用時回錯誤，服務不要啟動。
+`Context` 提供 `config()`（已驗證的服務設定）、`health()`（註冊 readiness 檢查）、`shutdown()`（收尾狀態）、`request_timeout()`（`http.request_timeout`，handler 要等慢的上游時，啟動時拿自己的時間上限與它比對，例如 `services/ai-gateway`）、`spawn(task)`（收尾時會等待的背景工作）與 `serve_port(位址, routes)`：在另一個埠提供一組路由，和 API 埠有同樣的 layer（handler 逾時、panic 處理、請求的 span 與存取日誌）與收尾，給 mesh 要和 API 分開授權的內部 API 用，例如身分服務的 token 交換（Laysi/trustiot-v2#106）。埠被占用時回錯誤，服務不要啟動。
 
 ## 設定
 
