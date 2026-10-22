@@ -1,5 +1,7 @@
 //! Shared test support: fixtures, a byte source that counts reads, and a scripted HTTP/1.1
-//! server on loopback.
+//! server on loopback. services/ai-gateway's tests include this file by path for its server and
+//! test CA, so a change here must keep them building; [`fixture_path`] resolves against the
+//! including package, so they read the fixtures through their own helper.
 
 #![allow(
     dead_code,
@@ -13,11 +15,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ai_clients::{ApiKey, ByteSource, ChunkFuture, EndpointConfig, Timeouts};
+use ai_clients::{ApiKey, ByteSource, ChunkFuture, EndpointConfig, Timeouts, Tls};
 use bytes::Bytes;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tokio::sync::watch;
+use tokio_rustls::TlsAcceptor;
 
 /// How long a test waits for something it expects to happen soon (a closed connection, a
 /// cancelled task). Only a bound: tests never assert elapsed time.
@@ -65,6 +70,22 @@ pub fn endpoint(addr: SocketAddr, max_concurrent: usize) -> EndpointConfig {
         timeouts: generous_timeouts(),
         ..EndpointConfig::new("test", format!("http://{addr}"))
     }
+}
+
+/// [`endpoint`] over `https://`, for a server started with [`Server::start_tls`].
+pub fn tls_endpoint(addr: SocketAddr) -> EndpointConfig {
+    EndpointConfig {
+        base_url: format!("https://{addr}"),
+        ..endpoint(addr, 4)
+    }
+}
+
+/// An SSE fixture without its comment lines: what a relay of its events sends.
+pub fn sse_without_comments(text: &str) -> String {
+    text.lines()
+        .filter(|line| !line.starts_with(':'))
+        .map(|line| format!("{line}\n"))
+        .collect()
 }
 
 /// Feeds fixed chunks and counts every read; after the last chunk it ends the body, or never
@@ -138,6 +159,58 @@ impl Recorded {
     }
 }
 
+/// A CA made for one test process, and the server certificates it signs.
+pub struct TestCa {
+    pub certificate: CertificateDer<'static>,
+    /// The certificate in PEM, for a process that reads its roots from a file (`SSL_CERT_FILE`).
+    pub pem: String,
+    issuer: Issuer<'static, KeyPair>,
+}
+
+impl TestCa {
+    pub fn generate() -> Self {
+        let key = KeyPair::generate().expect("CA key");
+        let mut params = CertificateParams::new(Vec::<String>::new()).expect("CA params");
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        params
+            .distinguished_name
+            .push(DnType::CommonName, "ai-clients test CA");
+        let signed = params.self_signed(&key).expect("CA certificate");
+        Self {
+            certificate: signed.der().clone(),
+            pem: signed.pem(),
+            issuer: Issuer::new(params, key),
+        }
+    }
+
+    /// A client configuration that trusts only this CA.
+    pub fn tls(&self) -> Tls {
+        Tls::roots([self.certificate.clone()]).expect("a TLS configuration")
+    }
+
+    /// A TLS acceptor presenting a certificate for `names` (host names or IP addresses).
+    pub fn acceptor(&self, names: &[&str]) -> TlsAcceptor {
+        let key = KeyPair::generate().expect("server key");
+        let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
+        let certificate = CertificateParams::new(names)
+            .expect("server params")
+            .signed_by(&key, &self.issuer)
+            .expect("server certificate");
+        let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("TLS versions")
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![certificate.der().clone()],
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der())),
+        )
+        .expect("a server certificate and key");
+        TlsAcceptor::from(Arc::new(config))
+    }
+}
+
 /// A loopback HTTP/1.1 server. Connection N gets script N (the last script repeats).
 pub struct Server {
     pub addr: SocketAddr,
@@ -148,6 +221,16 @@ pub struct Server {
 
 impl Server {
     pub async fn start(scripts: Vec<Vec<Step>>) -> Self {
+        Self::start_with(scripts, None).await
+    }
+
+    /// The same server behind TLS: a connection whose handshake fails is closed and records
+    /// no request.
+    pub async fn start_tls(scripts: Vec<Vec<Step>>, acceptor: TlsAcceptor) -> Self {
+        Self::start_with(scripts, Some(acceptor)).await
+    }
+
+    async fn start_with(scripts: Vec<Vec<Step>>, acceptor: Option<TlsAcceptor>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind a loopback port");
@@ -170,7 +253,18 @@ impl Server {
                 connection += 1;
                 let recorded = Arc::clone(&recorded);
                 let closes_tx = Arc::clone(&closes_tx);
-                tokio::spawn(serve(socket, script, recorded, closes_tx));
+                match acceptor.clone() {
+                    None => {
+                        tokio::spawn(serve(socket, script, recorded, closes_tx));
+                    }
+                    Some(acceptor) => {
+                        tokio::spawn(async move {
+                            if let Ok(tls) = acceptor.accept(socket).await {
+                                serve(tls, script, recorded, closes_tx).await;
+                            }
+                        });
+                    }
+                }
             }
         });
         Self {
@@ -212,8 +306,8 @@ impl Server {
     }
 }
 
-async fn serve(
-    mut socket: TcpStream,
+async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
+    mut socket: S,
     script: Vec<Step>,
     recorded: Arc<Mutex<Vec<Recorded>>>,
     closes: Arc<watch::Sender<usize>>,

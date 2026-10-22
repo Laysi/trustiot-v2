@@ -6,6 +6,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::sse::SseError;
+use crate::transport::{BoxError, ConnectTimedOut};
 use crate::usage::ReportedUsage;
 
 /// Which time limit ran out ([`crate::Timeouts`]).
@@ -142,9 +143,11 @@ pub enum Error {
     StreamError(Box<ApiError>),
     #[error("AI provider request timed out ({0:?})")]
     Timeout(TimeoutKind),
-    /// Connecting, sending or reading failed for a reason other than a timeout.
-    #[error("AI provider connection failed: {0}")]
-    Transport(#[source] reqwest::Error),
+    /// Connecting (TCP or TLS, including a certificate the client does not trust), sending or
+    /// reading failed for a reason other than a timeout. The message names the causes, never
+    /// the request.
+    #[error("AI provider connection failed: {}", causes(.0.as_ref()))]
+    Transport(#[source] BoxError),
     /// The response does not follow the provider's protocol: invalid JSON, a stream that ends
     /// before its last event, events out of order, a stream over its size limit, or (from
     /// `DecisionResponse::parse` and `validate_against` called directly) a Decisions answer
@@ -196,8 +199,6 @@ impl Error {
         }
     }
 
-    /// Maps a transport error: a connect timeout is [`TimeoutKind::Connect`]; anything else
-    /// stays a transport error.
     /// The usage the provider reported for a billed response that could not be used
     /// ([`Error::InvalidResponse`]); `None` for every other error, whose usage (if any) the
     /// gateway estimates (a stream's partial usage is in `MessageStream::message`).
@@ -225,11 +226,39 @@ impl Error {
         }
     }
 
-    pub(crate) fn from_reqwest(error: reqwest::Error) -> Self {
-        if error.is_connect() && error.is_timeout() {
-            Error::Timeout(TimeoutKind::Connect)
-        } else {
-            Error::Transport(error)
+    /// Maps an HTTP client error: the connect timeout running out is [`TimeoutKind::Connect`];
+    /// anything else stays a transport error.
+    pub(crate) fn from_client(error: hyper_util::client::legacy::Error) -> Self {
+        let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+        while let Some(current) = cause {
+            if current.is::<ConnectTimedOut>() {
+                return Error::Timeout(TimeoutKind::Connect);
+            }
+            cause = current.source();
         }
+        Error::Transport(Box::new(error))
     }
 }
+
+/// An error and its causes, joined with `: `, at most [`MAX_CAUSES`] deep. The HTTP client's own
+/// message only names the stage ("client error (Connect)"); the causes say what went wrong, such
+/// as a refused connection or an untrusted certificate.
+fn causes(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut text = error.to_string();
+    let mut cause = error.source();
+    let mut depth = 1;
+    while let Some(current) = cause {
+        if depth == MAX_CAUSES {
+            text.push_str(": …");
+            break;
+        }
+        text.push_str(": ");
+        text.push_str(&current.to_string());
+        cause = current.source();
+        depth += 1;
+    }
+    text
+}
+
+/// How many causes an error message lists.
+const MAX_CAUSES: usize = 6;

@@ -13,22 +13,35 @@ repository.workspace = true
 # Decisions image parts are base64 data URLs.
 base64.workspace = true
 bytes.workspace = true
-# HTTP/1.1 transport without a TLS backend: the caller hands in a `reqwest::ClientBuilder` with
-# the TLS stack and trust anchors it chooses (the AI gateway, Laysi/trustiot-v2#139).
-reqwest.workspace = true
+# HTTP/1.1 over hyper with rustls and ring, trusting the system store or the roots the caller
+# names (`Tls`). Not reqwest: see src/transport.rs.
+http.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-rustls = { workspace = true, features = ["http1", "ring", "tls12"] }
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
+rustls = { workspace = true, features = ["ring", "std", "tls12"] }
+rustls-native-certs.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "sync", "time"] }
 # CancellationToken, to cancel a stream from another task.
 tokio-util.workspace = true
+# The connect timeout wraps the connector, a `tower::Service`.
+tower.workspace = true
+# Endpoint URL checks.
+url.workspace = true
 # API keys are wiped from memory on drop.
 zeroize.workspace = true
 
 [dev-dependencies]
+# The TLS tests serve HTTPS with a certificate from a test CA.
+rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
 # A listener with a full accept queue, so a connection attempt times out (connect timeout test).
 socket2.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+tokio-rustls = { workspace = true, features = ["ring"] }
 
 [lints]
 workspace = true
