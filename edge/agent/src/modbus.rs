@@ -154,8 +154,7 @@ impl ReadError {
 pub struct Timestamp {
     /// Milliseconds since the Unix epoch, from the gateway's clock.
     pub at: UnixMillis,
-    /// Whether the clock was synchronized when it was read. The gateway has no hardware clock
-    /// and has booted 38 minutes slow without a network (Laysi/trustiot#180).
+    /// Whether the clock was synchronized when it was read.
     pub synced: bool,
 }
 
