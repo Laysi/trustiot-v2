@@ -441,8 +441,9 @@ impl PlatformDb {
     }
 
     /// Starts a cross-tenant transaction. It is logged at INFO with the actor and `purpose`
-    /// (`platform database access`); the operation log of Laysi/trustiot-v2#130 records the
-    /// operations themselves.
+    /// (`platform database access`); the operations themselves reach the identity service's
+    /// event log through the events they write (`outbox::publish_as` with the actor;
+    /// Laysi/trustiot-v2#130).
     ///
     /// # Errors
     ///

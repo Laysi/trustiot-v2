@@ -83,13 +83,14 @@ The services whose platform role logs in (Laysi/trustiot-v2#65): the role that r
 tenants (service-kit's PlatformDb), which every outbox consumer needs to read its producers'
 events. tools/migrate creates a platform role for every service its registry marks, but a role
 logs in only while a Secret is bound to it, and the chart binds one only to the services listed
-here: a platform role nobody logs in with stays NOLOGIN (identity's, for example, exists for
-platform-wide events it does not write yet). tools/migrate/tests/registry.rs checks this list
-against the registry: every consumer is in it, and nothing without a platform role is.
+here: a platform role nobody logs in with stays NOLOGIN. identity is listed because it keeps
+the event log (Laysi/trustiot-v2#130) and reads the events it records as its platform role.
+tools/migrate/tests/registry.rs checks this list against the registry: every consumer is in it,
+and nothing without a platform role is.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.migrate.platformLogins" -}}
-{{- list "assets" | toYaml -}}
+{{- list "assets" "identity" "telemetry-query" | toYaml -}}
 {{- end -}}
 
 {{/*
@@ -99,14 +100,19 @@ one per consumer, so a node's kubelet can read only the passwords of the pods sc
   its login role's password under the key "<service>_app" (role "app"), and, for a service in
   "trustiot.migrate.platformLogins", its platform role's password under "<service>_platform" (role
   "platform") in the same Secret;
+- the telemetry-query service, when enabled: its ClickHouse account's password under the key
+  "trustiot_telemetry_query" (role "clickhouse") in the same "<release>-telemetry-query-password"
+  (services/telemetry-query/README.md; the account is defined by
+  services/ingest/migrations/clickhouse/0008_telemetry_query.sql);
 - the OpenTelemetry collector, when enabled: "<release>-otel-collector-password", with its
   ClickHouse account's password under the key named after the account.
 templates/passwords.yaml declares them without data; the migration Job generates each password and
 writes it in (tools/migrate/src/passwords.rs). They are declared whether or not migrate.enabled is
 true: with the Job turned off, whatever replaces it fills them (only the cluster tests do that).
 Returns a YAML list of {name, key, database (postgres or clickhouse), component, role (app or
-platform, postgres only)}, one per key, so a Secret with two keys appears twice; use with
-fromYamlArray, and "trustiot.migrate.passwordSecretObjects" for the Secrets themselves.
+platform for postgres, clickhouse for a service's ClickHouse account)}, one per key, so a Secret
+with two keys appears twice; use with fromYamlArray, and "trustiot.migrate.passwordSecretObjects"
+for the Secrets themselves.
 */}}
 {{- define "trustiot.migrate.passwordSecrets" -}}
 {{- $secrets := list -}}
@@ -116,6 +122,11 @@ fromYamlArray, and "trustiot.migrate.passwordSecretObjects" for the Secrets them
 {{- $secrets = append $secrets (dict "name" $name "key" (include "trustiot.migrate.appRole" .) "database" "postgres" "component" . "role" "app") -}}
 {{- if has . $platformLogins -}}
 {{- $secrets = append $secrets (dict "name" $name "key" (include "trustiot.migrate.platformRole" .) "database" "postgres" "component" . "role" "platform") -}}
+{{- end -}}
+{{- end -}}
+{{- with get .Values.services "telemetry-query" -}}
+{{- if .enabled -}}
+{{- $secrets = append $secrets (dict "name" (include "trustiot.componentName" (dict "root" $ "name" "telemetry-query-password")) "key" "trustiot_telemetry_query" "database" "clickhouse" "component" "telemetry-query" "role" "clickhouse") -}}
 {{- end -}}
 {{- end -}}
 {{- with .Values.observability.collector -}}
@@ -319,6 +330,8 @@ passwords. */ -}}
 {{- range $secrets -}}
 {{- if eq .database "postgres" -}}
 {{- $postgres = append $postgres (printf "%s=%s" .key .name) -}}
+{{- else if eq .component "telemetry-query" -}}
+{{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__CLICKHOUSE_TELEMETRY_QUERY" "value" (printf "%s=%s" .key .name)) -}}
 {{- else -}}
 {{- $env = append $env (dict "name" "TRUSTIOT__PASSWORDS__CLICKHOUSE_COLLECTOR" "value" (printf "%s=%s" .key .name)) -}}
 {{- end -}}

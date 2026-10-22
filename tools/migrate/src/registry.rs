@@ -20,6 +20,10 @@ mod identity_schema;
 #[path = "../../../services/assets/src/schema.rs"]
 mod assets_schema;
 
+/// The telemetry-query service's files (compiled into the service as well).
+#[path = "../../../services/telemetry-query/src/schema.rs"]
+mod telemetry_query_schema;
+
 /// The certs service's files (compiled into the service as well).
 #[path = "../../../services/certs/src/schema.rs"]
 mod certs_schema;
@@ -33,6 +37,7 @@ pub struct Outbox {
     pub producer: bool,
     /// The producers this service reads events from (their names): `outbox::install_consumer`
     /// on every run, and its platform role becomes a reader of each producer's `outbox_event`.
+    /// Each one must be an outbox producer of the registry, before or after this service.
     /// Needs a platform role.
     pub consumes: &'static [&'static str],
 }
@@ -155,14 +160,16 @@ pub const OUTBOX_AGGREGATE_TEMPLATE: Migration = service_kit::migrations::OUTBOX
 pub const PRODUCT: Registry = Registry {
     services: &[
         // Writes `identity.tenant_created` (Laysi/trustiot-v2#65) with its service role, in the
-        // new tenant's transaction. Its platform role exists because the outbox policy names one
-        // (platform-wide events), but the chart binds no Secret to it, so it stays NOLOGIN.
+        // new tenant's transaction, and keeps the event log (Laysi/trustiot-v2#130): it reads the
+        // events of every producer in `CONSUMES` (its own and assets', which comes later in this
+        // list) as its platform role, so the chart binds a password to `identity_platform` as
+        // well ("trustiot.migrate.platformLogins" in deploy/chart/templates/_migrate.tpl).
         Service {
             name: identity_schema::SCHEMA.service,
             platform_role: true,
             outbox: Outbox {
                 producer: identity_schema::SCHEMA.outbox_producer,
-                consumes: &[],
+                consumes: identity_schema::CONSUMES,
             },
             migrations: identity_schema::SCHEMA.migrations,
         },
@@ -182,6 +189,17 @@ pub const PRODUCT: Registry = Registry {
                 consumes: &["identity", "assets"],
             },
             migrations: assets_schema::SCHEMA.migrations,
+        },
+        // Reads identity's events as its platform role, like assets, to create each new
+        // tenant's ClickHouse account (Laysi/trustiot-v2#119).
+        Service {
+            name: telemetry_query_schema::SCHEMA.service,
+            platform_role: true,
+            outbox: Outbox {
+                producer: telemetry_query_schema::SCHEMA.outbox_producer,
+                consumes: &["identity"],
+            },
+            migrations: telemetry_query_schema::SCHEMA.migrations,
         },
         // The ledger of issued certificates and the CRLs (Laysi/trustiot-v2#78): no tenant data
         // and no events, so no platform role.
