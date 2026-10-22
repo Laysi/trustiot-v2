@@ -781,6 +781,25 @@ describe("the demo release", () => {
   );
 });
 
+// The MQTT broker (Laysi/trustiot-v2#84) needs a server certificate Secret that nothing in a
+// cluster issues yet (Laysi/trustiot-v2#535), so no cluster turns it on: the chart's shapes leave
+// it off, and so must every values file and value a cluster's release reads.
+describe.each([...CLUSTERS])("the MQTT broker stays off in the %s cluster", (cluster) => {
+  test("no values file of the release sets mqttBroker, and no private value targets it", () => {
+    const data = one(cluster, "ConfigMap", "trustiot-values").data as Record<string, string>;
+    expect(Object.keys(data).length).toBeGreaterThan(0);
+    for (const [file, text] of Object.entries(data)) {
+      const values = Bun.YAML.parse(text);
+      expect({ file, mqttBroker: isMap(values) ? values.mqttBroker : undefined }).toEqual({ file, mqttBroker: undefined });
+    }
+    const release = spec(one(cluster, "HelmRelease", "trustiot"));
+    expect(release.values).toBeUndefined();
+    for (const entry of (release.valuesFrom ?? []) as YamlMap[]) {
+      expect(String(entry.targetPath ?? "")).not.toStartWith("mqttBroker");
+    }
+  });
+});
+
 interface SopsRule {
   path_regex: string;
   encrypted_regex: string;

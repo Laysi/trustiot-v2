@@ -42,6 +42,8 @@ hyper-util = { version = "0.1.21", default-features = false }
 # TLS for the AI provider clients (crates/ai-clients) with ring, not reqwest's TLS features: those
 # need aws-lc-rs or a process-wide crypto provider (see crates/ai-clients/README.md).
 hyper-rustls = { version = "0.27.10", default-features = false }
+# kill(2) for the MQTT broker's trust sidecar (tools/migrate/src/mqtt_trust.rs).
+libc = "0.2.190"
 log = "0.4.34"
 opentelemetry = { version = "0.33.1", default-features = false }
 opentelemetry-otlp = { version = "0.33.1", default-features = false }

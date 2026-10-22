@@ -101,6 +101,7 @@ describe("path rules", () => {
     ["a Rust file under scripts", "scripts/ci/fixture.rs"],
     ["SQL outside the crates (a Rust file may include it)", "deploy/sql/seed.sql"],
     ["the chart values a service-kit test reads", "deploy/chart/values.yaml"],
+    ["the MQTT broker configuration a migrate test runs", "deploy/chart/files/mosquitto/mosquitto.conf"],
     ["the git ignore rules (the OpenAPI diff uses git status)", ".gitignore"],
     ["ci.yml", ".github/workflows/ci.yml"],
     ["a local action", ".github/actions/setup-proto/action.yml"],
@@ -178,6 +179,9 @@ describe("path rules", () => {
     "scripts/ci/check-secret-handling.ts",
     "scripts/lib/stack.ts",
     "services/ingest/tests/common/mod.rs",
+    // The MQTT broker's image pin, probe and memory limit, shared with its tests.
+    "crates/protocol/tests/broker.rs",
+    "tools/migrate/tests/mqtt_broker.rs",
     "services/ingest/migrations/clickhouse",
     "services/ingest/migrations/clickhouse/0006_logs.sql",
     "crates/service-kit/src/telemetry/redact.rs",

@@ -162,7 +162,8 @@ ClickHouse's admin password Secret while the chart generates that password
 identity service's signing keys Secret while the identity service is enabled
 ("trustiot.identity.keys"), which the identity pod's init container fills, then the certs
 service's issuing CA keys Secret while the certs service is enabled ("trustiot.certs.ca"), which
-the certs pod's init container fills.
+the certs pod's init container fills, then the MQTT broker's accounts Secret while the broker is
+enabled ("trustiot.mqttBroker.accountsSecret"), which the broker pod's init container fills.
 templates/passwords.yaml declares one per entry. Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.filledSecretObjects" -}}
@@ -178,6 +179,9 @@ templates/passwords.yaml declares one per entry. Returns a YAML list; use with f
 {{- if include "trustiot.certs.enabled" . -}}
 {{- $ca := include "trustiot.certs.ca" . | fromYaml -}}
 {{- $objects = append $objects (dict "name" $ca.secret "component" "certs") -}}
+{{- end -}}
+{{- if include "trustiot.mqttBroker.enabled" . -}}
+{{- $objects = append $objects (dict "name" (include "trustiot.mqttBroker.accountsSecret" .) "component" "mqtt-broker") -}}
 {{- end -}}
 {{- toYaml $objects -}}
 {{- end -}}

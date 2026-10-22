@@ -99,6 +99,13 @@ const ALLOWED: &[(&str, &str, usize, &str)] = &[
         2,
         "the identity service's signing keys (crates/identity-keys) into their own Secret; no CA key",
     ),
+    (
+        "tools/migrate/src/mqtt_trust.rs",
+        "from_pem",
+        1,
+        "the MQTT broker's trust sidecar reads the broker's own server key (no CA key) from the \
+         Secret it mounts, only to check that it belongs to the certificate before a reload",
+    ),
 ];
 
 /// The directories scanned: every non-test Rust source that handles the CA keys.

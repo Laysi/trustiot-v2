@@ -7,7 +7,7 @@
 - 服務骨架：自己的 schema `certs`、服務角色、簽發紀錄與 CRL 兩張表（沒有租戶資料，見[資料庫](#資料庫)）。
 - CA 階層與私鑰保管（見下一節），以及根 CA 的離線儀式工具 `certs-ca`。
 - 從 CSR 簽閘道器憑證的程式（`src/issue.rs`）：只取 CSR 的公鑰，CN、EKU 與效期由 CA 決定。還沒有對外的簽發 API：出廠登錄（Laysi/trustiot-v2#79）與換發端點（Laysi/trustiot-v2#81）呼叫它，撤銷（Laysi/trustiot-v2#82）寫簽發紀錄的撤銷欄位。
-- CRL 依排程重發、到期前告警，以及給 broker 的 `crl.pem` 與 `ca.pem`。broker 怎麼取用它們在 Laysi/trustiot-v2#84。
+- CRL 依排程重發、到期前告警，以及給 broker 的 `crl.pem` 與 `ca.pem`。broker 怎麼取用它們見 [deploy/chart/README.md](../../deploy/chart/README.md) 的「MQTT broker」（Laysi/trustiot-v2#84）。
 
 Laysi/trustiot-v2#534（2026-10-22）加上：
 
@@ -44,7 +44,7 @@ Laysi/trustiot-v2#534（2026-10-22）加上：
 
 已知的限制（後續 issue 見 Laysi/trustiot-v2#78 的實作紀錄）：
 
-- 根 CA 不發 CRL：簽發 CA 外洩時，靠「移除它的金鑰、broker 不再讀到它的 CRL」讓 broker 拒絕它簽的閘道器憑證（見[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)）。閘道器驗 broker 的伺服器憑證時看不到這件事；broker 伺服器憑證怎麼簽、閘道器信任什麼由 Laysi/trustiot-v2#84 決定。
+- 根 CA 不發 CRL：簽發 CA 外洩時，靠「移除它的金鑰、broker 不再讀到它的 CRL」讓 broker 拒絕它簽的閘道器憑證（見[簽發 CA 金鑰遺失或外洩](#簽發-ca-金鑰遺失或外洩)）。閘道器驗 broker 的伺服器憑證時看不到這件事；broker 伺服器憑證怎麼簽、閘道器信任什麼由 Laysi/trustiot-v2#535 決定。
 - 根 CA 換新還沒有做法。地端的 CA 階層（誰保管客戶的根 CA）延後：地端專用的工作排在 SaaS 之後（決策 1 的 2026-10-18 補充，Laysi/trustiot-v2#446）；chart 本身兩種型態相同。
 
 ## 發簽發 CA 憑證
@@ -139,7 +139,7 @@ age --decrypt -i <自己的 identity> root-key.age \
 
 **外洩**（或懷疑有人拿到 Secret、certs pod 或它的節點）：先止血，接受短暫中斷。
 
-1. 同一次升級把 `keyGeneration` 與 `removeKeysBeforeGeneration` 都設成新的一代（例如目前是 `"2"` 就都設 `"3"`）：init container 移除外洩的金鑰並加一把新的。外洩的簽發 CA 不再出現在 `ca.pem` 與 `crl.pem`，broker 讀不到它的 CRL，就拒絕它簽的每一張閘道器憑證（broker 要開 CRL 檢查，Laysi/trustiot-v2#84 驗證）。這時服務沒有可用的簽發 CA，不能簽章（`certs.ca.signing` 是 0，每次檢查記 WARN）。
+1. 同一次升級把 `keyGeneration` 與 `removeKeysBeforeGeneration` 都設成新的一代（例如目前是 `"2"` 就都設 `"3"`）：init container 移除外洩的金鑰並加一把新的。外洩的簽發 CA 不再出現在 `ca.pem` 與 `crl.pem`，broker 讀不到它的 CRL，就拒絕它簽的每一張閘道器憑證（broker 的 CRL 檢查與它沒有可用的簽發 CA 時拒絕每張閘道器憑證，由 Laysi/trustiot-v2#84 的 Rust 測試驗證）。這時服務沒有可用的簽發 CA，不能簽章（`certs.ca.signing` 是 0，每次檢查記 WARN）。
 2. 照「[發簽發 CA 憑證](#發簽發-ca-憑證)」簽新的一代；外洩的那一張從 `issuingCertificates` 拿掉。
 3. 閘道器經換發端點以 TPM 金鑰重新取得憑證（決策 12，Laysi/trustiot-v2#81），不必寄回。產線工作站由平台管理員重新簽發（[工作站憑證](#工作站憑證)的「換發」），外洩的簽發 CA 簽的工作站憑證已經不能鏈到 `ca.pem`。
 4. 依 [docs/runbooks/secrets.md](../../docs/runbooks/secrets.md) 的「外洩處理」調查並開 `security` issue。
@@ -275,11 +275,11 @@ curl -sS --fail-with-body -X POST "https://<app 主機>/api/certs/v1/workstation
 
 ## 端點
 
-`/internal` 底下只有公開資料：入口不轉送 `/internal`（決策 27），叢集內只有 `mesh.calls` 列出 certs 的服務連得到（目前沒有；broker 在 Laysi/trustiot-v2#84 加入）。
+`/internal` 底下只有公開資料：入口不轉送 `/internal`（決策 27），叢集內只有 `mesh.calls` 列出 certs 的服務，以及 MQTT broker 的 pod（`mqttBroker.enabled` 時由 chart 自動加上，Laysi/trustiot-v2#84）連得到。
 
 | 端點 | 回應 |
 | --- | --- |
-| `GET /internal/certs/v1/crl.pem` | 每個憑證還有效的簽發 CA 的目前 CRL，PEM（Mosquitto 的 `crlfile`）。其中一個還沒有 CRL 時 503，取用端保留手上的檔案；沒有任何可用的簽發 CA 時是空檔，broker 因此拒絕每張閘道器憑證 |
+| `GET /internal/certs/v1/crl.pem` | 每個憑證還有效的簽發 CA 的目前 CRL，PEM（Mosquitto 的 `crlfile`）。其中一個還沒有 CRL 時 503，取用端保留手上的檔案；沒有任何可用的簽發 CA 時是空檔，broker 因此改用不信任任何閘道器的佔位 CA，拒絕每張閘道器憑證（Mosquitto 載入空的 CRL 檔會停止，所以 broker 不直接用它） |
 | `GET /internal/certs/v1/ca.pem` | 根憑證，接著每個可用的簽發 CA 憑證，PEM。還沒載入 CA 時 503 |
 
 給平台管理員的 API 在 `/api/certs/v1/` 底下，經入口的 cookie 路由、驗內部身分 token（用法與錯誤見[工作站憑證](#工作站憑證)的「簽發、撤銷與換發」，`src/workstations.rs`）：
