@@ -49,7 +49,7 @@ fn gateway_request(name: &str) -> (KeyPair, Vec<u8>) {
     (key, request)
 }
 
-fn issue_for(ca: &certs::authority::IssuingCa, name: &str) -> issue::GatewayCertificate {
+fn issue_for(ca: &certs::authority::IssuingCa, name: &str) -> issue::IssuedCertificate {
     let (_, request) = gateway_request(name);
     issue::gateway_certificate(
         ca,
@@ -277,16 +277,17 @@ async fn crls_are_renewed_on_schedule_and_alert_before_they_lapse() {
         let mut app = product.postgres.connect("certs_app", DATABASE).await;
         issue::record(&mut app, &revoked).await.expect("recorded");
         issue::record(&mut app, &kept).await.expect("recorded");
+        // Gateway revocation is Laysi/trustiot-v2#82; the test marks the row as the service
+        // role would, with the column grant of 0002_workstation_certificates.sql.
+        sqlx::query(
+            "UPDATE certs.issued_certificates SET revoked_at = now(), revocation_reason = 1
+             WHERE serial = $1",
+        )
+        .bind(&revoked.serial)
+        .execute(&mut app)
+        .await
+        .expect("mark the certificate revoked");
     }
-    // Revocation is Laysi/trustiot-v2#82; until then the test marks the row as the superuser.
-    sqlx::query(
-        "UPDATE certs.issued_certificates SET revoked_at = now(), revocation_reason = 1
-         WHERE serial = $1",
-    )
-    .bind(&revoked.serial)
-    .execute(&mut product.superuser().await)
-    .await
-    .expect("mark the certificate revoked");
     wait_for("the revoked serial in the newer CA's CRL", || async {
         stored(&product)
             .await

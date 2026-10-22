@@ -11,6 +11,7 @@
 | `identity` | 內部身分標頭 `x-internal-identity`、claims `InternalClaims`、遮蔽內容的 `InternalToken` |
 | `client` | 內部 API 的 `Endpoint` 與有型別的 client `InternalClient<S>` |
 | `api` | 內部 API 本身，每個提供 API 的服務一個子模組；目前有 `api::identity::ExchangeToken`（身分服務的 token 交換，Laysi/trustiot-v2#106） |
+| `certs` | certs 服務的用戶端 API：平台管理員簽發與撤銷工作站憑證的請求與回應（`IssueWorkstationCertificate`、`RevokeWorkstationCertificate`、`RevocationReason`、`WorkstationCertificate`，Laysi/trustiot-v2#534）。經入口以 cookie 呼叫，不是內部 API；請求拒絕不認得的欄位，讓送出主體、延伸欄位或效期的用戶端立刻知道這些由 CA 決定。profile 與步驟見 [certs README](../../services/certs/README.md) 的「工作站憑證」 |
 | `service` | `ServiceName` 與型別層級的服務標記（`service::Identity` 等） |
 | `openapi` | `SharedSchemas`：每個服務規格共用的 OpenAPI schema（M1 錯誤格式） |
 | `json` | 不含文件內容的 JSON 錯誤 `JsonError`：serde 的訊息會引用值，日誌不得含個資（M2） |

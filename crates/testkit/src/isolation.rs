@@ -372,6 +372,7 @@ pub struct Suite<'a, S> {
     endpoints: Vec<api::Endpoint>,
     exempt_endpoints: Vec<(String, &'static str)>,
     api: ApiDeclaration,
+    without_tenant_data: Option<&'static str>,
 }
 
 impl<'a, S: Store> Suite<'a, S> {
@@ -385,6 +386,7 @@ impl<'a, S: Store> Suite<'a, S> {
             endpoints: Vec::new(),
             exempt_endpoints: Vec::new(),
             api: ApiDeclaration::Undeclared,
+            without_tenant_data: None,
         }
     }
 
@@ -419,6 +421,17 @@ impl<'a, S: Store> Suite<'a, S> {
         self
     }
 
+    /// The service keeps and serves no tenant data, for `reason`: every relation is exempt
+    /// ([`postgres::PgStore::exempt`]) and every operation too ([`Suite::exempt_endpoint`]), so
+    /// only the coverage checks apply. Without this, such a suite fails with "nothing is
+    /// declared"; with it, a tenant table or an endpoint to attack fails the run, because the
+    /// declaration no longer holds.
+    #[must_use]
+    pub fn without_tenant_data(mut self, reason: &'static str) -> Self {
+        self.without_tenant_data = Some(reason);
+        self
+    }
+
     /// Runs the suite; `base_url` is where the service under test listens (for example
     /// `http://127.0.0.1:8080`), required when endpoints are declared. Start the service with
     /// the issuer's [`TestIssuer::jwks`] and the same database as the store.
@@ -445,13 +458,33 @@ impl<'a, S: Store> Suite<'a, S> {
             return report;
         }
         let seeded = Seeded::new(world, rows);
-        if seeded.objects().is_empty() && self.endpoints.is_empty() {
-            report.fail(
+        let nothing_declared = seeded.objects().is_empty() && self.endpoints.is_empty();
+        match (self.without_tenant_data, nothing_declared) {
+            (None, true) => {
+                report.fail(
+                    "suite",
+                    "declarations",
+                    "nothing is declared, so nothing was tested",
+                );
+                return report;
+            }
+            (Some(reason), true) => {
+                report.pass(
+                    "suite",
+                    "declarations",
+                    format!("no tenant data, every relation and operation exempt: {reason}"),
+                );
+                return report;
+            }
+            (Some(reason), false) => report.fail(
                 "suite",
                 "declarations",
-                "nothing is declared, so nothing was tested",
-            );
-            return report;
+                format!(
+                    "declared without tenant data ({reason}), but tenant tables or endpoints \
+                     are declared"
+                ),
+            ),
+            (None, false) => {}
         }
 
         for attacker in [Side::A, Side::B] {

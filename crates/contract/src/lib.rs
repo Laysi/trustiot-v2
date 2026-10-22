@@ -14,6 +14,8 @@
 //! - [`client`]: the typed HTTP/JSON client for synchronous internal API calls: a timeout is
 //!   mandatory and every failure maps to an M1 code.
 //! - [`api`]: the internal APIs themselves, one module per serving service.
+//! - [`certs`]: the certs service's client API, workstation certificates
+//!   (Laysi/trustiot-v2#534).
 //! - [`service`]: the names of the services that take part in these contracts.
 //! - [`openapi`]: the schemas shared by every service spec merged into `api/openapi.json`.
 //!
@@ -22,6 +24,7 @@
 //! `README.md`.
 
 pub mod api;
+pub mod certs;
 pub mod client;
 pub mod error;
 pub mod event;

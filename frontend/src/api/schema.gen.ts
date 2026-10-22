@@ -96,6 +96,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/certs/v1/workstation-certificates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issues a workstation certificate for the public key of a CSR. The CA decides everything
+         *     else; the private key never reaches the service.
+         */
+        post: operations["issueWorkstationCertificate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/certs/v1/workstation-certificates/{serial}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revokes a workstation certificate. Its issuing CA's next scheduled CRL lists it; the
+         *     registration API (Laysi/trustiot-v2#79) reads the ledger, so it refuses the certificate at
+         *     once.
+         */
+        post: operations["revokeWorkstationCertificate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/identity/v1/tenants": {
         parameters: {
             query?: never;
@@ -320,11 +361,41 @@ export interface components {
             /** @description The message the client shows next to the field. */
             message_key: components["schemas"]["MessageKey"];
         };
+        /** @description The body of `POST /api/certs/v1/workstation-certificates`. Unknown fields are refused. */
+        IssueWorkstationCertificate: {
+            /**
+             * @description A PKCS #10 certificate signing request, PEM (`-----BEGIN CERTIFICATE REQUEST-----`), at
+             *     most 4096 bytes as DER, signed with ecdsa-with-SHA256 by the workstation's ECDSA P-256
+             *     key. Only its public key is used, once its signature shows the workstation holds the
+             *     private key: the CA decides the subject, the extensions and the validity, and the private
+             *     key never leaves the workstation.
+             */
+            certificate_request: string;
+            /**
+             * @description The workstation's name: 1-48 ASCII letters, digits, `.`, `_` or `-`, starting with a
+             *     letter or digit. The certificate's subject is `CN=workstation:<name>`.
+             * @example line-a-ws-01
+             */
+            workstation: string;
+        };
         /**
          * @description Key of the translated message the client shows; never the message itself.
          * @example error.not_found
          */
         MessageKey: string;
+        /**
+         * @description A reason a workstation certificate can be revoked for: the RFC 5280 CRLReason codes that
+         *     apply to an end entity, without `certificateHold` (a revocation here is final).
+         * @enum {string}
+         */
+        RevocationReason: "unspecified" | "key_compromise" | "affiliation_changed" | "superseded" | "cessation_of_operation" | "privilege_withdrawn";
+        /**
+         * @description The body of `POST /api/certs/v1/workstation-certificates/{serial}/revoke`. Unknown fields are
+         *     refused.
+         */
+        RevokeWorkstationCertificate: {
+            reason?: components["schemas"]["RevocationReason"] | null;
+        };
         /** @description A tenant. */
         Tenant: {
             /**
@@ -360,6 +431,39 @@ export interface components {
              *     other's points unseen. Required.
              */
             revision: number;
+        };
+        /** @description A workstation certificate as the ledger records it. */
+        WorkstationCertificate: {
+            /** @description The issuing CA that signed it: the SHA-256 of its public key, 64 lower-case hex digits. */
+            ca_key_id: string;
+            /** @description The certificate, PEM. It goes to the workstation, which keeps it with its private key. */
+            certificate: string;
+            /**
+             * Format: date-time
+             * @description When it expires; a renewal is another issue request before then.
+             */
+            not_after: string;
+            /**
+             * Format: date-time
+             * @description When it becomes valid: five minutes before it was signed.
+             */
+            not_before: string;
+            revocation_reason?: components["schemas"]["RevocationReason"] | null;
+            /**
+             * Format: date-time
+             * @description When it was revoked; absent while it is not.
+             */
+            revoked_at?: string | null;
+            /**
+             * @description The serial number, lower-case hex (32 digits for the certificates this service signs):
+             *     the `{serial}` of the revoke request. Keep it; it is how the certificate is revoked.
+             * @example 4f3a9c1e2b7d6058a1c3e5f708192a3b
+             */
+            serial: string;
+            /** @description The certificate's common name: `workstation:<workstation>`. */
+            subject: string;
+            /** @description The workstation's name. */
+            workstation: string;
         };
     };
     responses: never;
@@ -893,6 +997,165 @@ export interface operations {
                 };
             };
             /** @description The database failed (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    issueWorkstationCertificate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IssueWorkstationCertificate"];
+            };
+        };
+        responses: {
+            /** @description Issued and recorded in the ledger. The subject is `CN=workstation:<workstation>`, the extended key usage the TrustIoT workstation purpose only (never client authentication, so the MQTT broker refuses it), valid for the configured workstation validity (default 180 days). Keep `serial`: it is how the certificate is revoked. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkstationCertificate"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is larger than 16 KiB (`workstation_certificate.body_too_large`), or it is not a JSON object (`workstation_certificate.body_invalid`) (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description An unknown or missing field, a name that breaks its rule (`workstation_certificate.name_invalid`), or a certificate request that is not one PEM CSR (`workstation_certificate.request_invalid`), not for ECDSA P-256 with ecdsa-with-SHA256 (`workstation_certificate.request_unsupported`) or not signed by its own key (`workstation_certificate.request_signature_invalid`) (`validation_failed`). Nothing was issued. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No issuing CA can sign yet (`workstation_certificate.ca_not_ready`), or the database failed (`unavailable`). Nothing was issued. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    revokeWorkstationCertificate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The certificate's serial number, hex, as `serial` of the issue response. */
+                serial: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevokeWorkstationCertificate"];
+            };
+        };
+        responses: {
+            /** @description Revoked now; the ledger records the time and the reason, and the issuing CA's next scheduled CRL lists it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkstationCertificate"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is larger than 16 KiB (`workstation_certificate.body_too_large`), or it is not a JSON object (`workstation_certificate.body_invalid`) (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No workstation certificate has this serial number (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description It is already revoked (`conflict`, `workstation_certificate.already_revoked`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description An unknown field, or a reason that is not one of the listed ones (`workstation_certificate.reason_invalid`) (`validation_failed`). Nothing was revoked. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Nothing was revoked. */
             503: {
                 headers: {
                     [name: string]: unknown;
