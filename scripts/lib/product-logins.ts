@@ -12,15 +12,15 @@
  * The services of `PRODUCT`, in the registry's order: each has a `<schema>_app` login role.
  * Add a service here in the same change that adds it to `PRODUCT`.
  */
-export const PRODUCT_SERVICES: readonly string[] = ["identity", "assets", "certs"];
+export const PRODUCT_SERVICES: readonly string[] = ["identity", "assets", "telemetry-query", "certs"];
 
 /**
  * The services whose platform role logs in, as the chart binds them
  * ("trustiot.migrate.platformLogins"): the outbox consumers, which read their producers' events
- * as the platform role. A platform role not listed here stays NOLOGIN on purpose (identity's,
- * which only the outbox policy needs).
+ * as the platform role (identity among them since it keeps the event log, Laysi/trustiot-v2#130).
+ * A platform role not listed here stays NOLOGIN on purpose.
  */
-export const PLATFORM_LOGIN_SERVICES: readonly string[] = ["assets"];
+export const PLATFORM_LOGIN_SERVICES: readonly string[] = ["assets", "identity", "telemetry-query"];
 
 export interface ProductLogin {
   /** The service's chart key, for example `telemetry-query`. */

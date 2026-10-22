@@ -1,0 +1,58 @@
+# Full checks on feat/119-telemetry-query at 5073b7f, through the check queue on the build host, CI=1, 2026-10-22 21:51-22:03 (Asia/Taipei).
+# Each step prints the tail of its output and its exit code; cargo test prints the sum of its 'test result' lines.
+=== fmt
+=== fmt EXIT=0
+=== clippy
+    Checking web v0.1.0 (<host copy>/src/services/web)
+    Checking migrate v0.1.0 (<host copy>/src/tools/migrate)
+    Checking identity v0.1.0 (<host copy>/src/services/identity)
+    Checking assets v0.1.0 (<host copy>/src/services/assets)
+    Checking telemetry-query v0.1.0 (<host copy>/src/services/telemetry-query)
+    Checking openapi v0.1.0 (<host copy>/src/tools/openapi)
+    Checking testkit v0.1.0 (<host copy>/src/crates/testkit)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.43s
+=== clippy EXIT=0
+=== openapi
+api/openapi.json is up to date
+=== openapi EXIT=0
+=== test
+TEST SUMMARY: 144 result lines, 1072 passed, 0 failed, 0 ignored
+=== test EXIT=0
+=== deny
+          │   ├── identity v0.1.0 (*)
+          │   ├── migrate v0.1.0 (*)
+          │   └── telemetry-query v0.1.0 (*)
+          ├── telemetry-query v0.1.0 (*)
+          ├── testkit v0.1.0 (*)
+          └── web v0.1.0
+
+advisories ok, bans ok, licenses ok, sources ok
+=== deny EXIT=0
+=== chart
+(pass) sendRaw > a response that never comes is a ConnectionError after the timeout [201.32ms]
+
+ 508 pass
+ 0 fail
+ 6117 expect() calls
+Ran 508 tests across 9 files. [57.01s]
+=== chart EXIT=0
+=== scripts-install
+bun install v1.4.2 (744846f84)
+
++ @actions/expressions@0.3.61
++ @types/bun@1.4.2
++ typescript@7.0.2
+
+7 packages installed [24.00ms]
+=== scripts-install EXIT=0
+=== scripts
+
+ 1541 pass
+ 4 skip
+ 0 fail
+ 6437 expect() calls
+Ran 1545 tests across 49 files. [9.49s]
+=== scripts EXIT=0
+=== scripts-typecheck
+$ tsc --noEmit --project tsconfig.json
+=== scripts-typecheck EXIT=0

@@ -120,9 +120,10 @@ export function drift(
 
 /**
  * The registry takes each service's name and producer flag from the service's own `src/schema.rs`
- * (`<name>_schema::SCHEMA.service`, Laysi/trustiot-v2#402). Replace those references with the
- * literals of the file the `#[path]` attribute names, so the parser below keeps reading literals
- * and a reference it cannot resolve fails instead of being skipped.
+ * (`<name>_schema::SCHEMA.service`, Laysi/trustiot-v2#402), and identity's consumed producers from
+ * its `CONSUMES` (`<name>_schema::CONSUMES`, Laysi/trustiot-v2#130). Replace those references with
+ * the literals of the file the `#[path]` attribute names, so the parser below keeps reading
+ * literals and a reference it cannot resolve fails instead of being skipped.
  */
 export function resolveSchemaRefs(source: string, read: (path: string) => string): string {
   const files = new Map<string, string>();
@@ -136,7 +137,13 @@ export function resolveSchemaRefs(source: string, read: (path: string) => string
     if (value === undefined) throw new Error(`${mod}'s schema.rs has no literal ${field}; update ${import.meta.file}`);
     return value;
   });
-  return resolved;
+  return resolved.replace(/\b(\w+)::CONSUMES\b/g, (_, mod: string) => {
+    const schema = files.get(mod);
+    if (schema === undefined) throw new Error(`${REGISTRY_PATH} refers to ${mod}::CONSUMES without a #[path] module; update ${import.meta.file}`);
+    const value = /\bpub const CONSUMES:\s*&\[&str\]\s*=\s*(&\[[^\]]*\]);/.exec(schema)?.[1];
+    if (value === undefined) throw new Error(`${mod}'s schema.rs has no literal CONSUMES; update ${import.meta.file}`);
+    return value;
+  });
 }
 
 const registrySource = resolveSchemaRefs(readFileSync(join(REPO, REGISTRY_PATH), "utf8"), (path) =>
@@ -152,11 +159,11 @@ describe("the local login roles against the product", () => {
 
   test("the parsers read the real files, so the comparison above cannot pass on an empty read", () => {
     const registry = registryServices(registrySource);
-    expect(registry.find((service) => service.name === "identity")).toEqual({ name: "identity", platformRole: true, consumes: [] });
+    expect(registry.find((service) => service.name === "identity")).toEqual({ name: "identity", platformRole: true, consumes: ["identity", "assets"] });
     // "assets" reads its own outbox only until the gateway configuration's consumer registers
     // (Laysi/trustiot-v2#93), which drops it from this list.
     expect(registry.find((service) => service.name === "assets")).toEqual({ name: "assets", platformRole: true, consumes: ["identity", "assets"] });
-    expect(chartPlatformLogins(chartSource)).toContain("assets");
+    expect(chartPlatformLogins(chartSource)).toEqual(["assets", "identity", "telemetry-query"]);
   });
 
   test("every role the local Job binds is a login role the registry creates", () => {
@@ -183,7 +190,7 @@ describe("a change of the product that the local list does not follow", () => {
 
   test("a service added to PRODUCT fails, naming the file to change", () => {
     const messages = drift(
-      registryWith(service("identity", true), service("assets", true, ["identity"]), service("telemetry-query", false)),
+      registryWith(service("identity", true, ["identity"]), service("assets", true, ["identity"]), service("telemetry-query", false)),
       chartWith("assets"),
       LOCAL_SERVICES,
       LOCAL_PLATFORM,
@@ -196,7 +203,7 @@ describe("a change of the product that the local list does not follow", () => {
 
   test("a platform role the chart starts to bind fails, naming the file to change", () => {
     const messages = drift(
-      registryWith(service("identity", true), service("assets", true, ["identity"])),
+      registryWith(service("identity", true, ["identity"]), service("assets", true, ["identity"])),
       chartWith("assets", "identity"),
       LOCAL_SERVICES,
       LOCAL_PLATFORM,
@@ -207,7 +214,7 @@ describe("a change of the product that the local list does not follow", () => {
   });
 
   test("a local role the product does not have fails the other way round", () => {
-    const registry = registryWith(service("identity", true), service("assets", true, ["identity"]));
+    const registry = registryWith(service("identity", true, ["identity"]), service("assets", true, ["identity"]));
     expect(drift(registry, chartWith(), LOCAL_SERVICES, LOCAL_PLATFORM).join("\n")).toContain(
       "does not bind assets_platform",
     );
@@ -219,7 +226,7 @@ describe("a change of the product that the local list does not follow", () => {
   test("agrees when both follow", () => {
     expect(
       drift(
-        registryWith(service("identity", true), service("assets", true, ["identity"]), service("telemetry-query", true, ["identity"])),
+        registryWith(service("identity", true, ["identity"]), service("assets", true, ["identity"]), service("telemetry-query", true, ["identity"])),
         chartWith("assets", "telemetry-query"),
         [...LOCAL_SERVICES, "telemetry-query"],
         [...LOCAL_PLATFORM, "telemetry-query"],
@@ -240,8 +247,23 @@ describe("the logins", () => {
   test("are each service's own role, then its platform role when the chart binds it", () => {
     expect(productLogins()).toEqual([
       { service: "identity", kind: "app", role: "identity_app", secret: "dev-identity-password", stateKey: "identity" },
+      { service: "identity", kind: "platform", role: "identity_platform", secret: "dev-identity-password", stateKey: "identity-platform" },
       { service: "assets", kind: "app", role: "assets_app", secret: "dev-assets-password", stateKey: "assets" },
       { service: "assets", kind: "platform", role: "assets_platform", secret: "dev-assets-password", stateKey: "assets-platform" },
+      {
+        service: "telemetry-query",
+        kind: "app",
+        role: "telemetry_query_app",
+        secret: "dev-telemetry-query-password",
+        stateKey: "telemetry-query",
+      },
+      {
+        service: "telemetry-query",
+        kind: "platform",
+        role: "telemetry_query_platform",
+        secret: "dev-telemetry-query-password",
+        stateKey: "telemetry-query-platform",
+      },
       { service: "certs", kind: "app", role: "certs_app", secret: "dev-certs-password", stateKey: "certs" },
     ]);
   });

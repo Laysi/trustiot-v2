@@ -96,6 +96,98 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/certs/v1/workstation-certificates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issues a workstation certificate for the public key of a CSR. The CA decides everything
+         *     else; the private key never reaches the service.
+         */
+        post: operations["issueWorkstationCertificate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/certs/v1/workstation-certificates/{serial}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revokes a workstation certificate. Its issuing CA's next scheduled CRL lists it; the
+         *     registration API (Laysi/trustiot-v2#79) reads the ledger, so it refuses the certificate at
+         *     once.
+         */
+        post: operations["revokeWorkstationCertificate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/identity/v1/event-log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's tenant's operation log. Administrators of the tenant only. */
+        get: operations["getTenantEventLog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/identity/v1/platform/event-log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The platform-wide operation log, for the back office. Platform administrators only. */
+        get: operations["getPlatformEventLog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/identity/v1/platform/tenants/{tenant_id}/event-log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One tenant's operation log, for the back office. Platform administrators only. */
+        get: operations["getPlatformTenantEventLog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/identity/v1/tenants": {
         parameters: {
             query?: never;
@@ -107,6 +199,43 @@ export interface paths {
         put?: never;
         /** Creates a tenant. Platform administrators only. */
         post: operations["createTenant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/telemetry/v1/devices/{device_id}/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The latest value of each data point of a device, from the readings of the raw period. */
+        get: operations["getTelemetryLatest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/telemetry/v1/devices/{device_id}/series": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A data point's series over a time range: raw readings, or buckets of an interval that
+         *     follow the time zone `tz`, within the queryable period.
+         */
+        get: operations["getTelemetrySeries"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -308,6 +437,20 @@ export interface components {
          * @enum {string}
          */
         ErrorCode: "invalid_request" | "validation_failed" | "unauthenticated" | "permission_denied" | "tenant_suspended" | "quota_exceeded" | "not_found" | "conflict" | "rate_limited" | "internal" | "unavailable" | "timeout";
+        /**
+         * Format: uuid
+         * @description An event, unique across services; consumers deduplicate deliveries by it.
+         *
+         *     Serialized as a lowercase hyphenated UUID string.
+         */
+        EventId: string;
+        /** @description One page of the log, newest first. */
+        EventLogPage: {
+            /** @description The events, newest first (by `occurred_at`, then `event_id`). */
+            events: components["schemas"]["LoggedEvent"][];
+            /** @description Pass it as `cursor` for the next, older page; `null` on the last page. Opaque. */
+            next_cursor?: string | null;
+        };
         /** @description A rejected field of the request body. */
         FieldError: {
             /** @description Values the message refers to. Absent when empty. */
@@ -321,10 +464,213 @@ export interface components {
             message_key: components["schemas"]["MessageKey"];
         };
         /**
+         * @description How readings are grouped: `raw` (no grouping) or a bucket length.
+         * @enum {string}
+         */
+        Interval: "raw" | "1m" | "5m" | "15m" | "1h" | "3h" | "6h" | "12h" | "1d";
+        /** @description The body of `POST /api/certs/v1/workstation-certificates`. Unknown fields are refused. */
+        IssueWorkstationCertificate: {
+            /**
+             * @description A PKCS #10 certificate signing request, PEM (`-----BEGIN CERTIFICATE REQUEST-----`), at
+             *     most 4096 bytes as DER, signed with ecdsa-with-SHA256 by the workstation's ECDSA P-256
+             *     key. Only its public key is used, once its signature shows the workstation holds the
+             *     private key: the CA decides the subject, the extensions and the validity, and the private
+             *     key never leaves the workstation.
+             */
+            certificate_request: string;
+            /**
+             * @description The workstation's name: 1-48 ASCII letters, digits, `.`, `_` or `-`, starting with a
+             *     letter or digit. The certificate's subject is `CN=workstation:<name>`.
+             * @example line-a-ws-01
+             */
+            workstation: string;
+        };
+        /** @description The latest value of each data point of a device that has a reading in the raw period. */
+        Latest: {
+            /**
+             * Format: uuid
+             * @description The device.
+             */
+            device_id: string;
+            /**
+             * Format: date-time
+             * @description The start of the period searched (the raw period), UTC.
+             */
+            earliest: string;
+            /** @description One entry per data point, ordered by data point. */
+            points: components["schemas"]["LatestPoint"][];
+        };
+        /** @description The latest value of one data point. */
+        LatestPoint: {
+            /** @description The data point. */
+            point: string;
+            /**
+             * Format: date-time
+             * @description When the reading was taken, UTC.
+             */
+            time: string;
+            /** @description The reading. */
+            value: components["schemas"]["Reading"];
+        };
+        /** @description Who made a logged change. */
+        LoggedActor: {
+            /** @enum {string} */
+            kind: "user";
+            /** @description The user. */
+            user_id: components["schemas"]["UserId"];
+        } | {
+            /** @enum {string} */
+            kind: "service";
+            /** @description The service, for example `assets`. */
+            service: string;
+        };
+        /** @description One event in the log. */
+        LoggedEvent: {
+            actor?: components["schemas"]["LoggedActor"] | null;
+            /** @description What changed: the aggregate's ID. */
+            aggregate_id: string;
+            /**
+             * Format: int64
+             * @description The event's number within its aggregate, from 1.
+             */
+            aggregate_seq: number;
+            /** @description What changed: the aggregate's kind, for example `tenant`. */
+            aggregate_type: string;
+            /** @description The event's ID (UUIDv7). */
+            event_id: components["schemas"]["EventId"];
+            /**
+             * Format: date-time
+             * @description When the change happened, by the producer's clock.
+             */
+            occurred_at: string;
+            /** @description The event's payload as the producer wrote it, in the version above; a JSON object. */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** @description The service that wrote the event, for example `identity`. */
+            producer: string;
+            /**
+             * Format: date-time
+             * @description When the event log stored the event, by the database clock.
+             */
+            recorded_at: string;
+            tenant_id?: components["schemas"]["TenantId"] | null;
+            /** @description The event type, for example `identity.tenant_created`. */
+            type: string;
+            /**
+             * Format: int32
+             * @description The payload's version.
+             */
+            version: number;
+        };
+        /**
          * @description Key of the translated message the client shows; never the message itself.
          * @example error.not_found
          */
         MessageKey: string;
+        /** @description One reading's value, as its type stored it. */
+        Reading: {
+            /** @enum {string} */
+            type: "float";
+            /**
+             * Format: double
+             * @description A floating-point reading; `null` for NaN or an infinity.
+             */
+            value: number | null;
+        } | {
+            /** @enum {string} */
+            type: "int";
+            /**
+             * Format: int64
+             * @description An integer reading.
+             */
+            value: number;
+        } | {
+            /** @enum {string} */
+            type: "bool";
+            /** @description A boolean reading. */
+            value: boolean;
+        } | {
+            /** @enum {string} */
+            type: "string";
+            /** @description A text reading. */
+            value: string;
+        };
+        /**
+         * @description A reason a workstation certificate can be revoked for: the RFC 5280 CRLReason codes that
+         *     apply to an end entity, without `certificateHold` (a revocation here is final).
+         * @enum {string}
+         */
+        RevocationReason: "unspecified" | "key_compromise" | "affiliation_changed" | "superseded" | "cessation_of_operation" | "privilege_withdrawn";
+        /**
+         * @description The body of `POST /api/certs/v1/workstation-certificates/{serial}/revoke`. Unknown fields are
+         *     refused.
+         */
+        RevokeWorkstationCertificate: {
+            reason?: components["schemas"]["RevocationReason"] | null;
+        };
+        /** @description A data point's series. */
+        Series: {
+            /**
+             * Format: uuid
+             * @description The device.
+             */
+            device_id: string;
+            /**
+             * Format: date-time
+             * @description The start of the queryable period for this interval at the time of the request.
+             */
+            earliest: string;
+            /**
+             * Format: date-time
+             * @description The range queried, `from` inclusive and `to` exclusive, UTC; `from` is later than
+             *     requested when the request started before the queryable period.
+             */
+            from: string;
+            /** @description The interval used: the requested one, or the automatic choice. */
+            interval: components["schemas"]["Interval"];
+            /** @description The data point. */
+            point: string;
+            /** @description The buckets with readings, in time order; buckets without readings are left out. */
+            points: components["schemas"]["SeriesPoint"][];
+            /** Format: date-time */
+            to: string;
+            /** @description Whether `from` was moved to the start of the queryable period. */
+            truncated: boolean;
+            /** @description The time zone the buckets follow. */
+            tz: string;
+        };
+        /** @description One bucket of a series (for `raw`, one reading). */
+        SeriesPoint: {
+            /**
+             * Format: double
+             * @description The mean of the numeric values.
+             */
+            avg?: number | null;
+            /**
+             * Format: int64
+             * @description How many readings the bucket holds.
+             */
+            count: number;
+            /** @description The bucket's latest reading. */
+            last: components["schemas"]["Reading"];
+            /**
+             * Format: double
+             * @description The largest numeric value.
+             */
+            max?: number | null;
+            /**
+             * Format: double
+             * @description The smallest numeric value (a bool counts as 0 or 1); `null` when the bucket holds only
+             *     text readings.
+             */
+            min?: number | null;
+            /**
+             * Format: date-time
+             * @description The bucket's start (for `raw`, the reading's time), UTC.
+             */
+            time: string;
+        };
         /** @description A tenant. */
         Tenant: {
             /**
@@ -360,6 +706,46 @@ export interface components {
              *     other's points unseen. Required.
              */
             revision: number;
+        };
+        /**
+         * Format: uuid
+         * @description A user account; one user can be a member of several tenants.
+         *
+         *     Serialized as a lowercase hyphenated UUID string.
+         */
+        UserId: string;
+        /** @description A workstation certificate as the ledger records it. */
+        WorkstationCertificate: {
+            /** @description The issuing CA that signed it: the SHA-256 of its public key, 64 lower-case hex digits. */
+            ca_key_id: string;
+            /** @description The certificate, PEM. It goes to the workstation, which keeps it with its private key. */
+            certificate: string;
+            /**
+             * Format: date-time
+             * @description When it expires; a renewal is another issue request before then.
+             */
+            not_after: string;
+            /**
+             * Format: date-time
+             * @description When it becomes valid: five minutes before it was signed.
+             */
+            not_before: string;
+            revocation_reason?: components["schemas"]["RevocationReason"] | null;
+            /**
+             * Format: date-time
+             * @description When it was revoked; absent while it is not.
+             */
+            revoked_at?: string | null;
+            /**
+             * @description The serial number, lower-case hex (32 digits for the certificates this service signs):
+             *     the `{serial}` of the revoke request. Keep it; it is how the certificate is revoked.
+             * @example 4f3a9c1e2b7d6058a1c3e5f708192a3b
+             */
+            serial: string;
+            /** @description The certificate's common name: `workstation:<workstation>`. */
+            subject: string;
+            /** @description The workstation's name. */
+            workstation: string;
         };
     };
     responses: never;
@@ -903,6 +1289,363 @@ export interface operations {
             };
         };
     };
+    issueWorkstationCertificate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IssueWorkstationCertificate"];
+            };
+        };
+        responses: {
+            /** @description Issued and recorded in the ledger. The subject is `CN=workstation:<workstation>`, the extended key usage the TrustIoT workstation purpose only (never client authentication, so the MQTT broker refuses it), valid for the configured workstation validity (default 180 days). Keep `serial`: it is how the certificate is revoked. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkstationCertificate"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is larger than 16 KiB (`workstation_certificate.body_too_large`), or it is not a JSON object (`workstation_certificate.body_invalid`) (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description An unknown or missing field, a name that breaks its rule (`workstation_certificate.name_invalid`), or a certificate request that is not one PEM CSR (`workstation_certificate.request_invalid`), not for ECDSA P-256 with ecdsa-with-SHA256 (`workstation_certificate.request_unsupported`) or not signed by its own key (`workstation_certificate.request_signature_invalid`) (`validation_failed`). Nothing was issued. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No issuing CA can sign yet (`workstation_certificate.ca_not_ready`), or the database failed (`unavailable`). Nothing was issued. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    revokeWorkstationCertificate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The certificate's serial number, hex, as `serial` of the issue response. */
+                serial: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevokeWorkstationCertificate"];
+            };
+        };
+        responses: {
+            /** @description Revoked now; the ledger records the time and the reason, and the issuing CA's next scheduled CRL lists it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkstationCertificate"];
+                };
+            };
+            /** @description The `Content-Type` is not `application/json`, the body is larger than 16 KiB (`workstation_certificate.body_too_large`), or it is not a JSON object (`workstation_certificate.body_invalid`) (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a platform administrator (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No workstation certificate has this serial number (`not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description It is already revoked (`conflict`, `workstation_certificate.already_revoked`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description An unknown field, or a reason that is not one of the listed ones (`workstation_certificate.reason_invalid`) (`validation_failed`). Nothing was revoked. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed (`unavailable`). Nothing was revoked. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getTenantEventLog: {
+        parameters: {
+            query?: {
+                /** @description Only events that occurred at or after this RFC 3339 time. */
+                from?: string;
+                /** @description Only events that occurred before this RFC 3339 time; after `from`. */
+                to?: string;
+                /** @description Events per page, 1 to 500; default 100. */
+                limit?: number;
+                /** @description The previous page's `next_cursor`, for the next, older page. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the tenant's events, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventLogPage"];
+                };
+            };
+            /** @description A malformed parameter, or `from` not before `to` (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The user has no tenant, or is not an administrator of it (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed, or the event log is off (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getPlatformEventLog: {
+        parameters: {
+            query?: {
+                /** @description Only events that occurred at or after this RFC 3339 time. */
+                from?: string;
+                /** @description Only events that occurred before this RFC 3339 time; after `from`. */
+                to?: string;
+                /** @description Events per page, 1 to 500; default 100. */
+                limit?: number;
+                /** @description The previous page's `next_cursor`, for the next, older page. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the platform-wide events, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventLogPage"];
+                };
+            };
+            /** @description A malformed parameter, or `from` not before `to` (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The user is not a platform administrator (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed, or the event log is off (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getPlatformTenantEventLog: {
+        parameters: {
+            query?: {
+                /** @description Only events that occurred at or after this RFC 3339 time. */
+                from?: string;
+                /** @description Only events that occurred before this RFC 3339 time; after `from`. */
+                to?: string;
+                /** @description Events per page, 1 to 500; default 100. */
+                limit?: number;
+                /** @description The previous page's `next_cursor`, for the next, older page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The tenant's ID. An ID no tenant has gives an empty page. */
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the tenant's events, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventLogPage"];
+                };
+            };
+            /** @description A malformed tenant ID or parameter, or `from` not before `to` (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The user is not a platform administrator (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database failed, or the event log is off (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     createTenant: {
         parameters: {
             query?: never;
@@ -963,6 +1706,207 @@ export interface operations {
             };
             /** @description The database failed; nothing was created (`unavailable`). */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getTelemetryLatest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The device. */
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The latest values; empty when the device has no reading in the raw period, or is not the tenant's. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Latest"];
+                };
+            };
+            /** @description A malformed device ID (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The user has not picked or joined a tenant (`permission_denied`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The device has more data points than one answer holds (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant's query quota or concurrency limit is used up (`rate_limited`). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The query ran into its time limit (`timeout`). */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getTelemetrySeries: {
+        parameters: {
+            query: {
+                /** @description The data point key (1 to 128 characters). */
+                point: string;
+                /** @description The range's start, RFC 3339 (inclusive). Percent-encode a `+` offset, or use `Z`. */
+                from: string;
+                /** @description The range's end, RFC 3339 (exclusive). */
+                to: string;
+                /** @description An IANA time zone name, for example `Asia/Taipei`: hour and day buckets start at its local hours and midnights. */
+                tz: string;
+                /** @description `raw`, `1m`, `5m`, `15m`, `1h`, `3h`, `6h`, `12h` or `1d`; without it, the finest interval that gives at most 1500 buckets. */
+                interval?: components["schemas"]["Interval"];
+            };
+            header?: never;
+            path: {
+                /** @description The device. */
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The series. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Series"];
+                };
+            };
+            /** @description A malformed device ID or query string (`invalid_request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No valid session (`unauthenticated`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No tenant (`permission_denied`), or the range lies wholly before the queryable period (`quota_exceeded`, `telemetry.outside_queryable_period`, detail `earliest`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant's account has not been created yet (`not_found`, `telemetry.account_not_ready`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A parameter breaks a rule (`validation_failed`, detail `parameter`), the series would have too many points (`telemetry.too_many_points`), or the query reads or holds too much (`telemetry.query_too_heavy`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The tenant's query quota or concurrency limit is used up (`rate_limited`). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Postgres or ClickHouse failed, or the tenant's ClickHouse account is not as the service creates it (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The query ran into its time limit (`timeout`). */
+            504: {
                 headers: {
                     [name: string]: unknown;
                 };

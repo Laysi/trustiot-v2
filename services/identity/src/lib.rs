@@ -6,7 +6,9 @@
 //! sessions) is Laysi/trustiot-v2#103; until then only the test tooling creates sessions, and the
 //! service's database role cannot. Platform administrators create tenants
 //! (Laysi/trustiot-v2#65), which other services learn of from the `identity.tenant_created`
-//! event.
+//! event. The service also keeps the platform's event layer and operation log
+//! (Laysi/trustiot-v2#130, decision 34): it records every producer's events once and serves them
+//! to tenant administrators and the back office.
 //!
 //! - [`session`]: the cookie, its hash, and the Postgres session store.
 //! - [`issuer`]: the signing keys the cluster generates, which one signs when, and the token
@@ -17,6 +19,7 @@
 //! - [`exchange`]: the token exchange, for services that call another one on behalf of the
 //!   request's user (Laysi/trustiot-v2#106).
 //! - [`tenants`]: creating tenants, and the event that announces them.
+//! - [`event_log`]: the event layer: recording every producer's events, and reading them.
 //! - [`schema`]: the migration files this release expects, which readiness checks
 //!   (Laysi/trustiot-v2#402) and the migration Job applies.
 //! - [`config`]: the settings.
@@ -27,6 +30,7 @@
 pub mod audience;
 pub mod config;
 pub mod csrf;
+pub mod event_log;
 pub mod exchange;
 pub mod ext_authz;
 pub mod issuer;
@@ -36,12 +40,16 @@ pub mod tenants;
 
 use axum::Router;
 use contract::ServiceName;
-use service_kit::identity::{ExchangeVerifier, IdentityVerifier, PublishedKeys};
+use outbox::{Consumer, ConsumerConfig};
+use service_kit::identity::{ExchangeVerifier, IdentityVerifier, PublishedKeys, ServiceIdentity};
 use service_kit::migrations::MigrationCheck;
+use service_kit::tenant::{BackgroundTenantDb, PlatformDb, TenantDb};
 use service_kit::{BoxError, Context};
+use sqlx::postgres::PgPoolOptions;
 use utoipa::OpenApi;
 
 use crate::config::Config;
+use crate::event_log::{EventLog, EventLogRecorder};
 use crate::exchange::Exchange;
 use crate::ext_authz::ExtAuthz;
 use crate::issuer::{Issuer, IssuerSettings};
@@ -54,7 +62,12 @@ use crate::tenants::TenantStore;
 /// `contract::api::identity::ExchangeToken`.
 #[derive(OpenApi)]
 #[openapi(
-    paths(tenants::create_tenant),
+    paths(
+        tenants::create_tenant,
+        event_log::tenant_event_log,
+        event_log::platform_tenant_event_log,
+        event_log::platform_event_log
+    ),
     tags((name = "identity", description = "Sessions, users and tenants (services/identity)."))
 )]
 struct ApiDoc;
@@ -67,15 +80,16 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 
 /// The service's startup for `service_kit::run`: starts following the public keys file and the
 /// signing keys file ([`Issuer::watch`]), starts keeping the Postgres connections open (with the
-/// session check of `crates/service-kit`), serves the token exchange on its own port
-/// ([`serve_exchange`]), and returns the ext_authz check and the tenant API for the API port.
-/// Readiness passes once the connections are open (`PgSessionStore::keep_warm`), the public keys
-/// have arrived, a key may sign, and the database has every migration file this release expects
-/// ([`schema::SCHEMA`]).
+/// session check of `crates/service-kit`), starts recording the event log ([`event_log`]), serves
+/// the token exchange on its own port ([`serve_exchange`]), and returns the ext_authz check, the
+/// tenant API and the event log API for the API port. Readiness passes once the connections are
+/// open (`PgSessionStore::keep_warm`), the public keys have arrived, a key may sign, and the
+/// database has every migration file this release expects ([`schema::SCHEMA`]).
 ///
 /// # Errors
 ///
-/// When the database settings would not verify the server. Nothing is served then: the service
+/// When the database settings would not verify the server, or an event log subscription name
+/// is invalid. Nothing is served then: the service
 /// exits with code 1. Missing or unusable key files do not stop it: it starts unready and becomes
 /// ready when they arrive, as on a fresh install.
 pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
@@ -107,6 +121,7 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     });
     MigrationCheck::new(&schema::SCHEMA, store.pool().clone()).register(context.health());
     let tenants = TenantStore::connect_lazy(config.postgres().connect_options())?;
+    let log = start_event_log(&context)?;
     // Requests to the service's own API come through the ingress gateway like any other, with a
     // token the ext_authz check signed for `identity`.
     let verifier = IdentityVerifier::new(ServiceName::Identity, published.clone());
@@ -119,7 +134,58 @@ pub async fn start(context: Context<Config>) -> Result<Router, BoxError> {
     );
     serve_exchange(&context, exchange).await?;
     let ext_authz = ExtAuthz::new(store, issuer, platform.ingress_routes.clone());
-    Ok(ext_authz::routes(ext_authz).merge(tenants::routes(verifier, tenants)))
+    Ok(ext_authz::routes(ext_authz)
+        .merge(tenants::routes(verifier.clone(), tenants))
+        .merge(event_log::routes(verifier, log)))
+}
+
+/// Opens the event log's pools lazily and starts one consumer per producer in
+/// [`schema::CONSUMES`], each recording that producer's events. `None`, with a WARN, when the
+/// platform role has no credentials ([`Config::platform_role`]).
+///
+/// Neither pool is part of readiness: the ext_authz check every request passes through must not
+/// fail because the platform role cannot log in, or the event log fell behind. A recorder that
+/// cannot work retries and its consumer's lag grows (`outbox.consumer.lag.age`, crates/outbox),
+/// which is what alerts; the event log's API answers 503 while its pools cannot connect.
+fn start_event_log(context: &Context<Config>) -> Result<Option<EventLog>, BoxError> {
+    let config = context.config();
+    let Some(platform_role) = config.platform_role() else {
+        tracing::warn!(
+            "the event log is off: the platform role has no credentials \
+             (TRUSTIOT__DATABASE__PLATFORM_USERNAME, TRUSTIOT__DATABASE__PLATFORM_PASSWORD)"
+        );
+        return Ok(None);
+    };
+    let pool = |connections| {
+        PgPoolOptions::new()
+            .max_connections(connections)
+            .min_connections(0)
+            .acquire_timeout(event_log::ACQUIRE_TIMEOUT)
+    };
+    let (db, work): (TenantDb, BackgroundTenantDb) = TenantDb::connect_lazy_with_background(
+        config.postgres().connect_options(),
+        pool(event_log::SERVICE_CONNECTIONS),
+        ServiceIdentity::new(ServiceName::Identity),
+    )?;
+    let platform = PlatformDb::connect_lazy(
+        platform_role.connect_options(),
+        pool(event_log::platform_connections()),
+    )?;
+    for &source in schema::CONSUMES {
+        let consumer = Consumer::new(
+            &platform,
+            work.clone(),
+            ConsumerConfig::new(event_log::subscription(source), source)?,
+            EventLogRecorder::new(source),
+        );
+        let stop = context.shutdown().stopping_token();
+        context.spawn(async move {
+            // `run` retries everything but a configuration mistake, which it logs; the service
+            // keeps serving then and the consumer's lag shows the problem.
+            let _ = consumer.run(stop).await;
+        });
+    }
+    Ok(Some(EventLog::new(db, platform)))
 }
 
 /// Serves the token exchange on its own port (`exchange.listen_addr`), apart from the API port,
