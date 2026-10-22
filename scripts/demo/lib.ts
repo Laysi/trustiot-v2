@@ -34,11 +34,15 @@ export const DEMO_NAMESPACE = "trustiot";
 export const LOCK_DIR = "e2e.lock";
 /**
  * The first release the demo environment may start with: it generates the internal identity
- * signing keys in the cluster (Laysi/trustiot-v2#404) and bootstraps Postgres with the PUBLIC
+ * signing keys in the cluster (Laysi/trustiot-v2#404), bootstraps Postgres with the PUBLIC
  * access to postgres and template1 revoked (Laysi/trustiot-v2#400), which only happens when the
- * Cluster is created. Earlier charts would need a person-made signing key and a manual revoke.
+ * Cluster is created, and takes the tunnel ingress Service's fixed ClusterIP
+ * (Laysi/trustiot-v2#478), which only applies when the Service is created. Earlier charts would
+ * need a person-made signing key and a manual revoke, and refuse values-demo.yaml's address.
+ * 0.0.0-rc.9 has all three but not rustls-webpki 0.103.16 (RUSTSEC-2026-0382,
+ * Laysi/trustiot-v2#487).
  */
-export const DEMO_MIN_CHART_VERSION = "0.0.0-rc.8";
+export const DEMO_MIN_CHART_VERSION = "0.0.0-rc.10";
 /** The host's own tunnel unit (ops ssh). Read only, never changed. */
 export const OPS_TUNNEL_UNIT = "cloudflared.service";
 /** The istiod ext_authz provider the chart refers to (deploy/istio/istiod-values.yaml). */

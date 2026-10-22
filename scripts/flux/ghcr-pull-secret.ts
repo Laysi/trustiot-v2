@@ -1,7 +1,8 @@
 /**
  * Writes the SOPS-encrypted pull Secret of a cluster (deploy/flux/README.md, "GHCR 拉取 token"):
- * the read-only GHCR token of the machine account, as a kubernetes.io/dockerconfigjson Secret
- * that Flux uses to pull the chart and the kubelet uses to pull the images.
+ * a read-only GHCR token (a classic token with only read:packages; the README says who creates
+ * it), as a kubernetes.io/dockerconfigjson Secret that Flux uses to pull the chart and the
+ * kubelet uses to pull the images.
  *
  *   <command that prints the token> | bun scripts/flux/ghcr-pull-secret.ts --username <account>
  *     [--cluster saas|demo] [--registry ghcr.io]
