@@ -70,6 +70,11 @@ data:
   TRUSTIOT_SMTP_HOST: {{ .host | quote }}
   TRUSTIOT_SMTP_PORT: {{ .port | quote }}
   TRUSTIOT_SMTP_SECURITY: {{ .security | quote }}
+  {{- /* The relay needs an account: the identity service reports a missing one (its Secret
+  reference is optional, see "trustiot.credentialCatalog") instead of sending without it. */}}
+  {{- if .credentialsSecret.name }}
+  TRUSTIOT_SMTP_AUTH_REQUIRED: "true"
+  {{- end }}
   {{- end }}
   {{- if .from }}
   TRUSTIOT_SMTP_FROM: {{ .from | quote }}

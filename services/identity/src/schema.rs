@@ -29,6 +29,13 @@ pub const SCHEMA: Schema = Schema {
             name: "0003_event_log.sql",
             sql: include_str!("../migrations/postgres/0003_event_log.sql"),
         },
+        // Login (Laysi/trustiot-v2#103). It was 0003_login.sql only on its unmerged pull request
+        // branch; main's 0003_event_log.sql merged first, so this file took the next number. No
+        // release or deployed database ever had the old name: only main's files ship.
+        Migration {
+            name: "0004_login.sql",
+            sql: include_str!("../migrations/postgres/0004_login.sql"),
+        },
     ],
 };
 

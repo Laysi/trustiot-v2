@@ -18,17 +18,26 @@ doc = false
 axum = { workspace = true, features = ["http1", "json", "query", "tokio"] }
 # Strict base64url: token segments and the session cookie have exactly one encoding.
 base64.workspace = true
-# `created_at` of a tenant, read from Postgres and returned in the API.
-chrono = { workspace = true, features = ["serde"] }
+# `created_at` of a tenant, read from Postgres and returned in the API; the `Date` of a login
+# email.
+chrono = { workspace = true, features = ["alloc", "now", "serde"] }
 contract = { path = "../../crates/contract" }
 # Signs internal identity tokens with Ed25519. `zeroize` wipes the key on drop.
 ed25519-dalek = { workspace = true, features = ["fast", "zeroize"] }
+# Session secrets and login codes, from the operating system's CSPRNG.
+getrandom.workspace = true
+# Login codes are stored as HMAC-SHA-256 under a key derived from the signing key, so the
+# database alone cannot test them.
+hmac.workspace = true
 # The signing keys the identity pod's init container generates (Laysi/trustiot-v2#404): their
 # file format and which key signs when.
 identity-keys = { path = "../../crates/identity-keys" }
 # Writes `identity.tenant_created` in the transaction that creates the tenant, and consumes every
 # producer's events into the event log (Laysi/trustiot-v2#130).
 outbox = { path = "../../crates/outbox" }
+# The SMTP client that mails login codes (src/mail.rs): always TLS, rustls with ring like the
+# rest of the workspace, trusting the image's CA bundle or the configured CA file only.
+rustls = { workspace = true, features = ["ring", "std", "tls12"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 service-kit = { path = "../../crates/service-kit" }
@@ -37,7 +46,9 @@ sha2.workspace = true
 # Same TLS stack as service-kit: every connection verifies the server (checklist M3).
 sqlx = { workspace = true, features = ["chrono", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+# With rustls above: the SMTP client's TLS.
+tokio-rustls = { workspace = true, features = ["ring"] }
 tracing.workspace = true
 # Tenant names: the Unicode general category of each character (control, format and separator
 # characters are refused). Already in the build through sqlx's SCRAM (stringprep).
@@ -51,9 +62,8 @@ zeroize.workspace = true
 # The PKCS#8 PEM form of a test key, to show the service refuses a key file of the format before
 # Laysi/trustiot-v2#404 and never logs any form of the key.
 ed25519-dalek = { workspace = true, features = ["pem", "pkcs8"] }
-# Session secrets for test sessions; production code never creates sessions in MS0.
-getrandom.workspace = true
-# The TLS Postgres the integration tests start (shared with crates/service-kit's tests).
+# The TLS Postgres the integration tests start (shared with crates/service-kit's tests), and the
+# certificate of the fake SMTP relay of tests/login.rs.
 rcgen = { workspace = true, features = ["crypto", "pem", "ring"] }
 # The cross-tenant negative test suite (decision 29).
 testkit = { path = "../../crates/testkit" }

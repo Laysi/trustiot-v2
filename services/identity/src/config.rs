@@ -102,6 +102,80 @@ pub struct Platform {
     /// `TRUSTIOT_POSTGRES_CA_FILE`: the CA of the server certificate, the only trust anchor
     /// (crates/service-kit, "連線"); required.
     pub postgres_ca_file: PathBuf,
+    /// `TRUSTIOT_SMTP_HOST`: the chart's `smtp.host`, the relay login codes are sent through.
+    /// Without it the service runs, but cannot send login codes ([`crate::mail`]).
+    #[serde(default)]
+    pub smtp_host: Option<String>,
+    /// `TRUSTIOT_SMTP_PORT`: `smtp.port`.
+    #[serde(default)]
+    pub smtp_port: Option<u16>,
+    /// `TRUSTIOT_SMTP_SECURITY`: `smtp.security`, `starttls` or `tls`.
+    #[serde(default)]
+    pub smtp_security: Option<SmtpSecurity>,
+    /// `TRUSTIOT_SMTP_FROM`: `smtp.from`, the sender, `Name <address>` or a bare address.
+    #[serde(default)]
+    pub smtp_from: Option<String>,
+    /// `TRUSTIOT_SMTP_AUTH_REQUIRED`: `true` when the relay needs an account, which the chart
+    /// sets when `smtp.credentialsSecret` names a Secret. The chart's reference to that Secret is
+    /// optional, so the pod starts without it (the ext_authz check must not depend on mail); this
+    /// setting turns a missing account into an unusable relay setting, logged at startup, instead
+    /// of mail sent without authentication. Default `false`.
+    #[serde(default)]
+    pub smtp_auth_required: bool,
+    /// `TRUSTIOT_SMTP_USERNAME`, from the Secret `smtp.credentialsSecret` (only for services
+    /// whose `credentials` list `smtp`). Absent when the relay needs no authentication.
+    #[serde(default)]
+    pub smtp_username: Option<String>,
+    /// `TRUSTIOT_SMTP_PASSWORD`, from the same Secret.
+    #[serde(default)]
+    pub smtp_password: Option<SmtpPassword>,
+    /// `TRUSTIOT_SMTP_CA_FILE`: PEM certificates to trust for the relay instead of the image's
+    /// CA bundle ([`crate::mail::SYSTEM_CA_FILE`]), for a relay with a private CA. The chart
+    /// does not set it yet.
+    #[serde(default)]
+    pub smtp_ca_file: Option<PathBuf>,
+}
+
+/// `smtp.security`: how the connection to the relay is encrypted. There is no plain SMTP.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SmtpSecurity {
+    /// Plain TCP, then `STARTTLS` before anything else (usually port 587). A relay that does not
+    /// offer it is not used.
+    Starttls,
+    /// TLS from the first byte (usually port 465).
+    Tls,
+}
+
+/// The SMTP password. `Debug` never prints it, and it is wiped on drop.
+#[derive(Clone, Deserialize)]
+#[serde(transparent)]
+pub struct SmtpPassword(String);
+
+impl SmtpPassword {
+    /// The password, for the `AUTH` command only.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for SmtpPassword {
+    fn from(password: String) -> Self {
+        Self(password)
+    }
+}
+
+impl Drop for SmtpPassword {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.0);
+    }
+}
+
+impl fmt::Debug for SmtpPassword {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SmtpPassword(<redacted>)")
+    }
 }
 
 /// `database.*`: the service role (`identity_app`), which owns nothing and reads the sessions
@@ -261,6 +335,66 @@ impl Validate for Config {
                     ));
                 }
             }
+        }
+        // The SMTP settings are checked at startup by `Mailer::from_platform` instead: a broken
+        // relay setting must not stop the ext_authz check that every request with a cookie
+        // needs, so the service runs without a relay and logs the error.
+        Ok(())
+    }
+}
+
+impl Platform {
+    /// Without `smtp_host` the other SMTP settings are not used. With it, the port, security and
+    /// sender must be set and valid, the username and password come together, and they are set
+    /// when `smtp_auth_required` is.
+    ///
+    /// # Errors
+    ///
+    /// The first setting that is missing or invalid, without its value.
+    pub(crate) fn validate_smtp(&self) -> Result<(), Invalid> {
+        if self.smtp_host.is_none() {
+            return Ok(());
+        }
+        if !self.smtp_port.is_some_and(|port| port > 0) {
+            return Err(Invalid::new(
+                "platform.smtp_port",
+                "must be a port from 1 to 65535 when platform.smtp_host is set",
+            ));
+        }
+        if self.smtp_security.is_none() {
+            return Err(Invalid::new(
+                "platform.smtp_security",
+                "must be starttls or tls when platform.smtp_host is set",
+            ));
+        }
+        match self.smtp_from.as_deref().map(crate::mail::Mailbox::parse) {
+            None => {
+                return Err(Invalid::new(
+                    "platform.smtp_from",
+                    "must be set when platform.smtp_host is set",
+                ));
+            }
+            Some(None) => {
+                return Err(Invalid::new(
+                    "platform.smtp_from",
+                    "must be `Name <address>` or an address: one line, an ASCII address",
+                ));
+            }
+            Some(Some(_)) => {}
+        }
+        if self.smtp_username.is_some() != self.smtp_password.is_some() {
+            return Err(Invalid::new(
+                "platform.smtp_password",
+                "platform.smtp_username and platform.smtp_password must be set together",
+            ));
+        }
+        if self.smtp_auth_required && self.smtp_username.is_none() {
+            return Err(Invalid::new(
+                "platform.smtp_username",
+                "platform.smtp_username and platform.smtp_password must be set when \
+                 platform.smtp_auth_required is true; the chart reads them from the Secret in \
+                 smtp.credentialsSecret, which may be missing",
+            ));
         }
         Ok(())
     }

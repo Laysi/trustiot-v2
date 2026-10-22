@@ -73,6 +73,10 @@
   "workstation_certificate.already_revoked": "這張憑證已經撤銷。",
   "workstation_certificate.ca_not_ready": "憑證機構還不能簽發憑證，請過幾分鐘再試。",
 
+  "login.email_invalid": "請輸入有效的 email 地址。",
+  "login.code_invalid": "請輸入 email 裡完整的驗證碼。",
+  "login.redirect_invalid": "登入後要回到的頁面不在這個網站上。",
+
   "nav.home": "首頁",
 
   "tenant_switcher.label": "組織",

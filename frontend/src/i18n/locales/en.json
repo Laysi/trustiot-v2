@@ -73,6 +73,10 @@
   "workstation_certificate.already_revoked": "This certificate is already revoked.",
   "workstation_certificate.ca_not_ready": "The certificate authority can't issue certificates yet. Try again in a few minutes.",
 
+  "login.email_invalid": "Enter a valid email address.",
+  "login.code_invalid": "Enter the whole code from the email.",
+  "login.redirect_invalid": "The page to return to after signing in isn't on this site.",
+
   "nav.home": "Home",
 
   "tenant_switcher.label": "Organization",
