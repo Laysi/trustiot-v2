@@ -2495,7 +2495,7 @@ describe("migration Job (Laysi/trustiot-v2#60)", () => {
     }
     const stolen = helmTemplate(SHAPES.saas, [
       ...withIdentity, "--set", "services.telemetry-query.enabled=true",
-      "--set-json", `services.certs.env=[{"name":"STOLEN","valueFrom":{"secretKeyRef":{"name":"${secret}","key":"trustiot_telemetry_query"}}}]`,
+      "--set-json", `services.mqtt-bridge.env=[{"name":"STOLEN","valueFrom":{"secretKeyRef":{"name":"${secret}","key":"trustiot_telemetry_query"}}}]`,
     ]);
     expect(stolen.code).not.toBe(0);
     expect(stolen.stderr).toContain(`env reads Secret ${secret}`);
