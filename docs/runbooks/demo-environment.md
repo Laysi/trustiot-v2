@@ -198,7 +198,7 @@ Laysi/trustiot-v2#113（限流）、Laysi/trustiot-v2#107（停權）、Laysi/tr
 
 展示環境的服務只經 SMTP 寄信（chart 的 `smtp.*`；[里程碑](../roadmap/milestones.md)「展示切片」），2026-10-19 起暫用 Resend 的 relay：`values-demo.yaml` 設 `smtp.resend.com`、587、`starttls`，帳密在 Secret `trustiot-smtp`（`username` 是 `resend`，`password` 是 Resend 的 API key），寄件人（`smtp.from`）在私有 values `trustiot-demo-values` 的 `smtp-from`。AI 閘道（Laysi/trustiot-v2#139）的 Anthropic 金鑰在 Secret `trustiot-anthropic` 的 `api-key`，閘道加入前沒有服務使用。兩個 Secret 都以 SOPS 加密放在 `deploy/flux/clusters/demo/trustiot/`（[deploy/flux/README.md](../../deploy/flux/README.md)「展示叢集」的表），第一次建立後列進同目錄的 `kustomization.yaml`。金鑰只經 stdin 交給 `scripts/flux/sops-secret.ts`，不貼到 issue、PR、聊天或指令列；主控台只顯示一次的金鑰，複製後以輸出剪貼簿的指令直接接上管線，用完清除剪貼簿。
 
-寄件網域是上層網域（展示主機名稱所在的 zone）下專門寄信的子網域（Resend 建議以子網域寄信，寄件信譽與上層網域分開）。它和展示的主機名稱一樣不寫進公開的 repo、issue 與 PR（[密鑰與權限](../architecture/secrets.md)「公開 repo 的資訊規則」），文中稱「寄件網域」。
+寄件網域是上層網域本身（展示主機名稱所在的 zone）。2026-10-20 原本選了 zone 下專門寄信的子網域（Resend 建議以子網域寄信，寄件信譽與上層網域分開），2026-10-22 決定改以上層網域本身寄信。上層網域也收發公司的郵件：它的 MX、SPF 與 DMARC（`p=reject; adkim=r; aspf=r`）屬於另一個郵件服務，Resend 的紀錄不動它們（下面第 2 步）。寄件網域和展示的主機名稱一樣不寫進公開的 repo、issue 與 PR（[密鑰與權限](../architecture/secrets.md)「公開 repo 的資訊規則」），文中稱「寄件網域」。
 
 ### Resend 的寄件網域與金鑰
 
@@ -206,12 +206,13 @@ Laysi/trustiot-v2#113（限流）、Laysi/trustiot-v2#107（停權）、Laysi/tr
 
 1. **加入網域**：Domains → Add Domain，填寄件網域，區域選 Tokyo（`ap-northeast-1`），離展示的收件者最近。區域之後不能直接改：要刪掉網域、以新區域重新加入並換 DNS 紀錄。不論選哪個區域，帳號的資料（含寄出的信件與紀錄）都存在美國（[Regions](https://resend.com/docs/dashboard/domains/regions)）。
 2. **DNS 紀錄**：照主控台列出的值，名稱都相對於寄件網域（[Cloudflare 的設定方式](https://resend.com/docs/dashboard/domains/cloudflare)）：
-   - `send` 的 MX（主控台列出的退信主機，優先序 10）與 `send` 的 TXT（`v=spf1 include:<主控台列出的網域> ~all`）：Resend 寄信時信封寄件人（MAIL FROM）在 `send.<寄件網域>`，收件端的 SPF 驗的是這個名稱，兩筆都要在。
+   - `send` 的 MX（主控台列出的退信主機，優先序 10）與 `send` 的 TXT（`v=spf1 include:<主控台列出的網域> ~all`）：Resend 寄信時信封寄件人（MAIL FROM）在 `send.<寄件網域>`，收件端的 SPF 驗的是這個名稱，兩筆都要在。上層網域自己的 MX 與 SPF 不改。
    - `resend._domainkey` 的 TXT（`p=` 加上公鑰）：DKIM，簽章的 `d=` 是寄件網域本身。
-   - 建議加 `_dmarc` 的 TXT，從 `v=DMARC1; p=none;` 開始（[DMARC](https://resend.com/docs/dashboard/domains/dmarc)）；沒有這筆時，收件端改用上層網域（展示主機名稱所在的 zone）的 DMARC 紀錄（它的 `sp`，沒有 `sp` 時是 `p`）。DKIM 的 `d=` 與 From 相同，嚴格與寬鬆對齊都成立；SPF 的 `send.<寄件網域>` 只在寬鬆對齊下對齊，所以 `aspf` 不設成 `s`。
+   - `_dmarc` 不加也不改：上層網域已有 DMARC 紀錄（`p=reject`），由收發公司郵件的一方管理（Resend 的說明見 [DMARC](https://resend.com/docs/dashboard/domains/dmarc)）。DKIM 的 `d=` 與 From 相同，嚴格與寬鬆對齊都成立，所以 Resend 寄出的信在 `p=reject` 下照常通過 DMARC；SPF 的 `send.<寄件網域>` 只在寬鬆對齊下對齊，所以這筆紀錄的 `aspf` 不能改成 `s`。
+   - 主控台另外列出 `rsend` 的 CNAME：那是 Resend Forge（Resend 自己的寄信引擎，只在北維吉尼亞 `us-east-1` 運作）的退信網域，在主控台按 Activate Resend Forge 才會啟用（[Resend Forge](https://resend.com/docs/forge)）。展示環境不加，寄信留在 Tokyo 區域；沒有這筆時主控台的網域狀態是 `partially_failed`，Forge 的說明是驗證完成前網域照常寄信。
    - 收信用的 MX（`inbound`）不加：展示環境不收信。MX 與 TXT 都是 DNS only。
 
-   主控台顯示 Verified 後才寄得出去；手動加的紀錄可能要等到 72 小時。
+   DKIM 與 `send` 的 MX、TXT 都顯示 verified 後才寄得出去；手動加的紀錄可能要等到 72 小時。
 3. **金鑰**：API Keys → Create API Key，權限選 Sending access（`sending_access`，只能寄信），Domain 選寄件網域，只能以這個網域寄（[API keys](https://resend.com/docs/dashboard/api-keys/introduction)、[Create API key](https://resend.com/docs/api-reference/api-keys/create-api-key)）。金鑰只顯示這一次，之後看不到也改不了：
 
    ```sh
@@ -220,7 +221,7 @@ Laysi/trustiot-v2#113（限流）、Laysi/trustiot-v2#107（停權）、Laysi/tr
 
    產生 `deploy/flux/clusters/demo/trustiot/trustiot-smtp.sops.yaml`；開 PR（內文只寫改了哪個 Secret 與 key），合併後 Flux 套用。
 4. **主控台成員**：Resend 主控台的 Emails 頁看得到每封寄出的信，含收件地址與內容（[Managing emails](https://resend.com/docs/dashboard/emails/manage-emails)），登入驗證碼（Laysi/trustiot-v2#103）上線後也包括驗證碼。所以主控台的成員只限維運人員；有人不再負責時移除他，並依 [secrets runbook](secrets.md)「何時輪替」輪替金鑰。
-5. **紀錄**：網域的狀態（Verified）與區域、金鑰的權限與限定網域記進測試報告，不寫網域名稱與金鑰。
+5. **紀錄**：網域每筆紀錄的狀態（DKIM 與 `send` 的 MX、TXT）與區域、金鑰的權限與限定網域記進測試報告，不寫網域名稱與金鑰。
 
 ### Anthropic 的工作區與金鑰
 
