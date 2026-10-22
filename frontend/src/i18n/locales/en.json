@@ -20,6 +20,15 @@
 
   "security.cross_site_request": "This request came from another site and was blocked. Open TrustIoT directly and try again.",
   "tenant.name_invalid": "Enter a name of 1 to {max} characters.",
+  "telemetry.query_invalid": "The history query is missing a setting or has one in the wrong format.",
+  "telemetry.device_id_invalid": "This device ID is not valid.",
+  "telemetry.time_zone_invalid": "Choose a valid time zone.",
+  "telemetry.range_invalid": "Check the time range: the start must be before the end, and the range can't be this long.",
+  "telemetry.point_invalid": "This data point name is not valid.",
+  "telemetry.too_many_points": "There is too much data to show at once; at most {max} can be shown. Narrow the query and try again.",
+  "telemetry.outside_queryable_period": "Data from this period can no longer be queried. Choose a more recent time range.",
+  "telemetry.query_too_heavy": "This query needs too many resources. Choose a shorter time range or a longer interval.",
+  "telemetry.account_not_ready": "Telemetry history for this organization isn't ready yet. Try again in a few minutes.",
 
   "nav.home": "Home",
 

@@ -20,6 +20,15 @@
 
   "security.cross_site_request": "這個請求來自其他網站，已被擋下。請直接開啟 TrustIoT 後再試一次。",
   "tenant.name_invalid": "名稱需為 1 到 {max} 個字元。",
+  "telemetry.query_invalid": "歷史資料查詢缺少設定，或設定的格式不正確。",
+  "telemetry.device_id_invalid": "裝置 ID 的格式不正確。",
+  "telemetry.time_zone_invalid": "請選擇有效的時區。",
+  "telemetry.range_invalid": "請檢查時間範圍：開始時間要早於結束時間，且範圍不能這麼長。",
+  "telemetry.point_invalid": "資料點名稱的格式不正確。",
+  "telemetry.too_many_points": "資料太多，無法一次顯示；一次最多顯示 {max} 筆。請縮小查詢範圍後再試一次。",
+  "telemetry.outside_queryable_period": "這段期間的資料已無法查詢，請選擇較近的時間範圍。",
+  "telemetry.query_too_heavy": "這個查詢需要的資源太多，請縮短時間範圍或選擇較長的時間間隔。",
+  "telemetry.account_not_ready": "這個組織的遙測歷史資料尚未準備好，請幾分鐘後再試。",
 
   "nav.home": "首頁",
 
