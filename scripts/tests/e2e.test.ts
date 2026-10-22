@@ -125,8 +125,9 @@ interface RunningIdentity {
 
 /**
  * Starts the identity service on the host from what `env` printed: the platform settings and the
- * key paths as they are, the database login under the names the service reads (the README of the
- * scripts says to map `TRUSTIOT_DEV_IDENTITY_DATABASE_*` this way).
+ * key paths as they are, the database logins under the names the service reads (the README of the
+ * scripts says to map `TRUSTIOT_DEV_IDENTITY_DATABASE_*` and, for the event log's platform role,
+ * `TRUSTIOT_DEV_IDENTITY_PLATFORM_DATABASE_*` this way).
  */
 async function startIdentity(binary: string, settings: Record<string, string>): Promise<RunningIdentity> {
   const apiPort = await freePort();
@@ -138,6 +139,8 @@ async function startIdentity(binary: string, settings: Record<string, string>): 
       ...settings,
       TRUSTIOT__DATABASE__USERNAME: settings.TRUSTIOT_DEV_IDENTITY_DATABASE_USERNAME!,
       TRUSTIOT__DATABASE__PASSWORD: settings.TRUSTIOT_DEV_IDENTITY_DATABASE_PASSWORD!,
+      TRUSTIOT__DATABASE__PLATFORM_USERNAME: settings.TRUSTIOT_DEV_IDENTITY_PLATFORM_DATABASE_USERNAME!,
+      TRUSTIOT__DATABASE__PLATFORM_PASSWORD: settings.TRUSTIOT_DEV_IDENTITY_PLATFORM_DATABASE_PASSWORD!,
       TRUSTIOT__HTTP__LISTEN_ADDR: `127.0.0.1:${apiPort}`,
       TRUSTIOT__HTTP__HEALTH_LISTEN_ADDR: `127.0.0.1:${healthPort}`,
       // The token exchange's own port (Laysi/trustiot-v2#106); its default, 8082 on every
@@ -520,23 +523,29 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
         expect(first.stdout).not.toContain("the migration Job reported");
         expect(first.stdout).not.toContain("may connect to it");
         const logins = productLogins();
-        expect(logins.map((login) => login.role)).toEqual(["identity_app", "assets_app", "assets_platform", "certs_app"]);
+        expect(logins.map((login) => login.role)).toEqual([
+          "identity_app",
+          "identity_platform",
+          "assets_app",
+          "assets_platform",
+          "certs_app",
+        ]);
         for (const login of logins) {
           expect(firstState.credentials.services[login.stateKey].user).toBe(login.role);
           expect(firstState.credentials.services[login.stateKey].password).toMatch(/^[0-9a-f]{64}$/);
         }
         expect(new Set(logins.map((login) => firstState.credentials.services[login.stateKey].password)).size).toBe(logins.length);
         const roles = await psql(instance, "SELECT rolname || ':' || rolcanlogin || ':' || rolsuper FROM pg_roles WHERE rolname LIKE 'identity_%' OR rolname LIKE 'assets_%' OR rolname = 'trustiot_owner' ORDER BY 1");
-        // identity_platform exists because identity writes outbox events (Laysi/trustiot-v2#65); no
-        // Secret is bound to it, so it stays NOLOGIN, like the owner roles. assets_platform reads
-        // identity's events, so the chart and this environment bind a password to it.
+        // assets_platform reads identity's events (Laysi/trustiot-v2#65) and identity_platform the
+        // events its event log records (Laysi/trustiot-v2#130), so the chart and this environment
+        // bind a password to both. The owner roles stay NOLOGIN.
         expect(roles).toEqual([
           "assets_app:true:false",
           "assets_owner:false:false",
           "assets_platform:true:false",
           "identity_app:true:false",
           "identity_owner:false:false",
-          "identity_platform:false:false",
+          "identity_platform:true:false",
           "trustiot_owner:true:false",
         ]);
         expect(await psql(instance, "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'trustiot'")).toEqual(["trustiot_owner"]);
@@ -599,7 +608,7 @@ describe.skipIf(!ENABLED)("the dev environment with podman", () => {
           }
         }
         // The roles that no Secret is bound to cannot log in, whatever the password.
-        for (const role of ["identity_platform", "identity_owner", "assets_owner"]) {
+        for (const role of ["identity_owner", "assets_owner"]) {
           const refused = await loginAs(postgresPort, database, caFile, { user: role, password: "not-the-password" }).then(
             () => false,
             () => true,

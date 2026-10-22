@@ -83,13 +83,14 @@ The services whose platform role logs in (Laysi/trustiot-v2#65): the role that r
 tenants (service-kit's PlatformDb), which every outbox consumer needs to read its producers'
 events. tools/migrate creates a platform role for every service its registry marks, but a role
 logs in only while a Secret is bound to it, and the chart binds one only to the services listed
-here: a platform role nobody logs in with stays NOLOGIN (identity's, for example, exists for
-platform-wide events it does not write yet). tools/migrate/tests/registry.rs checks this list
-against the registry: every consumer is in it, and nothing without a platform role is.
+here: a platform role nobody logs in with stays NOLOGIN. identity is listed because it keeps
+the event log (Laysi/trustiot-v2#130) and reads the events it records as its platform role.
+tools/migrate/tests/registry.rs checks this list against the registry: every consumer is in it,
+and nothing without a platform role is.
 Returns a YAML list; use with fromYamlArray.
 */}}
 {{- define "trustiot.migrate.platformLogins" -}}
-{{- list "assets" | toYaml -}}
+{{- list "assets" "identity" | toYaml -}}
 {{- end -}}
 
 {{/*

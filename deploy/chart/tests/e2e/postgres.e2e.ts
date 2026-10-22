@@ -69,6 +69,9 @@ const RUN = crypto.randomUUID().replaceAll("-", "").slice(0, 8);
 // by the example service (its readiness opens a verify-full session as that role).
 const SERVICE = "identity";
 const ROLE = "identity_app";
+// Its platform role logs in too, from the same Secret: identity keeps the event log
+// (Laysi/trustiot-v2#130).
+const PLATFORM_ROLE = "identity_platform";
 // The password Secrets the chart declares and the Job fills (templates/passwords.yaml).
 const SERVICE_SECRET = `${PREFIX}-${SERVICE}-password`;
 const COLLECTOR_SECRET = `${PREFIX}-otel-collector-password`;
@@ -601,7 +604,7 @@ describe(`bundled Postgres (${SHAPE} shape)`, () => {
     const shape = passwordSecretsShape();
     report.passwordSecrets = shape;
     expect(shape).toEqual([
-      { name: SERVICE_SECRET, keys: [ROLE], generation: "1", bound: true, keep: "keep", filledBy: "migrate", dataManagers: ["trustiot-migrate"] },
+      { name: SERVICE_SECRET, keys: [ROLE, PLATFORM_ROLE], generation: "1", bound: true, keep: "keep", filledBy: "migrate", dataManagers: ["trustiot-migrate"] },
       { name: COLLECTOR_SECRET, keys: ["trustiot_collector"], generation: "1", bound: true, keep: "keep", filledBy: "migrate", dataManagers: ["trustiot-migrate"] },
     ]);
     for (const name of PASSWORD_SECRETS) {
@@ -770,7 +773,7 @@ describe(`bundled Postgres (${SHAPE} shape)`, () => {
     report.lostKey = { secrets: after, keys: passwordSecretsShape().map((s) => s.keys) };
     console.log(`password Secrets after a lost key and migrate.revision=2: ${after}`);
     expect(after).toBe("changed");
-    expect(Object.keys(secret(SERVICE_SECRET).data ?? {})).toEqual([ROLE]);
+    expect(Object.keys(secret(SERVICE_SECRET).data ?? {})).toEqual([ROLE, PLATFORM_ROLE]);
     expect(kubectl("logs", `job/${jobName()}`)).toContain(`generated the password of ${ROLE} in Secret ${SERVICE_SECRET} (it had none)`);
   }, 1_200_000);
 

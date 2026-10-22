@@ -31,6 +31,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use chrono::{DateTime, Utc};
+use contract::event::Actor;
 use contract::events::identity::{TENANT_AGGREGATE, TenantCreated};
 use contract::{ErrorBody, ErrorCode, FieldError, MessageKey, ServiceName, TenantId};
 use outbox::Aggregate;
@@ -233,11 +234,15 @@ impl TenantStore {
             .fetch_one(&mut *tx)
             .await?;
         let aggregate = Aggregate::new(TENANT_AGGREGATE, tenant_id.to_string())?;
-        outbox::publish(
+        // The event names the administrator, so the operation log shows who created the tenant.
+        outbox::publish_as(
             tx.transaction(),
             &aggregate,
             &TenantCreated {},
             Some(tenant_id),
+            Actor::User {
+                user_id: admin.user_id(),
+            },
         )
         .await?;
         tx.commit().await?;
