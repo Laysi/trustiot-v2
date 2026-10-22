@@ -349,7 +349,9 @@ pub struct LoggedEvent {
     /// Who made the change; `null` when the producer did not say.
     pub actor: Option<LoggedActor>,
     /// The event's payload as the producer wrote it, in the version above; a JSON object.
-    #[schema(value_type = Object)]
+    // Described as a map of any JSON values, so the spec allows any field (`value_type = Object`
+    // alone gives an object without properties, which generated clients read as empty).
+    #[schema(value_type = std::collections::BTreeMap<String, serde_json::Value>)]
     pub payload: serde_json::Value,
 }
 

@@ -479,7 +479,11 @@
             "type": "string"
           },
           "payload": {
+            "additionalProperties": {},
             "description": "The event's payload as the producer wrote it, in the version above; a JSON object.",
+            "propertyNames": {
+              "type": "string"
+            },
             "type": "object"
           },
           "producer": {
