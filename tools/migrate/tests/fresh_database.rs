@@ -182,9 +182,9 @@ async fn a_fresh_database_gets_every_migration_once() {
         .await
         .expect("count tables");
     assert_eq!(
-        tables, 7,
-        "users, memberships, sessions, tenants, the outbox's outbox_aggregate and outbox_event, \
-         and the migration records trustiot_migrate_applied"
+        tables, 8,
+        "users, memberships, sessions, tenants, login_codes, the outbox's outbox_aggregate and \
+         outbox_event, and the migration records trustiot_migrate_applied"
     );
     for (query, what) in [
         (
