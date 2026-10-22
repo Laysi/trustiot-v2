@@ -155,3 +155,11 @@ cargo deny --locked check
 工作站（`b4b2ce9c`）：`bun run --cwd frontend api:check`、`typecheck`、`lint` 通過，`test` 115 通過、0 失敗；`bun scripts/ci/check-secret-handling.ts` 沒有違規；`gitleaks git --redact --log-opts="origin/main..HEAD"` 與對 `git archive HEAD` 展開的目錄跑 `gitleaks dir --redact` 都沒有發現。
 
 結論：登入的兩步都在處理常式最前面擋下跨站請求，跨站的登出由 ext_authz 擋下，兩者都不改變任何狀態；同源的登入照常。整個 workspace 的檢查通過。
+
+### SMTP 帳密的 Secret 不存在時（2026-10-23）
+
+PR Laysi/trustiot-v2#525 在 `89b827bb` 的 nightly smoke 失敗：ingress e2e 以 saas 形態安裝在自己的 namespace，身分服務的 pod 停在 `CreateContainerConfigError: secret "trustiot-smtp" not found`，`helm install --wait` 逾時。原因：本分支讓 `values.yaml` 給 identity `smtp` 帳密，`tests/values/saas-instance.yaml` 指定 Secret `trustiot-smtp`，而引用是必填的。smoke 本身的安裝依渲染結果補上每個缺的 Secret，所以通過；叢集測試不建依賴 Secret；on-prem 的實例 overlay 用不需要帳號的 relay，沒有這個引用，所以也通過。
+
+修正：SMTP 帳密的 `secretKeyRef` 改成 `optional: true`（只有它），chart 在 `smtp.credentialsSecret.name` 有值時另給平台設定 `TRUSTIOT_SMTP_AUTH_REQUIRED: "true"`；身分服務在它是 `true` 卻沒有帳密時照常啟動、記 ERROR、`send_code` 回 503，不會不帶帳號寄信。chart 測試新增：每個叢集測試的安裝都不需要實例 overlay 指定的依賴 Secret（把 `optional` 拿掉時，ingress saas、mesh、postgres saas 與 identity-keys saas 兩種，共 5 個安裝失敗，都是 `Deployment/trustiot-identity reads trustiot-smtp`）；只有 SMTP 的引用是 optional。`tests/login.rs` 的 `a_missing_or_incomplete_relay_is_reported` 加上兩個帳密都沒有的情況，假 relay 的設定都帶 `TRUSTIOT_SMTP_AUTH_REQUIRED=true`。
+
+結果（建置主機，`CI=1`）：`cargo fmt --all --check`、`cargo clippy -p identity --all-targets --locked -- -D warnings` 通過；`cargo test --locked -p identity --no-fail-fast` 9 個測試執行檔 122 通過、0 失敗；`cargo test --locked -p sql-check --test check` 6 通過；`bun test deploy/chart` 522 通過、0 失敗；`bun test deploy/flux` 73 通過；`bun test scripts` 1541 通過、0 失敗；`bun run --cwd scripts typecheck` 通過。

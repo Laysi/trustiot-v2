@@ -115,6 +115,13 @@ pub struct Platform {
     /// `TRUSTIOT_SMTP_FROM`: `smtp.from`, the sender, `Name <address>` or a bare address.
     #[serde(default)]
     pub smtp_from: Option<String>,
+    /// `TRUSTIOT_SMTP_AUTH_REQUIRED`: `true` when the relay needs an account, which the chart
+    /// sets when `smtp.credentialsSecret` names a Secret. The chart's reference to that Secret is
+    /// optional, so the pod starts without it (the ext_authz check must not depend on mail); this
+    /// setting turns a missing account into an unusable relay setting, logged at startup, instead
+    /// of mail sent without authentication. Default `false`.
+    #[serde(default)]
+    pub smtp_auth_required: bool,
     /// `TRUSTIOT_SMTP_USERNAME`, from the Secret `smtp.credentialsSecret` (only for services
     /// whose `credentials` list `smtp`). Absent when the relay needs no authentication.
     #[serde(default)]
@@ -272,7 +279,8 @@ impl Validate for Config {
 
 impl Platform {
     /// Without `smtp_host` the other SMTP settings are not used. With it, the port, security and
-    /// sender must be set and valid, and the username and password come together.
+    /// sender must be set and valid, the username and password come together, and they are set
+    /// when `smtp_auth_required` is.
     ///
     /// # Errors
     ///
@@ -312,6 +320,14 @@ impl Platform {
             return Err(Invalid::new(
                 "platform.smtp_password",
                 "platform.smtp_username and platform.smtp_password must be set together",
+            ));
+        }
+        if self.smtp_auth_required && self.smtp_username.is_none() {
+            return Err(Invalid::new(
+                "platform.smtp_username",
+                "platform.smtp_username and platform.smtp_password must be set when \
+                 platform.smtp_auth_required is true; the chart reads them from the Secret in \
+                 smtp.credentialsSecret, which may be missing",
             ));
         }
         Ok(())

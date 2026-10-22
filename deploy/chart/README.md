@@ -495,7 +495,7 @@ chart 產生下列物件：
 | `smtp.port` | `587` | |
 | `smtp.security` | `starttls` | `starttls` 或 `tls`（直接 TLS，通常是 465）；不支援明文 SMTP |
 | `smtp.from` | `""` | 寄件者，例如 `TrustIoT <noreply@example.com>`；只能一行，避免注入郵件標頭。設了 `smtp.host` 就必填（schema 檢查） |
-| `smtp.credentialsSecret.name` | `""` | relay 不需要驗證時留空 |
+| `smtp.credentialsSecret.name` | `""` | relay 不需要驗證時留空；有值時平台設定多一個 `TRUSTIOT_SMTP_AUTH_REQUIRED`，引用是 optional（見「密鑰的環境變數」） |
 | `smtp.credentialsSecret.usernameKey` | `username` | |
 | `smtp.credentialsSecret.passwordKey` | `password` | |
 | `ai.chat.baseUrl` | `""` | OpenAI 相容的聊天端點，例如 `https://api.openai.com/v1`；SaaS 只接受 https |
@@ -699,6 +699,7 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 | `TRUSTIOT_QDRANT_URL` | `qdrant.external.url` | `qdrant.mode` 為 `external` |
 | `TRUSTIOT_S3_ENDPOINT`、`_REGION`、`_BUCKET`、`_FORCE_PATH_STYLE` | `objectStorage.*` | 各自有值時；`_FORCE_PATH_STYLE` 隨 bucket |
 | `TRUSTIOT_SMTP_HOST`、`_PORT`、`_SECURITY`、`_FROM` | `smtp.*` | 有 host 時（`_FROM` 有值時） |
+| `TRUSTIOT_SMTP_AUTH_REQUIRED` | `"true"`：relay 需要帳號 | 有 host 且 `smtp.credentialsSecret.name` 有值時；身分服務據此把缺少的帳密當成不能用的寄信設定（見「密鑰的環境變數」） |
 | `TRUSTIOT_AI_CHAT_BASE_URL`、`TRUSTIOT_AI_EMBEDDING_BASE_URL`、`TRUSTIOT_AI_RERANK_BASE_URL` | `ai.*.baseUrl` | 各自有值時 |
 | `TRUSTIOT_CLICKHOUSE_CA_FILE` | 掛載的 CA 憑證路徑 `/etc/trustiot/clickhouse-ca/ca.crt` | `clickhouse.mode` 為 `external` 且設定了 `caSecret.name` |
 | `SENTRY_ENVIRONMENT` | `observability.sentry.environment` | Sentry 開啟時（`SENTRY_DSN` 來自 Secret，見上） |
@@ -713,8 +714,10 @@ SIEM 連不上時 exporter 在記憶體佇列重試 5 分鐘，不影響寫進 C
 | `TRUSTIOT_QDRANT_READ_API_KEY` | `qdrant.external.credentialsSecret` 的 `readApiKeyKey` | `knowledge` 的 `credentials` 含 `qdrant-read`，且 `qdrant.mode` 為 `external` |
 | `TRUSTIOT_QDRANT_WRITE_API_KEY` | `qdrant.external.credentialsSecret` 的 `writeApiKeyKey` | `knowledge` 的 `credentials` 含 `qdrant-write`，且 `qdrant.mode` 為 `external` |
 | `TRUSTIOT_S3_ACCESS_KEY_ID`、`TRUSTIOT_S3_SECRET_ACCESS_KEY` | `objectStorage.credentialsSecret` | `credentials` 含 `object-storage` |
-| `TRUSTIOT_SMTP_USERNAME`、`TRUSTIOT_SMTP_PASSWORD` | `smtp.credentialsSecret` | `credentials` 含 `smtp` |
+| `TRUSTIOT_SMTP_USERNAME`、`TRUSTIOT_SMTP_PASSWORD` | `smtp.credentialsSecret`，引用是 `optional: true` | `credentials` 含 `smtp` |
 | `TRUSTIOT_AI_CHAT_API_KEY`、`TRUSTIOT_AI_EMBEDDING_API_KEY`、`TRUSTIOT_AI_RERANK_API_KEY` | `ai.*.apiKeySecret` | `ai-gateway` 的 `credentials` 含 `ai`（決策 28） |
+
+引用的 Secret 不存在時，pod 停在 `CreateContainerConfigError`，只有 SMTP 帳密例外：它的引用是 `optional: true`。身分服務以它寄登入驗證碼，又負責每個帶 cookie 的請求都要經過的 ext_authz 檢查，寄信的帳密缺了不該讓整個平台的請求都失敗。Secret 或其中的 key 不存在時 pod 照常啟動、沒有這兩個變數；平台設定 `TRUSTIOT_SMTP_AUTH_REQUIRED` 告訴服務 relay 需要帳號，所以它啟動時記一行 ERROR、`send_code` 回 503，而不是不帶帳號寄信（`services/identity/README.md`「寄信（SMTP）」）。這也表示 Secret 漏建時 `helm install --wait` 與 Flux 不會失敗：要看身分服務的 ERROR。叢集測試（`tests/e2e/`）的 namespace 沒有實例 overlay 指定的依賴 Secret，chart 測試確認每個叢集測試的安裝都不需要它們（「e2e overlays」）。
 
 只給身分服務的變數（chart 設定，`TRUSTIOT_` 開頭，自訂 `env` 不能覆寫）：
 

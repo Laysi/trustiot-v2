@@ -193,7 +193,7 @@ impl FakeSmtp {
     }
 
     /// The platform settings that point the identity service at this relay, as the chart sets
-    /// them, with `TRUSTIOT_SMTP_CA_FILE` for the test CA.
+    /// them for a relay that needs an account, with `TRUSTIOT_SMTP_CA_FILE` for the test CA.
     pub fn env(&self) -> Vec<(String, String)> {
         vec![
             ("TRUSTIOT_SMTP_HOST".into(), "127.0.0.1".into()),
@@ -207,6 +207,7 @@ impl FakeSmtp {
                 "TRUSTIOT_SMTP_CA_FILE".into(),
                 self.ca_file.display().to_string(),
             ),
+            ("TRUSTIOT_SMTP_AUTH_REQUIRED".into(), "true".into()),
             (
                 "TRUSTIOT_SMTP_USERNAME".into(),
                 self.account.username.clone(),

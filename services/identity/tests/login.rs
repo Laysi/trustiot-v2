@@ -1004,7 +1004,9 @@ async fn codes_travel_only_over_verified_tls() {
 
 /// Without a relay nobody can get a code (503). A relay setting that is incomplete is logged at
 /// ERROR without printing any value, and the service still serves (the ext_authz check must not
-/// depend on the relay), answering `send_code` with 503.
+/// depend on the relay), answering `send_code` with 503. That includes a relay that needs an
+/// account without one: the chart's optional reference to a missing Secret
+/// `smtp.credentialsSecret` leaves out both variables.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_missing_or_incomplete_relay_is_reported() {
     let Some(product) = product_postgres(&["identity_app"]).await else {
@@ -1027,14 +1029,19 @@ async fn a_missing_or_incomplete_relay_is_reported() {
 
     let relay = FakeSmtp::start(Mode::StartTls);
     let base = service_env(&product, Some(&relay), &[]);
-    for (change, setting) in [
-        ("TRUSTIOT_SMTP_FROM", "platform.smtp_from"),
-        ("TRUSTIOT_SMTP_SECURITY", "platform.smtp_security"),
-        ("TRUSTIOT_SMTP_PASSWORD", "platform.smtp_password"),
+    for (removed, setting) in [
+        (&["TRUSTIOT_SMTP_FROM"][..], "platform.smtp_from"),
+        (&["TRUSTIOT_SMTP_SECURITY"][..], "platform.smtp_security"),
+        (&["TRUSTIOT_SMTP_PASSWORD"][..], "platform.smtp_password"),
+        (
+            &["TRUSTIOT_SMTP_USERNAME", "TRUSTIOT_SMTP_PASSWORD"][..],
+            "platform.smtp_auth_required",
+        ),
     ] {
+        let change = removed.join(" and ");
         let env: Vec<(&str, &str)> = base
             .iter()
-            .filter(|(name, _)| name != change)
+            .filter(|(name, _)| !removed.contains(&name.as_str()))
             .map(|(name, value)| (name.as_str(), value.as_str()))
             .collect();
         let service = Service::start(&env);
