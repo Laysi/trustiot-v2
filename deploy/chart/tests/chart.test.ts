@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { checkRenderedManifests } from "../../../scripts/ci/check-secret-handling.ts";
 import { routeListProblems, sampleRequests } from "./ingress-authz.ts";
-import type { PolicyRule, RouteRule } from "./ingress-authz.ts";
+import type { Exception, PolicyRule, RouteRule } from "./ingress-authz.ts";
 import { COMMAND_TIMEOUT_MS, SLOW_TEST_MS, throwIfTimedOut, useProcessTestTimeouts } from "./timing.ts";
 
 // Every test starts helm, and some also kubeconform: see timing.ts for the limits.
@@ -69,7 +69,8 @@ const EXTERNAL_MIGRATION = [
   "--set",
   "clickhouse.external.migrationSecret.name=trustiot-ch-migrate",
 ];
-// Ingress e2e overlay: identity, certs, mqtt-bridge and assets on, plus a catch-all cookie route.
+// Ingress e2e overlay: identity, certs, mqtt-bridge, assets and web (the SPA's static files) on,
+// plus a cookie route for /api.
 const E2E_VALUES = "tests/e2e/values-e2e.yaml";
 
 type YamlMap = { [key: string]: unknown };
@@ -910,13 +911,14 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
   test("the identity service alone gets the cookie routes, with host names, to address its tokens", () => {
     const manifests = render(e2e, [
       "--set-json",
-      'ingress.routes=[{"host":"app","path":"/","match":"PathPrefix","service":"assets"},{"host":"gateway","path":"/api/certs","match":"Exact","service":"certs"}]',
+      'ingress.routes=[{"host":"app","path":"/api","match":"PathPrefix","service":"assets"},{"host":"gateway","path":"/api/certs","match":"Exact","service":"certs"}]',
     ]);
+    // Cookie routes only: the public paths and the SPA's static files get no token.
     expect(JSON.parse(envValue(manifests, "identity", "TRUSTIOT_INGRESS_ROUTES") ?? "null")).toEqual([
-      { host: "app.saas.trustiot.test", path: "/", match: "PathPrefix", service: "assets" },
+      { host: "app.saas.trustiot.test", path: "/api", match: "PathPrefix", service: "assets" },
       { host: "gw.saas.trustiot.test", path: "/api/certs", match: "Exact", service: "certs" },
     ]);
-    for (const service of ["assets", "certs", "mqtt-bridge"]) {
+    for (const service of ["assets", "certs", "mqtt-bridge", "web"]) {
       expect(envValue(manifests, service, "TRUSTIOT_INGRESS_ROUTES")).toBeUndefined();
     }
     expect(platformConfig(manifests).TRUSTIOT_INGRESS_ROUTES).toBeUndefined();
@@ -2986,6 +2988,13 @@ describe("ingress gateway (decision 27)", () => {
     ],
   } as const;
   const withBackends = (shape: Shape, args: string[] = []) => render([...SHAPES[shape], E2E_VALUES], args);
+  // hosts.app of the shape's instance overlay, where the SPA's static files are served.
+  const appHost = (shape: Shape) => PUBLIC_PATHS[shape][0][0];
+  // The SPA's static files off: the e2e overlay and enableAllServices turn them on.
+  const WEB_OFF = ["--set", "services.web.enabled=false"];
+  // The paths of hosts.app that keep the cookie check while the SPA is on (templates/_ingress.tpl).
+  const COOKIE_PREFIXES = ["/api", "/auth"];
+  const underCookiePrefix = (path: string) => COOKIE_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 
   function rules(manifests: Manifest[]) {
     return manifests
@@ -3099,7 +3108,8 @@ describe("ingress gateway (decision 27)", () => {
   });
 
   test.each(SHAPE_NAMES)("%s: public paths are exact, strip the identity header and skip the cookie check only on their host", (shape) => {
-    const manifests = withBackends(shape);
+    // Without the SPA's static files, as every install before Laysi/trustiot-v2#123 renders.
+    const manifests = withBackends(shape, WEB_OFF);
     const rendered = rules(manifests);
     const publicRules = rendered.filter(({ rule }) => strips(rule));
     expect(
@@ -3137,6 +3147,78 @@ describe("ingress gateway (decision 27)", () => {
     for (const { rule } of cookieRules) {
       expect(modifier(rule).remove).toEqual(UNDERSCORE_SPELLINGS);
       expect(exempt).not.toContain(rule.matches[0]?.path.value);
+    }
+  });
+
+  test.each(SHAPE_NAMES)("%s: with the SPA, every other path on hosts.app is its static files, without the cookie check, the Cookie or the identity header", (shape) => {
+    const manifests = withBackends(shape);
+    const app = appHost(shape);
+    const rendered = rules(manifests);
+    const statics = rendered.filter(({ rule }) => (modifier(rule).remove ?? []).includes("cookie"));
+    expect(statics.map(({ host, rule }) => ({ host, matches: rule.matches, backendRefs: rule.backendRefs }))).toEqual([
+      { host: app, matches: [{ path: { type: "PathPrefix", value: "/" } }], backendRefs: [{ name: `${RELEASE}-web`, port: 8080 }] },
+    ]);
+    // The web service holds neither the session cookie nor an identity, in any spelling.
+    expect(modifier(statics[0]?.rule as HttpRouteRule).remove).toEqual(["cookie", "x-internal-identity", ...UNDERSCORE_SPELLINGS]);
+    // The public paths keep their exact routes and lose only the identity header; no cookie
+    // route of hosts.app lies outside the cookie prefixes.
+    const others = rendered.filter((r) => !statics.includes(r));
+    expect(
+      others.filter(({ rule }) => strips(rule)).map(({ host, rule }) => [host, rule.matches[0]?.path.value, rule.backendRefs[0]?.name]).sort(),
+    ).toEqual(PUBLIC_PATHS[shape].map((p) => [...p]).sort());
+    const appCookieRoutes = others.filter(({ host, rule }) => host === app && !strips(rule));
+    expect(appCookieRoutes.length).toBeGreaterThan(0);
+    for (const { rule } of appCookieRoutes) expect(underCookiePrefix(rule.matches[0]?.path.value ?? "")).toBe(true);
+    // Rule 1 checks every other host as without the SPA, rule 2 the cookie prefixes and /internal
+    // on every host, and one more rule per public path checks it on any other host; a public path
+    // outside the prefixes reaches the static files on hosts.app, so it is not checked there.
+    const exempt = PUBLIC_PATHS[shape].map(([, path]) => path).sort();
+    const check = policy(manifests, "cookie-check");
+    expect(check.rules).toEqual([
+      { to: [{ operation: { notHosts: withPorts([app]), notPaths: exempt } }] },
+      { to: [{ operation: { paths: ["/api", "/api/*", "/auth", "/auth/*", "/internal*"], notPaths: exempt } }] },
+      ...exempt.map((path) => {
+        const hosts = PUBLIC_PATHS[shape].filter(([, p]) => p === path).map(([host]) => host as string);
+        return { to: [{ operation: { paths: [path], notHosts: withPorts([...new Set(underCookiePrefix(path) ? hosts : [...hosts, app])].sort()) } }] };
+      }),
+    ]);
+  });
+
+  test("with the SPA, a cookie route on hosts.app outside /api and /auth, a cookie route to web, or a host named like hosts.app fails to render", () => {
+    const withRoutes = (routes: object[], args: string[] = []) =>
+      helmTemplate([...SHAPES.saas, E2E_VALUES], [...args, "--set-json", `ingress.routes=${JSON.stringify(routes)}`]);
+    const outside =
+      "while services.web is enabled, every path on hosts.app outside /api and /auth is the SPA's static files, so a cookie route there must be one of them or below one";
+    for (const [path, match] of [["/", "PathPrefix"], ["/apix", "PathPrefix"], ["/authz", "Exact"], ["/settings", "PathPrefix"], ["/healthz/details", "Exact"]]) {
+      const refused = withRoutes([{ host: "app", path: "/api", match: "PathPrefix", service: "assets" }, { host: "app", path, match, service: "assets" }]);
+      expect(refused.code).not.toBe(0);
+      expect(refused.stderr).toContain(`ingress.routes[1]: ${outside}`);
+      // Without the SPA, the same route is the host's own.
+      expect(withRoutes([{ host: "app", path, match, service: "assets" }], WEB_OFF).code).toBe(0);
+    }
+    // The prefixes themselves, paths below them, and other hosts' paths render.
+    const allowed = withRoutes([
+      { host: "app", path: "/api", match: "Exact", service: "assets" },
+      { host: "app", path: "/api/assets", match: "PathPrefix", service: "assets" },
+      { host: "app", path: "/auth", match: "PathPrefix", service: "identity" },
+      { host: "app", path: "/auth/logout", match: "Exact", service: "identity" },
+      { host: "gateway", path: "/", match: "PathPrefix", service: "certs" },
+      { host: "ota", path: "/", match: "PathPrefix", service: "certs" },
+    ]);
+    expect(allowed.stderr).toBe("");
+    expect(allowed.code).toBe(0);
+    const toWeb = withRoutes([{ host: "app", path: "/api/web", match: "PathPrefix", service: "web" }]);
+    expect(toWeb.code).not.toBe(0);
+    expect(toWeb.stderr).toContain(
+      "ingress.routes[0]: web serves only the SPA's static files, which need neither the session cookie nor an internal identity, so it gets no cookie route",
+    );
+    // The exemption of hosts.app would cover every route of a host with the same name.
+    for (const host of ["gateway", "ota"]) {
+      const same = helmTemplate([...SHAPES.saas, E2E_VALUES], ["--set", `hosts.${host}=app.saas.trustiot.test`]);
+      expect(same.code).not.toBe(0);
+      expect(same.stderr).toContain(
+        `hosts.${host}: must differ from hosts.app while services.web is enabled, because every path on hosts.app outside /api and /auth skips the cookie check`,
+      );
     }
   });
 
@@ -3192,6 +3274,23 @@ describe("ingress gateway (decision 27)", () => {
     { host: "ota", path: "/", match: "PathPrefix", service: "gateway-ops" },
     { host: "ota", path: "/mqtt", match: "Exact", service: "mqtt-bridge" },
   ];
+  // The same overlaps with the SPA's static files on: cookie routes on hosts.app only under the
+  // cookie prefixes, and the public paths' backends also routed on the other hosts.
+  const ROUTE_LIST_SPA = [
+    { host: "app", path: "/api", match: "PathPrefix", service: "assets" },
+    { host: "app", path: "/api/identity", match: "PathPrefix", service: "identity" },
+    { host: "app", path: "/api/mqtt", match: "Exact", service: "mqtt-bridge" },
+    { host: "app", path: "/auth", match: "PathPrefix", service: "identity" },
+    { host: "app", path: "/auth/login/details", match: "Exact", service: "identity" },
+    { host: "gateway", path: "/", match: "PathPrefix", service: "gateway-ops" },
+    { host: "gateway", path: "/api", match: "PathPrefix", service: "certs" },
+    { host: "gateway", path: "/certs", match: "PathPrefix", service: "certs" },
+    { host: "gateway", path: "/healthz", match: "Exact", service: "certs" },
+    { host: "gateway", path: "/auth/login", match: "Exact", service: "certs" },
+    { host: "ota", path: "/", match: "PathPrefix", service: "gateway-ops" },
+    { host: "ota", path: "/mqtt", match: "Exact", service: "mqtt-bridge" },
+    { host: "ota", path: "/static", match: "PathPrefix", service: "assets" },
+  ];
   // What the nightly smoke adds for its API check (scripts/nightly/api.ts, API_ROUTES).
   const SMOKE_API = [
     "--set", "services.identity.enabled=true",
@@ -3202,9 +3301,12 @@ describe("ingress gateway (decision 27)", () => {
     ])}`,
   ];
   const ROUTE_LIST_CASES = SHAPE_NAMES.flatMap((shape) => [
-    { name: `${shape}: every service, routes that overlap the exceptions`, shape, files: SHAPES[shape], args: [...enableAllServices, "--set-json", `ingress.routes=${JSON.stringify(ROUTE_LIST)}`] },
+    { name: `${shape}: every service, routes that overlap the exceptions`, shape, files: SHAPES[shape], args: [...enableAllServices, ...WEB_OFF, "--set-json", `ingress.routes=${JSON.stringify(ROUTE_LIST)}`] },
+    { name: `${shape}: every service and the SPA, routes that overlap the exceptions`, shape, files: SHAPES[shape], args: [...enableAllServices, "--set-json", `ingress.routes=${JSON.stringify(ROUTE_LIST_SPA)}`] },
     { name: `${shape}: the nightly smoke with its API routes`, shape, files: [...SHAPES[shape], SMOKE], args: SMOKE_API },
+    { name: `${shape}: the nightly smoke with its API routes and the SPA`, shape, files: [...SHAPES[shape], SMOKE], args: [...SMOKE_API, "--set", "services.web.enabled=true"] },
     { name: `${shape}: the ingress e2e overlay`, shape, files: [...SHAPES[shape], E2E_VALUES], args: [] },
+    { name: `${shape}: the ingress e2e overlay without the SPA`, shape, files: [...SHAPES[shape], E2E_VALUES], args: WEB_OFF },
   ]).concat([{ name: "saas: the service-to-service e2e overlay", shape: "saas", files: [...SHAPES.saas, E2E_VALUES, "tests/e2e/values-mesh-e2e.yaml"], args: [] }]);
 
   test.each(ROUTE_LIST_CASES.map((c) => [c.name, c] as const))(
@@ -3222,14 +3324,26 @@ describe("ingress gateway (decision 27)", () => {
         public: strips(rule),
         backend: rule.backendRefs[0]?.name ?? "",
       }));
-      // Decision 27's exceptions whose backend this render runs: the others are neither routed nor exempt.
+      // Decision 27's exceptions whose backend this render runs: the others are neither routed nor
+      // exempt. With the SPA, every path of hosts.app outside the cookie prefixes is one more.
       const running = new Set(manifests.filter((m) => m.kind === "Deployment").map((m) => m.metadata.name));
-      const exceptions = PUBLIC_PATHS[shape].filter(([, , backend]) => running.has(backend)).map(([hostname, path]) => ({ hostname, path }));
+      const exceptions: Exception[] = PUBLIC_PATHS[shape].filter(([, , backend]) => running.has(backend)).map(([hostname, path]) => ({ hostname, path }));
+      if (running.has(`${RELEASE}-web`)) exceptions.push({ hostname: appHost(shape), outside: COOKIE_PREFIXES });
       expect(exceptions.length).toBeGreaterThan(0);
       const check = policy(manifests, "cookie-check");
       expect(check.action).toBe("CUSTOM");
+      const deny = policy(manifests, "deny-internal");
+      expect(deny.action).toBe("DENY");
+      // The proof lets the identity service refuse a checked request no cookie route matches; it
+      // matches the cookie routes it is given, and those are exactly the rendered ones.
+      if (running.has(`${RELEASE}-identity`)) {
+        const given = podSpec(find(manifests, "Deployment", `${RELEASE}-identity`)).containers[0]?.env?.find((e) => e.name === "TRUSTIOT_INGRESS_ROUTES")?.value;
+        expect((JSON.parse(given ?? "null") as { host: string; path: string; match: string }[]).map((r) => `${r.host} ${r.match} ${r.path}`).sort()).toEqual(
+          routes.filter((r) => !r.public).map((r) => `${r.hostname} ${r.match} ${r.path}`).sort(),
+        );
+      }
       const ports = [shape === "saas" ? 80 : 443, 8443];
-      expect(routeListProblems(routes, check.rules as PolicyRule[], exceptions, ports)).toEqual([]);
+      expect(routeListProblems(routes, check.rules as PolicyRule[], exceptions, ports, deny.rules as PolicyRule[])).toEqual([]);
       // Not a vacuous pass: the render has cookie routes, and each exception has its route.
       expect(routes.filter((r) => !r.public).length).toBeGreaterThan(0);
       expect(routes.filter((r) => r.public).length).toBe(exceptions.length);
@@ -3314,7 +3428,8 @@ describe("ingress gateway (decision 27)", () => {
     expect(http.statusOnError).toBe("503");
     expect(String(http.timeout)).toMatch(/^0\.\d+s$/);
     expect(http.pathPrefix).toBe("/internal/ext-authz");
-    expect(http.includeRequestHeadersInCheck).toEqual(["cookie"]);
+    // The cookie, and the headers of the identity service's cross-site request check (CSRF).
+    expect(http.includeRequestHeadersInCheck).toEqual(["cookie", "origin", "sec-fetch-site"]);
     expect(http.headersToUpstreamOnAllow).toEqual(["x-internal-identity"]);
     // The identity service of the release "trustiot" in namespace "trustiot" (README.md).
     const identity = find(render(SHAPES.saas, ["--set", "services.identity.enabled=true"]), "Service", `${RELEASE}-identity`);
@@ -3370,7 +3485,7 @@ describe("service-to-service authorization (decision 27)", () => {
   // TrustIoT service.
   const WHOAMI_STAND_INS: Record<string, string[]> = {
     [SMOKE]: ["smoke-echo"],
-    [E2E_VALUES]: ["assets", "certs", "mqtt-bridge"],
+    [E2E_VALUES]: ["assets", "certs", "mqtt-bridge", "web"],
   };
   const standInsOf = (overlays: readonly string[]) => new Set(overlays.flatMap((overlay) => WHOAMI_STAND_INS[overlay] ?? []));
   // Bundled ClickHouse probes /ping on its HTTP port; the native protocol (9000) stays closed.
@@ -3445,6 +3560,8 @@ describe("service-to-service authorization (decision 27)", () => {
       assets: [sa("identity"), principal(GATEWAY_SA)],
       certs: [sa("assets"), principal(GATEWAY_SA)],
       "mqtt-bridge": [principal(GATEWAY_SA)],
+      // The SPA's static files: the gateway only, like a public path.
+      web: [principal(GATEWAY_SA)],
       alerts: [sa("assets")],
       knowledge: [],
     };
@@ -3478,7 +3595,7 @@ describe("service-to-service authorization (decision 27)", () => {
   test.each(SHAPE_NAMES)("%s: each service's NetworkPolicy admits HBONE from the same callers, and kubelet probes", (shape) => {
     const manifests = withCalls(shape);
     const services = manifests.filter((m) => m.kind === "Deployment").map((d) => serviceOf(d.metadata.name));
-    expect(services.length).toBe(6);
+    expect(services.length).toBe(7);
     for (const service of services) {
       const spec = networkPolicy(manifests, service);
       for (const deployment of manifests.filter((m) => m.kind === "Deployment")) {
@@ -3651,8 +3768,9 @@ describe("service-to-service authorization (decision 27)", () => {
   test("with the default empty call list only the ingress gateway reaches its backends and the identity service", () => {
     const manifests = render(SHAPES.saas, enableAllServices);
     for (const service of plannedServices) {
-      // Public paths keep identity, certs and mqtt-bridge reachable from the gateway.
-      const expected = ["identity", "certs", "mqtt-bridge"].includes(service) ? [principal(GATEWAY_SA)] : [];
+      // Public paths keep identity, certs and mqtt-bridge reachable from the gateway, and the
+      // SPA's static files keep web.
+      const expected = ["identity", "certs", "mqtt-bridge", "web"].includes(service) ? [principal(GATEWAY_SA)] : [];
       expect(principalsOf(meshPolicy(manifests, service))).toEqual(expected);
       expect(networkPolicy(manifests, service).ingress?.length).toBe(expected.length > 0 ? 2 : 1);
     }

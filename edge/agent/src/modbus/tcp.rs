@@ -9,6 +9,7 @@
 use std::time::Duration;
 
 use protocol::config::Transport;
+use socket2::{SockRef, TcpKeepalive};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::{Instant, timeout, timeout_at};
@@ -316,7 +317,30 @@ async fn connect(host: &str, port: u16, limit: Duration) -> Result<TcpStream, Re
     stream
         .set_nodelay(true)
         .map_err(|error| ReadError::Connect(format!("setting TCP_NODELAY failed: {error}")))?;
+    SockRef::from(&stream)
+        .set_tcp_keepalive(&keepalive())
+        .map_err(|error| ReadError::Connect(format!("setting TCP keepalive failed: {error}")))?;
     Ok(stream)
+}
+
+/// How long a connection stays idle before the kernel probes the peer (TCP keepalive).
+const KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
+/// Time between keepalive probes the peer does not acknowledge.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+/// Unacknowledged probes after which the kernel drops the connection.
+const KEEPALIVE_RETRIES: u32 = 3;
+
+/// TCP keepalive for every connection (rebuild checklist F4, Laysi/trustiot#164). When the peer
+/// vanished while the connection was idle between polls (power lost, a cable pulled, a router
+/// that dropped the connection's state), the kernel drops the connection about a minute later,
+/// and the next request opens a new one instead of first waiting out its timeout on a dead
+/// connection. Keepalive cannot see a peer whose TCP stack still acknowledges but that never
+/// answers a request: the request timeout and the watchdog ([`crate::polling`]) handle that.
+fn keepalive() -> TcpKeepalive {
+    TcpKeepalive::new()
+        .with_time(KEEPALIVE_IDLE)
+        .with_interval(KEEPALIVE_INTERVAL)
+        .with_retries(KEEPALIVE_RETRIES)
 }
 
 /// Reads, without waiting, what arrived on an idle connection and drops every whole frame: late
@@ -410,6 +434,26 @@ mod tests {
         bounded("the socket to become readable", stream.readable())
             .await
             .unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn connections_use_tcp_keepalive() {
+        // The connect timeout must not fire on a busy machine: the clock moves only by hand.
+        let _clock = clock::manual();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stream = bounded(
+            "a connection",
+            connect("127.0.0.1", port, Duration::from_secs(10)),
+        )
+        .await
+        .unwrap();
+        let socket = SockRef::from(&stream);
+        assert!(socket.keepalive().unwrap(), "SO_KEEPALIVE");
+        assert_eq!(socket.tcp_keepalive_time().unwrap(), KEEPALIVE_IDLE);
+        assert_eq!(socket.tcp_keepalive_interval().unwrap(), KEEPALIVE_INTERVAL);
+        assert_eq!(socket.tcp_keepalive_retries().unwrap(), KEEPALIVE_RETRIES);
+        assert!(stream.nodelay().unwrap(), "TCP_NODELAY");
     }
 
     /// Accepts one connection, answers one Modbus TCP read of a holding register with `value`,

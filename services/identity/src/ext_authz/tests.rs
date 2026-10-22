@@ -25,6 +25,9 @@ const USER: &str = "01928f6e-7a3c-7d4e-8f00-0123456789ab";
 const TENANT: &str = "01928f6e-7a3c-7d4e-8f00-00000000000a";
 const KID: &str = "2026-10-a";
 
+/// Headers that a case adds to the check request.
+type CaseHeaders = &'static [(&'static str, &'static str)];
+
 /// What the in-memory store does for every lookup.
 #[derive(Clone, Copy)]
 enum Behaviour {
@@ -542,4 +545,127 @@ async fn grants_without_a_tenant_or_with_admin_rights_are_signed_as_they_are() {
     assert_eq!(user.user_id(), admin.user);
     assert_eq!(user.tenant(), None);
     assert!(user.is_platform_admin());
+}
+
+/// Acceptance (Laysi/trustiot-v2#123): a cross-site request with a valid session gets 403
+/// `security.cross_site_request`, without an identity and before the session is looked up.
+#[tokio::test]
+async fn a_cross_site_request_gets_403_before_the_session_is_looked_up() {
+    let fixture = Fixture::new(Behaviour::Answer);
+    let cookie = fixture.cookie();
+    let cases: [(Method, CaseHeaders); 7] = [
+        (Method::POST, &[("origin", "https://attacker.example.test")]),
+        (Method::POST, &[("sec-fetch-site", "cross-site")]),
+        (Method::DELETE, &[("sec-fetch-site", "same-site")]),
+        (Method::POST, &[("sec-fetch-site", "none")]),
+        (Method::GET, &[("sec-fetch-site", "cross-site")]),
+        (Method::PUT, &[("origin", "null")]),
+        (
+            Method::PATCH,
+            &[
+                ("origin", "https://app.example.com"),
+                ("origin", "https://attacker.example.test"),
+            ],
+        ),
+    ];
+    for (method, extra) in cases {
+        let mut headers = vec![("host", APP), ("cookie", cookie.as_str())];
+        headers.extend_from_slice(extra);
+        let before = fixture.store.lookups.load(Ordering::SeqCst);
+        let response = fixture
+            .check(method.clone(), "/internal/ext-authz/api/devices", &headers)
+            .await;
+        assert_eq!(
+            fixture.store.lookups.load(Ordering::SeqCst),
+            before,
+            "{method} {extra:?}"
+        );
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "{method} {extra:?}"
+        );
+        assert!(identity_headers(&response).is_empty());
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .map(HeaderValue::as_bytes),
+            Some(b"no-store".as_slice())
+        );
+        assert_eq!(
+            body_json(response).await,
+            json!({"code": "permission_denied", "message_key": "security.cross_site_request"}),
+            "{method} {extra:?}"
+        );
+    }
+    // Without a session too: the request is refused for where it comes from, not for the cookie.
+    let response = fixture
+        .check(
+            Method::POST,
+            "/internal/ext-authz/api/devices",
+            &[("host", APP), ("sec-fetch-site", "cross-site")],
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(fixture.store.lookups.load(Ordering::SeqCst), 0);
+}
+
+/// The SPA's own requests, typed addresses and clients that are not browsers go on to the
+/// session check as before.
+#[tokio::test]
+async fn same_origin_requests_and_requests_without_the_headers_are_checked_as_before() {
+    let fixture = Fixture::new(Behaviour::Answer);
+    let cookie = fixture.cookie();
+    let cases: [(Method, &str, CaseHeaders); 7] = [
+        (Method::POST, APP, &[("sec-fetch-site", "same-origin")]),
+        (
+            Method::DELETE,
+            APP,
+            &[
+                ("sec-fetch-site", "same-origin"),
+                ("origin", "https://app.example.com"),
+            ],
+        ),
+        (Method::GET, APP, &[("sec-fetch-site", "none")]),
+        (Method::POST, APP, &[("origin", "https://app.example.com")]),
+        (
+            Method::PUT,
+            "app.example.com:443",
+            &[("origin", "https://app.example.com")],
+        ),
+        (Method::POST, APP, &[]),
+        (
+            Method::GET,
+            APP,
+            &[("origin", "https://attacker.example.test")],
+        ),
+    ];
+    for (method, host, extra) in &cases {
+        let mut headers = vec![("host", *host), ("cookie", cookie.as_str())];
+        headers.extend_from_slice(extra);
+        let response = fixture
+            .check(method.clone(), "/internal/ext-authz/api/certs", &headers)
+            .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{method} {host} {extra:?}"
+        );
+        let tokens = identity_headers(&response);
+        let [token] = tokens.as_slice() else {
+            panic!("{method} {host} {extra:?}: {tokens:?}");
+        };
+        assert!(verifier(ServiceName::Certs).verify(token).is_ok());
+    }
+    assert_eq!(fixture.store.lookups.load(Ordering::SeqCst), cases.len());
+    // Same origin, but no session: 401 as before.
+    let response = fixture
+        .check(
+            Method::POST,
+            "/internal/ext-authz/api/certs",
+            &[("host", APP), ("sec-fetch-site", "same-origin")],
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }

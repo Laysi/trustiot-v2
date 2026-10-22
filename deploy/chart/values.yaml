@@ -74,9 +74,10 @@ ingress:
     # Existing kubernetes.io/tls Secret with the outer TLS certificate (the customer's, or one
     # from our CA) for hosts.app, hosts.gateway and hosts.ota. Required when exposure is direct.
     tlsSecret: ""
-  # The only paths that skip the cookie check (decision 27). Each is one exact path on a fixed
-  # host and backend; the ingress strips x-internal-identity from these requests. A path is
-  # exempt only while its backend service is enabled.
+  # The only paths that skip the cookie check (decision 27), besides the SPA's static files while
+  # services.web is enabled. Each is one exact path on a fixed host and backend; the ingress
+  # strips x-internal-identity from these requests. A path is exempt only while its backend
+  # service is enabled.
   publicPaths:
     # hosts.app -> identity
     login: /auth/login
@@ -88,7 +89,9 @@ ingress:
     mqtt: /mqtt
   # Routes that need the cookie: {host: app|gateway|ota, path, match: PathPrefix|Exact,
   # service: <key under services>, port: <port name, default http>}. Services add their routes
-  # when they ship. Paths under /internal/ are never routed (decision 27).
+  # when they ship. Paths under /internal/ are never routed (decision 27). While services.web is
+  # enabled, a route on hosts.app must be /api, /auth or below them: every other path there is
+  # the SPA's.
   routes: []
 
 # Defaults for every entry under `services`. An entry overrides them field by field
@@ -184,6 +187,12 @@ serviceDefaults:
 # (qdrant-read, qdrant-write, object-storage, smtp, ai; the AI keys only for ai-gateway and the
 # Qdrant keys only for knowledge); see README.md.
 services:
+  # The SPA's static files (services/web, decision 2). While enabled, every path on hosts.app
+  # outside /api and /auth reaches it without the cookie check, and without the Cookie and
+  # x-internal-identity headers (decision 27); cookie routes on hosts.app must then be /api,
+  # /auth or below them.
+  web:
+    enabled: false
   identity:
     enabled: false
     # The API (http: the ext_authz check, the tenant API) and the token exchange on a port of its

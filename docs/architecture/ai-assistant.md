@@ -118,7 +118,7 @@ Claude Opus 5.5 的 thinking 綁定產生它的對話：system prompt、工具�
 
 ## 分流
 
-1. 一次 Decisions 請求問兩題：predicate「這則訊息不需要查資料、讀文件或執行動作就能完整回答」（回傳機率），以及 score「需要多少推理」（low、medium、high，對應主 agent 的 effort）。輸入是最新的訊息、最近幾輪的文字與附圖的縮圖；Decisions 只收 base64 圖片，不收音訊與影片，影音只送檔案類型與長度。
+1. 一次 Decisions 請求問兩題：predicate「這則訊息不需要查資料、讀文件或執行動作就能完整回答」（回傳機率），以及 score「需要多少推理」（low、medium、high，對應主 agent 的 effort）。輸入是最新的訊息、最近幾輪的文字與附圖的縮圖；Decisions 的圖片收 base64 data URL 或公開網址（我們的圖片不公開，所以只送 base64，crates/ai-clients 送出前檢查），不收音訊與影片，影音只送檔案類型與長度。
 2. 只有機率超過門檻才交給 worker，門檻用 MS3 題庫校準；其他的、不確定的，以及分流失敗（逾時、錯誤、beta 期間的介面變更）一律交給主 agent。
 3. worker 只回答簡單訊息，沒有查詢工具，只有 `escalate(reason)`：覺得超出能力時，把對話交給主 agent。主 agent 接手同一個對話，worker 的回答以一般訊息附加在歷史後面。
 4. 分流要與「全部交給主 agent、用低 effort」比較（MS3 題庫，Laysi/trustiot-v2#444）。依 2026-10-18 的單價估算，分流每題只省約 $0.01–0.02，主要的好處是簡單問題回得快；比不過就拿掉分流。Decisions API 仍在 public beta（2026-10-06 推出），沒有 SLA。

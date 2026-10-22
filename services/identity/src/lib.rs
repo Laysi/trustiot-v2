@@ -13,6 +13,7 @@
 //!   format `crates/service-kit` verifies.
 //! - [`audience`]: which service a request goes to, from the chart's cookie routes.
 //! - [`ext_authz`]: the check endpoint.
+//! - [`csrf`]: the check's refusal of cross-site requests, before the session is looked up.
 //! - [`exchange`]: the token exchange, for services that call another one on behalf of the
 //!   request's user (Laysi/trustiot-v2#106).
 //! - [`tenants`]: creating tenants, and the event that announces them.
@@ -25,6 +26,7 @@
 
 pub mod audience;
 pub mod config;
+pub mod csrf;
 pub mod exchange;
 pub mod ext_authz;
 pub mod issuer;

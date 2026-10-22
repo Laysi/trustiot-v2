@@ -54,7 +54,7 @@ on:
       # What goes into the nightly's Rust images (scripts/nightly/image-cache.ts, NIGHTLY_IMAGES):
       # the workspace, the toolchain, the build scripts and every local crate tools/migrate,
       # services/identity and services/assets build from (scripts/nightly/image-cache.test.ts
-      # keeps this list complete).
+      # keeps this list complete), plus the files tools/migrate compiles in with #[path].
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
@@ -63,9 +63,11 @@ on:
       - crates/contract/**
       - crates/identity-keys/**
       - crates/outbox/**
+      - crates/protocol/**
       - crates/service-kit/**
       - crates/testkit/**
       - crates/webpki-roots-empty/**
+      - services/ingest/src/retention.rs
       - deploy/chart/**
       - deploy/cloudnative-pg/**
       - deploy/images/postgres/**

@@ -13,10 +13,11 @@
 
 ## 與入口的約定（ext_authz）
 
-Istio 的 ext_authz provider（`deploy/istio/istiod-values.yaml`）對每個需要 cookie 的請求，以原始的方法、Host 與 `Cookie` 呼叫 `/internal/ext-authz<原始路徑>`。`/internal` 不會被入口路由，用戶端到不了這個端點。服務只讀 `Cookie`、`Host` 與路徑；請求帶的其他標頭（包含任何寫法的 `x-internal-identity`）都不影響結果。
+Istio 的 ext_authz provider（`deploy/istio/istiod-values.yaml`）對每個需要 cookie 的請求，以原始的方法、Host、`Cookie`、`Origin` 與 `Sec-Fetch-Site` 呼叫 `/internal/ext-authz<原始路徑>`。`/internal` 不會被入口路由，用戶端到不了這個端點。服務只讀方法、`Cookie`、`Origin`、`Sec-Fetch-Site`、`Host` 與路徑；請求帶的其他標頭（包含任何寫法的 `x-internal-identity`）都不影響結果。
 
 | 回應 | 情況 | 入口 |
 | --- | --- | --- |
+| 403 `permission_denied`，訊息 key `security.cross_site_request` | 跨站請求（見下方[跨站請求](#跨站請求csrf)），在讀 cookie、查 session 之前判斷，所以沒有 session 時也是這個回應 | 原樣交給用戶端 |
 | 200，剛好一個 `x-internal-identity`，`cache-control: no-store` | session 有效，原始請求的主機與路徑對得到一條 cookie 路由 | 以這個值覆寫用戶端帶來的同名標頭，轉給後端 |
 | 401 `unauthenticated` | 沒有 session cookie、有兩個以上、格式不對；session 不存在、過期、已撤銷或使用者已刪除 | 原樣交給用戶端 |
 | 403 `permission_denied` | session 有效，但路由表對不到這個請求 | 原樣交給用戶端 |
@@ -24,8 +25,22 @@ Istio 的 ext_authz provider（`deploy/istio/istiod-values.yaml`）對每個需�
 
 - 200 只能由剛簽好的 token 組成（程式裡的 `Decision::Allow` 沒有 token 就建不出來）。原因：ext_authz 回 200 卻沒帶 `x-internal-identity` 時，入口會把用戶端自己帶的同名標頭轉給後端（[2026-10-10 PoC](../../docs/feasibility/2026-10-10-edge-poc.md)）。
 - 拒絕的回應一律不帶身分標頭，body 是 `contract::ErrorBody`，也帶 `cache-control: no-store`。
-- 401 與 403 以 INFO 記一行 `denied the ext_authz check`，`reason` 是 `no_session_cookie`、`repeated_session_cookie`、`malformed_session_cookie`、`no_active_session` 或 `no_route`；日誌不寫 cookie、session 雜湊或 token。
+- 401 與 403 以 INFO 記一行 `denied the ext_authz check`，`reason` 是 `cross_site_request`（另帶 `header`：判斷依據是 `sec-fetch-site` 還是 `origin`）、`no_session_cookie`、`repeated_session_cookie`、`malformed_session_cookie`、`no_active_session` 或 `no_route`；日誌不寫 cookie、session 雜湊、token 或 `Origin` 的值。
 - 每個檢查最多等 0.4 秒（`CHECK_DEADLINE`），比入口的 0.5 秒短，所以入口一定拿得到服務自己的回答；到了就回 503（fail closed）。查詢本身在背景跑完，開到一半的資料庫連線留給下一個檢查（見[連線池](#連線池)）。
+
+### 跨站請求（CSRF）
+
+SPA 與 API 同源（決策 2），SPA 自己送的請求一律是同源；別的網站可以讓瀏覽器帶著 session cookie 送請求，所以 cookie 檢查在查 session 之前先擋下跨站請求（`src/csrf.rs`，Laysi/trustiot-v2#123，2026-10-21）：
+
+| 請求帶的標頭 | 放行的條件 |
+| --- | --- |
+| `Sec-Fetch-Site`（目前的瀏覽器都會帶） | 剛好一個值，是 `same-origin`；GET 與 HEAD 另外接受 `none`（使用者自己輸入網址或開書籤）。`same-site`（同一個網站的其他主機，例如閘道器的主機名稱）也算跨站 |
+| 沒有 `Sec-Fetch-Site`、有 `Origin`，方法不是 GET 或 HEAD | 剛好一個值，等於 `https://` 加上 `Host` 的主機與埠號（沒寫埠號時是 443）；`http://` 只接受 `localhost` 與 `127.0.0.1`（本機開發，預設埠 80）。`Origin: null`、帶路徑或帳號、埠號不合法的值都算跨站 |
+| 兩個都沒有 | 一律放行：不是瀏覽器，或太舊的瀏覽器 |
+
+- 入口要把 `Origin` 與 `Sec-Fetch-Site` 交給身分服務（`includeRequestHeadersInCheck`）。istiod 還是舊設定時，這兩個標頭不會送來，檢查一律放行而且沒有任何紀錄；升級步驟見 [deploy/istio/README.md](../../deploy/istio/README.md)。
+- 這是第一道防線，[租戶](#租戶)的「以 cookie 認證的寫入一律要求 JSON 的 `Content-Type`」與 cookie 的 `SameSite` 照樣適用。
+- 不需要 cookie 的例外路徑（例如 Laysi/trustiot-v2#103 的登入）不經 ext_authz，這個檢查管不到：那些處理常式要自己呼叫 `csrf::cross_site`。
 
 ### token
 
@@ -227,9 +242,10 @@ CARGO_BUILD_JOBS=2 cargo test -p identity
 | `src/session.rs` | cookie 的解析（混在其他 cookie 與多個 `Cookie` 標頭裡、缺少、重複、非標準寫法），`Debug` 不顯示 secret 與雜湊 |
 | `src/issuer.rs` | token 的標頭與 claims 剛好是約定的格式、只有受眾驗得過、過期後被拒；`kid` 的判斷；公鑰沒部署時拒絕；錯誤與 `Debug` 不含私鑰 |
 | `src/audience.rs` | `Exact` 優先與最長 `PathPrefix`、主機比對；不能用的路由設定拒絕啟動且不引用設定值 |
+| `src/csrf.rs` | 跨站請求的判斷：`Sec-Fetch-Site` 的每個值、重複與合併的值，`Origin` 的主機、埠號、scheme 與格式，沒有標頭時放行 |
 | `src/exchange/tests.rs` | token 交換（Laysi/trustiot-v2#106）：清單上的呼叫端換到同一個使用者、租戶、角色的 token，到期不晚於原 token；重播：受眾不是驗證端的 token 被每個服務拒絕，過期的 token 換不到；只有清單上的組合換得到；換來的 token 帶 `act`，即使清單上有對應的呼叫也不能再換（只換一跳）；缺少、重複、偽造的 token 401，token 先於本文檢查，各種壞本文 400，`GET` 405，沒有公鑰或簽章金鑰 503；清單的解析錯誤不引用設定值；以 `OnBehalf` 端到端呼叫：被呼叫端看到的是同一個使用者 |
-| `src/ext_authz/tests.rs` | 以假的 session store 驗證回應表的每一列、偽造的身分標頭不影響 200、store 失敗或卡住時 0.4 秒內回 503、各種方法與路徑形狀、只服務這個端點 |
-| `tests/ext_authz.rs` | 真的服務與 Postgres：有效 session 拿到一個通過 service-kit 驗證的 token，偽造的同名標頭不會出現在回應；401 的各種情況（含過期、撤銷、使用者刪除）；改角色與移除成員在下一個請求生效；服務角色不能寫 session、RLS 擋住其他租戶的成員資料；私鑰、session secret 與 token 不出現在日誌與回應；健康埠只有 `/healthz`、`/readyz`；資料庫連不上時回 503；開新連線比檢查期限慢時，就緒後的檢查不失敗、斷線後自動恢復；金鑰與設定不能用時拒絕啟動 |
+| `src/ext_authz/tests.rs` | 以假的 session store 驗證回應表的每一列、跨站請求在查 session 之前回 403（查詢次數不變）、偽造的身分標頭不影響 200、store 失敗或卡住時 0.4 秒內回 503、各種方法與路徑形狀、只服務這個端點 |
+| `tests/ext_authz.rs` | 真的服務與 Postgres：有效 session 拿到一個通過 service-kit 驗證的 token，偽造的同名標頭不會出現在回應；401 的各種情況（含過期、撤銷、使用者刪除）；跨站的寫入不論 session 有效與否都回 403 `security.cross_site_request`，同源的照常放行；改角色與移除成員在下一個請求生效；服務角色不能寫 session、RLS 擋住其他租戶的成員資料；私鑰、session secret 與 token 不出現在日誌與回應；健康埠只有 `/healthz`、`/readyz`；資料庫連不上時回 503；開新連線比檢查期限慢時，就緒後的檢查不失敗、斷線後自動恢復；金鑰與設定不能用時拒絕啟動 |
 | `tests/ext_authz.rs` 的 token 交換 | Laysi/trustiot-v2#106，真的服務：以 `TRUSTIOT_ON_BEHALF_CALLS` 啟動，在 token 交換自己的埠把 ext_authz 給 assets 的 token 換成給 certs 的，certs 的驗證端接受、是同一個使用者與租戶、到期不晚於原 token，assets 與 alerts 的驗證端拒絕它；清單外的組合 403、沒有或偽造的 token 401；清單含 `ai-gateway`、不是 JSON、以 `TRUSTIOT__PLATFORM__ON_BEHALF_CALLS` 覆寫時拒絕啟動 |
 | `tests/adversarial.rs` | 驗證者另寫的攻擊測試（真的服務與 Postgres）：cookie 解析的各種變形、以資料庫時鐘判斷到期與撤銷、資料庫被鎖、連線被殺、帳密錯誤時回 503 而不放行、成員資料的租戶隔離、各種日誌等級都不含密鑰、金鑰載入、健康埠、跨重啟的金鑰輪替 |
 | `tests/token_claims.rs` | 驗證者另寫：竄改、改簽、改受眾、改時間的 token 都過不了 service-kit 的驗證器，輪替期間舊 token 在效期內仍有效（不需要資料庫） |

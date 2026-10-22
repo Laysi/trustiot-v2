@@ -11,10 +11,14 @@
 #                          (TRUSTIOT_ON_BEHALF_CALLS {"assets":["certs"]}, Laysi/trustiot-v2#106)
 #   everything else        not listed: refused, for example certs -> assets, assets -> alerts,
 #                          mqtt-bridge -> identity and certs -> identity
-# The ingress gateway reaches identity (public paths, ext_authz), assets (catch-all route),
+# The ingress gateway reaches identity (public paths, ext_authz), assets (the /api route),
 # certs and mqtt-bridge (public paths); nothing routes to alerts.
 
 services:
+  # The ingress overlay's SPA stand-in is ingress.e2e.ts's: off here, so the services, their
+  # policies and the call graph are exactly those of mesh.e2e.ts.
+  web:
+    enabled: false
   # Reached by no route and no listed caller: refuses every connection.
   alerts:
     enabled: true
