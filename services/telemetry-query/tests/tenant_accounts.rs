@@ -250,13 +250,13 @@ const ATTACKS: &[Attack] = &[
 /// refused for want of the privilege (`ACCESS_DENIED`), after `SYSTEM FLUSH LOGS` has created
 /// the log tables, so a missing table cannot pass for a refusal.
 const SYSTEM_TABLES: &[&str] = &[
-    "query_log",
-    "text_log",
-    "processes",
-    "parts",
-    "users",
-    "role_grants",
-    "settings_profile_elements",
+    "SELECT count() FROM system.query_log",
+    "SELECT count() FROM system.text_log",
+    "SELECT count() FROM system.processes",
+    "SELECT count() FROM system.parts",
+    "SELECT count() FROM system.users",
+    "SELECT count() FROM system.role_grants",
+    "SELECT count() FROM system.settings_profile_elements",
 ];
 
 /// Heavy queries the settings profile stops (0004_access.sql), with the error each must end in.
@@ -317,15 +317,11 @@ async fn run_attacks(stack: &Stack, account: &Account) {
 )]
 async fn run_system_tables(stack: &Stack, account: &Account) {
     admin_query(stack, "SYSTEM FLUSH LOGS", &[]).await;
-    for table in SYSTEM_TABLES {
-        let sql = format!("SELECT count() FROM system.{table}");
-        let error = stack.clickhouse.query(account, &sql).await.expect_err(&sql);
+    for sql in SYSTEM_TABLES {
+        let error = stack.clickhouse.query(account, sql).await.expect_err(sql);
         assert_eq!(error.code(), "ACCESS_DENIED", "{sql}: {}", error.body);
-        eprintln!(
-            "attack {:>40}: refused: {}",
-            format!("system.{table}"),
-            error.code()
-        );
+        let table = sql.trim_start_matches("SELECT count() FROM ");
+        eprintln!("attack {table:>40}: refused: {}", error.code());
     }
 }
 
