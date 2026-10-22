@@ -9,7 +9,7 @@ Laysi/trustiot-v2#106（父 issue Laysi/trustiot-v2#21，清單 A4）：服務�
 | 機器 | 建置主機（x86_64 Linux），經 check queue 執行：worktree 的已追蹤與未追蹤檔案複製過去，`CI=1`（需要容器的測試失敗而不略過），容器測試用 podman |
 | 工具 | Rust 1.99.0（`rust-toolchain.toml`）、Bun 1.4.2、helm 4.3.0、kubeconform 0.8.0（`.prototools`） |
 | 程式碼 | 分支 `feat/106-on-behalf-identity`。2026-10-21 的檢查以 main `cc185b9` 為基礎，跑在提交前的工作目錄上；2026-10-22 的修正在工作目錄上檢查後，分支快轉到 main `6a0938e`（多的兩個 commit 只改 `edge/agent`、`scripts/demo`、`deploy/flux` 與文件）再提交 |
-| 叢集 | 沒有。mesh e2e（`deploy/chart/tests/e2e/mesh.e2e.ts`）只在 nightly 的 smoke 執行，見「結論」 |
+| 叢集 | 建置主機沒有叢集。mesh e2e（`deploy/chart/tests/e2e/mesh.e2e.ts`）在 nightly 的 smoke job 執行，CI 在 k3d 叢集上部署 chart，見「2026-10-22 叢集上的 mesh e2e」 |
 
 ## 指令
 
@@ -132,12 +132,34 @@ Rust 的修改在提交後於建置主機補跑，結果見下一節「2026-10-2
 
 `cargo test --workspace` 包含上一節列出的每一個驗收條件測試，都通過。
 
+## 2026-10-22 叢集上的 mesh e2e
+
+PR Laysi/trustiot-v2#514 加上 `smoke` label 之後，nightly workflow 在 CI 的 k3d 叢集上以兩種 values 部署 chart，執行部署後的檢查與 e2e。run 39651067528 的第 2 次嘗試通過，測的是 GitHub 為 PR 建立的合併 commit `4e4be07`（head `e0a55f4` 合併進 main `1bda1d9`）。第 1 次嘗試在建置 Postgres 映像時 snapshot.debian.org 回 503，與這個分支無關，所以只重跑失敗的 job。原始資料 [05](data/2026-10-21-106-on-behalf-identity/05-nightly-smoke-2026-10-22.txt)。
+
+| 步驟 | 結果 |
+| --- | --- |
+| `values-onprem.yaml`：部署與部署後的檢查 | 全部通過 |
+| `values-onprem.yaml`：ingress e2e | 69 通過、0 失敗 |
+| `values-saas.yaml`：部署與部署後的檢查 | 全部通過 |
+| `values-saas.yaml`：ingress e2e | 69 通過、0 失敗 |
+| `values-saas.yaml`：mesh e2e（`deploy/chart/tests/e2e/mesh.e2e.ts`） | 5 通過、0 失敗，82 個 `expect()` |
+
+mesh e2e 依序檢查決策 27 的兩層政策，每個探測都帶著被呼叫端會接受的使用者 token：
+
+1. 兩層都在：清單內的呼叫與入口通過，清單外的呼叫失敗，預設拒絕下健康檢查仍通過。
+2. 拿掉 AuthorizationPolicy：只靠 NetworkPolicy 也拒絕每個清單外的呼叫。
+3. 兩層都拿掉：清單外的呼叫會通，所以前面的拒絕來自這兩層。
+4. 放回 AuthorizationPolicy，NetworkPolicy 仍拿掉：只靠 AuthorizationPolicy 也拒絕每個清單外的呼叫。
+5. 兩層都放回：回到安裝後的狀態，每個 pod 都仍健康。
+
+這次執行之後，分支只多了更新本報告的 commit，程式碼沒有變。
+
 ## 結論
 
 | 驗收條件 | 結果 |
 | --- | --- |
-| 服務冒用測試：未被允許的服務帶使用者 token 呼叫，被拒 | **應用層與 chart 在 2026-10-22 修正後通過；叢集待測**。清單外的服務換不到 token（403），換來的 token 不能再換，把自己的 token 轉給別人會被以受眾不符拒絕；chart 只讓清單內的呼叫端連到被呼叫端與身分服務的 `token-exchange` 埠。叢集上的 L4 拒絕由 `deploy/chart/tests/e2e/mesh.e2e.ts` 驗證：每個探測都帶著被呼叫端會接受的使用者 token，清單外的呼叫要被拒，清單內的呼叫要帶著 token 到達。這個測試只在 nightly 的 smoke 執行，**待 PR 加上 `smoke` label 的那次執行**，結果補進本報告。叢集上的服務都跑身分服務替身、不驗證 token，所以那裡看到的拒絕都是 L4 的；token 交換的應用層檢查由上面的 Rust 測試驗證 |
+| 服務冒用測試：未被允許的服務帶使用者 token 呼叫，被拒 | **通過**：應用層與 chart 在 2026-10-22 修正後通過，叢集上的 mesh e2e 在 2026-10-22 通過。清單外的服務換不到 token（403），換來的 token 不能再換，把自己的 token 轉給別人會被以受眾不符拒絕；chart 只讓清單內的呼叫端連到被呼叫端與身分服務的 `token-exchange` 埠。叢集上的 L4 拒絕由 `deploy/chart/tests/e2e/mesh.e2e.ts` 驗證：每個探測都帶著被呼叫端會接受的使用者 token，清單外的呼叫要被拒，清單內的呼叫要帶著 token 到達。這個測試只在 nightly 的 smoke 執行；PR 加上 `smoke` label 之後的 run 39651067528 是 5 通過、0 失敗，只留任一層政策時清單外的呼叫也被拒（見「2026-10-22 叢集上的 mesh e2e」）。叢集上的服務都跑身分服務替身、不驗證 token，所以那裡看到的拒絕都是 L4 的；token 交換的應用層檢查由上面的 Rust 測試驗證 |
 | token 重播測試：過期或受眾為別的服務的 token 被拒 | **2026-10-22 修正後通過**（`act` 宣告、token 交換改到自己的埠、`an_exchanged_token_is_never_exchanged_again` 取代前身測試之後重跑） |
 | 背景工作沒有使用者身分也能完成自己的工作 | **2026-10-22 修正後通過**（修正動到 `service-kit` 的 `serve_port` 之後重跑） |
 
-待補的檢查：只剩叢集上的 mesh e2e，在 PR 加上 `smoke` label 之後的 nightly 部署執行，結果補進本報告與 Laysi/trustiot-v2#106。
+三條驗收條件都有證據，沒有待補的檢查；安全審查的其餘項目記在 Laysi/trustiot-v2#509。
