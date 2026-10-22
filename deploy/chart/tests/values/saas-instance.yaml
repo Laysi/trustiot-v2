@@ -42,19 +42,32 @@ smtp:
   credentialsSecret:
     name: trustiot-smtp
 
+# The AI gateway's providers and roles (used while services.ai-gateway is enabled): Anthropic
+# through an example Cloudflare AI Gateway URL, OpenAI at its own API.
 ai:
-  chat:
-    baseUrl: https://llm.saas.trustiot.test/v1
-    apiKeySecret:
-      name: trustiot-ai-chat
-  embedding:
-    baseUrl: https://embedding.saas.trustiot.test/v1
-    apiKeySecret:
-      name: trustiot-ai-embedding
-  rerank:
-    baseUrl: https://llm.saas.trustiot.test/v1
-    apiKeySecret:
-      name: trustiot-ai-chat
+  providers:
+    anthropic:
+      baseUrl: https://ai-gateway.saas.trustiot.test/v1/example/anthropic
+      apiKeySecret:
+        name: trustiot-anthropic
+    openai:
+      apiKeySecret:
+        name: trustiot-openai
+  roles:
+    main:
+      models:
+        - anthropic/claude-opus-5-5
+        - anthropic/claude-sonnet-5-5
+      queueWait: 5s
+    worker:
+      models:
+        - anthropic/claude-haiku-5-5
+      maxConcurrent: 64
+    router:
+      models:
+        - openai/gpt-6-luna
+      timeouts:
+        response: 30s
 
 observability:
   sentry:

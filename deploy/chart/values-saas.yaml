@@ -22,7 +22,8 @@ qdrant:
 # objectStorage: hosted S3 or R2 (decision 20). The instance overlay sets the endpoint,
 # region, bucket and credentials Secret.
 # smtp: our email provider. The instance overlay sets host, from and the credentials Secret.
-# ai: cloud LLM, embedding and rerank APIs (decisions 15 and 26), set by the instance overlay.
+# ai: the AI gateway's providers (their key Secrets and, through Cloudflare AI Gateway, their
+# endpoints) and model roles (decisions 15 and 28), set by the instance overlay.
 
 observability:
   sentry:

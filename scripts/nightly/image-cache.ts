@@ -53,10 +53,11 @@ export const IMAGE_CACHE_VERSION = "v1";
 /**
  * The Rust images the nightly builds from the commit and deploys: the migration Job's
  * (Laysi/trustiot-v2#60), and the identity and assets services the smoke test calls through the
- * ingress (Laysi/trustiot-v2#65). They share one cache entry, since every Rust change reaches all
- * of them anyway (each key covers the whole workspace).
+ * ingress (Laysi/trustiot-v2#65), and the AI gateway, which the smoke only starts: no provider key
+ * reaches CI (Laysi/trustiot-v2#536). They share one cache entry, since every Rust change reaches
+ * all of them anyway (each key covers the whole workspace).
  */
-export const NIGHTLY_IMAGES = ["migrate", "identity", "assets"] as const;
+export const NIGHTLY_IMAGES = ["migrate", "identity", "assets", "ai-gateway"] as const;
 
 const NAME = /^[a-z0-9][a-z0-9-]*$/;
 

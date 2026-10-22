@@ -256,7 +256,15 @@ function readYaml(relativePath: string): YamlMap {
 const defaults = readYaml("values.yaml");
 const chart = readYaml("Chart.yaml") as { version: string; appVersion: string };
 const plannedServices = Object.keys(defaults.services as YamlMap);
-const enableAllServices = plannedServices.flatMap((name) => ["--set", `services.${name}.enabled=true`]);
+// The AI gateway refuses to start without a provider key and a role, so the chart refuses to render
+// it without them: one provider and one role for both shapes (the SaaS overlay adds more).
+const AI_GATEWAY_SETTINGS = [
+  "--set",
+  "ai.providers.anthropic.apiKeySecret.name=trustiot-anthropic",
+  "--set-json",
+  'ai.roles.test={"models":["anthropic/claude-test"]}',
+];
+const enableAllServices = [...plannedServices.flatMap((name) => ["--set", `services.${name}.enabled=true`]), ...AI_GATEWAY_SETTINGS];
 
 function kubeconform(manifests: string, kubernetesVersion: string) {
   const cache = join(tmpdir(), "trustiot-kubeconform-cache");
@@ -468,8 +476,6 @@ describe("secrets reach only the services that need them", () => {
       'services.knowledge.credentials=["qdrant-read","object-storage"]',
       "--set",
       "services.ai-gateway.enabled=true",
-      "--set-json",
-      'services.ai-gateway.credentials=["ai"]',
     ]);
     expect(secretRefs(manifests, "identity")).toEqual({
       SENTRY_DSN: "trustiot-sentry/dsn",
@@ -489,11 +495,12 @@ describe("secrets reach only the services that need them", () => {
       TRUSTIOT_S3_ACCESS_KEY_ID: "trustiot-object-storage/access-key-id",
       TRUSTIOT_S3_SECRET_ACCESS_KEY: "trustiot-object-storage/secret-access-key",
     });
+    // values.yaml lists `ai` for the AI gateway: one key per configured provider, each from the
+    // Secret the overlay names.
     expect(secretRefs(manifests, "ai-gateway")).toEqual({
       SENTRY_DSN: "trustiot-sentry/dsn",
-      TRUSTIOT_AI_CHAT_API_KEY: "trustiot-ai-chat/api-key",
-      TRUSTIOT_AI_EMBEDDING_API_KEY: "trustiot-ai-embedding/api-key",
-      TRUSTIOT_AI_RERANK_API_KEY: "trustiot-ai-chat/api-key",
+      TRUSTIOT_AI_ANTHROPIC_API_KEY: "trustiot-anthropic/api-key",
+      TRUSTIOT_AI_OPENAI_API_KEY: "trustiot-openai/api-key",
     });
   });
 
@@ -927,6 +934,7 @@ describe("internal identity (decision 27, Laysi/trustiot-v2#61; keys generated i
           ...legacy,
           ...["--set", "observability.sentry.dsnSecret.name=s", "--set", "observability.sentry.environment=t"],
           ...["--set", "observability.collector.forward.endpoint=https://siem.trustiot.test:4318"],
+          ...AI_GATEWAY_SETTINGS,
         ]);
       const roles = manifests.filter((m) => m.kind === "Role" || m.kind === "ClusterRole") as (Manifest & { rules: Rule[] })[];
       expect(roles.map((m) => m.metadata.name)).toContain(SIGNING_KEYS);
@@ -1264,9 +1272,9 @@ describe("values reference Secrets by name only and hold no secret material", ()
     expect(valuesProblems({ smtp: { credentialsSecret: { name: "trustiot-smtp", password: "hunter2" } } })).toEqual([
       "smtp.credentialsSecret.password looks like a secret but is not a Secret name or key reference",
     ]);
-    expect(valuesProblems({ ai: { chat: { apiKeySecret: { name: "sk-0123456789abcdefghijKLMN" } } } })).toEqual([
-      "ai.chat.apiKeySecret.name holds an API key",
-      "ai.chat.apiKeySecret.name looks like a secret but is not a Secret name or key reference",
+    expect(valuesProblems({ ai: { providers: { anthropic: { apiKeySecret: { name: "sk-0123456789abcdefghijKLMN" } } } } })).toEqual([
+      "ai.providers.anthropic.apiKeySecret.name holds an API key",
+      "ai.providers.anthropic.apiKeySecret.name looks like a secret but is not a Secret name or key reference",
     ]);
     expect(valuesProblems({ hosts: { app: "-----BEGIN PRIVATE KEY-----" } })).toEqual(["hosts.app holds a PEM block"]);
     // A `*Secret` field holds a Secret name, and a `*SecretRevision` a counter, nothing else.
@@ -1441,7 +1449,8 @@ describe("values reference Secrets by name only and hold no secret material", ()
       ...["--set", "clickhouse.external.url=https://ch.trustiot.test:8443", "--set", "clickhouse.external.caSecret.name=trustiot-ch-ca"],
       ...["--set", "qdrant.external.url=https://qdrant.trustiot.test:6333", "--set", "qdrant.external.credentialsSecret.name=trustiot-qdrant"],
       ...["--set", "objectStorage.credentialsSecret.name=trustiot-object-storage", "--set", "smtp.credentialsSecret.name=trustiot-smtp"],
-      ...["chat", "embedding", "rerank"].flatMap((use) => ["--set", `ai.${use}.apiKeySecret.name=trustiot-ai-${use}`]),
+      ...["anthropic", "openai"].flatMap((provider) => ["--set", `ai.providers.${provider}.apiKeySecret.name=trustiot-${provider}`]),
+      ...["--set-json", 'ai.roles.test={"models":["anthropic/claude-test","openai/gpt-test"]}'],
       ...["--set", "internalIdentity.signingKeySecret.name=trustiot-identity-signing"],
       ...["--set-json", 'internalIdentity.publicKeys=[{"kid":"2026-10-a","x":"jxSgv4kffdHZ1jN2sf_IVpE4VGbJdheBqhCAAqI89Q8"}]'],
       ...["--set", "observability.sentry.environment=test", "--set", "observability.sentry.dsnSecret.name=trustiot-sentry"],
@@ -1511,8 +1520,9 @@ describe("exposure and hardening", () => {
         expect(pod.automountServiceAccountToken).toBe(false);
         expect(pod.securityContext?.runAsNonRoot).toBe(true);
         expect(pod.securityContext?.seccompProfile?.type).toBe("RuntimeDefault");
-        // preStopSleepSeconds (5) + drainSeconds (30): the preStop sleep counts in the grace period.
-        expect(pod.terminationGracePeriodSeconds).toBe(35);
+        // preStopSleepSeconds (5) + drainSeconds (30, 310 for the AI gateway, whose streams in
+        // flight run to their end): the preStop sleep counts in the grace period.
+        expect(pod.terminationGracePeriodSeconds).toBe(deployment.metadata.name === `${RELEASE}-ai-gateway` ? 315 : 35);
         for (const container of pod.containers) {
           expect(container.securityContext?.allowPrivilegeEscalation).toBe(false);
           expect(container.securityContext?.readOnlyRootFilesystem).toBe(true);
@@ -4279,7 +4289,7 @@ describe("service-to-service authorization (decision 27)", () => {
         "gateway-ops": ["certs"],
         certs: ["field-context"],
       };
-      const enable = ["alerts", "knowledge", "assistant", "ai-gateway", "ingest"].flatMap((s) => ["--set", `services.${s}.enabled=true`]);
+      const enable = [...["alerts", "knowledge", "assistant", "ai-gateway", "ingest"].flatMap((s) => ["--set", `services.${s}.enabled=true`]), ...AI_GATEWAY_SETTINGS];
       for (const shape of SHAPE_NAMES) {
         const manifests = render([...SHAPES[shape], E2E_VALUES], [...enable, "--set-json", `mesh.calls=${JSON.stringify(calls)}`]);
         expect(onBehalfCalls(manifests)).toEqual({ assets: ["alerts", "certs"], assistant: ["knowledge"] });
@@ -4509,6 +4519,54 @@ describe("service-to-service authorization (decision 27)", () => {
     expect(hboneSources(manifests, networkPolicy(manifests, "clickhouse")).services).toEqual(["ingest", "migrate", "otel-collector"]);
   });
 
+  // Decision 28: the AI gateway verifies no internal identity and spends the provider accounts, so
+  // the mesh alone keeps every service but the AI assistant, the knowledge base and alerts away
+  // from it (Laysi/trustiot-v2#536).
+  describe("only the assistant, the knowledge base and alerts may call ai-gateway (decision 28)", () => {
+    const CALLERS = ["alerts", "assistant", "knowledge"];
+    const withGateway = (services: string[]) => [...services.flatMap((s) => ["--set", `services.${s}.enabled=true`]), ...AI_GATEWAY_SETTINGS];
+
+    test.each(SHAPE_NAMES)("%s: both layers admit exactly the listed callers among the three, and nothing else", (shape) => {
+      const enable = withGateway([...CALLERS, "ai-gateway", "assets"]);
+      const all = Object.fromEntries(CALLERS.map((caller) => [caller, ["ai-gateway"]]));
+      const manifests = render([...SHAPES[shape], E2E_VALUES], [...enable, "--set-json", `mesh.calls=${JSON.stringify(all)}`]);
+      expect(principalsOf(meshPolicy(manifests, "ai-gateway")).sort()).toEqual(CALLERS.map((c) => principal(`${RELEASE}-${c}`)).sort());
+      expect(hboneSources(manifests, networkPolicy(manifests, "ai-gateway"))).toEqual({ services: CALLERS, gateway: false });
+      // One caller listed: only that one.
+      const one = render([...SHAPES[shape], E2E_VALUES], [...enable, "--set-json", 'mesh.calls={"assistant":["ai-gateway"]}']);
+      expect(principalsOf(meshPolicy(one, "ai-gateway"))).toEqual([principal(`${RELEASE}-assistant`)]);
+      expect(hboneSources(one, networkPolicy(one, "ai-gateway"))).toEqual({ services: ["assistant"], gateway: false });
+      // None listed: no service, and never the ingress gateway (no cookie route may lead to it).
+      const none = render([...SHAPES[shape], E2E_VALUES], [...enable, "--set-json", "mesh.calls={}"]);
+      expect(principalsOf(meshPolicy(none, "ai-gateway"))).toEqual([]);
+      expect(hboneSources(none, networkPolicy(none, "ai-gateway"))).toEqual({ services: [], gateway: false });
+    });
+
+    // The ingress gateway is the other way in: "trustiot.ingress.plan" refuses every cookie route
+    // to ai-gateway, on any host and with either match, so the mesh never admits the gateway there.
+    test.each(["app", "gateway", "ota"])("no ingress route on hosts.%s may lead to ai-gateway, with or without schema validation", (host) => {
+      for (const [path, match] of [["/api/ai", "PathPrefix"], ["/", "PathPrefix"], ["/v1/messages", "Exact"]]) {
+        for (const skip of [[], ["--skip-schema-validation"]]) {
+          const routes = JSON.stringify([{ host, path, match, service: "ai-gateway" }]);
+          // web off, so its SPA rule on hosts.app does not refuse "/" first.
+          const args = [...skip, ...withGateway(["ai-gateway"]), "--set", "services.web.enabled=false", "--set-json", `ingress.routes=${routes}`];
+          const result = helmTemplate([...SHAPES.saas, E2E_VALUES], args);
+          expect(result.code).not.toBe(0);
+          expect(result.stderr).toMatch(/ingress\.routes\[0\]: ai-gateway takes no internal identity tokens/);
+        }
+      }
+    });
+
+    const others = plannedServices.filter((service) => !CALLERS.includes(service));
+    test.each(others)("%s may not list ai-gateway in mesh.calls, enabled or not, with or without schema validation", (caller) => {
+      for (const args of [withGateway([]), withGateway([caller]), ["--skip-schema-validation", ...withGateway([caller])]]) {
+        const result = helmTemplate([...SHAPES.saas, E2E_VALUES], [...args, "--set-json", `mesh.calls={"${caller}":["ai-gateway"]}`]);
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toMatch(`mesh.calls.${caller}: only alerts, assistant, knowledge may call ai-gateway (decision 28)`);
+      }
+    });
+  });
+
   test.each([
     ["an unknown caller", '{"billing":["assets"]}', /mesh\.calls: unknown caller "billing"/],
     ["a component as the caller", '{"clickhouse":["assets"]}', /mesh\.calls: unknown caller "clickhouse"/],
@@ -4682,6 +4740,262 @@ describe("service-to-service authorization (decision 27)", () => {
   });
 });
 
+describe("AI gateway settings (decisions 15 and 28, Laysi/trustiot-v2#536)", () => {
+  const CONFIG = `${RELEASE}-ai-gateway`;
+  const ON = ["--set", "services.ai-gateway.enabled=true"];
+  const gatewayConfig = (manifests: Manifest[]) => (find(manifests, "ConfigMap", CONFIG) as Manifest & { data: Record<string, string> }).data;
+  const gatewayContainer = (manifests: Manifest[]) => podSpec(find(manifests, "Deployment", `${RELEASE}-ai-gateway`)).containers[0] as Container;
+
+  test("SaaS: the providers, roles and limits reach the gateway as AI_GATEWAY__ variables in its own ConfigMap, without a key", () => {
+    const manifests = render([...SHAPES.saas, SMOKE], ON);
+    // tests/values/saas-instance.yaml, and the chart's request timeout and drain.
+    expect(gatewayConfig(manifests)).toEqual({
+      AI_GATEWAY__PROVIDERS__ANTHROPIC__PROTOCOL: "anthropic-messages",
+      AI_GATEWAY__PROVIDERS__ANTHROPIC__KEY_ENV: "TRUSTIOT_AI_ANTHROPIC_API_KEY",
+      AI_GATEWAY__PROVIDERS__ANTHROPIC__BASE_URL: "https://ai-gateway.saas.trustiot.test/v1/example/anthropic",
+      AI_GATEWAY__PROVIDERS__OPENAI__PROTOCOL: "openai-decisions",
+      AI_GATEWAY__PROVIDERS__OPENAI__KEY_ENV: "TRUSTIOT_AI_OPENAI_API_KEY",
+      AI_GATEWAY__ROLES__MAIN__MODELS: "anthropic/claude-opus-5-5,anthropic/claude-sonnet-5-5",
+      AI_GATEWAY__ROLES__MAIN__QUEUE_WAIT: "5s",
+      AI_GATEWAY__ROLES__WORKER__MODELS: "anthropic/claude-haiku-5-5",
+      AI_GATEWAY__ROLES__WORKER__MAX_CONCURRENT: "64",
+      AI_GATEWAY__ROLES__ROUTER__MODELS: "openai/gpt-6-luna",
+      AI_GATEWAY__ROLES__ROUTER__TIMEOUTS__RESPONSE: "30s",
+      AI_GATEWAY__HTTP__REQUEST_TIMEOUT: "10m",
+      // drainSeconds 310 in values.yaml, less 10 s for the kit's drain delay and its last 3 s.
+      AI_GATEWAY__SHUTDOWN__DRAIN_TIMEOUT: "300s",
+    });
+    const configMap = find(manifests, "ConfigMap", CONFIG);
+    expect(configMap.metadata.labels?.["app.kubernetes.io/component"]).toBe("ai-gateway");
+    const container = gatewayContainer(manifests);
+    expect(container.envFrom).toEqual([{ configMapRef: { name: `${RELEASE}-platform` } }, { configMapRef: { name: CONFIG } }]);
+    // The keys come from their Secrets only, in the variables KEY_ENV names; telemetry goes to the
+    // collector under the gateway's own prefix.
+    const env = container.env ?? [];
+    for (const name of ["TRUSTIOT_AI_ANTHROPIC_API_KEY", "TRUSTIOT_AI_OPENAI_API_KEY"]) {
+      const entry = env.find((e) => e.name === name);
+      expect(entry?.value).toBeUndefined();
+      expect(entry?.valueFrom?.secretKeyRef?.key).toBe("api-key");
+    }
+    expect(env.map((e) => e.name)).toContain("AI_GATEWAY__TELEMETRY__OTLP_ENDPOINT");
+    expect(env.map((e) => e.name)).not.toContain("TRUSTIOT__TELEMETRY__OTLP_ENDPOINT");
+    // Only the gateway reads the ConfigMap; the AI settings are gone from the platform settings.
+    for (const deployment of manifests.filter(isServiceDeployment)) {
+      if (deployment.metadata.name === `${RELEASE}-ai-gateway`) continue;
+      for (const c of podSpec(deployment).containers) {
+        expect(c.envFrom ?? []).not.toContainEqual({ configMapRef: { name: CONFIG } });
+        expect((c.env ?? []).map((e) => e.name).filter((n) => n.startsWith("TRUSTIOT_AI_"))).toEqual([]);
+      }
+    }
+    expect(Object.keys(platformConfig(manifests)).filter((name) => name.includes("_AI_"))).toEqual([]);
+    // Off: no ConfigMap, and the render does not need any AI setting.
+    const off = render([...SHAPES.onprem, SMOKE]);
+    expect(off.filter((m) => m.metadata.name === CONFIG)).toEqual([]);
+  });
+
+  test("on-prem: a provider without a Secret is left out, and its own API is the default endpoint", () => {
+    const manifests = render([...SHAPES.onprem, SMOKE], [...ON, ...AI_GATEWAY_SETTINGS]);
+    expect(gatewayConfig(manifests)).toEqual({
+      AI_GATEWAY__PROVIDERS__ANTHROPIC__PROTOCOL: "anthropic-messages",
+      AI_GATEWAY__PROVIDERS__ANTHROPIC__KEY_ENV: "TRUSTIOT_AI_ANTHROPIC_API_KEY",
+      AI_GATEWAY__ROLES__TEST__MODELS: "anthropic/claude-test",
+      AI_GATEWAY__HTTP__REQUEST_TIMEOUT: "10m",
+      AI_GATEWAY__SHUTDOWN__DRAIN_TIMEOUT: "300s",
+    });
+    // The catalog leaves the unconfigured provider's key out: no reference to a Secret without a name.
+    expect((gatewayContainer(manifests).env ?? []).map((e) => e.name).filter((n) => n.startsWith("TRUSTIOT_AI_"))).toEqual(["TRUSTIOT_AI_ANTHROPIC_API_KEY"]);
+  });
+
+  test("every limit of a role reaches its variable, and the pods roll when the settings change", () => {
+    const role = {
+      models: ["anthropic/claude-a", "openai/gpt-b"],
+      maxConcurrent: 10000,
+      queueWait: "1500ms",
+      timeouts: { connect: "5s", firstToken: "2m", streamIdle: "90s", streamTotal: "24h", response: "8m" },
+      maxResponseBytes: 268435456,
+      maxEventBytes: 1024,
+    };
+    const args = [...ON, "--set-json", `ai.roles.full=${JSON.stringify(role)}`, "--set-json", "ai.requestTimeout=\"1h\""];
+    const manifests = render([...SHAPES.saas, SMOKE], args);
+    const data = gatewayConfig(manifests);
+    expect(Object.fromEntries(Object.entries(data).filter(([name]) => name.startsWith("AI_GATEWAY__ROLES__FULL__")))).toEqual({
+      AI_GATEWAY__ROLES__FULL__MODELS: "anthropic/claude-a,openai/gpt-b",
+      AI_GATEWAY__ROLES__FULL__MAX_CONCURRENT: "10000",
+      AI_GATEWAY__ROLES__FULL__QUEUE_WAIT: "1500ms",
+      AI_GATEWAY__ROLES__FULL__TIMEOUTS__CONNECT: "5s",
+      AI_GATEWAY__ROLES__FULL__TIMEOUTS__FIRST_TOKEN: "2m",
+      AI_GATEWAY__ROLES__FULL__TIMEOUTS__STREAM_IDLE: "90s",
+      AI_GATEWAY__ROLES__FULL__TIMEOUTS__STREAM_TOTAL: "24h",
+      AI_GATEWAY__ROLES__FULL__TIMEOUTS__RESPONSE: "8m",
+      AI_GATEWAY__ROLES__FULL__MAX_RESPONSE_BYTES: "268435456",
+      AI_GATEWAY__ROLES__FULL__MAX_EVENT_BYTES: "1024",
+    });
+    expect(data.AI_GATEWAY__HTTP__REQUEST_TIMEOUT).toBe("1h");
+    const checksum = (m: Manifest[]) =>
+      (find(m, "Deployment", `${RELEASE}-ai-gateway`).spec as { template: { metadata: { annotations: Record<string, string> } } }).template.metadata.annotations[
+        "checksum/ai-gateway-config"
+      ];
+    const before = checksum(render([...SHAPES.saas, SMOKE], ON));
+    expect(before).toMatch(/^[0-9a-f]{64}$/);
+    expect(checksum(manifests)).not.toBe(before);
+    expect(checksum(render([...SHAPES.saas, SMOKE], ON))).toBe(before);
+  });
+
+  // The gateway refuses to start when queueWait plus the longer of timeouts.response and
+  // timeouts.firstToken exceeds http.request_timeout less a tenth of it, at most 2 s
+  // (services/ai-gateway/src/gateway.rs). The chart refuses the same values, to the millisecond.
+  // On-prem has no roles of its own, so the role under test is the only one.
+  const oneRole = (role: object, requestTimeout: string) => [
+    ...ON,
+    "--set",
+    "ai.providers.anthropic.apiKeySecret.name=trustiot-anthropic",
+    "--set-json",
+    `ai.roles.edge=${JSON.stringify(role)}`,
+    "--set-json",
+    `ai.requestTimeout=${JSON.stringify(requestTimeout)}`,
+    "--skip-schema-validation",
+  ];
+  test.each([
+    ["10m", "298s", true],
+    ["10m", "299s", false],
+    ["1s", "100ms", false],
+  ])("requestTimeout %s with queueWait %s on the default limits: renders %p", (requestTimeout, queueWait, renders) => {
+    const result = helmTemplate([...SHAPES.onprem, SMOKE], oneRole({ models: ["anthropic/claude-a"], queueWait }, requestTimeout));
+    if (renders) expect(result.stderr).toBe("");
+    else expect(result.stderr).toMatch(/ai\.roles\.edge: queueWait plus the longer of timeouts\.response/);
+    expect(result.code === 0).toBe(renders);
+  });
+
+  test("a short request timeout fits a role with short limits: the margin is a tenth, rounded up to the millisecond", () => {
+    // 1s keeps 100 ms: 900 ms for 400 ms in the queue and 500 ms to the first token.
+    const role = { models: ["anthropic/claude-a"], queueWait: "400ms", timeouts: { firstToken: "500ms", response: "500ms" } };
+    const fits = render([...SHAPES.onprem, SMOKE], oneRole(role, "1s"));
+    expect(gatewayConfig(fits).AI_GATEWAY__ROLES__EDGE__QUEUE_WAIT).toBe("400ms");
+    const over = helmTemplate([...SHAPES.onprem, SMOKE], oneRole({ ...role, queueWait: "401ms" }, "1s"));
+    expect(over.stderr).toMatch(/is 901 ms, more than the 900 ms ai\.requestTimeout leaves/);
+  });
+
+  // The schema takes every request timeout the template takes, in each unit, up to one hour.
+  test.each([
+    ["1500ms", true],
+    ["3600000ms", true],
+    ["3600s", true],
+    ["60m", true],
+    ["1h", true],
+    ["3600001ms", false],
+    ["0ms", false],
+    ["61m", false],
+  ])("the schema validates ai.requestTimeout %s: renders %p", (requestTimeout, renders) => {
+    const role = { models: ["anthropic/claude-a"], timeouts: { firstToken: "100ms", response: "100ms" } };
+    const args = oneRole(role, requestTimeout).filter((arg) => arg !== "--skip-schema-validation");
+    const result = helmTemplate([...SHAPES.onprem, SMOKE], args);
+    if (renders) expect(result.stderr).toBe("");
+    else expect(result.stderr).toMatch(/\/ai\/requestTimeout/);
+    expect(result.code === 0).toBe(renders);
+  });
+
+  // What the gateway would refuse at startup fails the render even without schema validation, so
+  // a values mistake never ships as a crash-looping pod.
+  const cases: [string, readonly string[], string[], RegExp][] = [
+    ["no role", SHAPES.onprem, ["--set", "ai.providers.anthropic.apiKeySecret.name=trustiot-anthropic"], /ai\.roles: the AI gateway needs at least one model role/],
+    [
+      "a model of a provider without a key",
+      SHAPES.onprem,
+      [...AI_GATEWAY_SETTINGS, "--set-json", 'ai.roles.other={"models":["openai/gpt-x"]}'],
+      /ai\.roles\.other\.models: openai\/gpt-x needs ai\.providers\.openai\.apiKeySecret\.name/,
+    ],
+    ["credentials without ai", SHAPES.saas, ["--set-json", "services.ai-gateway.credentials=[]"], /services\.ai-gateway\.credentials must list ai/],
+    ["a provider the chart does not know", SHAPES.saas, ["--set", "ai.providers.gemini.apiKeySecret.name=trustiot-gemini"], /ai\.providers\.gemini: unknown provider; the chart knows anthropic, openai/],
+    ["a base URL with user info", SHAPES.saas, ["--set", "ai.providers.openai.baseUrl=https://user@llm.saas.trustiot.test/v1"], /ai\.providers\.openai\.baseUrl must be an https URL/],
+    ["a base URL over plain http", SHAPES.saas, ["--set", "ai.providers.openai.baseUrl=http://llm.saas.trustiot.test/v1"], /ai\.providers\.openai\.baseUrl must be an https URL/],
+    ["a base URL with a fragment", SHAPES.saas, ["--set", "ai.providers.openai.baseUrl=https://llm.saas.trustiot.test/v1#x"], /ai\.providers\.openai\.baseUrl must be an https URL/],
+    ["a base URL with a port the URL parser refuses", SHAPES.saas, ["--set", "ai.providers.openai.baseUrl=https://llm.saas.trustiot.test:65536/v1"], /ai\.providers\.openai\.baseUrl must be an https URL/],
+    ["a role name in upper case", SHAPES.saas, ["--set-json", 'ai.roles.Main={"models":["anthropic/claude-x"]}'], /ai\.roles\.Main: a role name is 1 to 32 lower-case letters/],
+    ["a role without models", SHAPES.saas, ["--set-json", 'ai.roles.empty={"models":[]}'], /ai\.roles\.empty\.models must list 1 to 8 models/],
+    [
+      "a role with nine models",
+      SHAPES.saas,
+      ["--set-json", `ai.roles.many={"models":${JSON.stringify(Array.from({ length: 9 }, (_, i) => `anthropic/m${i}`))}}`],
+      /ai\.roles\.many\.models must list 1 to 8 models/,
+    ],
+    ["a model listed twice", SHAPES.saas, ["--set-json", 'ai.roles.twice={"models":["anthropic/a","anthropic/a"]}'], /ai\.roles\.twice\.models lists a model twice/],
+    ["a model with a comma", SHAPES.saas, ["--set-json", 'ai.roles.comma={"models":["anthropic/a,b"]}'], /ai\.roles\.comma\.models: each model is <provider>\/<model id>/],
+    ["a model with a space", SHAPES.saas, ["--set-json", 'ai.roles.space={"models":["anthropic/a b"]}'], /ai\.roles\.space\.models: each model is/],
+    ["a model without a provider", SHAPES.saas, ["--set-json", 'ai.roles.bare={"models":["claude-x"]}'], /ai\.roles\.bare\.models: each model is/],
+    ["an unknown role setting", SHAPES.saas, ["--set-json", 'ai.roles.main.temperature=1'], /ai\.roles\.main\.temperature: unknown setting/],
+    ["an unknown time limit", SHAPES.saas, ["--set-json", 'ai.roles.main.timeouts={"total":"1m"}'], /ai\.roles\.main\.timeouts\.total: unknown time limit/],
+    ["a time limit of zero", SHAPES.saas, ["--set-json", 'ai.roles.main.timeouts={"connect":"0s"}'], /ai\.roles\.main\.timeouts\.connect must be more than 0 and at most 1h/],
+    ["a response limit over an hour", SHAPES.saas, ["--set-json", 'ai.roles.main.timeouts={"response":"61m"}'], /ai\.roles\.main\.timeouts\.response must be more than 0 and at most 1h/],
+    ["a stream over a day", SHAPES.saas, ["--set-json", 'ai.roles.main.timeouts={"streamTotal":"25h"}'], /ai\.roles\.main\.timeouts\.streamTotal must be more than 0 and at most 24h/],
+    ["a duration with two units, which the chart does not take", SHAPES.saas, ["--set-json", 'ai.roles.main.queueWait="1m30s"'], /ai\.roles\.main\.queueWait must be a duration such as 30s/],
+    ["a duration as a number", SHAPES.saas, ["--set-json", "ai.roles.main.queueWait=5"], /ai\.roles\.main\.queueWait must be a duration/],
+    ["a queue wait over an hour", SHAPES.saas, ["--set-json", 'ai.roles.main.queueWait="2h"', "--set-json", 'ai.requestTimeout="1h"'], /ai\.roles\.main\.queueWait must be at most 1h/],
+    ["no slot per model", SHAPES.saas, ["--set-json", "ai.roles.main.maxConcurrent=0"], /ai\.roles\.main\.maxConcurrent must be a whole number from 1 to 10000/],
+    ["more slots than the gateway allows", SHAPES.saas, ["--set-json", "ai.roles.main.maxConcurrent=10001"], /ai\.roles\.main\.maxConcurrent must be a whole number from 1 to 10000/],
+    ["a response cap under 1 KiB", SHAPES.saas, ["--set-json", "ai.roles.main.maxResponseBytes=1023"], /ai\.roles\.main\.maxResponseBytes must be a whole number from 1024 to 268435456/],
+    [
+      "an event cap over the default response cap",
+      SHAPES.saas,
+      ["--set-json", "ai.roles.main.maxEventBytes=33554433"],
+      /ai\.roles\.main\.maxEventBytes \(33554433\) must not exceed maxResponseBytes \(33554432; 32 MiB unless set\)/,
+    ],
+    ["a request timeout over an hour", SHAPES.saas, ["--set-json", 'ai.requestTimeout="2h"'], /ai\.requestTimeout must be more than 0 and at most 1h/],
+    ["a request timeout of zero", SHAPES.saas, ["--set-json", 'ai.requestTimeout="0s"'], /ai\.requestTimeout must be more than 0 and at most 1h/],
+    ["a drain too short for the kit's own drain", SHAPES.saas, ["--set", "services.ai-gateway.drainSeconds=10"], /services\.ai-gateway\.drainSeconds must be 11 to 3605/],
+    [
+      "custom env that sets a role",
+      SHAPES.saas,
+      ["--set-json", 'services.ai-gateway.env=[{"name":"AI_GATEWAY__ROLES__MAIN__MODELS","value":"openai/x"}]'],
+      /services\.ai-gateway: env AI_GATEWAY__ROLES__MAIN__MODELS is set by the chart from values\.ai/,
+    ],
+    [
+      "custom env that adds a provider",
+      SHAPES.saas,
+      ["--set-json", 'services.ai-gateway.env=[{"name":"ai_gateway__providers__evil__base_url","value":"https://evil.test"}]'],
+      /services\.ai-gateway: env ai_gateway__providers__evil__base_url is set by the chart/,
+    ],
+    [
+      "custom env that overrides a setting of the ConfigMap",
+      SHAPES.saas,
+      ["--set-json", 'services.ai-gateway.env=[{"name":"AI_GATEWAY__HTTP__REQUEST_TIMEOUT","value":"1h"}]'],
+      /services\.ai-gateway: env AI_GATEWAY__HTTP__REQUEST_TIMEOUT is set by the chart/,
+    ],
+    [
+      "custom env that names a settings file",
+      SHAPES.saas,
+      ["--set-json", 'services.ai-gateway.env=[{"name":"AI_GATEWAY_CONFIG_FILE","value":"/tmp/x.toml"}]'],
+      /services\.ai-gateway: env AI_GATEWAY_CONFIG_FILE is set by the chart/,
+    ],
+    [
+      "custom env that replaces a provider key",
+      SHAPES.saas,
+      ["--set-json", 'services.ai-gateway.env=[{"name":"TRUSTIOT_AI_OPENAI_API_KEY","value":"x"}]'],
+      /services\.ai-gateway: env TRUSTIOT_AI_OPENAI_API_KEY: names starting with TRUSTIOT_, SENTRY_ or OTEL_ are set by the chart/,
+    ],
+    [
+      "custom env that redirects the gateway's telemetry",
+      SHAPES.saas,
+      ["--set-json", 'services.ai-gateway.env=[{"name":"AI_GATEWAY__TELEMETRY__OTLP_ENDPOINT","value":"http://elsewhere:4318"}]'],
+      /services\.ai-gateway: env AI_GATEWAY__TELEMETRY__OTLP_ENDPOINT is set by the chart/,
+    ],
+  ];
+
+  test.each(cases)("the templates refuse %s, without schema validation", (_name, files, args, expected) => {
+    const result = helmTemplate([...files, SMOKE], ["--skip-schema-validation", ...ON, ...args]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(expected);
+  });
+
+  test("custom env may still tune what the chart leaves to the gateway's defaults", () => {
+    const manifests = render([...SHAPES.saas, SMOKE], [
+      ...ON,
+      "--set-json",
+      'services.ai-gateway.env=[{"name":"AI_GATEWAY__MAX_REQUEST_BYTES","value":"1048576"}]',
+    ]);
+    expect(gatewayContainer(manifests).env).toContainEqual({ name: "AI_GATEWAY__MAX_REQUEST_BYTES", value: "1048576" });
+  });
+});
+
 // Values of ingress.tunnel.clusterIP that are not one plain IPv4 address (Laysi/trustiot-v2#478):
 // Kubernetes would refuse each, or take "None" for a headless Service.
 const INVALID_CLUSTER_IPS: [string, string][] = [
@@ -4716,8 +5030,44 @@ describe("values validation rejects unsafe or incomplete settings", () => {
     [
       "SaaS endpoint over plain http",
       saas,
-      ["--set", "ai.chat.baseUrl=http://llm.saas.trustiot.test/v1"],
-      /\/ai\/chat\/baseUrl/,
+      ["--set", "objectStorage.endpoint=http://objects.saas.trustiot.test"],
+      /\/objectStorage\/endpoint/,
+    ],
+    [
+      "AI provider endpoint over plain http, in either shape",
+      onprem,
+      ["--set", "ai.providers.anthropic.baseUrl=http://llm.factory.test/anthropic"],
+      /\/ai\/providers\/anthropic\/baseUrl/,
+    ],
+    [
+      "AI provider endpoint with a query, where a key could hide",
+      saas,
+      ["--set", "ai.providers.openai.baseUrl=https://llm.saas.trustiot.test/v1?key=x"],
+      /\/ai\/providers\/openai\/baseUrl/,
+    ],
+    [
+      "AI provider the chart does not know",
+      saas,
+      ["--set", "ai.providers.gemini.apiKeySecret.name=trustiot-gemini"],
+      /gemini/,
+    ],
+    [
+      "AI model of an unknown provider or with a comma",
+      saas,
+      ["--set-json", 'ai.roles.main.models=["gemini/x","anthropic/a,b"]'],
+      /\/ai\/roles\/main\/models\/0|\/ai\/roles\/main\/models\/1/,
+    ],
+    [
+      "AI role name the gateway refuses",
+      saas,
+      ["--set-json", 'ai.roles.Main={"models":["anthropic/claude-x"]}'],
+      /Main/,
+    ],
+    [
+      "AI request timeout over an hour",
+      saas,
+      ["--set", "ai.requestTimeout=2h"],
+      /\/ai\/requestTimeout/,
     ],
     [
       "secret-like env var with a literal value",
@@ -5000,9 +5350,9 @@ describe("values validation rejects unsafe or incomplete settings", () => {
       saas,
       [
         "--set-json",
-        'services.smoke-echo.env=[{"name":"LLM_API_KEY","valueFrom":{"secretKeyRef":{"name":"trustiot-ai-chat","key":"api-key"}}}]',
+        'services.smoke-echo.env=[{"name":"LLM_API_KEY","valueFrom":{"secretKeyRef":{"name":"trustiot-anthropic","key":"api-key"}}}]',
       ],
-      /env reads the dependency credential trustiot-ai-chat\/api-key/,
+      /env reads the dependency credential trustiot-anthropic\/api-key/,
     ],
     [
       "ClickHouse bootstrap admin password, in an existing Secret, read through custom env",

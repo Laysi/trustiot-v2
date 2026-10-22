@@ -8,6 +8,7 @@ release.yml 發佈的容器映像。每個子目錄是一個映像，目錄名�
 
 | 目錄 | 內容 |
 | --- | --- |
+| `ai-gateway` | AI 閘道（`services/ai-gateway`），chart 的 `services.ai-gateway`；2026-10-23 加入（Laysi/trustiot-v2#536），nightly 從原始碼建置並以兩份 values 部署它，沒有真的供應商金鑰，只等它就緒（chart README「AI 閘道」）。連供應商的 TLS 信任 distroless static 內附的 CA bundle |
 | `assets` | 資產服務（`services/assets`），chart 的 `services.assets`；2026-10-14 加入（Laysi/trustiot-v2#65），nightly 從原始碼建置它並經入口呼叫它的 API |
 | `certs` | 憑證服務（`services/certs`），chart 的 `services.certs`；只放服務本身的執行檔 `certs`（`bin = "certs"`），離線根 CA 儀式工具 `certs-ca` 不進映像。2026-10-21 加入（Laysi/trustiot-v2#78），nightly 還沒有建置它 |
 | `identity` | 身分服務（`services/identity`），chart 的 `services.identity`；2026-10-11 加入（Laysi/trustiot-v2#308），arm64 啟動驗證見[測試報告](../../docs/test-reports/2026-10-11-308-identity-image.md)；nightly 從 Laysi/trustiot-v2#65 起從原始碼建置並部署它 |

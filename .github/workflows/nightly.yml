@@ -53,13 +53,15 @@ on:
       - .dockerignore
       # What goes into the nightly's Rust images (scripts/nightly/image-cache.ts, NIGHTLY_IMAGES):
       # the workspace, the toolchain, the build scripts and every local crate tools/migrate,
-      # services/identity and services/assets build from (scripts/nightly/image-cache.test.ts
-      # keeps this list complete), plus the files tools/migrate compiles in with #[path].
+      # services/identity, services/assets and services/ai-gateway build from
+      # (scripts/nightly/image-cache.test.ts keeps this list complete), plus the files
+      # tools/migrate compiles in with #[path].
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
       - deploy/images/rust-binary.Containerfile
       - scripts/**
+      - crates/ai-clients/**
       - crates/ca-keys/**
       - crates/contract/**
       - crates/identity-keys/**
@@ -75,10 +77,12 @@ on:
       - deploy/images/migrate/**
       - deploy/images/identity/**
       - deploy/images/assets/**
+      - deploy/images/ai-gateway/**
       - deploy/istio/**
       - tools/migrate/**
       - services/identity/**
       - services/assets/**
+      - services/ai-gateway/**
       - services/*/migrations/**
 
 # No token scopes by default; each job asks for what it needs.
@@ -154,7 +158,9 @@ jobs:
     # dependencies) and per shape their rollout and the API check through the ingress. A cache
     # hit adds only the loads and the imports. Laysi/trustiot-v2#77 adds the service-to-service e2e
     # test once (SaaS shape, no image build) and about a dozen requests per shape.
-    timeout-minutes: 55
+    # Laysi/trustiot-v2#536 adds the AI gateway's image (one more cold build, whose AI client
+    # crates no other image uses) and per shape its rollout, with no request to it.
+    timeout-minutes: 60
     permissions:
       contents: read
     env:
@@ -188,7 +194,7 @@ jobs:
         with:
           tools: bun helm k3d kubectl
       # The Rust images (NIGHTLY_IMAGES in scripts/nightly/image-cache.ts: deploy/images/migrate,
-      # identity and assets) are reused while nothing that goes into them changed: the key is a
+      # identity, assets and ai-gateway) are reused while nothing that goes into them changed: the key is a
       # digest of the git object hashes of every input of their builds. One entry holds every
       # tarball, and it is saved only with all of them. Exact key only, no restore-keys: an image
       # of other sources would test code that is not this commit's.

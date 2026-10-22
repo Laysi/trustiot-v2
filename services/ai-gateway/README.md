@@ -4,7 +4,7 @@
 
 閘道與產品無關（決策 28）：租戶只是不透明的 ID，設定用自己的前綴 `AI_GATEWAY`，也不依賴 `crates/contract`（`tests/no_contract.rs` 以 `cargo tree -p ai-gateway` 檢查，service-kit 以 `default-features = false` 引入）。
 
-目前支援兩種協定：Anthropic Messages（含串流）與 OpenAI Decisions。不在這裡：用量帳本與租戶額度（Laysi/trustiot-v2#140）、執行期更換角色的模型與管理 API（Laysi/trustiot-v2#537）、映像、chart、Secret 與 AuthorizationPolicy（Laysi/trustiot-v2#536）、Vertex AI（Laysi/trustiot-v2#440）。沒有資料庫。
+目前支援兩種協定：Anthropic Messages（含串流）與 OpenAI Decisions。不在這裡：用量帳本與租戶額度（Laysi/trustiot-v2#140）、執行期更換角色的模型與管理 API（Laysi/trustiot-v2#537）、Vertex AI（Laysi/trustiot-v2#440）。沒有資料庫。部署（映像 `deploy/images/ai-gateway`、chart 從 values 的 `ai` 產生的設定、金鑰的 Secret、只允許三個呼叫端的 AuthorizationPolicy）見 [chart README](../../deploy/chart/README.md)「AI 閘道」（Laysi/trustiot-v2#536）。
 
 | 檔案 | 內容 |
 | --- | --- |
@@ -40,7 +40,7 @@
 
 ### 範例：一次最小的呼叫
 
-確認一把供應商金鑰能用（例如輪替 Anthropic 金鑰後，[展示環境 runbook](../../docs/runbooks/demo-environment.md)「輪替 Resend 與 Anthropic 金鑰」）就送一次最小的 Messages 呼叫。`<gateway>` 是閘道的位址與連接埠，`main` 換成設定裡用那個供應商的角色；內部 API 只開給 mesh 授權的呼叫端，在叢集裡從哪裡送出由部署（Laysi/trustiot-v2#536）決定。
+確認一把供應商金鑰能用（例如輪替 Anthropic 金鑰後，[展示環境 runbook](../../docs/runbooks/demo-environment.md)「輪替 Resend 與 Anthropic 金鑰」）就送一次最小的 Messages 呼叫。`<gateway>` 是閘道的位址與連接埠，`main` 換成設定裡用那個供應商的角色；內部 API 只開給 mesh 授權的呼叫端，所以在叢集裡以 `kubectl port-forward` 連進閘道的 pod 送出，`<gateway>` 是轉出來的本機埠（chart README「AI 閘道」）。
 
 ```sh
 curl -sS -D - -X POST "http://<gateway>/internal/roles/main/v1/messages" \
@@ -135,10 +135,10 @@ AI_GATEWAY__HTTP__REQUEST_TIMEOUT=10m
 
 ## 金鑰與 TLS
 
-- 每個供應商的 key 在啟動時從 `key_env` 指的環境變數讀一次；沒設、空的或含空白與控制字元時不啟動，錯誤訊息只寫變數名稱。key 只存在 ai-clients 的 `ApiKey`（`Debug` 不顯示、drop 時清除、標頭標成 sensitive）與閘道用來遮蔽錯誤訊息的副本（同樣在 drop 時清除）；環境變數本身仍留在程序環境裡，部署時只讓這個 pod 拿得到那個 Secret（Laysi/trustiot-v2#536）。
+- 每個供應商的 key 在啟動時從 `key_env` 指的環境變數讀一次；沒設、空的或含空白與控制字元時不啟動，錯誤訊息只寫變數名稱。key 只存在 ai-clients 的 `ApiKey`（`Debug` 不顯示、drop 時清除、標頭標成 sensitive）與閘道用來遮蔽錯誤訊息的副本（同樣在 drop 時清除）；環境變數本身仍留在程序環境裡，所以 chart 只讓這個 pod 拿得到那個 Secret（`services.<name>.credentials` 的 `ai` 只能給 `ai-gateway`，變數是 `TRUSTIOT_AI_ANTHROPIC_API_KEY`、`TRUSTIOT_AI_OPENAI_API_KEY`）。
 - key 不進日誌也不進回應：供應商錯誤訊息裡的 key 換成 `[REDACTED]`，401 與 403 的訊息整個不交回。串流的 `error` 事件先解析成 JSON，在解碼後的每個字串與欄位名稱、以及原始文字裡找 key，所以用 JSON 跳脫寫成的 key 也會被換掉；找到時事件資料改寫成遮蔽後的 JSON（欄位順序可能改變），沒找到時照原樣轉送，不是 JSON 的資料換成閘道自己的 `api_error` 事件。供應商的錯誤 `type`、`code` 與 request ID 也遮蔽後才交回或寫進日誌。成功的回應與串流照原樣轉送，不檢查。`tests/process.rs` 以 trace 等級執行真正的程式檢查。
 - 連供應商的 TLS 信任系統的根憑證（`SSL_CERT_FILE` 或 `SSL_CERT_DIR` 有設時用它們），一張都載不到就不啟動，所以映像要有 CA bundle。不走 proxy、不跟隨重新導向（ai-clients 的「規則」）。
-- 閘道本身不驗證呼叫端：內部 API 只靠 mesh 授權，只有 assistant、knowledge、alerts 能連（決策 28；AuthorizationPolicy 在 Laysi/trustiot-v2#536）。
+- 閘道本身不驗證呼叫端：內部 API 只靠 mesh 授權，只有 assistant、knowledge、alerts 能連（決策 28；chart 在 `mesh.calls` 把其他服務列為呼叫端時拒絕渲染，見 chart README「服務間授權（mesh）」）。
 
 ## 日誌
 
@@ -146,7 +146,7 @@ AI_GATEWAY__HTTP__REQUEST_TIMEOUT=10m
 
 ## 關機
 
-service-kit 對長連線的建議是在 `Shutdown::stopping` 時結束 SSE，讓用戶端改連新的 pod；閘道刻意不這樣做：模型的回答不能在另一個 pod 接續，提早結束只會讓呼叫端整段重來並重複計費。進行中的串流在 drain 期間照常轉送到結束，`shutdown.drain_timeout`（預設 20 秒）到了才隨程序結束被切斷。部署（Laysi/trustiot-v2#536）要把 `AI_GATEWAY__SHUTDOWN__DRAIN_TIMEOUT` 與 chart 的 `drainSeconds` 調到能涵蓋一般的回答長度（service-kit 的「收尾」一節說明兩者的關係）。
+service-kit 對長連線的建議是在 `Shutdown::stopping` 時結束 SSE，讓用戶端改連新的 pod；閘道刻意不這樣做：模型的回答不能在另一個 pod 接續，提早結束只會讓呼叫端整段重來並重複計費。進行中的串流在 drain 期間照常轉送到結束，`shutdown.drain_timeout`（預設 20 秒）到了才隨程序結束被切斷。chart 給閘道的 `drainSeconds` 預設是 310 秒，並把 `AI_GATEWAY__SHUTDOWN__DRAIN_TIMEOUT` 設成它減 10 秒（300 秒），涵蓋一般的回答長度（service-kit 的「收尾」一節說明兩者的關係；chart README「AI 閘道」）。
 
 ## 測試
 

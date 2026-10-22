@@ -1,0 +1,20 @@
+{{- /*
+The AI gateway's settings (services/ai-gateway, Laysi/trustiot-v2#536; helpers in _ai-gateway.tpl):
+the providers, model roles and limits from values.ai as AI_GATEWAY__* variables, which only the
+gateway's container reads (envFrom). No key: each provider's key reaches the container from its
+Secret as a secretKeyRef ("trustiot.credentialCatalog"). The gateway reads its settings at startup
+only, so its pods carry a checksum of this ConfigMap and roll when it changes.
+*/ -}}
+{{- if include "trustiot.aiGateway.enabled" . }}
+{{- $ctx := dict "root" . "name" "ai-gateway" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "trustiot.aiGateway.configName" . }}
+  labels:
+    {{- include "trustiot.componentLabels" $ctx | nindent 4 }}
+data:
+  {{- range $name, $value := (include "trustiot.aiGateway.config" . | fromYaml).data }}
+  {{ $name }}: {{ $value | quote }}
+  {{- end }}
+{{- end }}

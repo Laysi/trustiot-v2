@@ -237,8 +237,20 @@ services:
     enabled: false
   assistant:
     enabled: false
+  # The AI gateway (services/ai-gateway, decisions 15 and 28): the providers, model roles and limits
+  # come from `ai` below. Only the AI assistant, the knowledge base and alerts may call it
+  # (mesh.calls; README.md, "服務間授權（mesh）").
   ai-gateway:
     enabled: false
+    # The provider keys (ai.providers.*.apiKeySecret): only this service may list them, and the
+    # gateway does not start without them, so the render fails while it is enabled without ai.
+    credentials:
+      - ai
+    # A model's answer streams for minutes and cannot go on in another pod, so the gateway lets
+    # the streams in flight run to their end while it drains (services/ai-gateway/README.md,
+    # 「關機」). The chart sets its shutdown.drain_timeout to drainSeconds - 10 s (300 s here);
+    # 11 to 3605.
+    drainSeconds: 310
   alerts:
     enabled: false
   field-context:
@@ -655,25 +667,34 @@ smtp:
     usernameKey: username
     passwordKey: password
 
-# OpenAI-compatible endpoints (decisions 15, 16, 26 and 28). On-prem points at the
-# customer's endpoints (for example vLLM or Ollama).
+# The AI gateway's providers and model roles (services/ai-gateway, decisions 15 and 28, J8). Each
+# provider speaks its native protocol; only ai-gateway gets the keys. The chart hands the gateway
+# these settings in the ConfigMap <release>-ai-gateway, without any key (README.md, "AI 閘道").
 ai:
-  chat:
-    baseUrl: ""
-    apiKeySecret:
-      name: ""
-      key: api-key
-  embedding:
-    baseUrl: ""
-    apiKeySecret:
-      name: ""
-      key: api-key
-  # Reranking uses a chat-completions endpoint with a fast model (decision 26).
-  rerank:
-    baseUrl: ""
-    apiKeySecret:
-      name: ""
-      key: api-key
+  providers:
+    # Anthropic Messages. A provider is configured when its apiKeySecret has a name.
+    anthropic:
+      # Empty: Anthropic's own API (https://api.anthropic.com). To go through Cloudflare AI Gateway,
+      # set its https URL here (for example https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic).
+      baseUrl: ""
+      apiKeySecret:
+        name: ""
+        key: api-key
+    # OpenAI Decisions. Empty baseUrl: OpenAI's own API (https://api.openai.com).
+    openai:
+      baseUrl: ""
+      apiKeySecret:
+        name: ""
+        key: api-key
+  # Model roles: <role>: {models: [<provider>/<model id>, ...]}, the first choice first and then its
+  # fallbacks (1 to 8). The gateway needs at least one role, and every provider a role names needs
+  # its apiKeySecret. Optional per role: maxConcurrent, queueWait, timeouts (connect, firstToken,
+  # streamIdle, streamTotal, response), maxResponseBytes, maxEventBytes (README.md, "AI 閘道").
+  roles: {}
+  # The gateway's http.request_timeout: a call's time budget up to its response or first streamed
+  # output is this minus a tenth, at most 2 s. Every role's queueWait plus the longer of its
+  # response and firstToken limits must fit, or the gateway does not start; the defaults need 300 s.
+  requestTimeout: 10m
 
 observability:
   # Error tracking (decision 24): SaaS sends to sentry.io; on-prem is off unless the
