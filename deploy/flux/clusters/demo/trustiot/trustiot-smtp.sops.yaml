@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: Secret
+metadata:
+    name: trustiot-smtp
+    namespace: trustiot
+type: Opaque
+stringData:
+    password: ENC[AES256_GCM,data:2S980J4K6vqoPHxPpEEwTTmLUi8iRyg9MS2nljiFjiXaYqDt,iv:fBQJa+HJq9Yb59ni88FnsT77xsebmre7MqI02BD7Td0=,tag:Q45IokZ7ArGW5jbOgfSJ3w==,type:str]
+    username: ENC[AES256_GCM,data:hNfLzF01,iv:OGXCdoizXFCunwr3Fk4B2qqcCiPBXLV70hiKLQ6p7pw=,tag:hoFOzU52wNe/fZ2GPv3oZA==,type:str]
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBYaGJTbzRYSjYyVEZqZjZR
+            QTdnYnNKR0thdEhDOXBoeSs5WHlNcEpLRlcwCjZacGFZZFViRHJ3Nk95b0Z4Mk1M
+            OXFIcEMzRVhuTjRDeGZFaDFvMGsxMFUKLS0tIGV5aHFGU0ZhbW5HMjRHYkpCcTJm
+            ZjdJVkZQTi9MaGxaaVJuMXl6LzdmVHMKAfrNCISq1fvl2EyPE4SL9NjOl8Ebwafs
+            Dx+VeOaeQbCPhqsbKGJfnipNZPhSIF41NvN8hRJdfs62goRoLuKx+A==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age17tmfvm966vuuu82a5jn6zw6uhcjaqhstxl5xajlcw7e0a7gfy4ws84hytc
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSB1aGZBWko2c2ZyN0pkb2Rs
+            NEVOYlp2S3RnTFUvWHk3RTh0d29XS1Jzc1c4CnhtWmlIZ3hERVNTMDZsTkU4NjZ4
+            UndDdHFLd0RWSWx1S2lkWXJSNzZUZUEKLS0tIEo1WVBwY09ta1NxcVJFenpQNTNz
+            UloxazZOMDdQeEJqUDluc2pjWWVrUVUK2BmZ0st0hoUH/rKL+2SC/8JHlRDCrkr9
+            FnN8NsKpyUgOPQyfuKWa29oQdSABQvB7H5xAJjN1ihn/1ORmhe3fRw==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1nsq9mcnwfhg2vra3hjw6tp9dfhy8lq2366hjr2l96fcq07yvq46q8nnrsk
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-10-22T07:05:51Z"
+    mac: ENC[AES256_GCM,data:iUt+hGu3C30zLc6qHfaO+kx9igHHpHZWVGETIFoS5+QO1WW53NCbRPe/w+L6HpSj5ZnAOod6n9eXnf6zh4XyL7PfrBdmi1FGTJffS/qVr7tM24lfHc6HshBvD5nT6bpeDkKpoKEkWXClnz1XplYSpQzr3mXy3jEPkisLepFw/SE=,iv:ahhmlbu64Mc+8BUMRlJtTKDkTd9k4XRz32vwt2QkwkQ=,tag:B9gSqlHd77BrAaJJjyTcqw==,type:str]
+    version: 3.13.3

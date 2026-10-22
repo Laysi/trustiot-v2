@@ -76,7 +76,8 @@ describe("password bindings", () => {
     const logins = productLogins();
     const text = passwordBindings(logins);
     expect(text).toBe(
-      "identity_app=dev-identity-password,assets_app=dev-assets-password,assets_platform=dev-assets-password," +
+      "identity_app=dev-identity-password,identity_platform=dev-identity-password," +
+        "assets_app=dev-assets-password,assets_platform=dev-assets-password," +
         "telemetry_query_app=dev-telemetry-query-password,telemetry_query_platform=dev-telemetry-query-password," +
         "certs_app=dev-certs-password",
     );

@@ -55,6 +55,7 @@
 - **Qdrant**：唯讀與寫入兩把 key 分開輪替，換完以知識庫的一次檢索與一次背景處理確認（Laysi/trustiot-v2#194）。
 - **Sentry DSN**：所有服務都用到，以 `serviceDefaults.podAnnotations` 讓全部 pod 滾動。
 - **SMTP（暫用 Resend）**：新 key 的權限選只能寄信（`sending_access`）並限定寄件網域，不選完整權限（`full_access`）；帳號固定是 `resend`，只換密碼。
+- **展示環境的 SMTP 與 Anthropic 金鑰**：與 SaaS 分開，步驟（含 Anthropic 工作區的用量上限與換完後的測試信）見 [展示環境 runbook](demo-environment.md)「輪替 Resend 與 Anthropic 金鑰」。
 
 ### GHCR 拉取 token
 

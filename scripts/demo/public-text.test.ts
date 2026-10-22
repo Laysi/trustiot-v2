@@ -7,8 +7,8 @@ import { join, relative } from "node:path";
 import { ROOT } from "./lib.ts";
 
 /**
- * The files this rule covers: the runbook, everything under scripts/demo, and the other documents
- * the demo environment's tunnel changes (Laysi/trustiot-v2#466).
+ * The files this rule covers: the runbook, everything under scripts/demo, the other documents the
+ * demo environment's tunnel changes (Laysi/trustiot-v2#466), and the demo environment's test reports.
  */
 export const DEMO_DOCS = [
   "docs/runbooks/demo-environment.md",
@@ -17,6 +17,7 @@ export const DEMO_DOCS = [
   "docs/architecture/secrets.md",
   "docs/runbooks/secrets.md",
   "docs/test-reports/2026-10-21-466-demo-tunnel-access.md",
+  "docs/test-reports/2026-10-22-468-demo-mail-anthropic-keys.md",
 ];
 
 /** Directories whose every file the rule covers: the scripts and the test report's raw data. */
@@ -52,6 +53,10 @@ export const ALLOWED_NAMES: Record<string, string> = {
   "rpm.rancher.io": "the k3s RPM repository, pinned in deploy/host",
   "ghcr.io": "the GitHub container registry",
   "hosts.app": "the chart values key hosts.app (deploy/chart/values.yaml), not a host name",
+  "quay.io": "the registry of curl's official image, pinned by digest in test-mail.ts",
+  "resend.com": "Resend's SMTP host in values-demo.yaml (smtp.resend.com) and links to its documentation",
+  "platform.claude.com": "links to Anthropic's Console documentation",
+  "api.anthropic.com": "the Anthropic API host in the key check of the #468 test report",
 };
 
 /**
@@ -82,8 +87,8 @@ describe("public text of the demo environment", () => {
     expect(found).toEqual([]);
   });
 
-  test("the test report and its data hold no object ID and no cf-ray", () => {
-    const report = [DEMO_DOCS.find((doc) => doc.startsWith("docs/test-reports/"))!, ...DEMO_DIRS.filter((dir) => dir.startsWith("docs/test-reports/"))];
+  test("the test reports and their data hold no object ID and no cf-ray", () => {
+    const report = [...DEMO_DOCS, ...DEMO_DIRS].filter((path) => path.startsWith("docs/test-reports/"));
     const files = publicFiles().filter((file) => report.some((path) => relative(ROOT, file).startsWith(path)));
     expect(files.length).toBeGreaterThan(1);
     // Tunnel, application and policy IDs are UUIDs; account and zone IDs are 32 hex digits; a

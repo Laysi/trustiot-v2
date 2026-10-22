@@ -667,8 +667,9 @@ export function serviceLoginVariable(service: string, field: "USERNAME" | "PASSW
  * `TRUSTIOT_INTERNAL_IDENTITY_KEYS_FILE` is a platform setting every service verifies tokens with
  * (the public keys file, which a cluster mounts from a ConfigMap);
  * `TRUSTIOT_IDENTITY_SIGNING_KEYS_FILE` (a path, never a key) and `TRUSTIOT_INGRESS_ROUTES` are
- * for the identity service only; its database login is `TRUSTIOT_DEV_IDENTITY_DATABASE_*` like
- * every other service's. The JSON values are single-quoted.
+ * for the identity service only; its database logins are `TRUSTIOT_DEV_IDENTITY_DATABASE_*` like
+ * every other service's, and `TRUSTIOT_DEV_IDENTITY_PLATFORM_DATABASE_*` for its platform role
+ * (the event log, Laysi/trustiot-v2#130). The JSON values are single-quoted.
  */
 export function envLines(state: State, caFile: string, identity?: IdentityEnv): string {
   const { postgres, clickhouse: ch, mqtt } = state.credentials;

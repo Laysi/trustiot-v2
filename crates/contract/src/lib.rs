@@ -36,6 +36,8 @@ mod naming;
 
 pub use client::{CallError, CallErrorKind, ClientConfigError, Endpoint, InternalClient, Method};
 pub use error::{ErrorBody, ErrorCode, FieldError, MessageKey};
+// `contract::Actor` is the internal token's `act` claim (identity); the event envelope's
+// actor, who made a change, stays `contract::event::Actor`.
 pub use event::{DecodeError, EncodeError, Event, EventEnvelope};
 pub use id::{DeviceModelId, EventId, TenantId, UserId};
 pub use identity::{

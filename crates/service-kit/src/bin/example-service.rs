@@ -83,14 +83,24 @@ struct Platform {
 struct DatabaseCredentials {
     username: String,
     password: String,
+    /// `database.platform_username` and `database.platform_password`: the chart sets them for a
+    /// service whose platform role logs in (deploy/chart, "trustiot.migrate.platformLogins"),
+    /// such as the identity service the example plays in the chart's Postgres e2e. Accepted so
+    /// it starts there; the example connects as the service role only.
+    #[serde(default)]
+    platform_username: Option<String>,
+    #[serde(default)]
+    platform_password: Option<String>,
 }
 
-/// Never prints the password.
+/// Never prints the passwords.
 #[cfg(feature = "contract")]
 impl std::fmt::Debug for DatabaseCredentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DatabaseCredentials")
             .field("username", &self.username)
+            .field("platform_username", &self.platform_username)
+            .field("platform_password_set", &self.platform_password.is_some())
             .finish_non_exhaustive()
     }
 }
