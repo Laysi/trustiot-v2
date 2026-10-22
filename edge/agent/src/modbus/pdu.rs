@@ -1,6 +1,7 @@
 //! The protocol data units of the four read functions: the request the gateway sends and the
 //! response it accepts (Modbus Application Protocol Specification V1.1b3, sections 6.1–6.4 and
-//! 7). The framing around them (MBAP for Modbus TCP) lives in [`super::tcp`].
+//! 7). The framing around them (MBAP for Modbus TCP, RTU with a CRC for an RS485 converter) is
+//! [`super::tcp`]'s.
 
 use std::fmt;
 

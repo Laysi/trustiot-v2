@@ -9,7 +9,7 @@ use std::time::Duration;
 use agent::modbus::pdu::{Data, Read};
 use agent::modbus::tcp::TcpConnection;
 use agent::modbus::{Connection, DEFAULT_CONNECT_TIMEOUT, Exchange, ReadError};
-use protocol::config::FunctionCode;
+use protocol::config::{FunctionCode, Transport};
 use testkit::clock::{self, bounded};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -25,7 +25,12 @@ async fn listen() -> (TcpListener, TcpConnection) {
     let port = listener.local_addr().expect("the bound address").port();
     (
         listener,
-        TcpConnection::new("127.0.0.1", port, DEFAULT_CONNECT_TIMEOUT),
+        TcpConnection::new(
+            Transport::ModbusTcp,
+            "127.0.0.1",
+            port,
+            DEFAULT_CONNECT_TIMEOUT,
+        ),
     )
 }
 
