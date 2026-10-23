@@ -41,6 +41,51 @@ describe("preferences", () => {
     ).toEqual({ locale: "zh-TW", timeZone: "auto", theme: "dark" });
   });
 
+  test("a bad field resets only itself, and a missing or mistyped one counts as bad", () => {
+    const languages = ["zh-TW"];
+    expect(
+      parsePreferences(JSON.stringify({ v: 1, locale: "en", timeZone: "Mars/Olympus", theme: "dark" }), languages),
+    ).toEqual({
+      locale: "en",
+      timeZone: "auto",
+      theme: "dark",
+    });
+    expect(parsePreferences(JSON.stringify({ v: 1, locale: "en", timeZone: "UTC", theme: "neon" }), languages)).toEqual(
+      {
+        locale: "en",
+        timeZone: "UTC",
+        theme: "system",
+      },
+    );
+    expect(parsePreferences(JSON.stringify({ v: 1, locale: 7, timeZone: null, theme: "light" }), languages)).toEqual({
+      locale: "zh-TW",
+      timeZone: "auto",
+      theme: "light",
+    });
+    expect(parsePreferences(JSON.stringify({ v: 1, theme: "dark" }), languages)).toEqual({
+      locale: "zh-TW",
+      timeZone: "auto",
+      theme: "dark",
+    });
+  });
+
+  test("a version other than 1 gives the defaults, whatever the fields hold", () => {
+    const defaults = { locale: "zh-TW", timeZone: "auto", theme: "system" } as const;
+    const fields = { locale: "en", timeZone: "UTC", theme: "dark" };
+    for (const v of [0, 2, "1", null, undefined, true]) {
+      expect(parsePreferences(JSON.stringify({ v, ...fields }), ["zh-TW"])).toEqual(defaults);
+    }
+    expect(parsePreferences(JSON.stringify(fields), ["zh-TW"])).toEqual(defaults);
+    for (const text of ["null", "7", '"x"', "[]", "[1]", "true"]) {
+      expect(parsePreferences(text, ["zh-TW"])).toEqual(defaults);
+    }
+  });
+
+  test("stored members that are not preferences are not kept", () => {
+    const stored = JSON.stringify({ v: 1, locale: "en", timeZone: "UTC", theme: "dark", extra: "x" });
+    expect(parsePreferences(stored, ["zh-TW"])).toStrictEqual({ locale: "en", timeZone: "UTC", theme: "dark" });
+  });
+
   test("unreadable or other-version values give the defaults", () => {
     const defaults = { locale: "zh-TW", timeZone: "auto", theme: "system" } as const;
     expect(parsePreferences(null, ["zh-TW"])).toEqual(defaults);

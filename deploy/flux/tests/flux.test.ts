@@ -747,6 +747,42 @@ describe("the demo release", () => {
   );
 
   test(
+    "the README's values that turn telemetry-query on render with the overlay: the service, its cookie route on the private app host, no Secret to add (Laysi/trustiot-v2#539)",
+    () => {
+      // The YAML block under 「打開 telemetry-query」 in deploy/flux/README.md, as an operator copies it.
+      const readme = read("deploy/flux/README.md");
+      const section = readme.slice(readme.indexOf("- **打開 telemetry-query**"));
+      const block = /\n {2}```yaml\n([\s\S]*?)\n {2}```\n/.exec(section)?.[1];
+      expect(block).toBeDefined();
+      const values = Bun.YAML.parse((block ?? "").replaceAll(/^ {2}/gm, "")) as YamlMap;
+      expect(Object.keys(values).sort()).toEqual(["ingress", "services"]);
+      // The overlay sets no route yet; once it does, the README's list must keep those (helm
+      // replaces a list as a whole), which this test cannot know, so it stops here.
+      expect(isMap(overlay.ingress) ? overlay.ingress.routes : undefined).toBeUndefined();
+      const result = helmTemplate([overlay, values], setLiteral);
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+      const objects = parseAll(result.stdout);
+      const deployment = objects.find((m) => m.kind === "Deployment" && m.metadata.name === "trustiot-telemetry-query");
+      expect(deployment).toBeDefined();
+      const pod = (spec(deployment!).template as { spec: { imagePullSecrets: { name: string }[] } }).spec;
+      expect(pod.imagePullSecrets).toEqual([{ name: GHCR_PULL_NAME }]);
+      const routes = objects.filter((m) => m.kind === "HTTPRoute").map((m) => JSON.stringify(m.spec));
+      expect(
+        routes.some((r) => r.includes('"value":"/api/telemetry"') && r.includes('"name":"trustiot-telemetry-query"') && r.includes(privateExample["app-host"]!)),
+      ).toBe(true);
+      // The passwords are generated in the cluster: the only Secret it reads is the one the chart
+      // declares for the migration Job to fill.
+      const secretRefs = new Set(
+        [...JSON.stringify(spec(deployment!)).matchAll(/"secretKeyRef":\{"key":"[^"]+","name":"([^"]+)"\}/g)].map((m) => m[1]),
+      );
+      expect([...secretRefs]).toEqual(["trustiot-telemetry-query-password"]);
+      expect(objects.some((m) => m.kind === "Secret" && m.metadata.name === "trustiot-telemetry-query-password")).toBe(true);
+    },
+    SLOW_TEST_MS,
+  );
+
+  test(
     "the private values arrive verbatim and change nothing else; through --set syntax the sender would set another value",
     () => {
       const literal = helmTemplate([overlay], setLiteral);

@@ -511,7 +511,7 @@ export interface components {
              * @description Values the translated message refers to, for example `{"max": 40}`. Never user-facing
              *     text, internal error text, or personal data. Absent when empty.
              */
-            details?: Record<string, never>;
+            details?: Record<string, unknown>;
             /** @description The request fields that were rejected. Absent when empty. */
             field_errors?: components["schemas"]["FieldError"][];
             /** @description The message the client shows, translated by the client. */
@@ -540,7 +540,7 @@ export interface components {
         /** @description A rejected field of the request body. */
         FieldError: {
             /** @description Values the message refers to. Absent when empty. */
-            details?: Record<string, never>;
+            details?: Record<string, unknown>;
             /**
              * @description JSON Pointer (RFC 6901) to the rejected value in the request body, for example
              *     `/points/3/address`; an empty string means the whole body.

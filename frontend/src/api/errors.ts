@@ -1,45 +1,137 @@
+import type { AllTrue, Assert, Equal } from "../lib/type-binding.ts";
+import { z } from "../lib/zod.ts";
 import type { components } from "./schema.gen.ts";
 
 export type ErrorCode = components["schemas"]["ErrorCode"];
 
-/** One rejected request field; `details` holds the values its message refers to. */
-export interface FieldError {
-  field: string;
-  message_key: string;
-  details?: Readonly<Record<string, string | number>>;
+/**
+ * Every code, in the spec's order. `ErrorCodeMatchesSpec` makes a code added to or removed from
+ * api/openapi.json a type error here; i18n/server-keys.test.ts checks each has a translation.
+ */
+const ErrorCodeSchema = z.enum([
+  "invalid_request",
+  "validation_failed",
+  "unauthenticated",
+  "permission_denied",
+  "tenant_suspended",
+  "quota_exceeded",
+  "not_found",
+  "conflict",
+  "rate_limited",
+  "internal",
+  "unavailable",
+  "timeout",
+]);
+export const ERROR_CODES = ErrorCodeSchema.options;
+
+/** Drops the keys whose value is `undefined`, so an absent optional field stays absent. */
+function present<T extends Record<string, unknown>>(value: T): T {
+  const kept = { ...value };
+  for (const key of Object.keys(kept)) {
+    if (kept[key] === undefined) {
+      delete kept[key];
+    }
+  }
+  return kept;
 }
+
+/**
+ * `details`: only text and finite numbers are kept, because message values are never markup or
+ * nested data; the other members are dropped, not a failure. Nothing left, or not an object at
+ * all, leaves it out.
+ */
+const DetailsSchema = z
+  .record(
+    z.string(),
+    z
+      .union([z.string(), z.number().refine(Number.isFinite)])
+      .optional()
+      .catch(undefined),
+  )
+  .transform((items) => {
+    const kept: Record<string, string | number> = {};
+    for (const [name, item] of Object.entries(items)) {
+      if (item !== undefined) {
+        kept[name] = item;
+      }
+    }
+    return Object.keys(kept).length > 0 ? kept : undefined;
+  })
+  .optional()
+  .catch(undefined);
+
+/** One rejected request field; `details` holds the values its message refers to. */
+const FieldErrorSchema = z
+  .object({
+    field: z.string(),
+    message_key: z.string(),
+    details: DetailsSchema,
+  })
+  .transform(present);
+export type FieldError = z.output<typeof FieldErrorSchema>;
+
+/**
+ * The `field_errors` list: an entry that is not a field error is dropped, not a failure. No
+ * entry left, or not a list at all, leaves it out.
+ */
+const FieldErrorsSchema = z
+  .array(z.unknown())
+  .transform((items) => {
+    const kept: FieldError[] = [];
+    for (const item of items) {
+      const parsed = FieldErrorSchema.safeParse(item);
+      if (parsed.success) {
+        kept.push(parsed.data);
+      }
+    }
+    return kept.length > 0 ? kept : undefined;
+  })
+  .optional()
+  .catch(undefined);
 
 /**
  * The M1 error body (crates/contract/src/error.rs), as the client keeps it: the code, the message
  * key the user sees translated, and the values the message refers to. Unknown fields are ignored,
  * so a newer server can add optional ones.
  */
-export interface ErrorBody {
-  code: ErrorCode;
-  message_key: string;
-  details?: Readonly<Record<string, string | number>>;
-  field_errors?: readonly FieldError[];
-}
+const ErrorBodySchema = z
+  .object({
+    code: ErrorCodeSchema,
+    message_key: z.string(),
+    details: DetailsSchema,
+    field_errors: FieldErrorsSchema,
+  })
+  .transform(present);
+export type ErrorBody = z.output<typeof ErrorBodySchema>;
 
-/**
- * Every code, in the spec's order. The `Record` makes a code added to api/openapi.json without
- * an entry here a type error; i18n/server-keys.test.ts checks each has a translation.
- */
-const CODES: Readonly<Record<ErrorCode, true>> = {
-  invalid_request: true,
-  validation_failed: true,
-  unauthenticated: true,
-  permission_denied: true,
-  tenant_suspended: true,
-  quota_exceeded: true,
-  not_found: true,
-  conflict: true,
-  rate_limited: true,
-  internal: true,
-  unavailable: true,
-  timeout: true,
-};
-export const ERROR_CODES = Object.keys(CODES) as readonly ErrorCode[];
+// The client keeps `details` narrower than the spec's open object (text and finite numbers
+// only), so `details` is bound by assignability and the rest of each type by `Equal`; the key
+// sets must be the same, and the two optional keys must stay optional.
+type Spec = components["schemas"];
+type Rest<T> = Omit<T, "details" | "field_errors">;
+type Optional<T, K extends keyof T> = Partial<Pick<T, K>> extends Pick<T, K> ? true : false;
+export type ErrorCodeMatchesSpec = Assert<Equal<z.output<typeof ErrorCodeSchema>, ErrorCode>>;
+export type FieldErrorMatchesSpec = Assert<
+  AllTrue<
+    [
+      Equal<Rest<FieldError>, Rest<Spec["FieldError"]>>,
+      Equal<keyof FieldError, keyof Spec["FieldError"]>,
+      Optional<FieldError, "details">,
+      FieldError["details"] extends Spec["FieldError"]["details"] ? true : false,
+    ]
+  >
+>;
+export type ErrorBodyMatchesSpec = Assert<
+  AllTrue<
+    [
+      Equal<Rest<ErrorBody>, Rest<Spec["ErrorBody"]>>,
+      Equal<keyof ErrorBody, keyof Spec["ErrorBody"]>,
+      Optional<ErrorBody, "details" | "field_errors">,
+      ErrorBody["details"] extends Spec["ErrorBody"]["details"] ? true : false,
+      ErrorBody["field_errors"] extends Spec["ErrorBody"]["field_errors"] ? true : false,
+    ]
+  >
+>;
 
 /** The codes the server marks retryable (`ErrorCode::is_retryable`). */
 const RETRYABLE: ReadonlySet<ErrorCode> = new Set(["rate_limited", "unavailable", "timeout"]);
@@ -72,56 +164,50 @@ export class ApiError extends Error {
   }
 }
 
-function isErrorCode(value: unknown): value is ErrorCode {
-  return typeof value === "string" && Object.hasOwn(CODES, value);
+/** Where a response differs from its schema, without the received value: only a path and zod's issue code. */
+export interface ResponseIssue {
+  /** JSON Pointer (RFC 6901) to the member; an empty string means the whole body. */
+  path: string;
+  /** zod's issue code, for example `invalid_type`. */
+  code: string;
 }
 
-/** Keeps only text and finite numbers: message values are never markup or nested data. */
-function parseDetails(value: unknown): Record<string, string | number> | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
+function pointer(path: readonly PropertyKey[]): string {
+  return path.map((key) => `/${String(key).replaceAll("~", "~0").replaceAll("/", "~1")}`).join("");
+}
+
+/**
+ * A successful (2xx) response whose body does not have the shape the caller's schema says: the
+ * server and this page disagree, as during a rolling update, or something other than the service
+ * answered. Not an `ApiError`: the server reported no failure, and asking again gets the same
+ * answer, so it is not retried (`classifyError` says "other"). The message and `issues` name the
+ * members and zod's issue codes, never the received values, which can be tenant data.
+ */
+export class ResponseShapeError extends Error {
+  readonly status: number;
+  readonly issues: readonly ResponseIssue[];
+
+  constructor(status: number, issues: readonly ResponseIssue[]) {
+    const where = issues.map((issue) => `${issue.path === "" ? "(body)" : issue.path} ${issue.code}`).join(", ");
+    super(`HTTP ${status}: response does not match its schema: ${where}`);
+    this.name = "ResponseShapeError";
+    this.status = status;
+    this.issues = issues;
   }
-  const details: Record<string, string | number> = {};
-  for (const [name, item] of Object.entries(value)) {
-    if (typeof item === "string" || (typeof item === "number" && Number.isFinite(item))) {
-      details[name] = item;
-    }
+
+  /** The error for a failed `safeParse`. */
+  static from(status: number, error: z.ZodError): ResponseShapeError {
+    return new ResponseShapeError(
+      status,
+      error.issues.map((issue) => ({ path: pointer(issue.path), code: issue.code })),
+    );
   }
-  return Object.keys(details).length > 0 ? details : undefined;
 }
 
 /** An M1 error body, or null when `value` is not one (or carries a code this client does not know). */
 export function parseErrorBody(value: unknown): ErrorBody | null {
-  if (typeof value !== "object" || value === null) {
-    return null;
-  }
-  const record = value as Record<string, unknown>;
-  if (!isErrorCode(record.code) || typeof record.message_key !== "string") {
-    return null;
-  }
-  const body: ErrorBody = { code: record.code, message_key: record.message_key };
-  const details = parseDetails(record.details);
-  if (details) {
-    body.details = details;
-  }
-  if (Array.isArray(record.field_errors)) {
-    const fields: FieldError[] = [];
-    for (const item of record.field_errors as unknown[]) {
-      if (typeof item !== "object" || item === null) continue;
-      const entry = item as Record<string, unknown>;
-      if (typeof entry.field !== "string" || typeof entry.message_key !== "string") continue;
-      const fieldDetails = parseDetails(entry.details);
-      fields.push({
-        field: entry.field,
-        message_key: entry.message_key,
-        ...(fieldDetails ? { details: fieldDetails } : {}),
-      });
-    }
-    if (fields.length > 0) {
-      body.field_errors = fields;
-    }
-  }
-  return body;
+  const parsed = ErrorBodySchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 /** What a page does about an error. */
