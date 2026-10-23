@@ -74,12 +74,34 @@ bun <dir>/dry-run.ts "$PWD" "$PWD/target/debug/certs-ca" <dir>/dry-run
 
 ## 結論
 
-| 驗收條件 | 本機結果 |
+| 驗收條件 | 結果 |
 | --- | --- |
-| nightly 以兩種 values 部署並啟用 certs：init container 寫入金鑰 Secret 與 CSR、設定簽發 CA 憑證後 `certs.ca.signing` 是 1、mesh 內的 `ca.pem` 與 `crl.pem` 正確 | 程式與單元測試完成，兩種型態的渲染通過 kubeconform，`certs-ca` 流程以真的程式試跑通過；叢集上的結果待 nightly。`certs.ca.signing` 這個指標在 nightly 讀不到（Laysi/trustiot-v2#183 之前 metrics 不輸出，nightly 也不讀 pod log），改以它代表的行為斷言：設定前 `ca.pem` 只有根、平台管理者得到 503 `workstation_certificate.ca_not_ready`，設定後 `ca.pem` 多了簽發 CA、平台管理者得到 201 |
-| 經入口呼叫簽發與撤銷：沒有 cookie 401、租戶管理員 403、平台管理員成功 | 檢查與它的負向單元測試完成；待 nightly |
-| `bun test scripts/nightly`、`bun test scripts/ci/changes.test.ts` 與 CI 通過 | 本機通過；CI 待 PR |
+| nightly 以兩種 values 部署並啟用 certs：init container 寫入金鑰 Secret 與 CSR、設定簽發 CA 憑證後 `certs.ca.signing` 是 1、mesh 內的 `ca.pem` 與 `crl.pem` 正確 | 通過（nightly run 39939744654，head `9aa26521`，見下方「nightly 證據」）：兩種型態的 init container 都寫入金鑰 Secret（只有 `issuing-ca-keys.json`）與放 CSR 的 ConfigMap；設定簽發 CA 憑證之前，mesh 內的 `ca.pem` 只有測試根、`crl.pem` 是空的；設定之後不重啟 pod，`ca.pem` 就變成根加上簽發 CA（onprem 59 秒、saas 40 秒），`crl.pem` 是一份由簽發 CA 簽的 CRL，以簽發 CA 的金鑰驗證通過、以根的金鑰驗不過。`certs.ca.signing` 這個指標在 nightly 讀不到（Laysi/trustiot-v2#183 之前 metrics 不輸出，nightly 也不讀 pod log），改以它代表的行為斷言：設定前平台管理者得到 503 `workstation_certificate.ca_not_ready`，設定後得到 201 |
+| 經入口呼叫簽發與撤銷：沒有 cookie 401、租戶管理員 403、平台管理員成功 | 通過（同一次 run）：兩種型態的簽發與撤銷，沒有 cookie 都是 401、租戶管理員都是 403；平台管理員簽發得到 201，憑證由簽發 CA 簽出，撤銷得到 200，再撤銷一次得到 409 `already_revoked` |
+| `bun test scripts/nightly`、`bun test scripts/ci/changes.test.ts` 與 CI 通過 | 通過：本機通過；PR Laysi/trustiot-v2#589 在 head `9aa26521` 的 ci（run 39939744315）的 `changes`、`rust`、`helm`、`gitleaks`、`workflow-policy` 都通過，其他 job 依變更路徑略過。前一個 head `f15e9b59` 的 `workflow-policy` 失敗過一次：runner 的 OpenSSL 3.0 在 `-text` 輸出把主旨印成 `CN = ...`，單元測試卻比對 `CN=...`；`9aa26521` 改以 `-subject -nameopt RFC2253` 讀主旨，與正式程式讀 CRL 簽發者的方式相同 |
 
 ## nightly 證據
 
-待 coordinator 以帶 `smoke` label 的 PR 跑完 nightly 之後補上：run 編號、兩種型態第 12 項三個檢查的 detail 行，以及 `trustiot-certs-ca-keys`、`trustiot-certs-ca-requests` 兩個物件與 uninstall 檢查的結果。
+PR Laysi/trustiot-v2#589 的 head `9aa26521`，nightly run 39939744654（smoke job 120368257620，2026-10-23 10:32–10:51 UTC），兩種型態都通過。下面是 `ubuntu-24.04-arm` runner 上 smoke 的原始 detail 行，依序是第 12 項的三個檢查（等待簽發 CA、根簽發簽發 CA 的請求並 `helm upgrade`、以簽發 CA 簽章）與 uninstall 檢查。
+
+`values-onprem.yaml`（namespace `nightly-onprem`）：
+
+```text
+ok: Secret trustiot-certs-ca-keys: only issuing-ca-keys.json, bound; ConfigMap trustiot-certs-ca-requests: issuing-ca-generation-1.csr.pem, a request for key 42c9c3d6b2d3b532394f71b8e26735ab58b2917f45f2cfd003f6efb15ca3cd89; inside the mesh ca.pem is the test root alone and crl.pem is empty; POST /api/certs/v1/workstation-certificates (routed after 0 s): without a cookie 401 unauthenticated, as a tenant administrator 403 permission_denied, as a platform administrator 503 workstation_certificate.ca_not_ready
+ok: certs-ca root sign certified key 42c9c3d6b2d3b532394f71b8e26735ab58b2917f45f2cfd003f6efb15ca3cd89, the key of trustiot-certs-ca-requests's request; values-certs-issuing-onprem.yaml: issuingCertificates; release upgraded
+ok: inside the mesh ca.pem became the root and the issuing CA after 59 s, crl.pem one CRL issued by CN=TrustIoT nightly issuing CA G1 onprem after 0 s more, whose signature verifies with the issuing CA's key and not the root's; POST /api/certs/v1/workstation-certificates: without a cookie 401, as a tenant administrator 403, as a platform administrator 201 after 0 s with certificate 4903bc27d343c502fe2e833b4a246ab2 that the issuing CA signed, ca_key_id 42c9c3d6b2d3b532394f71b8e26735ab58b2917f45f2cfd003f6efb15ca3cd89; its revoke: without a cookie 401, as a tenant administrator 403, as a platform administrator 200 (superseded), again 409 already_revoked; the same 1 certs pod(s) throughout, no restart
+ok: all objects removed; kept on uninstall as intended, then deleted: cluster.postgresql.cnpg.io/trustiot-postgres, secret/trustiot-assets-password, secret/trustiot-certs-password, secret/trustiot-identity-password, secret/trustiot-telemetry-query-password, secret/trustiot-otel-collector-password, secret/trustiot-clickhouse-admin-password, secret/trustiot-identity-signing-keys, secret/trustiot-certs-ca-keys, secret/trustiot-mqtt-broker-accounts, configmap/trustiot-certs-ca-requests, configmap/trustiot-internal-identity-keys, imagecatalog.postgresql.cnpg.io/trustiot-postgres; their volumes were gone after 18 s
+```
+
+`values-saas.yaml`（namespace `nightly-saas`）：
+
+```text
+ok: Secret trustiot-certs-ca-keys: only issuing-ca-keys.json, bound; ConfigMap trustiot-certs-ca-requests: issuing-ca-generation-1.csr.pem, a request for key ee2c6806c94791759508b9686fdfca7d8ca89e4a3fd7b62913d48f761daaf02c; inside the mesh ca.pem is the test root alone and crl.pem is empty; POST /api/certs/v1/workstation-certificates (routed after 1 s): without a cookie 401 unauthenticated, as a tenant administrator 403 permission_denied, as a platform administrator 503 workstation_certificate.ca_not_ready
+ok: certs-ca root sign certified key ee2c6806c94791759508b9686fdfca7d8ca89e4a3fd7b62913d48f761daaf02c, the key of trustiot-certs-ca-requests's request; values-certs-issuing-saas.yaml: issuingCertificates; release upgraded
+ok: inside the mesh ca.pem became the root and the issuing CA after 40 s, crl.pem one CRL issued by CN=TrustIoT nightly issuing CA G1 saas after 0 s more, whose signature verifies with the issuing CA's key and not the root's; POST /api/certs/v1/workstation-certificates: without a cookie 401, as a tenant administrator 403, as a platform administrator 201 after 1 s with certificate 5b3e6873d006b16930129a6faca73f86 that the issuing CA signed, ca_key_id ee2c6806c94791759508b9686fdfca7d8ca89e4a3fd7b62913d48f761daaf02c; its revoke: without a cookie 401, as a tenant administrator 403, as a platform administrator 200 (superseded), again 409 already_revoked; the same 1 certs pod(s) throughout, no restart
+ok: all objects removed; kept on uninstall as intended, then deleted: cluster.postgresql.cnpg.io/trustiot-postgres, secret/trustiot-assets-password, secret/trustiot-certs-password, secret/trustiot-identity-password, secret/trustiot-telemetry-query-password, secret/trustiot-otel-collector-password, secret/trustiot-clickhouse-admin-password, secret/trustiot-identity-signing-keys, secret/trustiot-certs-ca-keys, secret/trustiot-mqtt-broker-accounts, configmap/trustiot-certs-ca-requests, configmap/trustiot-internal-identity-keys, imagecatalog.postgresql.cnpg.io/trustiot-postgres; their volumes were gone after 18 s
+```
+
+- `trustiot-certs-ca-keys`（Secret）只有 `issuing-ca-keys.json`，並帶著把它綁到 tools/migrate 所填物件的 annotation `trustiot.io/password-secret-uid`（log 的 `bound`）；`trustiot-certs-ca-requests`（ConfigMap）有第 1 代的 CSR，根簽發的正是這把金鑰（key id 一致）。
+- uninstall 之後，這兩個物件與其他保留的 Secret 一起列在「依設計保留、之後刪除」，release 的其他物件都已移除。
+- 整個過程是同一個 certs pod，沒有重啟。
